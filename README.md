@@ -106,6 +106,10 @@ fix/*     ─┘
 - `feature/*` — 기능 작업. `dev`에서 분기합니다.
 - `fix/*` — 버그/핫픽스. `dev`에서 분기합니다.
 
+**브랜치 이름 (Jira 이슈 키 포함)**
+- 형식: `feature/<이슈키>-<슬러그>` · `fix/<이슈키>-<슬러그>`. 예: `feature/ALPHA-121-login-oauth`, `fix/ALPHA-130-duplicate-save`.
+- 이슈 키를 브랜치 이름에 넣으면 Jira가 PR을 해당 이슈에 **자동 연결**합니다.
+
 **PR 규칙 (엄격한 사다리)**
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
 - `dev` → **`main`에만** PR 한다.
@@ -121,6 +125,8 @@ Squash 머지 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제�
 type(scope): 제목
 
 [본문 — 무엇이 아니라 왜를 설명 (선택)]
+
+Refs: ALPHA-121
 ```
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
@@ -129,6 +135,8 @@ type(scope): 제목
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
+- **푸터 (Jira 이슈 키)** — 본문 아래 마지막 줄에 `Refs: <이슈키>`로 이슈를 참조합니다. 제목 형식(Conventional Commits)은 그대로 두고 키는 **푸터에만** 둡니다. 여러 이슈는 `Refs: ALPHA-121, ALPHA-122`.
+  - Squash 머지 시 최종 커밋 메시지는 **PR 제목 + PR 설명**으로 합쳐지므로, `Refs:`는 **PR 설명 맨 아래**에 둡니다(아래 PR 템플릿이 자동으로 넣습니다). 그래야 `main`/`dev`의 squash 커밋에도 이슈 키가 남습니다.
 
 ### 예시
 ```
@@ -136,6 +144,15 @@ feat(widget-api): 위젯 조회 엔드포인트 추가
 fix(analysis-engine): 분석 결과 중복 저장 방지
 docs(repo): 모노레포 구조 README 작성
 chore(schema): 마이그레이션 도구 설정
+```
+
+이슈 키 푸터까지 포함한 전체 형태:
+```
+feat(tenant-console-api): OAuth 로그인 구현
+
+기존 세션 방식 대신 OAuth로 외부 IdP 로그인을 지원한다.
+
+Refs: ALPHA-121
 ```
 
 ### 원칙
