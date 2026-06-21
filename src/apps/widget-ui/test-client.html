@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EDGE MTS Demo - 탭형 종목상세</title>
+  <style>
+    :root {
+      --bg: #eef1f5;
+      --surface: #ffffff;
+      --surface-2: #f7f8fa;
+      --surface-3: #eef2f7;
+      --line: #dfe4ea;
+      --line-strong: #cbd3dd;
+      --text: #111827;
+      --muted: #6b7280;
+      --soft: #9aa3af;
+      --red: #d64040;
+      --red-bg: #fff1f1;
+      --blue: #225ec8;
+      --blue-bg: #eef4ff;
+      --green: #07845f;
+      --dark: #1f2937;
+      --tab: #293241;
+      --shadow: 0 24px 70px rgba(15, 23, 42, .18);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 20% 6%, rgba(34, 94, 200, .18), transparent 28%),
+        radial-gradient(circle at 90% 20%, rgba(214, 64, 64, .12), transparent 30%),
+        linear-gradient(135deg, #e9eef7 0%, #f6f7fb 46%, #e8edf3 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .page-shell {
+      width: min(100%, 430px);
+      padding: 22px 14px;
+    }
+
+    .phone {
+      position: relative;
+      width: 100%;
+      max-width: 390px;
+      height: 844px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 10px solid #101827;
+      border-radius: 42px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .screen {
+      height: 100%;
+      overflow-y: auto;
+      background: var(--bg);
+      scrollbar-width: none;
+    }
+
+    .screen::-webkit-scrollbar { display: none; }
+
+    .status-bar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      height: 34px;
+      padding: 7px 18px 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      background: rgba(255,255,255,.98);
+      border-bottom: 1px solid rgba(223,228,234,.7);
+      font-size: 12px;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .status-icons {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .signal { display: flex; gap: 2px; align-items: flex-end; }
+    .signal i { display: block; width: 3px; border-radius: 4px; background: #111827; }
+    .signal i:nth-child(1) { height: 5px; }
+    .signal i:nth-child(2) { height: 7px; }
+    .signal i:nth-child(3) { height: 9px; }
+    .signal i:nth-child(4) { height: 11px; }
+    .battery { width: 20px; height: 10px; border: 1.6px solid #111827; border-radius: 3px; position: relative; }
+    .battery::after { content: ""; position: absolute; right: -3.5px; top: 2px; width: 2px; height: 4px; background: #111827; border-radius: 2px; }
+    .battery span { display: block; width: 13px; height: 6px; margin: 1px; background: #111827; border-radius: 2px; }
+
+    .sticky-head {
+      position: sticky;
+      top: 34px;
+      z-index: 25;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line-strong);
+      box-shadow: 0 8px 18px rgba(15, 23, 42, .06);
+    }
+
+    .top-nav {
+      height: 46px;
+      padding: 0 12px;
+      display: grid;
+      grid-template-columns: 42px 1fr 86px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .nav-left,
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .nav-right { justify-content: flex-end; }
+
+    .icon-btn {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      font-size: 21px;
+      cursor: pointer;
+    }
+
+    .nav-title {
+      min-width: 0;
+      text-align: center;
+      line-height: 1.25;
+    }
+
+    .nav-title strong {
+      display: block;
+      font-size: 15px;
+      letter-spacing: -.03em;
+    }
+
+    .nav-title span {
+      display: block;
+      margin-top: 2px;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: -.02em;
+    }
+
+    .quote-summary {
+      padding: 10px 12px 8px;
+      background: #fff;
+    }
+
+    .stock-line {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .stock-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .stock-title h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: -.04em;
+    }
+
+    .code-pill,
+    .market-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 19px;
+      padding: 0 6px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      color: var(--muted);
+      background: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    .market-pill {
+      color: var(--blue);
+      background: var(--blue-bg);
+      border-color: #d4e2ff;
+    }
+
+    .refresh-time {
+      color: var(--muted);
+      font-size: 10px;
+      text-align: right;
+      line-height: 1.4;
+    }
+
+    .price-line {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: end;
+      gap: 8px;
+    }
+
+    .price {
+      font-size: 29px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -.06em;
+      color: var(--blue);
+    }
+
+    .change {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .mini-status {
+      display: grid;
+      gap: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .compact-stats {
+      margin-top: 9px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-right: 0;
+      background: #fff;
+    }
+
+    .compact-stats div {
+      min-width: 0;
+      padding: 6px 7px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .compact-stats span,
+    .data-table th {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .compact-stats strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+      white-space: nowrap;
+    }
+
+    .main-tabs {
+      display: flex;
+      overflow-x: auto;
+      background: #fff;
+      border-top: 1px solid var(--line);
+      scrollbar-width: none;
+    }
+
+    .main-tabs::-webkit-scrollbar { display: none; }
+
+    .main-tab {
+      position: relative;
+      flex: 0 0 auto;
+      min-width: 58px;
+      height: 43px;
+      padding: 0 12px;
+      border: 0;
+      background: #fff;
+      color: #4b5563;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -.03em;
+      cursor: pointer;
+    }
+
+    .main-tab[aria-selected="true"] {
+      color: var(--blue);
+    }
+
+    .main-tab[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 0;
+      height: 3px;
+      border-radius: 3px 3px 0 0;
+      background: var(--blue);
+    }
+
+    .main-tab.edge-tab {
+      min-width: 76px;
+    }
+
+    .main-tab.edge-tab::before {
+      content: "배정";
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      padding: 1px 4px 2px;
+      border-radius: 99px;
+      background: #111827;
+      color: #fff;
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: -.02em;
+    }
+
+    .tab-panel {
+      display: none;
+      padding: 10px 8px 92px;
+    }
+
+    .tab-panel.active { display: block; }
+
+    .panel-banner {
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      border: 1px solid #d8e3f8;
+      background: #f8fbff;
+      color: #3c4c68;
+      font-size: 11px;
+      line-height: 1.45;
+      letter-spacing: -.02em;
+    }
+
+    .panel-banner strong {
+      color: var(--blue);
+      font-weight: 900;
+    }
+
+    .edge-install-code {
+      margin: 8px 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre;
+      overflow-x: auto;
+    }
+
+    .edge-install-note {
+      margin: 0 10px 10px;
+      padding-left: 18px;
+      color: #3c4c68;
+      font-size: 11px;
+      line-height: 1.5;
+      letter-spacing: -.02em;
+    }
+
+    .edge-install-note li {
+      margin-bottom: 3px;
+    }
+
+    .edge-debug-panel {
+      width: 100%;
+      max-width: 390px;
+      margin: 18px auto 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+
+    .edge-debug-panel > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 11px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      user-select: none;
+    }
+
+    .edge-debug-panel > summary::-webkit-details-marker { display: none; }
+
+    .edge-debug-panel > summary::before {
+      content: "▸";
+      margin-right: 6px;
+      color: var(--soft);
+    }
+
+    .edge-debug-panel[open] > summary {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .edge-debug-panel[open] > summary::before { content: "▾"; }
+
+    .edge-debug-body {
+      padding: 4px 12px 12px;
+      background: var(--surface);
+    }
+
+    .edge-debug-intro {
+      margin: 12px 0 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .edge-debug-section {
+      margin: 0;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .edge-debug-section h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      letter-spacing: -.02em;
+      color: var(--text);
+    }
+
+    .edge-debug-section p {
+      margin: 0 0 8px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #3c4c68;
+    }
+
+    .edge-debug-section .edge-install-code,
+    .edge-debug-section .edge-install-note {
+      margin-left: 0;
+      margin-right: 0;
+    }
+
+    .edge-debug-state { margin-top: 10px; }
+
+    .edge-debug-state-label {
+      margin-bottom: 2px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .edge-debug-panel code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-3);
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 10.5px;
+      color: var(--blue);
+    }
+
+    .block {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      margin-bottom: 8px;
+    }
+
+    .block-head {
+      height: 34px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      background: #f9fafb;
+    }
+
+    .block-head h2,
+    .block-head h3 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: -.03em;
+    }
+
+    .block-head span,
+    .block-link {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .sub-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .sub-tabs button {
+      height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      color: #4b5563;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .sub-tabs button:last-child { border-right: 0; }
+
+    .sub-tabs button.active {
+      background: #eef4ff;
+      color: var(--blue);
+    }
+
+    .edge-top {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .edge-summary-row {
+      display: grid;
+      grid-template-columns: 74px 1fr;
+      gap: 9px;
+      align-items: stretch;
+    }
+
+    .edge-score {
+      padding: 10px 7px;
+      border: 1px solid #cfe0ff;
+      background: #f4f8ff;
+      text-align: center;
+    }
+
+    .edge-score span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .edge-score strong {
+      display: block;
+      margin-top: 6px;
+      color: var(--blue);
+      font-size: 25px;
+      line-height: 1;
+      letter-spacing: -.06em;
+    }
+
+    .edge-score em {
+      display: block;
+      margin-top: 5px;
+      color: #496181;
+      font-style: normal;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .edge-title {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .edge-title p {
+      margin: 0;
+      color: #1f2937;
+      font-size: 14px;
+      line-height: 1.48;
+      font-weight: 850;
+      letter-spacing: -.04em;
+    }
+
+    .edge-title small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .factor-bars {
+      display: grid;
+      gap: 7px;
+    }
+
+    .factor {
+      display: grid;
+      grid-template-columns: 66px 1fr 44px;
+      gap: 7px;
+      align-items: center;
+      font-size: 11px;
+    }
+
+    .factor span:first-child {
+      color: #374151;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .bar {
+      height: 9px;
+      position: relative;
+      background: #edf1f6;
+      overflow: hidden;
+      border-radius: 99px;
+    }
+
+    .bar i {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--w);
+      background: var(--blue);
+      border-radius: 99px;
+      opacity: .88;
+    }
+
+    .factor.negative .bar i { background: var(--blue); }
+    .factor.positive .bar i { background: var(--red); }
+    .factor span:last-child {
+      text-align: right;
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .reason-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reason-item {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 8px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      align-items: start;
+      background: #fff;
+    }
+
+    .reason-item:last-child { border-bottom: 0; }
+
+    .rank {
+      width: 23px;
+      height: 23px;
+      display: grid;
+      place-items: center;
+      background: var(--tab);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .reason-copy strong {
+      display: block;
+      font-size: 13px;
+      letter-spacing: -.03em;
+    }
+
+    .reason-copy span {
+      display: block;
+      margin-top: 4px;
+      color: #4b5563;
+      font-size: 11px;
+      line-height: 1.48;
+      letter-spacing: -.02em;
+    }
+
+    .impact {
+      min-width: 48px;
+      text-align: right;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 8px 9px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .data-table tr:last-child th,
+    .data-table tr:last-child td { border-bottom: 0; }
+
+    .data-table th {
+      width: 74px;
+      background: #fbfcfd;
+      border-right: 1px solid var(--line);
+    }
+
+    .data-table td {
+      color: #374151;
+      font-size: 11px;
+      line-height: 1.45;
+      letter-spacing: -.02em;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 6px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: #4b5563;
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .disclaimer {
+      padding: 8px 10px;
+      color: var(--soft);
+      background: #fbfcfe;
+      border-top: 1px solid var(--line);
+      font-size: 10px;
+      line-height: 1.45;
+      letter-spacing: -.02em;
+    }
+
+    .chart-tools {
+      display: flex;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .chart-tools button {
+      flex: 1;
+      height: 32px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      color: #4b5563;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .chart-tools button.active {
+      color: var(--blue);
+      background: var(--blue-bg);
+    }
+
+    .chart-box {
+      position: relative;
+      height: 260px;
+      background:
+        linear-gradient(to right, rgba(107, 114, 128, .12) 1px, transparent 1px) 0 0 / 20% 100%,
+        linear-gradient(to bottom, rgba(107, 114, 128, .12) 1px, transparent 1px) 0 0 / 100% 25%,
+        #fff;
+      overflow: hidden;
+    }
+
+    .chart-svg { width: 100%; height: 100%; display: block; }
+
+    .chart-price-labels {
+      position: absolute;
+      inset: 8px 8px auto auto;
+      display: grid;
+      gap: 18px;
+      color: var(--soft);
+      font-size: 10px;
+      text-align: right;
+      pointer-events: none;
+    }
+
+    .candle-row {
+      position: absolute;
+      left: 10px;
+      right: 40px;
+      bottom: 34px;
+      height: 60px;
+      display: flex;
+      align-items: end;
+      gap: 5px;
+      opacity: .75;
+    }
+
+    .candle-row i {
+      flex: 1;
+      min-width: 3px;
+      height: var(--h);
+      background: var(--blue);
+    }
+
+    .candle-row i:nth-child(3n) { background: var(--red); }
+
+    .order-book {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: #fff;
+    }
+
+    .book-side:first-child { border-right: 1px solid var(--line); }
+
+    .book-title {
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #fafafa;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .book-row {
+      position: relative;
+      height: 30px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      padding: 0 8px;
+      border-bottom: 1px solid #edf0f4;
+      font-size: 12px;
+      font-weight: 800;
+      overflow: hidden;
+    }
+
+    .book-row:last-child { border-bottom: 0; }
+
+    .book-row::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--depth);
+      opacity: .16;
+    }
+
+    .asks .book-row::before { background: var(--red); }
+    .bids .book-row::before { background: var(--blue); }
+    .asks .book-row span:first-child { color: var(--red); }
+    .bids .book-row span:first-child { color: var(--blue); }
+    .book-row span { position: relative; z-index: 1; }
+    .book-row span:last-child { text-align: right; color: var(--muted); font-size: 11px; }
+
+    .order-form {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      background: #fff;
+    }
+
+    .form-line {
+      display: grid;
+      grid-template-columns: 68px 1fr 54px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .form-line label { color: #374151; }
+
+    .form-line input,
+    .form-line select {
+      width: 100%;
+      height: 36px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      padding: 0 9px;
+      color: var(--text);
+      font-weight: 800;
+      text-align: right;
+    }
+
+    .form-line select { text-align: left; }
+
+    .form-line span { color: var(--muted); font-size: 11px; }
+
+    .wide-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    .wide-buttons button {
+      height: 42px;
+      border: 0;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .btn-buy { background: var(--red); }
+    .btn-sell { background: var(--blue); }
+
+    .news-item {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .news-item:last-child { border-bottom: 0; }
+
+    .news-meta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .news-title {
+      margin: 5px 0 0;
+      color: #1f2937;
+      font-size: 13px;
+      line-height: 1.42;
+      letter-spacing: -.03em;
+      font-weight: 760;
+    }
+
+    .tag {
+      padding: 2px 5px;
+      background: var(--surface-3);
+      border: 1px solid var(--line);
+      color: #4b5563;
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .mini-chart {
+      min-height: 168px;
+      background: #fff;
+    }
+
+    .mini-chart .chart-box { height: 152px; }
+
+
+    .floating-note {
+      margin: 12px auto 0;
+      max-width: 390px;
+      text-align: center;
+      color: #647084;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 430px) {
+      .page-shell { padding: 0; }
+      body { display: block; background: var(--bg); }
+      .phone {
+        max-width: none;
+        width: 100%;
+        height: 100vh;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .floating-note { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <section class="phone" aria-label="기존 증권사형 MTS 종목상세 데모 화면">
+      <div class="screen">
+        <div class="status-bar">
+          <span>9:41</span>
+          <div class="status-icons" aria-hidden="true">
+            <span class="signal"><i></i><i></i><i></i><i></i></span>
+            <span>5G</span>
+            <span class="battery"><span></span></span>
+          </div>
+        </div>
+
+        <header class="sticky-head">
+          <nav class="top-nav" aria-label="상단 내비게이션">
+            <div class="nav-left">
+              <button class="icon-btn" aria-label="뒤로가기">‹</button>
+            </div>
+            <div class="nav-title">
+              <strong>삼성전자</strong>
+              <span id="currentTabName">종목상세 · AI분석 탭</span>
+            </div>
+            <div class="nav-right">
+              <button class="icon-btn" aria-label="종목검색">⌕</button>
+              <button class="icon-btn" aria-label="관심종목">☆</button>
+            </div>
+          </nav>
+
+          <section class="quote-summary" aria-label="종목 시세 요약">
+            <div class="stock-line">
+              <div class="stock-title">
+                <h1>삼성전자</h1>
+                <span class="code-pill">005930</span>
+                <span class="market-pill">KOSPI</span>
+              </div>
+              <div class="refresh-time">실시간<br>14:28:10</div>
+            </div>
+
+            <div class="price-line">
+              <div class="price">73,200</div>
+              <div class="change"><span>▼ 1,600</span><span>-2.14%</span></div>
+              <div class="mini-status"><span>거래대금 1.3조</span><span>외국인 -1,284억</span></div>
+            </div>
+
+            <div class="compact-stats">
+              <div><span>시가</span><strong>74,500</strong></div>
+              <div><span>고가</span><strong>75,100</strong></div>
+              <div><span>저가</span><strong>72,900</strong></div>
+              <div><span>거래량</span><strong>18,421,903</strong></div>
+              <div><span>PER</span><strong>17.8배</strong></div>
+              <div><span>PBR</span><strong>1.42배</strong></div>
+              <div><span>시총</span><strong>437조</strong></div>
+              <div><span>업종</span><strong>전기전자</strong></div>
+            </div>
+          </section>
+
+          <div class="main-tabs" role="tablist" aria-label="종목상세 세부 탭">
+            <button class="main-tab" role="tab" data-tab="summary" aria-selected="false">종합</button>
+            <button class="main-tab" role="tab" data-tab="chart" aria-selected="false">차트</button>
+            <button class="main-tab" role="tab" data-tab="orderbook" aria-selected="false">호가</button>
+            <button class="main-tab" role="tab" data-tab="order" aria-selected="false">주문</button>
+            <button class="main-tab" role="tab" data-tab="news" aria-selected="false">뉴스</button>
+            <button class="main-tab" role="tab" data-tab="finance" aria-selected="false">재무</button>
+            <button class="main-tab edge-tab" role="tab" data-tab="edge" aria-selected="true">AI분석</button>
+          </div>
+        </header>
+
+        <section class="tab-panel" id="panel-summary" role="tabpanel" aria-label="종합 탭">
+          <div class="panel-banner">
+            기존 증권사 MTS의 종목상세 탭 구조 예시입니다. <strong>AI분석</strong>은 차트·호가·주문과 같은 레벨의 세부 탭으로 배치됩니다.
+          </div>
+
+          <div class="summary-grid">
+            <section class="block mini-chart">
+              <div class="block-head"><h2>미니 차트</h2><span>1주</span></div>
+              <div class="chart-box">
+                <svg class="chart-svg" viewBox="0 0 180 150" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M0 35 C18 34 24 52 39 50 C60 46 66 64 84 62 C104 60 112 82 130 88 C148 94 160 102 180 111" fill="none" stroke="#225ec8" stroke-width="2.4" stroke-linecap="round"/>
+                </svg>
+              </div>
+            </section>
+            <section class="block">
+              <div class="block-head"><h2>주요 지표</h2><span>실시간</span></div>
+              <table class="data-table">
+                <tr><th>매도호가</th><td>73,300</td></tr>
+                <tr><th>매수호가</th><td>73,200</td></tr>
+                <tr><th>체결강도</th><td>83.4%</td></tr>
+                <tr><th>프로그램</th><td>-426억</td></tr>
+              </table>
+            </section>
+          </div>
+
+          <section class="block">
+            <div class="block-head"><h2>요약 뉴스</h2><a class="block-link" href="#">더보기</a></div>
+            <article class="news-item">
+              <div class="news-meta"><span class="tag">수급</span><span>14:05</span><span>데모뉴스</span></div>
+              <p class="news-title">외국인 대형 전기전자 업종 순매도 확대, 반도체주 동반 약세</p>
+            </article>
+            <article class="news-item">
+              <div class="news-meta"><span class="tag">정책</span><span>13:42</span><span>마켓브리프</span></div>
+              <p class="news-title">반도체 장비 수출관리 강화 가능성에 투자심리 위축</p>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-chart" role="tabpanel" aria-label="차트 탭">
+          <section class="block">
+            <div class="block-head"><h2>차트</h2><span>보조지표 · 이동평균</span></div>
+            <div class="chart-tools">
+              <button>1일</button><button class="active">1주</button><button>1개월</button><button>3개월</button><button>1년</button>
+            </div>
+            <div class="chart-box">
+              <div class="chart-price-labels"><span>76,000</span><span>75,000</span><span>74,000</span><span>73,000</span><span>72,000</span></div>
+              <svg class="chart-svg" viewBox="0 0 360 260" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0 62 C28 60 35 82 62 78 C91 72 104 100 132 96 C160 91 171 112 198 118 C225 125 242 124 264 145 C287 167 319 158 360 171" fill="none" stroke="#225ec8" stroke-width="3" stroke-linecap="round"/>
+                <path d="M0 88 C28 86 42 96 70 94 C97 93 116 111 143 109 C171 107 190 131 219 136 C250 142 278 155 360 188" fill="none" stroke="#9aa3af" stroke-width="1.5" stroke-dasharray="4 5"/>
+              </svg>
+              <div class="candle-row" aria-hidden="true">
+                <i style="--h:34%"></i><i style="--h:43%"></i><i style="--h:28%"></i><i style="--h:58%"></i><i style="--h:37%"></i><i style="--h:74%"></i><i style="--h:42%"></i><i style="--h:80%"></i><i style="--h:51%"></i><i style="--h:62%"></i><i style="--h:93%"></i><i style="--h:68%"></i><i style="--h:73%"></i><i style="--h:57%"></i><i style="--h:82%"></i><i style="--h:65%"></i>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-orderbook" role="tabpanel" aria-label="호가 탭">
+          <section class="block">
+            <div class="block-head"><h2>호가</h2><span>10단계 호가 · 데모</span></div>
+            <div class="order-book">
+              <div class="book-side asks">
+                <div class="book-title">매도 잔량</div>
+                <div class="book-row" style="--depth:88%"><span>73,700</span><span>241,903</span></div>
+                <div class="book-row" style="--depth:72%"><span>73,600</span><span>184,201</span></div>
+                <div class="book-row" style="--depth:63%"><span>73,500</span><span>124,982</span></div>
+                <div class="book-row" style="--depth:55%"><span>73,400</span><span>84,102</span></div>
+                <div class="book-row" style="--depth:46%"><span>73,300</span><span>62,791</span></div>
+              </div>
+              <div class="book-side bids">
+                <div class="book-title">매수 잔량</div>
+                <div class="book-row" style="--depth:68%"><span>73,200</span><span>110,453</span></div>
+                <div class="book-row" style="--depth:52%"><span>73,100</span><span>76,891</span></div>
+                <div class="book-row" style="--depth:44%"><span>73,000</span><span>58,102</span></div>
+                <div class="book-row" style="--depth:35%"><span>72,900</span><span>39,742</span></div>
+                <div class="book-row" style="--depth:29%"><span>72,800</span><span>30,411</span></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-order" role="tabpanel" aria-label="주문 탭">
+          <section class="block">
+            <div class="block-head"><h2>주문</h2><span>모의 주문 화면</span></div>
+            <div class="sub-tabs">
+              <button class="active">매수</button><button>매도</button><button>정정</button><button>취소</button>
+            </div>
+            <div class="order-form">
+              <div class="form-line"><label for="orderType">구분</label><select id="orderType"><option>보통가</option><option>시장가</option></select><span></span></div>
+              <div class="form-line"><label for="priceInput">가격</label><input id="priceInput" value="73,200" /><span>원</span></div>
+              <div class="form-line"><label for="qtyInput">수량</label><input id="qtyInput" value="10" /><span>주</span></div>
+              <div class="form-line"><label>가능금액</label><input value="2,480,000" readonly /><span>원</span></div>
+              <div class="wide-buttons"><button class="btn-sell">매도</button><button class="btn-buy">매수</button></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-news" role="tabpanel" aria-label="뉴스 탭">
+          <section class="block">
+            <div class="block-head"><h2>뉴스·공시</h2><span>종목 관련</span></div>
+            <article class="news-item">
+              <div class="news-meta"><span class="tag">정책</span><span>14:05</span><span>데모뉴스</span></div>
+              <p class="news-title">미국 첨단 반도체 장비 수출 관리 강화 검토…국내 반도체주 약세</p>
+            </article>
+            <article class="news-item">
+              <div class="news-meta"><span class="tag">수급</span><span>13:42</span><span>마켓브리프</span></div>
+              <p class="news-title">외국인, 코스피 대형 전기전자 업종 중심 순매도 확대</p>
+            </article>
+            <article class="news-item">
+              <div class="news-meta"><span class="tag">산업</span><span>11:20</span><span>리서치</span></div>
+              <p class="news-title">메모리 가격 회복 속도 둔화 우려…실적 민감도 점검 필요</p>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-finance" role="tabpanel" aria-label="재무 탭">
+          <section class="block">
+            <div class="block-head"><h2>재무요약</h2><span>최근 결산 기준 · 데모</span></div>
+            <table class="data-table">
+              <tr><th>매출액</th><td>258.9조원</td></tr>
+              <tr><th>영업이익</th><td>6.6조원</td></tr>
+              <tr><th>순이익</th><td>15.4조원</td></tr>
+              <tr><th>부채비율</th><td>26.4%</td></tr>
+              <tr><th>ROE</th><td>4.1%</td></tr>
+            </table>
+          </section>
+        </section>
+
+        <section class="tab-panel active" id="panel-edge" role="tabpanel" aria-label="AI분석 탭">
+          <div class="panel-banner">
+            이 화면은 증권사 MTS의 종목 상세 화면에 <strong>EDGE 위젯</strong>이 삽입된 상황을 가정한 데모입니다.
+          </div>
+
+          <section class="block" aria-label="EDGE AI 분석 위젯 성공 상태">
+            <div class="block-head">
+              <h2>EDGE AI 주가해석</h2>
+              <span>005930 · summary v1</span>
+            </div>
+
+            <div class="sub-tabs" aria-label="AI분석 하위 메뉴">
+              <button class="active">주가요인</button>
+              <button>뉴스근거</button>
+              <button>수급</button>
+              <button>리스크</button>
+            </div>
+
+            <script
+              src="./widget.js"
+              data-embed-key="pub_demo_1234"
+              data-client-id="demo-sec"
+              data-widget-id="asset-event-impact"
+              data-symbol="005930"
+              data-theme="default">
+            </script>
+          </section>
+        </section>
+      </div>
+
+    </section>
+
+    <details class="edge-debug-panel">
+      <summary>개발자 검증 정보 보기</summary>
+      <div class="edge-debug-body">
+        <p class="edge-debug-intro">
+          아래 정보는 개발자 검증용입니다. 실제 고객사 화면에는 노출되지 않으며, 상세 계약과 결과는 docs 폴더 문서를 참고하세요.
+        </p>
+
+        <section class="edge-debug-section">
+          <h3>S015 기본 설치 예시</h3>
+          <p>단일 <code>&lt;script&gt;</code> 태그 하나로 <code>widget.js</code>가 로드되고, script 위치 바로 뒤에 위젯 container가 생성됩니다.</p>
+          <pre class="edge-install-code">&lt;script
+  src="./widget.js"
+  data-embed-key="pub_demo_1234"
+  data-client-id="demo-sec"
+  data-widget-id="asset-event-impact"
+  data-symbol="005930"
+  data-theme="default"&gt;
+&lt;/script&gt;</pre>
+        </section>
+
+        <section class="edge-debug-section">
+          <h3>S016 data attribute 계약 요약</h3>
+          <ul class="edge-install-note">
+            <li>필수: <code>data-embed-key</code>, <code>data-widget-id</code>, <code>data-symbol</code></li>
+            <li>선택: <code>data-client-id</code>, <code>data-theme</code></li>
+            <li>테스트 전용: <code>data-mock-status</code> — PoC 상태 강제용이며 실제 Gateway request나 설치 코드에는 포함하지 않습니다.</li>
+            <li>멀티테넌시 신뢰 기준은 <code>data-client-id</code>가 아니라 <code>data-embed-key</code> 검증 결과입니다.</li>
+          </ul>
+        </section>
+
+        <section class="edge-debug-section">
+          <h3>mock 상태 확인 · success / empty / error / fallback</h3>
+          <p><code>data-mock-status</code>로 상태별 렌더링을 확인합니다. <strong>success</strong>는 위 AI분석 탭 본문 위젯에서 확인하고, 아래에서 empty / error / fallback을 확인합니다.</p>
+
+          <div class="edge-debug-state">
+            <div class="edge-debug-state-label">empty · 분석 결과 없음</div>
+            <script
+              src="./widget.js"
+              data-embed-key="pub_demo_1234"
+              data-client-id="demo-sec"
+              data-widget-id="asset-event-impact"
+              data-symbol="005930"
+              data-theme="default"
+              data-mock-status="empty">
+            </script>
+          </div>
+
+          <div class="edge-debug-state">
+            <div class="edge-debug-state-label">error · 오류 메시지</div>
+            <script
+              src="./widget.js"
+              data-embed-key="pub_demo_1234"
+              data-client-id="demo-sec"
+              data-widget-id="asset-event-impact"
+              data-symbol="005930"
+              data-theme="default"
+              data-mock-status="error">
+            </script>
+          </div>
+
+          <div class="edge-debug-state">
+            <div class="edge-debug-state-label">fallback · 대체 응답</div>
+            <script
+              src="./widget.js"
+              data-embed-key="pub_demo_1234"
+              data-client-id="demo-sec"
+              data-widget-id="asset-event-impact"
+              data-symbol="005930"
+              data-theme="default"
+              data-mock-status="fallback">
+            </script>
+          </div>
+        </section>
+
+        <section class="edge-debug-section">
+          <h3>후속 티켓</h3>
+          <p>실제 Gateway 연동(adapter 변환·분석 API 호출·tenant context)과 local-api 모드는 이 스파이크(ALPHA-263) 범위가 아니며 후속 티켓 S046·S049에서 구현합니다.</p>
+        </section>
+
+        <section class="edge-debug-section">
+          <h3>관련 문서</h3>
+          <ul class="edge-install-note">
+            <li><code>notes/widget-data-attributes-note.md</code></li>
+            <li><code>notes/widget-gateway-note.md</code></li>
+          </ul>
+        </section>
+      </div>
+    </details>
+
+    <p class="floating-note">기존 증권사 MTS처럼 종목상세 안에 세부 탭이 있고, 그중 하나가 AI분석 탭으로 배정된 데모입니다.</p>
+  </main>
+
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.main-tab'));
+    const panels = Array.from(document.querySelectorAll('.tab-panel'));
+    const tabName = document.getElementById('currentTabName');
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const key = tab.dataset.tab;
+
+        tabs.forEach((item) => item.setAttribute('aria-selected', item === tab ? 'true' : 'false'));
+        panels.forEach((panel) => panel.classList.toggle('active', panel.id === `panel-${key}`));
+
+        tabName.textContent = `종목상세 · ${tab.textContent.trim()} 탭`;
+      });
+    });
+  </script>
+
+</body>
+</html>
