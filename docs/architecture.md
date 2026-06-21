@@ -17,7 +17,7 @@
 - **gateway** (JVM) — 인터넷 트래픽의 단일 엣지. widget·console 트래픽을 모두 받아 라우트별로 필터링·전달.
 - **widget-api** (JVM) — 위젯용 백엔드. **읽기 전용·좁은 표면**.
 - **tenant-console-api** (JVM) — 콘솔용 백엔드. **읽기/쓰기·넓은 표면**.
-- **data-pipeline** (JVM) — 스케줄러로 외부 데이터를 DB에 적재.
+- **data-pipeline** (Python) — 스케줄러로 외부 데이터를 DB에 적재.
 - **analysis-engine** (Python) — 스케줄러로 적재 데이터를 분석해 `analysis_result`를 DB에 저장.
 - **libs/schema** — DB 스키마 SSOT(마이그레이션 + 생성 모델). [[adr/0005-db-as-contract]].
 - **libs/jvm-common** — 공유 도메인 + `analysis_result` 접근 로직.

@@ -15,7 +15,7 @@ src/
 │   ├── gateway/              # JVM    · 공개 엣지 (widget·console 앞단)
 │   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
 │   ├── tenant-console-api/   # JVM    · 내부용 · 읽기/쓰기 · 넓은 표면
-│   ├── data-pipeline/        # JVM    · 스케줄러 → DB 적재
+│   ├── data-pipeline/        # Python · 스케줄러 → DB 적재
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
@@ -37,9 +37,9 @@ src/
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · data-pipeline · jvm-common |
+| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · jvm-common |
 | Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · ui-kit |
-| Python | `src/pyproject.toml` | analysis-engine · py-common |
+| Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
 ## apps — 배포 단위
 
@@ -50,7 +50,7 @@ src/
 | `gateway` | JVM | 공개 엣지. widget·console 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
 | `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
 | `tenant-console-api` | JVM | 내부용 API. **읽기/쓰기**, 넓은 표면 |
-| `data-pipeline` | JVM | 스케줄러로 동작 → DB에 데이터 적재 |
+| `data-pipeline` | Python | 스케줄러로 동작 → DB에 데이터 적재 |
 | `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
 ### 외부 표면 vs 내부 표면
