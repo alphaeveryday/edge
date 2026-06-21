@@ -61,6 +61,10 @@ If you genuinely think a convention is harmful, surface it. Don't fork silently.
 "Tests pass" is wrong if any were skipped.
 Default to surfacing uncertainty, not hiding it.
 
+## Git Workflow
+- Full convention lives in README.md ("Git 컨벤션") — branch strategy, commit/PR title, merge policy. That is the SSOT.
+- Hard rule: never commit or PR directly to `main`. Branch ladder is `feature/*`·`fix/*` → `dev` → `main`. Open PRs against `dev` (except a `dev` → `main` release PR).
+
 ## Instruction File Convention
 - AGENTS.md is the single source of truth (SSOT) for agent instructions.
 - Add a per-folder AGENTS.md (folder-specific content) plus CLAUDE.md (a single

@@ -87,9 +87,32 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 
 ## Git 컨벤션
 
-[Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
+브랜치 전략 · 커밋/PR 제목 · 머지 정책을 함께 정의합니다.
 
-### 커밋 메시지 형식
+### 브랜치 전략
+
+```
+feature/* ─┐
+           ├─→  dev  ─→  main  ──(tag)
+fix/*     ─┘
+```
+
+- `main` — 릴리스 기준. 항상 배포 가능한 상태를 유지합니다.
+- `dev` — 통합 브랜치. 모든 작업이 먼저 모이는 곳입니다.
+- `feature/*` — 기능 작업. `dev`에서 분기합니다.
+- `fix/*` — 버그/핫픽스. `dev`에서 분기합니다.
+
+**PR 규칙 (엄격한 사다리)**
+- `feature/*`·`fix/*` → **`dev`에만** PR 한다.
+- `dev` → **`main`에만** PR 한다.
+- 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
+- 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
+
+### 커밋·PR 제목
+
+[Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
+Squash 머지 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목도 아래 형식을 그대로 따릅니다.
+
 ```
 type(scope): 제목
 
@@ -114,3 +137,11 @@ chore(schema): 마이그레이션 도구 설정
 ### 원칙
 - 하나의 커밋은 하나의 논리적 변경만 담습니다. 여러 관심사는 나눠 커밋합니다.
 - 스키마 변경(`schema`)과 그 생성 모델(`generated`) 갱신은 함께 커밋합니다.
+
+### 머지 정책
+
+**Squash 머지만 허용합니다.** Merge commit·Rebase 머지는 사용하지 않습니다.
+
+- **PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위.** `main`/`dev` 히스토리에 PR당 커밋 하나만 남아, 추적과 롤백(`revert`)이 단순해집니다.
+- **PR은 작게 유지합니다.** 리뷰 부담이 줄고, 문제 발생 시 되돌리는 범위가 좁아집니다.
+- PR 안의 중간 커밋은 squash로 합쳐지므로 자유롭게 쌓되, **PR 제목은 정확히** 작성합니다(최종 커밋 메시지가 됨).
