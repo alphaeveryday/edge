@@ -6,10 +6,12 @@
 
 ## 실행
 
+Node 패키지 매니저는 **pnpm**이다(ADR-0001). Node 워크스페이스 루트는 `src/pnpm-workspace.yaml`.
+
 ```bash
-npm install
-npm run dev      # Vite dev 서버 → http://localhost:5173/test-client.html
-npm test         # Vitest + jsdom (69 tests)
+pnpm install                      # src/ (Node 루트)에서 1회
+pnpm --filter widget-ui dev       # Vite dev 서버 → http://localhost:5173/test-client.html
+pnpm --filter widget-ui test      # Vitest + jsdom (71 tests)
 ```
 
 `test-client.html`은 고객사 MTS 종목상세에 위젯을 삽입한 데모다. `success`는 AI분석 탭 본문에서, `empty`/`error`/`fallback`은 하단 "개발자 검증 정보 보기" 패널의 `data-mock-status` 위젯에서 확인한다.
