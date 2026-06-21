@@ -10,7 +10,7 @@ src/
 ├── apps/                     # 배포되는 실행 단위
 │   ├── widget-ui/            # Node   · 외부 임베드 위젯
 │   ├── tenant-console-ui/    # Node   · 내부 관리자 콘솔
-│   ├── gateway/              # JVM    · 공개 엣지 (widget-api 앞단)
+│   ├── gateway/              # JVM    · 공개 엣지 (widget·console 앞단)
 │   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
 │   ├── tenant-console-api/   # JVM    · 내부용 · 읽기/쓰기 · 넓은 표면
 │   ├── data-pipeline/        # JVM    · 스케줄러 → DB 적재
@@ -43,17 +43,17 @@ src/
 |---|---|---|
 | `widget-ui` | Node | 외부 사이트에 임베드되는 위젯 |
 | `tenant-console-ui` | Node | 내부 관리자용 콘솔 |
-| `gateway` | JVM | 공개 엣지. `widget-api` 앞단에서 외부 트래픽을 받음 |
+| `gateway` | JVM | 공개 엣지. widget·console 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
 | `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
 | `tenant-console-api` | JVM | 내부용 API. **읽기/쓰기**, 넓은 표면 |
 | `data-pipeline` | JVM | 스케줄러로 동작 → DB에 데이터 적재 |
 | `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
 ### 외부 표면 vs 내부 표면
-- **외부 경로**: `widget-ui` → `gateway` → `widget-api` (읽기 전용, 좁은 표면)
-- **내부 경로**: `tenant-console-ui` → `tenant-console-api` (읽기/쓰기, 넓은 표면)
+- **외부 경로**: `widget-ui` → `gateway`(widget 라우트) → `widget-api` (읽기 전용, 좁은 표면)
+- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 넓은 표면)
 
-외부에 노출되는 `widget-api`는 표면을 의도적으로 좁게 유지하고, 그 앞단을 `gateway`가 감쌉니다.
+`gateway`가 두 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. 신뢰 경계 상세는 [docs/architecture.md](docs/architecture.md) 참고.
 
 ## libs — 공유 코드
 
@@ -76,7 +76,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
                                   │            (분석 결과 저장)
                                   │
    외부:  widget-ui → gateway → widget-api (읽기) ─┘
-   내부:  tenant-console-ui → tenant-console-api (읽기/쓰기) ─┘
+   콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기) ─┘
 
    schema(SSOT) ─→ generated 모델 ─→ 모든 JVM/Python 모듈이 공유
 ```
