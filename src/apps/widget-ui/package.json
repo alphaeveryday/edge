@@ -1,0 +1,14 @@
+{
+  "name": "widget-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "test": "vitest run --environment jsdom"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0",
+    "jsdom": "^24.0.0"
+  }
+}
