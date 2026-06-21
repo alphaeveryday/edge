@@ -35,8 +35,6 @@
 | `data-symbol` | 필수 | `005930` | 고객사 페이지가 전달하는 종목 식별자 | 포함: `symbol` | trim 후 non-empty만 검증 |
 | `data-theme` | 선택 | `default` | 위젯 테마 | 포함: `theme` | 현재 `default`만 공식 지원 |
 | `data-mock-status` | 테스트 전용 | `success` | PoC 상태 강제값 | 포함하지 않음 | 실제 Gateway 계약 아님 |
-| `data-gateway-mode` | PoC/dev 전용 | `local-api` | Gateway 호출 모드 | 포함하지 않음 | S049 전용. 기본값은 내부 mock mode |
-| `data-gateway-url` | PoC/dev 전용 | `/mock-gateway/widget-analysis` | local mock Gateway endpoint URL | 포함하지 않음 | S049 전용. local-api mode에서만 사용 |
 
 ## 4. 필수/선택/테스트 전용 구분
 
@@ -55,14 +53,7 @@
 
 - `data-mock-status`
 
-### PoC/dev 전용
-
-- `data-gateway-mode`
-- `data-gateway-url`
-
-`data-gateway-mode`, `data-gateway-url`은 S049 local API mode(PoC/dev)에서만 사용한다. 실제 고객사 설치 코드 계약이 아니며 Gateway request에도 포함하지 않는다. 자세한 매핑은 `analysis-to-widget-response-mapping-draft.md`를 참고한다.
-
-S046에서 local mock Gateway endpoint(`POST /mock-gateway/widget-analysis`)는 내부적으로 `request → mock tenantContext → analysisApiClient.getLatestAnalysis() → S049 adapter` 흐름으로 위젯 응답을 만든다. 실제 Gateway 서버와 Public Embed Key 검증은 아직 없으며, `embedKey`가 tenant 식별 신뢰 기준이어야 한다는 결정은 추후 Gateway 구현에서 확정한다 (`Jira ALPHA-147`).
+> 실제 Gateway 호출 모드(local-api)와 endpoint 연동 속성은 이 스파이크(ALPHA-263) 범위가 아니다. Gateway 내부 흐름(mock tenantContext → 분석 API → adapter)과 함께 후속 티켓 S046·S049에서 정의한다.
 
 ## 5. 멀티테넌시 결정
 

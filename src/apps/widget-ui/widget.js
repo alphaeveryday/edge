@@ -4,11 +4,9 @@
   const ANALYSIS_V1_SUMMARY =
     '이번 삼성전자 하락은 반도체 규제 뉴스가 가장 크게 작용했어요. 전체 설명 중 절반 이상은 미국의 중국향 반도체 수출 규제 강화로 보는 게 자연스러워요. 삼성전자는 중국 반도체 수요와 장비 규제에 민감하고, 과거 비슷한 규제 뉴스 43건에서도 평균 -1.8% 하락했으며 72%는 같은 하락 방향이었어요. 그다음은 메모리 반도체 수요 전망 하향이에요. 비중은 규제 뉴스의 절반보다 작지만, 삼성전자 이익 기대를 낮추는 보조 악재로 작용했어요. 과거 비슷한 수요 전망 하향 뉴스 31건에서도 평균 -0.9% 하락했어요. 원화 약세는 영향이 있더라도 작게 보는 게 맞아요. 시장 전체나 수출주 전반에는 영향을 줄 수 있지만, 이번 삼성전자 하락을 직접 설명하는 핵심 요인으로 보기엔 근거가 약해요.';
 
-  // 이미 Gateway adapter(src/gateway-adapter.js)를 거쳐 변환이 끝난 widget response 스냅샷.
-  // widget.js는 analysis -> widget 변환(adapter)을 직접 하지 않는다.
-  // mock 모드는 서버 없이 도는 오프라인 대역으로 이 스냅샷을 그대로 돌려줄 뿐이며,
-  // 실제 변환은 Gateway(local-api) 쪽 src/gateway-adapter.js에서 한다.
-  // 이 스냅샷이 adapter 출력과 어긋나지 않는지는 테스트로 보장한다.
+  // 이미 변환이 끝난 widget response 스냅샷. widget.js는 analysis -> widget 변환을 하지 않고
+  // 이 스냅샷을 status별로 렌더링만 한다(widget = 렌더). 서버 없이 도는 오프라인 대역이다.
+  // 실제 Gateway 연동(adapter 변환, 분석 API 호출, tenant context)은 후속 티켓 S046/S049에서 구현한다.
   const MOCK_GENERATED_AT = '2026-03-12T15:30:00+09:00';
   const MOCK_DISCLAIMER =
     '본 정보는 투자 참고용이며, 투자 판단의 최종 책임은 투자자 본인에게 있습니다.';
@@ -74,17 +72,15 @@
     }
 
     const request = createGatewayRequest(config);
-    console.log('[EDGE Widget] request:', JSON.stringify(request));
 
-    return fetchGateway(request, config)
+    return fetchMockGateway(request, config.mockStatus)
       .then((response) => {
         renderWidget(container, response);
       })
       .catch((error) => {
-        console.error('[EDGE Widget] fetchGateway error:', error);
+        console.error('[EDGE Widget] mock gateway error:', error);
         renderError(container, {
           message: '위젯을 불러오는 중 문제가 발생했습니다.',
-          details: error && error.message,
         });
       });
   }
@@ -105,8 +101,6 @@
       symbol: normalizeSymbolInput(script.getAttribute('data-symbol')),
       theme: normalizeTheme(script.getAttribute('data-theme')),
       mockStatus: normalizeStatus(script.getAttribute('data-mock-status')),
-      gatewayMode: normalizeGatewayMode(script.getAttribute('data-gateway-mode')),
-      gatewayUrl: normalizeAttribute(script.getAttribute('data-gateway-url')),
     };
   }
 
@@ -132,15 +126,6 @@
       return {
         ok: false,
         message: `필수 설정값 누락: ${missing.join(', ')}`,
-      };
-    }
-
-    // fail loud: local-api 모드인데 gatewayUrl이 없으면 mock으로 조용히 빠지지 않고 에러로 막는다.
-    // 실제 Gateway 연결 검증 중 data-gateway-url 누락이 "성공한 것처럼" 보이는 걸 방지한다.
-    if (config.gatewayMode === 'local-api' && !normalizeAttribute(config.gatewayUrl)) {
-      return {
-        ok: false,
-        message: 'local-api 모드에는 data-gateway-url이 필요합니다.',
       };
     }
 
@@ -336,13 +321,7 @@
     card.appendChild(title);
     card.appendChild(message);
 
-    if (response && response.details) {
-      const detail = document.createElement('div');
-      detail.className = 'edge-widget-detail';
-      detail.textContent = response.details;
-      card.appendChild(detail);
-    }
-
+    // 내부 오류 상세(details)는 사용자 UI에 노출하지 않는다(정보 유출 방지).
     container.appendChild(card);
   }
 
@@ -536,31 +515,6 @@
     return 'success';
   }
 
-  function normalizeGatewayMode(raw) {
-    const normalized = String(raw || 'mock').trim().toLowerCase();
-    return normalized === 'local-api' ? 'local-api' : 'mock';
-  }
-
-  function fetchGateway(request, config) {
-    if (config && config.gatewayMode === 'local-api' && config.gatewayUrl) {
-      return fetchLocalGateway(request, config.gatewayUrl);
-    }
-    return fetchMockGateway(request, config && config.mockStatus);
-  }
-
-  function fetchLocalGateway(request, gatewayUrl) {
-    return fetch(gatewayUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    }).then((response) => {
-      if (!response.ok) {
-        throw new Error(`Gateway 응답 오류 (status ${response.status})`);
-      }
-      return response.json();
-    });
-  }
-
   function fetchMockGateway(request, mockStatus) {
     const status = normalizeStatus(mockStatus);
     const symbol = request && request.symbol ? request.symbol : '';
@@ -627,8 +581,6 @@
       createContainer,
       renderLoading,
       fetchMockGateway,
-      fetchGateway,
-      fetchLocalGateway,
       renderWidget,
       renderSuccess,
       renderEmpty,
@@ -642,7 +594,6 @@
       normalizeSymbolInput,
       normalizeTheme,
       normalizeStatus,
-      normalizeGatewayMode,
     };
   } else {
     initEdgeWidget();

@@ -1,16 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  mapAnalysisToWidgetResponse as adapterMapAnalysisToWidgetResponse,
-  createFallbackResponse,
-  DEFAULT_DISCLAIMER,
-  ERROR_MESSAGE,
-} from '../src/gateway-adapter.js';
-import {
-  successAnalysisResponse,
-  emptyAnalysisResponse,
-} from '../src/fixtures/analysis-response.fixture.js';
 
 const widgetSource = fs.readFileSync(path.resolve(__dirname, '../widget.js'), 'utf8');
 const ANALYSIS_V1_SUMMARY =
@@ -71,8 +61,6 @@ describe('S104 Edge widget helpers', () => {
       symbol: '005930',
       theme: 'default',
       mockStatus: 'empty',
-      gatewayMode: 'mock',
-      gatewayUrl: '',
     });
   });
 
@@ -117,27 +105,6 @@ describe('S104 Edge widget helpers', () => {
 
   it('validateConfig가 clientId 누락은 허용한다', () => {
     const validation = internals.validateConfig(internals.readConfig(buildScript({ clientId: null })));
-
-    expect(validation.ok).toBe(true);
-  });
-
-  it('validateConfig가 local-api 모드에서 gatewayUrl 누락을 fail loud로 잡는다', () => {
-    // 실제 Gateway 연결 검증 의도인데 URL이 없으면 mock 성공으로 가려지면 안 된다.
-    const script = buildScript({});
-    script.setAttribute('data-gateway-mode', 'local-api');
-
-    const validation = internals.validateConfig(internals.readConfig(script));
-
-    expect(validation.ok).toBe(false);
-    expect(validation.message).toContain('data-gateway-url');
-  });
-
-  it('validateConfig가 local-api 모드에서 gatewayUrl이 있으면 통과한다', () => {
-    const script = buildScript({});
-    script.setAttribute('data-gateway-mode', 'local-api');
-    script.setAttribute('data-gateway-url', '/mock-gateway/widget-analysis');
-
-    const validation = internals.validateConfig(internals.readConfig(script));
 
     expect(validation.ok).toBe(true);
   });
@@ -392,168 +359,5 @@ describe('S015 script loader', () => {
     // 후속 테스트를 위해 테스트 모드와 내부 노출 상태를 복구한다.
     window.__EDGE_WIDGET_TEST_MODE__ = true;
     window.__EDGE_WIDGET_INTERNALS__ = internals;
-  });
-});
-
-describe('S049 widget local-api mode', () => {
-  beforeAll(() => {
-    bootstrapInternals();
-  });
-
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    document.getElementById('edge-widget-style')?.remove();
-  });
-
-  it('createGatewayRequest는 gatewayMode/gatewayUrl/mockStatus를 request에서 제외한다', () => {
-    const script = buildScript({ mockStatus: 'success' });
-    script.setAttribute('data-gateway-mode', 'local-api');
-    script.setAttribute('data-gateway-url', '/mock-gateway/widget-analysis');
-    const config = internals.readConfig(script);
-    expect(config.gatewayMode).toBe('local-api');
-    expect(config.gatewayUrl).toBe('/mock-gateway/widget-analysis');
-
-    const request = internals.createGatewayRequest(config);
-    expect(request).not.toHaveProperty('gatewayMode');
-    expect(request).not.toHaveProperty('gatewayUrl');
-    expect(request).not.toHaveProperty('mockStatus');
-  });
-
-  it('fetchGateway는 기본 config에서 mock mode를 사용한다', async () => {
-    const response = await internals.fetchGateway(
-      { symbol: '005930', widgetId: 'asset-event-impact', clientId: 'demo-sec' },
-      { gatewayMode: 'mock', mockStatus: 'success' },
-    );
-    expect(response.status).toBe('success');
-    expect(response.summary).toContain('삼성전자');
-  });
-
-  it('fetchGateway는 local-api mode에서 gatewayUrl로 POST 요청을 보낸다', async () => {
-    const localResponse = {
-      status: 'success',
-      symbol: '005930',
-      summary: 'LOCAL_SUMMARY',
-      cards: [{ title: '가격 변동 설명', description: 'LOCAL_SUMMARY' }],
-      disclaimer: 'D',
-      newsLinks: [],
-      fallback: { isFallback: false, reason: null, basedAt: null },
-    };
-    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => localResponse }));
-    const originalFetch = window.fetch;
-    window.fetch = fetchSpy;
-
-    try {
-      const request = { symbol: '005930', widgetId: 'asset-event-impact', clientId: 'demo-sec' };
-      const response = await internals.fetchGateway(request, {
-        gatewayMode: 'local-api',
-        gatewayUrl: '/mock-gateway/widget-analysis',
-      });
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchSpy.mock.calls[0];
-      expect(url).toBe('/mock-gateway/widget-analysis');
-      expect(init.method).toBe('POST');
-      expect(JSON.parse(init.body).symbol).toBe('005930');
-      expect(response.summary).toBe('LOCAL_SUMMARY');
-    } finally {
-      window.fetch = originalFetch;
-    }
-  });
-
-  it('initEdgeWidget이 local-api mode에서 fetch 응답을 렌더링한다', async () => {
-    const localResponse = {
-      status: 'success',
-      symbol: '005930',
-      summary: 'LOCAL_RENDER_SUMMARY',
-      cards: [{ title: '가격 변동 설명', description: 'LOCAL_RENDER_SUMMARY' }],
-      disclaimer: 'D',
-      newsLinks: [],
-      fallback: { isFallback: false, reason: null, basedAt: null },
-    };
-    const originalFetch = window.fetch;
-    window.fetch = vi.fn(async () => ({ ok: true, json: async () => localResponse }));
-
-    try {
-      const script = buildScript();
-      script.setAttribute('data-gateway-mode', 'local-api');
-      script.setAttribute('data-gateway-url', '/mock-gateway/widget-analysis');
-      document.body.appendChild(script);
-
-      await internals.initEdgeWidget(script);
-
-      const container = script.nextSibling;
-      expect(container.textContent).toContain('LOCAL_RENDER_SUMMARY');
-    } finally {
-      window.fetch = originalFetch;
-    }
-  });
-
-  it('local-api fetch 실패 시 renderError로 표시한다', async () => {
-    const originalFetch = window.fetch;
-    window.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
-
-    try {
-      const script = buildScript();
-      script.setAttribute('data-gateway-mode', 'local-api');
-      script.setAttribute('data-gateway-url', '/mock-gateway/widget-analysis');
-      document.body.appendChild(script);
-
-      await internals.initEdgeWidget(script);
-
-      const container = script.nextSibling;
-      expect(container.textContent).toContain('위젯을 불러오는 중 문제가 발생했습니다.');
-    } finally {
-      window.fetch = originalFetch;
-    }
-  });
-});
-
-describe('option C: mock 스냅샷 ↔ src adapter 일관성', () => {
-  beforeAll(() => {
-    bootstrapInternals();
-  });
-
-  const request = {
-    embedKey: 'pub_demo_1234',
-    clientId: 'demo-sec',
-    widgetId: 'asset-event-impact',
-    symbol: '005930',
-    theme: 'default',
-  };
-
-  it('mock success가 src adapter success 출력과 일치한다', async () => {
-    const mock = await internals.fetchMockGateway(request, 'success');
-    const canonical = adapterMapAnalysisToWidgetResponse(successAnalysisResponse, request, {
-      disclaimer: DEFAULT_DISCLAIMER,
-    });
-    expect(mock).toEqual(canonical);
-  });
-
-  it('mock empty가 src adapter empty 출력과 일치한다', async () => {
-    const mock = await internals.fetchMockGateway(request, 'empty');
-    const canonical = adapterMapAnalysisToWidgetResponse(emptyAnalysisResponse, request, {
-      disclaimer: DEFAULT_DISCLAIMER,
-    });
-    expect(mock).toEqual(canonical);
-  });
-
-  it('mock fallback이 src adapter createFallbackResponse 출력과 일치한다', async () => {
-    const mock = await internals.fetchMockGateway(request, 'fallback');
-    const success = adapterMapAnalysisToWidgetResponse(successAnalysisResponse, request, {
-      disclaimer: DEFAULT_DISCLAIMER,
-    });
-    const canonical = createFallbackResponse(
-      success,
-      '실시간 분석 데이터를 수집할 수 없습니다.',
-      '2026-03-12T14:45:00+09:00',
-    );
-    expect(mock).toEqual(canonical);
-  });
-
-  it('mock error가 src adapter ERROR_MESSAGE와 일치한다', async () => {
-    const mock = await internals.fetchMockGateway(request, 'error');
-    expect(mock.status).toBe('error');
-    expect(mock.message).toBe(ERROR_MESSAGE);
-    expect(mock.symbol).toBe('005930');
   });
 });
