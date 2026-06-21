@@ -64,6 +64,7 @@ Default to surfacing uncertainty, not hiding it.
 ## Git Workflow
 - Full convention lives in README.md ("Git 컨벤션") — branch strategy, commit/PR title, merge policy. That is the SSOT.
 - Hard rule: never commit or PR directly to `main`. Branch ladder is `feature/*`·`fix/*` → `dev` → `main`. Open PRs against `dev` (except a `dev` → `main` release PR).
+- Jira issue key: put it in the branch name (`feature/<KEY>-slug`) and reference it in the commit/PR footer as `Refs: <KEY>`. Keep the title pure Conventional Commits — the key lives only in the footer. For squash merges put `Refs:` at the bottom of the PR description (the PR template does this). Details in README.
 
 ## Instruction File Convention
 - AGENTS.md is the single source of truth (SSOT) for agent instructions.
