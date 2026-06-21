@@ -1,7 +1,7 @@
 # widget-ui — ALPHA-263 워킹 스켈레톤 (스파이크)
 
 > **스파이크다. 운영 구현이 아니다.** 실제 Gateway/분석 API/Public Embed Key 검증/CDN 배포는 없다.
-> 단일 `<script>` 로더가 부팅돼 mock 응답을 4상태로 렌더하는지까지만 확인하고, data-*/위젯 응답 계약 초안을 도출한 M1 기록이다.
+> 단일 `<script>` 로더가 부팅돼 mock 응답을 4상태로 렌더하는지까지만 확인하고, data-*/위젯 응답 초안 노트를 도출한 M1 기록이다.
 > 모듈 역할(위젯 임베드 프론트엔드)은 루트 [README.md](../../../README.md)가 SSOT — 여기선 로컬 실행/특이점만 둔다.
 
 ## 실행
@@ -43,7 +43,7 @@ ALPHA-263은 widget 워킹 스켈레톤까지다. Gateway/분석 체인은 한 �
 [docs/](../../../docs/README.md)에 두지 않고 스파이크와 함께 둔다. 다음 스프린트에서 합의·확정되면
 그때 ADR/`schema`로 증류해 docs 지도에 등록한다(설계·계약 SSOT는 docs).
 
-- [`notes/widget-data-attributes-contract.md`](notes/widget-data-attributes-contract.md) — `data-*` 노트(S016). 필수 `data-embed-key`·`data-widget-id`·`data-symbol`. **멀티테넌시 신뢰 기준은 embedKey**(clientId 아님).
-- [`notes/widget-gateway-contract-draft.md`](notes/widget-gateway-contract-draft.md) — Widget↔Gateway 요청/위젯 응답 v1 노트(S104). adapter 매핑은 §6에서 S049로 위임.
+- [`notes/widget-data-attributes-note.md`](notes/widget-data-attributes-note.md) — `data-*` 노트(S016). 필수 `data-embed-key`·`data-widget-id`·`data-symbol`. **멀티테넌시 신뢰 기준은 embedKey**(clientId 아님).
+- [`notes/widget-gateway-note.md`](notes/widget-gateway-note.md) — Widget↔Gateway 요청/위젯 응답 v1 노트(S104). adapter 매핑은 §6에서 S049로 위임.
 
 `data-theme`는 현재 `default`만 지원한다(unknown 값도 `default`로 fallback). light/dark는 추후 확장.

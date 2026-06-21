@@ -1,11 +1,13 @@
-# Widget Data Attributes Contract Draft (S016)
+# Widget Data Attributes — 스파이크 노트 (S016)
 
-## 1. 문서 목적
+> 이 문서는 **계약 SSOT가 아니다.** 스파이크에서 도출한 미확정 노트이며, 확정되면 ADR/`schema`로 증류해 `docs/`에 등록한다.
 
-본 문서는 S016에서 script `data-*` 속성 계약 초안을 정리하는 문서다.
+## 1. 목적
+
+스파이크에서 script `data-*` 속성 초안을 정리한 노트다.
 
 - 확정 운영 스펙이 아니다.
-- Gateway/Widget 연동 전 프론트엔드 삽입 계약 초안이다.
+- Gateway/Widget 연동 전 프론트엔드 삽입 규격 초안이다.
 - 실제 Gateway endpoint, Public Embed Key 검증, ML API 호출, 분석 DB 조회는 구현하지 않는다.
 
 ## 2. Script 삽입 예시

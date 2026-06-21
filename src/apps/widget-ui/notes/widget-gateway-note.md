@@ -1,12 +1,14 @@
-# Widget Gateway Contract Draft (S104 PoC)
+# Widget ↔ Gateway 요청/응답 — 스파이크 노트 (S104)
 
-## 1. 문서 목적
+> 이 문서는 **계약 SSOT가 아니다.** 스파이크에서 도출한 미확정 노트이며, 확정되면 ADR/`schema`로 증류해 `docs/`에 등록한다.
 
-본 문서는 확정 API 스펙이 아닌 S104 PoC를 위한 Gateway 계약 초안이다.
+## 1. 목적
 
-- S104 PoC에서 `widget.js`가 단일 script 삽입으로 동작 가능한지 확인하기 위한 임시 요청/응답 규격이다.
+확정 API 스펙이 아닌 스파이크용 Widget↔Gateway 요청/응답 초안 노트다.
+
+- `widget.js`가 단일 script 삽입으로 동작 가능한지 확인하기 위한 임시 요청/응답 규격이다.
 - 실제 Gateway endpoint, 인증, ML API, 분석 DB, CDN 배포는 구현하지 않는다.
-- 실제 운영 계약은 S016/S046/S049에서 별도 확정한다.
+- 실제 운영 규격은 S016/S046/S049에서 별도 확정한다.
 
 ## 2. 구현 기준 정렬
 
@@ -18,7 +20,7 @@
 - 렌더러: `renderSuccess`, `renderEmpty`, `renderError`, `renderFallback`
 - 지원 mock 상태: `success`, `empty`, `error`, `fallback`
 - 스타일 주입: `id="edge-widget-style"`로 `document.head`에 1회 삽입
-- S016 data attribute 계약: `widget-data-attributes-contract.md`
+- S016 data attribute 계약: `widget-data-attributes-note.md`
 
 ## 3. Widget → Gateway Request Draft
 
@@ -150,6 +152,6 @@ Gateway v1은 분석 서버 응답을 위젯 응답으로 감싸서 반환하는
 
 ## 10. 다음 작업 연결
 
-- S016: data attribute/request 계약 정리 (`widget-data-attributes-contract.md`)
+- S016: data attribute/request 계약 정리 (`widget-data-attributes-note.md`)
 - **S049 (ALPHA-150)**: analysis 응답을 위젯 표준 응답으로 변환하는 Gateway adapter + §5 매핑 규칙 구현.
 - **S046 (ALPHA-147)**: Gateway 내부 흐름(`request → tenantContext → 분석 API → adapter`), Public Embed Key 검증, tenant context 생성.
