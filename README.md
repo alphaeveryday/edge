@@ -106,9 +106,10 @@ fix/*     ─┘
 - `feature/*` — 기능 작업. `dev`에서 분기합니다.
 - `fix/*` — 버그/핫픽스. `dev`에서 분기합니다.
 
-**브랜치 이름 (Jira 이슈 키 포함)**
-- 형식: `feature/<이슈키>-<슬러그>` · `fix/<이슈키>-<슬러그>`. 예: `feature/ALPHA-121-login-oauth`, `fix/ALPHA-130-duplicate-save`.
-- 이슈 키를 브랜치 이름에 넣으면 Jira가 PR을 해당 이슈에 **자동 연결**합니다.
+**브랜치 이름과 Jira 이슈 키**
+- 브랜치 종류는 `feature/*`·`fix/*` 둘뿐입니다. 접두어는 **작업 성격**(추가/수정)을, 커밋 `type`(feat·fix·docs·chore…)은 **각 변경**을 가리키는 별개 축입니다. 그래서 `feature/*` 브랜치에 `docs:` 커밋이 와도 정상입니다.
+- **이슈 우선(issue-first)** — 기능·버그 작업은 **Jira 이슈를 먼저 만들고** 그 키로 분기합니다(키 필수): `feature/<이슈키>-<슬러그>`. 예: `feature/ALPHA-121-login-oauth`, `fix/ALPHA-130-duplicate-save`. 키가 브랜치에 있으면 Jira가 PR을 해당 이슈에 **자동 연결**합니다.
+- **키 없는 예외** — 추적할 이슈가 없는 자명한 문서·잡무(`docs`·`chore`)는 키 없이 분기하고 `Refs:` 푸터를 생략할 수 있습니다. 예: `feature/add-contributing-guide`, `fix/readme-typo`.
 
 **PR 규칙 (엄격한 사다리)**
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
@@ -136,7 +137,7 @@ Refs: ALPHA-121
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
 - **푸터 (Jira 이슈 키)** — 본문 아래 마지막 줄에 `Refs: <이슈키>`로 이슈를 참조합니다. 제목 형식(Conventional Commits)은 그대로 두고 키는 **푸터에만** 둡니다. 여러 이슈는 `Refs: ALPHA-121, ALPHA-122`.
-  - Squash 머지 시 최종 커밋 메시지는 **PR 제목 + PR 설명**으로 합쳐지므로, `Refs:`는 **PR 설명 맨 아래**에 둡니다(아래 PR 템플릿이 자동으로 넣습니다). 그래야 `main`/`dev`의 squash 커밋에도 이슈 키가 남습니다.
+  - Squash 머지(feature/fix → dev) 시 최종 커밋 메시지는 **PR 제목 + PR 설명**으로 합쳐지므로, `Refs:`는 **PR 설명 맨 아래**에 둡니다(아래 PR 템플릿이 자동으로 넣습니다). 그래야 `dev`의 squash 커밋에 이슈 키가 남고, `dev → main` 머지 때 그대로 `main`까지 따라옵니다.
 
 ### 예시
 ```
@@ -161,8 +162,19 @@ Refs: ALPHA-121
 
 ### 머지 정책
 
-**Squash 머지만 허용합니다.** Merge commit·Rebase 머지는 사용하지 않습니다.
+머지 방식은 **경계마다 다릅니다.** 배경은 [docs/adr/0007](docs/adr/0007-merge-strategy.md).
 
-- **PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위.** `main`/`dev` 히스토리에 PR당 커밋 하나만 남아, 추적과 롤백(`revert`)이 단순해집니다.
-- **PR은 작게 유지합니다.** 리뷰 부담이 줄고, 문제 발생 시 되돌리는 범위가 좁아집니다.
+| 경계 | 머지 방식 | PR |
+|---|---|---|
+| `feature/*`·`fix/*` → `dev` | **Squash** (+ 머지 후 브랜치 삭제) | 필수 |
+| `dev` → `main` | **Merge commit (`--no-ff`)** | 필수 (릴리스) |
+
+**feature/fix → dev (Squash)**
+- PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위. `dev`에 PR당 커밋 하나만 남습니다.
+- **PR은 작게 유지합니다.** 리뷰 부담이 줄고, 되돌리는 범위가 좁아집니다.
 - PR 안의 중간 커밋은 squash로 합쳐지므로 자유롭게 쌓되, **PR 제목은 정확히** 작성합니다(최종 커밋 메시지가 됨).
+- 머지 후 feature/fix 브랜치는 **삭제**합니다. 다음 작업은 갱신된 `dev`에서 새로 분기합니다.
+
+**dev → main (Merge commit, 릴리스 PR)**
+- 리뷰와 CI를 이 PR에서 통과시킨 뒤 머지하고, `main`에 태그합니다.
+- **Squash·Rebase로 머지하지 않습니다.** 그 둘은 새 SHA의 커밋을 만들어 장수 브랜치 `dev`를 `main`과 **발산**시키고(같은 내용·다른 커밋), 릴리스마다 `dev`를 강제 재정렬해야 합니다. Merge commit은 기존 커밋을 공유해 발산이 없습니다.
