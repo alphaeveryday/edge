@@ -1309,7 +1309,7 @@
 
         <section class="edge-debug-section">
           <h3>S046 / S049 local API mode · PoC/dev 전용</h3>
-          <p>아래 위젯은 <code>data-gateway-mode="local-api"</code>로 동작하며 Vite dev 서버의 <code>POST /mock-gateway/widget-analysis</code> endpoint를 호출합니다. (S046) 이 endpoint는 내부적으로 <code>request → mock tenantContext → analysisApiClient.getLatestAnalysis() → S049 adapter(mapAnalysisToWidgetResponse())</code> 순서로 위젯 응답을 만듭니다. <code>npm run dev:widget</code>로 띄운 dev 서버에서만 동작합니다.</p>
+          <p>아래 위젯은 <code>data-gateway-mode="local-api"</code>로 동작하며 Vite dev 서버의 <code>POST /mock-gateway/widget-analysis</code> endpoint를 호출합니다. (S046) 이 endpoint는 내부적으로 <code>request → mock tenantContext → analysisApiClient.getLatestAnalysis() → S049 adapter(mapAnalysisToWidgetResponse())</code> 순서로 위젯 응답을 만듭니다. <code>pnpm --filter widget-ui dev</code>로 띄운 dev 서버에서만 동작합니다.</p>
           <p><code>POST /mock-gateway/widget-analysis</code>는 PoC/dev 전용 endpoint입니다. 실제 Gateway 서버, Public Embed Key 검증, tenant DB/분석 API 호출은 아직 없습니다.</p>
           <pre class="edge-install-code">&lt;script
   src="./widget.js"
@@ -1342,9 +1342,9 @@
           <ul class="edge-install-note">
             <li><code>docs/sprint/s015-result.md</code></li>
             <li><code>docs/sprint/s104-result.md</code></li>
-            <li><code>docs/contracts/widget-data-attributes-contract.md</code></li>
-            <li><code>docs/contracts/widget-gateway-contract-draft.md</code></li>
-            <li><code>docs/contracts/analysis-to-widget-response-mapping-draft.md</code></li>
+            <li><code>contracts/widget-data-attributes-contract.md</code></li>
+            <li><code>contracts/widget-gateway-contract-draft.md</code></li>
+            <li><code>contracts/analysis-to-widget-response-mapping-draft.md</code></li>
             <li><code>docs/sprint/s049-result.md</code></li>
             <li><code>docs/sprint/s046-result.md</code></li>
           </ul>

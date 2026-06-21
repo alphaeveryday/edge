@@ -18,7 +18,7 @@
 - 렌더러: `renderSuccess`, `renderEmpty`, `renderError`, `renderFallback`
 - 지원 mock 상태: `success`, `empty`, `error`, `fallback`
 - 스타일 주입: `id="edge-widget-style"`로 `document.head`에 1회 삽입
-- S016 data attribute 계약: `docs/contracts/widget-data-attributes-contract.md`
+- S016 data attribute 계약: `widget-data-attributes-contract.md`
 
 ## 3. Widget → Gateway Request Draft
 
@@ -69,14 +69,13 @@
 
 Gateway v1은 분석 서버 응답을 위젯 응답으로 감싸서 반환하는 adapter 역할을 맡는다.
 
+> `organizationId`/`applicationId`/`widgetId`는 **표준 응답에 포함하지 않는다.** S104 내부 mock은 `org_*`/`app_mts`를 붙였지만, 실제 tenant context 주입 방식이 미정이라 S049 adapter 출력(`createSuccessResponse`)에서 제외하기로 결정했다 — `analysis-to-widget-response-mapping-draft.md` §7. 이 문서의 이전 예시가 해당 필드를 포함했던 것을 위 결정에 맞춰 정리했다.
+
 ### 5.1. `status: "success"` 예시
 
 ```json
 {
   "status": "success",
-  "organizationId": "org_demo_sec",
-  "applicationId": "app_mts",
-  "widgetId": "asset-event-impact",
   "symbol": "005930",
   "generatedAt": "2026-03-12T15:30:00+09:00",
   "summary": "이번 삼성전자 하락은 반도체 규제 뉴스가 가장 크게 작용했어요...",
@@ -101,9 +100,6 @@ Gateway v1은 분석 서버 응답을 위젯 응답으로 감싸서 반환하는
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
 | `status` | string | 위젯 분기 기준 값 (`success`/`empty`/`error`/`fallback`) |
-| `organizationId` | string | 조직 식별자. 현재 mock 문자열 |
-| `applicationId` | string | 애플리케이션 식별자. 현재 mock 문자열 |
-| `widgetId` | string | 응답 위젯 ID |
 | `symbol` | string | 대상 종목 코드 |
 | `generatedAt` | string | 분석 기준 시각. S104에서는 analysis `as_of`를 사용 |
 | `summary` | string | 위젯 상단 요약. analysis `affected_assets[].summary`에서 매핑 |
@@ -142,7 +138,7 @@ S049에서 `mapAnalysisToWidgetResponse()` 변환 책임을 `widget.js` 내부 m
 - 분석 서버 v1 fixture: `src/fixtures/analysis-response.fixture.js`
 - local mock Gateway endpoint: Vite dev middleware `POST /mock-gateway/widget-analysis` (`vite.config.js`). PoC/dev 전용이며 실제 Gateway endpoint가 아니다.
 - `widget.js`는 기본 mock mode를 유지하고, `data-gateway-mode="local-api"` + `data-gateway-url`이 있으면 local endpoint를 호출한다 (`fetchGateway` → `fetchMockGateway` / `fetchLocalGateway`).
-- 매핑 규칙 상세: `docs/contracts/analysis-to-widget-response-mapping-draft.md`, 완료 기록: `Jira ALPHA-150`
+- 매핑 규칙 상세: `analysis-to-widget-response-mapping-draft.md`, 완료 기록: `Jira ALPHA-150`
 
 ## 6-2. S046 Gateway 내부 분석 API 호출 분리 (PoC)
 

@@ -60,7 +60,7 @@
 - `data-gateway-mode`
 - `data-gateway-url`
 
-`data-gateway-mode`, `data-gateway-url`은 S049 local API mode(PoC/dev)에서만 사용한다. 실제 고객사 설치 코드 계약이 아니며 Gateway request에도 포함하지 않는다. 자세한 매핑은 `docs/contracts/analysis-to-widget-response-mapping-draft.md`를 참고한다.
+`data-gateway-mode`, `data-gateway-url`은 S049 local API mode(PoC/dev)에서만 사용한다. 실제 고객사 설치 코드 계약이 아니며 Gateway request에도 포함하지 않는다. 자세한 매핑은 `analysis-to-widget-response-mapping-draft.md`를 참고한다.
 
 S046에서 local mock Gateway endpoint(`POST /mock-gateway/widget-analysis`)는 내부적으로 `request → mock tenantContext → analysisApiClient.getLatestAnalysis() → S049 adapter` 흐름으로 위젯 응답을 만든다. 실제 Gateway 서버와 Public Embed Key 검증은 아직 없으며, `embedKey`가 tenant 식별 신뢰 기준이어야 한다는 결정은 추후 Gateway 구현에서 확정한다 (`Jira ALPHA-147`).
 
