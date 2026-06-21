@@ -246,40 +246,9 @@
     disclaimer.textContent = response.disclaimer || '';
     card.appendChild(disclaimer);
 
-    if (Array.isArray(response.newsLinks) && response.newsLinks.length > 0) {
-      const linksWrap = document.createElement('div');
-      linksWrap.className = 'edge-widget-news-links';
-
-      const linksTitle = document.createElement('div');
-      linksTitle.textContent = '관련 뉴스';
-      linksTitle.className = 'edge-widget-news-title';
-      linksWrap.appendChild(linksTitle);
-
-      const linksList = document.createElement('ul');
-      linksList.className = 'edge-widget-list';
-
-      response.newsLinks.forEach((linkItem) => {
-        const item = document.createElement('li');
-
-        const anchor = document.createElement('a');
-        anchor.textContent = linkItem.title || '링크';
-        anchor.setAttribute('href', escapeAttribute(linkItem.url || '#'));
-        anchor.setAttribute('target', '_blank');
-        anchor.setAttribute('rel', 'noopener noreferrer');
-
-        const sourceText = document.createTextNode(` (${linkItem.source || '알 수 없음'})`);
-        const linkWrapper = document.createElement('span');
-        linkWrapper.appendChild(anchor);
-        linkWrapper.appendChild(sourceText);
-
-        item.appendChild(linkWrapper);
-        linksList.appendChild(item);
-      });
-
-      linksWrap.appendChild(linksList);
-      card.appendChild(linksWrap);
-    }
-
+    // newsLinks 렌더는 이 스파이크 범위가 아니다(v1 응답은 항상 []). 외부 URL을 href에
+    // 넣으려면 javascript: 등 위험 scheme을 막는 http/https allowlist가 선행돼야 하므로,
+    // 실제 newsLinks 도입(후속 S049+) 때 allowlist + 테스트와 함께 추가한다.
     container.appendChild(card);
   }
 
@@ -454,29 +423,6 @@
         font-size: 12px;
       }
 
-      .edge-widget-news-title {
-        margin-top: 12px;
-        font-weight: 800;
-      }
-
-      .edge-widget-list {
-        margin: 6px 0;
-        padding-left: 16px;
-      }
-
-      .edge-widget-list li {
-        margin-bottom: 6px;
-      }
-
-      .edge-widget-list a {
-        color: #225ec8;
-        text-decoration: none;
-      }
-
-      .edge-widget-list a:hover {
-        text-decoration: underline;
-      }
-
       .edge-widget-error .edge-widget-title,
       .edge-widget-fallback .edge-widget-title {
         color: #d64040;
@@ -560,17 +506,6 @@
       .replace(/`/g, '&#x60;');
   }
 
-  function escapeAttribute(value) {
-    return String(value === undefined || value === null ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/\"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .replace(/`/g, '&#x60;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/=/g, '&#x3D;');
-  }
-
   if (window.__EDGE_WIDGET_TEST_MODE__) {
     window.__EDGE_WIDGET_INTERNALS__ = {
       initEdgeWidget,
@@ -588,7 +523,6 @@
       renderFallback,
       injectStyle,
       escapeHtml,
-      escapeAttribute,
       clearContainer,
       normalizeAttribute,
       normalizeSymbolInput,

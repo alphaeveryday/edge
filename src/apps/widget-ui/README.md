@@ -37,11 +37,13 @@ ALPHA-263은 widget 워킹 스켈레톤까지다. Gateway/분석 체인은 한 �
 | analysis → widget 변환 adapter, local-api 모드, §5 응답 매핑 | **S049 (ALPHA-150)** |
 | Gateway 내부 흐름(tenantContext → 분석 API → adapter), Public Embed Key 검증 | **S046 (ALPHA-147)** |
 
-## 계약 초안
+## 스파이크 노트 (계약 후보 · 미확정)
 
-다음 스프린트 합의 대상. 확정 시 ADR/`schema`로 증류해 [docs 지도](../../../docs/README.md)에 등록한다.
+아래는 **확정 계약이 아니라** 스파이크에서 도출한 탐색 노트다. 계약 SSOT가 아니므로
+[docs/](../../../docs/README.md)에 두지 않고 스파이크와 함께 둔다. 다음 스프린트에서 합의·확정되면
+그때 ADR/`schema`로 증류해 docs 지도에 등록한다(설계·계약 SSOT는 docs).
 
-- [`contracts/widget-data-attributes-contract.md`](contracts/widget-data-attributes-contract.md) — `data-*` 계약(S016). 필수 `data-embed-key`·`data-widget-id`·`data-symbol`. **멀티테넌시 신뢰 기준은 embedKey**(clientId 아님).
-- [`contracts/widget-gateway-contract-draft.md`](contracts/widget-gateway-contract-draft.md) — Widget↔Gateway 요청/위젯 응답 v1(S104). adapter 매핑은 §6에서 S049로 위임.
+- [`notes/widget-data-attributes-contract.md`](notes/widget-data-attributes-contract.md) — `data-*` 노트(S016). 필수 `data-embed-key`·`data-widget-id`·`data-symbol`. **멀티테넌시 신뢰 기준은 embedKey**(clientId 아님).
+- [`notes/widget-gateway-contract-draft.md`](notes/widget-gateway-contract-draft.md) — Widget↔Gateway 요청/위젯 응답 v1 노트(S104). adapter 매핑은 §6에서 S049로 위임.
 
 `data-theme`는 현재 `default`만 지원한다(unknown 값도 `default`로 fallback). light/dark는 추후 확장.
