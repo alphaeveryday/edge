@@ -135,6 +135,15 @@
       };
     }
 
+    // fail loud: local-api 모드인데 gatewayUrl이 없으면 mock으로 조용히 빠지지 않고 에러로 막는다.
+    // 실제 Gateway 연결 검증 중 data-gateway-url 누락이 "성공한 것처럼" 보이는 걸 방지한다.
+    if (config.gatewayMode === 'local-api' && !normalizeAttribute(config.gatewayUrl)) {
+      return {
+        ok: false,
+        message: 'local-api 모드에는 data-gateway-url이 필요합니다.',
+      };
+    }
+
     return {
       ok: true,
       message: '',

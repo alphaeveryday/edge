@@ -121,6 +121,27 @@ describe('S104 Edge widget helpers', () => {
     expect(validation.ok).toBe(true);
   });
 
+  it('validateConfig가 local-api 모드에서 gatewayUrl 누락을 fail loud로 잡는다', () => {
+    // 실제 Gateway 연결 검증 의도인데 URL이 없으면 mock 성공으로 가려지면 안 된다.
+    const script = buildScript({});
+    script.setAttribute('data-gateway-mode', 'local-api');
+
+    const validation = internals.validateConfig(internals.readConfig(script));
+
+    expect(validation.ok).toBe(false);
+    expect(validation.message).toContain('data-gateway-url');
+  });
+
+  it('validateConfig가 local-api 모드에서 gatewayUrl이 있으면 통과한다', () => {
+    const script = buildScript({});
+    script.setAttribute('data-gateway-mode', 'local-api');
+    script.setAttribute('data-gateway-url', '/mock-gateway/widget-analysis');
+
+    const validation = internals.validateConfig(internals.readConfig(script));
+
+    expect(validation.ok).toBe(true);
+  });
+
   it('createGatewayRequest가 S016 request 객체를 만들고 mockStatus를 제외한다', () => {
     const config = internals.readConfig(buildScript({ mockStatus: 'fallback' }));
 
