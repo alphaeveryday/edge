@@ -1,8 +1,8 @@
-"""ALPHA-102 — 수집 설정 스키마.
+"""수집 설정 스키마.
 
 뉴스/가격 데이터 소스와 수집 대상(종목/키워드)을 타입이 있는 모델로 정의한다.
 필수값이 없거나 알 수 없는 키가 들어오면 pydantic이 ValidationError로 즉시 실패한다
-(조용한 기본값 금지 — AGENTS Rule 12 / AC "필수 설정 누락 시 명시적 실패").
+(조용한 기본값으로 넘기지 않고 명시적으로 실패 — AGENTS Rule 12).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class NewsSource(BaseModel):
 class PriceSource(BaseModel):
     """가격 데이터 소스.
 
-    ALPHA-102 범위는 가격 소스의 '설정 위치 명시'까지다. 실제 가격 수집은 후속.
+    현재 범위는 가격 소스의 '설정 위치 명시'까지다. 실제 가격 수집은 후속.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -50,7 +50,7 @@ class PriceConfig(BaseModel):
 
 
 class CollectionTargets(BaseModel):
-    """수집 대상. 설정만 바꾸면 fetcher(ALPHA-103)의 수집 대상이 바뀐다(AC4)."""
+    """수집 대상. 설정만 바꾸면 fetcher의 수집 대상이 바뀐다(코드 수정 없이)."""
 
     model_config = ConfigDict(extra="forbid")
 

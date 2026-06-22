@@ -1,6 +1,6 @@
-"""ALPHA-102 설정 로더 테스트.
+"""수집 설정 로더 테스트.
 
-각 테스트는 '왜 이 동작이 중요한가'(AC/Rule)를 주석으로 남긴다 — AGENTS Rule 9.
+각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다 — AGENTS Rule 9.
 설정 로딩은 결정론적 변환이라 코드로만 검증한다(Rule 5).
 """
 
@@ -30,7 +30,7 @@ def _write(tmp_path: Path, text: str) -> Path:
 
 
 def test_loads_typed_settings(tmp_path):
-    # 정상 파일은 타입이 있는 Settings로 로드된다(AC: 설정값으로 관리).
+    # 정상 파일은 타입이 있는 Settings로 로드된다(설정값으로 관리).
     settings = load_settings(_write(tmp_path, VALID))
 
     assert settings.news.sources["naver"].base_url == "https://example.com/news"
@@ -40,14 +40,14 @@ def test_loads_typed_settings(tmp_path):
 
 
 def test_missing_required_base_url_fails_loud(tmp_path):
-    # WHY: base_url 누락을 조용히 기본값으로 넘기면 fetcher가 빈/잘못된 소스로 수집한다(AC5).
+    # WHY: base_url 누락을 조용히 기본값으로 넘기면 fetcher가 빈/잘못된 소스로 수집한다.
     bad = VALID.replace('base_url = "https://example.com/news"', "")
     with pytest.raises(ConfigError):
         load_settings(_write(tmp_path, bad))
 
 
 def test_no_news_source_fails_loud(tmp_path):
-    # WHY: 뉴스 소스가 0개면 수집할 원천이 없다 — 명시적 실패여야 한다(AC1).
+    # WHY: 뉴스 소스가 0개면 수집할 원천이 없다 — 명시적 실패여야 한다.
     bad = """
 [price.source]
 base_url = "https://example.com/price"
@@ -60,7 +60,7 @@ symbols = ["005930"]
 
 
 def test_empty_targets_fails_loud(tmp_path):
-    # WHY: 종목·키워드가 모두 비면 파이프라인이 아무것도 수집하지 않고도 '성공'처럼 보인다(AC3/AC5).
+    # WHY: 종목·키워드가 모두 비면 파이프라인이 아무것도 수집하지 않고도 '성공'처럼 보인다.
     bad = """
 [news.sources.naver]
 base_url = "https://example.com/news"
@@ -118,7 +118,7 @@ def test_env_overrides_value_present_in_file(tmp_path, monkeypatch):
 
 
 def test_changing_config_changes_targets_without_code(tmp_path):
-    # WHY: AC4 — 설정값 변경만으로 수집 대상이 바뀐다(코드 수정 없이).
+    # WHY: 설정값 변경만으로 수집 대상이 바뀐다(코드 수정 없이).
     other = VALID.replace('symbols = ["005930"]', 'symbols = ["000660", "035720"]')
     settings = load_settings(_write(tmp_path, other))
     assert settings.targets.symbols == ["000660", "035720"]

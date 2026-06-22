@@ -33,7 +33,7 @@ class ConfigError(RuntimeError):
 
 
 class Settings(BaseSettings):
-    """수집 설정 루트. ALPHA-103 수집 로직이 이 객체를 받아 쓴다."""
+    """수집 설정 루트. 수집 로직이 이 객체를 받아 쓴다."""
 
     model_config = SettingsConfigDict(
         env_prefix="DATA_PIPELINE_",
