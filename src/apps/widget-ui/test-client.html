@@ -1222,10 +1222,7 @@
             <script
               src="./widget.js"
               data-embed-key="pub_demo_1234"
-              data-client-id="demo-sec"
-              data-widget-id="asset-event-impact"
-              data-symbol="005930"
-              data-theme="default">
+              data-symbol="005930">
             </script>
           </section>
         </section>
@@ -1246,20 +1243,16 @@
           <pre class="edge-install-code">&lt;script
   src="./widget.js"
   data-embed-key="pub_demo_1234"
-  data-client-id="demo-sec"
-  data-widget-id="asset-event-impact"
-  data-symbol="005930"
-  data-theme="default"&gt;
+  data-symbol="005930"&gt;
 &lt;/script&gt;</pre>
         </section>
 
         <section class="edge-debug-section">
           <h3>S016 data attribute 계약 요약</h3>
           <ul class="edge-install-note">
-            <li>필수: <code>data-embed-key</code>, <code>data-widget-id</code>, <code>data-symbol</code></li>
-            <li>선택: <code>data-client-id</code>, <code>data-theme</code></li>
+            <li>필수: <code>data-embed-key</code>, <code>data-symbol</code> (이 2개가 전체 계약)</li>
             <li>테스트 전용: <code>data-mock-status</code> — PoC 상태 강제용이며 실제 Gateway request나 설치 코드에는 포함하지 않습니다.</li>
-            <li>멀티테넌시 신뢰 기준은 <code>data-client-id</code>가 아니라 <code>data-embed-key</code> 검증 결과입니다.</li>
+            <li>멀티테넌시 신뢰 기준은 <code>data-embed-key</code>(Public Embed Key) 검증 결과이며, 키 1개가 위젯 1개를 가리킵니다(widget-id 불필요).</li>
           </ul>
         </section>
 
@@ -1272,10 +1265,7 @@
             <script
               src="./widget.js"
               data-embed-key="pub_demo_1234"
-              data-client-id="demo-sec"
-              data-widget-id="asset-event-impact"
               data-symbol="005930"
-              data-theme="default"
               data-mock-status="empty">
             </script>
           </div>
@@ -1285,10 +1275,7 @@
             <script
               src="./widget.js"
               data-embed-key="pub_demo_1234"
-              data-client-id="demo-sec"
-              data-widget-id="asset-event-impact"
               data-symbol="005930"
-              data-theme="default"
               data-mock-status="error">
             </script>
           </div>
@@ -1298,10 +1285,7 @@
             <script
               src="./widget.js"
               data-embed-key="pub_demo_1234"
-              data-client-id="demo-sec"
-              data-widget-id="asset-event-impact"
               data-symbol="005930"
-              data-theme="default"
               data-mock-status="fallback">
             </script>
           </div>

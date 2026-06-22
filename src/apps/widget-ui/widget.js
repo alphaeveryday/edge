@@ -96,10 +96,7 @@
 
     return {
       embedKey: normalizeAttribute(script.getAttribute('data-embed-key')),
-      clientId: normalizeAttribute(script.getAttribute('data-client-id')),
-      widgetId: normalizeAttribute(script.getAttribute('data-widget-id')),
       symbol: normalizeSymbolInput(script.getAttribute('data-symbol')),
-      theme: normalizeTheme(script.getAttribute('data-theme')),
       mockStatus: normalizeStatus(script.getAttribute('data-mock-status')),
     };
   }
@@ -114,7 +111,6 @@
 
     const required = [
       { key: 'embedKey', name: 'data-embed-key' },
-      { key: 'widgetId', name: 'data-widget-id' },
       { key: 'symbol', name: 'data-symbol' },
     ];
 
@@ -136,19 +132,10 @@
   }
 
   function createGatewayRequest(config) {
-    const request = {
+    return {
       embedKey: normalizeAttribute(config.embedKey),
-      widgetId: normalizeAttribute(config.widgetId),
       symbol: normalizeSymbolInput(config.symbol),
-      theme: normalizeTheme(config.theme),
     };
-
-    const clientId = normalizeAttribute(config.clientId);
-    if (clientId) {
-      request.clientId = clientId;
-    }
-
-    return request;
   }
 
   function createContainer(script) {
@@ -448,11 +435,6 @@
     return normalizeAttribute(value);
   }
 
-  function normalizeTheme(raw) {
-    const normalized = String(raw || 'default').trim().toLowerCase();
-    return normalized === 'default' ? 'default' : 'default';
-  }
-
   function normalizeStatus(raw) {
     const normalized = String(raw || 'success').trim().toLowerCase();
     if (normalized === 'success' || normalized === 'empty' || normalized === 'error' || normalized === 'fallback') {
@@ -526,7 +508,6 @@
       clearContainer,
       normalizeAttribute,
       normalizeSymbolInput,
-      normalizeTheme,
       normalizeStatus,
     };
   } else {
