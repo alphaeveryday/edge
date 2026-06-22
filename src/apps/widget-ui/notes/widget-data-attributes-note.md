@@ -1,4 +1,4 @@
-# Widget Data Attributes — 입력 계약 (S016)
+# Widget Data Attributes — 입력 계약
 
 > 이 문서는 위젯 로더의 **입력 계약(현 합의)** 이다. 고객사 페이지가 박는 `<script>`의
 > `data-*` 속성과 그 처리/매핑 규칙을 정의한다.
@@ -39,8 +39,8 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 
 `data-mock-status`는 PoC 테스트 전용이므로 실제 고객사 설치 예시에는 포함하지 않는다(§7).
 
-위 단일 `<script>` 태그가 S015 loader의 진입점이다. 단일 script로 `widget.js`가 로드되면 loader가
-현재 script 위치를 찾아 그 바로 뒤에 위젯 container를 생성한다. S015 상세 완료 기록은 `Jira ALPHA-116`를 참고한다.
+위 단일 `<script>` 태그가 loader의 진입점이다. 단일 script로 `widget.js`가 로드되면 loader가
+현재 script 위치를 찾아 그 바로 뒤에 위젯 container를 생성한다.
 
 ## 3. data attribute 표
 
@@ -50,7 +50,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 | `data-symbol` | 필수 | `005930` | 고객사 페이지가 전달하는 종목 식별자 | 포함: `symbol` | trim 후 non-empty만 검증 |
 | `data-mock-status` | 테스트 전용 | `success` | PoC 상태 강제값 | 포함하지 않음 | 실제 계약 아님 |
 
-> 이전 초안(ALPHA-263)의 `data-widget-id`·`data-theme`·`data-client-id`는 본 계약에서 제거됐다.
+> 이전 초안의 `data-widget-id`·`data-theme`·`data-client-id`는 본 계약에서 제거됐다.
 > widget·theme 등 위젯 설정은 키로 조회하는 서버(DB) 책임이다.
 
 ## 4. 필수/테스트 전용 구분
@@ -85,7 +85,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 
 고객사마다 종목 코드 형식이 다를 수 있으므로 위젯은 symbol format을 엄격하게 검증하지 않는다.
 
-- S016에서는 trim 후 non-empty만 검증한다.
+- 현재는 trim 후 non-empty만 검증한다.
 - `005930`, `005930.KS`, `KRX:005930` 같은 형식을 모두 허용 가능하다.
 - `widget.js`는 고객사가 준 `symbol`을 request에 그대로 전달한다.
 - 실제 canonical symbol 변환은 Gateway adapter 또는 분석 API adapter에서 처리한다.
@@ -101,7 +101,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 
 ## 8. Widget → Request Draft
 
-S016 기준 request 예시:
+현 계약 기준 request 예시:
 
 ```json
 {
@@ -120,4 +120,4 @@ S016 기준 request 예시:
 
 - attribute → **iframe URL(`?key=&symbol=`) 전달**, widget-loader 엔트리, postMessage → iframe 전달 마이그레이션.
 - 서버측 `allowed_origins`/`frame-ancestors`, `public_embed_keys`·`widget_config` 스키마 → 조영서 트랙.
-- S046: 실제 Gateway API 호출 연결 / S049: 분석 서버 응답 → 위젯 응답 변환 adapter.
+- 실제 Gateway API 호출 연결 / 분석 서버 응답 → 위젯 응답 변환 adapter.

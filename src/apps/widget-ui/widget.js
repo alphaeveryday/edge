@@ -6,7 +6,7 @@
 
   // 이미 변환이 끝난 widget response 스냅샷. widget.js는 analysis -> widget 변환을 하지 않고
   // 이 스냅샷을 status별로 렌더링만 한다(widget = 렌더). 서버 없이 도는 오프라인 대역이다.
-  // 실제 Gateway 연동(adapter 변환, 분석 API 호출, tenant context)은 후속 티켓 S046/S049에서 구현한다.
+  // 실제 Gateway 연동(adapter 변환, 분석 API 호출, tenant context)은 후속에서 구현한다.
   const MOCK_GENERATED_AT = '2026-03-12T15:30:00+09:00';
   const MOCK_DISCLAIMER =
     '본 정보는 투자 참고용이며, 투자 판단의 최종 책임은 투자자 본인에게 있습니다.';
@@ -235,7 +235,7 @@
 
     // newsLinks 렌더는 이 스파이크 범위가 아니다(v1 응답은 항상 []). 외부 URL을 href에
     // 넣으려면 javascript: 등 위험 scheme을 막는 http/https allowlist가 선행돼야 하므로,
-    // 실제 newsLinks 도입(후속 S049+) 때 allowlist + 테스트와 함께 추가한다.
+    // 실제 newsLinks 도입(후속) 때 allowlist + 테스트와 함께 추가한다.
     container.appendChild(card);
   }
 
