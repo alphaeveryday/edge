@@ -131,6 +131,22 @@ def test_env_overrides_value_present_in_file(tmp_path, monkeypatch):
     assert settings.news.sources["naver"].base_url == "https://override.example.com"
 
 
+def test_blank_config_arg_fails_loud(tmp_path):
+    # WHY: load_settings("")는 '명시했으나 빈 값' — 조용히 기본값으로 폴백하면 안 되고 실패해야 한다.
+    with pytest.raises(ConfigError):
+        load_settings("")
+    with pytest.raises(ConfigError):
+        load_settings("   ")
+
+
+def test_blank_config_env_fails_loud(monkeypatch):
+    # WHY: 배포에서 DATA_PIPELINE_CONFIG_FILE에 빈 값이 주입되면 placeholder 기본값으로
+    #      조용히 부팅하는 대신 fail-loud해야 한다(문서화된 경로 우선순위).
+    monkeypatch.setenv("DATA_PIPELINE_CONFIG_FILE", "")
+    with pytest.raises(ConfigError):
+        load_settings()
+
+
 def test_default_config_loads_without_args(monkeypatch):
     # WHY: 인자·env 없이도 패키지 동봉 기본 설정이 로드돼야 한다. 기본 경로 해석이
     #      깨지면(예: wheel 설치) load_settings()가 ConfigError로 죽는다.

@@ -61,11 +61,22 @@ class Settings(BaseSettings):
 
 def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
     """설정을 로드해 검증된 Settings를 돌려준다. 실패는 ConfigError로 드러낸다."""
-    path = Path(
-        config_file
-        or os.environ.get("DATA_PIPELINE_CONFIG_FILE")
-        or _DEFAULT_CONFIG_FILE
-    )
+    # 경로 우선순위: 인자 > DATA_PIPELINE_CONFIG_FILE > 동봉 기본값.
+    # "미지정"(None/미설정)과 "지정했으나 빈 값"을 구분한다 — 빈 값은 조용히 기본값으로
+    # 넘기지 않고 fail-loud한다(예: 배포에서 env에 빈 경로가 주입된 경우).
+    if config_file is not None:
+        candidate, origin = os.fspath(config_file), "인자"
+    elif "DATA_PIPELINE_CONFIG_FILE" in os.environ:
+        candidate, origin = os.environ["DATA_PIPELINE_CONFIG_FILE"], "DATA_PIPELINE_CONFIG_FILE"
+    else:
+        candidate, origin = None, None
+
+    if candidate is not None and not candidate.strip():
+        raise ConfigError(
+            f"설정 파일 경로({origin})가 비어 있다 — 실제 경로를 지정하거나 아예 지정하지 마라"
+        )
+
+    path = Path(candidate) if candidate is not None else _DEFAULT_CONFIG_FILE
     if not path.is_file():
         raise ConfigError(f"설정 파일을 찾을 수 없다: {path}")
 
