@@ -1,6 +1,6 @@
 # widget-ui
 
-> 외부 임베드 위젯 모듈 — 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
+> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·범위 경계만 둔다.
 >
 > ALPHA-263 스파이크의 워킹 스켈레톤을 위젯 렌더링 책임으로 정리했다.
@@ -17,7 +17,7 @@ pnpm --filter widget-ui dev       # Vite dev 서버 → http://localhost:5173/te
 pnpm --filter widget-ui test      # Vitest + jsdom (26 tests)
 ```
 
-> pnpm이 없는 환경이면 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run`(= `npm test`).
+> pnpm이 없는 환경이면 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
 
 `test-client.html`은 고객사 MTS 종목상세에 위젯을 삽입한 데모다. `success`는 AI분석 탭 본문에서, `empty`/`error`/`fallback`은 하단 "개발자 검증 정보 보기" 패널의 `data-mock-status` 위젯에서 확인한다.
 
