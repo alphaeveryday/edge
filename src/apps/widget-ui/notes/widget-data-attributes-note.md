@@ -37,7 +37,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 </script>
 ```
 
-`data-mock-status`는 PoC 테스트 전용이므로 실제 고객사 설치 예시에는 포함하지 않는다(§8).
+`data-mock-status`는 PoC 테스트 전용이므로 실제 고객사 설치 예시에는 포함하지 않는다(§7).
 
 위 단일 `<script>` 태그가 S015 loader의 진입점이다. 단일 script로 `widget.js`가 로드되면 loader가
 현재 script 위치를 찾아 그 바로 뒤에 위젯 container를 생성한다. S015 상세 완료 기록은 `Jira ALPHA-116`를 참고한다.
@@ -69,7 +69,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 ### 누락/잘못된 값 처리
 
 - 필수 누락(`data-embed-key` 또는 `data-symbol`) → 검증 실패, 에러 카드 렌더 + `console.error`.
-- `data-mock-status`에 잘못된 값 → `success`로 fallback(§8).
+- `data-mock-status`에 잘못된 값 → `success`로 fallback(§7).
 
 ## 5. 멀티테넌시 결정
 
