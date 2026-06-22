@@ -99,13 +99,22 @@ def test_missing_config_file_fails_loud(tmp_path):
         load_settings(tmp_path / "does-not-exist.toml")
 
 
-def test_env_overrides_file_secret(tmp_path, monkeypatch):
-    # WHY: 비밀값(api_key)은 커밋되는 파일이 아니라 env로 주입되며, env가 파일을 덮어쓴다.
+def test_env_fills_secret_absent_from_file(tmp_path, monkeypatch):
+    # WHY: 비밀값(api_key)은 커밋되는 파일에 없고 env로 주입된다.
     monkeypatch.setenv(
         "DATA_PIPELINE_NEWS__SOURCES__NAVER__API_KEY", "secret-from-env"
     )
     settings = load_settings(_write(tmp_path, VALID))
     assert settings.news.sources["naver"].api_key == "secret-from-env"
+
+
+def test_env_overrides_value_present_in_file(tmp_path, monkeypatch):
+    # WHY: env > file 우선순위. 파일에 이미 있는 값도 env가 덮어쓴다(채우기만이 아니라 오버라이드).
+    monkeypatch.setenv(
+        "DATA_PIPELINE_NEWS__SOURCES__NAVER__BASE_URL", "https://override.example.com"
+    )
+    settings = load_settings(_write(tmp_path, VALID))
+    assert settings.news.sources["naver"].base_url == "https://override.example.com"
 
 
 def test_changing_config_changes_targets_without_code(tmp_path):

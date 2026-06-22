@@ -14,9 +14,10 @@ uv sync                                  # src/ (Python 루트)에서 의존성 
 uv run --package data-pipeline pytest    # 테스트
 ```
 
-> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서):
+> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
 > ```bash
-> python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+> python3 -m venv .venv
+> .venv/bin/pip install -e . --group dev   # dev 그룹(pytest)은 PEP 735 [dependency-groups]
 > .venv/bin/pytest
 > ```
 

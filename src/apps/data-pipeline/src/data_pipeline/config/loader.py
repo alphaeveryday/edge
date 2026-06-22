@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -19,7 +20,6 @@ from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    TomlConfigSettingsSource,
 )
 
 from .models import CollectionTargets, NewsConfig, PriceConfig
@@ -54,12 +54,8 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # 환경변수가 TOML 파일 값을 덮어쓴다(env 먼저 = 우선순위 높음).
-        toml_file = cls.model_config.get("toml_file")
-        return (
-            env_settings,
-            TomlConfigSettingsSource(settings_cls, toml_file=toml_file),
-        )
+        # 환경변수(높은 우선순위)가 파일에서 읽어 주입한 init 데이터를 덮어쓴다(env > file).
+        return (env_settings, init_settings)
 
 
 def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
@@ -72,8 +68,14 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if not path.is_file():
         raise ConfigError(f"설정 파일을 찾을 수 없다: {path}")
 
-    Settings.model_config["toml_file"] = str(path)
     try:
-        return Settings()
+        with path.open("rb") as fp:
+            file_data = tomllib.load(fp)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"설정 파일 TOML 파싱 실패 ({path}):\n{exc}") from exc
+
+    try:
+        # 파일 데이터는 init으로 주입하고, 환경변수가 이를 덮어쓴다(settings_customise_sources).
+        return Settings(**file_data)
     except ValidationError as exc:
         raise ConfigError(f"설정 검증 실패 ({path}):\n{exc}") from exc
