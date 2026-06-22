@@ -1,8 +1,11 @@
-# widget-ui — ALPHA-263 워킹 스켈레톤 (스파이크)
+# widget-ui
 
-> **스파이크다. 운영 구현이 아니다.** 실제 Gateway/분석 API/Public Embed Key 검증/CDN 배포는 없다.
-> 단일 `<script>` 로더가 부팅돼 mock 응답을 4상태로 렌더하는지까지만 확인하고, data-*/위젯 응답 초안 노트를 도출한 M1 기록이다.
-> 모듈 역할(위젯 임베드 프론트엔드)은 루트 [README.md](../../../README.md)가 SSOT — 여기선 로컬 실행/특이점만 둔다.
+> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
+> 이 문서는 로컬 실행·범위 경계만 둔다.
+>
+> ALPHA-263 스파이크의 워킹 스켈레톤을 위젯 렌더링 책임으로 정리했다.
+> 단일 `<script>` 로더가 고객사 페이지 삽입을 가정한 데모에서 부팅돼 gateway/mock 응답을 4상태로 렌더링한다.
+> **gateway는 아직 mock** — 분석 API 호출 / adapter 변환 / Public Embed Key 검증은 후속 범위다(아래 "제외" 표).
 
 ## 실행
 
@@ -13,6 +16,8 @@ pnpm install                      # src/ (Node 루트)에서 1회
 pnpm --filter widget-ui dev       # Vite dev 서버 → http://localhost:5173/test-client.html
 pnpm --filter widget-ui test      # Vitest + jsdom (26 tests)
 ```
+
+> pnpm이 없는 환경이면 `src/apps/widget-ui`에서 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
 
 `test-client.html`은 고객사 MTS 종목상세에 위젯을 삽입한 데모다. `success`는 AI분석 탭 본문에서, `empty`/`error`/`fallback`은 하단 "개발자 검증 정보 보기" 패널의 `data-mock-status` 위젯에서 확인한다.
 
@@ -26,11 +31,11 @@ widget.js (data-* 파싱 → request)
   → renderWidget (success / empty / error / fallback)
 ```
 
-analysis → widget 변환(adapter)은 Gateway 책임이며 **이 스파이크 범위가 아니다** — 후속 S049에서 구현한다.
+analysis → widget 변환(adapter)은 Gateway 책임이며 **이 모듈 범위가 아니다** — 후속 S049에서 구현한다.
 
 ## 범위에서 의도적으로 제외한 것 (후속 티켓)
 
-ALPHA-263은 widget 워킹 스켈레톤까지다. Gateway/분석 체인은 한 모듈에 책임을 몰지 않도록 **이 PR에서 제외**했고, 티켓 명시대로 후속에서 구현한다:
+이 모듈은 위젯 렌더링 + mock 응답 표시까지다. Gateway/분석 체인은 한 모듈에 책임을 몰지 않도록 **이 범위에서 제외**했고, 티켓 명시대로 후속에서 구현한다:
 
 | 제외 대상 | 후속 티켓 |
 |---|---|
