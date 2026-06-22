@@ -24,8 +24,9 @@ from pydantic_settings import (
 
 from .models import CollectionTargets, NewsConfig, PriceConfig
 
-# loader.py -> config -> data_pipeline -> src -> data-pipeline(앱 루트)
-_DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[3] / "config" / "sources.toml"
+# 기본 설정은 패키지 안에 두고 모듈과 함께 배포한다(loader.py 옆). 이렇게 해야
+# editable/wheel 어느 설치에서도 __file__ 기준으로 동일하게 찾는다.
+_DEFAULT_CONFIG_FILE = Path(__file__).resolve().parent / "sources.toml"
 
 
 class ConfigError(RuntimeError):

@@ -131,6 +131,15 @@ def test_env_overrides_value_present_in_file(tmp_path, monkeypatch):
     assert settings.news.sources["naver"].base_url == "https://override.example.com"
 
 
+def test_default_config_loads_without_args(monkeypatch):
+    # WHY: 인자·env 없이도 패키지 동봉 기본 설정이 로드돼야 한다. 기본 경로 해석이
+    #      깨지면(예: wheel 설치) load_settings()가 ConfigError로 죽는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    settings = load_settings()
+    assert settings.news.sources  # 비어 있지 않음
+    assert settings.targets.symbols or settings.targets.keywords
+
+
 def test_changing_config_changes_targets_without_code(tmp_path):
     # WHY: 설정값 변경만으로 수집 대상이 바뀐다(코드 수정 없이).
     other = VALID.replace('symbols = ["005930"]', 'symbols = ["000660", "035720"]')
