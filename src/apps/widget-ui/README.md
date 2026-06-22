@@ -17,7 +17,7 @@ pnpm --filter widget-ui dev       # Vite dev 서버 → http://localhost:5173/te
 pnpm --filter widget-ui test      # Vitest + jsdom (26 tests)
 ```
 
-> pnpm이 없는 환경이면 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
+> pnpm이 없는 환경이면 `src/apps/widget-ui`에서 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
 
 `test-client.html`은 고객사 MTS 종목상세에 위젯을 삽입한 데모다. `success`는 AI분석 탭 본문에서, `empty`/`error`/`fallback`은 하단 "개발자 검증 정보 보기" 패널의 `data-mock-status` 위젯에서 확인한다.
 
