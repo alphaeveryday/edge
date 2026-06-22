@@ -32,7 +32,7 @@ function buildScript(overrides = {}) {
   return script;
 }
 
-describe('S104 Edge widget helpers', () => {
+describe('Edge widget helpers', () => {
   beforeAll(() => {
     bootstrapInternals();
   });
@@ -229,7 +229,7 @@ describe('S104 Edge widget helpers', () => {
   });
 });
 
-describe('S015 script loader', () => {
+describe('script loader', () => {
   beforeAll(() => {
     bootstrapInternals();
   });
