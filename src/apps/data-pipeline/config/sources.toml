@@ -1,0 +1,23 @@
+# data-pipeline 수집 설정 (ALPHA-102)
+#
+# 구조와 공개값만 둔다. api_key 등 비밀값은 커밋하지 말고 환경변수로 주입한다.
+#   예) DATA_PIPELINE_NEWS__SOURCES__NAVER__API_KEY=...
+# 같은 경로의 환경변수가 이 파일 값을 덮어쓴다(env > file).
+#
+# 수집 대상은 [targets]만 바꾸면 fetcher(ALPHA-103)의 대상이 바뀐다 — 코드 수정 불필요.
+
+[news.sources.naver]
+base_url = "https://openapi.naver.com/v1/search/news.json"
+enabled = true
+
+[news.sources.hankyung]
+base_url = "https://www.hankyung.com/feed/finance"
+enabled = true
+
+[price.source]
+base_url = "https://api.example-price.com/v1"
+enabled = true
+
+[targets]
+symbols = ["005930", "000660", "035720"]  # 삼성전자, SK하이닉스, 카카오
+keywords = ["금리", "실적", "환율"]

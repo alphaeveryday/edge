@@ -1,0 +1,79 @@
+"""TOML 베이스 파일 + 환경변수 오버라이드로 수집 설정을 로드한다.
+
+우선순위: **환경변수 > TOML 파일**.
+비밀값(api_key 등)은 커밋되는 TOML이 아니라 환경변수로만 주입한다.
+
+    DATA_PIPELINE_NEWS__SOURCES__NAVER__API_KEY=...   # news.sources.naver.api_key 덮어쓰기
+
+파일 경로는 인자 > 환경변수(DATA_PIPELINE_CONFIG_FILE) > 기본값(config/sources.toml) 순으로 정해진다.
+이 한 줄로 환경(dev/prod)별 로딩을 구분한다.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from pydantic import ValidationError
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+
+from .models import CollectionTargets, NewsConfig, PriceConfig
+
+# loader.py -> config -> data_pipeline -> src -> data-pipeline(앱 루트)
+_DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[3] / "config" / "sources.toml"
+
+
+class ConfigError(RuntimeError):
+    """설정 로딩/검증 실패. 조용한 기본값 대신 항상 이 예외로 드러낸다(fail loud)."""
+
+
+class Settings(BaseSettings):
+    """수집 설정 루트. ALPHA-103 수집 로직이 이 객체를 받아 쓴다."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="DATA_PIPELINE_",
+        env_nested_delimiter="__",
+        extra="forbid",
+    )
+
+    news: NewsConfig
+    price: PriceConfig
+    targets: CollectionTargets
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # 환경변수가 TOML 파일 값을 덮어쓴다(env 먼저 = 우선순위 높음).
+        toml_file = cls.model_config.get("toml_file")
+        return (
+            env_settings,
+            TomlConfigSettingsSource(settings_cls, toml_file=toml_file),
+        )
+
+
+def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
+    """설정을 로드해 검증된 Settings를 돌려준다. 실패는 ConfigError로 드러낸다."""
+    path = Path(
+        config_file
+        or os.environ.get("DATA_PIPELINE_CONFIG_FILE")
+        or _DEFAULT_CONFIG_FILE
+    )
+    if not path.is_file():
+        raise ConfigError(f"설정 파일을 찾을 수 없다: {path}")
+
+    Settings.model_config["toml_file"] = str(path)
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise ConfigError(f"설정 검증 실패 ({path}):\n{exc}") from exc
