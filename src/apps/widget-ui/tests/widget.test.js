@@ -19,17 +19,11 @@ function buildScript(overrides = {}) {
   const script = document.createElement('script');
   const values = {
     embedKey: overrides.embedKey === undefined ? 'pub_demo_1234' : overrides.embedKey,
-    clientId: overrides.clientId === undefined ? 'demo-sec' : overrides.clientId,
-    widgetId: overrides.widgetId === undefined ? 'asset-event-impact' : overrides.widgetId,
     symbol: overrides.symbol === undefined ? '005930' : overrides.symbol,
-    theme: overrides.theme === undefined ? 'default' : overrides.theme,
   };
 
   if (values.embedKey !== null) script.setAttribute('data-embed-key', values.embedKey);
-  if (values.clientId !== null) script.setAttribute('data-client-id', values.clientId);
-  if (values.widgetId !== null) script.setAttribute('data-widget-id', values.widgetId);
   if (values.symbol !== null) script.setAttribute('data-symbol', values.symbol);
-  if (values.theme !== null) script.setAttribute('data-theme', values.theme);
 
   if (Object.prototype.hasOwnProperty.call(overrides, 'mockStatus') && overrides.mockStatus !== null) {
     script.setAttribute('data-mock-status', overrides.mockStatus);
@@ -48,7 +42,7 @@ describe('S104 Edge widget helpers', () => {
     document.getElementById('edge-widget-style')?.remove();
   });
 
-  it('readConfig가 모든 data attribute를 읽는다', () => {
+  it('readConfig가 data attribute(embedKey, symbol)를 읽는다', () => {
     const script = buildScript({ mockStatus: 'empty' });
     document.body.appendChild(script);
 
@@ -56,24 +50,9 @@ describe('S104 Edge widget helpers', () => {
 
     expect(config).toEqual({
       embedKey: 'pub_demo_1234',
-      clientId: 'demo-sec',
-      widgetId: 'asset-event-impact',
       symbol: '005930',
-      theme: 'default',
       mockStatus: 'empty',
     });
-  });
-
-  it('readConfig가 theme이 없을 때 default를 적용한다', () => {
-    const config = internals.readConfig(buildScript({ theme: null }));
-
-    expect(config.theme).toBe('default');
-  });
-
-  it('readConfig가 알 수 없는 theme을 default로 fallback한다', () => {
-    const config = internals.readConfig(buildScript({ theme: 'dark' }));
-
-    expect(config.theme).toBe('default');
   });
 
   it('readConfig가 symbol을 trim하고 canonical 변환은 하지 않는다', () => {
@@ -89,11 +68,10 @@ describe('S104 Edge widget helpers', () => {
     expect(validation.message).toContain('data-embed-key');
   });
 
-  it('validateConfig가 widgetId 누락을 잡는다', () => {
-    const validation = internals.validateConfig(internals.readConfig(buildScript({ widgetId: null })));
+  it('validateConfig가 embedKey+symbol만으로 통과한다 (widgetId/theme/clientId는 계약에서 제외)', () => {
+    const validation = internals.validateConfig(internals.readConfig(buildScript()));
 
-    expect(validation.ok).toBe(false);
-    expect(validation.message).toContain('data-widget-id');
+    expect(validation.ok).toBe(true);
   });
 
   it('validateConfig가 symbol 누락을 잡는다', () => {
@@ -103,38 +81,18 @@ describe('S104 Edge widget helpers', () => {
     expect(validation.message).toContain('data-symbol');
   });
 
-  it('validateConfig가 clientId 누락은 허용한다', () => {
-    const validation = internals.validateConfig(internals.readConfig(buildScript({ clientId: null })));
-
-    expect(validation.ok).toBe(true);
-  });
-
-  it('createGatewayRequest가 S016 request 객체를 만들고 mockStatus를 제외한다', () => {
+  it('createGatewayRequest가 embedKey+symbol request를 만들고 mockStatus를 제외한다', () => {
     const config = internals.readConfig(buildScript({ mockStatus: 'fallback' }));
 
     const request = internals.createGatewayRequest(config);
 
     expect(request).toEqual({
       embedKey: 'pub_demo_1234',
-      widgetId: 'asset-event-impact',
       symbol: '005930',
-      theme: 'default',
-      clientId: 'demo-sec',
     });
     expect(request).not.toHaveProperty('mockStatus');
-  });
-
-  it('createGatewayRequest가 clientId 누락 시 request에서 생략한다', () => {
-    const config = internals.readConfig(buildScript({ clientId: null }));
-
-    const request = internals.createGatewayRequest(config);
-
-    expect(request).toMatchObject({
-      embedKey: 'pub_demo_1234',
-      widgetId: 'asset-event-impact',
-      symbol: '005930',
-      theme: 'default',
-    });
+    expect(request).not.toHaveProperty('widgetId');
+    expect(request).not.toHaveProperty('theme');
     expect(request).not.toHaveProperty('clientId');
   });
 

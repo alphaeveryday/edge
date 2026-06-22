@@ -24,15 +24,14 @@
 
 ## 3. Widget → Gateway Request Draft
 
+> **request 입력 계약 SSOT는 `widget-data-attributes-note.md` §8이다.** S016에서 계약을 `embedKey + symbol`로 축소했다(키 1개 = 위젯 1개, 위젯 설정은 키로 서버에서 조회). 이전 초안의 `widgetId`/`theme`/`clientId`는 제거됐다.
+
 ### 3.1. 요청 JSON 예시
 
 ```json
 {
   "embedKey": "pub_demo_1234",
-  "clientId": "demo-sec",
-  "widgetId": "asset-event-impact",
-  "symbol": "005930",
-  "theme": "default"
+  "symbol": "005930"
 }
 ```
 
@@ -40,11 +39,8 @@
 
 | 필드 | 타입 | 필수 | 의미 |
 | --- | --- | --- | --- |
-| `embedKey` | string | 필수 | Public Embed Key. 실제 tenant 식별은 이 값의 Gateway 검증 결과를 기준으로 한다 |
-| `widgetId` | string | 필수 | 렌더링할 위젯 타입 식별자. `data-widget-id` 기반 |
+| `embedKey` | string | 필수 | Public Embed Key. 실제 tenant·위젯 식별은 이 값의 Gateway 검증 결과를 기준으로 한다 |
 | `symbol` | string | 필수 | 대상 종목 코드. 위젯은 trim 후 non-empty만 검증하고 canonical 변환은 adapter에 위임 |
-| `clientId` | string | 아니오 | 고객사 식별 보조값. 값이 있을 때만 request에 포함하며 신뢰 가능한 tenant 식별자가 아니다 |
-| `theme` | string | 아니오 | 테마 식별자. 현재 공식 지원값은 `default`이며 unknown 값도 `default`로 fallback |
 
 `data-mock-status`는 요청 바디에 포함하지 않는다. S104/S016 PoC 테스트 분기 제어용 속성이며 실제 Gateway 계약이 아니다.
 
