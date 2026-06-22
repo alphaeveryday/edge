@@ -45,8 +45,9 @@ settings.targets.keywords            # ["금리", ...]
   접두어 `DATA_PIPELINE_`, 중첩 구분자 `__`.
 - **파일 경로**: `load_settings(path)` 인자 > `DATA_PIPELINE_CONFIG_FILE` env > 기본값 `config/sources.toml`.
   이 한 줄로 환경(dev/prod)별 로딩을 구분한다.
-- **명시적 실패**: 필수값 누락·알 수 없는 키·대상 0개·파일 없음은 조용한 기본값 대신 `ConfigError`로
-  드러난다(AGENTS Rule 12).
+- **명시적 실패**: 필수값 누락·알 수 없는 키·대상 0개·공백 값·파일 없음은 조용한 기본값 대신
+  `ConfigError`로 드러난다(AGENTS Rule 12). 단, `extra="forbid"`는 **TOML 파일 키에만** 적용된다 —
+  `DATA_PIPELINE_*` env의 오타 키는 pydantic-settings 표준 동작상 조용히 무시된다.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 

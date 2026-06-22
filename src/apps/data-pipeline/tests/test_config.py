@@ -76,6 +76,20 @@ keywords = []
         load_settings(_write(tmp_path, bad))
 
 
+def test_whitespace_base_url_fails_loud(tmp_path):
+    # WHY: 공백만 있는 base_url은 길이는 있지만 무효 — 통과하면 fetcher가 빈 URL을 질의한다.
+    bad = VALID.replace('base_url = "https://example.com/news"', 'base_url = "   "')
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_blank_target_entry_fails_loud(tmp_path):
+    # WHY: symbols=[""] 처럼 빈 대상이 끼면 '대상 있음'으로 통과하나 실제론 무의미 — 명시적 실패.
+    bad = VALID.replace('symbols = ["005930"]', 'symbols = [""]')
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
 def test_unknown_key_rejected(tmp_path):
     # WHY: 오타 난 설정 키를 조용히 무시하면 의도한 설정이 적용되지 않은 채 돈다(extra=forbid).
     bad = """

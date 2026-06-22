@@ -7,7 +7,21 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def _non_blank(value: str) -> str:
+    """공백만 있는 문자열을 무효로 본다 — 의미 없는 값이 fail-loud를 통과하지 못하게."""
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("빈 문자열/공백은 허용되지 않는다")
+    return stripped
+
+
+# 길이만 보는 min_length=1은 "   "(공백)을 통과시킨다. strip 후 비면 실패시킨다.
+NonBlankStr = Annotated[str, AfterValidator(_non_blank)]
 
 
 class NewsSource(BaseModel):
@@ -18,7 +32,7 @@ class NewsSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = Field(min_length=1)  # 필수 — 누락 시 실패
+    base_url: NonBlankStr  # 필수 — 누락·공백 불가
     enabled: bool = True
     api_key: str | None = None  # 비밀값: env 오버라이드 전용
 
@@ -31,7 +45,7 @@ class PriceSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = Field(min_length=1)
+    base_url: NonBlankStr
     enabled: bool = True
     api_key: str | None = None
 
@@ -54,8 +68,8 @@ class CollectionTargets(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    symbols: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
+    symbols: list[NonBlankStr] = Field(default_factory=list)
+    keywords: list[NonBlankStr] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_at_least_one_target(self) -> CollectionTargets:
