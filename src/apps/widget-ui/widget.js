@@ -43,24 +43,18 @@
     message: MOCK_ERROR_MESSAGE,
   };
 
-  const EDGE_WIDGET_STYLE_ID = 'edge-widget-style';
+  const HEIGHT_MESSAGE_TYPE = 'edge-widget:height';
 
-  function initEdgeWidget(scriptOverride) {
-    const script = scriptOverride || getCurrentScript();
+  // widget.js는 iframe 본체에서 돈다. 입력은 더 이상 script data-*가 아니라 iframe URL의
+  // fragment #key=&symbol=이다(쿼리스트링 대신 fragment를 써서 key·symbol이 서버/CDN 로그·Referer에
+  // 남지 않게 한다). 로더(widget-loader.js)가 고객사 페이지에서 이 URL을 만든다.
+  function initEdgeWidget(hashOverride) {
+    const container = createContainer();
+    observeHeight(container);
 
-    const container = createContainer(script);
-
-    if (!script) {
-      if (!window.__EDGE_WIDGET_TEST_MODE__) {
-        renderError(container, {
-          message: '위젯 실행에 필요한 script 태그를 찾을 수 없습니다.',
-        });
-      }
-      return;
-    }
-
-    const config = readConfig(script);
+    const config = readConfig(hashOverride);
     renderLoading(container);
+    notifyHeight();
 
     const validation = validateConfig(config);
     if (!validation.ok) {
@@ -68,36 +62,36 @@
       renderError(container, {
         message: validation.message,
       });
+      notifyHeight();
       return;
     }
 
     const request = createGatewayRequest(config);
 
-    return fetchMockGateway(request, config.mockStatus)
+    return fetchMockGateway(request)
       .then((response) => {
         renderWidget(container, response);
+        notifyHeight();
       })
       .catch((error) => {
         console.error('[EDGE Widget] mock gateway error:', error);
         renderError(container, {
           message: '위젯을 불러오는 중 문제가 발생했습니다.',
         });
+        notifyHeight();
       });
   }
 
-  function getCurrentScript() {
-    return document.currentScript || null;
-  }
-
-  function readConfig(script) {
-    if (!script) {
-      return null;
-    }
+  function readConfig(hashOverride) {
+    const raw = typeof hashOverride === 'string'
+      ? hashOverride
+      : (typeof window !== 'undefined' ? window.location.hash : '');
+    // location.hash는 선행 '#'을 포함한다. 테스트가 '?…'를 넘겨도 동작하도록 '#'·'?' 모두 제거.
+    const params = new URLSearchParams(raw.replace(/^[#?]/, ''));
 
     return {
-      embedKey: normalizeAttribute(script.getAttribute('data-embed-key')),
-      symbol: normalizeSymbolInput(script.getAttribute('data-symbol')),
-      mockStatus: normalizeStatus(script.getAttribute('data-mock-status')),
+      embedKey: normalizeAttribute(params.get('key')),
+      symbol: normalizeSymbolInput(params.get('symbol')),
     };
   }
 
@@ -110,8 +104,8 @@
     }
 
     const required = [
-      { key: 'embedKey', name: 'data-embed-key' },
-      { key: 'symbol', name: 'data-symbol' },
+      { key: 'embedKey', name: 'key' },
+      { key: 'symbol', name: 'symbol' },
     ];
 
     const missing = required
@@ -138,18 +132,40 @@
     };
   }
 
-  function createContainer(script) {
+  function createContainer() {
     const container = document.createElement('div');
     container.className = 'edge-widget-root';
-
-    if (script && script.parentNode) {
-      script.parentNode.insertBefore(container, script.nextSibling);
-    } else {
-      document.body.appendChild(container);
-    }
-
-    injectStyle();
+    document.body.appendChild(container);
     return container;
+  }
+
+  // 본체 높이를 부모(loader)에 알린다. 높이 값은 민감정보가 아니라 targetOrigin '*'로 보낸다.
+  // 수신측의 origin 엄격검증(allowed_origins/frame-ancestors)은 서버 트랙에서 도입한다.
+  function notifyHeight() {
+    if (typeof window === 'undefined' || window.parent === window) {
+      return; // iframe에 임베드된 경우에만 동기화한다.
+    }
+    window.parent.postMessage(
+      { type: HEIGHT_MESSAGE_TYPE, height: measureHeight() },
+      '*',
+    );
+  }
+
+  function measureHeight() {
+    if (typeof document === 'undefined' || !document.body) {
+      return 0;
+    }
+    return Math.ceil(document.body.getBoundingClientRect().height);
+  }
+
+  // 내용 변화(로딩→렌더, 상태 전환 등)마다 높이를 다시 알린다.
+  function observeHeight(target) {
+    if (typeof ResizeObserver === 'undefined' || !target) {
+      return null;
+    }
+    const observer = new ResizeObserver(() => notifyHeight());
+    observer.observe(target);
+    return observer;
   }
 
   function renderLoading(container) {
@@ -200,11 +216,6 @@
 
     const cards = Array.isArray(response.cards) ? response.cards : [];
     const mainCard = cards.length > 0 ? cards[0] : null;
-
-    const header = document.createElement('div');
-    header.className = 'edge-widget-heading';
-    header.textContent = `자산 분석 위젯 (${response.symbol || '-'})`;
-    card.appendChild(header);
 
     if (mainCard) {
       const issueTitle = document.createElement('h3');
@@ -332,97 +343,6 @@
     container.appendChild(card);
   }
 
-  function injectStyle() {
-    if (document.getElementById(EDGE_WIDGET_STYLE_ID)) {
-      return;
-    }
-
-    const style = document.createElement('style');
-    style.id = EDGE_WIDGET_STYLE_ID;
-    style.textContent = `
-      .edge-widget-root {
-        margin: 14px 0 0;
-        font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
-        color: #111827;
-        line-height: 1.5;
-      }
-
-      .edge-widget-root * {
-        box-sizing: border-box;
-      }
-
-      .edge-widget-card {
-        width: 100%;
-        border: 1px solid #dfe7f2;
-        border-radius: 18px;
-        padding: 16px;
-        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-        box-shadow: 0 12px 28px rgba(34, 94, 200, 0.10);
-      }
-
-      .edge-widget-heading {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 9px;
-        border-radius: 999px;
-        background: #eef4ff;
-        color: #225ec8;
-        font-size: 12px;
-        font-weight: 800;
-        margin-bottom: 12px;
-      }
-
-      .edge-widget-title {
-        font-size: 14px;
-        font-weight: 800;
-        margin-bottom: 8px;
-      }
-
-      .edge-widget-card-title {
-        margin: 0 0 8px;
-        font-size: 16px;
-        line-height: 1.35;
-        letter-spacing: -0.02em;
-      }
-
-      .edge-widget-summary,
-      .edge-widget-description,
-      .edge-widget-message,
-      .edge-widget-empty,
-      .edge-widget-detail {
-        margin: 7px 0;
-        color: #374151;
-        white-space: pre-line;
-      }
-
-      .edge-widget-summary {
-        font-size: 14px;
-        font-weight: 600;
-        letter-spacing: -0.03em;
-      }
-
-      .edge-widget-disclaimer {
-        margin-top: 12px;
-        padding-top: 10px;
-        border-top: 1px solid #edf1f6;
-        color: #6b7280;
-        font-size: 12px;
-      }
-
-      .edge-widget-error .edge-widget-title,
-      .edge-widget-fallback .edge-widget-title {
-        color: #d64040;
-      }
-
-      .edge-widget-loading {
-        color: #6b7280;
-        font-size: 13px;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
   function clearContainer(container) {
     container.innerHTML = '';
   }
@@ -443,6 +363,9 @@
     return 'success';
   }
 
+  // 라이브 부팅 경로(initEdgeWidget)는 인자 없이 호출 → 항상 success를 반환한다. mockStatus 인자는
+  // empty/error/fallback 렌더를 렌더 단위 테스트에서 검증하기 위한 용도이며, 실제 부팅 경로에선 도달하지 않는다.
+  // (실제 Gateway 연동 시 이 함수가 실제 fetch로 교체된다.)
   function fetchMockGateway(request, mockStatus) {
     const status = normalizeStatus(mockStatus);
     const symbol = request && request.symbol ? request.symbol : '';
@@ -477,25 +400,17 @@
     return { ...MOCK_WIDGET_RESPONSE_SUCCESS, symbol };
   }
 
-
-  function escapeHtml(value) {
-    return String(value === undefined || value === null ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/\"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .replace(/`/g, '&#x60;');
-  }
-
   if (window.__EDGE_WIDGET_TEST_MODE__) {
     window.__EDGE_WIDGET_INTERNALS__ = {
       initEdgeWidget,
-      getCurrentScript,
       readConfig,
       validateConfig,
       createGatewayRequest,
       createContainer,
+      notifyHeight,
+      measureHeight,
+      observeHeight,
+      HEIGHT_MESSAGE_TYPE,
       renderLoading,
       fetchMockGateway,
       renderWidget,
@@ -503,8 +418,6 @@
       renderEmpty,
       renderError,
       renderFallback,
-      injectStyle,
-      escapeHtml,
       clearContainer,
       normalizeAttribute,
       normalizeSymbolInput,
