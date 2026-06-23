@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Local data mirror + generated artifacts (synced out-of-band, not versioned)
+# Anchored to this app root so the code module edge_event_model/db/ stays tracked.
+/data/
+/db/
+*.sqlite
+*.sqlite-*
+*.parquet
+/artifacts/
+*.log
+/model_artifacts/
