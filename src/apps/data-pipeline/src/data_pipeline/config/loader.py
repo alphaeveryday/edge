@@ -20,6 +20,7 @@ from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
+    SettingsError,
 )
 
 from .models import CollectionTargets, NewsConfig, PriceConfig
@@ -89,5 +90,8 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     try:
         # 파일 데이터는 init으로 주입하고, 환경변수가 이를 덮어쓴다(settings_customise_sources).
         return Settings(**file_data)
-    except ValidationError as exc:
+    except (ValidationError, SettingsError) as exc:
+        # SettingsError: 복합 필드(news/price/targets)를 잘못된 env로 덮을 때
+        # (예: DATA_PIPELINE_TARGETS=not-json) 소스 파싱 단계에서 난다 — ValidationError가
+        # 아니라 그대로 새므로, 같은 ConfigError 계약(fail loud)으로 함께 감싼다.
         raise ConfigError(f"설정 검증 실패 ({path}):\n{exc}") from exc

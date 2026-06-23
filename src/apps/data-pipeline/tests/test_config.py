@@ -147,6 +147,15 @@ def test_blank_config_env_fails_loud(monkeypatch):
         load_settings()
 
 
+def test_malformed_env_override_fails_loud(tmp_path, monkeypatch):
+    # WHY: 복합 필드를 잘못된 env로 덮으면(DATA_PIPELINE_TARGETS=not-json) pydantic-settings는
+    #      ValidationError가 아니라 SettingsError를 던진다. ConfigError로 감싸지 않으면
+    #      load_settings의 fail-loud 계약(실패=ConfigError)이 깨져 호출부가 못 잡는다.
+    monkeypatch.setenv("DATA_PIPELINE_TARGETS", "not-json")
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, VALID))
+
+
 def test_default_config_loads_without_args(monkeypatch):
     # WHY: 인자·env 없이도 패키지 동봉 기본 설정이 로드돼야 한다. 기본 경로 해석이
     #      깨지면(예: wheel 설치) load_settings()가 ConfigError로 죽는다.
