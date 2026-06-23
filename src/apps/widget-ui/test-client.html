@@ -83,6 +83,55 @@
       .num {
         font-variant-numeric: tabular-nums;
       }
+      /* AI 분석 데모 종목 선택기 (데모 한정 UI, 위젯과 무관) */
+      #aiSelector {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .ai-sector-label {
+        font-size: 12.5px;
+        font-weight: 700;
+        color: #8b8e93;
+        margin-bottom: 7px;
+      }
+      .ai-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .ai-chip {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+        padding: 8px 12px;
+        border: 1px solid #e3e5e8;
+        border-radius: 11px;
+        background: #ffffff;
+        cursor: pointer;
+        font-family: inherit;
+        line-height: 1.25;
+      }
+      .ai-chip-name {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #17181a;
+      }
+      .ai-chip-ticker {
+        font-size: 11px;
+        font-weight: 600;
+        color: #8b8e93;
+        font-variant-numeric: tabular-nums;
+      }
+      .ai-chip.active {
+        border-color: #1668d8;
+        background: #eaf1fd;
+      }
+      .ai-chip.active .ai-chip-ticker {
+        color: #1668d8;
+      }
     </style>
   </head>
   <body>
@@ -330,8 +379,13 @@
       <!-- =================== AI =================== -->
       <div class="tab-panel" id="panel-ai">
         <div style="padding:18px 16px 28px;">
-          <!-- EDGE 위젯 설치: 고객사가 넣는 코드는 이 한 줄이 전부다. (실제 위젯은 iframe 안에서 렌더) -->
-          <script src="./widget-loader.js" data-embed-key="pub_demo_1234" data-symbol="005930"></script>
+          <!-- 데모 종목 선택기(데모 한정). 종목을 고르면 그 symbol을 위젯 로더 data-symbol로 주입해
+               iframe을 재주입한다 — 임베드 스크립트의 data-symbol을 손으로 편집하지 않는다. -->
+          <div id="aiSelector"></div>
+
+          <!-- EDGE 위젯이 들어갈 자리. 선택기가 이 안에 단일 <script>(widget-loader.js)를 주입하고,
+               로더가 그 옆에 iframe 본체를 띄운다. 고객사 실제 설치 코드는 그 <script> 한 줄이 전부다. -->
+          <div id="aiWidgetMount"></div>
 
           <div style="font-size:13px; color:#9a9da2; font-weight:500; text-align:center; margin-top:20px; line-height:1.5;">본 AI 분석은 참고용 정보이며, 투자 판단의 책임은 투자자 본인에게 있습니다.</div>
         </div>
@@ -498,6 +552,70 @@
         const rpts = rsi.map((v, i) => (v == null ? null : X(i) + ',' + Yr(v))).filter(Boolean).join(' ');
         rs += `<polyline points="${rpts}" fill="none" stroke="#8b53d6" stroke-width="1.5"/>`;
         document.getElementById('chartRsi').innerHTML = `<svg viewBox="0 0 400 94" style="width:100%;height:auto;display:block">${rs}</svg>`;
+      })();
+
+      // ---- AI 분석 위젯: 데모 종목 선택기 (데모 한정) ----
+      // 위젯이 받는 ticker = ALPHA-269 데모 유니버스(미국 9종목). 종목을 고르면 그 ticker를
+      // 로더 data-symbol로 주입해 위젯을 재주입한다. 위젯 본체는 symbol passthrough라 ticker
+      // 문자열을 그대로 싣는다(canonical 변환은 후속 Gateway adapter 책임). 종목별 실제 분석
+      // 결과 표시는 게이트웨이 스텁(ALPHA-264) 연결 후 — 현재 mock은 동일 스냅샷을 렌더한다.
+      (function aiWidget() {
+        const EMBED_KEY = 'pub_demo_1234';
+        const LOADER_SRC = './widget-loader.js';
+        const UNIVERSE = [
+          { sector: 'IT', name: '엔비디아', ticker: 'NVDA' },
+          { sector: 'IT', name: '애플', ticker: 'AAPL' },
+          { sector: 'IT', name: '마이크로소프트', ticker: 'MSFT' },
+          { sector: '산업재', name: '캐터필러', ticker: 'CAT' },
+          { sector: '산업재', name: 'GE 에어로스페이스', ticker: 'GE' },
+          { sector: '산업재', name: 'RTX', ticker: 'RTX' },
+          { sector: '금융', name: '버크셔 해서웨이', ticker: 'BRK.B' },
+          { sector: '금융', name: 'JP모건 체이스', ticker: 'JPM' },
+          { sector: '금융', name: '비자', ticker: 'V' },
+        ];
+
+        const selector = document.getElementById('aiSelector');
+        const mount = document.getElementById('aiWidgetMount');
+        if (!selector || !mount) return;
+
+        // 종목 선택 시 위젯 로더 <script>를 mount 안에 재주입한다. 로더는 data-symbol을 주입 시
+        // 1회만 읽으므로(currentScript), symbol을 바꾸려면 기존 iframe을 지우고 새로 주입한다.
+        function embed(ticker) {
+          mount.innerHTML = ''; // 이전 로더 script + iframe 제거
+          const script = document.createElement('script');
+          script.src = LOADER_SRC;
+          script.async = false; // 동적 주입 classic script에서 document.currentScript가 로더를 가리키게 보장
+          script.setAttribute('data-embed-key', EMBED_KEY);
+          script.setAttribute('data-symbol', ticker);
+          mount.appendChild(script);
+        }
+
+        function selectTicker(ticker) {
+          Array.from(selector.querySelectorAll('[data-ticker]')).forEach((chip) => {
+            chip.classList.toggle('active', chip.dataset.ticker === ticker);
+          });
+          embed(ticker);
+        }
+
+        // 섹터별로 칩을 그린다.
+        const sectors = [...new Set(UNIVERSE.map((s) => s.sector))];
+        selector.innerHTML = sectors.map((sector) => {
+          const chips = UNIVERSE.filter((s) => s.sector === sector).map((s) =>
+            `<button type="button" class="ai-chip" data-ticker="${s.ticker}">`
+            + `<span class="ai-chip-name">${s.name}</span>`
+            + `<span class="ai-chip-ticker">${s.ticker}</span>`
+            + `</button>`
+          ).join('');
+          return `<div class="ai-sector"><div class="ai-sector-label">${sector}</div>`
+            + `<div class="ai-chip-row">${chips}</div></div>`;
+        }).join('');
+
+        selector.addEventListener('click', (e) => {
+          const chip = e.target.closest('[data-ticker]');
+          if (chip) selectTicker(chip.dataset.ticker);
+        });
+
+        selectTicker(UNIVERSE[0].ticker); // 기본 선택
       })();
     </script>
   </body>
