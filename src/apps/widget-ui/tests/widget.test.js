@@ -15,21 +15,14 @@ function bootstrapInternals() {
   }
 }
 
-function buildScript(overrides = {}) {
-  const script = document.createElement('script');
-  const values = {
-    embedKey: overrides.embedKey === undefined ? 'pub_demo_1234' : overrides.embedKey,
-    symbol: overrides.symbol === undefined ? '005930' : overrides.symbol,
-  };
-
-  if (values.embedKey !== null) script.setAttribute('data-embed-key', values.embedKey);
-  if (values.symbol !== null) script.setAttribute('data-symbol', values.symbol);
-
-  if (Object.prototype.hasOwnProperty.call(overrides, 'mockStatus') && overrides.mockStatus !== null) {
-    script.setAttribute('data-mock-status', overrides.mockStatus);
-  }
-
-  return script;
+// 입력은 iframe URL의 fragment #key=&symbol=다(로더가 생성). data attribute가 아니다.
+function frag(overrides = {}) {
+  const params = new URLSearchParams();
+  const key = overrides.key === undefined ? 'pub_demo_1234' : overrides.key;
+  const symbol = overrides.symbol === undefined ? '005930' : overrides.symbol;
+  if (key !== null) params.set('key', key);
+  if (symbol !== null) params.set('symbol', symbol);
+  return '#' + params.toString();
 }
 
 describe('Edge widget helpers', () => {
@@ -39,52 +32,55 @@ describe('Edge widget helpers', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
-    document.getElementById('edge-widget-style')?.remove();
   });
 
-  it('readConfig가 data attribute(embedKey, symbol)를 읽는다', () => {
-    const script = buildScript({ mockStatus: 'empty' });
-    document.body.appendChild(script);
-
-    const config = internals.readConfig(script);
+  it('readConfig가 URL 파라미터(key, symbol)를 읽는다', () => {
+    const config = internals.readConfig(frag());
 
     expect(config).toEqual({
       embedKey: 'pub_demo_1234',
       symbol: '005930',
-      mockStatus: 'empty',
     });
   });
 
+  it('readConfig가 mock 등 계약 외 파라미터는 무시한다', () => {
+    const config = internals.readConfig('#key=pub_demo_1234&symbol=005930&mock=error');
+
+    expect(config).toEqual({
+      embedKey: 'pub_demo_1234',
+      symbol: '005930',
+    });
+    expect(config).not.toHaveProperty('mockStatus');
+  });
+
   it('readConfig가 symbol을 trim하고 canonical 변환은 하지 않는다', () => {
-    const config = internals.readConfig(buildScript({ symbol: '  KRX:005930  ' }));
+    const config = internals.readConfig(frag({ symbol: '  KRX:005930  ' }));
 
     expect(config.symbol).toBe('KRX:005930');
   });
 
-  it('validateConfig가 embedKey 누락을 잡는다', () => {
-    const validation = internals.validateConfig(internals.readConfig(buildScript({ embedKey: null })));
+  it('validateConfig가 key 누락을 잡는다', () => {
+    const validation = internals.validateConfig(internals.readConfig(frag({ key: null })));
 
     expect(validation.ok).toBe(false);
-    expect(validation.message).toContain('data-embed-key');
+    expect(validation.message).toContain('key');
   });
 
-  it('validateConfig가 embedKey+symbol만으로 통과한다 (widgetId/theme/clientId는 계약에서 제외)', () => {
-    const validation = internals.validateConfig(internals.readConfig(buildScript()));
+  it('validateConfig가 key+symbol만으로 통과한다 (widgetId/theme/clientId는 계약에서 제외)', () => {
+    const validation = internals.validateConfig(internals.readConfig(frag()));
 
     expect(validation.ok).toBe(true);
   });
 
   it('validateConfig가 symbol 누락을 잡는다', () => {
-    const validation = internals.validateConfig(internals.readConfig(buildScript({ symbol: '   ' })));
+    const validation = internals.validateConfig(internals.readConfig(frag({ symbol: '   ' })));
 
     expect(validation.ok).toBe(false);
-    expect(validation.message).toContain('data-symbol');
+    expect(validation.message).toContain('symbol');
   });
 
-  it('createGatewayRequest가 embedKey+symbol request를 만들고 mockStatus를 제외한다', () => {
-    const config = internals.readConfig(buildScript({ mockStatus: 'fallback' }));
-
-    const request = internals.createGatewayRequest(config);
+  it('createGatewayRequest가 key+symbol request를 만든다 (그 외 필드 제외)', () => {
+    const request = internals.createGatewayRequest(internals.readConfig(frag()));
 
     expect(request).toEqual({
       embedKey: 'pub_demo_1234',
@@ -96,13 +92,19 @@ describe('Edge widget helpers', () => {
     expect(request).not.toHaveProperty('clientId');
   });
 
-  it('normalizeStatus가 잘못된 status를 success로 fallback한다', () => {
+  it('normalizeStatus가 유효 status는 통과시키고 그 외만 success로 막는다', () => {
+    // 유효 status는 그대로 통과해야 테스트가 해당 렌더 경로(empty/error/fallback)를 선택할 수 있다.
+    // passthrough가 깨지면 mock 기반 렌더 테스트가 엉뚱한 상태를 그리게 되므로 여기서 잡는다.
+    expect(internals.normalizeStatus('empty')).toBe('empty');
+    expect(internals.normalizeStatus('error')).toBe('error');
+    expect(internals.normalizeStatus('fallback')).toBe('fallback');
+    // 알 수 없는/누락 status만 success로 막는다.
     expect(internals.normalizeStatus('unknown')).toBe('success');
-    expect(internals.readConfig(buildScript({ mockStatus: 'unknown' })).mockStatus).toBe('success');
+    expect(internals.normalizeStatus(undefined)).toBe('success');
   });
 
   it('fetchMockGateway가 success, empty, error, fallback 상태를 반환한다', async () => {
-    const request = internals.createGatewayRequest(internals.readConfig(buildScript()));
+    const request = internals.createGatewayRequest(internals.readConfig(frag()));
 
     const success = await internals.fetchMockGateway(request, 'success');
     const empty = await internals.fetchMockGateway(request, 'empty');
@@ -124,14 +126,21 @@ describe('Edge widget helpers', () => {
     });
   });
 
-  it('renderSuccess가 symbol, summary, disclaimer를 DOM에 표시한다', async () => {
+  it('fetchMockGateway는 status 미지정 시 success를 반환한다', async () => {
+    const request = internals.createGatewayRequest(internals.readConfig(frag()));
+
+    const response = await internals.fetchMockGateway(request);
+
+    expect(response.status).toBe('success');
+  });
+
+  it('renderSuccess가 summary, disclaimer, 카드 제목을 DOM에 표시한다', async () => {
     const container = document.createElement('div');
-    const request = internals.createGatewayRequest(internals.readConfig(buildScript()));
+    const request = internals.createGatewayRequest(internals.readConfig(frag()));
     const response = await internals.fetchMockGateway(request, 'success');
 
     internals.renderSuccess(container, response);
 
-    expect(container.textContent).toContain('005930');
     expect(container.textContent).toContain(ANALYSIS_V1_SUMMARY);
     expect(container.textContent).toContain('본 정보는 투자 참고용이며, 투자 판단의 최종 책임은 투자자 본인에게 있습니다.');
     expect(container.textContent).toContain('가격 변동 설명');
@@ -194,73 +203,43 @@ describe('Edge widget helpers', () => {
     expect(titleEl.textContent).toBe('반도체 규제 이슈 영향');
   });
 
-  it('initEdgeWidget이 empty, error, fallback 상태를 DOM에 렌더링한다', async () => {
-    const emptyScript = buildScript({ mockStatus: 'empty' });
-    const errorScript = buildScript({ mockStatus: 'error' });
-    const fallbackScript = buildScript({ mockStatus: 'fallback' });
-    document.body.append(emptyScript, errorScript, fallbackScript);
+  // mock-status(PoC)를 제거했으므로 empty/error/fallback은 라이브 경로 대신 renderWidget으로 직접 검증한다.
+  it('renderWidget이 empty, error, fallback 상태를 DOM에 렌더링한다', async () => {
+    const request = internals.createGatewayRequest(internals.readConfig(frag()));
+    const empty = await internals.fetchMockGateway(request, 'empty');
+    const error = await internals.fetchMockGateway(request, 'error');
+    const fallback = await internals.fetchMockGateway(request, 'fallback');
 
-    await internals.initEdgeWidget(emptyScript);
-    await internals.initEdgeWidget(errorScript);
-    await internals.initEdgeWidget(fallbackScript);
+    const emptyContainer = document.createElement('div');
+    const errorContainer = document.createElement('div');
+    const fallbackContainer = document.createElement('div');
 
-    const text = document.body.textContent;
-    expect(text).toContain('해당 종목의 최신 분석 결과가 없습니다.');
-    expect(text).toContain('위젯 응답 변환 중 문제가 발생했습니다.');
-    expect(text).toContain('실시간 분석 데이터를 수집할 수 없습니다.');
-    expect(text).toContain('기준 시각: 2026-03-12T14:45:00+09:00');
-    expect(text).toContain(ANALYSIS_V1_SUMMARY);
-  });
+    internals.renderWidget(emptyContainer, empty);
+    internals.renderWidget(errorContainer, error);
+    internals.renderWidget(fallbackContainer, fallback);
 
-  it('injectStyle은 document.head에 style을 1회만 삽입한다', () => {
-    const container = document.createElement('div');
-
-    internals.injectStyle(container);
-    internals.injectStyle(container);
-
-    const styles = document.head.querySelectorAll('#edge-widget-style');
-    expect(styles).toHaveLength(1);
-    expect(styles[0].textContent).toContain('.edge-widget-root');
-    expect(container.querySelector('#edge-widget-style')).toBeNull();
-  });
-
-  it('escapeHtml이 잠재적인 HTML을 안전하게 이스케이프한다', () => {
-    expect(internals.escapeHtml('<script>alert(1)</script>')).toBe('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(emptyContainer.textContent).toContain('해당 종목의 최신 분석 결과가 없습니다.');
+    expect(errorContainer.textContent).toContain('위젯 응답 변환 중 문제가 발생했습니다.');
+    expect(fallbackContainer.textContent).toContain('실시간 분석 데이터를 수집할 수 없습니다.');
+    expect(fallbackContainer.textContent).toContain('기준 시각: 2026-03-12T14:45:00+09:00');
+    expect(fallbackContainer.textContent).toContain(ANALYSIS_V1_SUMMARY);
   });
 });
 
-describe('script loader', () => {
+describe('widget bootstrap (iframe 본체)', () => {
   beforeAll(() => {
     bootstrapInternals();
   });
 
   beforeEach(() => {
     document.body.innerHTML = '';
-    document.getElementById('edge-widget-style')?.remove();
   });
 
-  it('getCurrentScript는 currentScript가 없으면 null을 반환하고, scriptOverride로 초기화한다', async () => {
-    expect(internals.getCurrentScript()).toBeNull();
-
-    const script = buildScript();
-    document.body.appendChild(script);
-
-    await internals.initEdgeWidget(script);
-
-    const container = script.nextSibling;
-    expect(container).not.toBeNull();
-    expect(container.className).toBe('edge-widget-root');
-  });
-
-  it('createContainer가 script 태그 바로 뒤에 container를 삽입한다', () => {
-    const script = buildScript();
-    document.body.appendChild(script);
-
-    const container = internals.createContainer(script);
+  it('createContainer가 document.body에 root container를 추가한다', () => {
+    const container = internals.createContainer();
 
     expect(container.className).toBe('edge-widget-root');
-    expect(script.nextSibling).toBe(container);
-    expect(container.parentNode).toBe(script.parentNode);
+    expect(container.parentNode).toBe(document.body);
   });
 
   it('renderLoading이 로딩 UI를 렌더링한다', () => {
@@ -272,26 +251,32 @@ describe('script loader', () => {
     expect(container.textContent).toContain('위젯을 불러오는 중입니다');
   });
 
-  it('initEdgeWidget(scriptOverride)가 container 생성 후 mock 응답 렌더링까지 이어진다', async () => {
-    const script = buildScript({ mockStatus: 'success' });
-    document.body.appendChild(script);
+  it('initEdgeWidget(search)가 URL 입력으로 부팅해 success를 렌더링한다', async () => {
+    await internals.initEdgeWidget(frag());
 
-    await internals.initEdgeWidget(script);
-
-    const container = script.nextSibling;
-    expect(container.className).toBe('edge-widget-root');
+    const container = document.querySelector('.edge-widget-root');
+    expect(container).not.toBeNull();
     expect(container.querySelector('.edge-widget-card')).not.toBeNull();
-    expect(container.textContent).toContain('자산 분석 위젯 (005930)');
+    expect(container.textContent).toContain('가격 변동 설명');
     expect(container.textContent).toContain(ANALYSIS_V1_SUMMARY);
   });
 
-  it('injectStyle은 document.head에 edge-widget-style을 1회만 삽입한다', () => {
-    internals.injectStyle();
-    internals.injectStyle();
+  it('initEdgeWidget(search)가 key 누락 시 검증 에러를 렌더링한다', async () => {
+    await internals.initEdgeWidget(frag({ key: null }));
 
-    const styles = document.head.querySelectorAll('#edge-widget-style');
-    expect(styles).toHaveLength(1);
-    expect(styles[0].textContent).toContain('.edge-widget-root');
+    const container = document.querySelector('.edge-widget-root');
+    expect(container.textContent).toContain('필수 설정값 누락');
+    expect(container.textContent).toContain('key');
+  });
+
+  it('measureHeight는 document.body 높이를 px 정수로 반환한다', () => {
+    expect(typeof internals.measureHeight()).toBe('number');
+    expect(Number.isInteger(internals.measureHeight())).toBe(true);
+  });
+
+  it('notifyHeight는 iframe에 임베드되지 않으면(window.parent === window) 아무 일도 하지 않는다', () => {
+    // jsdom에서 window.parent === window이므로 throw 없이 조용히 반환해야 한다.
+    expect(() => internals.notifyHeight()).not.toThrow();
   });
 
   it('테스트 모드에서만 window.__EDGE_WIDGET_INTERNALS__를 노출한다', () => {

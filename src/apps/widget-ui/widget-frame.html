@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EDGE 위젯</title>
+    <style>
+      /* iframe 본체. 위젯 스타일은 더 이상 JS로 host 페이지에 주입하지 않고, 격리된 이
+         프레임 문서의 정적 CSS로 둔다(iframe-native). 배경은 투명, body는 flow-root로
+         BFC를 만들어 자식 margin까지 포함해 높이 측정(body.getBoundingClientRect)이 정확하게 한다. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+      }
+      body {
+        display: flow-root;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+      }
+
+      .edge-widget-root {
+        margin: 0;
+        color: #111827;
+        line-height: 1.5;
+      }
+
+      .edge-widget-root * {
+        box-sizing: border-box;
+      }
+
+      .edge-widget-card {
+        width: 100%;
+        border: 1px solid #dfe7f2;
+        border-radius: 18px;
+        padding: 16px;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        box-shadow: 0 12px 28px rgba(34, 94, 200, 0.1);
+      }
+
+      .edge-widget-title {
+        font-size: 14px;
+        font-weight: 800;
+        margin-bottom: 8px;
+      }
+
+      .edge-widget-card-title {
+        margin: 0 0 8px;
+        font-size: 16px;
+        line-height: 1.35;
+        letter-spacing: -0.02em;
+      }
+
+      .edge-widget-summary,
+      .edge-widget-description,
+      .edge-widget-message,
+      .edge-widget-empty,
+      .edge-widget-detail {
+        margin: 7px 0;
+        color: #374151;
+        white-space: pre-line;
+      }
+
+      .edge-widget-summary {
+        font-size: 15.5px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+      }
+
+      .edge-widget-disclaimer {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #edf1f6;
+        color: #6b7280;
+        font-size: 12px;
+      }
+
+      .edge-widget-error .edge-widget-title,
+      .edge-widget-fallback .edge-widget-title {
+        color: #d64040;
+      }
+
+      .edge-widget-loading {
+        color: #6b7280;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 입력은 이 페이지의 URL #key=&symbol=로 들어온다(로더가 생성). widget.js가 읽어 렌더한다. -->
+    <script src="./widget.js"></script>
+  </body>
+</html>

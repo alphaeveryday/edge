@@ -6,20 +6,19 @@
 
 확정 API 스펙이 아닌 스파이크용 Widget↔Gateway 요청/응답 초안 노트다.
 
-- `widget.js`가 단일 script 삽입으로 동작 가능한지 확인하기 위한 임시 요청/응답 규격이다.
+- 단일 `<script>`(`widget-loader.js`) 삽입 → iframe(`widget-frame.html`) 본체(`widget.js`)로 동작 가능한지 확인하기 위한 임시 요청/응답 규격이다.
 - 실제 Gateway endpoint, 인증, ML API, 분석 DB, CDN 배포는 구현하지 않는다.
 - 실제 운영 규격은 후속에서 별도 확정한다.
 
 ## 2. 구현 기준 정렬
 
-- 위젯 스크립트: `widget.js`
+- 위젯 스크립트: 고객사 진입점 `widget-loader.js`(얇은 로더) + 본체 `widget.js`(iframe `widget-frame.html`에서 실행)
 - 실행 방식: Vanilla JavaScript IIFE
 - 테스트 노출: `window.__EDGE_WIDGET_TEST_MODE__ = true`일 때만 `window.__EDGE_WIDGET_INTERNALS__` 노출
-- 주요 흐름: `readConfig` → `validateConfig` → `createGatewayRequest` → `fetchMockGateway` → `renderWidget`
-- mock 모드: `widget.js`는 변환하지 않고 이미 변환된 widget response 스냅샷을 status별로 그대로 렌더링한다(widget = 렌더). analysis → widget 변환(adapter)은 Gateway 책임이며 후속에서 구현한다(§6).
-- 렌더러: `renderSuccess`, `renderEmpty`, `renderError`, `renderFallback`
-- 지원 mock 상태: `success`, `empty`, `error`, `fallback`
-- 스타일 주입: `id="edge-widget-style"`로 `document.head`에 1회 삽입
+- 주요 흐름: `readConfig`(iframe URL `#key=&symbol=`) → `validateConfig` → `createGatewayRequest` → `fetchMockGateway` → `renderWidget`
+- mock 모드: `widget.js`는 변환하지 않고 이미 변환된 widget response 스냅샷을 렌더링한다(widget = 렌더). 라이브 부팅 경로는 `success`만 렌더하며, analysis → widget 변환(adapter)은 Gateway 책임이라 후속에서 구현한다(§6).
+- 렌더러: `renderSuccess`, `renderEmpty`, `renderError`, `renderFallback` (4상태 렌더는 단위 테스트로 검증)
+- 스타일: 위젯 CSS는 본체 프레임 `widget-frame.html`의 정적 스타일(이전 `injectStyle` head 주입은 iframe 격리로 제거)
 - data attribute 계약: `widget-data-attributes-note.md`
 
 ## 3. Widget → Gateway Request Draft
@@ -42,7 +41,7 @@
 | `embedKey` | string | 필수 | Public Embed Key. 실제 tenant·위젯 식별은 이 값의 Gateway 검증 결과를 기준으로 한다 |
 | `symbol` | string | 필수 | 대상 종목 코드. 위젯은 trim 후 non-empty만 검증하고 canonical 변환은 adapter에 위임 |
 
-`data-mock-status`는 요청 바디에 포함하지 않는다. PoC 테스트 분기 제어용 속성이며 실제 Gateway 계약이 아니다.
+PoC용 `data-mock-status`는 계약·구현에서 제거됐다(입력 계약 노트 §7). 요청 바디는 `embedKey`/`symbol`만 담는다.
 
 ## 4. Analysis Server Response v1
 

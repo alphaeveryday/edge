@@ -5,7 +5,8 @@
 >
 > 단, **키 모델 자체**(위젯당 1키 등 조직/발급 구조)는 아직 변경 여지가 일부 남아 있다.
 > 반면 **attribute 표면(`key + symbol`)** 은 그 내부 구조가 바뀌어도 가장 안 흔들리는 부분이라
-> 본 계약으로 확정한다. Gateway endpoint·Public Embed Key 검증·iframe URL 전달은 범위 밖이다(§9).
+> 본 계약으로 확정한다. Gateway endpoint·Public Embed Key 검증은 범위 밖이다(§9).
+> attribute → iframe URL(`#key=&symbol=`) 전달은 본 마이그레이션에서 구현됐다(§2).
 
 ## 1. 결정 요약
 
@@ -22,7 +23,7 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 ```html
 <!-- ① 기본 설치 -->
 <script
-  src="./widget.js"
+  src="./widget-loader.js"
   data-embed-key="pub_demo_1234"
   data-symbol="005930">
 </script>
@@ -31,45 +32,42 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 ```html
 <!-- ② 다른 종목 -->
 <script
-  src="./widget.js"
+  src="./widget-loader.js"
   data-embed-key="pub_live_acme_001"
   data-symbol="000660">
 </script>
 ```
 
-`data-mock-status`는 PoC 테스트 전용이므로 실제 고객사 설치 예시에는 포함하지 않는다(§7).
+위 단일 `<script>`(`widget-loader.js`)가 고객사 페이지의 진입점이다. 로더는 `data-*`를 읽어
+현재 script 바로 뒤에 위젯 본체 iframe(`widget-frame.html#key=&symbol=`)을 생성한다. 실제 위젯
+(`widget.js`)은 그 iframe 안에서 URL 파라미터(`#key=&symbol=`)를 읽어 렌더하며, CSS는 iframe으로
+고객사 페이지와 격리된다. (본체 높이는 `postMessage`로 로더에 전달돼 iframe 높이가 동기화된다.)
 
-위 단일 `<script>` 태그가 loader의 진입점이다. 단일 script로 `widget.js`가 로드되면 loader가
-현재 script 위치를 찾아 그 바로 뒤에 위젯 container를 생성한다.
+> key·symbol을 쿼리스트링이 아니라 **fragment(`#…`)** 로 싣는 이유: fragment는 HTTP 요청 라인과
+> Referer 헤더에 포함되지 않아, 종목·public key가 정적 서버·CDN·프록시 접근 로그에 남지 않는다.
+> (`key`는 설계상 public 키지만(§5), `symbol`+key+IP+timestamp가 로그에 축적되는 것을 피한다.)
 
 ## 3. data attribute 표
 
 | 속성명 | 필수 여부 | 예시 | 설명 | request 포함 여부 | 비고 |
 | --- | --- | --- | --- | --- | --- |
-| `data-embed-key` | 필수 | `pub_demo_1234` | Public Embed Key (위젯 1개를 가리킴) | 포함: `embedKey` | tenant·위젯 식별의 신뢰 기준 |
-| `data-symbol` | 필수 | `005930` | 고객사 페이지가 전달하는 종목 식별자 | 포함: `symbol` | trim 후 non-empty만 검증 |
-| `data-mock-status` | 테스트 전용 | `success` | PoC 상태 강제값 | 포함하지 않음 | 실제 계약 아님 |
+| `data-embed-key` | 필수 | `pub_demo_1234` | Public Embed Key (위젯 1개를 가리킴) | iframe URL `key` → request `embedKey` | tenant·위젯 식별의 신뢰 기준 |
+| `data-symbol` | 필수 | `005930` | 고객사 페이지가 전달하는 종목 식별자 | iframe URL `symbol` → request `symbol` | trim 후 non-empty만 검증 |
 
 > 이전 초안의 `data-widget-id`·`data-theme`·`data-client-id`는 본 계약에서 제거됐다.
 > widget·theme 등 위젯 설정은 키로 조회하는 서버(DB) 책임이다.
 
-## 4. 필수/테스트 전용 구분
-
-### 필수
+## 4. 필수 속성
 
 - `data-embed-key`
 - `data-symbol`
-
-### 테스트 전용
-
-- `data-mock-status`
 
 선택 속성은 없다 — 계약은 필수 2개가 전부다.
 
 ### 누락/잘못된 값 처리
 
-- 필수 누락(`data-embed-key` 또는 `data-symbol`) → 검증 실패, 에러 카드 렌더 + `console.error`.
-- `data-mock-status`에 잘못된 값 → `success`로 fallback(§7).
+- 필수 누락(`data-embed-key` 또는 `data-symbol`) → 로더가 빈 값으로 iframe URL을 만들고,
+  본체(`widget.js`)의 `validateConfig`가 검증 실패로 에러 카드 렌더 + `console.error`.
 
 ## 5. 멀티테넌시 결정
 
@@ -90,14 +88,13 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 - `widget.js`는 고객사가 준 `symbol`을 request에 그대로 전달한다.
 - 실제 canonical symbol 변환은 Gateway adapter 또는 분석 API adapter에서 처리한다.
 
-## 7. mockStatus 처리 정책
+## 7. PoC mock 상태 (제거됨)
 
-- `data-mock-status`는 PoC 테스트 전용이다.
-- 지원값은 `success`, `empty`, `error`, `fallback`이다.
-- 잘못된 값이 들어오면 `success`로 fallback한다.
-- 실제 request에 포함하지 않으며, 실제 고객사 설치 코드에도 포함하지 않는다.
-- `test-client.html`의 기본 화면은 실제 고객사 MTS 삽입 데모 중심이고, `data-mock-status` 기반 상태 확인
-  위젯(success/empty/error/fallback)은 페이지 하단의 접힌 "개발자 검증 정보 보기" 패널에서만 노출한다.
+이전 PoC의 `data-mock-status`(success/empty/error/fallback 강제값)는 **계약과 구현에서 모두 제거**됐다.
+
+- 라이브 경로(loader → iframe 부팅)는 항상 `success`만 렌더한다.
+- `empty`/`error`/`fallback` 4상태 렌더 로직은 유지되며, 렌더 단위 테스트(`tests/widget.test.js`)로 검증한다.
+- `test-client.html` 데모는 실제 고객사 MTS 삽입(AI 분석 탭의 단일 `<script>` 한 줄)만 보여주며, 별도 상태 확인 패널은 없다.
 
 ## 8. Widget → Request Draft
 
@@ -114,10 +111,9 @@ attribute를 **`key + symbol` 두 개로 최소화**한다.
 
 - `embedKey`, `symbol`만 포함한다(`createGatewayRequest`).
 - `widgetId`/`theme`/`clientId`는 보내지 않는다 — 위젯 설정은 키로 서버에서 조회한다.
-- `mockStatus`는 request에 절대 포함하지 않는다.
 
 ## 9. 범위 밖 / 다음 작업 연결
 
-- attribute → **iframe URL(`?key=&symbol=`) 전달**, widget-loader 엔트리, postMessage → iframe 전달 마이그레이션.
-- 서버측 `allowed_origins`/`frame-ancestors`, `public_embed_keys`·`widget_config` 스키마 → 조영서 트랙.
+- (완료) attribute → **iframe URL(`#key=&symbol=`) 전달**, widget-loader 엔트리, postMessage 높이 동기화 → 본 마이그레이션(ALPHA-268).
+- 서버측 `allowed_origins`/`frame-ancestors`, `public_embed_keys`·`widget_config` 스키마 → 조영서 트랙. 현재 로더는 postMessage `event.source` 동일성만 확인한다.
 - 실제 Gateway API 호출 연결 / 분석 서버 응답 → 위젯 응답 변환 adapter.
