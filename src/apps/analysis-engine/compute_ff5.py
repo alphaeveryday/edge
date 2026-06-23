@@ -70,17 +70,20 @@ def _js(path: str):
 
 
 def fetch_universe() -> list[str]:
-    d = _js("company-screener?exchange=NASDAQ&isActivelyTrading=true&limit=10000")
-    syms = sorted({x["symbol"] for x in d
-                   if x.get("symbol") and _SYM_RE.match(x["symbol"])
-                   and x.get("sector") and (x.get("price") or 0) > 0 and (x.get("marketCap") or 0) > 0})
-    return syms
+    d = _js("company-screener?exchange=NASDAQ&isActivelyTrading=true&isEtf=false&isFund=false&limit=10000")
+    meta = {}
+    for x in d:
+        s = x.get("symbol")
+        if s and _SYM_RE.match(s) and x.get("sector") and (x.get("price") or 0) > 0 and (x.get("marketCap") or 0) > 0:
+            meta[s] = x["marketCap"]
+    pd.DataFrame([{"sym": s, "mktcap": v} for s, v in sorted(meta.items())]).to_parquet(OUT / "universe.parquet", index=False)
+    return sorted(meta)
 
 
 def fetch_prices(syms: list[str]) -> pd.DataFrame:
     def one(s):
         d = _js(f"historical-price-eod/full?symbol={s}&from={START}&to={END}")
-        return [(s, r["date"], r.get("close"), r.get("adjClose")) for r in d if r.get("adjClose")]
+        return [(s, r["date"], r.get("close")) for r in d if r.get("close")]
     rows = []
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futs = {ex.submit(one, s): s for s in syms}
@@ -91,9 +94,9 @@ def fetch_prices(syms: list[str]) -> pd.DataFrame:
             except Exception:
                 pass
             done += 1
-            if done % 400 == 0:
+            if done % 500 == 0:
                 print(f"  prices {done}/{len(syms)}", flush=True)
-    px = pd.DataFrame(rows, columns=["sym", "date", "close", "adjclose"])
+    px = pd.DataFrame(rows, columns=["sym", "date", "close"])
     px["date"] = pd.to_datetime(px["date"])
     px.to_parquet(OUT / "prices.parquet", index=False)
     return px
@@ -144,9 +147,9 @@ def _asof(s: pd.Series, when: pd.Timestamp):
     return float(s.iloc[-1]) if len(s) else None
 
 
-def compute_ff5(px: pd.DataFrame, fund: pd.DataFrame, rf: pd.Series) -> pd.DataFrame:
+def compute_ff5(px: pd.DataFrame, fund: pd.DataFrame, rf: pd.Series, shares_map: dict) -> pd.DataFrame:
     px = px.sort_values(["sym", "date"])
-    px["ret"] = px.groupby("sym")["adjclose"].pct_change()
+    px["ret"] = px.groupby("sym")["close"].pct_change().clip(-0.5, 0.5)
     ret_wide = px.pivot_table(index="date", columns="sym", values="ret")
     close_by = {s: g.set_index("date")["close"].sort_index() for s, g in px.groupby("sym")}
     fund = fund.dropna(subset=["fy"]).copy(); fund["fy"] = fund["fy"].astype(int)
@@ -163,17 +166,20 @@ def compute_ff5(px: pd.DataFrame, fund: pd.DataFrame, rf: pd.Series) -> pd.DataF
             if fb is None or cb is None or (Y - 1) not in fb.index:
                 continue
             r = fb.loc[Y - 1]
-            be, assets, op, shares = r["be"], r["assets"], r["op_income"], r["shares"]
+            be, assets, op = r["be"], r["assets"], r["op_income"]
+            mc = shares_map.get(s)
             assets_prev = fb.loc[Y - 2, "assets"] if (Y - 2) in fb.index else None
-            if not be or be <= 0 or not shares or shares <= 0:
+            if not be or be <= 0 or not mc or mc < 5e7:
                 continue
             c_jun, c_dec = _asof(cb, june), _asof(cb, dec_prev)
             if not c_jun or not c_dec:
                 continue
-            me_jun, me_dec = c_jun * shares, c_dec * shares
+            me_jun, me_dec = mc, mc
             inv = ((assets - assets_prev) / assets_prev) if (assets and assets_prev and assets_prev > 0) else np.nan
             recs.append({"sym": s, "me": me_jun, "bm": be / me_dec,
                          "op": (op / be) if op is not None else np.nan, "inv": inv})
+        if not recs:
+            continue
         u = pd.DataFrame(recs).dropna(subset=["me", "bm"])
         if len(u) < 50:
             continue
@@ -216,7 +222,7 @@ def compute_ff5(px: pd.DataFrame, fund: pd.DataFrame, rf: pd.Series) -> pd.DataF
     ff = ff[~ff.index.duplicated(keep="last")].join(rf.rename("rf"), how="left")
     ff["rf"] = ff["rf"].ffill().fillna(0.0)
     ff["mkt_rf"] = ff["mkt"] - ff["rf"]
-    out = ff.reset_index().rename(columns={"index": "trade_date"})
+    out = ff.rename_axis("trade_date").reset_index()
     return out[["trade_date", "mkt_rf", "smb", "hml", "rmw", "cma", "rf"]].dropna(subset=["mkt_rf"])
 
 
@@ -237,17 +243,22 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Compute US (NASDAQ-universe) FF5 from FMP")
     ap.add_argument("--use-cache", action="store_true")
     args = ap.parse_args(argv)
-    if args.use_cache and (OUT / "prices.parquet").exists():
-        px = pd.read_parquet(OUT / "prices.parquet"); fund = pd.read_parquet(OUT / "fundamentals.parquet")
-        print(f"cache: prices rows={len(px)} syms={px['sym'].nunique()} fund rows={len(fund)}")
+    syms = fetch_universe()
+    print(f"NASDAQ common-stock universe: {len(syms)} symbols", flush=True)
+    um = pd.read_parquet(OUT / "universe.parquet"); shares_map = dict(zip(um["sym"], um["mktcap"]))
+    fund_path = OUT / "fundamentals.parquet"
+    if args.use_cache and fund_path.exists():
+        fund = pd.read_parquet(fund_path); print(f"  fundamentals cache: {len(fund)} rows", flush=True)
     else:
-        syms = fetch_universe()
-        print(f"NASDAQ common-stock universe: {len(syms)} symbols", flush=True)
         fund = fetch_fundamentals(set(syms))
+    px_path = OUT / "prices.parquet"
+    if args.use_cache and px_path.exists() and len(pd.read_parquet(px_path)):
+        px = pd.read_parquet(px_path); print(f"  prices cache: {len(px)} rows", flush=True)
+    else:
         px = fetch_prices(syms)
-        print(f"fetched: price rows={len(px)} syms={px['sym'].nunique()} fund rows={len(fund)}", flush=True)
+    print(f"fetched: price rows={len(px)} syms={px['sym'].nunique()} fund rows={len(fund)}", flush=True)
     rf = fetch_rf()
-    ff = compute_ff5(px, fund, rf)
+    ff = compute_ff5(px, fund, rf, shares_map)
     ff.to_parquet(OUT / "us_ff5_computed.parquet", index=False)
     print(f"\nFF5: {len(ff)} days {ff['trade_date'].min().date()} -> {ff['trade_date'].max().date()}")
     print(ff.tail(3).to_string(index=False))

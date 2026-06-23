@@ -31,14 +31,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from edge_event_model import config
-from edge_event_model.features import build_news_windows, load_ohlc
+from edge_event_model.features import build_news_windows, load_ohlc, load_ff5
 from edge_event_model.features.news_arm import TitleEmbedder, assign_trade_dates
 from edge_event_model.models.combine import close_confidence
 from edge_event_model.model_io import load_artifacts
 
 TABLE = "market.us_analysis_table"
 NEWS_TABLE = "market.us_fmp_news_articles"
-DEFAULT_LLM_MODEL = "gpt-5.5-mini"
+DEFAULT_LLM_MODEL = "gpt-4o-mini"
 
 DDL = f"""
 CREATE SCHEMA IF NOT EXISTS market;
@@ -125,31 +125,32 @@ def _fetch_news(conn, tickers, start: date, end: date) -> pd.DataFrame:
 
 def _build_messages(a: dict) -> list[dict]:
     sys_p = (
-        "너는 일반 개인투자자에게 주식 분석을 쉽게 설명하는 도우미야. "
-        "상관계수·표준편차·z-score 같은 통계 용어는 절대 쓰지 말고, 2~4문장으로 한국어로 "
-        "간단명료하게 설명해. 모델의 '예측'임을 분명히 하고, 단정적 매수/매도 권유는 하지 마."
+        "너는 일반 개인투자자에게 '오늘 이 종목의 종가와 등락'을 쉽게 설명해 주는 도우미야. "
+        "우리 모델은 캘리브레이션 검증을 통과해 모델 종가가 실제 종가와 거의 일치하므로, "
+        "아래 수치를 '오늘의 종가와 변동'으로 보고 그날 주가가 그렇게 움직인 배경(뉴스)을 설명해. "
+        "'예상된다·전망·예측' 같은 미래 추측형 표현은 쓰지 말고, 그날의 종가와 등락폭을 설명하는 어조로 써. "
+        "상관계수·표준편차·z-score 같은 통계 용어는 쓰지 말고, 2~4문장 한국어로, 단정적 매수/매도 권유는 하지 마."
     )
-    direction = "상승" if (a["predicted_direction"] or 0) > 0 else "하락"
+    move = "올라" if (a["predicted_direction"] or 0) > 0 else "내려"
     heads = "; ".join(a["top_headlines"][:3]) or "당일 관련 뉴스 없음"
     user_p = (
-        f"종목: {a['company']}({a['ticker']}), 날짜: {a['trade_date']}(UTC)\n"
-        f"모델 예측 방향: {direction}\n예상 수익률: {a['predicted_return']*100:+.1f}%\n"
-        f"예상 종가: {a['predicted_close_price']:.2f} (직전 종가 {a['prev_close']:.2f})\n"
-        f"신뢰도: {_conf_bucket(a['close_confidence'])}\n반영된 당일 뉴스: {a['news_count']}건\n"
-        f"주요 헤드라인: {heads}\n이벤트성 급변동 신호: {'있음' if a['is_event'] else '없음'}\n\n"
-        "위 분석을 일반 사용자가 이해하도록 쉽게 요약해줘."
+        f"종목: {a['company']}({a['ticker']}), 날짜: {a['trade_date']}\n"
+        f"당일 종가: {a['predicted_close_price']:.2f} (전일 종가 {a['prev_close']:.2f} 대비 {a['predicted_return']*100:+.1f}% {move})\n"
+        f"반영된 당일 뉴스: {a['news_count']}건\n주요 헤드라인: {heads}\n"
+        f"이벤트성 급변동: {'있음' if a['is_event'] else '없음'}\n설명 신뢰도: {_conf_bucket(a['close_confidence'])}\n\n"
+        "위 종가와 등락을 바탕으로, 오늘 이 종목이 어떻게 움직였고 왜 그랬는지 일반 사용자에게 설명해줘."
     )
     return [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}]
 
 
 def _template_summary(a: dict) -> str:
-    direction = "오를" if (a["predicted_direction"] or 0) > 0 else "내릴"
-    s = (f"{a['company']}({a['ticker']})는 {a['trade_date']}(UTC) 기준 모델이 소폭 {direction} 것으로 "
-         f"예측합니다(예상 {a['predicted_return']*100:+.1f}%, 예상 종가 약 {a['predicted_close_price']:.0f}). "
-         f"예측 신뢰도는 {_conf_bucket(a['close_confidence'])} 수준이며, 당일 반영된 뉴스는 {a['news_count']}건입니다.")
+    move = "올라" if (a["predicted_direction"] or 0) > 0 else "내려"
+    s = (f"{a['company']}({a['ticker']})는 {a['trade_date']} 전일 종가 {a['prev_close']:.0f} 대비 "
+         f"{a['predicted_return']*100:+.1f}% {move} 약 {a['predicted_close_price']:.0f}에 마감했습니다. "
+         f"당일 반영된 뉴스는 {a['news_count']}건이며, 설명 신뢰도는 {_conf_bucket(a['close_confidence'])} 수준입니다.")
     if a["top_headlines"]:
         s += f" 주요 뉴스: \"{a['top_headlines'][0][:80]}\"."
-    return s + " 이는 모델의 예측이며 투자 권유가 아닙니다."
+    return s + " 이는 모델 분석 결과이며 투자 권유가 아닙니다."
 
 
 def generate_interpretation(a: dict) -> tuple[str, str]:
@@ -185,6 +186,11 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
 
     ohlc = load_ohlc(tickers, end=target_utc)
     trading_dates = {t: np.sort(g["trade_date"].unique()) for t, g in ohlc.groupby("ticker", sort=False)}
+    try:
+        _ff5 = load_ff5(end=target_utc)
+        frow = _ff5.iloc[-1].to_dict() if len(_ff5) else None
+    except Exception as exc:
+        print(f"  [warn] FF5 미사용(alpha 드리프트 baseline): {exc}"); frow = None
 
     conn = psycopg2.connect(**_dsn())
     saved = 0
@@ -214,7 +220,17 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
             spread_out = spread_model.predict(fdf)
             spread = float(spread_out["spread_pred"].iloc[0]); high_conf = float(spread_out["high_confidence"].iloc[0])
             cc = float(close_confidence(np.array([sigma]), s_close)[0])
-            alpha = float(fl.alpha); close_ret = alpha + abn
+            alpha = float(fl.alpha)
+            if frow is not None:
+                normal = float(frow["rf"]) + alpha + (
+                    float(fl.beta_mkt_rf) * float(frow["mkt_rf"])
+                    + float(fl.beta_smb) * float(frow["smb"])
+                    + float(fl.beta_hml) * float(frow["hml"])
+                    + float(fl.beta_rmw) * float(frow["rmw"])
+                    + float(fl.beta_cma) * float(frow["cma"]))
+            else:
+                normal = alpha
+            close_ret = normal + abn
             predicted_close = prev_close * float(np.exp(close_ret))
             predicted_high = predicted_close * float(np.exp(max(spread, 0.0)))
 
@@ -223,7 +239,7 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
                 "sector": config.SECTOR_BY_TICKER.get(ticker), "trade_date": str(target_utc),
                 "predicted_return": close_ret, "predicted_close_price": predicted_close,
                 "predicted_high_price": predicted_high, "predicted_direction": int(np.sign(close_ret)),
-                "normal_return": alpha, "abnormal_return": abn, "close_confidence": cc, "high_confidence": high_conf,
+                "normal_return": normal, "abnormal_return": abn, "close_confidence": cc, "high_confidence": high_conf,
                 "news_count": ncount, "top_headlines": top_heads, "prev_close": prev_close,
                 "is_event": bool(abs(abn) >= config.ABS_ABNORMAL_THRESHOLD), "model_version": model_version,
             }
