@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     predicted_high_price  double precision,
     predicted_direction   integer,
     normal_return         double precision,
+    normal_close_price    double precision,
     abnormal_return       double precision,
     close_confidence      double precision,
     high_confidence       double precision,
@@ -66,11 +67,12 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     PRIMARY KEY (trade_date, ticker)
 );
 COMMENT ON TABLE {TABLE} IS '일자별 종목 분석 결과 + 일반 사용자용 LLM 해석';
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS normal_close_price double precision;
 """
 
 _COLS = ("ticker", "market", "company", "sector", "predicted_return", "predicted_close_price",
-         "predicted_high_price", "predicted_direction", "normal_return", "abnormal_return",
-         "close_confidence", "high_confidence", "news_count", "model_version")
+         "predicted_high_price", "predicted_direction", "normal_return", "normal_close_price",
+         "abnormal_return", "close_confidence", "high_confidence", "news_count", "model_version")
 
 UPSERT = f"""
 INSERT INTO {TABLE} (trade_date,{','.join(_COLS)},top_headlines,analysis_json,llm_interpretation,llm_model)
@@ -80,7 +82,7 @@ ON CONFLICT (trade_date,ticker) DO UPDATE SET
     market=EXCLUDED.market, company=EXCLUDED.company, sector=EXCLUDED.sector,
     predicted_return=EXCLUDED.predicted_return, predicted_close_price=EXCLUDED.predicted_close_price,
     predicted_high_price=EXCLUDED.predicted_high_price, predicted_direction=EXCLUDED.predicted_direction,
-    normal_return=EXCLUDED.normal_return, abnormal_return=EXCLUDED.abnormal_return,
+    normal_return=EXCLUDED.normal_return, normal_close_price=EXCLUDED.normal_close_price, abnormal_return=EXCLUDED.abnormal_return,
     close_confidence=EXCLUDED.close_confidence, high_confidence=EXCLUDED.high_confidence,
     news_count=EXCLUDED.news_count, top_headlines=EXCLUDED.top_headlines,
     analysis_json=EXCLUDED.analysis_json, llm_interpretation=EXCLUDED.llm_interpretation,
@@ -232,6 +234,7 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
                 normal = alpha
             close_ret = normal + abn
             predicted_close = prev_close * float(np.exp(close_ret))
+            normal_close = prev_close * float(np.exp(normal))
             predicted_high = predicted_close * float(np.exp(max(spread, 0.0)))
 
             analysis = {
@@ -239,7 +242,7 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
                 "sector": config.SECTOR_BY_TICKER.get(ticker), "trade_date": str(target_utc),
                 "predicted_return": close_ret, "predicted_close_price": predicted_close,
                 "predicted_high_price": predicted_high, "predicted_direction": int(np.sign(close_ret)),
-                "normal_return": normal, "abnormal_return": abn, "close_confidence": cc, "high_confidence": high_conf,
+                "normal_return": normal, "normal_close_price": normal_close, "abnormal_return": abn, "close_confidence": cc, "high_confidence": high_conf,
                 "news_count": ncount, "top_headlines": top_heads, "prev_close": prev_close,
                 "is_event": bool(abs(abn) >= config.ABS_ABNORMAL_THRESHOLD), "model_version": model_version,
             }
