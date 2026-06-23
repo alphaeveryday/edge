@@ -14,7 +14,7 @@ Node 패키지 매니저는 **pnpm**이다(ADR-0001). Node 워크스페이스 �
 ```bash
 pnpm install                      # src/ (Node 루트)에서 1회
 pnpm --filter widget-ui dev       # Vite dev 서버 → http://localhost:5173/test-client.html
-pnpm --filter widget-ui test      # Vitest + jsdom (39 tests)
+pnpm --filter widget-ui test      # Vitest + jsdom (40 tests)
 ```
 
 > pnpm이 없는 환경이면 `src/apps/widget-ui`에서 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
