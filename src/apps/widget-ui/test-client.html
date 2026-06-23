@@ -416,11 +416,12 @@
       <!-- =================== AI =================== -->
       <div class="tab-panel" id="panel-ai">
         <div style="padding:18px 16px 28px;">
-          <!-- EDGE 위젯이 들어갈 자리. 상단 돋보기 검색으로 고른 종목의 symbol을 위젯 로더
-               data-symbol로 주입하고, 로더가 이 안에 iframe 본체를 띄운다. 종목을 바꾸면
-               기존 iframe을 지우고 새 symbol로 재주입한다. 고객사 실제 설치 코드는 그
-               <script> 한 줄이 전부다. -->
-          <div id="aiWidgetMount"></div>
+          <!-- EDGE 위젯 설치: 고객사가 넣는 코드는 이 <script> 한 줄이 전부다. (실제 위젯은
+               iframe 안에서 렌더) data-symbol은 페이지 컨텍스트(여기선 상단 돋보기 검색)가
+               채운다 — 초기엔 005930, 종목을 바꾸면 이 한 줄을 새 symbol로 재주입한다. -->
+          <div id="aiWidgetMount">
+            <script src="./widget-loader.js" data-embed-key="pub_demo_1234" data-symbol="005930"></script>
+          </div>
 
           <div style="font-size:13px; color:#9a9da2; font-weight:500; text-align:center; margin-top:20px; line-height:1.5;">본 AI 분석은 참고용 정보이며, 투자 판단의 책임은 투자자 본인에게 있습니다.</div>
         </div>
@@ -704,8 +705,9 @@
           if (row) { applySymbol(row.dataset.ticker); closeSearch(); }
         });
 
-        // 초기: 헤더는 삼성전자(원본) 유지, 위젯만 INITIAL로 부팅. 유니버스 픽 전까지 active 없음.
-        embed(current);
+        // 초기 위젯은 위 HTML의 정적 <script> 한 줄이 이미 띄웠다(symbol=INITIAL, 헤더도 삼성전자
+        // 원본 유지). 여기서 다시 주입하지 않는다 — 종목을 바꿀 때만 applySymbol→embed가 기존
+        // iframe을 지우고 새 symbol로 재주입한다.
         syncActive();
       })();
     </script>
