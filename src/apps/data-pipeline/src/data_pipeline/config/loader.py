@@ -15,12 +15,10 @@ import os
 import tomllib
 from pathlib import Path
 
-from pydantic import ValidationError
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    SettingsError,
 )
 
 from .models import CollectionTargets, NewsConfig, PriceConfig
@@ -90,8 +88,10 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     try:
         # 파일 데이터는 init으로 주입하고, 환경변수가 이를 덮어쓴다(settings_customise_sources).
         return Settings(**file_data)
-    except (ValidationError, SettingsError) as exc:
-        # SettingsError: 복합 필드(news/price/targets)를 잘못된 env로 덮을 때
-        # (예: DATA_PIPELINE_TARGETS=not-json) 소스 파싱 단계에서 난다 — ValidationError가
-        # 아니라 그대로 새므로, 같은 ConfigError 계약(fail loud)으로 함께 감싼다.
+    except ValueError as exc:
+        # 설정 구성 실패는 공통 상위 ValueError로 잡는다: pydantic ValidationError(필드 검증
+        # 실패)와 pydantic-settings SettingsError(복합 필드를 잘못된 env로 덮을 때 — 예:
+        # DATA_PIPELINE_TARGETS=not-json — 소스 파싱 단계에서 발생)가 둘 다 ValueError 서브클래스다.
+        # SettingsError는 버전마다 import 경로가 달라(2.2.x엔 top-level·exceptions 모두 없음)
+        # 직접 import하지 않고 ValueError로 잡아 ConfigError(fail loud)로 감싼다.
         raise ConfigError(f"설정 검증 실패 ({path}):\n{exc}") from exc
