@@ -83,6 +83,92 @@
       .num {
         font-variant-numeric: tabular-nums;
       }
+      /* 종목 검색 오버레이 (데모 한정) */
+      .stock-search {
+        position: absolute;
+        inset: 0;
+        z-index: 50;
+        background: #ffffff;
+        display: flex;
+        flex-direction: column;
+        border-radius: 44px;
+        overflow: hidden;
+      }
+      .stock-search[hidden] {
+        display: none;
+      }
+      .stock-search-bar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 18px 16px 14px;
+        border-bottom: 1px solid #ededef;
+      }
+      .stock-search-bar input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid #e3e5e8;
+        border-radius: 10px;
+        padding: 11px 13px;
+        font-size: 15px;
+        font-family: inherit;
+        outline: none;
+      }
+      .stock-search-bar input:focus {
+        border-color: #1668d8;
+      }
+      .stock-search-bar button {
+        flex: none;
+        border: none;
+        background: none;
+        color: #1668d8;
+        font-weight: 700;
+        font-size: 15px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .stock-search-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0 24px;
+      }
+      .stock-search-sector {
+        font-size: 12.5px;
+        font-weight: 700;
+        color: #8b8e93;
+        padding: 14px 20px 6px;
+      }
+      .stock-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        cursor: pointer;
+      }
+      .stock-row.active {
+        background: #eaf1fd;
+      }
+      .stock-row-name {
+        font-size: 15.5px;
+        font-weight: 600;
+        color: #17181a;
+      }
+      .stock-row-ticker {
+        font-size: 13px;
+        font-weight: 600;
+        color: #8b8e93;
+        font-variant-numeric: tabular-nums;
+      }
+      .stock-row.active .stock-row-ticker {
+        color: #1668d8;
+      }
+      .stock-search-empty {
+        padding: 28px 20px;
+        text-align: center;
+        font-size: 14px;
+        color: #9a9da2;
+      }
     </style>
   </head>
   <body>
@@ -106,7 +192,7 @@
       <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 18px 4px; background:#ffffff;">
         <svg width="13" height="22" viewBox="0 0 13 22" fill="none" stroke="#17181a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L2 11l9 9"/></svg>
         <div style="display:flex; align-items:center; gap:22px;">
-          <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#17181a" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="7"/><path d="M16 16l5 5"/></svg>
+          <svg id="searchBtn" style="cursor:pointer;" width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#17181a" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="7"/><path d="M16 16l5 5"/></svg>
           <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#17181a" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L4.5 9.7l5.9-.9z"/></svg>
           <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#17181a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
           <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#17181a" stroke-width="2.2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
@@ -115,8 +201,8 @@
 
       <!-- header info -->
       <div style="background:#ffffff; padding:8px 22px 12px;">
-        <div style="font-size:23px; font-weight:800; letter-spacing:-0.5px; line-height:1.1;">삼성전자</div>
-        <div style="font-size:13px; color:#8b8e93; font-weight:500; margin-top:3px;">005930 <span style="color:#c7cace; margin:0 4px;">|</span> KOSPI</div>
+        <div id="hdrName" style="font-size:23px; font-weight:800; letter-spacing:-0.5px; line-height:1.1;">삼성전자</div>
+        <div id="hdrCode" style="font-size:13px; color:#8b8e93; font-weight:500; margin-top:3px;">005930 <span style="color:#c7cace; margin:0 4px;">|</span> KOSPI</div>
         <div style="font-size:38px; font-weight:800; letter-spacing:-1px; color:#1668d8; line-height:1.05; margin-top:6px;">81,300</div>
         <div style="display:flex; align-items:center; gap:14px; margin-top:4px;">
           <div style="display:flex; align-items:center; gap:6px; color:#1668d8;"><span style="font-size:12px;">▼</span><span style="font-size:16px; font-weight:700;">700</span></div>
@@ -330,11 +416,25 @@
       <!-- =================== AI =================== -->
       <div class="tab-panel" id="panel-ai">
         <div style="padding:18px 16px 28px;">
-          <!-- EDGE 위젯 설치: 고객사가 넣는 코드는 이 한 줄이 전부다. (실제 위젯은 iframe 안에서 렌더) -->
-          <script src="./widget-loader.js" data-embed-key="pub_demo_1234" data-symbol="005930"></script>
+          <!-- EDGE 위젯 설치: 고객사가 넣는 코드는 이 <script> 한 줄이 전부다. (실제 위젯은
+               iframe 안에서 렌더) data-symbol은 페이지 컨텍스트(여기선 상단 돋보기 검색)가
+               채운다 — 초기엔 005930, 종목을 바꾸면 이 한 줄을 새 symbol로 재주입한다. -->
+          <div id="aiWidgetMount">
+            <script src="./widget-loader.js" data-embed-key="pub_demo_1234" data-symbol="005930"></script>
+          </div>
 
           <div style="font-size:13px; color:#9a9da2; font-weight:500; text-align:center; margin-top:20px; line-height:1.5;">본 AI 분석은 참고용 정보이며, 투자 판단의 책임은 투자자 본인에게 있습니다.</div>
         </div>
+      </div>
+
+      <!-- 종목 검색 오버레이 (데모 한정). 상단 돋보기로 열어 유니버스에서 종목을 고르면
+           헤더 종목명·코드가 바뀌고 AI 위젯이 그 symbol로 재주입된다. -->
+      <div id="stockSearch" class="stock-search" hidden>
+        <div class="stock-search-bar">
+          <input id="stockSearchInput" type="text" placeholder="종목명·티커 검색" autocomplete="off" />
+          <button type="button" id="stockSearchClose">취소</button>
+        </div>
+        <div id="stockSearchList" class="stock-search-list"></div>
       </div>
       </div>
     </div>
@@ -498,6 +598,129 @@
         const rpts = rsi.map((v, i) => (v == null ? null : X(i) + ',' + Yr(v))).filter(Boolean).join(' ');
         rs += `<polyline points="${rpts}" fill="none" stroke="#8b53d6" stroke-width="1.5"/>`;
         document.getElementById('chartRsi').innerHTML = `<svg viewBox="0 0 400 94" style="width:100%;height:auto;display:block">${rs}</svg>`;
+      })();
+
+      // ---- 종목 선택기: 돋보기 검색 오버레이 (데모 한정) ----
+      // 상단 돋보기로 검색 오버레이를 열어 유니버스에서 종목을 고르면 applySymbol이 헤더
+      // 종목명·코드를 바꾸고, 그 ticker를 로더 data-symbol로 주입해 AI 위젯을 재주입한다.
+      // ticker = ALPHA-269 데모 유니버스(미국 9종목). 위젯 본체는 symbol passthrough라 문자열을
+      // 그대로 싣는다(canonical 변환은 후속 Gateway adapter 책임). 종목별 실제 분석 콘텐츠는
+      // 게이트웨이 스텁(ALPHA-264) 연결 후 — 현재 mock은 9종목 모두 동일 스냅샷을 렌더한다.
+      (function stockPicker() {
+        const EMBED_KEY = 'pub_demo_1234';
+        const LOADER_SRC = './widget-loader.js';
+        // 초기 종목 = 페이지가 원래 보여주던 삼성전자(005930). 유니버스(9종목)는 돋보기 검색으로 전환.
+        const INITIAL = '005930';
+        const UNIVERSE = [
+          { sector: 'IT', name: '엔비디아', ticker: 'NVDA', market: 'NASDAQ' },
+          { sector: 'IT', name: '애플', ticker: 'AAPL', market: 'NASDAQ' },
+          { sector: 'IT', name: '마이크로소프트', ticker: 'MSFT', market: 'NASDAQ' },
+          { sector: '산업재', name: '캐터필러', ticker: 'CAT', market: 'NYSE' },
+          { sector: '산업재', name: 'GE 에어로스페이스', ticker: 'GE', market: 'NYSE' },
+          { sector: '산업재', name: 'RTX', ticker: 'RTX', market: 'NYSE' },
+          { sector: '금융', name: '버크셔 해서웨이', ticker: 'BRK.B', market: 'NYSE' },
+          { sector: '금융', name: 'JP모건 체이스', ticker: 'JPM', market: 'NYSE' },
+          { sector: '금융', name: '비자', ticker: 'V', market: 'NYSE' },
+        ];
+        const sectors = [...new Set(UNIVERSE.map((s) => s.sector))];
+        const byTicker = (t) => UNIVERSE.find((s) => s.ticker === t);
+
+        const mount = document.getElementById('aiWidgetMount');
+        const hdrName = document.getElementById('hdrName');
+        const hdrCode = document.getElementById('hdrCode');
+        const device = document.querySelector('.device');
+        const search = document.getElementById('stockSearch');
+        const searchList = document.getElementById('stockSearchList');
+        const searchInput = document.getElementById('stockSearchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const searchClose = document.getElementById('stockSearchClose');
+        if (!mount) return;
+
+        let current = INITIAL;
+        let injectToken = 0; // 가장 최근 주입을 식별 — 빠른 연속 전환의 stale 로더 정리에 쓴다.
+
+        // 위젯 로더 <script>를 mount 안에 재주입한다. 로더는 data-symbol을 주입 시 1회만
+        // 읽으므로(currentScript), symbol을 바꾸려면 기존 iframe을 지우고 새로 주입한다.
+        function embed(ticker) {
+          const myToken = ++injectToken;
+          mount.innerHTML = ''; // 이전 로더 script + iframe 제거
+          const script = document.createElement('script');
+          script.src = LOADER_SRC;
+          script.async = false; // 동적 주입 classic script에서 document.currentScript가 로더를 가리키게 보장
+          script.setAttribute('data-embed-key', EMBED_KEY);
+          script.setAttribute('data-symbol', ticker);
+          // 전환을 매우 빠르게 반복하면(콜드 캐시·느린 서버) 직전 로더 script가 아직 로드 중인데
+          // mount.innerHTML=''로 떨어져 나갈 수 있다. detach된 그 stale 로더가 뒤늦게 실행되면
+          // parentNode가 null이라 로더가 iframe을 document.body(마운트 밖)에 붙인다 → 유령 위젯.
+          // 이 주입이 더 이상 최신이 아니면 마운트 밖으로 샌 위젯을 제거한다(최신 iframe은 항상
+          // mount 안이라 안전).
+          script.addEventListener('load', () => {
+            if (myToken !== injectToken) {
+              document.querySelectorAll('body > iframe.edge-widget-frame').forEach((f) => f.remove());
+            }
+          });
+          mount.appendChild(script);
+        }
+
+        function syncActive() {
+          if (searchList) Array.from(searchList.querySelectorAll('[data-ticker]')).forEach((el) => {
+            el.classList.toggle('active', el.dataset.ticker === current);
+          });
+        }
+
+        // 단일 진입점: 종목 적용(헤더 + 위젯 + 검색 목록 active 동기화).
+        function applySymbol(ticker) {
+          const stock = byTicker(ticker);
+          if (!stock) return;
+          current = ticker;
+          if (hdrName) hdrName.textContent = stock.name;
+          if (hdrCode) hdrCode.innerHTML = `${stock.ticker} <span style="color:#c7cace; margin:0 4px;">|</span> ${stock.market}`;
+          embed(ticker);
+          syncActive();
+        }
+
+        // 돋보기 검색 오버레이
+        function renderSearchList(filter) {
+          if (!searchList) return;
+          const q = (filter || '').trim().toLowerCase();
+          const match = (s) => !q || s.name.toLowerCase().includes(q) || s.ticker.toLowerCase().includes(q);
+          const html = sectors.map((sector) => {
+            const rows = UNIVERSE.filter((s) => s.sector === sector && match(s)).map((s) =>
+              `<div class="stock-row" data-ticker="${s.ticker}">`
+              + `<span class="stock-row-name">${s.name}</span>`
+              + `<span class="stock-row-ticker">${s.ticker} · ${s.market}</span>`
+              + `</div>`
+            ).join('');
+            return rows ? `<div class="stock-search-sector">${sector}</div>${rows}` : '';
+          }).join('');
+          searchList.innerHTML = html || '<div class="stock-search-empty">검색 결과가 없습니다</div>';
+          syncActive();
+        }
+
+        function openSearch() {
+          if (!search) return;
+          if (device) device.scrollTop = 0; // 오버레이가 .device 상단에 정렬되도록
+          renderSearchList('');
+          if (searchInput) searchInput.value = '';
+          search.hidden = false;
+          if (searchInput) searchInput.focus();
+        }
+        function closeSearch() {
+          if (search) search.hidden = true;
+        }
+
+        if (searchBtn) searchBtn.addEventListener('click', openSearch);
+        if (searchClose) searchClose.addEventListener('click', closeSearch);
+        if (searchInput) searchInput.addEventListener('input', (e) => renderSearchList(e.target.value));
+        if (searchList) searchList.addEventListener('click', (e) => {
+          const row = e.target.closest('[data-ticker]');
+          if (row) { applySymbol(row.dataset.ticker); closeSearch(); }
+        });
+
+        // 초기 위젯은 위 HTML의 정적 <script> 한 줄이 이미 띄웠다(symbol=INITIAL, 헤더도 삼성전자
+        // 원본 유지). 여기서 다시 주입하지 않는다 — 종목을 바꿀 때만 applySymbol→embed가 기존
+        // iframe을 지우고 새 symbol로 재주입한다. (검색 목록은 첫 openSearch에서 렌더되므로
+        // init 시점 active 동기화는 불필요하다.)
       })();
     </script>
   </body>

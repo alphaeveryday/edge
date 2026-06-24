@@ -19,7 +19,7 @@ pnpm --filter widget-ui test      # Vitest + jsdom (40 tests)
 
 > pnpm이 없는 환경이면 `src/apps/widget-ui`에서 같은 바이너리를 `npx`로 실행한다: `npx vite`(dev), `npx vitest run --environment jsdom`(= `npm test`).
 
-`test-client.html`은 고객사(증권사) 종목상세를 흉내 낸 데모다. 섹션 몇 개(차트/호가/뉴스 placeholder)와 "AI 분석" 섹션의 **단일 `<script>` 한 줄**(`widget-loader.js`)이 전부 — 고객사가 넣는 설치 코드가 한 줄임을 보여준다. AI 분석 섹션에서 `success` 상태를 확인한다. `empty`/`error`/`fallback` 4상태 렌더는 PoC용 `data-mock-status`를 제거하면서 단위 테스트(`tests/widget.test.js`)로 검증한다.
+`test-client.html`은 고객사(증권사) 종목상세를 흉내 낸 데모다. 섹션 몇 개(차트/호가/뉴스 placeholder)와 "AI 분석" 섹션의 **단일 `<script>` 한 줄**(`widget-loader.js`)이 전부 — 고객사가 넣는 설치 코드가 한 줄임을 보여준다. AI 분석 섹션에서 `success` 상태를 확인한다. 상단 돋보기를 누르면 종목 검색 오버레이가 열리고, 데모 유니버스(미국 9종목)에서 종목을 고르면 헤더 종목명·코드가 바뀌며 그 `symbol`로 위젯이 재주입된다(**데모 한정** — 종목별 실제 분석 콘텐츠는 게이트웨이 연결 후, 현재 mock은 9종목 동일 스냅샷). `empty`/`error`/`fallback` 4상태 렌더는 PoC용 `data-mock-status`를 제거하면서 단위 테스트(`tests/widget.test.js`)로 검증한다.
 
 ## 핵심 경계 — loader / 본체(iframe) 2계층, widget = 렌더
 
