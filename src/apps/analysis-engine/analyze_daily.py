@@ -39,6 +39,7 @@ from edge_event_model.model_io import load_artifacts
 TABLE = "market.us_analysis_table"
 NEWS_TABLE = "market.us_fmp_news_articles"
 DEFAULT_LLM_MODEL = "gpt-4o-mini"
+TOP_HEADLINES = 8  # 최신 N건 헤드라인을 LLM 컨텍스트/DB 저장에 사용
 
 DDL = f"""
 CREATE SCHEMA IF NOT EXISTS market;
@@ -105,6 +106,10 @@ def _conf_bucket(cc: float) -> str:
     return "높음" if cc >= 0.55 else ("보통" if cc >= 0.40 else "낮음")
 
 
+def _pct(x: float) -> str:
+    return f"{x * 100:+.1f}%"
+
+
 def _company(ticker: str) -> str:
     for a in config.UNIVERSE:
         if a.ticker == ticker:
@@ -126,33 +131,50 @@ def _fetch_news(conn, tickers, start: date, end: date) -> pd.DataFrame:
 
 
 def _build_messages(a: dict) -> list[dict]:
+    move = "상승" if (a["predicted_direction"] or 0) > 0 else "하락"
+    conf = _conf_bucket(a["close_confidence"])
+    heads = "\n".join(f"- {h}" for h in a["top_headlines"]) or "- (당일 관련 뉴스 없음)"
     sys_p = (
-        "너는 일반 개인투자자에게 '오늘 이 종목의 종가와 등락'을 쉽게 설명해 주는 도우미야. "
-        "우리 모델은 캘리브레이션 검증을 통과해 모델 종가가 실제 종가와 거의 일치하므로, "
-        "아래 수치를 '오늘의 종가와 변동'으로 보고 그날 주가가 그렇게 움직인 배경(뉴스)을 설명해. "
-        "'예상된다·전망·예측' 같은 미래 추측형 표현은 쓰지 말고, 그날의 종가와 등락폭을 설명하는 어조로 써. "
-        "상관계수·표준편차·z-score 같은 통계 용어는 쓰지 말고, 2~4문장 한국어로, 단정적 매수/매도 권유는 하지 마."
+        "역할: 너는 개인투자자에게 특정 종목의 '그날 주가 예측'을 쉬운 한국어로 풀어 주는 애널리스트다.\n\n"
+        "입력은 전부 모델의 예측치이며 실현된 종가가 아니다. 변동은 두 가지로 나뉜다.\n"
+        "- 정상 변동: 뉴스를 빼고 시장 전체 흐름만 반영한 예측 변동.\n"
+        "- 모델 예측 변동: 뉴스까지 반영한 최종 예측 변동. 정상 변동과의 차이가 '뉴스 기여분'이다.\n\n"
+        "작성 절차:\n"
+        "1) 모델이 그날 종가를 전일 대비 몇 % 어느 방향으로 예측하는지 먼저 말한다.\n"
+        "2) 정상 변동과 모델 예측 변동을 비교해 그 움직임이 시장 흐름 탓인지 뉴스 탓인지 가른다.\n"
+        "   - '이벤트성 급변동: 없음'이면 특정 뉴스보다 시장 흐름을 따른 예측이라고 설명한다.\n"
+        "   - '있음'이면 그 방향(상승/하락)을 가장 잘 설명하는 헤드라인 1~2개를 주된 요인으로 지목한다.\n"
+        "   - 뉴스 기여분은 큰데 어떤 헤드라인도 그 방향을 설명하지 못하면, 솔직히 '뉴스로는 잘 설명되지 않는 변동'이라고 쓴다.\n"
+        "3) '설명 신뢰도'가 낮음이면 단정하지 말고 '~로 보인다'처럼 약하게 쓴다.\n\n"
+        "예시 톤: 'AAPL은 시장 흐름만 보면 +0.4% 안팎에 그칠 예측이지만, 신제품 공개 소식이 더해져 "
+        "약 +2.1% 상승한 204.24로 예측됩니다. 다만 설명 신뢰도는 보통 수준입니다.'\n\n"
+        "엄수: 주어진 헤드라인 밖의 사실·뉴스를 지어내지 말 것. 수치를 언급하면 입력의 숫자를 그대로 쓸 것. "
+        "상관계수·표준편차·z-score 같은 통계 용어 금지, 매수/매도 권유 금지. 한국어 2~3문장으로 간결하게."
     )
-    move = "올라" if (a["predicted_direction"] or 0) > 0 else "내려"
-    heads = "; ".join(a["top_headlines"][:3]) or "당일 관련 뉴스 없음"
     user_p = (
-        f"종목: {a['company']}({a['ticker']}), 날짜: {a['trade_date']}\n"
-        f"당일 종가: {a['predicted_close_price']:.2f} (전일 종가 {a['prev_close']:.2f} 대비 {a['predicted_return']*100:+.1f}% {move})\n"
-        f"반영된 당일 뉴스: {a['news_count']}건\n주요 헤드라인: {heads}\n"
-        f"이벤트성 급변동: {'있음' if a['is_event'] else '없음'}\n설명 신뢰도: {_conf_bucket(a['close_confidence'])}\n\n"
-        "위 종가와 등락을 바탕으로, 오늘 이 종목이 어떻게 움직였고 왜 그랬는지 일반 사용자에게 설명해줘."
+        f"종목: {a['company']}({a['ticker']})\n"
+        f"예측 대상일: {a['trade_date']}\n"
+        f"전일 종가: {a['prev_close']:.2f}\n"
+        f"정상 변동(뉴스 제외, 시장 흐름만): {_pct(a['normal_return'])} → 예측가 {a['normal_close_price']:.2f}\n"
+        f"모델 예측 변동(뉴스 반영): {_pct(a['predicted_return'])} → 예측가 {a['predicted_close_price']:.2f} ({move})\n"
+        f"뉴스 기여분(둘의 차이): {_pct(a['abnormal_return'])}\n"
+        f"이벤트성 급변동: {'있음' if a['is_event'] else '없음'}\n"
+        f"설명 신뢰도: {conf}\n"
+        f"당일 뉴스 {a['news_count']}건 중 최신 헤드라인:\n{heads}\n\n"
+        "위 입력만 근거로, 작성 절차에 따라 그날의 예측 움직임과 그 이유(주된 요인)를 설명하라."
     )
     return [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}]
 
 
 def _template_summary(a: dict) -> str:
-    move = "올라" if (a["predicted_direction"] or 0) > 0 else "내려"
-    s = (f"{a['company']}({a['ticker']})는 {a['trade_date']} 전일 종가 {a['prev_close']:.0f} 대비 "
-         f"{a['predicted_return']*100:+.1f}% {move} 약 {a['predicted_close_price']:.0f}에 마감했습니다. "
-         f"당일 반영된 뉴스는 {a['news_count']}건이며, 설명 신뢰도는 {_conf_bucket(a['close_confidence'])} 수준입니다.")
+    move = "상승" if (a["predicted_direction"] or 0) > 0 else "하락"
+    s = (f"{a['company']}({a['ticker']})는 {a['trade_date']} 전일 종가 {a['prev_close']:.0f} 기준, "
+         f"뉴스가 없었다면 시장 흐름상 {_pct(a['normal_return'])} 변동이 예측되지만 "
+         f"모델은 뉴스를 반영해 {_pct(a['predicted_return'])} {move}한 약 {a['predicted_close_price']:.0f}로 예측합니다 "
+         f"(뉴스 기여분 {_pct(a['abnormal_return'])}). 당일 반영 뉴스 {a['news_count']}건, 설명 신뢰도 {_conf_bucket(a['close_confidence'])}.")
     if a["top_headlines"]:
         s += f" 주요 뉴스: \"{a['top_headlines'][0][:80]}\"."
-    return s + " 이는 모델 분석 결과이며 투자 권유가 아닙니다."
+    return s + " 이는 모델 예측이며 투자 권유가 아닙니다."
 
 
 def generate_interpretation(a: dict) -> tuple[str, str]:
@@ -218,7 +240,7 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
             if dated is not None and not dated.empty:
                 same = dated[(dated["ticker"] == ticker) & (dated["trade_date"] == ts)].sort_values("published_at")
                 ncount = int(len(same))
-                top_heads = [str(t)[:140] for t in same["title"].tail(3).tolist()][::-1]
+                top_heads = [str(t)[:140] for t in same["title"].tail(TOP_HEADLINES).tolist()][::-1]
 
             fdf = pd.DataFrame([{"ticker": ticker, "trade_date": ts, "normal_return": float(fl.alpha),
                                  "spread_lag_mean": float(fl.spread_lag_mean),
