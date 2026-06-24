@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,9 @@ def load_artifacts(in_dir: str | Path) -> tuple[TemporalNewsModel, SpreadModel, 
     import torch
 
     p = Path(in_dir)
+    if os.environ.get("EDGE_ARTIFACTS_FROM_S3") == "1":
+        from .aws import ensure_artifacts
+        ensure_artifacts(p)
     ckpt = torch.load(p / "news_nn.pt", map_location="cpu", weights_only=False)
     nm = TemporalNewsModel(
         target_col=ckpt["target_col"], emb_dim=ckpt["emb_dim"], proj=ckpt["proj"],

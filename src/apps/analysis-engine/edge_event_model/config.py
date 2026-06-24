@@ -41,6 +41,12 @@ DB_PATH: Path = DB_DIR / "edge_analysis.sqlite"
 CACHE_DIR: Path = DATA_DIR / "context_outputs"
 EMBED_CACHE: Path = CACHE_DIR / os.environ.get("EDGE_EMBED_FILE", "news_embeddings_us.parquet")
 
+# AWS artifact/secret sources (cloud inference): models + embedding cache in S3, OpenAI key in Secrets Manager.
+AWS_REGION: str = os.environ.get("AWS_REGION", "ap-northeast-2")
+ARTIFACT_S3_BUCKET: str = os.environ.get("EDGE_ARTIFACT_BUCKET", "news-pipeline-dev-data-curatedbucket6a59c97e-entdeitkha1g")
+ARTIFACT_S3_PREFIX: str = os.environ.get("EDGE_ARTIFACT_PREFIX", "models/current")
+OPENAI_SECRET_ID: str = os.environ.get("EDGE_OPENAI_SECRET", "news-pipeline/dev/openai/api-key")
+
 # --------------------------------------------------------------------------- #
 # Columns / labels
 # --------------------------------------------------------------------------- #

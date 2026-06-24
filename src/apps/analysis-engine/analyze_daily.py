@@ -157,6 +157,9 @@ def _template_summary(a: dict) -> str:
 
 def generate_interpretation(a: dict) -> tuple[str, str]:
     key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not key:
+        from edge_event_model.aws import openai_key as _ok
+        key = _ok()
     model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
     if not key:
         return _template_summary(a), "template-fallback"
@@ -198,6 +201,9 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
     saved = 0
     try:
         news = _fetch_news(conn, tickers, target_utc - timedelta(days=60), target_utc)
+        if os.environ.get("EDGE_ARTIFACTS_FROM_S3") == "1":
+            from edge_event_model.aws import ensure_embed_cache
+            ensure_embed_cache(config.EMBED_CACHE)
         embedder = TitleEmbedder()
         _, windows = build_news_windows(news, trading_dates, embedder=embedder)
         dated = assign_trade_dates(news, trading_dates) if not news.empty else news
