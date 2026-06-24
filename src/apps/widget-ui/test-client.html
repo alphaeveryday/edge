@@ -609,7 +609,7 @@
       (function stockPicker() {
         const EMBED_KEY = 'pub_demo_1234';
         const LOADER_SRC = './widget-loader.js';
-        // 초기 종목 = 페이지가 원래 보여주던 삼성전자(005930). 유니버스(9종목)는 검색/칩으로 전환.
+        // 초기 종목 = 페이지가 원래 보여주던 삼성전자(005930). 유니버스(9종목)는 돋보기 검색으로 전환.
         const INITIAL = '005930';
         const UNIVERSE = [
           { sector: 'IT', name: '엔비디아', ticker: 'NVDA', market: 'NASDAQ' },
@@ -656,7 +656,7 @@
           });
         }
 
-        // 단일 진입점: 종목 적용(헤더 + 위젯 + 두 선택기 동기화).
+        // 단일 진입점: 종목 적용(헤더 + 위젯 + 검색 목록 active 동기화).
         function applySymbol(ticker) {
           const stock = byTicker(ticker);
           if (!stock) return;
@@ -707,8 +707,8 @@
 
         // 초기 위젯은 위 HTML의 정적 <script> 한 줄이 이미 띄웠다(symbol=INITIAL, 헤더도 삼성전자
         // 원본 유지). 여기서 다시 주입하지 않는다 — 종목을 바꿀 때만 applySymbol→embed가 기존
-        // iframe을 지우고 새 symbol로 재주입한다.
-        syncActive();
+        // iframe을 지우고 새 symbol로 재주입한다. (검색 목록은 첫 openSearch에서 렌더되므로
+        // init 시점 active 동기화는 불필요하다.)
       })();
     </script>
   </body>
