@@ -637,16 +637,28 @@
         if (!mount) return;
 
         let current = INITIAL;
+        let injectToken = 0; // 가장 최근 주입을 식별 — 빠른 연속 전환의 stale 로더 정리에 쓴다.
 
         // 위젯 로더 <script>를 mount 안에 재주입한다. 로더는 data-symbol을 주입 시 1회만
         // 읽으므로(currentScript), symbol을 바꾸려면 기존 iframe을 지우고 새로 주입한다.
         function embed(ticker) {
+          const myToken = ++injectToken;
           mount.innerHTML = ''; // 이전 로더 script + iframe 제거
           const script = document.createElement('script');
           script.src = LOADER_SRC;
           script.async = false; // 동적 주입 classic script에서 document.currentScript가 로더를 가리키게 보장
           script.setAttribute('data-embed-key', EMBED_KEY);
           script.setAttribute('data-symbol', ticker);
+          // 전환을 매우 빠르게 반복하면(콜드 캐시·느린 서버) 직전 로더 script가 아직 로드 중인데
+          // mount.innerHTML=''로 떨어져 나갈 수 있다. detach된 그 stale 로더가 뒤늦게 실행되면
+          // parentNode가 null이라 로더가 iframe을 document.body(마운트 밖)에 붙인다 → 유령 위젯.
+          // 이 주입이 더 이상 최신이 아니면 마운트 밖으로 샌 위젯을 제거한다(최신 iframe은 항상
+          // mount 안이라 안전).
+          script.addEventListener('load', () => {
+            if (myToken !== injectToken) {
+              document.querySelectorAll('body > iframe.edge-widget-frame').forEach((f) => f.remove());
+            }
+          });
           mount.appendChild(script);
         }
 
