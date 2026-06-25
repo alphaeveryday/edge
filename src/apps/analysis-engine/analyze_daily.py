@@ -22,7 +22,6 @@ import argparse
 import json
 import os
 import sys
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,10 +34,11 @@ from edge_event_model.features import build_news_windows, load_ohlc, load_ff5
 from edge_event_model.features.news_arm import TitleEmbedder, assign_trade_dates
 from edge_event_model.models.combine import close_confidence
 from edge_event_model.model_io import load_artifacts
+from edge_event_model import llm
+from edge_event_model.oneliner import generate_oneliner
 
 TABLE = "market.us_analysis_table"
 NEWS_TABLE = "market.us_fmp_news_articles"
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
 TOP_HEADLINES = 8  # 최신 N건 헤드라인을 LLM 컨텍스트/DB 저장에 사용
 
 DDL = f"""
@@ -64,30 +64,41 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     llm_interpretation    text,
     llm_model             text,
     model_version         text,
+    oneliner_claim1       text,
+    oneliner_claim2       text,
+    oneliner_claim        text,
+    oneliner_direction    text,
+    oneliner_strength     integer,
+    oneliner_horizon      text,
+    latest_news_title     text,
+    latest_news_at        timestamptz,
     created_at            timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (trade_date, ticker)
 );
 COMMENT ON TABLE {TABLE} IS '일자별 종목 분석 결과 + 일반 사용자용 LLM 해석';
 ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS normal_close_price double precision;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_claim1 text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_claim2 text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_claim text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_direction text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_strength integer;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS oneliner_horizon text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS latest_news_title text;
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS latest_news_at timestamptz;
 """
 
 _COLS = ("ticker", "market", "company", "sector", "predicted_return", "predicted_close_price",
          "predicted_high_price", "predicted_direction", "normal_return", "normal_close_price",
-         "abnormal_return", "close_confidence", "high_confidence", "news_count", "model_version")
+         "abnormal_return", "close_confidence", "high_confidence", "news_count", "model_version",
+         "oneliner_claim1", "oneliner_claim2", "oneliner_claim", "oneliner_direction",
+         "oneliner_strength", "oneliner_horizon", "latest_news_title", "latest_news_at")
 
+_INS = (*_COLS, "top_headlines", "analysis_json", "llm_interpretation", "llm_model")
+_SET = ", ".join(f"{c}=EXCLUDED.{c}" for c in _INS if c != "ticker")
 UPSERT = f"""
-INSERT INTO {TABLE} (trade_date,{','.join(_COLS)},top_headlines,analysis_json,llm_interpretation,llm_model)
-VALUES (%(trade_date)s,{','.join('%('+c+')s' for c in _COLS)},%(top_headlines)s,%(analysis_json)s,
-        %(llm_interpretation)s,%(llm_model)s)
-ON CONFLICT (trade_date,ticker) DO UPDATE SET
-    market=EXCLUDED.market, company=EXCLUDED.company, sector=EXCLUDED.sector,
-    predicted_return=EXCLUDED.predicted_return, predicted_close_price=EXCLUDED.predicted_close_price,
-    predicted_high_price=EXCLUDED.predicted_high_price, predicted_direction=EXCLUDED.predicted_direction,
-    normal_return=EXCLUDED.normal_return, normal_close_price=EXCLUDED.normal_close_price, abnormal_return=EXCLUDED.abnormal_return,
-    close_confidence=EXCLUDED.close_confidence, high_confidence=EXCLUDED.high_confidence,
-    news_count=EXCLUDED.news_count, top_headlines=EXCLUDED.top_headlines,
-    analysis_json=EXCLUDED.analysis_json, llm_interpretation=EXCLUDED.llm_interpretation,
-    llm_model=EXCLUDED.llm_model, model_version=EXCLUDED.model_version, created_at=now()
+INSERT INTO {TABLE} (trade_date,{','.join(_INS)})
+VALUES (%(trade_date)s,{','.join('%('+c+')s' for c in _INS)})
+ON CONFLICT (trade_date,ticker) DO UPDATE SET {_SET}, created_at=now()
 """
 
 
@@ -178,26 +189,8 @@ def _template_summary(a: dict) -> str:
 
 
 def generate_interpretation(a: dict) -> tuple[str, str]:
-    key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        from edge_event_model.aws import openai_key as _ok
-        key = _ok()
-    model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
-    if not key:
-        return _template_summary(a), "template-fallback"
-    base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    body = json.dumps({"model": model, "messages": _build_messages(a),
-                       "max_completion_tokens": 600}).encode()  # gpt-5 family: no custom temperature
-    req = urllib.request.Request(f"{base}/chat/completions", data=body,
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            d = json.loads(r.read().decode())
-        txt = (d["choices"][0]["message"]["content"] or "").strip()
-        return (txt, model) if txt else (_template_summary(a), f"{model}(empty->template)")
-    except Exception as exc:  # one ticker's LLM failure must not abort the batch
-        print(f"  [warn] LLM 실패({a['ticker']}): {exc}")
-        return _template_summary(a), f"{model}(error->template)"
+    text, model = llm.chat(_build_messages(a), max_tokens=600)
+    return (text, model) if text else (_template_summary(a), f"{model}->template")
 
 
 def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
@@ -209,6 +202,9 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
     s_close = float(meta.get("s_close", 1.0)) or 1.0
     model_version = str(meta.get("model_version", "ff5_temporal_news_v3"))
     tickers = [t for t in config.TICKERS if t in latest]
+    missing = [t for t in config.TICKERS if t not in latest]
+    if missing:
+        print(f"  [warn] 모델 아티팩트 누락 {len(missing)}/{len(config.TICKERS)}종목 제외: {missing}")
     ts = pd.Timestamp(target_utc)
 
     ohlc = load_ohlc(tickers, end=target_utc)
@@ -236,11 +232,13 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
             fl = latest[ticker]
             prior = ohlc[(ohlc["ticker"] == ticker) & (ohlc["trade_date"] < ts)].sort_values("trade_date")
             prev_close = float(prior["close"].iloc[-1]) if len(prior) else float(fl.last_close)
-            ncount, top_heads = 0, []
+            ncount, top_heads, latest_title, latest_at = 0, [], None, None
             if dated is not None and not dated.empty:
                 same = dated[(dated["ticker"] == ticker) & (dated["trade_date"] == ts)].sort_values("published_at")
                 ncount = int(len(same))
                 top_heads = [str(t)[:140] for t in same["title"].tail(TOP_HEADLINES).tolist()][::-1]
+                latest_title = top_heads[0] if top_heads else None
+                latest_at = pd.Timestamp(same["published_at"].max()).tz_localize("UTC").isoformat() if ncount else None
 
             fdf = pd.DataFrame([{"ticker": ticker, "trade_date": ts, "normal_return": float(fl.alpha),
                                  "spread_lag_mean": float(fl.spread_lag_mean),
@@ -274,6 +272,12 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
                 "news_count": ncount, "top_headlines": top_heads, "prev_close": prev_close,
                 "is_event": bool(abs(abn) >= config.ABS_ABNORMAL_THRESHOLD), "model_version": model_version,
             }
+            ol = generate_oneliner(analysis)
+            analysis.update({"oneliner_claim1": ol["claim1"], "oneliner_claim2": ol["claim2"],
+                             "oneliner_claim": ol["claim"], "oneliner_direction": ol["direction"],
+                             "oneliner_strength": ol["strength"], "oneliner_horizon": ol["horizon"],
+                             "oneliner_source": ol["source"],
+                             "latest_news_title": latest_title, "latest_news_at": latest_at})
             interp, llm_model = generate_interpretation(analysis)
             analysis["llm_interpretation"] = interp
             row = {k: analysis.get(k) for k in _COLS}
@@ -282,8 +286,8 @@ def run_for_date(target_utc: date, artifacts_dir: str) -> dict:
             cur.execute(UPSERT, row)
             saved += 1
             d = "▲" if analysis["predicted_direction"] > 0 else "▼"
-            print(f"  {ticker:6s} {d} ret={close_ret*100:+.2f}% close={predicted_close:.2f} "
-                  f"conf={cc:.2f} news={ncount} llm={llm_model}")
+            print(f"  {ticker:6s} {d} ret={close_ret*100:+.2f}% conf={cc:.2f} news={ncount} "
+                  f"1줄[{ol['direction']}·{ol['strength']}] {ol['claim1']}{ol['claim2']}")
         conn.commit()
     finally:
         conn.close()
