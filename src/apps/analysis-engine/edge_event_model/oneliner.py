@@ -77,12 +77,17 @@ def template(a: dict) -> dict:
     """Deterministic card from the signals alone (LLM-free fallback)."""
     direction = direction_of(a)
     head = (a.get("top_headlines") or [None])[0]
-    if head:
+    abn, nrm = a.get("abnormal_return") or 0.0, a.get("normal_return") or 0.0
+    # 헤드라인은 뉴스 기여분이 시장 성분을 주도하고 방향까지 맞을 때만 인용한다 (오귀인 방지).
+    news_led = (head is not None and direction != "중립"
+                and abs(abn) >= max(abs(nrm), _NEUTRAL_BAND)
+                and (abn > 0) == (direction == "긍정"))
+    if news_led:
         claim1 = head.strip()[:18].rstrip("., ") + ","
-        claim2 = {"긍정": "상승 모멘텀 부각", "부정": "하락 압력 요인", "중립": "주가 영향 주목"}[direction]
+        claim2 = "상승 모멘텀 부각" if direction == "긍정" else "하락 압력 요인"
     else:
-        claim1 = "뚜렷한 재료 없이,"
-        claim2 = {"긍정": "시장 흐름에 동조", "부정": "시장 약세에 동조", "중립": "큰 변동 없는 흐름"}[direction]
+        claim1 = "시장 흐름 주도,"
+        claim2 = {"긍정": "동반 상승 흐름", "부정": "동반 약세 흐름", "중립": "큰 변동 없는 흐름"}[direction]
     return {"claim1": claim1, "claim2": claim2, "claim": f"{claim1[:-1]} {claim2}",
             "direction": direction, "strength": strength_of(a), "horizon": "단기", "source": "template"}
 

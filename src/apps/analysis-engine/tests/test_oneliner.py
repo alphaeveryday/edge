@@ -84,3 +84,20 @@ def test_all_nine_us_tickers_get_a_complete_card(monkeypatch):
         assert 1 <= d["strength"] <= 5
         assert d["horizon"] in oneliner.HORIZONS
         assert d["claim1"] and d["claim2"] and d["claim"]
+
+
+def test_template_does_not_attribute_market_driven_move_to_news():
+    # move led by normal_return, abnormal ~0 -> must NOT cite the headline
+    a = _analysis(normal_return=0.02, abnormal_return=0.0005, predicted_return=0.0205,
+                  top_headlines=["무관한 제목 공급 과잉 우려"])
+    assert oneliner.template(a)["claim1"] == "시장 흐름 주도,"
+    # opposite-signed news must not be cited as the cause either
+    a2 = _analysis(normal_return=0.03, abnormal_return=-0.005, predicted_return=0.025,
+                   top_headlines=["악재성 제목"])
+    assert "악재성 제목" not in oneliner.template(a2)["claim1"]
+
+
+def test_template_attributes_news_led_move_to_headline():
+    a = _analysis(normal_return=0.002, abnormal_return=0.02, predicted_return=0.022,
+                  top_headlines=["호재성 양산 발표"])
+    assert oneliner.template(a)["claim1"].startswith("호재성 양산 발표")
