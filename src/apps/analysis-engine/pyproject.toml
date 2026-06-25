@@ -1,0 +1,20 @@
+[project]
+name = "analysis-engine"
+version = "0.1.0"
+description = "EDGE event-driven return model: FF5 residual (Stage A) -> news NN (Stage B) -> final regression (Stage C)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scikit-learn",
+    "torch",
+    "transformers",
+    "stanza",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib", "plotly"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
