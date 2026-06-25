@@ -252,7 +252,7 @@ def build_day_embeddings(
         return empty, {}
     embedder = embedder or TitleEmbedder()
     emb = _embed_with_cache(deduped, embedder, cache_path)
-    merged = deduped.merge(emb, on="news_id", how="inner")
+    merged = deduped.assign(news_id=deduped["news_id"].astype(str)).merge(emb, on="news_id", how="inner")
     day_emb: dict[tuple[str, pd.Timestamp], np.ndarray] = {}
     rows = []
     for (ticker, trade_date), group in merged.groupby(["ticker", "trade_date"], sort=False):
@@ -340,7 +340,7 @@ def build_news_windows(
         return empty, NewsWindows({}, {}, trading_dates)
     embedder = embedder or TitleEmbedder()
     emb = _embed_with_cache(deduped, embedder, cache_path)
-    merged = deduped.merge(emb, on="news_id", how="inner")
+    merged = deduped.assign(news_id=deduped["news_id"].astype(str)).merge(emb, on="news_id", how="inner")
     today_emb: dict[tuple[str, pd.Timestamp], np.ndarray] = {}
     day_mean: dict[tuple[str, pd.Timestamp], np.ndarray] = {}
     rows = []
