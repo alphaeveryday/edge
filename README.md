@@ -11,10 +11,12 @@
 src/
 ├── apps/                     # 배포되는 실행 단위
 │   ├── widget-ui/            # Node   · 외부 임베드 위젯
-│   ├── tenant-console-ui/    # Node   · 내부 관리자 콘솔
-│   ├── gateway/              # JVM    · 공개 엣지 (widget·console 앞단)
+│   ├── tenant-console-ui/    # Node   · 테넌트 직원 콘솔 (한 테넌트 범위)
+│   ├── super-admin-ui/       # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   ├── gateway/              # JVM    · 공개 엣지 (widget·console·admin 앞단)
 │   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
-│   ├── tenant-console-api/   # JVM    · 내부용 · 읽기/쓰기 · 넓은 표면
+│   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 · 넓은 표면
+│   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant 읽기/쓰기 · 최고 권한
 │   ├── data-pipeline/        # Python · 스케줄러 → DB 적재
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
 ├── libs/                     # 가져다 쓰는 공유 코드
@@ -37,8 +39,8 @@ src/
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · jvm-common |
-| Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · ui-kit |
+| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · super-admin-api · jvm-common |
+| Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
 ## apps — 배포 단위
@@ -46,18 +48,21 @@ src/
 | 앱 | 런타임 | 역할 |
 |---|---|---|
 | `widget-ui` | Node | 외부 사이트에 임베드되는 위젯 |
-| `tenant-console-ui` | Node | 내부 관리자용 콘솔 |
-| `gateway` | JVM | 공개 엣지. widget·console 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
+| `tenant-console-ui` | Node | 테넌트 직원용 콘솔 (한 테넌트 범위) |
+| `super-admin-ui` | Node | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
+| `gateway` | JVM | 공개 엣지. widget·console·admin 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
 | `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
-| `tenant-console-api` | JVM | 내부용 API. **읽기/쓰기**, 넓은 표면 |
+| `tenant-console-api` | JVM | 테넌트용 API. **읽기/쓰기**, 넓은 표면 (한 테넌트 범위) |
+| `super-admin-api` | JVM | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | 스케줄러로 동작 → DB에 데이터 적재 |
 | `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
 ### 외부 표면 vs 내부 표면
 - **외부 경로**: `widget-ui` → `gateway`(widget 라우트) → `widget-api` (읽기 전용, 좁은 표면)
-- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 넓은 표면)
+- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위)
+- **운영 경로**: `super-admin-ui` → `gateway`(admin 라우트, VPN/IP 제한) → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
 
-`gateway`가 두 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. 신뢰 경계 상세는 [docs/architecture.md](docs/architecture.md) 참고.
+`gateway`가 세 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 신뢰 경계 상세는 [docs/architecture.md](docs/architecture.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 
@@ -80,14 +85,15 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
                                   │            (분석 결과 저장)
                                   │
    외부:  widget-ui → gateway → widget-api (읽기) ─┘
-   콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기) ─┘
+   콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
+   운영:  super-admin-ui → gateway → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
    schema(SSOT) ─→ generated 모델 ─→ 모든 JVM/Python 모듈이 공유
 ```
 
 - `data-pipeline`이 외부 데이터를 DB에 적재합니다.
 - `analysis-engine`이 적재된 데이터를 분석해 `analysis_result`로 DB에 저장합니다.
-- API 계층(`widget-api`/`tenant-console-api`)이 DB를 읽어 UI에 제공하며, `analysis_result` 접근은 `jvm-common`이 담당합니다.
+- API 계층(`widget-api`/`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, `analysis_result` 접근은 `jvm-common`이 담당합니다.
 
 ## Git 컨벤션
 
@@ -132,7 +138,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `widget-ui` · `widget-api` · `gateway` · `tenant-console-ui` · `tenant-console-api` · `data-pipeline` · `analysis-engine`
+  - apps: `widget-ui` · `widget-api` · `gateway` · `tenant-console-ui` · `tenant-console-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
