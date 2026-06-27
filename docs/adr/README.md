@@ -15,3 +15,4 @@
 | [0005](0005-db-as-contract.md) | DB를 단일 계약으로 · 확장-수축 마이그레이션 | 승인됨 |
 | [0006](0006-gateway-single-edge.md) | gateway 단일 엣지 · 라우트별 신뢰 필터 | 승인됨 |
 | [0007](0007-merge-strategy.md) | 머지 전략 — 경계별(feature→dev Squash, dev→main Merge commit) | 승인됨 |
+| [0008](0008-super-admin-console.md) | super-admin 콘솔 — cross-tenant 운영자 표면 | 승인됨 |
