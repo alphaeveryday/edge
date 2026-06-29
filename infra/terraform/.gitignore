@@ -1,0 +1,14 @@
+# Terraform 로컬 작업물 — 커밋 금지
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# 커밋함: .terraform.lock.hcl(프로바이더 고정), *.tf, terraform.tfvars(비밀 아님 — env 정의)
