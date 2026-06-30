@@ -22,9 +22,9 @@
 - **tenant-console-api** (JVM) — 콘솔용 백엔드. **읽기/쓰기·넓은 표면**(한 테넌트 범위).
 - **super-admin-api** (JVM) — 운영 콘솔용 백엔드. **cross-tenant 읽기/쓰기 = 최고 권한 표면**.
 - **data-pipeline** (Python) — 스케줄러로 외부 데이터를 DB에 적재.
-- **analysis-engine** (Python) — 스케줄러로 적재 데이터를 분석해 `analysis_result`를 DB에 저장.
+- **analysis-engine** (Python) — 스케줄러로 적재 데이터를 분석해 분석 마트(`analysis_reports` 등)를 DB에 저장.
 - **libs/schema** — DB 스키마 SSOT(마이그레이션 + 생성 모델). [[adr/0005-db-as-contract]].
-- **libs/jvm-common** — 공유 도메인 + `analysis_result` 접근 로직.
+- **libs/jvm-common** — 공유 도메인 + 분석 마트(`analysis_reports` 등) 접근 로직.
 - **libs/ui-kit** — 두 UI 공유 디자인 시스템. **libs/py-common** — Python 공통 유틸.
 
 ## 3. 통신·데이터 흐름
@@ -36,10 +36,10 @@
 
 **배치(스케줄러 트리거)**
 - `스케줄러 → data-pipeline → DB(적재)`
-- `스케줄러 → analysis-engine → DB에서 적재분 읽기 → analysis_result 쓰기`
+- `스케줄러 → analysis-engine → DB에서 적재분 읽기 → 분석 마트 쓰기`
 
 **DB를 통한 통합(핵심)**
-서비스끼리 서로를 직접 호출하지 않는다. analysis-engine이 만든 `analysis_result`를
+서비스끼리 서로를 직접 호출하지 않는다. analysis-engine이 만든 분석 마트(`analysis_reports` 등)를
 API가 (jvm-common을 통해) 읽는 식으로, **결합은 항상 DB를 거친다**.
 그래서 DB 스키마가 사실상 서비스 간 계약이며, 변경 절차를 엄격히 둔다 — [schema.md](schema.md), [[adr/0005-db-as-contract]].
 
