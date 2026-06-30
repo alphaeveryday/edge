@@ -1,0 +1,32 @@
+// DB 스키마 SSOT 모듈 — Flyway 전용. Spring 앱이 아니다.
+// PostgreSQL 드라이버 + flyway-database-postgresql 모듈을 Flyway Gradle 플러그인 classpath에 올린다.
+buildscript {
+    repositories { mavenCentral() }
+    dependencies {
+        classpath("org.postgresql:postgresql:42.7.4")
+        classpath("org.flywaydb:flyway-database-postgresql:10.21.0")
+    }
+}
+
+plugins {
+    id("org.flywaydb.flyway") version "10.21.0"
+}
+
+// url/user/password는 Gradle property → 환경변수 → 기본값(Docker Compose와 일치) 순으로 override 가능.
+fun cfg(prop: String, env: String, default: String): String =
+    providers.gradleProperty(prop)
+        .orElse(providers.environmentVariable(env))
+        .orElse(default)
+        .get()
+
+flyway {
+    url = cfg("flyway.url", "FLYWAY_URL", "jdbc:postgresql://localhost:55432/edge")
+    user = cfg("flyway.user", "FLYWAY_USER", "edge")
+    password = cfg("flyway.password", "FLYWAY_PASSWORD", "edge")
+
+    locations = arrayOf("filesystem:${projectDir}/migrations")
+
+    baselineOnMigrate = false
+    cleanDisabled = true
+    validateMigrationNaming = true
+}

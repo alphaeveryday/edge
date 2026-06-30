@@ -21,9 +21,9 @@ src/
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
-│   │   ├── migrations/       #   마이그레이션 (한 곳에서 관리)
-│   │   └── generated/        #   스키마에서 생성한 각 언어 모델
-│   ├── jvm-common/           # JVM    · 공유 도메인 + analysis_result 접근 로직
+│   │   ├── migrations/       #   Flyway 마이그레이션 (한 곳에서 관리)
+│   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
+│   ├── jvm-common/           # JVM    · 공유 도메인 + 분석 마트 접근 로직
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
 │   └── py-common/            # Python · 공통 유틸
 ├── settings.gradle.kts       # JVM 루트
@@ -36,6 +36,8 @@ src/
 ## 런타임별 워크스페이스
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
+
+아래 "포함 모듈"은 **목표 기준**이다(전체 골격 — README 상단 참고). 현재 Gradle 빌드(`src/settings.gradle.kts`)에 실제 등록된 JVM 모듈은 `libs:schema`뿐이며, 나머지는 구현 시 추가한다.
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
@@ -69,14 +71,14 @@ src/
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
-| `jvm-common` | JVM | 공유 도메인 모델 + `analysis_result` 접근 로직 |
+| `jvm-common` | JVM | 공유 도메인 모델 + 분석 마트(`analysis_reports` 등) 접근 로직 |
 | `ui-kit` | Node | `widget-ui`·`tenant-console-ui` 공유 디자인 시스템 |
 | `py-common` | Python | Python 공통 유틸 |
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations/` — 스키마 변경은 여기서만 관리합니다.
-- `generated/` — 스키마로부터 각 언어용 모델을 생성합니다. JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
+- `migrations/` — Flyway 마이그레이션. 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `generated/` — 스키마로부터 각 언어용 모델을 생성합니다(생성기는 후속 티켓에서 도입; 그 전까지 Flyway SQL이 계약 SSOT). JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
 
 ## 데이터 흐름
 
@@ -88,12 +90,12 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
    콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
    운영:  super-admin-ui → gateway → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
-   schema(SSOT) ─→ generated 모델 ─→ 모든 JVM/Python 모듈이 공유
+   schema(Flyway SQL = 현재 SSOT) ─→ DB 계약 ─→ 모든 JVM/Python 모듈이 공유   (generated 모델은 후속 도입)
 ```
 
 - `data-pipeline`이 외부 데이터를 DB에 적재합니다.
-- `analysis-engine`이 적재된 데이터를 분석해 `analysis_result`로 DB에 저장합니다.
-- API 계층(`widget-api`/`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, `analysis_result` 접근은 `jvm-common`이 담당합니다.
+- `analysis-engine`이 적재된 데이터를 분석해 분석 마트(`analysis_reports` 등)로 DB에 저장합니다.
+- API 계층(`widget-api`/`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, 분석 마트 접근은 `jvm-common`이 담당합니다.
 
 ## Git 컨벤션
 
