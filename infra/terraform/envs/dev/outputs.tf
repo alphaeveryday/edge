@@ -24,6 +24,16 @@ output "alb_dns_name" {
   value       = module.edge_alb.dns_name
 }
 
+output "rds_endpoint" {
+  description = "RDS address:port"
+  value       = module.rds.endpoint
+}
+
+output "rds_master_user_secret_arn" {
+  description = "RDS 관리형 마스터 비밀번호 시크릿 ARN"
+  value       = module.rds.master_user_secret_arn
+}
+
 output "edge_url" {
   description = "임시 검증용 공개 URL(HTTPS)"
   value       = "https://${var.edge_domain}"

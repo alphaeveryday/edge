@@ -88,9 +88,15 @@ variable "environment" {
 }
 
 variable "secrets" {
-  description = "시크릿 환경변수 map (값은 Secrets Manager/SSM ARN)"
+  description = "시크릿 환경변수 map (값은 Secrets Manager/SSM ARN, JSON 키는 arn:...:json-key:: 형식)"
   type        = map(string)
   default     = {}
+}
+
+variable "secret_arns" {
+  description = "실행 역할에 GetSecretValue 를 허용할 시크릿 ARN 목록(secrets 로 주입하는 시크릿의 기반 ARN). 비우면 정책 없음"
+  type        = list(string)
+  default     = []
 }
 
 variable "target_group_arn" {
