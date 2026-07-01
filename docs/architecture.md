@@ -24,7 +24,7 @@
 - **data-pipeline** (Python) — 스케줄러로 외부 데이터를 DB에 적재.
 - **analysis-engine** (Python) — 스케줄러로 적재 데이터를 분석해 분석 마트(`analysis_reports` 등)를 DB에 저장.
 - **libs/schema** — DB 스키마 SSOT(마이그레이션 + 생성 모델). [[adr/0005-db-as-contract]].
-- **libs/jvm-common** — 공유 도메인 + 분석 마트(`analysis_reports` 등) 접근 로직.
+- **libs/jvm-common** — 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·공유 도메인 + 분석 마트(`analysis_reports` 등) 접근 로직.
 - **libs/ui-kit** — 두 UI 공유 디자인 시스템. **libs/py-common** — Python 공통 유틸.
 
 ## 3. 통신·데이터 흐름

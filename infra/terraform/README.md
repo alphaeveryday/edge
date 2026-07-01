@@ -39,11 +39,11 @@ terraform apply     # 실제 생성
 
 ## 현재 범위(증분 1)와 의도적 보류
 
-**만든 것**: VPC/서브넷/NAT, service 클러스터, widget-api ECS 서비스(내부, Service Connect 등록).
+**만든 것**: VPC/서브넷/NAT, service 클러스터, widget-api ECS 서비스(내부, Service Connect 등록), RDS(PostgreSQL, private).
 
 **아직 안 만든 것(후속 증분에서)**:
 - **공개 ALB + WAF + ACM** — gateway 증분에서. (widget-api 는 내부라 불필요)
-- **RDS** — 신규 생성 vs 기존 이전 결정 후. widget-api 는 현재 DB 자동설정을 끈 상태라 DB 없이 뜬다.
+- **widget-api DataSource 재활성화** — RDS·시크릿 주입 배선은 끝났으나, `application.yaml` 의 autoconfigure.exclude 제거는 테스트 컨텍스트가 실DB 를 요구하게 되어 별도 처리. 지금은 주입만 되고 앱은 미사용.
 - **worker 클러스터 + 파이프라인 이전** — data-pipeline·analysis-engine 을 새 VPC 로.
 - **컨테이너 헬스체크** — 현재 런타임 이미지에 curl 이 없어 미설정. ALB target group(gateway 증분) 또는 이미지에 curl 추가로 활성.
 - **오토스케일링·원격 상태 백엔드**.

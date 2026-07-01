@@ -3,7 +3,7 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 초기 스캐폴드.** 디렉토리 골격과 설계 문서는 갖춰졌지만, 앱·라이브러리 구현은 아직 비어 있습니다(`.gitkeep`). 아래 구조와 [`docs/`](docs/)의 문서는 **현재 동작하는 시스템이 아니라 목표 아키텍처**를 기술합니다.
+> **프로젝트 상태 — 초기 스캐폴드(walking-skeleton).** JVM 앱(gateway·widget-api·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. Node·Python 쪽과 대부분의 기능 구현은 아직 비어 있습니다(`.gitkeep`). 아래 구조와 [`docs/`](docs/)의 문서는 상당 부분 **현재 동작하는 시스템이 아니라 목표 아키텍처**를 기술합니다.
 
 ## 한눈에 보기
 
@@ -23,10 +23,10 @@ src/
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations/       #   Flyway 마이그레이션 (한 곳에서 관리)
 │   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
-│   ├── jvm-common/           # JVM    · 공유 도메인 + 분석 마트 접근 로직
+│   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload) + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
 │   └── py-common/            # Python · 공통 유틸
-├── settings.gradle.kts       # JVM 루트
+├── settings.gradle           # JVM 루트 (Groovy DSL 멀티모듈)
 ├── pnpm-workspace.yaml       # Node 루트
 └── pyproject.toml            # Python 루트
 ```
@@ -37,11 +37,11 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-아래 "포함 모듈"은 **목표 기준**이다(전체 골격 — README 상단 참고). 현재 Gradle 빌드(`src/settings.gradle.kts`)에 실제 등록된 JVM 모듈은 `libs:schema`뿐이며, 나머지는 구현 시 추가한다.
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 4개 앱(gateway·widget-api·tenant-console-api·super-admin-api)이 모두 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · super-admin-api · jvm-common |
+| JVM | `src/settings.gradle` | schema · jvm-common · gateway · widget-api · tenant-console-api · super-admin-api |
 | Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
@@ -71,7 +71,7 @@ src/
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
-| `jvm-common` | JVM | 공유 도메인 모델 + 분석 마트(`analysis_reports` 등) 접근 로직 |
+| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`) + 공유 도메인 모델·분석 마트(`analysis_reports` 등) 접근 로직 |
 | `ui-kit` | Node | `widget-ui`·`tenant-console-ui` 공유 디자인 시스템 |
 | `py-common` | Python | Python 공통 유틸 |
 

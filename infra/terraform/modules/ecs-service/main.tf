@@ -29,6 +29,24 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# secrets 로 주입할 시크릿을 태스크 기동 시 읽을 수 있게. 비어 있으면 정책 없음.
+# (RDS 관리형 시크릿은 기본 aws/secretsmanager 키라 GetSecretValue 로 충분. 향후
+#  고객관리형(CMK) 시크릿이면 kms:Decrypt 도 추가 필요.)
+resource "aws_iam_role_policy" "execution_secrets" {
+  count = length(var.secret_arns) > 0 ? 1 : 0
+  name  = "${var.name}-secrets"
+  role  = aws_iam_role.execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = var.secret_arns
+    }]
+  })
+}
+
 # 태스크 역할: 앱이 런타임에 쓰는 AWS 권한(현재 없음 — 필요 시 정책 부착)
 resource "aws_iam_role" "task" {
   name               = "${var.name}-task"

@@ -4,7 +4,7 @@ DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 �
 [schema.md](../../../docs/schema.md)) 모든 마이그레이션을 여기서 관리한다.
 
 이 모듈은 **Spring 앱이 아니다.** Flyway 마이그레이션을 실행하기만 하는 전용 Gradle 모듈이다
-(`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle.kts`의 Flyway 플러그인 블록에 있다.
+(`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle`(Groovy)의 Flyway 플러그인 블록에 있다.
 
 ## 로컬 DB — Docker Postgres
 
