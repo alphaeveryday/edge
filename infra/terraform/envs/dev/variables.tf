@@ -41,3 +41,15 @@ variable "edge_domain" {
   type        = string
   default     = "edge-dev.edgesignal.dev"
 }
+
+variable "github_org_repo" {
+  description = "OIDC 로 배포 역할을 assume 할 GitHub repo (owner/repo)"
+  type        = string
+  default     = "alphaeveryday/edge"
+}
+
+variable "create_github_oidc_provider" {
+  description = "계정에 GitHub OIDC provider 가 없으면 true. 이미 있으면 false 로 두고 modules/github-oidc-deploy 의 oidc_provider_arn 을 넘긴다."
+  type        = bool
+  default     = true
+}
