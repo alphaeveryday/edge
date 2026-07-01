@@ -10,20 +10,24 @@
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
 #
-# ⚠️ 현재 gateway 는 라우팅 미구현(ALPHA-294) — /actuator/health 만 응답하고 프록시는 안 한다.
-#    그래서 지금은 각 백엔드를 host 포트로 '직접' 테스트한다(아래 ports).
-#    라우팅이 붙으면 gateway(localhost:8080) 하나로 모두 라우팅된다.
+# gateway 라우팅 구현됨(ALPHA-294·301): gateway(localhost:8080) 하나로 3라우트 프록시한다.
+#    /api/v1/widget/** → widget-api, /api/v1/console/** → tenant-console-api, /api/v1/admin/** → super-admin-api
+#    (기본 uri 가 서비스명 http://<name>:8080 이라 compose 에서 별도 설정 없이 동작.)
+#    각 백엔드 host 포트(18080~)는 라우팅 우회 직접 테스트용으로 남겨 둔다.
 #
 # 사용:
 #   docker compose up --build          # 전체 기동(첫 실행은 gradle 빌드로 느림)
 #   docker compose up --build gateway  # 특정 서비스만
 #   docker compose down [-v]           # 정리(-v 는 DB 볼륨까지)
 #
-# 직접 테스트(라우팅 전):
+# 테스트:
+#   # gateway 경유(라우팅)
+#   curl -X POST localhost:8080/api/v1/widget/analysis -H 'Content-Type: application/json' -d '{"embedKey":"k","symbol":"005930"}'
+#   curl localhost:8080/actuator/health    # gateway
+#   # 백엔드 직접(라우팅 우회)
 #   curl localhost:18080/actuator/health   # widget-api
 #   curl localhost:18081/actuator/health   # tenant-console-api
 #   curl localhost:18082/actuator/health   # super-admin-api
-#   curl localhost:8080/actuator/health    # gateway
 
 services:
   postgres:
@@ -106,7 +110,8 @@ services:
     ports:
       - "18082:8080"
 
-  # 공개 엣지. 라우팅 구현(ALPHA-294) 후 backends 를 http://<name>:8080 으로 프록시한다.
+  # 공개 엣지(단일 진입점). backends 를 http://<name>:8080 으로 프록시한다(ALPHA-294·301).
+  #   widget→widget-api · console→tenant-console-api · admin→super-admin-api
   gateway:
     build:
       context: ./src
@@ -120,7 +125,7 @@ services:
       super-admin-api:
         condition: service_started
     ports:
-      - "8080:8080" # 라우팅 완성 후 로컬 단일 진입점
+      - "8080:8080" # 로컬 단일 진입점(3라우트 프록시)
 
 volumes:
   edge-postgres-data:
