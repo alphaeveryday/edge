@@ -18,7 +18,7 @@ PR 제목은 Conventional Commits를 따르세요: type(scope): 제목
 ## 체크리스트
 - [ ] PR 제목이 Conventional Commits 형식이다 (`type(scope): 제목`)
 - [ ] 대상 브랜치가 올바르다 (`feature/*`·`fix/* → dev`, `dev → main`)
-- [ ] 스키마를 바꿨다면 `generated` 모델을 함께 갱신했다
+- [ ] 스키마를 바꿨다면 `generated` 모델을 함께 갱신했다 (생성기 도입 전이면 해당 없음 — ALPHA-290)
 
 ---
 Refs: ALPHA-
