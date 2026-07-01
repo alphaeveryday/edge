@@ -12,7 +12,7 @@
 ## 결정
 단일 **모노레포**로 둔다. 코드는 `src/` 아래에 두고:
 - `apps/` — 배포되는 실행 단위, `libs/` — 가져다 쓰는 공유 코드.
-- 런타임별 워크스페이스 루트를 분리한다: `settings.gradle.kts`(JVM) · `pnpm-workspace.yaml`(Node) · `pyproject.toml`(Python).
+- 런타임별 워크스페이스 루트를 분리한다: `settings.gradle`(JVM, Groovy DSL) · `pnpm-workspace.yaml`(Node) · `pyproject.toml`(Python).
 - 빈 폴더는 `.gitkeep`으로 구조를 추적하고, 빌드 산출물 `out/`은 추적하지 않는다.
 
 자세한 구조는 [README.md](../../README.md) 참고.
