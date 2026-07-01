@@ -5,13 +5,33 @@ spring:
     gateway:
       server:
         webmvc:
+          # 라우트 uri 의 호스트는 '서비스명'이다. 이 이름은
+          #   docker-compose 서비스명 == ECS Service Connect dns_name == Terraform ecs-service name
+          # 로 일치시켜 로컬(compose)과 dev(ECS)에서 동일하게 동작한다.
+          # (바 JVM 로컬 테스트 등 예외는 *_URI 환경변수로 override)
           routes:
-            # 위젯 라우트: 공개 요청을 widget-api 로 전달(리버스 프록시).
-            # dev ECS: Service Connect http://widget-api:8080, 로컬: http://localhost:8081
+            # ── 외부: widget-ui → gateway → widget-api ─────────────────
             - id: widget
-              uri: ${WIDGET_API_BASE_URL:http://localhost:8081}
+              uri: ${WIDGET_API_URI:http://widget-api:8080}
               predicates:
                 - Path=/api/v1/widget/**
               filters:
-                # 공개 경로(/api/v1/widget/**) → widget-api 내부 경로(/internal/widget/**)
                 - RewritePath=/api/v1/widget/(?<segment>.*), /internal/widget/$\{segment}
+
+            # ── 콘솔: tenant-console-ui → gateway → tenant-console-api ──
+            - id: tenant-console
+              uri: ${TENANT_CONSOLE_API_URI:http://tenant-console-api:8080}
+              predicates:
+                - Path=/api/v1/console/**
+              filters:
+                - RewritePath=/api/v1/console/(?<segment>.*), /internal/console/$\{segment}
+
+            # ── 운영: super-admin-ui → gateway → super-admin-api ───────
+            # ⚠️ admin 은 운영자(소수·알려진 집합) 전용. 망 수준 제한(VPN/IP allowlist)은
+            #    인프라에서 추가한다(architecture.md §4·ADR-0008). 여기선 경로 라우팅만.
+            - id: super-admin
+              uri: ${SUPER_ADMIN_API_URI:http://super-admin-api:8080}
+              predicates:
+                - Path=/api/v1/admin/**
+              filters:
+                - RewritePath=/api/v1/admin/(?<segment>.*), /internal/admin/$\{segment}
