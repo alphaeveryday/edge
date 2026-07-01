@@ -29,7 +29,7 @@ class WidgetInternalControllerTest {
     }
 
     private org.springframework.test.web.servlet.ResultActions call(String symbol) throws Exception {
-        String body = "{\"symbol\":\"" + symbol + "\",\"organizationId\":\"org_demo_0001\",\"applicationId\":\"app_demo_0001\"}";
+        String body = "{\"symbol\":\"" + symbol + "\"}";
         return mvc.perform(post("/internal/widget/analysis")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));

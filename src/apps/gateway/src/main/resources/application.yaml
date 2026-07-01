@@ -1,15 +1,17 @@
 spring:
   application:
     name: gateway
-  # DB가 아직 연결되지 않은 단계라 DataSource 자동설정을 끈다.
-  # (data-jpa·postgresql 의존성은 두되 부팅 시 DB 접속을 시도하지 않게 함)
-  # DB 연동 시 이 exclude 블록을 지우고 spring.datasource.* 를 채운다.
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
-      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
-
-# 라우팅 대상. gateway는 위젯 요청을 widget-api로 포워딩한다(모델 A).
-# dev ECS: Service Connect http://widget-api:8080, 로컬: http://localhost:8081
-widget-api:
-  base-url: ${WIDGET_API_BASE_URL:http://localhost:8081}
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          routes:
+            # 위젯 라우트: 공개 요청을 widget-api 로 전달(리버스 프록시).
+            # dev ECS: Service Connect http://widget-api:8080, 로컬: http://localhost:8081
+            - id: widget
+              uri: ${WIDGET_API_BASE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/widget/**
+              filters:
+                # 공개 경로(/api/v1/widget/**) → widget-api 내부 경로(/internal/widget/**)
+                - RewritePath=/api/v1/widget/(?<segment>.*), /internal/widget/$\{segment}
