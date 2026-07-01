@@ -1,31 +1,28 @@
 name: Deploy Pages
 
+# private 레포라 자체 GitHub Pages 게시가 불가하므로(Free 플랜), 여기서 사이트를
+# 빌드해 public 레포(alphaeveryday/edge-pages)로 퍼블리시하고 그쪽 Pages 가 서빙한다.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "docs/**"
       - "pages/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
-# GitHub Pages 배포에 필요한 최소 권한.
+# 이 레포에서는 소스 읽기만 필요하다. 외부 레포 푸시는 PAGES_PUBLISH_TOKEN(PAT)으로 한다.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# 동시 배포 충돌 방지(진행 중 배포는 취소하지 않는다).
+# 동시 퍼블리시 충돌 방지(진행 중 작업은 취소하지 않는다).
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build-and-publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,12 +33,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      # Pages 소스를 GitHub Actions 로 자동 설정(수동 레포 설정 의존 제거).
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       # 버전 고정 — 미래 릴리스가 --strict 빌드를 깨뜨리지 않도록 재현성 확보.
       - name: Install MkDocs Material
@@ -56,11 +47,14 @@ jobs:
       - name: Build site
         run: mkdocs build -f pages/mkdocs.yml --strict
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      # 빌드 산출물(pages/site)을 public 레포의 gh-pages 브랜치로 퍼블리시.
+      - name: Publish to edge-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: pages/site
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          personal_token: ${{ secrets.PAGES_PUBLISH_TOKEN }}
+          external_repository: alphaeveryday/edge-pages
+          publish_branch: gh-pages
+          publish_dir: ./pages/site
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: "deploy: ${{ github.sha }}"
