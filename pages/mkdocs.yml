@@ -1,0 +1,59 @@
+site_name: Edge Architecture Portal
+site_description: Edge 시스템 아키텍처 문서 포털 — 설계 문서·산출물·발전 과정
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: ko
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: 다크 모드로 전환
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: 라이트 모드로 전환
+
+plugins:
+  - search
+
+# reference/ 는 docs/ SSOT 를 그대로 복사한 산출물이라, 원본이 리포지토리 루트
+# (../README.md 등)나 디렉터리(adr/)를 가리키는 포털 밖 링크를 포함한다.
+# 원본을 수정하지 않으므로(복사만), --strict 빌드가 이 링크로 실패하지 않도록 완화한다.
+validation:
+  links:
+    not_found: ignore
+    unrecognized_links: ignore
+    absolute_links: ignore
+
+nav:
+  - Home: index.md
+  - Evolution: evolution.md
+  - Artifacts: artifacts.md
+  - Reference:
+      - Architecture: reference/architecture.md
+      - Schema: reference/schema.md
+      - ADR: reference/adr/README.md
+
+# reference/adr/ 아래 개별 ADR 은 빌드 시 복사되는 산출물이며 nav 에 나열하지 않는다
+# (README.md 만 nav 에 둔다). ADR 파일명 규칙이나 하위 폴더 유무와 무관하게
+# --strict 빌드가 "nav 에 없는 문서" 경고로 실패하지 않도록, README 를 뺀 전부를 대상으로 한다.
+not_in_nav: |
+  /reference/adr/**
+  !/reference/adr/README.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
