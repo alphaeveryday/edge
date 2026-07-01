@@ -26,14 +26,12 @@ theme:
 plugins:
   - search
 
-# reference/ 는 docs/ SSOT 를 그대로 복사한 산출물이라, 원본이 리포지토리 루트
-# (../README.md 등)나 디렉터리(adr/)를 가리키는 포털 밖 링크를 포함한다.
-# 원본을 수정하지 않으므로(복사만), --strict 빌드가 이 링크로 실패하지 않도록 완화한다.
+# sync 가 복사 시 포털 밖(루트 README 등) 링크를 GitHub 소스 URL 로 재작성하므로
+# not_found 는 기본(warn)으로 두어 --strict 가 진짜 깨진 링크를 잡게 한다.
+# 남는 건 디렉터리형 링크(](adr/))뿐이라 unrecognized 만 완화한다.
 validation:
   links:
-    not_found: ignore
     unrecognized_links: ignore
-    absolute_links: ignore
 
 nav:
   - Home: index.md
