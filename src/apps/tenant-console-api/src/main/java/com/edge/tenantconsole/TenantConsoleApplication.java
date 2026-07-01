@@ -1,13 +1,13 @@
-package com.edge.superadmin;
+package com.edge.tenantconsole;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class SuperadminApplication {
+public class TenantConsoleApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(SuperadminApplication.class, args);
+		SpringApplication.run(TenantConsoleApplication.class, args);
 	}
 
 }
