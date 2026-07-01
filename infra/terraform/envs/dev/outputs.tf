@@ -38,3 +38,42 @@ output "edge_url" {
   description = "임시 검증용 공개 URL(HTTPS)"
   value       = "https://${var.edge_domain}"
 }
+
+# ── 스키마 마이그레이션 배포용 값 ──────────────────────────
+# 아래 값들을 GitHub 저장소의 development environment 변수(vars.*)로 넣으면 deploy-dev 워크플로가 쓴다.
+# (secret 이 아니라 식별자라 vars 로 충분. terraform apply 후 `terraform output` 으로 확인.)
+output "gha_deploy_role_arn" {
+  description = "→ vars.AWS_DEPLOY_ROLE_ARN"
+  value       = module.gha_deploy_dev.role_arn
+}
+
+output "schema_migrate_ecr_repository_url" {
+  description = "→ vars.MIGRATE_ECR_REPOSITORY"
+  value       = module.schema_migrate.ecr_repository_url
+}
+
+output "schema_migrate_task_family" {
+  description = "→ vars.MIGRATE_TASK_FAMILY"
+  value       = module.schema_migrate.task_definition_family
+}
+
+output "schema_migrate_cluster_arn" {
+  description = "→ vars.ECS_CLUSTER_ARN"
+  value       = module.service_cluster.cluster_arn
+}
+
+output "schema_migrate_subnet_ids" {
+  description = "→ vars.MIGRATE_SUBNET_IDS (쉼표구분). private 서브넷."
+  value       = join(",", module.network.private_subnet_ids)
+}
+
+output "schema_migrate_security_group_id" {
+  description = "→ vars.MIGRATE_SECURITY_GROUP_ID"
+  value       = module.schema_migrate.security_group_id
+}
+
+output "schema_migrate_log_group" {
+  description = "→ vars.MIGRATE_LOG_GROUP"
+  value       = module.schema_migrate.log_group_name
+}
+
