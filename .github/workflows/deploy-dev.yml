@@ -1,0 +1,56 @@
+# dev 배포 — dev/staging DB에 스키마 마이그레이션을 적용한 뒤 앱을 배포한다.
+#
+# 원칙: merge 자체는 DB를 바꾸지 않는다. dev 브랜치에 머지가 들어와 이 파이프라인이
+# :libs:schema:flywayMigrate를 실행할 때만 dev/staging DB가 변경된다.
+# migrate가 성공해야만 앱 배포(deploy-apps)가 진행된다.
+name: deploy-dev
+
+on:
+  push:
+    branches: [dev]
+
+# dev 배포는 직렬화한다(마이그레이션 경쟁 방지). 최신 커밋만 남기지 말고 순서대로 처리.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    # 접속값 노출을 막고(승인 게이트를 붙일 수 있게) environment로 묶는다.
+    environment: development
+    # 접속값은 코드가 아니라 secrets로만 주입한다.
+    env:
+      FLYWAY_URL: ${{ secrets.DEV_FLYWAY_URL }}
+      FLYWAY_USER: ${{ secrets.DEV_FLYWAY_USER }}
+      FLYWAY_PASSWORD: ${{ secrets.DEV_FLYWAY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: src
+
+      - name: Flyway migrate (dev/staging DB)
+        working-directory: src
+        run: ./gradlew :libs:schema:flywayMigrate --info
+
+  # 스키마 마이그레이션 성공 후에만 앱을 배포한다.
+  # 앱 배포 워크플로는 아직 없다. migrate 성공에 의존(needs)하는 훅만 둔다.
+  # 앱 배포가 구현되면 이 job의 body를 실제 배포 스텝으로 채운다.
+  deploy-apps:
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: App deploy placeholder
+        run: |
+          echo "dev/staging 스키마 마이그레이션 성공. 앱 배포 단계 진입."
+          echo "앱 배포 워크플로 구현 시 이 스텝을 실제 배포로 교체한다(needs: migrate 유지)."

@@ -49,6 +49,27 @@ FLYWAY_PASSWORD=edge \
 ./gradlew :libs:schema:flywayMigrate
 ```
 
+## 실행 주체 — 앱이 아니라 파이프라인이 Flyway를 실행한다
+
+DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로컬 명령은 개발자 검증용이고,
+공유 DB(dev/staging·prod)를 바꾸는 주체는 각 JVM/Spring 앱이 아니라 CI/CD다.
+
+- **merge 자체는 DB를 바꾸지 않는다.** DB 변경은 파이프라인이 `:libs:schema:flywayMigrate`를 실행할 때만 일어난다.
+- **dev 머지** → dev/staging DB 마이그레이션 대상 (`.github/workflows/deploy-dev.yml`).
+- **main 머지** → prod DB 마이그레이션 대상 (`.github/workflows/deploy-prod.yml`, 승인 게이트 후).
+- **PR(→dev)** → ephemeral Postgres에 실제 적용·검증만 한다 (`.github/workflows/schema-validate.yml`). 운영 DB는 건드리지 않는다.
+- 접속값(`FLYWAY_URL/USER/PASSWORD`)은 코드가 아니라 CI secrets로 주입한다.
+  - dev: `DEV_FLYWAY_URL` · `DEV_FLYWAY_USER` · `DEV_FLYWAY_PASSWORD`
+  - prod: `PROD_FLYWAY_URL` · `PROD_FLYWAY_USER` · `PROD_FLYWAY_PASSWORD`
+
+### JVM/Spring 앱은 schema **consumer**다
+
+앱은 스키마를 소비만 하고, 마이그레이션하지 않는다. `libs/schema`와 파이프라인이 유일한 schema **migrator**다.
+
+- 앱에 Flyway 의존성·마이그레이션 SQL을 두지 않는다(마이그레이션은 이 모듈에만 있다).
+- Spring Boot 앱은 기동 시 마이그레이션을 실행하지 않는다 — `spring.flyway.enabled=false`.
+- Hibernate/JPA는 스키마를 생성/변경하지 않는다 — `spring.jpa.hibernate.ddl-auto`는 `create`/`update` 금지, 필요 시 `validate`만 허용.
+
 ## 마이그레이션 파일
 
 - 위치: `migrations/`

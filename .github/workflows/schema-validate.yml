@@ -1,0 +1,72 @@
+# PR 검증 — 스키마 마이그레이션을 실제 Postgres에 적용·검증한다.
+#
+# 원칙: DB 스키마 SSOT는 libs/schema이고, 서비스 앱이 아니라 파이프라인이 Flyway를 실행한다.
+# 이 워크플로는 배포가 아니라 "이 PR의 마이그레이션이 빈 DB에 깨끗하게 적용되는가"만 검증한다.
+# 단순 build가 아니라 flywayMigrate로 SQL을 실제 실행한 뒤 flywayValidate로 정합성을 확인한다.
+name: schema-validate
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "src/libs/schema/**"
+      - "src/gradle/**"
+      - "src/gradlew"
+      - "src/gradlew.bat"
+      - "src/settings.gradle.kts"
+      - ".github/workflows/schema-validate.yml"
+
+# 같은 PR의 이전 실행은 취소한다.
+concurrency:
+  group: schema-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrate-and-validate:
+    runs-on: ubuntu-latest
+
+    # 검증 전용 ephemeral Postgres. 러너 종료와 함께 사라진다(운영 DB 아님).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: edge
+          POSTGRES_USER: edge
+          POSTGRES_PASSWORD: edge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edge -d edge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # build.gradle.kts의 Flyway 블록이 읽는 접속값. ephemeral 컨테이너를 가리킨다.
+    env:
+      FLYWAY_URL: jdbc:postgresql://localhost:5432/edge
+      FLYWAY_USER: edge
+      FLYWAY_PASSWORD: edge
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: src
+
+      # SQL을 실제 Postgres에 적용한다. 마이그레이션이 깨졌으면 여기서 실패한다.
+      - name: Flyway migrate (ephemeral Postgres)
+        working-directory: src
+        run: ./gradlew :libs:schema:flywayMigrate --info
+
+      # 적용본과 마이그레이션 파일의 정합성(체크섬·순서·네이밍)을 검증한다.
+      - name: Flyway validate
+        working-directory: src
+        run: ./gradlew :libs:schema:flywayValidate --info
