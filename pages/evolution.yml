@@ -7,7 +7,9 @@ include_paths:
   - docs/adr/
   - pages/docs/assets/images/
 
-# 발전 기록에서 뺄 커밋(SHA prefix 목록). 예: ["a1b2c3d"]
+# 발전 기록에서 뺄 커밋(SHA prefix 목록). 인라인이 아니라 블록 형태로 쓴다. 예:
+#   exclude:
+#     - a1b2c3d
 exclude: []
 
 # 커밋별 표기 덮어쓰기. SHA prefix 를 키로 title/description/image 를 지정한다.

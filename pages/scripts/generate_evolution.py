@@ -82,14 +82,13 @@ def parse_simple_yaml(text: str):
         return items
 
     def parse_value(value: str, parent_indent: int):
+        # 빈 컬렉션(`[]`/`{}`)만 인라인으로 인정한다. 비어있지 않은 인라인
+        # 컬렉션([a,b]·{k:v})은 지원하지 않는다 — 스칼라 문자열로 남고,
+        # load_config 가 기대 타입이 아니라며 fail-loud 한다(조용히 버리지 않음).
+        if value == "[]":
+            return []
         if value == "{}":
             return {}
-        # 인라인 리스트 [] / [a, b] 를 지원한다(빈 것도, 비어있지 않은 것도).
-        if value.startswith("[") and value.endswith("]"):
-            inner = value[1:-1].strip()
-            if not inner:
-                return []
-            return [_unquote(item.strip()) for item in inner.split(",") if item.strip()]
         if value != "":
             return _unquote(value)
         # 인라인 값이 비면 다음 줄들이 블록이다. YAML 은 부모 키와 '같은'
@@ -148,9 +147,16 @@ def load_config():
     if not isinstance(overrides, dict):
         raise SystemExit(f"[evolution] overrides 는 매핑이어야 합니다: {overrides!r}")
     # 빈 문자열 prefix 는 모든 SHA 에 매칭되므로(startswith("")) 걸러낸다.
-    include_paths = [p for p in include_paths if isinstance(p, str) and p.strip()]
+    include_paths = [p for p in include_paths if str(p).strip()]
     exclude = [e for e in exclude if str(e).strip()]
     overrides = {k: v for k, v in overrides.items() if str(k).strip()}
+    # 각 override 값은 title/description/image 매핑이어야 한다. 인라인 맵으로 잘못
+    # 쓰면 스칼라로 파싱되는데, 이때 조용히 무시하지 않고 실패한다(fail loud).
+    for key, val in overrides.items():
+        if not isinstance(val, dict):
+            raise SystemExit(
+                f"[evolution] overrides['{key}'] 는 title/description/image 매핑이어야 합니다: {val!r}"
+            )
     # include_paths 가 비면 추적할 대상이 없다 — 키 오타(include_path:)나 잘못된
     # 형태로 값이 사라진 것이므로 조용히 빈 페이지를 내지 않고 실패한다(fail loud).
     # (경로는 있는데 커밋이 없는 '정상적 빈 결과'는 render 의 EMPTY_MESSAGE 로 처리.)
@@ -188,8 +194,7 @@ def git(args):
 
 
 def collect_commits(include_paths):
-    if not include_paths:
-        return []
+    # include_paths 는 load_config 가 비어있지 않음을 보장한다.
     fmt = SEP.join(["%H", "%ad", "%s"])
     out = git([
         "log", "--reverse", "--no-merges", "--date=short",
