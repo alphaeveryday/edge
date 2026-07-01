@@ -1,9 +1,13 @@
-# prod 배포 — 운영 DB에 스키마 마이그레이션을 적용한 뒤 앱을 배포한다.
+# prod 배포 — 운영 DB에 스키마 마이그레이션을 적용한다.
 #
 # 원칙: dev -> main 머지가 릴리스 경계다. main에 머지가 들어와 이 파이프라인이
 # :libs:schema:flywayMigrate를 실행할 때만 운영 DB가 변경된다.
 # 운영 마이그레이션은 environment protection(수동 승인 게이트)을 거친 뒤에만 실행된다.
-# migrate가 성공해야만 prod 앱 배포(deploy-apps)가 진행된다.
+#
+# 앱 배포는 아직 워크플로가 없다. 이 워크플로는 스키마 migrate만 책임진다.
+# 앱 배포 job/워크플로가 생기면 반드시 `needs: migrate`(또는 이 워크플로 완료)를 걸어
+# "migrate 성공 후에만 앱 배포"가 성립하도록 연결한다. 지금은 가짜 성공 신호를 만들지
+# 않기 위해 placeholder 배포 job을 두지 않는다.
 name: deploy-prod
 
 on:
@@ -43,15 +47,3 @@ jobs:
       - name: Flyway migrate (prod DB)
         working-directory: src
         run: ./gradlew :libs:schema:flywayMigrate --info
-
-  # 운영 스키마 마이그레이션 성공 후에만 앱을 배포한다.
-  # 앱 배포 워크플로는 아직 없다. migrate 성공에 의존(needs)하는 훅만 둔다.
-  deploy-apps:
-    needs: migrate
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: App deploy placeholder
-        run: |
-          echo "운영 스키마 마이그레이션 성공. prod 앱 배포 단계 진입."
-          echo "앱 배포 워크플로 구현 시 이 스텝을 실제 배포로 교체한다(needs: migrate 유지)."

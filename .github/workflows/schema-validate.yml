@@ -3,11 +3,13 @@
 # 원칙: DB 스키마 SSOT는 libs/schema이고, 서비스 앱이 아니라 파이프라인이 Flyway를 실행한다.
 # 이 워크플로는 배포가 아니라 "이 PR의 마이그레이션이 빈 DB에 깨끗하게 적용되는가"만 검증한다.
 # 단순 build가 아니라 flywayMigrate로 SQL을 실제 실행한 뒤 flywayValidate로 정합성을 확인한다.
+# 어떤 secret도 쓰지 않으며 dev/prod DB를 건드리지 않는다(ephemeral 컨테이너만 사용).
 name: schema-validate
 
 on:
   pull_request:
-    branches: [dev]
+    # feature/fix -> dev PR과 릴리스 PR(dev -> main) 모두에서 검증한다.
+    branches: [dev, main]
     paths:
       - "src/libs/schema/**"
       - "src/gradle/**"
@@ -22,6 +24,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # fresh ephemeral DB는 "이미 적용된 마이그레이션 파일을 수정"해도 통과한다(체크섬이 새로 계산됨).
+  # 하지만 dev/prod DB에는 기존 체크섬이 flyway_schema_history에 남아 있어 실제 배포 때 validate가 실패한다.
+  # 그래서 base 브랜치 대비 기존 V*.sql의 수정/삭제/이름변경을 CI에서 차단한다(추가만 허용).
+  # (repo 정책: "이미 적용된 마이그레이션 파일은 수정하지 않는다" — libs/schema/README.md)
+  guard-immutable-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 기존 마이그레이션 파일 수정/삭제 차단
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # base(merge-base)부터 PR head까지, migrations 아래에서 수정(M)/삭제(D)/이름변경(R)된 파일.
+          changed="$(git diff --name-status --diff-filter=MDR \
+            "origin/${BASE_REF}...${HEAD_SHA}" -- src/libs/schema/migrations/)"
+          if [ -n "${changed}" ]; then
+            echo "::error::이미 존재하는 마이그레이션 파일을 수정/삭제/이름변경했습니다. 변경은 항상 새 V*.sql 추가로만 하세요(확장-수축)."
+            echo "${changed}"
+            exit 1
+          fi
+          echo "OK — 기존 마이그레이션 파일 변경 없음(추가만 있음)."
+
   migrate-and-validate:
     runs-on: ubuntu-latest
 

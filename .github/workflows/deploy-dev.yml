@@ -1,8 +1,12 @@
-# dev 배포 — dev/staging DB에 스키마 마이그레이션을 적용한 뒤 앱을 배포한다.
+# dev 배포 — dev/staging DB에 스키마 마이그레이션을 적용한다.
 #
 # 원칙: merge 자체는 DB를 바꾸지 않는다. dev 브랜치에 머지가 들어와 이 파이프라인이
 # :libs:schema:flywayMigrate를 실행할 때만 dev/staging DB가 변경된다.
-# migrate가 성공해야만 앱 배포(deploy-apps)가 진행된다.
+#
+# 앱 배포는 아직 워크플로가 없다. 이 워크플로는 스키마 migrate만 책임진다.
+# 앱 배포 job/워크플로가 생기면 반드시 `needs: migrate`(또는 이 워크플로 완료)를 걸어
+# "migrate 성공 후에만 앱 배포"가 성립하도록 연결한다. 지금은 가짜 성공 신호를 만들지
+# 않기 위해 placeholder 배포 job을 두지 않는다.
 name: deploy-dev
 
 on:
@@ -41,16 +45,3 @@ jobs:
       - name: Flyway migrate (dev/staging DB)
         working-directory: src
         run: ./gradlew :libs:schema:flywayMigrate --info
-
-  # 스키마 마이그레이션 성공 후에만 앱을 배포한다.
-  # 앱 배포 워크플로는 아직 없다. migrate 성공에 의존(needs)하는 훅만 둔다.
-  # 앱 배포가 구현되면 이 job의 body를 실제 배포 스텝으로 채운다.
-  deploy-apps:
-    needs: migrate
-    runs-on: ubuntu-latest
-    environment: development
-    steps:
-      - name: App deploy placeholder
-        run: |
-          echo "dev/staging 스키마 마이그레이션 성공. 앱 배포 단계 진입."
-          echo "앱 배포 워크플로 구현 시 이 스텝을 실제 배포로 교체한다(needs: migrate 유지)."
