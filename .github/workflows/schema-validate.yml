@@ -17,6 +17,8 @@ on:
       - "src/gradlew.bat"
       - "src/settings.gradle.kts"
       - ".github/workflows/schema-validate.yml"
+      - ".github/workflows/deploy-dev.yml"
+      - ".github/workflows/deploy-prod.yml"
 
 # 같은 PR의 이전 실행은 취소한다.
 concurrency:
@@ -53,6 +55,9 @@ jobs:
 
   migrate-and-validate:
     runs-on: ubuntu-latest
+    # guard가 실패하면 이 job은 아예 실행되지 않는다(green이 되지 않는다).
+    # branch protection이 이 job만 required check로 잡아도 guard 우회를 막는다.
+    needs: guard-immutable-migrations
 
     # 검증 전용 ephemeral Postgres. 러너 종료와 함께 사라진다(운영 DB 아님).
     services:
