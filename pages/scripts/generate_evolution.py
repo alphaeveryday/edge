@@ -82,10 +82,14 @@ def parse_simple_yaml(text: str):
         return items
 
     def parse_value(value: str, parent_indent: int):
-        if value == "[]":
-            return []
         if value == "{}":
             return {}
+        # 인라인 리스트 [] / [a, b] 를 지원한다(빈 것도, 비어있지 않은 것도).
+        if value.startswith("[") and value.endswith("]"):
+            inner = value[1:-1].strip()
+            if not inner:
+                return []
+            return [_unquote(item.strip()) for item in inner.split(",") if item.strip()]
         if value != "":
             return _unquote(value)
         # 인라인 값이 비면 다음 줄들이 블록이다. YAML 은 부모 키와 '같은'
@@ -131,23 +135,22 @@ def load_config():
         raise SystemExit(f"[evolution] 설정 파일이 없습니다: {CONFIG_PATH}")
     data = parse_simple_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        data = {}
+        raise SystemExit("[evolution] evolution.yml 형식이 올바르지 않습니다(최상위는 매핑).")
     include_paths = data.get("include_paths") or []
     exclude = data.get("exclude") or []
     overrides = data.get("overrides") or {}
+    # 형식이 어긋나면(예: exclude 가 리스트가 아닌 스칼라로 파싱되면) 조용히 버리지 않고
+    # 실패한다 — 안 그러면 제외하려던 커밋이 경고 없이 그대로 렌더링된다(fail loud).
+    if not isinstance(include_paths, list):
+        raise SystemExit(f"[evolution] include_paths 는 리스트여야 합니다: {include_paths!r}")
+    if not isinstance(exclude, list):
+        raise SystemExit(f"[evolution] exclude 는 리스트여야 합니다: {exclude!r}")
+    if not isinstance(overrides, dict):
+        raise SystemExit(f"[evolution] overrides 는 매핑이어야 합니다: {overrides!r}")
     # 빈 문자열 prefix 는 모든 SHA 에 매칭되므로(startswith("")) 걸러낸다.
-    include_paths = (
-        [p for p in include_paths if isinstance(p, str) and p.strip()]
-        if isinstance(include_paths, list) else []
-    )
-    exclude = (
-        [e for e in exclude if str(e).strip()]
-        if isinstance(exclude, list) else []
-    )
-    overrides = (
-        {k: v for k, v in overrides.items() if str(k).strip()}
-        if isinstance(overrides, dict) else {}
-    )
+    include_paths = [p for p in include_paths if isinstance(p, str) and p.strip()]
+    exclude = [e for e in exclude if str(e).strip()]
+    overrides = {k: v for k, v in overrides.items() if str(k).strip()}
     # include_paths 가 비면 추적할 대상이 없다 — 키 오타(include_path:)나 잘못된
     # 형태로 값이 사라진 것이므로 조용히 빈 페이지를 내지 않고 실패한다(fail loud).
     # (경로는 있는데 커밋이 없는 '정상적 빈 결과'는 render 의 EMPTY_MESSAGE 로 처리.)
