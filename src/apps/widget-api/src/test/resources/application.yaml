@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: widget
+  # 테스트는 실제 DB 없이 컨텍스트만 로드한다 → DataSource/JPA 자동설정 비활성.
+  # (운영/로컬 실행은 main 의 application.yaml 로 DB 에 연결)
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
