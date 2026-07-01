@@ -1,0 +1,66 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "pages/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+# GitHub Pages 배포에 필요한 최소 권한.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 동시 배포 충돌 방지(진행 중 배포는 취소하지 않는다).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 발전 기록 생성에 전체 커밋 이력 필요
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pages 소스를 GitHub Actions 로 자동 설정(수동 레포 설정 의존 제거).
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # 버전 고정 — 미래 릴리스가 --strict 빌드를 깨뜨리지 않도록 재현성 확보.
+      - name: Install MkDocs Material
+        run: pip install "mkdocs-material==9.7.6"
+
+      - name: Sync reference docs
+        run: python pages/scripts/sync_reference_docs.py
+
+      - name: Generate evolution page
+        run: python pages/scripts/generate_evolution.py
+
+      - name: Build site
+        run: mkdocs build -f pages/mkdocs.yml --strict
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages/site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

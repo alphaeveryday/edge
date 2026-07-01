@@ -18,6 +18,11 @@ dist/
 build/
 *.log
 
+# GitHub Pages (MkDocs) 빌드 산출물 (sync/generate 스크립트가 생성)
+pages/site/
+pages/docs/reference/
+pages/docs/evolution.md
+
 # ──────────────────────────────────────────────
 # JVM / Gradle
 # ──────────────────────────────────────────────
