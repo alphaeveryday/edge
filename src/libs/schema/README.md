@@ -31,7 +31,10 @@ cd src
 
 ## 다른 DB로 override
 
-Gradle property로:
+우선순위는 **환경변수 > Gradle property > 기본값**이다(둘 다 주면 env가 이긴다). CI/배포는 secrets를
+env로 주입하므로, repo에 체크인된 `gradle.properties`의 `flyway.*` 가 배포/검증 대상 DB를 바꿀 수 없다.
+
+Gradle property로(로컬, env 미설정 시):
 
 ```bash
 ./gradlew :libs:schema:flywayMigrate \

@@ -60,7 +60,8 @@ jobs:
         run: |
           set -euo pipefail
           if git diff --quiet "origin/${BASE_REF}...${HEAD_SHA}" -- \
-              src/libs/schema/ src/gradle/ src/gradlew src/gradlew.bat src/settings.gradle.kts \
+              src/libs/schema/ src/gradle/ src/gradlew src/gradlew.bat \
+              src/settings.gradle.kts src/build.gradle.kts src/gradle.properties \
               .github/workflows/schema-validate.yml \
               .github/workflows/deploy-dev.yml \
               .github/workflows/deploy-prod.yml; then

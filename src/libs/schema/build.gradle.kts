@@ -12,10 +12,13 @@ plugins {
     id("org.flywaydb.flyway") version "10.21.0"
 }
 
-// url/user/password는 Gradle property → 환경변수 → 기본값(Docker Compose와 일치) 순으로 override 가능.
+// 접속값 우선순위: 환경변수 → Gradle property → 기본값(Docker Compose와 일치).
+// CI/배포는 secrets를 env로 주입하므로 env를 최우선으로 둔다. 이렇게 하면 repo에 체크인된
+// gradle.properties의 flyway.* 가 배포/검증 대상 DB를 가로채지 못한다(secrets override 불가).
+// 로컬 -P 오버라이드는 env가 없을 때 그대로 동작한다.
 fun cfg(prop: String, env: String, default: String): String =
-    providers.gradleProperty(prop)
-        .orElse(providers.environmentVariable(env))
+    providers.environmentVariable(env)
+        .orElse(providers.gradleProperty(prop))
         .orElse(default)
         .get()
 
