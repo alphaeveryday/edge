@@ -18,7 +18,7 @@ repositories {
 }
 
 dependencies {
-	// 공용 응답 봉투(ApiResponse/ApiError) 등 프레임워크-경량 공유 타입
+	// apipayload 공통 규약(ApiResponse·BaseErrorCode·ErrorStatus·GeneralException)
 	implementation project(':libs:jvm-common')
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'

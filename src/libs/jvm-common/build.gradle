@@ -1,11 +1,13 @@
-// 공용 JVM 라이브러리 모듈 — 여러 실행 앱이 공유하는 프레임워크-경량 코드.
-// 의도적으로 Spring 의존을 두지 않는다(순수 타입/record 만). 그래야
-//  (1) 웹이 아닌 미래 모듈(워커 등)도 재사용할 수 있고,
-//  (2) jvm-common 이 특정 프레임워크/버전에 묶이지 않으며,
-//  (3) "공용"이라는 이름에 아무거나 쌓이는 god-module 화를 구조적으로 억제한다.
-// 웹 전용 공유물(@RestControllerAdvice 등)이 필요해지면 별도 common-web 모듈로 분리.
+// 공용 JVM 라이브러리 모듈 — 여러 실행 앱이 공유하는 API 응답 규약(apipayload).
+//
+// 주의: 이 모듈은 BODY-CHECK 식 apipayload 패턴을 따르며, SuccessStatus/ErrorStatus/ReasonDto 가
+// org.springframework.http.HttpStatus 를 쓴다 → spring-web 에 의존한다(더 이상 '프레임워크 무의존'이
+// 아니다). 대신 @RestControllerAdvice 같은 '핸들러(Spring MVC 글루)'는 여기 두지 않고 각 앱 웹 계층에
+// 남긴다. 도메인 에러 코드도 여기 두지 않는다 — 각 앱의 *ErrorStatus enum(BaseErrorCode 구현)이 소유.
+// 버전은 앱과 일치시키기 위해 Spring Boot BOM 으로 관리(BOM 은 버전 제약만).
 plugins {
     id 'java-library'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group = 'com.edge'
@@ -21,6 +23,19 @@ repositories {
     mavenCentral()
 }
 
+dependencyManagement {
+    imports {
+        mavenBom 'org.springframework.boot:spring-boot-dependencies:4.1.0'
+    }
+}
+
 dependencies {
-    // 현재 무(無)의존. 봉투는 순수 record 라 Jackson 이 별도 애노테이션 없이 직렬화한다.
+    // apipayload 가 공개 API 로 HttpStatus 를 노출 → api 로 전이 노출.
+    api 'org.springframework:spring-web'
+    // 봉투가 노출하는 Jackson 애노테이션.
+    api 'com.fasterxml.jackson.core:jackson-annotations'
+
+    // 보일러플레이트(getter/생성자/빌더) 축소 — 컴파일 타임 전용.
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 }
