@@ -162,6 +162,53 @@ module "tenant_console_api" {
   desired_count = 1
 }
 
+# ── 스키마 마이그레이션 one-off task (배포 파이프라인이 트리거) ──────────
+# GitHub-hosted 러너는 VPC 밖이라 private RDS 에 못 붙는다. Flyway 는 이 VPC 내부 task 에서
+# 실행하고, GitHub Actions 는 OIDC 로 이 task 를 RunTask 트리거만 한다. 접속값은 RDS 관리형
+# 시크릿을 재사용(비밀번호만 시크릿, url/user 는 평문) — widget-api 와 동일 패턴.
+module "schema_migrate" {
+  source = "../../modules/schema-migrate"
+
+  name   = "${local.prefix}-schema-migrate"
+  region = var.region
+  vpc_id = module.network.vpc_id
+
+  flyway_url  = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+  flyway_user = module.rds.master_username
+  # base ARN 을 넘긴다(접미사 없이). 모듈이 valueFrom 에 ':password::' 를 붙이고, IAM 은 base ARN 을 쓴다.
+  flyway_password_secret_arn = module.rds.master_user_secret_arn
+
+  cpu_architecture = "X86_64" # 워크플로가 빌드하는 amd64 이미지와 일치
+}
+
+# 마이그레이션 task SG → RDS 5432. widget-api 와 동일하게 env 에서 독립 리소스로(순환 의존 회피).
+resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.schema_migrate.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "schema-migrate task to postgres"
+}
+
+# GitHub Actions(development environment) → AWS OIDC 배포 역할. 마이그레이션 이미지 push + RunTask 최소 권한.
+module "gha_deploy_dev" {
+  source = "../../modules/github-oidc-deploy"
+
+  name                = "${local.prefix}-gha-schema-migrate"
+  github_org_repo     = var.github_org_repo
+  github_environments = ["development"] # deploy-dev.yml 의 environment: development 와 일치(OIDC sub)
+
+  create_oidc_provider = var.create_github_oidc_provider
+  oidc_provider_arn    = var.github_oidc_provider_arn # create_oidc_provider=false 일 때 기존 provider ARN
+
+  ecr_repository_arn     = module.schema_migrate.ecr_repository_arn
+  ecs_cluster_arn        = module.service_cluster.cluster_arn
+  task_definition_family = module.schema_migrate.task_definition_family
+  pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
+  log_group_arn          = module.schema_migrate.log_group_arn
+}
+
 module "super_admin_api" {
   source = "../../modules/ecs-service"
 
