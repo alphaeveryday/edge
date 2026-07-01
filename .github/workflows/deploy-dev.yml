@@ -13,7 +13,12 @@ on:
   push:
     branches: [dev]
 
-# dev 배포는 직렬화한다(마이그레이션 경쟁 방지). 최신 커밋만 남기지 말고 순서대로 처리.
+# dev 배포는 같은 그룹에서 직렬화한다(동시 마이그레이션 방지).
+# cancel-in-progress: false — "실행 중"인 마이그레이션은 취소하지 않는다(부분 적용 방지).
+# 단 GitHub은 pending run을 하나만 유지하므로, 대기 중 새 push가 오면 이전 pending은 취소되고
+# 최신만 실행된다(latest-pending-wins). Flyway는 누적이라 최신 run이 dev HEAD의 모든 미적용
+# 마이그레이션을 순서대로 적용하므로 중간 리비전 마이그레이션이 유실되지 않는다.
+# (표준 GitHub Actions concurrency에는 FIFO 큐 옵션이 없다 — actionlint는 queue 키를 거부한다.)
 concurrency:
   group: deploy-dev
   cancel-in-progress: false

@@ -14,7 +14,9 @@ on:
   push:
     branches: [main]
 
-# 운영 배포는 절대 병렬 실행하지 않는다.
+# 운영 배포는 같은 그룹에서 절대 병렬 실행하지 않고, 실행 중 마이그레이션은 취소하지 않는다.
+# pending run은 최신만 유지된다(latest-pending-wins). Flyway는 누적이라 최신 run이 main HEAD의
+# 모든 미적용 마이그레이션을 적용하므로 중간 리비전 마이그레이션이 유실되지 않는다.
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
