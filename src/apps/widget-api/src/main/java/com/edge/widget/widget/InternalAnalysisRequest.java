@@ -1,8 +1,9 @@
 package com.edge.widget.widget;
 
 /**
- * gateway → widget-api 내부 요청. gateway가 (고정)tenantContext와 symbol을 실어 보낸다.
- * embed key 검증·테넌트 식별은 gateway(엣지)의 몫이라, widget-api는 이미 식별된 org/app을 받는다.
+ * gateway가 전달하는 위젯 분석 요청 body. gateway는 프론트 요청({@code {embedKey, symbol}})을 그대로
+ * 포워딩하므로 여기선 {@code symbol}만 읽는다(embedKey 등 나머지 필드는 무시).
+ * 테넌트 식별은 gateway(엣지)의 몫 — 확정 시 헤더 등으로 전달한다.
  */
-public record InternalAnalysisRequest(String symbol, String organizationId, String applicationId) {
+public record InternalAnalysisRequest(String symbol) {
 }
