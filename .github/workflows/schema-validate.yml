@@ -124,21 +124,23 @@ jobs:
             fi
           fi
 
-          # (c) 체크인된 flyway.* gradle property 전면 금지.
-          # Flyway Gradle 플러그인은 flyway.* gradle property를 build.gradle.kts의 flyway{} 블록보다
-          # 우선한다. 따라서 체크인된 gradle.properties의 flyway.locations/outOfOrder/cleanDisabled/url 등이
-          # 검증·배포 설정을 통째로 우회할 수 있다(빈 locations로 no-op 배포, out-of-order 허용 등).
-          # 접속·마이그레이션 설정은 오직 build.gradle.kts와 CI env로만 주입한다 — 체크인 override는 거부.
+          # (c) 체크인된 gradle.properties의 Flyway override 전면 금지.
+          # Flyway 설정은 gradle property/시스템 프로퍼티가 build.gradle.kts의 flyway{} 블록보다
+          # 우선한다. gradle.properties로 넣을 수 있는 우회 벡터는 여러 형태다:
+          #   flyway.locations=... / systemProp.flyway.outOfOrder=true / org.gradle.jvmargs=-Dflyway.locations=...
+          # 이들이 검증·배포 설정을 통째로 우회할 수 있다(빈 locations no-op 배포, out-of-order 허용 등).
+          # 합법 gradle.properties 키에는 'flyway'가 없으므로, 체크인된 gradle.properties에서
+          # 'flyway'가 언급되면(대소문자 무관) 형태 불문 거부한다. Flyway 설정은 build.gradle.kts/CI env로만.
           propfiles="$(git ls-files | grep -E '(^|/)gradle\.properties$' || true)"
           if [ -n "${propfiles}" ]; then
-            offenders="$(echo "${propfiles}" | xargs grep -lE '^[[:space:]]*flyway\.' 2>/dev/null || true)"
+            offenders="$(echo "${propfiles}" | xargs grep -liE 'flyway' 2>/dev/null || true)"
             if [ -n "${offenders}" ]; then
-              echo "::error::체크인된 gradle.properties에 flyway.* 설정이 있습니다. Flyway 설정은 build.gradle.kts/CI env로만 주입하세요(플러그인이 flyway.* property를 flyway{} 블록보다 우선함)."
+              echo "::error::체크인된 gradle.properties가 Flyway 설정을 참조합니다(flyway.* / systemProp.flyway.* / -Dflyway...). Flyway 설정은 build.gradle.kts와 CI env로만 주입하세요."
               echo "${offenders}"
               exit 1
             fi
           fi
-          echo "OK — 기존 파일 불변 + 신규 버전 단조 증가 + 체크인 flyway.* override 없음."
+          echo "OK — 기존 파일 불변 + 신규 버전 단조 증가 + 체크인 gradle.properties의 Flyway override 없음."
 
       # relevant일 때만 Postgres를 띄운다(무관한 PR은 Docker를 건드리지 않는다).
       - name: Start ephemeral Postgres
