@@ -26,9 +26,9 @@ variable "master_username" {
 }
 
 variable "engine_version" {
-  description = "PostgreSQL 엔진 버전. 존재하지 않는 마이너면 apply 실패 → 필요 시 조정"
+  description = "PostgreSQL 엔진 버전. ap-northeast-2 실재 버전이어야 함(16.8 은 미제공). auto_minor_version_upgrade 로 패치는 따라감"
   type        = string
-  default     = "16.8"
+  default     = "16.9"
 }
 
 variable "instance_class" {
