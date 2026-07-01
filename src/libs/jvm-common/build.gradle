@@ -1,0 +1,26 @@
+// 공용 JVM 라이브러리 모듈 — 여러 실행 앱이 공유하는 프레임워크-경량 코드.
+// 의도적으로 Spring 의존을 두지 않는다(순수 타입/record 만). 그래야
+//  (1) 웹이 아닌 미래 모듈(워커 등)도 재사용할 수 있고,
+//  (2) jvm-common 이 특정 프레임워크/버전에 묶이지 않으며,
+//  (3) "공용"이라는 이름에 아무거나 쌓이는 god-module 화를 구조적으로 억제한다.
+// 웹 전용 공유물(@RestControllerAdvice 등)이 필요해지면 별도 common-web 모듈로 분리.
+plugins {
+    id 'java-library'
+}
+
+group = 'com.edge'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 현재 무(無)의존. 봉투는 순수 record 라 Jackson 이 별도 애노테이션 없이 직렬화한다.
+}
