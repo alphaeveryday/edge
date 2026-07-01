@@ -13,6 +13,10 @@ on:
   push:
     branches: [dev]
 
+# 최소 권한 — 이 워크플로는 체크아웃(읽기)만 필요하다. secrets는 별도로 주입된다.
+permissions:
+  contents: read
+
 # dev 배포는 같은 그룹에서 직렬화한다(동시 마이그레이션 방지).
 # cancel-in-progress: false — "실행 중"인 마이그레이션은 취소하지 않는다(부분 적용 방지).
 # 단 GitHub은 pending run을 하나만 유지하므로, 대기 중 새 push가 오면 이전 pending은 취소되고
@@ -26,13 +30,9 @@ concurrency:
 jobs:
   migrate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # 접속값 노출을 막고(승인 게이트를 붙일 수 있게) environment로 묶는다.
     environment: development
-    # 접속값은 코드가 아니라 secrets로만 주입한다.
-    env:
-      FLYWAY_URL: ${{ secrets.DEV_FLYWAY_URL }}
-      FLYWAY_USER: ${{ secrets.DEV_FLYWAY_USER }}
-      FLYWAY_PASSWORD: ${{ secrets.DEV_FLYWAY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,4 +47,9 @@ jobs:
 
       - name: Flyway migrate (dev/staging DB)
         working-directory: src
+        # 접속값은 secrets로만 주입하고, 이 step에만 노출한다(앞선 checkout/setup 액션에는 미노출 — 최소 노출).
+        env:
+          FLYWAY_URL: ${{ secrets.DEV_FLYWAY_URL }}
+          FLYWAY_USER: ${{ secrets.DEV_FLYWAY_USER }}
+          FLYWAY_PASSWORD: ${{ secrets.DEV_FLYWAY_PASSWORD }}
         run: ./gradlew :libs:schema:flywayMigrate --info

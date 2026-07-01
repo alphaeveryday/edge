@@ -14,6 +14,10 @@ on:
   push:
     branches: [main]
 
+# 최소 권한 — 이 워크플로는 체크아웃(읽기)만 필요하다. secrets는 별도로 주입된다.
+permissions:
+  contents: read
+
 # 운영 배포는 같은 그룹에서 절대 병렬 실행하지 않고, 실행 중 마이그레이션은 취소하지 않는다.
 # pending run은 최신만 유지된다(latest-pending-wins). Flyway는 누적이라 최신 run이 main HEAD의
 # 모든 미적용 마이그레이션을 적용하므로 중간 리비전 마이그레이션이 유실되지 않는다.
@@ -24,14 +28,10 @@ concurrency:
 jobs:
   migrate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # 'production' environment에 required reviewers/보호 규칙을 걸어 수동 승인 게이트로 쓴다.
     # (게이트 활성화는 repo Settings > Environments에서 설정한다 — README 참고.)
     environment: production
-    # 접속값은 코드가 아니라 secrets로만 주입한다.
-    env:
-      FLYWAY_URL: ${{ secrets.PROD_FLYWAY_URL }}
-      FLYWAY_USER: ${{ secrets.PROD_FLYWAY_USER }}
-      FLYWAY_PASSWORD: ${{ secrets.PROD_FLYWAY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,4 +46,9 @@ jobs:
 
       - name: Flyway migrate (prod DB)
         working-directory: src
+        # 접속값은 secrets로만 주입하고, 이 step에만 노출한다(앞선 checkout/setup 액션에는 미노출 — 최소 노출).
+        env:
+          FLYWAY_URL: ${{ secrets.PROD_FLYWAY_URL }}
+          FLYWAY_USER: ${{ secrets.PROD_FLYWAY_USER }}
+          FLYWAY_PASSWORD: ${{ secrets.PROD_FLYWAY_PASSWORD }}
         run: ./gradlew :libs:schema:flywayMigrate --info

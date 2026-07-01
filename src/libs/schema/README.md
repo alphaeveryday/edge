@@ -70,6 +70,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - **Secrets 등록**: 위 `DEV_FLYWAY_*`는 `development`, `PROD_FLYWAY_*`는 `production` environment에 넣는다.
 - **prod 승인 게이트**: `production` environment에 **Required reviewers**를 지정한다. 그래야 `deploy-prod`의 migrate job이 운영 DB를 건드리기 전에 수동 승인을 거친다(필요 시 배포 브랜치를 `main`으로 제한).
 - (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다.
+  - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
 
 ### JVM/Spring 앱은 schema **consumer**다
 
