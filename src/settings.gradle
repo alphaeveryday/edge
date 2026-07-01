@@ -1,0 +1,11 @@
+rootProject.name = 'edge'
+
+// JVM 워크스페이스 루트 (ADR-0001 — 런타임별 루트 분리).
+// 공용 라이브러리와 앱을 단일 멀티프로젝트 빌드로 묶는다.
+// 런타임 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지·ECS 서비스).
+include ':libs:schema'
+include ':libs:jvm-common'
+include ':apps:widget-api'
+include ':apps:gateway'
+include ':apps:tenant-console-api'
+include ':apps:super-admin-api'
