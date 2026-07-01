@@ -139,3 +139,43 @@ module "widget_api" {
   }
   secret_arns = [module.rds.master_user_secret_arn]
 }
+
+# ── 내부 API (internal-only 스테이징) ────────────────────
+# tenant-console-api·super-admin-api 는 아직 호출자(gateway 라우팅)가 없어
+# private 서브넷에 Service Connect 로 등록만 하고 대기(idle)한다.
+# ALB 타깃·인바운드 허용자 없음 — 호출자가 생기면 ingress_security_group_ids 로 연다.
+module "tenant_console_api" {
+  source = "../../modules/ecs-service"
+
+  name   = "tenant-console-api"
+  region = var.region
+
+  cluster_arn                   = module.service_cluster.cluster_arn
+  service_connect_namespace_arn = module.service_cluster.namespace_arn
+
+  container_image  = var.tenant_console_api_image
+  container_port   = 8080
+  cpu_architecture = "X86_64" # ECR amd64 이미지와 일치
+
+  vpc_id        = module.network.vpc_id
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+}
+
+module "super_admin_api" {
+  source = "../../modules/ecs-service"
+
+  name   = "super-admin-api"
+  region = var.region
+
+  cluster_arn                   = module.service_cluster.cluster_arn
+  service_connect_namespace_arn = module.service_cluster.namespace_arn
+
+  container_image  = var.super_admin_api_image
+  container_port   = 8080
+  cpu_architecture = "X86_64" # ECR amd64 이미지와 일치
+
+  vpc_id        = module.network.vpc_id
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+}

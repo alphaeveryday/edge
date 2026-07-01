@@ -14,6 +14,16 @@ variable "widget_api_image" {
   type        = string
 }
 
+variable "tenant_console_api_image" {
+  description = "tenant-console-api ECR 이미지 URI(:태그 포함)"
+  type        = string
+}
+
+variable "super_admin_api_image" {
+  description = "super-admin-api ECR 이미지 URI(:태그 포함)"
+  type        = string
+}
+
 variable "alb_allowed_cidrs" {
   description = "임시 검증 ALB 인바운드 허용 CIDR"
   type        = list(string)
