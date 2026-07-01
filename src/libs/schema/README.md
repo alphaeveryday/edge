@@ -4,7 +4,7 @@ DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 �
 [schema.md](../../../docs/schema.md)) 모든 마이그레이션을 여기서 관리한다.
 
 이 모듈은 **Spring 앱이 아니다.** Flyway 마이그레이션을 실행하기만 하는 전용 Gradle 모듈이다
-(`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle.kts`의 Flyway 플러그인 블록에 있다.
+(`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle`(Groovy)의 Flyway 플러그인 블록에 있다.
 
 ## 로컬 DB — Docker Postgres
 
@@ -31,10 +31,11 @@ cd src
 
 ## 다른 DB로 override
 
-우선순위는 **환경변수 > Gradle property > 기본값**이다(둘 다 주면 env가 이긴다). CI/배포는 secrets를
-env로 주입하므로, repo에 체크인된 `gradle.properties`의 `flyway.*` 가 배포/검증 대상 DB를 바꿀 수 없다.
+접속값은 `-P` Gradle property나 환경변수로 override할 수 있다(우선순위: property → env → 기본값).
+단, repo에 체크인된 `gradle.properties`에 `flyway.*`(및 `systemProp.flyway.*`)를 두는 것은 CI가 거부한다
+(`schema-validate` guard). 체크인된 설정이 배포/검증 대상 DB나 마이그레이션 동작을 바꾸지 못하게 하기 위함이다.
 
-Gradle property로(로컬, env 미설정 시):
+Gradle property로:
 
 ```bash
 ./gradlew :libs:schema:flywayMigrate \

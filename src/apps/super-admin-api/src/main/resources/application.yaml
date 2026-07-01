@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: superadmin
+  # DB가 아직 연결되지 않은 단계라 DataSource 자동설정을 끈다.
+  # (data-jpa·postgresql 의존성은 두되 부팅 시 DB 접속을 시도하지 않게 함)
+  # DB 연동 시 이 exclude 블록을 지우고 spring.datasource.* 를 채운다.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration

@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # build.gradle.kts의 Flyway 블록이 읽는 접속값. 아래 조건부로 띄우는 ephemeral 컨테이너를 가리킨다.
+    # build.gradle의 Flyway 블록이 읽는 접속값. 아래 조건부로 띄우는 ephemeral 컨테이너를 가리킨다.
     # (migrate/validate step에서만 쓰이며, 스킵되는 PR에서는 무시된다.)
     env:
       FLYWAY_URL: jdbc:postgresql://localhost:5432/edge
@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           if git diff --quiet "origin/${BASE_REF}...${HEAD_SHA}" -- \
               src/libs/schema/ src/gradle/ src/gradlew src/gradlew.bat \
-              src/settings.gradle.kts src/build.gradle.kts src/gradle.properties \
+              src/settings.gradle src/build.gradle src/gradle.properties \
               .github/workflows/schema-validate.yml \
               .github/workflows/deploy-dev.yml \
               .github/workflows/deploy-prod.yml; then
@@ -125,17 +125,17 @@ jobs:
           fi
 
           # (c) 체크인된 gradle.properties의 Flyway override 전면 금지.
-          # Flyway 설정은 gradle property/시스템 프로퍼티가 build.gradle.kts의 flyway{} 블록보다
+          # Flyway 설정은 gradle property/시스템 프로퍼티가 build.gradle의 flyway{} 블록보다
           # 우선한다. gradle.properties로 넣을 수 있는 우회 벡터는 여러 형태다:
           #   flyway.locations=... / systemProp.flyway.outOfOrder=true / org.gradle.jvmargs=-Dflyway.locations=...
           # 이들이 검증·배포 설정을 통째로 우회할 수 있다(빈 locations no-op 배포, out-of-order 허용 등).
           # 합법 gradle.properties 키에는 'flyway'가 없으므로, 체크인된 gradle.properties에서
-          # 'flyway'가 언급되면(대소문자 무관) 형태 불문 거부한다. Flyway 설정은 build.gradle.kts/CI env로만.
+          # 'flyway'가 언급되면(대소문자 무관) 형태 불문 거부한다. Flyway 설정은 build.gradle/CI env로만.
           propfiles="$(git ls-files | grep -E '(^|/)gradle\.properties$' || true)"
           if [ -n "${propfiles}" ]; then
             offenders="$(echo "${propfiles}" | xargs grep -liE 'flyway' 2>/dev/null || true)"
             if [ -n "${offenders}" ]; then
-              echo "::error::체크인된 gradle.properties가 Flyway 설정을 참조합니다(flyway.* / systemProp.flyway.* / -Dflyway...). Flyway 설정은 build.gradle.kts와 CI env로만 주입하세요."
+              echo "::error::체크인된 gradle.properties가 Flyway 설정을 참조합니다(flyway.* / systemProp.flyway.* / -Dflyway...). Flyway 설정은 build.gradle와 CI env로만 주입하세요."
               echo "${offenders}"
               exit 1
             fi
