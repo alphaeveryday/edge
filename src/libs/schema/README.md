@@ -69,7 +69,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - **Environments 생성**: `development`, `production`.
 - **Secrets 등록**: 위 `DEV_FLYWAY_*`는 `development`, `PROD_FLYWAY_*`는 `production` environment에 넣는다.
 - **prod 승인 게이트**: `production` environment에 **Required reviewers**를 지정한다. 그래야 `deploy-prod`의 migrate job이 운영 DB를 건드리기 전에 수동 승인을 거친다(필요 시 배포 브랜치를 `main`으로 제한).
-- (권장) **Branch protection**: `dev`에 `schema-validate` 상태 체크를 required로 지정한다.
+- (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다.
 
 ### JVM/Spring 앱은 schema **consumer**다
 

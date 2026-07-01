@@ -1,9 +1,13 @@
 # PR 검증 — 스키마 마이그레이션을 실제 Postgres에 적용·검증한다.
 #
 # 원칙: DB 스키마 SSOT는 libs/schema이고, 서비스 앱이 아니라 파이프라인이 Flyway를 실행한다.
-# 이 워크플로는 배포가 아니라 "이 PR의 마이그레이션이 빈 DB에 깨끗하게 적용되는가"만 검증한다.
+# 이 워크플로는 배포가 아니라 "이 PR의 마이그레이션이 안전하게 적용되는가"만 검증한다.
 # 단순 build가 아니라 flywayMigrate로 SQL을 실제 실행한 뒤 flywayValidate로 정합성을 확인한다.
 # 어떤 secret도 쓰지 않으며 dev/prod DB를 건드리지 않는다(ephemeral 컨테이너만 사용).
+#
+# guard는 별도 job이 아니라 이 job의 첫 step으로 둔다. 별도 job으로 두고 needs로 걸면,
+# guard 실패 시 이 job이 skip되어 branch protection이 skipped를 "통과"로 오인할 수 있다.
+# 한 job의 step으로 두면 guard 실패 = 이 job 자체가 red로 실패한다(어떤 required check든 확실).
 name: schema-validate
 
 on:
@@ -26,38 +30,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # fresh ephemeral DB는 "이미 적용된 마이그레이션 파일을 수정"해도 통과한다(체크섬이 새로 계산됨).
-  # 하지만 dev/prod DB에는 기존 체크섬이 flyway_schema_history에 남아 있어 실제 배포 때 validate가 실패한다.
-  # 그래서 base 브랜치 대비 기존 V*.sql의 수정/삭제/이름변경을 CI에서 차단한다(추가만 허용).
-  # (repo 정책: "이미 적용된 마이그레이션 파일은 수정하지 않는다" — libs/schema/README.md)
-  guard-immutable-migrations:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 기존 마이그레이션 파일 수정/삭제 차단
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          # base(merge-base)부터 PR head까지, migrations 아래에서 수정(M)/삭제(D)/이름변경(R)된 파일.
-          changed="$(git diff --name-status --diff-filter=MDR \
-            "origin/${BASE_REF}...${HEAD_SHA}" -- src/libs/schema/migrations/)"
-          if [ -n "${changed}" ]; then
-            echo "::error::이미 존재하는 마이그레이션 파일을 수정/삭제/이름변경했습니다. 변경은 항상 새 V*.sql 추가로만 하세요(확장-수축)."
-            echo "${changed}"
-            exit 1
-          fi
-          echo "OK — 기존 마이그레이션 파일 변경 없음(추가만 있음)."
-
   migrate-and-validate:
     runs-on: ubuntu-latest
-    # guard가 실패하면 이 job은 아예 실행되지 않는다(green이 되지 않는다).
-    # branch protection이 이 job만 required check로 잡아도 guard 우회를 막는다.
-    needs: guard-immutable-migrations
 
     # 검증 전용 ephemeral Postgres. 러너 종료와 함께 사라진다(운영 DB 아님).
     services:
@@ -83,6 +57,55 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # base와의 merge-base diff를 위해 전체 히스토리를 받는다.
+          fetch-depth: 0
+
+      # fresh ephemeral DB는 (a) 이미 적용된 파일 수정, (b) 이미 적용된 버전보다 낮은 신규 파일을
+      # 모두 통과시킨다(전체를 순서대로 새로 적용하므로). 하지만 dev/prod DB에는 기존 이력이 남아 있어
+      # 실제 배포의 flywayValidate/Migrate가 실패한다. 그 드리프트를 PR에서 선제 차단한다.
+      # (repo 정책: libs/schema/README.md — 적용된 파일 수정 금지 + timestamp 버전 단조 증가)
+      - name: 마이그레이션 불변성·버전 단조성 guard
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          base="origin/${BASE_REF}"
+          head="${HEAD_SHA}"
+          migdir="src/libs/schema/migrations"
+
+          # (a) 기존 마이그레이션 파일의 수정(M)/삭제(D)/이름변경(R) 금지 — 추가(A)만 허용.
+          changed="$(git diff --name-status --diff-filter=MDR "${base}...${head}" -- "${migdir}/")"
+          if [ -n "${changed}" ]; then
+            echo "::error::이미 존재하는 마이그레이션 파일을 수정/삭제/이름변경했습니다. 변경은 항상 새 V*.sql 추가로만 하세요(확장-수축)."
+            echo "${changed}"
+            exit 1
+          fi
+
+          # (b) 새로 추가되는 마이그레이션 버전은 base 브랜치 최신 버전보다 커야 한다(out-of-order 방지).
+          added="$(git diff --name-only --diff-filter=A "${base}...${head}" -- "${migdir}/" | grep -E '/V[0-9]+__' || true)"
+          if [ -n "${added}" ]; then
+            base_max="$(git ls-tree -r --name-only "${base}" -- "${migdir}/" \
+              | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1)"
+            base_max="${base_max:-0}"
+            echo "base('${BASE_REF}') 최신 마이그레이션 버전: ${base_max}"
+            # 주의: set -e 하에서 while 본문이 실패하는 test로 끝나면 서브셸이 exit 1이 되어
+            # 명령치환 할당이 죽는다. 조건 출력은 반드시 if/fi로 감싸 본문을 exit 0으로 끝낸다.
+            bad="$(echo "${added}" | while IFS= read -r f; do
+              v="$(echo "${f}" | sed -nE 's#.*/V([0-9]+)__.*#\1#p')"
+              [ -n "${v}" ] || continue
+              if [ "${v}" -le "${base_max}" ]; then
+                echo "  - ${f} (버전 ${v} <= ${base_max})"
+              fi
+            done)"
+            if [ -n "${bad}" ]; then
+              echo "::error::신규 마이그레이션 버전이 base 최신 버전 이하입니다(out-of-order). 항상 더 큰 timestamp 버전으로 추가하세요."
+              echo "${bad}"
+              exit 1
+            fi
+          fi
+          echo "OK — 기존 파일 불변 + 신규 버전 단조 증가."
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
