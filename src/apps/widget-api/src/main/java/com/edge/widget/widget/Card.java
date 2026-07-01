@@ -1,4 +1,4 @@
-package com.edge.gateway.widget;
+package com.edge.widget.widget;
 
 /**
  * 위젯 표준 응답의 카드. v1은 대표 카드 1개.

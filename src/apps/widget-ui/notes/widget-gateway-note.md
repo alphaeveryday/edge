@@ -64,7 +64,7 @@ PoC용 `data-mock-status`는 계약·구현에서 제거됐다(입력 계약 노
 
 ## 5. Gateway → Widget Response v1
 
-Gateway v1은 분석 서버 응답을 위젯 응답으로 감싸서 반환하는 adapter 역할을 맡는다.
+분석 서버 응답을 위젯 응답으로 감싸는 adapter는 **widget-api**가 맡는다(모델 A). gateway는 그 응답을 포워딩만 한다.
 
 > `organizationId`/`applicationId`/`widgetId`는 **표준 응답에 포함하지 않는다.** 이전 mock은 `org_*`/`app_mts`를 붙였지만, 실제 tenant context 주입 방식이 미정이라 위젯 응답 표준에서 제외하기로 결정했다(충돌 평균 금지). tenant context 주입은 후속에서 확정한다.
 
@@ -114,10 +114,10 @@ Gateway v1은 분석 서버 응답을 위젯 응답으로 감싸서 반환하는
 
 아래 **Gateway 변환·내부 흐름은 의도적으로 제외**했고 후속 티켓에서 구현한다:
 
-- analysis → widget 변환 adapter(`mapAnalysisToWidgetResponse`, symbol 매칭, disclaimer 주입 등)와 §5 응답 매핑 규칙. local-api 모드도 여기서.
-- Gateway 내부 흐름(`request → tenantContext → 분석 API 호출 → adapter`), Public Embed Key 검증, tenant context 생성.
+- analysis → widget 변환 adapter(`mapAnalysisToWidgetResponse`, symbol 매칭, disclaimer 주입 등)와 §5 응답 매핑 규칙 — **widget-api**가 담당.
+- gateway 흐름: Public Embed Key 검증 · tenant context 생성 후 **widget-api로 포워딩(라우팅)**. 분석 조회·변환은 하지 않는다.
 
-개념: **widget = 렌더, Gateway = 변환.** 실제 Gateway 연결 시 widget의 렌더 계약(§5)은 그대로 두고 변환을 Gateway가 맡는다.
+개념: **widget = 렌더, widget-api = 변환, gateway = 라우팅.** (ALPHA-300에서 architecture.md에 맞춰 확정 — 초기 스파이크의 "Gateway = 변환"을 정정.) widget의 렌더 계약(§5)은 그대로다.
 
 ## 7. 상태별 응답
 

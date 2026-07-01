@@ -1,78 +1,55 @@
 package com.edge.gateway.web;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-import com.edge.gateway.analysis.MockAnalysisClient;
+import com.edge.gateway.client.WidgetApiClient;
 import com.edge.gateway.tenant.StubTenantResolver;
-import com.edge.gateway.widget.WidgetResponseAdapter;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 위젯 표준 응답 계약의 "의도"를 검증한다(Rule 9): 프론트는 body의 {@code status} 문자열로 4상태를
- * 분기하므로, 각 상태가 계약대로 나가야 프론트 렌더가 깨지지 않는다.
+ * gateway 라우팅의 "의도"를 검증한다(Rule 9): gateway는 데이터를 만들지 않고 widget-api로 포워딩해
+ * 응답을 그대로 돌려준다. 포워딩이 실패하면 위젯 error 상태로 폴백한다.
  *
- * <p>Boot 슬라이스(@WebMvcTest) 대신 standaloneSetup으로 컨트롤러+협력자를 직접 조립.
+ * <p>widget-api 호출은 fake {@link WidgetApiClient}로 대체(실 HTTP 불필요).
  */
 class WidgetControllerTest {
 
-    private MockMvc mvc;
-
-    @BeforeEach
-    void setUp() {
-        WidgetController controller = new WidgetController(
-                new StubTenantResolver(), new MockAnalysisClient(), new WidgetResponseAdapter());
-        mvc = MockMvcBuilders.standaloneSetup(controller).build();
+    private MockMvc mvcWith(WidgetApiClient client) {
+        WidgetController controller = new WidgetController(new StubTenantResolver(), client);
+        return MockMvcBuilders.standaloneSetup(controller).build();
     }
 
-    private org.springframework.test.web.servlet.ResultActions call(String symbol) throws Exception {
-        String body = "{\"embedKey\":\"pub_demo_1234\",\"symbol\":\"" + symbol + "\"}";
-        return mvc.perform(post("/api/v1/widget/analysis")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body));
-    }
+    private static final String REQ = "{\"embedKey\":\"pub_demo_1234\",\"symbol\":\"005930\"}";
 
     @Test
-    void 정상심볼은_success로_카드를_담아_반환() throws Exception {
-        call("005930")
+    void widget_api_응답을_그대로_포워딩한다() throws Exception {
+        // widget-api가 만든 위젯 표준 응답을 흉내
+        WidgetApiClient fake = req ->
+                "{\"status\":\"success\",\"symbol\":\"" + req.symbol() + "\",\"cards\":[{\"title\":null,\"description\":\"x\"}]}";
+        mvcWith(fake).perform(post("/api/v1/widget/analysis")
+                        .contentType(MediaType.APPLICATION_JSON).content(REQ))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("success"))
                 .andExpect(jsonPath("$.symbol").value("005930"))
-                .andExpect(jsonPath("$.cards.length()").value(1))
-                .andExpect(jsonPath("$.cards[0].description").isNotEmpty())
-                .andExpect(jsonPath("$.fallback.isFallback").value(false));
+                .andExpect(jsonPath("$.cards.length()").value(1));
     }
 
     @Test
-    void EMPTY심볼은_empty상태_summary공백_cards빈배열() throws Exception {
-        call("EMPTY")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("empty"))
-                .andExpect(jsonPath("$.summary").value(""))
-                .andExpect(jsonPath("$.cards.length()").value(0));
-    }
-
-    @Test
-    void ERROR심볼은_error상태_message포함_cards없음() throws Exception {
-        call("ERROR")
+    void 포워딩_실패시_위젯_error상태로_폴백() throws Exception {
+        WidgetApiClient down = req -> {
+            throw new RuntimeException("widget-api unreachable");
+        };
+        mvcWith(down).perform(post("/api/v1/widget/analysis")
+                        .contentType(MediaType.APPLICATION_JSON).content(REQ))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("error"))
-                .andExpect(jsonPath("$.message").isNotEmpty())
-                .andExpect(jsonPath("$.cards").doesNotExist());
-    }
-
-    @Test
-    void FALLBACK심볼은_fallback상태_블록채움() throws Exception {
-        call("FALLBACK")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("fallback"))
-                .andExpect(jsonPath("$.fallback.isFallback").value(true))
-                .andExpect(jsonPath("$.fallback.reason").isNotEmpty());
+                .andExpect(jsonPath("$.symbol").value("005930"))
+                .andExpect(jsonPath("$.message").isNotEmpty());
     }
 }

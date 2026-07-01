@@ -1,51 +1,55 @@
 package com.edge.gateway.web;
 
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.edge.gateway.analysis.AnalysisResponse;
-import com.edge.gateway.analysis.MockAnalysisClient;
+import com.edge.gateway.client.WidgetApiClient;
 import com.edge.gateway.tenant.StubTenantResolver;
 import com.edge.gateway.tenant.TenantContext;
+import com.edge.gateway.widget.InternalAnalysisRequest;
 import com.edge.gateway.widget.WidgetAnalysisRequest;
-import com.edge.gateway.widget.WidgetResponse;
-import com.edge.gateway.widget.WidgetResponseAdapter;
 
 /**
- * 위젯용 게이트웨이 스텁 진입점 — 얕은 E2E 스켈레톤의 프론트↔게이트웨이↔분석 홉.
+ * 위젯용 게이트웨이 진입점 — <b>라우터</b>(모델 A). 데이터·변환은 하지 않는다.
  *
- * <p>흐름: HTTP 진입 → (고정)tenantContext → mock 분석 호출 → adapter로 위젯 표준 응답 변환.
- * 위젯 계약이라 apipayload 봉투가 아닌 위젯 표준 응답을 그대로 반환하고, 변환 중 오류는
- * HTTP 5xx가 아니라 위젯 표준 error 상태(body.status="error")로 내려 프론트가 렌더하게 한다.
+ * <p>흐름: HTTP 진입 → (고정)tenantContext 생성 → widget-api로 <b>포워딩</b> → 응답 pass-through.
+ * gateway는 위젯 응답 형태를 알지 않고 raw JSON을 그대로 반환한다(포워딩 실패 시에만 최소 error 구성).
  */
 @RestController
 @RequestMapping("/api/v1/widget")
 public class WidgetController {
 
     private final StubTenantResolver tenantResolver;
-    private final MockAnalysisClient analysisClient;
-    private final WidgetResponseAdapter adapter;
+    private final WidgetApiClient widgetApiClient;
 
-    public WidgetController(StubTenantResolver tenantResolver,
-                            MockAnalysisClient analysisClient,
-                            WidgetResponseAdapter adapter) {
+    public WidgetController(StubTenantResolver tenantResolver, WidgetApiClient widgetApiClient) {
         this.tenantResolver = tenantResolver;
-        this.analysisClient = analysisClient;
-        this.adapter = adapter;
+        this.widgetApiClient = widgetApiClient;
     }
 
     @PostMapping("/analysis")
-    public WidgetResponse analysis(@RequestBody(required = false) WidgetAnalysisRequest request) {
+    public ResponseEntity<String> analysis(@RequestBody(required = false) WidgetAnalysisRequest request) {
         String symbol = request == null ? null : request.symbol();
         try {
-            // 고정 embed key → 고정 tenantContext (검증 없음 — 스텁). 분석은 테넌트 범위로 조회.
+            // 엣지 책임: (고정)embed key → (고정)tenantContext. 실제 검증/식별은 후속(S055~063).
             TenantContext tenant = tenantResolver.resolve(request == null ? null : request.embedKey());
-            AnalysisResponse analysis = analysisClient.analyze(tenant, symbol);
-            return adapter.toWidgetResponse(analysis, symbol);
+            String widgetResponse = widgetApiClient.analyze(
+                    new InternalAnalysisRequest(symbol, tenant.organizationId(), tenant.applicationId()));
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(widgetResponse);
         } catch (Exception e) {
-            return WidgetResponse.error(symbol, "위젯 응답 변환 중 문제가 발생했습니다.");
+            // 포워딩 실패 → 위젯 error 상태로 폴백(프론트 렌더 유지).
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(errorJson(symbol));
         }
+    }
+
+    /** 포워딩 실패 폴백 — 위젯 error 상태 최소 JSON. gateway는 위젯 응답 형태를 알지 않으므로 직접 구성한다. */
+    private String errorJson(String symbol) {
+        String s = symbol == null ? "" : symbol.replace("\\", "\\\\").replace("\"", "\\\"");
+        return "{\"status\":\"error\",\"symbol\":\"" + s
+                + "\",\"message\":\"게이트웨이가 위젯 분석을 가져오지 못했습니다.\"}";
     }
 }

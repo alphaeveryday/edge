@@ -1,13 +1,13 @@
-package com.edge.gateway.widget;
+package com.edge.widget.widget;
 
 import org.springframework.stereotype.Component;
 
-import com.edge.gateway.analysis.AnalysisResponse;
+import com.edge.widget.analysis.AnalysisResponse;
 
 /**
- * 분석 서버 응답 → 위젯 표준 응답 변환(adapter). "widget = 렌더, Gateway = 변환" 책임 경계의 변환부.
+ * 분석 응답 → 위젯 표준 응답 변환(adapter). 모델 A에서 이 "변환" 책임은 widget-api가 소유한다.
  *
- * <p>변환 규칙: {@code as_of}→{@code generatedAt}, {@code affected_assets[0].summary}→{@code summary}·
+ * <p>규칙: {@code as_of}→{@code generatedAt}, {@code affected_assets[0].summary}→{@code summary}·
  * {@code cards[0].description}, disclaimer 주입. 영향 자산 없으면 empty, stale이면 fallback.
  */
 @Component

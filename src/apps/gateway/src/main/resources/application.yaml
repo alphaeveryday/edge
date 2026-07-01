@@ -8,3 +8,8 @@ spring:
     exclude:
       - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+# 라우팅 대상. gateway는 위젯 요청을 widget-api로 포워딩한다(모델 A).
+# dev ECS: Service Connect http://widget-api:8080, 로컬: http://localhost:8081
+widget-api:
+  base-url: ${WIDGET_API_BASE_URL:http://localhost:8081}
