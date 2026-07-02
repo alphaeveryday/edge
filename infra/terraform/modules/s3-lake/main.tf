@@ -38,6 +38,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   }
 }
 
+# 위 SSE-KMS 가 쓰는 관리형 키(aws/s3)의 ARN. 레이크에 R/W 하는 역할은 S3 권한만으론
+# 부족하고 이 키에 대한 kms:Decrypt/GenerateDataKey 가 필요하다(그렇지 않으면 AccessDenied).
+# 암호화 방식은 이 모듈이 소유하므로, 키 ARN 도 여기서 노출해 호출부가 IAM 에 반영한다.
+data "aws_kms_alias" "s3" {
+  name = "alias/aws/s3"
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
   bucket = aws_s3_bucket.this.id
 

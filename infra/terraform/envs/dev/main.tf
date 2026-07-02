@@ -150,6 +150,18 @@ module "data_pipeline" {
           "${module.data_lake.bucket_arn}/operations_archive/*",
         ]
       },
+      {
+        # 버킷이 SSE-KMS 라 객체 R/W 에 KMS 권한이 필수(없으면 AccessDenied).
+        # ViaService 로 S3 경유 호출로만 제한한다.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = [module.data_lake.kms_key_arn]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "s3.${var.region}.amazonaws.com"
+          }
+        }
+      },
     ]
   })
 }
