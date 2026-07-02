@@ -45,6 +45,9 @@ class FmpNewsSource:
         # fetch 중 심볼 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다.
         # (격리로 남은 심볼은 계속 수집하되, 실패가 조용히 묻히지 않게 — fail loud.)
         self.fetch_failures: list[dict] = []
+        # 직전 fetch 가 계획한 (매핑된) 대상 수. 활성 소스인데 0이면 심볼맵 누락·
+        # 전 대상 미매핑 — 스텝이 success(0건)로 위장하지 않고 skip 으로 드러낸다.
+        self.planned_symbols: int | None = None
 
     @property
     def enabled(self) -> bool:
@@ -102,8 +105,10 @@ class FmpNewsSource:
         (격리≠은폐), StopFetch(4xx/429)만 전체 중단.
         """
         self.fetch_failures = []
+        plan = self.plan(symbols)
+        self.planned_symbols = len(plan)  # 빈 plan(매핑 대상 0)을 스텝이 감지하게
         fetched_at = datetime.now(timezone.utc).isoformat()
-        for our_ticker, fmp_symbol in self.plan(symbols):
+        for our_ticker, fmp_symbol in plan:
             try:
                 yield from self._paginate(
                     our_ticker, fmp_symbol, from_date, to_date, fetched_at

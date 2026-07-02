@@ -249,6 +249,40 @@ def test_unexpected_failure_still_writes_log(tmp_path):
     assert "boom" in log["error"]
 
 
+def test_enabled_but_no_mapped_targets_marks_skipped(tmp_path):
+    # WHY: 활성 소스(키 주입됨)인데 매핑된 대상이 0개면(심볼맵 누락·전 대상이 미매핑
+    #      KR 티커) 수집이 사실상 불가능하다 — success(0건)로 위장하면 잘못된 설정이
+    #      성공처럼 보인다. skipped 로 드러내야 운영이 인지한다(Rule 12).
+    config = """
+[news.sources.fmp]
+base_url = "https://fmp.example/stable/news/stock"
+
+[news.sources.fmp.symbol_map]
+NVDA = "NVDA"
+
+[price.source]
+base_url = "https://example.com/price"
+
+[targets]
+symbols = ["005930"]
+"""
+    path = tmp_path / "sources.toml"
+    path.write_text(config, encoding="utf-8")
+    settings = load_settings(path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = FmpNewsSource(
+        settings.news.sources["fmp"].model_copy(update={"api_key": "k"}),  # 활성
+        FakeClient({}),
+    )
+    code = ingest_raw.run(settings, storage, source, "20260701T000000Z")
+
+    assert code == 0  # 잘못된 설정이지만 크래시는 아님 — 로그로 드러냄
+    assert storage.list_keys("raw") == []
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "skipped"
+    assert log["reason"] == "no mapped targets"
+
+
 def test_missing_published_date_falls_back_to_fetched_date(tmp_path):
     # WHY: raw 는 전부 보존한다(품질 게이트는 Step2) — 발행시각이 없어도 버리지 않고
     #      수집일 파티션으로라도 남아야 한다.

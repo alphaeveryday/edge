@@ -75,7 +75,7 @@ def run(
     kept_by_id: dict[str, dict] = {}
     partitions: dict[tuple[str, str], list[dict]] = defaultdict(list)
     fetched = duplicates = 0
-    status, error = "success", None
+    status, error, reason = "success", None, None
     exit_code = 0
 
     try:
@@ -129,6 +129,12 @@ def run(
         else:
             status = "partial"
 
+    # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑 KR 등) 수집이
+    # 사실상 불가능한 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).
+    # plan() 규약상 미매핑은 오류가 아니라 정상(후속 소스가 커버)이라 error 가 아닌 skip.
+    if status == "success" and getattr(source, "planned_symbols", None) == 0:
+        status, reason = "skipped", "no mapped targets"
+
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한
     # 비0 종료로 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
     try:
@@ -136,6 +142,7 @@ def run(
             **log,
             "status": status,
             "error": error,
+            "reason": reason,
             "records_fetched": fetched,
             "records_saved": saved,
             "records_skipped_duplicate": duplicates,
