@@ -76,8 +76,10 @@ def test_saves_partitioned_ndjson_and_log(tmp_path):
     assert log["records_saved"] == 2
 
 
-def test_same_article_across_symbols_saved_once(tmp_path):
+def test_same_article_across_symbols_saved_once_with_merged_mentions(tmp_path):
     # WHY: S002 AC2 — 같은 기사가 두 심볼 질의에 걸려 와도 중복 저장되지 않아야 한다.
+    #      단, 두 종목 mention 은 모두 보존돼야 한다 — 뒤 record 를 통째로 버리면
+    #      다운스트림(ticker 매칭)이 그 기사가 AAPL 도 언급했음을 알 수 없다.
     same = _item("https://e.com/shared")
     code, storage = _run(tmp_path, {"NVDA": [same], "AAPL": [dict(same)]})
 
@@ -86,8 +88,62 @@ def test_same_article_across_symbols_saved_once(tmp_path):
     lines = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
     assert len(lines) == 1
 
+    record = json.loads(lines[0])
+    tickers = {m["ticker"] for m in record["mentions"]}
+    assert tickers == {"NVDA", "AAPL"}  # 두 종목 연결 모두 보존
+
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["records_skipped_duplicate"] == 1
+
+
+class _PartlyFailingClient(FakeClient):
+    """지정한 심볼은 재시도 소진(RuntimeError), 나머지는 정상 응답."""
+
+    def __init__(self, responses, failing):
+        super().__init__(responses)
+        self.failing = set(failing)
+
+    def get(self, url, *, accept="application/json"):
+        symbol = url.split("symbols=")[1].split("&")[0]
+        if symbol in self.failing:
+            raise RuntimeError("GET 재시도 소진")
+        return super().get(url, accept=accept)
+
+
+def _run_client(tmp_path, client, run_id="20260701T000000Z"):
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = FmpNewsSource(
+        settings.news.sources["fmp"].model_copy(update={"api_key": "k"}), client
+    )
+    return ingest_raw.run(settings, storage, source, run_id), storage
+
+
+def test_all_symbols_failing_marks_run_error(tmp_path):
+    # WHY: 심볼 격리로 남은 심볼은 계속 시도하되, 전 심볼이 실패해 0건 저장이면
+    #      status=success 로 남기면 안 된다(조용한 성공 금지 — fail loud).
+    client = _PartlyFailingClient({}, failing=["NVDA", "AAPL"])
+    code, storage = _run_client(tmp_path, client)
+
+    assert code == 1
+    assert storage.list_keys("raw") == []
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "error"
+    assert log["records_failed_symbols"] == 2
+    assert {f["symbol"] for f in log["failed_symbols"]} == {"NVDA", "AAPL"}
+
+
+def test_partial_failure_marks_run_partial(tmp_path):
+    # WHY: 일부 심볼만 실패하면 저장분은 있으나 온전치 않다 — partial 로 드러내고
+    #      실패 심볼을 로그에 남겨 운영이 손실을 인지하게 한다.
+    client = _PartlyFailingClient({"NVDA": [_item("https://e.com/a")]}, failing=["AAPL"])
+    code, storage = _run_client(tmp_path, client)
+
+    assert code == 0  # 부분 성공은 비정상 종료가 아님
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "partial"
+    assert log["records_saved"] == 1
+    assert log["records_failed_symbols"] == 1
 
 
 def test_record_carries_article_id(tmp_path):

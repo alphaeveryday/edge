@@ -78,6 +78,8 @@ def test_fetch_isolates_retry_exhaustion_per_symbol():
     source = FmpNewsSource(config, FlakyClient({"NVDA": ok}))
     records = list(source.fetch(["005930", "NVDA"]))
     assert [r["our_ticker"] for r in records] == ["NVDA"]
+    # 격리하되 은폐하지 않는다 — 실패 심볼이 기록돼 스텝이 런 상태에 반영한다.
+    assert [f["symbol"] for f in source.fetch_failures] == ["SSNLF"]
 
 
 def test_fetch_stops_on_stop_fetch():

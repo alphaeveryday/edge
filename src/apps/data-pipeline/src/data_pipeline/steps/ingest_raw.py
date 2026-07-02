@@ -1,8 +1,8 @@
 """Step1 — 원본저장 (S002. raw 존 저장 S028 은 이 스텝에 흡수).
 
-FMP 에서 신규 뉴스 목록을 수집해, 런 내 중복 제거(article_id) 후
-(market, published_date) 파티션별 ndjson 으로 raw 존에 append 하고,
-실행 결과를 collection_log 로 남긴다.
+FMP 에서 신규 뉴스 목록을 수집해, 런 내 중복은 article_id 로 합치고
+(같은 기사의 여러 종목 mention 은 병합) (market, published_date) 파티션별
+ndjson 으로 raw 존에 append 하고, 실행 결과를 collection_log 로 남긴다.
 
 raw 는 run_id 별 append(재현성) — 런 간 중복은 Step2 canonical 병합이 흡수한다.
 """
@@ -15,7 +15,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from ..config import Settings
-from ..dedup import Deduper
 from ..lake import Storage, collection_log_key, raw_news_partition
 from ..parse import make_article_id, parse_datetime
 from ..sources import FmpNewsSource, StopFetch
@@ -52,7 +51,10 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
                                                    "reason": "fmp disabled or no api_key"})
         return 0
 
-    deduper = Deduper()
+    # article_id → 보관 중인 record. 같은 기사가 여러 심볼 질의에 걸려 오면
+    # 새 record 를 버리지 않고 그 (market, ticker) mention 을 기존 record 에 병합한다
+    # (질의 기반 소스는 어느 종목으로 걸렸는지 알고 있어 — 이 연결을 raw 에서 보존).
+    kept_by_id: dict[str, dict] = {}
     partitions: dict[tuple[str, str], list[dict]] = defaultdict(list)
     fetched = duplicates = 0
     status, error = "success", None
@@ -64,10 +66,16 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
             article_id = make_article_id(
                 record.get("url"), record.get("title") or "", record.get("publishedDate")
             )
-            if not deduper.is_new(article_id):
+            mention = {"market": record["market"], "ticker": record["our_ticker"]}
+            existing = kept_by_id.get(article_id)
+            if existing is not None:
                 duplicates += 1
+                if mention not in existing["mentions"]:
+                    existing["mentions"].append(mention)
                 continue
             record["article_id"] = article_id
+            record["mentions"] = [mention]
+            kept_by_id[article_id] = record
             partitions[(record["market"], _partition_date(record))].append(record)
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
@@ -86,6 +94,17 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         storage.put_bytes(key, lines.encode("utf-8"))
         saved += len(records)
 
+    # 심볼 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
+    #  - 저장분 있고 일부 실패 → partial(성공했지만 온전치 않음)
+    #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
+    failed_symbols = getattr(source, "fetch_failures", [])
+    if status == "success" and failed_symbols:
+        if saved == 0:
+            status, exit_code = "error", 1
+            error = f"모든 수집 심볼 실패 ({len(failed_symbols)}건)"
+        else:
+            status = "partial"
+
     _write_log(storage, started_date, run_id, {
         **log,
         "status": status,
@@ -93,12 +112,14 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         "records_fetched": fetched,
         "records_saved": saved,
         "records_skipped_duplicate": duplicates,
+        "records_failed_symbols": len(failed_symbols),
+        "failed_symbols": failed_symbols,
         "partitions": len(partitions),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     })
     logger.info(
-        "ingest_raw 완료: status=%s fetched=%d saved=%d dup=%d partitions=%d",
-        status, fetched, saved, duplicates, len(partitions),
+        "ingest_raw 완료: status=%s fetched=%d saved=%d dup=%d failed_symbols=%d partitions=%d",
+        status, fetched, saved, duplicates, len(failed_symbols), len(partitions),
     )
     return exit_code
 

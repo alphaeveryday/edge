@@ -66,6 +66,9 @@ class FmpNewsSource:
         self.config_enabled = config.enabled
         self.client = client
         self.limit = limit
+        # fetch 중 심볼 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다.
+        # (격리로 남은 심볼은 계속 수집하되, 실패가 조용히 묻히지 않게 — fail loud.)
+        self.fetch_failures: list[dict] = []
 
     @property
     def enabled(self) -> bool:
@@ -91,6 +94,7 @@ class FmpNewsSource:
 
     def fetch(self, symbols: list[str]) -> Iterator[dict]:
         """심볼별로 질의해 raw 항목(dict)을 낸다. 수집 메타를 항목에 덧붙인다."""
+        self.fetch_failures = []
         fetched_at = datetime.now(timezone.utc).isoformat()
         for our_ticker, fmp_symbol in self.plan(symbols):
             try:
@@ -99,7 +103,11 @@ class FmpNewsSource:
                 raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
             except Exception as exc:
                 # 일시 오류 재시도 소진은 심볼 단위로 격리 — 남은 심볼은 계속.
+                # 단, 실패는 기록해 스텝이 런 상태(성공/부분/실패)에 반영한다.
                 logger.warning("fmp 요청 실패 — 심볼 건너뜀: %s (%s)", fmp_symbol, exc)
+                self.fetch_failures.append(
+                    {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": str(exc)}
+                )
                 continue
             try:
                 payload = json.loads(body) if body else []
