@@ -8,9 +8,12 @@
 # 마이그레이션 이미지를 ECR에 push하고, VPC 내부에서 도는 ECS Fargate task를 트리거만 한다.
 # Flyway는 그 task 안에서 RDS에 적용된다(infra/terraform/modules/schema-migrate).
 #
-# 앱 배포는 아직 워크플로가 없다. 이 워크플로는 스키마 migrate만 책임진다.
-# 앱 배포 job/워크플로가 생기면 반드시 `needs: migrate`를 걸어 "migrate 성공 후에만 앱 배포"가
-# 성립하도록 연결한다. 지금은 가짜 성공 신호를 만들지 않기 위해 placeholder 배포 job을 두지 않는다.
+# 앱 배포: changes job 이 push 범위를 diff 해 앱별로 바뀐 것만 골라내고(path 필터),
+# 바뀐 앱만 deploy-app.yml(재사용 워크플로)로 독립 배포한다. 모든 앱 배포 job 은
+# `needs: migrate` — migrate 성공 후에만 앱이 롤아웃된다(스키마가 코드보다 먼저).
+#
+# 선행 조건(별도 티켓, ALPHA-303 참고): github-oidc-deploy 역할이 schema-migrate 전용 스코프라
+# 앱 ECR push·ecs:UpdateService·PassRole 권한 확장 전까지 앱 배포 job 은 AccessDenied 로 실패한다.
 name: deploy-dev
 
 on:
@@ -31,6 +34,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 이 push 로 어떤 앱이 바뀌었는지 판별한다. 서드파티 액션 대신 git diff 로 직접 계산
+  # (이 repo 는 폴링도 자체 구현하는 최소 의존 방침). 공유 경로(jvm-common·gradle 루트·
+  # 이 워크플로들)가 바뀌면 모든 앱을 다시 배포한다 — 과잉 배포가 누락보다 안전하다.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      widget_api: ${{ steps.filter.outputs.widget_api }}
+      tenant_console_api: ${{ steps.filter.outputs.tenant_console_api }}
+      super_admin_api: ${{ steps.filter.outputs.super_admin_api }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # push 이전 커밋(event.before)과 diff 하려면 전체 히스토리 필요
+
+      - id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # force-push·최초 push 는 before 를 신뢰할 수 없다 → 전체 배포로 폴백(누락보다 과잉이 안전).
+          if [ "${BEFORE}" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}" 2>/dev/null; then
+            echo "before(${BEFORE}) 조회 불가 — 전체 배포로 폴백."
+            changed="__ALL__"
+          else
+            changed="$(git diff --name-only "${BEFORE}" "${AFTER}")"
+            printf '변경 파일:\n%s\n' "${changed}"
+          fi
+
+          # 모든 JVM 앱 이미지에 영향을 주는 공유 경로. schema(SQL)는 migrate 소관이라 제외.
+          shared='^src/libs/jvm-common/|^src/settings\.gradle$|^src/gradle/|^src/gradlew|^src/\.dockerignore$|^\.github/workflows/deploy-app\.yml$|^\.github/workflows/deploy-dev\.yml$'
+
+          for app in widget-api tenant-console-api super-admin-api gateway; do
+            key="${app//-/_}"
+            if [ "${changed}" = "__ALL__" ] || printf '%s\n' "${changed}" | grep -qE "^src/apps/${app}/|${shared}"; then
+              echo "${key}=true" >> "${GITHUB_OUTPUT}"
+              echo "→ ${app}: 배포 대상"
+            else
+              echo "${key}=false" >> "${GITHUB_OUTPUT}"
+              echo "→ ${app}: 변경 없음"
+            fi
+          done
+
   migrate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -137,3 +185,42 @@ jobs:
             exit 1
           fi
           echo "dev/staging 스키마 마이그레이션 성공."
+
+  # ─── 앱 배포 (path 필터 기반 독립 배포) ─────────────────────────────
+  # 각 job 은 자기 앱 경로가 바뀐 push 에서만 실행되고, migrate 성공을 전제한다.
+  # 배포 절차 자체는 deploy-app.yml(재사용 워크플로)에 한 벌만 둔다.
+
+  deploy-widget-api:
+    needs: [migrate, changes]
+    if: needs.changes.outputs.widget_api == 'true'
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: widget-api
+      environment: development
+
+  deploy-tenant-console-api:
+    needs: [migrate, changes]
+    if: needs.changes.outputs.tenant_console_api == 'true'
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: tenant-console-api
+      environment: development
+
+  deploy-super-admin-api:
+    needs: [migrate, changes]
+    if: needs.changes.outputs.super_admin_api == 'true'
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: super-admin-api
+      environment: development
+
+  # gateway 는 아직 dev 환경에 ECS 서비스가 없다(infra/terraform/envs/dev 에 모듈 미존재).
+  # 서비스 인프라가 생기면(별도 티켓) 아래 주석을 해제한다 — changes 필터는 이미 gateway 를 추적한다.
+  # 실패할 것이 확실한 job 을 켜두지 않는다(가짜 신호 방지, 헤더의 placeholder 원칙과 동일).
+  # deploy-gateway:
+  #   needs: [migrate, changes]
+  #   if: needs.changes.outputs.gateway == 'true'
+  #   uses: ./.github/workflows/deploy-app.yml
+  #   with:
+  #     app: gateway
+  #     environment: development

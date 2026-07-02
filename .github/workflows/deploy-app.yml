@@ -1,0 +1,117 @@
+# 앱 배포 재사용 워크플로 — JVM 앱 하나를 빌드해 ECS 서비스로 롤링 배포한다.
+#
+# 호출자(deploy-dev.yml 등)가 app 이름만 넘기면 나머지 식별자는 규약으로 파생된다:
+#   ECR 저장소 = edge/<app> · task 정의 family = <app> · ECS 서비스 = <app>
+#   (infra/terraform/modules/ecs-service 가 var.name 하나로 세 이름을 모두 만드는 규약과 동일.)
+#
+# 배포 방식: 이미지 태그 = git sha(불변). TF 소유 base task 정의에서 이미지만 교체해 새 리비전을
+# 등록하고(스키마 migrate 와 같은 패턴), 서비스를 그 리비전으로 업데이트한 뒤 안정화를 폴링한다.
+# tfvars 의 semver 이미지 핀은 TF 가 소유하는 baseline 이고, CD 리비전은 그 위에 쌓인다.
+#
+# 선행 조건(별도 티켓, ALPHA-303 참고): github-oidc-deploy 역할은 현재 schema-migrate 전용
+# 스코프다. 앱 배포에는 edge/<app> ECR push, ecs:UpdateService/DescribeServices,
+# 앱 task·execution 역할 PassRole 이 추가로 필요하다. 인프라 확장 전까지 이 워크플로는
+# AccessDenied 로 실패한다 — 가짜 성공 신호를 만들지 않는다.
+name: deploy-app
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: "배포할 앱 이름 (src/apps/<app> · ECR edge/<app> · ECS 서비스 <app>)"
+        required: true
+        type: string
+      environment:
+        description: "GitHub environment — vars.*(역할·리전·클러스터) 주입 스코프"
+        required: true
+        type: string
+
+# 호출자에게서 상속되는 상한 안에서만 유효. OIDC 토큰 발급 + 체크아웃.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.app }}
+    runs-on: ubuntu-latest
+    # gradle 콜드 빌드(~10분) + 이미지 push + 롤아웃 대기까지 포함한 상한.
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 이 커밋의 소스로 앱 이미지를 빌드·push. 재실행 등으로 이미 있으면 건너뛴다(불변 태그).
+      - name: Build & push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          APP: ${{ inputs.app }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          repo="edge/${APP}"
+          image="${REGISTRY}/${repo}:${IMAGE_TAG}"
+          if aws ecr describe-images --repository-name "${repo}" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "이미지 ${image} 이미 존재 — 빌드/푸시 생략."
+          else
+            # 빌드 컨텍스트 = src/ 루트(멀티프로젝트 — 각 앱 Dockerfile 헤더 참고). Fargate 는 amd64.
+            docker build --platform linux/amd64 -f "src/apps/${APP}/Dockerfile" -t "${image}" src
+            docker push "${image}"
+          fi
+
+      # TF 소유 base task 정의에서 이미지만 교체해 새 리비전 등록 → 서비스 롤링 업데이트 → 안정화 대기.
+      - name: Deploy to ECS service
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER_ARN }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          APP: ${{ inputs.app }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/edge/${APP}:${IMAGE_TAG}"
+
+          # base task 정의를 받아 이미지만 교체해 새 리비전 등록(register가 허용하는 필드만 추림).
+          base="$(aws ecs describe-task-definition --task-definition "${APP}" --query 'taskDefinition' --output json)"
+          new_def="$(printf '%s' "${base}" | jq --arg IMG "${image}" '
+            .containerDefinitions[0].image = $IMG
+            | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions,
+               requiresCompatibilities, cpu, memory, runtimePlatform}')"
+          new_arn="$(aws ecs register-task-definition --cli-input-json "${new_def}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)"
+          echo "등록된 task 정의: ${new_arn}"
+
+          aws ecs update-service --cluster "${CLUSTER}" --service "${APP}" \
+            --task-definition "${new_arn}" >/dev/null
+          echo "서비스 ${APP} 업데이트 시작 → 롤아웃 대기"
+
+          # 롤아웃 폴링. rolloutState=FAILED 는 circuit breaker 가 켜진 서비스에서만 나오므로,
+          # 안 켜진 서비스의 실패(크래시 루프 등)는 deadline 초과로 잡는다.
+          deadline=$(( SECONDS + 900 )) # ~15분 (job timeout 30분 안, 빌드 시간 제외 여유)
+          while :; do
+            state="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${APP}" \
+              --query 'services[0].deployments[?status==`PRIMARY`] | [0].rolloutState' --output text 2>/dev/null || true)"
+            echo "롤아웃 상태: ${state:-unknown}"
+            if [ "${state}" = "COMPLETED" ]; then
+              break
+            fi
+            if [ "${state}" = "FAILED" ]; then
+              echo "::error::${APP} 롤아웃 실패 (circuit breaker). 서비스 이벤트를 확인하세요."
+              exit 1
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::${APP} 롤아웃이 제한 시간 내 안정화되지 않았습니다 (마지막 상태: ${state:-unknown})."
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "${APP} 배포 완료: ${image}"

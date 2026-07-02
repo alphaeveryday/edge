@@ -35,7 +35,7 @@ terraform apply     # 실제 생성
 ```
 
 - 상태는 기본 **로컬**. 공유하려면 [`backend.tf`](envs/dev/backend.tf) 주석을 풀고 S3+DynamoDB 로 전환(부트스트랩 필요).
-- 이미지 태그를 올릴 때는 `terraform.tfvars` 의 `widget_api_image` 갱신 후 `apply`.
+- 이미지 태그를 올릴 때는 `terraform.tfvars` 의 `widget_api_image` 갱신 후 `apply`. 이 semver 핀은 TF 소유 baseline 이고, dev CD(`.github/workflows/deploy-dev.yml` 의 앱 배포 job)는 그 위에 git sha 태그 이미지를 task 정의 리비전으로 쌓는다 — `terraform apply` 시 baseline 으로 되돌아갈 수 있으므로 릴리스 시점에 tfvars 를 최신으로 맞춘다.
 
 ## 현재 범위(증분 1)와 의도적 보류
 
