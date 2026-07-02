@@ -124,6 +124,11 @@ class FmpNewsSource:
                 self._note_failure(fmp_symbol, our_ticker, "response not a list")
                 continue
             for item in payload:
+                # list 안에 null/문자열/숫자가 섞여도 dict(item) 예외로 제너레이터가
+                # 죽어 남은 심볼 수집이 끊기지 않게 — 불량 item 은 기록 후 스킵.
+                if not isinstance(item, dict):
+                    self._note_failure(fmp_symbol, our_ticker, f"malformed item: {type(item).__name__}")
+                    continue
                 record = dict(item)
                 record["our_ticker"] = our_ticker
                 record["market"] = market_for(our_ticker)

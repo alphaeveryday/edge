@@ -74,6 +74,22 @@ def test_fetch_records_non_list_response_as_failure():
     assert [f["symbol"] for f in source.fetch_failures] == ["NVDA"]
 
 
+def test_fetch_skips_malformed_items_and_keeps_good_ones():
+    # WHY: list 안에 null/문자열/숫자가 섞여도 dict(item) 예외로 제너레이터가 죽어
+    #      남은 정상 item·심볼 수집이 끊기면 안 된다 — 불량 item 은 기록 후 스킵.
+    payload = json.dumps([
+        {"title": "good", "publishedDate": "2026-07-01 00:00:00"},
+        None,
+        "쓰레기",
+        123,
+    ])
+    source = _source({"NVDA": payload})
+    records = list(source.fetch(["NVDA"]))
+
+    assert [r["title"] for r in records] == ["good"]  # 정상 item 은 살아남음
+    assert len(source.fetch_failures) == 3  # null·str·int 3건 기록
+
+
 def test_fetch_isolates_retry_exhaustion_per_symbol():
     # WHY: 한 심볼의 일시 오류(5xx 재시도 소진)가 남은 심볼 수집을 끊으면
     #      런 하나의 장애가 전체 유니버스 유실로 번진다 — 심볼 단위 격리.

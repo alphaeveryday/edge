@@ -69,6 +69,11 @@ def parse_datetime(text: str | None) -> str | None:
 
     FMP 는 오프셋 없는 벽시계 시각을 준다 — naive 는 UTC 로 간주한다
     (published_at 을 비우지 않기 위한 알려진 근사. 페이로드에 오프셋이 없다).
+
+    NOTE(ALPHA-104): offset 포함 ISO(예: '...+09:00', '...-04:00')는 지금 오파싱된다
+    (+오프셋은 잘려 UTC 로 오인, -오프셋은 파싱 실패). Step1 은 이 값을 coarse 파티션
+    날짜로만 써서 raw 보존엔 영향이 작다. 정확한 published_at 은 S003(정규화·품질)의 AC라,
+    offset-aware 파싱(fromisoformat 기반)은 ALPHA-104 에서 다룬다.
     """
     if not text:
         return None

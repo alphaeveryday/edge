@@ -87,12 +87,18 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         logger.exception("수집 실패")
         status, error, exit_code = "error", str(exc), 1
 
+    # raw 저장도 계약("결과는 항상 collection_log") 안에 둔다 — put_bytes 가
+    # 실패(IAM·네트워크·부분 쓰기)해도 예외를 삼켜 status=error 로 남기고 로그를 쓴다.
     saved = 0
-    for (market, published_date), records in sorted(partitions.items()):
-        key = f"{raw_news_partition(SOURCE, market, published_date, run_id)}/part-00000.ndjson"
-        lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
-        storage.put_bytes(key, lines.encode("utf-8"))
-        saved += len(records)
+    try:
+        for (market, published_date), records in sorted(partitions.items()):
+            key = f"{raw_news_partition(SOURCE, market, published_date, run_id)}/part-00000.ndjson"
+            lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
+            storage.put_bytes(key, lines.encode("utf-8"))
+            saved += len(records)
+    except Exception as exc:
+        logger.exception("raw 저장 실패")
+        status, error, exit_code = "error", str(exc), 1
 
     # 심볼 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
     #  - 저장분 있고 일부 실패 → partial(성공했지만 온전치 않음)
@@ -105,18 +111,24 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         else:
             status = "partial"
 
-    _write_log(storage, started_date, run_id, {
-        **log,
-        "status": status,
-        "error": error,
-        "records_fetched": fetched,
-        "records_saved": saved,
-        "records_skipped_duplicate": duplicates,
-        "records_failed_symbols": len(failed_symbols),
-        "failed_symbols": failed_symbols,
-        "partitions": len(partitions),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-    })
+    # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한
+    # 비0 종료로 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
+    try:
+        _write_log(storage, started_date, run_id, {
+            **log,
+            "status": status,
+            "error": error,
+            "records_fetched": fetched,
+            "records_saved": saved,
+            "records_skipped_duplicate": duplicates,
+            "records_failed_symbols": len(failed_symbols),
+            "failed_symbols": failed_symbols,
+            "partitions": len(partitions),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
+        exit_code = exit_code or 1
     logger.info(
         "ingest_raw 완료: status=%s fetched=%d saved=%d dup=%d failed_symbols=%d partitions=%d",
         status, fetched, saved, duplicates, len(failed_symbols), len(partitions),

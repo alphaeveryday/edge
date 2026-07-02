@@ -146,6 +146,30 @@ def test_partial_failure_marks_run_partial(tmp_path):
     assert log["records_failed_symbols"] == 1
 
 
+def test_raw_write_failure_still_writes_collection_log(tmp_path):
+    # WHY: "결과는 항상 collection_log" 계약 — raw put_bytes 가 실패(IAM·네트워크)해도
+    #      런 흔적이 사라지면 안 된다. status=error·exit 1 로 남고 로그는 남아야 한다.
+    class RawFailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            if key.startswith("raw/"):
+                raise OSError("S3 raw write denied")
+            super().put_bytes(key, data)  # operations_archive 로그는 정상
+
+    settings = _settings(tmp_path)
+    storage = RawFailingStorage(tmp_path / "lake")
+    source = FmpNewsSource(
+        settings.news.sources["fmp"].model_copy(update={"api_key": "k"}),
+        FakeClient({"NVDA": [_item("https://e.com/a")]}),
+    )
+    code = ingest_raw.run(settings, storage, source, "20260701T000000Z")
+
+    assert code == 1
+    [log_key] = storage.list_keys("operations_archive")
+    log = json.loads(storage.get_bytes(log_key))
+    assert log["status"] == "error"
+    assert "denied" in log["error"]
+
+
 def test_record_carries_article_id(tmp_path):
     # WHY: article_id 가 raw 항목에 실려 있어야 Step2 가 재계산 없이 병합 키로 쓴다.
     code, storage = _run(tmp_path, {"NVDA": [_item("https://e.com/a")]})
