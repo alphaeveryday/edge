@@ -1,0 +1,90 @@
+---
+name: pr-cycle
+description: Jira 이슈 확인부터 브랜치 생성·커밋·PR 생성·Squash 머지·이슈 전환까지 edge 저장소의 Git 작업 사이클 전체를 거버넌스(issue-first, feature/<KEY>-슬러그, Refs 푸터, dev 타겟, 경계별 머지)에 맞게 수행. 기능·버그·문서 작업을 시작할 때, "브랜치 파줘", "커밋해줘", "PR 올려줘", "머지해줘", "티켓 처리해줘", "릴리스하자"(dev→main) 등 git/Jira가 얽힌 모든 요청에 반드시 이 스킬을 사용할 것. 이미 진행 중인 브랜치/PR의 수정·보완·리뷰 반영·재실행 요청에도 사용. 단순 git 상태 조회(로그·diff 보기)에는 불필요.
+---
+
+# pr-cycle — 티켓 한 장의 Git 작업 사이클
+
+티켓 하나를 이슈 확인 → 브랜치 → 커밋 → PR → Squash 머지 → 이슈 전환까지 거버넌스 위반 없이 가져간다.
+규칙의 SSOT는 루트 [README.md](../../../README.md)의 "Git 컨벤션"이다 — 이 스킬과 README가 충돌하면 README를 따르고, 이 스킬의 갱신을 제안하라.
+
+## Phase 0 — 컨텍스트 확인
+
+`git branch --show-current`와 `git status`, 필요 시 `gh pr list --head <브랜치>`로 현재 위치를 파악하고 모드를 정한다:
+
+| 상태 | 모드 |
+|---|---|
+| `dev` 위, 깨끗한 작업트리 | 새 사이클 — 1단계부터 |
+| `dev` 위, 미커밋 변경 있음 | 변경이 이번 티켓의 작업물이면 브랜치를 만들어 가져간다(2단계로). 무관한 변경이면 처리 방법(stash·별도 커밋)을 사용자에게 확인한 뒤 새 사이클 시작 |
+| `feature/*`·`fix/*` 위, PR 없음 | 진행 중 사이클 — 개발/커밋 단계부터 이어감 |
+| `feature/*`·`fix/*` 위, 열린 PR 있음 | PR 보완 모드 — 리뷰 반영 커밋 후 push만 |
+| `main` 위 | 작업 금지 — `dev`로 이동 후 시작 |
+
+작업트리에 이번 티켓과 무관한 변경이 섞여 있으면 커밋에 쓸어담지 말고 사용자에게 처리 방법을 확인한다. 하나의 PR은 하나의 되돌릴 수 있는 단위여야 하기 때문이다.
+
+## 1. 티켓 확인 (issue-first)
+
+먼저 **Jira 대상 여부를 판별한다**: 기능(`feat`)·버그(`fix`) 작업은 Jira 이슈가 필수다. 키 없는 예외는 추적할 이슈가 없는 자명한 `docs`·`chore`뿐이며 (예: `fix/readme-typo`), 이 경우 `Refs:` 푸터도 생략하고 이 단계를 건너뛴다.
+
+Jira 대상이면 아래 순서로 확인해 **활성 스프린트에 있는 키**를 확보한다. 브랜치를 만들기 전에 끝내야 한다 — 키가 브랜치 이름에 있어야 Jira가 PR을 이슈에 자동 연결하고, 스프린트에 있어야 보드에서 진행 상황이 보인다.
+
+1. **스프린트 확인**: `searchJiraIssuesUsingJql`로 `project = ALPHA AND sprint in openSprints()` + 이슈 키 또는 작업 내용 검색. 있으면 그 키로 진행.
+2. **백로그 확인**: 스프린트에 없으면 `project = ALPHA AND (sprint is EMPTY OR sprint not in openSprints()) AND statusCategory != Done` + 검색어로 백로그를 조회한다. 같은 작업의 이슈가 이미 있으면 **새로 만들지 말고** 그 이슈를 활성 스프린트로 올린다. 백로그 확인 없이 바로 생성하면 중복 이슈가 쌓인다.
+3. **생성 + 스프린트 배치**: 백로그에도 없으면 `createJiraIssue`로 생성하고 활성 스프린트에 배치한다.
+
+스프린트 이동/배치는 `editJiraIssue`의 Sprint 필드로 시도한다. MCP 도구로 불가능하면(필드 권한·보드 API 제약) 사용자에게 보드에서 올려 달라고 요청하고, 배치가 확인된 뒤 다음 단계로 진행한다.
+
+## 2. 브랜치 생성 + 즉시 push
+
+```bash
+git switch dev && git pull
+git switch -c feature/<이슈키>-<슬러그>   # 버그면 fix/
+git push -u origin <브랜치>
+```
+
+- 슬러그는 영문 소문자-하이픈으로 작업 요지를 담는다 (예: `feature/ALPHA-121-login-oauth`).
+- **분기 직후 바로 push한다.** Jira의 "진행 중" 자동 전환은 원격 이벤트로만 동작하므로, 로컬 전용 브랜치는 보드를 움직이지 못한다.
+- 브랜치 접두어(`feature/`·`fix/`)는 작업 성격이고, 커밋 `type`은 각 변경의 성격이다 — `feature/*` 브랜치에 `docs:` 커밋이 있어도 정상이다.
+
+## 3. 개발 + 커밋
+
+- 제목: `type(scope): 제목` — 한국어, 50자 이내, 마침표 없음. scope는 변경된 모듈명(전역이면 `repo`·`config` 또는 생략).
+- 하나의 커밋 = 하나의 논리적 변경. 스키마 변경은 `generated` 모델 갱신과 함께 커밋한다.
+- 이슈 키는 본문 마지막 줄 `Refs: <이슈키>` 푸터에만 둔다. 제목에 키를 넣지 않는다.
+- co-author 트레일러는 넣지 않는다 (프로젝트 설정 `includeCoAuthoredBy: false`).
+
+## 4. PR 전 게이트
+
+PR을 올리기 전에 두 가지를 통과시킨다:
+
+1. **빌드/테스트** — 변경된 모듈만: JVM은 `./gradlew :apps:<모듈>:build`(src/에서), Node는 `pnpm --filter <패키지> test`, Python은 해당 모듈 pytest. 실패를 안고 PR을 올리지 않는다.
+2. **docs-sync 스킬 실행** — 코드가 바꾼 사실이 문서에 반영됐는지 점검하고 드리프트를 이 PR 안에서 함께 해소한다. 사후 "문서 정합성 정정" 커밋이 반복돼 온 이력이 있다.
+
+## 5. dev 대상 PR
+
+- base는 반드시 `dev`다. `feature/*`·`fix/*`에서 `main`으로 가는 경로는 없다 (핫픽스도 `fix/* → dev → main`).
+- **PR 제목이 squash 후 최종 커밋 메시지가 된다** — 커밋 제목과 같은 Conventional Commits 형식으로 정확하게 쓴다.
+- 본문은 PR 템플릿(요약/변경 사항/산출물/체크리스트)을 따르고, 맨 아래 `Refs: <이슈키>`를 채운다. squash 커밋에 키가 남아 `main`까지 따라가게 하는 장치다.
+- `gh pr create`가 반환한 PR 번호 `<N>`을 기억해 둔다 — 6단계의 머지 subject에 필요하다.
+
+## 6. Squash 머지 + 브랜치 삭제
+
+- 머지는 되돌리기 번거로운 동작이므로 사용자 확인 후 실행한다.
+- `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
+- `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
+
+## 7. 사이클 마감
+
+- `git switch dev && git pull`로 복귀하고 로컬 브랜치를 정리한다.
+- Jira 이슈가 자동 전환되지 않았으면 `transitionJiraIssue`로 완료 상태로 옮긴다.
+
+## 에러 처리
+
+- push/PR 생성 실패: 1회 재시도 후에도 실패하면 현재 상태(브랜치, 커밋 여부)를 보고하고 중단한다 — 어중간한 상태를 사용자가 모르게 두지 않는다.
+- `dev`·`main`에 직접 커밋하려는 상황이 감지되면 즉시 멈추고 브랜치를 만든다.
+- 테스트 실패: 실패 출력과 함께 보고한다. 실패를 숨기고 "완료"라 하지 않는다.
+
+## 테스트 시나리오
+
+- **정상 흐름**: "ALPHA-301 위젯 폴백 구현해줘" → 티켓 확인 → `feature/ALPHA-301-widget-fallback` 분기+push → 구현·커밋 → 빌드+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → 승인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
+- **에러 흐름**: PR 전 게이트에서 `./gradlew :apps:widget-api:build` 실패 → PR을 올리지 않고 실패 출력 보고 → 수정 후 게이트 재실행.
