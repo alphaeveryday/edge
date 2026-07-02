@@ -26,23 +26,19 @@ resource "aws_s3_bucket_versioning" "this" {
   }
 }
 
-# SSE-KMS(AWS 관리형 aws/s3 키). Bucket Key 로 KMS 요청 비용을 줄인다.
+# SSE-S3(AES256). 저장 시 암호화는 충족하되 KMS 운영비용(권한·키·요청)을 지지 않는다.
+# 결정 근거: 지금은 키 단위 감사·접근제어 요구가 없어 SSE-S3 로 단순화한다(YAGNI).
+#   - 프로토타입(news-pipeline CDK)은 전용 CMK 로 SSE-KMS 를 썼다(alias/news-pipeline-dev-data).
+#     감사·규제 요구가 생기면 그때 전용 CMK 를 만들어 이 rule 을 aws:kms 로 승격한다.
+#     (기존 객체는 재암호화되지 않으니 데이터가 적은 초기에 전환하는 게 싸다.)
 resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   bucket = aws_s3_bucket.this.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
+      sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
-}
-
-# 위 SSE-KMS 가 쓰는 관리형 키(aws/s3)의 ARN. 레이크에 R/W 하는 역할은 S3 권한만으론
-# 부족하고 이 키에 대한 kms:Decrypt/GenerateDataKey 가 필요하다(그렇지 않으면 AccessDenied).
-# 암호화 방식은 이 모듈이 소유하므로, 키 ARN 도 여기서 노출해 호출부가 IAM 에 반영한다.
-data "aws_kms_alias" "s3" {
-  name = "alias/aws/s3"
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
