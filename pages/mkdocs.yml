@@ -33,10 +33,18 @@ validation:
   links:
     unrecognized_links: ignore
 
+# 회고 표준 템플릿은 산출물이 아니라 작성 참고용이므로 빌드/포털에서 제외한다.
+exclude_docs: |
+  retrospective/_template.md
+
 nav:
   - Home: index.md
   - Evolution: evolution.md
   - Artifacts: artifacts.md
+  - Retrospective:
+      - Overview: retrospective/index.md
+      - Sprint 1: retrospective/sprint-1.md
+      - Sprint 2: retrospective/sprint-2.md
   - Reference:
       - Architecture: reference/architecture.md
       - Schema: reference/schema.md
