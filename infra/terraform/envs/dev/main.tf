@@ -62,7 +62,8 @@ module "network" {
 }
 
 # ── 서비스 클러스터(API 상시 가동) ──────────────────────
-# 워커(data-pipeline·analysis-engine) 클러스터는 별도(edge-dev-worker)로 분리 예정.
+# 워커(data-pipeline·analysis-engine) 클러스터는 별도(edge-dev-worker)로 분리 —
+# 아래 news_pipeline 모듈(sfn-pipeline)이 소유한다.
 module "service_cluster" {
   source         = "../../modules/ecs-cluster"
   name           = "${local.prefix}-service"
