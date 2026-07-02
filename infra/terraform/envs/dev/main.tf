@@ -150,7 +150,6 @@ module "data_pipeline" {
           "${module.data_lake.bucket_arn}/operations_archive/*",
         ]
       },
-      # 버킷이 SSE-S3(AES256) 라 KMS 권한 불필요. CMK 로 승격 시 kms 문을 다시 추가한다.
     ]
   })
 }

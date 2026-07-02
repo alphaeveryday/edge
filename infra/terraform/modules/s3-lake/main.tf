@@ -26,11 +26,7 @@ resource "aws_s3_bucket_versioning" "this" {
   }
 }
 
-# SSE-S3(AES256). 저장 시 암호화는 충족하되 KMS 운영비용(권한·키·요청)을 지지 않는다.
-# 결정 근거: 지금은 키 단위 감사·접근제어 요구가 없어 SSE-S3 로 단순화한다(YAGNI).
-#   - 프로토타입(news-pipeline CDK)은 전용 CMK 로 SSE-KMS 를 썼다(alias/news-pipeline-dev-data).
-#     감사·규제 요구가 생기면 그때 전용 CMK 를 만들어 이 rule 을 aws:kms 로 승격한다.
-#     (기존 객체는 재암호화되지 않으니 데이터가 적은 초기에 전환하는 게 싸다.)
+# 저장 시 암호화(SSE-S3, AES256).
 resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   bucket = aws_s3_bucket.this.id
 
