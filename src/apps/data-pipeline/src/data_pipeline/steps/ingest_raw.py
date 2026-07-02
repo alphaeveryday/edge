@@ -25,11 +25,12 @@ JOB_NAME = "ingest_raw"
 SOURCE = "fmp"
 
 
-def _partition_date(record: dict) -> str:
-    """파티션 published_date. 발행시각이 없거나 파싱 불가면 수집시각으로 폴백
-    (raw 는 전부 보존 — 품질 게이트는 Step2 소관)."""
+def _partition_date(record: dict, fallback_date: str) -> str:
+    """파티션 published_date. 발행시각이 없거나 파싱 불가면 수집시각으로,
+    그마저 없으면 런 시작일로 폴백한다(raw 는 전부 보존 — 하나도 못 버림).
+    fetched_at 하드 서브스크립트로 한 레코드가 런 전체를 죽이지 않게."""
     published = parse_datetime(record.get("publishedDate"))
-    basis = published or record["fetched_at"]
+    basis = published or record.get("fetched_at") or fallback_date
     return basis[:10]
 
 
@@ -46,9 +47,13 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
 
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
+        # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
         logger.warning("fmp 비활성(api_key 미주입) — 수집 건너뜀")
-        _write_log(storage, started_date, run_id, {**log, "status": "skipped",
-                                                   "reason": "fmp disabled or no api_key"})
+        try:
+            _write_log(storage, started_date, run_id, {**log, "status": "skipped",
+                                                       "reason": "fmp disabled or no api_key"})
+        except Exception:
+            logger.exception("collection_log 기록 실패(skip 경로)")
         return 0
 
     # article_id → 보관 중인 record. 같은 기사가 여러 심볼 질의에 걸려 오면
@@ -76,7 +81,7 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
             record["article_id"] = article_id
             record["mentions"] = [mention]
             kept_by_id[article_id] = record
-            partitions[(record["market"], _partition_date(record))].append(record)
+            partitions[(record["market"], _partition_date(record, started_date))].append(record)
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("수집 중단(4xx/429): %s", exc)

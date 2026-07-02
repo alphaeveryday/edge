@@ -189,6 +189,30 @@ def test_disabled_source_skips_with_log(tmp_path):
     assert log["status"] == "skipped"
 
 
+def test_partition_date_fallbacks():
+    # WHY: raw 는 하나도 못 버린다 — 발행시각 없으면 수집시각, 그마저 없으면 런 시작일.
+    #      fetched_at 하드 서브스크립트가 한 레코드로 런 전체를 죽이면 안 된다.
+    fb = "2026-07-03"
+    assert ingest_raw._partition_date({"publishedDate": "2026-07-01 09:00:00"}, fb) == "2026-07-01"
+    assert ingest_raw._partition_date({"fetched_at": "2026-07-02T00:00:00+00:00"}, fb) == "2026-07-02"
+    assert ingest_raw._partition_date({}, fb) == "2026-07-03"  # 둘 다 없으면 런 시작일
+
+
+def test_disabled_skip_survives_log_write_failure(tmp_path):
+    # WHY: skip 경로의 로그 쓰기도 best-effort — 스토리지 장애로 skip 로그마저 못
+    #      남겨도 크래시 대신 정상 종료해야 한다(다른 경로와 계약 일관).
+    class FailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            raise OSError("storage down")
+
+    settings = _settings(tmp_path)
+    storage = FailingStorage(tmp_path / "lake")
+    source = FmpNewsSource(
+        settings.news.sources["fmp"].model_copy(update={"api_key": None}), FakeClient({})
+    )
+    assert ingest_raw.run(settings, storage, source, "20260701T000000Z") == 0  # 크래시 없음
+
+
 def test_unexpected_failure_still_writes_log(tmp_path):
     # WHY: '결과는 항상 collection_log' 계약 — 재시도 소진 같은 예기치 못한 실패도
     #      로그 없이 죽으면 운영에서 런이 있었는지조차 알 수 없다. 부분 수집분은

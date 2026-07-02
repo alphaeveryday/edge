@@ -61,6 +61,14 @@ def test_make_article_id_falls_back_without_url():
     assert a == b and len(a) == 64
 
 
+def test_make_article_id_fallback_is_normalized():
+    # WHY: URL 없는 폴백이 원본 문자열로 해시하면, 같은 기사가 날짜 표기·제목 공백만
+    #      달라도 다른 id 로 갈려 dedup 을 빠져나가 중복 저장된다. 폴백도 정규화한다.
+    base = make_article_id(None, "삼성 실적 발표", "2026-07-01 09:00:00")
+    assert base == make_article_id(None, "삼성 실적 발표", "2026-07-01T09:00:00")  # 날짜 표기
+    assert base == make_article_id(None, "  삼성   실적 발표 ", "2026-07-01 09:00:00")  # 제목 공백
+
+
 def test_parse_datetime_fmp_sql_format_to_utc_iso():
     # WHY: FMP publishedDate 는 오프셋 없는 "YYYY-MM-DD HH:MM:SS" — UTC ISO 로
     #      통일돼야 published_date 파티션과 published_at 필드가 결정론적이다.

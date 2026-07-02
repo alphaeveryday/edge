@@ -60,7 +60,14 @@ def url_hash(url: str | None) -> str | None:
 def make_article_id(url: str | None, title: str, published_at: str | None) -> str:
     """기사 안정 식별자. 정규화 URL 우선, 없으면 title|published_at 폴백."""
     norm = normalize_url(url)
-    basis = norm if norm else f"{(title or '').strip()}|{published_at or ''}"
+    if norm:
+        basis = norm
+    else:
+        # 폴백도 정규화한다 — 날짜 표기(공백/T/Z)·제목 공백만 다른 같은 기사가
+        # 다른 id 로 갈려 dedup 을 빠져나가지 않게(URL 경로와 동일한 안정성).
+        canonical_dt = parse_datetime(published_at) or (published_at or "").strip()
+        canonical_title = " ".join((title or "").split())
+        basis = f"{canonical_title}|{canonical_dt}"
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 

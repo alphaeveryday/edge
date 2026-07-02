@@ -46,6 +46,20 @@ def test_local_storage_roundtrip_and_list(tmp_path):
     assert storage.list_keys("canonical") == []
 
 
+def test_local_list_keys_uses_string_prefix_like_s3(tmp_path):
+    # WHY: S3 는 문자열 prefix 매칭이라, 로컬 스텁이 prefix 를 '디렉터리'로 취급하면
+    #      로컬 통과·배포 S3 불일치가 생긴다(백엔드 교체 계약 위반). 두 규약을 맞춘다.
+    storage = LocalStorage(tmp_path)
+    storage.put_bytes("raw/market=US/a.ndjson", b"x")
+    storage.put_bytes("raw/market=KR/b.ndjson", b"y")
+
+    # 컴포넌트 중간을 자르는 prefix 도 S3 처럼 매칭돼야 한다.
+    assert storage.list_keys("raw/market=U") == ["raw/market=US/a.ndjson"]
+    # 전체 키를 prefix 로 줘도 그 키가 매칭돼야 한다(디렉터리 취급이면 []).
+    assert storage.list_keys("raw/market=US/a.ndjson") == ["raw/market=US/a.ndjson"]
+    assert storage.list_keys("nope") == []
+
+
 def test_make_storage_selects_backend_from_config():
     # WHY: 배포는 env(DATA_PIPELINE_STORAGE__*)만으로 s3 로 전환된다 — 선택 로직이
     #      설정을 무시하면 배포에서 로컬 디스크에 쓰고도 '성공'처럼 보인다.

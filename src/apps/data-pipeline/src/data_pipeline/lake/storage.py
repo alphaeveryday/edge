@@ -66,14 +66,17 @@ class LocalStorage:
         return self._path(key).read_bytes()
 
     def list_keys(self, prefix: str) -> list[str]:
-        base = self._path(prefix)
-        if not base.exists():
+        # S3 처럼 '문자열 prefix' 매칭 — prefix 를 디렉터리로 취급하면 백엔드 간
+        # 동작이 갈린다(컴포넌트 중간을 자르는 prefix·전체 키 전달 등). 두 백엔드의
+        # 키 규약을 일치시켜 로컬 통과·배포 S3 불일치를 막는다.
+        if not self.root.exists():
             return []
-        return sorted(
+        keys = (
             str(p.relative_to(self.root))
-            for p in base.rglob("*")
+            for p in self.root.rglob("*")
             if p.is_file()
         )
+        return sorted(k for k in keys if k.startswith(prefix))
 
 
 class S3Storage:
