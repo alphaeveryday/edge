@@ -1,8 +1,12 @@
 # 앱 배포 재사용 워크플로 — JVM 앱 하나를 빌드해 ECS 서비스로 롤링 배포한다.
 #
-# 호출자(deploy-dev.yml 등)가 app 이름만 넘기면 나머지 식별자는 규약으로 파생된다:
+# 호출자(deploy-<app>.yml)가 app 이름만 넘기면 나머지 식별자는 규약으로 파생된다:
 #   ECR 저장소 = edge/<app> · task 정의 family = <app> · ECS 서비스 = <app>
 #   (infra/terraform/modules/ecs-service 가 var.name 하나로 세 이름을 모두 만드는 규약과 동일.)
+#
+# 순서 보장: 앱 워크플로는 deploy-dev(스키마 migrate)와 파일이 분리돼 있어 `needs:`를 걸 수 없다.
+# 대신 wait-for-migrate job 이 같은 커밋의 deploy-dev run 완료를 폴링해, migrate 성공 후에만
+# 배포한다(스키마가 코드보다 먼저 — docs/architecture.md §6).
 #
 # 배포 방식: 이미지 태그 = git sha(불변). TF 소유 base task 정의에서 이미지만 교체해 새 리비전을
 # 등록하고(스키마 migrate 와 같은 패턴), 서비스를 그 리비전으로 업데이트한 뒤 안정화를 폴링한다.
@@ -25,15 +29,59 @@ on:
         description: "GitHub environment — vars.*(역할·리전·클러스터) 주입 스코프"
         required: true
         type: string
+      migrate-workflow:
+        description: "완료를 기다릴 스키마 migrate 워크플로 파일명"
+        required: false
+        type: string
+        default: deploy-dev.yml
 
-# 호출자에게서 상속되는 상한 안에서만 유효. OIDC 토큰 발급 + 체크아웃.
+# 호출자에게서 상속되는 상한 안에서만 유효.
+# id-token: OIDC / contents: 체크아웃 / actions: migrate run 상태 조회.
 permissions:
   id-token: write
   contents: read
+  actions: read
 
 jobs:
+  # 같은 커밋의 migrate 워크플로 run 이 성공으로 끝날 때까지 대기한다.
+  # deploy-dev 는 dev push 마다 무조건 실행되므로 run 은 반드시 존재한다(큐 지연만 폴링으로 흡수).
+  wait-for-migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for schema migration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.migrate-workflow }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "커밋 ${SHA} 의 ${WORKFLOW} 완료 대기"
+          deadline=$(( SECONDS + 1620 )) # ~27분 (migrate job 20분 + 큐 대기 여유)
+          while :; do
+            # 같은 sha 의 최신 run 하나. 조회 일시 실패는 재시도(deadline 으로만 실패).
+            result="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW}/runs?head_sha=${SHA}&per_page=1" \
+              --jq 'if (.workflow_runs | length) == 0 then "absent" else "\(.workflow_runs[0].status) \(.workflow_runs[0].conclusion)" end' \
+              2>/dev/null || echo "query-failed")"
+            echo "migrate run 상태: ${result}"
+            if [ "${result%% *}" = "completed" ]; then
+              if [ "${result##* }" = "success" ]; then
+                echo "migrate 성공 — 앱 배포를 진행한다."
+                break
+              fi
+              echo "::error::${WORKFLOW}(${SHA}) 가 성공하지 않았습니다(${result}). 스키마가 코드보다 먼저여야 하므로 앱 배포를 중단한다."
+              exit 1
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::${WORKFLOW}(${SHA}) 완료 대기 시간 초과 (마지막 상태: ${result})."
+              exit 1
+            fi
+            sleep 20
+          done
+
   deploy:
     name: deploy ${{ inputs.app }}
+    needs: wait-for-migrate
     runs-on: ubuntu-latest
     # gradle 콜드 빌드(~10분) + 이미지 push + 롤아웃 대기까지 포함한 상한.
     timeout-minutes: 30

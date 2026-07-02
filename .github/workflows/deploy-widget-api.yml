@@ -1,0 +1,40 @@
+# widget-api dev 배포 — 자기 코드(또는 모든 JVM 앱 이미지에 영향을 주는 공유 경로)가
+# 바뀐 dev push 에서만 트리거되는 독립 배포. 절차는 deploy-app.yml 한 벌을 재사용한다.
+# 같은 커밋의 deploy-dev(스키마 migrate) 성공을 기다린 뒤 배포한다.
+#
+# paths 필터 주의: diff 를 계산할 수 없는 push(force 등)에서는 GitHub 이 fail-open 으로
+# 워크플로를 실행한다 — 과잉 배포가 누락보다 안전하다는 방침과 일치.
+name: deploy-widget-api
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/widget-api/**"
+      # 공유 경로 — 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
+      - "src/libs/jvm-common/**"
+      - "src/settings.gradle"
+      - "src/gradle/**"
+      - "src/gradlew"
+      - "src/gradlew.bat"
+      - "src/.dockerignore"
+      # 배포 절차 자체의 변경.
+      - ".github/workflows/deploy-app.yml"
+      - ".github/workflows/deploy-widget-api.yml"
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+# 같은 앱의 배포는 직렬화, 실행 중 롤아웃은 취소하지 않는다(latest-pending-wins).
+concurrency:
+  group: deploy-widget-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: widget-api
+      environment: development
