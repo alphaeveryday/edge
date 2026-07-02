@@ -39,6 +39,22 @@ output "edge_url" {
   value       = "https://${var.edge_domain}"
 }
 
+# ── 데이터 레이크 / 뉴스 수집 배치 ────────────────────────
+output "lake_bucket_name" {
+  description = "데이터 레이크 버킷 이름"
+  value       = module.data_lake.bucket_name
+}
+
+output "data_pipeline_ecr_repository_url" {
+  description = "data-pipeline 이미지 push 대상 ECR"
+  value       = module.data_pipeline.ecr_repository_url
+}
+
+output "fmp_secret_arn" {
+  description = "FMP API 키 시크릿(값은 수동 주입 — main.tf 주석 참고)"
+  value       = aws_secretsmanager_secret.fmp.arn
+}
+
 # ── 스키마 마이그레이션 배포용 값 ──────────────────────────
 # 아래 값들을 GitHub 저장소의 development environment 변수(vars.*)로 넣으면 deploy-dev 워크플로가 쓴다.
 # (secret 이 아니라 식별자라 vars 로 충분. terraform apply 후 `terraform output` 으로 확인.)

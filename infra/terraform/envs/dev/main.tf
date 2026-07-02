@@ -69,6 +69,91 @@ module "service_cluster" {
   namespace_name = "edge.internal"
 }
 
+# ── 워커 클러스터 (배치: data-pipeline·analysis-engine) ──
+module "worker_cluster" {
+  source         = "../../modules/ecs-cluster"
+  name           = "${local.prefix}-worker"
+  namespace_name = "edge-worker.internal"
+}
+
+# ── 데이터 레이크 (수집→분석 공유 저장소, edge-data-lake-*) ──
+module "data_lake" {
+  source      = "../../modules/s3-lake"
+  bucket_name = var.lake_bucket_name
+}
+
+# FMP API 키 시크릿 껍데기. 값은 apply 후 수동 주입한다(하드코딩 금지):
+#   aws secretsmanager put-secret-value --secret-id edge-dev/data-pipeline/fmp \
+#     --secret-string '{"api_key":"..."}'
+resource "aws_secretsmanager_secret" "fmp" {
+  name        = "${local.prefix}/data-pipeline/fmp"
+  description = "FMP API key for data-pipeline news collection"
+}
+
+# ── 뉴스 수집 배치 (EventBridge Scheduler → Fargate) ────
+# 스케줄 주기는 미확정 placeholder — 이미지 push·키 주입 전까지 비활성(enabled=false).
+module "data_pipeline" {
+  source = "../../modules/ecs-scheduled-task"
+
+  # 앱 리소스는 bare 앱명(widget-api 등 ecs-service 와 동일 규칙),
+  # 이미지 저장소는 edge/<앱> 네임스페이스(기존 앱 ECR 과 동일).
+  name                = "data-pipeline"
+  ecr_repository_name = "edge/data-pipeline"
+  region              = var.region
+  vpc_id              = module.network.vpc_id
+  cluster_arn         = module.worker_cluster.cluster_arn
+  subnet_ids          = module.network.private_subnet_ids
+
+  schedules = {
+    ingest-raw = {
+      schedule_expression = "cron(0 * * * ? *)"
+      command             = ["python", "-m", "data_pipeline.run", "ingest-raw"]
+      enabled             = false
+    }
+    normalize = {
+      schedule_expression = "cron(20 * * * ? *)"
+      command             = ["python", "-m", "data_pipeline.run", "normalize"]
+      enabled             = false
+    }
+  }
+
+  # 앱 설정 오버라이드(config loader 의 DATA_PIPELINE_ 접두 규약).
+  environment = {
+    DATA_PIPELINE_STORAGE__BACKEND = "s3"
+    DATA_PIPELINE_STORAGE__BUCKET  = module.data_lake.bucket_name
+  }
+  secrets = {
+    DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY = "${aws_secretsmanager_secret.fmp.arn}:api_key::"
+  }
+  secret_arns = [aws_secretsmanager_secret.fmp.arn]
+
+  # 레이크 프리픽스 R/W 최소 권한 — 파이프라인이 쓰는 프리픽스만.
+  task_policy_json = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = [module.data_lake.bucket_arn]
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["raw/*", "canonical/*", "operations_archive/*"]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject"]
+        Resource = [
+          "${module.data_lake.bucket_arn}/raw/*",
+          "${module.data_lake.bucket_arn}/canonical/*",
+          "${module.data_lake.bucket_arn}/operations_archive/*",
+        ]
+      },
+    ]
+  })
+}
+
 # ── RDS (PostgreSQL, private) ───────────────────────────
 module "rds" {
   source     = "../../modules/rds"
