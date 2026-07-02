@@ -24,6 +24,12 @@ variable "super_admin_api_image" {
   type        = string
 }
 
+variable "lake_bucket_name" {
+  description = "데이터 레이크 버킷 이름(전역 유일 — 선점 시 변경)"
+  type        = string
+  default     = "stock-ai-lake"
+}
+
 variable "alb_allowed_cidrs" {
   description = "임시 검증 ALB 인바운드 허용 CIDR"
   type        = list(string)
