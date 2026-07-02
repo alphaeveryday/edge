@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
@@ -61,6 +61,28 @@ class PriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: PriceSource
+
+
+class StorageConfig(BaseModel):
+    """레이크 스토리지 백엔드 선택.
+
+    MVP 개발은 local(스텁)로 돌리고, 배포는 env 로 s3 + bucket 을 주입한다:
+        DATA_PIPELINE_STORAGE__BACKEND=s3
+        DATA_PIPELINE_STORAGE__BUCKET=stock-ai-lake
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: Literal["local", "s3"] = "local"
+    local_root: NonBlankStr = ".lake"  # local 백엔드의 루트 디렉터리
+    bucket: str | None = None  # s3 백엔드 필수
+
+    @model_validator(mode="after")
+    def _s3_requires_bucket(self) -> StorageConfig:
+        # bucket 없이 s3 로 부팅하면 첫 put 에서야 죽는다 — 로드 시점에 fail loud.
+        if self.backend == "s3" and not (self.bucket or "").strip():
+            raise ValueError("storage.backend=s3 인데 storage.bucket 이 없다")
+        return self
 
 
 class CollectionTargets(BaseModel):

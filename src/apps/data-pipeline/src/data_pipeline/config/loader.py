@@ -21,7 +21,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from .models import CollectionTargets, NewsConfig, PriceConfig
+from .models import CollectionTargets, NewsConfig, PriceConfig, StorageConfig
 
 # 기본 설정은 패키지 안에 두고 모듈과 함께 배포한다(loader.py 옆). 이렇게 해야
 # editable/wheel 어느 설치에서도 __file__ 기준으로 동일하게 찾는다.
@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     news: NewsConfig
     price: PriceConfig
     targets: CollectionTargets
+    # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
+    storage: StorageConfig = StorageConfig()
 
     @classmethod
     def settings_customise_sources(

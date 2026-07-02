@@ -1,0 +1,109 @@
+"""FMP 뉴스 소스 어댑터 (S002 — 유일하게 구현된 소스).
+
+엔드포인트: {base_url}?symbols={fmp_symbol}&limit={n}&apikey={key}
+(base_url 은 설정 news.sources.fmp.base_url — /stable/news/stock. v3/v4 는 폐기됨.)
+
+응답 배열 항목: {symbol, publishedDate, title, site, url, text, ...}.
+raw 존에는 항목 원본에 수집 메타(our_ticker/market/fetched_at)만 붙여 그대로 둔다 —
+필드 선별·품질검증은 Step2(normalize) 소관.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Iterator
+from datetime import datetime, timezone
+
+from ..config import NewsSource
+from .http import PoliteClient
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_LIMIT = 50
+
+# our_ticker → FMP 심볼. US 는 동일, KR 은 검증된 ADR/OTC 만(None 은 FMP 미질의 —
+# 검증 안 된 ADR 심볼로 엉뚱한 종목 뉴스를 수집하지 않기 위해. 후속 소스가 커버).
+# 프로토타입 seeds/fmp_symbol_map.yaml 이식.
+SYMBOL_MAP: dict[str, str | None] = {
+    # KR — ADR/OTC (검증됨) 또는 None (건너뜀)
+    "005930": "SSNLF",  # 삼성전자 (OTC ADR)
+    "000660": None,  # SK하이닉스 — ADR 미검증
+    "009150": None,  # 삼성전기
+    "402340": None,  # SK스퀘어
+    "373220": None,  # LG에너지솔루션
+    "028260": None,  # 삼성물산
+    "032830": None,  # 삼성생명
+    "105560": "KB",  # KB금융 (NYSE ADR)
+    "055550": "SHG",  # 신한지주 (NYSE ADR)
+    # US — FMP 심볼 동일
+    "NVDA": "NVDA",
+    "AAPL": "AAPL",
+    "MSFT": "MSFT",
+    "CAT": "CAT",
+    "GE": "GE",
+    "RTX": "RTX",
+    "BRK.B": "BRK.B",
+    "JPM": "JPM",
+    "V": "V",
+}
+
+
+def market_for(our_ticker: str) -> str:
+    """KR 티커는 6자리 숫자, US 는 알파벳으로 시작한다."""
+    return "KR" if our_ticker[:1].isdigit() else "US"
+
+
+class FmpNewsSource:
+    source_name = "fmp"
+
+    def __init__(
+        self, config: NewsSource, client: PoliteClient, limit: int = DEFAULT_LIMIT
+    ):
+        self.base_url = config.base_url
+        self.api_key = config.api_key
+        self.config_enabled = config.enabled
+        self.client = client
+        self.limit = limit
+
+    @property
+    def enabled(self) -> bool:
+        # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
+        return self.config_enabled and bool(self.api_key)
+
+    def request_url(self, fmp_symbol: str) -> str:
+        # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
+        return f"{self.base_url}?symbols={fmp_symbol}&limit={self.limit}&apikey={self.api_key}"
+
+    def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
+        """수집 대상 → [(our_ticker, fmp_symbol)]. 매핑 없는 심볼은 로그 남기고 제외."""
+        out: list[tuple[str, str]] = []
+        for our_ticker in symbols:
+            if our_ticker not in SYMBOL_MAP:
+                logger.warning("fmp 심볼 매핑 없음 — 건너뜀: %s", our_ticker)
+                continue
+            fmp_symbol = SYMBOL_MAP[our_ticker]
+            if not fmp_symbol:  # KR 미검증 ADR — 의도된 건너뜀
+                continue
+            out.append((our_ticker, fmp_symbol))
+        return out
+
+    def fetch(self, symbols: list[str]) -> Iterator[dict]:
+        """심볼별로 질의해 raw 항목(dict)을 낸다. 수집 메타를 항목에 덧붙인다."""
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        for our_ticker, fmp_symbol in self.plan(symbols):
+            body = self.client.get(self.request_url(fmp_symbol))
+            try:
+                payload = json.loads(body) if body else []
+            except json.JSONDecodeError:
+                logger.warning("fmp 응답 JSON 파싱 실패 — 건너뜀: %s", fmp_symbol)
+                continue
+            if not isinstance(payload, list):
+                logger.warning("fmp 응답이 배열이 아님 — 건너뜀: %s", fmp_symbol)
+                continue
+            for item in payload:
+                record = dict(item)
+                record["our_ticker"] = our_ticker
+                record["market"] = market_for(our_ticker)
+                record["fetched_at"] = fetched_at
+                yield record

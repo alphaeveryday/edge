@@ -3,7 +3,8 @@
 > 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
-> 현재 범위는 **수집 설정 관리**까지다. 실제 뉴스 수집/적재는 후속이다.
+> 현재 범위는 **수집 설정 관리 + 뉴스 원본저장(Step1, FMP)**까지다.
+> 정규화·품질검증(Step2)과 가격 수집은 후속이다.
 
 ## 실행
 
@@ -12,6 +13,10 @@ Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `src/p
 ```bash
 uv sync                                  # src/ (Python 루트)에서 의존성 설치
 uv run --package data-pipeline pytest    # 테스트
+
+# 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
+DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw
 ```
 
 > uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
@@ -50,7 +55,19 @@ settings.targets.keywords            # ["금리", ...]
   `ConfigError`로 드러난다(AGENTS Rule 12). 단, `extra="forbid"`는 **TOML 파일 키에만** 적용된다 —
   `DATA_PIPELINE_*` env의 오타 키는 pydantic-settings 표준 동작상 조용히 무시된다.
 
+## 레이크 저장 계약
+
+수집물은 단일 레이크(`s3://stock-ai-lake/` 또는 local 스텁)에 쓴다.
+경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.
+
+- **raw** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
+  run_id 별 append(재현성). 런 내 중복은 article_id 로 제거한다.
+- **수집 로그** — `operations_archive/collection_logs/source=…/started_date=…/run_id=…/log.json`
+- 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
+  `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
+
 ## 범위에서 의도적으로 제외한 것 (후속)
 
-- 등록 소스에서 신규 뉴스 수집·중복 없이 적재
+- 정규화·품질검증(Step2) — raw → canonical 병합
+- 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
 - 실제 가격 데이터 수집(여기서는 소스 '위치'만 설정)
