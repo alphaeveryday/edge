@@ -20,7 +20,9 @@ from .http import PoliteClient, StopFetch
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LIMIT = 50
+DEFAULT_LIMIT = 100
+# 심볼·창당 페이지 안전 상한 — 응답이 계속 limit 을 꽉 채워도 무한 순회를 막는다.
+MAX_PAGES = 50
 
 
 def market_for(our_ticker: str) -> str:
@@ -49,9 +51,21 @@ class FmpNewsSource:
         # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.api_key)
 
-    def request_url(self, fmp_symbol: str) -> str:
+    def request_url(
+        self,
+        fmp_symbol: str,
+        *,
+        page: int = 0,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> str:
         # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
-        return f"{self.base_url}?symbols={fmp_symbol}&limit={self.limit}&apikey={self.api_key}"
+        url = f"{self.base_url}?symbols={fmp_symbol}&page={page}&limit={self.limit}"
+        if from_date:
+            url += f"&from={from_date}"
+        if to_date:
+            url += f"&to={to_date}"
+        return f"{url}&apikey={self.api_key}"
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
         """수집 대상 → [(our_ticker, fmp_symbol)]. 매핑 없는 심볼은 FMP 로는 제외.
@@ -74,38 +88,68 @@ class FmpNewsSource:
             {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": reason}
         )
 
-    def fetch(self, symbols: list[str]) -> Iterator[dict]:
-        """심볼별로 질의해 raw 항목(dict)을 낸다. 수집 메타를 항목에 덧붙인다."""
+    def fetch(
+        self,
+        symbols: list[str],
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> Iterator[dict]:
+        """심볼별로 [from_date, to_date] 창을 페이지 끝까지 순회해 raw 항목을 낸다.
+
+        날짜창을 안 주면(둘 다 None) FMP 최신분(page 0)만 — 로컬/테스트용. 스케줄
+        실행은 run 엔트리가 증분 창(어제~오늘)을, 백필은 명시 창을 넘긴다. 심볼 단위
+        실패는 격리·기록(격리≠은폐), StopFetch(4xx/429)만 전체 중단.
+        """
         self.fetch_failures = []
         fetched_at = datetime.now(timezone.utc).isoformat()
         for our_ticker, fmp_symbol in self.plan(symbols):
             try:
-                body = self.client.get(self.request_url(fmp_symbol))
+                yield from self._paginate(
+                    our_ticker, fmp_symbol, from_date, to_date, fetched_at
+                )
             except StopFetch:
                 raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
             except Exception as exc:
-                # 일시 오류 재시도 소진은 심볼 단위로 격리 — 남은 심볼은 계속.
-                # 단, 실패는 기록해 스텝이 런 상태(성공/부분/실패)에 반영한다.
-                self._note_failure(fmp_symbol, our_ticker, f"request: {exc}")
+                # 요청 실패·깨진 JSON·비배열 응답은 심볼 단위로 격리 — 남은 심볼 계속.
+                self._note_failure(fmp_symbol, our_ticker, str(exc))
                 continue
+
+    def _paginate(
+        self,
+        our_ticker: str,
+        fmp_symbol: str,
+        from_date: str | None,
+        to_date: str | None,
+        fetched_at: str,
+    ) -> Iterator[dict]:
+        """한 심볼의 창을 page 0..N 순회. 마지막 페이지(빈/limit 미만)에서 멈춘다.
+
+        페이지 실패는 예외로 올려 호출부가 심볼 단위로 격리한다(앞 페이지 수집분은
+        보존). MAX_PAGES 안전 상한으로 무한 페이지를 막는다."""
+        for page in range(MAX_PAGES):
+            body = self.client.get(
+                self.request_url(fmp_symbol, page=page, from_date=from_date, to_date=to_date)
+            )
             try:
                 payload = json.loads(body) if body else []
             except json.JSONDecodeError as exc:
-                # 잘못된 200 응답도 실패다 — 기록 없이 넘기면 전 심볼이 깨진 JSON 을
-                # 받아도 런이 '성공(0건)'으로 남는다(조용한 성공 금지).
-                self._note_failure(fmp_symbol, our_ticker, f"json: {exc}")
-                continue
+                raise ValueError(f"json: {exc}") from exc  # → 심볼 단위 실패
             if not isinstance(payload, list):
-                self._note_failure(fmp_symbol, our_ticker, "response not a list")
-                continue
+                raise ValueError("response not a list")
+            if not payload:
+                return  # 마지막 페이지(빈 응답)
             for item in payload:
-                # list 안에 null/문자열/숫자가 섞여도 dict(item) 예외로 제너레이터가
-                # 죽어 남은 심볼 수집이 끊기지 않게 — 불량 item 은 기록 후 스킵.
+                # list 안에 null/문자열/숫자가 섞여도 dict(item) 예외로 남은 수집이
+                # 끊기지 않게 — 불량 item 은 기록 후 스킵.
                 if not isinstance(item, dict):
-                    self._note_failure(fmp_symbol, our_ticker, f"malformed item: {type(item).__name__}")
+                    self._note_failure(
+                        fmp_symbol, our_ticker, f"malformed item: {type(item).__name__}"
+                    )
                     continue
                 record = dict(item)
                 record["our_ticker"] = our_ticker
                 record["market"] = market_for(our_ticker)
                 record["fetched_at"] = fetched_at
                 yield record
+            if len(payload) < self.limit:
+                return  # 마지막 페이지(limit 미만)

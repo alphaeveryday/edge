@@ -28,6 +28,9 @@ class FakeClient:
         self.responses = responses
 
     def get(self, url: str, *, accept: str = "application/json") -> str:
+        page = url.split("page=")[1].split("&")[0] if "page=" in url else "0"
+        if page != "0":  # 페이지네이션 종료 흉내 (응답은 page 0 에만)
+            return "[]"
         symbol = url.split("symbols=")[1].split("&")[0]
         return json.dumps(self.responses.get(symbol, []))
 
@@ -236,7 +239,7 @@ def test_unexpected_failure_still_writes_log(tmp_path):
         ExplodingClient({"NVDA": [ok_item]}),
     )
     # 어댑터의 심볼 격리를 우회해 fetch 자체가 죽는 경우를 검증한다.
-    source.fetch = lambda symbols: (_ for _ in ()).throw(RuntimeError("boom"))
+    source.fetch = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
 
     code = ingest_raw.run(settings, storage, source, "20260701T000000Z")
 

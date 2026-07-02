@@ -33,8 +33,19 @@ def _partition_date(record: dict, fallback_date: str) -> str:
     return basis[:10]
 
 
-def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str) -> int:
-    """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다."""
+def run(
+    settings: Settings,
+    storage: Storage,
+    source: FmpNewsSource,
+    run_id: str,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> int:
+    """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
+
+    from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). None 이면 소스 기본
+    (최신분) — 스케줄 증분·백필 창은 run 엔트리가 정해 넘긴다.
+    """
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
@@ -42,6 +53,8 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         "run_id": run_id,
         "job_name": JOB_NAME,
         "source_vendor": vendor,
+        "window_from": from_date,
+        "window_to": to_date,
         "started_at": started_at.isoformat(),
     }
 
@@ -66,7 +79,7 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
     exit_code = 0
 
     try:
-        for record in source.fetch(settings.targets.symbols):
+        for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
             article_id = make_article_id(
                 record.get("url"), record.get("title") or "", record.get("publishedDate")

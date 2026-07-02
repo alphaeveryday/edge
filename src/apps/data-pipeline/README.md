@@ -15,9 +15,17 @@ uv sync                                  # src/ (Python 루트)에서 의존성 
 uv run --package data-pipeline pytest    # 테스트
 
 # 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
+# 날짜창 미지정 = 증분(어제~오늘, 앱이 계산). 백필은 --from/--to 로 구간 지정.
 DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw
+# 백필 예: 2026-06 한 달
+#   ... run ingest-raw --from 2026-06-01 --to 2026-06-30
 ```
+
+> **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
+> 지원한다. 어댑터는 심볼별로 창을 페이지 끝까지 순회해 고volume 날에도 누락이 없다.
+> 스케줄 실행은 날짜창을 생략하면 되고(앱이 어제~오늘 계산 — EventBridge Scheduler 는
+> 정적 입력만 넣어 동적 날짜를 못 만들기 때문), 과거 적재만 `--from/--to` 로 명시한다.
 
 > uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
 > ```bash

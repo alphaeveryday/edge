@@ -6,17 +6,24 @@ from data_pipeline.config import NewsSource
 from data_pipeline.sources.fmp import FmpNewsSource, market_for
 
 
+def _qs(url: str, key: str, default: str = "") -> str:
+    return url.split(f"{key}=")[1].split("&")[0] if f"{key}=" in url else default
+
+
 class FakeClient:
-    """URL 별 canned 응답. 실제 HTTP 없이 어댑터 로직만 검증한다."""
+    """URL 별 canned 응답. 실제 HTTP 없이 어댑터 로직만 검증한다.
+
+    page 0 에만 응답을 주고 이후는 빈 배열 — 페이지네이션 종료를 흉내낸다."""
 
     def __init__(self, responses: dict[str, str]):
         self.responses = responses  # {fmp_symbol: body}
         self.requested: list[str] = []
 
     def get(self, url: str, *, accept: str = "application/json") -> str:
-        symbol = url.split("symbols=")[1].split("&")[0]
-        self.requested.append(symbol)
-        return self.responses.get(symbol, "[]")
+        self.requested.append(url)
+        if _qs(url, "page", "0") != "0":
+            return "[]"
+        return self.responses.get(_qs(url, "symbols"), "[]")
 
 
 # 심볼 맵은 이제 설정에서 온다 — 테스트도 config 로 주입한다(코드 상수 아님).
@@ -141,6 +148,35 @@ def test_brk_queries_fmp_dash_symbol():
     #      버크셔 뉴스가 조용히 0건이 된다(analysis-engine 데이터 키와도 일치).
     source = _source({})
     assert source.plan(["BRK.B"]) == [("BRK.B", "BRK-B")]
+
+
+def test_request_url_carries_window_and_page():
+    # WHY: 날짜창·페이지가 URL 에 실려야 FMP 가 창을 좁히고 페이지네이션이 동작한다.
+    source = _source({})
+    url = source.request_url("AAPL", page=2, from_date="2026-06-01", to_date="2026-06-15")
+    assert "symbols=AAPL" in url and "page=2" in url
+    assert "from=2026-06-01" in url and "to=2026-06-15" in url
+
+
+def test_fetch_paginates_until_short_page():
+    # WHY: 하루 유입이 limit 을 넘으면 page 0 만 읽어선 뒷부분을 놓친다 — 페이지 끝까지
+    #      순회해야 창 안 기사를 다 수집한다(마지막 페이지 = limit 미만에서 종료).
+    def item(n):
+        return {"title": f"a{n}", "publishedDate": "2026-06-10 00:00:00", "url": f"https://e.com/{n}"}
+
+    class PagingClient:
+        def get(self, url, *, accept="application/json"):
+            page = _qs(url, "page", "0")
+            return {  # limit=2 → page0·page1 꽉 참, page2 부분(1건)에서 종료
+                "0": json.dumps([item(1), item(2)]),
+                "1": json.dumps([item(3), item(4)]),
+                "2": json.dumps([item(5)]),
+            }.get(page, "[]")
+
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k", symbol_map={"NVDA": "NVDA"})
+    source = FmpNewsSource(config, PagingClient(), limit=2)
+    records = list(source.fetch(["NVDA"], "2026-06-01", "2026-06-30"))
+    assert [r["title"] for r in records] == ["a1", "a2", "a3", "a4", "a5"]
 
 
 def test_market_for():
