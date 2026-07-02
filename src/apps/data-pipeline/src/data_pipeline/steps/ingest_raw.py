@@ -73,6 +73,11 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("수집 중단(4xx/429): %s", exc)
         status, error, exit_code = "stopped", str(exc), 1
+    except Exception as exc:
+        # 예기치 못한 실패(재시도 소진 등)도 '결과는 항상 collection_log' 계약을
+        # 지킨다 — 부분 수집분 저장 + status=error 로 남기고 비0 종료.
+        logger.exception("수집 실패")
+        status, error, exit_code = "error", str(exc), 1
 
     saved = 0
     for (market, published_date), records in sorted(partitions.items()):

@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..config import NewsSource
-from .http import PoliteClient
+from .http import PoliteClient, StopFetch
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,8 @@ SYMBOL_MAP: dict[str, str | None] = {
     "CAT": "CAT",
     "GE": "GE",
     "RTX": "RTX",
-    "BRK.B": "BRK.B",
+    # FMP 는 클래스주를 대시로 표기 — analysis-engine 데이터 키(BRK-B)와도 일치.
+    "BRK.B": "BRK-B",
     "JPM": "JPM",
     "V": "V",
 }
@@ -92,7 +93,14 @@ class FmpNewsSource:
         """심볼별로 질의해 raw 항목(dict)을 낸다. 수집 메타를 항목에 덧붙인다."""
         fetched_at = datetime.now(timezone.utc).isoformat()
         for our_ticker, fmp_symbol in self.plan(symbols):
-            body = self.client.get(self.request_url(fmp_symbol))
+            try:
+                body = self.client.get(self.request_url(fmp_symbol))
+            except StopFetch:
+                raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
+            except Exception as exc:
+                # 일시 오류 재시도 소진은 심볼 단위로 격리 — 남은 심볼은 계속.
+                logger.warning("fmp 요청 실패 — 심볼 건너뜀: %s (%s)", fmp_symbol, exc)
+                continue
             try:
                 payload = json.loads(body) if body else []
             except json.JSONDecodeError:

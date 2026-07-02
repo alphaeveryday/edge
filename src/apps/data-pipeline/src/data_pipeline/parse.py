@@ -9,13 +9,28 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+# 추적 파라미터만 제거한다. 쿼리 전체를 지우면 ?id=1 / ?id=2 처럼 쿼리가
+# 기사 식별자인 URL 이 같은 article_id 로 붕괴해 별개 기사가 유실된다.
+_TRACKING_PARAMS = {"fbclid", "gclid", "yclid", "igshid", "mc_cid", "mc_eid"}
+
+
+def _clean_query(query: str) -> str:
+    pairs = [
+        (k, v)
+        for k, v in parse_qsl(query, keep_blank_values=True)
+        if not (k.startswith("utm_") or k in _TRACKING_PARAMS)
+    ]
+    # 정렬: 파라미터 순서만 다른 같은 URL 이 같은 해시로 모이게.
+    return urlencode(sorted(pairs))
 
 
 def normalize_url(url: str | None) -> str | None:
-    """스킴/호스트 소문자화, 끝 슬래시 제거, 쿼리·프래그먼트 제거.
+    """스킴/호스트 소문자화, 끝 슬래시·프래그먼트·추적 파라미터 제거.
 
-    트래킹 파라미터가 붙은 같은 기사 URL 이 같은 article_id 로 모이게 한다.
+    트래킹 파라미터만 다른 같은 기사 URL 은 같은 article_id 로 모이고,
+    식별자성 쿼리(?id=…)는 보존돼 별개 기사로 남는다.
     """
     if not url:
         return None
@@ -24,7 +39,9 @@ def normalize_url(url: str | None) -> str | None:
         return None
     host = parsed.netloc.lower()
     path = parsed.path.rstrip("/") or "/"
-    return urlunsplit((parsed.scheme.lower(), host, path, "", ""))
+    return urlunsplit(
+        (parsed.scheme.lower(), host, path, _clean_query(parsed.query), "")
+    )
 
 
 def url_hash(url: str | None) -> str | None:

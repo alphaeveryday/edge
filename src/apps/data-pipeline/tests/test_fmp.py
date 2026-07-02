@@ -63,6 +63,47 @@ def test_fetch_isolates_bad_json_per_symbol():
     assert [r["our_ticker"] for r in records] == ["NVDA"]
 
 
+def test_fetch_isolates_retry_exhaustion_per_symbol():
+    # WHY: 한 심볼의 일시 오류(5xx 재시도 소진)가 남은 심볼 수집을 끊으면
+    #      런 하나의 장애가 전체 유니버스 유실로 번진다 — 심볼 단위 격리.
+    ok = json.dumps([{"title": "ok", "publishedDate": "2026-07-01 00:00:00"}])
+
+    class FlakyClient(FakeClient):
+        def get(self, url, *, accept="application/json"):
+            if "SSNLF" in url:
+                raise RuntimeError("GET 재시도 소진")
+            return super().get(url, accept=accept)
+
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k")
+    source = FmpNewsSource(config, FlakyClient({"NVDA": ok}))
+    records = list(source.fetch(["005930", "NVDA"]))
+    assert [r["our_ticker"] for r in records] == ["NVDA"]
+
+
+def test_fetch_stops_on_stop_fetch():
+    # WHY: 4xx/429 는 키·쿼터 문제라 심볼 격리 대상이 아니다 — 즉시 전체 중단해야
+    #      무의미한 호출로 쿼터를 더 태우지 않는다.
+    import pytest
+
+    from data_pipeline.sources.http import StopFetch
+
+    class BlockedClient(FakeClient):
+        def get(self, url, *, accept="application/json"):
+            raise StopFetch("HTTP 429")
+
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k")
+    source = FmpNewsSource(config, BlockedClient({}))
+    with pytest.raises(StopFetch):
+        list(source.fetch(["NVDA"]))
+
+
+def test_brk_queries_fmp_dash_symbol():
+    # WHY: FMP 는 클래스주를 대시(BRK-B)로 표기한다 — 점 표기로 질의하면
+    #      버크셔 뉴스가 조용히 0건이 된다(analysis-engine 데이터 키와도 일치).
+    source = _source({})
+    assert source.plan(["BRK.B"]) == [("BRK.B", "BRK-B")]
+
+
 def test_market_for():
     # WHY: market 파티션 키가 갈리는 지점 — KR 숫자 티커 규약이 바뀌면 경로가 깨진다.
     assert market_for("005930") == "KR"

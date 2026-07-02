@@ -109,6 +109,35 @@ def test_disabled_source_skips_with_log(tmp_path):
     assert log["status"] == "skipped"
 
 
+def test_unexpected_failure_still_writes_log(tmp_path):
+    # WHY: '결과는 항상 collection_log' 계약 — 재시도 소진 같은 예기치 못한 실패도
+    #      로그 없이 죽으면 운영에서 런이 있었는지조차 알 수 없다. 부분 수집분은
+    #      저장되고 status=error 로 남아야 한다.
+    ok_item = _item("https://e.com/ok")
+
+    class ExplodingClient(FakeClient):
+        def get(self, url, *, accept="application/json"):
+            if "AAPL" in url:
+                raise RuntimeError("GET 재시도 소진")
+            return super().get(url, accept=accept)
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = FmpNewsSource(
+        settings.news.sources["fmp"].model_copy(update={"api_key": "k"}),
+        ExplodingClient({"NVDA": [ok_item]}),
+    )
+    # 어댑터의 심볼 격리를 우회해 fetch 자체가 죽는 경우를 검증한다.
+    source.fetch = lambda symbols: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    code = ingest_raw.run(settings, storage, source, "20260701T000000Z")
+
+    assert code == 1
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "error"
+    assert "boom" in log["error"]
+
+
 def test_missing_published_date_falls_back_to_fetched_date(tmp_path):
     # WHY: raw 는 전부 보존한다(품질 게이트는 Step2) — 발행시각이 없어도 버리지 않고
     #      수집일 파티션으로라도 남아야 한다.

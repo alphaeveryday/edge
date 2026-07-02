@@ -4,15 +4,31 @@ from data_pipeline.parse import make_article_id, normalize_url, parse_datetime, 
 
 
 def test_normalize_url_collapses_tracking_variants():
-    # WHY: 쿼리(utm 등)·대소문자·끝 슬래시만 다른 같은 기사가 같은 키로 모여야
-    #      중복 저장이 생기지 않는다(S002 AC).
+    # WHY: 추적 파라미터(utm 등)·대소문자·끝 슬래시만 다른 같은 기사가 같은 키로
+    #      모여야 중복 저장이 생기지 않는다(S002 AC).
     variants = [
-        "https://Example.com/news/article-1?utm_source=x",
+        "https://Example.com/news/article-1?utm_source=x&fbclid=y",
         "https://example.com/news/article-1/",
         "https://example.com/news/article-1#top",
     ]
     normalized = {normalize_url(u) for u in variants}
     assert normalized == {"https://example.com/news/article-1"}
+
+
+def test_normalize_url_preserves_identifying_query():
+    # WHY: 쿼리가 기사 식별자인 매체(?id=1 vs ?id=2)에서 쿼리를 지우면 별개
+    #      기사가 같은 article_id 로 붕괴해 두 번째 기사가 유실된다.
+    a = normalize_url("https://example.com/news?id=1")
+    b = normalize_url("https://example.com/news?id=2")
+    assert a != b
+    assert a == "https://example.com/news?id=1"
+
+
+def test_normalize_url_query_order_insensitive():
+    # WHY: 파라미터 순서만 다른 같은 URL 이 다른 해시가 되면 중복 저장이 생긴다.
+    assert normalize_url("https://e.com/n?a=1&b=2") == normalize_url(
+        "https://e.com/n?b=2&a=1"
+    )
 
 
 def test_normalize_url_rejects_non_url():
