@@ -1,6 +1,12 @@
 variable "name" {
-  description = "리소스 접두어 (예: edge-dev-data-pipeline). ECR·로그·SG·역할 이름에 사용"
+  description = "리소스 접두어 (예: data-pipeline — ecs-service 와 같이 bare 앱명). 로그·SG·역할·스케줄 이름에 사용"
   type        = string
+}
+
+variable "ecr_repository_name" {
+  description = "ECR 저장소 이름 (예: edge/data-pipeline — 앱 이미지 네임스페이스). null 이면 name 사용"
+  type        = string
+  default     = null
 }
 
 variable "region" {

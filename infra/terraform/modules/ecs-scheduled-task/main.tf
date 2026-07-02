@@ -6,7 +6,8 @@
 # (예: ingest_raw 와 normalize 는 같은 이미지의 다른 진입 명령).
 
 resource "aws_ecr_repository" "this" {
-  name                 = var.name
+  # 앱 이미지 저장소는 edge/<앱> 네임스페이스(widget-api 등과 동일) — 리소스 이름과 분리.
+  name                 = coalesce(var.ecr_repository_name, var.name)
   image_tag_mutability = var.image_tag_mutability
 
   image_scanning_configuration {

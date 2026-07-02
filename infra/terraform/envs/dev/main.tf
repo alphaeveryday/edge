@@ -95,11 +95,14 @@ resource "aws_secretsmanager_secret" "fmp" {
 module "data_pipeline" {
   source = "../../modules/ecs-scheduled-task"
 
-  name        = "${local.prefix}-data-pipeline"
-  region      = var.region
-  vpc_id      = module.network.vpc_id
-  cluster_arn = module.worker_cluster.cluster_arn
-  subnet_ids  = module.network.private_subnet_ids
+  # 앱 리소스는 bare 앱명(widget-api 등 ecs-service 와 동일 규칙),
+  # 이미지 저장소는 edge/<앱> 네임스페이스(기존 앱 ECR 과 동일).
+  name                = "data-pipeline"
+  ecr_repository_name = "edge/data-pipeline"
+  region              = var.region
+  vpc_id              = module.network.vpc_id
+  cluster_arn         = module.worker_cluster.cluster_arn
+  subnet_ids          = module.network.private_subnet_ids
 
   schedules = {
     ingest-raw = {
