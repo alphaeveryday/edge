@@ -60,9 +60,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
       days = var.raw_expiration_days
     }
 
-    # 버저닝이 켜져 있어 만료는 delete marker 만 남긴다 — 이전 버전도 정리.
+    # 버저닝 때문에 위 만료는 delete marker 만 남기고 객체를 noncurrent 로 바꾼다.
+    # noncurrent 타이머는 그 시점부터 새로 돌므로, 여기에 raw_expiration_days 를 또
+    # 쓰면 실보존이 2배(만료+만료)가 된다 — 짧은 유예만 두고 실제 삭제한다.
     noncurrent_version_expiration {
-      noncurrent_days = var.raw_expiration_days
+      noncurrent_days = var.raw_noncurrent_grace_days
     }
   }
 

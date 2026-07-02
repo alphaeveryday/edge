@@ -14,3 +14,9 @@ variable "raw_expiration_days" {
   type        = number
   default     = 365
 }
+
+variable "raw_noncurrent_grace_days" {
+  description = "만료(delete marker) 후 noncurrent 버전을 실제 삭제하기까지 유예일. 실보존 ≈ raw_expiration_days + 이 값"
+  type        = number
+  default     = 30
+}
