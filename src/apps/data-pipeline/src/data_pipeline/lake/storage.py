@@ -37,6 +37,30 @@ def collection_log_key(source: str, started_date: str, run_id: str) -> str:
     )
 
 
+def canonical_news_articles_key(published_date: str, source_vendor: str) -> str:
+    """canonical 뉴스 메타 파티션 파일 키. run_id 없음 — article_id 병합(멱등)."""
+    return (
+        f"canonical/news/news_articles/published_date={published_date}"
+        f"/source_vendor={source_vendor}/data.parquet"
+    )
+
+
+def canonical_news_bodies_key(published_date: str, source_vendor: str) -> str:
+    """canonical 뉴스 본문 파티션 파일 키 — 메타(news_articles)와 분리된 데이터셋."""
+    return (
+        f"canonical/news/news_article_bodies/published_date={published_date}"
+        f"/source_vendor={source_vendor}/data.parquet"
+    )
+
+
+def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
+    """품질검증 로그(런당 1건) 키."""
+    return (
+        f"operations_archive/data_quality_logs/dataset={dataset}"
+        f"/checked_date={checked_date}/run_id={run_id}/log.json"
+    )
+
+
 # ── 백엔드 ──────────────────────────────────────────────
 class Storage(Protocol):
     """레이크 키-바이트 저장 계약. 키는 위 빌더가 만든 상대경로."""
@@ -44,6 +68,8 @@ class Storage(Protocol):
     def put_bytes(self, key: str, data: bytes) -> None: ...
 
     def get_bytes(self, key: str) -> bytes: ...
+
+    def get_bytes_or_none(self, key: str) -> bytes | None: ...
 
     def list_keys(self, prefix: str) -> list[str]: ...
 
@@ -64,6 +90,11 @@ class LocalStorage:
 
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
+
+    def get_bytes_or_none(self, key: str) -> bytes | None:
+        """없으면 None — canonical 병합의 '기존 파티션 없음' 케이스가 정상 경로라서."""
+        path = self._path(key)
+        return path.read_bytes() if path.is_file() else None
 
     def list_keys(self, prefix: str) -> list[str]:
         base = self._path(prefix)
@@ -96,6 +127,12 @@ class S3Storage:
 
     def get_bytes(self, key: str) -> bytes:  # pragma: no cover - 통합
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def get_bytes_or_none(self, key: str) -> bytes | None:  # pragma: no cover - 통합
+        try:
+            return self.get_bytes(key)
+        except self.client.exceptions.NoSuchKey:
+            return None
 
     def list_keys(self, prefix: str) -> list[str]:  # pragma: no cover - 통합
         paginator = self.client.get_paginator("list_objects_v2")

@@ -3,8 +3,8 @@
 > 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
-> 현재 범위는 **수집 설정 관리 + 뉴스 원본저장(Step1, FMP)**까지다.
-> 정규화·품질검증(Step2)과 가격 수집은 후속이다.
+> 현재 범위는 **수집 설정 관리 + 뉴스 원본저장(Step1) + 정규화·품질검증(Step2)**까지다.
+> ticker 매칭·마트 적재·가격 수집은 후속이다.
 
 ## 실행
 
@@ -17,6 +17,9 @@ uv run --package data-pipeline pytest    # 테스트
 # 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
 DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw
+
+# 정규화·품질검증(Step2) — raw → canonical 병합(멱등)
+uv run --package data-pipeline python -m data_pipeline.run normalize
 ```
 
 > uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
@@ -62,12 +65,16 @@ settings.targets.keywords            # ["금리", ...]
 
 - **raw** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
   run_id 별 append(재현성). 런 내 중복은 article_id 로 제거한다.
-- **수집 로그** — `operations_archive/collection_logs/source=…/started_date=…/run_id=…/log.json`
+- **canonical** — `canonical/news/news_articles/`(메타: 제목·발행시각·언론사·URL)와
+  `canonical/news/news_article_bodies/`(본문) 두 데이터셋(parquet). run_id 없이
+  article_id 키로 파티션 병합(멱등) — 같은 raw 를 다시 돌려도 결과가 같다.
+- **로그** — 수집 `operations_archive/collection_logs/…/log.json`,
+  품질 `operations_archive/data_quality_logs/dataset=news_articles/…/log.json`
+  (게이트 실패 항목은 사유와 함께 남는다).
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 
-- 정규화·품질검증(Step2) — raw → canonical 병합
-- 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
+- ticker 매칭(news_article_mentions)·마트 적재(Postgres)
 - 실제 가격 데이터 수집(여기서는 소스 '위치'만 설정)

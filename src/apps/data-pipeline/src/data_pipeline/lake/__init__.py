@@ -4,8 +4,11 @@ from .storage import (
     LocalStorage,
     S3Storage,
     Storage,
+    canonical_news_articles_key,
+    canonical_news_bodies_key,
     collection_log_key,
     make_storage,
+    quality_log_key,
     raw_news_partition,
 )
 
@@ -16,4 +19,7 @@ __all__ = [
     "make_storage",
     "raw_news_partition",
     "collection_log_key",
+    "canonical_news_articles_key",
+    "canonical_news_bodies_key",
+    "quality_log_key",
 ]
