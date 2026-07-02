@@ -57,10 +57,21 @@ def test_fetch_attaches_collection_meta():
 
 def test_fetch_isolates_bad_json_per_symbol():
     # WHY: 한 심볼의 깨진 응답이 나머지 심볼 수집까지 죽이면 안 된다 — 격리 후 계속.
+    #      단 깨진 응답도 실패로 기록돼야 한다(전 심볼이 깨진 200 → 조용한 성공 금지).
     ok = json.dumps([{"title": "ok", "publishedDate": "2026-07-01 00:00:00"}])
     source = _source({"SSNLF": "{broken", "NVDA": ok})
     records = list(source.fetch(["005930", "NVDA"]))
     assert [r["our_ticker"] for r in records] == ["NVDA"]
+    assert [f["symbol"] for f in source.fetch_failures] == ["SSNLF"]
+
+
+def test_fetch_records_non_list_response_as_failure():
+    # WHY: 200 이지만 배열이 아닌 응답(예: 에러 객체)도 실패다 — 기록 없이 넘기면
+    #      전 심볼이 그런 응답을 받아도 런이 '성공(0건)'으로 남는다.
+    source = _source({"NVDA": json.dumps({"error": "quota"})})
+    records = list(source.fetch(["NVDA"]))
+    assert records == []
+    assert [f["symbol"] for f in source.fetch_failures] == ["NVDA"]
 
 
 def test_fetch_isolates_retry_exhaustion_per_symbol():

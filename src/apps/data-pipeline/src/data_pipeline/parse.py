@@ -34,7 +34,13 @@ def normalize_url(url: str | None) -> str | None:
     """
     if not url:
         return None
-    parsed = urlsplit(url.strip())
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        # 문법이 깨진 URL(예: 닫히지 않은 IPv6 대괄호)은 urlsplit 이 ValueError 를
+        # 낸다 — 여기서 삼켜 None 을 돌려줘야 make_article_id 가 title|published 로
+        # 폴백한다(기사 하나가 런 전체를 죽이지 않게).
+        return None
     if not parsed.scheme or not parsed.netloc:
         return None
     host = parsed.netloc.lower()

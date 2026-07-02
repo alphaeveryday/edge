@@ -34,6 +34,14 @@ def test_normalize_url_query_order_insensitive():
 def test_normalize_url_rejects_non_url():
     # WHY: URL 아닌 문자열을 그대로 해시하면 무의미한 키가 조용히 생긴다.
     assert normalize_url("not a url") is None
+
+
+def test_normalize_url_malformed_returns_none_not_raises():
+    # WHY: 문법이 깨진 URL(닫히지 않은 IPv6 대괄호)은 urlsplit 이 ValueError 를 낸다.
+    #      여기서 새어 나가면 기사 하나가 수집 런 전체를 죽인다 — None 폴백이어야 한다.
+    assert normalize_url("http://[::1") is None
+    # make_article_id 는 그 경우 title|published 폴백으로 안정 id 를 만든다.
+    assert len(make_article_id("http://[::1", "제목", "2026-07-01")) == 64
     assert normalize_url("") is None
     assert normalize_url(None) is None
 

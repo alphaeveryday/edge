@@ -92,6 +92,13 @@ class FmpNewsSource:
             out.append((our_ticker, fmp_symbol))
         return out
 
+    def _note_failure(self, fmp_symbol: str, our_ticker: str, reason: str) -> None:
+        """심볼 단위 실패를 로그로 남기고 fetch_failures 에 기록(격리≠은폐)."""
+        logger.warning("fmp 심볼 건너뜀: %s (%s)", fmp_symbol, reason)
+        self.fetch_failures.append(
+            {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": reason}
+        )
+
     def fetch(self, symbols: list[str]) -> Iterator[dict]:
         """심볼별로 질의해 raw 항목(dict)을 낸다. 수집 메타를 항목에 덧붙인다."""
         self.fetch_failures = []
@@ -104,18 +111,17 @@ class FmpNewsSource:
             except Exception as exc:
                 # 일시 오류 재시도 소진은 심볼 단위로 격리 — 남은 심볼은 계속.
                 # 단, 실패는 기록해 스텝이 런 상태(성공/부분/실패)에 반영한다.
-                logger.warning("fmp 요청 실패 — 심볼 건너뜀: %s (%s)", fmp_symbol, exc)
-                self.fetch_failures.append(
-                    {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": str(exc)}
-                )
+                self._note_failure(fmp_symbol, our_ticker, f"request: {exc}")
                 continue
             try:
                 payload = json.loads(body) if body else []
-            except json.JSONDecodeError:
-                logger.warning("fmp 응답 JSON 파싱 실패 — 건너뜀: %s", fmp_symbol)
+            except json.JSONDecodeError as exc:
+                # 잘못된 200 응답도 실패다 — 기록 없이 넘기면 전 심볼이 깨진 JSON 을
+                # 받아도 런이 '성공(0건)'으로 남는다(조용한 성공 금지).
+                self._note_failure(fmp_symbol, our_ticker, f"json: {exc}")
                 continue
             if not isinstance(payload, list):
-                logger.warning("fmp 응답이 배열이 아님 — 건너뜀: %s", fmp_symbol)
+                self._note_failure(fmp_symbol, our_ticker, "response not a list")
                 continue
             for item in payload:
                 record = dict(item)
