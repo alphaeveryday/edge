@@ -11,6 +11,10 @@ CONFIG = """
 [news.sources.fmp]
 base_url = "https://fmp.example/stable/news/stock"
 
+[news.sources.fmp.symbol_map]
+NVDA = "NVDA"
+AAPL = "AAPL"
+
 [price.source]
 base_url = "https://example.com/price"
 

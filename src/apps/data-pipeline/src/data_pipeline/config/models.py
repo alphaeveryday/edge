@@ -35,6 +35,9 @@ class NewsSource(BaseModel):
     base_url: NonBlankStr  # 필수 — 누락·공백 불가
     enabled: bool = True
     api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → 소스별 심볼(예: FMP 심볼). 설정으로 관리해 종목 추가에 코드 수정
+    # 불필요. 매핑 없는 유니버스 종목은 이 소스가 수집하지 않는다(생략 = 제외).
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
 class PriceSource(BaseModel):

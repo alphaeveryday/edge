@@ -22,33 +22,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = 50
 
-# our_ticker → FMP 심볼. US 는 동일, KR 은 검증된 ADR/OTC 만(None 은 FMP 미질의 —
-# 검증 안 된 ADR 심볼로 엉뚱한 종목 뉴스를 수집하지 않기 위해. 후속 소스가 커버).
-# 프로토타입 seeds/fmp_symbol_map.yaml 이식.
-SYMBOL_MAP: dict[str, str | None] = {
-    # KR — ADR/OTC (검증됨) 또는 None (건너뜀)
-    "005930": "SSNLF",  # 삼성전자 (OTC ADR)
-    "000660": None,  # SK하이닉스 — ADR 미검증
-    "009150": None,  # 삼성전기
-    "402340": None,  # SK스퀘어
-    "373220": None,  # LG에너지솔루션
-    "028260": None,  # 삼성물산
-    "032830": None,  # 삼성생명
-    "105560": "KB",  # KB금융 (NYSE ADR)
-    "055550": "SHG",  # 신한지주 (NYSE ADR)
-    # US — FMP 심볼 동일
-    "NVDA": "NVDA",
-    "AAPL": "AAPL",
-    "MSFT": "MSFT",
-    "CAT": "CAT",
-    "GE": "GE",
-    "RTX": "RTX",
-    # FMP 는 클래스주를 대시로 표기 — analysis-engine 데이터 키(BRK-B)와도 일치.
-    "BRK.B": "BRK-B",
-    "JPM": "JPM",
-    "V": "V",
-}
-
 
 def market_for(our_ticker: str) -> str:
     """KR 티커는 6자리 숫자, US 는 알파벳으로 시작한다."""
@@ -64,6 +37,7 @@ class FmpNewsSource:
         self.base_url = config.base_url
         self.api_key = config.api_key
         self.config_enabled = config.enabled
+        self.symbol_map = config.symbol_map  # our_ticker → FMP 심볼 (설정에서)
         self.client = client
         self.limit = limit
         # fetch 중 심볼 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다.
@@ -80,14 +54,15 @@ class FmpNewsSource:
         return f"{self.base_url}?symbols={fmp_symbol}&limit={self.limit}&apikey={self.api_key}"
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
-        """수집 대상 → [(our_ticker, fmp_symbol)]. 매핑 없는 심볼은 로그 남기고 제외."""
+        """수집 대상 → [(our_ticker, fmp_symbol)]. 매핑 없는 심볼은 FMP 로는 제외.
+
+        매핑 없음은 오류가 아니라 정상(검증 안 된 KR ADR 등은 후속 소스가 커버).
+        """
         out: list[tuple[str, str]] = []
         for our_ticker in symbols:
-            if our_ticker not in SYMBOL_MAP:
-                logger.warning("fmp 심볼 매핑 없음 — 건너뜀: %s", our_ticker)
-                continue
-            fmp_symbol = SYMBOL_MAP[our_ticker]
-            if not fmp_symbol:  # KR 미검증 ADR — 의도된 건너뜀
+            fmp_symbol = self.symbol_map.get(our_ticker)
+            if not fmp_symbol:
+                logger.info("fmp 매핑 없음 — 이 소스는 건너뜀: %s", our_ticker)
                 continue
             out.append((our_ticker, fmp_symbol))
         return out

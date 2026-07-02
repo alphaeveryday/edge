@@ -19,8 +19,18 @@ class FakeClient:
         return self.responses.get(symbol, "[]")
 
 
-def _source(responses: dict[str, str], api_key: str | None = "k") -> FmpNewsSource:
-    config = NewsSource(base_url="https://fmp.example/stable/news/stock", api_key=api_key)
+# 심볼 맵은 이제 설정에서 온다 — 테스트도 config 로 주입한다(코드 상수 아님).
+_MAP = {"005930": "SSNLF", "105560": "KB", "NVDA": "NVDA", "BRK.B": "BRK-B"}
+
+
+def _source(
+    responses: dict[str, str], api_key: str | None = "k", symbol_map: dict | None = None
+) -> FmpNewsSource:
+    config = NewsSource(
+        base_url="https://fmp.example/stable/news/stock",
+        api_key=api_key,
+        symbol_map=_MAP if symbol_map is None else symbol_map,
+    )
     return FmpNewsSource(config, FakeClient(responses))
 
 
@@ -31,9 +41,9 @@ def test_disabled_without_api_key():
     assert _source({}, api_key="k").enabled is True
 
 
-def test_plan_skips_unmapped_and_unverified_symbols():
-    # WHY: 검증 안 된 KR ADR 매핑(None)으로 질의하면 엉뚱한 종목 뉴스가 수집된다 —
-    #      매핑된 심볼만 질의 계획에 올라야 한다.
+def test_plan_skips_unmapped_symbols():
+    # WHY: 설정 심볼맵에 없는 종목(검증 안 된 KR ADR·오타)은 FMP 질의에 오르면 안 된다 —
+    #      매핑된 심볼만 계획에 남는다(나머지는 이 소스가 건너뜀).
     source = _source({})
     plan = source.plan(["005930", "000660", "NVDA", "UNKNOWN"])
     assert plan == [("005930", "SSNLF"), ("NVDA", "NVDA")]
@@ -101,7 +111,7 @@ def test_fetch_isolates_retry_exhaustion_per_symbol():
                 raise RuntimeError("GET 재시도 소진")
             return super().get(url, accept=accept)
 
-    config = NewsSource(base_url="https://fmp.example/x", api_key="k")
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k", symbol_map=_MAP)
     source = FmpNewsSource(config, FlakyClient({"NVDA": ok}))
     records = list(source.fetch(["005930", "NVDA"]))
     assert [r["our_ticker"] for r in records] == ["NVDA"]
@@ -120,7 +130,7 @@ def test_fetch_stops_on_stop_fetch():
         def get(self, url, *, accept="application/json"):
             raise StopFetch("HTTP 429")
 
-    config = NewsSource(base_url="https://fmp.example/x", api_key="k")
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k", symbol_map=_MAP)
     source = FmpNewsSource(config, BlockedClient({}))
     with pytest.raises(StopFetch):
         list(source.fetch(["NVDA"]))

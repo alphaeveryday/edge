@@ -22,7 +22,6 @@ from ..sources import FmpNewsSource, StopFetch
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_raw"
-SOURCE = "fmp"
 
 
 def _partition_date(record: dict, fallback_date: str) -> str:
@@ -38,10 +37,11 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다."""
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
+    vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
         "run_id": run_id,
         "job_name": JOB_NAME,
-        "source_vendor": SOURCE,
+        "source_vendor": vendor,
         "started_at": started_at.isoformat(),
     }
 
@@ -50,8 +50,8 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
         # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
         logger.warning("fmp 비활성(api_key 미주입) — 수집 건너뜀")
         try:
-            _write_log(storage, started_date, run_id, {**log, "status": "skipped",
-                                                       "reason": "fmp disabled or no api_key"})
+            _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
+                                                               "reason": "fmp disabled or no api_key"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
         return 0
@@ -97,7 +97,7 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
     saved = 0
     try:
         for (market, published_date), records in sorted(partitions.items()):
-            key = f"{raw_news_partition(SOURCE, market, published_date, run_id)}/part-00000.ndjson"
+            key = f"{raw_news_partition(vendor, market, published_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
             saved += len(records)
@@ -119,7 +119,7 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한
     # 비0 종료로 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
     try:
-        _write_log(storage, started_date, run_id, {
+        _write_log(storage, vendor, started_date, run_id, {
             **log,
             "status": status,
             "error": error,
@@ -141,6 +141,6 @@ def run(settings: Settings, storage: Storage, source: FmpNewsSource, run_id: str
     return exit_code
 
 
-def _write_log(storage: Storage, started_date: str, run_id: str, payload: dict) -> None:
-    key = collection_log_key(SOURCE, started_date, run_id)
+def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
+    key = collection_log_key(vendor, started_date, run_id)
     storage.put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))

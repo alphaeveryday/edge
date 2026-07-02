@@ -12,6 +12,23 @@
 base_url = "https://financialmodelingprep.com/stable/news/stock"
 enabled = true
 
+# our_ticker → FMP 심볼. 검증된 매핑만 둔다 — 여기 없는 유니버스 종목은 FMP 로
+# 수집하지 않는다(검증 안 된 KR ADR 은 생략 = 제외, 후속 소스가 커버).
+# US 는 심볼 동일, BRK.B 는 FMP 대시 표기(BRK-B, analysis-engine 데이터 키와 일치).
+[news.sources.fmp.symbol_map]
+"005930" = "SSNLF"  # 삼성전자 (OTC ADR)
+"105560" = "KB"     # KB금융 (NYSE ADR)
+"055550" = "SHG"    # 신한지주 (NYSE ADR)
+NVDA = "NVDA"
+AAPL = "AAPL"
+MSFT = "MSFT"
+CAT = "CAT"
+GE = "GE"
+RTX = "RTX"
+"BRK.B" = "BRK-B"
+JPM = "JPM"
+V = "V"
+
 [news.sources.naver]
 base_url = "https://openapi.naver.com/v1/search/news.json"
 enabled = true
@@ -24,8 +41,8 @@ enabled = true
 base_url = "https://api.example-price.com/v1"
 enabled = true
 
-# 수집 유니버스: US 9 + KR 9. FMP 심볼 매핑(KR ADR)은 sources/fmp.py SYMBOL_MAP —
-# 매핑이 검증되지 않은 KR 종목은 FMP 수집에서 건너뛴다(후속 소스가 커버).
+# 수집 유니버스: US 9 + KR 9(소스 무관). 소스별 심볼 번역은 각 소스의 symbol_map
+# 참고 — targets 에 있어도 그 소스에 매핑이 없으면 해당 소스는 건너뛴다.
 [targets]
 symbols = [
     # KR
