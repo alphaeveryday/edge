@@ -77,3 +77,24 @@ output "schema_migrate_log_group" {
   value       = module.schema_migrate.log_group_name
 }
 
+# ── news-pipeline 워커 ─────────────────────────────────
+output "news_pipeline_state_machine_arn" {
+  description = "수동 실행·컷오버 검증에 사용"
+  value       = module.news_pipeline.state_machine_arn
+}
+
+output "news_pipeline_raw_bucket" {
+  description = "데이터 이관(s3 sync) 대상"
+  value       = aws_s3_bucket.pipeline_raw.id
+}
+
+output "news_pipeline_curated_bucket" {
+  description = "데이터 이관(s3 sync) 대상"
+  value       = aws_s3_bucket.pipeline_curated.id
+}
+
+output "news_pipeline_alarms_topic_arn" {
+  description = "실패 알림 SNS — 이메일 구독은 수동으로 건다"
+  value       = module.news_pipeline.sns_topic_arn
+}
+

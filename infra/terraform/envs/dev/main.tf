@@ -226,3 +226,106 @@ module "super_admin_api" {
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
 }
+
+# ── news-pipeline 워커 (CDK 스택에서 이관, ALPHA-304) ────
+# SFN 8단계 배치가 edge-dev-worker 클러스터에서 Fargate one-off task 로 돈다.
+# 구 CDK 스택(news-pipeline-dev-*)과 병행 배포 → 데이터 이관 → 컷오버 순서라,
+# 스케줄은 기본 DISABLED 로 만들어지고 컷오버 때 schedule_enabled=true 로 켠다.
+
+data "aws_caller_identity" "current" {}
+
+# raw/curated 버킷 — 버킷명은 글로벌 유니크라 계정 ID 를 접미사로.
+# force_destroy 는 dev 전용(스택 철거 시 오브젝트째 삭제 허용).
+resource "aws_s3_bucket" "pipeline_raw" {
+  bucket        = "${local.prefix}-pipeline-raw-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket" "pipeline_curated" {
+  bucket        = "${local.prefix}-pipeline-curated-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+module "news_pipeline" {
+  source = "../../modules/sfn-pipeline"
+
+  name   = "${local.prefix}-worker"
+  region = var.region
+
+  vpc_id = module.network.vpc_id
+  # NAT 비용 회피: 퍼블릭 서브넷 + 퍼블릭 IP 로 아웃바운드(이미지 pull·외부 API).
+  subnet_ids       = module.network.public_subnet_ids
+  assign_public_ip = true
+
+  container_image  = var.news_pipeline_image
+  cpu_architecture = "X86_64" # ECR amd64 이미지와 일치
+
+  # 현행 CDK 태스크 정의와 동일한 앱 설정. DB 는 통합 RDS(market 스키마)로 교체 —
+  # 앱은 DB_SECRET_ARN_REF 시크릿을 런타임에 직접 읽는다(주입 아님 → 태스크 역할 권한).
+  environment = {
+    PROJECT                 = "news-pipeline"
+    ENV                     = "dev"
+    AWS_REGION_NAME         = var.region
+    RAW_BUCKET              = aws_s3_bucket.pipeline_raw.id
+    CURATED_BUCKET          = aws_s3_bucket.pipeline_curated.id
+    DB_SECRET_ARN_REF       = module.rds.master_user_secret_arn
+    DB_SCHEMA               = "market"
+    NEWS_SOURCES            = "google_news,fmp"
+    NEWS_SOURCE             = "stockinfo7"
+    NER_ENABLED             = "false"
+    RUN_MODE                = "incremental"
+    RUN_ID                  = "manual"
+    FMP_PRICE_LOOKBACK_DAYS = "7"
+    FMP_FINANCIAL_LIMIT     = "8"
+    PREFLIGHT_TERMS_OK      = "true"
+    CONTACT_EMAIL           = "asm.alphaeveryday@gmail.com"
+  }
+  inference_environment = {
+    TRANSFORMERS_CACHE = "/tmp/hf"
+    HF_HOME            = "/tmp/hf"
+    ARTIFACTS_DIR      = "model_artifacts_temporal"
+    LLM_BASE_URL       = "https://api.openai.com/v1"
+    LLM_MODEL          = "gpt-4o-mini"
+  }
+
+  # API 키 시크릿은 수동 생성 자원이라 CDK 스택 삭제와 무관 — 기존 것을 그대로 참조.
+  secrets = {
+    FMP_API_KEY = var.news_pipeline_fmp_secret_arn
+  }
+  inference_secrets = {
+    OPENAI_API_KEY = var.news_pipeline_openai_secret_arn
+    LLM_API_KEY    = var.news_pipeline_openai_secret_arn
+  }
+  secret_arns = [
+    var.news_pipeline_fmp_secret_arn,
+    var.news_pipeline_openai_secret_arn,
+  ]
+  runtime_secret_arns = [module.rds.master_user_secret_arn]
+
+  s3_bucket_arns = [
+    aws_s3_bucket.pipeline_raw.arn,
+    aws_s3_bucket.pipeline_curated.arn,
+  ]
+
+  # 현행 SFN 8단계와 동일한 순서. analyze_daily 만 고사양(추론) 태스크 정의.
+  steps = [
+    { command = "collect" },
+    { command = "alias_map" },
+    { command = "persist" },
+    { command = "fmp_price_collect" },
+    { command = "fmp_financial_collect" },
+    { command = "us_news_ingest" },
+    { command = "compute_ff5" },
+    { command = "analyze_daily", inference = true },
+  ]
+}
+
+# 워커 task SG → RDS 5432 (persist 등 DB 쓰는 단계). env 레벨 독립 리소스(순환 의존 회피).
+resource "aws_vpc_security_group_ingress_rule" "rds_from_news_pipeline" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.news_pipeline.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "news-pipeline worker tasks to postgres"
+}

@@ -59,3 +59,18 @@ variable "github_oidc_provider_arn" {
   type        = string
   default     = null
 }
+
+variable "news_pipeline_image" {
+  description = "news-pipeline 워커 ECR 이미지 URI(:태그 포함)"
+  type        = string
+}
+
+variable "news_pipeline_fmp_secret_arn" {
+  description = "FMP API 키 시크릿 ARN (수동 생성 자원 참조)"
+  type        = string
+}
+
+variable "news_pipeline_openai_secret_arn" {
+  description = "OpenAI API 키 시크릿 ARN (수동 생성 자원 참조)"
+  type        = string
+}
