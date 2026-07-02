@@ -25,9 +25,9 @@ variable "super_admin_api_image" {
 }
 
 variable "lake_bucket_name" {
-  description = "데이터 레이크 버킷 이름(전역 유일 — 선점 시 변경)"
+  description = "데이터 레이크 버킷 이름(전역 유일). 계정 ID 접미사로 충돌 회피 — market-data 버킷과 동일 패턴"
   type        = string
-  default     = "stock-ai-lake"
+  default     = "edge-dev-lake-393229433969"
 }
 
 variable "alb_allowed_cidrs" {

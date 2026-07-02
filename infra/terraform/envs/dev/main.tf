@@ -76,7 +76,7 @@ module "worker_cluster" {
   namespace_name = "edge-worker.internal"
 }
 
-# ── 데이터 레이크 (단일 stock-ai-lake 버킷) ─────────────
+# ── 데이터 레이크 (단일 버킷, edge-dev-lake-*) ──────────
 module "data_lake" {
   source      = "../../modules/s3-lake"
   bucket_name = var.lake_bucket_name
