@@ -76,7 +76,7 @@ module "worker_cluster" {
   namespace_name = "edge-worker.internal"
 }
 
-# ── 데이터 레이크 (수집→분석 공유 저장소, edge-market-data-lake-*) ──
+# ── 데이터 레이크 (수집→분석 공유 저장소, edge-data-lake-*) ──
 module "data_lake" {
   source      = "../../modules/s3-lake"
   bucket_name = var.lake_bucket_name

@@ -25,9 +25,9 @@ variable "super_admin_api_image" {
 }
 
 variable "lake_bucket_name" {
-  description = "데이터 레이크 버킷 이름(전역 유일). 파이프라인 수집→분석 소비의 공유 데이터 저장소. 계정 ID 접미사로 충돌 회피"
+  description = "데이터 레이크 버킷 이름(전역 유일). 파이프라인 수집→분석 소비의 공유 데이터(뉴스·가격·재무) 저장소. 계정 ID 접미사로 충돌 회피"
   type        = string
-  default     = "edge-market-data-lake-393229433969"
+  default     = "edge-data-lake-393229433969"
 }
 
 variable "alb_allowed_cidrs" {
