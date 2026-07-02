@@ -11,6 +11,12 @@
 # 걷어내고 감지 step으로 되돌려야 한다 — path로 걸러 스킵된 required check는 GitHub에서
 # Pending으로 남아 PR을 영구 차단한다.
 #
+# 한계(감수): paths 필터는 diff의 앞 300개 파일까지만 평가한다(GitHub 제약). 300개 초과 대형 PR에서
+# 스키마 변경이 그 밖에 있으면 이 워크플로가 실행되지 않고 guard·검증이 건너뛰어질 수 있다.
+# 이 창은 배포 파이프라인의 flywayValidate/Migrate가 fail-loud 백스톱으로 닫는다(발견이 배포 시점으로
+# 늦어질 뿐 조용히 통과하지 않는다). required check가 아니어서 이 체크에 머지 차단력이 없는 현 상태에서는
+# 감수 가능한 트레이드오프다 — required 도입 시 어차피 위 주의에 따라 무조건 실행으로 되돌린다.
+#
 # guard는 별도 job이 아니라 이 job의 step으로 둔다. 별도 job + needs로 걸면 guard 실패 시 이 job이
 # skip되어 (required check 도입 시) skipped를 "통과"로 오인할 수 있다. step으로 두면 guard 실패 = job red.
 name: schema-validate
