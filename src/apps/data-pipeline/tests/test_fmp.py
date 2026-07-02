@@ -150,6 +150,27 @@ def test_brk_queries_fmp_dash_symbol():
     assert source.plan(["BRK.B"]) == [("BRK.B", "BRK-B")]
 
 
+def test_fetch_flags_truncation_at_max_pages(monkeypatch):
+    # WHY: 백필 창이 커서 MAX_PAGES 를 초과하면 뒷부분을 조용히 버리면 안 된다 —
+    #      절단을 실패로 기록해 런이 partial 로 드러나야 한다(fail loud).
+    from data_pipeline.sources import fmp as fmp_mod
+    monkeypatch.setattr(fmp_mod, "MAX_PAGES", 3)
+
+    full = json.dumps([{"title": "x", "publishedDate": "2026-06-10 00:00:00",
+                        "url": "https://e.com/x"}])  # limit=1 → 매 페이지가 '꽉 참'
+
+    class AlwaysFull:
+        def get(self, url, *, accept="application/json"):
+            return full
+
+    config = NewsSource(base_url="https://fmp.example/x", api_key="k", symbol_map={"NVDA": "NVDA"})
+    source = FmpNewsSource(config, AlwaysFull(), limit=1)
+    records = list(source.fetch(["NVDA"], "2026-06-01", "2026-06-30"))
+
+    assert len(records) == 3  # MAX_PAGES(3) × limit(1) 까지만
+    assert source.fetch_failures and "MAX_PAGES" in source.fetch_failures[0]["error"]
+
+
 def test_request_url_carries_window_and_page():
     # WHY: 날짜창·페이지가 URL 에 실려야 FMP 가 창을 좁히고 페이지네이션이 동작한다.
     source = _source({})

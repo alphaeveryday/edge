@@ -96,9 +96,10 @@ class FmpNewsSource:
     ) -> Iterator[dict]:
         """심볼별로 [from_date, to_date] 창을 페이지 끝까지 순회해 raw 항목을 낸다.
 
-        날짜창을 안 주면(둘 다 None) FMP 최신분(page 0)만 — 로컬/테스트용. 스케줄
-        실행은 run 엔트리가 증분 창(어제~오늘)을, 백필은 명시 창을 넘긴다. 심볼 단위
-        실패는 격리·기록(격리≠은폐), StopFetch(4xx/429)만 전체 중단.
+        날짜창을 안 주면(둘 다 None) 창 필터 없이 순회한다(run 엔트리는 항상 증분
+        창을 채우므로 이 경로는 사실상 테스트용). 스케줄 실행은 run 엔트리가 증분
+        창(어제~오늘)을, 백필은 명시 창을 넘긴다. 심볼 단위 실패는 격리·기록
+        (격리≠은폐), StopFetch(4xx/429)만 전체 중단.
         """
         self.fetch_failures = []
         fetched_at = datetime.now(timezone.utc).isoformat()
@@ -125,7 +126,8 @@ class FmpNewsSource:
         """한 심볼의 창을 page 0..N 순회. 마지막 페이지(빈/limit 미만)에서 멈춘다.
 
         페이지 실패는 예외로 올려 호출부가 심볼 단위로 격리한다(앞 페이지 수집분은
-        보존). MAX_PAGES 안전 상한으로 무한 페이지를 막는다."""
+        보존). MAX_PAGES 안전 상한으로 무한 페이지를 막되, 상한에 걸려 창이 절단되면
+        조용히 버리지 않고 실패로 기록한다(fail loud)."""
         for page in range(MAX_PAGES):
             body = self.client.get(
                 self.request_url(fmp_symbol, page=page, from_date=from_date, to_date=to_date)
@@ -153,3 +155,9 @@ class FmpNewsSource:
                 yield record
             if len(payload) < self.limit:
                 return  # 마지막 페이지(limit 미만)
+        # 루프가 MAX_PAGES 를 다 돌았는데도 early return 이 없었다 = 마지막 페이지가
+        # 꽉 참 → 창에 더 남았을 수 있다. 조용히 버리지 않고 실패로 기록해 런을 partial
+        # 로 드러낸다(백필 창을 좁히거나 MAX_PAGES 를 올려 재실행하라는 신호).
+        self._note_failure(
+            fmp_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)"
+        )
