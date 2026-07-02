@@ -84,7 +84,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
    - `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`(=`gha_deploy_role_arn`), `ECS_CLUSTER_ARN`, `MIGRATE_TASK_FAMILY`, `MIGRATE_ECR_REPOSITORY`, `MIGRATE_SUBNET_IDS`, `MIGRATE_SECURITY_GROUP_ID`, `MIGRATE_LOG_GROUP`.
    - DB 접속 비밀번호는 여기 없다(RDS 시크릿에서 task가 직접 읽음).
 4. **prod 승인 게이트**: `production` environment에 **Required reviewers**를 지정한다(배포 브랜치를 `main`으로 제한). prod는 별도 prod env terraform(선행 티켓) 적용 후 동일한 vars를 `production` environment에 채운다.
-- (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다.
+- (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (현재 private + free 플랜이라 branch protection 불가 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
   - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
 
 ### JVM/Spring 앱은 schema **consumer**다
