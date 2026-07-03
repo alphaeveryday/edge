@@ -59,9 +59,9 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 공유 DB(dev/staging·prod)를 바꾸는 주체는 각 JVM/Spring 앱이 아니라 CI/CD다.
 
 - **merge 자체는 DB를 바꾸지 않는다.** DB 변경은 파이프라인이 마이그레이션을 실행할 때만 일어난다.
-- **dev 머지** → dev/staging DB 마이그레이션 대상 (`.github/workflows/deploy-dev.yml`).
-- **main 머지** → prod DB 마이그레이션 대상 (`.github/workflows/deploy-prod.yml`, 승인 게이트 후).
+- **dev 머지** → dev DB 마이그레이션 대상 (`.github/workflows/deploy-dev.yml`, **`src/libs/schema/` 변경 커밋에서만** 실행).
 - **PR(→dev/main)** → ephemeral Postgres에 `:libs:schema:flywayMigrate`+`flywayValidate` 실제 적용·검증만 한다 (`.github/workflows/schema-validate.yml`). secret을 쓰지 않고 운영 DB는 건드리지 않는다.
+- **prod 마이그레이션(main 머지 → prod DB, 승인 게이트 후)** 은 목표 토폴로지지만 아직 워크플로가 없다. prod 인프라(RDS·클러스터·`production` environment)가 생기면 별도 티켓에서 dev와 같은 패턴으로 재도입한다(현재는 dev 인프라만 존재).
 
 ### 배포 시 마이그레이션은 VPC 내부 ECS one-off task에서 실행한다
 
@@ -83,7 +83,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 3. **environment 변수(vars) 등록** — `terraform output` 값을 GitHub `development` environment의 **variables**(secret 아님, 식별자)로 넣는다:
    - `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`(=`gha_deploy_role_arn`), `ECS_CLUSTER_ARN`, `MIGRATE_TASK_FAMILY`, `MIGRATE_ECR_REPOSITORY`, `MIGRATE_SUBNET_IDS`, `MIGRATE_SECURITY_GROUP_ID`, `MIGRATE_LOG_GROUP`.
    - DB 접속 비밀번호는 여기 없다(RDS 시크릿에서 task가 직접 읽음).
-4. **prod 승인 게이트**: `production` environment에 **Required reviewers**를 지정한다(배포 브랜치를 `main`으로 제한). prod는 별도 prod env terraform(선행 티켓) 적용 후 동일한 vars를 `production` environment에 채운다.
+4. **prod 승인 게이트(후속)**: prod 인프라가 아직 없어 prod 마이그레이션 워크플로는 두지 않는다. prod env terraform(선행 티켓) 적용 후, `production` environment에 **Required reviewers**를 지정하고(배포 브랜치를 `main`으로 제한) 동일한 vars를 채운 뒤 dev와 같은 패턴의 prod 마이그레이션 워크플로를 재도입한다.
 - (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (현재 private + free 플랜이라 branch protection 불가 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
   - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
 

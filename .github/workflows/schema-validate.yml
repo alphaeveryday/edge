@@ -36,7 +36,6 @@ on:
       - "src/gradle.properties"
       - ".github/workflows/schema-validate.yml"
       - ".github/workflows/deploy-dev.yml"
-      - ".github/workflows/deploy-prod.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret도 쓰지 않는 검증 전용 워크플로).
 permissions:
