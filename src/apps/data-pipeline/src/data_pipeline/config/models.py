@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
@@ -35,6 +35,9 @@ class NewsSource(BaseModel):
     base_url: NonBlankStr  # 필수 — 누락·공백 불가
     enabled: bool = True
     api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → 소스별 심볼(예: FMP 심볼). 설정으로 관리해 종목 추가에 코드 수정
+    # 불필요. 매핑 없는 유니버스 종목은 이 소스가 수집하지 않는다(생략 = 제외).
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
 class PriceSource(BaseModel):
@@ -61,6 +64,28 @@ class PriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: PriceSource
+
+
+class StorageConfig(BaseModel):
+    """레이크 스토리지 백엔드 선택.
+
+    MVP 개발은 local(스텁)로 돌리고, 배포는 env 로 s3 + bucket 을 주입한다:
+        DATA_PIPELINE_STORAGE__BACKEND=s3
+        DATA_PIPELINE_STORAGE__BUCKET=stock-ai-lake
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: Literal["local", "s3"] = "local"
+    local_root: NonBlankStr = ".lake"  # local 백엔드의 루트 디렉터리
+    bucket: str | None = None  # s3 백엔드 필수
+
+    @model_validator(mode="after")
+    def _s3_requires_bucket(self) -> StorageConfig:
+        # bucket 없이 s3 로 부팅하면 첫 put 에서야 죽는다 — 로드 시점에 fail loud.
+        if self.backend == "s3" and not (self.bucket or "").strip():
+            raise ValueError("storage.backend=s3 인데 storage.bucket 이 없다")
+        return self
 
 
 class CollectionTargets(BaseModel):
