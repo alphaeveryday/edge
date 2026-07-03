@@ -1,6 +1,5 @@
 # super-admin-api dev 배포 — 자기 코드(또는 모든 JVM 앱 이미지에 영향을 주는 공유 경로)가
 # 바뀐 dev push 에서만 트리거되는 독립 배포. 절차는 deploy-app.yml 한 벌을 재사용한다.
-# 같은 커밋의 schema-migrate 성공을 기다린 뒤 배포한다.
 #
 # paths 필터 주의: diff 를 계산할 수 없는 push(force 등)에서는 GitHub 이 fail-open 으로
 # 워크플로를 실행한다 — 과잉 배포가 누락보다 안전하다는 방침과 일치.
