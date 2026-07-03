@@ -49,3 +49,24 @@ variable "log_group_arn" {
   description = "마이그레이션 로그 그룹 ARN (워크플로가 로그를 읽기 위함)"
   type        = string
 }
+
+# ── 앱 배포(deploy-app.yml) 확장 — 모두 옵션(기본 빈 리스트, 비우면 앱 배포 권한 없음) ──
+# 이 역할은 schema-migrate 와 앱 배포가 공유한다(같은 AWS_DEPLOY_ROLE_ARN). 아래를 채우면
+# 마이그레이션 권한에 더해 앱 이미지 push·서비스 롤링 배포·앱 역할 PassRole 을 부여한다.
+variable "app_ecr_repository_arns" {
+  description = "앱 배포가 이미지를 push 할 ECR 저장소 ARN 목록 (edge/<app>). 비우면 앱 ECR 권한 없음."
+  type        = list(string)
+  default     = []
+}
+
+variable "app_service_arns" {
+  description = "앱 롤링 배포(ecs:UpdateService/DescribeServices) 대상 ECS 서비스 ARN 목록. 비우면 권한 없음."
+  type        = list(string)
+  default     = []
+}
+
+variable "app_pass_role_arns" {
+  description = "앱 task 정의가 참조하는 execution·task 역할 ARN 목록 (PassRole 추가 허용)."
+  type        = list(string)
+  default     = []
+}

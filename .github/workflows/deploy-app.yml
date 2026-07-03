@@ -16,10 +16,11 @@
 # 새 태그로 task 정의 리비전을 등록하고 서비스를 업데이트한 뒤 안정화를 폴링한다.
 # 주의: run 재실행도 새 버전을 만든다(멱등 아님) — 같은 커밋을 재배포하면 버전이 한 번 더 오른다.
 #
-# 선행 조건(별도 티켓, ALPHA-303 참고): github-oidc-deploy 역할은 현재 schema-migrate 전용
-# 스코프다. 앱 배포에는 edge/<app> ECR push·DescribeImages(버전 조회),
-# ecs:UpdateService/DescribeServices, 앱 task·execution 역할 PassRole 이 추가로 필요하다. 인프라 확장 전까지 이 워크플로는
-# AccessDenied 로 실패한다 — 가짜 성공 신호를 만들지 않는다.
+# 배포 역할 권한(ALPHA-303 완료): github-oidc-deploy 역할(schema-migrate 와 공유)에 앱 배포
+# 권한이 부여돼 있다 — edge/<app> ECR push·DescribeImages(버전 조회),
+# ecs:UpdateService/DescribeServices(서비스 ARN 스코프), 앱 task·execution 역할 PassRole.
+# (infra/terraform/modules/github-oidc-deploy 의 app_* 변수 · envs/dev 에서 3개 API 배선.)
+# gateway 는 dev ECS 서비스가 생기면 같은 방식으로 app_* 목록에 추가한다.
 name: deploy-app
 
 on:

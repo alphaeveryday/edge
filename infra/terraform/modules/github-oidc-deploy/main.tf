@@ -1,6 +1,8 @@
 # GitHub Actions → AWS 를 OIDC(웹 아이덴티티)로 잇는 배포 역할.
 # 장기 액세스 키 없이, 지정한 repo 의 지정한 브랜치 워크플로만 이 역할을 assume 한다.
-# 권한은 "마이그레이션 이미지 push + ECS one-off RunTask" 에 필요한 최소로 좁힌다.
+# 권한은 최소 스코프다: 마이그레이션(이미지 push + ECS one-off RunTask)에 더해, app_* 변수를
+# 채우면 앱 배포(앱 이미지 push + 서비스 롤링 UpdateService + 앱 역할 PassRole)까지 부여한다.
+# schema-migrate 와 앱 배포가 이 한 역할을 공유한다(같은 AWS_DEPLOY_ROLE_ARN).
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
@@ -68,7 +70,7 @@ data "aws_iam_policy_document" "permissions" {
     resources = ["*"]
   }
 
-  # 마이그레이션 저장소에 이미지 push/pull.
+  # 마이그레이션 + 앱(app_ecr_repository_arns) 저장소에 이미지 push/pull.
   statement {
     sid = "EcrPushPull"
     actions = [
@@ -79,10 +81,10 @@ data "aws_iam_policy_document" "permissions" {
       "ecr:PutImage",
       "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer",
-      # 워크플로의 "이미지 이미 존재?" 가드가 쓰는 조회 권한(없으면 AccessDenied → 재실행 시 push 실패).
+      # 워크플로의 "이미지 이미 존재?" 가드·버전 조회가 쓰는 권한(없으면 AccessDenied → push 실패).
       "ecr:DescribeImages",
     ]
-    resources = [var.ecr_repository_arn]
+    resources = concat([var.ecr_repository_arn], var.app_ecr_repository_arns)
   }
 
   # 새 이미지로 task 정의 리비전 등록. Register/Describe 는 리소스 스코프를 지원하지 않아 * 이다.
@@ -116,11 +118,22 @@ data "aws_iam_policy_document" "permissions" {
     }
   }
 
-  # task 정의가 execution·task 역할을 쓰도록 PassRole. 서비스 조건으로 좁힌다.
+  # 앱 롤링 배포 — task 정의 교체 후 서비스 업데이트 + 안정화 폴링. app_service_arns 가 있을 때만.
+  # 리소스가 서비스 ARN(클러스터명 포함)으로 완전 특정되므로 별도 클러스터 조건은 불필요.
+  dynamic "statement" {
+    for_each = length(var.app_service_arns) > 0 ? [1] : []
+    content {
+      sid       = "AppEcsRollingDeploy"
+      actions   = ["ecs:UpdateService", "ecs:DescribeServices"]
+      resources = var.app_service_arns
+    }
+  }
+
+  # task 정의가 execution·task 역할을 쓰도록 PassRole(마이그레이션 + 앱 역할). 서비스 조건으로 좁힌다.
   statement {
     sid       = "PassEcsRoles"
     actions   = ["iam:PassRole"]
-    resources = var.pass_role_arns
+    resources = concat(var.pass_role_arns, var.app_pass_role_arns)
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"

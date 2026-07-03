@@ -31,6 +31,20 @@ data "aws_ecr_repository" "schema_migrate" {
   name = "edge/schema-migrate"
 }
 
+# 앱 배포(deploy-app.yml)가 이미지를 push 할 저장소 — foundation 소유(edge/<app>).
+# CD 배포 역할에 push 권한을 스코프하기 위해 ARN 을 조회한다.
+data "aws_ecr_repository" "widget_api" {
+  name = "edge/widget-api"
+}
+
+data "aws_ecr_repository" "tenant_console_api" {
+  name = "edge/tenant-console-api"
+}
+
+data "aws_ecr_repository" "super_admin_api" {
+  name = "edge/super-admin-api"
+}
+
 # 엣지 도메인 → ALB (ALIAS)
 resource "aws_route53_record" "edge" {
   zone_id = data.aws_route53_zone.main.zone_id
@@ -211,6 +225,23 @@ module "gha_deploy_dev" {
   task_definition_family = module.schema_migrate.task_definition_family
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
+
+  # 앱 배포(deploy-app.yml) 권한 — 3개 API(gateway 는 ECS 서비스 생기면 추가).
+  app_ecr_repository_arns = [
+    data.aws_ecr_repository.widget_api.arn,
+    data.aws_ecr_repository.tenant_console_api.arn,
+    data.aws_ecr_repository.super_admin_api.arn,
+  ]
+  app_service_arns = [
+    module.widget_api.service_arn,
+    module.tenant_console_api.service_arn,
+    module.super_admin_api.service_arn,
+  ]
+  app_pass_role_arns = [
+    module.widget_api.execution_role_arn, module.widget_api.task_role_arn,
+    module.tenant_console_api.execution_role_arn, module.tenant_console_api.task_role_arn,
+    module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
+  ]
 }
 
 # ── news-pipeline (Step Functions 배치) ─────────────────
