@@ -103,4 +103,4 @@ admin은 **최고 권한(cross-tenant)** 표면이지만 운영자는 **소수·
 
 ## 6. 범위 밖
 - **클라우드/배포 토폴로지** — 리전, 네트워크, 매니지드 서비스, 스케일링, 시크릿 관리 인프라. 토폴로지·단계 스택은 [[adr/0009-aws-deployment-topology]](제안됨), 세부는 infra/terraform/README.md.
-- **CD(지속적 배포)** — dev 는 GitHub Actions 로 구현됐다: dev push 마다 `deploy-dev.yml`(스키마 migrate)이 먼저 돌고, 앱별 워크플로(`deploy-<app>.yml`)가 자기 path 변경에만 트리거되어 migrate 성공을 기다린 뒤 독립 배포한다. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 앱 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
+- **CD(지속적 배포)** — dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 앱별 워크플로(`deploy-<app>.yml`)는 자기 path 변경에 트리거되는 독립 배포다(migrate 와의 순서 보장 결합은 재배선 중). 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 앱 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
