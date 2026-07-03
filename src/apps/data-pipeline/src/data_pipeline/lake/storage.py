@@ -29,6 +29,22 @@ def raw_news_partition(
     )
 
 
+def raw_price_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 일봉(price_daily) 파티션 프리픽스 (끝 슬래시 없음).
+
+    뉴스와 달리 파티션 키는 trade_date 가 아니라 ingest_date(수집일)다 — 가격 EOD
+    응답은 한 심볼이 여러 trade_date 를 한 번에 주므로 원본을 수집일 기준으로
+    보존한다(trade_date 별 분해는 후속 canonical/market_data 소관). SSOT: 사용자
+    레이크 계층구조의 raw/source=fmp/dataset=price_daily/market=…/ingest_date=….
+    """
+    return (
+        f"raw/source={source}/dataset=price_daily/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def collection_log_key(source: str, started_date: str, run_id: str) -> str:
     """수집 실행 로그(런당 1건) 키."""
     return (

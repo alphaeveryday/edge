@@ -3,8 +3,8 @@
 > 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
-> 현재 범위는 **수집 설정 관리 + 뉴스 원본저장(Step1, FMP)**까지다.
-> 정규화·품질검증(Step2)과 가격 수집은 후속이다.
+> 현재 범위는 **수집 설정 관리 + 원본저장(Step1, FMP)** — 뉴스와 가격(OHLCV 일봉)까지다.
+> 정규화·품질검증(뉴스 Step2)과 가격의 canonical 적재는 후속이다.
 
 ## 실행
 
@@ -20,6 +20,13 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw
 # 백필 예: 2026-06 한 달
 #   ... run ingest-raw --from 2026-06-01 --to 2026-06-30
+
+# 가격(OHLCV 일봉) 원본저장(Step1) — FMP EOD. 날짜창 미지정 = 증분(5일 소급~오늘,
+# 주말·공휴일 공백 대비). 심볼맵은 news.sources.fmp 와 공유하므로 별도 설정 불필요.
+DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw
+# 백필 예: 2026-06 한 달
+#   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -43,7 +50,7 @@ from data_pipeline import load_settings
 
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
-settings.price.source                # PriceSource (가격 소스 위치)
+settings.price.source                # PriceSource (FMP EOD — 심볼맵은 news.sources.fmp 공유)
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -68,14 +75,19 @@ settings.targets.keywords            # ["금리", ...]
 수집물은 단일 레이크(`s3://stock-ai-lake/` 또는 local 스텁)에 쓴다.
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.
 
-- **raw** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
+- **raw(뉴스)** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
   run_id 별 append(재현성). 런 내 중복은 article_id 로 제거한다.
+- **raw(가격)** — `raw/source=fmp/dataset=price_daily/market=…/ingest_date=…/run_id=…/` 에
+  run_id 별 append. 파티션 키는 뉴스(published_date)와 달리 **ingest_date(수집일)** 다 —
+  EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다
+  (거래일별 분해는 후속 canonical). 런 내 중복은 (market, ticker, trade_date) 로 제거한다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/started_date=…/run_id=…/log.json`
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 
-- 정규화·품질검증(Step2) — raw → canonical 병합
+- 정규화·품질검증(뉴스 Step2) — raw → canonical 병합
 - 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
-- 실제 가격 데이터 수집(여기서는 소스 '위치'만 설정)
+- 가격 canonical 적재 — raw price_daily → `canonical/market_data/price_daily`
+  정규화·멱등 upsert(거래일별 분해, 품질 게이트)는 후속(S006/S007)

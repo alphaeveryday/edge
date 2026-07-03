@@ -37,8 +37,12 @@ enabled = true
 base_url = "https://www.hankyung.com/feed/finance"
 enabled = true
 
+# 가격(OHLCV) 소스 — FMP EOD(일봉, S004). api_key 는 env 로 주입:
+#   DATA_PIPELINE_PRICE__SOURCE__API_KEY=...
+# our_ticker→FMP 심볼 매핑은 FMP 벤더 단위라 위 news.sources.fmp.symbol_map 을 공유한다
+# (run 엔트리가 배선 — 종목 추가 시 심볼맵은 한 곳만 고치면 된다). 여기엔 두지 않는다.
 [price.source]
-base_url = "https://api.example-price.com/v1"
+base_url = "https://financialmodelingprep.com/stable/historical-price-eod/full"
 enabled = true
 
 # 수집 유니버스: US 9 + KR 9(소스 무관). 소스별 심볼 번역은 각 소스의 symbol_map
