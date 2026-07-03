@@ -8,9 +8,12 @@
 # 마이그레이션 이미지를 ECR에 push하고, VPC 내부에서 도는 ECS Fargate task를 트리거만 한다.
 # Flyway는 그 task 안에서 RDS에 적용된다(infra/terraform/modules/schema-migrate).
 #
-# 앱 배포는 아직 워크플로가 없다. 이 워크플로는 스키마 migrate만 책임진다.
-# 앱 배포 job/워크플로가 생기면 반드시 `needs: migrate`를 걸어 "migrate 성공 후에만 앱 배포"가
-# 성립하도록 연결한다. 지금은 가짜 성공 신호를 만들지 않기 위해 placeholder 배포 job을 두지 않는다.
+# 이 워크플로는 스키마 migrate만 책임진다. 앱 배포는 앱별 워크플로가 담당한다:
+# deploy-widget-api.yml · deploy-tenant-console-api.yml · deploy-super-admin-api.yml —
+# 각자 자기 path 변경(on.push.paths)에만 트리거되어 독립 배포한다. 파일은 분리돼 있지만
+# 순서는 지킨다: 워크플로 간에는 `needs:`를 걸 수 없으므로, 각 앱 워크플로가 같은 커밋의
+# 이 워크플로 run 완료를 폴링해 "migrate 성공 후에만 앱 배포"를 보장한다(deploy-app.yml).
+# gateway 는 dev ECS 서비스 인프라가 생기면(별도 티켓) 같은 패턴으로 추가한다.
 name: deploy-dev
 
 on:
