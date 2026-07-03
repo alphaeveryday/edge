@@ -10,7 +10,7 @@
 # 직접 접속할 수 없다. 그래서 러너에서 flyway를 돌리지 않는다. 대신 러너는 OIDC로 AWS 인증 후
 # 마이그레이션 이미지를 ECR에 push하고, VPC 내부에서 도는 ECS Fargate task를 트리거만 한다.
 # Flyway는 그 task 안에서 RDS에 적용된다(infra/terraform/modules/schema-migrate).
-name: deploy-dev
+name: schema-migrate
 
 on:
   push:
@@ -20,7 +20,7 @@ on:
     # self 를 포함해 이 워크플로 자체 수정도 트리거된다(파이프라인 변경 검증).
     paths:
       - "src/libs/schema/**"
-      - ".github/workflows/deploy-dev.yml"
+      - ".github/workflows/schema-migrate.yml"
 
 # OIDC 토큰 발급(id-token) + 체크아웃(contents). 그 외 권한 없음.
 permissions:
@@ -32,7 +32,7 @@ permissions:
 # 대기 중 새 push가 오면 이전 pending은 취소되고 최신만 실행된다(latest-pending-wins).
 # Flyway는 누적이라 최신 run이 dev HEAD의 모든 미적용 마이그레이션을 적용하므로 유실이 없다.
 concurrency:
-  group: deploy-dev
+  group: schema-migrate
   cancel-in-progress: false
 
 jobs:
