@@ -79,19 +79,21 @@ def test_saves_ingest_date_partition_and_log(tmp_path):
     assert log["records_saved"] == 3
 
 
-def test_duplicate_trade_date_saved_once(tmp_path):
-    # WHY: 창 겹침·API 중복으로 같은 (market,ticker,trade_date) 봉이 다시 와도 raw 에
-    #      두 번 쌓이면 안 된다 — 첫 건만 남기고 중복은 센다(재현성은 run_id append 로).
+def test_raw_preserves_all_rows_including_repeated_trade_date(tmp_path):
+    # WHY: raw 는 받은 행을 전부 보존한다(전부 append) — FMP 가 같은 거래일을 두 번
+    #      줘도(이상치) 조용히 버리지 않는다. (market,ticker,trade_date) 정체성 판정·
+    #      upsert 는 후속 canonical 소관이라 raw 단계에서 그 키로 dedup 하지 않는다.
     code, storage = _run(tmp_path, {"NVDA": [_bar("2026-07-01", 10.0), _bar("2026-07-01", 99.0)]})
 
     assert code == 0
     [raw_key] = storage.list_keys("raw")
     lines = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
-    assert len(lines) == 1
-    assert json.loads(lines[0])["close"] == 10.0  # 첫 건 유지
+    assert len(lines) == 2  # 둘 다 보존(버리지 않음)
+    assert {json.loads(line)["close"] for line in lines} == {10.0, 99.0}
 
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
-    assert log["records_skipped_duplicate"] == 1
+    assert log["records_saved"] == 2
+    assert "records_skipped_duplicate" not in log  # dedup 개념 자체가 raw 에 없다
 
 
 class _PartlyFailingClient(FakeClient):

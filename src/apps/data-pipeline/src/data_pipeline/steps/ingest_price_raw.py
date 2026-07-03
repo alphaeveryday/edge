@@ -1,11 +1,13 @@
 """가격 Step1 — 원본저장 (S004. raw 존 저장 S028 을 이 스텝에 흡수).
 
-FMP EOD 에서 종목별 일봉을 수집해, 런 내 중복은 (market, ticker, trade_date) 로
-합치고, market 별로 ingest_date 파티션(수집일) ndjson 으로 raw 존에 append 하고,
-실행 결과를 collection_log 로 남긴다.
+FMP EOD 에서 종목별 일봉을 수집해, market 별로 ingest_date 파티션(수집일) ndjson
+으로 raw 존에 append 하고, 실행 결과를 collection_log 로 남긴다.
 
-raw 는 run_id 별 append(재현성). trade_date 별 분해·정규화는 후속(canonical/
-market_data/price_daily) 소관이라 여기선 수집일 기준 원본 보존까지만 한다.
+raw 는 받은 행을 그대로 보존한다(전부 append) — 중복 판정·정규화는 하지 않는다.
+가격은 뉴스와 달리 질의 팬아웃(같은 항목이 여러 심볼 질의에 걸림)이 없어 한 런에서
+(market,ticker,trade_date) 중복이 사실상 안 생기고, 생긴다면 그건 FMP 이상치라
+raw 가 있는 그대로 남겨야 한다(조용히 버리면 fail-loud 위반). 그 키로의 upsert/
+dedup 은 정체성 결정이라 후속 canonical/market_data/price_daily(S006/S007) 소관이다.
 """
 
 from __future__ import annotations
@@ -22,18 +24,6 @@ from ..sources import FmpPriceSource, StopFetch
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_price_raw"
-
-
-def _trade_date(record: dict) -> str | None:
-    """일봉의 거래일(trade_date). FMP EOD 는 'date'(YYYY-MM-DD) 를 준다.
-
-    dedup 키의 일부라 없으면 None — 파티션은 ingest_date 라 date 가 없어도 raw 는
-    수집일 파티션에 그대로 보존한다(하나도 못 버림).
-    """
-    value = record.get("date")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return value.strip()[:10]
 
 
 def run(
@@ -72,23 +62,16 @@ def run(
             logger.exception("collection_log 기록 실패(skip 경로)")
         return 0
 
-    # (market, ticker, trade_date) → 보관 중인 일봉. 창 겹침·API 중복으로 같은
-    # 거래일 봉이 다시 와도 첫 건만 남기고 중복은 센다(raw 재현성은 run_id append 로).
-    kept: dict[tuple[str, str, str | None], dict] = {}
-    # 파티션 키는 market 만(ingest_date 는 런 전체가 started_date 로 동일).
+    # 파티션 키는 market 만(ingest_date 는 런 전체가 started_date 로 동일). raw 는
+    # 받은 행을 그대로 append 해 전부 보존한다 — 중복 판정·upsert 는 후속 canonical 소관.
     partitions: dict[str, list[dict]] = defaultdict(list)
-    fetched = duplicates = 0
+    fetched = 0
     status, error, reason = "success", None, None
     exit_code = 0
 
     try:
         for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
-            key = (record["market"], record["our_ticker"], _trade_date(record))
-            if key in kept:
-                duplicates += 1
-                continue
-            kept[key] = record
             partitions[record["market"]].append(record)
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
@@ -139,7 +122,6 @@ def run(
             "reason": reason,
             "records_fetched": fetched,
             "records_saved": saved,
-            "records_skipped_duplicate": duplicates,
             "records_failed_symbols": len(failed_symbols),
             "failed_symbols": failed_symbols,
             "partitions": len(partitions),
@@ -149,8 +131,8 @@ def run(
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
     logger.info(
-        "ingest_price_raw 완료: status=%s fetched=%d saved=%d dup=%d failed_symbols=%d partitions=%d",
-        status, fetched, saved, duplicates, len(failed_symbols), len(partitions),
+        "ingest_price_raw 완료: status=%s fetched=%d saved=%d failed_symbols=%d partitions=%d",
+        status, fetched, saved, len(failed_symbols), len(partitions),
     )
     return exit_code
 

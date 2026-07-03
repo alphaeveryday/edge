@@ -79,8 +79,9 @@ settings.targets.keywords            # ["금리", ...]
   run_id 별 append(재현성). 런 내 중복은 article_id 로 제거한다.
 - **raw(가격)** — `raw/source=fmp/dataset=price_daily/market=…/ingest_date=…/run_id=…/` 에
   run_id 별 append. 파티션 키는 뉴스(published_date)와 달리 **ingest_date(수집일)** 다 —
-  EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다
-  (거래일별 분해는 후속 canonical). 런 내 중복은 (market, ticker, trade_date) 로 제거한다.
+  EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
+  raw 는 받은 행을 **전부 보존**한다(중복 판정 안 함) — (market, ticker, trade_date)
+  정체성 upsert·거래일별 분해는 후속 canonical/market_data(S006/S007) 소관.
 - **수집 로그** — `operations_archive/collection_logs/source=…/started_date=…/run_id=…/log.json`
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
