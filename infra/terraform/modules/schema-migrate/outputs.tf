@@ -1,12 +1,3 @@
-output "ecr_repository_url" {
-  description = "마이그레이션 이미지를 push 할 ECR 저장소 URL"
-  value       = aws_ecr_repository.this.repository_url
-}
-
-output "ecr_repository_arn" {
-  value = aws_ecr_repository.this.arn
-}
-
 output "task_definition_family" {
   description = "RunTask 에 쓸 task 정의 family"
   value       = aws_ecs_task_definition.this.family

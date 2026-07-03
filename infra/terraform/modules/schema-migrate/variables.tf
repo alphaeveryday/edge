@@ -55,7 +55,12 @@ variable "log_retention_days" {
   default = 14
 }
 
-variable "image_tag_mutability" {
-  type    = string
-  default = "IMMUTABLE"
+variable "ecr_repository_url" {
+  description = "마이그레이션 이미지 ECR repo URL (foundation 의 edge/schema-migrate). 태스크 정의 placeholder 이미지에 사용."
+  type        = string
+}
+
+variable "ecr_repository_arn" {
+  description = "위 repo ARN. env 가 github-oidc-deploy 의 push 권한 대상으로 참조(모듈 외부에서 씀)."
+  type        = string
 }
