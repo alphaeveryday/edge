@@ -132,7 +132,12 @@ class FmpPriceSource:
         except json.JSONDecodeError as exc:
             raise ValueError(f"json: {exc}") from exc  # → 심볼 단위 실패
         if isinstance(payload, dict):
-            rows = payload.get("historical", [])
+            # {symbol, historical:[...]} 형태만 정상. historical 키가 없는 dict 는 HTTP
+            # 200 에러 객체({"Error Message": ...}·쿼터 초과)다 — get(…, []) 로 조용히
+            # 0행 처리하면 전 심볼이 그래도 run 이 success(0건)로 위장한다. 심볼 실패로 올린다.
+            if "historical" not in payload:
+                raise ValueError("response object without 'historical'")
+            rows = payload["historical"]
         elif isinstance(payload, list):
             rows = payload
         else:

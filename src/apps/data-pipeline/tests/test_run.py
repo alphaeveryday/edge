@@ -25,7 +25,8 @@ def test_lookback_default_is_one_day():
 
 def test_price_window_uses_wider_lookback():
     # WHY: 가격 EOD 는 주말·공휴일에 봉이 없어 소급 1일이면 월요일 런이 직전 거래일을
-    #      놓친다 — 가격 증분 창은 더 넓은 소급을 써야 한다(겹침은 dedup 이 흡수).
+    #      놓친다 — 가격 증분 창은 더 넓은 소급을 써야 한다(겹치는 거래일은 raw 에 그대로
+    #      보존되고 정체성 병합은 후속 canonical 소관 — ingest 단계는 dedup 하지 않는다).
     now = datetime(2026, 7, 6, 5, 0, tzinfo=timezone.utc)  # 월요일
     from_date, to_date = default_window(now, DEFAULT_PRICE_LOOKBACK_DAYS)
     assert to_date == "2026-07-06"

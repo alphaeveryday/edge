@@ -1,4 +1,4 @@
-"""ingest_price_raw 스텝 테스트 — raw append·중복 제거·collection_log (local 스토리지)."""
+"""ingest_price_raw 스텝 테스트 — raw append(전부 보존, dedup 없음)·collection_log."""
 
 import json
 

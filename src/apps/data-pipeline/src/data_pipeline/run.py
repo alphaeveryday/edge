@@ -27,7 +27,8 @@ from .steps import ingest_price_raw, ingest_raw
 # 증분 기본 창의 소급 일수 — 어제부터(런 간 경계 겹침을 dedup 이 흡수하도록) 오늘까지.
 DEFAULT_LOOKBACK_DAYS = 1
 # 가격 증분은 소급을 넉넉히 둔다 — 주말·공휴일엔 EOD 가 없어 소급 1일이면 월요일 런이
-# 직전 거래일(금요일) 봉을 놓친다. 겹치는 거래일은 (market,ticker,trade_date) dedup 이 흡수.
+# 직전 거래일(금요일) 봉을 놓친다. raw 는 겹치는 거래일을 그대로 append 해 보존하고
+# (dedup 안 함), (market,ticker,trade_date) 정체성 병합은 후속 canonical 소관이다.
 DEFAULT_PRICE_LOOKBACK_DAYS = 5
 
 

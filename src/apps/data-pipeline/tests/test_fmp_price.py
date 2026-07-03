@@ -98,6 +98,16 @@ def test_fetch_records_non_list_response_as_failure():
     assert [f["symbol"] for f in source.fetch_failures] == ["NVDA"]
 
 
+def test_fetch_records_error_object_as_failure():
+    # WHY: FMP 는 쿼터 초과·플랜 제한을 HTTP 200 + {"Error Message": ...} dict 로 준다 —
+    #      historical 키 없는 dict 를 조용히 0행 처리하면 전 심볼이 그래도 run 이
+    #      success(0건)로 위장한다. historical 없는 응답 객체는 심볼 실패로 드러내야 한다.
+    source = _source({"NVDA": json.dumps({"Error Message": "Limit Reach"})})
+    records = list(source.fetch(["NVDA"]))
+    assert records == []
+    assert [f["symbol"] for f in source.fetch_failures] == ["NVDA"]
+
+
 def test_fetch_skips_malformed_rows_and_keeps_good_ones():
     # WHY: 배열 안에 null/문자열/숫자가 섞여도 dict(row) 예외로 제너레이터가 죽어
     #      남은 정상 봉·심볼 수집이 끊기면 안 된다 — 불량 행은 기록 후 스킵.
