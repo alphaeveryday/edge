@@ -9,8 +9,10 @@
 원본에 수집 메타(our_ticker/market/fmp_symbol/fetched_at)만 붙여 그대로 둔다 —
 필드 선별·정규화는 후속(canonical/market_data) 소관.
 
-심볼맵은 FMP 벤더 단위 매핑이라 뉴스 소스(news.sources.fmp.symbol_map)와 공유한다
-(run 엔트리가 배선). api_key 는 price.source 자체 env 로 주입한다.
+심볼맵은 price.source 자체 맵을 쓴다(뉴스와 공유하지 않는다) — 뉴스는 ADR 매핑도
+'그 회사 뉴스'라 맞지만, 가격은 ADR 의 USD 시세를 KR 종목 가격으로 쓰면 통화·거래
+시간이 어긋나 다운스트림이 오염된다. 거래소-로컬 심볼만 두고 없으면 건너뛴다.
+api_key 는 price.source 자체 env 로 주입한다.
 """
 
 from __future__ import annotations
@@ -30,17 +32,12 @@ logger = logging.getLogger(__name__)
 class FmpPriceSource:
     source_name = "fmp"
 
-    def __init__(
-        self,
-        config: PriceSource,
-        client: PoliteClient,
-        symbol_map: dict[str, str],
-    ):
+    def __init__(self, config: PriceSource, client: PoliteClient):
         self.base_url = config.base_url
         self.api_key = config.api_key
         self.config_enabled = config.enabled
-        # our_ticker → FMP 심볼. 뉴스 소스와 같은 벤더 매핑을 공유한다(run 엔트리 배선).
-        self.symbol_map = symbol_map
+        # our_ticker → FMP 심볼. 가격 전용 맵(뉴스와 별개 — 위 모듈 주석 참고).
+        self.symbol_map = config.symbol_map
         self.client = client
         # 심볼 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다(격리≠은폐).
         self.fetch_failures: list[dict] = []

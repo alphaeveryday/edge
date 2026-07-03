@@ -22,6 +22,7 @@ from ..sources import FmpNewsSource, StopFetch
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_raw"
+DATASET = "stock_news"  # collection_log·raw 파티션의 dataset= 키
 
 
 def _partition_date(record: dict, fallback_date: str) -> str:
@@ -162,5 +163,5 @@ def run(
 
 
 def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
-    key = collection_log_key(vendor, started_date, run_id)
+    key = collection_log_key(vendor, DATASET, started_date, run_id)
     storage.put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))

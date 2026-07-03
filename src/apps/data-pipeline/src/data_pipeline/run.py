@@ -77,11 +77,9 @@ def main(argv: list[str] | None = None) -> int:
         source = FmpNewsSource(fmp_config, PoliteClient())
         return ingest_raw.run(settings, storage, source, run_id, from_date, to_date)
     if args.step == "ingest-price-raw":
-        # 심볼맵은 FMP 벤더 단위 — 뉴스 소스 설정과 공유한다(중복 없이 한 곳에서 관리).
-        fmp_news = settings.news.sources.get("fmp")
-        if fmp_news is None:
-            raise SystemExit("news.sources.fmp 설정이 없다(가격 심볼맵 공유원) — sources.toml 확인")
-        source = FmpPriceSource(settings.price.source, PoliteClient(), symbol_map=fmp_news.symbol_map)
+        # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
+        # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).
+        source = FmpPriceSource(settings.price.source, PoliteClient())
         return ingest_price_raw.run(settings, storage, source, run_id, from_date, to_date)
     raise AssertionError(f"unreachable step: {args.step}")
 

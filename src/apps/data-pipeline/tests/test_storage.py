@@ -24,9 +24,11 @@ def test_raw_news_partition_matches_lake_layout():
 
 def test_collection_log_key_matches_lake_layout():
     # WHY: 운영 로그 경로도 레이크 계약의 일부 — 조회 도구가 이 규약으로 찾는다.
+    #      dataset= 로 갈라 같은 벤더의 뉴스·가격 로그가 같은 run_id 를 공유해도
+    #      서로 덮어쓰지 않아야 한다.
     assert (
-        collection_log_key("fmp", "2026-07-01", "r1")
-        == "operations_archive/collection_logs/source=fmp"
+        collection_log_key("fmp", "price_daily", "2026-07-01", "r1")
+        == "operations_archive/collection_logs/source=fmp/dataset=price_daily"
         "/started_date=2026-07-01/run_id=r1/log.json"
     )
 

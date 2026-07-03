@@ -39,11 +39,25 @@ enabled = true
 
 # 가격(OHLCV) 소스 — FMP EOD(일봉, S004). api_key 는 env 로 주입:
 #   DATA_PIPELINE_PRICE__SOURCE__API_KEY=...
-# our_ticker→FMP 심볼 매핑은 FMP 벤더 단위라 위 news.sources.fmp.symbol_map 을 공유한다
-# (run 엔트리가 배선 — 종목 추가 시 심볼맵은 한 곳만 고치면 된다). 여기엔 두지 않는다.
 [price.source]
 base_url = "https://financialmodelingprep.com/stable/historical-price-eod/full"
 enabled = true
+
+# our_ticker → FMP 심볼. 뉴스와 별개 맵이다 — 뉴스 맵의 KR 은 ADR(SSNLF·KB·SHG)로
+# 매핑돼 '그 회사 뉴스'엔 맞지만, 가격은 ADR 의 USD 시세를 KR 종목 가격으로 쓰면
+# 통화·거래시간이 어긋난다. 그래서 가격은 US 거래소-로컬 심볼만 두고, KR 은 FMP EOD 의
+# KRX 로컬 심볼이 검증되기 전까지 생략(=이 소스가 건너뜀, 후속). US 는 심볼 동일,
+# BRK.B 는 FMP 대시 표기(BRK-B).
+[price.source.symbol_map]
+NVDA = "NVDA"
+AAPL = "AAPL"
+MSFT = "MSFT"
+CAT = "CAT"
+GE = "GE"
+RTX = "RTX"
+"BRK.B" = "BRK-B"
+JPM = "JPM"
+V = "V"
 
 # 수집 유니버스: US 9 + KR 9(소스 무관). 소스별 심볼 번역은 각 소스의 symbol_map
 # 참고 — targets 에 있어도 그 소스에 매핑이 없으면 해당 소스는 건너뛴다.

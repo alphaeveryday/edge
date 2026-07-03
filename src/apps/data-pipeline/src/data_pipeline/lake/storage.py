@@ -45,10 +45,15 @@ def raw_price_partition(
     )
 
 
-def collection_log_key(source: str, started_date: str, run_id: str) -> str:
-    """수집 실행 로그(런당 1건) 키."""
+def collection_log_key(source: str, dataset: str, started_date: str, run_id: str) -> str:
+    """수집 실행 로그(런당 1건) 키.
+
+    source 뿐 아니라 dataset 으로도 가른다 — 같은 벤더(source=fmp)의 뉴스(stock_news)·
+    가격(price_daily) 수집이 같은 run_id 를 공유해도(오케스트레이션 백필 등) 로그가
+    서로 덮어쓰지 않게. (뉴스만 있던 시절엔 dataset 없이 source 로만 갈랐다.)
+    """
     return (
-        f"operations_archive/collection_logs/source={source}"
+        f"operations_archive/collection_logs/source={source}/dataset={dataset}"
         f"/started_date={started_date}/run_id={run_id}/log.json"
     )
 

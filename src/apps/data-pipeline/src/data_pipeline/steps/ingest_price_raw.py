@@ -24,6 +24,7 @@ from ..sources import FmpPriceSource, StopFetch
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_price_raw"
+DATASET = "price_daily"  # collection_log·raw 파티션의 dataset= 키
 
 
 def run(
@@ -138,5 +139,5 @@ def run(
 
 
 def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
-    key = collection_log_key(vendor, started_date, run_id)
+    key = collection_log_key(vendor, DATASET, started_date, run_id)
     storage.put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))

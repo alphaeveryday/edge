@@ -22,7 +22,7 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
 #   ... run ingest-raw --from 2026-06-01 --to 2026-06-30
 
 # 가격(OHLCV 일봉) 원본저장(Step1) — FMP EOD. 날짜창 미지정 = 증분(5일 소급~오늘,
-# 주말·공휴일 공백 대비). 심볼맵은 news.sources.fmp 와 공유하므로 별도 설정 불필요.
+# 주말·공휴일 공백 대비). 심볼맵은 가격 전용(price.source.symbol_map) — 현재 US 만.
 DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw
 # 백필 예: 2026-06 한 달
@@ -50,7 +50,7 @@ from data_pipeline import load_settings
 
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
-settings.price.source                # PriceSource (FMP EOD — 심볼맵은 news.sources.fmp 공유)
+settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -82,7 +82,8 @@ settings.targets.keywords            # ["금리", ...]
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
   raw 는 받은 행을 **전부 보존**한다(중복 판정 안 함) — (market, ticker, trade_date)
   정체성 upsert·거래일별 분해는 후속 canonical/market_data(S006/S007) 소관.
-- **수집 로그** — `operations_archive/collection_logs/source=…/started_date=…/run_id=…/log.json`
+- **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
+  (`dataset=`로 갈라 같은 벤더의 뉴스·가격 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 

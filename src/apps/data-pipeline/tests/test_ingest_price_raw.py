@@ -48,8 +48,8 @@ def _settings(tmp_path):
 def _run(tmp_path, responses, api_key="k", run_id="20260703T000000Z"):
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
-    config = PriceSource(base_url=settings.price.source.base_url, api_key=api_key)
-    source = FmpPriceSource(config, FakeClient(responses), _MAP)
+    config = PriceSource(base_url=settings.price.source.base_url, api_key=api_key, symbol_map=_MAP)
+    source = FmpPriceSource(config, FakeClient(responses))
     code = ingest_price_raw.run(settings, storage, source, run_id)
     return code, storage
 
@@ -113,8 +113,8 @@ class _PartlyFailingClient(FakeClient):
 def _run_client(tmp_path, client, run_id="20260703T000000Z"):
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
-    config = PriceSource(base_url=settings.price.source.base_url, api_key="k")
-    source = FmpPriceSource(config, client, _MAP)
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
+    source = FmpPriceSource(config, client)
     return ingest_price_raw.run(settings, storage, source, run_id), storage
 
 
@@ -154,8 +154,8 @@ def test_raw_write_failure_still_writes_collection_log(tmp_path):
 
     settings = _settings(tmp_path)
     storage = RawFailingStorage(tmp_path / "lake")
-    config = PriceSource(base_url=settings.price.source.base_url, api_key="k")
-    source = FmpPriceSource(config, FakeClient({"NVDA": [_bar("2026-07-01")]}), _MAP)
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
+    source = FmpPriceSource(config, FakeClient({"NVDA": [_bar("2026-07-01")]}))
     code = ingest_price_raw.run(settings, storage, source, "20260703T000000Z")
 
     assert code == 1
@@ -181,8 +181,8 @@ def test_enabled_but_no_mapped_targets_marks_skipped(tmp_path):
     #      수집이 사실상 불가능하다 — success(0건)로 위장하지 않고 skip 으로 드러낸다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
-    config = PriceSource(base_url=settings.price.source.base_url, api_key="k")  # 활성
-    source = FmpPriceSource(config, FakeClient({}), symbol_map={})  # 매핑 0
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k")  # 활성, 심볼맵 0
+    source = FmpPriceSource(config, FakeClient({}))  # 매핑 대상 0
     code = ingest_price_raw.run(settings, storage, source, "20260703T000000Z")
 
     assert code == 0  # 잘못된 설정이지만 크래시는 아님 — 로그로 드러냄
@@ -208,8 +208,8 @@ def test_unexpected_failure_still_writes_log(tmp_path):
     #      로그 없이 죽으면 운영에서 런이 있었는지조차 알 수 없다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
-    config = PriceSource(base_url=settings.price.source.base_url, api_key="k")
-    source = FmpPriceSource(config, FakeClient({}), _MAP)
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
+    source = FmpPriceSource(config, FakeClient({}))
     source.fetch = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
 
     code = ingest_price_raw.run(settings, storage, source, "20260703T000000Z")

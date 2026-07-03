@@ -36,9 +36,11 @@ def _source(
     responses: dict[str, str], api_key: str | None = "k", symbol_map: dict | None = None
 ) -> FmpPriceSource:
     config = PriceSource(
-        base_url="https://fmp.example/stable/historical-price-eod/full", api_key=api_key
+        base_url="https://fmp.example/stable/historical-price-eod/full",
+        api_key=api_key,
+        symbol_map=_MAP if symbol_map is None else symbol_map,
     )
-    return FmpPriceSource(config, FakeClient(responses), _MAP if symbol_map is None else symbol_map)
+    return FmpPriceSource(config, FakeClient(responses))
 
 
 def test_disabled_without_api_key():
@@ -128,8 +130,8 @@ def test_fetch_isolates_retry_exhaustion_per_symbol():
                 raise RuntimeError("GET 재시도 소진")
             return super().get(url, accept=accept)
 
-    config = PriceSource(base_url="https://fmp.example/x", api_key="k")
-    source = FmpPriceSource(config, FlakyClient({"NVDA": json.dumps([_bar("2026-07-01")])}), _MAP)
+    config = PriceSource(base_url="https://fmp.example/x", api_key="k", symbol_map=_MAP)
+    source = FmpPriceSource(config, FlakyClient({"NVDA": json.dumps([_bar("2026-07-01")])}))
     records = list(source.fetch(["005930", "NVDA"]))
     assert [r["our_ticker"] for r in records] == ["NVDA"]
     assert [f["symbol"] for f in source.fetch_failures] == ["SSNLF"]
@@ -142,8 +144,8 @@ def test_fetch_stops_on_stop_fetch():
         def get(self, url, *, accept="application/json"):
             raise StopFetch("HTTP 429")
 
-    config = PriceSource(base_url="https://fmp.example/x", api_key="k")
-    source = FmpPriceSource(config, BlockedClient({}), _MAP)
+    config = PriceSource(base_url="https://fmp.example/x", api_key="k", symbol_map=_MAP)
+    source = FmpPriceSource(config, BlockedClient({}))
     with pytest.raises(StopFetch):
         list(source.fetch(["NVDA"]))
 
