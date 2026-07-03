@@ -16,3 +16,4 @@
 | [0006](0006-gateway-single-edge.md) | gateway 단일 엣지 · 라우트별 신뢰 필터 | 승인됨 |
 | [0007](0007-merge-strategy.md) | 머지 전략 — 경계별(feature→dev Squash, dev→main Merge commit) | 승인됨 |
 | [0008](0008-super-admin-console.md) | super-admin 콘솔 — cross-tenant 운영자 표면 | 승인됨 |
+| [0009](0009-aws-deployment-topology.md) | AWS 배포 토폴로지 — Terraform IaC · 단계 스택 | 제안됨 |

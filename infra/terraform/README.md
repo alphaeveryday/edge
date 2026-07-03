@@ -1,51 +1,80 @@
 # infra/terraform
 
-`edge` 의 AWS 인프라를 코드로 정의한다. **완전 그린필드** — 기존 click-ops 자원을 참조(`data`)하지 않고 VPC부터 전부 새로 만든다. 그래서 다른 계정/region 에서도 `tfvars` 만 바꿔 그대로 재현된다.
+`edge` 의 AWS 인프라를 코드로 정의한다. **완전 그린필드** — 도메인 등록(Route53 존·NS 위임)만 수동이고, 그 아래(SSL·네트워크·컴퓨트·데이터·CDN)는 전부 Terraform 이 소유한다. 다른 계정/region 에서도 `tfvars` 만 바꿔 재현된다.
 
-> 범위 결정 배경은 [docs/architecture.md](../../docs/architecture.md) §4(신뢰 경계)·§6(배포 토폴로지). 인프라가 확정되면 ADR 로 증류한다.
+> 배포 토폴로지 결정은 [docs/adr/0009](../../docs/adr/0009-aws-deployment-topology.md), 신뢰 경계는 [docs/architecture.md](../../docs/architecture.md) §4.
 
-## 구조
+## 구조 — 단계(phase) 스택 + 모듈
+
+수명·blast-radius 로 3단계 스택을 나눈다. 각 스택은 **독립 state·독립 apply**.
 
 ```
 infra/terraform/
-├── modules/
-│   ├── network/       # VPC, public/private 서브넷(2 AZ), IGW, NAT
-│   ├── ecs-cluster/   # ECS 클러스터 + Service Connect 네임스페이스 + Fargate CP
-│   └── ecs-service/   # 재사용 서비스 모듈: task def + service + SG + IAM + 로그
-└── envs/
-    └── dev/           # 모듈을 엮는 환경. 구체값은 terraform.tfvars
+├── bootstrap/          # 원격 state 그릇(S3 버킷 + 네이티브 락). 자체 state=로컬, 계정당 1회
+├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR ×6 · GitHub OIDC provider
+├── envs/dev/           # 환경: 모듈을 엮음. 구체값은 terraform.tfvars
+└── modules/
+    ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, AZ override
+    ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
+    ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
+    ├── alb/                # 공개 엣지 ALB (임시 검증 → gateway 증분서 교체)
+    ├── rds/                # PostgreSQL(private·관리형 비밀번호)
+    ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
+    ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
+    ├── pipeline/           # Step Functions 배치 (self-contained: SFN·태스크2종·S3·시크릿·스케줄러)
+    └── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
 ```
 
-`ecs-service` 모듈 하나를 widget-api·gateway·tenant-console-api·super-admin-api 가 **동일하게 재사용**한다. 서비스 간 차이(이미지·자원·인바운드 허용자)는 변수로만 표현한다.
+`ecs-service` 를 widget-api·tenant-console-api·super-admin-api 가, `static-site` 를 widget·tenant-console·super-admin UI 가 동일 재사용한다.
 
 ## 설계 요지
 
-- **gateway 만 공개 엣지** — 나머지 API 는 private 서브넷, 인터넷 facing LB 없음.
-- **SG 백스톱** — 각 서비스 인바운드를 허용 SG(gateway)로 좁힌다. 엣지 오설정이 단일 실패점이 되지 않게.
-- **Service Connect** — gateway→API 내부 호출은 `http://<service>:<port>` 로. internal ALB 불필요.
-- **클러스터 분리** — 상시 API(`edge-dev-service`)와 배치 워커(`edge-dev-worker`, 예정)를 나눈다. 클러스터는 무료라 cost-neutral.
+- **단계 스택** — bootstrap(state) → foundation(zone·ECR·OIDC·ACM) → envs. env 는 foundation 자원을 이미지 URI·`data`(ACM/OIDC/ECR 조회)로 **느슨하게** 참조 → remote_state 강결합 없음. **apply 순서: foundation → env.**
+- **와일드카드 ACM** — `*.edgesignal.dev` 을 리전당 1장(ALB=apne2, CloudFront=us-east-1). 새 서브도메인 추가 시 인증서 재발급 0.
+- **네트워크 3-tier** — public(ALB·NAT) / private=compute(ECS, NAT 아웃바운드) / **data=RDS 격리(아웃바운드 없음)**. AZ `a·c`.
+- **클러스터 분리** — 상시 API(`edge-dev-service`) / 배치(`edge-dev-worker`).
+- **배치 = Step Functions** — 수집→분석 순차 스텝을 `ecs:runTask.sync` 로 오케스트레이션(순서·재시도·실패알림).
+- **비밀번호는 코드/state 에 없음** — RDS 관리형 시크릿, 외부 키는 Secrets Manager(값 수동 주입).
 
 ## 사용
 
 ```bash
-cd envs/dev
-terraform init      # 첫 실행: 프로바이더 설치
-terraform plan      # 변경 미리보기
-terraform apply     # 실제 생성
+# 최초 1회 — 원격 state 그릇
+cd bootstrap && terraform apply
+
+# 순서 엄수: foundation 먼저(ACM·ECR·OIDC), 그다음 env
+cd ../foundation && terraform apply
+cd ../envs/dev  && terraform apply
 ```
 
-- 상태는 기본 **로컬**. 공유하려면 [`backend.tf`](envs/dev/backend.tf) 주석을 풀고 S3+DynamoDB 로 전환(부트스트랩 필요).
-- 이미지 태그를 올릴 때는 `terraform.tfvars` 의 `widget_api_image` 갱신 후 `apply`. 이 semver 핀은 TF 소유 baseline 이고, dev CD(앱별 `.github/workflows/deploy-<app>.yml`)는 ECR 최신 semver 태그를 커밋 타입에 따라 버전 업(feat→minor, 그 외→patch)한 새 태그 이미지를 task 정의 리비전으로 쌓는다 — `terraform apply` 시 baseline 으로 되돌아갈 수 있으므로 릴리스 시점에 tfvars 를 최신으로 맞춘다.
+- 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`.
+- env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
+- 이미지 태그: `terraform.tfvars` 의 `*_image` 가 TF 소유 baseline. 앱 CD(`deploy-<app>.yml`)가 semver 태그를 올린다.
 
-## 현재 범위(증분 1)와 의도적 보류
+## 현재 상태 (2026-07-04)
 
-**만든 것**: VPC/서브넷/NAT, service 클러스터, widget-api ECS 서비스(내부, Service Connect 등록), RDS(PostgreSQL, private).
+인프라는 **구조 완성 + apply 됨**. 다만 아래는 의도적으로 꺼두었거나 비어 있다.
 
-**아직 안 만든 것(후속 증분에서)**:
-- **공개 ALB + WAF + ACM** — gateway 증분에서. (widget-api 는 내부라 불필요)
-- **widget-api DataSource 재활성화** — RDS·시크릿 주입 배선은 끝났으나, `application.yaml` 의 autoconfigure.exclude 제거는 테스트 컨텍스트가 실DB 를 요구하게 되어 별도 처리. 지금은 주입만 되고 앱은 미사용.
-- **worker 클러스터 + 파이프라인 이전** — data-pipeline·analysis-engine 을 새 VPC 로.
-- **컨테이너 헬스체크** — 현재 런타임 이미지에 curl 이 없어 미설정. ALB target group(gateway 증분) 또는 이미지에 curl 추가로 활성.
-- **오토스케일링·원격 상태 백엔드**.
+### 🔴 의도적 off (준비되면 켠다)
 
-> widget-api 는 내부 서비스라 지금은 외부에서 직접 도달할 수 없다. 배포 성공은 ECS 서비스가 RUNNING 으로 안정화되는지로 확인한다(헬스 200 은 로컬에서 이미 검증).
+| 기능 | 상태 | 켜는 법 |
+|------|------|---------|
+| **파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | 모듈 `schedule_state = "ENABLED"` |
+| **파이프라인 실패 알림 이메일** | 구독 없음(토픽만) | `pipeline_alarm_email = "..."` |
+| **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | gateway 도입 시 연결 |
+| **widget-api DB 연동** | TF 주입되나 앱 미사용(`application.yaml` DataSource exclude) | 앱에서 exclude 제거 |
+| **오토스케일링** | 없음(`desired_count=1`) | 추후 |
+| **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
+
+### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
+
+- 앱 ECR 이미지 6개(push), 프론트 S3 콘텐츠 3개(build sync)
+- 파이프라인 이미지(`edge/pipeline:latest` placeholder) + 시크릿 fmp/openai(`REPLACE_ME` → 실제 키)
+
+### 🔮 미구축 (후속 증분)
+
+- **gateway**(단일 엣지) — 지금 ALB 가 임시 대역. 목표는 gateway 앞단.
+- **WAF** — gateway 증분에서.
+- **prod 환경**(`envs/prod`), **super-admin-ui 빌드**(빈 폴더, CDN 자리만 확보).
+
+> 배치 파이프라인은 스케줄러 DISABLED 라 자동 실행 안 됨. 수동 검증은 `aws stepfunctions start-execution` 으로.
