@@ -39,33 +39,30 @@ output "edge_url" {
   value       = "https://${var.edge_domain}"
 }
 
-# ── 데이터 레이크 / 뉴스 수집 배치 ────────────────────────
-output "lake_bucket_name" {
-  description = "데이터 레이크 버킷 이름"
-  value       = module.data_lake.bucket_name
+# ── 프론트 CDN ───────────────────────────────────────────
+output "widget_url" {
+  value = module.widget_site.url
 }
 
-output "data_pipeline_ecr_repository_url" {
-  description = "data-pipeline 이미지 push 대상 ECR"
-  value       = module.data_pipeline.ecr_repository_url
+output "console_url" {
+  value = module.tenant_console_site.url
 }
 
-output "fmp_secret_arn" {
-  description = "FMP API 키 시크릿(값은 수동 주입 — main.tf 주석 참고)"
-  value       = aws_secretsmanager_secret.fmp.arn
+# ── news-pipeline ────────────────────────────────────────
+output "pipeline_state_machine_arn" {
+  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값>"
+  value       = module.pipeline.state_machine_arn
 }
 
-# ── 스키마 마이그레이션 배포용 값 ──────────────────────────
-# 아래 값들을 GitHub 저장소의 development environment 변수(vars.*)로 넣으면 deploy-dev 워크플로가 쓴다.
-# (secret 이 아니라 식별자라 vars 로 충분. terraform apply 후 `terraform output` 으로 확인.)
+# ── 스키마 마이그레이션 배포용 값 (GitHub development environment vars) ──
 output "gha_deploy_role_arn" {
   description = "→ vars.AWS_DEPLOY_ROLE_ARN"
   value       = module.gha_deploy_dev.role_arn
 }
 
 output "schema_migrate_ecr_repository_url" {
-  description = "→ vars.MIGRATE_ECR_REPOSITORY"
-  value       = module.schema_migrate.ecr_repository_url
+  description = "→ vars.MIGRATE_ECR_REPOSITORY (foundation 의 edge/schema-migrate)"
+  value       = data.aws_ecr_repository.schema_migrate.repository_url
 }
 
 output "schema_migrate_task_family" {
@@ -93,3 +90,6 @@ output "schema_migrate_log_group" {
   value       = module.schema_migrate.log_group_name
 }
 
+output "admin_url" {
+  value = module.super_admin_site.url
+}

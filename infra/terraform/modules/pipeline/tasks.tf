@@ -18,7 +18,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   security_group_id = aws_security_group.task.id
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
-  description       = "allow all egress (외부 API, ECR pull, RDS)"
+  description       = "allow all egress (external API, ECR pull, RDS)"
 }
 
 # ── 태스크 정의 (pipeline / inference) ──────────────────

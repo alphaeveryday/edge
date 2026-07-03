@@ -2,42 +2,33 @@ locals {
   prefix = "edge-dev"
 }
 
-# ── DNS / TLS (기존 edgesignal.dev 영역은 참조만) ───────
-# .dev 는 HSTS preload(강제 HTTPS)라 ACM 인증서가 필수.
+# ── DNS / TLS ───────────────────────────────────────────
+# 존은 도메인 등록(수동)으로 생긴 것을 참조. 인증서는 foundation 의 와일드카드를 쓴다
+# (ALB=apne2, CloudFront=us-east-1) — env 는 발급하지 않고 data 로 조회만.
 data "aws_route53_zone" "main" {
   name = var.route53_zone_name
 }
 
-resource "aws_acm_certificate" "edge" {
-  domain_name       = var.edge_domain
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
+data "aws_acm_certificate" "wildcard" {
+  domain      = "*.${var.route53_zone_name}"
+  statuses    = ["ISSUED"]
+  most_recent = true
 }
 
-# ACM DNS 검증 레코드를 Route53 에 자동 생성
-resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.edge.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      record = dvo.resource_record_value
-    }
-  }
-
-  zone_id         = data.aws_route53_zone.main.zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 60
-  allow_overwrite = true
+data "aws_acm_certificate" "wildcard_cdn" {
+  provider    = aws.us_east_1
+  domain      = "*.${var.route53_zone_name}"
+  statuses    = ["ISSUED"]
+  most_recent = true
 }
 
-resource "aws_acm_certificate_validation" "edge" {
-  certificate_arn         = aws_acm_certificate.edge.arn
-  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+# foundation 이 소유한 GitHub OIDC provider·이미지 ECR 을 data 로 참조(느슨한 결합).
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+data "aws_ecr_repository" "schema_migrate" {
+  name = "edge/schema-migrate"
 }
 
 # 엣지 도메인 → ALB (ALIAS)
@@ -53,117 +44,37 @@ resource "aws_route53_record" "edge" {
   }
 }
 
-# ── 네트워크(VPC·서브넷·NAT) ────────────────────────────
+# ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
-  source   = "../../modules/network"
-  name     = local.prefix
-  vpc_cidr = var.vpc_cidr
+  source             = "../../modules/network"
+  name               = local.prefix
+  vpc_cidr           = var.vpc_cidr
+  availability_zones = ["${var.region}a", "${var.region}c"] # a·c 고정(b 회피)
   # dev: NAT 1개 공유. prod 에서는 single_nat_gateway=false 로 AZ당 1개.
 }
 
-# ── 서비스 클러스터(API 상시 가동) ──────────────────────
-# 워커(data-pipeline·analysis-engine) 클러스터는 별도(edge-dev-worker)로 분리 예정.
+# ── 클러스터: 상시 API(service) / 배치(worker) 분리 ─────
 module "service_cluster" {
   source         = "../../modules/ecs-cluster"
   name           = "${local.prefix}-service"
   namespace_name = "edge.internal"
 }
 
-# ── 워커 클러스터 (배치: data-pipeline·analysis-engine) ──
 module "worker_cluster" {
   source         = "../../modules/ecs-cluster"
   name           = "${local.prefix}-worker"
   namespace_name = "edge-worker.internal"
 }
 
-# ── 데이터 레이크 (수집→분석 공유 저장소, edge-data-lake-*) ──
-module "data_lake" {
-  source      = "../../modules/s3-lake"
-  bucket_name = var.lake_bucket_name
-}
-
-# FMP API 키 시크릿 껍데기. 값은 apply 후 수동 주입한다(하드코딩 금지):
-#   aws secretsmanager put-secret-value --secret-id edge-dev/data-pipeline/fmp \
-#     --secret-string '{"api_key":"..."}'
-resource "aws_secretsmanager_secret" "fmp" {
-  name        = "${local.prefix}/data-pipeline/fmp"
-  description = "FMP API key for data-pipeline news collection"
-}
-
-# ── 뉴스 수집 배치 (EventBridge Scheduler → Fargate) ────
-# 스케줄 주기는 미확정 placeholder — 이미지 push·키 주입 전까지 비활성(enabled=false).
-module "data_pipeline" {
-  source = "../../modules/ecs-scheduled-task"
-
-  # 앱 리소스는 bare 앱명(widget-api 등 ecs-service 와 동일 규칙),
-  # 이미지 저장소는 edge/<앱> 네임스페이스(기존 앱 ECR 과 동일).
-  name                = "data-pipeline"
-  ecr_repository_name = "edge/data-pipeline"
-  region              = var.region
-  vpc_id              = module.network.vpc_id
-  cluster_arn         = module.worker_cluster.cluster_arn
-  subnet_ids          = module.network.private_subnet_ids
-
-  schedules = {
-    ingest-raw = {
-      schedule_expression = "cron(0 * * * ? *)"
-      command             = ["python", "-m", "data_pipeline.run", "ingest-raw"]
-      enabled             = false
-    }
-    normalize = {
-      schedule_expression = "cron(20 * * * ? *)"
-      command             = ["python", "-m", "data_pipeline.run", "normalize"]
-      enabled             = false
-    }
-  }
-
-  # 앱 설정 오버라이드(config loader 의 DATA_PIPELINE_ 접두 규약).
-  environment = {
-    DATA_PIPELINE_STORAGE__BACKEND = "s3"
-    DATA_PIPELINE_STORAGE__BUCKET  = module.data_lake.bucket_name
-  }
-  secrets = {
-    DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY = "${aws_secretsmanager_secret.fmp.arn}:api_key::"
-  }
-  secret_arns = [aws_secretsmanager_secret.fmp.arn]
-
-  # 레이크 프리픽스 R/W 최소 권한 — 파이프라인이 쓰는 프리픽스만.
-  task_policy_json = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = [module.data_lake.bucket_arn]
-        Condition = {
-          StringLike = {
-            "s3:prefix" = ["raw/*", "canonical/*", "operations_archive/*"]
-          }
-        }
-      },
-      {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
-        Resource = [
-          "${module.data_lake.bucket_arn}/raw/*",
-          "${module.data_lake.bucket_arn}/canonical/*",
-          "${module.data_lake.bucket_arn}/operations_archive/*",
-        ]
-      },
-    ]
-  })
-}
-
-# ── RDS (PostgreSQL, private) ───────────────────────────
+# ── RDS (PostgreSQL, 격리된 data tier) ──────────────────
 module "rds" {
   source     = "../../modules/rds"
   name       = local.prefix
   vpc_id     = module.network.vpc_id
-  subnet_ids = module.network.private_subnet_ids
+  subnet_ids = module.network.data_subnet_ids # 격리 데이터 tier(컴퓨트와 분리)
 }
 
-# widget-api SG → RDS 5432. 여기(env)에서 독립 리소스로 건다.
-# rds 모듈 안에서 widget_api SG 를 참조하면 widget_api↔rds 순환 의존이 되므로.
+# widget-api SG → RDS 5432 (env 에서 독립 리소스로 — 순환 의존 회피)
 resource "aws_vpc_security_group_ingress_rule" "rds_from_widget_api" {
   security_group_id            = module.rds.security_group_id
   referenced_security_group_id = module.widget_api.security_group_id
@@ -174,8 +85,6 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_widget_api" {
 }
 
 # ── 공개 엣지 ALB (임시: widget-api 검증용) ─────────────
-# 목표 토폴로지에서는 gateway 앞에 선다. gateway 증분에서 타깃그룹을
-# gateway 서비스로 갈아끼우고, widget-api 는 다시 private 으로 닫는다.
 module "edge_alb" {
   source = "../../modules/alb"
 
@@ -186,11 +95,10 @@ module "edge_alb" {
   health_check_path = "/actuator/health"
   allowed_cidrs     = var.alb_allowed_cidrs
   enable_https      = true
-  certificate_arn   = aws_acm_certificate_validation.edge.certificate_arn
+  certificate_arn   = data.aws_acm_certificate.wildcard.arn # foundation apne2 와일드카드
 }
 
-# ── widget-api (현재 임시로 ALB 뒤에서 공개 검증) ───────
-# gateway 도입 시: target_group_arn 제거 + ingress 를 gateway SG 로 교체.
+# ── widget-api (ALB 뒤 공개 검증) ───────────────────────
 module "widget_api" {
   source = "../../modules/ecs-service"
 
@@ -202,19 +110,16 @@ module "widget_api" {
 
   container_image  = var.widget_api_image
   container_port   = 8080
-  cpu_architecture = "X86_64" # ECR 에 올린 amd64 이미지와 일치
+  cpu_architecture = "X86_64"
 
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
 
-  # ALB 에서만 인바운드 허용 + 타깃그룹 등록
   ingress_security_group_ids        = [module.edge_alb.security_group_id]
   target_group_arn                  = module.edge_alb.target_group_arn
-  health_check_grace_period_seconds = 120 # JVM 부팅 ~38s 대비
+  health_check_grace_period_seconds = 120
 
-  # DB 접속 정보 주입. 비밀번호만 Secrets Manager(RDS 관리형)에서, 나머지는 평문 env.
-  # (앱쪽 application.yaml 의 DataSource 재활성화는 후속 — 주입돼도 미사용이면 무해)
   environment = {
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     SPRING_DATASOURCE_USERNAME = module.rds.master_username
@@ -225,10 +130,7 @@ module "widget_api" {
   secret_arns = [module.rds.master_user_secret_arn]
 }
 
-# ── 내부 API (internal-only 스테이징) ────────────────────
-# tenant-console-api·super-admin-api 는 아직 호출자(gateway 라우팅)가 없어
-# private 서브넷에 Service Connect 로 등록만 하고 대기(idle)한다.
-# ALB 타깃·인바운드 허용자 없음 — 호출자가 생기면 ingress_security_group_ids 로 연다.
+# ── 내부 API (호출자 생길 때까지 idle) ──────────────────
 module "tenant_console_api" {
   source = "../../modules/ecs-service"
 
@@ -240,58 +142,11 @@ module "tenant_console_api" {
 
   container_image  = var.tenant_console_api_image
   container_port   = 8080
-  cpu_architecture = "X86_64" # ECR amd64 이미지와 일치
+  cpu_architecture = "X86_64"
 
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
-}
-
-# ── 스키마 마이그레이션 one-off task (배포 파이프라인이 트리거) ──────────
-# GitHub-hosted 러너는 VPC 밖이라 private RDS 에 못 붙는다. Flyway 는 이 VPC 내부 task 에서
-# 실행하고, GitHub Actions 는 OIDC 로 이 task 를 RunTask 트리거만 한다. 접속값은 RDS 관리형
-# 시크릿을 재사용(비밀번호만 시크릿, url/user 는 평문) — widget-api 와 동일 패턴.
-module "schema_migrate" {
-  source = "../../modules/schema-migrate"
-
-  name   = "${local.prefix}-schema-migrate"
-  region = var.region
-  vpc_id = module.network.vpc_id
-
-  flyway_url  = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
-  flyway_user = module.rds.master_username
-  # base ARN 을 넘긴다(접미사 없이). 모듈이 valueFrom 에 ':password::' 를 붙이고, IAM 은 base ARN 을 쓴다.
-  flyway_password_secret_arn = module.rds.master_user_secret_arn
-
-  cpu_architecture = "X86_64" # 워크플로가 빌드하는 amd64 이미지와 일치
-}
-
-# 마이그레이션 task SG → RDS 5432. widget-api 와 동일하게 env 에서 독립 리소스로(순환 의존 회피).
-resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.schema_migrate.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "schema-migrate task to postgres"
-}
-
-# GitHub Actions(development environment) → AWS OIDC 배포 역할. 마이그레이션 이미지 push + RunTask 최소 권한.
-module "gha_deploy_dev" {
-  source = "../../modules/github-oidc-deploy"
-
-  name                = "${local.prefix}-gha-schema-migrate"
-  github_org_repo     = var.github_org_repo
-  github_environments = ["development"] # deploy-dev.yml 의 environment: development 와 일치(OIDC sub)
-
-  create_oidc_provider = var.create_github_oidc_provider
-  oidc_provider_arn    = var.github_oidc_provider_arn # create_oidc_provider=false 일 때 기존 provider ARN
-
-  ecr_repository_arn     = module.schema_migrate.ecr_repository_arn
-  ecs_cluster_arn        = module.service_cluster.cluster_arn
-  task_definition_family = module.schema_migrate.task_definition_family
-  pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
-  log_group_arn          = module.schema_migrate.log_group_arn
 }
 
 module "super_admin_api" {
@@ -305,9 +160,137 @@ module "super_admin_api" {
 
   container_image  = var.super_admin_api_image
   container_port   = 8080
-  cpu_architecture = "X86_64" # ECR amd64 이미지와 일치
+  cpu_architecture = "X86_64"
 
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
+}
+
+# ── 스키마 마이그레이션 one-off task ────────────────────
+# ECR 은 foundation(edge/schema-migrate) 소유 — data 로 조회해 넘긴다(decoupled).
+module "schema_migrate" {
+  source = "../../modules/schema-migrate"
+
+  name   = "${local.prefix}-schema-migrate"
+  region = var.region
+  vpc_id = module.network.vpc_id
+
+  ecr_repository_url = data.aws_ecr_repository.schema_migrate.repository_url
+  ecr_repository_arn = data.aws_ecr_repository.schema_migrate.arn
+
+  flyway_url                 = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+  flyway_user                = module.rds.master_username
+  flyway_password_secret_arn = module.rds.master_user_secret_arn
+
+  cpu_architecture = "X86_64"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.schema_migrate.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "schema-migrate task to postgres"
+}
+
+# GitHub Actions → AWS OIDC 배포 역할. provider 는 foundation 소유(create=false + data ARN).
+module "gha_deploy_dev" {
+  source = "../../modules/github-oidc-deploy"
+
+  name                = "${local.prefix}-gha-schema-migrate"
+  github_org_repo     = var.github_org_repo
+  github_environments = ["development"]
+
+  create_oidc_provider = false
+  oidc_provider_arn    = data.aws_iam_openid_connect_provider.github.arn
+
+  ecr_repository_arn     = data.aws_ecr_repository.schema_migrate.arn
+  ecs_cluster_arn        = module.service_cluster.cluster_arn
+  task_definition_family = module.schema_migrate.task_definition_family
+  pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
+  log_group_arn          = module.schema_migrate.log_group_arn
+}
+
+# ── news-pipeline (Step Functions 배치) ─────────────────
+# CDK 대체 SFN. edge VPC·RDS 통합. 스케줄러는 DISABLED 로 생성(수동 검증 후 컷오버).
+module "pipeline" {
+  source = "../../modules/pipeline"
+
+  name        = "${local.prefix}-pipeline"
+  region      = var.region
+  vpc_id      = module.network.vpc_id
+  subnet_ids  = module.network.private_subnet_ids
+  cluster_arn = module.worker_cluster.cluster_arn
+  image       = var.pipeline_image
+
+  db_host                = module.rds.address
+  db_port                = module.rds.port
+  db_name                = module.rds.db_name
+  db_user                = module.rds.master_username
+  db_password_secret_arn = module.rds.master_user_secret_arn
+
+  contact_email = var.pipeline_contact_email
+  alarm_email   = var.pipeline_alarm_email
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.pipeline.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "news-pipeline batch tasks to postgres"
+}
+
+# ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
+# 모듈·S3 이름은 앱 폴더명과 일치(widget-ui·tenant-console-ui·super-admin-ui).
+# 인증서는 foundation us-east-1 와일드카드(모든 서브도메인 커버).
+module "widget_site" {
+  source = "../../modules/static-site"
+
+  name            = "${local.prefix}-widget" # widget-ui (임베드 위젯, 정적 파일)
+  domain_name     = var.widget_domain
+  zone_id         = data.aws_route53_zone.main.zone_id
+  certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
+  spa             = false
+}
+
+module "tenant_console_site" {
+  source = "../../modules/static-site"
+
+  name            = "${local.prefix}-tenant-console" # tenant-console-ui (테넌트 콘솔 SPA)
+  domain_name     = var.console_domain
+  zone_id         = data.aws_route53_zone.main.zone_id
+  certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
+  spa             = true
+}
+
+# super-admin-ui: 아직 빈 폴더지만 CDN 자리를 미리 세워둔다(빌드되면 s3 sync 만).
+module "super_admin_site" {
+  source = "../../modules/static-site"
+
+  name            = "${local.prefix}-super-admin" # super-admin-ui (운영 콘솔 SPA)
+  domain_name     = var.admin_domain
+  zone_id         = data.aws_route53_zone.main.zone_id
+  certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
+  spa             = true
+}
+
+# 모듈 rename 은 state 상 이동으로 처리 — CloudFront 배포를 재생성하지 않고 보존한다.
+moved {
+  from = module.console_site
+  to   = module.tenant_console_site
+}
+
+moved {
+  from = module.admin_site
+  to   = module.super_admin_site
+}
+
+# news_pipeline → pipeline 인스턴스 rename (state 이동으로 보존, 재생성 없음).
+moved {
+  from = module.news_pipeline
+  to   = module.pipeline
 }
