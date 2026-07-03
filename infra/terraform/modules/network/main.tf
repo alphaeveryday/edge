@@ -1,12 +1,13 @@
-# VPC + public/private 서브넷(2 AZ) + IGW + NAT.
-# AZ 이름을 하드코딩하지 않고 region에서 동적으로 골라 "어디서나" 재현되게 한다.
+# VPC + public/private/data 서브넷(2 AZ) + IGW + NAT.
+# AZ 는 기본적으로 region 에서 동적으로 골라 "어디서나" 재현되게 하되, 특정 AZ 를 원하면
+# availability_zones 로 명시 오버라이드한다(길이는 az_count 와 같아야 함).
 
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  azs = length(var.availability_zones) > 0 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, var.az_count)
 }
 
 resource "aws_vpc" "this" {
@@ -31,13 +32,23 @@ resource "aws_subnet" "public" {
   tags                    = { Name = "${var.name}-public-${local.azs[count.index]}", Tier = "public" }
 }
 
-# private: Fargate task(API·워커)·RDS 가 위치
+# private(compute): Fargate task(API·워커)가 위치. NAT 로 아웃바운드(이미지 pull·외부 수집).
 resource "aws_subnet" "private" {
   count             = var.az_count
   vpc_id            = aws_vpc.this.id
   availability_zone = local.azs[count.index]
   cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 100)
   tags              = { Name = "${var.name}-private-${local.azs[count.index]}", Tier = "private" }
+}
+
+# data: RDS 전용 격리 서브넷. 아웃바운드 인터넷 경로 없음(NAT/IGW 미연결) — DB 는 egress 불필요.
+# 컴퓨트 tier 와 라우트/서브넷을 분리해 데이터 계층을 격리한다(다층 방어).
+resource "aws_subnet" "data" {
+  count             = var.az_count
+  vpc_id            = aws_vpc.this.id
+  availability_zone = local.azs[count.index]
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 200)
+  tags              = { Name = "${var.name}-data-${local.azs[count.index]}", Tier = "data" }
 }
 
 resource "aws_route_table" "public" {
@@ -87,4 +98,17 @@ resource "aws_route_table_association" "private" {
   count          = var.az_count
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id
+}
+
+# data 라우트 테이블 — local 경로만(격리). 0.0.0.0/0 없음 → 인터넷 왕복 불가.
+# AZ 별로 나눌 이유 없음(NAT 미연결이라 전부 동일) → 단일 테이블 공유.
+resource "aws_route_table" "data" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name}-data" }
+}
+
+resource "aws_route_table_association" "data" {
+  count          = var.az_count
+  subnet_id      = aws_subnet.data[count.index].id
+  route_table_id = aws_route_table.data.id
 }

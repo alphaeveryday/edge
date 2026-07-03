@@ -10,9 +10,15 @@ variable "vpc_cidr" {
 }
 
 variable "az_count" {
-  description = "사용할 AZ 수(ALB·RDS Multi-AZ 대비 최소 2)"
+  description = "사용할 AZ 수(ALB·RDS Multi-AZ 대비 최소 2). availability_zones 미지정 시 동적 선택 개수."
   type        = number
   default     = 2
+}
+
+variable "availability_zones" {
+  description = "사용할 AZ 를 명시(예: [\"ap-northeast-2a\", \"ap-northeast-2c\"]). 비우면 region 에서 앞 az_count 개를 동적 선택. 지정 시 길이는 az_count 와 같아야 한다."
+  type        = list(string)
+  default     = []
 }
 
 variable "enable_nat" {

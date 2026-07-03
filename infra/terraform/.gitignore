@@ -12,3 +12,5 @@ override.tf.json
 terraform.rc
 
 # 커밋함: .terraform.lock.hcl(프로바이더 고정), *.tf, terraform.tfvars(비밀 아님 — env 정의)
+tfplan
+*.tfplan

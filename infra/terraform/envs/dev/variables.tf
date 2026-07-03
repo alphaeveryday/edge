@@ -48,6 +48,18 @@ variable "edge_domain" {
   default     = "edge-dev.edgesignal.dev"
 }
 
+variable "widget_domain" {
+  description = "widget-ui(임베드 위젯) CDN 도메인. prod 는 widget.edgesignal.dev 로."
+  type        = string
+  default     = "widget-dev.edgesignal.dev"
+}
+
+variable "console_domain" {
+  description = "tenant-console-ui(콘솔 SPA) CDN 도메인. prod 는 app.edgesignal.dev 로."
+  type        = string
+  default     = "console-dev.edgesignal.dev"
+}
+
 variable "github_org_repo" {
   description = "OIDC 로 배포 역할을 assume 할 GitHub repo (owner/repo)"
   type        = string
@@ -64,4 +76,27 @@ variable "github_oidc_provider_arn" {
   description = "create_github_oidc_provider=false 일 때 사용할 기존 GitHub OIDC provider ARN. true 면 무시된다."
   type        = string
   default     = null
+}
+
+variable "pipeline_image" {
+  description = "news-pipeline 배치 이미지 URI(:태그 포함). foundation 의 edge/pipeline 에 push 후 그 URI."
+  type        = string
+}
+
+variable "pipeline_contact_email" {
+  description = "파이프라인이 외부 뉴스 소스 접근 시 밝히는 연락 이메일"
+  type        = string
+  default     = "asm.alphaeveryday@gmail.com"
+}
+
+variable "pipeline_alarm_email" {
+  description = "파이프라인 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
+  type        = string
+  default     = null
+}
+
+variable "admin_domain" {
+  description = "super-admin-ui(운영 콘솔 SPA) CDN 도메인. prod 는 admin.edgesignal.dev 로."
+  type        = string
+  default     = "admin-dev.edgesignal.dev"
 }

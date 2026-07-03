@@ -6,15 +6,8 @@
 #
 # 이 모듈은 "상시 서비스"가 아니라 실행할 task 정의만 만든다(aws_ecs_service 없음).
 
-# 마이그레이션 이미지를 담을 ECR 저장소. 워크플로가 새 SQL 을 담은 이미지를 여기에 push 한다.
-resource "aws_ecr_repository" "this" {
-  name                 = var.name
-  image_tag_mutability = var.image_tag_mutability
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
+# 마이그레이션 이미지 ECR 은 foundation(edge/schema-migrate)이 소유한다 — 모든 이미지 레포를
+# 한 곳에 모으는 규약(ADR-0009). 이 모듈은 그 repo 의 URL/ARN 을 입력으로 받아 참조만 한다.
 
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.name}"
@@ -88,7 +81,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 locals {
   # 부트스트랩 이미지(저장소 생성 직후엔 아직 없음). 워크플로가 실제 SQL 이미지를 push 하고
   # 새 task 정의 리비전을 등록해 실행하므로, 여기 값은 최초 apply 를 통과시키는 placeholder 다.
-  bootstrap_image = "${aws_ecr_repository.this.repository_url}:bootstrap"
+  bootstrap_image = "${var.ecr_repository_url}:bootstrap"
 
   container = {
     name      = var.name
