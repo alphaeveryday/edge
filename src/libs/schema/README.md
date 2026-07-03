@@ -62,6 +62,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - **dev 머지** → dev DB 마이그레이션 대상 (`.github/workflows/schema-migrate.yml`, **`src/libs/schema/` 변경 커밋에서만** 실행).
 - **PR(→dev/main)** → ephemeral Postgres에 `:libs:schema:flywayMigrate`+`flywayValidate` 실제 적용·검증만 한다 (`.github/workflows/schema-validate.yml`). secret을 쓰지 않고 운영 DB는 건드리지 않는다.
 - **prod 마이그레이션(main 머지 → prod DB, 승인 게이트 후)** 은 목표 토폴로지지만 아직 워크플로가 없다. prod 인프라(RDS·클러스터·`production` environment)가 생기면 별도 티켓에서 dev와 같은 패턴으로 재도입한다(현재는 dev 인프라만 존재).
+- **앱 배포(API CD)는 마이그레이션 CD와 분리돼 있다** — 앱 워크플로는 CI에서 `schema-migrate` 완료를 기다리지 않는다. "스키마가 코드보다 먼저"는 확장-수축 + PR 순서 규율로 지킨다: **확장 마이그레이션 PR을 먼저 머지·적용(schema-migrate 초록 확인)한 뒤 의존 코드 PR을 머지한다**(docs/schema.md §2).
 
 ### 배포 시 마이그레이션은 VPC 내부 ECS one-off task에서 실행한다
 
@@ -71,7 +72,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 1. 러너가 **OIDC로 AWS 인증**(장기 액세스 키 없음).
 2. 이 커밋의 SQL을 담은 **마이그레이션 이미지**(`src/libs/schema/Dockerfile`, Flyway CLI + SQL)를 ECR에 push.
 3. **ECS Fargate one-off task**(`infra/terraform/modules/schema-migrate`)를 private 서브넷에서 RunTask로 실행 → Flyway가 VPC 안에서 RDS에 적용.
-4. task 완료(STOPPED)까지 대기 후 컨테이너 exit code로 성공/실패 판정(실패 시 앱 배포 진행 안 됨).
+4. task 완료(STOPPED)까지 대기 후 컨테이너 exit code로 성공/실패 판정.
 
 - **DB 비밀번호는 RDS 관리형 Secrets Manager 시크릿**에서 task로 주입한다(코드·로그·GitHub에 평문 없음). URL/user는 RDS 출력(평문 env). 별도 `FLYWAY_*` secret을 만들지 않는다.
 - 이미지 안 `flyway.conf`의 정책 플래그(`baselineOnMigrate`·`cleanDisabled`·`validateMigrationNaming`)는 `build.gradle`의 `flyway{}` 블록과 **동일하게 유지**한다.
