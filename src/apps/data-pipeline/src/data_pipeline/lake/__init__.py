@@ -7,6 +7,7 @@ from .storage import (
     collection_log_key,
     make_storage,
     raw_news_partition,
+    raw_price_partition,
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "S3Storage",
     "make_storage",
     "raw_news_partition",
+    "raw_price_partition",
     "collection_log_key",
 ]

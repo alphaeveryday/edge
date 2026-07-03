@@ -41,16 +41,20 @@ class NewsSource(BaseModel):
 
 
 class PriceSource(BaseModel):
-    """가격 데이터 소스.
+    """가격 데이터 소스 (FMP EOD 일봉 수집, S004).
 
-    현재 범위는 가격 소스의 '설정 위치 명시'까지다. 실제 가격 수집은 후속.
+    api_key 는 커밋되는 파일이 아니라 환경변수로 주입한다(loader 참고).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     base_url: NonBlankStr
     enabled: bool = True
-    api_key: str | None = None
+    api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → FMP 심볼. 뉴스와 별개 맵이다 — 뉴스는 ADR(SSNLF·KB…)로 매핑해도
+    # '그 회사 뉴스'라 맞지만, 가격은 ADR 의 USD 시세를 KR 종목 가격으로 쓰면 통화·
+    # 거래시간이 어긋난다. 가격은 거래소-로컬 심볼만 두고, 없으면 이 소스가 건너뛴다.
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
 class NewsConfig(BaseModel):
