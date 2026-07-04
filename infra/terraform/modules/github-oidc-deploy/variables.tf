@@ -9,8 +9,15 @@ variable "github_org_repo" {
 }
 
 variable "github_environments" {
-  description = "이 역할을 assume 할 수 있는 GitHub Actions environment 이름 목록. job 이 `environment:` 를 참조하면 OIDC 토큰 sub 가 `repo:owner/repo:environment:NAME` 형태가 되므로, 브랜치 ref 가 아니라 environment 로 신뢰한다. dev 역할은 [\"development\"], prod 역할은 [\"production\"]."
+  description = "이 역할을 assume 할 수 있는 GitHub Actions environment 이름 목록(sub=`environment:NAME`). Free+private 플랜은 environment 배포 브랜치 정책을 강제할 수 없어 브랜치 핀이 안 되므로, 신규 구성은 github_branch_refs 를 권장한다. 빈 리스트면 environment 기반 신뢰 없음."
   type        = list(string)
+  default     = []
+}
+
+variable "github_branch_refs" {
+  description = "이 역할을 assume 할 수 있는 브랜치 ref 목록(예: [\"refs/heads/dev\"]). job 이 `environment:` 없이 push 로 돌면 OIDC sub 가 `repo:owner/repo:ref:refs/heads/BRANCH` 형태가 된다. GitHub 플랜과 무관하게 브랜치를 암호학적으로 핀한다. 빈 리스트면 ref 기반 신뢰 없음."
+  type        = list(string)
+  default     = []
 }
 
 variable "create_oidc_provider" {

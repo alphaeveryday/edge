@@ -239,9 +239,11 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
 module "gha_deploy_dev" {
   source = "../../modules/github-oidc-deploy"
 
-  name                = "${local.prefix}-gha-schema-migrate"
-  github_org_repo     = var.github_org_repo
+  name            = "${local.prefix}-gha-schema-migrate"
+  github_org_repo = var.github_org_repo
+  # 전환기(ALPHA-313 B1): environment 와 ref 둘 다 허용. B2 에서 environment 를 비워 ref-only 로 좁힌다.
   github_environments = ["development"]
+  github_branch_refs  = ["refs/heads/dev"]
 
   create_oidc_provider = false
   oidc_provider_arn    = data.aws_iam_openid_connect_provider.github.arn
