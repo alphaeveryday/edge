@@ -25,7 +25,7 @@ infra/terraform/
     └── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
 ```
 
-`ecs-service` 를 widget-api·tenant-console-api·super-admin-api 가, `static-site` 를 widget·tenant-console·super-admin UI 가 동일 재사용한다.
+`ecs-service` 를 widget-api·tenant-console-api·super-admin-api·gateway 가, `static-site` 를 widget·tenant-console·super-admin UI 가 동일 재사용한다.
 
 ## 설계 요지
 
@@ -50,6 +50,8 @@ cd ../envs/dev  && terraform apply
 - 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`.
 - env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
 - 이미지 태그: `terraform.tfvars` 의 `*_image` 가 TF 소유 baseline. 앱 CD(`deploy-<app>.yml`)가 semver 태그를 올린다.
+  서비스의 실행 task 정의는 CD 소유라 TF 가 되돌리지 않는다(`ecs-service` 의 `ignore_changes = [task_definition]`);
+  `terraform.tfvars` 핀은 신규 생성 시 baseline 으로만 쓰인다.
 
 ## 현재 상태 (2026-07-04)
 
@@ -73,7 +75,8 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **gateway**(단일 엣지) — 지금 ALB 가 임시 대역. 목표는 gateway 앞단.
+- **gateway**(단일 엣지) — internal-only ECS 서비스로 스테이징됨(ALPHA-296, Service Connect `gateway:8080`).
+  공개 ALB 타깃 컷오버(지금 ALB 는 widget-api 임시 대역)와 리버스 프록시 라우팅은 ALPHA-294.
 - **WAF** — gateway 증분에서.
 - **prod 환경**(`envs/prod`), **super-admin-ui 빌드**(빈 폴더, CDN 자리만 확보).
 

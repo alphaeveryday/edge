@@ -181,6 +181,28 @@ module "super_admin_api" {
   desired_count = 1
 }
 
+# ── gateway (엣지 리버스 프록시 — ALPHA-296 internal-only 스테이징) ──
+# 공개 ALB 컷오버(ALPHA-294) 전까지 internal-only 로 세워 ecs-service 재사용·Service Connect 등록을 검증한다.
+# 라우트 uri 는 Service Connect DNS(widget-api·tenant-console-api·super-admin-api)로 요청 시 lazy 해석 —
+# 업스트림 연결 없이 부팅되므로 target_group·ingress 없이 RUNNING 안정화된다(ALB 타깃·컷오버는 ALPHA-294).
+module "gateway" {
+  source = "../../modules/ecs-service"
+
+  name   = "gateway"
+  region = var.region
+
+  cluster_arn                   = module.service_cluster.cluster_arn
+  service_connect_namespace_arn = module.service_cluster.namespace_arn
+
+  container_image  = var.gateway_image
+  container_port   = 8080
+  cpu_architecture = "X86_64"
+
+  vpc_id        = module.network.vpc_id
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+}
+
 # ── 스키마 마이그레이션 one-off task ────────────────────
 # ECR 은 foundation(edge/schema-migrate) 소유 — data 로 조회해 넘긴다(decoupled).
 module "schema_migrate" {
