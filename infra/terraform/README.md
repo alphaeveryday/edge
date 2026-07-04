@@ -78,6 +78,6 @@ cd ../envs/dev  && terraform apply
 - **gateway**(단일 엣지) — internal-only ECS 서비스로 스테이징됨(ALPHA-296, Service Connect `gateway:8080`).
   공개 ALB 타깃 컷오버(지금 ALB 는 widget-api 임시 대역)와 리버스 프록시 라우팅은 ALPHA-294.
 - **WAF** — gateway 증분에서.
-- **prod 환경**(`envs/prod`), **super-admin-ui 빌드**(빈 폴더, CDN 자리만 확보).
+- **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > 배치 파이프라인은 스케줄러 DISABLED 라 자동 실행 안 됨. 수동 검증은 `aws stepfunctions start-execution` 으로.
