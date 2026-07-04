@@ -1,0 +1,33 @@
+# widget-ui dev 배포 — 자기 코드(또는 워크스페이스 공유 파일)가 바뀐 dev push 에서만 트리거되는
+# 독립 배포. 절차는 deploy-ui.yml 한 벌을 재사용한다. 버킷·배포 ID 는 repo vars 로 전달한다.
+name: deploy-widget-ui
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/widget-ui/**"
+      # 워크스페이스 공유 — 의존성 그래프에 영향.
+      - "src/pnpm-lock.yaml"
+      - "src/pnpm-workspace.yaml"
+      # 배포 절차 자체의 변경.
+      - ".github/workflows/deploy-ui.yml"
+      - ".github/workflows/deploy-widget-ui.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+# 같은 앱의 배포는 직렬화, 실행 중 배포는 취소하지 않는다.
+concurrency:
+  group: deploy-widget-ui
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-ui.yml
+    with:
+      app: widget-ui
+      environment: development
+      bucket: ${{ vars.WIDGET_UI_BUCKET }}
+      distribution_id: ${{ vars.WIDGET_UI_DISTRIBUTION_ID }}

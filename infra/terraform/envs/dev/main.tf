@@ -271,6 +271,18 @@ module "gha_deploy_dev" {
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
     module.gateway.execution_role_arn, module.gateway.task_role_arn,
   ]
+
+  # UI 배포(deploy-ui.yml) 권한 — 3개 프론트 S3 sync + CloudFront 무효화.
+  ui_bucket_arns = [
+    module.widget_site.bucket_arn,
+    module.tenant_console_site.bucket_arn,
+    module.super_admin_site.bucket_arn,
+  ]
+  ui_distribution_arns = [
+    module.widget_site.distribution_arn,
+    module.tenant_console_site.distribution_arn,
+    module.super_admin_site.distribution_arn,
+  ]
 }
 
 # ── news-pipeline (Step Functions 배치) ─────────────────
