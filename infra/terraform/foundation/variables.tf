@@ -21,3 +21,9 @@ variable "github_oidc_thumbprint" {
   type        = string
   default     = "6938fd4d98bab03faadb97b34396831e3780aea1"
 }
+
+variable "github_org_repo" {
+  description = "Terraform CD 역할(tf-cd.tf)이 OIDC sub 로 신뢰할 GitHub repo (owner/repo)"
+  type        = string
+  default     = "alphaeveryday/edge"
+}
