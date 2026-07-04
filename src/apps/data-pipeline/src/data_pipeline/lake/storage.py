@@ -3,7 +3,8 @@
 이 모듈이 s3://stock-ai-lake/ 파티션 규약의 SSOT 다 — 경로 문자열을
 다른 곳에서 조립하지 말고 여기 빌더를 쓴다.
 
-- raw:  run_id 별 append (재현성). 파티션은 published_date(수집일 아님).
+- raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
+        가격·재무는 ingest_date(수집일). 각 빌더 주석 참고.
 - 로그: operations_archive/collection_logs/ 아래 run_id 별 1건.
 
 백엔드는 설정(storage.backend)으로 고른다. MVP 개발은 local 스텁으로 돌리고,

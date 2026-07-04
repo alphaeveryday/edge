@@ -30,8 +30,9 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 #   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
 
 # 재무제표(손익·재무상태·현금흐름) 원본저장(Step1) — FMP 재무 API. 날짜창 없음(매 실행이
-# 최근 N기를 재요청하는 point-in-time 폴링). 매일 폴링해도 공시 정체성 키로 신규·정정만
-# 저장한다(저장은 공시당 1회). 심볼맵은 재무 전용(financial.source.symbol_map) — 현재 US 만.
+# 최근 N기를 재요청하는 point-in-time 폴링). 가격과 동형으로 받은 행을 ingest_date/run_id 에
+# 전부 append(중복 판정 안 함 — dedup·정정·point-in-time 은 후속 canonical). 심볼맵은 재무
+# 전용(financial.source.symbol_map) — 현재 US 만.
 DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial
 ```
