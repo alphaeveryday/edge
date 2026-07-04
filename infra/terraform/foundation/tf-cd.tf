@@ -45,6 +45,26 @@ resource "aws_iam_role_policy_attachment" "tf_plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
+# envs/dev 의 pipeline 모듈은 `aws_secretsmanager_secret_version` 데이터 소스로 API 키 시크릿을 읽는다
+# → plan(refresh)에 GetSecretValue 가 필요한데 ReadOnlyAccess 는 이 민감 액션을 제외한다. 해당 dev
+# 파이프라인 시크릿(edge-dev-pipeline/*)에만 스코프해 보완한다(그 외 시크릿은 여전히 읽지 못함).
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+resource "aws_iam_role_policy" "tf_plan_pipeline_secrets" {
+  name = "edge-tf-plan-read-pipeline-secrets"
+  role = aws_iam_role.tf_plan.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "PlanReadPipelineSecrets"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:edge-dev-pipeline/*"
+    }]
+  })
+}
+
 # apply: 전 서비스 권한. envs/dev 는 VPC·RDS·ECS·IAM·ALB·CloudFront·SFN 등 거의 모든 리소스를
 # 관리하므로 실질적으로 admin 급이 필요하다. 실 통제는 trust(ref:refs/heads/dev = 머지된 코드만)이며,
 # 권한을 서비스별로 좁히면 새 리소스 타입마다 apply 가 깨져 파이프라인을 막는다(brittle) — 범위가 아닌
