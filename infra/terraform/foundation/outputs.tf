@@ -21,3 +21,13 @@ output "ecr_repository_urls" {
   description = "이미지 레포 URL 맵 (name → url)"
   value       = { for k, r in aws_ecr_repository.this : k => r.repository_url }
 }
+
+output "tf_plan_role_arn" {
+  description = "→ vars.TF_PLAN_ROLE_ARN (terraform-plan.yml, PR)"
+  value       = aws_iam_role.tf_plan.arn
+}
+
+output "tf_apply_role_arn" {
+  description = "→ vars.TF_APPLY_ROLE_ARN (terraform-apply.yml, 머지)"
+  value       = aws_iam_role.tf_apply.arn
+}
