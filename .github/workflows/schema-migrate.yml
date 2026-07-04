@@ -39,8 +39,8 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # 접속값/식별자는 development environment의 vars에서 주입한다(terraform output → GitHub vars).
-    environment: development
+    # 접속값/식별자는 repo-level vars 에서 주입한다(terraform output → GitHub vars). OIDC 신뢰 경계는
+    # dev 브랜치(push:dev → sub=ref:refs/heads/dev) — `environment:` 를 쓰지 않는다(ALPHA-313).
     steps:
       - uses: actions/checkout@v4
 

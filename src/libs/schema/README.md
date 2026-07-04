@@ -79,12 +79,11 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 ### CI 운영 설정 (1회)
 
-1. **Terraform apply** (`infra/terraform/envs/dev`) — schema-migrate task·ECR·SG·OIDC 배포 역할을 생성한다. 계정에 GitHub OIDC provider가 이미 있으면 `create_github_oidc_provider=false` + `github_oidc_provider_arn=<기존 ARN>`로 참조한다. (배포 role은 `development` **environment** 를 쓰는 워크플로만 신뢰한다 — OIDC sub가 `...:environment:development`.)
-2. **Environments 생성**: `development`, `production`. **각 environment의 배포 브랜치(deployment branch)를 제한한다** — `development`는 `dev`, `production`은 `main`. OIDC trust가 environment 기반이라(브랜치가 아님), 이 environment 브랜치 정책이 "어느 브랜치가 배포 role을 쓸 수 있는가"를 실제로 강제한다(안 걸면 모든 브랜치가 해당 environment로 배포 가능해져 trust가 넓어진다).
-3. **environment 변수(vars) 등록** — `terraform output` 값을 GitHub `development` environment의 **variables**(secret 아님, 식별자)로 넣는다:
+1. **Terraform apply** (`infra/terraform/envs/dev`) — schema-migrate task·ECR·SG·OIDC 배포 역할을 생성한다. 계정에 GitHub OIDC provider가 이미 있으면 `create_github_oidc_provider=false` + `github_oidc_provider_arn=<기존 ARN>`로 참조한다. (배포 role은 `dev` **브랜치**에서 도는 워크플로만 신뢰한다 — OIDC sub가 `...:ref:refs/heads/dev`이며 모듈의 `github_branch_refs`로 핀한다. 워크플로는 `environment:`를 쓰지 않는다 — Free+private 플랜은 environment 배포 브랜치 정책을 강제할 수 없어 브랜치 핀이 안 되기 때문. ALPHA-313.)
+2. **repo-level 변수(vars) 등록** — `terraform output` 값을 GitHub **repository variables**(secret 아님, 식별자)로 넣는다. environment 를 쓰지 않으므로 environment vars 가 아니라 repo vars 다:
    - `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`(=`gha_deploy_role_arn`), `ECS_CLUSTER_ARN`, `MIGRATE_TASK_FAMILY`, `MIGRATE_ECR_REPOSITORY`, `MIGRATE_SUBNET_IDS`, `MIGRATE_SECURITY_GROUP_ID`, `MIGRATE_LOG_GROUP`.
    - DB 접속 비밀번호는 여기 없다(RDS 시크릿에서 task가 직접 읽음).
-4. **prod 승인 게이트(후속)**: prod 인프라가 아직 없어 prod 마이그레이션 워크플로는 두지 않는다. prod env terraform(선행 티켓) 적용 후, `production` environment에 **Required reviewers**를 지정하고(배포 브랜치를 `main`으로 제한) 동일한 vars를 채운 뒤 dev와 같은 패턴의 prod 마이그레이션 워크플로를 재도입한다.
+3. **prod (후속)**: prod 인프라가 아직 없어 prod 마이그레이션 워크플로는 두지 않는다. prod env terraform(선행 티켓) 적용 후, 배포 role 을 `refs/heads/main` 으로 핀하고 동일 vars 를 채운 뒤 dev 와 같은 패턴의 prod 워크플로를 재도입한다. 승인 게이트가 필요하면 Pro 플랜의 environment protection(Required reviewers)을 쓴다.
 - (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (현재 private + free 플랜이라 branch protection 불가 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
   - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
 

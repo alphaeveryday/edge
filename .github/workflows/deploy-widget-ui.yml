@@ -28,6 +28,5 @@ jobs:
     uses: ./.github/workflows/deploy-ui.yml
     with:
       app: widget-ui
-      environment: development
       bucket: ${{ vars.WIDGET_UI_BUCKET }}
       distribution_id: ${{ vars.WIDGET_UI_DISTRIBUTION_ID }}

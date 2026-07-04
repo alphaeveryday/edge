@@ -241,9 +241,9 @@ module "gha_deploy_dev" {
 
   name            = "${local.prefix}-gha-schema-migrate"
   github_org_repo = var.github_org_repo
-  # 전환기(ALPHA-313 B1): environment 와 ref 둘 다 허용. B2 에서 environment 를 비워 ref-only 로 좁힌다.
-  github_environments = ["development"]
-  github_branch_refs  = ["refs/heads/dev"]
+  # 신뢰 경계 = dev 브랜치 ref 만(ALPHA-313). 배포 워크플로는 `environment:` 없이 push:dev 로 돌아
+  # sub=ref:refs/heads/dev 가 된다. environment 기반 신뢰는 두지 않는다(Free 플랜은 브랜치 핀 불가).
+  github_branch_refs = ["refs/heads/dev"]
 
   create_oidc_provider = false
   oidc_provider_arn    = data.aws_iam_openid_connect_provider.github.arn

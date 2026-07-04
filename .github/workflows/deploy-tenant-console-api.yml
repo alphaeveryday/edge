@@ -36,4 +36,3 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: tenant-console-api
-      environment: development
