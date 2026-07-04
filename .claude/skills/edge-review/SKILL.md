@@ -25,9 +25,12 @@ description: edge 저장소의 변경(diff·PR)을 정통 버그 + edge 고유 �
 ## Phase 0 — 범위 수집
 
 ```bash
-git diff dev...HEAD --stat && git status --short   # 브랜치 diff + 작업트리
+git diff dev...HEAD   # 커밋된 브랜치 변경
+git diff HEAD         # 미커밋(staged+unstaged) 변경
+git status --short
 ```
-- 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`). 범위 diff 가 비면 작업트리(`git diff HEAD`)만 범위임을 인지한다(리뷰가 커밋 전 게이트로 도는 경우).
+- **커밋된 브랜치 변경과 미커밋 작업트리 변경을 둘 다** 범위에 넣는다(합집합, fallback 아님). 브랜치에 이미 커밋이 있어도(예: `--fix` 후·최종 커밋 전) 미커밋 편집이 line-by-line·시크릿 스캔을 빠져나가면 안 된다. `git diff dev...HEAD` 는 커밋분만, `git status --short` 는 파일명만 주므로 `git diff HEAD` 로 미커밋 내용을 실제로 읽는다.
+- 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`).
 - **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI/infra?
 
 ## Phase 1 — 파인더 각도 (Agent 로 독립 병렬 실행)
@@ -70,7 +73,7 @@ git diff dev...HEAD --stat && git status --short   # 브랜치 diff + 작업트�
 검증 통과 finding 을 **가장 심각한 순**으로 낸다. `ReportFindings` 툴이 있으면 그걸로 보고하고 텍스트로 중복 출력하지 않는다(없으면 랭크된 목록). 정확성 버그가 cleanup·규칙 finding 보다 항상 우선하고, 티어 상한을 넘으면 상위만 남긴다. 아무것도 안 남으면 "정합 — 실질 이슈 없음"을 명시한다(점검 자체가 산출물).
 
 **후처리 플래그**
-- `--comment` — finding 을 PR 인라인 코멘트로 게시(`gh pr comment`/review). PR 대상일 때만.
+- `--comment` — finding 을 PR **라인 앵커드 인라인 코멘트**로 게시. `gh pr comment`·`gh pr review` 는 path/line 옵션이 없어 본문 코멘트만 되므로 쓰지 않고, review comments API 를 쓴다: `gh api repos/{owner}/{repo}/pulls/{N}/comments -f path=… -F line=… -f side=RIGHT -f commit_id=… -f body=…`. PR 대상일 때만.
 - `--fix` — 검증된 finding 을 작업트리에 적용(정확성 수정 우선, cleanup 은 명확한 것만). 적용 후 테스트 재실행.
 
 ## 경계·주의
