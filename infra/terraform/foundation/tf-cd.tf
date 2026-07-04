@@ -45,25 +45,9 @@ resource "aws_iam_role_policy_attachment" "tf_plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
-# envs/dev 의 pipeline 모듈은 `aws_secretsmanager_secret_version` 데이터 소스로 API 키 시크릿을 읽는다
-# → plan(refresh)에 GetSecretValue 가 필요한데 ReadOnlyAccess 는 이 민감 액션을 제외한다. 해당 dev
-# 파이프라인 시크릿(edge-dev-pipeline/*)에만 스코프해 보완한다(그 외 시크릿은 여전히 읽지 못함).
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-resource "aws_iam_role_policy" "tf_plan_pipeline_secrets" {
-  name = "edge-tf-plan-read-pipeline-secrets"
-  role = aws_iam_role.tf_plan.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid      = "PlanReadPipelineSecrets"
-      Effect   = "Allow"
-      Action   = "secretsmanager:GetSecretValue"
-      Resource = "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:edge-dev-pipeline/*"
-    }]
-  })
-}
+# plan 역할은 시크릿 값 읽기 권한이 없다(ReadOnlyAccess 는 GetSecretValue 를 제외). pipeline 모듈이
+# 시크릿 버전을 TF 로 관리하지 않게 바꿔(ALPHA-312) plan refresh 가 GetSecretValue 를 부르지 않으므로,
+# 이전의 edge-dev-pipeline/* GetSecretValue 보완 정책은 제거했다 — PR 컨텍스트(신뢰 불가)가 시크릿에 접근 불가.
 
 # apply: 전 서비스 권한. envs/dev 는 VPC·RDS·ECS·IAM·ALB·CloudFront·SFN 등 거의 모든 리소스를
 # 관리하므로 실질적으로 admin 급이 필요하다. 실 통제는 trust(ref:refs/heads/dev = 머지된 코드만)이며,
