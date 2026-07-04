@@ -188,4 +188,11 @@ resource "aws_ecs_service" "this" {
   health_check_grace_period_seconds = var.target_group_arn == null ? null : var.health_check_grace_period_seconds
 
   enable_execute_command = var.enable_execute_command
+
+  # task_definition 은 생성 후 CD(deploy-app.yml)가 소유한다 — CD 가 ECR semver 이미지로 새 리비전을
+  # 등록해 서비스를 롤링 업데이트하므로, TF 는 실행 리비전을 되돌리지 않는다(위 aws_ecs_task_definition 은
+  # baseline 으로만 남음). 없으면 매 apply 가 CD 배포를 tfvars 핀으로 롤백한다(ECS+외부 CD 표준 패턴).
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
