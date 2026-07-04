@@ -170,3 +170,24 @@ def test_changing_config_changes_targets_without_code(tmp_path):
     other = VALID.replace('symbols = ["005930"]', 'symbols = ["000660", "035720"]')
     settings = load_settings(_write(tmp_path, other))
     assert settings.targets.symbols == ["000660", "035720"]
+
+
+def test_financial_section_optional(tmp_path):
+    # WHY: 재무제표는 독립 잡이라 섹션이 없어도 로드돼야 한다(뉴스·가격만 돌리는 환경).
+    #      진입점(ingest-raw-financial)이 None 을 fail-loud 로 잡는다.
+    settings = load_settings(_write(tmp_path, VALID))
+    assert settings.financial is None
+
+
+def test_financial_section_parsed_when_present(tmp_path):
+    # WHY: [financial.source] 가 있으면 타입 있는 설정으로 로드돼 재무 잡이 쓴다.
+    text = VALID + """
+[financial.source]
+base_url = "https://example.com/stable"
+
+[financial.source.symbol_map]
+NVDA = "NVDA"
+"""
+    settings = load_settings(_write(tmp_path, text))
+    assert settings.financial.source.base_url == "https://example.com/stable"
+    assert settings.financial.source.symbol_map == {"NVDA": "NVDA"}

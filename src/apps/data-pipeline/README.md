@@ -3,8 +3,9 @@
 > 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
-> 현재 범위는 **수집 설정 관리 + 원본저장(Step1, FMP)** — 뉴스와 가격(OHLCV 일봉)까지다.
-> 정규화·품질검증(뉴스 Step2)과 가격의 canonical 적재는 후속이다.
+> 현재 범위는 **수집 설정 관리 + 원본저장(Step1, FMP)** — 뉴스·가격(OHLCV 일봉)·
+> 재무제표(손익·재무상태·현금흐름)까지다.
+> 정규화·품질검증(뉴스 Step2)과 canonical 적재는 후속이다.
 
 ## 실행
 
@@ -27,6 +28,12 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw
 # 백필 예: 2026-06 한 달
 #   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
+
+# 재무제표(손익·재무상태·현금흐름) 원본저장(Step1) — FMP 재무 API. 날짜창 없음(매 실행이
+# 최근 N기를 재요청하는 point-in-time 폴링). 매일 폴링해도 공시 정체성 키로 신규·정정만
+# 저장한다(저장은 공시당 1회). 심볼맵은 재무 전용(financial.source.symbol_map) — 현재 US 만.
+DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -51,6 +58,7 @@ from data_pipeline import load_settings
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
 settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
+settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -82,8 +90,13 @@ settings.targets.keywords            # ["금리", ...]
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
   raw 는 받은 행을 **전부 보존**한다(중복 판정 안 함) — (market, ticker, trade_date)
   정체성 upsert·거래일별 분해는 후속 canonical/market_data(S006/S007) 소관.
+- **raw(재무제표)** — `raw/source=fmp/dataset=financial_statements/statement_type=…/market=…/ticker=…/period=…/fiscal_period_end=…/filing_date=…/data.json`.
+  뉴스·가격과 달리 파티션이 ingest_date/run_id 가 아니라 **공시 정체성**(문서·종목·주기·회계기간·공시일)이다 —
+  재무는 드물게·비동기로 공시되는데 매일 재폴링하므로, 키 자체를 공시 정체성으로 만들어
+  존재검사→신규만 저장한다(매일 폴링, 저장은 공시당 1회). 정정 공시는 다른 filing_date 로
+  새 키에 원본과 함께 보존한다(point-in-time·룩어헤드 방지).
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
-  (`dataset=`로 갈라 같은 벤더의 뉴스·가격 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
+  (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
@@ -93,3 +106,4 @@ settings.targets.keywords            # ["금리", ...]
 - 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
 - 가격 canonical 적재 — raw price_daily → `canonical/market_data/price_daily`
   정규화·멱등 upsert(거래일별 분해, 품질 게이트)는 후속(S006/S007)
+- 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation

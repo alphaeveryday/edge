@@ -57,6 +57,24 @@ class PriceSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class FinancialSource(BaseModel):
+    """재무제표 데이터 소스 (FMP 손익·재무상태·현금흐름 수집, S035).
+
+    api_key 는 커밋되는 파일이 아니라 환경변수로 주입한다(loader 참고).
+    base_url 은 /stable 베이스만 둔다 — 3개 엔드포인트(income-statement·balance-
+    sheet-statement·cash-flow-statement)는 어댑터가 붙인다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: NonBlankStr
+    enabled: bool = True
+    api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → FMP 심볼. 가격과 같은 정책 — 재무제표는 US 거래소-로컬 심볼만 둔다.
+    # KR 은 FMP 재무 커버리지가 약해 후속(DART 등)으로 미룬다(없으면 이 소스가 건너뜀).
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class NewsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -68,6 +86,12 @@ class PriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: PriceSource
+
+
+class FinancialConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: FinancialSource
 
 
 class StorageConfig(BaseModel):

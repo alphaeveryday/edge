@@ -45,6 +45,35 @@ def raw_price_partition(
     )
 
 
+def raw_financial_object_key(
+    source: str,
+    statement_type: str,
+    market: str,
+    ticker: str,
+    period_type: str,
+    fiscal_period_end: str,
+    filing_date: str,
+) -> str:
+    """raw 재무제표 객체 키 (공시 하나 = 객체 하나).
+
+    뉴스·가격 raw 와 달리 파티션 키가 ingest_date/run_id 가 아니라 **공시 정체성**이다
+    (종목·문서·회계기간·공시일). 재무제표는 드물게·비동기로 공시되는데 매일 재폴링하므로,
+    ingest_date/run_id 로 '전부 append'하면 같은 분기 payload 가 매일 쌓인다. 키 자체를
+    공시 정체성으로 만들면 존재검사→신규만 put 이라 매일 폴링해도 저장은 분기당 1회다.
+
+    - period_type(annual|quarter)을 키에 둔다 — 애플 Q4 분기와 FY 연간은 같은
+      fiscal_period_end(회계연도말)를 공유하지만 서로 다른 명세라 구분돼야 한다.
+    - filing_date 를 키에 둬 정정 공시(같은 기간, 다른 공시일)를 원본과 함께 새 키로
+      보존한다(덮어쓰지 않음 = point-in-time 이력, 룩어헤드 방지). append-only 유지.
+    """
+    return (
+        f"raw/source={source}/dataset=financial_statements"
+        f"/statement_type={statement_type}/market={market}/ticker={ticker}"
+        f"/period={period_type}/fiscal_period_end={fiscal_period_end}"
+        f"/filing_date={filing_date}/data.json"
+    )
+
+
 def collection_log_key(source: str, dataset: str, started_date: str, run_id: str) -> str:
     """수집 실행 로그(런당 1건) 키.
 
