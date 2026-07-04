@@ -44,13 +44,15 @@ git diff dev...HEAD --stat && git status --short   # 브랜치 diff + 작업트�
   - **Rule 9 tests-encode-WHY** — 테스트가 WHAT만 검사하고 WHY(왜 그 동작이 중요한지)를 인코딩하지 못하는가. 테스트가 비즈니스 로직이 바뀌어도 못 깨지면 잘못됐다.
   - **Rule 2 simplicity / Rule 11 conformance** — 불필요한 추상화·투기적 코드 / 주변 컨벤션 이탈(단, 프로젝트가 Rule 3로 택한 의도적 복제는 감안).
 
+- **시크릿 커밋 스캔(항상·영역 무관)** — 변경된 **모든** 파일에서 커밋된 비밀값(api_key·토큰·private key·비밀번호)이 박혔는지. 코드뿐 아니라 `.github`·`infra`·config 샘플·UI 포함(Phase 0 이 전역 config/CI/infra 를 영역으로 분류하므로 거기 새는 키를 놓치면 안 된다). 비밀값은 env 주입만 허용 — 커밋되면 최우선 finding.
+
 **cleanup 각도(항상, 낮은 순위)**
 - **재사용·단순화·효율** — 이미 있는 헬퍼 재구현(shared util Grep 해 이름 대라)·파생 가능한 중복 상태·핫패스 낭비. edge 는 뉴스/가격처럼 Rule 3로 **의도적 복제**를 택한 지점이 있으니, 복제는 '동기화 안 되면 버그 나는' 경우(예: 상태 판정 로직)만 flag 하고 그 비용을 명시하라.
 
 **조건부 각도 (변경 영역이 켜질 때만)**
-- **E. 스키마 계약** (`libs/schema` 변경 시) — 스키마 변경에 `generated` 모델 동반 갱신이 빠졌는가(README Git 원칙). 단일 writer 위반([ADR-0005](../../../docs/adr/0005-db-as-contract.md)) — 한 테이블을 소유 모듈 밖에서 쓰는가. 마이그레이션이 expand-contract(파괴적 DDL을 한 번에)를 어겼는가.
-- **F. 신뢰경계·시크릿** (`gateway`·`*-api` 변경 시) — `widget-api`에 쓰기 표면이 생겼는가(읽기 전용·좁은 표면이어야 함). `gateway` 라우트 필터가 fail-open 인가(fail-closed 여야, [ADR-0006](../../../docs/adr/0006-gateway-single-edge.md)). cross-tenant 누수([ADR-0008](../../../docs/adr/0008-super-admin-console.md)). **시크릿(api_key 등)이 커밋되는 파일에 박혔는가**(env 주입만 허용).
-- **G. 레이크·파이프라인** (`data-pipeline`·`analysis-engine` 변경 시) — 파티션 경로를 `lake/storage.py` 빌더(경로 규약 SSOT) 밖에서 조립했는가. raw 존이 원본을 유실하는가(raw 는 전부 보존). "결과는 항상 collection_log" 계약과 status 시맨틱(success/partial/error/stopped/skipped)이 온전한가 — 실패를 success(0건)로 위장하지 않는가(Rule 12). 시크릿이 env 주입인가.
+- **E. 스키마 계약** (`libs/schema` 변경 **또는 DB 쓰기 코드**(리포지토리·`persist`·마트 적재 등) 변경 시) — 스키마 변경에 `generated` 모델 동반 갱신이 빠졌는가(README Git 원칙). 마이그레이션이 expand-contract(파괴적 DDL을 한 번에)를 어겼는가. **단일 writer 위반**([ADR-0005](../../../docs/adr/0005-db-as-contract.md)·[docs/schema.md](../../../docs/schema.md) §1) — 한 테이블을 소유 모듈 밖에서 INSERT/UPDATE/DELETE 하는가. 이 위반은 스키마 diff 가 아니라 **앱 DB 접근 코드**에서 터지므로, 스키마 변경이 없어도 DB 쓰기 코드가 바뀌면 검사한다.
+- **F. 신뢰경계** (`gateway`·`*-api` 변경 시) — `widget-api`에 쓰기 표면이 생겼는가(읽기 전용·좁은 표면이어야 함). `gateway` 라우트 필터가 fail-open 인가(fail-closed 여야, [ADR-0006](../../../docs/adr/0006-gateway-single-edge.md)). cross-tenant 누수([ADR-0008](../../../docs/adr/0008-super-admin-console.md)). (시크릿 커밋은 위 '항상' 각도가 영역 무관하게 스캔한다.)
+- **G. 레이크·파이프라인** (`data-pipeline`·`analysis-engine` 변경 시) — 파티션 경로를 `lake/storage.py` 빌더(경로 규약 SSOT) 밖에서 조립했는가. raw 존이 원본을 유실하는가(raw 는 전부 보존). "결과는 항상 collection_log" 계약과 status 시맨틱(success/partial/error/stopped/skipped)이 온전한가 — 실패를 success(0건)로 위장하지 않는가(Rule 12).
 
 ## Phase 2 — 검증
 
