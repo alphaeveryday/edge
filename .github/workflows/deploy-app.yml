@@ -19,8 +19,8 @@
 # 배포 역할 권한(ALPHA-303 완료): github-oidc-deploy 역할(schema-migrate 와 공유)에 앱 배포
 # 권한이 부여돼 있다 — edge/<app> ECR push·DescribeImages(버전 조회),
 # ecs:UpdateService/DescribeServices(서비스 ARN 스코프), 앱 task·execution 역할 PassRole.
-# (infra/terraform/modules/github-oidc-deploy 의 app_* 변수 · envs/dev 에서 3개 API 배선.)
-# gateway 는 dev ECS 서비스가 생기면 같은 방식으로 app_* 목록에 추가한다.
+# (infra/terraform/modules/github-oidc-deploy 의 app_* 변수 · envs/dev 에서 4개 백엔드 앱
+#  widget-api·tenant-console-api·super-admin-api·gateway 배선.)
 name: deploy-app
 
 on:
