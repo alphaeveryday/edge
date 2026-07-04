@@ -30,8 +30,9 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 #   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
 
 # 재무제표(손익·재무상태·현금흐름) 원본저장(Step1) — FMP 재무 API. 날짜창 없음(매 실행이
-# 최근 N기를 재요청하는 point-in-time 폴링). 매일 폴링해도 공시 정체성 키로 신규·정정만
-# 저장한다(저장은 공시당 1회). 심볼맵은 재무 전용(financial.source.symbol_map) — 현재 US 만.
+# 최근 N기를 재요청하는 point-in-time 폴링). 가격과 동형으로 받은 행을 ingest_date/run_id 에
+# 전부 append(중복 판정 안 함 — dedup·정정·point-in-time 은 후속 canonical). 심볼맵은 재무
+# 전용(financial.source.symbol_map) — 현재 US 만.
 DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial
 ```
@@ -90,11 +91,11 @@ settings.targets.keywords            # ["금리", ...]
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
   raw 는 받은 행을 **전부 보존**한다(중복 판정 안 함) — (market, ticker, trade_date)
   정체성 upsert·거래일별 분해는 후속 canonical/market_data(S006/S007) 소관.
-- **raw(재무제표)** — `raw/source=fmp/dataset=financial_statements/statement_type=…/market=…/ticker=…/period=…/fiscal_period_end=…/filing_date=…/data.json`.
-  뉴스·가격과 달리 파티션이 ingest_date/run_id 가 아니라 **공시 정체성**(문서·종목·주기·회계기간·공시일)이다 —
-  재무는 드물게·비동기로 공시되는데 매일 재폴링하므로, 키 자체를 공시 정체성으로 만들어
-  존재검사→신규만 저장한다(매일 폴링, 저장은 공시당 1회). 정정 공시는 다른 filing_date 로
-  새 키에 원본과 함께 보존한다(point-in-time·룩어헤드 방지).
+- **raw(재무제표)** — `raw/source=fmp/dataset=financial_statements/market=…/ingest_date=…/run_id=…/` 에
+  run_id 별 append. **가격과 동형(bronze 통일)** — 받은 행을 수집일 기준으로 **전부 보존**한다
+  (중복 판정 안 함). 재무는 드물게·비동기로 공시돼 매일 재폴링하면 같은 스냅샷이 날마다 쌓이지만,
+  중복 제거·정정(SCD)·point-in-time 판정은 후속 canonical(silver) MERGE 소관이다. 각 행에
+  statement_type·period_type·filing_date 등이 그대로 보존돼 canonical 이 정체성 추출에 쓴다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는

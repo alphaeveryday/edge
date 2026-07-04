@@ -9,9 +9,9 @@
 planned_symbols)를 따르되, 재무제표는 심볼·문서·주기의 3중 팬아웃이다(심볼당 3문서 ×
 2주기 = 6콜). 각 응답은 최근 N개 회계기간 행의 배열이고, 한 행 = 한 공시 명세다.
 
-raw 존에는 행 원본에 수집 메타 + 공시 정체성(statement_type·period_type·
-fiscal_period_end·filing_date)만 붙여 그대로 낸다 — 스텝이 그 정체성으로 객체 키를
-만들어 존재검사→신규만 저장한다(중복 없이 매일 폴링). 필드 선별·정규화는 후속 소관.
+raw 존에는 행 원본에 수집 provenance(our_ticker·market·fmp_symbol·statement_type·
+period_type·fetched_at)만 붙여 그대로 낸다 — 스텝이 가격과 동형으로 ingest_date/run_id
+파티션에 전부 append 한다(bronze 통일). 중복 제거·정정(SCD)·정규화는 후속 canonical 소관.
 
 심볼맵은 financial.source 자체 맵(가격과 같은 정책 — US 거래소-로컬 심볼만, KR 은
 FMP 재무 커버리지가 약해 후속 DART 등이 커버). api_key 는 financial.source env 주입.
@@ -173,24 +173,14 @@ class FmpFinancialSource:
                     f"malformed row: {type(row).__name__}",
                 )
                 continue
-            fiscal_period_end = row.get("date")
-            # FMP 필드명은 'fillingDate'(오타가 실제 필드) — 'filingDate' 도 방어.
-            filing_date = row.get("fillingDate") or row.get("filingDate")
-            # 공시 정체성(회계기간·공시일)이 없으면 raw 객체 키를 만들 수 없다 — raw 존은 이
-            # 키로 멱등·시점보존을 하므로, 키를 못 만드는 행은 조용히 버리지 않고 실패로 남긴다.
-            if not fiscal_period_end or not filing_date:
-                self._note_failure(
-                    fmp_symbol, our_ticker, statement_type, period,
-                    "missing date/fillingDate — 공시 정체성 키 불가",
-                )
-                continue
+            # bronze 는 받은 행을 그대로 보존한다 — date/fillingDate 가 없어도 버리지 않는다
+            # (품질 판정·공시 정체성 추출은 후속 canonical 소관). 원본 필드(date·fillingDate·
+            # period 등)는 손대지 않고, 수집 provenance 만 덧붙인다(가격 어댑터와 동형).
             record = dict(row)
             record["our_ticker"] = our_ticker
             record["market"] = market
             record["fmp_symbol"] = fmp_symbol
-            record["statement_type"] = statement_type
-            record["period_type"] = period  # annual|quarter (row["period"]=FY/Q1 과 별개)
-            record["fiscal_period_end"] = fiscal_period_end
-            record["filing_date"] = filing_date
+            record["statement_type"] = statement_type  # 어느 문서(endpoint)에서 왔나
+            record["period_type"] = period  # 어느 주기 질의였나 (annual|quarter; row["period"]=FY/Q1 과 별개)
             record["fetched_at"] = fetched_at
             yield record

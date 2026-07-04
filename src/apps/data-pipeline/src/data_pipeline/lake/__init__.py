@@ -6,7 +6,7 @@ from .storage import (
     Storage,
     collection_log_key,
     make_storage,
-    raw_financial_object_key,
+    raw_financial_partition,
     raw_news_partition,
     raw_price_partition,
 )
@@ -18,6 +18,6 @@ __all__ = [
     "make_storage",
     "raw_news_partition",
     "raw_price_partition",
-    "raw_financial_object_key",
+    "raw_financial_partition",
     "collection_log_key",
 ]

@@ -42,9 +42,10 @@ def _source(responses, api_key="k", symbol_map=None):
     return FmpFinancialSource(config, FakeClient(responses))
 
 
-def test_fetch_attaches_identity_fields_us_only():
-    # WHY: 스텝이 공시 정체성으로 raw 키를 만든다 — 어댑터가 statement_type·period_type·
-    #      fiscal_period_end·filing_date 를 각 행에 붙여야 키를 만들 수 있다. 매핑 없는 KR 은 제외.
+def test_fetch_attaches_provenance_us_only():
+    # WHY: bronze 는 원본 행을 보존하고 수집 provenance(our_ticker·market·fmp_symbol·
+    #      statement_type·period_type)만 덧붙인다. canonical 이 statement_type·period_type
+    #      으로 문서·주기를 가르므로 이 둘은 꼭 붙어야 한다. 매핑 없는 KR 은 제외.
     responses = {
         ("NVDA", "income-statement", "annual"): [_row("2025-01-31", "2025-02-26", period="FY", netIncome=100)],
         ("NVDA", "income-statement", "quarter"): [_row("2025-01-31", "2025-02-26", period="Q4", netIncome=30)],
@@ -57,13 +58,14 @@ def test_fetch_attaches_identity_fields_us_only():
     assert {r["period_type"] for r in income} == {"annual", "quarter"}  # 두 주기 모두 수집
     r = next(r for r in income if r["period_type"] == "annual")
     assert r["our_ticker"] == "NVDA" and r["market"] == "US" and r["fmp_symbol"] == "NVDA"
-    assert r["fiscal_period_end"] == "2025-01-31" and r["filing_date"] == "2025-02-26"
-    assert r["netIncome"] == 100  # 원본 필드 보존(무변형)
+    # 원본 필드는 손대지 않고 그대로 보존(무변형) — canonical 이 date·fillingDate 로 정체성 추출.
+    assert r["date"] == "2025-01-31" and r["fillingDate"] == "2025-02-26"
+    assert r["netIncome"] == 100
 
 
-def test_row_without_identity_is_isolated_not_yielded():
-    # WHY: 공시 정체성(date/fillingDate)이 없으면 raw 키를 못 만든다 — 조용히 버리지 않고
-    #      대상 단위 실패로 남겨 운영이 인지하게 한다(fail loud).
+def test_row_missing_date_is_preserved():
+    # WHY: bronze 는 하나도 못 버린다 — date/fillingDate 가 없는 행도(품질 판정은 후속
+    #      canonical 소관) 그대로 낸다. 정체성 부재를 raw 에서 드롭하면 원본을 잃는다.
     responses = {
         ("NVDA", "income-statement", "annual"): [
             {"period": "FY", "netIncome": 1},          # date·fillingDate 없음
@@ -75,8 +77,8 @@ def test_row_without_identity_is_isolated_not_yielded():
         r for r in src.fetch(["NVDA"])
         if r["statement_type"] == "income_statement" and r["period_type"] == "annual"
     ]
-    assert len(annual_income) == 1  # 정상 행만 나온다
-    assert any("공시 정체성" in f["error"] for f in src.fetch_failures)
+    assert len(annual_income) == 2  # 둘 다 보존(버리지 않음)
+    assert not src.fetch_failures  # 정체성 부재는 실패가 아님(canonical 이 판정)
 
 
 def test_error_object_response_is_isolated():
