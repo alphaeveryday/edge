@@ -110,6 +110,16 @@ def run(
     if status == "success" and getattr(source, "planned_symbols", None) == 0:
         status, reason = "skipped", "no mapped targets"
 
+    # 매핑 대상이 있는데 한 행도 못 받았으면(전 엔드포인트가 200 [] 반환) success(0건)로
+    # 위장하지 않고 error 로 드러낸다(Rule 12). 뉴스·가격은 빈 창(주말·무뉴스)이 정상이라
+    # 이 가드가 없지만, 재무제표는 매 실행이 '최근 N기'를 재요청하고 US 대형주는 항상 재무
+    # 이력이 있으므로, 전량 빈 응답은 정상 '데이터 없음'이 아니라 엔드포인트 변경·커버리지
+    # 상실 같은 이상이다 — 스텝별로 판정을 달리한다(Rule 7). (정상 재폴링은 fetched>0 이고
+    # 이미 있는 공시가 skipped_existing 으로 잡히므로 여기 걸리지 않는다.)
+    if status == "success" and fetched == 0 and getattr(source, "planned_symbols", 0):
+        status, exit_code = "error", 1
+        error = "매핑 대상이 있는데 수집된 재무 행이 0 — 전 엔드포인트 빈 응답(이상)"
+
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한 비0 종료로
     # 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
     try:

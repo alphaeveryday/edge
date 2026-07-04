@@ -147,6 +147,20 @@ def test_disabled_source_skips_with_log(tmp_path):
     assert _log(storage, "r1")["status"] == "skipped"
 
 
+def test_all_empty_responses_marks_error(tmp_path):
+    # WHY: 재무제표는 매 실행이 '최근 N기'를 재요청한다 — 매핑 대상이 있는데 전 엔드포인트가
+    #      200 [] 를 주면 정상 '데이터 없음'이 아니라 엔드포인트 변경·커버리지 상실 같은
+    #      이상이다. success(0건)로 위장하면 스케줄러가 데이터 유실을 못 본다(Rule 12).
+    #      (가격은 주말 공백이 정상이라 이 가드가 없지만, 재무는 빈 응답이 항상 비정상.)
+    code, storage = _run(tmp_path, {}, run_id="r1")  # 활성·NVDA 매핑됨·전 응답 빈 배열
+
+    assert code == 1
+    assert storage.list_keys("raw") == []
+    log = _log(storage, "r1")
+    assert log["status"] == "error"
+    assert log["records_fetched"] == 0
+
+
 class _AllFailingClient:
     def get(self, url, *, accept="application/json"):
         raise RuntimeError("GET 재시도 소진")
