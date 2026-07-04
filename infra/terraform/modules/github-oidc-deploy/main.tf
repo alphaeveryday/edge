@@ -38,13 +38,17 @@ data "aws_iam_policy_document" "trust" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # 지정 repo 의 지정 environment 를 쓰는 워크플로만 허용.
-    # (deploy job 이 `environment:` 를 참조하므로 sub 는 branch 가 아니라 environment 형태다.
-    #  environment 의 배포 브랜치 정책으로 어느 브랜치가 배포할지 별도 제한한다.)
+    # 지정 repo 의, 지정 environment(sub=`environment:<name>`) 또는 지정 브랜치(sub=`ref:refs/heads/<branch>`)
+    # 를 쓰는 워크플로만 허용. Free+private 플랜은 environment 배포 브랜치 정책을 강제할 수 없으므로,
+    # 배포는 `github_branch_refs`(예: dev)로 브랜치를 암호학적으로 핀하는 게 안전하다(edge-tf-apply 와 동일).
+    # 둘 다 지정하면 합집합을 허용한다(전환기용) — 최종적으로는 ref 만 남긴다.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for e in var.github_environments : "repo:${var.github_org_repo}:environment:${e}"]
+      values = concat(
+        [for e in var.github_environments : "repo:${var.github_org_repo}:environment:${e}"],
+        [for r in var.github_branch_refs : "repo:${var.github_org_repo}:ref:${r}"],
+      )
     }
   }
 }
