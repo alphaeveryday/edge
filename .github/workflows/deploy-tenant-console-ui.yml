@@ -28,6 +28,5 @@ jobs:
     uses: ./.github/workflows/deploy-ui.yml
     with:
       app: tenant-console-ui
-      environment: development
       bucket: ${{ vars.TENANT_CONSOLE_UI_BUCKET }}
       distribution_id: ${{ vars.TENANT_CONSOLE_UI_DISTRIBUTION_ID }}

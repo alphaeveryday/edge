@@ -28,6 +28,5 @@ jobs:
     uses: ./.github/workflows/deploy-ui.yml
     with:
       app: super-admin-ui
-      environment: development
       bucket: ${{ vars.SUPER_ADMIN_UI_BUCKET }}
       distribution_id: ${{ vars.SUPER_ADMIN_UI_DISTRIBUTION_ID }}
