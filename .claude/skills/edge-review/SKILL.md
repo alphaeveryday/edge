@@ -64,7 +64,7 @@ git status --short
 ## 빌드/테스트 확인
 
 변경 모듈의 빌드·테스트가 통과하는지 확인하고, 실패는 **최우선 finding**으로 올린다(Rule 12 — "통과"라 말하려면 실제로 통과해야 함). 런타임별:
-- JVM: `./gradlew :apps:<모듈>:build` (src/ 에서)
+- JVM: `./gradlew :<apps|libs>:<모듈>:build` (src/ 에서 — 앱은 `:apps:*`, 공유 라이브러리는 `:libs:*`. 예: `:apps:widget-api`·`:libs:schema`·`:libs:jvm-common`)
 - Node: `pnpm --filter <패키지> test`
 - Python: `uv run --package <패키지> pytest` (또는 모듈 `.venv/bin/pytest`)
 
