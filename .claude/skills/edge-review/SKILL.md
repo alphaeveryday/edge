@@ -25,11 +25,12 @@ description: edge 저장소의 변경(diff·PR)을 정통 버그 + edge 고유 �
 ## Phase 0 — 범위 수집
 
 ```bash
-git diff dev...HEAD   # 커밋된 브랜치 변경
-git diff HEAD         # 미커밋(staged+unstaged) 변경
+git diff dev...HEAD                       # 커밋된 브랜치 변경
+git diff HEAD                              # 미커밋(staged+unstaged, 추적 파일)
+git ls-files --others --exclude-standard   # 미추적(아직 add 안 된) 새 파일
 git status --short
 ```
-- **커밋된 브랜치 변경과 미커밋 작업트리 변경을 둘 다** 범위에 넣는다(합집합, fallback 아님). 브랜치에 이미 커밋이 있어도(예: `--fix` 후·최종 커밋 전) 미커밋 편집이 line-by-line·시크릿 스캔을 빠져나가면 안 된다. `git diff dev...HEAD` 는 커밋분만, `git status --short` 는 파일명만 주므로 `git diff HEAD` 로 미커밋 내용을 실제로 읽는다.
+- **커밋된 브랜치 변경 + 미커밋(staged/unstaged) + 미추적 새 파일을 모두** 범위에 넣는다(합집합, fallback 아님). `git diff dev...HEAD` 는 커밋분만, `git diff HEAD` 는 추적 파일의 미커밋 변경만(**미추적 새 파일은 안 나온다**), `git status --short` 는 파일명만 준다. 그래서 미추적 파일은 `git ls-files --others --exclude-standard` 로 나열해 **직접 읽는다**(또는 `git diff --no-index /dev/null <파일>`) — line-by-line·시크릿 스캔이 새 config/소스에 든 버그·토큰을 놓치지 않게. `--fix` 후·최종 커밋 전 편집도 같은 이유로 포함.
 - 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`).
 - **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI/infra?
 

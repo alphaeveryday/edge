@@ -55,11 +55,10 @@ git push -u origin <브랜치>
 
 ## 4. PR 전 게이트
 
-PR을 올리기 전에 세 가지를 순서대로 통과시킨다:
+PR을 올리기 전에 두 가지를 순서대로 통과시킨다:
 
-1. **빌드/테스트** — 변경된 모듈만: JVM은 `./gradlew :apps:<모듈>:build`(src/에서), Node는 `pnpm --filter <패키지> test`, Python은 해당 모듈 pytest. 실패를 안고 PR을 올리지 않는다.
-2. **edge-review 스킬 실행** — 변경(diff)을 edge 규칙·계약(AGENTS 12룰·schema SSOT·신뢰경계·레이크)과 정통 버그로 리뷰하고, 검증된 finding 은 이 PR 안에서 고친다. 기본 effort는 `medium`(작은 PR), 넓거나 위험한 변경은 `high`. 코드를 고쳤으면 1번 빌드/테스트를 재실행한다. PR을 올린 뒤 리뷰 봇/사람이 잡을 걸 미리 잡아 왕복을 줄인다.
-3. **docs-sync 스킬 실행** — 코드가 바꾼 사실이 문서에 반영됐는지 점검하고 드리프트를 이 PR 안에서 함께 해소한다. 사후 "문서 정합성 정정" 커밋이 반복돼 온 이력이 있다. (edge-review 가 코드를 고쳤을 수 있으니 문서 점검은 그 뒤에 둔다.)
+1. **edge-review 스킬 실행** — 변경(diff)을 edge 규칙·계약(AGENTS 12룰·schema SSOT·신뢰경계·레이크)과 정통 버그로 리뷰하고, 검증된 finding 은 이 PR 안에서 고친다. edge-review 는 변경 모듈의 **빌드/테스트를 함께 확인**해 실패를 최우선 finding 으로 올리므로, 빌드·테스트가 깨진 채로 PR 이 올라가지 않는다(별도 빌드/테스트 단계를 두지 않는 이유 — 중복). 기본 effort는 `medium`(작은 PR), 넓거나 위험한 변경은 `high`. PR을 올린 뒤 리뷰 봇/사람이 잡을 걸 미리 잡아 왕복을 줄인다.
+2. **docs-sync 스킬 실행** — 코드가 바꾼 사실이 문서에 반영됐는지 점검하고 드리프트를 이 PR 안에서 함께 해소한다. 사후 "문서 정합성 정정" 커밋이 반복돼 온 이력이 있다. (edge-review 가 코드를 고쳤을 수 있으니 문서 점검은 그 뒤에 둔다.)
 
 ## 5. dev 대상 PR
 
@@ -87,5 +86,5 @@ PR을 올리기 전에 세 가지를 순서대로 통과시킨다:
 
 ## 테스트 시나리오
 
-- **정상 흐름**: "ALPHA-301 위젯 폴백 구현해줘" → 티켓 확인 → `feature/ALPHA-301-widget-fallback` 분기+push → 구현·커밋 → 빌드+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → 승인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
-- **에러 흐름**: PR 전 게이트에서 `./gradlew :apps:widget-api:build` 실패 → PR을 올리지 않고 실패 출력 보고 → 수정 후 게이트 재실행.
+- **정상 흐름**: "ALPHA-301 위젯 폴백 구현해줘" → 티켓 확인 → `feature/ALPHA-301-widget-fallback` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → 승인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
+- **에러 흐름**: edge-review 게이트가 `./gradlew :apps:widget-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.
