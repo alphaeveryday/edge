@@ -74,7 +74,7 @@ git status --short
 검증 통과 finding 을 **가장 심각한 순**으로 낸다. `ReportFindings` 툴이 있으면 그걸로 보고하고 텍스트로 중복 출력하지 않는다(없으면 랭크된 목록). 정확성 버그가 cleanup·규칙 finding 보다 항상 우선하고, 티어 상한을 넘으면 상위만 남긴다. 아무것도 안 남으면 "정합 — 실질 이슈 없음"을 명시한다(점검 자체가 산출물).
 
 **후처리 플래그**
-- `--comment` — finding 을 PR **라인 앵커드 인라인 코멘트**로 게시. `gh pr comment`·`gh pr review` 는 path/line 옵션이 없어 본문 코멘트만 되므로 쓰지 않고, review comments API 를 쓴다: `gh api repos/{owner}/{repo}/pulls/{N}/comments -f path=… -F line=… -f side=RIGHT -f commit_id=… -f body=…`. PR 대상일 때만.
+- `--comment` — finding 을 PR **라인 앵커드 인라인 코멘트**로 게시. `gh pr comment`·`gh pr review` 는 path/line 옵션이 없어 본문 코멘트만 되므로 쓰지 않고, review comments API 를 쓴다: `gh api repos/{owner}/{repo}/pulls/$PR/comments -f path=… -F line=… -f side=RIGHT -f commit_id=… -f body=…` (`gh api` 는 `{owner}`·`{repo}`·`{branch}` 만 치환하므로 **PR 번호는 셸 변수 `$PR` 로 직접** 넣는다). PR 대상일 때만.
 - `--fix` — 검증된 finding 을 작업트리에 적용(정확성 수정 우선, cleanup 은 명확한 것만). 적용 후 테스트 재실행.
 
 ## 경계·주의
