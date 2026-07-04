@@ -72,9 +72,10 @@ def _log(storage, run_id):
     return json.loads(storage.get_bytes(key))
 
 
-def test_saves_new_filings_under_identity_keys(tmp_path):
-    # WHY: S035 — 신규 공시가 공시 정체성 키(종목·문서·주기·회계기간·공시일)로 저장되고,
-    #      실행 결과가 collection_log 로 남아야 운영에서 수집을 확인한다.
+def test_saves_ingest_date_partition_and_log(tmp_path):
+    # WHY: S035 realign — 재무 raw 도 가격과 동형으로 market 별 ingest_date 파티션(수집일)에
+    #      저장되고, 실행 결과가 collection_log 로 남아야 운영에서 수집을 확인한다. 여러 문서
+    #      (income·balance)는 한 market 파일에 함께 append 되고 각 행에 statement_type 이 남는다.
     responses = {
         ("NVDA", "income-statement", "annual"): [_row("2025-01-31", "2025-02-26", netIncome=100)],
         ("NVDA", "balance-sheet-statement", "annual"): [_row("2025-01-31", "2025-02-26", totalAssets=900)],
@@ -82,59 +83,48 @@ def test_saves_new_filings_under_identity_keys(tmp_path):
     code, storage = _run(tmp_path, responses, run_id="r1")
 
     assert code == 0
-    keys = storage.list_keys("raw")
-    assert len(keys) == 2
-    assert all(k.startswith("raw/source=fmp/dataset=financial_statements/statement_type=") for k in keys)
-    assert all(
-        "/period=annual/fiscal_period_end=2025-01-31/filing_date=2025-02-26/data.json" in k
-        for k in keys
-    )
+    [key] = storage.list_keys("raw")  # market 별 1파일(US)
+    assert key.startswith("raw/source=fmp/dataset=financial_statements/market=US")
+    assert "/ingest_date=" in key and key.endswith("/part-00000.ndjson")
+    lines = storage.get_bytes(key).decode("utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert {json.loads(ln)["statement_type"] for ln in lines} == {"income_statement", "balance_sheet"}
+
     log = _log(storage, "r1")
     assert log["status"] == "success"
     assert log["records_saved"] == 2
-    assert log["records_skipped_existing"] == 0
 
 
-def test_daily_repoll_skips_existing_no_duplicate(tmp_path):
-    # WHY: 핵심 계약 — 매일 폴링하면 FMP 가 같은 분기를 반복 반환한다. 공시 정체성 키
-    #      존재검사로 이미 있는 공시는 skip 해 중복 저장이 0이어야 한다(요청 매일, 저장 공시당 1회).
-    responses = {("NVDA", "income-statement", "annual"): [_row("2025-01-31", "2025-02-26")]}
-    storage = LocalStorage(tmp_path / "lake")
-    code1, _ = _run(tmp_path, responses, storage=storage, run_id="day1")
-    keys_after_1 = storage.list_keys("raw")
-    code2, _ = _run(tmp_path, responses, storage=storage, run_id="day2")
-    keys_after_2 = storage.list_keys("raw")
-
-    assert code1 == 0 and code2 == 0
-    assert keys_after_1 == keys_after_2  # 둘째 폴링이 새 raw 를 만들지 않음(멱등)
-    assert len(keys_after_2) == 1
-    day2 = _log(storage, "day2")
-    assert day2["records_saved"] == 0
-    assert day2["records_skipped_existing"] == 1
-
-
-def test_restatement_and_new_period_add_new_keys(tmp_path):
-    # WHY: 정정 공시(같은 기간·다른 filing_date)와 새 분기는 새 정체성이라 새 키로 적재돼
-    #      원본과 함께 보존된다(덮어쓰지 않음 = point-in-time 이력, 룩어헤드 방지).
-    storage = LocalStorage(tmp_path / "lake")
-    first = {("NVDA", "income-statement", "quarter"): [_row("2025-03-31", "2025-04-30", period="Q1")]}
-    _run(tmp_path, first, storage=storage, run_id="r1")
-
-    second = {("NVDA", "income-statement", "quarter"): [
-        _row("2025-03-31", "2025-05-15", period="Q1"),   # 정정(filing_date 다름)
-        _row("2025-06-30", "2025-07-30", period="Q2"),   # 새 분기
-        _row("2025-03-31", "2025-04-30", period="Q1"),   # 원본 재등장 → skip
+def test_raw_preserves_all_rows_no_dedup(tmp_path):
+    # WHY: bronze 는 받은 행을 전부 보존한다(append) — 매일 재폴링해 같은 공시(같은
+    #      fiscal_period_end·filing_date)가 반복 와도 조용히 버리지 않는다. 중복 제거·정정
+    #      (SCD)·point-in-time 판정은 후속 canonical MERGE 소관이라 raw 에서 dedup 하지 않는다.
+    responses = {("NVDA", "income-statement", "annual"): [
+        _row("2025-01-31", "2025-02-26", netIncome=100),
+        _row("2025-01-31", "2025-02-26", netIncome=100),  # 같은 공시 중복 — 그대로 보존
     ]}
-    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+    code, storage = _run(tmp_path, responses, run_id="r1")
 
     assert code == 0
+    [key] = storage.list_keys("raw")
+    lines = storage.get_bytes(key).decode("utf-8").strip().splitlines()
+    assert len(lines) == 2  # 둘 다 보존(dedup 안 함)
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 2
+    assert "records_skipped_existing" not in log  # dedup 개념 자체가 raw 에 없다
+
+
+def test_repoll_new_run_id_writes_separate_partition(tmp_path):
+    # WHY: 매일 재폴링은 새 run_id 로 별도 파티션 파일에 그대로 append 된다(스냅샷 보존) —
+    #      raw 에서 합치거나 덮지 않는다. 같은 run_id 재실행만 같은 키를 덮는다(재현 실행).
+    responses = {("NVDA", "income-statement", "annual"): [_row("2025-01-31", "2025-02-26")]}
+    storage = LocalStorage(tmp_path / "lake")
+    _run(tmp_path, responses, storage=storage, run_id="day1")
+    _run(tmp_path, responses, storage=storage, run_id="day2")
+
     keys = storage.list_keys("raw")
-    assert len(keys) == 3  # 원본 Q1 + 정정 Q1 + Q2 모두 보존
-    filings = sorted(k.split("filing_date=")[1].split("/")[0] for k in keys)
-    assert filings == ["2025-04-30", "2025-05-15", "2025-07-30"]
-    r2 = _log(storage, "r2")
-    assert r2["records_saved"] == 2           # 정정 + 새 분기
-    assert r2["records_skipped_existing"] == 1  # 원본 재등장
+    assert len(keys) == 2  # run_id 별 파일 2개(중복 스냅샷도 보존)
+    assert {k.split("run_id=")[1].split("/")[0] for k in keys} == {"day1", "day2"}
 
 
 def test_disabled_source_skips_with_log(tmp_path):
