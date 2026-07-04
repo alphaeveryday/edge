@@ -70,3 +70,17 @@ variable "app_pass_role_arns" {
   type        = list(string)
   default     = []
 }
+
+# ── UI CD(deploy-ui.yml) 확장 — 모두 옵션(기본 빈 리스트, 비우면 UI 배포 권한 없음) ──
+# 정적 프론트를 S3 에 sync 하고 CloudFront 를 무효화하는 권한. 같은 배포 역할을 공유한다.
+variable "ui_bucket_arns" {
+  description = "UI 산출물을 sync 할 S3 버킷 ARN 목록. 버킷(ListBucket)·객체(Put/Delete)에 스코프. 비우면 권한 없음."
+  type        = list(string)
+  default     = []
+}
+
+variable "ui_distribution_arns" {
+  description = "UI 배포 후 무효화(cloudfront:CreateInvalidation/GetInvalidation)할 CloudFront 배포 ARN 목록. 비우면 권한 없음."
+  type        = list(string)
+  default     = []
+}

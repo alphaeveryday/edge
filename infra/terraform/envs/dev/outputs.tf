@@ -93,3 +93,34 @@ output "schema_migrate_log_group" {
 output "admin_url" {
   value = module.super_admin_site.url
 }
+
+# ── UI 배포용 값 (GitHub repo vars — deploy-ui.yml 콜러가 with 로 전달) ──
+output "widget_ui_bucket" {
+  description = "→ vars.WIDGET_UI_BUCKET"
+  value       = module.widget_site.bucket_name
+}
+
+output "widget_ui_distribution_id" {
+  description = "→ vars.WIDGET_UI_DISTRIBUTION_ID"
+  value       = module.widget_site.distribution_id
+}
+
+output "tenant_console_ui_bucket" {
+  description = "→ vars.TENANT_CONSOLE_UI_BUCKET"
+  value       = module.tenant_console_site.bucket_name
+}
+
+output "tenant_console_ui_distribution_id" {
+  description = "→ vars.TENANT_CONSOLE_UI_DISTRIBUTION_ID"
+  value       = module.tenant_console_site.distribution_id
+}
+
+output "super_admin_ui_bucket" {
+  description = "→ vars.SUPER_ADMIN_UI_BUCKET"
+  value       = module.super_admin_site.bucket_name
+}
+
+output "super_admin_ui_distribution_id" {
+  description = "→ vars.SUPER_ADMIN_UI_DISTRIBUTION_ID"
+  value       = module.super_admin_site.distribution_id
+}

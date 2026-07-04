@@ -1,8 +1,9 @@
 # GitHub Actions → AWS 를 OIDC(웹 아이덴티티)로 잇는 배포 역할.
 # 장기 액세스 키 없이, 지정한 repo 의 지정한 브랜치 워크플로만 이 역할을 assume 한다.
 # 권한은 최소 스코프다: 마이그레이션(이미지 push + ECS one-off RunTask)에 더해, app_* 변수를
-# 채우면 앱 배포(앱 이미지 push + 서비스 롤링 UpdateService + 앱 역할 PassRole)까지 부여한다.
-# schema-migrate 와 앱 배포가 이 한 역할을 공유한다(같은 AWS_DEPLOY_ROLE_ARN).
+# 채우면 앱 배포(앱 이미지 push + 서비스 롤링 UpdateService + 앱 역할 PassRole), ui_* 변수를 채우면
+# UI 배포(S3 sync + CloudFront 무효화)까지 부여한다.
+# schema-migrate·앱·UI 배포가 이 한 역할을 공유한다(같은 AWS_DEPLOY_ROLE_ARN).
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
@@ -138,6 +139,27 @@ data "aws_iam_policy_document" "permissions" {
       test     = "StringEquals"
       variable = "iam:PassedToService"
       values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+
+  # UI 배포 — dist/ 를 S3 버킷에 sync. ui_bucket_arns 가 있을 때만.
+  # 버킷(ListBucket)과 객체(Get/Put/Delete) 양쪽 리소스 형태를 함께 스코프한다.
+  dynamic "statement" {
+    for_each = length(var.ui_bucket_arns) > 0 ? [1] : []
+    content {
+      sid       = "UiS3Sync"
+      actions   = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+      resources = concat(var.ui_bucket_arns, [for arn in var.ui_bucket_arns : "${arn}/*"])
+    }
+  }
+
+  # UI 배포 후 CloudFront 캐시 무효화. ui_distribution_arns 가 있을 때만.
+  dynamic "statement" {
+    for_each = length(var.ui_distribution_arns) > 0 ? [1] : []
+    content {
+      sid       = "UiCloudFrontInvalidate"
+      actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+      resources = var.ui_distribution_arns
     }
   }
 

@@ -70,7 +70,7 @@ cd ../envs/dev  && terraform apply
 
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
-- 앱 ECR 이미지 6개(push), 프론트 S3 콘텐츠 3개(build sync)
+- 앱 ECR 이미지 6개(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드 4종·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-<ui>.yml`)가 채운다
 - 파이프라인 이미지(`edge/pipeline:latest` placeholder) + 시크릿 fmp/openai(`REPLACE_ME` → 실제 키)
 
 ### 🔮 미구축 (후속 증분)
