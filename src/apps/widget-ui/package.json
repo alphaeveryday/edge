@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "build": "rm -rf dist && mkdir -p dist && cp widget-loader.js widget.js widget-frame.html dist/",
     "test": "vitest run --environment jsdom"
   },
   "devDependencies": {
