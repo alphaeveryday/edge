@@ -1,10 +1,10 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
-    python -m data_pipeline.run {ingest-raw|ingest-price-raw}
+    python -m data_pipeline.run {ingest-raw|ingest-price-raw|ingest-raw-financial}
                                 [--from YYYY-MM-DD] [--to YYYY-MM-DD]
                                 [--run-id RUN_ID] [--config PATH]
 
-수집 날짜창(--from/--to):
+수집 날짜창(--from/--to) — 뉴스·가격만 사용(재무제표는 point-in-time 폴링이라 창 없음):
   - 미지정(스케줄 증분): 어제~오늘 UTC 창을 앱이 계산한다. EventBridge Scheduler 는
     정적 입력만 넣어 '어제/오늘'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다.
   - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다.
@@ -21,8 +21,8 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .lake import make_storage
-from .sources import FmpNewsSource, FmpPriceSource, PoliteClient
-from .steps import ingest_price_raw, ingest_raw
+from .sources import FmpFinancialSource, FmpNewsSource, FmpPriceSource, PoliteClient
+from .steps import ingest_price_raw, ingest_raw, ingest_raw_financial
 
 # 증분 기본 창의 소급 일수 — 어제부터(런 간 경계 겹침을 dedup 이 흡수하도록) 오늘까지.
 DEFAULT_LOOKBACK_DAYS = 1
@@ -45,7 +45,7 @@ def default_window(now: datetime, lookback_days: int = DEFAULT_LOOKBACK_DAYS) ->
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="data-pipeline")
-    parser.add_argument("step", choices=["ingest-raw", "ingest-price-raw"])
+    parser.add_argument("step", choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial"])
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
@@ -59,6 +59,14 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.config)
     storage = make_storage(settings.storage)
     run_id = args.run_id or make_run_id()
+
+    # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
+    if args.step == "ingest-raw-financial":
+        if settings.financial is None:
+            # 재무 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+            raise SystemExit("financial.source 설정이 없다 — sources.toml 확인")
+        source = FmpFinancialSource(settings.financial.source, PoliteClient())
+        return ingest_raw_financial.run(settings, storage, source, run_id)
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).
     # 소급 일수는 스텝별로 다르다(가격 EOD 는 주말·공휴일 공백 때문에 더 넉넉히).

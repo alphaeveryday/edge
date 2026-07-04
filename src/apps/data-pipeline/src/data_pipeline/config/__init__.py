@@ -3,6 +3,8 @@
 from .loader import ConfigError, Settings, load_settings
 from .models import (
     CollectionTargets,
+    FinancialConfig,
+    FinancialSource,
     NewsConfig,
     NewsSource,
     PriceConfig,
@@ -18,6 +20,8 @@ __all__ = [
     "NewsConfig",
     "PriceSource",
     "PriceConfig",
+    "FinancialSource",
+    "FinancialConfig",
     "CollectionTargets",
     "StorageConfig",
 ]
