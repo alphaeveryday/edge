@@ -219,6 +219,17 @@ def test_dateless_rows_preserved_not_dropped():
     assert not src.fetch_failures  # 정상 dict 행이라 실패가 아님(보존으로 surface)
 
 
+def test_all_dateless_page_marked_incomplete():
+    # WHY: 행은 있는데 날짜 있는 행이 0인 페이지는 페이지네이션을 진전시킬 수 없어 창이
+    #      절단될 수 있다 — 이상치는 보존하되 조용한 success 가 아니라 실패로 surface 해야 한다
+    #      (빈 응답 raw_chunk==[] 은 정상 종료라 이와 구분한다).
+    dateless = {"stck_oprc": "100", "stck_clpr": "110"}
+    src = _source({"005930": [_ok([dateless])]})  # 첫 페이지가 전부 날짜 없음
+    records = list(src.fetch(["005930"]))
+    assert len(records) == 1 and records[0].get("stck_bsop_date") is None  # 이상치 보존
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930"]  # 그러나 실패로 surface
+
+
 def test_max_pages_truncation_is_noted(monkeypatch):
     # WHY: 안전상한(MAX_PAGES)에 걸려 창이 절단되면 조용히 버리지 않고 실패로 기록해 런을
     #      partial 로 드러내야 한다(구간 좁혀 재실행 신호).

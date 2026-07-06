@@ -173,8 +173,15 @@ class KisDailyPriceSource:
                     seen_extra.add(key)
                     extras.append(bar)
             if not dated:
-                # 날짜 있는 행이 없으면 페이지네이션을 진전시킬 수 없다 — 정상 끝(빈 응답)이거나
-                # 전 행이 이상치인 페이지. 어느 쪽이든 여기서 멈춘다(이상치는 위에서 이미 보존).
+                # 날짜 있는 행이 없으면 페이지네이션을 더 진전시킬 수 없다. 빈 응답(raw_chunk==[])은
+                # 정상 종료지만, 행은 있는데 전부 날짜 없는 페이지는 이상(스키마 드리프트/malformed)
+                # 이라 창이 절단될 수 있다 — 이상치는 위에서 보존했으되 조용한 success 대신 실패로
+                # surface 한다(둘을 구분: 빈 페이지=정상, 비어있지 않은데 날짜 0=이상).
+                if raw_chunk:
+                    self._note_failure(
+                        kis_symbol, our_ticker,
+                        "날짜 있는 행이 없는 비어있지 않은 페이지 — 창 절단 가능(스키마 드리프트?)",
+                    )
                 truncated = False
                 break
             new = 0
