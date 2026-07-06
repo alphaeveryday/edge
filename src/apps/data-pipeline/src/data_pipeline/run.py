@@ -106,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
             if settings.kis_price is None:
                 # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
                 raise SystemExit("kis_price.source 설정이 없다 — sources.toml 확인")
+            if to_date is not None and from_date is None:
+                # KIS inquire-daily 는 FID_INPUT_DATE_1(시작일)이 필수다 — 한쪽만 준 창은
+                # 빈 시작일로 전 종목이 KIS 오류가 된다. 무의미한 전량 실패 전에 fail-fast.
+                # (증분=둘 다 미지정은 위에서 창을 채웠으므로 이 경로로 오지 않는다.)
+                raise SystemExit("KIS 가격은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
             price_source = KisDailyPriceSource(
                 settings.kis_price.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
             )
