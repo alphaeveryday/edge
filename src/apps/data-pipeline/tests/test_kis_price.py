@@ -184,6 +184,26 @@ def test_requests_original_unadjusted_prices():
     assert all("FID_ORG_ADJ_PRC=1" in url for url in client.urls)  # 전부 원주가로 질의
 
 
+def test_non_object_response_fails_loud():
+    # WHY: KIS 는 항상 객체({rt_cd,...})로 답한다 — 배열·스칼라(스키마 드리프트)를 조용히
+    #      넘기면 .get 이 AttributeError 로 죽거나 이상 응답이 묻힌다. 형태를 명시 검사해
+    #      심볼 단위 실패로 surface(FMP 어댑터의 응답 형태 검사와 동형).
+    src = _source({"005930": [json.dumps(["not", "an", "object"])]})
+    records = list(src.fetch(["005930"]))
+    assert records == []
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
+
+
+def test_malformed_success_missing_output2_fails_loud():
+    # WHY: rt_cd=0 인데 output2 누락/비-list(malformed success·스키마 드리프트)를 정상 빈
+    #      페이지로 취급하면 success 0건으로 위장된다 — 빈 list([])와 구분해 fail-loud 해야
+    #      한다(빈 [] 는 정상 종료지만, 키 누락은 이상 신호라 심볼 실패로 surface).
+    src = _source({"005930": [json.dumps({"rt_cd": "0"})]})  # output2 키 자체가 없음
+    records = list(src.fetch(["005930"]))
+    assert records == []
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
+
+
 def test_dateless_rows_preserved_not_dropped():
     # WHY: bronze 는 받은 행을 버리지 않는다(FMP 가격이 date 없는 dict 행도 보존하는 것과 동형).
     #      stck_bsop_date 없는 이상치를 조용히 드롭하면 스키마 드리프트가 묻힌다 — 날짜 있는

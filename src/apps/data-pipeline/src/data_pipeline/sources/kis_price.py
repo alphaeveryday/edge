@@ -226,8 +226,19 @@ class KisDailyPriceSource:
             # 4xx/429 는 client 가 StopFetch 로 올린다(전체 중단). 5xx·네트워크는 client 가 재시도.
             body = self.client.request("GET", url, headers=headers, decode=True)
             data = json.loads(body)  # 깨진 JSON → 심볼 단위 실패로 전파
+            # KIS 는 항상 {rt_cd, output1, output2, ...} 객체로 답한다 — 배열·스칼라(스키마
+            # 드리프트)면 .get 이 AttributeError 를 내기 전에 명확한 메시지로 fail-loud(FMP
+            # 어댑터가 응답 형태를 명시 검사하는 것과 동형).
+            if not isinstance(data, dict):
+                raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
             if data.get("rt_cd") == "0":
-                return data.get("output2") or []
+                output2 = data.get("output2")
+                # 빈 list([])는 정상 종료(더 이상 데이터 없음)지만, 키 누락(None)·비-list 는
+                # rt_cd=0 인데도 이상(malformed success·스키마 드리프트)이다 — 정상 빈 페이지로
+                # 위장(success 0건)하지 않고 fail-loud(심볼 단위 실패로 격리·기록)한다.
+                if not isinstance(output2, list):
+                    raise ValueError(f"KIS rt_cd=0 인데 output2 이상: {type(output2).__name__}")
+                return output2
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
                 self.client._sleep(0.7 * (attempt + 1))
