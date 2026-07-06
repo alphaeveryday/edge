@@ -31,8 +31,11 @@ logger = logging.getLogger(__name__)
 TR_ID_DAILY = "FHKST03010100"
 PATH_DAILY = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 MARKET_DIV = "J"  # J: KRX 주식
-# 100건/콜 × 60 = ~24년 영업일. KR 상장 이력이 이보다 길 일은 없어 사실상 절단 없음.
-MAX_PAGES = 60
+# 무한 페이지 방어용 백스톱. 종목 이력이 끝나면 new==0 으로, 창 하한에 닿으면
+# earliest<=d1 로 먼저 멈춘다 — 이 값은 그 자연 종료가 안 될 때만 걸린다. 100건/콜 ×
+# 200 = 2만 영업일(~80년)이라 가장 오래된 KRX 종목의 일봉 백필도 하한(d1)에 먼저 닿아
+# 사실상 안 걸린다(다년 백필이 이 상한에 절단되지 않게 넉넉히 둔다).
+MAX_PAGES = 200
 RATE_MSG_CD = "EGW00201"  # "초당 거래건수 초과" — HTTP 429 아님(200 본문). 어댑터가 재시도.
 MAX_RATE_RETRY = 5
 
@@ -182,7 +185,10 @@ class KisDailyPriceSource:
             "FID_INPUT_DATE_1": d1 or "",
             "FID_INPUT_DATE_2": d2,
             "FID_PERIOD_DIV_CODE": "D",
-            "FID_ORG_ADJ_PRC": "0",  # 0: 수정주가 미반영(원본). 정규화는 후속 소관.
+            # KIS FID_ORG_ADJ_PRC: 0=수정주가(반영), 1=원주가(미반영). bronze 는 원본
+            # (미조정) 봉을 보존해야 후속 canonical 이 조정을 재현할 수 있으므로 1(원주가).
+            # 0 을 쓰면 조정 시점마다 값이 바뀌어 원본 복원이 불가능하다(무변형 원칙 위반).
+            "FID_ORG_ADJ_PRC": "1",
         }
         url = self.base + PATH_DAILY + "?" + urllib.parse.urlencode(params)
         headers = {

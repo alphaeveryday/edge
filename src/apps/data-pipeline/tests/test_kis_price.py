@@ -52,12 +52,14 @@ class FakeClient:
         self.chunk_responses = chunk_responses
         self.token_body = token_body
         self.calls: list[str] = []  # method 기록
+        self.urls: list[str] = []  # GET 질의 URL 기록(파라미터 계약 검증용)
         self._idx: dict[str, int] = defaultdict(int)
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         self.calls.append(method)
         if method == "POST":
             return self.token_body
+        self.urls.append(url)
         sym = _qs(url, "FID_INPUT_ISCD")
         pages = self.chunk_responses.get(sym, [])
         idx = self._idx[sym]
@@ -170,6 +172,16 @@ def test_token_failure_is_not_isolated():
     src = _source({"005930": [_ok([_bar("20260703")])]}, client=FakeClient({}, token_body="{}"))
     with pytest.raises(RuntimeError):
         list(src.fetch(["005930"]))
+
+
+def test_requests_original_unadjusted_prices():
+    # WHY: bronze 는 원본(미조정) 봉을 보존해야 한다 — KIS FID_ORG_ADJ_PRC=1(원주가)이어야
+    #      후속 canonical 이 조정을 재현할 수 있다. 0(수정주가)이면 조정 시점마다 값이 바뀌어
+    #      원본 복원이 불가능하다(무변형 원칙 위반). 이 파라미터 계약을 잠근다.
+    client = FakeClient({"005930": [_ok([_bar("20260703")]), _EMPTY]})
+    list(_source({}, client=client).fetch(["005930"]))
+    assert client.urls  # GET 이 실제로 나갔고
+    assert all("FID_ORG_ADJ_PRC=1" in url for url in client.urls)  # 전부 원주가로 질의
 
 
 def test_max_pages_truncation_is_noted(monkeypatch):
