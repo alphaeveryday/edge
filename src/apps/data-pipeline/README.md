@@ -3,8 +3,8 @@
 > 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
-> 현재 범위는 **수집 설정 관리 + 원본저장(Step1, FMP)** — 뉴스·가격(OHLCV 일봉)·
-> 재무제표(손익·재무상태·현금흐름)까지다.
+> 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
+> 재무제표(손익·재무상태·현금흐름)와 KIS(한국투자, 국내) 일봉까지다.
 > 정규화·품질검증(뉴스 Step2)과 canonical 적재는 후속이다.
 
 ## 실행
@@ -28,6 +28,14 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw
 # 백필 예: 2026-06 한 달
 #   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
+
+# 국내 가격(OHLCV 일봉) 원본저장(Step1) — KIS(한국투자) REST. --source kis 로 벤더 선택
+# (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 심볼맵은
+# 국내 전용(kis_price.source.symbol_map, KR 6자리). 토큰은 run 당 1회 발급·재사용.
+DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
+# 백필 예: 2026-06 한 달
+#   ... run ingest-price-raw --source kis --from 2026-06-01 --to 2026-06-30
 
 # 재무제표(손익·재무상태·현금흐름) 원본저장(Step1) — FMP 재무 API. 날짜창 없음(매 실행이
 # 최근 N기를 재요청하는 point-in-time 폴링). 가격과 동형으로 받은 행을 ingest_date/run_id 에
@@ -59,6 +67,7 @@ from data_pipeline import load_settings
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
 settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
+settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱키/시크릿 env·env=prod|vps); 미설정이면 settings.kis_price 은 None
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
@@ -91,6 +100,7 @@ settings.targets.keywords            # ["금리", ...]
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
   raw 는 받은 행을 **전부 보존**한다(중복 판정 안 함) — (market, ticker, trade_date)
   정체성 upsert·거래일별 분해는 후속 canonical/market_data(S006/S007) 소관.
+  국내 KIS 일봉은 같은 dataset·규약으로 `source=kis`(`--source kis`) 아래 쌓인다.
 - **raw(재무제표)** — `raw/source=fmp/dataset=financial_statements/market=…/ingest_date=…/run_id=…/` 에
   run_id 별 append. **가격과 동형(bronze 통일)** — 받은 행을 수집일 기준으로 **전부 보존**한다
   (중복 판정 안 함). 재무는 드물게·비동기로 공시돼 매일 재폴링하면 같은 스냅샷이 날마다 쌓이지만,

@@ -59,6 +59,28 @@ RTX = "RTX"
 JPM = "JPM"
 V = "V"
 
+# 국내 가격 소스 — KIS(한국투자) REST 일봉 OHLCV(S004 국내). FMP(위 [price.source])와
+# 별개 벤더다. 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps)로 고른다:
+#   DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=...
+#   DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=...
+# ingest-price-raw --source kis 로 선택(미지정=fmp). 검증에 쓴 키는 폐기·재발급 대상.
+[kis_price.source]
+env = "prod"
+enabled = true
+
+# our_ticker → KIS 6자리 코드. KR 은 대개 항등(005930→005930)이라 검증된 KR 타깃만 둔다.
+# 여기 없는 종목(US 등)은 KIS 로 수집하지 않는다 — KIS 는 국내(KRX) 전용.
+[kis_price.source.symbol_map]
+"005930" = "005930"  # 삼성전자
+"000660" = "000660"  # SK하이닉스
+"009150" = "009150"  # 삼성전기
+"402340" = "402340"  # SK스퀘어
+"373220" = "373220"  # LG에너지솔루션
+"028260" = "028260"  # 삼성물산
+"032830" = "032830"  # 삼성생명
+"105560" = "105560"  # KB금융
+"055550" = "055550"  # 신한지주
+
 # 재무제표 소스 — FMP 재무제표(손익·재무상태·현금흐름, S035). api_key 는 env 로 주입:
 #   DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=...
 # base_url 은 /stable 베이스만 둔다 — 3개 엔드포인트(income-statement·balance-sheet-

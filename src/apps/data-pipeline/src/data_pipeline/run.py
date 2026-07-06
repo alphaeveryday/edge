@@ -21,8 +21,17 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .lake import make_storage
-from .sources import FmpFinancialSource, FmpNewsSource, FmpPriceSource, PoliteClient
+from .sources import (
+    FmpFinancialSource,
+    FmpNewsSource,
+    FmpPriceSource,
+    KisDailyPriceSource,
+    PoliteClient,
+)
 from .steps import ingest_price_raw, ingest_raw, ingest_raw_financial
+
+# KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
+KIS_MIN_INTERVAL_SEC = 0.5
 
 # 증분 기본 창의 소급 일수 — 어제부터(런 간 경계 겹침을 dedup 이 흡수하도록) 오늘까지.
 DEFAULT_LOOKBACK_DAYS = 1
@@ -50,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
+    # 가격 벤더 선택 — ingest-price-raw 에서만 의미가 있다(미지정=fmp, 기존 동작 보존).
+    parser.add_argument("--source", default=None, help="가격 소스 벤더(fmp|kis). 미지정=fmp")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -87,8 +98,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "ingest-price-raw":
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
         # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).
-        source = FmpPriceSource(settings.price.source, PoliteClient())
-        return ingest_price_raw.run(settings, storage, source, run_id, from_date, to_date)
+        # --source 로 벤더를 고른다(미지정=fmp, 기존 동작 보존; kis=국내 일봉).
+        vendor = args.source or "fmp"
+        if vendor == "fmp":
+            price_source = FmpPriceSource(settings.price.source, PoliteClient())
+        elif vendor == "kis":
+            if settings.kis_price is None:
+                # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+                raise SystemExit("kis_price.source 설정이 없다 — sources.toml 확인")
+            if to_date is not None and from_date is None:
+                # KIS inquire-daily 는 FID_INPUT_DATE_1(시작일)이 필수다 — 한쪽만 준 창은
+                # 빈 시작일로 전 종목이 KIS 오류가 된다. 무의미한 전량 실패 전에 fail-fast.
+                # (증분=둘 다 미지정은 위에서 창을 채웠으므로 이 경로로 오지 않는다.)
+                raise SystemExit("KIS 가격은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
+            price_source = KisDailyPriceSource(
+                settings.kis_price.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+            )
+        else:
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
+        return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
     raise AssertionError(f"unreachable step: {args.step}")
 
 

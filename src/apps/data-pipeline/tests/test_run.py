@@ -2,10 +2,13 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
 from data_pipeline.run import (
     DEFAULT_LOOKBACK_DAYS,
     DEFAULT_PRICE_LOOKBACK_DAYS,
     default_window,
+    main,
 )
 
 
@@ -32,3 +35,12 @@ def test_price_window_uses_wider_lookback():
     assert to_date == "2026-07-06"
     assert from_date == "2026-07-01"  # 5일 소급 → 직전 금요일(7/3) 포함
     assert DEFAULT_PRICE_LOOKBACK_DAYS == 5
+
+
+def test_kis_rejects_to_without_from(monkeypatch):
+    # WHY: KIS inquire-daily 는 시작일(FID_INPUT_DATE_1)이 필수다 — --to 만 주면 빈 시작일로
+    #      전 종목이 KIS 오류가 되어 무의미한 전량 실패가 된다. 한쪽만 준 창은 API 호출 전에
+    #      fail-fast 로 거부해야 한다(증분=둘 다 미지정은 앱이 창을 채우므로 이 경로 아님).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["ingest-price-raw", "--source", "kis", "--to", "2026-06-30"])

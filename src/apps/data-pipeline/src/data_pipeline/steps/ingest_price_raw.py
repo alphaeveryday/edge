@@ -19,7 +19,11 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_price_partition
-from ..sources import FmpPriceSource, StopFetch
+from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
+
+# 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 가격 어댑터들의
+# 합집합으로 둔다. 새 가격 벤더를 추가하면 이 합집합에 더한다(로직은 손대지 않는다).
+PriceSourceAdapter = FmpPriceSource | KisDailyPriceSource
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,7 @@ DATASET = "price_daily"  # collection_log·raw 파티션의 dataset= 키
 def run(
     settings: Settings,
     storage: Storage,
-    source: FmpPriceSource,
+    source: PriceSourceAdapter,
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -53,12 +57,13 @@ def run(
     }
 
     if not source.enabled:
-        # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
+        # 크리덴셜 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
+        # 벤더 무관이라 메시지도 소스가 규정한 vendor 로 남긴다(fmp=api_key, kis=앱키/시크릿).
         # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
-        logger.warning("fmp 가격 비활성(api_key 미주입) — 수집 건너뜀")
+        logger.warning("%s 가격 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": "fmp disabled or no api_key"})
+                                                               "reason": f"{vendor} disabled or missing credentials"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
         return 0
