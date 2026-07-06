@@ -141,22 +141,49 @@ class KisDailyPriceSource:
         실패는 예외로 올려 호출부가 심볼 단위로 격리한다. 같은 거래일이 페이지 경계에서
         겹쳐 와도 raw 는 거래일 기준으로 dedup 해 보존한다(같은 봉 중복 저장 방지 —
         정체성 upsert 아님, 페이지 경계 중복만 제거).
+
+        날짜(stck_bsop_date) 없는 행(스키마 드리프트/이상치)은 페이지네이션 산식에서만
+        제외하고 raw 로는 보존한다(bronze 무변형 — FMP 가격이 date 없는 dict 행도 버리지
+        않는 것과 동형; 조용히 드롭하면 드리프트가 묻힌다). 페이지 경계 중복만 제거한다.
         """
-        bars: dict[str, dict] = {}  # 거래일 → 원본 봉
+        def _emit(bar: dict) -> dict:
+            # bronze 무변형: output2 행 원본 보존 + 수집 provenance 만 부착(FMP 가격과 동형).
+            record = dict(bar)
+            record["our_ticker"] = our_ticker
+            record["market"] = "KR"  # KIS 는 KRX 로컬 전용
+            record["kis_symbol"] = kis_symbol
+            record["fetched_at"] = fetched_at
+            return record
+
+        bars: dict[str, dict] = {}  # 거래일 → 원본 봉(날짜 기준 dedup)
+        extras: list[dict] = []  # 날짜 없는 이상치 행(보존 대상)
+        seen_extra: set[str] = set()  # 이상치의 페이지 경계 중복만 제거
         end = d2
         truncated = True
         for _ in range(MAX_PAGES):
-            chunk = [b for b in self._chunk(kis_symbol, d1, end, token) if b.get("stck_bsop_date")]
-            if not chunk:
+            raw_chunk = self._chunk(kis_symbol, d1, end, token)
+            dated = []
+            for bar in raw_chunk:
+                if bar.get("stck_bsop_date"):
+                    dated.append(bar)
+                    continue
+                # 날짜 없는 행은 페이지네이션엔 못 쓰지만 raw 로는 보존(내용 기준 중복 제거).
+                key = json.dumps(bar, sort_keys=True, ensure_ascii=False)
+                if key not in seen_extra:
+                    seen_extra.add(key)
+                    extras.append(bar)
+            if not dated:
+                # 날짜 있는 행이 없으면 페이지네이션을 진전시킬 수 없다 — 정상 끝(빈 응답)이거나
+                # 전 행이 이상치인 페이지. 어느 쪽이든 여기서 멈춘다(이상치는 위에서 이미 보존).
                 truncated = False
                 break
             new = 0
-            for bar in chunk:
+            for bar in dated:
                 day = bar["stck_bsop_date"]
                 if day not in bars:
                     bars[day] = bar
                     new += 1
-            earliest = min(b["stck_bsop_date"] for b in chunk)
+            earliest = min(b["stck_bsop_date"] for b in dated)
             if new == 0 or (d1 and earliest <= d1):
                 truncated = False
                 break
@@ -169,13 +196,9 @@ class KisDailyPriceSource:
                 kis_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)"
             )
         for day in sorted(bars):
-            # bronze 무변형: output2 행 원본 보존 + 수집 provenance 만 부착(FMP 가격과 동형).
-            record = dict(bars[day])
-            record["our_ticker"] = our_ticker
-            record["market"] = "KR"  # KIS 는 KRX 로컬 전용
-            record["kis_symbol"] = kis_symbol
-            record["fetched_at"] = fetched_at
-            yield record
+            yield _emit(bars[day])
+        for bar in extras:  # 날짜 없는 원본도 보존(수집 provenance 부착)
+            yield _emit(bar)
 
     def _chunk(self, kis_symbol: str, d1: str | None, d2: str, token: str) -> list[dict]:
         """일봉 1콜(≤100건). rt_cd!=0 은 오류, EGW00201(초당한도)만 본문 기반 재시도한다."""

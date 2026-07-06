@@ -184,6 +184,21 @@ def test_requests_original_unadjusted_prices():
     assert all("FID_ORG_ADJ_PRC=1" in url for url in client.urls)  # 전부 원주가로 질의
 
 
+def test_dateless_rows_preserved_not_dropped():
+    # WHY: bronze 는 받은 행을 버리지 않는다(FMP 가격이 date 없는 dict 행도 보존하는 것과 동형).
+    #      stck_bsop_date 없는 이상치를 조용히 드롭하면 스키마 드리프트가 묻힌다 — 날짜 있는
+    #      봉은 정상 수집하고, 날짜 없는 행은 원본+provenance 로 raw 에 보존돼야 한다.
+    dateless = {"stck_oprc": "100", "stck_clpr": "110"}  # stck_bsop_date 없음
+    src = _source({"005930": [_ok([_bar("20260703"), dateless]), _EMPTY]})
+    records = list(src.fetch(["005930"]))
+
+    assert "20260703" in [r.get("stck_bsop_date") for r in records]  # 정상 봉 수집
+    preserved = [r for r in records if r.get("stck_bsop_date") is None]
+    assert len(preserved) == 1  # 날짜 없는 이상치도 보존(드롭 아님)
+    assert preserved[0]["market"] == "KR" and preserved[0]["fetched_at"]  # provenance 부착
+    assert not src.fetch_failures  # 정상 dict 행이라 실패가 아님(보존으로 surface)
+
+
 def test_max_pages_truncation_is_noted(monkeypatch):
     # WHY: 안전상한(MAX_PAGES)에 걸려 창이 절단되면 조용히 버리지 않고 실패로 기록해 런을
     #      partial 로 드러내야 한다(구간 좁혀 재실행 신호).
