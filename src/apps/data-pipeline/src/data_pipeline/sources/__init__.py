@@ -4,11 +4,15 @@ from .fmp import FmpNewsSource
 from .fmp_financial import FmpFinancialSource
 from .fmp_price import FmpPriceSource
 from .http import PoliteClient, StopFetch
+from .kis_auth import KisAuth
+from .kis_price import KisDailyPriceSource
 
 __all__ = [
     "FmpNewsSource",
     "FmpPriceSource",
     "FmpFinancialSource",
+    "KisDailyPriceSource",
+    "KisAuth",
     "PoliteClient",
     "StopFetch",
 ]

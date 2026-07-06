@@ -57,6 +57,27 @@ class PriceSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class KisPriceSource(BaseModel):
+    """KIS(한국투자) 국내 가격 소스 (일봉 OHLCV, S004 국내).
+
+    FMP(PriceSource)와 달리 인증이 OAuth 앱키/시크릿이고 도메인이 env(prod|vps)로 갈린다.
+    그래서 base_url 대신 env 로 도메인을 고르고(경로·tr_id 는 어댑터가 고정), 비밀값
+    (app_key/app_secret)은 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=...
+        DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=...
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    env: Literal["prod", "vps"] = "prod"
+    enabled: bool = True
+    app_key: str | None = None  # 비밀값: env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → KIS 6자리 코드. KR 은 대개 항등(005930→005930)이지만, 맵에 없는 종목
+    # (US 등)은 이 소스가 건너뛴다 — KIS 는 국내(KRX) 전용이라 US 티커를 질의하면 안 된다.
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class FinancialSource(BaseModel):
     """재무제표 데이터 소스 (FMP 손익·재무상태·현금흐름 수집, S035).
 
@@ -86,6 +107,12 @@ class PriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: PriceSource
+
+
+class KisPriceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KisPriceSource
 
 
 class FinancialConfig(BaseModel):

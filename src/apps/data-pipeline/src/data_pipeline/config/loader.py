@@ -24,6 +24,7 @@ from pydantic_settings import (
 from .models import (
     CollectionTargets,
     FinancialConfig,
+    KisPriceConfig,
     NewsConfig,
     PriceConfig,
     StorageConfig,
@@ -53,6 +54,9 @@ class Settings(BaseSettings):
     # 재무제표는 독립 잡(스케줄 별개)이라 섹션 생략 가능 — 미설정이면 ingest-raw-financial
     # 진입점이 fail-loud 한다(뉴스·가격만 돌리는 환경은 이 섹션이 없어도 된다).
     financial: FinancialConfig | None = None
+    # KIS(국내 가격) 도 독립 벤더라 섹션 생략 가능 — 미설정이면 ingest-price-raw --source kis
+    # 진입점이 fail-loud 한다(FMP 만 돌리는 환경은 이 섹션이 없어도 된다).
+    kis_price: KisPriceConfig | None = None
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 
