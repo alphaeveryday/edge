@@ -127,6 +127,15 @@ def test_key_or_quota_status_aborts_whole_source():
         list(src.fetch(["005930"]))
 
 
+def test_expired_key_status_901_aborts_whole_source():
+    # WHY: OpenDART 901 은 만료/차단된 계정성 키 오류라 종목별 실패로 계속 호출하면
+    #      요청만 소모하고 원인을 흐린다. 키/IP/쿼터와 같이 source-wide 중단이어야 한다.
+    src = _source({}, corp_body=_corp_zip([("005930", "00126380", "삼성전자")]))
+    src.client.responses[("00126380", "2025", "11011")] = _status("901", "사용자 계정 만료")
+    with pytest.raises(StopFetch):
+        list(src.fetch(["005930"]))
+
+
 def test_missing_corp_code_isolated_per_symbol():
     # WHY: 설정 맵에는 있는데 corpCode.xml 에 없는 종목은 그 종목만 실패로 기록하고,
     #      매핑 가능한 나머지 종목 수집은 계속해야 한다.
