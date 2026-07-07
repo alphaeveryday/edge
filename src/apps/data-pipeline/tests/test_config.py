@@ -191,3 +191,29 @@ NVDA = "NVDA"
     settings = load_settings(_write(tmp_path, text))
     assert settings.financial.source.base_url == "https://example.com/stable"
     assert settings.financial.source.symbol_map == {"NVDA": "NVDA"}
+
+
+def test_dart_financial_section_optional(tmp_path):
+    # WHY: OpenDART 재무는 독립 벤더라 섹션이 없어도 기존 FMP 재무/뉴스/가격 환경은
+    #      그대로 로드돼야 한다. --source dart 진입점이 None 을 fail-loud 로 잡는다.
+    settings = load_settings(_write(tmp_path, VALID))
+    assert settings.dart_financial is None
+
+
+def test_dart_financial_section_parsed_when_present(tmp_path):
+    # WHY: [dart_financial.source] 가 있으면 타입 있는 설정으로 로드돼 DART 재무 잡이 쓴다.
+    #      api_key 는 파일이 아니라 env 로 주입되며, 종목 맵은 KR 6자리 코드를 담는다.
+    text = VALID + """
+[dart_financial.source]
+base_url = "https://opendart.example/api"
+years = ["2025"]
+reprt_codes = ["11011"]
+
+[dart_financial.source.symbol_map]
+"005930" = "005930"
+"""
+    settings = load_settings(_write(tmp_path, text))
+    assert settings.dart_financial.source.base_url == "https://opendart.example/api"
+    assert settings.dart_financial.source.years == ["2025"]
+    assert settings.dart_financial.source.reprt_codes == ["11011"]
+    assert settings.dart_financial.source.symbol_map == {"005930": "005930"}

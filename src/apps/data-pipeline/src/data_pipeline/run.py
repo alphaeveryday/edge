@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from .config import load_settings
 from .lake import make_storage
 from .sources import (
+    DartFinancialSource,
     FmpFinancialSource,
     FmpNewsSource,
     FmpPriceSource,
@@ -59,8 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
-    # 가격 벤더 선택 — ingest-price-raw 에서만 의미가 있다(미지정=fmp, 기존 동작 보존).
-    parser.add_argument("--source", default=None, help="가격 소스 벤더(fmp|kis). 미지정=fmp")
+    # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
+    parser.add_argument("--source", default=None, help="소스 벤더(가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -73,10 +74,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
     if args.step == "ingest-raw-financial":
-        if settings.financial is None:
-            # 재무 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
-            raise SystemExit("financial.source 설정이 없다 — sources.toml 확인")
-        source = FmpFinancialSource(settings.financial.source, PoliteClient())
+        vendor = args.source or "fmp"
+        if vendor == "fmp":
+            if settings.financial is None:
+                # 재무 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+                raise SystemExit("financial.source 설정이 없다 — sources.toml 확인")
+            source = FmpFinancialSource(settings.financial.source, PoliteClient())
+        elif vendor == "dart":
+            if settings.dart_financial is None:
+                raise SystemExit("dart_financial.source 설정이 없다 — sources.toml 확인")
+            source = DartFinancialSource(settings.dart_financial.source, PoliteClient())
+        else:
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|dart)")
         return ingest_raw_financial.run(settings, storage, source, run_id)
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).

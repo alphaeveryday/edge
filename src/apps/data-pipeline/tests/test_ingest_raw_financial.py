@@ -1,6 +1,6 @@
-"""ingest_raw_financial 스텝 테스트 — 공시 정체성 키로 존재검사→신규만 적재(멱등 폴링).
+"""ingest_raw_financial 스텝 테스트 — bronze 통일 raw append·collection_log.
 
-핵심 계약: 매일 폴링해도 저장은 공시당 1회. 신규 분기·정정은 새 키, 재폴링은 skip.
+핵심 계약: 재무 raw 도 ingest_date/run_id 파티션에 받은 행을 전부 보존한다.
 각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다(AGENTS Rule 9).
 """
 
@@ -93,6 +93,39 @@ def test_saves_ingest_date_partition_and_log(tmp_path):
     log = _log(storage, "r1")
     assert log["status"] == "success"
     assert log["records_saved"] == 2
+
+
+def test_dart_source_uses_same_bronze_partition_and_log(tmp_path):
+    # WHY: OpenDART 는 새 벤더지만 raw 저장 규약은 FMP 재무와 같은 bronze 통일 규약이다.
+    #      step 이 source_name 으로 source=dart 파티션과 로그를 만들고 별도 경로를 조립하지
+    #      않아야 후속 canonical 이 dataset=financial_statements 를 일관되게 읽는다.
+    class DartLikeSource:
+        source_name = "dart"
+        enabled = True
+        planned_symbols = 1
+        fetch_failures: list[dict] = []
+
+        def fetch(self, symbols):
+            yield {
+                "market": "KR",
+                "our_ticker": "005930",
+                "stock_code": "005930",
+                "corp_code": "00126380",
+                "account_nm": "자산총계",
+            }
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    code = ingest_raw_financial.run(settings, storage, DartLikeSource(), "r1")
+
+    assert code == 0
+    [raw_key] = storage.list_keys("raw")
+    assert raw_key.startswith("raw/source=dart/dataset=financial_statements/market=KR")
+    [line] = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
+    assert json.loads(line)["corp_code"] == "00126380"
+    log = _log(storage, "r1")
+    assert log["source_vendor"] == "dart"
+    assert log["records_saved"] == 1
 
 
 def test_raw_preserves_all_rows_no_dedup(tmp_path):

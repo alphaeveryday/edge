@@ -4,7 +4,7 @@
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
-> 재무제표(손익·재무상태·현금흐름)와 KIS(한국투자, 국내) 일봉까지다.
+> 재무제표(손익·재무상태·현금흐름), KIS(한국투자, 국내) 일봉, OpenDART 국내 재무까지다.
 > 정규화·품질검증(뉴스 Step2)과 canonical 적재는 후속이다.
 
 ## 실행
@@ -43,6 +43,12 @@ DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__AP
 # 전용(financial.source.symbol_map) — 현재 US 만.
 DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial
+
+# 국내 재무제표 원본저장(Step1) — OpenDART 단일회사 주요계정. --source dart 로 벤더 선택
+# (미지정=fmp). 인증키는 env 주입, corp_code 는 corpCode.xml 로 런타임 매핑한다. 받은 list[]
+# 행은 ingest_date/run_id 파티션에 전부 append 되고, 정규화·dedup 은 후속 canonical 소관.
+DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial --source dart
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -69,6 +75,7 @@ settings.news.sources                # {이름: NewsSource}
 settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
 settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱키/시크릿 env·env=prod|vps); 미설정이면 settings.kis_price 은 None
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
+settings.dart_financial.source       # DartFinancialSource (OpenDART 국내 재무 — 인증키 env·KR 6자리 맵); 미설정이면 settings.dart_financial 은 None
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -106,6 +113,9 @@ settings.targets.keywords            # ["금리", ...]
   (중복 판정 안 함). 재무는 드물게·비동기로 공시돼 매일 재폴링하면 같은 스냅샷이 날마다 쌓이지만,
   중복 제거·정정(SCD)·point-in-time 판정은 후속 canonical(silver) MERGE 소관이다. 각 행에
   statement_type·period_type·filing_date 등이 그대로 보존돼 canonical 이 정체성 추출에 쓴다.
+  국내 OpenDART 재무는 같은 dataset·규약으로 `source=dart`(`--source dart`) 아래 쌓이며,
+  DART `list[]` 원본 행에 `our_ticker`·`stock_code`·`corp_code`·`bsns_year`·`reprt_code` 등
+  수집 provenance 만 부착한다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는

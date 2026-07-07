@@ -96,6 +96,28 @@ class FinancialSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class DartFinancialSource(BaseModel):
+    """OpenDART 국내 재무제표 소스 (financial_statements raw).
+
+    api_key 는 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=...
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: NonBlankStr = "https://opendart.fss.or.kr/api"
+    enabled: bool = True
+    api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → KRX 6자리 종목코드. corp_code 는 OpenDART corpCode.xml 로 런타임 매핑한다.
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # 비우면 어댑터가 KST 기준 현재연도와 직전연도를 조회한다.
+    years: list[NonBlankStr] = Field(default_factory=list)
+    # 11011=사업, 11012=반기, 11013=1분기, 11014=3분기.
+    reprt_codes: list[NonBlankStr] = Field(
+        default_factory=lambda: ["11011", "11012", "11013", "11014"]
+    )
+
+
 class NewsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -119,6 +141,12 @@ class FinancialConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: FinancialSource
+
+
+class DartFinancialConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: DartFinancialSource
 
 
 class StorageConfig(BaseModel):
