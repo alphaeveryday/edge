@@ -19,18 +19,19 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_financial_partition
-from ..sources import FmpFinancialSource, StopFetch
+from ..sources import DartFinancialSource, FmpFinancialSource, StopFetch
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_raw_financial"
 DATASET = "financial_statements"  # collection_log·raw 파티션의 dataset= 키
+FinancialSourceAdapter = FmpFinancialSource | DartFinancialSource
 
 
 def run(
     settings: Settings,
     storage: Storage,
-    source: FmpFinancialSource,
+    source: FinancialSourceAdapter,
     run_id: str,
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
@@ -51,10 +52,10 @@ def run(
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
-        logger.warning("fmp 재무제표 비활성(api_key 미주입) — 수집 건너뜀")
+        logger.warning("%s 재무제표 비활성(api_key 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": "fmp disabled or no api_key"})
+                                                               "reason": f"{vendor} disabled or no api_key"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
         return 0

@@ -3,6 +3,8 @@
 from .loader import ConfigError, Settings, load_settings
 from .models import (
     CollectionTargets,
+    DartFinancialConfig,
+    DartFinancialSource,
     FinancialConfig,
     FinancialSource,
     KisPriceConfig,
@@ -22,6 +24,8 @@ __all__ = [
     "NewsConfig",
     "PriceSource",
     "PriceConfig",
+    "DartFinancialSource",
+    "DartFinancialConfig",
     "KisPriceSource",
     "KisPriceConfig",
     "FinancialSource",
