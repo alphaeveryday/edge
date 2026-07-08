@@ -221,7 +221,7 @@ class _EndpointFailingClient(FakeClient):
 
 def test_partial_failure_marks_run_partial(tmp_path):
     # WHY: 일부 대상만 실패하면 저장분은 있으나 온전치 않다 — partial 로 드러내고 실패
-    #      대상을 로그에 남겨 운영이 손실을 인지하게 한다.
+    #      비0 종료로 오케스트레이터에도 손실을 알린다.
     responses = {("NVDA", "income-statement", "annual"): [_row("2025-01-31", "2025-02-26")]}
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
@@ -229,7 +229,7 @@ def test_partial_failure_marks_run_partial(tmp_path):
     source = FmpFinancialSource(config, _EndpointFailingClient(responses, "cash-flow-statement"))
     code = ingest_raw_financial.run(settings, storage, source, "r1")
 
-    assert code == 0  # 부분 성공은 비정상 종료가 아님
+    assert code == 1
     log = _log(storage, "r1")
     assert log["status"] == "partial"
     assert log["records_saved"] == 1

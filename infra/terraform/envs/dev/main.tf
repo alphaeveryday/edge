@@ -49,6 +49,10 @@ data "aws_ecr_repository" "gateway" {
   name = "edge/gateway"
 }
 
+data "aws_ecr_repository" "data_pipeline" {
+  name = "edge/data-pipeline"
+}
+
 # 엣지 도메인 → ALB (ALIAS)
 resource "aws_route53_record" "edge" {
   zone_id = data.aws_route53_zone.main.zone_id
@@ -254,12 +258,13 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱 배포(deploy-app.yml) 권한 — 4개 백엔드 앱(widget-api·tenant-console-api·super-admin-api·gateway).
+  # 앱/배치 이미지 push 권한 — 백엔드 앱 4종 + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
     data.aws_ecr_repository.widget_api.arn,
     data.aws_ecr_repository.tenant_console_api.arn,
     data.aws_ecr_repository.super_admin_api.arn,
     data.aws_ecr_repository.gateway.arn,
+    data.aws_ecr_repository.data_pipeline.arn,
   ]
   app_service_arns = [
     module.widget_api.service_arn,
@@ -316,6 +321,22 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "news-pipeline batch tasks to postgres"
+}
+
+# ── data-pipeline raw ingest (Step Functions 배치) ───────
+# 기존 임시 news-pipeline SFN 과 분리된 raw 수집 전용 상태머신. 최초엔 DISABLED 로 생성한다.
+module "data_pipeline" {
+  source = "../../modules/data-pipeline"
+
+  name             = "${local.prefix}-data-pipeline"
+  region           = var.region
+  vpc_id           = module.network.vpc_id
+  subnet_ids       = module.network.private_subnet_ids
+  cluster_arn      = module.worker_cluster.cluster_arn
+  image            = var.data_pipeline_image
+  lake_bucket_name = var.lake_bucket_name
+
+  alarm_email = var.pipeline_alarm_email
 }
 
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────

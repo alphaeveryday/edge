@@ -88,6 +88,11 @@ variable "pipeline_image" {
   type        = string
 }
 
+variable "data_pipeline_image" {
+  description = "data-pipeline raw 수집 배치 이미지 URI(:태그 포함). 기존 edge/data-pipeline ECR 의 latest 태그."
+  type        = string
+}
+
 variable "pipeline_contact_email" {
   description = "파이프라인이 외부 뉴스 소스 접근 시 밝히는 연락 이메일"
   type        = string
