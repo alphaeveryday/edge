@@ -23,7 +23,7 @@ locals {
   env = {
     AWS_REGION_NAME                = var.region
     DATA_PIPELINE_STORAGE__BACKEND = "s3"
-    DATA_PIPELINE_STORAGE__BUCKET  = data.aws_s3_bucket.lake.bucket
+    DATA_PIPELINE_STORAGE__BUCKET  = var.lake_bucket_name
   }
 
   secret_sets = {

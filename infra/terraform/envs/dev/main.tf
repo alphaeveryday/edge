@@ -330,13 +330,16 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
 module "data_pipeline" {
   source = "../../modules/data-pipeline"
 
-  name             = "${local.prefix}-data-pipeline"
-  region           = var.region
-  vpc_id           = module.network.vpc_id
-  subnet_ids       = module.network.private_subnet_ids
-  cluster_arn      = module.worker_cluster.cluster_arn
-  image            = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
+  name        = "${local.prefix}-data-pipeline"
+  region      = var.region
+  vpc_id      = module.network.vpc_id
+  subnet_ids  = module.network.private_subnet_ids
+  cluster_arn = module.worker_cluster.cluster_arn
+  image       = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
+  # 신규 lake bucket 은 이번 PR에서 생성만 한다. 기존 raw 데이터 sync 검증 전까지
+  # raw-ingest 는 legacy raw bucket 에 계속 쓴다.
   lake_bucket_name = module.pipeline.raw_bucket
+  lake_bucket_arn  = module.pipeline.raw_bucket_arn
 
   alarm_email = var.pipeline_alarm_email
 }

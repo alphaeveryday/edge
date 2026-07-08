@@ -9,11 +9,31 @@ output "security_group_id" {
 }
 
 output "raw_bucket" {
-  value = aws_s3_bucket.raw.bucket
+  description = "레거시 raw bucket 이름. lake 전환 검증 후 제거 대상."
+  value       = aws_s3_bucket.raw.bucket
+}
+
+output "raw_bucket_arn" {
+  value = aws_s3_bucket.raw.arn
+}
+
+output "migration_lake_bucket" {
+  description = "전환 대상 lake bucket 이름. 데이터 sync 검증 후 active bucket 으로 전환한다."
+  value       = aws_s3_bucket.lake.bucket
+}
+
+output "migration_lake_bucket_arn" {
+  description = "전환 대상 lake bucket ARN. 데이터 sync 검증 후 active bucket 으로 전환한다."
+  value       = aws_s3_bucket.lake.arn
 }
 
 output "curated_bucket" {
-  value = aws_s3_bucket.curated.bucket
+  description = "레거시 curated bucket 이름. lake 전환 검증 후 제거 대상."
+  value       = aws_s3_bucket.curated.bucket
+}
+
+output "curated_bucket_arn" {
+  value = aws_s3_bucket.curated.arn
 }
 
 output "fmp_secret_arn" {
