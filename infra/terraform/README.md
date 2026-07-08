@@ -11,7 +11,7 @@
 ```
 infra/terraform/
 ├── bootstrap/          # 원격 state 그릇(S3 버킷 + 네이티브 락). 자체 state=로컬, 계정당 1회
-├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR ×6 · GitHub OIDC provider
+├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR · GitHub OIDC provider
 ├── envs/dev/           # 환경: 모듈을 엮음. 구체값은 terraform.tfvars
 └── modules/
     ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, AZ override
@@ -21,7 +21,8 @@ infra/terraform/
     ├── rds/                # PostgreSQL(private·관리형 비밀번호)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
-    ├── pipeline/           # Step Functions 배치 (self-contained: SFN·태스크2종·S3·시크릿·스케줄러)
+    ├── pipeline/           # 임시 news-pipeline Step Functions 배치 (self-contained)
+    ├── data-pipeline/      # raw ingest 전용 Step Functions 배치 (data-pipeline 이미지·S3 lake·시크릿·스케줄러)
     └── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
 ```
 
@@ -33,7 +34,7 @@ infra/terraform/
 - **와일드카드 ACM** — `*.edgesignal.dev` 을 리전당 1장(ALB=apne2, CloudFront=us-east-1). 새 서브도메인 추가 시 인증서 재발급 0.
 - **네트워크 3-tier** — public(ALB·NAT) / private=compute(ECS, NAT 아웃바운드) / **data=RDS 격리(아웃바운드 없음)**. AZ `a·c`.
 - **클러스터 분리** — 상시 API(`edge-dev-service`) / 배치(`edge-dev-worker`).
-- **배치 = Step Functions** — 수집→분석 순차 스텝을 `ecs:runTask.sync` 로 오케스트레이션(순서·재시도·실패알림).
+- **배치 = Step Functions** — 임시 news-pipeline 과 raw ingest 전용 data-pipeline 을 분리해 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림).
 - **비밀번호는 코드/state 에 없음** — RDS 관리형 시크릿, 외부 키는 Secrets Manager(값 수동 주입).
 
 ## 사용
@@ -50,9 +51,14 @@ cd ../envs/dev  && terraform apply
 - **envs/dev 는 Terraform CD 로 배포된다(ALPHA-311)**: `envs/dev/**`·`modules/**` 를 바꾼 PR 이 `terraform-plan.yml`(read-only 역할 `edge-tf-plan`)로 plan 을 PR 코멘트에 게시하고, dev 머지 시 `terraform-apply.yml`(`edge-tf-apply`, trust=`ref:refs/heads/dev`)이 apply 한다. 두 역할은 foundation `tf-cd.tf` 소유. 위 수동 apply 는 **bootstrap·foundation**(CD 대상 아님) 및 env 브레이크글래스용이다.
 - 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`.
 - env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
+- foundation 이 소유해야 하는 ECR 이 AWS 에 이미 수동 생성돼 있으면, 첫 apply 전에 해당
+  repository 를 foundation state 로 import 한다(예: `edge/data-pipeline`). clean account 는
+  foundation 이 직접 생성한다.
 - 이미지 태그: `terraform.tfvars` 의 `*_image` 가 TF 소유 baseline. 앱 CD(`deploy-<app>.yml`)가 semver 태그를 올린다.
   서비스의 실행 task 정의는 CD 소유라 TF 가 되돌리지 않는다(`ecs-service` 의 `ignore_changes = [task_definition]`);
   `terraform.tfvars` 핀은 신규 생성 시 baseline 으로만 쓰인다.
+  `data-pipeline` 배치 이미지는 `deploy-data-pipeline.yml` 이 `edge/data-pipeline:{git-sha,latest}` 를 push 하고,
+  raw ingest task definition 은 `latest` 를 참조한다.
 
 ## 현재 상태 (2026-07-04)
 
@@ -62,7 +68,8 @@ cd ../envs/dev  && terraform apply
 
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
-| **파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | 모듈 `schedule_state = "ENABLED"` |
+| **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
+| **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | 구독 없음(토픽만) | `pipeline_alarm_email = "..."` |
 | **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | gateway 도입 시 연결 |
 | **widget-api DB 연동** | TF 주입되나 앱 미사용(`application.yaml` DataSource exclude) | 앱에서 exclude 제거 |
@@ -71,7 +78,7 @@ cd ../envs/dev  && terraform apply
 
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
-- 앱 ECR 이미지 6개(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드 4종·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-<ui>.yml`)가 채운다
+- 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드 4종·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다
 - 파이프라인 이미지(`edge/pipeline:latest` placeholder) + 시크릿 fmp/openai(`REPLACE_ME` → 실제 키)
 
 ### 🔮 미구축 (후속 증분)

@@ -21,7 +21,7 @@
 - **widget-api** (JVM) — 위젯용 백엔드. **읽기 전용·좁은 표면**.
 - **tenant-console-api** (JVM) — 콘솔용 백엔드. **읽기/쓰기·넓은 표면**(한 테넌트 범위).
 - **super-admin-api** (JVM) — 운영 콘솔용 백엔드. **cross-tenant 읽기/쓰기 = 최고 권한 표면**.
-- **data-pipeline** (Python) — 스케줄러로 외부 데이터를 DB에 적재.
+- **data-pipeline** (Python) — 스케줄러로 외부 데이터를 raw lake에 보존하고, 후속 DB 적재 단계의 입력을 만든다.
 - **analysis-engine** (Python) — 스케줄러로 적재 데이터를 분석해 분석 마트(`analysis_reports` 등)를 DB에 저장.
 - **libs/schema** — DB 스키마 SSOT(마이그레이션 + 생성 모델). [[adr/0005-db-as-contract]].
 - **libs/jvm-common** — 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·공유 도메인 + 분석 마트(`analysis_reports` 등) 접근 로직.
@@ -35,7 +35,7 @@
 - 운영: `운영자 → super-admin-ui → gateway(admin 라우트) → super-admin-api → DB(읽기/쓰기, cross-tenant)`
 
 **배치(스케줄러 트리거)**
-- `스케줄러 → data-pipeline → DB(적재)`
+- `스케줄러 → data-pipeline → raw lake(S3 원본 저장)`; 후속 정규화·마트 적재는 별도 단계
 - `스케줄러 → analysis-engine → DB에서 적재분 읽기 → 분석 마트 쓰기`
 
 **DB를 통한 통합(핵심)**
@@ -95,7 +95,7 @@ admin은 **최고 권한(cross-tenant)** 표면이지만 운영자는 **소수·
            └────────────────────┼──────────────────────────┘
                                  │
                               ┌──┴──┐
-                              │  DB │ ◀── data-pipeline (적재)   ◀─ 스케줄러
+                              │  DB │ ◀── data-pipeline 후속 적재 ◀─ 스케줄러
                               └──┬──┘ ◀── analysis-engine (분석)  ◀─ 스케줄러
                                  │
                            libs/schema = 계약(SSOT)
@@ -103,4 +103,4 @@ admin은 **최고 권한(cross-tenant)** 표면이지만 운영자는 **소수·
 
 ## 6. 범위 밖
 - **클라우드/배포 토폴로지** — 리전, 네트워크, 매니지드 서비스, 스케일링, 시크릿 관리 인프라. 토폴로지·단계 스택은 [[adr/0009-aws-deployment-topology]](제안됨), 세부는 infra/terraform/README.md.
-- **CD(지속적 배포)** — dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 4종 widget-api·tenant-console-api·super-admin-api·gateway)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). 프론트별 워크플로(`deploy-<ui>.yml`, 3종 widget-ui·tenant-console-ui·super-admin-ui)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다. 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
+- **CD(지속적 배포)** — dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 4종 widget-api·tenant-console-api·super-admin-api·gateway)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. 프론트별 워크플로(`deploy-<ui>.yml`, 3종 widget-ui·tenant-console-ui·super-admin-ui)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다. 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.

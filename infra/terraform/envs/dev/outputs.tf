@@ -54,6 +54,47 @@ output "pipeline_state_machine_arn" {
   value       = module.pipeline.state_machine_arn
 }
 
+# ── data-pipeline raw ingest ────────────────────────────
+output "data_pipeline_state_machine_arn" {
+  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> --input '{\"run_id\":\"manual-...\"}'"
+  value       = module.data_pipeline.state_machine_arn
+}
+
+output "data_pipeline_ecr_repository_url" {
+  description = "→ vars.DATA_PIPELINE_ECR_REPOSITORY (기존 edge/data-pipeline)"
+  value       = local.data_pipeline_ecr_repository_url
+}
+
+output "data_pipeline_task_families" {
+  description = "data-pipeline raw ingest ECS task definition families by vendor"
+  value       = module.data_pipeline.task_definition_families
+}
+
+output "data_pipeline_log_group" {
+  description = "data-pipeline raw ingest CloudWatch log group"
+  value       = module.data_pipeline.log_group_name
+}
+
+output "data_pipeline_lake_bucket" {
+  description = "data-pipeline raw lake bucket"
+  value       = module.data_pipeline.lake_bucket_name
+}
+
+output "data_pipeline_fmp_secret_arn" {
+  description = "FMP API key secret ARN (수동 주입: {\"apikey\":\"...\"})"
+  value       = module.data_pipeline.fmp_secret_arn
+}
+
+output "data_pipeline_kis_secret_arn" {
+  description = "KIS OAuth secret ARN (수동 주입: {\"app_key\":\"...\",\"app_secret\":\"...\"})"
+  value       = module.data_pipeline.kis_secret_arn
+}
+
+output "data_pipeline_dart_secret_arn" {
+  description = "OpenDART API key secret ARN (수동 주입: {\"apikey\":\"...\"})"
+  value       = module.data_pipeline.dart_secret_arn
+}
+
 # ── 스키마 마이그레이션 배포용 값 (GitHub development environment vars) ──
 output "gha_deploy_role_arn" {
   description = "→ vars.AWS_DEPLOY_ROLE_ARN"

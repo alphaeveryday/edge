@@ -17,7 +17,7 @@ src/
 │   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
 │   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 · 넓은 표면
 │   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant 읽기/쓰기 · 최고 권한
-│   ├── data-pipeline/        # Python · 스케줄러 → DB 적재
+│   ├── data-pipeline/        # Python · 스케줄러 → raw 수집/후속 DB 적재
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
@@ -56,7 +56,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
 | `tenant-console-api` | JVM | 테넌트용 API. **읽기/쓰기**, 넓은 표면 (한 테넌트 범위) |
 | `super-admin-api` | JVM | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
-| `data-pipeline` | Python | 스케줄러로 동작 → DB에 데이터 적재 |
+| `data-pipeline` | Python | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
 | `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
 ### 외부 표면 vs 내부 표면
@@ -83,7 +83,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 ## 데이터 흐름
 
 ```
-[스케줄러] ─→ data-pipeline ──→ DB ←── analysis-engine ←─ [스케줄러]
+[스케줄러] ─→ data-pipeline ──→ raw lake ──→ DB ←── analysis-engine ←─ [스케줄러]
                                   │            (분석 결과 저장)
                                   │
    외부:  widget-ui → gateway → widget-api (읽기) ─┘
@@ -93,7 +93,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
    schema(Flyway SQL = 현재 SSOT) ─→ DB 계약 ─→ 모든 JVM/Python 모듈이 공유   (generated 모델은 후속 도입)
 ```
 
-- `data-pipeline`이 외부 데이터를 DB에 적재합니다.
+- `data-pipeline`이 외부 데이터를 raw lake에 보존하고, 후속 단계가 DB 적재로 이어집니다.
 - `analysis-engine`이 적재된 데이터를 분석해 분석 마트(`analysis_reports` 등)로 DB에 저장합니다.
 - API 계층(`widget-api`/`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, 분석 마트 접근은 `jvm-common`이 담당합니다.
 
