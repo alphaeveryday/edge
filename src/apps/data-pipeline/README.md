@@ -69,6 +69,25 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 > .venv/bin/pytest
 > ```
 
+## 배포/스케줄 실행
+
+dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/data-pipeline`
+ECR repository 에 `:${git_sha}` 와 `:latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
+
+Terraform 의 `modules/data-pipeline` 은 raw ingest 전용 ECS task definition 과 Step Functions
+state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 ECS RunTask 로 실행하며,
+모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition 과 collection_log 를 같은 실행 단위로 묶는다.
+
+- `ingest-raw --source fmp`
+- `ingest-price-raw --source fmp`
+- `ingest-raw-financial --source fmp`
+- `ingest-raw --source bigkinds`
+- `ingest-price-raw --source kis`
+- `ingest-raw-financial --source dart`
+
+Scheduler 는 최초 `DISABLED` 로 생성한다. 수동 검증은 `terraform output data_pipeline_state_machine_arn`
+값으로 `aws stepfunctions start-execution --input '{"run_id":"manual-YYYYMMDDTHHMMSSZ"}'` 를 실행한다.
+
 ## 설정 계약
 
 수집 설정은 **TOML 베이스 파일 + 환경변수 오버라이드**로 로드한다. 진입점은 하나다:
@@ -104,7 +123,7 @@ settings.targets.keywords            # ["금리", ...]
 
 ## 레이크 저장 계약
 
-수집물은 단일 레이크(`s3://stock-ai-lake/` 또는 local 스텁)에 쓴다.
+수집물은 단일 레이크(예: dev `s3://edge-data-lake-393229433969/`, 또는 local 스텁)에 쓴다.
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.
 
 - **raw(뉴스)** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에

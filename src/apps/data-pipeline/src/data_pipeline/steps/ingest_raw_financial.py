@@ -103,7 +103,7 @@ def run(
             status, exit_code = "error", 1
             error = f"모든 수집 대상 실패 ({len(failed_targets)}건)"
         else:
-            status = "partial"
+            status, exit_code = "partial", 1
 
     # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑) 수집이 사실상 불가능한
     # 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).

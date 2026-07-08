@@ -60,3 +60,6 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Local planning scratch files. Durable project docs belong under docs/ or tracked .dev scripts.
+.dev/*-plan.md

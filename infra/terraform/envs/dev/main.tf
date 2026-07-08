@@ -1,5 +1,8 @@
 locals {
-  prefix = "edge-dev"
+  prefix                           = "edge-dev"
+  data_pipeline_ecr_name           = "edge/data-pipeline"
+  data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
+  data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
 }
 
 # ── DNS / TLS ───────────────────────────────────────────
@@ -26,6 +29,8 @@ data "aws_acm_certificate" "wildcard_cdn" {
 data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
+
+data "aws_caller_identity" "current" {}
 
 data "aws_ecr_repository" "schema_migrate" {
   name = "edge/schema-migrate"
@@ -254,12 +259,13 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱 배포(deploy-app.yml) 권한 — 4개 백엔드 앱(widget-api·tenant-console-api·super-admin-api·gateway).
+  # 앱/배치 이미지 push 권한 — 백엔드 앱 4종 + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
     data.aws_ecr_repository.widget_api.arn,
     data.aws_ecr_repository.tenant_console_api.arn,
     data.aws_ecr_repository.super_admin_api.arn,
     data.aws_ecr_repository.gateway.arn,
+    local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = [
     module.widget_api.service_arn,
@@ -316,6 +322,22 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "news-pipeline batch tasks to postgres"
+}
+
+# ── data-pipeline raw ingest (Step Functions 배치) ───────
+# 기존 임시 news-pipeline SFN 과 분리된 raw 수집 전용 상태머신. 최초엔 DISABLED 로 생성한다.
+module "data_pipeline" {
+  source = "../../modules/data-pipeline"
+
+  name             = "${local.prefix}-data-pipeline"
+  region           = var.region
+  vpc_id           = module.network.vpc_id
+  subnet_ids       = module.network.private_subnet_ids
+  cluster_arn      = module.worker_cluster.cluster_arn
+  image            = "${local.data_pipeline_ecr_repository_url}:latest"
+  lake_bucket_name = var.lake_bucket_name
+
+  alarm_email = var.pipeline_alarm_email
 }
 
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
