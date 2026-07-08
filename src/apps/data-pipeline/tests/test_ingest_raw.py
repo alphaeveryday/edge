@@ -138,6 +138,8 @@ def test_bigkinds_preserve_all_rows_without_run_dedup(tmp_path):
     records = [json.loads(line) for line in lines]
     assert {r["bigkinds_query"] for r in records} == {"삼성전자", "SK하이닉스"}
     assert all("mentions" not in r for r in records)  # FMP mention merge 경로를 타지 않음
+    assert {len(r["article_id"]) for r in records} == {64}  # canonical merge 계약 유지
+    assert len({r["article_id"] for r in records}) == 1  # 같은 기사 id, row 는 둘 다 보존
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["records_saved"] == 2
     assert log["records_skipped_duplicate"] == 0
@@ -241,6 +243,8 @@ def test_partition_date_fallbacks():
     #      fetched_at 하드 서브스크립트가 한 레코드로 런 전체를 죽이면 안 된다.
     fb = "2026-07-03"
     assert ingest_raw._partition_date({"publishedDate": "2026-07-01 09:00:00"}, fb) == "2026-07-01"
+    # WHY: BigKinds native DATE 가 있으면 NEWS_ID 형식 변화에도 기사 발행일 파티션을 지킨다.
+    assert ingest_raw._partition_date({"DATE": "2026.07.02 15:30", "NEWS_ID": "bad"}, fb) == "2026-07-02"
     assert ingest_raw._partition_date({"fetched_at": "2026-07-02T00:00:00+00:00"}, fb) == "2026-07-02"
     assert ingest_raw._partition_date({}, fb) == "2026-07-03"  # 둘 다 없으면 런 시작일
 

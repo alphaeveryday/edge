@@ -28,16 +28,32 @@ NewsSourceAdapter = FmpNewsSource | BigKindsNewsSource
 _BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
 
 
+def _bigkinds_date(record: dict) -> str | None:
+    date_digits = re.sub(r"\D", "", str(record.get("DATE") or ""))
+    if len(date_digits) >= 8:
+        return f"{date_digits[:4]}-{date_digits[4:6]}-{date_digits[6:8]}"
+    match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
+    if match:
+        day = match.group(1)
+        return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+    return None
+
+
+def _article_id(record: dict) -> str:
+    title = record.get("title") or record.get("TITLE") or ""
+    published = record.get("publishedDate") or record.get("DATE") or _bigkinds_date(record)
+    return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)
+
+
 def _partition_date(record: dict, fallback_date: str) -> str:
     """파티션 published_date. 발행시각이 없거나 파싱 불가면 수집시각으로,
     그마저 없으면 런 시작일로 폴백한다(raw 는 전부 보존 — 하나도 못 버림).
     fetched_at 하드 서브스크립트로 한 레코드가 런 전체를 죽이지 않게."""
     published = parse_datetime(record.get("publishedDate"))
     if published is None:
-        match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
-        if match:
-            day = match.group(1)
-            return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+        bigkinds_date = _bigkinds_date(record)
+        if bigkinds_date:
+            return bigkinds_date
     basis = published or record.get("fetched_at") or fallback_date
     return basis[:10]
 
@@ -92,11 +108,10 @@ def run(
         for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
             if getattr(source, "preserve_all_rows", False):
+                record["article_id"] = _article_id(record)
                 partitions[(record["market"], _partition_date(record, started_date))].append(record)
                 continue
-            article_id = make_article_id(
-                record.get("url"), record.get("title") or "", record.get("publishedDate")
-            )
+            article_id = _article_id(record)
             mention = {"market": record["market"], "ticker": record["our_ticker"]}
             existing = kept_by_id.get(article_id)
             if existing is not None:
