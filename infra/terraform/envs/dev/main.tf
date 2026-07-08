@@ -335,7 +335,7 @@ module "data_pipeline" {
   subnet_ids       = module.network.private_subnet_ids
   cluster_arn      = module.worker_cluster.cluster_arn
   image            = "${local.data_pipeline_ecr_repository_url}:latest"
-  lake_bucket_name = var.lake_bucket_name
+  lake_bucket_name = module.pipeline.raw_bucket
 
   alarm_email = var.pipeline_alarm_email
 }

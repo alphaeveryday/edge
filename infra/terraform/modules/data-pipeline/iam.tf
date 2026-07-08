@@ -48,7 +48,7 @@ resource "aws_iam_role_policy" "task" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
-      Resource = [aws_s3_bucket.lake.arn, "${aws_s3_bucket.lake.arn}/*"]
+      Resource = [data.aws_s3_bucket.lake.arn, "${data.aws_s3_bucket.lake.arn}/*"]
     }]
   })
 }

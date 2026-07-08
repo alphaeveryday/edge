@@ -29,7 +29,7 @@ variable "image" {
 }
 
 variable "lake_bucket_name" {
-  description = "raw 수집물을 저장할 data lake S3 bucket 이름"
+  description = "raw 수집물을 저장할 기존 S3 bucket 이름"
   type        = string
 }
 
