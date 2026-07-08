@@ -7,7 +7,6 @@ locals {
     "edge/gateway",
     "edge/super-admin-api",
     "edge/tenant-console-api",
-    "edge/data-pipeline",  # raw ingest SFN 배치 이미지
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
     "edge/schema-migrate", # Flyway one-off 이미지
   ])
