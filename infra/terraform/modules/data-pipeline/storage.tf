@@ -1,7 +1,3 @@
-data "aws_s3_bucket" "lake" {
-  bucket = var.lake_bucket_name
-}
-
 removed {
   from = aws_s3_bucket.lake
   lifecycle {

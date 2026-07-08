@@ -25,7 +25,7 @@ output "log_group_arn" {
 }
 
 output "lake_bucket_name" {
-  value = data.aws_s3_bucket.lake.bucket
+  value = var.lake_bucket_name
 }
 
 output "fmp_secret_arn" {

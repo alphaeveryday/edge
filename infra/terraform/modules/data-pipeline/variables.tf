@@ -29,7 +29,12 @@ variable "image" {
 }
 
 variable "lake_bucket_name" {
-  description = "raw 수집물을 저장할 기존 S3 bucket 이름"
+  description = "raw/canonical/curated prefix 를 담는 lake bucket 이름"
+  type        = string
+}
+
+variable "lake_bucket_arn" {
+  description = "raw/canonical/curated prefix 를 담는 lake bucket ARN"
   type        = string
 }
 

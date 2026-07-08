@@ -1,4 +1,10 @@
-# ── S3: 원시/정제 데이터 버킷 (edge 소유로 신설) ────────
+# ── S3: 데이터 레이크 버킷 (edge 소유) ─────────────────
+# 전환 대상 lake bucket. 이번 단계에서는 생성만 하고, 데이터 sync 검증 후 task 를 전환한다.
+resource "aws_s3_bucket" "lake" {
+  bucket = "${var.name}-lake"
+}
+
+# 기존 raw/curated 버킷은 마이그레이션 검증 전까지 보존한다.
 resource "aws_s3_bucket" "raw" {
   bucket = "${var.name}-raw"
 }
@@ -7,7 +13,16 @@ resource "aws_s3_bucket" "curated" {
   bucket = "${var.name}-curated"
 }
 
-# 저장 시 암호화(SSE-S3). 뉴스·금융 원시데이터의 최소 보호.
+# 저장 시 암호화(SSE-S3). 뉴스·금융 데이터의 최소 보호.
+resource "aws_s3_bucket_server_side_encryption_configuration" "lake" {
+  bucket = aws_s3_bucket.lake.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "raw" {
   bucket = aws_s3_bucket.raw.id
   rule {
@@ -24,6 +39,14 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "curated" {
       sse_algorithm = "AES256"
     }
   }
+}
+
+resource "aws_s3_bucket_public_access_block" "lake" {
+  bucket                  = aws_s3_bucket.lake.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_public_access_block" "raw" {

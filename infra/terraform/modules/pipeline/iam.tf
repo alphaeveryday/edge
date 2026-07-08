@@ -34,7 +34,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
   })
 }
 
-# 태스크 역할: 컨테이너가 런타임에 호출하는 것 — S3(raw/curated) 읽고 쓰기,
+# 태스크 역할: 컨테이너가 런타임에 호출하는 것 — 단일 lake bucket 읽고 쓰기,
 # 그리고 앱이 boto3 로 직접 읽는 시크릿(OpenAI 키 등) GetSecretValue.
 resource "aws_iam_role" "task" {
   name               = "${var.name}-task"

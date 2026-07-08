@@ -76,8 +76,13 @@ output "data_pipeline_log_group" {
 }
 
 output "data_pipeline_lake_bucket" {
-  description = "data-pipeline raw lake bucket"
+  description = "data-pipeline active storage bucket. lake migration 전까지 legacy raw bucket 을 가리킨다."
   value       = module.data_pipeline.lake_bucket_name
+}
+
+output "pipeline_migration_lake_bucket" {
+  description = "pipeline lake migration target bucket. 데이터 sync 검증 후 active bucket 으로 전환한다."
+  value       = module.pipeline.migration_lake_bucket
 }
 
 output "data_pipeline_fmp_secret_arn" {
