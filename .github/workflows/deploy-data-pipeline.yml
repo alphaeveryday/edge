@@ -1,15 +1,15 @@
 # data-pipeline dev 이미지 배포 — raw 수집 배치 이미지를 ECR 에 push 한다.
-# SFN task definition 은 edge/data-pipeline:latest 를 참조하므로, 다음 실행부터 새 이미지를 pull 한다.
+# SFN task definition 은 edge/pipeline:data-pipeline-latest 를 참조하므로, 다음 실행부터 새 이미지를 pull 한다.
 name: deploy-data-pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches: [dev]
     paths:
       - "src/apps/data-pipeline/**"
       - "src/pyproject.toml"
       - "src/.dockerignore"
-      - ".github/workflows/deploy-data-pipeline.yml"
 
 permissions:
   id-token: write
@@ -37,12 +37,14 @@ jobs:
 
       - name: Build & push data-pipeline image
         env:
-          ECR_REPO: ${{ vars.DATA_PIPELINE_ECR_REPOSITORY }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          image_sha="${ECR_REPO}:${IMAGE_TAG}"
-          image_latest="${ECR_REPO}:latest"
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          ecr_repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
+          image_sha="${ecr_repo}:${IMAGE_TAG}"
+          image_latest="${ecr_repo}:data-pipeline-latest"
           docker build --platform linux/amd64 \
             -f src/apps/data-pipeline/Dockerfile \
             -t "${image_sha}" \

@@ -71,8 +71,8 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 
 ## 배포/스케줄 실행
 
-dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/data-pipeline`
-ECR repository 에 `:${git_sha}` 와 `:latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
+dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/pipeline`
+ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 raw ingest 전용 ECS task definition 과 Step Functions
 state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 ECS RunTask 로 실행하며,

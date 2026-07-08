@@ -1,6 +1,7 @@
 locals {
   prefix                           = "edge-dev"
-  data_pipeline_ecr_name           = "edge/data-pipeline"
+  data_pipeline_ecr_name           = "edge/pipeline"
+  data_pipeline_image_tag          = "data-pipeline-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
 }
@@ -334,7 +335,7 @@ module "data_pipeline" {
   vpc_id           = module.network.vpc_id
   subnet_ids       = module.network.private_subnet_ids
   cluster_arn      = module.worker_cluster.cluster_arn
-  image            = "${local.data_pipeline_ecr_repository_url}:latest"
+  image            = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
   lake_bucket_name = module.pipeline.raw_bucket
 
   alarm_email = var.pipeline_alarm_email
