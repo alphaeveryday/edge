@@ -8,15 +8,6 @@ output "security_group_id" {
   value       = aws_security_group.task.id
 }
 
-output "raw_bucket" {
-  description = "레거시 raw bucket 이름. lake 전환 검증 후 제거 대상."
-  value       = aws_s3_bucket.raw.bucket
-}
-
-output "raw_bucket_arn" {
-  value = aws_s3_bucket.raw.arn
-}
-
 output "lake_bucket" {
   description = "active pipeline lake bucket 이름. raw/canonical/curated prefix 를 함께 담는다."
   value       = aws_s3_bucket.lake.bucket
@@ -25,15 +16,6 @@ output "lake_bucket" {
 output "lake_bucket_arn" {
   description = "active pipeline lake bucket ARN."
   value       = aws_s3_bucket.lake.arn
-}
-
-output "curated_bucket" {
-  description = "레거시 curated bucket 이름. lake 전환 검증 후 제거 대상."
-  value       = aws_s3_bucket.curated.bucket
-}
-
-output "curated_bucket_arn" {
-  value = aws_s3_bucket.curated.arn
 }
 
 output "fmp_secret_arn" {

@@ -4,36 +4,9 @@ resource "aws_s3_bucket" "lake" {
   bucket = "${var.name}-lake"
 }
 
-# 기존 raw/curated 버킷은 lake 전환 후 검증·정리 전까지 보존한다.
-resource "aws_s3_bucket" "raw" {
-  bucket = "${var.name}-raw"
-}
-
-resource "aws_s3_bucket" "curated" {
-  bucket = "${var.name}-curated"
-}
-
 # 저장 시 암호화(SSE-S3). 뉴스·금융 데이터의 최소 보호.
 resource "aws_s3_bucket_server_side_encryption_configuration" "lake" {
   bucket = aws_s3_bucket.lake.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "raw" {
-  bucket = aws_s3_bucket.raw.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "curated" {
-  bucket = aws_s3_bucket.curated.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -49,20 +22,48 @@ resource "aws_s3_bucket_public_access_block" "lake" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_public_access_block" "raw" {
-  bucket                  = aws_s3_bucket.raw.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+# lake 전환 후 legacy raw/curated 버킷은 더 이상 TF 가 소유하지 않는다.
+# 원격 버킷은 삭제하지 않고 state 에서만 forget 한다. 콘솔 수동 정리는 이 apply 이후 가능하다.
+removed {
+  from = aws_s3_bucket.raw
+  lifecycle {
+    destroy = false
+  }
 }
 
-resource "aws_s3_bucket_public_access_block" "curated" {
-  bucket                  = aws_s3_bucket.curated.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+removed {
+  from = aws_s3_bucket.curated
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_s3_bucket_server_side_encryption_configuration.raw
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_s3_bucket_server_side_encryption_configuration.curated
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_s3_bucket_public_access_block.raw
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_s3_bucket_public_access_block.curated
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── 외부 API 키 시크릿 (edge 소유로 신설, 값은 수동 주입) ─────────────
