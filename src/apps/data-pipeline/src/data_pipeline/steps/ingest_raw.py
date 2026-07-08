@@ -40,6 +40,9 @@ def _bigkinds_date(record: dict) -> str | None:
 
 
 def _article_id(record: dict) -> str:
+    news_id = str(record.get("NEWS_ID") or "").strip()
+    if news_id:
+        return make_article_id(None, news_id, None)
     title = record.get("title") or record.get("TITLE") or ""
     published = record.get("publishedDate") or record.get("DATE") or _bigkinds_date(record)
     return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)

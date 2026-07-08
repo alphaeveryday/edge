@@ -249,6 +249,16 @@ def test_partition_date_fallbacks():
     assert ingest_raw._partition_date({}, fb) == "2026-07-03"  # 둘 다 없으면 런 시작일
 
 
+def test_bigkinds_article_id_prefers_news_id():
+    # WHY: BigKinds 에서 같은 제목과 날짜를 가진 서로 다른 기사들이 있다. NEWS_ID 를 무시하고
+    #      TITLE|DATE 로만 해시하면 Step2 canonical merge 가 별개 기사를 하나로 합친다.
+    base = {"TITLE": "같은 제목", "DATE": "20260702"}
+    a = ingest_raw._article_id({**base, "NEWS_ID": "01100101.20260702100000000"})
+    b = ingest_raw._article_id({**base, "NEWS_ID": "01100101.20260702100100000"})
+    assert a != b
+    assert len(a) == len(b) == 64
+
+
 def test_disabled_skip_survives_log_write_failure(tmp_path):
     # WHY: disabled skip 도 collection_log 로 드러나는 것이 계약이다. 스토리지 장애로
     #      skip 로그마저 못 남겼는데 exit 0 이면 스케줄러가 결과 유실을 성공으로 본다.
