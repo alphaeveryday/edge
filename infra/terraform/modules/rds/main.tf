@@ -43,5 +43,10 @@ resource "aws_db_instance" "this" {
   deletion_protection = var.deletion_protection
   skip_final_snapshot = var.skip_final_snapshot
 
+  # 16.x auto minor upgrade 는 AWS 가 관리한다. 의도적 major upgrade 전에는 이 ignore 를 제거한다.
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
+
   tags = { Name = var.name }
 }

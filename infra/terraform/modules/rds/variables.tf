@@ -26,9 +26,9 @@ variable "master_username" {
 }
 
 variable "engine_version" {
-  description = "PostgreSQL 엔진 버전. ap-northeast-2 실재 버전이어야 함(16.8 은 미제공). auto_minor_version_upgrade 로 패치는 따라감"
+  description = "PostgreSQL 엔진 버전 prefix. auto_minor_version_upgrade 와 함께 16.x 패치 drift 를 방지"
   type        = string
-  default     = "16.9"
+  default     = "16"
 }
 
 variable "instance_class" {
