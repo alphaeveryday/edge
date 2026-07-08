@@ -51,7 +51,7 @@ resource "aws_iam_role_policy" "task" {
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
-        Resource = [aws_s3_bucket.raw.arn, "${aws_s3_bucket.raw.arn}/*", aws_s3_bucket.curated.arn, "${aws_s3_bucket.curated.arn}/*"]
+        Resource = [aws_s3_bucket.lake.arn, "${aws_s3_bucket.lake.arn}/*"]
       },
       {
         Effect   = "Allow"
