@@ -123,7 +123,7 @@ settings.targets.keywords            # ["금리", ...]
 
 ## 레이크 저장 계약
 
-수집물은 단일 raw 레이크(예: dev `s3://edge-dev-pipeline-raw/`, 또는 local 스텁)에 쓴다.
+수집물은 단일 lake 버킷(예: dev `s3://edge-dev-pipeline-lake/`, 또는 local 스텁)에 쓴다.
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.
 
 - **raw(뉴스)** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
