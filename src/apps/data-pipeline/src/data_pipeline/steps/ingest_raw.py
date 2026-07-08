@@ -69,13 +69,14 @@ def run(
 
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
-        # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
+        # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다.
         logger.warning("%s 비활성 — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
                                                                "reason": f"{vendor} disabled"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
+            return 1
         return 0
 
     # article_id → 보관 중인 record. 같은 기사가 여러 심볼 질의에 걸려 오면

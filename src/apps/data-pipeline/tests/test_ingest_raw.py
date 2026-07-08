@@ -246,8 +246,8 @@ def test_partition_date_fallbacks():
 
 
 def test_disabled_skip_survives_log_write_failure(tmp_path):
-    # WHY: skip 경로의 로그 쓰기도 best-effort — 스토리지 장애로 skip 로그마저 못
-    #      남겨도 크래시 대신 정상 종료해야 한다(다른 경로와 계약 일관).
+    # WHY: disabled skip 도 collection_log 로 드러나는 것이 계약이다. 스토리지 장애로
+    #      skip 로그마저 못 남겼는데 exit 0 이면 스케줄러가 결과 유실을 성공으로 본다.
     class FailingStorage(LocalStorage):
         def put_bytes(self, key, data):
             raise OSError("storage down")
@@ -257,7 +257,7 @@ def test_disabled_skip_survives_log_write_failure(tmp_path):
     source = FmpNewsSource(
         settings.news.sources["fmp"].model_copy(update={"api_key": None}), FakeClient({})
     )
-    assert ingest_raw.run(settings, storage, source, "20260701T000000Z") == 0  # 크래시 없음
+    assert ingest_raw.run(settings, storage, source, "20260701T000000Z") == 1  # 로그 유실 표면화
 
 
 def test_unexpected_failure_still_writes_log(tmp_path):

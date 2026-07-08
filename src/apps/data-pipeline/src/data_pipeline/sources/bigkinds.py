@@ -73,12 +73,12 @@ class BigKindsNewsSource:
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
         fetched_at = datetime.now(timezone.utc).isoformat()
-        start_date = from_date or to_date
-        end_date = to_date or from_date
-        if not start_date or not end_date:
+        start_date = from_date
+        end_date = to_date
+        if start_date is None and end_date is None:
             today = datetime.now(timezone.utc).date().isoformat()
-            start_date = start_date or today
-            end_date = end_date or today
+            start_date = today
+            end_date = today
         for our_ticker, query in plan:
             try:
                 yield from self._paginate(our_ticker, query, start_date, end_date, fetched_at)
@@ -127,8 +127,10 @@ class BigKindsNewsSource:
                 f"MAX_PAGES({self.max_pages}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
             )
 
-    def _search(self, query: str, start_date: str, end_date: str, page: int) -> dict:
-        start_no = page * self.page_size + 1
+    def _search(
+        self, query: str, start_date: str | None, end_date: str | None, page: int
+    ) -> dict:
+        start_no = page + 1
         body = json.dumps(
             {
                 "indexName": "news",
@@ -137,8 +139,8 @@ class BigKindsNewsSource:
                 "searchScopeType": "1",
                 "searchSortType": "date",
                 "sortMethod": "date",
-                "startDate": start_date,
-                "endDate": end_date,
+                "startDate": start_date or "",
+                "endDate": end_date or "",
                 "startNo": start_no,
                 "resultNumber": self.page_size,
                 "providerCodes": [],

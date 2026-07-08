@@ -76,6 +76,32 @@ def test_fetch_posts_search_body_and_preserves_raw_fields():
     assert req["body"]["resultNumber"] == 2
 
 
+def test_pagination_uses_bigkinds_page_number_not_row_offset():
+    # WHY: BigKinds startNo 는 row offset 이 아니라 page number 다. page_size=50 에서
+    #      2페이지를 51 로 호출하면 하루 50건 초과 뉴스가 조용히 유실된다.
+    first_page = [_row(f"01100101.2026070715{i:02d}00000") for i in range(50)]
+    src = _source({
+        ("삼성전자", 1): _ok(first_page),
+        ("삼성전자", 2): _ok([_row("01100101.20260707165000000")]),
+    }, page_size=50, max_pages=3)
+
+    records = list(src.fetch(["005930"], "2026-07-07", "2026-07-07"))
+
+    assert len(records) == 51
+    assert [r["body"]["startNo"] for r in src.client.requests] == [1, 2]
+
+
+def test_one_sided_date_window_is_not_collapsed_to_one_day():
+    # WHY: run.py 는 사용자가 한쪽 날짜만 지정하면 그대로 소스에 넘긴다. BigKinds 가 반대쪽
+    #      bound 를 같은 날짜로 채우면 open-ended backfill 이 하루 수집으로 위장된다.
+    src = _source({("삼성전자", 1): _ok([])})
+    list(src.fetch(["005930"], from_date="2026-06-01"))
+
+    req = src.client.requests[0]
+    assert req["body"]["startDate"] == "2026-06-01"
+    assert req["body"]["endDate"] == ""
+
+
 def test_plan_skips_unmapped_symbols():
     # WHY: 검색어 맵에 없는 종목은 BigKinds 로 질의하면 안 된다. 별칭 확장은 후속 T 단계다.
     assert _source({}).plan(["005930", "NVDA", "000660"]) == [
