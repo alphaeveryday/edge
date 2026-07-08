@@ -1,10 +1,10 @@
 # ── S3: 데이터 레이크 버킷 (edge 소유) ─────────────────
-# 전환 대상 lake bucket. 이번 단계에서는 생성만 하고, 데이터 sync 검증 후 task 를 전환한다.
+# active lake bucket. raw/canonical/curated prefix 를 함께 담는다.
 resource "aws_s3_bucket" "lake" {
   bucket = "${var.name}-lake"
 }
 
-# 기존 raw/curated 버킷은 마이그레이션 검증 전까지 보존한다.
+# 기존 raw/curated 버킷은 lake 전환 후 검증·정리 전까지 보존한다.
 resource "aws_s3_bucket" "raw" {
   bucket = "${var.name}-raw"
 }

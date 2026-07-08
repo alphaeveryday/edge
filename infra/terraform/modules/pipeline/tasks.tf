@@ -28,8 +28,8 @@ locals {
     PROJECT                 = "news-pipeline"
     ENV                     = "dev"
     AWS_REGION_NAME         = var.region
-    RAW_BUCKET              = aws_s3_bucket.raw.bucket
-    CURATED_BUCKET          = aws_s3_bucket.curated.bucket
+    RAW_BUCKET              = aws_s3_bucket.lake.bucket
+    CURATED_BUCKET          = aws_s3_bucket.lake.bucket
     NEWS_SOURCES            = "google_news,fmp"
     NEWS_SOURCE             = "stockinfo7"
     NER_ENABLED             = "false"

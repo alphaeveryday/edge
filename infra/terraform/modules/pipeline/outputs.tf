@@ -17,13 +17,13 @@ output "raw_bucket_arn" {
   value = aws_s3_bucket.raw.arn
 }
 
-output "migration_lake_bucket" {
-  description = "전환 대상 lake bucket 이름. 데이터 sync 검증 후 active bucket 으로 전환한다."
+output "lake_bucket" {
+  description = "active pipeline lake bucket 이름. raw/canonical/curated prefix 를 함께 담는다."
   value       = aws_s3_bucket.lake.bucket
 }
 
-output "migration_lake_bucket_arn" {
-  description = "전환 대상 lake bucket ARN. 데이터 sync 검증 후 active bucket 으로 전환한다."
+output "lake_bucket_arn" {
+  description = "active pipeline lake bucket ARN."
   value       = aws_s3_bucket.lake.arn
 }
 
