@@ -22,6 +22,7 @@ from pydantic_settings import (
 )
 
 from .models import (
+    BigKindsNewsSource,
     CollectionTargets,
     DartFinancialConfig,
     FinancialConfig,
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     # OpenDART(국내 재무) 도 독립 벤더다. 미설정이면 ingest-raw-financial --source dart
     # 진입점이 fail-loud 한다(FMP 재무만 돌리는 환경은 이 섹션이 없어도 된다).
     dart_financial: DartFinancialConfig | None = None
+    # BigKinds(국내 뉴스)는 news.sources dict 밖의 독립 벤더다. 미설정이면 ingest-raw
+    # --source bigkinds 진입점이 fail-loud 한다(FMP 뉴스만 돌리는 환경은 생략 가능).
+    bigkinds_news: BigKindsNewsSource | None = None
     # KIS(국내 가격) 도 독립 벤더라 섹션 생략 가능 — 미설정이면 ingest-price-raw --source kis
     # 진입점이 fail-loud 한다(FMP 만 돌리는 환경은 이 섹션이 없어도 된다).
     kis_price: KisPriceConfig | None = None

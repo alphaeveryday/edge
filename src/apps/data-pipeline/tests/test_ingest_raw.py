@@ -103,6 +103,48 @@ def test_same_article_across_symbols_saved_once_with_merged_mentions(tmp_path):
     assert log["records_skipped_duplicate"] == 1
 
 
+def test_bigkinds_preserve_all_rows_without_run_dedup(tmp_path):
+    # WHY: BigKinds raw 는 응답 row 전량 보존이 계약이다. 같은 NEWS_ID 가 여러 검색어에 걸려도
+    #      FMP 방식의 run-level dedup/mention merge 로 한 row 를 버리면 raw 원본이 유실된다.
+    class BigKindsLikeSource:
+        source_name = "bigkinds"
+        preserve_all_rows = True
+        enabled = True
+        planned_symbols = 2
+        fetch_failures: list[dict] = []
+
+        def fetch(self, symbols, from_date=None, to_date=None):
+            base = {
+                "NEWS_ID": "01100101.20260707153000000",
+                "TITLE": "같은 기사",
+                "CONTENT": "BigKinds CONTENT 원본",
+                "market": "KR",
+                "fetched_at": "2026-07-07T06:30:00+00:00",
+            }
+            yield {**base, "our_ticker": "005930", "bigkinds_query": "삼성전자"}
+            yield {**base, "our_ticker": "000660", "bigkinds_query": "SK하이닉스"}
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    code = ingest_raw.run(settings, storage, BigKindsLikeSource(), "r1")
+
+    assert code == 0
+    [raw_key] = storage.list_keys("raw")
+    assert raw_key.startswith(
+        "raw/source=bigkinds/dataset=stock_news/market=KR/published_date=2026-07-07"
+    )
+    lines = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
+    assert len(lines) == 2  # 같은 NEWS_ID 라도 둘 다 보존
+    records = [json.loads(line) for line in lines]
+    assert {r["bigkinds_query"] for r in records} == {"삼성전자", "SK하이닉스"}
+    assert all("mentions" not in r for r in records)  # FMP mention merge 경로를 타지 않음
+    assert {len(r["article_id"]) for r in records} == {64}  # canonical merge 계약 유지
+    assert len({r["article_id"] for r in records}) == 1  # 같은 기사 id, row 는 둘 다 보존
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["records_saved"] == 2
+    assert log["records_skipped_duplicate"] == 0
+
+
 class _PartlyFailingClient(FakeClient):
     """지정한 심볼은 재시도 소진(RuntimeError), 나머지는 정상 응답."""
 
@@ -201,13 +243,25 @@ def test_partition_date_fallbacks():
     #      fetched_at 하드 서브스크립트가 한 레코드로 런 전체를 죽이면 안 된다.
     fb = "2026-07-03"
     assert ingest_raw._partition_date({"publishedDate": "2026-07-01 09:00:00"}, fb) == "2026-07-01"
+    # WHY: BigKinds native DATE 가 있으면 NEWS_ID 형식 변화에도 기사 발행일 파티션을 지킨다.
+    assert ingest_raw._partition_date({"DATE": "2026.07.02 15:30", "NEWS_ID": "bad"}, fb) == "2026-07-02"
     assert ingest_raw._partition_date({"fetched_at": "2026-07-02T00:00:00+00:00"}, fb) == "2026-07-02"
     assert ingest_raw._partition_date({}, fb) == "2026-07-03"  # 둘 다 없으면 런 시작일
 
 
+def test_bigkinds_article_id_prefers_news_id():
+    # WHY: BigKinds 에서 같은 제목과 날짜를 가진 서로 다른 기사들이 있다. NEWS_ID 를 무시하고
+    #      TITLE|DATE 로만 해시하면 Step2 canonical merge 가 별개 기사를 하나로 합친다.
+    base = {"TITLE": "같은 제목", "DATE": "20260702"}
+    a = ingest_raw._article_id({**base, "NEWS_ID": "01100101.20260702100000000"})
+    b = ingest_raw._article_id({**base, "NEWS_ID": "01100101.20260702100100000"})
+    assert a != b
+    assert len(a) == len(b) == 64
+
+
 def test_disabled_skip_survives_log_write_failure(tmp_path):
-    # WHY: skip 경로의 로그 쓰기도 best-effort — 스토리지 장애로 skip 로그마저 못
-    #      남겨도 크래시 대신 정상 종료해야 한다(다른 경로와 계약 일관).
+    # WHY: disabled skip 도 collection_log 로 드러나는 것이 계약이다. 스토리지 장애로
+    #      skip 로그마저 못 남겼는데 exit 0 이면 스케줄러가 결과 유실을 성공으로 본다.
     class FailingStorage(LocalStorage):
         def put_bytes(self, key, data):
             raise OSError("storage down")
@@ -217,7 +271,7 @@ def test_disabled_skip_survives_log_write_failure(tmp_path):
     source = FmpNewsSource(
         settings.news.sources["fmp"].model_copy(update={"api_key": None}), FakeClient({})
     )
-    assert ingest_raw.run(settings, storage, source, "20260701T000000Z") == 0  # 크래시 없음
+    assert ingest_raw.run(settings, storage, source, "20260701T000000Z") == 1  # 로그 유실 표면화
 
 
 def test_unexpected_failure_still_writes_log(tmp_path):

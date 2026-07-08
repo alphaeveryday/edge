@@ -77,3 +77,33 @@ symbols = ["005930"]
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     with pytest.raises(SystemExit):
         main(["ingest-raw-financial", "--source", "dart", "--config", str(config)])
+
+
+def test_news_rejects_unknown_source(monkeypatch):
+    # WHY: 뉴스 수집 벤더 오타를 기본 fmp 로 조용히 돌리면 의도와 다른 소스가 수집된다.
+    #      알 수 없는 --source 는 API 호출 전에 fail-fast 해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["ingest-raw", "--source", "bogus"])
+
+
+def test_bigkinds_requires_config(tmp_path, monkeypatch):
+    # WHY: --source bigkinds 를 명시했는데 설정 섹션이 없으면 기존 FMP 뉴스로 대체하면 안 된다.
+    #      BigKinds 전용 설정 누락을 명확히 실패로 드러내야 한다.
+    config = tmp_path / "sources.toml"
+    config.write_text(
+        """
+[news.sources.fmp]
+base_url = "https://fmp.example/news"
+
+[price.source]
+base_url = "https://fmp.example/price"
+
+[targets]
+symbols = ["005930"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["ingest-raw", "--source", "bigkinds", "--config", str(config)])

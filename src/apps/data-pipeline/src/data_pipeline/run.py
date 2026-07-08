@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from .config import load_settings
 from .lake import make_storage
 from .sources import (
+    BigKindsNewsSource,
     DartFinancialSource,
     FmpFinancialSource,
     FmpNewsSource,
@@ -61,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
-    parser.add_argument("--source", default=None, help="소스 벤더(가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
+    parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -98,11 +99,19 @@ def main(argv: list[str] | None = None) -> int:
         from_date, to_date = default_window(datetime.now(timezone.utc), lookback)
 
     if args.step == "ingest-raw":
-        fmp_config = settings.news.sources.get("fmp")
-        if fmp_config is None:
-            # 소스 등록 누락은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
-            raise SystemExit("news.sources.fmp 설정이 없다 — sources.toml 확인")
-        source = FmpNewsSource(fmp_config, PoliteClient())
+        vendor = args.source or "fmp"
+        if vendor == "fmp":
+            fmp_config = settings.news.sources.get("fmp")
+            if fmp_config is None:
+                # 소스 등록 누락은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+                raise SystemExit("news.sources.fmp 설정이 없다 — sources.toml 확인")
+            source = FmpNewsSource(fmp_config, PoliteClient())
+        elif vendor == "bigkinds":
+            if settings.bigkinds_news is None:
+                raise SystemExit("bigkinds_news 설정이 없다 — sources.toml 확인")
+            source = BigKindsNewsSource(settings.bigkinds_news, PoliteClient(min_interval=1.0))
+        else:
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|bigkinds)")
         return ingest_raw.run(settings, storage, source, run_id, from_date, to_date)
     if args.step == "ingest-price-raw":
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면

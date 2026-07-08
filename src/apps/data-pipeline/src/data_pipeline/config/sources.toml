@@ -37,6 +37,26 @@ enabled = true
 base_url = "https://www.hankyung.com/feed/finance"
 enabled = true
 
+# 국내 뉴스 소스 — BigKinds search.do raw 수집. 키 없음, 저부하 직렬 수집.
+# ingest-raw --source bigkinds 로 선택(미지정=fmp). CONTENT 는 BigKinds 응답 원본 필드로
+# 그대로 저장한다(본문 전문 크롤·요약·절단 없음).
+[bigkinds_news]
+base_url = "https://www.bigkinds.or.kr/api/news/search.do"
+enabled = true
+page_size = 50
+max_pages = 5
+
+[bigkinds_news.query_map]
+"005930" = "삼성전자"
+"000660" = "SK하이닉스"
+"009150" = "삼성전기"
+"402340" = "SK스퀘어"
+"373220" = "LG에너지솔루션"
+"028260" = "삼성물산"
+"032830" = "삼성생명"
+"105560" = "KB금융"
+"055550" = "신한지주"
+
 # 가격(OHLCV) 소스 — FMP EOD(일봉, S004). api_key 는 env 로 주입:
 #   DATA_PIPELINE_PRICE__SOURCE__API_KEY=...
 [price.source]

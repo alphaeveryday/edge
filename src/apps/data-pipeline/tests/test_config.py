@@ -217,3 +217,29 @@ reprt_codes = ["11011"]
     assert settings.dart_financial.source.years == ["2025"]
     assert settings.dart_financial.source.reprt_codes == ["11011"]
     assert settings.dart_financial.source.symbol_map == {"005930": "005930"}
+
+
+def test_bigkinds_news_section_optional(tmp_path):
+    # WHY: BigKinds 는 독립 뉴스 벤더라 섹션이 없어도 기존 FMP 뉴스 환경은 그대로 로드돼야 한다.
+    #      --source bigkinds 진입점이 None 을 fail-loud 로 잡는다.
+    settings = load_settings(_write(tmp_path, VALID))
+    assert settings.bigkinds_news is None
+
+
+def test_bigkinds_news_section_parsed_when_present(tmp_path):
+    # WHY: [bigkinds_news] 가 있으면 타입 있는 설정으로 로드돼 BigKinds 뉴스 잡이 쓴다.
+    #      검색어 맵은 코드가 아니라 설정으로 관리한다.
+    text = VALID + """
+[bigkinds_news]
+base_url = "https://bigkinds.example/search.do"
+page_size = 25
+max_pages = 2
+
+[bigkinds_news.query_map]
+"005930" = "삼성전자"
+"""
+    settings = load_settings(_write(tmp_path, text))
+    assert settings.bigkinds_news.base_url == "https://bigkinds.example/search.do"
+    assert settings.bigkinds_news.page_size == 25
+    assert settings.bigkinds_news.max_pages == 2
+    assert settings.bigkinds_news.query_map == {"005930": "삼성전자"}
