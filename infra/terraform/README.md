@@ -52,13 +52,13 @@ cd ../envs/dev  && terraform apply
 - 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`.
 - env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
 - foundation 이 소유해야 하는 ECR 이 AWS 에 이미 수동 생성돼 있으면, 첫 apply 전에 해당
-  repository 를 foundation state 로 import 한다(예: `edge/data-pipeline`). clean account 는
+  repository 를 foundation state 로 import 한다(예: `edge/pipeline`). clean account 는
   foundation 이 직접 생성한다.
 - 이미지 태그: `terraform.tfvars` 의 `*_image` 가 TF 소유 baseline. 앱 CD(`deploy-<app>.yml`)가 semver 태그를 올린다.
   서비스의 실행 task 정의는 CD 소유라 TF 가 되돌리지 않는다(`ecs-service` 의 `ignore_changes = [task_definition]`);
   `terraform.tfvars` 핀은 신규 생성 시 baseline 으로만 쓰인다.
-  `data-pipeline` 배치 이미지는 `deploy-data-pipeline.yml` 이 `edge/data-pipeline:{git-sha,latest}` 를 push 하고,
-  raw ingest task definition 은 `latest` 를 참조한다.
+  `data-pipeline` 배치 이미지는 `deploy-data-pipeline.yml` 이 기존 `edge/pipeline` 에 `{git-sha,data-pipeline-latest}` 를 push 하고,
+  raw ingest task definition 은 `data-pipeline-latest` 를 참조한다.
 
 ## 현재 상태 (2026-07-04)
 

@@ -61,7 +61,7 @@ output "data_pipeline_state_machine_arn" {
 }
 
 output "data_pipeline_ecr_repository_url" {
-  description = "→ vars.DATA_PIPELINE_ECR_REPOSITORY (기존 edge/data-pipeline)"
+  description = "data-pipeline raw ingest image repository URL (기존 edge/pipeline)"
   value       = local.data_pipeline_ecr_repository_url
 }
 
