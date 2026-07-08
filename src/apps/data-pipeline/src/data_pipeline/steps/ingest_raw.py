@@ -11,18 +11,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_news_partition
 from ..parse import make_article_id, parse_datetime
-from ..sources import FmpNewsSource, StopFetch
+from ..sources import BigKindsNewsSource, FmpNewsSource, StopFetch
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "ingest_raw"
 DATASET = "stock_news"  # collection_log·raw 파티션의 dataset= 키
+NewsSourceAdapter = FmpNewsSource | BigKindsNewsSource
+_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
 
 
 def _partition_date(record: dict, fallback_date: str) -> str:
@@ -30,6 +33,11 @@ def _partition_date(record: dict, fallback_date: str) -> str:
     그마저 없으면 런 시작일로 폴백한다(raw 는 전부 보존 — 하나도 못 버림).
     fetched_at 하드 서브스크립트로 한 레코드가 런 전체를 죽이지 않게."""
     published = parse_datetime(record.get("publishedDate"))
+    if published is None:
+        match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
+        if match:
+            day = match.group(1)
+            return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
     basis = published or record.get("fetched_at") or fallback_date
     return basis[:10]
 
@@ -37,7 +45,7 @@ def _partition_date(record: dict, fallback_date: str) -> str:
 def run(
     settings: Settings,
     storage: Storage,
-    source: FmpNewsSource,
+    source: NewsSourceAdapter,
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -62,10 +70,10 @@ def run(
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
-        logger.warning("fmp 비활성(api_key 미주입) — 수집 건너뜀")
+        logger.warning("%s 비활성 — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": "fmp disabled or no api_key"})
+                                                               "reason": f"{vendor} disabled"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
         return 0
@@ -82,6 +90,9 @@ def run(
     try:
         for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
+            if getattr(source, "preserve_all_rows", False):
+                partitions[(record["market"], _partition_date(record, started_date))].append(record)
+                continue
             article_id = make_article_id(
                 record.get("url"), record.get("title") or "", record.get("publishedDate")
             )

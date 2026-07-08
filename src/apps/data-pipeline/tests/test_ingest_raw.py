@@ -103,6 +103,46 @@ def test_same_article_across_symbols_saved_once_with_merged_mentions(tmp_path):
     assert log["records_skipped_duplicate"] == 1
 
 
+def test_bigkinds_preserve_all_rows_without_run_dedup(tmp_path):
+    # WHY: BigKinds raw 는 응답 row 전량 보존이 계약이다. 같은 NEWS_ID 가 여러 검색어에 걸려도
+    #      FMP 방식의 run-level dedup/mention merge 로 한 row 를 버리면 raw 원본이 유실된다.
+    class BigKindsLikeSource:
+        source_name = "bigkinds"
+        preserve_all_rows = True
+        enabled = True
+        planned_symbols = 2
+        fetch_failures: list[dict] = []
+
+        def fetch(self, symbols, from_date=None, to_date=None):
+            base = {
+                "NEWS_ID": "01100101.20260707153000000",
+                "TITLE": "같은 기사",
+                "CONTENT": "BigKinds CONTENT 원본",
+                "market": "KR",
+                "fetched_at": "2026-07-07T06:30:00+00:00",
+            }
+            yield {**base, "our_ticker": "005930", "bigkinds_query": "삼성전자"}
+            yield {**base, "our_ticker": "000660", "bigkinds_query": "SK하이닉스"}
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    code = ingest_raw.run(settings, storage, BigKindsLikeSource(), "r1")
+
+    assert code == 0
+    [raw_key] = storage.list_keys("raw")
+    assert raw_key.startswith(
+        "raw/source=bigkinds/dataset=stock_news/market=KR/published_date=2026-07-07"
+    )
+    lines = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
+    assert len(lines) == 2  # 같은 NEWS_ID 라도 둘 다 보존
+    records = [json.loads(line) for line in lines]
+    assert {r["bigkinds_query"] for r in records} == {"삼성전자", "SK하이닉스"}
+    assert all("mentions" not in r for r in records)  # FMP mention merge 경로를 타지 않음
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["records_saved"] == 2
+    assert log["records_skipped_duplicate"] == 0
+
+
 class _PartlyFailingClient(FakeClient):
     """지정한 심볼은 재시도 소진(RuntimeError), 나머지는 정상 응답."""
 

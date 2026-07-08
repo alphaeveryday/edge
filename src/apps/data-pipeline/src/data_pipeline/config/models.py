@@ -40,6 +40,22 @@ class NewsSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class BigKindsNewsSource(BaseModel):
+    """BigKinds 국내 뉴스 소스 (stock_news raw).
+
+    BigKinds search.do 는 키 없이 호출하지만, 저부하를 위해 page_size/max_pages 를 설정으로 둔다.
+    query_map 은 our_ticker → 검색어(초기엔 표준명 1개)다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: NonBlankStr = "https://www.bigkinds.or.kr/api/news/search.do"
+    enabled: bool = True
+    page_size: int = Field(default=50, ge=1, le=100)
+    max_pages: int = Field(default=5, ge=1, le=100)
+    query_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class PriceSource(BaseModel):
     """가격 데이터 소스 (FMP EOD 일봉 수집, S004).
 

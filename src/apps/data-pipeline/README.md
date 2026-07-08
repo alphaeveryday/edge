@@ -4,7 +4,8 @@
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
-> 재무제표(손익·재무상태·현금흐름), KIS(한국투자, 국내) 일봉, OpenDART 국내 재무까지다.
+> 재무제표(손익·재무상태·현금흐름), BigKinds 국내 뉴스, KIS(한국투자, 국내) 일봉,
+> OpenDART 국내 재무까지다.
 > 정규화·품질검증(뉴스 Step2)과 canonical 적재는 후속이다.
 
 ## 실행
@@ -21,6 +22,11 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw
 # 백필 예: 2026-06 한 달
 #   ... run ingest-raw --from 2026-06-01 --to 2026-06-30
+
+# 국내 뉴스 원본저장(Step1) — BigKinds search.do. --source bigkinds 로 벤더 선택
+# (미지정=fmp). 인증키 없음. resultList[] row 원본 필드는 그대로 저장하고, our_ticker·
+# market·bigkinds_query·fetched_at 같은 수집 provenance 만 붙인다.
+uv run --package data-pipeline python -m data_pipeline.run ingest-raw --source bigkinds
 
 # 가격(OHLCV 일봉) 원본저장(Step1) — FMP EOD. 날짜창 미지정 = 증분(5일 소급~오늘,
 # 주말·공휴일 공백 대비). 심볼맵은 가격 전용(price.source.symbol_map) — 현재 US 만.
@@ -72,6 +78,7 @@ from data_pipeline import load_settings
 
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
+settings.bigkinds_news               # BigKindsNewsSource (국내 뉴스 — 키 없음·KR 검색어 맵); 미설정이면 None
 settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
 settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱키/시크릿 env·env=prod|vps); 미설정이면 settings.kis_price 은 None
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
@@ -101,7 +108,10 @@ settings.targets.keywords            # ["금리", ...]
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.
 
 - **raw(뉴스)** — `raw/source=fmp/dataset=stock_news/market=…/published_date=…/run_id=…/` 에
-  run_id 별 append(재현성). 런 내 중복은 article_id 로 제거한다.
+  run_id 별 append(재현성). FMP 뉴스는 기존 계약대로 런 내 중복을 article_id 로 제거하고
+  mentions 를 병합한다. 국내 BigKinds 뉴스는 같은 dataset·규약으로 `source=bigkinds`
+  (`--source bigkinds`) 아래 쌓이며, BigKinds `resultList[]` row 를 전량 보존한다(런 내
+  dedup 없음). `CONTENT` 도 BigKinds 응답 원본 필드 그대로 저장한다.
 - **raw(가격)** — `raw/source=fmp/dataset=price_daily/market=…/ingest_date=…/run_id=…/` 에
   run_id 별 append. 파티션 키는 뉴스(published_date)와 달리 **ingest_date(수집일)** 다 —
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.

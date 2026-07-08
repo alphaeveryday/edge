@@ -2,6 +2,7 @@
 
 from .loader import ConfigError, Settings, load_settings
 from .models import (
+    BigKindsNewsSource,
     CollectionTargets,
     DartFinancialConfig,
     DartFinancialSource,
@@ -20,6 +21,7 @@ __all__ = [
     "ConfigError",
     "Settings",
     "load_settings",
+    "BigKindsNewsSource",
     "NewsSource",
     "NewsConfig",
     "PriceSource",
