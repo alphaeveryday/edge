@@ -45,6 +45,7 @@ nav:
       - Overview: retrospective/index.md
       - Sprint 1: retrospective/sprint-1.md
       - Sprint 2: retrospective/sprint-2.md
+      - Sprint 3: retrospective/sprint-3.md
   - Reference:
       - Architecture: reference/architecture.md
       - Schema: reference/schema.md
