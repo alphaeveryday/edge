@@ -6,8 +6,9 @@
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
 > 재무제표(손익·재무상태·현금흐름), BigKinds 국내 뉴스, KIS(한국투자, 국내) 일봉,
 > OpenDART 국내 재무까지다.
-> **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log 까지
-> 착수했다(`normalize-price`, ALPHA-133). 뉴스 정규화·통과 행의 canonical 멱등 적재는 후속이다.
+> **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
+> 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
+> ALPHA-133). 뉴스 정규화는 후속이다.
 
 ## 실행
 
@@ -58,9 +59,12 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial --source dart
 
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
-# 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계와 탈락 사유는
-# data_quality_logs 로 남기고, 통과 행의 canonical 적재는 후속(PR2)이라 여기선 검증까지다.
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw price 전체, 멱등).
+# 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
+# data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
+# trade_date) 로 멱등 병합 적재한다(같은 벤더 최신 fetched_at 우선, 벤더 교차 충돌 fail-loud).
+# --input-run-id 로 특정 수집 런만 재검증(미지정=raw price 전체, 멱등). 단, 스코프 실행은
+# 재검증(quality_log)만 하고 canonical 은 안 쓴다 — 스코프는 다른 벤더의 raw 를 못 봐 벤더
+# 교차 충돌을 감지 못 하므로, canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative 하게 쓴다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-price
 #   특정 런만: ... run normalize-price --input-run-id 20260701T000000Z
 ```
@@ -155,10 +159,16 @@ settings.targets.keywords            # ["금리", ...]
   수집 provenance 만 부착한다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
+- **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
+  에 게이트 통과 행을 **(market,ticker,trade_date) 키로 멱등 병합**. raw 와 달리 run_id·source_vendor
+  파티션이 없다(멱등 — 같은 raw 를 몇 번 정제해도 결과 동일). market·trade_date 가 파티션, ticker 는
+  파티션 내 행 키다. 같은 벤더 재적재는 최신 fetched_at 우선(정정 반영), **벤더 교차 같은 키 충돌은
+  fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
+  market 별 태깅만 하고 FX 환산하지 않는다.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
-  에 검증 실행당 1건. 몇 건 읽고/통과/탈락했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·비수치 등)를
-  남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). canonical 은 멱등이라 run_id 가 없지만,
-  '이 검증 실행이 무엇을 걸렀나'는 실행 단위 감사라 run_id 로 가른다(수집 로그와 분리된 정제 로그).
+  에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
+  비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). canonical 은 멱등이라
+  run_id 가 없지만, '이 검증 실행이 무엇을 걸렀나'는 실행 단위 감사라 run_id 로 가른다(수집 로그와 분리).
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
@@ -166,7 +176,6 @@ settings.targets.keywords            # ["금리", ...]
 
 - 정규화·품질검증(뉴스 Step2) — raw → canonical 병합
 - 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
-- 가격 canonical 적재 — 정규화·OHLCV 정합성 게이트는 착수(`normalize-price`), 통과 행을
-  `canonical/market_data/price_daily` 로 멱등 upsert(거래일별 분해, 벤더 교차 충돌 fail-loud)하는
-  적재는 후속(PR2/S006·S007)
+- 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
+  섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation

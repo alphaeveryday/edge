@@ -64,8 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
-    # 정제 스텝 전용 — 이 수집 런의 raw 만 재검증(미지정=raw price 전체, 멱등).
-    parser.add_argument("--input-run-id", default=None, help="정제 대상 수집 run_id(normalize-price)")
+    # 정제 스텝 전용 — 이 수집 런의 raw 만 재검증(미지정=raw price 전체, 멱등). 스코프 실행은
+    # 재검증(quality_log)만 하고 canonical 은 안 쓴다 — canonical 은 전체 런이 authoritative.
+    parser.add_argument("--input-run-id", default=None,
+                        help="normalize-price 재검증 대상 수집 run_id(재검증만 — canonical 은 전체 런이 씀)")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     args = parser.parse_args(argv)

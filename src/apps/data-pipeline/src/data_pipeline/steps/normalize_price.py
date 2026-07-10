@@ -5,8 +5,11 @@ raw price_daily(FMP·KIS 두 벤더, 이형 스키마)를 읽어 **표준 OHLCV 
 `data_quality_logs` 로 남긴다 — 몇 건 읽고/통과/탈락했는지와 **탈락 사유**를 드러내
 잘못된 가격이 조용히 사라지지 않게 한다(AGENTS Rule 12).
 
-이 스텝(PR1)은 **검증까지만** 한다 — 통과 행을 canonical 로 적재하는 멱등 병합은 후속
-(PR2 / S006·S007) 소관이라 여기서 쓰지 않는다. quality_log 자체가 검증 결과 sink 다.
+게이트를 통과한 행은 `canonical/market_data/price_daily` 에 **(market,ticker,trade_date)
+정체성 키로 멱등 병합** 한다 — canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가
+같다. 같은 벤더 재적재는 최신 fetched_at 이 이기고, **벤더 교차 같은 키 충돌은 fail-loud**
+(통화 오염 방지 — 조용히 하나 고르지 않고 quality_log 에 드러낸다). 탈락 행은 quality_log 에
+사유와 함께 남긴다 — 잘못된 가격이 조용히 사라지거나 canonical 을 오염시키지 않게 한다.
 
 정규화가 흡수하는 벤더 이형(raw 무변형으로 보존된 원본):
   - FMP: date="YYYY-MM-DD", open/high/low/close/volume/adjClose = 수치
@@ -167,6 +170,119 @@ def _adj_close(raw: dict) -> float | None:
     return num if math.isfinite(num) else None
 
 
+# canonical 표준행 컬럼 — 명시 스키마로 고정한다(pyarrow 추론에 맡기면 all-None 컬럼이
+# null 타입으로 잡혀 기존 파티션(float)과 병합 시 스키마가 충돌한다).
+_CANONICAL_COLUMNS = (
+    "market", "ticker", "trade_date", "open", "high", "low", "close",
+    "volume", "adj_close", "currency", "source_vendor", "fetched_at",
+)
+
+
+def _canonical_schema():
+    import pyarrow as pa
+
+    return pa.schema([
+        ("market", pa.string()), ("ticker", pa.string()), ("trade_date", pa.string()),
+        ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
+        ("close", pa.float64()), ("volume", pa.int64()), ("adj_close", pa.float64()),
+        ("currency", pa.string()), ("source_vendor", pa.string()), ("fetched_at", pa.string()),
+    ])
+
+
+def _read_parquet_rows(data: bytes) -> list[dict]:
+    import io
+    import pyarrow.parquet as pq
+
+    return pq.read_table(io.BytesIO(data)).to_pylist()
+
+
+def _write_parquet_rows(rows: list[dict]) -> bytes:
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.Table.from_pylist(
+        [{c: r.get(c) for c in _CANONICAL_COLUMNS} for r in rows], schema=_canonical_schema()
+    )
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    return buf.getvalue()
+
+
+_OLDEST = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _fetched_at(row: dict) -> datetime:
+    """'최신 우선' 정렬 키 — 실제 시각으로 비교한다. 문자열 비교는 오프셋이 다르면 어긋난다
+    (예: '…+09:00'(01:00Z) vs '…+00:00'(05:00Z) 를 사전순 비교하면 stale 이 이긴다). 파싱
+    불가·결측·naive(오프셋 없음)는 각각 가장 오래된 것/UTC 로 안전하게 처리한다."""
+    text = row.get("fetched_at")
+    if not isinstance(text, str):
+        return _OLDEST
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return _OLDEST
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: list[dict]) -> list[dict]:
+    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 신규가
+    같은 벤더면 최신 fetched_at 로 이기고, 벤더 교차 충돌은 fail-loud 로 제외한다(§6b).
+
+    collisions 에 교차 충돌을 append(호출부가 quality_log·exit_code 에 반영)."""
+    acc: dict[str, dict] = {}
+    conflicted: set[str] = set()
+    for row in [*existing, *new_rows]:
+        ticker = row["ticker"]
+        if ticker in conflicted:
+            continue
+        prev = acc.get(ticker)
+        if prev is None:
+            acc[ticker] = row
+            continue
+        if prev["source_vendor"] != row["source_vendor"]:
+            # 벤더 교차 같은 키 — 조용히 하나 고르면 USD 를 KRW 로 태깅하는 오염이 된다.
+            # 둘 다 canonical 에서 빼고 충돌로 드러낸다(§6b fail-loud, Rule 12).
+            conflicted.add(ticker)
+            acc.pop(ticker, None)
+            collisions.append({
+                "market": row["market"], "ticker": ticker, "trade_date": row["trade_date"],
+                "vendors": sorted({prev["source_vendor"], row["source_vendor"]}),
+            })
+            continue
+        # 같은 벤더 재적재 → 최신 fetched_at 우선(정정 반영). 동률이면 신규(멱등 재실행).
+        if _fetched_at(row) >= _fetched_at(prev):
+            acc[ticker] = row
+    return [acc[t] for t in sorted(acc)]
+
+
+def _write_canonical(storage: Storage, passing: list[dict], collisions: list[dict]) -> tuple[int, int]:
+    """통과 행을 (market,trade_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
+    반환: (쓴 파티션 수, 쓴 행 수)."""
+    from ..lake import canonical_price_daily_partition
+
+    by_partition: dict[tuple[str, str], list[dict]] = {}
+    for row in passing:
+        by_partition.setdefault((row["market"], row["trade_date"]), []).append(row)
+
+    parts_written = rows_written = 0
+    for (market, trade_date), new_rows in sorted(by_partition.items()):
+        prefix = canonical_price_daily_partition(market, trade_date)
+        # 파티션의 기존 parquet 을 전부 읽어 병합한다(여러 파트가 있어도 유실 없이 읽는다).
+        # 이 스텝은 항상 part-00000 하나로 되써 멱등을 지킨다 — Storage 에 delete 가 없어
+        # 외부가 만든 다른 파트명은 못 지우지만, canonical 은 이 스텝만 쓰므로 part-00000 만 존재한다.
+        existing: list[dict] = []
+        for key in storage.list_keys(prefix + "/"):
+            if key.endswith(".parquet"):
+                existing.extend(_read_parquet_rows(storage.get_bytes(key)))
+        merged = _merge_partition(existing, new_rows, collisions)
+        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
+        parts_written += 1
+        rows_written += len(merged)
+    return parts_written, rows_written
+
+
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     """raw price_daily → 정규화 → 게이트 → quality_log. 성공 0, 스토리지 장애 시 비0.
 
@@ -179,8 +295,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
-    read = passed = 0
+    read = 0
     failures: list[dict] = []
+    passing: list[dict] = []  # 게이트 통과 행 — 루프 뒤 canonical 로 멱등 병합
     exit_code = 0
 
     for raw_key in raw_keys:
@@ -232,7 +349,28 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                     "reasons": reasons, "raw_key": raw_key,
                 })
                 continue
-            passed += 1
+            passing.append(row)
+
+    # 통과 행을 canonical 로 멱등 병합 적재 — **전체 런(input_run_id=None)만** 쓴다.
+    # 스코프 실행은 그 수집 런의 행만 보므로 벤더 교차 충돌을 감지할 수 없다(다른 벤더의
+    # raw 는 스코프 밖). 스코프가 canonical 을 쓰면, 충돌로 비워진 키를 한 벤더만으로 다시
+    # 채워 fail-loud 불변식(둘 다 제외)을 조용히 깬다. 그래서 스코프는 재검증(quality_log)만
+    # 하고, canonical 은 전체 raw 를 보는 멱등 런이 authoritative 하게 쓴다(Rule 12).
+    collisions: list[dict] = []
+    parts_written = canonical_rows = 0
+    canonical_written = input_run_id is None
+    if canonical_written:
+        try:
+            parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            exit_code = 1
+        if collisions:
+            # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
+            logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
+            exit_code = exit_code or 1
+    else:
+        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
 
     try:
         storage.put_bytes(
@@ -244,9 +382,13 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "input_run_id": input_run_id,
                 "raw_files": len(raw_keys),
                 "records_read": read,
-                "records_passed": passed,
+                "records_passed": len(passing),
                 "records_failed": len(failures),
                 "failures": failures,
+                "canonical_written": canonical_written,
+                "canonical_partitions_written": parts_written,
+                "canonical_rows_written": canonical_rows,
+                "vendor_collisions": collisions,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             }, ensure_ascii=False).encode("utf-8"),
@@ -257,7 +399,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         exit_code = exit_code or 1
 
     logger.info(
-        "normalize_price 완료: raw_files=%d read=%d passed=%d failed=%d",
-        len(raw_keys), read, passed, len(failures),
+        "normalize_price 완료: raw_files=%d read=%d passed=%d failed=%d "
+        "canonical_parts=%d canonical_rows=%d collisions=%d",
+        len(raw_keys), read, len(passing), len(failures),
+        parts_written, canonical_rows, len(collisions),
     )
     return exit_code
