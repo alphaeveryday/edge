@@ -45,6 +45,17 @@ def _quality_log(storage) -> dict:
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
+def _canonical_rows(storage, published_date: str, source_vendor: str) -> list[dict]:
+    from data_pipeline.lake import canonical_news_articles_partition
+
+    prefix = canonical_news_articles_partition(published_date, source_vendor)
+    rows: list[dict] = []
+    for key in storage.list_keys(prefix + "/"):
+        if key.endswith(".parquet"):
+            rows.extend(normalize_news._read_parquet_rows(storage.get_bytes(key)))
+    return rows
+
+
 def test_both_vendors_normalize_and_pass(tmp_path):
     # WHY: 정제의 존재 이유는 FMP(title/url/site/publishedDate)·BigKinds(TITLE/PROVIDER/NEWS_ID)
     #      이형을 하나의 표준 메타행으로 수렴시키는 것 — 둘 다 정상이면 통과로 집계돼야
@@ -234,3 +245,105 @@ def test_input_run_id_scopes_validation(tmp_path):
     assert normalize_news.run(storage, "N1", input_run_id="R2") == 0
     log = _quality_log(storage)
     assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
+
+
+# ── canonical 멱등 병합 + 중복 신호 (ALPHA-132) ──────────
+def test_passing_rows_written_to_canonical_by_vendor_partition(tmp_path):
+    # WHY: 정제의 목적은 검증된 메타행을 canonical 로 넘기는 것 — source_vendor 가 파티션이라
+    #      FMP·BigKinds 가 각자 파티션에 article_id 키로 적재돼야 다운스트림이 읽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row()])
+
+    assert normalize_news.run(storage, "N1") == 0
+    fmp_rows = _canonical_rows(storage, "2026-07-01", "fmp")
+    bk_rows = _canonical_rows(storage, "2026-07-01", "bigkinds")
+    assert [r["article_id"] for r in fmp_rows] == ["fmp-a"]
+    assert [r["article_id"] for r in bk_rows] == ["bk-a"]
+    log = _quality_log(storage)
+    assert log["canonical_written"] is True
+    assert log["canonical_rows_written"] == 2 and log["canonical_partitions_written"] == 2
+
+
+def test_canonical_idempotent_across_runs(tmp_path):
+    # WHY: canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같아야 한다 —
+    #      두 번 돌려도 part-00000 하나, 내용 동일(멱등 재실행이 데이터를 늘리지 않게).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+
+    assert normalize_news.run(storage, "N1") == 0
+    first = _canonical_rows(storage, "2026-07-01", "fmp")
+    assert normalize_news.run(storage, "N2") == 0
+    second = _canonical_rows(storage, "2026-07-01", "fmp")
+    assert first == second
+    parts = [k for k in storage.list_keys("canonical/") if k.endswith(".parquet")]
+    assert len(parts) == 1  # part 누적 없이 되쓰기
+
+
+def test_same_article_latest_fetched_at_wins(tmp_path):
+    # WHY: 같은 article_id 를 재적재(정정)하면 최신 수집분이 canonical 을 대표해야 한다 —
+    #      오래된 스냅샷이 최신 정정을 덮지 않게(교차 런 병합 경로).
+    storage = LocalStorage(tmp_path / "lake")
+    old = _fmp_row(article_id="a", title="옛 제목", fetched_at="2026-07-01T00:00:00+00:00")
+    new = _fmp_row(article_id="a", title="새 제목", fetched_at="2026-07-02T00:00:00+00:00")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [old])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [new])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01", "fmp")
+    assert len(rows) == 1 and rows[0]["title"] == "새 제목"  # 최신 fetched_at 승리
+
+
+def test_failed_rows_excluded_from_canonical(tmp_path):
+    # WHY: 게이트 탈락 행(제목 결측)은 canonical 에 들어가면 안 된다 — 분석 불가 뉴스 차단이
+    #      이 정제의 핵심. 통과 행만 적재되고 탈락 행은 quality_log 에만 남는다(격리≠은폐).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"),
+               [_fmp_row(article_id="ok"), _fmp_row(article_id="bad", title="  ")])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01", "fmp")
+    assert [r["article_id"] for r in rows] == ["ok"]
+
+
+def test_duplicate_title_signal_logged_but_not_merged(tmp_path):
+    # WHY: 다른 article_id·같은 정규화 제목(다른 URL)은 근접중복이다 — exact 병합하면 별개
+    #      기사가 유실되므로 둘 다 보존하고 신호만 로깅한다(fuzzy 클러스터는 다운스트림 소관).
+    storage = LocalStorage(tmp_path / "lake")
+    a = _fmp_row(article_id="a", title="동일 헤드라인", url="https://e.com/a")
+    b = _fmp_row(article_id="b", title="동일 헤드라인", url="https://e.com/b")
+    _write_raw(storage, _raw_key("fmp", "US"), [a, b])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01", "fmp")
+    assert sorted(r["article_id"] for r in rows) == ["a", "b"]  # 별개 기사 둘 다 보존
+    sigs = _quality_log(storage)["duplicate_signals"]
+    assert any(s["basis"] == "normalized_title" and set(s["article_ids"]) == {"a", "b"} for s in sigs)
+
+
+def test_scoped_run_does_not_write_canonical(tmp_path):
+    # WHY: 스코프(--input-run-id) 실행은 재검증(quality_log)만 하고 canonical 은 안 쓴다 —
+    #      canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative(부분 파티션 덮어쓰기 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row()])
+
+    assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
+    log = _quality_log(storage)
+    assert log["canonical_written"] is False and log["canonical_rows_written"] == 0
+    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+
+
+def test_mentions_preserved_fmp_merged_and_bigkinds_synthesized(tmp_path):
+    # WHY: mentions[] 는 다운스트림 엔티티 링크 씨앗 — FMP 는 ingest 가 병합한 목록을,
+    #      BigKinds 는 단일 our_ticker 를 합성해 보존해야 종목↔기사 연결이 유지된다.
+    storage = LocalStorage(tmp_path / "lake")
+    fmp = _fmp_row(article_id="f",
+                   mentions=[{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}])
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row(article_id="b")])
+
+    assert normalize_news.run(storage, "N1") == 0
+    f = _canonical_rows(storage, "2026-07-01", "fmp")[0]
+    b = _canonical_rows(storage, "2026-07-01", "bigkinds")[0]
+    assert json.loads(f["mentions"]) == [{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}]
+    assert json.loads(b["mentions"]) == [{"market": "KR", "ticker": "000660"}]  # our_ticker 합성
