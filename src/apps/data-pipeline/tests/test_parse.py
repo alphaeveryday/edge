@@ -1,6 +1,13 @@
 """parse 테스트 — article_id 규약(SSOT)이 흔들리면 중복 제거·canonical 병합이 깨진다."""
 
-from data_pipeline.parse import make_article_id, normalize_url, parse_datetime, url_hash
+from data_pipeline.parse import (
+    bigkinds_date,
+    make_article_id,
+    news_article_id,
+    normalize_url,
+    parse_datetime,
+    url_hash,
+)
 
 
 def test_normalize_url_collapses_tracking_variants():
@@ -81,3 +88,37 @@ def test_parse_datetime_invalid_returns_none():
     #      돌려주고 호출부(파티션 폴백/Step2 품질 게이트)가 처리한다.
     assert parse_datetime("발행일 미상") is None
     assert parse_datetime(None) is None
+
+
+def test_bigkinds_date_prefers_date_then_falls_back_to_news_id():
+    # WHY: BigKinds 발행일 파생은 ingest(파티션)와 normalize(published_at)가 공유하는 SSOT다 —
+    #      DATE 우선, 없으면 NEWS_ID 임베드 타임스탬프. 두 소비자가 같은 규약을 써야 발행일이
+    #      드리프트하지 않는다.
+    assert bigkinds_date({"DATE": "20260701"}) == "2026-07-01"
+    assert bigkinds_date({"NEWS_ID": "01100101.20260701153000000"}) == "2026-07-01"  # DATE 없음
+    assert bigkinds_date({"DATE": "2026-07-01 15:30"}) == "2026-07-01"  # 비숫자 섞여도 슬라이스
+
+
+def test_bigkinds_date_non_string_and_missing_return_none_not_crash():
+    # WHY: 비문자열 DATE/NEWS_ID(list·dict·int)나 결측이 str() 강제 없이 크래시하면 한 이상치
+    #      행이 검증 배치를 무너뜨린다 — falsy 는 None, int 는 자릿수로 취급(달력 검증은 parse_datetime).
+    assert bigkinds_date({"DATE": [], "NEWS_ID": {}}) is None
+    assert bigkinds_date({}) is None
+    assert bigkinds_date({"DATE": 20260701}) == "2026-07-01"  # int → str 강제
+
+
+def test_news_article_id_prefers_news_id_for_bigkinds():
+    # WHY: BigKinds 는 같은 제목·날짜의 별개 기사가 있다 — NEWS_ID 를 무시하고 TITLE|DATE 로만
+    #      해시하면 Step2 canonical merge 가 별개 기사를 하나로 합친다. ingest·normalize 가 이
+    #      SSOT 를 공유해 두 단계의 article_id 가 일치한다(정체성 드리프트 없음).
+    base = {"TITLE": "같은 제목", "DATE": "20260702"}
+    a = news_article_id({**base, "NEWS_ID": "01100101.20260702100000000"})
+    b = news_article_id({**base, "NEWS_ID": "01100101.20260702100100000"})
+    assert a != b and len(a) == len(b) == 64  # 별개 NEWS_ID → 별개 id
+
+
+def test_news_article_id_falls_back_to_url_then_title_when_no_news_id():
+    # WHY: NEWS_ID 없는 벤더(FMP 등)는 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백 —
+    #      URL 만 다른 같은 기사는 안 갈리고, URL 없는 기사도 안정 id 를 얻는다.
+    with_url = news_article_id({"title": "제목", "url": "https://e.com/a", "publishedDate": "2026-07-02"})
+    assert with_url == make_article_id("https://e.com/a", "제목", "2026-07-02")

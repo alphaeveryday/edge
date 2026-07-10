@@ -8,6 +8,7 @@ title|published_at 폴백으로라도 안정적인 id 를 만든다(항상 non-e
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -94,3 +95,38 @@ def parse_datetime(text: str | None) -> str | None:
         except ValueError:
             continue
     return None
+
+
+_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
+
+
+def bigkinds_date(record: dict) -> str | None:
+    """BigKinds row 의 발행일(YYYY-MM-DD) 파생 — DATE 우선, 없으면 NEWS_ID 임베드 타임스탬프.
+
+    BigKinds 벤더 date 파싱의 SSOT다. ingest(raw 파티션 published_date)와 normalize(canonical
+    published_at)가 같은 규약을 쓰도록 여기 한 곳에 둔다 — 스텝별로 재구현하면 두 단계의 발행일이
+    드리프트한다. `str()` 강제로 비문자열 DATE/NEWS_ID 에도 크래시하지 않는다(달력 유효성 검증은
+    이 값을 받는 parse_datetime 이 한다 — 여기선 자릿수만 슬라이싱)."""
+    date_digits = re.sub(r"\D", "", str(record.get("DATE") or ""))
+    if len(date_digits) >= 8:
+        return f"{date_digits[:4]}-{date_digits[4:6]}-{date_digits[6:8]}"
+    match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
+    if match:
+        day = match.group(1)
+        return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+    return None
+
+
+def news_article_id(record: dict) -> str:
+    """raw 뉴스 레코드(벤더 무관) → 안정 article_id. 벤더별 정체성 규약의 SSOT.
+
+    **BigKinds 는 NEWS_ID 를 우선**한다 — 국내 뉴스는 제목·발행일이 같아도 별개 기사가 있어
+    (제목|날짜 폴백으로 묶으면 별개 기사가 같은 id 로 붕괴한다), NEWS_ID 라는 벤더 고유 식별자를
+    쓴다. NEWS_ID 가 없으면(FMP 등) 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백.
+    ingest(raw 적재)와 normalize(정제 재계산)가 이 한 함수를 공유해 정체성이 드리프트하지 않는다."""
+    news_id = str(record.get("NEWS_ID") or "").strip()
+    if news_id:
+        return make_article_id(None, news_id, None)
+    title = record.get("title") or record.get("TITLE") or ""
+    published = record.get("publishedDate") or record.get("DATE") or bigkinds_date(record)
+    return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)
