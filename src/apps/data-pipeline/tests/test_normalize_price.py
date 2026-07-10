@@ -155,6 +155,22 @@ def test_nonfinite_or_bool_adjclose_nulled_but_row_valid():
     assert ok["adj_close"] == 12.5
 
 
+def test_fractional_volume_rejected_not_truncated():
+    # WHY: int() 는 -0.5 를 0 으로 잘라 음수 거래량을 게이트(volume<0) 앞에서 숨긴다 —
+    #      소수 거래량은 정수 카운트가 아니므로(드리프트) non_numeric 으로 걸러야 물리적으로
+    #      불가능한 거래량이 records_passed 로 새지 않는다(Codex P2 회귀 방지).
+    for bad in (-0.5, 0.5, 100.5):
+        _, reasons = normalize_price._normalize("fmp", _fmp_row(volume=bad))
+        assert "non_numeric" in reasons, f"{bad!r} 는 non_numeric 이어야"
+    _, kis_reasons = normalize_price._normalize("kis", _kis_row(acml_vol="-0.5"))
+    assert "non_numeric" in kis_reasons
+    # 정수값(100.0)은 통과하고, whole 음수(-3)는 게이트가 negative_volume 으로 잡는다.
+    ok, ok_reasons = normalize_price._normalize("fmp", _fmp_row(volume=100.0))
+    assert ok_reasons == [] and ok["volume"] == 100
+    neg, neg_reasons = normalize_price._normalize("fmp", _fmp_row(volume=-3))
+    assert neg_reasons == [] and neg["volume"] == -3  # 게이트 이전엔 통과, 게이트에서 탈락
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")

@@ -70,6 +70,12 @@ def _to_number(raw: dict, key: str, reasons: list[str], *, as_int: bool = False)
         # 막지 않으면 이 스토리가 막으려는 바로 그 오염이 canonical 로 흘러간다(Rule 12).
         reasons.append("non_numeric")
         return None
+    if as_int and not num.is_integer():
+        # 거래량은 정수 카운트다 — '-0.5'/'100.5' 같은 소수 거래량은 드리프트다. 특히
+        # int() 는 -0.5 를 0 으로 잘라 음수 거래량을 게이트(volume<0) 앞에서 숨긴다
+        # (0 은 정상 통과). 소수 거래량은 비수치로 드러낸다(Rule 12).
+        reasons.append("non_numeric")
+        return None
     return int(num) if as_int else num
 
 
