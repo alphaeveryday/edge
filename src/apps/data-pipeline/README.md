@@ -8,7 +8,9 @@
 > OpenDART 국내 재무까지다.
 > **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
-> ALPHA-133). 뉴스 정규화는 후속이다.
+> ALPHA-133). **뉴스 정제(Step2)** 는 정규화(FMP·BigKinds 이형 → 표준 메타행) + 필수필드·발행일
+> 게이트 + quality_log 까지 완료했다(`normalize-news`, ALPHA-131). 게이트 통과 행의 canonical
+> `news_articles` 멱등 병합 적재는 후속이다(ALPHA-132).
 
 ## 실행
 
@@ -67,6 +69,14 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # 교차 충돌을 감지 못 하므로, canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative 하게 쓴다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-price
 #   특정 런만: ... run normalize-price --input-run-id 20260701T000000Z
+
+# 뉴스 정제(Step2) — raw stock_news(FMP·BigKinds) → 표준 메타행 정규화 + 필수필드·발행일 게이트.
+# 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). blocking 사유(제목 결측·발행시각 파싱
+# 불가/범위 밖)는 canonical 제외 대상이고, url·publisher 결측은 non-blocking 경고로 data_quality_logs
+# 에 남긴다 — BigKinds 는 URL 없이 NEWS_ID 로 식별하므로 가변 필드로 벤더를 대량 탈락시키지 않는다.
+# --input-run-id 로 특정 수집 런만 재검증(미지정=raw news 전체, 멱등). canonical 적재는 후속(ALPHA-132).
+uv run --package data-pipeline python -m data_pipeline.run normalize-news
+#   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -167,15 +177,18 @@ settings.targets.keywords            # ["금리", ...]
   market 별 태깅만 하고 FX 환산하지 않는다.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
-  비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). canonical 은 멱등이라
-  run_id 가 없지만, '이 검증 실행이 무엇을 걸렀나'는 실행 단위 감사라 run_id 로 가른다(수집 로그와 분리).
+  비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
+  news_articles`)도 같은 규약으로 남기되 blocking 탈락 사유(제목 결측·발행시각 파싱 불가/범위 밖)와
+  non-blocking 경고(url·publisher 결측)를 구분해 기록한다. canonical 은 멱등이라 run_id 가 없지만,
+  '이 검증 실행이 무엇을 걸렀나'는 실행 단위 감사라 run_id 로 가른다(수집 로그와 분리).
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 
-- 정규화·품질검증(뉴스 Step2) — raw → canonical 병합
-- 런 간(run 간) 중복 제거 — Step2 의 canonical article_id 멱등 병합이 흡수
+- 뉴스 canonical 적재(Step2 후반) — 게이트 통과 행의 `canonical/news/news_articles` article_id
+  멱등 병합·정규화 제목/URL 충돌 로깅은 후속(ALPHA-132). 필수필드·발행일 검증·quality_log 는 완료.
+- 런 간(run 간) 중복 제거 — Step2(ALPHA-132) 의 canonical article_id 멱등 병합이 흡수
 - 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
   섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation
