@@ -368,3 +368,24 @@ def test_full_run_merges_with_existing_partition_preserving_aged_out_raw(tmp_pat
 
     ids = sorted(r["article_id"] for r in _canonical_rows(storage, "2026-07-01", "fmp"))
     assert ids == ["A", "B"]  # 기존 A(raw 만료) 보존 + 신규 B 추가
+
+
+def test_bigkinds_same_article_unions_mentions_across_tickers(tmp_path):
+    # WHY: BigKinds 는 종목별 질의(preserve_all_rows)라 같은 기사(NEWS_ID)가 여러 추적 종목 질의에
+    #      걸려 각기 단일 mention 으로 온다(ingest 가 mention 병합 안 함) — 병합이 최신 행으로 통째
+    #      교체하면 한 종목의 mention 이 유실돼 종목↔기사 링크가 끊긴다. mentions 는 union 해야
+    #      한다(Codex P2 회귀 방지). 멱등 재실행에도 union 이 안정적이어야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    a = _bk_row(article_id="X", our_ticker="373220")
+    b = _bk_row(article_id="X", our_ticker="005380")  # 같은 기사, 다른 종목 질의
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [a, b])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01", "bigkinds")
+    assert len(rows) == 1  # 같은 article_id → 한 행
+    assert sorted(m["ticker"] for m in json.loads(rows[0]["mentions"])) == ["005380", "373220"]
+
+    # 멱등: 재실행해도 union 결과가 동일(중복 누적·순서 흔들림 없음).
+    assert normalize_news.run(storage, "N2") == 0
+    rows2 = _canonical_rows(storage, "2026-07-01", "bigkinds")
+    assert rows == rows2

@@ -139,6 +139,28 @@ def _canonical_row(row: dict) -> dict:
     return out
 
 
+def _union_mentions(*mentions_values: object) -> str:
+    """여러 행의 mentions(JSON 문자열 또는 list)를 (market,ticker) 기준 union → **결정적** JSON
+    문자열(정렬). BigKinds 는 종목별 질의라 같은 기사(NEWS_ID)가 여러 추적 종목에 걸려 각기 단일
+    mention 으로 온다(ingest 가 mention 병합 안 함) — 병합이 통째 교체하면 종목↔기사 링크가
+    유실되므로 union 한다. 정렬로 멱등 재실행이 같은 바이트를 낸다."""
+    by_key: dict[tuple, dict] = {}
+    for value in mentions_values:
+        if isinstance(value, str):
+            try:
+                items = json.loads(value)
+            except ValueError:
+                items = []
+        else:
+            items = value or []
+        if not isinstance(items, list):
+            continue
+        for mention in items:
+            if isinstance(mention, dict):
+                by_key[(str(mention.get("market")), str(mention.get("ticker")))] = mention
+    return json.dumps([by_key[k] for k in sorted(by_key)], ensure_ascii=False)
+
+
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -180,8 +202,16 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     for row in [*existing, *new_rows]:
         article_id = row["article_id"]
         prev = acc.get(article_id)
-        if prev is None or _fetched_at(row) >= _fetched_at(prev):
+        if prev is None:
             acc[article_id] = row
+            continue
+        # 최신 fetched_at 이 메타데이터 대표를 이기되, **mentions 는 양쪽 union** 한다 — BigKinds 는
+        # 같은 기사가 여러 종목 질의에 걸려 각기 다른 단일 mention 으로 오므로(ingest 가 병합 안 함),
+        # 통째 교체하면 종목↔기사 링크가 유실된다. fetched_at 동률이면 신규(멱등).
+        winner = row if _fetched_at(row) >= _fetched_at(prev) else prev
+        merged = dict(winner)
+        merged["mentions"] = _union_mentions(prev.get("mentions"), row.get("mentions"))
+        acc[article_id] = merged
     return [acc[a] for a in sorted(acc)]
 
 
