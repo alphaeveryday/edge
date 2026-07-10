@@ -94,6 +94,16 @@ def parse_raw_price_key(key: str) -> dict[str, str]:
     }
 
 
+def canonical_price_daily_partition(market: str, trade_date: str) -> str:
+    """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
+
+    raw 와 달리 run_id·source_vendor 파티션이 없다 — canonical 은 멱등이라 같은 raw 를
+    몇 번 정제해도 결과가 같아야 하고, 벤더는 시장이 가른다(US=fmp, KR=kis). 정체성 키
+    (market,ticker,trade_date) 중 market·trade_date 가 파티션, ticker 는 파티션 내 행 키다.
+    """
+    return f"canonical/market_data/price_daily/market={market}/trade_date={trade_date}"
+
+
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     """정제 품질 로그(검증 실행당 1건) 키.
 

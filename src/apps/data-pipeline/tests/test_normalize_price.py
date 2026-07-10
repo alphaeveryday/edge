@@ -42,6 +42,17 @@ def _quality_log(storage) -> dict:
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
+def _canonical_rows(storage, market: str, trade_date: str) -> list[dict]:
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    prefix = canonical_price_daily_partition(market, trade_date)
+    rows: list[dict] = []
+    for key in storage.list_keys(prefix + "/"):
+        if key.endswith(".parquet"):
+            rows.extend(normalize_price._read_parquet_rows(storage.get_bytes(key)))
+    return rows
+
+
 def test_both_vendors_normalize_and_pass(tmp_path):
     # WHY: 정제의 존재 이유는 FMP(숫자)·KIS(문자열·YYYYMMDD) 이형을 하나의 표준 봉으로
     #      수렴시키는 것 — 둘 다 정상 봉이면 통과로 집계돼야 다운스트림이 동형으로 읽는다.
@@ -52,6 +63,98 @@ def test_both_vendors_normalize_and_pass(tmp_path):
     assert normalize_price.run(storage, "N1") == 0
     log = _quality_log(storage)
     assert (log["records_read"], log["records_passed"], log["records_failed"]) == (2, 2, 0)
+
+
+def test_passing_rows_written_to_canonical(tmp_path):
+    # WHY: 정제의 목적은 검증된 표준 봉을 canonical 로 넘기는 것 — 통과 행이 표준 스키마
+    #      (market,ticker,trade_date,OHLCV,currency)로 canonical 에 적재돼야 다운스트림이 읽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row()])
+
+    assert normalize_price.run(storage, "N1") == 0
+    us = _canonical_rows(storage, "US", "2026-07-01")
+    kr = _canonical_rows(storage, "KR", "2026-07-01")
+    assert len(us) == 1 and us[0]["ticker"] == "AAPL" and us[0]["currency"] == "USD"
+    assert len(kr) == 1 and kr[0]["ticker"] == "005930" and kr[0]["currency"] == "KRW"
+    log = _quality_log(storage)
+    assert log["canonical_rows_written"] == 2 and log["canonical_partitions_written"] == 2
+
+
+def test_canonical_idempotent_across_runs(tmp_path):
+    # WHY: canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같아야 한다 —
+    #      두 번 돌려도 파티션은 part-00000 하나, 내용 동일(멱등 재실행이 데이터를 늘리지 않게).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+
+    assert normalize_price.run(storage, "N1") == 0
+    first = _canonical_rows(storage, "US", "2026-07-01")
+    assert normalize_price.run(storage, "N2") == 0
+    second = _canonical_rows(storage, "US", "2026-07-01")
+    assert first == second
+    parts = [k for k in storage.list_keys("canonical/") if k.endswith(".parquet")]
+    assert len(parts) == 1  # part 누적 없이 되쓰기
+
+
+def test_same_vendor_latest_fetched_at_wins(tmp_path):
+    # WHY: 같은 (market,ticker,trade_date) 를 같은 벤더가 재적재(정정)하면 최신 수집분이
+    #      canonical 을 대표해야 한다 — 오래된 스냅샷이 최신 정정을 덮지 않게.
+    storage = LocalStorage(tmp_path / "lake")
+    # 두 봉 다 물리적으로 유효(close 가 high=11·low=8.5 안)해야 게이트를 통과 — 정정만 차이.
+    old = _fmp_row(close=10.0, fetched_at="2026-07-01T00:00:00+00:00")
+    new = _fmp_row(close=10.5, fetched_at="2026-07-02T00:00:00+00:00")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [old])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [new])
+
+    assert normalize_price.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "US", "2026-07-01")
+    assert len(rows) == 1 and rows[0]["close"] == 10.5  # 최신 fetched_at 승리
+
+
+def test_cross_run_correction_updates_canonical(tmp_path):
+    # WHY: 뒤 실행이 canonical 로 읽은 기존 행 vs 새 raw 를 병합하는 경로(멱등의 핵심) —
+    #      같은 벤더의 정정 raw 가 더 최신 fetched_at 이면, 앞 실행이 이미 적재한 canonical
+    #      행을 갱신해야 한다(오래된 값이 남지 않게). 이 경로는 단일 실행 테스트로는 안 탄다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"),
+               [_fmp_row(close=10.0, fetched_at="2026-07-01T00:00:00+00:00")])
+    assert normalize_price.run(storage, "N1") == 0
+    assert _canonical_rows(storage, "US", "2026-07-01")[0]["close"] == 10.0
+
+    # 정정 raw 를 새 수집 런으로 추가하고 다시 정제 — canonical 이 최신으로 갱신돼야.
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"),
+               [_fmp_row(close=10.5, fetched_at="2026-07-02T00:00:00+00:00")])
+    assert normalize_price.run(storage, "N2") == 0
+    rows = _canonical_rows(storage, "US", "2026-07-01")
+    assert len(rows) == 1 and rows[0]["close"] == 10.5  # 기존 canonical 위에 정정 반영
+
+
+def test_cross_vendor_collision_fail_loud(tmp_path):
+    # WHY: 같은 정체성 키가 서로 다른 벤더에서 오면 조용히 하나 고르는 건 USD 를 KRW 로
+    #      태깅하는 통화 오염이다 — 둘 다 canonical 에서 빼고 fail-loud(비0 종료 + quality_log
+    #      의 vendor_collisions)로 드러내야 한다(§6b, Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    # 같은 market=KR·ticker·trade_date 를 fmp·kis 두 벤더가 낸 상황을 강제.
+    _write_raw(storage, _raw_key("fmp", "KR"), [_fmp_row(our_ticker="005930", market="KR")])
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(our_ticker="005930")])
+
+    assert normalize_price.run(storage, "N1") == 1  # fail-loud
+    assert _canonical_rows(storage, "KR", "2026-07-01") == []  # 충돌 키 제외
+    log = _quality_log(storage)
+    assert len(log["vendor_collisions"]) == 1
+    assert log["vendor_collisions"][0]["vendors"] == ["fmp", "kis"]
+
+
+def test_failed_rows_excluded_from_canonical(tmp_path):
+    # WHY: 게이트 탈락 행(high<low)은 canonical 에 들어가면 안 된다 — 잘못된 가격 차단이
+    #      이 스토리의 핵심. 통과 행만 적재되고 탈락 행은 quality_log 에만 남는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"),
+               [_fmp_row(our_ticker="OK"), _fmp_row(our_ticker="BAD", high=7.0, low=9.0)])
+
+    assert normalize_price.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "US", "2026-07-01")
+    assert [r["ticker"] for r in rows] == ["OK"]
 
 
 def test_ohlcv_violation_isolated_and_logged(tmp_path):

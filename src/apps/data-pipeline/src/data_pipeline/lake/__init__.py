@@ -4,6 +4,7 @@ from .storage import (
     LocalStorage,
     S3Storage,
     Storage,
+    canonical_price_daily_partition,
     collection_log_key,
     is_raw_price_key,
     make_storage,
@@ -24,6 +25,7 @@ __all__ = [
     "raw_financial_partition",
     "collection_log_key",
     "quality_log_key",
+    "canonical_price_daily_partition",
     "is_raw_price_key",
     "parse_raw_price_key",
 ]
