@@ -29,8 +29,9 @@ def _fmp_row(**over) -> dict:
 
 
 def _bk_row(**over) -> dict:
-    # BigKinds resultList 원본 + provenance. URL(PROVIDER_LINK_PAGE)은 일부러 뺀다 —
-    # BigKinds 는 NEWS_ID 로 식별하고 URL 이 없을 수 있다(경고 대상, 탈락 아님).
+    # BigKinds resultList 원본 + provenance. 실제 BigKinds 는 PROVIDER_LINK_PAGE(원문 URL)를
+    # 주지만(실측 확인), 이 픽스처는 URL 없는 폴백 경로(정체성=NEWS_ID, missing_url 경고)를
+    # 테스트하려 일부러 뺀다 — URL 정체성 테스트는 test_same_original_url… 이 따로 커버.
     row = {"NEWS_ID": "01100101.20260701153000000", "TITLE": "SK하이닉스 신규 계약",
            "CONTENT": "BigKinds 원문", "PROVIDER": "테스트신문",
            "our_ticker": "000660", "market": "KR", "article_id": "bk-a",
@@ -43,6 +44,25 @@ def _quality_log(storage) -> dict:
     keys = storage.list_keys("operations_archive/data_quality_logs/")
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _canonical_rows(storage, published_date: str) -> list[dict]:
+    from data_pipeline.lake import canonical_news_articles_partition
+
+    prefix = canonical_news_articles_partition(published_date)
+    rows: list[dict] = []
+    for key in storage.list_keys(prefix + "/"):
+        if key.endswith(".parquet"):
+            rows.extend(normalize_news._read_parquet_rows(storage.get_bytes(key)))
+    return rows
+
+
+def _aid(record: dict) -> str:
+    # normalize 는 raw stamp 를 신뢰하지 않고 정체성을 재계산하므로(Codex P2), 테스트도 기대 id 를
+    # 같은 SSOT 로 파생한다 — 원문 URL 해시 / (URL 없으면) NEWS_ID.
+    from data_pipeline.parse import news_article_id
+
+    return news_article_id(record)
 
 
 def test_both_vendors_normalize_and_pass(tmp_path):
@@ -152,10 +172,10 @@ def test_unsupported_vendor_reported_not_silently_passed(tmp_path):
     assert "unsupported_vendor" in log["failures"][0]["reasons"]
 
 
-def test_bigkinds_fallback_article_id_prefers_news_id():
-    # WHY: raw 에 article_id 가 없을 때(구 raw) normalize 가 제목|날짜로 재계산하면 제목·발행일이
-    #      같은 별개 BigKinds 기사가 같은 id 로 붕괴해 canonical 병합(ALPHA-132)에서 유실된다 —
-    #      ingest 와 같은 SSOT(NEWS_ID 우선)를 써 별개 기사가 별개 id 를 갖게 한다(Codex P2 회귀 방지).
+def test_bigkinds_url_absent_falls_back_to_news_id_not_title():
+    # WHY: URL(PROVIDER_LINK_PAGE) 없는 BigKinds 행은 정체성이 NEWS_ID 폴백이어야 한다 — 제목|날짜로
+    #      가면 제목·발행일 같은 별개 기사가 같은 id 로 붕괴해 canonical 병합에서 유실된다. URL 이
+    #      있으면 url_hash 가 1순위지만(test_same_original_url…), 없을 땐 NEWS_ID 가 붕괴를 막는다.
     from data_pipeline.parse import news_article_id
 
     base = _bk_row(TITLE="같은 제목", NEWS_ID="01100101.20260701153000001")
@@ -164,7 +184,7 @@ def test_bigkinds_fallback_article_id_prefers_news_id():
     del other["article_id"]
     id1 = normalize_news._normalize("bigkinds", base)["article_id"]
     id2 = normalize_news._normalize("bigkinds", other)["article_id"]
-    assert id1 and id2 and id1 != id2  # 제목·날짜 같아도 별개 기사 → 별개 id
+    assert id1 and id2 and id1 != id2  # URL 없어도 NEWS_ID 로 별개 기사 → 별개 id
     assert id1 == news_article_id(base)  # ingest 와 동일 SSOT 사용(드리프트 없음)
 
 
@@ -234,3 +254,219 @@ def test_input_run_id_scopes_validation(tmp_path):
     assert normalize_news.run(storage, "N1", input_run_id="R2") == 0
     log = _quality_log(storage)
     assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
+
+
+# ── canonical 멱등 병합 + 중복 신호 (ALPHA-132) ──────────
+def test_passing_rows_written_to_unified_date_partition(tmp_path):
+    # WHY: canonical 은 소스를 흡수한 통합 구조다 — FMP·BigKinds 가 **한 published_date 파티션**에
+    #      섞여 article_id 키로 적재되고 source_vendor 는 컬럼(provenance)이어야 한다(벤더 사일로 아님).
+    storage = LocalStorage(tmp_path / "lake")
+    fmp, bk = _fmp_row(), _bk_row()
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
+
+    assert normalize_news.run(storage, "N1") == 0
+    by_id = {r["article_id"]: r for r in _canonical_rows(storage, "2026-07-01")}  # 통합 파티션 하나
+    assert set(by_id) == {_aid(fmp), _aid(bk)}  # 두 벤더가 한 파티션에(원문 URL 해시 / NEWS_ID)
+    assert by_id[_aid(fmp)]["source_vendor"] == "fmp"  # 벤더는 컬럼
+    assert by_id[_aid(bk)]["source_vendor"] == "bigkinds"
+    log = _quality_log(storage)
+    assert log["canonical_written"] is True
+    assert log["canonical_rows_written"] == 2 and log["canonical_partitions_written"] == 1
+
+
+def test_same_original_url_unifies_identity_across_vendors(tmp_path):
+    # WHY: canonical 통합의 핵심 — 정체성이 원문 URL 해시라 같은 원문 URL 이면 FMP(url)든
+    #      BigKinds(PROVIDER_LINK_PAGE)든 **같은 article_id → 한 행으로 병합**(소스 무관 dedup).
+    #      승자(최신 fetched_at)의 스칼라 메타가 대표가 되고 패자 스칼라는 버려지되, mentions 는
+    #      양쪽 union — 종목별 권위 market 은 행 market 이 아니라 self-describing 한 mention 에 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    fmp = _fmp_row(url="https://press.com/a", publishedDate="2026-07-01 09:00:00",
+                   our_ticker="AAPL", fetched_at="2026-07-02T00:00:00+00:00")  # 최신 → 승자
+    del fmp["article_id"]  # url 에서 파생되게
+    bk = _bk_row(PROVIDER_LINK_PAGE="https://press.com/a", our_ticker="000660",
+                 fetched_at="2026-07-01T00:00:00+00:00")  # 같은 원문 URL, 옛 수집
+    del bk["article_id"]
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert len(rows) == 1  # 같은 원문 URL → 같은 정체성 → 통합 병합
+    row = rows[0]
+    assert row["source_vendor"] == "fmp"  # 승자(최신) 프로비넌스가 행 대표
+    assert sorted((m["market"], m["ticker"]) for m in json.loads(row["mentions"])) == \
+        [("KR", "000660"), ("US", "AAPL")]  # 양쪽 종목 mention 보존(교차벤더 union)
+
+
+def test_multi_mention_single_write_is_sorted_and_idempotent(tmp_path):
+    # WHY: 단일 적재 경로도 병합 경로와 **같은 정렬 표현**을 써야 멱등 — mentions 를 raw(질의) 순서로
+    #      쓰면 첫 런(단일 적재)과 재런(기존+신규 병합)의 바이트가 어긋난다(canonical 은 run_id
+    #      없는 멱등 계약). 단일 적재도 dedup+정렬로 고정한다.
+    storage = LocalStorage(tmp_path / "lake")
+    fmp = _fmp_row(article_id="m",
+                   mentions=[{"market": "US", "ticker": "MSFT"}, {"market": "US", "ticker": "AAPL"}])  # 역순
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+
+    assert normalize_news.run(storage, "N1") == 0
+    first = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(first[0]["mentions"]) == \
+        [{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}]  # 단일 적재도 정렬됨
+    assert normalize_news.run(storage, "N2") == 0
+    assert _canonical_rows(storage, "2026-07-01") == first  # 단일→병합 재런 바이트 동일
+
+
+def test_canonical_idempotent_across_runs(tmp_path):
+    # WHY: canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같아야 한다 —
+    #      두 번 돌려도 part-00000 하나, 내용 동일(멱등 재실행이 데이터를 늘리지 않게).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+
+    assert normalize_news.run(storage, "N1") == 0
+    first = _canonical_rows(storage, "2026-07-01")
+    assert normalize_news.run(storage, "N2") == 0
+    second = _canonical_rows(storage, "2026-07-01")
+    assert first == second
+    parts = [k for k in storage.list_keys("canonical/") if k.endswith(".parquet")]
+    assert len(parts) == 1  # part 누적 없이 되쓰기
+
+
+def test_same_article_latest_fetched_at_wins(tmp_path):
+    # WHY: 같은 article_id 를 재적재(정정)하면 최신 수집분이 canonical 을 대표해야 한다 —
+    #      오래된 스냅샷이 최신 정정을 덮지 않게(교차 런 병합 경로).
+    storage = LocalStorage(tmp_path / "lake")
+    old = _fmp_row(article_id="a", title="옛 제목", fetched_at="2026-07-01T00:00:00+00:00")
+    new = _fmp_row(article_id="a", title="새 제목", fetched_at="2026-07-02T00:00:00+00:00")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [old])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [new])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert len(rows) == 1 and rows[0]["title"] == "새 제목"  # 최신 fetched_at 승리
+
+
+def test_failed_rows_excluded_from_canonical(tmp_path):
+    # WHY: 게이트 탈락 행(제목 결측)은 canonical 에 들어가면 안 된다 — 분석 불가 뉴스 차단이
+    #      이 정제의 핵심. 통과 행만 적재되고 탈락 행은 quality_log 에만 남는다(격리≠은폐).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"),
+               [_fmp_row(title="살아남는 기사"), _fmp_row(title="  ")])  # 두 번째=제목 결측 → 탈락
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert [r["title"] for r in rows] == ["살아남는 기사"]  # 통과 행만, 탈락 행 제외
+
+
+def test_duplicate_title_signal_logged_but_not_merged(tmp_path):
+    # WHY: 다른 article_id·같은 정규화 제목(다른 URL)은 근접중복이다 — exact 병합하면 별개
+    #      기사가 유실되므로 둘 다 보존하고 신호만 로깅한다(fuzzy 클러스터는 다운스트림 소관).
+    storage = LocalStorage(tmp_path / "lake")
+    a = _fmp_row(title="동일 헤드라인", url="https://e.com/a")
+    b = _fmp_row(title="동일 헤드라인", url="https://e.com/b")  # 다른 원문 URL → 다른 id
+    ida, idb = _aid(a), _aid(b)
+    _write_raw(storage, _raw_key("fmp", "US"), [a, b])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert sorted(r["article_id"] for r in rows) == sorted([ida, idb])  # 별개 기사 둘 다 보존
+    sigs = _quality_log(storage)["duplicate_signals"]
+    assert any(s["basis"] == "normalized_title" and set(s["article_ids"]) == {ida, idb} for s in sigs)
+
+
+def test_scoped_run_does_not_write_canonical(tmp_path):
+    # WHY: 스코프(--input-run-id) 실행은 재검증(quality_log)만 하고 canonical 은 안 쓴다 —
+    #      canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative(부분 파티션 덮어쓰기 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row()])
+
+    assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
+    log = _quality_log(storage)
+    assert log["canonical_written"] is False and log["canonical_rows_written"] == 0
+    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+
+
+def test_mentions_preserved_fmp_merged_and_bigkinds_synthesized(tmp_path):
+    # WHY: mentions[] 는 다운스트림 엔티티 링크 씨앗 — FMP 는 ingest 가 병합한 목록을,
+    #      BigKinds 는 단일 our_ticker 를 합성해 보존해야 종목↔기사 연결이 유지된다.
+    storage = LocalStorage(tmp_path / "lake")
+    fmp = _fmp_row(mentions=[{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}])
+    bk = _bk_row()
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
+
+    assert normalize_news.run(storage, "N1") == 0
+    by_id = {r["article_id"]: r for r in _canonical_rows(storage, "2026-07-01")}
+    assert json.loads(by_id[_aid(fmp)]["mentions"]) == [{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}]
+    assert json.loads(by_id[_aid(bk)]["mentions"]) == [{"market": "KR", "ticker": "000660"}]  # our_ticker 합성
+
+
+def test_full_run_merges_with_existing_partition_preserving_aged_out_raw(tmp_path):
+    # WHY: canonical 은 raw 가 라이프사이클로 만료(Glacier/삭제)돼도 이전 적재분을 보존해야 한다 —
+    #      전체 런이 기존 파티션을 읽어 새 article_id 를 '추가'(덮어쓰기 아님)해야 raw 가 사라진 옛
+    #      기사가 유실되지 않는다. (_merge_partition 이 existing 을 떨어뜨리는 회귀를 격리해 잡는다 —
+    #      전량 재스캔 테스트로는 new_rows 가 옛 기사도 재구성해 이 경로가 안 탄다.)
+    import os
+
+    storage = LocalStorage(tmp_path / "lake")
+    a = _fmp_row(url="https://e.com/A")  # 원문 URL 로 정체성 파생(별개 기사)
+    b = _fmp_row(url="https://e.com/B")
+    ida, idb = _aid(a), _aid(b)
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [a])
+    assert normalize_news.run(storage, "N1") == 0
+    assert [r["article_id"] for r in _canonical_rows(storage, "2026-07-01")] == [ida]
+
+    # R1 raw 를 만료(삭제) — LocalStorage 에 delete 가 없어 파일을 직접 제거해 시뮬레이션.
+    os.remove(tmp_path / "lake" / _raw_key("fmp", "US", run_id="R1"))
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [b])
+    assert normalize_news.run(storage, "N2") == 0
+
+    ids = sorted(r["article_id"] for r in _canonical_rows(storage, "2026-07-01"))
+    assert ids == sorted([ida, idb])  # 기존 A(raw 만료) 보존 + 신규 B 추가
+
+
+def test_bigkinds_same_article_unions_mentions_across_tickers(tmp_path):
+    # WHY: BigKinds 는 종목별 질의(preserve_all_rows)라 같은 기사(NEWS_ID)가 여러 추적 종목 질의에
+    #      걸려 각기 단일 mention 으로 온다(ingest 가 mention 병합 안 함) — 병합이 최신 행으로 통째
+    #      교체하면 한 종목의 mention 이 유실돼 종목↔기사 링크가 끊긴다. mentions 는 union 해야
+    #      한다(Codex P2 회귀 방지). 멱등 재실행에도 union 이 안정적이어야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    a = _bk_row(article_id="X", our_ticker="373220")
+    b = _bk_row(article_id="X", our_ticker="005380")  # 같은 기사, 다른 종목 질의
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [a, b])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert len(rows) == 1  # 같은 article_id → 한 행
+    assert sorted(m["ticker"] for m in json.loads(rows[0]["mentions"])) == ["005380", "373220"]
+
+    # 멱등: 재실행해도 union 결과가 동일(중복 누적·순서 흔들림 없음).
+    assert normalize_news.run(storage, "N2") == 0
+    rows2 = _canonical_rows(storage, "2026-07-01")
+    assert rows == rows2
+
+
+def test_normalize_recomputes_identity_ignoring_stale_stamp(tmp_path):
+    # WHY: canonical 정체성은 canonical 단계가 raw 내용에서 재계산해야 한다 — raw 에 (구 로직으로)
+    #      stamp 된 옛 article_id 를 신뢰하면 정체성 로직 변경(NEWS_ID→원문 URL 우선)이 구 raw 에 안
+    #      먹혀 같은 원문 URL 인 FMP·BigKinds 가 안 합쳐진다(Codex P2). stamp 무시·재계산을 고정.
+    storage = LocalStorage(tmp_path / "lake")
+    stale = _bk_row(PROVIDER_LINK_PAGE="https://press.com/x", article_id="STALE-NEWSID-BASED")
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [stale])
+
+    assert normalize_news.run(storage, "N1") == 0
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert [r["article_id"] for r in rows] == [_aid(stale)]  # 원문 URL 해시로 재계산
+    assert rows[0]["article_id"] != "STALE-NEWSID-BASED"  # raw stamp 무시
+
+
+def test_non_string_url_falls_back_to_news_id_not_crash(tmp_path):
+    # WHY: 비문자열 PROVIDER_LINK_PAGE(예 123)가 normalize_url 의 .strip() 에서 크래시하면 ingest
+    #      preserve_all_rows 수집 루프가 통째 중단된다(각도 H crash-before-gate). 비str URL 은 None
+    #      으로 흘려 NEWS_ID 폴백으로 안전 식별해야 한다(Codex P2).
+    storage = LocalStorage(tmp_path / "lake")
+    bad = _bk_row(PROVIDER_LINK_PAGE=123)  # 비문자열 URL
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [bad])
+
+    assert normalize_news.run(storage, "N1") == 0  # 크래시 없이 완료
+    rows = _canonical_rows(storage, "2026-07-01")
+    assert len(rows) == 1 and rows[0]["article_id"] == _aid(bad)  # NEWS_ID 폴백

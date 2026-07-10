@@ -9,8 +9,8 @@
 > **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
 > ALPHA-133). **뉴스 정제(Step2)** 는 정규화(FMP·BigKinds 이형 → 표준 메타행) + 필수필드·발행일
-> 게이트 + quality_log 까지 완료했다(`normalize-news`, ALPHA-131). 게이트 통과 행의 canonical
-> `news_articles` 멱등 병합 적재는 후속이다(ALPHA-132).
+> 게이트 + quality_log + 통과 행의 `canonical/news/news_articles` article_id 멱등 병합 적재까지
+> 완료했다(`normalize-news`, ALPHA-131·132).
 
 ## 실행
 
@@ -74,7 +74,9 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-price
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). blocking 사유(제목 결측·발행시각 파싱
 # 불가/범위 밖)는 canonical 제외 대상이고, url·publisher 결측은 non-blocking 경고로 data_quality_logs
 # 에 남긴다 — BigKinds 는 URL 없이 NEWS_ID 로 식별하므로 가변 필드로 벤더를 대량 탈락시키지 않는다.
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw news 전체, 멱등). canonical 적재는 후속(ALPHA-132).
+# 통과 행은 canonical/news/news_articles 에 article_id 로 멱등 병합 적재하고(같은 벤더 최신
+# fetched_at 우선), 다른 article_id 가 같은 정규화 제목·URL 해시면 duplicate_signal 로 로깅한다.
+# --input-run-id 로 특정 수집 런만 재검증(미지정=raw news 전체, 멱등; 스코프는 canonical 안 씀).
 uv run --package data-pipeline python -m data_pipeline.run normalize-news
 #   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
 ```
@@ -175,20 +177,29 @@ settings.targets.keywords            # ["금리", ...]
   파티션 내 행 키다. 같은 벤더 재적재는 최신 fetched_at 우선(정정 반영), **벤더 교차 같은 키 충돌은
   fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
   market 별 태깅만 하고 FX 환산하지 않는다.
+- **canonical(뉴스, 정제 Step2)** — `canonical/news/news_articles/published_date=…/part-*.parquet`
+  에 게이트 통과 행을 **article_id 키로 멱등 병합**. **정체성 `article_id = url_hash(원문 URL)`**
+  (FMP `url`/BigKinds `PROVIDER_LINK_PAGE`)은 **소스 무관**이라 canonical 이 소스를 흡수한 **통합
+  구조**가 된다 — `source_vendor` 는 파티션이 아니라 **컬럼**(provenance), 파티션은 published_date
+  하나(가격의 trade_date 파티션과 동형). 같은 원문 URL 이면 벤더 불문 한 행으로 병합(통합 dedup);
+  URL 없으면 정체성은 BigKinds `NEWS_ID`→`title|date` 폴백. run_id 없음(멱등). 같은 article_id
+  재적재는 최신 fetched_at 이 메타 대표를 이기되 **mentions 는 union**(종목↔기사 링크 보존). 다른
+  article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
+  id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
   news_articles`)도 같은 규약으로 남기되 blocking 탈락 사유(제목 결측·발행시각 파싱 불가/범위 밖)와
-  non-blocking 경고(url·publisher 결측)를 구분해 기록한다. canonical 은 멱등이라 run_id 가 없지만,
+  non-blocking 경고(url·publisher 결측)를 구분하고, canonical 적재 결과·근접중복 신호(duplicate_signals)를
+  함께 기록한다. canonical 은 멱등이라 run_id 가 없지만,
   '이 검증 실행이 무엇을 걸렀나'는 실행 단위 감사라 run_id 로 가른다(수집 로그와 분리).
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 
-- 뉴스 canonical 적재(Step2 후반) — 게이트 통과 행의 `canonical/news/news_articles` article_id
-  멱등 병합·정규화 제목/URL 충돌 로깅은 후속(ALPHA-132). 필수필드·발행일 검증·quality_log 는 완료.
-- 런 간(run 간) 중복 제거 — Step2(ALPHA-132) 의 canonical article_id 멱등 병합이 흡수
+- 뉴스 근접중복 클러스터링(fuzzy)·교차벤더 dedup — canonical 은 exact article_id 병합 + 제목/URL
+  충돌 로깅까지다. dedup_cluster·엔티티/컨셉 링크·이벤트 태깅은 다운스트림(analysis-engine) 소관.
 - 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
   섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation

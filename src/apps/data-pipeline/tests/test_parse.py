@@ -107,18 +107,28 @@ def test_bigkinds_date_non_string_and_missing_return_none_not_crash():
     assert bigkinds_date({"DATE": 20260701}) == "2026-07-01"  # int → str 강제
 
 
-def test_news_article_id_prefers_news_id_for_bigkinds():
-    # WHY: BigKinds 는 같은 제목·날짜의 별개 기사가 있다 — NEWS_ID 를 무시하고 TITLE|DATE 로만
-    #      해시하면 Step2 canonical merge 가 별개 기사를 하나로 합친다. ingest·normalize 가 이
-    #      SSOT 를 공유해 두 단계의 article_id 가 일치한다(정체성 드리프트 없음).
-    base = {"TITLE": "같은 제목", "DATE": "20260702"}
+def test_news_article_id_uses_original_url_hash_across_vendors():
+    # WHY: canonical 통합 정체성 — 원문 URL 해시는 소스 무관이다. 같은 원문 URL 이면 FMP `url` 이든
+    #      BigKinds `PROVIDER_LINK_PAGE` 든 같은 article_id → canonical 이 소스를 흡수해 통합 dedup.
+    fmp = news_article_id({"url": "https://press.com/a", "title": "무시됨", "publishedDate": "2026-07-02"})
+    bk = news_article_id({"PROVIDER_LINK_PAGE": "https://press.com/a", "NEWS_ID": "01100101.20260702100000000"})
+    assert fmp == bk == make_article_id("https://press.com/a", "", None)  # 원문 URL 해시, NEWS_ID 무시
+
+
+def test_news_article_id_falls_back_news_id_then_title_when_no_url():
+    # WHY: 우선순위 url → NEWS_ID → title|date. URL 없으면 BigKinds NEWS_ID(벤더 식별자)로 별개
+    #      기사를 가르고(제목·날짜 붕괴 방지), NEWS_ID 도 없으면 최후로 제목|발행일 폴백.
+    base = {"TITLE": "같은 제목", "DATE": "20260702"}  # URL 없음
     a = news_article_id({**base, "NEWS_ID": "01100101.20260702100000000"})
     b = news_article_id({**base, "NEWS_ID": "01100101.20260702100100000"})
     assert a != b and len(a) == len(b) == 64  # 별개 NEWS_ID → 별개 id
+    # NEWS_ID 도 URL 도 없으면 title|date 최후 폴백.
+    assert news_article_id(base) == make_article_id(None, "같은 제목", "20260702")
 
 
-def test_news_article_id_falls_back_to_url_then_title_when_no_news_id():
-    # WHY: NEWS_ID 없는 벤더(FMP 등)는 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백 —
-    #      URL 만 다른 같은 기사는 안 갈리고, URL 없는 기사도 안정 id 를 얻는다.
-    with_url = news_article_id({"title": "제목", "url": "https://e.com/a", "publishedDate": "2026-07-02"})
-    assert with_url == make_article_id("https://e.com/a", "제목", "2026-07-02")
+def test_normalize_url_non_string_returns_none_not_crash():
+    # WHY: 비문자열 입력(int·list)이 .strip() 에서 크래시하면 URL 후보 필터로 쓰는 news_article_id 가
+    #      한 이상치 행에 죽는다(BigKinds preserve_all_rows 수집 중단) — SSOT 에서 None 방어(Codex P2).
+    assert normalize_url(123) is None
+    assert normalize_url([]) is None
+    assert normalize_url(None) is None
