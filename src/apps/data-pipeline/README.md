@@ -177,12 +177,15 @@ settings.targets.keywords            # ["금리", ...]
   파티션 내 행 키다. 같은 벤더 재적재는 최신 fetched_at 우선(정정 반영), **벤더 교차 같은 키 충돌은
   fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
   market 별 태깅만 하고 FX 환산하지 않는다.
-- **canonical(뉴스, 정제 Step2)** — `canonical/news/news_articles/published_date=…/source_vendor=…/part-*.parquet`
-  에 게이트 통과 행을 **article_id 키로 멱등 병합**. run_id 는 없다(멱등). 가격과 달리 **source_vendor
-  가 파티션**이다(벤더가 파티션을 갈라 교차벤더 같은 키 충돌이 구조적으로 없어 통화 오염 fail-loud 불필요).
-  같은 벤더 재적재는 최신 fetched_at 우선. 다른 article_id 가 같은 정규화 제목·URL 해시를 가지면
-  **exact 병합 없이 duplicate_signal 로 로깅만** 한다(별개 기사 붕괴 방지 — fuzzy·교차벤더 클러스터는
-  다운스트림 news_dedup_cluster 소관). mentions(FMP 병합분/BigKinds our_ticker 합성)는 JSON 문자열로 보존.
+- **canonical(뉴스, 정제 Step2)** — `canonical/news/news_articles/published_date=…/part-*.parquet`
+  에 게이트 통과 행을 **article_id 키로 멱등 병합**. **정체성 `article_id = url_hash(원문 URL)`**
+  (FMP `url`/BigKinds `PROVIDER_LINK_PAGE`)은 **소스 무관**이라 canonical 이 소스를 흡수한 **통합
+  구조**가 된다 — `source_vendor` 는 파티션이 아니라 **컬럼**(provenance), 파티션은 published_date
+  하나(가격의 trade_date 파티션과 동형). 같은 원문 URL 이면 벤더 불문 한 행으로 병합(통합 dedup);
+  URL 없으면 정체성은 BigKinds `NEWS_ID`→`title|date` 폴백. run_id 없음(멱등). 같은 article_id
+  재적재는 최신 fetched_at 이 메타 대표를 이기되 **mentions 는 union**(종목↔기사 링크 보존). 다른
+  article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
+  id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

@@ -118,15 +118,19 @@ def bigkinds_date(record: dict) -> str | None:
 
 
 def news_article_id(record: dict) -> str:
-    """raw 뉴스 레코드(벤더 무관) → 안정 article_id. 벤더별 정체성 규약의 SSOT.
+    """raw 뉴스 레코드(벤더 무관) → 안정 article_id. 뉴스 정체성 규약의 SSOT.
 
-    **BigKinds 는 NEWS_ID 를 우선**한다 — 국내 뉴스는 제목·발행일이 같아도 별개 기사가 있어
-    (제목|날짜 폴백으로 묶으면 별개 기사가 같은 id 로 붕괴한다), NEWS_ID 라는 벤더 고유 식별자를
-    쓴다. NEWS_ID 가 없으면(FMP 등) 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백.
-    ingest(raw 적재)와 normalize(정제 재계산)가 이 한 함수를 공유해 정체성이 드리프트하지 않는다."""
+    **원문 URL 해시를 1순위**로 쓴다 — URL 은 전역 식별자라 소스 무관하다: 같은 실기사면 FMP `url`
+    이든 BigKinds `PROVIDER_LINK_PAGE`(원문 링크, 실측 확인)이든 같은 id 로 모여 canonical 이
+    소스를 흡수한 통합 구조가 된다. URL 이 없을 때만 폴백 — BigKinds `NEWS_ID`(벤더 고유 식별자,
+    제목|날짜 붕괴 방지) → 최후 `title|published`. ingest(raw 적재)와 normalize(정제 재계산)가 이
+    한 함수를 공유해 정체성이 드리프트하지 않는다. 우선순위: url → NEWS_ID → title|date."""
+    url = record.get("url") or record.get("PROVIDER_LINK_PAGE")
+    if normalize_url(url):
+        return make_article_id(url, "", None)  # 원문 URL 해시 — 소스 무관 정체성
     news_id = str(record.get("NEWS_ID") or "").strip()
     if news_id:
-        return make_article_id(None, news_id, None)
+        return make_article_id(None, news_id, None)  # URL 없을 때 BigKinds 벤더 식별자
     title = record.get("title") or record.get("TITLE") or ""
     published = record.get("publishedDate") or record.get("DATE") or bigkinds_date(record)
-    return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)
+    return make_article_id(None, title, published)  # 최후 폴백

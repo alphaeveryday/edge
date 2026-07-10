@@ -131,18 +131,15 @@ def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     return f"canonical/market_data/price_daily/market={market}/trade_date={trade_date}"
 
 
-def canonical_news_articles_partition(published_date: str, source_vendor: str) -> str:
+def canonical_news_articles_partition(published_date: str) -> str:
     """canonical 뉴스 메타 파티션 프리픽스 (끝 슬래시 없음).
 
-    가격(벤더=시장으로 갈림, 파티션에 벤더 없음)과 달리 **source_vendor 가 파티션 키**다
-    (news-collection-plan §3 규약) — 벤더가 파티션을 갈라 교차벤더 같은 키 충돌이 구조적으로
-    없다(가격의 통화 오염 fail-loud 불필요). run_id 는 없다(멱등 — 같은 raw 를 몇 번 정제해도
-    결과 동일). published_date·source_vendor 가 파티션, article_id 는 파티션 내 행 키다.
+    canonical 은 소스를 흡수한 **통합 구조**다 — source_vendor 는 파티션이 아니라 **컬럼**
+    (provenance)이라 벤더가 한 날짜 파티션에 섞인다. 파티션은 `published_date` 하나(가격의
+    trade_date 파티션과 동형 — 프루닝·라이프사이클). run_id 는 없다(멱등). 정체성 키는
+    `article_id`(=원문 URL 해시, 소스 무관)로 파티션 내 행 키다.
     """
-    return (
-        f"canonical/news/news_articles/published_date={published_date}"
-        f"/source_vendor={source_vendor}"
-    )
+    return f"canonical/news/news_articles/published_date={published_date}"
 
 
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
