@@ -130,11 +130,17 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
     # market·ticker 는 canonical 정체성 키(market,ticker,trade_date)의 일부다 — 없으면 그
     # 행은 키를 만들 수 없어 canonical 로 못 간다. validate_ohlcv 는 이 둘을 안 보므로, 여기서
     # 결측을 missing_field 로 드러내지 않으면 정체성 없는 행이 passed 로 인증된다(Rule 12).
-    if not row["market"]:
+    # 공백/비문자열도 결측으로 본다(설정 NonBlankStr 관례와 일치 — '  ' 로 위장 못 하게).
+    if _blank(row["market"]):
         reasons.append("missing_field")
-    if not row["ticker"]:
+    if _blank(row["ticker"]):
         reasons.append("missing_field")
     return row, _dedup(reasons)
+
+
+def _blank(value: object) -> bool:
+    """정체성 값이 사실상 비었는가 — None·비문자열·공백만 문자열(설정 NonBlankStr 과 동형)."""
+    return not (isinstance(value, str) and value.strip())
 
 
 def _adj_close(raw: dict) -> float | None:

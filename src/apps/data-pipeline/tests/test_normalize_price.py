@@ -185,6 +185,10 @@ def test_missing_identity_ticker_or_market_rejected():
     _, r2 = normalize_price._normalize("fmp", no_market)
     assert "missing_field" in r2
 
+    # 공백만 있는 ticker 도 결측으로 본다('  ' 로 정체성을 위장 못 하게, NonBlankStr 관례).
+    _, r3 = normalize_price._normalize("fmp", _fmp_row(our_ticker="   "))
+    assert "missing_field" in r3
+
 
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
