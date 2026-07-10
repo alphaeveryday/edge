@@ -23,6 +23,7 @@ from .config import load_settings
 from .lake import make_storage
 from .sources import (
     BigKindsNewsSource,
+    DartDisclosureSource,
     DartFinancialSource,
     FmpFinancialSource,
     FmpNewsSource,
@@ -33,6 +34,7 @@ from .sources import (
 from .steps import (
     ingest_price_raw,
     ingest_raw,
+    ingest_raw_disclosure,
     ingest_raw_financial,
     normalize_news,
     normalize_price,
@@ -65,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "normalize-price", "normalize-news"],
+                 "ingest-raw-disclosure", "normalize-price", "normalize-news"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -158,6 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
         return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
+    if args.step == "ingest-raw-disclosure":
+        # 공시는 KR·단일 벤더(OpenDART)라 --source 분기가 없다. 재무(fnlttSinglAcnt)와 별개
+        # API·별개 잡이다. 날짜창은 뉴스와 동형(위에서 증분/백필 창을 채웠다).
+        if settings.dart_disclosure is None:
+            raise SystemExit("dart_disclosure.source 설정이 없다 — sources.toml 확인")
+        disclosure_source = DartDisclosureSource(settings.dart_disclosure.source, PoliteClient())
+        return ingest_raw_disclosure.run(
+            settings, storage, disclosure_source, run_id, from_date, to_date
+        )
     raise AssertionError(f"unreachable step: {args.step}")
 
 

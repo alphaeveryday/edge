@@ -66,6 +66,39 @@ def raw_financial_partition(
     )
 
 
+def raw_disclosure_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 공시(disclosures) 메타 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격·재무와 동형(bronze 통일) — 공시목록(list.json) 행을 수집일(ingest_date) 기준으로
+    run_id 별 append 한다(전부 보존, dedup 없음). 정체성 병합·corp_code↔ticker bridge·정정
+    판정은 후속 canonical 소관이다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
+    document_raw_path 가 그대로 보존돼 canonical/파싱이 쓴다. 공시서류 원본 본문은 ndjson 에
+    못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션 아래 별도 객체로 둔다
+    (raw_disclosure_document_key 참고).
+    """
+    return (
+        f"raw/source={source}/dataset=disclosures/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
+def raw_disclosure_document_key(
+    source: str, market: str, ingest_date: str, run_id: str, rcept_no: str
+) -> str:
+    """raw 공시서류 원본 본문(document.xml ZIP) 객체 키.
+
+    메타(raw_disclosure_partition ndjson)와 같은 파티션 아래 `documents/{rcept_no}.zip` 로
+    받은 ZIP bytes 를 무변형 저장한다(bronze). 메타 행의 document_raw_path 가 이 키를 가리켜
+    메타↔본문을 잇는다. rcept_no 는 14자리라 파일명이 유일하다.
+    """
+    return (
+        f"{raw_disclosure_partition(source, market, ingest_date, run_id)}"
+        f"/documents/{rcept_no}.zip"
+    )
+
+
 # ── raw price 스캔(정제 입력) ────────────────────────────
 # 정제(normalize_price)는 raw price 를 벤더·시장·수집일에 걸쳐 읽어 (market,ticker,
 # trade_date) 로 재그룹한다. raw 는 수집일(ingest_date)로 파티션되므로 한 trade_date 가
