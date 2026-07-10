@@ -152,6 +152,63 @@ def test_unsupported_vendor_reported_not_silently_passed(tmp_path):
     assert "unsupported_vendor" in log["failures"][0]["reasons"]
 
 
+class _FailingStorage:
+    """LocalStorage 위임 + 지정 키에서 예외 — fail-loud(비0 종료) 경로 검증용."""
+
+    def __init__(self, inner, *, fail_get: str | None = None, fail_put: str | None = None):
+        self.inner = inner
+        self.fail_get = fail_get  # get_bytes 키가 이 문자열을 포함하면 예외
+        self.fail_put = fail_put  # put_bytes 키가 이 문자열을 포함하면 예외
+
+    def list_keys(self, prefix):
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        if self.fail_get and self.fail_get in key:
+            raise OSError("의도된 읽기 실패")
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        if self.fail_put and self.fail_put in key:
+            raise OSError("의도된 쓰기 실패")
+        return self.inner.put_bytes(key, data)
+
+
+def test_raw_read_failure_is_fail_loud(tmp_path):
+    # WHY: raw 읽기 실패를 조용히 넘기면(exit 0) 검증이 사실상 안 돌았는데 성공으로 위장된다
+    #      (Rule 12). raw_read_error 를 quality_log 에 남기고 비0 으로 종료해야 스케줄러가 안다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+    storage = _FailingStorage(inner, fail_get="/dataset=stock_news/")
+
+    assert normalize_news.run(storage, "N1") == 1  # fail-loud
+    log = _quality_log(storage)
+    assert "raw_read_error" in log["failures"][0]["reasons"]
+
+
+def test_quality_log_write_failure_is_fail_loud(tmp_path):
+    # WHY: 품질 로그마저 못 남기면 검증 결과가 통째로 유실된다 — 최소한 비0 종료로 알려야
+    #      감사 로그 유실이 조용한 성공으로 묻히지 않는다(Rule 12).
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+    storage = _FailingStorage(inner, fail_put="data_quality_logs")
+
+    assert normalize_news.run(storage, "N1") == 1  # fail-loud
+
+
+def test_blocking_row_not_double_counted_as_warning(tmp_path):
+    # WHY: blocking(missing_title)+경고(missing_url) 사유를 동시에 가진 행은 failures 로만 가고
+    #      records_warned 를 올리면 안 된다 — 통과 안 한 행이 경고로도 세어지면 카운트가 부풀려진다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row(TITLE="  ")])  # url 없음 + 제목 결측
+
+    assert normalize_news.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert (log["records_passed"], log["records_failed"], log["records_warned"]) == (0, 1, 0)
+    reasons = log["failures"][0]["reasons"]
+    assert "missing_title" in reasons and "missing_url" in reasons  # 경고 사유도 함께 기록
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")

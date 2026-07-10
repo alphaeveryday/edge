@@ -1,6 +1,12 @@
 """parse 테스트 — article_id 규약(SSOT)이 흔들리면 중복 제거·canonical 병합이 깨진다."""
 
-from data_pipeline.parse import make_article_id, normalize_url, parse_datetime, url_hash
+from data_pipeline.parse import (
+    bigkinds_date,
+    make_article_id,
+    normalize_url,
+    parse_datetime,
+    url_hash,
+)
 
 
 def test_normalize_url_collapses_tracking_variants():
@@ -81,3 +87,20 @@ def test_parse_datetime_invalid_returns_none():
     #      돌려주고 호출부(파티션 폴백/Step2 품질 게이트)가 처리한다.
     assert parse_datetime("발행일 미상") is None
     assert parse_datetime(None) is None
+
+
+def test_bigkinds_date_prefers_date_then_falls_back_to_news_id():
+    # WHY: BigKinds 발행일 파생은 ingest(파티션)와 normalize(published_at)가 공유하는 SSOT다 —
+    #      DATE 우선, 없으면 NEWS_ID 임베드 타임스탬프. 두 소비자가 같은 규약을 써야 발행일이
+    #      드리프트하지 않는다.
+    assert bigkinds_date({"DATE": "20260701"}) == "2026-07-01"
+    assert bigkinds_date({"NEWS_ID": "01100101.20260701153000000"}) == "2026-07-01"  # DATE 없음
+    assert bigkinds_date({"DATE": "2026-07-01 15:30"}) == "2026-07-01"  # 비숫자 섞여도 슬라이스
+
+
+def test_bigkinds_date_non_string_and_missing_return_none_not_crash():
+    # WHY: 비문자열 DATE/NEWS_ID(list·dict·int)나 결측이 str() 강제 없이 크래시하면 한 이상치
+    #      행이 검증 배치를 무너뜨린다 — falsy 는 None, int 는 자릿수로 취급(달력 검증은 parse_datetime).
+    assert bigkinds_date({"DATE": [], "NEWS_ID": {}}) is None
+    assert bigkinds_date({}) is None
+    assert bigkinds_date({"DATE": 20260701}) == "2026-07-01"  # int → str 강제

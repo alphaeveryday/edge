@@ -21,11 +21,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from ..lake import Storage, is_raw_news_key, parse_raw_news_key, quality_log_key
-from ..parse import make_article_id, normalize_url, parse_datetime
+# BigKinds 날짜 파생(bigkinds_date)은 parse 의 벤더 date SSOT — ingest 도 같은 함수를 써
+# raw 파티션 published_date 와 canonical published_at 이 드리프트하지 않는다.
+from ..parse import bigkinds_date, make_article_id, normalize_url, parse_datetime
 from ..quality import BLOCKING_REASONS, validate_news_meta
-# BigKinds 날짜 파생은 ingest 가 이미 규정한 규약(DATE→NEWS_ID 폴백)이다 — 중복 구현으로
-# 드리프트를 만들지 않고 그 SSOT 를 재사용한다(순수 파싱 함수, 부작용 없음).
-from .ingest_raw import _bigkinds_date
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +55,9 @@ def _normalize(vendor: str, record: dict) -> dict:
         url = _text(record, "PROVIDER_LINK_PAGE")
         publisher = _text(record, "PROVIDER")
         market = "KR"
-        # BigKinds 발행시각은 날짜 단위(시각 없음) — _bigkinds_date 가 None 이면 가짜 문자열을
+        # BigKinds 발행시각은 날짜 단위(시각 없음) — bigkinds_date 가 None 이면 가짜 문자열을
         # 조립하지 않고 그대로 None → parse_datetime(None)=None → 게이트가 unparseable 로 잡음.
-        published_at = parse_datetime(_bigkinds_date(record))
+        published_at = parse_datetime(bigkinds_date(record))
     else:  # fmp
         title = _text(record, "title")
         url = _text(record, "url")
