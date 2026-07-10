@@ -170,6 +170,12 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             except json.JSONDecodeError:
                 failures.append({"raw_key": raw_key, "reasons": ["unparseable_json"]})
                 continue
+            if not isinstance(record, dict):
+                # 유효 JSON 이지만 객체가 아닌 행(null·배열·스칼라)은 _normalize 의 raw.get 에서
+                # AttributeError 로 런 전체를 죽여 quality_log 조차 못 남긴다 — 한 행이 검증
+                # 잡을 통째로 무너뜨리지 않게 행 단위 실패로 격리한다(격리≠은폐, Rule 12).
+                failures.append({"raw_key": raw_key, "reasons": ["non_object_row"]})
+                continue
             if vendor not in ("fmp", "kis"):
                 # 알 수 없는 가격 벤더 — 조용히 통과시키지 않고 사유로 드러낸다(Rule 12).
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,

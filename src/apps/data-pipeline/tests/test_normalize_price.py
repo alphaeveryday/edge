@@ -127,6 +127,21 @@ def test_unpadded_dates_rejected_both_vendors(tmp_path):
     assert all("bad_trade_date" in f["reasons"] for f in log["failures"])
 
 
+def test_non_object_row_isolated_not_crash(tmp_path):
+    # WHY: 유효 JSON 이지만 객체가 아닌 행(null·배열)은 _normalize 의 raw.get 에서 런 전체를
+    #      죽여 quality_log 조차 못 남긴다 — 행 단위로 격리해 나머지 검증은 완료돼야 한다
+    #      (한 이상치 행이 검증 잡을 무너뜨리지 않게, Codex P2 회귀 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    key = _raw_key("fmp", "US")
+    body = "null\n" + json.dumps(_fmp_row()) + "\n[]\n"
+    storage.put_bytes(key, body.encode("utf-8"))
+
+    assert normalize_price.run(storage, "N1") == 0  # 크래시 없이 완료
+    log = _quality_log(storage)
+    assert log["records_passed"] == 1 and log["records_failed"] == 2
+    assert all("non_object_row" in f["reasons"] for f in log["failures"])
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")
