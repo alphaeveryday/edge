@@ -30,7 +30,7 @@ from .sources import (
     KisDailyPriceSource,
     PoliteClient,
 )
-from .steps import ingest_price_raw, ingest_raw, ingest_raw_financial
+from .steps import ingest_price_raw, ingest_raw, ingest_raw_financial, normalize_price
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
@@ -56,11 +56,16 @@ def default_window(now: datetime, lookback_days: int = DEFAULT_LOOKBACK_DAYS) ->
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="data-pipeline")
-    parser.add_argument("step", choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial"])
+    parser.add_argument(
+        "step",
+        choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial", "normalize-price"],
+    )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
+    # 정제 스텝 전용 — 이 수집 런의 raw 만 재검증(미지정=raw price 전체, 멱등).
+    parser.add_argument("--input-run-id", default=None, help="정제 대상 수집 run_id(normalize-price)")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     args = parser.parse_args(argv)
@@ -72,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.config)
     storage = make_storage(settings.storage)
     run_id = args.run_id or make_run_id()
+
+    # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
+    # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
+    if args.step == "normalize-price":
+        return normalize_price.run(storage, run_id, args.input_run_id)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
     if args.step == "ingest-raw-financial":

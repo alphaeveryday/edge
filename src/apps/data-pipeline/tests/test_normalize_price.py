@@ -1,0 +1,124 @@
+"""normalize_price 스텝 테스트 — 벤더 이형 흡수 + 정합성 게이트 + quality_log(ALPHA-133)."""
+
+import json
+
+from data_pipeline.lake import LocalStorage
+from data_pipeline.steps import normalize_price
+
+
+def _raw_key(source: str, market: str, run_id: str = "R1", date: str = "2026-07-01") -> str:
+    return (
+        f"raw/source={source}/dataset=price_daily/market={market}"
+        f"/ingest_date={date}/run_id={run_id}/part-00000.ndjson"
+    )
+
+
+def _write_raw(storage, key: str, rows: list[dict]) -> None:
+    body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    storage.put_bytes(key, body.encode("utf-8"))
+
+
+def _fmp_row(**over) -> dict:
+    row = {"date": "2026-07-01", "open": 9.0, "high": 11.0, "low": 8.5, "close": 10.0,
+           "volume": 100, "adjClose": 10.0, "our_ticker": "AAPL", "market": "US",
+           "fmp_symbol": "AAPL", "fetched_at": "2026-07-01T00:00:00+00:00"}
+    row.update(over)
+    return row
+
+
+def _kis_row(**over) -> dict:
+    # KIS 원본은 전부 문자열, 날짜는 YYYYMMDD.
+    row = {"stck_bsop_date": "20260701", "stck_oprc": "9", "stck_hgpr": "11",
+           "stck_lwpr": "8", "stck_clpr": "10", "acml_vol": "100",
+           "our_ticker": "005930", "market": "KR", "kis_symbol": "005930",
+           "fetched_at": "2026-07-01T00:00:00+00:00"}
+    row.update(over)
+    return row
+
+
+def _quality_log(storage) -> dict:
+    keys = storage.list_keys("operations_archive/data_quality_logs/")
+    assert len(keys) == 1, keys
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def test_both_vendors_normalize_and_pass(tmp_path):
+    # WHY: 정제의 존재 이유는 FMP(숫자)·KIS(문자열·YYYYMMDD) 이형을 하나의 표준 봉으로
+    #      수렴시키는 것 — 둘 다 정상 봉이면 통과로 집계돼야 다운스트림이 동형으로 읽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row()])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert (log["records_read"], log["records_passed"], log["records_failed"]) == (2, 2, 0)
+
+
+def test_ohlcv_violation_isolated_and_logged(tmp_path):
+    # WHY: high<low 인 봉은 탈락시키되(잘못된 가격 차단), 같은 파티션의 정상 봉은 통과해야
+    #      한다(격리≠은폐) — 그리고 탈락은 사유와 함께 quality_log 에 남아야 추적된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"),
+               [_fmp_row(our_ticker="AAPL"), _fmp_row(our_ticker="BAD", high=7.0, low=9.0)])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 1 and log["records_failed"] == 1
+    failure = log["failures"][0]
+    assert failure["ticker"] == "BAD" and "high_lt_low" in failure["reasons"]
+
+
+def test_missing_and_non_numeric_reported(tmp_path):
+    # WHY: 결측 필드와 비수치(스키마 드리프트)는 서로 다른 소스 문제다 — 사유를 구분해
+    #      남겨야(Rule 12) 운영이 어느 쪽인지 안다. 물리 게이트 이전 단계에서 잡힌다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(close=None)])           # 결측
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_clpr="비수치")])   # 비수치
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    reasons = {r for f in log["failures"] for r in f["reasons"]}
+    assert "missing_field" in reasons and "non_numeric" in reasons
+    assert log["records_passed"] == 0
+
+
+def test_nan_inf_bool_prices_rejected_not_silently_passed(tmp_path):
+    # WHY: json.loads 는 NaN/Infinity 리터럴을 float 로 파싱하고 NaN 비교는 전부 False 라,
+    #      막지 않으면 잘못된 봉이 게이트를 '정상'으로 통과한다 — 이 스토리가 막으려는 바로
+    #      그 오염이다. bool 도 float(True)=1.0 로 조용히 통과하는 스키마 드리프트다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    # NaN/Infinity 는 벤더 JSON 에 올 수 있는 리터럴 — allow_nan=True 로 그 상황을 재현.
+    nan_line = json.dumps(_fmp_row(our_ticker="NANP", high=float("nan")), allow_nan=True)
+    inf_line = json.dumps(_fmp_row(our_ticker="INFP", low=float("inf")), allow_nan=True)
+    bool_line = json.dumps(_fmp_row(our_ticker="BOOLP", close=True))
+    key = _raw_key("fmp", "US")
+    storage.put_bytes(key, (nan_line + "\n" + inf_line + "\n" + bool_line + "\n").encode("utf-8"))
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 0 and log["records_failed"] == 3
+    assert all("non_numeric" in f["reasons"] for f in log["failures"])
+
+
+def test_input_run_id_scopes_validation(tmp_path):
+    # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row()])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(), _fmp_row()])
+
+    assert normalize_price.run(storage, "N1", input_run_id="R2") == 0
+    assert _quality_log(storage)["records_read"] == 2  # R1(1건) 제외, R2(2건)만
+
+
+def test_kis_dateless_extra_row_fails_gracefully(tmp_path):
+    # WHY: KIS 어댑터는 날짜 없는 이상치 행을 raw 로 보존한다 — 정제는 크래시 없이
+    #      missing_field 로 탈락시키고 quality_log 로 드러내야 한다(조용한 드롭 금지).
+    storage = LocalStorage(tmp_path / "lake")
+    dateless = _kis_row()
+    del dateless["stck_bsop_date"]
+    _write_raw(storage, _raw_key("kis", "KR"), [dateless])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_failed"] == 1
+    assert "missing_field" in log["failures"][0]["reasons"]

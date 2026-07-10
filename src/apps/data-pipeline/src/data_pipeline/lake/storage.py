@@ -66,6 +66,46 @@ def raw_financial_partition(
     )
 
 
+# ── raw price 스캔(정제 입력) ────────────────────────────
+# 정제(normalize_price)는 raw price 를 벤더·시장·수집일에 걸쳐 읽어 (market,ticker,
+# trade_date) 로 재그룹한다. raw 는 수집일(ingest_date)로 파티션되므로 한 trade_date 가
+# 여러 ingest_date/run_id 에 흩어진다 — 프리픽스로 dataset 전체를 훑어야 한다. 경로
+# 조립뿐 아니라 **경로 해석(파싱)도 이 모듈이 SSOT** 다(다른 곳에서 key 를 split 하지 않는다).
+_RAW_PRICE_MARKER = "/dataset=price_daily/"
+
+
+def is_raw_price_key(key: str) -> bool:
+    """raw price_daily 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return key.startswith("raw/") and _RAW_PRICE_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_price_key(key: str) -> dict[str, str]:
+    """raw price 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=price_daily/market=…/ingest_date=…/run_id=…/part-*.ndjson.
+    `key=value` 세그먼트만 취해 dict 로 — part 파일명(= 없음)은 자연히 빠진다.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
+    """정제 품질 로그(검증 실행당 1건) 키.
+
+    canonical 자체는 run_id 가 없지만(멱등), '이 검증 실행이 무엇을 몇 건 걸렀나'는
+    실행 단위 감사라 run_id 로 남긴다. collection_log(수집)와 분리된 정제 단계 로그다.
+    """
+    return (
+        f"operations_archive/data_quality_logs/dataset={dataset}"
+        f"/checked_date={checked_date}/run_id={run_id}/log.json"
+    )
+
+
 def collection_log_key(source: str, dataset: str, started_date: str, run_id: str) -> str:
     """수집 실행 로그(런당 1건) 키.
 

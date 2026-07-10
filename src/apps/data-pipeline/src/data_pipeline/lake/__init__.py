@@ -5,7 +5,10 @@ from .storage import (
     S3Storage,
     Storage,
     collection_log_key,
+    is_raw_price_key,
     make_storage,
+    parse_raw_price_key,
+    quality_log_key,
     raw_financial_partition,
     raw_news_partition,
     raw_price_partition,
@@ -20,4 +23,7 @@ __all__ = [
     "raw_price_partition",
     "raw_financial_partition",
     "collection_log_key",
+    "quality_log_key",
+    "is_raw_price_key",
+    "parse_raw_price_key",
 ]
