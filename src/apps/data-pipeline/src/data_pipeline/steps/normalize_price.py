@@ -112,8 +112,9 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
     is_kis = vendor == "kis"
     date_key = "stck_bsop_date" if is_kis else "date"
 
+    market = raw.get("market")
     row = {
-        "market": raw.get("market"),
+        "market": market,
         "ticker": raw.get("our_ticker"),
         "trade_date": _norm_trade_date(raw, date_key, reasons, kis=is_kis),
         "open": _to_number(raw, field_map["open"], reasons),
@@ -123,7 +124,10 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
         "volume": _to_number(raw, field_map["volume"], reasons, as_int=True),
         # FMP 만 수정종가를 준다 — KIS 는 없어 null(다운스트림이 close 로 폴백).
         "adj_close": None if is_kis else _adj_close(raw),
-        "currency": _CURRENCY.get(raw.get("market")),
+        # market 이 문자열일 때만 통화 조회한다 — 배열/객체 같은 unhashable market 을 dict
+        # 키로 쓰면 TypeError 로 런이 죽는다. 비문자열 market 은 아래 _blank 가 missing_field
+        # 로 분류하므로, 여기선 통화만 None 으로 두고 크래시를 피한다(Rule 12).
+        "currency": _CURRENCY.get(market) if isinstance(market, str) else None,
         "source_vendor": vendor,
         "fetched_at": raw.get("fetched_at"),
     }
@@ -206,9 +210,16 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
                 continue
-            row, reasons = _normalize(vendor, record)
-            if not reasons:
-                reasons = validate_ohlcv(row)
+            try:
+                row, reasons = _normalize(vendor, record)
+                if not reasons:
+                    reasons = validate_ohlcv(row)
+            except Exception as exc:
+                # 예기치 못한 행 단위 크래시도 배치를 죽이지 않게 격리한다 — 검증 잡의 계약은
+                # '한 이상치 행이 잡을 무너뜨리지 않고 항상 quality_log 를 남긴다'(Rule 12).
+                logger.exception("행 정규화 실패(격리): %s", raw_key)
+                failures.append({"raw_key": raw_key, "reasons": ["row_error"], "error": str(exc)})
+                continue
             if reasons:
                 failures.append({
                     "market": row["market"], "ticker": row["ticker"],

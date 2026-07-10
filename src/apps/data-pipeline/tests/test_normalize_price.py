@@ -190,6 +190,22 @@ def test_missing_identity_ticker_or_market_rejected():
     assert "missing_field" in r3
 
 
+def test_unhashable_market_isolated_not_crash(tmp_path):
+    # WHY: 배열/객체 같은 unhashable market 이 _CURRENCY.get(dict 키)에서 TypeError 로 런
+    #      전체를 죽여 quality_log 조차 못 남기던 경로 — 통화는 문자열 market 일 때만 조회하고
+    #      비문자열은 missing_field 로 격리해, 나머지 검증이 완료되고 로그가 남아야 한다
+    #      (Codex P2 crash-before-gate 회귀 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    good = json.dumps(_fmp_row())
+    bad = json.dumps(_fmp_row(market=[]))  # unhashable market
+    storage.put_bytes(_raw_key("fmp", "US"), (good + "\n" + bad + "\n").encode("utf-8"))
+
+    assert normalize_price.run(storage, "N1") == 0  # 크래시 없이 완료
+    log = _quality_log(storage)
+    assert log["records_passed"] == 1 and log["records_failed"] == 1
+    assert "missing_field" in log["failures"][0]["reasons"]
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")
