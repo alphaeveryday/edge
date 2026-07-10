@@ -142,6 +142,29 @@ enabled = true
 "105560" = "105560"  # KB금융
 "055550" = "055550"  # 신한지주
 
+# 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
+# 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
+#   DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
+# ingest-raw-disclosure 로 실행. corp_code 는 corpCode.xml 로 런타임 매핑.
+[dart_disclosure.source]
+base_url = "https://opendart.fss.or.kr/api"
+enabled = true
+# 수집 대상 공시 유형 — report_nm 부분일치. "단일판매ㆍ공급계약체결" 은 "공급계약" 으로,
+# 사업부문 매출은 "사업보고서" 본문으로 잡는다(정정본 [기재정정]… 도 부분일치로 포함).
+report_name_filters = ["공급계약", "사업보고서"]
+
+# our_ticker → KRX 6자리 종목코드. KR 은 대개 항등(005930→005930)이라 검증된 KR 타깃만 둔다.
+[dart_disclosure.source.symbol_map]
+"005930" = "005930"  # 삼성전자
+"000660" = "000660"  # SK하이닉스
+"009150" = "009150"  # 삼성전기
+"402340" = "402340"  # SK스퀘어
+"373220" = "373220"  # LG에너지솔루션
+"028260" = "028260"  # 삼성물산
+"032830" = "032830"  # 삼성생명
+"105560" = "105560"  # KB금융
+"055550" = "055550"  # 신한지주
+
 # 수집 유니버스: US 9 + KR 9(소스 무관). 소스별 심볼 번역은 각 소스의 symbol_map
 # 참고 — targets 에 있어도 그 소스에 매핑이 없으면 해당 소스는 건너뛴다.
 [targets]

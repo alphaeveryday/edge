@@ -4,6 +4,8 @@ from .loader import ConfigError, Settings, load_settings
 from .models import (
     BigKindsNewsSource,
     CollectionTargets,
+    DartDisclosureConfig,
+    DartDisclosureSource,
     DartFinancialConfig,
     DartFinancialSource,
     FinancialConfig,
@@ -28,6 +30,8 @@ __all__ = [
     "PriceConfig",
     "DartFinancialSource",
     "DartFinancialConfig",
+    "DartDisclosureSource",
+    "DartDisclosureConfig",
     "KisPriceSource",
     "KisPriceConfig",
     "FinancialSource",

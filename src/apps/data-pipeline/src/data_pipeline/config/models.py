@@ -134,6 +134,33 @@ class DartFinancialSource(BaseModel):
     )
 
 
+class DartDisclosureSource(BaseModel):
+    """OpenDART 국내 공시(disclosure filing) 소스 (disclosures raw).
+
+    재무제표(DartFinancialSource, fnlttSinglAcnt)와 **다른 API**다 — 이 소스는 공시목록
+    (list.json)과 공시서류 원본(document.xml)을 다룬다. api_key 는 커밋되는 파일이 아니라
+    환경변수로 주입한다:
+        DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
+    corp_code 는 OpenDART corpCode.xml 로 런타임 매핑한다(재무 소스와 동형).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: NonBlankStr = "https://opendart.fss.or.kr/api"
+    enabled: bool = True
+    api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → KRX 6자리 종목코드. 매핑 없는 심볼은 이 소스가 건너뛴다(재무와 동일 정책).
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # 수집 대상 공시 유형 — report_nm 부분일치(strip 후)로 거른다. 공시목록은 전 유형을
+    # 주므로 이 필터로 좁힌다(예: "단일판매ㆍ공급계약체결" 은 "공급계약" 으로 매칭). 실측상
+    # 가운뎃점(ㆍ)·꼬리 공백·[기재정정] 접두가 있어 부분일치가 정정본까지 안전히 잡는다.
+    report_name_filters: list[NonBlankStr] = Field(
+        default_factory=lambda: ["공급계약", "사업보고서"]
+    )
+    page_count: int = Field(default=100, ge=1, le=100)  # list.json 페이지당 건수(최대 100)
+    max_pages: int = Field(default=10, ge=1, le=100)  # corp·창당 페이지 상한(절단 방지 감사)
+
+
 class NewsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -163,6 +190,12 @@ class DartFinancialConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: DartFinancialSource
+
+
+class DartDisclosureConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: DartDisclosureSource
 
 
 class StorageConfig(BaseModel):
