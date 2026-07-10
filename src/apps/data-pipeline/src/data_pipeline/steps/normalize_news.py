@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from ..lake import Storage, is_raw_news_key, parse_raw_news_key, quality_log_key
 # BigKinds 날짜 파생(bigkinds_date)은 parse 의 벤더 date SSOT — ingest 도 같은 함수를 써
 # raw 파티션 published_date 와 canonical published_at 이 드리프트하지 않는다.
-from ..parse import bigkinds_date, make_article_id, normalize_url, parse_datetime
+from ..parse import bigkinds_date, news_article_id, normalize_url, parse_datetime
 from ..quality import BLOCKING_REASONS, validate_news_meta
 
 logger = logging.getLogger(__name__)
@@ -66,10 +66,11 @@ def _normalize(vendor: str, record: dict) -> dict:
         published_at = parse_datetime(_text(record, "publishedDate"))
 
     # article_id 는 ingest 가 raw 에 이미 심었다(FMP·BigKinds 둘 다) — 없으면(구 raw 등)
-    # parse.make_article_id 로 안정 재계산(항상 non-empty).
+    # ingest 와 **같은 SSOT**(parse.news_article_id)로 재계산한다. BigKinds 는 NEWS_ID 를 우선하므로
+    # 제목·발행일이 같은 별개 기사가 같은 id 로 붕괴하지 않는다(Codex P2 — 벤더 정체성 규약 일치).
     article_id = record.get("article_id")
     if not (isinstance(article_id, str) and article_id):
-        article_id = make_article_id(url, title or "", published_at)
+        article_id = news_article_id(record)
 
     return {
         "article_id": article_id,

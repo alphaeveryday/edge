@@ -3,6 +3,7 @@
 from data_pipeline.parse import (
     bigkinds_date,
     make_article_id,
+    news_article_id,
     normalize_url,
     parse_datetime,
     url_hash,
@@ -104,3 +105,20 @@ def test_bigkinds_date_non_string_and_missing_return_none_not_crash():
     assert bigkinds_date({"DATE": [], "NEWS_ID": {}}) is None
     assert bigkinds_date({}) is None
     assert bigkinds_date({"DATE": 20260701}) == "2026-07-01"  # int → str 강제
+
+
+def test_news_article_id_prefers_news_id_for_bigkinds():
+    # WHY: BigKinds 는 같은 제목·날짜의 별개 기사가 있다 — NEWS_ID 를 무시하고 TITLE|DATE 로만
+    #      해시하면 Step2 canonical merge 가 별개 기사를 하나로 합친다. ingest·normalize 가 이
+    #      SSOT 를 공유해 두 단계의 article_id 가 일치한다(정체성 드리프트 없음).
+    base = {"TITLE": "같은 제목", "DATE": "20260702"}
+    a = news_article_id({**base, "NEWS_ID": "01100101.20260702100000000"})
+    b = news_article_id({**base, "NEWS_ID": "01100101.20260702100100000"})
+    assert a != b and len(a) == len(b) == 64  # 별개 NEWS_ID → 별개 id
+
+
+def test_news_article_id_falls_back_to_url_then_title_when_no_news_id():
+    # WHY: NEWS_ID 없는 벤더(FMP 등)는 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백 —
+    #      URL 만 다른 같은 기사는 안 갈리고, URL 없는 기사도 안정 id 를 얻는다.
+    with_url = news_article_id({"title": "제목", "url": "https://e.com/a", "publishedDate": "2026-07-02"})
+    assert with_url == make_article_id("https://e.com/a", "제목", "2026-07-02")

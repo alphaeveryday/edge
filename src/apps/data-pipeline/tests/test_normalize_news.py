@@ -152,6 +152,22 @@ def test_unsupported_vendor_reported_not_silently_passed(tmp_path):
     assert "unsupported_vendor" in log["failures"][0]["reasons"]
 
 
+def test_bigkinds_fallback_article_id_prefers_news_id():
+    # WHY: raw 에 article_id 가 없을 때(구 raw) normalize 가 제목|날짜로 재계산하면 제목·발행일이
+    #      같은 별개 BigKinds 기사가 같은 id 로 붕괴해 canonical 병합(ALPHA-132)에서 유실된다 —
+    #      ingest 와 같은 SSOT(NEWS_ID 우선)를 써 별개 기사가 별개 id 를 갖게 한다(Codex P2 회귀 방지).
+    from data_pipeline.parse import news_article_id
+
+    base = _bk_row(TITLE="같은 제목", NEWS_ID="01100101.20260701153000001")
+    other = _bk_row(TITLE="같은 제목", NEWS_ID="01100101.20260701153000002")  # 같은 날짜, 다른 기사
+    del base["article_id"]
+    del other["article_id"]
+    id1 = normalize_news._normalize("bigkinds", base)["article_id"]
+    id2 = normalize_news._normalize("bigkinds", other)["article_id"]
+    assert id1 and id2 and id1 != id2  # 제목·날짜 같아도 별개 기사 → 별개 id
+    assert id1 == news_article_id(base)  # ingest 와 동일 SSOT 사용(드리프트 없음)
+
+
 class _FailingStorage:
     """LocalStorage 위임 + 지정 키에서 예외 — fail-loud(비0 종료) 경로 검증용."""
 

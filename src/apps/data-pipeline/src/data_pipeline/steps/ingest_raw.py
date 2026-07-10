@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_news_partition
-from ..parse import bigkinds_date, make_article_id, parse_datetime
+from ..parse import bigkinds_date, news_article_id, parse_datetime
 from ..sources import BigKindsNewsSource, FmpNewsSource, StopFetch
 
 logger = logging.getLogger(__name__)
@@ -24,15 +24,6 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "ingest_raw"
 DATASET = "stock_news"  # collection_log·raw 파티션의 dataset= 키
 NewsSourceAdapter = FmpNewsSource | BigKindsNewsSource
-
-
-def _article_id(record: dict) -> str:
-    news_id = str(record.get("NEWS_ID") or "").strip()
-    if news_id:
-        return make_article_id(None, news_id, None)
-    title = record.get("title") or record.get("TITLE") or ""
-    published = record.get("publishedDate") or record.get("DATE") or bigkinds_date(record)
-    return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)
 
 
 def _partition_date(record: dict, fallback_date: str) -> str:
@@ -98,10 +89,10 @@ def run(
         for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
             if getattr(source, "preserve_all_rows", False):
-                record["article_id"] = _article_id(record)
+                record["article_id"] = news_article_id(record)
                 partitions[(record["market"], _partition_date(record, started_date))].append(record)
                 continue
-            article_id = _article_id(record)
+            article_id = news_article_id(record)
             mention = {"market": record["market"], "ticker": record["our_ticker"]}
             existing = kept_by_id.get(article_id)
             if existing is not None:

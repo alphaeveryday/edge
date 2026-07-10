@@ -115,3 +115,18 @@ def bigkinds_date(record: dict) -> str | None:
         day = match.group(1)
         return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
     return None
+
+
+def news_article_id(record: dict) -> str:
+    """raw 뉴스 레코드(벤더 무관) → 안정 article_id. 벤더별 정체성 규약의 SSOT.
+
+    **BigKinds 는 NEWS_ID 를 우선**한다 — 국내 뉴스는 제목·발행일이 같아도 별개 기사가 있어
+    (제목|날짜 폴백으로 묶으면 별개 기사가 같은 id 로 붕괴한다), NEWS_ID 라는 벤더 고유 식별자를
+    쓴다. NEWS_ID 가 없으면(FMP 등) 정규화 URL 우선, 그것도 없으면 제목|발행일 폴백.
+    ingest(raw 적재)와 normalize(정제 재계산)가 이 한 함수를 공유해 정체성이 드리프트하지 않는다."""
+    news_id = str(record.get("NEWS_ID") or "").strip()
+    if news_id:
+        return make_article_id(None, news_id, None)
+    title = record.get("title") or record.get("TITLE") or ""
+    published = record.get("publishedDate") or record.get("DATE") or bigkinds_date(record)
+    return make_article_id(record.get("url") or record.get("PROVIDER_LINK_PAGE"), title, published)
