@@ -5,7 +5,8 @@
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
 > 재무제표(손익·재무상태·현금흐름), BigKinds 국내 뉴스, KIS(한국투자, 국내) 일봉,
-> OpenDART 국내 재무까지다.
+> OpenDART 국내 재무·**공시(disclosure filing)**까지다. 공시는 재무제표(fnlttSinglAcnt)와
+> **다른 API**(공시목록 list.json + 공시서류 원본 document.xml)로 메타 + 본문 raw 를 적재한다.
 > **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
 > ALPHA-133). **뉴스 정제(Step2)** 는 정규화(FMP·BigKinds 이형 → 표준 메타행) + 필수필드·발행일
@@ -60,6 +61,16 @@ DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=... \
 DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial --source dart
 
+# 국내 공시(disclosure) 원본저장(Step1) — OpenDART 공시목록(list.json) + 공시서류 원본
+# (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. corp_code×날짜창으로
+# 공시목록을 수집해 대상 유형(공급계약·사업보고서, report_nm 부분일치)만 추리고, 매칭 공시의
+# 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다. 날짜창은 뉴스와 동형(미지정=증분
+# 어제~오늘, 백필은 --from/--to). corp_code 는 corpCode.xml 로 런타임 매핑. 인증키는 env 주입.
+DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
+# 백필 예: 2026-06 한 달
+#   ... run ingest-raw-disclosure --from 2026-06-01 --to 2026-06-30
+
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
@@ -109,6 +120,9 @@ state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 
 - `ingest-price-raw --source kis`
 - `ingest-raw-financial --source dart`
 
+> ※ `ingest-raw-disclosure`(공시, ALPHA-344)는 신규 raw 스텝이다 — 로컬 CLI 로는 실행되나
+> 스케줄러/상태머신 편입은 인프라 후속(terraform 미변경). 편입 시 위 목록에 일곱 번째 브랜치로 추가한다.
+
 Scheduler 는 최초 `DISABLED` 로 생성한다. 수동 검증은 `terraform output data_pipeline_state_machine_arn`
 값으로 `aws stepfunctions start-execution --input '{"run_id":"manual-YYYYMMDDTHHMMSSZ"}'` 를 실행한다.
 
@@ -126,6 +140,7 @@ settings.price.source                # PriceSource (FMP EOD — 가격 전용 �
 settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱키/시크릿 env·env=prod|vps); 미설정이면 settings.kis_price 은 None
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
 settings.dart_financial.source       # DartFinancialSource (OpenDART 국내 재무 — 인증키 env·KR 6자리 맵); 미설정이면 settings.dart_financial 은 None
+settings.dart_disclosure.source      # DartDisclosureSource (OpenDART 국내 공시 — 인증키 env·KR 맵·report_nm 유형필터); 재무와 다른 API. 미설정이면 settings.dart_disclosure 은 None
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -169,6 +184,14 @@ settings.targets.keywords            # ["금리", ...]
   국내 OpenDART 재무는 같은 dataset·규약으로 `source=dart`(`--source dart`) 아래 쌓이며,
   DART `list[]` 원본 행에 `our_ticker`·`stock_code`·`corp_code`·`bsns_year`·`reprt_code` 등
   수집 provenance 만 부착한다.
+- **raw(공시)** — `raw/source=dart/dataset=disclosures/market=KR/ingest_date=…/run_id=…/` 에
+  run_id 별 append. **가격·재무와 동형(bronze 통일)** — 공시목록(list.json) 행을 수집일 기준으로
+  **전부 보존**한다(중복 판정 안 함). 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
+  **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
+  에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
+  아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
+  가 그 객체를 가리킨다(메타↔본문 링크). list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
+  붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
@@ -203,3 +226,6 @@ settings.targets.keywords            # ["금리", ...]
 - 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
   섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation
+- 공시(disclosure) 파싱 문서 레이크·정규화 fact(공급계약·사업부문 fact)·graph·eventization —
+  raw disclosures(메타+본문 ZIP)까지가 이번 범위. 본문 euc-kr HTML 파싱 → 열 지향 fact 는 후속
+  트랙(단일판매·공급계약 등은 OpenDART 구조화 JSON 이 없어 본문 파싱 필수)

@@ -1,10 +1,12 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
-    python -m data_pipeline.run {ingest-raw|ingest-price-raw|ingest-raw-financial}
-                                [--from YYYY-MM-DD] [--to YYYY-MM-DD]
-                                [--run-id RUN_ID] [--config PATH]
+    python -m data_pipeline.run
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure
+         |normalize-price|normalize-news}
+        [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
+        [--source VENDOR] [--input-run-id RUN_ID]
 
-수집 날짜창(--from/--to) — 뉴스·가격만 사용(재무제표는 point-in-time 폴링이라 창 없음):
+수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표는 point-in-time 폴링이라 창 없음):
   - 미지정(스케줄 증분): 어제~오늘 UTC 창을 앱이 계산한다. EventBridge Scheduler 는
     정적 입력만 넣어 '어제/오늘'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다.
   - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다.
