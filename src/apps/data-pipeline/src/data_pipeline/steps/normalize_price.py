@@ -82,14 +82,21 @@ def _norm_trade_date(raw: dict, key: str, reasons: list[str], *, kis: bool) -> s
     text = str(value).strip()
     # 벤더별 원본 포맷은 다르지만(KIS 'YYYYMMDD' vs FMP 'YYYY-MM-DD'), 둘 다 strptime 으로
     # 실재 달력일인지까지 검증한다 — 문자열 슬라이싱만 하면 '20260231'(2월 31일) 같은
-    # 8자리 비달력일이 통과한다. validate_ohlcv 는 날짜를 안 보므로, 여기서 안 막으면
-    # quality_log 가 존재하지 않는 거래일을 '정상'으로 인증한다(Rule 12).
+    # 비달력일이 통과한다. validate_ohlcv 는 날짜를 안 보므로, 여기서 안 막으면 quality_log
+    # 가 존재하지 않는 거래일을 '정상'으로 인증한다(Rule 12).
     fmt = "%Y%m%d" if kis else "%Y-%m-%d"
     try:
-        return datetime.strptime(text, fmt).date().isoformat()
+        parsed = datetime.strptime(text, fmt).date()
     except ValueError:
         reasons.append("bad_trade_date")
         return None
+    # strptime 은 zero-pad 를 강제하지 않아 '202671'(6자리)·'2026-7-1' 같은 드리프트도
+    # 2026-07-01 로 파싱한다 — 파싱값을 같은 포맷으로 되돌려 원문과 정확히 일치할 때만
+    # 정상으로 본다(왕복 검증). 어긋나면 정규 포맷이 아니므로 bad_trade_date.
+    if parsed.strftime(fmt) != text:
+        reasons.append("bad_trade_date")
+        return None
+    return parsed.isoformat()
 
 
 def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:

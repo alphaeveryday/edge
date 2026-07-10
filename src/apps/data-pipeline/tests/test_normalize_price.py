@@ -113,6 +113,20 @@ def test_kis_malformed_calendar_date_rejected(tmp_path):
     assert "bad_trade_date" in log["failures"][0]["reasons"]
 
 
+def test_unpadded_dates_rejected_both_vendors(tmp_path):
+    # WHY: strptime 은 zero-pad 를 강제하지 않아 KIS '202671'·FMP '2026-7-1' 같은 포맷
+    #      드리프트도 2026-07-01 로 파싱한다 — 왕복 검증으로 막지 않으면 비정규 포맷 행이
+    #      records_passed 로 샌다(Codex P2 회귀 방지). 정상 pad 날짜는 통과해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_bsop_date="202671")])
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(date="2026-7-1")])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 0 and log["records_failed"] == 2
+    assert all("bad_trade_date" in f["reasons"] for f in log["failures"])
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")
