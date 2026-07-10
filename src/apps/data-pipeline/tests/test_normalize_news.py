@@ -347,3 +347,24 @@ def test_mentions_preserved_fmp_merged_and_bigkinds_synthesized(tmp_path):
     b = _canonical_rows(storage, "2026-07-01", "bigkinds")[0]
     assert json.loads(f["mentions"]) == [{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}]
     assert json.loads(b["mentions"]) == [{"market": "KR", "ticker": "000660"}]  # our_ticker 합성
+
+
+def test_full_run_merges_with_existing_partition_preserving_aged_out_raw(tmp_path):
+    # WHY: canonical 은 raw 가 라이프사이클로 만료(Glacier/삭제)돼도 이전 적재분을 보존해야 한다 —
+    #      전체 런이 기존 파티션을 읽어 새 article_id 를 '추가'(덮어쓰기 아님)해야 raw 가 사라진 옛
+    #      기사가 유실되지 않는다. (_merge_partition 이 existing 을 떨어뜨리는 회귀를 격리해 잡는다 —
+    #      전량 재스캔 테스트로는 new_rows 가 옛 기사도 재구성해 이 경로가 안 탄다.)
+    import os
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row(article_id="A")])
+    assert normalize_news.run(storage, "N1") == 0
+    assert [r["article_id"] for r in _canonical_rows(storage, "2026-07-01", "fmp")] == ["A"]
+
+    # R1 raw 를 만료(삭제) — LocalStorage 에 delete 가 없어 파일을 직접 제거해 시뮬레이션.
+    os.remove(tmp_path / "lake" / _raw_key("fmp", "US", run_id="R1"))
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(article_id="B")])
+    assert normalize_news.run(storage, "N2") == 0
+
+    ids = sorted(r["article_id"] for r in _canonical_rows(storage, "2026-07-01", "fmp"))
+    assert ids == ["A", "B"]  # 기존 A(raw 만료) 보존 + 신규 B 추가
