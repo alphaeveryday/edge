@@ -32,7 +32,7 @@ git status --short
 ```
 - **커밋된 브랜치 변경 + 미커밋(staged/unstaged) + 미추적 새 파일을 모두** 범위에 넣는다(합집합, fallback 아님). `git diff dev...HEAD` 는 커밋분만, `git diff HEAD` 는 추적 파일의 미커밋 변경만(**미추적 새 파일은 안 나온다**), `git status --short` 는 파일명만 준다. 그래서 미추적 파일은 `git ls-files --others --exclude-standard` 로 나열해 **직접 읽는다**(또는 `git diff --no-index /dev/null <파일>`) — line-by-line·시크릿 스캔이 새 config/소스에 든 버그·토큰을 놓치지 않게. `--fix` 후·최종 커밋 전 편집도 같은 이유로 포함.
 - 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`).
-- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI/infra?
+- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI/infra? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
 
 ## Phase 1 — 파인더 각도 (Agent 로 독립 병렬 실행)
 
@@ -57,6 +57,10 @@ git status --short
 - **E. 스키마 계약** (`libs/schema` 변경 **또는 DB 쓰기 코드**(리포지토리·`persist`·마트 적재 등) 변경 시) — 스키마 변경에 `generated` 모델 동반 갱신이 빠졌는가(README Git 원칙). 마이그레이션이 expand-contract(파괴적 DDL을 한 번에)를 어겼는가. **단일 writer 위반**([ADR-0005](../../../docs/adr/0005-db-as-contract.md)·[docs/schema.md](../../../docs/schema.md) §1) — 한 테이블을 소유 모듈 밖에서 INSERT/UPDATE/DELETE 하는가. 이 위반은 스키마 diff 가 아니라 **앱 DB 접근 코드**에서 터지므로, 스키마 변경이 없어도 DB 쓰기 코드가 바뀌면 검사한다.
 - **F. 신뢰경계** (`gateway`·`*-api` 변경 시) — `widget-api`에 쓰기 표면이 생겼는가(읽기 전용·좁은 표면이어야 함). `gateway` 라우트 필터가 fail-open 인가(fail-closed 여야, [ADR-0006](../../../docs/adr/0006-gateway-single-edge.md)). cross-tenant 누수([ADR-0008](../../../docs/adr/0008-super-admin-console.md)). (시크릿 커밋은 위 '항상' 각도가 영역 무관하게 스캔한다.)
 - **G. 레이크·파이프라인** (`data-pipeline`·`analysis-engine` 변경 시) — 파티션 경로를 `lake/storage.py` 빌더(경로 규약 SSOT) 밖에서 조립했는가. raw 존이 원본을 유실하는가(raw 는 전부 보존). "결과는 항상 collection_log" 계약과 status 시맨틱(success/partial/error/stopped/skipped)이 온전한가 — 실패를 success(0건)로 위장하지 않는가(Rule 12).
+- **H. 검증·품질 게이트 완전성** (검증·정규화·파싱·타입강제·품질 게이트 코드 변경 시. 이 코드가 diff 의 핵심이면 tier 무관하게 켠다 — 우회된 게이트는 Rule 12 blocker다) — 코드의 일이 '잘못된 데이터를 거르는 것'일 때, **malformed 입력이 실제로 드러나는지**(사유와 함께 실패) 아니면 (a) 게이트 전에 crash 하거나 (b) 통과값으로 강제되거나 (c) 게이트가 안 보는 필드로 우회해 **passed 로 인증**되는지 적대적으로 열거한다. '통과로 집계됨(records_passed 등)'이 hunt 대상이다 — 게이트가 bad data 를 조용히 인증하면 fail-loud 위반(Rule 12). 아래 최소 입력군을 실제로 대입해 각 결과를 확인(테스트에 없으면 그 자체가 후보):
+  - **crash-before-gate** — 비객체/비기대 타입 입력(`null`·`[]`·스칼라·키 누락)이 `.get()`·인덱싱·언패킹에서 터져 배치 전체를 죽이는가(행 단위로 격리돼야, 한 이상치가 잡을 무너뜨리면 안 됨).
+  - **coerce-to-passing** — 타입 강제가 bad 를 통과값으로 바꾸는가: `float("nan"/"inf")`(NaN 비교는 전부 False라 수치 게이트를 조용히 통과)·`int(-0.5)=0`(부호·소수 소실)·`float(True)=1.0`(bool⊂int)·관대한 `strptime`(`'202671'` 미패딩·`'20260231'` 비달력일)·공백만 문자열이 truthy.
+  - **unchecked-field** — 게이트가 안 보는데 다운스트림 계약(정체성 키·참고값 등)이 요구하는 필드가 결측·불량이어도 passed 인가(예: `(market,ticker,trade_date)` 정체성 결측).
 
 ## Phase 2 — 검증
 
