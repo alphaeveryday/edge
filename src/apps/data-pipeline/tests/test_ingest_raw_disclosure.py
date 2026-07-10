@@ -103,6 +103,30 @@ def test_saves_meta_ndjson_and_document_objects(tmp_path):
     assert log["records_saved"] == 2 and log["documents_saved"] == 2
 
 
+def test_documents_written_as_fetched_not_buffered(tmp_path):
+    # WHY(Codex #83 P2): 본문 ZIP 은 대용량이라 전량 메모리 버퍼링하면 넓은 백필(사업보고서
+    #      다수)에서 raw 를 하나도 못 쓰고 OOM 난다 — 받는 즉시 저장해야 한다. put 순서로
+    #      검증: 본문(.zip)들이 메타(.ndjson)보다 먼저 쓰인다(버퍼링으로 되돌리면 메타·본문이
+    #      같은 저장 단계에 묶여 이 순서가 깨진다).
+    class OrderSpy(LocalStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.puts: list[str] = []
+
+        def put_bytes(self, key, data):
+            self.puts.append(key)
+            super().put_bytes(key, data)
+
+    spy = OrderSpy(tmp_path / "lake")
+    settings = _settings(tmp_path)
+    ingest_raw_disclosure.run(settings, spy, FakeSource(records=[_rec("A1"), _rec("B2")]), "r1")
+
+    raw_puts = [k for k in spy.puts if k.startswith("raw/")]
+    assert len([k for k in raw_puts if k.endswith(".zip")]) == 2  # 본문 2건
+    assert raw_puts[-1].endswith(".ndjson")  # 메타는 맨 마지막(본문 즉시 저장 후)
+    assert all(k.endswith(".zip") for k in raw_puts[:-1])  # 그 앞은 전부 본문
+
+
 def test_empty_window_is_success_not_error(tmp_path):
     # WHY(Rule 7 — 스텝별 판정): 매핑 대상이 있는데 공시가 0건인 건 정상 빈 창이다(그날 대상
     #      유형 공시 없음) — 재무제표의 '0행=error' 가드를 복사하면 정상 상태를 오탐한다.

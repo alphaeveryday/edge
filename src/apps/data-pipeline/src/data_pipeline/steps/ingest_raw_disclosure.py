@@ -73,12 +73,14 @@ def run(
     # 메타(공시목록 행)는 market 별 ndjson 으로, 본문(document.xml ZIP)은 rcept_no 별 객체로
     # 버퍼링했다가 저장 단계에서 한 번에 쓴다 — put 실패를 한 곳에서 계약대로 처리하려는 것.
     partitions: dict[str, list[dict]] = defaultdict(list)
-    documents: dict[str, bytes] = {}
     doc_failures: list[dict] = []
-    fetched = documents_fetched = 0
+    fetched = documents_saved = 0
     status, error, reason = "success", None, None
     exit_code = 0
 
+    # 본문(document.xml ZIP)은 대용량 바이너리라 버퍼링하지 않고 받는 즉시 저장한다 — 넓은
+    # 백필(사업보고서 다수)에서 전체 ZIP 을 메모리에 쌓으면 raw 를 하나도 못 쓰고 ECS 가 OOM
+    # 날 수 있다(Codex #83 P2). 메타(작은 ndjson)만 파티션별로 버퍼링해 저장 단계에서 쓴다.
     try:
         for record in source.fetch(settings.targets.symbols, from_date, to_date):
             fetched += 1
@@ -99,35 +101,34 @@ def run(
                     "error": str(exc),
                 })
             else:
+                # 받는 즉시 저장(버퍼링 안 함). put 실패는 저장 인프라 오류라 아래 except 로
+                # 전파돼 error 가 된다(메타 put 실패와 동일 취급 — "raw 저장 실패").
                 doc_key = raw_disclosure_document_key(
                     vendor, market, started_date, run_id, rcept_no
                 )
-                documents[doc_key] = body
+                storage.put_bytes(doc_key, body)
                 record["document_raw_path"] = doc_key
                 record["body_format"] = BODY_FORMAT
-                documents_fetched += 1
+                documents_saved += 1
             partitions[market].append(record)
     except StopFetch as exc:
         logger.error("공시 수집 중단(4xx/429): %s", exc)
         status, error, exit_code = "stopped", str(exc), 1
     except Exception as exc:
-        logger.exception("공시 수집 실패")
+        logger.exception("공시 수집/본문 저장 실패")
         status, error, exit_code = "error", str(exc), 1
 
-    # raw 저장(메타 ndjson + 본문 객체)도 계약("결과는 항상 collection_log") 안에 둔다 —
-    # put_bytes 가 실패해도 예외를 삼켜 status=error 로 남기고 로그를 쓴다.
-    saved = saved_documents = 0
+    # 메타(ndjson)만 저장 단계에서 쓴다 — 본문은 위에서 즉시 저장됨. put 실패도 계약
+    # ("결과는 항상 collection_log") 안에서 삼켜 status=error 로 남긴다.
+    saved = 0
     try:
         for market, records in sorted(partitions.items()):
             key = f"{raw_disclosure_partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
             saved += len(records)
-        for doc_key, body in sorted(documents.items()):
-            storage.put_bytes(doc_key, body)
-            saved_documents += 1
     except Exception as exc:
-        logger.exception("raw 저장 실패")
+        logger.exception("raw 메타 저장 실패")
         status, error, exit_code = "error", str(exc), 1
 
     # 대상(corp·페이지·문서) 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
@@ -159,8 +160,7 @@ def run(
             "reason": reason,
             "records_fetched": fetched,
             "records_saved": saved,
-            "documents_fetched": documents_fetched,
-            "documents_saved": saved_documents,
+            "documents_saved": documents_saved,
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),
@@ -171,7 +171,7 @@ def run(
         exit_code = exit_code or 1
     logger.info(
         "ingest_raw_disclosure 완료: status=%s fetched=%d saved=%d docs=%d failed=%d partitions=%d",
-        status, fetched, saved, saved_documents, len(failed_targets), len(partitions),
+        status, fetched, saved, documents_saved, len(failed_targets), len(partitions),
     )
     return exit_code
 
