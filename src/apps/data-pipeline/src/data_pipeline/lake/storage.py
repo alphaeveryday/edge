@@ -94,6 +94,33 @@ def parse_raw_price_key(key: str) -> dict[str, str]:
     }
 
 
+# ── raw news 스캔(정제 입력) ─────────────────────────────
+# 정제(normalize_news)는 raw stock_news 를 벤더·시장·발행일에 걸쳐 읽어 표준 메타행으로
+# 정규화한다. 경로 조립뿐 아니라 **경로 해석(파싱)도 이 모듈이 SSOT** 다(다른 곳에서 key 를
+# split 하지 않는다 — is_raw_price_key/parse_raw_price_key 와 동형).
+_RAW_NEWS_MARKER = "/dataset=stock_news/"
+
+
+def is_raw_news_key(key: str) -> bool:
+    """raw stock_news 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return key.startswith("raw/") and _RAW_NEWS_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_news_key(key: str) -> dict[str, str]:
+    """raw news 키에서 파티션 값(source·market·published_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=stock_news/market=…/published_date=…/run_id=…/part-*.ndjson.
+    `key=value` 세그먼트만 취해 dict 로 — part 파일명(= 없음)은 자연히 빠진다.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "published_date": segs["published_date"],
+        "run_id": segs["run_id"],
+    }
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 

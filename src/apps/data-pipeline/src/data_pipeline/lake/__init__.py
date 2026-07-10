@@ -6,8 +6,10 @@ from .storage import (
     Storage,
     canonical_price_daily_partition,
     collection_log_key,
+    is_raw_news_key,
     is_raw_price_key,
     make_storage,
+    parse_raw_news_key,
     parse_raw_price_key,
     quality_log_key,
     raw_financial_partition,
@@ -28,4 +30,6 @@ __all__ = [
     "canonical_price_daily_partition",
     "is_raw_price_key",
     "parse_raw_price_key",
+    "is_raw_news_key",
+    "parse_raw_news_key",
 ]
