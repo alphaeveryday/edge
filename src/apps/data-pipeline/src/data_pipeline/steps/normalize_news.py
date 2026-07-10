@@ -133,10 +133,11 @@ def _canonical_schema():
 
 
 def _canonical_row(row: dict) -> dict:
-    """표준 메타행 → canonical 직렬화 행. mentions(list)를 JSON 문자열로 고정해, 기존 파티션
-    (읽으면 문자열)과 신규 행이 병합 내내 같은 표현을 갖게 한다(이중 인코딩 방지)."""
+    """표준 메타행 → canonical 직렬화 행. mentions(list)를 **정규화(dedup+정렬) JSON 문자열**로
+    고정한다 — 단일 적재도 병합 경로(_union_mentions)와 **같은 결정적 표현**을 써야 멱등 재실행
+    바이트가 안정된다(단일 적재만 raw 순서로 쓰면 첫 런 vs 병합 재런의 바이트가 어긋난다)."""
     out = {c: row.get(c) for c in _CANONICAL_COLUMNS}
-    out["mentions"] = json.dumps(row.get("mentions") or [], ensure_ascii=False)
+    out["mentions"] = _union_mentions(row.get("mentions"))
     return out
 
 
@@ -196,9 +197,17 @@ def _fetched_at(row: dict) -> datetime:
 
 
 def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
-    """한 (published_date, source_vendor) 파티션을 article_id 키로 멱등 병합. 같은 article_id
-    재적재는 최신 fetched_at 이 이기고(정정 반영), 동률이면 신규(멱등 재실행). source_vendor 가
-    파티션을 갈라 교차벤더 충돌이 없으므로 가격의 fail-loud 분기는 없다."""
+    """한 **published_date 파티션**(통합 — 벤더가 섞임)을 `article_id`(=원문 URL 해시) 키로 멱등
+    병합. 같은 article_id 재적재는 최신 fetched_at 이 이기고(정정 반영), 동률이면 신규(멱등 재실행).
+
+    가격의 fail-loud(벤더 교차 통화 오염) 분기는 없다 — 뉴스는 **정체성이 원문 URL 이라 교차벤더
+    같은 id = 같은 실기사**이고, 오염될 공유 수치 진실이 없다. 교차벤더 같은 URL 이 병합될 때는
+    최신 fetched_at 행의 스칼라 메타(title·url·market·source_vendor·publisher)가 대표가 되고 **패자
+    쪽 스칼라는 버려진다** — 단 mentions 는 양쪽 union 한다(BigKinds 는 같은 기사가 여러 종목
+    질의로 각기 단일 mention 으로 와, 통째 교체하면 종목↔기사 링크가 유실되므로). 그래서 행
+    레벨 `market`/`source_vendor` 는 '대표(승자) 프로비넌스'일 뿐이고, **종목별 권위 있는 market
+    은 self-describing 한 mentions[].market 에 있다**(다운스트림은 행 market 이 아니라 mention 을
+    쓴다). 교차벤더 같은 URL 은 실무상 드묾(FMP 영문·US vs BigKinds 국문·KR)."""
     acc: dict[str, dict] = {}
     for row in [*existing, *new_rows]:
         article_id = row["article_id"]
@@ -206,9 +215,6 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
         if prev is None:
             acc[article_id] = row
             continue
-        # 최신 fetched_at 이 메타데이터 대표를 이기되, **mentions 는 양쪽 union** 한다 — BigKinds 는
-        # 같은 기사가 여러 종목 질의에 걸려 각기 다른 단일 mention 으로 오므로(ingest 가 병합 안 함),
-        # 통째 교체하면 종목↔기사 링크가 유실된다. fetched_at 동률이면 신규(멱등).
         winner = row if _fetched_at(row) >= _fetched_at(prev) else prev
         merged = dict(winner)
         merged["mentions"] = _union_mentions(prev.get("mentions"), row.get("mentions"))
@@ -220,7 +226,9 @@ def _duplicate_signals(rows: list[dict], published_date: str) -> list[dict]:
     """파티션 내 근접중복 신호 — **다른 article_id** 가 같은 **정규화 제목**을 가지면 로깅한다
     (exact 병합은 안 함 — 서로 다른 기사를 붕괴시키면 유실이므로 신호만). URL 은 이제 정체성이라
     같은 URL→같은 article_id→이미 병합이므로 다른 id 로 갈릴 수 없다 → 제목 근접중복만 신호 대상.
-    통합 파티션이라 벤더가 섞여도 제목 충돌을 함께 감지한다(교차벤더 near-dup 도 신호로 드러남)."""
+    통합 파티션이라 벤더가 섞여도 제목 충돌을 함께 감지한다(교차벤더 near-dup 도 신호로 드러남).
+    판정은 **공백정규화 제목의 정확일치**다(대소문자·문장부호 미폴딩) — 넓은 fuzzy 클러스터링은
+    다운스트림 news_dedup_cluster 소관이라 여기선 좁은 exact-title 신호만 낸다."""
     signals: list[dict] = []
     groups: dict[str, list[str]] = defaultdict(list)
     for row in rows:

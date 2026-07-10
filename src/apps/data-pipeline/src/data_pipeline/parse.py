@@ -125,8 +125,10 @@ def news_article_id(record: dict) -> str:
     소스를 흡수한 통합 구조가 된다. URL 이 없을 때만 폴백 — BigKinds `NEWS_ID`(벤더 고유 식별자,
     제목|날짜 붕괴 방지) → 최후 `title|published`. ingest(raw 적재)와 normalize(정제 재계산)가 이
     한 함수를 공유해 정체성이 드리프트하지 않는다. 우선순위: url → NEWS_ID → title|date."""
-    url = record.get("url") or record.get("PROVIDER_LINK_PAGE")
-    if normalize_url(url):
+    # 후보 URL 필드 중 **정규화 가능한 첫 값**을 쓴다 — truthy-but-garbage `url` 이 유효한
+    # `PROVIDER_LINK_PAGE` 를 가리지 않게(깨진 필드보다 성립하는 원문 링크 우선).
+    url = next((u for u in (record.get("url"), record.get("PROVIDER_LINK_PAGE")) if normalize_url(u)), None)
+    if url:
         return make_article_id(url, "", None)  # 원문 URL 해시 — 소스 무관 정체성
     news_id = str(record.get("NEWS_ID") or "").strip()
     if news_id:

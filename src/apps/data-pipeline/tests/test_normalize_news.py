@@ -269,11 +269,15 @@ def test_passing_rows_written_to_unified_date_partition(tmp_path):
 
 def test_same_original_url_unifies_identity_across_vendors(tmp_path):
     # WHY: canonical 통합의 핵심 — 정체성이 원문 URL 해시라 같은 원문 URL 이면 FMP(url)든
-    #      BigKinds(PROVIDER_LINK_PAGE)든 **같은 article_id → 한 행으로 병합**. 소스 무관 dedup.
+    #      BigKinds(PROVIDER_LINK_PAGE)든 **같은 article_id → 한 행으로 병합**(소스 무관 dedup).
+    #      승자(최신 fetched_at)의 스칼라 메타가 대표가 되고 패자 스칼라는 버려지되, mentions 는
+    #      양쪽 union — 종목별 권위 market 은 행 market 이 아니라 self-describing 한 mention 에 있다.
     storage = LocalStorage(tmp_path / "lake")
-    fmp = _fmp_row(url="https://press.com/a", publishedDate="2026-07-01 09:00:00")
+    fmp = _fmp_row(url="https://press.com/a", publishedDate="2026-07-01 09:00:00",
+                   our_ticker="AAPL", fetched_at="2026-07-02T00:00:00+00:00")  # 최신 → 승자
     del fmp["article_id"]  # url 에서 파생되게
-    bk = _bk_row(PROVIDER_LINK_PAGE="https://press.com/a")  # 같은 원문 URL
+    bk = _bk_row(PROVIDER_LINK_PAGE="https://press.com/a", our_ticker="000660",
+                 fetched_at="2026-07-01T00:00:00+00:00")  # 같은 원문 URL, 옛 수집
     del bk["article_id"]
     _write_raw(storage, _raw_key("fmp", "US"), [fmp])
     _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
@@ -281,6 +285,27 @@ def test_same_original_url_unifies_identity_across_vendors(tmp_path):
     assert normalize_news.run(storage, "N1") == 0
     rows = _canonical_rows(storage, "2026-07-01")
     assert len(rows) == 1  # 같은 원문 URL → 같은 정체성 → 통합 병합
+    row = rows[0]
+    assert row["source_vendor"] == "fmp"  # 승자(최신) 프로비넌스가 행 대표
+    assert sorted((m["market"], m["ticker"]) for m in json.loads(row["mentions"])) == \
+        [("KR", "000660"), ("US", "AAPL")]  # 양쪽 종목 mention 보존(교차벤더 union)
+
+
+def test_multi_mention_single_write_is_sorted_and_idempotent(tmp_path):
+    # WHY: 단일 적재 경로도 병합 경로와 **같은 정렬 표현**을 써야 멱등 — mentions 를 raw(질의) 순서로
+    #      쓰면 첫 런(단일 적재)과 재런(기존+신규 병합)의 바이트가 어긋난다(canonical 은 run_id
+    #      없는 멱등 계약). 단일 적재도 dedup+정렬로 고정한다.
+    storage = LocalStorage(tmp_path / "lake")
+    fmp = _fmp_row(article_id="m",
+                   mentions=[{"market": "US", "ticker": "MSFT"}, {"market": "US", "ticker": "AAPL"}])  # 역순
+    _write_raw(storage, _raw_key("fmp", "US"), [fmp])
+
+    assert normalize_news.run(storage, "N1") == 0
+    first = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(first[0]["mentions"]) == \
+        [{"market": "US", "ticker": "AAPL"}, {"market": "US", "ticker": "MSFT"}]  # 단일 적재도 정렬됨
+    assert normalize_news.run(storage, "N2") == 0
+    assert _canonical_rows(storage, "2026-07-01") == first  # 단일→병합 재런 바이트 동일
 
 
 def test_canonical_idempotent_across_runs(tmp_path):
