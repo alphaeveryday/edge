@@ -100,6 +100,19 @@ def test_nan_inf_bool_prices_rejected_not_silently_passed(tmp_path):
     assert all("non_numeric" in f["reasons"] for f in log["failures"])
 
 
+def test_kis_malformed_calendar_date_rejected(tmp_path):
+    # WHY: KIS 날짜는 8자리·숫자여도 실재 달력일이 아닐 수 있다('20260231'=2월 31일).
+    #      validate_ohlcv 는 날짜를 안 보므로, 정규화가 strptime 으로 걸러야 존재하지 않는
+    #      거래일이 records_passed 로 인증되지 않는다(Codex P2 회귀 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_bsop_date="20260231")])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 0 and log["records_failed"] == 1
+    assert "bad_trade_date" in log["failures"][0]["reasons"]
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")

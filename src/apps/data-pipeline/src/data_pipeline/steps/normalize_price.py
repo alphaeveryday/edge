@@ -80,15 +80,13 @@ def _norm_trade_date(raw: dict, key: str, reasons: list[str], *, kis: bool) -> s
         reasons.append("missing_field")
         return None
     text = str(value).strip()
-    if kis:
-        # KIS 는 'YYYYMMDD'(8자리) — 하이픈 형식으로 통일.
-        if len(text) == 8 and text.isdigit():
-            return f"{text[:4]}-{text[4:6]}-{text[6:]}"
-        reasons.append("bad_trade_date")
-        return None
-    # FMP 는 이미 'YYYY-MM-DD' — 형식만 확인(파싱 실패는 드리프트).
+    # 벤더별 원본 포맷은 다르지만(KIS 'YYYYMMDD' vs FMP 'YYYY-MM-DD'), 둘 다 strptime 으로
+    # 실재 달력일인지까지 검증한다 — 문자열 슬라이싱만 하면 '20260231'(2월 31일) 같은
+    # 8자리 비달력일이 통과한다. validate_ohlcv 는 날짜를 안 보므로, 여기서 안 막으면
+    # quality_log 가 존재하지 않는 거래일을 '정상'으로 인증한다(Rule 12).
+    fmt = "%Y%m%d" if kis else "%Y-%m-%d"
     try:
-        return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+        return datetime.strptime(text, fmt).date().isoformat()
     except ValueError:
         reasons.append("bad_trade_date")
         return None
