@@ -125,12 +125,18 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
 
 
 def _adj_close(raw: dict) -> float | None:
-    """FMP adjClose(있으면). 없거나 비수치면 null — 정합성 게이트 대상 아님(참고 필드)."""
+    """FMP adjClose(있으면). 정합성 게이트 대상이 아닌 참고 필드라 값이 나빠도 행을 탈락
+    시키진 않지만, 없거나 비수치·비유한(NaN/Inf)·bool 이면 그 못 쓰는 값을 그대로 싣지
+    않고 null 로 정리한다(_to_number 와 같은 위생 기준 — 다운스트림이 NaN adj_close 를
+    읽지 않게)."""
     value = raw.get("adjClose")
+    if value is None or isinstance(value, bool):
+        return None
     try:
-        return float(value) if value is not None else None
+        num = float(value)
     except (TypeError, ValueError):
         return None
+    return num if math.isfinite(num) else None
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:

@@ -142,6 +142,19 @@ def test_non_object_row_isolated_not_crash(tmp_path):
     assert all("non_object_row" in f["reasons"] for f in log["failures"])
 
 
+def test_nonfinite_or_bool_adjclose_nulled_but_row_valid():
+    # WHY: adj_close 는 정합성 게이트 대상이 아닌 참고 필드라 NaN/Inf/bool 이어도 행을
+    #      탈락시키진 않지만(정상 봉 유실 방지), 못 쓰는 값을 그대로 싣지 않고 null 로
+    #      정리해야 다운스트림이 NaN adj_close 를 읽지 않는다(Codex P2 회귀 방지).
+    for bad in (float("nan"), float("inf"), True):
+        row, reasons = normalize_price._normalize("fmp", _fmp_row(adjClose=bad))
+        assert reasons == [], f"{bad!r} 이 행을 탈락시키면 안 된다"
+        assert row["adj_close"] is None, f"{bad!r} adjClose 는 null 로 정리돼야 한다"
+    # 정상 adjClose 는 그대로 보존.
+    ok, _ = normalize_price._normalize("fmp", _fmp_row(adjClose=12.5))
+    assert ok["adj_close"] == 12.5
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")
