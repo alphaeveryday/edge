@@ -324,7 +324,28 @@ def test_input_run_id_scopes_validation(tmp_path):
     _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(), _fmp_row()])
 
     assert normalize_price.run(storage, "N1", input_run_id="R2") == 0
-    assert _quality_log(storage)["records_read"] == 2  # R1(1건) 제외, R2(2건)만
+    log = _quality_log(storage)
+    assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
+    # 스코프 실행은 canonical 을 쓰지 않는다 — 다른 벤더 raw 를 못 봐 벤더 교차 충돌을 감지
+    # 못 하므로, 충돌로 비워진 키를 한 벤더만으로 재적재해 fail-loud 를 깨는 걸 막는다.
+    assert log["canonical_written"] is False
+    assert log["canonical_rows_written"] == 0
+    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+
+
+def test_scoped_rerun_does_not_revive_collision(tmp_path):
+    # WHY: 벤더 교차 충돌로 canonical 이 비워진 뒤, 한 벤더만 --input-run-id 로 재실행해도
+    #      그 벤더가 canonical 에 되살아나면 안 된다(fail-loud 불변식: 둘 다 제외 유지) —
+    #      스코프 실행이 canonical 을 안 쓰므로 자연히 보장된다(Codex P2 회귀 방지).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "KR", run_id="RF"), [_fmp_row(our_ticker="005930", market="KR")])
+    _write_raw(storage, _raw_key("kis", "KR", run_id="RK"), [_kis_row(our_ticker="005930")])
+    assert normalize_price.run(storage, "N1") == 1  # 전체 런: 충돌 fail-loud
+    assert _canonical_rows(storage, "KR", "2026-07-01") == []
+
+    # fmp 런만 스코프 재실행 — canonical 에 fmp 를 되살리지 않아야 한다.
+    assert normalize_price.run(storage, "N2", input_run_id="RF") == 0
+    assert _canonical_rows(storage, "KR", "2026-07-01") == []
 
 
 def test_kis_dateless_extra_row_fails_gracefully(tmp_path):

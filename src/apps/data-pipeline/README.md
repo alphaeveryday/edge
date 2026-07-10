@@ -62,7 +62,9 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
 # trade_date) 로 멱등 병합 적재한다(같은 벤더 최신 fetched_at 우선, 벤더 교차 충돌 fail-loud).
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw price 전체, 멱등).
+# --input-run-id 로 특정 수집 런만 재검증(미지정=raw price 전체, 멱등). 단, 스코프 실행은
+# 재검증(quality_log)만 하고 canonical 은 안 쓴다 — 스코프는 다른 벤더의 raw 를 못 봐 벤더
+# 교차 충돌을 감지 못 하므로, canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative 하게 쓴다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-price
 #   특정 런만: ... run normalize-price --input-run-id 20260701T000000Z
 ```

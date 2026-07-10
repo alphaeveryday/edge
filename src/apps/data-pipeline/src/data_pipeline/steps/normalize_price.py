@@ -351,19 +351,26 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 continue
             passing.append(row)
 
-    # 통과 행을 canonical 로 멱등 병합 적재. 스토리지/parquet 장애는 삼키지 않고 exit_code
-    # 에 반영한다(검증만 하고 적재를 조용히 건너뛰면 Rule 12 위반).
+    # 통과 행을 canonical 로 멱등 병합 적재 — **전체 런(input_run_id=None)만** 쓴다.
+    # 스코프 실행은 그 수집 런의 행만 보므로 벤더 교차 충돌을 감지할 수 없다(다른 벤더의
+    # raw 는 스코프 밖). 스코프가 canonical 을 쓰면, 충돌로 비워진 키를 한 벤더만으로 다시
+    # 채워 fail-loud 불변식(둘 다 제외)을 조용히 깬다. 그래서 스코프는 재검증(quality_log)만
+    # 하고, canonical 은 전체 raw 를 보는 멱등 런이 authoritative 하게 쓴다(Rule 12).
     collisions: list[dict] = []
     parts_written = canonical_rows = 0
-    try:
-        parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
-    except Exception:
-        logger.exception("canonical 적재 실패")
-        exit_code = 1
-    if collisions:
-        # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
-        logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
-        exit_code = exit_code or 1
+    canonical_written = input_run_id is None
+    if canonical_written:
+        try:
+            parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            exit_code = 1
+        if collisions:
+            # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
+            logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
+            exit_code = exit_code or 1
+    else:
+        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
 
     try:
         storage.put_bytes(
@@ -378,6 +385,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_passed": len(passing),
                 "records_failed": len(failures),
                 "failures": failures,
+                "canonical_written": canonical_written,
                 "canonical_partitions_written": parts_written,
                 "canonical_rows_written": canonical_rows,
                 "vendor_collisions": collisions,
