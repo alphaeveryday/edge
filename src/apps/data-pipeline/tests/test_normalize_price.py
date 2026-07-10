@@ -171,6 +171,21 @@ def test_fractional_volume_rejected_not_truncated():
     assert neg_reasons == [] and neg["volume"] == -3  # 게이트 이전엔 통과, 게이트에서 탈락
 
 
+def test_missing_identity_ticker_or_market_rejected():
+    # WHY: (market,ticker,trade_date) 는 canonical 정체성 키다 — ticker·market 없는 행은
+    #      키를 만들 수 없어 canonical 로 못 간다. validate_ohlcv 는 이 둘을 안 보므로,
+    #      정규화가 missing_field 로 걸러야 정체성 없는 행이 passed 로 인증되지 않는다(Codex P2).
+    no_ticker = _fmp_row()
+    del no_ticker["our_ticker"]
+    _, r1 = normalize_price._normalize("fmp", no_ticker)
+    assert "missing_field" in r1
+
+    no_market = _fmp_row()
+    del no_market["market"]
+    _, r2 = normalize_price._normalize("fmp", no_market)
+    assert "missing_field" in r2
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")

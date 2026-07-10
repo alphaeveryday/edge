@@ -127,6 +127,13 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
         "source_vendor": vendor,
         "fetched_at": raw.get("fetched_at"),
     }
+    # market·ticker 는 canonical 정체성 키(market,ticker,trade_date)의 일부다 — 없으면 그
+    # 행은 키를 만들 수 없어 canonical 로 못 간다. validate_ohlcv 는 이 둘을 안 보므로, 여기서
+    # 결측을 missing_field 로 드러내지 않으면 정체성 없는 행이 passed 로 인증된다(Rule 12).
+    if not row["market"]:
+        reasons.append("missing_field")
+    if not row["ticker"]:
+        reasons.append("missing_field")
     return row, _dedup(reasons)
 
 
