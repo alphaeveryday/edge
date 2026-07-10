@@ -206,6 +206,14 @@ def test_unhashable_market_isolated_not_crash(tmp_path):
     assert "missing_field" in log["failures"][0]["reasons"]
 
 
+def test_unsupported_market_rejected():
+    # WHY: 정규화는 US/KR 만 지원한다 — 비어있진 않지만 미지원 market('ZZ')은 통화 계약을
+    #      만들 수 없어(currency=None) 표준행이 불완전하다. present 라고 passed 로 인증하지
+    #      않고 지원 집합으로 명시 검증한다(Codex P2 회귀 방지).
+    _, reasons = normalize_price._normalize("fmp", _fmp_row(market="ZZ"))
+    assert "unsupported_market" in reasons
+
+
 def test_input_run_id_scopes_validation(tmp_path):
     # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
     storage = LocalStorage(tmp_path / "lake")

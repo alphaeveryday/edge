@@ -137,6 +137,11 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
     # 공백/비문자열도 결측으로 본다(설정 NonBlankStr 관례와 일치 — '  ' 로 위장 못 하게).
     if _blank(row["market"]):
         reasons.append("missing_field")
+    elif row["market"] not in _CURRENCY:
+        # 비어있진 않지만 정규화가 지원하지 않는 market('ZZ' 등)은 통화 계약을 만들 수 없어
+        # (currency=None) 표준행이 불완전하다 — passed 로 위장하지 않는다(Rule 12). 정규화는
+        # 현재 US/KR 만 지원하므로 지원 집합(_CURRENCY 키)으로 명시 검증한다.
+        reasons.append("unsupported_market")
     if _blank(row["ticker"]):
         reasons.append("missing_field")
     return row, _dedup(reasons)
