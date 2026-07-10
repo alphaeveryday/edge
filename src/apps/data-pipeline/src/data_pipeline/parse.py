@@ -32,8 +32,12 @@ def normalize_url(url: str | None) -> str | None:
 
     트래킹 파라미터만 다른 같은 기사 URL 은 같은 article_id 로 모이고,
     식별자성 쿼리(?id=…)는 보존돼 별개 기사로 남는다.
+
+    비문자열 입력(int·list 등)은 None 으로 돌려준다 — `.strip()` 이 비str 에서 크래시하면
+    이 함수를 URL 후보 필터로 쓰는 news_article_id 가 한 이상치 행에 죽는다(BigKinds
+    PROVIDER_LINK_PAGE 가 비str 이어도 NEWS_ID 폴백으로 안전하게 흐르도록, SSOT 에서 방어).
     """
-    if not url:
+    if not isinstance(url, str) or not url:
         return None
     try:
         parsed = urlsplit(url.strip())

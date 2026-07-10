@@ -92,12 +92,11 @@ def _normalize(vendor: str, record: dict) -> dict:
         market = _text(record, "market")
         published_at = parse_datetime(_text(record, "publishedDate"))
 
-    # article_id 는 ingest 가 raw 에 이미 심었다(FMP·BigKinds 둘 다) — 없으면(구 raw 등)
-    # ingest 와 **같은 SSOT**(parse.news_article_id)로 재계산한다. BigKinds 는 NEWS_ID 를 우선하므로
-    # 제목·발행일이 같은 별개 기사가 같은 id 로 붕괴하지 않는다(벤더 정체성 규약 일치).
-    article_id = record.get("article_id")
-    if not (isinstance(article_id, str) and article_id):
-        article_id = news_article_id(record)
+    # article_id 는 raw 의 stamp 를 **신뢰하지 않고 항상 재계산**한다(parse.news_article_id) —
+    # canonical 정체성은 canonical 단계가 불변 raw 내용에서 파생해야, 정체성 로직이 바뀌어도
+    # (예: NEWS_ID 우선 → 원문 URL 우선) 이미 수집된 구 raw 까지 통합이 적용된다. stamp 를
+    # 신뢰하면 구 raw 의 옛 id 가 남아 같은 원문 URL 인 FMP·BigKinds 가 안 합쳐진다(Codex P2).
+    article_id = news_article_id(record)
 
     return {
         "article_id": article_id,

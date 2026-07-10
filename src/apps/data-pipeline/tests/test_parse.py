@@ -124,3 +124,11 @@ def test_news_article_id_falls_back_news_id_then_title_when_no_url():
     assert a != b and len(a) == len(b) == 64  # 별개 NEWS_ID → 별개 id
     # NEWS_ID 도 URL 도 없으면 title|date 최후 폴백.
     assert news_article_id(base) == make_article_id(None, "같은 제목", "20260702")
+
+
+def test_normalize_url_non_string_returns_none_not_crash():
+    # WHY: 비문자열 입력(int·list)이 .strip() 에서 크래시하면 URL 후보 필터로 쓰는 news_article_id 가
+    #      한 이상치 행에 죽는다(BigKinds preserve_all_rows 수집 중단) — SSOT 에서 None 방어(Codex P2).
+    assert normalize_url(123) is None
+    assert normalize_url([]) is None
+    assert normalize_url(None) is None
