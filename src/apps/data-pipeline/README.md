@@ -11,7 +11,10 @@
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
 > ALPHA-133). **뉴스 정제(Step2)** 는 정규화(FMP·BigKinds 이형 → 표준 메타행) + 필수필드·발행일
 > 게이트 + quality_log + 통과 행의 `canonical/news/news_articles` article_id 멱등 병합 적재까지
-> 완료했다(`normalize-news`, ALPHA-131·132).
+> 완료했다(`normalize-news`, ALPHA-131·132). **공시 정제(Step2)** 는 raw 공시 본문(euc-kr HTML)을
+> 파싱해 공통 **공급계약 fact** 로 정규화 + 게이트 + quality_log + 통과 fact 의
+> `canonical/disclosures/supply_contract_fact` rcept_no 멱등 병합 적재까지 완료했다
+> (`normalize-disclosure`, ALPHA-345). 사업부문(segment) fact 는 후속 트랙.
 
 ## 실행
 
@@ -90,6 +93,18 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-price
 # --input-run-id 로 특정 수집 런만 재검증(미지정=raw news 전체, 멱등; 스코프는 canonical 안 씀).
 uv run --package data-pipeline python -m data_pipeline.run normalize-news
 #   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
+
+# 공시 정제(Step2) — raw disclosures(메타 ndjson + 본문 ZIP) → 단일판매·공급계약 본문 파싱 →
+# 공통 공급계약 fact. report_nm 으로 doc_type 라우팅(공급계약만; 사업보고서 등은 스킵),
+# 본문은 document.xml ZIP 을 euc-kr 디코딩·파싱하고 메타 provenance(rcept_no·corp_code·ticker·
+# corp_name·source_url·rcept_dt)를 조인한다. 게이트는 정체성(rcept_no)·시간축(report_date)·표현
+# 불가 수치(int64 초과 금액·비유한 비율)를 blocking, 값 이상(유보 상대방·범위밖 비율·비양수 금액)을
+# 경고로 data_quality_logs 에 남긴다. 통과 fact 는 canonical/disclosures/supply_contract_fact 에
+# rcept_no 로 멱등 병합 적재한다(같은 rcept_no 최신 fetched_at 우선). --input-run-id 로 특정 수집
+# 런만 재검증(미지정=raw disclosures 전체, 멱등; 스코프는 canonical 안 씀). 파서는 팀원(정준영)
+# 검증 프로토타입 이식 — graph 투영·theme 링킹은 범위 밖(analysis-engine 소관).
+uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
+#   특정 런만: ... run normalize-disclosure --input-run-id 20260701T000000Z
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -209,6 +224,13 @@ settings.targets.keywords            # ["금리", ...]
   재적재는 최신 fetched_at 이 메타 대표를 이기되 **mentions 는 union**(종목↔기사 링크 보존). 다른
   article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
+- **canonical(공시 공급계약, 정제 Step2)** — `canonical/disclosures/supply_contract_fact/report_date=…/part-*.parquet`
+  에 게이트 통과 fact 를 **rcept_no(14자리 접수번호=문서키) 키로 멱등 병합**. raw 와 달리 run_id·
+  source_vendor 파티션이 없다(멱등). 파티션은 `report_date`(rcept_dt, 공시 접수일) 하나, rcept_no 는
+  파티션 내 행 키다. 같은 rcept_no 재적재(정정본 재수집)는 최신 fetched_at 우선. `source_vendor`(dart)는
+  현재 KR·DART 단독이라 컬럼(provenance)이지 파티션이 아니다. 파서 출력(계약상대방·금액·매출액대비·
+  계약기간·confidence)에 메타 provenance(corp_code·ticker·corp_name·source_url)를 조인한다. graph
+  투영·theme 링킹·event 는 범위 밖(analysis-engine 소관).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
@@ -226,6 +248,6 @@ settings.targets.keywords            # ["금리", ...]
 - 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
   섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation
-- 공시(disclosure) 파싱 문서 레이크·정규화 fact(공급계약·사업부문 fact)·graph·eventization —
-  raw disclosures(메타+본문 ZIP)까지가 이번 범위. 본문 euc-kr HTML 파싱 → 열 지향 fact 는 후속
-  트랙(단일판매·공급계약 등은 OpenDART 구조화 JSON 이 없어 본문 파싱 필수)
+- 공시(disclosure) **사업부문(segment) fact**·graph·eventization — 공급계약 fact 정제(본문 euc-kr
+  HTML 파싱 → `canonical/disclosures/supply_contract_fact`)는 완료(ALPHA-345). 사업부문 fact(pandas
+  4-전략 파싱)는 후속 트랙, graph 투영·theme 링킹·event 는 다운스트림(analysis-engine) 소관.
