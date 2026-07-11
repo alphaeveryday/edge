@@ -91,15 +91,18 @@ def _norm_report_date(rcept_dt: object) -> str | None:
     return parsed.isoformat()
 
 
-def _to_fact(record: dict, parsed: dict) -> dict:
+def _to_fact(record: dict, parsed: dict, vendor: str) -> dict:
     """파서 출력 + raw 메타 provenance → 공통 공급계약 fact 행.
 
     corp_name 은 raw 메타(권위 provenance)를 쓴다(파서도 title 에서 뽑지만 raw 가 SSOT).
-    계약기간(start·end)은 ISO 문자열로 직렬화한다(canonical 은 전 컬럼 명시 스키마)."""
+    계약기간(start·end)은 ISO 문자열로 직렬화한다(canonical 은 전 컬럼 명시 스키마).
+    source_vendor(raw 키의 source=)는 파티션이 아니라 컬럼으로 보존한다 — 현재 KR·DART
+    단독이나 다른 공시 소스 추가·canonical↔raw 감사에 provenance 가 필요하다(가격·뉴스 동형)."""
     start = parsed.get("start")
     end = parsed.get("end")
     return {
         "rcept_no": _text(record, "rcept_no"),
+        "source_vendor": vendor,
         "corp_code": _text(record, "corp_code"),
         "ticker": _text(record, "our_ticker"),
         "corp_name": _text(record, "corp_name"),
@@ -123,9 +126,10 @@ def _to_fact(record: dict, parsed: dict) -> dict:
 # 명시 스키마로 고정 — pyarrow 추론에 맡기면 all-None 컬럼이 null 타입으로 잡혀 기존 파티션과
 # 병합 시 스키마가 충돌한다. 수치는 타입 지정(가격 정제 관례), 나머지는 string.
 _CANONICAL_COLUMNS = (
-    "rcept_no", "corp_code", "ticker", "corp_name", "counterparty", "counterparty_raw",
-    "counterparty_withheld", "object", "amount_krw", "ratio_pct", "contract_start",
-    "contract_end", "confidence", "report_date", "source_url", "parser_version", "fetched_at",
+    "rcept_no", "source_vendor", "corp_code", "ticker", "corp_name", "counterparty",
+    "counterparty_raw", "counterparty_withheld", "object", "amount_krw", "ratio_pct",
+    "contract_start", "contract_end", "confidence", "report_date", "source_url",
+    "parser_version", "fetched_at",
 )
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
@@ -135,7 +139,8 @@ def _canonical_schema():
     import pyarrow as pa
 
     return pa.schema([
-        ("rcept_no", pa.string()), ("corp_code", pa.string()), ("ticker", pa.string()),
+        ("rcept_no", pa.string()), ("source_vendor", pa.string()),
+        ("corp_code", pa.string()), ("ticker", pa.string()),
         ("corp_name", pa.string()), ("counterparty", pa.string()), ("counterparty_raw", pa.string()),
         ("counterparty_withheld", pa.bool_()), ("object", pa.string()),
         ("amount_krw", pa.int64()), ("ratio_pct", pa.float64()),
@@ -294,7 +299,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             try:
                 html = extract_document_html(storage.get_bytes(doc_path))
                 parsed = parse_supply(html)
-                fact = _to_fact(record, parsed)
+                fact = _to_fact(record, parsed, vendor)
                 reasons = validate_supply_fact(fact, max_report_date=max_report_date)
             except Exception as exc:
                 logger.exception("공급계약 본문 파싱 실패(격리): %s", ref)

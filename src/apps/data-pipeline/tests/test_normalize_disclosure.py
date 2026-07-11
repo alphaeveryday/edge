@@ -126,6 +126,7 @@ def test_real_fixture_parses_and_lands_in_canonical(tmp_path):
     assert row["ratio_pct"] == 92.33
     assert row["report_date"] == "2026-06-23"
     assert row["parser_version"] == "supply-v1"
+    assert row["source_vendor"] == "dart"  # provenance 컬럼(파티션 아님) — 감사·다소스 대비
     assert row["counterparty_withheld"] is False
 
     log = _quality_log(storage)
