@@ -53,9 +53,12 @@ PARSER_VERSION = "supply-v1"
 # report_date 상한 여유 — 검증 실행일 기준 이 일수까지의 미래 접수일은 허용(수집 지연·TZ 여유).
 _FUTURE_SLACK_DAYS = 2
 
-# 공급계약 공시 판정 키워드. report_nm 은 가운뎃점 ㆍ(U+318D)·꼬리 패딩·[기재정정] 접두가
-# 있으나(실측), "공급계약" 은 그 사이에서 온전한 부분문자열이라 NFKC 정규화 후 부분일치로 잡는다.
-_SUPPLY_KEYWORD = "공급계약"
+# 공급계약 **체결** 공시 판정 키워드. report_nm 은 가운뎃점 ㆍ(U+318D)·꼬리 패딩·[기재정정]
+# 접두가 있으나(실측), "공급계약"·"체결" 은 그 사이에서 온전한 부분문자열이라 NFKC 정규화 후
+# 부분일치로 잡는다. **"체결" 을 함께 요구**해 같은 "공급계약" 을 포함하는 해지(공급계약해지)를
+# 새 계약 fact 로 오적재하지 않는다 — raw 필터가 "공급계약" 부분일치라 해지도 raw 에 들어온다
+# (bronze); doc_type 판별은 정제 소관이다(Codex P2). [기재정정]…체결 정정본은 "체결" 을 유지.
+_SUPPLY_KEYWORDS = ("공급계약", "체결")
 
 
 def _text(record: dict, key: str) -> str | None:
@@ -66,11 +69,13 @@ def _text(record: dict, key: str) -> str | None:
 
 
 def _is_supply_report(report_nm: object) -> bool:
-    """report_nm 이 단일판매ㆍ공급계약 유형인지 — NFKC 정규화 후 '공급계약' 부분일치.
-    비문자열은 False(라우팅에서 조용히 스킵 — 본문 파싱 대상 아님)."""
+    """report_nm 이 단일판매ㆍ공급계약 **체결** 유형인지 — NFKC 정규화 후 '공급계약'·'체결' 모두
+    부분일치. 해지(공급계약해지)는 '체결' 이 없어 제외된다. 비문자열은 False(호출부가 별도로
+    malformed 로 격리하므로 여기선 방어만)."""
     if not isinstance(report_nm, str):
         return False
-    return _SUPPLY_KEYWORD in unicodedata.normalize("NFKC", report_nm)
+    norm = unicodedata.normalize("NFKC", report_nm)
+    return all(keyword in norm for keyword in _SUPPLY_KEYWORDS)
 
 
 def _norm_report_date(rcept_dt: object) -> str | None:

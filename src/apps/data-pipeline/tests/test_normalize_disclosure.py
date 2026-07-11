@@ -161,6 +161,21 @@ def test_non_supply_report_is_skipped_not_failed(tmp_path):
     assert log["records_failed"] == 0
 
 
+def test_termination_filing_is_not_routed_as_supply(tmp_path):
+    # WHY: raw 필터가 "공급계약" 부분일치라 해지(공급계약해지)도 raw 에 들어온다 — 라우팅이
+    #      "체결" 을 요구하지 않으면 해지가 새 계약 fact 로 오적재돼 체결과 구분 불가(Codex P2).
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260623800014"
+    rec = _supply_record(rcept_no, report_nm="단일판매ㆍ공급계약해지")
+    _write_run(storage, [(rec, _doc_zip(_supply_html(), rcept_no))])
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    assert _canonical_rows(storage, "2026-06-23") == []
+    log = _quality_log(storage)
+    assert log["records_skipped_type"] == 1
+    assert log["records_routed_supply"] == 0
+
+
 def test_gijae_jeongjeong_prefix_still_routes_as_supply(tmp_path):
     # WHY: 정정 공시는 [기재정정] 접두가 붙지만 여전히 공급계약이다 — 부분일치가 이를 잡아야 한다.
     storage = LocalStorage(tmp_path / "lake")

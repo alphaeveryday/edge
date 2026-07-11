@@ -119,7 +119,10 @@ def parse_date_value(text: object | None) -> date | None:
     if _is_nullish(value):
         return None
 
-    match = re.search(r"(\d{4})\s*[./-년]\s*(\d{1,2})\s*[./-월]\s*(\d{1,2})", value)
+    # 구분자 문자군의 '-' 는 반드시 끝에 둔다 — `[./-년]` 처럼 가운데 두면 `/`~`년` 범위가 되어
+    # 숫자까지 매치해 컴팩트 날짜('20240429')를 잘못 파싱한다('20240429'→2024-04-09). 끝의 '-' 는
+    # 리터럴이라 구분자('2024-04-29')만 잡고, 컴팩트 날짜는 아래 8자리 폴백으로 흘러간다(Codex P2).
+    match = re.search(r"(\d{4})\s*[./년-]\s*(\d{1,2})\s*[./월-]\s*(\d{1,2})", value)
     if match is not None:
         try:
             return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -137,7 +140,8 @@ def parse_date_value(text: object | None) -> date | None:
 
 def parse_date_range(text: object | None) -> tuple[date | None, date | None]:
     value = _normalize_text(text)
-    matches = re.findall(r"(\d{4})\s*[./-년]\s*(\d{1,2})\s*[./-월]\s*(\d{1,2})", value)
+    # '-' 는 문자군 끝(리터럴) — parse_date_value 와 동일 이유(컴팩트 날짜 오파싱 방지, Codex P2).
+    matches = re.findall(r"(\d{4})\s*[./년-]\s*(\d{1,2})\s*[./월-]\s*(\d{1,2})", value)
     dates: list[date] = []
     for year_text, month_text, day_text in matches[:2]:
         try:
@@ -216,7 +220,12 @@ def _find_value(rows: list[list[str]], *keys: str) -> str | None:
         if row_head.endswith("계약내역") and label == row[0]:
             continue
         if row_head.endswith("계약기간") and label == row[0]:
-            continue
+            # 계약기간이 시작일/종료일 서브라벨을 거느린 그룹 헤더면 그 헤더-서브라벨 쌍을 건너뛴다
+            # (서브라벨을 기간 값으로 오인 방지). 단, 2컬럼 `계약기간 | 2024.01.02 ~ …` 처럼 값 칸이
+            # 실제 날짜면 건너뛰지 않는다 — 안 그러면 그 기간이 통째 유실된다(Codex P2).
+            value_key = _canonical_label(value)
+            if not value_key or value_key in ("시작일", "종료일"):
+                continue
         return _normalize_text(value)
     return None
 

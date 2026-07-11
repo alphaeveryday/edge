@@ -86,6 +86,41 @@ def test_parse_date_range_handles_inline_period() -> None:
     assert PS.parse_date_range("계약기간 2024.04.29 ~ 2029.02.10") == (date(2024, 4, 29), date(2029, 2, 10))
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("20240429", date(2024, 4, 29)),   # 컴팩트 YYYYMMDD — 구분자 문자군에 안 걸려 폴백 파싱
+        ("2024.04.29", date(2024, 4, 29)),  # 점 구분자
+        ("2024-04-29", date(2024, 4, 29)),  # 하이픈 구분자(리터럴)
+        ("2024년 04월 29일", date(2024, 4, 29)),
+    ],
+)
+def test_parse_date_value_handles_compact_and_separated(text: str, expected: date) -> None:
+    """구분자 문자군의 '-' 를 끝(리터럴)에 둬, 컴팩트 날짜가 '20240429'→2024-04-09 로 오파싱되지
+    않고 8자리 폴백으로 정확히 파싱되게 한다(Codex P2 — 범위 '/'~'년' 이 숫자를 먹던 버그)."""
+    assert PS.parse_date_value(text) == expected
+
+
+def test_parse_date_range_handles_compact_dates() -> None:
+    assert PS.parse_date_range("20240429 ~ 20290210") == (date(2024, 4, 29), date(2029, 2, 10))
+
+
+def test_parse_supply_inline_period_row_not_dropped() -> None:
+    """2컬럼 `계약기간 | 날짜` 행(시작일/종료일 서브라벨 없음)의 기간이 유실되지 않아야 한다 —
+    그룹 헤더 스킵 가드가 실제 날짜 값 칸까지 건너뛰던 문제(Codex P2)."""
+    html = """
+    <html><head><title>인라인/공급</title></head><body>
+      <table>
+        <tr><td>계약상대방</td><td>발주처(주)</td></tr>
+        <tr><td>계약기간</td><td>2024.01.02 ~ 2025.03.04</td></tr>
+      </table>
+    </body></html>
+    """
+    parsed = PS.parse_supply(html)
+    assert parsed["start"] == date(2024, 1, 2)
+    assert parsed["end"] == date(2025, 3, 4)
+
+
 def test_parse_supply_detects_withheld_counterparty() -> None:
     withheld = """
     <html>
