@@ -6,8 +6,12 @@ from data_pipeline.config import StorageConfig
 from data_pipeline.lake import (
     LocalStorage,
     S3Storage,
+    canonical_supply_contract_fact_partition,
     collection_log_key,
+    is_raw_disclosure_key,
     make_storage,
+    parse_raw_disclosure_key,
+    raw_disclosure_partition,
     raw_news_partition,
 )
 
@@ -60,6 +64,28 @@ def test_local_list_keys_uses_string_prefix_like_s3(tmp_path):
     # 전체 키를 prefix 로 줘도 그 키가 매칭돼야 한다(디렉터리 취급이면 []).
     assert storage.list_keys("raw/market=US/a.ndjson") == ["raw/market=US/a.ndjson"]
     assert storage.list_keys("nope") == []
+
+
+def test_disclosure_key_roundtrip_and_excludes_document_zip():
+    # WHY: 정제(normalize_disclosure)는 raw 메타 ndjson 만 스캔하고 본문 documents/*.zip 은
+    #      건드리면 안 된다(파싱 대상은 메타가 가리키는 본문) — is_ 판정이 zip 을 잡으면
+    #      정제가 바이너리를 ndjson 으로 읽어 터진다. 경로 파싱도 이 모듈이 SSOT.
+    meta = f"{raw_disclosure_partition('dart', 'KR', '2026-06-23', 'R1')}/part-00000.ndjson"
+    doc = f"{raw_disclosure_partition('dart', 'KR', '2026-06-23', 'R1')}/documents/20260623900750.zip"
+    assert is_raw_disclosure_key(meta) is True
+    assert is_raw_disclosure_key(doc) is False
+    assert parse_raw_disclosure_key(meta) == {
+        "source": "dart", "market": "KR", "ingest_date": "2026-06-23", "run_id": "R1",
+    }
+
+
+def test_canonical_supply_contract_fact_partition_is_report_date_keyed():
+    # WHY: canonical 은 멱등 — run_id·source_vendor 파티션이 없고 report_date 하나로 가른다
+    #      (가격 trade_date·뉴스 published_date 와 동형). rcept_no 는 파티션 내 행 키다.
+    assert (
+        canonical_supply_contract_fact_partition("2026-06-23")
+        == "canonical/disclosures/supply_contract_fact/report_date=2026-06-23"
+    )
 
 
 def test_make_storage_selects_backend_from_config():

@@ -154,6 +154,33 @@ def parse_raw_news_key(key: str) -> dict[str, str]:
     }
 
 
+# ── raw disclosure 스캔(정제 입력) ───────────────────────
+# 정제(normalize_disclosure)는 raw disclosures 메타 ndjson 을 수집일에 걸쳐 읽어 본문을
+# 파싱·조인한다. 메타는 part-*.ndjson, 본문은 같은 파티션 아래 documents/*.zip 라 **메타만**
+# 매칭한다(is_raw_price_key/is_raw_news_key 와 동형 — .ndjson 만). 경로 해석도 이 모듈이 SSOT.
+_RAW_DISCLOSURE_MARKER = "/dataset=disclosures/"
+
+
+def is_raw_disclosure_key(key: str) -> bool:
+    """raw disclosures 메타 파일 키인지. (part-*.ndjson 만 — documents/*.zip 본문은 제외.)"""
+    return key.startswith("raw/") and _RAW_DISCLOSURE_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_disclosure_key(key: str) -> dict[str, str]:
+    """raw disclosure 메타 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=disclosures/market=…/ingest_date=…/run_id=…/part-*.ndjson.
+    `key=value` 세그먼트만 취해 dict 로 — part 파일명(= 없음)은 자연히 빠진다.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 
@@ -173,6 +200,18 @@ def canonical_news_articles_partition(published_date: str) -> str:
     `article_id`(=원문 URL 해시, 소스 무관)로 파티션 내 행 키다.
     """
     return f"canonical/news/news_articles/published_date={published_date}"
+
+
+def canonical_supply_contract_fact_partition(report_date: str) -> str:
+    """canonical 공급계약 fact 파티션 프리픽스 (끝 슬래시 없음).
+
+    raw 와 달리 run_id·source_vendor 파티션이 없다 — canonical 은 멱등이라 같은 raw 를 몇 번
+    정제해도 결과가 같아야 한다. 파티션은 `report_date`(rcept_dt, 공시 접수일) 하나(가격의
+    trade_date·뉴스의 published_date 파티션과 동형 — 프루닝·라이프사이클). 정체성 키는
+    `rcept_no`(14자리 접수번호=문서키)로 파티션 내 행 키다. source_vendor(dart)는 현재 KR·DART
+    단독이라 컬럼(provenance)이지 파티션이 아니다.
+    """
+    return f"canonical/disclosures/supply_contract_fact/report_date={report_date}"
 
 
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
