@@ -78,6 +78,18 @@ def _is_supply_report(report_nm: object) -> bool:
     return all(keyword in norm for keyword in _SUPPLY_KEYWORDS)
 
 
+# DART list.json `rm`(비고, 결합코드) 의 obsolete 마커 — '정'=정정신고가 있어 대체된 원본
+# (DART: "관련 보고서를 참조"), '철'=철회 간주. 이 원본은 정정본([기재정정]…체결)이 authoritative
+# 라 canonical 에서 제외한다(안 그러면 원본+정정본이 서로 다른 rcept_no 로 둘 다 적재돼 같은
+# 계약을 이중 계산). 다른 rm 코드(유·코·연 등)엔 이 글자가 없어 부분일치가 안전(Codex P2).
+_OBSOLETE_RM_MARKERS = ("정", "철")
+
+
+def _is_obsolete(rm: object) -> bool:
+    """rm 이 정정으로 대체된 원본('정')·철회('철')를 표시하는지 — obsolete 원본은 canonical 제외."""
+    return isinstance(rm, str) and any(marker in rm for marker in _OBSOLETE_RM_MARKERS)
+
+
 def _norm_report_date(rcept_dt: object) -> str | None:
     """rcept_dt('YYYYMMDD') → 'YYYY-MM-DD'. 결측·비달력일·형식불량은 None(게이트가 사유로 잡음).
 
@@ -241,7 +253,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
-    read = routed = skipped_type = 0
+    read = routed = skipped_type = skipped_superseded = 0
     failures: list[dict] = []  # blocking·본문/파싱 실패 — canonical 제외 대상
     warnings: list[dict] = []  # non-blocking — 통과하되 값 이상을 로깅
     passing: list[dict] = []   # 게이트 통과 fact — 루프 뒤 canonical 로 멱등 병합
@@ -289,6 +301,13 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if not _is_supply_report(report_nm):
                 # 대상 아님(사업보고서 등) — 스킵(실패 아님, segment fact 는 후속 스토리).
                 skipped_type += 1
+                continue
+            if _is_obsolete(record.get("rm")):
+                # 정정으로 대체됐거나(rm '정') 철회된(rm '철') 원본 — canonical 제외. 정정본
+                # ([기재정정]…체결, 별도 rcept_no)이 authoritative 라 원본을 함께 적재하면 같은
+                # 계약이 이중 계산된다. bronze raw 는 원본을 보존하고, 실패가 아니라 명시적 스킵으로
+                # 카운트해 드러낸다(Rule 12, Codex P2).
+                skipped_superseded += 1
                 continue
             routed += 1
 
@@ -351,6 +370,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_read": read,
                 "records_routed_supply": routed,
                 "records_skipped_type": skipped_type,
+                "records_skipped_superseded": skipped_superseded,
                 "records_passed": len(passing),
                 "records_failed": len(failures),
                 "records_warned": len(warnings),
@@ -370,8 +390,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     logger.info(
         "normalize_disclosure 완료: raw_files=%d read=%d routed=%d skipped_type=%d "
+        "skipped_superseded=%d "
         "passed=%d failed=%d warned=%d canonical_parts=%d canonical_rows=%d",
-        len(raw_keys), read, routed, skipped_type, len(passing), len(failures),
-        len(warnings), parts_written, canonical_rows,
+        len(raw_keys), read, routed, skipped_type, skipped_superseded, len(passing),
+        len(failures), len(warnings), parts_written, canonical_rows,
     )
     return exit_code

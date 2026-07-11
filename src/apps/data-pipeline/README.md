@@ -95,7 +95,8 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-news
 #   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
 
 # 공시 정제(Step2) — raw disclosures(메타 ndjson + 본문 ZIP) → 단일판매·공급계약 본문 파싱 →
-# 공통 공급계약 fact. report_nm 으로 doc_type 라우팅(공급계약만; 사업보고서 등은 스킵),
+# 공통 공급계약 fact. report_nm 으로 doc_type 라우팅(공급계약 '체결'만; 사업보고서·해지 등은 스킵,
+# 정정 대체·철회 원본(rm '정'·'철')은 정정본이 authoritative 라 canonical 제외),
 # 본문은 document.xml ZIP 을 euc-kr 디코딩·파싱하고 메타 provenance(rcept_no·corp_code·ticker·
 # corp_name·source_url·rcept_dt)를 조인한다. 게이트는 정체성(rcept_no)·시간축(report_date)·표현
 # 불가 수치(int64 초과 금액·비유한 비율)를 blocking, 값 이상(유보 상대방·범위밖 비율·비양수 금액)을

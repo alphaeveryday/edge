@@ -176,6 +176,31 @@ def test_termination_filing_is_not_routed_as_supply(tmp_path):
     assert log["records_routed_supply"] == 0
 
 
+def test_superseded_original_is_skipped_correction_kept(tmp_path):
+    # WHY: 정정으로 대체된 원본(rm '정')과 정정본([기재정정]…체결)은 서로 다른 rcept_no 라
+    #      canonical(rcept_no 키)에 둘 다 적재되면 같은 계약을 이중 계산한다 — 원본은 obsolete 로
+    #      제외하고 정정본만 남긴다(Codex P2). rm 은 결합코드(예 '유정' = 유가+정정).
+    storage = LocalStorage(tmp_path / "lake")
+    original = _supply_record("20260623800020", rm="유정")  # 정정신고 있음 → obsolete
+    correction = _supply_record("20260624800021", report_nm="[기재정정]단일판매ㆍ공급계약체결",
+                                rm="유", rcept_dt="20260624", fetched_at="2026-06-24T00:00:00+00:00")
+    _write_run(storage, [
+        (original, _doc_zip(_supply_html(ratio="10.0"), "20260623800020")),
+    ], run_id="R1")
+    _write_run(storage, [
+        (correction, _doc_zip(_supply_html(ratio="20.0"), "20260624800021")),
+    ], run_id="R2", ingest_date="2026-06-24")
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    # 원본은 제외, 정정본만 canonical(각기 다른 report_date 파티션)
+    assert _canonical_rows(storage, "2026-06-23") == []
+    corr_rows = _canonical_rows(storage, "2026-06-24")
+    assert [r["rcept_no"] for r in corr_rows] == ["20260624800021"]
+    log = _quality_log(storage)
+    assert log["records_skipped_superseded"] == 1
+    assert log["records_routed_supply"] == 1
+
+
 def test_gijae_jeongjeong_prefix_still_routes_as_supply(tmp_path):
     # WHY: 정정 공시는 [기재정정] 접두가 붙지만 여전히 공급계약이다 — 부분일치가 이를 잡아야 한다.
     storage = LocalStorage(tmp_path / "lake")
