@@ -37,6 +37,23 @@ def test_price_window_uses_wider_lookback():
     assert DEFAULT_PRICE_LOOKBACK_DAYS == 5
 
 
+def test_normalize_disclosure_dispatches_step(tmp_path, monkeypatch):
+    # WHY: normalize-disclosure 는 raw 를 읽는 정제 스텝이라 수집 창·소스 벤더 없이 곧장
+    #      스텝으로 라우팅되고 --input-run-id 만 전달돼야 한다(normalize-price/news 와 동형).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    called = {}
+
+    from data_pipeline import run as run_mod
+
+    def fake_run(storage, run_id, input_run_id):
+        called["input_run_id"] = input_run_id
+        return 0
+
+    monkeypatch.setattr(run_mod.normalize_disclosure, "run", fake_run)
+    assert main(["normalize-disclosure", "--input-run-id", "R7"]) == 0
+    assert called == {"input_run_id": "R7"}
+
+
 def test_kis_rejects_to_without_from(monkeypatch):
     # WHY: KIS inquire-daily 는 시작일(FID_INPUT_DATE_1)이 필수다 — --to 만 주면 빈 시작일로
     #      전 종목이 KIS 오류가 되어 무의미한 전량 실패가 된다. 한쪽만 준 창은 API 호출 전에
