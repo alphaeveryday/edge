@@ -221,6 +221,21 @@ def _find_value(rows: list[list[str]], *keys: str) -> str | None:
     return None
 
 
+def _find_first_nonnull(rows: list[list[str]], *keys: str) -> str | None:
+    """키를 **우선순위 순으로 하나씩** 시도해 첫 non-nullish 값을 반환한다.
+
+    `_find_value` 는 여러 키를 한 번에 받아 '테이블 순서상 첫 매치'를 주므로, 조건부 계약처럼
+    특정 라벨(예: `확정 계약금액`='-')이 `계약금액 총액` 위에 먼저 오면 nullish 를 집어 실제
+    총액을 놓친다. 이 헬퍼는 넘긴 키 우선순위(총액 우선)를 존중하고 nullish 매치는 건너뛴다
+    (이식원 jy `parse_supply` 대비 edge 개선 — 조건부 계약 금액 유실 방지, Codex P2).
+    """
+    for key in keys:
+        value = _find_value(rows, key)
+        if value is not None and not _is_nullish(value):
+            return value
+    return None
+
+
 def _find_period(rows: list[list[str]]) -> tuple[date | None, date | None]:
     start = parse_date_value(_find_value(rows, "시작일"))
     end = parse_date_value(_find_value(rows, "종료일"))
@@ -259,7 +274,9 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
     counterparty_raw = _find_value(rows, "계약상대방", "계약상대")
     counterparty, counterparty_raw, counterparty_withheld = _counterparty_fields(counterparty_raw)
     object_text = _find_value(rows, "체결계약명", "판매ㆍ공급계약 내용", "판매ㆍ공급계약내용")
-    amount_text = _find_value(rows, "계약금액 총액(원)", "계약금액 총액", "확정 계약금액", "계약금액(원)", "계약금액")
+    # 총액을 우선하고 nullish(조건부 계약의 '-' 등)는 건너뛴다 — 특정 라벨이 총액 위에 먼저
+    # 와도 실제 계약금액(총액)을 놓치지 않게(_find_first_nonnull 참고, Codex P2).
+    amount_text = _find_first_nonnull(rows, "계약금액 총액(원)", "계약금액 총액", "확정 계약금액", "계약금액(원)", "계약금액")
     ratio_text = _find_value(rows, "매출액대비(%)", "매출액대비", "매출액 대비(%)", "매출액 대비")
     start, end = _find_period(rows)
     amount_krw = parse_krw_amount(amount_text)

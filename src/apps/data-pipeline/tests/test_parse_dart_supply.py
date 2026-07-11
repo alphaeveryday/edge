@@ -154,6 +154,29 @@ def test_parse_supply_malformed_input_returns_partial_not_exception() -> None:
     assert parsed["confidence"] == "partial"
 
 
+def test_parse_supply_conditional_contract_prefers_total_over_nullish_component() -> None:
+    """조건부 계약: 확정 계약금액='-'가 총액 위에 먼저 와도 실제 총액을 집어야 한다(Codex P2).
+    _find_value 의 '테이블 순서 첫 매치'가 nullish 를 집던 유실을 우선순위+skip 으로 방지."""
+    conditional = """
+    <html>
+      <head><title>조건부테스트/단일판매ㆍ공급계약체결</title></head>
+      <body>
+        <table>
+          <tr><td>계약상대방</td><td>발주처(주)</td></tr>
+          <tr><td>체결계약명</td><td>조건부 공급계약</td></tr>
+          <tr><td>확정 계약금액</td><td>-</td></tr>
+          <tr><td>조건부 계약금액</td><td>-</td></tr>
+          <tr><td>계약금액 총액(원)</td><td>112,757,480,000</td></tr>
+          <tr><td>매출액 대비</td><td>4.94</td></tr>
+          <tr><td>계약기간</td><td>2024.01.02 ~ 2025.03.04</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    parsed = PS.parse_supply(conditional)
+    assert parsed["amount_krw"] == 112_757_480_000  # 총액 — nullish 확정금액을 건너뜀
+
+
 def test_parse_supply_no_table_returns_partial() -> None:
     """각도 H: 테이블이 아예 없는 본문도 crash 없이 전부 None/partial 로 나온다."""
     parsed = PS.parse_supply("<html><head><title>없음/공급</title></head><body><p>본문</p></body></html>")
