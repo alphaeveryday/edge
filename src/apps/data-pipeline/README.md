@@ -95,8 +95,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-news
 #   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
 
 # 공시 정제(Step2) — raw disclosures(메타 ndjson + 본문 ZIP) → 단일판매·공급계약 본문 파싱 →
-# 공통 공급계약 fact. report_nm 으로 doc_type 라우팅(공급계약 '체결'만; 사업보고서·해지 등은 스킵,
-# 정정 대체·철회 원본(rm '정'·'철')은 정정본이 authoritative 라 canonical 제외),
+# 공통 공급계약 fact. report_nm 으로 doc_type 라우팅(공급계약 '체결'만; 사업보고서·해지 등은 스킵),
 # 본문은 document.xml ZIP 을 euc-kr 디코딩·파싱하고 메타 provenance(rcept_no·corp_code·ticker·
 # corp_name·source_url·rcept_dt)를 조인한다. 게이트는 정체성(rcept_no)·시간축(report_date)·표현
 # 불가 수치(int64 초과 금액·비유한 비율)를 blocking, 값 이상(유보 상대방·범위밖 비율·비양수 금액)을
@@ -252,3 +251,8 @@ settings.targets.keywords            # ["금리", ...]
 - 공시(disclosure) **사업부문(segment) fact**·graph·eventization — 공급계약 fact 정제(본문 euc-kr
   HTML 파싱 → `canonical/disclosures/supply_contract_fact`)는 완료(ALPHA-345). 사업부문 fact(pandas
   4-전략 파싱)는 후속 트랙, graph 투영·theme 링킹·event 는 다운스트림(analysis-engine) 소관.
+- 공시 **정정 supersession(point-in-time)** — 공급계약 canonical 은 파일링당 fact 를 rcept_no 로
+  투영한다. 원본과 정정본([기재정정]…체결)은 서로 다른 rcept_no 라 각각 남고, 어느 정정본이 어느
+  원본을 대체하는지의 링크는 list.json 행에 없다(정정 관련 필드·문서 파싱 필요; 원본이 정정 이전에
+  수집되면 rm 마커조차 없음). 정정↔원본 collapse·이중계산 해소는 정체성 해소/SCD 문제라 후속
+  트랙 소관이다(뉴스가 near-dup 를 news_dedup_cluster 로 미루는 것과 동형).

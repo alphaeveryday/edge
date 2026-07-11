@@ -22,6 +22,14 @@ raw disclosures(메타 ndjson + 본문 ZIP, ALPHA-344)를 읽어 **단일판매�
 
 파서(parse_dart_supply)는 팀원 정준영 프로토타입 이식 — 출처는 그 모듈 헤더 참조. graph
 투영(supplier→customer edge·theme 링킹)은 edge 범위 밖(analysis-engine 소관)이라 안 한다.
+
+⚠️ 정정 supersession(point-in-time)은 이 스텝 범위 밖이다 — 원본과 정정본([기재정정]…체결)은
+서로 다른 rcept_no 라 canonical 에 각각 파일링당 fact 로 남는다. 어느 정정본이 어느 원본을
+대체하는지의 링크는 list.json 행에 없고(정정 관련 필드·문서 파싱 필요), 원본이 정정 이전에
+수집되면 rm 마커조차 없다 — 즉 정정↔원본 collapse 는 정체성 해소/point-in-time(SCD) 문제라
+후속 트랙 소관이다(계획 Q4: fact 는 원자 필드만, point-in-time 은 다운스트림). 이 스텝은
+파일링당 fact 를 충실히 투영하고, 정정 collapse·이중계산 해소는 다운스트림이 맡는다(뉴스가
+near-dup 클러스터링을 news_dedup_cluster 로 미루는 것과 동형).
 """
 
 from __future__ import annotations
@@ -76,18 +84,6 @@ def _is_supply_report(report_nm: object) -> bool:
         return False
     norm = unicodedata.normalize("NFKC", report_nm)
     return all(keyword in norm for keyword in _SUPPLY_KEYWORDS)
-
-
-# DART list.json `rm`(비고, 결합코드) 의 obsolete 마커 — '정'=정정신고가 있어 대체된 원본
-# (DART: "관련 보고서를 참조"), '철'=철회 간주. 이 원본은 정정본([기재정정]…체결)이 authoritative
-# 라 canonical 에서 제외한다(안 그러면 원본+정정본이 서로 다른 rcept_no 로 둘 다 적재돼 같은
-# 계약을 이중 계산). 다른 rm 코드(유·코·연 등)엔 이 글자가 없어 부분일치가 안전(Codex P2).
-_OBSOLETE_RM_MARKERS = ("정", "철")
-
-
-def _is_obsolete(rm: object) -> bool:
-    """rm 이 정정으로 대체된 원본('정')·철회('철')를 표시하는지 — obsolete 원본은 canonical 제외."""
-    return isinstance(rm, str) and any(marker in rm for marker in _OBSOLETE_RM_MARKERS)
 
 
 def _norm_report_date(rcept_dt: object) -> str | None:
@@ -253,7 +249,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
-    read = routed = skipped_type = skipped_superseded = 0
+    read = routed = skipped_type = 0
     failures: list[dict] = []  # blocking·본문/파싱 실패 — canonical 제외 대상
     warnings: list[dict] = []  # non-blocking — 통과하되 값 이상을 로깅
     passing: list[dict] = []   # 게이트 통과 fact — 루프 뒤 canonical 로 멱등 병합
@@ -301,13 +297,6 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if not _is_supply_report(report_nm):
                 # 대상 아님(사업보고서 등) — 스킵(실패 아님, segment fact 는 후속 스토리).
                 skipped_type += 1
-                continue
-            if _is_obsolete(record.get("rm")):
-                # 정정으로 대체됐거나(rm '정') 철회된(rm '철') 원본 — canonical 제외. 정정본
-                # ([기재정정]…체결, 별도 rcept_no)이 authoritative 라 원본을 함께 적재하면 같은
-                # 계약이 이중 계산된다. bronze raw 는 원본을 보존하고, 실패가 아니라 명시적 스킵으로
-                # 카운트해 드러낸다(Rule 12, Codex P2).
-                skipped_superseded += 1
                 continue
             routed += 1
 
@@ -370,7 +359,6 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_read": read,
                 "records_routed_supply": routed,
                 "records_skipped_type": skipped_type,
-                "records_skipped_superseded": skipped_superseded,
                 "records_passed": len(passing),
                 "records_failed": len(failures),
                 "records_warned": len(warnings),
@@ -390,9 +378,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     logger.info(
         "normalize_disclosure 완료: raw_files=%d read=%d routed=%d skipped_type=%d "
-        "skipped_superseded=%d "
         "passed=%d failed=%d warned=%d canonical_parts=%d canonical_rows=%d",
-        len(raw_keys), read, routed, skipped_type, skipped_superseded, len(passing),
-        len(failures), len(warnings), parts_written, canonical_rows,
+        len(raw_keys), read, routed, skipped_type, len(passing), len(failures),
+        len(warnings), parts_written, canonical_rows,
     )
     return exit_code
