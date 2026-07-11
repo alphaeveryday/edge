@@ -148,8 +148,9 @@ _SHARE_MAX_PCT = 100.0
 def validate_segment_fact(row: dict, *, max_report_date: str) -> list[str]:
     """조인된 사업부문 fact 행의 정체성·시간축·값 검사. 위반 사유 코드 리스트(정상=[]).
 
-    행키가 (rcept_no, segment_name)이라 segment_name 결측도 blocking 이다(파티션 내 행을
-    식별 못 함). 나머지는 공급계약 게이트와 동형(각도 H — coerce-to-passing 방지).
+    행키는 (rcept_no, segment_ordinal)이지만 segment_name 결측도 blocking 이다 — 이름 없는
+    부문은 분석 가치가 없다(행키가 아니라 필수 데이터라서 막는다). 나머지는 공급계약 게이트와
+    동형(각도 H — coerce-to-passing 방지).
 
     사유:
       - missing_rcept_no / missing_report_date / bad_report_date : 정체성·시간축 (blocking)

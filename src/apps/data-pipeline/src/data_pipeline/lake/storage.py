@@ -219,7 +219,8 @@ def canonical_business_segment_fact_partition(report_date: str) -> str:
 
     공급계약 fact(canonical_supply_contract_fact_partition)와 동형 — run_id·source_vendor
     파티션 없이 `report_date`(rcept_dt) 하나로 가른다(멱등). 정체성 키는 파티션 내
-    `rcept_no + segment_name`(한 사업보고서에 사업부문 여러 행). source_vendor(dart)는 컬럼.
+    `rcept_no + segment_ordinal`(파스 순서) — 한 사업보고서에 사업부문 여러 행이고, segment_name
+    은 유일하지 않아(제품/용역 sub-row) 순서 인덱스로 키를 잡는다. source_vendor(dart)는 컬럼.
     """
     return f"canonical/disclosures/business_segment_fact/report_date={report_date}"
 
