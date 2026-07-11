@@ -21,10 +21,20 @@ blocking/non-blocking 경계는 뉴스 게이트(quality/news)와 동형이다:
 
 from __future__ import annotations
 
+import math
+
 # canonical 진입을 막는 필수 사유. 나머지(withheld_counterparty·ratio_out_of_range·
 # amount_non_positive·missing_amount_and_ratio)는 경고로 로깅만 한다.
+#
+# 수치 이상은 두 급으로 가른다: **표현가능하나 의심스러움**(ratio>150·amount≤0)은 실재 공시가
+# 여전히 유효해 경고로 표면화하고, **표현 불가**(amount_out_of_range=canonical int64 초과·
+# ratio_not_finite=inf/nan)는 canonical 컬럼(int64·float64)에 담을 수 없어 blocking 이다 —
+# 안 막으면 게이트가 passed 로 인증한 단일 행이 pyarrow 적재에서 OverflowError 로 배치 전체를
+# 죽이거나(비원자적 부분 쓰기), inf 가 float64 컬럼을 오염시킨다(각도 H — 가격 정제가
+# math.isfinite 로 non-finite 를 원천 차단하는 것과 같은 위생).
 BLOCKING_REASONS_DISCLOSURE = frozenset(
-    {"missing_rcept_no", "missing_report_date", "bad_report_date", "empty_parse"}
+    {"missing_rcept_no", "missing_report_date", "bad_report_date", "empty_parse",
+     "amount_out_of_range", "ratio_not_finite"}
 )
 
 # report_date 하한 — 이보다 과거는 공시 파이프라인 대상이 아닌 오염된 날짜로 본다.
@@ -32,6 +42,10 @@ MIN_REPORT_DATE = "2000-01-01"
 
 # 매출액대비 비율 상한 — 이를 넘는 %는 파싱 이상(단위 오인·표 오매칭) 신호로 표면화한다.
 _RATIO_MAX_PCT = 150.0
+
+# canonical amount_krw 는 int64 컬럼 — 이 범위를 넘는 파싱값(단위 곱으로 만든 초대형 금액)은
+# 적재 시 OverflowError 라 담을 수 없다(표현 불가 → blocking).
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
 
 def _blank(value: object) -> bool:
@@ -50,10 +64,12 @@ def validate_supply_fact(row: dict, *, max_report_date: str) -> list[str]:
       - missing_report_date       : report_date 결측/공백 (blocking)
       - bad_report_date           : report_date [MIN, max] 밖(far-future/past) (blocking)
       - empty_parse               : 본문에서 계약을 하나도 못 뽑음(핵심필드 전무) (blocking)
+      - ratio_not_finite          : 매출액대비 inf/nan(float64 표현 불가) (blocking)
+      - amount_out_of_range       : 계약금액 int64 초과(적재 시 OverflowError) (blocking)
       - withheld_counterparty     : 계약상대방 유보(비밀유지·공시유보) (경고 — 정상 관행)
       - missing_amount_and_ratio  : 계약금액·매출액대비 둘 다 결측 (경고)
-      - ratio_out_of_range        : 매출액대비 pct ≤0 또는 >150 (경고 — 파싱 이상 표면화)
-      - amount_non_positive       : 계약금액 ≤0 (경고 — 파싱 이상 표면화)
+      - ratio_out_of_range        : 매출액대비 finite pct ≤0 또는 >150 (경고 — 파싱 이상 표면화)
+      - amount_non_positive       : 계약금액 int64 내 ≤0 (경고 — 파싱 이상 표면화)
     """
     reasons: list[str] = []
 
@@ -95,14 +111,23 @@ def validate_supply_fact(row: dict, *, max_report_date: str) -> list[str]:
 
     ratio_pct = row.get("ratio_pct")
     if isinstance(ratio_pct, (int, float)) and not isinstance(ratio_pct, bool):
-        if ratio_pct <= 0 or ratio_pct > _RATIO_MAX_PCT:
+        if not math.isfinite(ratio_pct):
+            # blocking: inf/nan 은 float64 canonical 을 오염시킨다(400자리 숫자→float=inf 등).
+            # NaN 비교는 전부 False 라 아래 범위 검사를 조용히 통과하므로 여기서 먼저 막는다.
+            reasons.append("ratio_not_finite")
+        elif ratio_pct <= 0 or ratio_pct > _RATIO_MAX_PCT:
             # 경고: 0 이하·150% 초과는 단위 오인·표 오매칭 등 파싱 이상 신호로 표면화한다
             # (coerce-to-passing 방지 — 조용히 통과시키지 않는다, Rule 12).
             reasons.append("ratio_out_of_range")
 
     amount_krw = row.get("amount_krw")
-    if isinstance(amount_krw, int) and not isinstance(amount_krw, bool) and amount_krw <= 0:
-        # 경고: 계약금액 ≤0 은 파싱 이상(부호·단위) 신호로 표면화한다.
-        reasons.append("amount_non_positive")
+    if isinstance(amount_krw, int) and not isinstance(amount_krw, bool):
+        if not (_INT64_MIN <= amount_krw <= _INT64_MAX):
+            # blocking: int64 초과 금액(단위 곱으로 만든 초대형 값)은 canonical 적재 시
+            # OverflowError 로 배치 전체를 죽인다 — passed 로 인증하지 않고 여기서 막는다.
+            reasons.append("amount_out_of_range")
+        elif amount_krw <= 0:
+            # 경고: 계약금액 ≤0 은 파싱 이상(부호·단위) 신호로 표면화한다.
+            reasons.append("amount_non_positive")
 
     return reasons

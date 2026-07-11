@@ -267,10 +267,17 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
                 continue
-            # doc_type 라우팅 — 공급계약만 이 스텝이 처리한다. 그 외(사업보고서 등)는 스킵
-            # (실패 아님 — segment fact 는 후속 스토리). raw 는 유형 필터로 좁혀졌지만 정제도
-            # report_nm 으로 재라우팅해 소스 필터 변화에 독립적으로 동작한다.
-            if not _is_supply_report(record.get("report_nm")):
+            # doc_type 라우팅 — 공급계약만 이 스텝이 처리한다. raw 는 유형 필터로 좁혀졌지만
+            # 정제도 report_nm 으로 재라우팅해 소스 필터 변화에 독립적으로 동작한다.
+            report_nm = record.get("report_nm")
+            if not isinstance(report_nm, str):
+                # 비문자열 report_nm 은 오염된 메타 — 라우팅 판정 자체가 불가하다. skipped_type
+                # (정상적인 비대상 유형)으로 침묵 흡수하지 않고 사유로 드러낸다(Rule 12, 각도 H).
+                failures.append({"rcept_no": _text(record, "rcept_no"), "raw_key": raw_key,
+                                 "reasons": ["malformed_report_nm"]})
+                continue
+            if not _is_supply_report(report_nm):
+                # 대상 아님(사업보고서 등) — 스킵(실패 아님, segment fact 는 후속 스토리).
                 skipped_type += 1
                 continue
             routed += 1

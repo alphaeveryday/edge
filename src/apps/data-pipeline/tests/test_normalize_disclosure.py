@@ -213,6 +213,44 @@ def test_empty_parse_body_is_blocked(tmp_path):
     assert "empty_parse" in log["failures"][0]["reasons"]
 
 
+def test_oversized_amount_does_not_kill_canonical_batch(tmp_path):
+    # WHY: 각도 H — int64 초과 금액(단위 곱)은 게이트가 blocking 으로 막아야 한다. 안 막으면
+    #      passed 로 인증된 그 한 행이 pyarrow int64 적재에서 OverflowError 로 같은 런의 정상
+    #      행 canonical 적재 전체를 죽인다(비원자적 부분 쓰기). poison 행은 격리되고 정상 행은
+    #      canonical 에 남아야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    poison = "20260623800011"
+    good = "20260623800012"
+    _write_run(storage, [
+        (_supply_record(poison), _doc_zip(_supply_html(amount="10000000조원"), poison)),
+        (_supply_record(good), _doc_zip(_supply_html(amount="1,200,000,000원"), good)),
+    ])
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    rows = _canonical_rows(storage, "2026-06-23")
+    assert {r["rcept_no"] for r in rows} == {good}  # 정상 행만 적재, poison 격리
+    log = _quality_log(storage)
+    assert log["records_passed"] == 1
+    assert log["records_failed"] == 1
+    assert "amount_out_of_range" in log["failures"][0]["reasons"]
+
+
+def test_malformed_report_nm_is_failure_not_silent_skip(tmp_path):
+    # WHY: 각도 H — 비문자열 report_nm(오염 메타)은 라우팅 판정 불가다. skipped_type(정상 비대상)
+    #      으로 침묵 흡수하면 malformed 공급계약이 사유 없이 유실된다 — 사유로 드러낸다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260623800013"
+    rec = _supply_record(rcept_no, report_nm=None)
+    _write_run(storage, [(rec, _doc_zip(_supply_html(), rcept_no))])
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    assert _canonical_rows(storage, "2026-06-23") == []
+    log = _quality_log(storage)
+    assert log["records_skipped_type"] == 0
+    assert log["records_failed"] == 1
+    assert log["failures"][0]["reasons"] == ["malformed_report_nm"]
+
+
 def test_bad_rcept_dt_is_blocked(tmp_path):
     # WHY: 비달력일 rcept_dt('20260231')는 report_date 파티션을 못 만든다 — bad_report_date 로 막음.
     storage = LocalStorage(tmp_path / "lake")
