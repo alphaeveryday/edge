@@ -12,6 +12,7 @@ from data_pipeline.lake import (
     make_storage,
     parse_raw_disclosure_key,
     raw_disclosure_partition,
+    raw_etf_partition,
     raw_news_partition,
 )
 
@@ -23,6 +24,16 @@ def test_raw_news_partition_matches_lake_layout():
         raw_news_partition("fmp", "US", "2026-07-01", "20260701T000000Z")
         == "raw/source=fmp/dataset=stock_news/market=US"
         "/published_date=2026-07-01/run_id=20260701T000000Z"
+    )
+
+
+def test_raw_etf_partition_matches_lake_layout():
+    # WHY: ETF holdings 도 bronze 통일 규약 — 가격·재무와 동형(dataset=etf_holdings,
+    #      ingest_date/run_id append). 이 문자열이 레이크 파티션 계약이다.
+    assert (
+        raw_etf_partition("fmp", "US", "2026-07-12", "20260712T000000Z")
+        == "raw/source=fmp/dataset=etf_holdings/market=US"
+        "/ingest_date=2026-07-12/run_id=20260712T000000Z"
     )
 
 

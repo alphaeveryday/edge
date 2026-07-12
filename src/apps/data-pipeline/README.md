@@ -4,8 +4,8 @@
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
-> 재무제표(손익·재무상태·현금흐름), BigKinds 국내 뉴스, KIS(한국투자, 국내) 일봉,
-> OpenDART 국내 재무·**공시(disclosure filing)**까지다. 공시는 재무제표(fnlttSinglAcnt)와
+> 재무제표(손익·재무상태·현금흐름)·**ETF 구성종목(holdings)**, BigKinds 국내 뉴스,
+> KIS(한국투자, 국내) 일봉, OpenDART 국내 재무·**공시(disclosure filing)**까지다. 공시는 재무제표(fnlttSinglAcnt)와
 > **다른 API**(공시목록 list.json + 공시서류 원본 document.xml)로 메타 + 본문 raw 를 적재한다.
 > **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
@@ -75,6 +75,14 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달
 #   ... run ingest-raw-disclosure --from 2026-06-01 --to 2026-06-30
+
+# 미국 ETF 구성종목 원본저장(Step1) — FMP ETF holdings(/stable/etf/holdings). 날짜창 없음
+# (스냅샷 — 매 실행이 현재 구성종목 전량을 재요청). 수집 대상은 종목 유니버스(targets)가 아니라
+# ETF 목록(etf.source.etf_map, 현재 US 대표 4종). 1 ETF→N 구성종목 fan-out 행을 ingest_date/
+# run_id 파티션에 전부 append 하고, 벤더 기준일(updatedAt)은 무변형 보존(dedup·기준일 SCD 는
+# 후속 canonical). ETF 는 정의상 구성종목이 있으므로 빈 holdings·에러객체는 ETF 단위 실패로 격리.
+DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf
 
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
@@ -147,8 +155,9 @@ state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 
 - `ingest-price-raw --source kis`
 - `ingest-raw-financial --source dart`
 
-> ※ `ingest-raw-disclosure`(공시, ALPHA-344)는 신규 raw 스텝이다 — 로컬 CLI 로는 실행되나
-> 스케줄러/상태머신 편입은 인프라 후속(terraform 미변경). 편입 시 위 목록에 일곱 번째 브랜치로 추가한다.
+> ※ `ingest-raw-disclosure`(공시, ALPHA-344)·`ingest-raw-etf`(미국 ETF 구성종목, ALPHA-337)는
+> 신규 raw 스텝이다 — 로컬 CLI 로는 실행되나 스케줄러/상태머신 편입은 인프라 후속(terraform 미변경).
+> 편입 시 위 목록에 각각 일곱·여덟 번째 브랜치(`ingest-raw-etf --source fmp`)로 추가한다.
 
 Scheduler 는 최초 `DISABLED` 로 생성한다. 수동 검증은 `terraform output data_pipeline_state_machine_arn`
 값으로 `aws stepfunctions start-execution --input '{"run_id":"manual-YYYYMMDDTHHMMSSZ"}'` 를 실행한다.
@@ -168,6 +177,7 @@ settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
 settings.dart_financial.source       # DartFinancialSource (OpenDART 국내 재무 — 인증키 env·KR 6자리 맵); 미설정이면 settings.dart_financial 은 None
 settings.dart_disclosure.source      # DartDisclosureSource (OpenDART 국내 공시 — 인증키 env·KR 맵·report_nm 유형필터); 재무와 다른 API. 미설정이면 settings.dart_disclosure 은 None
+settings.etf.source                  # EtfSource (FMP 미국 ETF holdings — 인증키 env·ETF 전용 맵 etf_map, 현재 US); 미설정이면 settings.etf 은 None
 settings.targets.symbols             # ["005930", ...]
 settings.targets.keywords            # ["금리", ...]
 ```
@@ -219,6 +229,13 @@ settings.targets.keywords            # ["금리", ...]
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
   가 그 객체를 가리킨다(메타↔본문 링크). list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
+- **raw(ETF 구성종목)** — `raw/source=fmp/dataset=etf_holdings/market=US/ingest_date=…/run_id=…/` 에
+  run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
+  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(중복 판정 안 함). 수집 대상은
+  종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`)이라 **1 ETF → N 구성종목**으로 펼쳐지고,
+  각 행에 벤더 기준일(`updatedAt`)·`our_etf_id`·`market`·`fetched_at` 를 부착한다. 같은 스냅샷 중복
+  제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver) 소관. KR ETF 는 FMP 커버리지 밖이라
+  후속 별도 벤더(ALPHA-336).
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`

@@ -1,12 +1,12 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID]
 
-수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표는 point-in-time 폴링이라 창 없음):
+수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음):
   - 미지정(스케줄 증분): 어제~오늘 UTC 창을 앱이 계산한다. EventBridge Scheduler 는
     정적 입력만 넣어 '어제/오늘'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다.
   - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다.
@@ -27,6 +27,7 @@ from .sources import (
     BigKindsNewsSource,
     DartDisclosureSource,
     DartFinancialSource,
+    FmpEtfSource,
     FmpFinancialSource,
     FmpNewsSource,
     FmpPriceSource,
@@ -37,6 +38,7 @@ from .steps import (
     ingest_price_raw,
     ingest_raw,
     ingest_raw_disclosure,
+    ingest_raw_etf,
     ingest_raw_financial,
     normalize_disclosure,
     normalize_disclosure_segment,
@@ -71,8 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "ingest-raw-disclosure", "normalize-price", "normalize-news",
-                 "normalize-disclosure", "normalize-disclosure-segment"],
+                 "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
+                 "normalize-news", "normalize-disclosure", "normalize-disclosure-segment"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -124,6 +126,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|dart)")
         return ingest_raw_financial.run(settings, storage, source, run_id)
+
+    # ETF 구성종목도 스냅샷(현재 holdings)이라 날짜창을 쓰지 않는다 — 재무와 함께 먼저
+    # 분기해 창 계산을 건너뛴다. US=FMP 단일 벤더(KR 은 후속 별도 벤더 — ALPHA-336).
+    if args.step == "ingest-raw-etf":
+        vendor = args.source or "fmp"
+        if vendor == "fmp":
+            if settings.etf is None:
+                # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+                raise SystemExit("etf.source 설정이 없다 — sources.toml 확인")
+            etf_source = FmpEtfSource(settings.etf.source, PoliteClient())
+        else:
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp)")
+        return ingest_raw_etf.run(settings, storage, etf_source, run_id)
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).
     # 소급 일수는 스텝별로 다르다(가격 EOD 는 주말·공휴일 공백 때문에 더 넉넉히).

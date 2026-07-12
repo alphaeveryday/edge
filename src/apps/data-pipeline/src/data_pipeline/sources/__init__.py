@@ -3,6 +3,7 @@
 from .bigkinds import BigKindsNewsSource
 from .dart_disclosure import DartDisclosureSource
 from .dart_financial import DartFinancialSource
+from .etf import FmpEtfSource
 from .fmp import FmpNewsSource
 from .fmp_financial import FmpFinancialSource
 from .fmp_price import FmpPriceSource
@@ -14,6 +15,7 @@ __all__ = [
     "BigKindsNewsSource",
     "DartDisclosureSource",
     "DartFinancialSource",
+    "FmpEtfSource",
     "FmpNewsSource",
     "FmpPriceSource",
     "FmpFinancialSource",

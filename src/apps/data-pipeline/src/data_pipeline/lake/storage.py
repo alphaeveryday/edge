@@ -66,6 +66,23 @@ def raw_financial_partition(
     )
 
 
+def raw_etf_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw ETF 구성종목(etf_holdings) 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격·재무와 동형(bronze 통일) — ETF holdings 응답은 스냅샷이라 매 run 이 현재 PDF
+    전량을 주므로 원본을 수집일(ingest_date) 기준으로 run_id 별 append 한다(전부 보존,
+    dedup 없음). 벤더가 주는 기준일(as-of, FMP `updatedAt`)은 ingest_date 와 별개로 각
+    레코드에 그대로 보존돼 canonical 이 쓴다 — 재무의 filing_date↔ingest_date 분리와 같다.
+    같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver) 소관이다.
+    """
+    return (
+        f"raw/source={source}/dataset=etf_holdings/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_disclosure_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:

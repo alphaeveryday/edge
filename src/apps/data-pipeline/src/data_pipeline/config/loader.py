@@ -26,6 +26,7 @@ from .models import (
     CollectionTargets,
     DartDisclosureConfig,
     DartFinancialConfig,
+    EtfConfig,
     FinancialConfig,
     KisPriceConfig,
     NewsConfig,
@@ -60,6 +61,9 @@ class Settings(BaseSettings):
     # OpenDART(국내 재무) 도 독립 벤더다. 미설정이면 ingest-raw-financial --source dart
     # 진입점이 fail-loud 한다(FMP 재무만 돌리는 환경은 이 섹션이 없어도 된다).
     dart_financial: DartFinancialConfig | None = None
+    # ETF 구성종목(FMP holdings, US) 은 독립 잡이라 섹션 생략 가능 — 미설정이면
+    # ingest-raw-etf 진입점이 fail-loud 한다(ETF 를 안 돌리는 환경은 생략 가능).
+    etf: EtfConfig | None = None
     # OpenDART 공시(disclosure) 는 재무와 별개 잡·별개 API(list.json/document.xml)다. 미설정이면
     # ingest-raw-disclosure 진입점이 fail-loud 한다(공시를 안 돌리는 환경은 생략 가능).
     dart_disclosure: DartDisclosureConfig | None = None

@@ -112,6 +112,27 @@ class FinancialSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class EtfSource(BaseModel):
+    """ETF 구성종목(holdings) 소스 — FMP ETF holdings 스냅샷 수집 (US, S005 선행).
+
+    api_key 는 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_ETF__SOURCE__API_KEY=...
+    base_url 은 FMP `/stable/etf/holdings` 엔드포인트. 날짜창 없이 심볼(ETF)당 1콜로
+    현재 구성종목 전량을 받는다(가격·재무처럼 배열 응답, 뉴스처럼 페이지네이션 없음).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: NonBlankStr
+    enabled: bool = True
+    api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_etf_id → FMP ETF 심볼. 종목(symbol_map)과 별개 맵이다 — 수집 대상이 종목
+    # 유니버스가 아니라 ETF 목록이라, 이 맵의 키가 곧 수집 유니버스다(targets 와 무관).
+    # 매핑 없는 ETF 는 수집하지 않는다(생략 = 제외). KR ETF 는 FMP 커버리지 밖이라
+    # 여기 두지 않는다(후속 KIS 등 별도 벤더 — ALPHA-336).
+    etf_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class DartFinancialSource(BaseModel):
     """OpenDART 국내 재무제표 소스 (financial_statements raw).
 
@@ -184,6 +205,12 @@ class FinancialConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: FinancialSource
+
+
+class EtfConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: EtfSource
 
 
 class DartFinancialConfig(BaseModel):
