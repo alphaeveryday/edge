@@ -328,6 +328,10 @@ def _extract_standard_rows(frame: pd.DataFrame, context_text: str) -> list[dict[
     amount_column = _choose_column(columns, re.compile(r"매출액|영업수익|금액"), period=period)
     if share_column is None:
         combined_column = _choose_column(columns, re.compile(r"매출액\s*\(?비율\)?|금액\s*\(?비율\)?"), period=period)
+    elif share_column == amount_column:
+        # 같은 컬럼이 금액·비율 둘 다 매치 = 결합 헤더(예 `매출액(비율)`, 셀 `1,234 (56.7)`).
+        # 결합-셀 파서를 켜지 않으면 금액을 비율로 오독(>100)해 행이 버려진다(Codex P2).
+        combined_column = share_column
     else:
         combined_column = None
     if combined_column:

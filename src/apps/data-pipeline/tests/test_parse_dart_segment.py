@@ -134,6 +134,23 @@ def test_drops_aggregate_parent_rows() -> None:
     assert [s["revenue_share_pct"] for s in segments] == [60.0, 40.0]
 
 
+def test_combined_amount_share_column_parses_both() -> None:
+    """결합 헤더 `매출액(비율)`(셀 `1,234 (56.7)`)에서 금액·비중을 각각 뽑아야 한다 — share_column
+    이 결합 헤더를 먼저 매치해도 금액을 비율로 오독(>100)해 행을 버리지 않게(Codex P2)."""
+    html = """
+    <p>사업부문별 매출</p>
+    <table>
+      <tr><th>부문</th><th>매출액(비율)</th></tr>
+      <tr><td>완성품</td><td>1,234 (56.7)</td></tr>
+      <tr><td>부품</td><td>900 (43.3)</td></tr>
+    </table>
+    """
+    segments, meta = parse_segments(html)
+    assert [s["segment_name"] for s in segments] == ["완성품", "부품"]
+    assert [s["revenue_krw"] for s in segments] == [1234, 900]
+    assert [s["revenue_share_pct"] for s in segments] == [56.7, 43.3]
+
+
 def test_no_segment_table_returns_empty_unreliable() -> None:
     """각도 H: 사업부문 표가 없는 본문은 crash 없이 빈 rows·unreliable stats 로 나온다."""
     segments, meta = parse_segments("<html><body><p>본문</p></body></html>")
