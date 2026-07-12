@@ -142,6 +142,21 @@ enabled = true
 "105560" = "105560"  # KB금융
 "055550" = "055550"  # 신한지주
 
+# ETF 구성종목(holdings) 소스 — FMP ETF holdings 스냅샷(US, ALPHA-337). api_key 는 env 로 주입:
+#   DATA_PIPELINE_ETF__SOURCE__API_KEY=...
+# ingest-raw-etf 로 실행(날짜창 없음 — 스냅샷). KR ETF 는 FMP 커버리지 밖이라 여기 없다(후속 별도 벤더).
+[etf.source]
+base_url = "https://financialmodelingprep.com/stable/etf/holdings"
+enabled = true
+
+# our_etf_id → FMP ETF 심볼. 종목맵과 별개 — 이 맵의 키가 곧 수집 유니버스다(targets 무관).
+# 소수 대표 US ETF 부터 시작한다(브로드마켓 4종). 추가는 여기만 바꾸면 된다(코드 수정 불필요).
+[etf.source.etf_map]
+SPY = "SPY"   # S&P 500
+QQQ = "QQQ"   # 나스닥 100
+DIA = "DIA"   # 다우 30
+IWM = "IWM"   # 러셀 2000
+
 # 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
 # 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
 #   DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
