@@ -358,11 +358,15 @@ def _extract_standard_rows(frame: pd.DataFrame, context_text: str) -> list[dict[
         revenue_krw = _parse_amount(row.get(amount_column)) if amount_column else None
         if combined_column:
             cell = row.get(combined_column, "")
-            matches = re.findall(r"\d+(?:,\d{3})*(?:\.\d+)?", cell)
-            if matches:
-                revenue_krw = int(round(float(matches[0].replace(",", ""))))
-            if len(matches) >= 2:
-                revenue_share_pct = float(matches[1].replace(",", ""))
+            # △/▲/-(음수 조정·제거 행)를 토큰별 부호로 보존한다 — 안 그러면 음수 비중이 양수로
+            # 뒤집혀 아래 `<=0` 가드를 우회해 canonical 을 오염시킨다(_parse_number 의 △ 처리와
+            # 정합, Codex P2). 결합 셀 포맷의 바깥 괄호 '('는 부호가 아니라 매치되지 않는다.
+            tokens = re.findall(r"([△▲-]?)\s*(\d+(?:,\d{3})*(?:\.\d+)?)", cell)
+            nums = [(-1 if sign else 1) * float(digits.replace(",", "")) for sign, digits in tokens]
+            if nums:
+                revenue_krw = int(round(nums[0]))
+            if len(nums) >= 2:
+                revenue_share_pct = nums[1]
 
         if revenue_share_pct is None and revenue_krw is None:
             continue

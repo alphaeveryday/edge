@@ -151,6 +151,21 @@ def test_combined_amount_share_column_parses_both() -> None:
     assert [s["revenue_share_pct"] for s in segments] == [56.7, 43.3]
 
 
+def test_combined_cell_negative_adjustment_dropped_by_sign() -> None:
+    """결합 셀의 △ 음수(조정·제거 행)가 부호를 잃고 양수로 뒤집혀 canonical 에 새지 않게 한다
+    — 음수 비중은 <=0 가드로 드롭돼야 한다(Codex P2). 정상 양수 행만 남는다."""
+    html = """
+    <p>사업부문별 매출</p>
+    <table>
+      <tr><th>부문</th><th>매출액(비율)</th></tr>
+      <tr><td>완성품</td><td>1,234 (56.7)</td></tr>
+      <tr><td>내부조정</td><td>△301,146 (△8.9)</td></tr>
+    </table>
+    """
+    segments, _ = parse_segments(html)
+    assert [s["segment_name"] for s in segments] == ["완성품"]  # 음수 조정행은 드롭
+
+
 def test_no_segment_table_returns_empty_unreliable() -> None:
     """각도 H: 사업부문 표가 없는 본문은 crash 없이 빈 rows·unreliable stats 로 나온다."""
     segments, meta = parse_segments("<html><body><p>본문</p></body></html>")
