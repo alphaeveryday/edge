@@ -48,7 +48,27 @@ def test_pharmaresearch_fixture_extracts_current_mix() -> None:
     segments, meta = parse_segments(PHARMA_HTML)
     _assert_common(segments, meta, minimum=4)
     assert [s["segment_name"] for s in segments] == ["의약품", "의료기기", "화장품", "기타"]
-    assert [s["revenue_krw"] for s in segments] == [82540, 314435, 131645, 7669]
+    # 표가 '(단위 : 백만원)'을 선언 — 표시값(82,540)을 KRW(×10^6)로 스케일해야 한다.
+    assert [s["revenue_krw"] for s in segments] == [82_540_000_000, 314_435_000_000, 131_645_000_000, 7_669_000_000]
+
+
+def test_unit_scaling_reads_table_unit() -> None:
+    """표 단위 선언(백만원/억원)을 감지해 revenue_krw 를 KRW 로 스케일한다(Codex P1).
+    단위 미선언 표(원)는 무변형(factor 1)."""
+    baseline = """
+    <p>4. 매출 및 수주상황</p><p>가. 사업부문별 매출 현황</p>
+    <table>
+      <tr><th>부문</th><th>매출액</th><th>비중</th></tr>
+      <tr><td>A</td><td>60</td><td>60</td></tr>
+      <tr><td>B</td><td>40</td><td>40</td></tr>
+    </table>
+    """
+    seg_won, _ = parse_segments(baseline)
+    assert [s["revenue_krw"] for s in seg_won] == [60, 40]  # 단위 미선언 → 무변형
+
+    scaled = baseline.replace("<th>부문</th>", "<th>부문 (단위 : 억원, %)</th>")
+    seg_eok, _ = parse_segments(scaled)
+    assert [s["revenue_krw"] for s in seg_eok] == [60 * 10**8, 40 * 10**8]  # 억원 → ×10^8
 
 
 def test_pharmaresearch_fixture_keeps_reported_shares() -> None:

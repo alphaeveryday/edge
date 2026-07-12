@@ -84,6 +84,21 @@ def _parse_amount(value: Any) -> int | None:
     return None if number is None else int(round(number))
 
 
+# 표 단위 스케일 — DART 사업보고서 표는 금액 단위를 셀 밖(`(단위 : 백만원, %)`)에 선언하는데,
+# 파서가 뽑는 건 표시값(예 '82,540' = 82,540백만원)이다. canonical 컬럼은 revenue_krw(원)라
+# 표시값을 그대로 저장하면 매출이 10^6·10^8배 어긋난다 → 감지한 단위로 KRW 로 스케일한다.
+# jy 원본은 표시값을 저장하지만(그래프는 비중 위주), edge fact 는 절대 KRW 를 함의하므로 스케일.
+_UNIT_FACTORS = {"조원": 10**12, "천억원": 10**11, "억원": 10**8, "백만원": 10**6, "천원": 10**3}
+# 단위 선언 근처에서 스케일 단위를 찾는다(긴 단위 우선 — '천억원'이 '억원'보다 먼저).
+# 스케일 대상이 아닌 '원'은 목록에서 빼 기본 factor 1(미검출·원 단위 = 무변형)로 둔다.
+_UNIT_RE = re.compile(r"단위[^)]{0,20}?(조원|천억원|백만원|억원|천원)")
+
+
+def _unit_factor(haystack: str) -> int:
+    match = _UNIT_RE.search(haystack)
+    return _UNIT_FACTORS[match.group(1)] if match else 1
+
+
 def _uniquify_columns(columns: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     unique: list[str] = []
@@ -583,6 +598,13 @@ def parse_segments(html_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 continue
             normalized_rows = [dict(row) for row in rows]
             normalized_rows, share_basis, share_sum = _normalize_shares(normalized_rows)
+            # 감지한 표 단위로 revenue_krw 를 KRW 로 스케일한다(비중은 비율이라 스케일 무관 —
+            # normalize 뒤에 적용해 computed share 계산·share_sum 을 건드리지 않는다).
+            factor = _unit_factor(haystack)
+            if factor != 1:
+                for row in normalized_rows:
+                    if row.get("revenue_krw") is not None:
+                        row["revenue_krw"] = int(row["revenue_krw"]) * factor
             basis_rank = {"reported": 3, "rescaled": 2, "computed": 1, "unreliable": 0}[share_basis]
             period_rank = max((_period_rank(str(row.get("period"))) for row in normalized_rows), default=-1)
             unique_names = {_name_key(str(row.get("segment_name") or "")) for row in normalized_rows if row.get("segment_name")}
