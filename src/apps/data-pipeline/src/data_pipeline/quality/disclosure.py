@@ -131,3 +131,70 @@ def validate_supply_fact(row: dict, *, max_report_date: str) -> list[str]:
             reasons.append("amount_non_positive")
 
     return reasons
+
+
+# ── 사업부문 fact 게이트 (ALPHA-346) ─────────────────────
+# 공급계약 게이트와 같은 경계: 정체성(rcept_no·segment_name)·시간축(report_date)·표현 불가
+# 수치(int64 초과 매출·비유한 비중)는 blocking, 값 이상(share_basis=unreliable·비중 범위밖·
+# 매출 비양수)은 경고. share 상한은 비중이라 100% 다(계약 매출액대비 150% 와 다름).
+BLOCKING_REASONS_SEGMENT = frozenset(
+    {"missing_rcept_no", "missing_report_date", "bad_report_date", "missing_segment_name",
+     "empty_segment", "revenue_out_of_range", "share_not_finite"}
+)
+
+_SHARE_MAX_PCT = 100.0
+
+
+def validate_segment_fact(row: dict, *, max_report_date: str) -> list[str]:
+    """조인된 사업부문 fact 행의 정체성·시간축·값 검사. 위반 사유 코드 리스트(정상=[]).
+
+    행키는 (rcept_no, segment_ordinal)이지만 segment_name 결측도 blocking 이다 — 이름 없는
+    부문은 분석 가치가 없다(행키가 아니라 필수 데이터라서 막는다). 나머지는 공급계약 게이트와
+    동형(각도 H — coerce-to-passing 방지).
+
+    사유:
+      - missing_rcept_no / missing_report_date / bad_report_date : 정체성·시간축 (blocking)
+      - missing_segment_name    : segment_name 결측/공백 (blocking — 행키 일부)
+      - empty_segment           : 매출액·비중 둘 다 결측 (blocking — 분석 가치 없음)
+      - revenue_out_of_range     : revenue_krw int64 초과 (blocking — 적재 OverflowError)
+      - share_not_finite         : revenue_share_pct inf/nan (blocking — float64 오염)
+      - share_basis_unreliable   : share_basis == 'unreliable' (경고 — 비중 신뢰 낮음)
+      - share_out_of_range       : 비중 finite ≤0 또는 >100 (경고 — 파싱 이상 표면화)
+      - revenue_non_positive     : revenue_krw int64 내 ≤0 (경고)
+    """
+    reasons: list[str] = []
+
+    if _blank(row.get("rcept_no")):
+        reasons.append("missing_rcept_no")
+    if _blank(row.get("segment_name")):
+        reasons.append("missing_segment_name")
+
+    report_date = row.get("report_date")
+    if _blank(report_date):
+        reasons.append("missing_report_date")
+    elif not (MIN_REPORT_DATE <= report_date[:10] <= max_report_date):
+        reasons.append("bad_report_date")
+
+    if row.get("revenue_krw") is None and row.get("revenue_share_pct") is None:
+        # 매출액·비중 둘 다 없으면 사업부문 fact 로서 분석 가치가 없다(malformed 표).
+        reasons.append("empty_segment")
+
+    share_pct = row.get("revenue_share_pct")
+    if isinstance(share_pct, (int, float)) and not isinstance(share_pct, bool):
+        if not math.isfinite(share_pct):
+            reasons.append("share_not_finite")
+        elif share_pct <= 0 or share_pct > _SHARE_MAX_PCT:
+            reasons.append("share_out_of_range")
+
+    revenue_krw = row.get("revenue_krw")
+    if isinstance(revenue_krw, int) and not isinstance(revenue_krw, bool):
+        if not (_INT64_MIN <= revenue_krw <= _INT64_MAX):
+            reasons.append("revenue_out_of_range")
+        elif revenue_krw <= 0:
+            reasons.append("revenue_non_positive")
+
+    if row.get("share_basis") == "unreliable":
+        # 경고: 비중 합이 신뢰 범위를 벗어나 파서가 unreliable 로 표시 — 통과시키되 드러낸다.
+        reasons.append("share_basis_unreliable")
+
+    return reasons

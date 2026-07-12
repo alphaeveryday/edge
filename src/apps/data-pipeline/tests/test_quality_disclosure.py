@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from data_pipeline.quality import BLOCKING_REASONS_DISCLOSURE
-from data_pipeline.quality.disclosure import validate_supply_fact
+from data_pipeline.quality import BLOCKING_REASONS_DISCLOSURE, BLOCKING_REASONS_SEGMENT
+from data_pipeline.quality.disclosure import validate_segment_fact, validate_supply_fact
 
 MAX_REPORT_DATE = "2026-06-25"
 
@@ -134,3 +134,61 @@ def test_boolean_ratio_does_not_crash_or_flag() -> None:
     """각도 H: bool 은 int 하위형이라 조용히 수치로 통과할 수 있다 — 비교 대상에서 제외한다."""
     reasons = validate_supply_fact(_valid_fact(ratio_pct=True), max_report_date=MAX_REPORT_DATE)
     assert "ratio_out_of_range" not in reasons
+
+
+# ── 사업부문 fact 게이트 (ALPHA-346) ─────────────────────
+def _valid_segment(**overrides) -> dict:
+    fact = {
+        "rcept_no": "20260310000001",
+        "segment_name": "의약품",
+        "report_date": "2026-03-10",
+        "revenue_krw": 82540,
+        "revenue_share_pct": 15.4,
+        "share_basis": "reported",
+    }
+    fact.update(overrides)
+    return fact
+
+
+def test_valid_segment_has_no_reasons() -> None:
+    assert validate_segment_fact(_valid_segment(), max_report_date="2026-03-12") == []
+
+
+@pytest.mark.parametrize("field", ["rcept_no", "segment_name"])
+def test_missing_identity_is_blocking(field) -> None:
+    reasons = validate_segment_fact(_valid_segment(**{field: None}), max_report_date="2026-03-12")
+    assert f"missing_{field}" in reasons
+    assert f"missing_{field}" in BLOCKING_REASONS_SEGMENT
+
+
+def test_empty_segment_is_blocking() -> None:
+    fact = _valid_segment(revenue_krw=None, revenue_share_pct=None)
+    reasons = validate_segment_fact(fact, max_report_date="2026-03-12")
+    assert "empty_segment" in reasons
+    assert "empty_segment" in BLOCKING_REASONS_SEGMENT
+
+
+def test_revenue_over_int64_is_blocking() -> None:
+    reasons = validate_segment_fact(_valid_segment(revenue_krw=10**19), max_report_date="2026-03-12")
+    assert "revenue_out_of_range" in reasons
+    assert "revenue_out_of_range" in BLOCKING_REASONS_SEGMENT
+
+
+def test_share_non_finite_is_blocking() -> None:
+    for bad in (float("inf"), float("nan")):
+        reasons = validate_segment_fact(_valid_segment(revenue_share_pct=bad), max_report_date="2026-03-12")
+        assert "share_not_finite" in reasons, bad
+        assert "share_out_of_range" not in reasons
+
+
+@pytest.mark.parametrize("share", [0, -5.0, 120.0])
+def test_share_out_of_range_is_warning(share) -> None:
+    reasons = validate_segment_fact(_valid_segment(revenue_share_pct=share), max_report_date="2026-03-12")
+    assert "share_out_of_range" in reasons
+    assert not (set(reasons) & BLOCKING_REASONS_SEGMENT)
+
+
+def test_unreliable_share_basis_is_warning() -> None:
+    reasons = validate_segment_fact(_valid_segment(share_basis="unreliable"), max_report_date="2026-03-12")
+    assert "share_basis_unreliable" in reasons
+    assert not (set(reasons) & BLOCKING_REASONS_SEGMENT)
