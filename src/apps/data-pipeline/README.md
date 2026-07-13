@@ -145,7 +145,7 @@ dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 raw ingest 전용 ECS task definition 과 Step Functions
-state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 ECS RunTask 로 실행하며,
+state machine 을 만든다. 상태머신은 아래 여덟 raw 수집을 병렬 ECS RunTask 로 실행하며,
 모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition 과 collection_log 를 같은 실행 단위로 묶는다.
 
 - `ingest-raw --source fmp`
@@ -154,10 +154,12 @@ state machine 을 만든다. 상태머신은 아래 여섯 raw 수집을 병렬 
 - `ingest-raw --source bigkinds`
 - `ingest-price-raw --source kis`
 - `ingest-raw-financial --source dart`
+- `ingest-raw-disclosure`(공시, dart 세트) — 단일 벤더라 `--source` 없음
+- `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트) — 단일 벤더라 `--source` 없음
 
-> ※ `ingest-raw-disclosure`(공시, ALPHA-344)·`ingest-raw-etf`(미국 ETF 구성종목, ALPHA-337)는
-> 신규 raw 스텝이다 — 로컬 CLI 로는 실행되나 스케줄러/상태머신 편입은 인프라 후속(terraform 미변경).
-> 편입 시 위 목록에 각각 일곱·여덟 번째 브랜치(`ingest-raw-etf --source fmp`)로 추가한다.
+> ※ 공시·ETF 는 각각 dart·fmp 시크릿 세트에 env(`DATA_PIPELINE_DART_DISCLOSURE__/ETF__SOURCE__API_KEY`)를
+> 편입해 상태머신 브랜치로 함께 돈다(ALPHA-347). 다만 스케줄러는 여전히 `DISABLED` 라 실제 cron 기동은
+> 컷오버(시크릿 값 주입·스케줄러 ENABLED) 전까지 안 뜬다 — 새 브랜치 검증은 아래 수동 실행으로 한다.
 
 Scheduler 는 최초 `DISABLED` 로 생성한다. 수동 검증은 `terraform output data_pipeline_state_machine_arn`
 값으로 `aws stepfunctions start-execution --input '{"run_id":"manual-YYYYMMDDTHHMMSSZ"}'` 를 실행한다.

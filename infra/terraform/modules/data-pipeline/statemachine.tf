@@ -41,6 +41,16 @@ locals {
       taskdef_key  = "dart"
       command_expr = "States.Array('ingest-raw-financial', '--source', 'dart', '--run-id', $.run_id)"
     },
+    {
+      state        = "CollectDartDisclosure"
+      taskdef_key  = "dart"
+      command_expr = "States.Array('ingest-raw-disclosure', '--run-id', $.run_id)"
+    },
+    {
+      state        = "CollectFmpEtf"
+      taskdef_key  = "fmp"
+      command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
