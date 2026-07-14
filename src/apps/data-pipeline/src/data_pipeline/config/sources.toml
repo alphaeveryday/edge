@@ -157,6 +157,21 @@ QQQ = "QQQ"   # 나스닥 100
 DIA = "DIA"   # 다우 30
 IWM = "IWM"   # 러셀 2000
 
+# 국내 ETF 구성종목 소스 — KRX 정보데이터시스템 PDF(MDCSTAT05001, KR, ALPHA-336). FMP 는
+# KR ETF 커버리지 밖이라 별개 벤더다. 로그인 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입:
+#   DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=...
+#   DATA_PIPELINE_KRX_ETF__SOURCE__PW=...
+# ingest-raw-etf --source krx 로 실행(날짜창 없음 — 그날 trdDd PDF 스냅샷). 계정 파이프라인 전용.
+[krx_etf.source]
+enabled = true
+
+# our_etf_id → KRX ISIN(표준코드). US(FMP 심볼)와 달리 KRX 는 ISIN 으로 질의한다. 이 맵의
+# 키가 곧 수집 유니버스다. 라이브 검증한 대표 2종부터 시작한다(추가는 여기만 바꾸면 된다).
+# 해외기초(TIGER美S&P500)는 구성종목이 오되 비중·금액이 `-`(대시)로 온다 — raw 무변형 보존.
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"   # KODEX 200 (국내, 201종목·비중합 100%)
+"360750" = "KR7360750004"   # TIGER 미국S&P500 (해외기초, 505종목·비중 대시)
+
 # 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
 # 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
 #   DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...

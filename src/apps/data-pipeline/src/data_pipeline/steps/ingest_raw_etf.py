@@ -18,11 +18,11 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_etf_partition
-from ..sources import FmpEtfSource, StopFetch
+from ..sources import FmpEtfSource, KrxEtfSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 ETF 어댑터로
-# 둔다. 새 ETF 벤더(KR KIS 등)를 추가하면 이 합집합에 더한다(로직은 손대지 않는다).
-EtfSourceAdapter = FmpEtfSource
+# 둔다. 새 ETF 벤더를 추가하면 이 합집합에 더한다(로직은 손대지 않는다).
+EtfSourceAdapter = FmpEtfSource | KrxEtfSource
 
 logger = logging.getLogger(__name__)
 

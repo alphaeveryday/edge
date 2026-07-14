@@ -133,6 +133,26 @@ class EtfSource(BaseModel):
     etf_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class KrxEtfSource(BaseModel):
+    """KRX 정보데이터시스템 ETF 구성종목(PDF) 소스 — 로그인 게이트 뒤 MDCSTAT05001 (KR, ALPHA-336).
+
+    US(EtfSource=FMP holdings)와 달리 (1) 인증이 KRX 계정 로그인(mbr_id/pw, JSESSIONID
+    세션) (2) KR 시장 전용이라 market 은 항상 KR (3) etf_map 이 our_etf_id → ISIN(표준코드,
+    예 KR7069500007)이다. 비밀값(mbr_id/pw)은 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=...
+        DATA_PIPELINE_KRX_ETF__SOURCE__PW=...
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    mbr_id: str | None = None  # 비밀값: env 오버라이드 전용
+    pw: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_etf_id → KRX ISIN(표준코드). US(FMP 심볼)와 달리 KRX 는 ISIN 으로 질의한다. 이 맵의
+    # 키가 곧 수집 유니버스다(targets 무관) — 매핑 없는 ETF 는 수집하지 않는다(생략 = 제외).
+    etf_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class DartFinancialSource(BaseModel):
     """OpenDART 국내 재무제표 소스 (financial_statements raw).
 
@@ -211,6 +231,12 @@ class EtfConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: EtfSource
+
+
+class KrxEtfConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KrxEtfSource
 
 
 class DartFinancialConfig(BaseModel):
