@@ -5,7 +5,7 @@
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
 > 재무제표(손익·재무상태·현금흐름)·**ETF 구성종목(holdings)**, BigKinds 국내 뉴스,
-> KIS(한국투자, 국내) 일봉, OpenDART 국내 재무·**공시(disclosure filing)**까지다. 공시는 재무제표(fnlttSinglAcnt)와
+> KIS(한국투자, 국내) 일봉, **KRX 국내 ETF 구성종목**(로그인 게이트 PDF), OpenDART 국내 재무·**공시(disclosure filing)**까지다. 공시는 재무제표(fnlttSinglAcnt)와
 > **다른 API**(공시목록 list.json + 공시서류 원본 document.xml)로 메타 + 본문 raw 를 적재한다.
 > **가격 정제(Step2)** 는 정규화(FMP·KIS 이형 → 표준 OHLCV) + 정합성 게이트 + quality_log +
 > 통과 행의 `canonical/market_data/price_daily` 멱등 병합 적재까지 완료했다(`normalize-price`,
@@ -84,6 +84,14 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf
 
+# 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
+# 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
+# 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
+# etf_map, 현재 KR 대표 2종). 날짜창 없이 그날(trdDd) PDF 전량을 append(US ETF 와 동형). 해외기초
+# ETF 는 비중·금액이 대시(-)로 와도 무변형 보존. ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
+DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
+
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
@@ -156,7 +164,7 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
 - `ingest-price-raw --source kis`
 - `ingest-raw-financial --source dart`
 - `ingest-raw-disclosure`(공시, dart 세트) — 단일 벤더라 `--source` 없음
-- `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트) — 단일 벤더라 `--source` 없음
+- `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트) — SFN 은 fmp(미국) 브랜치만 실행. KRX 국내 ETF(`--source krx`, 로그인 게이트)는 코드에 있으나 SFN 편입은 후속(인프라 재정합)
 
 정제 스테이지(raw 성공 뒤, ALPHA-355)는 아래 4잡을 병렬로 돌려 canonical 을 멱등 적재한다 —
 벤더 API 키가 없어(레이크만 읽고 canonical 을 쓴다) 시크릿 없는 bigkinds task-def 를 재사용한다
