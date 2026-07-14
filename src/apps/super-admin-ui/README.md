@@ -1,6 +1,6 @@
 # super-admin-ui
 
-> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
+> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/context.md](../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·범위 경계만 둔다.
 
 운영자 콘솔(EDGE Admin). tenant-console-ui 와 동일 스택(Vite + React 19 + TypeScript, `react-router-dom`).

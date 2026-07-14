@@ -1,6 +1,6 @@
 # ADR-0006: gateway 단일 엣지 · 라우트별 신뢰 필터
 
-- 상태: 승인됨
+- 상태: 대체됨(→ [ADR-0010](0010-hybrid-onprem-pivot.md))
 - 날짜: 2026-06-21
 
 ## 맥락
@@ -23,7 +23,7 @@ console은 `tenant-console-ui → tenant-console-api`로 직접 가는 형태였
 - **엣지에만 의존하지 않는다** — `widget-api`는 읽기 전용이라 오라우팅돼도 변경 불가,
   `tenant-console-api`는 서비스 레벨에서도 인증을 요구한다(엣지 통과만으로 접근 불가).
 
-상세는 [architecture.md](../architecture.md) §4 신뢰 경계.
+상세는 구 architecture.md §4 신뢰 경계 (하이브리드 피벗으로 삭제됨 — `git log --follow`로 열람 가능).
 
 ## 대안
 - **gateway는 widget만, console은 직접** — 경계가 물리적으로 더 분리되지만, 엣지 정책(레이트리밋·WAF·

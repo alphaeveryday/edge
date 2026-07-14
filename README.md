@@ -64,7 +64,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 - **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위)
 - **운영 경로**: `super-admin-ui` → `gateway`(admin 라우트, VPN/IP 제한) → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
 
-`gateway`가 세 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 신뢰 경계 상세는 [docs/architecture.md](docs/architecture.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
+`gateway`가 세 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 

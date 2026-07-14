@@ -1,6 +1,6 @@
 # widget-ui
 
-> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/architecture](../../../docs/architecture.md)가 SSOT.
+> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/context.md](../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·범위 경계만 둔다.
 >
 > 워킹 스켈레톤을 위젯 렌더링 책임으로 정리했다.

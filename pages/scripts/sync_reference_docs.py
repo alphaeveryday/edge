@@ -22,13 +22,26 @@ REFERENCE = REPO_ROOT / "pages" / "docs" / "reference"
 
 # (원본, 대상) — 파일은 파일로, 디렉터리는 디렉터리로 복사한다.
 COPIES = [
-    (DOCS / "architecture.md", REFERENCE / "architecture.md"),
-    (DOCS / "schema.md", REFERENCE / "schema.md"),
+    (DOCS / "context.md", REFERENCE / "context.md"),
+    (DOCS / "scope.md", REFERENCE / "scope.md"),
+    (DOCS / "implementation.md", REFERENCE / "implementation.md"),
+    (DOCS / "roadmap.md", REFERENCE / "roadmap.md"),
+    (DOCS / "writing-rules.md", REFERENCE / "writing-rules.md"),
+    (DOCS / "contracts", REFERENCE / "contracts"),
+    (DOCS / "domain", REFERENCE / "domain"),
+    (DOCS / "console-ia", REFERENCE / "console-ia"),
     (DOCS / "adr", REFERENCE / "adr"),
 ]
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.
-_COPIED_FILES = ("docs/architecture.md", "docs/schema.md")
+_COPIED_FILES = (
+    "docs/context.md",
+    "docs/scope.md",
+    "docs/implementation.md",
+    "docs/roadmap.md",
+    "docs/writing-rules.md",
+)
+_COPIED_DIRS = ("docs/adr", "docs/contracts", "docs/domain", "docs/console-ia")
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 
 
@@ -64,10 +77,8 @@ def detect_repo() -> str:
 
 def _is_internal(resolved: str) -> bool:
     # reference/ 안에서 정상 해결되는(=복사되는) 대상인지.
-    return (
-        resolved in _COPIED_FILES
-        or resolved == "docs/adr"
-        or resolved.startswith("docs/adr/")
+    return resolved in _COPIED_FILES or any(
+        resolved == d or resolved.startswith(d + "/") for d in _COPIED_DIRS
     )
 
 

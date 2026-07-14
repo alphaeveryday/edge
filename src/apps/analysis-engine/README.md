@@ -38,5 +38,5 @@ python viz_plotly.py         # artifacts/*.html (인터랙티브)
 `data/`(price·news·FF5 parquet), 로컬 SQLite `db/edge_analysis.sqlite`, 학습 산출물 `model_artifacts/`, 리포트 `artifacts/`는 out-of-band로 관리하며 git에 올리지 않는다(`.gitignore`).
 
 ## 후속 작업 (별도 PR)
-- **공유 DB 연동** — 현재 로컬 SQLite에 persist. edge 공유 DB + `libs/schema` SSOT 이전은 확장-수축 절차로 진행: [ADR-0005](../../../docs/adr/0005-db-as-contract.md), [schema.md](../../../docs/schema.md).
+- **공유 DB 연동** — 현재 로컬 SQLite에 persist. edge 공유 DB + `libs/schema` SSOT 이전은 확장-수축 절차로 진행: [ADR-0005](../../../docs/adr/0005-db-as-contract.md), [docs/implementation.md](../../../docs/implementation.md) §4.
 - **적재 분리** — 뉴스 적재(`upload_us_news.py`)는 성격상 `data-pipeline` 소관이라 본 앱에 미포함. analysis-engine은 적재분을 읽어 분석/`analysis_result` 산출만 담당.

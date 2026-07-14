@@ -15,7 +15,7 @@ _아직 등록된 이미지가 없습니다._ 준비되면 `assets/images/`에 �
 
 ## ERD
 
-_준비 중._ 현재 DB 계약은 [Reference › Schema](reference/schema.md)에서 확인할 수 있습니다.
+_준비 중._ 현재 DB 변경 절차는 [Reference › Implementation](reference/implementation.md)에서, 도메인 상태값·ERD 방향은 [Reference › Domain › State Machine](reference/domain/state-machine.md)에서 확인할 수 있습니다.
 
 ## API 계약
 

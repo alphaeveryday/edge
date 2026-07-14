@@ -33,9 +33,9 @@ diff에서 문서에 등장할 수 있는 사실만 골라낸다. 코드 내부 
 
 | 바뀐 사실 | 확인할 위치 |
 |---|---|
-| 모듈 추가/역할/데이터 흐름 | 루트 README (구조 트리 · apps/libs 표 · 워크스페이스 표 · 데이터 흐름 다이어그램), docs/architecture.md |
-| DB 스키마 | docs/schema.md (테이블 소유권 · 확장-수축 절차), src/libs/schema/README.md |
-| 라우팅/포트/서비스 연결 | docker-compose.yml 주석, gateway `application.yaml`, docs/architecture.md |
+| 모듈 추가/역할/데이터 흐름 | 루트 README (구조 트리 · apps/libs 표 · 워크스페이스 표 · 데이터 흐름 다이어그램), docs/context.md |
+| DB 스키마 | docs/implementation.md §4 (소유권 원칙 · 확장-수축 절차), docs/domain/state-machine.md (상태값·ERD), src/libs/schema/README.md |
+| 라우팅/포트/서비스 연결 | docker-compose.yml 주석, gateway `application.yaml`, docs/context.md |
 | 배포/이미지 태그/인프라 | 루트 README "이미지 태그 규약", infra/terraform/README.md · envs/*/terraform.tfvars 주석 |
 | 모듈 내부 동작/테스트 개수/실행법 | 해당 모듈 README (예: src/apps/widget-ui/README.md) |
 | 코드 흐름/연동을 서술하는 인라인 주석 | 변경된 소스 파일 자체 — "추후 X로 교체 예정"류 주석이 이미 실현된 사실과 어긋나지 않는지 |
