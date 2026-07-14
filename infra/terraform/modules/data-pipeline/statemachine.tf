@@ -102,7 +102,7 @@ locals {
         "${job.state}CheckExitCode" = {
           Type = "Choice"
           Choices = [{
-            Variable      = "$.ecs.Tasks[0].Containers[0].ExitCode"
+            Variable      = "$.ecs.Containers[0].ExitCode"
             NumericEquals = 0
             Next          = "${job.state}Succeeded"
           }]
@@ -114,8 +114,8 @@ locals {
           Parameters = {
             job           = job.state
             status        = "succeeded"
-            "exit_code.$" = "$.ecs.Tasks[0].Containers[0].ExitCode"
-            "task_arn.$"  = "$.ecs.Tasks[0].TaskArn"
+            "exit_code.$" = "$.ecs.Containers[0].ExitCode"
+            "task_arn.$"  = "$.ecs.TaskArn"
           }
         }
         "${job.state}Failed" = {
@@ -125,8 +125,8 @@ locals {
             job           = job.state
             status        = "failed"
             cause         = "${job.state} container exited non-zero"
-            "exit_code.$" = "$.ecs.Tasks[0].Containers[0].ExitCode"
-            "task_arn.$"  = "$.ecs.Tasks[0].TaskArn"
+            "exit_code.$" = "$.ecs.Containers[0].ExitCode"
+            "task_arn.$"  = "$.ecs.TaskArn"
           }
         }
         "${job.state}TaskFailed" = {
