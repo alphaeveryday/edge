@@ -85,11 +85,13 @@ class KisDailyPriceSource:
             out.append((our_ticker, kis_symbol))
         return out
 
-    def _note_failure(self, kis_symbol: str, our_ticker: str, reason: str) -> None:
+    def _note_failure(
+        self, kis_symbol: str, our_ticker: str, reason: str, *, kind: str = "failure"
+    ) -> None:
         """심볼 단위 실패를 로그로 남기고 fetch_failures 에 기록(격리≠은폐)."""
         logger.warning("kis 심볼 건너뜀: %s (%s)", kis_symbol, reason)
         self.fetch_failures.append(
-            {"symbol": kis_symbol, "our_ticker": our_ticker, "error": reason}
+            {"symbol": kis_symbol, "our_ticker": our_ticker, "error": reason, "kind": kind}
         )
 
     def fetch(
@@ -200,7 +202,8 @@ class KisDailyPriceSource:
             # MAX_PAGES 를 다 돌았는데도 창 하한에 못 닿음 → 절단 가능. 조용히 버리지 않고
             # 실패로 기록해 런을 partial 로 드러낸다(창을 좁혀 재실행하라는 신호).
             self._note_failure(
-                kis_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)"
+                kis_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+                kind="truncation",
             )
         for day in sorted(bars):
             yield _emit(bars[day])

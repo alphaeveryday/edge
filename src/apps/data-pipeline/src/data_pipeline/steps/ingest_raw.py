@@ -130,11 +130,14 @@ def run(
     # 심볼 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
     #  - 저장분 있고 일부 실패 → partial(성공했지만 온전치 않음)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
+    #  - MAX_PAGES 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로 본다
+    #    (ALPHA-351). 절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다.
     failed_symbols = getattr(source, "fetch_failures", [])
-    if status == "success" and failed_symbols:
+    real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
+    if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
-            error = f"모든 수집 심볼 실패 ({len(failed_symbols)}건)"
+            error = f"모든 수집 심볼 실패 ({len(real_failures)}건)"
         else:
             status, exit_code = "partial", 1
 

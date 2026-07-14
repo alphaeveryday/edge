@@ -157,6 +157,37 @@ def test_document_fetch_failure_marks_partial_meta_preserved(tmp_path):
     assert log["records_failed_targets"] == 1
 
 
+def test_list_truncation_stays_success_but_logged(tmp_path):
+    # WHY(ALPHA-351): MAX_PAGES 목록 절단은 데이터 유효 + 다음 창에서 이어받으므로 SFN 을
+    #      죽이면 안 된다 — kind=truncation 은 성공(exit 0)으로 남기되, 절단 자체는 로그에
+    #      남겨 fail-loud 를 유지한다. 오케스트레이션이 흔한 절단마다 빨간불이 되던 원인.
+    source = FakeSource(records=[_rec("A1")])
+    source.fetch_failures.append(
+        {"symbol": "005930", "our_ticker": "005930",
+         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
+    )
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "success"
+    assert log["records_failed_targets"] == 1  # 절단도 로그엔 남는다(fail-loud)
+
+
+def test_truncation_plus_real_failure_still_partial(tmp_path):
+    # WHY(ALPHA-351): 절단을 성공 처리해도 같은 런의 진짜 실패(본문 결측)까지 삼키면 안 된다 —
+    #      절단은 제외하되 real failure 가 하나라도 있으면 partial/exit 1 을 유지한다.
+    source = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
+    source.fetch_failures.append(
+        {"symbol": "005930", "our_ticker": "005930",
+         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
+    )
+    code, storage = _run(tmp_path, source)
+
+    assert code == 1
+    assert _log(storage, "r1")["status"] == "partial"
+
+
 def test_stopfetch_marks_stopped(tmp_path):
     # WHY: 쿼터/키 오류(StopFetch)는 조용한 성공이 아니라 stopped 로 드러내고 비0 종료한다.
     source = FakeSource(stop=True)

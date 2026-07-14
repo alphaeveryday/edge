@@ -151,8 +151,9 @@ def test_brk_queries_fmp_dash_symbol():
 
 
 def test_fetch_flags_truncation_at_max_pages(monkeypatch):
-    # WHY: 백필 창이 커서 MAX_PAGES 를 초과하면 뒷부분을 조용히 버리면 안 된다 —
-    #      절단을 실패로 기록해 런이 partial 로 드러나야 한다(fail loud).
+    # WHY: 백필 창이 커서 MAX_PAGES 를 초과하면 뒷부분을 조용히 버리면 안 된다 — 절단을
+    #      kind=truncation 으로 기록해 로그엔 남기되(fail loud), 스텝은 이를 성공으로 본다
+    #      (ALPHA-351 — 데이터 유효 + 다음 창에서 이어받음). 진짜 실패와 구분되는 태그다.
     from data_pipeline.sources import fmp as fmp_mod
     monkeypatch.setattr(fmp_mod, "MAX_PAGES", 3)
 
@@ -169,6 +170,7 @@ def test_fetch_flags_truncation_at_max_pages(monkeypatch):
 
     assert len(records) == 3  # MAX_PAGES(3) × limit(1) 까지만
     assert source.fetch_failures and "MAX_PAGES" in source.fetch_failures[0]["error"]
+    assert source.fetch_failures[0]["kind"] == "truncation"
 
 
 def test_request_url_carries_window_and_page():
