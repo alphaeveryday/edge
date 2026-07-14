@@ -150,6 +150,18 @@ def test_weight_out_of_range_warns_but_passes(tmp_path):
     assert "weight_out_of_range" in log["warnings"][0]["reasons"]
 
 
+def test_ref_number_sanitizes_dash_comma_nonfinite_bool():
+    # WHY: 참고 수치는 canonical float64 컬럼에 담긴다 — 각도 H(coerce-to-passing 방지):
+    #      NaN/Inf(json.loads 가 리터럴을 float 로 파싱)·bool(float(True)=1.0)이 float64 를
+    #      오염시키지 않게 정규화가 null 로 원천 차단해야 한다. KRX 대시(-)·콤마문자열도 흡수.
+    for bad in ("-", "", "  ", float("nan"), float("inf"), float("-inf"), True, "비수치", None):
+        assert normalize_etf._ref_number(bad) is None, f"{bad!r} 는 null 로 정리돼야 한다"
+    # 정상값·콤마문자열·음수는 finite float 로 보존(음수는 게이트가 경고로 잡는다).
+    assert normalize_etf._ref_number("1,234") == 1234.0
+    assert normalize_etf._ref_number(30.5) == 30.5
+    assert normalize_etf._ref_number("-5") == -5.0
+
+
 def test_non_object_row_isolated_not_crash(tmp_path):
     # WHY: 유효 JSON 이지만 객체가 아닌 행(null·배열)은 _normalize 의 record.get 에서 런 전체를
     #      죽여 quality_log 조차 못 남긴다 — 행 단위로 격리해 나머지 검증은 완료돼야 한다(Rule 12).
