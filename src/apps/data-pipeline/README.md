@@ -17,6 +17,11 @@
 > (`normalize-disclosure`, ALPHA-345). **사업부문(segment) 정제(Step2)** 는 사업보고서 본문 표를
 > 파싱해 사업부문별 매출 fact 로 정규화 + 게이트 + `canonical/disclosures/business_segment_fact`
 > (rcept_no+segment_ordinal 멱등 병합)까지 완료했다(`normalize-disclosure-segment`, ALPHA-346).
+> **ETF 구성종목 정제(Step2)** 는 정규화(FMP US·KRX KR 이형 → 공통 구성종목 fact) + 게이트
+> (정체성 blocking·비중/주식수/평가금액은 참고필드로 범위 경고) + quality_log + 통과 행의
+> `canonical/holdings/etf_holdings` (market,etf_id,constituent,as_of_date) 멱등 병합 적재까지
+> 완료했다(`normalize-etf`, ALPHA-342·343). KRX 해외기초 ETF 의 대시(-) 비중은 null 로 통과시켜
+> 구성종목을 보존한다.
 
 ## 실행
 
@@ -133,6 +138,15 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
 # business_segment_fact 에 멱등 병합. 파서는 팀원(정준영) 프로토타입(segments-v2) 이식(graph 제외).
 uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-segment
 #   특정 런만: ... run normalize-disclosure-segment --input-run-id 20260701T000000Z
+
+# ETF 구성종목 정제(Step2) — raw etf_holdings(FMP US·KRX KR) → 공통 구성종목 fact 정규화 + 게이트.
+# 벤더는 raw 키의 source= 로 판별한다(fmp=US·krx=KR, 수집 날짜창 없음). 정체성(market·etf_id·
+# 구성종목·as_of_date)은 blocking, 비중·주식수·평가금액은 참고필드(대시(-)·결측=null, 범위 이상만
+# 경고). 통과 행은 canonical/holdings/etf_holdings 에 (market,etf_id,constituent_ticker,as_of_date)
+# 로 멱등 병합(같은 키 최신 fetched_at 우선). market-스코프 파티션이라 벤더 disjoint(교차충돌 없음).
+# --input-run-id 로 특정 수집 런만 재검증(미지정=raw etf 전체, 멱등; 스코프는 canonical 안 씀).
+uv run --package data-pipeline python -m data_pipeline.run normalize-etf
+#   특정 런만: ... run normalize-etf --input-run-id 20260701T000000Z
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -171,6 +185,9 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
 (새 task-def·IAM 불요). 전체런(`--input-run-id` 없이)이라 멱등 적재다.
 
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
+
+`normalize-etf`(ETF 구성종목 정제, ALPHA-342·343)는 코드에 있으나 SFN 정제 스테이지 편입은
+후속(인프라 재정합) — KRX 국내 ETF 원본 수집(`--source krx`)이 SFN 미편입인 것과 같은 결이다.
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 스테이지에서 제외한다(raw-only). raw 가 partial/
 실패면 정제로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
@@ -249,13 +266,13 @@ settings.targets.keywords            # ["금리", ...]
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
   가 그 객체를 가리킨다(메타↔본문 링크). list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
-- **raw(ETF 구성종목)** — `raw/source=fmp/dataset=etf_holdings/market=US/ingest_date=…/run_id=…/` 에
-  run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
+- **raw(ETF 구성종목)** — `raw/source={fmp|krx}/dataset=etf_holdings/market={US|KR}/ingest_date=…/run_id=…/`
+  에 run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
   구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(중복 판정 안 함). 수집 대상은
-  종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`)이라 **1 ETF → N 구성종목**으로 펼쳐지고,
-  각 행에 벤더 기준일(`updatedAt`)·`our_etf_id`·`market`·`fetched_at` 를 부착한다. 같은 스냅샷 중복
-  제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver) 소관. KR ETF 는 FMP 커버리지 밖이라
-  후속 별도 벤더(ALPHA-336).
+  종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`·`krx_etf.source.etf_map`)이라 **1 ETF → N
+  구성종목**으로 펼쳐지고, 각 행에 벤더 기준일(FMP `updatedAt`·KRX `trd_dd`)·`our_etf_id`·`market`·
+  `fetched_at` 를 부착한다. 같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver)
+  소관. US=FMP(ALPHA-337)·KR=KRX 로그인 게이트 PDF(ALPHA-336) — 정규화는 `normalize-etf`(342·343).
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
@@ -285,6 +302,13 @@ settings.targets.keywords            # ["금리", ...]
   파티션·source_vendor 컬럼)이나 **1 문서 → N 부문**(fan-out)이라 행키에 파스 순서 `segment_ordinal` 을
   둔다 — `segment_name` 은 한 문서에서 유일하지 않다(제품/용역 sub-row 로 같은 부문 반복). 파서(4-전략
   추출)가 뽑은 `revenue_krw·revenue_share_pct·share_basis·period` 에 메타 provenance 를 조인한다.
+- **canonical(ETF 구성종목, 정제 Step2)** — `canonical/holdings/etf_holdings/market=…/as_of_date=…/part-*.parquet`
+  에 게이트 통과 행을 **(etf_id, constituent_ticker) 키로 멱등 병합**. raw 와 달리 run_id·source_vendor
+  파티션이 없다(멱등). market·as_of_date 가 파티션, (etf_id, constituent_ticker)가 파티션 내 행 키다
+  (1 ETF → N 구성종목 fan-out). 기준일 as_of_date 는 벤더가 준다 — FMP `updatedAt`(datetime→date)·
+  KRX `trd_dd`(우리가 지정). **market-스코프 파티션이라 한 파티션엔 한 벤더만**(US=fmp·KR=krx disjoint)
+  → 가격의 벤더 교차 충돌 가드가 불필요하다. 같은 키 재적재는 최신 fetched_at 우선. `weight_pct·shares·
+  market_value` 는 참고 필드(KRX 해외기초는 대시(-)→null), `source_vendor`(fmp|krx)는 컬럼(provenance).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

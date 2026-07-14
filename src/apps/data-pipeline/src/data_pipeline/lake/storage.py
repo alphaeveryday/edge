@@ -198,6 +198,45 @@ def parse_raw_disclosure_key(key: str) -> dict[str, str]:
     }
 
 
+# ── raw etf 스캔(정제 입력) ──────────────────────────────
+# 정제(normalize_etf)는 raw etf_holdings 를 벤더·시장·수집일에 걸쳐 읽어 (market,etf_id,
+# 구성종목,as_of_date) 공통 스키마로 정규화한다. 경로 해석도 이 모듈이 SSOT(다른 곳에서 key 를
+# split 하지 않는다 — is_raw_price_key/parse_raw_price_key 와 동형).
+_RAW_ETF_MARKER = "/dataset=etf_holdings/"
+
+
+def is_raw_etf_key(key: str) -> bool:
+    """raw etf_holdings 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return key.startswith("raw/") and _RAW_ETF_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_etf_key(key: str) -> dict[str, str]:
+    """raw etf 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=etf_holdings/market=…/ingest_date=…/run_id=…/part-*.ndjson.
+    `key=value` 세그먼트만 취해 dict 로 — part 파일명(= 없음)은 자연히 빠진다.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
+    """canonical ETF 구성종목 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격(canonical_price_daily_partition)과 동형 — run_id·source_vendor 파티션 없이
+    (market, as_of_date) 로 가른다(멱등). 정체성 키 (market,etf_id,constituent_ticker,
+    as_of_date) 중 market·as_of_date 가 파티션, (etf_id,constituent_ticker)가 파티션 내 행
+    키다. 벤더는 시장이 가른다(US=fmp, KR=krx)라 source_vendor 는 파티션이 아니라 컬럼
+    (provenance)이고, market-스코프 파티션이라 한 파티션엔 한 벤더만 온다(교차 충돌 불가).
+    """
+    return f"canonical/holdings/etf_holdings/market={market}/as_of_date={as_of_date}"
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 
