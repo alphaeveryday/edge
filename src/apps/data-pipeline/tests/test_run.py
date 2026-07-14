@@ -71,6 +71,23 @@ def test_normalize_disclosure_segment_dispatches_step(tmp_path, monkeypatch):
     assert called == {"input_run_id": "R9"}
 
 
+def test_normalize_etf_dispatches_step(tmp_path, monkeypatch):
+    # WHY: normalize-etf 도 raw 를 읽는 정제 스텝이라 수집 창·소스 벤더 없이 곧장 스텝으로
+    #      라우팅되고 --input-run-id 만 전달돼야 한다(벤더는 raw 키 source= 로 판별).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    called = {}
+
+    from data_pipeline import run as run_mod
+
+    def fake_run(storage, run_id, input_run_id):
+        called["input_run_id"] = input_run_id
+        return 0
+
+    monkeypatch.setattr(run_mod.normalize_etf, "run", fake_run)
+    assert main(["normalize-etf", "--input-run-id", "R11"]) == 0
+    assert called == {"input_run_id": "R11"}
+
+
 def test_kis_rejects_to_without_from(monkeypatch):
     # WHY: KIS inquire-daily 는 시작일(FID_INPUT_DATE_1)이 필수다 — --to 만 주면 빈 시작일로
     #      전 종목이 KIS 오류가 되어 무의미한 전량 실패가 된다. 한쪽만 준 창은 API 호출 전에

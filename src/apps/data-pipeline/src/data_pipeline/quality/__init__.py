@@ -6,6 +6,7 @@ from .disclosure import (
     validate_segment_fact,
     validate_supply_fact,
 )
+from .etf import BLOCKING_REASONS_ETF, validate_etf_holding
 from .news import BLOCKING_REASONS, validate_news_meta
 from .price import validate_ohlcv
 
@@ -17,4 +18,6 @@ __all__ = [
     "BLOCKING_REASONS_DISCLOSURE",
     "validate_segment_fact",
     "BLOCKING_REASONS_SEGMENT",
+    "validate_etf_holding",
+    "BLOCKING_REASONS_ETF",
 ]

@@ -43,6 +43,7 @@ from .steps import (
     ingest_raw_financial,
     normalize_disclosure,
     normalize_disclosure_segment,
+    normalize_etf,
     normalize_news,
     normalize_price,
 )
@@ -75,7 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
-                 "normalize-news", "normalize-disclosure", "normalize-disclosure-segment"],
+                 "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
+                 "normalize-etf"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -111,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         return normalize_disclosure.run(storage, run_id, args.input_run_id)
     if args.step == "normalize-disclosure-segment":
         return normalize_disclosure_segment.run(storage, run_id, args.input_run_id)
+    # ETF 구성종목 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
+    # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
+    if args.step == "normalize-etf":
+        return normalize_etf.run(storage, run_id, args.input_run_id)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
     if args.step == "ingest-raw-financial":

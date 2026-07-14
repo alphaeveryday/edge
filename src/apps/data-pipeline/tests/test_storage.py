@@ -6,11 +6,14 @@ from data_pipeline.config import StorageConfig
 from data_pipeline.lake import (
     LocalStorage,
     S3Storage,
+    canonical_etf_holdings_partition,
     canonical_supply_contract_fact_partition,
     collection_log_key,
     is_raw_disclosure_key,
+    is_raw_etf_key,
     make_storage,
     parse_raw_disclosure_key,
+    parse_raw_etf_key,
     raw_disclosure_partition,
     raw_etf_partition,
     raw_news_partition,
@@ -88,6 +91,26 @@ def test_disclosure_key_roundtrip_and_excludes_document_zip():
     assert parse_raw_disclosure_key(meta) == {
         "source": "dart", "market": "KR", "ingest_date": "2026-06-23", "run_id": "R1",
     }
+
+
+def test_raw_etf_key_roundtrip_and_matches_only_ndjson():
+    # WHY: ETF 정제(normalize_etf)는 raw etf_holdings 메타 ndjson 만 스캔한다 — is_ 판정과
+    #      경로 파싱이 이 모듈의 SSOT 라 다른 곳에서 key 를 split 하지 않는다(가격 키와 동형).
+    key = f"{raw_etf_partition('krx', 'KR', '2026-07-14', 'R1')}/part-00000.ndjson"
+    assert is_raw_etf_key(key) is True
+    assert is_raw_etf_key(raw_etf_partition("krx", "KR", "2026-07-14", "R1")) is False  # 프리픽스 아님
+    assert parse_raw_etf_key(key) == {
+        "source": "krx", "market": "KR", "ingest_date": "2026-07-14", "run_id": "R1",
+    }
+
+
+def test_canonical_etf_holdings_partition_is_market_as_of_keyed():
+    # WHY: canonical ETF 는 멱등 — run_id·source_vendor 파티션 없이 (market, as_of_date)로
+    #      가른다(가격 trade_date 와 동형). market-스코프라 한 파티션엔 한 벤더만 온다.
+    assert (
+        canonical_etf_holdings_partition("KR", "2026-07-14")
+        == "canonical/holdings/etf_holdings/market=KR/as_of_date=2026-07-14"
+    )
 
 
 def test_canonical_supply_contract_fact_partition_is_report_date_keyed():
