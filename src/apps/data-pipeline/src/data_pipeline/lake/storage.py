@@ -247,15 +247,20 @@ def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     return f"canonical/market_data/price_daily/market={market}/trade_date={trade_date}"
 
 
-def canonical_news_articles_partition(published_date: str) -> str:
+def canonical_news_articles_partition(language: str, published_date: str) -> str:
     """canonical 뉴스 메타 파티션 프리픽스 (끝 슬래시 없음).
 
-    canonical 은 소스를 흡수한 **통합 구조**다 — source_vendor 는 파티션이 아니라 **컬럼**
-    (provenance)이라 벤더가 한 날짜 파티션에 섞인다. 파티션은 `published_date` 하나(가격의
-    trade_date 파티션과 동형 — 프루닝·라이프사이클). run_id 는 없다(멱등). 정체성 키는
-    `article_id`(=원문 URL 해시, 소스 무관)로 파티션 내 행 키다.
-    """
-    return f"canonical/news/news_articles/published_date={published_date}"
+    파티션은 `language`(ko·en) → `published_date` 2단이다(ALPHA-352). 다운스트림 언어모델이
+    언어별로 프루닝/분기하도록 언어를 파티션 최상단에 둔다 — 언어는 **벤더 고정**으로 파생한다
+    (bigkinds=ko·fmp=en). `market` 을 언어 프록시로 쓰면 틀린다(FMP 는 KR 기업 ADR 의 영어
+    기사를 market=KR 로 낸다) — 그래서 언어 파티션은 market 이 아니라 벤더에서 온다.
+
+    source_vendor·market 은 파티션이 아니라 **컬럼**(provenance)이라 한 언어 파티션 안에 (벤더별로)
+    섞인다 — 다만 현재 두 벤더가 언어와 1:1이라 언어 파티션이 곧 벤더 파티션이다. run_id 는 없다
+    (멱등). 정체성 키는 `article_id`(=원문 URL 해시, 소스 무관)로 파티션 내 행 키다. 같은 원문 URL
+    이 두 언어 파티션에 각각 오면 서로 다른 파티션이라 병합되지 않는다(교차언어 병합은 실무상
+    드물고 — FMP 영어·BigKinds 국문 — 다운스트림 dedup 소관)."""
+    return f"canonical/news/news_articles/language={language}/published_date={published_date}"
 
 
 def canonical_supply_contract_fact_partition(report_date: str) -> str:

@@ -46,14 +46,18 @@ def _quality_log(storage) -> dict:
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
-def _canonical_rows(storage, published_date: str) -> list[dict]:
+def _canonical_rows(storage, published_date: str, language: str | None = None) -> list[dict]:
+    # language=None 이면 그 날짜의 모든 언어 파티션(ko·en)을 합쳐 읽는다 — 단일벤더 테스트는 자기
+    # 언어만 있으니 무관하고, 언어 배치 자체를 검증하는 테스트는 language= 로 한 파티션만 읽는다.
     from data_pipeline.lake import canonical_news_articles_partition
 
-    prefix = canonical_news_articles_partition(published_date)
+    languages = [language] if language else ["ko", "en"]
     rows: list[dict] = []
-    for key in storage.list_keys(prefix + "/"):
-        if key.endswith(".parquet"):
-            rows.extend(normalize_news._read_parquet_rows(storage.get_bytes(key)))
+    for lang in languages:
+        prefix = canonical_news_articles_partition(lang, published_date)
+        for key in storage.list_keys(prefix + "/"):
+            if key.endswith(".parquet"):
+                rows.extend(normalize_news._read_parquet_rows(storage.get_bytes(key)))
     return rows
 
 
@@ -257,46 +261,48 @@ def test_input_run_id_scopes_validation(tmp_path):
 
 
 # ── canonical 멱등 병합 + 중복 신호 (ALPHA-132) ──────────
-def test_passing_rows_written_to_unified_date_partition(tmp_path):
-    # WHY: canonical 은 소스를 흡수한 통합 구조다 — FMP·BigKinds 가 **한 published_date 파티션**에
-    #      섞여 article_id 키로 적재되고 source_vendor 는 컬럼(provenance)이어야 한다(벤더 사일로 아님).
+def test_passing_rows_split_by_language_partition(tmp_path):
+    # WHY: ALPHA-352 — canonical 은 language(벤더 고정: bigkinds=ko·fmp=en)→published_date 로 갈린다.
+    #      다운스트림 언어모델이 언어별로 프루닝/분기하도록. FMP(en)·BigKinds(ko) 는 같은 날짜라도
+    #      **서로 다른 언어 파티션**에 적재되고 source_vendor 는 여전히 컬럼(provenance)이다.
     storage = LocalStorage(tmp_path / "lake")
     fmp, bk = _fmp_row(), _bk_row()
     _write_raw(storage, _raw_key("fmp", "US"), [fmp])
     _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
 
     assert normalize_news.run(storage, "N1") == 0
-    by_id = {r["article_id"]: r for r in _canonical_rows(storage, "2026-07-01")}  # 통합 파티션 하나
-    assert set(by_id) == {_aid(fmp), _aid(bk)}  # 두 벤더가 한 파티션에(원문 URL 해시 / NEWS_ID)
-    assert by_id[_aid(fmp)]["source_vendor"] == "fmp"  # 벤더는 컬럼
-    assert by_id[_aid(bk)]["source_vendor"] == "bigkinds"
+    en = _canonical_rows(storage, "2026-07-01", language="en")
+    ko = _canonical_rows(storage, "2026-07-01", language="ko")
+    assert [r["article_id"] for r in en] == [_aid(fmp)] and en[0]["source_vendor"] == "fmp"
+    assert [r["article_id"] for r in ko] == [_aid(bk)] and ko[0]["source_vendor"] == "bigkinds"
     log = _quality_log(storage)
     assert log["canonical_written"] is True
-    assert log["canonical_rows_written"] == 2 and log["canonical_partitions_written"] == 1
+    assert log["canonical_rows_written"] == 2 and log["canonical_partitions_written"] == 2  # 언어별 2 파티션
 
 
-def test_same_original_url_unifies_identity_across_vendors(tmp_path):
-    # WHY: canonical 통합의 핵심 — 정체성이 원문 URL 해시라 같은 원문 URL 이면 FMP(url)든
-    #      BigKinds(PROVIDER_LINK_PAGE)든 **같은 article_id → 한 행으로 병합**(소스 무관 dedup).
-    #      승자(최신 fetched_at)의 스칼라 메타가 대표가 되고 패자 스칼라는 버려지되, mentions 는
-    #      양쪽 union — 종목별 권위 market 은 행 market 이 아니라 self-describing 한 mention 에 있다.
+def test_same_url_stays_separate_across_language_partitions(tmp_path):
+    # WHY: ALPHA-352 트레이드오프 — 정체성(원문 URL 해시)이 같아도 언어 파티션이 다르면 병합
+    #      경로가 파티션 단위라 통합되지 않는다. 같은 원문 URL 의 FMP(en)·BigKinds(ko) 는 각 언어
+    #      파티션에 **같은 article_id 로 공존**한다(실무상 드묾 — FMP 영문·BigKinds 국문). 교차언어
+    #      dedup 은 다운스트림(news_dedup_cluster) 소관으로 넘긴다 — 언어분리가 우선 계약이므로.
     storage = LocalStorage(tmp_path / "lake")
     fmp = _fmp_row(url="https://press.com/a", publishedDate="2026-07-01 09:00:00",
-                   our_ticker="AAPL", fetched_at="2026-07-02T00:00:00+00:00")  # 최신 → 승자
+                   our_ticker="AAPL", fetched_at="2026-07-02T00:00:00+00:00")
     del fmp["article_id"]  # url 에서 파생되게
     bk = _bk_row(PROVIDER_LINK_PAGE="https://press.com/a", our_ticker="000660",
-                 fetched_at="2026-07-01T00:00:00+00:00")  # 같은 원문 URL, 옛 수집
+                 fetched_at="2026-07-01T00:00:00+00:00")  # 같은 원문 URL
     del bk["article_id"]
     _write_raw(storage, _raw_key("fmp", "US"), [fmp])
     _write_raw(storage, _raw_key("bigkinds", "KR"), [bk])
 
     assert normalize_news.run(storage, "N1") == 0
-    rows = _canonical_rows(storage, "2026-07-01")
-    assert len(rows) == 1  # 같은 원문 URL → 같은 정체성 → 통합 병합
-    row = rows[0]
-    assert row["source_vendor"] == "fmp"  # 승자(최신) 프로비넌스가 행 대표
-    assert sorted((m["market"], m["ticker"]) for m in json.loads(row["mentions"])) == \
-        [("KR", "000660"), ("US", "AAPL")]  # 양쪽 종목 mention 보존(교차벤더 union)
+    en = _canonical_rows(storage, "2026-07-01", language="en")
+    ko = _canonical_rows(storage, "2026-07-01", language="ko")
+    assert [r["article_id"] for r in en] == [_aid(fmp)]  # 같은 URL 이지만 언어별로 갈려
+    assert [r["article_id"] for r in ko] == [_aid(bk)]   # 각 파티션에 1행씩 공존(병합 안 됨)
+    assert _aid(fmp) == _aid(bk)  # 정체성 자체는 같다(원문 URL 해시) — 갈린 건 파티션뿐
+    assert json.loads(en[0]["mentions"]) == [{"market": "US", "ticker": "AAPL"}]  # 각자 자기 mention
+    assert json.loads(ko[0]["mentions"]) == [{"market": "KR", "ticker": "000660"}]
 
 
 def test_multi_mention_single_write_is_sorted_and_idempotent(tmp_path):
@@ -470,3 +476,17 @@ def test_non_string_url_falls_back_to_news_id_not_crash(tmp_path):
     assert normalize_news.run(storage, "N1") == 0  # 크래시 없이 완료
     rows = _canonical_rows(storage, "2026-07-01")
     assert len(rows) == 1 and rows[0]["article_id"] == _aid(bad)  # NEWS_ID 폴백
+
+
+def test_language_derived_from_vendor_not_market(tmp_path):
+    # WHY: ALPHA-352 언어 파티션은 **벤더 고정**이다 — market 이 아니다. FMP 는 KR 기업 ADR 의
+    #      영어 기사를 market=KR 로 낼 수 있는데(005930→SSNLF), 그래도 언어는 en 이어야 한다.
+    #      market 을 언어 프록시로 쓰면 이 행이 ko 로 잘못 분류된다 → 벤더가 SSOT.
+    storage = LocalStorage(tmp_path / "lake")
+    kr_adr = _fmp_row(our_ticker="005930", market="KR", url="https://e.com/adr")  # FMP·market=KR
+    _write_raw(storage, _raw_key("fmp", "KR"), [kr_adr])
+
+    assert normalize_news.run(storage, "N1") == 0
+    assert _canonical_rows(storage, "2026-07-01", language="ko") == []  # market=KR 이어도 ko 아님
+    en = _canonical_rows(storage, "2026-07-01", language="en")
+    assert [r["article_id"] for r in en] == [_aid(kr_adr)] and en[0]["market"] == "KR"  # en 파티션·market 컬럼은 KR
