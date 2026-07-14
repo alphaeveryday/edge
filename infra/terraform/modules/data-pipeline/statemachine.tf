@@ -203,8 +203,13 @@ locals {
         }]
         Default = "NotifyFailure"
       }
-      # raw 전량 성공 뒤에만 정제로 넘어간다 — raw 가 partial/실패면 NotifyFailure 로 빠져 canonical
-      # 을 오염된 raw 위에 쌓지 않는다. ALPHA-351 로 흔한 절단은 이제 raw 브랜치에서 성공 처리된다.
+      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면(브랜치 실패)
+      # normalize 를 헛돌리지 않고 다음 성공 실행이 전체를 멱등 정제하게 미룬다. 이 게이트는 실행 내
+      # 순서 제어지 실패-run raw 의 영구 격리가 아니다 — normalize 는 full-scan(--input-run-id 없이)
+      # 이라 이전 partial/실패 실행이 저장한 raw 도 다음 성공 실행에서 함께 승격된다. 그게 맞다:
+      # bronze→silver 승격의 authoritative 필터는 normalize 의 행 단위 품질 게이트지 SFN run 상태가
+      # 아니고(유효 행은 승격·garbage 행은 거름), 저장된 partial raw 는 유효 데이터다(ALPHA-351 의
+      # '다음 창 이어받음'과 동형). ALPHA-351 로 흔한 절단은 이제 raw 브랜치에서 성공 처리된다.
       NormalizeParallel = {
         Type       = "Parallel"
         Branches   = local.normalize_branches
