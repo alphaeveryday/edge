@@ -144,9 +144,10 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/pipeline`
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
-Terraform 의 `modules/data-pipeline` 은 raw ingest 전용 ECS task definition 과 Step Functions
-state machine 을 만든다. 상태머신은 아래 여덟 raw 수집을 병렬 ECS RunTask 로 실행하며,
-모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition 과 collection_log 를 같은 실행 단위로 묶는다.
+Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
+만든다. 상태머신은 아래 여덟 raw 수집을 병렬 ECS RunTask 로 실행한 뒤, **raw 전량 성공 시 정제
+(normalize) 스테이지**를 이어 canonical 까지 한 실행에서 완주한다(ALPHA-355). 모든 브랜치에 같은
+`--run-id` 를 넘겨 raw partition·canonical·collection_log 를 같은 실행 단위로 묶는다.
 
 - `ingest-raw --source fmp`
 - `ingest-price-raw --source fmp`
@@ -156,6 +157,15 @@ state machine 을 만든다. 상태머신은 아래 여덟 raw 수집을 병렬 
 - `ingest-raw-financial --source dart`
 - `ingest-raw-disclosure`(공시, dart 세트) — 단일 벤더라 `--source` 없음
 - `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트) — 단일 벤더라 `--source` 없음
+
+정제 스테이지(raw 성공 뒤, ALPHA-355)는 아래 4잡을 병렬로 돌려 canonical 을 멱등 적재한다 —
+벤더 API 키가 없어(레이크만 읽고 canonical 을 쓴다) 시크릿 없는 bigkinds task-def 를 재사용한다
+(새 task-def·IAM 불요). 전체런(`--input-run-id` 없이)이라 멱등 적재다.
+
+- `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
+
+재무(financial)는 canonical 스텝이 아직 없어 정제 스테이지에서 제외한다(raw-only). raw 가 partial/
+실패면 정제로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
 
 > ※ 공시·ETF 는 각각 dart·fmp 시크릿 세트에 env(`DATA_PIPELINE_DART_DISCLOSURE__/ETF__SOURCE__API_KEY`)를
 > 편입해 상태머신 브랜치로 함께 돈다(ALPHA-347). 다만 스케줄러는 여전히 `DISABLED` 라 실제 cron 기동은
