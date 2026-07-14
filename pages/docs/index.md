@@ -10,7 +10,7 @@ Edge 시스템의 **설계 지식을 공개용으로 보여주는 포털**입니
 
 ## 이 포털에서 볼 수 있는 것
 
-- **[Architecture](reference/architecture.md)** — 컴포넌트·통신·신뢰 경계 등 시스템 구조(원본 `docs/architecture.md`).
+- **[Context](reference/context.md)** — 제품 정의·하이브리드 아키텍처·책임 분리 등 시스템 구조(원본 `docs/context.md`).
 - **[Evolution](evolution.md)** — `docs/` 아키텍처 문서를 바꾼 커밋의 시간순 발전 기록.
 - **[Artifacts](artifacts.md)** — 아키텍처 이미지·ERD·API 계약·ADR 등 산출물 모음.
-- **[Reference](reference/architecture.md)** — `docs/`의 원본 아키텍처·스키마·ADR(빌드 시 복사).
+- **[Reference](reference/context.md)** — `docs/`의 원본 컨텍스트·계약·도메인·콘솔 IA·ADR(빌드 시 복사).

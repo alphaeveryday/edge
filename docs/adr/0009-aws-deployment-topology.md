@@ -4,7 +4,7 @@
 - 날짜: 2026-07-03
 
 ## 맥락
-[architecture.md](../architecture.md)는 신뢰 경계·서비스 분리(§4)까지만 다루고 **클라우드/배포 토폴로지는 범위 밖(§6)으로 미뤄**, "인프라가 정해지면 별도 문서/ADR"로 남겨 뒀다. 그 인프라가 이제 Terraform 으로 실체화됐다 — VPC·RDS·ECS(Fargate)·ALB·ACM, 그리고 CDK 로 운영되던 분석 배치 파이프라인(Step Functions)의 이관.
+구 architecture.md(하이브리드 피벗으로 삭제됨)는 신뢰 경계·서비스 분리(§4)까지만 다루고 **클라우드/배포 토폴로지는 범위 밖(§6)으로 미뤄**, "인프라가 정해지면 별도 문서/ADR"로 남겨 뒀다. 그 인프라가 이제 Terraform 으로 실체화됐다 — VPC·RDS·ECS(Fargate)·ALB·ACM, 그리고 CDK 로 운영되던 분석 배치 파이프라인(Step Functions)의 이관.
 
 동시에 두 운영 리스크가 드러났다: ① 모든 자원을 한 state 에 담으면 `terraform destroy` 한 번이 DNS 루트·이미지 레포까지 날린다(blast-radius). ② state 가 로컬에만 있으면 RDS 를 IaC 가 소유하는 순간부터 유실 위험. 이 토폴로지와 소유 모델을 기록한다.
 

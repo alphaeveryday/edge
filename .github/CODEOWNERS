@@ -1,0 +1,4 @@
+# docs/contracts/ 핵심 계약 2건 — 진기·영서 인터페이스 계약, 변경 시 양자 합의 (ADR-0019)
+# 나머지 contracts/(sync-auth, serving-api)는 영서 단독 오너십 영역이라 걸지 않는다.
+/docs/contracts/sync-protocol.md      @jingi723 @choyoungseo20
+/docs/contracts/event-bundle-schema.md @jingi723 @choyoungseo20

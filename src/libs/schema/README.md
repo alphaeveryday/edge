@@ -1,7 +1,7 @@
 # libs/schema
 
 DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 간 계약이므로(ADR-0005,
-[schema.md](../../../docs/schema.md)) 모든 마이그레이션을 여기서 관리한다.
+[docs/implementation.md](../../../docs/implementation.md) §4) 모든 마이그레이션을 여기서 관리한다.
 
 이 모듈은 **Spring 앱이 아니다.** Flyway 마이그레이션을 실행하기만 하는 전용 Gradle 모듈이다
 (`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle`(Groovy)의 Flyway 플러그인 블록에 있다.
@@ -62,7 +62,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - **dev 머지** → dev DB 마이그레이션 대상 (`.github/workflows/schema-migrate.yml`, **`src/libs/schema/` 변경 커밋에서만** 실행).
 - **PR(→dev/main)** → ephemeral Postgres에 `:libs:schema:flywayMigrate`+`flywayValidate` 실제 적용·검증만 한다 (`.github/workflows/schema-validate.yml`). secret을 쓰지 않고 운영 DB는 건드리지 않는다.
 - **prod 마이그레이션(main 머지 → prod DB, 승인 게이트 후)** 은 목표 토폴로지지만 아직 워크플로가 없다. prod 인프라(RDS·클러스터·`production` environment)가 생기면 별도 티켓에서 dev와 같은 패턴으로 재도입한다(현재는 dev 인프라만 존재).
-- **앱 배포(API CD)는 마이그레이션 CD와 분리돼 있다** — 앱 워크플로는 CI에서 `schema-migrate` 완료를 기다리지 않는다. "스키마가 코드보다 먼저"는 확장-수축 + PR 순서 규율로 지킨다: **확장 마이그레이션 PR을 먼저 머지·적용(schema-migrate 초록 확인)한 뒤 의존 코드 PR을 머지한다**(docs/schema.md §2).
+- **앱 배포(API CD)는 마이그레이션 CD와 분리돼 있다** — 앱 워크플로는 CI에서 `schema-migrate` 완료를 기다리지 않는다. "스키마가 코드보다 먼저"는 확장-수축 + PR 순서 규율로 지킨다: **확장 마이그레이션 PR을 먼저 머지·적용(schema-migrate 초록 확인)한 뒤 의존 코드 PR을 머지한다**(docs/implementation.md §4).
 
 ### 배포 시 마이그레이션은 VPC 내부 ECS one-off task에서 실행한다
 
@@ -99,7 +99,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 - 위치: `migrations/`
 - 파일명: timestamp 버전 — `VyyyyMMddHHmm__description.sql` (공유 DB 동시 작업 시 버전 충돌 방지)
-- **이미 적용된 마이그레이션 파일은 수정하지 않는다.** 변경은 항상 새 `V...sql`로 추가한다(확장-수축, schema.md §2).
+- **이미 적용된 마이그레이션 파일은 수정하지 않는다.** 변경은 항상 새 `V...sql`로 추가한다(확장-수축, docs/implementation.md §4).
 
 ## 정책 (고정)
 

@@ -1,9 +1,17 @@
 # 발전 과정(Evolution) 생성 설정 — pages/scripts/generate_evolution.py 가 읽는다.
 
 # 발전 기록의 기준이 되는 경로. 이 경로들을 바꾼 커밋이 항목이 된다.
+# architecture.md·schema.md 는 2026-07 피벗으로 삭제됐지만 과거 커밋 이력을 위해 남긴다.
 include_paths:
   - docs/architecture.md
   - docs/schema.md
+  - docs/context.md
+  - docs/scope.md
+  - docs/implementation.md
+  - docs/roadmap.md
+  - docs/contracts/
+  - docs/domain/
+  - docs/console-ia/
   - docs/adr/
   - pages/docs/assets/images/
 
