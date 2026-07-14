@@ -32,6 +32,7 @@ from .sources import (
     FmpNewsSource,
     FmpPriceSource,
     KisDailyPriceSource,
+    KrxEtfSource,
     PoliteClient,
 )
 from .steps import (
@@ -128,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         return ingest_raw_financial.run(settings, storage, source, run_id)
 
     # ETF 구성종목도 스냅샷(현재 holdings)이라 날짜창을 쓰지 않는다 — 재무와 함께 먼저
-    # 분기해 창 계산을 건너뛴다. US=FMP 단일 벤더(KR 은 후속 별도 벤더 — ALPHA-336).
+    # 분기해 창 계산을 건너뛴다. US=FMP(미지정=fmp), KR=KRX 로그인 게이트 PDF(--source krx).
     if args.step == "ingest-raw-etf":
         vendor = args.source or "fmp"
         if vendor == "fmp":
@@ -136,8 +137,12 @@ def main(argv: list[str] | None = None) -> int:
                 # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
                 raise SystemExit("etf.source 설정이 없다 — sources.toml 확인")
             etf_source = FmpEtfSource(settings.etf.source, PoliteClient())
+        elif vendor == "krx":
+            if settings.krx_etf is None:
+                raise SystemExit("krx_etf.source 설정이 없다 — sources.toml 확인")
+            etf_source = KrxEtfSource(settings.krx_etf.source, PoliteClient())
         else:
-            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp)")
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")
         return ingest_raw_etf.run(settings, storage, etf_source, run_id)
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).

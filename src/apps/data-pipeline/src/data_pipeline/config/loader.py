@@ -29,6 +29,7 @@ from .models import (
     EtfConfig,
     FinancialConfig,
     KisPriceConfig,
+    KrxEtfConfig,
     NewsConfig,
     PriceConfig,
     StorageConfig,
@@ -64,6 +65,9 @@ class Settings(BaseSettings):
     # ETF 구성종목(FMP holdings, US) 은 독립 잡이라 섹션 생략 가능 — 미설정이면
     # ingest-raw-etf 진입점이 fail-loud 한다(ETF 를 안 돌리는 환경은 생략 가능).
     etf: EtfConfig | None = None
+    # KRX(국내 ETF 구성종목) 도 독립 벤더라 섹션 생략 가능 — 미설정이면 ingest-raw-etf
+    # --source krx 진입점이 fail-loud 한다(US ETF 만 돌리는 환경은 생략 가능).
+    krx_etf: KrxEtfConfig | None = None
     # OpenDART 공시(disclosure) 는 재무와 별개 잡·별개 API(list.json/document.xml)다. 미설정이면
     # ingest-raw-disclosure 진입점이 fail-loud 한다(공시를 안 돌리는 환경은 생략 가능).
     dart_disclosure: DartDisclosureConfig | None = None
