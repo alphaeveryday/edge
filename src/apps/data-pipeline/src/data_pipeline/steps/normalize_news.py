@@ -5,10 +5,11 @@ raw stock_news(FMP·BigKinds 두 벤더, 이형 스키마)를 읽어 **표준 �
 검증 결과는 `data_quality_logs` 로 남긴다 — 몇 건 읽고/통과/탈락(blocking)/경고했는지와
 사유를 드러내, 분석에 못 쓰는 뉴스가 조용히 새거나 사라지지 않게 한다(AGENTS Rule 12).
 
-게이트를 통과한 행은 `canonical/news/news_articles/published_date=…/` 에 **article_id 정체성
-키로 멱등 병합**한다(ALPHA-132). 정체성 `article_id = url_hash(원문 URL)` 은 **소스 무관**이라
-(FMP `url`/BigKinds `PROVIDER_LINK_PAGE`) canonical 이 소스를 흡수한 **통합 구조**가 된다 —
-source_vendor 는 파티션이 아니라 컬럼(provenance)이고 파티션은 published_date 하나다. canonical 은
+게이트를 통과한 행은 `canonical/news/news_articles/language=…/published_date=…/` 에 **article_id
+정체성 키로 멱등 병합**한다(ALPHA-132·352). 정체성 `article_id = url_hash(원문 URL)` 은 **소스
+무관**이라(FMP `url`/BigKinds `PROVIDER_LINK_PAGE`) canonical 이 소스를 흡수한 **통합 구조**가 된다 —
+source_vendor 는 파티션이 아니라 컬럼(provenance)이다. 파티션은 `language`(벤더 고정 파생)→
+`published_date` 2단으로, 다운스트림 언어모델이 언어별로 분기/프루닝하게 한다(ALPHA-352). canonical 은
 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같다. 같은 article_id 재적재는 최신 fetched_at 이
 메타 대표를 이기되 mentions 는 union 한다. 다른 article_id 가 **같은 정규화 제목**이면 근접중복
 신호로 로깅만 한다(URL 충돌은 곧 같은 id 라 자동 병합 → 신호 대상 아님). fuzzy 클러스터는
@@ -43,6 +44,12 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "normalize_news"
 DATASET = "news_articles"
+
+# 언어는 **벤더 고정**으로 파생한다(ALPHA-352) — code answers, 모델 불필요(Rule 5). BigKinds 는
+# 국내(한국언론진흥재단) 아카이브라 전량 한국어, FMP /stable/news/stock 는 미국 금융 언론이라 영어
+# (KR 기업 ADR 기사도 영어). market 은 언어가 아니다(FMP 가 market=KR 영어행을 낸다) → 벤더가 SSOT.
+# 신규 뉴스 벤더는 여기 매핑만 늘린다. 미등록 벤더는 위쪽 unsupported_vendor 게이트가 먼저 막는다.
+_LANGUAGE_BY_VENDOR = {"bigkinds": "ko", "fmp": "en"}
 
 # 발행일 상한 여유 — 검증 실행일 기준 이 일수까지의 미래 발행일은 허용(수집 지연·TZ 여유).
 _FUTURE_SLACK_DAYS = 2
@@ -101,6 +108,7 @@ def _normalize(vendor: str, record: dict) -> dict:
     return {
         "article_id": article_id,
         "source_vendor": vendor,
+        "language": _LANGUAGE_BY_VENDOR[vendor],  # 파티션 키(벤더 고정) — canonical 경로만 쓰고 컬럼엔 안 넣음
         "market": market,
         "title": " ".join(title.split()) if title else None,  # 공백 정규화(제목 dedup 안정)
         "url": url,
@@ -225,8 +233,10 @@ def _duplicate_signals(rows: list[dict], published_date: str) -> list[dict]:
     """파티션 내 근접중복 신호 — **다른 article_id** 가 같은 **정규화 제목**을 가지면 로깅한다
     (exact 병합은 안 함 — 서로 다른 기사를 붕괴시키면 유실이므로 신호만). URL 은 이제 정체성이라
     같은 URL→같은 article_id→이미 병합이므로 다른 id 로 갈릴 수 없다 → 제목 근접중복만 신호 대상.
-    통합 파티션이라 벤더가 섞여도 제목 충돌을 함께 감지한다(교차벤더 near-dup 도 신호로 드러남).
-    판정은 **공백정규화 제목의 정확일치**다(대소문자·문장부호 미폴딩) — 넓은 fuzzy 클러스터링은
+    호출은 (language, published_date) 파티션 단위라 **같은 언어 안의** 제목 충돌만 감지한다 —
+    언어 파티션이 곧 벤더 파티션(1:1)이라 교차언어/교차벤더 near-dup 은 여기서 안 잡히고 다운스트림
+    dedup 소관이다(ALPHA-352 언어분리의 귀결). 판정은 **공백정규화 제목의 정확일치**다
+    (대소문자·문장부호 미폴딩) — 넓은 fuzzy 클러스터링은
     다운스트림 news_dedup_cluster 소관이라 여기선 좁은 exact-title 신호만 낸다."""
     signals: list[dict] = []
     groups: dict[str, list[str]] = defaultdict(list)
@@ -245,18 +255,20 @@ def _duplicate_signals(rows: list[dict], published_date: str) -> list[dict]:
 
 
 def _write_canonical(storage: Storage, passing: list[dict], signals: list[dict]) -> tuple[int, int]:
-    """통과 행을 published_date 파티션별로 기존 canonical 과 article_id(원문 URL 해시) 키로 멱등
-    병합해 쓴다. source_vendor 는 컬럼이라 벤더가 한 파티션에 섞인다(통합 canonical). 근접중복
-    신호는 signals 에 append(호출부가 quality_log 에 반영). 반환: (쓴 파티션 수, 행 수)."""
-    by_partition: dict[str, list[dict]] = defaultdict(list)
+    """통과 행을 (language, published_date) 파티션별로 기존 canonical 과 article_id(원문 URL 해시)
+    키로 멱등 병합해 쓴다. language 는 벤더 고정 파생(파티션 키, 컬럼 아님). 근접중복 신호는 각
+    파티션 내에서만 감지된다 — 언어가 다르면 파티션이 갈려 교차언어 near-dup 은 안 잡힌다(의도:
+    다운스트림 언어분기 대비). 신호는 signals 에 append(호출부가 quality_log 에 반영).
+    반환: (쓴 파티션 수, 행 수)."""
+    by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         # 게이트 통과행은 published_at 이 유효(결측·범위밖 아님)라 [:10] 파티션이 결정적(멱등).
         published_date = row["published_at"][:10]
-        by_partition[published_date].append(_canonical_row(row))
+        by_partition[(row["language"], published_date)].append(_canonical_row(row))
 
     parts_written = rows_written = 0
-    for published_date, new_rows in sorted(by_partition.items()):
-        prefix = canonical_news_articles_partition(published_date)
+    for (language, published_date), new_rows in sorted(by_partition.items()):
+        prefix = canonical_news_articles_partition(language, published_date)
         # 파티션의 기존 parquet 을 전부 읽어 병합한다. 이 스텝은 항상 part-00000 하나로 되써
         # 멱등을 지킨다(canonical 은 이 스텝만 쓰므로 part-00000 만 존재).
         existing: list[dict] = []
