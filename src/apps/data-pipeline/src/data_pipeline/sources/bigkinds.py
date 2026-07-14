@@ -55,11 +55,13 @@ class BigKindsNewsSource:
         return out
 
     def _note_failure(
-        self, query: str, our_ticker: str, reason: str, *, page: int | None = None
+        self, query: str, our_ticker: str, reason: str, *, page: int | None = None,
+        kind: str = "failure",
     ) -> None:
         logger.warning("bigkinds 대상 건너뜀: %s page=%s (%s)", query, page, reason)
         self.fetch_failures.append(
-            {"symbol": query, "our_ticker": our_ticker, "page": page, "error": reason}
+            {"symbol": query, "our_ticker": our_ticker, "page": page, "error": reason,
+             "kind": kind}
         )
 
     def fetch(
@@ -125,6 +127,7 @@ class BigKindsNewsSource:
                 query,
                 our_ticker,
                 f"MAX_PAGES({self.max_pages}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+                kind="truncation",
             )
 
     def _search(

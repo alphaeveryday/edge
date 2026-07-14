@@ -109,6 +109,7 @@ class DartDisclosureSource:
         *,
         rcept_no: str | None = None,
         page: int | None = None,
+        kind: str = "failure",
     ) -> None:
         logger.warning(
             "dart 공시 대상 건너뜀: %s rcept_no=%s page=%s (%s)",
@@ -121,6 +122,7 @@ class DartDisclosureSource:
                 "rcept_no": rcept_no,
                 "page": page,
                 "error": reason,
+                "kind": kind,
             }
         )
 
@@ -239,6 +241,7 @@ class DartDisclosureSource:
             stock_code,
             our_ticker,
             f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단 가능(창 좁혀 재실행)",
+            kind="truncation",
         )
 
     def _list(

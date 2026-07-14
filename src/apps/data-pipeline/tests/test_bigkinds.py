@@ -143,15 +143,17 @@ def test_stop_fetch_propagates():
 
 
 def test_max_pages_truncation_is_noted():
-    # WHY: 검색 결과가 max_pages 를 초과하면 뒷부분이 절단될 수 있다. 조용히 success 로
-    #      남기지 않고 실패로 기록해 런이 partial 로 드러나야 한다.
+    # WHY: 검색 결과가 max_pages 를 초과하면 뒷부분이 절단될 수 있다. 조용히 버리지 않고
+    #      kind=truncation 으로 기록해 로그엔 남기되(fail loud), 스텝은 성공으로 본다
+    #      (ALPHA-351 — 다음 창에서 이어받음). 진짜 실패와 구분되는 태그다.
     src = _source({
         ("삼성전자", 1): _ok([_row("01100101.20260707153000000")]),
         ("삼성전자", 2): _ok([_row("01100101.20260707153100000")]),
     }, page_size=1, max_pages=2)
     records = list(src.fetch(["005930"], "2026-07-07", "2026-07-07"))
     assert len(records) == 2
-    assert any("MAX_PAGES" in f["error"] for f in src.fetch_failures)
+    trunc = [f for f in src.fetch_failures if "MAX_PAGES" in f["error"]]
+    assert trunc and all(f["kind"] == "truncation" for f in trunc)
 
 
 def test_disabled_depends_only_on_config():

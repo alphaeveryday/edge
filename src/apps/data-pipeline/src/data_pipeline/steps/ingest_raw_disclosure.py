@@ -135,11 +135,14 @@ def run(
     # list 실패(source.fetch_failures)와 본문 실패(doc_failures)를 합쳐 판정한다.
     #  - 저장분 있고 일부 실패 → partial(메타는 있으나 온전치 않음: 본문 결측 등)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
+    #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
+    #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
-    if status == "success" and failed_targets:
+    real_failures = [f for f in failed_targets if f.get("kind") != "truncation"]
+    if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
-            error = f"모든 수집 대상 실패 ({len(failed_targets)}건)"
+            error = f"모든 수집 대상 실패 ({len(real_failures)}건)"
         else:
             status, exit_code = "partial", 1
 

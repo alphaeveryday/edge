@@ -84,11 +84,13 @@ class FmpNewsSource:
             out.append((our_ticker, fmp_symbol))
         return out
 
-    def _note_failure(self, fmp_symbol: str, our_ticker: str, reason: str) -> None:
+    def _note_failure(
+        self, fmp_symbol: str, our_ticker: str, reason: str, *, kind: str = "failure"
+    ) -> None:
         """심볼 단위 실패를 로그로 남기고 fetch_failures 에 기록(격리≠은폐)."""
         logger.warning("fmp 심볼 건너뜀: %s (%s)", fmp_symbol, reason)
         self.fetch_failures.append(
-            {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": reason}
+            {"symbol": fmp_symbol, "our_ticker": our_ticker, "error": reason, "kind": kind}
         )
 
     def fetch(
@@ -164,5 +166,6 @@ class FmpNewsSource:
         # 꽉 참 → 창에 더 남았을 수 있다. 조용히 버리지 않고 실패로 기록해 런을 partial
         # 로 드러낸다(백필 창을 좁히거나 MAX_PAGES 를 올려 재실행하라는 신호).
         self._note_failure(
-            fmp_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)"
+            fmp_symbol, our_ticker, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+            kind="truncation",
         )
