@@ -198,7 +198,15 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     재적재는 최신 fetched_at 우선, 동률이면 신규(멱등 재실행).
 
     벤더 교차 충돌 가드가 없다 — 파티션이 market-스코프라 한 파티션엔 한 벤더만(US=fmp·KR=krx)
-    온다. 같은 (etf_id,constituent) 를 두 벤더가 만들 수 없으므로 최신 우선 dedup 이면 충분하다."""
+    온다. 같은 (etf_id,constituent) 를 두 벤더가 만들 수 없으므로 최신 우선 dedup 이면 충분하다.
+
+    ponytail: 같은 (etf_id,as_of_date)를 더 늦은 fetched_at 으로 재수집했는데 구성종목이 하나
+    빠지면(같은 날짜 스냅샷 정정), 그 사라진 구성종목의 옛 행이 tombstone 없이 남는 얕은
+    staleness 가 있다 — 병합이 키별 최신우선이라 '사라짐'을 표현할 새 행이 없어서다. 리밸런싱은
+    새 기준일→새 파티션이라 무관하고, 같은 날짜 축소는 벤더 정정 시에만 생기며 raw 는 append-only
+    라 감사 가능하다. 사업부문 fact(normalize_disclosure_segment)가 같은 한계를 수용·연기한 것과
+    동형이다(SCD·point-in-time 은 파이프라인 전반이 다운스트림 소관으로 둔다). full snapshot-replace
+    (etf_id 별 최신 fetched_at 스냅샷으로 통째 교체)는 후속 — 지금 유니버스·정정 빈도엔 무해하다."""
     acc: dict[tuple, dict] = {}
     for row in [*existing, *new_rows]:
         key = (row["etf_id"], row["constituent_ticker"])
