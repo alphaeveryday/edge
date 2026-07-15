@@ -27,6 +27,7 @@
 #   curl localhost:18081/actuator/health   # tenant-console-api
 #   curl localhost:18082/actuator/health   # super-admin-api
 #   curl "localhost:18083/api/v1/sync/bundle?after=0"   # tenant-sync-api (번들+체크섬 헤더)
+#   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # serving-api
 
 services:
   postgres:
@@ -91,6 +92,15 @@ services:
       SPRING_DATASOURCE_PASSWORD: edge
     ports:
       - "18082:8080"
+
+  # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만). 인메모리 시드 — DB 의존 없음.
+  serving-api:
+    build:
+      context: ./src
+      dockerfile: apps/serving-api/Dockerfile
+    container_name: edge-serving-api
+    ports:
+      - "18084:8080"
 
   # Sync Agent 가 Pull 하는 Cloud 표면(ADR-0010). outbox 인메모리 스텁 — DB 의존 없음.
   # gateway 를 타지 않는다(mTLS 직접 노출 유력 — TODO §6 gateway 존치 ADR과 함께 확정).

@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: serving
+# DB 의존성 없음 — 설명 저장소는 인메모리 시드. 온프렘 도메인 마이그레이션
+# (libs/schema/migrations-onprem) 확정 후 datasource 를 추가한다.
