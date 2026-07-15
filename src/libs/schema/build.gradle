@@ -25,6 +25,9 @@ flyway {
     user = cfg('flyway.user', 'FLYWAY_USER', 'edge')
     password = cfg('flyway.password', 'FLYWAY_PASSWORD', 'edge')
 
+    // 마이그레이션 세트 2개(아티팩트 분리 — ADR-0016): migrations/ = cloud(기본),
+    // migrations-onprem/ = 온프렘. 온프렘 적용은 -Pflyway.url·-Pflyway.locations 로
+    // 명시 전환한다(gradle property 가 이 블록보다 우선 — 예: schema-validate.yml).
     locations = ["filesystem:${projectDir}/migrations"] as String[]
 
     baselineOnMigrate = false

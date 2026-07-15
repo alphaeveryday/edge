@@ -20,7 +20,7 @@ src/
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장 [edge-cloud]
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
-│   │   ├── migrations/       #   Flyway 마이그레이션 (한 곳에서 관리)
+│   │   ├── migrations/       #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
 │   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
 │   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload) + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
@@ -76,7 +76,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations/` — Flyway 마이그레이션. 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `migrations/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
 - `generated/` — 스키마로부터 각 언어용 모델을 생성합니다(생성기는 후속 티켓에서 도입; 그 전까지 Flyway SQL이 계약 SSOT). JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
 
 ## 데이터 흐름
