@@ -616,8 +616,12 @@ def _connection_rank(context_text: str, columns: list[str]) -> int:
 def parse_segments(html_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """사업보고서 본문에서 사업부문별 매출 rows + stats 를 파싱한다.
 
-    헤더군 A(매출·부문·제품)·B(비중·매출액·%) 를 모두 가진 표만 후보로 삼아 4-전략으로
-    추출하고, share_basis·기간·연결기준 등을 점수화해 best 테이블을 고른 뒤 share 를 정규화한다.
+    헤더군 A(매출·부문·제품)·B(비중·매출액·%) 를 모두 가진 표를 후보로 잡되, 관계사 지분표·
+    주주현황표·손익계산서가 부문으로 오인되지 않게 게이트를 건다(ALPHA-354): DART <TITLE> 이
+    주주·지분투자 섹션이면 배제, read_html 실패 표는 격리, share_sum 밴드 밖(관계사 지분율 합)
+    이면 탈락, computed·unreliable 은 사업부문 섹션 근거가 있을 때만 인정, 손익 이름 행 배제.
+    통과 후보를 4-전략으로 추출·점수화(share_basis·섹션·기간·연결기준 등)해 best 를 고른 뒤 share
+    를 정규화한다. 추출 불가 문서는 빈 rows(loud-fail) — garbage 를 부문으로 certify 하지 않는다.
     """
     soup = BeautifulSoup(html_text, "html.parser")
     tables = soup.find_all("table")
