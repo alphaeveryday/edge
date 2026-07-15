@@ -36,7 +36,6 @@ X-Channel: MTS | HTS | INTERNAL
   "trade_date": "2026-07-15",
   "summary": "반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
   "confidence_level": "MEDIUM",
-  "counter_factors": ["환율 변동은 반대 방향 요인"],
   "evidences": [
     { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
   ],
@@ -45,9 +44,9 @@ X-Channel: MTS | HTS | INTERNAL
 }
 ```
 
-- `summary`는 검수를 거친 **최종 노출 문구**다(원본 AI 문구가 아니라 검수자 수정 반영본).
+- `summary`는 검수를 거친 **최종 노출 문구**다(원본 AI 문구가 아니라 검수자 수정 반영본). 원천은 Cloud `explanation_result.summary`(물리 스키마의 유일한 고객 노출 텍스트 필드) — 번들로 온프렘에 수신된 뒤 검수를 거친 값이다.
 - `disclaimer`는 테넌트 정책의 기본 안내 문구 — 화면에 반드시 함께 노출한다.
-- `evidences` 요소 형상은 `[확정 필요 — 화면 요구에 맞춰 데모 페이지 작업과 함께 확정]`.
+- `evidences` 요소 형상은 `[확정 필요 — 화면 요구에 맞춰 데모 페이지 작업과 함께 확정]`. 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
 - **이 200 응답이 Exposure Log 기록 시점**이다 — 응답한 문구 스냅샷·고객 해시·채널·시각이 기록되어 민원·감사 시 재현된다.
 
 **응답 204** (해당 ETF·일자에 노출 가능한 설명이 없을 때): 정상 상태다 — 모든 ETF가 매일 설명을 갖지 않는다. body 없음, Exposure Log 기록 없음.
