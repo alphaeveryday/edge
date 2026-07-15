@@ -14,6 +14,11 @@ point-in-time 재현이 된다. 그래서 **모델은 추출만 하고 lineage �
   - 모델: doc_class 판정, event_type_code 분류, 술어·역할 추출
   - 코드: 라벨이 온톨로지 허용 집합에 드는지 검증, 결측·불량을 사유와 함께 드러내기
 
+미결(ALPHA-190 적재 선행): `document_assertion.modality_code` 는 NOT NULL 인데 여기서 안 낸다.
+스키마에 `VARCHAR(30) NOT NULL` 만 있고 **허용 어휘 정의가 레포 어디에도 없다**(CHECK·문서·ADR
+모두 없음). 어휘를 여기서 발명하면 그게 사실상 계약이 되므로 정하지 않는다 — 적재 배선 전에
+합의가 필요하다. predicate 는 온톨로지가 기본값을 주므로 같은 문제가 아니다.
+
 `complete_fn` 은 주입받는다 — 이 모듈은 어느 LLM 벤더인지 모른다. 호출부가 (system, user)
 → 응답 문자열 callable 을 넘긴다. 벤더 배선·모델 선택은 이 모듈의 관심사가 아니고, 단위
 테스트는 실제 호출 없이 가짜 complete_fn 으로 돈다.
@@ -28,6 +33,7 @@ from .ontology import (
     DOC_CLASSES,
     allowed_predicates,
     allowed_roles,
+    default_predicate,
     event_type_codes,
     load_profiles,
     ontology_version,
@@ -108,11 +114,26 @@ def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
         # 역할 검증의 기준도 없다).
         return None, ["unknown_event_type"]
 
+    # 술어는 모델이 주면 그걸 쓰고, 없거나 허용 밖이면 **온톨로지 기본값**으로 채운다.
+    # 비우지 않는 이유: document_assertion.predicate_code 가 NOT NULL 이라 None 을 내면
+    # 타입이 맞게 나온 assertion 을 적재할 수 없다. 그렇다고 사건을 버리는 건 손실이 더 크다 —
+    # 타입이 이미 사건의 성격을 정하고, 술어는 그 안의 부차 정보다. 기본값은 지어낸 값이
+    # 아니라 그 타입 자신의 allowed_predicates[0] 이고, 출처를 predicate_source 로 남겨
+    # 다운스트림이 추출값과 구분할 수 있게 한다(alphamale 어셈블러와 같은 규약).
     predicate = raw.get("predicate_code")
-    if predicate is not None and predicate not in allowed_predicates(code):
-        # 술어는 사건 식별에 필수가 아니다(타입이 이미 성격을 정한다) — 떨어뜨리고 사유만 남긴다.
+    predicate_source = "model"
+    if predicate is None:
+        predicate_source = "ontology_default"
+        predicate = default_predicate(code)
+    elif predicate not in allowed_predicates(code):
         reasons.append("predicate_not_allowed")
-        predicate = None
+        predicate_source = "ontology_default"
+        predicate = default_predicate(code)
+    if predicate is None:
+        # 타입에 허용 술어가 하나도 없다 = 온톨로지 스냅샷 이상. 조용히 넘기면 적재에서
+        # NOT NULL 위반으로 터진다 — 여기서 사유로 드러낸다.
+        reasons.append("no_predicate_available")
+        predicate_source = None
 
     permitted = allowed_roles(code)
     arguments: list[dict] = []
@@ -156,6 +177,8 @@ def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
     assertion = {
         "event_type_code": code,
         "predicate_code": predicate,
+        # 술어가 모델 추출인지 온톨로지 기본값인지 — 적재 후에도 구분이 남아야 한다.
+        "predicate_source": predicate_source,
         "arguments": arguments,
         "confidence": None if confidence is None else float(confidence),
         # 필수역할 충족 여부 — 후속 조립이 partial 을 확정 사건으로 못 쓰게 하는 표시다.

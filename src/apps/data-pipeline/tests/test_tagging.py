@@ -118,14 +118,45 @@ def test_role_outside_type_is_dropped_but_assertion_survives():
     assert "role_not_allowed" in result["reasons"]
 
 
-def test_predicate_outside_type_is_dropped_not_assertion():
-    # WHY: 술어는 타입이 이미 정한 성격의 보조 정보라 사건 식별에 필수가 아니다 — 불량이면
-    # 그것만 비우고 사건은 살린다.
+def test_predicate_outside_type_falls_back_to_ontology_default():
+    # WHY: document_assertion.predicate_code 는 NOT NULL 이라 None 을 내면 타입이 맞게 나온
+    # assertion 을 적재할 수 없다. 그렇다고 사건을 버리면 손실이 더 크다 — 타입이 사건의
+    # 성격을 이미 정하고 술어는 부차 정보다. 기본값은 지어낸 값이 아니라 그 타입 자신의
+    # allowed_predicates[0] 이다(alphamale 어셈블러와 같은 규약).
     result = extract.extract_assertions(_article(), complete_fn=_fn(
         {"doc_class": "EVENT", "events": [_event(predicate_code="RELEASE")]}))
     [a] = result["assertions"]
-    assert a["predicate_code"] is None
+    assert a["predicate_code"] == "SIGN"  # CONTRACT.SIGNING 의 allowed_predicates[0]
+    assert a["predicate_source"] == "ontology_default"
     assert "predicate_not_allowed" in result["reasons"]
+
+
+def test_missing_predicate_falls_back_to_ontology_default():
+    # WHY: 위와 같은 이유 — 모델이 술어를 안 줘도 적재 가능한 행이어야 한다.
+    ev = _event()
+    del ev["predicate_code"]
+    result = extract.extract_assertions(_article(), complete_fn=_fn(
+        {"doc_class": "EVENT", "events": [ev]}))
+    [a] = result["assertions"]
+    assert a["predicate_code"] == "SIGN"
+    assert a["predicate_source"] == "ontology_default"
+
+
+def test_model_predicate_is_marked_as_model_sourced():
+    # WHY: 추출값과 기본값이 구분되지 않으면 다운스트림이 술어의 신뢰도를 판단할 수 없다 —
+    # 전부 기본값으로 채워진 코퍼스와 실제로 추출된 코퍼스가 같아 보인다.
+    result = extract.extract_assertions(_article(), complete_fn=_fn(
+        {"doc_class": "EVENT", "events": [_event(predicate_code="ENTER_INTO")]}))
+    [a] = result["assertions"]
+    assert a["predicate_code"] == "ENTER_INTO"
+    assert a["predicate_source"] == "model"
+
+
+def test_every_ontology_type_has_a_default_predicate():
+    # WHY: 기본값 폴백은 모든 타입에 술어가 하나는 있다는 전제 위에 선다. 빈 타입이 있으면
+    # 그 타입의 assertion 은 NOT NULL 위반으로 적재에서 터진다 — 스냅샷 교체 시 회귀 감지.
+    missing = [c for c in ontology.event_type_codes() if ontology.default_predicate(c) is None]
+    assert missing == []
 
 
 def test_events_on_non_event_doc_class_are_refused():

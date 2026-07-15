@@ -84,6 +84,20 @@ def allowed_predicates(event_type_code: str) -> frozenset[str]:
     return frozenset(load_profiles()[event_type_code]["allowed_predicates"])
 
 
+def default_predicate(event_type_code: str) -> str | None:
+    """그 타입의 기본 술어 — `allowed_predicates` 의 첫 원소.
+
+    모델이 술어를 안 주거나 허용 밖을 줬을 때 쓴다. **값을 지어내는 게 아니다** — 기본값이
+    그 타입 자신의 계약에서 나오고, 타입은 모델이 고른 것이다. alphamale 의 결정론 어셈블러가
+    같은 규약을 쓴다(`assemble.py`: `spec.predicates[0]` + `predicate_source=ontology_default`)
+    — 산출물이 그쪽과 호환되게 같은 관례를 따른다.
+
+    목록이 비면 None — 호출부가 사유로 드러낸다(조용한 빈 문자열 금지).
+    """
+    predicates = load_profiles()[event_type_code]["allowed_predicates"]
+    return predicates[0] if predicates else None
+
+
 def prompt_catalog() -> str:
     """프롬프트에 실을 타입 카탈로그 — `타입 | 술어 | 필수역할 | 선택역할` 한 줄씩.
 
