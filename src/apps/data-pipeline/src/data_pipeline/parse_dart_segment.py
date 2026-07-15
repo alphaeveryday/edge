@@ -212,12 +212,25 @@ def _nearby_text(table: Tag, *, limit: int = 4) -> str:
     return " ".join(texts)
 
 
+def _is_section_heading(node: Any) -> bool:
+    """섹션 제목 노드인가 — DART 문서의 두 형태를 모두 인식한다:
+      1. 프로덕션 raw(document.xml, DART-XML): `<TITLE>2. 주요 제품 및 서비스</TITLE>` (내용 있는 TITLE).
+      2. DART 뷰어 HTML(report_xml.css): `<P class='section-2'>…</P>` (문서 최상단 TITLE 은 비어 있음).
+    빈 `<TITLE></TITLE>`(뷰어 HTML 헤드)는 제목이 아니므로 제외한다."""
+    name = getattr(node, "name", None)
+    if name == "title":
+        return bool(node.get_text(strip=True))
+    if name == "p":
+        return any("section" in cls for cls in (node.get("class") or []))
+    return False
+
+
 def _nearest_section_title(table: Tag) -> str:
-    """표가 속한 DART 섹션 제목 — 문서 순서상 가장 가까운 앞 <TITLE>(SECTION-1/2 의 제목). 없으면 ''.
-    DART-XML 은 표를 `<SECTION-2><TITLE>2. 주요 제품 및 서비스</TITLE>…표…</SECTION-2>` 로 감싸므로
-    최근접 TITLE 이 그 표가 실린 섹션이다(간이 HTML 픽스처엔 TITLE 이 없어 '' — 섹션 신호 무효)."""
-    title = table.find_previous("title")
-    return _clean_text(title.get_text(" ", strip=True)) if title else ""
+    """표가 속한 DART 섹션 제목 — 문서 순서상 가장 가까운 앞 섹션 헤딩(위 두 형태). 없으면 ''.
+    DART-XML 은 `<SECTION-2><TITLE>…</TITLE>…표…</SECTION-2>`, 뷰어 HTML 은 `<P class='section-N'>…</P>`
+    로 섹션을 표시하므로 어느 쪽이든 최근접 헤딩을 그 표의 섹션으로 본다."""
+    node = table.find_previous(_is_section_heading)
+    return _clean_text(node.get_text(" ", strip=True)) if node else ""
 
 
 def _label_column(frame: pd.DataFrame) -> str:

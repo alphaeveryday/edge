@@ -245,6 +245,22 @@ def test_drops_income_statement_line_names() -> None:
     assert segments == []
 
 
+def test_section_gate_reads_viewer_html_heading_form() -> None:
+    """섹션 근거는 두 HTML 형태를 모두 읽는다 — 프로덕션 raw 는 DART-XML `<TITLE>`, DART 뷰어 HTML 은
+    `<P class='section-N'>` 로 섹션을 표시한다(픽스처 형태). 뷰어 형태에서도 주주 섹션 표를 배제하고
+    사업부문 섹션 표를 골라야 한다(Codex 리뷰: 뷰어 HTML 에서 게이트 무력화 방지)."""
+    html = (
+        "<TITLE></TITLE>"  # 뷰어 HTML 의 빈 문서 TITLE — 섹션 제목 아님
+        "<p class='section-2'>1. 회사의 개요</p>"
+        "<table><tr><th>사업부문</th><th>매출액</th><th>비중</th></tr>"
+        "<tr><td>대주주</td><td>600</td><td>60</td></tr>"
+        "<tr><td>기타주주</td><td>400</td><td>40</td></tr></table>"
+        "<p class='section-2'>2. 주요 제품 및 서비스</p>" + _SEGMENT_TABLE
+    )
+    segments, _ = parse_segments(html)
+    assert [s["segment_name"] for s in segments] == ["반도체", "디스플레이"]
+
+
 def test_unparseable_table_does_not_kill_document() -> None:
     """read_html 로 파싱 안 되는 표(빈 <table>·DART-XML 잔재)가 있어도 문서 전체가 죽지 않고 나머지
     표에서 추출한다 — 표별 격리(각도 H·Rule 12). 옛 코드는 첫 junk 표에서 예외로 문서 전량 유실."""
