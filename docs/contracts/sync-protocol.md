@@ -12,6 +12,16 @@
 - **전달 보장**: at-least-once. On-Prem 저장은 도메인 ID(`explanation_result_id` 등 — [event-bundle-schema.md](event-bundle-schema.md) ID 체계) 기반 **멱등 upsert** — 중복 수신은 무해해야 한다.
 - **순서**: cursor 순 처리. 서버 발번 단조증가 cursor를 순차 소비하므로 정정/무효화는 항상 대상 원본 이벤트보다 늦게 도착한다 (원본 cursor < 정정 cursor). 정정/무효화는 대상 원본을 `target_explanation_result_id`로 참조한다. "원본 미수신 상태의 정정"은 gap(sequence 누락)에서만 발생할 수 있으므로, 보류-재처리 로직은 gap 감지(목표 계약)와 함께 도입한다. MVP는 순차 소비 보장 하나로 순서를 담보한다. (참고: 서버 발번 sequence 구조에서는 gap 감지가 수신 cursor의 불연속 확인만으로 가능해 구현 비용이 낮다 — walking skeleton 안정화 후 목표 계약에서 MVP로 조기 승격 검토 후보.)
 
+**엔드포인트 와이어 스펙 (제안 — tenant-sync-api 스캐폴드 기준, ALPHA-358)**:
+
+> 아래는 스캐폴드 구현이 도입한 구체 스펙이다. 아직 합의 전이므로 **제안** 상태로 두고, 확정 시 위 "MVP 구현 스펙"으로 승격한다. Sync Agent 구현은 이 스펙이 확정되기 전까지 이 표면에 고정 의존하지 않는다.
+
+- **경로**: `GET /api/v1/sync/bundle?after={cursor}&limit={n}` — `limit` 생략 시 100, 최대 500 (범위 밖은 400).
+- **신규 없음**: `204 No Content` — 빈 번들은 만들지 않는다.
+- **무결성 헤더**: `X-Bundle-Checksum: sha256=<hex>` — 체크섬 대상은 **응답 body 바이트열 그대로**. 서버는 직렬화를 한 번만 수행하고 같은 바이트를 body로 보낸다 (재직렬화·body 가공 필터 금지).
+- **필드 표기**: snake_case (`bundle_id`·`cursor_from`·`delivery_type` …).
+- **에러 응답**: 4xx/5xx만 공통 봉투(jvm-common `ApiResponse`) — 파라미터 오류는 400 + `SYNC4001`(after)·`SYNC4002`(limit). 성공(200) 본문은 봉투 없이 계약 와이어 포맷 그대로(체크섬 대상이므로). 401·403·410 외 4xx는 소비자 버그 신호로 재시도 없이 표면화한다.
+
 **목표 계약 (문서상 명시, 구현은 후순위)**:
 
 - MVP 스펙 + **벤더 개인키 기반 번들 서명** — 감사 시 "이 콘텐츠는 벤더가 발행한 원본"임을 증명. Raw Event Store에 서명 원본 보존.
