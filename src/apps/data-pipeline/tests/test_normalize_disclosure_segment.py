@@ -93,7 +93,7 @@ def test_business_report_fans_out_to_segment_facts(tmp_path):
     assert [r["segment_ordinal"] for r in rows] == [0, 1, 2, 3]
     assert all(r["rcept_no"] == rcept_no and r["source_vendor"] == "dart" for r in rows)
     assert all(r["ticker"] == "214450" and r["corp_name"] == "파마리서치" for r in rows)
-    assert all(r["share_basis"] == "reported" and r["parser_version"] == "segments-v2" for r in rows)
+    assert all(r["share_basis"] == "reported" and r["parser_version"] == "segments-v3" for r in rows)
     log = _quality_log(storage)
     assert (log["records_routed_business_report"], log["records_passed"]) == (1, 4)
     assert log["segments_extracted"] == 4
