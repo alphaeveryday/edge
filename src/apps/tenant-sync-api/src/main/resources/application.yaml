@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: tenant-sync
+# DB 의존성 없음 — outbox 는 인메모리 스텁. Cloud Event Store 스키마 확정 후
+# JDBC 리더로 교체하며 datasource 설정을 추가한다 (docs/contracts/event-bundle-schema.md).
