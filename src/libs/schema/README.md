@@ -95,11 +95,20 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - Spring Boot 앱은 기동 시 마이그레이션을 실행하지 않는다 — `spring.flyway.enabled=false`.
 - Hibernate/JPA는 스키마를 생성/변경하지 않는다 — `spring.jpa.hibernate.ddl-auto`는 `create`/`update` 금지, 필요 시 `validate`만 허용.
 
-## 마이그레이션 파일
+## 마이그레이션 파일 — 세트 2개 (아티팩트 분리, ADR-0016)
 
-- 위치: `migrations/`
+- `migrations/` — **cloud 세트**(기본). Cloud Event Store·SaaS — dev RDS 적용 대상. 기존 배선(compose·이미지·ECS)이 그대로 이 세트를 가리킨다.
+- `migrations-onprem/` — **온프렘 세트**. 테넌트 온프렘 PostgreSQL 적용 대상(sync-agent 등). 버전은 세트별 독립 증가.
 - 파일명: timestamp 버전 — `VyyyyMMddHHmm__description.sql` (공유 DB 동시 작업 시 버전 충돌 방지)
 - **이미 적용된 마이그레이션 파일은 수정하지 않는다.** 변경은 항상 새 `V...sql`로 추가한다(확장-수축, docs/implementation.md §4).
+
+온프렘 세트 로컬 적용(별도 DB 사용 — cloud 와 같은 DB에 섞지 않는다):
+
+```bash
+./gradlew :libs:schema:flywayMigrate \
+  -Pflyway.url=jdbc:postgresql://localhost:55432/edge_onprem \
+  -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
+```
 
 ## 정책 (고정)
 
