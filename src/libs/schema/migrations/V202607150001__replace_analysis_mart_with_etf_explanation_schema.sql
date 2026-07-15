@@ -25,6 +25,14 @@
 --   * monetary amounts and market prices: NUMERIC
 --   * codes/status/version values: VARCHAR with CHECK constraints where stable
 --
+-- 수치 CHECK 의 유한성 관용구 — `AND col < 'Infinity'` 를 지우지 말 것
+--   PostgreSQL 은 IEEE 와 달리 NaN 을 **최댓값**으로 정렬한다. 그래서 `nav > 0` 같은
+--   부등호 하나짜리 CHECK 는 'NaN' 과 'Infinity' 를 그대로 통과시킨다(float8·numeric 공통).
+--   `AND col < 'Infinity'` 를 붙이면 NaN(비교가 false)·+Inf 가 함께 막히고,
+--   -Inf 는 원래 부등호가 막는다. 양쪽이 열린 제약(leverage_multiplier <> 0)에만
+--   `> '-Infinity'` 를 추가로 붙인다.
+--   BETWEEN 0 AND 1 형태는 이미 NaN·±Inf 를 막으므로 손대지 않았다.
+--
 -- Version-management policy (MVP)
 --   * release_bundle is the customer-facing product version.
 --   * component versions are stored in release_bundle.component_versions JSONB.
@@ -207,7 +215,14 @@ CREATE TABLE etf_profile (
     CONSTRAINT ck_etf_profile_total_expense_ratio
         CHECK (total_expense_ratio IS NULL OR total_expense_ratio BETWEEN 0 AND 1),
     CONSTRAINT ck_etf_profile_leverage_multiplier
-        CHECK (leverage_multiplier IS NULL OR leverage_multiplier <> 0)
+        CHECK (
+            leverage_multiplier IS NULL
+            OR (
+                leverage_multiplier <> 0
+                AND leverage_multiplier > '-Infinity'::DOUBLE PRECISION
+                AND leverage_multiplier < 'Infinity'::DOUBLE PRECISION
+            )
+        )
 );
 
 COMMENT ON TABLE etf_profile IS
@@ -268,7 +283,7 @@ CREATE TABLE etf_nav_daily (
     PRIMARY KEY (etf_instrument_id, trade_date),
 
     CONSTRAINT ck_etf_nav_daily_nav
-        CHECK (nav > 0)
+        CHECK (nav > 0 AND nav < 'Infinity'::NUMERIC)
 );
 
 COMMENT ON TABLE etf_nav_daily IS
@@ -291,14 +306,18 @@ CREATE TABLE price_movement_trigger (
     CONSTRAINT ck_price_movement_trigger_gate
         CHECK (absolute_gate_triggered OR relative_gate_triggered),
     CONSTRAINT ck_price_movement_trigger_return
-        CHECK (observed_return >= -1)
+        CHECK (
+            observed_return >= -1
+            AND observed_return < 'Infinity'::DOUBLE PRECISION
+        )
 );
 
 COMMENT ON TABLE price_movement_trigger IS
 'ETF 가격 변동이 진입 게이트를 통과하여 심층 분석을 시작한 사건. 이 행이 없는 날에는 후속 분석 행이 없을 수 있다.';
 
-CREATE INDEX ix_price_movement_trigger_etf_date
-    ON price_movement_trigger (etf_instrument_id, trade_date DESC);
+-- (etf_instrument_id, trade_date DESC) 전용 인덱스는 두지 않는다 —
+-- uq_price_movement_trigger (etf_instrument_id, trade_date, detected_at) 가
+-- backward scan 으로 같은 조회를 커버한다.
 
 CREATE TABLE etf_contribution_observation (
     contribution_observation_id         TEXT PRIMARY KEY,
@@ -315,11 +334,14 @@ CREATE TABLE etf_contribution_observation (
     available_at                        TIMESTAMPTZ NOT NULL,
     data_version                        VARCHAR(50) NOT NULL,
 
+    -- 둘 다 NULL 이거나 둘 다 값이 있어야 한다. num_nonnulls 로 부분 NULL 을 먼저 막는다 —
+    -- 원래 형태는 (advancing=5, total=NULL) 이 3-valued logic 으로 통과했다.
     CONSTRAINT ck_etf_contribution_counts
         CHECK (
-            (advancing_constituent_count IS NULL AND total_constituent_count IS NULL)
+            num_nonnulls(advancing_constituent_count, total_constituent_count) = 0
             OR (
-                advancing_constituent_count >= 0
+                num_nonnulls(advancing_constituent_count, total_constituent_count) = 2
+                AND advancing_constituent_count >= 0
                 AND total_constituent_count >= 0
                 AND advancing_constituent_count <= total_constituent_count
             )
@@ -663,7 +685,7 @@ CREATE TABLE event_thread_link (
 );
 
 COMMENT ON TABLE event_thread_link IS
-'소스 이벤트 한 건의 thread 귀속 결과와 신규성 상태. UNKNOWN이면 thread_id가 NULL일 수 있다.';
+'소스 이벤트 한 건의 thread 귀속 결과와 신규성 상태. UNKNOWN이면 thread_id가 반드시 NULL이고, UNKNOWN이 아니면 반드시 NULL이 아니다.';
 
 CREATE INDEX ix_event_thread_link_thread ON event_thread_link (thread_id);
 
@@ -724,18 +746,33 @@ CREATE TABLE supply_contract_fact (
     late_disclosure             BOOLEAN NOT NULL DEFAULT FALSE,
     completeness_status         VARCHAR(20),
 
+    -- counterparty_actor_id 는 공시 원문 사실이 아니라 원문 상대방을 내부 actor 에 연결한
+    -- 선택적 정규화 결과다. 공시 fact 는 actor master 의 삭제·병합과 무관하게 보존돼야 하므로
+    -- FK 는 ON DELETE SET NULL 이다. 그래서 actor 연결만으로 상대방을 식별하면 안 된다 —
+    -- actor 가 삭제되는 순간 상대방 정보가 통째로 사라지고 이 CHECK 도 깨진다.
+    -- 비공개가 아닌 상대방은 actor 연결 여부와 무관하게 원문명을 반드시 보존한다.
     CONSTRAINT ck_supply_contract_counterparty
         CHECK (
-            counterparty_actor_id IS NOT NULL
-            OR counterparty_raw_name IS NOT NULL
-            OR counterparty_withheld
+            (
+                counterparty_withheld
+                AND counterparty_actor_id IS NULL
+            )
+            OR
+            (
+                NOT counterparty_withheld
+                AND NULLIF(BTRIM(counterparty_raw_name), '') IS NOT NULL
+            )
         ),
-    CONSTRAINT ck_supply_contract_withheld
-        CHECK (NOT counterparty_withheld OR counterparty_actor_id IS NULL),
     CONSTRAINT ck_supply_contract_amount
-        CHECK (contract_amount_krw IS NULL OR contract_amount_krw >= 0),
+        CHECK (
+            contract_amount_krw IS NULL
+            OR (contract_amount_krw >= 0 AND contract_amount_krw < 'Infinity'::NUMERIC)
+        ),
     CONSTRAINT ck_supply_contract_revenue_ratio
-        CHECK (revenue_ratio_pct IS NULL OR revenue_ratio_pct >= 0),
+        CHECK (
+            revenue_ratio_pct IS NULL
+            OR (revenue_ratio_pct >= 0 AND revenue_ratio_pct < 'Infinity'::DOUBLE PRECISION)
+        ),
     CONSTRAINT ck_supply_contract_dates
         CHECK (
             contract_start_date IS NULL
@@ -764,9 +801,15 @@ CREATE TABLE business_segment_fact (
     concept_link_confidence DOUBLE PRECISION,
 
     CONSTRAINT ck_business_segment_revenue
-        CHECK (revenue_krw IS NULL OR revenue_krw >= 0),
+        CHECK (
+            revenue_krw IS NULL
+            OR (revenue_krw >= 0 AND revenue_krw < 'Infinity'::NUMERIC)
+        ),
     CONSTRAINT ck_business_segment_share
-        CHECK (revenue_share_pct IS NULL OR revenue_share_pct >= 0),
+        CHECK (
+            revenue_share_pct IS NULL
+            OR (revenue_share_pct >= 0 AND revenue_share_pct < 'Infinity'::DOUBLE PRECISION)
+        ),
     CONSTRAINT ck_business_segment_link_confidence
         CHECK (concept_link_confidence IS NULL OR concept_link_confidence BETWEEN 0 AND 1),
     CONSTRAINT ck_business_segment_share_basis
@@ -799,11 +842,14 @@ CREATE TABLE price_daily (
 
     CONSTRAINT ck_price_daily_values
         CHECK (
-            (close_price IS NULL OR close_price > 0)
-            AND (adjusted_close_price IS NULL OR adjusted_close_price > 0)
+            (close_price IS NULL OR (close_price > 0 AND close_price < 'Infinity'::NUMERIC))
+            AND (adjusted_close_price IS NULL
+                 OR (adjusted_close_price > 0 AND adjusted_close_price < 'Infinity'::NUMERIC))
             AND (volume IS NULL OR volume >= 0)
-            AND (turnover_value IS NULL OR turnover_value >= 0)
-            AND (simple_return IS NULL OR simple_return >= -1)
+            AND (turnover_value IS NULL
+                 OR (turnover_value >= 0 AND turnover_value < 'Infinity'::NUMERIC))
+            AND (simple_return IS NULL
+                 OR (simple_return >= -1 AND simple_return < 'Infinity'::DOUBLE PRECISION))
         )
 );
 
@@ -933,8 +979,8 @@ CREATE TABLE event_price_observation (
 COMMENT ON TABLE event_price_observation IS
 '소스이벤트·금융상품·반응창 grain의 가격 검증 결과. 방향·크기·타이밍 정합성을 확인하되 인과를 확정하지 않는다.';
 
-CREATE INDEX ix_event_price_observation_event
-    ON event_price_observation (source_event_id);
+-- source_event_id 단독 인덱스는 두지 않는다 — uq_event_price_observation 의 선두 컬럼이라
+-- 그 UNIQUE 인덱스가 그대로 커버한다.
 CREATE INDEX ix_event_price_observation_instrument
     ON event_price_observation (instrument_id, window_start_at);
 
@@ -1663,3 +1709,37 @@ ALTER TABLE tenant_sync_cursor
     FOREIGN KEY (tenant_id)
     REFERENCES tenant (tenant_id)
     ON DELETE CASCADE;
+
+-- ============================================================================
+-- 게시 정책 — 동일 grain 의 PUBLISHED 는 한 건만
+-- ============================================================================
+
+-- explanation_run_id UNIQUE 는 "한 실행이 최대 하나의 결과를 낸다"만 보장한다.
+-- 같은 ETF·거래일을 재실행하거나 다른 모델·입력으로 다시 생성한 이력은 허용한다.
+-- 다만 서빙은 결정적이어야 하므로 게시된 결과는 grain 당 하나로 강제한다.
+-- 재게시 절차: 기존 게시본을 WITHDRAWN 으로 바꾼 뒤 새 결과를 PUBLISHED 로 올린다.
+--   DRAFT·WITHDRAWN 이력은 같은 grain 에 여러 건 남을 수 있다(부분 인덱스라 대상 밖).
+CREATE UNIQUE INDEX uq_explanation_result_published_grain
+    ON explanation_result (etf_instrument_id, trade_date, explanation_as_of)
+    WHERE publication_status = 'PUBLISHED';
+
+-- ============================================================================
+-- FK 역방향 조회·삭제 검사용 인덱스
+-- ============================================================================
+
+-- 단일 컬럼 FK 중 선행 인덱스가 없던 것들. 없으면 부모 삭제/변경 시 자식 전체를 seq scan 한다
+-- (특히 entity·concept 처럼 여러 테이블이 RESTRICT 로 참조하는 허브).
+CREATE INDEX ix_concept_parent ON concept (parent_concept_id);
+CREATE INDEX ix_etf_profile_theme ON etf_profile (primary_theme_concept_id);
+CREATE INDEX ix_etf_profile_tracking_series ON etf_profile (tracking_market_series_id);
+CREATE INDEX ix_event_price_observation_benchmark ON event_price_observation (benchmark_series_id);
+CREATE INDEX ix_explanation_result_thread ON explanation_result (primary_thread_id);
+CREATE INDEX ix_explanation_route_decomposition_price
+    ON explanation_route_decomposition (price_decomposition_id);
+CREATE INDEX ix_explanation_route_target_source_instrument
+    ON explanation_route_target (source_instrument_id);
+CREATE INDEX ix_explanation_route_target_entity ON explanation_route_target (target_entity_id);
+CREATE INDEX ix_news_document_representative ON news_document (representative_document_id);
+CREATE INDEX ix_news_document_theme ON news_document (theme_concept_id);
+CREATE INDEX ix_supply_contract_concept ON supply_contract_fact (contract_object_concept_id);
+CREATE INDEX ix_tenant_release_history_bundle ON tenant_release_history (bundle_version);
