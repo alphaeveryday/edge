@@ -171,6 +171,7 @@ enabled = true
 [krx_etf.source.etf_map]
 "069500" = "KR7069500007"   # KODEX 200 (국내, 201종목·비중합 100%)
 "360750" = "KR7360750004"   # TIGER 미국S&P500 (해외기초, 505종목·비중 대시)
+"091160" = "KR7091160002"   # KODEX 반도체 (국내, 35종목+원화현금·비중합 100%)
 
 # 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
 # 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
