@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>가상 MTS — AI 분석 탭 (데모)</title>
+<link rel="stylesheet" href="css/colors_and_type.css">
+<link rel="stylesheet" href="css/edge-components.css">
+<style>
+  body{margin:0;background:#e4e4e7;font-family:"Pretendard",-apple-system,sans-serif}
+  a{color:#2e5aac;text-decoration:none}a:hover{color:#244a93}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .fade-up{animation:fadeUp .25s ease both}
+  /* 디자인 시안의 iOS 프레임(402x874)을 단순 프레임으로 재현 */
+  .phone{width:402px;height:874px;border-radius:28px;overflow:hidden;
+         box-shadow:0 16px 48px rgba(24,24,27,.18);border:1px solid var(--gray-300);background:var(--gray-50)}
+  .mts-tab{flex:none;border:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;
+           padding:9px 10px;font-weight:400;color:var(--fg-3);border-bottom:2px solid transparent;white-space:nowrap}
+  .mts-tab.active{font-weight:600;color:var(--accent);border-bottom-color:var(--accent)}
+</style>
+</head>
+<body>
+<div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:32px 0">
+<div class="phone">
+<div style="display:flex;flex-direction:column;height:100%;background:var(--gray-50);font-family:var(--font-sans);color:var(--fg-1)">
+
+  <!-- 종목 헤더 — 시세는 증권사 자체 데이터(목업 고정값), AI 분석만 Serving API 경유 -->
+  <div style="background:#fff;border-bottom:1px solid var(--border);padding:10px 16px 0;flex:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="etf-name" style="font-size:17px;font-weight:700;letter-spacing:-0.01em">KODEX 200</span>
+        <span id="etf-ticker" class="tag num" style="font-size:11px">069500</span>
+        <span class="chip" style="height:18px;font-size:10px">ETF</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;color:var(--fg-3)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21l-8.5-8.5a5.5 5.5 0 1 1 8.5-6.9 5.5 5.5 0 1 1 8.5 6.9L11 21z"></path></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16l6-4 6 4V4z"></path></svg>
+      </div>
+    </div>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between">
+      <div>
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <span class="num" style="font-size:24px;font-weight:700;letter-spacing:-0.01em;color:var(--down)">36,485</span>
+          <span class="delta delta-down num" style="font-size:12px">▼ 340</span>
+          <span class="delta delta-down num" style="font-size:12px">−0.92%</span>
+        </div>
+      </div>
+      <div class="num" style="display:grid;grid-template-columns:auto auto;gap:2px 12px;font-size:10.5px;color:var(--fg-3);text-align:right">
+        <span>고 <b style="color:var(--fg-1);font-weight:500">36,955</b></span>
+        <span>거래량 <b style="color:var(--fg-1);font-weight:500">6,214,830</b></span>
+        <span>저 <b style="color:var(--fg-1);font-weight:500">36,340</b></span>
+        <span>거래대금 <b style="color:var(--fg-1);font-weight:500">2,271억</b></span>
+      </div>
+    </div>
+    <!-- 탭 바 -->
+    <div id="tab-bar" style="display:flex;gap:2px;margin-top:10px;overflow-x:auto;scrollbar-width:none"></div>
+  </div>
+
+  <!-- 탭 콘텐츠 -->
+  <div style="flex:1;overflow-y:auto;padding:12px 16px 24px;display:flex;flex-direction:column;gap:12px">
+
+    <!-- AI 분석 탭 -->
+    <div id="panel-ai" style="display:flex;flex-direction:column;gap:12px">
+      <div class="card" style="padding:16px 14px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <span style="font-size:15px;font-weight:700;letter-spacing:-0.01em">오늘의 가격 변동 분석</span>
+          <span id="analysis-meta" class="num" style="font-size:11px;color:var(--fg-3)"></span>
+        </div>
+        <!-- 로딩 스켈레톤 -->
+        <div id="analysis-loading" style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+          <span class="skel" style="width:92%"></span>
+          <span class="skel" style="width:100%"></span>
+          <span class="skel" style="width:96%"></span>
+          <span class="skel" style="width:64%"></span>
+        </div>
+        <!-- 200: 설명 본문 -->
+        <p id="analysis-text" style="display:none;margin:14px 0 0;font-size:14px;line-height:1.75;color:var(--fg-1);white-space:pre-line;text-wrap:pretty"></p>
+        <!-- 204/에러: 안내 문구 -->
+        <div id="analysis-empty" style="display:none;padding:36px 8px;text-align:center">
+          <p id="analysis-empty-text" style="margin:0;font-size:13px;line-height:1.6;color:var(--fg-3)"></p>
+        </div>
+      </div>
+      <div style="padding:0 2px">
+        <p style="margin:0;font-size:10.5px;line-height:1.6;color:var(--fg-4)">※ 본 정보는 뉴스·공시 데이터를 기반으로 자동 생성된 참고 자료로, 특정 종목의 매수·매도 추천이 아닙니다. 투자 판단의 최종 책임은 투자자 본인에게 있으며, 원금 손실이 발생할 수 있습니다.</p>
+        <!-- 계약(serving-api.md): 응답의 disclaimer는 화면에 반드시 함께 노출한다 -->
+        <p id="serving-disclaimer" style="display:none;margin:4px 0 0;font-size:10.5px;line-height:1.6;color:var(--fg-4)"></p>
+        <p class="num" style="margin:4px 0 0;font-size:10.5px;color:var(--fg-4)">자료: 한국거래소(KRX)·KIND · 문의 1588-0000</p>
+      </div>
+    </div>
+
+    <!-- 그 외 탭 (목업) -->
+    <div id="panel-other" style="display:none;padding:60px 16px;flex-direction:column;align-items:center;gap:8px">
+      <span id="other-tab-name" style="font-size:13px;font-weight:600;color:var(--fg-3)"></span>
+      <span style="font-size:12px;color:var(--fg-4)">이 탭은 목업입니다 — AI 분석 탭을 눌러 돌아가세요.</span>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<script src="js/serving-api-mock.js"></script>
+<script src="js/broker-api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

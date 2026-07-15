@@ -15,25 +15,30 @@
       etf: { ticker: '069500', name: 'KODEX 200' },
       trade_date: LATEST_TRADE_DATE,
       summary:
-        '반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.',
+        'KODEX 200은 오늘 전일 대비 0.92% 하락했습니다.\n\n' +
+        '미국 6월 CPI가 예상치를 웃돌며 금리 인하 기대가 후퇴한 가운데, 지수 비중이 큰 반도체 대형주가 동반 약세를 보인 것이 하락의 주된 원인으로 분석됩니다.\n\n' +
+        '· 삼성전자(−1.9%)·SK하이닉스(−2.4%) 등 반도체 대형주가 필라델피아 반도체지수 급락(−3.1%) 영향으로 동반 하락하며 지수 낙폭의 절반 이상을 설명합니다.\n' +
+        '· 미국 6월 소비자물가가 전년 대비 3.4%로 시장 예상(3.1%)을 상회, 원/달러 환율이 8.2원 상승하고 외국인이 코스피200 선물을 4,120억원 순매도했습니다.\n' +
+        '· 외국인 현물 순매도가 5거래일 연속(당일 −2,860억원) 이어지며 낙폭을 키웠습니다.\n' +
+        '· 반면 LG에너지솔루션(+2.1%)이 북미 신규 수주 공시에 반등하며 지수 낙폭을 일부 상쇄했습니다.',
       confidence_level: 'MEDIUM',
-      counter_factors: ['환율 변동은 반대 방향 요인'],
+      counter_factors: ['LG에너지솔루션의 수주 공시 반등은 반대 방향 요인'],
       evidences: [
         {
           kind: 'NEWS',
-          title: '반도체 수출 반등',
+          title: '미국 6월 CPI 3.4%로 예상 상회',
           source: '연합인포맥스',
           published_at: '2026-07-15T08:30:00+09:00',
         },
         {
           kind: 'NEWS',
-          title: '외국인 현물 순매수 전환',
+          title: '필라델피아 반도체지수 3.1% 급락',
           source: '한국경제',
-          published_at: '2026-07-15T10:05:00+09:00',
+          published_at: '2026-07-15T07:05:00+09:00',
         },
       ],
       disclaimer: DISCLAIMER,
-      published_at: '2026-07-15T16:40:00+09:00',
+      published_at: '2026-07-15T15:32:00+09:00',
     },
     '091160': {
       publication_id: 'pub-20260715-091160-01',
@@ -70,6 +75,11 @@
         }
         if (tradeDate && !/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
           resolve({ status: 400, body: null });
+          return;
+        }
+        // 5xx 경로 재현용 — 계약의 폴백 문구 처리(증권사 백엔드 권장)를 화면에서 확인한다
+        if (etfTicker === '999999') {
+          resolve({ status: 500, body: null });
           return;
         }
         if (!(etfTicker in EXPLANATIONS)) {
