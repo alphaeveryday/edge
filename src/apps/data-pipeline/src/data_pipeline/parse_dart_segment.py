@@ -26,7 +26,10 @@ from typing import Any
 import pandas as pd
 from bs4 import BeautifulSoup, Tag
 
-PARSER_VERSION = "segments-v2"
+# segments-v3: ALPHA-354 표 선택 게이트(비부문표 배제·섹션 게이트)로 파서 시맨틱이 바뀌어 방출
+# 부문 수가 줄 수 있다. normalize_disclosure_segment._merge_partition 이 parser_version 변경을
+# stale 고아 행(옛 파스의 높은 ordinal) 식별·정리 신호로 쓰므로, v2→v3 로 올려 재파스를 구분한다.
+PARSER_VERSION = "segments-v3"
 
 _HEADER_GROUP_A = re.compile(r"매출|부문|제품|품목|영업수익|서비스")
 _HEADER_GROUP_B = re.compile(r"비중|비율|%|매출액|금액|수익")
