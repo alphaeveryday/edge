@@ -5,6 +5,10 @@
 
 - raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
         가격·재무는 ingest_date(수집일). 각 빌더 주석 참고.
+- feature: canonical 에서 파생한 모델 산출물(LLM 태깅 등). canonical 과 마찬가지로 run_id 가
+        없고 멱등이지만, canonical 이 **벤더 원본의 결정론적 정규화**인 반면 feature 는
+        **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번
+        만든 것은 버전(tagger_version·ontology_version)이 같으면 다시 만들지 않는다.
 - 로그: operations_archive/collection_logs/ 아래 run_id 별 1건.
 
 백엔드는 설정(storage.backend)으로 고른다. MVP 개발은 local 스텁으로 돌리고,
@@ -261,6 +265,26 @@ def canonical_news_articles_partition(language: str, published_date: str) -> str
     이 두 언어 파티션에 각각 오면 서로 다른 파티션이라 병합되지 않는다(교차언어 병합은 실무상
     드물고 — FMP 영어·BigKinds 국문 — 다운스트림 dedup 소관)."""
     return f"canonical/news/news_articles/language={language}/published_date={published_date}"
+
+
+def feature_news_assertions_partition(language: str, published_date: str) -> str:
+    """feature 뉴스 assertion 파티션 프리픽스 (끝 슬래시 없음).
+
+    입력 canonical 뉴스와 **같은 파티션 축**(language → published_date)이다 — 한 canonical
+    파티션이 한 feature 파티션으로 대응해 태깅 대상을 프루닝으로 고를 수 있다(비용이 LLM 호출에
+    비례하므로 날짜창 프루닝이 곧 비용 통제다). 정체성 키는 canonical 과 같은 `article_id`.
+
+    canonical 이 아니라 feature 인 이유: 여기 값은 벤더 원본의 결정론적 정규화가 아니라 **LLM
+    추론 결과**다. 같은 입력에 다시 돌려도 같은 값이 나온다는 보장이 없고 호출마다 돈이 든다.
+    그래서 canonical(언제든 raw 에서 재생성 가능·무료)과 라이프사이클이 다르다 — 이 존은 한 번
+    만든 걸 보존하고, `tagger_version`·`ontology_version` 이 바뀔 때만 다시 만든다.
+
+    행은 **기사 1건 = 1행**이다(assertion 1건 = 1행이 아니다). 한 기사가 사건을 0..N 개 주장하고
+    status·reasons 는 기사 단위 사실이라, assertion 을 펼치면 사건 0건인 기사(전체의 다수 — 시황·
+    논평)가 행 자체를 잃어 '태깅했는데 사건이 없었다'와 '태깅한 적 없다'가 구분되지 않는다.
+    assertions 는 JSON 문자열 컬럼이다(canonical 뉴스의 mentions 와 같은 관례).
+    """
+    return f"feature/news/assertions/language={language}/published_date={published_date}"
 
 
 def canonical_supply_contract_fact_partition(report_date: str) -> str:

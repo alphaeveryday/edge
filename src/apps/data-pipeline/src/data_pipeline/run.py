@@ -2,11 +2,17 @@
 
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
-         |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment}
+         |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
+         |normalize-etf|tag-news}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
-        [--source VENDOR] [--input-run-id RUN_ID]
+        [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
 
-수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음):
+태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
+(analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
+
+수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음).
+tag-news 는 같은 인자를 **태깅 대상 파티션 프루닝**에 쓴다(raw 수집 창이 아니라 canonical
+published_date 범위이며, 미지정은 증분 기본창이 아니라 전체다):
   - 미지정(스케줄 증분): 어제~오늘 UTC 창을 앱이 계산한다. EventBridge Scheduler 는
     정적 입력만 넣어 '어제/오늘'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다.
   - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다.
@@ -18,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -46,7 +53,9 @@ from .steps import (
     normalize_etf,
     normalize_news,
     normalize_price,
+    tag_news,
 )
+from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
@@ -77,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf"],
+                 "normalize-etf", "tag-news"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -89,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalize-* 재검증 대상 수집 run_id(미지정=전체, 멱등)")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
+    # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
+    # 수에 비례해서 실수로 큰 금액이 나가는 걸 호출부가 막을 수 있게 둔다. 미지정=대상 전부.
+    parser.add_argument("--limit", type=int, default=None,
+                        help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -117,6 +130,26 @@ def main(argv: list[str] | None = None) -> int:
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":
         return normalize_etf.run(storage, run_id, args.input_run_id)
+
+    # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라
+    # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=전체). 비용이 LLM 호출 수에
+    # 비례하므로 창·--limit 이 곧 비용 통제다. 그래서 아래 증분 기본창(어제~오늘) 계산을 타지
+    # 않도록 여기서 분기한다 — 태깅에 기본창을 씌우면 과거 기사가 영영 태깅되지 않는다.
+    if args.step == "tag-news":
+        # LLM 설정은 **여기서** env 로 읽는다. llm.py 는 인자만 받고 env 를 모른다 —
+        # DATA_PIPELINE_* 는 수집 설정(load_settings) 네임스페이스인데 LLM 은 수집 소스가
+        # 아니라 거기 안 든다. 관례는 analysis-engine analyze_daily.py 와 같은 LLM_* 키다.
+        api_key = os.environ.get("LLM_API_KEY", "")
+        if not api_key:
+            # 조용히 0건 태깅하고 성공으로 끝나면 커버리지 저하가 안 보인다(Rule 12).
+            raise SystemExit("LLM_API_KEY 가 없다 — tag-news 는 LLM 호출이 필수다")
+        complete_fn = openai_compatible_complete_fn(
+            api_key=api_key,
+            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+        )
+        return tag_news.run(storage, run_id, complete_fn=complete_fn,
+                            from_date=args.from_date, to_date=args.to_date, limit=args.limit)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
     if args.step == "ingest-raw-financial":
