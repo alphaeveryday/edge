@@ -11,7 +11,7 @@
 
 ## Cloud Event Store 스키마
 
-**물리 정의는 [`src/libs/schema/migrations/`](../../src/libs/schema/migrations/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), outbox·cursor 는 `V202607150002`(ALPHA-356)가 추가·정정. 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
+**물리 정의는 [`src/libs/schema/migrations/`](../../src/libs/schema/migrations/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
 
 아래는 Sync 채널이 실제로 소비하는 **경계면**만 추린 것이다. 47개 전체가 인터페이스는 아니다 — 나머지는 진기 측 내부 구현이며 양자 합의 없이 바뀔 수 있다.
 
@@ -34,22 +34,14 @@
 - `tenant_id`는 BIGINT(identity). 전달(delivery) 단위의 멱등 키 = `(tenant_id, cursor)`.
 - 정정·무효화는 대상을 `target_explanation_result_id`로 참조한다. 정정으로 생기는 재게시본은 **새 `explanation_result_id`** — On-Prem 리비전 분리 모델의 소스([../domain/state-machine.md](../domain/state-machine.md)).
 
-## tenant_outbox — fan-out 산출물, 번들 생성의 유일한 소스
+## 전달 레코드 (fan-out 산출물) — 논리 계약
 
-물리 정의는 `V202607150002`. cursor 발번 시점(ADR-0021 — 테넌트별 fan-out 트랜잭션)의 물리 구현이다.
+번들은 **테넌트별 전달 레코드**를 cursor 순으로 묶어 생성한다. 계약은 논리 수준까지만 정의한다:
 
-| 필드 | 타입 | 설명 |
-|---|---|---|
-| tenant_id | BIGINT | PK 일부. FK → tenant |
-| cursor | BIGINT | PK 일부. **테넌트별 단조 증가** — fan-out 트랜잭션 안에서 해당 테넌트 last cursor + 1 |
-| delivery_type | VARCHAR | `NEW` / `CORRECTION` / `INVALIDATION` |
-| explanation_result_id | TEXT | 전달 본체 (NEW·CORRECTION=게시본/재게시본, INVALIDATION=철회 대상) |
-| target_explanation_result_id | TEXT | CORRECTION에서만 — 대체된 구 게시본 |
-| reason | TEXT | CORRECTION·INVALIDATION 필수 (Super Admin 사유 입력 필수 정책) |
-| enqueued_at | TIMESTAMPTZ | |
-
-- **fan-out 직렬화 규칙**: 한 테넌트의 outbox 행 생성은 **단일 writer(fan-out 워커)가 테넌트별로 직렬 처리**하고, cursor 발번과 행 INSERT는 같은 트랜잭션이다. DB sequence(`nextval`)를 쓰지 않는다 — sequence는 트랜잭션 밖에서 발번되어 **커밋 순서 ≠ cursor 순서**가 될 수 있고, 그 gap은 소비자가 이벤트를 영구히 건너뛰게 만든다. 이 규칙이 "순차 소비만으로 순서 담보"(ADR-0015)의 성립 조건이다.
-- `tenant_sync_cursor.last_cursor`(BIGINT)는 이 cursor의 소비 추적이다 — TIMESTAMPTZ watermark는 ADR-0015가 배제한 방식(동일 시각 충돌·시계 스큐·gap 감지 불가)이라 `V202607150002`에서 정정했다.
+- 전달 멱등 키 = `(tenant_id, cursor)`. cursor 는 테넌트별 단조 증가이며 **발번 시점은 fan-out**(ADR-0021 확정).
+- 전달 레코드는 `delivery_type`(NEW/CORRECTION/INVALIDATION), 전달 본체 참조(`explanation_result_id`), CORRECTION 의 대체 대상(`target_explanation_result_id`), CORRECTION·INVALIDATION 의 `reason`(필수)을 가진다.
+- **저장 구조·fan-out 구현(outbox 물리 설계·직렬화·retention)은 영서 오너십의 고도화 영역** — 확정 시 이 문서와 마이그레이션에 기록한다. `[합의 필요]`
+- `tenant_sync_cursor.last_cursor`(BIGINT)는 이 cursor 의 소비 추적이다 — TIMESTAMPTZ watermark 는 ADR-0015가 배제한 방식(동일 시각 충돌·시계 스큐·gap 감지 불가)이라 `V202607150002`에서 정정했다.
 
 ### 게시 상태 → 전달 유형 매핑 (제안) `[합의 필요]`
 
@@ -119,7 +111,7 @@
 1. 게시 상태 → 전달 유형 매핑 (위 제안 표 승인 여부)
 2. `source_events`·`evidences`의 번들 경계면 컬럼 선정 (물리 스키마 컬럼 중 선별)
 3. `tenant`·`tenant_credential` 정의 검토 — Tenant Sync API 이후 영역(영서 오너십, [ADR-0019](../adr/0019-team-ownership-interface.md)). 인증 모델(sync-auth)과 함께 확정, 다르면 수축-확장으로 교체
-4. outbox retention·full resync 경로 (410 시맨틱과 짝 — [sync-protocol.md](sync-protocol.md))
+4. 전달 레코드 저장 구조·fan-out 구현(영서 설계) + retention·full resync 경로 (410 시맨틱과 짝 — [sync-protocol.md](sync-protocol.md))
 5. 일일 이벤트 규모 가정 검증 (국내 ETF 기준 — [sync-protocol.md](sync-protocol.md) 기재값)
 
 해소된 안건: ~~confidence 스케일~~ → 물리 스키마의 `confidence_level` enum(HIGH/MEDIUM/LOW) 채택. ~~risk_grade 존치~~ → 물리 스키마에 없음, 위험 등급 산정 주체 결정(TODO §2) 후 필요 시 확장-수축으로 추가. ~~ID 체계(UUIDv7 제안)~~ → 물리 스키마의 TEXT 도메인 ID 채택.
