@@ -37,5 +37,5 @@ Tenant Console
 **Settings**
 
 - Cloud Sync: [../contracts/sync-auth.md](../contracts/sync-auth.md) 참조 (연결 상태, 동기화 이력, 인증서 fingerprint/만료일/교체)
-- 노출 범위: 특정 종목·섹터 제외, MTS/HTS/Internal 채널별 ON·OFF. **MVP 커버리지는 한국주식 한정** — 미국주식 ON·OFF는 시장 커버리지 확장 시 추가 ([../roadmap.md](../roadmap.md))
+- 노출 범위: 특정 ETF·섹터 제외, MTS/HTS/Internal 채널별 ON·OFF. **MVP 커버리지는 국내 상장 ETF 한정**([../adr/0024](../adr/0024-scope-domestic-etf.md)) — 미국 ETF ON·OFF는 시장 커버리지 확장 시 추가 ([../roadmap.md](../roadmap.md))
 - Users & Roles: 사용자 목록/등록/비활성화 (관리자 직접 등록 — 초대·재설정 메일 흐름 없음, [../adr/0025](../adr/0025-onprem-auth-hybrid.md)), 역할 부여 — **Tenant Admin / Compliance Reviewer / Operator / Read Only**
