@@ -1,4 +1,4 @@
-package com.edge.sync.tenant;
+package com.edge.tenantsync.tenant;
 
 import org.springframework.stereotype.Component;
 
@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 public class FixedTenantResolver implements TenantResolver {
 
 	@Override
-	public String resolveTenantId() {
-		return "t-demo";
+	public long resolveTenantId() {
+		return 1L; // tenant 시드 마이그레이션 전 임시 값 — tenant 테이블 BIGINT identity
 	}
 }

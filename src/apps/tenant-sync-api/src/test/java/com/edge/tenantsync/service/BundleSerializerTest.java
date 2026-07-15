@@ -1,5 +1,7 @@
-package com.edge.sync.bundle;
+package com.edge.tenantsync.service;
 
+import com.edge.tenantsync.dto.BundleEntry;
+import com.edge.tenantsync.dto.EventBundle;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -31,17 +33,16 @@ class BundleSerializerTest {
 		String json = new String(serializer.serialize(fixedBundle()).body(), StandardCharsets.UTF_8);
 
 		assertThat(json).contains("\"bundle_id\"", "\"tenant_id\"", "\"generated_at\"",
-				"\"cursor_from\"", "\"cursor_to\"", "\"delivery_type\"", "\"target_event_id\"");
+				"\"cursor_from\"", "\"cursor_to\"", "\"delivery_type\"", "\"target_explanation_result_id\"");
 		assertThat(json).doesNotContain("\"bundleId\"", "\"deliveryType\"");
 	}
 
 	private static EventBundle fixedBundle() {
-		UUID target = UUID.fromString("019624c0-0000-7000-8000-0000000000ff");
 		return new EventBundle(
 				UUID.fromString("019624c0-0000-7000-8000-0000000000aa"),
-				"t-demo",
+				1L,
 				java.time.Instant.parse("2026-07-15T09:00:00Z"),
 				3L, 3L,
-				List.of(BundleEntry.invalidation(3L, target, "오탐지 이벤트")));
+				List.of(BundleEntry.invalidation(3L, "expr-20260715-069500-0002", "오탐지 이벤트")));
 	}
 }

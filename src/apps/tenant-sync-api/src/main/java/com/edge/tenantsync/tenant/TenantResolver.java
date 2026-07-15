@@ -1,4 +1,4 @@
-package com.edge.sync.tenant;
+package com.edge.tenantsync.tenant;
 
 /**
  * 요청의 테넌트 식별. 계약(docs/contracts/sync-protocol.md): 테넌트는 쿼리·경로·헤더가 아니라
@@ -8,5 +8,5 @@ package com.edge.sync.tenant;
  */
 public interface TenantResolver {
 
-	String resolveTenantId();
+	long resolveTenantId();
 }

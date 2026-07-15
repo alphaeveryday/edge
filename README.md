@@ -52,7 +52,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
 | `gateway` | JVM | **edge-cloud** | Cloud 엣지. console·admin 트래픽에 라우트별 필터 적용 (목표: Super Admin·Tenant Sync API용만 — [ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md)) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
-| `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). outbox는 인메모리 스텁, mTLS 인가는 후속 |
+| `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | **edge-cloud** | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
 | `analysis-engine` | Python | **edge-cloud** | 스케줄러로 동작 → 분석 결과를 DB에 저장 |

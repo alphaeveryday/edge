@@ -1,5 +1,6 @@
-package com.edge.sync.bundle;
+package com.edge.tenantsync.service;
 
+import com.edge.tenantsync.dto.EventBundle;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.json.JsonMapper;
