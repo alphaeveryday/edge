@@ -17,15 +17,16 @@ SET search_path TO public;
 CREATE TABLE received_bundle (
     cursor_from     BIGINT NOT NULL,
     cursor_to       BIGINT NOT NULL,
-    checksum        CHAR(64) NOT NULL,
+    checksum        VARCHAR(72) NOT NULL,
     body            BYTEA NOT NULL,
     received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_received_bundle PRIMARY KEY (cursor_from),
     CONSTRAINT ck_received_bundle_range
         CHECK (cursor_to >= cursor_from),
+    -- 와이어 계약의 헤더값(X-Bundle-Checksum: sha256=<hex>)을 변형 없이 그대로 저장한다.
     CONSTRAINT ck_received_bundle_checksum
-        CHECK (checksum ~ '^[0-9a-f]{64}$')
+        CHECK (checksum ~ '^sha256=[0-9a-f]{64}$')
 );
 
 COMMENT ON TABLE received_bundle IS
