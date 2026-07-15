@@ -92,7 +92,7 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 대표 2종). 날짜창 없이 그날(trdDd) PDF 전량을 append(US ETF 와 동형). 해외기초
+# etf_map, 현재 KR 대표 3종). 날짜창 없이 그날(trdDd) PDF 전량을 append(US ETF 와 동형). 해외기초
 # ETF 는 비중·금액이 대시(-)로 와도 무변형 보존. ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
