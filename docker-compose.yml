@@ -4,16 +4,16 @@
 #       로컬에서 동일하게 재현해 테스트한다.
 #
 # 핵심 정합성:
-#   - 서비스 이름(widget-api·tenant-console-api·super-admin-api·gateway)을
+#   - 서비스 이름(tenant-console-api·super-admin-api·gateway)을
 #     ECS Service Connect 의 dns_name(= Terraform 모듈 name)과 '똑같이' 둔다.
-#     → gateway 라우팅 설정이 http://widget-api:8080 을 타깃하면 로컬·ECS 가 동일 동작.
+#     → gateway 라우팅 설정이 http://tenant-console-api:8080 을 타깃하면 로컬·ECS 가 동일 동작.
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
 #
-# gateway 라우팅 구현됨(ALPHA-294·301): gateway(localhost:8080) 하나로 3라우트 프록시한다.
-#    /api/v1/widget/** → widget-api, /api/v1/console/** → tenant-console-api, /api/v1/admin/** → super-admin-api
+# gateway 라우팅(ALPHA-294·301, 위젯 라우트는 하이브리드 피벗으로 제거 — ADR-0010):
+#    /api/v1/console/** → tenant-console-api, /api/v1/admin/** → super-admin-api
 #    (기본 uri 가 서비스명 http://<name>:8080 이라 compose 에서 별도 설정 없이 동작.)
-#    각 백엔드 host 포트(18080~)는 라우팅 우회 직접 테스트용으로 남겨 둔다.
+#    각 백엔드 host 포트(18081~)는 라우팅 우회 직접 테스트용으로 남겨 둔다.
 #
 # 사용:
 #   docker compose up --build          # 전체 기동(첫 실행은 gradle 빌드로 느림)
@@ -22,10 +22,8 @@
 #
 # 테스트:
 #   # gateway 경유(라우팅)
-#   curl -X POST localhost:8080/api/v1/widget/analysis -H 'Content-Type: application/json' -d '{"embedKey":"k","symbol":"005930"}'
 #   curl localhost:8080/actuator/health    # gateway
 #   # 백엔드 직접(라우팅 우회)
-#   curl localhost:18080/actuator/health   # widget-api
 #   curl localhost:18081/actuator/health   # tenant-console-api
 #   curl localhost:18082/actuator/health   # super-admin-api
 
@@ -63,23 +61,6 @@ services:
       -locations=filesystem:/flyway/sql
       migrate
 
-  widget-api:
-    build:
-      context: ./src
-      dockerfile: apps/widget-api/Dockerfile
-    container_name: edge-widget-api
-    depends_on:
-      flyway:
-        condition: service_completed_successfully
-    environment:
-      # DB 접속 주입(ECS 배선과 동일). 현재 앱은 DataSource exclude 라 미사용이지만,
-      # 재활성화 시 compose 수정 없이 바로 연결되도록 미리 채워 둔다.
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
-      SPRING_DATASOURCE_USERNAME: edge
-      SPRING_DATASOURCE_PASSWORD: edge
-    ports:
-      - "18080:8080" # 직접 테스트용(prod 에선 private, 노출 없음)
-
   tenant-console-api:
     build:
       context: ./src
@@ -111,21 +92,19 @@ services:
       - "18082:8080"
 
   # 공개 엣지(단일 진입점). backends 를 http://<name>:8080 으로 프록시한다(ALPHA-294·301).
-  #   widget→widget-api · console→tenant-console-api · admin→super-admin-api
+  #   console→tenant-console-api · admin→super-admin-api
   gateway:
     build:
       context: ./src
       dockerfile: apps/gateway/Dockerfile
     container_name: edge-gateway
     depends_on:
-      widget-api:
-        condition: service_started
       tenant-console-api:
         condition: service_started
       super-admin-api:
         condition: service_started
     ports:
-      - "8080:8080" # 로컬 단일 진입점(3라우트 프록시)
+      - "8080:8080" # 로컬 단일 진입점(2라우트 프록시)
 
 volumes:
   edge-postgres-data:

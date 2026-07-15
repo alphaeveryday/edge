@@ -55,7 +55,7 @@ git status --short
 
 **조건부 각도 (변경 영역이 켜질 때만)**
 - **E. 스키마 계약** (`libs/schema` 변경 **또는 DB 쓰기 코드**(리포지토리·`persist`·마트 적재 등) 변경 시) — 스키마 변경에 `generated` 모델 동반 갱신이 빠졌는가(README Git 원칙). 마이그레이션이 expand-contract(파괴적 DDL을 한 번에)를 어겼는가. **단일 writer 위반**([ADR-0005](../../../docs/adr/0005-db-as-contract.md)·[docs/implementation.md](../../../docs/implementation.md) §4) — 한 테이블을 소유 모듈 밖에서 INSERT/UPDATE/DELETE 하는가. 이 위반은 스키마 diff 가 아니라 **앱 DB 접근 코드**에서 터지므로, 스키마 변경이 없어도 DB 쓰기 코드가 바뀌면 검사한다.
-- **F. 신뢰경계** (`gateway`·`*-api` 변경 시) — `widget-api`에 쓰기 표면이 생겼는가(읽기 전용·좁은 표면이어야 함). `gateway` 라우트 필터가 fail-open 인가(fail-closed 여야, [ADR-0006](../../../docs/adr/0006-gateway-single-edge.md)). cross-tenant 누수([ADR-0008](../../../docs/adr/0008-super-admin-console.md)). (시크릿 커밋은 위 '항상' 각도가 영역 무관하게 스캔한다.)
+- **F. 신뢰경계** (`gateway`·`*-api`·Sync 채널·Serving 코드 변경 시) — 하이브리드 경계([ADR-0010](../../../docs/adr/0010-hybrid-onprem-pivot.md)·[docs/context.md](../../../docs/context.md)) 위반을 본다: ① **Sync 채널** — Cloud→온프렘 Push 경로가 생겼는가(항상 온프렘 outbound Pull만). 테넌트 식별을 mTLS 인증서 바인딩 밖(파라미터·헤더)에서 받는가, 요청별 인증서-테넌트 인가 검증을 우회하는가([sync-auth.md](../../../docs/contracts/sync-auth.md)). ② **Serving API** — Published 외 상태(REVIEW_REQUIRED·BLOCKED·UNPUBLISHED 등)가 응답에 노출되는가. 원본 고객 ID/계좌를 받는 표면이 생겼는가(고객 식별 해시만 허용). ③ **데이터 거주지** — Cloud 저장 금지 데이터(고객 ID·노출 이력·최종 노출 문구 등, [data-residency.md](../../../docs/domain/data-residency.md))를 Cloud 쪽 코드가 저장하는가. ④ `gateway` 라우트 필터가 fail-open 인가(fail-closed 여야). cross-tenant 누수([ADR-0008](../../../docs/adr/0008-super-admin-console.md)). (시크릿 커밋은 위 '항상' 각도가 영역 무관하게 스캔한다.)
 - **G. 레이크·파이프라인** (`data-pipeline`·`analysis-engine` 변경 시) — 파티션 경로를 `lake/storage.py` 빌더(경로 규약 SSOT) 밖에서 조립했는가. raw 존이 원본을 유실하는가(raw 는 전부 보존). "결과는 항상 collection_log" 계약과 status 시맨틱(success/partial/error/stopped/skipped)이 온전한가 — 실패를 success(0건)로 위장하지 않는가(Rule 12).
 - **H. 검증·품질 게이트 완전성** (검증·정규화·파싱·타입강제·품질 게이트 코드 변경 시. 이 코드가 diff 의 핵심이면 tier 무관하게 켠다 — 우회된 게이트는 Rule 12 blocker다) — 코드의 일이 '잘못된 데이터를 거르는 것'일 때, **malformed 입력이 실제로 드러나는지**(사유와 함께 실패) 아니면 (a) 게이트 전에 crash 하거나 (b) 통과값으로 강제되거나 (c) 게이트가 안 보는 필드로 우회해 **passed 로 인증**되는지 적대적으로 열거한다. '통과로 집계됨(records_passed 등)'이 hunt 대상이다 — 게이트가 bad data 를 조용히 인증하면 fail-loud 위반(Rule 12). 아래 최소 입력군을 실제로 대입해 각 결과를 확인(테스트에 없으면 그 자체가 후보):
   - **crash-before-gate** — 비객체/비기대 타입 입력(`null`·`[]`·스칼라·키 누락)이 `.get()`·인덱싱·언패킹에서 터져 배치 전체를 죽이는가(행 단위로 격리돼야, 한 이상치가 잡을 무너뜨리면 안 됨).
@@ -69,7 +69,7 @@ git status --short
 ## 빌드/테스트 확인
 
 변경 모듈의 빌드·테스트가 통과하는지 확인하고, 실패는 **최우선 finding**으로 올린다(Rule 12 — "통과"라 말하려면 실제로 통과해야 함). 세 런타임의 워크스페이스 루트가 모두 `src/`(settings.gradle·pnpm-workspace.yaml·pyproject.toml)이므로 **명령은 `src/` 에서** 돌린다. 런타임별:
-- JVM: `./gradlew :<apps|libs>:<모듈>:build` (앱은 `:apps:*`, 공유 라이브러리는 `:libs:*`. 예: `:apps:widget-api`·`:libs:schema`·`:libs:jvm-common`)
+- JVM: `./gradlew :<apps|libs>:<모듈>:build` (앱은 `:apps:*`, 공유 라이브러리는 `:libs:*`. 예: `:apps:tenant-console-api`·`:libs:schema`·`:libs:jvm-common`)
 - Node: 패키지 `package.json` 의 scripts 를 먼저 보고 **정의된 것만** 돌린다 — `pnpm --filter <패키지> build`·`typecheck`·`test` 중 존재하는 것. `test` 스크립트가 없는 패키지(예: tenant-console-ui)에 `test` 만 돌리면 아무 검증 없이 exit 0 이라 통과로 오인한다.
 - Python: `uv run --package <패키지> pytest` — uv 워크스페이스가 `src/pyproject.toml` 이라 반드시 `src/` 에서(레포 루트에선 pyproject 를 못 찾아 실패). uv 없으면 모듈 `.venv/bin/pytest`.
 
