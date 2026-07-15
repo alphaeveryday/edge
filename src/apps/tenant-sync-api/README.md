@@ -11,15 +11,15 @@
 
 ## 구조 (layered)
 
-`controller`(HTTP 검증·상태코드) → `service`(SyncBundleService 오케스트레이션 + BundleSerializer) → `repository`(BundleEntryRepository — 전달 레코드 저장 구조를 전제하지 않는 읽기 포트) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver).
+`controller`(HTTP 검증·상태코드) → `service`(SyncBundleService 오케스트레이션 + BundleSerializer) → `repository`(BundleEntryRepository — 전달 레코드 조회) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). 인터페이스 이음새 없이 구체 클래스 직결 — 교체는 해당 클래스를 직접 재작성한다. **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.**
 `entity` 층은 아직 없다 — 영속성이 없어서다. JDBC 리더 교체 시 entity가 함께 들어온다.
 
 ## 스텁 → 실구현 교체 지점
 
-| 스텁 | 교체 시점 | 교체물 |
+| 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `InMemoryBundleEntryRepository` (고정 시드 3건: NEW·CORRECTION·INVALIDATION) | 전달 레코드 저장 구조·fan-out 설계(영서 고도화 영역) 확정 후 | 실저장소 기반 리포지토리 + entity (+ datasource 설정, build.gradle에 JDBC 의존성) |
-| `FixedTenantResolver` (데모 테넌트 `1L` 고정) | sync-auth 티켓 | mTLS 인증서 fingerprint → 테넌트 바인딩 조회, 요청별 인가 검증 |
+| `BundleEntryRepository` (인메모리 시드 3건: NEW·CORRECTION·INVALIDATION) | 전달 레코드 저장 구조·fan-out 설계(영서 고도화 영역) 확정 후 | 경계면 테이블 DB 조회 + 조립 (+ datasource 설정, build.gradle에 JDBC 의존성, entity 도입) |
+| `TenantResolver` (데모 테넌트 `1L` 고정) | sync-auth 티켓 | mTLS 인증서 fingerprint → 테넌트 바인딩 조회, 요청별 인가 검증 |
 
 ## 실행·확인
 

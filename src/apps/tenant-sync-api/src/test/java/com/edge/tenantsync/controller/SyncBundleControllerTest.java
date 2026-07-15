@@ -1,9 +1,9 @@
 package com.edge.tenantsync.controller;
 
-import com.edge.tenantsync.repository.InMemoryBundleEntryRepository;
+import com.edge.tenantsync.repository.BundleEntryRepository;
 import com.edge.tenantsync.service.BundleSerializer;
 import com.edge.tenantsync.service.SyncBundleService;
-import com.edge.tenantsync.tenant.FixedTenantResolver;
+import com.edge.tenantsync.tenant.TenantResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,9 +30,9 @@ class SyncBundleControllerTest {
 	@BeforeEach
 	void setUp() {
 		SyncBundleService service =
-				new SyncBundleService(new InMemoryBundleEntryRepository(), new BundleSerializer());
+				new SyncBundleService(new BundleEntryRepository(), new BundleSerializer());
 		mvc = MockMvcBuilders
-				.standaloneSetup(new SyncBundleController(service, new FixedTenantResolver()))
+				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
 				.setControllerAdvice(new GlobalExceptionHandler())
 				.build();
 	}
