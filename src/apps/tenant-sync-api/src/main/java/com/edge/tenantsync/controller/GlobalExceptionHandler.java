@@ -5,8 +5,10 @@ import com.edge.common.apipayload.code.ErrorReasonDto;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
  * 예외 → 공통 응답 봉투(ApiResponse) 매핑 — jvm-common 규약의 웹 계층 글루.
@@ -20,6 +22,18 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(GeneralException.class)
 	public ResponseEntity<ApiResponse<Void>> handle(GeneralException ex) {
 		ErrorReasonDto reason = ex.getErrorReasonHttpStatus();
+		return ResponseEntity
+				.status(reason.getHttpStatus())
+				.body(ApiResponse.<Void>onFailure(reason.getCode(), reason.getMessage(), null));
+	}
+
+	/**
+	 * 파라미터 바인딩 실패(after 누락·비숫자 등) → 400. 컨트롤러 검증 이전에 터지는
+	 * 클라이언트 오류라, catch-all(500)에 삼켜지면 소비자가 자기 버그를 서버 장애로 오인한다.
+	 */
+	@ExceptionHandler({MissingServletRequestParameterException.class, MethodArgumentTypeMismatchException.class})
+	public ResponseEntity<ApiResponse<Void>> handleBadParameter(Exception ex) {
+		ErrorReasonDto reason = ErrorStatus._BAD_REQUEST.getReasonHttpStatus();
 		return ResponseEntity
 				.status(reason.getHttpStatus())
 				.body(ApiResponse.<Void>onFailure(reason.getCode(), reason.getMessage(), null));

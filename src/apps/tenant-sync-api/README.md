@@ -31,4 +31,4 @@ curl -i "localhost:8080/api/v1/sync/bundle?after=3"   # 204
 # compose 로는 루트에서: docker compose up --build tenant-sync-api (host 18083)
 ```
 
-테스트 7건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400 을 인코딩한다.
+테스트 8건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 을 인코딩한다.

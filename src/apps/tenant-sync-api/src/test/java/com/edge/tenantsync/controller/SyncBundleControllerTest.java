@@ -95,4 +95,17 @@ class SyncBundleControllerTest {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("SYNC4002"));
 	}
+
+	@Test
+	void 바인딩_실패도_500이_아니라_400이다() throws Exception {
+		// WHY: after 누락·비숫자는 컨트롤러 검증 전에 터지는 클라이언트 오류 —
+		// catch-all(500)에 삼켜지면 소비자가 자기 버그를 서버 장애로 오인한다.
+		mvc.perform(get("/api/v1/sync/bundle"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COMMON400"));
+		mvc.perform(get("/api/v1/sync/bundle").param("after", "abc"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("COMMON400"));
+	}
 }
