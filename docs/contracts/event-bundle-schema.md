@@ -40,14 +40,14 @@
 
 - 전달 멱등 키 = `(tenant_id, cursor)`. cursor 는 테넌트별 단조 증가이며 **발번 시점은 fan-out**(ADR-0021 확정).
 - 전달 레코드는 `delivery_type`(NEW/CORRECTION/INVALIDATION), 전달 본체 참조(`explanation_result_id`), CORRECTION 의 대체 대상(`target_explanation_result_id`), CORRECTION·INVALIDATION 의 `reason`(필수)을 가진다.
-- **저장 구조·fan-out 구현(outbox 물리 설계·직렬화·retention)은 영서 오너십의 고도화 영역** — 확정 시 이 문서와 마이그레이션에 기록한다. `[합의 필요]`
+- **저장 구조·fan-out 구현(물리 설계·직렬화·retention)은 영서 오너십의 고도화 영역** — 확정 시 이 문서와 마이그레이션에 기록한다. `[합의 필요]`
 - `tenant_sync_cursor.last_cursor`(BIGINT)는 이 cursor 의 소비 추적이다 — TIMESTAMPTZ watermark 는 ADR-0015가 배제한 방식(동일 시각 충돌·시계 스큐·gap 감지 불가)이라 `V202607150002`에서 정정했다.
 
 ### 게시 상태 → 전달 유형 매핑 (제안) `[합의 필요]`
 
 `publication_status`는 **Cloud 내부의 확정 상태**이지 고객 노출 상태가 아니다(고객 노출은 On-Prem 검수를 거친 `publications`가 결정 — [state-machine.md](../domain/state-machine.md)). fan-out 트리거 제안:
 
-| Cloud 전이 | outbox 전달 |
+| Cloud 전이 | 전달 유형 |
 |---|---|
 | grain 최초 `PUBLISHED` | `NEW` (게시본) |
 | 재게시 (`WITHDRAWN` → 새 행 `PUBLISHED`) | `CORRECTION` (새 게시본 + target=구 게시본) |
@@ -57,7 +57,7 @@
 
 ## Event Bundle JSON 구조
 
-번들은 outbox를 cursor 순으로 묶은 것이다. 엔트리 공통 봉투 + delivery_type별 페이로드:
+번들은 테넌트별 전달 레코드를 cursor 순으로 묶은 것이다. 엔트리 공통 봉투 + delivery_type별 페이로드:
 
 ```json
 {
