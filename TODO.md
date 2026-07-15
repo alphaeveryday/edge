@@ -15,7 +15,7 @@
 
 ## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님)
 - [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Compliance Engine)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Compliance Engine 구현의 선행 조건)
-- [ ] 온프렘 사용자 **인증 방식**(자체 계정 vs 증권사 SSO/AD) + **역할 4종 권한 매트릭스**
+- [ ] **역할 4종 권한 매트릭스** 정의 — 인증 방식은 하이브리드로 확정([adr/0025](docs/adr/0025-onprem-auth-hybrid.md)), 매트릭스만 잔여 (ALPHA-118·119 선행 조건)
 - [ ] **외부 데이터 소스 약관 확인** — 빅카인즈·DART·KIS·FMP 수집 데이터의 **상용 제품 재제공** 허용 여부. 비개발 작업 중 최대 리스크 — 늦게 발견하면 제품을 되돌려야 함
 - [ ] **GitHub 플랜/공개 여부 결정** — private+free 플랜이라 **branch protection 불가** (main 직접 push 방지·required check·CODEOWNERS 강제 전부 규율로만 유지 중, schema-validate.yml 주석 참조). Team 플랜 업그레이드 vs public 전환
 - [ ] **OSS 라이선스 방침·인벤토리** — 온프렘 배포는 고객사 라이선스 실사 대상. GPL류 의존성 확인 + NOTICE 준비 + LICENSE 파일(proprietary 명시)
