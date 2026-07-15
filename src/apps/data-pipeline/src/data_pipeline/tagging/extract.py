@@ -14,10 +14,12 @@ point-in-time 재현이 된다. 그래서 **모델은 추출만 하고 lineage �
   - 모델: doc_class 판정, event_type_code 분류, 술어·역할 추출
   - 코드: 라벨이 온톨로지 허용 집합에 드는지 검증, 결측·불량을 사유와 함께 드러내기
 
-미결(ALPHA-190 적재 선행): `document_assertion.modality_code` 는 NOT NULL 인데 여기서 안 낸다.
-스키마에 `VARCHAR(30) NOT NULL` 만 있고 **허용 어휘 정의가 레포 어디에도 없다**(CHECK·문서·ADR
-모두 없음). 어휘를 여기서 발명하면 그게 사실상 계약이 되므로 정하지 않는다 — 적재 배선 전에
-합의가 필요하다. predicate 는 온톨로지가 기본값을 주므로 같은 문제가 아니다.
+미결(어휘 계약): `document_assertion.modality_code` 는 **허용 어휘가 정의된 적이 없어**(CHECK·
+문서·ADR 도, 상류 온톨로지에도 없음) 여기서 값을 내지 않는다. 발명하면 그게 사실상 계약이
+되는데, assertion 은 PIT 재현 대상이라 어휘 확정 후 소급 백필이 비싸다. 다만 이게 적재를
+막지는 않는다 — ALPHA-361 이 스키마의 NOT NULL 을 풀어 NULL 적재를 허용한다. 어휘가 확정되면
+CHECK·NOT NULL 복원과 함께 여기서 값을 내도록 확장한다. predicate 는 온톨로지가 기본값을 주므로
+같은 문제가 아니다.
 
 `complete_fn` 은 주입받는다 — 이 모듈은 어느 LLM 벤더인지 모른다. 호출부가 (system, user)
 → 응답 문자열 callable 을 넘긴다. 벤더 배선·모델 선택은 이 모듈의 관심사가 아니고, 단위
