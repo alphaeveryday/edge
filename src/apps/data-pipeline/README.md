@@ -21,8 +21,10 @@
 > (정체성 blocking·비중/주식수/평가금액은 참고필드로 범위 경고) + quality_log + 통과 행의
 > `canonical/holdings/etf_holdings` (market,etf_id,constituent,as_of_date) 멱등 병합 적재까지
 > 완료했다(`normalize-etf`, ALPHA-342·343). KRX 해외기초 ETF 의 대시(-) 비중은 null 로 통과시켜
-> 구성종목을 보존한다. **뉴스 이벤트 태깅(피처)** 은 기사(제목+리드)에서 문서가 주장하는 사건을
-> 온톨로지 라벨로 뽑는 라이브러리까지 완료했다(`tagging/`, ALPHA-138) — 스텝·적재 배선은 후속.
+> 구성종목을 보존한다. **뉴스 이벤트 태깅(Step3, 피처)** 은 기사(제목+리드)에서 문서가 주장하는
+> 사건을 온톨로지 라벨로 뽑아(`tagging/`, ALPHA-138) `feature/news/assertions` 에 article_id 멱등
+> 병합 적재까지 완료했다(`tag-news`, ALPHA-365). **RDB 적재·엔티티 해소는 후속**(ALPHA-190) —
+> `entity_id` 는 NULL 로 두고 `text` 만 남긴다.
 
 ## 실행
 
@@ -148,6 +150,20 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # --input-run-id 로 특정 수집 런만 재검증(미지정=raw etf 전체, 멱등; 스코프는 canonical 안 씀).
 uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 #   특정 런만: ... run normalize-etf --input-run-id 20260701T000000Z
+
+# 뉴스 이벤트 태깅(Step3, 피처) — canonical 뉴스(language=ko)를 LLM 으로 태깅해
+# feature/news/assertions 에 article_id 멱등 병합. ko 만 태깅한다(프롬프트가 한국 금융 뉴스
+# 전용 — 영어 기사에 씌우면 품질이 조용히 무너진다).
+#
+# **이미 태깅된 기사는 건너뛴다** — LLM 이 비싸서만이 아니라, 다시 돌리면 값이 흔들려 PIT
+# 재현이 깨지기 때문이다. tagger_version·ontology_version 이 바뀔 때만 재태깅한다. 단
+# llm_error(호출 자체 실패)는 판정이 아니라서 다음 런이 재시도한다.
+#
+# --from/--to 는 여기선 **태깅 대상 published_date 파티션**을 좁히는 창이다(raw 수집 창이
+# 아니고, 미지정은 증분 기본창이 아니라 전체). --limit 은 이번 런에서 새로 LLM 을 부를 기사
+# 수 상한 — 창·limit 이 곧 비용 통제다.
+LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50
+#   기간 지정: ... run tag-news --from 2026-07-01 --to 2026-07-08
 ```
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
@@ -295,6 +311,18 @@ settings.targets.keywords            # ["금리", ...]
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
   `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
   것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님). 본문 전문 크롤은 범위 밖이다.
+- **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
+  에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
+  파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제). **canonical 이 아니라 feature
+  인 이유**: 여기 값은 벤더 원본의 결정론적 정규화가 아니라 **LLM 추론 결과**라 재실행이 값을 바꿀
+  수 있고 호출마다 돈이 든다 — raw 에서 언제든 무료로 재생성되는 canonical 과 라이프사이클이 다르다.
+  그래서 **한 번 만든 건 다시 만들지 않는다**(`tagger_version`·`ontology_version` 이 바뀔 때만 재태깅;
+  단 `llm_error` 는 '물어보지도 못했다'는 뜻이라 다음 런이 재시도한다 — 일시 장애가 기사를 영구히
+  누락시키지 않게). **행은 기사 1건 = 1행**이다(assertion 1건=1행이 아니다) — 사건 0건인 기사(시황·
+  논평 등 다수)가 행을 잃으면 '태깅했는데 사건이 없었다'와 '태깅한 적 없다'가 구분되지 않는다.
+  `assertions`·`reasons` 는 JSON 문자열(canonical 뉴스 mentions 와 같은 관례), `status` 는 기사별로
+  무슨 일이 있었는지(ok·no_title·llm_error·llm_unparseable·bad_doc_class). `entity_id` 는 NULL —
+  엔티티 해소는 entity 마스터(RDB)를 읽어야 해 적재(ALPHA-190)와 같은 소관이고 `text` 가 그 입력이다.
 - **canonical(공시 공급계약, 정제 Step2)** — `canonical/disclosures/supply_contract_fact/report_date=…/part-*.parquet`
   에 게이트 통과 fact 를 **rcept_no(14자리 접수번호=문서키) 키로 멱등 병합**. raw 와 달리 run_id·
   source_vendor 파티션이 없다(멱등). 파티션은 `report_date`(rcept_dt, 공시 접수일) 하나, rcept_no 는
