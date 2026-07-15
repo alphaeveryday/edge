@@ -88,6 +88,31 @@ def test_normalize_etf_dispatches_step(tmp_path, monkeypatch):
     assert called == {"input_run_id": "R11"}
 
 
+def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
+    # WHY: KRX getJsonData 는 응답에 **10초를 넘게** 걸린다 — 2026-07-15 라이브 실측에서 같은
+    #      세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에 성공했다. 기본값
+    #      (PoliteClient timeout=10.0)을 그대로 쓰면 KRX ETF 수집이 **100% 실패**한다(ALPHA-368
+    #      — 실제로 머지·배포된 채 아무도 실행하지 않아 잠복했다). 이 값을 실측 지연 아래로
+    #      되돌리면 수집이 조용히 전량 실패로 돌아가므로 여기서 고정한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    measured_latency_sec = 12.4  # 라이브 실측 응답 시간
+    assert run_mod.KRX_ETF_TIMEOUT_SEC > measured_latency_sec
+
+    captured = {}
+
+    class _Spy(run_mod.KrxEtfSource):
+        def __init__(self, config, client):
+            captured["timeout"] = client.timeout
+            super().__init__(config, client)
+
+    monkeypatch.setattr(run_mod, "KrxEtfSource", _Spy)
+    monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
+    assert main(["ingest-raw-etf", "--source", "krx"]) == 0
+    assert captured["timeout"] > measured_latency_sec, "KRX 수집이 타임아웃으로 전량 실패한다"
+
+
 def test_kis_rejects_to_without_from(monkeypatch):
     # WHY: KIS inquire-daily 는 시작일(FID_INPUT_DATE_1)이 필수다 — --to 만 주면 빈 시작일로
     #      전 종목이 KIS 오류가 되어 무의미한 전량 실패가 된다. 한쪽만 준 창은 API 호출 전에
