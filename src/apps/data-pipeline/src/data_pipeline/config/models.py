@@ -273,6 +273,36 @@ class StorageConfig(BaseModel):
         return self
 
 
+class DbConfig(BaseModel):
+    """Cloud Event Store(Postgres) 접속. 적재 스텝(load-*)만 쓴다.
+
+    스토리지(StorageConfig)와 같은 결의 **인프라 설정**이라 같은 네임스페이스에 둔다:
+        DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=...
+
+    비밀번호는 **파일·설정에 두지 않는다** — env 주입만 허용한다(배포는 RDS 관리형 시크릿을
+    task 로 주입, 로컬은 SSM 포트포워딩 + 시크릿에서 꺼내 넣는다).
+
+    `sslmode` 기본 require — dev RDS 는 private 서브넷이지만 평문으로 흘릴 이유가 없다
+    (analysis-engine upload_ff5_rds.py 도 같은 전제).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: NonBlankStr = "127.0.0.1"
+    port: int = 5432
+    name: NonBlankStr = "edge"
+    user: NonBlankStr = "edge"
+    password: str | None = None
+    sslmode: NonBlankStr = "require"
+
+    @model_validator(mode="after")
+    def _require_password(self) -> DbConfig:
+        # 비밀번호 없이 부팅하면 첫 커넥션에서야 죽는다 — 로드 시점에 fail loud(StorageConfig 동형).
+        if not (self.password or "").strip():
+            raise ValueError("db.password 가 없다 — DATA_PIPELINE_DB__PASSWORD 로 주입한다")
+        return self
+
+
 class CollectionTargets(BaseModel):
     """수집 대상. 설정만 바꾸면 fetcher의 수집 대상이 바뀐다(코드 수정 없이)."""
 

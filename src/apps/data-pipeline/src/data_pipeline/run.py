@@ -29,6 +29,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
+from .db import db_config_from_env
 from .lake import make_storage
 from .sources import (
     BigKindsNewsSource,
@@ -44,6 +45,7 @@ from .sources import (
 )
 from .steps import (
     ingest_price_raw,
+    load_instruments,
     ingest_raw,
     ingest_raw_disclosure,
     ingest_raw_etf,
@@ -93,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "tag-news"],
+                 "normalize-etf", "tag-news", "load-instruments"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -137,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":
         return normalize_etf.run(storage, run_id, args.input_run_id)
+
+    # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
+    # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
+    if args.step == "load-instruments":
+        return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db))
 
     # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라
     # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=전체). 비용이 LLM 호출 수에
