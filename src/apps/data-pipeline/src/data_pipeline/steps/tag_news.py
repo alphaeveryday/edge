@@ -11,8 +11,11 @@ canonical 뉴스(`language=ko`)를 읽어 기사마다 `extract_assertions` 를 
 라이프사이클이 다르므로 존을 가른다.
 
 **재태깅하지 않는다**: 이미 태깅된 기사는 건너뛴다. LLM 이 비싸서만이 아니라, 같은 기사를 다시
-돌리면 값이 흔들려 point-in-time 재현이 깨지기 때문이다. `tagger_version`·`ontology_version` 이
-바뀌면 그때만 다시 돈다 — 그건 '다른 태거의 판정'이라 새로 만드는 게 맞다.
+돌리면 값이 흔들려 point-in-time 재현이 깨지기 때문이다. 다시 도는 건 그 판정이 더는 이 기사를
+설명하지 못할 때뿐이고, 그 축은 셋이다 — `tagger_version`·`ontology_version`(다른 태거의 판정) ·
+**입력 지문**(다른 텍스트에 대한 판정: normalize_news 가 같은 URL 재적재에서 최신 fetched_at 의
+title·lead 를 대표로 삼아 **정정을 반영**하므로 canonical 텍스트는 바뀔 수 있다) · `llm_error`
+status(판정이 아니라 '물어보지도 못했다'는 뜻).
 
 **ko 만 태깅한다**: 프롬프트가 한국 금융 뉴스 전용("너는 한국 금융 뉴스에서…")이다. 영어(FMP)
 기사에 이 프롬프트를 씌우면 조용히 품질이 무너지므로, 언어 파티션에서 아예 고른다. 영어는 별도
@@ -27,6 +30,7 @@ entity_id 는 채우지 않는다 — 모델은 사내 식별자를 모르고, �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections import Counter
@@ -57,6 +61,7 @@ _FEATURE_COLUMNS = (
     "article_id",
     "published_at",
     "title",
+    "input_fingerprint",
     "doc_class",
     "status",
     "assertions",
@@ -65,6 +70,22 @@ _FEATURE_COLUMNS = (
     "tagger_version",
     "tagged_at",
 )
+
+
+def _input_fingerprint(article: dict) -> str:
+    """이 assertion 이 **어느 텍스트에서 나왔는지**의 지문 — 프롬프트에 들어가는 값만 해싱한다.
+
+    canonical 은 같은 article_id 라도 title·lead_text 가 **바뀔 수 있다** — normalize_news 가
+    같은 URL 재적재에서 최신 fetched_at 행의 스칼라를 대표로 삼아 정정을 반영하기 때문이다.
+    버전만 보고 건너뛰면 제목이 정정돼도 옛 텍스트 기반 assertion 이 그대로 남아, 정제가 반영한
+    정정이 태깅에서 조용히 사라진다.
+
+    fetched_at 은 **일부러 넣지 않는다** — 재수집으로 fetched_at 만 갱신되고 텍스트가 같으면
+    같은 답이 나올 게 뻔한데 LLM 을 다시 부르는 건 돈만 태운다. 지문은 내용에만 걸린다.
+    """
+    parts = [article.get("title"), article.get("lead_text"), article.get("published_at")]
+    payload = "\x1f".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _feature_schema():
@@ -96,12 +117,14 @@ def _write_parquet_rows(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def _is_current(row: object) -> bool:
-    """이 feature 행이 **현재 태거·온톨로지의 유효한 판정**인가 — 그러면 재태깅하지 않는다.
+def _is_current(row: object, fingerprint: str) -> bool:
+    """이 feature 행이 **현재 태거·온톨로지가 현재 텍스트에 내린 유효한 판정**인가 — 그러면
+    재태깅하지 않는다. 세 축이 전부 맞아야 현재다.
 
-    비객체·결측은 현재 아님으로 본다(다시 태깅). 버전이 다르면 다른 태거의 판정이라 새로 만든다.
+    비객체·결측은 현재 아님으로 본다(다시 태깅). 버전이 다르면 다른 태거의 판정이고, 지문이
+    다르면 **다른 텍스트에 대한** 판정이라 이 기사의 현재 내용을 설명하지 못한다.
 
-    status 가 RETRYABLE 이면 버전이 같아도 현재 아님이다 — llm_error 는 '이 기사는 이렇다'는
+    status 가 RETRYABLE 이면 나머지가 같아도 현재 아님이다 — llm_error 는 '이 기사는 이렇다'는
     판정이 아니라 '물어보지도 못했다'는 뜻이라, 그걸 완료로 캐시하면 일시적 장애 한 번이 그
     기사를 영구히 태깅 대상에서 지운다.
     """
@@ -112,6 +135,7 @@ def _is_current(row: object) -> bool:
     return (
         row.get("tagger_version") == TAGGER_VERSION
         and row.get("ontology_version") == ontology_version()
+        and row.get("input_fingerprint") == fingerprint
     )
 
 
@@ -155,11 +179,12 @@ def _read_feature(storage: Storage, language: str, published_date: str) -> list[
     return rows
 
 
-def _feature_row(article: dict, result: dict, tagged_at: str) -> dict:
+def _feature_row(article: dict, result: dict, tagged_at: str, fingerprint: str) -> dict:
     return {
         "article_id": article.get("article_id"),
         "published_at": article.get("published_at"),
         "title": article.get("title"),
+        "input_fingerprint": fingerprint,
         "doc_class": result.get("doc_class"),
         "status": result.get("status"),
         "assertions": json.dumps(result.get("assertions") or [], ensure_ascii=False),
@@ -225,7 +250,8 @@ def run(
                     continue
                 read += 1
                 article_id = article.get("article_id")
-                if _is_current(by_id.get(article_id)):
+                fingerprint = _input_fingerprint(article)
+                if _is_current(by_id.get(article_id), fingerprint):
                     skipped += 1
                     continue
                 if limit is not None and tagged >= limit:
@@ -237,7 +263,7 @@ def run(
                 status_counts[result.get("status")] += 1
                 for reason in result.get("reasons") or []:
                     reason_counts[str(reason)] += 1
-                merged[article_id] = _feature_row(article, result, tagged_at)
+                merged[article_id] = _feature_row(article, result, tagged_at, fingerprint)
                 changed = True
 
             if not changed:

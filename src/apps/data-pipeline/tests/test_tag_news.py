@@ -216,6 +216,44 @@ def test_transient_llm_failure_is_retried_next_run(tmp_path):
     assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "ok"
 
 
+def test_corrected_article_text_forces_retag(tmp_path):
+    """normalize_news 는 같은 URL 재적재에서 최신 fetched_at 의 title·lead 를 대표로 삼아
+    **정정을 반영한다**(그게 그 스텝의 의도된 기능이다). 태깅이 버전만 보고 건너뛰면 정정된
+    제목인데 옛 텍스트 기반 assertion 이 남아, 정제가 반영한 정정이 태깅에서 조용히 사라진다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1", title="삼성전자, 공급계약 체결")])
+    first: list = []
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first)) == 0
+    assert len(first) == 1
+
+    # 같은 article_id 인데 제목이 정정됐다(normalize_news 가 그렇게 덮어쓴 상황).
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1", title="[정정] 삼성전자, 공급계약 해지")])
+    second: list = []
+    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second)) == 0
+    assert len(second) == 1, "텍스트가 정정됐는데 재태깅하지 않았다"
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert len(rows) == 1
+    assert rows[0]["title"] == "[정정] 삼성전자, 공급계약 해지"
+
+
+def test_recollection_without_text_change_does_not_call_llm(tmp_path):
+    """지문은 **내용**에만 걸린다 — 재수집으로 fetched_at 만 갱신되고 텍스트가 같으면 같은 답이
+    나올 게 뻔한데 LLM 을 다시 부르는 건 돈만 태운다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete([])) == 0
+
+    # 같은 텍스트로 canonical 을 다시 썼다(재수집·재정제).
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    calls: list = []
+    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
+    assert calls == [], "텍스트가 같은데 재태깅했다 — 비용만 든다"
+
+
 def test_model_level_rejection_is_not_retried_every_run(tmp_path):
     """반면 모델이 답을 했는데 계약을 어긴 건(unparseable) 매 런 재호출하면 돈만 태운다.
 
