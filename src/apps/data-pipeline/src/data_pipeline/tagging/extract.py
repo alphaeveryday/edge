@@ -210,6 +210,12 @@ def extract_assertions(article: dict, *, complete_fn) -> dict:
             reasons.extend(event_reasons)
             if assertion is not None:
                 assertions.append(assertion)
+        if not assertions:
+            # EVENT 라 해놓고 사건을 못 낸 것도 자기모순이다(아래 반대 방향과 대칭).
+            # 골든 150건 eval 에서 이 조합 2건이 **둘 다** 티처 기준 비-사건이었다 — 즉
+            # 오탐 EVENT 의 신호다. 라벨을 코드가 뒤집진 않는다(분류는 모델 몫, Rule 5) —
+            # 사유로 남겨 다운스트림·집계가 쓰게 한다.
+            reasons.append("event_doc_class_without_events")
     elif parsed.get("events"):
         # 비-EVENT 인데 사건을 냈다 = 모델 자기모순. 사건은 안 쓰되 사유로 드러낸다.
         reasons.append("events_on_non_event_doc_class")

@@ -4,8 +4,12 @@
 수동으로 돌려 회귀를 본다. 단위 테스트(tests/test_tagging.py)는 계약 위반 처리를 검증하고,
 이 스크립트는 정확도를 잰다 — 둘은 다른 질문에 답한다.
 
-  DATA_PIPELINE_LLM__API_KEY=... uv run --package data-pipeline \
+  LLM_API_KEY=... uv run --package data-pipeline \
     python scripts/eval_tagging.py --gold <ko_gold_title.jsonl> --sample 150
+
+env 는 analysis-engine 의 `analyze_daily.py` 가 이미 쓰는 `LLM_API_KEY`/`LLM_BASE_URL`/
+`LLM_MODEL` 관례를 따른다(Rule 11) — 수집 설정 네임스페이스(`DATA_PIPELINE_*`)와 섞지 않는다.
+LLM 은 수집 소스가 아니라 `load_settings()` 모델에 안 들어간다.
 
 ⚠️ **여기서 나오는 정확도는 정답률이 아니라 티처 일치율(teacher-relative fidelity)이다.**
 골든 라벨(`source: ko_teacher_v1`)은 사람이 아니라 teacher LLM 이 붙였다 — alphamale 문서도
@@ -22,14 +26,14 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import os
 import pathlib
 import random
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from data_pipeline.tagging import extract  # noqa: E402
-from data_pipeline.tagging.llm import openai_compatible_complete_fn  # noqa: E402
+from data_pipeline.tagging import extract, llm  # noqa: E402
 
 
 def main() -> int:
@@ -46,7 +50,15 @@ def main() -> int:
         # 실제 유입 분포를 닮는다. 시드 고정으로 프롬프트 비교가 같은 표본 위에서 이뤄진다.
         rows = random.Random(args.seed).sample(rows, args.sample)
 
-    complete_fn = openai_compatible_complete_fn()
+    api_key = os.environ.get("LLM_API_KEY")
+    if not api_key:
+        print("LLM_API_KEY 미설정 — eval 은 실호출이 필요하다", file=sys.stderr)
+        return 2
+    complete_fn = llm.openai_compatible_complete_fn(
+        api_key=api_key,
+        base_url=os.environ.get("LLM_BASE_URL") or llm.DEFAULT_BASE_URL,
+        model=os.environ.get("LLM_MODEL") or llm.DEFAULT_MODEL,
+    )
     gate_hit = type_hit = type_total = 0
     statuses: collections.Counter = collections.Counter()
     reasons: collections.Counter = collections.Counter()

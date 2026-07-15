@@ -4,13 +4,13 @@
 만든다 — 경계를 여기 하나로 몰아, 벤더를 바꿔도 추출·검증 로직은 안 건드린다.
 
 **OpenAI 호환 규약만 쓴다.** DeepSeek·OpenAI 를 포함한 주요 벤더가 같은 `POST
-{base_url}/chat/completions` 형태를 제공하므로, 벤더별 SDK 를 붙이는 대신 base_url·model 을
-env 로 바꾼다(신규 의존성 0 — stdlib urllib). analysis-engine 의 `analyze_daily.py` 가 이미
-쓰는 `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` 관례를 그대로 따른다(Rule 11).
+{base_url}/chat/completions` 형태를 제공하므로, 벤더별 SDK 를 붙이는 대신 base_url·model 만
+바꾼다(신규 의존성 0 — stdlib urllib).
 
-  DATA_PIPELINE_LLM__BASE_URL=https://api.deepseek.com/v1
-  DATA_PIPELINE_LLM__MODEL=deepseek-chat
-  DATA_PIPELINE_LLM__API_KEY=...      # 커밋 금지 — env·시크릿으로만 주입
+**설정은 인자로만 받는다** — 이 모듈은 env 를 안 읽는다. `DATA_PIPELINE_*` 는 수집 설정
+(`load_settings()`)의 네임스페이스인데 LLM 은 수집 소스가 아니라 거기 안 들어간다. 그렇다고
+같은 접두어로 env 를 직접 읽으면 설정 계약인 척하는 가짜 키가 된다 — 호출부가 자기 방식으로
+값을 구해 넘기고, 여기선 순수 어댑터로 남는다(테스트도 env 없이 돈다).
 
 호출 실패는 여기서 삼키지 않고 예외로 올린다 — 기사 단위 격리는 extract 가 하고(status=
 llm_error), 조용한 폴백은 태깅 커버리지 저하를 숨긴다(Rule 12).
@@ -19,39 +19,34 @@ llm_error), 조용한 폴백은 태깅 커버리지 저하를 숨긴다(Rule 12)
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 
-# OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 env 로만 한다(코드 수정 불필요).
+# OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 인자로 한다(코드 수정 불필요).
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 # 추출은 창작이 아니다 — 같은 기사에 같은 라벨이 나와야 재현·집계가 된다.
 DEFAULT_TEMPERATURE = 0.0
 
 
-def _env(name: str, default: str | None = None) -> str | None:
-    return os.environ.get(f"DATA_PIPELINE_LLM__{name}") or default
-
-
 def openai_compatible_complete_fn(
     *,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
+    api_key: str,
+    base_url: str = DEFAULT_BASE_URL,
+    model: str = DEFAULT_MODEL,
     timeout: float = 60.0,
 ):
-    """(system, user) → 응답 문자열 callable. 키가 없으면 즉시 예외(조용한 무동작 금지).
+    """(system, user) → 응답 문자열 callable. 키가 비면 즉시 예외(조용한 무동작 금지).
 
     `response_format=json_object` 를 요청한다 — 추출 계약이 JSON 이라 벤더가 지원하면 형식
     위반을 벤더 쪽에서 막는 게 싸다. 지원 안 하는 벤더면 무시되고, 그땐 extract 의
     llm_unparseable 게이트가 잡는다(이중 방어).
     """
-    key = api_key or _env("API_KEY")
+    key = api_key
     if not key:
-        raise RuntimeError("DATA_PIPELINE_LLM__API_KEY 미설정 — 태깅 LLM 호출 불가")
-    url = f"{(base_url or _env('BASE_URL', DEFAULT_BASE_URL)).rstrip('/')}/chat/completions"
-    model_name = model or _env("MODEL", DEFAULT_MODEL)
+        raise RuntimeError("태깅 LLM api_key 가 비었다 — 호출 불가")
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    model_name = model
 
     def complete(system: str, user: str) -> str:
         body = json.dumps({

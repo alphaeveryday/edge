@@ -219,14 +219,13 @@ def test_argument_without_text_is_dropped():
 
 # ── LLM 어댑터 ────────────────────────────
 
-def test_missing_key_fails_loud_not_silently_disabled(monkeypatch):
+def test_missing_key_fails_loud_not_silently_disabled():
     # WHY: 키가 없을 때 조용히 no-op 하면 태깅 0건이 '사건이 없었다'로 위장된다. 배선 실수는
     # 즉시 터져야 한다(Rule 12).
     from data_pipeline.tagging import llm
 
-    monkeypatch.delenv("DATA_PIPELINE_LLM__API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="API_KEY"):
-        llm.openai_compatible_complete_fn()
+    with pytest.raises(RuntimeError, match="api_key"):
+        llm.openai_compatible_complete_fn(api_key="")
 
 
 def test_malformed_200_response_is_not_mistaken_for_empty(monkeypatch):
@@ -246,3 +245,14 @@ def test_malformed_200_response_is_not_mistaken_for_empty(monkeypatch):
     fn = llm.openai_compatible_complete_fn(api_key="k")
     with pytest.raises(RuntimeError, match="응답 형태 이상"):
         fn("s", "u")
+
+
+def test_event_doc_class_without_events_is_flagged():
+    # WHY: EVENT 라 해놓고 사건을 못 내는 것도 자기모순이다 — 반대 방향(비-EVENT 인데 사건
+    # 냄)만 잡으면 비대칭이다. 골든 eval 에서 이 조합 2건이 둘 다 티처 기준 비-사건이었다:
+    # 오탐 EVENT 의 신호라 집계에 남아야 한다. 단 라벨을 코드가 뒤집지는 않는다(Rule 5).
+    result = extract.extract_assertions(_article(), complete_fn=_fn(
+        {"doc_class": "EVENT", "events": []}))
+    assert result["status"] == "ok"
+    assert result["doc_class"] == "EVENT"
+    assert "event_doc_class_without_events" in result["reasons"]
