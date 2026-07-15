@@ -60,6 +60,13 @@ from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_comp
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
 
+# KRX getJsonData(구성종목 PDF) 응답 타임아웃 — **기본 10초로는 100% 실패한다**(ALPHA-368).
+# 2026-07-15 라이브 실측: 같은 세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에
+# 8190바이트 성공. 이 엔드포인트는 조회 때마다 집계를 도는지 원래 10초를 넘는다 — 느린 게 성질이다.
+# 전역 기본값(PoliteClient timeout=10.0)은 안 건드린다: 다른 소스는 10초로 충분하고, 전역을 올리면
+# 진짜로 죽은 엔드포인트를 기다리는 시간만 길어진다(Rule 3 — 느린 건 KRX 하나다).
+KRX_ETF_TIMEOUT_SEC = 45.0
+
 # 증분 기본 창의 소급 일수 — 어제부터(런 간 경계 겹침을 dedup 이 흡수하도록) 오늘까지.
 DEFAULT_LOOKBACK_DAYS = 1
 # 가격 증분은 소급을 넉넉히 둔다 — 주말·공휴일엔 EOD 가 없어 소급 1일이면 월요일 런이
@@ -179,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
         elif vendor == "krx":
             if settings.krx_etf is None:
                 raise SystemExit("krx_etf.source 설정이 없다 — sources.toml 확인")
-            etf_source = KrxEtfSource(settings.krx_etf.source, PoliteClient())
+            etf_source = KrxEtfSource(
+                settings.krx_etf.source, PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC)
+            )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")
         return ingest_raw_etf.run(settings, storage, etf_source, run_id)
