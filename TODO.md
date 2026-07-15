@@ -38,6 +38,7 @@
 - [ ] Serving API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
+- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Serving API 호출 렌더링. 구 widget-ui 부활 아님 — Serving API 계약의 데모 소비자 (데모 토폴로지와 연동)
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속
