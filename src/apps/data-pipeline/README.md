@@ -23,8 +23,11 @@
 > 완료했다(`normalize-etf`, ALPHA-342·343). KRX 해외기초 ETF 의 대시(-) 비중은 null 로 통과시켜
 > 구성종목을 보존한다. **뉴스 이벤트 태깅(Step3, 피처)** 은 기사(제목+리드)에서 문서가 주장하는
 > 사건을 온톨로지 라벨로 뽑아(`tagging/`, ALPHA-138) `feature/news/assertions` 에 article_id 멱등
-> 병합 적재까지 완료했다(`tag-news`, ALPHA-365). **RDB 적재·엔티티 해소는 후속**(ALPHA-190) —
-> `entity_id` 는 NULL 로 두고 `text` 만 남긴다.
+> 병합 적재까지 완료했다(`tag-news`, ALPHA-365) — `entity_id` 는 NULL 로 두고 `text` 만 남긴다
+> (엔티티 해소·assertion RDB 적재는 후속, ALPHA-190).
+> **종목 마스터 적재(Step4, RDB)** 는 canonical ETF 구성종목을 Cloud Event Store 의
+> `entity`/`actor`/`company_profile`/`instrument`/`equity_profile` 로 멱등 적재한다
+> (`load-instruments`, ALPHA-372) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
 
 ## 실행
 
@@ -164,7 +167,30 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 # 수 상한 — 창·limit 이 곧 비용 통제다.
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50
 #   기간 지정: ... run tag-news --from 2026-07-01 --to 2026-07-08
+
+# 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일**을 읽어
+# entity/actor/company_profile/instrument/equity_profile 을 만든다. 이 저장소가 Cloud Event
+# Store 48테이블에 쓰는 첫 경로다.
+#
+# 멱등: 자연키 (market_code, ticker) 로 찾고 없을 때만 새 ULID 를 발번한다(ADR-0027) — 재실행이
+# ID 를 바꾸면 그 ID 를 참조하던 FK 가 전부 끊긴다. MIC 없는 행(원화현금)은 instrument.market_code
+# 가 NOT NULL 이라 스키마 자신의 규칙으로 빠진다.
+#
+# DB 설정은 DATA_PIPELINE_DB__* (스토리지와 같은 인프라 네임스페이스). 비밀번호는 env 주입만.
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-instruments
 ```
+
+> **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
+> 포트포워딩으로 터널을 뚫는다(선례: `analysis-engine/upload_ff5_rds.py` — "through the bastion
+> tunnel"). 비밀번호는 RDS 관리형 시크릿(`rds!db-…`)에서 꺼내 env 로 넣는다.
+> ```bash
+> aws ssm start-session --target <bastion-instance-id> \
+>   --document-name AWS-StartPortForwardingSessionToRemoteHost \
+>   --parameters '{"host":["<rds-endpoint>"],"portNumber":["5432"],"localPortNumber":["15432"]}'
+> ```
+> 배포 실행은 베스천이 필요 없다 — ECS 태스크가 VPC 안에서 돌고 `edge-dev-pipeline-task` SG 가
+> 이미 RDS 5432 를 허용한다.
 
 > **수집 날짜창** — FMP `/stable/news/stock` 은 `from`/`to`(날짜창)·`page`(페이지네이션)를
 > 지원한다. 어댑터는 심볼별로 창을 페이지 끝까지 순회해 고volume 날에도 누락이 없다.

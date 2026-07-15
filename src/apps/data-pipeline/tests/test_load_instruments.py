@@ -200,3 +200,60 @@ def test_db_config_requires_password():
     """비밀번호 없이 부팅해 첫 커넥션에서야 죽으면 적재 런이 늦게 실패한다 — 로드 시점 fail-loud."""
     with pytest.raises(Exception):
         DbConfig()
+
+
+def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
+    """DB 가 터지면 트레이스백으로 죽는 게 아니라 **비0 종료 + 로그**로 드러나야 한다.
+
+    안 그러면 이 런이 뭘 했는지 사후에 알 수 없다(Rule 12 — 결과는 항상 로그, 형제 정제
+    스텝과 같은 규약). 그리고 롤백된 시장의 created 를 로그가 만들었다고 주장하면 안 된다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _boom(config):
+        raise RuntimeError("DB 연결 끊김")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(load_instruments, "connect", _boom)
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 1, "실패가 성공으로 위장됐다"
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    assert len(keys) == 1, "실패했는데 로그가 안 남았다"
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["exit_code"] == 1
+    assert log["failures"][0]["reasons"] == ["load_error"]
+    assert log["created"] == 0, "롤백됐는데 만들었다고 로그가 주장한다"
+    assert log["created_rows"] == []
+
+
+def test_partial_failure_does_not_claim_created_rows(tmp_path, monkeypatch):
+    """중간에 터지면 그 시장은 통째로 롤백된다 — 앞서 넣은 것도 없던 일이 된다.
+    로그의 created 가 롤백된 행을 세면 다음 사람이 DB 에 있다고 믿는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"), _holding("000660", "SK하이닉스"),
+    ])
+
+    conn = _FakeConn()
+    calls = {"n": 0}
+    orig = conn.cursor
+
+    def flaky_cursor():
+        calls["n"] += 1
+        if calls["n"] > 4:  # 첫 종목(6쿼리) 처리 중 터뜨린다
+            raise RuntimeError("디스크 꽉 참")
+        return orig()
+
+    conn.cursor = flaky_cursor
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 1
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["created"] == 0
+    assert log["created_rows"] == []

@@ -127,6 +127,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = 0
     created_rows: list[dict] = []
+    failures: list[dict] = []
     exit_code = 0
 
     for market in LOADED_MARKETS:
@@ -155,21 +156,35 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             logger.info("적재 대상 없음: market=%s", market)
             continue
 
-        with connect(db) as conn:
-            have = _existing_tickers(conn, {m for m, _ in all_rows})
-            for (mic, ticker), row in sorted(all_rows.items()):
-                if (mic, ticker) in have:
-                    existing += 1
-                    continue
-                name = row.get("constituent_name") or ticker
-                currency = row.get("currency") or "KRW"
-                actor_id = _insert_company(conn, name, country)
-                instrument_id = _insert_equity(
-                    conn, name=name, mic=mic, ticker=ticker, currency=currency, issuer=actor_id
-                )
-                created += 1
-                created_rows.append({"ticker": ticker, "market_code": mic, "name": name,
-                                     "actor_id": actor_id, "instrument_id": instrument_id})
+        created_before = len(created_rows)
+
+        # DB 실패를 잡아 사유와 함께 드러낸다 — 안 잡으면 트레이스백으로 죽어 **이 런이 뭘 했는지
+        # 로그가 안 남는다**(Rule 12 — 결과는 항상 로그, 형제 정제 스텝과 같은 규약).
+        # 커밋 경계는 시장 단위다: connect() 가 예외면 롤백하므로 이 시장은 전무가 되고, 다른
+        # 시장은 계속 시도한다 — 부분 커밋으로 FK 로 얽힌 마스터가 반쪽으로 남지 않는다.
+        try:
+            with connect(db) as conn:
+                have = _existing_tickers(conn, {m for m, _ in all_rows})
+                for (mic, ticker), row in sorted(all_rows.items()):
+                    if (mic, ticker) in have:
+                        existing += 1
+                        continue
+                    name = row.get("constituent_name") or ticker
+                    currency = row.get("currency") or "KRW"
+                    actor_id = _insert_company(conn, name, country)
+                    instrument_id = _insert_equity(
+                        conn, name=name, mic=mic, ticker=ticker, currency=currency, issuer=actor_id
+                    )
+                    created += 1
+                    created_rows.append({"ticker": ticker, "market_code": mic, "name": name,
+                                         "actor_id": actor_id, "instrument_id": instrument_id})
+        except Exception as exc:
+            logger.exception("적재 실패(롤백): market=%s", market)
+            failures.append({"market": market, "reasons": ["load_error"], "error": str(exc)})
+            # 롤백됐으므로 이 시장에서 만든 건 없다 — 카운터를 되돌려 로그가 거짓말하지 않게.
+            created -= len(created_rows) - created_before
+            del created_rows[created_before:]
+            exit_code = 1
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
@@ -177,7 +192,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
         "already_present": existing, "created": created, "created_rows": created_rows,
-        "exit_code": exit_code,
+        "failures": failures, "exit_code": exit_code,
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),
@@ -187,7 +202,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         exit_code = 1
 
     logger.info(
-        "load_instruments: read=%d skipped_no_mic=%d already=%d created=%d",
-        read, skipped_no_mic, existing, created,
+        "load_instruments: read=%d skipped_no_mic=%d already=%d created=%d failures=%d",
+        read, skipped_no_mic, existing, created, len(failures),
     )
     return exit_code
