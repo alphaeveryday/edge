@@ -195,13 +195,38 @@ def test_confidence_rejects_bool_and_out_of_range():
     assert "confidence_out_of_range" in result["reasons"]
 
 
-@pytest.mark.parametrize("events", [None, "문자열", [None], [[]], [42]])
+@pytest.mark.parametrize("events", [None, "문자열", [None], [[]], [42], 42, {"a": 1}, True])
 def test_malformed_events_do_not_crash(events):
-    # WHY: 모델 응답은 신뢰경계 밖 입력이다. 비객체 원소가 .get() 에서 터지면 한 이상치가
-    # 배치를 무너뜨린다(crash-before-gate).
+    # WHY: 모델 응답은 신뢰경계 밖 입력이다. 구문상 유효한 JSON 이어도 형태가 계약 밖이면
+    # 순회에서 TypeError 로 터져 배치 전체가 죽는다(crash-before-gate). 격리는 status·reasons
+    # 로 드러나야 하고, 예외로 새면 안 된다.
+    # 회귀 주의: 이 목록의 초기 버전은 [None,"문자열",[None],[[]],[42]] 뿐이었는데 전부 우연히
+    # 안 터지는 모양이라 통과했다 — 실제로는 events=42 가 크래시였다. 비순회 스칼라를 넣어야
+    # 이 테스트가 제 일을 한다.
     result = extract.extract_assertions(_article(), complete_fn=_fn(
         {"doc_class": "EVENT", "events": events}))
     assert result["status"] == "ok"
+    assert result["assertions"] == []
+
+
+@pytest.mark.parametrize("arguments", [42, {"role_code": "SUPPLIER"}, "SUPPLIER", True])
+def test_malformed_arguments_do_not_crash(arguments):
+    # WHY: arguments 가 배열이 아니면 순회가 TypeError(스칼라)로 터지거나 dict 키를 순회해
+    # 엉뚱한 사유를 쏟는다. 타입 계약 위반은 사건을 버리지 않고 역할 없음으로 격리한다.
+    ev = _event(arguments=arguments)
+    result = extract.extract_assertions(_article(), complete_fn=_fn(
+        {"doc_class": "EVENT", "events": [ev]}))
+    assert result["status"] == "ok"
+    [a] = result["assertions"]
+    assert a["arguments"] == []
+    assert a["completeness"] == "partial"
+
+
+def test_non_string_llm_response_is_surfaced_not_crash():
+    # WHY: complete_fn 이 None·객체를 돌려주는 건 주입 계약 위반이다(벤더 SDK 가 그럴 수 있다).
+    # .strip() 의 AttributeError 로 새면 한 기사가 배치를 죽인다.
+    result = extract.extract_assertions(_article(), complete_fn=lambda s, u: None)
+    assert result["status"] == "llm_unparseable"
     assert result["assertions"] == []
 
 

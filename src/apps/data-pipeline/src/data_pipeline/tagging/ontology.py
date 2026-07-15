@@ -35,8 +35,8 @@ DOC_CLASSES = (
 
 
 @lru_cache(maxsize=1)
-def load_profiles() -> dict[str, dict]:
-    """event_type_id → 프로필 dict. 스냅샷을 1회만 읽어 캐시한다.
+def _snapshot() -> dict:
+    """스냅샷 원본을 1회만 읽어 캐시한다.
 
     스냅샷이 깨졌으면(파일 없음·JSON 불량·items 비정상) 예외로 올린다 — 온톨로지 없이
     태깅하면 라벨 구속이 통째로 풀리므로 조용한 폴백은 금지다(Rule 12).
@@ -45,13 +45,18 @@ def load_profiles() -> dict[str, dict]:
     items = data.get("items")
     if not isinstance(items, list) or not items:
         raise ValueError(f"온톨로지 스냅샷 items 이상: {type(items).__name__}")
-    return {item["event_type_id"]: item for item in items}
+    return data
 
 
 @lru_cache(maxsize=1)
+def load_profiles() -> dict[str, dict]:
+    """event_type_id → 프로필 dict."""
+    return {item["event_type_id"]: item for item in _snapshot()["items"]}
+
+
 def ontology_version() -> str:
     """스냅샷의 dataset_version — 산출물 provenance 에 박아 어느 온톨로지로 태깅했는지 남긴다."""
-    return json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))["dataset_version"]
+    return _snapshot()["dataset_version"]
 
 
 def event_type_codes() -> tuple[str, ...]:

@@ -76,6 +76,10 @@ def _parse_response(text: str) -> dict:
     펜스는 지시를 어겨도 흔해서 관대하게 처리하지만, 그 너머의 관대한 복구(정규식으로 JSON
     긁어내기 등)는 하지 않는다 — 응답이 계약을 벗어난 걸 조용히 메우면 품질 저하가 안 보인다.
     """
+    if not isinstance(text, str):
+        # complete_fn 이 문자열이 아닌 걸 돌려주는 건 주입 계약 위반이다(벤더 SDK 가 None·
+        # 객체를 낼 수 있다). .strip() 에서 AttributeError 로 터지면 배치가 죽는다.
+        raise ValueError(f"complete_fn 응답이 문자열이 아님: {type(text).__name__}")
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.split("```")[1]
@@ -113,7 +117,13 @@ def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
     permitted = allowed_roles(code)
     arguments: list[dict] = []
     seen: set[str] = set()
-    for arg in raw.get("arguments") or []:
+    raw_arguments = raw.get("arguments") or []
+    if not isinstance(raw_arguments, list):
+        # 스칼라(42)·dict 가 오면 순회가 각각 TypeError·키 순회로 샌다 — 배열이 아니면
+        # 역할이 없는 것으로 보고 사유만 남긴다.
+        reasons.append("arguments_not_list")
+        raw_arguments = []
+    for arg in raw_arguments:
         if not isinstance(arg, dict):
             reasons.append("argument_not_object")
             continue
@@ -201,12 +211,29 @@ def extract_assertions(article: dict, *, complete_fn) -> dict:
     if doc_class not in DOC_CLASSES:
         return {**base, "status": "bad_doc_class", "reasons": [f"doc_class={doc_class!r}"]}
 
-    reasons: list[str] = []
+    raw_events = parsed.get("events") or []
+    if not isinstance(raw_events, list):
+        # 스칼라(42)면 순회가 TypeError 로 터지고, 문자열이면 글자를 순회한다 — 둘 다
+        # 배치를 죽이거나 무의미한 사유를 쏟는다. 배열이 아니면 사건 없음으로 본다.
+        reasons_prefix = ["events_not_list"]
+        raw_events = []
+    else:
+        reasons_prefix = []
+
+    reasons: list[str] = list(reasons_prefix)
     assertions: list[dict] = []
     if doc_class == "EVENT":
         # EVENT 만 주장을 낸다 — 논평·시황·홍보는 사건 보도가 아니라 추출 대상이 아니다.
-        for raw in parsed.get("events") or []:
-            assertion, event_reasons = _validate_event(raw)
+        for raw in raw_events:
+            try:
+                assertion, event_reasons = _validate_event(raw)
+            except Exception as exc:
+                # 예기치 못한 응답 모양이 배치를 죽이지 않게 사건 단위로 격리한다
+                # (normalize_news 의 row_error 와 동형) — 격리≠은폐라 사유는 남긴다.
+                logger.warning("사건 검증 실패(격리): article_id=%s %s",
+                               article.get("article_id"), exc)
+                reasons.append("event_validation_error")
+                continue
             reasons.extend(event_reasons)
             if assertion is not None:
                 assertions.append(assertion)
@@ -216,7 +243,7 @@ def extract_assertions(article: dict, *, complete_fn) -> dict:
             # 오탐 EVENT 의 신호다. 라벨을 코드가 뒤집진 않는다(분류는 모델 몫, Rule 5) —
             # 사유로 남겨 다운스트림·집계가 쓰게 한다.
             reasons.append("event_doc_class_without_events")
-    elif parsed.get("events"):
+    elif raw_events:
         # 비-EVENT 인데 사건을 냈다 = 모델 자기모순. 사건은 안 쓰되 사유로 드러낸다.
         reasons.append("events_on_non_event_doc_class")
 

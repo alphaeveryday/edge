@@ -19,7 +19,6 @@ llm_error), 조용한 폴백은 태깅 커버리지 저하를 숨긴다(Rule 12)
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.request
 
 # OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 인자로 한다(코드 수정 불필요).
