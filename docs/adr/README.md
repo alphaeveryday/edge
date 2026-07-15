@@ -31,3 +31,4 @@
 | [0021](0021-design-reinforcement.md) | 설계 보강 — DMZ 배치·cursor 발번 시점·정정 리비전 모델 확정 | 승인됨 |
 | [0022](0022-verification-round2.md) | 검증·보강 2차 — 규제 사실관계 외부 검증 및 배치·온보딩 옵션 보강 | 승인됨 |
 | [0023](0023-customer-validation.md) | 고객 검증 반영 — 증권사 현업 리뷰 확보·이해상충은 노출 범위 제외로 통제 | 승인됨 |
+| [0025](0025-onprem-auth-hybrid.md) | 온프렘 콘솔 인증 — SSO/AD 지향 + 데모 자체 계정 하이브리드 | 승인됨 |
