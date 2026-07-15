@@ -64,5 +64,11 @@
 
   renderHeader();
   renderTabs(AI_TAB);
-  window.BrokerApi.getAiAnalysis(ticker, tradeDate).then(showAnalysis);
+  window.BrokerApi.getAiAnalysis(ticker, tradeDate)
+    .then(showAnalysis)
+    .catch(function (err) {
+      // 렌더링 예외까지 스켈레톤 잔류 없이 안내 문구로 수렴시킨다
+      console.warn('[app] 렌더링 실패', err);
+      showAnalysis({ state: 'FALLBACK', message: 'AI 분석을 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.' });
+    });
 })();

@@ -13,23 +13,9 @@
   const FALLBACK_MESSAGE = 'AI 분석을 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
   const NO_DATA_MESSAGE = '이 종목·일자에 대해 제공되는 AI 분석이 아직 없습니다.';
 
-  // 실제 Serving API 엔드포인트가 생기면 이 값을 채워 fetch 경로로 전환한다(형상은 동일).
-  const SERVING_BASE_URL = null;
-
+  // 실제 연동에서 이 레이어는 증권사 백엔드 구현으로 통째로 대체된다(화면 코드는 그대로).
+  // 브라우저에서 Serving API를 직접 fetch하는 경로는 두지 않는다 — 계약의 경로 원칙 위반.
   function callServing(ticker, tradeDate, headers) {
-    if (SERVING_BASE_URL) {
-      const query = tradeDate ? '?trade_date=' + encodeURIComponent(tradeDate) : '';
-      return fetch(SERVING_BASE_URL + '/api/v1/explanations/' + encodeURIComponent(ticker) + query, {
-        headers: headers,
-      }).then(function (res) {
-        if (res.status === 200) {
-          return res.json().then(function (body) {
-            return { status: 200, body: body };
-          });
-        }
-        return { status: res.status, body: null };
-      });
-    }
     return window.ServingApiMock.getExplanation(ticker, tradeDate, headers);
   }
 
@@ -51,9 +37,14 @@
         if (res.status === 404) {
           return { state: 'NO_DATA', message: '지원하지 않는 종목입니다. (국내 상장 ETF 대상)' };
         }
+        if (res.status === 400) {
+          // 400은 일시 장애가 아니라 호출측 통합 버그 신호다 — 폴백 문구로 코팅하되 콘솔에 드러낸다
+          console.warn('[broker-api] Serving API 400 — 요청 파라미터/헤더 확인 필요 (ticker=%s, trade_date=%s)', ticker, tradeDate);
+        }
         return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
       })
-      .catch(function () {
+      .catch(function (err) {
+        console.warn('[broker-api] Serving API 호출 실패', err);
         return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
       });
   }
