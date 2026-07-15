@@ -15,6 +15,7 @@ src/
 │   ├── gateway/              # JVM    · Cloud 엣지 (console·admin 앞단) [edge-cloud]
 │   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 [edge-onprem]
 │   ├── tenant-sync-api/      # JVM    · Sync Agent Pull 표면 (cursor delta) [edge-cloud]
+│   ├── serving-api/          # JVM    · MTS 조회 표면 (Published만) [edge-onprem]
 │   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant · 최고 권한 [edge-cloud]
 │   ├── data-pipeline/        # Python · 스케줄러 → raw 수집/후속 DB 적재 [edge-cloud]
 │   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장 [edge-cloud]
@@ -36,11 +37,11 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 4개 앱(gateway·tenant-console-api·tenant-sync-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 5개 앱(gateway·tenant-console-api·tenant-sync-api·serving-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · tenant-sync-api · super-admin-api |
+| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · tenant-sync-api · serving-api · super-admin-api |
 | Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
@@ -53,11 +54,12 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `gateway` | JVM | **edge-cloud** | Cloud 엣지. console·admin 트래픽에 라우트별 필터 적용 (목표: Super Admin·Tenant Sync API용만 — [ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md)) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
+| `serving-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/serving-api.md](docs/contracts/serving-api.md)). 설명 저장소는 인메모리 시드 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | **edge-cloud** | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
 | `analysis-engine` | Python | **edge-cloud** | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
-신규 온프렘 컴포넌트(sync-agent · compliance-engine · serving-api)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 gateway를 경유하지 않습니다(mTLS 직접 노출 유력 — 확정은 gateway 존치 ADR과 함께).
+신규 온프렘 컴포넌트(sync-agent · compliance-engine)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 gateway를 경유하지 않습니다(mTLS 직접 노출 유력 — 확정은 gateway 존치 ADR과 함께).
 
 ### 표면 분리
 - **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘 재배치 시 gateway 경유 제거)
