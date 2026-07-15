@@ -850,6 +850,11 @@ CREATE TABLE price_daily (
                  OR (turnover_value >= 0 AND turnover_value < 'Infinity'::NUMERIC))
             AND (simple_return IS NULL
                  OR (simple_return >= -1 AND simple_return < 'Infinity'::DOUBLE PRECISION))
+            -- log_return 은 범위 하한이 없다(가격이 0 에 가까우면 임의로 작아진다). 그래서
+            -- 부등호 대신 유한성만 본다 — close_price > 0 이 강제되므로 유한해야 한다.
+            AND (log_return IS NULL
+                 OR (log_return > '-Infinity'::DOUBLE PRECISION
+                     AND log_return < 'Infinity'::DOUBLE PRECISION))
         )
 );
 
