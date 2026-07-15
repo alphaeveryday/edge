@@ -1,0 +1,218 @@
+"""뉴스 이벤트 태깅 — 기사 1건 → assertion N건 (ALPHA-138).
+
+기사(제목+리드)를 LLM 에 넣어 **문서가 주장하는 사건**을 온톨로지 라벨로 뽑는다. 산출은
+`document_assertion`(+`assertion_argument`) 물리 스키마에 대응하는 dict 다 — 적재는 범위
+밖(ALPHA-190)이고 이 모듈은 DB 를 모른다.
+
+**assertion 은 event 가 아니다.** 여기서 내는 건 '이 문서가 이렇게 주장했다'는 사실이고,
+기사가 틀려도 주장했다는 사실은 남는다. 여러 기사가 같은 사건을 주장하면 assertion 은 N 개,
+canonical event 는 1 개다 — 그 조립(source_event)과 스레드 lineage 판정은 후속이며, 결정론이라야
+point-in-time 재현이 된다. 그래서 **모델은 추출만 하고 lineage 를 판정하지 않는다**(Rule 5 —
+분류·추출은 모델, 라우팅·결정론 변환은 코드).
+
+역할 분담(Rule 5):
+  - 모델: doc_class 판정, event_type_code 분류, 술어·역할 추출
+  - 코드: 라벨이 온톨로지 허용 집합에 드는지 검증, 결측·불량을 사유와 함께 드러내기
+
+`complete_fn` 은 주입받는다 — 이 모듈은 어느 LLM 벤더인지 모른다. 호출부가 (system, user)
+→ 응답 문자열 callable 을 넘긴다. 벤더 배선·모델 선택은 이 모듈의 관심사가 아니고, 단위
+테스트는 실제 호출 없이 가짜 complete_fn 으로 돈다.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from .ontology import (
+    DOC_CLASSES,
+    allowed_predicates,
+    allowed_roles,
+    event_type_codes,
+    load_profiles,
+    ontology_version,
+    prompt_catalog,
+    required_roles,
+)
+
+logger = logging.getLogger(__name__)
+
+TAGGER_VERSION = "tagging-v1"
+
+_SYSTEM = """너는 한국 금융 뉴스에서 '문서가 주장하는 사건'을 구조화하는 추출기다.
+
+규칙:
+- 기사에 적힌 것만 뽑는다. 배경지식으로 값을 보충하거나 추론하지 않는다.
+- event_type_code 와 predicate_code, role_code 는 아래 카탈로그에 있는 것만 쓴다. 새 라벨을 만들지 않는다.
+- 한 기사가 여러 사건을 주장하면 events 를 여러 개 낸다. 사건이 없으면 빈 배열이다.
+- 역할 값은 기사에 나온 표현을 그대로 옮긴다(정규화·번역·풀어쓰기 금지).
+- 확실하지 않으면 그 역할을 비운다. 지어내는 것보다 비는 게 낫다.
+
+doc_class:
+- EVENT: 일어난/결정된 구체 사건을 보도
+- OPINION_OR_ANALYSIS: 전망·해설·논평
+- NO_EVENT_MARKET_COMMENTARY: 시황·지수 등락 나열
+- PROMOTIONAL_OR_SOLICITATION: 홍보·투자권유
+
+출력은 JSON 하나만. 설명·코드펜스 금지.
+{"doc_class": "...", "events": [{"event_type_code": "...", "predicate_code": "...",
+ "arguments": [{"role_code": "...", "text": "..."}], "confidence": 0.0~1.0}]}"""
+
+
+def build_prompt(title: str, lead: str | None, published_at: str | None) -> tuple[str, str]:
+    """(system, user) 프롬프트. 카탈로그는 ontology 가 파생해 검증과 같은 출처를 쓴다."""
+    parts = [f"제목: {title}"]
+    if lead:
+        parts.append(f"리드: {lead}")
+    if published_at:
+        parts.append(f"발행: {published_at}")
+    user = "\n".join(parts)
+    return f"{_SYSTEM}\n\n=== 이벤트 타입 카탈로그 ===\n{prompt_catalog()}", user
+
+
+def _parse_response(text: str) -> dict:
+    """LLM 응답 → dict. 코드펜스만 벗기고, 그 외 형식 위반은 예외로 올린다.
+
+    펜스는 지시를 어겨도 흔해서 관대하게 처리하지만, 그 너머의 관대한 복구(정규식으로 JSON
+    긁어내기 등)는 하지 않는다 — 응답이 계약을 벗어난 걸 조용히 메우면 품질 저하가 안 보인다.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("```")[1]
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"응답이 객체가 아님: {type(parsed).__name__}")
+    return parsed
+
+
+def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
+    """이벤트 1건을 온톨로지로 검증 → (assertion, reasons). 불량이면 (None, reasons).
+
+    검증은 **타입별** 허용 집합으로 한다 — 전역 86개 역할 중 하나라는 건 의미가 없고,
+    그 타입이 가질 수 있는 역할인지가 계약이다. 허용 밖 역할은 그 역할만 떨어뜨리고 나머지
+    assertion 은 살린다(한 역할의 환각이 사건 전체를 버리게 하지 않는다).
+    """
+    reasons: list[str] = []
+    if not isinstance(raw, dict):
+        return None, ["event_not_object"]
+
+    code = raw.get("event_type_code")
+    if code not in load_profiles():
+        # 온톨로지 밖 타입 = 모델이 라벨을 발명한 것. 사건 자체를 버린다(타입이 없으면
+        # 역할 검증의 기준도 없다).
+        return None, ["unknown_event_type"]
+
+    predicate = raw.get("predicate_code")
+    if predicate is not None and predicate not in allowed_predicates(code):
+        # 술어는 사건 식별에 필수가 아니다(타입이 이미 성격을 정한다) — 떨어뜨리고 사유만 남긴다.
+        reasons.append("predicate_not_allowed")
+        predicate = None
+
+    permitted = allowed_roles(code)
+    arguments: list[dict] = []
+    seen: set[str] = set()
+    for arg in raw.get("arguments") or []:
+        if not isinstance(arg, dict):
+            reasons.append("argument_not_object")
+            continue
+        role = arg.get("role_code")
+        text = arg.get("text")
+        if role not in permitted:
+            reasons.append("role_not_allowed")
+            continue
+        if not isinstance(text, str) or not text.strip():
+            # 역할만 있고 값이 없으면 근거가 없다 — 빈 역할은 안 채운 것과 같다.
+            reasons.append("argument_text_missing")
+            continue
+        if role in seen:
+            reasons.append("duplicate_role")
+            continue
+        seen.add(role)
+        # entity_id 는 여기서 안 채운다 — 엔티티 해소는 별도 소관이고, 모델이 사내 엔티티
+        # 식별자를 알 수 없다. text 가 해소의 입력이다.
+        arguments.append({"role_code": role, "text": text.strip(), "entity_id": None})
+
+    confidence = raw.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        # bool 은 int 의 하위형이라 isinstance(True, int) 가 True — 신뢰도로 통과시키면 안 된다.
+        confidence = None
+    elif not 0.0 <= float(confidence) <= 1.0:
+        reasons.append("confidence_out_of_range")
+        confidence = None
+
+    missing = required_roles(code) - seen
+    assertion = {
+        "event_type_code": code,
+        "predicate_code": predicate,
+        "arguments": arguments,
+        "confidence": None if confidence is None else float(confidence),
+        # 필수역할 충족 여부 — 후속 조립이 partial 을 확정 사건으로 못 쓰게 하는 표시다.
+        "completeness": "complete" if not missing else "partial",
+        "missing_required_roles": sorted(missing),
+    }
+    return assertion, reasons
+
+
+def extract_assertions(article: dict, *, complete_fn) -> dict:
+    """canonical 뉴스행 1건 → 태깅 결과.
+
+    반환: {status, doc_class, assertions[], reasons[], ontology_version, tagger_version}
+    status 는 이 기사에 무슨 일이 있었는지 드러낸다(Rule 12 — 조용한 0건 금지):
+      ok              — 추출 성공(EVENT 가 아니면 assertions 는 빈 배열)
+      no_title        — 제목 결측이라 호출조차 안 함
+      llm_error       — complete_fn 이 던짐
+      llm_unparseable — 응답이 JSON 계약 위반
+      bad_doc_class   — doc_class 가 허용 어휘 밖
+
+    `reasons` 는 통과했더라도 버린 게 있으면 남는다(환각 역할·범위 밖 술어 등) — 태깅
+    품질을 나중에 집계할 수 있게 사유를 세어 둔다.
+    """
+    base = {
+        "article_id": article.get("article_id"),
+        "ontology_version": ontology_version(),
+        "tagger_version": TAGGER_VERSION,
+        "doc_class": None,
+        "assertions": [],
+        "reasons": [],
+    }
+
+    title = article.get("title")
+    if not isinstance(title, str) or not title.strip():
+        # 제목이 없으면 뽑을 근거가 없다 — 호출 낭비 없이 사유로 드러낸다.
+        return {**base, "status": "no_title"}
+
+    system, user = build_prompt(title, article.get("lead_text"), article.get("published_at"))
+    try:
+        response = complete_fn(system, user)
+    except Exception as exc:
+        # 한 기사의 LLM 실패가 배치를 죽이지 않게 격리하되, 조용히 성공으로 만들지 않는다.
+        logger.warning("태깅 LLM 실패(격리): article_id=%s %s", article.get("article_id"), exc)
+        return {**base, "status": "llm_error", "reasons": [str(exc)]}
+
+    try:
+        parsed = _parse_response(response)
+    except (ValueError, IndexError) as exc:
+        logger.warning("태깅 응답 파싱 실패: article_id=%s %s", article.get("article_id"), exc)
+        return {**base, "status": "llm_unparseable", "reasons": [str(exc)]}
+
+    doc_class = parsed.get("doc_class")
+    if doc_class not in DOC_CLASSES:
+        return {**base, "status": "bad_doc_class", "reasons": [f"doc_class={doc_class!r}"]}
+
+    reasons: list[str] = []
+    assertions: list[dict] = []
+    if doc_class == "EVENT":
+        # EVENT 만 주장을 낸다 — 논평·시황·홍보는 사건 보도가 아니라 추출 대상이 아니다.
+        for raw in parsed.get("events") or []:
+            assertion, event_reasons = _validate_event(raw)
+            reasons.extend(event_reasons)
+            if assertion is not None:
+                assertions.append(assertion)
+    elif parsed.get("events"):
+        # 비-EVENT 인데 사건을 냈다 = 모델 자기모순. 사건은 안 쓰되 사유로 드러낸다.
+        reasons.append("events_on_non_event_doc_class")
+
+    return {**base, "status": "ok", "doc_class": doc_class,
+            "assertions": assertions, "reasons": reasons}
