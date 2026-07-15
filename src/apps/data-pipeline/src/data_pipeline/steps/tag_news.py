@@ -44,6 +44,15 @@ DATASET = "news_assertions"
 # 태깅 대상 언어. 프롬프트가 한국어 전용이라 ko 만 — 영어 프롬프트가 생기면 여기 늘린다.
 TAGGED_LANGUAGES = ("ko",)
 
+# 다음 런이 **다시 시도해야 하는** status. llm_error 는 호출 자체가 실패한 것(네트워크·레이트
+# 리밋·5xx)이라 기사에 대한 판정이 아니다 — 이걸 '태깅 완료'로 캐시하면 일시적 장애 한 번에
+# 그 기사가 영구히 태깅되지 않는다.
+#
+# llm_unparseable·bad_doc_class 는 넣지 않는다. 그건 호출은 됐고 **모델이 그렇게 답한** 것이라
+# temperature=0 에선 재시도해도 같은 답이 올 공산이 크다 — 매 런 돈만 태운다. 프롬프트·모델이
+# 바뀌면 tagger_version 이 올라가 그때 자연히 재태깅된다.
+RETRYABLE_STATUSES = frozenset({"llm_error"})
+
 _FEATURE_COLUMNS = (
     "article_id",
     "published_at",
@@ -88,11 +97,17 @@ def _write_parquet_rows(rows: list[dict]) -> bytes:
 
 
 def _is_current(row: object) -> bool:
-    """이 feature 행이 **현재 태거·온톨로지 판정**인가 — 그러면 재태깅하지 않는다.
+    """이 feature 행이 **현재 태거·온톨로지의 유효한 판정**인가 — 그러면 재태깅하지 않는다.
 
     비객체·결측은 현재 아님으로 본다(다시 태깅). 버전이 다르면 다른 태거의 판정이라 새로 만든다.
+
+    status 가 RETRYABLE 이면 버전이 같아도 현재 아님이다 — llm_error 는 '이 기사는 이렇다'는
+    판정이 아니라 '물어보지도 못했다'는 뜻이라, 그걸 완료로 캐시하면 일시적 장애 한 번이 그
+    기사를 영구히 태깅 대상에서 지운다.
     """
     if not isinstance(row, dict):
+        return False
+    if row.get("status") in RETRYABLE_STATUSES:
         return False
     return (
         row.get("tagger_version") == TAGGER_VERSION

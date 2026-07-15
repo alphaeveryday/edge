@@ -194,6 +194,49 @@ def test_llm_failure_is_isolated_and_recorded_not_silent(tmp_path):
     assert all(json.loads(r["assertions"]) == [] for r in rows)
 
 
+def test_transient_llm_failure_is_retried_next_run(tmp_path):
+    """llm_error 는 '이 기사는 이렇다'는 판정이 아니라 '물어보지도 못했다'는 뜻이다.
+
+    이걸 태깅 완료로 캐시하면 네트워크가 한 번 끊긴 기사가 **영구히** 태깅되지 않는다 —
+    재태깅 방지가 오히려 커버리지에 구멍을 낸다. 다음 런이 반드시 다시 물어봐야 한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+
+    def boom(system: str, user: str) -> str:
+        raise RuntimeError("일시적 네트워크 실패")
+
+    assert tag_news.run(storage, "R1", complete_fn=boom) == 0
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "llm_error"
+
+    calls: list = []
+    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
+    assert len(calls) == 1, "일시 실패한 기사를 재시도하지 않았다"
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "ok"
+
+
+def test_model_level_rejection_is_not_retried_every_run(tmp_path):
+    """반면 모델이 답을 했는데 계약을 어긴 건(unparseable) 매 런 재호출하면 돈만 태운다.
+
+    temperature=0 이라 같은 입력엔 같은 답이 온다 — 프롬프트·모델이 바뀌면 tagger_version 이
+    올라가 그때 재태깅된다. 그게 재시도의 올바른 트리거다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+
+    def garbage(system: str, user: str) -> str:
+        return "JSON 아님"
+
+    assert tag_news.run(storage, "R1", complete_fn=garbage) == 0
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "llm_unparseable"
+
+    calls: list = []
+    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
+    assert calls == [], "모델 수준 거절을 매 런 재호출하면 비용만 든다"
+
+
 def test_quality_log_records_what_happened(tmp_path):
     """조용한 0건 금지 — 이 런이 몇 건 읽고 몇 건 태깅했는지가 로그에 남아야 한다."""
     storage = LocalStorage(tmp_path / "lake")
