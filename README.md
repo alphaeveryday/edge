@@ -70,7 +70,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
-| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`) + 공유 도메인 모델·분석 마트(`analysis_reports` 등) 접근 로직 |
+| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
 | `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 (스텁 — 콘솔 재구축 시 채움) |
 | `py-common` | Python | Python 공통 유틸 |
 
@@ -92,8 +92,8 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 ```
 
 - `data-pipeline`이 외부 데이터를 raw lake에 보존하고, 후속 단계가 DB 적재로 이어집니다.
-- `analysis-engine`이 적재된 데이터를 분석해 분석 마트(`analysis_reports` 등)로 DB에 저장합니다.
-- API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, 분석 마트 접근은 `jvm-common`이 담당합니다.
+- `analysis-engine`이 적재된 데이터를 분석해 Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다.
+- API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent → Compliance → Serving API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
 
 ## Git 컨벤션

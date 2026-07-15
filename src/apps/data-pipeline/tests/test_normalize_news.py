@@ -490,3 +490,30 @@ def test_language_derived_from_vendor_not_market(tmp_path):
     assert _canonical_rows(storage, "2026-07-01", language="ko") == []  # market=KR 이어도 ko 아님
     en = _canonical_rows(storage, "2026-07-01", language="en")
     assert [r["article_id"] for r in en] == [_aid(kr_adr)] and en[0]["market"] == "KR"  # en 파티션·market 컬럼은 KR
+
+
+def test_lead_text_carries_vendor_body_snippet(tmp_path):
+    # WHY: 태깅은 제목만으론 역할(공급자·고객사·금액)을 못 뽑는다. 리드는 이미 raw 에
+    # 있는데(BigKinds CONTENT·FMP text) canonical 이 안 실어 나르면 다운스트림이 본문 크롤을
+    # 기다려야 한다 — 있는 걸 버리지 않는 게 이 컬럼의 존재 이유다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(text="FMP 리드 문장")])
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row(CONTENT="BigKinds 리드 스니펫")])
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    leads = {r["title"]: r["lead_text"] for r in _canonical_rows(storage, "2026-07-01")}
+    assert leads["삼성전자 실적 개선"] == "FMP 리드 문장"
+    assert leads["SK하이닉스 신규 계약"] == "BigKinds 리드 스니펫"
+
+
+def test_lead_text_absent_is_none_not_gate_failure(tmp_path):
+    # WHY: 리드는 선택 정보다 — 없다고 기사를 canonical 에서 떨어뜨리면 제목만으로도 가능한
+    # 태깅까지 잃는다. 결측은 NULL 로 남기고 통과시킨다.
+    storage = LocalStorage(tmp_path / "lake")
+    row = _fmp_row()
+    del row["text"]
+    _write_raw(storage, _raw_key("fmp", "US"), [row])
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert r["lead_text"] is None

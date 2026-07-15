@@ -21,7 +21,8 @@
 > (정체성 blocking·비중/주식수/평가금액은 참고필드로 범위 경고) + quality_log + 통과 행의
 > `canonical/holdings/etf_holdings` (market,etf_id,constituent,as_of_date) 멱등 병합 적재까지
 > 완료했다(`normalize-etf`, ALPHA-342·343). KRX 해외기초 ETF 의 대시(-) 비중은 null 로 통과시켜
-> 구성종목을 보존한다.
+> 구성종목을 보존한다. **뉴스 이벤트 태깅(피처)** 은 기사(제목+리드)에서 문서가 주장하는 사건을
+> 온톨로지 라벨로 뽑는 라이브러리까지 완료했다(`tagging/`, ALPHA-138) — 스텝·적재 배선은 후속.
 
 ## 실행
 
@@ -92,7 +93,7 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 대표 2종). 날짜창 없이 그날(trdDd) PDF 전량을 append(US ETF 와 동형). 해외기초
+# etf_map, 현재 KR 대표 3종). 날짜창 없이 그날(trdDd) PDF 전량을 append(US ETF 와 동형). 해외기초
 # ETF 는 비중·금액이 대시(-)로 와도 무변형 보존. ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
@@ -292,6 +293,8 @@ settings.targets.keywords            # ["금리", ...]
   재적재는 최신 fetched_at 이 메타 대표를 이기되 **mentions 는 union**(종목↔기사 링크 보존). 다른
   article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
+  `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
+  것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님). 본문 전문 크롤은 범위 밖이다.
 - **canonical(공시 공급계약, 정제 Step2)** — `canonical/disclosures/supply_contract_fact/report_date=…/part-*.parquet`
   에 게이트 통과 fact 를 **rcept_no(14자리 접수번호=문서키) 키로 멱등 병합**. raw 와 달리 run_id·
   source_vendor 파티션이 없다(멱등). 파티션은 `report_date`(rcept_dt, 공시 접수일) 하나, rcept_no 는
@@ -324,7 +327,9 @@ settings.targets.keywords            # ["금리", ...]
 ## 범위에서 의도적으로 제외한 것 (후속)
 
 - 뉴스 근접중복 클러스터링(fuzzy)·교차벤더 dedup — canonical 은 exact article_id 병합 + 제목/URL
-  충돌 로깅까지다. dedup_cluster·엔티티/컨셉 링크·이벤트 태깅은 다운스트림(analysis-engine) 소관.
+  충돌 로깅까지다. dedup_cluster·엔티티/컨셉 링크는 후속. **이벤트 태깅은 이 모듈 소관으로
+  들어왔다**(ALPHA-138, `tagging/` 참조) — 피처 추출까지가 data-pipeline 경계이고, 그 피처를
+  소비하는 분석(event 조립·스레드·가격 설명)이 analysis-engine 소관이다.
 - 가격 factor·지표 계산 — canonical price_daily 위의 수정주가 파생·거래일 캘린더 정합(휴장일)·
   섹터 태깅·수익률/지표는 후속(S006·S007 이후 Curation). 정제(정규화·정합성·멱등 적재)까지는 완료.
 - 재무제표 canonical 적재·지표(Factor) 계산 — raw financial_statements → 후속 Structuring/Curation

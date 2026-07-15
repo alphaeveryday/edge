@@ -56,6 +56,7 @@ def test_unit_scaling_reads_table_unit() -> None:
     """표 단위 선언(백만원/억원)을 감지해 revenue_krw 를 KRW 로 스케일한다(Codex P1).
     단위 미선언 표(원)는 무변형(factor 1)."""
     baseline = """
+    <title>4. 매출 및 수주상황</title>
     <p>4. 매출 및 수주상황</p><p>가. 사업부문별 매출 현황</p>
     <table>
       <tr><th>부문</th><th>매출액</th><th>비중</th></tr>
@@ -81,6 +82,7 @@ def test_pharmaresearch_fixture_keeps_reported_shares() -> None:
 
 def test_low_share_sum_is_unreliable() -> None:
     html = """
+    <title>2. 주요 제품 및 서비스</title>
     <table>
       <tr><th>부문</th><th>비중</th></tr>
       <tr><td>완성품</td><td>20</td></tr>
@@ -96,6 +98,7 @@ def test_low_share_sum_is_unreliable() -> None:
 
 def test_computes_shares_from_amount_only_sections() -> None:
     html = """
+    <title>4. 매출 및 수주상황</title>
     <p>4. 매출 및 수주상황</p>
     <p>가. 사업부문별 매출 현황</p>
     <table>
@@ -172,3 +175,99 @@ def test_no_segment_table_returns_empty_unreliable() -> None:
     assert segments == []
     assert meta["rows"] == 0
     assert meta["share_basis"] == "unreliable"
+
+
+# ── ALPHA-354 표 선택 게이트 회귀 (라이브 사업보고서 실측으로 도출) ──────────────
+# 헤더군(A∧B)만 맞으면 관계사 지분표·주주현황표·손익계산서도 후보가 돼 garbage 를 부문으로 certify
+# 하던 결함을 4 신호로 막는다: 섹션 배제 / 합계 밴드 / 섹션 게이트 / 손익 이름 배제 + read_html 격리.
+
+_SEGMENT_TABLE = """
+<table>
+  <tr><th>사업부문</th><th>매출액</th><th>비중</th></tr>
+  <tr><td>반도체</td><td>600</td><td>60</td></tr>
+  <tr><td>디스플레이</td><td>400</td><td>40</td></tr>
+</table>
+"""
+
+
+def test_rejects_table_under_nonsegment_section() -> None:
+    """같은 표라도 주주·회사개요 섹션 아래면 사업부문표가 아니다 — DART <TITLE> 로 배제한다.
+    (삼성전자 관계사 지분표·SK하이닉스 주주현황표가 부문으로 뽑히던 결함.)"""
+    banned, _ = parse_segments("<title>1. 회사의 개요</title>" + _SEGMENT_TABLE)
+    assert banned == []
+    kept, _ = parse_segments("<title>2. 주요 제품 및 서비스</title>" + _SEGMENT_TABLE)
+    assert [s["segment_name"] for s in kept] == ["반도체", "디스플레이"]
+
+
+def test_rejects_share_sum_far_from_100() -> None:
+    """관계사 지분율표는 각 지분율의 단순 합이 100 을 크게 넘는다 — 사업부문 분할이 아니므로 rescale
+    로 100 에 맞추기 전에 밴드(>130) 밖이면 탈락한다(삼성전자 154%·신한 16007% 결함)."""
+    html = """
+    <title>2. 주요 제품 및 서비스</title>
+    <table>
+      <tr><th>부문</th><th>비중</th></tr>
+      <tr><td>계열사A</td><td>80</td></tr>
+      <tr><td>계열사B</td><td>74</td></tr>
+    </table>
+    """
+    segments, _ = parse_segments(html)
+    assert segments == []
+
+
+def test_weak_basis_requires_segment_section() -> None:
+    """computed(금액→비중 파생)는 증거가 약해 사업부문 섹션 밖이면 인정 안 한다 — 금융사 손익계산서가
+    합 100 으로 부문 오인되던 결함(삼성생명). 사업부문 섹션 안에서는 인정한다."""
+    amount_only = """
+    <table>
+      <tr><th>부문</th><th>금액</th></tr>
+      <tr><td>사업A</td><td>60</td></tr>
+      <tr><td>사업B</td><td>40</td></tr>
+    </table>
+    """
+    outside, _ = parse_segments("<title>3. 연결재무제표 주석</title>" + amount_only)
+    assert outside == []
+    inside, _ = parse_segments("<title>2. 주요 제품 및 서비스</title>" + amount_only)
+    assert [s["segment_name"] for s in inside] == ["사업A", "사업B"]
+
+
+def test_drops_income_statement_line_names() -> None:
+    """손익계산서 라인(이자수익·보험금융비용 등)은 부문명이 아니다 — 사업부문 섹션 안이어도 이름으로
+    배제해 빈 결과가 된다(삼성생명 '재무상태 및 영업실적' 손익표가 부문으로 뽑히던 결함)."""
+    html = """
+    <title>2. 주요 제품 및 서비스</title>
+    <table>
+      <tr><th>구분</th><th>금액</th></tr>
+      <tr><td>이자수익</td><td>60</td></tr>
+      <tr><td>보험금융비용</td><td>40</td></tr>
+    </table>
+    """
+    segments, _ = parse_segments(html)
+    assert segments == []
+
+
+def test_section_gate_reads_viewer_html_heading_form() -> None:
+    """섹션 근거는 두 HTML 형태를 모두 읽는다 — 프로덕션 raw 는 DART-XML `<TITLE>`, DART 뷰어 HTML 은
+    `<P class='section-N'>` 로 섹션을 표시한다(픽스처 형태). 뷰어 형태에서도 주주 섹션 표를 배제하고
+    사업부문 섹션 표를 골라야 한다(Codex 리뷰: 뷰어 HTML 에서 게이트 무력화 방지)."""
+    html = (
+        "<TITLE></TITLE>"  # 뷰어 HTML 의 빈 문서 TITLE — 섹션 제목 아님
+        "<p class='section-2'>1. 회사의 개요</p>"
+        "<table><tr><th>사업부문</th><th>매출액</th><th>비중</th></tr>"
+        "<tr><td>대주주</td><td>600</td><td>60</td></tr>"
+        "<tr><td>기타주주</td><td>400</td><td>40</td></tr></table>"
+        "<p class='section-2'>2. 주요 제품 및 서비스</p>" + _SEGMENT_TABLE
+    )
+    segments, _ = parse_segments(html)
+    assert [s["segment_name"] for s in segments] == ["반도체", "디스플레이"]
+
+
+def test_unparseable_table_does_not_kill_document() -> None:
+    """read_html 로 파싱 안 되는 표(빈 <table>·DART-XML 잔재)가 있어도 문서 전체가 죽지 않고 나머지
+    표에서 추출한다 — 표별 격리(각도 H·Rule 12). 옛 코드는 첫 junk 표에서 예외로 문서 전량 유실."""
+    html = (
+        "<title>2. 주요 제품 및 서비스</title>"
+        "<p>부문별 매출 비중</p><table></table>"  # 헤더군 매치(context) but read_html 실패 → 격리
+        + _SEGMENT_TABLE
+    )
+    segments, _ = parse_segments(html)
+    assert [s["segment_name"] for s in segments] == ["반도체", "디스플레이"]

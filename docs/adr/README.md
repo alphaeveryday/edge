@@ -26,8 +26,11 @@
 | [0016](0016-single-repo-two-artifacts.md) | 코드베이스 — 단일 레포, 배포 아티팩트 2종 | 승인됨 |
 | [0017](0017-demo-topology-compose.md) | 데모/개발 토폴로지 — 별도 EC2 + Docker Compose 가상 온프렘 | 승인됨 |
 | [0018](0018-rule-deployment-path.md) | Compliance Rule 배포 경로 — Rule Type은 릴리스, Sync 채널은 데이터 전용 | 승인됨 |
-| [0019](0019-team-ownership-interface.md) | 팀 오너십 — Sync 프로토콜 양단 단일 오너, 인터페이스 계약 고정 | 승인됨 |
+| [0019](0019-team-ownership-interface.md) | 팀 오너십 — Sync 프로토콜 양단 단일 오너, 인터페이스 계약 고정 | 대체됨 (→ [0026](0026-ownership-boundary-db.md)) |
 | [0020](0020-verification-realign.md) | 검증 반영 — 규제 서사 재정렬 및 설계 정합 일괄 정정 | 승인됨 |
 | [0021](0021-design-reinforcement.md) | 설계 보강 — DMZ 배치·cursor 발번 시점·정정 리비전 모델 확정 | 승인됨 |
 | [0022](0022-verification-round2.md) | 검증·보강 2차 — 규제 사실관계 외부 검증 및 배치·온보딩 옵션 보강 | 승인됨 |
 | [0023](0023-customer-validation.md) | 고객 검증 반영 — 증권사 현업 리뷰 확보·이해상충은 노출 범위 제외로 통제 | 승인됨 |
+| [0024](0024-scope-domestic-etf.md) | MVP 상품 범위 — 국내 ETF, 스키마는 미국 확장성 선반영 | 승인됨 |
+| [0025](0025-onprem-auth-hybrid.md) | 온프렘 콘솔 인증 — SSO/AD 지향 + 데모 자체 계정 하이브리드 | 승인됨 |
+| [0026](0026-ownership-boundary-db.md) | 팀 오너십 경계 정정 — 진기는 DB 적재까지, 인터페이스는 DB 스키마 | 승인됨 |

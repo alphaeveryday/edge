@@ -16,8 +16,8 @@ run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같다. 같은 a
 다운스트림(news_dedup_cluster) 소관이다.
 
 정규화가 흡수하는 벤더 이형(raw 무변형으로 보존된 원본):
-  - FMP: title/url/site/publishedDate(오프셋 없는 벽시계)/mentions[]
-  - BigKinds: TITLE/PROVIDER_LINK_PAGE/PROVIDER/DATE·NEWS_ID(날짜 단위)/our_ticker
+  - FMP: title/url/site/publishedDate(오프셋 없는 벽시계)/text/mentions[]
+  - BigKinds: TITLE/PROVIDER_LINK_PAGE/PROVIDER/DATE·NEWS_ID(날짜 단위)/CONTENT/our_ticker
 벤더 판별은 raw 키의 source= 파티션으로 한다(레코드 내용 아님 — 키가 규약의 SSOT).
 """
 
@@ -92,12 +92,14 @@ def _normalize(vendor: str, record: dict) -> dict:
         # BigKinds 발행시각은 날짜 단위(시각 없음) — bigkinds_date 가 None 이면 가짜 문자열을
         # 조립하지 않고 그대로 None → parse_datetime(None)=None → 게이트가 unparseable 로 잡음.
         published_at = parse_datetime(bigkinds_date(record))
+        lead = _text(record, "CONTENT")
     else:  # fmp
         title = _text(record, "title")
         url = _text(record, "url")
         publisher = _text(record, "site")
         market = _text(record, "market")
         published_at = parse_datetime(_text(record, "publishedDate"))
+        lead = _text(record, "text")
 
     # article_id 는 raw 의 stamp 를 **신뢰하지 않고 항상 재계산**한다(parse.news_article_id) —
     # canonical 정체성은 canonical 단계가 불변 raw 내용에서 파생해야, 정체성 로직이 바뀌어도
@@ -116,6 +118,11 @@ def _normalize(vendor: str, record: dict) -> dict:
         "normalized_url_hash": url_hash(url),
         "published_at": published_at,
         "publisher": publisher.strip() if publisher else None,
+        # 기사 앞부분(리드) — 다운스트림 태깅의 입력이다. 제목만으론 역할(공급자·고객사·금액)이
+        # 안 나오는 기사가 많다. BigKinds CONTENT 는 200~256자 스니펫이고 FMP text 는 더 길 수
+        # 있는데, 여기선 자르지 않고 온 만큼 보존한다(절단 기준은 소비처가 정한다). 본문 전문
+        # 크롤은 여전히 범위 밖 — 리드는 이미 raw 에 있어 공짜다.
+        "lead_text": " ".join(lead.split()) if lead else None,
         "mentions": _mentions(record, market),
         "fetched_at": _text(record, "fetched_at"),
     }
@@ -127,7 +134,7 @@ def _normalize(vendor: str, record: dict) -> dict:
 # (parquet list-of-struct 의 스키마 복잡성·병합 충돌을 피한다 — 다운스트림이 파싱).
 _CANONICAL_COLUMNS = (
     "article_id", "source_vendor", "market", "title", "url", "normalized_url",
-    "normalized_url_hash", "published_at", "publisher", "mentions", "fetched_at",
+    "normalized_url_hash", "published_at", "publisher", "lead_text", "mentions", "fetched_at",
 )
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
