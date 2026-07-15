@@ -1,9 +1,7 @@
 -- ============================================================================
 -- tenant_sync_cursor 재정의 — TIMESTAMPTZ watermark → BIGINT sequence cursor
 --
--- cursor 를 TIMESTAMPTZ 에서 BIGINT 로 바꾸는 이유 (ADR-0015·0021):
---   timestamp watermark 는 동일 시각 충돌·시계 스큐·gap 감지 불가로 확정 배제된 방식이다.
---   cursor 는 테넌트별 단조 증가 sequence 값이며, 발번 시점은 테넌트별 fan-out(ADR-0021).
+-- cursor 는 테넌트별 단조 증가 sequence 값(BIGINT)이다 — 근거는 ADR-0015·0021.
 --   전달 레코드 저장 구조의 물리 설계는 영서 오너십으로 별도 확정한다
 --   (docs/contracts/event-bundle-schema.md).
 --
