@@ -43,6 +43,7 @@
 
 ## 5. 문서·하네스 후속
 - [ ] **테스트 전략 문서** — 모듈별 요구 테스트 층(단위/통합) 기준 + **Event Bundle 계약 테스트**(진기-영서 양단이 같은 스키마로 검증, §1 계약 확정과 짝)
+- [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Serving API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
 - [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL)
 - [ ] **Definition of Done 명문화** — 게이트(edge-review→docs-sync)+이슈 전환 기준을 README Git 컨벤션에 한 절로
 - [ ] gateway console 라우트 제거 — tenant-console 온프렘 재배치(데모 토폴로지) 시점에 (gateway = Super Admin·Tenant Sync API 전용 완성)
