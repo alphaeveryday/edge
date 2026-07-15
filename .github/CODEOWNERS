@@ -1,10 +1,10 @@
-# docs/contracts/ 핵심 계약 2건 — 진기·영서 인터페이스 계약, 변경 시 양자 합의 (ADR-0019)
-# 나머지 contracts/(sync-auth, serving-api)는 영서 단독 오너십 영역이라 걸지 않는다.
-/docs/contracts/sync-protocol.md      @jingi723 @choyoungseo20
+# 진기-영서 인터페이스 = Cloud Event Store DB 스키마 (ADR-0026, db-as-contract).
+# event-bundle-schema.md 는 스키마 경계면 서술을 담으므로 공동 게이트 유지.
+# sync-protocol.md 는 Sync 양단이 모두 영서 소유라 걸지 않는다 (sync-auth·serving-api 와 동일).
 /docs/contracts/event-bundle-schema.md @jingi723 @choyoungseo20
 
 # Cloud Event Store 스키마의 물리 정의 — 계약 문서와 같은 게이트를 건다.
 # event-bundle-schema.md 가 이 마이그레이션을 계약 본문으로 참조하므로, 문서만 걸어두면
-# 스키마를 직접 바꿔 계약을 우회할 수 있다 (ADR-0019 "이 계약 변경은 반드시 양자 합의").
+# 스키마를 직접 바꿔 계약을 우회할 수 있다 (ADR-0026 — 스키마 변경은 반드시 양자 합의).
 # implementation.md §4 체크리스트의 "libs/schema 는 양쪽 리뷰를 받는다" 도 여기서 강제된다.
 /src/libs/schema/ @jingi723 @choyoungseo20

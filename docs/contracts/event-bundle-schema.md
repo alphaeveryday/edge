@@ -1,12 +1,10 @@
 # Event Bundle 인터페이스 계약 (진기-영서)
 
-> **계약 문서** — 이 파일의 변경은 진기·영서 공동 승인 대상이다(CODEOWNERS).
+> **계약 문서** — 진기-영서 인터페이스는 **Cloud Event Store DB 스키마**다([../adr/0026](../adr/0026-ownership-boundary-db.md), db-as-contract). 이 파일 중 스키마 경계면 서술의 변경은 공동 승인 대상(CODEOWNERS)이고, 번들 와이어 포맷(JSON·체크섬)은 Sync 양단 소유자(영서)의 스펙으로 함께 기록한다.
 
 > **상태: 합의 진행 (v2, 2026-07-15)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했다. `[합의 필요]` 표기만 남은 열린 결정이다.
 
-진기-영서 인터페이스는 **"Cloud Event Store 스키마 + 번들 생성 규칙"** 하나로 고정한다. 이 계약 변경은 반드시 양자 합의.
-
-- 오너십 경계: **김진기** — Data Pipeline → Common Analysis Engine → Cloud Event Store + **Event Bundle 생성까지** / **조영서** — **Tenant Sync API부터 이후 전부** ([../README.md](../README.md)의 팀 오너십 참조).
+- 오너십 경계: **김진기** — Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** / **조영서** — DB를 소비하는 이후 전부: **Event Bundle 생성(tenant-sync-api의 DB 조회·조립)**, 전달 레코드, Sync Agent, 온프렘 ([../adr/0026](../adr/0026-ownership-boundary-db.md)).
 - 전송 단위: Event Bundle (신규 + 정정 + 무효화). 무결성은 번들 단위 SHA-256 체크섬. 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
 
 ## Cloud Event Store 스키마
@@ -91,11 +89,10 @@
 - 체크섬 값은 응답 헤더 `X-Bundle-Checksum: sha256=<hex>`로 전달한다 (body 밖 — body에 넣으면 자기 자신을 포함하는 순환).
 - 검증 실패 시 저장하지 않고 재시도([sync-protocol.md](sync-protocol.md)). 검증 통과한 **수신 바이트 원본을 Raw Event Store에 그대로 보존**한다 (수신 원본 불변 원칙, 목표 계약의 서명 검증도 같은 바이트 대상).
 
-## 미확정 요약 (남은 합의 안건)
+## 미확정 요약
 
-1. 전달 레코드 설계 일체 — 멱등 키·저장 구조·fan-out 구현·retention·게시 상태↔전달 유형 매핑 (영서 설계 후 기록)
-2. Tenant Sync API 엔드포인트 계약 — 응답 포맷·상한·에러 시맨틱·규모 가정 (영서 설계 후 [sync-protocol.md](sync-protocol.md)에 기록)
-3. `source_events`·`evidences`의 번들 경계면 컬럼 선정 (물리 스키마 컬럼 중 선별)
-4. `tenant`·`tenant_credential` 정의 검토 — Tenant Sync API 이후 영역(영서 오너십, [ADR-0019](../adr/0019-team-ownership-interface.md)). 인증 모델(sync-auth)과 함께 확정, 다르면 수축-확장으로 교체
+**영서 단독 결정(설계 후 이 문서에 기록)**: ① 전달 레코드 설계 일체(멱등 키·저장 구조·fan-out·retention·게시 상태↔전달 유형 매핑) ② Tenant Sync API 엔드포인트 계약([sync-protocol.md](sync-protocol.md)) ③ 번들에 실을 `source_events`·`evidences` 컬럼 선별(reader 자유 — 단 스키마 의존이므로 변경 감지 대상)
+
+**진기 확인 대상(스키마)**: `tenant`·`tenant_credential` 정의 검토 — 인증 모델(sync-auth)과 함께 확정, 다르면 수축-확장으로 교체 ([ADR-0026](../adr/0026-ownership-boundary-db.md))
 
 해소된 안건: ~~confidence 스케일~~ → 물리 스키마의 `confidence_level` enum(HIGH/MEDIUM/LOW) 채택. ~~risk_grade 존치~~ → 물리 스키마에 없음, 위험 등급 산정 주체 결정(TODO §2) 후 필요 시 확장-수축으로 추가. ~~ID 체계(UUIDv7 제안)~~ → 물리 스키마의 TEXT 도메인 ID 채택.
