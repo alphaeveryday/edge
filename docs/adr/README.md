@@ -31,3 +31,4 @@
 | [0021](0021-design-reinforcement.md) | 설계 보강 — DMZ 배치·cursor 발번 시점·정정 리비전 모델 확정 | 승인됨 |
 | [0022](0022-verification-round2.md) | 검증·보강 2차 — 규제 사실관계 외부 검증 및 배치·온보딩 옵션 보강 | 승인됨 |
 | [0023](0023-customer-validation.md) | 고객 검증 반영 — 증권사 현업 리뷰 확보·이해상충은 노출 범위 제외로 통제 | 승인됨 |
+| [0024](0024-scope-domestic-etf.md) | MVP 상품 범위 — 국내 ETF, 스키마는 미국 확장성 선반영 | 승인됨 |

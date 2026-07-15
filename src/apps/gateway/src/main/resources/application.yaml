@@ -10,13 +10,9 @@ spring:
           # 로 일치시켜 로컬(compose)과 dev(ECS)에서 동일하게 동작한다.
           # (바 JVM 로컬 테스트 등 예외는 *_URI 환경변수로 override)
           routes:
-            # ── 외부: widget-ui → gateway → widget-api ─────────────────
-            - id: widget
-              uri: ${WIDGET_API_URI:http://widget-api:8080}
-              predicates:
-                - Path=/api/v1/widget/**
-              filters:
-                - RewritePath=/api/v1/widget/(?<segment>.*), /internal/widget/$\{segment}
+            # 위젯 라우트는 하이브리드 피벗으로 제거됐다(ADR-0010 — embed widget 폐기).
+            # 목표 상태: Cloud gateway 는 Super Admin·Tenant Sync API 용만. console 라우트는
+            # tenant-console 온프렘 재배치 시 제거한다.
 
             # ── 콘솔: tenant-console-ui → gateway → tenant-console-api ──
             - id: tenant-console
@@ -28,7 +24,7 @@ spring:
 
             # ── 운영: super-admin-ui → gateway → super-admin-api ───────
             # ⚠️ admin 은 운영자(소수·알려진 집합) 전용. 망 수준 제한(VPN/IP allowlist)은
-            #    인프라에서 추가한다(architecture.md §4·ADR-0008). 여기선 경로 라우팅만.
+            #    인프라에서 추가한다(ADR-0008). 여기선 경로 라우팅만.
             - id: super-admin
               uri: ${SUPER_ADMIN_API_URI:http://super-admin-api:8080}
               predicates:
