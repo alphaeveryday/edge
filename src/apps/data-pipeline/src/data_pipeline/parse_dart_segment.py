@@ -40,6 +40,28 @@ _RAW_MATERIAL_RE = re.compile(r"원재료|매입유형|매입처|투입액|구�
 _SALES_CONTEXT_RE = re.compile(r"매출|영업수익|서비스|판매|수주")
 _NON_SEGMENT_RE = re.compile(r"^(?:구분|비중|전년비\s*증감률|총수출|매출액|영업이익|당기순이익|연결조정(?:\s*후)?|내부매출액|총매출액|순매출액|제\s*\d+\s*기)$")
 
+# ALPHA-354 표 선택 게이트 — 헤더군(A∧B)만으로는 사업부문표와 관계사 지분표·주주현황표를 못 가른다
+# (지분율·주주비중도 '부문명+비중%' 모양이라 후보가 돼 garbage 를 certify). 라이브 15개 사업보고서
+# 실측으로 세 신호를 추가한다: (1) 표가 앉은 DART 섹션(<TITLE>) 이 주주·지분투자면 배제, (2) 사업부문
+# 섹션이면 가점, (3) 사업부문 분할은 합≈100 이라 rescale 前 share_sum 이 밴드 밖이면 후보 탈락.
+_NONSEG_SECTION_RE = re.compile(
+    r"주주|최대주주|소유주식|종속기업|관계기업|공동기업|특수관계자|지분법|투자자산|일반사항|회사의\s*개요|배당|임원|계열회사|위험관리|자기주식"
+)
+# '영업실적'은 넣지 않는다 — 금융사는 '재무상태 및 영업실적' 섹션에 사업부문표가 아니라 손익계산서·
+# 재무상태표를 싣는다(삼성생명·삼성전기). 그 제목을 사업부문 섹션으로 인정하면 재무제표가 computed
+# 게이트를 통과해 부문으로 오인된다 — 신한 1건을 살리는 대가로 오탐이 커져 제외한다(신한 부문표는
+# 숫자도 부정확해 빈값이 낫다). 금융사 부문 추출은 Phase 2(별도).
+_SEGMENT_SECTION_RE = re.compile(r"주요\s*제품|주요\s*서비스|매출\s*(?:및|실적|현황)|사업부문|영업부문|사업의\s*내용|수주")
+# 손익계산서·회계 라인은 부문명이 아니다 — 부문명은 사업라인 명사(반도체·건설·은행·금융업)이지 손익
+# 항목(이자수익·보험금융비용·매출원가·금융자산손실…)이 아니다. 금융사 사업보고서는 사업부문표 대신
+# 손익계산서가 같은 섹션 제목('재무상태 및 영업실적') 아래 실려 부문으로 오인되므로(삼성생명 vs 신한이
+# 동일 제목), 섹션만으로 못 가른다 — 손익 접미어(수익·비용·손익·손실·이익·원가)로 이름 배제한다.
+# 정답 부문명(반도체·건설·은행·금융업·의약품…)은 이 어휘를 담지 않는다(실측 정답 문서 전건 무충돌).
+_METRIC_NAME_RE = re.compile(
+    r"수익|비용|손익|손실|이익|원가|대손|간접경비|판매비|관리비|법인세|충당금|손상|상각후원가"
+)
+_SHARE_SUM_MIN, _SHARE_SUM_MAX = 50.0, 130.0
+
 
 def _clean_text(value: Any) -> str:
     text = "" if value is None else str(value)
@@ -190,6 +212,14 @@ def _nearby_text(table: Tag, *, limit: int = 4) -> str:
     return " ".join(texts)
 
 
+def _nearest_section_title(table: Tag) -> str:
+    """표가 속한 DART 섹션 제목 — 문서 순서상 가장 가까운 앞 <TITLE>(SECTION-1/2 의 제목). 없으면 ''.
+    DART-XML 은 표를 `<SECTION-2><TITLE>2. 주요 제품 및 서비스</TITLE>…표…</SECTION-2>` 로 감싸므로
+    최근접 TITLE 이 그 표가 실린 섹션이다(간이 HTML 픽스처엔 TITLE 이 없어 '' — 섹션 신호 무효)."""
+    title = table.find_previous("title")
+    return _clean_text(title.get_text(" ", strip=True)) if title else ""
+
+
 def _label_column(frame: pd.DataFrame) -> str:
     for column in frame.columns:
         values = [_clean_text(value) for value in frame[column].tolist()]
@@ -294,6 +324,7 @@ def _postprocess_segments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("segment_name")
         and not _is_total_name(str(row["segment_name"]))
         and not _NON_SEGMENT_RE.match(_clean_segment_name(row["segment_name"]))
+        and not _METRIC_NAME_RE.search(_clean_segment_name(row["segment_name"]))
     ]
     if len(filtered) < 3:
         return filtered
@@ -600,12 +631,36 @@ def parse_segments(html_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         haystack = f"{context_text} {header_text}"
         if not (_HEADER_GROUP_A.search(haystack) and _HEADER_GROUP_B.search(haystack)):
             continue
-        for frame in pd.read_html(StringIO(str(table))):
+        section_title = _nearest_section_title(table)
+        if _NONSEG_SECTION_RE.search(section_title):
+            # 주주현황·관계사 지분투자 섹션의 표는 사업부문표가 아니다(합≈100 이어도 오인 방지).
+            continue
+        # 섹션 근거는 DART <TITLE> 로만 판단한다 — context_text(표 주변 셀)는 '매출' 등이 노이즈로
+        # 섞여 재무제표 표까지 사업부문으로 오인시킨다(실측: KB 조달표·삼성생명 재무상태표 오탐).
+        is_segment_section = bool(_SEGMENT_SECTION_RE.search(section_title))
+        try:
+            frames = pd.read_html(StringIO(str(table)))
+        except Exception:
+            # DART-XML 표가 read_html 로 재파싱 안 됨(`No tables found`·빈 컬럼 IndexError 등 표별
+            # 다양) — 표 하나가 문서 전체 파싱을 죽이지 않게 격리(각도 H·Rule 12). read_html 한
+            # 호출만 감싸 우리 추출 로직의 버그는 가리지 않는다. 사업부문표는 대개 read_html 가능.
+            continue
+        for frame in frames:
             rows = _extract_from_frame(frame, context_text)
             if not rows:
                 continue
             normalized_rows = [dict(row) for row in rows]
             normalized_rows, share_basis, share_sum = _normalize_shares(normalized_rows)
+            if share_basis in ("reported", "rescaled") and not (_SHARE_SUM_MIN <= share_sum <= _SHARE_SUM_MAX):
+                # 합계 정합 게이트: 사업부문 분할은 합≈100. 밴드 밖(관계사 지분율 합 154%·330%…)은
+                # 분할이 아니므로 rescale 로 100 에 맞춰 certify 하기 전에 후보에서 뺀다.
+                continue
+            if share_basis in ("computed", "unreliable") and not is_segment_section:
+                # 긍정 게이트: computed(금액→비중 파생)·unreliable(비중 합이 신뢰 밖)은 증거가 약하다.
+                # 사업부문 섹션 밖의 이런 표는 손익계산서·재무상태표·사채/지분 목록이 합≈100(또는
+                # 저신뢰)으로 부문 오인되므로(금융사 사업보고서), DART 섹션 제목 근거가 있을 때만 인정한다.
+                # reported/rescaled(회사가 명시한 비중 컬럼)는 강한 증거라 섹션 무관 인정(KB 재무제표 주석).
+                continue
             # 감지한 표 단위로 revenue_krw 를 KRW 로 스케일한다(비중은 비율이라 스케일 무관 —
             # normalize 뒤에 적용해 computed share 계산·share_sum 을 건드리지 않는다).
             factor = _unit_factor(haystack)
@@ -618,16 +673,18 @@ def parse_segments(html_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             unique_names = {_name_key(str(row.get("segment_name") or "")) for row in normalized_rows if row.get("segment_name")}
             score = (
                 basis_rank,
+                int(is_segment_section),
                 _connection_rank(context_text, [str(column) for column in _flatten_columns(frame).columns]),
                 int(2 <= len(normalized_rows) <= 12),
                 int(len(unique_names) == len(normalized_rows)),
                 len(unique_names),
                 period_rank,
                 sum(row.get("revenue_krw") is not None for row in normalized_rows),
-                share_sum,
+                # 마지막 tiebreak: 100 에 가까운 합을 선호(옛 share_sum 최대화는 큰 합=관계사표를 편애).
+                -abs(share_sum - 100.0),
             )
             candidates.append((score, normalized_rows, share_sum))
-    _, best_rows, best_share_sum = max(candidates, key=lambda item: item[0], default=((0, 0, 0, 0, 0, 0, 0, 0.0), [], 0.0))
+    _, best_rows, best_share_sum = max(candidates, key=lambda item: item[0], default=((0, 0, 0, 0, 0, 0, 0, 0, 0.0), [], 0.0))
     share_basis = str(best_rows[0]["share_basis"]) if best_rows else "unreliable"
     return best_rows, {
         "tables_seen": len(tables),
