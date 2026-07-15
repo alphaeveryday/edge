@@ -32,4 +32,4 @@ COMMENT ON TABLE tenant_sync_cursor IS
 
 ALTER TABLE tenant_sync_cursor
     ADD CONSTRAINT fk_tenant_sync_cursor_tenant
-        FOREIGN KEY (tenant_id) REFERENCES tenant (tenant_id);
+        FOREIGN KEY (tenant_id) REFERENCES tenant (tenant_id) ON DELETE CASCADE;
