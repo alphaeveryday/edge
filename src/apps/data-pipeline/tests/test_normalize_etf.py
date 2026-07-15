@@ -198,3 +198,64 @@ def test_input_run_id_scopes_validation_without_canonical(tmp_path):
     assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
     assert log["canonical_written"] is False and log["canonical_rows_written"] == 0
     assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+
+
+def test_krx_kospi_and_kosdaq_resolve_to_distinct_mics(tmp_path):
+    # WHY: 파티션의 market=KR 은 **지역**이지 거래소가 아니다(ADR-0027). 실측상 KODEX 반도체
+    #      구성종목 35종 중 **28종이 코스닥**이라, 거래소를 지역으로 뭉개면 다운스트림이
+    #      코스닥 종목을 유가증권시장으로 적재한다. MKT_ID 를 MIC(ISO 10383)로 흡수해야
+    #      canonical 만 보고 instrument.market_code 를 채울 수 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [
+        _krx_row(COMPST_ISU_CD="005930", COMPST_ISU_NM="삼성전자", MKT_ID="STK"),
+        _krx_row(COMPST_ISU_CD="036930", COMPST_ISU_NM="주성엔지니어링", MKT_ID="KSQ"),
+    ])
+    assert normalize_etf.run(storage, "R1") == 0
+
+    rows = {r["constituent_ticker"]: r for r in _canonical_rows(storage, "KR", "2026-07-14")}
+    assert rows["005930"]["constituent_mic"] == "XKRX"  # 유가증권시장
+    assert rows["036930"]["constituent_mic"] == "XKOS"  # 코스닥
+
+
+def test_krx_non_listed_holding_has_no_mic(tmp_path):
+    # WHY: 원화현금(KRD010010001)은 MKT_ID·SECUGRP_ID 가 빈 문자열로 온다(실측) — 거래소에
+    #      상장된 종목이 아니다. MIC=None 이 곧 그 사실이고, 우리 RDB 는
+    #      instrument.market_code NOT NULL 이라 이 행은 애초에 instrument 가 될 수 없다.
+    #      그래서 별도 증권유형 어휘를 만들지 않는다. 단 구성종목 자체는 canonical 에 보존한다
+    #      (ETF 의 실제 보유분이라 비중합이 맞아야 한다).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [
+        _krx_row(COMPST_ISU_CD="KRD010010001", COMPST_ISU_CD2="KRD010010001",
+                 COMPST_ISU_NM="원화현금", MKT_ID="", COMPST_RTO="0.03"),
+    ])
+    assert normalize_etf.run(storage, "R1") == 0
+
+    rows = _canonical_rows(storage, "KR", "2026-07-14")
+    assert len(rows) == 1, "비상장 보유분도 canonical 에는 남아야 한다(비중합 보존)"
+    assert rows[0]["constituent_mic"] is None
+    assert rows[0]["weight_pct"] == 0.03
+
+
+def test_unknown_krx_market_id_surfaces_instead_of_silent_null(tmp_path, caplog):
+    # WHY: KRX 가 새 시장 코드를 늘렸을 때 조용히 None 으로 뭉개면, 그 시장 전 종목이 거래소
+    #      없이 적재되고 아무도 모른다(Rule 12). 매핑 누락은 로그로 드러나야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [_krx_row(MKT_ID="NEWMKT")])
+    with caplog.at_level("WARNING"):
+        assert normalize_etf.run(storage, "R1") == 0
+
+    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["constituent_mic"] is None
+    assert any("NEWMKT" in r.getMessage() for r in caplog.records), \
+        "미지 MKT_ID 가 로그에 안 드러났다"
+
+
+def test_fmp_holdings_have_no_mic(tmp_path):
+    # WHY: FMP 는 거래소·자산유형 필드를 아예 주지 않는다(실측: symbol·asset·name·isin·
+    #      securityCusip·sharesNumber·weightPercentage·marketValue·updatedAt 이 전부).
+    #      없는 걸 지어내지 않고 None 으로 둔다 — 한 벤더만 채우는 nullable 은 기존 관례다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row()])
+    assert normalize_etf.run(storage, "R1") == 0
+
+    rows = _canonical_rows(storage, "US", "2026-07-11")
+    assert rows[0]["constituent_mic"] is None

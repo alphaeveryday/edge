@@ -14,7 +14,8 @@ disclosure_segment)의 blocking/경고 분리·canonical 멱등 병합을 합친
 정규화가 흡수하는 벤더 이형(raw 무변형으로 보존된 원본):
   - FMP(US): asset·name·isin·sharesNumber·weightPercentage·marketValue·updatedAt(datetime)
   - KRX(KR): COMPST_ISU_CD·COMPST_ISU_NM·COMPST_ISU_CD2·COMPST_ISU_CU1_SHRS·COMPST_RTO·
-    VALU_AMT + trd_dd(우리가 지정한 기준일). 수치는 콤마 포함 문자열일 수 있어 정규화가 흡수.
+    VALU_AMT·MKT_ID + trd_dd(우리가 지정한 기준일). 수치는 콤마 포함 문자열일 수 있어 정규화가
+    흡수하고, MKT_ID(STK/KSQ)는 MIC(ISO 10383)로 흡수한다 — FMP 는 거래소를 안 줘 MIC 가 None.
 벤더 판별은 raw 키의 source= 파티션으로 한다(레코드 내용 아님 — 키가 규약의 SSOT).
 
 정체성 키 (market,etf_id,constituent_ticker,as_of_date) 중 (market,as_of_date)가 파티션,
@@ -62,10 +63,42 @@ _KRX_FIELDS = {
     "shares": "COMPST_ISU_CU1_SHRS", "market_value": "VALU_AMT",
 }
 
+# KRX MKT_ID(벤더 거래소 구분) → MIC(ISO 10383, 국제표준 거래소 식별자).
+#
+# **어휘를 발명하지 않는다** — ADR-0027 이 `market_code = MIC` 를 이미 채택했고, 벤더 이형
+# (STK/KSQ)을 표준으로 흡수하는 게 정규화의 정의다. 파티션의 `market=KR` 은 **지역**이지
+# 거래소가 아니라서(ADR-0027) 이 정보를 대신하지 못한다 — 실측상 KODEX 반도체 구성종목 35종
+# 중 **28종이 코스닥**이라, 시장을 지역으로 뭉개면 다운스트림이 틀린 거래소로 적재한다.
+#
+# 매핑 밖 값은 None 이 되고 호출부가 경고를 남긴다(Rule 12 — KRX 가 코드를 늘리면 알아야 한다).
+_KRX_MIC_BY_MKT_ID = {
+    "STK": "XKRX",  # 유가증권시장(KOSPI)
+    "KSQ": "XKOS",  # 코스닥
+    "KNX": "XKON",  # 코넥스
+}
+
 
 def _text(record: dict, key: str) -> str | None:
     value = record.get(key)
     return value if isinstance(value, str) else None
+
+
+def _krx_mic(record: dict) -> str | None:
+    """KRX 구성종목의 거래소 MIC. 비상장(원화현금 등)은 MKT_ID 가 비어 None 이다.
+
+    None 은 결측이 아니라 **'거래소에 상장된 종목이 아니다'** 는 사실이다 — 실측상 원화현금
+    (`KRD010010001`)은 MKT_ID·SECUGRP_ID 가 둘 다 빈 문자열로 온다. 우리 RDB 는
+    `instrument.market_code NOT NULL` 이라 MIC 없는 행은 애초에 instrument 가 될 수 없으므로,
+    별도 증권유형 어휘를 만들지 않고 이 한 필드로 구분이 선다.
+    """
+    mkt_id = _text(record, "MKT_ID")
+    if not mkt_id:
+        return None
+    mic = _KRX_MIC_BY_MKT_ID.get(mkt_id)
+    if mic is None:
+        # 조용히 None 으로 뭉개면 새 시장이 생겼을 때 전 종목이 시장 없이 적재된다.
+        logger.warning("알 수 없는 KRX MKT_ID=%r — MIC 없이 통과(매핑 추가 필요)", mkt_id)
+    return mic
 
 
 def _ref_number(value: object) -> float | None:
@@ -127,6 +160,10 @@ def _normalize(vendor: str, record: dict) -> dict:
         "constituent_ticker": _text(record, fields["constituent_ticker"]),
         "constituent_isin": _text(record, fields["constituent_isin"]),
         "constituent_name": _text(record, fields["constituent_name"]),
+        # 거래소 MIC — KRX 만 준다. FMP 는 거래소·자산유형 필드를 아예 안 줘(실측: symbol·
+        # asset·name·isin·securityCusip·sharesNumber·weightPercentage·marketValue·updatedAt
+        # 이 전부) None 이다. 한 벤더만 채우는 nullable 은 기존 관례(해외기초 대시 비중)와 같다.
+        "constituent_mic": _krx_mic(record) if vendor == "krx" else None,
         "weight_pct": _ref_number(record.get(fields["weight_pct"])),
         "shares": _ref_number(record.get(fields["shares"])),
         "market_value": _ref_number(record.get(fields["market_value"])),
@@ -142,7 +179,7 @@ def _normalize(vendor: str, record: dict) -> dict:
 # ── canonical 적재 ───────────────────────────────────────
 _CANONICAL_COLUMNS = (
     "market", "etf_id", "constituent_ticker", "constituent_isin", "constituent_name",
-    "weight_pct", "shares", "market_value", "currency", "as_of_date",
+    "constituent_mic", "weight_pct", "shares", "market_value", "currency", "as_of_date",
     "source_vendor", "fetched_at",
 )
 
@@ -155,7 +192,8 @@ def _canonical_schema():
     return pa.schema([
         ("market", pa.string()), ("etf_id", pa.string()),
         ("constituent_ticker", pa.string()), ("constituent_isin", pa.string()),
-        ("constituent_name", pa.string()), ("weight_pct", pa.float64()),
+        ("constituent_name", pa.string()), ("constituent_mic", pa.string()),
+        ("weight_pct", pa.float64()),
         ("shares", pa.float64()), ("market_value", pa.float64()),
         ("currency", pa.string()), ("as_of_date", pa.string()),
         ("source_vendor", pa.string()), ("fetched_at", pa.string()),
