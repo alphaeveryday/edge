@@ -175,16 +175,20 @@ jobs:
       - name: Create onprem database
         run: docker exec edge-ci-pg createdb -U edge edge_onprem
 
+      # 주의: Flyway Gradle 플러그인은 환경변수(FLYWAY_*)가 Gradle property 보다 우선한다.
+      # job 레벨 FLYWAY_URL(=edge)이 -Pflyway.url 을 덮으므로 step 레벨 env 로 재정의한다.
       - name: Flyway migrate (onprem set)
         working-directory: src
+        env:
+          FLYWAY_URL: jdbc:postgresql://localhost:5432/edge_onprem
         run: >
           ./gradlew :libs:schema:flywayMigrate --info
-          -Pflyway.url=jdbc:postgresql://localhost:5432/edge_onprem
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
 
       - name: Flyway validate (onprem set)
         working-directory: src
+        env:
+          FLYWAY_URL: jdbc:postgresql://localhost:5432/edge_onprem
         run: >
           ./gradlew :libs:schema:flywayValidate --info
-          -Pflyway.url=jdbc:postgresql://localhost:5432/edge_onprem
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
