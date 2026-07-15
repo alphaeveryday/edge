@@ -5,11 +5,11 @@
 # (Free+private 플랜은 environment 배포 브랜치 정책 강제 불가 — ALPHA-313). 역할·리전은 repo-level vars.
 #
 # 배포 방식: pnpm 워크스페이스에서 해당 앱만 빌드(dist/) → aws s3 sync --delete → CloudFront 무효화.
-# widget-ui 는 임베드 위젯(고정 파일명 dist/), 콘솔 2종은 SPA(dist/ + assets) — sync 절차는 동일하다.
+# 대상은 콘솔 SPA 2종(tenant-console-ui·super-admin-ui, dist/ + assets). widget-ui 는 피벗으로 제거(ADR-0010).
 #
 # 배포 역할 권한(ALPHA-310): github-oidc-deploy 역할(schema-migrate·앱 배포와 공유)에 UI 권한이
 # 부여돼 있다 — 대상 버킷 S3 sync(ListBucket·Get/Put/DeleteObject)·CloudFront CreateInvalidation.
-# (infra/terraform/modules/github-oidc-deploy 의 ui_* 변수 · envs/dev 에서 3개 프론트 배선.)
+# (infra/terraform/modules/github-oidc-deploy 의 ui_* 변수 · envs/dev 에서 프론트 배선.)
 name: deploy-ui
 
 on:

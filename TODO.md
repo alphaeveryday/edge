@@ -4,12 +4,9 @@
 > **항목은 항상 우선순위순으로 유지한다** — 추가할 때마다 전체를 재정렬하며 갱신하고, 완료 시 줄을 지운다.
 > 항목 착수 시 Jira 티켓을 만든다(issue-first).
 
-## 0. 진행 중 — docs SSOT 분해 (ALPHA-348)
-- [ ] (하네스) edge-review F각도의 ADR-0006 인용 교체 — 대체됨(→0010) 처리된 ADR을 활성 규칙 근거로 인용 중
-- [ ] (하네스) docs-sync 문서 지도의 `docs/proposals/` 행 삭제 — git 이력에도 존재한 적 없는 디렉토리 (ADR-0009의 동일 링크도 정리)
+## 0. 하네스 소수정 잔여
+- [ ] (하네스) ADR-0009의 `docs/proposals/` 죽은 링크 정리 — git 이력에도 존재한 적 없는 디렉토리
 - [ ] (하네스) AGENTS.md 1행 `12-rule template` placeholder 제목 정리
-- [ ] (하네스) CLAUDE.md 변경 이력에 하네스 변경 기록 — docs-sync 지도 신구조 갱신·edge-review 링크 교체·writing-rules 포인터 추가
-- [ ] 위 소수정 적용 후: 브랜치 커밋 → PR 전 게이트(edge-review → docs-sync) → dev PR
 
 ## 1. 인터페이스 계약 확정 — 병렬 개발 블로커 (진기·영서 합의 세션 1회)
 - [ ] **Event Bundle·Cloud Event Store 필드 스키마** 확정 → `docs/contracts/event-bundle-schema.md` 기입 (이벤트 타입별 필드·ID 체계·번들 JSON 구조·체크섬 대상 바이트)
@@ -34,23 +31,25 @@
 - [ ] **린팅/포맷팅 도입** — eslint+prettier(TS)·ruff(Python)·spotless(JVM), 3런타임 전부 미설정. **시점 주의: 코드 재편(§4) 후 도입하거나 포맷 전용 커밋으로 분리** — 재편 diff에 포맷 노이즈 섞이면 리뷰 오염
 
 ## 4. MVP 구현 (§1 계약 확정 후, docs/implementation.md 기준)
-- [ ] 코드베이스 재편 — widget 모듈 삭제·shared-tenancy(RLS) 삭제·tenant-console onprem 이동·아티팩트 2종(edge-cloud/edge-onprem) 빌드 분리
+- [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
 - [ ] Compliance Engine — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
 - [ ] Serving API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
+- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Serving API 호출 렌더링. 구 widget-ui 부활 아님 — Serving API 계약의 데모 소비자 (데모 토폴로지와 연동)
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속
 - [ ] **테스트 전략 문서** — 모듈별 요구 테스트 층(단위/통합) 기준 + **Event Bundle 계약 테스트**(진기-영서 양단이 같은 스키마로 검증, §1 계약 확정과 짝)
 - [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL)
 - [ ] **Definition of Done 명문화** — 게이트(edge-review→docs-sync)+이슈 전환 기준을 README Git 컨벤션에 한 절로
-- [ ] (하네스, 코드 재편과 함께) edge-review **F각도(신뢰경계) 전면 개정** — widget-api 읽기전용·gateway 3라우트 전제를 신규 신뢰경계(Sync 채널 mTLS·인증서-테넌트 인가 검증·Serving API Published-only·data-residency 기준)로 재작성. 빌드 예시 `:apps:widget-api`도 교체
-- [ ] (코드 재편과 함께) 루트 README 구 구조 서술 정비 — 외부/콘솔/운영 경로·gateway 3라우트·모듈 표가 피벗 전 기준
+- [ ] gateway console 라우트 제거 — tenant-console 온프렘 재배치(데모 토폴로지) 시점에 (gateway = Super Admin·Tenant Sync API 전용 완성)
 - [ ] 온프렘 릴리스 절차 문서화 — Rule Type 배포가 "소프트웨어 릴리스"인데 버전 정책·업그레이드 방법 미정
 
 ## 6. 인프라
+- [ ] **widget 인프라 Terraform 삭제 후속 PR** — envs/dev의 widget_api ECS 모듈·RDS SG 규칙·widget_site(S3/CloudFront)·OIDC 역할 참조·variables/tfvars, foundation의 `edge/widget-api` ECR, modules/alb 주석("widget-api 임시 검증용") 갱신. terraform-plan 코멘트 리뷰 후 머지 (코드 재편 PR에서 의도적으로 분리)
+- [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
 - [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
-- [ ] Cloud serving cluster를 신규 컴포넌트(Tenant Sync API 등)에 맞게 개정 — 구 앱 4종 배포 워크플로 정리 포함 (§4 코드베이스 재편과 연동)
+- [ ] Cloud serving cluster를 신규 컴포넌트(Tenant Sync API 등)에 맞게 개정 — 구 앱 배포 워크플로 정리 포함 (§4 코드베이스 재편과 연동). **gateway 존치 vs ALB 직결 ADR 포함** — 판단 조건 2개가 갖춰지는 시점에 결정: ① Tenant Sync API의 mTLS 노출 방식 확정(앱 직접 검증이면 gateway 경유 불가 → 존치 근거 하나 소멸) ② 콘솔 온프렘 재배치(console 라우트 소멸). 그 후 gateway에 남는 건 super-admin 앞 방어층뿐인데 ALB 리스너 규칙+망 제한으로 대체 가능성 있음

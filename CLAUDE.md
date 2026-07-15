@@ -20,3 +20,4 @@ Codex 등 다른 도구와 공유하기 위함입니다.
 | 2026-07-02 | 티켓 확인을 3단계 에스컬레이션으로 확장 (스프린트→백로그→생성, 스프린트 배치 보장) | skills/pr-cycle | 백로그 미확인 시 중복 이슈 생성 우려 피드백 |
 | 2026-07-04 | edge 특화 코드리뷰 스킬 신설 + PR 전 게이트에 편입 (edge-review → docs-sync 2단계; 빌드/테스트 확인은 edge-review 안에 포함) | skills/edge-review, skills/pr-cycle | 내장 /code-review 대신 AGENTS 규칙·계약(schema SSOT·신뢰경계·레이크) 특화 리뷰를 게이트에 상시화 |
 | 2026-07-10 | 파인더 각도 H(검증·품질 게이트 완전성) 신설 — malformed 입력의 crash-before-gate·coerce-to-passing·unchecked-field 우회를 적대적 열거 | skills/edge-review | ALPHA-133 정제 PR에서 edge-review가 놓친 게이트 우회 6건(비달력일·NaN/inf·소수거래량·비객체행·정체성결측 등)을 Codex가 전부 잡음 — 검증 게이트 특화 각도 부재가 원인 |
+| 2026-07-15 | F각도(신뢰경계) 전면 개정 — widget-api 읽기전용·gateway 3라우트 전제를 하이브리드 경계(Sync 채널 outbound-Pull·인증서-테넌트 인가·Serving Published-only·데이터 거주지)로 교체, 대체된 ADR-0006 인용 제거, widget 예시를 tenant-console-api로 교체 | skills/edge-review, skills/pr-cycle, skills/docs-sync | 코드베이스 재편(widget 삭제, ADR-0010·0016)으로 구 신뢰경계 전제가 소멸 — 하네스가 폐기된 구조를 규칙 근거로 인용 중이었음 |

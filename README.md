@@ -3,22 +3,20 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 초기 스캐폴드(walking-skeleton).** JVM 앱(gateway·widget-api·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. Node·Python 쪽과 대부분의 기능 구현은 아직 비어 있습니다(`.gitkeep`). 아래 구조와 [`docs/`](docs/)의 문서는 상당 부분 **현재 동작하는 시스템이 아니라 목표 아키텍처**를 기술합니다.
+> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(gateway·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. embed widget 모듈(widget-api·widget-ui)은 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로 삭제됐고, 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·compliance-engine·serving-api)는 walking skeleton 단계에서 추가됩니다.
 
 ## 한눈에 보기
 
 ```
 src/
 ├── apps/                     # 배포되는 실행 단위
-│   ├── widget-ui/            # Node   · 외부 임베드 위젯
-│   ├── tenant-console-ui/    # Node   · 테넌트 직원 콘솔 (한 테넌트 범위)
-│   ├── super-admin-ui/       # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
-│   ├── gateway/              # JVM    · 공개 엣지 (widget·console·admin 앞단)
-│   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
-│   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 · 넓은 표면
-│   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant 읽기/쓰기 · 최고 권한
-│   ├── data-pipeline/        # Python · 스케줄러 → raw 수집/후속 DB 적재
-│   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
+│   ├── tenant-console-ui/    # Node   · 테넌트 검수·정책 콘솔 [edge-onprem]
+│   ├── super-admin-ui/       # Node   · 플랫폼 운영자 콘솔 (cross-tenant) [edge-cloud]
+│   ├── gateway/              # JVM    · Cloud 엣지 (console·admin 앞단) [edge-cloud]
+│   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 [edge-onprem]
+│   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant · 최고 권한 [edge-cloud]
+│   ├── data-pipeline/        # Python · 스케줄러 → raw 수집/후속 DB 적재 [edge-cloud]
+│   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장 [edge-cloud]
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations/       #   Flyway 마이그레이션 (한 곳에서 관리)
@@ -37,34 +35,33 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 4개 앱(gateway·widget-api·tenant-console-api·super-admin-api)이 모두 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 3개 앱(gateway·tenant-console-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · gateway · widget-api · tenant-console-api · super-admin-api |
-| Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · super-admin-ui · ui-kit |
+| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · super-admin-api |
+| Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
 ## apps — 배포 단위
 
-| 앱 | 런타임 | 역할 |
-|---|---|---|
-| `widget-ui` | Node | 외부 사이트에 임베드되는 위젯 |
-| `tenant-console-ui` | Node | 테넌트 직원용 콘솔 (한 테넌트 범위) |
-| `super-admin-ui` | Node | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
-| `gateway` | JVM | 공개 엣지. widget·console·admin 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
-| `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
-| `tenant-console-api` | JVM | 테넌트용 API. **읽기/쓰기**, 넓은 표면 (한 테넌트 범위) |
-| `super-admin-api` | JVM | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
-| `data-pipeline` | Python | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
-| `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
+| 앱 | 런타임 | 아티팩트 | 역할 |
+|---|---|---|---|
+| `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, [console-ia](docs/console-ia/tenant-console.md) 기준 재구축 예정) |
+| `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
+| `gateway` | JVM | **edge-cloud** | Cloud 엣지. console·admin 트래픽에 라우트별 필터 적용 (목표: Super Admin·Tenant Sync API용만 — [ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md)) |
+| `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
+| `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
+| `data-pipeline` | Python | **edge-cloud** | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
+| `analysis-engine` | Python | **edge-cloud** | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
 
-### 외부 표면 vs 내부 표면
-- **외부 경로**: `widget-ui` → `gateway`(widget 라우트) → `widget-api` (읽기 전용, 좁은 표면)
-- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위)
+신규 온프렘 컴포넌트(sync-agent · compliance-engine · serving-api)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1).
+
+### 표면 분리
+- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘 재배치 시 gateway 경유 제거)
 - **운영 경로**: `super-admin-ui` → `gateway`(admin 라우트, VPN/IP 제한) → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
 
-`gateway`가 세 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
+`gateway`가 트래픽을 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Serving API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 
@@ -72,7 +69,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
 | `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`) + 공유 도메인 모델·분석 마트(`analysis_reports` 등) 접근 로직 |
-| `ui-kit` | Node | `widget-ui`·`tenant-console-ui` 공유 디자인 시스템 |
+| `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 (스텁 — 콘솔 재구축 시 채움) |
 | `py-common` | Python | Python 공통 유틸 |
 
 ### schema — 단일 진실 공급원(SSOT)
@@ -86,7 +83,6 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 [스케줄러] ─→ data-pipeline ──→ raw lake ──→ DB ←── analysis-engine ←─ [스케줄러]
                                   │            (분석 결과 저장)
                                   │
-   외부:  widget-ui → gateway → widget-api (읽기) ─┘
    콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
    운영:  super-admin-ui → gateway → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
@@ -95,7 +91,8 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 
 - `data-pipeline`이 외부 데이터를 raw lake에 보존하고, 후속 단계가 DB 적재로 이어집니다.
 - `analysis-engine`이 적재된 데이터를 분석해 분석 마트(`analysis_reports` 등)로 DB에 저장합니다.
-- API 계층(`widget-api`/`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, 분석 마트 접근은 `jvm-common`이 담당합니다.
+- API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, 분석 마트 접근은 `jvm-common`이 담당합니다.
+- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent → Compliance → Serving API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
 
 ## Git 컨벤션
 
@@ -140,7 +137,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `widget-ui` · `widget-api` · `gateway` · `tenant-console-ui` · `tenant-console-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
+  - apps: `gateway` · `tenant-console-ui` · `tenant-console-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
@@ -149,7 +146,7 @@ Refs: ALPHA-121
 
 ### 예시
 ```
-feat(widget-api): 위젯 조회 엔드포인트 추가
+feat(tenant-console-api): 검수 승인 엔드포인트 추가
 fix(analysis-engine): 분석 결과 중복 저장 방지
 docs(repo): 모노레포 구조 README 작성
 chore(schema): 마이그레이션 도구 설정
