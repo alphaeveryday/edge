@@ -278,8 +278,8 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     """raw etf_holdings → 정규화 → 게이트 → canonical 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
 
-    input_run_id 지정 시 그 수집 런의 raw 만, 아니면 raw etf 전체를 검증한다(멱등). 스코프 실행은
-    재검증(quality_log)만 하고 canonical 은 전체 런이 authoritative 하게 쓴다(가격 정제 동형)."""
+    input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
+    (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_as_of_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
@@ -343,16 +343,17 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if warn:
                 warnings.append({**ref, "reasons": warn})
 
+    # 스코프든 전체 런이든 canonical 을 쓴다(ALPHA-389) — 병합이 기존 행을 읽어 합친다.
     parts_written = canonical_rows = 0
-    canonical_written = input_run_id is None
-    if canonical_written:
-        try:
-            parts_written, canonical_rows = _write_canonical(storage, passing)
-        except Exception:
-            logger.exception("canonical 적재 실패")
-            exit_code = 1
-    else:
-        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
+    canonical_written = True
+    try:
+        parts_written, canonical_rows = _write_canonical(storage, passing)
+    except Exception:
+        logger.exception("canonical 적재 실패")
+        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+        canonical_written = False
+        exit_code = 1
 
     try:
         storage.put_bytes(

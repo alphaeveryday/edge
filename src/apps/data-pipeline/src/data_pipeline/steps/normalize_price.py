@@ -286,7 +286,8 @@ def _write_canonical(storage: Storage, passing: list[dict], collisions: list[dic
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     """raw price_daily → 정규화 → 게이트 → quality_log. 성공 0, 스토리지 장애 시 비0.
 
-    input_run_id 지정 시 그 수집 런의 raw 만, 아니면 raw price 전체를 검증한다(멱등).
+    input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
+    (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다.
     """
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
@@ -351,26 +352,34 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 continue
             passing.append(row)
 
-    # 통과 행을 canonical 로 멱등 병합 적재 — **전체 런(input_run_id=None)만** 쓴다.
-    # 스코프 실행은 그 수집 런의 행만 보므로 벤더 교차 충돌을 감지할 수 없다(다른 벤더의
-    # raw 는 스코프 밖). 스코프가 canonical 을 쓰면, 충돌로 비워진 키를 한 벤더만으로 다시
-    # 채워 fail-loud 불변식(둘 다 제외)을 조용히 깬다. 그래서 스코프는 재검증(quality_log)만
-    # 하고, canonical 은 전체 raw 를 보는 멱등 런이 authoritative 하게 쓴다(Rule 12).
+    # 통과 행을 canonical 로 멱등 병합 적재 — **스코프든 전체 런이든 쓴다**(ALPHA-389).
+    #
+    # 아래 교차 충돌 fail-loud 는 그대로 살아 있다 — 한 키에 두 벤더가 오면 둘 다 뺀다.
+    # 다만 **'충돌로 비워진 키를 단일 벤더 스코프가 되살리는' 경우는 이제 못 막는다**:
+    # 충돌이 나면 두 행을 다 빼 canonical 이 비고, 그러면 다음 스코프 런의 existing 에
+    # 비교 상대가 없다. 예전엔 스코프가 canonical 을 아예 안 써서 자연히 막혔다.
+    #
+    # 그 하위 케이스를 포기하는 근거: **선행 조건인 '벤더 겹침'이 설계상 없다.** 벤더는
+    # 서로 다른 종목을 받는다 — sources.toml `[price.source.symbol_map]` 은 US 심볼만 두고
+    # ("가격은 ADR 의 USD 시세를 KR 종목 가격으로 쓰면 통화·거래시간이 어긋난다"), KR 은
+    # KIS 소관이라 (market,ticker,trade_date) 가 겹치지 않는다. 불가능한 전제 뒤의 케이스를
+    # 지키려고 정제를 영구히 O(전체 raw) 로 둘 이유가 없다(Rule 2·Rule 7).
+    # 벤더가 실제로 겹치게 되면 전체 런·같은 런 스코프가 여전히 충돌을 fail-loud 로 잡는다.
     collisions: list[dict] = []
     parts_written = canonical_rows = 0
-    canonical_written = input_run_id is None
-    if canonical_written:
-        try:
-            parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
-        except Exception:
-            logger.exception("canonical 적재 실패")
-            exit_code = 1
-        if collisions:
-            # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
-            logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
-            exit_code = exit_code or 1
-    else:
-        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
+    canonical_written = True  # quality_log 계약 유지(스코프 여부와 무관하게 이제 항상 쓴다)
+    try:
+        parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
+    except Exception:
+        logger.exception("canonical 적재 실패")
+        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+        canonical_written = False
+        exit_code = 1
+    if collisions:
+        # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
+        logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
+        exit_code = exit_code or 1
 
     try:
         storage.put_bytes(

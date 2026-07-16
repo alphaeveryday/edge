@@ -293,8 +293,10 @@ def _write_canonical(storage: Storage, passing: list[dict], signals: list[dict])
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     """raw stock_news → 정규화 → 게이트 → canonical 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
 
-    input_run_id 지정 시 그 수집 런의 raw 만 **재검증**한다(canonical 은 안 씀 — 전체 런이
-    authoritative). 미지정이면 raw news 전체를 검증하고 canonical 을 멱등 적재한다.
+    input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다(ALPHA-389 —
+    SFN 이 이 경로로 돈다. 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에 비례한다).
+    미지정이면 raw news 전체를 읽는다 — **백필·복구 수단**이다(실패한 런의 raw 를 나중에
+    주워오거나 정체성 로직 변경을 구 raw 에 소급할 때).
     """
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
@@ -364,20 +366,22 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 통과했지만 url·publisher 결측 — canonical 진입은 시키되 provenance 손실을 드러낸다.
                 warnings.append({**ref, "reasons": warn})
 
-    # 통과 행을 canonical 로 멱등 병합 — **전체 런(input_run_id=None)만** 쓴다. 스코프 실행은
-    # 재검증(quality_log)만 하고 canonical 은 전체 raw 를 보는 멱등 런이 authoritative 하게 쓴다
-    # (가격 정제와 동형 — 스코프가 부분 파티션을 덮어써 멱등성을 흔들지 않게).
+    # 통과 행을 canonical 로 멱등 병합 — **스코프든 전체 런이든 쓴다**(ALPHA-389).
+    # 예전엔 전체 런만 썼고 근거를 "스코프가 부분 파티션을 덮어써 멱등성을 흔든다"로 적었으나
+    # 그건 사실이 아니었다 — _write_canonical 은 파티션의 기존 parquet 을 **전부 읽어**
+    # _merge_partition 으로 합치지(덮어쓰지) 않는다. 스코프 런이 자기 런의 행만 병합해도
+    # 기존 행은 그대로 남는다.
     duplicate_signals: list[dict] = []
     parts_written = canonical_rows = 0
-    canonical_written = input_run_id is None
-    if canonical_written:
-        try:
-            parts_written, canonical_rows = _write_canonical(storage, passing, duplicate_signals)
-        except Exception:
-            logger.exception("canonical 적재 실패")
-            exit_code = 1
-    else:
-        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
+    canonical_written = True  # quality_log 계약 유지(스코프 여부와 무관하게 이제 항상 쓴다)
+    try:
+        parts_written, canonical_rows = _write_canonical(storage, passing, duplicate_signals)
+    except Exception:
+        logger.exception("canonical 적재 실패")
+        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+        canonical_written = False
+        exit_code = 1
 
     try:
         storage.put_bytes(

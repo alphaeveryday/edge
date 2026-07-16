@@ -379,16 +379,24 @@ def test_duplicate_title_signal_logged_but_not_merged(tmp_path):
     assert any(s["basis"] == "normalized_title" and set(s["article_ids"]) == {ida, idb} for s in sigs)
 
 
-def test_scoped_run_does_not_write_canonical(tmp_path):
-    # WHY: 스코프(--input-run-id) 실행은 재검증(quality_log)만 하고 canonical 은 안 쓴다 —
-    #      canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative(부분 파티션 덮어쓰기 방지).
+def test_scoped_run_writes_canonical_without_losing_other_runs(tmp_path):
+    # WHY: SFN 이 --input-run-id 로 도는 경로다(ALPHA-389) — 스코프가 canonical 을 안 쓰면
+    #      파이프라인이 아무것도 적재하지 못한다. 그리고 스코프가 **기존 행을 날리지 않아야**
+    #      한다: _write_canonical 은 파티션의 기존 parquet 을 전부 읽어 병합하지 덮어쓰지
+    #      않는다. 이게 깨지면 매 런이 직전 런의 기사를 지워 canonical 이 하루치만 남는다.
     storage = LocalStorage(tmp_path / "lake")
-    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row()])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row(url="https://x.test/a")])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(url="https://x.test/b")])
 
     assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
     log = _quality_log(storage)
-    assert log["canonical_written"] is False and log["canonical_rows_written"] == 0
-    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+    assert log["canonical_written"] is True and log["canonical_rows_written"] == 1
+    assert log["records_read"] == 1  # R2 는 스코프 밖 — 읽지도 않는다
+
+    # R2 만 스코프 재실행 — R1 의 기사가 남은 채 R2 가 더해져야 한다.
+    assert normalize_news.run(storage, "N2", input_run_id="R2") == 0
+    urls = sorted(r["url"] for r in _canonical_rows(storage, "2026-07-01"))
+    assert urls == ["https://x.test/a", "https://x.test/b"]
 
 
 def test_mentions_preserved_fmp_merged_and_bigkinds_synthesized(tmp_path):

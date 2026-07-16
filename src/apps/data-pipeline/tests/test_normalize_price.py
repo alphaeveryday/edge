@@ -318,34 +318,56 @@ def test_unsupported_market_rejected():
 
 
 def test_input_run_id_scopes_validation(tmp_path):
-    # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 전량 재스캔 없이 운영한다.
+    # WHY: SFN 이 --input-run-id 로 도는 경로다(ALPHA-389) — 그 런의 raw 만 읽어 정제 비용이
+    #      여태 쌓인 raw 전체가 아니라 이번 런에 비례한다. 스코프도 canonical 을 쓴다.
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [_fmp_row()])
-    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(), _fmp_row()])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [_fmp_row(our_ticker="MSFT")])
 
     assert normalize_price.run(storage, "N1", input_run_id="R2") == 0
     log = _quality_log(storage)
-    assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
-    # 스코프 실행은 canonical 을 쓰지 않는다 — 다른 벤더 raw 를 못 봐 벤더 교차 충돌을 감지
-    # 못 하므로, 충돌로 비워진 키를 한 벤더만으로 재적재해 fail-loud 를 깨는 걸 막는다.
-    assert log["canonical_written"] is False
-    assert log["canonical_rows_written"] == 0
-    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+    assert log["records_read"] == 1  # R1 은 스코프 밖 — 읽지도 않는다
+    assert log["canonical_written"] is True
+    assert [r["ticker"] for r in _canonical_rows(storage, "US", "2026-07-01")] == ["MSFT"]
 
 
-def test_scoped_rerun_does_not_revive_collision(tmp_path):
-    # WHY: 벤더 교차 충돌로 canonical 이 비워진 뒤, 한 벤더만 --input-run-id 로 재실행해도
-    #      그 벤더가 canonical 에 되살아나면 안 된다(fail-loud 불변식: 둘 다 제외 유지) —
-    #      스코프 실행이 canonical 을 안 쓰므로 자연히 보장된다(Codex P2 회귀 방지).
+def test_scoped_run_covers_all_vendors_of_a_run(tmp_path):
+    # WHY: 스코프가 canonical 을 쓰게 되면서(ALPHA-389) 벤더 교차 충돌 감지는 **스코프가 그
+    #      키를 쓰는 모든 벤더를 포함한다**는 전제 위에 선다. SFN 이 그 전제를 만족한다 — 9개
+    #      raw 브랜치에 같은 run_id 를 넘기고 raw 키가 `source={vendor}/…/run_id={run_id}` 라
+    #      --input-run-id 필터에 두 벤더가 다 걸린다. 이게 깨지면(벤더마다 run_id 를 나누면)
+    #      한 벤더만 든 스코프가 충돌을 못 보고 통화 오염을 canonical 에 넣는다.
     storage = LocalStorage(tmp_path / "lake")
-    _write_raw(storage, _raw_key("fmp", "KR", run_id="RF"), [_fmp_row(our_ticker="005930", market="KR")])
-    _write_raw(storage, _raw_key("kis", "KR", run_id="RK"), [_kis_row(our_ticker="005930")])
-    assert normalize_price.run(storage, "N1") == 1  # 전체 런: 충돌 fail-loud
+    _write_raw(storage, _raw_key("fmp", "KR", run_id="N1"), [_fmp_row(our_ticker="005930", market="KR")])
+    _write_raw(storage, _raw_key("kis", "KR", run_id="N1"), [_kis_row(our_ticker="005930")])
+
+    # 같은 런 스코프 → 두 벤더가 다 보인다 → 충돌 fail-loud(둘 다 제외).
+    assert normalize_price.run(storage, "N2", input_run_id="N1") == 1
     assert _canonical_rows(storage, "KR", "2026-07-01") == []
 
-    # fmp 런만 스코프 재실행 — canonical 에 fmp 를 되살리지 않아야 한다.
-    assert normalize_price.run(storage, "N2", input_run_id="RF") == 0
-    assert _canonical_rows(storage, "KR", "2026-07-01") == []
+
+def test_vendors_do_not_overlap_by_design(tmp_path):
+    # WHY: 교차 충돌 fail-loud 가 지키는 상황(한 키에 두 벤더)은 **설계상 오지 않는다** —
+    #      벤더가 서로 다른 종목을 받기 때문이다. 이 계약이 곧 ALPHA-389 가 price 를 스코프로
+    #      돌릴 수 있는 근거다: 충돌이 없으면 '충돌로 비워진 키를 단일벤더 스코프가 되살린다'는
+    #      하위 케이스도 선행 조건이 없어 발생하지 않는다.
+    #      이 테스트가 깨지면(= 심볼맵이 겹치게 바뀌면) 스코프 정제의 전제가 무너진 것이니
+    #      normalize_price 의 canonical 적재 주석을 다시 읽어라.
+    #
+    #      **한계**: 이건 이 프로세스가 로드한 설정을 볼 뿐이라, 커밋된 sources.toml 은
+    #      지키지만 배포된 taskdef 의 env 오버라이드(DATA_PIPELINE_PRICE__SOURCE__SYMBOL_MAP)
+    #      까지는 못 본다 — env > file 이므로 CI 초록인 채 prod 만 겹칠 수 있다. 그때도
+    #      조용하진 않다: 런타임에 _merge_partition 이 충돌을 fail-loud 로 잡아 exit 1 이고
+    #      SFN 이 실패 알림을 낸다. 잃는 건 '충돌 후 단일벤더 스코프 복구가 되살리는' 케이스뿐.
+    from data_pipeline import load_settings
+
+    settings = load_settings()
+    fmp_tickers = set(settings.price.source.symbol_map)
+    kis_tickers = set(settings.kis_price.source.symbol_map) if settings.kis_price else set()
+    assert fmp_tickers and kis_tickers, "두 벤더 다 대상이 있어야 이 계약이 의미 있다"
+    assert not (fmp_tickers & kis_tickers), (
+        f"벤더 심볼맵이 겹친다: {sorted(fmp_tickers & kis_tickers)} — 교차 충돌이 가능해졌다"
+    )
 
 
 def test_kis_dateless_extra_row_fails_gracefully(tmp_path):
