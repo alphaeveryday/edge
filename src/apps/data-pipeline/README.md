@@ -47,6 +47,8 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
 # 국내 뉴스 원본저장(Step1) — BigKinds search.do. --source bigkinds 로 벤더 선택
 # (미지정=fmp). 인증키 없음. resultList[] row 원본 필드는 그대로 저장하고, our_ticker·
 # market·bigkinds_query·fetched_at 같은 수집 provenance 만 붙인다.
+# 검색어(종목명) + **경제 카테고리**로 좁혀 받는다(sources.toml `category_codes`,
+# ALPHA-388) — 필터가 없으면 그 종목이 언급된 정치·사회 기사까지 들어온다.
 uv run --package data-pipeline python -m data_pipeline.run ingest-raw --source bigkinds
 
 # 가격(OHLCV 일봉) 원본저장(Step1) — FMP EOD. 날짜창 미지정 = 증분(5일 소급~오늘,
@@ -265,7 +267,7 @@ from data_pipeline import load_settings
 
 settings = load_settings()           # 패키지 동봉 기본 설정 + env
 settings.news.sources                # {이름: NewsSource}
-settings.bigkinds_news               # BigKindsNewsSource (국내 뉴스 — 키 없음·KR 검색어 맵); 미설정이면 None
+settings.bigkinds_news               # BigKindsNewsSource (국내 뉴스 — 키 없음·KR 검색어 맵·경제 카테고리 필터); 미설정이면 None
 settings.price.source                # PriceSource (FMP EOD — 가격 전용 심볼맵, 현재 US)
 settings.kis_price.source            # KisPriceSource (KIS 국내 일봉 — 앱키/시크릿 env·env=prod|vps); 미설정이면 settings.kis_price 은 None
 settings.financial.source            # FinancialSource (FMP 재무 — 재무 전용 심볼맵, 현재 US); 미설정이면 settings.financial 은 None
@@ -300,7 +302,9 @@ settings.targets.keywords            # ["금리", ...]
   run_id 별 append(재현성). FMP 뉴스는 기존 계약대로 런 내 중복을 article_id 로 제거하고
   mentions 를 병합한다. 국내 BigKinds 뉴스는 같은 dataset·규약으로 `source=bigkinds`
   (`--source bigkinds`) 아래 쌓이며, BigKinds `resultList[]` row 를 전량 보존한다(런 내
-  dedup 없음). `CONTENT` 도 BigKinds 응답 원본 필드 그대로 저장한다.
+  dedup 없음). `CONTENT` 도 BigKinds 응답 원본 필드 그대로 저장한다. **전량 보존은 받아온
+  것을 안 버린다는 뜻이지 전부 받는다는 뜻이 아니다** — 무엇을 받을지는 검색어와 카테고리
+  필터가 정하고(경제 한정, ALPHA-388), 받은 뒤로는 무변형 보존이다.
 - **raw(가격)** — `raw/source=fmp/dataset=price_daily/market=…/ingest_date=…/run_id=…/` 에
   run_id 별 append. 파티션 키는 뉴스(published_date)와 달리 **ingest_date(수집일)** 다 —
   EOD 응답은 한 심볼이 여러 거래일을 한 번에 주므로 원본을 수집일 기준으로 보존한다.
