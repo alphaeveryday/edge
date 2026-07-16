@@ -35,6 +35,7 @@ class BigKindsNewsSource:
         self.page_size = config.page_size
         self.max_pages = config.max_pages
         self.query_map = config.query_map
+        self.category_codes = list(config.category_codes)
         self.client = client
         self.fetch_failures: list[dict] = []
         self.planned_symbols: int | None = None
@@ -147,7 +148,8 @@ class BigKindsNewsSource:
                 "startNo": start_no,
                 "resultNumber": self.page_size,
                 "providerCodes": [],
-                "categoryCodes": [],
+                # 카테고리 대분류 필터(설정). 언론사(providerCodes)는 안 좁힌다 — 전체 언론사.
+                "categoryCodes": self.category_codes,
                 "incidentCodes": [],
                 "dateCodes": [],
             },

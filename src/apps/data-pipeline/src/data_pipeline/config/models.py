@@ -54,6 +54,10 @@ class BigKindsNewsSource(BaseModel):
     page_size: int = Field(default=50, ge=1, le=100)
     max_pages: int = Field(default=5, ge=1, le=100)
     query_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # 검색을 좁히는 BigKinds 카테고리 대분류 코드. 검색어(종목명)만으로는 그 종목이 언급된
+    # 스포츠·지역 홍보 기사까지 들어오는데, 우리 소비자(태깅)는 경제 사건만 쓴다. 빈 리스트면
+    # 필터 없음(전 카테고리) — BigKinds 의 무필터 표현이 곧 빈 배열이라 그대로 넘긴다.
+    category_codes: list[NonBlankStr] = Field(default_factory=list)
 
 
 class PriceSource(BaseModel):
