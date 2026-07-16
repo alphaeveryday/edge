@@ -51,6 +51,15 @@ locals {
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
     },
+    # ⚠️ 컷오버 블로커 — 이 잡은 **현재 스케줄로는 항상 실패한다**(ALPHA-387).
+    # 형제 KR 소스(BigKinds·KIS·DART)는 날짜창 기반이라 빈 결과를 허용하지만, KRX ETF 는
+    # `trdDd`=오늘(KST) 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된 설계).
+    # 그런데 이 SFN 스케줄은 미 동부 16:10 = **KST 05:10**이라 기준일이 PDF 미게시(금요일
+    # 런은 아예 토요일)를 가리킨다. raw 는 전량성공 게이트라 이게 normalize·derive 를 통째로
+    # 막는다. 지금 안 터지는 건 스케줄러가 DISABLED 라서다.
+    # 그럼에도 게이트에 넣는 이유: 스케줄 자체가 US 마감 기준이라 KR 소스 전반과 안 맞고,
+    # 그 재검토는 컷오버(schedule_state=ENABLED)의 일이지 편입의 일이 아니다. 수동
+    # StartExecution(KST 주간)은 정상 동작한다. **ENABLED 로 바꾸기 전에 ALPHA-387 을 닫아라.**
     {
       state        = "CollectKrxEtf"
       taskdef_key  = "krx"
@@ -99,7 +108,7 @@ locals {
     {
       state        = "TagNews"
       taskdef_key  = "deepseek"
-      command_expr = "States.Array('tag-news', '--run-id', $.run_id)"
+      command_expr = "States.Array('tag-news', '--run-id', $.run_id, '--limit', '${var.tag_news_limit}')"
     },
     {
       state        = "LoadInstruments"
@@ -301,6 +310,29 @@ resource "aws_sfn_state_machine" "this" {
   name       = "${var.name}-raw-ingest"
   role_arn   = aws_iam_role.sfn.arn
   definition = local.sfn_definition
+}
+
+# 상태머신 정의 안의 NotifyFailure 는 **정의가 살아 있을 때만** 통보한다. 최상위
+# TimeoutSeconds 로 실행이 죽으면 States.Timeout 이 실행 자체를 끝내므로 어떤 Catch 도
+# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. derive 페이즈가 들어오면서 이 경로가 처음으로
+# 실질 도달 가능해졌다(LLM 호출은 소요시간 상한이 없다. tag_news_limit 이 1차 방어).
+# 알람은 정의 밖에서 도는 유일한 통보 수단이라 그 구멍을 정확히 메운다.
+# ExecutionsFailed 는 안 건다 — NotifyFailure 가 이미 덮고, 겹치면 같은 실패에 두 통이 온다.
+resource "aws_cloudwatch_metric_alarm" "execution_timed_out" {
+  alarm_name        = "${var.name}-execution-timed-out"
+  alarm_description = "SFN 실행이 TimeoutSeconds 초과로 죽었다 — 정의 안의 NotifyFailure 가 못 잡는 경로다."
+  namespace         = "AWS/States"
+  metric_name       = "ExecutionsTimedOut"
+  dimensions        = { StateMachineArn = aws_sfn_state_machine.this.arn }
+
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
 resource "aws_scheduler_schedule" "daily" {

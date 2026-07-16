@@ -120,6 +120,17 @@ variable "log_retention_days" {
   default = 14
 }
 
+# tag-news 는 기사 하나당 LLM 을 한 번 부르고, 창을 안 주면 canonical 전체가 대상이다
+# (다른 스텝과 달리 미지정이 증분 기본창이 아니다). run.py 의 --limit 은 "실수로 큰 금액이
+# 나가는 걸 호출부가 막을 수 있게" 둔 가드이고, SFN 이 그 호출부다. 상한을 안 주면 재태깅
+# 축(TAGGER_VERSION·온톨로지 범프)이 발동한 다음 런이 전 기간을 한 번에 태깅한다.
+# 상한에 걸린 잔여분은 다음 런이 이어받는다 — 미태깅 기사만 고르므로 진척이 누적된다.
+variable "tag_news_limit" {
+  description = "tag-news 가 한 실행에서 새로 LLM 을 부를 기사 수 상한(비용 가드). 잔여는 다음 실행이 이어받는다."
+  type        = number
+  default     = 500
+}
+
 variable "state_machine_timeout_seconds" {
   type    = number
   default = 21600
