@@ -40,7 +40,7 @@ locals {
   # ECS 가 task 기동 시 Secrets Manager 에서 읽어 env 로 주입한다(앱은 평문 env 로 소비).
   secrets = {
     PGPASSWORD       = "${var.db_password_secret_arn}:password::"
-    DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:apikey::"
+    DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:api_key::"
   }
 
   log_options = {
