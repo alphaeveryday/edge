@@ -2,6 +2,7 @@ locals {
   prefix                           = "edge-dev"
   data_pipeline_ecr_name           = "edge/pipeline"
   data_pipeline_image_tag          = "data-pipeline-latest"
+  analysis_engine_image_tag        = "analysis-engine-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
 }
@@ -53,6 +54,12 @@ data "aws_ecr_repository" "super_admin_api" {
 
 data "aws_ecr_repository" "gateway" {
   name = "edge/gateway"
+}
+
+# analysis-engine 이 읽는 DeepSeek API 키 시크릿 — data-pipeline 네임스페이스의 기존 그릇을 참조.
+# 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"apikey":"..."}'.
+data "aws_secretsmanager_secret" "deepseek" {
+  name = "${local.prefix}-data-pipeline/deepseek/api-key"
 }
 
 # 엣지 도메인 → ALB (ALIAS)
@@ -340,6 +347,43 @@ module "data_pipeline" {
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
   alarm_email = var.pipeline_alarm_email
+}
+
+# ── analysis-engine (KODEX 반도체 일일 뉴스 정규화 + 설명 SFN 배치) ──
+# data-pipeline 과 같은 배선: worker 클러스터·private 서브넷·pipeline lake·RDS·pipeline_alarm_email.
+# 이미지는 공유 edge/pipeline ECR 의 analysis-engine-latest 태그. 최초엔 스케줄 DISABLED 로 생성.
+module "analysis_engine" {
+  source = "../../modules/analysis-engine"
+
+  name        = "${local.prefix}-analysis-engine"
+  region      = var.region
+  vpc_id      = module.network.vpc_id
+  subnet_ids  = module.network.private_subnet_ids
+  cluster_arn = module.worker_cluster.cluster_arn
+  image       = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
+
+  lake_bucket_name = module.pipeline.lake_bucket
+  lake_bucket_arn  = module.pipeline.lake_bucket_arn
+
+  db_host                = module.rds.address
+  db_port                = module.rds.port
+  db_name                = module.rds.db_name
+  db_user                = module.rds.master_username
+  db_password_secret_arn = module.rds.master_user_secret_arn
+
+  deepseek_secret_arn = data.aws_secretsmanager_secret.deepseek.arn
+
+  alarm_email = var.pipeline_alarm_email
+}
+
+# analysis-engine SG → RDS 5432 (env 에서 독립 리소스로 — 순환 의존 회피)
+resource "aws_vpc_security_group_ingress_rule" "rds_from_analysis_engine" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.analysis_engine.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "analysis-engine batch tasks to postgres"
 }
 
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
