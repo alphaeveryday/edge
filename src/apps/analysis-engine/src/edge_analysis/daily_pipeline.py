@@ -45,6 +45,11 @@ PIPELINE_ID = "alphamale-etf-daily-v1"
 DEFAULT_ETF_TICKER = "091160"
 KODEX_SEMI_INSTRUMENT_FALLBACK = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 LAKE_NEWS_PREFIX = "canonical/news/news_articles"
+LAKE_PRICE_PREFIX = "canonical/market_data/price_daily"
+LAKE_HOLDINGS_PREFIX = "canonical/holdings/etf_holdings"
+ABS_GATE_THRESHOLD = 0.03
+CONCENTRATION_THRESHOLD = 0.5
+POLICY_VERSION = "l0-abs-v1"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
 CLASSIFY_BATCH = 40
@@ -235,6 +240,221 @@ def read_daily_news(s3, bucket: str, trade_date: date) -> list[dict[str, Any]]:
                 }
             )
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Price consumption, identity decomposition, L0 gate, routing (cloud S3)
+# --------------------------------------------------------------------------- #
+def _partition_values(s3, bucket: str, base: str, key: str) -> list[str]:
+    """Sorted partition values for ``key=`` immediately under ``base``."""
+    resp = s3.list_objects_v2(Bucket=bucket, Prefix=base, Delimiter="/")
+    out: list[str] = []
+    for common in resp.get("CommonPrefixes", []):
+        seg = common.get("Prefix", "").rstrip("/").split("/")[-1]
+        if seg.startswith(f"{key}="):
+            out.append(seg[len(key) + 1 :])
+    return sorted(out)
+
+
+def _read_parquet_prefix(s3, bucket: str, prefix: str, columns: list[str]) -> list[dict[str, Any]]:
+    import pyarrow.parquet as pq
+
+    rows: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            if not obj["Key"].endswith(".parquet"):
+                continue
+            body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
+            rows.extend(pq.read_table(io.BytesIO(body), columns=columns).to_pylist())
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return rows
+
+
+def load_constituent_prices(s3, bucket: str, market: str, trade_date: date) -> dict[str, dict[str, Any]]:
+    """Close-to-close returns per ticker for the trade day, from the S3 lake.
+
+    Uses the immediately-preceding available trade_date partition as D-1.
+    """
+    base = f"{LAKE_PRICE_PREFIX}/market={market}/"
+    dates = _partition_values(s3, bucket, base, "trade_date")
+    d = trade_date.isoformat()
+    if d not in dates:
+        return {}
+    idx = dates.index(d)
+    prev = dates[idx - 1] if idx > 0 else None
+    cur = {
+        str(r["ticker"]): r["close"]
+        for r in _read_parquet_prefix(s3, bucket, f"{base}trade_date={d}/", ["ticker", "close"])
+        if r.get("close") is not None
+    }
+    prv = (
+        {
+            str(r["ticker"]): r["close"]
+            for r in _read_parquet_prefix(s3, bucket, f"{base}trade_date={prev}/", ["ticker", "close"])
+            if r.get("close") is not None
+        }
+        if prev
+        else {}
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for ticker, close in cur.items():
+        prev_close = prv.get(ticker)
+        ret = (close / prev_close - 1.0) if prev_close and prev_close > 0 else None
+        out[ticker] = {"close": close, "prev_close": prev_close, "ret": ret, "prev_date": prev}
+    return out
+
+
+def load_etf_holdings(s3, bucket: str, market: str, etf_id: str, trade_date: date) -> tuple[list[dict[str, Any]], str | None]:
+    """Constituent weights (fraction) for one ETF, latest as_of <= trade_date."""
+    base = f"{LAKE_HOLDINGS_PREFIX}/market={market}/"
+    dates = _partition_values(s3, bucket, base, "as_of_date")
+    if not dates:
+        return [], None
+    eligible = [x for x in dates if x <= trade_date.isoformat()]
+    chosen = eligible[-1] if eligible else dates[0]
+    rows = _read_parquet_prefix(
+        s3, bucket, f"{base}as_of_date={chosen}/",
+        ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
+    )
+    holdings = [
+        {
+            "ticker": str(r["constituent_ticker"]),
+            "name": r.get("constituent_name"),
+            "weight": float(r["weight_pct"] or 0.0) / 100.0,
+        }
+        for r in rows
+        if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
+    ]
+    return holdings, chosen
+
+
+def compute_decomposition(holdings: list[dict[str, Any]], prices: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Constituent-contribution decomposition over the priced subset."""
+    total_weight = sum(h["weight"] for h in holdings)
+    members: list[dict[str, Any]] = []
+    num = den = 0.0
+    for h in holdings:
+        ret = prices.get(h["ticker"], {}).get("ret")
+        if ret is None:
+            continue
+        contribution = h["weight"] * ret
+        members.append(
+            {"ticker": h["ticker"], "name": h["name"], "weight": h["weight"], "ret": ret, "contribution": contribution}
+        )
+        num += contribution
+        den += h["weight"]
+    members.sort(key=lambda m: abs(m["contribution"]), reverse=True)
+    for rank, m in enumerate(members, 1):
+        m["rank"] = rank
+    total_abs = sum(abs(m["contribution"]) for m in members)
+    proxy_ret = (num / den) if den > 0 else None
+    return {
+        "members": members,
+        "proxy_ret": proxy_ret,
+        "covered_weight": den,
+        "total_weight": total_weight,
+        "coverage": (den / total_weight) if total_weight > 0 else 0.0,
+        "top1": (abs(members[0]["contribution"]) / total_abs) if members and total_abs > 0 else None,
+        "top3": (sum(abs(m["contribution"]) for m in members[:3]) / total_abs) if members and total_abs > 0 else None,
+        "advancing": sum(1 for m in members if m["ret"] > 0),
+        "total_priced": len(members),
+        "n_constituents": len(holdings),
+    }
+
+
+def l0_gate(decomp: dict[str, Any]) -> dict[str, Any]:
+    """Absolute entry gate on the (coverage-normalized) ETF proxy return."""
+    ret = decomp["proxy_ret"]
+    abs_gate = ret is not None and abs(ret) >= ABS_GATE_THRESHOLD
+    return {
+        "abs_gate": abs_gate,
+        "rel_gate": False,  # deferred: no benchmark index price in the lake yet
+        "triggered": abs_gate,
+        "observed_return": ret,
+        "reason": (f"abs|{ret:.4f}|>={ABS_GATE_THRESHOLD}" if abs_gate else "below_abs_threshold"),
+    }
+
+
+def decide_route(decomp: dict[str, Any]) -> tuple[str, bool]:
+    """Route code + whether event (news) search is required."""
+    top1 = decomp.get("top1")
+    if top1 is not None and top1 >= CONCENTRATION_THRESHOLD:
+        return "CONCENTRATED", True
+    return "COMMON_FACTOR", True
+
+
+def persist_trigger_route(
+    conn,
+    settings: Settings,
+    etf_instrument_id: str,
+    decomp: dict[str, Any],
+    gate: dict[str, Any],
+    route_code: str,
+    event_search: bool,
+    entity_index: dict[str, str],
+) -> dict[str, str]:
+    """Persist L1/L0/route lineage. FK-safe: uses only seeded instruments."""
+    from psycopg2.extras import execute_values
+
+    detected_at = _utcnow_iso()
+    trigger_id = _stable_id("pmt", etf_instrument_id, settings.trade_date.isoformat())
+    obs_id = _stable_id("cob", trigger_id)
+    route_id = _stable_id("rte", obs_id)
+    contribution_sum = sum(m["contribution"] for m in decomp["members"]) if decomp["members"] else None
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO price_movement_trigger (price_movement_trigger_id, etf_instrument_id, trade_date,"
+            " detected_at, observed_return, market_relative_return, absolute_gate_triggered,"
+            " relative_gate_triggered, detection_policy_version, detection_reason)"
+            " VALUES (%s,%s,%s,%s,%s,NULL,%s,%s,%s,%s) ON CONFLICT (price_movement_trigger_id) DO NOTHING",
+            (
+                trigger_id, etf_instrument_id, settings.trade_date.isoformat(), detected_at,
+                gate["observed_return"], gate["abs_gate"], gate["rel_gate"], POLICY_VERSION, gate["reason"],
+            ),
+        )
+        cur.execute(
+            "INSERT INTO etf_contribution_observation (contribution_observation_id, price_movement_trigger_id,"
+            " etf_return, nav_return, constituent_contribution_return, fx_contribution_return,"
+            " premium_discount_contribution_return, reconciliation_error, advancing_constituent_count,"
+            " total_constituent_count, top3_contribution_ratio, available_at, data_version)"
+            " VALUES (%s,%s,%s,NULL,%s,NULL,NULL,NULL,%s,%s,%s,%s,%s)"
+            " ON CONFLICT (contribution_observation_id) DO NOTHING",
+            (
+                obs_id, trigger_id, decomp["proxy_ret"], contribution_sum,
+                decomp["advancing"], decomp["total_priced"], decomp["top3"], detected_at, POLICY_VERSION,
+            ),
+        )
+        members = [
+            (obs_id, entity_index[m["ticker"]], m["weight"], m["ret"], m["contribution"], m["rank"])
+            for m in decomp["members"]
+            if m["ticker"] in entity_index
+        ]
+        if members:
+            execute_values(
+                cur,
+                "INSERT INTO etf_contribution_member (contribution_observation_id, constituent_instrument_id,"
+                " weight_ratio, constituent_return, contribution_return, contribution_rank) VALUES %s"
+                " ON CONFLICT (contribution_observation_id, constituent_instrument_id) DO NOTHING",
+                members,
+            )
+        cur.execute(
+            "INSERT INTO explanation_route (explanation_route_id, contribution_observation_id, route_code,"
+            " event_search_required, decision_reason, evaluated_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (contribution_observation_id) DO NOTHING",
+            (
+                route_id, obs_id, route_code, event_search,
+                f"top1={decomp['top1']}, coverage={decomp['coverage']:.2f}", detected_at,
+            ),
+        )
+    conn.commit()
+    return {"trigger_id": trigger_id, "obs_id": obs_id, "route_id": route_id}
 
 
 def _mention_tickers(mentions: Any) -> list[str]:
@@ -709,24 +929,57 @@ def fetch_kodex_events(conn, trade_date: date, tickers: list[str]) -> list[dict[
     ]
 
 
-def analyze(client: DeepSeekClient, settings: Settings, kodex_events: list[dict[str, Any]]) -> dict[str, Any]:
-    lines = []
+def analyze(
+    client: DeepSeekClient,
+    settings: Settings,
+    decomp: dict[str, Any],
+    gate: dict[str, Any],
+    route_code: str,
+    kodex_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    proxy = decomp["proxy_ret"]
+    price_lines = [
+        f"ETF 프록시 등락(구성종목 기여 합, 가격 커버리지 {decomp['coverage']:.0%}): "
+        + (f"{proxy * 100:+.2f}%" if proxy is not None else "산출 불가"),
+        f"진입 게이트: 절대(|등락|>=3%)={'발화' if gate['abs_gate'] else '미발화'} (상대 게이트: 지수 미확보로 미적용)",
+        f"라우팅: {route_code}",
+    ]
+    if decomp["top3"] is not None:
+        price_lines.append(
+            f"상승 {decomp['advancing']}/{decomp['total_priced']}종목(가격 보유분), 상위3 기여집중도 {decomp['top3']:.0%}"
+        )
+    price_lines.append("구성종목 기여(가격 보유분만, 비중×등락):")
+    for m in decomp["members"][:8]:
+        price_lines.append(
+            f"  {m['name'] or m['ticker']}({m['ticker']}) 비중 {m['weight']:.1%}"
+            f" | 등락 {m['ret'] * 100:+.1f}% | 기여 {m['contribution'] * 100:+.2f}%p"
+        )
+    price_lines.append(
+        f"주의: 구성종목 {decomp['n_constituents']}개 중 {decomp['total_priced']}개만 가격 확보"
+        f"(비중 {decomp['coverage']:.0%}). 나머지·NAV·괴리·환율은 미확보이므로 단정 금지."
+    )
+
+    event_lines = []
     for event in sorted(kodex_events, key=lambda e: e["available_at"]):
-        name, weight = KODEX_CONSTITUENTS.get(event["ticker"], (event["ticker"], 0.0))
-        lines.append(
-            f"- {name}({event['ticker']}, 비중 {weight:.1%}) | {event['event_type_code']}"
+        name, _weight = KODEX_CONSTITUENTS.get(event["ticker"], (event["ticker"], 0.0))
+        event_lines.append(
+            f"- {name}({event['ticker']}) | {event['event_type_code']}"
             f" | {event['novelty_status']} | 「{event['title']}」"
         )
+    events_block = "\n".join(event_lines) if event_lines else "  (해당 없음)"
+
     packet = (
-        f"[데이터] KODEX 반도체 ({settings.etf_ticker}) {settings.trade_date.isoformat()}\n"
-        f"오늘 정규화된 구성종목 이벤트 {len(kodex_events)}건 (제목 기반):\n" + "\n".join(lines)
+        f"[데이터] KODEX 반도체 ({settings.etf_ticker}) {settings.trade_date.isoformat()}\n\n"
+        f"[가격 분해]\n" + "\n".join(price_lines) + "\n\n"
+        f"[구성종목 뉴스 이벤트 {len(kodex_events)}건 (제목 기반)]\n" + events_block
     )
     system = (
-        "너는 KODEX 반도체 ETF의 당일 움직임을 구성종목 이벤트로 설명하는 분석 에이전트다. "
-        "아래 [데이터]의 이벤트 제목만 근거로 판단하며, 없는 사실을 만들지 마라. "
+        "너는 KODEX 반도체 ETF의 당일 움직임을 설명하는 분석 에이전트다. "
+        "[가격 분해]의 수치와 [뉴스 이벤트]의 제목만 근거로 판단하며, 없는 사실을 만들지 마라. "
+        "가격 커버리지가 부분이면 그 한계를 반영하고 단정하지 마라. 숫자는 제공된 값만 인용한다. "
         "반드시 아래 JSON만 출력한다.\n"
         '{"verdict": <"공식 이벤트 선행"|"시장·섹터 주도"|"가격 선행·설명 후행"|"수급·흐름 추정"|"원인 미확인">, '
-        '"headline": <한 문장 존댓말>, "explain": <3~6문장 존댓말>, '
+        '"headline": <한 문장 존댓말>, "explain": <3~6문장 존댓말, 견인 종목 기여와 이벤트를 연결>, '
         '"confidence": <"높음"|"중간"|"보류">, '
         '"key_evidence": [{"signal": str, "why": str}], "unexplained": str}'
     )
@@ -861,49 +1114,55 @@ def run(settings: Settings) -> int:
     log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id)
     registry = load_registry()
     client = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_model)
-
     s3 = _boto3_client("s3", settings)
-    news = read_daily_news(s3, settings.lake_bucket, settings.trade_date)
-    log("news.read", rows=len(news))
-    if not news:
-        log("done", reason="no_news")
-        return 0
 
     conn = connect(settings)
     try:
         entity_index = load_entity_index(conn)
         etf_instrument_id = resolve_etf_instrument(conn, settings.etf_ticker)
 
-        # Only news mentioning a seeded entity can produce FK-safe canonical events.
-        in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
-        already = existing_document_source_ids(conn, [n["article_id"] for n in in_universe])
-        todo = [n for n in in_universe if n["article_id"] not in already]
+        # --- Consume price (cloud S3) and decompose the ETF move (L1) --------
+        holdings, holdings_asof = load_etf_holdings(s3, settings.lake_bucket, "KR", settings.etf_ticker, settings.trade_date)
+        prices = load_constituent_prices(s3, settings.lake_bucket, "KR", settings.trade_date)
+        decomp = compute_decomposition(holdings, prices)
         log(
-            "normalize.scope",
-            in_universe=len(in_universe),
-            already_normalized=len(already),
-            to_normalize=len(todo),
+            "price.decomposed",
+            holdings_asof=holdings_asof,
+            constituents=decomp["n_constituents"],
+            priced=decomp["total_priced"],
+            coverage=round(decomp["coverage"], 4),
+            proxy_ret=decomp["proxy_ret"],
         )
 
-        classifications = classify_titles(client, todo, registry, entity_index) if todo else {}
-        created = persist_normalization(conn, todo, classifications, entity_index, settings)
-        log("normalize.written", canonical_events=len(created))
-
-        # Thread the KODEX-constituent events created this run.
-        new_kodex = select_kodex_events(created)
-        thread_events(conn, new_kodex)
-        log("thread.written", new_kodex_events=len(new_kodex))
-
-        # Explain over the full day's KODEX events (idempotent rerun safe):
-        # includes events normalized in prior runs, not just this invocation.
-        kodex_events = fetch_kodex_events(conn, settings.trade_date, list(KODEX_CONSTITUENTS))
-        if not kodex_events:
-            log("done", reason="no_kodex_events", canonical_events=len(created))
+        # --- L0 entry gate on price ------------------------------------------
+        gate = l0_gate(decomp)
+        if not gate["triggered"]:
+            # Normal variation is a first-class answer; no explanation is produced.
+            log("done", reason="normal_variation", observed_return=gate["observed_return"])
             return 0
 
-        explanation = analyze(client, settings, kodex_events)
+        route_code, event_search = decide_route(decomp)
+        ids = persist_trigger_route(conn, settings, etf_instrument_id, decomp, gate, route_code, event_search, entity_index)
+        log("trigger.persisted", route=route_code, event_search=event_search, **ids)
+
+        # --- Event search: normalize the day's news (title-only) -------------
+        kodex_events: list[dict[str, Any]] = []
+        if event_search:
+            news = read_daily_news(s3, settings.lake_bucket, settings.trade_date)
+            in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
+            already = existing_document_source_ids(conn, [n["article_id"] for n in in_universe])
+            todo = [n for n in in_universe if n["article_id"] not in already]
+            log("normalize.scope", news=len(news), in_universe=len(in_universe), to_normalize=len(todo))
+            classifications = classify_titles(client, todo, registry, entity_index) if todo else {}
+            created = persist_normalization(conn, todo, classifications, entity_index, settings)
+            thread_events(conn, select_kodex_events(created))
+            kodex_events = fetch_kodex_events(conn, settings.trade_date, list(KODEX_CONSTITUENTS))
+            log("events.ready", canonical_events=len(created), kodex_events=len(kodex_events))
+
+        # --- Synthesis: price decomposition + news events --------------------
+        explanation = analyze(client, settings, decomp, gate, route_code, kodex_events)
         outcome = persist_explanation(conn, s3, settings, etf_instrument_id, explanation, kodex_events)
-        log("done", kodex_events=len(kodex_events), **outcome)
+        log("done", route=route_code, kodex_events=len(kodex_events), **outcome)
         return 0
     finally:
         conn.close()
