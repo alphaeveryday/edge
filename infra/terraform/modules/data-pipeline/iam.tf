@@ -27,9 +27,16 @@ resource "aws_iam_role_policy" "execution_secrets" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.fmp.arn, aws_secretsmanager_secret.kis.arn, aws_secretsmanager_secret.dart.arn]
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_secretsmanager_secret.fmp.arn,
+        aws_secretsmanager_secret.kis.arn,
+        aws_secretsmanager_secret.dart.arn,
+        aws_secretsmanager_secret.krx.arn,
+        var.deepseek_secret_arn,
+        var.db_password_secret_arn,
+      ]
     }]
   })
 }

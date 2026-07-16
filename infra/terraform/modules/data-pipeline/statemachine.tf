@@ -51,6 +51,11 @@ locals {
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
     },
+    {
+      state        = "CollectKrxEtf"
+      taskdef_key  = "krx"
+      command_expr = "States.Array('ingest-raw-etf', '--source', 'krx', '--run-id', $.run_id)"
+    },
   ]
 
   # raw 성공 뒤 도는 정제 스테이지(ALPHA-355). raw 와 같은 브랜치 구조를 재사용하되 잡만 다르다.
@@ -79,6 +84,28 @@ locals {
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-disclosure-segment', '--run-id', $.run_id)"
     },
+    {
+      state        = "NormalizeEtf"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-etf', '--run-id', $.run_id)"
+    },
+  ]
+
+  # canonical 을 소비해 다운스트림 산출물을 만드는 스테이지(ALPHA-386). normalize 와 갈라 둔
+  # 이유는 의존이다 — 둘 다 canonical 전체를 읽으므로 정제가 끝난 뒤라야 한다. 두 잡은 서로
+  # 독립이고(뉴스 feature vs ETF 마스터) 쓰는 대상도 다르다: tag-news 는 레이크 feature 존,
+  # load-instruments 는 Cloud Event Store(RDB). 각자 시크릿이 달라 task-def 도 따로다.
+  derive_jobs = [
+    {
+      state        = "TagNews"
+      taskdef_key  = "deepseek"
+      command_expr = "States.Array('tag-news', '--run-id', $.run_id)"
+    },
+    {
+      state        = "LoadInstruments"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-instruments', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
@@ -91,6 +118,13 @@ locals {
   normalize_success_checks = [
     for index, _ in local.normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
+      StringEquals = "succeeded"
+    }
+  ]
+
+  derive_success_checks = [
+    for index, _ in local.derive_jobs : {
+      Variable     = "$.derive_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
@@ -112,9 +146,9 @@ locals {
     }
   }
 
-  # raw·normalize 가 동일한 브랜치 구조라 잡 리스트만 바꿔 한 빌더로 재생성한다(ALPHA-355).
+  # 모든 페이즈가 동일한 브랜치 구조라 잡 리스트만 바꿔 한 빌더로 재생성한다(ALPHA-355·386).
   branches_by_phase = {
-    for phase, jobs in { raw = local.raw_ingest_jobs, normalize = local.normalize_jobs } :
+    for phase, jobs in { raw = local.raw_ingest_jobs, normalize = local.normalize_jobs, derive = local.derive_jobs } :
     phase => [
       for job in jobs : {
         StartAt = job.state
@@ -183,6 +217,7 @@ locals {
 
   raw_ingest_branches = local.branches_by_phase["raw"]
   normalize_branches  = local.branches_by_phase["normalize"]
+  derive_branches     = local.branches_by_phase["derive"]
 
   sfn_definition = jsonencode({
     StartAt        = "RawIngestParallel"
@@ -221,6 +256,26 @@ locals {
         Type = "Choice"
         Choices = [{
           And  = local.normalize_success_checks
+          Next = "DeriveParallel"
+        }]
+        Default = "NotifyFailure"
+      }
+      # 정제 전량 성공일 때만 파생으로 넘어간다 — 위 raw→normalize 게이트와 같은 이유이자
+      # 같은 성격이다(실행 내 순서 제어지 영구 격리가 아니다). 두 파생 잡도 canonical 을
+      # full-scan 하므로, 이번 실행이 여기서 멈춰도 다음 성공 실행이 밀린 canonical 을 함께
+      # 소비한다. tag-news 는 미태깅 기사만 고르고 load-instruments 는 자연키 멱등이라
+      # 재실행이 중복을 만들지 않는다.
+      DeriveParallel = {
+        Type       = "Parallel"
+        Branches   = local.derive_branches
+        ResultPath = "$.derive_results"
+        Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
+        Next       = "DeriveCheckResults"
+      }
+      DeriveCheckResults = {
+        Type = "Choice"
+        Choices = [{
+          And  = local.derive_success_checks
           Next = "PipelineSucceeded"
         }]
         Default = "NotifyFailure"

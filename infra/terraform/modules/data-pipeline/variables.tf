@@ -38,6 +38,44 @@ variable "lake_bucket_arn" {
   type        = string
 }
 
+# ── DB (edge RDS, Cloud Event Store) ────────────────────
+# 적재 스텝(load-*)만 쓴다. 접속정보는 평문 env, 비밀번호만 RDS 관리형 시크릿에서 주입
+# (analysis-engine 모듈과 같은 관례). 단 env 이름은 data-pipeline 의 설정 네임스페이스를
+# 따른다 — DATA_PIPELINE_DB__*(DbConfig). PG* 가 아니다.
+variable "db_host" {
+  description = "edge RDS host (address, 포트 제외)"
+  type        = string
+}
+
+variable "db_port" {
+  description = "edge RDS 포트"
+  type        = number
+  default     = 5432
+}
+
+variable "db_name" {
+  description = "edge RDS 데이터베이스 이름"
+  type        = string
+}
+
+variable "db_user" {
+  description = "edge RDS 사용자 (평문)"
+  type        = string
+}
+
+variable "db_password_secret_arn" {
+  description = "DB 비밀번호 시크릿 base ARN. RDS 관리형 시크릿({username,password} JSON). 모듈이 ':password::' 를 붙여 DATA_PIPELINE_DB__PASSWORD 로 주입."
+  type        = string
+}
+
+# ── DeepSeek LLM (tag-news) ─────────────────────────────
+# analysis-engine 과 **같은 시크릿을 공유**하므로 그릇을 이 모듈이 소유하지 않는다(두 모듈이
+# 한 리소스를 동시에 소유할 수 없다) — 호출부가 data 로 조회해 ARN 을 넘긴다.
+variable "deepseek_secret_arn" {
+  description = "DeepSeek API 키 시크릿 base ARN({\"api_key\":\"...\"} JSON). 모듈이 ':api_key::' 를 붙여 LLM_API_KEY 로 주입."
+  type        = string
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024
