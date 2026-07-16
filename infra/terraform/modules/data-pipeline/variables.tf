@@ -38,6 +38,44 @@ variable "lake_bucket_arn" {
   type        = string
 }
 
+# ── DB (edge RDS, Cloud Event Store) ────────────────────
+# 적재 스텝(load-*)만 쓴다. 접속정보는 평문 env, 비밀번호만 RDS 관리형 시크릿에서 주입
+# (analysis-engine 모듈과 같은 관례). 단 env 이름은 data-pipeline 의 설정 네임스페이스를
+# 따른다 — DATA_PIPELINE_DB__*(DbConfig). PG* 가 아니다.
+variable "db_host" {
+  description = "edge RDS host (address, 포트 제외)"
+  type        = string
+}
+
+variable "db_port" {
+  description = "edge RDS 포트"
+  type        = number
+  default     = 5432
+}
+
+variable "db_name" {
+  description = "edge RDS 데이터베이스 이름"
+  type        = string
+}
+
+variable "db_user" {
+  description = "edge RDS 사용자 (평문)"
+  type        = string
+}
+
+variable "db_password_secret_arn" {
+  description = "DB 비밀번호 시크릿 base ARN. RDS 관리형 시크릿({username,password} JSON). 모듈이 ':password::' 를 붙여 DATA_PIPELINE_DB__PASSWORD 로 주입."
+  type        = string
+}
+
+# ── DeepSeek LLM (tag-news) ─────────────────────────────
+# analysis-engine 과 **같은 시크릿을 공유**하므로 그릇을 이 모듈이 소유하지 않는다(두 모듈이
+# 한 리소스를 동시에 소유할 수 없다) — 호출부가 data 로 조회해 ARN 을 넘긴다.
+variable "deepseek_secret_arn" {
+  description = "DeepSeek API 키 시크릿 base ARN({\"api_key\":\"...\"} JSON). 모듈이 ':api_key::' 를 붙여 LLM_API_KEY 로 주입."
+  type        = string
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024
@@ -80,6 +118,17 @@ variable "alarm_email" {
 variable "log_retention_days" {
   type    = number
   default = 14
+}
+
+# tag-news 는 기사 하나당 LLM 을 한 번 부르고, 창을 안 주면 canonical 전체가 대상이다
+# (다른 스텝과 달리 미지정이 증분 기본창이 아니다). run.py 의 --limit 은 "실수로 큰 금액이
+# 나가는 걸 호출부가 막을 수 있게" 둔 가드이고, SFN 이 그 호출부다. 상한을 안 주면 재태깅
+# 축(TAGGER_VERSION·온톨로지 범프)이 발동한 다음 런이 전 기간을 한 번에 태깅한다.
+# 상한에 걸린 잔여분은 다음 런이 이어받는다 — 미태깅 기사만 고르므로 진척이 누적된다.
+variable "tag_news_limit" {
+  description = "tag-news 가 한 실행에서 새로 LLM 을 부를 기사 수 상한(비용 가드). 잔여는 다음 실행이 이어받는다."
+  type        = number
+  default     = 500
 }
 
 variable "state_machine_timeout_seconds" {

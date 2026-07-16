@@ -68,7 +68,7 @@ variable "db_password_secret_arn" {
 
 # ── DeepSeek LLM ────────────────────────────────────────
 variable "deepseek_secret_arn" {
-  description = "DeepSeek API 키 시크릿 base ARN({\"apikey\":\"...\"} JSON). 모듈이 ':apikey::' 를 붙여 DEEPSEEK_API_KEY 로 주입."
+  description = "DeepSeek API 키 시크릿 base ARN({\"api_key\":\"...\"} JSON). 모듈이 ':api_key::' 를 붙여 DEEPSEEK_API_KEY 로 주입."
   type        = string
 }
 

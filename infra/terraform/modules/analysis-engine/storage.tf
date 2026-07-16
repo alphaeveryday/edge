@@ -4,7 +4,7 @@
 #                       canonical 뉴스를 읽고 설명 결과를 result prefix 에 쓴다.
 #   - DeepSeek API 키  : data-pipeline 네임스페이스의 기존 시크릿
 #                       (edge-dev-data-pipeline/deepseek/api-key). var.deepseek_secret_arn 으로 주입하고
-#                       ':apikey::' 로 DEEPSEEK_API_KEY 에 읽힌다. 값은 TF 밖 수동 주입.
+#                       ':api_key::' 로 DEEPSEEK_API_KEY 에 읽힌다. 값은 TF 밖 수동 주입.
 #   - DB 비밀번호       : RDS 관리형 시크릿({username,password}). var.db_password_secret_arn 으로 주입하고
 #                       ':password::' 로 PGPASSWORD 에 읽힌다.
 #

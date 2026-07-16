@@ -56,8 +56,9 @@ data "aws_ecr_repository" "gateway" {
   name = "edge/gateway"
 }
 
-# analysis-engine 이 읽는 DeepSeek API 키 시크릿 — data-pipeline 네임스페이스의 기존 그릇을 참조.
-# 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"apikey":"..."}'.
+# analysis-engine·data-pipeline(tag-news)이 함께 읽는 DeepSeek API 키 시크릿 — data-pipeline
+# 네임스페이스의 기존 그릇을 참조한다(두 모듈이 한 리소스를 소유할 수 없어 data 로 조회).
+# 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
 data "aws_secretsmanager_secret" "deepseek" {
   name = "${local.prefix}-data-pipeline/deepseek/api-key"
 }
@@ -332,8 +333,8 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
   description                  = "news-pipeline batch tasks to postgres"
 }
 
-# ── data-pipeline raw ingest (Step Functions 배치) ───────
-# 기존 임시 news-pipeline SFN 과 분리된 raw 수집 전용 상태머신. 최초엔 DISABLED 로 생성한다.
+# ── data-pipeline (Step Functions 배치: raw → normalize → derive) ──
+# 기존 임시 news-pipeline SFN 과 분리된 상태머신. 최초엔 DISABLED 로 생성한다.
 module "data_pipeline" {
   source = "../../modules/data-pipeline"
 
@@ -346,7 +347,39 @@ module "data_pipeline" {
   lake_bucket_name = module.pipeline.lake_bucket
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
+  # derive 페이즈(ALPHA-386): tag-news 는 DeepSeek 키, load-instruments 는 RDS 접속이 필요하다.
+  # deepseek 시크릿은 analysis-engine 과 공유하므로 여기서 data 로 조회해 양쪽에 같은 ARN 을 넘긴다.
+  db_host                = module.rds.address
+  db_port                = module.rds.port
+  db_name                = module.rds.db_name
+  db_user                = module.rds.master_username
+  db_password_secret_arn = module.rds.master_user_secret_arn
+  deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
+
   alarm_email = var.pipeline_alarm_email
+}
+
+# KRX 시크릿 그릇은 ALPHA-336 때 CLI 로 만들어져 TF state 밖에 있었다 — 형제 시크릿(fmp·kis·
+# dart)처럼 모듈이 소유하도록 입양한다. 값(mbr_id·pw)은 건드리지 않는다: TF 는 그릇만 만들고
+# 버전은 수동 주입하는 게 이 모듈의 관례다(modules/data-pipeline/storage.tf).
+# id 가 이름이 아니라 ARN 인 건 프로바이더 규약이고, ARN 의 랜덤 접미사는 환경 고유값이라
+# 이 블록이 모듈이 아니라 env 에 있다. 입양 후에는 no-op 이라 남겨 둬도 무해하다.
+import {
+  to = module.data_pipeline.aws_secretsmanager_secret.krx
+  id = "arn:aws:secretsmanager:ap-northeast-2:393229433969:secret:edge-dev-data-pipeline/krx/login-LAY4MI"
+}
+
+# data-pipeline SG → RDS 5432 (env 에서 독립 리소스로 — 순환 의존 회피)
+# load-instruments 가 ECS 안에서 Cloud Event Store 에 쓰려면 필요하다. ALPHA-372 는 이 규칙
+# 없이 완료됐는데, 그때 로더를 SSM 터널로 **로컬에서** 돌렸기 때문에 드러나지 않았다
+# (티켓에 적힌 "이미 허용됨"은 news-pipeline 모듈의 다른 SG 를 본 오독이다).
+resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.data_pipeline.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "data-pipeline batch tasks to postgres"
 }
 
 # ── analysis-engine (KODEX 반도체 일일 뉴스 정규화 + 설명 SFN 배치) ──
