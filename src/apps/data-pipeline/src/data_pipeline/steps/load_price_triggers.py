@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 
 from ..config import DbConfig, PriceTriggersConfig
@@ -65,9 +66,11 @@ def _etf_close(storage: Storage, market: str, trade_date: str, ticker: str) -> f
         for row in _read_parquet_rows(storage.get_bytes(key)):
             if row.get("ticker") == ticker:
                 close = row.get("close")
-                # canonical 게이트를 통과한 값이지만 0/음수 종가로 나누면 수익률이
-                # 오염되므로 원료 결측과 같은 취급으로 셈에서 뺀다.
-                if isinstance(close, (int, float)) and close > 0:
+                # normalize 의 _to_number 와 같은 위생 기준(bool 차단 + isfinite) — inf 는
+                # `> 0` 을 통과해 수익률 inf(CHECK 위반, 런 전체 롤백)나 분모 inf(가짜 -100%
+                # 트리거 커밋)를 만든다. 0/음수·NaN·bool 과 함께 원료 결측 취급으로 뺀다.
+                if (isinstance(close, (int, float)) and not isinstance(close, bool)
+                        and math.isfinite(close) and close > 0):
                     return float(close)
                 return None
     return None
@@ -114,10 +117,6 @@ def run(
     # ponytail: 전체 스캔은 파티션 수(연 ~250)에 선형 — 파티션이 수년치로 늘면 기본 창 도입
     """
     started_at = datetime.now(timezone.utc)
-    dates = _partition_dates(storage, config.market)
-    targets = [d for d in dates
-               if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
-
     considered = missing_price = missing_prev = gated_out = 0
     already = created = 0
     created_rows: list[dict] = []
@@ -133,22 +132,31 @@ def run(
         return closes[date]
 
     try:
+        dates = _partition_dates(storage, config.market)
+        # canonical 최초 날짜는 분모(직전 거래일)가 레이크에 없다 — 구조적 제외라 결손
+        # 신호(missing_prev)에 섞지 않는다(매 런 +1 상수 노이즈가 실제 결손을 묻는다).
+        prev_by_date = {dates[i]: dates[i - 1] for i in range(1, len(dates))}
+        targets = [d for d in dates[1:]
+                   if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
+
         with connect(db) as conn:
             etf_instrument_id = _resolve_etf_instrument_id(conn, config.etf_ticker)
             if etf_instrument_id is None:
                 # 트리거는 ETF 도메인 ID 에 매달린다 — 마스터가 없으면 만들 수 있는 게 없다.
-                # 조용히 0건 성공으로 끝나면 전제 결손이 안 보이므로 fail-loud(Rule 12).
-                logger.error("instrument 마스터에 ETF 가 없다: ticker=%s — load-instruments 선행 필요",
-                             config.etf_ticker)
-                return 1
+                # 조용히 0건 성공으로 끝나면 전제 결손이 안 보이므로 fail-loud 하되, 아래
+                # 로그 블록까지 내려가 quality log 는 남긴다("결과는 항상 로그"). ETF 행의
+                # 출처는 load-instruments(EQUITY 만 적재)가 아니라 시드 마이그레이션이다.
+                logger.error(
+                    "instrument 마스터에 ETF 가 없다: ticker=%s — 스키마 시드 마이그레이션"
+                    "(V202607150004 seed_entity_master_kr) 적용 여부 확인", config.etf_ticker)
+                failures.append({"reasons": ["missing_etf_master"],
+                                 "error": f"instrument 에 ETF ticker={config.etf_ticker} 없음"})
+                exit_code = 1
+                targets = []
+                etf_instrument_id = ""  # 아래 루프는 targets=[] 라 닿지 않는다
 
-            have = _existing_trade_dates(conn, etf_instrument_id)
+            have = _existing_trade_dates(conn, etf_instrument_id) if targets else set()
             for date in targets:
-                idx = dates.index(date)
-                if idx == 0:
-                    # canonical 최초 날짜는 분모(직전 거래일)가 레이크에 없다.
-                    missing_prev += 1
-                    continue
                 considered += 1
                 if date in have:
                     already += 1
@@ -157,7 +165,7 @@ def run(
                 if close is None:
                     missing_price += 1
                     continue
-                prev_close = close_of(dates[idx - 1])
+                prev_close = close_of(prev_by_date[date])
                 if prev_close is None:
                     missing_prev += 1
                     continue

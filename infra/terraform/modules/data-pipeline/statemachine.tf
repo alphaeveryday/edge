@@ -106,9 +106,10 @@ locals {
   ]
 
   # canonical 을 소비해 다운스트림 산출물을 만드는 스테이지(ALPHA-386). normalize 와 갈라 둔
-  # 이유는 의존이다 — 둘 다 canonical 전체를 읽으므로 정제가 끝난 뒤라야 한다. 두 잡은 서로
-  # 독립이고(뉴스 feature vs ETF 마스터) 쓰는 대상도 다르다: tag-news 는 레이크 feature 존,
-  # load-instruments 는 Cloud Event Store(RDB). 각자 시크릿이 달라 task-def 도 따로다.
+  # 이유는 의존이다 — 전부 canonical 을 읽으므로 정제가 끝난 뒤라야 한다. 세 잡은 서로
+  # 독립이고(뉴스 feature vs ETF 마스터 vs 가격변동 트리거) 쓰는 대상이 다르다: tag-news 는
+  # 레이크 feature 존, load-instruments·load-price-triggers 는 Cloud Event Store(RDB, 서로
+  # 다른 테이블·같은 rds task-def). 시크릿이 다른 잡은 task-def 도 따로다.
   derive_jobs = [
     {
       state        = "TagNews"

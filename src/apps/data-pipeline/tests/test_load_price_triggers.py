@@ -144,15 +144,36 @@ def test_detected_at_is_deterministic_market_close(tmp_path, monkeypatch):
     assert params[5] == "pipeline-absolute-v0"
 
 
-def test_missing_etf_master_fails_loud(tmp_path, monkeypatch):
-    """instrument 마스터에 ETF 가 없으면 비0 종료 — 조용한 0건 성공은 전제 결손을 숨긴다."""
+def test_missing_etf_master_fails_loud_with_quality_log(tmp_path, monkeypatch):
+    """마스터에 ETF 가 없으면 비0 종료 + quality log — "돌았는데 전제 결손"과 "안 돌았다"가
+    레이크 감사에서 구분돼야 한다("결과는 항상 로그")."""
     storage = LocalStorage(tmp_path)
     _write_canonical(storage, "2026-07-15", [{"ticker": _ETF, "close": 10000.0}])
     _write_canonical(storage, "2026-07-16", [{"ticker": _ETF, "close": 11000.0}])
     conn = _FakeConn(etf_id=None)
 
     assert _run(storage, conn, monkeypatch) == 1
+
     assert _inserts(conn) == []
+    log = _quality_log(storage)
+    assert log["exit_code"] == 1
+    assert log["failures"][0]["reasons"] == ["missing_etf_master"]
+
+
+def test_nonfinite_close_treated_as_missing(tmp_path, monkeypatch):
+    """inf 종가는 결측 취급 — 분자면 observed_return=inf 가 DB CHECK 위반으로 런 전체를
+    영구 롤백시키고, 분모면 가짜 -100% 트리거가 조용히 커밋된다."""
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "2026-07-14", [{"ticker": _ETF, "close": 10000.0}])
+    _write_canonical(storage, "2026-07-15", [{"ticker": _ETF, "close": float("inf")}])
+    _write_canonical(storage, "2026-07-16", [{"ticker": _ETF, "close": 11000.0}])
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+
+    assert _inserts(conn) == []  # 07-15 는 분자 inf, 07-16 은 분모 inf — 둘 다 차단
+    log = _quality_log(storage)
+    assert log["missing_price"] == 1 and log["missing_prev"] == 1 and log["created"] == 0
 
 
 def test_missing_etf_row_counts_not_crashes(tmp_path, monkeypatch):

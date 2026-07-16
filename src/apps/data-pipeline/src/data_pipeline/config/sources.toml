@@ -203,15 +203,8 @@ report_name_filters = ["공급계약", "사업보고서"]
 "105560" = "105560"  # KB금융
 "055550" = "055550"  # 신한지주
 
-# 수집 유니버스: US 9 + KR 9(소스 무관). 소스별 심볼 번역은 각 소스의 symbol_map
-# ETF 가격변동 트리거(잠정 absolute gate) — load-price-triggers 가 쓴다(ALPHA-406).
-# 게이트 임계값·relative gate 규칙은 로직 소유자(정준영) 합의 대상이라 코드가 아닌 여기 두고,
-# 적재 행의 detection_policy_version 으로 잠정 정책임을 표시한다.
-[price_triggers]
-etf_ticker = "091160"  # KODEX 반도체
-abs_threshold = 0.005  # ponytail: 잠정 0.5% — 게이트 정책 합의 후 갱신
-policy_version = "pipeline-absolute-v0"
-
+# 수집 유니버스: US 9 + KR 10(소스 무관, KR 은 개별주 9 + ETF 091160). 소스별 심볼 번역은
+# 각 소스의 symbol_map
 # 참고 — targets 에 있어도 그 소스에 매핑이 없으면 해당 소스는 건너뛴다.
 [targets]
 symbols = [
@@ -230,3 +223,11 @@ symbols = [
     "NVDA", "AAPL", "MSFT", "CAT", "GE", "RTX", "BRK.B", "JPM", "V",
 ]
 keywords = ["금리", "실적", "환율"]
+
+# ETF 가격변동 트리거(잠정 absolute gate) — load-price-triggers 가 쓴다(ALPHA-406).
+# 게이트 임계값·relative gate 규칙은 로직 소유자(정준영) 합의 대상이라 코드가 아닌 여기 두고,
+# 적재 행의 detection_policy_version 으로 잠정 정책임을 표시한다.
+[price_triggers]
+etf_ticker = "091160"  # KODEX 반도체
+abs_threshold = 0.005  # ponytail: 잠정 0.5% — 게이트 정책 합의 후 갱신
+policy_version = "pipeline-absolute-v0"
