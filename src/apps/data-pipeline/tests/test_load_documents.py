@@ -153,6 +153,10 @@ def test_available_at_falls_back_to_published_at_or_skips(tmp_path, monkeypatch)
     [(_, _, article_id, _, _, _, available_at, _)] = _inserts(conn)
     assert article_id == "a1"
     assert available_at == "2026-07-15T09:00:00+09:00"
+    # 결손이 로그에 세어져야 운영이 믿을 수 있다(Rule 12) — skip 은 침묵이 아니다.
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["skipped_no_available_at"] == 1
 
 
 def test_window_prunes_partitions(tmp_path, monkeypatch):
