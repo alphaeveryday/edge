@@ -62,6 +62,9 @@ resource "aws_iam_role_policy" "task" {
 
 # analyze 태스크 역할 — 공용 task 역할(레이크 전체 RW)과 달리 레이크는 읽기만, 쓰기는 설명
 # 결과 prefix 에 한정한다(구 analysis-engine 모듈의 최소권한 유지). RDS 쓰기는 IAM 무관(암호 인증).
+# 반면 execution 역할은 공용을 그대로 쓴다(모듈 관례: task-def 마다 주입 시크릿은 다르지만
+# 기동 주체는 하나) — 구 모듈의 2개(deepseek·db)보다 읽기 가능 시크릿이 벤더 4종만큼 넓어진다.
+# 주입 시크릿 목록(analysis_secrets)은 불변이라 컨테이너 표면 노출은 그대로다.
 resource "aws_iam_role" "analysis_task" {
   name               = "${var.name}-analysis-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json

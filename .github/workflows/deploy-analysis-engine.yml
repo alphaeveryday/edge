@@ -10,7 +10,6 @@ on:
       - "src/apps/analysis-engine/**"
       - "src/pyproject.toml"
       - "src/.dockerignore"
-      - "infra/terraform/modules/analysis-engine/**"
 
 permissions:
   id-token: write
