@@ -22,7 +22,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 임시 news-pipeline Step Functions 배치 (self-contained)
-    ├── data-pipeline/      # raw ingest 전용 Step Functions 배치 (data-pipeline 이미지·S3 lake·시크릿·스케줄러)
+    ├── data-pipeline/      # raw→normalize→derive Step Functions 배치 (data-pipeline 이미지·S3 lake·시크릿·스케줄러)
     └── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
 ```
 
@@ -34,7 +34,7 @@ infra/terraform/
 - **와일드카드 ACM** — `*.edgesignal.dev` 을 리전당 1장(ALB=apne2, CloudFront=us-east-1). 새 서브도메인 추가 시 인증서 재발급 0.
 - **네트워크 3-tier** — public(ALB·NAT) / private=compute(ECS, NAT 아웃바운드) / **data=RDS 격리(아웃바운드 없음)**. AZ `a·c`.
 - **클러스터 분리** — 상시 API(`edge-dev-service`) / 배치(`edge-dev-worker`).
-- **배치 = Step Functions** — 임시 news-pipeline 과 raw ingest 전용 data-pipeline 을 분리해 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림).
+- **배치 = Step Functions** — 임시 news-pipeline 과 data-pipeline(raw→normalize→derive 3페이즈)을 분리해 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림).
 - **비밀번호는 코드/state 에 없음** — RDS 관리형 시크릿, 외부 키는 Secrets Manager(값 수동 주입).
 
 ## 사용
