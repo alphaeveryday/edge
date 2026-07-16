@@ -406,6 +406,11 @@ module "analysis_engine" {
 
   deepseek_secret_arn = data.aws_secretsmanager_secret.deepseek.arn
 
+  # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
+  # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
+  # 정식 버저닝은 릴리스 규약 합의 후.
+  release_bundle_version = "dev-mvp-0"
+
   alarm_email = var.pipeline_alarm_email
 }
 
