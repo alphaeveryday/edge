@@ -171,28 +171,48 @@ def _boto3_client(service: str, settings: Settings):
     return session.client(service)
 
 
+def _list_news_keys(s3, bucket: str, trade_date: date) -> list[str]:
+    """Parquet keys for the trade day across both lake layouts.
+
+    The canonical writer partitions news as
+    ``canonical/news/news_articles/language={lang}/published_date={date}/`` while
+    a flat ``published_date={date}/`` layout also exists. Enumerate the language
+    partitions and include the flat prefix so the reader is robust to either.
+    """
+    base = f"{LAKE_NEWS_PREFIX}/"
+    date_seg = f"published_date={trade_date.isoformat()}/"
+    prefixes = [f"{base}{date_seg}"]
+    top = s3.list_objects_v2(Bucket=bucket, Prefix=base, Delimiter="/")
+    for common in top.get("CommonPrefixes", []):
+        p = common.get("Prefix", "")
+        if p[len(base):].startswith("language="):
+            prefixes.append(f"{p}{date_seg}")
+
+    keys: list[str] = []
+    for prefix in prefixes:
+        token: str | None = None
+        while True:
+            kwargs = {"Bucket": bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = s3.list_objects_v2(**kwargs)
+            keys.extend(
+                obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith(".parquet")
+            )
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+    return list(dict.fromkeys(keys))
+
+
 def read_daily_news(s3, bucket: str, trade_date: date) -> list[dict[str, Any]]:
     """Return canonical news rows (title-only fields) for the trade day."""
     import pyarrow.parquet as pq
 
-    prefix = f"{LAKE_NEWS_PREFIX}/published_date={trade_date.isoformat()}/"
-    keys: list[str] = []
-    token: str | None = None
-    while True:
-        kwargs = {"Bucket": bucket, "Prefix": prefix}
-        if token:
-            kwargs["ContinuationToken"] = token
-        resp = s3.list_objects_v2(**kwargs)
-        keys.extend(
-            obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith(".parquet")
-        )
-        if not resp.get("IsTruncated"):
-            break
-        token = resp.get("NextContinuationToken")
-
     columns = ["article_id", "title", "published_at", "publisher", "source_vendor", "mentions"]
     rows: list[dict[str, Any]] = []
-    for key in keys:
+    seen: set[str] = set()
+    for key in _list_news_keys(s3, bucket, trade_date):
         body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         table = pq.read_table(io.BytesIO(body), columns=columns)
         for rec in table.to_pylist():
@@ -200,9 +220,13 @@ def read_daily_news(s3, bucket: str, trade_date: date) -> list[dict[str, Any]]:
             article_id = rec.get("article_id")
             if not title or not article_id:
                 continue
+            article_id = str(article_id)
+            if article_id in seen:
+                continue
+            seen.add(article_id)
             rows.append(
                 {
-                    "article_id": str(article_id),
+                    "article_id": article_id,
                     "title": title,
                     "published_at": rec.get("published_at"),
                     "publisher": rec.get("publisher"),
@@ -386,7 +410,9 @@ def _validate_classification(
     ticker = str(item.get("primary_ticker") or "")
     if event_type not in registry.types:
         return None
-    if registry.validate(event_type, predicate or None):
+    if not predicate:
+        return None
+    if registry.validate(event_type, predicate):
         return None
     entity_id = entity_index.get(ticker)
     if entity_id is None:
@@ -646,6 +672,43 @@ def select_kodex_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if e["ticker"] in KODEX_CONSTITUENTS]
 
 
+def fetch_kodex_events(conn, trade_date: date, tickers: list[str]) -> list[dict[str, Any]]:
+    """Load the trade day's KODEX-constituent source events from the DB.
+
+    Used so an idempotent rerun (documents already normalized this day) still
+    has the full event set to thread/explain, not just events created this run.
+    """
+    sql = (
+        "SELECT DISTINCT ON (se.source_event_id)"
+        " se.source_event_id, se.event_type_code, se.available_at, ea.entity_id, i.ticker,"
+        " etl.thread_id, etl.novelty_status, ev.evidence_text"
+        " FROM source_event se"
+        " JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
+        " JOIN instrument i ON i.instrument_id = ea.entity_id"
+        " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
+        " LEFT JOIN event_evidence ev ON ev.source_event_id = se.source_event_id AND ev.evidence_type = %s"
+        " WHERE se.event_date = %s AND se.source_class = 'NEWS' AND se.event_status = 'ACTIVE'"
+        " AND i.ticker = ANY(%s)"
+        " ORDER BY se.source_event_id, se.available_at"
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, (TITLE_EVIDENCE_TYPE, trade_date.isoformat(), tickers))
+        rows = cur.fetchall()
+    return [
+        {
+            "source_event_id": str(r[0]),
+            "event_type_code": r[1],
+            "available_at": _iso(r[2]),
+            "entity_id": str(r[3]),
+            "ticker": str(r[4]),
+            "thread_id": r[5],
+            "novelty_status": r[6] or "UNKNOWN",
+            "title": r[7] or "",
+        }
+        for r in rows
+    ]
+
+
 def analyze(client: DeepSeekClient, settings: Settings, kodex_events: list[dict[str, Any]]) -> dict[str, Any]:
     lines = []
     for event in sorted(kodex_events, key=lambda e: e["available_at"]):
@@ -826,18 +889,21 @@ def run(settings: Settings) -> int:
         created = persist_normalization(conn, todo, classifications, entity_index, settings)
         log("normalize.written", canonical_events=len(created))
 
-        # Thread every KODEX-constituent event created this run.
-        kodex_events = select_kodex_events(created)
-        thread_events(conn, kodex_events)
-        log("thread.written", kodex_events=len(kodex_events))
+        # Thread the KODEX-constituent events created this run.
+        new_kodex = select_kodex_events(created)
+        thread_events(conn, new_kodex)
+        log("thread.written", new_kodex_events=len(new_kodex))
 
+        # Explain over the full day's KODEX events (idempotent rerun safe):
+        # includes events normalized in prior runs, not just this invocation.
+        kodex_events = fetch_kodex_events(conn, settings.trade_date, list(KODEX_CONSTITUENTS))
         if not kodex_events:
             log("done", reason="no_kodex_events", canonical_events=len(created))
             return 0
 
         explanation = analyze(client, settings, kodex_events)
         outcome = persist_explanation(conn, s3, settings, etf_instrument_id, explanation, kodex_events)
-        log("done", **outcome)
+        log("done", kodex_events=len(kodex_events), **outcome)
         return 0
     finally:
         conn.close()
