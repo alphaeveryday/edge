@@ -43,16 +43,16 @@ def _article(article_id: str, **over) -> dict:
 
 
 class _FakeCursor:
+    """ON CONFLICT DO NOTHING 시맨틱 흉내 — 자연키(existing)가 이미 있으면 rowcount 0."""
+
     def __init__(self, log: list, existing: list[tuple]):
-        self._log, self._existing, self._rows = log, existing, []
+        self._log, self._existing = log, existing
+        self.rowcount = 1
 
     def execute(self, sql, params=None):
         self._log.append((" ".join(sql.split()), params))
-        if sql.lstrip().upper().startswith("SELECT"):
-            self._rows = list(self._existing)
-
-    def fetchall(self):
-        return self._rows
+        if sql.lstrip().upper().startswith("INSERT INTO DOCUMENT"):
+            self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
 
     def __enter__(self):
         return self
@@ -111,15 +111,20 @@ def test_new_article_becomes_a_news_document_row(tmp_path, monkeypatch):
 
 
 def test_existing_article_is_not_recreated(tmp_path, monkeypatch):
-    """멱등 — 재실행이 새 document_id 를 발번하면 그 문서를 참조할 assertion FK 가 전부
-    끊긴다(ALPHA-376). 자연키로 이미 있으면 건드리지 않는다(ADR-0027 upsert 절차)."""
+    """멱등 — 재실행이 기존 행을 덮거나 새 document_id 로 갈아치우면 그 문서를 참조할
+    assertion FK 가 전부 끊긴다(ALPHA-376). ON CONFLICT DO NOTHING(rowcount 0)이면 created
+    가 아니라 already 로 세어져야 로그가 거짓말하지 않는다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "ko", "2026-07-15", [_article("a1")])
     conn = _FakeConn(existing=[("bigkinds", "a1")])
     monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
 
     assert load_documents.run(storage, "R1", db=_db()) == 0
-    assert _inserts(conn) == []
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["created"] == 0
+    assert log["already_present"] == 1
+    assert log["created_rows_sample"] == []
 
 
 def test_missing_identity_is_skipped_not_inserted(tmp_path, monkeypatch):

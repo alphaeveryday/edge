@@ -5,9 +5,10 @@
 published_date=…` 를 읽어 기사마다 `document` 행(document_type='NEWS')을 만든다.
 
 **멱등**: 자연키 = `uq_document_source (source_code, source_document_id)` =
-canonical 의 (source_vendor, article_id). 이미 있으면 skip 하고 없을 때만
-`domain_id("doc")` 를 발번한다(ADR-0027 표준 절차) — 재실행이 ID 를 바꾸면 이 문서를
-참조할 assertion FK 가 전부 끊긴다. load-instruments(ALPHA-372) 패턴 그대로.
+canonical 의 (source_vendor, article_id). `ON CONFLICT DO NOTHING` 으로 제약 자체가
+멱등의 근거다 — 이미 있으면(rowcount 0) 기존 행을 건드리지 않아, 재실행이 ID 를 바꿔
+이 문서를 참조할 assertion FK 를 끊는 일이 없다(ADR-0027). 사전 스냅샷 조회 방식
+(load-instruments)과 달리 동시 실행에도 원자적이다.
 
 **창(from/to) 미지정 = published_date 전체 스캔** — 멱등 skip 이라 재실행 비용은
 신규분뿐이고, 놓친 날짜도 다음 런이 자연 회복한다(load-price-triggers 와 같은 모델).
@@ -64,15 +65,6 @@ def _partition_dates(storage: Storage, language: str) -> list[str]:
     return sorted(dates)
 
 
-def _existing_source_keys(conn) -> set[tuple[str, str]]:
-    """이미 있는 (source_code, source_document_id) — 자연키 조회가 멱등의 근거다.
-    # ponytail: 전량 조회는 문서 수 선형 — 수십만 행 넘으면 배치 IN 조회로 좁힌다
-    """
-    with conn.cursor() as cur:
-        cur.execute("SELECT source_code, source_document_id FROM document")
-        return {(s, d) for s, d in cur.fetchall()}
-
-
 def run(
     storage: Storage,
     run_id: str,
@@ -124,18 +116,18 @@ def run(
                         })
 
         with connect(db) as conn:
-            have = _existing_source_keys(conn)
             for (source_code, article_id), doc in sorted(candidates.items()):
-                if (source_code, article_id) in have:
-                    already += 1
-                    continue
+                # 멱등의 근거는 사전 스냅샷이 아니라 자연키 제약 자체다 — DO NOTHING 이라
+                # 동시 실행이 같은 키를 넣어도 늦은 쪽이 already 로 세어질 뿐 배치가 죽지
+                # 않는다. rowcount 0 = 이미 있었다(분석엔진이 먼저 쓴 행 포함).
                 document_id = domain_id("doc")
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO document (document_id, document_type, source_code,"
                         " source_document_id, title, language_code, published_at,"
                         " available_at, source_uri)"
-                        " VALUES (%s, 'NEWS', %s, %s, %s, %s, %s, %s, %s)",
+                        " VALUES (%s, 'NEWS', %s, %s, %s, %s, %s, %s, %s)"
+                        " ON CONFLICT (source_code, source_document_id) DO NOTHING",
                         (
                             document_id,
                             source_code,
@@ -147,6 +139,9 @@ def run(
                             doc["source_uri"],
                         ),
                     )
+                    if cur.rowcount == 0:
+                        already += 1
+                        continue
                 created += 1
                 if len(created_sample) < _CREATED_SAMPLE_LIMIT:
                     created_sample.append({"document_id": document_id,
