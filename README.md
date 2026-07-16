@@ -17,8 +17,8 @@ src/
 │   ├── tenant-sync-api/      # JVM    · Sync Agent Pull 표면 (cursor delta) [edge-cloud]
 │   ├── serving-api/          # JVM    · MTS 조회 표면 (Published만) [edge-onprem]
 │   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant · 최고 권한 [edge-cloud]
-│   ├── data-pipeline/        # Python · 스케줄러 → raw 수집/후속 DB 적재 [edge-cloud]
-│   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장 [edge-cloud]
+│   ├── data-pipeline/        # Python · 파이프라인 SFN raw→정제→feature 페이즈 [edge-cloud]
+│   └── analysis-engine/      # Python · 같은 SFN 의 analyze 페이즈 → 분석 결과 DB 저장 [edge-cloud]
 ├── libs/                     # 가져다 쓰는 공유 코드
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations/       #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
@@ -56,8 +56,8 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
 | `serving-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/serving-api.md](docs/contracts/serving-api.md)). 설명 저장소는 인메모리 시드 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
-| `data-pipeline` | Python | **edge-cloud** | 스케줄러로 동작 → raw lake 수집, 후속 단계에서 DB 적재 |
-| `analysis-engine` | Python | **edge-cloud** | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
+| `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
+| `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
 신규 온프렘 컴포넌트(sync-agent · compliance-engine)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 gateway를 경유하지 않습니다(mTLS 직접 노출 유력 — 확정은 gateway 존치 ADR과 함께).
 
@@ -84,17 +84,17 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 ## 데이터 흐름
 
 ```
-[스케줄러] ─→ data-pipeline ──→ raw lake ──→ DB ←── analysis-engine ←─ [스케줄러]
-                                  │            (분석 결과 저장)
-                                  │
+[스케줄러] ─→ 파이프라인 SFN: raw 수집 ─→ 정제 ─→ feature ─→ analyze ──→ DB
+              (raw lake 보존)   └──── data-pipeline ────┘   (analysis-engine)   │
+                                                                                │
    콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
    운영:  super-admin-ui → gateway → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
    schema(Flyway SQL = 현재 SSOT) ─→ DB 계약 ─→ 모든 JVM/Python 모듈이 공유   (generated 모델은 후속 도입)
 ```
 
-- `data-pipeline`이 외부 데이터를 raw lake에 보존하고, 후속 단계가 DB 적재로 이어집니다.
-- `analysis-engine`이 적재된 데이터를 분석해 Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다.
+- `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
+- `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent → Compliance → Serving API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
 
