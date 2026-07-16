@@ -109,11 +109,10 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
 # trade_date) 로 멱등 병합 적재한다(같은 벤더 최신 fetched_at 우선, 벤더 교차 충돌 fail-loud).
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw price 전체, 멱등). 단, 스코프 실행은
-# 재검증(quality_log)만 하고 canonical 은 안 쓴다 — 스코프는 다른 벤더의 raw 를 못 봐 벤더
-# 교차 충돌을 감지 못 하므로, canonical 은 전체 raw 를 보는 멱등 전체 런이 authoritative 하게 쓴다.
+# --input-run-id 로 그 수집 런의 raw 만 읽어 적재한다(SFN 이 도는 경로, ALPHA-389).
+# 미지정=raw price 전체 = 백필·복구 수단. 어느 쪽이든 적재는 멱등이다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-price
-#   특정 런만: ... run normalize-price --input-run-id 20260701T000000Z
+#   그 런만: ... run normalize-price --input-run-id 20260701T000000Z
 
 # 뉴스 정제(Step2) — raw stock_news(FMP·BigKinds) → 표준 메타행 정규화 + 필수필드·발행일 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). blocking 사유(제목 결측·발행시각 파싱
@@ -121,7 +120,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-price
 # 에 남긴다 — BigKinds 는 URL 없이 NEWS_ID 로 식별하므로 가변 필드로 벤더를 대량 탈락시키지 않는다.
 # 통과 행은 canonical/news/news_articles 에 article_id 로 멱등 병합 적재하고(같은 벤더 최신
 # fetched_at 우선), 다른 article_id 가 같은 정규화 제목·URL 해시면 duplicate_signal 로 로깅한다.
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw news 전체, 멱등; 스코프는 canonical 안 씀).
+# --input-run-id 로 그 수집 런의 raw 만 읽어 적재(SFN 경로). 미지정=전체 백필. 둘 다 멱등.
 uv run --package data-pipeline python -m data_pipeline.run normalize-news
 #   특정 런만: ... run normalize-news --input-run-id 20260701T000000Z
 
@@ -132,7 +131,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-news
 # 불가 수치(int64 초과 금액·비유한 비율)를 blocking, 값 이상(유보 상대방·범위밖 비율·비양수 금액)을
 # 경고로 data_quality_logs 에 남긴다. 통과 fact 는 canonical/disclosures/supply_contract_fact 에
 # rcept_no 로 멱등 병합 적재한다(같은 rcept_no 최신 fetched_at 우선). --input-run-id 로 특정 수집
-# 런만 재검증(미지정=raw disclosures 전체, 멱등; 스코프는 canonical 안 씀). 파서는 팀원(정준영)
+# 런의 raw 만 읽어 적재(SFN 경로; 미지정=전체 백필, 둘 다 멱등). 파서는 팀원(정준영)
 # 검증 프로토타입 이식 — graph 투영·theme 링킹은 범위 밖(analysis-engine 소관).
 uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
 #   특정 런만: ... run normalize-disclosure --input-run-id 20260701T000000Z
@@ -152,7 +151,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # 구성종목·as_of_date)은 blocking, 비중·주식수·평가금액은 참고필드(대시(-)·결측=null, 범위 이상만
 # 경고). 통과 행은 canonical/holdings/etf_holdings 에 (market,etf_id,constituent_ticker,as_of_date)
 # 로 멱등 병합(같은 키 최신 fetched_at 우선). market-스코프 파티션이라 벤더 disjoint(교차충돌 없음).
-# --input-run-id 로 특정 수집 런만 재검증(미지정=raw etf 전체, 멱등; 스코프는 canonical 안 씀).
+# --input-run-id 로 그 수집 런의 raw 만 읽어 적재(SFN 경로). 미지정=전체 백필. 둘 다 멱등.
 uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 #   특정 런만: ... run normalize-etf --input-run-id 20260701T000000Z
 
@@ -234,7 +233,9 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
     바꾸기 전에 닫아라.** 수동 실행(KST 주간)은 정상이다.
 
 **정제(normalize, 5잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
-bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). 전체런(`--input-run-id` 없이)이라 멱등이다.
+bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
+수집한 raw 만 정제한다**(ALPHA-389) — 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에
+비례한다. 적재는 여전히 멱등이다(병합이 기존 행을 읽어 합친다).
 
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)

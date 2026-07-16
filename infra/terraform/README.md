@@ -70,11 +70,16 @@ cd ../envs/dev  && terraform apply
 |------|------|---------|
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
-| **파이프라인 실패 알림 이메일** | 구독 없음(토픽만) | `pipeline_alarm_email = "..."` |
+| **파이프라인 실패 알림 이메일** | 구독 생성됨 — **수신자가 AWS 확인 메일을 눌러야 활성**(`PendingConfirmation`) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | gateway 도입 시 연결 |
 | **widget-api DB 연동** | TF 주입되나 앱 미사용(`application.yaml` DataSource exclude) | 앱에서 exclude 제거 |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
+
+> ⚠️ `pipeline_alarm_email` 이 `null` 이면 SNS 구독 리소스가 `count=0` 으로 **아예 안 생겨** 실패
+> 알림이 구독자 없는 토픽으로 사라진다 — "구독 없음"이 아니라 **알림 유실**이다. ALPHA-389 착수
+> 전까지 실제로 그 상태였고(라이브 토픽 구독자 0), data-pipeline 정제가 run 스코프로 바뀐 뒤로는
+> 실패 런의 raw 를 사람이 명시 재처리해야 하므로 이 알림이 그 절차의 유일한 트리거다.
 
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 

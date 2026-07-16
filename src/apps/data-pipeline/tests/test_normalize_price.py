@@ -353,6 +353,12 @@ def test_vendors_do_not_overlap_by_design(tmp_path):
     #      하위 케이스도 선행 조건이 없어 발생하지 않는다.
     #      이 테스트가 깨지면(= 심볼맵이 겹치게 바뀌면) 스코프 정제의 전제가 무너진 것이니
     #      normalize_price 의 canonical 적재 주석을 다시 읽어라.
+    #
+    #      **한계**: 이건 이 프로세스가 로드한 설정을 볼 뿐이라, 커밋된 sources.toml 은
+    #      지키지만 배포된 taskdef 의 env 오버라이드(DATA_PIPELINE_PRICE__SOURCE__SYMBOL_MAP)
+    #      까지는 못 본다 — env > file 이므로 CI 초록인 채 prod 만 겹칠 수 있다. 그때도
+    #      조용하진 않다: 런타임에 _merge_partition 이 충돌을 fail-loud 로 잡아 exit 1 이고
+    #      SFN 이 실패 알림을 낸다. 잃는 건 '충돌 후 단일벤더 스코프 복구가 되살리는' 케이스뿐.
     from data_pipeline import load_settings
 
     settings = load_settings()
