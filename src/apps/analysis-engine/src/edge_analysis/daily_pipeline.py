@@ -1033,7 +1033,7 @@ def persist_explanation(
         cur.execute(
             "INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_instrument_id,"
             " trade_date, explanation_as_of, primary_thread_id, explanation_type, summary, confidence_level,"
-            " stage_results, publication_status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'DRAFT')"
+            " stage_results, publication_status, headline) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'DRAFT',%s)"
             " ON CONFLICT (explanation_result_id) DO NOTHING",
             (
                 result_id,
@@ -1046,6 +1046,7 @@ def persist_explanation(
                 summary,
                 confidence,
                 stage_results,
+                str(explanation.get("headline") or "") or None,
             ),
         )
     conn.commit()
