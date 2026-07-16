@@ -221,10 +221,12 @@ dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
-만든다. 상태머신은 **raw → normalize → derive 3페이즈**를 한 실행에서 완주한다(ALPHA-355·386) —
+만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
+한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../docs/adr/0028-unified-pipeline-sfn.md)) —
 각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다.
 모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition·canonical·collection_log 를 같은 실행 단위로
-묶는다. 세 페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어낸다(구조 동일).
+묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일
+태스크(analysis-engine 이미지)라 빌더 밖이다.
 
 **raw 수집(9잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
@@ -250,8 +252,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)
 
-**파생(derive, 3잡)** — canonical 을 소비해 다운스트림 산출물을 만든다. 정제 뒤라야 하고(전부
-canonical 을 읽는다) 서로는 독립이라 병렬이다. 시크릿이 다른 잡은 task-def 도 따로다.
+**feature(구 derive, 3잡)** — canonical 을 소비해 분석이 읽을 feature/factor 산출물을 만든다.
+정제 뒤라야 하고(전부 canonical 을 읽는다) 서로는 독립이라 병렬이다. 시크릿이 다른 잡은
+task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread 추출 + 가격이벤트
+생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
 - `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 500)을 넘겨 한 실행의
   LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(미태깅 기사만 고른다)
@@ -262,6 +266,14 @@ canonical 을 읽는다) 서로는 독립이라 병렬이다. 시크릿이 다�
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
+
+**analyze(1태스크)** — 구 analysis-engine SFN 의 흡수(ALPHA-408). analysis-engine 이미지의
+ENTRYPOINT 가 그대로 돌며(command 미지정 = 오늘 Asia/Seoul), **feature 산출물만 읽는다**
+(canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument)가 페이즈 경계
+계약이다 — 나중에 수집 빈도가 줄면 이 페이즈만 가격이벤트 기반 비동기 실행으로 떼어낸다.
+특정일(trade_date) 수동 재실행은 SFN 이 아니라 `terraform output data_pipeline_analysis_task_family`
+의 task-def 를 `aws ecs run-task` 로 직접 띄워 Command 를
+`["--trade-date","YYYY-MM-DD","--request-id","manual-..."]` 로 덮는다.
 
 > ※ task-def 는 시크릿 세트 단위로 만든다(`tasks.tf` 의 `secret_sets` 맵에 키를 넣으면 자동 생성) —
 > 현재 7개: `fmp`·`bigkinds`(시크릿 없음)·`kis`·`dart`·`krx`·`deepseek`·`rds`. 전부 같은 이미지를

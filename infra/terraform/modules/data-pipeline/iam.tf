@@ -60,6 +60,37 @@ resource "aws_iam_role_policy" "task" {
   })
 }
 
+# analyze 태스크 역할 — 공용 task 역할(레이크 전체 RW)과 달리 레이크는 읽기만, 쓰기는 설명
+# 결과 prefix 에 한정한다(구 analysis-engine 모듈의 최소권한 유지). RDS 쓰기는 IAM 무관(암호 인증).
+# 반면 execution 역할은 공용을 그대로 쓴다(모듈 관례: task-def 마다 주입 시크릿은 다르지만
+# 기동 주체는 하나) — 구 모듈의 2개(deepseek·db)보다 읽기 가능 시크릿이 벤더 4종만큼 넓어진다.
+# 주입 시크릿 목록(analysis_secrets)은 불변이라 컨테이너 표면 노출은 그대로다.
+resource "aws_iam_role" "analysis_task" {
+  name               = "${var.name}-analysis-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+}
+
+resource "aws_iam_role_policy" "analysis_task" {
+  name = "${var.name}-analysis-task"
+  role = aws_iam_role.analysis_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${var.lake_bucket_arn}/${local.analysis_result_s3_prefix}*"]
+      },
+    ]
+  })
+}
+
 data "aws_iam_policy_document" "sfn_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -83,9 +114,12 @@ resource "aws_iam_role_policy" "sfn" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask"]
-        Resource = [for task_definition in aws_ecs_task_definition.this : task_definition.arn]
+        Effect = "Allow"
+        Action = ["ecs:RunTask"]
+        Resource = concat(
+          [for task_definition in aws_ecs_task_definition.this : task_definition.arn],
+          [aws_ecs_task_definition.analysis.arn],
+        )
       },
       {
         Effect    = "Allow"
@@ -96,7 +130,7 @@ resource "aws_iam_role_policy" "sfn" {
       {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn]
+        Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.analysis_task.arn]
       },
       {
         Effect   = "Allow"

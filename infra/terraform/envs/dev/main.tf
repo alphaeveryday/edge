@@ -56,8 +56,8 @@ data "aws_ecr_repository" "gateway" {
   name = "edge/gateway"
 }
 
-# analysis-engine·data-pipeline(tag-news)이 함께 읽는 DeepSeek API 키 시크릿 — data-pipeline
-# 네임스페이스의 기존 그릇을 참조한다(두 모듈이 한 리소스를 소유할 수 없어 data 로 조회).
+# data-pipeline 의 tag-news·analyze 페이즈가 함께 읽는 DeepSeek API 키 시크릿 — 그릇이 TF 밖
+# CLI 로 먼저 생겨 모듈 소유가 아니다(data 로 조회). 이름의 네임스페이스는 data-pipeline 관례.
 # 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
 data "aws_secretsmanager_secret" "deepseek" {
   name = "${local.prefix}-data-pipeline/deepseek/api-key"
@@ -333,8 +333,9 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
   description                  = "news-pipeline batch tasks to postgres"
 }
 
-# ── data-pipeline (Step Functions 배치: raw → normalize → derive) ──
+# ── data-pipeline (Step Functions 배치: raw → normalize → feature → analyze) ──
 # 기존 임시 news-pipeline SFN 과 분리된 상태머신. 최초엔 DISABLED 로 생성한다.
+# analyze 페이즈는 구 analysis-engine 모듈의 흡수다(ALPHA-408) — 이미지는 alphamale 코드베이스라 따로다.
 module "data_pipeline" {
   source = "../../modules/data-pipeline"
 
@@ -344,17 +345,23 @@ module "data_pipeline" {
   subnet_ids       = module.network.private_subnet_ids
   cluster_arn      = module.worker_cluster.cluster_arn
   image            = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
+  analysis_image   = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
   lake_bucket_name = module.pipeline.lake_bucket
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
-  # derive 페이즈(ALPHA-386): tag-news 는 DeepSeek 키, load-instruments 는 RDS 접속이 필요하다.
-  # deepseek 시크릿은 analysis-engine 과 공유하므로 여기서 data 로 조회해 양쪽에 같은 ARN 을 넘긴다.
+  # feature 페이즈(ALPHA-386): tag-news 는 DeepSeek 키, load-* 는 RDS 접속이 필요하다.
+  # deepseek 시크릿은 tag-news 와 analyze 페이즈가 함께 읽는다(그릇은 기존 CLI 생성분 — data 조회).
   db_host                = module.rds.address
   db_port                = module.rds.port
   db_name                = module.rds.db_name
   db_user                = module.rds.master_username
   db_password_secret_arn = module.rds.master_user_secret_arn
   deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
+
+  # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
+  # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
+  # 정식 버저닝은 릴리스 규약 합의 후.
+  analysis_release_bundle_version = "dev-mvp-0"
 
   alarm_email = var.pipeline_alarm_email
 }
@@ -382,47 +389,8 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
   description                  = "data-pipeline batch tasks to postgres"
 }
 
-# ── analysis-engine (KODEX 반도체 일일 뉴스 정규화 + 설명 SFN 배치) ──
-# data-pipeline 과 같은 배선: worker 클러스터·private 서브넷·pipeline lake·RDS·pipeline_alarm_email.
-# 이미지는 공유 edge/pipeline ECR 의 analysis-engine-latest 태그. 최초엔 스케줄 DISABLED 로 생성.
-module "analysis_engine" {
-  source = "../../modules/analysis-engine"
-
-  name        = "${local.prefix}-analysis-engine"
-  region      = var.region
-  vpc_id      = module.network.vpc_id
-  subnet_ids  = module.network.private_subnet_ids
-  cluster_arn = module.worker_cluster.cluster_arn
-  image       = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
-
-  lake_bucket_name = module.pipeline.lake_bucket
-  lake_bucket_arn  = module.pipeline.lake_bucket_arn
-
-  db_host                = module.rds.address
-  db_port                = module.rds.port
-  db_name                = module.rds.db_name
-  db_user                = module.rds.master_username
-  db_password_secret_arn = module.rds.master_user_secret_arn
-
-  deepseek_secret_arn = data.aws_secretsmanager_secret.deepseek.arn
-
-  # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
-  # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
-  # 정식 버저닝은 릴리스 규약 합의 후.
-  release_bundle_version = "dev-mvp-0"
-
-  alarm_email = var.pipeline_alarm_email
-}
-
-# analysis-engine SG → RDS 5432 (env 에서 독립 리소스로 — 순환 의존 회피)
-resource "aws_vpc_security_group_ingress_rule" "rds_from_analysis_engine" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.analysis_engine.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "analysis-engine batch tasks to postgres"
-}
+# analysis-engine 모듈은 ALPHA-408 에서 data-pipeline 의 analyze 페이즈로 흡수돼 삭제됐다.
+# analyze 태스크의 RDS 접근은 위 rds_from_data_pipeline 규칙이 덮는다(같은 task SG).
 
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
 # 모듈·S3 이름은 앱 폴더명과 일치(widget-ui·tenant-console-ui·super-admin-ui).
