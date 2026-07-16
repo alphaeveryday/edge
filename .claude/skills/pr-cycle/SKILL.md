@@ -1,6 +1,6 @@
 ---
 name: pr-cycle
-description: Jira 이슈 확인부터 브랜치 생성·커밋·PR 생성·Squash 머지·이슈 전환까지 edge 저장소의 Git 작업 사이클 전체를 거버넌스(issue-first, feature/<KEY>-슬러그, Refs 푸터, dev 타겟, 경계별 머지)에 맞게 수행. 기능·버그·문서 작업을 시작할 때, "브랜치 파줘", "커밋해줘", "PR 올려줘", "머지해줘", "티켓 처리해줘", "릴리스하자"(dev→main) 등 git/Jira가 얽힌 모든 요청에 반드시 이 스킬을 사용할 것. 이미 진행 중인 브랜치/PR의 수정·보완·리뷰 반영·재실행 요청에도 사용. 단순 git 상태 조회(로그·diff 보기)에는 불필요.
+description: Jira 이슈 확인부터 브랜치 생성·커밋·PR 생성·Codex 리뷰 왕복(풀링·수용 판단·재리뷰)·Squash 머지·이슈 전환까지 edge 저장소의 Git 작업 사이클 전체를 거버넌스(issue-first, feature/<KEY>-슬러그, Refs 푸터, dev 타겟, 경계별 머지)에 맞게 수행. 기능·버그·문서 작업을 시작할 때, "브랜치 파줘", "커밋해줘", "PR 올려줘", "머지해줘", "티켓 처리해줘", "릴리스하자"(dev→main) 등 git/Jira가 얽힌 모든 요청에 반드시 이 스킬을 사용할 것. 이미 진행 중인 브랜치/PR의 수정·보완·리뷰 반영·재실행 요청에도 사용. 단순 git 상태 조회(로그·diff 보기)에는 불필요.
 ---
 
 # pr-cycle — 티켓 한 장의 Git 작업 사이클
@@ -65,15 +65,38 @@ PR을 올리기 전에 두 가지를 순서대로 통과시킨다:
 - base는 반드시 `dev`다. `feature/*`·`fix/*`에서 `main`으로 가는 경로는 없다 (핫픽스도 `fix/* → dev → main`).
 - **PR 제목이 squash 후 최종 커밋 메시지가 된다** — 커밋 제목과 같은 Conventional Commits 형식으로 정확하게 쓴다.
 - 본문은 PR 템플릿(요약/변경 사항/산출물/체크리스트)을 따르고, 맨 아래 `Refs: <이슈키>`를 채운다. squash 커밋에 키가 남아 `main`까지 따라가게 하는 장치다.
-- `gh pr create`가 반환한 PR 번호 `<N>`을 기억해 둔다 — 6단계의 머지 subject에 필요하다.
+- `gh pr create`가 반환한 PR 번호 `<N>`을 기억해 둔다 — 이후 리뷰 풀링과 머지 subject에 필요하다.
 
-## 6. Squash 머지 + 브랜치 삭제
+## 6. Codex 리뷰 왕복
+
+PR을 올리면 Codex 리뷰어(`chatgpt-codex-connector`)가 자동 리뷰한다. 결과가 나올 때까지 풀링하고, 코멘트가 달리면 수용 여부를 판단해 반영·재리뷰를 반복한 뒤 머지로 넘어간다.
+
+**풀링** — 60초 간격으로 두 신호를 확인한다 (보통 수 분 내 응답, 10분 넘게 무응답이면 사용자에게 보고하고 대기 여부를 확인):
+
+```bash
+gh api repos/{owner}/{repo}/issues/<N>/reactions --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .content'   # 통과 시 "+1"
+gh pr view <N> --json reviews --jq '[.reviews[] | select(.author.login == "chatgpt-codex-connector")] | length'                    # 코멘트 리뷰 수
+```
+
+- PR 본문에 **`+1` 리액션** → 통과. 7단계(머지)로 진행.
+- **리뷰 코멘트** → 인라인 코멘트를 모두 읽고(`gh api repos/{owner}/{repo}/pulls/<N>/comments`) finding별로 수용 여부를 판단한다.
+
+**수용 판단** — Codex는 과하게 엄밀한 경향이 있으므로 지적을 그대로 받아들이지 말고 두 축으로 거른다:
+
+1. **실질 여부**: 실제 버그·계약 위반·데이터 손상 경로인가, 아니면 이론상 엣지·스타일 취향·과잉 방어 요구인가. 후자는 비수용.
+2. **의도적 생략 여부**: 이 PR의 스코프에서 의도적으로 하지 않은 것(YAGNI, 후속 티켓, 기존 컨벤션 준수)을 지적한 것인가. 그렇다면 비수용.
+
+**반영 루프** — 하나라도 수용했다면: 수정 커밋 → push → PR에 `@codex review` 코멘트로 재리뷰 요청 → 다시 풀링. 재요청 전의 리뷰 수를 기억해 두고 **수가 증가했을 때만** 새 응답으로 판정한다 — 기존 리뷰를 새 응답으로 오인해 이미 반영한 지적을 다시 돌지 않게. `+1`이 달리거나, 남은 finding이 전부 비수용 판정이면 루프를 끝내고 머지로 진행한다.
+
+머지 확인을 받을 때 비수용한 finding과 그 이유를 함께 보고한다 — 판단을 숨기지 않는다.
+
+## 7. Squash 머지 + 브랜치 삭제
 
 - 머지는 되돌리기 번거로운 동작이므로 사용자 확인 후 실행한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
 
-## 7. 사이클 마감
+## 8. 사이클 마감
 
 - `git switch dev && git pull`로 복귀하고 로컬 브랜치를 정리한다.
 - Jira 이슈가 자동 전환되지 않았으면 `transitionJiraIssue`로 완료 상태로 옮긴다.
@@ -86,5 +109,5 @@ PR을 올리기 전에 두 가지를 순서대로 통과시킨다:
 
 ## 테스트 시나리오
 
-- **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → 승인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
+- **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → Codex 리뷰 풀링, finding 1건 수용·수정·`@codex review` 재요청, `+1` 확인 → 사용자 확인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
 - **에러 흐름**: edge-review 게이트가 `./gradlew :apps:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.
