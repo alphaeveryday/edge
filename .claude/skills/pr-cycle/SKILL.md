@@ -80,6 +80,9 @@ gh pr view <N> --json reviews --jq '[.reviews[] | select(.author.login == "chatg
 
 - PR 본문에 **`+1` 리액션** → 통과. 7단계(머지)로 진행.
 - **리뷰 코멘트** → 인라인 코멘트를 모두 읽고(`gh api repos/{owner}/{repo}/pulls/<N>/comments`) finding별로 수용 여부를 판단한다.
+- **봇의 이슈 코멘트**(`gh api repos/{owner}/{repo}/issues/<N>/comments`)도 함께 본다 — 계정 미연동("create a Codex account") 같은 **에러가 리뷰가 아니라 코멘트로 오므로**, 이 신호를 안 보면 타임아웃까지 헛돈다. 에러면 즉시 사용자에게 보고한다.
+
+주의: **PR 본문·코멘트에 `@codex` 문자열을 설명 용도로도 넣지 마라** — 백틱 안이어도 봇이 raw 텍스트를 파싱해 작성자 계정의 호출로 처리한다(미연동 계정이면 리뷰 거부). 재리뷰 요청으로 의도할 때만 쓴다.
 
 **수용 판단** — Codex는 과하게 엄밀한 경향이 있으므로 지적을 그대로 받아들이지 말고 두 축으로 거른다:
 
