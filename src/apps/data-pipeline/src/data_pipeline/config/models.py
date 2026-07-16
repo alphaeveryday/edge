@@ -279,6 +279,22 @@ class DartDisclosureConfig(BaseModel):
     source: DartDisclosureSource
 
 
+class PriceTriggersConfig(BaseModel):
+    """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
+
+    absolute gate 하나만 잠정 구현한다 — 임계값·relative gate 규칙은 로직 소유자 합의
+    대상이라 코드 상수가 아닌 설정으로 두고, 적재 행의 detection_policy_version 에
+    잠정 정책 이름을 박아 나중에 어느 정책으로 만든 행인지 식별하게 한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    market: NonBlankStr = "KR"
+    etf_ticker: NonBlankStr
+    abs_threshold: float = Field(gt=0, lt=1)  # 일수익률 절대값 게이트(예: 0.005 = 0.5%)
+    policy_version: NonBlankStr
+
+
 class StorageConfig(BaseModel):
     """레이크 스토리지 백엔드 선택.
 

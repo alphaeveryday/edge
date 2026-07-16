@@ -21,6 +21,7 @@ from .models import (
     NewsSource,
     PriceConfig,
     PriceSource,
+    PriceTriggersConfig,
     StorageConfig,
 )
 
@@ -33,6 +34,7 @@ __all__ = [
     "NewsConfig",
     "PriceSource",
     "PriceConfig",
+    "PriceTriggersConfig",
     "DartFinancialSource",
     "DbConfig",
     "DartFinancialConfig",
