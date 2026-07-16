@@ -76,6 +76,19 @@ variable "deepseek_secret_arn" {
   type        = string
 }
 
+# ── analyze 페이즈 (구 analysis-engine 모듈 흡수, ALPHA-408) ───────
+# 로직·정확도는 alphamale 레포 소관이고 이 모듈은 실행만 담당한다 — 경계는 이미지다.
+variable "analysis_image" {
+  description = "analysis-engine 컨테이너 이미지 URI(:태그 포함). data-pipeline 과 다른 코드베이스(alphamale)라 이미지가 따로다."
+  type        = string
+}
+
+variable "analysis_release_bundle_version" {
+  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. null 이면 주입 안 함(앱이 S3 fallback)."
+  type        = string
+  default     = null
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024

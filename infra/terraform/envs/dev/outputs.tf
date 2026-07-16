@@ -54,24 +54,29 @@ output "pipeline_state_machine_arn" {
   value       = module.pipeline.state_machine_arn
 }
 
-# ── data-pipeline raw ingest ────────────────────────────
+# ── data-pipeline (raw → normalize → feature → analyze) ─
 output "data_pipeline_state_machine_arn" {
   description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> --input '{\"run_id\":\"manual-...\"}'"
   value       = module.data_pipeline.state_machine_arn
 }
 
 output "data_pipeline_ecr_repository_url" {
-  description = "data-pipeline raw ingest image repository URL (기존 edge/pipeline)"
+  description = "data-pipeline image repository URL (기존 edge/pipeline; analyze 는 같은 저장소의 analysis-engine-latest 태그)"
   value       = local.data_pipeline_ecr_repository_url
 }
 
 output "data_pipeline_task_families" {
-  description = "data-pipeline raw ingest ECS task definition families by vendor"
+  description = "data-pipeline ECS task definition families by vendor"
   value       = module.data_pipeline.task_definition_families
 }
 
+output "data_pipeline_analysis_task_family" {
+  description = "analyze 페이즈 task family — 특정일 수동 재실행: aws ecs run-task 로 이 task-def 를 띄워 Command 를 ['--trade-date','YYYY-MM-DD','--request-id','manual-...'] 로 덮는다"
+  value       = module.data_pipeline.analysis_task_definition_family
+}
+
 output "data_pipeline_log_group" {
-  description = "data-pipeline raw ingest CloudWatch log group"
+  description = "data-pipeline CloudWatch log group (analyze 포함 — 스트림 접두사 analysis)"
   value       = module.data_pipeline.log_group_name
 }
 
@@ -98,32 +103,6 @@ output "data_pipeline_kis_secret_arn" {
 output "data_pipeline_dart_secret_arn" {
   description = "OpenDART API key secret ARN (수동 주입: {\"apikey\":\"...\"})"
   value       = module.data_pipeline.dart_secret_arn
-}
-
-# ── analysis-engine (KODEX 일일 뉴스 정규화 + 설명) ─────
-output "analysis_engine_state_machine_arn" {
-  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> [--input '{\"trade_date\":\"2026-07-14\",\"request_id\":\"manual-1\"}']"
-  value       = module.analysis_engine.state_machine_arn
-}
-
-output "analysis_engine_ecr_repository_url" {
-  description = "analysis-engine 이미지 저장소 URL (공유 edge/pipeline, 태그 analysis-engine-latest)"
-  value       = local.data_pipeline_ecr_repository_url
-}
-
-output "analysis_engine_task_family" {
-  description = "analysis-engine ECS task definition family"
-  value       = module.analysis_engine.task_definition_family
-}
-
-output "analysis_engine_log_group" {
-  description = "analysis-engine CloudWatch log group"
-  value       = module.analysis_engine.log_group_name
-}
-
-output "analysis_engine_lake_bucket" {
-  description = "analysis-engine active lake bucket."
-  value       = module.analysis_engine.lake_bucket_name
 }
 
 # ── 스키마 마이그레이션 배포용 값 (GitHub development environment vars) ──

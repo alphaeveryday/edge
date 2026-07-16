@@ -55,7 +55,7 @@ locals {
     # 형제 KR 소스(BigKinds·KIS·DART)는 날짜창 기반이라 빈 결과를 허용하지만, KRX ETF 는
     # `trdDd`=오늘(KST) 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된 설계).
     # 그런데 이 SFN 스케줄은 미 동부 16:10 = **KST 05:10**이라 기준일이 PDF 미게시(금요일
-    # 런은 아예 토요일)를 가리킨다. raw 는 전량성공 게이트라 이게 normalize·derive 를 통째로
+    # 런은 아예 토요일)를 가리킨다. raw 는 전량성공 게이트라 이게 뒤 페이즈 전부를 통째로
     # 막는다. 지금 안 터지는 건 스케줄러가 DISABLED 라서다.
     # 그럼에도 게이트에 넣는 이유: 스케줄 자체가 US 마감 기준이라 KR 소스 전반과 안 맞고,
     # 그 재검토는 컷오버(schedule_state=ENABLED)의 일이지 편입의 일이 아니다. 수동
@@ -105,12 +105,16 @@ locals {
     },
   ]
 
-  # canonical 을 소비해 다운스트림 산출물을 만드는 스테이지(ALPHA-386). normalize 와 갈라 둔
-  # 이유는 의존이다 — 전부 canonical 을 읽으므로 정제가 끝난 뒤라야 한다. 세 잡은 서로
-  # 독립이고(뉴스 feature vs ETF 마스터 vs 가격변동 트리거) 쓰는 대상이 다르다: tag-news 는
-  # 레이크 feature 존, load-instruments·load-price-triggers 는 Cloud Event Store(RDB, 서로
-  # 다른 테이블·같은 rds task-def). 시크릿이 다른 잡은 task-def 도 따로다.
-  derive_jobs = [
+  # feature/factor 스테이지(구 derive, ALPHA-386→408 개명). canonical 을 소비해 분석이 읽을
+  # 산출물을 만든다. normalize 와 갈라 둔 이유는 의존이다 — 전부 canonical 을 읽으므로 정제가
+  # 끝난 뒤라야 한다. 세 잡은 서로 독립이고(뉴스 feature vs ETF 마스터 vs 가격변동 트리거)
+  # 쓰는 대상이 다르다: tag-news 는 레이크 feature 존, load-instruments·load-price-triggers 는
+  # Cloud Event Store(RDB, 서로 다른 테이블·같은 rds task-def). 시크릿이 다른 잡은 task-def 도 따로다.
+  #
+  # 이 페이즈의 최종 범위(ALPHA-408): 뉴스/공시 assertion·event·event_thread 추출 + 가격이벤트
+  # 생성까지. 추출 스텝들은 alphamale 로직의 data-pipeline 이관 합의 후 여기 잡으로 편입된다.
+  # 로직·정확도(정준영)와 실행·부하·적재(김진기)의 협업 경계가 이 잡 리스트다.
+  feature_jobs = [
     {
       state        = "TagNews"
       taskdef_key  = "deepseek"
@@ -144,9 +148,9 @@ locals {
     }
   ]
 
-  derive_success_checks = [
-    for index, _ in local.derive_jobs : {
-      Variable     = "$.derive_results[${index}].status"
+  feature_success_checks = [
+    for index, _ in local.feature_jobs : {
+      Variable     = "$.feature_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
@@ -169,8 +173,9 @@ locals {
   }
 
   # 모든 페이즈가 동일한 브랜치 구조라 잡 리스트만 바꿔 한 빌더로 재생성한다(ALPHA-355·386).
+  # analyze 페이즈는 예외 — 단일 태스크·다른 이미지라 빌더를 안 거치고 아래에 직접 정의한다.
   branches_by_phase = {
-    for phase, jobs in { raw = local.raw_ingest_jobs, normalize = local.normalize_jobs, derive = local.derive_jobs } :
+    for phase, jobs in { raw = local.raw_ingest_jobs, normalize = local.normalize_jobs, feature = local.feature_jobs } :
     phase => [
       for job in jobs : {
         StartAt = job.state
@@ -239,7 +244,7 @@ locals {
 
   raw_ingest_branches = local.branches_by_phase["raw"]
   normalize_branches  = local.branches_by_phase["normalize"]
-  derive_branches     = local.branches_by_phase["derive"]
+  feature_branches    = local.branches_by_phase["feature"]
 
   sfn_definition = jsonencode({
     StartAt        = "RawIngestParallel"
@@ -294,30 +299,57 @@ locals {
         Type = "Choice"
         Choices = [{
           And  = local.normalize_success_checks
-          Next = "DeriveParallel"
+          Next = "FeatureParallel"
         }]
         Default = "NotifyFailure"
       }
-      # 정제 전량 성공일 때만 파생으로 넘어간다 — 실행 내 순서 제어다.
+      # 정제 전량 성공일 때만 feature 로 넘어간다 — 실행 내 순서 제어다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
-      # 두 파생 잡은 **canonical 을 full-scan** 하므로 여기 걸린 건 자동 회복된다: 이번 실행이
+      # 두 적재 잡은 **canonical 을 full-scan** 하므로 여기 걸린 건 자동 회복된다: 이번 실행이
       # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. tag-news 는 미태깅 기사만
       # 고르고(태거·온톨로지 버전 + 입력 지문으로 판정) load-instruments 는 자연키 멱등이라
-      # 재실행이 중복을 만들지 않는다. 즉 derive 는 아직 옛 모델이고, 그래서 안전하다.
-      DeriveParallel = {
+      # 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      FeatureParallel = {
         Type       = "Parallel"
-        Branches   = local.derive_branches
-        ResultPath = "$.derive_results"
+        Branches   = local.feature_branches
+        ResultPath = "$.feature_results"
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
-        Next       = "DeriveCheckResults"
+        Next       = "FeatureCheckResults"
       }
-      DeriveCheckResults = {
+      FeatureCheckResults = {
         Type = "Choice"
         Choices = [{
-          And  = local.derive_success_checks
-          Next = "PipelineSucceeded"
+          And  = local.feature_success_checks
+          Next = "RunAnalysis"
+        }]
+        Default = "NotifyFailure"
+      }
+      # analyze 페이즈(ALPHA-408) — 구 analysis-engine SFN 의 완전 흡수. feature 전량 성공일
+      # 때만 돈다: **분석은 feature 산출물만 읽는다**(canonical/feature 존 + Cloud Event Store 의
+      # price_movement_trigger·instrument)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
+      # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
+      # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
+      # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
+      RunAnalysis = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "AnalysisCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.analysis.arn
+        })
+      })
+      AnalysisCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "PipelineSucceeded"
         }]
         Default = "NotifyFailure"
       }
@@ -342,16 +374,19 @@ locals {
   })
 }
 
+# 이름에 접미사를 두지 않는다(ALPHA-408, 구 "-raw-ingest") — raw 수집만이 아니라
+# raw → normalize → feature → analyze 전체가 이 상태머신이다. 이름 변경은 destroy+recreate 지만
+# SFN 은 무상태라 안전하다(실행 이력만 새 ARN 에서 다시 시작).
 resource "aws_sfn_state_machine" "this" {
-  name       = "${var.name}-raw-ingest"
+  name       = var.name
   role_arn   = aws_iam_role.sfn.arn
   definition = local.sfn_definition
 }
 
 # 상태머신 정의 안의 NotifyFailure 는 **정의가 살아 있을 때만** 통보한다. 최상위
 # TimeoutSeconds 로 실행이 죽으면 States.Timeout 이 실행 자체를 끝내므로 어떤 Catch 도
-# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. derive 페이즈가 들어오면서 이 경로가 처음으로
-# 실질 도달 가능해졌다(LLM 호출은 소요시간 상한이 없다. tag_news_limit 이 1차 방어).
+# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. LLM 을 부르는 페이즈(feature 의 tag-news, analyze)가
+# 들어오면서 이 경로가 실질 도달 가능해졌다(LLM 호출은 소요시간 상한이 없다. tag_news_limit 이 1차 방어).
 # 알람은 정의 밖에서 도는 유일한 통보 수단이라 그 구멍을 정확히 메운다.
 # ExecutionsFailed 는 안 건다 — NotifyFailure 가 이미 덮고, 겹치면 같은 실패에 두 통이 온다.
 resource "aws_cloudwatch_metric_alarm" "execution_timed_out" {

@@ -83,6 +83,67 @@ locals {
   }
 }
 
+# ── analyze 페이즈 task-def (구 analysis-engine 모듈 흡수, ALPHA-408) ──
+# for_each 밖에 따로 두는 이유: 이미지(alphamale)·env 네임스페이스(PG*·ALPHAMALE_*·DEEPSEEK_*)·
+# 컨테이너명이 data-pipeline 계열과 전부 다르다. 시크릿 주입 메커니즘만 같다.
+locals {
+  analysis_container_name = "analysis-engine"
+
+  # 결과 prefix — env(ALPHAMALE_RESULT_S3_PREFIX)와 analysis task 역할의 PutObject 스코프가
+  # 어긋나지 않게 한 곳에서 고정한다. dev 는 KODEX 반도체(091160) 단일 ETF 상수.
+  analysis_result_s3_prefix = "operations_archive/etf_explanations/"
+
+  analysis_env = merge({
+    AWS_REGION                 = var.region
+    ALPHAMALE_LAKE_BUCKET      = var.lake_bucket_name
+    PGHOST                     = var.db_host
+    PGPORT                     = tostring(var.db_port)
+    PGDATABASE                 = var.db_name
+    PGUSER                     = var.db_user
+    PGSCHEMA                   = "public"
+    DEEPSEEK_MODEL             = "deepseek-chat"
+    ALPHAMALE_ETF_TICKER       = "091160"
+    ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
+    },
+    var.analysis_release_bundle_version == null ? {} : { ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version },
+  )
+
+  analysis_secrets = {
+    PGPASSWORD       = "${var.db_password_secret_arn}:password::"
+    DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:api_key::"
+  }
+}
+
+resource "aws_ecs_task_definition" "analysis" {
+  family                   = "${var.name}-analysis"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.analysis_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = var.cpu_architecture
+  }
+
+  # command 미지정: 이미지 ENTRYPOINT(python -m edge_analysis)가 기본 실행 = 오늘(Asia/Seoul).
+  # 특정 trade-date/request-id 재실행은 SFN 라우팅 없이 ecs run-task 로 이 task-def 를 직접
+  # 띄워 Command(=CMD args: --trade-date/--request-id)만 덮는다 — 운영 수동 실행 계약.
+  container_definitions = jsonencode([{
+    name        = local.analysis_container_name
+    image       = var.analysis_image
+    essential   = true
+    environment = [for k, v in local.analysis_env : { name = k, value = v }]
+    secrets     = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis" })
+    }
+  }])
+}
+
 resource "aws_ecs_task_definition" "this" {
   for_each = local.secret_sets
 

@@ -1,6 +1,11 @@
 output "state_machine_arn" {
-  description = "raw ingest 상태머신 ARN"
+  description = "파이프라인 상태머신 ARN (raw → normalize → feature → analyze)"
   value       = aws_sfn_state_machine.this.arn
+}
+
+output "analysis_task_definition_family" {
+  description = "analyze 페이즈 ECS task definition family — 특정일 수동 재실행(ecs run-task --trade-date) 대상"
+  value       = aws_ecs_task_definition.analysis.family
 }
 
 output "task_definition_families" {
