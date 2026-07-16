@@ -264,9 +264,17 @@ locals {
       # 그래서 **실패한 실행의 raw 는 명시적으로 주워와야 한다** — 자동으로 안 된다:
       #   normalize-<step> --run-id <새 id> --input-run-id <실패한 run_id>   # 그 런만
       #   normalize-<step> --run-id <새 id>                                  # 전체 백필
-      # 실패는 NotifyFailure(SNS)로 이미 통보되므로 그 알림이 이 절차의 트리거다. 자동
-      # 구제가 나아 보이지만, 옛 구조는 "언젠가 주워진다"라 **아무도 그게 언제였는지 몰랐다**.
-      # 명시적 재처리는 누가 언제 무엇을 승격했는지가 남는다.
+      #
+      # 이 절차의 트리거는 NotifyFailure 알림이고, 제목에 실패한 run_id 가 박혀 나온다.
+      # ⚠️ **그래서 `pipeline_alarm_email` 이 반드시 설정돼 있어야 한다** — null 이면 구독
+      # 리소스가 count=0 으로 안 생겨 알림이 구독자 없는 토픽으로 사라지고, 그러면 미승격
+      # run 을 **아무도 모른다**(ALPHA-389 착수 시 dev 토픽 구독자가 실제로 0이었다).
+      # 수집 창이 '오늘'인 소스(BigKinds·DART·KRX ETF)는 다음 런이 그 날짜를 재수집하지도
+      # 않으므로, 알림을 놓치면 그 날 데이터는 raw 에만 남고 canonical 에 영영 없다.
+      #
+      # 자동 구제가 나아 보이지만, 옛 구조는 "언젠가 주워진다"라 **아무도 그게 언제였는지
+      # 몰랐다**. 명시적 재처리는 누가 언제 무엇을 승격했는지가 남는다 — 단 그 대가로 알림이
+      # 살아 있어야 한다는 조건이 붙는다.
       NormalizeParallel = {
         Type       = "Parallel"
         Branches   = local.normalize_branches
@@ -309,8 +317,12 @@ locals {
         ResultPath = null
         Next       = "PipelineFailed"
         Parameters = {
-          TopicArn    = aws_sns_topic.alarms.arn
-          Subject     = "[${var.name}] pipeline FAILED"
+          TopicArn = aws_sns_topic.alarms.arn
+          # run_id 를 제목에 박는다 — 정제가 run 스코프가 된 뒤로(ALPHA-389) 실패 런의 raw 는
+          # **사람이 그 run_id 로 명시 재처리**해야 승격된다. 제목이 전부 "pipeline FAILED" 로
+          # 같으면 메일함에서 어느 런을 주워와야 하는지 알 수 없어 절차가 시작되지 않는다.
+          # 본문(전체 상태 JSON)에 어느 브랜치가 실패했는지가 들어 있다.
+          "Subject.$" = "States.Format('[${var.name}] FAILED — run {}', $.run_id)"
           "Message.$" = "States.JsonToString($)"
         }
       }

@@ -352,7 +352,6 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 continue
             passing.append(row)
 
-    # 통과 행을 canonical 로 멱등 병합 적재 — **전체 런(input_run_id=None)만** 쓴다.
     # 통과 행을 canonical 로 멱등 병합 적재 — **스코프든 전체 런이든 쓴다**(ALPHA-389).
     #
     # 아래 교차 충돌 fail-loud 는 그대로 살아 있다 — 한 키에 두 벤더가 오면 둘 다 뺀다.
@@ -373,6 +372,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
     except Exception:
         logger.exception("canonical 적재 실패")
+        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+        canonical_written = False
         exit_code = 1
     if collisions:
         # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).

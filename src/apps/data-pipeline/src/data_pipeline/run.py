@@ -101,10 +101,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
-    # 정제 스텝 전용 — 이 수집 런의 raw 만 재검증(미지정=raw price 전체, 멱등). 스코프 실행은
-    # 재검증(quality_log)만 하고 canonical 은 안 쓴다 — canonical 은 전체 런이 authoritative.
+    # 정제 스텝 전용 — 그 수집 런의 raw 만 읽어 canonical 을 적재한다(ALPHA-389). SFN 이 이
+    # 경로로 돈다: 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에 비례한다. 미지정이면
+    # 전체를 읽는다 — **백필·복구 수단**이다(실패한 런의 raw 를 나중에 주워오거나, 정체성
+    # 로직 변경을 이미 수집된 구 raw 에 소급할 때). 어느 쪽이든 적재는 멱등이다.
     parser.add_argument("--input-run-id", default=None,
-                        help="normalize-* 재검증 대상 수집 run_id(미지정=전체, 멱등)")
+                        help="normalize-* 대상 수집 run_id(미지정=전체 raw 백필). 적재는 멱등")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출

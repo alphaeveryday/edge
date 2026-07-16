@@ -289,6 +289,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         parts_written, canonical_rows = _write_canonical(storage, passing)
     except Exception:
         logger.exception("canonical 적재 실패")
+        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+        canonical_written = False
         exit_code = 1
 
     try:
