@@ -100,6 +100,32 @@ output "data_pipeline_dart_secret_arn" {
   value       = module.data_pipeline.dart_secret_arn
 }
 
+# ── analysis-engine (KODEX 일일 뉴스 정규화 + 설명) ─────
+output "analysis_engine_state_machine_arn" {
+  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> [--input '{\"trade_date\":\"2026-07-14\",\"request_id\":\"manual-1\"}']"
+  value       = module.analysis_engine.state_machine_arn
+}
+
+output "analysis_engine_ecr_repository_url" {
+  description = "analysis-engine 이미지 저장소 URL (공유 edge/pipeline, 태그 analysis-engine-latest)"
+  value       = local.data_pipeline_ecr_repository_url
+}
+
+output "analysis_engine_task_family" {
+  description = "analysis-engine ECS task definition family"
+  value       = module.analysis_engine.task_definition_family
+}
+
+output "analysis_engine_log_group" {
+  description = "analysis-engine CloudWatch log group"
+  value       = module.analysis_engine.log_group_name
+}
+
+output "analysis_engine_lake_bucket" {
+  description = "analysis-engine active lake bucket."
+  value       = module.analysis_engine.lake_bucket_name
+}
+
 # ── 스키마 마이그레이션 배포용 값 (GitHub development environment vars) ──
 output "gha_deploy_role_arn" {
   description = "→ vars.AWS_DEPLOY_ROLE_ARN"
