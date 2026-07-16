@@ -186,18 +186,18 @@ def test_unknown_vendor_reported_not_silently_passed(tmp_path):
     assert "unsupported_vendor" in log["failures"][0]["reasons"]
 
 
-def test_input_run_id_scopes_validation_without_canonical(tmp_path):
-    # WHY: 특정 수집 런만 재검증할 수 있어야(멱등·부분 재실행) 하고, 스코프 실행은 canonical 을
-    #      쓰지 않는다 — 전체 raw 를 보는 멱등 런이 authoritative 하게 쓴다(가격 정제와 동형).
+def test_input_run_id_scopes_read_and_writes_canonical(tmp_path):
+    # WHY: SFN 이 --input-run-id 로 도는 경로다(ALPHA-389) — 그 런의 raw 만 읽어 정제 비용이
+    #      여태 쌓인 raw 전체가 아니라 이번 런에 비례한다. 스코프도 canonical 을 쓴다 —
+    #      안 쓰면 파이프라인이 아무것도 적재하지 못한다.
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("krx", "KR", run_id="R1"), [_krx_row()])
     _write_raw(storage, _raw_key("krx", "KR", run_id="R2"), [_krx_row(), _krx_row(COMPST_ISU_CD="000660")])
 
     assert normalize_etf.run(storage, "N1", input_run_id="R2") == 0
     log = _quality_log(storage)
-    assert log["records_read"] == 2  # R1(1건) 제외, R2(2건)만
-    assert log["canonical_written"] is False and log["canonical_rows_written"] == 0
-    assert not any(k.endswith(".parquet") for k in storage.list_keys("canonical/"))
+    assert log["records_read"] == 2  # R1(1건) 은 스코프 밖 — 읽지도 않는다
+    assert log["canonical_written"] is True and log["canonical_rows_written"] == 2
 
 
 def test_krx_kospi_and_kosdaq_resolve_to_distinct_mics(tmp_path):

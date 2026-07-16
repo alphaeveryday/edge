@@ -173,13 +173,14 @@ def test_idempotent_rerun_stable_bytes(tmp_path):
     assert storage.get_bytes(key) == first
 
 
-def test_scoped_run_revalidates_without_writing_canonical(tmp_path):
-    # WHY: --input-run-id 스코프는 재검증만 — canonical 은 전체 런이 authoritative.
+def test_scoped_run_writes_canonical(tmp_path):
+    # WHY: SFN 이 --input-run-id 로 도는 경로다(ALPHA-389) — 그 런의 raw 만 읽되 canonical 은
+    #      쓴다. 안 쓰면 파이프라인이 아무것도 적재하지 못한다.
     storage = LocalStorage(tmp_path / "lake")
     rcept_no = "20260319000006"
     _write_run(storage, [(_report_record(rcept_no), _doc_zip(PHARMA_HTML, rcept_no))])
 
     assert seg.run(storage, "S1", input_run_id="R1") == 0
-    assert _canonical_rows(storage, "2026-03-19") == []
+    assert len(_canonical_rows(storage, "2026-03-19")) == 4
     log = _quality_log(storage)
-    assert log["canonical_written"] is False and log["records_passed"] == 4
+    assert log["canonical_written"] is True and log["records_passed"] == 4

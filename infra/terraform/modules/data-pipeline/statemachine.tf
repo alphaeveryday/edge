@@ -70,33 +70,38 @@ locals {
   # raw 성공 뒤 도는 정제 스테이지(ALPHA-355). raw 와 같은 브랜치 구조를 재사용하되 잡만 다르다.
   # normalize 는 벤더 API 키가 필요 없고(레이크만 읽고 canonical 을 쓴다) 모든 task-def 가 같은
   # task_role(레이크 RW)을 공유하므로, 시크릿 없는 bigkinds task-def 를 재사용한다 — 새 task-def·
-  # IAM 불요. 전체런(`--input-run-id` 없이)이라 멱등 canonical 적재. normalize-financial 은 아직
-  # canonical 스텝이 없어 제외한다(재무는 raw-only).
+  # IAM 불요. normalize-financial 은 아직 canonical 스텝이 없어 제외한다(재무는 raw-only).
+  #
+  # **`--input-run-id $.run_id` = 이 실행이 수집한 raw 만 정제한다**(ALPHA-389). 정제는
+  # 데이터셋별 1잡이고 벤더를 합치는 자리라(한 task 가 source= 로 FMP·KIS 를 함께 읽는다),
+  # 9개 raw 브랜치가 같은 run_id 를 쓰는 덕에 스코프 안에 그 런의 전 벤더가 들어온다.
+  # 적재 자체는 여전히 멱등이다 — canonical 병합이 파티션의 기존 행을 읽어 합친다.
+  # 실패 런 raw 재처리는 아래 NormalizeParallel 주석 참조.
   normalize_jobs = [
     {
       state        = "NormalizeNews"
       taskdef_key  = "bigkinds"
-      command_expr = "States.Array('normalize-news', '--run-id', $.run_id)"
+      command_expr = "States.Array('normalize-news', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       state        = "NormalizePrice"
       taskdef_key  = "bigkinds"
-      command_expr = "States.Array('normalize-price', '--run-id', $.run_id)"
+      command_expr = "States.Array('normalize-price', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       state        = "NormalizeDisclosure"
       taskdef_key  = "bigkinds"
-      command_expr = "States.Array('normalize-disclosure', '--run-id', $.run_id)"
+      command_expr = "States.Array('normalize-disclosure', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       state        = "NormalizeDisclosureSegment"
       taskdef_key  = "bigkinds"
-      command_expr = "States.Array('normalize-disclosure-segment', '--run-id', $.run_id)"
+      command_expr = "States.Array('normalize-disclosure-segment', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       state        = "NormalizeEtf"
       taskdef_key  = "bigkinds"
-      command_expr = "States.Array('normalize-etf', '--run-id', $.run_id)"
+      command_expr = "States.Array('normalize-etf', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
   ]
 
@@ -247,13 +252,21 @@ locals {
         }]
         Default = "NotifyFailure"
       }
-      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면(브랜치 실패)
-      # normalize 를 헛돌리지 않고 다음 성공 실행이 전체를 멱등 정제하게 미룬다. 이 게이트는 실행 내
-      # 순서 제어지 실패-run raw 의 영구 격리가 아니다 — normalize 는 full-scan(--input-run-id 없이)
-      # 이라 이전 partial/실패 실행이 저장한 raw 도 다음 성공 실행에서 함께 승격된다. 그게 맞다:
-      # bronze→silver 승격의 authoritative 필터는 normalize 의 행 단위 품질 게이트지 SFN run 상태가
-      # 아니고(유효 행은 승격·garbage 행은 거름), 저장된 partial raw 는 유효 데이터다(ALPHA-351 의
-      # '다음 창 이어받음'과 동형). ALPHA-351 로 흔한 절단은 이제 raw 브랜치에서 성공 처리된다.
+      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면 정제를
+      # 헛돌리지 않는다. ALPHA-351 로 흔한 절단은 raw 브랜치에서 성공 처리되므로, 여기 걸리는
+      # 건 진짜 실패다.
+      #
+      # ⚠️ **정제는 이 실행의 raw 만 본다**(`--input-run-id $.run_id`, ALPHA-389). 예전엔
+      # full-scan 이라 "이전 실패 실행이 저장한 raw 도 다음 성공 실행이 함께 주워간다"는
+      # 자동 구제가 있었는데, **그게 없어졌다.** 대가로 정제 비용이 여태 쌓인 raw 전체가
+      # 아니라 이번 런에 비례한다(옛 구조는 영구히 O(전체 raw)였다).
+      #
+      # 그래서 **실패한 실행의 raw 는 명시적으로 주워와야 한다** — 자동으로 안 된다:
+      #   normalize-<step> --run-id <새 id> --input-run-id <실패한 run_id>   # 그 런만
+      #   normalize-<step> --run-id <새 id>                                  # 전체 백필
+      # 실패는 NotifyFailure(SNS)로 이미 통보되므로 그 알림이 이 절차의 트리거다. 자동
+      # 구제가 나아 보이지만, 옛 구조는 "언젠가 주워진다"라 **아무도 그게 언제였는지 몰랐다**.
+      # 명시적 재처리는 누가 언제 무엇을 승격했는지가 남는다.
       NormalizeParallel = {
         Type       = "Parallel"
         Branches   = local.normalize_branches

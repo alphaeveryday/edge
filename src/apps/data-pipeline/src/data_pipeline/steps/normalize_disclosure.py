@@ -12,7 +12,7 @@ raw disclosures(메타 ndjson + 본문 ZIP, ALPHA-344)를 읽어 **단일판매�
 이 이긴다. source_vendor(dart)는 현재 KR·DART 단독이라 파티션이 아니라 컬럼(provenance)이다.
 
 파이프라인(가격·뉴스 정제와 동형):
-  1. raw 메타 ndjson 스캔(is_raw_disclosure_key). --input-run-id 로 특정 수집 런만 재검증.
+  1. raw 메타 ndjson 스캔(is_raw_disclosure_key). --input-run-id 로 그 수집 런만 스코프(ALPHA-389).
   2. report_nm 으로 **doc_type 라우팅** — 공급계약만 이 스텝이 처리(사업보고서 등은 스킵,
      segment fact 는 후속 스토리). 본문은 document_raw_path 의 ZIP 을 열어 euc-kr 디코딩·파싱.
   3. 파서 출력 + 메타 provenance(rcept_no·corp_code·ticker·corp_name·source_url·rcept_dt)
@@ -237,9 +237,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     """raw disclosures → 공급계약 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 장애 시 비0.
 
-    input_run_id 지정 시 그 수집 런의 raw 만 **재검증**한다(canonical 은 안 씀 — 전체 런이
-    authoritative). 미지정이면 raw disclosures 전체를 검증하고 canonical 을 멱등 적재한다
-    (가격·뉴스 정제와 동형).
+    input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다(ALPHA-389 —
+    SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다(가격·뉴스 정제와 동형).
     """
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
@@ -333,19 +332,15 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 시키되 품질 신호를 드러낸다(coerce-to-passing 방지, Rule 12).
                 warnings.append({**ref, "reasons": warn})
 
-    # 통과 fact 를 canonical 로 멱등 병합 — **전체 런(input_run_id=None)만** 쓴다. 스코프
-    # 실행은 재검증(quality_log)만 하고 canonical 은 전체 raw 를 보는 멱등 런이 authoritative
-    # 하게 쓴다(가격·뉴스 정제와 동형 — 스코프가 부분 파티션을 덮어써 멱등성을 흔들지 않게).
+    # 통과 fact 를 canonical 로 멱등 병합 — **스코프든 전체 런이든 쓴다**(ALPHA-389).
+    # 병합이 파티션의 기존 행을 읽어 합치므로(덮어쓰기 아님) 스코프 런도 기존을 안 잃는다.
     parts_written = canonical_rows = 0
-    canonical_written = input_run_id is None
-    if canonical_written:
-        try:
-            parts_written, canonical_rows = _write_canonical(storage, passing)
-        except Exception:
-            logger.exception("canonical 적재 실패")
-            exit_code = 1
-    else:
-        logger.info("스코프(--input-run-id) 실행 — 재검증만, canonical 은 전체 런이 쓴다")
+    canonical_written = True
+    try:
+        parts_written, canonical_rows = _write_canonical(storage, passing)
+    except Exception:
+        logger.exception("canonical 적재 실패")
+        exit_code = 1
 
     try:
         storage.put_bytes(

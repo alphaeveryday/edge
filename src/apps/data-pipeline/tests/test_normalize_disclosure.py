@@ -347,14 +347,15 @@ def test_latest_fetched_at_wins_on_reingest(tmp_path):
 
 
 # ── 스코프 실행 ──────────────────────────────────────────
-def test_scoped_run_revalidates_without_writing_canonical(tmp_path):
-    # WHY: --input-run-id 스코프는 재검증(quality_log)만 — canonical 은 전체 런이 authoritative.
+def test_scoped_run_writes_canonical(tmp_path):
+    # WHY: SFN 이 --input-run-id 로 도는 경로다(ALPHA-389) — 그 런의 raw 만 읽되 canonical 은
+    #      쓴다. 안 쓰면 파이프라인이 아무것도 적재하지 못한다.
     storage = LocalStorage(tmp_path / "lake")
     rcept_no = "20260623800010"
     _write_run(storage, [(_supply_record(rcept_no), _doc_zip(_supply_html(), rcept_no))])
 
     assert normalize_disclosure.run(storage, "D1", input_run_id="R1") == 0
-    assert _canonical_rows(storage, "2026-06-23") == []
+    assert [r["rcept_no"] for r in _canonical_rows(storage, "2026-06-23")] == [rcept_no]
     log = _quality_log(storage)
-    assert log["canonical_written"] is False
+    assert log["canonical_written"] is True
     assert log["records_passed"] == 1
