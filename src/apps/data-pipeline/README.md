@@ -28,6 +28,9 @@
 > **종목 마스터 적재(Step4, RDB)** 는 canonical ETF 구성종목을 Cloud Event Store 의
 > `entity`/`actor`/`company_profile`/`instrument`/`equity_profile` 로 멱등 적재한다
 > (`load-instruments`, ALPHA-372) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
+> **가격변동 트리거 적재(RDB)** 는 canonical 일봉에서 대상 ETF 의 일수익률을 계산해 absolute
+> gate(임계값은 설정 `[price_triggers]`, 잠정 정책) 통과 거래일만 `price_movement_trigger` 로
+> 멱등 적재한다(`load-price-triggers`, ALPHA-406) — 분석 SFN RDS 영속 전제 체인의 첫 고리다.
 
 ## 실행
 
@@ -180,6 +183,13 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 # DB 설정은 DATA_PIPELINE_DB__* (스토리지와 같은 인프라 네임스페이스). 비밀번호는 env 주입만.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-instruments
+
+# 가격변동 트리거 적재(RDB) — canonical 일봉의 대상 ETF([price_triggers].etf_ticker) 일수익률이
+# absolute gate(abs_threshold)를 넘는 거래일만 price_movement_trigger 로. 게이트 미통과 일자는
+# 행이 없는 게 정상이고 그 수는 data_quality_logs 로 남는다. --from/--to 는 대상 trade_date
+# 파티션을 좁히는 창(미지정=전체 스캔, (etf, trade_date) 멱등 skip).
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-price-triggers
 ```
 
 > **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
@@ -240,13 +250,15 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)
 
-**파생(derive, 2잡)** — canonical 을 소비해 다운스트림 산출물을 만든다. 정제 뒤라야 하고(둘 다
-canonical 전체를 읽는다) 서로는 독립이라 병렬이다. 각자 시크릿이 달라 task-def 도 따로다.
+**파생(derive, 3잡)** — canonical 을 소비해 다운스트림 산출물을 만든다. 정제 뒤라야 하고(전부
+canonical 을 읽는다) 서로는 독립이라 병렬이다. 시크릿이 다른 잡은 task-def 도 따로다.
 
 - `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 500)을 넘겨 한 실행의
   LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(미태깅 기사만 고른다)
 - `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — DB 접속정보는 이 task-def 에만 주입한다.
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
+- `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 창 미지정 = canonical 전체
+  스캔 + (etf, trade_date) 멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
