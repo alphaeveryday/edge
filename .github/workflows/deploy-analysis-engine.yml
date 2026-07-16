@@ -1,0 +1,55 @@
+# analysis-engine dev 이미지 배포 — KODEX 일일 뉴스 정규화 + 설명 배치 이미지를 ECR 에 push 한다.
+# SFN task definition 은 edge/pipeline:analysis-engine-latest 를 참조하므로, 다음 실행부터 새 이미지를 pull 한다.
+name: deploy-analysis-engine
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/analysis-engine/**"
+      - "src/pyproject.toml"
+      - "src/.dockerignore"
+      - "infra/terraform/modules/analysis-engine/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-analysis-engine
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push analysis-engine image
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          ecr_repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
+          image_sha="${ecr_repo}:analysis-engine-${IMAGE_TAG}"
+          image_latest="${ecr_repo}:analysis-engine-latest"
+          docker build --platform linux/amd64 \
+            -f src/apps/analysis-engine/Dockerfile \
+            -t "${image_sha}" \
+            -t "${image_latest}" \
+            src
+          docker push "${image_sha}"
+          docker push "${image_latest}"
