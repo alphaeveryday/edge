@@ -7,6 +7,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from data_pipeline.config import BigKindsNewsSource as BigKindsNewsSourceConfig
 from data_pipeline.sources.bigkinds import BigKindsNewsSource
@@ -93,6 +94,27 @@ def test_category_codes_narrow_the_search_to_configured_categories():
     assert src.client.requests[0]["body"]["categoryCodes"] == ["002000000"]
     # 언론사는 안 좁힌다 — 결정은 "경제 카테고리 한정, **전체 언론사**"였다.
     assert src.client.requests[0]["body"]["providerCodes"] == []
+
+
+@pytest.mark.parametrize("bad", ["002", "abc", "0020000000", "00200000x", ""])
+def test_malformed_category_code_fails_at_config_load(bad):
+    # WHY: BigKinds 는 잘못된 코드에 에러를 안 준다 — HTTP 200 에 빈 resultList 를 준다
+    #      (라이브 실측: "002"·"999000000"·"abc" 전부 totalCount=0). 그러면 전 심볼이 0행이
+    #      되는데 ingest_raw 의 상태 판정은 real_failures 나 planned_symbols==0 만 보므로
+    #      **success 로 기록된다** — 오타 하나가 뉴스 수집을 통째로 죽이면서 파이프라인은
+    #      초록불이 된다(Rule 12 위반, ALPHA-368 이 몇 주 잠복한 것과 같은 모양).
+    #      그래서 형식 오류는 첫 호출 전에, 로드 시점에 터져야 한다.
+    with pytest.raises(ValidationError):
+        BigKindsNewsSourceConfig(query_map=_MAP, category_codes=[bad])
+
+
+def test_valid_category_code_loads_and_strips_whitespace():
+    # WHY: 위 검증이 정상 코드까지 막으면 수집이 아예 안 된다 — 게이트가 참을 거짓이라
+    #      하지 않는지 함께 고정한다(실측으로 동작 확인된 경제 대분류 코드).
+    #      공백은 TOML 서식 부산물이지 의미 오류가 아니라 NonBlankStr 과 같이 strip 해
+    #      통과시킨다 — 안 그러면 코드는 맞는데 들여쓰기 때문에 수집이 0 이 된다.
+    config = BigKindsNewsSourceConfig(query_map=_MAP, category_codes=["002000000", " 002006000 "])
+    assert config.category_codes == ["002000000", "002006000"]
 
 
 def test_no_category_codes_means_no_filter():

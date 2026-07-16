@@ -24,6 +24,30 @@ def _non_blank(value: str) -> str:
 NonBlankStr = Annotated[str, AfterValidator(_non_blank)]
 
 
+def _bigkinds_category_code(value: str) -> str:
+    """BigKinds 카테고리 코드는 9자리 숫자다(`002000000` = 경제 대분류).
+
+    형식을 여기서 막는 이유: **BigKinds 는 잘못된 코드에 에러를 안 준다 — HTTP 200 에
+    빈 resultList 를 준다**(라이브 실측: `002`·`999000000`·`abc` 전부 totalCount=0).
+    그러면 전 심볼이 0행이 되는데 수집 스텝은 실패도 매핑누락도 아니라 **success 로**
+    기록한다(ingest_raw 의 상태 판정은 real_failures 나 planned_symbols==0 만 본다).
+    오타 하나가 뉴스 수집을 통째로 죽이면서 파이프라인은 초록불인 상태가 된다.
+
+    그래서 오타류는 **로드 시점에** 터뜨린다(DbConfig 비밀번호 검사와 같은 결).
+    9자리 숫자지만 실재하지 않는 코드(`999000000`)는 여기서 못 잡는다 — 그건 형식이
+    아니라 의미라 라이브 조회 없이는 알 수 없다.
+    """
+    stripped = value.strip()
+    if len(stripped) != 9 or not stripped.isdigit():
+        raise ValueError(
+            f"BigKinds 카테고리 코드는 9자리 숫자여야 한다(예: 002000000) — 받은 값: {value!r}"
+        )
+    return stripped
+
+
+BigKindsCategoryCode = Annotated[str, AfterValidator(_bigkinds_category_code)]
+
+
 class NewsSource(BaseModel):
     """등록된 뉴스 소스 하나.
 
@@ -57,7 +81,7 @@ class BigKindsNewsSource(BaseModel):
     # 검색을 좁히는 BigKinds 카테고리 대분류 코드. 검색어(종목명)만으로는 그 종목이 언급된
     # 스포츠·지역 홍보 기사까지 들어오는데, 우리 소비자(태깅)는 경제 사건만 쓴다. 빈 리스트면
     # 필터 없음(전 카테고리) — BigKinds 의 무필터 표현이 곧 빈 배열이라 그대로 넘긴다.
-    category_codes: list[NonBlankStr] = Field(default_factory=list)
+    category_codes: list[BigKindsCategoryCode] = Field(default_factory=list)
 
 
 class PriceSource(BaseModel):
