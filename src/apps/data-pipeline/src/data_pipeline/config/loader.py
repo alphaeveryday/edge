@@ -33,6 +33,7 @@ from .models import (
     KrxEtfConfig,
     NewsConfig,
     PriceConfig,
+    PriceTriggersConfig,
     StorageConfig,
 )
 
@@ -81,6 +82,9 @@ class Settings(BaseSettings):
     # DB(Cloud Event Store)는 적재 스텝(load-*)만 쓴다 — 수집·정제만 돌리는 환경은 생략
     # 가능하고, 미설정이면 load-* 진입점이 fail-loud 한다.
     db: DbConfig | None = None
+    # ETF 가격변동 트리거(ALPHA-406)는 load-price-triggers 만 쓴다 — 미설정이면 그 진입점이
+    # fail-loud 한다(트리거를 안 돌리는 환경은 생략 가능).
+    price_triggers: PriceTriggersConfig | None = None
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

@@ -3,7 +3,7 @@
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|tag-news}
+         |normalize-etf|tag-news|load-instruments|load-price-triggers}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
 
@@ -46,6 +46,7 @@ from .sources import (
 from .steps import (
     ingest_price_raw,
     load_instruments,
+    load_price_triggers,
     ingest_raw,
     ingest_raw_disclosure,
     ingest_raw_etf,
@@ -95,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "tag-news", "load-instruments"],
+                 "normalize-etf", "tag-news", "load-instruments", "load-price-triggers"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -146,6 +147,18 @@ def main(argv: list[str] | None = None) -> int:
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
     if args.step == "load-instruments":
         return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db))
+
+    # 가격변동 트리거도 canonical 을 읽어 DB 에 쓰는 적재 스텝이다. 창(--from/--to)은 수집
+    # 창이 아니라 **트리거 계산 대상 trade_date 파티션**을 좁힌다(미지정=전체, 멱등 skip 이라
+    # 재실행 비용은 신규분뿐) — 그래서 아래 증분 기본창 계산을 타지 않게 여기서 분기한다.
+    if args.step == "load-price-triggers":
+        if settings.price_triggers is None:
+            # 조용히 0건 성공으로 끝나면 트리거 부재가 안 보인다(Rule 12).
+            raise SystemExit("price_triggers 설정이 없다 — sources.toml 확인")
+        return load_price_triggers.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            config=settings.price_triggers, from_date=args.from_date, to_date=args.to_date,
+        )
 
     # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라
     # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=전체). 비용이 LLM 호출 수에

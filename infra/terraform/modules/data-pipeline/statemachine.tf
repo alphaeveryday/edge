@@ -120,6 +120,13 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-instruments', '--run-id', $.run_id)"
     },
+    {
+      # ETF 가격변동 트리거(ALPHA-406) — canonical 일봉 → price_movement_trigger.
+      # 창 미지정 = canonical 전체 스캔 + 멱등 skip 이라 놓친 날을 다음 런이 자연 회복한다.
+      state        = "LoadPriceTriggers"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
