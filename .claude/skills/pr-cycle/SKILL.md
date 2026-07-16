@@ -91,11 +91,11 @@ gh pr view <N> --json reviews --jq '[.reviews[] | select(.author.login == "chatg
 
 **반영 루프** — 하나라도 수용했다면: 수정 커밋 → push → **베이스라인 기록** → PR에 `@codex review` 코멘트로 재리뷰 요청 → 다시 풀링. 베이스라인은 반드시 요청 **전에** 기록한다 — 봇은 수 초 만에도 응답하므로, 요청 후에 기록하면 그 사이 도착한 응답이 베이스라인에 묻혀 타임아웃까지 헛돈다. 새 `+1`이 달리거나, 남은 finding이 전부 비수용 판정이면 루프를 끝내고 머지로 진행한다.
 
-머지 확인을 받을 때 비수용한 finding과 그 이유를 함께 보고한다 — 판단을 숨기지 않는다.
+머지 보고에 비수용한 finding과 그 이유를 반드시 포함한다 — 판단을 숨기지 않는다.
 
 ## 7. Squash 머지 + 브랜치 삭제
 
-- 머지는 되돌리기 번거로운 동작이므로 사용자 확인 후 실행한다.
+- `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계)을 통과했으면 **확인 없이 실행한다** — 루프 종료 조건(`+1` 또는 전건 비수용)이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
 
