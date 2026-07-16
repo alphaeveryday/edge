@@ -190,6 +190,13 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 파티션을 좁히는 창(미지정=전체 스캔, (etf, trade_date) 멱등 skip).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-price-triggers
+
+# 문서 마스터 적재(RDB, ALPHA-374) — canonical 뉴스(ko·en)를 document(document_type='NEWS')로.
+# document_assertion.document_id FK 의 선행. 멱등: 자연키 uq_document_source(source_vendor,
+# article_id)로 있으면 skip, 없을 때만 doc_<ULID> 발번(ADR-0027). --from/--to 는 published_date
+# 파티션을 좁히는 창(미지정=전체 스캔). 아직 SFN 미편입 — 수동 실행 전용.
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-documents
 ```
 
 > **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
