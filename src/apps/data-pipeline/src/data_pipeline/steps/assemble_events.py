@@ -231,12 +231,22 @@ def load_entity_index(conn) -> dict[str, str]:
         return {str(t): str(i) for t, i in cur.fetchall()}
 
 
-def existing_document_source_ids(conn, source_ids: list[str]) -> set[str]:
+def assembled_source_ids(conn, source_ids: list[str]) -> set[str]:
+    """이미 **조립된** 기사의 article_id 집합 — 증분(재분류 방지)의 근거.
+
+    엔진의 원래 규칙(document 존재=정규화됨)은 엔진이 document 의 유일한 생산자일 때만
+    성립했다. 통합 SFN 에선 LoadDocuments 가 이 스텝보다 먼저 **모든** 기사에 document
+    를 깔아 주므로, 그 기준이면 todo 가 항상 비어 이벤트가 영영 안 생긴다(Codex #137).
+    조립만 남기는 자국인 document_entity(persist_normalization 전용 산출)로 판정한다 —
+    비이벤트 기사는 자국이 없어 재실행 시 재분류되는데, 이는 엔진 원 동작과 같다.
+    """
     if not source_ids:
         return set()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT source_document_id FROM document WHERE source_document_id = ANY(%s)",
+            "SELECT d.source_document_id FROM document d"
+            " JOIN document_entity de ON de.document_id = d.document_id"
+            " WHERE d.source_document_id = ANY(%s)",
             (source_ids,),
         )
         return {str(r[0]) for r in cur.fetchall()}
@@ -488,7 +498,7 @@ def run(
                 news_read += len(news)
                 in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
                 in_universe_count += len(in_universe)
-                already = existing_document_source_ids(conn, [n["article_id"] for n in in_universe])
+                already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 already_normalized += len(in_universe) - len(todo)
                 classifications = (classify_titles(complete_fn, todo, registry, entity_index)

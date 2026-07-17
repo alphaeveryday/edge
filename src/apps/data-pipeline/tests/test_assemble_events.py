@@ -60,9 +60,9 @@ class _FakeCursor:
         upper = flat.upper()
         if upper.startswith("SELECT TICKER, INSTRUMENT_ID"):
             self._rows = list(conn.instruments)
-        elif upper.startswith("SELECT SOURCE_DOCUMENT_ID FROM DOCUMENT"):
+        elif upper.startswith("SELECT D.SOURCE_DOCUMENT_ID FROM DOCUMENT D"):
             wanted = set(params[0])
-            self._rows = [(a,) for a in conn.normalized_articles if a in wanted]
+            self._rows = [(a,) for a in conn.assembled_articles if a in wanted]
         elif upper.startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID"):
             # 자연키 해소 — 로더 선적재 행이 있으면 그 ID, 없으면 방금 넣은 후보 해시.
             wanted = set(params[1])
@@ -87,13 +87,13 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, normalized_articles=(), doc_overrides=None,
+    def __init__(self, instruments=None, assembled_articles=(), doc_overrides=None,
                  assertion_rows=None, prior_thread_counts=None):
         self.log: list = []
         self.batches: list = []
         self.instruments = instruments or [("005930", "inst_SAMSUNG"), ("000660", "inst_HYNIX"),
                                            ("999999", "inst_OTHER")]
-        self.normalized_articles = set(normalized_articles)
+        self.assembled_articles = set(assembled_articles)
         self.doc_overrides = doc_overrides or {}
         self.assertion_rows = assertion_rows
         self.prior_thread_counts = prior_thread_counts or {}
@@ -172,12 +172,13 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     assert log["events_created"] == 1 and log["kodex_threaded"] == 1
 
 
-def test_already_normalized_articles_skip_llm(tmp_path, monkeypatch):
-    """document 가 이미 있는 기사는 LLM 을 다시 태우지 않는다 — 엔진의 증분 규칙이자
-    비용 통제. complete_fn 이 불리면 이 테스트가 즉시 깨진다."""
+def test_already_assembled_articles_skip_llm(tmp_path, monkeypatch):
+    """이미 **조립된**(document_entity 자국) 기사는 LLM 을 다시 태우지 않는다 — 증분·비용
+    통제. 판정 축은 document 존재가 아니다: LoadDocuments 가 선행하는 SFN 에선 그 기준이면
+    todo 가 항상 비어 이벤트가 영영 안 생긴다(Codex #137 P1). complete_fn 이 불리면 즉시 깨진다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1")])
-    conn = _FakeConn(normalized_articles=["a1"])
+    conn = _FakeConn(assembled_articles=["a1"])
     _setup(monkeypatch, conn)
 
     def complete_fn(system, user):
