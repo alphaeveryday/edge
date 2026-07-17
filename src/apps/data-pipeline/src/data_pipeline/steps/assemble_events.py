@@ -414,7 +414,13 @@ def select_kodex_events(events: list[dict]) -> list[dict]:
 
 
 def thread_events(conn, events: list[dict]) -> None:
-    """event_thread 계보 — 엔진 thread_events 이식(novelty FIRST/FOLLOW_UP 판정)."""
+    """event_thread 계보 — 엔진 thread_events 이식(novelty FIRST/FOLLOW_UP 판정).
+
+    알려진 천장(엔진 정본 그대로): prior 판정이 기존 링크 **총수** 기준이라, 이미 처리된
+    날짜보다 **오래된** 날짜를 나중에 백필하면 novelty 가 역전된다(옛 이벤트가 FOLLOW_UP).
+    런 내부는 available_at 정렬이라 안전 — 런 간 역순 백필만 해당. 회피는 운영 지침
+    (백필은 과거→현재 순)이고, 시각 기준 novelty 재판정은 threading 로직 소유자 안건.
+    """
     if not events:
         return
     threads: dict[str, tuple] = {}
