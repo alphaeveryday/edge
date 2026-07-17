@@ -83,7 +83,8 @@ def run(
     """feature 뉴스 assertion → document_assertion·assertion_argument 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
-    folded = missing_document = skipped_incomplete = skipped_no_resolved_argument = 0
+    folded = missing_document = skipped_incomplete = skipped_partial = 0
+    skipped_no_resolved_argument = 0
     created = already = arguments_inserted = 0
     args_total = 0
     args_by_reason: dict[str, int] = {"resolved": 0, "unresolved": 0, "ambiguous": 0}
@@ -130,6 +131,12 @@ def run(
                             if not event_type or not predicate or not isinstance(arguments, list):
                                 # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
                                 skipped_incomplete += 1
+                                continue
+                            if assertion.get("completeness") != "complete":
+                                # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
+                                # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
+                                # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
+                                skipped_partial += 1
                                 continue
                             nk = (source_code, article_id, str(event_type), str(predicate))
                             entry = candidates.get(nk)
@@ -239,6 +246,7 @@ def run(
         "rows_no_assertion": rows_no_assertion, "rows_malformed": rows_malformed,
         "assertions_considered": len(candidates), "assertions_folded": folded,
         "missing_document": missing_document, "skipped_incomplete": skipped_incomplete,
+        "skipped_partial": skipped_partial,
         "skipped_no_resolved_argument": skipped_no_resolved_argument,
         "created": created, "already_present": already,
         "arguments_inserted": arguments_inserted,

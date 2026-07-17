@@ -188,6 +188,24 @@ def test_unresolved_only_assertion_is_skipped_and_counted(tmp_path, monkeypatch)
            ("미등록회사", 1) in [tuple(x) for x in res["top_unresolved"]]
 
 
+def test_partial_assertion_is_not_persisted_as_confirmed(tmp_path, monkeypatch):
+    """completeness='partial'(필수 역할 결손 표시)은 적재하지 않는다 — 스키마에 완결성
+    컬럼이 없어 실으면 확정 주장과 구분 불가가 된다(Codex #133 P1). feature 존에 원본이
+    남고, skip 은 수치로 남는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [
+        _assertion(),
+        _assertion(event_type_code="LITIGATION", completeness="partial",
+                   missing_required_roles=["COUNTERPARTY"]),
+    ])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+    assert len(_inserts(conn, "document_assertion")) == 1
+    assert _log(storage)["skipped_partial"] == 1
+
+
 def test_missing_document_is_skipped_not_a_broken_fk(tmp_path, monkeypatch):
     """document 행이 없으면(로더 선행 전) FK 위반으로 죽는 대신 결손으로 세고 넘어간다 —
     load-documents 가 선행 스텝이라 다음 런이 자연 회복한다."""
