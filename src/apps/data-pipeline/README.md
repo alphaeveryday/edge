@@ -208,6 +208,12 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-assertions
+
+# 이벤트 조립(RDB+LLM, ALPHA-412) — canonical 뉴스 제목을 분류해 source_event 계보와
+# event_thread 를 만든다(분석엔진 추출 체인 이식, 결정적 ID 산식 동일). LLM 은 tag-news 와
+# 같은 LLM_* env. 창 미지정 = 오늘(KST) 하루(분류 비용이 기사 수 비례), 과거는 창으로 백필.
+LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run assemble-events
 ```
 
 > **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
@@ -287,6 +293,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `load-assertions`(**직렬**, 페이즈 전량 성공 뒤 → analyze 앞, ALPHA-376·410) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   엔티티 해소·해소율은 quality log 로 남는다
+- `assemble-events`(**직렬**, LoadAssertions 뒤 → analyze 앞, ALPHA-412, **events 세트**=LLM+DB) —
+  분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
+  계보 조립 → event_thread threading. 결정적 ID 산식·프롬프트는 엔진과 동일(정본), 창 미지정 =
+  오늘(KST) 하루. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028)
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.

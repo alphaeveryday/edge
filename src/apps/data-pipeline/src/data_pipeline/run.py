@@ -4,7 +4,7 @@
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|tag-news|load-instruments|load-price-triggers|load-documents
-         |load-assertions}
+         |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
 
@@ -45,6 +45,7 @@ from .sources import (
     PoliteClient,
 )
 from .steps import (
+    assemble_events,
     ingest_price_raw,
     load_assertions,
     load_documents,
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "tag-news", "load-instruments", "load-price-triggers",
-                 "load-documents", "load-assertions"],
+                 "load-documents", "load-assertions", "assemble-events"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -166,6 +167,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "load-assertions":
         return load_assertions.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # 이벤트 조립은 canonical 뉴스를 분류(LLM)해 DB 에 event 계보를 쓴다(ALPHA-412).
+    # LLM 설정은 tag-news 와 같은 관례(LLM_* env), DB 는 적재 스텝 공통. 창 미지정 =
+    # **오늘(KST) 하루**(분류 비용이 기사 수 비례 — 전체 스캔 기본이 아니다).
+    if args.step == "assemble-events":
+        api_key = os.environ.get("LLM_API_KEY", "")
+        if not api_key:
+            # 조용히 0건 조립하고 성공으로 끝나면 이벤트 부재가 안 보인다(Rule 12).
+            raise SystemExit("LLM_API_KEY 가 없다 — assemble-events 는 분류 LLM 호출이 필수다")
+        complete_fn = openai_compatible_complete_fn(
+            api_key=api_key,
+            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+        )
+        return assemble_events.run(
+            storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn,
             from_date=args.from_date, to_date=args.to_date,
         )
 
