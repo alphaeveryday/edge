@@ -132,6 +132,13 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id)"
     },
+    {
+      # 문서 마스터(ALPHA-374·410) — canonical 뉴스 → document. 창 미지정 = 전체 스캔 +
+      # 자연키 멱등 skip. assertion 적재(LoadAssertions, 페이즈 뒤 직렬)의 FK 선행이다.
+      state        = "LoadDocuments"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-documents', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
@@ -322,13 +329,44 @@ locals {
         Type = "Choice"
         Choices = [{
           And  = local.feature_success_checks
-          Next = "RunAnalysis"
+          Next = "LoadAssertions"
         }]
         Default = "NotifyFailure"
       }
-      # analyze 페이즈(ALPHA-408) — 구 analysis-engine SFN 의 완전 흡수. feature 전량 성공일
-      # 때만 돈다: **분석은 feature 산출물만 읽는다**(canonical/feature 존 + Cloud Event Store 의
-      # price_movement_trigger·instrument)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
+      # assertion 적재(ALPHA-376·410) — feature 병렬 페이즈 **뒤 직렬**이다: document FK
+      # 의존(LoadDocuments 산출)이 같은 페이즈 병렬이면 레이스라, 페이즈 전량 성공 뒤에 돈다.
+      # 자연키 멱등 + missing_document 는 다음 런 회복이라 재실행 안전.
+      LoadAssertions = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "LoadAssertionsCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      LoadAssertionsCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "RunAnalysis"
+        }]
+        Default = "NotifyFailure"
+      }
+      # analyze 페이즈(ALPHA-408) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
+      # LoadAssertions 포함) 전량 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
+      # (canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument·
+      # document·assertion)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
       # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
       # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
       # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
