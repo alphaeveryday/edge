@@ -42,6 +42,12 @@ locals {
       DATA_PIPELINE_DB__NAME = var.db_name
       DATA_PIPELINE_DB__USER = var.db_user
     }
+    events = {
+      DATA_PIPELINE_DB__HOST = var.db_host
+      DATA_PIPELINE_DB__PORT = tostring(var.db_port)
+      DATA_PIPELINE_DB__NAME = var.db_name
+      DATA_PIPELINE_DB__USER = var.db_user
+    }
   }
 
   secret_sets = {
@@ -72,6 +78,12 @@ locals {
       LLM_API_KEY = "${var.deepseek_secret_arn}:api_key::"
     }
     rds = {
+      DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+    }
+    # assemble-events(ALPHA-412) — 분류 LLM 과 DB 적재를 한 태스크가 다 한다(엔진 추출
+    # 체인 이식이라 분리 불가). deepseek·rds 두 세트의 합집합.
+    events = {
+      LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
   }

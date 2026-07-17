@@ -359,6 +359,36 @@ locals {
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"
           NumericEquals = 0
+          Next          = "AssembleEvents"
+        }]
+        Default = "NotifyFailure"
+      }
+      # 이벤트 조립(ALPHA-412) — 엔진 추출 체인(분류→event 계보→threading)의 이식.
+      # LoadAssertions 뒤 직렬: document/assertion 자연키 브리지가 선적재 행에 수렴하려면
+      # 로더들이 먼저다. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028).
+      AssembleEvents = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "AssembleEventsCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["events"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      AssembleEventsCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
           Next          = "RunAnalysis"
         }]
         Default = "NotifyFailure"
