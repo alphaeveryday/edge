@@ -194,7 +194,7 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 문서 마스터 적재(RDB, ALPHA-374) — canonical 뉴스(ko·en)를 document(document_type='NEWS')로.
 # document_assertion.document_id FK 의 선행. 멱등: 자연키 uq_document_source(source_vendor,
 # article_id)로 있으면 skip, 없을 때만 doc_<ULID> 발번(ADR-0027). --from/--to 는 published_date
-# 파티션을 좁히는 창(미지정=전체 스캔). 아직 SFN 미편입 — 수동 실행 전용.
+# 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-documents
 
@@ -267,10 +267,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)
 
-**feature(구 derive, 3잡)** — canonical 을 소비해 분석이 읽을 feature/factor 산출물을 만든다.
-정제 뒤라야 하고(전부 canonical 을 읽는다) 서로는 독립이라 병렬이다. 시크릿이 다른 잡은
-task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread 추출 + 가격이벤트
-생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
+**feature(구 derive, 병렬 4잡 + 직렬 1스텝)** — canonical 을 소비해 분석이 읽을 feature/factor
+산출물을 만든다. 정제 뒤라야 하고(전부 canonical 을 읽는다) 병렬 잡들은 서로 독립이다.
+시크릿이 다른 잡은 task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread
+추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
 - `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 500)을 넘겨 한 실행의
   LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(미태깅 기사만 고른다)
@@ -278,6 +278,11 @@ task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_t
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
 - `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 창 미지정 = canonical 전체
   스캔 + (etf, trade_date) 멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
+- `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410) — canonical 뉴스 →
+  document. 자연키 멱등, LoadAssertions 의 FK 선행
+- `load-assertions`(**직렬**, 페이즈 전량 성공 뒤 → analyze 앞, ALPHA-376·410) — feature assertion →
+  document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
+  엔티티 해소·해소율은 quality log 로 남는다
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
