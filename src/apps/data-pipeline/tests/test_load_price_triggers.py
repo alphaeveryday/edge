@@ -70,7 +70,8 @@ class _FakeCursor:
         if flat.startswith("SELECT instrument_id"):
             self._one = (self._conn.etf_id,) if self._conn.etf_id else None
         elif flat.startswith("SELECT t.trade_date"):
-            self._all = [(d, p, i, o) for d, (p, i, o) in self._conn.existing.items()]
+            self._all = [(d, p, i, o) for d, rows in self._conn.existing.items()
+                         for (p, i, o) in rows]
 
     def fetchone(self):
         return self._one
@@ -89,7 +90,7 @@ class _FakeConn:
     def __init__(self, etf_id="inst_ETF", existing=None):
         self.log: list = []
         self.etf_id = etf_id
-        # trade_date → (policy_version, trigger_id, observation 참조 여부)
+        # trade_date → [(policy_version, trigger_id, 계보 참조 여부), ...]
         self.existing = existing or {}
 
     def cursor(self):
@@ -189,7 +190,7 @@ def test_idempotent_rerun_skips_same_policy_rows(tmp_path, monkeypatch):
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(existing={"2026-07-16": ("l0-abs-v1", "pmt_X", False)})
+    conn = _FakeConn(existing={"2026-07-16": [("l0-abs-v1", "pmt_X", False)]})
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _inserts(conn) == [] and _deletes(conn) == []
@@ -203,7 +204,7 @@ def test_stale_policy_row_without_lineage_is_replaced(tmp_path, monkeypatch):
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 10100.0}])  # +1% < 3%
-    conn = _FakeConn(existing={"2026-07-16": ("pipeline-absolute-v0", "pmt_OLD", False)})
+    conn = _FakeConn(existing={"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", False)]})
 
     assert _run(storage, conn, monkeypatch) == 0
     [(_sql, params)] = _deletes(conn)
@@ -220,11 +221,45 @@ def test_stale_policy_row_with_lineage_is_kept_and_counted(tmp_path, monkeypatch
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(existing={"2026-07-16": ("pipeline-absolute-v0", "pmt_OLD", True)})
+    conn = _FakeConn(existing={"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", True)]})
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _deletes(conn) == [] and _inserts(conn) == []
     assert _quality_log(storage)["stale_policy_kept"] == 1
+
+
+def test_dates_before_first_holdings_snapshot_are_missing_not_lookahead(tmp_path, monkeypatch):
+    """최초 holdings 스냅샷 이전 날짜에 미래 스냅샷을 대입하면 아직 편입되지도 않은
+    종목으로 과거를 계산하는 look-ahead 편향이다(Codex #135 P1) — 결손으로 센다."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage, as_of="2026-07-16")  # 스냅샷이 7-16 부터만 존재
+    _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert _inserts(conn) == []
+    assert _quality_log(storage)["missing_holdings"] == 1
+
+
+def test_same_date_multiple_rows_are_each_judged(tmp_path, monkeypatch):
+    """uq 는 (etf,date,detected_at) 3키라 같은 날짜에 행이 여럿일 수 있다(엔진 writer 잔존기).
+    날짜당 1행으로 접으면 어느 행을 보느냐가 조회 순서에 달린다 — 현행 정책 행이 있으면
+    already, stale 무참조 행은 각각 정리돼야 한다."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage)
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn(existing={"2026-07-16": [
+        ("l0-abs-v1", "pmt_CURRENT", False),
+        ("pipeline-absolute-v0", "pmt_OLD", False),
+    ]})
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert [p for _s, p in _deletes(conn)] == [("pmt_OLD",)]  # stale 은 정리되고
+    assert _inserts(conn) == []                               # 현행 행이 있어 재삽입은 없다
+    log = _quality_log(storage)
+    assert log["already_present"] == 1 and log["replaced_stale_policy"] == 1
 
 
 def test_detected_at_is_deterministic_market_close(tmp_path, monkeypatch):

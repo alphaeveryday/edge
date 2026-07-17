@@ -137,10 +137,13 @@ def _resolve_etf_instrument_id(conn, ticker: str) -> str | None:
     return str(row[0]) if row else None
 
 
-def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, tuple[str, str, bool]]:
-    """trade_date → (policy_version, trigger_id, 다운스트림 계보 참조 여부).
+def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, list[tuple[str, str, bool]]]:
+    """trade_date → [(policy_version, trigger_id, 다운스트림 계보 참조 여부), …].
 
     (etf, trade_date) 존재가 멱등의 근거이고, 정책·참조 여부가 이행 판단의 근거다.
+    **리스트인 이유**: uq 는 (etf, date, detected_at) 3키라 같은 날짜에 행이 여럿일 수
+    있다(엔진 writer 가 소비 전환 전까지 런타임 detected_at 으로 씀) — 날짜당 1행으로
+    접으면 어느 행을 보느냐가 조회 순서에 달려 이행이 비결정적이 된다.
     참조 검사는 트리거를 참조하는 **모든** 테이블을 덮어야 한다(현재 FK 2개:
     etf_contribution_observation·price_observation — 후자는 ON DELETE CASCADE 라
     빠뜨리면 stale 정리가 가격분석 계보를 조용히 연쇄 삭제한다).
@@ -155,10 +158,11 @@ def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, tuple[str, str
             " FROM price_movement_trigger t WHERE t.etf_instrument_id = %s",
             (etf_instrument_id,),
         )
-        return {
-            (d.isoformat() if hasattr(d, "isoformat") else str(d)): (str(p), str(i), bool(o))
-            for d, p, i, o in cur.fetchall()
-        }
+        out: dict[str, list[tuple[str, str, bool]]] = {}
+        for d, p, i, o in cur.fetchall():
+            key = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            out.setdefault(key, []).append((str(p), str(i), bool(o)))
+        return out
 
 
 def run(
@@ -228,17 +232,17 @@ def run(
             existing = _existing_triggers(conn, etf_instrument_id) if targets else {}
             for date in targets:
                 considered += 1
-                state = existing.get(date)
-                if state is not None:
-                    policy, trigger_id, has_lineage = state
+                rows = existing.get(date, [])
+                kept_for_date = False
+                for policy, trigger_id, has_lineage in rows:
                     if policy == config.policy_version:
-                        already += 1
-                        continue
+                        continue  # 현행 정책 행 — 아래에서 already 판정
                     if has_lineage:
                         # 구정책 행이지만 다운스트림 계보(contribution observation 또는
                         # price_observation)가 매달려 있다 — 지우면 설명·가격분석 이력이
                         # 끊긴다(후자는 CASCADE 라 소리 없이). 보존하고 수치로 드러낸다.
                         stale_policy_kept += 1
+                        kept_for_date = True
                         continue
                     # 구정책·무참조 — 잠정 정책(0.5%) 계열 정리. 지우고 새 정책으로 재평가.
                     with conn.cursor() as cur:
@@ -248,10 +252,19 @@ def run(
                             (trigger_id,),
                         )
                     replaced_stale_policy += 1
+                if any(policy == config.policy_version for policy, _i, _l in rows):
+                    already += 1
+                    continue
+                if kept_for_date:
+                    # 계보 때문에 남긴 구정책 행이 이 날짜를 대표한다 — 옆에 새 행을 더 꽂으면
+                    # 소비자가 (etf, date)로 두 행을 보게 된다.
+                    continue
 
+                # holdings 는 거래일 **이하** 최신 스냅샷만 쓴다. 최초 스냅샷 이전 날짜에 미래
+                # 스냅샷을 대입하면 아직 편입되지도 않은 종목으로 과거를 계산하는 look-ahead
+                # 편향이라(전체 스캔에서 실재), 결손으로 세고 건너뛴다.
                 as_of_eligible = [x for x in holdings_dates if x <= date]
-                as_of = (as_of_eligible[-1] if as_of_eligible
-                         else (holdings_dates[0] if holdings_dates else None))
+                as_of = as_of_eligible[-1] if as_of_eligible else None
                 holdings = holdings_as_of(as_of) if as_of else []
                 if not holdings:
                     missing_holdings += 1
