@@ -272,6 +272,22 @@ def test_non_kodex_event_is_created_but_not_threaded(tmp_path, monkeypatch):
     assert log["events_created"] == 1 and log["kodex_threaded"] == 0
 
 
+def test_ticker_outside_article_mentions_is_rejected(tmp_path, monkeypatch):
+    """모델이 기사 tickers 밖의(그러나 유니버스엔 있는) 종목을 반환하면 거부돼야 한다 —
+    통과시키면 엉뚱한 회사에 이벤트·스레드가 선다(Codex #137 P1, 프롬프트 규칙의 코드 강제)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", ticker="005930")])
+    conn = _FakeConn()
+    _setup(monkeypatch, conn)
+
+    # 기사 mentions 는 005930 뿐인데 모델이 000660(유니버스 내 타사)을 반환.
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a1", ticker="000660"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    assert _batch(conn, "source_event") == []
+    assert _log(storage)["events_created"] == 0
+
+
 def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     """분류 LLM 이 3회 재시도 후에도 죽으면 비0 종료 + 로그 — 조용한 0건 성공 금지."""
     storage = LocalStorage(tmp_path / "lake")

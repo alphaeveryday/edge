@@ -181,16 +181,17 @@ def classify_titles(complete_fn, rows: list[dict], registry: Registry,
         items = [{"id": r["article_id"], "title": r["title"],
                   "tickers": [t for t in r["tickers"] if t in entity_index]}
                  for r in chunk]
+        allowed_by_id = {i["id"]: set(i["tickers"]) for i in items}
         payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
         for item in payload.get("items", []):
-            validated = _validate_classification(item, registry, entity_index)
+            validated = _validate_classification(item, registry, entity_index, allowed_by_id)
             if validated is not None:
                 results[validated["article_id"]] = validated
     return results
 
 
-def _validate_classification(item: dict, registry: Registry,
-                             entity_index: dict[str, str]) -> dict | None:
+def _validate_classification(item: dict, registry: Registry, entity_index: dict[str, str],
+                             allowed_by_id: dict[str, set[str]]) -> dict | None:
     article_id = item.get("id")
     if not article_id or not item.get("is_event"):
         return None
@@ -202,6 +203,11 @@ def _validate_classification(item: dict, registry: Registry,
     if not predicate:
         return None
     if registry.validate(event_type, predicate):
+        return None
+    if ticker not in allowed_by_id.get(str(article_id), set()):
+        # 프롬프트는 "입력 tickers 중에서만"을 이미 명시하지만 엔진 검증은 전역 유니버스만
+        # 봤다 — 모델이 무관한 유니버스 종목을 반환하면 엉뚱한 회사에 이벤트·스레드가 선다
+        # (Codex #137). 프롬프트 규칙의 코드 강제이지 분류 시맨틱 변경이 아니다.
         return None
     entity_id = entity_index.get(ticker)
     if entity_id is None:
