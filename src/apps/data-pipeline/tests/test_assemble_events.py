@@ -230,6 +230,7 @@ def test_fmp_article_documents_keep_their_vendor(tmp_path, monkeypatch):
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     [doc] = _batch(conn, "document")
     assert (doc[2], doc[3]) == ("fmp", "a-en")
+    assert doc[5] == "en"  # language_code 도 파티션 축을 따른다(ko 하드코딩 금지)
     resolutions = [p for sql, p in conn.log
                    if sql.upper().startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID")]
     assert resolutions == [("fmp", ["a-en"])]

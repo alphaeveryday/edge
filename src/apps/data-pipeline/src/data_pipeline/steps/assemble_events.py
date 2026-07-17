@@ -134,6 +134,7 @@ def read_daily_news(storage: Storage, published_date: str) -> list[dict]:
                     "published_at": rec.get("published_at"),
                     "publisher": rec.get("publisher"),
                     "source_vendor": rec.get("source_vendor") or "bigkinds",
+                    "language": language,  # 파티션 축 — document.language_code 로 실린다
                     "tickers": _mention_tickers(rec.get("mentions")),
                 })
     return rows
@@ -287,7 +288,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         source_code = row["source_vendor"]
         documents.append((
             _stable_id("doc", source_code, article_id), "NEWS", source_code, article_id,
-            row["title"], "ko", available_at, available_at,
+            row["title"], row.get("language") or "ko", available_at, available_at,
         ))
         pending.append((article_id, row, cls, available_at, source_code))
 
@@ -425,8 +426,12 @@ def thread_events(conn, events: list[dict]) -> None:
         prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
         novelty = "FIRST_IN_THREAD" if prior == 0 else "FOLLOW_UP_STAGE"
         per_thread_seen[thread_key] = per_thread_seen.get(thread_key, 0) + 1
+        # 같은 배치에 같은 스레드 이벤트가 여럿이면 opened_at 은 **첫**(가장 이른) 이벤트,
+        # last_state_at 만 갱신 — 마지막 대입으로 덮으면 opened_at 이 멤버보다 늦어진다.
+        prev_row = threads.get(thread_key)
+        opened_at = prev_row[3] if prev_row else event["available_at"]
         threads[thread_key] = (thread_id, thread_key, event["event_type_code"],
-                               event["available_at"], event["available_at"])
+                               opened_at, event["available_at"])
         links.append((event["source_event_id"], thread_id, "NEWS", novelty, "TITLE_EVENT",
                       evaluated_at))
         snapshots.append((event["source_event_id"], thread_id, prior, None, prior == 0,
