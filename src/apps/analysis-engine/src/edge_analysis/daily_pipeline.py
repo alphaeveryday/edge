@@ -730,11 +730,9 @@ def persist_normalization(
         news_docs.append((document_id,))
         entity_id = cls["entity_id"]
         doc_entities.append((document_id, entity_id, row["title"], "mention", cls["confidence"]))
-
-        assertion_id = _stable_id("asrt", document_id, cls["event_type_code"], cls["predicate_code"])
         assertions.append(
             (
-                assertion_id,
+                _stable_id("asrt", document_id, cls["event_type_code"], cls["predicate_code"]),
                 document_id,
                 cls["event_type_code"],
                 cls["predicate_code"],
@@ -743,6 +741,42 @@ def persist_normalization(
                 available_at,
             )
         )
+
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            "INSERT INTO news_document (document_id) VALUES %s ON CONFLICT (document_id) DO NOTHING",
+            news_docs,
+        )
+        execute_values(
+            cur,
+            "INSERT INTO document_entity (document_id, entity_id, matched_text, link_method, confidence)"
+            " VALUES %s ON CONFLICT (document_id, entity_id) DO NOTHING",
+            doc_entities,
+        )
+        # 충돌 축은 assertion_id 가 아니라 **자연키**다(uq_document_assertion_natural, ALPHA-376).
+        # load-assertions 가 같은 주장을 ULID 로 먼저 적재했으면 후보 해시 id 는 테이블에 없어
+        # (assertion_id) 축으로는 conflict-skip 이 안 되고, 실제 INSERT 가 자연키 제약에 걸려
+        # persist 전체가 죽는다. document 와 같은 이행기 브리지(ALPHA-409): 어느 writer 가
+        # 먼저였든 실제 행의 assertion_id 를 자연키로 다시 읽어 종속 계보를 그 ID 로 건다.
+        execute_values(
+            cur,
+            "INSERT INTO document_assertion (assertion_id, document_id, event_type_code, predicate_code,"
+            " confidence, lifecycle_stage, available_at) VALUES %s"
+            " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
+            assertions,
+        )
+        cur.execute(
+            "SELECT document_id, event_type_code, predicate_code, assertion_id"
+            " FROM document_assertion WHERE document_id = ANY(%s)",
+            ([doc_id_by_article[a] for a, _r, _c, _at in pending],),
+        )
+        asrt_id_by_key = {(d, e, p): a for d, e, p, a in cur.fetchall()}
+
+    for article_id, row, cls, available_at in pending:
+        document_id = doc_id_by_article[article_id]
+        entity_id = cls["entity_id"]
+        assertion_id = asrt_id_by_key[(document_id, cls["event_type_code"], cls["predicate_code"])]
         assertion_args.append((assertion_id, cls["role_code"], entity_id, cls["confidence"]))
 
         source_event_id = _stable_id("evt", assertion_id, entity_id)
@@ -776,23 +810,6 @@ def persist_normalization(
         )
 
     with conn.cursor() as cur:
-        execute_values(
-            cur,
-            "INSERT INTO news_document (document_id) VALUES %s ON CONFLICT (document_id) DO NOTHING",
-            news_docs,
-        )
-        execute_values(
-            cur,
-            "INSERT INTO document_entity (document_id, entity_id, matched_text, link_method, confidence)"
-            " VALUES %s ON CONFLICT (document_id, entity_id) DO NOTHING",
-            doc_entities,
-        )
-        execute_values(
-            cur,
-            "INSERT INTO document_assertion (assertion_id, document_id, event_type_code, predicate_code,"
-            " confidence, lifecycle_stage, available_at) VALUES %s ON CONFLICT (assertion_id) DO NOTHING",
-            assertions,
-        )
         execute_values(
             cur,
             "INSERT INTO assertion_argument (assertion_id, role_code, entity_id, confidence) VALUES %s"

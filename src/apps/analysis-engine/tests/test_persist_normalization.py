@@ -18,10 +18,15 @@ class _FakeCursor:
         self._conn = conn
 
     def execute(self, sql, params=None):
-        self._conn.executed.append((" ".join(sql.split()), params))
+        flat = " ".join(sql.split())
+        self._conn.executed.append((flat, params))
+        if flat.upper().startswith("SELECT SOURCE_DOCUMENT_ID"):
+            self._rows = self._conn.resolved_rows
+        elif flat.upper().startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
+            self._rows = self._conn.assertion_rows
 
     def fetchall(self):
-        return self._conn.resolved_rows
+        return self._rows
 
     def __enter__(self):
         return self
@@ -31,10 +36,11 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, resolved_rows):
+    def __init__(self, resolved_rows, assertion_rows=None):
         self.executed: list = []
         self.value_batches: list = []
         self.resolved_rows = resolved_rows
+        self.assertion_rows = assertion_rows or []
         self.committed = False
 
     def cursor(self):
@@ -71,9 +77,14 @@ _CLS = {
 _SETTINGS = SimpleNamespace(trade_date=date(2026, 7, 16))
 
 
-def _run(monkeypatch, resolved_rows):
+def _run(monkeypatch, resolved_rows, assertion_rows=None):
     monkeypatch.setattr("psycopg2.extras.execute_values", _fake_execute_values)
-    conn = _FakeConn(resolved_rows)
+    doc_id = resolved_rows[0][1]
+    if assertion_rows is None:
+        # 기본값: 이 런이 방금 넣은 자기 해시 assertion 이 해소된다(선적재 없음).
+        assertion_rows = [(doc_id, "SUPPLY_CONTRACT", "WIN",
+                           _stable_id("asrt", doc_id, "SUPPLY_CONTRACT", "WIN"))]
+    conn = _FakeConn(resolved_rows, assertion_rows)
     created = persist_normalization(conn, _ROWS, _CLS, {"005930": "ent_X"}, _SETTINGS)
     return conn, created
 
@@ -108,12 +119,41 @@ def test_behavior_unchanged_when_engine_wrote_first(monkeypatch):
     assert row[1] == candidate
 
 
-def test_resolution_query_targets_natural_key(monkeypatch):
-    """해소 SELECT 는 자연키(source_code, source_document_id)로 실제 행을 읽어야 한다 —
-    후보 ID 로 읽으면(WHERE document_id = …) 로더 행을 영영 못 찾는다."""
-    conn, _ = _run(monkeypatch, resolved_rows=[("a1", "doc_X")])
+def test_assertion_dependents_use_resolved_id_when_loader_wrote_first(monkeypatch):
+    """load-assertions 가 같은 주장을 ULID 로 먼저 적재한 경우(ALPHA-376) — 분석엔진의
+    assertion INSERT 는 자연키로 conflict-skip 되고, argument·source_event·evidence 계보는
+    **그 ULID** 에서 파생돼야 한다. 후보 해시로 걸면 FK 위반으로 persist 전체가 죽는다."""
+    doc_id = "doc_D1"
+    loader_asrt = "asrt_01LOADERULID"
+    conn, created = _run(
+        monkeypatch,
+        resolved_rows=[("a1", doc_id)],
+        assertion_rows=[(doc_id, "SUPPLY_CONTRACT", "WIN", loader_asrt)],
+    )
+
+    candidate = _stable_id("asrt", doc_id, "SUPPLY_CONTRACT", "WIN")
+    assert _batch(conn, "assertion_argument")[0][0] == loader_asrt
+    evidence_row = _batch(conn, "event_evidence")[0]
+    assert evidence_row[2] == loader_asrt
+    assert candidate not in {evidence_row[2], _batch(conn, "assertion_argument")[0][0]}
+    # source_event 도 해소된 assertion_id 에서 파생된다 — 계보 전체가 실제 행에 걸린다.
+    assert _batch(conn, "source_event")[0][0] == _stable_id("evt", loader_asrt, "ent_X")
+    # INSERT 충돌 축이 자연키여야 loader 선행 시 실제 INSERT 시도 자체가 skip 된다.
+    asrt_sql = next(sql for sql, _ in conn.value_batches
+                    if sql.upper().startswith("INSERT INTO DOCUMENT_ASSERTION"))
+    assert "ON CONFLICT (document_id, event_type_code, predicate_code)" in asrt_sql
+
+
+def test_resolution_queries_target_natural_keys(monkeypatch):
+    """해소 SELECT 는 자연키로 실제 행을 읽어야 한다 — 후보 ID 로 읽으면(WHERE
+    document_id/assertion_id = 후보) 로더 행을 영영 못 찾는다. document·assertion 두 축."""
+    conn, _ = _run(monkeypatch, resolved_rows=[("a1", "doc_X")],
+                   assertion_rows=[("doc_X", "SUPPLY_CONTRACT", "WIN", "asrt_Y")])
     selects = [(sql, p) for sql, p in conn.executed if sql.upper().startswith("SELECT")]
-    assert len(selects) == 1
-    sql, params = selects[0]
-    assert "source_code" in sql and "source_document_id" in sql
-    assert params == ("bigkinds", ["a1"])
+    assert len(selects) == 2
+    doc_sql, doc_params = selects[0]
+    assert "source_code" in doc_sql and "source_document_id" in doc_sql
+    assert doc_params == ("bigkinds", ["a1"])
+    asrt_sql, asrt_params = selects[1]
+    assert "FROM document_assertion" in asrt_sql and "event_type_code" in asrt_sql
+    assert asrt_params == (["doc_X"],)
