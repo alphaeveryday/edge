@@ -3,7 +3,8 @@
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|tag-news|load-instruments|load-price-triggers|load-documents}
+         |normalize-etf|tag-news|load-instruments|load-price-triggers|load-documents
+         |load-assertions}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
 
@@ -45,6 +46,7 @@ from .sources import (
 )
 from .steps import (
     ingest_price_raw,
+    load_assertions,
     load_documents,
     load_instruments,
     load_price_triggers,
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                  "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "tag-news", "load-instruments", "load-price-triggers",
-                 "load-documents"],
+                 "load-documents", "load-assertions"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -155,6 +157,14 @@ def main(argv: list[str] | None = None) -> int:
     # 비용은 신규분뿐) — 그래서 아래 증분 기본창 계산을 타지 않게 여기서 분기한다.
     if args.step == "load-documents":
         return load_documents.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # assertion 적재는 feature 를 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
+    # (feature published_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    if args.step == "load-assertions":
+        return load_assertions.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
         )

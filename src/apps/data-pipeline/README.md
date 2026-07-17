@@ -197,6 +197,14 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 파티션을 좁히는 창(미지정=전체 스캔). 아직 SFN 미편입 — 수동 실행 전용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-documents
+
+# assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
+# assertion_argument 로. argument text 는 엔티티 마스터 완전일치(티커·정식명·종목명)로
+# instrument 에 해소하고, 미해소·충돌은 quality log 에 사유별 수치로 남긴다(해소율 실측).
+# 멱등: uq_document_assertion_natural(document_id, event_type, predicate) ON CONFLICT.
+# 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-assertions
 ```
 
 > **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
