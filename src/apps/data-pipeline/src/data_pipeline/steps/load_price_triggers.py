@@ -138,15 +138,20 @@ def _resolve_etf_instrument_id(conn, ticker: str) -> str | None:
 
 
 def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, tuple[str, str, bool]]:
-    """trade_date → (policy_version, trigger_id, observation 참조 여부).
+    """trade_date → (policy_version, trigger_id, 다운스트림 계보 참조 여부).
 
     (etf, trade_date) 존재가 멱등의 근거이고, 정책·참조 여부가 이행 판단의 근거다.
+    참조 검사는 트리거를 참조하는 **모든** 테이블을 덮어야 한다(현재 FK 2개:
+    etf_contribution_observation·price_observation — 후자는 ON DELETE CASCADE 라
+    빠뜨리면 stale 정리가 가격분석 계보를 조용히 연쇄 삭제한다).
     """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT t.trade_date, t.detection_policy_version, t.price_movement_trigger_id,"
             " EXISTS (SELECT 1 FROM etf_contribution_observation o"
             "         WHERE o.price_movement_trigger_id = t.price_movement_trigger_id)"
+            " OR EXISTS (SELECT 1 FROM price_observation p"
+            "            WHERE p.price_movement_trigger_id = t.price_movement_trigger_id)"
             " FROM price_movement_trigger t WHERE t.etf_instrument_id = %s",
             (etf_instrument_id,),
         )
@@ -225,13 +230,14 @@ def run(
                 considered += 1
                 state = existing.get(date)
                 if state is not None:
-                    policy, trigger_id, has_observation = state
+                    policy, trigger_id, has_lineage = state
                     if policy == config.policy_version:
                         already += 1
                         continue
-                    if has_observation:
-                        # 구정책 행이지만 분석 계보(observation→route→explanation)가 매달려
-                        # 있다 — 지우면 설명 이력이 끊긴다. 보존하고 수치로 드러낸다.
+                    if has_lineage:
+                        # 구정책 행이지만 다운스트림 계보(contribution observation 또는
+                        # price_observation)가 매달려 있다 — 지우면 설명·가격분석 이력이
+                        # 끊긴다(후자는 CASCADE 라 소리 없이). 보존하고 수치로 드러낸다.
                         stale_policy_kept += 1
                         continue
                     # 구정책·무참조 — 잠정 정책(0.5%) 계열 정리. 지우고 새 정책으로 재평가.
