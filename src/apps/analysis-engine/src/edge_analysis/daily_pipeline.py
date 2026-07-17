@@ -682,15 +682,15 @@ def persist_normalization(
     evidences: list[tuple] = []
 
     by_id = {r["article_id"]: r for r in rows}
+    pending: list[tuple[str, dict[str, Any], dict[str, Any], str]] = []
     for article_id, cls in classifications.items():
         row = by_id.get(article_id)
         if row is None:
             continue
         available_at = _iso(row["published_at"])
-        document_id = _stable_id("doc", source_code, article_id)
         documents.append(
             (
-                document_id,
+                _stable_id("doc", source_code, article_id),
                 "NEWS",
                 source_code,
                 article_id,
@@ -700,6 +700,33 @@ def persist_normalization(
                 available_at,
             )
         )
+        pending.append((article_id, row, cls, available_at))
+
+    if not documents:
+        return created
+
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            "INSERT INTO document (document_id, document_type, source_code, source_document_id,"
+            " title, language_code, published_at, available_at) VALUES %s"
+            " ON CONFLICT (source_code, source_document_id) DO NOTHING",
+            documents,
+        )
+        # document_id 는 INSERT 후 자연키로 다시 읽는다(ALPHA-409) — load-documents(ALPHA-374)
+        # 가 같은 기사를 먼저 적재했으면 위 INSERT 는 conflict-skip 되는데, 종속 행을 위 후보
+        # 해시 ID 로 걸면 fk_document_assertion_document 위반으로 persist 전체가 죽는다.
+        # 어느 writer 가 먼저였든 **실제 행의 ID** 로 계보를 건다(이중 writer 이행기 브리지 —
+        # 최종 상태는 분리다: 분석은 feature 산출물만 읽는다, ADR-0028).
+        cur.execute(
+            "SELECT source_document_id, document_id FROM document"
+            " WHERE source_code = %s AND source_document_id = ANY(%s)",
+            (source_code, [article_id for article_id, _row, _cls, _at in pending]),
+        )
+        doc_id_by_article = {a: d for a, d in cur.fetchall()}
+
+    for article_id, row, cls, available_at in pending:
+        document_id = doc_id_by_article[article_id]
         news_docs.append((document_id,))
         entity_id = cls["entity_id"]
         doc_entities.append((document_id, entity_id, row["title"], "mention", cls["confidence"]))
@@ -748,17 +775,7 @@ def persist_normalization(
             }
         )
 
-    if not documents:
-        return created
-
     with conn.cursor() as cur:
-        execute_values(
-            cur,
-            "INSERT INTO document (document_id, document_type, source_code, source_document_id,"
-            " title, language_code, published_at, available_at) VALUES %s"
-            " ON CONFLICT (source_code, source_document_id) DO NOTHING",
-            documents,
-        )
         execute_values(
             cur,
             "INSERT INTO news_document (document_id) VALUES %s ON CONFLICT (document_id) DO NOTHING",
