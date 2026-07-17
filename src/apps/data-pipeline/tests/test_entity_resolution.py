@@ -38,11 +38,11 @@ class _FakeConn:
         return _FakeCursor(self._rows)
 
 
-# (instrument_id, ticker, instrument display_name, issuer display_name)
+# (instrument_id, ticker, instrument display_name, issuer display_name, share_class_code)
 _MASTER = [
-    ("inst_SAMSUNG", "005930", "삼성전자 보통주", "삼성전자"),
-    ("inst_HYNIX", "000660", "SK하이닉스 보통주", "SK하이닉스"),
-    ("inst_KODEX", "091160", "KODEX 반도체", None),  # ETF — equity_profile 없음
+    ("inst_SAMSUNG", "005930", "삼성전자 보통주", "삼성전자", "COMMON"),
+    ("inst_HYNIX", "000660", "SK하이닉스 보통주", "SK하이닉스", "COMMON"),
+    ("inst_KODEX", "091160", "KODEX 반도체", None, None),  # ETF — equity_profile 없음
 ]
 
 
@@ -72,10 +72,20 @@ def test_unknown_text_is_unresolved_not_guessed():
     assert resolve(index, 5930) == (None, UNRESOLVED)  # 비문자열
 
 
+def test_preferred_share_does_not_hijack_company_name():
+    """우선주가 있는 발행사 — 회사명은 약속대로 **보통주**로 해소돼야 하고(ambiguous 로
+    무너지면 안 됨, Codex #132 P2), 우선주는 자기 티커·종목명으로 해소된다."""
+    rows = _MASTER + [("inst_SAMSUNG_P", "005935", "삼성전자 우선주", "삼성전자", "PREFERRED")]
+    index = _index(rows)
+    assert resolve(index, "삼성전자") == ("inst_SAMSUNG", RESOLVED)
+    assert resolve(index, "005935") == ("inst_SAMSUNG_P", RESOLVED)
+    assert resolve(index, "삼성전자 우선주") == ("inst_SAMSUNG_P", RESOLVED)
+
+
 def test_name_collision_is_ambiguous_not_last_writer_wins():
     """같은 이름이 두 엔티티면 아무거나 고르는 순간 적재 순서가 정답을 정한다 —
     ambiguous 로 미해소 처리돼야 한다."""
-    rows = _MASTER + [("inst_OTHER", "999999", "삼성전자 보통주", "삼성전자")]
+    rows = _MASTER + [("inst_OTHER", "999999", "삼성전자 보통주", "삼성전자", "COMMON")]
     index = _index(rows)
     assert resolve(index, "삼성전자") == (None, AMBIGUOUS)
     assert resolve(index, "삼성전자 보통주") == (None, AMBIGUOUS)

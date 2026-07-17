@@ -50,7 +50,8 @@ def load_resolution_index(conn) -> ResolutionIndex:
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT i.instrument_id, i.ticker, ie.display_name, ae.display_name"
+            "SELECT i.instrument_id, i.ticker, ie.display_name, ae.display_name,"
+            " ep.share_class_code"
             " FROM instrument i"
             " JOIN entity ie ON ie.entity_id = i.instrument_id"
             " LEFT JOIN equity_profile ep ON ep.instrument_id = i.instrument_id"
@@ -59,8 +60,11 @@ def load_resolution_index(conn) -> ResolutionIndex:
         rows = cur.fetchall()
 
     by_key: dict[str, str | None] = {}
-    for instrument_id, ticker, instrument_name, issuer_name in rows:
-        for raw in (ticker, instrument_name, issuer_name):
+    for instrument_id, ticker, instrument_name, issuer_name, share_class in rows:
+        # 회사명 키는 보통주에만 건다 — 우선주가 있는 발행사에서 회사명이 두 종목으로
+        # 갈려 ambiguous 가 되면 "회사명 → 그 회사 보통주" 약속이 깨진다. 우선주는
+        # 자기 티커·종목명으로는 여전히 해소된다.
+        for raw in (ticker, instrument_name, issuer_name if share_class == "COMMON" else None):
             if not raw:
                 continue
             key = _normalize(str(raw))
