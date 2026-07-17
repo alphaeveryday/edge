@@ -1188,8 +1188,7 @@ def run(settings: Settings) -> int:
 
         route_code, event_search = decide_route(decomp)
         ids = persist_observation_route(conn, gate["trigger_id"], decomp, route_code, event_search, entity_index)
-        log("trigger.consumed", route=route_code, event_search=event_search,
-            trigger_id=gate["trigger_id"], **ids)
+        log("trigger.consumed", route=route_code, event_search=event_search, **ids)
 
         # --- Event search: normalize the day's news (title-only) -------------
         kodex_events: list[dict[str, Any]] = []
