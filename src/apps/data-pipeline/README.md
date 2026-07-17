@@ -28,9 +28,11 @@
 > **종목 마스터 적재(Step4, RDB)** 는 canonical ETF 구성종목을 Cloud Event Store 의
 > `entity`/`actor`/`company_profile`/`instrument`/`equity_profile` 로 멱등 적재한다
 > (`load-instruments`, ALPHA-372) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
-> **가격변동 트리거 적재(RDB)** 는 canonical 일봉에서 대상 ETF 의 일수익률을 계산해 absolute
-> gate(임계값은 설정 `[price_triggers]`, 잠정 정책) 통과 거래일만 `price_movement_trigger` 로
-> 멱등 적재한다(`load-price-triggers`, ALPHA-406) — 분석 SFN RDS 영속 전제 체인의 첫 고리다.
+> **가격변동 트리거 적재(RDB)** 는 canonical holdings 가중치와 구성종목 일봉으로 **가중 proxy
+> 수익률**(coverage 정규화 — 분석엔진 L0 와 같은 산식, 정본)을 계산해 absolute gate(3%,
+> `[price_triggers]`) 통과 거래일만 `price_movement_trigger` 로 멱등 적재한다
+> (`load-price-triggers`, ALPHA-406→411) — 이 테이블의 **단일 writer** 이자 분석 SFN RDS
+> 영속 전제 체인의 첫 고리다.
 
 ## 실행
 
@@ -184,10 +186,11 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-instruments
 
-# 가격변동 트리거 적재(RDB) — canonical 일봉의 대상 ETF([price_triggers].etf_ticker) 일수익률이
-# absolute gate(abs_threshold)를 넘는 거래일만 price_movement_trigger 로. 게이트 미통과 일자는
-# 행이 없는 게 정상이고 그 수는 data_quality_logs 로 남는다. --from/--to 는 대상 trade_date
-# 파티션을 좁히는 창(미지정=전체 스캔, (etf, trade_date) 멱등 skip).
+# 가격변동 트리거 적재(RDB, ALPHA-411) — canonical holdings 가중치 × 구성종목 일봉 수익률의
+# coverage 정규화 proxy(분석엔진 L0 산식 정본)가 absolute gate(abs_threshold=3%)를 넘는
+# 거래일만 price_movement_trigger 로. 게이트 미통과 일자는 행이 없는 게 정상이고 그 수는
+# data_quality_logs 로 남는다. 구정책 행은 observation 참조가 없으면 자동 교체된다.
+# --from/--to 는 대상 trade_date 파티션을 좁히는 창(미지정=전체 스캔, (etf,date) 멱등 skip).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-price-triggers
 
@@ -276,8 +279,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(미태깅 기사만 고른다)
 - `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — DB 접속정보는 이 task-def 에만 주입한다.
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
-- `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 창 미지정 = canonical 전체
-  스캔 + (etf, trade_date) 멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
+- `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 구성종목 가중 proxy
+  3% 게이트(엔진 L0 정본, ALPHA-411). 창 미지정 = canonical 전체 스캔 + (etf, trade_date)
+  멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
 - `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410) — canonical 뉴스 →
   document. 자연키 멱등, LoadAssertions 의 FK 선행
 - `load-assertions`(**직렬**, 페이즈 전량 성공 뒤 → analyze 앞, ALPHA-376·410) — feature assertion →

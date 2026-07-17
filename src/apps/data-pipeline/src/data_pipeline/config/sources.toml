@@ -225,9 +225,11 @@ symbols = [
 keywords = ["금리", "실적", "환율"]
 
 # ETF 가격변동 트리거(잠정 absolute gate) — load-price-triggers 가 쓴다(ALPHA-406).
-# 게이트 임계값·relative gate 규칙은 로직 소유자(정준영) 합의 대상이라 코드가 아닌 여기 두고,
-# 적재 행의 detection_policy_version 으로 잠정 정책임을 표시한다.
+# 게이트 정책 정본 = 분석엔진 L0(결정 2026-07-17, ALPHA-411): 구성종목 가중 proxy 수익률
+# |r| >= 3%. relative gate 는 미구현(레이크에 벤치마크 지수 가격이 아직 없다 — 엔진과 동일).
+# 임계값 재조정은 로직 소유자(정준영) 소관이라 코드가 아닌 여기 두고, 적재 행의
+# detection_policy_version 으로 어느 정책의 행인지 남긴다.
 [price_triggers]
 etf_ticker = "091160"  # KODEX 반도체
-abs_threshold = 0.005  # ponytail: 잠정 0.5% — 게이트 정책 합의 후 갱신
-policy_version = "pipeline-absolute-v0"
+abs_threshold = 0.03   # 엔진 ABS_GATE_THRESHOLD 와 동일
+policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정책 이름
