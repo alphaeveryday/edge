@@ -64,9 +64,10 @@ class _FakeCursor:
             wanted = set(params[0])
             self._rows = [(a,) for a in conn.assembled_articles if a in wanted]
         elif upper.startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID"):
-            # 자연키 해소 — 로더 선적재 행이 있으면 그 ID, 없으면 방금 넣은 후보 해시.
-            wanted = set(params[1])
-            self._rows = [(a, conn.doc_overrides.get(a, _stable_id("doc", "bigkinds", a)))
+            # 자연키 해소 — 로더 선적재 행이 있으면 그 ID, 없으면 방금 넣은 후보 해시
+            # (조회된 source_code 기준 — 벤더별 자연키).
+            source_code, wanted = params[0], set(params[1])
+            self._rows = [(a, conn.doc_overrides.get(a, _stable_id("doc", source_code, a)))
                           for a in wanted]
         elif upper.startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self._rows = list(conn.assertion_rows)
@@ -211,6 +212,44 @@ def test_lineage_lands_on_loader_written_document(tmp_path, monkeypatch):
     assert asrt_arg[0] == loader_asrt
     [se] = _batch(conn, "source_event")
     assert se[0] == _stable_id("evt", loader_asrt, "inst_SAMSUNG")
+
+
+def test_fmp_article_documents_keep_their_vendor(tmp_path, monkeypatch):
+    """en/fmp 기사가 분류돼도 document 자연키는 (fmp, article_id) — bigkinds 로 하드코딩하면
+    LoadDocuments 가 fmp 로 적재한 행과 어긋난 중복 document 가 생긴다(Codex #137 P1)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "en", "2026-07-15", [
+        _article("a-en", source_vendor="fmp", title="Samsung earnings")])
+    doc_id = _stable_id("doc", "fmp", "a-en")
+    asrt_id = _stable_id("asrt", doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT")
+    conn = _FakeConn(assertion_rows=[(doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT", asrt_id)])
+    _setup(monkeypatch, conn)
+
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a-en"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    [doc] = _batch(conn, "document")
+    assert (doc[2], doc[3]) == ("fmp", "a-en")
+    resolutions = [p for sql, p in conn.log
+                   if sql.upper().startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID")]
+    assert resolutions == [("fmp", ["a-en"])]
+
+
+def test_thread_timestamps_stay_monotonic_on_conflict(tmp_path, monkeypatch):
+    """백필이 기존 스레드보다 오래된 이벤트를 넣어도 opened_at/last_state_at 이 역행하면
+    안 된다(ck_event_thread_time 위반 → 백필 전체 롤백) — LEAST/GREATEST 병합이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    _setup(monkeypatch, conn)
+
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a1"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    [thread_sql] = [sql for sql, _rows in conn.batches
+                    if sql.upper().startswith("INSERT INTO EVENT_THREAD ")]
+    assert "LEAST(event_thread.opened_at" in thread_sql
+    assert "GREATEST(event_thread.last_state_at" in thread_sql
 
 
 def test_non_kodex_event_is_created_but_not_threaded(tmp_path, monkeypatch):

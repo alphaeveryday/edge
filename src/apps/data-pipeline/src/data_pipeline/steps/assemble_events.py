@@ -261,8 +261,12 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     document_assertion 의 실제 행 ID 를 자연키로 다시 읽어 종속 계보를 그 ID 로 건다 —
     load-documents/load-assertions 가 먼저 적재한 행과도 FK 가 산다.
     psycopg2 execute_values → psycopg3 executemany 는 실행부 어댑트일 뿐 SQL 시맨틱 동일.
+
+    엔진과 다른 지점 하나: source_code 를 'bigkinds' 로 하드코딩하지 않고 **기사 행의
+    source_vendor** 를 쓴다 — LoadDocuments 가 (fmp, article_id)로 적재한 en 기사를
+    bigkinds 키로 다시 넣으면 벤더 어긋난 중복 document 가 생긴다(Codex #137). 엔진은
+    실질 ko/bigkinds 만 다뤄 잠복했던 결함이라, 정본 로직이 아니라 실행부 결함 수정이다.
     """
-    source_code = "bigkinds"
     created: list[dict] = []
     documents: list[tuple] = []
     news_docs: list[tuple] = []
@@ -274,17 +278,18 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     evidences: list[tuple] = []
 
     by_id = {r["article_id"]: r for r in rows}
-    pending: list[tuple[str, dict, dict, str]] = []
+    pending: list[tuple[str, dict, dict, str, str]] = []
     for article_id, cls in classifications.items():
         row = by_id.get(article_id)
         if row is None:
             continue
         available_at = _iso(row["published_at"])
+        source_code = row["source_vendor"]
         documents.append((
             _stable_id("doc", source_code, article_id), "NEWS", source_code, article_id,
             row["title"], "ko", available_at, available_at,
         ))
-        pending.append((article_id, row, cls, available_at))
+        pending.append((article_id, row, cls, available_at, source_code))
 
     if not documents:
         return created
@@ -296,15 +301,21 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             " ON CONFLICT (source_code, source_document_id) DO NOTHING",
             documents,
         )
-        cur.execute(
-            "SELECT source_document_id, document_id FROM document"
-            " WHERE source_code = %s AND source_document_id = ANY(%s)",
-            (source_code, [a for a, _r, _c, _at in pending]),
-        )
-        doc_id_by_article = {a: d for a, d in cur.fetchall()}
+        article_ids_by_source: dict[str, list[str]] = {}
+        for article_id, _r, _c, _at, source_code in pending:
+            article_ids_by_source.setdefault(source_code, []).append(article_id)
+        doc_id_by_key: dict[tuple[str, str], str] = {}
+        for source_code, ids in sorted(article_ids_by_source.items()):
+            cur.execute(
+                "SELECT source_document_id, document_id FROM document"
+                " WHERE source_code = %s AND source_document_id = ANY(%s)",
+                (source_code, ids),
+            )
+            for sdi, did in cur.fetchall():
+                doc_id_by_key[(source_code, sdi)] = did
 
-    for article_id, row, cls, available_at in pending:
-        document_id = doc_id_by_article[article_id]
+    for article_id, row, cls, available_at, source_code in pending:
+        document_id = doc_id_by_key[(source_code, article_id)]
         news_docs.append((document_id,))
         doc_entities.append((document_id, cls["entity_id"], row["title"], "mention",
                              cls["confidence"]))
@@ -335,12 +346,12 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         cur.execute(
             "SELECT document_id, event_type_code, predicate_code, assertion_id"
             " FROM document_assertion WHERE document_id = ANY(%s)",
-            ([doc_id_by_article[a] for a, _r, _c, _at in pending],),
+            ([doc_id_by_key[(sc, a)] for a, _r, _c, _at, sc in pending],),
         )
         asrt_id_by_key = {(d, e, p): a for d, e, p, a in cur.fetchall()}
 
-    for article_id, row, cls, available_at in pending:
-        document_id = doc_id_by_article[article_id]
+    for article_id, row, cls, available_at, source_code in pending:
+        document_id = doc_id_by_key[(source_code, article_id)]
         entity_id = cls["entity_id"]
         assertion_id = asrt_id_by_key[(document_id, cls["event_type_code"], cls["predicate_code"])]
         assertion_args.append((assertion_id, cls["role_code"], entity_id, cls["confidence"]))
@@ -422,10 +433,16 @@ def thread_events(conn, events: list[dict]) -> None:
                           evaluated_at))
 
     with conn.cursor() as cur:
+        # 백필(--from/--to)이 기존 스레드보다 **오래된** 이벤트를 넣을 수 있다 — 단순
+        # 대입이면 last_state_at 이 역행하고, opened_at 보다 앞서면 ck_event_thread_time
+        # 위반으로 백필 전체가 롤백된다. 시각은 단조로 유지한다(엔진은 '오늘'만 돌아
+        # 이 경로가 없었다 — 백필 능력이 생기며 필요해진 실행부 보강).
         cur.executemany(
             "INSERT INTO event_thread (thread_id, thread_key, event_type_code, opened_at,"
             " last_state_at) VALUES (%s,%s,%s,%s,%s)"
-            " ON CONFLICT (thread_key) DO UPDATE SET last_state_at = EXCLUDED.last_state_at",
+            " ON CONFLICT (thread_key) DO UPDATE SET"
+            " opened_at = LEAST(event_thread.opened_at, EXCLUDED.opened_at),"
+            " last_state_at = GREATEST(event_thread.last_state_at, EXCLUDED.last_state_at)",
             list(threads.values()),
         )
         cur.executemany(
