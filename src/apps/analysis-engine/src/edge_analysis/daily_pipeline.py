@@ -47,8 +47,10 @@ KODEX_SEMI_INSTRUMENT_FALLBACK = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 LAKE_NEWS_PREFIX = "canonical/news/news_articles"
 LAKE_PRICE_PREFIX = "canonical/market_data/price_daily"
 LAKE_HOLDINGS_PREFIX = "canonical/holdings/etf_holdings"
-ABS_GATE_THRESHOLD = 0.03
 CONCENTRATION_THRESHOLD = 0.5
+# 게이트 임계값은 이제 여기 없다 — L0 게이트는 파이프라인 load-price-triggers 가 단일
+# writer 로 판정한다(ALPHA-411, [price_triggers] 설정). 아래 버전은 observation 의
+# data_version(분해 산출 버전) 스탬프로만 남는다.
 POLICY_VERSION = "l0-abs-v1"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
@@ -369,16 +371,32 @@ def compute_decomposition(holdings: list[dict[str, Any]], prices: dict[str, dict
     }
 
 
-def l0_gate(decomp: dict[str, Any]) -> dict[str, Any]:
-    """Absolute entry gate on the (coverage-normalized) ETF proxy return."""
-    ret = decomp["proxy_ret"]
-    abs_gate = ret is not None and abs(ret) >= ABS_GATE_THRESHOLD
+def fetch_price_trigger(conn, etf_instrument_id: str, trade_date: date) -> dict[str, Any] | None:
+    """Consume the pipeline-produced L0 trigger (single writer: load-price-triggers).
+
+    The engine no longer computes or persists the gate (ALPHA-411) — the pipeline's
+    holdings-weighted proxy 3% gate decides. No row for the day == normal variation.
+    Transitional safety: pick the latest detected_at if legacy duplicates exist
+    (the uq is 3-keyed on detected_at).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT price_movement_trigger_id, observed_return, detection_reason,"
+            " absolute_gate_triggered, relative_gate_triggered"
+            " FROM price_movement_trigger"
+            " WHERE etf_instrument_id = %s AND trade_date = %s"
+            " ORDER BY detected_at DESC LIMIT 1",
+            (etf_instrument_id, trade_date.isoformat()),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
     return {
-        "abs_gate": abs_gate,
-        "rel_gate": False,  # deferred: no benchmark index price in the lake yet
-        "triggered": abs_gate,
-        "observed_return": ret,
-        "reason": (f"abs|{ret:.4f}|>={ABS_GATE_THRESHOLD}" if abs_gate else "below_abs_threshold"),
+        "trigger_id": str(row[0]),
+        "observed_return": float(row[1]) if row[1] is not None else None,
+        "reason": row[2],
+        "abs_gate": bool(row[3]),
+        "rel_gate": bool(row[4]),
     }
 
 
@@ -390,35 +408,26 @@ def decide_route(decomp: dict[str, Any]) -> tuple[str, bool]:
     return "COMMON_FACTOR", True
 
 
-def persist_trigger_route(
+def persist_observation_route(
     conn,
-    settings: Settings,
-    etf_instrument_id: str,
+    trigger_id: str,
     decomp: dict[str, Any],
-    gate: dict[str, Any],
     route_code: str,
     event_search: bool,
     entity_index: dict[str, str],
 ) -> dict[str, str]:
-    """Persist L1/L0/route lineage. FK-safe: uses only seeded instruments."""
+    """Persist L1/route lineage off the **consumed** trigger. FK-safe: seeded instruments only.
+
+    The trigger row itself is the pipeline's (ALPHA-411) — obs/route ids derive from
+    whatever id the pipeline minted, so the lineage stays attached to the real row.
+    """
     from psycopg2.extras import execute_values
 
     detected_at = _utcnow_iso()
-    trigger_id = _stable_id("pmt", etf_instrument_id, settings.trade_date.isoformat())
     obs_id = _stable_id("cob", trigger_id)
     route_id = _stable_id("rte", obs_id)
     contribution_sum = sum(m["contribution"] for m in decomp["members"]) if decomp["members"] else None
     with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO price_movement_trigger (price_movement_trigger_id, etf_instrument_id, trade_date,"
-            " detected_at, observed_return, market_relative_return, absolute_gate_triggered,"
-            " relative_gate_triggered, detection_policy_version, detection_reason)"
-            " VALUES (%s,%s,%s,%s,%s,NULL,%s,%s,%s,%s) ON CONFLICT (price_movement_trigger_id) DO NOTHING",
-            (
-                trigger_id, etf_instrument_id, settings.trade_date.isoformat(), detected_at,
-                gate["observed_return"], gate["abs_gate"], gate["rel_gate"], POLICY_VERSION, gate["reason"],
-            ),
-        )
         cur.execute(
             "INSERT INTO etf_contribution_observation (contribution_observation_id, price_movement_trigger_id,"
             " etf_return, nav_return, constituent_contribution_return, fx_contribution_return,"
@@ -1169,16 +1178,18 @@ def run(settings: Settings) -> int:
             proxy_ret=decomp["proxy_ret"],
         )
 
-        # --- L0 entry gate on price ------------------------------------------
-        gate = l0_gate(decomp)
-        if not gate["triggered"]:
+        # --- L0 gate is consumed, not computed (ALPHA-411) --------------------
+        # 파이프라인 load-price-triggers 가 단일 writer 다 — 행이 없으면 그날은 평온이다.
+        gate = fetch_price_trigger(conn, etf_instrument_id, settings.trade_date)
+        if gate is None:
             # Normal variation is a first-class answer; no explanation is produced.
-            log("done", reason="normal_variation", observed_return=gate["observed_return"])
+            log("done", reason="normal_variation", observed_return=decomp["proxy_ret"])
             return 0
 
         route_code, event_search = decide_route(decomp)
-        ids = persist_trigger_route(conn, settings, etf_instrument_id, decomp, gate, route_code, event_search, entity_index)
-        log("trigger.persisted", route=route_code, event_search=event_search, **ids)
+        ids = persist_observation_route(conn, gate["trigger_id"], decomp, route_code, event_search, entity_index)
+        log("trigger.consumed", route=route_code, event_search=event_search,
+            trigger_id=gate["trigger_id"], **ids)
 
         # --- Event search: normalize the day's news (title-only) -------------
         kodex_events: list[dict[str, Any]] = []
