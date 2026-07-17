@@ -44,6 +44,9 @@ SFN 이름이 실제 범위(정제·파생 포함)와 어긋났다. 한편 팀 �
   통합되며(미 동부 16:10, DISABLED) 컷오버 전 재검토는 ALPHA-387 소관.
 - 분석의 SFN 타임아웃 예산(21600초)이 4페이즈 공유가 된다 — 초과는 `execution_timed_out`
   알람이 감지한다.
-- 따라오는 의무: ① assertion/event/event_thread 추출의 data-pipeline 이관(정준영 합의) ②
-  price trigger 이중 writer 정리(파이프라인 0.5% vs 분석엔진 내부 L0 3% — 단일 writer 확정)
-  ③ 컷오버 시 통합 스케줄 시각 재설계(ALPHA-387).
+- 따라오는 의무: ① assertion/event/event_thread 추출의 data-pipeline 이관 — **이행됨**
+  (ALPHA-412, assemble-events 스텝: 엔진 분류기·계보 조립·threading verbatim 이식, 엔진은
+  소비자로 축소) ② price trigger 이중 writer 정리 — **이행됨**(ALPHA-411, 파이프라인이
+  구성종목 가중 proxy 3% 게이트의 단일 writer, 엔진은 소비) ③ 컷오버 시 통합 스케줄 시각
+  재설계(ALPHA-387) — 미결. 잔여 로직 소유자 안건: 분류기 프롬프트 단일화(tag-news vs
+  이식 분류기), available_at 시각 축 통일, 역순 백필 novelty 재판정.
