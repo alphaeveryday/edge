@@ -525,3 +525,117 @@ def test_lead_text_absent_is_none_not_gate_failure(tmp_path):
 
     [r] = _canonical_rows(storage, "2026-07-01")
     assert r["lead_text"] is None
+
+
+# ── 종목명 탐지 매핑 (ALPHA-416) ────────────────────────────
+
+
+def _write_holdings(storage, as_of_date: str, names: list[tuple[str, str]]) -> None:
+    """canonical ETF holdings 스냅샷 픽스처 — 탐지 인덱스의 이름 출처."""
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_etf_holdings_partition
+
+    schema = pa.schema([("constituent_name", pa.string()), ("constituent_ticker", pa.string())])
+    table = pa.Table.from_pylist(
+        [{"constituent_name": n, "constituent_ticker": t} for n, t in names], schema=schema
+    )
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    prefix = canonical_etf_holdings_partition("KR", as_of_date)
+    storage.put_bytes(f"{prefix}/part-00000.parquet", buf.getvalue())
+
+
+def test_bigkinds_mentions_detected_from_holdings_names(tmp_path):
+    # WHY: 전체 경제 뉴스 수집(카테고리 주도)에선 our_ticker provenance 가 없다 — 종목 매핑은
+    #      정규화가 holdings 종목명 탐지로 합성해야 다운스트림 in_universe 필터가 살아남는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30", [("한미반도체", "042700"), ("삼성전자", "005930")])
+    row = _bk_row(TITLE="한미반도체, HBM 장비 수주", our_ticker=None)
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "042700"}]
+    log = _quality_log(storage)
+    assert log["mention_index_as_of_date"] == "2026-06-30"
+    assert log["mention_index_names"] == 2
+    assert log["detected_name_counts"] == {"한미반도체": 1}
+
+
+def test_detection_unions_with_our_ticker_provenance(tmp_path):
+    # WHY: 이행기엔 구 raw(our_ticker 있음)와 신 raw 가 섞인다 — 탐지가 provenance 를 교체하면
+    #      구 raw 의 종목↔기사 링크가 유실되므로 union 이어야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30", [("삼성전자", "005930")])
+    row = _bk_row(TITLE="삼성전자 공급계약", CONTENT="리드")  # our_ticker=000660 유지
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert sorted(m["ticker"] for m in json.loads(r["mentions"])) == ["000660", "005930"]
+
+
+def test_detection_uses_latest_holdings_snapshot(tmp_path):
+    # WHY: 유니버스는 스냅샷마다 바뀐다 — 옛 스냅샷으로 탐지하면 편입 종목이 안 잡힌다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-01", [("옛날종목", "111111")])
+    _write_holdings(storage, "2026-06-30", [("한미반도체", "042700")])
+    row = _bk_row(TITLE="한미반도체 실적, 옛날종목 매각", our_ticker=None)
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "042700"}]
+
+
+def test_no_holdings_snapshot_keeps_provenance_path(tmp_path):
+    # WHY: 신규 레이크(holdings 미적재)에서 정규화가 죽거나 mentions 가 사라지면 안 된다 —
+    #      탐지는 no-op, our_ticker 경로는 그대로.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row()])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "000660"}]
+    log = _quality_log(storage)
+    assert log["mention_index_as_of_date"] is None
+    assert log["detected_name_counts"] == {}
+
+
+def test_fmp_path_is_not_touched_by_detection(tmp_path):
+    # WHY: FMP 는 ingest 병합 mentions[] 가 SSOT — 영문 기사에 한글 이름 탐지를 섞으면
+    #      벤더 분기 계약이 흐려진다. 한글 이름이 우연히 제목에 있어도 탐지하지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30", [("삼성전자", "005930")])
+    row = _fmp_row(title="삼성전자 Samsung beats estimates", mentions=[{"market": "US", "ticker": "AAPL"}])
+    _write_raw(storage, _raw_key("fmp", "US"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == [{"market": "US", "ticker": "AAPL"}]
+    assert _quality_log(storage)["detected_name_counts"] == {}
+
+
+def test_holdings_index_load_failure_is_fail_loud_but_still_normalizes(tmp_path, monkeypatch):
+    # WHY: 전체 수집 전환 후엔 인덱스가 mentions 의 유일한 공급원 — 로드가 터졌는데 exit 0 이면
+    #      'mentions 전량 소실'이 정상 완료로 오독된다(Rule 12). 단 정규화 자체는 계속돼
+    #      canonical 은 쓰인다(구 our_ticker 경로 생존).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row()])
+    monkeypatch.setattr(normalize_news, "_holdings_name_index",
+                        lambda s: (_ for _ in ()).throw(OSError("s3 read failed")))
+
+    assert normalize_news.run(storage, "RUN1") == 1
+
+    [r] = _canonical_rows(storage, "2026-07-01")  # canonical 은 그래도 쓰였다
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "000660"}]
+    log = _quality_log(storage)
+    assert "s3 read failed" in log["mention_index_error"]

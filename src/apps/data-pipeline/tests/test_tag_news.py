@@ -16,7 +16,7 @@ from data_pipeline.steps import tag_news
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
 
-_CANONICAL_COLUMNS = ("article_id", "published_at", "title", "lead_text", "language")
+_CANONICAL_COLUMNS = ("article_id", "published_at", "title", "lead_text", "language", "mentions")
 
 
 def _write_canonical(storage, language: str, published_date: str, rows: list[dict]) -> None:
@@ -45,8 +45,10 @@ def _read_feature(storage, language: str, published_date: str) -> list[dict]:
 
 
 def _article(article_id: str = "a1", **over) -> dict:
+    # mentions 기본값이 있어야 태깅된다 — mentions 게이트(ALPHA-416)가 무언급 기사를 거른다.
     row = {"article_id": article_id, "published_at": "2026-07-01T09:00:00+00:00",
-           "title": "삼성전자, SK하이닉스와 공급계약 체결", "lead_text": "리드", "language": "ko"}
+           "title": "삼성전자, SK하이닉스와 공급계약 체결", "lead_text": "리드", "language": "ko",
+           "mentions": json.dumps([{"market": "KR", "ticker": "005930"}])}
     row.update(over)
     return row
 
@@ -273,6 +275,32 @@ def test_model_level_rejection_is_not_retried_every_run(tmp_path):
     calls: list = []
     assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
     assert calls == [], "모델 수준 거절을 매 런 재호출하면 비용만 든다"
+
+
+def test_articles_without_mentions_are_not_tagged(tmp_path):
+    """LLM 비용 게이트(ALPHA-416) — 유니버스 종목이 안 잡힌 기사는 다운스트림(in_universe)이
+    어차피 버리므로 기사당 1 LLM 콜을 태우지 않는다. 전체 경제 뉴스 수집 전환 후 기사가
+    배수로 늘어도 태깅 비용이 '유니버스 관련 기사' 수준으로 유지되는 근거다. 건너뛴 수는
+    조용히 사라지지 않고 로그로 드러난다(Rule 12)."""
+    storage = LocalStorage(tmp_path / "lake")
+
+    _write_canonical(storage, "ko", "2026-07-01", [
+        _article("a1"),                            # mentions 있음 → 태깅
+        _article("a2", mentions="[]"),             # 빈 mentions → 스킵
+        _article("a3", mentions=None),             # 결측(구 canonical) → 스킵
+        _article("a4", mentions="broken json"),    # 오염 → 스킵(태깅 안 함)
+    ])
+    calls: list = []
+
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(calls)) == 0
+
+    assert len(calls) == 1  # LLM 은 mentions 있는 a1 한 건만
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert [r["article_id"] for r in rows] == ["a1"]
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["articles_skipped_no_mention"] == 3
 
 
 def test_quality_log_records_what_happened(tmp_path):

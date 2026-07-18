@@ -21,6 +21,12 @@ status(판정이 아니라 '물어보지도 못했다'는 뜻).
 기사에 이 프롬프트를 씌우면 조용히 품질이 무너지므로, 언어 파티션에서 아예 고른다. 영어는 별도
 프롬프트가 생길 때 대상에 넣는다(그때 이 상수만 늘린다).
 
+**mentions 있는 기사만 태깅한다(ALPHA-416)**: 수집이 전체 경제 뉴스(카테고리 주도)로 전환되면
+기사 수가 배수로 늘지만, 유니버스 종목이 안 잡힌 기사는 다운스트림(assemble-events 의
+in_universe 필터)이 어차피 버린다 — 거기에 기사당 1 LLM 콜을 태우지 않는다. mentions 는
+normalize_news 가 종목명 탐지로 합성하므로 이 게이트가 곧 '유니버스 관련 기사' 필터다.
+건너뛴 수는 skipped_no_mention 으로 드러낸다(Rule 12).
+
 entity_id 는 채우지 않는다 — 모델은 사내 식별자를 모르고, 엔티티 해소는 entity 마스터(RDB)를
 읽어야 해서 로더(ALPHA-190)와 같은 소관이다. `text` 가 그 해소의 입력으로 남는다.
 
@@ -70,6 +76,19 @@ _FEATURE_COLUMNS = (
     "tagger_version",
     "tagged_at",
 )
+
+
+def _has_mentions(article: dict) -> bool:
+    """canonical mentions(JSON 문자열)에 종목 mention 이 하나라도 있는가 — 태깅 비용 게이트.
+    파싱 불가·비리스트·비객체 원소뿐이면 False(태깅 안 함) — mentions 가 없는 기사와 같은
+    처지고, 게이트 건너뛴 수로 계측되므로 조용히 사라지지 않는다."""
+    value = article.get("mentions")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return False
+    return isinstance(value, list) and any(isinstance(m, dict) for m in value)
 
 
 def _input_fingerprint(article: dict) -> str:
@@ -215,6 +234,7 @@ def run(
 
     read = 0            # canonical 에서 본 기사 수
     skipped = 0         # 이미 현재 버전으로 태깅돼 건너뛴 수 (LLM 미호출)
+    skipped_no_mention = 0  # mentions 없어 태깅 대상이 아닌 수 (LLM 미호출, ALPHA-416)
     tagged = 0          # 이번 런에서 LLM 을 부른 수
     limited = 0         # limit 에 걸려 안 부른 수
     status_counts: Counter = Counter()
@@ -249,6 +269,10 @@ def run(
                                      "reasons": ["non_object_article"]})
                     continue
                 read += 1
+                if not _has_mentions(article):
+                    # 유니버스 종목이 안 잡힌 기사 — 다운스트림이 버릴 기사에 LLM 을 안 태운다.
+                    skipped_no_mention += 1
+                    continue
                 article_id = article.get("article_id")
                 fingerprint = _input_fingerprint(article)
                 if _is_current(by_id.get(article_id), fingerprint):
@@ -292,6 +316,7 @@ def run(
         "tagger_version": TAGGER_VERSION, "ontology_version": ontology_version(),
         "articles_read": read, "articles_tagged": tagged,
         "articles_skipped_already_tagged": skipped, "articles_left_by_limit": limited,
+        "articles_skipped_no_mention": skipped_no_mention,
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
@@ -305,7 +330,8 @@ def run(
         exit_code = 1
 
     logger.info(
-        "tag_news: read=%d tagged=%d skipped=%d limited=%d status=%s parts=%d rows=%d",
-        read, tagged, skipped, limited, dict(status_counts), parts_written, rows_written,
+        "tag_news: read=%d tagged=%d skipped=%d no_mention=%d limited=%d status=%s parts=%d rows=%d",
+        read, tagged, skipped, skipped_no_mention, limited, dict(status_counts),
+        parts_written, rows_written,
     )
     return exit_code

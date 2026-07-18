@@ -170,7 +170,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 #
 # --from/--to 는 여기선 **태깅 대상 published_date 파티션**을 좁히는 창이다(raw 수집 창이
 # 아니고, 미지정은 증분 기본창이 아니라 전체). --limit 은 이번 런에서 새로 LLM 을 부를 기사
-# 수 상한 — 창·limit 이 곧 비용 통제다.
+# 수 상한 — mentions ≥ 1 게이트(유니버스 종목이 안 잡힌 기사는 태깅 안 함, ALPHA-416)·창·limit 이 곧 비용 통제다.
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50
 #   기간 지정: ... run tag-news --from 2026-07-01 --to 2026-07-08
 
@@ -282,7 +282,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
 - `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 500)을 넘겨 한 실행의
-  LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(미태깅 기사만 고른다)
+  LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
+  기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다)
 - `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — DB 접속정보는 이 task-def 에만 주입한다.
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
 - `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 구성종목 가중 proxy
@@ -412,6 +413,11 @@ settings.targets.keywords            # ["금리", ...]
   재적재는 최신 fetched_at 이 메타 대표를 이기되 **mentions 는 union**(종목↔기사 링크 보존). 다른
   article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
+  **종목 매핑은 정규화의 일이다(ALPHA-416)**: BigKinds 행의 mentions 는 canonical ETF holdings
+  최신 스냅샷(KR)의 종목명 인덱스로 제목+리드에서 substring 탐지해 합성한다(구 raw 의
+  `our_ticker` provenance 와 union — 이행기 호환). 유니버스가 바뀌면 전체 백필 재정규화로 과거
+  기사에 소급되고, 탐지 계측(`detected_name_counts`)·인덱스 상태는 quality_log 에 남는다.
+  FMP 는 ingest 병합 mentions[] 그대로(영문 기사라 한글 이름 탐지 무의미).
   `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
   것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님). 본문 전문 크롤은 범위 밖이다.
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
