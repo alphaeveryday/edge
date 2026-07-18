@@ -105,16 +105,16 @@ variable "cpu_architecture" {
   default     = "X86_64"
 }
 
-# KR 장마감 기준(ALPHA-414) — KRX 마감 15:30 뒤 40분 여유를 두고 그날 종가 수집 →
+# KR 장마감 기준(ALPHA-414) — KRX 마감 15:30 뒤 10분 여유를 두고 그날 종가 수집 →
 # proxy 트리거 산출 → analyze 가 한 런에서 이어진다. 구 기본(미 동부 16:10 = KST 05:10)은
 # KR 가격·뉴스가 전날 기준으로 잡히고 KRX ETF(trdDd=오늘)의 기준일이 미게시 시점을
 # 가리켰다. 트레이드오프: 이 시각에 US 소스(FMP)는 직전 미 거래일 기준이 된다 —
 # MVP 가 국내 ETF(ADR-0024)라 KR 우선이 맞다. 휴장일은 가격 파티션이 안 생겨
 # 트리거 없음 → analyze 평온 종료로 자연 처리된다.
 variable "schedule_expression" {
-  description = "EventBridge Scheduler cron. 기본은 평일 KRX 장 마감 후(16:10 Asia/Seoul)."
+  description = "EventBridge Scheduler cron. 기본은 평일 KRX 장 마감 후(15:40 Asia/Seoul)."
   type        = string
-  default     = "cron(10 16 ? * MON-FRI *)"
+  default     = "cron(40 15 ? * MON-FRI *)"
 }
 
 variable "schedule_timezone" {

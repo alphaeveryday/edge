@@ -51,7 +51,7 @@ locals {
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
     },
-    # ⚠️ 컷오버 잔여(ALPHA-387) — 스케줄이 KST 16:10(장 마감 후)으로 바뀌며(ALPHA-414)
+    # ⚠️ 컷오버 잔여(ALPHA-387) — 스케줄이 KST 15:40(장 마감 후)으로 바뀌며(ALPHA-414)
     # "기준일이 PDF 미게시 시점을 가리킨다"는 구조 문제는 해소됐다. 남은 확인 2개:
     # ① trdDd 백필 수단 부재 — 실패한 날의 스냅샷은 다음 런이 못 줍는다.
     # ② 휴장일 trdDd 응답의 정체 — 7-17 휴장일에도 응답이 왔고 as_of=당일로 라벨됐다
