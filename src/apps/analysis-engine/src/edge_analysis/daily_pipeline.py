@@ -702,6 +702,59 @@ def _write_explanation_to_s3(s3, settings: Settings, explanation: dict[str, Any]
     return f"s3://{bucket}/{key}"
 
 
+def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | None:
+    """매 런의 중간 산출물 아카이브 — 파이프라인 quality log 규약("결과는 항상 로그")의
+    엔진판 (ALPHA-415).
+
+    explanation_result 는 요약 매핑이라 분해·트리거·LLM 원문(verdict/key_evidence/
+    unexplained — ALPHA-407 매핑 손실 필드)이 안 남고, 기존 S3 쓰기는 FK 결여 폴백뿐이라
+    정상 런은 stdout 로그가 전부였다. 평온 종료를 포함한 모든 런이 여기로 1건을 남긴다.
+    기록 실패는 런을 죽이지 않는다 — 분석 결과 영속이 본업이고 아카이브는 관측이다.
+    키는 결과 prefix 하위 runs/ 라 기존 PutObject IAM 스코프 안이다.
+    """
+    prefix = settings.result_s3_prefix or f"s3://{settings.lake_bucket}/operations_archive/etf_explanations/"
+    if not prefix.startswith("s3://"):
+        return None
+    bucket, _, key_prefix = prefix[len("s3://") :].partition("/")
+    key = (
+        f"{key_prefix.rstrip('/')}/runs/etf={settings.etf_ticker}/"
+        f"trade_date={settings.trade_date.isoformat()}/{settings.request_id}.json"
+    )
+    body = json.dumps(
+        {
+            "etf_ticker": settings.etf_ticker,
+            "trade_date": settings.trade_date.isoformat(),
+            "request_id": settings.request_id,
+            "generated_at": _utcnow_iso(),
+            **archive,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    try:
+        s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    except Exception as exc:  # noqa: BLE001 — 관측 실패가 본업(분석 영속)을 죽이면 안 된다
+        log("run_archive.failed", error=str(exc))
+        return None
+    location = f"s3://{bucket}/{key}"
+    log("run_archive.stored", s3=location)
+    return location
+
+
+def _decomp_summary(decomp: dict[str, Any]) -> dict[str, Any]:
+    """아카이브용 분해 요약 — 전 종목 기여도는 크므로 상위 10개만, 스칼라는 전부."""
+    return {
+        "proxy_ret": decomp["proxy_ret"],
+        "coverage": decomp["coverage"],
+        "covered_weight": decomp["covered_weight"],
+        "total_priced": decomp["total_priced"],
+        "n_constituents": decomp["n_constituents"],
+        "advancing": decomp["advancing"],
+        "top1": decomp["top1"],
+        "top3": decomp["top3"],
+        "top_members": decomp["members"][:10],
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -733,6 +786,12 @@ def run(settings: Settings) -> int:
         gate = fetch_price_trigger(conn, etf_instrument_id, settings.trade_date)
         if gate is None:
             # Normal variation is a first-class answer; no explanation is produced.
+            write_run_archive(s3, settings, {
+                "outcome": "normal_variation",
+                "trigger": None,
+                "decomposition": _decomp_summary(decomp),
+                "holdings_asof": holdings_asof,
+            })
             log("done", reason="normal_variation", observed_return=decomp["proxy_ret"])
             return 0
 
@@ -751,6 +810,22 @@ def run(settings: Settings) -> int:
         # --- Synthesis: price decomposition + news events --------------------
         explanation = analyze(client, settings, decomp, gate, route_code, kodex_events)
         outcome = persist_explanation(conn, s3, settings, etf_instrument_id, explanation, kodex_events)
+        write_run_archive(s3, settings, {
+            "outcome": "explained",
+            "trigger": gate,
+            "route_code": route_code,
+            "decomposition": _decomp_summary(decomp),
+            "holdings_asof": holdings_asof,
+            "kodex_events": [
+                {k: e[k] for k in ("source_event_id", "thread_id", "event_type_code",
+                                   "ticker", "novelty_status", "title")}
+                for e in kodex_events
+            ],
+            # LLM 원문 전체 — explanation_result 매핑에서 손실되는 verdict 원문·
+            # key_evidence·unexplained 가 여기 남는다(ALPHA-407 승격 후보의 임시 거처).
+            "explanation": explanation,
+            "persistence": outcome,
+        })
         log("done", route=route_code, kodex_events=len(kodex_events), **outcome)
         return 0
     finally:
