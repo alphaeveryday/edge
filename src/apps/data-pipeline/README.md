@@ -263,10 +263,10 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
 - `ingest-raw-disclosure`(공시, dart 세트) — 단일 벤더라 `--source` 없음
 - `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트)
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
-  - ⚠️ **컷오버 블로커**(ALPHA-387): `trdDd`=오늘(KST) 스냅샷인데 스케줄이 미 동부 16:10(=KST
-    05:10)이라 기준일이 PDF 미게시일(금요일 런은 토요일)을 가리킨다. raw 는 전량 성공 게이트라
-    이게 뒤 페이즈를 통째로 막는다. 스케줄러가 `DISABLED` 라 아직 안 터진다 — **ENABLED 로
-    바꾸기 전에 닫아라.** 수동 실행(KST 주간)은 정상이다.
+  - ⚠️ **컷오버 잔여**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후)으로 바뀌어(ALPHA-414) 기준일
+    불일치는 해소됐다. 남은 확인: ① trdDd 백필 수단 부재(실패한 날 스냅샷은 못 줍는다)
+    ② 휴장일 trdDd 응답의 정체(7-17 휴장일에도 as_of=당일 라벨 응답 — 전 거래일 구성 추정).
+    raw 는 전량 성공 게이트라 실패 시 뒤 페이즈를 통째로 막는다 — **ENABLED 전에 닫아라.**
 
 **정제(normalize, 5잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이

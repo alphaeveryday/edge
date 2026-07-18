@@ -51,15 +51,14 @@ locals {
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
     },
-    # ⚠️ 컷오버 블로커 — 이 잡은 **현재 스케줄로는 항상 실패한다**(ALPHA-387).
-    # 형제 KR 소스(BigKinds·KIS·DART)는 날짜창 기반이라 빈 결과를 허용하지만, KRX ETF 는
-    # `trdDd`=오늘(KST) 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된 설계).
-    # 그런데 이 SFN 스케줄은 미 동부 16:10 = **KST 05:10**이라 기준일이 PDF 미게시(금요일
-    # 런은 아예 토요일)를 가리킨다. raw 는 전량성공 게이트라 이게 뒤 페이즈 전부를 통째로
-    # 막는다. 지금 안 터지는 건 스케줄러가 DISABLED 라서다.
-    # 그럼에도 게이트에 넣는 이유: 스케줄 자체가 US 마감 기준이라 KR 소스 전반과 안 맞고,
-    # 그 재검토는 컷오버(schedule_state=ENABLED)의 일이지 편입의 일이 아니다. 수동
-    # StartExecution(KST 주간)은 정상 동작한다. **ENABLED 로 바꾸기 전에 ALPHA-387 을 닫아라.**
+    # ⚠️ 컷오버 잔여(ALPHA-387) — 스케줄이 KST 15:40(장 마감 후)으로 바뀌며(ALPHA-414)
+    # "기준일이 PDF 미게시 시점을 가리킨다"는 구조 문제는 해소됐다. 남은 확인 2개:
+    # ① trdDd 백필 수단 부재 — 실패한 날의 스냅샷은 다음 런이 못 줍는다.
+    # ② 휴장일 trdDd 응답의 정체 — 7-17 휴장일에도 응답이 왔고 as_of=당일로 라벨됐다
+    #    (전 거래일 구성으로 추정. 휴장이면 구성 변동도 없어 실해는 없으나 확인 대상).
+    # KRX ETF 는 `trdDd`=오늘 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된
+    # 설계) — raw 전량성공 게이트라 실패 시 뒤 페이즈 전부가 막힌다.
+    # **ENABLED 로 바꾸기 전에 ALPHA-387 을 닫아라.**
     {
       state        = "CollectKrxEtf"
       taskdef_key  = "krx"
