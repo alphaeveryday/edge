@@ -237,27 +237,35 @@ def load_constituent_prices(s3, bucket: str, market: str, trade_date: date) -> d
 
 
 def load_etf_holdings(s3, bucket: str, market: str, etf_id: str, trade_date: date) -> tuple[list[dict[str, Any]], str | None]:
-    """Constituent weights (fraction) for one ETF, latest as_of <= trade_date."""
+    """Constituent weights (fraction) for one ETF.
+
+    Selection is by **target-ETF row presence**, not partition presence — a
+    (market, as_of_date) partition can hold other ETFs only (ETF-level collection
+    failures). Latest as_of <= trade_date first, else earliest future snapshot —
+    the same rule as the pipeline trigger writer (load_price_triggers, ALPHA-418),
+    so a fired trigger and its explanation decompose with the same holdings.
+    """
     base = f"{LAKE_HOLDINGS_PREFIX}/market={market}/"
     dates = _partition_values(s3, bucket, base, "as_of_date")
-    if not dates:
-        return [], None
     eligible = [x for x in dates if x <= trade_date.isoformat()]
-    chosen = eligible[-1] if eligible else dates[0]
-    rows = _read_parquet_prefix(
-        s3, bucket, f"{base}as_of_date={chosen}/",
-        ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
-    )
-    holdings = [
-        {
-            "ticker": str(r["constituent_ticker"]),
-            "name": r.get("constituent_name"),
-            "weight": float(r["weight_pct"] or 0.0) / 100.0,
-        }
-        for r in rows
-        if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
-    ]
-    return holdings, chosen
+    future = [x for x in dates if x > trade_date.isoformat()]
+    for chosen in [*reversed(eligible), *future]:
+        rows = _read_parquet_prefix(
+            s3, bucket, f"{base}as_of_date={chosen}/",
+            ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
+        )
+        holdings = [
+            {
+                "ticker": str(r["constituent_ticker"]),
+                "name": r.get("constituent_name"),
+                "weight": float(r["weight_pct"] or 0.0) / 100.0,
+            }
+            for r in rows
+            if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
+        ]
+        if holdings:
+            return holdings, chosen
+    return [], None
 
 
 def compute_decomposition(holdings: list[dict[str, Any]], prices: dict[str, dict[str, Any]]) -> dict[str, Any]:

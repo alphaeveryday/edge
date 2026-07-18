@@ -228,9 +228,12 @@ def test_stale_policy_row_with_lineage_is_kept_and_counted(tmp_path, monkeypatch
     assert _quality_log(storage)["stale_policy_kept"] == 1
 
 
-def test_dates_before_first_holdings_snapshot_are_missing_not_lookahead(tmp_path, monkeypatch):
-    """최초 holdings 스냅샷 이전 날짜에 미래 스냅샷을 대입하면 아직 편입되지도 않은
-    종목으로 과거를 계산하는 look-ahead 편향이다(Codex #135 P1) — 결손으로 센다."""
+def test_dates_before_first_holdings_snapshot_fall_back_to_earliest_future(tmp_path, monkeypatch):
+    """최초 holdings 스냅샷 이전 날짜는 **가장 이른 미래 스냅샷으로 폴백**해 평가한다
+    (ALPHA-418 — 엔진 load_etf_holdings 와 같은 선택). 미래 스냅샷은 look-ahead 지만
+    (Codex #135 P1 이 금지했던 것), 과거 스냅샷 소급 수집이 비싸고 리밸런싱이 완만해
+    proxy 근사로 수용하기로 결정했다(2026-07-18) — 스킵하면 7/13 −11% 폭락일 같은 실제
+    설명거리가 트리거 없이 영구 누락된다. 대신 폴백 사용은 수치·as_of 로 드러난다(Rule 12)."""
     storage = LocalStorage(tmp_path)
     _default_holdings(storage, as_of="2026-07-16")  # 스냅샷이 7-16 부터만 존재
     _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
@@ -238,8 +241,11 @@ def test_dates_before_first_holdings_snapshot_are_missing_not_lookahead(tmp_path
     conn = _FakeConn()
 
     assert _run(storage, conn, monkeypatch) == 0
-    assert _inserts(conn) == []
-    assert _quality_log(storage)["missing_holdings"] == 1
+    assert len(_inserts(conn)) == 1  # 7-15 가 미래 스냅샷(7-16)으로 평가돼 트리거 생성
+    log = _quality_log(storage)
+    assert log["missing_holdings"] == 0
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-16"
 
 
 def test_same_date_multiple_rows_are_each_judged(tmp_path, monkeypatch):
@@ -331,3 +337,42 @@ def test_window_narrows_target_dates(tmp_path, monkeypatch):
     inserts = _inserts(conn)
     assert len(inserts) == 1
     assert inserts[0][1][2] == "2026-07-16"
+
+
+def test_future_fallback_skips_partitions_without_target_etf(tmp_path, monkeypatch):
+    """미래 폴백은 대상 ETF 행이 있는 첫 스냅샷을 고른다(Codex #144 P2) — 파티션은
+    (market, as_of_date) 단위라 다른 ETF 만 있을 수 있다(ETF 단위 격리 실패 등). 빈
+    파티션(dates[0])을 고르면 폴백이 무산돼 missing_holdings 로 되돌아간다."""
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-16", [])  # 파티션은 있으나 대상 ETF 행 없음
+    storage.put_bytes(
+        f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet",
+        storage.get_bytes(f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet"))
+    _default_holdings(storage, as_of="2026-07-17")  # 대상 ETF 는 다음 스냅샷부터
+    _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"
+
+
+def test_past_partition_without_target_etf_falls_through(tmp_path, monkeypatch):
+    """과거(≤date) 파티션이 있어도 대상 ETF 행이 없으면(ETF 단위 격리 실패로 그날 091160 만
+    누락) 그 파티션에 멈추지 말고 — 더 과거의 ETF 포함 스냅샷, 그것도 없으면 미래 폴백으로
+    이어져야 한다(Codex #144 P2 2라운드). 파티션 존재≠ETF 존재."""
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-14", [])  # 과거 파티션 존재하나 대상 ETF 행 없음
+    _default_holdings(storage, as_of="2026-07-17")  # ETF 는 미래 스냅샷에만
+    _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"
