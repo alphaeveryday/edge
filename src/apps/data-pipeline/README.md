@@ -65,8 +65,10 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 #   ... run ingest-price-raw --from 2026-06-01 --to 2026-06-30
 
 # 국내 가격(OHLCV 일봉) 원본저장(Step1) — KIS(한국투자) REST. --source kis 로 벤더 선택
-# (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 심볼맵은
-# 국내 전용(kis_price.source.symbol_map, KR 6자리). 토큰은 run 당 1회 발급·재사용.
+# (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 수집 대상은
+# canonical KR holdings 최신 스냅샷의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가
+# holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
+# symbol_map 은 예외 오버라이드 축. 토큰은 run 당 1회 발급·재사용.
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달

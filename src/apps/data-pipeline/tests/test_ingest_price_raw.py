@@ -218,3 +218,72 @@ def test_unexpected_failure_still_writes_log(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "error"
     assert "boom" in log["error"]
+
+
+def _write_holdings(storage, as_of: str, rows: list[tuple[str, str]]) -> None:
+    """canonical KR holdings 스냅샷 픽스처 — (constituent_ticker, etf_id) 쌍."""
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_etf_holdings_partition
+
+    schema = pa.schema([("etf_id", pa.string()), ("constituent_ticker", pa.string())])
+    table = pa.Table.from_pylist(
+        [{"etf_id": e, "constituent_ticker": c} for c, e in rows], schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    prefix = canonical_etf_holdings_partition("KR", as_of)
+    storage.put_bytes(f"{prefix}/part-00000.parquet", buf.getvalue())
+
+
+class _UniverseFakeSource:
+    """universe_from_holdings 옵트인 소스 — 스텝이 넘긴 symbols 를 기록만 한다."""
+
+    source_name = "kis"
+    enabled = True
+    universe_from_holdings = True
+    fetch_failures: list = []
+    planned_symbols = None
+
+    def __init__(self):
+        self.received: list[str] | None = None
+
+    def fetch(self, symbols, from_date=None, to_date=None):
+        self.received = list(symbols)
+        return iter(())
+
+
+def test_universe_derived_from_latest_holdings_snapshot(tmp_path):
+    # WHY: 정적 targets/symbol_map 은 유니버스와 어긋난다(KODEX 구성종목 36개 중 2개만
+    #      수집되던 원인 — proxy 커버리지 60%). 옵트인 소스(KIS)는 canonical KR holdings
+    #      **최신 스냅샷**의 구성종목·ETF 티커가 수집 대상에 union 돼야 커버리지가
+    #      holdings 를 따라간다(ALPHA-419). 더한 수는 로그로 드러난다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-14", [("111111", "091160")])  # 구 스냅샷 — 무시돼야 함
+    _write_holdings(storage, "2026-07-15", [("042700", "091160"), ("000660", "091160")])
+    source = _UniverseFakeSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1") == 0
+
+    assert source.received is not None
+    assert {"042700", "000660", "091160"} <= set(source.received)  # 구성종목 + ETF 자신
+    assert "111111" not in source.received  # 최신 스냅샷만
+    assert "NVDA" in source.received  # 기존 targets 는 유지(union)
+    logs = [k for k in storage.list_keys("operations_archive/collection_logs/") if "kis" in k]
+    log = json.loads(storage.get_bytes(logs[0]))
+    assert log["symbols_from_holdings"] == 3  # 042700·000660·091160 전부 targets 밖
+
+
+def test_universe_absent_holdings_keeps_targets_only(tmp_path):
+    # WHY: 신규 레이크(holdings 미적재)에서 수집이 죽거나 대상이 비면 안 된다 —
+    #      기존 targets 경로 그대로, 더한 수 0 이 로그로 남는다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = _UniverseFakeSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1") == 0
+    assert source.received == sorted(["NVDA", "AAPL", "005930"])
+    logs = [k for k in storage.list_keys("operations_archive/collection_logs/") if "kis" in k]
+    assert json.loads(storage.get_bytes(logs[0]))["symbols_from_holdings"] == 0

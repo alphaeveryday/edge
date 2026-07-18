@@ -85,10 +85,18 @@ def test_disabled_without_credentials():
     assert _source({}, app_key="k", app_secret="s").enabled is True
 
 
-def test_plan_skips_unmapped_symbols():
-    # WHY: KIS 는 국내 전용 — 맵에 없는 종목(US 등)이 질의에 오르면 안 된다(FMP 가 커버).
-    plan = _source({}).plan(["005930", "NVDA", "000660", "999999"])
+def test_plan_maps_six_digit_identity_and_skips_foreign():
+    # WHY: KRX 6자리 코드는 KIS 코드와 **항등**이라 맵 없이도 수집돼야 한다(ALPHA-419 —
+    #      유니버스가 holdings 에서 파생되면 맵에 없는 구성종목이 대상으로 온다). 비6자리
+    #      (US 등)만 제외한다 — KIS 는 국내 전용이라 US 티커를 질의하면 안 된다(FMP 가 커버).
+    plan = _source({}, symbol_map={}).plan(["005930", "NVDA", "000660", "AAPL"])
     assert plan == [("005930", "005930"), ("000660", "000660")]
+
+
+def test_plan_symbol_map_overrides_identity():
+    # WHY: symbol_map 은 항등이 아닌 예외의 오버라이드 축으로 남는다 — 맵이 있으면 맵이 이긴다.
+    plan = _source({}, symbol_map={"005930": "005935"}).plan(["005930"])
+    assert plan == [("005930", "005935")]
 
 
 def test_fetch_attaches_meta_and_preserves_raw():

@@ -18,7 +18,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from ..config import Settings
-from ..lake import Storage, collection_log_key, raw_price_partition
+from ..lake import Storage, canonical_etf_holdings_partition, collection_log_key, raw_price_partition
 from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 가격 어댑터들의
@@ -26,6 +26,38 @@ from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
 PriceSourceAdapter = FmpPriceSource | KisDailyPriceSource
 
 logger = logging.getLogger(__name__)
+
+
+def _kr_holdings_universe(storage: Storage) -> list[str]:
+    """canonical KR holdings **최신 스냅샷**의 구성종목·ETF 티커 목록(ALPHA-419).
+
+    수집 유니버스를 holdings 에서 파생한다 — 정적 targets/symbol_map 은 유니버스와
+    어긋난다(구성종목 36개 중 2개만 등재됐던 원인, 뉴스 ALPHA-416·417 과 같은 축).
+    스냅샷이 없으면 빈 목록 — 기존 targets 경로만 남는다(신규 레이크에서 정상).
+    """
+    marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
+    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    dates.discard("")
+    if not dates:
+        return []
+    tickers: set[str] = set()
+    prefix = canonical_etf_holdings_partition("KR", max(dates))
+    for key in storage.list_keys(prefix + "/"):
+        if not key.endswith(".parquet"):
+            continue
+        for row in _read_parquet_rows(storage.get_bytes(key)):
+            # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
+            for value in (row.get("constituent_ticker"), row.get("etf_id")):
+                if isinstance(value, str) and value.strip().isdigit() and len(value.strip()) == 6:
+                    tickers.add(value.strip())
+    return sorted(tickers)
+
+
+def _read_parquet_rows(data: bytes) -> list[dict]:
+    import io
+    import pyarrow.parquet as pq
+
+    return pq.read_table(io.BytesIO(data)).to_pylist()
 
 JOB_NAME = "ingest_price_raw"
 DATASET = "price_daily"  # collection_log·raw 파티션의 dataset= 키
@@ -76,7 +108,17 @@ def run(
     exit_code = 0
 
     try:
-        for record in source.fetch(settings.targets.symbols, from_date, to_date):
+        # 수집 유니버스 — 소스가 옵트인하면(KIS, ALPHA-419) canonical KR holdings 최신
+        # 스냅샷의 구성종목·ETF 티커를 targets 에 union 한다. 유니버스가 곧 분석 유니버스라
+        # 커버리지가 holdings 를 따라간다(정적 맵 드리프트 제거). 얼마나 더해졌는지는 로그로.
+        # holdings 읽기 실패도 이 try 안 — "결과는 항상 collection_log" 계약을 지킨다.
+        symbols = list(settings.targets.symbols)
+        log["symbols_from_holdings"] = 0
+        if getattr(source, "universe_from_holdings", False):
+            universe = _kr_holdings_universe(storage)
+            log["symbols_from_holdings"] = len(set(universe) - set(symbols))
+            symbols = sorted(set(symbols) | set(universe))
+        for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
             partitions[record["market"]].append(record)
     except StopFetch as exc:
