@@ -19,17 +19,24 @@ run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가 같다. 같은 a
   - FMP: title/url/site/publishedDate(오프셋 없는 벽시계)/text/mentions[]
   - BigKinds: TITLE/PROVIDER_LINK_PAGE/PROVIDER/DATE·NEWS_ID(날짜 단위)/CONTENT/our_ticker
 벤더 판별은 raw 키의 source= 파티션으로 한다(레코드 내용 아님 — 키가 규약의 SSOT).
+
+**종목 매핑은 정규화의 일이다(ALPHA-416)**: BigKinds 행은 canonical ETF holdings 최신
+스냅샷의 종목명 인덱스로 제목+리드에서 종목명을 탐지해 mentions 를 합성한다(구 raw 의
+our_ticker provenance 와 union — 이행기 호환). 수집이 카테고리 주도(전체 경제 뉴스)로
+전환돼도 mentions 가 유지되는 근거이며, 유니버스가 바뀌면 전체 백필 재정규화로 과거
+기사에 소급된다. FMP 는 ingest 병합 mentions[] 그대로(영문 기사라 한글 이름 탐지 무의미).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 from ..lake import (
     Storage,
+    canonical_etf_holdings_partition,
     canonical_news_articles_partition,
     is_raw_news_key,
     parse_raw_news_key,
@@ -54,6 +61,12 @@ _LANGUAGE_BY_VENDOR = {"bigkinds": "ko", "fmp": "en"}
 # 발행일 상한 여유 — 검증 실행일 기준 이 일수까지의 미래 발행일은 허용(수집 지연·TZ 여유).
 _FUTURE_SLACK_DAYS = 2
 
+# 종목명 탐지(ALPHA-416) 대상 시장 — BigKinds(ko)만 탐지하므로 KR holdings 만 인덱싱한다.
+# FMP(en)는 ingest 가 병합한 mentions[] 가 이미 있고 영문 기사라 한글 종목명이 안 잡힌다.
+_DETECT_MARKET = "KR"
+# 이 길이 미만의 종목명은 인덱스에서 뺀다 — 한 글자 이름은 substring 오탐이 사실상 전부다.
+_MIN_NAME_LEN = 2
+
 
 def _text(record: dict, key: str) -> str | None:
     """문자열 필드 안전 추출 — 비문자열(int·list 등)은 None 으로 정리한다. 정규화 다운스트림
@@ -66,14 +79,54 @@ def _text(record: dict, key: str) -> str | None:
 def _mentions(record: dict, market: object) -> list[dict]:
     """canonical 에 보존할 종목 mention 목록(다운스트림 엔티티 링크 씨앗). FMP 는 ingest 가
     병합한 mentions[] 를, BigKinds 는 단일 our_ticker 를 [{market,ticker}] 로 합성한다.
-    dict 원소만 취해 오염을 막는다(비객체 mention 은 버린다)."""
+    dict 원소만 취해 오염을 막는다(비객체 mention 은 버린다). BigKinds 는 여기에 더해
+    run() 이 종목명 탐지(detect_mentions) 결과를 union 한다(ALPHA-416)."""
     existing = record.get("mentions")
     if isinstance(existing, list):
         return [m for m in existing if isinstance(m, dict)]
     ticker = record.get("our_ticker")
     if isinstance(ticker, str) and ticker.strip() and isinstance(market, str):
-        return [{"market": market, "ticker": ticker}]
+        # strip 해 저장 — 탐지 경로(detect_mentions)와 union dedup 키((market,ticker))를 맞춘다.
+        return [{"market": market, "ticker": ticker.strip()}]
     return []
+
+
+def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict]]:
+    """canonical ETF holdings **최신 스냅샷(KR)** 에서 `종목명 → {market,ticker}` 인덱스를 만든다
+    (ALPHA-416). 이름 출처를 holdings 로 두는 이유 — normalize 는 레이크만 읽는 설계 전제라
+    DB(entity 마스터)를 붙일 수 없고, holdings 유니버스가 곧 분석 유니버스(load-instruments
+    시딩 원천)라 탐지 범위가 다운스트림 in_universe 필터와 정합한다.
+
+    스냅샷이 없으면 (None, {}) — 탐지는 no-op 이 되고 구 raw 의 our_ticker 경로만 남는다
+    (신규 레이크에서 정상). 반환: (as_of_date, index)."""
+    marker = canonical_etf_holdings_partition(_DETECT_MARKET, "")  # ".../as_of_date="
+    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    dates.discard("")
+    if not dates:
+        return None, {}
+    as_of_date = max(dates)
+    index: dict[str, dict] = {}
+    prefix = canonical_etf_holdings_partition(_DETECT_MARKET, as_of_date)
+    for key in storage.list_keys(prefix + "/"):
+        if not key.endswith(".parquet"):
+            continue
+        for row in _read_parquet_rows(storage.get_bytes(key)):
+            name, ticker = row.get("constituent_name"), row.get("constituent_ticker")
+            if not (isinstance(name, str) and isinstance(ticker, str) and ticker.strip()):
+                continue
+            name = " ".join(name.split())  # 기사 텍스트와 같은 공백 정규화라야 substring 이 맞는다
+            if len(name) >= _MIN_NAME_LEN:
+                index[name] = {"market": _DETECT_MARKET, "ticker": ticker.strip()}
+    return as_of_date, index
+
+
+def detect_mentions(text: str, name_index: dict[str, dict]) -> dict[str, dict]:
+    """제목+리드 텍스트에서 종목명 substring 탐지 → {이름: mention}. entity_resolution 의
+    완전일치(필드=이름)와 다른 축이다 — 여기는 자유 텍스트 안의 부분 문자열을 찾는다.
+    이름을 키로 돌려줘 호출부가 '어느 이름이 얼마나 잡히는지'를 계측한다(오탐 감시).
+    # ponytail: naive substring O(기사×이름) — 유니버스 수백 종목 규모까진 충분, 커지면 aho-corasick
+    """
+    return {name: mention for name, mention in name_index.items() if name in text}
 
 
 def _normalize(vendor: str, record: dict) -> dict:
@@ -307,11 +360,23 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
+    # 종목명 탐지 인덱스(ALPHA-416). 로드 실패해도 정규화는 계속한다(구 our_ticker 경로는
+    # 살아 있다) — 단 성공으로 위장하지 않는다(Rule 12): 전체 수집 전환 후엔 인덱스가 mentions
+    # 의 유일한 공급원이라, exit 0 이면 'mentions 전량 소실'이 정상 완료로 오독된다. canonical
+    # 적재 실패와 같은 계약으로 비0 종료한다. 스냅샷 부재(신규 레이크)는 실패가 아니다.
+    name_index_error: str | None = None
+    try:
+        holdings_as_of, name_index = _holdings_name_index(storage)
+    except Exception as exc:
+        logger.exception("holdings 이름 인덱스 로드 실패 — 이번 런은 탐지 없이 정규화")
+        holdings_as_of, name_index, name_index_error = None, {}, str(exc)
+    detected_name_counts: Counter = Counter()
+
     read = 0
     failures: list[dict] = []  # blocking — canonical 제외 대상
     warnings: list[dict] = []  # non-blocking — 통과하되 결측을 로깅(url·publisher)
     passing: list[dict] = []  # 게이트 통과 행 — 루프 뒤 canonical 로 멱등 병합
-    exit_code = 0
+    exit_code = 1 if name_index_error else 0  # 인덱스 로드 실패는 fail-loud(위 주석)
 
     for raw_key in raw_keys:
         try:
@@ -360,6 +425,16 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 소스 품질 문제를 한 번에 파악하게 한다.
                 failures.append({**ref, "reasons": reasons})
                 continue
+            if vendor == "bigkinds" and name_index:
+                # 종목명 탐지 합성(ALPHA-416) — mentions = our_ticker(구 raw provenance) ∪ 탐지.
+                # 전체 경제 뉴스 수집(카테고리 주도)으로 전환하면 our_ticker 가 사라지므로 이
+                # 탐지가 mentions 의 유일한 공급원이 된다. dedup 은 _canonical_row 의
+                # _union_mentions 가 (market,ticker) 키로 결정적으로 처리한다.
+                text = " ".join(p for p in (row["title"], row["lead_text"]) if p)
+                hits = detect_mentions(text, name_index)
+                if hits:
+                    row["mentions"] = [*row["mentions"], *hits.values()]
+                    detected_name_counts.update(hits.keys())
             passing.append(row)
             warn = [r for r in reasons if r not in BLOCKING_REASONS]
             if warn:
@@ -398,6 +473,11 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_warned": len(warnings),
                 "failures": failures,
                 "warnings": warnings,
+                # 종목명 탐지 계측(ALPHA-416) — 어느 이름이 얼마나 잡혔는지로 오탐을 감시한다.
+                "mention_index_as_of_date": holdings_as_of,
+                "mention_index_names": len(name_index),
+                "mention_index_error": name_index_error,
+                "detected_name_counts": dict(detected_name_counts),
                 "canonical_written": canonical_written,
                 "canonical_partitions_written": parts_written,
                 "canonical_rows_written": canonical_rows,
