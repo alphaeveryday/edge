@@ -337,3 +337,24 @@ def test_window_narrows_target_dates(tmp_path, monkeypatch):
     inserts = _inserts(conn)
     assert len(inserts) == 1
     assert inserts[0][1][2] == "2026-07-16"
+
+
+def test_future_fallback_skips_partitions_without_target_etf(tmp_path, monkeypatch):
+    """미래 폴백은 대상 ETF 행이 있는 첫 스냅샷을 고른다(Codex #144 P2) — 파티션은
+    (market, as_of_date) 단위라 다른 ETF 만 있을 수 있다(ETF 단위 격리 실패 등). 빈
+    파티션(dates[0])을 고르면 폴백이 무산돼 missing_holdings 로 되돌아간다."""
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-16", [])  # 파티션은 있으나 대상 ETF 행 없음
+    storage.put_bytes(
+        f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet",
+        storage.get_bytes(f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet"))
+    _default_holdings(storage, as_of="2026-07-17")  # 대상 ETF 는 다음 스냅샷부터
+    _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"

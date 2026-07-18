@@ -268,13 +268,14 @@ def run(
                 # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
                 # 드러낸다(Rule 12).
                 as_of_eligible = [x for x in holdings_dates if x <= date]
-                if as_of_eligible:
-                    as_of = as_of_eligible[-1]
-                elif holdings_dates:
-                    as_of = holdings_dates[0]
-                    future_asof_used += 1
-                else:
-                    as_of = None
+                as_of = as_of_eligible[-1] if as_of_eligible else None
+                if as_of is None:
+                    # 미래 폴백은 **대상 ETF 행이 실제로 있는** 첫 스냅샷 — 파티션은
+                    # (market, as_of_date) 단위라 다른 ETF 만 있을 수 있다(ETF 단위 격리
+                    # 실패 등, Codex #144 P2). 빈 파티션을 고르면 폴백이 무산된다.
+                    as_of = next((x for x in holdings_dates if holdings_as_of(x)), None)
+                    if as_of is not None:
+                        future_asof_used += 1
                 holdings = holdings_as_of(as_of) if as_of else []
                 if not holdings:
                     missing_holdings += 1
