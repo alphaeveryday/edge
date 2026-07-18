@@ -65,6 +65,11 @@ class KisDailyPriceSource:
         self.fetch_failures: list[dict] = []
         # 직전 fetch 가 계획한(매핑된) 대상 수. 활성인데 0이면 스텝이 skip 으로 드러낸다.
         self.planned_symbols: int | None = None
+        # 수집 유니버스를 canonical KR holdings 에서 파생하라는 옵트인(ALPHA-419) —
+        # ingest_price_raw 가 이 플래그를 보고 구성종목·ETF 티커를 대상에 union 한다.
+        # 정적 targets/symbol_map 만으론 구성종목 36개 중 2개만 수집돼 proxy 커버리지가
+        # 60% 에 머문다(뉴스 전환 ALPHA-416·417 과 같은 유니버스 정합 축).
+        self.universe_from_holdings = True
 
     @property
     def enabled(self) -> bool:
@@ -72,13 +77,15 @@ class KisDailyPriceSource:
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
-        """수집 대상 → [(our_ticker, kis_symbol)]. 매핑 없는 심볼은 KIS 로는 제외.
-
-        매핑 없음은 오류가 아니라 정상(US 등은 FMP 가 커버 — KIS 는 국내만).
+        """수집 대상 → [(our_ticker, kis_symbol)]. KR 6자리 코드는 **항등 매핑**이 기본이고
+        (ALPHA-419 — KRX 코드가 곧 KIS 코드), symbol_map 은 항등이 아닌 예외의 오버라이드
+        축으로만 남는다. 6자리가 아닌 미매핑 심볼(US 등)은 제외 — KIS 는 국내 전용.
         """
         out: list[tuple[str, str]] = []
         for our_ticker in symbols:
             kis_symbol = self.symbol_map.get(our_ticker)
+            if not kis_symbol and our_ticker.isdigit() and len(our_ticker) == 6:
+                kis_symbol = our_ticker
             if not kis_symbol:
                 logger.info("kis 매핑 없음 — 이 소스는 건너뜀: %s", our_ticker)
                 continue

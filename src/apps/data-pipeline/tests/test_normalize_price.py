@@ -364,7 +364,14 @@ def test_vendors_do_not_overlap_by_design(tmp_path):
     settings = load_settings()
     fmp_tickers = set(settings.price.source.symbol_map)
     kis_tickers = set(settings.kis_price.source.symbol_map) if settings.kis_price else set()
-    assert fmp_tickers and kis_tickers, "두 벤더 다 대상이 있어야 이 계약이 의미 있다"
+    assert fmp_tickers, "FMP 가격 대상이 있어야 이 계약이 의미 있다"
+    # KIS 대상은 이제 정적 맵이 아니라 holdings 파생 + 6자리 항등이다(ALPHA-419) — KIS 는
+    # 6자리 KRX 코드만 질의하므로, 겹침은 FMP 가격 맵에 6자리 our_ticker 가 오를 때만
+    # 성립한다. 그 키가 없음을 고정한다(+오버라이드 맵을 쓰는 경우의 직접 겹침도 차단).
+    six_digit_fmp = {t for t in fmp_tickers if t.isdigit() and len(t) == 6}
+    assert not six_digit_fmp, (
+        f"FMP 가격 맵에 KR 6자리 our_ticker: {sorted(six_digit_fmp)} — KIS 와 교차 충돌이 가능해졌다"
+    )
     assert not (fmp_tickers & kis_tickers), (
         f"벤더 심볼맵이 겹친다: {sorted(fmp_tickers & kis_tickers)} — 교차 충돌이 가능해졌다"
     )
