@@ -40,28 +40,21 @@ enabled = true
 # 국내 뉴스 소스 — BigKinds search.do raw 수집. 키 없음, 저부하 직렬 수집.
 # ingest-raw --source bigkinds 로 선택(미지정=fmp). CONTENT 는 BigKinds 응답 원본 필드로
 # 그대로 저장한다(본문 전문 크롤·요약·절단 없음).
+# **카테고리 주도 전체 수집(ALPHA-417)** — 검색어 없이(searchKey="") 카테고리의 그날 뉴스
+# 전체를 받는다. 종목 매핑은 정규화의 종목명 탐지(ALPHA-416) 소관. page_size 100 = API 상한,
+# max_pages 40 = 일 최대 4,000건 안전 상한(초과는 truncation 로그 + 다음 창 이어받기).
+# PoliteClient 1초 간격이면 하루 최대 ~40요청 — 구 종목별 수집(9종목×5페이지)과 비슷한 부하.
 [bigkinds_news]
 base_url = "https://www.bigkinds.or.kr/api/news/search.do"
 enabled = true
-page_size = 50
-max_pages = 5
-# 경제 대분류만 수집한다. 검색어가 종목명이라 필터가 없으면 그 종목이 언급된 스포츠·지역
-# 홍보 기사까지 들어오는데, 소비자(tag-news)는 경제 사건만 쓴다 — 온톨로지에 없는 유형은
+page_size = 100
+max_pages = 40
+# 경제 대분류만 수집한다. 소비자(tag-news)는 경제 사건만 쓴다 — 온톨로지에 없는 유형은
 # 버려지는 게 아니라 가장 가까운 라벨로 굴절돼 조용히 오분류된다(ALPHA-360).
 # `002…` = 경제 대분류(2026-07-14 라이브 실측). CATEGORY 는 멀티라벨이라 경제를 **포함**하면
-# 수집된다. 언론사는 안 좁힌다(전체).
+# 수집된다. 언론사는 안 좁힌다(전체). **필수** — 검색어가 없으므로 카테고리마저 비면 전체
+# 뉴스 firehose 라 로드가 거부한다.
 category_codes = ["002000000"]
-
-[bigkinds_news.query_map]
-"005930" = "삼성전자"
-"000660" = "SK하이닉스"
-"009150" = "삼성전기"
-"402340" = "SK스퀘어"
-"373220" = "LG에너지솔루션"
-"028260" = "삼성물산"
-"032830" = "삼성생명"
-"105560" = "KB금융"
-"055550" = "신한지주"
 
 # 가격(OHLCV) 소스 — FMP EOD(일봉, S004). api_key 는 env 로 주입:
 #   DATA_PIPELINE_PRICE__SOURCE__API_KEY=...

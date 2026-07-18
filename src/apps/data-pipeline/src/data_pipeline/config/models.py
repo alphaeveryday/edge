@@ -65,23 +65,22 @@ class NewsSource(BaseModel):
 
 
 class BigKindsNewsSource(BaseModel):
-    """BigKinds 국내 뉴스 소스 (stock_news raw).
+    """BigKinds 국내 뉴스 소스 (stock_news raw) — 카테고리 주도 전체 수집(ALPHA-417).
 
     BigKinds search.do 는 키 없이 호출하지만, 저부하를 위해 page_size/max_pages 를 설정으로 둔다.
-    query_map 은 our_ticker → 검색어(초기엔 표준명 1개)다.
+    검색어(query_map)는 없다 — 종목 매핑은 정규화의 종목명 탐지(ALPHA-416) 소관이다.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     base_url: NonBlankStr = "https://www.bigkinds.or.kr/api/news/search.do"
     enabled: bool = True
-    page_size: int = Field(default=50, ge=1, le=100)
-    max_pages: int = Field(default=5, ge=1, le=100)
-    query_map: dict[str, NonBlankStr] = Field(default_factory=dict)
-    # 검색을 좁히는 BigKinds 카테고리 대분류 코드. 검색어(종목명)만으로는 그 종목이 언급된
-    # 스포츠·지역 홍보 기사까지 들어오는데, 우리 소비자(태깅)는 경제 사건만 쓴다. 빈 리스트면
-    # 필터 없음(전 카테고리) — BigKinds 의 무필터 표현이 곧 빈 배열이라 그대로 넘긴다.
-    category_codes: list[BigKindsCategoryCode] = Field(default_factory=list)
+    page_size: int = Field(default=100, ge=1, le=100)
+    max_pages: int = Field(default=40, ge=1, le=100)
+    # 수집 범위를 정하는 BigKinds 카테고리 대분류 코드 — **필수(최소 1개)**. 검색어가 없으므로
+    # 카테고리마저 비면 전체 뉴스 firehose 다 — 로드 시점에 거부한다(fail loud). 우리 소비자
+    # (태깅)는 경제 사건만 쓴다.
+    category_codes: list[BigKindsCategoryCode] = Field(min_length=1)
 
 
 class PriceSource(BaseModel):
