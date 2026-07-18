@@ -228,18 +228,16 @@ def test_bigkinds_news_section_optional(tmp_path):
 
 def test_bigkinds_news_section_parsed_when_present(tmp_path):
     # WHY: [bigkinds_news] 가 있으면 타입 있는 설정으로 로드돼 BigKinds 뉴스 잡이 쓴다.
-    #      검색어 맵은 코드가 아니라 설정으로 관리한다.
+    #      수집 범위(카테고리)는 코드가 아니라 설정으로 관리한다(ALPHA-417).
     text = VALID + """
 [bigkinds_news]
 base_url = "https://bigkinds.example/search.do"
 page_size = 25
 max_pages = 2
-
-[bigkinds_news.query_map]
-"005930" = "삼성전자"
+category_codes = ["002000000"]
 """
     settings = load_settings(_write(tmp_path, text))
     assert settings.bigkinds_news.base_url == "https://bigkinds.example/search.do"
     assert settings.bigkinds_news.page_size == 25
     assert settings.bigkinds_news.max_pages == 2
-    assert settings.bigkinds_news.query_map == {"005930": "삼성전자"}
+    assert settings.bigkinds_news.category_codes == ["002000000"]
