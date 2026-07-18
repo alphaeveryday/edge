@@ -267,13 +267,15 @@ def run(
                 # 완만해 proxy 근사로 수용한다(유저 결정 2026-07-18) — 최초 스냅샷(2026-07-15)
                 # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
                 # 드러낸다(Rule 12).
+                # 스냅샷 선택은 파티션 존재가 아니라 **대상 ETF 행 존재** 기준이다 — 파티션은
+                # (market, as_of_date) 단위라 ETF 단위 격리 실패로 다른 ETF 만 있을 수 있다
+                # (Codex #144 P2 ×2: 과거·미래 양쪽). 과거(≤date) 최신 → 없으면 가장 이른
+                # 미래 순으로, ETF 행이 있는 첫 스냅샷을 고른다.
                 as_of_eligible = [x for x in holdings_dates if x <= date]
-                as_of = as_of_eligible[-1] if as_of_eligible else None
+                as_of = next((x for x in reversed(as_of_eligible) if holdings_as_of(x)), None)
                 if as_of is None:
-                    # 미래 폴백은 **대상 ETF 행이 실제로 있는** 첫 스냅샷 — 파티션은
-                    # (market, as_of_date) 단위라 다른 ETF 만 있을 수 있다(ETF 단위 격리
-                    # 실패 등, Codex #144 P2). 빈 파티션을 고르면 폴백이 무산된다.
-                    as_of = next((x for x in holdings_dates if holdings_as_of(x)), None)
+                    as_of = next(
+                        (x for x in holdings_dates if x > date and holdings_as_of(x)), None)
                     if as_of is not None:
                         future_asof_used += 1
                 holdings = holdings_as_of(as_of) if as_of else []

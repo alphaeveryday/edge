@@ -358,3 +358,21 @@ def test_future_fallback_skips_partitions_without_target_etf(tmp_path, monkeypat
     log = _quality_log(storage)
     assert log["future_asof_used"] == 1
     assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"
+
+
+def test_past_partition_without_target_etf_falls_through(tmp_path, monkeypatch):
+    """과거(≤date) 파티션이 있어도 대상 ETF 행이 없으면(ETF 단위 격리 실패로 그날 091160 만
+    누락) 그 파티션에 멈추지 말고 — 더 과거의 ETF 포함 스냅샷, 그것도 없으면 미래 폴백으로
+    이어져야 한다(Codex #144 P2 2라운드). 파티션 존재≠ETF 존재."""
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-14", [])  # 과거 파티션 존재하나 대상 ETF 행 없음
+    _default_holdings(storage, as_of="2026-07-17")  # ETF 는 미래 스냅샷에만
+    _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"
