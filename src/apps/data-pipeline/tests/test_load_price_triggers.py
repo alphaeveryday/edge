@@ -228,9 +228,12 @@ def test_stale_policy_row_with_lineage_is_kept_and_counted(tmp_path, monkeypatch
     assert _quality_log(storage)["stale_policy_kept"] == 1
 
 
-def test_dates_before_first_holdings_snapshot_are_missing_not_lookahead(tmp_path, monkeypatch):
-    """최초 holdings 스냅샷 이전 날짜에 미래 스냅샷을 대입하면 아직 편입되지도 않은
-    종목으로 과거를 계산하는 look-ahead 편향이다(Codex #135 P1) — 결손으로 센다."""
+def test_dates_before_first_holdings_snapshot_fall_back_to_earliest_future(tmp_path, monkeypatch):
+    """최초 holdings 스냅샷 이전 날짜는 **가장 이른 미래 스냅샷으로 폴백**해 평가한다
+    (ALPHA-418 — 엔진 load_etf_holdings 와 같은 선택). 미래 스냅샷은 look-ahead 지만
+    (Codex #135 P1 이 금지했던 것), 과거 스냅샷 소급 수집이 비싸고 리밸런싱이 완만해
+    proxy 근사로 수용하기로 결정했다(2026-07-18) — 스킵하면 7/13 −11% 폭락일 같은 실제
+    설명거리가 트리거 없이 영구 누락된다. 대신 폴백 사용은 수치·as_of 로 드러난다(Rule 12)."""
     storage = LocalStorage(tmp_path)
     _default_holdings(storage, as_of="2026-07-16")  # 스냅샷이 7-16 부터만 존재
     _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
@@ -238,8 +241,11 @@ def test_dates_before_first_holdings_snapshot_are_missing_not_lookahead(tmp_path
     conn = _FakeConn()
 
     assert _run(storage, conn, monkeypatch) == 0
-    assert _inserts(conn) == []
-    assert _quality_log(storage)["missing_holdings"] == 1
+    assert len(_inserts(conn)) == 1  # 7-15 가 미래 스냅샷(7-16)으로 평가돼 트리거 생성
+    log = _quality_log(storage)
+    assert log["missing_holdings"] == 0
+    assert log["future_asof_used"] == 1
+    assert log["created_rows"][0]["holdings_as_of"] == "2026-07-16"
 
 
 def test_same_date_multiple_rows_are_each_judged(tmp_path, monkeypatch):

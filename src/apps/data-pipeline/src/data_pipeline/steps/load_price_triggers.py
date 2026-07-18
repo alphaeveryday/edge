@@ -182,6 +182,7 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     considered = missing_holdings = missing_price = gated_out = 0
+    future_asof_used = 0  # 최초 스냅샷 이전 날짜에 미래 as_of 폴백을 쓴 횟수(ALPHA-418)
     already = created = replaced_stale_policy = stale_policy_kept = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
@@ -260,11 +261,20 @@ def run(
                     # 소비자가 (etf, date)로 두 행을 보게 된다.
                     continue
 
-                # holdings 는 거래일 **이하** 최신 스냅샷만 쓴다. 최초 스냅샷 이전 날짜에 미래
-                # 스냅샷을 대입하면 아직 편입되지도 않은 종목으로 과거를 계산하는 look-ahead
-                # 편향이라(전체 스캔에서 실재), 결손으로 세고 건너뛴다.
+                # holdings 는 거래일 이하 최신 스냅샷, 없으면 **가장 이른 미래 스냅샷**으로
+                # 폴백한다 — 엔진 load_etf_holdings 와 같은 선택(정책 정본 정합, ALPHA-418).
+                # 미래 스냅샷은 look-ahead 지만, 과거 스냅샷 소급 수집이 비싸고 ETF 리밸런싱이
+                # 완만해 proxy 근사로 수용한다(유저 결정 2026-07-18) — 최초 스냅샷(2026-07-15)
+                # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
+                # 드러낸다(Rule 12).
                 as_of_eligible = [x for x in holdings_dates if x <= date]
-                as_of = as_of_eligible[-1] if as_of_eligible else None
+                if as_of_eligible:
+                    as_of = as_of_eligible[-1]
+                elif holdings_dates:
+                    as_of = holdings_dates[0]
+                    future_asof_used += 1
+                else:
+                    as_of = None
                 holdings = holdings_as_of(as_of) if as_of else []
                 if not holdings:
                     missing_holdings += 1
@@ -299,7 +309,8 @@ def run(
                     )
                 created += 1
                 created_rows.append({"trade_date": date, "observed_return": proxy_ret,
-                                     "price_movement_trigger_id": trigger_id})
+                                     "price_movement_trigger_id": trigger_id,
+                                     "holdings_as_of": as_of})
     except Exception as exc:
         # 커밋 경계는 런 전체다 — connect() 가 예외면 롤백이라 부분 적재가 없다. 트레이스백으로
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
@@ -315,6 +326,7 @@ def run(
         "market": config.market, "etf_ticker": config.etf_ticker,
         "abs_threshold": config.abs_threshold, "policy_version": config.policy_version,
         "dates_considered": considered, "missing_holdings": missing_holdings,
+        "future_asof_used": future_asof_used,
         "missing_price": missing_price, "gated_out": gated_out,
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
         "stale_policy_kept": stale_policy_kept,
