@@ -125,14 +125,18 @@ Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 
 - `generated/physical-erd.dbml` — cloud 세트(`migrations/`)
 - `generated/physical-erd-onprem.dbml` — 온프렘 세트(`migrations-onprem/`)
 
-재생성(마이그레이션을 바꾼 뒤 — PostgreSQL 18 필요):
+**자동 갱신 — pre-commit 훅.** 마이그레이션을 바꿔 커밋하면 훅이 ERD 를 재생성해 그 커밋에 포함한다.
+클론당 1회 활성화한다:
 
 ```bash
-bash src/libs/schema/scripts/generate-erd.sh
+git config core.hooksPath .githooks
 ```
 
-- **드리프트는 CI 가 막는다.** `schema-validate` 의 `erd-drift` 잡이 PR 마다 ERD 를 재생성해
-  커밋본과 대조하고, 어긋나면 fail-loud 로 실패한다(생성물 커밋은 개발자 몫 — bot push 없음).
+- 훅(`.githooks/pre-commit`)은 **스키마 마이그레이션이 스테이징된 커밋에서만** `generate-erd.sh` 를
+  돌려 `generated/*.dbml` 을 갱신·스테이징한다(일반 커밋은 즉시 통과).
+- **의존: PostgreSQL 18**(initdb·pg_ctl·psql). 없으면 훅은 커밋을 막지 않고 경고만 한다 — 이 경우
+  pg18 설치 후 `bash src/libs/schema/scripts/generate-erd.sh` 로 직접 재생성한다.
+- 훅은 **opt-in 이라 강제되지 않는다**(CI 게이트 없음). 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다.
 - 결정성: 클러스터 `--no-locale` + `gen-erd.sql` 의 `ORDER BY COLLATE "C"` + LF 고정
   (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다.
 - `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
