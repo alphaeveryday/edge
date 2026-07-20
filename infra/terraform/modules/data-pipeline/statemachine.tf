@@ -275,19 +275,25 @@ locals {
         Branches   = local.raw_ingest_branches
         ResultPath = "$.branch_results"
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
-        Next       = "RawIngestCheckResults"
+        Next       = "NormalizeParallel"
       }
-      RawIngestCheckResults = {
-        Type = "Choice"
-        Choices = [{
-          And  = local.raw_ingest_success_checks
-          Next = "NormalizeParallel"
-        }]
-        Default = "NotifyFailure"
-      }
-      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면 정제를
-      # 헛돌리지 않는다. ALPHA-351 로 흔한 절단은 raw 브랜치에서 성공 처리되므로, 여기 걸리는
-      # 건 진짜 실패다.
+      # raw 부분 실패는 뒤 페이즈를 **막지 않는다**(ALPHA-460). 예전엔 여기 전량성공 게이트가
+      # 있어서 소스 하나가 죽으면 무관한 소스의 정제·분석까지 통째로 멈췄다 — 뉴스 수집 실패가
+      # 가격 정제를 막는 건 의도가 아니다. 재무는 canonical 스텝조차 없어 아무것도 공급하지
+      # 않는데도 전체를 막았다.
+      #
+      # 막을 필요가 없는 근거: **정제는 빈 입력을 정상 성공으로 처리한다.** raw 키가 0개면
+      # 루프가 안 돌고 exit 0 이다(normalize_price.py 의 `for raw_key in raw_keys`). 그래서
+      # BigKinds 가 죽어도 NormalizeNews 는 이 런의 FMP raw 만 정제하고 성공한다 — 정제 잡별로
+      # "어느 raw 가 필수인가" 의존 맵을 ASL 에 적을 이유가 없다. 있는 만큼 처리한다.
+      #
+      # 실패 **신호**는 죽이지 않는다 — 파이프라인 끝 RawPartialCheck 가 같은 검사식으로 다시
+      # 판정해 런을 FAILED 로 마감한다(아래). 막지 않되 조용하지도 않게.
+      #
+      # analyze 까지 부분 입력으로 도는 것도 의도다: 준실시간에선 '완전한 입력'이라는 상태가
+      # 존재하지 않아 입력 완전성 게이트는 주기가 짧아질수록 '매번 불성립'으로 수렴한다.
+      # 대신 트리거 결측이 '데이터 없음'이 아니라 '움직임 없음'으로 나가는 위험이 남는데,
+      # 그건 게이트가 아니라 산출물이 두 상태를 구분해야 풀리는 문제다(ALPHA-452·453 소관).
       #
       # ⚠️ **정제는 이 실행의 raw 만 본다**(`--input-run-id $.run_id`, ALPHA-389). 예전엔
       # full-scan 이라 "이전 실패 실행이 저장한 raw 도 다음 성공 실행이 함께 주워간다"는
@@ -430,7 +436,24 @@ locals {
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"
           NumericEquals = 0
-          Next          = "PipelineSucceeded"
+          Next          = "RawPartialCheck"
+        }]
+        Default = "NotifyFailure"
+      }
+      # 옮겨온 raw 전량성공 판정(ALPHA-460) — 막는 게이트가 아니라 **마감 판정**이다. 다운스트림을
+      # 끝까지 돌린 뒤 여기서 raw 를 다시 보고, 부분 실패였으면 런을 FAILED 로 끝낸다.
+      #
+      # 이 상태가 없으면 안 되는 이유: 정제가 run 스코프라(ALPHA-389) 실패 런의 raw 는 다음 런이
+      # 자동으로 안 주워간다. NotifyFailure 알림이 수동 재승격(`--input-run-id`)의 유일한
+      # 트리거라, 부분 성공 런이 Succeed 로 끝나면 **못 주워온 raw 를 아무도 모른다.**
+      #
+      # `$.branch_results` 는 RawIngestParallel 이 쓴 뒤 여기까지 살아 있다 — 뒤 Task 들이
+      # ResultPath 를 `$.ecs` 로 쓰고 Parallel 들도 각자 다른 키를 써서 덮이지 않는다.
+      RawPartialCheck = {
+        Type = "Choice"
+        Choices = [{
+          And  = local.raw_ingest_success_checks
+          Next = "PipelineSucceeded"
         }]
         Default = "NotifyFailure"
       }
