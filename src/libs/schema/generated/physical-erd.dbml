@@ -1,0 +1,613 @@
+// AUTO-GENERATED from libs/schema Flyway migrations - DO NOT EDIT.
+// Regenerate: bash src/libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).
+// SSOT: libs/schema migrations. Derived physical ERD (dbdiagram.io syntax).
+
+Table "actor" {
+  "actor_id" text [pk]
+  "entity_type" varchar(20)
+  "actor_type" varchar(30) [not null]
+  "country_code" varchar(2)
+}
+
+Table "assertion_argument" {
+  "assertion_argument_id" bigint [pk, increment]
+  "assertion_id" text [not null]
+  "role_code" varchar(80) [not null]
+  "entity_id" text [not null]
+  "confidence" double precision
+}
+
+Table "assertion_metric" {
+  "assertion_metric_id" bigint [pk, increment]
+  "assertion_id" text [not null]
+  "metric_code" varchar(80) [not null]
+  "numeric_value" numeric(30,8)
+  "unit_code" varchar(30)
+  "period_basis" varchar(30)
+  "integrity_status" varchar(20)
+  "confidence" double precision
+}
+
+Table "business_segment_fact" {
+  "fact_id" text [pk]
+  "fact_type" varchar(30)
+  "segment_name" text [not null]
+  "concept_id" text
+  "period_label" varchar(30)
+  "revenue_krw" numeric(30,0)
+  "revenue_share_pct" double precision
+  "share_basis" varchar(20)
+  "concept_link_confidence" double precision
+}
+
+Table "company_profile" {
+  "actor_id" text [pk]
+  "actor_type" varchar(30)
+  "dart_corp_code" varchar(8)
+  "profile_as_of_date" date
+}
+
+Table "concept" {
+  "concept_id" text [pk]
+  "entity_type" varchar(20)
+  "concept_type" varchar(30) [not null]
+  "parent_concept_id" text
+}
+
+Table "disclosure_document" {
+  "document_id" text [pk]
+  "document_type" varchar(20)
+  "issuer_actor_id" text [not null]
+  "disclosure_type" varchar(50) [not null]
+  "report_date" date
+  "parser_version" varchar(50) [not null]
+  "parsed_result_uri" text
+}
+
+Table "disclosure_fact" {
+  "fact_id" text [pk]
+  "document_id" text [not null]
+  "fact_type" varchar(30) [not null]
+  "available_at" timestamptz [not null]
+}
+
+Table "document" {
+  "document_id" text [pk]
+  "document_type" varchar(20) [not null]
+  "source_code" varchar(50) [not null]
+  "source_document_id" text [not null]
+  "title" text
+  "language_code" varchar(10)
+  "published_at" timestamptz
+  "available_at" timestamptz [not null]
+  "source_uri" text
+}
+
+Table "document_assertion" {
+  "assertion_id" text [pk]
+  "document_id" text [not null]
+  "event_type_code" varchar(120) [not null]
+  "predicate_code" varchar(80) [not null]
+  "modality_code" varchar(30)
+  "confidence" double precision
+  "lifecycle_stage" varchar(50)
+  "available_at" timestamptz [not null]
+}
+
+Table "document_entity" {
+  "document_id" text [not null]
+  "entity_id" text [not null]
+  "matched_text" text
+  "link_method" varchar(30)
+  "confidence" double precision
+
+  indexes {
+    ("document_id", "entity_id") [pk]\n  }
+}
+
+Table "entity" {
+  "entity_id" text [pk]
+  "entity_type" varchar(20) [not null]
+  "display_name" text [not null]
+  "status" varchar(20) [not null]
+}
+
+Table "equity_profile" {
+  "instrument_id" text [pk]
+  "instrument_type" varchar(20)
+  "issuer_actor_id" text [not null]
+  "share_class_code" varchar(20) [not null]
+  "profile_as_of_date" date
+}
+
+Table "etf_contribution_member" {
+  "contribution_observation_id" text [not null]
+  "constituent_instrument_id" text [not null]
+  "weight_ratio" double precision
+  "constituent_return" double precision
+  "contribution_return" double precision
+  "contribution_rank" int
+
+  indexes {
+    ("contribution_observation_id", "constituent_instrument_id") [pk]\n  }
+}
+
+Table "etf_contribution_observation" {
+  "contribution_observation_id" text [pk]
+  "price_movement_trigger_id" text [not null]
+  "etf_return" double precision
+  "nav_return" double precision
+  "constituent_contribution_return" double precision
+  "fx_contribution_return" double precision
+  "premium_discount_contribution_return" double precision
+  "reconciliation_error" double precision
+  "advancing_constituent_count" int
+  "total_constituent_count" int
+  "top3_contribution_ratio" double precision
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+}
+
+Table "etf_holding_snapshot" {
+  "etf_instrument_id" text [not null]
+  "constituent_instrument_id" text [not null]
+  "trade_date" date [not null]
+  "weight_ratio" double precision
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("etf_instrument_id", "constituent_instrument_id", "trade_date") [pk]\n  }
+}
+
+Table "etf_nav_daily" {
+  "etf_instrument_id" text [not null]
+  "trade_date" date [not null]
+  "nav" numeric(24,8) [not null]
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("etf_instrument_id", "trade_date") [pk]\n  }
+}
+
+Table "etf_profile" {
+  "instrument_id" text [pk]
+  "instrument_type" varchar(20)
+  "etf_type" varchar(40) [not null]
+  "tracking_market_series_id" text
+  "primary_theme_concept_id" text
+  "asset_manager_name" text
+  "leverage_multiplier" double precision
+  "currency_hedged" boolean
+  "decomposition_template" varchar(50)
+  "total_expense_ratio" double precision
+  "profile_as_of_date" date
+}
+
+Table "event_argument" {
+  "source_event_id" text [not null]
+  "role_code" varchar(80) [not null]
+  "entity_id" text [not null]
+  "confidence" double precision
+
+  indexes {
+    ("source_event_id", "role_code", "entity_id") [pk]\n  }
+}
+
+Table "event_evidence" {
+  "evidence_id" text [pk]
+  "source_event_id" text [not null]
+  "assertion_id" text [not null]
+  "evidence_type" varchar(30) [not null]
+  "evidence_text" text
+  "link_confidence" double precision
+}
+
+Table "event_price_observation" {
+  "event_price_observation_id" text [pk]
+  "source_event_id" text [not null]
+  "instrument_id" text [not null]
+  "anchor_evidence_id" text
+  "benchmark_series_id" text [not null]
+  "window_start_at" timestamptz [not null]
+  "window_end_at" timestamptz [not null]
+  "simple_return" double precision
+  "market_return" double precision
+  "peer_orthogonal_return" double precision
+  "explained_return" double precision
+  "residual_return" double precision
+  "window_status" varchar(30)
+  "is_confounded" boolean [not null]
+  "evaluation_as_of" timestamptz [not null]
+  "policy_version" varchar(50) [not null]
+  "input_uri" text
+}
+
+Table "event_price_observation_peer" {
+  "event_price_observation_id" text [not null]
+  "peer_instrument_id" text [not null]
+  "peer_rank" int
+  "peer_weight_ratio" double precision
+  "peer_return" double precision
+  "peer_orthogonal_return" double precision
+
+  indexes {
+    ("event_price_observation_id", "peer_instrument_id") [pk]\n  }
+}
+
+Table "event_thread" {
+  "thread_id" text [pk]
+  "thread_key" text [not null]
+  "event_type_code" varchar(120) [not null]
+  "current_stage" varchar(50)
+  "opened_at" timestamptz
+  "last_state_at" timestamptz
+}
+
+Table "event_thread_link" {
+  "source_event_id" text [pk]
+  "thread_id" text
+  "source_class" varchar(20) [not null]
+  "novelty_status" varchar(30) [not null]
+  "link_type" varchar(30)
+  "evaluated_at" timestamptz [not null]
+  "unknown_reason" text
+}
+
+Table "explanation_result" {
+  "explanation_result_id" text [pk]
+  "explanation_run_id" text [not null]
+  "etf_instrument_id" text [not null]
+  "trade_date" date [not null]
+  "explanation_as_of" timestamptz [not null]
+  "primary_thread_id" text
+  "explanation_type" varchar(30) [not null]
+  "summary" text [not null]
+  "confidence_level" varchar(20)
+  "stage_results" jsonb
+  "publication_status" varchar(20) [not null]
+  "generated_at" timestamptz [not null]
+  "result_uri" text
+  "headline" text
+}
+
+Table "explanation_route" {
+  "explanation_route_id" text [pk]
+  "contribution_observation_id" text [not null]
+  "route_code" varchar(30) [not null]
+  "event_search_required" boolean [not null]
+  "decision_reason" text
+  "evaluated_at" timestamptz [not null]
+}
+
+Table "explanation_route_decomposition" {
+  "explanation_route_id" text [not null]
+  "price_decomposition_id" text [not null]
+  "usage_type" varchar(30)
+  "priority" int
+
+  indexes {
+    ("explanation_route_id", "price_decomposition_id") [pk]\n  }
+}
+
+Table "explanation_route_target" {
+  "explanation_route_id" text [not null]
+  "target_entity_id" text [not null]
+  "source_instrument_id" text
+  "target_scope" varchar(20) [not null]
+  "selection_reason" varchar(50)
+  "priority" int
+
+  indexes {
+    ("explanation_route_id", "target_entity_id", "target_scope") [pk]\n  }
+}
+
+Table "explanation_run" {
+  "explanation_run_id" text [pk]
+  "explanation_route_id" text [not null]
+  "bundle_version" varchar(30) [not null]
+  "explanation_as_of" timestamptz [not null]
+  "run_reason" varchar(30)
+  "run_status" varchar(20) [not null]
+  "started_at" timestamptz [not null]
+  "finished_at" timestamptz
+}
+
+Table "explanation_run_disclosure_fact" {
+  "explanation_run_id" text [not null]
+  "fact_id" text [not null]
+  "stage_code" varchar(10) [not null]
+  "usage_type" varchar(30)
+  "priority" int
+  "weight_ratio" double precision
+
+  indexes {
+    ("explanation_run_id", "fact_id", "stage_code") [pk]\n  }
+}
+
+Table "explanation_run_event_evidence" {
+  "explanation_run_id" text [not null]
+  "evidence_id" text [not null]
+  "stage_code" varchar(10) [not null]
+  "usage_type" varchar(30)
+  "priority" int
+  "weight_ratio" double precision
+
+  indexes {
+    ("explanation_run_id", "evidence_id", "stage_code") [pk]\n  }
+}
+
+Table "explanation_run_event_price_observation" {
+  "explanation_run_id" text [not null]
+  "event_price_observation_id" text [not null]
+  "stage_code" varchar(10) [not null]
+  "usage_type" varchar(30)
+  "priority" int
+  "weight_ratio" double precision
+
+  indexes {
+    ("explanation_run_id", "event_price_observation_id", "stage_code") [pk]\n  }
+}
+
+Table "instrument" {
+  "instrument_id" text [pk]
+  "entity_type" varchar(20)
+  "market_code" varchar(30) [not null]
+  "ticker" varchar(30) [not null]
+  "instrument_type" varchar(20) [not null]
+  "currency_code" varchar(3)
+}
+
+Table "market_series" {
+  "market_series_id" text [pk]
+  "series_type" varchar(30) [not null]
+  "series_name" text [not null]
+  "source_code" varchar(50) [not null]
+  "source_series_id" text [not null]
+  "market_code" varchar(30)
+  "currency_code" varchar(3)
+  "status" varchar(20) [not null]
+}
+
+Table "news_document" {
+  "document_id" text [pk]
+  "document_type" varchar(20)
+  "lead_text" text
+  "representative_document_id" text
+  "dedup_cluster_id" text
+  "theme_concept_id" text
+}
+
+Table "price_daily" {
+  "instrument_id" text [not null]
+  "trade_date" date [not null]
+  "close_price" numeric(24,8)
+  "adjusted_close_price" numeric(24,8)
+  "simple_return" double precision
+  "log_return" double precision
+  "volume" bigint
+  "turnover_value" numeric(30,4)
+  "price_basis" varchar(30)
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("instrument_id", "trade_date") [pk]\n  }
+}
+
+Table "price_decomposition" {
+  "price_decomposition_id" text [pk]
+  "price_observation_id" text [not null]
+  "benchmark_series_id" text [not null]
+  "target_return" double precision
+  "market_return" double precision
+  "peer_raw_return" double precision
+  "peer_orthogonal_return" double precision
+  "intercept_contribution_return" double precision
+  "market_explained_return" double precision
+  "peer_explained_return" double precision
+  "explained_return" double precision
+  "residual_return" double precision
+  "volume_abnormality" double precision
+  "volatility_change" double precision
+  "residual_gate_status" varchar(20)
+  "residual_gate_score" double precision
+  "policy_version" varchar(50) [not null]
+  "model_version" varchar(50) [not null]
+  "evaluation_as_of" timestamptz [not null]
+  "input_uri" text
+}
+
+Table "price_decomposition_peer" {
+  "price_decomposition_id" text [not null]
+  "peer_instrument_id" text [not null]
+  "peer_rank" int
+  "peer_weight_ratio" double precision
+  "peer_return" double precision
+  "peer_orthogonal_return" double precision
+
+  indexes {
+    ("price_decomposition_id", "peer_instrument_id") [pk]\n  }
+}
+
+Table "price_movement_trigger" {
+  "price_movement_trigger_id" text [pk]
+  "etf_instrument_id" text [not null]
+  "trade_date" date [not null]
+  "detected_at" timestamptz [not null]
+  "observed_return" double precision [not null]
+  "market_relative_return" double precision
+  "absolute_gate_triggered" boolean [not null]
+  "relative_gate_triggered" boolean [not null]
+  "detection_policy_version" varchar(50) [not null]
+  "detection_reason" text
+}
+
+Table "price_observation" {
+  "price_observation_id" text [pk]
+  "price_movement_trigger_id" text [not null]
+  "instrument_id" text [not null]
+  "window_type" varchar(30) [not null]
+  "window_start_at" timestamptz [not null]
+  "window_end_at" timestamptz [not null]
+  "anchor_trade_date" date [not null]
+  "evaluation_as_of" timestamptz [not null]
+  "policy_version" varchar(50) [not null]
+  "data_version" varchar(50) [not null]
+}
+
+Table "release_bundle" {
+  "bundle_version" varchar(30) [pk]
+  "component_versions" jsonb [not null]
+  "component_hash" character(64) [not null]
+  "status" varchar(20) [not null]
+  "release_notes" text
+  "published_at" timestamptz
+  "created_at" timestamptz [not null]
+}
+
+Table "source_event" {
+  "source_event_id" text [pk]
+  "source_class" varchar(20) [not null]
+  "event_type_code" varchar(120) [not null]
+  "event_date" date
+  "lifecycle_stage" varchar(50)
+  "event_status" varchar(20) [not null]
+  "available_at" timestamptz [not null]
+}
+
+Table "supply_contract_fact" {
+  "fact_id" text [pk]
+  "fact_type" varchar(30)
+  "counterparty_actor_id" text
+  "counterparty_raw_name" text
+  "counterparty_withheld" boolean [not null]
+  "contract_object_concept_id" text
+  "contract_amount_krw" numeric(30,0)
+  "revenue_ratio_pct" double precision
+  "contract_start_date" date
+  "contract_end_date" date
+  "late_disclosure" boolean [not null]
+  "completeness_status" varchar(20)
+}
+
+Table "tenant" {
+  "tenant_id" bigint [pk, increment]
+  "tenant_name" varchar(100) [not null]
+  "environment" varchar(10) [not null]
+  "status" varchar(20) [not null]
+  "created_at" timestamptz [not null]
+}
+
+Table "tenant_credential" {
+  "credential_hash" character(64) [pk]
+  "tenant_id" bigint [not null]
+  "status" varchar(20) [not null]
+  "created_at" timestamptz [not null]
+  "revoked_at" timestamptz
+}
+
+Table "tenant_release_history" {
+  "tenant_id" bigint [not null]
+  "bundle_version" varchar(30) [not null]
+  "approved_by" varchar(100) [not null]
+  "approved_at" timestamptz [not null]
+  "applied_at" timestamptz
+
+  indexes {
+    ("tenant_id", "bundle_version", "approved_at") [pk]\n  }
+}
+
+Table "tenant_sync_cursor" {
+  "tenant_id" bigint [pk]
+  "last_cursor" bigint [not null]
+  "last_synced_at" timestamptz [not null]
+}
+
+Table "thread_discovery_snapshot" {
+  "source_event_id" text [pk]
+  "thread_id" text
+  "prior_event_count" int
+  "days_since_previous_stage" int
+  "is_novel" boolean
+  "unknown_reason" text
+  "evaluated_at" timestamptz [not null]
+}
+
+Ref: "actor".("actor_id", "entity_type") > "entity".("entity_id", "entity_type")
+Ref: "assertion_argument"."assertion_id" > "document_assertion"."assertion_id"
+Ref: "assertion_argument"."entity_id" > "entity"."entity_id"
+Ref: "assertion_metric"."assertion_id" > "document_assertion"."assertion_id"
+Ref: "business_segment_fact"."concept_id" > "concept"."concept_id"
+Ref: "business_segment_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
+Ref: "company_profile".("actor_id", "actor_type") > "actor".("actor_id", "actor_type")
+Ref: "concept".("concept_id", "entity_type") > "entity".("entity_id", "entity_type")
+Ref: "concept"."parent_concept_id" > "concept"."concept_id"
+Ref: "disclosure_document"."issuer_actor_id" > "company_profile"."actor_id"
+Ref: "disclosure_document".("document_id", "document_type") > "document".("document_id", "document_type")
+Ref: "disclosure_fact"."document_id" > "disclosure_document"."document_id"
+Ref: "document_assertion"."document_id" > "document"."document_id"
+Ref: "document_entity"."document_id" > "document"."document_id"
+Ref: "document_entity"."entity_id" > "entity"."entity_id"
+Ref: "equity_profile".("instrument_id", "instrument_type") > "instrument".("instrument_id", "instrument_type")
+Ref: "equity_profile"."issuer_actor_id" > "company_profile"."actor_id"
+Ref: "etf_contribution_member"."constituent_instrument_id" > "instrument"."instrument_id"
+Ref: "etf_contribution_member"."contribution_observation_id" > "etf_contribution_observation"."contribution_observation_id"
+Ref: "etf_contribution_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
+Ref: "etf_holding_snapshot"."constituent_instrument_id" > "instrument"."instrument_id"
+Ref: "etf_holding_snapshot"."etf_instrument_id" > "etf_profile"."instrument_id"
+Ref: "etf_nav_daily"."etf_instrument_id" > "etf_profile"."instrument_id"
+Ref: "etf_profile".("instrument_id", "instrument_type") > "instrument".("instrument_id", "instrument_type")
+Ref: "etf_profile"."primary_theme_concept_id" > "concept"."concept_id"
+Ref: "etf_profile"."tracking_market_series_id" > "market_series"."market_series_id"
+Ref: "event_argument"."entity_id" > "entity"."entity_id"
+Ref: "event_argument"."source_event_id" > "source_event"."source_event_id"
+Ref: "event_evidence"."assertion_id" > "document_assertion"."assertion_id"
+Ref: "event_evidence"."source_event_id" > "source_event"."source_event_id"
+Ref: "event_price_observation".("source_event_id", "anchor_evidence_id") > "event_evidence".("source_event_id", "evidence_id")
+Ref: "event_price_observation"."benchmark_series_id" > "market_series"."market_series_id"
+Ref: "event_price_observation"."source_event_id" > "source_event"."source_event_id"
+Ref: "event_price_observation"."instrument_id" > "instrument"."instrument_id"
+Ref: "event_price_observation_peer"."peer_instrument_id" > "instrument"."instrument_id"
+Ref: "event_price_observation_peer"."event_price_observation_id" > "event_price_observation"."event_price_observation_id"
+Ref: "event_thread_link".("source_event_id", "source_class") > "source_event".("source_event_id", "source_class")
+Ref: "event_thread_link"."thread_id" > "event_thread"."thread_id"
+Ref: "explanation_result"."etf_instrument_id" > "etf_profile"."instrument_id"
+Ref: "explanation_result"."explanation_run_id" > "explanation_run"."explanation_run_id"
+Ref: "explanation_result"."primary_thread_id" > "event_thread"."thread_id"
+Ref: "explanation_route"."contribution_observation_id" > "etf_contribution_observation"."contribution_observation_id"
+Ref: "explanation_route_decomposition"."price_decomposition_id" > "price_decomposition"."price_decomposition_id"
+Ref: "explanation_route_decomposition"."explanation_route_id" > "explanation_route"."explanation_route_id"
+Ref: "explanation_route_target"."target_entity_id" > "entity"."entity_id"
+Ref: "explanation_route_target"."explanation_route_id" > "explanation_route"."explanation_route_id"
+Ref: "explanation_route_target"."source_instrument_id" > "instrument"."instrument_id"
+Ref: "explanation_run"."bundle_version" > "release_bundle"."bundle_version"
+Ref: "explanation_run"."explanation_route_id" > "explanation_route"."explanation_route_id"
+Ref: "explanation_run_disclosure_fact"."fact_id" > "disclosure_fact"."fact_id"
+Ref: "explanation_run_disclosure_fact"."explanation_run_id" > "explanation_run"."explanation_run_id"
+Ref: "explanation_run_event_evidence"."evidence_id" > "event_evidence"."evidence_id"
+Ref: "explanation_run_event_evidence"."explanation_run_id" > "explanation_run"."explanation_run_id"
+Ref: "explanation_run_event_price_observation"."event_price_observation_id" > "event_price_observation"."event_price_observation_id"
+Ref: "explanation_run_event_price_observation"."explanation_run_id" > "explanation_run"."explanation_run_id"
+Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "entity_type")
+Ref: "news_document"."representative_document_id" > "news_document"."document_id"
+Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
+Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
+Ref: "price_daily"."instrument_id" > "instrument"."instrument_id"
+Ref: "price_decomposition"."benchmark_series_id" > "market_series"."market_series_id"
+Ref: "price_decomposition"."price_observation_id" > "price_observation"."price_observation_id"
+Ref: "price_decomposition_peer"."price_decomposition_id" > "price_decomposition"."price_decomposition_id"
+Ref: "price_decomposition_peer"."peer_instrument_id" > "instrument"."instrument_id"
+Ref: "price_movement_trigger"."etf_instrument_id" > "etf_profile"."instrument_id"
+Ref: "price_observation"."instrument_id" > "instrument"."instrument_id"
+Ref: "price_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
+Ref: "supply_contract_fact"."contract_object_concept_id" > "concept"."concept_id"
+Ref: "supply_contract_fact"."counterparty_actor_id" > "actor"."actor_id"
+Ref: "supply_contract_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
+Ref: "tenant_credential"."tenant_id" > "tenant"."tenant_id"
+Ref: "tenant_release_history"."bundle_version" > "release_bundle"."bundle_version"
+Ref: "tenant_release_history"."tenant_id" > "tenant"."tenant_id"
+Ref: "tenant_sync_cursor"."tenant_id" > "tenant"."tenant_id"
+Ref: "thread_discovery_snapshot"."source_event_id" > "source_event"."source_event_id"
+Ref: "thread_discovery_snapshot"."thread_id" > "event_thread"."thread_id"

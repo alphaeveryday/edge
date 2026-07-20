@@ -192,3 +192,36 @@ jobs:
         run: >
           ./gradlew :libs:schema:flywayValidate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
+  # ── 물리 ERD 드리프트 체크 ────────────────────────────────────────────────
+  # Flyway 가 스키마 SSOT 이므로 물리 ERD(src/libs/schema/generated/*.dbml)는 파생물이다.
+  # 마이그레이션이 적용된 임시 pg18 클러스터에서 ERD 를 재생성해 커밋본과 대조하고, 어긋나면
+  # fail-loud 로 막는다. 배포/시크릿과 무관하며 checkout(읽기)만 쓴다 — 생성물 커밋은 개발자 몫
+  # (bot push 없음, permissions: contents: read 유지). migrate-and-validate 와 독립 병렬.
+  erd-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 로컬 베이스라인과 동일한 pg18 로 재생성해 버전 스큐를 없앤다(gen-erd.sql 은 외부 도구 의존 없음).
+      - name: Install PostgreSQL 18
+        run: |
+          set -euo pipefail
+          sudo sh -c "echo 'deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-18
+
+      - name: Regenerate physical ERD from migrations
+        run: bash src/libs/schema/scripts/generate-erd.sh
+
+      # 생성물이 커밋본과 다르면 ERD 가 마이그레이션과 어긋난 것 — 개발자가 재생성·커밋해야 한다.
+      - name: Fail on ERD drift
+        run: |
+          if ! git diff --quiet -- src/libs/schema/generated/; then
+            echo "::error::물리 ERD 가 마이그레이션과 어긋납니다. 로컬에서 'bash src/libs/schema/scripts/generate-erd.sh' 실행 후 src/libs/schema/generated/*.dbml 을 커밋하세요."
+            git --no-pager diff -- src/libs/schema/generated/
+            exit 1
+          fi
+          echo "OK — 물리 ERD 가 마이그레이션과 일치합니다."

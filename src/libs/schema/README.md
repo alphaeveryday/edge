@@ -115,3 +115,25 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - `baselineOnMigrate = false` — 그린필드 DB. 기존 DB adoption이 아니다.
 - `cleanDisabled = true` — `flyway clean` 금지(데이터 전체 삭제 방지).
 - `validateMigrationNaming = true` — 파일명 규칙 위반 시 실패.
+
+## 물리 ERD 자동 생성 (파생물)
+
+Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 그리지 않고 **마이그레이션에서 생성**한다.
+`scripts/generate-erd.sh` 가 임시 pg18 클러스터에 두 세트를 적용하고 `scripts/gen-erd.sql`
+(pg_catalog → dbdiagram.io DBML, 외부 도구 없음)로 추출한다. 산출물은 `generated/` 에 커밋된다:
+
+- `generated/physical-erd.dbml` — cloud 세트(`migrations/`)
+- `generated/physical-erd-onprem.dbml` — 온프렘 세트(`migrations-onprem/`)
+
+재생성(마이그레이션을 바꾼 뒤 — PostgreSQL 18 필요):
+
+```bash
+bash src/libs/schema/scripts/generate-erd.sh
+```
+
+- **드리프트는 CI 가 막는다.** `schema-validate` 의 `erd-drift` 잡이 PR 마다 ERD 를 재생성해
+  커밋본과 대조하고, 어긋나면 fail-loud 로 실패한다(생성물 커밋은 개발자 몫 — bot push 없음).
+- 결정성: 클러스터 `--no-locale` + `gen-erd.sql` 의 `ORDER BY COLLATE "C"` + LF 고정
+  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다.
+- `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
+  문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.
