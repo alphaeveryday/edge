@@ -271,7 +271,10 @@ ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한�
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
 만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
 한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md)) —
-각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다.
+각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다 —
+단 **raw 는 예외**다(ALPHA-460): 소스 하나가 실패해도 무관한 소스의 정제·분석은 계속 돈다.
+정제가 빈 입력을 정상 성공으로 처리하므로 있는 만큼 처리하면 되기 때문이다. 대신 실패 직후
+SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않되 조용하지도 않게).
 모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition·canonical·collection_log 를 같은 실행 단위로
 묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일
 태스크(analysis-engine 이미지)라 빌더 밖이다.
@@ -294,7 +297,9 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
   - ⚠️ **컷오버 잔여**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후)으로 바뀌어(ALPHA-414) 기준일
     불일치는 해소됐다. 남은 확인: ① trdDd 백필 수단 부재(실패한 날 스냅샷은 못 줍는다)
     ② 휴장일 trdDd 응답의 정체(7-17 휴장일에도 as_of=당일 라벨 응답 — 전 거래일 구성 추정).
-    raw 는 전량 성공 게이트라 실패 시 뒤 페이즈를 통째로 막는다 — **ENABLED 전에 닫아라.**
+    ALPHA-460 이후 이 실패가 뒤 페이즈를 막지는 않는다(알림 + 런 FAILED 마감, 그날 ETF
+    canonical 만 결손). 즉 ENABLED 의 하드 블로커는 아니지만 ①이 남아 있어 실패한 날의
+    KRX 스냅샷은 여전히 영구 결손이다.
 
 **정제(normalize, 5잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
