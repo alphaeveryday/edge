@@ -56,6 +56,12 @@ locals {
       command_expr = "States.Array('ingest-raw-nav', '--run-id', $.run_id)"
     },
     {
+      # ETF 프로필(ALPHA-462) — ETF 마스터의 표시명 출처. NAV·구성종목과 같은 kis 세트다.
+      state        = "CollectKisEtfProfile"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-etf-profile', '--run-id', $.run_id)"
+    },
+    {
       state        = "CollectFmpEtf"
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
@@ -112,6 +118,11 @@ locals {
       state        = "NormalizeEtf"
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-etf', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      state        = "NormalizeEtfProfile"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-etf-profile', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       state        = "NormalizeEtfNav"

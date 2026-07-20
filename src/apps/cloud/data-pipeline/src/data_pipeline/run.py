@@ -1,9 +1,9 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-etf-profile
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|tag-news|load-instruments|load-price-triggers|load-documents|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|load-price-triggers|load-documents|load-etf-nav
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
-from .lake import make_storage, raw_etf_nav_partition
+from .lake import make_storage, raw_etf_nav_partition, raw_etf_profile_partition
 from .sources import (
     BigKindsNewsSource,
     DartDisclosureSource,
@@ -41,6 +41,7 @@ from .sources import (
     FmpNewsSource,
     FmpPriceSource,
     KisDailyPriceSource,
+    KisEtfProfileSource,
     KisNavSource,
     KrxEtfSource,
     PoliteClient,
@@ -61,6 +62,7 @@ from .steps import (
     normalize_disclosure_segment,
     normalize_etf,
     normalize_etf_nav,
+    normalize_etf_profile,
     normalize_news,
     normalize_price,
     tag_news,
@@ -101,10 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav",
+                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-etf-profile",
                  "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "normalize-etf-nav", "tag-news", "load-instruments", "load-price-triggers",
+                 "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "load-price-triggers",
                  "load-documents", "load-etf-nav", "load-assertions", "assemble-events"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
@@ -155,6 +157,9 @@ def main(argv: list[str] | None = None) -> int:
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
         return normalize_etf_nav.run(storage, run_id, args.input_run_id)
+    # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
+    if args.step == "normalize-etf-profile":
+        return normalize_etf_profile.run(storage, run_id, args.input_run_id)
 
     # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
@@ -270,6 +275,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")
         return ingest_raw_etf.run(settings, storage, etf_source, run_id)
+
+    # ETF 프로필도 스냅샷(현재 상품정보)이라 날짜창을 쓰지 않는다. 유니버스는 NAV 와 같은
+    # krx_etf.source.etf_map 이다 — 마스터·NAV·구성종목이 다른 목록을 보면 안 된다.
+    if args.step == "ingest-raw-etf-profile":
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다 — sources.toml 확인")
+        if settings.krx_etf is None:
+            raise SystemExit("krx_etf.source 설정이 없다(프로필 유니버스 출처) — sources.toml 확인")
+        profile_source = KisEtfProfileSource(
+            settings.kis_nav.source,
+            settings.krx_etf.source.etf_map,
+            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+        )
+        return ingest_raw_etf.run(
+            settings, storage, profile_source, run_id,
+            dataset="etf_profile", partition=raw_etf_profile_partition,
+            job_name="ingest_raw_etf_profile",
+        )
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).
     # 소급 일수는 스텝별로 다르다(가격 EOD 는 주말·공휴일 공백 때문에 더 넉넉히).

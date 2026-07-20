@@ -49,6 +49,8 @@ def _holding(ticker: str, name: str, mic: str | None = "XKRX", **over) -> dict:
 class _FakeCursor:
     def __init__(self, log: list, existing: list[tuple]):
         self._log, self._existing, self._rows = log, existing, []
+        # ETF 마스터 생성 경로가 etf_profile 보장에서 rowcount 를 읽는다(ALPHA-462).
+        self.rowcount = 1
 
     def execute(self, sql, params=None):
         self._log.append((" ".join(sql.split()), params))
@@ -257,3 +259,98 @@ def test_partial_failure_does_not_claim_created_rows(tmp_path, monkeypatch):
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["created"] == 0
     assert log["created_rows"] == []
+
+
+# ── ETF 마스터 생성 (ALPHA-462) ──────────────────────────
+_PROFILE_COLUMNS = ("market", "etf_id", "isin", "display_name", "legal_name", "english_name",
+                    "product_class", "currency", "as_of_date", "source_vendor", "fetched_at")
+
+
+def _write_profile_canonical(storage, market: str, as_of: str, rows: list[dict]) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_etf_profile_partition
+
+    schema = pa.schema([(c, pa.string()) for c in _PROFILE_COLUMNS])
+    table = pa.Table.from_pylist([{c: r.get(c) for c in _PROFILE_COLUMNS} for r in rows],
+                                schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(f"{canonical_etf_profile_partition(market, as_of)}/part-00000.parquet",
+                      buf.getvalue())
+
+
+def _profile(etf_id: str, display_name: str, **over) -> dict:
+    row = {"market": "KR", "etf_id": etf_id, "isin": f"KR7{etf_id}00",
+           "display_name": display_name, "legal_name": f"{display_name} 증권상장지수투자신탁",
+           "english_name": display_name, "product_class": "ETF", "currency": "KRW",
+           "as_of_date": "2026-07-20", "source_vendor": "kis",
+           "fetched_at": "2026-07-20T06:00:00+00:00"}
+    row.update(over)
+    return row
+
+
+def _etf_inserts(conn):
+    return [p for sql, p in conn.log
+            if sql.upper().startswith("INSERT INTO INSTRUMENT") and "'ETF'" in sql.upper()]
+
+
+def test_ETF_마스터가_프로필_canonical_에서_만들어진다(tmp_path, monkeypatch):
+    # WHY: ETF instrument 가 없으면 NAV·구성종목 마트가 그 ETF 를 통째로 건너뛴다(실측: 31종 중
+    #      30종 미등록 → NAV 적재 1/31). 이 경로가 그 벽을 없앤다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+    _write_profile_canonical(storage, "KR", "2026-07-20",
+                             [_profile("069500", "KODEX 200"), _profile("091160", "KODEX 반도체")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    etfs = _etf_inserts(conn)
+    assert [(p[1], p[2]) for p in etfs] == [("XKRX", "069500"), ("XKRX", "091160")]
+    # 표시명은 약명 그대로 — entity.display_name 이 화면에 나가는 이름이다.
+    names = [p[1] for sql, p in conn.log if sql.upper().startswith("INSERT INTO ENTITY")]
+    assert "KODEX 200" in names and "KODEX 반도체" in names
+    # ETF 도 etf_profile FK 선행이 필요하다(NAV·구성종목·트리거가 전부 참조).
+    assert [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO ETF_PROFILE")]
+
+
+def test_이미_있는_ETF_는_ID_를_바꾸지_않는다(tmp_path, monkeypatch):
+    # WHY: 재실행이 instrument_id 를 바꾸면 그 ID 를 참조하는 NAV·구성종목·트리거 FK 가 전부
+    #      끊긴다(ADR-0027). 자연키 (market_code, ticker) 로 찾고 없을 때만 발번해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_profile_canonical(storage, "KR", "2026-07-20", [_profile("091160", "KODEX 반도체")])
+    conn = _FakeConn(existing=[("XKRX", "091160", "inst_seeded")])
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    assert _etf_inserts(conn) == []
+
+
+def test_ETF_는_발행회사_actor_를_만들지_않는다(tmp_path, monkeypatch):
+    # WHY: equity_profile.issuer_actor_id 는 주식 전용이고 ETF 는 etf_profile 이 자기 프로필을
+    #      갖는다. ETF 마다 가짜 회사를 만들면 actor 마스터가 오염된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_profile_canonical(storage, "KR", "2026-07-20", [_profile("069500", "KODEX 200")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    assert [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO ACTOR")] == []
+    assert [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO EQUITY_PROFILE")] == []
+
+
+def test_최신_기준일_스냅샷만_읽는다(tmp_path, monkeypatch):
+    # WHY: 개명이 일어나면 과거 기준일에는 옛 이름이 남아 있다. 전 기준일을 훑으면 옛 이름으로
+    #      마스터를 만들 수 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_profile_canonical(storage, "KR", "2026-07-19", [_profile("069500", "옛이름")])
+    _write_profile_canonical(storage, "KR", "2026-07-20", [_profile("069500", "KODEX 200")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    names = [p[1] for sql, p in conn.log if sql.upper().startswith("INSERT INTO ENTITY")]
+    assert names == ["KODEX 200"]

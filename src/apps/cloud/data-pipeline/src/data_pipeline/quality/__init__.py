@@ -8,6 +8,7 @@ from .disclosure import (
 )
 from .etf import BLOCKING_REASONS_ETF, validate_etf_holding
 from .etf_nav import BLOCKING_REASONS_ETF_NAV, validate_etf_nav
+from .etf_profile import BLOCKING_REASONS_ETF_PROFILE, validate_etf_profile
 from .news import BLOCKING_REASONS, validate_news_meta
 from .price import validate_ohlcv
 
@@ -23,4 +24,6 @@ __all__ = [
     "BLOCKING_REASONS_ETF",
     "validate_etf_nav",
     "BLOCKING_REASONS_ETF_NAV",
+    "validate_etf_profile",
+    "BLOCKING_REASONS_ETF_PROFILE",
 ]
