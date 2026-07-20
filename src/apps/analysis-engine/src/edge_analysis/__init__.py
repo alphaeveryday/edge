@@ -1,10 +1,14 @@
-"""EDGE analysis-engine: KODEX-semiconductor daily news normalization + explanation.
+"""EDGE analysis-engine: KODEX-semiconductor daily ETF explanation.
 
-Reads the trade day's news titles from the S3 canonical lake, normalizes the
-un-normalized ones into the Cloud Event Store (document -> assertion ->
-source_event), threads KODEX-constituent events, and produces the daily ETF
-explanation. Runs as a single ECS Fargate task invoked by a Step Functions
-state machine.
+Consumer of the unified pipeline's feature outputs (ADR-0028, ALPHA-411/412):
+it reads the pipeline-written ``price_movement_trigger`` (L0 gate) and the
+assembled ``source_event`` lineage, decomposes the ETF move from the S3 lake,
+and produces the daily explanation. Runs as a single ECS Fargate task, the
+``analyze`` phase of the Step Functions state machine.
+
+Layering:
+    domain/     pure logic + models (no I/O)
+    adapters/   I/O boundaries (S3 lake, Event Store, DeepSeek, run archive)
+    pipeline    orchestration (dependency-injected)
+    cli         composition root
 """
-
-__all__ = ["daily_pipeline", "ontology"]
