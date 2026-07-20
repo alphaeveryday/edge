@@ -35,9 +35,17 @@ resource "aws_cloudwatch_log_metric_filter" "raw_ingest_skipped" {
   log_group_name = aws_cloudwatch_log_group.this.name
   pattern        = "?\"수집 건너뜀\" ?\"status=skipped\""
 
+  # namespace 를 var.name 으로 가른다 — 메트릭 정체성은 namespace+name+dimensions 라, 고정
+  # namespace 면 같은 계정·리전의 두 모듈 인스턴스(dev·prod)가 **같은 메트릭에 함께 쓴다**.
+  # dev 의 skip 이 prod 알람을 울리고 그 반대도 된다. 이 모듈이 다른 리소스를 전부
+  # "${var.name}-" 로 가르는 것과 같은 이유다(Codex #147 P2).
+  #
+  # dimensions 로 가르지 않는 이유: metric filter 의 dimension 값은 로그 이벤트에서
+  # `$.field` 로 **추출**하는 것인데 우리 로그는 평문이라(run.py 의 basicConfig) 추출이
+  # 안 된다. 붙이면 필터가 조용히 아무것도 안 낸다.
   metric_transformation {
     name      = "RawIngestSkipped"
-    namespace = "edge/data-pipeline"
+    namespace = "edge/${var.name}"
     value     = "1"
   }
 }
@@ -45,7 +53,7 @@ resource "aws_cloudwatch_log_metric_filter" "raw_ingest_skipped" {
 resource "aws_cloudwatch_metric_alarm" "raw_ingest_skipped" {
   alarm_name        = "${var.name}-raw-ingest-skipped"
   alarm_description = "수집 소스가 건너뛰어졌다(비활성·크리덴셜 결측 또는 매핑 타깃 0건) — 런은 exit 0 으로 성공하므로 이 알람 말고는 드러나는 곳이 없다. collection_log 에서 어느 벤더인지 확인할 것."
-  namespace         = "edge/data-pipeline"
+  namespace         = "edge/${var.name}"
   metric_name       = "RawIngestSkipped"
 
   statistic           = "Sum"
