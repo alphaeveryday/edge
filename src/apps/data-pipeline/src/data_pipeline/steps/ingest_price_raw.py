@@ -92,8 +92,10 @@ def run(
         # 크리덴셜 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 벤더 무관이라 메시지도 소스가 규정한 vendor 로 남긴다(fmp=api_key, kis=앱키/시크릿).
         # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(ALPHA-451) — 예외를
-        # 밖으로 던지지 않는다는 뜻의 best-effort 이지 exit 0 이 아니다(아래 terminal 경로와
-        # 같은 계약). 기록을 못 남긴 채 성공으로 끝나면 감사 레코드 유실을 아무도 모른다.
+        # 밖으로 던지지 않는다는 뜻의 best-effort 이지 exit 0 이 아니다. 기록을 못 남긴 채
+        # 성공으로 끝나면 감사 레코드 유실을 아무도 모른다. 비0이 raw 게이트(And)를 막는
+        # 대가는 **아래 terminal 경로가 이미 같은 값으로 치르고 있다** — 여기만 exit 0 이면
+        # 같은 장애가 어느 줄에서 났느냐로 결과가 갈린다(뒤집으려면 저장소 15곳을 함께).
         logger.warning("%s 가격 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
