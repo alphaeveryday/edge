@@ -18,7 +18,7 @@
 | [contracts/sync-protocol.md](contracts/sync-protocol.md) | Sync 프로토콜 계약 (cursor·fan-out·멱등성·목표 계약) — 양단 모두 영서 소유 ([adr/0026](adr/0026-ownership-boundary-db.md)) | Sync 채널 양단을 만질 때 |
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
-| [contracts/serving-api.md](contracts/serving-api.md) | MTS/HTS 연동 방식 — Serving API | 증권사 연동 접점을 만질 때 |
+| [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |
@@ -35,7 +35,7 @@
 ## 팀 오너십
 
 - **김진기**: Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** (DB에 쓰는 것까지 — [adr/0026](adr/0026-ownership-boundary-db.md)).
-- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent, Compliance Engine, Tenant Console (API), Serving API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
+- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent, Compliance Engine, Tenant Console (API), Publication API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
 - **정준영**: AI/ML — 설명 후보 생성, 신뢰도/반대 요인 산출.
 - 진기-영서 인터페이스는 **Cloud Event Store DB 스키마** 하나로 고정한다(db-as-contract). 스키마 변경은 반드시 양자 합의 ([contracts/event-bundle-schema.md](contracts/event-bundle-schema.md), [adr/0026](adr/0026-ownership-boundary-db.md)).
 
@@ -66,7 +66,7 @@
 | 11 Super Admin Console IA | console-ia/super-admin-console.md |
 | 12 Tenant Console IA | console-ia/tenant-console.md |
 | 13 데이터 저장 위치 기준 | domain/data-residency.md |
-| 14 MTS/HTS 연동 방식 | contracts/serving-api.md |
+| 14 MTS/HTS 연동 방식 | contracts/publication-api.md |
 | 15 ERD 방향 및 상태값 | domain/state-machine.md |
 | 16 MVP 제외 범위 | scope.md |
 | 17.1~17.3 구현 결정사항 | implementation.md |

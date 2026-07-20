@@ -8,7 +8,7 @@
   const ticker = params.get('ticker') || '069500';
   const tradeDate = params.get('trade_date') || null;
 
-  // 증권사 자체 종목 마스터(목업) — Serving API와 무관한 증권사 데이터
+  // 증권사 자체 종목 마스터(목업) — Publication API와 무관한 증권사 데이터
   const ETF_NAMES = {
     '069500': 'KODEX 200',
     '091160': 'KODEX 반도체',

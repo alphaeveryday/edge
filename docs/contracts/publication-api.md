@@ -1,14 +1,14 @@
-# MTS/HTS 연동 방식 — Serving API
+# MTS/HTS 연동 방식 — Publication API
 
-> 이 문서는 증권사 백엔드 개발자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수). 문법 명세(OpenAPI)는 serving-api 모듈 생성 시 코드 옆에 두고 이 문서가 상위 시맨틱이다.
+> 이 문서는 증권사 백엔드 개발자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수). 문법 명세(OpenAPI)는 publication-api 모듈 생성 시 코드 옆에 두고 이 문서가 상위 시맨틱이다.
 
 ## 원칙 (확정)
 
 - MTS/HTS는 증권사 소유 UI이며 벤더 widget을 임베드하지 않는다.
-- 경로: **MTS/HTS → 증권사 Backend/API Gateway → On-Premise Serving API**. MTS가 Serving API를 직접 호출하지 않는다.
-- Serving API는 **Published(AUTO_PUBLISHED, APPROVED) 상태만 반환**. 검수 대기/차단/반려/무효화/노출중단 상태는 절대 반환하지 않는다 — 응답에 존재할 수 없는 것이 제품 보장이다.
-- Serving API 호출 시 증권사 백엔드가 **고객 식별 해시**를 전달 → 조회 시점에 Exposure Log 자동 기록(조회=노출 간주, [../domain/exposure-log.md](../domain/exposure-log.md)). 원본 고객 ID/계좌번호는 절대 받지 않는다.
-- Serving API 자체의 인증은 증권사 내부망 정책(내부 API GW)에 위임한다. 벤더 API Key 없음.
+- 경로: **MTS/HTS → 증권사 Backend/API Gateway → On-Premise Publication API**. MTS가 Publication API를 직접 호출하지 않는다.
+- Publication API는 **Published(AUTO_PUBLISHED, APPROVED) 상태만 반환**. 검수 대기/차단/반려/무효화/노출중단 상태는 절대 반환하지 않는다 — 응답에 존재할 수 없는 것이 제품 보장이다.
+- Publication API 호출 시 증권사 백엔드가 **고객 식별 해시**를 전달 → 조회 시점에 Exposure Log 자동 기록(조회=노출 간주, [../domain/exposure-log.md](../domain/exposure-log.md)). 원본 고객 ID/계좌번호는 절대 받지 않는다.
+- Publication API 자체의 인증은 증권사 내부망 정책(내부 API GW)에 위임한다. 벤더 API Key 없음.
 
 ## 엔드포인트 스펙 (초안 — ALPHA-366)
 
@@ -59,7 +59,7 @@ X-Channel: MTS | HTS | INTERNAL
 | 404 | 알 수 없는 ETF 종목코드 |
 | 5xx | 서버 오류 — 증권사 백엔드는 폴백 문구 처리 권장(설명 미제공이 고객 화면 오류로 보이지 않게) |
 
-- 에러 body 형상은 `[확정 필요 — 봉투 정책, serving-api 모듈 스캐폴드 시]`.
+- 에러 body 형상은 `[확정 필요 — 봉투 정책, publication-api 모듈 스캐폴드 시]`.
 
 ### 미확정 목록
 

@@ -6,7 +6,7 @@
 
 > 결정 배경: [ADR-0016](adr/0016-single-repo-two-artifacts.md), [ADR-0011](adr/0011-rls-to-physical-isolation.md)
 
-- **단일 레포 유지**, 배포 아티팩트 2종으로 분리: `edge-cloud` (super-admin, tenant-sync-api, pipeline 연동) / `edge-onprem` (sync-agent, compliance-engine, tenant-console, serving-api).
+- **단일 레포 유지**, 배포 아티팩트 2종으로 분리: `edge-cloud` (super-admin, tenant-sync-api, pipeline 연동) / `edge-onprem` (sync-agent, compliance-engine, tenant-console, publication-api).
 - 기존 Gradle 멀티모듈에서 **widget 모듈 삭제**, tenant-console은 onprem 아티팩트로 이동.
 - **shared-tenancy(RLS) 모듈 삭제.** On-Prem이 테넌트별 물리 격리이므로 RLS의 존재 이유가 소멸. "RLS 설계 → 물리 격리 전환" 의사결정 자체는 기술 스토리로 문서화해 보존 ([ADR-0011](adr/0011-rls-to-physical-isolation.md)).
 - Flyway 중앙화(shared-migration)는 유지하되 cloud/onprem 마이그레이션 세트를 분리.
@@ -15,7 +15,7 @@
 
 > 결정 배경: [ADR-0017](adr/0017-demo-topology-compose.md)
 
-- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Serving API, Compliance Engine, Tenant Console, Sync Agent, PostgreSQL, Redis).
+- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Publication API, Compliance Engine, Tenant Console, Sync Agent, PostgreSQL, Redis).
 - 딜리버리 스토리: "증권사 서버에 Compose 파일 하나로 설치된다."
 - On-Prem 스택: **PostgreSQL + Redis 유지**.
 - Cloud 측은 기존 AWS 구조(ECS, Step Functions, RDS, 3-layer subnet) 유지하되 serving cluster 구성을 신규 컴포넌트에 맞게 개정.

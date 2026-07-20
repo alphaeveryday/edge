@@ -3,7 +3,7 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(gateway·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. embed widget 모듈(widget-api·widget-ui)은 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로 삭제됐고, 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·compliance-engine·serving-api)는 walking skeleton 단계에서 추가됩니다.
+> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(gateway·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. embed widget 모듈(widget-api·widget-ui)은 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로 삭제됐고, 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·compliance-engine·publication-api)는 walking skeleton 단계에서 추가됩니다.
 
 ## 한눈에 보기
 
@@ -20,7 +20,7 @@ src/
 │   └── onprem/               #   edge-onprem (증권사 관리 환경)
 │       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
-│       └── serving-api/        # JVM  · MTS 조회 표면 (Published만)
+│       └── publication-api/        # JVM  · MTS 조회 표면 (Published만)
 ├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
@@ -39,11 +39,11 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 5개 앱(gateway·tenant-console-api·tenant-sync-api·serving-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 5개 앱(gateway·tenant-console-api·tenant-sync-api·publication-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · tenant-sync-api · serving-api · super-admin-api |
+| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · tenant-sync-api · publication-api · super-admin-api |
 | Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
@@ -56,7 +56,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `gateway` | JVM | **edge-cloud** | Cloud 엣지. console·admin 트래픽에 라우트별 필터 적용 (목표: Super Admin·Tenant Sync API용만 — [ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md)) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
-| `serving-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/serving-api.md](docs/contracts/serving-api.md)). 설명 저장소는 인메모리 시드 |
+| `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 설명 저장소는 인메모리 시드 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
 | `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
@@ -67,7 +67,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 - **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘 재배치 시 gateway 경유 제거)
 - **운영 경로**: `super-admin-ui` → `gateway`(admin 라우트, VPN/IP 제한) → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
 
-`gateway`가 트래픽을 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Serving API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
+`gateway`가 트래픽을 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Publication API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 
@@ -98,7 +98,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
 - `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
-- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent → Compliance → Serving API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
+- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent → Compliance → Publication API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
 
 ## Git 컨벤션
 

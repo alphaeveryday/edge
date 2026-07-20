@@ -34,7 +34,7 @@
 | 항목 | 기존 (폐기) | 신규 (현행) |
 | --- | --- | --- |
 | 배치 | 모든 기능 Vendor Cloud | Cloud = 비개인화 공통 분석만 / On-Prem = 고객 접점·컴플라이언스 전부 |
-| 고객 화면 | 벤더 embed widget (widget-api) | 증권사 MTS/HTS 자체 UI → On-Prem Serving API |
+| 고객 화면 | 벤더 embed widget (widget-api) | 증권사 MTS/HTS 자체 UI → On-Prem Publication API |
 | Tenant Console | 클라우드 tenant-console-api | 증권사 On-Premise 배포 |
 | 연동 방향 | 클라우드 → 증권사 (widget 서빙) | On-Prem Sync Agent → Cloud **Pull only** (outbound HTTPS/mTLS) |
 | Gateway | 범용 클라우드 gateway | Cloud에는 Super Admin·Tenant Sync API용 gateway만 |
@@ -61,8 +61,8 @@ flowchart TB
         CES --> TSA["Tenant Sync API"]
     end
     subgraph onprem["증권사 On-Premise"]
-        MTS["MTS / HTS / Internal"] -->|증권사 내부 Backend/API GW 경유| SVA["Serving API"]
-        PS["Published Store"] --> SC["Serving Cache"] --> SVA
+        MTS["MTS / HTS / Internal"] -->|증권사 내부 Backend/API GW 경유| SVA["Publication API"]
+        PS["Published Store"] --> SC["Publication Cache"] --> SVA
         SA["Sync Agent"] --> RES["Raw Event Store"]
         RES --> CE["Compliance Engine"]
         CE -->|승인/자동노출| PS
@@ -74,7 +74,7 @@ flowchart TB
 
 - 데이터는 항상 **Cloud → On-Prem 단방향**으로 흐르고, 연결은 항상 **On-Prem → Cloud outbound**로만 열린다.
 - Cloud는 "어느 증권사가 무엇을 노출했는지" 알지 못한다. Cloud가 아는 테넌트 정보는 동기화 상태(마지막 sync 시각, 성공/실패, 전달 이벤트 수)까지다.
-- **네트워크 배치 (확정, 2026-07-13)**: Sync Agent는 증권사 내부 업무망이 아닌 **DMZ(외부연계망) 구간**에 배치한다. 망분리 환경에서 내부 업무망은 외부 인터넷으로 직접 outbound를 열 수 없으므로, 외부 통신 경로는 DMZ에 한정한다. ① 방화벽 outbound 허용 대상은 벤더 Tenant Sync API의 **고정 FQDN:443 (mTLS) 단일 목적지 화이트리스트**로 제한 ② 증권사 표준 forward proxy 경유를 지원 ③ Sync Agent → 내부망 On-Prem DB 접근은 증권사 내부 방화벽 정책에 따라 전용 포트·계정으로 최소화 — 단, DMZ→내부망 직접 DB 커넥션 자체를 금지하고 망연계 솔루션(망간자료전송 시스템) 경유를 요구하는 증권사를 위해 **망연계 솔루션 경유 배치도 지원**한다. 이 경우 Sync Agent는 Pull·무결성 검증까지만 DMZ에서 수행하고, 내부망 저장은 별도 수신 모듈이 담당하는 2단 구성으로 분리한다. 나머지 온프렘 컴포넌트(Compliance Engine, Tenant Console, Serving API, DB)는 전부 내부 업무망에 위치하며 외부 통신이 없다. "외부와 닿는 것은 DMZ의 Sync Agent 하나, 방향은 outbound 하나, 목적지는 하나"가 준법감시인 대상 설명 문구다.
+- **네트워크 배치 (확정, 2026-07-13)**: Sync Agent는 증권사 내부 업무망이 아닌 **DMZ(외부연계망) 구간**에 배치한다. 망분리 환경에서 내부 업무망은 외부 인터넷으로 직접 outbound를 열 수 없으므로, 외부 통신 경로는 DMZ에 한정한다. ① 방화벽 outbound 허용 대상은 벤더 Tenant Sync API의 **고정 FQDN:443 (mTLS) 단일 목적지 화이트리스트**로 제한 ② 증권사 표준 forward proxy 경유를 지원 ③ Sync Agent → 내부망 On-Prem DB 접근은 증권사 내부 방화벽 정책에 따라 전용 포트·계정으로 최소화 — 단, DMZ→내부망 직접 DB 커넥션 자체를 금지하고 망연계 솔루션(망간자료전송 시스템) 경유를 요구하는 증권사를 위해 **망연계 솔루션 경유 배치도 지원**한다. 이 경우 Sync Agent는 Pull·무결성 검증까지만 DMZ에서 수행하고, 내부망 저장은 별도 수신 모듈이 담당하는 2단 구성으로 분리한다. 나머지 온프렘 컴포넌트(Compliance Engine, Tenant Console, Publication API, DB)는 전부 내부 업무망에 위치하며 외부 통신이 없다. "외부와 닿는 것은 DMZ의 Sync Agent 하나, 방향은 outbound 하나, 목적지는 하나"가 준법감시인 대상 설명 문구다.
 
 ## 4. Cloud / On-Premise 책임 분리
 
@@ -101,8 +101,8 @@ flowchart TB
 | Review Queue | **물리 DB 아님.** analysis_items 중 status=REVIEW_REQUIRED의 논리적 작업함 |
 | Tenant Console + Tenant Console API | 검수, 정책 관리, 감사 로그, 설정 (증권사 내부 사용자 전용) |
 | Published Store | 최종 노출 확정 문구 저장 |
-| Serving Cache | Published 데이터 조회 캐시 (Redis) |
-| Serving API | MTS/HTS/Internal에 Published 상태만 반환 |
+| Publication Cache | Published 데이터 조회 캐시 (Redis) |
+| Publication API | MTS/HTS/Internal에 Published 상태만 반환 |
 | Exposure Log | 고객 노출 이력 (민원/감사 재현용) |
 | Audit Log | 콘텐츠 상태 변경/검수/정책 변경 이력 |
 | Tenant On-Prem DB | 위 전부의 저장소 (PostgreSQL) |
@@ -113,9 +113,9 @@ flowchart TB
 | --- | --- | --- |
 | super-admin-api | **유지** | Vendor Cloud. 테넌트 생성, 파이프라인 조회, 정정/무효화, Admin Activity Log |
 | tenant-console-api | **이동** | 증권사 On-Premise. 설명 조회, 검수, 컴플라이언스 정책, 감사 로그, 설정 |
-| gateway | **축소** | Cloud에는 Super Admin·Tenant Sync API용 gateway만. On-Prem은 Serving API 또는 증권사 내부 API GW |
+| gateway | **축소** | Cloud에는 Super Admin·Tenant Sync API용 gateway만. On-Prem은 Publication API 또는 증권사 내부 API GW |
 | widget-api | **제거** | MVP에 embed widget 없음. 고객 화면은 증권사 MTS/HTS가 직접 구성 |
 | Tenant Sync API | **신규** | Vendor Cloud. cursor 기반 delta sync, 신규/정정/무효화 이벤트 전달, mTLS |
 | Sync Agent | **신규** | On-Premise. outbound Pull, 무결성 검증 후 저장 |
 | Compliance Engine | **신규** | On-Premise. 금칙어/금지 표현/자동노출·검수·차단 기준 적용 |
-| Serving API | **신규** | On-Premise. Published 데이터만 조회 제공 |
+| Publication API | **신규** | On-Premise. Published 데이터만 조회 제공 |

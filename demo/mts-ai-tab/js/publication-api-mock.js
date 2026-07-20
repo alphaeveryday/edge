@@ -1,4 +1,4 @@
-// On-Premise Serving API 모킹 — 응답 형상의 근거는 docs/contracts/serving-api.md (ALPHA-366 초안).
+// On-Premise Publication API 모킹 — 응답 형상의 근거는 docs/contracts/publication-api.md (ALPHA-366 초안).
 // 데모에는 실서버가 없으므로 GET /api/v1/explanations/{etf_ticker} 의 상태·본문을 이 모듈이 재현한다.
 // 계약 보장: Published(AUTO_PUBLISHED, APPROVED) 상태의 설명만 응답에 존재한다.
 (function () {
@@ -93,7 +93,7 @@
         }
         // 계약: 이 200 응답 시점에 Exposure Log가 자동 기록된다(조회=노출).
         console.log(
-          '[serving-api-mock] Exposure Log 기록 — ticker=%s, hash=%s, channel=%s',
+          '[publication-api-mock] Exposure Log 기록 — ticker=%s, hash=%s, channel=%s',
           etfTicker,
           headers['X-Customer-Hash'],
           headers['X-Channel']
@@ -103,5 +103,5 @@
     });
   }
 
-  window.ServingApiMock = { getExplanation: getExplanation };
+  window.PublicationApiMock = { getExplanation: getExplanation };
 })();

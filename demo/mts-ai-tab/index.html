@@ -24,7 +24,7 @@
 <div class="phone">
 <div style="display:flex;flex-direction:column;height:100%;background:var(--gray-50);font-family:var(--font-sans);color:var(--fg-1)">
 
-  <!-- 종목 헤더 — 시세는 증권사 자체 데이터(목업 고정값), AI 분석만 Serving API 경유 -->
+  <!-- 종목 헤더 — 시세는 증권사 자체 데이터(목업 고정값), AI 분석만 Publication API 경유 -->
   <div style="background:#fff;border-bottom:1px solid var(--border);padding:10px 16px 0;flex:none">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <div style="display:flex;align-items:center;gap:8px">
@@ -82,7 +82,7 @@
       </div>
       <div style="padding:0 2px">
         <p style="margin:0;font-size:10.5px;line-height:1.6;color:var(--fg-4)">※ 본 정보는 뉴스·공시 데이터를 기반으로 자동 생성된 참고 자료로, 특정 종목의 매수·매도 추천이 아닙니다. 투자 판단의 최종 책임은 투자자 본인에게 있으며, 원금 손실이 발생할 수 있습니다.</p>
-        <!-- 계약(serving-api.md): 응답의 disclaimer는 화면에 반드시 함께 노출한다 -->
+        <!-- 계약(publication-api.md): 응답의 disclaimer는 화면에 반드시 함께 노출한다 -->
         <p id="serving-disclaimer" style="display:none;margin:4px 0 0;font-size:10.5px;line-height:1.6;color:var(--fg-4)"></p>
         <p class="num" style="margin:4px 0 0;font-size:10.5px;color:var(--fg-4)">자료: 한국거래소(KRX)·KIND · 문의 1588-0000</p>
       </div>
@@ -98,7 +98,7 @@
 </div>
 </div>
 
-<script src="js/serving-api-mock.js"></script>
+<script src="js/publication-api-mock.js"></script>
 <script src="js/broker-api.js"></script>
 <script src="js/app.js"></script>
 </body>
