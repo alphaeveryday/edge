@@ -45,17 +45,21 @@ git status --short
 레포 루트에서, 티어가 정한 패스 수만큼 실행한다. 패스가 2 이상이면 **병렬로** 띄우고 출력 파일을 분리한다.
 
 ```bash
-codex exec \
+OUT=$(mktemp -t edge-review)          # 패스마다 새 파일 — 재사용 금지
+codex exec -s read-only \
   --output-schema .claude/skills/edge-review/findings.schema.json \
-  -o /tmp/edge-review-1.json \
+  -o "$OUT" \
   - <<'PROMPT'
 <아래 지시문>
 PROMPT
+echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
 ```
 
 - `-o` 파일에 스키마대로 된 JSON 이 떨어진다. stdout 은 진행 로그이니 파싱하지 마라.
-- Codex 는 기본 **read-only 샌드박스**로 돈다 — 레포를 읽고 `git`·`grep` 은 되지만 파일을 쓰거나 테스트를 돌리지 못한다. 그대로 둔다(리뷰는 읽기만 하면 된다). 빌드·테스트는 아래에서 이 스킬이 직접 돌린다.
-- `-o` 파일이 없거나 JSON 파싱에 실패하면 실패를 그대로 보고하라 — 빈 결과를 "이슈 없음"으로 위장하지 마라(Rule 12).
+- **출력 파일은 패스마다 `mktemp` 로 새로 만든다.** 고정 경로(`/tmp/edge-review-1.json`)를 재사용하면 codex 가 비정상 종료했을 때 이전 실행이 남긴 유효한 `{"findings":[]}` 가 그대로 읽혀, 실패한 리뷰가 "이슈 없음"으로 통과한다(Rule 12).
+- **종료 코드를 반드시 확인한다.** codex 는 최종 메시지를 낸 경우에만 `-o` 파일을 쓰므로, 인증·네트워크·모델 오류로 죽으면 파일이 아예 없거나 낡은 것이다. exit≠0 이면 그 패스는 실패로 보고하고, 남은 패스 결과만으로 "리뷰 완료"라 하지 마라.
+- **파싱 후 스키마 준수를 직접 검증한다.** `--output-schema` 는 모델에 스키마를 전달할 뿐 CLI 가 사후 검증을 보장하지 않는다. 각 finding 에 `file`·`line`·`severity`·`category`·`summary`·`failure_scenario`·`verdict` 가 다 있는지 확인하고, 빠진 게 있으면 그 finding 을 조용히 버리지 말고 결손을 명시해 보고하라.
+- `-s read-only` 를 **명시한다.** 생략하면 샌드박스 정책이 사용자·프로젝트 설정에서 해석돼 `workspace-write` 가 될 수 있고, 그러면 리뷰 도중 모델이 작업트리를 고쳐 이후 빌드·`--fix` 범위가 오염된다. 리뷰는 읽기만 하면 된다. 빌드·테스트는 아래에서 이 스킬이 직접 돌린다.
 - `codex exec review` 서브커맨드는 쓰지 않는다: edge 고유 계약을 모르고, 출력이 산문 요약이라 라인 앵커가 없다.
 
 ### 지시문 (프롬프트로 조립)
@@ -92,7 +96,14 @@ PROMPT
 
 ## Phase 2 — 취합
 
-- 패스가 여럿이면 **dedup**: 같은 결함·같은 위치·같은 사유 → 하나만. verdict 가 갈리면 높은 쪽(CONFIRMED)을 취하고, 한 패스만 낸 finding 은 그대로 살린다(다수결로 죽이지 마라 — 미스의 주범).
+- 패스가 여럿이면 **dedup**: 같은 결함·같은 위치·같은 사유 → 하나만. verdict 가 갈리면 높은 쪽(CONFIRMED)을 취한다.
+- **한 패스만 낸 finding 은 다수결로 죽이지 마라** — 다른 패스가 못 본 것일 뿐 반증이 아니다(미스의 주범). 대신 `max`·`ultra` 에서는 그런 finding 만 모아 **검증 패스를 한 번 더** 돌린다. 파인더와 검증이 같은 실행 안에 있어 한 패스의 오독이 아무 반증도 못 받는 구조라, 패스를 늘리는 것만으로는 precision 이 오르지 않기 때문이다:
+  ```
+  아래 finding 들은 한 번의 리뷰에서만 나왔다. 각각을 반증하라 —
+  실제 코드 줄·불변식·기존 가드를 인용해 반박할 수 있으면 REFUTED,
+  확증되면 CONFIRMED, 반증도 확증도 안 되면 PLAUSIBLE.
+  ```
+  REFUTED 만 버리고 나머지는 살린다. `low`~`high` 는 패스가 하나뿐이라 이 단계가 없다 — 그 티어의 결과는 단독 검증분임을 출력에 밝힌다.
 - Codex 가 낸 `file`·`line` 이 실제 변경 범위에 있는지 확인하고, 어긋나면 앵커를 바로잡거나 낮은 신뢰로 강등하라.
 
 ## 빌드/테스트 확인 (이 스킬이 직접 — Codex 는 못 한다)
@@ -104,7 +115,7 @@ Codex 는 read-only 샌드박스라 테스트를 돌리지 못한다. 변경 모
 
 ## 출력
 
-finding 을 **가장 심각한 순**으로 낸다. `ReportFindings` 툴이 있으면 그걸로 보고하고 텍스트로 중복 출력하지 않는다(없으면 랭크된 목록). 정확성 버그가 cleanup·규칙 finding 보다 항상 우선하고, 티어 상한을 넘으면 상위만 남긴다. 아무것도 안 남으면 "정합 — 실질 이슈 없음"을 명시한다(점검 자체가 산출물). **리뷰를 Codex 가 수행했음과 패스 수를 한 줄로 밝힌다.**
+finding 을 **가장 심각한 순**으로 낸다. `ReportFindings` 툴이 있으면 그걸로 보고하고 텍스트로 중복 출력하지 않는다(없으면 랭크된 목록). 정확성 버그가 cleanup·규칙 finding 보다 항상 우선하고, 티어 상한을 넘으면 상위만 남긴다. 아무것도 안 남으면 "정합 — 실질 이슈 없음"을 명시한다(점검 자체가 산출물). **무엇이 리뷰했는지 한 줄로 밝힌다** — Codex 를 돌렸으면 패스 수와 실패한 패스가 있었는지, 트리비얼 변경이라 Codex 없이 즉답했으면 그 사실을. 돌리지 않은 리뷰를 돌린 것처럼 쓰지 마라(Rule 12).
 
 **후처리 플래그**
 - `--comment` — finding 을 PR **라인 앵커드 인라인 코멘트**로 게시. `gh pr comment`·`gh pr review` 는 path/line 옵션이 없어 본문 코멘트만 되므로 쓰지 않고, review comments API 를 쓴다: `gh api repos/{owner}/{repo}/pulls/$PR/comments -f path=… -F line=… -f side=RIGHT -f commit_id=… -f body=…` (`gh api` 는 `{owner}`·`{repo}`·`{branch}` 만 치환하므로 **PR 번호는 셸 변수 `$PR` 로 직접** 넣는다). PR 대상일 때만.
