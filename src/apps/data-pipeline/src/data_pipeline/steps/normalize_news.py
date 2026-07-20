@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -91,21 +92,32 @@ def _mentions(record: dict, market: object) -> list[dict]:
     return []
 
 
-def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict]]:
+def _match_text(text: str) -> str:
+    """부분문자열 매칭용 정규화 — NFKC 후 공백 축약. 인덱스의 종목명과 기사 텍스트에 **양쪽 다**
+    적용해야 한다(한쪽만 하면 매칭이 조용히 죽는다).
+
+    NFKC 는 저장소 관례다(`normalize_disclosure`·`parse_dart_*` — 실측 텍스트에 부분일치를 쓰는
+    코드는 전부 먼저 정규화한다). 여기서 특히 필요한 이유(ALPHA-448): 같은 이름의 NFC/NFD 표기가
+    서로 다른 키로 남으면 동명이 판정이 새어나가 **둘 다 '단일 ticker'로 인덱스에 들어간다** —
+    막으려던 오매핑이 유니코드 형태 차이로 되살아난다."""
+    return " ".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict], list[str]]:
     """canonical ETF holdings **최신 스냅샷(KR)** 에서 `종목명 → {market,ticker}` 인덱스를 만든다
     (ALPHA-416). 이름 출처를 holdings 로 두는 이유 — normalize 는 레이크만 읽는 설계 전제라
     DB(entity 마스터)를 붙일 수 없고, holdings 유니버스가 곧 분석 유니버스(load-instruments
     시딩 원천)라 탐지 범위가 다운스트림 in_universe 필터와 정합한다.
 
-    스냅샷이 없으면 (None, {}) — 탐지는 no-op 이 되고 구 raw 의 our_ticker 경로만 남는다
-    (신규 레이크에서 정상). 반환: (as_of_date, index)."""
+    스냅샷이 없으면 (None, {}, []) — 탐지는 no-op 이 되고 구 raw 의 our_ticker 경로만 남는다
+    (신규 레이크에서 정상). 반환: (as_of_date, index, 동명이로 제외된 이름들)."""
     marker = canonical_etf_holdings_partition(_DETECT_MARKET, "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     dates.discard("")
     if not dates:
-        return None, {}
+        return None, {}, []
     as_of_date = max(dates)
-    index: dict[str, dict] = {}
+    tickers_by_name: dict[str, set[str]] = {}
     prefix = canonical_etf_holdings_partition(_DETECT_MARKET, as_of_date)
     for key in storage.list_keys(prefix + "/"):
         if not key.endswith(".parquet"):
@@ -114,10 +126,17 @@ def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict]]
             name, ticker = row.get("constituent_name"), row.get("constituent_ticker")
             if not (isinstance(name, str) and isinstance(ticker, str) and ticker.strip()):
                 continue
-            name = " ".join(name.split())  # 기사 텍스트와 같은 공백 정규화라야 substring 이 맞는다
+            name = _match_text(name)  # 기사 텍스트와 같은 정규화라야 substring 이 맞는다
             if len(name) >= _MIN_NAME_LEN:
-                index[name] = {"market": _DETECT_MARKET, "ticker": ticker.strip()}
-    return as_of_date, index
+                tickers_by_name.setdefault(name, set()).add(ticker.strip())
+    # 동명이(같은 이름, 다른 ticker)는 **어느 쪽도 고르지 않는다**(ALPHA-448). 이름을 키로 덮어쓰면
+    # 파일 나열 순서가 승자를 정해 mention 이 비결정적으로 틀린다 — 틀린 ticker 가 canonical 에
+    # 들어가면 다운스트림에서 되돌릴 근거가 없다. entity_resolution 의 동명이 ambiguous 와 같은
+    # 판단이고, 탐지 누락은 quality log 의 제외 이름으로 드러난다(Rule 12).
+    index = {name: {"market": _DETECT_MARKET, "ticker": next(iter(tickers))}
+             for name, tickers in tickers_by_name.items() if len(tickers) == 1}
+    ambiguous = sorted(name for name, tickers in tickers_by_name.items() if len(tickers) > 1)
+    return as_of_date, index, ambiguous
 
 
 def detect_mentions(text: str, name_index: dict[str, dict]) -> dict[str, dict]:
@@ -365,8 +384,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     # 의 유일한 공급원이라, exit 0 이면 'mentions 전량 소실'이 정상 완료로 오독된다. canonical
     # 적재 실패와 같은 계약으로 비0 종료한다. 스냅샷 부재(신규 레이크)는 실패가 아니다.
     name_index_error: str | None = None
+    ambiguous_names: list[str] = []
     try:
-        holdings_as_of, name_index = _holdings_name_index(storage)
+        holdings_as_of, name_index, ambiguous_names = _holdings_name_index(storage)
     except Exception as exc:
         logger.exception("holdings 이름 인덱스 로드 실패 — 이번 런은 탐지 없이 정규화")
         holdings_as_of, name_index, name_index_error = None, {}, str(exc)
@@ -430,7 +450,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 전체 경제 뉴스 수집(카테고리 주도)으로 전환하면 our_ticker 가 사라지므로 이
                 # 탐지가 mentions 의 유일한 공급원이 된다. dedup 은 _canonical_row 의
                 # _union_mentions 가 (market,ticker) 키로 결정적으로 처리한다.
-                text = " ".join(p for p in (row["title"], row["lead_text"]) if p)
+                text = _match_text(" ".join(p for p in (row["title"], row["lead_text"]) if p))
                 hits = detect_mentions(text, name_index)
                 if hits:
                     row["mentions"] = [*row["mentions"], *hits.values()]
@@ -476,6 +496,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 종목명 탐지 계측(ALPHA-416) — 어느 이름이 얼마나 잡혔는지로 오탐을 감시한다.
                 "mention_index_as_of_date": holdings_as_of,
                 "mention_index_names": len(name_index),
+                # 동명이로 인덱스에서 빠진 이름 — 탐지 누락의 사유이자 유니버스 품질 신호다.
+                "mention_index_ambiguous_names": ambiguous_names,
                 "mention_index_error": name_index_error,
                 "detected_name_counts": dict(detected_name_counts),
                 "canonical_written": canonical_written,
