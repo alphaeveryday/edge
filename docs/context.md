@@ -37,7 +37,7 @@
 | 고객 화면 | 벤더 embed widget (widget-api) | 증권사 MTS/HTS 자체 UI → On-Prem Publication API |
 | Tenant Console | 클라우드 tenant-console-api | 증권사 On-Premise 배포 |
 | 연동 방향 | 클라우드 → 증권사 (widget 서빙) | On-Prem Sync Agent → Cloud **Pull only** (outbound HTTPS/mTLS) |
-| Gateway | 범용 클라우드 gateway | Cloud에는 Super Admin·Tenant Sync API용 gateway만 |
+| Gateway | 범용 클라우드 gateway | 제거 — 공개 엣지는 ALB 직결(ADR-0032) |
 | API Key | Super Admin이 테넌트 API Key 관리 | API Key 메뉴 없음. Cloud Sync 인증서만 존재 |
 | 고객 데이터 | 클라우드 저장 (RLS 격리) | On-Prem에만 저장 (물리 격리) |
 | 멀티테넌시 | 단일 스키마 PostgreSQL RLS | 테넌트별 On-Prem 물리 격리 (RLS 폐기, [implementation.md](implementation.md)) |
@@ -113,7 +113,7 @@ flowchart TB
 | --- | --- | --- |
 | super-admin-api | **유지** | Vendor Cloud. 테넌트 생성, 파이프라인 조회, 정정/무효화, Admin Activity Log |
 | tenant-console-api | **이동** | 증권사 On-Premise. 설명 조회, 검수, 컴플라이언스 정책, 감사 로그, 설정 |
-| gateway | **축소** | Cloud에는 Super Admin·Tenant Sync API용 gateway만. On-Prem은 Publication API 또는 증권사 내부 API GW |
+| gateway | **제거** | 앱 레벨 프록시 폐지(ADR-0032). 공개 엣지는 super-admin 공개화 시 ALB 직결. On-Prem은 증권사 내부 API GW |
 | widget-api | **제거** | MVP에 embed widget 없음. 고객 화면은 증권사 MTS/HTS가 직접 구성 |
 | Tenant Sync API | **신규** | Vendor Cloud. cursor 기반 delta sync, 신규/정정/무효화 이벤트 전달, mTLS |
 | Sync Agent | **신규** | On-Premise. outbound Pull, 무결성 검증 후 저장 |

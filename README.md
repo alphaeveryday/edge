@@ -3,7 +3,7 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(gateway·tenant-console-api·super-admin-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. embed widget 모듈(widget-api·widget-ui)은 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로 삭제됐고, 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·compliance-engine·publication-api)는 walking skeleton 단계에서 추가됩니다.
+> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. embed widget 모듈(widget-api·widget-ui)은 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](docs/adr/0032-retire-gateway.md)로 삭제됐고, 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·compliance-engine·publication-api)는 walking skeleton 단계에서 추가됩니다.
 
 ## 한눈에 보기
 
@@ -11,7 +11,6 @@
 src/
 ├── apps/                     # 배포되는 실행 단위 (플레인별 그룹 — ADR-0029)
 │   ├── cloud/                #   edge-cloud (벤더 운영)
-│   │   ├── gateway/          # JVM    · Cloud 엣지 (console·admin 앞단)
 │   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
 │   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
@@ -39,11 +38,11 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 5개 앱(gateway·tenant-console-api·tenant-sync-api·publication-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 4개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · gateway · tenant-console-api · tenant-sync-api · publication-api · super-admin-api |
+| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api |
 | Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
@@ -53,7 +52,6 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 |---|---|---|---|
 | `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, [console-ia](docs/console-ia/tenant-console.md) 기준 재구축 예정) |
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
-| `gateway` | JVM | **edge-cloud** | Cloud 엣지. console·admin 트래픽에 라우트별 필터 적용 (목표: Super Admin·Tenant Sync API용만 — [ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md)) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
 | `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 설명 저장소는 인메모리 시드 |
@@ -61,13 +59,13 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
 | `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
-신규 온프렘 컴포넌트(sync-agent · compliance-engine)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 gateway를 경유하지 않습니다(mTLS 직접 노출 유력 — 확정은 gateway 존치 ADR과 함께).
+신규 온프렘 컴포넌트(sync-agent · compliance-engine)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 ([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
 ### 표면 분리
-- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘 재배치 시 gateway 경유 제거)
-- **운영 경로**: `super-admin-ui` → `gateway`(admin 라우트, VPN/IP 제한) → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
+- **콘솔 경로**: `tenant-console-ui` → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘에서 UI·API 동거)
+- **운영 경로**: `super-admin-ui` → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
 
-`gateway`가 트래픽을 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리합니다. admin 라우트는 운영자(소수·알려진 집합) 전용이라 망 수준으로 추가 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Publication API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
+클라우드 gateway는 은퇴했습니다([ADR-0032](docs/adr/0032-retire-gateway.md)) — super-admin 공개 도달이 필요해지면 ALB 직결(listener rule)로 재도입하고, admin은 운영자(소수·알려진 집합) 전용이라 망 수준(VPN/IP allowlist)으로 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Publication API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 
@@ -89,8 +87,8 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 [스케줄러] ─→ 파이프라인 SFN: raw 수집 ─→ 정제 ─→ feature ─→ analyze ──→ DB
               (raw lake 보존)   └──── data-pipeline ────┘   (analysis-engine)   │
                                                                                 │
-   콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
-   운영:  super-admin-ui → gateway → super-admin-api (읽기/쓰기, cross-tenant) ─┘
+   콘솔:  tenant-console-ui → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
+   운영:  super-admin-ui → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
    schema(Flyway SQL = 현재 SSOT) ─→ DB 계약 ─→ 모든 JVM/Python 모듈이 공유   (generated 모델은 후속 도입)
 ```
@@ -143,7 +141,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `gateway` · `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
