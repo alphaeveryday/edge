@@ -45,7 +45,7 @@ git status --short
 레포 루트에서, 티어가 정한 패스 수만큼 실행한다. 패스가 2 이상이면 **병렬로** 띄우고 출력 파일을 분리한다.
 
 ```bash
-OUT=$(mktemp -t edge-review)          # 패스마다 새 파일 — 재사용 금지
+OUT=$(mktemp)                          # 패스마다 새 파일 — 재사용 금지
 codex exec -s read-only \
   --output-schema .claude/skills/edge-review/findings.schema.json \
   -o "$OUT" \
@@ -103,7 +103,7 @@ echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
   실제 코드 줄·불변식·기존 가드를 인용해 반박할 수 있으면 REFUTED,
   확증되면 CONFIRMED, 반증도 확증도 안 되면 PLAUSIBLE.
   ```
-  REFUTED 만 버리고 나머지는 살린다. `low`~`high` 는 패스가 하나뿐이라 이 단계가 없다 — 그 티어의 결과는 단독 검증분임을 출력에 밝힌다.
+  REFUTED 만 버리고 나머지는 살린다. `verdict` enum 이 `REFUTED` 를 포함하는 건 **이 검증 패스 전용**이다 — 파인더 패스는 위 지시대로 반증된 후보를 애초에 내지 않으므로 REFUTED 를 쓸 일이 없고, 파인더가 REFUTED 를 냈다면 지시문을 어긴 것이니 그대로 버리지 말고 보고하라. `low`~`high` 는 패스가 하나뿐이라 이 단계가 없다 — 그 티어의 결과는 단독 검증분임을 출력에 밝힌다.
 - Codex 가 낸 `file`·`line` 이 실제 변경 범위에 있는지 확인하고, 어긋나면 앵커를 바로잡거나 낮은 신뢰로 강등하라.
 
 ## 빌드/테스트 확인 (이 스킬이 직접 — Codex 는 못 한다)

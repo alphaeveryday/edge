@@ -16,7 +16,7 @@
           "category": { "type": "string" },
           "summary": { "type": "string" },
           "failure_scenario": { "type": "string" },
-          "verdict": { "type": "string", "enum": ["CONFIRMED", "PLAUSIBLE"] }
+          "verdict": { "type": "string", "enum": ["CONFIRMED", "PLAUSIBLE", "REFUTED"] }
         }
       }
     }
