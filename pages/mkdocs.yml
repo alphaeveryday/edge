@@ -57,7 +57,7 @@ nav:
           - Sync Protocol: reference/contracts/sync-protocol.md
           - Event Bundle Schema: reference/contracts/event-bundle-schema.md
           - Sync Auth: reference/contracts/sync-auth.md
-          - Serving API: reference/contracts/serving-api.md
+          - Publication API: reference/contracts/publication-api.md
       - Domain:
           - State Machine: reference/domain/state-machine.md
           - Data Residency: reference/domain/data-residency.md

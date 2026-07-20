@@ -1,0 +1,69 @@
+# MTS/HTS 연동 방식 — Publication API
+
+> 이 문서는 증권사 백엔드 개발자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수). 문법 명세(OpenAPI)는 publication-api 모듈 생성 시 코드 옆에 두고 이 문서가 상위 시맨틱이다.
+
+## 원칙 (확정)
+
+- MTS/HTS는 증권사 소유 UI이며 벤더 widget을 임베드하지 않는다.
+- 경로: **MTS/HTS → 증권사 Backend/API Gateway → On-Premise Publication API**. MTS가 Publication API를 직접 호출하지 않는다.
+- Publication API는 **Published(AUTO_PUBLISHED, APPROVED) 상태만 반환**. 검수 대기/차단/반려/무효화/노출중단 상태는 절대 반환하지 않는다 — 응답에 존재할 수 없는 것이 제품 보장이다.
+- Publication API 호출 시 증권사 백엔드가 **고객 식별 해시**를 전달 → 조회 시점에 Exposure Log 자동 기록(조회=노출 간주, [../domain/exposure-log.md](../domain/exposure-log.md)). 원본 고객 ID/계좌번호는 절대 받지 않는다.
+- Publication API 자체의 인증은 증권사 내부망 정책(내부 API GW)에 위임한다. 벤더 API Key 없음.
+
+## 엔드포인트 스펙 (초안 — ALPHA-366)
+
+> `[확정 필요]` 표기 항목 외에는 기확정 결정에서 도출된 제안값이다. 데모 페이지(가상 MTS)는 이 스펙 기준으로 mock을 만든다.
+
+### 조회 — ETF 가격 변동 설명 (단건)
+
+```
+GET /api/v1/explanations/{etf_ticker}?trade_date={yyyy-MM-dd}
+X-Customer-Hash: <증권사 백엔드가 생성한 고객 식별 해시>
+X-Channel: MTS | HTS | INTERNAL
+```
+
+- `etf_ticker`: 국내 상장 ETF 종목코드 (MVP 커버리지 — [../adr/0024](../adr/0024-scope-domestic-etf.md)). `[확정 필요 — 식별자 체계: 종목코드 vs ISIN. 초안은 종목코드]`
+- `trade_date` 생략 시 가장 최근 게시분.
+- `X-Customer-Hash` 필수 — 해시 생성 규칙·salt는 증권사 관리 영역(벤더 불관여). 누락 시 400.
+- `X-Channel` 필수 — Exposure Log의 채널 필드.
+
+**응답 200** (노출 가능한 설명이 있을 때):
+
+```json
+{
+  "publication_id": "...",
+  "etf": { "ticker": "069500", "name": "KODEX 200" },
+  "trade_date": "2026-07-15",
+  "summary": "반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
+  "confidence_level": "MEDIUM",
+  "evidences": [
+    { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
+  ],
+  "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
+  "published_at": "2026-07-15T16:40:00+09:00"
+}
+```
+
+- `summary`는 검수를 거친 **최종 노출 문구**다(원본 AI 문구가 아니라 검수자 수정 반영본). 원천은 Cloud `explanation_result.summary`(물리 스키마의 유일한 고객 노출 텍스트 필드) — 번들로 온프렘에 수신된 뒤 검수를 거친 값이다.
+- `disclaimer`는 테넌트 정책의 기본 안내 문구 — 화면에 반드시 함께 노출한다.
+- `evidences` 요소 형상은 `[확정 필요 — 화면 요구에 맞춰 데모 페이지 작업과 함께 확정]`. 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
+- **이 200 응답이 Exposure Log 기록 시점**이다 — 응답한 문구 스냅샷·고객 해시·채널·시각이 기록되어 민원·감사 시 재현된다.
+
+**응답 204** (해당 ETF·일자에 노출 가능한 설명이 없을 때): 정상 상태다 — 모든 ETF가 매일 설명을 갖지 않는다. body 없음, Exposure Log 기록 없음.
+
+**에러**:
+
+| 코드 | 의미 |
+|---|---|
+| 400 | `X-Customer-Hash`/`X-Channel` 누락, 잘못된 `trade_date` 형식 |
+| 404 | 알 수 없는 ETF 종목코드 |
+| 5xx | 서버 오류 — 증권사 백엔드는 폴백 문구 처리 권장(설명 미제공이 고객 화면 오류로 보이지 않게) |
+
+- 에러 body 형상은 `[확정 필요 — 봉투 정책, publication-api 모듈 스캐폴드 시]`.
+
+### 미확정 목록
+
+1. 식별자 체계 (종목코드 vs ISIN)
+2. 목록/배치 조회(여러 ETF 한 번에) 필요 여부 — MTS 관심목록 화면이 요구하면 추가
+3. 에러 body 봉투 정책
+4. 캐싱 지시(ETag 등) — 조회=노출 시맨틱과의 상호작용 검토 필요 (`[주의]` 증권사 백엔드가 응답을 캐시하면 Exposure Log가 실노출보다 적게 기록된다 — 연동 가이드에 캐시 금지 또는 노출 콜백(로드맵, [../roadmap.md](../roadmap.md)) 안내)

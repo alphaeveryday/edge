@@ -19,19 +19,19 @@
 
 | 분기 | analysis_items.status | 후속 처리 |
 | --- | --- | --- |
-| 저위험/정책 통과 | AUTO_PUBLISHED | Published Store 저장 → Serving Cache 반영 → MTS/HTS 조회 가능 |
+| 저위험/정책 통과 | AUTO_PUBLISHED | Published Store 저장 → Publication Cache 반영 → MTS/HTS 조회 가능 |
 | 검수 필요 | REVIEW_REQUIRED | Review Queue 표시, 고객 화면 비노출 |
 | 차단 | BLOCKED | 고객 화면 비노출 |
-| 검수 승인 | APPROVED | Published Store 저장 → Serving Cache 반영 → 조회 가능 |
+| 검수 승인 | APPROVED | Published Store 저장 → Publication Cache 반영 → 조회 가능 |
 | 반려 | REJECTED | 고객 화면 비노출 |
 | 정정 | CORRECTED (아래 [컴플라이언스 플로우](#컴플라이언스-플로우--정정무효화-처리-확정-결정) 참조) | **기존 발행분 노출 중단 후 재검수** |
-| 무효화 | INVALIDATED | Serving Cache 제거 + publications.status → INVALIDATED 전이, 즉시 비노출 |
+| 무효화 | INVALIDATED | Publication Cache 제거 + publications.status → INVALIDATED 전이, 즉시 비노출 |
 
 ## 컴플라이언스 플로우 — 정정/무효화 처리 (확정 결정)
 
 **원칙: 검수 없이 고객 노출 문구가 변경되는 경로는 존재하지 않는다.**
 
-- **무효화(INVALIDATED)**: 노출 "제거"는 검수 불요. Sync Agent가 무효화 이벤트 수신 즉시 Serving Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용)
+- **무효화(INVALIDATED)**: 노출 "제거"는 검수 불요. Sync Agent가 무효화 이벤트 수신 즉시 Publication Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용)
 - **정정(CORRECTED)**: 노출 "변경"은 반드시 재검수.
     1. Cloud가 정정 이벤트 발행 (Super Admin은 정정 시 사유 입력 필수)
     2. On-Prem이 수신 → 기존 발행 콘텐츠 즉시 **UNPUBLISHED** (고객 화면에서 제거)

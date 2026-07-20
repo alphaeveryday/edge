@@ -35,15 +35,15 @@
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
 - [ ] Compliance Engine — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
-- [ ] Serving API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
+- [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
-- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Serving API 호출 렌더링. 구 widget-ui 부활 아님 — Serving API 계약의 데모 소비자 (데모 토폴로지와 연동)
+- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Publication API 호출 렌더링. 구 widget-ui 부활 아님 — Publication API 계약의 데모 소비자 (데모 토폴로지와 연동)
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속
 - [ ] **테스트 전략 문서** — 모듈별 요구 테스트 층(단위/통합) 기준 + **Event Bundle 계약 테스트**(진기-영서 양단이 같은 스키마로 검증, §1 계약 확정과 짝)
-- [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Serving API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
+- [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Publication API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
 - [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL)
 - [ ] **Definition of Done 명문화** — 게이트(edge-review→docs-sync)+이슈 전환 기준을 README Git 컨벤션에 한 절로
 - [ ] gateway console 라우트 제거 — tenant-console 온프렘 재배치(데모 토폴로지) 시점에 (gateway = Super Admin·Tenant Sync API 전용 완성)
