@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 
 from .http import PoliteClient, StopFetch
 
@@ -35,6 +36,13 @@ TOKEN_PATH = "/oauth2/tokenP"
 TOKEN_RATE_LIMIT_STATUS = 403
 TOKEN_RATE_LIMIT_CODE = "EGW00133"
 TOKEN_RATE_LIMIT_WAIT_SEC = 61  # "1분당 1회" + 시계 오차 여유
+# 대기 뒤 **지터**를 더한다. 같은 앱키를 쓰는 두 브랜치가 동시에 403 을 맞으면(직전 1분 내
+# 발급이 있었던 경우 — 빠른 수동 재실행·실행 겹침) 고정 간격으로는 둘이 같은 시각에 다시
+# 깨어나 충돌을 그대로 재생산한다. 지터가 순서를 갈라 한쪽이 먼저 발급하게 한다.
+TOKEN_RATE_LIMIT_JITTER_SEC = 20
+# 재시도 횟수 — 1회로는 위 동시 충돌에서 진 쪽이 그대로 죽는다. 2회면 지터와 합쳐 두 브랜치가
+# 각자 자기 분(minute)을 잡는다. 무한 대기는 금지(막히면 런이 실패로 드러나야 한다, Rule 12).
+TOKEN_RATE_LIMIT_MAX_RETRY = 2
 
 
 def domain_for(env: str) -> str:
@@ -78,19 +86,22 @@ class KisAuth:
         포기한다(무한 대기 금지 — 실패는 스텝이 fail-loud 로 드러낸다).
         """
         if self._token is None:
-            try:
-                self._token = self._issue()
-            except StopFetch as exc:
-                if not _is_rate_limited(exc):
+            for attempt in range(TOKEN_RATE_LIMIT_MAX_RETRY + 1):
+                try:
+                    self._token = self._issue()
+                    break
+                except StopFetch as exc:
                     # 유량 제한이 아닌 4xx(잘못된 키·권한)는 기다려도 안 풀린다 — 즉시 올린다.
-                    raise
-                logger.warning(
-                    "KIS 토큰 발급이 분당 1회 제한에 걸렸다 — %d초 대기 후 1회 재시도"
-                    "(같은 앱키를 쓰는 다른 스텝이 방금 발급했을 수 있다)",
-                    TOKEN_RATE_LIMIT_WAIT_SEC,
-                )
-                self.client._sleep(TOKEN_RATE_LIMIT_WAIT_SEC)
-                self._token = self._issue()
+                    # 재시도를 다 쓴 뒤에도 막혀 있으면 그대로 올려 런을 실패로 드러낸다.
+                    if not _is_rate_limited(exc) or attempt == TOKEN_RATE_LIMIT_MAX_RETRY:
+                        raise
+                    wait = TOKEN_RATE_LIMIT_WAIT_SEC + random.uniform(0, TOKEN_RATE_LIMIT_JITTER_SEC)
+                    logger.warning(
+                        "KIS 토큰 발급이 분당 1회 제한에 걸렸다 — %.1f초 대기 후 재시도 "
+                        "(%d/%d, 같은 앱키를 쓰는 다른 스텝이 방금 발급했을 수 있다)",
+                        wait, attempt + 1, TOKEN_RATE_LIMIT_MAX_RETRY,
+                    )
+                    self.client._sleep(wait)
         return self._token
 
     def _issue(self) -> str:
