@@ -241,3 +241,23 @@ category_codes = ["002000000"]
     assert settings.bigkinds_news.page_size == 25
     assert settings.bigkinds_news.max_pages == 2
     assert settings.bigkinds_news.category_codes == ["002000000"]
+
+
+def test_krx_etf_isins_match_their_short_codes():
+    # WHY: etf_map 의 ISIN 은 손으로 적는 값이고, 오타가 나도 형식은 멀쩡해 보인다. 틀린 ISIN 은
+    #      KRX 가 빈 output 을 주고 그 ETF 가 런 단위로 실패한다(krx_etf.py — partial 로 드러남).
+    #      31종까지 늘어난 지금(ALPHA-454) 그건 매일 시끄러운 실패라, 오타를 런타임이 아니라
+    #      여기서 잡는다. 체크디짓까지 봐야 한 자리 오타가 걸린다 — 접두사만 보면 KR7091*1*60002
+    #      같은 실수가 통과한다.
+    settings = load_settings()
+
+    for short_code, isin in settings.krx_etf.source.etf_map.items():
+        body, expected = isin[:-1], isin[-1]
+        assert body == f"KR7{short_code}00", f"{short_code}: ISIN 본문 불일치 ({isin})"
+        digits = "".join(str(int(c, 36)) if c.isalpha() else c for c in body)
+        total, double = 0, True
+        for c in reversed(digits):
+            d = int(c) * 2 if double else int(c)
+            total += d - 9 if d > 9 else d
+            double = not double
+        assert str((10 - total % 10) % 10) == expected, f"{short_code}: 체크디짓 불일치 ({isin})"
