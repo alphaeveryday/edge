@@ -31,9 +31,12 @@ class StopFetch(Exception):
     (운반 계층은 벤더 오류 어휘를 모른다).
     """
 
-    def __init__(self, message: str, *, status: int | None = None):
+    def __init__(self, message: str, *, status: int | None = None, body: str = ""):
         super().__init__(message)
         self.status = status
+        # 4xx 응답 본문(잘린 원문). 운반 계층은 이걸 **해석하지 않는다** — 벤더 오류 어휘를
+        # 아는 건 어댑터뿐이라, 판정에 필요한 원문만 실어 보낸다.
+        self.body = body
 
 
 class PoliteClient:
@@ -81,7 +84,14 @@ class PoliteClient:
             except urllib.error.HTTPError as exc:
                 self._last_request_at = time.monotonic()
                 if exc.code == 429 or 400 <= exc.code < 500:
-                    raise StopFetch(f"HTTP {exc.code}: 수집 중단", status=exc.code) from exc
+                    try:
+                        detail = exc.read().decode("utf-8", errors="replace")[:500]
+                    except Exception:
+                        detail = ""  # 본문을 못 읽어도 중단 자체는 그대로 진행한다
+                    raise StopFetch(
+                        f"HTTP {exc.code}: 수집 중단 {detail}".rstrip(),
+                        status=exc.code, body=detail,
+                    ) from exc
                 last_exc = exc  # 5xx → 재시도
             except (urllib.error.URLError, TimeoutError) as exc:
                 self._last_request_at = time.monotonic()

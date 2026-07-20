@@ -30,7 +30,10 @@ TOKEN_PATH = "/oauth2/tokenP"
 # 이게 실제로 문제가 되는 지점: SFN raw 페이즈의 CollectKisPrice·CollectKisNav 는 같은 앱키를
 # 쓰는 별개 Parallel 브랜치라 거의 동시에 발급을 시도한다 — 재시도가 없으면 매 런에서 한쪽이
 # 죽어 파이프라인이 상시 partial 이 된다(ALPHA-458). 사람이 1분 안에 수동 실행한 경우도 같다.
+# 유량 제한은 **오류 코드로** 가른다 — 같은 403 이라도 잘못된 앱키·권한 문제는 기다려도
+# 안 풀리므로 61초를 낭비하고 같은 실패를 반복하면 안 된다(edge-review 지적).
 TOKEN_RATE_LIMIT_STATUS = 403
+TOKEN_RATE_LIMIT_CODE = "EGW00133"
 TOKEN_RATE_LIMIT_WAIT_SEC = 61  # "1분당 1회" + 시계 오차 여유
 
 
@@ -40,6 +43,20 @@ def domain_for(env: str) -> str:
         return DOMAINS[env]
     except KeyError as exc:
         raise ValueError(f"알 수 없는 KIS env: {env!r} (prod|vps)") from exc
+
+
+def _is_rate_limited(exc: StopFetch) -> bool:
+    """토큰 발급 4xx 가 '분당 1회' 유량 제한인가 — 상태코드 403 + 본문 오류코드 EGW00133.
+
+    코드로 가리는 이유: 403 이라고 전부 대기 대상은 아니다(잘못된 앱키·권한도 4xx 다).
+    벤더가 코드를 바꾸면 여기서 못 잡고 그 런은 실패로 드러난다 — 조용히 계속되는 것보다
+    낫다(Rule 12). 실측 본문: {"error_code":"EGW00133","error_description":"접근토큰 발급
+    잠시 후 다시 시도하세요(1분당 1회)"}.
+    """
+    return (
+        getattr(exc, "status", None) == TOKEN_RATE_LIMIT_STATUS
+        and TOKEN_RATE_LIMIT_CODE in getattr(exc, "body", "")
+    )
 
 
 class KisAuth:
@@ -64,7 +81,8 @@ class KisAuth:
             try:
                 self._token = self._issue()
             except StopFetch as exc:
-                if getattr(exc, "status", None) != TOKEN_RATE_LIMIT_STATUS:
+                if not _is_rate_limited(exc):
+                    # 유량 제한이 아닌 4xx(잘못된 키·권한)는 기다려도 안 풀린다 — 즉시 올린다.
                     raise
                 logger.warning(
                     "KIS 토큰 발급이 분당 1회 제한에 걸렸다 — %d초 대기 후 1회 재시도"

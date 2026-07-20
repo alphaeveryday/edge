@@ -85,7 +85,10 @@ def test_토큰_403_은_대기후_1회_재시도한다(monkeypatch):
         def request(self, method, url, *, headers=None, data=None, decode=True):
             self.calls += 1
             if self.calls == 1:
-                raise StopFetch("HTTP 403: 수집 중단", status=403)
+                raise StopFetch(
+                    "HTTP 403: 수집 중단", status=403,
+                    body='{"error_code":"EGW00133","error_description":"접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)"}',
+                )
             return json.dumps({"access_token": "TOKEN", "expires_in": 86400})
 
         def _sleep(self, seconds):
@@ -108,7 +111,7 @@ def test_403_이_아닌_4xx_는_기다리지_않고_올린다():
 
     class _Client:
         def request(self, *a, **k):
-            raise StopFetch("HTTP 401: 수집 중단", status=401)
+            raise StopFetch("HTTP 401: 수집 중단", status=401, body="")
 
         def _sleep(self, seconds):
             raise AssertionError("401 에는 대기하면 안 된다")
@@ -128,7 +131,7 @@ def test_재시도_후에도_403_이면_포기한다():
 
         def request(self, *a, **k):
             self.calls += 1
-            raise StopFetch("HTTP 403: 수집 중단", status=403)
+            raise StopFetch("HTTP 403: 수집 중단", status=403, body='{"error_code":"EGW00133","error_description":"접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)"}')
 
         def _sleep(self, seconds):
             pass
@@ -137,3 +140,24 @@ def test_재시도_후에도_403_이면_포기한다():
     with pytest.raises(StopFetch):
         KisAuth("k", "s", client).token()
     assert client.calls == 2
+
+
+def test_유량제한_코드가_아닌_403_은_대기하지_않는다():
+    # WHY: 403 이라고 전부 '1분당 1회'가 아니다 — 잘못된 앱키·권한 문제도 4xx 로 오고 그건
+    #      기다려도 안 풀린다. 상태코드만 보고 재시도하면 영구 실패를 61초씩 지연시키고
+    #      같은 요청을 헛되이 반복한다(edge-review 지적). 코드(EGW00133)로 가른다.
+    from data_pipeline.sources.http import StopFetch
+    from data_pipeline.sources.kis_auth import KisAuth
+
+    class _Client:
+        def request(self, *a, **k):
+            raise StopFetch(
+                "HTTP 403: 수집 중단", status=403,
+                body='{"error_code":"EGW00121","error_description":"유효하지 않은 AppKey"}',
+            )
+
+        def _sleep(self, seconds):
+            raise AssertionError("유량 제한이 아닌 403 에는 대기하면 안 된다")
+
+    with pytest.raises(StopFetch):
+        KisAuth("k", "s", _Client()).token()
