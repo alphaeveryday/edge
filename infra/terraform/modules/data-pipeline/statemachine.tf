@@ -47,6 +47,15 @@ locals {
       command_expr = "States.Array('ingest-raw-disclosure', '--run-id', $.run_id)"
     },
     {
+      # ETF NAV(ALPHA-380·458) — KIS ETF NAV비교추이(일). 가격과 같은 kis task-def·같은
+      # 앱키를 쓰므로 CollectKisPrice 와 동시에 토큰을 발급한다. KIS 는 앱키당 분당 1회만
+      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초 대기 후 1회 재시도한다 —
+      # 그 재시도가 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
+      state        = "CollectKisNav"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-nav', '--run-id', $.run_id)"
+    },
+    {
       state        = "CollectFmpEtf"
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
@@ -101,6 +110,11 @@ locals {
       state        = "NormalizeEtf"
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-etf', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      state        = "NormalizeEtfNav"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-etf-nav', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
   ]
 

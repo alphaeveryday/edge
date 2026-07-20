@@ -123,9 +123,15 @@ locals {
       DATA_PIPELINE_ETF__SOURCE__API_KEY        = "${aws_secretsmanager_secret.fmp.arn}:apikey::"
     }
     bigkinds = {}
+    # 가격(kis_price)과 NAV(kis_nav)는 같은 KIS 앱키를 쓰지만 설정 섹션이 달라 env 도 따로다
+    # (같은 시크릿의 같은 필드를 두 이름으로 주입 — 새 시크릿 불요). ⚠️ 같은 앱키라 두 스텝이
+    # 동시에 토큰을 발급하면 분당 1회 제한(403 EGW00133)에 걸린다 — kis_auth 의 대기·재시도가
+    # 그걸 흡수한다(ALPHA-458). 앱키 분리는 별건.
     kis = {
       DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
       DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+      DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY      = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+      DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET   = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
     }
     dart = {
       DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY  = "${aws_secretsmanager_secret.dart.arn}:apikey::"
