@@ -119,3 +119,26 @@ def connect(config: DbConfig):
             yield conn
     finally:
         conn.close()
+
+
+def ensure_etf_profile(conn, instrument_id: str) -> bool:
+    """ETF 계열 FK 의 선행 행(`etf_profile`)을 보장한다. 새로 만들었으면 True.
+
+    **여기 있는 이유는 순서 의존을 없애기 위해서다.** `etf_nav_daily`·`etf_holding_snapshot`·
+    `price_movement_trigger` 가 전부 `etf_profile(instrument_id)` 를 참조하는데, 이들을 쓰는
+    로더는 SFN feature 페이즈의 **같은 Parallel 브랜치들**이라 실행 순서가 없다. 한 스텝만
+    프로필을 만들면 다른 스텝이 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다
+    (edge-review 지적). 각 스텝이 자기 선행을 스스로 보장하면 순서가 무관해진다 —
+    `ON CONFLICT DO NOTHING` 이라 동시에 들어와도 늦은 쪽이 False 를 받을 뿐이다.
+
+    `etf_type` 은 채우지 않는다 — 허용 어휘가 미확정이라 ALPHA-378 이 NOT NULL 을 풀었고,
+    임의 값을 넣으면 그게 사실상 계약이 돼 나중에 적재분이 오염된다. 다른 프로필 속성도
+    canonical 에 없어 비워 둔다(프로필 채우기는 별건 — 여기 일은 FK 를 세우는 것뿐이다).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO etf_profile (instrument_id) VALUES (%s)"
+            " ON CONFLICT (instrument_id) DO NOTHING",
+            (instrument_id,),
+        )
+        return cur.rowcount > 0

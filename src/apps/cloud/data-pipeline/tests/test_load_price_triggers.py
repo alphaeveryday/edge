@@ -12,6 +12,7 @@
 
 import io
 import json
+import pathlib
 
 from data_pipeline.config import DbConfig, PriceTriggersConfig
 from data_pipeline.lake import (
@@ -62,6 +63,9 @@ class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self._all: list[tuple] = []
+        # etf_profile 선행 보장(ON CONFLICT DO NOTHING)이 rowcount 를 읽는다 —
+        # 트리거 로더가 자기 FK 선행을 스스로 만들기 때문(순서 무관성, ALPHA-383).
+        self.rowcount = 1
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
@@ -114,7 +118,9 @@ def _run(storage, conn, monkeypatch, **kwargs):
 
 
 def _inserts(conn):
-    return [(sql, params) for sql, params in conn.log if sql.startswith("INSERT")]
+    # 트리거 INSERT 만 — 같은 트랜잭션에 etf_profile 선행 보장 INSERT 도 섞인다(ALPHA-383).
+    return [(sql, params) for sql, params in conn.log
+            if sql.startswith("INSERT INTO price_movement_trigger")]
 
 
 def _deletes(conn):
@@ -445,3 +451,17 @@ def test_past_partition_without_target_etf_falls_through(tmp_path, monkeypatch):
     log = _quality_log(storage)
     assert log["future_asof_used"] == 1
     assert log["created_rows"][0]["holdings_as_of"] == "2026-07-17"
+
+
+def test_트리거_적재도_etf_profile_선행을_스스로_보장한다(tmp_path, monkeypatch):
+    # WHY: price_movement_trigger.etf_instrument_id 는 etf_profile 을 참조한다. NAV 적재
+    #      (LoadEtfNav)와 같은 SFN Parallel 페이즈라 실행 순서가 없어, 프로필 생성을 남에게
+    #      의존하면 이 스텝이 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다(edge-review).
+    #      자기 선행은 자기가 보장해야 순서가 무관해진다.
+    from data_pipeline.steps import load_price_triggers as mod
+
+    src = (pathlib.Path(mod.__file__).read_text())
+    assert "ensure_etf_profile(conn, etf_instrument_id)" in src
+    idx_profile = src.index("ensure_etf_profile(conn, etf_instrument_id)")
+    idx_insert = src.index("INSERT INTO price_movement_trigger")
+    assert idx_profile < idx_insert, "프로필 보장이 트리거 INSERT 보다 먼저여야 한다"

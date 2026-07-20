@@ -30,7 +30,7 @@ import math
 from datetime import datetime, timezone
 
 from ..config import DbConfig, PriceTriggersConfig
-from ..db import connect, domain_id
+from ..db import connect, domain_id, ensure_etf_profile
 from ..lake import (
     Storage,
     canonical_etf_holdings_partition,
@@ -336,6 +336,11 @@ def run(
                     gated_out += 1
                     continue
                 trigger_id = domain_id("pmt")
+                # price_movement_trigger.etf_instrument_id 도 etf_profile 을 참조한다. NAV
+                # 적재(LoadEtfNav)와 같은 Parallel 페이즈라 실행 순서가 없어, 프로필 생성을
+                # 남에게 의존하면 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다.
+                # 자기 선행은 자기가 보장한다(멱등이라 중복 생성은 없다).
+                ensure_etf_profile(conn, etf_instrument_id)
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO price_movement_trigger (price_movement_trigger_id,"

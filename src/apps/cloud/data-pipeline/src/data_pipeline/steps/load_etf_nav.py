@@ -23,10 +23,9 @@
 
 **etf_profile 선행 생성**: `etf_nav_daily.etf_instrument_id` 는 `etf_profile(instrument_id)` 를
 참조하는데, `etf_profile` 행을 만드는 코드가 저장소에 없었다(ALPHA-378 이 `etf_type` NOT NULL 을
-푼 이유). 그래서 이 스텝이 **이미 instrument 가 있는 ETF 에 한해** 프로필 행을 보장한다
-(`ON CONFLICT DO NOTHING`). 새 instrument 를 만들지는 않는다 — 마스터 생성은 이름 출처 문제가
-얽혀 있어(canonical holdings 에 ETF 표시명이 없다) ALPHA-379 소관이다. 379 는 이 함수를 재사용하고
-자기 경로에서 중복 생성하지 않는다(한 테이블 = 한 writer, ADR-0005).
+푼 이유). 그래서 **이미 instrument 가 있는 ETF 에 한해** `db.ensure_etf_profile` 로 프로필 행을
+보장한다. 새 instrument 를 만들지는 않는다 — 마스터 생성은 이름 출처 문제가 얽혀 있어
+(canonical holdings 에 ETF 표시명이 없다) ALPHA-379 소관이다.
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ import logging
 from datetime import datetime, timezone
 
 from ..config import DbConfig
-from ..db import connect
+from ..db import connect, ensure_etf_profile
 from ..lake import Storage, canonical_etf_nav_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -80,23 +79,6 @@ def _etf_instrument_ids(conn, mic: str) -> dict[str, str]:
             (mic,),
         )
         return {str(t): str(i) for t, i in cur.fetchall()}
-
-
-def ensure_etf_profile(conn, instrument_id: str) -> bool:
-    """etf_nav_daily·etf_holding_snapshot 의 FK 대상인 etf_profile 행을 보장한다.
-
-    새로 만들었으면 True. `etf_type` 은 채우지 않는다 — 허용 어휘가 미확정이라 ALPHA-378 이
-    NOT NULL 을 풀었고, 임의 값을 넣으면 그게 사실상 계약이 돼 나중에 적재분이 오염된다.
-    다른 프로필 속성(운용사·보수율·레버리지 배수 등)도 canonical 에 없어 비워 둔다 — 이 스텝의
-    일은 FK 를 세우는 것이지 프로필을 채우는 게 아니다(수집은 별건).
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO etf_profile (instrument_id) VALUES (%s)"
-            " ON CONFLICT (instrument_id) DO NOTHING",
-            (instrument_id,),
-        )
-        return cur.rowcount > 0
 
 
 def run(
