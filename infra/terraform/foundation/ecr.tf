@@ -4,7 +4,6 @@
 locals {
   image_repositories = toset([
     "edge/widget-api",
-    "edge/gateway",
     "edge/super-admin-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지

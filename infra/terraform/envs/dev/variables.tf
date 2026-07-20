@@ -24,11 +24,6 @@ variable "super_admin_api_image" {
   type        = string
 }
 
-variable "gateway_image" {
-  description = "gateway ECR 이미지 URI(:태그 포함)"
-  type        = string
-}
-
 variable "alb_allowed_cidrs" {
   description = "임시 검증 ALB 인바운드 허용 CIDR"
   type        = list(string)

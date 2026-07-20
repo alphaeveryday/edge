@@ -112,20 +112,5 @@ services:
     ports:
       - "18083:8080"
 
-  # 공개 엣지(단일 진입점). backends 를 http://<name>:8080 으로 프록시한다(ALPHA-294·301).
-  #   console→tenant-console-api · admin→super-admin-api
-  gateway:
-    build:
-      context: ./src
-      dockerfile: apps/cloud/gateway/Dockerfile
-    container_name: edge-gateway
-    depends_on:
-      tenant-console-api:
-        condition: service_started
-      super-admin-api:
-        condition: service_started
-    ports:
-      - "8080:8080" # 로컬 단일 진입점(2라우트 프록시)
-
 volumes:
   edge-postgres-data:

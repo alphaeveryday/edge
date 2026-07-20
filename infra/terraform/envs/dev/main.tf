@@ -52,10 +52,6 @@ data "aws_ecr_repository" "super_admin_api" {
   name = "edge/super-admin-api"
 }
 
-data "aws_ecr_repository" "gateway" {
-  name = "edge/gateway"
-}
-
 # data-pipeline 의 tag-news·analyze 페이즈가 함께 읽는 DeepSeek API 키 시크릿 — 그릇이 TF 밖
 # CLI 로 먼저 생겨 모듈 소유가 아니다(data 로 조회). 이름의 네임스페이스는 data-pipeline 관례.
 # 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
@@ -199,28 +195,6 @@ module "super_admin_api" {
   desired_count = 1
 }
 
-# ── gateway (엣지 리버스 프록시 — ALPHA-296 internal-only 스테이징) ──
-# 공개 ALB 컷오버(ALPHA-294) 전까지 internal-only 로 세워 ecs-service 재사용·Service Connect 등록을 검증한다.
-# 라우트 uri 는 Service Connect DNS(widget-api·tenant-console-api·super-admin-api)로 요청 시 lazy 해석 —
-# 업스트림 연결 없이 부팅되므로 target_group·ingress 없이 RUNNING 안정화된다(ALB 타깃·컷오버는 ALPHA-294).
-module "gateway" {
-  source = "../../modules/ecs-service"
-
-  name   = "gateway"
-  region = var.region
-
-  cluster_arn                   = module.service_cluster.cluster_arn
-  service_connect_namespace_arn = module.service_cluster.namespace_arn
-
-  container_image  = var.gateway_image
-  container_port   = 8080
-  cpu_architecture = "X86_64"
-
-  vpc_id        = module.network.vpc_id
-  subnet_ids    = module.network.private_subnet_ids
-  desired_count = 1
-}
-
 # ── 스키마 마이그레이션 one-off task ────────────────────
 # ECR 은 foundation(edge/schema-migrate) 소유 — data 로 조회해 넘긴다(decoupled).
 module "schema_migrate" {
@@ -273,20 +247,17 @@ module "gha_deploy_dev" {
     data.aws_ecr_repository.widget_api.arn,
     data.aws_ecr_repository.tenant_console_api.arn,
     data.aws_ecr_repository.super_admin_api.arn,
-    data.aws_ecr_repository.gateway.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = [
     module.widget_api.service_arn,
     module.tenant_console_api.service_arn,
     module.super_admin_api.service_arn,
-    module.gateway.service_arn,
   ]
   app_pass_role_arns = [
     module.widget_api.execution_role_arn, module.widget_api.task_role_arn,
     module.tenant_console_api.execution_role_arn, module.tenant_console_api.task_role_arn,
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
-    module.gateway.execution_role_arn, module.gateway.task_role_arn,
   ]
 
   # UI 배포(deploy-ui.yml) 권한 — 3개 프론트 S3 sync + CloudFront 무효화.
