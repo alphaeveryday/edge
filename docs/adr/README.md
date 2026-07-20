@@ -39,3 +39,4 @@
 | [0029](0029-apps-plane-grouping.md) | apps 플레인 그룹핑 · schema 마이그레이션 세트 대칭 명명 | 승인됨 |
 | [0030](0030-raw-phase-partial-failure.md) | raw 페이즈는 부분 실패를 격리한다 — 전량 성공 게이트 제거 | 승인됨 |
 | [0031](0031-serving-to-publication.md) | serving-api를 Publication 도메인으로 리네이밍 | 승인됨 |
+| [0032](0032-retire-gateway.md) | gateway 은퇴 — 클라우드 엣지를 ALB 직결로 | 승인됨 |
