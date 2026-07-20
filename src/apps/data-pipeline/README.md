@@ -421,8 +421,12 @@ settings.targets.keywords            # ["금리", ...]
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
   **종목 매핑은 정규화의 일이다(ALPHA-416)**: BigKinds 행의 mentions 는 canonical ETF holdings
   최신 스냅샷(KR)의 종목명 인덱스로 제목+리드에서 substring 탐지해 합성한다(구 raw 의
-  `our_ticker` provenance 와 union — 이행기 호환). 유니버스가 바뀌면 전체 백필 재정규화로 과거
-  기사에 소급되고, 탐지 계측(`detected_name_counts`)·인덱스 상태는 quality_log 에 남는다.
+  `our_ticker` provenance 와 union — 이행기 호환). 이름 비교는 **NFKC 정규화 후 substring**
+  (인덱스·기사 텍스트 양쪽 — 저장소 관례). **동명이(같은 이름, 다른 ticker)는 어느 쪽도 고르지
+  않고 인덱스에서 뺀다**(ALPHA-448) — 이름을 키로 덮어쓰면 parquet 나열 순서가 승자를 정해
+  mention 이 비결정적으로 틀린다. 유니버스가 바뀌면 전체 백필 재정규화로 과거 기사에
+  소급되고, 탐지 계측(`detected_name_counts`)·제외된 동명이(`mention_index_ambiguous_names`)·
+  인덱스 상태는 quality_log 에 남는다.
   FMP 는 ingest 병합 mentions[] 그대로(영문 기사라 한글 이름 탐지 무의미).
   `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
   것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님). 본문 전문 크롤은 범위 밖이다.
