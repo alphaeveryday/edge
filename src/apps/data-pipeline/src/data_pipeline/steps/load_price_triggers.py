@@ -109,12 +109,25 @@ def _proxy_return(
     holdings: list[tuple[str, float]],
     closes: dict[str, float],
     prev_closes: dict[str, float],
-) -> float | None:
-    """구성종목 가중 proxy 수익률 — 엔진 compute_decomposition 과 같은 산식.
+) -> tuple[float | None, float]:
+    """구성종목 가중 proxy 수익률과 **가격 coverage** — 엔진 compute_decomposition 과 같은 산식.
 
-    가격이 있는 부분집합에 한정해 Σ(weight·ret)/Σ(weight) 로 coverage 정규화한다.
-    가격이 하나도 없으면 None(트리거 판단 불능 — 결측으로 센다).
+    가격이 있는 부분집합에 한정해 Σ(weight·ret)/Σ(weight) 로 정규화한다.
+    가격이 하나도 없으면 proxy 는 None(트리거 판단 불능 — 결측으로 센다).
+
+    **coverage 를 함께 돌려주는 이유**(ALPHA-452): 부분집합 재정규화는 표본이 작아도 값을 낸다 —
+    1% 비중 종목 하나만 가격이 있고 그게 10% 오르면 proxy 도 10% 라 3% 게이트를 통과하고,
+    나머지 99% 결손이 트리거 어디에도 안 남는다. `covered_weight / total_weight` 를 남겨야
+    "ETF 가 움직였다"와 "가격 있는 한 종목이 움직였다"를 사후에 구분할 수 있다.
+
+    산식·이름은 엔진 `compute_decomposition`(analysis-engine daily_pipeline.py) 을 그대로
+    따른다 — 엔진은 이 값을 이미 설명 문구("가격 커버리지 87%")에 쓰고 있어, 새로 정의하면
+    같은 이름의 두 수치가 생긴다. total_weight 가 0 이면 coverage 0.0(엔진과 동일).
+
+    **coverage 로 막지는 않는다** — 최소 하한은 실측 분포와 엔진 정책 합의가 선행이라
+    ALPHA-453 소관이다. 여기서는 계측만 한다.
     """
+    total_weight = sum(weight for _t, weight in holdings)
     num = den = 0.0
     for ticker, weight in holdings:
         close = closes.get(ticker)
@@ -123,7 +136,8 @@ def _proxy_return(
             continue
         num += weight * (close / prev_close - 1.0)
         den += weight
-    return (num / den) if den > 0 else None
+    coverage = (den / total_weight) if total_weight > 0 else 0.0
+    return ((num / den) if den > 0 else None), coverage
 
 
 def _resolve_etf_instrument_ids(conn, ticker: str) -> list[str]:
@@ -191,6 +205,7 @@ def run(
     already = created = replaced_stale_policy = stale_policy_kept = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
+    coverage_by_date: dict[str, float] = {}  # 거래일 → 가격 coverage (ALPHA-452, 판정 무관)
     exit_code = 0
 
     closes_cache: dict[str, dict[str, float]] = {}
@@ -299,8 +314,11 @@ def run(
                     missing_holdings += 1
                     continue
 
-                proxy_ret = _proxy_return(holdings, closes_of(date),
-                                          closes_of(prev_by_date[date]))
+                proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
+                                                    closes_of(prev_by_date[date]))
+                # 판정과 무관하게 전 거래일의 coverage 를 남긴다 — 최소 하한(ALPHA-453)을
+                # 정하려면 트리거가 난 날뿐 아니라 **걸러진 날의 분포**도 필요하다.
+                coverage_by_date[date] = round(coverage, 4)
                 if proxy_ret is None:
                     missing_price += 1
                     continue
@@ -322,14 +340,19 @@ def run(
                             f"{date}{_MARKET_CLOSE_KST}",
                             proxy_ret,
                             config.policy_version,
-                            # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성.
-                            f"abs|{proxy_ret:.4f}|>={config.abs_threshold}",
+                            # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성. 뒤에 coverage 를
+                            # 덧붙인다(ALPHA-452): 이 트리거가 구성종목 몇 %의 가격으로 판정됐는지가
+                            # 행 자체에 없으면, 소비자(설명·검수)가 근거의 두께를 알 수 없다.
+                            # 컬럼 신설 대신 이 필드를 쓰는 이유 — 엔진은 이 값을 읽어 나르기만 하고
+                            # 파싱하지 않아(daily_pipeline.py 의 trigger["reason"]) 늘려도 안전하다.
+                            f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
+                            f"|coverage={coverage:.4f}",
                         ),
                     )
                 created += 1
                 created_rows.append({"trade_date": date, "observed_return": proxy_ret,
                                      "price_movement_trigger_id": trigger_id,
-                                     "holdings_as_of": as_of})
+                                     "holdings_as_of": as_of, "coverage": round(coverage, 4)})
     except Exception as exc:
         # 커밋 경계는 런 전체다 — connect() 가 예외면 롤백이라 부분 적재가 없다. 트레이스백으로
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
@@ -350,6 +373,11 @@ def run(
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
         "stale_policy_kept": stale_policy_kept,
         "created": created, "created_rows": created_rows,
+        # 가격 coverage 계측(ALPHA-452) — 평가한 전 거래일치를 남긴다. 최소 하한(ALPHA-453)은
+        # 이 분포를 며칠 쌓아 보고 정한다. min 은 "가장 얇은 근거로 판정한 날"이라 하한 후보의
+        # 출발점이고, 전체 맵이 있어야 그 값이 이상치인지 상시인지 구분된다.
+        "coverage_by_date": coverage_by_date,
+        "coverage_min": min(coverage_by_date.values(), default=None),
         "failures": failures, "exit_code": exit_code,
     }
     try:
