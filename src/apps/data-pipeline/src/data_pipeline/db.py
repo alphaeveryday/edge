@@ -8,12 +8,19 @@
 죽은 티커는 재사용되므로, 파생 ID 는 영구히 잘못된 ID 로 남거나 참조 전부를 마이그레이션하게
 만든다. 서로게이트는 `instrument.ticker` 한 컬럼만 UPDATE 하면 참조가 전부 살아 있다.
 
+**예외 — 결정적 계열**(`stable_domain_id`): document/assertion/event/thread 계보 ID 는 자연키
+해시라 ULID 가 아니고 **시간 정렬이 안 된다**(hex 26자). ADR 이 자연키 파생을 배격한 이유는
+*가변 외부 식별자*(티커) 인코딩이었는데 이 계열의 재료는 전부 내부·불변값이라 그 위험이
+없고, 불투명성은 유지된다(해시라 파싱해도 의미가 안 나온다). 대신 **같은 사건이 재실행·다른
+writer 에서도 같은 ID 로 수렴**하는 걸 얻는다. 시간 정렬이 필요하면 `available_at` 을 쓴다.
+
 psycopg 는 **지연 import** 한다 — 레이크만 쓰는 스텝(수집·정제)과 그 단위테스트가 DB 드라이버
 없이 돌아야 한다(pyarrow·boto3 와 같은 관례).
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 import time
@@ -49,6 +56,29 @@ def domain_id(prefix: str) -> str:
     `entity_id` 만 봐도 ACTOR 인지 INSTRUMENT 인지 안다).
     """
     return f"{prefix}_{new_ulid()}"
+
+
+# ⚠️ 결정적 ID 의 네임스페이스 — 분석엔진 daily_pipeline.PIPELINE_ID 와 **동일해야 한다**.
+# 다르면 같은 사건이 다른 ID 로 갈려 이행기 멱등 수렴이 깨진다(steps/assemble_events 독스트링).
+PIPELINE_ID = "alphamale-etf-daily-v1"
+
+
+def stable_domain_id(prefix: str, *parts: object) -> str:
+    """자연키에서 **결정적으로** 파생하는 도메인 ID — 같은 재료면 언제 어디서 불러도 같은 값.
+
+    `domain_id`(랜덤 ULID)와 쓰임이 갈린다. 행의 정체성이 **이미 자연키로 정해져 있는데**
+    서로게이트가 랜덤이면, 그 ID 를 재료로 삼는 다운스트림 ID 까지 랜덤을 상속한다. 특히
+    같은 테이블에 writer 가 둘일 때(load-assertions·assemble-events 의 `document_assertion`)
+    산식이 갈리면 먼저 쓴 쪽 값이 남아 "결정적 ID" 계약이 조용히 깨진다(ALPHA-456).
+
+    그래서 **두 writer 는 반드시 이 함수를 공유해야 한다** — 각자 같은 모양의 해시를 따로
+    구현하면 salt 나 구분자 하나만 어긋나도 같은 자연키에 다른 ID 가 나온다.
+
+    `\\u0001` 구분자는 재료 경계를 고정한다(`("ab","c")` 와 `("a","bc")` 가 같은 문자열로
+    합쳐지지 않게). 26자는 ULID 길이와 맞춘 것으로, 두 계열이 컬럼 폭을 공유한다.
+    """
+    material = "".join([PIPELINE_ID, *(str(p) for p in parts)])
+    return f"{prefix}_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:26]}"
 
 
 def db_config_from_env(base: DbConfig | None) -> DbConfig:

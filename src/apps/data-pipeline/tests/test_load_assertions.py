@@ -277,3 +277,33 @@ def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     assert log["exit_code"] == 1
     assert log["failures"][0]["reasons"] == ["load_error"]
     assert log["created"] == 0 and log["arguments_inserted"] == 0
+
+
+def test_assertion_id_is_derived_from_the_natural_key(tmp_path, monkeypatch):
+    """적재되는 assertion_id 가 자연키에서 결정적으로 나온다(ALPHA-456).
+
+    WHY: 이 테이블은 writer 가 둘이다(load-assertions·assemble-events). 산식이 갈리면
+    ON CONFLICT DO NOTHING 때문에 **먼저 도는 이 스텝의 값이 남는데**, 그게 랜덤 ULID 면
+    source_event_id = f(assertion_id, entity_id) 가 랜덤을 상속해 모듈이 선언한 "결정적 ID"
+    계약이 조용히 깨진다 — document_assertion 을 재구축하면 계보 ID 가 전부 갈린다.
+
+    두 스텝이 **같은 함수**를 쓰는지까지 함께 고정한다. 각자 같은 모양의 해시를 따로
+    구현하면 salt·구분자 하나 차이로 다시 갈리기 때문이다.
+    """
+    from data_pipeline.db import stable_domain_id
+    from data_pipeline.steps import assemble_events
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion()])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    [(assertion_id, *_rest)] = _inserts(conn, "document_assertion")
+    natural_key = ("doc_D1", "SUPPLY_CONTRACT", "WIN")
+    assert assertion_id == stable_domain_id("asrt", *natural_key)
+    # 같은 자연키에 assemble-events 도 같은 값을 낸다 — 공유가 끊기면 여기서 깨진다
+    assert assertion_id == assemble_events._stable_id("asrt", *natural_key)
+    # 구분자가 재료 경계를 고정한다("ab"+"c" 와 "a"+"bc" 가 같은 값이 되면 안 된다)
+    assert stable_domain_id("asrt", "ab", "c") != stable_domain_id("asrt", "a", "bc")

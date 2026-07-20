@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone
 
 from ..config import DbConfig
-from ..db import connect, domain_id
+from ..db import connect, stable_domain_id
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,11 @@ def run(
                 # 멱등의 근거는 사전 스냅샷이 아니라 자연키 제약 자체다 — DO NOTHING 이라
                 # 동시 실행이 같은 키를 넣어도 늦은 쪽이 already 로 세어질 뿐 배치가 죽지
                 # 않는다. rowcount 0 = 이미 있었다(분석엔진이 먼저 쓴 행 포함).
-                document_id = domain_id("doc")
+                # 자연키에서 결정적으로 뽑는다(ALPHA-456) — assemble-events 도 같은 재료로
+                # 같은 값을 계산해야 한다(`_stable_id("doc", source_code, article_id)`).
+                # 랜덤이면 이 ID 를 재료로 쓰는 assertion_id·source_event_id 가 전부 랜덤을
+                # 상속해, 계보 전체의 결정성이 이 한 줄에서 무너진다.
+                document_id = stable_domain_id("doc", source_code, article_id)
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO document (document_id, document_type, source_code,"

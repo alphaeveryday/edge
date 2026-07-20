@@ -6,7 +6,7 @@
 검증 규칙·결정적 ID 산식 전부 엔진과 동일하고, 바뀐 것은 실행 위치와 실행부 관례
 (Storage 레이크 접근·psycopg3·LLM complete_fn 주입·quality log)뿐이다.
 
-⚠️ **PIPELINE_ID 는 엔진과 반드시 동일해야 한다** — 결정적 ID(_stable_id)의 재료라,
+⚠️ **PIPELINE_ID 는 엔진과 반드시 동일해야 한다**(db.PIPELINE_ID) — 결정적 ID 의 재료라,
 다르면 같은 이벤트가 다른 source_event_id/thread_id 로 갈려 이행기(엔진이 아직 자체
 조립을 하는 동안)의 멱등 수렴이 깨진다. 엔진 축소(PR D) 후에도 기존 행과의 수렴을
 위해 유지한다.
@@ -19,13 +19,12 @@ assertion 사슬), 이 스텝은 엔진 분류기(기사당 1건, 제목만)로 
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from ..config import DbConfig
-from ..db import connect
+from ..db import connect, stable_domain_id
 from ..events.ontology import Registry, load_registry
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 
@@ -34,8 +33,6 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "assemble_events"
 DATASET = "source_event"
 
-# ⚠️ 결정적 ID 재료 — 분석엔진 daily_pipeline.PIPELINE_ID 와 동일해야 한다(모듈 독스트링).
-PIPELINE_ID = "alphamale-etf-daily-v1"
 CLASSIFY_BATCH = 40
 TITLE_EVIDENCE_TYPE = "TITLE"
 _KST = timezone(timedelta(hours=9))
@@ -62,10 +59,10 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _stable_id(prefix: str, *parts: object) -> str:
-    material = "\u0001".join([PIPELINE_ID, *(str(p) for p in parts)])
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:26]
-    return f"{prefix}_{digest}"
+# 결정적 ID 산식은 db.stable_domain_id 가 소유한다(ALPHA-456) — load-assertions 와 **같은
+# 함수**를 써야 같은 자연키에 같은 assertion_id 가 나온다. 지역 별칭만 남긴다(이 파일의
+# _stable_id 호출 6곳을 치환하는 것보다 diff 가 작고 호출부 의미도 그대로다).
+_stable_id = stable_domain_id
 
 
 def _iso(value: object) -> str:

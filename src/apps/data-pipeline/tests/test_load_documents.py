@@ -249,3 +249,30 @@ def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     assert log["failures"][0]["reasons"] == ["load_error"]
     assert log["created"] == 0, "롤백됐는데 만들었다고 로그가 주장한다"
     assert log["created_rows_sample"] == []
+
+
+def test_document_id_is_derived_from_the_natural_key(tmp_path, monkeypatch):
+    """적재되는 document_id 가 자연키에서 결정적으로 나온다(ALPHA-456).
+
+    WHY: document_id 는 계보의 뿌리다 — assertion_id = f(document_id, …) 이고
+    source_event_id = f(assertion_id, …) 이다. 이 한 줄이 랜덤이면 그 위 전부가 랜덤을
+    상속해, assemble-events 가 선언한 "결정적 ID" 계약이 뿌리에서 무너진다.
+
+    이 테이블도 writer 가 둘이라(이 스텝·assemble-events) 산식이 갈리면 ON CONFLICT
+    DO NOTHING 때문에 먼저 쓴 쪽 값이 남는다. 두 스텝이 **같은 함수·같은 재료**를 쓰는지
+    함께 고정한다.
+    """
+    from data_pipeline.db import stable_domain_id
+    from data_pipeline.steps import assemble_events
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "R1", db=_db()) == 0
+
+    [(doc_id, *_rest)] = _inserts(conn)
+    assert doc_id == stable_domain_id("doc", "bigkinds", "a1")
+    # assemble-events 도 같은 재료로 같은 값을 낸다 — 공유가 끊기면 여기서 깨진다
+    assert doc_id == assemble_events._stable_id("doc", "bigkinds", "a1")
