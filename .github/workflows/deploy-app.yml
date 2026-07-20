@@ -27,7 +27,11 @@ on:
   workflow_call:
     inputs:
       app:
-        description: "배포할 앱 이름 (src/apps/<app> · ECR edge/<app> · ECS 서비스 <app>)"
+        description: "배포할 앱 이름 (ECR edge/<app> · ECS 서비스 <app>)"
+        required: true
+        type: string
+      plane:
+        description: "배포 플레인 디렉터리 (cloud · onprem) — 소스 경로 src/apps/<plane>/<app> (ADR-0029)"
         required: true
         type: string
 
@@ -98,12 +102,13 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           APP: ${{ inputs.app }}
+          PLANE: ${{ inputs.plane }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           image="${REGISTRY}/edge/${APP}:${VERSION}"
           # 빌드 컨텍스트 = src/ 루트(멀티프로젝트 — 각 앱 Dockerfile 헤더 참고). Fargate 는 amd64.
-          docker build --platform linux/amd64 -f "src/apps/${APP}/Dockerfile" -t "${image}" src
+          docker build --platform linux/amd64 -f "src/apps/${PLANE}/${APP}/Dockerfile" -t "${image}" src
           docker push "${image}"
 
       # TF 소유 base task 정의에서 이미지만 교체해 새 리비전 등록 → 서비스 롤링 업데이트 → 안정화 대기.

@@ -25,7 +25,7 @@
 
 ```bash
 # src/ 에서
-./gradlew :apps:tenant-sync-api:bootRun
+./gradlew :apps:cloud:tenant-sync-api:bootRun
 curl -i "localhost:8080/api/v1/sync/bundle?after=0"   # 200 + X-Bundle-Checksum
 curl -i "localhost:8080/api/v1/sync/bundle?after=3"   # 204
 # compose 로는 루트에서: docker compose up --build tenant-sync-api (host 18083)

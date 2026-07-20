@@ -6,7 +6,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/super-admin-ui/**"
+      - "src/apps/cloud/super-admin-ui/**"
       # 워크스페이스 공유 — 의존성 그래프에 영향.
       - "src/pnpm-lock.yaml"
       - "src/pnpm-workspace.yaml"
@@ -28,5 +28,6 @@ jobs:
     uses: ./.github/workflows/deploy-ui.yml
     with:
       app: super-admin-ui
+      plane: cloud
       bucket: ${{ vars.SUPER_ADMIN_UI_BUCKET }}
       distribution_id: ${{ vars.SUPER_ADMIN_UI_DISTRIBUTION_ID }}

@@ -22,7 +22,7 @@
 
 ```bash
 # src/ 에서
-./gradlew :apps:serving-api:bootRun
+./gradlew :apps:onprem:serving-api:bootRun
 curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/069500  # 200
 curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/305720  # 204
 # compose 로는 루트에서: docker compose up --build serving-api (host 18084)

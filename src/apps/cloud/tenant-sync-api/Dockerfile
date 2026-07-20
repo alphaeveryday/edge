@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # 빌드 컨텍스트 = src/ 루트(멀티프로젝트). 빌드:
-#   docker build -f apps/tenant-console-api/Dockerfile -t tenant-console-api .
+#   docker build -f apps/cloud/tenant-sync-api/Dockerfile -t tenant-sync-api .
 # 이 모듈의 bootJar 만 만들어 서비스별 독립 이미지로 배포한다.
 
 # --- build stage: 루트 래퍼로 해당 모듈 bootJar 빌드 ---
@@ -8,7 +8,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 
 COPY . .
-RUN chmod +x gradlew && ./gradlew :apps:tenant-console-api:bootJar --no-daemon
+RUN chmod +x gradlew && ./gradlew :apps:cloud:tenant-sync-api:bootJar --no-daemon
 
 # --- runtime stage: JRE 만, 비루트 실행 ---
 FROM eclipse-temurin:21-jre AS runtime
@@ -18,7 +18,7 @@ WORKDIR /app
 RUN useradd -r -u 1001 spring
 USER spring
 
-COPY --from=build /workspace/apps/tenant-console-api/build/libs/*.jar app.jar
+COPY --from=build /workspace/apps/cloud/tenant-sync-api/build/libs/*.jar app.jar
 
 # Spring Boot 기본 포트. ECS target group / Service Connect 도 8080 으로 맞춘다.
 EXPOSE 8080
