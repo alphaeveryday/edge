@@ -167,8 +167,13 @@ enabled = true
 # KODEX 200 은 반도체 밖 종목의 가격 수집을 위해 남긴다 — ingest_price_raw 의
 # _kr_holdings_universe() 가 holdings 에서 KIS 가격 수집 유니버스를 파생시키기 때문이다.
 # TIGER 미국S&P500(360750)은 해외기초라 제외했다(구성종목이 해외 티커).
-# ⚠ 표시는 영숫자 단축코드 — ISIN 포맷에 실측 대조군이 없어 미검증이다. 틀리면 빈 output 이
-# ETF 단위 실패로 격리돼(krx_etf.py, 조용한 0행 없음) 첫 런 로그에 드러난다. 그때만 고치면 된다.
+# ⚠ 표시는 영숫자 단축코드 — 두 가지가 걸려 있다.
+#  1) ISIN 포맷에 실측 대조군이 없어 미검증이다. 틀리면 빈 output 이 ETF 단위 실패로 격리돼
+#     (krx_etf.py, 조용한 0행 없음) 첫 런 로그에 드러난다. 그때만 고치면 된다.
+#  2) **이 7종은 ETF 자기 종가가 수집되지 않는다** — ingest_price_raw._kr_holdings_universe()
+#     와 kis_price.plan() 이 6자리 '숫자' 코드만 통과시켜서(isdigit) 영숫자 코드가 걸러진다.
+#     구성종목(전부 숫자 코드)은 정상 수집되지만 ETF 종가가 없어 price trigger 의 대조축이
+#     빈다 — 하류에서 원인 없이 missing_price 로만 집계된다. 후속: ALPHA-455.
 [krx_etf.source.etf_map]
 "069500" = "KR7069500007"   # KODEX 200 (시장지수 — 가격 유니버스 파생용)
 "396500" = "KR7396500001"   # TIGER 반도체TOP10
