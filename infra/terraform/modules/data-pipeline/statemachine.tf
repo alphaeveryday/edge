@@ -49,8 +49,8 @@ locals {
     {
       # ETF NAV(ALPHA-380·458) — KIS ETF NAV비교추이(일). 가격과 같은 kis task-def·같은
       # 앱키를 쓰므로 CollectKisPrice 와 동시에 토큰을 발급한다. KIS 는 앱키당 분당 1회만
-      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초 대기 후 1회 재시도한다 —
-      # 그 재시도가 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
+      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초+지터(0~20초) 대기 후 최대 2회
+      # 재시도한다 — 그게 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
       state        = "CollectKisNav"
       taskdef_key  = "kis"
       command_expr = "States.Array('ingest-raw-nav', '--run-id', $.run_id)"
@@ -65,9 +65,11 @@ locals {
     # ① trdDd 백필 수단 부재 — 실패한 날의 스냅샷은 다음 런이 못 줍는다.
     # ② 휴장일 trdDd 응답의 정체 — 7-17 휴장일에도 응답이 왔고 as_of=당일로 라벨됐다
     #    (전 거래일 구성으로 추정. 휴장이면 구성 변동도 없어 실해는 없으나 확인 대상).
-    # KRX ETF 는 `trdDd`=오늘 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된
-    # 설계) — raw 전량성공 게이트라 실패 시 뒤 페이즈 전부가 막힌다.
-    # **ENABLED 로 바꾸기 전에 ALPHA-387 을 닫아라.**
+    # KRX ETF 는 `trdDd`=오늘 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된 설계).
+    # ALPHA-460 이후 이 실패가 뒤 페이즈를 막지는 않는다 — 알림이 나가고 런은 FAILED 로
+    # 마감되며, 그날 ETF canonical 만 비고 나머지 소스는 정상 승격된다. 즉 ALPHA-387 은
+    # 더 이상 ENABLED 의 하드 블로커가 아니지만, **①(백필 수단 부재)이 남아 실패한 날의
+    # KRX 스냅샷은 여전히 영구 결손**이므로 닫는 게 맞다.
     {
       state        = "CollectKrxEtf"
       taskdef_key  = "krx"
@@ -285,17 +287,49 @@ locals {
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next       = "RawIngestCheckResults"
       }
+      # raw 부분 실패는 뒤 페이즈를 **막지 않는다**(ALPHA-460) — 알리기만 하고 계속 간다.
+      # 예전엔 여기가 전량성공 게이트라 소스 하나가 죽으면 무관한 소스의 정제·분석까지 통째로
+      # 멈췄다. 뉴스 수집 실패가 가격 정제를 막는 건 의도가 아니고, 재무는 canonical 스텝조차
+      # 없어 아무것도 공급하지 않는데도 전체를 막았다.
+      #
+      # 막을 필요가 없는 근거: **정제는 빈 입력을 정상 성공으로 처리한다.** raw 키가 0개면
+      # 루프가 안 돌고 exit 0 이다(normalize_price.py 의 `for raw_key in raw_keys`). 그래서
+      # BigKinds 가 죽어도 NormalizeNews 는 이 런의 FMP raw 만 정제하고 성공한다 — 정제 잡별로
+      # "어느 raw 가 필수인가" 의존 맵을 ASL 에 적을 이유가 없다. 있는 만큼 처리한다.
       RawIngestCheckResults = {
         Type = "Choice"
         Choices = [{
           And  = local.raw_ingest_success_checks
           Next = "NormalizeParallel"
         }]
-        Default = "NotifyFailure"
+        Default = "NotifyRawPartial"
       }
-      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면 정제를
-      # 헛돌리지 않는다. ALPHA-351 로 흔한 절단은 raw 브랜치에서 성공 처리되므로, 여기 걸리는
-      # 건 진짜 실패다.
+      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 tag-news·analyze 처럼
+      # LLM 을 부르는(소요시간 상한이 없는) 페이즈가 있고, 최상위 TimeoutSeconds 로 실행이
+      # 죽으면 States.Timeout 이 실행 자체를 끝내 **어떤 Catch 도 안 탄다**(아래 CloudWatch
+      # 알람 주석 참조). 즉 판정을 끝에 두면 "raw 부분 실패 + 그 뒤 타임아웃" 조합에서 run_id 가
+      # 박힌 알림이 영영 안 나가고, run 스코프 정제라 그 raw 는 아무도 못 줍는다.
+      # 타임아웃 알람은 실행 단위라 run_id·branch_results 를 담지 못해 대체재가 못 된다.
+      #
+      # 통보 뒤 NormalizeParallel 로 **계속 간다**(ResultPath = null 로 $ 를 보존). 런의 최종
+      # FAILED 마감은 파이프라인 끝 RawPartialCheck 가 맡는다 — 거긴 SNS 를 다시 쏘지 않는다
+      # (한 실패에 두 통이 가지 않게. 아래 ExecutionsFailed 알람을 안 거는 것과 같은 이유).
+      NotifyRawPartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "NormalizeParallel"
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}] raw 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
+      }
+      #
+      # analyze 까지 부분 입력으로 도는 것도 의도다: 준실시간에선 '완전한 입력'이라는 상태가
+      # 존재하지 않아 입력 완전성 게이트는 주기가 짧아질수록 '매번 불성립'으로 수렴한다.
+      # 대신 트리거 결측이 '데이터 없음'이 아니라 '움직임 없음'으로 나가는 위험이 남는데,
+      # 그건 게이트가 아니라 산출물이 두 상태를 구분해야 풀리는 문제다(ALPHA-452·453 소관).
       #
       # ⚠️ **정제는 이 실행의 raw 만 본다**(`--input-run-id $.run_id`, ALPHA-389). 예전엔
       # full-scan 이라 "이전 실패 실행이 저장한 raw 도 다음 성공 실행이 함께 주워간다"는
@@ -438,9 +472,27 @@ locals {
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"
           NumericEquals = 0
-          Next          = "PipelineSucceeded"
+          Next          = "RawPartialCheck"
         }]
         Default = "NotifyFailure"
+      }
+      # raw 부분 실패 런의 **마감 판정**(ALPHA-460) — 막는 게이트가 아니다. 다운스트림을 끝까지
+      # 돌린 뒤 raw 를 다시 보고, 부분 실패였으면 런을 FAILED 로 끝낸다. 알림은 이미 raw 직후
+      # NotifyRawPartial 이 쐈으므로 **여기선 SNS 를 안 탄다**(한 실패에 두 통 금지) — 곧장
+      # PipelineFailed 로 간다.
+      #
+      # 이 상태가 없으면 안 되는 이유: 알림만으로는 실행이 Succeed 로 남아 콘솔·ExecutionsFailed
+      # 지표에서 정상 런과 구분되지 않는다. raw 가 불완전한 런은 상태로도 실패여야 한다.
+      #
+      # `$.branch_results` 는 RawIngestParallel 이 쓴 뒤 여기까지 살아 있다 — 뒤 Task 들이
+      # ResultPath 를 `$.ecs` 로 쓰고 Parallel 들도 각자 다른 키를 써서 덮이지 않는다.
+      RawPartialCheck = {
+        Type = "Choice"
+        Choices = [{
+          And  = local.raw_ingest_success_checks
+          Next = "PipelineSucceeded"
+        }]
+        Default = "PipelineFailed"
       }
       PipelineSucceeded = { Type = "Succeed" }
       NotifyFailure = {
