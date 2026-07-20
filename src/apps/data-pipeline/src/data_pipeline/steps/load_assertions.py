@@ -11,10 +11,20 @@ argument 가 전무 해소된 assertion 은 assertion 도 넣지 않는다 — �
 event 조립 소비자에게 죽은 행이다.
 
 **멱등**: 논리 자연키 = `uq_document_assertion_natural (document_id, event_type_code,
-predicate_code)` 에 ON CONFLICT DO NOTHING(원자적 — #130 교훈). 신규면 `asrt_<ULID>`
-(ADR-0027), 이미 있으면(분석엔진 선적재 포함) 그 행의 assertion_id 를 자연키로 읽어
-arguments 만 union 한다(`uq_assertion_argument` DO NOTHING). 같은 런 내 같은 키 주장은
-arguments 를 접는다.
+predicate_code)` 에 ON CONFLICT DO NOTHING(원자적 — #130 교훈). 신규면 그 자연키에서
+**결정적으로** 파생한 `asrt_<해시>`(`db.stable_domain_id`, ALPHA-456), 이미 있으면(분석엔진
+선적재 포함) 그 행의 assertion_id 를 자연키로 읽어 arguments 만 union 한다
+(`uq_assertion_argument` DO NOTHING). 같은 런 내 같은 키 주장은 arguments 를 접는다.
+
+⚠️ **수렴하는 건 assertion_id 뿐이다.** 이 테이블은 writer 가 둘인데(이 스텝·assemble-events)
+ON CONFLICT DO NOTHING 이라 `confidence`·`available_at`·`lifecycle_stage` 는 **먼저 쓴 쪽 값이
+남는다**. 두 writer 의 판정이 다르면 최종 행이 실행 순서를 탄다. 어느 쪽을 정본으로 둘지는
+assertion 단일화 결정 사안이라 여기서 정하지 않는다 — ID 만 먼저 결정적으로 맞춘 상태다.
+
+ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 계열은 **hex 해시**라 시간
+정렬이 안 된다. 불투명성(ID 를 파싱해 의미를 얻지 못함)은 유지되고, ADR 이 자연키 파생을
+배격한 이유는 *가변 외부 식별자*(티커) 인코딩이었는데 여기 자연키는 전부 내부·불변값이라
+그 위험이 없다. 시간 정렬이 필요한 소비자는 `available_at` 을 쓴다.
 
 **document 연결**: feature 행에 source_vendor 가 없어 언어→벤더 고정(ko=bigkinds,
 분석엔진과 같은 가정)으로 자연키 SELECT 해소. document 행이 없으면 결손으로 세고
