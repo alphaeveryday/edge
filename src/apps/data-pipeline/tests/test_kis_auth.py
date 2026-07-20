@@ -66,3 +66,74 @@ def test_domain_selects_by_env():
     # WHY: prod/vps 도메인이 뒤바뀌면 실전 키로 모의 서버(또는 반대)를 쳐 데이터가 오염된다.
     assert domain_for("prod").endswith(":9443")
     assert domain_for("vps").endswith(":29443")
+
+
+def test_토큰_403_은_대기후_1회_재시도한다(monkeypatch):
+    # WHY: SFN raw 페이즈의 CollectKisPrice·CollectKisNav 는 같은 앱키를 쓰는 별개 Parallel
+    #      브랜치라 거의 동시에 토큰을 발급한다. KIS 는 앱키당 분당 1회만 발급하므로(403
+    #      EGW00133, 2026-07-20 실측) 재시도가 없으면 매 런에서 한쪽이 죽어 파이프라인이
+    #      상시 partial 이 된다(ALPHA-458). 토큰은 24h 유효라 기다리면 반드시 풀린다.
+    from data_pipeline.sources.http import StopFetch
+    from data_pipeline.sources.kis_auth import KisAuth, TOKEN_RATE_LIMIT_WAIT_SEC
+
+    slept = []
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            self.calls += 1
+            if self.calls == 1:
+                raise StopFetch("HTTP 403: 수집 중단", status=403)
+            return json.dumps({"access_token": "TOKEN", "expires_in": 86400})
+
+        def _sleep(self, seconds):
+            slept.append(seconds)
+
+    client = _Client()
+    auth = KisAuth("k", "s", client)
+
+    assert auth.token() == "TOKEN"
+    assert client.calls == 2                      # 대기 후 정확히 1회 재시도
+    assert slept == [TOKEN_RATE_LIMIT_WAIT_SEC]   # 분당 제한이 풀릴 만큼 기다린다
+    assert auth.token() == "TOKEN" and client.calls == 2  # 이후엔 캐시(run 당 1회 규약)
+
+
+def test_403_이_아닌_4xx_는_기다리지_않고_올린다():
+    # WHY: 잘못된 앱키(401 등)는 기다려도 안 풀린다 — 61초를 낭비하고 같은 실패를 반복하는 대신
+    #      즉시 드러내야 한다(Rule 12). 유량 제한만 대기 대상이다.
+    from data_pipeline.sources.http import StopFetch
+    from data_pipeline.sources.kis_auth import KisAuth
+
+    class _Client:
+        def request(self, *a, **k):
+            raise StopFetch("HTTP 401: 수집 중단", status=401)
+
+        def _sleep(self, seconds):
+            raise AssertionError("401 에는 대기하면 안 된다")
+
+    with pytest.raises(StopFetch):
+        KisAuth("k", "s", _Client()).token()
+
+
+def test_재시도_후에도_403_이면_포기한다():
+    # WHY: 무한 대기 금지 — 두 번째도 막히면 그 런은 실패로 드러내고 스케줄러가 알게 한다.
+    from data_pipeline.sources.http import StopFetch
+    from data_pipeline.sources.kis_auth import KisAuth
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def request(self, *a, **k):
+            self.calls += 1
+            raise StopFetch("HTTP 403: 수집 중단", status=403)
+
+        def _sleep(self, seconds):
+            pass
+
+    client = _Client()
+    with pytest.raises(StopFetch):
+        KisAuth("k", "s", client).token()
+    assert client.calls == 2

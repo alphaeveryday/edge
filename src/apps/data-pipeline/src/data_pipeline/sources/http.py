@@ -23,7 +23,17 @@ RETRY_BACKOFF_SEC = [1, 2, 4]
 
 
 class StopFetch(Exception):
-    """4xx/429 — 이 소스에 대한 수집을 즉시 중단해야 한다."""
+    """4xx/429 — 이 소스에 대한 수집을 즉시 중단해야 한다.
+
+    `status` 로 HTTP 상태코드를 함께 싣는다 — 대부분의 4xx 는 중단이 맞지만, 벤더가 4xx 로
+    **일시적 유량 제한**을 표현하는 경우가 있어(KIS 토큰 발급 403 EGW00133 "1분당 1회")
+    어댑터가 그 하나만 골라 처리하려면 코드가 필요하다. 본문 의미 판정은 여전히 어댑터 몫이다
+    (운반 계층은 벤더 오류 어휘를 모른다).
+    """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class PoliteClient:
@@ -71,7 +81,7 @@ class PoliteClient:
             except urllib.error.HTTPError as exc:
                 self._last_request_at = time.monotonic()
                 if exc.code == 429 or 400 <= exc.code < 500:
-                    raise StopFetch(f"HTTP {exc.code}: 수집 중단") from exc
+                    raise StopFetch(f"HTTP {exc.code}: 수집 중단", status=exc.code) from exc
                 last_exc = exc  # 5xx → 재시도
             except (urllib.error.URLError, TimeoutError) as exc:
                 self._last_request_at = time.monotonic()
