@@ -3,7 +3,6 @@
 # schema-migrate 는 repo URL/ARN 을 data 로 참조 — 하드 크로스스택 의존 없음.
 locals {
   image_repositories = toset([
-    "edge/widget-api",
     "edge/super-admin-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지

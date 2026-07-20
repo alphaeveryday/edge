@@ -10,20 +10,6 @@ output "service_cluster_name" {
   value = module.service_cluster.cluster_name
 }
 
-output "widget_api_service_name" {
-  value = module.widget_api.service_name
-}
-
-output "widget_api_security_group_id" {
-  description = "gateway 도입 시 이 SG 를 ingress 허용 대상으로 참조"
-  value       = module.widget_api.security_group_id
-}
-
-output "alb_dns_name" {
-  description = "ALB 직접 DNS"
-  value       = module.edge_alb.dns_name
-}
-
 output "rds_endpoint" {
   description = "RDS address:port"
   value       = module.rds.endpoint
@@ -34,16 +20,7 @@ output "rds_master_user_secret_arn" {
   value       = module.rds.master_user_secret_arn
 }
 
-output "edge_url" {
-  description = "임시 검증용 공개 URL(HTTPS)"
-  value       = "https://${var.edge_domain}"
-}
-
 # ── 프론트 CDN ───────────────────────────────────────────
-output "widget_url" {
-  value = module.widget_site.url
-}
-
 output "console_url" {
   value = module.tenant_console_site.url
 }
@@ -146,16 +123,6 @@ output "admin_url" {
 }
 
 # ── UI 배포용 값 (GitHub repo vars — deploy-ui.yml 콜러가 with 로 전달) ──
-output "widget_ui_bucket" {
-  description = "→ vars.WIDGET_UI_BUCKET"
-  value       = module.widget_site.bucket_name
-}
-
-output "widget_ui_distribution_id" {
-  description = "→ vars.WIDGET_UI_DISTRIBUTION_ID"
-  value       = module.widget_site.distribution_id
-}
-
 output "tenant_console_ui_bucket" {
   description = "→ vars.TENANT_CONSOLE_UI_BUCKET"
   value       = module.tenant_console_site.bucket_name

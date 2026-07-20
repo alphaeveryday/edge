@@ -14,12 +14,6 @@ data "aws_route53_zone" "main" {
   name = var.route53_zone_name
 }
 
-data "aws_acm_certificate" "wildcard" {
-  domain      = "*.${var.route53_zone_name}"
-  statuses    = ["ISSUED"]
-  most_recent = true
-}
-
 data "aws_acm_certificate" "wildcard_cdn" {
   provider    = aws.us_east_1
   domain      = "*.${var.route53_zone_name}"
@@ -40,10 +34,6 @@ data "aws_ecr_repository" "schema_migrate" {
 
 # 앱 배포(deploy-app.yml)가 이미지를 push 할 저장소 — foundation 소유(edge/<app>).
 # CD 배포 역할에 push 권한을 스코프하기 위해 ARN 을 조회한다.
-data "aws_ecr_repository" "widget_api" {
-  name = "edge/widget-api"
-}
-
 data "aws_ecr_repository" "tenant_console_api" {
   name = "edge/tenant-console-api"
 }
@@ -57,19 +47,6 @@ data "aws_ecr_repository" "super_admin_api" {
 # 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
 data "aws_secretsmanager_secret" "deepseek" {
   name = "${local.prefix}-data-pipeline/deepseek/api-key"
-}
-
-# 엣지 도메인 → ALB (ALIAS)
-resource "aws_route53_record" "edge" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.edge_domain
-  type    = "A"
-
-  alias {
-    name                   = module.edge_alb.dns_name
-    zone_id                = module.edge_alb.zone_id
-    evaluate_target_health = true
-  }
 }
 
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
@@ -100,62 +77,6 @@ module "rds" {
   name       = local.prefix
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.data_subnet_ids # 격리 데이터 tier(컴퓨트와 분리)
-}
-
-# widget-api SG → RDS 5432 (env 에서 독립 리소스로 — 순환 의존 회피)
-resource "aws_vpc_security_group_ingress_rule" "rds_from_widget_api" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.widget_api.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "widget-api svc to postgres"
-}
-
-# ── 공개 엣지 ALB (임시: widget-api 검증용) ─────────────
-module "edge_alb" {
-  source = "../../modules/alb"
-
-  name              = "${local.prefix}-edge"
-  vpc_id            = module.network.vpc_id
-  public_subnet_ids = module.network.public_subnet_ids
-  target_port       = 8080
-  health_check_path = "/actuator/health"
-  allowed_cidrs     = var.alb_allowed_cidrs
-  enable_https      = true
-  certificate_arn   = data.aws_acm_certificate.wildcard.arn # foundation apne2 와일드카드
-}
-
-# ── widget-api (ALB 뒤 공개 검증) ───────────────────────
-module "widget_api" {
-  source = "../../modules/ecs-service"
-
-  name   = "widget-api"
-  region = var.region
-
-  cluster_arn                   = module.service_cluster.cluster_arn
-  service_connect_namespace_arn = module.service_cluster.namespace_arn
-
-  container_image  = var.widget_api_image
-  container_port   = 8080
-  cpu_architecture = "X86_64"
-
-  vpc_id        = module.network.vpc_id
-  subnet_ids    = module.network.private_subnet_ids
-  desired_count = 1
-
-  ingress_security_group_ids        = [module.edge_alb.security_group_id]
-  target_group_arn                  = module.edge_alb.target_group_arn
-  health_check_grace_period_seconds = 120
-
-  environment = {
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
-    SPRING_DATASOURCE_USERNAME = module.rds.master_username
-  }
-  secrets = {
-    SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
-  }
-  secret_arns = [module.rds.master_user_secret_arn]
 }
 
 # ── 내부 API (호출자 생길 때까지 idle) ──────────────────
@@ -244,30 +165,25 @@ module "gha_deploy_dev" {
 
   # 앱/배치 이미지 push 권한 — 백엔드 앱 4종 + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
-    data.aws_ecr_repository.widget_api.arn,
     data.aws_ecr_repository.tenant_console_api.arn,
     data.aws_ecr_repository.super_admin_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = [
-    module.widget_api.service_arn,
     module.tenant_console_api.service_arn,
     module.super_admin_api.service_arn,
   ]
   app_pass_role_arns = [
-    module.widget_api.execution_role_arn, module.widget_api.task_role_arn,
     module.tenant_console_api.execution_role_arn, module.tenant_console_api.task_role_arn,
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
   ]
 
   # UI 배포(deploy-ui.yml) 권한 — 3개 프론트 S3 sync + CloudFront 무효화.
   ui_bucket_arns = [
-    module.widget_site.bucket_arn,
     module.tenant_console_site.bucket_arn,
     module.super_admin_site.bucket_arn,
   ]
   ui_distribution_arns = [
-    module.widget_site.distribution_arn,
     module.tenant_console_site.distribution_arn,
     module.super_admin_site.distribution_arn,
   ]
@@ -366,16 +282,6 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
 # 모듈·S3 이름은 앱 폴더명과 일치(widget-ui·tenant-console-ui·super-admin-ui).
 # 인증서는 foundation us-east-1 와일드카드(모든 서브도메인 커버).
-module "widget_site" {
-  source = "../../modules/static-site"
-
-  name            = "${local.prefix}-widget" # widget-ui (임베드 위젯, 정적 파일)
-  domain_name     = var.widget_domain
-  zone_id         = data.aws_route53_zone.main.zone_id
-  certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
-  spa             = false
-}
-
 module "tenant_console_site" {
   source = "../../modules/static-site"
 
