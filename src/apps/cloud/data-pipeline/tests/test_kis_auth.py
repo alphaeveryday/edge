@@ -200,3 +200,29 @@ def test_대기시간에_지터가_섞여_동시_충돌이_재생산되지_않�
         TOKEN_RATE_LIMIT_WAIT_SEC <= w <= TOKEN_RATE_LIMIT_WAIT_SEC + TOKEN_RATE_LIMIT_JITTER_SEC
         for w in waits
     )
+
+
+def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
+    # WHY: 토큰 발급이 분당 1회라 N개 브랜치가 동시에 시작하면 마지막 브랜치는 N-1 분을
+    #      기다려야 한다. 예산이 브랜치 수보다 작으면 그 브랜치는 상시 partial 이 된다
+    #      (edge-review 지적 — kis 브랜치가 2개에서 3개로 늘었는데 예산이 2였다).
+    #      SFN 의 kis 브랜치 수와 이 상수가 같이 움직여야 한다는 계약을 값으로 고정한다.
+    import pathlib as _p
+
+    from data_pipeline.sources.kis_auth import TOKEN_RATE_LIMIT_MAX_RETRY
+
+    here = _p.Path(__file__).resolve()
+    tf = next(
+        (parent / "infra/terraform/modules/data-pipeline/statemachine.tf"
+         for parent in here.parents
+         if (parent / "infra/terraform/modules/data-pipeline/statemachine.tf").exists()),
+        None,
+    )
+    if tf is None:  # 저장소 밖(패키지만 설치된 환경)에서는 검사할 대상이 없다
+        pytest.skip("statemachine.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+    kis_branches = tf.read_text().count('taskdef_key  = "kis"')
+    assert kis_branches >= 3, f"kis 브랜치 수 파싱 실패({kis_branches}) — 경로·형식 확인"
+    assert TOKEN_RATE_LIMIT_MAX_RETRY > kis_branches - 1, (
+        f"동시 발급자 {kis_branches}개인데 재시도 예산이 {TOKEN_RATE_LIMIT_MAX_RETRY} — "
+        "마지막 브랜치가 자기 차례를 못 받는다"
+    )

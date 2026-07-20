@@ -147,11 +147,6 @@ locals {
       command_expr = "States.Array('tag-news', '--run-id', $.run_id, '--limit', '${var.tag_news_limit}')"
     },
     {
-      state        = "LoadInstruments"
-      taskdef_key  = "rds"
-      command_expr = "States.Array('load-instruments', '--run-id', $.run_id)"
-    },
-    {
       # ETF 가격변동 트리거(ALPHA-406) — canonical 일봉 → price_movement_trigger.
       # 창 미지정 = canonical 전체 스캔 + 멱등 skip 이라 놓친 날을 다음 런이 자연 회복한다.
       state        = "LoadPriceTriggers"
@@ -372,11 +367,11 @@ locals {
         Type = "Choice"
         Choices = [{
           And  = local.normalize_success_checks
-          Next = "FeatureParallel"
+          Next = "LoadInstruments"
         }]
         Default = "NotifyFailure"
       }
-      # 정제 전량 성공일 때만 feature 로 넘어간다 — 실행 내 순서 제어다.
+      # 정제 전량 성공일 때만 **마스터 적재**로 넘어간다 — 실행 내 순서 제어다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
@@ -384,6 +379,39 @@ locals {
       # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. tag-news 는 미태깅 기사만
       # 고르고(태거·온톨로지 버전 + 입력 지문으로 판정) load-instruments 는 자연키 멱등이라
       # 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
+      # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
+      # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
+      # unknown 으로 건너뛰고 **성공으로 끝난다** — 그 런은 조용히 데이터를 빠뜨린다.
+      # LoadAssertions 가 document FK 때문에 뒤 직렬인 것과 같은 이유·같은 형태다.
+      # 자연키 멱등이라 재실행 안전하고, 마스터가 없을 때만 발번한다(ADR-0027).
+      LoadInstruments = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "LoadInstrumentsCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('load-instruments', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      LoadInstrumentsCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "FeatureParallel"
+        }]
+        Default = "NotifyFailure"
+      }
       FeatureParallel = {
         Type       = "Parallel"
         Branches   = local.feature_branches
