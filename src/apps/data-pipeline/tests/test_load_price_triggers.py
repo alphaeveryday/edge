@@ -150,7 +150,11 @@ def test_observed_return_is_holdings_weighted_proxy(tmp_path, monkeypatch):
     [( _sql, params )] = _inserts(conn)
     assert params[2] == "2026-07-16"
     assert abs(params[4] - 0.038) < 1e-9, "proxy 산식이 엔진 정본과 다르다"
-    assert params[6] == "abs|0.0380|>=0.03"  # 엔진 l0_gate 사유 포맷
+    # 엔진 l0_gate 사유 포맷을 **접두로** 유지한다 — 뒤에 coverage 를 덧붙였다(ALPHA-452).
+    # 확장이 가능한 건 파이프라인이 이 테이블의 단일 writer 이기 때문이다(ALPHA-411, 엔진은
+    # SELECT 만 한다). 접두가 깨지면 정책 계보 추적이 끊기므로 그건 그대로 고정한다.
+    assert params[6].startswith("abs|0.0380|>=0.03")
+    assert params[6] == "abs|0.0380|>=0.03|coverage=1.0000"
 
 
 def test_quiet_day_is_gated_out_at_3pct(tmp_path, monkeypatch):
@@ -180,6 +184,53 @@ def test_proxy_is_coverage_normalized_over_priced_subset(tmp_path, monkeypatch):
     assert _run(storage, conn, monkeypatch) == 0
     [(_sql, params)] = _inserts(conn)
     assert abs(params[4] - 0.05) < 1e-9  # 0.6*0.05/0.6 — 가중치 재정규화
+
+
+def test_thin_coverage_trigger_records_how_thin_it_was(tmp_path, monkeypatch):
+    """1% 비중 종목 하나만 가격이 있어도 게이트를 통과한다 — 그 사실이 남아야 한다(ALPHA-452).
+
+    WHY: 부분집합 재정규화는 표본이 작아도 값을 낸다. 1% 종목이 10% 오르면 proxy 도 10% 라
+    3% 게이트를 통과하는데, coverage 가 없으면 트리거만 봐선 "ETF 가 움직였다"와 "가격 있는
+    한 종목이 움직였다"를 구분할 수 없다. 이 트리거는 뒤이어 설명·분석 비용을 쓰게 만든다.
+    막지는 않는다(하한은 ALPHA-453) — 대신 근거의 두께를 행과 로그 양쪽에 남긴다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-01", [
+        {"constituent_ticker": "005930", "weight_pct": 1.0},    # 유일하게 가격 있음
+        {"constituent_ticker": "000660", "weight_pct": 99.0},   # 가격 결측
+    ])
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch) == 0
+
+    [(_sql, params)] = _inserts(conn)
+    assert abs(params[4] - 0.10) < 1e-9          # proxy 는 1% 종목의 등락 그대로
+    assert "coverage=0.0100" in params[6]         # 행이 근거의 두께를 들고 있다
+    log = _quality_log(storage)
+    assert log["created_rows"][0]["coverage"] == 0.01
+    assert log["coverage_by_date"]["2026-07-16"] == 0.01
+    assert log["coverage_min"] == 0.01
+
+
+def test_coverage_is_recorded_for_gated_out_days_too(tmp_path, monkeypatch):
+    """트리거가 안 난 날의 coverage 도 남긴다 — 하한을 정할 근거는 걸러진 날에 있다.
+
+    WHY: 최소 coverage 하한(ALPHA-453)은 실측 분포로 정해야 하는데, 트리거가 난 날만 남기면
+    표본이 "게이트를 통과한 날"로 편향된다. 평상시 coverage 가 얼마인지 모르면 하한이
+    추측이 된다. 이 계측을 지우면 ALPHA-453 이 근거를 잃는다.
+    """
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage)  # 005930 60% / 000660 40%
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 10010.0}])  # +0.1%
+
+    assert _run(storage, _FakeConn(), monkeypatch) == 0
+
+    log = _quality_log(storage)
+    assert log["gated_out"] == 1 and log["created"] == 0   # 잔잔한 날 — 트리거 없음
+    assert log["coverage_by_date"]["2026-07-16"] == 0.6    # 그래도 coverage 는 남는다
 
 
 def test_idempotent_rerun_skips_same_policy_rows(tmp_path, monkeypatch):

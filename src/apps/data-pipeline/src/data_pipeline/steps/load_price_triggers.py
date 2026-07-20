@@ -8,7 +8,10 @@ explanation_route` 의 첫 고리이자, 이 테이블의 **단일 writer** 다(
 수익률이 아니라 **구성종목 가중 proxy 수익률** — canonical holdings 의 가중치와 구성종목
 일봉 수익률로 `Σ(weight·ret) / Σ(weight)` (가격이 있는 부분집합에 한정한 coverage 정규화,
 analysis-engine daily_pipeline.compute_decomposition 과 같은 산식) — 이고 임계값은
-3%(`l0-abs-v1`, 설정 [price_triggers])다. detection_reason 도 엔진 포맷을 따른다.
+3%(`l0-abs-v1`, 설정 [price_triggers])다. detection_reason 은 엔진 포맷을 **접두로** 두고
+뒤에 `|coverage=…` 를 덧붙인다(ALPHA-452 — 판정에 쓴 가격 coverage 를 행에 남긴다).
+**coverage 로 막지는 않는다**: 최소 하한은 실측 분포와 엔진 정책 합의가 선행이라 ALPHA-453
+소관이고, 엔진에는 아직 coverage 게이트가 없다.
 
 detected_at·ID·멱등은 구현 소관이라 파이프라인 방식을 유지한다: 장 마감(KST 15:30) 고정
 (엔진의 런타임 시계는 재실행마다 uq 세 번째 키를 흔든다), `pmt_<ULID>`(ADR-0027),
@@ -109,12 +112,25 @@ def _proxy_return(
     holdings: list[tuple[str, float]],
     closes: dict[str, float],
     prev_closes: dict[str, float],
-) -> float | None:
-    """구성종목 가중 proxy 수익률 — 엔진 compute_decomposition 과 같은 산식.
+) -> tuple[float | None, float]:
+    """구성종목 가중 proxy 수익률과 **가격 coverage** — 엔진 compute_decomposition 과 같은 산식.
 
-    가격이 있는 부분집합에 한정해 Σ(weight·ret)/Σ(weight) 로 coverage 정규화한다.
-    가격이 하나도 없으면 None(트리거 판단 불능 — 결측으로 센다).
+    가격이 있는 부분집합에 한정해 Σ(weight·ret)/Σ(weight) 로 정규화한다.
+    가격이 하나도 없으면 proxy 는 None(트리거 판단 불능 — 결측으로 센다).
+
+    **coverage 를 함께 돌려주는 이유**(ALPHA-452): 부분집합 재정규화는 표본이 작아도 값을 낸다 —
+    1% 비중 종목 하나만 가격이 있고 그게 10% 오르면 proxy 도 10% 라 3% 게이트를 통과하고,
+    나머지 99% 결손이 트리거 어디에도 안 남는다. `covered_weight / total_weight` 를 남겨야
+    "ETF 가 움직였다"와 "가격 있는 한 종목이 움직였다"를 사후에 구분할 수 있다.
+
+    산식·이름은 엔진 `compute_decomposition`(analysis-engine daily_pipeline.py) 을 그대로
+    따른다 — 엔진은 이 값을 이미 설명 문구("가격 커버리지 87%")에 쓰고 있어, 새로 정의하면
+    같은 이름의 두 수치가 생긴다. total_weight 가 0 이면 coverage 0.0(엔진과 동일).
+
+    **coverage 로 막지는 않는다** — 최소 하한은 실측 분포와 엔진 정책 합의가 선행이라
+    ALPHA-453 소관이다. 여기서는 계측만 한다.
     """
+    total_weight = sum(weight for _t, weight in holdings)
     num = den = 0.0
     for ticker, weight in holdings:
         close = closes.get(ticker)
@@ -123,7 +139,8 @@ def _proxy_return(
             continue
         num += weight * (close / prev_close - 1.0)
         den += weight
-    return (num / den) if den > 0 else None
+    coverage = (den / total_weight) if total_weight > 0 else 0.0
+    return ((num / den) if den > 0 else None), coverage
 
 
 def _resolve_etf_instrument_ids(conn, ticker: str) -> list[str]:
@@ -191,6 +208,7 @@ def run(
     already = created = replaced_stale_policy = stale_policy_kept = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
+    coverage_by_date: dict[str, float] = {}  # 거래일 → 가격 coverage (ALPHA-452, 판정 무관)
     exit_code = 0
 
     closes_cache: dict[str, dict[str, float]] = {}
@@ -299,8 +317,18 @@ def run(
                     missing_holdings += 1
                     continue
 
-                proxy_ret = _proxy_return(holdings, closes_of(date),
-                                          closes_of(prev_by_date[date]))
+                proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
+                                                    closes_of(prev_by_date[date]))
+                # 게이트 판정과 **무관하게** 남긴다 — 최소 하한(ALPHA-453)을 정하려면 트리거가
+                # 난 날뿐 아니라 걸러진 날의 분포도 필요하다.
+                #
+                # 단 이 지점은 현행 정책 행이 **이미 있는 날짜에는 닿지 않는다**(위 already
+                # continue). 그래서 로그의 이 맵은 "아직 트리거가 없는 날"의 분포이고, 트리거가
+                # 난 날의 coverage 는 그 행의 detection_reason 에 남는다 — 둘을 합쳐야 전체다.
+                # 남는 구멍은 ALPHA-452 이전에 만들어진 기존 행뿐이다(그 행들은 어느 쪽에도
+                # 없다). 일회성 과거 구멍이라 여기서 메우지 않는다 — already 앞으로 옮기면 매 런
+                # 전체 거래일의 가격 파티션을 다시 읽어 비용이 히스토리에 비례해 는다(Codex #149).
+                coverage_by_date[date] = round(coverage, 4)
                 if proxy_ret is None:
                     missing_price += 1
                     continue
@@ -322,14 +350,19 @@ def run(
                             f"{date}{_MARKET_CLOSE_KST}",
                             proxy_ret,
                             config.policy_version,
-                            # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성.
-                            f"abs|{proxy_ret:.4f}|>={config.abs_threshold}",
+                            # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성. 뒤에 coverage 를
+                            # 덧붙인다(ALPHA-452): 이 트리거가 구성종목 몇 %의 가격으로 판정됐는지가
+                            # 행 자체에 없으면, 소비자(설명·검수)가 근거의 두께를 알 수 없다.
+                            # 컬럼 신설 대신 이 필드를 쓰는 이유 — 엔진은 이 값을 읽어 나르기만 하고
+                            # 파싱하지 않아(daily_pipeline.py 의 trigger["reason"]) 늘려도 안전하다.
+                            f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
+                            f"|coverage={coverage:.4f}",
                         ),
                     )
                 created += 1
                 created_rows.append({"trade_date": date, "observed_return": proxy_ret,
                                      "price_movement_trigger_id": trigger_id,
-                                     "holdings_as_of": as_of})
+                                     "holdings_as_of": as_of, "coverage": round(coverage, 4)})
     except Exception as exc:
         # 커밋 경계는 런 전체다 — connect() 가 예외면 롤백이라 부분 적재가 없다. 트레이스백으로
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
@@ -350,6 +383,17 @@ def run(
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
         "stale_policy_kept": stale_policy_kept,
         "created": created, "created_rows": created_rows,
+        # 가격 coverage 계측(ALPHA-452) — **아직 트리거가 없는 거래일**의 분포다(현행 정책 행이
+        # 있는 날짜는 already 로 먼저 빠진다). 트리거가 난 날의 coverage 는 그 행의
+        # detection_reason 에 있으니, 하한(ALPHA-453)은 둘을 합쳐 봐야 한다.
+        # min 은 "가장 얇은 근거로 평가한 날"이라 하한 후보의 출발점이고, 전체 맵이 있어야
+        # 그 값이 이상치인지 상시인지 구분된다.
+        # ponytail: 창 미지정(기본 전체 스캔)이면 트리거가 안 난 과거 날짜가 매 런 다시 담겨
+        # 로그당 O(전체 거래일)·누적 O(N²)이다(Codex #148). 항목이 ~28바이트라 1년 7KB·5년 35KB
+        # 수준이고 이 맵이 곧 ALPHA-453 의 근거라 지금은 그대로 둔다 — 커지면 --from/--to 로
+        # 창을 좁히거나 날짜 맵 대신 히스토그램으로 축약한다.
+        "coverage_by_date": coverage_by_date,
+        "coverage_min": min(coverage_by_date.values(), default=None),
         "failures": failures, "exit_code": exit_code,
     }
     try:
