@@ -1,8 +1,8 @@
-"""Tests for the Explanation domain model.
+"""Explanation 도메인 모델 테스트.
 
-The DeepSeek response is an untyped JSON object; Explanation gives it typed
-accessors while preserving the raw payload for the run archive (ALPHA-407
-fields such as key_evidence/unexplained are otherwise lost by the DB mapping).
+DeepSeek 응답은 타입 없는 JSON 객체다. Explanation 은 타입 있는 접근자를 주면서
+원본 payload 를 보존한다 — DB 매핑에서 잃는 필드(key_evidence·unexplained 등,
+ALPHA-407)가 런 아카이브에 남아야 하기 때문이다.
 """
 
 from edge_analysis.domain.models import Explanation

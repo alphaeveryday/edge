@@ -1,8 +1,8 @@
-"""Tests for the run archive and its decomposition summary.
+"""런 아카이브와 분해 요약 테스트.
 
-Every run (including a calm no-trigger exit) must leave one archived record so
-intermediate outputs stay auditable, and an archive write must never take the
-run down: persistence is the job, observation is not.
+모든 런(트리거 없는 잔잔한 종료 포함)은 아카이브 1건을 남겨 중간 산출물이
+감사 가능해야 하고, 아카이브 쓰기 실패가 런을 죽여선 안 된다 — 본업은 영속,
+아카이브는 관측이다.
 """
 
 import json
@@ -33,8 +33,8 @@ class _FakeS3:
 
 
 def test_archive_lands_under_the_result_prefix_runs_path():
-    # The key must sit under the result prefix's runs/ so the existing PutObject
-    # IAM scope covers it; anywhere else is an AccessDenied every run.
+    # 키는 결과 prefix 하위 runs/ 여야 기존 PutObject IAM 스코프 안이다 —
+    # 밖이면 매 런 AccessDenied 다.
     s3 = _FakeS3()
 
     location = write_run_archive(s3, _SETTINGS, {
@@ -47,7 +47,7 @@ def test_archive_lands_under_the_result_prefix_runs_path():
                           "trade_date=2026-07-16/req-1.json")
     assert location == f"s3://test-lake/{put['Key']}"
     body = json.loads(put["Body"].decode("utf-8"))
-    assert body["explanation"]["key_evidence"] == ["e1"]  # raw LLM fields survive
+    assert body["explanation"]["key_evidence"] == ["e1"]  # LLM 원문 보존
     assert body["explanation"]["unexplained"] == "u"
     assert body["trade_date"] == "2026-07-16"
 

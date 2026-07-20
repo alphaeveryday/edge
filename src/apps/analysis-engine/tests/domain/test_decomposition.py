@@ -1,7 +1,7 @@
-"""Tests for ETF-move decomposition and routing.
+"""ETF 등락 분해·라우팅 테스트.
 
-This is the engine's core arithmetic; the proxy-return formula must match the
-pipeline's trigger writer so a fired trigger and its explanation agree.
+엔진의 핵심 산술이다. proxy 등락 산식은 파이프라인 트리거 writer 와 같아야
+발화한 트리거와 그 설명의 분해가 일치한다.
 """
 
 import pytest
@@ -22,11 +22,11 @@ def test_proxy_return_is_weight_averaged_over_priced_subset():
 
 def test_unpriced_constituents_reduce_coverage_but_not_count():
     holdings = [Holding("A", "A", 0.6), Holding("B", "B", 0.4)]
-    returns = {"A": 0.10}  # B has no price for the day.
+    returns = {"A": 0.10}  # B 는 그날 가격이 없다.
 
     d = compute_decomposition(holdings, returns)
 
-    assert d.proxy_ret == pytest.approx(0.10)  # normalized over A's weight only
+    assert d.proxy_ret == pytest.approx(0.10)  # A 비중으로만 정규화
     assert d.covered_weight == pytest.approx(0.6)
     assert d.total_priced == 1
     assert d.n_constituents == 2
@@ -34,7 +34,7 @@ def test_unpriced_constituents_reduce_coverage_but_not_count():
 
 def test_members_are_ranked_by_absolute_contribution():
     holdings = [Holding("A", "A", 0.2), Holding("B", "B", 0.8)]
-    returns = {"A": 0.10, "B": -0.05}  # |0.02| < |0.04| -> B ranks first
+    returns = {"A": 0.10, "B": -0.05}  # |0.02| < |0.04| → B 가 1위
 
     d = compute_decomposition(holdings, returns)
 
@@ -51,7 +51,7 @@ def test_no_priced_constituent_yields_no_proxy():
 
 
 def test_route_is_concentrated_at_the_inclusive_threshold():
-    # top1 == 0.5 counts as concentrated (>= threshold).
+    # top1 == 0.5 은 집중으로 친다(임계값 이상 포함).
     holdings = [Holding("A", "A", 0.5), Holding("B", "B", 0.5)]
     returns = {"A": 0.10, "B": 0.10}
 

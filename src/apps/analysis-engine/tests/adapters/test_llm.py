@@ -1,8 +1,7 @@
-"""Tests for the analysis step's response validation.
+"""분석 스텝의 응답 검증 테스트.
 
-The DeepSeek HTTP call is I/O and is not unit-tested; analyze() is exercised
-with a fake client to pin that a malformed response fails loudly instead of
-persisting an empty explanation.
+DeepSeek HTTP 호출은 I/O 라 여기서 유닛테스트하지 않는다. analyze() 는 fake client 로
+돌려, 잘못된 응답이 빈 설명을 영속하는 대신 fail-loud 하는지 고정한다.
 """
 
 from datetime import date

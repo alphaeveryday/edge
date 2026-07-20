@@ -1,9 +1,8 @@
-"""Tests for the run orchestration.
+"""run 오케스트레이션 테스트.
 
-Dependencies are injected as fakes, so these pin control flow rather than I/O:
-a trigger-less day exits calmly without analysis, a triggered day persists the
-explanation, and a day missing FK prerequisites falls back to S3 instead of
-inserting an orphan row.
+의존성을 fake 로 주입해 I/O 가 아니라 제어 흐름을 고정한다: 트리거 없는 날은 분석
+없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 고아
+행을 넣는 대신 S3 로 폴백한다.
 """
 
 import json
@@ -91,7 +90,7 @@ def test_no_trigger_exits_without_analysis():
     s3 = _FakeS3()
 
     assert _run(store, s3) == 0
-    assert store.calls == []  # no observation/route, no explanation
+    assert store.calls == []  # observation/route·설명 없음
     assert _outcomes(s3) == ["normal_variation"]
 
 
@@ -109,7 +108,7 @@ def test_missing_prerequisites_fall_back_to_s3():
     s3 = _FakeS3()
 
     assert _run(store, s3) == 0
-    assert "persist_explanation" not in store.calls  # no orphan RDS row
+    assert "persist_explanation" not in store.calls  # 고아 RDS 행 없음
     keys = [p["Key"] for p in s3.puts]
-    assert any("/runs/" not in k for k in keys)  # explanation S3 fallback
-    assert any("/runs/" in k for k in keys)      # run archive
+    assert any("/runs/" not in k for k in keys)  # 설명 S3 폴백
+    assert any("/runs/" in k for k in keys)      # 런 아카이브

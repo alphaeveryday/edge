@@ -1,9 +1,9 @@
-"""Tests for the Event Store repository's trigger consumption.
+"""Event Store 리포지토리의 트리거 소비 테스트.
 
-The engine consumes the pipeline-written price_movement_trigger. It must not
-resurrect the double-writer (ADR-0005) by inserting a trigger, and observation/
-route lineage ids must derive from the *consumed* trigger id, not a locally
-recomputed candidate, or the lineage points at a row that is not in the DB.
+엔진은 파이프라인이 쓴 price_movement_trigger 를 소비한다. 트리거를 직접 insert 해
+이중 writer(ADR-0005)를 되살리면 안 되고, observation/route 계보 id 는 로컬 재계산
+후보가 아니라 **소비한** trigger_id 에서 파생돼야 한다 — 아니면 계보가 DB 에 없는
+행을 가리킨다.
 """
 
 from datetime import date
@@ -60,7 +60,7 @@ def test_missing_trigger_row_means_normal_variation():
 
     assert EventStore(conn).fetch_price_trigger("inst_ETF", date(2026, 7, 16)) is None
 
-    # Natural key + latest detected_at, since transitional duplicates may exist.
+    # 자연키 + 최신 detected_at (이행기 중복 행이 있을 수 있다).
     sql, params = conn.executed[0]
     assert "ORDER BY detected_at DESC" in sql
     assert params == ("inst_ETF", "2026-07-16")
@@ -86,7 +86,7 @@ def test_lineage_derives_from_the_consumed_trigger_id(monkeypatch):
 
     trigger_inserts = [s for s, _ in conn.executed
                        if s.upper().startswith("INSERT INTO PRICE_MOVEMENT_TRIGGER")]
-    assert trigger_inserts == []  # double-writer must stay dead
+    assert trigger_inserts == []  # 이중 writer 는 되살아나면 안 된다
     obs_inserts = [p for s, p in conn.executed
                    if s.upper().startswith("INSERT INTO ETF_CONTRIBUTION_OBSERVATION")]
-    assert obs_inserts[0][1] == "pmt_01PIPELINEULID"  # obs FK points at consumed row
+    assert obs_inserts[0][1] == "pmt_01PIPELINEULID"  # obs FK 가 소비한 행을 가리킨다

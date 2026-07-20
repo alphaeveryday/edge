@@ -1,8 +1,4 @@
-"""Tests for settings loading and validation.
-
-Bad or missing configuration must fail loudly rather than fall back to a silent
-default (AGENTS Rule 12).
-"""
+"""config — 잘못/누락 설정은 조용한 기본값이 아니라 fail-loud (AGENTS Rule 12)."""
 
 from datetime import datetime
 
@@ -19,7 +15,7 @@ from edge_analysis.config import (
 
 
 def _set_valid_env(monkeypatch):
-    """Set the minimum environment for a successful load."""
+    """로드 성공에 필요한 최소 환경을 세팅한다."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     for name in ("PGSCHEMA", "PGPASSWORD"):
         monkeypatch.delenv(name, raising=False)
@@ -53,7 +49,7 @@ def test_load_settings_with_injected_schema_raises(monkeypatch):
 
 
 def test_parse_trade_date_defaults_to_today_when_empty():
-    # A trigger-less day still runs for "today" (KST) instead of failing.
+    # 트리거 없는 날에도 오늘(KST)로 돌아야 그날 설명이 난다.
     assert parse_trade_date(None) == datetime.now(KST).date()
 
 

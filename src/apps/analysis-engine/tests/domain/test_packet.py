@@ -1,9 +1,8 @@
-"""Tests for analysis-packet construction.
+"""분석 패킷 구성 테스트.
 
-The exact prompt wording is a contract owned elsewhere; these tests pin only the
-behavior that guards bugs: a missing proxy must not crash the formatting, an
-empty event list needs a placeholder, and the member list is capped so a large
-holdings set cannot bloat the prompt.
+프롬프트 문구 자체는 다른 곳이 소유하는 계약이다. 여기서는 버그를 막는 동작만
+고정한다: proxy 부재가 포매팅을 깨뜨리지 않을 것, 이벤트가 없으면 플레이스홀더,
+큰 holdings 가 프롬프트를 부풀리지 않도록 멤버 줄 수 상한.
 """
 
 from datetime import date
@@ -45,7 +44,7 @@ def test_packet_uses_placeholder_when_no_events():
 
 
 def test_packet_caps_member_lines_at_eight():
-    members = [_member(f"T{i}", i) for i in range(1, 13)]  # 12 priced names
+    members = [_member(f"T{i}", i) for i in range(1, 13)]  # 12 종목
 
     _system, packet = build_packet(
         etf_ticker="091160", trade_date=date(2026, 7, 16),
