@@ -130,7 +130,7 @@ class KisNavSource:
         d2 = _yyyymmdd(self.to_date) or datetime.now(KST).strftime("%Y%m%d")
         for our_etf_id, kis_symbol in plan:
             try:
-                for row in self._fetch_etf(kis_symbol, d1, d2, token):
+                for row in self._fetch_etf(our_etf_id, kis_symbol, d1, d2, token):
                     # bronze 무변형: output 행 원본 보존 + 수집 provenance 만 부착.
                     record = dict(row)
                     record["our_etf_id"] = our_etf_id
@@ -145,7 +145,9 @@ class KisNavSource:
                 self._note_failure(kis_symbol, our_etf_id, str(exc))
                 continue
 
-    def _fetch_etf(self, kis_symbol: str, d1: str, d2: str, token: str) -> list[dict]:
+    def _fetch_etf(
+        self, our_etf_id: str, kis_symbol: str, d1: str, d2: str, token: str
+    ) -> list[dict]:
         """한 ETF 의 창 NAV 를 1콜로 받는다. rt_cd!=0 은 오류, EGW00201 만 본문 기반 재시도.
 
         실패는 예외로 올려 호출부가 ETF 단위로 격리한다. 빈 output 은 정상 ETF·정상 창으로는
@@ -186,8 +188,10 @@ class KisNavSource:
                     if isinstance(row, dict):
                         rows.append(row)
                     else:
+                        # our_etf_id 를 함께 남긴다 — symbol 만으로는 로그 소비자가
+                        # 어느 ETF 의 원본 행이 유실됐는지 내부 식별자로 잇지 못한다.
                         self._note_failure(
-                            kis_symbol, "", f"malformed row: {type(row).__name__}"
+                            kis_symbol, our_etf_id, f"malformed row: {type(row).__name__}"
                         )
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
