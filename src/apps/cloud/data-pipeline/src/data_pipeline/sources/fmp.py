@@ -26,7 +26,11 @@ MAX_PAGES = 50
 
 
 def market_for(our_ticker: str) -> str:
-    """KR 티커는 6자리 숫자, US 는 알파벳으로 시작한다."""
+    """KR 티커는 숫자로, US 는 알파벳으로 시작한다.
+
+    KR 6자리가 전부 숫자인 건 아니다 — 신규 상장분 단축코드에는 문자가 섞인다(0093A0 등).
+    선두만 보는 이 판정은 그 코드도 KR 로 옳게 분류한다(형태 판정은 `parse.krx_short_code`).
+    """
     return "KR" if our_ticker[:1].isdigit() else "US"
 
 

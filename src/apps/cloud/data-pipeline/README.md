@@ -68,7 +68,9 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 수집 대상은
 # canonical KR holdings 최신 스냅샷의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가
 # holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. 토큰은 run 당 1회 발급·재사용.
+# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
+# 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
+# 토큰은 run 당 1회 발급·재사용.
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달
