@@ -3,6 +3,52 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = var.log_retention_days
 }
 
+# 수집 소스가 통째로 건너뛰어진 런을 드러낸다(ALPHA-449, 검수 F-01).
+#
+# **왜 알람이 필요한가**: 수집기는 비활성·크리덴셜 결측을 status=skipped + **exit 0** 으로
+# 처리한다. 기존 통보 2경로는 둘 다 그걸 못 잡는다 — SFN NotifyFailure 는 ExitCode != 0 에서만
+# 발화하고, execution-timed-out 알람은 타임아웃 전용이다. 그래서 소스 하나가 통째로 빠져도
+# 파이프라인은 정상 성공으로 끝나고 아무 메일도 안 간다. collection_log 에 사유가 남지만
+# **읽는 쪽이 없어**(소비자는 테스트뿐) 사람이 S3 를 직접 열기 전엔 모른다.
+#
+# **이 알람이 덮지 않는 것**: 런을 실패시키지는 않는다. skip 된 소스 없이 다음 페이즈가 그대로
+# 진행되는 오케스트레이션 게이트는 여전히 열려 있다(F-01 의 나머지 절반, 별도 티켓).
+#
+# 패턴이 두 갈래인 이유 — skip 은 로그 흔적이 다른 두 경로에서 난다:
+#   - 비활성/크리덴셜 결측: logger.warning("… 수집 건너뜀") 후 조기 return 0. 5개 수집기의
+#     문구가 조금씩 달라 공통 부분문자열 "수집 건너뜀" 로 잡는다.
+#   - 매핑 타깃 0건: warning 이 아예 없고 종료 INFO 의 status=skipped 만 남는다.
+# 벤더별로 쪼개지 않는다 — 알람은 "로그를 보라"는 신호이고, 정상 상태에서 발화가 없다(실측).
+resource "aws_cloudwatch_log_metric_filter" "raw_ingest_skipped" {
+  name           = "${var.name}-raw-ingest-skipped"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "?\"수집 건너뜀\" ?\"status=skipped\""
+
+  metric_transformation {
+    name      = "RawIngestSkipped"
+    namespace = "edge/data-pipeline"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "raw_ingest_skipped" {
+  alarm_name        = "${var.name}-raw-ingest-skipped"
+  alarm_description = "수집 소스가 건너뛰어졌다(비활성·크리덴셜 결측 또는 매핑 타깃 0건) — 런은 exit 0 으로 성공하므로 이 알람 말고는 드러나는 곳이 없다. collection_log 에서 어느 벤더인지 확인할 것."
+  namespace         = "edge/data-pipeline"
+  metric_name       = "RawIngestSkipped"
+
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # metric filter 는 매칭이 없으면 데이터포인트를 아예 안 낸다 — 평상시가 곧 결측이라
+  # notBreaching 이어야 알람이 INSUFFICIENT_DATA 로 눌러앉지 않는다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_security_group" "task" {
   name        = "${var.name}-task"
   description = "data-pipeline raw ingest tasks ${var.name}"
