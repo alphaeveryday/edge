@@ -31,7 +31,7 @@ import logging
 from datetime import datetime, timezone
 
 from ..config import DbConfig
-from ..db import connect, domain_id
+from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, resolve
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
@@ -194,7 +194,13 @@ def run(
                     continue
 
                 with conn.cursor() as cur:
-                    assertion_id = domain_id("asrt")
+                    # 자연키에서 결정적으로 뽑는다(ALPHA-456) — 랜덤 ULID 였을 때는 이 테이블의
+                    # 다른 writer(assemble-events)와 값이 갈렸고, 먼저 도는 이 스텝의 랜덤값이
+                    # 남아 그걸 재료로 쓰는 source_event_id 까지 랜덤을 상속했다. 산식은
+                    # assemble-events 와 **같은 함수**여야 한다(각자 구현하면 salt·구분자
+                    # 하나에 다시 갈린다).
+                    assertion_id = stable_domain_id(
+                        "asrt", document_id, event_type, predicate)
                     cur.execute(
                         "INSERT INTO document_assertion (assertion_id, document_id,"
                         " event_type_code, predicate_code, confidence, available_at)"
