@@ -183,3 +183,29 @@ symbols = ["005930"]
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     with pytest.raises(SystemExit):
         main(["ingest-raw", "--source", "bigkinds", "--config", str(config)])
+
+
+def test_nav_shares_the_krx_etf_universe(monkeypatch):
+    # WHY: NAV 는 자기 etf_map 을 두지 않고 krx_etf.source.etf_map 을 공유한다 — 맵을 복제하면
+    #      한쪽만 갱신돼 구성종목과 NAV 의 수집 유니버스가 갈라진다(ALPHA-454 로 31종이 된 뒤
+    #      NAV 는 옛 목록을 보는 식). 이 배선이 끊기면 컴파일은 되고 데이터만 어긋나므로
+    #      값으로 고정한다. 창(--from/--to)도 함께 — 창이 안 넘어가면 백필이 조용히 죽는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    class _Spy(run_mod.KisNavSource):
+        def __init__(self, config, etf_map, client, from_date=None, to_date=None):
+            captured["etf_map"] = etf_map
+            captured["window"] = (from_date, to_date)
+            super().__init__(config, etf_map, client, from_date, to_date)
+
+    monkeypatch.setattr(run_mod, "KisNavSource", _Spy)
+    monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
+    assert main(["ingest-raw-nav", "--from", "2026-07-14", "--to", "2026-07-17"]) == 0
+
+    settings = run_mod.load_settings(None)
+    assert captured["etf_map"] == settings.krx_etf.source.etf_map
+    assert captured["etf_map"], "NAV 유니버스가 비어 있으면 수집 대상이 0이다"
+    assert captured["window"] == ("2026-07-14", "2026-07-17")

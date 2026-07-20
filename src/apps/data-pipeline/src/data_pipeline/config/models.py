@@ -121,6 +121,27 @@ class KisPriceSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class KisNavSource(BaseModel):
+    """KIS(한국투자) 국내 ETF NAV 소스 — nav-comparison-daily-trend, tr_id FHPST02440200 (ALPHA-380).
+
+    인증 축은 KisPriceSource 와 같다(OAuth 앱키/시크릿·env 도메인). 비밀값은 env 로만 주입:
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=...
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=...
+
+    **etf_map 이 여기 없는 건 의도다** — 수집 유니버스는 `krx_etf.source.etf_map`(ALPHA-454
+    국내 반도체 30 + KODEX 200)을 그대로 쓴다. 같은 ETF 목록을 두 섹션에 복제하면 한쪽만
+    갱신돼 구성종목과 NAV 의 유니버스가 어긋난다. KIS 는 ISIN 이 아니라 6자리 단축코드로
+    질의하므로 표준코드에서 파생한다(krx_etf._short_code).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    env: Literal["prod", "vps"] = "prod"
+    enabled: bool = True
+    app_key: str | None = None  # 비밀값: env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값: env 오버라이드 전용
+
+
 class FinancialSource(BaseModel):
     """재무제표 데이터 소스 (FMP 손익·재무상태·현금흐름 수집, S035).
 
@@ -246,6 +267,12 @@ class KisPriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: KisPriceSource
+
+
+class KisNavConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KisNavSource
 
 
 class FinancialConfig(BaseModel):

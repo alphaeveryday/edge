@@ -149,6 +149,16 @@ QQQ = "QQQ"   # 나스닥 100
 DIA = "DIA"   # 다우 30
 IWM = "IWM"   # 러셀 2000
 
+# 국내 ETF NAV 소스 — KIS ETF NAV비교추이(일) FHPST02440200 (ALPHA-380). KRX getJsonData 는
+# 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를 쓴다. 자격증명은 env:
+#   DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=...
+#   DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=...
+# 수집 대상은 여기 없다 — 아래 [krx_etf.source.etf_map] 을 그대로 쓴다(구성종목과 같은 유니버스).
+# 창(--from/--to) 미지정이면 앱이 기본 소급창을 채운다. ingest-raw-nav 로 실행.
+[kis_nav.source]
+env = "prod"
+enabled = true
+
 # 국내 ETF 구성종목 소스 — KRX 정보데이터시스템 PDF(MDCSTAT05001, KR, ALPHA-336). FMP 는
 # KR ETF 커버리지 밖이라 별개 벤더다. 로그인 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입:
 #   DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=...

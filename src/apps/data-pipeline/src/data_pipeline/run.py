@@ -1,7 +1,7 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|tag-news|load-instruments|load-price-triggers|load-documents
          |load-assertions|assemble-events}
@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
-from .lake import make_storage
+from .lake import make_storage, raw_etf_nav_partition
 from .sources import (
     BigKindsNewsSource,
     DartDisclosureSource,
@@ -41,6 +41,7 @@ from .sources import (
     FmpNewsSource,
     FmpPriceSource,
     KisDailyPriceSource,
+    KisNavSource,
     KrxEtfSource,
     PoliteClient,
 )
@@ -98,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "ingest-raw-disclosure", "ingest-raw-etf", "normalize-price",
+                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav",
+                 "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "tag-news", "load-instruments", "load-price-triggers",
                  "load-documents", "load-assertions", "assemble-events"],
@@ -279,6 +281,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|bigkinds)")
         return ingest_raw.run(settings, storage, source, run_id, from_date, to_date)
+    if args.step == "ingest-raw-nav":
+        # ETF NAV(ALPHA-380). 수집 유니버스는 krx_etf.source.etf_map 을 공유한다 —
+        # 구성종목과 NAV 가 서로 다른 ETF 목록을 보면 안 된다(맵 복제 = 드리프트).
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다 — sources.toml 확인")
+        if settings.krx_etf is None:
+            raise SystemExit("krx_etf.source 설정이 없다(NAV 유니버스 출처) — sources.toml 확인")
+        nav_source = KisNavSource(
+            settings.kis_nav.source,
+            settings.krx_etf.source.etf_map,
+            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            from_date,
+            to_date,
+        )
+        return ingest_raw_etf.run(
+            settings, storage, nav_source, run_id,
+            dataset="etf_nav", partition=raw_etf_nav_partition, job_name="ingest_raw_nav",
+        )
     if args.step == "ingest-price-raw":
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
         # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).

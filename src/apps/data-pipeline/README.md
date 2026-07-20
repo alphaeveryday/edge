@@ -114,6 +114,16 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
 
+# 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
+# KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
+# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 31종)을 그대로 공유한다
+# — 구성종목과 NAV 가 다른 목록을 보면 안 되기 때문. KIS 는 ISIN 이 아니라 6자리 단축코드로
+# 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 31종 중 7종 — 숫자로만 거르면 샌다).
+# 창(--from/--to)을 그대로 받아 1콜로 구간 거래일 NAV 를 받으므로 백필도 같은 명령이다.
+# raw 는 응답 행 전량 무변형(nav 외 stck_clpr·dprt 포함) append — 필드 선별은 canonical(382).
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-nav --from 2026-07-14 --to 2026-07-17
+
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
@@ -277,6 +287,10 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
 - `ingest-raw-disclosure`(공시, dart 세트) — 단일 벤더라 `--source` 없음
 - `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트)
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
+- `ingest-raw-nav`(국내 ETF NAV, **kis 세트** — 단일 벤더라 `--source` 없음)
+  - ⚠️ **SFN 편입 시**: KIS 토큰 발급은 앱키당 분당 1회다. 같은 앱키를 쓰는
+    `ingest-price-raw --source kis` 와 **동시 실행하면 한쪽이 403** 으로 죽는다(로컬 실측).
+    Parallel 브랜치에 나란히 넣지 말고 순차화하거나 앱키를 분리해야 한다.
   - ⚠️ **컷오버 잔여**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후)으로 바뀌어(ALPHA-414) 기준일
     불일치는 해소됐다. 남은 확인: ① trdDd 백필 수단 부재(실패한 날 스냅샷은 못 줍는다)
     ② 휴장일 trdDd 응답의 정체(7-17 휴장일에도 as_of=당일 라벨 응답 — 전 거래일 구성 추정).
