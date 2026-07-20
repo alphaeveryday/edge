@@ -80,11 +80,15 @@ class KisDailyPriceSource:
         """수집 대상 → [(our_ticker, kis_symbol)]. KR 6자리 코드는 **항등 매핑**이 기본이고
         (ALPHA-419 — KRX 코드가 곧 KIS 코드), symbol_map 은 항등이 아닌 예외의 오버라이드
         축으로만 남는다. 6자리가 아닌 미매핑 심볼(US 등)은 제외 — KIS 는 국내 전용.
+
+        6자리는 **숫자 전용이 아니다** — 신규 상장분 단축코드에는 문자가 섞이고(0093A0 등)
+        KIS 는 그대로 받는다. `isdigit()` 로 보면 그 종목들이 항등 매핑을 못 받아
+        "매핑 없음"으로 건너뛰어진다(ALPHA-463·380 과 같은 축).
         """
         out: list[tuple[str, str]] = []
         for our_ticker in symbols:
             kis_symbol = self.symbol_map.get(our_ticker)
-            if not kis_symbol and our_ticker.isdigit() and len(our_ticker) == 6:
+            if not kis_symbol and our_ticker.isalnum() and len(our_ticker) == 6:
                 kis_symbol = our_ticker
             if not kis_symbol:
                 logger.info("kis 매핑 없음 — 이 소스는 건너뜀: %s", our_ticker)

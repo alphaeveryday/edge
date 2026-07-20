@@ -93,6 +93,14 @@ def test_plan_maps_six_digit_identity_and_skips_foreign():
     assert plan == [("005930", "005930"), ("000660", "000660")]
 
 
+def test_plan_maps_alphanumeric_short_code_identity():
+    # WHY: 신규 상장분 단축코드에는 문자가 섞이고(0093A0 등) KIS 는 그대로 받는다. 숫자로만
+    #      보면 이 종목들이 항등 매핑을 못 받아 "매핑 없음"으로 건너뛰어져, 유니버스를
+    #      고쳐도 KIS 질의까지 못 간다(ALPHA-463 — 유니버스 파생과 같은 축의 결함).
+    plan = _source({}, symbol_map={}).plan(["0093A0", "0005G0", "NVDA"])
+    assert plan == [("0093A0", "0093A0"), ("0005G0", "0005G0")]
+
+
 def test_plan_symbol_map_overrides_identity():
     # WHY: symbol_map 은 항등이 아닌 예외의 오버라이드 축으로 남는다 — 맵이 있으면 맵이 이긴다.
     plan = _source({}, symbol_map={"005930": "005935"}).plan(["005930"])

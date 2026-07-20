@@ -34,6 +34,11 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
     수집 유니버스를 holdings 에서 파생한다 — 정적 targets/symbol_map 은 유니버스와
     어긋난다(구성종목 36개 중 2개만 등재됐던 원인, 뉴스 ALPHA-416·417 과 같은 축).
     스냅샷이 없으면 빈 목록 — 기존 targets 경로만 남는다(신규 레이크에서 정상).
+
+    코드는 **숫자 전용이 아니다** — KRX 가 번호를 소진해 신규 상장분에는 문자가 섞인
+    단축코드(0093A0·0005G0 등)를 발급하고, 우리 ETF 유니버스 31종 중 7종이 그렇다.
+    그래서 '6자리 영숫자'로 본다 — `isdigit()` 로 거르면 그 7종이 조용히 빠진다
+    (ALPHA-380 이 NAV 쪽에서 고친 것과 같은 축, `sources/kis_nav.py` 참조).
     """
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
@@ -48,7 +53,7 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
         for row in _read_parquet_rows(storage.get_bytes(key)):
             # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
             for value in (row.get("constituent_ticker"), row.get("etf_id")):
-                if isinstance(value, str) and value.strip().isdigit() and len(value.strip()) == 6:
+                if isinstance(value, str) and value.strip().isalnum() and len(value.strip()) == 6:
                     tickers.add(value.strip())
     return sorted(tickers)
 
