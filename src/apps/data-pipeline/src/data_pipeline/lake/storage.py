@@ -245,6 +245,43 @@ def parse_raw_etf_key(key: str) -> dict[str, str]:
     }
 
 
+_RAW_ETF_NAV_MARKER = "/dataset=etf_nav/"
+
+
+def is_raw_etf_nav_key(key: str) -> bool:
+    """raw etf_nav 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)
+
+    마커가 `/dataset=etf_nav/` 라 구성종목(`/dataset=etf_holdings/`)과 정확히 갈린다 —
+    is_raw_etf_key 가 NAV 를 집거나 그 반대가 되지 않는다.
+    """
+    return key.startswith("raw/") and _RAW_ETF_NAV_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_etf_nav_key(key: str) -> dict[str, str]:
+    """raw etf_nav 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=etf_nav/market=…/ingest_date=…/run_id=…/part-*.ndjson.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_etf_nav_partition(market: str, trade_date: str) -> str:
+    """canonical ETF NAV 파티션 프리픽스 (끝 슬래시 없음).
+
+    holdings(스냅샷·as_of_date)가 아니라 **일봉(canonical_price_daily_partition)과 동형**이다 —
+    NAV 는 거래일 시계열이고 마트 etf_nav_daily 의 grain 도 (etf, trade_date)라 시간축이
+    trade_date 다. 그래서 market_data 존에 둔다. 정체성 키 (market,etf_id,trade_date) 중
+    market·trade_date 가 파티션, etf_id 가 파티션 내 행 키다.
+    """
+    return f"canonical/market_data/etf_nav/market={market}/trade_date={trade_date}"
+
+
 def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
     """canonical ETF 구성종목 파티션 프리픽스 (끝 슬래시 없음).
 
