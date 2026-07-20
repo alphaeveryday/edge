@@ -103,6 +103,21 @@ def raw_etf_nav_partition(
     )
 
 
+def raw_etf_profile_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw ETF 프로필(etf_profile) 파티션 프리픽스 (끝 슬래시 없음).
+
+    구성종목·NAV 와 동형(bronze 통일) — 프로필은 스냅샷이라 매 run 이 현재 상품정보 전량을
+    수집일(ingest_date) 기준으로 append 한다. 명칭 변경(개명)은 새 수집일의 새 스냅샷으로
+    나타나고, 그 중 무엇이 현재인지 판정하는 건 canonical 소관이다.
+    """
+    return (
+        f"raw/source={source}/dataset=etf_profile/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_disclosure_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
@@ -280,6 +295,36 @@ def canonical_etf_nav_partition(market: str, trade_date: str) -> str:
     market·trade_date 가 파티션, etf_id 가 파티션 내 행 키다.
     """
     return f"canonical/market_data/etf_nav/market={market}/trade_date={trade_date}"
+
+
+_RAW_ETF_PROFILE_MARKER = "/dataset=etf_profile/"
+
+
+def is_raw_etf_profile_key(key: str) -> bool:
+    """raw etf_profile 데이터 파일 키인지. (part-*.ndjson 만.)"""
+    return key.startswith("raw/") and _RAW_ETF_PROFILE_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_etf_profile_key(key: str) -> dict[str, str]:
+    """raw etf_profile 키에서 파티션 값(source·market·ingest_date·run_id) 추출."""
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_etf_profile_partition(market: str, as_of_date: str) -> str:
+    """canonical ETF 프로필 파티션 프리픽스 (끝 슬래시 없음).
+
+    시세(market_data)가 아니라 **참조 데이터**라 reference 존에 둔다 — 거래일 시계열이 아니고
+    상품 식별·명칭이라 값이 거의 안 바뀐다. 시간축은 수집 기준일(as_of_date)이다: 개명이
+    일어나면 새 기준일의 행이 최신을 말하고, 마스터 로더는 **최신 기준일 스냅샷**을 읽는다
+    (구성종목 canonical 과 같은 모델).
+    """
+    return f"canonical/reference/etf_profile/market={market}/as_of_date={as_of_date}"
 
 
 def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:

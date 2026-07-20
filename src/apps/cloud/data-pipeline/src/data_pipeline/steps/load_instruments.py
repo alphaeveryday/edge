@@ -32,8 +32,13 @@ import logging
 from datetime import datetime, timezone
 
 from ..config import DbConfig
-from ..db import connect, domain_id
-from ..lake import Storage, canonical_etf_holdings_partition, quality_log_key
+from ..db import connect, domain_id, ensure_etf_profile
+from ..lake import (
+    Storage,
+    canonical_etf_holdings_partition,
+    canonical_etf_profile_partition,
+    quality_log_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,10 @@ DATASET = "instrument_master"
 LOADED_MARKETS = ("KR",)
 
 _COUNTRY_BY_MARKET = {"KR": "KR"}
+
+# 시장 → MIC. 구성종목은 canonical 행이 mic 을 갖고 오지만(KRX MKT_ID 흡수), ETF 자신은
+# 프로필에 시장 코드가 없어(KIS `mket_id_cd` 는 null 실측) 여기서 정한다.
+_MIC_BY_MARKET = {"KR": "XKRX"}
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -122,10 +131,56 @@ def _insert_equity(conn, *, name: str, mic: str, ticker: str, currency: str, iss
     return instrument_id
 
 
+def _latest_profile_rows(storage: Storage, market: str) -> list[dict]:
+    """canonical ETF 프로필의 **최신 기준일** 스냅샷 행(ALPHA-462).
+
+    개명이 일어나면 새 기준일 파티션이 최신을 말한다 — 과거 기준일까지 훑으면 옛 이름으로
+    마스터를 만들 수 있어 최신 하나만 읽는다(구성종목이 최신 스냅샷만 보는 것과 같은 모델).
+    """
+    marker = canonical_etf_profile_partition(market, "")  # ".../as_of_date="
+    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    dates.discard("")
+    if not dates:
+        return []
+    rows: list[dict] = []
+    prefix = canonical_etf_profile_partition(market, max(dates))
+    for key in storage.list_keys(prefix + "/"):
+        if key.endswith(".parquet"):
+            rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+    return rows
+
+
+def _insert_etf(conn, *, name: str, mic: str, ticker: str, currency: str) -> str:
+    """ETF 1건 — entity(INSTRUMENT) + instrument(type=ETF) + etf_profile. instrument_id 반환.
+
+    주식(_insert_equity)과 달리 발행회사(actor)를 만들지 않는다 — ETF 의 '발행자'는 운용사지만
+    우리 스키마의 `equity_profile.issuer_actor_id` 는 주식 전용이고, ETF 는 `etf_profile` 이
+    자기 프로필을 갖는다. 운용사 마스터가 필요해지면 별건이다.
+
+    `etf_type` 은 채우지 않는다 — 허용 어휘가 미정의라 ALPHA-378 이 NOT NULL 을 풀었다.
+    임의 값을 넣으면 그게 사실상 계약이 돼 나중에 적재분이 오염된다.
+    """
+    instrument_id = domain_id("inst")
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO entity (entity_id, entity_type, display_name, status)"
+            " VALUES (%s, 'INSTRUMENT', %s, 'ACTIVE')",
+            (instrument_id, name),
+        )
+        cur.execute(
+            "INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type,"
+            " currency_code) VALUES (%s, %s, %s, 'ETF', %s)",
+            (instrument_id, mic, ticker, currency),
+        )
+    ensure_etf_profile(conn, instrument_id)
+    return instrument_id
+
+
 def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = 0
+    etfs_read = etfs_existing = etfs_created = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -152,7 +207,13 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                         continue
                     all_rows.setdefault((mic, ticker), row)
 
-        if not all_rows:
+        # ETF 마스터(ALPHA-462)는 구성종목과 **독립된 입력**(프로필 canonical)에서 온다 —
+        # 구성종목이 비어도(수집 실패·신규 레이크) ETF 는 만들 수 있어야 한다. 둘 다 비었을
+        # 때만 이 시장을 건너뛴다. 예전엔 구성종목만 보고 continue 해서, 프로필만 있는 런이
+        # 조용히 아무것도 안 했다(테스트가 잡음).
+        mic_for_market = _MIC_BY_MARKET.get(market)
+        profile_rows = _latest_profile_rows(storage, market) if mic_for_market else []
+        if not all_rows and not profile_rows:
             logger.info("적재 대상 없음: market=%s", market)
             continue
 
@@ -178,11 +239,40 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                     created += 1
                     created_rows.append({"ticker": ticker, "market_code": mic, "name": name,
                                          "actor_id": actor_id, "instrument_id": instrument_id})
+
+                # ETF 자신의 마스터(ALPHA-462). 구성종목과 같은 트랜잭션에 둔다 — 둘 다
+                # 마스터라 반쪽 커밋이 나면 FK 로 얽힌 상태가 남는다.
+                etf_have = _existing_tickers(conn, {mic_for_market}) if profile_rows else {}
+                for profile in sorted(profile_rows, key=lambda r: str(r.get("etf_id"))):
+                    etfs_read += 1
+                    etf_ticker = profile.get("etf_id")
+                    etf_name = profile.get("display_name")
+                    if not etf_ticker or not etf_name:
+                        # 게이트가 이미 걸렀어야 하는 행 — 넣으면 NOT NULL 위반이다.
+                        failures.append({"market": market, "etf_id": etf_ticker,
+                                         "reasons": ["etf_profile_incomplete"]})
+                        continue
+                    if (mic_for_market, etf_ticker) in etf_have:
+                        # 이미 있으면 건드리지 않는다 — 재실행이 ID 를 바꾸면 그 ID 를 참조하는
+                        # NAV·구성종목·트리거 FK 가 전부 끊긴다(ADR-0027).
+                        etfs_existing += 1
+                        continue
+                    etf_instrument_id = _insert_etf(
+                        conn, name=etf_name, mic=mic_for_market, ticker=etf_ticker,
+                        currency=profile.get("currency") or "KRW",
+                    )
+                    etfs_created += 1
+                    created_rows.append({"ticker": etf_ticker, "market_code": mic_for_market,
+                                         "name": etf_name, "instrument_type": "ETF",
+                                         "instrument_id": etf_instrument_id})
         except Exception as exc:
             logger.exception("적재 실패(롤백): market=%s", market)
             failures.append({"market": market, "reasons": ["load_error"], "error": str(exc)})
             # 롤백됐으므로 이 시장에서 만든 건 없다 — 카운터를 되돌려 로그가 거짓말하지 않게.
-            created -= len(created_rows) - created_before
+            created -= sum(1 for r in created_rows[created_before:]
+                           if r.get("instrument_type") != "ETF")
+            etfs_created -= sum(1 for r in created_rows[created_before:]
+                                if r.get("instrument_type") == "ETF")
             del created_rows[created_before:]
             exit_code = 1
 
@@ -192,6 +282,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
         "already_present": existing, "created": created, "created_rows": created_rows,
+        "etfs_read": etfs_read, "etfs_already_present": etfs_existing, "etfs_created": etfs_created,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -202,7 +293,9 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         exit_code = 1
 
     logger.info(
-        "load_instruments: read=%d skipped_no_mic=%d already=%d created=%d failures=%d",
-        read, skipped_no_mic, existing, created, len(failures),
+        "load_instruments: read=%d skipped_no_mic=%d already=%d created=%d "
+        "etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
+        read, skipped_no_mic, existing, created,
+        etfs_read, etfs_existing, etfs_created, len(failures),
     )
     return exit_code
