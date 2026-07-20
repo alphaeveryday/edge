@@ -101,6 +101,27 @@ def parse_datetime(text: str | None) -> str | None:
     return None
 
 
+_KRX_SHORT_CODE = re.compile(r"[0-9][0-9A-Z]{5}\Z")
+
+
+def krx_short_code(value: object) -> str | None:
+    """KRX 단축코드로 성립하면 정돈한 코드, 아니면 None. KR 티커 형태 판정의 SSOT.
+
+    **숫자 6자리가 아니다** — KRX 가 번호를 소진해 신규 상장분에는 문자가 섞인 코드
+    (0093A0·0005G0 등)를 발급하고, 우리 ETF 유니버스 31종 중 7종이 그렇다. `isdigit()`
+    로 보면 그 7종이 조용히 빠진다(ALPHA-463·380 이 각각 가격·NAV 에서 겪은 결함).
+
+    다만 '6자리 영숫자'로만 넓히면 반대로 `ABCDEF` 같은 6자 US 심볼과 한글·전각
+    문자열까지 KR 코드로 통과한다 — KIS(국내 전용)에 엉뚱한 질의를 보내고 그 응답을
+    market=KR 로 적재하게 된다. **선두는 숫자, 나머지는 ASCII 영숫자 대문자**가
+    실제 형태다(`sources/fmp.py:market_for` 의 '첫 글자 숫자면 KR' 규약과 같은 축).
+    """
+    if not isinstance(value, str):
+        return None
+    code = value.strip()
+    return code if _KRX_SHORT_CODE.match(code) else None
+
+
 _BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
 
 

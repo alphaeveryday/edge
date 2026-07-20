@@ -68,7 +68,9 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 수집 대상은
 # canonical KR holdings 최신 스냅샷의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가
 # holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. 토큰은 run 당 1회 발급·재사용.
+# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
+# 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
+# 토큰은 run 당 1회 발급·재사용.
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달
@@ -271,12 +273,15 @@ ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한�
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
 만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
 한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md)) —
-각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다.
+각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다 —
+단 **raw 는 예외**다(ALPHA-460): 소스 하나가 실패해도 무관한 소스의 정제·분석은 계속 돈다.
+정제가 빈 입력을 정상 성공으로 처리하므로 있는 만큼 처리하면 되기 때문이다. 대신 실패 직후
+SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않되 조용하지도 않게).
 모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition·canonical·collection_log 를 같은 실행 단위로
 묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
-**raw 수집(9잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
+**raw 수집(10잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
 - `ingest-raw --source fmp`
 - `ingest-price-raw --source fmp`
@@ -288,15 +293,18 @@ Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions
 - `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트)
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
 - `ingest-raw-nav`(국내 ETF NAV, **kis 세트** — 단일 벤더라 `--source` 없음)
-  - ⚠️ **SFN 편입 시**: KIS 토큰 발급은 앱키당 분당 1회다. 같은 앱키를 쓰는
-    `ingest-price-raw --source kis` 와 **동시 실행하면 한쪽이 403** 으로 죽는다(로컬 실측).
-    Parallel 브랜치에 나란히 넣지 말고 순차화하거나 앱키를 분리해야 한다.
+  - ⚠️ KIS 토큰 발급은 앱키당 분당 1회라, 같은 앱키를 쓰는 `ingest-price-raw --source kis` 와
+    **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 이미 나란히 편입돼 있고(ALPHA-458),
+    `kis_auth` 가 이 코드를 만나면 61초 + 지터(0~20초) 대기 후 **최대 2회 재시도**(총 3회 시도)해
+    흡수한다 — dev 실런으로 실증됨. 유량 제한이 아닌 4xx 는 기다려도 안 풀리므로 즉시 올린다.
   - ⚠️ **컷오버 잔여**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후)으로 바뀌어(ALPHA-414) 기준일
     불일치는 해소됐다. 남은 확인: ① trdDd 백필 수단 부재(실패한 날 스냅샷은 못 줍는다)
     ② 휴장일 trdDd 응답의 정체(7-17 휴장일에도 as_of=당일 라벨 응답 — 전 거래일 구성 추정).
-    raw 는 전량 성공 게이트라 실패 시 뒤 페이즈를 통째로 막는다 — **ENABLED 전에 닫아라.**
+    ALPHA-460 이후 이 실패가 뒤 페이즈를 막지는 않는다(알림 + 런 FAILED 마감, 그날 ETF
+    canonical 만 결손). 즉 ENABLED 의 하드 블로커는 아니지만 ①이 남아 있어 실패한 날의
+    KRX 스냅샷은 여전히 영구 결손이다.
 
-**정제(normalize, 5잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
+**정제(normalize, 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
 수집한 raw 만 정제한다**(ALPHA-389) — 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에
 비례한다. 적재는 여전히 멱등이다(병합이 기존 행을 읽어 합친다).

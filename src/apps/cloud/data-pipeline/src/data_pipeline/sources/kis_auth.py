@@ -40,9 +40,13 @@ TOKEN_RATE_LIMIT_WAIT_SEC = 61  # "1분당 1회" + 시계 오차 여유
 # 발급이 있었던 경우 — 빠른 수동 재실행·실행 겹침) 고정 간격으로는 둘이 같은 시각에 다시
 # 깨어나 충돌을 그대로 재생산한다. 지터가 순서를 갈라 한쪽이 먼저 발급하게 한다.
 TOKEN_RATE_LIMIT_JITTER_SEC = 20
-# 재시도 횟수 — 1회로는 위 동시 충돌에서 진 쪽이 그대로 죽는다. 2회면 지터와 합쳐 두 브랜치가
-# 각자 자기 분(minute)을 잡는다. 무한 대기는 금지(막히면 런이 실패로 드러나야 한다, Rule 12).
-TOKEN_RATE_LIMIT_MAX_RETRY = 2
+# 재시도 횟수 — **동시에 토큰을 발급하는 브랜치 수보다 커야 한다.** 발급이 분당 1회라 N개
+# 브랜치가 동시에 시작하면 최악의 경우 마지막 브랜치가 N-1 분을 기다려야 자기 차례가 온다.
+# 현재 동시 발급자는 SFN raw 페이즈의 kis 브랜치 3개다(CollectKisPrice·CollectKisNav·
+# CollectKisEtfProfile, ALPHA-462). 여기에 직전 1분 내 발급이 겹칠 수 있어 한 칸 더 둔다.
+# **kis 브랜치를 추가하면 이 값도 함께 올려라** — 안 올리면 새 브랜치가 상시 partial 이 된다
+# (edge-review 지적). 무한 대기는 금지(막히면 런이 실패로 드러나야 한다, Rule 12).
+TOKEN_RATE_LIMIT_MAX_RETRY = 4
 
 
 def domain_for(env: str) -> str:

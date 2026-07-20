@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, canonical_etf_holdings_partition, collection_log_key, raw_price_partition
+from ..parse import krx_short_code
 from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 가격 어댑터들의
@@ -34,6 +35,9 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
     수집 유니버스를 holdings 에서 파생한다 — 정적 targets/symbol_map 은 유니버스와
     어긋난다(구성종목 36개 중 2개만 등재됐던 원인, 뉴스 ALPHA-416·417 과 같은 축).
     스냅샷이 없으면 빈 목록 — 기존 targets 경로만 남는다(신규 레이크에서 정상).
+
+    티커 형태 판정은 `parse.krx_short_code` 하나로 간다(ALPHA-463) — 문자 섞인 신형
+    단축코드를 빠뜨리지도, 6자 US 심볼을 KR 로 주워담지도 않는다.
     """
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
@@ -48,8 +52,9 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
         for row in _read_parquet_rows(storage.get_bytes(key)):
             # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
             for value in (row.get("constituent_ticker"), row.get("etf_id")):
-                if isinstance(value, str) and value.strip().isdigit() and len(value.strip()) == 6:
-                    tickers.add(value.strip())
+                code = krx_short_code(value)
+                if code:
+                    tickers.add(code)
     return sorted(tickers)
 
 

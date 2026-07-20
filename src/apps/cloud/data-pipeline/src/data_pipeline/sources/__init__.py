@@ -9,6 +9,7 @@ from .fmp_financial import FmpFinancialSource
 from .fmp_price import FmpPriceSource
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth
+from .kis_etf_profile import KisEtfProfileSource
 from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
 from .krx_auth import KrxAuth
@@ -23,6 +24,7 @@ __all__ = [
     "FmpPriceSource",
     "FmpFinancialSource",
     "KisDailyPriceSource",
+    "KisEtfProfileSource",
     "KisNavSource",
     "KisAuth",
     "KrxEtfSource",
