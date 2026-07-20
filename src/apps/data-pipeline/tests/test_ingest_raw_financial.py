@@ -268,3 +268,18 @@ def test_enabled_but_no_mapped_targets_marks_skipped(tmp_path):
     log = _log(storage, "r1")
     assert log["status"] == "skipped"
     assert log["reason"] == "no mapped targets"
+
+
+def test_disabled_skip_survives_log_write_failure(tmp_path):
+    # WHY: skip 도 collection_log 로 드러나는 것이 계약이다(Rule 12). 스토리지 장애로 그
+    #      로그마저 못 남겼는데 exit 0 이면 스케줄러는 성공으로 보고, 감사 레코드가 사라진
+    #      사실을 아무도 모른다. 5개 수집기가 이 처리를 3:2 로 달리해 통일한 자리다(ALPHA-451)
+    #      — 되돌리면 그 분기가 되살아난다.
+    class FailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            raise OSError("storage down")
+
+    code, _storage = _run(tmp_path, {}, storage=FailingStorage(tmp_path / "lake"),
+                          api_key=None, run_id="r1")
+
+    assert code == 1

@@ -233,3 +233,18 @@ def test_raw_write_failure_still_writes_collection_log(tmp_path):
     log = _log(storage, "r1")
     assert log["status"] == "error"
     assert "denied" in log["error"]
+
+
+def test_disabled_skip_survives_log_write_failure(tmp_path):
+    # WHY: skip 도 collection_log 로 드러나는 것이 계약이다(Rule 12). 스토리지 장애로 그
+    #      로그마저 못 남겼는데 exit 0 이면 스케줄러는 성공으로 보고, 감사 레코드가 사라진
+    #      사실을 아무도 모른다. 이 스텝은 동작은 맞았으나 근거 주석도 테스트도 없어 정리
+    #      대상으로 오해받기 쉬웠다 — 5개 통일(ALPHA-451)의 일부로 고정한다.
+    class FailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            raise OSError("storage down")
+
+    code, _storage = _run(tmp_path, FakeSource(enabled=False),
+                          storage=FailingStorage(tmp_path / "lake"))
+
+    assert code == 1

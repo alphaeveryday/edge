@@ -287,3 +287,20 @@ def test_universe_absent_holdings_keeps_targets_only(tmp_path):
     assert source.received == sorted(["NVDA", "AAPL", "005930"])
     logs = [k for k in storage.list_keys("operations_archive/collection_logs/") if "kis" in k]
     assert json.loads(storage.get_bytes(logs[0]))["symbols_from_holdings"] == 0
+
+
+def test_disabled_skip_survives_log_write_failure(tmp_path):
+    # WHY: skip 도 collection_log 로 드러나는 것이 계약이다(Rule 12). 스토리지 장애로 그
+    #      로그마저 못 남겼는데 exit 0 이면 스케줄러는 성공으로 보고, 감사 레코드가 사라진
+    #      사실을 아무도 모른다. 5개 수집기가 이 처리를 3:2 로 달리해 통일한 자리다(ALPHA-451)
+    #      — 되돌리면 그 분기가 되살아난다.
+    class FailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            raise OSError("storage down")
+
+    settings = _settings(tmp_path)
+    storage = FailingStorage(tmp_path / "lake")
+    config = PriceSource(base_url=settings.price.source.base_url, api_key=None, symbol_map=_MAP)
+    source = FmpPriceSource(config, FakeClient({}))
+
+    assert ingest_price_raw.run(settings, storage, source, "20260703T000000Z") == 1

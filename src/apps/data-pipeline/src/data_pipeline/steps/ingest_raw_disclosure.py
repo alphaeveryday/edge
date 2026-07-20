@@ -61,6 +61,9 @@ def run(
 
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
+        # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(ALPHA-451) — 예외를
+        # 밖으로 던지지 않는다는 뜻의 best-effort 이지 exit 0 이 아니다(아래 terminal 경로와
+        # 같은 계약). 기록을 못 남긴 채 성공으로 끝나면 감사 레코드 유실을 아무도 모른다.
         logger.warning("%s 공시 비활성(api_key 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
