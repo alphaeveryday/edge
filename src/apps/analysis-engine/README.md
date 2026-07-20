@@ -62,6 +62,17 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
 
+## 주석 컨벤션
+
+프로덕션 코드는 **WHAT은 코드가, WHY는 주석이** 원칙을 따른다(Google Python Style Guide).
+
+- **docstring = 계약**: 모듈·공개 함수에 1줄 요약. 이름·타입으로 드러나지 않는 것만
+  `Returns:`/`Raises:` 를 덧붙인다. 자명한 함수는 이름·타입에 맡기고 docstring 을 생략한다.
+- **인라인 = WHY만**: 불변식·함정·비자명한 선택(지연 import 근거, 결정적 ID 교차 계약 등)과
+  티켓 참조(ALPHA-###). WHAT(코드가 이미 말하는 것) 재진술은 금지.
+- **금지**: 코드 재진술, 주석 처리된 죽은 코드, 변경 이력 주석(git 소관), 실제와 어긋나는 주석.
+- **언어**: 한국어.
+
 ## 테스트 컨벤션
 
 이 앱의 테스트는 레이어드 구조를 반영해 **Google Python Style Guide 관행**을 따른다
