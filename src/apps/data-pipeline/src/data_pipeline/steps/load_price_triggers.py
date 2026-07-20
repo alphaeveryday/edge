@@ -126,15 +126,20 @@ def _proxy_return(
     return (num / den) if den > 0 else None
 
 
-def _resolve_etf_instrument_id(conn, ticker: str) -> str | None:
-    """instrument 마스터에서 ETF 의 도메인 ID. 없으면 None — 호출부가 fail-loud 한다."""
+def _resolve_etf_instrument_ids(conn, ticker: str) -> list[str]:
+    """instrument 마스터의 ETF 후보 도메인 ID(최대 2건 — 1건 초과 여부만 알면 된다).
+
+    **후보 목록인 이유**(ALPHA-448): 식별 자연키는 `(market_code, ticker)` 인데 조회 축은
+    `ticker` 뿐이라 같은 ticker 가 여러 시장에 있으면 여러 건이 나온다. `fetchone()` 으로 한 건을
+    집으면 어느 시장의 ETF 인지 비결정적이라 **잘못된 ETF 에 트리거가 매달린다**. 0건과 복수 건
+    모두 호출부가 fail-loud 한다."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT instrument_id FROM instrument WHERE ticker = %s AND instrument_type = 'ETF'",
+            "SELECT instrument_id FROM instrument"
+            " WHERE ticker = %s AND instrument_type = 'ETF' LIMIT 2",
             (ticker,),
         )
-        row = cur.fetchone()
-    return str(row[0]) if row else None
+        return [str(row[0]) for row in cur.fetchall()]
 
 
 def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, list[tuple[str, str, bool]]]:
@@ -216,19 +221,30 @@ def run(
             storage, canonical_etf_holdings_partition(config.market, ""))
 
         with connect(db) as conn:
-            etf_instrument_id = _resolve_etf_instrument_id(conn, config.etf_ticker)
-            if etf_instrument_id is None:
-                # 트리거는 ETF 도메인 ID 에 매달린다 — 마스터가 없으면 만들 수 있는 게 없다.
-                # 조용히 0건 성공으로 끝나면 전제 결손이 안 보이므로 fail-loud 하되, 아래
-                # 로그 블록까지 내려가 quality log 는 남긴다("결과는 항상 로그").
-                logger.error(
-                    "instrument 마스터에 ETF 가 없다: ticker=%s — 스키마 시드 마이그레이션"
-                    "(V202607150004 seed_entity_master_kr) 적용 여부 확인", config.etf_ticker)
-                failures.append({"reasons": ["missing_etf_master"],
-                                 "error": f"instrument 에 ETF ticker={config.etf_ticker} 없음"})
+            candidates = _resolve_etf_instrument_ids(conn, config.etf_ticker)
+            etf_instrument_id = candidates[0] if len(candidates) == 1 else ""
+            if len(candidates) != 1:
+                # 트리거는 ETF 도메인 ID 에 매달린다 — 0건이면 만들 수 있는 게 없고, 복수면
+                # 어느 시장의 ETF 인지 이 조회 축으로 정할 수 없다. 조용히 0건 성공이나 임의
+                # 선택으로 끝나면 전제 결손이 안 보이므로 fail-loud 하되, 아래 로그 블록까지
+                # 내려가 quality log 는 남긴다("결과는 항상 로그").
+                if candidates:
+                    logger.error(
+                        "instrument 에 ETF ticker=%s 가 복수 건이다 — 자연키는 (market_code,"
+                        " ticker) 인데 조회 축이 ticker 뿐이라 시장을 특정할 수 없다."
+                        " 다중 시장 운영으로 넘어갈 때 MIC 를 조회에 넣어야 한다",
+                        config.etf_ticker)
+                    failures.append(
+                        {"reasons": ["ambiguous_etf_master"],
+                         "error": f"instrument 에 ETF ticker={config.etf_ticker} 복수 건"})
+                else:
+                    logger.error(
+                        "instrument 마스터에 ETF 가 없다: ticker=%s — 스키마 시드 마이그레이션"
+                        "(V202607150004 seed_entity_master_kr) 적용 여부 확인", config.etf_ticker)
+                    failures.append({"reasons": ["missing_etf_master"],
+                                     "error": f"instrument 에 ETF ticker={config.etf_ticker} 없음"})
                 exit_code = 1
-                targets = []
-                etf_instrument_id = ""  # 아래 루프는 targets=[] 라 닿지 않는다
+                targets = []  # 아래 루프는 targets=[] 라 빈 etf_instrument_id 에 닿지 않는다
 
             existing = _existing_triggers(conn, etf_instrument_id) if targets else {}
             for date in targets:

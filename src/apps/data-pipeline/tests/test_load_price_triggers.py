@@ -61,20 +61,18 @@ def _default_holdings(storage, as_of: str = "2026-07-01") -> None:
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
-        self._one = None
         self._all: list[tuple] = []
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self._conn.log.append((flat, params))
         if flat.startswith("SELECT instrument_id"):
-            self._one = (self._conn.etf_id,) if self._conn.etf_id else None
+            # 후보 목록으로 돌려준다 — 스텝이 fetchall 로 0·1·복수를 구분하기 때문(ALPHA-448).
+            ids = self._conn.etf_id
+            self._all = [(i,) for i in ([ids] if isinstance(ids, str) else ids or [])]
         elif flat.startswith("SELECT t.trade_date"):
             self._all = [(d, p, i, o) for d, rows in self._conn.existing.items()
                          for (p, i, o) in rows]
-
-    def fetchone(self):
-        return self._one
 
     def fetchall(self):
         return self._all
@@ -297,6 +295,26 @@ def test_missing_etf_master_fails_loud_with_quality_log(tmp_path, monkeypatch):
     log = _quality_log(storage)
     assert log["exit_code"] == 1
     assert log["failures"][0]["reasons"] == ["missing_etf_master"]
+
+
+def test_ambiguous_etf_master_fails_loud_instead_of_picking_one(tmp_path, monkeypatch):
+    """같은 ticker 의 ETF instrument 가 복수면 **아무것도 만들지 않는다**(ALPHA-448).
+
+    식별 자연키는 (market_code, ticker) 인데 조회 축은 ticker 뿐이라, 한 건을 집으면 어느
+    시장의 ETF 인지 비결정적이다 — 잘못된 ETF 에 매달린 트리거는 그 뒤 분석·설명까지
+    오염시키고 트리거만 봐선 되돌릴 근거가 없다. 0건과 같은 등급으로 막는다.
+    """
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage)
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn(etf_id=["inst_ETF_KR", "inst_ETF_US"])
+
+    assert _run(storage, conn, monkeypatch) == 1
+    assert _inserts(conn) == []  # 임의 선택으로 트리거가 생기지 않는다
+    log = _quality_log(storage)
+    assert log["exit_code"] == 1
+    assert log["failures"][0]["reasons"] == ["ambiguous_etf_master"]
 
 
 def test_missing_holdings_counts_not_crashes(tmp_path, monkeypatch):

@@ -624,6 +624,73 @@ def test_fmp_path_is_not_touched_by_detection(tmp_path):
     assert _quality_log(storage)["detected_name_counts"] == {}
 
 
+def test_same_name_different_tickers_is_excluded_not_last_row_wins(tmp_path):
+    # WHY: 이름을 키로 덮어쓰면 parquet 나열 순서가 승자를 정한다 — 같은 기사가 런마다 다른
+    #      ticker 로 매핑되고, 틀린 ticker 가 canonical 에 들어가면 다운스트림엔 되돌릴 근거가
+    #      없다. 동명이는 어느 쪽도 고르지 않고(entity_resolution 과 같은 판단), 제외 사실을
+    #      quality log 로 드러내 탐지 누락이 조용히 묻히지 않게 한다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30",
+                    [("대상", "001680"), ("대상", "999999"), ("한미반도체", "042700")])
+    row = _bk_row(TITLE="대상, 한미반도체와 공급계약", our_ticker=None)
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    # 동명이 '대상'은 어느 ticker 도 아니다 — 단일 ticker 인 '한미반도체'만 남는다
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "042700"}]
+    log = _quality_log(storage)
+    assert log["mention_index_ambiguous_names"] == ["대상"]
+    assert log["mention_index_names"] == 1
+    assert log["detected_name_counts"] == {"한미반도체": 1}
+
+
+def test_duplicate_rows_and_ticker_whitespace_stay_in_the_index(tmp_path):
+    # WHY: 동명이 제외의 반대편 — **정상 중복까지 모호로 몰면** 탐지가 조용히 무너진다.
+    #      한 종목은 여러 parquet·여러 ETF 에 같은 이름으로 반복 등장하고(set 이라 1건),
+    #      벤더에 따라 ticker 에 공백이 섞인다(strip 이라 같은 값). 이 둘을 안 접으면
+    #      멀쩡한 이름이 ambiguous 로 빠져 '탐지 0건'이 정상 로그처럼 보인다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30", [
+        ("한미반도체", "042700"), ("한미반도체", "042700"),      # 중복 행 — 1건으로 접힌다
+        ("삼성전자", " 005930 "), ("삼성전자", "005930"),        # ticker 공백 이형 — 같은 값
+    ])
+    row = _bk_row(TITLE="한미반도체·삼성전자 동반 상승", our_ticker=None)
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert sorted(m["ticker"] for m in json.loads(r["mentions"])) == ["005930", "042700"]
+    log = _quality_log(storage)
+    assert log["mention_index_ambiguous_names"] == []
+    assert log["mention_index_names"] == 2
+
+
+def test_unicode_form_variants_are_one_name_not_two(tmp_path):
+    # WHY: NFC/NFD 는 눈에 같고 파이썬엔 다른 문자열이다. 정규화를 안 하면 같은 이름의 두 표기가
+    #      각각 '단일 ticker'로 인덱스에 들어가 동명이 판정을 통째로 우회한다 — ALPHA-448 이
+    #      막으려던 오매핑이 유니코드 형태 차이로 되살아나고, quality log 는 깨끗해 보인다.
+    #      저장소 관례(normalize_disclosure·parse_dart_*)대로 NFKC 후 매칭한다.
+    import unicodedata
+
+    storage = LocalStorage(tmp_path / "lake")
+    nfc, nfd = "대상", unicodedata.normalize("NFD", "대상")
+    assert nfc != nfd  # 전제: 두 표기는 실제로 다른 문자열이다
+    _write_holdings(storage, "2026-06-30", [(nfc, "001680"), (nfd, "999999")])
+    row = _bk_row(TITLE=f"{nfc}, 공급계약 체결", our_ticker=None)
+    _write_raw(storage, _raw_key("bigkinds", "KR"), [row])
+
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == []  # 한 이름의 두 ticker — 어느 쪽도 고르지 않는다
+    log = _quality_log(storage)
+    assert log["mention_index_ambiguous_names"] == ["대상"]
+    assert log["mention_index_names"] == 0
+
+
 def test_holdings_index_load_failure_is_fail_loud_but_still_normalizes(tmp_path, monkeypatch):
     # WHY: 전체 수집 전환 후엔 인덱스가 mentions 의 유일한 공급원 — 로드가 터졌는데 exit 0 이면
     #      'mentions 전량 소실'이 정상 완료로 오독된다(Rule 12). 단 정규화 자체는 계속돼
