@@ -14,6 +14,9 @@ resource "aws_ecr_repository" "this" {
   for_each             = local.image_repositories
   name                 = each.key
   image_tag_mutability = "MUTABLE"
+  # 레포를 세트에서 빼면 destroy 되는데, 이미지가 남아 있으면 RepositoryNotEmpty 로 apply 가 막힌다.
+  # dev clean-slate 정책상 강제 삭제를 허용한다(gateway·widget-api 은퇴 destroy 통과 — ADR-0032).
+  force_delete = true
 
   image_scanning_configuration {
     scan_on_push = true
