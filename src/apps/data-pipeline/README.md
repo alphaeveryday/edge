@@ -195,6 +195,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 미래 스냅샷 폴백(엔진과 같은 선택, ALPHA-418 — 사용 횟수·as_of 는 quality_log 로 드러남).
 # 게이트 미통과 일자는 행이 없는 게 정상이고 그 수는
 # data_quality_logs 로 남는다. 구정책 행은 observation 참조가 없으면 자동 교체된다.
+# 판정에 쓴 가격 coverage 는 평가한 전 거래일치가 quality_log(coverage_by_date·coverage_min)에,
+# 생성된 행은 detection_reason 끝의 |coverage=… 에 남는다(ALPHA-452 — 1% 비중 종목 하나로
+# 판정된 트리거를 사후에 구분하기 위함). 하한으로 막지는 않는다(ALPHA-453).
 # --from/--to 는 대상 trade_date 파티션을 좁히는 창(미지정=전체 스캔, (etf,date) 멱등 skip).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-price-triggers

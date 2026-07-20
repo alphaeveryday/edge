@@ -8,7 +8,10 @@ explanation_route` 의 첫 고리이자, 이 테이블의 **단일 writer** 다(
 수익률이 아니라 **구성종목 가중 proxy 수익률** — canonical holdings 의 가중치와 구성종목
 일봉 수익률로 `Σ(weight·ret) / Σ(weight)` (가격이 있는 부분집합에 한정한 coverage 정규화,
 analysis-engine daily_pipeline.compute_decomposition 과 같은 산식) — 이고 임계값은
-3%(`l0-abs-v1`, 설정 [price_triggers])다. detection_reason 도 엔진 포맷을 따른다.
+3%(`l0-abs-v1`, 설정 [price_triggers])다. detection_reason 은 엔진 포맷을 **접두로** 두고
+뒤에 `|coverage=…` 를 덧붙인다(ALPHA-452 — 판정에 쓴 가격 coverage 를 행에 남긴다).
+**coverage 로 막지는 않는다**: 최소 하한은 실측 분포와 엔진 정책 합의가 선행이라 ALPHA-453
+소관이고, 엔진에는 아직 coverage 게이트가 없다.
 
 detected_at·ID·멱등은 구현 소관이라 파이프라인 방식을 유지한다: 장 마감(KST 15:30) 고정
 (엔진의 런타임 시계는 재실행마다 uq 세 번째 키를 흔든다), `pmt_<ULID>`(ADR-0027),
@@ -376,6 +379,10 @@ def run(
         # 가격 coverage 계측(ALPHA-452) — 평가한 전 거래일치를 남긴다. 최소 하한(ALPHA-453)은
         # 이 분포를 며칠 쌓아 보고 정한다. min 은 "가장 얇은 근거로 판정한 날"이라 하한 후보의
         # 출발점이고, 전체 맵이 있어야 그 값이 이상치인지 상시인지 구분된다.
+        # ponytail: 창 미지정(기본 전체 스캔)이면 트리거가 안 난 과거 날짜가 매 런 다시 담겨
+        # 로그당 O(전체 거래일)·누적 O(N²)이다(Codex #148). 항목이 ~28바이트라 1년 7KB·5년 35KB
+        # 수준이고 이 맵이 곧 ALPHA-453 의 근거라 지금은 그대로 둔다 — 커지면 --from/--to 로
+        # 창을 좁히거나 날짜 맵 대신 히스토그램으로 축약한다.
         "coverage_by_date": coverage_by_date,
         "coverage_min": min(coverage_by_date.values(), default=None),
         "failures": failures, "exit_code": exit_code,
