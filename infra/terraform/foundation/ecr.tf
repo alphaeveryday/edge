@@ -19,8 +19,9 @@ resource "aws_ecr_repository" "this" {
   for_each             = local.image_repositories
   name                 = each.key
   image_tag_mutability = "MUTABLE"
-  # dev clean-slate 정책상 강제 삭제를 허용한다 — 은퇴 레포(gateway·widget-api)의 안전한 후속 제거 전제(위 주석).
-  force_delete = true
+  # 은퇴 대기 레포(gateway·widget-api)에만 강제 삭제를 허용해 안전한 후속 제거를 준비한다(위 주석).
+  # 활성 레포는 force_delete=false 로 둬 RepositoryNotEmpty 가드(실수 삭제·리네임 방지)를 유지한다.
+  force_delete = contains(["edge/gateway", "edge/widget-api"], each.key)
 
   image_scanning_configuration {
     scan_on_push = true
