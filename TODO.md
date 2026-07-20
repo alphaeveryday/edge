@@ -50,5 +50,6 @@
 
 ## 6. 인프라
 - [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
+- [ ] 은퇴 ECR 키 제거 후속 PR — `force_delete=true`가 dev foundation에 apply된 뒤 `edge/gateway`·`edge/widget-api`를 image_repositories에서 제거(2단계 destroy — ADR-0032). widget_site S3 버킷도 비어있음 확인 후.
 - [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
 - [ ] super-admin 공개 엣지 배선 — super-admin-api 공개 도달이 필요해지는 시점에 ALB 직결(listener rule `/api/v1/admin/*` → super-admin 타깃 승격 + 망 제한)로 재도입. gateway 은퇴는 결정됨(ADR-0032). WAF(ALPHA-297)·엣지 컷오버를 이때 함께.

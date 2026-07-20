@@ -7,6 +7,11 @@ locals {
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
     "edge/schema-migrate", # Flyway one-off 이미지
+    # ── 은퇴 대기(ADR-0032) ── gateway·widget-api 는 코드가 삭제됐지만 ECR 키는 남겨 둔다.
+    # 키를 지금 세트에서 빼면 destroy 가 기존 state(force_delete=false)로 실행돼 RepositoryNotEmpty 로 막힌다.
+    # force_delete=true 가 이 apply 로 두 레포 state 에 먼저 반영된 뒤, 후속 PR 에서 키를 제거하면 안전히 destroy 된다(2단계).
+    "edge/gateway",
+    "edge/widget-api",
   ])
 }
 
@@ -14,8 +19,7 @@ resource "aws_ecr_repository" "this" {
   for_each             = local.image_repositories
   name                 = each.key
   image_tag_mutability = "MUTABLE"
-  # 레포를 세트에서 빼면 destroy 되는데, 이미지가 남아 있으면 RepositoryNotEmpty 로 apply 가 막힌다.
-  # dev clean-slate 정책상 강제 삭제를 허용한다(gateway·widget-api 은퇴 destroy 통과 — ADR-0032).
+  # dev clean-slate 정책상 강제 삭제를 허용한다 — 은퇴 레포(gateway·widget-api)의 안전한 후속 제거 전제(위 주석).
   force_delete = true
 
   image_scanning_configuration {

@@ -45,3 +45,8 @@ gateway를 제거한다.
   시점으로 이월. TODO §56의 "gateway 존치 vs ALB" 질문은 이 ADR로 해소.
 - [[0006-gateway-single-edge]]는 이미 [[0010-hybrid-onprem-pivot]]로 대체됨 — 본 ADR은 그 방향을 실행에 옮긴다.
 - terraform은 이 PR에서 apply하지 않는다(.tf 변경만, terraform-plan CI가 검증). 승인된 ADR 본문은 불변.
+- **stateful destroy 주의**: 세트에서 빼는 리소스는 기존 state 속성으로 destroy된다(신규 config 아님).
+  - **ECR 레포(edge/gateway·edge/widget-api)**: 이미지가 남아 있으면 `RepositoryNotEmpty`로 막히므로,
+    이 PR은 키를 제거하지 않고 `force_delete=true`만 먼저 반영한다. 키 제거는 후속 PR에서(2단계 — TODO).
+  - **widget_site S3 버킷**: static-site 모듈에 `force_destroy`가 없어 객체가 남아 있으면 `BucketNotEmpty`로
+    막힐 수 있다. 위젯 CD 경로가 없어 비어 있을 것으로 보이나, apply 전 비어 있지 않으면 수동 비우기가 필요하다.
