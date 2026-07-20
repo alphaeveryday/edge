@@ -319,8 +319,15 @@ def run(
 
                 proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
                                                     closes_of(prev_by_date[date]))
-                # 판정과 무관하게 전 거래일의 coverage 를 남긴다 — 최소 하한(ALPHA-453)을
-                # 정하려면 트리거가 난 날뿐 아니라 **걸러진 날의 분포**도 필요하다.
+                # 게이트 판정과 **무관하게** 남긴다 — 최소 하한(ALPHA-453)을 정하려면 트리거가
+                # 난 날뿐 아니라 걸러진 날의 분포도 필요하다.
+                #
+                # 단 이 지점은 현행 정책 행이 **이미 있는 날짜에는 닿지 않는다**(위 already
+                # continue). 그래서 로그의 이 맵은 "아직 트리거가 없는 날"의 분포이고, 트리거가
+                # 난 날의 coverage 는 그 행의 detection_reason 에 남는다 — 둘을 합쳐야 전체다.
+                # 남는 구멍은 ALPHA-452 이전에 만들어진 기존 행뿐이다(그 행들은 어느 쪽에도
+                # 없다). 일회성 과거 구멍이라 여기서 메우지 않는다 — already 앞으로 옮기면 매 런
+                # 전체 거래일의 가격 파티션을 다시 읽어 비용이 히스토리에 비례해 는다(Codex #149).
                 coverage_by_date[date] = round(coverage, 4)
                 if proxy_ret is None:
                     missing_price += 1
@@ -376,9 +383,11 @@ def run(
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
         "stale_policy_kept": stale_policy_kept,
         "created": created, "created_rows": created_rows,
-        # 가격 coverage 계측(ALPHA-452) — 평가한 전 거래일치를 남긴다. 최소 하한(ALPHA-453)은
-        # 이 분포를 며칠 쌓아 보고 정한다. min 은 "가장 얇은 근거로 판정한 날"이라 하한 후보의
-        # 출발점이고, 전체 맵이 있어야 그 값이 이상치인지 상시인지 구분된다.
+        # 가격 coverage 계측(ALPHA-452) — **아직 트리거가 없는 거래일**의 분포다(현행 정책 행이
+        # 있는 날짜는 already 로 먼저 빠진다). 트리거가 난 날의 coverage 는 그 행의
+        # detection_reason 에 있으니, 하한(ALPHA-453)은 둘을 합쳐 봐야 한다.
+        # min 은 "가장 얇은 근거로 평가한 날"이라 하한 후보의 출발점이고, 전체 맵이 있어야
+        # 그 값이 이상치인지 상시인지 구분된다.
         # ponytail: 창 미지정(기본 전체 스캔)이면 트리거가 안 난 과거 날짜가 매 런 다시 담겨
         # 로그당 O(전체 거래일)·누적 O(N²)이다(Codex #148). 항목이 ~28바이트라 1년 7KB·5년 35KB
         # 수준이고 이 맵이 곧 ALPHA-453 의 근거라 지금은 그대로 둔다 — 커지면 --from/--to 로
