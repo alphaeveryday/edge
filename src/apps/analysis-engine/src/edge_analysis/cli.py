@@ -13,6 +13,7 @@ from .pipeline import run
 
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    """CLI 인자(--trade-date·--request-id)를 파싱한다."""
     parser = argparse.ArgumentParser(
         prog="python -m edge_analysis",
         description="Explain the KODEX semiconductor ETF's daily move.",

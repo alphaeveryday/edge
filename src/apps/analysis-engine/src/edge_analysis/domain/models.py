@@ -111,20 +111,25 @@ class Explanation:
 
     @property
     def summary(self) -> str:
+        """설명 본문 — explain 우선, 없으면 summary(둘 다 없으면 빈 문자열)."""
         return str(self.raw.get("explain") or self.raw.get("summary") or "")
 
     @property
     def headline(self) -> str | None:
+        """헤드라인 — 빈 문자열이면 None."""
         return str(self.raw.get("headline") or "") or None
 
     @property
     def explanation_type(self) -> str:
+        """verdict 를 Event Store enum 으로 매핑(미지의 verdict 는 UNCERTAIN)."""
         return _VERDICT_TO_TYPE.get(str(self.raw.get("verdict")), "UNCERTAIN")
 
     @property
     def confidence_level(self) -> str | None:
+        """confidence 를 enum 으로 매핑(미지의 값은 None)."""
         return _CONFIDENCE_MAP.get(str(self.raw.get("confidence")))
 
     @property
     def is_valid(self) -> bool:
+        """verdict 와 본문(explain/summary)이 모두 있으면 유효."""
         return "verdict" in self.raw and bool(self.raw.get("explain") or self.raw.get("summary"))

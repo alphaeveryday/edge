@@ -31,6 +31,7 @@ class LakeReader:
     """S3 레이크에서 종가 대비 등락과 ETF holdings 를 읽는다."""
 
     def __init__(self, s3, bucket: str) -> None:
+        """주어진 S3 클라이언트와 버킷으로 리더를 만든다."""
         self._s3 = s3
         self._bucket = bucket
 

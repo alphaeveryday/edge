@@ -37,6 +37,7 @@ class EventStore:
     """psycopg2 커넥션 위의 얇은 리포지토리."""
 
     def __init__(self, conn) -> None:
+        """주어진 psycopg2 커넥션을 감싼다."""
         self._conn = conn
 
     @classmethod
@@ -57,6 +58,7 @@ class EventStore:
         return cls(conn)
 
     def close(self) -> None:
+        """커넥션을 닫는다."""
         self._conn.close()
 
     # -- 읽기 --------------------------------------------------------------- #

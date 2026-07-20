@@ -21,18 +21,26 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 class AnalysisClient(Protocol):
     """분석 스텝이 LLM 클라이언트에 요구하는 최소 계약."""
 
-    def complete_json(self, system: str, user: str) -> dict[str, Any]: ...
+    def complete_json(self, system: str, user: str) -> dict[str, Any]:
+        """system·user 프롬프트로 JSON 객체 응답을 반환한다."""
+        ...
 
 
 class DeepSeekClient:
     """파싱된 JSON 객체를 반환하는 OpenAI 호환 DeepSeek 채팅 클라이언트."""
 
     def __init__(self, api_key: str, model: str, timeout: int = 180) -> None:
+        """API 키·모델·타임아웃을 보관한다."""
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
 
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
+        """system·user 프롬프트로 채팅을 호출해 파싱된 JSON 객체를 반환한다.
+
+        Raises:
+            PipelineError: 3회 재시도 후에도 실패하면.
+        """
         body = json.dumps(
             {
                 "model": self._model,
