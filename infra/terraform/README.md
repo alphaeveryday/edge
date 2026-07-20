@@ -70,7 +70,7 @@ cd ../envs/dev  && terraform apply
 |------|------|---------|
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
-| **파이프라인 실패 알림 이메일** | 구독 생성됨 — **수신자가 AWS 확인 메일을 눌러야 활성**(`PendingConfirmation`) | `pipeline_alarm_email` 기본값(변경 시 여기) |
+| **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | gateway 도입 시 연결 |
 | **widget-api DB 연동** | TF 주입되나 앱 미사용(`application.yaml` DataSource exclude) | 앱에서 exclude 제거 |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
