@@ -19,6 +19,17 @@ resource "aws_cloudwatch_log_group" "this" {
 #     문구가 조금씩 달라 공통 부분문자열 "수집 건너뜀" 로 잡는다.
 #   - 매핑 타깃 0건: warning 이 아예 없고 종료 INFO 의 status=skipped 만 남는다.
 # 벤더별로 쪼개지 않는다 — 알람은 "로그를 보라"는 신호이고, 정상 상태에서 발화가 없다(실측).
+#
+# ⚠️ 두 토큰 다 **부서지기 쉽다. 문구를 바꿀 땐 이 필터를 같이 고쳐라**:
+#   - "수집 " 접두가 유일한 분리막이다. sources/*.py 에 "심볼 건너뜀"·"대상 건너뜀"·
+#     "krx ETF 건너뜀" 같은 종목 단위 로그가 ~10종 있고 **매 정상 런마다 나온다**.
+#     접두를 떼면 알람이 매일 울려 아무도 안 보게 된다.
+#   - "status=skipped" 는 지금 5개 수집기의 종료 INFO 에서만 난다. tag_news.py 의
+#     status=%s 는 dict 를 넣어 "status={'skipped': 3}" 로 렌더돼 안 걸리는데,
+#     그 인자가 스칼라 문자열로 바뀌면 태깅이 수집 알람을 울린다.
+#
+# 덮지 못하는 것 하나 더: planned>0 인데 fetched==0 인 "빈 성공"은 status=success 라
+# 안 걸린다(ingest_raw_financial.py 만 error 로 올린다). 같은 F-01 계열의 남은 사각이다.
 resource "aws_cloudwatch_log_metric_filter" "raw_ingest_skipped" {
   name           = "${var.name}-raw-ingest-skipped"
   log_group_name = aws_cloudwatch_log_group.this.name
