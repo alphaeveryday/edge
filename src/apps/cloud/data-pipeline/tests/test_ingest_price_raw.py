@@ -282,11 +282,14 @@ def test_universe_includes_alphanumeric_short_codes(tmp_path):
     #      ETF 종가가 없으니 가격변동 트리거·설명의 대조축이 빈다(ALPHA-463).
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
-    _write_holdings(storage, "2026-07-20", [("000660", "0093A0"), ("0005G0", "0005G0")])
+    _write_holdings(storage, "2026-07-20", [
+        ("000660", "0093A0"), ("0005G0", "0005G0"), ("가나다라마바", "0093A0")])
     source = _UniverseFakeSource()
 
     assert ingest_price_raw.run(settings, storage, source, "r1") == 0
     assert {"0093A0", "0005G0"} <= set(source.received)
+    # 넓히되 새지 않는다 — 6자라고 다 KR 코드가 아니다(선두 숫자 + ASCII 영숫자).
+    assert "가나다라마바" not in source.received
 
 
 def test_universe_absent_holdings_keeps_targets_only(tmp_path):

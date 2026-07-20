@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 from ..config import KisPriceSource
+from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 
@@ -79,17 +80,15 @@ class KisDailyPriceSource:
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
         """수집 대상 → [(our_ticker, kis_symbol)]. KR 6자리 코드는 **항등 매핑**이 기본이고
         (ALPHA-419 — KRX 코드가 곧 KIS 코드), symbol_map 은 항등이 아닌 예외의 오버라이드
-        축으로만 남는다. 6자리가 아닌 미매핑 심볼(US 등)은 제외 — KIS 는 국내 전용.
+        축으로만 남는다. KRX 코드 형태가 아닌 미매핑 심볼(US 등)은 제외 — KIS 는 국내 전용.
 
-        6자리는 **숫자 전용이 아니다** — 신규 상장분 단축코드에는 문자가 섞이고(0093A0 등)
-        KIS 는 그대로 받는다. `isdigit()` 로 보면 그 종목들이 항등 매핑을 못 받아
-        "매핑 없음"으로 건너뛰어진다(ALPHA-463·380 과 같은 축).
+        형태 판정은 `parse.krx_short_code` 가 한다(ALPHA-463) — 문자 섞인 신형 단축코드
+        (0093A0 등)도 KIS 가 그대로 받으므로 항등 매핑 대상이고, 반대로 `ABCDEF` 같은
+        6자 US 심볼은 국내 API 로 새지 않는다.
         """
         out: list[tuple[str, str]] = []
         for our_ticker in symbols:
-            kis_symbol = self.symbol_map.get(our_ticker)
-            if not kis_symbol and our_ticker.isalnum() and len(our_ticker) == 6:
-                kis_symbol = our_ticker
+            kis_symbol = self.symbol_map.get(our_ticker) or krx_short_code(our_ticker)
             if not kis_symbol:
                 logger.info("kis 매핑 없음 — 이 소스는 건너뜀: %s", our_ticker)
                 continue

@@ -97,7 +97,9 @@ def test_plan_maps_alphanumeric_short_code_identity():
     # WHY: 신규 상장분 단축코드에는 문자가 섞이고(0093A0 등) KIS 는 그대로 받는다. 숫자로만
     #      보면 이 종목들이 항등 매핑을 못 받아 "매핑 없음"으로 건너뛰어져, 유니버스를
     #      고쳐도 KIS 질의까지 못 간다(ALPHA-463 — 유니버스 파생과 같은 축의 결함).
-    plan = _source({}, symbol_map={}).plan(["0093A0", "0005G0", "NVDA"])
+    plan = _source({}, symbol_map={}).plan(["0093A0", "0005G0", "NVDA", "ABCDEF", "가나다라마바"])
+    # 넓히되 새지 않는다: 6자 US 심볼·한글 6자는 국내 전용 API 로 가면 안 된다 —
+    # 질의가 실패하면 런이 매번 partial 이 되고, 응답하면 market=KR 로 오적재된다.
     assert plan == [("0093A0", "0093A0"), ("0005G0", "0005G0")]
 
 
