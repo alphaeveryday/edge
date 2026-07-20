@@ -9,19 +9,21 @@
 
 ```
 src/
-├── apps/                     # 배포되는 실행 단위
-│   ├── tenant-console-ui/    # Node   · 테넌트 검수·정책 콘솔 [edge-onprem]
-│   ├── super-admin-ui/       # Node   · 플랫폼 운영자 콘솔 (cross-tenant) [edge-cloud]
-│   ├── gateway/              # JVM    · Cloud 엣지 (console·admin 앞단) [edge-cloud]
-│   ├── tenant-console-api/   # JVM    · 테넌트용 · 읽기/쓰기 [edge-onprem]
-│   ├── tenant-sync-api/      # JVM    · Sync Agent Pull 표면 (cursor delta) [edge-cloud]
-│   ├── serving-api/          # JVM    · MTS 조회 표면 (Published만) [edge-onprem]
-│   ├── super-admin-api/      # JVM    · 운영자용 · cross-tenant · 최고 권한 [edge-cloud]
-│   ├── data-pipeline/        # Python · 파이프라인 SFN raw→정제→feature 페이즈 [edge-cloud]
-│   └── analysis-engine/      # Python · 같은 SFN 의 analyze 페이즈 → 분석 결과 DB 저장 [edge-cloud]
-├── libs/                     # 가져다 쓰는 공유 코드
+├── apps/                     # 배포되는 실행 단위 (플레인별 그룹 — ADR-0029)
+│   ├── cloud/                #   edge-cloud (벤더 운영)
+│   │   ├── gateway/          # JVM    · Cloud 엣지 (console·admin 앞단)
+│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
+│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
+│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
+│   │   └── analysis-engine/  # Python · 같은 SFN 의 analyze 페이즈 → 분석 결과 DB 저장
+│   └── onprem/               #   edge-onprem (증권사 관리 환경)
+│       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
+│       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
+│       └── serving-api/        # JVM  · MTS 조회 표면 (Published만)
+├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
-│   │   ├── migrations/       #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
+│   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
 │   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
 │   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload) + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
@@ -78,7 +80,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
 - `generated/` — 스키마로부터 각 언어용 모델을 생성합니다(생성기는 후속 티켓에서 도입; 그 전까지 Flyway SQL이 계약 SSOT). JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
 
 ## 데이터 흐름

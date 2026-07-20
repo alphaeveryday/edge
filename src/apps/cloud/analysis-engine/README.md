@@ -44,7 +44,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 ## 배포
 
-컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다(ALPHA-408에서 전용 모듈·SFN을 흡수) — 통합 파이프라인 SFN(raw→normalize→feature→**analyze**)의 마지막 페이즈로 돌며, task definition 은 `edge-dev-data-pipeline-analysis`. 특정일 수동 재실행은 이 task-def 를 `aws ecs run-task`로 직접 띄워 `--trade-date`/`--request-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
+컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다(ALPHA-408에서 전용 모듈·SFN을 흡수) — 통합 파이프라인 SFN(raw→normalize→feature→**analyze**)의 마지막 페이즈로 돌며, task definition 은 `edge-dev-data-pipeline-analysis`. 특정일 수동 재실행은 이 task-def 를 `aws ecs run-task`로 직접 띄워 `--trade-date`/`--request-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
 
 ## 스키마 계약
 

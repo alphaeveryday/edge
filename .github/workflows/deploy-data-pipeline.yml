@@ -7,7 +7,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/data-pipeline/**"
+      - "src/apps/cloud/data-pipeline/**"
       - "src/pyproject.toml"
       - "src/.dockerignore"
 
@@ -46,7 +46,7 @@ jobs:
           image_sha="${ecr_repo}:${IMAGE_TAG}"
           image_latest="${ecr_repo}:data-pipeline-latest"
           docker build --platform linux/amd64 \
-            -f src/apps/data-pipeline/Dockerfile \
+            -f src/apps/cloud/data-pipeline/Dockerfile \
             -t "${image_sha}" \
             -t "${image_latest}" \
             src

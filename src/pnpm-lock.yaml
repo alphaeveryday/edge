@@ -6,7 +6,7 @@ settings:
 
 importers:
 
-  apps/super-admin-ui:
+  apps/cloud/super-admin-ui:
     dependencies:
       react:
         specifier: ^19.0.0
@@ -34,7 +34,7 @@ importers:
         specifier: ^5.4.0
         version: 5.4.21
 
-  apps/tenant-console-ui:
+  apps/onprem/tenant-console-ui:
     dependencies:
       react:
         specifier: ^19.0.0

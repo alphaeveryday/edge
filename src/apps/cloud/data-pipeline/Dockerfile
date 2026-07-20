@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build context = src/ root. Build:
-#   docker build -f apps/data-pipeline/Dockerfile -t data-pipeline .
+#   docker build -f apps/cloud/data-pipeline/Dockerfile -t data-pipeline .
 
 FROM python:3.12-slim AS runtime
 
@@ -11,8 +11,8 @@ WORKDIR /app
 
 RUN useradd -r -u 1001 pipeline
 
-COPY apps/data-pipeline ./apps/data-pipeline
-RUN pip install --no-cache-dir ./apps/data-pipeline
+COPY apps/cloud/data-pipeline ./apps/cloud/data-pipeline
+RUN pip install --no-cache-dir ./apps/cloud/data-pipeline
 
 USER pipeline
 

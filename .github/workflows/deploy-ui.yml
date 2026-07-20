@@ -16,7 +16,11 @@ on:
   workflow_call:
     inputs:
       app:
-        description: "배포할 UI 앱 이름 (src/apps/<app> · pnpm 필터)"
+        description: "배포할 UI 앱 이름 (pnpm 필터 = 패키지명)"
+        required: true
+        type: string
+      plane:
+        description: "배포 플레인 디렉터리 (cloud · onprem) — dist 경로 apps/<plane>/<app>/dist (ADR-0029)"
         required: true
         type: string
       bucket:
@@ -72,12 +76,13 @@ jobs:
       - name: Sync to S3 & invalidate CloudFront
         env:
           APP: ${{ inputs.app }}
+          PLANE: ${{ inputs.plane }}
           BUCKET: ${{ inputs.bucket }}
           DISTRIBUTION_ID: ${{ inputs.distribution_id }}
         run: |
           set -euo pipefail
           # --delete 로 버킷을 dist/ 와 일치시킨다(삭제된 파일 제거). dist 는 src 기준 상대경로.
-          aws s3 sync "apps/${APP}/dist" "s3://${BUCKET}" --delete
+          aws s3 sync "apps/${PLANE}/${APP}/dist" "s3://${BUCKET}" --delete
           # 캐시 무효화 후 완료까지 대기 — 실패 시 워크플로가 빨간불이 되게.
           id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \
             --paths '/*' --query 'Invalidation.Id' --output text)"

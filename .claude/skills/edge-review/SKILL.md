@@ -109,7 +109,7 @@ echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
 ## 빌드/테스트 확인 (이 스킬이 직접 — Codex 는 못 한다)
 
 Codex 는 read-only 샌드박스라 테스트를 돌리지 못한다. 변경 모듈의 빌드·테스트가 통과하는지 **여기서** 확인하고, 실패는 **최우선 finding**으로 올린다(Rule 12 — "통과"라 말하려면 실제로 통과해야 함). 세 런타임의 워크스페이스 루트가 모두 `src/`(settings.gradle·pnpm-workspace.yaml·pyproject.toml)이므로 **명령은 `src/` 에서** 돌린다.
-- JVM: `./gradlew :<apps|libs>:<모듈>:build` (앱은 `:apps:*`, 공유 라이브러리는 `:libs:*`. 예: `:apps:tenant-console-api`·`:libs:schema`·`:libs:jvm-common`)
+- JVM: `./gradlew :<apps|libs>:<모듈>:build` (앱은 `:apps:{cloud|onprem}:*`, 공유 라이브러리는 `:libs:*`. 예: `:apps:onprem:tenant-console-api`·`:libs:schema`·`:libs:jvm-common`)
 - Node: 패키지 `package.json` 의 scripts 를 먼저 보고 **정의된 것만** 돌린다 — `pnpm --filter <패키지> build`·`typecheck`·`test` 중 존재하는 것. `test` 스크립트가 없는 패키지(예: tenant-console-ui)에 `test` 만 돌리면 아무 검증 없이 exit 0 이라 통과로 오인한다.
 - Python: `uv run --package <패키지> pytest` — uv 워크스페이스가 `src/pyproject.toml` 이라 반드시 `src/` 에서(레포 루트에선 pyproject 를 못 찾아 실패). uv 없으면 모듈 `.venv/bin/pytest`.
 

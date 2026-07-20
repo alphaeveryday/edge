@@ -6,7 +6,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/tenant-console-ui/**"
+      - "src/apps/onprem/tenant-console-ui/**"
       # 워크스페이스 공유 — 의존성 그래프에 영향.
       - "src/pnpm-lock.yaml"
       - "src/pnpm-workspace.yaml"
@@ -28,5 +28,6 @@ jobs:
     uses: ./.github/workflows/deploy-ui.yml
     with:
       app: tenant-console-ui
+      plane: onprem
       bucket: ${{ vars.TENANT_CONSOLE_UI_BUCKET }}
       distribution_id: ${{ vars.TENANT_CONSOLE_UI_DISTRIBUTION_ID }}

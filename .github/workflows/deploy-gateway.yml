@@ -12,7 +12,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/gateway/**"
+      - "src/apps/cloud/gateway/**"
       # 공유 경로 — 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
       - "src/libs/jvm-common/**"
       - "src/settings.gradle"
@@ -39,3 +39,4 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: gateway
+      plane: cloud

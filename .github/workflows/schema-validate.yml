@@ -83,7 +83,7 @@ jobs:
           head="${HEAD_SHA}"
 
           # 세트 2개(cloud·onprem — ADR-0016)를 각각 검사한다. 버전 단조성은 세트별 독립.
-          for migdir in "src/libs/schema/migrations" "src/libs/schema/migrations-onprem"; do
+          for migdir in "src/libs/schema/migrations-cloud" "src/libs/schema/migrations-onprem"; do
             echo "── 세트 검사: ${migdir}"
 
             # (a) 기존 마이그레이션 파일의 수정(M)/삭제(D)/이름변경(R) 금지 — 추가(A)만 허용.

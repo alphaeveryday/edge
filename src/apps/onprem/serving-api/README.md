@@ -1,7 +1,7 @@
 # serving-api
 
 증권사 백엔드가 호출하는 조회 표면 — `GET /api/v1/explanations/{etf_ticker}?trade_date=` [edge-onprem].
-계약은 [docs/contracts/serving-api.md](../../../docs/contracts/serving-api.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
+계약은 [docs/contracts/serving-api.md](../../../../docs/contracts/serving-api.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
 
 ## 지켜야 할 로컬 불변식
 
@@ -22,7 +22,7 @@
 
 ```bash
 # src/ 에서
-./gradlew :apps:serving-api:bootRun
+./gradlew :apps:onprem:serving-api:bootRun
 curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/069500  # 200
 curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/305720  # 204
 # compose 로는 루트에서: docker compose up --build serving-api (host 18084)

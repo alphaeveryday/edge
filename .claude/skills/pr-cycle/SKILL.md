@@ -113,4 +113,4 @@ gh pr view <N> --json reviews --jq '[.reviews[] | select(.author.login == "chatg
 ## 테스트 시나리오
 
 - **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → Codex 리뷰 풀링, finding 1건 수용·수정·`@codex review` 재요청, `+1` 확인 → 사용자 확인 후 Squash 머지·브랜치 삭제 → 이슈 완료 전환.
-- **에러 흐름**: edge-review 게이트가 `./gradlew :apps:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.
+- **에러 흐름**: edge-review 게이트가 `./gradlew :apps:onprem:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.

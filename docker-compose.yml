@@ -55,7 +55,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./src/libs/schema/migrations:/flyway/sql:ro
+      - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
     command: >-
       -url=jdbc:postgresql://postgres:5432/edge
       -user=edge -password=edge
@@ -66,7 +66,7 @@ services:
   tenant-console-api:
     build:
       context: ./src
-      dockerfile: apps/tenant-console-api/Dockerfile
+      dockerfile: apps/onprem/tenant-console-api/Dockerfile
     container_name: edge-tenant-console-api
     depends_on:
       flyway:
@@ -81,7 +81,7 @@ services:
   super-admin-api:
     build:
       context: ./src
-      dockerfile: apps/super-admin-api/Dockerfile
+      dockerfile: apps/cloud/super-admin-api/Dockerfile
     container_name: edge-super-admin-api
     depends_on:
       flyway:
@@ -97,7 +97,7 @@ services:
   serving-api:
     build:
       context: ./src
-      dockerfile: apps/serving-api/Dockerfile
+      dockerfile: apps/onprem/serving-api/Dockerfile
     container_name: edge-serving-api
     ports:
       - "18084:8080"
@@ -107,7 +107,7 @@ services:
   tenant-sync-api:
     build:
       context: ./src
-      dockerfile: apps/tenant-sync-api/Dockerfile
+      dockerfile: apps/cloud/tenant-sync-api/Dockerfile
     container_name: edge-tenant-sync-api
     ports:
       - "18083:8080"
@@ -117,7 +117,7 @@ services:
   gateway:
     build:
       context: ./src
-      dockerfile: apps/gateway/Dockerfile
+      dockerfile: apps/cloud/gateway/Dockerfile
     container_name: edge-gateway
     depends_on:
       tenant-console-api:

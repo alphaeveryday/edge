@@ -1,6 +1,6 @@
 # data-pipeline
 
-> 역할/아키텍처는 루트 [README](../../../README.md)·[docs/context.md](../../../docs/context.md)가 SSOT.
+> 역할/아키텍처는 루트 [README](../../../../README.md)·[docs/context.md](../../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·
@@ -265,12 +265,12 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 
 ## 배포/스케줄 실행
 
-dev 배포 이미지는 `src/apps/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/pipeline`
+dev 배포 이미지는 `src/apps/cloud/data-pipeline/Dockerfile` 로 빌드해 기존 `edge/pipeline`
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
 만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
-한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../docs/adr/0028-unified-pipeline-sfn.md)) —
+한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md)) —
 각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다.
 모든 브랜치에 같은 `--run-id` 를 넘겨 raw partition·canonical·collection_log 를 같은 실행 단위로
 묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일

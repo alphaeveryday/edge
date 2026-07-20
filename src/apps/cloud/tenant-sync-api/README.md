@@ -1,7 +1,7 @@
 # tenant-sync-api
 
 온프렘 Sync Agent가 Pull하는 Cloud 표면 — `GET /api/v1/sync/bundle?after={cursor}&limit={n}` (스캐폴드 — 엔드포인트 계약은 미확정, 영서 설계 예정).
-계약은 [docs/contracts/sync-protocol.md](../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
+계약은 [docs/contracts/sync-protocol.md](../../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
 
 ## 지켜야 할 로컬 불변식
 
@@ -25,7 +25,7 @@
 
 ```bash
 # src/ 에서
-./gradlew :apps:tenant-sync-api:bootRun
+./gradlew :apps:cloud:tenant-sync-api:bootRun
 curl -i "localhost:8080/api/v1/sync/bundle?after=0"   # 200 + X-Bundle-Checksum
 curl -i "localhost:8080/api/v1/sync/bundle?after=3"   # 204
 # compose 로는 루트에서: docker compose up --build tenant-sync-api (host 18083)
