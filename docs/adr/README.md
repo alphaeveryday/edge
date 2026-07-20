@@ -37,3 +37,4 @@
 | [0027](0027-entity-id-scheme.md) | 도메인 ID 체계 — 불투명 서로게이트(ULID), 외부 식별자는 속성 | 승인됨 |
 | [0028](0028-unified-pipeline-sfn.md) | 파이프라인 SFN 통합 — 4페이즈(raw→정제→feature→분석)와 feature/분석 경계 | 승인됨 |
 | [0029](0029-apps-plane-grouping.md) | apps 플레인 그룹핑 · schema 마이그레이션 세트 대칭 명명 | 승인됨 |
+| [0030](0030-serving-to-publication.md) | serving-api를 Publication 도메인으로 리네이밍 | 승인됨 |
