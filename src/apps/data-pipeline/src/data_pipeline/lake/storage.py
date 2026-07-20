@@ -87,6 +87,22 @@ def raw_etf_partition(
     )
 
 
+def raw_etf_nav_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw ETF NAV(etf_nav) 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격(raw_price_partition)과 동형이다 — NAV 응답은 한 ETF 가 여러 거래일을 한 번에
+    주므로(날짜창) 원본을 수집일(ingest_date) 기준으로 run_id 별 append 한다. 거래일
+    (stck_bsop_date)은 각 레코드에 보존돼 canonical 이 쓴다(ALPHA-382). 날짜창 백필로
+    같은 거래일이 여러 run 에 걸쳐 들어오지만, 그 중복 제거는 canonical 소관이다.
+    """
+    return (
+        f"raw/source={source}/dataset=etf_nav/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_disclosure_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:

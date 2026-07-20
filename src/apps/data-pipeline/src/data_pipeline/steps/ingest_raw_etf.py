@@ -14,15 +14,16 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_etf_partition
-from ..sources import FmpEtfSource, KrxEtfSource, StopFetch
+from ..sources import FmpEtfSource, KisNavSource, KrxEtfSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 ETF 어댑터로
 # 둔다. 새 ETF 벤더를 추가하면 이 합집합에 더한다(로직은 손대지 않는다).
-EtfSourceAdapter = FmpEtfSource | KrxEtfSource
+EtfSourceAdapter = FmpEtfSource | KrxEtfSource | KisNavSource
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +36,25 @@ def run(
     storage: Storage,
     source: EtfSourceAdapter,
     run_id: str,
+    dataset: str = DATASET,
+    partition: Callable[[str, str, str, str], str] = raw_etf_partition,
+    job_name: str = JOB_NAME,
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
 
     ETF holdings 는 스냅샷이라 날짜창이 없다 — 재무(ingest_raw_financial)처럼 창 인자를
     받지 않고 매 run 이 현재 구성종목 전량을 수집한다.
+
+    NAV(ALPHA-380)도 같은 형상이라 이 스텝을 재사용한다 — 차이는 dataset/파티션 빌더뿐이라
+    `dataset`·`partition`·`job_name` 으로만 가른다(로직 분기 없음). NAV 는 날짜창을 쓰지만
+    창은 어댑터(KisNavSource)가 생성자로 들고 있어 `fetch()` 시그니처가 스냅샷 소스와 같다.
     """
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
         "run_id": run_id,
-        "job_name": JOB_NAME,
+        "job_name": job_name,
         "source_vendor": vendor,
         "started_at": started_at.isoformat(),
     }
@@ -56,7 +64,7 @@ def run(
         # 로그 쓰기는 best-effort(스토리지 장애로 skip 로그마저 못 남겨도 크래시 금지).
         logger.warning("%s ETF 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
-            _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
+            _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
                                                                "reason": f"{vendor} disabled or missing credentials"})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
@@ -88,7 +96,7 @@ def run(
     saved = 0
     try:
         for market, records in sorted(partitions.items()):
-            key = f"{raw_etf_partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
+            key = f"{partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
             saved += len(records)
@@ -115,7 +123,7 @@ def run(
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한 비0
     # 종료로 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
     try:
-        _write_log(storage, vendor, started_date, run_id, {
+        _write_log(storage, vendor, dataset, started_date, run_id, {
             **log,
             "status": status,
             "error": error,
@@ -131,12 +139,14 @@ def run(
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
     logger.info(
-        "ingest_raw_etf 완료: status=%s fetched=%d saved=%d failed_etfs=%d partitions=%d",
+        job_name + " 완료: status=%s fetched=%d saved=%d failed_etfs=%d partitions=%d",
         status, fetched, saved, len(failed_etfs), len(partitions),
     )
     return exit_code
 
 
-def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
-    key = collection_log_key(vendor, DATASET, started_date, run_id)
+def _write_log(
+    storage: Storage, vendor: str, dataset: str, started_date: str, run_id: str, payload: dict
+) -> None:
+    key = collection_log_key(vendor, dataset, started_date, run_id)
     storage.put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
