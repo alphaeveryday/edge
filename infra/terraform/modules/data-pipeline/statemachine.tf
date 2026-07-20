@@ -49,8 +49,8 @@ locals {
     {
       # ETF NAV(ALPHA-380·458) — KIS ETF NAV비교추이(일). 가격과 같은 kis task-def·같은
       # 앱키를 쓰므로 CollectKisPrice 와 동시에 토큰을 발급한다. KIS 는 앱키당 분당 1회만
-      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초 대기 후 1회 재시도한다 —
-      # 그 재시도가 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
+      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초+지터(0~20초) 대기 후 최대 2회
+      # 재시도한다 — 그게 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
       state        = "CollectKisNav"
       taskdef_key  = "kis"
       command_expr = "States.Array('ingest-raw-nav', '--run-id', $.run_id)"
