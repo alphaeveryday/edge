@@ -20,12 +20,18 @@ from __future__ import annotations
 # NAV 는 참고 필드가 없다 — 전 사유가 blocking 이다(구성종목 게이트의 경고/차단 분리와 대비).
 BLOCKING_REASONS_ETF_NAV = frozenset(
     {"missing_market", "unsupported_market", "missing_etf_id",
-     "missing_trade_date", "bad_trade_date", "missing_nav", "non_positive_nav"}
+     "missing_trade_date", "bad_trade_date", "missing_nav", "non_positive_nav",
+     "nav_out_of_range"}
 )
 
 # NAV 는 국내 ETF 만 대상이다(ADR-0024 MVP=국내 ETF, 수집도 KIS 단일 벤더·KR 고정).
 # US 가 생기면 여기 넓힌다 — 지금 넓혀두면 잘못 라우팅된 행이 조용히 통과한다.
 _SUPPORTED_MARKETS = frozenset({"KR"})
+
+# NAV 상한(배타) — 마트 `etf_nav_daily.nav` 가 NUMERIC(24,8) 이라 정수부는 16자리까지다.
+# CHECK(nav < 'Infinity') 는 통과하지만 자릿수를 넘는 값(1e308 등)은 적재에서 numeric overflow
+# 로 터진다. 값 계약을 소유한 쪽에서 미리 거른다 — non_positive_nav 와 같은 근거다.
+NAV_MAX_EXCLUSIVE = 10 ** 16
 
 # trade_date 하한 — 이보다 과거는 NAV 파이프라인 대상이 아닌 오염된 날짜로 본다.
 MIN_TRADE_DATE = "2000-01-01"
@@ -52,6 +58,7 @@ def validate_etf_nav(row: dict, *, max_trade_date: str) -> list[str]:
       - bad_trade_date     : trade_date [MIN, max] 밖(far-future/past)
       - missing_nav        : nav 결측 또는 수치 변환 실패
       - non_positive_nav   : nav ≤ 0 (마트 CHECK 위반 — 순자산이 0 이하일 수 없다)
+      - nav_out_of_range   : nav ≥ 10^16 (마트 NUMERIC(24,8) 정수부 초과 — 적재 overflow)
     """
     reasons: list[str] = []
 
@@ -78,5 +85,9 @@ def validate_etf_nav(row: dict, *, max_trade_date: str) -> list[str]:
     elif nav <= 0:
         # 마트 CHECK(nav > 0) 를 canonical 에서 미리 강제 — 적재 시점에 터지지 않게.
         reasons.append("non_positive_nav")
+    elif nav >= NAV_MAX_EXCLUSIVE:
+        # finite 지만 마트 컬럼 폭을 넘는 값. CHECK 는 통과하고 INSERT 가 터지는 구간이라
+        # 게이트가 안 보면 '통과로 인증된 행'이 적재에서만 실패한다(각도 H).
+        reasons.append("nav_out_of_range")
 
     return reasons

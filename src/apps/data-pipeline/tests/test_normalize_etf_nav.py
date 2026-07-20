@@ -80,6 +80,10 @@ def test_문자열_nav_가_수치로_정규화돼_canonical_에_들어간다(tmp
         ("N/A", "missing_nav"),
         (True, "missing_nav"),            # float(True)=1.0 이 양수라 통과해버린다
         (None, "missing_nav"),
+        # finite 지만 마트 NUMERIC(24,8) 정수부(16자리)를 넘는 값 — CHECK 는 통과하고
+        # INSERT 만 터지는 구간이라 게이트가 안 보면 적재에서야 발견된다.
+        ("1e308", "nav_out_of_range"),
+        ("10000000000000000", "nav_out_of_range"),
     ],
 )
 def test_나쁜_nav_는_통과로_인증되지_않는다(tmp_path, bad_nav, reason):
