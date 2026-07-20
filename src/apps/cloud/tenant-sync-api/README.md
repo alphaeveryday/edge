@@ -1,7 +1,7 @@
 # tenant-sync-api
 
 온프렘 Sync Agent가 Pull하는 Cloud 표면 — `GET /api/v1/sync/bundle?after={cursor}&limit={n}` (스캐폴드 — 엔드포인트 계약은 미확정, 영서 설계 예정).
-계약은 [docs/contracts/sync-protocol.md](../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
+계약은 [docs/contracts/sync-protocol.md](../../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
 
 ## 지켜야 할 로컬 불변식
 

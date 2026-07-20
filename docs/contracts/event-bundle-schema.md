@@ -9,7 +9,7 @@
 
 ## Cloud Event Store 스키마
 
-**물리 정의는 [`src/libs/schema/migrations/`](../../src/libs/schema/migrations/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
+**물리 정의는 [`src/libs/schema/migrations-cloud/`](../../src/libs/schema/migrations-cloud/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
 
 아래는 Sync 채널이 실제로 소비하는 **경계면**만 추린 것이다. 47개 전체가 인터페이스는 아니다 — 나머지는 진기 측 내부 구현이며 양자 합의 없이 바뀔 수 있다.
 

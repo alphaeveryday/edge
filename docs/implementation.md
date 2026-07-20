@@ -64,7 +64,7 @@
   이 순서는 **CI가 강제하지 않는다** — 마이그레이션 CD(`schema-migrate`)와 앱 CD(`deploy-app`)는 분리돼 있어 앱 배포가 migrate를 기다리지 않는다. 확장 마이그레이션 PR을 먼저 머지해 `schema-migrate`가 초록인 것을 확인한 뒤 의존 코드 PR을 머지하는 것은 작성자 책임이다.
 
 **변경 체크리스트** — 스키마를 바꿀 때:
-- [ ] `libs/schema/migrations/`에 마이그레이션 추가(Flyway, timestamp 버전 `VyyyyMMddHHmm__`).
+- [ ] `libs/schema/migrations-cloud/`에 마이그레이션 추가(Flyway, timestamp 버전 `VyyyyMMddHHmm__`).
 - [ ] (생성기 도입 후) `libs/schema/generated/` 모델 재생성.
 - [ ] 마이그레이션과 생성 모델을 **같은 PR/커밋**으로 함께 올린다([ADR-0005](adr/0005-db-as-contract.md)).
 - [ ] 이 변경이 확장-수축 중 **어느 단계인지** PR 설명에 명시한다.
@@ -73,7 +73,7 @@
 **generated 모델 재생성**
 > **현황:** generated 모델 **생성기가 아직 없다.** ADR-0005·README의 "스키마 변경 시 generated
 > 동반 커밋" 규칙은 **그대로 유효하다.** 다만 그 **전제인 생성기가 아직 없어 현재 생성할 산출물이 없고**
-> (`generated/`는 비어 있음), 그 전까지는 `libs/schema/migrations/`의 Flyway SQL이 사실상 계약을 정의한다.
+> (`generated/`는 비어 있음), 그 전까지는 `libs/schema/migrations-cloud/`의 Flyway SQL이 사실상 계약을 정의한다.
 > 생성기는 별도 후속 티켓에서 도입하며, 도입되는 순간 아래 규칙이 그대로 적용된다(규칙 자체를 보류·완화하지 않는다).
 
 생성기 도입 이후의 규칙:
