@@ -3,7 +3,7 @@
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|tag-news|load-instruments|load-price-triggers|load-documents
+         |normalize-etf|normalize-etf-nav|tag-news|load-instruments|load-price-triggers|load-documents
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
@@ -59,6 +59,7 @@ from .steps import (
     normalize_disclosure,
     normalize_disclosure_segment,
     normalize_etf,
+    normalize_etf_nav,
     normalize_news,
     normalize_price,
     tag_news,
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav",
                  "normalize-price",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "tag-news", "load-instruments", "load-price-triggers",
+                 "normalize-etf", "normalize-etf-nav", "tag-news", "load-instruments", "load-price-triggers",
                  "load-documents", "load-assertions", "assemble-events"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
@@ -149,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":
         return normalize_etf.run(storage, run_id, args.input_run_id)
+    # NAV 정제도 raw 를 읽는 스텝이라 수집 창·벤더 인자가 없다 — 벤더는 raw 키의 source= 가
+    # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
+    if args.step == "normalize-etf-nav":
+        return normalize_etf_nav.run(storage, run_id, args.input_run_id)
 
     # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
