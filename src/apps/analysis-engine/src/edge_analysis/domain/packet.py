@@ -1,7 +1,6 @@
-"""Build the (system, user) prompt pair for the analysis LLM — pure.
+"""분석 LLM 용 (system, user) 프롬프트 쌍 구성 — 순수.
 
-The prompt wording is the analysis contract, ported verbatim; only the data
-access changed (typed models instead of dict payloads).
+프롬프트 문구는 분석 계약이라 그대로 이식했고, 데이터 접근만 타입 모델로 바꿨다.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ def build_packet(
     route_code: str,
     events: list[KodexEvent],
 ) -> tuple[str, str]:
-    """Return ``(system_prompt, user_packet)`` for the analysis call."""
+    """분석 호출용 ``(system_prompt, user_packet)`` 을 반환한다."""
     proxy = decomp.proxy_ret
     price_lines = [
         f"ETF 프록시 등락(구성종목 기여 합, 가격 커버리지 {decomp.coverage:.0%}): "

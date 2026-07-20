@@ -1,7 +1,7 @@
-"""S3 canonical-lake reader for prices and ETF holdings.
+"""가격·ETF holdings 를 읽는 S3 canonical-lake 리더.
 
-``boto3`` and ``pyarrow`` are imported lazily (repo convention for heavy deps):
-the reader is only touched on the price/holdings path, not on a calm early exit.
+``boto3``·``pyarrow`` 는 지연 import 한다(무거운 의존의 레포 관례) — 리더는 가격/holdings
+경로에서만 쓰이고, 잔잔한 조기 종료 경로에선 건드리지 않는다.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ LAKE_HOLDINGS_PREFIX = "canonical/holdings/etf_holdings"
 
 
 def make_s3_client(settings: Settings):
-    """Build an S3 client, honoring an optional AWS profile (lazy boto3)."""
+    """S3 클라이언트 생성(선택적 AWS 프로파일 반영, 지연 boto3)."""
     import boto3
 
     if settings.aws_profile:
@@ -28,14 +28,14 @@ def make_s3_client(settings: Settings):
 
 
 class LakeReader:
-    """Reads close-to-close returns and ETF holdings from the S3 lake."""
+    """S3 레이크에서 종가 대비 등락과 ETF holdings 를 읽는다."""
 
     def __init__(self, s3, bucket: str) -> None:
         self._s3 = s3
         self._bucket = bucket
 
     def _partition_values(self, base: str, key: str) -> list[str]:
-        """Sorted partition values for ``key=`` immediately under ``base``."""
+        """``base`` 바로 아래 ``key=`` 파티션 값들(정렬)."""
         resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=base, Delimiter="/")
         out: list[str] = []
         for common in resp.get("CommonPrefixes", []):
@@ -45,6 +45,7 @@ class LakeReader:
         return sorted(out)
 
     def _read_parquet_prefix(self, prefix: str, columns: list[str]) -> list[dict[str, Any]]:
+        """``prefix`` 하위 parquet 을 전부 읽어 행 dict 리스트로 반환한다."""
         import pyarrow.parquet as pq
 
         rows: list[dict[str, Any]] = []
@@ -65,7 +66,7 @@ class LakeReader:
         return rows
 
     def load_returns(self, market: str, trade_date: date) -> dict[str, float | None]:
-        """Close-to-close return per ticker, using the preceding partition as D-1."""
+        """티커별 종가 대비 등락. 직전 파티션을 D-1 로 쓴다."""
         base = f"{LAKE_PRICE_PREFIX}/market={market}/"
         dates = self._partition_values(base, "trade_date")
         today = trade_date.isoformat()
@@ -96,11 +97,11 @@ class LakeReader:
     def load_holdings(
         self, etf_id: str, market: str, trade_date: date
     ) -> tuple[list[Holding], str | None]:
-        """Constituent weights (fraction) for one ETF.
+        """한 ETF 의 구성종목 비중(fraction).
 
-        Selection is by target-ETF row presence: latest as_of <= trade_date, else
-        the earliest future snapshot — the same rule as the pipeline's trigger
-        writer (ALPHA-418), so a fired trigger and its explanation agree.
+        대상 ETF 행 존재 기준으로 고른다: trade_date 이하 최신 as_of, 없으면 가장 이른
+        미래 스냅샷 — 파이프라인 트리거 writer(ALPHA-418)와 같은 규칙이라 발화한 트리거와
+        그 설명이 같은 holdings 로 분해된다.
         """
         base = f"{LAKE_HOLDINGS_PREFIX}/market={market}/"
         dates = self._partition_values(base, "as_of_date")

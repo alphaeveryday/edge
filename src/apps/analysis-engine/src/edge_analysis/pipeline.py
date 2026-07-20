@@ -1,8 +1,8 @@
-"""Run orchestration — consume the trigger, decompose, explain, persist.
+"""run 오케스트레이션 — 트리거 소비 → 분해 → 설명 → 영속.
 
-Dependencies (lake, store, client, s3) are injected so the control flow is
-testable without I/O. The engine reads only pipeline-produced feature outputs
-(ADR-0028): a missing trigger row is a first-class "normal variation" answer.
+의존성(lake·store·client·s3)을 주입해 제어 흐름을 I/O 없이 테스트할 수 있다. 엔진은
+파이프라인이 만든 feature 산출물만 읽는다(ADR-0028) — 트리거 행이 없으면 그날은
+'정상 변동'이 일급 답이다.
 """
 from __future__ import annotations
 
@@ -34,12 +34,13 @@ def run(
     client: AnalysisClient,
     s3,
 ) -> int:
+    """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
     log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id)
 
     entity_index = store.load_entity_index()
     etf_instrument_id = store.resolve_etf_instrument(settings.etf_ticker)
 
-    # Consume price from the lake and decompose the ETF move (L1).
+    # 레이크에서 가격을 소비해 ETF 등락을 분해한다(L1).
     holdings, holdings_asof = lake.load_holdings(settings.etf_ticker, _MARKET, settings.trade_date)
     returns = lake.load_returns(_MARKET, settings.trade_date)
     decomp = compute_decomposition(holdings, returns)
@@ -52,7 +53,7 @@ def run(
         proxy_ret=decomp.proxy_ret,
     )
 
-    # The L0 gate is consumed, not computed (ALPHA-411): no row == normal day.
+    # L0 게이트는 계산이 아니라 소비다(ALPHA-411) — 행이 없으면 평온한 날.
     gate = store.fetch_price_trigger(etf_instrument_id, settings.trade_date)
     if gate is None:
         write_run_archive(s3, settings, {
@@ -70,7 +71,7 @@ def run(
     )
     log("trigger.consumed", route=route_code, event_search=event_search, **ids)
 
-    # Consume the events the pipeline assembled (ALPHA-412) — read only.
+    # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
     kodex_events = []
     if event_search:
         kodex_events = store.fetch_kodex_events(settings.trade_date, list(KODEX_CONSTITUENTS))
@@ -98,7 +99,7 @@ def run(
 def _persist_explanation(
     store: EventStore, s3, settings: Settings, etf_instrument_id: str, explanation, kodex_events,
 ) -> dict[str, Any]:
-    """Persist to RDS when FK prerequisites exist, otherwise fall back to S3."""
+    """FK 전제가 있으면 RDS 에, 없으면 S3 로 폴백해 설명을 영속한다."""
     prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
     missing = [key for key, value in prereqs.items() if not value]
     if missing:

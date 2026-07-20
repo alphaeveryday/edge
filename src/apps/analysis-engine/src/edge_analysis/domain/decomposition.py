@@ -1,8 +1,7 @@
-"""ETF-move decomposition and routing — pure functions over domain models.
+"""ETF 등락 분해와 라우팅 — 도메인 모델 위의 순수 함수.
 
-The proxy return is ``Σ(weight·return) / Σ(weight)`` restricted to the priced
-subset (coverage-normalized), matching the pipeline's trigger writer so a fired
-trigger and its explanation decompose consistently.
+proxy 등락은 가격 보유 부분집합에 한정한 ``Σ(비중·등락) / Σ(비중)``(커버리지 정규화)로,
+파이프라인 트리거 writer 와 같은 산식이다 — 발화한 트리거와 그 설명이 일관되게 분해되도록.
 """
 from __future__ import annotations
 
@@ -10,21 +9,20 @@ from collections.abc import Mapping
 
 from .models import Decomposition, Holding, Member
 
-# top-1 concentration at or above this fraction routes to a concentrated
-# (single-name-driven) explanation rather than a common-factor one.
+# top-1 집중도가 이 비율 이상이면 (단일 종목 주도) 집중 설명으로, 아니면 공통요인으로 라우팅.
 CONCENTRATION_THRESHOLD = 0.5
 
 
 def compute_decomposition(
     holdings: list[Holding], returns: Mapping[str, float | None]
 ) -> Decomposition:
-    """Decompose the ETF move into per-constituent contributions."""
+    """ETF 등락을 구성종목별 기여로 분해한다."""
     total_weight = sum(h.weight for h in holdings)
     members: list[Member] = []
     weighted_return_sum = covered_weight = 0.0
     for h in holdings:
         ret = returns.get(h.ticker)
-        if ret is None:
+        if ret is None:  # 가격 없는 종목은 proxy·커버리지에서 제외한다.
             continue
         contribution = h.weight * ret
         members.append(
@@ -34,6 +32,7 @@ def compute_decomposition(
         weighted_return_sum += contribution
         covered_weight += h.weight
 
+    # |기여| 내림차순으로 순위 부여. frozen dataclass 라 rank 를 넣어 다시 만든다.
     members.sort(key=lambda m: abs(m.contribution), reverse=True)
     members = [
         Member(m.ticker, m.name, m.weight, m.ret, m.contribution, rank)
@@ -58,7 +57,7 @@ def compute_decomposition(
 
 
 def decide_route(decomp: Decomposition) -> tuple[str, bool]:
-    """Return the route code and whether an event (news) search is required."""
+    """라우트 코드와 이벤트(뉴스) 검색 필요 여부를 반환한다."""
     if decomp.top1 is not None and decomp.top1 >= CONCENTRATION_THRESHOLD:
         return "CONCENTRATED", True
     return "COMMON_FACTOR", True

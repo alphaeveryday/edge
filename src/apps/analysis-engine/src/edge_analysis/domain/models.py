@@ -1,16 +1,15 @@
-"""Domain models and vocabulary — plain data plus the Explanation accessors.
+"""도메인 모델과 어휘 — 순수 데이터 + Explanation 접근자.
 
-No I/O. The structured objects (Member, Decomposition, PriceTrigger,
-KodexEvent) replace the ad-hoc ``dict[str, Any]`` payloads the pipeline used to
-pass around; Explanation wraps the untyped DeepSeek response with typed
-accessors while keeping the raw payload for the run archive.
+I/O 없음. 구조화 객체(Member·Decomposition·PriceTrigger·KodexEvent)는 파이프라인이
+주고받던 임시 ``dict[str, Any]`` payload 를 대체한다. Explanation 은 타입 없는 DeepSeek
+응답을 타입 있는 접근자로 감싸되 원본 payload 를 런 아카이브용으로 보존한다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-# The target ETF's core constituents (weights prioritise the analysis packet).
+# 대상 ETF 의 핵심 구성종목(비중은 분석 패킷 우선순위에만 쓴다).
 KODEX_CONSTITUENTS: dict[str, tuple[str, float]] = {
     "000660": ("SK하이닉스", 0.40),
     "005930": ("삼성전자", 0.20),
@@ -23,11 +22,11 @@ KODEX_CONSTITUENTS: dict[str, tuple[str, float]] = {
     "039030": ("이오테크닉스", 0.020),
 }
 
-# Stamped on the observation as its decomposition-output version (ALPHA-411);
-# the L0 gate threshold itself lives in the pipeline (single writer).
+# observation 에 분해-산출 버전으로 스탬프된다(ALPHA-411).
+# L0 게이트 임계값 자체는 파이프라인(단일 writer)에 있다.
 POLICY_VERSION = "l0-abs-v1"
 
-# DeepSeek verdict/confidence vocabulary -> Cloud Event Store enum values.
+# DeepSeek verdict/confidence 어휘 → Cloud Event Store enum 값.
 _VERDICT_TO_TYPE = {
     "공식 이벤트 선행": "EVENT_SUPPORTED",
     "시장·섹터 주도": "MIXED",
@@ -40,7 +39,7 @@ _CONFIDENCE_MAP = {"높음": "HIGH", "중간": "MEDIUM", "보류": "LOW"}
 
 @dataclass(frozen=True, slots=True)
 class Holding:
-    """One ETF constituent's weight (fraction), from the holdings snapshot."""
+    """holdings 스냅샷의 ETF 구성종목 1개 비중(fraction)."""
 
     ticker: str
     name: str | None
@@ -49,7 +48,7 @@ class Holding:
 
 @dataclass(frozen=True, slots=True)
 class Member:
-    """One priced constituent's contribution to the ETF move."""
+    """가격 보유 구성종목 1개의 ETF 등락 기여."""
 
     ticker: str
     name: str | None
@@ -61,7 +60,7 @@ class Member:
 
 @dataclass(frozen=True, slots=True)
 class Decomposition:
-    """Constituent-contribution decomposition over the priced subset."""
+    """가격 보유 부분집합에 대한 구성종목-기여 분해."""
 
     members: list[Member]
     proxy_ret: float | None
@@ -77,7 +76,7 @@ class Decomposition:
 
 @dataclass(frozen=True, slots=True)
 class PriceTrigger:
-    """The pipeline-written L0 gate row consumed for the trade day."""
+    """당일 소비한, 파이프라인이 쓴 L0 게이트 행."""
 
     trigger_id: str
     observed_return: float | None
@@ -88,7 +87,7 @@ class PriceTrigger:
 
 @dataclass(frozen=True, slots=True)
 class KodexEvent:
-    """A KODEX-constituent source event assembled by the pipeline."""
+    """파이프라인이 조립한 KODEX 구성종목 source event 1개."""
 
     source_event_id: str
     event_type_code: str
@@ -102,10 +101,10 @@ class KodexEvent:
 
 @dataclass(frozen=True, slots=True)
 class Explanation:
-    """Typed view over the raw DeepSeek JSON response.
+    """원본 DeepSeek JSON 응답에 대한 타입 있는 뷰.
 
-    ``raw`` is kept verbatim so the run archive preserves fields the DB mapping
-    drops (verdict wording, key_evidence, unexplained — ALPHA-407).
+    ``raw`` 는 그대로 보존해, DB 매핑이 버리는 필드(verdict 원문·key_evidence·
+    unexplained — ALPHA-407)를 런 아카이브가 남긴다.
     """
 
     raw: dict[str, Any]

@@ -1,8 +1,7 @@
 """런 아카이브와 분해 요약 테스트.
 
-모든 런(트리거 없는 잔잔한 종료 포함)은 아카이브 1건을 남겨 중간 산출물이
-감사 가능해야 하고, 아카이브 쓰기 실패가 런을 죽여선 안 된다 — 본업은 영속,
-아카이브는 관측이다.
+모든 런(트리거 없는 잔잔한 종료 포함)은 아카이브 1건을 남겨 중간 산출물이 감사
+가능해야 하고, 아카이브 쓰기 실패가 런을 죽여선 안 된다(본업은 영속, 아카이브는 관측).
 """
 
 import json
@@ -33,8 +32,7 @@ class _FakeS3:
 
 
 def test_archive_lands_under_the_result_prefix_runs_path():
-    # 키는 결과 prefix 하위 runs/ 여야 기존 PutObject IAM 스코프 안이다 —
-    # 밖이면 매 런 AccessDenied 다.
+    # 키는 결과 prefix 하위 runs/ 여야 기존 PutObject IAM 스코프 안이다(밖이면 매 런 AccessDenied).
     s3 = _FakeS3()
 
     location = write_run_archive(s3, _SETTINGS, {

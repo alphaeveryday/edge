@@ -1,7 +1,7 @@
-"""Configuration: environment variables to a validated ``Settings``.
+"""설정: 환경변수를 검증된 ``Settings`` 로 로드한다.
 
-Invalid or missing values fail loudly (``PipelineError``) instead of silently
-defaulting, so a misconfigured task cannot "succeed" with no output (Rule 12).
+잘못되거나 빠진 값은 조용히 기본값으로 넘기지 않고 ``PipelineError`` 로 드러낸다 —
+잘못 설정된 태스크가 산출물 없이 '성공'하면 안 되기 때문이다(Rule 12).
 """
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ DEFAULT_MODEL = "deepseek-chat"
 
 
 class PipelineError(RuntimeError):
-    """Fatal pipeline error -> non-zero exit -> Step Functions failure."""
+    """치명적 파이프라인 오류 → 비0 종료 → Step Functions 실패."""
 
 
 @dataclass(frozen=True, slots=True)
 class PgConfig:
+    """Cloud Event Store(Postgres) 접속 설정."""
+
     host: str
     port: int
     dbname: str
@@ -30,6 +32,8 @@ class PgConfig:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
+    """한 번의 실행에 필요한 검증된 설정 묶음."""
+
     trade_date: date
     request_id: str
     region: str
@@ -49,7 +53,7 @@ def _env(name: str, default: str | None = None) -> str | None:
 
 
 def parse_trade_date(value: str | None) -> date:
-    """Parse ``YYYY-MM-DD``; empty means today (KST) so trigger-less days run."""
+    """``YYYY-MM-DD`` 파싱. 빈 값이면 오늘(KST) — 트리거 없는 날도 돌게."""
     if not value:
         return datetime.now(KST).date()
     try:
@@ -60,6 +64,7 @@ def parse_trade_date(value: str | None) -> date:
 
 def _load_pg() -> PgConfig:
     schema = _env("PGSCHEMA", "public")
+    # 스키마는 search_path 에 문자열로 박히므로 주입을 막는다(영숫자·밑줄만 허용).
     if schema != schema.strip() or not schema.replace("_", "").isalnum():
         raise PipelineError(f"invalid PGSCHEMA {schema!r}")
     return PgConfig(
@@ -73,7 +78,11 @@ def _load_pg() -> PgConfig:
 
 
 def load_settings(*, trade_date: str | None = None, request_id: str | None = None) -> Settings:
-    """Build a validated ``Settings`` from the environment and CLI arguments."""
+    """환경변수와 CLI 인자로 검증된 ``Settings`` 를 만든다.
+
+    Raises:
+        PipelineError: ``DEEPSEEK_API_KEY`` 누락 또는 잘못된 ``PGSCHEMA``.
+    """
     api_key = _env("DEEPSEEK_API_KEY")
     if not api_key:
         raise PipelineError("DEEPSEEK_API_KEY is not set")

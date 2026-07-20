@@ -1,4 +1,4 @@
-"""CLI composition root: parse arguments, build adapters, run the pipeline."""
+"""CLI composition root: 인자 파싱 → 어댑터 조립 → 파이프라인 실행."""
 from __future__ import annotations
 
 import argparse
@@ -23,6 +23,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """설정 로드·어댑터 조립·실행. 실패(PipelineError)는 로그 + 비0 종료."""
     args = parse_args(argv)
     try:
         settings = load_settings(trade_date=args.trade_date, request_id=args.request_id)

@@ -1,9 +1,8 @@
-"""Cloud Event Store repository (Postgres).
+"""Cloud Event Store 리포지토리(Postgres).
 
-Writes only analysis outputs (observation/route/run/result); the trigger and
-event lineage are read-only (the pipeline is their single writer — ALPHA-411/412).
-``psycopg2`` is imported lazily to keep import cheap and match the repo
-convention for heavy drivers.
+분석 산출물(observation/route/run/result)만 쓴다. 트리거와 이벤트 계보는 읽기 전용이다
+(파이프라인이 단일 writer — ALPHA-411/412). ``psycopg2`` 는 import 를 가볍게 유지하고
+무거운 드라이버의 레포 관례를 따르려 지연 import 한다.
 """
 from __future__ import annotations
 
@@ -25,6 +24,7 @@ KODEX_SEMI_INSTRUMENT_FALLBACK = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 
 
 def _iso(value: Any) -> str:
+    """datetime/None 을 ISO 문자열로(None 이면 지금, naive 는 UTC 로 간주)."""
     if value is None:
         return utcnow_iso()
     if isinstance(value, datetime):
@@ -34,13 +34,14 @@ def _iso(value: Any) -> str:
 
 
 class EventStore:
-    """Thin repository over a psycopg2 connection."""
+    """psycopg2 커넥션 위의 얇은 리포지토리."""
 
     def __init__(self, conn) -> None:
         self._conn = conn
 
     @classmethod
     def connect(cls, settings: Settings) -> EventStore:
+        """설정으로 접속하고 search_path 를 세팅한 EventStore 를 반환한다."""
         import psycopg2
 
         conn = psycopg2.connect(
@@ -58,14 +59,15 @@ class EventStore:
     def close(self) -> None:
         self._conn.close()
 
-    # -- reads ------------------------------------------------------------- #
+    # -- 읽기 --------------------------------------------------------------- #
     def load_entity_index(self) -> dict[str, str]:
-        """ticker -> instrument entity_id for every seeded instrument."""
+        """ticker -> instrument entity_id (시드된 전 종목)."""
         with self._conn.cursor() as cur:
             cur.execute("SELECT ticker, instrument_id FROM instrument")
             return {str(ticker): str(iid) for ticker, iid in cur.fetchall()}
 
     def resolve_etf_instrument(self, ticker: str) -> str:
+        """ticker 로 ETF instrument_id 해소(없으면 시드 폴백)."""
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT instrument_id FROM instrument WHERE ticker = %s AND instrument_type = 'ETF'",
@@ -75,12 +77,10 @@ class EventStore:
         return str(row[0]) if row else KODEX_SEMI_INSTRUMENT_FALLBACK
 
     def fetch_price_trigger(self, etf_instrument_id: str, trade_date: date):
-        """Consume the pipeline's L0 trigger; ``None`` == normal variation.
+        """파이프라인 L0 트리거 소비. ``None`` == 평온(정상 변동).
 
-        Pick the latest detected_at when transitional duplicates exist (the
-        unique key is 3-keyed on detected_at).
+        이행기 중복이 있으면 최신 detected_at 을 고른다(uq 3번째 키가 detected_at).
         """
-
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT price_movement_trigger_id, observed_return, detection_reason,"
@@ -102,7 +102,7 @@ class EventStore:
         )
 
     def fetch_kodex_events(self, trade_date: date, tickers: list[str]) -> list[KodexEvent]:
-        """Load the day's KODEX-constituent source events assembled by the pipeline."""
+        """파이프라인이 조립한 당일 KODEX 구성종목 source event 를 읽는다."""
         sql = (
             "SELECT DISTINCT ON (se.source_event_id)"
             " se.source_event_id, se.event_type_code, se.available_at, ea.entity_id, i.ticker,"
@@ -137,7 +137,7 @@ class EventStore:
     def explanation_prerequisites(
         self, settings: Settings, etf_instrument_id: str
     ) -> dict[str, Any]:
-        """FK prerequisites for explanation_result: profile, route id, bundle."""
+        """explanation_result 의 FK 전제: profile 존재·route id·bundle."""
         with self._conn.cursor() as cur:
             cur.execute("SELECT 1 FROM etf_profile WHERE instrument_id = %s", (etf_instrument_id,))
             has_profile = cur.fetchone() is not None
@@ -165,7 +165,7 @@ class EventStore:
             "bundle": bundle if has_bundle else None,
         }
 
-    # -- writes ------------------------------------------------------------ #
+    # -- 쓰기 --------------------------------------------------------------- #
     def persist_observation_route(
         self,
         trigger_id: str,
@@ -174,10 +174,11 @@ class EventStore:
         event_search: bool,
         entity_index: dict[str, str],
     ) -> dict[str, str]:
-        """Persist L1/route lineage off the consumed trigger (no trigger insert)."""
+        """소비한 트리거에서 파생한 L1/route 계보를 적재한다(트리거 insert 없음)."""
         from psycopg2.extras import execute_values
 
         detected_at = utcnow_iso()
+        # 계보 id 는 소비한 trigger_id 에서 파생 — DB 에 있는 그 행에 계보가 매달린다.
         obs_id = stable_id("cob", trigger_id)
         route_id = stable_id("rte", obs_id)
         contribution_sum = (
@@ -238,7 +239,7 @@ class EventStore:
         primary_thread_id: str | None,
         event_count: int,
     ) -> dict[str, str]:
-        """Insert explanation_run + explanation_result (FK prerequisites assumed)."""
+        """explanation_run + explanation_result 를 적재한다(FK 전제는 충족 가정)."""
         import json
 
         explanation_as_of = utcnow_iso()

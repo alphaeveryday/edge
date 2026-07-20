@@ -1,10 +1,8 @@
-"""S3 outputs that are not the primary DB write: the run archive and the
-FK-missing explanation fallback.
+"""주 DB 쓰기가 아닌 S3 산출물: 런 아카이브와 FK-결여 설명 폴백.
 
-The run archive records every run's intermediate outputs (decomposition,
-consumed trigger, raw LLM response) so calm no-trigger days are still auditable
-(ALPHA-415). A write failure is logged and swallowed — observation must never
-take down analysis persistence.
+런 아카이브는 매 런의 중간 산출물(분해·소비 트리거·LLM 원문)을 남겨 트리거 없는 잔잔한
+날도 감사 가능하게 한다(ALPHA-415). 쓰기 실패는 로그만 남기고 삼킨다 — 관측이 분석
+영속을 무너뜨리면 안 된다.
 """
 from __future__ import annotations
 
@@ -18,8 +16,8 @@ from ..observability import log, utcnow_iso
 
 _DEFAULT_PREFIX = "operations_archive/etf_explanations/"
 
-# The FK-missing fallback keeps the event title; the run archive also keeps the
-# novelty status. Both intentionally drop the rest of the event.
+# FK-결여 폴백은 이벤트 제목을 남기고, 런 아카이브는 novelty 도 남긴다. 둘 다 나머지는
+# 의도적으로 버린다.
 _FALLBACK_EVENT_FIELDS = ("source_event_id", "thread_id", "event_type_code", "ticker", "title")
 _ARCHIVE_EVENT_FIELDS = (*_FALLBACK_EVENT_FIELDS[:4], "novelty_status", "title")
 
@@ -38,12 +36,12 @@ def _event_dict(event: KodexEvent, fields: tuple[str, ...]) -> dict[str, Any]:
 
 
 def archived_events(events: list[KodexEvent]) -> list[dict[str, Any]]:
-    """Serialize KODEX events for the run archive (incl. novelty status)."""
+    """런 아카이브용 KODEX 이벤트 직렬화(novelty 포함)."""
     return [_event_dict(e, _ARCHIVE_EVENT_FIELDS) for e in events]
 
 
 def decomp_summary(decomp: Decomposition) -> dict[str, Any]:
-    """Archive-friendly summary — scalars in full, only the top-10 members."""
+    """아카이브용 요약 — 스칼라는 전부, 멤버는 상위 10개만."""
     return {
         "proxy_ret": decomp.proxy_ret,
         "coverage": decomp.coverage,
@@ -58,10 +56,10 @@ def decomp_summary(decomp: Decomposition) -> dict[str, Any]:
 
 
 def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | None:
-    """Write one run-archive record under ``{result_prefix}/runs/``.
+    """``{result_prefix}/runs/`` 아래 런 아카이브 1건을 쓴다.
 
-    Returns the s3 URI, or ``None`` if the write fails or the prefix is not an
-    s3:// URI (the run continues either way).
+    Returns:
+        s3 URI, 또는 쓰기 실패·비 s3:// prefix 면 ``None``(어느 쪽이든 런은 계속).
     """
     prefix = _result_prefix(settings)
     if not prefix.startswith("s3://"):
@@ -83,7 +81,7 @@ def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | 
     ).encode("utf-8")
     try:
         s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
-    except Exception as exc:  # noqa: BLE001 — observation must not kill the run
+    except Exception as exc:  # noqa: BLE001 — 관측이 런을 죽이면 안 된다
         log("run_archive.failed", error=str(exc))
         return None
     location = f"s3://{bucket}/{key}"
@@ -94,7 +92,7 @@ def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | 
 def write_explanation_to_s3(
     s3, settings: Settings, explanation: dict[str, Any], events: list[KodexEvent]
 ) -> str:
-    """Persist the explanation to S3 when the DB FK prerequisites are missing."""
+    """DB FK 전제가 없을 때 설명을 S3 에 영속한다."""
     prefix = _result_prefix(settings)
     if not prefix.startswith("s3://"):
         raise PipelineError(f"result prefix must be an s3:// URI, got {prefix!r}")
