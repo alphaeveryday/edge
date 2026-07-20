@@ -146,6 +146,14 @@ locals {
       command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id)"
     },
     {
+      # ETF NAV 마트 적재(ALPHA-383) — canonical etf_nav → etf_nav_daily. feature 페이즈에
+      # 두는 이유는 의존이다: normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있다.
+      # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
+      state        = "LoadEtfNav"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-nav', '--run-id', $.run_id)"
+    },
+    {
       # 문서 마스터(ALPHA-374·410) — canonical 뉴스 → document. 창 미지정 = 전체 스캔 +
       # 자연키 멱등 skip. assertion 적재(LoadAssertions, 페이즈 뒤 직렬)의 FK 선행이다.
       state        = "LoadDocuments"
