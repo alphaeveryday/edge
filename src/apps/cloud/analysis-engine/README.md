@@ -1,6 +1,8 @@
 # analysis-engine
 
-KODEX 반도체 ETF의 **당일 설명 생성** 파이프라인 (Python, edge-cloud).
+ETF **당일 설명 생성** 파이프라인 (Python, edge-cloud). 대상 ETF 는 `ALPHAMALE_ETF_TICKER`
+(기본 `091160` KODEX 반도체)로 받고, 표시명·구성종목명은 전부 그 ETF 의 canonical holdings·
+마스터에서 파생한다 — KODEX 반도체 하드코딩은 없다(ALPHA-467). run() 은 한 번에 ETF 한 종을 돈다.
 통합 파이프라인 SFN의 analyze 페이즈로 실행되며, 트리거가 없으면 오늘(Asia/Seoul) 기준으로 실행된다.
 
 > ALPHA-411·412(완전 분리, ADR-0028) 이후 이 앱은 **feature 산출물의 소비자**다: L0 게이트는
@@ -14,7 +16,7 @@ KODEX 반도체 ETF의 **당일 설명 생성** 파이프라인 (Python, edge-cl
 price_movement_trigger 소비 (행 없음 = 평온 → 종료)
   → 구성종목 분해(가격 S3 읽기 — observation·packet 입력)
   → observation/route 적재 (소비한 trigger_id 에서 파생)
-  → DB 의 KODEX 구성종목 source_event/thread 조회 (assemble-events 산출)
+  → DB 의 대상 ETF 구성종목 source_event/thread 조회 (assemble-events 산출)
   → 분석 에이전트(DeepSeek) → explanation_result (DRAFT)
 ```
 
