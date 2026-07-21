@@ -47,11 +47,11 @@ Customer Console → API Gateway → 각 Service
 
 **반입(동기화) 경로**
 ```
-Content Sync Scheduler → Intake Worker → Screening Worker → Explanation Database
-                              └──────→ Relay Worker (Customer DMZ) → [EDGE] API Gateway
+Content Sync Scheduler → Relay Worker (Customer DMZ) ──outbound Pull(mTLS)──→ [EDGE] Tenant Sync API
+Relay Worker → Intake Worker (내부망) → Screening Worker → Explanation Database
 ```
 
-- Intake Worker가 Relay Worker(DMZ)를 통해 EDGE에서 분석 데이터를 가져오고, Screening Worker가 점검을 거쳐 Explanation Database에 적재
+- **Relay Worker(DMZ)** 가 EDGE Tenant Sync API를 outbound Pull·무결성 검증하고, **Intake Worker(내부망)** 가 번들을 넘겨받아 저장, Screening Worker가 점검을 거쳐 Explanation Database에 적재한다. 개시·외부 통신 주체는 DMZ의 Relay Worker뿐이다(배포 모듈: Relay Worker=Sync Agent(DMZ), Intake Worker=Intake(내부망), [adr/0036](../adr/0036-sync-agent-intake-topology.md))
 
 ---
 
@@ -123,10 +123,10 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 | Publication Service | `apps/onprem/publication-api` | 구 serving-api ([adr/0031](../adr/0031-serving-to-publication.md)) |
 | User·Stats·Explanation·Review·Policy·Settings Service | Tenant Console (`apps/onprem/tenant-console-api`·`-ui`) | Policy Service = 점검 **기준** 설정 |
 | Screening Worker | Screening Engine | 점검 **실행** 엔진 (≠ Policy). 리네임·구현 예정 — 아래 [전진 예정 축](#전진-예정-축) 참조 |
-| Relay Worker | Relay | **DMZ** 배포 — EDGE Cloud를 outbound pull |
-| Intake Worker | Intake | **내부망** 배포 — Relay에서 재-pull |
+| Relay Worker | Sync Agent (DMZ) | EDGE Cloud를 outbound pull·검증. 기존 SSOT·코드 명칭 유지([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
+| Intake Worker | Intake (내부망) | Sync Agent가 검증한 번들 수신·저장 ([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 
-> 위 온프렘 배포 모듈 중 **Screening Engine·Relay·Intake·Sync Agent는 아직 미구현**(walking skeleton 예정, [루트 README](../../README.md) 프로젝트 상태). 현행 코드로 존재하는 온프렘 모듈은 `publication-api`·`tenant-console-api`·`-ui`뿐이다.
+> 위 온프렘 배포 모듈 중 **Screening Engine·Sync Agent·Intake는 아직 미구현**(walking skeleton 예정, [루트 README](../../README.md) 프로젝트 상태). 현행 코드로 존재하는 온프렘 모듈은 `publication-api`·`tenant-console-api`·`-ui`뿐이다.
 
 **클라우드 (Vendor Cloud)**
 
@@ -140,12 +140,12 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 
 ## 전진 예정 축
 
-아래 축은 이 뷰가 현행 SSOT보다 앞선 **채택된 목표 설계**다. 결정은 확정됐으나 `context.md`·`console-ia/` 전진은 후속 PR에서 반영되며, **그 전까지는 현행 SSOT가 기준**이다 (뷰가 조용히 이기지 않는다).
+아래 축은 이 뷰가 채택한 목표 설계다. **위젯·Sync 토폴로지는 SSOT로 전진 완료**(✅), **콘솔 IA·점검 엔진명은 후속 PR에서 반영 예정**이다. 미완 축은 그 전까지 현행 SSOT(`console-ia/`·`compliance-engine`)가 기준이다 (뷰가 조용히 이기지 않는다).
 
 | 축 | 이 뷰 (목표) | 현행 SSOT | 전진 |
 |---|---|---|---|
-| 위젯 | 위젯 UI 임베드 접점 (빌드 산출물 납품, 서버 없음) | embed 위젯 제거·MTS 자체 구성 ([context.md](../context.md) §2, [scope.md](../scope.md)) | 후속 PR(위젯) |
-| Sync 토폴로지 | Relay(DMZ)+Intake(내부망) 2모듈 상시 분리 | 단일 Sync Agent 기본, 2단은 망연계 옵션 ([context.md](../context.md) §4.2) | 후속 PR(Sync) |
+| 위젯 | 위젯 UI 임베드 접점 (빌드 산출물 납품, 서버 없음) | **전진됨** — 빌드 산출물 납품 반영 ([context.md](../context.md) §2, [adr/0035](../adr/0035-widget-ui-build-artifact.md)) | ✅ 완료 |
+| Sync 토폴로지 | Relay(DMZ)+Intake(내부망) 2모듈 상시 분리 | **전진됨** — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준([context.md](../context.md) §3, [adr/0036](../adr/0036-sync-agent-intake-topology.md)). 뷰의 "Relay"=배포 모듈 Sync Agent | ✅ 완료 |
 | 콘솔 IA | [information-architecture.md](information-architecture.md) 재설계 | `console-ia/` 현행 메뉴 | 후속 PR(콘솔 IA) |
 | 점검 엔진명 | Screening Engine | Compliance Engine (미구현) | 후속 PR(리네임) |
 

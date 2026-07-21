@@ -42,3 +42,5 @@
 | [0032](0032-retire-gateway.md) | gateway 은퇴 — 클라우드 엣지를 ALB 직결로 | 승인됨 |
 | [0033](0033-demo-onprem-stack.md) | 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리 | 승인됨 |
 | [0034](0034-host-per-edge-alb.md) | 공개 엣지 호스트 단위 분리 — 서비스당 ALB 1개, 경로 라우팅 없음 | 승인됨 |
+| [0035](0035-widget-ui-build-artifact.md) | 위젯 UI를 빌드 산출물로 납품 — 실행 서버 없음 | 승인됨 |
+| [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 |

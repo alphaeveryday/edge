@@ -41,7 +41,7 @@
 ## 팀 오너십
 
 - **김진기**: Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** (DB에 쓰는 것까지 — [adr/0026](adr/0026-ownership-boundary-db.md)).
-- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent, Compliance Engine, Tenant Console (API), Publication API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
+- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent·Intake, Compliance Engine, Tenant Console (API), Publication API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
 - **정준영**: AI/ML — 설명 후보 생성, 신뢰도/반대 요인 산출.
 - 진기-영서 인터페이스는 **Cloud Event Store DB 스키마** 하나로 고정한다(db-as-contract). 스키마 변경은 반드시 양자 합의 ([contracts/event-bundle-schema.md](contracts/event-bundle-schema.md), [adr/0026](adr/0026-ownership-boundary-db.md)).
 
