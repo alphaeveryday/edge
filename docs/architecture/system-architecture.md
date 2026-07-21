@@ -122,11 +122,11 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 |---|---|---|
 | Publication Service | `apps/onprem/publication-api` | 구 serving-api ([adr/0031](../adr/0031-serving-to-publication.md)) |
 | User·Stats·Explanation·Review·Policy·Settings Service | Tenant Console (`apps/onprem/tenant-console-api`·`-ui`) | Policy Service = 점검 **기준** 설정 |
-| Screening Worker | Screening Engine | 점검 **실행** 엔진 (≠ Policy). 리네임·구현 예정 — 아래 [전진 예정 축](#전진-예정-축) 참조 |
+| Screening Worker | `screening-worker` | 점검 **실행** (≠ Policy) — 금칙어·기준 적용→상태 분기. 미구현(walking skeleton, [adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)) |
 | Relay Worker | Sync Agent (DMZ) | EDGE Cloud를 outbound pull·검증. 기존 SSOT·코드 명칭 유지([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 | Intake Worker | Intake (내부망) | Sync Agent가 검증한 번들 수신·저장 ([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 
-> 위 온프렘 배포 모듈 중 **Screening Engine·Sync Agent·Intake는 아직 미구현**(walking skeleton 예정, [루트 README](../../README.md) 프로젝트 상태). 현행 코드로 존재하는 온프렘 모듈은 `publication-api`·`tenant-console-api`·`-ui`뿐이다.
+> 위 온프렘 배포 모듈 중 **`screening-worker`·Sync Agent·Intake는 아직 미구현**(walking skeleton 예정, [루트 README](../../README.md) 프로젝트 상태). 현행 코드로 존재하는 온프렘 모듈은 `publication-api`·`tenant-console-api`·`-ui`뿐이다.
 
 **클라우드 (Vendor Cloud)**
 
@@ -140,14 +140,14 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 
 ## 전진 예정 축
 
-아래 축은 이 뷰가 채택한 목표 설계다. **위젯·Sync 토폴로지는 SSOT로 전진 완료**(✅), **콘솔 IA·점검 엔진명은 후속 PR에서 반영 예정**이다. 미완 축은 그 전까지 현행 SSOT(`console-ia/`·`compliance-engine`)가 기준이다 (뷰가 조용히 이기지 않는다).
+아래 축은 이 뷰가 채택한 목표 설계였고, **4개 축 모두 SSOT로 전진 완료**됐다(뷰-SSOT 정합 시리즈 PR-1~4). 각 축의 반영 근거는 아래 표 참조.
 
 | 축 | 이 뷰 (목표) | 현행 SSOT | 전진 |
 |---|---|---|---|
 | 위젯 | 위젯 UI 임베드 접점 (빌드 산출물 납품, 서버 없음) | **전진됨** — 빌드 산출물 납품 반영 ([context.md](../context.md) §2, [adr/0035](../adr/0035-widget-ui-build-artifact.md)) | ✅ 완료 |
 | Sync 토폴로지 | Relay(DMZ)+Intake(내부망) 2모듈 상시 분리 | **전진됨** — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준([context.md](../context.md) §3, [adr/0036](../adr/0036-sync-agent-intake-topology.md)). 뷰의 "Relay"=배포 모듈 Sync Agent | ✅ 완료 |
-| 콘솔 IA | [information-architecture.md](information-architecture.md) 재설계 | `console-ia/` 현행 메뉴 | 후속 PR(콘솔 IA) |
-| 점검 엔진명 | Screening Engine | Compliance Engine (미구현) | 후속 PR(리네임) |
+| 콘솔 IA | [information-architecture.md](information-architecture.md) 재설계 | **전진됨** — `console-ia/` 재작성(Audit/Admin Activity Log 메뉴 제거, 감사=DB 보존) | ✅ 완료 |
+| 점검 엔진명 | Screening Worker | **전진됨** — `compliance-engine`→`screening-worker`([adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)). 엔진 only(Policy·Reviewer 유지) | ✅ 완료 |
 
 ## 특징 요약
 

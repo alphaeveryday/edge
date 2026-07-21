@@ -12,7 +12,7 @@
 5. Event Bundle을 생성한다.
 6. On-Premise Sync Agent(DMZ)가 Tenant Sync API를 Pull·무결성 검증한다.
 7. Intake(내부망)가 검증된 Event Bundle을 넘겨받아 Raw Event Store에 저장한다 (단일 모듈 옵션에서는 Sync Agent가 저장까지 — [ADR-0036](../adr/0036-sync-agent-intake-topology.md)).
-8. Compliance Engine이 증권사 정책을 적용한다.
+8. Screening Worker가 증권사 정책(점검)을 적용한다.
 9. 결과에 따라 상태를 분기한다.
 
 **상태 분기**:

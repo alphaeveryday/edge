@@ -65,7 +65,7 @@ flowchart TB
         PS["Published Store"] --> SC["Publication Cache"] --> SVA
         SA["Sync Agent (DMZ)"] -->|"검증 번들 전달"| IN["Intake (내부망)"]
         IN --> RES["Raw Event Store"]
-        RES --> CE["Compliance Engine"]
+        RES --> CE["Screening Worker"]
         CE -->|승인/자동노출| PS
         CE --> RQ["Review Queue(논리)"]
         RQ --- TC["Tenant Console<br/>(검수/정책/감사)"]
@@ -75,7 +75,7 @@ flowchart TB
 
 - 데이터는 항상 **Cloud → On-Prem 단방향**으로 흐르고, 연결은 항상 **On-Prem → Cloud outbound**로만 열린다.
 - Cloud는 "어느 증권사가 무엇을 노출했는지" 알지 못한다. Cloud가 아는 테넌트 정보는 동기화 상태(마지막 sync 시각, 성공/실패, 전달 이벤트 수)까지다.
-- **네트워크 배치 (확정, 2026-07-21 — [ADR-0036](adr/0036-sync-agent-intake-topology.md))**: Sync는 **Sync Agent(DMZ)+Intake(내부망) 2모듈**로 분리 배치한다. **Sync Agent**는 DMZ(외부연계망)에 두어 벤더 Tenant Sync API를 outbound Pull(mTLS)·번들 무결성 검증까지 수행하고 **내부망 DB에 직접 접근하지 않는다**. **Intake**는 내부망에 두어 Sync Agent가 검증한 번들을 넘겨받아 Raw Event Store에 적재하며 외부 통신이 없다. Sync Agent→Intake 전달은 증권사의 승인된 DMZ→내부망 경계 메커니즘(망연계 솔루션(망간자료전송) 또는 통제된 내부 전송 채널)을 경유한다 — 이 경계가 곧 망분리 지점이다. ① 방화벽 outbound 허용 대상은 벤더 Tenant Sync API의 **고정 FQDN:443 (mTLS) 단일 목적지 화이트리스트**로 제한 ② 증권사 표준 forward proxy 경유를 지원 ③ **옵션**: DMZ→내부망 직접 DB 커넥션을 허용하고 컴포넌트 최소화를 원하는 증권사는 Sync Agent+Intake를 **단일 모듈**(DMZ 배치·내부망 DB 직접 적재)로 합쳐 배포할 수 있다(기존 단일 Sync Agent 구성). 나머지 온프렘 컴포넌트(Compliance Engine, Tenant Console, Publication API, DB)는 전부 내부 업무망에 위치하며 외부 통신이 없다. "외부와 닿는 것은 DMZ의 Sync Agent 하나, 방향은 outbound 하나, 목적지는 하나"가 준법감시인 대상 설명 문구다.
+- **네트워크 배치 (확정, 2026-07-21 — [ADR-0036](adr/0036-sync-agent-intake-topology.md))**: Sync는 **Sync Agent(DMZ)+Intake(내부망) 2모듈**로 분리 배치한다. **Sync Agent**는 DMZ(외부연계망)에 두어 벤더 Tenant Sync API를 outbound Pull(mTLS)·번들 무결성 검증까지 수행하고 **내부망 DB에 직접 접근하지 않는다**. **Intake**는 내부망에 두어 Sync Agent가 검증한 번들을 넘겨받아 Raw Event Store에 적재하며 외부 통신이 없다. Sync Agent→Intake 전달은 증권사의 승인된 DMZ→내부망 경계 메커니즘(망연계 솔루션(망간자료전송) 또는 통제된 내부 전송 채널)을 경유한다 — 이 경계가 곧 망분리 지점이다. ① 방화벽 outbound 허용 대상은 벤더 Tenant Sync API의 **고정 FQDN:443 (mTLS) 단일 목적지 화이트리스트**로 제한 ② 증권사 표준 forward proxy 경유를 지원 ③ **옵션**: DMZ→내부망 직접 DB 커넥션을 허용하고 컴포넌트 최소화를 원하는 증권사는 Sync Agent+Intake를 **단일 모듈**(DMZ 배치·내부망 DB 직접 적재)로 합쳐 배포할 수 있다(기존 단일 Sync Agent 구성). 나머지 온프렘 컴포넌트(Screening Worker, Tenant Console, Publication API, DB)는 전부 내부 업무망에 위치하며 외부 통신이 없다. "외부와 닿는 것은 DMZ의 Sync Agent 하나, 방향은 outbound 하나, 목적지는 하나"가 준법감시인 대상 설명 문구다.
 
 ## 4. Cloud / On-Premise 책임 분리
 
@@ -99,7 +99,7 @@ flowchart TB
 | Sync Agent (DMZ) | Tenant Sync API를 outbound Pull(mTLS), 번들 무결성 검증 (내부망 DB 미접근) |
 | Intake (내부망) | Sync Agent가 검증한 번들 수신, Raw Event Store 적재 (외부 통신 없음). 옵션 배치에서는 Sync Agent와 단일 모듈로 합침 |
 | Raw Event Store | 수신한 원본 이벤트 보존 (수신 원본 불변) |
-| Compliance Engine | 증권사별 금칙어/금지 표현/처리 기준 적용 → 상태 분기 |
+| Screening Worker | 증권사별 금칙어/금지 표현/처리 기준(점검) 적용 → 상태 분기 |
 | Review Queue | **물리 DB 아님.** analysis_items 중 status=REVIEW_REQUIRED의 논리적 작업함 |
 | Tenant Console + Tenant Console API | 검수, 정책 관리, 감사 로그, 설정 (증권사 내부 사용자 전용) |
 | Published Store | 최종 노출 확정 문구 저장 |
@@ -119,5 +119,5 @@ flowchart TB
 | widget-api | **제거** | 벤더 서빙 위젯 서버 제거 유지. 단 EDGE 위젯 UI는 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅) — [ADR-0035](adr/0035-widget-ui-build-artifact.md) |
 | Tenant Sync API | **신규** | Vendor Cloud. cursor 기반 delta sync, 신규/정정/무효화 이벤트 전달, mTLS |
 | Sync Agent (DMZ) + Intake (내부망) | **신규** | On-Premise 2모듈([ADR-0036](adr/0036-sync-agent-intake-topology.md)). Sync Agent=DMZ outbound Pull·검증, Intake=내부망 수신·저장. 단일 모듈 옵션 |
-| Compliance Engine | **신규** | On-Premise. 금칙어/금지 표현/자동노출·검수·차단 기준 적용 |
+| Screening Worker | **신규** | On-Premise. 금칙어/금지 표현/자동노출·검수·차단 기준(점검) 적용 |
 | Publication API | **신규** | On-Premise. Published 데이터만 조회 제공 |
