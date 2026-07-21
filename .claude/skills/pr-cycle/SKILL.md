@@ -30,7 +30,9 @@ Jira 대상이면 아래 순서로 확인해 **활성 스프린트에 있는 키
 
 1. **스프린트 확인**: `searchJiraIssuesUsingJql`로 `project = ALPHA AND sprint in openSprints()` + 이슈 키 또는 작업 내용 검색. 있으면 그 키로 진행.
 2. **백로그 확인**: 스프린트에 없으면 `project = ALPHA AND (sprint is EMPTY OR sprint not in openSprints()) AND statusCategory != Done` + 검색어로 백로그를 조회한다. 같은 작업의 이슈가 이미 있으면 **새로 만들지 말고** 그 이슈를 활성 스프린트로 올린다. 백로그 확인 없이 바로 생성하면 중복 이슈가 쌓인다.
-3. **생성 + 스프린트 배치**: 백로그에도 없으면 `createJiraIssue`로 생성하고 활성 스프린트에 배치한다.
+3. **생성 + 스프린트 배치**: 백로그에도 없으면 `createJiraIssue`로 생성하고 활성 스프린트에 배치한다. 생성하는 이슈는 아래 두 필드를 **반드시 채운다** — 담당자 없는 이슈는 보드에서 주인 없이 떠돌고, story point 없는 이슈는 스프린트 용량 계산을 깨뜨린다.
+   - **담당자**: 맥락상 누가 맡을지 명확하면(예: 요청자가 곧 작업자) `lookupJiraAccountId`로 계정을 찾아 설정한다. 불확실하면 **추측으로 배정하지 말고** 사용자에게 누구를 담당자로 할지 물어 확정한 뒤 설정한다.
+   - **Story Point**: 감으로 찍지 않는다. 백로그·최근 완료 이슈 몇 건(2~3건 이상)의 story point를 조회해 상대 크기의 기준선으로 삼고, 이번 작업을 그 기준 이슈들과 견주어 산정한다. 산정값과 비교 근거(어떤 이슈 대비 크다/작다)를 함께 보고한다. 필드 ID(예: `customfield_*`)는 `getJiraIssueTypeMetaWithFields`로 확인한다.
 
 스프린트 이동/배치는 `editJiraIssue`의 Sprint 필드로 시도한다. MCP 도구로 불가능하면(필드 권한·보드 API 제약) 사용자에게 보드에서 올려 달라고 요청하고, 배치가 확인된 뒤 다음 단계로 진행한다.
 
