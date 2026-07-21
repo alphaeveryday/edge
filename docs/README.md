@@ -24,6 +24,12 @@
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |
 | [console-ia/](console-ia/) | Super Admin·Tenant Console IA | 콘솔 화면·메뉴를 만들 때 |
 | [adr/](adr/) | 결정 기록 — 무엇을 왜 그렇게 정했나 | 결정의 배경이 궁금할 때 |
+| [architecture/system-architecture.md](architecture/system-architecture.md) | **[뷰]** 논리 컴포넌트↔시스템 매핑 + 논리→배포 모듈 매핑표 | 논리 구조를 훑을 때 (상세: context.md) |
+| [architecture/application-architecture.md](architecture/application-architecture.md) | **[뷰]** 환경별 UI/API/저장소 계층 | 앱 계층을 훑을 때 (상세: context.md·console-ia) |
+| [architecture/information-architecture.md](architecture/information-architecture.md) | **[뷰]** 콘솔 정보구조 트리(위젯·고객사·슈퍼어드민) | 콘솔 IA를 훑을 때 (상세: console-ia) |
+| [architecture/cloud-architecture.md](architecture/cloud-architecture.md) | **[뷰]** AWS 클라우드 인프라 구성도 | 클라우드 배치를 훑을 때 (상세: infra/terraform/README·adr/0034·0028) |
+
+> **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 
 ## 읽는 순서
 1. [context.md](context.md) — 제품이 무엇이고 왜 피벗했는지, 컴포넌트 경계
