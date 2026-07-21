@@ -64,8 +64,7 @@ services:
       -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
       migrate
 
-  # [edge-onprem] 온프렘 플레인이므로 온프렘 PG 를 본다 (앱은 아직 DataSource
-  # autoconfig exclude 상태 — env 는 검수 도메인 실구현 시 사용된다).
+  # [edge-onprem] 검수 표면(Review Queue 목록·승인·반려) — 온프렘 PG 조회·전이.
   tenant-console-api:
     build:
       context: ./src
