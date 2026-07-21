@@ -13,7 +13,7 @@
 - [ ] **Tenant Sync API 엔드포인트 계약** — 응답 포맷·번들 개수 상한·다음 cursor 전달·에러 시맨틱 → `docs/contracts/sync-protocol.md` 보강. 설계 입력으로 **일일 이벤트 규모 가정**을 함께 명시
 
 ## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님)
-- [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Compliance Engine)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Compliance Engine 구현의 선행 조건)
+- [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Screening Worker)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Screening Worker 구현의 선행 조건)
 - [ ] **역할 4종 권한 매트릭스** 정의 — 인증 방식은 하이브리드로 확정([adr/0025](docs/adr/0025-onprem-auth-hybrid.md)), 매트릭스만 잔여 (ALPHA-118·119 선행 조건)
 - [ ] **외부 데이터 소스 약관 확인** — 빅카인즈·DART·KIS·FMP 수집 데이터의 **상용 제품 재제공** 허용 여부. 비개발 작업 중 최대 리스크 — 늦게 발견하면 제품을 되돌려야 함
 - [ ] **GitHub 플랜/공개 여부 결정** — private+free 플랜이라 **branch protection 불가** (main 직접 push 방지·required check·CODEOWNERS 강제 전부 규율로만 유지 중, schema-validate.yml 주석 참조). Team 플랜 업그레이드 vs public 전환
@@ -33,7 +33,7 @@
 - [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
-- [ ] Compliance Engine — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
+- [ ] Screening Worker — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
