@@ -122,11 +122,11 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 |---|---|---|
 | Publication Service | `apps/onprem/publication-api` | 구 serving-api ([adr/0031](../adr/0031-serving-to-publication.md)) |
 | User·Stats·Explanation·Review·Policy·Settings Service | Tenant Console (`apps/onprem/tenant-console-api`·`-ui`) | Policy Service = 점검 **기준** 설정 |
-| Screening Worker | `screening-worker` | 점검 **실행** (≠ Policy) — 금칙어·기준 적용→상태 분기. 미구현(walking skeleton, [adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)) |
+| Screening Worker | `screening-worker` | 점검 **실행** (≠ Policy) — 금칙어·기준 적용→상태 분기. walking skeleton 구현(무조건 통과 정책, [adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)) |
 | Relay Worker | Sync Agent (DMZ) | EDGE Cloud를 outbound pull·검증. 기존 SSOT·코드 명칭 유지([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 | Intake Worker | Intake (내부망) | Sync Agent가 검증한 번들 수신·저장 ([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 
-> 위 온프렘 배포 모듈 중 **`screening-worker`·Sync Agent·Intake는 아직 미구현**(walking skeleton 예정, [루트 README](../../README.md) 프로젝트 상태). 현행 코드로 존재하는 온프렘 모듈은 `publication-api`·`tenant-console-api`·`-ui`뿐이다.
+> 위 온프렘 배포 모듈은 전부 walking skeleton 으로 구현됐다(`sync-agent`·`intake`·`screening-worker`·`publication-api`·`tenant-console-api`·`-ui` — [루트 README](../../README.md) 프로젝트 상태). Screening 의 정책 룰 엔진·검수 콘솔 연동은 후속이다.
 
 **클라우드 (Vendor Cloud)**
 

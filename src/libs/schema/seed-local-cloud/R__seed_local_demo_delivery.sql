@@ -57,11 +57,14 @@ INSERT INTO explanation_run (explanation_run_id, explanation_route_id, bundle_ve
      TIMESTAMPTZ '2026-07-15 16:00:00+09', TIMESTAMPTZ '2026-07-15 16:01:00+09'),
     ('exrun_LOCAL000000000000000002', 'exr_LOCAL0000000000000000001', 'local-demo.0',
      TIMESTAMPTZ '2026-07-15 17:00:00+09', 'SUCCEEDED',
-     TIMESTAMPTZ '2026-07-15 17:00:00+09', TIMESTAMPTZ '2026-07-15 17:01:00+09')
+     TIMESTAMPTZ '2026-07-15 17:00:00+09', TIMESTAMPTZ '2026-07-15 17:01:00+09'),
+    ('exrun_LOCAL000000000000000003', 'exr_LOCAL0000000000000000001', 'local-demo.0',
+     TIMESTAMPTZ '2026-07-15 18:00:00+09', 'SUCCEEDED',
+     TIMESTAMPTZ '2026-07-15 18:00:00+09', TIMESTAMPTZ '2026-07-15 18:01:00+09')
 ON CONFLICT (explanation_run_id) DO NOTHING;
 
--- 정정 서사: 0001(원본, 정정으로 WITHDRAWN) → 0002(정정분, 무효화로 WITHDRAWN).
--- 게시 grain 부분 유니크와 충돌하지 않는 종결 상태로 시드한다.
+-- 정정 서사: 0001(원본, 정정으로 WITHDRAWN) → 0002(정정분, 무효화로 WITHDRAWN)
+-- → 0003(재산출 최종본, PUBLISHED — 관통 후 Demo UI 가 노출하는 상태).
 INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_instrument_id,
     trade_date, explanation_as_of, primary_thread_id, explanation_type, summary,
     confidence_level, publication_status) VALUES
@@ -72,7 +75,11 @@ INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_i
     ('expr_LOCAL000000000000000002', 'exrun_LOCAL000000000000000002', 'inst_LOCAL00000000000069500KR',
      DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 17:00:00+09', NULL, 'EVENT_SUPPORTED',
      '정정된 공시 기준으로 재산출한 공개 정보 기반 변동 요인 후보입니다.',
-     'LOW', 'WITHDRAWN')
+     'LOW', 'WITHDRAWN'),
+    ('expr_LOCAL000000000000000003', 'exrun_LOCAL000000000000000003', 'inst_LOCAL00000000000069500KR',
+     DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 18:00:00+09', NULL, 'EVENT_SUPPORTED',
+     '반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다. (재산출 확정본)',
+     'MEDIUM', 'PUBLISHED')
 ON CONFLICT (explanation_result_id) DO NOTHING;
 
 -- 데모 테넌트 — TenantResolver 임시값(1)과 정합하도록 tenant_id=1 을 명시 고정한다.
@@ -87,7 +94,8 @@ ON CONFLICT (tenant_id) DO NOTHING;
 SELECT setval(pg_get_serial_sequence('tenant', 'tenant_id'),
               (SELECT max(tenant_id) FROM tenant), true);
 
--- 전달 레코드 3건 — NEW → CORRECTION → INVALIDATION
+-- 전달 레코드 4건 — NEW → CORRECTION → INVALIDATION → NEW(최종 게시분).
+-- 온프렘 관통 후 최종 상태: 0001=CORRECTED, 0002=INVALIDATED, 0003=AUTO_PUBLISHED(노출).
 INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, explanation_result_id,
     target_explanation_result_id, reason)
 SELECT t.tenant_id, v.cursor, v.delivery_type, v.result_id, v.target_id, v.reason
@@ -95,7 +103,8 @@ FROM tenant t,
      (VALUES
          (1::bigint, 'NEW', 'expr_LOCAL000000000000000001', NULL, NULL),
          (2::bigint, 'CORRECTION', 'expr_LOCAL000000000000000002', 'expr_LOCAL000000000000000001', '근거 공시 정정'),
-         (3::bigint, 'INVALIDATION', NULL, 'expr_LOCAL000000000000000002', '오탐지 이벤트')
+         (3::bigint, 'INVALIDATION', NULL, 'expr_LOCAL000000000000000002', '오탐지 이벤트'),
+         (4::bigint, 'NEW', 'expr_LOCAL000000000000000003', NULL, NULL)
      ) AS v(cursor, delivery_type, result_id, target_id, reason)
 WHERE t.tenant_name = 'local-demo'
 ON CONFLICT (tenant_id, cursor) DO NOTHING;
