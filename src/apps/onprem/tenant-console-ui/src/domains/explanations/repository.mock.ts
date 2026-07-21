@@ -118,7 +118,7 @@ const items: Explanation[] = [
   {
     id: 13, name: 'Rivian', code: 'RIVN', market: 'NASDAQ', direction: 1, changePct: 11.42,
     status: 'REJECTED', risk: 'HIGH', reviewReason: 'ASSERTIVE',
-    receivedRelative: '5시간 전', receivedAt: '2026-07-20 05:40 KST',
+    receivedRelative: '5시간 전', receivedAt: '2026-07-11 05:40 KST',
     evidence: [
       { type: '뉴스', title: '신형 SUV 사전예약 개시, 초기 반응 호조', source: 'TechCrunch', time: '04:55' },
     ],

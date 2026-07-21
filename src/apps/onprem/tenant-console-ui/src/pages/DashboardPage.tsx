@@ -85,18 +85,21 @@ export function DashboardPage() {
             </tr>
           </thead>
           <tbody>
-            {items.slice(0, 6).map((it) => (
-              <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
-                <StockCell name={it.name} code={it.code} />
-                <td className="col-muted">{it.market}</td>
-                <td className="col-num">
-                  <Delta direction={it.direction} pct={it.changePct} />
-                </td>
-                <StatusCell it={it} />
-                <RiskCell it={it} />
-                <td className="col-muted num">{it.receivedRelative}</td>
-              </tr>
-            ))}
+            {[...items]
+              .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))
+              .slice(0, 6)
+              .map((it) => (
+                <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
+                  <StockCell name={it.name} code={it.code} />
+                  <td className="col-muted">{it.market}</td>
+                  <td className="col-num">
+                    <Delta direction={it.direction} pct={it.changePct} />
+                  </td>
+                  <StatusCell it={it} />
+                  <RiskCell it={it} />
+                  <td className="col-muted num">{it.receivedRelative}</td>
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>

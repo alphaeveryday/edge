@@ -219,7 +219,8 @@ export function ConsoleLayout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6">
+        {/* pathname key로 리마운트 — 라우트 이동 시 스크롤 위치가 이전 화면 것을 물려받지 않게 */}
+        <main key={location.pathname} className="flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>
       </div>
