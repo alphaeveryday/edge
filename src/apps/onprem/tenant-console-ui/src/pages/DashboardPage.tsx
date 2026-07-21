@@ -6,11 +6,15 @@ import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError } = useExplanations();
-  const { data: feed, isError: feedError } = useFeedStatus();
+  const explanationsQuery = useExplanations();
+  const feedQuery = useFeedStatus();
 
-  if (isError || feedError) return <LoadError />;
+  if (explanationsQuery.isError || feedQuery.isError) return <LoadError />;
+  // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 둘 다 로드된 뒤 렌더
+  if (explanationsQuery.isPending || feedQuery.isPending) return null;
 
+  const items = explanationsQuery.data;
+  const feed = feedQuery.data;
   const count = (status: string) => items.filter((it) => it.status === status).length;
 
   return (
