@@ -93,6 +93,9 @@ module "rds" {
 # 운영 콘솔 API 를 전용 ALB 로 직결한다 — 호스트 단위 1:1, 경로 라우팅 없음. sync ALB 와
 # 진입점을 공유하지 않는 이유는 mTLS 가 리스너 단위라서(공유 시 운영자 브라우저까지
 # 클라이언트 인증서 강제). WAFv2 부착은 ALPHA-297 후속.
+# ⚠️ 앱 인증 미구현(스캐폴드) — 현재 노출 표면은 actuator health 뿐(컨트롤러 0·DB 미배선).
+# 실기능 컨트롤러·DB 배선은 인증(ALPHA-474) 선행이 게이트다 — cross-tenant 운영자
+# 표면은 운영자 인증·인가를 요구한다(ADR-0008).
 # tenant-console-api 는 onprem 플레인 앱(ADR-0029)이라 dev ECS 에서 제거됐다 —
 # 실 배포처는 데모 박스 compose 스택(ADR-0033).
 module "super_admin_alb" {
