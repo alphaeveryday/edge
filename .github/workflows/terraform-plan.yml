@@ -9,6 +9,8 @@ on:
     paths:
       - "infra/terraform/envs/dev/**"
       - "infra/terraform/modules/**"
+      # demo 전용 모듈은 dev 가 안 쓴다 — carve-out 해서 demo-only 변경이 dev plan 에 안 묶이게.
+      - "!infra/terraform/modules/demo-onprem/**"
       - ".github/workflows/terraform-plan.yml"
       - ".github/workflows/terraform-apply.yml"
 
