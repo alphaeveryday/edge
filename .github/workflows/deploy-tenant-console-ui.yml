@@ -7,6 +7,8 @@ on:
     branches: [dev]
     paths:
       - "src/apps/onprem/tenant-console-ui/**"
+      # 소스 워크스페이스 의존성 — ui-kit 변경도 이 앱의 빌드 산출물을 바꾼다.
+      - "src/libs/ui-kit/**"
       # 워크스페이스 공유 — 의존성 그래프에 영향.
       - "src/pnpm-lock.yaml"
       - "src/pnpm-workspace.yaml"
