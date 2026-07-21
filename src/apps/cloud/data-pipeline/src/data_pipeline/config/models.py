@@ -142,6 +142,29 @@ class KisNavSource(BaseModel):
     app_secret: str | None = None  # 비밀값: env 오버라이드 전용
 
 
+class KisInvestorSource(BaseModel):
+    """KIS(한국투자) 국내 종목별 투자자 수급 소스 — investor-trade-by-stock-daily, tr_id FHPTJ04160001 (ALPHA-482).
+
+    인증 축은 KisPriceSource 와 같다(OAuth 앱키/시크릿·env 도메인). 비밀값은 env 로만 주입:
+        DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=...
+        DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=...
+
+    수집 유니버스는 가격(KisPriceSource)과 같은 축이다 — canonical KR holdings 최신 스냅샷의
+    구성종목(개별주식)에서 파생한다(universe_from_holdings, ALPHA-419). ETF 자체가 아니라 편입
+    종목의 수급을 모아 ETF 움직임을 설명한다. symbol_map 은 항등이 아닌 예외의 오버라이드 축.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    env: Literal["prod", "vps"] = "prod"
+    enabled: bool = True
+    app_key: str | None = None  # 비밀값: env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → KIS 6자리 코드. KR 은 대개 항등(005930→005930). 가격과 동일 정책 —
+    # 맵에 없는 종목(US 등)은 이 소스가 건너뛴다(KIS 는 국내 전용).
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class FinancialSource(BaseModel):
     """재무제표 데이터 소스 (FMP 손익·재무상태·현금흐름 수집, S035).
 
@@ -273,6 +296,12 @@ class KisNavConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: KisNavSource
+
+
+class KisInvestorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KisInvestorSource
 
 
 class FinancialConfig(BaseModel):

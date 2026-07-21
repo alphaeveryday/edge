@@ -50,6 +50,22 @@ def raw_price_partition(
     )
 
 
+def raw_investor_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 투자자 수급(investor_flow_daily) 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격(raw_price_partition)과 동형이다 — 투자자별 매매동향 응답은 한 종목이 여러 거래일을
+    한 번에 주므로(콜당 30거래일) 원본을 수집일(ingest_date) 기준으로 run_id 별 append 한다.
+    거래일(stck_bsop_date)은 각 레코드에 보존돼 canonical 이 쓴다. 날짜 윈도잉 백필로 같은
+    거래일이 여러 run 에 걸쳐 들어오지만, 그 중복 제거는 canonical 소관이다(bronze 무변형).
+    """
+    return (
+        f"raw/source={source}/dataset=investor_flow_daily/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_financial_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
@@ -177,6 +193,44 @@ def parse_raw_price_key(key: str) -> dict[str, str]:
         "ingest_date": segs["ingest_date"],
         "run_id": segs["run_id"],
     }
+
+
+# ── raw investor 스캔(정제 입력) ─────────────────────────
+# 정제(normalize_investor)는 raw investor_flow_daily 를 벤더·시장·수집일에 걸쳐 읽어
+# (market,ticker,trade_date) 로 재그룹한다. 가격(price_daily)과 동형이다 — 경로 해석도 이
+# 모듈이 SSOT(다른 곳에서 key 를 split 하지 않는다).
+_RAW_INVESTOR_MARKER = "/dataset=investor_flow_daily/"
+
+
+def is_raw_investor_key(key: str) -> bool:
+    """raw investor_flow_daily 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return key.startswith("raw/") and _RAW_INVESTOR_MARKER in key and key.endswith(".ndjson")
+
+
+def parse_raw_investor_key(key: str) -> dict[str, str]:
+    """raw investor 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    경로 규약: raw/source=…/dataset=investor_flow_daily/market=…/ingest_date=…/run_id=…/part-*.ndjson.
+    `key=value` 세그먼트만 취해 dict 로 — part 파일명(= 없음)은 자연히 빠진다.
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_investor_flow_partition(market: str, trade_date: str) -> str:
+    """canonical 투자자 수급 파티션 프리픽스 (끝 슬래시 없음).
+
+    일봉(canonical_price_daily_partition)과 동형 — 투자자 순매수는 거래일 시계열이라 시간축이
+    trade_date 이고 market_data 존에 둔다. run_id·source_vendor 파티션 없이 (market,trade_date)
+    로 가른다(멱등). 정체성 키 (market,ticker,trade_date) 중 market·trade_date 가 파티션,
+    ticker 가 파티션 내 행 키다. 벤더(kis)는 시장이 가르므로 컬럼(provenance)이지 파티션이 아니다.
+    """
+    return f"canonical/market_data/investor_flow_daily/market={market}/trade_date={trade_date}"
 
 
 # ── raw news 스캔(정제 입력) ─────────────────────────────
