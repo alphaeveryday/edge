@@ -316,7 +316,10 @@ class PriceTriggersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     market: NonBlankStr = "KR"
-    etf_ticker: NonBlankStr
+    # 트리거 유니버스는 holdings∩마스터에서 파생한다 — 설정에 티커를 두지 않는다(정본은
+    # [krx_etf] 한 곳). etf_ticker 는 **옵션 단일 실행 필터**: 지정하면 그 한 종만 돈다
+    # (dev 검증·백필용). 미지정(기본 None)이면 유니버스 전체(ALPHA-465).
+    etf_ticker: NonBlankStr | None = None
     abs_threshold: float = Field(gt=0, lt=1)  # 일수익률 절대값 게이트(예: 0.005 = 0.5%)
     policy_version: NonBlankStr
 

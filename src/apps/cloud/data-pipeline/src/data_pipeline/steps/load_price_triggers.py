@@ -43,6 +43,11 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "load_price_triggers"
 DATASET = "price_movement_trigger"
 
+# 적재 대상 시장 → MIC(ISO 10383). load_etf_nav 와 같은 매핑 — instrument 마스터는
+# market_code 를 MIC 로 들고 있어, ticker 만으로 조회하면 시장이 모호했다(구 ALPHA-448).
+# 시장을 고정하면 (market_code, ticker) 자연키로 ticker 가 유일해 그 모호성이 사라진다.
+_MIC_BY_MARKET = {"KR": "XKRX"}
+
 # 결정적 detected_at — KRX 정규장 마감. 시각을 런타임 시계로 찍으면 재실행마다
 # uq(etf, trade_date, detected_at)의 세 번째 키가 달라져 중복 행이 쌓인다.
 _MARKET_CLOSE_KST = "T15:30:00+09:00"
@@ -91,21 +96,29 @@ def _closes(storage: Storage, market: str, trade_date: str) -> dict[str, float]:
     return out
 
 
-def _holdings(storage: Storage, market: str, as_of_date: str, etf_id: str) -> list[tuple[str, float]]:
-    """해당 기준일 스냅샷에서 대상 ETF 의 (구성종목 티커, 가중치 fraction) 목록."""
-    holdings: list[tuple[str, float]] = []
+def _holdings_by_etf(
+    storage: Storage, market: str, as_of_date: str
+) -> dict[str, list[tuple[str, float]]]:
+    """해당 기준일 스냅샷을 etf_id → [(구성종목 티커, 가중치 fraction)] 로 그룹핑.
+
+    파티션 parquet 을 **한 번만** 읽고 ETF 별로 나눈다 — ETF 마다 다시 읽으면 유니버스가
+    31종일 때 같은 파일을 31번 재파싱한다(스냅샷당 O(ETF)).
+    """
+    by_etf: dict[str, list[tuple[str, float]]] = {}
     prefix = canonical_etf_holdings_partition(market, as_of_date)
     for key in storage.list_keys(prefix + "/"):
         if not key.endswith(".parquet"):
             continue
         for row in _read_parquet_rows(storage.get_bytes(key)):
-            if str(row.get("etf_id")) != etf_id or not row.get("constituent_ticker"):
+            etf_id = row.get("etf_id")
+            if not etf_id or not row.get("constituent_ticker"):
                 continue
             weight_pct = _num(row.get("weight_pct"))
             if weight_pct is None or weight_pct < 0:
                 continue
-            holdings.append((str(row["constituent_ticker"]), weight_pct / 100.0))
-    return holdings
+            by_etf.setdefault(str(etf_id), []).append(
+                (str(row["constituent_ticker"]), weight_pct / 100.0))
+    return by_etf
 
 
 def _proxy_return(
@@ -143,47 +156,53 @@ def _proxy_return(
     return ((num / den) if den > 0 else None), coverage
 
 
-def _resolve_etf_instrument_ids(conn, ticker: str) -> list[str]:
-    """instrument 마스터의 ETF 후보 도메인 ID(최대 2건 — 1건 초과 여부만 알면 된다).
+def _etf_instrument_ids(conn, mic: str) -> dict[str, str]:
+    """(그 시장의) ETF ticker → instrument_id. load_etf_nav._etf_instrument_ids 와 동형.
 
-    **후보 목록인 이유**(ALPHA-448): 식별 자연키는 `(market_code, ticker)` 인데 조회 축은
-    `ticker` 뿐이라 같은 ticker 가 여러 시장에 있으면 여러 건이 나온다. `fetchone()` 으로 한 건을
-    집으면 어느 시장의 ETF 인지 비결정적이라 **잘못된 ETF 에 트리거가 매달린다**. 0건과 복수 건
-    모두 호출부가 fail-loud 한다."""
+    `(market_code, ticker)` 가 식별 자연키라 시장(MIC)을 고정하면 ticker 로 유일하다 —
+    구 `_resolve_etf_instrument_ids` 가 ticker 만으로 조회해 복수 후보 모호성을 fail-loud 로
+    막아야 했던 것과 달리(ALPHA-448), MIC 를 조회에 넣으면 그 모호성 자체가 없어진다.
+    holdings 에 있으나 이 dict 에 없는 ETF 는 마스터 미등록 — 호출부가 그 ETF 만 skip 한다.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT instrument_id FROM instrument"
-            " WHERE ticker = %s AND instrument_type = 'ETF' LIMIT 2",
-            (ticker,),
+            "SELECT ticker, instrument_id FROM instrument"
+            " WHERE market_code = %s AND instrument_type = 'ETF'",
+            (mic,),
         )
-        return [str(row[0]) for row in cur.fetchall()]
+        return {str(t): str(i) for t, i in cur.fetchall()}
 
 
-def _existing_triggers(conn, etf_instrument_id: str) -> dict[str, list[tuple[str, str, bool]]]:
-    """trade_date → [(policy_version, trigger_id, 다운스트림 계보 참조 여부), …].
+def _existing_triggers(
+    conn, etf_instrument_ids: list[str]
+) -> dict[str, dict[str, list[tuple[str, str, bool]]]]:
+    """etf_instrument_id → {trade_date → [(policy_version, trigger_id, 계보 참조 여부), …]}.
 
     (etf, trade_date) 존재가 멱등의 근거이고, 정책·참조 여부가 이행 판단의 근거다.
-    **리스트인 이유**: uq 는 (etf, date, detected_at) 3키라 같은 날짜에 행이 여럿일 수
-    있다(엔진 writer 가 소비 전환 전까지 런타임 detected_at 으로 씀) — 날짜당 1행으로
-    접으면 어느 행을 보느냐가 조회 순서에 달려 이행이 비결정적이 된다.
-    참조 검사는 트리거를 참조하는 **모든** 테이블을 덮어야 한다(현재 FK 2개:
+    **etf 축을 키에 두는 이유**: 유니버스가 다중 ETF 라 date 단일 맵으로 접으면 ETF 끼리
+    같은 날짜 행이 조용히 덮인다. **날짜당 리스트인 이유**: uq 는 (etf, date, detected_at)
+    3키라 같은 날짜에 행이 여럿일 수 있다(엔진 writer 가 소비 전환 전까지 런타임 detected_at
+    으로 씀) — 날짜당 1행으로 접으면 어느 행을 보느냐가 조회 순서에 달려 이행이 비결정적이 된다.
+    `= ANY(%s)` 로 유니버스 전체를 **한 번에** 조회한다 — ETF 마다 호출하면 EXISTS 서브쿼리 2개가
+    31번 돈다. 참조 검사는 트리거를 참조하는 **모든** 테이블을 덮어야 한다(현재 FK 2개:
     etf_contribution_observation·price_observation — 후자는 ON DELETE CASCADE 라
     빠뜨리면 stale 정리가 가격분석 계보를 조용히 연쇄 삭제한다).
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT t.trade_date, t.detection_policy_version, t.price_movement_trigger_id,"
+            "SELECT t.etf_instrument_id, t.trade_date, t.detection_policy_version,"
+            " t.price_movement_trigger_id,"
             " EXISTS (SELECT 1 FROM etf_contribution_observation o"
             "         WHERE o.price_movement_trigger_id = t.price_movement_trigger_id)"
             " OR EXISTS (SELECT 1 FROM price_observation p"
             "            WHERE p.price_movement_trigger_id = t.price_movement_trigger_id)"
-            " FROM price_movement_trigger t WHERE t.etf_instrument_id = %s",
-            (etf_instrument_id,),
+            " FROM price_movement_trigger t WHERE t.etf_instrument_id = ANY(%s)",
+            (etf_instrument_ids,),
         )
-        out: dict[str, list[tuple[str, str, bool]]] = {}
-        for d, p, i, o in cur.fetchall():
+        out: dict[str, dict[str, list[tuple[str, str, bool]]]] = {}
+        for eid, d, p, i, o in cur.fetchall():
             key = d.isoformat() if hasattr(d, "isoformat") else str(d)
-            out.setdefault(key, []).append((str(p), str(i), bool(o)))
+            out.setdefault(str(eid), {}).setdefault(key, []).append((str(p), str(i), bool(o)))
         return out
 
 
@@ -204,25 +223,30 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     considered = missing_holdings = missing_price = gated_out = 0
-    future_asof_used = 0  # 최초 스냅샷 이전 날짜에 미래 as_of 폴백을 쓴 횟수(ALPHA-418)
+    future_asof_used = 0  # 최초 스냅샷 이전 날짜에 미래 as_of 폴백을 쓴 (ETF×날짜) 횟수(ALPHA-418)
     already = created = replaced_stale_policy = stale_policy_kept = 0
+    skipped_unknown_etf = 0  # holdings 에 있으나 마스터 미등록 — 그 ETF 만 skip(런은 계속)
+    universe: list[str] = []  # try 밖에서도 로그 블록이 참조 — 예외 시 빈 목록
     created_rows: list[dict] = []
     failures: list[dict] = []
-    coverage_by_date: dict[str, float] = {}  # 거래일 → 가격 coverage (ALPHA-452, 판정 무관)
+    # etf_ticker → {거래일 → 가격 coverage} (ALPHA-452, 판정 무관). ETF 축을 키에 둬야 다중
+    # ETF 가 같은 날짜 coverage 로 서로 덮지 않는다.
+    coverage_by_etf_date: dict[str, dict[str, float]] = {}
     exit_code = 0
 
     closes_cache: dict[str, dict[str, float]] = {}
 
-    def closes_of(date: str) -> dict[str, float]:
+    def closes_of(date: str) -> dict[str, float]:  # ETF 무관 — ETF 루프 전반에서 재사용
         if date not in closes_cache:
             closes_cache[date] = _closes(storage, config.market, date)
         return closes_cache[date]
 
-    holdings_cache: dict[str, list[tuple[str, float]]] = {}
+    holdings_cache: dict[str, dict[str, list[tuple[str, float]]]] = {}
 
-    def holdings_as_of(as_of: str) -> list[tuple[str, float]]:
+    def holdings_of(as_of: str) -> dict[str, list[tuple[str, float]]]:
+        """as_of 스냅샷의 etf_id → holdings. 파티션은 스냅샷당 1회만 파싱(다중 ETF 재파싱 방지)."""
         if as_of not in holdings_cache:
-            holdings_cache[as_of] = _holdings(storage, config.market, as_of, config.etf_ticker)
+            holdings_cache[as_of] = _holdings_by_etf(storage, config.market, as_of)
         return holdings_cache[as_of]
 
     try:
@@ -239,135 +263,177 @@ def run(
             storage, canonical_etf_holdings_partition(config.market, ""))
 
         with connect(db) as conn:
-            candidates = _resolve_etf_instrument_ids(conn, config.etf_ticker)
-            etf_instrument_id = candidates[0] if len(candidates) == 1 else ""
-            if len(candidates) != 1:
-                # 트리거는 ETF 도메인 ID 에 매달린다 — 0건이면 만들 수 있는 게 없고, 복수면
-                # 어느 시장의 ETF 인지 이 조회 축으로 정할 수 없다. 조용히 0건 성공이나 임의
-                # 선택으로 끝나면 전제 결손이 안 보이므로 fail-loud 하되, 아래 로그 블록까지
-                # 내려가 quality log 는 남긴다("결과는 항상 로그").
-                if candidates:
-                    logger.error(
-                        "instrument 에 ETF ticker=%s 가 복수 건이다 — 자연키는 (market_code,"
-                        " ticker) 인데 조회 축이 ticker 뿐이라 시장을 특정할 수 없다."
-                        " 다중 시장 운영으로 넘어갈 때 MIC 를 조회에 넣어야 한다",
-                        config.etf_ticker)
-                    failures.append(
-                        {"reasons": ["ambiguous_etf_master"],
-                         "error": f"instrument 에 ETF ticker={config.etf_ticker} 복수 건"})
+            # 마스터 해소는 시장(MIC) 고정 — (market_code, ticker) 자연키라 ticker 가 유일하다.
+            # 구 ticker-만-조회의 복수 후보 fail-loud 가 여기서 소멸한다(ALPHA-448 → ALPHA-465).
+            mic = _MIC_BY_MARKET.get(config.market)
+            master = _etf_instrument_ids(conn, mic) if mic else {}
+
+            # 트리거 대상 유니버스 = 전 holdings 스냅샷에 등장한 etf_id ∩ 마스터. holdings 가
+            # 있어야 proxy 분해가 되고, 마스터에 있어야 FK(etf_instrument_id→etf_profile)가
+            # 꽂힌다. holdings 에 있으나 마스터에 없는 ETF 는 그 ETF 만 skip+카운트한다 —
+            # 1종 시드 누락이 나머지 유니버스를 죽이면 안 된다(구 missing_etf_master 는 런
+            # 전체 exit 1 이었다).
+            if config.etf_ticker is not None:
+                # 옵션 단일 실행 필터(dev 검증·백필) — 그 한 종만 해소한다. 전 스냅샷을 미리
+                # 스캔하지 않는다: 필터 밖 ETF·과거 파티션의 손상 parquet 이 대상 ETF 실행까지
+                # 롤백시키면 필터가 격리를 못 하는 셈이 된다(홀딩스는 아래 date 루프가 대상
+                # ETF 것만 지연 로드). 마스터에 없으면 fail-loud — 오타난 티커가 빈 성공 실행으로
+                # 조용히 끝나면 요청한 백필이 수행 안 된 걸 탐지 못 한다(Rule 12).
+                if config.etf_ticker in master:
+                    universe = [config.etf_ticker]
                 else:
                     logger.error(
-                        "instrument 마스터에 ETF 가 없다: ticker=%s — 스키마 시드 마이그레이션"
-                        "(V202607150004 seed_entity_master_kr) 적용 여부 확인", config.etf_ticker)
-                    failures.append({"reasons": ["missing_etf_master"],
-                                     "error": f"instrument 에 ETF ticker={config.etf_ticker} 없음"})
-                exit_code = 1
-                targets = []  # 아래 루프는 targets=[] 라 빈 etf_instrument_id 에 닿지 않는다
+                        "etf_ticker 필터=%s 가 instrument 마스터에 없다 — 티커 오타이거나 마스터"
+                        " 미적재. 빈 실행으로 끝내지 않고 fail-loud 한다", config.etf_ticker)
+                    failures.append({"reasons": ["unknown_etf_filter"],
+                                     "etf_ids": [config.etf_ticker]})
+                    exit_code = 1
+                    universe = []
+            else:
+                holdings_etf_ids: set[str] = set()
+                for hd in holdings_dates:
+                    holdings_etf_ids |= holdings_of(hd).keys()
+                unknown = sorted(holdings_etf_ids - master.keys())
+                skipped_unknown_etf = len(unknown)
+                if unknown:
+                    logger.warning(
+                        "holdings 에 있으나 instrument 마스터에 없는 ETF %d종 skip: %s"
+                        " — 마스터 적재(load-instruments) 누락 여부 확인",
+                        len(unknown), ", ".join(unknown))
+                    failures.append({"reasons": ["skipped_unknown_etf"], "etf_ids": unknown})
+                universe = sorted(holdings_etf_ids & master.keys())
+                # 평가할 거래일(targets)은 있는데 유니버스가 비면 — 가격은 들어왔으나 트리거
+                # 대상 ETF 가 하나도 없다. holdings 전량 결손이거나 전부 마스터 미등록인
+                # 상황으로, considered=0·exit 0 만 남기면 "정상적으로 0종 처리"와 구분이 안
+                # 된다. 결손 신호를 로그에 남긴다(Rule 12). 이른 시스템 상태일 수도 있어
+                # 런을 fail 시키지는 않는다 — skipped_unknown_etf 가 원인을 가른다.
+                if targets and not universe:
+                    logger.warning(
+                        "평가 대상 거래일 %d 개가 있으나 트리거 유니버스가 비었다"
+                        " (holdings∩마스터=∅, skipped_unknown_etf=%d)",
+                        len(targets), skipped_unknown_etf)
+                    failures.append({"reasons": ["empty_universe"],
+                                     "targets": len(targets),
+                                     "skipped_unknown_etf": skipped_unknown_etf})
 
-            existing = _existing_triggers(conn, etf_instrument_id) if targets else {}
-            for date in targets:
-                considered += 1
-                rows = existing.get(date, [])
-                kept_for_date = False
-                for policy, trigger_id, has_lineage in rows:
-                    if policy == config.policy_version:
-                        continue  # 현행 정책 행 — 아래에서 already 판정
-                    if has_lineage:
-                        # 구정책 행이지만 다운스트림 계보(contribution observation 또는
-                        # price_observation)가 매달려 있다 — 지우면 설명·가격분석 이력이
-                        # 끊긴다(후자는 CASCADE 라 소리 없이). 보존하고 수치로 드러낸다.
-                        stale_policy_kept += 1
-                        kept_for_date = True
+            existing = (_existing_triggers(conn, [master[t] for t in universe])
+                        if universe and targets else {})
+            for etf_ticker in universe:
+                etf_instrument_id = master[etf_ticker]
+                etf_existing = existing.get(etf_instrument_id, {})
+                etf_coverage = coverage_by_etf_date.setdefault(etf_ticker, {})
+                # etf_profile 선행 보장은 ETF 당 최대 1회(첫 INSERT 직전) — 루프 안 매 행마다
+                # 부르지 않는다. 트리거를 하나도 안 만든 ETF(전량 gated_out)엔 불필요.
+                profile_ensured = False
+                for date in targets:
+                    considered += 1
+                    rows = etf_existing.get(date, [])
+                    kept_for_date = False
+                    for policy, trigger_id, has_lineage in rows:
+                        if policy == config.policy_version:
+                            continue  # 현행 정책 행 — 아래에서 already 판정
+                        if has_lineage:
+                            # 구정책 행이지만 다운스트림 계보(contribution observation 또는
+                            # price_observation)가 매달려 있다 — 지우면 설명·가격분석 이력이
+                            # 끊긴다(후자는 CASCADE 라 소리 없이). 보존하고 수치로 드러낸다.
+                            stale_policy_kept += 1
+                            kept_for_date = True
+                            continue
+                        # 구정책·무참조 — 잠정 정책(0.5%) 계열 정리. 지우고 새 정책으로 재평가.
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "DELETE FROM price_movement_trigger"
+                                " WHERE price_movement_trigger_id = %s",
+                                (trigger_id,),
+                            )
+                        replaced_stale_policy += 1
+                    if any(policy == config.policy_version for policy, _i, _l in rows):
+                        already += 1
                         continue
-                    # 구정책·무참조 — 잠정 정책(0.5%) 계열 정리. 지우고 새 정책으로 재평가.
+                    if kept_for_date:
+                        # 계보 때문에 남긴 구정책 행이 이 날짜를 대표한다 — 옆에 새 행을 더 꽂으면
+                        # 소비자가 (etf, date)로 두 행을 보게 된다.
+                        continue
+
+                    # holdings 는 거래일 이하 최신 스냅샷, 없으면 **가장 이른 미래 스냅샷**으로
+                    # 폴백한다 — 엔진 load_etf_holdings 와 같은 선택(정책 정본 정합, ALPHA-418).
+                    # 미래 스냅샷은 look-ahead 지만, 과거 스냅샷 소급 수집이 비싸고 ETF 리밸런싱이
+                    # 완만해 proxy 근사로 수용한다(유저 결정 2026-07-18) — 최초 스냅샷(2026-07-15)
+                    # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
+                    # 드러낸다(Rule 12).
+                    # 스냅샷 선택은 파티션 존재가 아니라 **대상 ETF 행 존재** 기준이다 — 파티션은
+                    # (market, as_of_date) 단위라 ETF 단위 격리 실패로 다른 ETF 만 있을 수 있다
+                    # (Codex #144 P2 ×2: 과거·미래 양쪽). 과거(≤date) 최신 → 없으면 가장 이른
+                    # 미래 순으로, 이 ETF 행이 있는 첫 스냅샷을 고른다.
+                    as_of_eligible = [x for x in holdings_dates if x <= date]
+                    as_of = next(
+                        (x for x in reversed(as_of_eligible) if holdings_of(x).get(etf_ticker)),
+                        None)
+                    if as_of is None:
+                        as_of = next(
+                            (x for x in holdings_dates
+                             if x > date and holdings_of(x).get(etf_ticker)), None)
+                        if as_of is not None:
+                            future_asof_used += 1
+                    holdings = holdings_of(as_of).get(etf_ticker, []) if as_of else []
+                    if not holdings:
+                        missing_holdings += 1
+                        continue
+
+                    proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
+                                                        closes_of(prev_by_date[date]))
+                    # 게이트 판정과 **무관하게** 남긴다 — 최소 하한(ALPHA-453)을 정하려면 트리거가
+                    # 난 날뿐 아니라 걸러진 날의 분포도 필요하다.
+                    #
+                    # 단 이 지점은 현행 정책 행이 **이미 있는 날짜에는 닿지 않는다**(위 already
+                    # continue). 그래서 로그의 이 맵은 "아직 트리거가 없는 날"의 분포이고, 트리거가
+                    # 난 날의 coverage 는 그 행의 detection_reason 에 남는다 — 둘을 합쳐야 전체다.
+                    # 남는 구멍은 ALPHA-452 이전에 만들어진 기존 행뿐이다(그 행들은 어느 쪽에도
+                    # 없다). 일회성 과거 구멍이라 여기서 메우지 않는다 — already 앞으로 옮기면 매 런
+                    # 전체 거래일의 가격 파티션을 다시 읽어 비용이 히스토리에 비례해 는다(Codex #149).
+                    etf_coverage[date] = round(coverage, 4)
+                    if proxy_ret is None:
+                        missing_price += 1
+                        continue
+                    if abs(proxy_ret) < config.abs_threshold:
+                        gated_out += 1
+                        continue
+                    trigger_id = domain_id("pmt")
+                    # price_movement_trigger.etf_instrument_id 도 etf_profile 을 참조한다. NAV
+                    # 적재(LoadEtfNav)와 같은 Parallel 페이즈라 실행 순서가 없어, 프로필 생성을
+                    # 남에게 의존하면 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다.
+                    # 자기 선행은 자기가 보장한다(멱등이라 중복 생성은 없다).
+                    if not profile_ensured:
+                        ensure_etf_profile(conn, etf_instrument_id)
+                        profile_ensured = True
                     with conn.cursor() as cur:
                         cur.execute(
-                            "DELETE FROM price_movement_trigger"
-                            " WHERE price_movement_trigger_id = %s",
-                            (trigger_id,),
+                            "INSERT INTO price_movement_trigger (price_movement_trigger_id,"
+                            " etf_instrument_id, trade_date, detected_at, observed_return,"
+                            " market_relative_return, absolute_gate_triggered,"
+                            " relative_gate_triggered, detection_policy_version, detection_reason)"
+                            " VALUES (%s, %s, %s, %s, %s, NULL, TRUE, FALSE, %s, %s)",
+                            (
+                                trigger_id,
+                                etf_instrument_id,
+                                date,
+                                f"{date}{_MARKET_CLOSE_KST}",
+                                proxy_ret,
+                                config.policy_version,
+                                # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성. 뒤에 coverage 를
+                                # 덧붙인다(ALPHA-452): 이 트리거가 구성종목 몇 %의 가격으로 판정됐는지가
+                                # 행 자체에 없으면, 소비자(설명·검수)가 근거의 두께를 알 수 없다.
+                                # 컬럼 신설 대신 이 필드를 쓰는 이유 — 엔진은 이 값을 읽어 나르기만 하고
+                                # 파싱하지 않아(daily_pipeline.py 의 trigger["reason"]) 늘려도 안전하다.
+                                f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
+                                f"|coverage={coverage:.4f}",
+                            ),
                         )
-                    replaced_stale_policy += 1
-                if any(policy == config.policy_version for policy, _i, _l in rows):
-                    already += 1
-                    continue
-                if kept_for_date:
-                    # 계보 때문에 남긴 구정책 행이 이 날짜를 대표한다 — 옆에 새 행을 더 꽂으면
-                    # 소비자가 (etf, date)로 두 행을 보게 된다.
-                    continue
-
-                # holdings 는 거래일 이하 최신 스냅샷, 없으면 **가장 이른 미래 스냅샷**으로
-                # 폴백한다 — 엔진 load_etf_holdings 와 같은 선택(정책 정본 정합, ALPHA-418).
-                # 미래 스냅샷은 look-ahead 지만, 과거 스냅샷 소급 수집이 비싸고 ETF 리밸런싱이
-                # 완만해 proxy 근사로 수용한다(유저 결정 2026-07-18) — 최초 스냅샷(2026-07-15)
-                # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
-                # 드러낸다(Rule 12).
-                # 스냅샷 선택은 파티션 존재가 아니라 **대상 ETF 행 존재** 기준이다 — 파티션은
-                # (market, as_of_date) 단위라 ETF 단위 격리 실패로 다른 ETF 만 있을 수 있다
-                # (Codex #144 P2 ×2: 과거·미래 양쪽). 과거(≤date) 최신 → 없으면 가장 이른
-                # 미래 순으로, ETF 행이 있는 첫 스냅샷을 고른다.
-                as_of_eligible = [x for x in holdings_dates if x <= date]
-                as_of = next((x for x in reversed(as_of_eligible) if holdings_as_of(x)), None)
-                if as_of is None:
-                    as_of = next(
-                        (x for x in holdings_dates if x > date and holdings_as_of(x)), None)
-                    if as_of is not None:
-                        future_asof_used += 1
-                holdings = holdings_as_of(as_of) if as_of else []
-                if not holdings:
-                    missing_holdings += 1
-                    continue
-
-                proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
-                                                    closes_of(prev_by_date[date]))
-                # 게이트 판정과 **무관하게** 남긴다 — 최소 하한(ALPHA-453)을 정하려면 트리거가
-                # 난 날뿐 아니라 걸러진 날의 분포도 필요하다.
-                #
-                # 단 이 지점은 현행 정책 행이 **이미 있는 날짜에는 닿지 않는다**(위 already
-                # continue). 그래서 로그의 이 맵은 "아직 트리거가 없는 날"의 분포이고, 트리거가
-                # 난 날의 coverage 는 그 행의 detection_reason 에 남는다 — 둘을 합쳐야 전체다.
-                # 남는 구멍은 ALPHA-452 이전에 만들어진 기존 행뿐이다(그 행들은 어느 쪽에도
-                # 없다). 일회성 과거 구멍이라 여기서 메우지 않는다 — already 앞으로 옮기면 매 런
-                # 전체 거래일의 가격 파티션을 다시 읽어 비용이 히스토리에 비례해 는다(Codex #149).
-                coverage_by_date[date] = round(coverage, 4)
-                if proxy_ret is None:
-                    missing_price += 1
-                    continue
-                if abs(proxy_ret) < config.abs_threshold:
-                    gated_out += 1
-                    continue
-                trigger_id = domain_id("pmt")
-                # price_movement_trigger.etf_instrument_id 도 etf_profile 을 참조한다. NAV
-                # 적재(LoadEtfNav)와 같은 Parallel 페이즈라 실행 순서가 없어, 프로필 생성을
-                # 남에게 의존하면 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다.
-                # 자기 선행은 자기가 보장한다(멱등이라 중복 생성은 없다).
-                ensure_etf_profile(conn, etf_instrument_id)
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO price_movement_trigger (price_movement_trigger_id,"
-                        " etf_instrument_id, trade_date, detected_at, observed_return,"
-                        " market_relative_return, absolute_gate_triggered,"
-                        " relative_gate_triggered, detection_policy_version, detection_reason)"
-                        " VALUES (%s, %s, %s, %s, %s, NULL, TRUE, FALSE, %s, %s)",
-                        (
-                            trigger_id,
-                            etf_instrument_id,
-                            date,
-                            f"{date}{_MARKET_CLOSE_KST}",
-                            proxy_ret,
-                            config.policy_version,
-                            # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성. 뒤에 coverage 를
-                            # 덧붙인다(ALPHA-452): 이 트리거가 구성종목 몇 %의 가격으로 판정됐는지가
-                            # 행 자체에 없으면, 소비자(설명·검수)가 근거의 두께를 알 수 없다.
-                            # 컬럼 신설 대신 이 필드를 쓰는 이유 — 엔진은 이 값을 읽어 나르기만 하고
-                            # 파싱하지 않아(daily_pipeline.py 의 trigger["reason"]) 늘려도 안전하다.
-                            f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
-                            f"|coverage={coverage:.4f}",
-                        ),
-                    )
-                created += 1
-                created_rows.append({"trade_date": date, "observed_return": proxy_ret,
-                                     "price_movement_trigger_id": trigger_id,
-                                     "holdings_as_of": as_of, "coverage": round(coverage, 4)})
+                    created += 1
+                    created_rows.append({"etf_ticker": etf_ticker, "trade_date": date,
+                                         "observed_return": proxy_ret,
+                                         "price_movement_trigger_id": trigger_id,
+                                         "holdings_as_of": as_of, "coverage": round(coverage, 4)})
     except Exception as exc:
         # 커밋 경계는 런 전체다 — connect() 가 예외면 롤백이라 부분 적재가 없다. 트레이스백으로
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
@@ -380,25 +446,27 @@ def run(
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "market": config.market, "etf_ticker": config.etf_ticker,
+        "market": config.market, "etf_tickers": universe, "etf_filter": config.etf_ticker,
+        "skipped_unknown_etf": skipped_unknown_etf,
         "abs_threshold": config.abs_threshold, "policy_version": config.policy_version,
-        "dates_considered": considered, "missing_holdings": missing_holdings,
+        "considered": considered, "missing_holdings": missing_holdings,
         "future_asof_used": future_asof_used,
         "missing_price": missing_price, "gated_out": gated_out,
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
         "stale_policy_kept": stale_policy_kept,
         "created": created, "created_rows": created_rows,
-        # 가격 coverage 계측(ALPHA-452) — **아직 트리거가 없는 거래일**의 분포다(현행 정책 행이
-        # 있는 날짜는 already 로 먼저 빠진다). 트리거가 난 날의 coverage 는 그 행의
-        # detection_reason 에 있으니, 하한(ALPHA-453)은 둘을 합쳐 봐야 한다.
-        # min 은 "가장 얇은 근거로 평가한 날"이라 하한 후보의 출발점이고, 전체 맵이 있어야
+        # 가격 coverage 계측(ALPHA-452) — **아직 트리거가 없는 (ETF, 거래일)**의 분포다(현행
+        # 정책 행이 있는 셀은 already 로 먼저 빠진다). 트리거가 난 셀의 coverage 는 그 행의
+        # detection_reason 에 있으니, 하한(ALPHA-453)은 둘을 합쳐 봐야 한다. ETF 축을 키에 둬야
+        # 다중 ETF 가 같은 날짜 coverage 로 서로 덮지 않는다.
+        # min 은 "가장 얇은 근거로 평가한 셀"이라 하한 후보의 출발점이고, 전체 맵이 있어야
         # 그 값이 이상치인지 상시인지 구분된다.
-        # ponytail: 창 미지정(기본 전체 스캔)이면 트리거가 안 난 과거 날짜가 매 런 다시 담겨
-        # 로그당 O(전체 거래일)·누적 O(N²)이다(Codex #148). 항목이 ~28바이트라 1년 7KB·5년 35KB
-        # 수준이고 이 맵이 곧 ALPHA-453 의 근거라 지금은 그대로 둔다 — 커지면 --from/--to 로
-        # 창을 좁히거나 날짜 맵 대신 히스토그램으로 축약한다.
-        "coverage_by_date": coverage_by_date,
-        "coverage_min": min(coverage_by_date.values(), default=None),
+        # ponytail: 창 미지정(기본 전체 스캔)이면 트리거가 안 난 과거 (ETF,날짜)가 매 런 다시
+        # 담겨 로그당 O(ETF×거래일)·누적 O(N²)이다(Codex #148). 이 맵이 곧 ALPHA-453 의 근거라
+        # 지금은 그대로 둔다 — 커지면 --from/--to 로 창을 좁히거나 히스토그램으로 축약한다.
+        "coverage_by_etf_date": coverage_by_etf_date,
+        "coverage_min": min((c for m in coverage_by_etf_date.values() for c in m.values()),
+                            default=None),
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -409,9 +477,10 @@ def run(
         exit_code = 1
 
     logger.info(
-        "load_price_triggers: considered=%d missing_holdings=%d missing_price=%d gated_out=%d"
-        " already=%d replaced_stale=%d stale_kept=%d created=%d failures=%d",
-        considered, missing_holdings, missing_price, gated_out, already,
-        replaced_stale_policy, stale_policy_kept, created, len(failures),
+        "load_price_triggers: etfs=%d skipped_unknown_etf=%d considered=%d missing_holdings=%d"
+        " missing_price=%d gated_out=%d already=%d replaced_stale=%d stale_kept=%d created=%d"
+        " failures=%d",
+        len(universe), skipped_unknown_etf, considered, missing_holdings, missing_price,
+        gated_out, already, replaced_stale_policy, stale_policy_kept, created, len(failures),
     )
     return exit_code
