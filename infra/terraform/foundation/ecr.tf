@@ -4,6 +4,7 @@
 locals {
   image_repositories = toset([
     "edge/super-admin-api",
+    "edge/tenant-sync-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
     "edge/schema-migrate", # Flyway one-off 이미지
