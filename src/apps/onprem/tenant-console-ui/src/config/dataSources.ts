@@ -9,19 +9,12 @@
  */
 export type DataSourceMode = 'mock' | 'real';
 
-export type Domain =
-  | 'members'
-  | 'applications'
-  | 'usage'
-  | 'compliance'
-  | 'dashboard'
-  | 'settings';
+export type Domain = 'explanations' | 'screening' | 'scope' | 'users' | 'session';
 
 export const DATA_SOURCES: Record<Domain, DataSourceMode> = {
-  members: 'mock',
-  applications: 'mock',
-  usage: 'mock',
-  compliance: 'mock',
-  dashboard: 'mock',
-  settings: 'mock',
+  explanations: 'mock',
+  screening: 'mock',
+  scope: 'mock',
+  users: 'mock',
+  session: 'mock',
 };
