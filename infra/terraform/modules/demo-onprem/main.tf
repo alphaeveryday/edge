@@ -177,6 +177,15 @@ resource "aws_instance" "this" {
     encrypted   = true
   }
 
+  # IMDSv2 강제 — 공개 데모 박스라 IMDSv1(토큰 없는 metadata)로 instance-profile 자격증명이
+  # SSRF·컨테이너 탈출로 새는 걸 막는다. hop_limit=1: 호스트 docker 는 ECR pull 에 IMDS 를 쓰지만
+  # 컨테이너는 IMDS 에 닿지 못하게(온프렘 컨테이너는 AWS API 를 안 쓴다).
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
   # CD(SSM Run Command)가 이 태그로 인스턴스를 스코프한다.
   tags = {
     Name        = var.name
