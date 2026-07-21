@@ -191,6 +191,17 @@ locals {
     }
   ]
 
+  # analyze 페이즈 Map(ALPHA-470) 결과 게이트 — Map 은 유니버스 순서를 보존하므로 인덱스별
+  # 성공 검사를 정적 생성한다(raw/normalize/feature 와 같은 패턴). INLINE Map 은
+  # ToleratedFailurePercentage(Distributed 전용)를 못 써 실패 격리는 per-item Catch 로,
+  # 런 성패는 이 게이트로 판정한다 — 1종이라도 실패면 fail-loud.
+  analysis_success_checks = [
+    for index, _ in var.analysis_etf_universe : {
+      Variable     = "$.analysis[${index}].status"
+      StringEquals = "succeeded"
+    }
+  ]
+
   ecs_run_task_base = {
     Resource   = "arn:aws:states:::ecs:runTask.sync"
     ResultPath = "$.ecs"
@@ -483,35 +494,117 @@ locals {
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"
           NumericEquals = 0
-          Next          = "RunAnalysis"
+          Next          = "SeedAnalysisUniverse"
         }]
         Default = "NotifyFailure"
       }
-      # analyze 페이즈(ALPHA-408) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
+      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
       # LoadAssertions 포함) 전량 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
       # (canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument·
       # document·assertion)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
       # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
       # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
       # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
-      RunAnalysis = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "AnalysisCheckExitCode"
+      #
+      # ALPHA-470 — 단일 ETF(env ALPHAMALE_ETF_TICKER 기본 091160) 순차 실행을 유니버스 전체
+      # 병렬 Map 으로 교체. JSONPath Map 은 정적 배열을 Items 로 못 받고 ItemsPath(상태 참조)만
+      # 받으므로, 앞의 SeedAnalysisUniverse Pass 가 var.analysis_etf_universe 를 상태에 심고
+      # Map 이 그 경로를 참조한다. 미발화 ETF 는 컨테이너가 exit 0(normal_variation)이라 실패로
+      # 안 잡힌다(daily_pipeline.py) — 전량 팬아웃해도 미발화분은 정상 종료다.
+      SeedAnalysisUniverse = {
+        Type       = "Pass"
+        Result     = var.analysis_etf_universe
+        ResultPath = "$.etf_universe"
+        Next       = "RunAnalysis"
+      }
+      RunAnalysis = {
+        Type      = "Map"
+        ItemsPath = "$.etf_universe"
+        # 각 이터레이션 입력을 { ticker } 로 성형 — 처리기 안에서 $.ticker 로 참조한다.
+        ItemSelector = { "ticker.$" = "$$.Map.Item.Value" }
+        # ResultPath 를 $.ecs·$.branch_results 가 아닌 $.analysis 로 둬야 뒤 RawPartialCheck 가
+        # 읽는 $.branch_results(RawIngestParallel 산출)가 덮이지 않고 보존된다(ALPHA-470 플랜 3절).
+        ResultPath = "$.analysis"
+        # ponytail: MaxConcurrency=10 — 서브넷 IP 는 넉넉(≈500 free)하나 DeepSeek/Fargate 부하를
+        # 보수적으로 둔다. 31종이 ~4 웨이브로 끝난다. 실측 후 부족하면 상향(최대 31=완전 병렬).
+        MaxConcurrency = 10
+        # INLINE Map 은 ToleratedFailurePercentage(Distributed 전용)를 못 쓴다. 실패 격리는
+        # ItemProcessor 안 per-item Catch 로(실패 이터레이션도 Pass 로 마감해 Map 을 안 죽임),
+        # 런 성패는 뒤 AnalysisResultCheck 가 판정한다 — 1종이라도 실패면 fail-loud(ADR-0028).
         Catch = [{
           ErrorEquals = ["States.ALL"]
           ResultPath  = "$.error"
           Next        = "NotifyFailure"
         }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.analysis.arn
-        })
-      })
-      AnalysisCheckExitCode = {
+        Next = "AnalysisResultCheck"
+        ItemProcessor = {
+          ProcessorConfig = { Mode = "INLINE" }
+          StartAt         = "AnalyzeOne"
+          States = {
+            AnalyzeOne = merge(local.ecs_run_task_base, {
+              Type = "Task"
+              Next = "AnalyzeOneCheckExitCode"
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.error"
+                Next        = "AnalyzeOneFailed"
+              }]
+              Parameters = merge(local.ecs_run_task_base.Parameters, {
+                TaskDefinition = aws_ecs_task_definition.analysis.arn
+                Overrides = {
+                  ContainerOverrides = [{
+                    Name = local.analysis_container_name
+                    # task-def 기본 env(091160 등) 중 이 하나만 덮는다 — 나머지(RESULT_S3_PREFIX·
+                    # RELEASE_BUNDLE_VERSION)는 task-def 값 유지(ECS 는 이름 단위로 override).
+                    Environment = [{
+                      Name      = "ALPHAMALE_ETF_TICKER"
+                      "Value.$" = "$.ticker"
+                    }]
+                  }]
+                }
+              })
+            })
+            AnalyzeOneCheckExitCode = {
+              Type = "Choice"
+              Choices = [{
+                Variable      = "$.ecs.Containers[0].ExitCode"
+                NumericEquals = 0
+                Next          = "AnalyzeOneSucceeded"
+              }]
+              Default = "AnalyzeOneFailed"
+            }
+            AnalyzeOneSucceeded = {
+              Type = "Pass"
+              End  = true
+              Parameters = {
+                "ticker.$"    = "$.ticker"
+                status        = "succeeded"
+                "exit_code.$" = "$.ecs.Containers[0].ExitCode"
+              }
+            }
+            # per-item 실패도 Pass 로 마감한다 — Type=Fail 이면 INLINE Map 전체가 죽어 격리가
+            # 깨진다. status=failed 를 결과에 남기고, 런 성패는 Map 뒤 AnalysisResultCheck 가 판정.
+            # (Catch·exit-code Default 양쪽에서 진입 — 둘 다 입력에 $.ticker 가 있다.)
+            AnalyzeOneFailed = {
+              Type = "Pass"
+              End  = true
+              Parameters = {
+                "ticker.$" = "$.ticker"
+                status     = "failed"
+              }
+            }
+          }
+        }
+      }
+      # analyze Map(ALPHA-470) 결과 게이트 — Map 은 격리를 위해 실패 이터레이션도 Pass 로
+      # 마감하므로 Map 자체는 늘 성공한다. 유니버스 전 항목이 succeeded 일 때만 통과하고,
+      # 하나라도 failed 면 NotifyFailure 로 fail-loud 한다(ADR-0028 analysis 전량성공 게이트).
+      # RawPartialCheck 의 $.branch_results 는 Map 이 ResultPath=$.analysis 라 보존된다.
+      AnalysisResultCheck = {
         Type = "Choice"
         Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "RawPartialCheck"
+          And  = local.analysis_success_checks
+          Next = "RawPartialCheck"
         }]
         Default = "NotifyFailure"
       }
