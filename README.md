@@ -3,7 +3,7 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. 벤더 서빙 embed widget 서버(widget-api)는 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](docs/adr/0032-retire-gateway.md)로 삭제됐고 (위젯 **UI 자체는 빌드 산출물로 납품** — [ADR-0035](docs/adr/0035-widget-ui-build-artifact.md), 벤더 실행 서버 없음), 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 신규 온프렘 컴포넌트(sync-agent·intake·screening-worker·publication-api)는 walking skeleton 단계에서 추가됩니다(sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)).
+> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api·sync-agent·intake)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. 벤더 서빙 embed widget 서버(widget-api)는 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](docs/adr/0032-retire-gateway.md)로 삭제됐고 (위젯 **UI 자체는 빌드 산출물로 납품** — [ADR-0035](docs/adr/0035-widget-ui-build-artifact.md), 벤더 실행 서버 없음), 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 동기화 경로(sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](docs/adr/0036-sync-agent-intake-topology.md))는 구현됐고, screening-worker 는 walking skeleton 단계에서 추가됩니다.
 
 ## 한눈에 보기
 
@@ -19,6 +19,8 @@ src/
 │   └── onprem/               #   edge-onprem (증권사 관리 환경)
 │       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
+│       ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
+│       ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
 │       └── publication-api/        # JVM  · MTS 조회 표면 (Published만)
 ├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
@@ -38,11 +40,11 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 4개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 6개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api |
+| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake |
 | Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
 
@@ -54,12 +56,14 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
+| `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull + 번들 체크섬 검증, 내부망 무변형 전달. DB 접근 없음 ([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)) |
+| `intake` | JVM | **edge-onprem** | 내부망 — 검증된 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
 | `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
 | `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
-신규 온프렘 컴포넌트(sync-agent · intake · screening-worker)는 walking skeleton 단계에서 **edge-onprem**으로 추가됩니다 (sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](docs/adr/0036-sync-agent-intake-topology.md); [docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
+sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장)는 **edge-onprem**으로 구현됐고([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)), screening-worker 는 walking skeleton 단계에서 추가됩니다([docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
 ### 표면 분리
 - **콘솔 경로**: `tenant-console-ui` → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘에서 UI·API 동거)
@@ -96,7 +100,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
 - `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
-- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Compliance → Publication API)은 목표 아키텍처([docs/context.md](docs/context.md) §3)이며 walking skeleton 단계에서 구현됩니다.
+- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)에서 Sync 구간까지는 구현됐고([docs/context.md](docs/context.md) §3), 상태 분기(screening-worker)는 walking skeleton 단계에서 구현됩니다.
 
 ## Git 컨벤션
 
@@ -141,7 +145,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
