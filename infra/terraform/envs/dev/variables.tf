@@ -9,11 +9,6 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
-variable "tenant_console_api_image" {
-  description = "tenant-console-api ECR 이미지 URI(:태그 포함)"
-  type        = string
-}
-
 variable "super_admin_api_image" {
   description = "super-admin-api ECR 이미지 URI(:태그 포함)"
   type        = string

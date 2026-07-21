@@ -1,6 +1,6 @@
 # 재사용 가능한 Fargate ECS 서비스 모듈.
-# widget-api·gateway·tenant-console-api·super-admin-api 가 동일 모듈을 호출한다.
-# 차이는 image·인바운드 허용자(SG)·자원 크기 등 변수로만 표현한다.
+# 현재 호출자는 super-admin-api 하나다 (widget-api·gateway 은퇴, tenant-console-api 는
+# onprem 플레인이라 dev ECS 제거 — ADR-0029·0032). 차이는 image·SG·자원 크기 등 변수로만 표현한다.
 
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.name}"

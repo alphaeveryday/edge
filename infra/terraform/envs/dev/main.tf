@@ -34,10 +34,6 @@ data "aws_ecr_repository" "schema_migrate" {
 
 # 앱 배포(deploy-app.yml)가 이미지를 push 할 저장소 — foundation 소유(edge/<app>).
 # CD 배포 역할에 push 권한을 스코프하기 위해 ARN 을 조회한다.
-data "aws_ecr_repository" "tenant_console_api" {
-  name = "edge/tenant-console-api"
-}
-
 data "aws_ecr_repository" "super_admin_api" {
   name = "edge/super-admin-api"
 }
@@ -80,24 +76,8 @@ module "rds" {
 }
 
 # ── 내부 API (호출자 생길 때까지 idle) ──────────────────
-module "tenant_console_api" {
-  source = "../../modules/ecs-service"
-
-  name   = "tenant-console-api"
-  region = var.region
-
-  cluster_arn                   = module.service_cluster.cluster_arn
-  service_connect_namespace_arn = module.service_cluster.namespace_arn
-
-  container_image  = var.tenant_console_api_image
-  container_port   = 8080
-  cpu_architecture = "X86_64"
-
-  vpc_id        = module.network.vpc_id
-  subnet_ids    = module.network.private_subnet_ids
-  desired_count = 1
-}
-
+# tenant-console-api 는 onprem 플레인 앱(ADR-0029)이라 dev ECS 에서 제거됐다 —
+# 실 배포처는 데모 박스 compose 스택(ADR-0033).
 module "super_admin_api" {
   source = "../../modules/ecs-service"
 
@@ -163,18 +143,15 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱/배치 이미지 push 권한 — 백엔드 앱 4종 + data-pipeline 배치 이미지.
+  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api) + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
-    data.aws_ecr_repository.tenant_console_api.arn,
     data.aws_ecr_repository.super_admin_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = [
-    module.tenant_console_api.service_arn,
     module.super_admin_api.service_arn,
   ]
   app_pass_role_arns = [
-    module.tenant_console_api.execution_role_arn, module.tenant_console_api.task_role_arn,
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
   ]
 

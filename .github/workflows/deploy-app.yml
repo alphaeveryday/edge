@@ -20,7 +20,8 @@
 # 권한이 부여돼 있다 — edge/<app> ECR push·DescribeImages(버전 조회),
 # ecs:UpdateService/DescribeServices(서비스 ARN 스코프), 앱 task·execution 역할 PassRole.
 # (infra/terraform/modules/github-oidc-deploy 의 app_* 변수 · envs/dev 에서 백엔드 앱
-#  tenant-console-api·super-admin-api·gateway 배선. widget-api 는 피벗으로 제거 — ADR-0010.)
+#  super-admin-api 배선. widget-api·gateway 는 은퇴, tenant-console-api 는 onprem 플레인이라
+#  dev ECS 제거 — ADR-0010·0032·0029.)
 name: deploy-app
 
 on:
