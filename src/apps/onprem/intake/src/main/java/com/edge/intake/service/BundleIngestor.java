@@ -13,8 +13,9 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 번들 1건의 적재 트랜잭션 — received_bundle insert + sync_state 전진을 한 단위로 commit.
  * 본문은 파싱하지 않는다(상태 분기는 Screening 몫) — 봉투의 cursor_from·cursor_to 두
- * 필드만 읽어 저장 키·전진값으로 쓴다. 중복 수신은 무해(cursor dedup)하되 cursor 는
- * 전진한다 — at-least-once 재-Pull 수렴(sync-protocol.md).
+ * 필드만 읽어 저장 키·전진값으로 쓴다. at-least-once 재-Pull 수렴(sync-protocol.md):
+ * 정확한 중복(소비 완료 범위)은 committed 이하 가드가 거르고, 부분 겹침(conflict-skip
+ * 인데 범위가 committed 초과)은 전진 없이 실패시켜 유실을 막는다.
  */
 @Service
 public class BundleIngestor {
@@ -58,8 +59,17 @@ public class BundleIngestor {
 
 		boolean inserted = receivedBundleRepository.save(
 				cursorFrom, cursorTo, bundle.checksum(), bundle.body());
+		if (!inserted) {
+			// cursor_from 이 이미 저장돼 있는데 범위(cursor_to)는 committed 를 넘는다 —
+			// 부분 겹침 번들(경쟁 인스턴스·지연 응답). 여기서 전진하면 겹치지 않은 구간이
+			// 영영 저장되지 않으므로(at-least-once 위반) 전진 없이 실패한다. 다음 틱이
+			// 진짜 committed 에서 재-Pull 하면 겹침 없는 범위를 받는다.
+			throw new IllegalStateException(
+					"부분 겹침 번들 (from=" + cursorFrom + ", to=" + cursorTo + ", committed=" + committed
+							+ ") — 전진하지 않는다");
+		}
 		syncStateRepository.advance(cursorTo);
-		log.info("bundle ingested cursor_from={} cursor_to={} inserted={}", cursorFrom, cursorTo, inserted);
+		log.info("bundle ingested cursor_from={} cursor_to={}", cursorFrom, cursorTo);
 		return cursorTo;
 	}
 }

@@ -74,14 +74,20 @@ class BundleIngestorTest {
 	}
 
 	@Test
-	void 중복_번들도_cursor는_전진한다() {
-		// WHY: 재-Pull(ack 유실 등) 중복은 무해해야 하고, cursor 가 멈추면 같은 번들을 영원히 재수신한다.
+	void 부분_겹침_번들은_전진하지_않는다() {
+		// WHY: cursor_from 이 저장돼 있는데(conflict-skip) 범위가 committed 를 넘는 번들에서
+		// 전진하면 겹치지 않은 구간이 영영 저장되지 않는다(at-least-once 위반 — 경쟁
+		// 인스턴스·지연 응답 경로). 정확한 중복(범위 전체 소비 완료)은 committed 이하
+		// 가드가 먼저 거른다 — save 까지 온 conflict 는 곧 부분 겹침이다.
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		bundles.insertResult = false; // ON CONFLICT DO NOTHING 경로
 		RecordingStateRepo state = new RecordingStateRepo();
+		state.committed = 3;
+		Executable call = () -> new BundleIngestor(bundles, state)
+				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":100}"));
 
-		new BundleIngestor(bundles, state).ingest(bundle("{\"cursor_from\":1,\"cursor_to\":3}"));
-		assertThat(state.advanced).containsExactly(3L);
+		assertThrows(IllegalStateException.class, call);
+		assertThat(state.advanced).isEmpty();
 	}
 
 	@Test
