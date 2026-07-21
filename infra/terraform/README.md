@@ -19,7 +19,7 @@ infra/terraform/
     ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, AZ override
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
-    ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 현재 호출자: sync ALB)
+    ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 호출자: sync·super-admin ALB)
     ├── rds/                # PostgreSQL(private·관리형 비밀번호)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
@@ -31,7 +31,7 @@ infra/terraform/
 
 `ecs-service` 를 super-admin-api·tenant-sync-api 가, `static-site` 를 tenant-console·super-admin UI 와 데모 MTS 페이지가 동일 재사용한다.
 (tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
-tenant-sync-api 는 sync 전용 ALB(`sync-dev.edgesignal.dev`) 뒤에 있다 — 진입점은 호스트 단위 1:1, 경로 라우팅 없음(ADR-0034).
+두 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`. 진입점은 호스트 단위 1:1, 경로 라우팅 없음(ADR-0034).
 
 ## 설계 요지
 
@@ -77,7 +77,7 @@ cd ../envs/dev  && terraform apply
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
-| **내부 API**(super-admin) | idle — ALB 타깃 없음, Service Connect 만 | super-admin 공개화 시 전용 ALB 직결(ADR-0034, ALPHA-473) |
+| **super-admin ALB 보호** | 공개 도달 — WAF·IP 제한 없음(앱 인증만) | WAFv2 부착(ALPHA-297)·`allowed_cidrs` 운영 판단 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
@@ -94,9 +94,7 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **super-admin 공개 엣지** — super-admin-api 는 현재 Service Connect 내부 전용. 공개 도달이 필요해지면
-  `alb` 모듈을 super-admin 전용 인스턴스로 직결한다(호스트 단위 1:1, 경로 규칙 없음 — ADR-0034, ALPHA-473).
-- **WAF**(ALPHA-297) — super-admin ALB 도입 시(그 ALB 에만 — sync 는 trust store 가 게이트).
+- **WAF**(ALPHA-297) — super-admin ALB(`admin-api-dev`)에 부착(그 ALB 에만 — sync 는 trust store 가 게이트). 선행이던 ALB 는 ALPHA-473 으로 도입됨.
 - **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033). compose 스택·`deploy-demo-onprem.yml`(SSM Run Command)·CloudFront `/api/*`→EC2 오리진 프록시는 온프렘 코드(sync-agent·compliance) 완료 후(ALPHA-445).
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
