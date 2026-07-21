@@ -1,4 +1,8 @@
-"""KODEX 반도체 daily news normalization + explanation pipeline (single ECS task).
+"""ETF daily news normalization + explanation pipeline (single ECS task).
+
+대상 ETF 는 ALPHAMALE_ETF_TICKER env 로 받는다(기본 091160). 구성종목·표시명은
+전부 그 ETF 의 canonical holdings·마스터에서 파생한다 — KODEX 반도체 하드코딩은
+없다(ALPHA-467). run() 은 여전히 ETF 한 종을 돈다(루프 다중화는 후속).
 
 Flow, one Step Functions invocation -> one Fargate task (ALPHA-412 이후 — 소비자):
 
@@ -33,8 +37,7 @@ from typing import Any, Sequence
 
 KST = timezone(timedelta(hours=9))
 PIPELINE_ID = "alphamale-etf-daily-v1"
-DEFAULT_ETF_TICKER = "091160"
-KODEX_SEMI_INSTRUMENT_FALLBACK = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
+DEFAULT_ETF_TICKER = "091160"  # ALPHAMALE_ETF_TICKER 미지정 시 기본 대상(하위호환)
 LAKE_PRICE_PREFIX = "canonical/market_data/price_daily"
 LAKE_HOLDINGS_PREFIX = "canonical/holdings/etf_holdings"
 CONCENTRATION_THRESHOLD = 0.5
@@ -45,19 +48,6 @@ POLICY_VERSION = "l0-abs-v1"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
 TITLE_EVIDENCE_TYPE = "TITLE"
-
-# KODEX 반도체 core constituents (weights only used to prioritise the packet).
-KODEX_CONSTITUENTS: dict[str, tuple[str, float]] = {
-    "000660": ("SK하이닉스", 0.40),
-    "005930": ("삼성전자", 0.20),
-    "042700": ("한미반도체", 0.05),
-    "036930": ("주성엔지니어링", 0.04),
-    "240810": ("원익IPS", 0.024),
-    "058470": ("리노공업", 0.021),
-    "319660": ("피에스케이", 0.020),
-    "000990": ("DB하이텍", 0.020),
-    "039030": ("이오테크닉스", 0.020),
-}
 
 _VERDICT_TO_TYPE = {
     "공식 이벤트 선행": "EVENT_SUPPORTED",
@@ -432,16 +422,24 @@ def load_entity_index(conn) -> dict[str, str]:
         return {str(ticker): str(instrument_id) for ticker, instrument_id in cur.fetchall()}
 
 
-def resolve_etf_instrument(conn, ticker: str) -> str:
+def resolve_etf_instrument(conn, ticker: str) -> tuple[str, str] | None:
+    """ETF 의 (instrument_id, 표시명) — 마스터에 없으면 None.
+
+    표시명은 `entity.display_name`(instrument_id = entity_id)에서 온다 — instrument
+    자체엔 이름 컬럼이 없다. 구현은 조회 실패 시 091160 instrument_id 로 폴백했는데
+    (KODEX_SEMI_INSTRUMENT_FALLBACK), 다른 ETF 를 돌리면 holdings 는 env 티커로,
+    트리거·설명은 폴백 id 로 붙어 **계보가 조용히 오염**된다. 폴백을 없애고 None 을
+    돌려 호출부가 fail-loud 하게 한다(Rule 12).
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT instrument_id FROM instrument WHERE ticker = %s AND instrument_type = 'ETF'",
+            "SELECT i.instrument_id, e.display_name FROM instrument i"
+            " JOIN entity e ON e.entity_id = i.instrument_id"
+            " WHERE i.ticker = %s AND i.instrument_type = 'ETF'",
             (ticker,),
         )
         row = cur.fetchone()
-    if row:
-        return str(row[0])
-    return KODEX_SEMI_INSTRUMENT_FALLBACK
+    return (str(row[0]), str(row[1])) if row else None
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +532,8 @@ def fetch_kodex_events(conn, trade_date: date, tickers: list[str]) -> list[dict[
 def analyze(
     client: DeepSeekClient,
     settings: Settings,
+    etf_name: str,
+    name_by_ticker: dict[str, str],
     decomp: dict[str, Any],
     gate: dict[str, Any],
     route_code: str,
@@ -563,7 +563,9 @@ def analyze(
 
     event_lines = []
     for event in sorted(kodex_events, key=lambda e: e["available_at"]):
-        name, _weight = KODEX_CONSTITUENTS.get(event["ticker"], (event["ticker"], 0.0))
+        # 종목명은 이 ETF 의 canonical holdings 에서 온다 — 구 KODEX_CONSTITUENTS
+        # 하드코딩 dict 은 다른 ETF 로 돌리면 무관한 이름을 붙였다(ALPHA-467).
+        name = name_by_ticker.get(event["ticker"], event["ticker"])
         event_lines.append(
             f"- {name}({event['ticker']}) | {event['event_type_code']}"
             f" | {event['novelty_status']} | 「{event['title']}」"
@@ -571,12 +573,12 @@ def analyze(
     events_block = "\n".join(event_lines) if event_lines else "  (해당 없음)"
 
     packet = (
-        f"[데이터] KODEX 반도체 ({settings.etf_ticker}) {settings.trade_date.isoformat()}\n\n"
+        f"[데이터] {etf_name} ({settings.etf_ticker}) {settings.trade_date.isoformat()}\n\n"
         f"[가격 분해]\n" + "\n".join(price_lines) + "\n\n"
         f"[구성종목 뉴스 이벤트 {len(kodex_events)}건 (제목 기반)]\n" + events_block
     )
     system = (
-        "너는 KODEX 반도체 ETF의 당일 움직임을 설명하는 분석 에이전트다. "
+        f"너는 {etf_name} ETF의 당일 움직임을 설명하는 분석 에이전트다. "
         "[가격 분해]의 수치와 [뉴스 이벤트]의 제목만 근거로 판단하며, 없는 사실을 만들지 마라. "
         "가격 커버리지가 부분이면 그 한계를 반영하고 단정하지 마라. 숫자는 제공된 값만 인용한다. "
         "반드시 아래 JSON만 출력한다.\n"
@@ -589,6 +591,18 @@ def analyze(
     if "verdict" not in result or not (result.get("explain") or result.get("summary")):
         raise PipelineError("analysis response missing required fields")
     return result
+
+
+def _primary_thread_id(events: list[dict[str, Any]]) -> str | None:
+    """설명이 대표로 매다는 event thread — **스레드가 붙은 첫 이벤트**를 고른다.
+
+    `events[0]` 을 그대로 쓰면(fetch 는 source_event_id 순 정렬), upstream assemble-events 가
+    아직 스레드하지 않은(thread_id NULL) 구성종목 이벤트가 먼저 오면 primary_thread_id 가
+    NULL 이 돼, 스레드된 이벤트가 목록에 있는데도 계보가 끊긴다. 뉴스 대상을 KODEX 9종에서
+    전체 holdings 로 넓히며 unthreaded 이벤트가 섞이기 시작했다 — 기본 091160 런에도 회귀다
+    (edge-review). None 은 목록의 **어떤** 이벤트도 스레드되지 않았을 때만.
+    """
+    return next((e["thread_id"] for e in events if e.get("thread_id")), None)
 
 
 def persist_explanation(
@@ -605,7 +619,7 @@ def persist_explanation(
     summary = str(explanation.get("explain") or explanation.get("summary") or "")
     etype = _VERDICT_TO_TYPE.get(str(explanation.get("verdict")), "UNCERTAIN")
     confidence = _CONFIDENCE_MAP.get(str(explanation.get("confidence")))
-    primary_thread_id = kodex_events[0]["thread_id"] if kodex_events else None
+    primary_thread_id = _primary_thread_id(kodex_events)
     stage_results = json.dumps({"events": len(kodex_events), "raw": explanation}, ensure_ascii=False)
 
     missing = [k for k, v in prereqs.items() if not v]
@@ -774,10 +788,26 @@ def run(settings: Settings) -> int:
     conn = connect(settings)
     try:
         entity_index = load_entity_index(conn)
-        etf_instrument_id = resolve_etf_instrument(conn, settings.etf_ticker)
+        resolved = resolve_etf_instrument(conn, settings.etf_ticker)
+        if resolved is None:
+            # 폴백으로 남의 instrument_id 에 붙이면 계보가 조용히 오염된다 — 대상 ETF 가
+            # 마스터에 없으면 그 런은 성립하지 않으므로 비0 종료로 드러낸다(Rule 12).
+            raise PipelineError(
+                f"instrument 마스터에 ETF ticker={settings.etf_ticker} 없음"
+                " — 마스터 적재(load-instruments) 여부 확인")
+        etf_instrument_id, etf_name = resolved
 
         # --- Consume price (cloud S3) and decompose the ETF move (L1) --------
         holdings, holdings_asof = load_etf_holdings(s3, settings.lake_bucket, "KR", settings.etf_ticker, settings.trade_date)
+        if not holdings:
+            # holdings 가 비면(파티션 결손·정리 등) 분해가 불가하다 — proxy_ret None·구성종목 0
+            # 뉴스 0 인 packet 을 LLM 에 보내 설명을 만들면 입력 결손이 정상 분석으로 위장된다.
+            # 대상 ETF 는 holdings 가 있어야 성립하므로 비0 종료로 드러낸다(Rule 12, edge-review).
+            raise PipelineError(
+                f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
+                f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
+        # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다.
+        name_by_ticker = {h["ticker"]: h["name"] for h in holdings if h.get("name")}
         prices = load_constituent_prices(s3, settings.lake_bucket, "KR", settings.trade_date)
         decomp = compute_decomposition(holdings, prices)
         log(
@@ -812,11 +842,15 @@ def run(settings: Settings) -> int:
         # 이관됐다(ALPHA-412, ADR-0028) — 여기서는 DB 의 이벤트를 소비만 한다.
         kodex_events: list[dict[str, Any]] = []
         if event_search:
-            kodex_events = fetch_kodex_events(conn, settings.trade_date, list(KODEX_CONSTITUENTS))
+            # 뉴스 대상 티커는 이 ETF 의 holdings 구성종목이다 — 구 KODEX_CONSTITUENTS
+            # 9종목 하드코딩은 다른 ETF 로 돌려도 KODEX 뉴스만 읽었다(ALPHA-467).
+            kodex_events = fetch_kodex_events(
+                conn, settings.trade_date, [h["ticker"] for h in holdings])
             log("events.ready", kodex_events=len(kodex_events))
 
         # --- Synthesis: price decomposition + news events --------------------
-        explanation = analyze(client, settings, decomp, gate, route_code, kodex_events)
+        explanation = analyze(client, settings, etf_name, name_by_ticker,
+                              decomp, gate, route_code, kodex_events)
         outcome = persist_explanation(conn, s3, settings, etf_instrument_id, explanation, kodex_events)
         write_run_archive(s3, settings, {
             "outcome": "explained",
@@ -843,7 +877,7 @@ def run(settings: Settings) -> int:
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m edge_analysis",
-        description="Normalize the day's news titles and explain the KODEX semiconductor ETF.",
+        description="Normalize the day's news titles and explain the target ETF's move.",
     )
     parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD (Asia/Seoul); default today")
     parser.add_argument("--request-id", default=None, help="caller correlation id")
