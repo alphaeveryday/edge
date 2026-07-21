@@ -184,7 +184,7 @@ locals {
     PGDATABASE                 = var.db_name
     PGUSER                     = var.db_user
     PGSCHEMA                   = "public"
-    DEEPSEEK_MODEL             = "deepseek-chat"
+    DEEPSEEK_MODEL             = "deepseek-v4-pro"
     ALPHAMALE_ETF_TICKER       = "091160"
     ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
     },

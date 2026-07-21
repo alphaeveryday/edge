@@ -46,7 +46,9 @@ CONCENTRATION_THRESHOLD = 0.5
 # data_version(분해 산출 버전) 스탬프로만 남는다.
 POLICY_VERSION = "l0-abs-v1"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = "deepseek-chat"
+# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 계열은 thinking 기본 ON 이라
+# complete_json 이 thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
+DEFAULT_MODEL = "deepseek-v4-pro"
 TITLE_EVIDENCE_TYPE = "TITLE"
 
 _VERDICT_TO_TYPE = {
@@ -460,6 +462,9 @@ class DeepSeekClient:
                     {"role": "user", "content": user},
                 ],
                 "response_format": {"type": "json_object"},
+                # v4 계열은 thinking 기본 ON — 켜지면 구조화 JSON 출력이 깨진다(vllm#41132).
+                # 응답이 순수 JSON 오브젝트여야 파싱되므로 non-thinking 으로 고정한다.
+                "thinking": {"type": "disabled"},
                 "temperature": 0.0,
                 "max_tokens": 8000,
             }
