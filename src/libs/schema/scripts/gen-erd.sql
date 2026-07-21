@@ -14,11 +14,12 @@ pk_single AS (
 ),
 col AS (
   SELECT c.oid AS reloid, c.relname, a.attnum, a.attname,
-    replace(replace(replace(replace(
+    replace(replace(replace(replace(replace(
       format_type(a.atttypid, a.atttypmod),
       'timestamp without time zone', 'timestamp'),
       'timestamp with time zone', 'timestamptz'),
       'character varying', 'varchar'),
+      'double precision', 'float8'),
       'integer', 'int') AS typ,
     a.attnotnull AS notnull,
     (a.attidentity <> '' OR COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '') LIKE 'nextval(%') AS incr
@@ -46,7 +47,7 @@ comp_pk AS (
   SELECT p.reloid,
     E'\n\n  indexes {\n    (' ||
     string_agg('"' || a.attname || '"', ', ' ORDER BY u.ord) ||
-    ') [pk]\n  }' AS block
+    E') [pk]\n  }' AS block
   FROM pk p
   JOIN LATERAL unnest(p.keys) WITH ORDINALITY AS u(attnum, ord) ON true
   JOIN pg_attribute a ON a.attrelid = p.reloid AND a.attnum = u.attnum

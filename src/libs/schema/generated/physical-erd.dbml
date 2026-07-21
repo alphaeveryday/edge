@@ -14,7 +14,7 @@ Table "assertion_argument" {
   "assertion_id" text [not null]
   "role_code" varchar(80) [not null]
   "entity_id" text [not null]
-  "confidence" double precision
+  "confidence" float8
 }
 
 Table "assertion_metric" {
@@ -25,7 +25,7 @@ Table "assertion_metric" {
   "unit_code" varchar(30)
   "period_basis" varchar(30)
   "integrity_status" varchar(20)
-  "confidence" double precision
+  "confidence" float8
 }
 
 Table "business_segment_fact" {
@@ -35,9 +35,9 @@ Table "business_segment_fact" {
   "concept_id" text
   "period_label" varchar(30)
   "revenue_krw" numeric(30,0)
-  "revenue_share_pct" double precision
+  "revenue_share_pct" float8
   "share_basis" varchar(20)
-  "concept_link_confidence" double precision
+  "concept_link_confidence" float8
 }
 
 Table "company_profile" {
@@ -89,7 +89,7 @@ Table "document_assertion" {
   "event_type_code" varchar(120) [not null]
   "predicate_code" varchar(80) [not null]
   "modality_code" varchar(30)
-  "confidence" double precision
+  "confidence" float8
   "lifecycle_stage" varchar(50)
   "available_at" timestamptz [not null]
 }
@@ -99,10 +99,11 @@ Table "document_entity" {
   "entity_id" text [not null]
   "matched_text" text
   "link_method" varchar(30)
-  "confidence" double precision
+  "confidence" float8
 
   indexes {
-    ("document_id", "entity_id") [pk]\n  }
+    ("document_id", "entity_id") [pk]
+  }
 }
 
 Table "entity" {
@@ -123,27 +124,28 @@ Table "equity_profile" {
 Table "etf_contribution_member" {
   "contribution_observation_id" text [not null]
   "constituent_instrument_id" text [not null]
-  "weight_ratio" double precision
-  "constituent_return" double precision
-  "contribution_return" double precision
+  "weight_ratio" float8
+  "constituent_return" float8
+  "contribution_return" float8
   "contribution_rank" int
 
   indexes {
-    ("contribution_observation_id", "constituent_instrument_id") [pk]\n  }
+    ("contribution_observation_id", "constituent_instrument_id") [pk]
+  }
 }
 
 Table "etf_contribution_observation" {
   "contribution_observation_id" text [pk]
   "price_movement_trigger_id" text [not null]
-  "etf_return" double precision
-  "nav_return" double precision
-  "constituent_contribution_return" double precision
-  "fx_contribution_return" double precision
-  "premium_discount_contribution_return" double precision
-  "reconciliation_error" double precision
+  "etf_return" float8
+  "nav_return" float8
+  "constituent_contribution_return" float8
+  "fx_contribution_return" float8
+  "premium_discount_contribution_return" float8
+  "reconciliation_error" float8
   "advancing_constituent_count" int
   "total_constituent_count" int
-  "top3_contribution_ratio" double precision
+  "top3_contribution_ratio" float8
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
 }
@@ -152,12 +154,13 @@ Table "etf_holding_snapshot" {
   "etf_instrument_id" text [not null]
   "constituent_instrument_id" text [not null]
   "trade_date" date [not null]
-  "weight_ratio" double precision
+  "weight_ratio" float8
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
 
   indexes {
-    ("etf_instrument_id", "constituent_instrument_id", "trade_date") [pk]\n  }
+    ("etf_instrument_id", "constituent_instrument_id", "trade_date") [pk]
+  }
 }
 
 Table "etf_nav_daily" {
@@ -168,7 +171,8 @@ Table "etf_nav_daily" {
   "data_version" varchar(50) [not null]
 
   indexes {
-    ("etf_instrument_id", "trade_date") [pk]\n  }
+    ("etf_instrument_id", "trade_date") [pk]
+  }
 }
 
 Table "etf_profile" {
@@ -178,10 +182,10 @@ Table "etf_profile" {
   "tracking_market_series_id" text
   "primary_theme_concept_id" text
   "asset_manager_name" text
-  "leverage_multiplier" double precision
+  "leverage_multiplier" float8
   "currency_hedged" boolean
   "decomposition_template" varchar(50)
-  "total_expense_ratio" double precision
+  "total_expense_ratio" float8
   "profile_as_of_date" date
 }
 
@@ -189,10 +193,11 @@ Table "event_argument" {
   "source_event_id" text [not null]
   "role_code" varchar(80) [not null]
   "entity_id" text [not null]
-  "confidence" double precision
+  "confidence" float8
 
   indexes {
-    ("source_event_id", "role_code", "entity_id") [pk]\n  }
+    ("source_event_id", "role_code", "entity_id") [pk]
+  }
 }
 
 Table "event_evidence" {
@@ -201,7 +206,7 @@ Table "event_evidence" {
   "assertion_id" text [not null]
   "evidence_type" varchar(30) [not null]
   "evidence_text" text
-  "link_confidence" double precision
+  "link_confidence" float8
 }
 
 Table "event_price_observation" {
@@ -212,11 +217,11 @@ Table "event_price_observation" {
   "benchmark_series_id" text [not null]
   "window_start_at" timestamptz [not null]
   "window_end_at" timestamptz [not null]
-  "simple_return" double precision
-  "market_return" double precision
-  "peer_orthogonal_return" double precision
-  "explained_return" double precision
-  "residual_return" double precision
+  "simple_return" float8
+  "market_return" float8
+  "peer_orthogonal_return" float8
+  "explained_return" float8
+  "residual_return" float8
   "window_status" varchar(30)
   "is_confounded" boolean [not null]
   "evaluation_as_of" timestamptz [not null]
@@ -228,12 +233,13 @@ Table "event_price_observation_peer" {
   "event_price_observation_id" text [not null]
   "peer_instrument_id" text [not null]
   "peer_rank" int
-  "peer_weight_ratio" double precision
-  "peer_return" double precision
-  "peer_orthogonal_return" double precision
+  "peer_weight_ratio" float8
+  "peer_return" float8
+  "peer_orthogonal_return" float8
 
   indexes {
-    ("event_price_observation_id", "peer_instrument_id") [pk]\n  }
+    ("event_price_observation_id", "peer_instrument_id") [pk]
+  }
 }
 
 Table "event_thread" {
@@ -288,7 +294,8 @@ Table "explanation_route_decomposition" {
   "priority" int
 
   indexes {
-    ("explanation_route_id", "price_decomposition_id") [pk]\n  }
+    ("explanation_route_id", "price_decomposition_id") [pk]
+  }
 }
 
 Table "explanation_route_target" {
@@ -300,7 +307,8 @@ Table "explanation_route_target" {
   "priority" int
 
   indexes {
-    ("explanation_route_id", "target_entity_id", "target_scope") [pk]\n  }
+    ("explanation_route_id", "target_entity_id", "target_scope") [pk]
+  }
 }
 
 Table "explanation_run" {
@@ -320,10 +328,11 @@ Table "explanation_run_disclosure_fact" {
   "stage_code" varchar(10) [not null]
   "usage_type" varchar(30)
   "priority" int
-  "weight_ratio" double precision
+  "weight_ratio" float8
 
   indexes {
-    ("explanation_run_id", "fact_id", "stage_code") [pk]\n  }
+    ("explanation_run_id", "fact_id", "stage_code") [pk]
+  }
 }
 
 Table "explanation_run_event_evidence" {
@@ -332,10 +341,11 @@ Table "explanation_run_event_evidence" {
   "stage_code" varchar(10) [not null]
   "usage_type" varchar(30)
   "priority" int
-  "weight_ratio" double precision
+  "weight_ratio" float8
 
   indexes {
-    ("explanation_run_id", "evidence_id", "stage_code") [pk]\n  }
+    ("explanation_run_id", "evidence_id", "stage_code") [pk]
+  }
 }
 
 Table "explanation_run_event_price_observation" {
@@ -344,10 +354,11 @@ Table "explanation_run_event_price_observation" {
   "stage_code" varchar(10) [not null]
   "usage_type" varchar(30)
   "priority" int
-  "weight_ratio" double precision
+  "weight_ratio" float8
 
   indexes {
-    ("explanation_run_id", "event_price_observation_id", "stage_code") [pk]\n  }
+    ("explanation_run_id", "event_price_observation_id", "stage_code") [pk]
+  }
 }
 
 Table "instrument" {
@@ -384,8 +395,8 @@ Table "price_daily" {
   "trade_date" date [not null]
   "close_price" numeric(24,8)
   "adjusted_close_price" numeric(24,8)
-  "simple_return" double precision
-  "log_return" double precision
+  "simple_return" float8
+  "log_return" float8
   "volume" bigint
   "turnover_value" numeric(30,4)
   "price_basis" varchar(30)
@@ -393,26 +404,27 @@ Table "price_daily" {
   "data_version" varchar(50) [not null]
 
   indexes {
-    ("instrument_id", "trade_date") [pk]\n  }
+    ("instrument_id", "trade_date") [pk]
+  }
 }
 
 Table "price_decomposition" {
   "price_decomposition_id" text [pk]
   "price_observation_id" text [not null]
   "benchmark_series_id" text [not null]
-  "target_return" double precision
-  "market_return" double precision
-  "peer_raw_return" double precision
-  "peer_orthogonal_return" double precision
-  "intercept_contribution_return" double precision
-  "market_explained_return" double precision
-  "peer_explained_return" double precision
-  "explained_return" double precision
-  "residual_return" double precision
-  "volume_abnormality" double precision
-  "volatility_change" double precision
+  "target_return" float8
+  "market_return" float8
+  "peer_raw_return" float8
+  "peer_orthogonal_return" float8
+  "intercept_contribution_return" float8
+  "market_explained_return" float8
+  "peer_explained_return" float8
+  "explained_return" float8
+  "residual_return" float8
+  "volume_abnormality" float8
+  "volatility_change" float8
   "residual_gate_status" varchar(20)
-  "residual_gate_score" double precision
+  "residual_gate_score" float8
   "policy_version" varchar(50) [not null]
   "model_version" varchar(50) [not null]
   "evaluation_as_of" timestamptz [not null]
@@ -423,12 +435,13 @@ Table "price_decomposition_peer" {
   "price_decomposition_id" text [not null]
   "peer_instrument_id" text [not null]
   "peer_rank" int
-  "peer_weight_ratio" double precision
-  "peer_return" double precision
-  "peer_orthogonal_return" double precision
+  "peer_weight_ratio" float8
+  "peer_return" float8
+  "peer_orthogonal_return" float8
 
   indexes {
-    ("price_decomposition_id", "peer_instrument_id") [pk]\n  }
+    ("price_decomposition_id", "peer_instrument_id") [pk]
+  }
 }
 
 Table "price_movement_trigger" {
@@ -436,8 +449,8 @@ Table "price_movement_trigger" {
   "etf_instrument_id" text [not null]
   "trade_date" date [not null]
   "detected_at" timestamptz [not null]
-  "observed_return" double precision [not null]
-  "market_relative_return" double precision
+  "observed_return" float8 [not null]
+  "market_relative_return" float8
   "absolute_gate_triggered" boolean [not null]
   "relative_gate_triggered" boolean [not null]
   "detection_policy_version" varchar(50) [not null]
@@ -485,7 +498,7 @@ Table "supply_contract_fact" {
   "counterparty_withheld" boolean [not null]
   "contract_object_concept_id" text
   "contract_amount_krw" numeric(30,0)
-  "revenue_ratio_pct" double precision
+  "revenue_ratio_pct" float8
   "contract_start_date" date
   "contract_end_date" date
   "late_disclosure" boolean [not null]
@@ -516,7 +529,8 @@ Table "tenant_release_history" {
   "applied_at" timestamptz
 
   indexes {
-    ("tenant_id", "bundle_version", "approved_at") [pk]\n  }
+    ("tenant_id", "bundle_version", "approved_at") [pk]
+  }
 }
 
 Table "tenant_sync_cursor" {
