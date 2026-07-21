@@ -43,7 +43,12 @@ from ..lake import Storage, canonical_price_daily_partition, quality_log_key
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "load_price_daily"
-DATASET = "price_daily"
+# 품질 로그 dataset. normalize_price 도 canonical dataset 을 "price_daily" 로 쓰는데, SFN 은
+# 모든 스텝에 같은 run_id 를 넘긴다(statemachine.tf `$.run_id`). 로그 키가 같으면 normalize→load
+# 순서에서 이 로더가 정제 로그를 덮어써 records_failed·vendor_collisions 증거가 사라진다
+# (Codex 지적). load_etf_nav 는 마트 테이블명("etf_nav_daily")이 canonical dataset("etf_nav")과
+# 달라 자연히 갈렸지만, 가격은 둘 다 "price_daily" 라 명시적으로 "_load" 로 분리한다.
+DATASET = "price_daily_load"
 
 # 적재 대상 시장 → MIC(ISO 10383). instrument 마스터가 KR 만 있어(US 는 ALPHA-371 로 MIC 미비)
 # 지금은 하나다 — US 를 넣어도 전량 미등록으로 걸린다.

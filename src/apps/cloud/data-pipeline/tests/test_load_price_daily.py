@@ -120,7 +120,7 @@ def _inserts(conn) -> list:
 
 def _log(storage, run_id: str = "R1") -> dict:
     keys = [k for k in storage.list_keys("operations_archive/data_quality_logs/")
-            if "price_daily" in k and f"run_id={run_id}/" in k]
+            if "price_daily_load" in k and f"run_id={run_id}/" in k]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
