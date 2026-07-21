@@ -2,17 +2,24 @@ locals {
   prefix = "edge-demo-onprem"
 }
 
-# 데모는 신규 VPC 를 만들지 않고 default VPC 의 public 서브넷을 쓴다(ADR-0033 — dev 와 격리·단순).
-# 계정에 default VPC 가 없으면 이 data 가 실패한다 — 그때는 특정 서브넷을 변수로 넘기도록 전환.
+# 데모는 신규 VPC 를 만들지 않는다(ADR-0033 — dev 와 격리·단순).
+# subnet_id 를 주면 그 서브넷을, 없으면 default VPC 의 첫 public 서브넷을 쓴다.
 data "aws_vpc" "default" {
+  count   = var.subnet_id == null ? 1 : 0
   default = true
 }
 
 data "aws_subnets" "default_public" {
+  count = var.subnet_id == null ? 1 : 0
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    values = [data.aws_vpc.default[0].id]
   }
+}
+
+# 선택된 서브넷(명시 or default VPC) — vpc_id 는 여기서 파생한다.
+data "aws_subnet" "selected" {
+  id = var.subnet_id != null ? var.subnet_id : data.aws_subnets.default_public[0].ids[0]
 }
 
 # CloudFront 오리진 프리픽스 — 브라우저→CloudFront→EC2(mock-broker) 프록시의 인바운드 스코프.
@@ -37,8 +44,8 @@ module "demo_onprem" {
   source = "../../modules/demo-onprem"
 
   name      = local.prefix
-  vpc_id    = data.aws_vpc.default.id
-  subnet_id = data.aws_subnets.default_public.ids[0]
+  vpc_id    = data.aws_subnet.selected.vpc_id
+  subnet_id = data.aws_subnet.selected.id
 
   instance_type    = var.instance_type
   root_volume_size = var.root_volume_size

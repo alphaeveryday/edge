@@ -39,3 +39,9 @@ variable "mock_broker_port" {
   type        = number
   default     = 8080
 }
+
+variable "subnet_id" {
+  description = "데모 박스를 둘 public 서브넷 ID. 비우면 default VPC 의 첫 public 서브넷(계정에 default VPC 없으면 이 변수로 지정)"
+  type        = string
+  default     = null
+}
