@@ -82,4 +82,14 @@ class BundleRelayControllerTest {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("AGNT4001"));
 	}
+
+	@Test
+	void 범위_밖_limit은_업스트림_전달_전에_400으로_거른다() throws Exception {
+		// WHY: 잘못된 limit 을 업스트림에 넘기면 그쪽 400 이 UPSTREAM_REJECTED(500)로
+		// 둔갑한다 — 호출자 버그는 이 표면에서 직접 표면화한다.
+		mvcWith(stub(Optional.empty()))
+				.perform(get("/internal/v1/bundles").param("after", "0").param("limit", "501"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("AGNT4002"));
+	}
 }

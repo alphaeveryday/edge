@@ -23,6 +23,9 @@ public class BundleRelayController {
 
 	static final String CHECKSUM_HEADER = "X-Bundle-Checksum";
 	private static final int LIMIT_DEFAULT = 100;
+	// 업스트림 계약(sync-protocol.md)과 동일 상한 — 여기서 걸러야 잘못된 limit 이
+	// 업스트림 400(UPSTREAM_REJECTED 오인)으로 둔갑하지 않는다.
+	private static final int LIMIT_MAX = 500;
 
 	private final BundleRelayService bundleRelayService;
 
@@ -37,6 +40,9 @@ public class BundleRelayController {
 
 		if (after < 0) {
 			throw new GeneralException(SyncAgentErrorStatus.INVALID_AFTER);
+		}
+		if (limit < 1 || limit > LIMIT_MAX) {
+			throw new GeneralException(SyncAgentErrorStatus.INVALID_LIMIT);
 		}
 		Optional<VerifiedBundle> bundle = bundleRelayService.pull(after, limit);
 		return bundle

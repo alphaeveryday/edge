@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 public enum SyncAgentErrorStatus implements BaseErrorCode {
 
 	INVALID_AFTER(HttpStatus.BAD_REQUEST, "AGNT4001", "after 는 0 이상이어야 합니다."),
+	INVALID_LIMIT(HttpStatus.BAD_REQUEST, "AGNT4002", "limit 은 1..500 이어야 합니다."),
 	UPSTREAM_FAILURE(HttpStatus.BAD_GATEWAY, "AGNT5021", "tenant-sync-api 호출에 실패했습니다."),
 	CHECKSUM_MISMATCH(HttpStatus.BAD_GATEWAY, "AGNT5022", "번들 체크섬 검증에 실패했습니다 — 전달하지 않습니다."),
 	UPSTREAM_MALFORMED(HttpStatus.BAD_GATEWAY, "AGNT5023", "tenant-sync-api 응답이 계약 형상을 위반했습니다."),
