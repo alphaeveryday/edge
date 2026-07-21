@@ -14,6 +14,23 @@ variable "super_admin_api_image" {
   type        = string
 }
 
+variable "tenant_sync_api_image" {
+  description = "tenant-sync-api ECR 이미지 URI(:태그 포함). TF 소유 baseline — 실행 태그는 CD 소유"
+  type        = string
+}
+
+variable "sync_domain" {
+  description = "Sync 채널 고정 FQDN — 온프렘 sync-agent 의 outbound-Pull 단일 목적지. prod 는 sync.edgesignal.dev 로."
+  type        = string
+  default     = "sync-dev.edgesignal.dev"
+}
+
+variable "sync_mtls_trust_store_arn" {
+  description = "sync ALB mTLS trust store ARN. null=아직 mTLS 미적용(2단계 — CA·번들 준비 후 주입, ALPHA-447). 주입 전까지 sync 엔드포인트는 공개 도달"
+  type        = string
+  default     = null
+}
+
 variable "route53_zone_name" {
   description = "기존 Route53 호스팅 영역 이름(참조용)"
   type        = string

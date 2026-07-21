@@ -47,3 +47,9 @@ variable "certificate_arn" {
   type        = string
   default     = null
 }
+
+variable "mtls_trust_store_arn" {
+  description = "설정 시 HTTPS 리스너에 mTLS(verify) 적용 — ALB 가 이 trust store 의 CA 로 클라이언트 인증서를 검증하고, 검증된 인증서를 X-Amzn-Mtls-Clientcert-* 헤더로 타깃에 전달한다. null=일반 TLS. enable_https=true 일 때만 의미 있음"
+  type        = string
+  default     = null
+}

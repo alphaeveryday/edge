@@ -21,6 +21,13 @@ data "aws_acm_certificate" "wildcard_cdn" {
   most_recent = true
 }
 
+# ALB(apne2)용 와일드카드 — CloudFront 용(us-east-1)과 리전이 달라 별도 조회.
+data "aws_acm_certificate" "wildcard_alb" {
+  domain      = "*.${var.route53_zone_name}"
+  statuses    = ["ISSUED"]
+  most_recent = true
+}
+
 # foundation 이 소유한 GitHub OIDC provider·이미지 ECR 을 data 로 참조(느슨한 결합).
 data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
@@ -36,6 +43,10 @@ data "aws_ecr_repository" "schema_migrate" {
 # CD 배포 역할에 push 권한을 스코프하기 위해 ARN 을 조회한다.
 data "aws_ecr_repository" "super_admin_api" {
   name = "edge/super-admin-api"
+}
+
+data "aws_ecr_repository" "tenant_sync_api" {
+  name = "edge/tenant-sync-api"
 }
 
 # data-pipeline 의 tag-news·analyze 페이즈가 함께 읽는 DeepSeek API 키 시크릿 — 그릇이 TF 밖
@@ -96,6 +107,59 @@ module "super_admin_api" {
   desired_count = 1
 }
 
+# ── Sync 채널 공개 엣지 (ADR-0034) ──────────────────────
+# 진입점은 호스트 단위 1:1 — sync 전용 ALB, 경로 라우팅 없음. 온프렘 sync-agent 가
+# sync-dev.edgesignal.dev:443 으로 outbound-Pull 한다(항상 온프렘→클라우드 단방향).
+# ⚠️ mTLS 는 2단계: CA·trust store 준비(ALPHA-447) 전까지 mtls_trust_store_arn=null 이라
+# 이 엔드포인트는 공개 도달이다(dev 스텁·시드 데이터 전제). trust store 주입이 게이트를 닫는다.
+module "sync_alb" {
+  source = "../../modules/alb"
+
+  name              = "${local.prefix}-sync"
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+
+  enable_https    = true
+  certificate_arn = data.aws_acm_certificate.wildcard_alb.arn
+
+  mtls_trust_store_arn = var.sync_mtls_trust_store_arn
+}
+
+module "tenant_sync_api" {
+  source = "../../modules/ecs-service"
+
+  name   = "tenant-sync-api"
+  region = var.region
+
+  cluster_arn                   = module.service_cluster.cluster_arn
+  service_connect_namespace_arn = module.service_cluster.namespace_arn
+
+  container_image  = var.tenant_sync_api_image
+  container_port   = 8080
+  cpu_architecture = "X86_64"
+
+  vpc_id        = module.network.vpc_id
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+
+  # 인바운드는 sync ALB 에서만 — 태스크 직접 도달을 막아야 mTLS 헤더
+  # (X-Amzn-Mtls-Clientcert-*) 신뢰가 성립한다(ALB 우회 경로 없음).
+  target_group_arn           = module.sync_alb.target_group_arn
+  ingress_security_group_ids = [module.sync_alb.security_group_id]
+}
+
+resource "aws_route53_record" "sync" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.sync_domain
+  type    = "A"
+
+  alias {
+    name                   = module.sync_alb.dns_name
+    zone_id                = module.sync_alb.zone_id
+    evaluate_target_health = false
+  }
+}
+
 # ── 스키마 마이그레이션 one-off task ────────────────────
 # ECR 은 foundation(edge/schema-migrate) 소유 — data 로 조회해 넘긴다(decoupled).
 module "schema_migrate" {
@@ -143,16 +207,19 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api) + data-pipeline 배치 이미지.
+  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api·tenant-sync-api) + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
     data.aws_ecr_repository.super_admin_api.arn,
+    data.aws_ecr_repository.tenant_sync_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = [
     module.super_admin_api.service_arn,
+    module.tenant_sync_api.service_arn,
   ]
   app_pass_role_arns = [
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
+    module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
   ]
 
   # UI 배포(deploy-ui.yml) 권한 — 3개 프론트 S3 sync + CloudFront 무효화.
