@@ -1,0 +1,140 @@
+/* ============================================================
+   EDGE 디자인 토큰 — claude.ai/design "EDGE Wireframe Design System"
+   colors_and_type.css 이식본. 값 변경은 디자인 시스템과 함께 한다.
+   ============================================================ */
+
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css");
+
+:root {
+  /* 1. 그레이스케일 (cool zinc ramp) */
+  --gray-0:   #ffffff;
+  --gray-50:  #fafafa;
+  --gray-100: #f4f4f5;
+  --gray-150: #ececee;
+  --gray-200: #e4e4e7;
+  --gray-300: #d4d4d8;
+  --gray-400: #a1a1aa;
+  --gray-500: #71717a;
+  --gray-600: #52525b;
+  --gray-700: #3f3f46;
+  --gray-800: #27272a;
+  --gray-900: #18181b;
+
+  /* 2. 단일 액센트 (slate-blue — 인터랙션 전용) */
+  --accent:        #2e5aac;
+  --accent-hover:  #244a93;
+  --accent-press:  #1d3d7d;
+  --accent-tint:   #eaf0fa;
+  --accent-border: #c4d4ee;
+
+  /* 3. 방향 시맨틱 (impact/sentiment 수치 전용, glyph-first) */
+  --up:        #2f7d5b;
+  --up-tint:   #e8f3ed;
+  --down:      #b4453b;
+  --down-tint: #f8eceb;
+  --flat:      #71717a;
+  --flat-tint: #f1f1f2;
+  --warn:      #9a6a17;
+  --warn-tint: #f6efe1;
+
+  /* 4. 시맨틱 surface / text / border */
+  --bg-app:      var(--gray-50);
+  --bg-surface:  var(--gray-0);
+  --bg-sunken:   var(--gray-100);
+  --bg-hover:    var(--gray-100);
+  --bg-nav:      var(--gray-900);
+
+  --fg-1: var(--gray-900);
+  --fg-2: var(--gray-600);
+  --fg-3: var(--gray-500);
+  --fg-4: var(--gray-400);
+
+  --border:        var(--gray-200);
+  --border-strong: var(--gray-300);
+  --border-faint:  var(--gray-150);
+
+  /* 5. 타입 */
+  --font-sans: "Pretendard", "Pretendard Variable", -apple-system,
+               BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas",
+               "Liberation Mono", monospace;
+
+  --display-size: 24px;  --display-line: 30px;  --display-weight: 700;
+  --h1-size: 20px;       --h1-line: 26px;       --h1-weight: 600;
+  --h2-size: 16px;       --h2-line: 22px;       --h2-weight: 600;
+  --h3-size: 14px;       --h3-line: 20px;       --h3-weight: 600;
+  --body-size: 13px;     --body-line: 19px;     --body-weight: 400;
+  --sm-size: 12px;       --sm-line: 17px;       --sm-weight: 400;
+  --xs-size: 11px;       --xs-line: 15px;       --xs-weight: 500;
+  --label-track: 0.06em;
+  --data-size: 13px;
+
+  /* 6. 간격 (4px base) */
+  --sp-1: 2px;   --sp-2: 4px;   --sp-3: 6px;   --sp-4: 8px;
+  --sp-5: 12px;  --sp-6: 16px;  --sp-7: 20px;  --sp-8: 24px;
+  --sp-9: 32px;  --sp-10: 40px; --sp-11: 48px; --sp-12: 64px;
+
+  /* 7. 라운드 */
+  --radius-sm: 3px;
+  --radius:    5px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  /* 8. 엘리베이션 */
+  --shadow-pop:   0 4px 16px rgba(24, 24, 27, 0.10),
+                  0 1px 3px rgba(24, 24, 27, 0.06);
+  --shadow-modal: 0 16px 48px rgba(24, 24, 27, 0.18);
+  --focus-ring:   0 0 0 3px rgba(46, 90, 172, 0.28);
+
+  /* 셸 치수 */
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 56px;
+  --header-h: 52px;
+}
+
+/* ============================================================
+   시맨틱 엘리먼트 스타일
+   ============================================================ */
+.edge-root,
+body.edge {
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  color: var(--fg-1);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.t-display { font-size: var(--display-size); line-height: var(--display-line); font-weight: var(--display-weight); letter-spacing: -0.01em; }
+.t-h1 { font-size: var(--h1-size); line-height: var(--h1-line); font-weight: var(--h1-weight); letter-spacing: -0.01em; }
+.t-h2 { font-size: var(--h2-size); line-height: var(--h2-line); font-weight: var(--h2-weight); letter-spacing: -0.005em; }
+.t-h3 { font-size: var(--h3-size); line-height: var(--h3-line); font-weight: var(--h3-weight); }
+.t-body { font-size: var(--body-size); line-height: var(--body-line); font-weight: var(--body-weight); }
+.t-sm { font-size: var(--sm-size); line-height: var(--sm-line); }
+.t-xs { font-size: var(--xs-size); line-height: var(--xs-line); font-weight: var(--xs-weight); }
+
+.t-label {
+  font-size: var(--xs-size);
+  line-height: var(--xs-line);
+  font-weight: 600;
+  letter-spacing: var(--label-track);
+  text-transform: uppercase;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
+.t-data, .num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--sm-size);
+}
+
+a, .link { color: var(--accent); text-decoration: none; }
+a:hover, .link:hover { color: var(--accent-hover); text-decoration: underline; }
+
+:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
