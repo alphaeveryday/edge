@@ -19,9 +19,11 @@ INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type, cur
     ('inst_LOCAL00000000000069500KR', 'XKRX', '069500', 'ETF', 'KRW')
 ON CONFLICT (instrument_id) DO NOTHING;
 
--- trigger·explanation_result 의 ETF FK 대상은 etf_profile 이다 (etf_type 은 어휘 미확정으로 NULL 허용)
+-- trigger·explanation_result 의 ETF FK 대상은 etf_profile 이다 (etf_type 은 어휘 미확정으로 NULL 허용).
+-- 091160(KODEX 반도체)은 KR 마스터 시드(V202607150004)의 instrument 를 재사용한다.
 INSERT INTO etf_profile (instrument_id) VALUES
-    ('inst_LOCAL00000000000069500KR')
+    ('inst_LOCAL00000000000069500KR'),
+    ('inst_01KXJB6W2EFJF0AGPMWG967ZSZ')
 ON CONFLICT (instrument_id) DO NOTHING;
 
 -- 설명 체인: trigger → contribution observation → route → release bundle → run → result
@@ -30,19 +32,26 @@ INSERT INTO price_movement_trigger (price_movement_trigger_id, etf_instrument_id
     detection_policy_version, detection_reason) VALUES
     ('pmt_LOCAL0000000000000000001', 'inst_LOCAL00000000000069500KR', DATE '2026-07-15',
      TIMESTAMPTZ '2026-07-15 15:40:00+09', -0.0092, TRUE, FALSE,
-     'local-demo', '로컬 데모 시드')
+     'local-demo', '로컬 데모 시드'),
+    ('pmt_LOCAL0000000000000000002', 'inst_01KXJB6W2EFJF0AGPMWG967ZSZ', DATE '2026-07-16',
+     TIMESTAMPTZ '2026-07-16 15:40:00+09', -0.0949, TRUE, FALSE,
+     'local-demo', '로컬 데모 시드 (091160)')
 ON CONFLICT (price_movement_trigger_id) DO NOTHING;
 
 INSERT INTO etf_contribution_observation (contribution_observation_id, price_movement_trigger_id,
     available_at, data_version) VALUES
     ('eco_LOCAL0000000000000000001', 'pmt_LOCAL0000000000000000001',
-     TIMESTAMPTZ '2026-07-15 15:50:00+09', 'local-demo')
+     TIMESTAMPTZ '2026-07-15 15:50:00+09', 'local-demo'),
+    ('eco_LOCAL0000000000000000002', 'pmt_LOCAL0000000000000000002',
+     TIMESTAMPTZ '2026-07-16 15:50:00+09', 'local-demo')
 ON CONFLICT (contribution_observation_id) DO NOTHING;
 
 INSERT INTO explanation_route (explanation_route_id, contribution_observation_id, route_code,
     event_search_required, evaluated_at) VALUES
     ('exr_LOCAL0000000000000000001', 'eco_LOCAL0000000000000000001', 'CONCENTRATED',
-     TRUE, TIMESTAMPTZ '2026-07-15 15:55:00+09')
+     TRUE, TIMESTAMPTZ '2026-07-15 15:55:00+09'),
+    ('exr_LOCAL0000000000000000002', 'eco_LOCAL0000000000000000002', 'CONCENTRATED',
+     TRUE, TIMESTAMPTZ '2026-07-16 15:55:00+09')
 ON CONFLICT (explanation_route_id) DO NOTHING;
 
 INSERT INTO release_bundle (bundle_version, component_versions, component_hash, status, published_at) VALUES
@@ -60,7 +69,10 @@ INSERT INTO explanation_run (explanation_run_id, explanation_route_id, bundle_ve
      TIMESTAMPTZ '2026-07-15 17:00:00+09', TIMESTAMPTZ '2026-07-15 17:01:00+09'),
     ('exrun_LOCAL000000000000000003', 'exr_LOCAL0000000000000000001', 'local-demo.0',
      TIMESTAMPTZ '2026-07-15 18:00:00+09', 'SUCCEEDED',
-     TIMESTAMPTZ '2026-07-15 18:00:00+09', TIMESTAMPTZ '2026-07-15 18:01:00+09')
+     TIMESTAMPTZ '2026-07-15 18:00:00+09', TIMESTAMPTZ '2026-07-15 18:01:00+09'),
+    ('exrun_LOCAL000000000000000004', 'exr_LOCAL0000000000000000002', 'local-demo.0',
+     TIMESTAMPTZ '2026-07-16 16:00:00+09', 'SUCCEEDED',
+     TIMESTAMPTZ '2026-07-16 16:00:00+09', TIMESTAMPTZ '2026-07-16 16:01:00+09')
 ON CONFLICT (explanation_run_id) DO NOTHING;
 
 -- 정정 서사: 0001(원본, 정정으로 WITHDRAWN) → 0002(정정분, 무효화로 WITHDRAWN)
@@ -79,6 +91,17 @@ INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_i
     ('expr_LOCAL000000000000000003', 'exrun_LOCAL000000000000000003', 'inst_LOCAL00000000000069500KR',
      DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 18:00:00+09', NULL, 'EVENT_SUPPORTED',
      '반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다. (재산출 확정본)',
+     'MEDIUM', 'PUBLISHED'),
+    -- 091160 — 수령 디자인(ALPHA-485) 리포트 본문. 첫 문단은 화면 헤드라인 규칙(demo app.js).
+    ('expr_LOCAL000000000000000004', 'exrun_LOCAL000000000000000004', 'inst_01KXJB6W2EFJF0AGPMWG967ZSZ',
+     DATE '2026-07-16', TIMESTAMPTZ '2026-07-16 16:00:00+09', NULL, 'EVENT_SUPPORTED',
+     '미국 메모리주 약세로 시작된 하락, ''삼전닉스'' 쏠림과 레버리지 수급이 낙폭을 키웠습니다
+
+7월 16일 KODEX 반도체는 분석 기준 9.49% 하락했습니다. 간밤 마이크론을 비롯한 미국 메모리 반도체주의 급락이 업황 고점 우려가 겹치며 조정을 촉발했습니다.
+
+그러나 ETF의 낙폭은 반도체 지수 전체의 하락 폭보다 컸습니다. SK하이닉스(-4.39%p)와 삼성전자(-1.89%p)가 전체 낙폭의 약 66%를 차지했는데, 두 종목의 편입 비중 합이 60%를 넘는 종목 쏠림 구조가 지수 하락을 그대로 증폭시킨 것입니다.
+
+여기에 삼성전자·SK하이닉스 단일종목 레버리지 상품의 로스컷 청산과 리밸런싱 매도가 기계적으로 쏟아지며 낙폭을 키웠습니다. 즉, 이번 급락은 새로운 실적 악화 근거가 확인된 하락이라기보다, 미국발 외부 충격이 ETF의 종목 쏠림·레버리지 수급 구조와 만나 증폭된 하락으로 판단됩니다.',
      'MEDIUM', 'PUBLISHED')
 ON CONFLICT (explanation_result_id) DO NOTHING;
 
@@ -94,7 +117,7 @@ ON CONFLICT (tenant_id) DO NOTHING;
 SELECT setval(pg_get_serial_sequence('tenant', 'tenant_id'),
               (SELECT max(tenant_id) FROM tenant), true);
 
--- 전달 레코드 4건 — NEW → CORRECTION → INVALIDATION → NEW(최종 게시분).
+-- 전달 레코드 5건 — NEW → CORRECTION → INVALIDATION → NEW(069500 최종) → NEW(091160 수령 디자인).
 -- 온프렘 관통 후 최종 상태: 0001=CORRECTED, 0002=INVALIDATED, 0003=AUTO_PUBLISHED(노출).
 INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, explanation_result_id,
     target_explanation_result_id, reason)
@@ -104,7 +127,8 @@ FROM tenant t,
          (1::bigint, 'NEW', 'expr_LOCAL000000000000000001', NULL, NULL),
          (2::bigint, 'CORRECTION', 'expr_LOCAL000000000000000002', 'expr_LOCAL000000000000000001', '근거 공시 정정'),
          (3::bigint, 'INVALIDATION', NULL, 'expr_LOCAL000000000000000002', '오탐지 이벤트'),
-         (4::bigint, 'NEW', 'expr_LOCAL000000000000000003', NULL, NULL)
+         (4::bigint, 'NEW', 'expr_LOCAL000000000000000003', NULL, NULL),
+         (5::bigint, 'NEW', 'expr_LOCAL000000000000000004', NULL, NULL)
      ) AS v(cursor, delivery_type, result_id, target_id, reason)
 WHERE t.tenant_name = 'local-demo'
 ON CONFLICT (tenant_id, cursor) DO NOTHING;

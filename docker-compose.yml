@@ -10,8 +10,8 @@
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
 #   - DB 는 플레인별 2개: postgres(cloud, :55432) / postgres-onprem(온프렘, :55433,
-#     ADR-0011 물리 격리 재현). 온프렘 세트는 flyway-onprem 이 적용하고, 로컬 전용
-#     시드(seed-local-onprem — SSOT 밖)를 함께 태운다.
+#     ADR-0011 물리 격리 재현). 로컬 시드는 cloud 쪽(seed-local-cloud — SSOT 밖)뿐이며,
+#     온프렘 데이터는 동기화 경로(sync-agent→intake→screening-worker)가 실적재한다.
 #
 # 사용:
 #   docker compose up --build             # 전체 기동(첫 실행은 gradle 빌드로 느림)
@@ -25,7 +25,7 @@
 #   curl "localhost:18085/internal/v1/bundles?after=0"   # sync-agent — 검증 후 무변형 전달
 #   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
 #   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # publication-api
-#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(AI 분석 탭)
+#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세, AI 분석 탭만 실호출)
 #   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
 
 services:
@@ -149,6 +149,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 데모 한정 — 시드(seed-local-onprem)의 091160 을 지원 종목으로 인식시킨다
+      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160
     ports:
       - "18084:8080"
 
