@@ -49,9 +49,9 @@ def _price_row(ticker: str = "005930", trade_date: str = "2026-07-16", **over) -
 class _FakeCursor:
     """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
 
-    def __init__(self, log: list, instruments: dict, existing: dict):
+    def __init__(self, log: list, instrument_rows: list, existing: dict):
         self._log = log
-        self._instruments = instruments
+        self._instrument_rows = instrument_rows  # [(ticker, instrument_id), …] — 중복 ticker 가능
         self._existing = existing
         self._rows: list = []
         self._returning = None
@@ -62,7 +62,7 @@ class _FakeCursor:
         self._log.append((norm, params))
         upper = norm.upper()
         if upper.startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT"):
-            self._rows = list(self._instruments.items())
+            self._rows = list(self._instrument_rows)
         elif upper.startswith("INSERT INTO PRICE_DAILY"):
             # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
             # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
@@ -91,13 +91,18 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, existing=None):
+    def __init__(self, instruments=None, existing=None, instrument_rows=None):
         self.log: list = []
-        self.instruments = instruments if instruments is not None else {"005930": "inst_samsung"}
+        # instrument_rows 를 직접 주면(중복 ticker 테스트) 그대로, 아니면 dict 에서 파생한다.
+        if instrument_rows is not None:
+            self.instrument_rows = list(instrument_rows)
+        else:
+            instruments = instruments if instruments is not None else {"005930": "inst_samsung"}
+            self.instrument_rows = list(instruments.items())
         self.existing = dict(existing or {})
 
     def cursor(self):
-        return _FakeCursor(self.log, self.instruments, self.existing)
+        return _FakeCursor(self.log, self.instrument_rows, self.existing)
 
 
 def _fake_connect(conn):
@@ -193,6 +198,45 @@ def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(t
     assert log["created"] == 1
     assert log["skipped_unknown_instrument"] == 2
     assert log["unknown_instruments"] == ["KR:000660", "KR:035420"]  # 목록으로 남긴다
+
+
+def test_KR_해소는_KOSPI_KOSDAQ_KONEX_MIC_를_모두_조회한다(tmp_path, monkeypatch):
+    # WHY: canonical 가격은 지역 "KR" 만 주고 MIC 는 없다. XKRX(KOSPI) 만 조회하면
+    #      XKOS(KOSDAQ)·XKON(KONEX)에 적재된 종목이 마스터에 있어도 unknown 으로 조용히
+    #      버려져 비KOSPI 가격이 원장에서 통째로 빠진다(Codex P1). 세 MIC 를 다 봐야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    selects = [p for sql, p in conn.log
+               if sql.upper().startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT")]
+    assert selects, "instrument 조회가 없다"
+    assert set(selects[0][0]) == {"XKRX", "XKOS", "XKON"}  # ANY(%s) 에 세 MIC 전부
+
+
+def test_MIC_가로지른_중복_ticker_는_적재하지_않고_센다(tmp_path, monkeypatch):
+    # WHY: (market_code,ticker) 는 유일하지만 ticker 단독은 두 MIC 에 걸쳐 겹칠 수 있다.
+    #      겹치면 어느 시장 종목의 가격인지 알 수 없어, 조용히 하나 고르면 KOSPI 가격을
+    #      동명 KOSDAQ 종목에 붙이는 오염이 된다 — 적재하지 않고 드러낸다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row("005930"), _price_row("111111")])
+    # ticker 111111 이 두 instrument(XKRX·XKOS)로 존재 — 중복 ticker.
+    conn = _FakeConn(instrument_rows=[
+        ("005930", "inst_samsung"),
+        ("111111", "inst_kospi"),
+        ("111111", "inst_kosdaq"),
+    ])
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 모호하지 않은 것만
+    log = _log(storage)
+    assert log["created"] == 1
+    assert log["skipped_ambiguous_ticker"] == 1
+    assert log["ambiguous_tickers"] == ["KR:111111"]
 
 
 def test_CHECK_위반_행은_격리하고_센다(tmp_path, monkeypatch):

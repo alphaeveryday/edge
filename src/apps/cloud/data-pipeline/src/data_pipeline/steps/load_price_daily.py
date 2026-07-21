@@ -50,9 +50,12 @@ JOB_NAME = "load_price_daily"
 # 달라 자연히 갈렸지만, 가격은 둘 다 "price_daily" 라 명시적으로 "_load" 로 분리한다.
 DATASET = "price_daily_load"
 
-# 적재 대상 시장 → MIC(ISO 10383). instrument 마스터가 KR 만 있어(US 는 ALPHA-371 로 MIC 미비)
-# 지금은 하나다 — US 를 넣어도 전량 미등록으로 걸린다.
-_MIC_BY_MARKET = {"KR": "XKRX"}
+# 적재 대상 시장(레이크 지역 키) → 그 시장의 MIC(ISO 10383) 집합. canonical 가격은 지역 "KR"
+# 만 주고 MIC 는 없는데, KR 은 KRX 산하 세 시장이 서로 다른 MIC 를 쓴다(KOSPI=XKRX·KOSDAQ=XKOS·
+# KONEX=XKON). XKRX 만 보면 load_instruments 가 constituent_mic 로 XKOS·XKON 에 적재한 KOSDAQ/
+# KONEX 종목이 마스터에 있어도 unknown 으로 조용히 버려진다(Codex P1 지적) — 세 MIC 를 다 본다.
+# US 는 instrument 마스터가 없어(ALPHA-371) 넣어도 전량 미등록으로 걸린다.
+_MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
 
 _CREATED_SAMPLE_LIMIT = 5
 
@@ -72,18 +75,28 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
     return sorted(dates)
 
 
-def _instrument_ids(conn, mic: str) -> dict[str, str]:
-    """(그 시장의) ticker → instrument_id. ETF·개별주식 양쪽 다.
+def _instrument_ids(conn, mics: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
+    """(그 지역 MIC 집합의) ticker → instrument_id, 그리고 MIC 를 가로질러 겹친 ticker 집합.
 
-    `(market_code, ticker)` 가 유일 자연키라 시장을 고정하면 ticker 로 유일하다. NAV 로더와
-    달리 instrument_type 을 안 건다 — 가격은 ETF 도 개별주식도 다 있다.
+    ETF·개별주식 양쪽 다(NAV 로더와 달리 instrument_type 을 안 건다 — 가격은 둘 다 있다).
+    `(market_code, ticker)` 는 유일 자연키지만 ticker **단독**은 MIC 를 가로질러 겹칠 수 있다.
+    KRX 종목코드는 세 시장에 걸쳐 유일해 실제로는 안 겹치지만, 겹치면 어느 시장 종목의
+    가격인지 알 수 없다 — 조용히 하나 고르면 KOSPI 가격을 동명 KOSDAQ 종목에 붙이는 오염이
+    되므로, 겹친 ticker 를 드러내 해소에서 뺀다(Rule 12).
     """
+    ids: dict[str, str] = {}
+    ambiguous: set[str] = set()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ticker, instrument_id FROM instrument WHERE market_code = %s",
-            (mic,),
+            "SELECT ticker, instrument_id FROM instrument WHERE market_code = ANY(%s)",
+            (list(mics),),
         )
-        return {str(t): str(i) for t, i in cur.fetchall()}
+        for ticker, instrument_id in cur.fetchall():
+            t = str(ticker)
+            if t in ids and ids[t] != str(instrument_id):
+                ambiguous.add(t)
+            ids[t] = str(instrument_id)
+    return ids, ambiguous
 
 
 def _pos_finite(value) -> bool:
@@ -140,9 +153,11 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_unknown_instrument = skipped_check_violation = 0
+    skipped_ambiguous_ticker = 0
     already = created = updated = 0
     created_sample: list[dict] = []
     unknown_instruments: set[str] = set()
+    ambiguous_tickers: set[str] = set()
     check_violations: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -151,7 +166,7 @@ def run(
         # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신
         # fetched_at 이 이긴다 — canonical 병합(_merge_partition)과 같은 규칙이다.
         candidates: dict[tuple[str, str, str], dict] = {}
-        for market in _MIC_BY_MARKET:
+        for market in _MICS_BY_MARKET:
             dates = [
                 d for d in _partition_dates(storage, market)
                 if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)
@@ -186,10 +201,17 @@ def run(
 
         with connect(db) as conn:
             instruments = {
-                market: _instrument_ids(conn, mic) for market, mic in _MIC_BY_MARKET.items()
+                market: _instrument_ids(conn, mics) for market, mics in _MICS_BY_MARKET.items()
             }
             for (market, ticker, trade_date), fact in sorted(candidates.items()):
-                instrument_id = instruments[market].get(ticker)
+                ids, ambiguous = instruments[market]
+                if ticker in ambiguous:
+                    # 같은 ticker 가 두 MIC 에 걸쳐 존재 — 어느 시장 종목인지 알 수 없어
+                    # 조용히 붙이면 오염이다(Rule 12). 적재하지 않고 드러낸다.
+                    skipped_ambiguous_ticker += 1
+                    ambiguous_tickers.add(f"{market}:{ticker}")
+                    continue
+                instrument_id = ids.get(ticker)
                 if instrument_id is None:
                     # 마스터 미등록 — FK 위반으로 배치를 죽이는 대신 사실을 수치로 남긴다.
                     skipped_unknown_instrument += 1
@@ -248,12 +270,14 @@ def run(
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "markets": list(_MIC_BY_MARKET), "from_date": from_date, "to_date": to_date,
+        "markets": list(_MICS_BY_MARKET), "from_date": from_date, "to_date": to_date,
         "rows_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unknown_instrument": skipped_unknown_instrument,
         # 마스터가 모르는 종목 목록 — instrument 마스터 확장이 얼마나 필요한지의 근거다.
         "unknown_instruments": sorted(unknown_instruments),
+        "skipped_ambiguous_ticker": skipped_ambiguous_ticker,
+        "ambiguous_tickers": sorted(ambiguous_tickers),
         "skipped_check_violation": skipped_check_violation,
         "check_violations": check_violations,
         "already_present": already, "created": created, "updated": updated,
@@ -269,9 +293,9 @@ def run(
 
     logger.info(
         "load_price_daily 완료: read=%d created=%d updated=%d already=%d "
-        "unknown_instrument=%d(%d종) check_violation=%d skipped_identity=%d",
+        "unknown_instrument=%d(%d종) ambiguous=%d check_violation=%d skipped_identity=%d",
         read, created, updated, already,
         skipped_unknown_instrument, len(unknown_instruments),
-        skipped_check_violation, skipped_missing_identity,
+        skipped_ambiguous_ticker, skipped_check_violation, skipped_missing_identity,
     )
     return exit_code
