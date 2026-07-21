@@ -118,6 +118,8 @@ services:
   # 온프렘 세트(migrations-onprem) 적용. 온프렘 데이터는 이제 동기화 경로가 실적재하므로
   # 로컬 시드가 없다(구 seed-local-onprem 은 screening-worker 도입으로 제거 —
   # ignoreMigrationPatterns 는 기존 로컬 볼륨의 히스토리에 남은 그 repeatable 항목 허용용).
+  # 주의: 구 시드를 적용했던 기존 볼륨은 낡은 게시 행이 grain 을 선점해 동기화 게시를 막는다
+  # — 이 전환에서 한 번은 `docker compose down -v` 로 볼륨을 리셋할 것.
   flyway-onprem:
     image: flyway/flyway:10.21.0
     container_name: edge-flyway-onprem

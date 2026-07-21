@@ -6,8 +6,10 @@
 ## 실행
 
 ```bash
-docker compose up --build mock-broker publication-api
-# http://localhost:18090
+# 데이터는 동기화 경로가 실적재하므로 워커까지 함께 띄운다.
+# 구(로컬 시드) 볼륨을 쓰던 경우 최초 1회 `docker compose down -v` 로 리셋할 것.
+docker compose up --build mock-broker screening-worker intake
+# http://localhost:18090 (첫 관통까지 폴링 주기상 ~10초)
 ```
 
 compose 없이 로컬 프로세스로 띄우려면 (publication-api 는 18084 에 떠 있어야 한다):
