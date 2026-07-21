@@ -29,7 +29,8 @@ infra/terraform/
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
 
-`ecs-service` 를 tenant-console-api·super-admin-api 가, `static-site` 를 tenant-console·super-admin UI 와 데모 MTS 페이지가 동일 재사용한다.
+`ecs-service` 를 super-admin-api 가, `static-site` 를 tenant-console·super-admin UI 와 데모 MTS 페이지가 동일 재사용한다.
+(tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
 
 ## 설계 요지
 
@@ -75,7 +76,7 @@ cd ../envs/dev  && terraform apply
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
-| **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | super-admin 공개화 시 ALB listener rule 로 연결(ADR-0032) |
+| **내부 API**(super-admin) | idle — ALB 타깃 없음, Service Connect 만 | super-admin 공개화 시 ALB listener rule 로 연결(ADR-0032) |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
 
@@ -86,7 +87,7 @@ cd ../envs/dev  && terraform apply
 
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
-- 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드 4종·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다
+- 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다
 - 파이프라인 이미지(`edge/pipeline:latest` placeholder) + 시크릿 fmp/openai(`REPLACE_ME` → 실제 키)
 
 ### 🔮 미구축 (후속 증분)
