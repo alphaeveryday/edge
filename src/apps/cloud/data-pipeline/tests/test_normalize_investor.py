@@ -63,9 +63,10 @@ def test_normalizes_and_coerces_zero_padded_strings(tmp_path):
     assert normalize_investor.run(storage, "N1") == 0
     [row] = _canonical_rows(storage, "KR", "2026-07-01")
     assert row["ticker"] == "005930" and row["currency"] == "KRW"
-    assert row["net_qty_individual"] == -70203  # 음수 순매수 정상
-    assert row["net_val_individual"] == -3190
+    assert row["net_qty_individual"] == -70203  # 수량(주식수)은 미환산·음수 정상
+    assert row["net_val_individual"] == -3190 * 1_000_000  # 대금 백만원→원 환산(currency=KRW 정합)
     assert row["net_qty_foreign"] == 39367
+    assert row["net_val_foreign"] == 1713 * 1_000_000
     assert row["net_qty_institution_total"] == 11941
     assert row["net_qty_pension"] == 5000  # 연기금(기금) 세부도 적재
     log = _quality_log(storage)
@@ -116,14 +117,15 @@ def test_optional_sub_field_missing_nulls_but_row_survives(tmp_path):
 def test_large_integer_preserved_without_float_rounding(tmp_path):
     # WHY: canonical 이 int64 라 float 왕복(float("9007199254740993")→…992)으로 2^53 초과
     #      순매수를 조용히 반올림하면 원본과 다른 값이 passed 로 적재된다(coerce-to-passing).
-    #      정수 문자열은 int() 로 정확히 파싱해야 한다(edge-review F5).
+    #      정수 문자열은 int() 로 정확히 파싱해야 한다(edge-review F5). 수량(net_qty)은 환산이
+    #      없어 파싱 정밀도만 순수 검증한다(대금은 백만원→원 ×1e6 이라 이 극단값이 int64 초과).
     storage = LocalStorage(tmp_path / "lake")
     big = "9007199254740993"  # 2^53+1 — float 은 이 값을 표현 못 해 반올림된다
-    _write_raw(storage, _raw_key(), [_kis_row(frgn_ntby_tr_pbmn=big)])
+    _write_raw(storage, _raw_key(), [_kis_row(frgn_ntby_qty=big)])
 
     assert normalize_investor.run(storage, "N1") == 0
     [row] = _canonical_rows(storage, "KR", "2026-07-01")
-    assert row["net_val_foreign"] == 9007199254740993  # 반올림 없이 정확히 보존
+    assert row["net_qty_foreign"] == 9007199254740993  # 반올림 없이 정확히 보존
 
 
 def test_optional_sub_field_garbage_fails_loud(tmp_path):

@@ -34,6 +34,12 @@ DATASET = "investor_flow_daily"
 # market → 표준 통화(순매수 대금 태깅용). 가격과 동형 — FX 환산 없이 태깅만.
 _CURRENCY = {"KR": "KRW"}
 
+# KIS 순매수 대금(`*_ntby_tr_pbmn`)은 **백만원 단위**다(2026-07-21 실측: 삼성전자 순매수
+# -1,106,457주 × ~71,100원 ≈ -78,669 백만원 = 응답 -79,812. 반면 같은 응답의 누적거래대금
+# acml_tr_pbmn 은 원 단위라 vol×종가와 1:1). raw 그대로 저장하면 currency=KRW 태깅과 1e6 배
+# 어긋난다 — canonical 은 원으로 환산해 통화 태그와 정합시킨다(수량 net_qty 는 주식수라 미환산).
+_NET_VALUE_SCALE = 1_000_000
+
 # 표준 투자자 구분 → (KIS 순매수 수량 키, 순매수 대금 키). 라이브 실측(2026-07-21) 필드명.
 # 대부분 `_ntby_qty` 지만 사모·기타법인·기타단체는 `_ntby_vol`(거래량) 이름이다 — 무시 말고 정확히 잇는다.
 _HEADLINE_GROUPS = {
@@ -102,6 +108,13 @@ def _to_int(raw: dict, key: str, reasons: list[str], *, allow_missing: bool = Fa
         return None
 
 
+def _scaled_val(raw: dict, key: str, reasons: list[str], *, allow_missing: bool):
+    """순매수 대금 필드 → 원(정수). KIS 백만원 단위를 _NET_VALUE_SCALE 로 원 환산해 currency=KRW
+    와 정합시킨다. 결측·비수치는 _to_int 정책 그대로(None), 유효값만 환산한다."""
+    v = _to_int(raw, key, reasons, allow_missing=allow_missing)
+    return None if v is None else v * _NET_VALUE_SCALE
+
+
 def _norm_trade_date(raw: dict, reasons: list[str]) -> str | None:
     """stck_bsop_date(YYYYMMDD) → 'YYYY-MM-DD'. 결측=missing_field, 형식 불량=bad_trade_date.
 
@@ -142,14 +155,15 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
         "fetched_at": raw.get("fetched_at"),
     }
     # headline 3종(개인·외국인·기관계)의 수량·대금은 필수 — 결측·비수치면 행 탈락.
+    # 대금(net_val)은 백만원→원 환산(_NET_VALUE_SCALE), 수량(net_qty)은 주식수라 미환산.
     for name, (qty_key, val_key) in _HEADLINE_GROUPS.items():
         row[f"net_qty_{name}"] = _to_int(raw, qty_key, reasons)
-        row[f"net_val_{name}"] = _to_int(raw, val_key, reasons)
+        row[f"net_val_{name}"] = _scaled_val(raw, val_key, reasons, allow_missing=False)
     # 기관 세부는 선택 — 결측은 null 로 관용하되(allow_missing), 존재하는 비수치(garbage)는
     # non_numeric 으로 드러내 행을 탈락시킨다(조용한 null 로 드리프트를 삼키지 않는다, Rule 12).
     for name, (qty_key, val_key) in _SUB_GROUPS.items():
         row[f"net_qty_{name}"] = _to_int(raw, qty_key, reasons, allow_missing=True)
-        row[f"net_val_{name}"] = _to_int(raw, val_key, reasons, allow_missing=True)
+        row[f"net_val_{name}"] = _scaled_val(raw, val_key, reasons, allow_missing=True)
     # market·ticker 는 canonical 정체성 키의 일부다 — 없으면 키를 만들 수 없어 canonical 로 못
     # 간다. 결측·미지원 market 을 missing_field/unsupported_market 로 드러낸다(Rule 12).
     if _blank(row["market"]):
