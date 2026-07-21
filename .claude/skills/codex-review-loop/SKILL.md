@@ -11,7 +11,19 @@ description: 열린 PR 에 대한 Codex 자동 리뷰(chatgpt-codex-connector) �
 
 ## 진입 시 기존 finding 먼저 처리
 
-독립 호출(이미 리뷰가 달린 PR 의 반영 요청 — frontmatter 가 광고하는 용도)로 들어오면, **베이스라인을 잡기 전에** 현재 열려 있는 미처리 Codex 인라인 코멘트를 먼저 읽어 수용 판단한다. 단 `gh api repos/{owner}/{repo}/pulls/<N>/comments` 는 **resolved·outdated 포함 전체 코멘트**를 주므로(해결 상태는 REST 가 아니라 GraphQL 리뷰 스레드의 `isResolved`/`isOutdated` 에 있다), 그대로 쓰면 이미 처리된 stale 코멘트를 되살려 재수정·오보고한다. **현재 PR HEAD 커밋 SHA(`gh pr view <N> --json headRefOid`)의 코멘트만** 남겨 필터한다 — 그 이전 커밋에 달린 코멘트는 후속 커밋으로 이미 superseded 다. (정밀히 하려면 GraphQL 로 `isResolved=false && isOutdated=false` 스레드만 볼 수도 있으나, HEAD-SHA 필터가 더 단순하고 되살림을 막는다.) 베이스라인부터 잡으면 사용자가 처리하려던 **바로 그 기존 finding 이 베이스라인에 묻혀** 새 신호를 기다리다 타임아웃한다. 기존 finding 을 반영(또는 전건 비수용)한 뒤에야 아래 베이스라인-이후 방식으로 넘어간다. pr-cycle 경유(PR 생성 직후 진입)는 아직 리뷰가 없어 이 단계가 자연히 비고 바로 베이스라인으로 간다.
+독립 호출(이미 리뷰가 달린 PR 의 반영 요청 — frontmatter 가 광고하는 용도)로 들어오면, **베이스라인을 잡기 전에** 현재 살아 있는 Codex finding 을 먼저 읽어 수용 판단한다. 여기서 "살아 있음"의 판정은 **GraphQL 리뷰 스레드의 `isResolved`/`isOutdated`** 로 한다:
+
+```bash
+gh api graphql -f query='
+{ repository(owner:"{owner}", name:"{repo}") { pullRequest(number:<N>) {
+    reviewThreads(first:100) { nodes {
+      isResolved isOutdated
+      comments(first:1) { nodes { author{login} path line body } } } } } } }'
+```
+
+`isResolved==false && isOutdated==false` 이고 작성자가 `chatgpt-codex-connector` 인 스레드만 현재 finding 이다.
+
+**REST `pulls/<N>/comments` 의 `commit_id == headRefOid` 로 최신성을 판정하지 마라** — `commit_id` 는 코멘트가 *달린* 커밋일 뿐이고, 이후 push 가 그 finding 의 줄을 건드리지 않으면 스레드는 여전히 active 인데 `commit_id` 는 옛 SHA 그대로다. SHA 로 거르면 **아직 살아 있는 finding 을 떨어뜨려** 조용히 놓친다. 반대로 REST 를 필터 없이 쓰면 resolved·outdated 를 되살린다 — 그래서 스레드 상태가 정답이다. 베이스라인부터 잡으면 사용자가 처리하려던 **바로 그 기존 finding 이 베이스라인에 묻혀** 새 신호를 기다리다 타임아웃한다. 기존 finding 을 반영(또는 전건 비수용)한 뒤에야 아래 베이스라인-이후 방식으로 넘어간다. pr-cycle 경유(PR 생성 직후 진입)는 아직 리뷰가 없어 이 단계가 자연히 비고 바로 베이스라인으로 간다.
 
 ## 풀링
 
