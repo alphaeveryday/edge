@@ -9,6 +9,9 @@
 #     → 서비스 간 호출 http://<name>:8080 이 로컬·ECS 에서 동일 동작.
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
+#   - DB 는 플레인별 2개: postgres(cloud, :55432) / postgres-onprem(온프렘, :55433,
+#     ADR-0011 물리 격리 재현). 온프렘 세트는 flyway-onprem 이 적용하고, 로컬 전용
+#     시드(seed-local-onprem — SSOT 밖)를 함께 태운다.
 #
 # 사용:
 #   docker compose up --build             # 전체 기동(첫 실행은 gradle 빌드로 느림)
@@ -57,16 +60,18 @@ services:
       -locations=filesystem:/flyway/sql
       migrate
 
+  # [edge-onprem] 온프렘 플레인이므로 온프렘 PG 를 본다 (앱은 아직 DataSource
+  # autoconfig exclude 상태 — env 는 검수 도메인 실구현 시 사용된다).
   tenant-console-api:
     build:
       context: ./src
       dockerfile: apps/onprem/tenant-console-api/Dockerfile
     container_name: edge-tenant-console-api
     depends_on:
-      flyway:
+      flyway-onprem:
         condition: service_completed_successfully
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
     ports:
@@ -87,12 +92,56 @@ services:
     ports:
       - "18082:8080"
 
-  # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만). 인메모리 시드 — DB 의존 없음.
+  # [edge-onprem] 온프렘 PostgreSQL — 테넌트별 물리 격리(ADR-0011)를 컨테이너 분리로 재현.
+  # cloud postgres 와 절대 섞지 않는다. demo-onprem compose 추출(ALPHA-444/445)의 원형.
+  postgres-onprem:
+    image: postgres:16
+    container_name: edge-postgres-onprem
+    environment:
+      POSTGRES_DB: edge_onprem
+      POSTGRES_USER: edge
+      POSTGRES_PASSWORD: edge
+    ports:
+      - "55433:5432" # host 55433 → cloud(55432)와 구분
+    volumes:
+      - edge-postgres-onprem-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edge -d edge_onprem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # 온프렘 세트(migrations-onprem) 적용 + 로컬 전용 시드(seed-local-onprem — SSOT 밖,
+  # compose 만 마운트하므로 schema-migrate CD·CI 에 섞이지 않는다).
+  flyway-onprem:
+    image: flyway/flyway:10.21.0
+    container_name: edge-flyway-onprem
+    depends_on:
+      postgres-onprem:
+        condition: service_healthy
+    volumes:
+      - ./src/libs/schema/migrations-onprem:/flyway/sql:ro
+      - ./src/libs/schema/seed-local-onprem:/flyway/seed:ro
+    command: >-
+      -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      -user=edge -password=edge
+      -connectRetries=10
+      -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
+      migrate
+
+  # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만) — 온프렘 PG 조회.
   publication-api:
     build:
       context: ./src
       dockerfile: apps/onprem/publication-api/Dockerfile
     container_name: edge-publication-api
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
     ports:
       - "18084:8080"
 
@@ -122,3 +171,4 @@ services:
 
 volumes:
   edge-postgres-data:
+  edge-postgres-onprem-data:

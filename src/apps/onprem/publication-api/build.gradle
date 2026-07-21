@@ -18,10 +18,12 @@ repositories {
 }
 
 dependencies {
-	// 설명 저장소는 인메모리 시드 — 온프렘 DB 연동은 도메인 마이그레이션(state-machine ERD) 후.
 	implementation project(':libs:jvm-common') // 에러 응답 봉투(ApiResponse)·에러 코드 규약
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// 온프렘 Published Store 조회·Exposure 기록 (migrations-onprem 스키마)
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

@@ -32,7 +32,8 @@ app.js (MTS 화면)
 
 ## 데모 조작 (쿼리 파라미터)
 
-응답 데이터는 publication-api 인메모리 시드(`ExplanationStore`) 기준이다.
+응답 데이터는 온프렘 DB 의 로컬 전용 시드(`src/libs/schema/seed-local-onprem`) 기준이다.
+게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE publication_id=1;"` → 조회가 204(NO_DATA)로 바뀐다.
 
 | URL | 재현 상태 |
 |---|---|

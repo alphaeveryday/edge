@@ -1,5 +1,14 @@
 spring:
   application:
     name: publication
-# DB 의존성 없음 — 설명 저장소는 인메모리 시드. 온프렘 도메인 마이그레이션
-# (libs/schema/migrations-onprem) 확정 후 datasource 를 추가한다.
+  datasource:
+    # 온프렘 Published Store (libs/schema/migrations-onprem 스키마). 로컬 기본값은
+    # compose 의 postgres-onprem(:55433) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+
+publication:
+  # 상장 여부 판별(404) — 종목 마스터 동기화 도입 전의 설정 allowlist.
+  # 404(미상장)와 204(상장이나 설명 없음)는 다른 질문이다.
+  known-tickers: ${PUBLICATION_KNOWN_TICKERS:069500,305720}
