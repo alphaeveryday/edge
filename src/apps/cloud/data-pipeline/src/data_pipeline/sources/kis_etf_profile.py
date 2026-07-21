@@ -33,6 +33,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..config import KisNavSource as KisEtfProfileSourceConfig
+from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 from .krx_etf import _short_code
@@ -74,13 +75,15 @@ class KisEtfProfileSource:
     def plan(self) -> list[tuple[str, str]]:
         """수집 대상 → [(our_etf_id, kis_symbol)]. ISIN → 6자리 단축코드(NAV 와 동일 규칙).
 
-        단축코드는 숫자 전용이 아니다 — 신규 상장분은 문자가 섞인다(0093A0 등, ALPHA-380).
+        단축코드는 숫자 전용이 아니다 — 신규 상장분은 문자가 섞인다(0093A0 등). 형태 판정은
+        `parse.krx_short_code`(선두 숫자 + 영숫자 6자) 하나로 간다(ALPHA-380·463).
         """
         out: list[tuple[str, str]] = []
         for our_etf_id, isin in sorted(self.etf_map.items()):
-            symbol = _short_code(isin)
-            if not (symbol.isalnum() and len(symbol) == 6):
-                self._note_failure(symbol, our_etf_id, f"단축코드 파생 실패: isin={isin}")
+            raw = _short_code(isin)
+            symbol = krx_short_code(raw)
+            if symbol is None:
+                self._note_failure(raw, our_etf_id, f"단축코드 파생 실패: isin={isin}")
                 continue
             out.append((our_etf_id, symbol))
         return out

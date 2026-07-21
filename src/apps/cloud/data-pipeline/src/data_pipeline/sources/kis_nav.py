@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 from ..config import KisNavSource as KisNavSourceConfig
+from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 from .krx_etf import _short_code
@@ -88,16 +89,17 @@ class KisNavSource:
 
         단축코드는 **숫자 전용이 아니다** — KRX 가 번호를 소진해 신규 상장분에는 문자가 섞인
         코드(0093A0·0005G0 등)를 발급하고, 우리 유니버스 31종 중 7종이 그렇다. KIS 는 이
-        코드도 그대로 받는다(2026-07-20 실측: 0093A0·0005G0 각 33행). 그래서 숫자 검사가
-        아니라 '6자리 영숫자'로 본다 — `isdigit()` 로 거르면 7종이 조용히 빠진다.
-        파생 결과가 6자리 영숫자가 아니면 질의하지 않고 실패로 드러낸다 — 엉뚱한 코드로
-        KIS 를 두드려 무의미한 오류를 쌓지 않는다.
+        코드도 그대로 받는다(2026-07-20 실측: 0093A0·0005G0 각 33행). 형태 판정은
+        `parse.krx_short_code`(선두 숫자 + 영숫자 6자) 하나로 간다 — `isdigit()` 로 거르면
+        7종이 조용히 빠지고(ALPHA-380·463), 파생이 6자리 코드꼴이 아니면 질의하지 않고
+        실패로 드러낸다(엉뚱한 코드로 KIS 를 두드려 무의미한 오류를 쌓지 않는다).
         """
         out: list[tuple[str, str]] = []
         for our_etf_id, isin in sorted(self.etf_map.items()):
-            symbol = _short_code(isin)
-            if not (symbol.isalnum() and len(symbol) == 6):
-                self._note_failure(symbol, our_etf_id, f"단축코드 파생 실패: isin={isin}")
+            raw = _short_code(isin)
+            symbol = krx_short_code(raw)
+            if symbol is None:
+                self._note_failure(raw, our_etf_id, f"단축코드 파생 실패: isin={isin}")
                 continue
             out.append((our_etf_id, symbol))
         return out
