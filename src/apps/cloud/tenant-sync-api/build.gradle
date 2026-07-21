@@ -18,10 +18,12 @@ repositories {
 }
 
 dependencies {
-	// 전달 레코드 리더는 인메모리 스텁 — JDBC 의존성은 저장 설계 확정 후 추가.
 	implementation project(':libs:jvm-common') // 에러 응답 봉투(ApiResponse)·에러 코드 규약
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// 전달 레코드(tenant_delivery ⋈ 경계면 테이블) 조회 — event-bundle-schema.md
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

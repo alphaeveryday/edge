@@ -45,6 +45,7 @@ services:
       retries: 10
 
   # SSOT 스키마(src/libs/schema)를 DB 에 적용하고 종료한다.
+  # 로컬 전용 시드(seed-local-cloud — SSOT 밖, CI·CD 미포함)를 함께 태운다.
   flyway:
     image: flyway/flyway:10.21.0
     container_name: edge-flyway
@@ -53,11 +54,12 @@ services:
         condition: service_healthy
     volumes:
       - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
+      - ./src/libs/schema/seed-local-cloud:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres:5432/edge
       -user=edge -password=edge
       -connectRetries=10
-      -locations=filesystem:/flyway/sql
+      -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
       migrate
 
   # [edge-onprem] 온프렘 플레인이므로 온프렘 PG 를 본다 (앱은 아직 DataSource
@@ -159,13 +161,20 @@ services:
     ports:
       - "18090:8080"
 
-  # Sync Agent 가 Pull 하는 Cloud 표면(ADR-0010). outbox 인메모리 스텁 — DB 의존 없음.
-  # gateway 를 타지 않는다(mTLS 직접 노출 유력 — TODO §6 gateway 존치 ADR과 함께 확정).
+  # Sync Agent 가 Pull 하는 Cloud 표면(ADR-0010) — tenant_delivery(outbox) DB 조회.
+  # gateway 를 타지 않는다(sync 전용 mTLS ALB — ADR-0034).
   tenant-sync-api:
     build:
       context: ./src
       dockerfile: apps/cloud/tenant-sync-api/Dockerfile
     container_name: edge-tenant-sync-api
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
     ports:
       - "18083:8080"
 

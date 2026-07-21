@@ -10,6 +10,8 @@ import java.time.LocalDate;
 public record ExplanationResult(
 		String explanationResultId,
 		String etfInstrumentId,
+		String etfTicker,
+		String etfName,
 		LocalDate tradeDate,
 		Instant explanationAsOf,
 		String explanationType,

@@ -180,6 +180,17 @@ module "tenant_sync_api" {
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
 
+  # tenant_delivery(outbox) 조회 — 앱이 JDBC 를 갖게 되면서 dev RDS 배선이 필수다
+  # (미주입 시 localhost 폴백 → DB health DOWN). 비밀번호는 RDS 관리형 시크릿 주입.
+  environment = {
+    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+    SPRING_DATASOURCE_USERNAME = module.rds.master_username
+  }
+  secrets = {
+    SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
+  }
+  secret_arns = [module.rds.master_user_secret_arn]
+
   # 인바운드는 sync ALB 에서만 — 태스크 직접 도달을 막아야 mTLS 헤더
   # (X-Amzn-Mtls-Clientcert-*) 신뢰가 성립한다(ALB 우회 경로 없음).
   target_group_arn           = module.sync_alb.target_group_arn
@@ -188,6 +199,15 @@ module "tenant_sync_api" {
   # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다 — LB 미연결 target group 으로
   # 서비스를 만들면 ECS 가 거부하므로(fresh apply 경쟁) 모듈 전체를 명시 의존한다.
   depends_on = [module.sync_alb]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_tenant_sync_api" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.tenant_sync_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "tenant-sync-api to postgres"
 }
 
 resource "aws_route53_record" "sync" {
