@@ -26,7 +26,8 @@ export const mockScreeningRepository: ScreeningRepository = {
   },
   async toggleWord(id) {
     const w = words.find((x) => x.id === id);
-    if (w) w.active = !w.active;
+    if (!w) throw new Error('금칙어를 찾을 수 없습니다.');
+    w.active = !w.active;
   },
   async getCriteria(): Promise<AutoPublishCriteria> {
     return { ...criteria };

@@ -37,6 +37,7 @@ export const mockScopeRepository: ScopeRepository = {
   },
   async toggleStock(code) {
     const s = stocks.find((x) => x.code === code);
-    if (s) s.enabled = !s.enabled;
+    if (!s) throw new Error('종목을 찾을 수 없습니다.');
+    s.enabled = !s.enabled;
   },
 };

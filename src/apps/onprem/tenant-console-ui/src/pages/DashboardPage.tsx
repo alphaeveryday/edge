@@ -2,12 +2,14 @@ import { useNavigate } from 'react-router-dom';
 import { Delta } from 'ui-kit';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
-import { RiskCell, StatusCell, StockCell } from './_shared/cells';
+import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const { data: items = [] } = useExplanations();
-  const { data: feed } = useFeedStatus();
+  const { data: items = [], isError } = useExplanations();
+  const { data: feed, isError: feedError } = useFeedStatus();
+
+  if (isError || feedError) return <LoadError />;
 
   const count = (status: string) => items.filter((it) => it.status === status).length;
 

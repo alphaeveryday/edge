@@ -1,5 +1,14 @@
-/* 목록·대시보드 테이블이 공유하는 셀 조각 */
+/* 목록·대시보드 테이블이 공유하는 셀 조각 + 조회 실패 표시 */
 import { StatusBadge } from 'ui-kit';
+
+/** 쿼리 실패를 빈 화면으로 위장하지 않는다 (Rule 12) */
+export function LoadError() {
+  return (
+    <div className="card card-pad" style={{ fontSize: 12, color: 'var(--down)' }}>
+      데이터를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.
+    </div>
+  );
+}
 import type { Explanation } from '../../domains/explanations';
 import { RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
 

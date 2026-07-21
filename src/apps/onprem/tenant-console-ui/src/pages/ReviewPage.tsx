@@ -4,14 +4,16 @@ import { Delta, Icon, StatusBadge } from 'ui-kit';
 import type { ReviewReason } from '../domains/explanations';
 import { REASON_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
-import { RiskCell, StockCell } from './_shared/cells';
+import { LoadError, RiskCell, StockCell } from './_shared/cells';
 
 export function ReviewPage() {
   const navigate = useNavigate();
-  const { data: items = [] } = useExplanations();
+  const { data: items = [], isError } = useExplanations();
 
   const [q, setQ] = useState('');
   const [fReason, setFReason] = useState<ReviewReason | 'ALL'>('ALL');
+
+  if (isError) return <LoadError />;
 
   const keyword = q.trim().toLowerCase();
   const pending = items.filter((it) => it.status === 'REVIEW_REQUIRED');

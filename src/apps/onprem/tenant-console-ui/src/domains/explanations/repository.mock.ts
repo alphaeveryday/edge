@@ -139,7 +139,9 @@ const items: Explanation[] = [
 
 function patch(id: number, updater: (it: Explanation) => Explanation): void {
   const idx = items.findIndex((it) => it.id === id);
-  if (idx >= 0) items[idx] = updater(items[idx]);
+  // real 구현의 404와 같은 의미로 실패를 드러낸다 — 없는 ID에 성공 토스트가 뜨지 않게
+  if (idx < 0) throw new Error('가격 변동 설명을 찾을 수 없습니다.');
+  items[idx] = updater(items[idx]);
 }
 
 export const mockExplanationsRepository: ExplanationsRepository = {

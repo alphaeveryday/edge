@@ -4,18 +4,20 @@ import { Delta, Icon } from 'ui-kit';
 import type { Market, RiskLevel, ServeStatus } from '../domains/explanations';
 import { RISK_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
-import { RiskCell, StatusCell, StockCell } from './_shared/cells';
+import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
 
 const MARKETS: Market[] = ['KRX', 'NASDAQ'];
 
 export function ExplanationsPage() {
   const navigate = useNavigate();
-  const { data: items = [] } = useExplanations();
+  const { data: items = [], isError } = useExplanations();
 
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<ServeStatus | 'ALL'>('ALL');
   const [fMarket, setFMarket] = useState<Market | 'ALL'>('ALL');
   const [fRisk, setFRisk] = useState<RiskLevel | 'ALL'>('ALL');
+
+  if (isError) return <LoadError />;
 
   const keyword = q.trim().toLowerCase();
   const filtered = items.filter(

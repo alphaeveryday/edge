@@ -5,15 +5,17 @@ import {
   MARKET_DESC, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
+import { LoadError } from './_shared/cells';
 
 export function ExplanationDetailPage() {
   const { id } = useParams();
-  const { explanation: it, isLoading } = useExplanation(Number(id));
+  const { explanation: it, isLoading, isError } = useExplanation(Number(id));
   const { updateFinal, stop, moveToReview } = useExplanationActions();
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
+  if (isError) return <LoadError />;
   if (isLoading) return null;
   if (!it) {
     return (

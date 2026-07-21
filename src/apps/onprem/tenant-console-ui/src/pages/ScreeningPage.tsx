@@ -4,6 +4,7 @@ import type { RiskLevel } from '../domains/explanations';
 import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
 import { useBannedWords, useCriteria, useDisclaimer, useScreeningActions } from '../domains/screening/hooks';
+import { LoadError } from './_shared/cells';
 
 const ACTION_LABEL: Record<WordAction, string> = { REVIEW: '검수 필요', BLOCK: '점검 차단' };
 
@@ -34,7 +35,7 @@ export function ScreeningPage() {
 }
 
 function WordsTab() {
-  const { data: words = [] } = useBannedWords();
+  const { data: words = [], isError } = useBannedWords();
   const { addWord, toggleWord } = useScreeningActions();
 
   const [text, setText] = useState('');
@@ -57,6 +58,8 @@ function WordsTab() {
       },
     );
   };
+
+  if (isError) return <LoadError />;
 
   return (
     <div className="flex flex-col gap-4">
@@ -133,10 +136,12 @@ function WordsTab() {
 }
 
 function RulesTab() {
-  const { data: criteria } = useCriteria();
+  const { data: criteria, isError } = useCriteria();
   const { updateCriteria } = useScreeningActions();
 
   const changed = () => toast('자동 제공 기준이 변경되었습니다.');
+
+  if (isError) return <LoadError />;
 
   return (
     <div className="grid grid-cols-3 gap-3">
@@ -225,11 +230,13 @@ function RulesTab() {
 }
 
 function DisclaimerTab() {
-  const { data: saved } = useDisclaimer();
+  const { data: saved, isError } = useDisclaimer();
   const { updateDisclaimer } = useScreeningActions();
   const [draft, setDraft] = useState<string>();
 
   const text = draft ?? saved ?? '';
+
+  if (isError) return <LoadError />;
 
   return (
     <div className="card max-w-[720px]">

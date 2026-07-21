@@ -2,25 +2,44 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Delta, Icon, StatusBadge, toast } from 'ui-kit';
 import {
-  MARKET_DESC, REASON_DESC, REASON_LABEL, RISK_LABEL, RISK_TONE,
+  MARKET_DESC, REASON_DESC, REASON_LABEL, RISK_LABEL, RISK_TONE, STATUS_LABEL,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
+import { LoadError } from './_shared/cells';
 
 export function ReviewDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { explanation: it, isLoading } = useExplanation(Number(id));
+  const { explanation: it, isLoading, isError } = useExplanation(Number(id));
   const { approve, reject, saveDraft } = useExplanationActions();
 
   // 로드 전에는 undefined — 화면에는 최종 문구를 초기값으로 보여준다
   const [draft, setDraft] = useState<string>();
   const [note, setNote] = useState('');
 
+  if (isError) return <LoadError />;
   if (isLoading) return null;
   if (!it) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
         해당 검수 항목을 찾을 수 없습니다.
+      </div>
+    );
+  }
+  // 검수 대기 상태가 아닌 항목은 승인·반려 표면 자체를 열지 않는다 (URL 직접 진입 가드)
+  if (it.status !== 'REVIEW_REQUIRED') {
+    return (
+      <div className="flex max-w-[860px] flex-col gap-4">
+        <div>
+          <Link to="/review" className="inline-flex items-center gap-1" style={{ fontSize: 12 }}>
+            <Icon name="chevronLeft" size={13} strokeWidth={1.8} />
+            검수 대기 목록
+          </Link>
+        </div>
+        <div className="card card-pad" style={{ fontSize: 12, color: 'var(--fg-2)' }}>
+          {it.name}({it.code}) 설명은 현재 검수 대기 상태가 아닙니다 — {STATUS_LABEL[it.status]}.
+          상세는 <Link to={`/explanations/${it.id}`}>가격 변동 설명 상세</Link>에서 확인하세요.
+        </div>
       </div>
     );
   }

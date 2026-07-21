@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Icon, Toggle, toast } from 'ui-kit';
 import type { Market } from '../domains/explanations';
 import { useMarketScopes, useScopeActions, useStockScopes } from '../domains/scope/hooks';
+import { LoadError } from './_shared/cells';
 
 const MARKET_TITLE: Record<Market, { name: string; sub: string; desc: string }> = {
   KRX: { name: 'KRX', sub: '한국거래소', desc: '국내 상장 종목의 가격 변동 설명을 제공합니다.' },
@@ -9,13 +10,19 @@ const MARKET_TITLE: Record<Market, { name: string; sub: string; desc: string }> 
 };
 
 export function ScopePage() {
-  const { data: markets = [] } = useMarketScopes();
-  const { data: stocks = [] } = useStockScopes();
+  const marketsQuery = useMarketScopes();
+  const stocksQuery = useStockScopes();
   const { toggleMarket, toggleStock } = useScopeActions();
 
   const [q, setQ] = useState('');
 
-  const marketEnabled = (market: Market) => markets.find((m) => m.market === market)?.enabled ?? true;
+  if (marketsQuery.isError || stocksQuery.isError) return <LoadError />;
+  // 시장 상태를 모르는 채 종목 토글을 그리면 비활성 시장이 활성으로 보인다 — 둘 다 로드된 뒤 렌더
+  if (marketsQuery.isPending || stocksQuery.isPending) return null;
+
+  const markets = marketsQuery.data;
+  const stocks = stocksQuery.data;
+  const marketEnabled = (market: Market) => markets.find((m) => m.market === market)?.enabled ?? false;
   const keyword = q.trim().toLowerCase();
   const filtered = stocks.filter(
     (s) => !keyword || s.name.toLowerCase().includes(keyword) || s.code.toLowerCase().includes(keyword),

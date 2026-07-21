@@ -3,9 +3,10 @@ import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
 import { useSession } from '../domains/session/hooks';
 import type { MemberRole } from '../domains/users';
 import { useInviteMember, useMembers } from '../domains/users/hooks';
+import { LoadError } from './_shared/cells';
 
 export function UsersPage() {
-  const { data: members = [] } = useMembers();
+  const { data: members = [], isError } = useMembers();
   const { data: session } = useSession();
   const invite = useInviteMember();
 
@@ -19,6 +20,11 @@ export function UsersPage() {
       toast('올바른 이메일을 입력하세요.');
       return;
     }
+    // 안내 문구("조직 이메일 도메인만 가입 가능")와 검증을 일치시킨다
+    if (session && !value.toLowerCase().endsWith(`@${session.tenantDomain.toLowerCase()}`)) {
+      toast(`조직 이메일(@${session.tenantDomain})만 초대할 수 있습니다.`);
+      return;
+    }
     invite.mutate(
       { email: value, role },
       {
@@ -29,6 +35,8 @@ export function UsersPage() {
       },
     );
   };
+
+  if (isError) return <LoadError />;
 
   return (
     <div className="flex max-w-[960px] flex-col gap-4">
