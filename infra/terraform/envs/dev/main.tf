@@ -45,6 +45,9 @@ data "aws_ecr_repository" "super_admin_api" {
   name = "edge/super-admin-api"
 }
 
+# ⚠️ apply 순서: 이 저장소는 foundation(수동 apply)이 만든다. foundation 적용 전에 dev 가
+# apply 되면(머지 시 terraform-apply.yml 자동 실행 포함) 여기서 조회 실패로 중단된다 —
+# 의도된 순서 강제 장치(infra/terraform/README "apply 순서"). foundation 적용 후 재실행하면 된다.
 data "aws_ecr_repository" "tenant_sync_api" {
   name = "edge/tenant-sync-api"
 }
