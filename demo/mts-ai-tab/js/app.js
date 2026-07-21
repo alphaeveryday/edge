@@ -269,9 +269,11 @@
       var data = result.data;
       el('ai-date').textContent = data.trade_date;
       el('ai-date-dot').style.display = 'inline';
-      // published_at 은 오프셋 포함 ISO 문자열 — 브라우저 로컬(시연 환경=KST) 시각으로 표기한다
-      var published = new Date(data.published_at);
-      el('ai-published').textContent = ('0' + published.getHours()).slice(-2) + ':' + ('0' + published.getMinutes()).slice(-2) + ' 게시';
+      // 게시 시각은 뷰어 타임존과 무관하게 거래소 시간(KST)으로 표기한다
+      var published = new Date(data.published_at).toLocaleTimeString('ko-KR', {
+        timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      el('ai-published').textContent = published + ' 게시';
       // summary 는 빈 줄 구분 문단 텍스트 — 블록이 여럿이면 첫 블록을 헤드라인으로 올린다(시드 규칙)
       var blocks = data.summary.split(/\n{2,}/);
       var headline = blocks.length > 1 ? blocks.shift() : null;
