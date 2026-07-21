@@ -168,6 +168,14 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-documents', '--run-id', $.run_id)"
     },
+    {
+      # 가격 원장 적재(ALPHA-377) — canonical price_daily → price_daily. LoadEtfNav 와 같은 슬롯:
+      # normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있어 feature 페이즈에 둔다.
+      # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
+      state        = "LoadPriceDaily"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-price-daily', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
