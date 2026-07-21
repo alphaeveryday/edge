@@ -21,9 +21,13 @@ gh api graphql -f query='
       comments(first:1) { nodes { author{login} path line body } } } } } } }'
 ```
 
-`isResolved==false && isOutdated==false` 이고 작성자가 `chatgpt-codex-connector` 인 스레드만 현재 finding 이다.
+`isResolved==false && isOutdated==false` 이고 작성자가 `chatgpt-codex-connector` 인 스레드만 현재 finding 이다. 이 기존 finding 을 수용 판단한 뒤 분기한다:
 
-**REST `pulls/<N>/comments` 의 `commit_id == headRefOid` 로 최신성을 판정하지 마라** — `commit_id` 는 코멘트가 *달린* 커밋일 뿐이고, 이후 push 가 그 finding 의 줄을 건드리지 않으면 스레드는 여전히 active 인데 `commit_id` 는 옛 SHA 그대로다. SHA 로 거르면 **아직 살아 있는 finding 을 떨어뜨려** 조용히 놓친다. 반대로 REST 를 필터 없이 쓰면 resolved·outdated 를 되살린다 — 그래서 스레드 상태가 정답이다. 베이스라인부터 잡으면 사용자가 처리하려던 **바로 그 기존 finding 이 베이스라인에 묻혀** 새 신호를 기다리다 타임아웃한다. 기존 finding 을 반영(또는 전건 비수용)한 뒤에야 아래 베이스라인-이후 방식으로 넘어간다. pr-cycle 경유(PR 생성 직후 진입)는 아직 리뷰가 없어 이 단계가 자연히 비고 바로 베이스라인으로 간다.
+- **하나라도 수용** → 아래 반영 루프(수정→push→재리뷰→풀링)로 간다.
+- **전건 비수용** → **여기서 종료**하고 비수용 목록을 반환한다. 풀링으로 내려가지 마라 — 새 커밋도 재리뷰 요청도 없어 관찰할 새 신호가 없고, "전건 비수용"은 이미 터미널 조건이다(풀링으로 가면 타임아웃까지 헛돈다).
+- **현재 finding 이 없음**(pr-cycle 경유 신선 진입 등) → 아래 베이스라인·풀링으로 간다.
+
+**REST `pulls/<N>/comments` 의 `commit_id == headRefOid` 로 최신성을 판정하지 마라** — `commit_id` 는 코멘트가 *달린* 커밋일 뿐이고, 이후 push 가 그 finding 의 줄을 건드리지 않으면 스레드는 여전히 active 인데 `commit_id` 는 옛 SHA 그대로다. SHA 로 거르면 **아직 살아 있는 finding 을 떨어뜨려** 조용히 놓친다. 반대로 REST 를 필터 없이 쓰면 resolved·outdated 를 되살린다 — 그래서 스레드 상태가 정답이다. (베이스라인부터 잡으면 사용자가 처리하려던 바로 그 기존 finding 이 베이스라인에 묻혀 새 신호를 기다리다 타임아웃하므로, 위 분기를 베이스라인보다 **먼저** 둔다.)
 
 ## 풀링
 
