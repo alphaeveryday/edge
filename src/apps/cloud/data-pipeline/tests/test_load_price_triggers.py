@@ -1,4 +1,4 @@
-"""load_price_triggers 스텝 테스트 — 구성종목 proxy 게이트 (ALPHA-406 → 411 정본화).
+"""load_price_triggers 스텝 테스트 — 구성종목 proxy 게이트 (ALPHA-406 → 411 → 465).
 
 실 DB 없이 돈다 — 가짜 커넥션이 실행된 SQL·파라미터를 기록한다(load_instruments 테스트 동형).
 
@@ -8,6 +8,9 @@
   깨지면 잔잔한 날까지 트리거가 생겨 분석이 헛돌고, 정책 이행이 깨지면 잠정 0.5% 계열이
   영구히 남아 3% 정책을 우회하며, detected_at 이 런타임 시계를 타면 uq 세 번째 키가 달라져
   중복을 DB 제약도 못 막는다.
+
+  유니버스는 holdings∩마스터에서 파생한다(ALPHA-465) — 1종 결손이 나머지를 죽이지 않고,
+  coverage·트리거가 ETF 축으로 분리돼 서로 덮지 않아야 한다.
 """
 
 import io
@@ -39,24 +42,26 @@ def _write_prices(storage, trade_date: str, rows: list[dict]) -> None:
                       buf.getvalue())
 
 
-def _write_holdings(storage, as_of: str, rows: list[dict]) -> None:
+def _write_holdings(storage, as_of: str, rows: list[dict], etf: str = _ETF) -> None:
+    """한 ETF 의 holdings 를 그 ETF 전용 파일로 쓴다 — 한 스냅샷에 여러 ETF 가 공존한다
+    (_holdings_by_etf 가 파티션의 .parquet 을 모두 읽어 etf_id 로 그룹핑하므로)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     schema = pa.schema([("etf_id", pa.string()), ("constituent_ticker", pa.string()),
                         ("weight_pct", pa.float64())])
-    table = pa.Table.from_pylist([{"etf_id": _ETF, **r} for r in rows], schema=schema)
+    table = pa.Table.from_pylist([{"etf_id": etf, **r} for r in rows], schema=schema)
     buf = io.BytesIO()
     pq.write_table(table, buf)
-    storage.put_bytes(f"{canonical_etf_holdings_partition('KR', as_of)}/part-00000.parquet",
+    storage.put_bytes(f"{canonical_etf_holdings_partition('KR', as_of)}/part-{etf}.parquet",
                       buf.getvalue())
 
 
-def _default_holdings(storage, as_of: str = "2026-07-01") -> None:
+def _default_holdings(storage, as_of: str = "2026-07-01", etf: str = _ETF) -> None:
     _write_holdings(storage, as_of, [
         {"constituent_ticker": "005930", "weight_pct": 60.0},
         {"constituent_ticker": "000660", "weight_pct": 40.0},
-    ])
+    ], etf=etf)
 
 
 class _FakeCursor:
@@ -70,12 +75,14 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self._conn.log.append((flat, params))
-        if flat.startswith("SELECT instrument_id"):
-            # 후보 목록으로 돌려준다 — 스텝이 fetchall 로 0·1·복수를 구분하기 때문(ALPHA-448).
-            ids = self._conn.etf_id
-            self._all = [(i,) for i in ([ids] if isinstance(ids, str) else ids or [])]
-        elif flat.startswith("SELECT t.trade_date"):
-            self._all = [(d, p, i, o) for d, rows in self._conn.existing.items()
+        if flat.startswith("SELECT ticker, instrument_id"):
+            # 시장(MIC) 고정 조회라 ticker 가 유일 — (ticker, id) dict 를 준다(ALPHA-465).
+            self._all = list(self._conn.master.items())
+        elif flat.startswith("SELECT t.etf_instrument_id"):
+            # = ANY(%s) 로 유니버스 전체를 한 번에 — etf_instrument_id 를 첫 컬럼으로 돌려준다.
+            self._all = [(eid, d, p, i, o)
+                         for eid, dates in self._conn.existing.items()
+                         for d, rows in dates.items()
                          for (p, i, o) in rows]
 
     def fetchall(self):
@@ -89,10 +96,11 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, etf_id="inst_ETF", existing=None):
+    def __init__(self, master=None, existing=None):
         self.log: list = []
-        self.etf_id = etf_id
-        # trade_date → [(policy_version, trigger_id, 계보 참조 여부), ...]
+        # ETF ticker → instrument_id (마스터). 기본은 _ETF 한 종.
+        self.master = {_ETF: "inst_ETF"} if master is None else master
+        # etf_instrument_id → {trade_date → [(policy_version, trigger_id, 계보 참조 여부), ...]}
         self.existing = existing or {}
 
     def cursor(self):
@@ -109,9 +117,10 @@ def _patch_connect(monkeypatch, conn):
     monkeypatch.setattr(load_price_triggers, "connect", fake_connect)
 
 
-def _run(storage, conn, monkeypatch, **kwargs):
+def _run(storage, conn, monkeypatch, *, etf_ticker=_ETF, **kwargs):
+    """기본은 _ETF 한 종으로 좁혀 돈다(단일 ETF 의도 테스트). 유니버스 전체는 etf_ticker=None."""
     _patch_connect(monkeypatch, conn)
-    config = PriceTriggersConfig(etf_ticker=_ETF, abs_threshold=0.03,
+    config = PriceTriggersConfig(etf_ticker=etf_ticker, abs_threshold=0.03,
                                  policy_version="l0-abs-v1")
     return load_price_triggers.run(storage, "run-test", db=DbConfig(password="x"),
                                    config=config, **kwargs)
@@ -154,6 +163,7 @@ def test_observed_return_is_holdings_weighted_proxy(tmp_path, monkeypatch):
     assert _run(storage, conn, monkeypatch) == 0
 
     [( _sql, params )] = _inserts(conn)
+    assert params[1] == "inst_ETF"       # 트리거는 이 ETF 의 도메인 ID 에 매달린다
     assert params[2] == "2026-07-16"
     assert abs(params[4] - 0.038) < 1e-9, "proxy 산식이 엔진 정본과 다르다"
     # 엔진 l0_gate 사유 포맷을 **접두로** 유지한다 — 뒤에 coverage 를 덧붙였다(ALPHA-452).
@@ -216,7 +226,8 @@ def test_thin_coverage_trigger_records_how_thin_it_was(tmp_path, monkeypatch):
     assert "coverage=0.0100" in params[6]         # 행이 근거의 두께를 들고 있다
     log = _quality_log(storage)
     assert log["created_rows"][0]["coverage"] == 0.01
-    assert log["coverage_by_date"]["2026-07-16"] == 0.01
+    assert log["created_rows"][0]["etf_ticker"] == _ETF
+    assert log["coverage_by_etf_date"][_ETF]["2026-07-16"] == 0.01
     assert log["coverage_min"] == 0.01
 
 
@@ -236,7 +247,7 @@ def test_coverage_is_recorded_for_gated_out_days_too(tmp_path, monkeypatch):
 
     log = _quality_log(storage)
     assert log["gated_out"] == 1 and log["created"] == 0   # 잔잔한 날 — 트리거 없음
-    assert log["coverage_by_date"]["2026-07-16"] == 0.6    # 그래도 coverage 는 남는다
+    assert log["coverage_by_etf_date"][_ETF]["2026-07-16"] == 0.6   # 그래도 coverage 는 남는다
 
 
 def test_idempotent_rerun_skips_same_policy_rows(tmp_path, monkeypatch):
@@ -245,7 +256,7 @@ def test_idempotent_rerun_skips_same_policy_rows(tmp_path, monkeypatch):
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(existing={"2026-07-16": [("l0-abs-v1", "pmt_X", False)]})
+    conn = _FakeConn(existing={"inst_ETF": {"2026-07-16": [("l0-abs-v1", "pmt_X", False)]}})
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _inserts(conn) == [] and _deletes(conn) == []
@@ -259,7 +270,7 @@ def test_stale_policy_row_without_lineage_is_replaced(tmp_path, monkeypatch):
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 10100.0}])  # +1% < 3%
-    conn = _FakeConn(existing={"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", False)]})
+    conn = _FakeConn(existing={"inst_ETF": {"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", False)]}})
 
     assert _run(storage, conn, monkeypatch) == 0
     [(_sql, params)] = _deletes(conn)
@@ -276,7 +287,7 @@ def test_stale_policy_row_with_lineage_is_kept_and_counted(tmp_path, monkeypatch
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(existing={"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", True)]})
+    conn = _FakeConn(existing={"inst_ETF": {"2026-07-16": [("pipeline-absolute-v0", "pmt_OLD", True)]}})
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _deletes(conn) == [] and _inserts(conn) == []
@@ -311,10 +322,10 @@ def test_same_date_multiple_rows_are_each_judged(tmp_path, monkeypatch):
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(existing={"2026-07-16": [
+    conn = _FakeConn(existing={"inst_ETF": {"2026-07-16": [
         ("l0-abs-v1", "pmt_CURRENT", False),
         ("pipeline-absolute-v0", "pmt_OLD", False),
-    ]})
+    ]}})
 
     assert _run(storage, conn, monkeypatch) == 0
     assert [p for _s, p in _deletes(conn)] == [("pmt_OLD",)]  # stale 은 정리되고
@@ -338,52 +349,136 @@ def test_detected_at_is_deterministic_market_close(tmp_path, monkeypatch):
     assert params[5] == "l0-abs-v1"
 
 
-def test_missing_etf_master_fails_loud_with_quality_log(tmp_path, monkeypatch):
-    """마스터에 ETF 가 없으면 비0 종료 + quality log — "돌았는데 전제 결손"과 "안 돌았다"가
-    레이크 감사에서 구분돼야 한다("결과는 항상 로그")."""
-    storage = LocalStorage(tmp_path)
-    _default_holdings(storage)
-    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
-    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(etf_id=None)
+def test_holdings_etf_absent_from_master_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """holdings 에 있으나 마스터에 없는 ETF 는 **그 ETF 만 skip+카운트** — 런은 계속되고 exit 0.
 
-    assert _run(storage, conn, monkeypatch) == 1
-    assert _inserts(conn) == []
-    log = _quality_log(storage)
-    assert log["exit_code"] == 1
-    assert log["failures"][0]["reasons"] == ["missing_etf_master"]
-
-
-def test_ambiguous_etf_master_fails_loud_instead_of_picking_one(tmp_path, monkeypatch):
-    """같은 ticker 의 ETF instrument 가 복수면 **아무것도 만들지 않는다**(ALPHA-448).
-
-    식별 자연키는 (market_code, ticker) 인데 조회 축은 ticker 뿐이라, 한 건을 집으면 어느
-    시장의 ETF 인지 비결정적이다 — 잘못된 ETF 에 매달린 트리거는 그 뒤 분석·설명까지
-    오염시키고 트리거만 봐선 되돌릴 근거가 없다. 0건과 같은 등급으로 막는다.
+    구 동작은 런 전체 exit 1(missing_etf_master)이었다. 유니버스가 다중 ETF 가 되면 1종
+    시드 누락이 나머지 30종을 통째로 죽이면 안 된다 — 조용히 버리지도, 전량 중단하지도 않고
+    수치로 드러낸다(Rule 12, ALPHA-465).
     """
     storage = LocalStorage(tmp_path)
     _default_holdings(storage)
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(etf_id=["inst_ETF_KR", "inst_ETF_US"])
+    conn = _FakeConn(master={})  # 마스터에 ETF 없음
 
-    assert _run(storage, conn, monkeypatch) == 1
-    assert _inserts(conn) == []  # 임의 선택으로 트리거가 생기지 않는다
+    assert _run(storage, conn, monkeypatch, etf_ticker=None) == 0
+    assert _inserts(conn) == []
     log = _quality_log(storage)
-    assert log["exit_code"] == 1
-    assert log["failures"][0]["reasons"] == ["ambiguous_etf_master"]
+    assert log["exit_code"] == 0
+    assert log["skipped_unknown_etf"] == 1
+    assert log["etf_tickers"] == []
+    assert log["failures"][0]["reasons"] == ["skipped_unknown_etf"]
+    assert log["failures"][0]["etf_ids"] == [_ETF]
+
+
+def test_one_unknown_etf_does_not_block_the_rest_of_universe(tmp_path, monkeypatch):
+    """holdings 두 ETF 중 하나만 마스터에 있다 — 없는 것만 skip 되고 있는 것은 정상 트리거를
+    만든다. 1종 결손이 유니버스를 죽이지 않는다(Rule 9 — 픽스처가 다중 ETF 라야 잡힌다)."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage, etf="091160")  # 마스터 O (005930 60/000660 40)
+    _write_holdings(storage, "2026-07-01",
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="999999")  # 마스터 X
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn(master={"091160": "inst_SEMI"})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None) == 0
+    inserts = _inserts(conn)
+    assert len(inserts) == 1
+    assert inserts[0][1][1] == "inst_SEMI"   # 091160 에만 트리거가 매달린다
+    log = _quality_log(storage)
+    assert log["skipped_unknown_etf"] == 1 and log["created"] == 1
+    assert log["etf_tickers"] == ["091160"]
+    assert log["failures"][0]["etf_ids"] == ["999999"]
+
+
+def test_coverage_is_recorded_per_etf_not_mixed(tmp_path, monkeypatch):
+    """두 ETF 가 같은 거래일에 서로 다른 coverage 를 내면 각자 남아야 한다 — date 단일 맵이면
+    한 ETF 가 다른 ETF 의 coverage 를 조용히 덮는다(Rule 9 — 다중 ETF 픽스처라야 회귀를 잡음)."""
+    storage = LocalStorage(tmp_path)
+    _write_holdings(storage, "2026-07-01",
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="091160")
+    _write_holdings(storage, "2026-07-01", [
+        {"constituent_ticker": "005930", "weight_pct": 50.0},
+        {"constituent_ticker": "000660", "weight_pct": 50.0},  # 가격 결측 → coverage 0.5
+    ], etf="111111")
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn(master={"091160": "inst_A", "111111": "inst_B"})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None) == 0
+    assert len(_inserts(conn)) == 2  # 둘 다 proxy 10% ≥ 3%
+    log = _quality_log(storage)
+    assert log["coverage_by_etf_date"]["091160"]["2026-07-16"] == 1.0
+    assert log["coverage_by_etf_date"]["111111"]["2026-07-16"] == 0.5  # 안 덮인다
+
+
+def test_windowed_run_excludes_etfs_only_in_snapshots_after_window(tmp_path, monkeypatch):
+    """--to 백필의 유니버스 탐색은 창 이후 첫 스냅샷까지만 본다(Codex P2). 그 뒤에만 있는
+    ETF 는 창 안 어떤 거래일의 as_of 로도 안 뽑히므로 유니버스에 끌려들지 않고, 그 파티션을
+    읽지 않아 손상돼도 실행을 죽이지 않는다. 과거 스냅샷은 stale 정합상 상한 없이 다 본다."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage, as_of="2026-07-01", etf="091160")  # 창 이하 — 대상
+    _write_holdings(storage, "2026-07-20",  # to(07-16) 이후 첫 스냅샷 — 경계까지는 스캔
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="091160")
+    _write_holdings(storage, "2026-08-01",  # 경계 밖 — 여기에만 있는 ETF 는 제외돼야
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="888888")
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn(master={"091160": "inst_A", "888888": "inst_B"})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None, to_date="2026-07-16") == 0
+    log = _quality_log(storage)
+    assert "091160" in log["etf_tickers"]
+    assert "888888" not in log["etf_tickers"]  # 창+1 밖 스냅샷의 ETF 는 백필에 안 끌려든다
 
 
 def test_missing_holdings_counts_not_crashes(tmp_path, monkeypatch):
-    """holdings 스냅샷이 없으면 proxy 를 만들 수 없다 — 수치로 남기고 넘어간다."""
+    """holdings 스냅샷이 없으면 proxy 를 만들 수 없다 — 수치로 남기고 넘어간다.
+
+    필터(_ETF)가 마스터에 있으면 유니버스에 들고(전 스냅샷 스캔 없이 지연 해소), holdings
+    결손은 거래일별로 missing_holdings 로 계측된다(단일 ETF 원래 의도)."""
     storage = LocalStorage(tmp_path)  # holdings 미작성
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
     conn = _FakeConn()
 
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 0  # etf_ticker=_ETF 필터(기본)
     assert _inserts(conn) == []
-    assert _quality_log(storage)["missing_holdings"] == 1
+    assert _quality_log(storage)["missing_holdings"] == 1  # 7-16 이 대상, holdings 없음
+
+
+def test_unknown_etf_filter_fails_loud(tmp_path, monkeypatch):
+    """옵션 필터가 마스터에 없는 티커(오타)면 빈 성공이 아니라 exit 1 — 요청한 백필이 수행
+    안 된 걸 조용히 넘기지 않는다(Rule 12, edge-review F1)."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage)  # 091160 holdings 존재
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn(master={"091160": "inst_ETF"})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker="09116O") == 1  # 오타 티커
+    assert _inserts(conn) == []
+    log = _quality_log(storage)
+    assert log["exit_code"] == 1
+    assert log["etf_tickers"] == []
+    assert log["failures"][0]["reasons"] == ["unknown_etf_filter"]
+    assert log["failures"][0]["etf_ids"] == ["09116O"]
+
+
+def test_empty_universe_with_prices_is_flagged(tmp_path, monkeypatch):
+    """가격 파티션은 있으나 holdings 가 전량 없으면(유니버스=∅) considered=0·exit 0 로 조용히
+    끝나지 않고 결손 신호를 남긴다(Rule 12, edge-review F2). 전종 실행(필터 없음) 경로."""
+    storage = LocalStorage(tmp_path)  # holdings 미작성
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None) == 0
+    log = _quality_log(storage)
+    assert log["etf_tickers"] == []
+    assert any(f["reasons"] == ["empty_universe"] for f in log["failures"])
 
 
 def test_nonfinite_close_treated_as_missing(tmp_path, monkeypatch):
@@ -417,12 +512,9 @@ def test_window_narrows_target_dates(tmp_path, monkeypatch):
 def test_future_fallback_skips_partitions_without_target_etf(tmp_path, monkeypatch):
     """미래 폴백은 대상 ETF 행이 있는 첫 스냅샷을 고른다(Codex #144 P2) — 파티션은
     (market, as_of_date) 단위라 다른 ETF 만 있을 수 있다(ETF 단위 격리 실패 등). 빈
-    파티션(dates[0])을 고르면 폴백이 무산돼 missing_holdings 로 되돌아간다."""
+    파티션을 고르면 폴백이 무산돼 missing_holdings 로 되돌아간다."""
     storage = LocalStorage(tmp_path)
     _write_holdings(storage, "2026-07-16", [])  # 파티션은 있으나 대상 ETF 행 없음
-    storage.put_bytes(
-        f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet",
-        storage.get_bytes(f"{canonical_etf_holdings_partition('KR', '2026-07-16')}/part-00000.parquet"))
     _default_holdings(storage, as_of="2026-07-17")  # 대상 ETF 는 다음 스냅샷부터
     _write_prices(storage, "2026-07-14", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 11000.0}])  # +10%
