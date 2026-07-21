@@ -1,0 +1,154 @@
+# 가상 온프렘 데모 박스 — 단일 EC2 + Docker Compose (ADR-0017·0033).
+# terraform 은 서버·부트스트랩까지만 만든다. 온프렘 스택(compose·이미지)은
+# CD(SSM Run Command)가 얹는다 — apply(인프라)와 코드 배포는 별개 수명주기다.
+
+data "aws_region" "current" {}
+
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+# ── IAM: SSM 관리형 + ECR pull + cert 파라미터 read ─────
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "this" {
+  name               = "${var.name}-ec2"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+}
+
+# SSM 관리형 인스턴스(에이전트 → SSM 컨트롤플레인). CD 가 SSM Run Command 로 배포하는 전제.
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.this.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# ECR pull(로그인 + 레이어). 저장소는 var 로 스코프(비면 전체).
+resource "aws_iam_role_policy" "ecr" {
+  name = "${var.name}-ecr-pull"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchCheckLayerAvailability",
+        ]
+        Resource = length(var.ecr_repository_arns) > 0 ? var.ecr_repository_arns : ["*"]
+      },
+    ]
+  })
+}
+
+# 데모 mTLS cert(SSM SecureString) read. 복호화는 aws/ssm 관리형 키 경유 조건으로 한정.
+resource "aws_iam_role_policy" "cert" {
+  name = "${var.name}-cert-read"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = var.cert_parameter_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+        Condition = {
+          StringEquals = { "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com" }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "this" {
+  name = "${var.name}-ec2"
+  role = aws_iam_role.this.name
+}
+
+# ── 보안그룹: outbound all / inbound 는 prefix list(예: CloudFront)만. SSM·SSH inbound 0. ─
+resource "aws_security_group" "this" {
+  name        = "${var.name}-ec2"
+  description = "demo on-prem box ${var.name}"
+  vpc_id      = var.vpc_id
+  tags        = { Name = "${var.name}-ec2" }
+}
+
+resource "aws_vpc_security_group_egress_rule" "all" {
+  security_group_id = aws_security_group.this.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "all egress (ECR pull, cloud sync mTLS, SSM)"
+}
+
+# CloudFront 오리진 프리픽스 등에서만 mock-broker 포트로 인바운드. publication-api 는 비공개(내부 유지).
+resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
+  count             = length(var.ingress_prefix_list_ids)
+  security_group_id = aws_security_group.this.id
+  prefix_list_id    = var.ingress_prefix_list_ids[count.index]
+  ip_protocol       = "tcp"
+  from_port         = var.mock_broker_port
+  to_port           = var.mock_broker_port
+  description       = "mock-broker from allowed prefix list (e.g. CloudFront origin-facing)"
+}
+
+# ── EC2 ────────────────────────────────────────────────
+resource "aws_instance" "this" {
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  vpc_security_group_ids      = [aws_security_group.this.id]
+  iam_instance_profile        = aws_iam_instance_profile.this.name
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    compose_version = var.compose_version
+  })
+
+  root_block_device {
+    volume_size = var.root_volume_size
+    volume_type = var.root_volume_type
+    iops        = var.root_volume_iops
+    encrypted   = true
+  }
+
+  # CD(SSM Run Command)가 이 태그로 인스턴스를 스코프한다.
+  tags = {
+    Name        = var.name
+    "edge:role" = "demo-onprem"
+  }
+}
+
+resource "aws_eip" "this" {
+  count    = var.associate_eip ? 1 : 0
+  instance = aws_instance.this.id
+  domain   = "vpc"
+  tags     = { Name = "${var.name}-eip" }
+}

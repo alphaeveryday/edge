@@ -1,0 +1,18 @@
+#!/bin/bash
+# 데모 온프렘 박스 부트스트랩 — docker + compose 플러그인까지만 (ADR-0033).
+# 온프렘 스택(compose 파일·이미지)은 CD(SSM Run Command)가 얹는다.
+# SSM 에이전트는 AL2023 에 기본 탑재 — 별도 설치 불필요.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker
+systemctl enable --now docker
+
+# docker compose v2 플러그인 (배포 산출물이 compose 라 필수)
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# CD 가 compose 파일을 놓을 자리
+mkdir -p /opt/edge
