@@ -41,19 +41,6 @@ _KST = timezone(timedelta(hours=9))
 # 프롬프트가 한국어 제목 전제라 실질 판정은 ko 에서 나온다(엔진도 전 파티션을 읽었다).
 LANGUAGES = ("ko", "en")
 
-# KODEX 반도체 핵심 구성종목 — threading 대상 필터(엔진 KODEX_CONSTITUENTS verbatim).
-KODEX_CONSTITUENTS: dict[str, tuple[str, float]] = {
-    "000660": ("SK하이닉스", 0.40),
-    "005930": ("삼성전자", 0.20),
-    "042700": ("한미반도체", 0.05),
-    "036930": ("주성엔지니어링", 0.04),
-    "240810": ("원익IPS", 0.024),
-    "058470": ("리노공업", 0.021),
-    "319660": ("피에스케이", 0.020),
-    "000990": ("DB하이텍", 0.020),
-    "039030": ("이오테크닉스", 0.020),
-}
-
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -406,10 +393,6 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     return created
 
 
-def select_kodex_events(events: list[dict]) -> list[dict]:
-    return [e for e in events if e["ticker"] in KODEX_CONSTITUENTS]
-
-
 def thread_events(conn, events: list[dict]) -> None:
     """event_thread 계보 — 엔진 thread_events 이식(novelty FIRST/FOLLOW_UP 판정).
 
@@ -476,6 +459,40 @@ def thread_events(conn, events: list[dict]) -> None:
         )
 
 
+def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
+    """그 event_date 의 아직 event_thread_link 가 없는 NEWS source_event 전체.
+
+    threading 대상을 '이번 run 신규분(created)'이 아니라 '미연결 전체'로 잡는다 — 분류는
+    비싸 이미 조립된 기사를 건너뛰지만(assembled_source_ids), threading 은 싸고 멱등이라
+    재실행마다 미연결분을 채워야 한다. 안 그러면 배포 전 KODEX-only 로 조립돼 미연결로 남은
+    과거 이벤트가 영영 계보 없이 남고, _thread_prior_counts 가 그걸 못 세 같은 스레드 새
+    이벤트의 novelty 까지 오염된다(ALPHA-468 edge-review). 이미 엮인 이벤트는 제외라
+    prior_count 와 겹치지 않아 novelty 판정이 안전하다. source_event 는 in-universe 로만
+    조립되므로 별도 유니버스 필터가 필요 없다.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT ON (se.source_event_id)"
+            " se.source_event_id, se.event_type_code, ea.entity_id, se.available_at"
+            " FROM source_event se"
+            " JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
+            " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
+            # event_status='ACTIVE' 는 엔진 read 경로(fetch_kodex_events)와 같은 필터 — 비활성
+            # (REJECTED 등) 이벤트를 엮으면 prior_count 가 그걸 세 같은 스레드 첫 ACTIVE 를
+            # 잘못 FOLLOW_UP 으로 판정한다(edge-review). 설명이 읽는 집합과 threading 집합을 맞춘다.
+            " WHERE se.event_date = %s AND se.source_class = 'NEWS'"
+            " AND se.event_status = 'ACTIVE' AND etl.source_event_id IS NULL"
+            " ORDER BY se.source_event_id, ea.entity_id",
+            (event_date,),
+        )
+        rows = cur.fetchall()
+    return [
+        {"source_event_id": str(r[0]), "event_type_code": r[1],
+         "entity_id": str(r[2]), "available_at": _iso(r[3])}
+        for r in rows
+    ]
+
+
 def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
     if not thread_keys:
         return {}
@@ -507,7 +524,7 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
-    classified = events_created = kodex_threaded = 0
+    classified = events_created = threaded = 0
     failures: list[dict] = []
     exit_code = 0
 
@@ -537,14 +554,19 @@ def run(
                 classified += len(classifications)
                 created = persist_normalization(conn, todo, classifications, date)
                 events_created += len(created)
-                kodex = select_kodex_events(created)
-                thread_events(conn, kodex)
-                kodex_threaded += len(kodex)
+                # 유니버스(entity_index=holdings 파생 마스터) 전 구성종목 이벤트를 threading 한다
+                # (ALPHA-468). 과거 KODEX 9종 한정은 엔진이 KODEX 반도체만 설명하던 잔재였고,
+                # 다중 ETF 설명(ALPHA-465·467)은 계보·신규성이 유니버스 전체에 필요하다.
+                # in_universe/entity 해소가 이미 유니버스 필터라 별도 파생이 없다. 대상은
+                # created 가 아니라 그 날짜의 미연결 전체 — 재실행이 과거 미연결분을 self-heal.
+                to_thread = fetch_unthreaded_events(conn, date)
+                thread_events(conn, to_thread)
+                threaded += len(to_thread)
     except Exception as exc:
         # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
-        events_created = kodex_threaded = 0
+        events_created = threaded = 0
         exit_code = 1
 
     log = {
@@ -553,7 +575,7 @@ def run(
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,
         "already_normalized": already_normalized, "classified": classified,
-        "events_created": events_created, "kodex_threaded": kodex_threaded,
+        "events_created": events_created, "threaded": threaded,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -567,6 +589,6 @@ def run(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
         " threaded=%d failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
-        kodex_threaded, len(failures),
+        threaded, len(failures),
     )
     return exit_code

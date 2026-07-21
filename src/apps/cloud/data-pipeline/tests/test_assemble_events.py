@@ -71,6 +71,20 @@ class _FakeCursor:
                           for a in wanted]
         elif upper.startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self._rows = list(conn.assertion_rows)
+        elif upper.startswith("SELECT DISTINCT ON (SE.SOURCE_EVENT_ID)"):
+            # 미연결 이벤트 = 사전 존재분(conn.unthreaded_events) + 이번 run 이 방금 insert 한
+            # source_event(link insert 는 아직이라 전부 미연결). event_argument 로 entity 부착.
+            ea_by_se: dict = {}
+            for bsql, brows in conn.batches:
+                if bsql.upper().startswith("INSERT INTO EVENT_ARGUMENT "):
+                    for r in brows:
+                        ea_by_se[r[0]] = r[2]
+            out = list(conn.unthreaded_events)
+            for bsql, brows in conn.batches:
+                if bsql.upper().startswith("INSERT INTO SOURCE_EVENT "):
+                    for r in brows:
+                        out.append((r[0], r[2], ea_by_se.get(r[0]), r[6]))
+            self._rows = out
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items()]
 
@@ -89,7 +103,7 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, instruments=None, assembled_articles=(), doc_overrides=None,
-                 assertion_rows=None, prior_thread_counts=None):
+                 assertion_rows=None, prior_thread_counts=None, unthreaded_events=()):
         self.log: list = []
         self.batches: list = []
         self.instruments = instruments or [("005930", "inst_SAMSUNG"), ("000660", "inst_HYNIX"),
@@ -98,6 +112,8 @@ class _FakeConn:
         self.doc_overrides = doc_overrides or {}
         self.assertion_rows = assertion_rows
         self.prior_thread_counts = prior_thread_counts or {}
+        # 사전 존재하는 미연결 source_event: (source_event_id, event_type_code, entity_id, available_at)
+        self.unthreaded_events = list(unthreaded_events)
 
     def cursor(self):
         cur = _FakeCursor(self)
@@ -170,7 +186,7 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     # 분류 입력의 tickers 는 entity_index 교집합이어야 한다(엔진 규칙).
     assert calls[0]["items"][0]["tickers"] == ["005930"]
     log = _log(storage)
-    assert log["events_created"] == 1 and log["kodex_threaded"] == 1
+    assert log["events_created"] == 1 and log["threaded"] == 1
 
 
 def test_already_assembled_articles_skip_llm(tmp_path, monkeypatch):
@@ -253,9 +269,12 @@ def test_thread_timestamps_stay_monotonic_on_conflict(tmp_path, monkeypatch):
     assert "GREATEST(event_thread.last_state_at" in thread_sql
 
 
-def test_non_kodex_event_is_created_but_not_threaded(tmp_path, monkeypatch):
-    """유니버스(entity_index)엔 있지만 KODEX 구성종목이 아닌 이벤트 — 계보는 서되
-    threading 은 안 탄다(엔진 select_kodex_events 규칙)."""
+def test_in_universe_non_kodex_event_is_threaded(tmp_path, monkeypatch):
+    """유니버스(entity_index=holdings 파생 마스터) 구성종목이면 과거 KODEX 9종이 아니어도
+    threading 을 탄다(ALPHA-468). WHY: 다중 ETF 설명(ALPHA-465·467)은 KODEX 반도체뿐 아니라
+    발화한 모든 ETF 구성종목을 설명하는데, threading 이 KODEX 한정이면 그 종목들이 계보·
+    신규성(thread_id·novelty) 없이 설명에 들어가 검증이 반쪽이 된다. entity 해소가 이미
+    유니버스 필터라, 그 위 KODEX 협소화는 제거돼야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1", ticker="999999")])
     doc_id = _stable_id("doc", "bigkinds", "a1")
@@ -267,9 +286,37 @@ def test_non_kodex_event_is_created_but_not_threaded(tmp_path, monkeypatch):
                                complete_fn=lambda s, u: _classified("a1", ticker="999999"),
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     assert len(_batch(conn, "source_event")) == 1
-    assert _batch(conn, "event_thread_link") == []
+    # 999999 → inst_OTHER 도 계보가 선다(과거엔 event_thread_link == [] 였다).
+    [link] = _batch(conn, "event_thread_link")
+    thread_id = _stable_id("thr", "COMPANY.EARNINGS.RESULT_RELEASE||inst_OTHER")
+    assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
-    assert log["events_created"] == 1 and log["kodex_threaded"] == 0
+    assert log["events_created"] == 1 and log["threaded"] == 1
+
+
+def test_rerun_threads_preexisting_unthreaded_event(tmp_path, monkeypatch):
+    """배포 전 KODEX-only 로 조립돼 미연결로 남은 과거 이벤트가, 재실행 때 새 분류가 없어도
+    threading 된다(ALPHA-468 self-heal, edge-review). WHY: 분류는 assembled_source_ids 로
+    이미 조립된 기사를 건너뛰므로 created 가 비지만, threading 대상이 created 가 아니라 '그
+    날짜의 미연결 전체'라 과거 미연결분이 채워진다. 안 그러면 그 이벤트는 영영 계보 없이
+    남고 prior_count 가 못 세 같은 스레드 새 이벤트의 novelty 까지 오염된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    stale = ("evt_stale", "COMPANY.EARNINGS.RESULT_RELEASE", "inst_OTHER",
+             "2026-07-15T09:00:00+09:00")
+    # a1 은 이미 조립됨 → 재분류 안 함(created 비어야 self-heal 만 검증됨).
+    conn = _FakeConn(assembled_articles=["a1"], unthreaded_events=[stale])
+    _setup(monkeypatch, conn)
+
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a1"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    assert _batch(conn, "source_event") == []  # 신규 조립 없음
+    [link] = _batch(conn, "event_thread_link")
+    thread_id = _stable_id("thr", "COMPANY.EARNINGS.RESULT_RELEASE||inst_OTHER")
+    assert (link[0], link[1], link[3]) == ("evt_stale", thread_id, "FIRST_IN_THREAD")
+    log = _log(storage)
+    assert log["events_created"] == 0 and log["threaded"] == 1
 
 
 def test_ticker_outside_article_mentions_is_rejected(tmp_path, monkeypatch):
