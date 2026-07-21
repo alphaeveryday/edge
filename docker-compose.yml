@@ -10,8 +10,8 @@
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
 #   - DB 는 플레인별 2개: postgres(cloud, :55432) / postgres-onprem(온프렘, :55433,
-#     ADR-0011 물리 격리 재현). 온프렘 세트는 flyway-onprem 이 적용하고, 로컬 전용
-#     시드(seed-local-onprem — SSOT 밖)를 함께 태운다.
+#     ADR-0011 물리 격리 재현). 로컬 시드는 cloud 쪽(seed-local-cloud — SSOT 밖)뿐이며,
+#     온프렘 데이터는 동기화 경로(sync-agent→intake→screening-worker)가 실적재한다.
 #
 # 사용:
 #   docker compose up --build             # 전체 기동(첫 실행은 gradle 빌드로 느림)
@@ -115,8 +115,11 @@ services:
       timeout: 5s
       retries: 10
 
-  # 온프렘 세트(migrations-onprem) 적용 + 로컬 전용 시드(seed-local-onprem — SSOT 밖,
-  # compose 만 마운트하므로 schema-migrate CD·CI 에 섞이지 않는다).
+  # 온프렘 세트(migrations-onprem) 적용. 온프렘 데이터는 이제 동기화 경로가 실적재하므로
+  # 로컬 시드가 없다(구 seed-local-onprem 은 screening-worker 도입으로 제거 —
+  # ignoreMigrationPatterns 는 기존 로컬 볼륨의 히스토리에 남은 그 repeatable 항목 허용용).
+  # 주의: 구 시드를 적용했던 기존 볼륨은 낡은 게시 행이 grain 을 선점해 동기화 게시를 막는다
+  # — 이 전환에서 한 번은 `docker compose down -v` 로 볼륨을 리셋할 것.
   flyway-onprem:
     image: flyway/flyway:10.21.0
     container_name: edge-flyway-onprem
@@ -125,12 +128,12 @@ services:
         condition: service_healthy
     volumes:
       - ./src/libs/schema/migrations-onprem:/flyway/sql:ro
-      - ./src/libs/schema/seed-local-onprem:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
       -user=edge -password=edge
       -connectRetries=10
-      -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
+      -locations=filesystem:/flyway/sql
+      -ignoreMigrationPatterns=repeatable:missing
       migrate
 
   # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만) — 온프렘 PG 조회.
@@ -215,6 +218,24 @@ services:
       INTAKE_POLL_MS: "5000"
     ports:
       - "18086:8080"
+
+  # [edge-onprem] Screening Worker — 미점검 번들 파싱·상태 분기(state-machine.md).
+  # NEW=무조건 통과(AUTO_PUBLISHED)+자동 게시, CORRECTION=리비전 분리·재검수, INVALIDATION=즉시 비노출.
+  screening-worker:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/screening-worker/Dockerfile
+    container_name: edge-screening-worker
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      SCREENING_POLL_MS: "5000"
+    ports:
+      - "18087:8080"
 
 volumes:
   edge-postgres-data:

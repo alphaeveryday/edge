@@ -30,6 +30,6 @@ curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 204
 # bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:cloud:tenant-sync-api:bootRun)
 ```
 
-로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드 3건이다 — fan-out 발번기 도입 시 시드 제거.
+로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드 4건(NEW·CORRECTION·INVALIDATION·최종 NEW)이다 — fan-out 발번기 도입 시 시드 제거.
 
 테스트 8건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 을 인코딩한다.

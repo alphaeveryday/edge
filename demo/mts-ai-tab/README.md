@@ -8,8 +8,10 @@
 ## 실행
 
 ```bash
-docker compose up --build mock-broker publication-api
-# http://localhost:18090
+# 데이터는 동기화 경로가 실적재하므로 워커까지 함께 띄운다.
+# 구(로컬 시드) 볼륨을 쓰던 경우 최초 1회 `docker compose down -v` 로 리셋할 것.
+docker compose up --build mock-broker screening-worker intake
+# http://localhost:18090 (첫 관통까지 폴링 주기상 ~10초)
 ```
 
 compose 없이 로컬 프로세스로 띄우려면 (publication-api 는 18084 에 떠 있어야 한다):
@@ -35,10 +37,11 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 
 ## 데모 조작
 
-응답 데이터는 온프렘 DB 의 로컬 전용 시드(`src/libs/schema/seed-local-onprem`) 기준이다
-(200 게시분: 091160 = 2026-07-16, 069500 = 2026-07-15. compose 가 `PUBLICATION_KNOWN_TICKERS`
-로 091160 을 지원 종목에 추가한다).
-게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE publication_id=1;"` → 조회가 204(NO_DATA)로 바뀐다.
+응답 데이터는 cloud 시드(`src/libs/schema/seed-local-cloud`)의 전달 레코드가 동기화 경로
+(sync-agent→intake→screening-worker)를 관통해 만든 온프렘 게시분이다
+(200 게시분: 091160 = 2026-07-16 수령 디자인 리포트, 069500 = 2026-07-15. compose 가
+`PUBLICATION_KNOWN_TICKERS` 로 091160 을 지원 종목에 추가한다).
+게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE status='PUBLISHED';"` → 조회가 204(NO_DATA)로 바뀐다.
 
 `/`는 홈 화면에서 시작한다 — 검색·관심종목에서 종목을 탭해 상세로 들어가고, AI 분석 탭을 누르면
 실호출이 나간다. 관심종목의 삼성전자 등 비 ETF 종목은 AI 분석 탭에서 404(미지원 종목) 상태가

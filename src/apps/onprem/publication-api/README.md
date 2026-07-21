@@ -15,7 +15,7 @@
 - `ExplanationStore` — 온프렘 Published Store(migrations-onprem: `publication ⋈ analysis_item`) JDBC 조회. WHERE 절이 PUBLISHED + 노출 가능 상태(AUTO_PUBLISHED·APPROVED)만 허용한다. `trade_date` 생략 시 **최신 거래일** 게시분(게시 시각 아님 — 화면 시맨틱).
 - `ExposureLogRecorder` — `exposure_log` INSERT (스키마가 `summary_snapshot NOT NULL` 강제).
 - 상장 판별(404)은 설정 allowlist `publication.known-tickers` — 종목 마스터 동기화 도입 전 임시.
-- 로컬 데이터: compose 의 `flyway-onprem` 이 스키마와 로컬 전용 시드(`libs/schema/seed-local-onprem` — SSOT 밖)를 적용한다. screening-worker 실적재 시작 시 시드 제거 예정.
+- 로컬 데이터: 동기화 경로가 실적재한다 — cloud 시드(`libs/schema/seed-local-cloud`)의 전달 레코드가 sync-agent→intake→screening-worker 를 거쳐 `analysis_item`·`publication` 에 도착한다(온프렘 로컬 시드 없음).
 
 ## 재작성 지점
 
