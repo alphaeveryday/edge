@@ -25,7 +25,7 @@
 #   curl "localhost:18085/internal/v1/bundles?after=0"   # sync-agent — 검증 후 무변형 전달
 #   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
 #   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # publication-api
-#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(AI 분석 탭)
+#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세, AI 분석 탭만 실호출)
 #   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
 
 services:
@@ -146,6 +146,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 데모 한정 — 시드(seed-local-onprem)의 091160 을 지원 종목으로 인식시킨다
+      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160
     ports:
       - "18084:8080"
 
