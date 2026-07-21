@@ -23,6 +23,7 @@
 | `event_evidence` | 이벤트를 뒷받침하는 문서 주장 근거 | `evidence_id` |
 | `event_thread` | 동일 실제 사건의 계보(정정·후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
+| `instrument` · `entity` | 번들의 `etf_ticker`·`etf_name` 공급(조인) — 온프렘 서빙 키가 ticker 라서 경계면에 포함 (확정 2026-07-21) | `instrument_id` = `entity_id` |
 
 **게시 grain**: `explanation_result`의 결과 grain은 `(etf_instrument_id, trade_date, explanation_as_of)`이며, 이 grain에서 `publication_status = 'PUBLISHED'`인 행은 **부분 유니크 인덱스로 하나만 강제**된다(`uq_explanation_result_published_grain`). 재게시는 기존 게시본을 `WITHDRAWN`으로 내린 뒤 새 행을 게시한다. `DRAFT`·`WITHDRAWN` 이력은 같은 grain에 여러 건 남는다.
 
@@ -60,11 +61,12 @@
       "cursor": 101,
       "delivery_type": "NEW",
       "explanation_result": { "explanation_result_id": "...", "etf_instrument_id": "...",
+        "etf_ticker": "069500", "etf_name": "KODEX 200",
         "trade_date": "2026-07-15", "explanation_as_of": "...", "explanation_type": "EVENT_SUPPORTED",
         "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
-      "source_events": [ { "source_event_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정]" } ],
-      "evidences": [ { "evidence_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정]" } ]
+      "source_events": [ { "source_event_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정. 확정 전 번들은 빈 배열]" } ],
+      "evidences": [ { "evidence_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정(ALPHA-363 lineage 포함). 확정 전 번들은 빈 배열]" } ]
     },
     {
       "cursor": 102,

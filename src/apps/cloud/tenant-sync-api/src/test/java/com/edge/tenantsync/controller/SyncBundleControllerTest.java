@@ -1,5 +1,8 @@
 package com.edge.tenantsync.controller;
 
+import com.edge.tenantsync.dto.BundleEntry;
+import com.edge.tenantsync.dto.ExplanationResult;
+import com.edge.tenantsync.dto.ExplanationRun;
 import com.edge.tenantsync.repository.BundleEntryRepository;
 import com.edge.tenantsync.service.BundleSerializer;
 import com.edge.tenantsync.service.SyncBundleService;
@@ -11,7 +14,10 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HexFormat;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -22,15 +28,50 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 계약(sync-protocol.md) 시맨틱을 검증한다 — 엔드포인트 동작이 아니라 소비자(Sync Agent)가
  * 의존하는 약속이 깨지면 실패해야 한다.
  * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다.
+ * 저장소는 DB(JdbcTemplate) 구현이 됐으므로 시드 대역으로 대체한다 — 여기서 지키는
+ * 것은 와이어 계약이고, 실 DB 경로는 compose E2E 가 확인한다.
  */
 class SyncBundleControllerTest {
+
+	private static final ExplanationResult PUBLISHED = new ExplanationResult(
+			"expr-20260715-069500-0001", "inst-etf-069500", "069500", "KODEX 200",
+			LocalDate.of(2026, 7, 15), Instant.parse("2026-07-15T07:30:00Z"),
+			"EVENT_SUPPORTED",
+			"반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
+			"MEDIUM", "thr-0001");
+
+	private static final ExplanationResult REPUBLISHED = new ExplanationResult(
+			"expr-20260715-069500-0002", "inst-etf-069500", "069500", "KODEX 200",
+			LocalDate.of(2026, 7, 15), Instant.parse("2026-07-15T07:30:00Z"),
+			"EVENT_SUPPORTED",
+			"정정된 공시 기준으로 재산출한 공개 정보 기반 변동 요인 후보입니다.",
+			"LOW", "thr-0001");
+
+	/** 시드 대역 — NEW → CORRECTION → INVALIDATION (온프렘 수신 세 경로 전부 자극). */
+	private static final class SeededRepository extends BundleEntryRepository {
+		private final List<BundleEntry> seed = List.of(
+				BundleEntry.newResult(1L, PUBLISHED,
+						new ExplanationRun("exrun-0001", "rb-2026.07.0"), List.of(), List.of()),
+				BundleEntry.correction(2L, PUBLISHED.explanationResultId(), "근거 공시 정정",
+						REPUBLISHED, new ExplanationRun("exrun-0002", "rb-2026.07.0")),
+				BundleEntry.invalidation(3L, REPUBLISHED.explanationResultId(), "오탐지 이벤트"));
+
+		SeededRepository() {
+			super(null);
+		}
+
+		@Override
+		public List<BundleEntry> findAfter(long tenantId, long afterCursor, int limit) {
+			return seed.stream().filter(e -> e.cursor() > afterCursor).limit(limit).toList();
+		}
+	}
 
 	private MockMvc mvc;
 
 	@BeforeEach
 	void setUp() {
 		SyncBundleService service =
-				new SyncBundleService(new BundleEntryRepository(), new BundleSerializer());
+				new SyncBundleService(new SeededRepository(), new BundleSerializer());
 		mvc = MockMvcBuilders
 				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
 				.setControllerAdvice(new GlobalExceptionHandler())
@@ -64,6 +105,8 @@ class SyncBundleControllerTest {
 				.andExpect(jsonPath("$.entries.length()").value(3))
 				.andExpect(jsonPath("$.entries[0].delivery_type").value("NEW"))
 				.andExpect(jsonPath("$.entries[0].explanation_result.etf_instrument_id").value("inst-etf-069500"))
+				.andExpect(jsonPath("$.entries[0].explanation_result.etf_ticker").value("069500"))
+				.andExpect(jsonPath("$.entries[0].explanation_result.etf_name").value("KODEX 200"))
 				.andExpect(jsonPath("$.entries[0].explanation_result.confidence_level").value("MEDIUM"))
 				.andExpect(jsonPath("$.entries[0].explanation_run.release_bundle_version").value("rb-2026.07.0"))
 				.andExpect(jsonPath("$.entries[1].delivery_type").value("CORRECTION"))

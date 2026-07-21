@@ -11,24 +11,25 @@
 
 ## 구조 (layered)
 
-`controller`(HTTP 검증·상태코드) → `service`(SyncBundleService 오케스트레이션 + BundleSerializer) → `repository`(BundleEntryRepository — 전달 레코드 조회) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). 인터페이스 이음새 없이 구체 클래스 직결 — 교체는 해당 클래스를 직접 재작성한다. **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.**
-`entity` 층은 아직 없다 — 영속성이 없어서다. JDBC 리더 교체 시 entity가 함께 들어온다.
+`controller`(HTTP 검증·상태코드) → `service`(SyncBundleService 오케스트레이션 + BundleSerializer) → `repository`(BundleEntryRepository — `tenant_delivery` ⋈ 경계면 테이블 JDBC 조회) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). 인터페이스 이음새 없이 구체 클래스 직결 — 교체는 해당 클래스를 직접 재작성한다. **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.** 이 모듈의 DB 접근은 **읽기 전용**이다(outbox writer 는 fan-out 발번기 — 후속).
+`source_events`·`evidences` 는 경계면 컬럼 선별 미확정(ALPHA-363)이라 빈 배열로 실린다 — 확정 시 조회에 lineage 조인을 추가한다.
 
 ## 스텁 → 실구현 교체 지점
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `BundleEntryRepository` (인메모리 시드 3건: NEW·CORRECTION·INVALIDATION) | 전달 레코드 저장 구조·fan-out 설계(영서 고도화 영역) 확정 후 | 경계면 테이블 DB 조회 + 조립 (+ datasource 설정, build.gradle에 JDBC 의존성, entity 도입) |
 | `TenantResolver` (데모 테넌트 `1L` 고정) | sync-auth 티켓 | mTLS 인증서 fingerprint → 테넌트 바인딩 조회, 요청별 인가 검증 |
 
 ## 실행·확인
 
 ```bash
-# src/ 에서
-./gradlew :apps:cloud:tenant-sync-api:bootRun
-curl -i "localhost:8080/api/v1/sync/bundle?after=0"   # 200 + X-Bundle-Checksum
-curl -i "localhost:8080/api/v1/sync/bundle?after=3"   # 204
-# compose 로는 루트에서: docker compose up --build tenant-sync-api (host 18083)
+# 루트에서 (cloud PG + 스키마 + 로컬 시드 포함)
+docker compose up --build tenant-sync-api   # host 18083
+curl -i "localhost:18083/api/v1/sync/bundle?after=0"   # 200 + X-Bundle-Checksum
+curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 204
+# bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:cloud:tenant-sync-api:bootRun)
 ```
+
+로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드 3건이다 — fan-out 발번기 도입 시 시드 제거.
 
 테스트 8건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 을 인코딩한다.
