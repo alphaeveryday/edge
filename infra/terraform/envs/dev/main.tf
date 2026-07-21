@@ -149,6 +149,10 @@ module "tenant_sync_api" {
   # (X-Amzn-Mtls-Clientcert-*) 신뢰가 성립한다(ALB 우회 경로 없음).
   target_group_arn           = module.sync_alb.target_group_arn
   ingress_security_group_ids = [module.sync_alb.security_group_id]
+
+  # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다 — LB 미연결 target group 으로
+  # 서비스를 만들면 ECS 가 거부하므로(fresh apply 경쟁) 모듈 전체를 명시 의존한다.
+  depends_on = [module.sync_alb]
 }
 
 resource "aws_route53_record" "sync" {

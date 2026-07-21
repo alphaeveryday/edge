@@ -22,9 +22,10 @@ on:
       - "src/gradlew"
       - "src/gradlew.bat"
       - "src/.dockerignore"
-      # 배포 절차 자체의 변경.
+      # 배포 절차 자체의 변경. 형제(deploy-super-admin-api)와 달리 이 파일 자신은 넣지 않는다 —
+      # 이 워크플로가 신설되는 머지 push 에서 terraform-apply(권한·서비스 생성)와 경주해
+      # 첫 실행이 반드시 실패하기 때문. 부트스트랩은 workflow_dispatch 가 담당한다.
       - ".github/workflows/deploy-app.yml"
-      - ".github/workflows/deploy-tenant-sync-api.yml"
 
 permissions:
   id-token: write
