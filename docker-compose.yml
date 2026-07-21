@@ -144,6 +144,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 데모 한정 — 시드(seed-local-onprem)의 091160 을 지원 종목으로 인식시킨다
+      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160
     ports:
       - "18084:8080"
 

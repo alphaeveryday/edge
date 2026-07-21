@@ -2,6 +2,8 @@
 
 증권사 MTS의 AI 분석 탭 데모. 빌드 도구 없이 정적 html+js로 동작하며,
 정적 서빙과 증권사 API는 [demo/mock-broker](../mock-broker/server.js)가 담당한다.
+화면은 수령 디자인(claude.ai Design "KODEX 반도체 AI 분석", ALPHA-485)을 번역한
+홈 → 검색 → 종목상세(호가·차트·뉴스·공시·AI 분석·종목정보·커뮤니티·재무 7탭) 3화면 구성이다.
 
 ## 실행
 
@@ -21,25 +23,33 @@ PORT=18090 node demo/mock-broker/server.js
 [docs/contracts/publication-api.md](../../docs/contracts/publication-api.md)의 원칙(MTS는 Publication API를 직접 호출하지 않는다)을 실 HTTP 홉으로 재현한다 (ADR-0035 런타임 경로).
 
 ```
-app.js (MTS 화면)
+app.js (MTS 3화면 — 홈·검색·종목상세)
   → broker-api.js   /api/broker/* fetch — 얇은 래퍼(브라우저 mock 없음)
     → mock-broker (demo/mock-broker/server.js)   증권사 자체 제작 API — 고객 해시·채널 부착, 상태 매핑, 폴백 처리
       → publication-api (src/apps/onprem/publication-api)   On-Premise Publication API — 실 컨테이너
 ```
 
+- **AI 분석 탭만 실데이터다.** 시세·호가·차트·뉴스·커뮤니티 등 나머지는 증권사 자체 데이터라는 전제의 화면 고정값(목업)이다.
 - 고객 해시는 mock-broker 서버가 부착한다 — 실제 생성 규칙·salt는 증권사 서버 관리 영역(ADR-0013), 브라우저에 두지 않는다.
 - 실제 연동 시 mock-broker 레이어는 증권사 백엔드 구현으로 통째로 대체된다(화면 코드는 그대로). 브라우저에서 Publication API를 직접 fetch하는 경로는 계약 위반이라 데모에도 두지 않는다.
 
-## 데모 조작 (쿼리 파라미터)
+## 데모 조작
 
-응답 데이터는 온프렘 DB 의 로컬 전용 시드(`src/libs/schema/seed-local-onprem`) 기준이다.
+응답 데이터는 온프렘 DB 의 로컬 전용 시드(`src/libs/schema/seed-local-onprem`) 기준이다
+(200 게시분: 091160 = 2026-07-16, 069500 = 2026-07-15. compose 가 `PUBLICATION_KNOWN_TICKERS`
+로 091160 을 지원 종목에 추가한다).
 게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE publication_id=1;"` → 조회가 204(NO_DATA)로 바뀐다.
+
+`/`는 홈 화면에서 시작한다 — 검색·관심종목에서 종목을 탭해 상세로 들어가고, AI 분석 탭을 누르면
+실호출이 나간다. 관심종목의 삼성전자 등 비 ETF 종목은 AI 분석 탭에서 404(미지원 종목) 상태가
+자연 재현된다. 쿼리 파라미터를 주면 종목 상세의 AI 분석 탭으로 직행한다:
 
 | URL | 재현 상태 |
 |---|---|
-| `/` | 200 — KODEX 200 설명 노출 |
+| `/?ticker=091160` | 200 — KODEX 반도체 리포트(수령 디자인 본문) 노출 |
+| `/?ticker=069500` | 200 — KODEX 200 설명 노출 |
 | `/?ticker=305720` | 204 — 상장 종목이나 설명 없음(정상) 안내 |
 | `/?ticker=000001` | 404 — 미지원 종목 안내 |
-| `/?trade_date=2026-07-01` | 204 — 해당 기준일 게시분 없음 |
+| `/?trade_date=2026-07-01` | 204 — 해당 기준일 게시분 없음 (기본 종목 069500) |
 | `/?trade_date=2026-7-1` | 400 — 형식 오류(폴백 문구 + mock-broker 로그 경고) |
 | publication-api 중지 후 조회 | 5xx/통신 실패 — 폴백 문구 |
