@@ -593,6 +593,18 @@ def analyze(
     return result
 
 
+def _primary_thread_id(events: list[dict[str, Any]]) -> str | None:
+    """설명이 대표로 매다는 event thread — **스레드가 붙은 첫 이벤트**를 고른다.
+
+    `events[0]` 을 그대로 쓰면(fetch 는 source_event_id 순 정렬), upstream assemble-events 가
+    아직 스레드하지 않은(thread_id NULL) 구성종목 이벤트가 먼저 오면 primary_thread_id 가
+    NULL 이 돼, 스레드된 이벤트가 목록에 있는데도 계보가 끊긴다. 뉴스 대상을 KODEX 9종에서
+    전체 holdings 로 넓히며 unthreaded 이벤트가 섞이기 시작했다 — 기본 091160 런에도 회귀다
+    (edge-review). None 은 목록의 **어떤** 이벤트도 스레드되지 않았을 때만.
+    """
+    return next((e["thread_id"] for e in events if e.get("thread_id")), None)
+
+
 def persist_explanation(
     conn,
     s3,
@@ -607,7 +619,7 @@ def persist_explanation(
     summary = str(explanation.get("explain") or explanation.get("summary") or "")
     etype = _VERDICT_TO_TYPE.get(str(explanation.get("verdict")), "UNCERTAIN")
     confidence = _CONFIDENCE_MAP.get(str(explanation.get("confidence")))
-    primary_thread_id = kodex_events[0]["thread_id"] if kodex_events else None
+    primary_thread_id = _primary_thread_id(kodex_events)
     stage_results = json.dumps({"events": len(kodex_events), "raw": explanation}, ensure_ascii=False)
 
     missing = [k for k, v in prereqs.items() if not v]

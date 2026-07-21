@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from edge_analysis import daily_pipeline as dp
-from edge_analysis.daily_pipeline import analyze, resolve_etf_instrument
+from edge_analysis.daily_pipeline import _primary_thread_id, analyze, resolve_etf_instrument
 
 
 class _FakeCursor:
@@ -122,3 +122,20 @@ def test_run_fails_loud_when_holdings_empty(monkeypatch):
 
     with pytest.raises(dp.PipelineError):
         dp.run(settings)
+
+
+def test_primary_thread_id_picks_first_threaded_not_first_row():
+    """뉴스 대상을 전체 holdings 로 넓히면 upstream 이 아직 안 스레드한(thread_id NULL)
+    이벤트가 목록 맨 앞에 올 수 있다 — primary_thread_id 는 events[0] 이 아니라 **스레드된
+    첫 이벤트**를 골라야 계보가 안 끊긴다(edge-review, 기본 091160 런에도 회귀였던 지점)."""
+    events = [
+        {"ticker": "247540", "thread_id": None},        # unthreaded 가 먼저 정렬
+        {"ticker": "005930", "thread_id": "thr_CORE"},  # 스레드된 core 이벤트
+    ]
+    assert _primary_thread_id(events) == "thr_CORE"
+
+
+def test_primary_thread_id_is_none_only_when_nothing_threaded():
+    """하나도 안 스레드됐을 때만 None — 그때는 계보가 실제로 없다."""
+    assert _primary_thread_id([{"ticker": "x", "thread_id": None}]) is None
+    assert _primary_thread_id([]) is None
