@@ -10,7 +10,6 @@
 
 ## 1. 인터페이스 계약 확정 — 병렬 개발 블로커 (진기·영서 합의 세션 1회)
 - [ ] **Event Bundle·Cloud Event Store 필드 스키마** 확정 → `docs/contracts/event-bundle-schema.md` 기입 (이벤트 타입별 필드·ID 체계·번들 JSON 구조·체크섬 대상 바이트)
-- [ ] **outbox 테이블 설계** — fan-out 규칙과 함께 계약에 편입
 - [ ] **Tenant Sync API 엔드포인트 계약** — 응답 포맷·번들 개수 상한·다음 cursor 전달·에러 시맨틱 → `docs/contracts/sync-protocol.md` 보강. 설계 입력으로 **일일 이벤트 규모 가정**을 함께 명시
 
 ## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님)

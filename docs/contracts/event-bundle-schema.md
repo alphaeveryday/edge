@@ -2,7 +2,7 @@
 
 > **계약 문서** — 진기-영서 인터페이스는 **Cloud Event Store DB 스키마**다([../adr/0026](../adr/0026-ownership-boundary-db.md), db-as-contract). 이 파일 중 스키마 경계면 서술의 변경은 공동 승인 대상(CODEOWNERS)이고, 번들 와이어 포맷(JSON·체크섬)은 Sync 양단 소유자(영서)의 스펙으로 함께 기록한다.
 
-> **상태: 합의 진행 (v2, 2026-07-15)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했다. `[합의 필요]` 표기만 남은 열린 결정이다.
+> **상태: 합의 진행 (v3, 2026-07-21)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했고, 전달 레코드(outbox)를 `tenant_delivery`로 확정했다(ALPHA-396). `[합의 필요]` 표기만 남은 열린 결정이다.
 
 - 오너십 경계: **김진기** — Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** / **조영서** — DB를 소비하는 이후 전부: **Event Bundle 생성(tenant-sync-api의 DB 조회·조립)**, 전달 레코드, Sync Agent, 온프렘 ([../adr/0026](../adr/0026-ownership-boundary-db.md)).
 - 전송 단위: Event Bundle (신규 + 정정 + 무효화). 무결성은 번들 단위 SHA-256 체크섬. 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
@@ -32,9 +32,15 @@
 - `tenant_id`는 BIGINT(identity). 전달 단위의 멱등 처리 기준은 테넌트별 단조증가 cursor(ADR-0015 확정)이며, 저장 구조 차원의 키 설계는 전달 레코드 설계(미확정 — 아래)와 함께 확정한다.
 - 정정·무효화는 대상을 `target_explanation_result_id`로 참조한다. 정정으로 생기는 재게시본은 **새 `explanation_result_id`** — On-Prem 리비전 분리 모델의 소스([../domain/state-machine.md](../domain/state-machine.md)).
 
-## 전달 레코드
+## 전달 레코드 (확정 — 2026-07-21, ALPHA-396)
 
-번들은 테넌트별 전달 레코드를 cursor 순으로 묶어 생성한다 — cursor 발번 시점은 테넌트별 fan-out(ADR-0021 확정). **전달 레코드의 설계 일체 — 멱등 키·저장 구조·fan-out 구현·retention·게시 상태(`publication_status`)와 전달 유형의 매핑 — 는 영서 오너십이며 미확정이다.** 확정 시 이 문서에 기록한다. `[합의 필요]`
+번들은 테넌트별 전달 레코드를 cursor 순으로 묶어 생성한다 — cursor 발번 시점은 테넌트별 fan-out(ADR-0021 확정). 설계는 영서 단독 결정으로 다음과 같이 확정한다:
+
+- **저장 구조**: `tenant_delivery` — 물리 정의는 `migrations-cloud/V202607211740__add_tenant_delivery.sql`(SQL이 계약). 컬럼: `(tenant_id, cursor)` PK · `delivery_type` · `explanation_result_id` · `target_explanation_result_id` · `reason` · `created_at`. 유형별 페이로드 형상(NEW=결과만 / CORRECTION=결과+대상+사유 / INVALIDATION=대상+사유)은 CHECK 로 강제 — 와이어 JSON 봉투와 1:1.
+- **멱등 키**: 전달 단위는 `(tenant_id, cursor)` PK. On-Prem 소비 멱등은 별도 축 — 번들 단위는 `received_bundle.cursor_from`, 항목 단위는 도메인 ID(`explanation_result_id`) upsert.
+- **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 그 변경 자체는 다음 cursor(CORRECTION·INVALIDATION)로 다시 전달되므로 수렴한다.
+- **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 재게시(기존 `WITHDRAWN` + 새 행 `PUBLISHED`) → 새 행을 `CORRECTION`(대상=구 게시분, 사유 필수)으로 발번 / 재게시 없는 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다.
+- **fan-out 발번기 구현은 후속** — 도입 전까지 로컬·데모는 시드로 전달 레코드를 만든다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
 
 `tenant_sync_cursor.last_cursor`(BIGINT)는 cursor 소비 추적이다 — 타입 정정은 `V202607150002`(근거: ADR-0015).
 
@@ -91,7 +97,9 @@
 
 ## 미확정 요약
 
-**영서 단독 결정(설계 후 이 문서에 기록)**: ① 전달 레코드 설계 일체(멱등 키·저장 구조·fan-out·retention·게시 상태↔전달 유형 매핑) ② Tenant Sync API 엔드포인트 계약([sync-protocol.md](sync-protocol.md)) ③ 번들에 실을 `source_events`·`evidences` 컬럼 선별(reader 자유 — 단 스키마 의존이므로 변경 감지 대상)
+**영서 단독 결정(설계 후 이 문서에 기록)**: ② Tenant Sync API 엔드포인트 계약([sync-protocol.md](sync-protocol.md)) ③ 번들에 실을 `source_events`·`evidences` 컬럼 선별(reader 자유 — 단 스키마 의존이므로 변경 감지 대상)
+
+해소: ~~① 전달 레코드 설계 일체~~ → `tenant_delivery`로 확정(위 "전달 레코드" 절, ALPHA-396). retention 정리 정책만 후속.
 
 **진기 확인 대상(스키마)**: `tenant`·`tenant_credential` 정의 검토 — 인증 모델(sync-auth)과 함께 확정, 다르면 수축-확장으로 교체 ([ADR-0026](../adr/0026-ownership-boundary-db.md))
 
