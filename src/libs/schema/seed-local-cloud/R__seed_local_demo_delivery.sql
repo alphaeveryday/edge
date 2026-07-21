@@ -82,6 +82,11 @@ OVERRIDING SYSTEM VALUE
 VALUES (1, 'local-demo', 'DEV', 'ACTIVE')
 ON CONFLICT (tenant_id) DO NOTHING;
 
+-- 고정 ID insert 는 identity 시퀀스를 전진시키지 않는다 — 이후 일반 insert 가
+-- 1 을 재할당해 PK 충돌하지 않도록 시퀀스를 현재 최대값으로 보정한다(리뷰 지적).
+SELECT setval(pg_get_serial_sequence('tenant', 'tenant_id'),
+              (SELECT max(tenant_id) FROM tenant), true);
+
 -- 전달 레코드 3건 — NEW → CORRECTION → INVALIDATION
 INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, explanation_result_id,
     target_explanation_result_id, reason)
