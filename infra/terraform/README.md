@@ -17,7 +17,7 @@ infra/terraform/
     ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, AZ override
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
-    ├── alb/                # 공개 엣지 ALB (임시 검증 → gateway 증분서 교체)
+    ├── alb/                # 공개 엣지 ALB (재사용 모듈, 현재 미호출 — super-admin 공개화 시 재도입, ADR-0032)
     ├── rds/                # PostgreSQL(private·관리형 비밀번호)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
@@ -26,7 +26,7 @@ infra/terraform/
     └── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
 ```
 
-`ecs-service` 를 widget-api·tenant-console-api·super-admin-api·gateway 가, `static-site` 를 widget·tenant-console·super-admin UI 가 동일 재사용한다.
+`ecs-service` 를 tenant-console-api·super-admin-api 가, `static-site` 를 tenant-console·super-admin UI 가 동일 재사용한다.
 
 ## 설계 요지
 
@@ -71,8 +71,7 @@ cd ../envs/dev  && terraform apply
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
-| **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | gateway 도입 시 연결 |
-| **widget-api DB 연동** | TF 주입되나 앱 미사용(`application.yaml` DataSource exclude) | 앱에서 exclude 제거 |
+| **내부 API**(tenant-console·super-admin) | idle — ALB 타깃 없음, Service Connect 만 | super-admin 공개화 시 ALB listener rule 로 연결(ADR-0032) |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
 
@@ -88,9 +87,9 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **gateway**(단일 엣지) — internal-only ECS 서비스로 스테이징됨(ALPHA-296, Service Connect `gateway:8080`).
-  공개 ALB 타깃 컷오버(지금 ALB 는 widget-api 임시 대역)와 리버스 프록시 라우팅은 ALPHA-294.
-- **WAF** — gateway 증분에서.
+- **super-admin 공개 엣지** — super-admin-api 는 현재 Service Connect 내부 전용. 공개 도달이 필요해지면
+  `alb` 모듈을 재도입해 listener rule(`/api/v1/admin/*` → super-admin target group) + 망 제한으로 직결한다(ADR-0032, gateway 은퇴).
+- **WAF**(ALPHA-297) — super-admin ALB 재도입 시.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > 배치 파이프라인은 스케줄러 DISABLED 라 자동 실행 안 됨. 수동 검증은 `aws stepfunctions start-execution` 으로.

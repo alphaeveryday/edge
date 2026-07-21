@@ -1,6 +1,6 @@
-# 인터넷 facing Application Load Balancer (공개 엣지).
-# 목표 토폴로지에서는 gateway 앞에 선다. 현재는 gateway 부재로 widget-api 를
-# 임시 검증하기 위한 타깃그룹을 노출한다 — gateway 증분에서 타깃을 갈아끼운다.
+# 인터넷 facing Application Load Balancer (공개 엣지) — 재사용 모듈.
+# 현재 env 에서 미호출(호출자 없음). gateway 은퇴로 임시 widget-api 타깃이 제거됐다(ADR-0032).
+# super-admin 공개 도달이 필요해질 때 listener rule 로 super-admin target group 을 붙여 재도입한다.
 
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"

@@ -6,7 +6,6 @@ rootProject.name = 'edge'
 include ':libs:schema'
 include ':libs:jvm-common'
 // 앱은 배포 플레인(cloud/onprem)으로 그룹핑한다 (ADR-0029). 프로젝트 경로가 곧 디렉터리다.
-include ':apps:cloud:gateway'
 include ':apps:onprem:tenant-console-api'
 include ':apps:cloud:tenant-sync-api'
 include ':apps:onprem:publication-api'

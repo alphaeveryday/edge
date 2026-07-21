@@ -46,11 +46,10 @@
 - [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Publication API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
 - [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL)
 - [ ] **Definition of Done 명문화** — 게이트(edge-review→docs-sync)+이슈 전환 기준을 README Git 컨벤션에 한 절로
-- [ ] gateway console 라우트 제거 — tenant-console 온프렘 재배치(데모 토폴로지) 시점에 (gateway = Super Admin·Tenant Sync API 전용 완성)
 - [ ] 온프렘 릴리스 절차 문서화 — Rule Type 배포가 "소프트웨어 릴리스"인데 버전 정책·업그레이드 방법 미정
 
 ## 6. 인프라
-- [ ] **widget 인프라 Terraform 삭제 후속 PR** — envs/dev의 widget_api ECS 모듈·RDS SG 규칙·widget_site(S3/CloudFront)·OIDC 역할 참조·variables/tfvars, foundation의 `edge/widget-api` ECR, modules/alb 주석("widget-api 임시 검증용") 갱신. terraform-plan 코멘트 리뷰 후 머지 (코드 재편 PR에서 의도적으로 분리)
 - [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
+- [ ] 은퇴 ECR 키 제거 후속 PR — `force_delete=true`가 dev foundation에 apply된 뒤 `edge/gateway`·`edge/widget-api`를 image_repositories에서 제거(2단계 destroy — ADR-0032). widget_site S3 버킷도 비어있음 확인 후.
 - [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
-- [ ] Cloud serving cluster를 신규 컴포넌트(Tenant Sync API 등)에 맞게 개정 — 구 앱 배포 워크플로 정리 포함 (§4 코드베이스 재편과 연동). **gateway 존치 vs ALB 직결 ADR 포함** — 판단 조건 2개가 갖춰지는 시점에 결정: ① Tenant Sync API의 mTLS 노출 방식 확정(앱 직접 검증이면 gateway 경유 불가 → 존치 근거 하나 소멸) ② 콘솔 온프렘 재배치(console 라우트 소멸). 그 후 gateway에 남는 건 super-admin 앞 방어층뿐인데 ALB 리스너 규칙+망 제한으로 대체 가능성 있음
+- [ ] super-admin 공개 엣지 배선 — super-admin-api 공개 도달이 필요해지는 시점에 ALB 직결(listener rule `/api/v1/admin/*` → super-admin 타깃 승격 + 망 제한)로 재도입. gateway 은퇴는 결정됨(ADR-0032). WAF(ALPHA-297)·엣지 컷오버를 이때 함께.
