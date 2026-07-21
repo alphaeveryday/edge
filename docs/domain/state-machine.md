@@ -10,8 +10,8 @@
 3. AI 설명 후보와 근거 데이터를 생성한다.
 4. Cloud Event Store에 비개인화 이벤트와 설명 후보를 저장한다.
 5. Event Bundle을 생성한다.
-6. On-Premise Sync Agent가 Tenant Sync API를 Pull한다.
-7. 수신한 Event Bundle을 Raw Event Store에 저장한다.
+6. On-Premise Sync Agent(DMZ)가 Tenant Sync API를 Pull·무결성 검증한다.
+7. Intake(내부망)가 검증된 Event Bundle을 넘겨받아 Raw Event Store에 저장한다 (단일 모듈 옵션에서는 Sync Agent가 저장까지 — [ADR-0036](../adr/0036-sync-agent-intake-topology.md)).
 8. Compliance Engine이 증권사 정책을 적용한다.
 9. 결과에 따라 상태를 분기한다.
 
@@ -31,7 +31,7 @@
 
 **원칙: 검수 없이 고객 노출 문구가 변경되는 경로는 존재하지 않는다.**
 
-- **무효화(INVALIDATED)**: 노출 "제거"는 검수 불요. Sync Agent가 무효화 이벤트 수신 즉시 Publication Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용)
+- **무효화(INVALIDATED)**: 노출 "제거"는 검수 불요. 온프렘이 무효화 이벤트 수신 즉시 Publication Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용. Publication Cache는 내부망 자원이므로 처리 주체는 Intake·온프렘 내부 흐름이지 DMZ의 Sync Agent가 아니다.)
 - **정정(CORRECTED)**: 노출 "변경"은 반드시 재검수.
     1. Cloud가 정정 이벤트 발행 (Super Admin은 정정 시 사유 입력 필수)
     2. On-Prem이 수신 → 기존 발행 콘텐츠 즉시 **UNPUBLISHED** (고객 화면에서 제거)

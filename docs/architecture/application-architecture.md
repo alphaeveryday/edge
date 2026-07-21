@@ -4,7 +4,7 @@
 >
 > **[설계 뷰]** 논리 설계 개요다. 현행·계약의 권위는 SSOT에 있다 — 서비스/책임 경계 상세는 [../context.md](../context.md), 콘솔 화면·메뉴 상세는 [../console-ia/](../console-ia/). 논리명↔배포 모듈은 [system-architecture.md의 논리→배포 매핑](system-architecture.md#논리--배포-모듈-매핑) 참조. 충돌 시 SSOT 우선.
 >
-> ⚠️ **위젯 접점 주의**: 이 문서의 "위젯 UI 임베드/금융사 구축 API" 서술은 SSOT보다 앞선 목표다 — 현행 SSOT([../context.md](../context.md) §2·[../scope.md](../scope.md))는 embed 위젯을 제거하고 MTS/HTS 자체 구성으로 본다. 위젯은 **빌드 산출물 납품**으로 재정의됐고 context 전진은 후속 PR에서 반영된다 ([system-architecture.md 전진 예정 축](system-architecture.md#전진-예정-축)).
+> ⚠️ **위젯 접점**: 이 문서의 "위젯 UI 임베드" 서술은 **SSOT로 전진됨** — EDGE 위젯 UI를 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅)하는 것이 현행이다 ([../context.md](../context.md) §2, [../adr/0035](../adr/0035-widget-ui-build-artifact.md)). 데이터는 증권사 백엔드 경유로만 On-Prem Publication API에 도달하며 위젯이 벤더 클라우드를 직접 호출하지 않는다.
 
 ## 개요
 

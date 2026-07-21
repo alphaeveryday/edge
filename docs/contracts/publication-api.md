@@ -4,7 +4,7 @@
 
 ## 원칙 (확정)
 
-- MTS/HTS는 증권사 소유 UI이며 벤더 widget을 임베드하지 않는다.
+- MTS/HTS는 증권사 소유 UI다. 벤더가 **서빙·호스팅하는** widget 런타임은 임베드하지 않는다 — EDGE 위젯 UI는 빌드 산출물로 납품되어 증권사가 자기 환경에서 임베드·호스팅한다([ADR-0035](../adr/0035-widget-ui-build-artifact.md)). 어느 경우든 데이터는 증권사 백엔드/API GW 경유로만 Publication API에 도달하고, 위젯이 벤더 클라우드를 직접 호출하지 않는다.
 - 경로: **MTS/HTS → 증권사 Backend/API Gateway → On-Premise Publication API**. MTS가 Publication API를 직접 호출하지 않는다.
 - Publication API는 **Published(AUTO_PUBLISHED, APPROVED) 상태만 반환**. 검수 대기/차단/반려/무효화/노출중단 상태는 절대 반환하지 않는다 — 응답에 존재할 수 없는 것이 제품 보장이다.
 - Publication API 호출 시 증권사 백엔드가 **고객 식별 해시**를 전달 → 조회 시점에 Exposure Log 자동 기록(조회=노출 간주, [../domain/exposure-log.md](../domain/exposure-log.md)). 원본 고객 ID/계좌번호는 절대 받지 않는다.
