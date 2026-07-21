@@ -253,6 +253,10 @@ class KisInvestorSource:
                 raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
             if data.get("rt_cd") == "0":
                 output2 = data.get("output2")
+                # 단일 거래일(예: 1일 창·신규상장)은 output2 를 dict 하나로 줄 수 있다(KIS 공식
+                # 샘플도 list 아니면 단일 객체로 감싼다) — 유효한 1행을 실패로 처리하지 않게 list 로 감싼다.
+                if isinstance(output2, dict):
+                    output2 = [output2]
                 # 빈 list([])는 정상 종료(더 이상 데이터 없음)지만, 키 누락(None)·비-list 는
                 # rt_cd=0 인데도 이상(malformed success·스키마 드리프트)이다 — 정상 빈 페이지로
                 # 위장(success 0건)하지 않고 fail-loud(심볼 단위 실패로 격리·기록)한다.

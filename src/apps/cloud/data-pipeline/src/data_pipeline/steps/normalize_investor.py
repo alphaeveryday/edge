@@ -64,35 +64,42 @@ def _dedup(reasons: list[str]) -> list[str]:
     return list(seen)
 
 
-def _to_int(raw: dict, key: str, reasons: list[str] | None):
+def _to_int(raw: dict, key: str, reasons: list[str], *, allow_missing: bool = False):
     """KIS 원본 필드 → 정수 순매수(수량·대금). 값은 zero-pad 문자열(음수 가능).
 
-    reasons 가 주어지면(headline 필수 필드) 결측=missing_field·비수치=non_numeric 로 기록하고
-    None 을 돌려준다(행 탈락 유도). reasons 가 None 이면(기관 세부 선택 필드) 못 쓰는 값은 조용히
-    None 으로 정리한다 — 원본은 raw 에 남아 유실이 아니다(bronze 안전망).
+    파싱은 **정수 직접**이다 — canonical 이 int64 라 float 왕복(float("9007199254740993")→
+    …992)으로 2^53 초과 순매수를 조용히 반올림해 통과시키면 안 된다(순매수 대금·수량은 큰 정수
+    가 될 수 있다, Rule 12). 문자열은 int(base 10)로 파싱해 zero-pad·부호를 정확히 살린다.
+
+    allow_missing 로 결측 정책이 갈린다: headline(필수)은 결측=missing_field 로 행을 탈락시키고,
+    기관 세부(선택)는 결측을 null 로 관용한다(KIS 가 특정 종목의 세부를 안 줄 수 있음). **단
+    '존재하는데 비수치'(garbage·bool·소수·NaN)는 필수·선택 무관하게 non_numeric 으로 드러낸다**
+    — 결측(관용)과 스키마 드리프트(surface)를 구분한다(선택 필드라고 garbage 를 조용히 null 로
+    삼키지 않는다, Rule 12).
     """
     value = raw.get(key)
     if value is None or (isinstance(value, str) and not value.strip()):
-        if reasons is not None:
+        if not allow_missing:
             reasons.append("missing_field")
         return None
     if isinstance(value, bool):
-        # bool 은 int 하위형이라 float(True)=1.0 로 조용히 통과한다 — 수치 필드의 불리언은 드리프트.
-        if reasons is not None:
-            reasons.append("non_numeric")
+        # bool 은 int 하위형이라 int(True)=1 로 조용히 통과한다 — 수치 필드의 불리언은 드리프트.
+        reasons.append("non_numeric")
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # KIS 는 문자열로 주지만 방어적으로 — 소수·NaN/Inf 순매수는 드리프트(정수 카운트).
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        reasons.append("non_numeric")
         return None
     try:
-        num = float(value)
+        # 문자열은 int(base 10) — '1.5'·'nan'·'1e5' 는 ValueError 로 비수치 드러남(float 우회 금지).
+        return int(str(value).strip(), 10)
     except (TypeError, ValueError):
-        if reasons is not None:
-            reasons.append("non_numeric")
+        reasons.append("non_numeric")
         return None
-    if not math.isfinite(num) or not num.is_integer():
-        # NaN/Inf·소수 순매수는 드리프트(순매수는 정수 카운트) — 조용히 통과시키지 않는다(Rule 12).
-        if reasons is not None:
-            reasons.append("non_numeric")
-        return None
-    return int(num)
 
 
 def _norm_trade_date(raw: dict, reasons: list[str]) -> str | None:
@@ -134,14 +141,15 @@ def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
         "source_vendor": vendor,
         "fetched_at": raw.get("fetched_at"),
     }
-    # headline 3종(개인·외국인·기관계)의 수량·대금은 필수 — 비수치면 reasons 에 기록해 행 탈락.
+    # headline 3종(개인·외국인·기관계)의 수량·대금은 필수 — 결측·비수치면 행 탈락.
     for name, (qty_key, val_key) in _HEADLINE_GROUPS.items():
         row[f"net_qty_{name}"] = _to_int(raw, qty_key, reasons)
         row[f"net_val_{name}"] = _to_int(raw, val_key, reasons)
-    # 기관 세부는 선택 — 못 쓰는 값은 null(reasons=None). 행을 탈락시키지 않는다.
+    # 기관 세부는 선택 — 결측은 null 로 관용하되(allow_missing), 존재하는 비수치(garbage)는
+    # non_numeric 으로 드러내 행을 탈락시킨다(조용한 null 로 드리프트를 삼키지 않는다, Rule 12).
     for name, (qty_key, val_key) in _SUB_GROUPS.items():
-        row[f"net_qty_{name}"] = _to_int(raw, qty_key, None)
-        row[f"net_val_{name}"] = _to_int(raw, val_key, None)
+        row[f"net_qty_{name}"] = _to_int(raw, qty_key, reasons, allow_missing=True)
+        row[f"net_val_{name}"] = _to_int(raw, val_key, reasons, allow_missing=True)
     # market·ticker 는 canonical 정체성 키의 일부다 — 없으면 키를 만들 수 없어 canonical 로 못
     # 간다. 결측·미지원 market 을 missing_field/unsupported_market 로 드러낸다(Rule 12).
     if _blank(row["market"]):

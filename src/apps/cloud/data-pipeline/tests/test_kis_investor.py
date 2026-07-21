@@ -223,6 +223,16 @@ def test_malformed_success_missing_output2_fails_loud():
     assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
 
 
+def test_output2_single_object_wrapped_not_failed():
+    # WHY: 단일 거래일(1일 창·신규상장)은 KIS 가 output2 를 dict 하나로 줄 수 있다(공식 샘플도
+    #      list 아니면 단일 객체로 감싼다) — 유효한 1행을 output2 이상으로 실패 처리하면 안 된다.
+    page = json.dumps({"rt_cd": "0", "output2": _row("20260703")})  # list 아닌 dict 하나
+    src = _source({"005930": [page, _EMPTY]})
+    records = list(src.fetch(["005930"]))
+    assert [r["stck_bsop_date"] for r in records] == ["20260703"]  # 감싸서 정상 수집
+    assert not src.fetch_failures
+
+
 def test_non_dict_row_isolated_not_crashing_symbol():
     # WHY: output2 배열에 dict 아닌 행(스키마 드리프트)이 섞여도 한 행이 심볼 전체를 끊으면 안
     #      된다 — 기록 후 스킵하고 정상 행은 계속 수집한다(조용히 버리지 않는다, Rule 12).

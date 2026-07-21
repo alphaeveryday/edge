@@ -113,6 +113,32 @@ def test_optional_sub_field_missing_nulls_but_row_survives(tmp_path):
     assert _quality_log(storage)["records_passed"] == 1
 
 
+def test_large_integer_preserved_without_float_rounding(tmp_path):
+    # WHY: canonical 이 int64 라 float 왕복(float("9007199254740993")→…992)으로 2^53 초과
+    #      순매수를 조용히 반올림하면 원본과 다른 값이 passed 로 적재된다(coerce-to-passing).
+    #      정수 문자열은 int() 로 정확히 파싱해야 한다(edge-review F5).
+    storage = LocalStorage(tmp_path / "lake")
+    big = "9007199254740993"  # 2^53+1 — float 은 이 값을 표현 못 해 반올림된다
+    _write_raw(storage, _raw_key(), [_kis_row(frgn_ntby_tr_pbmn=big)])
+
+    assert normalize_investor.run(storage, "N1") == 0
+    [row] = _canonical_rows(storage, "KR", "2026-07-01")
+    assert row["net_val_foreign"] == 9007199254740993  # 반올림 없이 정확히 보존
+
+
+def test_optional_sub_field_garbage_fails_loud(tmp_path):
+    # WHY: 기관 세부는 결측을 관용하지만(null), 존재하는데 비수치(garbage)는 스키마 드리프트라
+    #      조용히 null 로 삼키면 안 된다 — non_numeric 으로 드러내 행을 탈락시킨다(edge-review F6).
+    #      결측(관용)과 present-garbage(surface)를 구분한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [_kis_row(fund_ntby_qty="garbage")])  # 세부 필드 존재+비수치
+
+    assert normalize_investor.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 0 and log["records_failed"] == 1
+    assert "non_numeric" in log["failures"][0]["reasons"]
+
+
 def test_non_numeric_headline_fails_loud(tmp_path):
     # WHY: NaN/문자 등 비수치 순매수를 조용히 통과시키면 canonical 이 오염된다 — 소수 순매수도
     #      드리프트다(순매수는 정수 카운트). 비수치 headline 은 탈락·사유 기록(Rule 12).
