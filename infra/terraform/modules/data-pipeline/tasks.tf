@@ -173,18 +173,20 @@ locals {
   analysis_container_name = "analysis-engine"
 
   # 결과 prefix — env(ALPHAMALE_RESULT_S3_PREFIX)와 analysis task 역할의 PutObject 스코프가
-  # 어긋나지 않게 한 곳에서 고정한다. dev 는 KODEX 반도체(091160) 단일 ETF 상수.
+  # 어긋나지 않게 한 곳에서 고정한다.
   analysis_result_s3_prefix = "operations_archive/etf_explanations/"
 
   analysis_env = merge({
-    AWS_REGION                 = var.region
-    ALPHAMALE_LAKE_BUCKET      = var.lake_bucket_name
-    PGHOST                     = var.db_host
-    PGPORT                     = tostring(var.db_port)
-    PGDATABASE                 = var.db_name
-    PGUSER                     = var.db_user
-    PGSCHEMA                   = "public"
-    DEEPSEEK_MODEL             = "deepseek-v4-pro"
+    AWS_REGION            = var.region
+    ALPHAMALE_LAKE_BUCKET = var.lake_bucket_name
+    PGHOST                = var.db_host
+    PGPORT                = tostring(var.db_port)
+    PGDATABASE            = var.db_name
+    PGUSER                = var.db_user
+    PGSCHEMA              = "public"
+    DEEPSEEK_MODEL        = "deepseek-v4-pro"
+    # fallback 기본값 — SFN analyze Map(ALPHA-470)이 이터레이션마다 유니버스 티커로 덮는다.
+    # 직접 ecs run-task(특정일 수동 재실행) 때만 이 값이 실제로 쓰인다.
     ALPHAMALE_ETF_TICKER       = "091160"
     ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
     },
