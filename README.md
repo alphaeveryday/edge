@@ -54,7 +54,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API. **읽기/쓰기** (증권사 관리 환경 배포 예정) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). 전달 레코드는 인메모리 스텁, mTLS 인가는 후속 |
-| `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 설명 저장소는 인메모리 시드 |
+| `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 |
 | `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
 | `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |

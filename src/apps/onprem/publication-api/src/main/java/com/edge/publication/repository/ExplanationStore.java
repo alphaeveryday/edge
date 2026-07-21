@@ -1,27 +1,31 @@
 package com.edge.publication.repository;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 /**
  * Published 설명 조회 — Publication API 의 유일한 데이터 소스.
- * 현재는 데모·테스트용 인메모리 시드. 온프렘 도메인 마이그레이션(state-machine ERD)
- * 확정 시 이 클래스를 DB 조회(Published 상태 필터)로 직접 재작성한다.
- * 시드는 tenant-sync-api 시드(069500, 2026-07-15)와 정합 — 데모 서사가 이어진다.
+ * 온프렘 Published Store(migrations-onprem: publication ⋈ analysis_item)를 조회하며,
+ * WHERE 절이 Published(그리고 노출 가능 상태 AUTO_PUBLISHED·APPROVED)만 허용하므로
+ * 그 외 상태는 이 층을 통과할 수 없다(제품 보장 — 계약 publication-api.md).
  */
 @Component
 public class ExplanationStore {
 
-	/** 조회 대상 도메인 모델(인메모리) — 영속화 시 온프렘 publications 테이블로 대체. */
+	/** 조회 도메인 모델 — publication_id 는 온프렘 발번(identity). */
 	public record PublishedExplanation(
-			String publicationId,
+			long publicationId,
 			String ticker,
 			String etfName,
 			LocalDate tradeDate,
@@ -34,37 +38,86 @@ public class ExplanationStore {
 		}
 	}
 
-	private static final LocalDate TRADE_DATE = LocalDate.of(2026, 7, 15);
-	private static final OffsetDateTime PUBLISHED_AT =
-			OffsetDateTime.of(2026, 7, 15, 16, 40, 0, 0, ZoneOffset.ofHours(9));
+	private static final String SERVE_SQL = """
+			SELECT p.publication_id, p.etf_ticker, a.etf_name, p.trade_date, a.summary,
+			       a.confidence_level, a.evidences::text AS evidences, p.published_at
+			FROM publication p
+			JOIN analysis_item a ON a.explanation_result_id = p.analysis_item_id
+			WHERE p.status = 'PUBLISHED'
+			  AND a.status IN ('AUTO_PUBLISHED', 'APPROVED')
+			  AND p.etf_ticker = ?
+			""";
 
-	// 상장 여부 판별(404)과 설명 존재 여부(204)는 다른 질문이다 — 305720 은 상장이지만 설명 없음.
-	private static final Set<String> KNOWN_TICKERS = Set.of("069500", "305720");
+	private final JdbcTemplate jdbc;
+	private final Set<String> knownTickers;
+	private final ObjectMapper objectMapper = new ObjectMapper();
 
-	private final Map<String, PublishedExplanation> published = Map.of(
-			"069500", new PublishedExplanation(
-					"pub-20260715-069500-0001", "069500", "KODEX 200", TRADE_DATE,
-					"반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
-					"MEDIUM",
-					List.of(new PublishedExplanation.Evidence(
-							"NEWS", "반도체 수출 반등", "demo",
-							OffsetDateTime.of(2026, 7, 15, 13, 0, 0, 0, ZoneOffset.ofHours(9)))),
-					PUBLISHED_AT)
-	);
-
-	public boolean isKnownTicker(String ticker) {
-		return KNOWN_TICKERS.contains(ticker);
+	public ExplanationStore(JdbcTemplate jdbc,
+			@Value("${publication.known-tickers}") Set<String> knownTickers) {
+		this.jdbc = jdbc;
+		this.knownTickers = knownTickers;
 	}
 
-	/** 해당 ETF·일자의 Published 설명. trade_date 가 null 이면 가장 최근 게시분. */
+	/** 상장 여부(404 판별) — 종목 마스터 동기화 전의 설정 allowlist. */
+	public boolean isKnownTicker(String ticker) {
+		return knownTickers.contains(ticker);
+	}
+
+	/**
+	 * 해당 ETF·일자의 Published 설명. trade_date 가 null 이면 **최신 거래일**의 게시분 —
+	 * 화면(MTS AI 탭)은 "가장 최근 거래일의 분석"을 원하므로 게시 시각이 아니라
+	 * 거래일을 우선 정렬한다(과거일 검수분이 늦게 게시돼도 최신 거래일이 이긴다).
+	 */
 	public Optional<PublishedExplanation> findPublished(String ticker, LocalDate tradeDate) {
-		PublishedExplanation e = published.get(ticker);
-		if (e == null) {
-			return Optional.empty();
+		List<PublishedExplanation> rows = tradeDate == null
+				? jdbc.query(SERVE_SQL + " ORDER BY p.trade_date DESC, p.published_at DESC LIMIT 1",
+						rowMapper(), ticker)
+				: jdbc.query(SERVE_SQL + " AND p.trade_date = ? ORDER BY p.published_at DESC LIMIT 1",
+						rowMapper(), ticker, tradeDate);
+		return rows.stream().findFirst();
+	}
+
+	private RowMapper<PublishedExplanation> rowMapper() {
+		return (rs, rowNum) -> new PublishedExplanation(
+				rs.getLong("publication_id"),
+				rs.getString("etf_ticker"),
+				rs.getString("etf_name"),
+				rs.getObject("trade_date", LocalDate.class),
+				rs.getString("summary"),
+				rs.getString("confidence_level"),
+				parseEvidences(rs.getString("evidences")),
+				rs.getObject("published_at", OffsetDateTime.class));
+	}
+
+	/**
+	 * analysis_item.evidences JSONB — [{kind, title, source, published_at}] (번들 경계면 형상).
+	 * 형상 위반(배열 아님·비객체 요소)은 조용히 빈 근거로 만들지 않고 즉시 실패시킨다
+	 * (Rule 12 fail-loud — 저장 데이터 오류를 200 응답이 은폐하면 안 된다).
+	 */
+	private List<PublishedExplanation.Evidence> parseEvidences(String json) {
+		if (json == null || json.isBlank()) {
+			return List.of();
 		}
-		if (tradeDate != null && !e.tradeDate().equals(tradeDate)) {
-			return Optional.empty();
+		JsonNode root = objectMapper.readTree(json);
+		if (root.isNull()) {
+			return List.of();
 		}
-		return Optional.of(e);
+		if (!root.isArray()) {
+			throw new IllegalStateException("evidences JSONB 가 배열이 아니다: " + root.getNodeType());
+		}
+		List<PublishedExplanation.Evidence> evidences = new ArrayList<>();
+		for (JsonNode node : root) {
+			if (!node.isObject()) {
+				throw new IllegalStateException("evidences 요소가 객체가 아니다: " + node.getNodeType());
+			}
+			evidences.add(new PublishedExplanation.Evidence(
+					node.path("kind").asString(null),
+					node.path("title").asString(null),
+					node.path("source").asString(null),
+					node.hasNonNull("published_at")
+							? OffsetDateTime.parse(node.get("published_at").asString())
+							: null));
+		}
+		return evidences;
 	}
 }

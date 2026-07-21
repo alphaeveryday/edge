@@ -10,22 +10,28 @@
 - **원본 고객 ID를 받는 표면을 만들지 않는다** — 고객 식별은 `X-Customer-Hash`(증권사 생성)뿐. 해시 생성 규칙·salt는 증권사 관리 영역이다.
 - **응답 봉투는 에러에만** — 성공(200) 본문은 계약 형상 그대로(jvm-common `ApiResponse`는 4xx/5xx만, 도메인 코드 `PublicationErrorStatus`).
 
+## 데이터 소스
+
+- `ExplanationStore` — 온프렘 Published Store(migrations-onprem: `publication ⋈ analysis_item`) JDBC 조회. WHERE 절이 PUBLISHED + 노출 가능 상태(AUTO_PUBLISHED·APPROVED)만 허용한다. `trade_date` 생략 시 **최신 거래일** 게시분(게시 시각 아님 — 화면 시맨틱).
+- `ExposureLogRecorder` — `exposure_log` INSERT (스키마가 `summary_snapshot NOT NULL` 강제).
+- 상장 판별(404)은 설정 allowlist `publication.known-tickers` — 종목 마스터 동기화 도입 전 임시.
+- 로컬 데이터: compose 의 `flyway-onprem` 이 스키마와 로컬 전용 시드(`libs/schema/seed-local-onprem` — SSOT 밖)를 적용한다. screening-worker 실적재 시작 시 시드 제거 예정.
+
 ## 재작성 지점
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `ExplanationStore` (인메모리 시드 — 069500 게시분 1건, 305720 상장·설명없음) | 온프렘 도메인 마이그레이션(state-machine ERD) 후 | 온프렘 DB의 Published 조회 (+ datasource) |
-| `ExposureLogRecorder` (인메모리 + 구조화 로그) | 온프렘 `exposure_log` 테이블 도입 후 | DB 기록 — 쓰기 경로 설계(유실 불가·저지연)는 오너 영역 |
 | `ExplanationService.DISCLAIMER` (상수) | 컴플라이언스 정책 테이블 도입 후 | 테넌트 정책의 기본 안내 문구 조회 |
+| known-tickers allowlist (설정) | 종목 마스터 동기화 도입 후 | DB 기반 상장 판별 |
 
 ## 실행·확인
 
 ```bash
-# src/ 에서
-./gradlew :apps:onprem:publication-api:bootRun
-curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/069500  # 200
-curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:8080/api/v1/explanations/305720  # 204
-# compose 로는 루트에서: docker compose up --build publication-api (host 18084)
+# 루트에서 (온프렘 PG + 스키마 + 시드 포함)
+docker compose up --build publication-api   # host 18084
+curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:18084/api/v1/explanations/069500  # 200
+curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:18084/api/v1/explanations/305720  # 204
+# bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:publication-api:bootRun)
 ```
 
-테스트 6건 — 계약 형상(snake_case·disclaimer 필수), 조회=노출 기록, 204는 기록 없음, 404, 400 봉투(SERV4001~4004)를 인코딩한다.
+테스트 6건 — 계약 형상(snake_case·disclaimer 필수), 조회=노출 기록, 204는 기록 없음, 404, 400 봉투(SERV4001~4004)를 인코딩한다. HTTP 계약은 시드 대역으로 검증하고, 실 DB 경로는 compose E2E 로 확인한다.

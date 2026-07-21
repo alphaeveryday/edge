@@ -43,7 +43,7 @@ public class ExplanationService {
 
 	private static ExplanationResponse toResponse(PublishedExplanation e) {
 		return new ExplanationResponse(
-				e.publicationId(),
+				String.valueOf(e.publicationId()),
 				new ExplanationResponse.EtfInfo(e.ticker(), e.etfName()),
 				e.tradeDate(),
 				e.summary(),
