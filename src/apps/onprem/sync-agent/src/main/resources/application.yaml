@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: sync-agent
+
+syncagent:
+  # 업스트림 Tenant Sync API(Cloud). compose 내에서는 http://tenant-sync-api:8080, 로컬은 :18083.
+  upstream-url: ${SYNC_UPSTREAM_URL:http://localhost:18083}

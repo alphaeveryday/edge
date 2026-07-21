@@ -178,6 +178,39 @@ services:
     ports:
       - "18083:8080"
 
+  # [ADR-0036] 온프렘 Sync 2모듈. sync-agent(DMZ)=outbound Pull·체크섬 검증(DB 미접근),
+  # intake(내부망)=폴링·received_bundle 멱등 적재·committed cursor 전진.
+  sync-agent:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/sync-agent/Dockerfile
+    container_name: edge-sync-agent
+    depends_on:
+      - tenant-sync-api
+    environment:
+      SYNC_UPSTREAM_URL: http://tenant-sync-api:8080
+    ports:
+      - "18085:8080"
+
+  intake:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/intake/Dockerfile
+    container_name: edge-intake
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+      sync-agent:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      SYNC_AGENT_URL: http://sync-agent:8080
+      SYNC_POLL_MS: "5000"
+    ports:
+      - "18086:8080"
+
 volumes:
   edge-postgres-data:
   edge-postgres-onprem-data:

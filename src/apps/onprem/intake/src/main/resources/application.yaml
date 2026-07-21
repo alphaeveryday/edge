@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: intake
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+
+intake:
+  # compose 내에서는 http://sync-agent:8080, 로컬은 :18085.
+  sync-agent-url: ${SYNC_AGENT_URL:http://localhost:18085}
+  poll-ms: ${SYNC_POLL_MS:5000}
