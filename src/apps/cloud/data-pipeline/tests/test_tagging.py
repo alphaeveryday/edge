@@ -303,6 +303,35 @@ def test_malformed_200_response_is_not_mistaken_for_empty(monkeypatch):
         fn("s", "u")
 
 
+@pytest.mark.parametrize(
+    "base_url, expect_thinking",
+    [
+        ("https://api.deepseek.com/v1", True),   # DeepSeek v4 — thinking 기본 ON 이라 꺼야 JSON 이 안 깨진다
+        ("https://api.openai.com/v1", False),    # 벤더 스왑 — thinking 은 미지원 키라 넣으면 400
+    ],
+)
+def test_thinking_param_only_for_deepseek_endpoint(monkeypatch, base_url, expect_thinking):
+    # WHY: llm.py 는 base_url·model 만 바꿔 벤더를 스왑하는 중립 어댑터다(모듈 docstring).
+    # thinking:disabled 는 DeepSeek v4 전용 파라미터라 무조건 넣으면 OpenAI 등 다른 벤더가
+    # 400 을 내 태깅 전체가 실패한다 — 엔드포인트가 DeepSeek 일 때만 실려야 한다.
+    import contextlib
+    import io
+
+    from data_pipeline.tagging import llm
+
+    captured: dict = {}
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data.decode())
+        yield io.BytesIO(json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode())
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    fn = llm.openai_compatible_complete_fn(api_key="k", base_url=base_url)
+    fn("s", "u")
+    assert ("thinking" in captured["body"]) is expect_thinking
+
+
 def test_event_doc_class_without_events_is_flagged():
     # WHY: EVENT 라 해놓고 사건을 못 내는 것도 자기모순이다 — 반대 방향(비-EVENT 인데 사건
     # 냄)만 잡으면 비대칭이다. 골든 eval 에서 이 조합 2건이 둘 다 티처 기준 비-사건이었다:

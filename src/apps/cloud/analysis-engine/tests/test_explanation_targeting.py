@@ -117,7 +117,7 @@ def test_run_fails_loud_when_holdings_empty(monkeypatch):
     settings = SimpleNamespace(
         trade_date=date(2026, 7, 20), request_id="r", region="ap-northeast-2",
         lake_bucket="b", etf_ticker="305720", pg={}, deepseek_api_key="k",
-        deepseek_model="deepseek-chat", release_bundle_version=None,
+        deepseek_model="deepseek-v4-pro", release_bundle_version=None,
         result_s3_prefix=None, aws_profile=None)
 
     with pytest.raises(dp.PipelineError):

@@ -22,8 +22,10 @@ import json
 import urllib.request
 
 # OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 인자로 한다(코드 수정 불필요).
+# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 는 thinking 기본 ON 이라 complete 가
+# thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-v4-pro"
 # 추출은 창작이 아니다 — 같은 기사에 같은 라벨이 나와야 재현·집계가 된다.
 DEFAULT_TEMPERATURE = 0.0
 
@@ -46,15 +48,23 @@ def openai_compatible_complete_fn(
         raise RuntimeError("태깅 LLM api_key 가 비었다 — 호출 불가")
     url = f"{base_url.rstrip('/')}/chat/completions"
     model_name = model
+    # thinking:disabled 는 DeepSeek v4 전용 파라미터다 — v4 는 thinking 기본 ON 이고 켜지면
+    # 구조화 JSON 이 깨진다(vllm#41132). 다른 OpenAI 호환 벤더(openai 등)엔 알 수 없는 키라
+    # 400 이 난다. 벤더 중립 계약(base_url·model 만 바꿔 스왑, 코드 수정 0)을 지키려
+    # 엔드포인트가 DeepSeek 일 때만 넣는다.
+    is_deepseek = "deepseek" in base_url.lower()
 
     def complete(system: str, user: str) -> str:
-        body = json.dumps({
+        request_body: dict = {
             "model": model_name,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "temperature": DEFAULT_TEMPERATURE,
             "response_format": {"type": "json_object"},
-        }).encode("utf-8")
+        }
+        if is_deepseek:
+            request_body["thinking"] = {"type": "disabled"}
+        body = json.dumps(request_body).encode("utf-8")
         request = urllib.request.Request(url, data=body, headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
