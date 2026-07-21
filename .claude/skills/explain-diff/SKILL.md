@@ -60,6 +60,6 @@ Codex 리뷰 비수용 finding 등 PR 본문에 담긴 판단 근거가 있으�
 
 ### 5. 생성·반환
 
-`notion-create-pages(parent={type:"page_id", page_id:"3a423c555bf48029987ed9debf48fddc"}, pages=[{title, icon, content}])` 로 고정 팀 경로 밑에 한 페이지 생성하고 **URL 을 반환**한다. 만든 위치(워크스페이스·상위 페이지)를 함께 보고한다.
+`notion-create-pages(parent={type:"page_id", page_id:"3a423c555bf48029987ed9debf48fddc"}, pages=[{properties:{title:"…"}, icon, content}])` 로 고정 팀 경로 밑에 한 페이지 생성하고 **URL 을 반환**한다. 제목은 top-level 이 아니라 **`properties.title`** 에 넣는다 — Notion 스키마상 워크스페이스 페이지의 title 은 properties 맵에 있어야 하고, top-level `title` 은 무시돼 제목 없는 페이지가 된다. 만든 위치(워크스페이스·상위 페이지)를 함께 보고한다.
 
 `content`·`parent`·`pages` 는 tool 인자로 **직접** 넘긴다 — 전체를 raw JSON 문자열로 직렬화해 넘기면 긴 본문의 이스케이프가 깨져 파싱 실패한다(실측).
