@@ -89,9 +89,26 @@ module "rds" {
   subnet_ids = module.network.data_subnet_ids # 격리 데이터 tier(컴퓨트와 분리)
 }
 
-# ── 내부 API (호출자 생길 때까지 idle) ──────────────────
+# ── super-admin 공개 엣지 (ADR-0034, ALPHA-473) ─────────
+# 운영 콘솔 API 를 전용 ALB 로 직결한다 — 호스트 단위 1:1, 경로 라우팅 없음. sync ALB 와
+# 진입점을 공유하지 않는 이유는 mTLS 가 리스너 단위라서(공유 시 운영자 브라우저까지
+# 클라이언트 인증서 강제). WAFv2 부착은 ALPHA-297 후속.
+# ⚠️ 앱 인증 미구현(스캐폴드) — 현재 노출 표면은 actuator health 뿐(컨트롤러 0·DB 미배선).
+# 실기능 컨트롤러·DB 배선은 인증(ALPHA-474) 선행이 게이트다 — cross-tenant 운영자
+# 표면은 운영자 인증·인가를 요구한다(ADR-0008).
 # tenant-console-api 는 onprem 플레인 앱(ADR-0029)이라 dev ECS 에서 제거됐다 —
 # 실 배포처는 데모 박스 compose 스택(ADR-0033).
+module "super_admin_alb" {
+  source = "../../modules/alb"
+
+  name              = "${local.prefix}-admin"
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+
+  enable_https    = true
+  certificate_arn = data.aws_acm_certificate.wildcard_alb.arn
+}
+
 module "super_admin_api" {
   source = "../../modules/ecs-service"
 
@@ -108,6 +125,24 @@ module "super_admin_api" {
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
+
+  target_group_arn           = module.super_admin_alb.target_group_arn
+  ingress_security_group_ids = [module.super_admin_alb.security_group_id]
+
+  # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다(sync 와 동일한 fresh apply 경쟁).
+  depends_on = [module.super_admin_alb]
+}
+
+resource "aws_route53_record" "admin_api" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.admin_api_domain
+  type    = "A"
+
+  alias {
+    name                   = module.super_admin_alb.dns_name
+    zone_id                = module.super_admin_alb.zone_id
+    evaluate_target_health = false
+  }
 }
 
 # ── Sync 채널 공개 엣지 (ADR-0034) ──────────────────────

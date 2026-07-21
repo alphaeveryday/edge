@@ -88,3 +88,9 @@ variable "admin_domain" {
   type        = string
   default     = "admin-dev.edgesignal.dev"
 }
+
+variable "admin_api_domain" {
+  description = "super-admin-api 공개 엣지 ALB 도메인(ADR-0034 — UI 도메인 admin-dev 와 짝). prod 는 admin-api.edgesignal.dev 로."
+  type        = string
+  default     = "admin-api-dev.edgesignal.dev"
+}
