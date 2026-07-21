@@ -44,8 +44,23 @@ resource "aws_iam_role_policy" "ssm_core" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
+      # AmazonSSMManagedInstanceCore 에서 ssm:GetParameter* 만 뺀 집합 — Run Command 가 문서를
+      # 가져와(GetDocument) 실행하는 데 필요한 문서·association 액션까지 포함한다.
+      # (파라미터 읽기는 아래 cert 한정 정책이 유일한 경로로 유지)
       Action = [
         "ssm:UpdateInstanceInformation",
+        "ssm:ListAssociations",
+        "ssm:ListInstanceAssociations",
+        "ssm:DescribeAssociation",
+        "ssm:UpdateAssociationStatus",
+        "ssm:UpdateInstanceAssociationStatus",
+        "ssm:GetDocument",
+        "ssm:DescribeDocument",
+        "ssm:GetManifest",
+        "ssm:GetDeployablePatchSnapshotForInstance",
+        "ssm:PutInventory",
+        "ssm:PutComplianceItems",
+        "ssm:PutConfigurePackageResult",
         "ssmmessages:CreateControlChannel",
         "ssmmessages:CreateDataChannel",
         "ssmmessages:OpenControlChannel",

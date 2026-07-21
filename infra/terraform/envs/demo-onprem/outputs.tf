@@ -19,6 +19,6 @@ output "mts_url" {
 }
 
 output "cert_parameter_name" {
-  description = "데모 mTLS cert SSM 파라미터 — 실제 cert 를 여기 수동 주입"
-  value       = aws_ssm_parameter.demo_cert.name
+  description = "데모 mTLS cert SSM SecureString 파라미터 이름 — 운영자가 CLI(put-parameter)로 여기 생성·주입"
+  value       = local.cert_param_name
 }

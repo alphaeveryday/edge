@@ -27,7 +27,9 @@
   - **CD = SSM Run Command** — EC2 instance profile에 `AmazonSSMManagedInstanceCore`를 붙여
     SSM-manageable하게 만든다. 코드 배포(compose·이미지)는 GitHub Actions가 SSM으로 원격 실행
     (SSH·열 포트·정적 키 없음, 기존 OIDC 재사용).
-  - **mTLS = 데모 단축** — pre-provisioned cert를 SSM SecureString에 두고 instance profile이 읽어 주입.
+  - **mTLS = 데모 단축** — pre-provisioned cert를 SSM SecureString에 둔다. **terraform은 그 값을
+    관리하지 않는다**(SecureString 을 terraform 이 관리하면 평문이 state 에 저장·refresh 로 노출됨) —
+    운영자가 CLI 로 파라미터를 생성하고, terraform 은 ARN 만 구성해 instance profile 이 읽게 한다.
   - **DB = compose 내장 PG+Redis** — terraform 밖([[0011-rls-to-physical-isolation]] 고객 격리 정신).
   - **부하 실험 겸용** — `instance_type`·볼륨(gp3/io2) 파라미터화. audit heavy-write·publication
     heavy-read를 단일 노드 상한까지 실험(온프렘 scale-up 모델이라 그 상한이 "한 증권사 install"의 값).

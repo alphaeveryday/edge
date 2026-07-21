@@ -1,5 +1,15 @@
+data "aws_caller_identity" "current" {}
+
 locals {
   prefix = "edge-demo-onprem"
+
+  # 데모 mTLS 클라이언트 인증서용 SSM SecureString. terraform 은 값을 관리하지 않는다 —
+  # SecureString 을 terraform 이 관리하면 평문이 state 에 저장되고, refresh 가 수동 주입한
+  # 실제 cert 를 공유 state 로 끌어와 노출한다. 운영자가 CLI 로 생성하고(아래 주석),
+  # 여기서는 ARN 만 구성해 instance profile 정책에 넘긴다(deepseek 시크릿과 같은 패턴).
+  #   aws ssm put-parameter --name /edge-demo-onprem/sync/client-cert --type SecureString --value "$(cat client.pem)"
+  cert_param_name = "/${local.prefix}/sync/client-cert"
+  cert_param_arn  = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter${local.cert_param_name}"
 }
 
 # 데모는 신규 VPC 를 만들지 않는다(ADR-0033 — dev 와 격리·단순).
@@ -27,18 +37,6 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
-# 데모 mTLS 클라이언트 인증서 — pre-provisioned(값은 apply 밖 수동 주입, ADR-0033).
-# placeholder 로 그릇만 만들고, 실제 cert 는 콘솔/CLI 로 이 파라미터에 넣는다(ignore_changes).
-resource "aws_ssm_parameter" "demo_cert" {
-  name  = "/${local.prefix}/sync/client-cert"
-  type  = "SecureString"
-  value = "REPLACE_ME"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
 # 가상 온프렘 박스 (EC2 + compose 부트스트랩).
 module "demo_onprem" {
   source = "../../modules/demo-onprem"
@@ -53,7 +51,7 @@ module "demo_onprem" {
   root_volume_iops = var.root_volume_iops
 
   mock_broker_port        = var.mock_broker_port
-  cert_parameter_arn      = aws_ssm_parameter.demo_cert.arn
+  cert_parameter_arn      = local.cert_param_arn
   ingress_prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   # ECR 은 데모 이미지 저장소 확정 전까지 스코프 미지정(전체 pull). 저장소 생기면 좁힌다.
 }
