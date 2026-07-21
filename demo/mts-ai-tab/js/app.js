@@ -91,6 +91,7 @@
     period: 2,
     liked: {},
     aiRequestSeq: 0,    // 종목 전환 중 도착한 낡은 응답 무시용
+    aiFetched: false,   // 현재 종목에서 AI 탭이 실제로 열렸는지 — 열기 전엔 호출하지 않는다
   };
 
   function el(id) {
@@ -193,9 +194,12 @@
     el('st-chg').textContent = stock.chgDetail;
     el('st-chg').style.color = stock.color;
     renderFavAlert();
+    // AI 분석 호출은 탭이 실제로 열릴 때만 — 성공 조회는 publication-api 가
+    // exposure_log(고객 노출 이력)로 기록하므로, 보지 않은 화면을 노출로 남기지 않는다.
+    state.aiFetched = false;
+    state.aiRequestSeq++; // 이전 종목의 in-flight 응답 무효화
     selectTab(tab || '차트');
     showScreen('stock');
-    fetchAiAnalysis();
   }
 
   function selectTab(name) {
@@ -218,6 +222,10 @@
     Object.keys(panels).forEach(function (label) {
       el(panels[label]).style.display = label === name ? 'block' : 'none';
     });
+    if (name === AI_TAB && !state.aiFetched) {
+      state.aiFetched = true;
+      fetchAiAnalysis();
+    }
   }
 
   function renderFavAlert() {
