@@ -33,10 +33,33 @@ resource "aws_iam_role" "this" {
   assume_role_policy = data.aws_iam_policy_document.assume.json
 }
 
-# SSM 관리형 인스턴스(에이전트 → SSM 컨트롤플레인). CD 가 SSM Run Command 로 배포하는 전제.
-resource "aws_iam_role_policy_attachment" "ssm" {
-  role       = aws_iam_role.this.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+# SSM 관리형 인스턴스(에이전트 ↔ SSM 컨트롤플레인) — CD 가 SSM Run Command 로 배포하는 전제.
+# AWS 관리형 AmazonSSMManagedInstanceCore 대신 최소 인라인을 쓴다: 그 관리형 정책은
+# ssm:GetParameter* 를 Resource=* 로 허용해 아래 cert 한정 정책을 무효화하기 때문(계정 내 임의
+# Parameter Store 열람 가능). 여기 담은 건 에이전트 등록 + Run Command/Session 메시징 채널뿐이다.
+resource "aws_iam_role_policy" "ssm_core" {
+  name = "${var.name}-ssm-core"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply",
+      ]
+      Resource = "*"
+    }]
+  })
 }
 
 # ECR pull(로그인 + 레이어). 저장소는 var 로 스코프(비면 전체).

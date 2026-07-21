@@ -33,7 +33,9 @@
     heavy-read를 단일 노드 상한까지 실험(온프렘 scale-up 모델이라 그 상한이 "한 증권사 install"의 값).
 
 **이 PR에서 하지 않는 것(범위 경계)**:
-- **terraform apply** — .tf만, PR terraform-plan CI가 검증. state 파일은 커밋하지 않는다.
+- **terraform apply** — .tf만. 데모 스택은 apply CD 밖이라 **오프라인 `terraform validate` CI**
+  (creds·default VPC 불필요)로 HCL·모듈·remote-state 참조를 검증한다. full plan/apply CI 편입은
+  실제 apply 착수 시(default VPC/서브넷 확정과 함께). state 파일은 커밋하지 않는다.
 - **온프렘 compose 파일·`deploy-demo-onprem.yml`** — `sync-agent`·`compliance-engine` 코드 완료 후.
   GHA 측 `ssm:SendCommand` 권한도 그 CD PR과 함께(EC2의 SSM 수신측만 이번에 준비).
 - **CloudFront `/api/*` → EC2(mock-broker) 오리진 프록시** — mock-broker 컨테이너가 생기는 런타임과 함께.
