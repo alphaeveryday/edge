@@ -108,7 +108,7 @@ const items: Explanation[] = [
   },
   {
     id: 11, name: 'AMD', code: 'AMD', market: 'NASDAQ', direction: -1, changePct: 3.29,
-    status: 'STOPPED', risk: 'MEDIUM', receivedRelative: '4시간 전', receivedAt: '2026-07-11 06:50 KST',
+    status: 'UNPUBLISHED', risk: 'MEDIUM', receivedRelative: '4시간 전', receivedAt: '2026-07-11 06:50 KST',
     evidence: [
       { type: '뉴스', title: '데이터센터 부문 경쟁 심화 우려', source: 'Reuters', time: '05:31' },
     ],
@@ -156,13 +156,14 @@ export const mockExplanationsRepository: ExplanationsRepository = {
     patch(id, (it) => ({ ...it, final }));
   },
   async stop(id) {
-    patch(id, (it) => ({ ...it, status: 'STOPPED' }));
+    patch(id, (it) => ({ ...it, status: 'UNPUBLISHED' }));
   },
   async moveToReview(id) {
     patch(id, (it) => ({ ...it, status: 'REVIEW_REQUIRED' }));
   },
   async approve(id, final, _note) {
-    patch(id, (it) => ({ ...it, status: 'AUTO_PUBLISHED', final, reviewReason: undefined }));
+    // 검수자 승인은 자동 제공과 구분되는 APPROVED — 상태기계(state-machine.md) 어휘
+    patch(id, (it) => ({ ...it, status: 'APPROVED', final, reviewReason: undefined }));
   },
   async reject(id, _note) {
     patch(id, (it) => ({ ...it, status: 'REJECTED' }));

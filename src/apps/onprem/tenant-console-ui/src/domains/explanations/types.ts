@@ -3,11 +3,12 @@
  * 한글 라벨·배지 톤 매핑은 labels.ts(뷰 관심사)에 둔다. */
 
 export type ServeStatus =
-  | 'AUTO_PUBLISHED' // 자동 제공
+  | 'AUTO_PUBLISHED' // 자동 제공 (정책 통과)
+  | 'APPROVED' // 승인 제공 (검수자 승인)
   | 'REVIEW_REQUIRED' // 검수 대기
   | 'BLOCKED' // 점검 차단
   | 'REJECTED' // 검수 반려
-  | 'STOPPED'; // 제공 중단 (운영자 수동)
+  | 'UNPUBLISHED'; // 제공 중단 (운영자 수동 — publication 상태)
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 

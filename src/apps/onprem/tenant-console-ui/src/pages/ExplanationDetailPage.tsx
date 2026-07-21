@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Delta, Icon, StatusBadge, toast } from 'ui-kit';
 import {
-  MARKET_DESC, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
+  MARKET_DESC, PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { LoadError } from './_shared/cells';
@@ -89,7 +89,8 @@ export function ExplanationDetailPage() {
               검수로 이관
             </button>
           )}
-          {it.status !== 'STOPPED' && (
+          {/* 실제 노출 중인 상태에서만 — 검수 대기·차단·반려 건은 승인/반려 플로우를 우회하지 않게 */}
+          {PUBLISHED_STATUSES.includes(it.status) && (
             <button
               className="btn btn-danger"
               onClick={() =>

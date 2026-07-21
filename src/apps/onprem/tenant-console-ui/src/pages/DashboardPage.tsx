@@ -60,7 +60,7 @@ export function DashboardPage() {
           </div>
           <div className="kpi">
             <div className="kpi-label">제공 중단</div>
-            <div className="kpi-value">{count('STOPPED')}</div>
+            <div className="kpi-value">{count('UNPUBLISHED')}</div>
             <div className="kpi-sub">운영자 수동 중단</div>
           </div>
         </div>

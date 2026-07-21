@@ -4,19 +4,24 @@ import type { FeedState, ReviewReason, RiskLevel, ServeStatus } from './types';
 
 export const STATUS_LABEL: Record<ServeStatus, string> = {
   AUTO_PUBLISHED: '자동 제공',
+  APPROVED: '승인 제공',
   REVIEW_REQUIRED: '검수 대기',
   BLOCKED: '점검 차단',
   REJECTED: '검수 반려',
-  STOPPED: '제공 중단',
+  UNPUBLISHED: '제공 중단',
 };
 
 export const STATUS_TONE: Record<ServeStatus, BadgeTone> = {
   AUTO_PUBLISHED: 'exposed',
+  APPROVED: 'exposed',
   REVIEW_REQUIRED: 'warn',
   BLOCKED: 'blocked',
   REJECTED: 'blocked',
-  STOPPED: 'gated',
+  UNPUBLISHED: 'gated',
 };
+
+/** 고객 화면에 실제 노출 중인 상태 — 제공 중단 액션은 이 상태에서만 의미가 있다 */
+export const PUBLISHED_STATUSES: ServeStatus[] = ['AUTO_PUBLISHED', 'APPROVED'];
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   LOW: '저위험',
