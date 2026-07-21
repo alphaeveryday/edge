@@ -21,7 +21,7 @@ diff 를 남(또는 나중의 나)에게 가르치는 학습용 페이지로 뽑
 - **PR 번호**: `gh pr view <N> --json number,title,body,headRefName,baseRefName,url,additions,deletions,files` + `gh pr diff <N>`
 - **브랜치**: `git diff dev...<branch>`
 - **커밋/범위**: 그 SHA/범위
-- **미지정**: 현재 브랜치의 `git diff dev...HEAD` + 작업트리(`git status --short`)
+- **미지정**: 현재 브랜치의 `git diff dev...HEAD`(커밋분) + 작업트리 변경. 작업트리는 `git diff HEAD`(스테이징·비스테이징 hunk)로 실제 변경 내용을 받고, `git status --short`로 untracked 파일을 찾아 그 내용을 읽는다 — `git status`는 파일명만 줄 뿐 hunk를 주지 않으므로 설명할 diff가 비지 않게 한다
 
 PR 이 아직 로컬 checkout 이 아니면, 배경 설명에 필요한 원본 파일은 PR head SHA 에서 꺼낸다(`gh pr view <N> --json headRefOid`, `git fetch origin <sha>`, `git show <sha>:<path>`). merge 되지 않은 SSOT 함수 정의 등이 현재 checkout 에 없을 수 있다.
 
