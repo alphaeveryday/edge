@@ -203,6 +203,13 @@ class KisInvestorSource:
             new = 0
             for row in dated:
                 day = row["stck_bsop_date"]
+                # 창 하한 필터 — 이 엔드포인트는 FID_INPUT_DATE_1(창 끝) 하나만 받아 그 날부터
+                # 과거 ~30거래일을 통째로 준다(kis_price 는 FID_INPUT_DATE_1=시작일로 서버가 하한을
+                # 거르지만 여긴 못 건다). d1 아래 행까지 저장하면 증분 run 마다 ~30일치가 raw·
+                # canonical 에 얹혀 창 밖 파티션을 매일 재작성한다 — 요청 창 [d1,d2] 로 좁힌다.
+                # (페이지네이션 stop 은 아래 earliest 로 별도 판정하므로 필터가 종료를 깨지 않는다.)
+                if d1 and day < d1:
+                    continue
                 if day not in rows:
                     rows[day] = row
                     new += 1

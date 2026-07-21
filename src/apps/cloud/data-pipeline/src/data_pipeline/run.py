@@ -306,8 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     # 소급 일수는 스텝별로 다르다(가격 EOD 는 주말·공휴일 공백 때문에 더 넉넉히).
     from_date, to_date = args.from_date, args.to_date
     if from_date is None and to_date is None:
+        # 가격·투자자 수급은 소급을 넉넉히 둔다 — 주말·공휴일엔 EOD 가 없어 소급 1일이면 월요일
+        # 런이 직전 거래일(금요일)을 놓친다. 투자자 소스는 창 하한으로 필터하므로(over-fetch 방지)
+        # 30일 반환에 기대던 갭 커버가 사라져 가격과 같은 소급이 필요하다.
         lookback = (
-            DEFAULT_PRICE_LOOKBACK_DAYS if args.step == "ingest-price-raw" else DEFAULT_LOOKBACK_DAYS
+            DEFAULT_PRICE_LOOKBACK_DAYS
+            if args.step in ("ingest-price-raw", "ingest-raw-investor")
+            else DEFAULT_LOOKBACK_DAYS
         )
         from_date, to_date = default_window(datetime.now(timezone.utc), lookback)
 

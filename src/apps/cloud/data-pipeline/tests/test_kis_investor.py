@@ -159,6 +159,17 @@ def test_pagination_walks_back_and_dedups():
     assert dates == ["20260701", "20260702", "20260703"]
 
 
+def test_from_date_filters_rows_below_lower_bound():
+    # WHY: 이 엔드포인트는 FID_INPUT_DATE_1(창 끝) 하나만 받아 그 날부터 과거 ~30거래일을 통째로
+    #      준다(kis_price 는 시작일 파라미터로 서버가 하한을 거르지만 여긴 못 건다). d1 아래 행까지
+    #      저장하면 증분 run 마다 창 밖 파티션이 raw·canonical 에 얹혀 매일 재작성된다 — 요청 창
+    #      [d1,d2] 로 좁혀야 한다(edge-review·Codex 공동 지적).
+    src = _source({"005930": [_ok([_row("20260703"), _row("20260702"), _row("20260630")])]})
+    records = list(src.fetch(["005930"], from_date="2026-07-02"))
+    dates = [r["stck_bsop_date"] for r in records]
+    assert dates == ["20260702", "20260703"]  # 20260630 은 d1 아래라 제외
+
+
 def test_egw00201_retried_then_succeeds():
     # WHY: 초당한도(EGW00201)는 HTTP 429 가 아니라 응답 본문으로 온다 — 어댑터가 재시도해야
     #      행을 놓치지 않는다.
