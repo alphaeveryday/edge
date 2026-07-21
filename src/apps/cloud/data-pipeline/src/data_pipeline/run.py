@@ -42,6 +42,7 @@ from .sources import (
     FmpPriceSource,
     KisDailyPriceSource,
     KisEtfProfileSource,
+    KisInvestorSource,
     KisNavSource,
     KrxEtfSource,
     PoliteClient,
@@ -58,11 +59,13 @@ from .steps import (
     ingest_raw_disclosure,
     ingest_raw_etf,
     ingest_raw_financial,
+    ingest_raw_investor,
     normalize_disclosure,
     normalize_disclosure_segment,
     normalize_etf,
     normalize_etf_nav,
     normalize_etf_profile,
+    normalize_investor,
     normalize_news,
     normalize_price,
     tag_news,
@@ -104,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-etf-profile",
-                 "normalize-price",
+                 "ingest-raw-investor",
+                 "normalize-price", "normalize-investor",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "load-price-triggers",
                  "load-documents", "load-etf-nav", "load-assertions", "assemble-events"],
@@ -139,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-price":
         return normalize_price.run(storage, run_id, args.input_run_id)
+    # 투자자 수급 정제도 raw 만 읽는 스텝이라 수집 창·벤더 인자가 없다 — 벤더는 raw 키의
+    # source= 가 규정하고(현재 kis), 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
+    if args.step == "normalize-investor":
+        return normalize_investor.run(storage, run_id, args.input_run_id)
     # 뉴스 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-news":
@@ -298,8 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     # 소급 일수는 스텝별로 다르다(가격 EOD 는 주말·공휴일 공백 때문에 더 넉넉히).
     from_date, to_date = args.from_date, args.to_date
     if from_date is None and to_date is None:
+        # 가격·투자자 수급은 소급을 넉넉히 둔다 — 주말·공휴일엔 EOD 가 없어 소급 1일이면 월요일
+        # 런이 직전 거래일(금요일)을 놓친다. 투자자 소스는 창 하한으로 필터하므로(over-fetch 방지)
+        # 30일 반환에 기대던 갭 커버가 사라져 가격과 같은 소급이 필요하다.
         lookback = (
-            DEFAULT_PRICE_LOOKBACK_DAYS if args.step == "ingest-price-raw" else DEFAULT_LOOKBACK_DAYS
+            DEFAULT_PRICE_LOOKBACK_DAYS
+            if args.step in ("ingest-price-raw", "ingest-raw-investor")
+            else DEFAULT_LOOKBACK_DAYS
         )
         from_date, to_date = default_window(datetime.now(timezone.utc), lookback)
 
@@ -358,6 +371,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
         return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
+    if args.step == "ingest-raw-investor":
+        # 종목별 투자자 수급(ALPHA-482). KR·KIS 단일 벤더라 --source 분기가 없다. 수집
+        # 유니버스는 canonical KR holdings 에서 파생한다(가격과 같은 축, universe_from_holdings).
+        if settings.kis_investor is None:
+            # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+            raise SystemExit("kis_investor.source 설정이 없다 — sources.toml 확인")
+        if to_date is not None and from_date is None:
+            # KIS 투자자 수급은 FID_INPUT_DATE_1(창 끝)이 필수라 --to 만으론 창 하한이 없어
+            # 무한정 과거로 돈다 — 무의미한 전량 페이지네이션 전에 fail-fast(가격과 동형).
+            raise SystemExit("KIS 투자자 수급은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
+        investor_source = KisInvestorSource(
+            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+        )
+        return ingest_raw_investor.run(settings, storage, investor_source, run_id, from_date, to_date)
     if args.step == "ingest-raw-disclosure":
         # 공시는 KR·단일 벤더(OpenDART)라 --source 분기가 없다. 재무(fnlttSinglAcnt)와 별개
         # API·별개 잡이다. 날짜창은 뉴스와 동형(위에서 증분/백필 창을 채웠다).

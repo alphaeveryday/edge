@@ -29,6 +29,7 @@ from .models import (
     DartFinancialConfig,
     EtfConfig,
     FinancialConfig,
+    KisInvestorConfig,
     KisNavConfig,
     KisPriceConfig,
     KrxEtfConfig,
@@ -83,6 +84,10 @@ class Settings(BaseSettings):
     # KIS ETF NAV(ALPHA-380) 도 독립 잡이라 섹션 생략 가능 — 미설정이면 ingest-raw-nav
     # 진입점이 fail-loud 한다. 수집 유니버스는 krx_etf.source.etf_map 을 공유한다.
     kis_nav: KisNavConfig | None = None
+    # KIS 종목별 투자자 수급(ALPHA-482) 도 독립 잡이라 섹션 생략 가능 — 미설정이면
+    # ingest-raw-investor 진입점이 fail-loud 한다. 수집 유니버스는 canonical KR holdings 에서
+    # 파생한다(가격과 같은 축, universe_from_holdings).
+    kis_investor: KisInvestorConfig | None = None
     # DB(Cloud Event Store)는 적재 스텝(load-*)만 쓴다 — 수집·정제만 돌리는 환경은 생략
     # 가능하고, 미설정이면 load-* 진입점이 fail-loud 한다.
     db: DbConfig | None = None
