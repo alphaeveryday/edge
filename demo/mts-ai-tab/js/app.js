@@ -3,7 +3,9 @@
 (function () {
   'use strict';
 
-  // 데모 조작: ?ticker=091160 (다른 설명), ?ticker=114800 (204), ?ticker=999999 (5xx 폴백), 그 외 미지 코드 (404)
+  // 데모 조작: ?ticker=305720 (204 — 상장이나 설명 없음), 그 외 미지 코드 (404).
+  // FALLBACK(5xx·통신 실패)은 publication-api 컨테이너를 중지하고 조회하면 재현된다.
+  // 시드 근거: publication-api ExplanationStore (069500=200, 305720=204).
   const params = new URLSearchParams(location.search);
   const ticker = params.get('ticker') || '069500';
   const tradeDate = params.get('trade_date') || null;
@@ -11,8 +13,7 @@
   // 증권사 자체 종목 마스터(목업) — Publication API와 무관한 증권사 데이터
   const ETF_NAMES = {
     '069500': 'KODEX 200',
-    '091160': 'KODEX 반도체',
-    '114800': 'KODEX 인버스',
+    '305720': 'KODEX 2차전지산업',
   };
 
   const TAB_NAMES = ['시세', '차트', '호가', 'AI 분석', '뉴스·공시', '구성종목', '투자자', '재무'];
