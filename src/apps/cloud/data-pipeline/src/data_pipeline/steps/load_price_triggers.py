@@ -290,8 +290,18 @@ def run(
                     exit_code = 1
                     universe = []
             else:
+                # 유니버스 탐색용 스냅샷 범위. to_date 백필이면 **그 이후 첫 스냅샷까지만** 본다 —
+                # 그 뒤 스냅샷은 창 안 어떤 거래일의 as_of(≤date 최신 / 가장 이른 미래)로도
+                # 선택될 수 없어, 읽으면 창 밖 obsolete 파티션의 손상·무관 ETF 만 백필에
+                # 끌어들인다(Codex P2). 과거 스냅샷은 상한을 못 둔다: holdings 에서 빠진 ETF 가
+                # 옛 스냅샷을 최신 as_of 로 쓰므로(stale holdings 정합) 전부 봐야 한다.
+                scan_dates = holdings_dates
+                if to_date is not None:
+                    after = [hd for hd in holdings_dates if hd > to_date]
+                    if after:
+                        scan_dates = [hd for hd in holdings_dates if hd <= after[0]]
                 holdings_etf_ids: set[str] = set()
-                for hd in holdings_dates:
+                for hd in scan_dates:
                     holdings_etf_ids |= holdings_of(hd).keys()
                 unknown = sorted(holdings_etf_ids - master.keys())
                 skipped_unknown_etf = len(unknown)

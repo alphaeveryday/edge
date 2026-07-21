@@ -414,6 +414,26 @@ def test_coverage_is_recorded_per_etf_not_mixed(tmp_path, monkeypatch):
     assert log["coverage_by_etf_date"]["111111"]["2026-07-16"] == 0.5  # 안 덮인다
 
 
+def test_windowed_run_excludes_etfs_only_in_snapshots_after_window(tmp_path, monkeypatch):
+    """--to 백필의 유니버스 탐색은 창 이후 첫 스냅샷까지만 본다(Codex P2). 그 뒤에만 있는
+    ETF 는 창 안 어떤 거래일의 as_of 로도 안 뽑히므로 유니버스에 끌려들지 않고, 그 파티션을
+    읽지 않아 손상돼도 실행을 죽이지 않는다. 과거 스냅샷은 stale 정합상 상한 없이 다 본다."""
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage, as_of="2026-07-01", etf="091160")  # 창 이하 — 대상
+    _write_holdings(storage, "2026-07-20",  # to(07-16) 이후 첫 스냅샷 — 경계까지는 스캔
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="091160")
+    _write_holdings(storage, "2026-08-01",  # 경계 밖 — 여기에만 있는 ETF 는 제외돼야
+                    [{"constituent_ticker": "005930", "weight_pct": 100.0}], etf="888888")
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])  # +10%
+    conn = _FakeConn(master={"091160": "inst_A", "888888": "inst_B"})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None, to_date="2026-07-16") == 0
+    log = _quality_log(storage)
+    assert "091160" in log["etf_tickers"]
+    assert "888888" not in log["etf_tickers"]  # 창+1 밖 스냅샷의 ETF 는 백필에 안 끌려든다
+
+
 def test_missing_holdings_counts_not_crashes(tmp_path, monkeypatch):
     """holdings 스냅샷이 없으면 proxy 를 만들 수 없다 — 수치로 남기고 넘어간다.
 
