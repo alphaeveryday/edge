@@ -230,13 +230,15 @@ function RulesTab() {
 }
 
 function DisclaimerTab() {
-  const { data: saved, isError } = useDisclaimer();
+  const { data: saved, isError, isPending } = useDisclaimer();
   const { updateDisclaimer } = useScreeningActions();
   const [draft, setDraft] = useState<string>();
 
-  const text = draft ?? saved ?? '';
-
   if (isError) return <LoadError />;
+  // 저장값 로드 전에 저장하면 빈 값으로 면책 문구를 덮어쓴다 — 로드 후 렌더
+  if (isPending) return null;
+
+  const text = draft ?? saved;
 
   return (
     <div className="card max-w-[720px]">

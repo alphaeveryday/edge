@@ -20,8 +20,13 @@ export function UsersPage() {
       toast('올바른 이메일을 입력하세요.');
       return;
     }
+    // 테넌트 도메인을 모르는 채 초대를 보내면 도메인 검증이 통째로 건너뛰어진다 — 세션 확보가 선행
+    if (!session) {
+      toast('세션 정보를 불러오는 중입니다. 잠시 후 다시 시도하세요.');
+      return;
+    }
     // 안내 문구("조직 이메일 도메인만 가입 가능")와 검증을 일치시킨다
-    if (session && !value.toLowerCase().endsWith(`@${session.tenantDomain.toLowerCase()}`)) {
+    if (!value.toLowerCase().endsWith(`@${session.tenantDomain.toLowerCase()}`)) {
       toast(`조직 이메일(@${session.tenantDomain})만 초대할 수 있습니다.`);
       return;
     }
