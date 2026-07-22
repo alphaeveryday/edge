@@ -14,8 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Optional;
 
 /**
- * Sync Agent 가 Pull 하는 표면 — GET /api/v1/sync/bundle. 스캐폴드 동작이며
- * 엔드포인트 계약은 미확정(영서 설계 예정 — docs/contracts/sync-protocol.md).
+ * Sync Agent 가 Pull 하는 표면 — GET /api/v1/sync/bundle. 엔드포인트 계약은
+ * docs/contracts/sync-protocol.md "엔드포인트 계약(확정)" 절이 SSOT 다.
  * HTTP 관심사만 담당한다: 파라미터 검증, 상태 코드, 체크섬 헤더.
  */
 @RestController
