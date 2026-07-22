@@ -176,6 +176,14 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-price-daily', '--run-id', $.run_id)"
     },
+    {
+      # ETF 구성종목 적재(ALPHA-379) — canonical etf_holdings → etf_holding_snapshot.
+      # LoadEtfNav·LoadPriceDaily 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(비중이 바뀐 정정만 UPDATE).
+      state        = "LoadEtfHoldings"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-holdings', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
