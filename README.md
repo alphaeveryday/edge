@@ -132,6 +132,24 @@ fix/*     ─┘
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
 - 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
 
+### 병렬 작업 (worktree)
+
+여러 브랜치를 **동시에** 진행할 때(특히 에이전트 세션 여러 개)는 **하나의 체크아웃을 공유하지 않는다.** git 저장소 폴더 하나에는 브랜치·작업트리가 각각 하나뿐이라, 두 세션이 같은 폴더에서 일하면 한쪽의 브랜치 전환·파일 저장이 다른 쪽에 섞여 **커밋이 엉키고 작업이 유실**된다.
+
+동시 작업은 `git worktree`로 **폴더를 분리**한다 — 같은 `.git`(커밋 이력·원격)을 공유하면서 폴더·브랜치·작업트리는 따로 간다.
+
+```bash
+git worktree add ../edge-<슬러그> -b feature/<KEY>-<슬러그> dev   # 새 브랜치로 새 폴더
+git worktree add ../edge-<슬러그> feature/<KEY>-<슬러그>          # 기존 브랜치를 폴더로
+git worktree list                                                # 어떤 폴더가 어떤 브랜치인지
+git worktree remove ../edge-<슬러그>                             # 머지 후 정리
+git worktree prune                                               # 폴더를 그냥 지웠을 때 잔재 청소
+```
+
+- 메인 체크아웃은 `dev`용으로 두고, 실제 작업은 각 worktree 폴더에서 한다.
+- 같은 브랜치를 두 worktree에 동시 체크아웃하지 않는다 — git이 기본으로 막으며, `--force`로 우회하지 않는다(우회하면 엉킴 위험이 되살아난다).
+- **worktree는 파일·브랜치의 기술적 충돌만 막는다.** *두 세션이 같은 작업을 각자 하는 중복*은 못 막으므로, **겹치는 티켓·작업 단위를 동시에 잡지 않도록 배정으로 조율**한다(둘 다 필요 — 폴더 분리 + 비겹침 배정).
+
 ### 커밋·PR 제목
 
 [Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
