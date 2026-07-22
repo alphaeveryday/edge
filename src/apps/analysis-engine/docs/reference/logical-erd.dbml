@@ -1,0 +1,644 @@
+// ETF 가격 변동 분석 서비스 - 한글 논리 ERD v1.2
+// 기준: v1.1 + 뉴스·공시 온톨로지 계약 반영 (2026-07-11)
+// v1.2 변경:
+//   ① 타입 레지스트리: 이벤트_유형(7계열/53유형), 이벤트_유형_역할(필수/동일성 계약), 역할_코드
+//   ② 뉴스 복제 제어·게이트: 중복_클러스터, 문서_이벤트_게이트
+//   ③ 스레드 계층: 이벤트_스레드, 이벤트_스레드_연결(신규성 5어휘), 스레드_발견_스냅샷
+//   ④ 라우팅·ETF identity: 설명_라우트, ETF_기준가_일별
+//   ⑤ 기존 테이블 보강: 정규화_이벤트.완결성_상태(+Note 의미 축소: 병합은 스레드 소유),
+//      분석_실행.설명_라우트_ID, 분석_결과.대표_스레드_ID, 이벤트_근거.근거_유형 어휘에 교차소스_확인
+// 팀 계약 근거: event_type_profiles_v0_1.json, news_thread_contract_v0_1.yaml,
+//   specs/data/{news-ontology-types,thread-types,disclosure-types,entity-master}.md,
+//   design/{data-ingestion,analysis-engine}.md
+// 주의: 물리 스키마가 아니라 핵심 업무 객체·식별자·관계를 위한 논리 ERD다. dbdiagram.io 문법.
+
+Table "엔터티" as entity {
+  "엔터티_ID" text [pk, note: '행위자, 금융상품, 개념을 공통으로 식별하는 ID']
+  "엔터티_유형" text [not null, note: '행위자, 금융상품, 개념']
+  "표시명" text [not null, note: '사용자와 분석 결과에 표시할 대표 이름']
+  "상태" text [not null, note: '사용 가능 상태']
+
+  Note: '문서, 주장, 이벤트가 공통으로 참조하는 최상위 의미 객체다.'
+}
+
+Table "행위자" as actor {
+  "행위자_ID" text [pk, note: '엔터티 중 회사, 기관, 정부, 인물에 해당하는 ID']
+  "행위자_유형" text [not null, note: '회사, 정부, 기관, 인물 등']
+  "국가_코드" text
+
+  Note: '현실 세계에서 행동하거나 의사결정하는 주체다.'
+}
+
+Table "회사_프로필" as company_profile {
+  "행위자_ID" text [pk, note: '회사 유형 행위자의 ID']
+  "DART_법인코드" text [note: '국내 공시 제출 법인 식별자']
+  "섹터_코드" text
+  "산업_코드" text
+  "기준일" date
+
+  Note: '회사에만 필요한 공시 식별자와 산업 분류를 저장한다.'
+}
+
+Table "금융상품" as instrument {
+  "금융상품_ID" text [pk, note: 'ETF와 개별주식을 식별하는 ID']
+  "시장_코드" text [not null]
+  "종목_코드" text [not null]
+  "금융상품_유형" text [not null, note: 'ETF 또는 주식']
+  "통화_코드" text
+
+  Note: '거래 가능한 ETF와 개별주식의 공통 식별 정보를 저장한다.'
+}
+
+Table "개념" as concept {
+  "개념_ID" text [pk, note: '제품, 산업, 사업부문, 테마 등을 식별하는 ID']
+  "개념_유형" text [not null]
+  "상위_개념_ID" text
+
+  Note: '뉴스 테마, ETF 테마, 공시 사업부문, 계약 대상에 사용되는 공통 개념이다.'
+}
+
+Table "ETF_프로필" as etf_profile {
+  "ETF_금융상품_ID" text [pk]
+  "자산운용사명" text
+  "추종지수명" text
+  "대표_테마_개념_ID" text
+  "설정일" date
+  "총보수율" decimal
+  "분배정책" text
+  "기준일" date
+
+  Note: 'ETF에만 필요한 상품 특성을 저장한다.'
+}
+
+Table "주식_프로필" as equity_profile {
+  "주식_금융상품_ID" text [pk]
+  "발행회사_행위자_ID" text [not null]
+  "주식_종류" text [not null, note: '보통주, 우선주 등']
+  "기준일" date
+
+  Note: '개별주식의 발행회사와 주식 종류를 저장한다.'
+}
+
+Table "ETF_구성종목" as etf_holding {
+  "ETF_금융상품_ID" text [not null]
+  "구성_금융상품_ID" text [not null]
+  "기준일" date [not null]
+  "비중" decimal
+
+  indexes {
+    ("ETF_금융상품_ID", "구성_금융상품_ID", "기준일") [pk]
+  }
+
+  Note: '특정 기준일의 ETF 구성종목과 비중을 저장한다.'
+}
+
+Table "ETF_기준가_일별" as etf_nav_daily {
+  "ETF_금융상품_ID" text [not null]
+  "기준일" date [not null]
+  "기준가" decimal
+  "괴리율" decimal
+  "데이터_버전" text
+
+  indexes {
+    ("ETF_금융상품_ID", "기준일") [pk]
+  }
+
+  Note: 'ETF 기준가(NAV)와 시장가 괴리를 저장한다. 괴리·유동성 라우트 판정의 입력이다. 결측은 0/직전값 보정 없이 명시적 공백으로 남긴다.'
+}
+
+Table "문서" as document {
+  "문서_ID" text [pk]
+  "문서_유형" text [not null, note: '뉴스 또는 공시']
+  "원천_코드" text [not null]
+  "원천_문서_ID" text [not null]
+  "제목" text
+  "언어_코드" text
+  "발행시각" timestamp
+  "사용가능시각" timestamp [not null]
+  "원문_URI" text
+
+  Note: '뉴스와 공시가 공통으로 가지는 문서 식별, 원천, 시간, 원문 위치를 저장한다.'
+}
+
+Table "뉴스_문서" as news_document {
+  "문서_ID" text [pk]
+  "리드" text
+  "대표_문서_ID" text [note: '중복_클러스터.대표_문서_ID의 비정규화 사본(조회 편의)']
+  "중복_클러스터_ID" text
+  "테마_개념_ID" text
+
+  Note: '뉴스에만 필요한 요약, 중복 묶음, 테마 정보를 저장한다.'
+}
+
+Table "공시_문서" as disclosure_document {
+  "문서_ID" text [pk]
+  "제출회사_행위자_ID" text [not null]
+  "공시_유형" text [not null]
+  "보고일" date
+  "파서_버전" text
+  "파싱결과_URI" text
+
+  Note: '공시에만 필요한 제출회사, 공시 유형, 파싱 결과 정보를 저장한다.'
+}
+
+Table "중복_클러스터" as dup_cluster {
+  "중복_클러스터_ID" text [pk]
+  "대표_문서_ID" text
+  "클러스터_방법" text [note: '판정 방법·임계값·실행 메타(재현용)']
+  "생성시각" timestamp
+
+  Note: '표현만 다른 같은 기사 묶음(복제 제어)이다. 사건 계보(이벤트_스레드)와 다른 축이며 서로 대체 불가 — 정정·후속 기사는 텍스트가 달라 같은 클러스터가 아닐 수 있다.'
+}
+
+Table "문서_이벤트_게이트" as document_event_gate {
+  "문서_ID" text [pk]
+  "게이트_판정" text [not null, note: '이벤트 | 비이벤트 | 검토']
+  "게이트_점수" decimal
+  "판정_사유" text [note: '시황·재탕 기사 차단 근거']
+
+  Note: '문서가 주장 추출 대상인지에 대한 1차 게이트 판정이다. 비이벤트 문서는 주장·이벤트 계층으로 올라가지 않는다.'
+}
+
+Table "문서_엔터티" as document_entity {
+  "문서_ID" text [not null]
+  "엔터티_ID" text [not null]
+  "매칭_문구" text
+  "매핑_방법" text
+  "신뢰도" decimal
+
+  indexes {
+    ("문서_ID", "엔터티_ID") [pk]
+  }
+
+  Note: '문서에 등장하거나 문서와 연결된 행위자, 금융상품, 개념을 저장한다.'
+}
+
+Table "이벤트_유형" as event_type {
+  "이벤트_유형_코드" text [pk, note: 'COMPANY.CONTRACT.SIGNING 등 53개 leaf 유형']
+  "유형_계열" text [not null, note: '회사, 외생, 산업, 매크로, 시장정보, 시장구조, 정책 — 7계열']
+  "생애주기_모델" text [note: '루머→확인→체결→종결 같은 단계 모델']
+  "단계_민감_여부" boolean
+  "허용_술어" text [note: '이 유형에서 허용되는 술어 코드 목록(요약)']
+  "계약_버전" text [note: '타입 카탈로그 버전. 변경은 계약 변경으로 취급']
+
+  Note: '주장, 정규화 이벤트, 스레드가 공유하는 이벤트 타입 사전이다.'
+}
+
+Table "역할_코드" as role_code {
+  "역할_코드" text [pk, note: '공급자, 고객, 발행사, 수량, 보고기간 등']
+  "역할_분류" text [note: '주체, 대상, 수치, 시간, 장소']
+  "기대_엔터티_유형" text [note: '행위자, 금융상품, 개념, 또는 리터럴(수치/기간)']
+
+  Note: '주장_인자·이벤트_인자·이벤트_유형_역할이 공유하는 역할 어휘 사전이다.'
+}
+
+Table "이벤트_유형_역할" as event_type_role {
+  "이벤트_유형_코드" text [not null]
+  "역할_코드" text [not null]
+  "필수_여부" boolean [not null, note: '이벤트 완결성(완결/부분) 판정에 필요한 역할']
+  "동일성_용도" text [note: '없음 | 동일성_필수 | 선택_판별자 — 스레드 키 참여 방식']
+
+  indexes {
+    ("이벤트_유형_코드", "역할_코드") [pk]
+  }
+
+  Note: '유형별 허용 역할과 스레드 동일성 계약을 저장한다. 동일성_필수 집합 = 같은 사건이라 주장하기 위한 최소 tuple. 선택_판별자는 값이 있을 때만 계보를 더 잘게 나누고, 필수를 대체할 수 없다.'
+}
+
+Table "주장" as assertion {
+  "주장_ID" text [pk]
+  "문서_ID" text [not null]
+  "이벤트_유형_코드" text [not null]
+  "술어_코드" text [not null]
+  "진술_양태" text [not null]
+  "신뢰도" decimal
+  "생애주기_단계" text
+  "사용가능시각" timestamp [not null]
+
+  Note: '뉴스 또는 공시 문서가 무엇을 주장하는지 문장 의미 단위로 저장한다.'
+}
+
+Table "주장_인자" as assertion_argument {
+  "주장_인자_ID" bigint [pk, increment]
+  "주장_ID" text [not null]
+  "역할_코드" text [not null, note: '공급자, 고객, 계약 대상 등']
+  "엔터티_ID" text [not null]
+  "신뢰도" decimal
+
+  Note: '주장 안에서 각 엔터티가 수행하는 역할을 저장한다.'
+}
+
+Table "주장_수치" as assertion_metric {
+  "주장_수치_ID" bigint [pk, increment]
+  "주장_ID" text [not null]
+  "수치_코드" text [not null, note: '계약금액, 계약기간, 비율 등']
+  "수치값" decimal
+  "단위_코드" text
+  "기간_기준" text
+  "무결성_상태" text
+  "신뢰도" decimal
+
+  Note: '주장에서 추출한 금액, 비율, 기간 등의 수치를 저장한다.'
+}
+
+Table "정규화_이벤트" as canonical_event {
+  "이벤트_ID" text [pk]
+  "이벤트_유형_코드" text [not null]
+  "이벤트_일자" date
+  "생애주기_단계" text
+  "이벤트_상태" text [not null]
+  "완결성_상태" text [note: '필수 역할 충족 여부: 완결 | 부분']
+  "사용가능시각" timestamp [not null]
+
+  Note: '한 문서(묶음)에서 조립된 구조화 사건 "관측" 1건이다. 동일 사건의 병합·계보는 이벤트_스레드가 맡는다(관측 불변, 재스레딩 가능).'
+}
+
+Table "이벤트_인자" as event_argument {
+  "이벤트_ID" text [not null]
+  "역할_코드" text [not null]
+  "엔터티_ID" text [not null]
+  "신뢰도" decimal
+
+  indexes {
+    ("이벤트_ID", "역할_코드", "엔터티_ID") [pk]
+  }
+
+  Note: '정규화된 이벤트에서 각 엔터티가 수행하는 역할을 저장한다.'
+}
+
+Table "이벤트_근거" as event_evidence {
+  "근거_ID" text [pk]
+  "이벤트_ID" text [not null]
+  "주장_ID" text [not null]
+  "근거_유형" text [not null, note: '직접_인용, 수치_근거, 교차소스_확인 등 — 교차소스_확인은 공시가 기존 뉴스 스레드를 확인하는 경우']
+  "근거_텍스트" text
+  "연결_신뢰도" decimal
+
+  Note: '정규화된 이벤트를 뒷받침하는 뉴스·공시 주장을 연결한다.'
+}
+
+Table "이벤트_스레드" as event_thread {
+  "스레드_ID" text [pk]
+  "스레드_키" text [not null, note: '이벤트_유형_코드 + 동일성_필수 역할 값 + 선택_판별자에서만 파생. 표면 문구·유사도는 입력 금지']
+  "이벤트_유형_코드" text [not null]
+  "현재_생애주기_단계" text
+  "최초_사용가능시각" timestamp [note: '선후(precedence) 판정의 권위 시각']
+  "최근_갱신시각" timestamp
+
+  Note: '같은 실제 사건의 계보 헤더다. 소스 중립 — 뉴스·공시에서 온 이벤트가 동일성만 같으면 같은 스레드에 귀속된다. 개별 문서·근거 행은 담지 않는다.'
+}
+
+Table "이벤트_스레드_연결" as event_thread_link {
+  "이벤트_ID" text [pk, note: '정규화 이벤트당 정확히 1행']
+  "스레드_ID" text [note: '신규성_상태=미확정이면 NULL 허용']
+  "신규성_상태" text [not null, note: '스레드_최초 | 후속_단계 | 정정 | 중복_재보도 | 미확정 — 전 유형 공통 5어휘']
+  "원천_구분" text [note: '뉴스 | 공시. 스레드_키에는 불포함(소스 중립 불변식)']
+  "판정_기준시각" timestamp [not null]
+
+  Note: '이벤트의 스레드 귀속 판정 결과다. 동일성_필수 역할을 못 채우면 합성 스레드를 만들지 않고 미확정 연결만 남긴다(EMIT_UNKNOWN_LINK_ONLY).'
+}
+
+Table "스레드_발견_스냅샷" as thread_discovery_snapshot {
+  "이벤트_ID" text [pk]
+  "스레드_ID" text
+  "선행_이벤트_수" integer
+  "직전_단계_경과일" integer
+  "미확정_사유" text
+
+  Note: '이벤트 발견 시점에 관측한 스레드 문맥이다. 신규성 판정값 자체는 이벤트_스레드_연결이 소유한다(발견 관측 ≠ 귀속 결과).'
+}
+
+Table "공시_사실" as disclosure_fact {
+  "사실_ID" text [pk]
+  "문서_ID" text [not null]
+  "사실_유형" text [not null]
+  "원문_순서" integer
+  "사용가능시각" timestamp [not null]
+  "근거_URI" text
+
+  Note: '공시 parser가 추출한 정규화 사실의 공통 부모다.'
+}
+
+Table "공급계약_사실" as supply_contract_fact {
+  "사실_ID" text [pk]
+  "계약상대_행위자_ID" text
+  "계약상대_원문명" text
+  "상대방_비공개_여부" boolean
+  "계약대상_개념_ID" text
+  "계약금액_원" decimal
+  "매출대비_비율" decimal
+  "계약_시작일" date
+  "계약_종료일" date
+  "지연공시_여부" boolean
+  "완결성_상태" text
+
+  Note: '공급계약 공시에서 추출한 계약 상대방, 금액, 비율, 기간을 저장한다.'
+}
+
+Table "사업부문_사실" as business_segment_fact {
+  "사실_ID" text [pk]
+  "사업부문명" text [not null]
+  "개념_ID" text
+  "기간" text
+  "매출액_원" decimal
+  "매출비중" decimal
+  "비중_산출기준" text
+  "연결_신뢰도" decimal
+
+  Note: '사업부문 공시에서 추출한 사업부문별 매출과 비중을 저장한다.'
+}
+
+Table "시장_시계열" as market_series {
+  "시장_시계열_ID" text [pk]
+  "시계열_유형" text [not null, note: '지수, ETF 대용치, 환율, 금리 등']
+  "시계열명" text [not null]
+  "원천_코드" text [not null]
+  "원천_시계열_ID" text [not null]
+  "시장_코드" text
+  "통화_코드" text
+  "상태" text
+
+  Note: '가격 분해에서 벤치마크로 사용하는 지수·환율·금리 시계열을 식별한다.'
+}
+
+Table "일별_가격" as price_daily {
+  "금융상품_ID" text [not null]
+  "거래일" date [not null]
+  "종가" decimal
+  "수정종가" decimal
+  "단순수익률" decimal
+  "거래량" bigint
+  "거래대금" decimal
+  "가격기준" text
+  "기준시각" timestamp
+  "데이터_버전" text
+
+  indexes {
+    ("금융상품_ID", "거래일") [pk]
+  }
+
+  Note: '금융상품의 거래일별 가격과 수익률을 저장한다.'
+}
+
+Table "가격_관찰" as price_observation {
+  "가격_관찰_ID" text [pk]
+  "금융상품_ID" text [not null]
+  "시작시각" timestamp [not null]
+  "종료시각" timestamp [not null]
+  "기준_거래일" date [not null]
+  "평가기준시각" timestamp [not null]
+  "정책_버전" text
+  "데이터_버전" text
+
+  Note: '어느 시간 구간의 가격 변동을 측정했는지 저장한다.'
+}
+
+Table "가격_분해" as price_decomposition {
+  "가격_관찰_ID" text [pk]
+  "벤치마크_시계열_ID" text [not null]
+  "대상수익률" decimal
+  "시장수익률" decimal
+  "피어원수익률" decimal
+  "피어직교수익률" decimal
+  "절편기여수익률" decimal
+  "시장설명수익률" decimal
+  "피어설명수익률" decimal
+  "설명수익률" decimal
+  "잔차수익률" decimal
+  "거래량이상도" decimal
+  "변동성변화" decimal
+  "게이트_상태" text
+  "게이트_점수" decimal
+  "정책_버전" text
+  "기준시각" timestamp
+  "입력_URI" text
+
+  Note: '가격 관찰창의 수익률을 시장, 피어, 잔차로 분해한 결과다.'
+}
+
+Table "가격_분해_피어" as price_decomposition_peer {
+  "가격_관찰_ID" text [not null]
+  "피어_금융상품_ID" text [not null]
+  "피어_순위" integer
+  "피어_가중치" decimal
+  "피어_수익률" decimal
+  "피어_직교수익률" decimal
+
+  indexes {
+    ("가격_관찰_ID", "피어_금융상품_ID") [pk]
+  }
+
+  Note: '가격 분해에 실제 사용한 피어 금융상품을 저장한다.'
+}
+
+Table "이벤트_가격_관찰" as event_price_observation {
+  "이벤트_가격_관찰_ID" text [pk]
+  "이벤트_ID" text [not null]
+  "금융상품_ID" text [not null]
+  "기준_근거_ID" text
+  "벤치마크_시계열_ID" text [not null]
+  "시작시각" timestamp [not null]
+  "종료시각" timestamp [not null]
+  "단순수익률" decimal
+  "시장수익률" decimal
+  "피어직교수익률" decimal
+  "설명수익률" decimal
+  "잔차수익률" decimal
+  "관찰창_상태" text
+  "교란_여부" boolean
+  "평가기준시각" timestamp
+  "정책_버전" text
+  "입력_URI" text
+
+  Note: '특정 이벤트 전후에 금융상품 가격이 어떻게 반응했는지 저장한다.'
+}
+
+Table "이벤트_가격_피어" as event_price_observation_peer {
+  "이벤트_가격_관찰_ID" text [not null]
+  "피어_금융상품_ID" text [not null]
+  "피어_순위" integer
+  "피어_가중치" decimal
+  "피어_수익률" decimal
+  "피어_직교수익률" decimal
+
+  indexes {
+    ("이벤트_가격_관찰_ID", "피어_금융상품_ID") [pk]
+  }
+
+  Note: '이벤트 가격 반응 계산에 사용한 피어 금융상품을 저장한다.'
+}
+
+Table "설명_라우트" as explanation_route {
+  "설명_라우트_ID" text [pk]
+  "대상_금융상품_ID" text [not null]
+  "거래일" date [not null]
+  "평가기준시각" timestamp [not null]
+  "라우트_유형" text [not null, note: '시장동행 | 테마동행 | 종목고유 | 괴리·유동성 지배 등']
+  "라우트_사유" text
+  "정책_버전" text
+
+  Note: '이 날 이 상품을 어디까지 깊게 설명할지 결정한 라우팅 판정이다. 분석_실행의 진입 조건이며, 심층 분석 비용을 통제한다.'
+}
+
+Table "분석_실행" as analysis_run {
+  "분석_실행_ID" text [pk]
+  "대상_금융상품_ID" text [not null]
+  "분석_기준시각" timestamp [not null]
+  "가격_관찰_ID" text
+  "설명_라우트_ID" text
+  "실행_사유" text
+  "모델_버전" text
+  "실행_상태" text
+  "시작시각" timestamp
+  "종료시각" timestamp
+
+  Note: '특정 금융상품의 가격 변동 원인을 분석한 한 번의 실행이다.'
+}
+
+Table "분석_실행_이벤트_근거" as analysis_run_event_evidence {
+  "분석_실행_ID" text [not null]
+  "근거_ID" text [not null]
+  "분석_단계" text [not null]
+  "사용_유형" text
+  "우선순위_또는_가중치" decimal
+
+  indexes {
+    ("분석_실행_ID", "근거_ID", "분석_단계") [pk]
+  }
+
+  Note: '분석 실행에서 실제 사용한 이벤트 근거를 저장한다.'
+}
+
+Table "분석_실행_공시_사실" as analysis_run_disclosure_fact {
+  "분석_실행_ID" text [not null]
+  "사실_ID" text [not null]
+  "분석_단계" text [not null]
+  "사용_유형" text
+  "우선순위_또는_가중치" decimal
+
+  indexes {
+    ("분석_실행_ID", "사실_ID", "분석_단계") [pk]
+  }
+
+  Note: '분석 실행에서 실제 사용한 공시 사실을 저장한다.'
+}
+
+Table "분석_실행_이벤트_가격" as analysis_run_event_price_observation {
+  "분석_실행_ID" text [not null]
+  "이벤트_가격_관찰_ID" text [not null]
+  "분석_단계" text [not null]
+  "사용_유형" text
+  "우선순위_또는_가중치" decimal
+
+  indexes {
+    ("분석_실행_ID", "이벤트_가격_관찰_ID", "분석_단계") [pk]
+  }
+
+  Note: '분석 실행에서 실제 사용한 이벤트 가격 반응 결과를 저장한다.'
+}
+
+Table "분석_결과" as analysis_result {
+  "분석_실행_ID" text [pk]
+  "대표_이벤트_ID" text
+  "대표_스레드_ID" text [note: 'novelty 문맥(신규/후속/재보도)을 결과에 고정']
+  "설명_유형" text [not null]
+  "요약" text [not null]
+  "신뢰수준" text
+  "단계별_결과" json
+  "생성시각" timestamp
+  "결과_URI" text
+
+  Note: '분석 실행의 최종 사용자 제공 결과를 저장한다.'
+}
+
+// 엔터티 상위-하위 관계
+Ref: entity."엔터티_ID" - actor."행위자_ID"
+Ref: actor."행위자_ID" - company_profile."행위자_ID"
+Ref: entity."엔터티_ID" - instrument."금융상품_ID"
+Ref: entity."엔터티_ID" - concept."개념_ID"
+Ref: concept."상위_개념_ID" > concept."개념_ID"
+
+// 금융상품 관계
+Ref: instrument."금융상품_ID" - etf_profile."ETF_금융상품_ID"
+Ref: etf_profile."대표_테마_개념_ID" > concept."개념_ID"
+Ref: instrument."금융상품_ID" - equity_profile."주식_금융상품_ID"
+Ref: equity_profile."발행회사_행위자_ID" > actor."행위자_ID"
+Ref: etf_holding."ETF_금융상품_ID" > instrument."금융상품_ID"
+Ref: etf_holding."구성_금융상품_ID" > instrument."금융상품_ID"
+Ref: etf_nav_daily."ETF_금융상품_ID" > etf_profile."ETF_금융상품_ID"
+
+// 문서 관계
+Ref: document."문서_ID" - news_document."문서_ID"
+Ref: document."문서_ID" - disclosure_document."문서_ID"
+Ref: news_document."대표_문서_ID" > news_document."문서_ID"
+Ref: news_document."테마_개념_ID" > concept."개념_ID"
+Ref: disclosure_document."제출회사_행위자_ID" > actor."행위자_ID"
+Ref: document_entity."문서_ID" > document."문서_ID"
+Ref: document_entity."엔터티_ID" > entity."엔터티_ID"
+
+// 중복 클러스터·게이트 관계
+Ref: news_document."중복_클러스터_ID" > dup_cluster."중복_클러스터_ID"
+Ref: dup_cluster."대표_문서_ID" > news_document."문서_ID"
+Ref: document."문서_ID" - document_event_gate."문서_ID"
+
+// 타입 레지스트리 관계
+Ref: assertion."이벤트_유형_코드" > event_type."이벤트_유형_코드"
+Ref: canonical_event."이벤트_유형_코드" > event_type."이벤트_유형_코드"
+Ref: event_type_role."이벤트_유형_코드" > event_type."이벤트_유형_코드"
+Ref: event_type_role."역할_코드" > role_code."역할_코드"
+Ref: assertion_argument."역할_코드" > role_code."역할_코드"
+Ref: event_argument."역할_코드" > role_code."역할_코드"
+
+// 주장과 이벤트 관계
+Ref: assertion."문서_ID" > document."문서_ID"
+Ref: assertion_argument."주장_ID" > assertion."주장_ID"
+Ref: assertion_argument."엔터티_ID" > entity."엔터티_ID"
+Ref: assertion_metric."주장_ID" > assertion."주장_ID"
+Ref: event_argument."이벤트_ID" > canonical_event."이벤트_ID"
+Ref: event_argument."엔터티_ID" > entity."엔터티_ID"
+Ref: event_evidence."이벤트_ID" > canonical_event."이벤트_ID"
+Ref: event_evidence."주장_ID" > assertion."주장_ID"
+
+// 스레드 관계
+Ref: event_thread."이벤트_유형_코드" > event_type."이벤트_유형_코드"
+Ref: canonical_event."이벤트_ID" - event_thread_link."이벤트_ID"
+Ref: event_thread_link."스레드_ID" > event_thread."스레드_ID"
+Ref: canonical_event."이벤트_ID" - thread_discovery_snapshot."이벤트_ID"
+Ref: thread_discovery_snapshot."스레드_ID" > event_thread."스레드_ID"
+
+// 공시 근거 관계
+Ref: disclosure_fact."문서_ID" > disclosure_document."문서_ID"
+Ref: disclosure_fact."사실_ID" - supply_contract_fact."사실_ID"
+Ref: disclosure_fact."사실_ID" - business_segment_fact."사실_ID"
+Ref: supply_contract_fact."계약상대_행위자_ID" > actor."행위자_ID"
+Ref: supply_contract_fact."계약대상_개념_ID" > concept."개념_ID"
+Ref: business_segment_fact."개념_ID" > concept."개념_ID"
+
+// 가격 관계
+Ref: price_daily."금융상품_ID" > instrument."금융상품_ID"
+Ref: price_observation."금융상품_ID" > instrument."금융상품_ID"
+Ref: price_observation."가격_관찰_ID" - price_decomposition."가격_관찰_ID"
+Ref: price_decomposition."벤치마크_시계열_ID" > market_series."시장_시계열_ID"
+Ref: price_decomposition_peer."가격_관찰_ID" > price_decomposition."가격_관찰_ID"
+Ref: price_decomposition_peer."피어_금융상품_ID" > instrument."금융상품_ID"
+Ref: event_price_observation."이벤트_ID" > canonical_event."이벤트_ID"
+Ref: event_price_observation."금융상품_ID" > instrument."금융상품_ID"
+Ref: event_price_observation."기준_근거_ID" > event_evidence."근거_ID"
+Ref: event_price_observation."벤치마크_시계열_ID" > market_series."시장_시계열_ID"
+Ref: event_price_observation_peer."이벤트_가격_관찰_ID" > event_price_observation."이벤트_가격_관찰_ID"
+Ref: event_price_observation_peer."피어_금융상품_ID" > instrument."금융상품_ID"
+
+// 라우팅·분석 실행과 결과 관계
+Ref: explanation_route."대상_금융상품_ID" > instrument."금융상품_ID"
+Ref: analysis_run."대상_금융상품_ID" > instrument."금융상품_ID"
+Ref: analysis_run."가격_관찰_ID" > price_observation."가격_관찰_ID"
+Ref: analysis_run."설명_라우트_ID" > explanation_route."설명_라우트_ID"
+Ref: analysis_run_event_evidence."분석_실행_ID" > analysis_run."분석_실행_ID"
+Ref: analysis_run_event_evidence."근거_ID" > event_evidence."근거_ID"
+Ref: analysis_run_disclosure_fact."분석_실행_ID" > analysis_run."분석_실행_ID"
+Ref: analysis_run_disclosure_fact."사실_ID" > disclosure_fact."사실_ID"
+Ref: analysis_run_event_price_observation."분석_실행_ID" > analysis_run."분석_실행_ID"
+Ref: analysis_run_event_price_observation."이벤트_가격_관찰_ID" > event_price_observation."이벤트_가격_관찰_ID"
+Ref: analysis_run."분석_실행_ID" - analysis_result."분석_실행_ID"
+Ref: analysis_result."대표_이벤트_ID" > canonical_event."이벤트_ID"
+Ref: analysis_result."대표_스레드_ID" > event_thread."스레드_ID"

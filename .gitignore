@@ -63,3 +63,9 @@ venv/
 
 # Local planning scratch files. Durable project docs belong under docs/ or tracked .dev scripts.
 .dev/*-plan.md
+
+# ──────────────────────────────────────────────
+# draw.io 스크래치 (자동저장 백업 · 편집 URL). 렌더 산출물(.drawio/.png/.svg)은 추적.
+# ──────────────────────────────────────────────
+*.drawio.bkp
+*.edit-url.txt
