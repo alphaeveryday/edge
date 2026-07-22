@@ -138,6 +138,9 @@ function patch(id: string, updater: (a: Analysis) => Analysis): void {
   analyses[idx] = updater(analyses[idx]);
 }
 
+/* 제외 전 상태 기억 — 복원이 미완료(FAILED·PENDING) 건을 COMPLETED 로 둔갑시키지 않게 */
+const statusBeforeExclusion = new Map<string, Analysis['status']>();
+
 export const mockAnalysesRepository: AnalysesRepository = {
   async list(): Promise<Analysis[]> {
     return analyses.map((a) => ({ ...a, evidence: [...a.evidence] }));
@@ -146,9 +149,14 @@ export const mockAnalysesRepository: AnalysesRepository = {
     patch(id, (a) => ({ ...a, result, corrected: true }));
   },
   async exclude(id) {
-    patch(id, (a) => ({ ...a, status: 'EXCLUDED' }));
+    patch(id, (a) => {
+      statusBeforeExclusion.set(id, a.status);
+      return { ...a, status: 'EXCLUDED' };
+    });
   },
   async restore(id) {
-    patch(id, (a) => ({ ...a, status: 'COMPLETED' }));
+    const prev = statusBeforeExclusion.get(id) ?? 'COMPLETED';
+    statusBeforeExclusion.delete(id);
+    patch(id, (a) => ({ ...a, status: prev }));
   },
 };

@@ -20,6 +20,8 @@ export function TenantDetailPage() {
 
   const errRate = t.calls ? `${((t.errors / t.calls) * 100).toFixed(2)}%` : '0.00%';
   const barMax = Math.max(1, ...t.bars);
+  // 툴팁 호출 수는 24시간 합계(t.calls)를 막대 비율로 배분 — 요약 수치와 모순되지 않게
+  const barTotal = Math.max(1, t.bars.reduce((sum, v) => sum + v, 0));
   const fmt = (n: number) => n.toLocaleString('ko-KR');
 
   return (
@@ -90,7 +92,7 @@ export function TenantDetailPage() {
                 {t.bars.map((v, i) => (
                   <div
                     key={i}
-                    title={`${24 - i}시간 전 · 호출 ${fmt(v * 23)}건`}
+                    title={`${i === 23 ? '현재' : `${23 - i}시간 전`} · 호출 ${fmt(Math.round((v / barTotal) * t.calls))}건`}
                     className="flex-1 rounded-t-[2px]"
                     style={{
                       height: `${Math.max(3, Math.round((v / barMax) * 100))}%`,
