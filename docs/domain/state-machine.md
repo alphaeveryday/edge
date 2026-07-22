@@ -44,7 +44,7 @@
 
 핵심 도메인 추상화 (기능 확장을 막지 않되 MVP UI는 가격 변동 설명에 집중):
 
-`event` / `evidence` / `analysis_item` / `compliance_check` / `review_task` / `publication` / `exposure_log`
+`event` / `evidence` / `analysis_item` / `screening_check` / `review_task` / `publication` / `exposure_log`
 
 - `analysis_item.analysis_type`: 현재 **PRICE_MOVEMENT**만 사용. 향후 MARKET_BRIEFING, DISCLOSURE_SUMMARY 확장 가능하나 MVP UI 비노출.
 - **정정 시 레코드 모델 (확정, 2026-07-13)**: 정정은 단일 레코드의 상태 왕복이 아니라 **리비전 분리**로 처리한다. ① 기존 analysis_item은 **CORRECTED로 종결(terminal 상태)** ② 해당 publication은 UNPUBLISHED로 전이 ③ 정정 문구는 원본을 참조하는(`supersedes_item_id`) **새 analysis_item 리비전**으로 생성되어 REVIEW_REQUIRED로 진입한다. 즉 위 [데이터 플로우](#데이터-플로우) 표의 CORRECTED는 구 리비전의 최종 상태이고, 재검수 대상은 신규 리비전이다. 감사 재현은 리비전 체인을 따라 "어느 시점에 어느 문구가 노출되었는지"를 완전 복원한다.
