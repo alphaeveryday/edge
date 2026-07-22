@@ -336,6 +336,9 @@ module "data_pipeline" {
   # 정식 버저닝은 릴리스 규약 합의 후.
   analysis_release_bundle_version = "dev-mvp-0"
 
+  # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
+  schedule_state = "ENABLED"
+
   alarm_email = var.pipeline_alarm_email
 }
 
