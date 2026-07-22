@@ -24,6 +24,9 @@ dependencies {
 	// 검수 도메인 — 온프렘 analysis_item·publication 읽기/전이 (migrations-onprem 스키마).
 	// 다른 온프렘 모듈과 동일하게 JPA 없이 JdbcTemplate(thin layered).
 	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	// 데모 자체 계정 비밀번호 해시(BCrypt)만 사용 — Spring Security 프레임워크 전체가
+	// 아니라 crypto 모듈 단독(ADR-0025 데모 최소 구현, 인가는 ConsoleAuthFilter 직접).
+	implementation 'org.springframework.security:spring-security-crypto'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

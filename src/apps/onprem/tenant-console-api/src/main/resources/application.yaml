@@ -7,3 +7,18 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
     username: ${SPRING_DATASOURCE_USERNAME:edge}
     password: ${SPRING_DATASOURCE_PASSWORD:edge}
+
+console:
+  auth:
+    # 데모 자체 계정 부트스트랩(ADR-0025) — member 0건일 때 1회 시드.
+    # 아래 비밀번호 기본값은 로컬·데모 스택 전용이다(postgres edge/edge 와 같은 결) —
+    # 데모 배포에서는 env 로 덮고, 운영은 SSO/AD 모드라 부트스트랩을 쓰지 않는다.
+    bootstrap-accounts:
+      - email: admin@demo.edge.local
+        name: 데모 관리자
+        role: TENANT_ADMIN
+        password: ${CONSOLE_BOOTSTRAP_ADMIN_PASSWORD:demo-admin-1}
+      - email: reviewer@demo.edge.local
+        name: 데모 검수자
+        role: COMPLIANCE_REVIEWER
+        password: ${CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD:demo-reviewer-1}
