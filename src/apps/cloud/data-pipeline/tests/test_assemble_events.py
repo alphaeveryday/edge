@@ -32,8 +32,21 @@ def _write_news(storage, language: str, date: str, rows: list[dict]) -> None:
         f"{canonical_news_articles_partition(language, date)}/part-00000.parquet", buf.getvalue())
 
 
+# 단일 identity_role(=required_roles[0]=ISSUER) 타입 — edge 의 단일 entity 추출로 identity 를
+# 채울 수 있어 thread 가 선다. (EARNINGS.RESULT_RELEASE 는 identity=[ISSUER, REPORTING_PERIOD]
+# 라 edge 가 REPORTING_PERIOD 를 못 채워 UNKNOWN 이 되므로, thread 형성 테스트엔 부적합.)
+_ETYPE = "COMPANY.CAPITAL.DIVIDEND_DECISION"
+_PRED = "DECLARE"
+_IDENTITY_ROLE = "ISSUER"
+
+
+def _thread_key(entity_id: str, event_type_code: str = _ETYPE, role: str = _IDENTITY_ROLE) -> str:
+    """계약 thread_key(단일 identity 역할) — assemble_events._thread_key 와 같은 형식."""
+    return f"event_type_id={event_type_code}||required:{role}={entity_id}"
+
+
 def _article(article_id: str, ticker: str = "005930", **over) -> dict:
-    row = {"article_id": article_id, "source_vendor": "bigkinds", "title": "삼성전자 실적 발표",
+    row = {"article_id": article_id, "source_vendor": "bigkinds", "title": "삼성전자 배당 결정",
            "published_at": "2026-07-15T09:00:00+09:00", "publisher": "매일경제",
            "mentions": json.dumps([{"market": "KR", "ticker": ticker}])}
     row.update(over)
@@ -43,7 +56,7 @@ def _article(article_id: str, ticker: str = "005930", **over) -> dict:
 def _classified(article_id: str, ticker: str = "005930") -> str:
     return json.dumps({"items": [{
         "id": article_id, "is_event": True,
-        "event_type_code": "COMPANY.EARNINGS.RESULT_RELEASE", "predicate_code": "REPORT",
+        "event_type_code": _ETYPE, "predicate_code": _PRED,
         "primary_ticker": ticker, "lifecycle_stage": "", "confidence": 0.9,
     }]})
 
@@ -71,19 +84,25 @@ class _FakeCursor:
                           for a in wanted]
         elif upper.startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self._rows = list(conn.assertion_rows)
-        elif upper.startswith("SELECT DISTINCT ON (SE.SOURCE_EVENT_ID)"):
+        elif upper.startswith("SELECT SE.SOURCE_EVENT_ID, SE.EVENT_TYPE_CODE, SE.AVAILABLE_AT, EA.ROLE_CODE"):
             # 미연결 이벤트 = 사전 존재분(conn.unthreaded_events) + 이번 run 이 방금 insert 한
-            # source_event(link insert 는 아직이라 전부 미연결). event_argument 로 entity 부착.
+            # source_event(link insert 는 아직이라 전부 미연결). 이벤트마다 event_argument 전
+            # 역할 행을 (sid, type, available_at, role_code, entity_id) 로 편다(계약 thread_key
+            # 가 identity 역할 전체 값을 필요로 함, ALPHA-457).
             ea_by_se: dict = {}
+            se_meta: dict = {}
             for bsql, brows in conn.batches:
-                if bsql.upper().startswith("INSERT INTO EVENT_ARGUMENT "):
+                u = bsql.upper()
+                if u.startswith("INSERT INTO EVENT_ARGUMENT "):
                     for r in brows:
-                        ea_by_se[r[0]] = r[2]
+                        ea_by_se.setdefault(r[0], []).append((r[1], r[2]))  # (role_code, entity_id)
+                elif u.startswith("INSERT INTO SOURCE_EVENT "):
+                    for r in brows:
+                        se_meta[r[0]] = (r[2], r[6])  # (event_type_code, available_at)
             out = list(conn.unthreaded_events)
-            for bsql, brows in conn.batches:
-                if bsql.upper().startswith("INSERT INTO SOURCE_EVENT "):
-                    for r in brows:
-                        out.append((r[0], r[2], ea_by_se.get(r[0]), r[6]))
+            for sid, (etype, avail) in se_meta.items():
+                for role_code, entity_id in ea_by_se.get(sid, []):
+                    out.append((sid, etype, avail, role_code, entity_id))
             self._rows = out
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items()]
@@ -112,7 +131,8 @@ class _FakeConn:
         self.doc_overrides = doc_overrides or {}
         self.assertion_rows = assertion_rows
         self.prior_thread_counts = prior_thread_counts or {}
-        # 사전 존재하는 미연결 source_event: (source_event_id, event_type_code, entity_id, available_at)
+        # 사전 존재하는 미연결 이벤트 행: (source_event_id, event_type_code, available_at,
+        # role_code, entity_id) — 역할당 한 행(멀티역할이면 같은 sid 로 여러 행).
         self.unthreaded_events = list(unthreaded_events)
 
     def cursor(self):
@@ -150,8 +170,8 @@ def _log(storage) -> dict:
 
 def _assertion_rows_for(article_id: str):
     doc_id = _stable_id("doc", "bigkinds", article_id)
-    asrt_id = _stable_id("asrt", doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT")
-    return [(doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT", asrt_id)]
+    asrt_id = _stable_id("asrt", doc_id, _ETYPE, _PRED)
+    return [(doc_id, _ETYPE, _PRED, asrt_id)]
 
 
 def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
@@ -171,7 +191,7 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
                                from_date="2026-07-15", to_date="2026-07-15") == 0
 
     doc_id = _stable_id("doc", "bigkinds", "a1")
-    asrt_id = _stable_id("asrt", doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT")
+    asrt_id = _stable_id("asrt", doc_id, _ETYPE, _PRED)
     evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
     [se] = _batch(conn, "source_event")
     assert se[0] == evt_id and se[1] == "NEWS" and se[3] == "2026-07-15"
@@ -179,9 +199,9 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     assert (arg[0], arg[2]) == (evt_id, "inst_SAMSUNG")
     [ev] = _batch(conn, "event_evidence")
     assert ev[1] == evt_id and ev[3] == "TITLE"
-    # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 도 엔진 산식.
+    # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 는 identity_roles 기반 계약 키.
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", "COMPANY.EARNINGS.RESULT_RELEASE||inst_SAMSUNG")
+    thread_id = _stable_id("thr", _thread_key("inst_SAMSUNG"))
     assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     # 분류 입력의 tickers 는 entity_index 교집합이어야 한다(엔진 규칙).
     assert calls[0]["items"][0]["tickers"] == ["005930"]
@@ -216,7 +236,7 @@ def test_lineage_lands_on_loader_written_document(tmp_path, monkeypatch):
     loader_asrt = "asrt_01LOADERASRT"
     conn = _FakeConn(
         doc_overrides={"a1": loader_doc},
-        assertion_rows=[(loader_doc, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT", loader_asrt)],
+        assertion_rows=[(loader_doc, _ETYPE, _PRED, loader_asrt)],
     )
     _setup(monkeypatch, conn)
 
@@ -237,8 +257,8 @@ def test_fmp_article_documents_keep_their_vendor(tmp_path, monkeypatch):
     _write_news(storage, "en", "2026-07-15", [
         _article("a-en", source_vendor="fmp", title="Samsung earnings")])
     doc_id = _stable_id("doc", "fmp", "a-en")
-    asrt_id = _stable_id("asrt", doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT")
-    conn = _FakeConn(assertion_rows=[(doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT", asrt_id)])
+    asrt_id = _stable_id("asrt", doc_id, _ETYPE, _PRED)
+    conn = _FakeConn(assertion_rows=[(doc_id, _ETYPE, _PRED, asrt_id)])
     _setup(monkeypatch, conn)
 
     assert assemble_events.run(storage, "R1", db=_db(),
@@ -278,8 +298,8 @@ def test_in_universe_non_kodex_event_is_threaded(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1", ticker="999999")])
     doc_id = _stable_id("doc", "bigkinds", "a1")
-    asrt_id = _stable_id("asrt", doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT")
-    conn = _FakeConn(assertion_rows=[(doc_id, "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT", asrt_id)])
+    asrt_id = _stable_id("asrt", doc_id, _ETYPE, _PRED)
+    conn = _FakeConn(assertion_rows=[(doc_id, _ETYPE, _PRED, asrt_id)])
     _setup(monkeypatch, conn)
 
     assert assemble_events.run(storage, "R1", db=_db(),
@@ -288,7 +308,7 @@ def test_in_universe_non_kodex_event_is_threaded(tmp_path, monkeypatch):
     assert len(_batch(conn, "source_event")) == 1
     # 999999 → inst_OTHER 도 계보가 선다(과거엔 event_thread_link == [] 였다).
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", "COMPANY.EARNINGS.RESULT_RELEASE||inst_OTHER")
+    thread_id = _stable_id("thr", _thread_key("inst_OTHER"))
     assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
     assert log["events_created"] == 1 and log["threaded"] == 1
@@ -302,8 +322,7 @@ def test_rerun_threads_preexisting_unthreaded_event(tmp_path, monkeypatch):
     남고 prior_count 가 못 세 같은 스레드 새 이벤트의 novelty 까지 오염된다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1")])
-    stale = ("evt_stale", "COMPANY.EARNINGS.RESULT_RELEASE", "inst_OTHER",
-             "2026-07-15T09:00:00+09:00")
+    stale = ("evt_stale", _ETYPE, "2026-07-15T09:00:00+09:00", _IDENTITY_ROLE, "inst_OTHER")
     # a1 은 이미 조립됨 → 재분류 안 함(created 비어야 self-heal 만 검증됨).
     conn = _FakeConn(assembled_articles=["a1"], unthreaded_events=[stale])
     _setup(monkeypatch, conn)
@@ -313,7 +332,7 @@ def test_rerun_threads_preexisting_unthreaded_event(tmp_path, monkeypatch):
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     assert _batch(conn, "source_event") == []  # 신규 조립 없음
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", "COMPANY.EARNINGS.RESULT_RELEASE||inst_OTHER")
+    thread_id = _stable_id("thr", _thread_key("inst_OTHER"))
     assert (link[0], link[1], link[3]) == ("evt_stale", thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
     assert log["events_created"] == 0 and log["threaded"] == 1
@@ -351,3 +370,111 @@ def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     assert log["exit_code"] == 1
     assert log["failures"][0]["reasons"] == ["assemble_error"]
     assert log["events_created"] == 0
+
+
+def _multi_role_event(source_event_id: str, role_values: dict, available_at="2026-07-15T09:00:00+09:00"):
+    return {"source_event_id": source_event_id, "event_type_code": "COMPANY.CONTRACT.SIGNING",
+            "available_at": available_at, "role_values": role_values}
+
+
+def test_contract_signing_splits_thread_by_customer(monkeypatch):
+    """계약 불변식: CONTRACT.SIGNING identity=SUPPLIER·CUSTOMER·CONTRACT_OBJECT 라, 같은
+    공급사라도 CUSTOMER 가 다르면 **다른 thread** 다. 엔티티 하나로 키를 만들던 옛 구현은
+    이 둘을 한 스레드로 뭉갰다(신규 계약이 기존 계약의 FOLLOW_UP 으로 오독). WHY: novelty·
+    prior_event_count 가 이 키 위에서 나오므로, 키가 CUSTOMER 를 안 보면 사건 계보가 틀린다.
+
+    라이브 파이프라인에선 edge 가 CUSTOMER·CONTRACT_OBJECT 를 추출하지 않아 이 타입은 UNKNOWN
+    이 되지만(아래 테스트), thread_key 로직 자체는 identity 가 채워졌을 때 올바로 갈라야 한다 —
+    그래서 event_argument 를 손으로 심어 thread_events 를 직접 검증한다."""
+    conn = _FakeConn()
+    ev_a = _multi_role_event("evt_a", {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST1",
+                                       "CONTRACT_OBJECT": "concept_battery"})
+    ev_b = _multi_role_event("evt_b", {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST2",
+                                       "CONTRACT_OBJECT": "concept_battery"})
+    assemble_events.thread_events(conn, [ev_a, ev_b])
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert links["evt_a"][1] != links["evt_b"][1]         # 다른 thread_id
+    assert links["evt_a"][3] == "FIRST_IN_THREAD" and links["evt_b"][3] == "FIRST_IN_THREAD"
+    # 같은 공급사·같은 계약대상, CUSTOMER 만 다름 → 키가 CUSTOMER 를 반영한다(역할 순서=identity_roles).
+    key_a = ("event_type_id=COMPANY.CONTRACT.SIGNING||required:SUPPLIER=inst_SUP"
+             "||required:CUSTOMER=inst_CUST1||required:CONTRACT_OBJECT=concept_battery")
+    assert links["evt_a"][1] == _stable_id("thr", key_a)
+    assert len(_batch(conn, "event_thread")) == 2
+
+
+def test_missing_identity_role_emits_unknown(monkeypatch):
+    """identity 역할을 못 채우면(edge 는 CONTRACT.SIGNING 의 CUSTOMER·CONTRACT_OBJECT 를
+    추출하지 않는다) synthetic thread 를 만들지 않고 novelty=UNKNOWN·thread_id=NULL 로 남긴다
+    (계약 불변식 5 missing_identity_policy=EMIT_UNKNOWN_LINK_ONLY). WHY: 없는 identity 로 억지
+    스레드를 세우면 서로 다른 계약이 다시 한 스레드로 뭉개져 옛 버그가 재발한다."""
+    conn = _FakeConn()
+    ev = _multi_role_event("evt_x", {"SUPPLIER": "inst_SUP"})  # CUSTOMER·CONTRACT_OBJECT 결측
+    assemble_events.thread_events(conn, [ev])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert link[1] is None and link[3] == "UNKNOWN"          # thread_id NULL + UNKNOWN
+    assert "CUSTOMER" in link[6] and "CONTRACT_OBJECT" in link[6]   # unknown_reason
+    [snap] = _batch(conn, "thread_discovery_snapshot")
+    assert snap[1] is None                                   # snapshot thread_id 도 NULL
+    assert _batch(conn, "event_thread") == []               # 스레드 행 없음
+
+
+def test_falsy_identity_value_is_treated_as_missing(monkeypatch):
+    """identity 역할이 키로는 있지만 값이 None(또는 빈 문자열)이면 결측으로 봐 UNKNOWN 이어야
+    한다(계약 _identity_scalar 규약, edge-review). WHY: 키 존재만 검사하면 `required:CUSTOMER=None`
+    헛 스레드가 서서 CUSTOMER 가 실제로 다른 계약들이 다시 한 스레드로 뭉갠다 — 이 티켓이 고친
+    바로 그 뭉갬이 값 검사 누락으로 재발한다."""
+    conn = _FakeConn()
+    ev = _multi_role_event("evt_n", {"SUPPLIER": "inst_SUP", "CUSTOMER": None,
+                                     "CONTRACT_OBJECT": ""})
+    assemble_events.thread_events(conn, [ev])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert link[1] is None and link[3] == "UNKNOWN"
+    assert "CUSTOMER" in link[6] and "CONTRACT_OBJECT" in link[6]
+    assert _batch(conn, "event_thread") == []
+
+
+def test_unthreaded_query_reevaluates_unknown_links(tmp_path, monkeypatch):
+    """미연결 조회가 기존 UNKNOWN 링크도 대상에 포함해야 한다(계약상 UNKNOWN 은 재평가 가능,
+    edge-review). WHY: `etl.source_event_id IS NULL` 만이면 UNKNOWN 이 영구 상태가 되어, identity
+    가 나중에 채워져도(멀티역할 추출 도입 등) 전역 TRUNCATE 없이는 승격되지 않는다. UNKNOWN
+    링크는 thread_id NULL 이라 prior_count 를 오염시키지 않아 재조회가 안전하다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    _setup(monkeypatch, conn)
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a1"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    [fetch_sql] = [sql for sql, _p in conn.log
+                   if sql.upper().startswith("SELECT SE.SOURCE_EVENT_ID, SE.EVENT_TYPE_CODE")]
+    assert "novelty_status = 'UNKNOWN'" in fetch_sql
+    assert "etl.source_event_id IS NULL OR" in fetch_sql
+
+
+def test_run_logs_unknown_thread_for_unfillable_type(tmp_path, monkeypatch):
+    """run 이 UNKNOWN 을 threaded 로 뭉치지 않고 unknown_thread 로 갈라 로그에 남긴다(Rule 12).
+    EARNINGS.RESULT_RELEASE 는 identity=[ISSUER, REPORTING_PERIOD] 인데 edge 는 REPORTING_PERIOD
+    를 추출하지 않아 라이브에서 UNKNOWN 이 된다 — 이런 흔한 타입이 로그에서 안 보이면 스레드
+    커버리지 저하를 아무도 모른다."""
+    etype, pred = "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT"
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    doc_id = _stable_id("doc", "bigkinds", "a1")
+    asrt_id = _stable_id("asrt", doc_id, etype, pred)
+    conn = _FakeConn(assertion_rows=[(doc_id, etype, pred, asrt_id)])
+    _setup(monkeypatch, conn)
+
+    def complete_fn(system, user):
+        return json.dumps({"items": [{"id": "a1", "is_event": True, "event_type_code": etype,
+                                      "predicate_code": pred, "primary_ticker": "005930",
+                                      "lifecycle_stage": "", "confidence": 0.9}]})
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    [link] = _batch(conn, "event_thread_link")
+    assert link[1] is None and link[3] == "UNKNOWN" and "REPORTING_PERIOD" in link[6]
+    log = _log(storage)
+    assert log["events_created"] == 1 and log["threaded"] == 0 and log["unknown_thread"] == 1

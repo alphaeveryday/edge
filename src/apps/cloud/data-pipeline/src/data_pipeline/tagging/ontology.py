@@ -12,8 +12,10 @@ alphamale 이고, 갱신은 그쪽 버전을 올린 뒤 스냅샷을 통째로 �
 검증 **양쪽의 같은 출처**가 된다 — 프롬프트와 검증이 서로 다른 목록을 보면 모델이 프롬프트를
 지켜도 검증에서 떨어지는 모순이 생긴다.
 
-프로필의 나머지 필드(`identity_roles`·`lifecycle_model`·`projection`·`activate_hq`)는
-스레드 정체성·그래프 투영 소관이라 태깅 범위 밖이다 — 스냅샷엔 남기되 여기선 안 읽는다.
+프로필의 나머지 필드(`lifecycle_model`·`projection`·`activate_hq`)는 그래프 투영 소관이라
+태깅 범위 밖이다 — 스냅샷엔 남기되 여기선 안 읽는다. `identity_roles` 는 thread 스텝
+(assemble_events)이 `identity_roles()` 로 읽는다(ALPHA-457) — 태깅 자체는 여전히 안 쓰고,
+이 모듈은 프로필 SSOT 접근자만 제공한다.
 """
 
 from __future__ import annotations
@@ -77,6 +79,18 @@ def allowed_roles(event_type_code: str) -> frozenset[str]:
 def required_roles(event_type_code: str) -> frozenset[str]:
     """그 타입이 요구하는 role_code — 다 채워지면 completeness=complete."""
     return frozenset(load_profiles()[event_type_code]["required_roles"])
+
+
+def identity_roles(event_type_code: str) -> tuple[str, ...]:
+    """그 타입의 thread 정체성 역할 — thread_key 구성 재료(ALPHA-457, 순서 보존).
+
+    `required_roles`(event completeness 판정)와 **다른 축**이다: 계약 불변식 3이 둘의 분리를
+    강제한다 — 다른 계약이 같은 스레드로 뭉개지지 않게. 예: CONTRACT.SIGNING 은 required 가
+    SUPPLIER·CONTRACT_OBJECT 지만 identity 는 SUPPLIER·CUSTOMER·CONTRACT_OBJECT 라, CUSTOMER
+    가 다르면 다른 thread 다. `frozenset`(required)과 달리 **tuple 로 순서를 보존**한다 —
+    thread_key 가 역할 순서에 의존하는 결정적 문자열이라 집합이면 안 된다.
+    """
+    return tuple(load_profiles()[event_type_code]["identity_roles"])
 
 
 def allowed_predicates(event_type_code: str) -> frozenset[str]:
