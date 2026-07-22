@@ -60,6 +60,12 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
 - 최종 문구 수정·정정 등록이 CR 전용인 이유: 노출 문구에 관한 판단은 검수
   경로이며(state-machine.md), Operator 의 쓰기는 노출 축소 방향으로 한정된다.
   Cloud Sync 관리(인증서 교체·재연결)는 노출 축소가 아닌 시스템 관리라 TA 전용이다.
+- 역할 부여의 직무 분리 보강: TA 가 스스로에게 CR 을 부여해 검수·정책 권한을
+  얻는 우회를 막기 위해 **자기 자신에 대한 역할 변경은 금지**하고, 역할
+  부여·회수는 전건 콘솔 감사 로그(console_action_log)에 기록한다 — 타인 계정을
+  경유한 우회는 차단이 아니라 감사로 추적한다(이중 통제 워크플로는 MVP 범위
+  밖). 운영 SSO/AD 연동 시 역할의 원천(IdP 클레임 vs 콘솔 부여)은
+  ALPHA-118 설계에서 확정한다.
 
 ## API 매핑
 
