@@ -73,6 +73,8 @@ class _FakeCursor:
             self._rows = list(conn.assertion_rows)
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items()]
+        elif upper.startswith("SELECT THREAD_ID, CURRENT_STAGE"):
+            self._rows = [(t, s, l) for t, (s, l) in conn.prior_thread_headers.items()]
 
     def executemany(self, sql, rows):
         self._conn.batches.append((" ".join(sql.split()), list(rows)))
@@ -89,7 +91,7 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, instruments=None, assembled_articles=(), doc_overrides=None,
-                 assertion_rows=None, prior_thread_counts=None):
+                 assertion_rows=None, prior_thread_counts=None, prior_thread_headers=None):
         self.log: list = []
         self.batches: list = []
         self.instruments = instruments or [("005930", "inst_SAMSUNG"), ("000660", "inst_HYNIX"),
@@ -98,6 +100,7 @@ class _FakeConn:
         self.doc_overrides = doc_overrides or {}
         self.assertion_rows = assertion_rows
         self.prior_thread_counts = prior_thread_counts or {}
+        self.prior_thread_headers = prior_thread_headers or {}
 
     def cursor(self):
         cur = _FakeCursor(self)
@@ -304,3 +307,83 @@ def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     assert log["exit_code"] == 1
     assert log["failures"][0]["reasons"] == ["assemble_error"]
     assert log["events_created"] == 0
+
+
+def test_novelty_decision_cascade():
+    """§7 캐스케이드 뉴스 경로 판정: 미해소→UNKNOWN, prior0→FIRST, stage전이→FOLLOW_UP,
+    전이 없음→DUPLICATE. 이 순서가 무너지면 재보도가 새 원인으로 새거나(과대주장) 실제
+    후속이 재보도로 묻힌다 — 설명엔진 A 의 novelty anchor 계약이 깨진다."""
+    d = assemble_events._novelty_decision
+    assert d(entity_id=None, prior_count=0, incoming_stage=None, current_stage=None) == (
+        "UNKNOWN", "ENTITY_UNRESOLVED")
+    assert d(entity_id="x", prior_count=0, incoming_stage=None, current_stage=None) == (
+        "FIRST_IN_THREAD", None)
+    assert d(entity_id="x", prior_count=1, incoming_stage="CONFIRMED",
+             current_stage="RUMORED") == ("FOLLOW_UP_STAGE", None)
+    assert d(entity_id="x", prior_count=1, incoming_stage="RUMORED",
+             current_stage="RUMORED") == ("DUPLICATE_REBROADCAST", None)
+    assert d(entity_id="x", prior_count=1, incoming_stage=None,
+             current_stage="RUMORED") == ("DUPLICATE_REBROADCAST", None)
+
+
+def test_days_between_calendar_days_and_reverse_clamp():
+    """일수는 캘린더 일자 차이(>=0). 역순 백필은 음수 대신 0 — snapshot CHECK(>=0) 보존."""
+    f = assemble_events._days_between
+    assert f("2026-07-17T09:00:00+09:00", "2026-07-15T09:00:00+09:00") == 2
+    assert f("2026-07-15T23:00:00+09:00", "2026-07-15T01:00:00+09:00") == 0
+    assert f("2026-07-10T09:00:00+09:00", "2026-07-15T09:00:00+09:00") == 0
+
+
+def _evt(sid, entity, at, stage=None, etype="COMPANY.EARNINGS.RESULT_RELEASE"):
+    return {"source_event_id": sid, "event_type_code": etype, "entity_id": entity,
+            "available_at": at, "lifecycle_stage": stage}
+
+
+def test_thread_events_marks_rebroadcast_and_fills_gap():
+    """같은 스레드의 후속 뉴스가 stage 전이 없이 재송고되면 DUPLICATE_REBROADCAST 로
+    보수 판정하고, 스레드 직전 관측과의 일수를 snapshot 에 남긴다 — 2치 스텁이 모든
+    후속을 FOLLOW_UP 으로 부풀리고 gap 을 NULL 로 버리던 결함 교정(§7 순서 4)."""
+    conn = _FakeConn()
+    assemble_events.thread_events(conn, [
+        _evt("evt_a", "inst_SAMSUNG", "2026-07-15T09:00:00+09:00"),
+        _evt("evt_b", "inst_SAMSUNG", "2026-07-17T09:00:00+09:00"),
+    ])
+    links = {l[0]: l[3] for l in _batch(conn, "event_thread_link")}
+    assert links == {"evt_a": "FIRST_IN_THREAD", "evt_b": "DUPLICATE_REBROADCAST"}
+    snaps = {s[0]: s for s in _batch(conn, "thread_discovery_snapshot")}
+    assert (snaps["evt_a"][2], snaps["evt_a"][3]) == (0, None)      # prior 0, gap 없음
+    assert (snaps["evt_b"][2], snaps["evt_b"][3]) == (1, 2)         # prior 1, 07-17−07-15=2
+
+
+def test_thread_events_follow_up_on_stage_transition():
+    """stage 가 실제 전이하면(예정→확정) FOLLOW_UP_STAGE — 재보도와 구분되는 유일한
+    뉴스 경로 신호(§7 순서 3). 스레드 헤더 current_stage 도 최신분으로 진행한다."""
+    conn = _FakeConn()
+    assemble_events.thread_events(conn, [
+        _evt("evt_a", "inst_ECOPRO", "2026-07-15T09:00:00+09:00", stage="RUMORED",
+             etype="COMPANY.CONTRACT.SIGNING"),
+        _evt("evt_b", "inst_ECOPRO", "2026-07-16T09:00:00+09:00", stage="CONFIRMED",
+             etype="COMPANY.CONTRACT.SIGNING"),
+    ])
+    links = {l[0]: l[3] for l in _batch(conn, "event_thread_link")}
+    assert links == {"evt_a": "FIRST_IN_THREAD", "evt_b": "FOLLOW_UP_STAGE"}
+    [thread_row] = _batch(conn, "event_thread")
+    assert thread_row[5] == "CONFIRMED"
+
+
+def test_thread_events_reads_db_prior_stage_across_runs():
+    """직전 런에서 연 스레드(DB current_stage·last_state_at)를 읽어 런 경계를 넘어
+    novelty·gap 을 이어간다 — 새 stage 면 FOLLOW_UP, prior/gap 은 DB 기준."""
+    thread_id = _stable_id("thr", "COMPANY.CONTRACT.SIGNING||inst_ECOPRO")
+    conn = _FakeConn(
+        prior_thread_counts={thread_id: 1},
+        prior_thread_headers={thread_id: ("RUMORED", "2026-07-15T09:00:00+09:00")},
+    )
+    assemble_events.thread_events(conn, [
+        _evt("evt_c", "inst_ECOPRO", "2026-07-18T09:00:00+09:00", stage="CONFIRMED",
+             etype="COMPANY.CONTRACT.SIGNING"),
+    ])
+    [link] = _batch(conn, "event_thread_link")
+    assert link[3] == "FOLLOW_UP_STAGE"
+    [snap] = _batch(conn, "thread_discovery_snapshot")
+    assert (snap[2], snap[3]) == (1, 3)   # DB prior 1건, 07-18−07-15=3

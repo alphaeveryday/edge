@@ -6,6 +6,12 @@
 검증 규칙·결정적 ID 산식 전부 엔진과 동일하고, 바뀐 것은 실행 위치와 실행부 관례
 (Storage 레이크 접근·psycopg3·LLM complete_fn 주입·quality log)뿐이다.
 
+예외(2026-07-21): threading 의 novelty 판정은 엔진 2치(FIRST/FOLLOW_UP) 스텁을 벗어나
+§6·§7 계약(뉴스 경로 가용분: FIRST_IN_THREAD·FOLLOW_UP_STAGE·DUPLICATE_REBROADCAST·
+UNKNOWN + days_since·unknown_reason·current_stage)으로 확장했다. 계보 조립·결정적 ID
+산식·thread_key 는 여전히 엔진과 동일. CORRECTION·교차소스 권위(재무값)·2차 부분일치는
+상류 선행작업(다역할 identity·assertion_metric·공시 스레딩) 전까지 보류.
+
 ⚠️ **PIPELINE_ID 는 엔진과 반드시 동일해야 한다** — 결정적 ID(_stable_id)의 재료라,
 다르면 같은 이벤트가 다른 source_event_id/thread_id 로 갈려 이행기(엔진이 아직 자체
 조립을 하는 동안)의 멱등 수렴이 깨진다. 엔진 축소(PR D) 후에도 기존 행과의 수렴을
@@ -377,6 +383,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             "evidence_id": evidence_id,
             "event_type_code": cls["event_type_code"],
             "entity_id": entity_id,
+            "lifecycle_stage": cls["lifecycle_stage"],
             "ticker": cls["primary_ticker"],
             "available_at": available_at,
             "title": row["title"],
@@ -413,13 +420,49 @@ def select_kodex_events(events: list[dict]) -> list[dict]:
     return [e for e in events if e["ticker"] in KODEX_CONSTITUENTS]
 
 
-def thread_events(conn, events: list[dict]) -> None:
-    """event_thread 계보 — 엔진 thread_events 이식(novelty FIRST/FOLLOW_UP 판정).
+def _novelty_decision(*, entity_id: str | None, prior_count: int,
+                      incoming_stage: str | None,
+                      current_stage: str | None) -> tuple[str, str | None]:
+    """§7 novelty 캐스케이드(뉴스 경로) — (novelty_status, unknown_reason) 반환.
 
-    알려진 천장(엔진 정본 그대로): prior 판정이 기존 링크 **총수** 기준이라, 이미 처리된
-    날짜보다 **오래된** 날짜를 나중에 백필하면 novelty 가 역전된다(옛 이벤트가 FOLLOW_UP).
-    런 내부는 available_at 정렬이라 안전 — 런 간 역순 백필만 해당. 회피는 운영 지침
-    (백필은 과거→현재 순)이고, 시각 기준 novelty 재판정은 threading 로직 소유자 안건.
+    0a 주체 미해소 → UNKNOWN. 1 매칭 스레드 없음 → FIRST_IN_THREAD. 3 stage 전이 →
+    FOLLOW_UP_STAGE. 4 신규 정보 없음(뉴스=같은 source_class) → DUPLICATE_REBROADCAST.
+    2 CORRECTION·5 교차소스·0b 부분일치는 뉴스 경로 보류(상류 선행작업·임계 미결).
+    """
+    if not entity_id:                                        # 0a
+        return "UNKNOWN", "ENTITY_UNRESOLVED"
+    if prior_count == 0:                                     # 1
+        return "FIRST_IN_THREAD", None
+    if incoming_stage and incoming_stage != current_stage:   # 3 stage 전이
+        return "FOLLOW_UP_STAGE", None
+    return "DUPLICATE_REBROADCAST", None                     # 4 신규 정보 없음
+
+
+def _days_between(later: object, earlier: object) -> int:
+    """두 available_at 사이 KST 캘린더 일수(>=0). 이벤트(KST ISO)와 DB last_state_at(tz-aware)를
+    같은 KST 일자로 정규화해 tz 경계 off-by-one 을 막는다. 역순 백필은 0 클램프(아래 천장 주석)."""
+    lo = later if isinstance(later, datetime) else datetime.fromisoformat(str(later))
+    hi = earlier if isinstance(earlier, datetime) else datetime.fromisoformat(str(earlier))
+    return max(0, (lo.astimezone(_KST).date() - hi.astimezone(_KST).date()).days)
+
+
+def thread_events(conn, events: list[dict]) -> None:
+    """event_thread 계보 — §7 novelty 캐스케이드(뉴스 경로 가용 입력).
+
+    판정은 순수 함수 `_novelty_decision`이 소유한다. 뉴스 단일 소스에서 결정 가능한 4개
+    상태만 낸다: FIRST_IN_THREAD·FOLLOW_UP_STAGE·DUPLICATE_REBROADCAST·UNKNOWN(계약 5어휘).
+    보류(analysis-engine.md §6·§7 — 상류 선행작업/임계 미결): CORRECTION(정정 마커·권위
+    숫자 유의차 — 뉴스 미추출·임계 연구 소유), 교차소스 확인(공시가 스레드 미인입),
+    2차 부분일치 강등(다역할 identity 미추출).
+
+    FOLLOW_UP vs DUPLICATE 는 lifecycle_stage 전이로만 가른다 — 통제 stage 어휘·구조화
+    assertion(assertion_metric)이 없어 '신규 assertion' 축은 아직 못 쓴다. stage 전이가
+    없으면 신규 정보 없음(=재보도)으로 **보수 판정**한다(novelty 과대주장 금지, 설명엔진
+    A 계약). days_since_previous_stage 는 스레드 직전 관측과의 캘린더 일수다.
+
+    알려진 천장(엔진 정본 그대로): prior 판정이 기존 링크 총수 기준이라, 이미 처리된
+    날짜보다 오래된 날짜를 나중에 백필하면 novelty·gap·current_stage 가 역전된다. 런
+    내부는 available_at 정렬이라 안전 — 런 간 역순 백필만 해당(운영: 백필은 과거→현재 순).
     """
     if not events:
         return
@@ -429,68 +472,115 @@ def thread_events(conn, events: list[dict]) -> None:
     evaluated_at = _utcnow_iso()
 
     thread_keys = {f"{e['event_type_code']}||{e['entity_id']}": None for e in events}
-    prior_counts = _thread_prior_counts(conn, list(thread_keys))
+    prior = _thread_prior_state(conn, list(thread_keys))
 
-    per_thread_seen: dict[str, int] = {}
+    seen: dict[str, int] = {}                # thread_key → 런 내 관측 수
+    run_stage: dict[str, str | None] = {}    # thread_key → 진행 중 current_stage
+    run_last: dict[str, object] = {}         # thread_key → 직전 관측 available_at
     for event in sorted(events, key=lambda e: e["available_at"]):
         thread_key = f"{event['event_type_code']}||{event['entity_id']}"
         thread_id = _stable_id("thr", thread_key)
-        prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
-        novelty = "FIRST_IN_THREAD" if prior == 0 else "FOLLOW_UP_STAGE"
-        per_thread_seen[thread_key] = per_thread_seen.get(thread_key, 0) + 1
-        # 같은 배치에 같은 스레드 이벤트가 여럿이면 opened_at 은 **첫**(가장 이른) 이벤트,
-        # last_state_at 만 갱신 — 마지막 대입으로 덮으면 opened_at 이 멤버보다 늦어진다.
+        prior_count, prior_stage, prior_last = prior.get(thread_key, (0, None, None))
+        count = prior_count + seen.get(thread_key, 0)
+        cur_stage = run_stage[thread_key] if thread_key in run_stage else prior_stage
+        last_at = run_last[thread_key] if thread_key in run_last else prior_last
+        stage = event.get("lifecycle_stage")
+
+        novelty, unknown_reason = _novelty_decision(
+            entity_id=event["entity_id"], prior_count=count,
+            incoming_stage=stage, current_stage=cur_stage,
+        )
+        if novelty == "UNKNOWN":
+            # 주체 미해소 — 스레드 없음(thread_id NULL). 스레드 부기에 반영하지 않는다.
+            links.append((event["source_event_id"], None, "NEWS", novelty, "TITLE_EVENT",
+                          evaluated_at, unknown_reason))
+            snapshots.append((event["source_event_id"], None, None, None, False,
+                              unknown_reason, evaluated_at))
+            continue
+
+        gap = (_days_between(event["available_at"], last_at)
+               if count and last_at is not None else None)
+        links.append((event["source_event_id"], thread_id, "NEWS", novelty, "TITLE_EVENT",
+                      evaluated_at, None))
+        snapshots.append((event["source_event_id"], thread_id, count, gap,
+                          novelty == "FIRST_IN_THREAD", None, evaluated_at))
+
+        # stage 는 최초(FIRST)·전이(FOLLOW_UP)일 때만 진행; 재보도는 기존 stage 유지.
+        if novelty in ("FIRST_IN_THREAD", "FOLLOW_UP_STAGE"):
+            cur_stage = stage
+        run_stage[thread_key] = cur_stage
+        run_last[thread_key] = event["available_at"]
+        seen[thread_key] = seen.get(thread_key, 0) + 1
+        # 같은 배치에 같은 스레드 이벤트가 여럿이면 opened_at 은 첫(가장 이른) 멤버,
+        # last_state_at·current_stage 는 최신 멤버.
         prev_row = threads.get(thread_key)
         opened_at = prev_row[3] if prev_row else event["available_at"]
         threads[thread_key] = (thread_id, thread_key, event["event_type_code"],
-                               opened_at, event["available_at"])
-        links.append((event["source_event_id"], thread_id, "NEWS", novelty, "TITLE_EVENT",
-                      evaluated_at))
-        snapshots.append((event["source_event_id"], thread_id, prior, None, prior == 0,
-                          evaluated_at))
+                               opened_at, event["available_at"], cur_stage)
 
     with conn.cursor() as cur:
-        # 백필(--from/--to)이 기존 스레드보다 **오래된** 이벤트를 넣을 수 있다 — 단순
-        # 대입이면 last_state_at 이 역행하고, opened_at 보다 앞서면 ck_event_thread_time
-        # 위반으로 백필 전체가 롤백된다. 시각은 단조로 유지한다(엔진은 '오늘'만 돌아
-        # 이 경로가 없었다 — 백필 능력이 생기며 필요해진 실행부 보강).
+        # 백필(--from/--to)이 기존 스레드보다 오래된 이벤트를 넣을 수 있다 — 단순 대입이면
+        # last_state_at 이 역행하고 opened_at 보다 앞서면 ck_event_thread_time 위반으로
+        # 백필 전체가 롤백된다. 시각은 단조로 유지한다(current_stage 는 최신분으로 대입 —
+        # 역순 백필 시 stale 가능, 위 천장 주석과 동일 등급의 수용 한계).
         cur.executemany(
             "INSERT INTO event_thread (thread_id, thread_key, event_type_code, opened_at,"
-            " last_state_at) VALUES (%s,%s,%s,%s,%s)"
+            " last_state_at, current_stage) VALUES (%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (thread_key) DO UPDATE SET"
             " opened_at = LEAST(event_thread.opened_at, EXCLUDED.opened_at),"
-            " last_state_at = GREATEST(event_thread.last_state_at, EXCLUDED.last_state_at)",
+            " last_state_at = GREATEST(event_thread.last_state_at, EXCLUDED.last_state_at),"
+            " current_stage = EXCLUDED.current_stage",
             list(threads.values()),
         )
         cur.executemany(
             "INSERT INTO event_thread_link (source_event_id, thread_id, source_class,"
-            " novelty_status, link_type, evaluated_at) VALUES (%s,%s,%s,%s,%s,%s)"
+            " novelty_status, link_type, evaluated_at, unknown_reason)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (source_event_id) DO UPDATE SET thread_id = EXCLUDED.thread_id,"
-            " novelty_status = EXCLUDED.novelty_status, evaluated_at = EXCLUDED.evaluated_at",
+            " novelty_status = EXCLUDED.novelty_status, evaluated_at = EXCLUDED.evaluated_at,"
+            " unknown_reason = EXCLUDED.unknown_reason",
             links,
         )
         cur.executemany(
             "INSERT INTO thread_discovery_snapshot (source_event_id, thread_id, prior_event_count,"
-            " days_since_previous_stage, is_novel, evaluated_at) VALUES (%s,%s,%s,%s,%s,%s)"
+            " days_since_previous_stage, is_novel, unknown_reason, evaluated_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (source_event_id) DO UPDATE SET"
-            " prior_event_count = EXCLUDED.prior_event_count, is_novel = EXCLUDED.is_novel,"
+            " prior_event_count = EXCLUDED.prior_event_count,"
+            " days_since_previous_stage = EXCLUDED.days_since_previous_stage,"
+            " is_novel = EXCLUDED.is_novel, unknown_reason = EXCLUDED.unknown_reason,"
             " evaluated_at = EXCLUDED.evaluated_at",
             snapshots,
         )
 
 
-def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
+def _thread_prior_state(conn, thread_keys: list[str]) -> dict[str, tuple]:
+    """기존 thread별 (링크 총수, current_stage, last_state_at) — novelty·gap 판정 입력.
+
+    UNKNOWN 링크는 thread_id=NULL 이라 총수(event_thread_link)에서 자연 제외된다.
+    """
     if not thread_keys:
         return {}
     thread_ids = {_stable_id("thr", tk): tk for tk in thread_keys}
+    ids = list(thread_ids)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT thread_id, COUNT(*) FROM event_thread_link WHERE thread_id = ANY(%s)"
             " GROUP BY thread_id",
-            (list(thread_ids),),
+            (ids,),
         )
         counts = {str(tid): int(n) for tid, n in cur.fetchall()}
-    return {thread_ids[tid]: n for tid, n in counts.items()}
+        cur.execute(
+            "SELECT thread_id, current_stage, last_state_at FROM event_thread"
+            " WHERE thread_id = ANY(%s)",
+            (ids,),
+        )
+        headers = {str(tid): (stage, last) for tid, stage, last in cur.fetchall()}
+    out: dict[str, tuple] = {}
+    for tid, tk in thread_ids.items():
+        stage, last = headers.get(tid, (None, None))
+        out[tk] = (counts.get(tid, 0), stage, last)
+    return out
 
 
 def run(
