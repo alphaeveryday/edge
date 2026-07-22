@@ -115,6 +115,14 @@ class ConsoleAuthFilterTest {
 	}
 
 	@Test
+	void matrix_parameter_우회는_인증을_건너뛰지_못한다() throws Exception {
+		// `/api;x=y/...` 는 MVC 가 매트릭스 파라미터를 벗겨 검수 API 로 매핑한다 —
+		// 필터도 같은 정규화를 적용해 미인증 요청을 401 로 막아야 한다(fail-closed).
+		mvc.perform(post("/api;x=y/v1/review/items/er-1/approve"))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
 	void 로그인은_유일한_공개_표면이다() throws Exception {
 		// 필터를 통과해 MVC 까지 도달한다 — 이 셋업엔 AuthController 가 없어 404 가
 		// 곧 "차단되지 않았다"의 증거다(401/403 이면 필터가 막은 것).

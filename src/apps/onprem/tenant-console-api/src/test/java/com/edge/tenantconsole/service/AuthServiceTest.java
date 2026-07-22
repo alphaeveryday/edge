@@ -50,20 +50,20 @@ class AuthServiceTest {
 	@Test
 	void 부트스트랩은_member_0건일_때만_시드한다() {
 		StubMembers empty = new StubMembers(0);
-		new AuthService(empty, new BootstrapAccounts(ACCOUNTS)).bootstrapIfEmpty();
+		new AuthService(empty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
 		assertThat(empty.inserted).hasSize(2);
 		// 이메일 정규화(소문자) — 로그인 조회와 같은 규칙이어야 시드 계정에 로그인이 된다.
 		assertThat(empty.inserted.get(0)[0]).isEqualTo("admin@demo.edge.local");
 
 		StubMembers nonEmpty = new StubMembers(1);
-		new AuthService(nonEmpty, new BootstrapAccounts(ACCOUNTS)).bootstrapIfEmpty();
+		new AuthService(nonEmpty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
 		assertThat(nonEmpty.inserted).isEmpty();
 	}
 
 	@Test
 	void 시드_비밀번호는_BCrypt_해시로_저장된다() {
 		StubMembers empty = new StubMembers(0);
-		new AuthService(empty, new BootstrapAccounts(ACCOUNTS)).bootstrapIfEmpty();
+		new AuthService(empty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
 		String storedHash = empty.inserted.get(0)[3];
 		assertThat(storedHash).isNotEqualTo("pw-admin");
 		assertThat(new BCryptPasswordEncoder().matches("pw-admin", storedHash)).isTrue();

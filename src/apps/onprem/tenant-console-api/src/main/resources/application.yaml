@@ -1,3 +1,14 @@
+server:
+  servlet:
+    session:
+      cookie:
+        # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(ADR-0025 데모 범위):
+        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다.
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 SSO 모드·HTTPS 종단에서는
+        # secure 쿠키·표준 CSRF 토큰이 추가된다(실계약 시점).
+        same-site: strict
+        http-only: true
+
 spring:
   application:
     name: tenantconsole

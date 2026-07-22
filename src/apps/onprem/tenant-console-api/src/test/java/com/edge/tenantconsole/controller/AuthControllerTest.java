@@ -50,6 +50,12 @@ class AuthControllerTest {
 		}
 
 		@Override
+		public long count() {
+			// 시드 불필요 상태 — 로그인 경로의 지연 부트스트랩이 시드를 건너뛰게 한다.
+			return 1;
+		}
+
+		@Override
 		public void touchLastLogin(long memberId) {
 			lastLoginTouched = memberId;
 		}
@@ -61,7 +67,8 @@ class AuthControllerTest {
 	@BeforeEach
 	void setUp() {
 		members = new StubMembers();
-		AuthService authService = new AuthService(members, new BootstrapAccounts(List.of()));
+		AuthService authService = new AuthService(members, new BootstrapAccounts(List.of()),
+				org.springframework.transaction.support.TransactionOperations.withoutTransaction());
 		mvc = MockMvcBuilders.standaloneSetup(new AuthController(authService))
 				.setControllerAdvice(new GlobalExceptionHandler())
 				.build();

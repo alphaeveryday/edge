@@ -21,6 +21,10 @@ import java.util.regex.Pattern;
  * 권한의 SSOT 는 docs/console-ia/permission-matrix.md — 이 필터의 라우트 정책은
  * 그 매트릭스의 "API 매핑" 표와 1:1 이며, 엔드포인트 추가 시 표와 여기에 함께
  * 행을 더한다. 매핑 없는 /api/** 는 거부가 기본이다(fail-closed).
+ *
+ * 인가는 세션에 실린 role 을 신뢰한다 — 로그인 이후의 계정 비활성화·역할 회수는
+ * 세션 만료·로그아웃 전까지 즉시 반영되지 않는다(데모 범위의 트레이드오프). 매
+ * 요청 is_active·role 재검증은 사용자 관리(ALPHA-119)와 함께 도입한다.
  */
 @Component
 public class ConsoleAuthFilter extends OncePerRequestFilter {
@@ -32,8 +36,8 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	private static final Set<String> COMPLIANCE_REVIEWER_ONLY = Set.of("COMPLIANCE_REVIEWER");
 
 	private record Rule(String method, Pattern path, Set<String> roles) {
-		boolean matches(HttpServletRequest request) {
-			return method.equals(request.getMethod()) && path.matcher(request.getRequestURI()).matches();
+		boolean matches(String requestMethod, String requestPath) {
+			return method.equals(requestMethod) && path.matcher(requestPath).matches();
 		}
 	}
 
@@ -53,12 +57,17 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
 			FilterChain chain) throws ServletException, IOException {
 
+		// 매칭은 컨텍스트 패스를 제거하고 세그먼트별 matrix parameter(;k=v)를 벗긴
+		// 경로 기준 — MVC 의 PathPattern 매칭과 같은 정규화를 적용해, `/api;x=y/...`
+		// 같은 우회로 필터가 통째로 건너뛰어지는 것을 막는다(fail-closed).
+		String path = normalize(request.getRequestURI().substring(request.getContextPath().length()));
+
 		// 콘솔 API 밖(actuator 등)은 이 필터의 관심사가 아니다.
-		if (!request.getRequestURI().startsWith("/api/")) {
+		if (!path.startsWith("/api/")) {
 			chain.doFilter(request, response);
 			return;
 		}
-		if (PUBLIC_LOGIN.matches(request)) {
+		if (PUBLIC_LOGIN.matches(request.getMethod(), path)) {
 			chain.doFilter(request, response);
 			return;
 		}
@@ -69,11 +78,12 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		Rule rule = RULES.stream().filter(r -> r.matches(request)).findFirst().orElse(null);
+		Rule rule = RULES.stream()
+				.filter(r -> r.matches(request.getMethod(), path)).findFirst().orElse(null);
 		if (rule == null) {
 			// 매핑 없는 표면은 배포 전 permission-matrix.md 매핑이 의무 — 누락은 fail-closed.
 			log.error("권한 매핑 없는 콘솔 표면 거부: {} {} (permission-matrix.md 매핑 필요)",
-					request.getMethod(), request.getRequestURI());
+					request.getMethod(), path);
 			write(response, HttpServletResponse.SC_FORBIDDEN, "CNSL4030", "이 작업을 수행할 권한이 없습니다.");
 			return;
 		}
@@ -82,6 +92,18 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 		chain.doFilter(request, response);
+	}
+
+	// 세그먼트별 matrix parameter(첫 ';' 이후) 제거. MVC 매핑이 무시하는 부분을
+	// 필터도 똑같이 무시해야 라우트 판정이 어긋나지 않는다.
+	private String normalize(String path) {
+		StringBuilder out = new StringBuilder(path.length());
+		for (String segment : path.split("/", -1)) {
+			int semicolon = segment.indexOf(';');
+			out.append('/').append(semicolon >= 0 ? segment.substring(0, semicolon) : segment);
+		}
+		// split 이 선행 '/' 를 빈 세그먼트로 만들어 앞에 '/' 가 하나 더 붙는다 — 제거.
+		return out.length() > 1 ? out.substring(1) : out.toString();
 	}
 
 	private SessionMember currentMember(HttpServletRequest request) {
