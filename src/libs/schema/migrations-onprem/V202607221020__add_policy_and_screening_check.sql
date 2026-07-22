@@ -18,7 +18,8 @@ CREATE TABLE policy_version (
     -- 콘솔 표시용 증가 번호(v1, v2, …).
     version_no            INTEGER NOT NULL,
     -- publication-api 응답 disclaimer 의 원천 — 노출 화면 필수 동반 문구
-    -- (docs/contracts/publication-api.md).
+    -- (docs/contracts/publication-api.md). 현행 응답은 상수 하드코딩이며, 이
+    -- 컬럼으로의 소비 전환은 콘솔 정책 구현과 함께 후속이다.
     disclaimer_text       TEXT NOT NULL,
     -- 자동 제공 스위치. 기본 FALSE = 전건 검수(0%)에서 시작 — 보수적 온보딩이
     -- 표준 시나리오(tenant-console.md 처리 기준)라 안전한 쪽이 기본값이다.
@@ -32,14 +33,21 @@ CREATE TABLE policy_version (
     deactivated_at        TIMESTAMPTZ,
 
     CONSTRAINT uq_policy_version_no UNIQUE (version_no),
+    CONSTRAINT ck_policy_version_no_positive CHECK (version_no >= 1),
     CONSTRAINT ck_policy_version_min_source
         CHECK (min_source_count IS NULL OR min_source_count >= 1),
+    -- 비활성은 활성 이후에만 — 음수 활성 구간(감사 재현 모순)을 차단한다.
     CONSTRAINT ck_policy_version_lifecycle
-        CHECK (deactivated_at IS NULL OR activated_at IS NOT NULL)
+        CHECK (deactivated_at IS NULL
+               OR (activated_at IS NOT NULL AND deactivated_at >= activated_at))
 );
 
+-- 활성 버전은 최대 1건 — 첫 버전 발행(콘솔 온보딩) 전엔 0건이다. 면책문구는
+-- 테넌트 컴플라이언스 콘텐츠라 시드로 발행하지 않는다. 0건 구간의 점검 처리는
+-- 정책 평가기 도입(ALPHA-421)에서 '정책 부재 = 진행 중단'을 안전 기본값으로
+-- 구현한다 — 현행 walking skeleton(BundleScreener)은 정책을 아직 읽지 않는다.
 COMMENT ON TABLE policy_version IS
-'점검 정책 버전(불변 — 변경 = 신규 버전, ADR-0018). 활성 버전은 항상 1개. writer = tenant-console-api.';
+'점검 정책 버전(불변 — 변경 = 신규 버전, ADR-0018). 활성 버전은 최대 1건(발행 전 0건). writer = tenant-console-api.';
 
 -- 활성 버전 단일성의 arbiter — 활성(활성화됨 + 비활성 전) 행은 1개만.
 CREATE UNIQUE INDEX uq_policy_version_active
@@ -65,13 +73,16 @@ CREATE TABLE screening_rule (
     CONSTRAINT ck_screening_rule_type
         CHECK (rule_type IN ('BANNED_WORD', 'SINGLE_SOURCE', 'ASSERTIVE_EXPRESSION')),
     CONSTRAINT ck_screening_rule_action
-        CHECK (action IN ('REVIEW', 'BLOCK'))
+        CHECK (action IN ('REVIEW', 'BLOCK')),
+    -- screening_check 의 복합 FK 대상 — "룰은 기록된 버전에 속한다"를 강제하기 위한 키.
+    CONSTRAINT uq_screening_rule_version_pair UNIQUE (policy_version_id, screening_rule_id)
 );
 
 COMMENT ON TABLE screening_rule IS
 '점검 룰 인스턴스(ADR-0018 — Type=코드/Instance=콘솔 설정) — policy_version 에 속하며 함께 불변. writer = tenant-console-api.';
 
-CREATE INDEX ix_screening_rule_version ON screening_rule (policy_version_id);
+-- 버전별 룰 조회는 uq_screening_rule_version_pair 의 B-tree 가 지원한다(선두
+-- 컬럼 = policy_version_id) — 별도 단일 컬럼 인덱스는 중복이라 두지 않는다.
 
 -- 점검 결과 (append-only — UPDATE/DELETE 하지 않는다).
 -- "어떤 정책·룰로 왜 이 상태가 됐나"의 감사 원장 — 민원 재현 시 노출 이력과
@@ -89,7 +100,13 @@ CREATE TABLE screening_check (
     checked_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT ck_screening_check_result
-        CHECK (result IN ('PASS', 'REVIEW', 'BLOCK'))
+        CHECK (result IN ('PASS', 'REVIEW', 'BLOCK')),
+    -- 룰 근거는 반드시 기록된 정책 버전에 속해야 한다 — 교차 버전 연결(감사 모순)
+    -- 차단. screening_rule_id 가 NULL 이면 이 FK 는 검사되지 않고(MATCH SIMPLE),
+    -- policy_version_id 는 위의 단독 FK 가 계속 보증한다.
+    CONSTRAINT fk_screening_check_rule_in_version
+        FOREIGN KEY (policy_version_id, screening_rule_id)
+        REFERENCES screening_rule (policy_version_id, screening_rule_id)
 );
 
 COMMENT ON TABLE screening_check IS

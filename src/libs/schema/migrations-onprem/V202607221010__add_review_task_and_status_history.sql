@@ -19,6 +19,8 @@ CREATE TABLE review_task (
     -- 배정 전 NULL. 결정 시점엔 앱 계층이 채운다.
     reviewer_id       BIGINT REFERENCES member (member_id),
     -- 검수 편집본(수정 승인·임시 저장) — 원문은 analysis_item 에 남고 여기엔 편집만.
+    -- 수정 승인의 노출 경로는 publication.published_summary 스냅샷이다(게시 시점 복사)
+    -- — analysis_item.summary 를 덮어쓰는 경로는 없다.
     edited_headline   TEXT,
     edited_summary    TEXT,
     -- 검수 의견·반려 사유. 반려(REJECTED) 시 사유 필수는 앱 계층이 강제한다
@@ -33,11 +35,25 @@ CREATE TABLE review_task (
         CHECK (status IN ('PENDING', 'APPROVED', 'EDITED_APPROVED', 'REJECTED', 'CANCELLED')),
     -- 결정(취소 포함)과 결정 시각은 함께 움직인다.
     CONSTRAINT ck_review_task_decided
-        CHECK ((status = 'PENDING') = (decided_at IS NULL))
+        CHECK ((status = 'PENDING') = (decided_at IS NULL)),
+    -- 사람 결정(승인·수정 승인·반려)엔 담당 검수자가 반드시 남는다 —
+    -- CANCELLED 는 시스템 취소(정정·무효화 도착)라 예외.
+    CONSTRAINT ck_review_task_decided_reviewer
+        CHECK (status IN ('PENDING', 'CANCELLED') OR reviewer_id IS NOT NULL),
+    -- 수정 승인은 편집 내용이 실제로 존재할 때만 — 편집 없는(NULL·공백뿐인)
+    -- EDITED_APPROVED(원문·빈 문구가 노출되는데 감사엔 수정 승인으로 남는
+    -- 기록)를 차단한다.
+    CONSTRAINT ck_review_task_edited_content
+        CHECK (status <> 'EDITED_APPROVED'
+               OR btrim(coalesce(edited_summary, ''), E' \t\n\r') <> ''
+               OR btrim(coalesce(edited_headline, ''), E' \t\n\r') <> '')
 );
 
+-- writer 는 전이 소유 분리를 따른다: tenant-console-api = 생성·검수 결정(PENDING·
+-- APPROVED·EDITED_APPROVED·REJECTED), screening-worker = CANCELLED(정정·무효화를
+-- analysis_item 에 반영하는 같은 트랜잭션에서 열린 태스크를 닫는다).
 COMMENT ON TABLE review_task IS
-'검수 태스크(state-machine.md review_tasks) — 결정·편집본·의견의 영속 기록(ALPHA-437). writer = tenant-console-api.';
+'검수 태스크(state-machine.md review_tasks) — 결정·편집본·의견의 영속 기록(ALPHA-437). writer 는 전이 소유 분리: tenant-console-api(생성·결정), screening-worker(CANCELLED).';
 
 -- 같은 항목에 열린 태스크는 1건만 — 동시 배정/중복 생성의 arbiter.
 CREATE UNIQUE INDEX uq_review_task_open
@@ -74,7 +90,7 @@ CREATE TABLE analysis_item_status_history (
 );
 
 COMMENT ON TABLE analysis_item_status_history IS
-'analysis_item 상태 변경 이력(append-only) — 전이를 만든 모든 writer 가 전이와 같은 트랜잭션에서 기록한다.';
+'analysis_item 상태 변경 이력(append-only) — writer 는 analysis_item 과 동일한 전이 소유 분리를 따른다(각 모듈은 자기가 만든 전이만 같은 트랜잭션에서 기록): screening-worker = 자동 분기·Cloud 이벤트 반영, tenant-console-api = 검수 결정.';
 
 -- 항목별 이력 재현(민원·감사) 조회용.
 CREATE INDEX ix_status_history_item ON analysis_item_status_history (analysis_item_id, occurred_at);
