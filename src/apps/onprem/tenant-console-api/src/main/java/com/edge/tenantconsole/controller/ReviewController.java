@@ -20,8 +20,8 @@ import java.util.Set;
 
 /**
  * 검수 표면 — Review Queue 목록 + 검수 액션(승인·반려). HTTP 관심사만 담당.
- * 인증·역할(Compliance Reviewer)은 ALPHA-435 소관 — 도입 전까지 이 표면은 내부망
- * 콘솔 전용 전제다.
+ * 인증·역할 강제는 ConsoleAuthFilter 가 수행한다(검수 액션 = Compliance Reviewer
+ * 전용 — docs/console-ia/permission-matrix.md).
  */
 @RestController
 public class ReviewController {

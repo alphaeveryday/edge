@@ -70,19 +70,24 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
 ## API 매핑
 
 권한의 **강제 지점은 API 다** — 화면의 버튼 숨김은 UX 이고, 콘솔
-API(tenant-console-api)가 세션의 역할 클레임으로 위 행을 강제해야 한다(이중 방어).
-**현행 walking skeleton 엔드포인트는 인증·인가 미적용 상태**라 아래 표는 현행
-통제가 아니라 **요구 권한**이며, 강제 구현은 ALPHA-118(인증)·ALPHA-119(Users &
-Roles)이 담당한다.
+API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제한다(이중 방어).
+**강제 구현 = `ConsoleAuthFilter`(ALPHA-118)**: 미인증은 전 표면 401(fail-closed),
+아래 표는 필터의 라우트 정책과 1:1 이며 엔드포인트 추가 시 표와 필터에 함께
+행을 더한다. 표에 없는 표면은 인증돼도 403 거부가 기본이다(fail-closed).
 
 | 엔드포인트 | 매트릭스 행 | 요구 역할 |
 |---|---|---|
+| `POST /api/v1/auth/login` | 인증(로그인) | **공개** — 유일한 비인증 표면 |
+| `POST /api/v1/auth/logout` | 인증(로그아웃) | 인증된 전 역할 |
+| `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 | CR |
 | `POST /api/v1/review/items/{id}/reject` | 검수 액션 | CR |
 
-이후 추가되는 엔드포인트는 구현 PR 에서 이 표에 행을 더한다 — 표에 없는
-엔드포인트는 배포 전 매핑이 의무다(fail-closed).
+인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),
+운영 = SSO/AD(같은 세션 추상화로 수렴, 실계약 시점 구현). **의도적 생략(데모
+범위)**: 로그인 레이트리밋·계정 잠금은 온프렘 내부망 전제의 데모 경로라 두지
+않는다 — 운영 SSO 모드에서는 IdP 정책이 담당한다.
 
 ## 후속
 
