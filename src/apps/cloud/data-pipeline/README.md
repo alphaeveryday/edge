@@ -242,6 +242,26 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 ```
 
+> **thread 재계산(ALPHA-457 등 thread_key 산식 변경 시)** — `thread_id = f(thread_key)` 라
+> thread_key 산식을 바꾸면 기존 `thread_id`·`thread_key` 가 전부 갈린다. 그런데 재실행은
+> **미연결(event_thread_link 없는) 이벤트만** threading 하므로(`fetch_unthreaded_events`),
+> 그냥 다시 돌리면 옛 키의 링크가 남아 재계산되지 않는다. 세 계보 테이블을 비우고 창으로
+> 재실행한다(dev 는 누적 행이 적어 전량 재계산이 싸다 — source_event/assertion 은 결정적
+> 멱등이라 보존, thread 층만 재생성). **TRUNCATE 는 못 쓴다** — `event_thread_link.thread_id`
+> FK 가 `ON DELETE RESTRICT` 라 링크를 먼저 지워야 하고, `explanation_result.primary_thread_id`
+> FK(`ON DELETE SET NULL`)가 참조해 TRUNCATE 는 거부된다. 순서 있는 DELETE 로 지운다:
+> ```sql
+> DELETE FROM event_thread_link;          -- RESTRICT FK: 링크를 먼저 지워야 event_thread 삭제 가능
+> DELETE FROM thread_discovery_snapshot;
+> DELETE FROM event_thread;               -- explanation_result.primary_thread_id 는 SET NULL 로 자동 정리
+> ```
+> ```bash
+> ... run assemble-events --from <first-date> --to <last-date>   # 과거→현재 순(novelty 단조)
+> ```
+> 재실행은 thread 층만 되살린다. `explanation_result.primary_thread_id` 는 NULL 로 남았다가
+> **설명 스텝(analysis-engine)이 다시 돌 때** 새 thread_id 로 재설정된다 — 설명까지 정합하려면
+> 그 스텝도 이어서 돌린다.
+
 > **dev RDS 는 private 서브넷이라 로컬에서 직접 못 닿는다.** 로컬 검증은 임시 베스천 + SSM
 > 포트포워딩으로 터널을 뚫는다(선례: `analysis-engine/upload_ff5_rds.py` — "through the bastion
 > tunnel"). 비밀번호는 RDS 관리형 시크릿(`rds!db-…`)에서 꺼내 env 로 넣는다.

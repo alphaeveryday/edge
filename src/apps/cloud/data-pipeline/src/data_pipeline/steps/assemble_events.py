@@ -27,6 +27,7 @@ from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..events.ontology import Registry, load_registry
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
+from ..tagging.ontology import identity_roles
 
 logger = logging.getLogger(__name__)
 
@@ -393,8 +394,41 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     return created
 
 
-def thread_events(conn, events: list[dict]) -> None:
-    """event_thread 계보 — 엔진 thread_events 이식(novelty FIRST/FOLLOW_UP 판정).
+def _thread_key(event_type_code: str, role_values: dict[str, str]) -> tuple[str | None, list[str]]:
+    """계약 thread_key(§2) — `event_type_id=X||required:ROLE=value||...`(identity_roles 순).
+
+    (key, missing_roles) 를 돌려준다. identity 역할이 하나라도 비면 key=None —
+    계약 novelty 0단계(required identity 결측 → UNKNOWN)이자 불변식 5
+    (missing_identity_policy=EMIT_UNKNOWN_LINK_ONLY): synthetic thread 를 억지로 만들지 않는다.
+
+    엔진 `_thread_key`(alphamale threading.py) 대비 두 가지를 뺀다:
+    `thread_scope`(엔진 실물 코드도 안 넣는다 — 계약 문서에만 있는 유령)와 optional
+    discriminator(edge 추출은 역할당 값 하나뿐이라 optional 값이 존재할 수 없다, YAGNI).
+    값은 엔진의 리치 스칼라(ticker/concept_id) 대신 edge 의 결정적 `entity_id` 다 — edge 는
+    개념·다중역할을 추출하지 않아 identity 를 채울 수 있는 건 단일 entity 역할뿐이다(그 밖은
+    위에서 UNKNOWN 으로 빠진다). 엔진 thread_id 와의 byte 수렴은 값·해시가 달라 애초에
+    불가라 추구하지 않는다(edge-native, 엔진 축소 후 edge 가 정본).
+    """
+    roles = identity_roles(event_type_code)
+    # falsy(None·빈 문자열) 값은 결측으로 본다 — 계약 _identity_scalar 이 falsy 를 값 없음으로
+    # 판정하므로(edge-review), 키 존재만 보면 `required:CUSTOMER=None` 같은 헛 스레드가 서서
+    # 다른 계약이 다시 뭉갠다. `not role_values.get(r)` 로 결측·None·빈값을 한 번에 건다.
+    missing = [r for r in roles if not role_values.get(r)]
+    if not roles or missing:
+        return None, (missing or ["<contract: no identity roles>"])
+    parts = [f"event_type_id={event_type_code}"]
+    parts += [f"required:{r}={role_values[r]}" for r in roles]
+    return "||".join(parts), []
+
+
+def thread_events(conn, events: list[dict]) -> int:
+    """event_thread 계보 — 계약 identity_roles 기반 thread_key + novelty(ALPHA-457).
+
+    thread_key 는 그 타입의 `identity_roles` 값들로 구성한다(엔진 정본 §2). identity 를 못
+    채우는 이벤트(다중역할·개념·날짜 역할 — edge 는 단일 entity 만 추출)는 thread 를 만들지
+    않고 `novelty_status='UNKNOWN'`·`thread_id=NULL`·`unknown_reason` 으로 link/snapshot 만
+    남긴다(불변식 5). 이전엔 `event_type||entity` 한 키라 다른 계약이 한 스레드로 뭉갰다.
+    **UNKNOWN 처리 건수를 반환한다** — 조용히 삼키지 않고 run 로그에 드러내기 위함(Rule 12).
 
     알려진 천장(엔진 정본 그대로): prior 판정이 기존 링크 **총수** 기준이라, 이미 처리된
     날짜보다 **오래된** 날짜를 나중에 백필하면 novelty 가 역전된다(옛 이벤트가 FOLLOW_UP).
@@ -402,18 +436,22 @@ def thread_events(conn, events: list[dict]) -> None:
     (백필은 과거→현재 순)이고, 시각 기준 novelty 재판정은 threading 로직 소유자 안건.
     """
     if not events:
-        return
+        return 0
     threads: dict[str, tuple] = {}
     links: list[tuple] = []
     snapshots: list[tuple] = []
     evaluated_at = _utcnow_iso()
 
-    thread_keys = {f"{e['event_type_code']}||{e['entity_id']}": None for e in events}
-    prior_counts = _thread_prior_counts(conn, list(thread_keys))
+    keyed: list[tuple[dict, str]] = []          # identity 충족 — 스레드 대상
+    unknown: list[tuple[dict, list[str]]] = []  # identity 결측 — UNKNOWN
+    for event in events:
+        thread_key, missing = _thread_key(event["event_type_code"], event["role_values"])
+        (unknown.append((event, missing)) if thread_key is None
+         else keyed.append((event, thread_key)))
 
+    prior_counts = _thread_prior_counts(conn, [k for _e, k in keyed])
     per_thread_seen: dict[str, int] = {}
-    for event in sorted(events, key=lambda e: e["available_at"]):
-        thread_key = f"{event['event_type_code']}||{event['entity_id']}"
+    for event, thread_key in sorted(keyed, key=lambda ek: ek[0]["available_at"]):
         thread_id = _stable_id("thr", thread_key)
         prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
         novelty = "FIRST_IN_THREAD" if prior == 0 else "FOLLOW_UP_STAGE"
@@ -425,38 +463,51 @@ def thread_events(conn, events: list[dict]) -> None:
         threads[thread_key] = (thread_id, thread_key, event["event_type_code"],
                                opened_at, event["available_at"])
         links.append((event["source_event_id"], thread_id, "NEWS", novelty, "TITLE_EVENT",
-                      evaluated_at))
+                      evaluated_at, None))
         snapshots.append((event["source_event_id"], thread_id, prior, None, prior == 0,
-                          evaluated_at))
+                          None, evaluated_at))
+
+    for event, missing in unknown:
+        reason = "missing required identity roles: " + ", ".join(missing)
+        links.append((event["source_event_id"], None, "NEWS", "UNKNOWN", "TITLE_EVENT",
+                      evaluated_at, reason))
+        snapshots.append((event["source_event_id"], None, None, None, None, reason, evaluated_at))
 
     with conn.cursor() as cur:
-        # 백필(--from/--to)이 기존 스레드보다 **오래된** 이벤트를 넣을 수 있다 — 단순
-        # 대입이면 last_state_at 이 역행하고, opened_at 보다 앞서면 ck_event_thread_time
-        # 위반으로 백필 전체가 롤백된다. 시각은 단조로 유지한다(엔진은 '오늘'만 돌아
-        # 이 경로가 없었다 — 백필 능력이 생기며 필요해진 실행부 보강).
-        cur.executemany(
-            "INSERT INTO event_thread (thread_id, thread_key, event_type_code, opened_at,"
-            " last_state_at) VALUES (%s,%s,%s,%s,%s)"
-            " ON CONFLICT (thread_key) DO UPDATE SET"
-            " opened_at = LEAST(event_thread.opened_at, EXCLUDED.opened_at),"
-            " last_state_at = GREATEST(event_thread.last_state_at, EXCLUDED.last_state_at)",
-            list(threads.values()),
-        )
+        if threads:
+            # 백필(--from/--to)이 기존 스레드보다 **오래된** 이벤트를 넣을 수 있다 — 단순
+            # 대입이면 last_state_at 이 역행하고, opened_at 보다 앞서면 ck_event_thread_time
+            # 위반으로 백필 전체가 롤백된다. 시각은 단조로 유지한다(엔진은 '오늘'만 돌아
+            # 이 경로가 없었다 — 백필 능력이 생기며 필요해진 실행부 보강).
+            cur.executemany(
+                "INSERT INTO event_thread (thread_id, thread_key, event_type_code, opened_at,"
+                " last_state_at) VALUES (%s,%s,%s,%s,%s)"
+                " ON CONFLICT (thread_key) DO UPDATE SET"
+                " opened_at = LEAST(event_thread.opened_at, EXCLUDED.opened_at),"
+                " last_state_at = GREATEST(event_thread.last_state_at, EXCLUDED.last_state_at)",
+                list(threads.values()),
+            )
+        # UNKNOWN↔thread_id NULL 커플링 CHECK 는 각 행의 EXCLUDED 값이 자기정합이라 통과한다.
+        # 재threading 이 이전 판정을 뒤집을 수 있어(UNKNOWN↔fillable) thread_id·novelty·
+        # unknown_reason 을 함께 갱신한다.
         cur.executemany(
             "INSERT INTO event_thread_link (source_event_id, thread_id, source_class,"
-            " novelty_status, link_type, evaluated_at) VALUES (%s,%s,%s,%s,%s,%s)"
+            " novelty_status, link_type, evaluated_at, unknown_reason) VALUES (%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (source_event_id) DO UPDATE SET thread_id = EXCLUDED.thread_id,"
-            " novelty_status = EXCLUDED.novelty_status, evaluated_at = EXCLUDED.evaluated_at",
+            " novelty_status = EXCLUDED.novelty_status, evaluated_at = EXCLUDED.evaluated_at,"
+            " unknown_reason = EXCLUDED.unknown_reason",
             links,
         )
         cur.executemany(
             "INSERT INTO thread_discovery_snapshot (source_event_id, thread_id, prior_event_count,"
-            " days_since_previous_stage, is_novel, evaluated_at) VALUES (%s,%s,%s,%s,%s,%s)"
-            " ON CONFLICT (source_event_id) DO UPDATE SET"
+            " days_since_previous_stage, is_novel, unknown_reason, evaluated_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            " ON CONFLICT (source_event_id) DO UPDATE SET thread_id = EXCLUDED.thread_id,"
             " prior_event_count = EXCLUDED.prior_event_count, is_novel = EXCLUDED.is_novel,"
-            " evaluated_at = EXCLUDED.evaluated_at",
+            " unknown_reason = EXCLUDED.unknown_reason, evaluated_at = EXCLUDED.evaluated_at",
             snapshots,
         )
+    return len(unknown)
 
 
 def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
@@ -467,30 +518,53 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
     재실행마다 미연결분을 채워야 한다. 안 그러면 배포 전 KODEX-only 로 조립돼 미연결로 남은
     과거 이벤트가 영영 계보 없이 남고, _thread_prior_counts 가 그걸 못 세 같은 스레드 새
     이벤트의 novelty 까지 오염된다(ALPHA-468 edge-review). 이미 엮인 이벤트는 제외라
-    prior_count 와 겹치지 않아 novelty 판정이 안전하다. source_event 는 in-universe 로만
-    조립되므로 별도 유니버스 필터가 필요 없다.
+    prior_count 와 겹치지 않아 novelty 판정이 안전하다(단 UNKNOWN 링크는 재평가 대상으로
+    다시 포함한다 — 아래 SQL 주석). source_event 는 in-universe 로만 조립되므로 별도 유니버스
+    필터가 필요 없다.
+
+    이벤트마다 **역할별 값 맵**(`role_values`: role_code → entity_id)을 싣는다 — thread_key 가
+    identity_roles 전 역할 값을 필요로 하기 때문(ALPHA-457). 그래서 DISTINCT ON 단일 entity
+    가 아니라 event_argument 전 행을 모아 role 별로 접는다. 한 역할에 값이 여럿이면 정렬된
+    JSON 배열로 축약한다(계약 `_collect_role_values` 규약 — 결정적 순서).
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT DISTINCT ON (se.source_event_id)"
-            " se.source_event_id, se.event_type_code, ea.entity_id, se.available_at"
+            "SELECT se.source_event_id, se.event_type_code, se.available_at,"
+            " ea.role_code, ea.entity_id"
             " FROM source_event se"
             " JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
             # event_status='ACTIVE' 는 엔진 read 경로(fetch_kodex_events)와 같은 필터 — 비활성
             # (REJECTED 등) 이벤트를 엮으면 prior_count 가 그걸 세 같은 스레드 첫 ACTIVE 를
             # 잘못 FOLLOW_UP 으로 판정한다(edge-review). 설명이 읽는 집합과 threading 집합을 맞춘다.
+            # 미연결(link 없음) + **기존 UNKNOWN 링크**를 대상으로 한다 — 계약상 UNKNOWN 은
+            # 재평가 가능한 상태라(identity 가 나중에 채워지면 승격), 링크 있다고 영구 제외하면
+            # UNKNOWN 에 갇힌다(edge-review). UNKNOWN 링크는 thread_id NULL 이라 _thread_prior_counts
+            # (thread_id 로 셈)에 안 잡혀, 재조회해도 novelty 판정이 안전하다.
             " WHERE se.event_date = %s AND se.source_class = 'NEWS'"
-            " AND se.event_status = 'ACTIVE' AND etl.source_event_id IS NULL"
-            " ORDER BY se.source_event_id, ea.entity_id",
+            " AND se.event_status = 'ACTIVE'"
+            " AND (etl.source_event_id IS NULL OR etl.novelty_status = 'UNKNOWN')"
+            " ORDER BY se.source_event_id, ea.role_code, ea.entity_id",
             (event_date,),
         )
         rows = cur.fetchall()
-    return [
-        {"source_event_id": str(r[0]), "event_type_code": r[1],
-         "entity_id": str(r[2]), "available_at": _iso(r[3])}
-        for r in rows
-    ]
+    events: dict[str, dict] = {}
+    role_lists: dict[str, dict[str, list[str]]] = {}
+    for sid, event_type_code, available_at, role_code, entity_id in rows:
+        sid = str(sid)
+        event = events.get(sid)
+        if event is None:
+            event = events[sid] = {"source_event_id": sid, "event_type_code": event_type_code,
+                                   "available_at": _iso(available_at), "role_values": {}}
+            role_lists[sid] = {}
+        role_lists[sid].setdefault(role_code, []).append(str(entity_id))
+    for sid, roles in role_lists.items():
+        events[sid]["role_values"] = {
+            role: (values[0] if len(values) == 1
+                   else json.dumps(sorted(values), ensure_ascii=False))
+            for role, values in roles.items()
+        }
+    return list(events.values())
 
 
 def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
@@ -524,7 +598,7 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
-    classified = events_created = threaded = 0
+    classified = events_created = threaded = unknown_thread = 0
     failures: list[dict] = []
     exit_code = 0
 
@@ -560,13 +634,17 @@ def run(
                 # in_universe/entity 해소가 이미 유니버스 필터라 별도 파생이 없다. 대상은
                 # created 가 아니라 그 날짜의 미연결 전체 — 재실행이 과거 미연결분을 self-heal.
                 to_thread = fetch_unthreaded_events(conn, date)
-                thread_events(conn, to_thread)
-                threaded += len(to_thread)
+                unknown = thread_events(conn, to_thread)
+                # threaded = 실제로 스레드가 선 것, unknown_thread = identity 결측으로 UNKNOWN
+                # (thread_id NULL). 둘을 갈라 로그에 남긴다 — UNKNOWN 을 threaded 로 뭉치면
+                # 계약상 스레드가 안 선 사실이 묻힌다(ALPHA-457, Rule 12).
+                threaded += len(to_thread) - unknown
+                unknown_thread += unknown
     except Exception as exc:
         # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
-        events_created = threaded = 0
+        events_created = threaded = unknown_thread = 0
         exit_code = 1
 
     log = {
@@ -576,6 +654,7 @@ def run(
         "news_read": news_read, "in_universe": in_universe_count,
         "already_normalized": already_normalized, "classified": classified,
         "events_created": events_created, "threaded": threaded,
+        "unknown_thread": unknown_thread,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -587,8 +666,8 @@ def run(
 
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
-        " threaded=%d failures=%d",
+        " threaded=%d unknown_thread=%d failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
-        threaded, len(failures),
+        threaded, unknown_thread, len(failures),
     )
     return exit_code
