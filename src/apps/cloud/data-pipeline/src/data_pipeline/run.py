@@ -52,6 +52,7 @@ from .steps import (
     ingest_price_raw,
     load_assertions,
     load_documents,
+    load_etf_flow,
     load_etf_holdings,
     load_etf_nav,
     load_instruments,
@@ -113,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-price", "normalize-investor",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-etf-nav", "load-etf-holdings", "load-assertions", "assemble-events"],
+                 "load-price-daily", "load-documents", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -205,6 +206,14 @@ def main(argv: list[str] | None = None) -> int:
     # (canonical as_of_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
     if args.step == "load-etf-holdings":
         return load_etf_holdings.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # 투자자 수급 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
+    # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    if args.step == "load-etf-flow":
+        return load_etf_flow.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
         )

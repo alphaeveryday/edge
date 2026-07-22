@@ -184,6 +184,14 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-etf-holdings', '--run-id', $.run_id)"
     },
+    {
+      # 투자자 수급 적재(ALPHA-385) — canonical investor_flow_daily → investor_flow_daily.
+      # LoadEtfNav·LoadPriceDaily·LoadEtfHoldings 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(순매수 값이 바뀐 정정만 UPDATE).
+      state        = "LoadEtfFlow"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id)"
+    },
   ]
 
   raw_ingest_success_checks = [
