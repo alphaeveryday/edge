@@ -46,23 +46,30 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
 | Compliance Policy | 정책 조회(금칙어·처리 기준·면책 문구) | ✓ | ✓ | ✓ | ✓ |
 | | 정책 변경(금칙어 등록·토글, 처리 기준, 면책 문구 = 새 버전 발행) | – | ✓ | – | – |
 | Settings — 제공 범위 | 조회 | ✓ | ✓ | ✓ | ✓ |
-| | 변경(시장·종목·섹터·채널 토글) | ✓ | ✓ | – | – |
+| | 커버리지 변경(시장·채널 토글) | ✓ | – | – | – |
+| | 이해상충 제외 변경(종목·섹터 토글) | – | ✓ | – | – |
 | Settings — Cloud Sync | 연결 상태·이력·인증서 조회 | ✓ | ✓ | ✓ | ✓ |
-| | 관리(인증서 교체·재연결) | ✓ | – | ✓ | – |
+| | 관리(인증서 교체·재연결) | ✓ | – | – | – |
 | Settings — Users & Roles | 사용자 조회·등록·비활성화·역할 부여 | ✓ | – | – | – |
 
-- 제공 범위 변경에 TA·CR 을 함께 둔 이유: 한 기능에 두 성격이 겹친다 — 시장
-  커버리지 토글은 시스템 설정(TA), 이해상충 종목·섹터 제외는 컴플라이언스 통제(CR,
-  [../adr/0023](../adr/0023-customer-validation.md))다.
+- 제공 범위 변경을 두 행으로 나눈 이유: 성격이 다른 두 통제가 한 화면에 있다 —
+  시장·채널 토글은 시스템 커버리지 설정(TA), 종목·섹터 제외는 이해상충
+  컴플라이언스 통제(CR, [../adr/0023](../adr/0023-customer-validation.md))다.
+  경계는 `serving_scope.scope_type` 과 1:1 이다(MARKET·CHANNEL = TA,
+  INSTRUMENT·SECTOR = CR) — TA 가 CR 의 이해상충 제외를 되돌릴 수 없다.
 - 최종 문구 수정·정정 등록이 CR 전용인 이유: 노출 문구에 관한 판단은 검수
   경로이며(state-machine.md), Operator 의 쓰기는 노출 축소 방향으로 한정된다.
+  Cloud Sync 관리(인증서 교체·재연결)는 노출 축소가 아닌 시스템 관리라 TA 전용이다.
 
 ## API 매핑
 
-콘솔 API(tenant-console-api)는 세션의 역할 클레임으로 위 행을 강제한다. 화면의
-버튼 숨김은 UX 이고, **권한의 강제 지점은 API 다**(이중 방어). 현행 엔드포인트:
+권한의 **강제 지점은 API 다** — 화면의 버튼 숨김은 UX 이고, 콘솔
+API(tenant-console-api)가 세션의 역할 클레임으로 위 행을 강제해야 한다(이중 방어).
+**현행 walking skeleton 엔드포인트는 인증·인가 미적용 상태**라 아래 표는 현행
+통제가 아니라 **요구 권한**이며, 강제 구현은 ALPHA-118(인증)·ALPHA-119(Users &
+Roles)이 담당한다.
 
-| 엔드포인트 | 매트릭스 행 | 허용 역할 |
+| 엔드포인트 | 매트릭스 행 | 요구 역할 |
 |---|---|---|
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 | CR |
