@@ -1,20 +1,28 @@
-import { Routes, Route } from 'react-router-dom';
+/* EDGE Admin — 라우트 트리 (디자인 v0.1 IA).
+ *
+ *   AdminLayout   /tenants(/:id) · /sources · /analyses(/:id)
+ *
+ * 운영자 인증 화면은 시안에 없다 — 진입은 테넌트 목록 직행 (ALPHA-487 범위 밖).
+ */
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AdminLayout } from './layouts/AdminLayout';
+import { TenantsPage } from './pages/TenantsPage';
+import { TenantDetailPage } from './pages/TenantDetailPage';
+import { SourcesPage } from './pages/SourcesPage';
+import { AnalysesPage } from './pages/AnalysesPage';
+import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
 
-// super-admin-ui 골자 — 운영자 인증·cross-tenant 관리 화면은 ALPHA-288 에서 구현한다.
-// 지금은 빌드·배포(S3+CloudFront) 파이프라인을 세우기 위한 최소 셸이다(tenant-console-ui 와 동일 스택).
 export function App() {
   return (
     <Routes>
-      <Route path="/" element={<Placeholder />} />
+      <Route element={<AdminLayout />}>
+        <Route path="/tenants" element={<TenantsPage />} />
+        <Route path="/tenants/:id" element={<TenantDetailPage />} />
+        <Route path="/sources" element={<SourcesPage />} />
+        <Route path="/analyses" element={<AnalysesPage />} />
+        <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/tenants" replace />} />
     </Routes>
-  );
-}
-
-function Placeholder() {
-  return (
-    <main className="admin-placeholder">
-      <h1>EDGE Admin</h1>
-      <p>운영자 콘솔 준비 중입니다.</p>
-    </main>
   );
 }
