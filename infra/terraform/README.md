@@ -75,7 +75,6 @@ cd ../envs/dev  && terraform apply
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
 | **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
-| **raw ingest 스케줄러** | `DISABLED` (수동 검증 전 자동실행 방지) | `data_pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **super-admin ALB 보호** | 공개 도달 — WAF·IP 제한·앱 인증 전부 미구현(현재 표면은 actuator health 뿐 — 컨트롤러 0·DB 미배선) | 앱 인증(ALPHA-474, 실기능 컨트롤러 선행 게이트)·WAFv2(ALPHA-297)·`allowed_cidrs` 운영 판단 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
