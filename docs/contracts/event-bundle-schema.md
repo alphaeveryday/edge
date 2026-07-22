@@ -100,9 +100,9 @@
 
 ## 미확정 요약
 
-**영서 단독 결정(설계 후 이 문서에 기록)**: ② Tenant Sync API 엔드포인트 계약([sync-protocol.md](sync-protocol.md)) ③ 번들에 실을 `source_events`·`evidences` 컬럼 선별(reader 자유 — 단 스키마 의존이므로 변경 감지 대상)
+**영서 단독 결정(설계 후 이 문서에 기록)**: ③ 번들에 실을 `source_events`·`evidences` 컬럼 선별(reader 자유 — 단 스키마 의존이므로 변경 감지 대상)
 
-해소: ~~① 전달 레코드 설계 일체~~ → `tenant_delivery`로 확정(위 "전달 레코드" 절, ALPHA-396). retention 정리 정책만 후속.
+해소: ~~① 전달 레코드 설계 일체~~ → `tenant_delivery`로 확정(위 "전달 레코드" 절, ALPHA-396). retention 정리 정책만 후속. ~~② Tenant Sync API 엔드포인트 계약~~ → [sync-protocol.md](sync-protocol.md) "엔드포인트 계약(확정)" 절로 확정(ALPHA-397).
 
 **진기 확인 대상(스키마)**: `tenant`·`tenant_credential` 정의 검토 — 인증 모델(sync-auth)과 함께 확정, 다르면 수축-확장으로 교체 ([ADR-0026](../adr/0026-ownership-boundary-db.md))
 
