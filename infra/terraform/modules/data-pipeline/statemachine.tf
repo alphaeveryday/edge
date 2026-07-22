@@ -62,6 +62,14 @@ locals {
       command_expr = "States.Array('ingest-raw-etf-profile', '--run-id', $.run_id)"
     },
     {
+      # 종목별 투자자 수급(ALPHA-482) — KIS FHPTJ04160001. 가격·NAV·ETF프로필과 같은 kis 세트다
+      # (같은 앱키·task-def, kis_auth 재시도 공유). 수집 유니버스는 canonical KR holdings 파생
+      # (universe_from_holdings, 가격과 같은 축). NormalizeInvestor→LoadEtfFlow 체인의 raw 선행이다.
+      state        = "CollectKisInvestor"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
+    },
+    {
       state        = "CollectFmpEtf"
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
@@ -128,6 +136,13 @@ locals {
       state        = "NormalizeEtfNav"
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-etf-nav', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      # 투자자 수급 정제(ALPHA-482) — raw investor_flow_daily → canonical. 다른 normalize 와
+      # 같이 레이크만 읽어 시크릿 없는 bigkinds task-def 재사용. LoadEtfFlow 의 canonical 선행이다.
+      state        = "NormalizeInvestor"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-investor', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
   ]
 
