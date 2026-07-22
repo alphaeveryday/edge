@@ -21,6 +21,7 @@
 | `explanation_run` | 어느 실행이 그 결과를 냈는지 + 사용한 릴리스 번들 버전 | `explanation_run_id` |
 | `source_event` | 설명이 근거로 삼은 소스 이벤트 | `source_event_id` |
 | `event_evidence` | 이벤트를 뒷받침하는 문서 주장 근거 | `evidence_id` |
+| `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363) | `(explanation_run_id, evidence_id, stage_code)` |
 | `event_thread` | 동일 실제 사건의 계보(정정·후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
 | `instrument` · `entity` | 번들의 `etf_ticker`·`etf_name` 공급(조인) — 온프렘 서빙 키가 ticker 라서 경계면에 포함 (확정 2026-07-21) | `instrument_id` = `entity_id` |
@@ -66,7 +67,7 @@
         "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
       "source_events": [ { "source_event_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정. 확정 전 번들은 빈 배열]" } ],
-      "evidences": [ { "evidence_id": "...", "...": "[합의 필요 — 경계면 컬럼 선정(ALPHA-363 lineage 포함). 확정 전 번들은 빈 배열]" } ]
+      "evidences": [ { "evidence_id": "...", "...": "[합의 필요 — 실을 컬럼 선정(영서, reader 자유). run↔evidence lineage 는 `explanation_run_event_evidence`(경계면 표) 로 확정. 확정 전 번들은 빈 배열]" } ]
     },
     {
       "cursor": 102,
