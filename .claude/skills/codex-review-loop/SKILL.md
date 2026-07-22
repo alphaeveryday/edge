@@ -1,6 +1,6 @@
 ---
 name: codex-review-loop
-description: 열린 PR 에 대한 Codex 자동 리뷰(chatgpt-codex-connector) 왕복을 수행한다 — 베이스라인 기록·신호 풀링(리액션·리뷰·봇 코멘트)·finding 수용 판단(과잉 엄밀 보정·의도적 생략 고려)·수용 시 수정→`@codex review` 재요청 반복·`+1` 또는 전건 비수용 시 종료. pr-cycle 이 Phase 6 에서 자동 호출한다. "Codex 리뷰 돌려줘", "리뷰 왕복", "PR 리뷰 반영해줘", 이미 올라간 PR 의 Codex 리뷰 반영·재요청·재실행 요청 시 사용. 대상은 이미 존재하는 PR 번호다 — 브랜치·커밋·머지는 pr-cycle 소관.
+description: 열린 PR 에 붙는 Codex 자동 리뷰어(chatgpt-codex-connector) 대응에 사용 — "Codex 리뷰 돌려줘", "리뷰 왕복", "PR 리뷰 반영해줘", 이미 올라간 PR 의 Codex 리뷰 반영·재요청·재실행 요청 시. pr-cycle 이 Phase 6 에서 자동 호출한다. 대상은 이미 존재하는 PR 번호다 — 브랜치·커밋·머지는 pr-cycle 소관.
 ---
 
 # codex-review-loop — Codex 리뷰 왕복
