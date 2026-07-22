@@ -10,8 +10,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.UriUtils;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -57,10 +59,12 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
 			FilterChain chain) throws ServletException, IOException {
 
-		// 매칭은 컨텍스트 패스를 제거하고 세그먼트별 matrix parameter(;k=v)를 벗긴
-		// 경로 기준 — MVC 의 PathPattern 매칭과 같은 정규화를 적용해, `/api;x=y/...`
-		// 같은 우회로 필터가 통째로 건너뛰어지는 것을 막는다(fail-closed).
-		String path = normalize(request.getRequestURI().substring(request.getContextPath().length()));
+		// 매칭은 MVC 의 PathPattern 과 같은 표현 — %-디코딩(예: %3B→;) 후 context-path
+		// 제거, 세그먼트별 matrix parameter(;k=v) 제거 — 를 적용한다. raw URI 로 판정하면
+		// `/api;x=y/...`·`/api%3Bx=y/...` 가 필터를 통째로 우회한다(fail-closed 위반).
+		String decodedUri = UriUtils.decode(request.getRequestURI(), StandardCharsets.UTF_8);
+		String contextPath = UriUtils.decode(request.getContextPath(), StandardCharsets.UTF_8);
+		String path = normalize(decodedUri.substring(contextPath.length()));
 
 		// 콘솔 API 밖(actuator 등)은 이 필터의 관심사가 아니다.
 		if (!path.startsWith("/api/")) {

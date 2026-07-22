@@ -123,6 +123,19 @@ class ConsoleAuthFilterTest {
 	}
 
 	@Test
+	void 인코딩된_matrix_구분자_우회도_차단된다() throws Exception {
+		// `%3B`(인코딩된 ;)는 MVC 가 디코딩 후 매핑하므로, 필터도 디코딩 후 판정해야
+		// `/api%3Bx=y/...` 우회를 막는다. requestURI 를 직접 지정해 인코딩을 보존한다.
+		mvc.perform(post("/x").requestAttr("bypass", "n")
+						.with(request -> {
+							request.setRequestURI("/api%3Bx=y/v1/review/items/er-1/approve");
+							request.setServletPath("/api%3Bx=y/v1/review/items/er-1/approve");
+							return request;
+						}))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
 	void 로그인은_유일한_공개_표면이다() throws Exception {
 		// 필터를 통과해 MVC 까지 도달한다 — 이 셋업엔 AuthController 가 없어 404 가
 		// 곧 "차단되지 않았다"의 증거다(401/403 이면 필터가 막은 것).
