@@ -1,3 +1,14 @@
+server:
+  servlet:
+    session:
+      cookie:
+        # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(tenant-console ADR-0025 와 같은 결):
+        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다.
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 IdP 연동·HTTPS 종단에서는
+        # secure 쿠키·표준 CSRF 토큰이 추가된다(ALPHA-474).
+        same-site: strict
+        http-only: true
+
 spring:
   application:
     name: superadmin
@@ -8,3 +19,13 @@ spring:
     exclude:
       - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+admin:
+  auth:
+    # 데모 운영자 부트스트랩 계정(config 전용 — DB 미배선 단계라 시드 없이 메모리 대조).
+    # 아래 비밀번호 기본값은 로컬·데모 스택 전용이다 — 배포에서는 env 로 덮고,
+    # 운영자 IdP 연동(ALPHA-474) 시 이 경로는 대체된다.
+    bootstrap-operators:
+      - email: operator@edge.local
+        name: EDGE 운영팀
+        password: ${ADMIN_BOOTSTRAP_OPERATOR_PASSWORD:demo-operator-1}

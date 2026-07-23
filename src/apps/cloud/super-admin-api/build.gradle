@@ -18,9 +18,13 @@ repositories {
 }
 
 dependencies {
+	implementation project(':libs:jvm-common') // 에러 응답 공통 포맷(ApiResponse)·에러 코드 규약
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// 데모 운영자 계정 비밀번호 해시(BCrypt)만 사용 — Spring Security 프레임워크 전체가
+	// 아니라 crypto 모듈 단독(ADR-0025 데모 최소 구현과 같은 결, 인가는 AdminAuthFilter 직접).
+	implementation 'org.springframework.security:spring-security-crypto'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'org.postgresql:postgresql'
 	annotationProcessor 'org.projectlombok:lombok'
