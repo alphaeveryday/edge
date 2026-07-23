@@ -1,76 +1,214 @@
-# Sprint 2 회고 (KPT)
+# Sprint 2 회고록
 
-!!! info "회고 개요"
-    - **스프린트**: Sprint 2
-    - **일자**: 2026-07-01
-    - **참여자**: 정준영, 조영서, 김진기
-    - **방식**: KPT (Keep · Problem · Try)
-    - **스프린트 골**: 얇은 E2E 슬라이스의 데이터·분석·인증 레이어를 실제로 교체 — 실제 뉴스·가격을 수집하고, 그 위에서 분석 결과를 내 저장하며, embedKey 발급·검증 경로를 실제로 만든다.
+<style>
+.retro-page {
+  max-width: 960px;
+}
+.retro-page h2 {
+  margin-top: 2.2rem;
+}
+.retro-muted {
+  color: #44546f;
+}
+.retro-info {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  margin: 1.2rem 0 1.6rem;
+  padding: 0.9rem 1rem;
+  border-radius: 2px;
+  background: #deebff;
+  color: #172b4d;
+}
+.retro-info-icon {
+  display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #0c66e4;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+}
+.retro-page table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.retro-page th,
+.retro-page td {
+  border: 1px solid #dfe1e6;
+  padding: 0.8rem;
+  vertical-align: top;
+}
+.retro-board td {
+  padding: 0.75rem 0.55rem;
+}
+.retro-meta th {
+  width: 30%;
+  background: #f4f5f7;
+  color: #172b4d;
+  text-align: left;
+}
+.retro-meta td {
+  color: #44546f;
+}
+.retro-board th {
+  color: #172b4d;
+  text-align: left;
+}
+.retro-board .keep {
+  background: #e6fcff;
+}
+.retro-board .problem {
+  background: #ffebe6;
+}
+.retro-board .try {
+  background: #e3fcef;
+}
+.retro-page .retro-board ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+.retro-page .retro-board li {
+  margin-left: 0;
+  position: relative;
+  padding-left: 0.9rem;
+}
+.retro-board li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+}
+.retro-actions ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.retro-board li + li,
+.retro-actions li + li {
+  margin-top: 0.55rem;
+}
+.retro-actions li {
+  list-style: none;
+  position: relative;
+  padding-left: 1.75rem;
+}
+.retro-actions li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.2rem;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c1c7d0;
+  border-radius: 2px;
+  background: #fff;
+  color: #0c66e4;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.retro-actions.done li::before {
+  content: "✓";
+}
+</style>
 
-## 📊 스프린트 요약
+<div class="retro-page">
 
-| 시작 커밋 | 최종 스코프 | 완료 | 이월 |
-|----------|------------|------|------|
-| 51 SP | 72 SP | 33 SP | 39 SP |
+<h2>📋 개요</h2>
 
-> 시작 커밋 51 SP 중 33 SP를 완료했다. 스프린트 중 +21 SP가 추가(특히 종료일 07-01에 인프라·게이트웨이·RDS 등 대량 편입)돼 최종 스코프가 72 SP로 늘고 39 SP를 Sprint 3로 이월했다. 완료 기준 불명확·설계 지연(PROBLEM 참고)과 과다 스코프가 겹쳤다. 달성률은 **시작 커밋 대비 65%, 최종 스코프 대비 46%**. (출처: Jira 스프린트 리포트 `SCRUM 2 스프린트`, 2026-06-25~07-01)
+<p class="retro-muted">
+회고 플레이에 대한 설명을 따라 지난 작업을 돌아보고 개선의 기회를 식별한다.
+</p>
 
-## ✅ KEEP — 잘 됐던 것, 계속 유지할 것
+<table class="retro-meta">
+  <tbody>
+    <tr>
+      <th>날짜</th>
+      <td>2026년 7월 1일</td>
+    </tr>
+    <tr>
+      <th>팀</th>
+      <td>Alpha Everyday</td>
+    </tr>
+    <tr>
+      <th>참여자</th>
+      <td>김진기, 조영서, 정준영</td>
+    </tr>
+  </tbody>
+</table>
 
-| 내용 | 제안자 |
-|------|--------|
-| 화면 확정 전 팀이 함께 리뷰해 피드백을 빠르게 반영했고, Claude로 시안을 신속히 뽑아 반복 주기를 줄였다 → **"화면 확정 전 팀 디자인 리뷰 + AI 시안 반복" 유지** | 정준영 |
-| 스프린트 초반에 아키텍처를 먼저 공유해 트랙 간 인터페이스 이해를 맞춘 덕에 병렬 작업 충돌이 적었다 → **설계 우선 공유 유지** | 조영서 |
-| 개발 환경·설계를 스프린트 내 대부분 확정해 다음 스프린트 구현 착수 장벽을 낮췄다 → **기반(환경·설계) 선확정 유지** | 김진기 |
+<h2>💭 KPT 회고</h2>
 
-## ❗ PROBLEM — 문제가 됐던 것, 개선이 필요한 것
+<div class="retro-info">
+  <span class="retro-info-icon">i</span>
+  <span>KEEP, PROBLEM, TRY 항목을 아래 표에 정리한다. 이 항목을 바탕으로 다음 스프린트에서 개선할 Action Item을 정한다.</span>
+</div>
 
-| 내용 | 제안자 |
-|------|--------|
-| 데이터베이스 지식 부족으로 ERD 설계가 늦어져 블로킹 요소가 발생했다 | 정준영 |
-| 인프라 배포가 되어 있지 않아 통일된 실행 환경을 갖추지 못했다 | 조영서 |
-| 설계·세팅 착수 전 완료 기준을 불명확하게 잡아 시간 산정을 잘 하지 못했고, 스프린트 이슈를 완료하지 못했다 | 김진기 |
-| 개발 착수 전 유저 가치 검증 없이 스토리를 만들어, 우선순위 낮은 기능에 공수를 소모했다 | 정준영 |
-| 각자 당일 작업 계획을 팀에 명확히 공유하지 않아 서로의 진행 방향이 보이지 않았다 | 정준영 |
-| 데일리 스크럼을 꾸준히 작성하지 않아 각자 한 일이 공유되지 않았고, 이를 뒤늦게 확인하는 중복 비용이 발생했다 | 조영서 |
+<table class="retro-board">
+  <thead>
+    <tr>
+      <th class="keep">KEEP</th>
+      <th class="problem">PROBLEM</th>
+      <th class="try">TRY</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>
+        <ul>
+          <li>화면 확정 전 팀이 함께 리뷰해 피드백을 빠르게 반영하고, AI로 시안을 빠르게 뽑아 반복 주기를 줄임</li>
+          <li>스프린트 초반에 아키텍처를 먼저 공유해 트랙 간 인터페이스 이해를 맞춰 병렬 작업 충돌이 적었음</li>
+          <li>개발 환경·설계를 스프린트 내 대부분 확정해 다음 스프린트 구현 착수 장벽을 낮춤</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li>데이터베이스 지식 부족으로 ERD 설계가 늦어져 블로커가 됨</li>
+          <li>인프라 배포가 안 돼 통일된 실행 환경을 갖추지 못함</li>
+          <li>착수 전 완료 기준을 불명확하게 잡아 시간 산정을 못 하고 스프린트 이슈를 완료하지 못함</li>
+          <li>유저 가치 검증 없이 스토리를 만들어 우선순위 낮은 기능에 공수를 소모함</li>
+          <li>각자 당일 작업 계획을 팀에 공유하지 않아 서로의 진행 방향이 보이지 않음</li>
+          <li>데일리 스크럼을 꾸준히 쓰지 않아 한 일이 공유되지 않고, 이를 뒤늦게 확인하는 중복 비용이 발생함</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li>기획 멘토에게 유저 스토리 작성법을 물어봄</li>
+          <li>데이터베이스 정규화 예제를 풀어 지식 공백을 메움</li>
+          <li>중요한 기능은 개발 전 문제를 문서화(왜·어떻게)한 뒤 해결함</li>
+          <li>이슈를 더 작은 서브태스크로 나누고 완료 기준을 명확히 함</li>
+          <li>인프라 세팅을 먼저 끝내고 개발함</li>
+          <li>데일리 스크럼을 매 영업일 작성함</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
-## 🚀 TRY — 다음 스프린트에 시도할 것
+<h2>✅ Action Item</h2>
 
-| 내용 | 제안자 |
-|------|--------|
-| 기획 멘토님께 유저 스토리 작성법 물어보기 | 정준영 |
-| 데이터베이스 정규화 예제 풀기 | 정준영 |
-| 티켓의 중요한 기능을 개발하기 전, 문제를 명확하게 문서화(왜·어떻게)하고 해결하기 | 정준영 |
-| 이슈를 더 작은 서브테스크로 나누고 완료 기준을 명확히 하기 (→ AI-2) | 김진기 |
-| 인프라 세팅을 먼저 끝내놓고 안정적으로 개발하기 | 조영서 |
-| 데일리 스크럼 작성하기 (→ AI-1) | 조영서 |
+<p class="retro-muted">회고에서 나온 내용을 다음 스프린트에 적용하기 위한 후속 Action Item이다.</p>
 
-## 🎯 Action Items
+<div class="retro-actions">
+  <ul>
+    <li>데일리 스크럼을 매 영업일 작성한다</li>
+    <li>이슈를 더 작은 서브태스크로 나누고 완료 기준을 명확히 한다</li>
+  </ul>
+</div>
 
-TRY 중 우선순위 상위 항목을 다음 스프린트(Sprint 3)의 실행 과제로 확정했다.
+</div>
 
-| 번호 | Action Item | 담당자 | 완료 기한 | 달성 여부 |
-|------|-------------|--------|-----------|-----------|
-| AI-1 | 데일리 스크럼 작성 | 조영서 | Sprint 3 전체 | 미확인 |
-| AI-2 | 이슈를 더 작은 서브테스크로 나누고, 완료 기준을 명확히 한다 | 김진기 | Sprint 3 전체 | 미확인 |
+??? note "이전 Action Item"
+    [Sprint 1](sprint-1.md)에서 정한 Action Item의 이행 여부를 점검한다.
 
-> 달성 여부 표기: `미확인` · `✅ 달성` · `❌ 미달성` · `🔄 진행중`
-
-## 🔁 이전 스프린트 Action Item 추적
-
-[Sprint 1](sprint-1.md)에서 정한 Action Item의 이행 여부를 점검한다.
-
-| 출처 | Action Item | 담당자 | 완료 기한 | 달성 여부 | 비고 |
-|------|-------------|--------|-----------|-----------|------|
-| Sprint 1 | 매일 데일리 전에 팀원이 Jira 상태를 최신화했는지 확인한다 (스프린트 말 bulk close 0건 목표) | 김진기 | Sprint 2 전체 | ❌ 미달성 | 데일리 스크럼을 꾸준히 진행하지 못해 최신화 상황을 확인하지 못함 |
-| Sprint 1 | Sprint 플래닝에서 각자의 가용 시간을 산정해 커밋 SP에 반영한다 | 김진기 | Sprint 2 플래닝 (Week 1) | ✅ 달성 | — |
-| Sprint 1 | Sprint 2 Week 1까지 모노레포 모듈 구조·브랜치 전략·공통 패키지 구성을 확정하고 README에 문서화한다 | 조영서 | Sprint 2 전체 | ✅ 달성 | — |
-
-## 📝 회고 개선 메모
-
-Action Item 문구는 팀이 정한 원문을 유지하되, 다음 회고를 위한 개선 메모를 남긴다. (KEEP·PROBLEM 서술은 이번에 다듬어 반영함.)
-
-- **Action Item을 측정 가능하게(SMART).**
-    - AI-1(데일리 스크럼 작성) → "매 영업일 스크럼 전 전원이 보드에 `전일 한 일·금일 계획·블로커`를 코멘트로 남긴다. 주간 작성률 100%(누락 0일) 목표, SM이 데일리에서 확인"
-    - AI-2(서브테스크 분할) → "모든 스토리를 ≤4h 서브태스크로 분할하고 스토리별 완료 기준(DoD)을 1줄 이상 명시한다. 플래닝 종료 시 미분할·DoD 누락 0건"
-- **AI-1은 반복 실패 항목이다.** [Sprint 1](sprint-1.md) AI-1(Jira 최신화·데일리)이 ❌ 미달성이었고 이번에 더 모호하게 재약속됐다. 위 측정 기준을 붙이지 않으면 또 미달성될 가능성이 높다.
+    - ❌ 매일 데일리 전 Jira 상태 최신화 확인 (bulk close 0건) — 데일리 스크럼을 꾸준히 진행하지 못해 미달성
+    - ✅ 플래닝에서 각자의 가용 시간을 산정해 커밋 SP에 반영
+    - ✅ 모노레포 모듈 구조·브랜치 전략·공통 패키지 구성 확정 + README 문서화
