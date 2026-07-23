@@ -20,7 +20,9 @@ dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, boo
 되어 세션 쿠키(SameSite=Strict)가 실린다. 로그인 화면이 아직 없어(ALPHA-486 범위 밖)
 앱 진입 시 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
 (`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `admin@demo.edge.local`)으로
-자동 로그인해 세션을 확보한다 — 로그인 화면 도입 시 제거한다.
+자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
+자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront)은
+`/api` 오리진이 아직 없어 데이터가 비어 있다 — 데모 런타임 오리진 연결은 ALPHA-445 후속.
 
 ## 라우트 / IA (디자인 v0.2)
 
