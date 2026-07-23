@@ -3,14 +3,17 @@ server:
     session:
       cookie:
         # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(tenant-console ADR-0025 와 같은 결):
-        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다.
-        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 IdP 연동·HTTPS 종단에서는
-        # secure 쿠키·표준 CSRF 토큰이 추가된다(ALPHA-474).
+        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다(같은 사이트
+        # 서브도메인발 CSRF 는 못 막는다 — 표준 CSRF 토큰은 ALPHA-474 에서 추가).
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다.
         same-site: strict
         http-only: true
-        # 공개 엣지(HTTPS ALB)라 기본 Secure — 평문 HTTP 요청에 운영자 세션 쿠키가
-        # 실리지 않게 한다. 로컬(http)은 compose/env 가 false 로 덮는다.
-        secure: ${ADMIN_SESSION_COOKIE_SECURE:true}
+        # 공개 엣지(HTTPS ALB)라 Secure 고정 — 평문 HTTP 요청에 운영자 세션 쿠키가
+        # 실리지 않게 한다. 로컬(http)은 표준 Spring env 오버라이드로 끈다
+        # (SERVER_SERVLET_SESSION_COOKIE_SECURE=false — compose 설정됨). 커스텀
+        # env 기본값(${VAR:true})을 쓰지 않는 이유: 빈 문자열 주입 시 기본값이
+        # 무시돼 Secure 가 조용히 풀린다.
+        secure: true
 
 spring:
   application:
