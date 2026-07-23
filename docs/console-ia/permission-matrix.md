@@ -84,6 +84,31 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 | CR |
 | `POST /api/v1/review/items/{id}/reject` | 검수 액션 | CR |
 
+### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
+
+아래 표면은 tenant-console-ui 화면 계약대로 만든 **mock 데이터 반환 표면**이다
+(응답 원천 = `mock` 패키지 in-memory 스토어, DB 미연동). UI 에 로그인·역할 화면이
+없는(ALPHA-486 범위 밖) mock 단계라 **인증만 강제하고 역할은 전 역할 허용**으로
+등록한다 — "데모에서도 동일 적용" 원칙의 **명시적 한시 예외**(2026-07-23 사용자
+결정)로, 도메인이 DB 로 전환될 때마다 그 도메인의 행을 위 매트릭스의 역할
+(검수·정책·문구·종목 제외=CR, 사용자·시장 커버리지=TA, 이관·중단=CR·OP)로
+좁힌다. 역할 세분화 전까지 이 표면들은 실데이터를 다루지 않는다.
+
+| 엔드포인트 | 매트릭스 행 (DB 전환 시 적용) | mock 단계 요구 역할 |
+|---|---|---|
+| `GET /api/v1/explanations` · `GET /api/v1/explanations/feed-status` | 목록·상세 조회 | 인증된 전 역할 |
+| `PATCH /api/v1/explanations/{id}/final` | 최종 문구 수정 (CR) | 인증된 전 역할 |
+| `POST /api/v1/explanations/{id}/stop` | 제공 중단 (CR·OP) | 인증된 전 역할 |
+| `POST /api/v1/explanations/{id}/move-to-review` | 검수로 이관 (CR·OP) | 인증된 전 역할 |
+| `POST /api/v1/explanations/{id}/approve` · `.../reject` · `PATCH .../draft` | 검수 액션 (CR) | 인증된 전 역할 |
+| `GET /api/v1/screening/words` · `.../criteria` · `.../disclaimer` | 정책 조회 | 인증된 전 역할 |
+| `POST /api/v1/screening/words` · `POST .../words/{id}/toggle` · `PATCH .../criteria` · `PATCH .../disclaimer` | 정책 변경 (CR) | 인증된 전 역할 |
+| `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | 인증된 전 역할 |
+| `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경 (TA) | 인증된 전 역할 |
+| `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경 (CR) | 인증된 전 역할 |
+| `GET /api/v1/members` · `POST /api/v1/members/invitations` | Users & Roles (TA) | 인증된 전 역할 |
+| `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 (전 역할) | 인증된 전 역할 |
+
 인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),
 운영 = SSO/AD(같은 세션 추상화로 수렴, 실계약 시점 구현). **의도적 생략(데모
 범위)**: 로그인 레이트리밋·계정 잠금은 온프렘 내부망 전제의 데모 경로라 두지

@@ -1,8 +1,11 @@
 package com.edge.tenantconsole.auth;
 
+import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.ReviewController;
+import com.edge.tenantconsole.mock.SessionMockStore;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
+import com.edge.tenantconsole.service.ConsoleSessionService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,7 +73,9 @@ class ConsoleAuthFilterTest {
 	@BeforeEach
 	void setUp() {
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications());
-		mvc = MockMvcBuilders.standaloneSetup(new ReviewController(reviewService))
+		mvc = MockMvcBuilders.standaloneSetup(
+						new ReviewController(reviewService),
+						new ConsoleSessionController(new ConsoleSessionService(new SessionMockStore())))
 				.addFilters(new ConsoleAuthFilter())
 				.build();
 	}
@@ -104,6 +109,17 @@ class ConsoleAuthFilterTest {
 				.andExpect(jsonPath("$.code").value("CNSL4030"));
 		mvc.perform(post("/api/v1/review/items/er-1/approve").session(sessionOf(REVIEWER)))
 				.andExpect(status().isNoContent());
+	}
+
+	@Test
+	void mock_콘솔_표면은_인증만_요구하고_전_역할을_허용한다() throws Exception {
+		// mock 데이터 단계(ALPHA-513)의 한시 결정 — 미인증은 여전히 401(fail-closed)
+		// 이고, 인증되면 역할과 무관하게 허용한다. 도메인별 DB 전환 시 이 테스트는
+		// permission-matrix.md 역할 세분화 검증으로 교체된다.
+		mvc.perform(get("/api/v1/session"))
+				.andExpect(status().isUnauthorized());
+		mvc.perform(get("/api/v1/session").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
 	}
 
 	@Test
