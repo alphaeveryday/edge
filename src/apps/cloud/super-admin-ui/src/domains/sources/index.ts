@@ -1,11 +1,9 @@
-/* sources 도메인 — config 를 보고 mock|real 중 하나를 export */
-import { DATA_SOURCES } from '../../config/dataSources';
-import { mockSourcesRepository } from './repository.mock';
+/* sources 도메인 — super-admin-api 연동 repository export.
+ * mock 데이터는 API 쪽 mock 패키지가 반환한다 — 도메인별 DB 전환도 API 쪽에서 진행(ALPHA-515). */
 import { realSourcesRepository } from './repository.real';
 import type { SourcesRepository } from './repository';
 
-export const sourcesRepository: SourcesRepository =
-  DATA_SOURCES.sources === 'real' ? realSourcesRepository : mockSourcesRepository;
+export const sourcesRepository: SourcesRepository = realSourcesRepository;
 
 export * from './types';
 export type { SourcesRepository } from './repository';
