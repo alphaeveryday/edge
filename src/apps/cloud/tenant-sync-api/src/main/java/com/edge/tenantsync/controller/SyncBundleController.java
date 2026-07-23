@@ -39,7 +39,7 @@ public class SyncBundleController {
 			@RequestParam(value = "limit", defaultValue = "" + LIMIT_DEFAULT) int limit) {
 
 		// 401·403·410 외 4xx 는 계약 위반(버그)로 간주해 재시도 없이 표면화 — fail-loud.
-		// 에러는 공통 봉투(ApiResponse)로 나간다 — GlobalExceptionHandler.
+		// 에러는 공통 응답(ApiResponse)로 나간다 — ExceptionAdvice.
 		if (after < 0) {
 			throw new GeneralException(SyncErrorStatus.INVALID_AFTER);
 		}

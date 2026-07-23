@@ -1,5 +1,6 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository.ReviewItem;
@@ -86,7 +87,7 @@ class ReviewControllerTest {
 		publications = new StubPublications();
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ReviewController(new ReviewService(items, publications)))
-				.setControllerAdvice(new GlobalExceptionHandler())
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 

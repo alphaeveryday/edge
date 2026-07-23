@@ -8,7 +8,7 @@
 - **Published 외 상태는 이 모듈에 존재하지 않는다** — 저장소(`ExplanationStore`)가 Published만 알고, 컨트롤러·서비스에 상태 필터 분기가 없다. 검수 대기/차단분이 응답에 나갈 수 있는 코드 경로 자체가 없어야 한다(제품 보장).
 - **200 = Exposure 기록** — 응답을 만든 그 지점(`ExplanationService.serve`)에서 문구 스냅샷·고객 해시·채널을 기록한다. 204·에러는 기록하지 않는다(노출이 없었으므로).
 - **원본 고객 ID를 받는 표면을 만들지 않는다** — 고객 식별은 `X-Customer-Hash`(증권사 생성)뿐. 해시 생성 규칙·salt는 증권사 관리 영역이다.
-- **응답 봉투는 에러에만** — 성공(200) 본문은 계약 형상 그대로(jvm-common `ApiResponse`는 4xx/5xx만, 도메인 코드 `PublicationErrorStatus`).
+- **공통 응답 포맷은 에러에만** — 성공(200) 본문은 계약 형상 그대로(jvm-common `ApiResponse`는 4xx/5xx만, 도메인 코드 `PublicationErrorStatus`).
 
 ## 데이터 소스
 
@@ -34,4 +34,4 @@ curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:18084/api/v1/expla
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:publication-api:bootRun)
 ```
 
-테스트 6건 — 계약 형상(snake_case·disclaimer 필수), 조회=노출 기록, 204는 기록 없음, 404, 400 봉투(SERV4001~4004)를 인코딩한다. HTTP 계약은 시드 대역으로 검증하고, 실 DB 경로는 compose E2E 로 확인한다.
+테스트 6건 — 계약 형상(snake_case·disclaimer 필수), 조회=노출 기록, 204는 기록 없음, 404, 400 공통 포맷(SERV4001~4004)를 인코딩한다. HTTP 계약은 시드 대역으로 검증하고, 실 DB 경로는 compose E2E 로 확인한다.

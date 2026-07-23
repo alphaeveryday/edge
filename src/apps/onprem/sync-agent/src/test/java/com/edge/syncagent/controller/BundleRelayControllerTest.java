@@ -1,5 +1,6 @@
 package com.edge.syncagent.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
 import com.edge.common.exception.GeneralException;
 import com.edge.syncagent.error.SyncAgentErrorStatus;
 import com.edge.syncagent.service.BundleRelayService;
@@ -29,7 +30,7 @@ class BundleRelayControllerTest {
 	private MockMvc mvcWith(BundleRelayService service) {
 		return MockMvcBuilders
 				.standaloneSetup(new BundleRelayController(service))
-				.setControllerAdvice(new GlobalExceptionHandler())
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 

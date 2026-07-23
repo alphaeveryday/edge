@@ -2,8 +2,8 @@
 //
 // 주의: 이 모듈은 BODY-CHECK 식 apipayload 패턴을 따르며, SuccessStatus/ErrorStatus/ReasonDto 가
 // org.springframework.http.HttpStatus 를 쓴다 → spring-web 에 의존한다(더 이상 '프레임워크 무의존'이
-// 아니다). 대신 @RestControllerAdvice 같은 '핸들러(Spring MVC 글루)'는 여기 두지 않고 각 앱 웹 계층에
-// 남긴다. 도메인 에러 코드도 여기 두지 않는다 — 각 앱의 *ErrorStatus enum(BaseErrorCode 구현)이 소유.
+// 아니다). 예외 → 공통 응답 포맷 매핑(ExceptionAdvice)도 여기서 소유하며, auto-configuration 으로 서블릿 웹 앱에만
+// 활성화된다. 도메인 에러 코드는 여기 두지 않는다 — 각 앱의 *ErrorStatus enum(BaseErrorCode 구현)이 소유.
 // 버전은 앱과 일치시키기 위해 Spring Boot BOM 으로 관리(BOM 은 버전 제약만).
 plugins {
     id 'java-library'
@@ -32,8 +32,21 @@ dependencyManagement {
 dependencies {
     // apipayload 가 공개 API 로 HttpStatus 를 노출 → api 로 전이 노출.
     api 'org.springframework:spring-web'
-    // 봉투가 노출하는 Jackson 애노테이션.
+    // 공통 응답 포맷(ApiResponse)이 노출하는 Jackson 애노테이션.
     api 'com.fasterxml.jackson.core:jackson-annotations'
+
+    // ExceptionAdvice 가 ResponseEntityExceptionHandler(서블릿 MVC)를 상속 → webmvc 필요
+    compileOnly 'org.springframework:spring-webmvc'
+
+    // ExceptionAdvice 핸들러 시그니처가 참조 → 소비자 앱에 starter-validation 이 없어도
+    // 빈 생성이 되도록 런타임까지 실어 보낸다 (compileOnly 로 내리면 컨텍스트 기동 실패)
+    implementation 'jakarta.validation:jakarta.validation-api'
+
+    // ExceptionAdvice 의 catch-all 로깅 — 런타임엔 소비자 Boot 앱이 제공하므로 컴파일 전용
+    compileOnly 'org.slf4j:slf4j-api'
+
+    // 자동설정(@AutoConfiguration·@ConditionalOn*) — 런타임엔 소비자 Boot 앱이 제공
+    compileOnly 'org.springframework.boot:spring-boot-autoconfigure'
 
     // 보일러플레이트(getter/생성자/빌더) 축소 — 컴파일 타임 전용.
     compileOnly 'org.projectlombok:lombok'

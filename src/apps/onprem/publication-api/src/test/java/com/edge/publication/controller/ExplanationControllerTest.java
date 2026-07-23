@@ -1,5 +1,6 @@
 package com.edge.publication.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
 import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
@@ -83,7 +84,7 @@ class ExplanationControllerTest {
 		ExplanationService service = new ExplanationService(new SeededStore(), recorder);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
-				.setControllerAdvice(new GlobalExceptionHandler())
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 
@@ -137,7 +138,7 @@ class ExplanationControllerTest {
 	}
 
 	@Test
-	void 필수_헤더_누락과_잘못된_형식은_400_봉투다() throws Exception {
+	void 필수_헤더_누락과_잘못된_형식은_400_공통_포맷이다() throws Exception {
 		// WHY: 원본 고객 ID 를 받지 않는 대신 해시가 필수 — 누락 호출은 연동 버그 신호(fail-loud).
 		mvc.perform(get("/api/v1/explanations/069500").header("X-Channel", "MTS"))
 				.andExpect(status().isBadRequest())

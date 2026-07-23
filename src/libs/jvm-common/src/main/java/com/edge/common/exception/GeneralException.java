@@ -6,8 +6,8 @@ import com.edge.common.apipayload.code.ErrorReasonDto;
 import lombok.Getter;
 
 /**
- * 비즈니스 예외 베이스 — {@link BaseErrorCode} 를 실어 각 앱 웹 계층(@RestControllerAdvice)이
- * 공통 봉투로 매핑한다. 공통 코드는 {@code ErrorStatus}, 도메인 코드는 각 앱 enum 이 소유한다.
+ * 비즈니스 예외 베이스 — {@link BaseErrorCode} 를 실어 공통 어드바이스({@code ExceptionAdvice})가
+ * 공통 응답 포맷으로 매핑한다. 공통 코드는 {@code ErrorStatus}, 도메인 코드는 각 앱 enum 이 소유한다.
  */
 @Getter
 public class GeneralException extends RuntimeException {
