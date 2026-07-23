@@ -97,7 +97,12 @@ cleanup() {
   echo
   echo "◼ UI 종료. 백엔드는 유지 중 — 정리는 .dev/up-all.sh down"
 }
-trap cleanup INT TERM EXIT
+# INT/TERM 은 정리 후 즉시 종료해야 한다 — cleanup 만 걸면 트랩 반환 후 원래
+# 흐름(리슨 대기·폴링)이 이어져 신호를 삼키고, 이후 EXIT 트랩이 cleanup 을
+# 한 번 더 돌린다. 트랩 해제 후 관례적 종료 코드(128+signo)로 끝낸다.
+trap 'trap - INT TERM EXIT; cleanup; exit 130' INT
+trap 'trap - INT TERM EXIT; cleanup; exit 143' TERM
+trap cleanup EXIT
 # 주의: `dev -- --strictPort` 로 쓰면 pnpm 이 `--` 를 vite 에 그대로 전달해
 # strictPort 가 무시된다(실증) — 구분자 없이 붙여야 vite 옵션으로 파싱된다.
 pnpm -C "$ROOT/src" --filter tenant-console-ui dev --strictPort &
