@@ -15,6 +15,24 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=(docker compose -f "$ROOT/docker-compose.yml")
 
+# 선행 의존성 검사 — 없으면 중간에 오도성 에러로 죽는 대신 여기서 이름을 대고
+# 멈춘다. 포트 검사는 외부 도구 없이 bash 내장 /dev/tcp 로 한다(lsof 는
+# Linux/dev container 에 없을 수 있고, 부재가 "리슨 없음"으로 오독된다).
+for dep in docker pnpm curl; do
+  if ! command -v "$dep" > /dev/null 2>&1; then
+    echo "✗ '$dep' 명령이 필요하다 — 설치 후 다시 실행" >&2
+    exit 1
+  fi
+done
+
+# 루프백 :$1 에 리스너가 있으면 0 — connect 성공 여부로 판정한다. 반드시
+# v4·v6 둘 다 찌른다: vite 기본 host(localhost)는 IPv6 우선 호스트에서
+# ::1 에만 리슨해(실증), 127.0.0.1 만 보면 떠 있는 UI 를 놓친다.
+port_in_use() {
+  (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null \
+    || (exec 3<> "/dev/tcp/::1/$1") 2> /dev/null
+}
+
 if [[ "${1:-}" == "down" ]]; then
   shift
   exec "${COMPOSE[@]}" down "$@"
@@ -27,7 +45,7 @@ fi
 # UI 포트 프리플라이트 — 선점돼 있으면 vite 가 다른 포트로 옮겨 앉아 아래 안내
 # URL 이 거짓이 된다. 여기서 막고, 경쟁 상황은 vite --strictPort 가 마저 막는다.
 for port in 5174 5175; do
-  if lsof -ti ":$port" > /dev/null 2>&1; then
+  if port_in_use "$port"; then
     echo "✗ 포트 $port 가 이미 사용 중이다 — 기존 UI dev 서버를 내리고 다시 실행" >&2
     exit 1
   fi
@@ -118,7 +136,7 @@ UI_PIDS+=($!)
 # 있고, 시작 실패(strictPort 충돌 등)도 배너 뒤에야 드러난다.
 for port in 5174 5175; do
   deadline=$((SECONDS + 60))
-  until lsof -ti ":$port" > /dev/null 2>&1; do
+  until port_in_use "$port"; do
     if ((SECONDS >= deadline)); then
       echo "✗ UI(:$port)가 60초 안에 리슨하지 않았다 — 위 vite 로그 확인" >&2
       exit 1
