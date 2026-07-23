@@ -107,7 +107,11 @@ trap cleanup EXIT
 # strictPort 가 무시된다(실증) — 구분자 없이 붙여야 vite 옵션으로 파싱된다.
 pnpm -C "$ROOT/src" --filter tenant-console-ui dev --strictPort &
 UI_PIDS=($!)
-pnpm -C "$ROOT/src" --filter super-admin-ui dev --strictPort &
+# 프록시 타깃을 IPv4 루프백으로 명시 — compose 가 super-admin-api 를
+# 127.0.0.1 로만 게시하므로, 기본값 localhost 는 IPv6(::1) 우선 호스트에서
+# 연결 거부가 된다(health 검사와 같은 주소로 고정).
+VITE_API_PROXY_TARGET="http://127.0.0.1:18082" \
+  pnpm -C "$ROOT/src" --filter super-admin-ui dev --strictPort &
 UI_PIDS+=($!)
 
 # 배너 전에 UI 리슨을 기다린다 — 안 기다리면 "기동 완료" 직후 접속이 실패할 수
