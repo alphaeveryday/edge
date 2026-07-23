@@ -6,4 +6,5 @@ import type { SessionUser } from './types';
 export const realSessionRepository: SessionRepository = {
   current: () => apiClient.get<SessionUser>('/session'),
   updateDisplayName: (name) => apiClient.patch<void>('/session/profile', { name }),
+  logout: () => apiClient.post<void>('/auth/logout'),
 };

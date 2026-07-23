@@ -4,7 +4,7 @@ import { Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
-import { useSession, useUpdateDisplayName } from '../domains/session/hooks';
+import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 
 interface NavEntry {
   path: string;
@@ -51,6 +51,7 @@ export function ConsoleLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { data: session } = useSession();
+  const logout = useLogout();
   const { data: feed } = useFeedStatus();
   const { data: explanations } = useExplanations();
   const updateName = useUpdateDisplayName();
@@ -209,7 +210,7 @@ export function ConsoleLayout() {
                   </div>
                 </div>
                 <div className="p-1" style={{ borderTop: '1px solid var(--border-faint)' }}>
-                  <div className="menu-item danger" onClick={() => toast('로그아웃되었습니다. (프로토타입)')}>
+                  <div className="menu-item danger" onClick={() => logout.mutate()}>
                     <Icon name="logOut" size={14} />
                     로그아웃
                   </div>
