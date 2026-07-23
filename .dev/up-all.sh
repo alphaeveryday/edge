@@ -15,6 +15,25 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=(docker compose -f "$ROOT/docker-compose.yml")
 
+# 루프백 :$1 에 리스너가 있으면 0 — connect 성공 여부로 판정한다. 반드시
+# v4·v6 둘 다 찌른다: vite 기본 host(localhost)는 IPv6 우선 호스트에서
+# ::1 에만 리슨해(실증), 127.0.0.1 만 보면 떠 있는 UI 를 놓친다.
+port_in_use() {
+  (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null \
+    || (exec 3<> "/dev/tcp/::1/$1") 2> /dev/null
+}
+
+# down 은 docker 만 필요하다 — 의존성 검사(pnpm·curl)보다 앞에 둬야
+# Node 도구가 없는 호스트에서도 안내대로 정리가 가능하다.
+if [[ "${1:-}" == "down" ]]; then
+  shift
+  exec "${COMPOSE[@]}" down "$@"
+fi
+if [[ $# -gt 0 ]]; then
+  echo "사용법: .dev/up-all.sh [down [-v]]" >&2
+  exit 2
+fi
+
 # 선행 의존성 검사 — 없으면 중간에 오도성 에러로 죽는 대신 여기서 이름을 대고
 # 멈춘다. 포트 검사는 외부 도구 없이 bash 내장 /dev/tcp 로 한다(lsof 는
 # Linux/dev container 에 없을 수 있고, 부재가 "리슨 없음"으로 오독된다).
@@ -24,23 +43,6 @@ for dep in docker pnpm curl; do
     exit 1
   fi
 done
-
-# 루프백 :$1 에 리스너가 있으면 0 — connect 성공 여부로 판정한다. 반드시
-# v4·v6 둘 다 찌른다: vite 기본 host(localhost)는 IPv6 우선 호스트에서
-# ::1 에만 리슨해(실증), 127.0.0.1 만 보면 떠 있는 UI 를 놓친다.
-port_in_use() {
-  (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null \
-    || (exec 3<> "/dev/tcp/::1/$1") 2> /dev/null
-}
-
-if [[ "${1:-}" == "down" ]]; then
-  shift
-  exec "${COMPOSE[@]}" down "$@"
-fi
-if [[ $# -gt 0 ]]; then
-  echo "사용법: .dev/up-all.sh [down [-v]]" >&2
-  exit 2
-fi
 
 # UI 포트 프리플라이트 — 선점돼 있으면 vite 가 다른 포트로 옮겨 앉아 아래 안내
 # URL 이 거짓이 된다. 여기서 막고, 경쟁 상황은 vite --strictPort 가 마저 막는다.
