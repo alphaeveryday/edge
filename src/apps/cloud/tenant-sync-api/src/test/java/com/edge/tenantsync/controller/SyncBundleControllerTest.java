@@ -1,5 +1,6 @@
 package com.edge.tenantsync.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.ExplanationResult;
 import com.edge.tenantsync.dto.ExplanationRun;
@@ -74,7 +75,7 @@ class SyncBundleControllerTest {
 				new SyncBundleService(new SeededRepository(), new BundleSerializer());
 		mvc = MockMvcBuilders
 				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
-				.setControllerAdvice(new GlobalExceptionHandler())
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 
@@ -124,9 +125,9 @@ class SyncBundleControllerTest {
 	}
 
 	@Test
-	void 잘못된_파라미터는_400_공통_봉투로_표면화한다() throws Exception {
+	void 잘못된_파라미터는_400_공통_포맷으로_표면화한다() throws Exception {
 		// WHY: 401·403·410 외 4xx 는 소비자 버그 신호 — 재시도 없이 fail-loud (Rule 12).
-		// 에러 응답만 jvm-common ApiResponse 봉투를 쓴다 (성공 번들 본문은 계약 형상 그대로).
+		// 에러 응답만 공통 응답 포맷(ApiResponse)을 쓴다 (성공 번들 본문은 계약 형상 그대로).
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "-1"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))

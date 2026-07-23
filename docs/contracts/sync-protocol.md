@@ -22,11 +22,11 @@
 - **경로·파라미터**: `GET /api/v1/sync/bundle?after={cursor}&limit={n}`
   - `after` = 소비자의 마지막 committed cursor(첫 동기화는 0). 0 미만은 400.
   - `limit` = **응답 번들에 담길 전달 레코드(entry) 수 상한** — 생략 시 100, 허용 1..500, 범위 밖은 400(`SYNC4002`). 수치 표현 자체가 불가한 값(정수 범위 밖·비수치)은 파라미터 바인딩 실패라 공통 400 으로 나간다. 한 응답은 항상 번들 1개다(번들 개수 파라미터가 아니다).
-- **응답 포맷 (200)**: 본문 = Event Bundle JSON 봉투 그대로([event-bundle-schema.md](event-bundle-schema.md)), `Content-Type: application/json`, 필드 표기 snake_case(`bundle_id`·`cursor_from`·`delivery_type` …). 성공 본문에 공통 봉투(`ApiResponse`)를 씌우지 않는다 — 본문 바이트가 체크섬 대상이다.
-- **다음 cursor 전달**: 응답 봉투의 `cursor_to`가 재개점이다 — 소비자는 번들 commit(원본 저장 + cursor 전진)이 끝난 뒤 committed cursor를 `cursor_to`로 전진시키고, 다음 Pull 은 `after={committed cursor}` 로 요청한다. entry 별 `cursor`는 번들 내 순서와 도메인 반영 추적용이며 재개점이 아니다. 서버는 `after` 초과분을 cursor 오름차순으로 묶는다 — gap 감지는 목표 계약(아래).
+- **응답 포맷 (200)**: 본문 = Event Bundle JSON 봉투 그대로([event-bundle-schema.md](event-bundle-schema.md)), `Content-Type: application/json`, 필드 표기 snake_case(`bundle_id`·`cursor_from`·`delivery_type` …). 성공 본문에 공통 응답 포맷(`ApiResponse`)을 씌우지 않는다 — 본문 바이트가 체크섬 대상이다.
+- **다음 cursor 전달**: 번들 봉투의 `cursor_to`가 재개점이다 — 소비자는 번들 commit(원본 저장 + cursor 전진)이 끝난 뒤 committed cursor를 `cursor_to`로 전진시키고, 다음 Pull 은 `after={committed cursor}` 로 요청한다. entry 별 `cursor`는 번들 내 순서와 도메인 반영 추적용이며 재개점이 아니다. 서버는 `after` 초과분을 cursor 오름차순으로 묶는다 — gap 감지는 목표 계약(아래).
 - **신규 없음**: `204 No Content` — 빈 번들은 만들지 않는다.
 - **무결성 헤더**: `X-Bundle-Checksum: sha256=<hex>` — 체크섬 대상은 **응답 body 바이트열 그대로**. 서버는 직렬화를 한 번만 수행하고 같은 바이트를 body로 보낸다 (재직렬화·body 가공 필터 금지). 검증 실패 시 소비자는 그 번들을 폐기하고 저장·전달 없이 재-Pull 한다.
-- **에러 시맨틱**: 4xx/5xx만 공통 봉투(jvm-common `ApiResponse`).
+- **에러 시맨틱**: 4xx/5xx만 공통 응답 포맷(jvm-common `ApiResponse`).
   - `400 SYNC4001`(after 위반)·`400 SYNC4002`(limit 위반) — **소비자 버그 신호**. 401·403·410 외 4xx 는 재시도로 낫지 않는다: 소비자는 이를 **일시 장애로 취급하지 않고**(백오프·복구 대기 없음) 즉시 에러 로그로 표면화하며, 해법은 수정 배포다. 폴링 데몬 구조상 다음 주기의 재호출 자체는 발생하지만 그것이 복구 수단이 아니다(fail-loud).
   - 5xx·네트워크 오류 — 일시 장애로 보고 다음 폴링 주기에 재시도한다. at-least-once 이므로 재시도 중복은 멱등 upsert 가 흡수한다.
   - 인증서 관련 401·403 의 도메인 코드는 [sync-auth.md](sync-auth.md) 계약에서 추가한다.

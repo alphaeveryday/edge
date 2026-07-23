@@ -27,7 +27,7 @@ src/
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
 │   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
-│   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload) + 공유 도메인
+│   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload)·예외 매핑 + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
 │   └── py-common/            # Python · 공통 유틸
 ├── settings.gradle           # JVM 루트 (Groovy DSL 멀티모듈)
@@ -78,7 +78,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
-| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
+| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·예외→공통 응답 포맷 매핑(`ExceptionAdvice`, auto-configuration 으로 웹 앱 활성) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
 | `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 — EDGE 디자인 토큰·컴포넌트 CSS·React 프리미티브 (소스 export 패키지) |
 | `py-common` | Python | Python 공통 유틸 |
 

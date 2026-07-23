@@ -7,7 +7,7 @@
 
 - **체크섬은 바이트에 대한 것** — `BundleSerializer`가 직렬화를 딱 한 번 하고, 그 바이트로 SHA-256을 계산하고, 같은 바이트를 body로 보낸다. 응답을 다시 직렬화하거나 body를 가공하는 필터를 끼우면 소비자의 무결성 검증이 전부 깨진다.
 - **테넌트 식별은 `TenantResolver`로만** — 쿼리·경로·헤더에서 테넌트를 받지 않는다(계약). 컨트롤러에 테넌트 파라미터를 추가하는 변경은 신뢰경계 위반이다.
-- **응답 봉투는 에러에만** — 4xx/5xx는 jvm-common `ApiResponse` 봉투(도메인 코드 `SyncErrorStatus`, 글루는 `GlobalExceptionHandler`). 성공(200) 번들 본문은 봉투로 감싸지 않는다 — 계약 와이어 포맷 자체가 응답이고 체크섬이 그 바이트 대상이라, 봉투를 씌우면 둘 다 깨진다.
+- **공통 응답 포맷은 에러에만** — 4xx/5xx는 jvm-common `ApiResponse`(도메인 코드 `SyncErrorStatus`, 글루는 jvm-common 공통 `ExceptionAdvice`). 성공(200) 번들 본문은 `ApiResponse`로 감싸지 않는다 — 계약 와이어 포맷 자체가 응답이고 체크섬이 그 바이트 대상이라, 감싸면 둘 다 깨진다.
 
 ## 구조 (layered)
 

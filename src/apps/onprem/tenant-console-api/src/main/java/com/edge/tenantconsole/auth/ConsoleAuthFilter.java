@@ -119,7 +119,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 		return attribute instanceof SessionMember sessionMember ? sessionMember : null;
 	}
 
-	// 필터는 @RestControllerAdvice 를 타지 않으므로 공통 봉투(ApiResponse 형상)를 직접 쓴다.
+	// 필터는 @RestControllerAdvice 를 타지 않으므로 공통 응답 포맷(ApiResponse 형상)을 직접 쓴다.
 	private void write(HttpServletResponse response, int status, String code, String message)
 			throws IOException {
 		response.setStatus(status);

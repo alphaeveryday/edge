@@ -1,5 +1,6 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantconsole.auth.BootstrapAccounts;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.repository.MemberRepository;
@@ -70,7 +71,7 @@ class AuthControllerTest {
 		AuthService authService = new AuthService(members, new BootstrapAccounts(List.of()),
 				org.springframework.transaction.support.TransactionOperations.withoutTransaction());
 		mvc = MockMvcBuilders.standaloneSetup(new AuthController(authService))
-				.setControllerAdvice(new GlobalExceptionHandler())
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 
