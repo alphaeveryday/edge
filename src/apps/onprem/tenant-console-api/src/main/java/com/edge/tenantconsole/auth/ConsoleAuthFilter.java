@@ -53,7 +53,33 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout"), ANY_ROLE),
-			new Rule("GET", Pattern.compile("/api/v1/auth/session"), ANY_ROLE));
+			new Rule("GET", Pattern.compile("/api/v1/auth/session"), ANY_ROLE),
+			// ── 콘솔 mock 표면(ALPHA-513) — 인증만 강제(전 역할). UI 에 로그인·역할
+			// 화면이 없는 mock 데이터 단계의 임시 완화로, 도메인별 DB 연동 시
+			// permission-matrix.md 의 역할 세분화(검수·정책=CR, 사용자·시장=TA)를 적용한다.
+			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/stop"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/move-to-review"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/approve"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/reject"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/draft"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/screening/words"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/screening/words"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/screening/words/[^/]+/toggle"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/screening/criteria"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/screening/criteria"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/screening/disclaimer"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/screening/disclaimer"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/scope/markets"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/scope/markets/[^/]+/toggle"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/scope/stocks"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/scope/stocks/[^/]+/toggle"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/members"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/members/invitations"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/session"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/session/profile"), ANY_ROLE));
 
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,

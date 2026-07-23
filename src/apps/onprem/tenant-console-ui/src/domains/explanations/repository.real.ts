@@ -1,4 +1,4 @@
-/* explanations 도메인 — 실연동 구현 (현재 stub, tenant-console-api 완성 시 배선) */
+/* explanations 도메인 — tenant-console-api 실연동 구현 */
 import { apiClient } from '../../api/client';
 import type { ExplanationsRepository } from './repository';
 import type { Explanation, FeedStatus } from './types';
