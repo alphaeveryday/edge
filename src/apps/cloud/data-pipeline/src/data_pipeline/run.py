@@ -273,8 +273,11 @@ def main(argv: list[str] | None = None) -> int:
             base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
             model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
         )
+        # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
+        concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
         return tag_news.run(storage, run_id, complete_fn=complete_fn,
-                            from_date=args.from_date, to_date=args.to_date, limit=args.limit)
+                            from_date=args.from_date, to_date=args.to_date, limit=args.limit,
+                            concurrency=concurrency)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.
     if args.step == "ingest-raw-financial":

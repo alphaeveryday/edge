@@ -162,7 +162,7 @@ variable "log_retention_days" {
 variable "tag_news_limit" {
   description = "tag-news 가 한 실행에서 새로 LLM 을 부를 기사 수 상한(비용 가드). 잔여는 다음 실행이 이어받는다."
   type        = number
-  default     = 500
+  default     = 10000
 }
 
 variable "state_machine_timeout_seconds" {

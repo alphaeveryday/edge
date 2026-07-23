@@ -40,6 +40,7 @@ import hashlib
 import json
 import logging
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..lake import Storage, canonical_news_articles_partition, feature_news_assertions_partition, quality_log_key
@@ -53,6 +54,13 @@ DATASET = "news_assertions"
 
 # 태깅 대상 언어. 프롬프트가 한국어 전용이라 ko 만 — 영어 프롬프트가 생기면 여기 늘린다.
 TAGGED_LANGUAGES = ("ko",)
+
+# LLM 호출 병렬도(ALPHA-519). TagNews 는 기사당 LLM 1콜이 완전 직렬이라 런타임의 큰 몫이다.
+# complete_fn 은 콜마다 독립 urllib 요청(상태없음=스레드안전)이고 블로킹 I/O 라 GIL 이 풀려
+# 실병렬이 난다. DeepSeek v4-pro 동시성 캡 500 안이라 100 까지 안전 — 상한을 그 아래로 둔다.
+# 기사별 status·격리·merged 병합은 결과 취합 후 메인스레드에서 해 경합을 피한다.
+DEFAULT_TAG_CONCURRENCY = 32
+MAX_TAG_CONCURRENCY = 100
 
 # 다음 런이 **다시 시도해야 하는** status. llm_error 는 호출 자체가 실패한 것(네트워크·레이트
 # 리밋·5xx)이라 기사에 대한 판정이 아니다 — 이걸 '태깅 완료'로 캐시하면 일시적 장애 한 번에
@@ -222,12 +230,17 @@ def run(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int | None = None,
+    concurrency: int = DEFAULT_TAG_CONCURRENCY,
 ) -> int:
     """canonical 뉴스(ko) → 태깅 → feature 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
 
     limit 은 **이번 런에서 새로 LLM 을 부를 기사 수 상한**이다(이미 태깅된 건 세지 않는다).
     미지정이면 대상 전부를 태깅한다 — 실수로 큰 비용이 나가는 걸 호출부가 막을 수 있게 둔다.
+
+    concurrency 는 LLM 호출 병렬도다(파티션 안에서 기사별 extract 를 동시 실행). 카운터·격리·
+    merged 병합은 결과 취합 뒤 메인스레드에서 순차로 해 경합을 없앤다 — 순차 실행과 결과 동일.
     """
+    concurrency = max(1, min(concurrency, MAX_TAG_CONCURRENCY))
     started_at = datetime.now(timezone.utc)
     tagged_at = started_at.isoformat()
     checked_date = tagged_at[:10]
@@ -261,6 +274,9 @@ def run(
             merged = dict(by_id)
             changed = False
 
+            # 1) 선택(순차·LLM 미호출): 비-LLM 게이트로 태깅 대상만 고른다. limit 은 전 파티션에
+            #    걸친 상한이라 확정 tagged + 이번에 고른 수로 판정(순차 tagged>=limit 와 동치).
+            to_tag: list[tuple[object, dict, str]] = []  # (article_id, article, fingerprint)
             for article in articles:
                 if not isinstance(article, dict):
                     # canonical 은 이 스텝이 안 쓰지만, 비객체 행이 섞이면 .get 에서 파티션이
@@ -278,11 +294,24 @@ def run(
                 if _is_current(by_id.get(article_id), fingerprint):
                     skipped += 1
                     continue
-                if limit is not None and tagged >= limit:
+                if limit is not None and tagged + len(to_tag) >= limit:
                     limited += 1
                     continue
+                to_tag.append((article_id, article, fingerprint))
 
-                result = extract_assertions(article, complete_fn=complete_fn)
+            # 2) 실행(병렬): LLM 콜만 스레드풀에 던진다. map 은 순서를 보존해 결과를 대상에 맞춘다.
+            #    extract 는 실패를 status=llm_error 로 격리하므로(부수효과 없는 순수 함수) 워커가
+            #    예외를 던지지 않는다 — 순차판과 같은 크래시 계약(격리 밖 예외는 그대로 전파).
+            if to_tag:
+                workers = min(concurrency, len(to_tag))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    results = list(pool.map(
+                        lambda item: extract_assertions(item[1], complete_fn=complete_fn), to_tag))
+            else:
+                results = []
+
+            # 3) 병합(순차·메인스레드): 카운터·merged 갱신을 여기서 해 경합을 없앤다.
+            for (article_id, article, fingerprint), result in zip(to_tag, results):
                 tagged += 1
                 status_counts[result.get("status")] += 1
                 for reason in result.get("reasons") or []:
