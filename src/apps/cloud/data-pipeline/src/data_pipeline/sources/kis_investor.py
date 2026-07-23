@@ -43,6 +43,12 @@ MARKET_DIV = "J"  # J: KRX
 MAX_PAGES = 200
 RATE_MSG_CD = "EGW00201"  # "초당 거래건수 초과" — HTTP 429 아님(200 본문). 어댑터가 재시도.
 MAX_RATE_RETRY = 5
+# EOD 서빙경계(ALPHA-518) — 확정 투자자 데이터가 서빙되기 전(장마감 직후 ~1분) 질의하면
+# rt_cd=2 msg_cd=OPSQ2001 "TIME LIMIT 00:00 ~ 15:40" 로 온다. 데이터 결손이 아니라 경계
+# 블랙아웃(자가해소)이라, 레이트리밋(0.7s)보다 긴 백오프로 대기했다 재시도한다(소진 시 심볼 격리).
+BOUNDARY_MSG_CD = "OPSQ2001"
+MAX_BOUNDARY_RETRY = 5  # 재시도 횟수(×15s = 75s 대기 — 서빙경계 분(15:40→15:41) 전체 + 여유 흡수)
+BOUNDARY_BACKOFF_S = 15.0
 
 KST = timezone(timedelta(hours=9))
 
@@ -232,8 +238,8 @@ class KisInvestorSource:
             yield _emit(row)
 
     def _chunk(self, kis_symbol: str, end: str, token: str) -> list[dict]:
-        """투자자 수급 1콜(≤30거래일, 기준일=end 부터 과거). rt_cd!=0 은 오류,
-        EGW00201(초당한도)만 본문 기반 재시도한다."""
+        """투자자 수급 1콜(≤30거래일, 기준일=end 부터 과거). rt_cd!=0 은 오류. 본문 오류코드
+        중 EGW00201(초당한도)·OPSQ2001(EOD 서빙경계)만 각자 독립 예산으로 재시도한다."""
         params = {
             "FID_COND_MRKT_DIV_CODE": MARKET_DIV,
             "FID_INPUT_ISCD": kis_symbol,
@@ -250,7 +256,12 @@ class KisInvestorSource:
             "tr_id": TR_ID_INVESTOR,
             "custtype": "P",
         }
-        for attempt in range(MAX_RATE_RETRY):
+        # 두 본문 오류코드는 독립 재시도 예산을 가진다 — 카운터를 분리하지 않고 attempt 하나를
+        # 공유하면 한쪽(초당한도)의 재시도가 다른 쪽(서빙경계)의 예산을 깎아, EGW 뒤 첫 OPSQ 가
+        # 대기 없이 즉시 격리될 수 있다. 루프 상한은 두 예산의 합(방어적 백스톱).
+        rate_retries = 0
+        boundary_retries = 0
+        for _ in range(MAX_RATE_RETRY + MAX_BOUNDARY_RETRY):
             # 4xx/429 는 client 가 StopFetch 로 올린다(전체 중단). 5xx·네트워크는 client 가 재시도.
             body = self.client.request("GET", url, headers=headers, decode=True)
             data = json.loads(body)  # 깨진 JSON → 심볼 단위 실패로 전파
@@ -273,10 +284,18 @@ class KisInvestorSource:
                 # 컨텍스트와 함께 한다 — 여기선 배열 그대로 돌려준다(가격 _chunk 와 동형).
                 return output2
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
-            if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
-                self.client._sleep(0.7 * (attempt + 1))
+            if data.get("msg_cd") == RATE_MSG_CD and rate_retries < MAX_RATE_RETRY - 1:
+                self.client._sleep(0.7 * (rate_retries + 1))
+                rate_retries += 1
+                continue
+            # EOD 서빙경계 블랙아웃 — 자가해소라 레이트리밋보다 긴 백오프로 대기 후 재시도.
+            if data.get("msg_cd") == BOUNDARY_MSG_CD and boundary_retries < MAX_BOUNDARY_RETRY:
+                self.client._sleep(BOUNDARY_BACKOFF_S)
+                boundary_retries += 1
                 continue
             raise ValueError(
                 f"KIS rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
             )
-        raise ValueError(f"KIS {RATE_MSG_CD} 재시도 소진")
+        raise ValueError(
+            f"KIS 재시도 소진 (rate={rate_retries} boundary={boundary_retries})"
+        )
