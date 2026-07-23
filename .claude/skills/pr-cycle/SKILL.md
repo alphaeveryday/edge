@@ -10,7 +10,11 @@ description: edge 저장소에서 git/Jira가 얽힌 모든 작업 요청에 반
 
 ## Phase 0 — 컨텍스트 확인
 
-`git branch --show-current`와 `git status`, 필요 시 `gh pr list --head <브랜치>`로 현재 위치를 파악하고 모드를 정한다:
+`git branch --show-current`와 `git status`·`git worktree list`, 필요 시 `gh pr list --head <브랜치>`로 현재 위치를 파악하고 모드를 정한다.
+
+**점유 감지 — 모드 판정보다 먼저.** 지금 보이는 브랜치·미커밋 변경이 **이 세션의 것인지**부터 가린다. 다음 중 하나면 병렬 상황이다 — ① 이 사이클과 무관한 `feature/*`·`fix/*` 가 체크아웃돼 있거나 무관한 미커밋 변경이 있다(다른 세션이 이 체크아웃을 점유 중일 수 있다), ② `git worktree list` 에 **현재 작업 폴더도 메인 체크아웃도 아닌** worktree 가 보인다(다른 세션이 이미 병렬 진행 중). 병렬 상황에서 공유 체크아웃 위에서 `git switch`·커밋을 하면 상대 세션의 브랜치 전환·파일 저장과 섞여 **커밋이 엉키고 작업이 유실**된다(README "병렬 작업"). 이 체크아웃을 건드리지 말고 **2단계의 worktree 분기**로 사이클을 시작한다. 단, **이 사이클의 브랜치가 이미 체크아웃된 폴더**(메인 체크아웃이든 자기 worktree 든)가 있으면 병렬이어도 정상 재진입이다 — 새 폴더를 만들지 말고 그 폴더에서 모드 표대로 이어간다(같은 브랜치의 이중 체크아웃은 git 이 막는다). 내 잔재인지 남의 진행분인지 판단이 안 서면 사용자에게 확인한다.
+
+아래 모드 표는 현재 폴더(메인 체크아웃 또는 자기 worktree)의 상태가 **이 세션 자신의 것일 때** 적용한다:
 
 | 상태 | 모드 |
 |---|---|
@@ -42,6 +46,16 @@ Jira 대상이면 아래 순서로 확인해 **활성 스프린트에 있는 키
 git switch dev && git pull
 git switch -c feature/<이슈키>-<슬러그>   # 버그면 fix/
 git push -u origin <브랜치>
+```
+
+**worktree 분기 (병렬일 때):** Phase 0 점유 감지에 걸렸으면 같은 체크아웃에서 `git switch` 하지 않고 폴더를 분리한다 (worktree 규약·정리 명령은 README "병렬 작업"이 SSOT). 새 사이클과 기존 사이클 재진입(진행 중·PR 보완 모드)의 형태가 다르다:
+
+```bash
+git fetch origin
+git worktree add ../edge-<슬러그> -b feature/<이슈키>-<슬러그> origin/dev   # 새 사이클: 새 브랜치
+git worktree add ../edge-<슬러그> feature/<이슈키>-<슬러그>                 # 재진입: 기존 브랜치를 폴더로 (원격에만 있으면 fetch 로 받아진다)
+cd ../edge-<슬러그>                       # 이후 모든 단계를 이 폴더에서
+git push -u origin <브랜치>               # 새 브랜치일 때만
 ```
 
 - 슬러그는 영문 소문자-하이픈으로 작업 요지를 담는다 (예: `feature/ALPHA-121-login-oauth`).
@@ -83,11 +97,13 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
 
 - `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계)을 통과했으면 **확인 없이 실행한다** — 루프 종료 조건(`+1` 또는 전건 비수용)이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
+- **worktree 사이클이면 `--delete-branch` 를 뺀다** — gh 가 로컬 브랜치를 지우려고 base(`dev`)로 전환을 시도하는데 `dev` 는 메인 체크아웃이 잡고 있어 실패한다. 머지 후 원격 브랜치는 `git push origin --delete <브랜치>` 로 지우고, 로컬 브랜치·폴더는 8단계에서 정리한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
 
 ## 8. 사이클 마감
 
-- `git switch dev && git pull`로 복귀하고 로컬 브랜치를 정리한다.
+- 메인 체크아웃 사이클이면 `git switch dev && git pull`로 복귀하고 로컬 브랜치를 정리한다.
+- worktree 사이클이면 worktree 안에서 `git switch dev` 를 하지 않는다(`dev` 는 메인 체크아웃이 잡고 있어 실패한다). 제거할 폴더 **밖**(메인 체크아웃 등)에서 `git worktree remove ../edge-<슬러그>` 로 폴더를 정리한 뒤 `git branch -D <브랜치>` 로 로컬 브랜치를 지운다(worktree 제거는 브랜치 ref 를 지우지 않는다) — 남겨두면 다음 사이클의 점유 감지에 유령 점유로 걸린다. 메인 체크아웃의 `git pull` 갱신은 그 체크아웃이 깨끗한 `dev` 일 때만 한다 — 다른 세션이 점유 중이면 건드리지 않는다(Phase 0 점유 감지와 같은 이유).
 - Jira 이슈가 자동 전환되지 않았으면 `transitionJiraIssue`로 완료 상태로 옮긴다.
 
 ## 에러 처리
