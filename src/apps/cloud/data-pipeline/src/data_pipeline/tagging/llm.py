@@ -19,6 +19,9 @@ llm_error), 조용한 폴백은 태깅 커버리지 저하를 숨긴다(Rule 12)
 from __future__ import annotations
 
 import json
+import random
+import time
+import urllib.error
 import urllib.request
 
 # OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 인자로 한다(코드 수정 불필요).
@@ -28,6 +31,17 @@ DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 # 추출은 창작이 아니다 — 같은 기사에 같은 라벨이 나와야 재현·집계가 된다.
 DEFAULT_TEMPERATURE = 0.0
+
+# 429(동시성 캡 초과) 유계 백오프 재시도(ALPHA-517). DeepSeek v4-pro 는 계정 동시성 캡 500 —
+# 태깅 병렬화(ALPHA-519·520)로 동시 호출이 늘면 순간 초과가 429 로 온다. 재시도가 없으면 그
+# 순간 429 가 기사별 llm_error 로 굳어 태깅 커버리지가 캡 근처에서 조용히 떨어진다.
+# 지터는 여러 병렬 호출이 동시에 429 를 받고 같은 시각에 재시도해 캡을 다시 때리는 것을 막는다
+# (KIS 토큰 경합의 지터와 같은 이유). 429 외 오류(키 4xx·5xx·네트워크)는 재시도하지 않고
+# 기사 단위 격리로 올린다(fail-loud — 조용한 폴백 금지).
+MAX_RETRIES_429 = 5
+RETRY_BACKOFF_BASE_S = 1.0
+RETRY_BACKOFF_CAP_S = 8.0
+RETRY_JITTER_S = 1.0
 
 
 def openai_compatible_complete_fn(
@@ -69,8 +83,18 @@ def openai_compatible_complete_fn(
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         })
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        for attempt in range(MAX_RETRIES_429 + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                # 429(동시성 캡 초과)만 유계 백오프 재시도. 그 외 HTTP 오류는 재시도해도 안
+                # 풀리므로(키 4xx·서버 5xx) 즉시 올려 기사 단위로 격리한다.
+                if exc.code != 429 or attempt >= MAX_RETRIES_429:
+                    raise
+                backoff = min(RETRY_BACKOFF_BASE_S * 2**attempt, RETRY_BACKOFF_CAP_S)
+                time.sleep(backoff + random.uniform(0, RETRY_JITTER_S))
         try:
             return payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
