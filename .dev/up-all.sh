@@ -24,6 +24,15 @@ if [[ $# -gt 0 ]]; then
   exit 2
 fi
 
+# UI 포트 프리플라이트 — 선점돼 있으면 vite 가 다른 포트로 옮겨 앉아 아래 안내
+# URL 이 거짓이 된다. 여기서 막고, 경쟁 상황은 vite --strictPort 가 마저 막는다.
+for port in 5174 5175; do
+  if lsof -ti ":$port" > /dev/null 2>&1; then
+    echo "✗ 포트 $port 가 이미 사용 중이다 — 기존 UI dev 서버를 내리고 다시 실행" >&2
+    exit 1
+  fi
+done
+
 echo "▶ 백엔드 기동 — docker compose up --build -d (첫 실행은 gradle 빌드로 느리다)"
 "${COMPOSE[@]}" up --build -d
 
@@ -44,15 +53,29 @@ wait_health tenant-console-api "http://localhost:18081/actuator/health"
 wait_health super-admin-api "http://127.0.0.1:18082/actuator/health"
 wait_health publication-api "http://localhost:18084/actuator/health"
 
+# health 엔드포인트가 없는 서비스(sync 경로·mock-broker·PG)도 생존을 확인한다 —
+# 시작 직후 죽은 컨테이너를 여기서 드러내지 않으면 동기화·데모만 조용히 빠진
+# "성공"이 된다. flyway* 는 마이그레이션 후 정상 종료라 제외.
+for svc in $("${COMPOSE[@]}" config --services | grep -v '^flyway'); do
+  state=$("${COMPOSE[@]}" ps --format '{{.State}}' "$svc" 2> /dev/null || true)
+  if [[ "$state" != "running" ]]; then
+    echo "✗ $svc 컨테이너가 running 이 아니다(현재: ${state:-없음}) — 'docker compose logs $svc' 확인" >&2
+    exit 1
+  fi
+done
+echo "  ✓ 전 서비스 컨테이너 생존"
+
 echo "▶ UI 의존성 확인 — pnpm install"
 pnpm -C "$ROOT/src" install
 
 echo "▶ 콘솔 UI 2종 기동 — vite dev (Ctrl-C 로 함께 내려간다)"
-# UI 는 이 스크립트의 자식으로 포그라운드에 묶는다 — 한쪽이 죽으면 wait 가
-# 그 실패 코드로 끝나고 trap 이 나머지를 정리한다(반쪽 기동을 숨기지 않음).
+# --strictPort: 프리플라이트와 기동 사이에 포트를 뺏겨도 다른 포트로 옮겨 앉지
+# 않고 죽는다 — 아래 생존 루프가 그 죽음을 드러낸다.
 trap 'kill $(jobs -p) 2> /dev/null; echo; echo "◼ UI 종료. 백엔드는 유지 중 — 정리는 .dev/up-all.sh down"' INT TERM EXIT
-pnpm -C "$ROOT/src" --filter tenant-console-ui dev &
-pnpm -C "$ROOT/src" --filter super-admin-ui dev &
+pnpm -C "$ROOT/src" --filter tenant-console-ui dev -- --strictPort &
+UI_PIDS=($!)
+pnpm -C "$ROOT/src" --filter super-admin-ui dev -- --strictPort &
+UI_PIDS+=($!)
 
 cat << 'EOF'
 
@@ -65,4 +88,16 @@ cat << 'EOF'
 
 종료: Ctrl-C (UI) → .dev/up-all.sh down [-v] (백엔드[·DB 볼륨])
 EOF
-wait
+
+# 편측 사망 감시 — 인자 없는 wait 는 한쪽이 먼저 죽어도 0 으로 끝나 실패를
+# 숨긴다(macOS 기본 bash 3.2 라 wait -n 도 없다). 생존 폴링으로 어느 쪽이든
+# 죽는 즉시 실패로 끝내고, EXIT trap 이 나머지를 정리한다.
+while :; do
+  for pid in "${UI_PIDS[@]}"; do
+    if ! kill -0 "$pid" 2> /dev/null; then
+      echo "✗ UI dev 서버(pid $pid)가 종료됐다 — 위 로그 확인" >&2
+      exit 1
+    fi
+  done
+  sleep 2
+done
