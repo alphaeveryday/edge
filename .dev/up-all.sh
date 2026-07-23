@@ -72,6 +72,12 @@ wait_health() {
 wait_health tenant-console-api "http://localhost:18081/actuator/health"
 wait_health super-admin-api "http://127.0.0.1:18082/actuator/health"
 wait_health publication-api "http://localhost:18084/actuator/health"
+# 동기화 경로도 actuator 로 확인 — 컨테이너 running 이어도 앱이 DOWN(예: DB
+# 미준비)이면 온프렘 데이터가 조용히 비는 반쪽 기동이 된다.
+wait_health tenant-sync-api "http://localhost:18083/actuator/health"
+wait_health sync-agent "http://localhost:18085/actuator/health"
+wait_health intake "http://localhost:18086/actuator/health"
+wait_health screening-worker "http://localhost:18087/actuator/health"
 
 # health 엔드포인트가 없는 서비스(sync 경로·mock-broker·PG)도 생존을 확인한다 —
 # 시작 직후 죽은 컨테이너를 여기서 드러내지 않으면 동기화·데모만 조용히 빠진
