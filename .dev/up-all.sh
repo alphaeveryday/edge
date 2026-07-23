@@ -72,9 +72,11 @@ echo "▶ 콘솔 UI 2종 기동 — vite dev (Ctrl-C 로 함께 내려간다)"
 # --strictPort: 프리플라이트와 기동 사이에 포트를 뺏겨도 다른 포트로 옮겨 앉지
 # 않고 죽는다 — 아래 생존 루프가 그 죽음을 드러낸다.
 trap 'kill $(jobs -p) 2> /dev/null; echo; echo "◼ UI 종료. 백엔드는 유지 중 — 정리는 .dev/up-all.sh down"' INT TERM EXIT
-pnpm -C "$ROOT/src" --filter tenant-console-ui dev -- --strictPort &
+# 주의: `dev -- --strictPort` 로 쓰면 pnpm 이 `--` 를 vite 에 그대로 전달해
+# strictPort 가 무시된다(실증) — 구분자 없이 붙여야 vite 옵션으로 파싱된다.
+pnpm -C "$ROOT/src" --filter tenant-console-ui dev --strictPort &
 UI_PIDS=($!)
-pnpm -C "$ROOT/src" --filter super-admin-ui dev -- --strictPort &
+pnpm -C "$ROOT/src" --filter super-admin-ui dev --strictPort &
 UI_PIDS+=($!)
 
 cat << 'EOF'
