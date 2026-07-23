@@ -15,3 +15,15 @@ export function useUpdateDisplayName() {
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }
+
+export function useLogout() {
+  return useMutation({
+    mutationFn: () => sessionRepository.logout(),
+    onSuccess: () => {
+      // 세션 무효화 후 전체 리로드 — 로그인 화면(ALPHA-486 범위 밖)이 없어 착지
+      // 화면이 없다. dev 는 재진입 시 devSession 이 새 세션을 만든다. 실패는 전역
+      // mutation 토스트가 드러낸다.
+      window.location.reload();
+    },
+  });
+}

@@ -7,10 +7,22 @@
 ## 실행
 
 ```bash
+# 백엔드 먼저 (레포 루트에서) — 콘솔 API 는 fail-closed 라 API 없이는 화면 데이터가 비어 있다
+docker compose up --build tenant-console-api   # host 18081
+
 pnpm --filter tenant-console-ui dev      # http://localhost:5174
 pnpm --filter tenant-console-ui build
 pnpm --filter tenant-console-ui typecheck
 ```
+
+dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, bootRun 직접
+기동이면 `VITE_API_PROXY_TARGET=http://localhost:8080`)로 프록시한다 — same-origin 이
+되어 세션 쿠키(SameSite=Strict)가 실린다. 로그인 화면이 아직 없어(ALPHA-486 범위 밖)
+앱 진입 시 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
+(`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `admin@demo.edge.local`)으로
+자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
+자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront)은
+`/api` 오리진이 아직 없어 데이터가 비어 있다 — 데모 런타임 오리진 연결은 ALPHA-445 후속.
 
 ## 라우트 / IA (디자인 v0.2)
 
@@ -30,22 +42,21 @@ pnpm --filter tenant-console-ui typecheck
 
 ## 데이터 레이어 (핵심 규약)
 
-화면 데이터는 mock 으로 시작하되 **도메인 단위로** 실연동 교체가 가능하다.
+화면 데이터는 전 도메인이 **tenant-console-api 호출**이다(ALPHA-513). mock 데이터는
+UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 API 쪽에서 도메인
+단위로 진행된다 — UI 는 그 전환을 알지 못한다(계약 불변).
 
-- 페이지/컴포넌트는 **mock 을 직접 import 하지 않는다.** 도메인 hook(예: `useExplanations`)만 의존한다.
-- 도메인 스위치는 [`src/config/dataSources.ts`](src/config/dataSources.ts) 한 곳. 해당 도메인 한 줄을 `'mock' → 'real'` 로 바꾸면 교체된다.
-- 공통 fetch 래퍼는 [`src/api/client.ts`](src/api/client.ts) (baseURL · 인증 헤더 · 에러 정규화).
+- 페이지/컴포넌트는 repository 를 직접 import 하지 않는다. 도메인 hook(예: `useExplanations`)만 의존한다.
+- 공통 fetch 래퍼는 [`src/api/client.ts`](src/api/client.ts) (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증).
 - hook 은 **TanStack Query** 기반 — mutation 성공 시 해당 도메인 쿼리를 invalidate 해 화면이 갱신된다.
-  mock 도 반드시 `Promise` 를 반환한다(async) — mock·real 의 로딩/에러 처리 모양을 동일하게 유지하기 위함.
 
 ### 도메인 구조 (`src/domains/<domain>/`)
 
 ```
-types.ts             mock·real 공유 타입 (상태 코드는 state-machine 어휘: AUTO_PUBLISHED 등)
+types.ts             API 와 공유하는 계약 타입 (상태 코드는 state-machine 어휘: AUTO_PUBLISHED 등)
 repository.ts        interface (계약)
-repository.mock.ts   mock 구현 (Promise 반환, 모듈 레벨 가변 스토어)
-repository.real.ts   api client 사용 (현재 stub)
-index.ts             config 보고 mock|real 중 하나 export
+repository.real.ts   api client 사용 (tenant-console-api 콘솔 표면과 1:1)
+index.ts             real repository export
 hooks.ts             페이지가 쓰는 hook (TanStack Query)
 ```
 
@@ -59,4 +70,5 @@ hooks.ts             페이지가 쓰는 hook (TanStack Query)
 - 앱 자체 전역 CSS 는 [`src/styles/app.css`](src/styles/app.css) (tailwind 진입점) 하나뿐이다 — 구 `global.css` 체계는 폐기.
 - import 순서는 tailwind(preflight) → ui-kit 고정 (`src/main.tsx`).
 
-샘플 데이터는 가상 증권사 **KB증권** 기준 (시안 목데이터 이식).
+샘플 데이터는 가상 증권사 **KB증권** 기준 — 시안 목데이터는 tenant-console-api 의
+`mock` 패키지로 이식됐다.

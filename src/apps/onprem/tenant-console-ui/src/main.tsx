@@ -20,12 +20,26 @@ const queryClient = new QueryClient({
   }),
 });
 
-createRoot(root).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+// dev 한정 세션 쿠키 확보 후 렌더 — 첫 쿼리들이 401 로 헛돌지 않게 한다. 조건이
+// 정적(import.meta.env.DEV)이라 prod 번들에서는 분기·동적 import 청크가 통째로
+// 제거된다 — 데모 자격증명이 배포 번들에 실리지 않는다. 실패해도 화면은 띄운다
+// (각 쿼리의 에러 표면이 원인을 드러낸다 — 조용한 공백 화면 금지).
+async function bootstrapDevSession(): Promise<void> {
+  if (!import.meta.env.DEV) return;
+  const { ensureDevSession } = await import('./api/devSession');
+  await ensureDevSession();
+}
+
+bootstrapDevSession()
+  .catch((error) => console.error('dev 세션 부트스트랩 실패:', error))
+  .finally(() => {
+    createRoot(root).render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+  });

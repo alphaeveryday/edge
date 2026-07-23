@@ -1,9 +1,9 @@
 # tenant-console-api
 
-증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)과 인증. 계약·권한의
-SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고, 이 README 는 이
-모듈만의 비자명한 규율만 적는다. 다른 온프렘 모듈과 동일하게 JPA 없이
-JdbcTemplate(thin layered).
+증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)·인증 + 콘솔 화면
+표면(현재 mock). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
+이 README 는 이 모듈만의 비자명한 규율만 적는다. 다른 온프렘 모듈과 동일하게
+JPA 없이 JdbcTemplate(thin layered).
 
 ## 지켜야 할 로컬 불변식
 
@@ -37,10 +37,25 @@ JdbcTemplate(thin layered).
   만료 전까지 반영되지 않는다 — 매 요청 재검증은 사용자 관리(ALPHA-119)와 함께.
   CSRF 는 세션 쿠키 SameSite=Strict·HttpOnly 로 경량 방어(운영은 표준 토큰 추가).
 
+## 콘솔 mock 표면 (ALPHA-513)
+
+tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 5종 —
+explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
+scope(시장·종목 제공 범위) · members(사용자·초대) · session(테넌트 컨텍스트·프로필).
+
+- **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
+  파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
+  의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
+- **JSON 은 camelCase** — UI 타입이 계약의 SSOT 라 기존 검수 표면(snake_case)과
+  다르다. `final` 은 Java 예약어라 컴포넌트명은 `finalText`, JSON 은 `@JsonProperty`.
+- **인가는 인증만 강제(전 역할)** — 로그인 화면 없는 mock 단계의 한시 예외
+  (permission-matrix.md "콘솔 mock 표면" 절). 도메인 DB 전환 시 역할을 좁힌다.
+
 ## 스텁 → 실구현 교체 지점
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
+| `mock` 패키지 `*MockStore` 5종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
 | 부트스트랩 시드(데모 자체 계정) | ALPHA-119 | 콘솔 Users & Roles 등록·역할 부여 화면·API |
 | 데모 로그인 | 실증권사 계약 | SSO/AD(SAML/OIDC) 진입점 — 같은 세션 추상화로 수렴 |
 
@@ -56,7 +71,8 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 21건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴)과 인증
+테스트 43건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
-parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장)을 인코딩한다.
+parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 콘솔 mock
+표면의 UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
 `contextLoads` 는 실 DB 를 요구하는 통합 테스트라 로컬 DB 없이는 실패한다(compose E2E 경로).

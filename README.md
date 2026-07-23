@@ -53,9 +53,9 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 
 | 앱 | 런타임 | 아티팩트 | 역할 |
 |---|---|---|---|
-| `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, 디자인 v0.2 기준 재구축 — [console-ia](docs/console-ia/tenant-console.md)와의 IA 정렬은 후속) |
+| `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, 디자인 v0.2 기준 재구축 — [console-ia](docs/console-ia/tenant-console.md)와의 IA 정렬은 후속). 전 도메인이 tenant-console-api 호출 — UI 자체 mock 레이어 없음 |
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**). 전 도메인이 super-admin-api 호출 — UI 자체 mock 레이어 없음 |
-| `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API — 검수 표면(Review Queue 목록·승인·반려, 승인=전이+재발행 단일 트랜잭션) + 인증(데모 자체 계정·세션·fail-closed 인가, [permission-matrix](docs/console-ia/permission-matrix.md)). 정책·감사는 후속 |
+| `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API — 검수 표면(Review Queue 목록·승인·반려, 승인=전이+재발행 단일 트랜잭션) + 인증(데모 자체 계정·세션·fail-closed 인가, [permission-matrix](docs/console-ia/permission-matrix.md)) + 콘솔 화면 표면 5종(현재 `mock` 패키지 반환, 도메인별 DB 전환 예정 — ALPHA-513). 정책·감사는 후속 |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
 | `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull + 번들 체크섬 검증, 내부망 무변형 전달. DB 접근 없음 ([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)) |
 | `intake` | JVM | **edge-onprem** | 내부망 — 검증된 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
@@ -218,7 +218,7 @@ Refs: ALPHA-121
 
 1. **스프린트에서 본인 티켓 확인** — 현재 열린 스프린트에 자신에게 할당된 이슈가 있는지 봅니다 (`assignee = currentUser() AND sprint in openSprints()`).
 2. **처리할 티켓 선택** — 무엇부터 할지 정합니다(각자 판단 또는 에이전트의 우선순위 추천). 기능·버그는 **이슈 우선** — 해당 이슈가 없으면 Jira 이슈를 먼저 만들고 키를 확보합니다.
-3. **브랜치 생성 + 즉시 push** — `git switch dev && git pull` 후 `feature/<이슈키>-<슬러그>`로 분기하고 곧바로 `git push -u origin <브랜치>`. 이 push가 Jira 자동화를 깨워 이슈를 **`해야 할 일` → `진행 중`** 으로 옮깁니다.
+3. **브랜치 생성 + 즉시 push** — `git switch dev && git pull` 후 `feature/<이슈키>-<슬러그>`로 분기하고 곧바로 `git push -u origin <브랜치>`. 다른 세션과 병렬이면 같은 체크아웃에서 분기하지 않고 위 [병렬 작업](#병렬-작업-worktree)대로 worktree 를 씁니다. 이 push가 Jira 자동화를 깨워 이슈를 **`해야 할 일` → `진행 중`** 으로 옮깁니다.
 4. **개발** — 위 [커밋·PR 제목](#커밋pr-제목) 형식(Conventional Commits)을 따르고, 논리 단위로 나눠 커밋합니다.
 5. **`dev` 대상 PR** — PR 을 올리기 전에 로컬 검수 게이트를 통과시킵니다: 코드 리뷰를 **수용한 지적이 없어질 때까지** 반복(반복 상한 있음)한 뒤 문서 정합성 점검 — 종료 조건·상한 등 상세 절차는 `.claude/skills/pr-cycle` §4(edge-review 수렴 루프·docs-sync). PR 설명 맨 아래에 `Refs: <이슈키>`(PR 템플릿이 자동 삽입). 브랜치에 키가 있으면 Jira가 PR을 해당 이슈에 자동 연결합니다.
 6. **Codex 리뷰 대응** — 자동 리뷰 결과를 확인하고, 수용한 지적은 반영 후 재리뷰를 요청합니다. 통과(👍) 또는 잔여 지적 전건 비수용이면 머지로 넘어갑니다.

@@ -1,11 +1,9 @@
-/* screening 도메인 — config 를 보고 mock|real 중 하나를 export */
-import { DATA_SOURCES } from '../../config/dataSources';
-import { mockScreeningRepository } from './repository.mock';
+/* screening 도메인 — tenant-console-api 연동 repository export.
+ * mock 데이터는 API 쪽 mock 패키지가 반환한다 — 도메인별 DB 전환도 API 쪽에서 진행(ALPHA-513). */
 import { realScreeningRepository } from './repository.real';
 import type { ScreeningRepository } from './repository';
 
-export const screeningRepository: ScreeningRepository =
-  DATA_SOURCES.screening === 'real' ? realScreeningRepository : mockScreeningRepository;
+export const screeningRepository: ScreeningRepository = realScreeningRepository;
 
 export * from './types';
 export type { ScreeningRepository } from './repository';
