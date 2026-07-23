@@ -1,11 +1,12 @@
 /**
- * 공통 fetch 래퍼. baseURL · 인증 헤더 · 에러 정규화를 한 곳에서 담당한다.
+ * 공통 fetch 래퍼. baseURL · 에러 정규화를 한 곳에서 담당한다.
  * 모든 도메인의 repository.real.ts 는 이 client 만 사용한다.
+ * 인증은 세션 쿠키(same-origin 자동 전송, vite 프록시 경유) — 헤더 토큰 경로는 없다.
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 
-/** 정규화된 API 에러. mock·real 모두 동일한 에러 모양을 갖도록 강제한다. */
+/** 정규화된 API 에러. 모든 도메인이 동일한 에러 모양을 갖도록 강제한다. */
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -15,13 +16,6 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
-}
-
-function authHeaders(): Record<string, string> {
-  // TODO(session 도메인): 토큰 저장/갱신은 추후 session 도메인으로 이동.
-  const token =
-    typeof localStorage !== 'undefined' ? localStorage.getItem('edge.admin.token') : null;
-  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
@@ -36,7 +30,6 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
     ...rest,
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders(),
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
