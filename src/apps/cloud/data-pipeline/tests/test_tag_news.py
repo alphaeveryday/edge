@@ -319,3 +319,96 @@ def test_quality_log_records_what_happened(tmp_path):
     assert log["status_counts"] == {"ok": 1}
     assert log["tagger_version"] == TAGGER_VERSION
     assert log["ontology_version"] == ontology_version()
+
+
+def test_concurrent_tagging_preserves_all_rows_and_call_count(tmp_path):
+    """WHY: LLM 콜을 병렬화(ALPHA-519)해도 결과는 순차와 같아야 한다 — merged 병합을 워커에서
+    하면 동시 갱신이 서로를 덮어 행이 유실된다. 병합을 취합 후 메인스레드에 두는 설계를 잠근다:
+    20건을 concurrency=8 로 태깅해도 20행 전부 남고 LLM 콜 수가 정확히 20이어야 한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    articles = [_article(f"a{i}") for i in range(20)]
+    _write_canonical(storage, "ko", "2026-07-01", articles)
+
+    calls: list = []
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(calls), concurrency=8) == 0
+
+    assert len(calls) == 20  # 병렬이어도 콜 수는 대상 수와 정확히 같다(중복·누락 없음)
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert {r["article_id"] for r in rows} == {f"a{i}" for i in range(20)}  # 20행 전부(유실 없음)
+    assert {r["status"] for r in rows} == {"ok"}
+
+
+def test_limit_respected_under_concurrency(tmp_path):
+    """WHY: limit 은 선택 단계(순차)에서 확정 tagged + 이번에 고른 수로 판정한다 — 병렬 실행이
+    이 상한을 흘리면 비용 가드가 깨진다. 20건·limit=5·concurrency=8 이면 정확히 5건만 태깅되고
+    나머지 15는 다음 런으로 남아야 한다(순차판과 동치).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    articles = [_article(f"a{i}") for i in range(20)]
+    _write_canonical(storage, "ko", "2026-07-01", articles)
+
+    first: list = []
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=5, concurrency=8) == 0
+    assert len(first) == 5
+    assert len(_read_feature(storage, "ko", "2026-07-01")) == 5
+
+    second: list = []
+    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second), concurrency=8) == 0
+    assert len(second) == 15  # 남은 15건만 — 이미 태깅된 5건은 안 부른다
+    assert len(_read_feature(storage, "ko", "2026-07-01")) == 20
+
+
+def test_calls_run_concurrently_not_serialized(tmp_path):
+    """WHY: 병렬화가 실제로 동시 실행돼야 의미가 있다 — ThreadPool 을 순차 루프로 되돌리거나
+    workers=1 로 만드는 회귀는 런타임만 되돌리고 결과는 같아 값 검사로는 안 잡힌다(Rule 9).
+    n 스레드가 barrier 에 동시 도달해야만 풀리게 해, 순차면 barrier 타임아웃(BrokenBarrier)→
+    extract 가 llm_error 로 격리 → status 로 회귀가 드러나게 한다.
+    """
+    import threading
+
+    storage = LocalStorage(tmp_path / "lake")
+    n = 8
+    _write_canonical(storage, "ko", "2026-07-01", [_article(f"a{i}") for i in range(n)])
+    barrier = threading.Barrier(n, timeout=5)
+
+    def gated(system: str, user: str) -> str:
+        barrier.wait()  # n 개가 동시에 도달해야 풀린다 — 순차 실행이면 첫 콜에서 타임아웃
+        return json.dumps({"doc_class": "EVENT", "events": [{
+            "event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": "SIGN",
+            "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자"}], "confidence": 0.9}]},
+            ensure_ascii=False)
+
+    assert tag_news.run(storage, "R1", complete_fn=gated, concurrency=n) == 0
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert len(rows) == n
+    assert {r["status"] for r in rows} == {"ok"}  # 순차 회귀면 barrier 타임아웃→llm_error
+
+
+def test_parallel_results_map_to_correct_article(tmp_path):
+    """WHY: pool.map 결과를 to_tag 순서에 zip 하므로 매핑이 어긋나면 기사별 결과가 뒤바뀐다.
+    응답이 모두 같으면 오매핑을 못 잡는다 — 기사마다 고유 응답(제목 마커를 되읽어 supplier 로)을
+    주고, 각 행의 assertion 이 자기 기사(제목 마커 == supplier 텍스트)에서 나왔는지 확인한다.
+    """
+    import re
+
+    storage = LocalStorage(tmp_path / "lake")
+    n = 12
+    # 제목에 고유 마커 — 프롬프트(user)의 '제목:' 에 실리므로 fake 가 되읽어 응답에 넣는다.
+    _write_canonical(storage, "ko", "2026-07-01",
+                     [_article(f"a{i}", title=f"공급계약 MARK{i} 체결") for i in range(n)])
+
+    def echoing(system: str, user: str) -> str:
+        m = re.search(r"MARK\d+", user)
+        return json.dumps({"doc_class": "EVENT", "events": [{
+            "event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": "SIGN",
+            "arguments": [{"role_code": "SUPPLIER", "text": m.group(0) if m else "NONE"}],
+            "confidence": 0.9}]}, ensure_ascii=False)
+
+    assert tag_news.run(storage, "R1", complete_fn=echoing, concurrency=8) == 0
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert len(rows) == n
+    for r in rows:
+        title_marker = re.search(r"MARK\d+", r["title"]).group(0)
+        supplier = json.loads(r["assertions"])[0]["arguments"][0]["text"]
+        assert supplier == title_marker, f"{r['article_id']}: 제목 {title_marker} 인데 supplier {supplier} — 오매핑"
