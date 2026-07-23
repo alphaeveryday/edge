@@ -92,6 +92,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 스택 전용 데모 운영자 비밀번호 — application.yaml 은 기본값을 커밋하지
+      # 않는다(공개 엣지 fail-closed). super-admin-ui dev 자동 로그인 기본값과 짝.
+      ADMIN_BOOTSTRAP_OPERATOR_PASSWORD: demo-operator-1
     ports:
       - "18082:8080"
 

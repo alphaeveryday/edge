@@ -26,7 +26,10 @@ dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRu
 진입 시 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
 (`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `operator@edge.local`)으로
 자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
-자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다.
+자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront,
+`admin-dev.edgesignal.dev`)은 `/api` 오리진 연결·로그인 화면이 아직 없어 화면
+데이터가 비어 있다 — tenant-console-ui 와 같은 한계로, 배포 오리진 연결과 로그인
+화면(시안 수령 후)이 후속이다.
 
 ## 라우트 / IA (디자인 v0.1)
 

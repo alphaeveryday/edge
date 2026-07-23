@@ -29,4 +29,16 @@ class AuthServiceTest {
 		assertThatThrownBy(() -> service.login("operator@edge.local", null))
 				.isInstanceOf(GeneralException.class);
 	}
+
+	@Test
+	void 비밀번호_env_미주입_계정은_비활성이다() throws Exception {
+		// 공개 엣지라 기본 비밀번호를 커밋하지 않는다 — env 미설정 배포는 계정이
+		// 비활성으로 남아 로그인 불가로 닫힌 채 떠야 한다(fail-closed).
+		AuthService service = new AuthService(new BootstrapOperators(List.of(
+				new BootstrapOperators.Operator("operator@edge.local", "EDGE 운영팀", ""))));
+		assertThatThrownBy(() -> service.login("operator@edge.local", ""))
+				.isInstanceOf(GeneralException.class);
+		assertThatThrownBy(() -> service.login("operator@edge.local", "demo-operator-1"))
+				.isInstanceOf(GeneralException.class);
+	}
 }

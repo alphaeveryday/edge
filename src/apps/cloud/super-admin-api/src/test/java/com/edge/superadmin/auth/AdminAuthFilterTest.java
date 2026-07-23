@@ -5,12 +5,15 @@ import com.edge.superadmin.mock.TenantMockStore;
 import com.edge.superadmin.service.TenantService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -30,6 +33,9 @@ class AdminAuthFilterTest {
 	void setUp() {
 		mvc = MockMvcBuilders
 				.standaloneSetup(new TenantController(new TenantService(new TenantMockStore())))
+				// 표면 전수 테스트가 빈 본문 POST 로 컨트롤러까지 들어간다 — 검증 400 이
+				// advice 없이 ServletException 으로 새지 않게 실제 배선과 같게 둔다.
+				.setControllerAdvice(new com.edge.common.exception.ExceptionAdvice())
 				.addFilters(new AdminAuthFilter())
 				.build();
 	}
@@ -84,6 +90,39 @@ class AdminAuthFilterTest {
 							return request;
 						}))
 				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void 전_표면이_RULES_에_등록돼_있다() throws Exception {
+		// RULES 와 실제 컨트롤러 표면의 1:1 을 표면 전수로 검증한다 — 여기 없는
+		// 표면이 컨트롤러에 생기면(또는 메서드·경로가 어긋나면) 그 API 는 배포돼도
+		// 403 으로 닫힌다. 이 목록은 super-admin-console.md 화면 표면의 전수다.
+		String[][] surfaces = {
+				{"POST", "/api/v1/auth/logout"},
+				{"GET", "/api/v1/auth/session"},
+				{"GET", "/api/v1/tenants"},
+				{"POST", "/api/v1/tenants"},
+				{"GET", "/api/v1/sources/report"},
+				{"GET", "/api/v1/analyses"},
+				{"PATCH", "/api/v1/analyses/a1/result"},
+				{"POST", "/api/v1/analyses/a1/exclude"},
+				{"POST", "/api/v1/analyses/a1/restore"},
+				{"GET", "/api/v1/session"},
+				{"PATCH", "/api/v1/session/profile"},
+		};
+		for (String[] surface : surfaces) {
+			// 인증된 요청이 401/403 없이 필터를 통과하면 등록된 것이다 — 이 셋업엔
+			// TenantController 만 있어 그 밖 표면은 404 가 곧 통과의 증거다.
+			int status = mvc.perform(request(HttpMethod.valueOf(surface[0]), surface[1])
+							.session(sessionOf(OPERATOR)))
+					.andReturn().getResponse().getStatus();
+			assertThat(status)
+					.as("%s %s 는 RULES 에 등록돼 필터를 통과해야 한다", surface[0], surface[1])
+					.isNotIn(401, 403);
+			// 미인증은 전 표면 401 — fail-closed 의 반대편 절반.
+			mvc.perform(request(HttpMethod.valueOf(surface[0]), surface[1]))
+					.andExpect(status().isUnauthorized());
+		}
 	}
 
 	@Test

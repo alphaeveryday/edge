@@ -38,14 +38,24 @@ public class AuthService {
 	private final Map<String, Operator> operators;
 
 	public AuthService(BootstrapOperators bootstrapOperators) {
+		// 비밀번호 미주입(빈 값) 계정은 비활성 — 공개 엣지라 기본 비밀번호를 커밋하지
+		// 않으므로, env 미설정 배포는 로그인 불가로 닫힌 채 뜬다(fail-closed).
 		this.operators = bootstrapOperators.bootstrapOperators().stream()
+				.filter(o -> {
+					boolean enabled = o.password() != null && !o.password().isBlank();
+					if (!enabled) {
+						log.warn("부트스트랩 운영자 {} 비활성 — 비밀번호 env 미주입 "
+								+ "(ADMIN_BOOTSTRAP_OPERATOR_PASSWORD)", o.email());
+					}
+					return enabled;
+				})
 				.collect(Collectors.toUnmodifiableMap(
 						o -> normalize(o.email()),
 						o -> new Operator(o.name(), encoder.encode(o.password()))));
 		if (operators.isEmpty()) {
 			// 계정 없음 = 로그인 불가 상태 — 조용히 두지 않는다(Rule 12 fail-loud).
-			log.warn("부트스트랩 운영자 계정 미설정 — admin 콘솔 로그인이 불가능한 상태다 "
-					+ "(admin.auth.bootstrap-operators 필요)");
+			log.warn("활성 부트스트랩 운영자 계정 없음 — admin 콘솔 로그인이 불가능한 상태다 "
+					+ "(admin.auth.bootstrap-operators + 비밀번호 env 필요)");
 		}
 	}
 
