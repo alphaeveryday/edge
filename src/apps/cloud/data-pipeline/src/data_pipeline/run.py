@@ -239,9 +239,11 @@ def main(argv: list[str] | None = None) -> int:
             base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
             model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
         )
+        # 분류 LLM 병렬도도 tag-news 와 같은 LLM_CONCURRENCY env(미지정=기본, 상한은 스텝이 클램프).
+        concurrency = int(os.environ.get("LLM_CONCURRENCY", assemble_events.DEFAULT_CLASSIFY_CONCURRENCY))
         return assemble_events.run(
             storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn,
-            from_date=args.from_date, to_date=args.to_date,
+            from_date=args.from_date, to_date=args.to_date, concurrency=concurrency,
         )
 
     # 가격변동 트리거도 canonical 을 읽어 DB 에 쓰는 적재 스텝이다. 창(--from/--to)은 수집

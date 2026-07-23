@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from ..config import DbConfig
@@ -37,6 +38,14 @@ DATASET = "source_event"
 CLASSIFY_BATCH = 40
 TITLE_EVIDENCE_TYPE = "TITLE"
 _KST = timezone(timedelta(hours=9))
+
+# 분류 LLM 호출 병렬도(ALPHA-520). classify 는 40건배치×수십 배치가 완전 직렬이라 Assemble
+# 런타임의 최대 병목이었다. 각 배치는 독립(자기 배치의 LLM 콜 + 검증만, article_id 도 배치 간
+# 유일)이라 병렬 안전하고, complete_fn 은 상태없는 urllib 콜(스레드안전)이다. 배치별 결과를
+# 취합 후 메인스레드에서 merge 한다. **threading(thread_events)은 병렬화 금지** — novelty 가
+# available_at 정렬·prior 카운트에 의존해 순서가 결과를 바꾼다. DeepSeek 캡 500 안이라 100 까지 안전.
+DEFAULT_CLASSIFY_CONCURRENCY = 32
+MAX_CLASSIFY_CONCURRENCY = 100
 
 # canonical 뉴스의 언어 파티션 축(벤더 고정: bigkinds=ko·fmp=en). 분류 대상은 전 언어지만
 # 프롬프트가 한국어 제목 전제라 실질 판정은 ko 에서 나온다(엔진도 전 파티션을 읽었다).
@@ -156,22 +165,42 @@ def _complete_json(complete_fn, system: str, user: str) -> dict:
     raise RuntimeError(f"분류 LLM 호출이 재시도 후에도 실패: {last}")
 
 
-def classify_titles(complete_fn, rows: list[dict], registry: Registry,
+def _classify_batch(complete_fn, system: str, chunk: list[dict], registry: Registry,
                     entity_index: dict[str, str]) -> dict[str, dict]:
-    """article_id → 검증된 분류(EVENT + 해소 가능한 엔티티만)."""
+    """40건배치 1개 → {article_id: 검증된 분류}. 배치 로컬 dict 만 반환(공유상태 미접근)해
+    스레드에서 안전하게 돈다 — merge 는 호출부가 메인스레드에서 한다."""
+    items = [{"id": r["article_id"], "title": r["title"],
+              "tickers": [t for t in r["tickers"] if t in entity_index]}
+             for r in chunk]
+    allowed_by_id = {i["id"]: set(i["tickers"]) for i in items}
+    payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
+    out: dict[str, dict] = {}
+    for item in payload.get("items", []):
+        validated = _validate_classification(item, registry, entity_index, allowed_by_id)
+        if validated is not None:
+            out[validated["article_id"]] = validated
+    return out
+
+
+def classify_titles(complete_fn, rows: list[dict], registry: Registry,
+                    entity_index: dict[str, str],
+                    concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY) -> dict[str, dict]:
+    """article_id → 검증된 분류(EVENT + 해소 가능한 엔티티만).
+
+    배치별 LLM 콜을 병렬 실행하고(각 배치 독립·complete_fn 스레드안전), 결과 병합은 취합 뒤
+    메인스레드에서 한다 — 순차 실행과 결과 동일(article_id 는 배치 간 유일이라 순서 무관).
+    """
+    concurrency = max(1, min(concurrency, MAX_CLASSIFY_CONCURRENCY))
     system = _classify_system(registry)
+    batches = [rows[start:start + CLASSIFY_BATCH] for start in range(0, len(rows), CLASSIFY_BATCH)]
     results: dict[str, dict] = {}
-    for start in range(0, len(rows), CLASSIFY_BATCH):
-        chunk = rows[start:start + CLASSIFY_BATCH]
-        items = [{"id": r["article_id"], "title": r["title"],
-                  "tickers": [t for t in r["tickers"] if t in entity_index]}
-                 for r in chunk]
-        allowed_by_id = {i["id"]: set(i["tickers"]) for i in items}
-        payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
-        for item in payload.get("items", []):
-            validated = _validate_classification(item, registry, entity_index, allowed_by_id)
-            if validated is not None:
-                results[validated["article_id"]] = validated
+    if not batches:
+        return results
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(batches))) as pool:
+        for partial in pool.map(
+                lambda chunk: _classify_batch(complete_fn, system, chunk, registry, entity_index),
+                batches):
+            results.update(partial)  # 메인스레드 순차 병합(경합 없음)
     return results
 
 
@@ -589,6 +618,7 @@ def run(
     complete_fn,
     from_date: str | None = None,
     to_date: str | None = None,
+    concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY,
 ) -> int:
     """canonical 뉴스 → 분류 → event 계보 조립 → threading. 성공 0, 장애 시 비0.
 
@@ -623,7 +653,8 @@ def run(
                 already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 already_normalized += len(in_universe) - len(todo)
-                classifications = (classify_titles(complete_fn, todo, registry, entity_index)
+                classifications = (classify_titles(complete_fn, todo, registry, entity_index,
+                                                   concurrency=concurrency)
                                    if todo else {})
                 classified += len(classifications)
                 created = persist_normalization(conn, todo, classifications, date)
