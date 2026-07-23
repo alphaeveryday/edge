@@ -355,7 +355,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `assemble-events`(**직렬**, LoadAssertions 뒤 → analyze 앞, ALPHA-412, **events 세트**=LLM+DB) —
   분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
   계보 조립 → event_thread threading. 결정적 ID 산식·프롬프트는 엔진과 동일(정본), 창 미지정 =
-  오늘(KST) 하루. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028)
+  오늘(KST) 하루. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028). 제목 분류 LLM 콜은
+  배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은 `LLM_CONCURRENCY` env) — 단 threading 은
+  novelty 가 available_at 순서·prior 카운트에 의존해 **직렬** 유지다
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.

@@ -478,3 +478,62 @@ def test_run_logs_unknown_thread_for_unfillable_type(tmp_path, monkeypatch):
     assert link[1] is None and link[3] == "UNKNOWN" and "REPORTING_PERIOD" in link[6]
     log = _log(storage)
     assert log["events_created"] == 1 and log["threaded"] == 0 and log["unknown_thread"] == 1
+
+
+def test_classify_batches_run_concurrently_not_serialized(tmp_path):
+    """WHY: classify 배치 병렬화(ALPHA-520)가 실제 동시 실행돼야 의미가 있다 — ThreadPool 을
+    순차로 되돌리는 회귀는 런타임만 되돌리고 결과는 같아 값 검사로 안 잡힌다(Rule 9). 3배치가
+    barrier 에 동시 도달해야만 풀리게 해, 순차면 타임아웃→_complete_json RuntimeError 로 드러낸다.
+    """
+    import threading
+
+    from data_pipeline.events.ontology import load_registry
+    from data_pipeline.steps.assemble_events import CLASSIFY_BATCH, classify_titles
+
+    registry = load_registry()
+    entity_index = {"005930": "inst_SAMSUNG"}
+    n_batches = 3
+    rows = [{"article_id": f"a{i}", "title": f"제목{i}", "tickers": ["005930"]}
+            for i in range(n_batches * CLASSIFY_BATCH)]
+    barrier = threading.Barrier(n_batches, timeout=5)
+
+    def gated(system, user):
+        barrier.wait()  # 3배치가 동시에 도달해야 풀린다 — 순차면 타임아웃
+        payload = json.loads(user)
+        return json.dumps({"items": [
+            {"id": it["id"], "is_event": True, "event_type_code": _ETYPE, "predicate_code": _PRED,
+             "primary_ticker": "005930", "lifecycle_stage": "", "confidence": 0.9}
+            for it in payload["items"]]})
+
+    results = classify_titles(gated, rows, registry, entity_index, concurrency=n_batches)
+    assert len(results) == n_batches * CLASSIFY_BATCH  # 순차 회귀면 barrier 타임아웃→RuntimeError
+
+
+def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
+    """WHY: 배치별 결과를 취합 후 병합하므로 (1) 배치 하나라도 병합에서 누락되면 그 기사들이
+    사라지고 (2) 클로저가 배치를 잘못 잡으면 allowed_by_id 가 어긋나 엉뚱한 티커가 걸러진다.
+    티커를 배치 걸쳐 교차시키고 각 기사의 결과 엔티티가 자기 입력 티커와 맞는지로 둘 다 잠근다.
+    """
+    from data_pipeline.events.ontology import load_registry
+    from data_pipeline.steps.assemble_events import classify_titles
+
+    registry = load_registry()
+    entity_index = {"005930": "inst_SAMSUNG", "000660": "inst_HYNIX"}
+    n = 100
+    tickers = ["005930" if i % 2 == 0 else "000660" for i in range(n)]
+    rows = [{"article_id": f"a{i}", "title": f"제목{i}", "tickers": [tickers[i]]} for i in range(n)]
+
+    def echoing(system, user):
+        payload = json.loads(user)
+        return json.dumps({"items": [
+            {"id": it["id"], "is_event": True, "event_type_code": _ETYPE, "predicate_code": _PRED,
+             "primary_ticker": it["tickers"][0], "lifecycle_stage": "", "confidence": 0.9}
+            for it in payload["items"]]})
+
+    results = classify_titles(echoing, rows, registry, entity_index, concurrency=8)
+
+    assert len(results) == n  # 배치 누락 없음
+    for i in range(n):
+        cls = results[f"a{i}"]
+        assert cls["primary_ticker"] == tickers[i]  # 배치 격리: 자기 입력 티커로 해소
+        assert cls["entity_id"] == ("inst_SAMSUNG" if tickers[i] == "005930" else "inst_HYNIX")
