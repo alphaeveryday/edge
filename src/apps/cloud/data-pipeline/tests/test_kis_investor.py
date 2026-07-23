@@ -39,6 +39,7 @@ def _ok(rows: list[dict]) -> str:
 
 _EMPTY = json.dumps({"rt_cd": "0", "output2": []})
 _RATE = json.dumps({"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 거래건수 초과"})
+_BOUNDARY = json.dumps({"rt_cd": "2", "msg_cd": "OPSQ2001", "msg1": "TIME LIMIT 00:00 ~ 15:40"})
 _ERR = json.dumps({"rt_cd": "1", "msg_cd": "OPSQ0001", "msg1": "조회 오류"})
 _TOKEN = json.dumps({"access_token": "tok", "access_token_token_expired": "2026-07-07 00:00:00"})
 
@@ -176,6 +177,43 @@ def test_egw00201_retried_then_succeeds():
     src = _source({"005930": [_RATE, _ok([_row("20260703")]), _EMPTY]})
     records = list(src.fetch(["005930"]))
     assert [r["stck_bsop_date"] for r in records] == ["20260703"]
+
+
+def test_opsq2001_boundary_retried_then_succeeds():
+    # WHY: EOD 서빙경계(OPSQ2001, "TIME LIMIT 00:00 ~ 15:40")는 장마감 직후 ~1분 블랙아웃 후
+    #      자가해소한다(ALPHA-518). 데이터 결손이 아니라 경계 레이스라 재시도로 복구해야 —
+    #      첫 스케줄 런이 이걸 부분실패로 판정해 전체 FAILED 났다. 격리로 끝내면 안 된다.
+    src = _source({"005930": [_BOUNDARY, _ok([_row("20260703")]), _EMPTY]})
+    records = list(src.fetch(["005930"]))
+    assert [r["stck_bsop_date"] for r in records] == ["20260703"]
+    assert src.fetch_failures == []  # 재시도로 복구 → 격리 기록 없음
+
+
+def test_egw_and_opsq_have_independent_retry_budgets():
+    # WHY: 초당한도(EGW00201)와 서빙경계(OPSQ2001)는 성격이 달라 재시도 예산이 독립이어야 —
+    #      공유 카운터면 EGW 재시도가 attempt 를 소비해 뒤이은 OPSQ 가 예산 부족으로 조기 격리되고,
+    #      경계는 자가해소하는데 EGW 노이즈 때문에 종목을 잃어 이 티켓의 취지가 깨진다(ALPHA-518).
+    #      최악 시퀀스(EGW 예산 전량 + OPSQ 예산 전량 소비 뒤 다음 콜에서 성공)를 상수로 구성한다 —
+    #      이건 두 가지를 동시에 고정한다: (1) 두 예산의 독립성(공유 카운터면 OPSQ 가 조기 소진돼
+    #      격리) (2) 루프 상한이 max 가 아니라 두 예산의 합이라는 것(max 면 마지막 성공 콜 전에 종료).
+    egw_budget = kis_investor.MAX_RATE_RETRY - 1  # EGW 는 rate<MAX-1 이라 MAX-1 회 재시도
+    opsq_budget = kis_investor.MAX_BOUNDARY_RETRY  # OPSQ 는 boundary<MAX 라 MAX 회 재시도
+    pages = [_RATE] * egw_budget + [_BOUNDARY] * opsq_budget + [_ok([_row("20260703")]), _EMPTY]
+    src = _source({"005930": pages})
+    records = list(src.fetch(["005930"]))
+    assert [r["stck_bsop_date"] for r in records] == ["20260703"]
+    assert src.fetch_failures == []
+
+
+def test_opsq2001_boundary_exhausted_isolated_per_symbol():
+    # WHY: 백오프가 소진되도록 경계가 안 풀리면(비정상) 조용한 성공이 아니라 심볼 단위 실패로
+    #      기록돼 런을 partial 로 드러내야 한다(fail-loud) — 다른 심볼은 계속 수집.
+    #      예산+1 회 연속 경계면 재시도를 다 쓰고도 성공 못 해 격리된다.
+    boundary_pages = [_BOUNDARY] * (kis_investor.MAX_BOUNDARY_RETRY + 1)
+    src = _source({"005930": boundary_pages, "000660": [_ok([_row("20260703")])]})
+    records = list(src.fetch(["005930", "000660"]))
+    assert [r["our_ticker"] for r in records] == ["000660"]
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
 
 
 def test_kis_error_code_isolated_per_symbol():
