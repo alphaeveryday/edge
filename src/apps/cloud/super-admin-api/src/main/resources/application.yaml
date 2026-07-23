@@ -8,6 +8,9 @@ server:
         # secure 쿠키·표준 CSRF 토큰이 추가된다(ALPHA-474).
         same-site: strict
         http-only: true
+        # 공개 엣지(HTTPS ALB)라 기본 Secure — 평문 HTTP 요청에 운영자 세션 쿠키가
+        # 실리지 않게 한다. 로컬(http)은 compose/env 가 false 로 덮는다.
+        secure: ${ADMIN_SESSION_COOKIE_SECURE:true}
 
 spring:
   application:

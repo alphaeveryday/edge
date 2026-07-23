@@ -35,7 +35,9 @@ public class TenantMockStore {
 			}
 			arr.add(v);
 		}
-		return arr;
+		// 불변으로 봉인 — list() 가 record 를 그대로 내보내므로 내부 리스트가 밖에서
+		// 변조되면 singleton 스토어가 오염된다(구 UI mock 의 복사 방어와 동등).
+		return List.copyOf(arr);
 	}
 
 	private static List<Integer> scaled(List<Integer> source, double factor) {

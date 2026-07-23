@@ -9,6 +9,14 @@ import org.springframework.http.HttpMethod;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+
+import java.lang.reflect.Method;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -92,37 +100,69 @@ class AdminAuthFilterTest {
 				.andExpect(status().isUnauthorized());
 	}
 
+	/**
+	 * RULES 와 실제 컨트롤러 표면의 1:1 을 검증한다 — 표면을 손으로 복제하지 않고
+	 * 컨트롤러 애노테이션에서 열거하므로, 새 엔드포인트를 RULES 등록 없이 추가하면
+	 * 이 테스트가 깨진다(등록 누락 = 배포돼도 403 으로 닫히는 회귀를 여기서 잡는다).
+	 * 새 컨트롤러 클래스는 CONTROLLERS 에 더한다.
+	 */
 	@Test
-	void 전_표면이_RULES_에_등록돼_있다() throws Exception {
-		// RULES 와 실제 컨트롤러 표면의 1:1 을 표면 전수로 검증한다 — 여기 없는
-		// 표면이 컨트롤러에 생기면(또는 메서드·경로가 어긋나면) 그 API 는 배포돼도
-		// 403 으로 닫힌다. 이 목록은 super-admin-console.md 화면 표면의 전수다.
-		String[][] surfaces = {
-				{"POST", "/api/v1/auth/logout"},
-				{"GET", "/api/v1/auth/session"},
-				{"GET", "/api/v1/tenants"},
-				{"POST", "/api/v1/tenants"},
-				{"GET", "/api/v1/sources/report"},
-				{"GET", "/api/v1/analyses"},
-				{"PATCH", "/api/v1/analyses/a1/result"},
-				{"POST", "/api/v1/analyses/a1/exclude"},
-				{"POST", "/api/v1/analyses/a1/restore"},
-				{"GET", "/api/v1/session"},
-				{"PATCH", "/api/v1/session/profile"},
-		};
-		for (String[] surface : surfaces) {
-			// 인증된 요청이 401/403 없이 필터를 통과하면 등록된 것이다 — 이 셋업엔
-			// TenantController 만 있어 그 밖 표면은 404 가 곧 통과의 증거다.
-			int status = mvc.perform(request(HttpMethod.valueOf(surface[0]), surface[1])
-							.session(sessionOf(OPERATOR)))
-					.andReturn().getResponse().getStatus();
-			assertThat(status)
-					.as("%s %s 는 RULES 에 등록돼 필터를 통과해야 한다", surface[0], surface[1])
-					.isNotIn(401, 403);
-			// 미인증은 전 표면 401 — fail-closed 의 반대편 절반.
-			mvc.perform(request(HttpMethod.valueOf(surface[0]), surface[1]))
-					.andExpect(status().isUnauthorized());
+	void 전_컨트롤러_표면이_RULES_에_등록돼_있다() throws Exception {
+		List<Class<?>> controllers = List.of(
+				com.edge.superadmin.controller.AuthController.class,
+				com.edge.superadmin.controller.TenantController.class,
+				com.edge.superadmin.controller.SourceController.class,
+				com.edge.superadmin.controller.AnalysisController.class,
+				com.edge.superadmin.controller.AdminSessionController.class);
+
+		int surfaceCount = 0;
+		for (Class<?> controller : controllers) {
+			for (Method handler : controller.getDeclaredMethods()) {
+				for (Map.Entry<String, String> mapping : mappingsOf(handler).entrySet()) {
+					surfaceCount++;
+					String httpMethod = mapping.getKey();
+					// 경로 변수는 임의 세그먼트로 치환 — RULES 의 [^/]+ 와 대응.
+					String path = mapping.getValue().replaceAll("\\{[^}]+}", "x1");
+					boolean isPublicLogin = "POST".equals(httpMethod)
+							&& "/api/v1/auth/login".equals(path);
+
+					// 인증된 요청이 401/403 없이 필터를 통과하면 등록된 것이다 — 이
+					// 셋업엔 TenantController 만 있어 그 밖 표면은 404 가 통과의 증거다.
+					int status = mvc.perform(request(HttpMethod.valueOf(httpMethod), path)
+									.session(sessionOf(OPERATOR)))
+							.andReturn().getResponse().getStatus();
+					assertThat(status)
+							.as("%s %s 는 RULES 에 등록돼 필터를 통과해야 한다", httpMethod, path)
+							.isNotIn(401, 403);
+
+					// 미인증은 login 을 제외한 전 표면 401 — fail-closed 의 반대편 절반.
+					if (!isPublicLogin) {
+						mvc.perform(request(HttpMethod.valueOf(httpMethod), path))
+								.andExpect(status().isUnauthorized());
+					}
+				}
+			}
 		}
+		// 열거 자체가 비어 있으면(애노테이션 스캔 오류) 테스트가 헛돌았다는 뜻이다.
+		assertThat(surfaceCount).isGreaterThanOrEqualTo(12);
+	}
+
+	/** 핸들러 메서드의 (HTTP 메서드 → 경로) 매핑 — 이 코드베이스가 쓰는 3종만 스캔. */
+	private Map<String, String> mappingsOf(Method handler) {
+		Map<String, String> mappings = new LinkedHashMap<>();
+		GetMapping get = handler.getAnnotation(GetMapping.class);
+		if (get != null) {
+			mappings.put("GET", get.value()[0]);
+		}
+		PostMapping post = handler.getAnnotation(PostMapping.class);
+		if (post != null) {
+			mappings.put("POST", post.value()[0]);
+		}
+		PatchMapping patch = handler.getAnnotation(PatchMapping.class);
+		if (patch != null) {
+			mappings.put("PATCH", patch.value()[0]);
+		}
+		return mappings;
 	}
 
 	@Test

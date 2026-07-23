@@ -95,6 +95,9 @@ services:
       # 로컬 스택 전용 데모 운영자 비밀번호 — application.yaml 은 기본값을 커밋하지
       # 않는다(공개 엣지 fail-closed). super-admin-ui dev 자동 로그인 기본값과 짝.
       ADMIN_BOOTSTRAP_OPERATOR_PASSWORD: demo-operator-1
+      # 로컬은 http 라 Secure 쿠키(기본 true)를 끈다 — 켜두면 브라우저가 세션
+      # 쿠키를 저장하지 않아 로그인이 조용히 풀린다.
+      ADMIN_SESSION_COOKIE_SECURE: "false"
     ports:
       - "18082:8080"
 
