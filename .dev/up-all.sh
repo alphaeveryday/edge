@@ -60,7 +60,9 @@ echo "▶ 백엔드 기동 — docker compose up --build -d (첫 실행은 gradl
 # 여기서 기다렸다 실패를 드러낸다(타임아웃 시 로그 안내 후 종료).
 wait_health() {
   local name="$1" url="$2" deadline=$((SECONDS + 180))
-  until curl -fsS "$url" > /dev/null 2>&1; do
+  # --max-time: 연결은 되는데 핸들러가 매달리면 curl 이 무한 블록해 180초
+  # 데드라인이 재검사되지 않는다 — 시도당 5초로 잘라 fail-loud 를 지킨다.
+  until curl -fsS --max-time 5 "$url" > /dev/null 2>&1; do
     if ((SECONDS >= deadline)); then
       echo "✗ $name 이 180초 안에 뜨지 않았다 — 'docker compose logs $name' 으로 원인 확인" >&2
       exit 1
