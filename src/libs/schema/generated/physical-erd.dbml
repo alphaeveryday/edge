@@ -194,6 +194,10 @@ Table "event_argument" {
   "role_code" varchar(80) [not null]
   "entity_id" text [not null]
   "confidence" float8
+  "slot" varchar(10)
+  "mention_text" text
+  "entity_kind" varchar(30)
+  "group_ord" smallint
 
   indexes {
     ("source_event_id", "role_code", "entity_id") [pk]
@@ -207,6 +211,24 @@ Table "event_evidence" {
   "evidence_type" varchar(30) [not null]
   "evidence_text" text
   "link_confidence" float8
+}
+
+Table "event_measure" {
+  "source_event_id" text [not null]
+  "measure_ord" smallint [not null]
+  "role_code" varchar(80) [not null]
+  "surface" text
+  "value" numeric(30,8)
+  "unit" varchar(30)
+  "basis" varchar(10) [not null]
+  "value_source" varchar(12) [not null]
+  "parse_flag" varchar(30)
+  "group_ord" smallint
+  "dart_rcept_no" varchar(20)
+
+  indexes {
+    ("source_event_id", "measure_ord") [pk]
+  }
 }
 
 Table "event_price_observation" {
@@ -620,6 +642,9 @@ Table "source_event" {
   "lifecycle_stage" varchar(50)
   "event_status" varchar(20) [not null]
   "available_at" timestamptz [not null]
+  "predicate_code" varchar(80)
+  "confidence_level" varchar(10)
+  "completeness" varchar(10)
 }
 
 Table "supply_contract_fact" {
@@ -725,6 +750,7 @@ Ref: "event_argument"."entity_id" > "entity"."entity_id"
 Ref: "event_argument"."source_event_id" > "source_event"."source_event_id"
 Ref: "event_evidence"."assertion_id" > "document_assertion"."assertion_id"
 Ref: "event_evidence"."source_event_id" > "source_event"."source_event_id"
+Ref: "event_measure"."source_event_id" > "source_event"."source_event_id"
 Ref: "event_price_observation".("source_event_id", "anchor_evidence_id") > "event_evidence".("source_event_id", "evidence_id")
 Ref: "event_price_observation"."benchmark_series_id" > "market_series"."market_series_id"
 Ref: "event_price_observation"."source_event_id" > "source_event"."source_event_id"
