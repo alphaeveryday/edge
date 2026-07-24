@@ -21,6 +21,7 @@ on:
       - "src/apps/cloud/data-pipeline/**"
       - "src/pyproject.toml"
       - "src/uv.lock"
+      - "src/.dockerignore"   # 이미지 컨텍스트 규칙 변경도 스모크 대상(deploy-* paths 와 일치)
       - ".github/workflows/test-python.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다.
