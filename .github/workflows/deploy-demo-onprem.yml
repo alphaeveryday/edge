@@ -1,0 +1,164 @@
+# 데모 온프렘 박스 배포 CD — 이미지·compose·MTS UI 를 한 번에(ALPHA-542).
+#
+# 세 갈래(ADR-0033 의 인프라/런타임 분리 원칙):
+#   images  — 온프렘 4종 + mock-broker 를 amd64 로 빌드해 ECR push(GitHub 러너=amd64 네이티브).
+#   compose — 번들(compose+migrations)을 base64 인라인으로 SSM Run Command 에 실어 박스에서
+#             docker compose up(재배포 시 flyway force-recreate 로 스키마 재적용). 박스는 태그로 타깃.
+#   mts     — demo/mts-ai-tab 정적을 MTS S3 에 sync + CloudFront 무효화(빌드 없음 — deploy-ui.yml 변형).
+#
+# OIDC 신뢰 = dev 브랜치. 역할·리소스는 데모 전용(envs/demo-onprem/deploy-role.tf), repo vars 로 주입.
+# 트리거는 수동(dispatch) — 데모 기동은 의도적. (push:dev 자동은 온프렘 앱 변경마다 재빌드라 보류.)
+# 선행: terraform apply(envs/demo-onprem) 로 역할·박스 존재 + repo vars 설정
+#   AWS_DEMO_DEPLOY_ROLE_ARN·DEMO_MTS_BUCKET·DEMO_MTS_DISTRIBUTION_ID (= terraform output).
+name: deploy-demo-onprem
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  images:
+    name: build ${{ matrix.svc }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { svc: publication-api, dockerfile: src/apps/onprem/publication-api/Dockerfile, context: src }
+          - { svc: screening-worker, dockerfile: src/apps/onprem/screening-worker/Dockerfile, context: src }
+          - { svc: intake, dockerfile: src/apps/onprem/intake/Dockerfile, context: src }
+          - { svc: sync-agent, dockerfile: src/apps/onprem/sync-agent/Dockerfile, context: src }
+          - { svc: mock-broker, dockerfile: demo/mock-broker/Dockerfile, context: demo }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEMO_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SVC: ${{ matrix.svc }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CONTEXT: ${{ matrix.context }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/edge/${SVC}:${TAG}"
+          # 러너가 amd64 라 정본 멀티스테이지 Dockerfile 을 네이티브로 빌드(로컬 에뮬레이션과 달리 빠름).
+          docker build --platform linux/amd64 -f "${DOCKERFILE}" -t "${image}" "${CONTEXT}"
+          docker push "${image}"
+          echo "pushed ${image}"
+
+  compose:
+    name: deploy compose (SSM)
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEMO_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Deploy onprem stack to box via SSM
+        env:
+          REGION: ${{ vars.AWS_REGION }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # 번들 = compose + migrations-onprem(옆에 놓여 flyway 가 마운트). base64 인라인 → 박스 S3 권한 불필요.
+          stage="$(mktemp -d)"
+          cp demo/onprem/docker-compose.yml "${stage}/"
+          cp -r src/libs/schema/migrations-onprem "${stage}/migrations-onprem"
+          bundle="$(tar czf - -C "${stage}" . | base64 -w0)"
+
+          # 박스에서 실행할 스크립트. workflow 변수(${...})는 여기서 확장, \$(...) 는 박스에서 실행.
+          box_script="$(cat <<BOX
+          set -e
+          mkdir -p /opt/edge-onprem && cd /opt/edge-onprem
+          echo '${bundle}' | base64 -d | tar xz
+          [ "\$(ls migrations-onprem/*.sql 2>/dev/null | wc -l)" -gt 0 ] || { echo 'ERROR: migrations 번들 없음'; exit 1; }
+          aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${REGISTRY}
+          # 재배포 스키마 재적용: flyway 를 강제 재생성(one-shot·불변 이미지라 안 하면 기존 컨테이너 재사용).
+          IMAGE_TAG=${TAG} docker compose up -d --force-recreate flyway-onprem
+          IMAGE_TAG=${TAG} docker compose up -d
+          sleep 20
+          docker compose ps
+          BOX
+          )"
+
+          python3 -c 'import json,sys; print(json.dumps({"commands":[sys.stdin.read()]}))' <<<"${box_script}" > params.json
+          cid="$(aws ssm send-command --region "${REGION}" \
+            --document-name AWS-RunShellScript \
+            --targets Key=tag:edge:role,Values=demo-onprem \
+            --comment "deploy-demo-onprem ${TAG}" \
+            --parameters file://params.json \
+            --query 'Command.CommandId' --output text)"
+          echo "command id: ${cid}"
+
+          # 타깃 인스턴스 id 확보(태그 타깃이라 미리 모름) — 등록될 때까지 잠깐 대기.
+          iid=""
+          for i in $(seq 1 10); do
+            iid="$(aws ssm list-command-invocations --command-id "${cid}" --region "${REGION}" \
+              --query 'CommandInvocations[0].InstanceId' --output text 2>/dev/null || true)"
+            [ -n "${iid}" ] && [ "${iid}" != "None" ] && break
+            sleep 3
+          done
+          [ -n "${iid}" ] && [ "${iid}" != "None" ] || { echo "::error::타깃 인스턴스 없음(박스 태그 edge:role=demo-onprem 확인)"; exit 1; }
+          echo "instance: ${iid}"
+
+          for i in $(seq 1 40); do
+            st="$(aws ssm get-command-invocation --command-id "${cid}" --instance-id "${iid}" --region "${REGION}" --query 'Status' --output text 2>/dev/null || echo Pending)"
+            echo "poll ${i}: ${st}"
+            case "${st}" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut)
+                echo "::error::SSM 배포 ${st}"
+                aws ssm get-command-invocation --command-id "${cid}" --instance-id "${iid}" --region "${REGION}" --query 'StandardErrorContent' --output text
+                exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "=== 박스 stdout ==="
+          aws ssm get-command-invocation --command-id "${cid}" --instance-id "${iid}" --region "${REGION}" --query 'StandardOutputContent' --output text
+          # 폴링이 Success 없이 소진되면(계속 InProgress/Delayed) 실패로 끝낸다 — 미완 배포를 성공으로 보고 금지.
+          [ "${st}" = "Success" ] || { echo "::error::SSM 배포가 제한 시간(≈400s) 내 완료되지 않음 (마지막 상태: ${st})"; exit 1; }
+
+  mts:
+    name: deploy MTS UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEMO_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Sync MTS static & invalidate CloudFront
+        env:
+          BUCKET: ${{ vars.DEMO_MTS_BUCKET }}
+          DISTRIBUTION_ID: ${{ vars.DEMO_MTS_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          # MTS 는 빌드 없는 정적(demo/mts-ai-tab). README 제외하고 버킷과 일치시킨다(--delete).
+          aws s3 sync demo/mts-ai-tab "s3://${BUCKET}" --delete --exclude README.md
+          id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \
+            --paths '/*' --query 'Invalidation.Id' --output text)"
+          echo "무효화 ${id} → 완료 대기"
+          aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${id}"
+          echo "MTS 배포 완료: s3://${BUCKET}"
