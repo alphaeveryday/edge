@@ -35,18 +35,21 @@ class AdminSessionControllerTest {
 	void 세션은_운영자_컨텍스트를_포함한다() throws Exception {
 		mvc.perform(get("/api/v1/session"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.name").value("EDGE 운영팀"))
-				.andExpect(jsonPath("$.role").value("Owner"))
-				.andExpect(jsonPath("$.initials").value("OP"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.name").value("EDGE 운영팀"))
+				.andExpect(jsonPath("$.result.role").value("Owner"))
+				.andExpect(jsonPath("$.result.initials").value("OP"));
 	}
 
 	@Test
 	void 표시_이름_변경은_다음_조회에_반영된다() throws Exception {
 		mvc.perform(patch("/api/v1/session/profile")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"EDGE Ops\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/session"))
-				.andExpect(jsonPath("$.name").value("EDGE Ops"));
+				.andExpect(jsonPath("$.result.name").value("EDGE Ops"));
 	}
 
 	@Test

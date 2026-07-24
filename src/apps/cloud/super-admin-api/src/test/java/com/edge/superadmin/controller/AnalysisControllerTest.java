@@ -36,12 +36,14 @@ class AnalysisControllerTest {
 	void 목록은_시안_목데이터_형상을_반환한다() throws Exception {
 		mvc.perform(get("/api/v1/analyses"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.length()").value(12))
-				.andExpect(jsonPath("$[0].id").value("a1"))
-				.andExpect(jsonPath("$[0].market").value("KRX"))
-				.andExpect(jsonPath("$[0].corrected").value(false))
-				.andExpect(jsonPath("$[0].evidence.length()").value(3))
-				.andExpect(jsonPath("$[11].status").value("EXCLUDED"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.length()").value(12))
+				.andExpect(jsonPath("$.result[0].id").value("a1"))
+				.andExpect(jsonPath("$.result[0].market").value("KRX"))
+				.andExpect(jsonPath("$.result[0].corrected").value(false))
+				.andExpect(jsonPath("$.result[0].evidence.length()").value(3))
+				.andExpect(jsonPath("$.result[11].status").value("EXCLUDED"));
 	}
 
 	@Test
@@ -49,11 +51,12 @@ class AnalysisControllerTest {
 		mvc.perform(patch("/api/v1/analyses/a1/result")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"result\":\"정정된 분석 결과\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/analyses"))
-				.andExpect(jsonPath("$[0].result").value("정정된 분석 결과"))
-				.andExpect(jsonPath("$[0].corrected").value(true));
+				.andExpect(jsonPath("$.result[0].result").value("정정된 분석 결과"))
+				.andExpect(jsonPath("$.result[0].corrected").value(true));
 	}
 
 	@Test
@@ -69,14 +72,16 @@ class AnalysisControllerTest {
 	void 제외_복원은_제외_전_상태로_되돌린다() throws Exception {
 		// a4 는 PENDING — 복원이 COMPLETED 로 둔갑시키면 미완료 건이 완료로 보인다.
 		mvc.perform(post("/api/v1/analyses/a4/exclude"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/analyses"))
-				.andExpect(jsonPath("$[3].status").value("EXCLUDED"));
+				.andExpect(jsonPath("$.result[3].status").value("EXCLUDED"));
 
 		mvc.perform(post("/api/v1/analyses/a4/restore"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/analyses"))
-				.andExpect(jsonPath("$[3].status").value("PENDING"));
+				.andExpect(jsonPath("$.result[3].status").value("PENDING"));
 	}
 
 	@Test

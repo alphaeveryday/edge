@@ -1,8 +1,8 @@
 package com.edge.superadmin.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.mock.AdminSessionMockStore.OperatorProfile;
 import com.edge.superadmin.service.AdminSessionService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,13 +26,13 @@ public class AdminSessionController {
 	}
 
 	@GetMapping("/api/v1/session")
-	public OperatorProfile current() {
-		return adminSessionService.current();
+	public ApiResponse<OperatorProfile> current() {
+		return ApiResponse.onSuccess(adminSessionService.current());
 	}
 
 	@PatchMapping("/api/v1/session/profile")
-	public ResponseEntity<Void> updateProfile(@RequestBody(required = false) ProfileRequest request) {
+	public ApiResponse<Void> updateProfile(@RequestBody(required = false) ProfileRequest request) {
 		adminSessionService.updateDisplayName(request == null ? null : request.name());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }

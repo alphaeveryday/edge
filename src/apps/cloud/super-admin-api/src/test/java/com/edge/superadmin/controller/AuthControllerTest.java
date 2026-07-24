@@ -46,8 +46,10 @@ class AuthControllerTest {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"email\":\"operator@edge.local\",\"password\":\"" + PASSWORD + "\"}"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.email").value("operator@edge.local"))
-				.andExpect(jsonPath("$.name").value("EDGE 운영팀"))
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.email").value("operator@edge.local"))
+				.andExpect(jsonPath("$.result.name").value("EDGE 운영팀"))
 				.andReturn();
 
 		Object attribute = result.getRequest().getSession(false)
@@ -92,7 +94,8 @@ class AuthControllerTest {
 				new SessionOperator("operator@edge.local", "EDGE 운영팀"));
 
 		mvc.perform(post("/api/v1/auth/logout").session(session))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		assertThat(session.isInvalid()).isTrue();
 	}
 
@@ -104,6 +107,7 @@ class AuthControllerTest {
 
 		mvc.perform(get("/api/v1/auth/session").session(session))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.email").value("operator@edge.local"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.result.email").value("operator@edge.local"));
 	}
 }

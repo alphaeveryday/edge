@@ -34,12 +34,14 @@ class TenantControllerTest {
 	void 목록은_시안_목데이터_형상을_반환한다() throws Exception {
 		mvc.perform(get("/api/v1/tenants"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.length()").value(8))
-				.andExpect(jsonPath("$[0].id").value("t1"))
-				.andExpect(jsonPath("$[0].name").value("미래에셋증권"))
-				.andExpect(jsonPath("$[0].status").value("ACTIVE"))
-				.andExpect(jsonPath("$[0].bars.length()").value(24))
-				.andExpect(jsonPath("$[2].status").value("SYNC_DELAYED"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.length()").value(8))
+				.andExpect(jsonPath("$.result[0].id").value("t1"))
+				.andExpect(jsonPath("$.result[0].name").value("미래에셋증권"))
+				.andExpect(jsonPath("$.result[0].status").value("ACTIVE"))
+				.andExpect(jsonPath("$.result[0].bars.length()").value(24))
+				.andExpect(jsonPath("$.result[2].status").value("SYNC_DELAYED"));
 	}
 
 	@Test
@@ -48,14 +50,15 @@ class TenantControllerTest {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"name\":\"대신증권\",\"env\":\"Dev\",\"admin\":\"홍길동\","
 								+ "\"email\":\"gd.hong@daishin.com\",\"memo\":\"PoC\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/tenants"))
-				.andExpect(jsonPath("$.length()").value(9))
-				.andExpect(jsonPath("$[0].name").value("대신증권"))
-				.andExpect(jsonPath("$[0].status").value("ONBOARDING"))
-				.andExpect(jsonPath("$[0].domain").value("daishin.com"))
-				.andExpect(jsonPath("$[0].lastSync").value("—"));
+				.andExpect(jsonPath("$.result.length()").value(9))
+				.andExpect(jsonPath("$.result[0].name").value("대신증권"))
+				.andExpect(jsonPath("$.result[0].status").value("ONBOARDING"))
+				.andExpect(jsonPath("$.result[0].domain").value("daishin.com"))
+				.andExpect(jsonPath("$.result[0].lastSync").value("—"));
 	}
 
 	@Test

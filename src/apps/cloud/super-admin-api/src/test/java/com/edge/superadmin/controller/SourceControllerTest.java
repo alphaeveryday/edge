@@ -30,10 +30,12 @@ class SourceControllerTest {
 	void 수집_리포트는_소스_5종을_반환한다() throws Exception {
 		mvc.perform(get("/api/v1/sources/report"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.checkedAt").value("2026-07-12 10:20 KST"))
-				.andExpect(jsonPath("$.sources.length()").value(5))
-				.andExpect(jsonPath("$.sources[0].name").value("뉴스"))
-				.andExpect(jsonPath("$.sources[0].status").value("COLLECTING"))
-				.andExpect(jsonPath("$.sources[3].status").value("DELAYED"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.checkedAt").value("2026-07-12 10:20 KST"))
+				.andExpect(jsonPath("$.result.sources.length()").value(5))
+				.andExpect(jsonPath("$.result.sources[0].name").value("뉴스"))
+				.andExpect(jsonPath("$.result.sources[0].status").value("COLLECTING"))
+				.andExpect(jsonPath("$.result.sources[3].status").value("DELAYED"));
 	}
 }
