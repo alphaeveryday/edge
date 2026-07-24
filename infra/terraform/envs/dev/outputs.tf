@@ -25,12 +25,6 @@ output "console_url" {
   value = module.tenant_console_site.url
 }
 
-# ── news-pipeline ────────────────────────────────────────
-output "pipeline_state_machine_arn" {
-  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값>"
-  value       = module.pipeline.state_machine_arn
-}
-
 # ── data-pipeline (raw → normalize → feature → analyze) ─
 output "data_pipeline_state_machine_arn" {
   description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> --input '{\"run_id\":\"manual-...\"}'"

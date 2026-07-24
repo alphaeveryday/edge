@@ -1,20 +1,10 @@
-# news-pipeline — Step Functions 로 오케스트레이션되는 일일 배치 파이프라인.
-# CDK(news-pipeline-dev-*) 를 Terraform 으로 이관하며, VPC·RDS 는 edge 스택으로 통합(A안).
-# CDK 스택은 그대로 두고 이 스택은 별도 이름(edge-dev-pipeline-*)으로 병렬 생성한다 —
-# 검증 후 스케줄러를 켜고(schedule_state=ENABLED) CDK 를 걷어내는 순서.
+# pipeline — 구 news-pipeline SFN 의 존치 자원(데이터 레이크)만 남긴 모듈.
 #
-# 파이프라인: collect → alias_map → persist → fmp_price_collect → fmp_financial_collect
-#           → us_news_ingest → compute_ff5 → analyze_daily(추론, 큰 태스크) → Succeed
-# 각 스텝은 ecs:runTask.sync 로 Fargate task 를 동기 실행. 실패 시 SNS 알림 → Fail.
+# 원래는 Step Functions 로 오케스트레이션하던 일일 배치(CDK→edge 이관)였으나, 현행 파이프라인이
+# edge-dev-data-pipeline(modules/data-pipeline)으로 전환되며 이 SFN 은 죽었다 — ALPHA-549 에서
+# SFN·스케줄러·SNS·ECS task-def·fmp/openai 시크릿·IAM 을 모두 걷어냈다.
+# 남은 유일한 live 자원은 lake S3 버킷: data-pipeline 이 raw/canonical/curated 를 담는 곳이라
+# 모듈째 삭제하지 못하고 이 껍데기만 존치한다(레이크 소유권 이관은 별건).
 #
 # 파일 구성:
-#   storage.tf       S3(single lake bucket) · API 키 시크릿
-#   iam.tf           실행/태스크/상태머신/스케줄러 IAM
-#   tasks.tf         로그 · SG · 태스크 정의 2종(pipeline/inference)
-#   statemachine.tf  SNS · Step Functions 정의/상태머신 · EventBridge Scheduler
-
-data "aws_caller_identity" "current" {}
-
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-}
+#   storage.tf  S3(single lake bucket) + 걷어낸 레거시 자원의 removed 블록

@@ -61,17 +61,6 @@ variable "github_oidc_provider_arn" {
   default     = null
 }
 
-variable "pipeline_image" {
-  description = "news-pipeline 배치 이미지 URI(:태그 포함). foundation 의 edge/pipeline 에 push 후 그 URI."
-  type        = string
-}
-
-variable "pipeline_contact_email" {
-  description = "파이프라인이 외부 뉴스 소스 접근 시 밝히는 연락 이메일"
-  type        = string
-  default     = "asm.alphaeveryday@gmail.com"
-}
-
 # ⚠️ null 이면 SNS 구독 리소스가 count=0 으로 **아예 안 생겨**, NotifyFailure·CloudWatch 알람이
 # 구독자 없는 토픽에 publish 한다 — 즉 실패가 아무 데도 안 알려진다. 여기 주소가 있어야
 # data-pipeline 의 실패 통보가 실제로 사람에게 닿는다(ALPHA-389 에서 라이브 실측으로 발견:
