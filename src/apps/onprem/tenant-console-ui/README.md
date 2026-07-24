@@ -48,6 +48,8 @@ UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 A
 
 - 페이지/컴포넌트는 repository 를 직접 import 하지 않는다. 도메인 hook(예: `useExplanations`)만 의존한다.
 - 공통 fetch 래퍼는 [`src/api/client.ts`](src/api/client.ts) (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증).
+  tenant-console-api 성공 응답은 공통 봉투(`ApiResponse` — `{isSuccess,code,message,result}`)라, 래퍼가
+  `.result` 를 중앙에서 벗겨 반환한다 — 도메인별 repository·mock 은 봉투를 알지 못한다(계약 불변). ALPHA-522.
 - hook 은 **TanStack Query** 기반 — mutation 성공 시 해당 도메인 쿼리를 invalidate 해 화면이 갱신된다.
 
 ### 도메인 구조 (`src/domains/<domain>/`)
