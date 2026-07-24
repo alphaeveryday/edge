@@ -201,6 +201,31 @@ def test_launch_unconfirmed_when_planning_run_has_no_sfn_evidence():
     assert len(db.open_issues(states.ISSUE_LAUNCH_UNCONFIRMED)) == 1
 
 
+def test_reconcile_does_not_overwrite_planner_launch_conflict():
+    """Planner 가 낸 LAUNCH_CONFLICT 를 reconcile 이 뒤엎지 않는다 — 다른 실행 history 채택 금지."""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    db.runs[_RUN_KEY]["launch_status"] = states.LAUNCH_CONFLICT
+    summary = _reconcile(db)
+    assert summary.get("launch_conflict") is True
+    assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_MISSED  # 판정 안 함
+
+
+def test_reconcile_rejects_foreign_execution_by_input_hash():
+    """locator ARN 에 다른 입력의 실행이 있으면(해시 불일치) 증거를 채택하지 않고 CONFLICT."""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1", "eligible_at": _OLD,
+                "deadline_at": _PAST}])
+    db.runs[_RUN_KEY]["input_hash"] = "OUR_HASH"      # sfn_execution_arn 은 None(확정 전)
+    sfn = FakeSfn(describe={"input": json.dumps({"mode": "backfill"}), "status": "RUNNING"})
+    summary = reconcile_run(_ledger(db), run_key=_RUN_KEY, now=_NOW, sfn_client=sfn,
+                            ecs_client=FakeEcs())
+    assert summary.get("launch_conflict") is True
+    assert len(db.open_issues(states.ISSUE_LAUNCH_CONFLICT)) == 1
+    assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_MISSED
+
+
 def test_planner_missing_when_slot_has_no_run():
     """시나리오 19 — schedule 상 있어야 할 run_key 부재 → PLANNER_MISSING, 생기면 RESOLVE."""
     db = FakeOpsDB()

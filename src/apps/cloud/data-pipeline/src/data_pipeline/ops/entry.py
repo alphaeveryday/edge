@@ -171,8 +171,9 @@ def reconcile_cli(settings) -> int:
         if run_key is None:
             logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
             return 0
-        # 예정+grace 가 지난 슬롯만 결측으로 본다(아직 Planner 가 뜰 시간이면 거짓경보 방지).
-        if override or (due and due[1]):
+        # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다. override 는 특정 런을 reconcile 하려는
+        # 수동 지정이라(미래 슬롯일 수 있다) 결측 판정 대상이 아니다(edge-review).
+        if not override and due and due[1]:
             reconciler.detect_planner_missing(ledger, expected_run_keys=[run_key])
         summary = reconciler.reconcile_run(ledger, run_key=run_key, cluster_arn=cluster_arn, now=now)
         logger.info("reconcile: %s", summary)

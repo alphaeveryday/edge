@@ -123,7 +123,7 @@ class _Cursor:
             return
         row = {"pipeline_run_id": p[0], "run_key": run_key, "execution_name": p[2],
                "pipeline_type": p[3], "schedule_slot": p[4], "trading_date": p[5],
-               "hard_deadline_at": p[6], "expected_execution_arn": p[11],
+               "hard_deadline_at": p[6], "input_hash": p[10], "expected_execution_arn": p[11],
                "sfn_execution_arn": None, "launch_status": p[12], "orchestration_status": None}
         self.db.runs[run_key] = row
         self.db.runs_by_id[p[0]] = row
@@ -145,7 +145,7 @@ class _Cursor:
         self._rows = [(row["pipeline_run_id"], row["run_key"], row["execution_name"],
                        row["expected_execution_arn"], row["sfn_execution_arn"],
                        row["launch_status"], row["orchestration_status"],
-                       row["hard_deadline_at"], row["trading_date"])]
+                       row["hard_deadline_at"], row["trading_date"], row.get("input_hash"))]
 
     def _ins_etask(self, p):
         key = (p[1], p[2])

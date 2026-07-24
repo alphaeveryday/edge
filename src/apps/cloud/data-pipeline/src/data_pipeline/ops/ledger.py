@@ -420,7 +420,7 @@ class Ledger:
             cur.execute(
                 "SELECT pipeline_run_id, run_key, execution_name, expected_execution_arn,"
                 " sfn_execution_arn, launch_status, orchestration_status, hard_deadline_at,"
-                " trading_date FROM ops_pipeline_run WHERE run_key=%s",
+                " trading_date, input_hash FROM ops_pipeline_run WHERE run_key=%s",
                 (run_key,),
             )
             row = cur.fetchone()
@@ -428,7 +428,7 @@ class Ledger:
                 return None
             keys = ("pipeline_run_id", "run_key", "execution_name", "expected_execution_arn",
                     "sfn_execution_arn", "launch_status", "orchestration_status",
-                    "hard_deadline_at", "trading_date")
+                    "hard_deadline_at", "trading_date", "input_hash")
             return dict(zip(keys, row))
 
     def expected_tasks_for(self, pipeline_run_id: str) -> list[dict]:

@@ -51,6 +51,11 @@ def _num(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _count(value) -> bool:
+    """유효한 건수인가 — 유한 수치이면서 **음수 아님**. 음수 카운트는 malformed 다(게이트 우회 방지)."""
+    return _num(value) and value >= 0
+
+
 def derive_data_status(signals: dict) -> str:
     """산출 데이터 신호 → data_status. **정직하게** — 근거 부족은 UNKNOWN(스펙 §3.3·§6).
 
@@ -85,13 +90,13 @@ def derive_data_status(signals: dict) -> str:
     # 공급하지 않아 프로덕션 data_status 는 UNKNOWN/INCOMPLETE/VALID_EMPTY 다(VALID 는 완전성
     # wiring 후속 — false-VALID 를 내느니 UNKNOWN 이 맞다).
     expected, received = signals.get("expected_count"), signals.get("received_count")
-    completeness_known = _num(expected) and _num(received)
+    completeness_known = _count(expected) and _count(received)
     if completeness_known and received < expected:
         return states.DATA_INCOMPLETE
     failed = signals.get("failed_records")
     if failed is not None:
-        if not _num(failed):
-            return states.DATA_UNKNOWN       # 비수치 실패 신호 — 비교 crash 대신 UNKNOWN
+        if not _count(failed):
+            return states.DATA_UNKNOWN       # 비수치·음수 실패 신호 — 게이트 우회 대신 UNKNOWN
         if failed > 0:
             return states.DATA_INCOMPLETE
 

@@ -24,6 +24,7 @@ exit code 는 SFN history 이벤트 output(Containers[].ExitCode)에서 얻고, 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -182,10 +183,15 @@ def _terminal_status(ev: dict | None, ecs, cluster_arn: str | None) -> str | Non
         return None
     if ev.get("exit_code") is not None:
         return states.EXEC_SUCCEEDED if ev["exit_code"] == 0 else states.EXEC_FAILED
+    # exit code 가 없으면 **ECS 를 먼저** 물어본다(exit code 정본). ECS 가 확정하면 그걸 쓰고,
+    # 미확정(None)일 때에 한해 SFN 통합 실패(TaskFailed)를 실패 신호로 인정한다 — 통합 실패는
+    # 컨테이너가 exit code 를 못 낸 진짜 실패라 fail-loud 가 맞다(edge-review).
+    if ev.get("ecs_task_arn"):
+        ecs_status = _ecs_terminal_status(ecs, ev["ecs_task_arn"], cluster_arn)
+        if ecs_status is not None:
+            return ecs_status
     if ev.get("sfn_terminal_failed"):
         return states.EXEC_FAILED
-    if ev.get("ecs_task_arn"):
-        return _ecs_terminal_status(ecs, ev["ecs_task_arn"], cluster_arn)
     return None
 
 
@@ -209,7 +215,6 @@ def reconcile_run(
         return {"run_key": run_key, "found": False}
 
     run_id = run["pipeline_run_id"]
-    exec_arn = run["sfn_execution_arn"] or run["expected_execution_arn"]
     hard_deadline = _parse_ts(run["hard_deadline_at"])
 
     summary = {"run_key": run_key, "found": True, "orchestration": run["orchestration_status"],
@@ -217,12 +222,37 @@ def reconcile_run(
                "evidence_lost": [], "failed_to_start": [], "stalled": [], "fulfilled_late": [],
                "failed": []}
 
+    # Planner 가 이미 입력 충돌로 판정한 런은 reconcile 이 뒤엎지 않는다 — 그 이름을 차지한
+    # 다른 실행의 history 를 우리 런의 작업에 적용하면 안 된다(edge-review). 충돌 이슈는 유지.
+    if run["launch_status"] == states.LAUNCH_CONFLICT:
+        summary["launch_conflict"] = True
+        return summary
+
+    # 확정된 sfn_execution_arn 은 우리 실행이라 신뢰한다. 없으면 expected_execution_arn(=locator)
+    # 인데, **입력 해시로 우리 실행인지 검증**한 뒤에만 채택한다 — 같은 이름에 다른 입력의 실행이
+    # 있으면(mode 다른 재계획) 그건 우리 게 아니다(스펙 §4 locator≠증거).
+    confirmed_arn = run["sfn_execution_arn"]
+    exec_arn = confirmed_arn or run["expected_execution_arn"]
+    verify_hash = confirmed_arn is None
+
     # ── SFN 실행 동기화 ──
     evidence: dict[str, dict] = {}
     if exec_arn:
         try:
             desc = sfn.describe_execution(executionArn=exec_arn)
             confirmed = desc.get("executionArn", exec_arn)
+            if verify_hash and run["input_hash"]:
+                existing_hash = hashlib.sha256((desc.get("input") or "").encode("utf-8")).hexdigest()
+                if existing_hash != run["input_hash"]:
+                    # 예상 이름에 다른 입력의 실행 — 우리 게 아니다. 채택 안 하고 충돌로 드러낸다.
+                    ledger.set_launch_result(run_id, launch_status=states.LAUNCH_CONFLICT)
+                    ledger.open_or_bump_issue(
+                        issue_type=states.ISSUE_LAUNCH_CONFLICT,
+                        dedupe_key=f"launch_conflict:{run['execution_name']}",
+                        scope="run", scope_key=run_id,
+                        evidence={"expected_input_hash": run["input_hash"]})
+                    summary["launch_conflict"] = True
+                    return summary
             ledger.set_launch_result(
                 run_id, launch_status=states.LAUNCH_LAUNCHED, sfn_execution_arn=confirmed,
                 orchestration_status=_ORCH_MAP.get(desc.get("status", ""), states.ORCH_UNKNOWN))
