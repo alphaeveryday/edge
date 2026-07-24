@@ -526,6 +526,63 @@ settings.targets.keywords            # ["금리", ...]
 - 백엔드는 `[storage]` 설정으로 고른다. 기본 `local`(루트 `./.lake`), 배포는
   `DATA_PIPELINE_STORAGE__BACKEND=s3` + `DATA_PIPELINE_STORAGE__BUCKET=…` 로 전환.
 
+## 운영 원장 — expected_task·Planner·Reconciler (ALPHA-530)
+
+SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projection(`ops_*` 5테이블,
+`migrations-cloud`). 실행을 **제어하지 않는다**(관측만 — ADR-0030). 답하는 질문: *원래 실행돼야
+했지만 아예 시작되지 않은 작업은 무엇인가.* 코드: `src/data_pipeline/ops/`.
+
+- **상태 4축을 섞지 않는다**: plan_status(DUE·SKIPPED) / task_outcome(PENDING·FULFILLED·FAILED·
+  BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
+  data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
+  RUNNING+시간초과로 파생하는 health(이슈로만 남김).
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. MVP 등록 3작업:
+  `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
+  canonical consumer). 종목 반복은 작업이 아니라 completeness/manifest, 개별 규칙은 quality_check.
+
+### 실행 흐름 (스펙 §5)
+
+```
+EventBridge(daily) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot) → commit
+                                       → 결정적 execution_name → SFN StartExecution
+각 ECS 태스크(3작업)  → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
+```
+
+Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도 "실행 자체가 안 됐다"를 잡기
+위함(ECS 안에서 자기 expected_task 를 만들면 불가능). `ExecutionAlreadyExists` 는 즉시 LAUNCHED
+로 보지 않고 DescribeExecution 으로 입력을 비교한다(동일=LAUNCHED, 상이=LAUNCH_CONFLICT).
+
+### 실행 (로컬/수동)
+
+```bash
+# Planner — 원장 기록 + SFN 시작. OPS_STATE_MACHINE_ARN·DATA_PIPELINE_DB__* 필수.
+OPS_STATE_MACHINE_ARN=arn:aws:states:…:stateMachine:edge-dev-data-pipeline \
+  python -m data_pipeline.run plan-run
+# Reconciler — 예정↔실제 대조(advisory lock 으로 중복 실행 방지).
+python -m data_pipeline.run reconcile
+```
+
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 2개(daily=plan-run·
+reconcile) + DLQ. daily 스케줄이 SFN 직접 시작에서 **Planner 경유**로 컷오버된다(스케줄 state 기본
+DISABLED). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마, `ops_` 접두사).
+
+### 복구 절차
+
+- **MISSED**(미실행): Reconciler 가 증거(SFN history·ECS)로 판정. "attempt 행 없음"만으로 단정하지
+  않는다 — 원장 누락은 `LEDGER_GAP` 으로 backfill, ECS 생성 확인 불가는 `EVIDENCE_LOST`.
+- **미승격 raw 재처리**: 실패 런 raw 는 `normalize-<step> --input-run-id <실패 run_id>` 로 수동
+  재처리(ADR-0030). 원장의 `ops_task_attempt`·`ops_reconciliation_issue` 가 어느 run 인지 알려준다.
+- **비래치 MISSED**: 늦게 성공하면 `MISSED → FULFILLED`(missed_at 보존, MISSED 이슈 RESOLVED).
+
+### 게이트 경계 — 이번 범위 밖 (ALPHA-452/453)
+
+`data_status` 는 future gate 의 **정본이 아니다**(관측값). 완전성 결손은 `INCOMPLETE` 로 **기록만**
+하고 downstream 을 차단하지 않는다(ADR-0030 — "관측만"). "데이터 없음 vs 움직임 없음"을 가르는
+coverage 계측(**ALPHA-452**)·게이트 정책·UNEVALUABLE(**ALPHA-453·490**)이 gate 의 정본을 소유하며,
+원장은 그 assessment 를 **참조/projection** 할 뿐이다. 이번 MVP 에 `gate_decision` 물리 컬럼을 두지
+않은 이유다.
+
 ## 범위에서 의도적으로 제외한 것 (후속)
 
 - 뉴스 근접중복 클러스터링(fuzzy)·교차벤더 dedup — canonical 은 exact article_id 병합 + 제목/URL
