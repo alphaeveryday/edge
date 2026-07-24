@@ -2,8 +2,11 @@
 
 증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)·인증 + 콘솔 화면
 표면(현재 mock). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
-이 README 는 이 모듈만의 비자명한 규율만 적는다. 다른 온프렘 모듈과 동일하게
-JPA 없이 JdbcTemplate(thin layered).
+이 README 는 이 모듈만의 비자명한 규율만 적는다. 실 DB 접근은 **JPA**(entity·좁은
+Spring Data repository·도메인 model 매핑)다 — DDL 은 Flyway(libs/schema/migrations-onprem)가
+SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl-auto=validate`·`flyway.enabled=false`).
+소유 전이 쓰기(검수 결정 status 전이·publication 재발행)는 원자성 가드가 붙은 native
+`@Modifying` 쿼리다. ALPHA-525·526 과 함께 진행한 JdbcTemplate→JPA 전환의 일부다(ADR-0038).
 
 ## 지켜야 할 로컬 불변식
 
@@ -85,8 +88,12 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 43건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
+테스트 47건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
 parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 콘솔 mock
 표면의 UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
-`contextLoads` 는 실 DB 를 요구하는 통합 테스트라 로컬 DB 없이는 실패한다(compose E2E 경로).
+단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
+Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
+`contextLoads` 가 `ddl-auto=validate` 로 엔티티↔실스키마 정합을, `ReviewMemberRepositoryIT`
+가 decide 가드·publish ON CONFLICT·활성 조회·save 를 실 쿼리로 확인한다(Docker 없으면
+JUnit `@EnabledIf` 로 disabled 로 보고 — 숨겨진 통과가 아니다; CI/Docker 에서 실행).
