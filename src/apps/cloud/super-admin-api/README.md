@@ -52,6 +52,11 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · 
   파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
   의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 다.
+- **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — jvm-common 봉투
+  `{isSuccess,code,message,result}` 로 내려간다. 계약 DTO 는 `result` 안의
+  camelCase 이고, 뮤테이션도 200 + `result` 생략이다(204 는 쓰지 않는다).
+  성공까지 감싸는 건 super-admin-api 한정 규약 — 타 API(tenant-console-api 등)는
+  raw DTO 성공을 유지하는 의도적 분기다(ALPHA-521, AGENTS Rule 7·11).
 - **정정/무효화 사유 필수·감사 레코드**(콘솔 IA)는 DB 연동 시 UI 계약과 함께
   편입한다 — mock 단계 UI 계약에는 사유 입력이 없다.
 
