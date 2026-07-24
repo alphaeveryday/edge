@@ -1,8 +1,8 @@
 package com.edge.superadmin.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.mock.AnalysisMockStore.Analysis;
 import com.edge.superadmin.service.AnalysisService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,26 +30,26 @@ public class AnalysisController {
 	}
 
 	@GetMapping("/api/v1/analyses")
-	public List<Analysis> list() {
-		return analysisService.list();
+	public ApiResponse<List<Analysis>> list() {
+		return ApiResponse.onSuccess(analysisService.list());
 	}
 
 	@PatchMapping("/api/v1/analyses/{id}/result")
-	public ResponseEntity<Void> correct(@PathVariable String id,
+	public ApiResponse<Void> correct(@PathVariable String id,
 			@RequestBody(required = false) CorrectRequest request) {
 		analysisService.correct(id, request == null ? null : request.result());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/analyses/{id}/exclude")
-	public ResponseEntity<Void> exclude(@PathVariable String id) {
+	public ApiResponse<Void> exclude(@PathVariable String id) {
 		analysisService.exclude(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/analyses/{id}/restore")
-	public ResponseEntity<Void> restore(@PathVariable String id) {
+	public ApiResponse<Void> restore(@PathVariable String id) {
 		analysisService.restore(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }

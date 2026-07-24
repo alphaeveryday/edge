@@ -1,5 +1,6 @@
 package com.edge.superadmin.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.mock.SourceMockStore.SourceReport;
 import com.edge.superadmin.service.SourceService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,7 +20,7 @@ public class SourceController {
 	}
 
 	@GetMapping("/api/v1/sources/report")
-	public SourceReport report() {
-		return sourceService.report();
+	public ApiResponse<SourceReport> report() {
+		return ApiResponse.onSuccess(sourceService.report());
 	}
 }

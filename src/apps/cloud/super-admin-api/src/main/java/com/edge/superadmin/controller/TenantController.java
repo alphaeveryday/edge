@@ -1,8 +1,8 @@
 package com.edge.superadmin.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.mock.TenantMockStore.Tenant;
 import com.edge.superadmin.service.TenantService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,18 +29,18 @@ public class TenantController {
 	}
 
 	@GetMapping("/api/v1/tenants")
-	public List<Tenant> list() {
-		return tenantService.list();
+	public ApiResponse<List<Tenant>> list() {
+		return ApiResponse.onSuccess(tenantService.list());
 	}
 
 	@PostMapping("/api/v1/tenants")
-	public ResponseEntity<Void> create(@RequestBody(required = false) TenantCreateRequest request) {
+	public ApiResponse<Void> create(@RequestBody(required = false) TenantCreateRequest request) {
 		if (request == null) {
 			tenantService.create(null, null, null, null);
 		} else {
 			// memo 는 UI 입력엔 있으나 mock 목록 표시에 없다 — DB 연동 시 보존 대상.
 			tenantService.create(request.name(), request.env(), request.admin(), request.email());
 		}
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }
