@@ -20,34 +20,27 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class BundleIngestorTest {
 
-	private static final class RecordingBundleRepo extends ReceivedBundleRepository {
+	private static final class RecordingBundleRepo implements ReceivedBundleRepository {
 		record Saved(long cursorFrom, long cursorTo, String checksum) {
 		}
 
 		final List<Saved> saved = new ArrayList<>();
 		boolean insertResult = true;
 
-		RecordingBundleRepo() {
-			super(null);
-		}
-
 		@Override
-		public boolean save(long cursorFrom, long cursorTo, String checksum, byte[] body) {
+		public int save(long cursorFrom, long cursorTo, String checksum, byte[] body) {
 			saved.add(new Saved(cursorFrom, cursorTo, checksum));
-			return insertResult;
+			return insertResult ? 1 : 0;
 		}
 	}
 
-	private static final class RecordingStateRepo extends SyncStateRepository {
+	private static final class RecordingStateRepo implements SyncStateRepository {
 		final List<Long> advanced = new ArrayList<>();
 		long committed = 0;
 
-		RecordingStateRepo() {
-			super(null);
-		}
-
+		// lastCursor() 의 null 가드는 인터페이스 default 로 검증한다 — 페이크는 원시 조회값만 낸다.
 		@Override
-		public long lastCursor() {
+		public Long findLastCursor() {
 			return committed;
 		}
 

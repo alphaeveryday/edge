@@ -58,7 +58,7 @@ public class BundleIngestor {
 		}
 
 		boolean inserted = receivedBundleRepository.save(
-				cursorFrom, cursorTo, bundle.checksum(), bundle.body());
+				cursorFrom, cursorTo, bundle.checksum(), bundle.body()) > 0;
 		if (!inserted) {
 			// cursor_from 이 이미 저장돼 있는데 범위(cursor_to)는 committed 를 넘는다 —
 			// 부분 겹침 번들(경쟁 인스턴스·지연 응답). 여기서 전진하면 겹치지 않은 구간이
