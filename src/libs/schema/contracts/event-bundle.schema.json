@@ -18,6 +18,7 @@
         },
         "tenant_id": {
           "type": "integer",
+          "format": "int64",
           "description": "테넌트 identity (BIGINT)."
         },
         "generated_at": {
@@ -27,10 +28,12 @@
         },
         "cursor_from": {
           "type": "integer",
+          "format": "int64",
           "description": "번들 첫 entry 의 cursor. received_bundle dedup 키."
         },
         "cursor_to": {
           "type": "integer",
+          "format": "int64",
           "description": "번들 마지막 entry 의 cursor. 소비자의 다음 재개점."
         },
         "entries": {
@@ -98,6 +101,7 @@
 
     "EntryCursor": {
       "type": "integer",
+      "format": "int64",
       "description": "번들 내 순서·도메인 반영 추적용. 재개점이 아니다(재개점은 봉투 cursor_to)."
     },
 
