@@ -38,7 +38,20 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-flyway'
 	testImplementation 'org.flywaydb:flyway-core'
 	testImplementation 'org.flywaydb:flyway-database-postgresql'
+	// 수신 번들 와이어 계약 검증(JSON Schema 2020-12) — producer(tenant-sync-api)와 같은
+	// libs/schema 공유 스키마 파일을 써 "양단이 같은 계약"을 강제한다(ALPHA-497). 문자열로
+	// 넘겨 검증기 Jackson 과 앱의 tools.jackson 을 분리한다.
+	testImplementation 'com.networknt:json-schema-validator:1.5.6'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// 번들 계약 SSOT(event-bundle.schema.json)를 테스트 classpath 에 올린다(producer 와 동일 파일).
+sourceSets {
+	test {
+		resources {
+			srcDir "$rootDir/libs/schema/contracts"
+		}
+	}
 }
 
 tasks.named('test') {
