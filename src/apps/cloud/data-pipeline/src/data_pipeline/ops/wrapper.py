@@ -104,10 +104,11 @@ def derive_data_status(signals: dict) -> str:
     if not _num(records_out) or records_out < 0:
         return states.DATA_UNKNOWN            # 결측·음수·NaN·비수치 → VALID 로 위장 금지
     if records_out == 0:
-        # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 **명시적 True** 일 때만(truthy 문자열·정수를
-        # 증명으로 삼지 않는다). trading_day 는 미지정이면 무모순으로 본다.
+        # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 **명시적 True** 일 때만(truthy 문자열·정수·
+        # malformed 값을 증명으로 삼지 않는다 — "false"·0·NaN 이 is not False 를 통과하던 우회 차단,
+        # edge-review). trading_day 는 미지정(기본 True)이거나 정확히 True 여야 무모순으로 본다.
         if signals.get("request_completed") is True and signals.get("empty_allowed") is True \
-                and signals.get("trading_day", True) is not False:
+                and signals.get("trading_day", True) is True:
             return states.DATA_VALID_EMPTY
         return states.DATA_UNKNOWN           # 0건만으로 VALID_EMPTY 금지(테스트 22)
     return states.DATA_VALID if completeness_known else states.DATA_UNKNOWN
