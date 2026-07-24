@@ -583,6 +583,22 @@ coverage 계측(**ALPHA-452**)·게이트 정책·UNEVALUABLE(**ALPHA-453·490**
 원장은 그 assessment 를 **참조/projection** 할 뿐이다. 이번 MVP 에 `gate_decision` 물리 컬럼을 두지
 않은 이유다.
 
+### 알려진 한계 (후속)
+
+edge-review 4라운드로 실질 결함은 수렴했고, 아래는 **의도적으로 남긴** 경계다:
+
+- **dep 완료 판정의 ECS fallback 미적용** — 선행 작업 완료를 SFN history 의 exit code 로만 본다.
+  드물게 exit code 가 ECS 에만 있으면(SFN output 잘림) 선행을 미완으로 봐 downstream 을 MISSED
+  대신 **BLOCKED** 로 마감한다 — 방향이 안전(BLOCKED 가 "선행 때문"을 더 정확히)하고, 매 dep 마다
+  ECS 콜을 더하는 대가가 이 사소한 불일치보다 커서 두었다(Rule 2).
+- **SFN 통합 실패(TaskFailed) 를 실패로 인정** — exit code 를 못 얻고 ECS 도 미확정일 때 SFN
+  TaskFailed 를 FAILED 로 본다. runTask.sync 의 TaskFailed 는 컨테이너 exit≠0 이 아니라 **작업
+  자체가 실패**한 신호라 이게 맞다(exit code 는 우선 조회한다).
+- **완전성(VALID)의 스냅샷 wiring** — data_status 는 기대집합(expectation_snapshot)+수신집합이
+  있어야 VALID 를 낸다. 아직 plan-run 이 holdings 파생 universe 를, observer 가 received_count 를
+  공급하지 않아 프로덕션 data_status 는 UNKNOWN/INCOMPLETE/VALID_EMPTY 다(false-VALID 를 내느니
+  UNKNOWN — 스펙 §6). 유니버스 밖 결측 종목 탐지를 켜려면 스냅샷 wiring 이 후속이다.
+
 ## 범위에서 의도적으로 제외한 것 (후속)
 
 - 뉴스 근접중복 클러스터링(fuzzy)·교차벤더 dedup — canonical 은 exact article_id 병합 + 제목/URL

@@ -280,6 +280,13 @@ locals {
                 ContainerOverrides = [{
                   Name        = local.container_name
                   "Command.$" = job.command_expr
+                  # 운영 원장(ALPHA-530 #5): 계측 작업(kis 수집·price 정제·price 적재)의 wrapper 가
+                  # attempt 에 SFN 실행 ARN·state 이름을 기록하도록 주입한다. 미계측 작업은 이 env 를
+                  # 안 읽어 무해하다($$.Execution.Id 는 실행 ARN 이라 attempt↔SFN 계보를 잇는다).
+                  Environment = [
+                    { Name = "OPS_SFN_STATE_NAME", Value = job.state },
+                    { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
+                  ]
                 }]
               }
             })
