@@ -49,6 +49,9 @@ class DeepSeekClient:
                     {"role": "user", "content": user},
                 ],
                 "response_format": {"type": "json_object"},
+                # v4 계열은 thinking 기본 ON — 켜지면 구조화 JSON 출력이 깨진다(vllm#41132).
+                # 응답이 순수 JSON 오브젝트여야 파싱되므로 non-thinking 으로 고정한다.
+                "thinking": {"type": "disabled"},
                 "temperature": 0.0,
                 "max_tokens": 8000,
             }
@@ -76,6 +79,8 @@ def analyze(
     client: AnalysisClient,
     *,
     etf_ticker: str,
+    etf_name: str,
+    name_by_ticker: dict[str, str],
     trade_date: date,
     decomp: Decomposition,
     gate: PriceTrigger,
@@ -84,12 +89,15 @@ def analyze(
 ) -> Explanation:
     """분석 LLM 을 돌려 검증된 Explanation 을 반환한다.
 
+    ``etf_name``·``name_by_ticker`` 는 대상 ETF 의 마스터·holdings 에서 파생한 표시명이다
+    (ALPHA-467) — 프롬프트가 KODEX 반도체 하드코딩 없이 어느 ETF 든 그 ETF 것으로 말한다.
+
     Raises:
         PipelineError: 응답에 필수 필드(verdict + 본문)가 없을 때.
     """
     system, packet = build_packet(
-        etf_ticker=etf_ticker, trade_date=trade_date, decomp=decomp,
-        gate=gate, route_code=route_code, events=events,
+        etf_ticker=etf_ticker, etf_name=etf_name, name_by_ticker=name_by_ticker,
+        trade_date=trade_date, decomp=decomp, gate=gate, route_code=route_code, events=events,
     )
     explanation = Explanation(client.complete_json(system, packet))
     if not explanation.is_valid:

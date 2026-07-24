@@ -27,7 +27,8 @@ class _FakeClient:
 
 
 def _analyze(response):
-    return analyze(_FakeClient(response), etf_ticker="091160", trade_date=date(2026, 7, 16),
+    return analyze(_FakeClient(response), etf_ticker="091160", etf_name="테스트 ETF",
+                   name_by_ticker={}, trade_date=date(2026, 7, 16),
                    decomp=_DECOMP, gate=_GATE, route_code="COMMON_FACTOR", events=[])
 
 

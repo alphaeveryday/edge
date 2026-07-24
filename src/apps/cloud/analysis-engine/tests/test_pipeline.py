@@ -40,7 +40,7 @@ class _FakeStore:
         return {"005930": "ent_1"}
 
     def resolve_etf_instrument(self, ticker):
-        return "inst_ETF"
+        return ("inst_ETF", "테스트 ETF")
 
     def fetch_price_trigger(self, etf_instrument_id, trade_date):
         return self._trigger

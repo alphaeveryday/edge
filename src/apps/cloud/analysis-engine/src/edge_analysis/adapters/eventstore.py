@@ -20,7 +20,6 @@ from ..domain.models import (
 from ..observability import log, stable_id, utcnow_iso
 
 _TITLE_EVIDENCE_TYPE = "TITLE"
-KODEX_SEMI_INSTRUMENT_FALLBACK = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 
 
 def _iso(value: Any) -> str:
@@ -68,15 +67,23 @@ class EventStore:
             cur.execute("SELECT ticker, instrument_id FROM instrument")
             return {str(ticker): str(iid) for ticker, iid in cur.fetchall()}
 
-    def resolve_etf_instrument(self, ticker: str) -> str:
-        """ticker 로 ETF instrument_id 해소(없으면 시드 폴백)."""
+    def resolve_etf_instrument(self, ticker: str) -> tuple[str, str] | None:
+        """ETF 의 (instrument_id, 표시명) — 마스터에 없으면 ``None``.
+
+        표시명은 ``entity.display_name``(instrument_id = entity_id)에서 온다 — instrument
+        자체엔 이름 컬럼이 없다. 구현은 조회 실패 시 091160 instrument_id 로 폴백했는데,
+        다른 ETF 를 돌리면 holdings 는 env 티커로, 트리거·설명은 폴백 id 로 붙어 **계보가
+        조용히 오염**된다(ALPHA-467). 폴백을 없애고 None 을 돌려 호출부가 fail-loud 한다.
+        """
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT instrument_id FROM instrument WHERE ticker = %s AND instrument_type = 'ETF'",
+                "SELECT i.instrument_id, e.display_name FROM instrument i"
+                " JOIN entity e ON e.entity_id = i.instrument_id"
+                " WHERE i.ticker = %s AND i.instrument_type = 'ETF'",
                 (ticker,),
             )
             row = cur.fetchone()
-        return str(row[0]) if row else KODEX_SEMI_INSTRUMENT_FALLBACK
+        return (str(row[0]), str(row[1])) if row else None
 
     def fetch_price_trigger(self, etf_instrument_id: str, trade_date: date):
         """파이프라인 L0 트리거 소비. ``None`` == 평온(정상 변동).

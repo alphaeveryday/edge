@@ -1,4 +1,4 @@
-"""EDGE analysis-engine: KODEX 반도체 ETF 당일 설명 생성.
+"""EDGE analysis-engine: 대상 ETF(ALPHAMALE_ETF_TICKER, 기본 091160) 당일 설명 생성.
 
 통합 파이프라인의 feature 산출물 소비자다(ADR-0028, ALPHA-411/412). 파이프라인이 쓴
 ``price_movement_trigger``(L0 게이트)와 조립된 ``source_event`` 계보를 읽고, S3 레이크에서

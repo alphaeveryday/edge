@@ -9,19 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# 대상 ETF 의 핵심 구성종목(비중은 분석 패킷 우선순위에만 쓴다).
-KODEX_CONSTITUENTS: dict[str, tuple[str, float]] = {
-    "000660": ("SK하이닉스", 0.40),
-    "005930": ("삼성전자", 0.20),
-    "042700": ("한미반도체", 0.05),
-    "036930": ("주성엔지니어링", 0.04),
-    "240810": ("원익IPS", 0.024),
-    "058470": ("리노공업", 0.021),
-    "319660": ("피에스케이", 0.020),
-    "000990": ("DB하이텍", 0.020),
-    "039030": ("이오테크닉스", 0.020),
-}
-
 # observation 에 분해-산출 버전으로 스탬프된다(ALPHA-411).
 # L0 게이트 임계값 자체는 파이프라인(단일 writer)에 있다.
 POLICY_VERSION = "l0-abs-v1"

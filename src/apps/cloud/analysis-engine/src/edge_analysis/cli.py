@@ -16,7 +16,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     """CLI 인자(--trade-date·--request-id)를 파싱한다."""
     parser = argparse.ArgumentParser(
         prog="python -m edge_analysis",
-        description="Explain the KODEX semiconductor ETF's daily move.",
+        description="Explain the target ETF's daily move.",
     )
     parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD (Asia/Seoul); default today")
     parser.add_argument("--request-id", default=None, help="caller correlation id")

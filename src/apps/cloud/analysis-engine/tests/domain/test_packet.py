@@ -27,7 +27,8 @@ def _decomp(members: list[Member], *, proxy: float | None = 0.02,
 
 def test_packet_reports_unavailable_proxy_without_crashing():
     _system, packet = build_packet(
-        etf_ticker="091160", trade_date=date(2026, 7, 16),
+        etf_ticker="091160", etf_name="테스트 ETF", name_by_ticker={},
+        trade_date=date(2026, 7, 16),
         decomp=_decomp([], proxy=None, top3=None), gate=_GATE,
         route_code="COMMON_FACTOR", events=[])
 
@@ -36,7 +37,8 @@ def test_packet_reports_unavailable_proxy_without_crashing():
 
 def test_packet_uses_placeholder_when_no_events():
     _system, packet = build_packet(
-        etf_ticker="091160", trade_date=date(2026, 7, 16),
+        etf_ticker="091160", etf_name="테스트 ETF", name_by_ticker={},
+        trade_date=date(2026, 7, 16),
         decomp=_decomp([_member("A", 1)]), gate=_GATE,
         route_code="CONCENTRATED", events=[])
 
@@ -47,7 +49,8 @@ def test_packet_caps_member_lines_at_eight():
     members = [_member(f"T{i}", i) for i in range(1, 13)]  # 12 종목
 
     _system, packet = build_packet(
-        etf_ticker="091160", trade_date=date(2026, 7, 16),
+        etf_ticker="091160", etf_name="테스트 ETF", name_by_ticker={},
+        trade_date=date(2026, 7, 16),
         decomp=_decomp(members), gate=_GATE, route_code="CONCENTRATED", events=[])
 
     member_lines = [line for line in packet.splitlines() if line.startswith("  T")]

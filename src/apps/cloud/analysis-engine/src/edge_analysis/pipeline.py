@@ -18,9 +18,9 @@ from .adapters.archive import (
 from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, analyze
-from .config import Settings
+from .config import PipelineError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
-from .domain.models import KODEX_CONSTITUENTS
+from .domain.models import KodexEvent
 from .observability import log
 
 _MARKET = "KR"
@@ -38,10 +38,25 @@ def run(
     log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id)
 
     entity_index = store.load_entity_index()
-    etf_instrument_id = store.resolve_etf_instrument(settings.etf_ticker)
+    resolved = store.resolve_etf_instrument(settings.etf_ticker)
+    if resolved is None:
+        # 폴백으로 남의 instrument_id 에 붙이면 계보가 조용히 오염된다 — 대상 ETF 가
+        # 마스터에 없으면 그 런은 성립하지 않으므로 비0 종료로 드러낸다(Rule 12, ALPHA-467).
+        raise PipelineError(
+            f"instrument 마스터에 ETF ticker={settings.etf_ticker} 없음"
+            " — 마스터 적재(load-instruments) 여부 확인")
+    etf_instrument_id, etf_name = resolved
 
     # 레이크에서 가격을 소비해 ETF 등락을 분해한다(L1).
     holdings, holdings_asof = lake.load_holdings(settings.etf_ticker, _MARKET, settings.trade_date)
+    if not holdings:
+        # holdings 가 비면(파티션 결손·정리 등) 분해가 불가하다 — proxy_ret None·구성종목 0·
+        # 뉴스 0 인 packet 을 LLM 에 보내면 입력 결손이 정상 분석으로 위장된다(Rule 12).
+        raise PipelineError(
+            f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
+            f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
+    # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다(ALPHA-467).
+    name_by_ticker = {h.ticker: h.name for h in holdings if h.name}
     returns = lake.load_returns(_MARKET, settings.trade_date)
     decomp = compute_decomposition(holdings, returns)
     log(
@@ -72,13 +87,17 @@ def run(
     log("trigger.consumed", route=route_code, event_search=event_search, **ids)
 
     # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
-    kodex_events = []
+    kodex_events: list[KodexEvent] = []
     if event_search:
-        kodex_events = store.fetch_kodex_events(settings.trade_date, list(KODEX_CONSTITUENTS))
+        # 뉴스 대상 티커는 이 ETF 의 holdings 구성종목이다 — 구 KODEX_CONSTITUENTS
+        # 9종목 하드코딩은 다른 ETF 로 돌려도 KODEX 뉴스만 읽었다(ALPHA-467).
+        kodex_events = store.fetch_kodex_events(
+            settings.trade_date, [h.ticker for h in holdings])
         log("events.ready", kodex_events=len(kodex_events))
 
     explanation = analyze(
-        client, etf_ticker=settings.etf_ticker, trade_date=settings.trade_date,
+        client, etf_ticker=settings.etf_ticker, etf_name=etf_name,
+        name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
         decomp=decomp, gate=gate, route_code=route_code, events=kodex_events,
     )
     outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, kodex_events)
@@ -116,6 +135,18 @@ def _persist_explanation(
         settings, etf_instrument_id, explanation,
         route_id=prereqs["route"],
         bundle=prereqs["bundle"],
-        primary_thread_id=kodex_events[0].thread_id if kodex_events else None,
+        primary_thread_id=_primary_thread_id(kodex_events),
         event_count=len(kodex_events),
     )
+
+
+def _primary_thread_id(events: list[KodexEvent]) -> str | None:
+    """설명이 대표로 매다는 event thread — **스레드가 붙은 첫 이벤트**를 고른다.
+
+    ``events[0]`` 을 그대로 쓰면(fetch 는 source_event_id 순 정렬), upstream assemble-events
+    가 아직 스레드하지 않은(thread_id NULL) 구성종목 이벤트가 먼저 오면 primary_thread_id
+    가 NULL 이 돼, 스레드된 이벤트가 목록에 있는데도 계보가 끊긴다. 뉴스 대상을 KODEX
+    9종에서 전체 holdings 로 넓히며 unthreaded 이벤트가 섞이기 시작했다(ALPHA-467,
+    edge-review). ``None`` 은 목록의 **어떤** 이벤트도 스레드되지 않았을 때만.
+    """
+    return next((e.thread_id for e in events if e.thread_id), None)

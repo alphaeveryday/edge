@@ -37,8 +37,12 @@ TRIGGER_ID = "trg_e2e_0001"
 BUNDLE_VERSION = "e2e-bundle-1"
 REQUEST_ID = "e2e-req-1"
 ARTICLE_ID = "e2e-a1"
-EVENT_TYPE = "COMPANY.EARNINGS.RESULT_RELEASE"
-PREDICATE = "REPORT"
+# 배당 결정은 identity_roles=[ISSUER] 라 edge 의 단일 entity 추출로 thread 가 선다 —
+# EARNINGS.RESULT_RELEASE 는 identity=[ISSUER, REPORTING_PERIOD]여서 REPORTING_PERIOD 를
+# 못 채워 UNKNOWN(thread NULL)이 된다(ALPHA-457, dev 테스트 픽스처와 동일 선택).
+EVENT_TYPE = "COMPANY.CAPITAL.DIVIDEND_DECISION"
+PREDICATE = "DECLARE"
+IDENTITY_ROLE = "ISSUER"
 
 _NEWS_COLUMNS = (
     "article_id", "source_vendor", "market", "title", "url", "normalized_url",
@@ -82,10 +86,10 @@ class FakeAnalysisClient:
     def complete_json(self, system: str, user: str) -> dict:
         return {
             "verdict": "공식 이벤트 선행",
-            "headline": "삼성전자 실적 발표가 지수를 끌어올렸습니다.",
-            "explain": "삼성전자 실적 발표 이벤트와 기여도 상위 종목이 일치합니다.",
+            "headline": "삼성전자 배당 결정이 지수를 끌어올렸습니다.",
+            "explain": "삼성전자 배당 결정 이벤트와 기여도 상위 종목이 일치합니다.",
             "confidence": "높음",
-            "key_evidence": [{"signal": "실적 발표", "why": "기여 1위 종목의 공식 이벤트"}],
+            "key_evidence": [{"signal": "배당 결정", "why": "기여 1위 종목의 공식 이벤트"}],
             "unexplained": "",
         }
 
@@ -117,7 +121,7 @@ def _seed_lake_news(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     rows = [{
         "article_id": ARTICLE_ID, "source_vendor": "bigkinds", "market": "KR",
-        "title": "삼성전자 2분기 실적 발표", "publisher": "매일경제",
+        "title": "삼성전자 배당 결정", "publisher": "매일경제",
         "published_at": f"{TRADE_DATE}T09:00:00+09:00",
         "mentions": json.dumps([{"market": "KR", "ticker": SAMSUNG_TICKER}]),
     }]
@@ -223,7 +227,10 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         doc_id = assemble_events._stable_id("doc", "bigkinds", ARTICLE_ID)
         asrt_id = assemble_events._stable_id("asrt", doc_id, EVENT_TYPE, PREDICATE)
         evt_id = assemble_events._stable_id("evt", asrt_id, SAMSUNG_INSTRUMENT)
-        thread_id = assemble_events._stable_id("thr", f"{EVENT_TYPE}||{SAMSUNG_INSTRUMENT}")
+        thread_key, missing_roles = assemble_events._thread_key(
+            EVENT_TYPE, {IDENTITY_ROLE: SAMSUNG_INSTRUMENT})
+        assert missing_roles == [], "배당 결정의 identity(ISSUER)가 단일 entity 로 안 채워졌다"
+        thread_id = assemble_events._stable_id("thr", thread_key)
         with seed_conn.cursor() as cur:
             cur.execute(
                 "SELECT event_status, source_class FROM source_event WHERE source_event_id = %s",
