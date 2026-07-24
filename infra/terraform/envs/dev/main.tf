@@ -315,35 +315,13 @@ module "gha_deploy_dev" {
   ]
 }
 
-# ── news-pipeline (Step Functions 배치) ─────────────────
-# CDK 대체 SFN. edge VPC·RDS 통합. 스케줄러는 DISABLED 로 생성(수동 검증 후 컷오버).
+# ── pipeline lake (구 news-pipeline SFN 의 존치 자원) ────
+# 레거시 SFN(edge-dev-pipeline)은 ALPHA-549 에서 걷어냈다 — 이 모듈은 이제 아래
+# data_pipeline 이 소비하는 lake S3 버킷만 소유한다.
 module "pipeline" {
   source = "../../modules/pipeline"
 
-  name        = "${local.prefix}-pipeline"
-  region      = var.region
-  vpc_id      = module.network.vpc_id
-  subnet_ids  = module.network.private_subnet_ids
-  cluster_arn = module.worker_cluster.cluster_arn
-  image       = var.pipeline_image
-
-  db_host                = module.rds.address
-  db_port                = module.rds.port
-  db_name                = module.rds.db_name
-  db_user                = module.rds.master_username
-  db_password_secret_arn = module.rds.master_user_secret_arn
-
-  contact_email = var.pipeline_contact_email
-  alarm_email   = var.pipeline_alarm_email
-}
-
-resource "aws_vpc_security_group_ingress_rule" "rds_from_pipeline" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.pipeline.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "news-pipeline batch tasks to postgres"
+  name = "${local.prefix}-pipeline"
 }
 
 # ── data-pipeline (Step Functions 배치: raw → normalize → feature → analyze) ──

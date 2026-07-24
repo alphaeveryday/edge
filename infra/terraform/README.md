@@ -23,7 +23,7 @@ infra/terraform/
     ├── rds/                # PostgreSQL(private·관리형 비밀번호)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
-    ├── pipeline/           # 임시 news-pipeline Step Functions 배치 (self-contained)
+    ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
     ├── data-pipeline/      # raw→normalize→feature→analyze Step Functions 배치 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
@@ -39,7 +39,7 @@ infra/terraform/
 - **와일드카드 ACM** — `*.edgesignal.dev` 을 리전당 1장(ALB=apne2, CloudFront=us-east-1). 새 서브도메인 추가 시 인증서 재발급 0.
 - **네트워크 3-tier** — public(ALB·NAT) / private=compute(ECS, NAT 아웃바운드) / **data=RDS 격리(아웃바운드 없음)**. AZ `a·c`.
 - **클러스터 분리** — 상시 API(`edge-dev-service`) / 배치(`edge-dev-worker`).
-- **배치 = Step Functions** — 임시 news-pipeline 과 data-pipeline(raw→normalize→feature→analyze 4페이즈, 구 analysis-engine SFN 흡수 — ALPHA-408)을 분리해 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림).
+- **배치 = Step Functions** — data-pipeline(raw→normalize→feature→analyze 4페이즈, 구 analysis-engine SFN 흡수 — ALPHA-408)을 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림). 구 임시 news-pipeline SFN 은 ALPHA-549 에서 제거 — `pipeline` 모듈은 lake 버킷만 존치.
 - **비밀번호는 코드/state 에 없음** — RDS 관리형 시크릿, 외부 키는 Secrets Manager(값 수동 주입).
 
 ## 사용
@@ -74,7 +74,6 @@ cd ../envs/dev  && terraform apply
 
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
-| **임시 파이프라인 스케줄러** | `DISABLED` (이미지·검증 전 자동실행 방지) | `pipeline` 모듈 `schedule_state = "ENABLED"` |
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **super-admin ALB 보호** | 공개 도달 — WAF·IP 제한 미구현(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있으나 dev 시크릿 미배선으로 닫힘 | 앱 인증 본격화(ALPHA-474)·WAFv2(ALPHA-297)·`allowed_cidrs` 운영 판단 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
@@ -89,7 +88,6 @@ cd ../envs/dev  && terraform apply
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
-- 파이프라인 이미지(`edge/pipeline:latest` placeholder) + 시크릿 fmp/openai(`REPLACE_ME` → 실제 키)
 
 ### 🔮 미구축 (후속 증분)
 
