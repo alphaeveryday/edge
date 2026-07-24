@@ -1,7 +1,8 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
-import com.edge.superadmin.mock.AnalysisMockStore.Analysis;
+import com.edge.superadmin.dto.AnalysisResponse;
+import com.edge.superadmin.dto.CorrectRequest;
 import com.edge.superadmin.service.AnalysisService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -26,12 +27,10 @@ public class AnalysisController {
 		this.analysisService = analysisService;
 	}
 
-	public record CorrectRequest(String result) {
-	}
-
 	@GetMapping("/api/v1/analyses")
-	public ApiResponse<List<Analysis>> list() {
-		return ApiResponse.onSuccess(analysisService.list());
+	public ApiResponse<List<AnalysisResponse>> list() {
+		return ApiResponse.onSuccess(
+				analysisService.list().stream().map(AnalysisResponse::from).toList());
 	}
 
 	@PatchMapping("/api/v1/analyses/{id}/result")
