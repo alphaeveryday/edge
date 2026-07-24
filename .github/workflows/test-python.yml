@@ -50,14 +50,17 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "src/uv.lock"
 
-      - name: uv sync (locked)
+      - name: uv sync (locked, 앱 스코프)
         working-directory: src
-        # --locked: 락파일이 pyproject 와 어긋나면 fail-loud (--frozen 은 낡은 락을 통과시킨다).
-        run: uv sync --locked
+        # --locked: 락-pyproject 정합 fail-loud (--frozen 은 낡은 락을 통과시킨다).
+        # --python 3.12: 프로덕션 이미지(python:3.12-slim)와 러너 인터프리터를 고정 일치.
+        # --package: 워크스페이스 합집합이 아니라 그 앱 의존만 설치 — 교차 의존 누수가
+        # CI 에선 green, 프로드 이미지에선 ImportError 로 갈리는 것을 차단한다.
+        run: uv sync --locked --python 3.12 --package ${{ matrix.app }}
 
       - name: pytest ${{ matrix.app }}
         working-directory: src
-        run: uv run pytest apps/cloud/${{ matrix.app }}/tests -q
+        run: uv run --package ${{ matrix.app }} pytest apps/cloud/${{ matrix.app }}/tests -q
 
   # ── 이미지 빌드 스모크 (push 없음) ───────────────────────────
   # 머지 후 deploy-* 에서야 첫 docker build 가 도는 구멍을 막는다 — 패키징·Dockerfile
