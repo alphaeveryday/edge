@@ -23,6 +23,18 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
 - **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
 
+## 구조
+
+레이어드 패키지(ports & adapters). `domain/`은 순수 로직·모델(I/O 없음), `adapters/`는 I/O
+경계, `pipeline`은 의존성 주입 오케스트레이션, `cli`는 composition root다.
+
+```
+src/edge_analysis/
+  __main__.py · cli.py · config.py · observability.py · pipeline.py
+  domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
+  adapters/   lake.py · eventstore.py · llm.py · archive.py  # I/O, 무거운 deps 지연 import
+```
+
 ## 실행
 
 ```
@@ -51,3 +63,29 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 ## 스키마 계약
 
 Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
+
+## 주석 컨벤션
+
+프로덕션 코드는 **WHAT은 코드가, WHY는 주석이** 원칙을 따른다(Google Python Style Guide).
+
+- **docstring = 계약 (Google §3.8.1)**: 모듈·클래스·공개 함수/메서드는 **자명해도** docstring 을
+  단다(1줄 요약). **생략은 사적(`_` 접두)이면서 짧고 자명한 것에 한한다.** 이름·타입으로
+  드러나지 않는 것만 `Returns:`/`Raises:` 를 덧붙인다.
+- **인라인 = WHY만**: 불변식·함정·비자명한 선택(지연 import 근거, 결정적 ID 교차 계약 등)과
+  티켓 참조(ALPHA-###). WHAT(코드가 이미 말하는 것) 재진술은 금지.
+- **금지**: 코드 재진술, 주석 처리된 죽은 코드, 변경 이력 주석(git 소관), 실제와 어긋나는 주석.
+- **언어**: 한국어.
+
+## 테스트 컨벤션
+
+이 앱의 테스트는 레이어드 구조를 반영해 **Google Python Style Guide 관행**을 따른다
+(레포 기본 관례와 다른 이 앱 한정 로컬 규약).
+
+- **레이아웃**: 소스 레이어를 미러링한다 — `tests/domain/`·`tests/adapters/`, 앱-레벨은
+  루트(`tests/test_config.py`·`test_observability.py`·`test_pipeline.py`). 파일명은 `test_<모듈>.py`.
+- **구조**: 테스트당 하나의 동작, 서술적 이름(`test_...`), AAA(Arrange-Act-Assert)를 빈 줄로 구분.
+- **주석**: 한국어. 모듈 도크스트링은 1줄 요약(+ 필요 시 검증 의도), 인라인 주석은 이름으로
+  드러나지 않는 WHY만 짧게(AGENTS Rule 9). 장황한 설명은 지양한다.
+- **격리**: `domain/`은 순수라 무거운 의존 없이 단위 검증, `adapters/`는 fake(가짜 conn·S3·
+  client), `pipeline`은 의존성 주입으로 검증한다(monkeypatch·실 DB·네트워크 없음).
+- **실행**: `uv run pytest`.
