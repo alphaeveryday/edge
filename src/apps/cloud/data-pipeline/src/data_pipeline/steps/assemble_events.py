@@ -405,8 +405,10 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         if not isinstance(raw, dict):
             continue
         role = str(raw.get("role") or "")
+        if role not in tv.quantity_roles:
+            continue  # 수량 메뉴 밖 역할 = 발명된 라벨 — 참여자와 같은 규약으로 그 항목만 버린다
         surface = raw.get("surface")
-        if not role or not isinstance(surface, str) or not surface.strip():
+        if not isinstance(surface, str) or not surface.strip():
             continue  # surface 없는 수량은 파서 입력이 없다 — 지어내지 않는다
         surface = surface.strip()
         parsed = parse_amount(surface)

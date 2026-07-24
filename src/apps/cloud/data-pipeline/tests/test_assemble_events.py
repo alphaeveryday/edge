@@ -530,6 +530,36 @@ def test_multi_company_participants_recorded_with_slot_and_group(tmp_path, monke
     assert log["participants_unresolved"] == 1
 
 
+def test_measure_role_outside_quantity_menu_is_dropped(tmp_path, monkeypatch):
+    """수량 메뉴 밖 역할을 measures 로 뱉은 환각(CONTRACT_OBJECT 는 참여자 역할이다)은 그
+    항목만 버린다 — event_measure 에 실리지 않고 covered_roles 도 부풀리지 않아, required
+    역할이 참여자 추출로 안 채워졌으면 completeness 가 partial 로 남는다(Codex #255 P2)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 HBM 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item(
+            "a1", predicate=_CONTRACT_PRED,
+            participants=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+                           "ticker": "005930", "group": 0}],
+            measures=[
+                {"role": "CONTRACT_OBJECT", "surface": "HBM", "basis": "TOTAL", "group": 0},
+                {"role": "CONTRACT_VALUE", "surface": "1,883억원", "basis": "TOTAL", "group": 0},
+            ])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    # 발명 역할은 버려지고 메뉴 안 CONTRACT_VALUE 만 실린다 — 남은 항목이 ord 0 을 받는다.
+    [meas] = _batch(conn, "event_measure")
+    assert (meas[1], meas[2]) == (0, "CONTRACT_VALUE")
+    # covered_roles 미부풀림 — required 인 CONTRACT_OBJECT 가 참여자로 안 채워졌으니 partial.
+    [se] = _batch(conn, "source_event")
+    assert se[9] == "partial"
+
+
 def test_kr_amount_parsing_and_basis_flow_into_event_measure(tmp_path, monkeypatch):
     """KR 금액 파싱 — 조/억 혼합은 결정적 파서가 NUMERIC 값을 계산하고(1조2,000억원 →
     1.2e12), 문법 밖 표기는 값을 지어내지 않고 UNRESOLVED 로 남는다. basis 는 모델 명시가
