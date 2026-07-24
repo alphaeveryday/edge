@@ -202,6 +202,17 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-instruments
 
+# corp_code enrichment(RDB, ALPHA-491) — load-instruments 가 NULL 로 둔 company_profile.
+# dart_corp_code 를 OpenDART corpCode.xml 매칭으로 채운다. 공시 로더 issuer 해소(9→309)와
+# 회사 자연키(우선주 dedup)의 공통 선행이라 별도 스텝(로더에 DART API 를 섞지 않는다).
+# 유니버스=DB 술어(dart_corp_code IS NULL AND actor.country_code='KR'), ticker(6자리)=corpCode
+# stock_code 매칭. 멱등: UPDATE … WHERE dart_corp_code IS NULL(시드 9종·재실행 불가침).
+# 오염(비8자리·중복 corp_code)은 선검증해 거절, corpCode 미존재는 정상 miss 로 계수(Rule 12).
+# OpenDART 키는 ingest-raw-disclosure 와 같은 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY.
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run enrich-corp-code
+
 # 가격변동 트리거 적재(RDB, ALPHA-411) — canonical holdings 가중치 × 구성종목 일봉 수익률의
 # coverage 정규화 proxy(분석엔진 L0 산식 정본)가 absolute gate(abs_threshold=3%)를 넘는
 # 거래일만 price_movement_trigger 로. holdings 는 거래일 이하 최신 스냅샷, 없으면 가장 이른
@@ -226,6 +237,16 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-documents
+
+# 공시 적재(RDB, ALPHA-476) — canonical 공시(supply_contract_fact·business_segment_fact)를
+# document(document_type='DISCLOSURE')·disclosure_document·disclosure_fact·타입별 child 로.
+# 설명 엔진이 explanation_run_disclosure_fact 로 직접 소비하는 fact 경로다(threading 미경유).
+# issuer 는 corp_code 를 company_profile.dart_corp_code 로 해소, 미해소(마스터 미시드)면
+# FK RESTRICT 회피 위해 skip+계측(커버리지 9→309 는 ALPHA-491). DB CHECK 는 파이썬 선검증해
+# 위반 fact 만 뺀다(한 건이 배치 롤백 안 되게). 멱등: document 자연키·fact_id=결정적 파생
+# ON CONFLICT. --from/--to 는 report_date 창(미지정=전체 스캔).
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-disclosure
 
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
 # assertion_argument 로. argument text 는 엔티티 마스터 완전일치(티커·정식명·종목명)로

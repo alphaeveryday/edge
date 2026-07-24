@@ -2,8 +2,11 @@
 
 증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)·인증 + 콘솔 화면
 표면(현재 mock). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
-이 README 는 이 모듈만의 비자명한 규율만 적는다. 다른 온프렘 모듈과 동일하게
-JPA 없이 JdbcTemplate(thin layered).
+이 README 는 이 모듈만의 비자명한 규율만 적는다. 실 DB 접근은 **JPA**(entity·좁은
+Spring Data repository·도메인 model 매핑)다 — DDL 은 Flyway(libs/schema/migrations-onprem)가
+SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl-auto=validate`·`flyway.enabled=false`).
+소유 전이 쓰기(검수 결정 status 전이·publication 재발행)는 원자성 가드가 붙은 native
+`@Modifying` 쿼리다. ALPHA-525·526 과 함께 진행한 JdbcTemplate→JPA 전환의 일부다(ADR-0038).
 
 ## 지켜야 할 로컬 불변식
 
@@ -59,9 +62,9 @@ scope(시장·종목 제공 범위) · members(사용자·초대) · session(테
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — 콘솔 전 표면이 jvm-common 봉투
   `{isSuccess,code,message,result}` 로 내려간다. 계약 DTO 는 `result` 안에 있고(검수·인증
   표면은 snake_case·ALPHA-513 표면은 camelCase — 네이밍은 위 규약대로), 뮤테이션도 200 +
-  `result` 생략이다(204 는 쓰지 않는다). 성공까지 감싸는 건 tenant-console-api 한정 규약 —
-  타 API(tenant-sync-api·publication-api 등)는 raw DTO 성공을 유지하는 의도적 분기다
-  (ALPHA-522, AGENTS Rule 7·11). super-admin-api 도 같은 통일을 별도로 진행한다(ALPHA-521).
+  `result` 생략이다(204 는 쓰지 않는다). 성공까지 봉투로 감싸는 건 콘솔 계열 API 규약이다
+  — tenant-console-api·super-admin-api 가 채택했다(ALPHA-521·522). 실계약 조회 표면
+  (tenant-sync-api·publication-api)은 raw DTO 성공을 유지하는 의도적 분기다(AGENTS Rule 7·11).
 - **인가는 인증만 강제(전 역할)** — 로그인 화면 없는 mock 단계의 한시 예외
   (permission-matrix.md "콘솔 mock 표면" 절). 도메인 DB 전환 시 역할을 좁힌다.
 
@@ -85,8 +88,12 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 43건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
+테스트 47건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
 parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 콘솔 mock
 표면의 UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
-`contextLoads` 는 실 DB 를 요구하는 통합 테스트라 로컬 DB 없이는 실패한다(compose E2E 경로).
+단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
+Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
+`contextLoads` 가 `ddl-auto=validate` 로 엔티티↔실스키마 정합을, `ReviewMemberRepositoryIT`
+가 decide 가드·publish ON CONFLICT·활성 조회·save 를 실 쿼리로 확인한다(Docker 없으면
+JUnit `@EnabledIf` 로 disabled 로 보고 — 숨겨진 통과가 아니다; CI/Docker 에서 실행).

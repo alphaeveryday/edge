@@ -55,7 +55,7 @@ UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 A
 tenant-console-ui 와 거의 동일 규약 — 공통 fetch 래퍼 [`src/api/client.ts`](src/api/client.ts)
 (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증), TanStack Query hook, 페이지는 도메인
 hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `session`.
-단 super-admin-api 는 성공 응답도 공통 봉투(`ApiResponse`)로 감싸므로, client.ts 가
-`.result` 를 중앙에서 벗겨 반환하는 점만 tenant-console-ui 와 다르다(ALPHA-521 —
-도메인별 repository 는 무변경). 그 밖 상세 규약은
+super-admin-api 성공 응답도 공통 봉투(`ApiResponse`)라 client.ts 가 `.result` 를
+중앙에서 벗겨 반환한다 — tenant-console-ui 도 동일하다(ALPHA-521·522, 도메인별
+repository 는 무변경). 그 밖 상세 규약은
 [tenant-console-ui README](../../onprem/tenant-console-ui/README.md#데이터-레이어-핵심-규약) 참조 (중복 서술하지 않는다).

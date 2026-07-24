@@ -1,12 +1,13 @@
 package com.edge.tenantconsole.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
+import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
-import com.edge.tenantconsole.repository.ReviewItemRepository.ReviewItem;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Limit;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -27,53 +28,47 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 검수 계약(state-machine.md)을 검증한다: 승인 = 전이+재발행이 한 단위, 반려 = 사유 필수,
  * REVIEW_REQUIRED 밖 항목은 409(동시 결정 수렴), grain 선점은 409.
- * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다. 실 DB 경로는 compose E2E.
+ * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다. 리포지토리(JPA)는 좁은
+ * 인터페이스라 페이크로 스텁한다 — 실 DB 경로는 Testcontainers 통합 테스트.
  */
 class ReviewControllerTest {
 
-	private static final ReviewItem PENDING = new ReviewItem(
+	private static final AnalysisItemEntity PENDING = new AnalysisItemEntity(
 			"er-rev-1", "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
 			"정정 요약", null, "LOW", "REVIEW_REQUIRED", "er-0", "근거 공시 정정",
 			OffsetDateTime.of(2026, 7, 15, 17, 0, 0, 0, ZoneOffset.ofHours(9)));
 
-	private static final class StubItems extends ReviewItemRepository {
-		ReviewItem item = PENDING;
+	private static final class StubItems implements ReviewItemRepository {
+		AnalysisItemEntity item = PENDING;
 		boolean decideResult = true;
 		final List<String> decisions = new ArrayList<>();
 
-		StubItems() {
-			super(null);
+		@Override
+		public List<AnalysisItemEntity> findByStatusOrderByReceivedAtAsc(String status, Limit limit) {
+			return item != null && item.getStatus().equals(status) ? List.of(item) : List.of();
 		}
 
 		@Override
-		public List<ReviewItem> findByStatus(String status, int limit) {
-			return item != null && item.status().equals(status) ? List.of(item) : List.of();
+		public Optional<AnalysisItemEntity> findById(String id) {
+			return Optional.ofNullable(
+					item != null && item.getExplanationResultId().equals(id) ? item : null);
 		}
 
 		@Override
-		public Optional<ReviewItem> findById(String id) {
-			return Optional.ofNullable(item != null && item.explanationResultId().equals(id) ? item : null);
-		}
-
-		@Override
-		public boolean decide(String id, String decidedStatus) {
+		public int decide(String id, String decidedStatus) {
 			decisions.add(id + ":" + decidedStatus);
-			return decideResult;
+			return decideResult ? 1 : 0;
 		}
 	}
 
-	private static final class StubPublications extends PublicationRepository {
+	private static final class StubPublications implements PublicationRepository {
 		boolean publishResult = true;
 		final List<String> published = new ArrayList<>();
 
-		StubPublications() {
-			super(null);
-		}
-
 		@Override
-		public boolean publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
+		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
 			published.add(analysisItemId);
-			return publishResult;
+			return publishResult ? 1 : 0;
 		}
 	}
 

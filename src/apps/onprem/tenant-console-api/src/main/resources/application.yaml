@@ -18,6 +18,16 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
     username: ${SPRING_DATASOURCE_USERNAME:edge}
     password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      # DDL 은 Flyway(libs/schema)가 SSOT — Hibernate 는 스키마를 생성/변경하지 않고
+      # 매핑↔실테이블 정합만 검증한다(불일치 시 기동 실패로 드러남). ADR-0005·0038.
+      ddl-auto: validate
+    # OSIV 비활성 — 영속성 컨텍스트를 트랜잭션 경계로 한정(레이지 로딩 경계 명확).
+    open-in-view: false
+  flyway:
+    # 앱은 기동 시 마이그레이션을 실행하지 않는다(libs/schema 전용) — README 규약.
+    enabled: false
 
 console:
   auth:
