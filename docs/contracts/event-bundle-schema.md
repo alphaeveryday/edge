@@ -2,7 +2,7 @@
 
 > **계약 문서** — 진기-영서 인터페이스는 **Cloud Event Store DB 스키마**다([../adr/0026](../adr/0026-ownership-boundary-db.md), db-as-contract). 이 파일 중 스키마 경계면 서술의 변경은 공동 승인 대상(CODEOWNERS)이고, 번들 와이어 포맷(JSON·체크섬)은 Sync 양단 소유자(영서)의 스펙으로 함께 기록한다.
 
-> **기계가독 계약(JSON Schema)** — 번들 JSON 구조의 기계가독 실체는 [`libs/schema/contracts/event-bundle.schema.json`](../../src/libs/schema/contracts/event-bundle.schema.json)(draft 2020-12, ALPHA-497). 이 문서(시맨틱·필드 정의)가 상위 SSOT이고 schema.json 은 그 기계가독 층이다. producer(tenant-sync-api)·consumer(publication-api) 양단이 이 파일을 로드해 계약 테스트로 검증하며(`contract-test.yml` CI — consumer 는 실제 `ExplanationStore` 파싱 대조), tenant-sync-api `openapi.yaml` 도 이 파일을 `$ref` 한다.
+> **기계가독 계약(JSON Schema)** — 번들 JSON 구조의 기계가독 실체는 [`libs/schema/contracts/event-bundle.schema.json`](../../src/libs/schema/contracts/event-bundle.schema.json)(draft 2020-12, ALPHA-497). 이 문서(시맨틱·필드 정의)가 상위 SSOT이고 schema.json 은 그 기계가독 층이다. producer(tenant-sync-api)와 온프렘 소비자(screening-worker `BundleScreener` wire 적재·publication-api `ExplanationStore` 서빙 파싱)가 이 파일을 로드해 전 구간 계약 테스트로 검증하며(`contract-test.yml` CI), tenant-sync-api `openapi.yaml` 도 이 파일을 `$ref` 한다.
 
 > **상태: 합의 진행 (v4, 2026-07-24)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했고, 전달 레코드(outbox)를 `tenant_delivery`로 확정했다(ALPHA-396). `source_events`·`evidences` 경계면 컬럼까지 확정했다(ALPHA-395, 아래 "경계면 컬럼" 절). 영서 단독 결정은 모두 확정됐고, 열린 항목은 진기 확인 대상(스키마 `tenant`·`tenant_credential` 정의, 선별 nullable 컬럼 채움 보증)뿐이다.
 

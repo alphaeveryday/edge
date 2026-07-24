@@ -36,7 +36,19 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-flyway'
 	testImplementation 'org.flywaydb:flyway-core'
 	testImplementation 'org.flywaydb:flyway-database-postgresql'
+	// 실 wire 소비자(BundleScreener) 가 번들 evidences 를 analysis_item 으로 옮길 때 계약 형상을
+	// 유지하는지 검증(JSON Schema 2020-12). producer 와 같은 libs/schema 공유 스키마(아래 sourceSets).
+	testImplementation 'com.networknt:json-schema-validator:1.5.6'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// 번들 계약 SSOT(event-bundle.schema.json)를 테스트 classpath 에 올린다(producer 와 동일 파일).
+sourceSets {
+	test {
+		resources {
+			srcDir "$rootDir/libs/schema/contracts"
+		}
+	}
 }
 
 tasks.named('test') {

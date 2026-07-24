@@ -1,12 +1,14 @@
 # PR 검증 — Event Bundle 와이어 계약(JSON Schema) 양단 일치.
 #
-# producer(tenant-sync-api)와 실소비자(publication-api)가 같은
-# libs/schema/contracts/event-bundle.schema.json 을 로드해 번들을 검증하는 계약 테스트를 돌린다
-# (ALPHA-497). producer 는 직렬화 출력이 계약을 만족하는지, consumer 는 실제 파싱
-# (ExplanationStore.parseEvidences)이 계약 형상을 읽는지 대조한다 — 스키마·직렬화·소비자 파싱이
-# 어긋나면 여기서 fail-loud, 온프렘 화면이 조용히 비는 사고(ALPHA-395)를 PR 에서 막는다.
+# producer(tenant-sync-api)와 온프렘 실소비자들이 같은 libs/schema/contracts/event-bundle.schema.json
+# 을 로드해 번들 계약을 검증한다(ALPHA-497) — 전 구간을 못박는다:
+#   · tenant-sync-api : 직렬화 출력이 계약을 만족하는가(producer)
+#   · screening-worker: 실 wire 소비자 BundleScreener 가 번들 evidences 를 analysis_item 으로 옮길 때
+#                       계약 형상을 유지하는가(rename/drop/transform 감지)
+#   · publication-api : 실 파싱 ExplanationStore.parseEvidences 가 계약 형상을 읽는가(서빙)
+# 어긋나면 fail-loud — 온프렘 화면이 조용히 비는 사고(ALPHA-395)를 PR 에서 막는다.
 #
-# --tests 필터로 계약 테스트 클래스만 돈다 — publication-api 의 Testcontainers 통합 테스트(Docker 필요)는
+# --tests 필터로 계약 테스트 클래스만 돈다 — 각 모듈의 Testcontainers 통합 테스트(Docker 필요)는
 # 제외되어 이 워크플로는 DB·secret 없이 순수 JVM 만으로 끝난다.
 #
 # 스키마·두 모듈·Gradle 이 바뀐 PR 에서만 실행하도록 paths 필터를 둔다. 이 레포(private, free 플랜)는
@@ -21,6 +23,7 @@ on:
     paths:
       - "src/libs/schema/contracts/**"
       - "src/apps/cloud/tenant-sync-api/**"
+      - "src/apps/onprem/screening-worker/**"
       - "src/apps/onprem/publication-api/**"
       - "src/gradle/**"
       - "src/gradlew"
@@ -60,5 +63,6 @@ jobs:
         run: >
           ./gradlew
           :apps:cloud:tenant-sync-api:test
+          :apps:onprem:screening-worker:test
           :apps:onprem:publication-api:test
           --tests '*EventBundleContractTest'
