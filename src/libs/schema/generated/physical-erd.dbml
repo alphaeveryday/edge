@@ -178,7 +178,7 @@ Table "etf_nav_daily" {
 Table "etf_profile" {
   "instrument_id" text [pk]
   "instrument_type" varchar(20)
-  "etf_type" varchar(40) [not null]
+  "etf_type" varchar(40)
   "tracking_market_series_id" text
   "primary_theme_concept_id" text
   "asset_manager_name" text
@@ -370,6 +370,43 @@ Table "instrument" {
   "currency_code" varchar(3)
 }
 
+Table "investor_flow_daily" {
+  "instrument_id" text [not null]
+  "trade_date" date [not null]
+  "net_qty_individual" bigint [not null]
+  "net_val_individual" bigint [not null]
+  "net_qty_foreign" bigint [not null]
+  "net_val_foreign" bigint [not null]
+  "net_qty_institution_total" bigint [not null]
+  "net_val_institution_total" bigint [not null]
+  "net_qty_financial_invest" bigint
+  "net_val_financial_invest" bigint
+  "net_qty_investment_trust" bigint
+  "net_val_investment_trust" bigint
+  "net_qty_pension" bigint
+  "net_val_pension" bigint
+  "net_qty_private_fund" bigint
+  "net_val_private_fund" bigint
+  "net_qty_bank" bigint
+  "net_val_bank" bigint
+  "net_qty_insurance" bigint
+  "net_val_insurance" bigint
+  "net_qty_merchant_bank" bigint
+  "net_val_merchant_bank" bigint
+  "net_qty_other_corp" bigint
+  "net_val_other_corp" bigint
+  "net_qty_other_org" bigint
+  "net_val_other_org" bigint
+  "net_qty_other" bigint
+  "net_val_other" bigint
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("instrument_id", "trade_date") [pk]
+  }
+}
+
 Table "market_series" {
   "market_series_id" text [pk]
   "series_type" varchar(30) [not null]
@@ -388,6 +425,101 @@ Table "news_document" {
   "representative_document_id" text
   "dedup_cluster_id" text
   "theme_concept_id" text
+}
+
+Table "ops_expectation_snapshot" {
+  "expectation_snapshot_id" text [pk]
+  "pipeline_run_id" text
+  "task_key" text
+  "universe_version" text
+  "constituent_as_of_date" date
+  "entity_kind" text
+  "expected_entity_count" int [not null]
+  "entity_ids" jsonb
+  "storage_uri" text
+  "content_hash" text
+  "created_at" timestamptz [not null]
+}
+
+Table "ops_expected_task" {
+  "expected_task_id" text [pk]
+  "pipeline_run_id" text [not null]
+  "task_key" text [not null]
+  "stage" text [not null]
+  "dataset" text
+  "plan_status" text [not null]
+  "task_outcome" text
+  "data_status" text
+  "required" boolean [not null]
+  "expected_at" timestamptz
+  "deadline_at" timestamptz
+  "eligible_at" timestamptz
+  "missed_at" timestamptz
+  "fulfilled_at" timestamptz
+  "blocked_at" timestamptz
+  "expected_as_of_date" date
+  "expectation_snapshot_id" text
+  "skip_reason" text
+  "outcome_reason" text
+  "current_attempt_id" text
+  "completeness" jsonb
+  "idempotency_key" text [not null]
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "ops_pipeline_run" {
+  "pipeline_run_id" text [pk]
+  "run_key" text [not null]
+  "pipeline_type" text [not null]
+  "schedule_slot" text
+  "trading_date" date
+  "hard_deadline_at" timestamptz
+  "catalog_version" text
+  "catalog_content_hash" text
+  "image_digest" text
+  "execution_name" text [not null]
+  "input_hash" text
+  "expected_execution_arn" text
+  "sfn_execution_arn" text
+  "launch_status" text [not null]
+  "orchestration_status" text
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "ops_reconciliation_issue" {
+  "issue_id" text [pk]
+  "issue_type" text [not null]
+  "scope" text
+  "scope_key" text
+  "dedupe_key" text [not null]
+  "status" text [not null]
+  "first_seen_at" timestamptz [not null]
+  "last_seen_at" timestamptz [not null]
+  "occurrence_count" int [not null]
+  "resolution_reason" text
+  "resolution_source" text
+  "evidence" jsonb
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "ops_task_attempt" {
+  "attempt_id" text [pk]
+  "expected_task_id" text [not null]
+  "attempt_number" int
+  "ecs_task_arn" text [not null]
+  "execution_status" text [not null]
+  "started_at" timestamptz
+  "finished_at" timestamptz
+  "exit_code" int
+  "failure_reason" text
+  "sfn_execution_arn" text
+  "sfn_state_name" text
+  "data_status" text
+  "record_source" text [not null]
+  "created_at" timestamptz [not null]
 }
 
 Table "price_daily" {
@@ -521,6 +653,20 @@ Table "tenant_credential" {
   "revoked_at" timestamptz
 }
 
+Table "tenant_delivery" {
+  "tenant_id" bigint [not null]
+  "cursor" bigint [not null]
+  "delivery_type" varchar(20) [not null]
+  "explanation_result_id" text
+  "target_explanation_result_id" text
+  "reason" text
+  "created_at" timestamptz [not null]
+
+  indexes {
+    ("tenant_id", "cursor") [pk]
+  }
+}
+
 Table "tenant_release_history" {
   "tenant_id" bigint [not null]
   "bundle_version" varchar(30) [not null]
@@ -605,9 +751,13 @@ Ref: "explanation_run_event_evidence"."explanation_run_id" > "explanation_run"."
 Ref: "explanation_run_event_price_observation"."event_price_observation_id" > "event_price_observation"."event_price_observation_id"
 Ref: "explanation_run_event_price_observation"."explanation_run_id" > "explanation_run"."explanation_run_id"
 Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "entity_type")
+Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
+Ref: "ops_expected_task"."pipeline_run_id" > "ops_pipeline_run"."pipeline_run_id"
+Ref: "ops_expected_task"."expectation_snapshot_id" > "ops_expectation_snapshot"."expectation_snapshot_id"
+Ref: "ops_task_attempt"."expected_task_id" > "ops_expected_task"."expected_task_id"
 Ref: "price_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "price_decomposition"."benchmark_series_id" > "market_series"."market_series_id"
 Ref: "price_decomposition"."price_observation_id" > "price_observation"."price_observation_id"
@@ -620,6 +770,9 @@ Ref: "supply_contract_fact"."contract_object_concept_id" > "concept"."concept_id
 Ref: "supply_contract_fact"."counterparty_actor_id" > "actor"."actor_id"
 Ref: "supply_contract_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
 Ref: "tenant_credential"."tenant_id" > "tenant"."tenant_id"
+Ref: "tenant_delivery"."explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."target_explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_release_history"."bundle_version" > "release_bundle"."bundle_version"
 Ref: "tenant_release_history"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_sync_cursor"."tenant_id" > "tenant"."tenant_id"

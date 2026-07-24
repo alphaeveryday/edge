@@ -44,7 +44,7 @@ apply() {  # $1=migration dir  $2=db
     psql -v ON_ERROR_STOP=1 -q -d "$2" -f "$f" >/dev/null
   done
 }
-apply "$HERE/migrations"        edge
+apply "$HERE/migrations-cloud"  edge
 apply "$HERE/migrations-onprem" edge_onprem
 
 mkdir -p "$OUT"

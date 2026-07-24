@@ -9,7 +9,7 @@ set -uo pipefail
 # 마이그레이션이 스테이징됐을 때만 동작한다(일반 커밋은 즉시 통과 — 매 커밋마다 DB 를 띄우지 않음).
 changed="$(git diff --cached --name-only)" || exit 0
 case "$changed" in
-  *src/libs/schema/migrations/*|*src/libs/schema/migrations-onprem/*) ;;
+  *src/libs/schema/migrations-cloud/*|*src/libs/schema/migrations-onprem/*) ;;
   *) exit 0 ;;
 esac
 
