@@ -1,0 +1,13 @@
+# prod profile 전용 — 배포 환경에서만 활성(SPRING_PROFILES_ACTIVE=prod). 로컬(IDE·compose)은
+# default profile 이라 평문 콘솔 로그를 유지한다(ALPHA-531). 배포 콘솔은 stdout 으로 흐르므로
+# ECS(Elastic Common Schema) JSON 으로 출력해 level·service 필드 단위 쿼리·집계를 가능케 한다.
+# service.name 은 spring.application.name 에서 자동 파생된다.
+# ⚠️ onprem 데모 배포 런타임은 아직 SPRING_PROFILES_ACTIVE 를 주입하지 않는다(ALPHA-445 후속) —
+#    그 배선 전까지 이 파일은 비활성이다. 로컬 compose 는 default profile 이라 평문을 유지한다.
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        environment: onprem
