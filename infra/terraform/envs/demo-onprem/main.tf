@@ -65,5 +65,14 @@ module "mts_site" {
   domain_name     = var.mts_domain
   zone_id         = data.terraform_remote_state.foundation.outputs.zone_id
   certificate_arn = data.terraform_remote_state.foundation.outputs.wildcard_cdn_certificate_arn
-  spa             = true
+  # 단일 페이지(클라이언트 탭 전환, pushState/해시 라우팅 없음)라 SPA fallback 불필요.
+  # spa=true 면 배포 전역 custom_error_response(403/404→index.html 200)가 /api/* 에도 적용돼
+  # mock-broker 오류를 HTML 200 으로 가린다(Codex 지적) — false 로 두어 API 오류가 그대로 통과.
+  spa = false
+
+  # /api/* → 데모 박스 mock-broker(HTTP :mock_broker_port). 브라우저 MTS 의 AI 탭이
+  # 같은 도메인으로 박스를 실호출한다(mixed-content 회피: 뷰어 HTTPS, 오리진 HTTP).
+  # 박스 SG 인바운드는 CloudFront origin-facing 프리픽스로 이미 열려 있다.
+  api_origin_domain = module.demo_onprem.public_dns
+  api_origin_port   = var.mock_broker_port
 }

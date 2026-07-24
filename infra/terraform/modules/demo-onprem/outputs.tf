@@ -13,6 +13,11 @@ output "public_ip" {
   value       = var.associate_eip ? aws_eip.this[0].public_ip : aws_instance.this.public_ip
 }
 
+output "public_dns" {
+  description = "데모 박스 공개 DNS (CloudFront /api 오리진 도메인용 — EIP 사용 시 그 DNS)"
+  value       = var.associate_eip ? aws_eip.this[0].public_dns : aws_instance.this.public_dns
+}
+
 output "security_group_id" {
   description = "데모 박스 SG — CloudFront 오리진 인바운드 배선 등에 참조"
   value       = aws_security_group.this.id
