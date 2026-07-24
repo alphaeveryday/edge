@@ -21,8 +21,9 @@
 `instrument.market_code NOT NULL` 이라 **스키마 자신의 규칙으로** 제외된다 — 별도 증권유형 어휘를
 만들지 않는다.
 
-`dart_corp_code` 는 채우지 않는다 — canonical 에 없고, 로더가 DART API 를 부르면 관심사가 섞인다
-(공시 적재는 KR 9 타깃 한정이고 그 9종은 ALPHA-362 가 이미 실값을 채웠다). nullable 이라 무해하다.
+`dart_corp_code` 는 채우지 않는다 — canonical 에 없고, 로더가 DART API 를 부르면 관심사가 섞인다.
+NULL 로 두면 별도 `enrich-corp-code` 스텝이 corpCode.xml 매칭으로 채운다(ALPHA-491). nullable 이라
+그 사이에도 무해하다(ALPHA-362 가 시딩한 9종은 이미 실값).
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def _insert_company(conn, name: str, country: str) -> str:
             "INSERT INTO actor (actor_id, actor_type, country_code) VALUES (%s, 'COMPANY', %s)",
             (actor_id, country),
         )
-        # dart_corp_code 는 canonical 에 없어 NULL — 공시 적재 때 채운다(nullable).
+        # dart_corp_code 는 canonical 에 없어 NULL — enrich-corp-code 스텝이 채운다(ALPHA-491, nullable).
         cur.execute("INSERT INTO company_profile (actor_id) VALUES (%s)", (actor_id,))
     return actor_id
 

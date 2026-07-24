@@ -3,7 +3,7 @@
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-etf-profile
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|load-price-triggers|load-documents|load-disclosure|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
@@ -49,6 +49,7 @@ from .sources import (
 )
 from .steps import (
     assemble_events,
+    enrich_corp_code,
     ingest_price_raw,
     load_assertions,
     load_disclosure,
@@ -114,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                  "ingest-raw-investor",
                  "normalize-price", "normalize-investor",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "load-price-triggers",
+                 "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
                  "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
@@ -177,6 +178,16 @@ def main(argv: list[str] | None = None) -> int:
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
     if args.step == "load-instruments":
         return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db))
+
+    # corp_code enrichment 은 DB(미충전 KR 회사)를 읽고 OpenDART corpCode.xml 로 채운다 —
+    # 마스터 적재도 공시 적재도 아닌 별개 관심사라 별도 스텝(ALPHA-491). db + DART 소스 둘 다 필요.
+    if args.step == "enrich-corp-code":
+        if settings.dart_disclosure is None:
+            raise SystemExit("dart_disclosure.source 설정이 없다 — sources.toml 확인")
+        corp_source = DartDisclosureSource(settings.dart_disclosure.source, PoliteClient())
+        return enrich_corp_code.run(
+            storage, run_id, db=db_config_from_env(settings.db), source=corp_source
+        )
 
     # 문서 마스터도 canonical 을 읽어 DB 에 쓰는 적재 스텝이다. 창(--from/--to)은 수집 창이
     # 아니라 **적재 대상 published_date 파티션**을 좁힌다(미지정=전체, 멱등 skip 이라 재실행
