@@ -1,5 +1,6 @@
 package com.edge.screening.service;
 
+import com.edge.screening.entity.ReceivedBundle;
 import com.edge.screening.repository.AnalysisItemRepository;
 import com.edge.screening.repository.PendingBundleRepository;
 import com.edge.screening.repository.PublicationRepository;
@@ -28,24 +29,20 @@ class BundleScreenerTest {
 			 "etf_name":"KODEX 200","trade_date":"2026-07-15","explanation_as_of":"2026-07-15T16:00:00+09:00",
 			 "explanation_type":"EVENT_SUPPORTED","summary":"s","confidence_level":"MEDIUM"}""";
 
-	private static final class RecordingItems extends AnalysisItemRepository {
+	private static final class RecordingItems implements AnalysisItemRepository {
 		record Upserted(String id, String supersedes, String reason, String status) {
 		}
 
 		final List<Upserted> upserts = new ArrayList<>();
 		final List<String> transitions = new ArrayList<>();
 
-		RecordingItems() {
-			super(null);
-		}
-
 		@Override
-		public boolean upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
+		public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 				OffsetDateTime asOf, String type, String summary, String headline, String confidence,
 				String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
 				long sourceCursor, String status) {
 			upserts.add(new Upserted(id, supersedesItemId, correctionReason, status));
-			return true;
+			return 1;
 		}
 
 		@Override
@@ -55,18 +52,14 @@ class BundleScreenerTest {
 		}
 	}
 
-	private static final class RecordingPublications extends PublicationRepository {
+	private static final class RecordingPublications implements PublicationRepository {
 		final List<String> published = new ArrayList<>();
 		final List<String> transitions = new ArrayList<>();
 
-		RecordingPublications() {
-			super(null);
-		}
-
 		@Override
-		public boolean publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
+		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
 			published.add(analysisItemId);
-			return true;
+			return 1;
 		}
 
 		@Override
@@ -76,11 +69,13 @@ class BundleScreenerTest {
 		}
 	}
 
-	private static final class RecordingPending extends PendingBundleRepository {
+	private static final class RecordingPending implements PendingBundleRepository {
 		final List<Long> screened = new ArrayList<>();
 
-		RecordingPending() {
-			super(null);
+		// screen() 경로만 검증하므로 조회는 안 쓴다 — 빈 목록 스텁.
+		@Override
+		public List<ReceivedBundle> findUnscreenedRows(int limit) {
+			return List.of();
 		}
 
 		@Override

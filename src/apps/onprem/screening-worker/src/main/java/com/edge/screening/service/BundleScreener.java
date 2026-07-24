@@ -73,7 +73,7 @@ public class BundleScreener {
 			log.error("NEW entry 에 etf_ticker 결측 — 게시 불가, 항목만 보존 (id={})", id);
 			return;
 		}
-		boolean published = publicationRepository.publish(id, ticker, tradeDate);
+		boolean published = publicationRepository.publish(id, ticker, tradeDate) > 0;
 		log.info("NEW screened id={} auto_published={} (grain 선점 시 skip)", id, published);
 	}
 
