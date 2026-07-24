@@ -78,6 +78,9 @@ ISSUE_LEDGER_GAP = "LEDGER_GAP"
 ISSUE_EVIDENCE_LOST = "EVIDENCE_LOST"
 ISSUE_PLANNER_MISSING = "PLANNER_MISSING"
 ISSUE_LAUNCH_CONFLICT = "LAUNCH_CONFLICT"
+# Planner 는 pipeline_run 을 남겼는데 SFN 실행이 확인되지 않는다(StartExecution 전/중 크래시).
+# 스케줄러 RunTask 성공이 Planner 프로세스 성공을 보장하지 않아 생기는 fail-loud 공백을 메운다.
+ISSUE_LAUNCH_UNCONFIRMED = "LAUNCH_UNCONFIRMED"
 
 # ── 사유 코드(outcome_reason / skip_reason / record_source) ──
 SKIP_NON_TRADING_DAY = "NON_TRADING_DAY"

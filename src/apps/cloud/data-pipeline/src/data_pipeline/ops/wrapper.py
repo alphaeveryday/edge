@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import urllib.request
 from collections.abc import Callable
@@ -45,6 +46,11 @@ def _detect_ecs_task_arn() -> str | None:
         return None
 
 
+def _num(value) -> bool:
+    """유한한 수치인가(bool 제외). malformed 신호(None·문자열·NaN·inf)를 걸러 crash·오판을 막는다."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def derive_data_status(signals: dict) -> str:
     """산출 데이터 신호 → data_status. **정직하게** — 근거 부족은 UNKNOWN(스펙 §3.3·§6).
 
@@ -53,39 +59,43 @@ def derive_data_status(signals: dict) -> str:
       request_completed    소스 요청 자체가 정상 완료됐나(bool)
       empty_allowed        데이터셋 계약상 0건이 정상인가(bool)
       records_out          canonical/적재된 유효 건수
-      failed_records       탈락/실패 건수
+      failed_records       탈락/실패 건수(적재 탈락·미등록·모호 등 in-band 유실 전부)
       expected_count       기대 entity 수(스냅샷)
       received_count       수신 unique entity 수
       trading_day          거래일 모순 없음(bool)
 
-    규칙:
-      exit≠0                         → UNKNOWN (실행 실패 — 데이터 상태 단정 안 함)
-      필수 신호 부재                 → UNKNOWN (exit0 만으로 VALID 금지, 테스트 21)
+    규칙(malformed 신호는 VALID 로 승격되지 않고 crash 하지도 않는다 — edge-review H각도):
+      exit_code 결측/≠0             → UNKNOWN (성공 exit 만으로 VALID 금지, 테스트 21)
       완전성 결손(received<expected) → INCOMPLETE
-      실패 레코드 있음               → INCOMPLETE
-      0건 + (요청완료·계약상 허용·거래일 무모순) → VALID_EMPTY (0건만으로는 불가, 테스트 22)
-      0건인데 위 증명 부족           → UNKNOWN
-      유효 건수>0·결손/실패 없음     → VALID
+      실패 레코드>0                  → INCOMPLETE / 실패 레코드 비수치 → UNKNOWN(malformed)
+      records_out 결측·음수·NaN·비수치 → UNKNOWN
+      0건 + (요청완료·계약허용·거래일무모순) → VALID_EMPTY (0건만으로는 불가, 테스트 22)
+      0건인데 증명 부족              → UNKNOWN
+      유효 건수>0·알려진 결손/실패 없음 → VALID
     """
-    exit_code = signals.get("exit_code")
-    if exit_code is not None and exit_code != 0:
+    # 성공 exit(정확히 0)이 아니면 데이터 상태를 단정하지 않는다. exit_code 결측(None)도 포함 —
+    # 성공을 확인하지 못한 것이므로 VALID 로 올리지 않는다(H각도 crash-before-gate·coerce 방지).
+    if signals.get("exit_code") != 0:
         return states.DATA_UNKNOWN
 
-    received = signals.get("received_count")
-    expected = signals.get("expected_count")
-    if received is not None and expected is not None and received < expected:
+    expected, received = signals.get("expected_count"), signals.get("received_count")
+    if _num(expected) and _num(received) and received < expected:
         return states.DATA_INCOMPLETE
-    if (signals.get("failed_records") or 0) > 0:
-        return states.DATA_INCOMPLETE
+    failed = signals.get("failed_records")
+    if failed is not None:
+        if not _num(failed):
+            return states.DATA_UNKNOWN       # 비수치 실패 신호 — 비교 crash 대신 UNKNOWN
+        if failed > 0:
+            return states.DATA_INCOMPLETE
 
     records_out = signals.get("records_out")
-    if records_out is None:
-        return states.DATA_UNKNOWN          # 신호 부족 — exit0 만으로 VALID 금지
+    if not _num(records_out) or records_out < 0:
+        return states.DATA_UNKNOWN            # 결측·음수·NaN·비수치 → VALID 로 위장 금지
     if records_out == 0:
         if signals.get("request_completed") and signals.get("empty_allowed") \
                 and signals.get("trading_day", True):
-            return states.DATA_VALID_EMPTY  # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 입증
-        return states.DATA_UNKNOWN          # 0건만으로 VALID_EMPTY 금지(테스트 22)
+            return states.DATA_VALID_EMPTY   # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 입증
+        return states.DATA_UNKNOWN           # 0건만으로 VALID_EMPTY 금지(테스트 22)
     return states.DATA_VALID
 
 
@@ -110,6 +120,11 @@ def instrument(
     expected = _safe(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key))
     if not expected:
         # 미등록 작업 또는 원장 조회 실패 — 본 작업만 돌린다(투명 통과, 스펙 §6).
+        return run_fn()
+    if expected.get("plan_status") == states.PLAN_SKIPPED:
+        # SKIPPED 작업(비거래일 등)은 attempt 를 만들지 않는다 — SKIPPED→attempt 금지 불변식
+        # (스펙 §3.2·마이그레이션 주석). SFN 이 그날 다른 데이터셋 때문에 돌아 이 컨테이너가
+        # 실행되더라도, 계획상 SKIP 된 작업에 실행 이력을 붙이면 축이 오염된다(edge-review).
         return run_fn()
     expected_task_id = expected["expected_task_id"]
 

@@ -202,15 +202,13 @@ def _reconcile_already_exists(
         ledger.set_launch_result(run_id, launch_status=states.LAUNCH_UNKNOWN)
         return states.LAUNCH_UNKNOWN, None, False
 
+    # **입력 해시로만** 동일성을 판정한다 — run_id 만 같고 mode 가 다르면(같은 날짜를 incremental
+    # vs backfill 로 재계획) 서로 다른 실행이라 CONFLICT 여야 한다. run_id OR 해시로 보면 mode
+    # 차이를 삼켜 원장 input_hash 와 실제 실행 입력이 어긋난다(edge-review). 해시가 곧 입력이다.
     existing_input = desc.get("input") or "{}"
-    try:
-        existing_run_id = json.loads(existing_input).get("run_id")
-    except (ValueError, AttributeError):
-        existing_run_id = None
     existing_hash = hashlib.sha256(existing_input.encode("utf-8")).hexdigest()
 
-    same = existing_run_id == pipeline_run_id or existing_hash == input_hash
-    if same:
+    if existing_hash == input_hash:
         arn = desc.get("executionArn", expected_execution_arn)
         ledger.set_launch_result(
             run_id, launch_status=states.LAUNCH_LAUNCHED, sfn_execution_arn=arn,
@@ -224,7 +222,7 @@ def _reconcile_already_exists(
         issue_type=states.ISSUE_LAUNCH_CONFLICT,
         dedupe_key=f"launch_conflict:{execution_name}",
         scope="run", scope_key=run_id,
-        evidence={"execution_name": execution_name, "existing_run_id": existing_run_id,
-                  "expected_run_id": pipeline_run_id},
+        evidence={"execution_name": execution_name, "existing_input_hash": existing_hash,
+                  "expected_input_hash": input_hash, "expected_run_id": pipeline_run_id},
     )
     return states.LAUNCH_CONFLICT, None, True

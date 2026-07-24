@@ -214,7 +214,7 @@ class _Cursor:
             return
         self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "arn": p[2], "status": p[3],
                                  "exit_code": p[4], "sfn_arn": p[5], "sfn_state": p[6],
-                                 "source": p[7], "number": None, "started_at": None})
+                                 "source": p[7], "number": None, "started_at": "STARTED"})
         self._rows = [(p[0],)]
 
     def _attempts_for(self, p):
@@ -256,11 +256,13 @@ class FakeSfn:
     class ExecutionAlreadyExists(Exception):
         pass
 
-    def __init__(self, *, already_exists=False, describe=None, history=None, start_arn=None):
+    def __init__(self, *, already_exists=False, describe=None, history=None, start_arn=None,
+                 describe_error=False):
         self._already = already_exists
         self._describe = describe or {}
         self._history = history or []
         self._start_arn = start_arn or "arn:aws:states:...:execution:sm:name"
+        self._describe_error = describe_error
         self.start_calls = []
 
     def start_execution(self, *, stateMachineArn, name, input):
@@ -270,6 +272,8 @@ class FakeSfn:
         return {"executionArn": self._start_arn}
 
     def describe_execution(self, *, executionArn):
+        if self._describe_error:
+            raise RuntimeError("simulated describe/history failure")
         return self._describe
 
     def get_execution_history(self, *, executionArn, maxResults=1000, nextToken=None):

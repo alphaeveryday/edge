@@ -74,6 +74,10 @@ resource "aws_ecs_task_definition" "ops" {
       DATA_PIPELINE_DB__USER  = var.db_user
       # Planner 가 시작할 상태머신. 카탈로그 버전은 배포 SHA 를 CD 가 주입(없으면 unknown).
       OPS_STATE_MACHINE_ARN = aws_sfn_state_machine.this.arn
+      # Reconciler 가 ECS DescribeTasks 를 이 클러스터로 조회한다(생략하면 default 클러스터를
+      # 봐서 실제 태스크를 못 찾는다, edge-review). Planner 의 비거래일 판정용 KR 공휴일 목록도.
+      OPS_CLUSTER_ARN = var.cluster_arn
+      OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

@@ -29,6 +29,13 @@ def test_ledger_present_with_db_config():
     assert ledger_from_settings(_WithDb()) is not None
 
 
-def test_run_module_imports_without_db_env():
-    """run.py 가 DB env 없이 import 됐다(위 import 성공). plan-run/reconcile 은 choices 에 있다."""
-    assert "plan-run" in run.__doc__ or True  # import 성공이 핵심
+def test_plan_run_and_reconcile_are_registered_cli_steps():
+    """plan-run·reconcile 이 실제 argparse choices 에 등록돼 있다(진입점 계약 — Rule 9).
+
+    run.py 는 sys.exit 하는 __main__ 뿐이라 파서를 직접 못 불러오므로, choices 리터럴을 소스에서
+    확인한다. 이름이 바뀌거나 빠지면 이 테스트가 깨진다(or True 같은 공허한 통과 금지)."""
+    import inspect
+
+    src = inspect.getsource(run)
+    assert '"plan-run"' in src and '"reconcile"' in src
+    assert "ops_entry.plan_run_cli" in src and "ops_entry.reconcile_cli" in src

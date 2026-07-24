@@ -336,11 +336,16 @@ class Ledger:
         if not ecs_task_arn:
             return None
         new_id = domain_id("att")
+        # finished_at 은 **종료 상태일 때만** 찍는다 — RUNNING 을 backfill 하면서 finished_at 을
+        # 넣으면 종료로 오독되고, started_at 이 없으면 다음 reconcile 이 경과시간을 못 재 STALLED
+        # 탐지가 영영 안 된다(edge-review). started_at 은 항상 채운다(경과 기준선).
+        terminal = execution_status != states.EXEC_RUNNING
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,"
                 " execution_status, exit_code, sfn_execution_arn, sfn_state_name, record_source,"
-                " finished_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now())"
+                " started_at, finished_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now(),"
+                f" {'now()' if terminal else 'NULL'})"
                 " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
                 " RETURNING attempt_id",
                 (new_id, expected_task_id, ecs_task_arn, execution_status, exit_code,

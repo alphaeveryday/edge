@@ -40,15 +40,25 @@ def _seed(db, tasks, *, hard_deadline=None):
         db.etasks[(_RID, t["task_key"])] = db.etasks_by_id[t["expected_task_id"]] = row
 
 
-def _entered(state, *, arn=None, succeeded=False, submit_failed=False):
-    events = [{"type": "TaskStateEntered", "stateEnteredEventDetails": {"name": state}}]
+def _entered(state, *, arn=None, succeeded=False, exit_code=0, submit_failed=False):
+    """실 SFN history 모양(id/previousEventId 체인)으로 이벤트를 만든다 — execution_evidence 가
+    Parallel 브랜치를 previousEventId 로 귀속하므로 체인이 있어야 arn/exit_code 가 붙는다."""
+    events = [{"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
+               "stateEnteredEventDetails": {"name": state}}]
+    nid = 2
     if arn:
-        events.append({"type": "TaskSubmitted",
+        events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskSubmitted",
                        "taskSubmittedEventDetails": {"output": json.dumps({"TaskArn": arn})}})
+        nid += 1
     if succeeded:
-        events.append({"type": "TaskSucceeded", "taskSucceededEventDetails": {"output": "{}"}})
+        # ecs runTask.sync TaskSucceeded output 은 컨테이너 exit code 를 담는다 — 그게 성패 정본.
+        out = json.dumps({"Containers": [{"ExitCode": exit_code}]})
+        events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskSucceeded",
+                       "taskSucceededEventDetails": {"output": out}})
+        nid += 1
     if submit_failed:
-        events.append({"type": "TaskSubmitFailed", "taskSubmitFailedEventDetails": {}})
+        events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskSubmitFailed",
+                       "taskSubmitFailedEventDetails": {}})
     return events
 
 
@@ -160,9 +170,48 @@ def test_hard_deadline_terminates_eligible_pending_as_missed():
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_MISSED
 
 
-def test_planner_missing_when_slot_has_no_run():
-    """시나리오 19 — schedule 상 있어야 할 run_key 부재 → PLANNER_MISSING."""
+def test_task_succeeded_but_nonzero_exit_is_failed_not_fulfilled():
+    """ecs runTask.sync 의 TaskSucceeded 는 exit0 이 아니다 — exit≠0 이면 FAILED(edge-review)."""
     db = FakeOpsDB()
-    missing = detect_planner_missing(_ledger(db), expected_run_keys=["etf-daily:2026-07-25"])
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis",
+                                    succeeded=True, exit_code=1))
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
+    assert any(a["etid"] == "e1" and a["status"] == states.EXEC_FAILED for a in db.attempts)
+
+
+def test_evidence_failure_does_not_declare_missed():
+    """증거 조회 실패 시 미실행으로 단정하지 않는다 — 빈 evidence 로 MISSED 금지(edge-review)."""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    summary = reconcile_run(_ledger(db), run_key=_RUN_KEY, now=_NOW,
+                            sfn_client=FakeSfn(describe_error=True), ecs_client=FakeEcs())
+    assert summary["evidence_ok"] is False
+    assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_MISSED
+
+
+def test_launch_unconfirmed_when_planning_run_has_no_sfn_evidence():
+    """Planner 가 pipeline_run 은 남겼는데 SFN 실행 미확인 → LAUNCH_UNCONFIRMED(fail-loud)."""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1"}])
+    db.runs[_RUN_KEY]["launch_status"] = states.LAUNCH_PLANNING
+    reconcile_run(_ledger(db), run_key=_RUN_KEY, now=_NOW,
+                  sfn_client=FakeSfn(describe_error=True), ecs_client=FakeEcs())
+    assert len(db.open_issues(states.ISSUE_LAUNCH_UNCONFIRMED)) == 1
+
+
+def test_planner_missing_when_slot_has_no_run():
+    """시나리오 19 — schedule 상 있어야 할 run_key 부재 → PLANNER_MISSING, 생기면 RESOLVE."""
+    db = FakeOpsDB()
+    ledger = _ledger(db)
+    missing = detect_planner_missing(ledger, expected_run_keys=["etf-daily:2026-07-25"])
     assert missing == ["etf-daily:2026-07-25"]
     assert len(db.open_issues(states.ISSUE_PLANNER_MISSING)) == 1
+    # 늦게 run 이 생기면 거짓 경보를 닫는다(비래치).
+    db.runs["etf-daily:2026-07-25"] = db.runs_by_id["r25"] = {
+        "pipeline_run_id": "r25", "run_key": "etf-daily:2026-07-25", "execution_name": "x",
+        "expected_execution_arn": None, "sfn_execution_arn": None, "launch_status": "LAUNCHED",
+        "orchestration_status": None, "hard_deadline_at": None, "trading_date": "2026-07-25"}
+    detect_planner_missing(ledger, expected_run_keys=["etf-daily:2026-07-25"])
+    assert len(db.open_issues(states.ISSUE_PLANNER_MISSING)) == 0

@@ -90,6 +90,18 @@ def test_instrument_passthrough_when_unregistered():
     assert db.attempts == []
 
 
+def test_instrument_skips_attempt_for_skipped_task():
+    """SKIPPED 작업(비거래일 등)은 SFN 이 그날 돌아 컨테이너가 떠도 attempt 를 안 만든다."""
+    db = FakeOpsDB()
+    _seed(db)
+    db.etasks_by_id["et1"]["plan_status"] = "SKIPPED"
+    rc = wrapper.instrument(lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R",
+                            ledger=_ledger(db), ecs_task_arn="arn:task/1")
+    assert rc == 0
+    assert db.attempts == []
+    assert db.etasks_by_id["et1"]["task_outcome"] == "PENDING"  # 안 건드림
+
+
 def test_instrument_continues_when_ledger_down():
     """시나리오 6(엔드투엔드) — 원장 DB 장애에도 본 작업이 실행되고 exit code 가 보존된다."""
     db = FakeOpsDB()

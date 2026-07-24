@@ -732,6 +732,12 @@ resource "aws_scheduler_schedule" "daily" {
   # Planner 가 실행 전 pipeline_run+expected_task 를 원장에 남기고(관측 정본) SFN 을 시작한다 —
   # 그래야 SFN 이 아예 안 떠도 "실행 자체가 안 됐다"를 탐지할 수 있다(스펙 §5). 스케줄 시각은
   # <aws.scheduler.scheduled-time> 를 env(OPS_SCHEDULED_TIME)로 넘겨 Planner 가 슬롯을 계산한다.
+  #
+  # ⚠️ retry/DLQ 의미가 바뀐다(edge-review): 스케줄러는 **RunTask 제출**까지만 보므로 아래
+  # retry/DLQ 는 "Planner 컨테이너가 뜨지 못한" 경우만 덮는다. Planner 가 뜬 뒤 DB·StartExecution
+  # 실패로 exit≠0 이어도 스케줄러엔 성공으로 보인다 — 그 공백은 **Reconciler 가 메운다**:
+  # pipeline_run 이 없으면 PLANNER_MISSING, 있는데 SFN 실행이 확인 안 되면 LAUNCH_UNCONFIRMED
+  # (Planner 가 pipeline_run 을 먼저 커밋한 뒤 StartExecution 하므로 두 경우가 갈린다).
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
