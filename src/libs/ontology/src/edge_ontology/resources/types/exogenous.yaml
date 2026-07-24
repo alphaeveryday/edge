@@ -1,0 +1,45 @@
+# exogenous.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION:
+    family: EXOGENOUS
+    lifecycle_model: OPERATIONS_LIFECYCLE
+    stage_sensitive: true
+    predicates: [OCCUR, SUSPEND, RESUME, REPORT]
+    roles: {required: [OPERATOR], optional: [FACILITY, PRODUCT, LOCATION, CAPACITY_SHARE, EFFECTIVE_DATE], identity: [OPERATOR, FACILITY, PRODUCT], primary: [OPERATOR]}
+
+  EXOGENOUS.CONFLICT.OUTBREAK:
+    family: EXOGENOUS
+    lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [OCCUR, ESCALATE, REPORT]
+    roles: {required: [LOCATION], optional: [GEOGRAPHY, COMMODITY, EFFECTIVE_DATE], identity: [LOCATION], primary: [LOCATION]}
+
+  EXOGENOUS.CONFLICT.RESOLUTION:
+    family: EXOGENOUS
+    lifecycle_model: CONFLICT_RESOLUTION_LIFECYCLE
+    stage_sensitive: true
+    predicates: [REACH, SIGN, COLLAPSE]
+    roles: {required: [LOCATION], optional: [GEOGRAPHY, AUTHORITY, EFFECTIVE_DATE], identity: [LOCATION], primary: [LOCATION]}
+    note: "Parties reach/sign a ceasefire, peace deal, or truce that de-escalates or ends an armed conflict; inverse of CONFLICT.OUTBREAK. COLLAPSE=a deal falls apart."
+
+  EXOGENOUS.CYBER.SERVICE_DISRUPTION:
+    family: EXOGENOUS
+    lifecycle_model: OPERATIONS_LIFECYCLE
+    stage_sensitive: true
+    predicates: [OCCUR, SUSPEND, RESUME, REPORT]
+    roles: {required: [OPERATOR], optional: [SERVICE, CUSTOMER, LOCATION, EFFECTIVE_DATE], identity: [OPERATOR, SERVICE], primary: [OPERATOR, CUSTOMER]}
+
+  EXOGENOUS.DISASTER.OCCURRENCE:
+    family: EXOGENOUS
+    lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [OCCUR, STRIKE, REPORT]
+    roles: {required: [HAZARD], optional: [LOCATION, GEOGRAPHY, QUANTITY, AMOUNT, EFFECTIVE_DATE], identity: [HAZARD], primary: [HAZARD]}
+
+  EXOGENOUS.HEALTH.OUTBREAK:
+    family: EXOGENOUS
+    lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [OCCUR, SPREAD, REPORT]
+    roles: {required: [PATHOGEN], optional: [LOCATION, GEOGRAPHY, QUANTITY, EFFECTIVE_DATE], identity: [PATHOGEN], primary: [PATHOGEN]}

@@ -1,0 +1,54 @@
+# company_product.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.COMMERCIAL.MARKET_ENTRY:
+    family: COMPANY
+    lifecycle_model: COMMERCIAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ENTER, EXPAND, EXIT]
+    roles: {required: [ISSUER], optional: [GEOGRAPHY, PRODUCT, AMOUNT, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    note: "A company enters/expands into a new market, geography, or business segment. NOT a product launch (use PRODUCT.LAUNCH) or capacity change."
+    quantities:
+      INVESTMENT_VALUE: {dtype: float, unit_family: CURRENCY, desc: 신규 시장 진입 투자/집행 금액}
+    derived:
+      investment_to_mcap: {formula: INVESTMENT_VALUE / market_cap, inputs: [INVESTMENT_VALUE, market_cap], dtype: float, desc: 시장 진입 투자/시총}
+
+  COMPANY.COMMERCIAL.PRICING_ACTION:
+    family: COMPANY
+    lifecycle_model: COMMERCIAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [RAISE, LOWER, SET]
+    roles: {required: [ISSUER], optional: [PRODUCT, PRICE, OLD_VALUE, NEW_VALUE, GEOGRAPHY, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    note: "A company raises/cuts/sets the price of its OWN product or service. NOT commodity/market price moves (use INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE)."
+
+  COMPANY.PRODUCT.CERTIFICATION:
+    family: COMPANY
+    lifecycle_model: PRODUCT_TECH_LIFECYCLE
+    stage_sensitive: true
+    predicates: [CERTIFY, APPROVE, REJECT]
+    roles: {required: [ISSUER, AUTHORITY], optional: [PRODUCT, STANDARD, EFFECTIVE_DATE], identity: [ISSUER, PRODUCT, AUTHORITY], primary: [ISSUER]}
+    note: "A product receives (or is denied) regulatory/standards certification or approval (FAA/FDA/CE etc.). NOT corporate regulatory enforcement (use LEGAL.REGULATORY_ACTION)."
+
+  COMPANY.PRODUCT.LAUNCH:
+    family: COMPANY
+    lifecycle_model: PRODUCT_TECH_LIFECYCLE
+    stage_sensitive: true
+    predicates: [LAUNCH, RELEASE, UNVEIL, INTRODUCE]
+    roles: {required: [ISSUER, PRODUCT], optional: [PRODUCT_FAMILY, CUSTOMER, TECH_NODE, EFFECTIVE_DATE, QUANTITY], identity: [ISSUER, PRODUCT], primary: [ISSUER, CUSTOMER]}
+    quantities:
+      INITIAL_ORDER_VALUE: {dtype: float, unit_family: CURRENCY, desc: 런칭과 동반된 초도 주문액 — 매출 5%(대규모법인 2.5%) 이상이면 단일판매·공급계약 공시로 격상되어 하한 검증 가능}
+    derived:
+      initial_order_share: {formula: 'INITIAL_ORDER_VALUE / revenue_ttm[ISSUER]', inputs: [INITIAL_ORDER_VALUE, revenue_ttm], dtype: float, desc: 초도 주문의 매출 대비 % — 검증된 실체 부분만의 크기}
+
+  COMPANY.PRODUCTION.CAPACITY_CHANGE:
+    family: COMPANY
+    lifecycle_model: OPERATIONS_LIFECYCLE
+    stage_sensitive: true
+    predicates: [EXPAND, REDUCE, SUSPEND, RESUME]
+    roles: {required: [ISSUER], optional: [FACILITY, PRODUCT, QUANTITY, AMOUNT, LOCATION, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    note: "Change in the firm's own production/facility capacity, incl. facility capex (new plants, capacity expansion, mass-production start). NOT a minority equity investment or fund (use INVESTMENT.STAKE_ACQUISITION)."
+    quantities:
+      CAPEX_VALUE: {dtype: float, unit_family: CURRENCY, desc: 시설투자/증설/감산 관련 금액 — 공시에서 직접 추출 가능한 규모}
+    derived:
+      capex_to_mcap: {formula: CAPEX_VALUE / market_cap, inputs: [CAPEX_VALUE, market_cap], dtype: float, desc: 투자금액/시총 — 체급 대비 투자 규모}
+      capex_to_revenue: {formula: CAPEX_VALUE / revenue_ttm, inputs: [CAPEX_VALUE, revenue_ttm], dtype: float, desc: 투자금액/TTM 매출 — 성장투자 강도}

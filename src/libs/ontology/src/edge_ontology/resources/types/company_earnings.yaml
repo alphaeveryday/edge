@@ -1,0 +1,37 @@
+# company_earnings.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.EARNINGS.GUIDANCE_CHANGE:
+    family: COMPANY
+    lifecycle_model: REVISION_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [ISSUE, REVISE, RAISE, LOWER, MAINTAIN, WITHDRAW]
+    roles: {required: [ISSUER, METRIC], optional: [REPORTING_PERIOD, OLD_VALUE, NEW_VALUE, GUIDANCE_RANGE], identity: [ISSUER, METRIC, REPORTING_PERIOD], primary: [ISSUER]}
+    quantities:
+      OLD_VALUE: {dtype: float, unit_family: CURRENCY, desc: 기존 가이던스 값 — 변화율 분모. 신규 제시(INITIATED)면 NULL}
+      NEW_VALUE: {dtype: float, unit_family: CURRENCY, desc: 신규 가이던스 값(레인지면 중앙값) — 철회(WITHDRAWN)면 NULL}
+      GUIDANCE_RANGE_LOW: {dtype: float, unit_family: CURRENCY, desc: 레인지 하단 — 하단이 컨센 아래로 내려오는지가 실질 신호}
+      GUIDANCE_RANGE_HIGH: {dtype: float, unit_family: CURRENCY, desc: 레인지 상단}
+    derived:
+      guidance_change_pct: {formula: (NEW_VALUE - OLD_VALUE) / abs(OLD_VALUE), inputs: [NEW_VALUE, OLD_VALUE], dtype: float, desc: 가이던스 변화율 — 헤드라인 크기 축}
+      range_width_pct: {formula: (GUIDANCE_RANGE_HIGH - GUIDANCE_RANGE_LOW) / abs(NEW_VALUE), inputs: [GUIDANCE_RANGE_HIGH, GUIDANCE_RANGE_LOW, NEW_VALUE], dtype: float, desc: 레인지 폭 — 경영진 스스로 인정하는 불확실성의 크기}
+
+  COMPANY.EARNINGS.RESULT_RELEASE:
+    family: COMPANY
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [REPORT, RECORD, RELEASE]
+    roles: {required: [ISSUER, REPORTING_PERIOD], optional: [METRIC, ACTUAL_VALUE, CONSENSUS_VALUE], identity: [ISSUER, REPORTING_PERIOD], primary: [ISSUER]}
+    quantities:
+      ACTUAL_VALUE: {dtype: float, unit_family: CURRENCY, required: true, desc: 실제치(METRIC role 바인딩) — 서프라이즈 계산의 분자}
+      DOC_REVENUE_ACTUAL: {dtype: float, unit_family: CURRENCY, desc: '동일 문서에 병기된 당기 매출 — KR 잠정공시는 매출/영업이익 동시 공표가 표준, 교차지표 괴리 계산 입력'}
+      DOC_OP_ACTUAL: {dtype: float, unit_family: CURRENCY, desc: 동일 문서에 병기된 당기 영업이익 — 마진 방향·매출-이익 괴리 계산 입력}
+    entity_state:
+      metric_year_ago_value: {scope: ISSUER, dtype: float, unit_family: CURRENCY, desc: '전년 동기 동일 지표 실적 — yoy의 분모, 컨센 부재 종목의 대체 기준점'}
+      year_ago_revenue_q: {scope: ISSUER, dtype: float, unit_family: CURRENCY, desc: 전년 동기 매출 — 매출-이익 괴리(증수감익) 판별 입력}
+      year_ago_op_q: {scope: ISSUER, dtype: float, unit_family: CURRENCY, desc: 전년 동기 영업이익 — 마진 방향 판별 입력}
+    derived:
+      yoy_growth: {formula: ACTUAL_VALUE / metric_year_ago_value - 1, inputs: [ACTUAL_VALUE, metric_year_ago_value], dtype: float, desc: 전년 동기 대비 성장률 — 컨센 부재 종목의 대체 서프라이즈 축이자 헤드라인 수치}
+      implied_op_margin_q: {formula: DOC_OP_ACTUAL / DOC_REVENUE_ACTUAL, inputs: [DOC_OP_ACTUAL, DOC_REVENUE_ACTUAL], dtype: float, desc: 당기 영업이익률 — 이익의 질 판단 원천}
+      margin_delta_yoy: {formula: implied_op_margin_q - (year_ago_op_q / year_ago_revenue_q), inputs: [implied_op_margin_q, year_ago_op_q, year_ago_revenue_q], dtype: float, desc: '마진 방향(yoy) — 매출 성장의 이익 전환 품질, 어닝 퀄리티 2축'}
+      rev_profit_divergence: {formula: sign(DOC_REVENUE_ACTUAL/year_ago_revenue_q - 1) != sign(DOC_OP_ACTUAL/year_ago_op_q - 1), inputs: [DOC_REVENUE_ACTUAL, year_ago_revenue_q, DOC_OP_ACTUAL, year_ago_op_q], dtype: bool, desc: 매출-이익 부호 괴리(증수감익/감수증익) — 헤드라인 매출과 실질 이익의 상반 신호}

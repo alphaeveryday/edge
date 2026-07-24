@@ -27,9 +27,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+from edge_ontology import Registry, load_registry
+
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..events.ontology import Registry, load_registry
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 from ..tagging.ontology import identity_roles
 

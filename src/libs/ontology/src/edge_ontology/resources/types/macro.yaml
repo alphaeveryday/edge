@@ -1,0 +1,51 @@
+# macro.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  MACRO.CREDIT.LIQUIDITY_ACTION:
+    family: MACRO
+    lifecycle_model: POLICY_ACTION_LIFECYCLE
+    stage_sensitive: false
+    predicates: [INJECT, WITHDRAW, EXPAND, REDUCE]
+    roles: {required: [AUTHORITY], optional: [FACILITY, AMOUNT, INTEREST_RATE, MATURITY_DATE, EFFECTIVE_DATE], identity: [AUTHORITY], primary: [AUTHORITY]}
+    quantities:
+      MATURITY_DAYS: {dtype: float, unit_family: DURATION_DAYS, desc: 시설 만기 또는 지원 기간}
+    derived:
+      liquidity_duration_years: {formula: MATURITY_DAYS / 365, inputs: [MATURITY_DAYS], dtype: float, desc: 지원 기간 연수}
+
+  MACRO.EMPLOYMENT.DATA_RELEASE:
+    family: MACRO
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [REPORT, RELEASE]
+    roles: {required: [INDICATOR], optional: [AUTHORITY, GEOGRAPHY, REPORTING_PERIOD, OLD_VALUE, NEW_VALUE, CONSENSUS_VALUE], identity: [INDICATOR], primary: [INDICATOR]}
+    note: "Official jobs/unemployment statistics release (payrolls, unemployment rate). NOT social/demographic stats (e.g. civil-service hiring, childcare leave)."
+
+  MACRO.FX.EXCHANGE_RATE_POLICY:
+    family: MACRO
+    lifecycle_model: POLICY_ACTION_LIFECYCLE
+    stage_sensitive: false
+    predicates: [INTERVENE, SET, MAINTAIN]
+    roles: {required: [AUTHORITY], optional: [POLICY_RATE, CURRENCY_PAIR, GEOGRAPHY, AMOUNT, EFFECTIVE_DATE], identity: [AUTHORITY], primary: [AUTHORITY]}
+
+  MACRO.GROWTH.GDP_RELEASE:
+    family: MACRO
+    lifecycle_model: POLICY_ACTION_LIFECYCLE
+    stage_sensitive: false
+    predicates: [REPORT, RELEASE]
+    roles: {required: [INDICATOR], optional: [AUTHORITY, GEOGRAPHY, REPORTING_PERIOD, OLD_VALUE, NEW_VALUE, CONSENSUS_VALUE], identity: [INDICATOR], primary: [INDICATOR]}
+    note: "Official growth / national-accounts release (GDP, current account). NOT surveys or competitiveness rankings."
+
+  MACRO.INFLATION.DATA_RELEASE:
+    family: MACRO
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [REPORT, RELEASE]
+    roles: {required: [INDICATOR], optional: [AUTHORITY, GEOGRAPHY, REPORTING_PERIOD, OLD_VALUE, NEW_VALUE, CONSENSUS_VALUE], identity: [INDICATOR], primary: [INDICATOR]}
+    note: "Official aggregate price-index release (CPI/PCE/PPI). NOT a single commodity's price move (use INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE); NOT taxes/fees."
+
+  MACRO.MONETARY.POLICY_RATE_DECISION:
+    family: MACRO
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [SET, RAISE, LOWER, MAINTAIN]
+    roles: {required: [CENTRAL_BANK, POLICY_RATE], optional: [OLD_VALUE, NEW_VALUE, EFFECTIVE_DATE], identity: [CENTRAL_BANK, EFFECTIVE_DATE], primary: [CENTRAL_BANK]}

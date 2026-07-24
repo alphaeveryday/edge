@@ -13,7 +13,11 @@ dependencies = [
     "lxml>=5", # pandas.read_html 백엔드(사업부문 표 파싱)
     "html5lib>=1.1", # pandas.read_html bs4 폴백 파서 — lxml 이 XML-ish 공시표를 못 읽을 때
     "psycopg[binary]>=3.1", # Cloud Event Store 적재(load-*) — Postgres 드라이버, 지연 import
+    "edge-ontology", # 이벤트 온톨로지 SSOT lib(src/libs/ontology) — 워크스페이스 멤버(ALPHA-539)
 ]
+
+[tool.uv.sources]
+edge-ontology = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

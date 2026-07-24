@@ -1,10 +1,10 @@
-"""이벤트 타입 온톨로지 — 허용 라벨의 SSOT (ALPHA-138).
+"""이벤트 타입 온톨로지 — 허용 라벨의 SSOT 접근자 (ALPHA-138, lib 이관 ALPHA-539).
 
-`event_type_profiles_v0_1.json` 은 분석 담당(정준영) 저장소 `alphamale` 의
-`src/alphamale/events/ontology/resources/` 에서 가져온 **스냅샷**이다(dataset_version
-0.1.0, 53 타입). 이 파일은 여기서 편집하지 않는다 — 온톨로지의 authoritative owner 는
-alphamale 이고, 갱신은 그쪽 버전을 올린 뒤 스냅샷을 통째로 교체하는 방식이다(부분 발췌·
-현지 수정은 드리프트를 만든다).
+어휘 정본은 `edge_ontology` lib(`src/libs/ontology`)의 resources/ 다 — 구 alphamale JSON
+스냅샷(`event_type_profiles_v0_1.json`)은 ALPHA-539 로 은퇴했다. 갱신 규약은 lib 소관:
+실험실(event-ontology repo)에서 확정한 리소스를 통째 교체하고(부분 발췌·현지 수정 금지),
+어휘가 바뀌었으면 `ONTOLOGY_VERSION` 을 함께 올린다. 이 모듈은 태깅이 쓰는 파생 뷰
+(허용 집합·프롬프트 카탈로그)만 남긴다.
 
 태깅이 이 온톨로지를 쓰는 이유는 **모델이 라벨을 발명하지 못하게** 하기 위해서다. 추출은
 모델의 일(분류·추출)이지만, 나온 라벨이 허용 집합에 드는지 판정하는 건 코드의 일이다
@@ -12,19 +12,16 @@ alphamale 이고, 갱신은 그쪽 버전을 올린 뒤 스냅샷을 통째로 �
 검증 **양쪽의 같은 출처**가 된다 — 프롬프트와 검증이 서로 다른 목록을 보면 모델이 프롬프트를
 지켜도 검증에서 떨어지는 모순이 생긴다.
 
-프로필의 나머지 필드(`lifecycle_model`·`projection`·`activate_hq`)는 그래프 투영 소관이라
-태깅 범위 밖이다 — 스냅샷엔 남기되 여기선 안 읽는다. `identity_roles` 는 thread 스텝
-(assemble_events)이 `identity_roles()` 로 읽는다(ALPHA-457) — 태깅 자체는 여전히 안 쓰고,
-이 모듈은 프로필 SSOT 접근자만 제공한다.
+프로필의 나머지 축(`lifecycle_model`·quantities 등)은 태깅 범위 밖이다 — lib 뷰(TypeView)
+소관이고 여기선 안 읽는다. `identity_roles` 는 thread 스텝(assemble_events)이
+`identity_roles()` 로 읽는다(ALPHA-457) — 태깅 자체는 여전히 안 쓴다.
 """
 
 from __future__ import annotations
 
-import json
 from functools import lru_cache
-from pathlib import Path
 
-_PROFILES_FILE = Path(__file__).resolve().parent / "event_type_profiles_v0_1.json"
+import edge_ontology
 
 # 문서 성격 라벨 — alphamale 골든 데이터(ko_gold_title.jsonl)의 doc_class 어휘와 같다.
 # EVENT 만 assertion 을 낸다(나머지는 사건이 아니라 논평·홍보라 주장 추출 대상이 아니다).
@@ -37,28 +34,23 @@ DOC_CLASSES = (
 
 
 @lru_cache(maxsize=1)
-def _snapshot() -> dict:
-    """스냅샷 원본을 1회만 읽어 캐시한다.
-
-    스냅샷이 깨졌으면(파일 없음·JSON 불량·items 비정상) 예외로 올린다 — 온톨로지 없이
-    태깅하면 라벨 구속이 통째로 풀리므로 조용한 폴백은 금지다(Rule 12).
-    """
-    data = json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
-    items = data.get("items")
-    if not isinstance(items, list) or not items:
-        raise ValueError(f"온톨로지 스냅샷 items 이상: {type(items).__name__}")
-    return data
-
-
-@lru_cache(maxsize=1)
 def load_profiles() -> dict[str, dict]:
-    """event_type_id → 프로필 dict."""
-    return {item["event_type_id"]: item for item in _snapshot()["items"]}
+    """event_type_id → 프로필 dict — lib 프로파일 뷰를 그대로 캐시한다.
+
+    키 형상(allowed_predicates·required/optional/identity_roles·stage_sensitive)은
+    구 JSON 스냅샷과 동일하다 — 소비자(추출 검증·프롬프트 카탈로그)는 무변경.
+    """
+    return edge_ontology.load_profiles()
 
 
 def ontology_version() -> str:
-    """스냅샷의 dataset_version — 산출물 provenance 에 박아 어느 온톨로지로 태깅했는지 남긴다."""
-    return _snapshot()["dataset_version"]
+    """어휘 판번 — 산출물 provenance 에 박아 어느 온톨로지로 태깅했는지 남긴다.
+
+    lib 상수(ONTOLOGY_VERSION)가 SSOT 다. 값이 바뀌면 tag_news._is_current 가 전 기사
+    재태깅(기사당 LLM 1콜)을 트리거하므로, 어휘가 실제로 바뀔 때만 올린다 — 0.1.0 어휘
+    동일성은 ALPHA-539 에서 프로그램 대조로 확인했다.
+    """
+    return edge_ontology.ONTOLOGY_VERSION
 
 
 def event_type_codes() -> tuple[str, ...]:

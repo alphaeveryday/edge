@@ -8,6 +8,7 @@ on:
     branches: [dev]
     paths:
       - "src/apps/cloud/data-pipeline/**"
+      - "src/libs/ontology/**" # 이미지가 edge_ontology lib 를 동봉(ALPHA-539) — 어휘 교체도 재배포 대상
       - "src/pyproject.toml"
       - "src/.dockerignore"
 

@@ -29,7 +29,8 @@ src/
 │   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
 │   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload)·예외 매핑 + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
-│   └── py-common/            # Python · 공통 유틸
+│   ├── py-common/            # Python · 공통 유틸
+│   └── ontology/             # Python · 이벤트 온톨로지 SSOT (53타입 어휘 리소스+로더)
 ├── settings.gradle           # JVM 루트 (Groovy DSL 멀티모듈)
 ├── pnpm-workspace.yaml       # Node 루트
 └── pyproject.toml            # Python 루트
@@ -47,7 +48,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 |---|---|---|
 | JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
 | Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
-| Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
+| Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common · ontology |
 
 ## apps — 배포 단위
 
@@ -81,6 +82,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 | `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·예외→공통 응답 포맷 매핑(`ExceptionAdvice`, auto-configuration 으로 웹 앱 활성) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
 | `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 — EDGE 디자인 토큰·컴포넌트 CSS·React 프리미티브 (소스 export 패키지) |
 | `py-common` | Python | Python 공통 유틸 |
+| `ontology` | Python | **이벤트 온톨로지 SSOT**(`edge_ontology`) — 53 이벤트 타입 어휘 리소스(YAML: 술어·역할·quantities·lifecycle·thread 계약) + 로더 뷰(registry/profiles/features/TypeView). 갱신은 실험실(event-ontology repo) 확정본을 통째 교체 + 어휘 변경 시 `ONTOLOGY_VERSION` 개정(ALPHA-539) |
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
@@ -167,7 +169,7 @@ Refs: ALPHA-121
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
   - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
-  - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
+  - libs: `schema` · `jvm-common` · `ui-kit` · `py-common` · `ontology`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
 - **푸터 (Jira 이슈 키)** — 본문 아래 마지막 줄에 `Refs: <이슈키>`로 이슈를 참조합니다. 제목 형식(Conventional Commits)은 그대로 두고 키는 **푸터에만** 둡니다. 여러 이슈는 `Refs: ALPHA-121, ALPHA-122`.

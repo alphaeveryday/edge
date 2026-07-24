@@ -520,7 +520,7 @@ def test_classify_batches_run_concurrently_not_serialized(tmp_path):
     """
     import threading
 
-    from data_pipeline.events.ontology import load_registry
+    from edge_ontology import load_registry
     from data_pipeline.steps.assemble_events import CLASSIFY_BATCH, classify_titles
 
     registry = load_registry()
@@ -547,7 +547,7 @@ def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
     사라지고 (2) 클로저가 배치를 잘못 잡으면 allowed_by_id 가 어긋나 엉뚱한 티커가 걸러진다.
     티커를 배치 걸쳐 교차시키고 각 기사의 결과 엔티티가 자기 입력 티커와 맞는지로 둘 다 잠근다.
     """
-    from data_pipeline.events.ontology import load_registry
+    from edge_ontology import load_registry
     from data_pipeline.steps.assemble_events import classify_titles
 
     registry = load_registry()

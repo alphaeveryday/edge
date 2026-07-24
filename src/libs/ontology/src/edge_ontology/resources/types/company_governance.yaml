@@ -1,0 +1,34 @@
+# company_governance.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE:
+    family: COMPANY
+    lifecycle_model: GOVERNANCE_LIFECYCLE
+    stage_sensitive: true
+    predicates: [APPOINT, RESIGN, DISMISS, REPLACE, NOMINATE]
+    roles: {required: [ISSUER], optional: [PERSON, POSITION, EFFECTIVE_DATE, REASON], identity: [ISSUER], primary: [ISSUER]}
+
+  COMPANY.OWNERSHIP.INSIDER_TRANSACTION:
+    family: COMPANY
+    lifecycle_model: OWNERSHIP_DISCLOSURE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [BUY, SELL]
+    roles: {required: [PERSON, ISSUER], optional: [QUANTITY, PRICE, AMOUNT, EFFECTIVE_DATE], identity: [PERSON, ISSUER], primary: [PERSON, ISSUER]}
+    note: "A corporate insider (officer/director/10%+ holder) buys or sells shares of their OWN company (Form 4). NOT the firm investing in another company (use INVESTMENT.STAKE_ACQUISITION); NOT a buyback (use CAPITAL.SHARE_BUYBACK)."
+    quantities:
+      TRADE_VALUE: {dtype: float, unit_family: CURRENCY, desc: 내부자 매수/매도 금액 — 신호 크기}
+      SHARES_TRADED: {dtype: float, unit_family: COUNT, desc: 거래 주식 수}
+      TRADE_PRICE: {dtype: float, unit_family: CURRENCY, desc: 거래 단가}
+      OWNERSHIP_AFTER: {dtype: float, unit_family: PERCENT, desc: 거래 후 보유 지분율}
+      OWNERSHIP_CHANGE: {dtype: float, unit_family: PERCENT, desc: 지분율 변화폭}
+    derived:
+      trade_to_mcap: {formula: 'TRADE_VALUE / market_cap[ISSUER]', inputs: [TRADE_VALUE, market_cap], dtype: float, desc: 내부자 거래금액/시총}
+      ownership_delta_abs: {formula: abs(OWNERSHIP_CHANGE), inputs: [OWNERSHIP_CHANGE], dtype: float, desc: 지분율 변화 절대값}
+
+  COMPANY.WORKFORCE.LAYOFF:
+    family: COMPANY
+    lifecycle_model: WORKFORCE_LIFECYCLE
+    stage_sensitive: true
+    predicates: [CUT, REDUCE, RESTRUCTURE]
+    roles: {required: [ISSUER], optional: [QUANTITY, LOCATION, EFFECTIVE_DATE, REASON], identity: [ISSUER], primary: [ISSUER]}
+    note: "A company cuts jobs / reduces or restructures its workforce (layoffs)."
