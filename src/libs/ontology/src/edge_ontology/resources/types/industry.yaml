@@ -1,0 +1,39 @@
+# industry.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  INDUSTRY.DEMAND.DEMAND_CHANGE:
+    family: INDUSTRY
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RISE, FALL, REPORT]
+    roles: {required: [PRODUCT], optional: [GEOGRAPHY, REPORTING_PERIOD, OLD_VALUE, NEW_VALUE], identity: [PRODUCT], primary: [PRODUCT]}
+
+  INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE:
+    family: INDUSTRY
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RISE, FALL, CHANGE]
+    roles: {required: [COMMODITY], optional: [CHANGE_VALUE, PERIOD, DRIVER_HINT, GEOGRAPHY], identity: [COMMODITY, PERIOD], primary: [COMMODITY]}
+
+  INDUSTRY.SUPPLY.CAPACITY_CHANGE:
+    family: INDUSTRY
+    lifecycle_model: OPERATIONS_LIFECYCLE
+    stage_sensitive: true
+    predicates: [EXPAND, REDUCE, REPORT]
+    roles: {required: [INDUSTRY], optional: [COMMODITY, CAPACITY_VALUE, GEOGRAPHY, EFFECTIVE_DATE], identity: [INDUSTRY, COMMODITY, GEOGRAPHY], primary: [INDUSTRY]}
+    quantities:
+      CAPEX_VALUE: {dtype: float, unit_family: CURRENCY, desc: '투자 금액 — 용량 미공개 시 크기 대리변수. KR 의무공시(자기자본 10%, 대규모법인 5% 이상) 채널이면 상대 크기 하한 보장'}
+
+  INDUSTRY.SUPPLY.INVENTORY_CHANGE:
+    family: INDUSTRY
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RISE, FALL, REPORT]
+    roles: {required: [COMMODITY], optional: [GEOGRAPHY, REPORTING_PERIOD, OLD_VALUE, NEW_VALUE], identity: [COMMODITY], primary: [COMMODITY]}
+
+  INDUSTRY.TECHNOLOGY.STANDARD_CHANGE:
+    family: INDUSTRY
+    lifecycle_model: DATA_RELEASE_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [ADOPT, REVISE, REPLACE]
+    roles: {required: [STANDARD], optional: [AUTHORITY, INDUSTRY, PRODUCT, EFFECTIVE_DATE], identity: [STANDARD], primary: [STANDARD]}

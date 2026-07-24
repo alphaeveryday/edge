@@ -1,0 +1,98 @@
+# company_deal.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.ALLIANCE.PARTNERSHIP:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [FORM, EXPAND, DISSOLVE]
+    roles: {required: [PARTNER], optional: [PARTNER_2, PROJECT, PRODUCT, EFFECTIVE_DATE], identity: [PARTNER, PARTNER_2, PROJECT], primary: [PARTNER, PARTNER_2]}
+    note: "Two or more peers form/expand a collaboration, alliance, or joint venture. NOT a customer-supplier contract (use CONTRACT.SIGNING). Amendments/modifications/expansions of an existing partnership -> predicate EXPAND (not OTHER)."
+    quantities:
+      INVESTMENT_COMMITTED: {dtype: float, unit_family: CURRENCY, desc: 동반 출자/투자 커밋 금액 — 말이 아닌 자본이 실린 제휴의 정량 증거. 3자배정 유증 동반이면 공시로 검증 가능}
+      EQUITY_STAKE_PCT: {dtype: float, unit_family: PERCENT, desc: '지분 스왑/취득 비율 — 5% 이상이면 대량보유보고(5%룰) 의무로 외부 검증 확보, 커밋 강도의 대리'}
+    derived:
+      investment_to_mcap: {formula: 'INVESTMENT_COMMITTED / market_cap[PARTNER]', inputs: [INVESTMENT_COMMITTED, market_cap], dtype: float, desc: 출자액/시총 — 자본 커밋의 상대 크기(각 파트너별 계산)}
+      partner_mcap_asymmetry: {formula: 'market_cap[PARTNER_2] / market_cap[PARTNER]', inputs: [market_cap], dtype: float, desc: '파트너 시총 비대칭 — 작은 쪽이 크게 반응(대기업엔 잡음, 소형사엔 사건). 반응 배분의 1차 결정자'}
+
+  COMPANY.CONTRACT.SIGNING:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [SIGN, ENTER_INTO]
+    roles: {required: [SUPPLIER, CONTRACT_OBJECT], optional: [CUSTOMER, CONTRACT_VALUE, CONTRACT_DURATION, EFFECTIVE_DATE], identity: [SUPPLIER, CUSTOMER, CONTRACT_OBJECT], primary: [SUPPLIER, CUSTOMER]}
+    quantities:
+      CONTRACT_VALUE: {dtype: float, unit_family: CURRENCY, basis: [TOTAL, ANNUAL], required: true, desc: 계약금액 — 총액/연간 구분 필수(치명 오류 지점)}
+      CONTRACT_DURATION: {dtype: float, unit_family: DURATION_DAYS, desc: 계약기간 — TOTAL 금액의 연간화 분모}
+    derived:
+      annualized_value: {formula: 'CONTRACT_VALUE[TOTAL] / years(CONTRACT_DURATION)', inputs: [CONTRACT_VALUE, CONTRACT_DURATION], dtype: float, desc: 연간화 계약액}
+      revenue_share: {formula: 'annualized_value / revenue_ttm[SUPPLIER]', inputs: [annualized_value, revenue_ttm], dtype: float, desc: 매출 대비 % — 크기 판단의 핵심}
+      op_impact_share: {formula: 'annualized_value * op_margin_ttm[SUPPLIER] / op_profit_ttm[SUPPLIER]', inputs: [annualized_value, op_margin_ttm, op_profit_ttm], dtype: float, desc: 이익 기여 %(마진 유지 가정 명시)}
+
+  COMPANY.INVESTMENT.STAKE_ACQUISITION:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ACQUIRE, INCREASE, REDUCE, EXIT]
+    roles: {required: [INVESTOR, TARGET_COMPANY], optional: [OWNERSHIP_RATIO, DEAL_VALUE, SELLER], identity: [INVESTOR, TARGET_COMPANY], primary: [INVESTOR, TARGET_COMPANY]}
+    note: "Investor takes or changes a NON-controlling minority equity stake in another firm. NOT a controlling takeover (use M_AND_A.ACQUISITION); NOT the firm's own capital action."
+    quantities:
+      OWNERSHIP_RATIO: {dtype: float, unit_family: PERCENT, required: true, desc: 보고 후 보유 지분율 — 5%/10%/25% 문턱별 제도 함의(공개매수 의무 등) 상이}
+      OWNERSHIP_CHANGE: {dtype: float, unit_family: PERCENT, desc: '지분 변동폭(%p) — 1%p 이상 변동 보고 의무가 만드는 관측 격자, 방향과 속도의 원천'}
+      DEAL_VALUE: {dtype: float, unit_family: CURRENCY, desc: 취득 금액 — 유통물량 흡수·투자자 본체 대비 크기의 분자}
+      ACQ_PRICE_AVG: {dtype: float, unit_family: CURRENCY, desc: 평균 취득 단가(보고서 기재) — 현재가 대비 투자자 손익 상태 = 추가 매수/차익실현 압력 추정}
+    entity_state:
+      controlling_stake_target: {scope: TARGET_COMPANY, dtype: float, unit_family: PERCENT, desc: 타깃 최대주주+특수관계인 지분율 — 취득자와의 격차가 경영권 분쟁 가능성의 1차 결정자}
+      treasury_ratio_target: {scope: TARGET_COMPANY, dtype: float, unit_family: PERCENT, desc: 타깃 자사주 비중 — 분쟁 시 우호세력 처분 가능한 방어 카드(KR 특수)}
+      nps_stake_target: {scope: TARGET_COMPANY, dtype: float, unit_family: PERCENT, desc: 국민연금 보유 지분율 — 주총 표 대결 시나리오의 캐스팅보트 크기}
+    derived:
+      stake_gap_to_control: {formula: controlling_stake_target - OWNERSHIP_RATIO, inputs: [controlling_stake_target, OWNERSHIP_RATIO], dtype: float, desc: 지배주주와의 지분 격차(%p) — 좁을수록 경영권 분쟁·프리미엄 옵션 가치 비선형 증가}
+      deal_to_investor_mcap: {formula: 'DEAL_VALUE / market_cap[INVESTOR]', inputs: [DEAL_VALUE, market_cap], dtype: float, desc: 투자자 시총 대비 투자 규모 — 상장 전략적 투자자의 본체 반응 크기 결정}
+      price_vs_acq_avg: {formula: '(prev_close[TARGET_COMPANY] - ACQ_PRICE_AVG) / ACQ_PRICE_AVG', inputs: [ACQ_PRICE_AVG], dtype: float, desc: '투자자 평단 대비 현재가 — 이미 큰 폭 위면 차익실현 압력, 아래면 추가 매수 여력 프레임'}
+
+  COMPANY.M_AND_A.ACQUISITION:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ACQUIRE, PURCHASE, TAKE_OVER]
+    roles: {required: [ACQUIRER, TARGET_COMPANY], optional: [SELLER, DEAL_VALUE, OWNERSHIP_RATIO, AUTHORITY, EFFECTIVE_DATE], identity: [ACQUIRER, TARGET_COMPANY], primary: [ACQUIRER, TARGET_COMPANY]}
+    note: "One company acquires CONTROL of another company or a business unit (SELLER optional). NOT a minority stake (use INVESTMENT.STAKE_ACQUISITION); NOT a spin-off."
+    quantities:
+      DEAL_VALUE: {dtype: float, unit_family: CURRENCY, required: true, desc: 딜 규모}
+      OWNERSHIP_RATIO: {dtype: float, unit_family: PERCENT, desc: 취득 지분율 — 경영권(50%+) vs 지배적 지분}
+      OFFER_PREMIUM: {dtype: float, unit_family: PERCENT, desc: 제시가/직전종가 - 1 (PIT 계산 가능)}
+      CASH_PORTION: {dtype: float, unit_family: PERCENT, desc: 현금 결제 비중 — 주식 결제는 희석+신호}
+    entity_state:
+      acquirer_goodwill_ratio: {scope: ACQUIRER, dtype: float, unit_family: RATIO, desc: 영업권/자본 — 과거 M&A 소화 부담}
+      target_revenue_ttm: {scope: TARGET_COMPANY, dtype: float, unit_family: CURRENCY, desc: 타깃 매출(비상장이면 감사보고서)}
+    derived:
+      deal_size_ratio: {formula: 'DEAL_VALUE / market_cap[ACQUIRER]', inputs: [DEAL_VALUE, market_cap], dtype: float, desc: 인수자 시총 대비 — 인수자 반응 크기의 1차 결정자}
+      relative_size: {formula: 'target_revenue_ttm / revenue_ttm[ACQUIRER]', inputs: [target_revenue_ttm, revenue_ttm], dtype: float, desc: 사업 상대 크기 — 통합 리스크}
+      financing_stretch: {formula: 'DEAL_VALUE / (total_cash[ACQUIRER] + 0.5 * op_profit_ttm[ACQUIRER])', inputs: [DEAL_VALUE, total_cash, op_profit_ttm], dtype: float, desc: 지불 여력 대비 무리 정도 — 증자/차입 예고}
+      arb_spread: {formula: '(offer_price - current_price) / current_price  [target_is_listed]', inputs: [OFFER_PREMIUM], dtype: float, desc: risk-arb 스프레드 = 시장의 P(close) 역산}
+
+  COMPANY.M_AND_A.MERGER:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [MERGE]
+    roles: {required: [MERGING_ENTITY], optional: [TARGET_COMPANY, ACQUIRER, SELLER, DEAL_VALUE, OWNERSHIP_RATIO, EFFECTIVE_DATE], identity: [MERGING_ENTITY], primary: [MERGING_ENTITY]}
+    quantities:
+      DEAL_VALUE: {dtype: float, unit_family: CURRENCY, desc: 합병가액 또는 합병 대가 총액 — 딜 크기}
+      MERGER_RATIO: {dtype: float, unit_family: RATIO, desc: 합병비율 — 주주 간 가치 이전의 핵심 수치}
+      APPRAISAL_RIGHT_PRICE: {dtype: float, unit_family: CURRENCY, desc: 주식매수청구권 가격 — 하방/차익거래 기준점}
+    derived:
+      deal_to_mcap: {formula: DEAL_VALUE / market_cap, inputs: [DEAL_VALUE, market_cap], dtype: float, desc: 딜 가치/시총 — 당사자 체급 대비 크기}
+
+  COMPANY.RESTRUCTURING.SPINOFF:
+    family: COMPANY
+    lifecycle_model: DEAL_LIFECYCLE
+    stage_sensitive: true
+    predicates: [SPIN_OFF, SPLIT, CARVE_OUT]
+    roles: {required: [PARENT, SPUNOFF_UNIT], optional: [SHAREHOLDER, EFFECTIVE_DATE, AMOUNT], identity: [PARENT, SPUNOFF_UNIT], primary: [PARENT, SPUNOFF_UNIT]}
+    note: "Parent separates/divests an internal unit or subsidiary into an independent entity (spin-off/split/carve-out). NOT employees leaving to found startups; NOT a sale to a buyer (use ACQUISITION with SELLER)."
+    quantities:
+      SPINOFF_VALUE: {dtype: float, unit_family: CURRENCY, desc: 분할/분사 대상 가치 또는 자산총액 — 거래 체급}
+      DISTRIBUTION_RATIO: {dtype: float, unit_family: RATIO, desc: 기존 주주 배정/분할 비율 — 가치 배분의 핵심}
+    derived:
+      spinoff_to_mcap: {formula: 'SPINOFF_VALUE / market_cap[PARENT]', inputs: [SPINOFF_VALUE, market_cap], dtype: float, desc: 분할 대상 가치/모회사 시총}

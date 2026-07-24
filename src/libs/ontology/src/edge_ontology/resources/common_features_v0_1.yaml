@@ -1,0 +1,19 @@
+# common_features_v0_1.yaml — 전 타입 상속 공용 재무풀(entity_state). 타입 정의는 types/*.yaml.
+
+meta: {version: 0.2.0, date: '2026-07-22'}
+
+common_blocks:
+  entity_state:
+    is_listed: {dtype: bool, desc: 상장 여부 — 미상장이면 그래프 전파 필요}
+    market_cap: {dtype: float, unit_family: CURRENCY, desc: 시총 — 만능 분모 1호}
+    revenue_ttm: {dtype: float, unit_family: CURRENCY, desc: 매출 TTM — 계약/벌금/딜 규모의 분모}
+    op_profit_ttm: {dtype: float, unit_family: CURRENCY, desc: 영업이익 TTM}
+    op_margin_ttm: {dtype: float, unit_family: PERCENT, desc: 영업이익률 — 증분 매출의 이익 전환율 추정}
+    total_cash: {dtype: float, unit_family: CURRENCY, desc: 현금성 자산 — 벌금/딜 지불능력 분모}
+    net_debt: {dtype: float, unit_family: CURRENCY, desc: 순차입금}
+    net_debt_to_ebitda: {dtype: float, unit_family: RATIO, desc: 레버리지 — 신용 이벤트 민감도}
+    per_ttm: {dtype: float, unit_family: RATIO, desc: 밸류에이션 — 기대 반영 수준 대리}
+    pbr: {dtype: float, unit_family: RATIO, desc: PBR}
+    is_group_affiliate: {dtype: bool, desc: 대기업집단 계열 여부 — 지배구조 이벤트 감도(KR 특수)}
+    sector_code: {dtype: enum, desc: 업종 — 피어·레짐 조건화 키}
+    customer_conc_top1: {dtype: float, unit_family: PERCENT, desc: 최대 고객 매출비중(공시) — 계약/이탈 이벤트 감도}

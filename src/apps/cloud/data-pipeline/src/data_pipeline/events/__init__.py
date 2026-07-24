@@ -1,7 +1,7 @@
-"""이벤트 온톨로지·조립 — 분석엔진 추출 체인의 이식분 (ALPHA-412, ADR-0028).
+"""이벤트 조립 — 분석엔진 추출 체인의 이식분 (ALPHA-412, ADR-0028).
 
 로직 정본은 분석엔진(daily_pipeline)이다 — 이 패키지는 그 로직의 실행 위치만
-feature 페이즈로 옮긴다. 온톨로지(ontology_ref.txt)는 엔진 동봉본과 같은 alphamale
-0.1.0 스냅샷이며, tagging/event_type_profiles_v0_1.json 과의 단일화는 로직 소유자
-결정 후 별건이다.
+feature 페이즈로 옮긴다. 온톨로지 어휘는 `edge_ontology` lib 이 SSOT 다 — 구
+ontology_ref.txt 미러는 ALPHA-539 로 은퇴했다(미러는 5개 타입의 STAGE 마커를
+잃어버린 드리프트가 있었고, lib 승계가 그걸 고쳤다).
 """

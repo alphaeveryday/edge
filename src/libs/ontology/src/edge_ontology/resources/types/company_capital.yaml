@@ -1,0 +1,102 @@
+# company_capital.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.CAPITAL.DIVIDEND_DECISION:
+    family: COMPANY
+    lifecycle_model: CAPITAL_ACTION_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [DECLARE, RAISE, LOWER, MAINTAIN, OMIT]
+    roles: {required: [ISSUER], optional: [AMOUNT, OLD_VALUE, NEW_VALUE, RECORD_DATE, PAYMENT_DATE], identity: [ISSUER], primary: [ISSUER]}
+    quantities:
+      TOTAL_DIVIDEND_VALUE: {dtype: float, unit_family: CURRENCY, desc: 공시/기사에 명시된 총 배당금 또는 배당총액 — 현금 유출과 환원 크기의 직접 분자}
+      DIVIDEND_PER_SHARE: {dtype: float, unit_family: CURRENCY, desc: 주당 배당금 — 가격 대비 배당수익률을 재계산하는 입력}
+    entity_state:
+      prior_dividend_per_share: {dtype: float, unit_family: CURRENCY, scope: ISSUER, desc: 직전 comparable 배당금 — 증감률 분모}
+    derived:
+      dividend_to_mcap: {formula: TOTAL_DIVIDEND_VALUE / market_cap, inputs: [TOTAL_DIVIDEND_VALUE, market_cap], dtype: float, desc: 총 배당금/시총 — 환원 크기의 공통 단위}
+      dividend_change_pct: {formula: (DIVIDEND_PER_SHARE - prior_dividend_per_share) / abs(prior_dividend_per_share), inputs: [DIVIDEND_PER_SHARE, prior_dividend_per_share], dtype: float, desc: 전회 대비 배당 변화율}
+
+  COMPANY.CAPITAL.EQUITY_ISSUANCE:
+    family: COMPANY
+    lifecycle_model: CAPITAL_ACTION_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ISSUE, PRICE]
+    roles: {required: [ISSUER], optional: [AMOUNT, PRICE, QUANTITY, INVESTOR, USE_OF_PROCEEDS, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    quantities:
+      ISSUE_VALUE: {dtype: float, unit_family: CURRENCY, required: true, desc: 발행 예정 금액 — 희석/자금조달 규모의 분자}
+      NEW_SHARES: {dtype: float, unit_family: COUNT, desc: 신규 발행 주식 수 — 지분 희석 계산 입력}
+      ISSUE_PRICE: {dtype: float, unit_family: CURRENCY, desc: 발행가 또는 예정 발행가 — 현재가 대비 할인/프리미엄 판단}
+      LOCKUP_DAYS: {dtype: float, unit_family: DURATION_DAYS, desc: 보호예수 기간 — 단기 오버행 완충 기간}
+    entity_state:
+      shares_outstanding: {dtype: float, unit_family: COUNT, scope: ISSUER, desc: 발행 전 주식 수 — 희석률 분모}
+    derived:
+      issue_to_mcap: {formula: ISSUE_VALUE / market_cap, inputs: [ISSUE_VALUE, market_cap], dtype: float, desc: 조달 금액/시총 — 체급 대비 희석 이벤트 크기}
+      dilution_ratio: {formula: NEW_SHARES / shares_outstanding, inputs: [NEW_SHARES, shares_outstanding], dtype: float, desc: 신주 수/기존 주식 수 — 직접 희석률}
+
+  COMPANY.CAPITAL.IPO:
+    family: COMPANY
+    lifecycle_model: CAPITAL_ACTION_LIFECYCLE
+    stage_sensitive: true
+    predicates: [FILE, PRICE, LIST, WITHDRAW]
+    roles: {required: [ISSUER], optional: [EXCHANGE, PRICE, AMOUNT, QUANTITY, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    note: "A company's initial public offering / going public (file -> price -> trading debut). NOT a secondary raise by an already-public firm (use EQUITY_ISSUANCE)."
+    quantities:
+      OFFER_VALUE: {dtype: float, unit_family: CURRENCY, desc: 공모 금액 — 조달 규모}
+      OFFER_PRICE: {dtype: float, unit_family: CURRENCY, desc: 확정/희망 공모가 — 밸류에이션 기준}
+      SHARES_OFFERED: {dtype: float, unit_family: COUNT, desc: 공모 주식 수 — 유통 물량}
+      IMPLIED_MCAP: {dtype: float, unit_family: CURRENCY, desc: 공모가 기준 예상 시가총액 — 기업 규모}
+    derived:
+      offered_float_ratio: {formula: OFFER_VALUE / IMPLIED_MCAP, inputs: [OFFER_VALUE, IMPLIED_MCAP], dtype: float, desc: 공모금액/예상시총 — 상장 직후 유통 부담}
+
+  COMPANY.CAPITAL.SHARE_BUYBACK:
+    family: COMPANY
+    lifecycle_model: OFFERING_LIFECYCLE
+    stage_sensitive: true
+    predicates: [REPURCHASE, EXPAND]
+    roles: {required: [ISSUER], optional: [BUYBACK_VALUE, SHARES, EFFECTIVE_DATE, DURATION], identity: [ISSUER, ANNOUNCED_DATE], primary: [ISSUER]}
+    quantities:
+      BUYBACK_VALUE: {dtype: float, unit_family: CURRENCY, required: true, desc: 취득 예정 금액 — 크기 축의 분자. 신탁은 계약금액=상한일 뿐 실취득 보장 아님}
+      SHARES: {dtype: float, unit_family: COUNT, desc: 취득 예정 주식수 — 발행주식수 대비 %와 EPS 증분 계산 입력}
+      BUYBACK_DURATION: {dtype: float, unit_family: DURATION_DAYS, desc: 취득 기간(직접취득은 결의 후 3개월 내 규정) — 일평균 매수 플로우 강도의 분모}
+      CANCEL_VALUE: {dtype: float, unit_family: CURRENCY, desc: 소각 예정 금액 — 취득분 중 소각분만 진짜 주주환원(KR 무소각 자사주는 처분·교환·우호지분 재활용 전례)}
+    entity_state:
+      treasury_share_ratio: {scope: ISSUER, dtype: float, unit_family: PERCENT, desc: 기취득 자사주 비중 — 이미 쌓인 자사주가 많으면 추가 취득의 한계 신호 약화 + 소각 여력 스톡}
+      controlling_owner_stake: {scope: ISSUER, dtype: float, unit_family: PERCENT, desc: 최대주주+특수관계인 지분율 — 낮으면 무소각 취득이 경영권 방어용으로 해석될 개연성(KR 특수)}
+      dividend_yield_ttm: {scope: ISSUER, dtype: float, unit_family: PERCENT, desc: 배당수익률 — 환원 수단 믹스 상 자사주의 한계 기여 판단}
+      fcf_ttm: {scope: ISSUER, dtype: float, unit_family: CURRENCY, desc: 잉여현금흐름 — 취득이 현금창출력 내인지 무리인지의 분모}
+      distributable_reserves: {scope: ISSUER, dtype: float, unit_family: CURRENCY, desc: '배당가능이익 — 상법상 자사주 취득 법정 한도, 근접 시 후속 환원 여력 소진'}
+    derived:
+      buyback_to_mcap: {formula: BUYBACK_VALUE / market_cap, inputs: [BUYBACK_VALUE, market_cap], dtype: float, desc: 시총 대비 취득 규모 — 크기 판단 1차 축}
+      buyback_to_fcf: {formula: BUYBACK_VALUE / fcf_ttm, inputs: [BUYBACK_VALUE, fcf_ttm], dtype: float, desc: 'FCF 대비 취득 규모 — 1 초과면 차입/현금 소진 동반, 지속가능성 의심'}
+      cancel_portion: {formula: CANCEL_VALUE / BUYBACK_VALUE, inputs: [CANCEL_VALUE, BUYBACK_VALUE], dtype: float, desc: 취득분 중 소각 비중 — 부분 소각(생색)과 전량 소각의 구분}
+      pbr_below_one: {formula: pbr < 1.0, inputs: [pbr], dtype: bool, desc: 저PBR 국면 여부 — PBR<1에서 소각은 산술적 BPS 증대 + 밸류업 정책 수혜 프레임}
+
+  COMPANY.CAPITAL.STOCK_SPLIT:
+    family: COMPANY
+    lifecycle_model: CAPITAL_ACTION_LIFECYCLE
+    stage_sensitive: true
+    predicates: [SPLIT, CONSOLIDATE]
+    roles: {required: [ISSUER], optional: [OLD_VALUE, NEW_VALUE, RECORD_DATE, EFFECTIVE_DATE], identity: [ISSUER], primary: [ISSUER]}
+    quantities:
+      SPLIT_RATIO_NEW: {dtype: float, unit_family: RATIO, required: true, desc: 분할 후 주식 수 비율의 분자}
+      SPLIT_RATIO_OLD: {dtype: float, unit_family: RATIO, required: true, desc: 분할 전 주식 수 비율의 분모}
+    derived:
+      split_factor: {formula: SPLIT_RATIO_NEW / SPLIT_RATIO_OLD, inputs: [SPLIT_RATIO_NEW, SPLIT_RATIO_OLD], dtype: float, desc: 주식 수 증가/감소 배율}
+
+  COMPANY.FINANCING.DEBT_ISSUANCE:
+    family: COMPANY
+    lifecycle_model: CAPITAL_ACTION_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ISSUE, PRICE]
+    roles: {required: [ISSUER], optional: [AMOUNT, PRICE, INTEREST_RATE, MATURITY_DATE, RATING_AGENCY, DEBT_INSTRUMENT], identity: [ISSUER], primary: [ISSUER]}
+    note: "A firm issues its OWN debt securities (corporate bonds/CB/perpetual/FX bonds). NOT investment received from others (use INVESTMENT.STAKE_ACQUISITION); NOT loans/guarantees provided to others."
+    quantities:
+      ISSUE_VALUE: {dtype: float, unit_family: CURRENCY, required: true, desc: 채권/차입 발행 금액 — 레버리지 증가 규모}
+      COUPON_RATE: {dtype: float, unit_family: PERCENT, desc: 표면이율 또는 발행금리 — 조달비용의 직접 관측치}
+      MATURITY_DAYS: {dtype: float, unit_family: DURATION_DAYS, desc: 만기까지 일수 — 차환 리스크 만기 구조}
+    entity_state:
+      debt_maturing_12m_observable: {dtype: float, unit_family: CURRENCY, scope: ISSUER, desc: 공시 재무제표 기준 12개월 내 만기 부채 — 차환 압력 분모}
+    derived:
+      debt_issue_to_mcap: {formula: ISSUE_VALUE / market_cap, inputs: [ISSUE_VALUE, market_cap], dtype: float, desc: 발행 금액/시총 — 주식 관점 체급 환산}
+      debt_issue_to_cash: {formula: ISSUE_VALUE / total_cash, inputs: [ISSUE_VALUE, total_cash], dtype: float, desc: 발행 금액/현금성 자산 — 유동성 필요 강도}
+      term_years: {formula: MATURITY_DAYS / 365, inputs: [MATURITY_DAYS], dtype: float, desc: 만기 연수 — 단기 차입 의존도 구분}
