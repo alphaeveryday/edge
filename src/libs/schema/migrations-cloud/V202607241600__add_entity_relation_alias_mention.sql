@@ -24,20 +24,20 @@
 --     도메인 ID(ADR-0027 ULID)는 마스터 객체 전용이다.
 -- =============================================================================
 
--- ── 1. entity_relation — 엔티티 간 단방향 관계 + 유효기간 ────────────────────
+-- ── 1. entity_relation — 엔티티 간 단방향 관계 (참조 지식 + 이벤트 파생 2층) ──
 
 CREATE TABLE entity_relation (
     entity_relation_id  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     subject_entity_id   TEXT NOT NULL,
-    -- 어휘는 계약 문서 v0.1 의 9종(produces·certified_for·owns·has_stake·supplies·
-    -- restricts·tariff_applies_to·sanctions·member_of). CHECK 없음 — 위 어휘 정책.
+    -- 어휘는 계약 문서가 정의한다: 참조 층 5종(ceo_of·officer_of·subsidiary_of·
+    -- owns_brand·produces) + 이벤트 파생 9종. CHECK 없음 — 위 어휘 정책.
     relation_code       TEXT NOT NULL,
     object_entity_id    TEXT NOT NULL,
-    -- 유효기간: 개시 = EFFECTIVE_DATE 역할값 또는 lifecycle EFFECTIVE 도달일,
-    -- 마감 = terminal stage 또는 역이벤트(INDEX.EXCLUSION 등). 미확정이면 NULL.
+    -- 유효기간은 이벤트 파생 층 전용(개시 = EFFECTIVE 도달, 마감 = terminal/역이벤트).
+    -- REFERENCE 층은 "현재 지식만" — 기간 없이 NULL, 사실 변경 시 행 교체(업서트).
     valid_from          DATE,
     valid_to            DATE,
-    -- 병합 우선순위: DECLARED(공시 fact) > EVENT_DERIVED(뉴스 thread) > PROVIDER(외부 피드).
+    -- 병합 우선순위: DECLARED(공시 fact) > EVENT_DERIVED(뉴스 thread) > REFERENCE(큐레이션·마스터 피드).
     source_kind         VARCHAR(20) NOT NULL,
     source_thread_id    TEXT,
     source_fact_id      TEXT,
@@ -49,16 +49,16 @@ CREATE TABLE entity_relation (
     CONSTRAINT ck_entity_relation_code
         CHECK (NULLIF(BTRIM(relation_code), '') IS NOT NULL),
     CONSTRAINT ck_entity_relation_source_kind
-        CHECK (source_kind IN ('DECLARED', 'EVENT_DERIVED', 'PROVIDER')),
+        CHECK (source_kind IN ('DECLARED', 'EVENT_DERIVED', 'REFERENCE')),
     -- 소스별 근거 참조를 강제한다: EVENT_DERIVED 는 thread, DECLARED 는 fact.
-    -- PROVIDER 는 도입 시(후속) 전용 참조 컬럼을 확장으로 추가한다.
+    -- REFERENCE 는 문서 단건이 아니라 현재-상태 지식이라 근거 참조가 없다(멱등키는 s·r·o).
     CONSTRAINT ck_entity_relation_source_ref
         CHECK (
             (source_kind = 'EVENT_DERIVED' AND source_thread_id IS NOT NULL AND source_fact_id IS NULL)
             OR
             (source_kind = 'DECLARED' AND source_fact_id IS NOT NULL AND source_thread_id IS NULL)
             OR
-            (source_kind = 'PROVIDER' AND source_thread_id IS NULL AND source_fact_id IS NULL)
+            (source_kind = 'REFERENCE' AND source_thread_id IS NULL AND source_fact_id IS NULL)
         ),
     CONSTRAINT ck_entity_relation_dates
         CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_to >= valid_from),
@@ -67,15 +67,19 @@ CREATE TABLE entity_relation (
 );
 
 COMMENT ON TABLE entity_relation IS
-'엔티티 간 단방향 관계(subject→object)와 유효기간. 어휘·방향·병합 규칙은 docs/contracts/entity-relations.md 가 정의한다.';
+'엔티티 간 단방향 관계(subject→object). REFERENCE 층은 현재-상태 지식(업서트·무이력), EVENT_DERIVED/DECLARED 층은 유효기간을 갖는 이벤트 파생. 어휘·방향·병합 규칙은 docs/contracts/entity-relations.md 가 정의한다.';
 
--- 재실행 멱등키: 한 thread(또는 공시 fact)는 관계 코드당 관계 행 하나만 만든다.
+-- 재실행 멱등키: 한 thread(또는 공시 fact)는 관계 코드당 관계 행 하나만 만들고,
+-- 참조 층은 (subject, relation, object) 현재 상태 한 행만 유지한다(업서트 키).
 CREATE UNIQUE INDEX uq_entity_relation_thread
     ON entity_relation (source_thread_id, relation_code)
     WHERE source_thread_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_entity_relation_fact
     ON entity_relation (source_fact_id, relation_code)
     WHERE source_fact_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_entity_relation_reference
+    ON entity_relation (subject_entity_id, relation_code, object_entity_id)
+    WHERE source_kind = 'REFERENCE';
 
 CREATE INDEX ix_entity_relation_subject ON entity_relation (subject_entity_id, relation_code);
 CREATE INDEX ix_entity_relation_object ON entity_relation (object_entity_id, relation_code);

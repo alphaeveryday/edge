@@ -10,11 +10,12 @@
 ## 결정
 
 1. **엔티티 kind 7종은 기존 `entity` 3서브타입(+`market_series`) 어휘로 사상한다** — 새 서브타입 테이블을 만들지 않는다. 회사의 캐노니컬 ID 는 instrument 가 아니라 **actor** 다. 사상표는 [contracts/entity-relations.md](../contracts/entity-relations.md) §1.
-2. **`entity_relation`** — 단방향(subject→object)+유효기간(valid_from/to)+소스 우선순위(DECLARED > EVENT_DERIVED > PROVIDER). 멱등키는 (thread×relation)·(fact×relation) 부분 유니크. 병합은 저장이 아니라 조회 계층 책임.
+2. **`entity_relation` 은 2층을 한 테이블에 담는다** — 단방향(subject→object) + 소스 우선순위(DECLARED > EVENT_DERIVED > REFERENCE). **REFERENCE 층 = 현재-상태 참조 지식 그래프**(사람·브랜드·기업·지주·제품 크로스 링크): 멱등키 (subject, relation, object), 이력 없음(업서트·행 교체), valid_from/to 미사용 — "현재 시간의 지식만" 요구를 스키마 시맨틱으로 고정. **EVENT_DERIVED/DECLARED 층 = 이벤트 파생 관계**: 멱등키 (thread×relation)·(fact×relation), 유효기간 사용. 병합은 저장이 아니라 조회 계층 책임.
 3. **`entity_mention`** — 미해소 표면 문자열의 1급 보존처. `RESOLVED ↔ entity_id NOT NULL` CHECK 로 placeholder 마스터 생성을 차단하고, UNKNOWN thread 재평가와 동형의 승격 경로를 연다. 확정 링크 소유권(`assertion_argument`·`event_argument`, NOT NULL FK)은 불변.
 4. **`entity_alias`** — 해소 4축째. 동명 충돌은 `is_ambiguous` 마킹 후 결정적 매칭에서 제외.
-5. **어휘 위치**: `relation_code`·`kind_hint` 는 온톨로지 소관 어휘라 SQL CHECK 로 발명하지 않는다(계약 문서가 정의, 적재 코드가 검증). `resolution_status`·`source_kind`·`alias_type` 은 edge 소유 구조 어휘라 CHECK 로 못박는다. `edge_ontology` 리소스는 현지 수정하지 않는다(통째 교체 규약, ALPHA-539) — 관계 어휘 정본은 당분간 edge 계약 문서이며, 실험실 확정본이 나오면 리소스 개정에 정합시킨다.
+5. **어휘 위치**: `relation_code`·`kind_hint` 는 SQL CHECK 로 발명하지 않는다(계약 문서가 정의, 적재 코드가 검증). 이벤트 파생 어휘는 온톨로지 thread 계약 승계(발명 금지), **참조 층 어휘(ceo_of·officer_of·subsidiary_of·owns_brand·produces)는 엔티티 마스터 소관이라 edge 계약 문서가 정본**이다. `resolution_status`·`source_kind`·`alias_type` 은 edge 소유 구조 어휘라 CHECK 로 못박는다. `edge_ontology` 리소스는 현지 수정하지 않는다(통째 교체 규약, ALPHA-539).
 6. **파생/링크 테이블 PK 는 BIGINT IDENTITY** — ADR-0027 의 ULID 도메인 ID 는 마스터 객체 전용을 유지한다.
+7. **개념 위계와 프로퍼티는 관계 테이블 밖이다** — 개념 내 위계(제품⊂제품군⊂브랜드)는 `concept.parent_concept_id` 트리, 스칼라·시계열 프로퍼티(주가·티커·이름)는 기존 컬럼·시계열 테이블(`price_daily` 등)이 담당한다. 판별 기준: "뉴스에서 독립적으로 재등장·참조되는가"(엔티티) vs 측정값·속성(프로퍼티). 관계 테이블에는 타입 경계를 넘는 링크만 둔다.
 
 ## 대안
 
