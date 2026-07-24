@@ -12,8 +12,9 @@
 
 ## 데이터 소스
 
-- `ExplanationStore` — 온프렘 Published Store(migrations-onprem: `publication ⋈ analysis_item`) JDBC 조회. WHERE 절이 PUBLISHED + 노출 가능 상태(AUTO_PUBLISHED·APPROVED)만 허용한다. `trade_date` 생략 시 **최신 거래일** 게시분(게시 시각 아님 — 화면 시맨틱).
-- `ExposureLogRecorder` — `exposure_log` INSERT (스키마가 `summary_snapshot NOT NULL` 강제).
+- **영속성** — Spring Data JPA(Hibernate). 스키마 SSOT 는 Flyway(`libs/schema`)라 `ddl-auto=validate` 로 검증만 하고 스키마를 생성/변경하지 않는다([ADR-0038](../../../../docs/adr/0038-jpa-onprem-read-standard.md)). 읽기 엔티티(`Publication`·`AnalysisItem`)는 `@Immutable` 로 쓰기를 봉인한다.
+- `ExplanationStore` — 온프렘 Published Store(migrations-onprem: `publication ⋈ analysis_item`)를 `PublicationRepository`(JPQL join fetch)로 조회하고 `PublishedExplanation` record 로 매핑한다. WHERE 절이 PUBLISHED + 노출 가능 상태(AUTO_PUBLISHED·APPROVED)만 허용한다. `trade_date` 생략 시 **최신 거래일** 게시분(게시 시각 아님 — 화면 시맨틱).
+- `ExposureLogRecorder` — `exposure_log` 저장(`ExposureLogRepository.save`, 스키마가 `summary_snapshot NOT NULL` 강제).
 - 상장 판별(404)은 설정 allowlist `publication.known-tickers` — 종목 마스터 동기화 도입 전 임시.
 - 로컬 데이터: 동기화 경로가 실적재한다 — cloud 시드(`libs/schema/seed-local-cloud`)의 전달 레코드가 sync-agent→intake→screening-worker 를 거쳐 `analysis_item`·`publication` 에 도착한다(온프렘 로컬 시드 없음).
 
@@ -34,4 +35,4 @@ curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" -i localhost:18084/api/v1/expla
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:publication-api:bootRun)
 ```
 
-테스트 6건 — 계약 형상(snake_case·disclaimer 필수), 조회=노출 기록, 204는 기록 없음, 404, 400 공통 포맷(SERV4001~4004)를 인코딩한다. HTTP 계약은 시드 대역으로 검증하고, 실 DB 경로는 compose E2E 로 확인한다.
+테스트 11건 — HTTP 계약 5건(계약 형상 snake_case·disclaimer 필수, 조회=노출 기록, 204는 기록 없음, 404, 400 공통 포맷 SERV4001~4004)은 시드 대역(standaloneSetup)으로 검증한다. DB 경로 6건은 Testcontainers Postgres 에 onprem 마이그레이션을 적용해 검증한다 — 엔티티↔스키마 정합(`ddl-auto=validate`) 1건 + 리포지토리 조회·노출 적재 통합 5건. 프로덕션 형상 전 구간은 compose E2E 로 확인한다.
