@@ -29,3 +29,24 @@ variable "price_class" {
   type        = string
   default     = "PriceClass_200" # 아시아(서울 엣지) 포함
 }
+
+# ── 선택: /api/* 프록시 오리진 ─────────────────────────
+# 정적 사이트에 API 백엔드를 같은 도메인으로 붙일 때(데모 온프렘 MTS → 박스 mock-broker).
+# 비우면 정적 전용(기존 동작). 브라우저 mixed-content 회피: 뷰어는 HTTPS, 오리진은 HTTP.
+variable "api_origin_domain" {
+  description = "선택: api_path_pattern 을 프록시할 커스텀 오리진 도메인(예: 데모 박스 EC2 public DNS). 비우면 API 오리진 없음."
+  type        = string
+  default     = ""
+}
+
+variable "api_origin_port" {
+  description = "API 오리진 HTTP 포트(api_origin_domain 설정 시)."
+  type        = number
+  default     = 8080
+}
+
+variable "api_path_pattern" {
+  description = "API 오리진으로 라우팅할 경로 패턴."
+  type        = string
+  default     = "/api/*"
+}

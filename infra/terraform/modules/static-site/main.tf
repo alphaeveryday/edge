@@ -55,6 +55,21 @@ resource "aws_cloudfront_distribution" "this" {
     origin_access_control_id = aws_cloudfront_origin_access_control.this.id
   }
 
+  # 선택: /api/* 를 프록시할 커스텀 오리진(데모 박스 mock-broker). 뷰어 HTTPS → 오리진 HTTP.
+  dynamic "origin" {
+    for_each = var.api_origin_domain != "" ? [1] : []
+    content {
+      domain_name = var.api_origin_domain
+      origin_id   = "api"
+      custom_origin_config {
+        http_port              = var.api_origin_port
+        https_port             = 443
+        origin_protocol_policy = "http-only" # 오리진(박스)은 평문 HTTP — CloudFront 가 뷰어 TLS 종단
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
   default_cache_behavior {
     target_origin_id       = "s3"
     viewer_protocol_policy = "redirect-to-https"
@@ -62,6 +77,21 @@ resource "aws_cloudfront_distribution" "this" {
     cached_methods         = ["GET", "HEAD"]
     compress               = true
     cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # AWS Managed-CachingOptimized
+  }
+
+  # /api/* → API 오리진. 캐시 비활성 + AllViewer 로 쿼리스트링(ticker 등)을 오리진에 전달.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.api_origin_domain != "" ? [1] : []
+    content {
+      path_pattern             = var.api_path_pattern
+      target_origin_id         = "api"
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = true
+      cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
+      origin_request_policy_id = "b689b0a8-53d0-40ab-baf2-68738e2966ac" # Managed-AllViewerExceptHostHeader
+    }
   }
 
   # SPA 라우팅: 존재하지 않는 경로도 index.html 로 200 응답(클라이언트 라우터가 처리).
