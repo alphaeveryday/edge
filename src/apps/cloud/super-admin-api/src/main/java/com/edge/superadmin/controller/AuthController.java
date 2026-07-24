@@ -2,6 +2,8 @@ package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.auth.SessionOperator;
+import com.edge.superadmin.dto.LoginRequest;
+import com.edge.superadmin.dto.SessionResponse;
 import com.edge.superadmin.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
@@ -21,15 +23,6 @@ public class AuthController {
 
 	public AuthController(AuthService authService) {
 		this.authService = authService;
-	}
-
-	public record LoginRequest(String email, String password) {
-	}
-
-	public record SessionResponse(String email, String name) {
-		static SessionResponse from(SessionOperator operator) {
-			return new SessionResponse(operator.email(), operator.name());
-		}
 	}
 
 	@PostMapping("/api/v1/auth/login")

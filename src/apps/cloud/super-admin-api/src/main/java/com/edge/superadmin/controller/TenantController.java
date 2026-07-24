@@ -1,7 +1,8 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
-import com.edge.superadmin.mock.TenantMockStore.Tenant;
+import com.edge.superadmin.dto.TenantCreateRequest;
+import com.edge.superadmin.dto.TenantResponse;
 import com.edge.superadmin.service.TenantService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,13 +25,10 @@ public class TenantController {
 		this.tenantService = tenantService;
 	}
 
-	public record TenantCreateRequest(String name, String env, String admin, String email,
-			String memo) {
-	}
-
 	@GetMapping("/api/v1/tenants")
-	public ApiResponse<List<Tenant>> list() {
-		return ApiResponse.onSuccess(tenantService.list());
+	public ApiResponse<List<TenantResponse>> list() {
+		return ApiResponse.onSuccess(
+				tenantService.list().stream().map(TenantResponse::from).toList());
 	}
 
 	@PostMapping("/api/v1/tenants")
