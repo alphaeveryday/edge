@@ -1,7 +1,9 @@
 package com.edge.intake;
 
+import com.edge.intake.scheduler.IntakePoller;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -27,4 +29,11 @@ abstract class OnpremPostgresIntegrationTest {
 	@ServiceConnection
 	static final PostgreSQLContainer POSTGRES =
 			new PostgreSQLContainer(DockerImageName.parse("postgres:16"));
+
+	// @Scheduled 폴러(IntakePoller)를 무력화한다 — 통합테스트 컨텍스트는 캐시돼 살아 있어 폴러가
+	// 배경에서 sync-agent 를 Pull 해 같은 Testcontainers DB 에 적재하면(로컬 compose 가동 시)
+	// sync_state·received_bundle 이 흔들려 테스트가 비결정적이 된다. Mockito 대체 빈은 메서드
+	// 애너테이션(@Scheduled)을 물려받지 않아 스케줄되지 않는다.
+	@MockitoBean
+	IntakePoller intakePoller;
 }
