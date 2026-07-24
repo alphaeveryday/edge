@@ -20,6 +20,7 @@
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
 | [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
 | [contracts/entity-relations.md](contracts/entity-relations.md) | 엔티티 관계 계약 — 타입 위계·참조 지식 그래프(현재 상태)·이벤트 파생 관계 어휘·병합 규칙, kind→DB 사상, 미해소·별칭 정책 ([adr/0039](adr/0039-entity-relation-schema.md)) | 엔티티 마스터·관계·해소를 만질 때 |
+| [specs/entity-ontology/](specs/entity-ontology/README.md) | 엔티티 온톨로지 설계 워크스페이스 — CQ 카탈로그(EO-CQ 18)·OntoClean 백본·셰이프/관계 명세·게이트 결정 로그 + 검토 산출물(ontology.sqlite·graph.html). 기준 CQ 배터리는 [specs/news-ontology-cohort-cq.md](specs/news-ontology-cohort-cq.md)(event-ontology 반입) | 엔티티 체계를 검토·개정할 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |
