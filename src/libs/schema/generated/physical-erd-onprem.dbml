@@ -1,0 +1,166 @@
+// AUTO-GENERATED from libs/schema Flyway migrations - DO NOT EDIT.
+// Regenerate: bash src/libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).
+// SSOT: libs/schema migrations. Derived physical ERD (dbdiagram.io syntax).
+
+Table "analysis_item" {
+  "explanation_result_id" text [pk]
+  "etf_instrument_id" text [not null]
+  "etf_ticker" varchar(20)
+  "etf_name" text
+  "trade_date" date [not null]
+  "explanation_as_of" timestamptz [not null]
+  "analysis_type" varchar(30) [not null]
+  "explanation_type" varchar(30) [not null]
+  "summary" text [not null]
+  "headline" text
+  "confidence_level" varchar(20)
+  "primary_thread_id" text
+  "evidences" jsonb
+  "supersedes_item_id" text
+  "correction_reason" text
+  "source_cursor" bigint
+  "status" varchar(20) [not null]
+  "received_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "analysis_item_status_history" {
+  "status_history_id" bigint [pk, increment]
+  "analysis_item_id" text [not null]
+  "from_status" varchar(20)
+  "to_status" varchar(20) [not null]
+  "actor_type" varchar(20) [not null]
+  "actor_id" bigint
+  "reason" text
+  "occurred_at" timestamptz [not null]
+}
+
+Table "console_action_log" {
+  "console_action_log_id" bigint [pk, increment]
+  "actor_id" bigint [not null]
+  "action" varchar(50) [not null]
+  "target_type" varchar(30)
+  "target_id" text
+  "detail" jsonb
+  "client_ip" varchar(45)
+  "occurred_at" timestamptz [not null]
+}
+
+Table "exposure_log" {
+  "exposure_log_id" bigint [pk, increment]
+  "publication_id" bigint [not null]
+  "customer_hash" varchar(128) [not null]
+  "channel" varchar(20) [not null]
+  "summary_snapshot" text [not null]
+  "exposed_at" timestamptz [not null]
+}
+
+Table "member" {
+  "member_id" bigint [pk, increment]
+  "email" text [not null]
+  "name" text [not null]
+  "role" varchar(30) [not null]
+  "is_active" boolean [not null]
+  "password_hash" text
+  "sso_subject" text
+  "last_login_at" timestamptz
+  "created_at" timestamptz [not null]
+}
+
+Table "policy_version" {
+  "policy_version_id" bigint [pk, increment]
+  "version_no" int [not null]
+  "disclaimer_text" text [not null]
+  "auto_publish_enabled" boolean [not null]
+  "min_source_count" int
+  "created_by" bigint
+  "created_at" timestamptz [not null]
+  "activated_at" timestamptz
+  "deactivated_at" timestamptz
+}
+
+Table "publication" {
+  "publication_id" bigint [pk, increment]
+  "analysis_item_id" text [not null]
+  "etf_ticker" varchar(20) [not null]
+  "trade_date" date [not null]
+  "status" varchar(20) [not null]
+  "published_at" timestamptz [not null]
+  "unpublished_at" timestamptz
+  "published_summary" text
+  "unpublish_reason" text
+  "unpublished_by" bigint
+}
+
+Table "received_bundle" {
+  "cursor_from" bigint [pk]
+  "cursor_to" bigint [not null]
+  "checksum" varchar(72) [not null]
+  "body" bytea [not null]
+  "received_at" timestamptz [not null]
+  "screened_at" timestamptz
+}
+
+Table "review_task" {
+  "review_task_id" bigint [pk, increment]
+  "analysis_item_id" text [not null]
+  "status" varchar(20) [not null]
+  "reviewer_id" bigint
+  "edited_headline" text
+  "edited_summary" text
+  "review_note" text
+  "created_at" timestamptz [not null]
+  "decided_at" timestamptz
+}
+
+Table "screening_check" {
+  "screening_check_id" bigint [pk, increment]
+  "analysis_item_id" text [not null]
+  "policy_version_id" bigint [not null]
+  "screening_rule_id" bigint
+  "result" varchar(20) [not null]
+  "matched_text" text
+  "checked_at" timestamptz [not null]
+}
+
+Table "screening_rule" {
+  "screening_rule_id" bigint [pk, increment]
+  "policy_version_id" bigint [not null]
+  "rule_type" varchar(30) [not null]
+  "params" jsonb [not null]
+  "action" varchar(20) [not null]
+  "enabled" boolean [not null]
+  "created_at" timestamptz [not null]
+}
+
+Table "serving_scope" {
+  "serving_scope_id" bigint [pk, increment]
+  "scope_type" varchar(20) [not null]
+  "scope_key" varchar(50) [not null]
+  "enabled" boolean [not null]
+  "updated_by" bigint
+  "updated_at" timestamptz [not null]
+}
+
+Table "sync_state" {
+  "single_row" boolean [pk]
+  "last_cursor" bigint [not null]
+  "last_synced_at" timestamptz
+}
+
+Ref: "analysis_item"."supersedes_item_id" > "analysis_item"."explanation_result_id"
+Ref: "analysis_item_status_history"."actor_id" > "member"."member_id"
+Ref: "analysis_item_status_history"."analysis_item_id" > "analysis_item"."explanation_result_id"
+Ref: "console_action_log"."actor_id" > "member"."member_id"
+Ref: "exposure_log"."publication_id" > "publication"."publication_id"
+Ref: "policy_version"."created_by" > "member"."member_id"
+Ref: "publication"."analysis_item_id" > "analysis_item"."explanation_result_id"
+Ref: "publication"."unpublished_by" > "member"."member_id"
+Ref: "review_task"."analysis_item_id" > "analysis_item"."explanation_result_id"
+Ref: "review_task"."reviewer_id" > "member"."member_id"
+Ref: "screening_check".("policy_version_id", "screening_rule_id") > "screening_rule".("policy_version_id", "screening_rule_id")
+Ref: "screening_check"."analysis_item_id" > "analysis_item"."explanation_result_id"
+Ref: "screening_check"."policy_version_id" > "policy_version"."policy_version_id"
+Ref: "screening_check"."screening_rule_id" > "screening_rule"."screening_rule_id"
+Ref: "screening_rule"."policy_version_id" > "policy_version"."policy_version_id"
+Ref: "serving_scope"."updated_by" > "member"."member_id"

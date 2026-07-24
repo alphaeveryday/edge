@@ -1,0 +1,2 @@
+# 훅은 git-bash/sh 로 실행되므로 OS 무관 LF 로 고정한다(CRLF shebang 이 Linux/Mac 에서 깨지지 않도록).
+* text eol=lf
