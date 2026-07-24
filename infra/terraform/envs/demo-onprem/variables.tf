@@ -11,9 +11,9 @@ variable "mts_domain" {
 }
 
 variable "instance_type" {
-  description = "데모 박스 인스턴스 타입. 시연은 작게, 부하 실험은 크게"
+  description = "데모 박스 인스턴스 타입. 시연은 작게, 부하 실험은 크게(실측 유휴 ~1.4GB — small 이 기본, 부하 실험 시 상향)"
   type        = string
-  default     = "t3.large"
+  default     = "t3.small"
 }
 
 variable "root_volume_size" {
