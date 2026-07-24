@@ -1,0 +1,11 @@
+# prod profile 전용 — 배포 이미지가 prod 로 뜰 때만 활성(Dockerfile ENV SPRING_PROFILES_ACTIVE=prod).
+# 로컬 compose 는 그 값을 빈 문자열로 override, IDE bootRun 은 이미지를 안 써 default → 둘 다 평문 유지(ALPHA-531).
+# 배포 콘솔은 stdout 으로 흐르므로 ECS(Elastic Common Schema) JSON 으로 출력해 level·service 필드 단위
+# 쿼리·집계를 가능케 한다. service.name 은 spring.application.name 에서 자동 파생된다.
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        environment: onprem

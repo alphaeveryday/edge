@@ -22,4 +22,9 @@ COPY --from=build /workspace/apps/cloud/tenant-sync-api/build/libs/*.jar app.jar
 
 # Spring Boot 기본 포트. ECS target group / Service Connect 도 8080 으로 맞춘다.
 EXPOSE 8080
+# 배포 이미지는 prod profile 로 뜬다 → application-prod.yaml 의 ECS JSON 구조적 로깅 활성(ALPHA-531).
+# 로컬 compose 는 SPRING_PROFILES_ACTIVE="" 로 override 해 default(평문)로 되돌린다. IDE bootRun 은
+# 이미지를 쓰지 않아 자동 default. 이미지에 박아 배포 경로(deploy-app.yml 이미지 교체)와 함께 이동시켜
+# terraform task-def env 의 CD 레이스(ecs-service ignore_changes)를 피한다.
+ENV SPRING_PROFILES_ACTIVE=prod
 ENTRYPOINT ["java", "-jar", "app.jar"]
