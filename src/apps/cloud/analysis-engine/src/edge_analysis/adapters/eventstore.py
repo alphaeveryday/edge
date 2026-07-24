@@ -13,8 +13,10 @@ from ..config import Settings
 from ..domain.models import (
     POLICY_VERSION,
     Decomposition,
+    EventContext,
     Explanation,
-    KodexEvent,
+    Measure,
+    Participant,
     PriceTrigger,
 )
 from ..observability import log, stable_id, utcnow_iso
@@ -110,38 +112,101 @@ class EventStore:
             rel_gate=bool(row[4]),
         )
 
-    def fetch_kodex_events(self, trade_date: date, tickers: list[str]) -> list[KodexEvent]:
-        """파이프라인이 조립한 당일 KODEX 구성종목 source event 를 읽는다."""
-        sql = (
+    def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
+        """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.
+
+        사건 선별(NEWS·ACTIVE·holdings 접지)과 문맥 수집(참여자 전원·측정값 전부)을
+        분리한 3쿼리다 — 단일 조인을 DISTINCT ON 으로 붕괴시키면 사건당 참여자 1명만
+        남는다(v4 온톨로지 이전의 손실). DISTINCT ON 은 이제 evidence fanout 방어만 한다
+        (TITLE evidence 는 assertion 별로 여럿일 수 있다). 신규 온톨로지 컬럼
+        (predicate_code·slot 등)은 백필 전 NULL 이어도 동작한다.
+        """
+        head_sql = (
             "SELECT DISTINCT ON (se.source_event_id)"
-            " se.source_event_id, se.event_type_code, se.available_at, ea.entity_id, i.ticker,"
+            " se.source_event_id, se.event_type_code, se.available_at,"
+            " se.predicate_code, se.lifecycle_stage,"
             " etl.thread_id, etl.novelty_status, ev.evidence_text"
             " FROM source_event se"
-            " JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
-            " JOIN instrument i ON i.instrument_id = ea.entity_id"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
             " LEFT JOIN event_evidence ev ON ev.source_event_id = se.source_event_id"
             " AND ev.evidence_type = %s"
             " WHERE se.event_date = %s AND se.source_class = 'NEWS' AND se.event_status = 'ACTIVE'"
-            " AND i.ticker = ANY(%s)"
-            " ORDER BY se.source_event_id, se.available_at"
+            " AND EXISTS (SELECT 1 FROM event_argument ea"
+            " JOIN instrument i ON i.instrument_id = ea.entity_id"
+            " WHERE ea.source_event_id = se.source_event_id AND i.ticker = ANY(%s))"
+            " ORDER BY se.source_event_id, ev.evidence_id"
         )
         with self._conn.cursor() as cur:
-            cur.execute(sql, (_TITLE_EVIDENCE_TYPE, trade_date.isoformat(), tickers))
-            rows = cur.fetchall()
-        return [
-            KodexEvent(
-                source_event_id=str(r[0]),
-                event_type_code=r[1],
-                available_at=_iso(r[2]),
-                entity_id=str(r[3]),
-                ticker=str(r[4]),
-                thread_id=r[5],
-                novelty_status=r[6] or "UNKNOWN",
-                title=r[7] or "",
+            cur.execute(head_sql, (_TITLE_EVIDENCE_TYPE, trade_date.isoformat(), tickers))
+            heads = cur.fetchall()
+            if not heads:
+                return []
+            event_ids = [str(h[0]) for h in heads]
+            # 참여자 전원 — 비종목 entity 도 유지하도록 instrument 는 LEFT JOIN 이다.
+            cur.execute(
+                "SELECT ea.source_event_id, ea.role_code, ea.slot, ea.entity_id,"
+                " i.ticker, ea.confidence"
+                " FROM event_argument ea"
+                " LEFT JOIN instrument i ON i.instrument_id = ea.entity_id"
+                " WHERE ea.source_event_id = ANY(%s)"
+                " ORDER BY ea.source_event_id, ea.role_code, ea.entity_id",
+                (event_ids,),
             )
-            for r in rows
-        ]
+            argument_rows = cur.fetchall()
+            cur.execute(
+                "SELECT em.source_event_id, em.role_code, em.value, em.unit, em.basis,"
+                " em.value_source, em.surface"
+                " FROM event_measure em"
+                " WHERE em.source_event_id = ANY(%s)"
+                " ORDER BY em.source_event_id, em.measure_ord",
+                (event_ids,),
+            )
+            measure_rows = cur.fetchall()
+
+        participants: dict[str, list[Participant]] = {}
+        for r in argument_rows:
+            participants.setdefault(str(r[0]), []).append(Participant(
+                role_code=str(r[1]),
+                slot=r[2],
+                entity_id=str(r[3]),
+                ticker=str(r[4]) if r[4] is not None else None,
+                confidence=float(r[5]) if r[5] is not None else None,
+            ))
+        measures: dict[str, list[Measure]] = {}
+        for r in measure_rows:
+            measures.setdefault(str(r[0]), []).append(Measure(
+                role_code=str(r[1]),
+                value=r[2],
+                unit=r[3],
+                basis=str(r[4] or "UNKNOWN"),
+                value_source=str(r[5] or "UNRESOLVED"),
+                surface=r[6],
+            ))
+
+        wanted = set(tickers)
+        contexts: list[EventContext] = []
+        for h in heads:
+            event_id = str(h[0])
+            event_participants = tuple(participants.get(event_id, ()))
+            # 대표 참여자 = holdings 접지 참여자(이 사건이 선별된 근거) 중 첫 번째.
+            anchor = next((p for p in event_participants if p.ticker in wanted), None)
+            if anchor is None:
+                continue  # 선별·수집 사이 인자 소실(비정상) — 접지 없는 사건은 버린다.
+            contexts.append(EventContext(
+                source_event_id=event_id,
+                event_type_code=h[1],
+                available_at=_iso(h[2]),
+                entity_id=anchor.entity_id,
+                ticker=anchor.ticker or "",
+                thread_id=h[5],
+                novelty_status=h[6] or "UNKNOWN",
+                title=h[7] or "",
+                participants=event_participants,
+                measures=tuple(measures.get(event_id, ())),
+                predicate_code=h[3],
+                lifecycle_stage=h[4],
+            ))
+        return contexts
 
     def explanation_prerequisites(
         self, settings: Settings, etf_instrument_id: str

@@ -14,7 +14,7 @@ import pytest
 from edge_analysis.adapters.eventstore import EventStore
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.config import PipelineError
-from edge_analysis.domain.models import Decomposition, Holding, KodexEvent, Member, PriceTrigger
+from edge_analysis.domain.models import Decomposition, EventContext, Holding, Member, PriceTrigger
 from edge_analysis.pipeline import _primary_thread_id, run
 
 
@@ -75,8 +75,8 @@ _DECOMP = Decomposition(
 )
 
 
-def _event(ticker: str, title: str, thread_id: str | None = None) -> KodexEvent:
-    return KodexEvent(
+def _event(ticker: str, title: str, thread_id: str | None = None) -> EventContext:
+    return EventContext(
         source_event_id=f"evt_{ticker}", event_type_code="NEWS",
         available_at="2026-07-20T09:00:00+09:00", entity_id=f"ent_{ticker}",
         ticker=ticker, thread_id=thread_id, novelty_status="NEW", title=title,

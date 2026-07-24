@@ -20,7 +20,7 @@ from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, analyze
 from .config import PipelineError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
-from .domain.models import KodexEvent
+from .domain.models import EventContext
 from .observability import log
 
 _MARKET = "KR"
@@ -87,42 +87,42 @@ def run(
     log("trigger.consumed", route=route_code, event_search=event_search, **ids)
 
     # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
-    kodex_events: list[KodexEvent] = []
+    events: list[EventContext] = []
     if event_search:
         # 뉴스 대상 티커는 이 ETF 의 holdings 구성종목이다 — 구 KODEX_CONSTITUENTS
         # 9종목 하드코딩은 다른 ETF 로 돌려도 KODEX 뉴스만 읽었다(ALPHA-467).
-        kodex_events = store.fetch_kodex_events(
+        events = store.fetch_event_contexts(
             settings.trade_date, [h.ticker for h in holdings])
-        log("events.ready", kodex_events=len(kodex_events))
+        log("events.ready", events=len(events))
 
     explanation = analyze(
         client, etf_ticker=settings.etf_ticker, etf_name=etf_name,
         name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
-        decomp=decomp, gate=gate, route_code=route_code, events=kodex_events,
+        decomp=decomp, gate=gate, route_code=route_code, events=events,
     )
-    outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, kodex_events)
+    outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, events)
     write_run_archive(s3, settings, {
         "outcome": "explained",
         "trigger": asdict(gate),
         "route_code": route_code,
         "decomposition": decomp_summary(decomp),
         "holdings_asof": holdings_asof,
-        "kodex_events": archived_events(kodex_events),
+        "events": archived_events(events),
         "explanation": explanation.raw,
         "persistence": outcome,
     })
-    log("done", route=route_code, kodex_events=len(kodex_events), **outcome)
+    log("done", route=route_code, events=len(events), **outcome)
     return 0
 
 
 def _persist_explanation(
-    store: EventStore, s3, settings: Settings, etf_instrument_id: str, explanation, kodex_events,
+    store: EventStore, s3, settings: Settings, etf_instrument_id: str, explanation, events,
 ) -> dict[str, Any]:
     """FK 전제가 있으면 RDS 에, 없으면 S3 로 폴백해 설명을 영속한다."""
     prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
     missing = [key for key, value in prereqs.items() if not value]
     if missing:
-        location = write_explanation_to_s3(s3, settings, explanation.raw, kodex_events)
+        location = write_explanation_to_s3(s3, settings, explanation.raw, events)
         log(
             "explanation_result.skipped",
             reason="missing_prerequisites",
@@ -135,12 +135,12 @@ def _persist_explanation(
         settings, etf_instrument_id, explanation,
         route_id=prereqs["route"],
         bundle=prereqs["bundle"],
-        primary_thread_id=_primary_thread_id(kodex_events),
-        event_count=len(kodex_events),
+        primary_thread_id=_primary_thread_id(events),
+        event_count=len(events),
     )
 
 
-def _primary_thread_id(events: list[KodexEvent]) -> str | None:
+def _primary_thread_id(events: list[EventContext]) -> str | None:
     """설명이 대표로 매다는 event thread — **스레드가 붙은 첫 이벤트**를 고른다.
 
     ``events[0]`` 을 그대로 쓰면(fetch 는 source_event_id 순 정렬), upstream assemble-events

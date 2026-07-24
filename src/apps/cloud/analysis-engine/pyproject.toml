@@ -1,7 +1,7 @@
 [project]
 name = "analysis-engine"
 version = "0.1.0"
-description = "KODEX 반도체 ETF 일일 뉴스 정규화 + 설명 파이프라인 (S3 → Cloud Event Store)"
+description = "ETF 당일 설명 생성 파이프라인 (S3 → Cloud Event Store)"
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.34",          # S3 canonical lake 읽기 + 결과 s3 fallback
