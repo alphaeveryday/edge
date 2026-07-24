@@ -81,8 +81,10 @@ class AuthControllerTest {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"email\":\"Reviewer@demo.edge.local\",\"password\":\"" + PASSWORD + "\"}"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.role").value("COMPLIANCE_REVIEWER"))
-				.andExpect(jsonPath("$.member_id").value(2))
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.role").value("COMPLIANCE_REVIEWER"))
+				.andExpect(jsonPath("$.result.member_id").value(2))
 				.andReturn();
 
 		// 이메일 대소문자는 정규화되고, 세션에 SessionMember 가 실리며, 최근 로그인이 갱신된다.
@@ -125,7 +127,8 @@ class AuthControllerTest {
 				new SessionMember(2L, "reviewer@demo.edge.local", "데모 검수자", "COMPLIANCE_REVIEWER"));
 
 		mvc.perform(post("/api/v1/auth/logout").session(session))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		assertThat(session.isInvalid()).isTrue();
 	}
 
@@ -137,7 +140,9 @@ class AuthControllerTest {
 
 		mvc.perform(get("/api/v1/auth/session").session(session))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.email").value("reviewer@demo.edge.local"))
-				.andExpect(jsonPath("$.role").value("COMPLIANCE_REVIEWER"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.email").value("reviewer@demo.edge.local"))
+				.andExpect(jsonPath("$.result.role").value("COMPLIANCE_REVIEWER"));
 	}
 }

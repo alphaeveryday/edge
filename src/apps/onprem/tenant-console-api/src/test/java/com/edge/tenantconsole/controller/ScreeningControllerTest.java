@@ -39,12 +39,13 @@ class ScreeningControllerTest {
 		mvc.perform(post("/api/v1/screening/words")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"text\":\"원금 보장\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/screening/words"))
-				.andExpect(jsonPath("$[0].text").value("원금 보장"))
-				.andExpect(jsonPath("$[0].active").value(true))
-				.andExpect(jsonPath("$[0].id").value(7));
+				.andExpect(jsonPath("$.result[0].text").value("원금 보장"))
+				.andExpect(jsonPath("$.result[0].active").value(true))
+				.andExpect(jsonPath("$.result[0].id").value(7));
 	}
 
 	@Test
@@ -60,10 +61,11 @@ class ScreeningControllerTest {
 	@Test
 	void 토글은_활성_여부를_뒤집는다() throws Exception {
 		mvc.perform(post("/api/v1/screening/words/1/toggle"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/screening/words"))
-				.andExpect(jsonPath("$[0].id").value(1))
-				.andExpect(jsonPath("$[0].active").value(false));
+				.andExpect(jsonPath("$.result[0].id").value(1))
+				.andExpect(jsonPath("$.result[0].active").value(false));
 
 		mvc.perform(post("/api/v1/screening/words/999/toggle"))
 				.andExpect(status().isNotFound())
@@ -75,10 +77,11 @@ class ScreeningControllerTest {
 		// WHY: PATCH 시맨틱 — minSources 만 보내는 UI 흐름에서 maxRisk 가 초기화되면 안 된다.
 		mvc.perform(patch("/api/v1/screening/criteria")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":3}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/screening/criteria"))
-				.andExpect(jsonPath("$.minSources").value(3))
-				.andExpect(jsonPath("$.maxRisk").value("MEDIUM"));
+				.andExpect(jsonPath("$.result.minSources").value(3))
+				.andExpect(jsonPath("$.result.maxRisk").value("MEDIUM"));
 	}
 
 	@Test
@@ -95,9 +98,12 @@ class ScreeningControllerTest {
 		// WHY: 원시 문자열 응답은 apiClient 의 JSON 파싱 계약과 어긋난다 — {text} 로 고정.
 		mvc.perform(patch("/api/v1/screening/disclaimer")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"새 면책 문구\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.text").value("새 면책 문구"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.text").value("새 면책 문구"));
 	}
 }

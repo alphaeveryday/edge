@@ -40,14 +40,16 @@ class ExplanationControllerTest {
 		// finalText/snake_case 로 새면 mock→real 전환 시 화면이 깨진다.
 		mvc.perform(get("/api/v1/explanations"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$[0].name").value("삼성전자"))
-				.andExpect(jsonPath("$[0].changePct").value(3.24))
-				.andExpect(jsonPath("$[0].final").exists())
-				.andExpect(jsonPath("$[0].finalText").doesNotExist())
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result[0].name").value("삼성전자"))
+				.andExpect(jsonPath("$.result[0].changePct").value(3.24))
+				.andExpect(jsonPath("$.result[0].final").exists())
+				.andExpect(jsonPath("$.result[0].finalText").doesNotExist())
 				// 검수 사유는 해당 상태에서만 존재한다(UI optional 필드 계약)
-				.andExpect(jsonPath("$[0].reviewReason").doesNotExist())
-				.andExpect(jsonPath("$[1].reviewReason").value("ASSERTIVE"))
-				.andExpect(jsonPath("$[0].evidence[0].type").value("공시"));
+				.andExpect(jsonPath("$.result[0].reviewReason").doesNotExist())
+				.andExpect(jsonPath("$.result[1].reviewReason").value("ASSERTIVE"))
+				.andExpect(jsonPath("$.result[0].evidence[0].type").value("공시"));
 	}
 
 	@Test
@@ -57,12 +59,13 @@ class ExplanationControllerTest {
 		mvc.perform(post("/api/v1/explanations/2/approve")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"final\":\"검수 반영 문구\",\"note\":\"단정 표현 제거\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/explanations"))
-				.andExpect(jsonPath("$[1].status").value("APPROVED"))
-				.andExpect(jsonPath("$[1].final").value("검수 반영 문구"))
-				.andExpect(jsonPath("$[1].reviewReason").doesNotExist());
+				.andExpect(jsonPath("$.result[1].status").value("APPROVED"))
+				.andExpect(jsonPath("$.result[1].final").value("검수 반영 문구"))
+				.andExpect(jsonPath("$.result[1].reviewReason").doesNotExist());
 	}
 
 	@Test
@@ -91,14 +94,17 @@ class ExplanationControllerTest {
 				.andExpect(jsonPath("$.code").value("CNSL4003"));
 		mvc.perform(patch("/api/v1/explanations/1/draft")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"final\":\"\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 	}
 
 	@Test
 	void 반입_상태는_UI_계약_형상이다() throws Exception {
 		mvc.perform(get("/api/v1/explanations/feed-status"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.state").value("NORMAL"))
-				.andExpect(jsonPath("$.todayReceived").value(128));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.state").value("NORMAL"))
+				.andExpect(jsonPath("$.result.todayReceived").value(128));
 	}
 }

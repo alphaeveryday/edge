@@ -108,7 +108,7 @@ class ConsoleAuthFilterTest {
 				.andExpect(status().isForbidden())
 				.andExpect(jsonPath("$.code").value("CNSL4030"));
 		mvc.perform(post("/api/v1/review/items/er-1/approve").session(sessionOf(REVIEWER)))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk());
 	}
 
 	@Test

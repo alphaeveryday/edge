@@ -1,12 +1,12 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.mock.ExplanationMockStore.Evidence;
 import com.edge.tenantconsole.mock.ExplanationMockStore.Explanation;
 import com.edge.tenantconsole.mock.ExplanationMockStore.FeedStatus;
 import com.edge.tenantconsole.service.ExplanationService;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -79,52 +79,53 @@ public class ExplanationController {
 	}
 
 	@GetMapping("/api/v1/explanations")
-	public List<ExplanationResponse> list() {
-		return explanationService.list().stream().map(ExplanationResponse::from).toList();
+	public ApiResponse<List<ExplanationResponse>> list() {
+		return ApiResponse.onSuccess(
+				explanationService.list().stream().map(ExplanationResponse::from).toList());
 	}
 
 	@GetMapping("/api/v1/explanations/feed-status")
-	public FeedStatusResponse feedStatus() {
-		return FeedStatusResponse.from(explanationService.feedStatus());
+	public ApiResponse<FeedStatusResponse> feedStatus() {
+		return ApiResponse.onSuccess(FeedStatusResponse.from(explanationService.feedStatus()));
 	}
 
 	@PatchMapping("/api/v1/explanations/{id}/final")
-	public ResponseEntity<Void> updateFinal(@PathVariable("id") long id,
+	public ApiResponse<Void> updateFinal(@PathVariable("id") long id,
 			@RequestBody(required = false) FinalRequest request) {
 		explanationService.updateFinal(id, request == null ? null : request.finalText());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/stop")
-	public ResponseEntity<Void> stop(@PathVariable("id") long id) {
+	public ApiResponse<Void> stop(@PathVariable("id") long id) {
 		explanationService.stop(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/move-to-review")
-	public ResponseEntity<Void> moveToReview(@PathVariable("id") long id) {
+	public ApiResponse<Void> moveToReview(@PathVariable("id") long id) {
 		explanationService.moveToReview(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/approve")
-	public ResponseEntity<Void> approve(@PathVariable("id") long id,
+	public ApiResponse<Void> approve(@PathVariable("id") long id,
 			@RequestBody(required = false) ApproveRequest request) {
 		explanationService.approve(id, request == null ? null : request.finalText());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/reject")
-	public ResponseEntity<Void> reject(@PathVariable("id") long id,
+	public ApiResponse<Void> reject(@PathVariable("id") long id,
 			@RequestBody(required = false) RejectRequest request) {
 		explanationService.reject(id, request == null ? null : request.note());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PatchMapping("/api/v1/explanations/{id}/draft")
-	public ResponseEntity<Void> saveDraft(@PathVariable("id") long id,
+	public ApiResponse<Void> saveDraft(@PathVariable("id") long id,
 			@RequestBody(required = false) FinalRequest request) {
 		explanationService.saveDraft(id, request == null ? null : request.finalText());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }

@@ -1,10 +1,10 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,7 +36,7 @@ public class AuthController {
 	}
 
 	@PostMapping("/api/v1/auth/login")
-	public SessionResponse login(@RequestBody(required = false) LoginRequest request,
+	public ApiResponse<SessionResponse> login(@RequestBody(required = false) LoginRequest request,
 			HttpServletRequest httpRequest) {
 		SessionMember member = authService.login(
 				request == null ? null : request.email(),
@@ -47,23 +47,23 @@ public class AuthController {
 			httpRequest.changeSessionId();
 		}
 		httpRequest.getSession(true).setAttribute(SessionMember.SESSION_KEY, member);
-		return SessionResponse.from(member);
+		return ApiResponse.onSuccess(SessionResponse.from(member));
 	}
 
 	@PostMapping("/api/v1/auth/logout")
-	public ResponseEntity<Void> logout(HttpServletRequest httpRequest) {
+	public ApiResponse<Void> logout(HttpServletRequest httpRequest) {
 		HttpSession session = httpRequest.getSession(false);
 		if (session != null) {
 			session.invalidate();
 		}
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	// 필터가 인증을 보장하므로 여기 도달하면 세션은 항상 존재한다.
 	@GetMapping("/api/v1/auth/session")
-	public SessionResponse session(HttpServletRequest httpRequest) {
+	public ApiResponse<SessionResponse> session(HttpServletRequest httpRequest) {
 		SessionMember member = (SessionMember) httpRequest.getSession(false)
 				.getAttribute(SessionMember.SESSION_KEY);
-		return SessionResponse.from(member);
+		return ApiResponse.onSuccess(SessionResponse.from(member));
 	}
 }

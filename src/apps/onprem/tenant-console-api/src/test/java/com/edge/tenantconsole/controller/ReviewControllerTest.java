@@ -96,10 +96,12 @@ class ReviewControllerTest {
 		// WHY: 콘솔 화면(review 도메인 repository.real)이 이 필드명으로 렌더링한다.
 		mvc.perform(get("/api/v1/review/items"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$[0].explanation_result_id").value("er-rev-1"))
-				.andExpect(jsonPath("$[0].status").value("REVIEW_REQUIRED"))
-				.andExpect(jsonPath("$[0].supersedes_item_id").value("er-0"))
-				.andExpect(jsonPath("$[0].correction_reason").value("근거 공시 정정"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result[0].explanation_result_id").value("er-rev-1"))
+				.andExpect(jsonPath("$.result[0].status").value("REVIEW_REQUIRED"))
+				.andExpect(jsonPath("$.result[0].supersedes_item_id").value("er-0"))
+				.andExpect(jsonPath("$.result[0].correction_reason").value("근거 공시 정정"));
 	}
 
 	@Test
@@ -107,7 +109,8 @@ class ReviewControllerTest {
 		// WHY: 검수 승인 후에만 재발행(state-machine.md) — 전이만 되고 게시가 빠지면
 		// 고객에겐 여전히 미노출이라 승인의 의미가 없다.
 		mvc.perform(post("/api/v1/review/items/er-rev-1/approve"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		assertThat(items.decisions).containsExactly("er-rev-1:APPROVED");
 		assertThat(publications.published).containsExactly("er-rev-1");
@@ -141,7 +144,8 @@ class ReviewControllerTest {
 
 		mvc.perform(post("/api/v1/review/items/er-rev-1/reject")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"근거 불충분\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		assertThat(items.decisions).containsExactly("er-rev-1:REJECTED");
 	}
 

@@ -1,8 +1,8 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.mock.SessionMockStore.SessionUser;
 import com.edge.tenantconsole.service.ConsoleSessionService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,13 +34,13 @@ public class ConsoleSessionController {
 	}
 
 	@GetMapping("/api/v1/session")
-	public SessionUserResponse current() {
-		return SessionUserResponse.from(consoleSessionService.current());
+	public ApiResponse<SessionUserResponse> current() {
+		return ApiResponse.onSuccess(SessionUserResponse.from(consoleSessionService.current()));
 	}
 
 	@PatchMapping("/api/v1/session/profile")
-	public ResponseEntity<Void> updateProfile(@RequestBody(required = false) ProfileRequest request) {
+	public ApiResponse<Void> updateProfile(@RequestBody(required = false) ProfileRequest request) {
 		consoleSessionService.updateDisplayName(request == null ? null : request.name());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }
