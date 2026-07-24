@@ -2,6 +2,7 @@ package com.edge.tenantconsole.service;
 
 import com.edge.tenantconsole.auth.BootstrapAccounts;
 import com.edge.tenantconsole.auth.BootstrapAccounts.Account;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.repository.MemberRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -14,16 +15,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 부트스트랩 계약(ADR-0025)을 검증한다: member 0건일 때만 시드(재기동 멱등),
- * 비밀번호는 평문이 아니라 BCrypt 해시로 저장된다.
+ * 비밀번호는 평문이 아니라 BCrypt 해시로 저장된다. 리포지토리(JPA)는 좁은 인터페이스라
+ * 페이크로 스텁한다 — 실 DB 경로는 Testcontainers 통합 테스트.
  */
 class AuthServiceTest {
 
-	private static final class StubMembers extends MemberRepository {
+	private static final class StubMembers implements MemberRepository {
 		long count;
-		final List<String[]> inserted = new ArrayList<>();
+		final List<MemberEntity> saved = new ArrayList<>();
 
 		StubMembers(long count) {
-			super(null);
 			this.count = count;
 		}
 
@@ -33,13 +34,18 @@ class AuthServiceTest {
 		}
 
 		@Override
-		public void insert(String email, String name, String role, String passwordHash) {
-			inserted.add(new String[]{email, name, role, passwordHash});
+		public MemberEntity save(MemberEntity member) {
+			saved.add(member);
+			return member;
 		}
 
 		@Override
-		public Optional<Member> findActiveByEmail(String email) {
+		public Optional<MemberEntity> findByEmailAndActiveTrue(String email) {
 			return Optional.empty();
+		}
+
+		@Override
+		public void touchLastLogin(long id) {
 		}
 	}
 
@@ -51,20 +57,20 @@ class AuthServiceTest {
 	void 부트스트랩은_member_0건일_때만_시드한다() {
 		StubMembers empty = new StubMembers(0);
 		new AuthService(empty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
-		assertThat(empty.inserted).hasSize(2);
+		assertThat(empty.saved).hasSize(2);
 		// 이메일 정규화(소문자) — 로그인 조회와 같은 규칙이어야 시드 계정에 로그인이 된다.
-		assertThat(empty.inserted.get(0)[0]).isEqualTo("admin@demo.edge.local");
+		assertThat(empty.saved.get(0).getEmail()).isEqualTo("admin@demo.edge.local");
 
 		StubMembers nonEmpty = new StubMembers(1);
 		new AuthService(nonEmpty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
-		assertThat(nonEmpty.inserted).isEmpty();
+		assertThat(nonEmpty.saved).isEmpty();
 	}
 
 	@Test
 	void 시드_비밀번호는_BCrypt_해시로_저장된다() {
 		StubMembers empty = new StubMembers(0);
 		new AuthService(empty, new BootstrapAccounts(ACCOUNTS), org.springframework.transaction.support.TransactionOperations.withoutTransaction()).bootstrapIfEmpty();
-		String storedHash = empty.inserted.get(0)[3];
+		String storedHash = empty.saved.get(0).getPasswordHash();
 		assertThat(storedHash).isNotEqualTo("pw-admin");
 		assertThat(new BCryptPasswordEncoder().matches("pw-admin", storedHash)).isTrue();
 	}

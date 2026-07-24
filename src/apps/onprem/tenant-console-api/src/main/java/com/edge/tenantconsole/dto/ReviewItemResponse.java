@@ -1,6 +1,6 @@
 package com.edge.tenantconsole.dto;
 
-import com.edge.tenantconsole.repository.ReviewItemRepository.ReviewItem;
+import com.edge.tenantconsole.model.ReviewItem;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;

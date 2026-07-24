@@ -2,6 +2,7 @@ package com.edge.tenantconsole.auth;
 
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.ReviewController;
+import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.mock.SessionMockStore;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
@@ -9,6 +10,7 @@ import com.edge.tenantconsole.service.ConsoleSessionService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Limit;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -34,37 +36,29 @@ class ConsoleAuthFilterTest {
 	private static final SessionMember READ_ONLY =
 			new SessionMember(4L, "ro@demo.edge.local", "열람자", "READ_ONLY");
 
-	private static final class StubItems extends ReviewItemRepository {
-		StubItems() {
-			super(null);
-		}
-
+	private static final class StubItems implements ReviewItemRepository {
 		@Override
-		public List<ReviewItem> findByStatus(String status, int limit) {
+		public List<AnalysisItemEntity> findByStatusOrderByReceivedAtAsc(String status, Limit limit) {
 			return List.of();
 		}
 
 		@Override
-		public Optional<ReviewItem> findById(String id) {
-			return Optional.of(new ReviewItem(id, "069500", "KODEX 200",
+		public Optional<AnalysisItemEntity> findById(String id) {
+			return Optional.of(new AnalysisItemEntity(id, "069500", "KODEX 200",
 					LocalDate.of(2026, 7, 22), "요약", null, "LOW", "REVIEW_REQUIRED",
 					null, null, null));
 		}
 
 		@Override
-		public boolean decide(String id, String decidedStatus) {
-			return true;
+		public int decide(String id, String decidedStatus) {
+			return 1;
 		}
 	}
 
-	private static final class StubPublications extends PublicationRepository {
-		StubPublications() {
-			super(null);
-		}
-
+	private static final class StubPublications implements PublicationRepository {
 		@Override
-		public boolean publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
-			return true;
+		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
+			return 1;
 		}
 	}
 
