@@ -2,6 +2,8 @@
 
 > **계약 문서** — 이 파일의 변경은 진기·영서 공동 승인 대상이다(CODEOWNERS). 인터페이스 계약의 정의는 [event-bundle-schema.md](event-bundle-schema.md).
 
+> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [tenant-sync-api/openapi.yaml](../../src/apps/cloud/tenant-sync-api/openapi.yaml)(OpenAPI 3.1). 이 문서(시맨틱 계약)가 상위, openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다. 번들 필드 내부 형상은 [event-bundle-schema.md](event-bundle-schema.md).
+
 **MVP 구현 스펙**:
 
 - **Cursor**: 테넌트별, Cloud 서버가 발번하는 단조 증가 sequence. 온프렘은 마지막 처리 cursor를 durable 저장하고 `?after={cursor}`로 Pull한다. Pull을 개시하는 주체는 DMZ의 **Sync Agent**이고, 권위 committed cursor의 durable 저장 주체는 2모듈 표준에서 **Intake(내부망)**·단일 모듈 옵션에서 sync-agent다([ADR-0036](../adr/0036-sync-agent-intake-topology.md)). 2모듈에서 Pull 재개점은 **Intake의 committed cursor가 권위**다 — Sync Agent의 DMZ-local 마크는 Intake의 **commit-ack까지만 전진**(내부 채널 ack)하므로, 전송·commit 실패 시 그 번들을 재-Pull하고 멱등 upsert가 중복을 dedup해 **유실 없이** 수렴한다. ack 없이 마크를 먼저 전진시키면 `?after=`가 미commit 번들을 건너뛰어 유실되므로 ack가 정확성 필수다(ADR-0036).

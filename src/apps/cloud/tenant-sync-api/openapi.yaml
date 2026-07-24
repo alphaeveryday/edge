@@ -1,0 +1,372 @@
+openapi: 3.1.0
+
+# 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
+# 시맨틱 계약(멱등성·cursor 규칙·에러 의미·전달 보장)의 SSOT 는
+# ../../../../docs/contracts/sync-protocol.md 이며, 이 문서는 그 하위 문법 층이다.
+# 본문 Event Bundle 봉투의 필드 표기는 snake_case (BundleSerializer 가 강제).
+info:
+  title: Tenant Sync API
+  version: 1.0.0
+  description: >-
+    온프렘 Sync Agent 가 outbound-Pull 로 소비하는 Cloud 표면.
+    한 응답은 항상 Event Bundle 1개이며, 본문 바이트가 곧 무결성 체크섬 대상이다
+    (성공 본문에 공통 응답 포맷을 씌우지 않는다). 시맨틱 계약은
+    ../../../../docs/contracts/sync-protocol.md, 번들 필드 정의는
+    ../../../../docs/contracts/event-bundle-schema.md 가 SSOT.
+
+servers:
+  - url: /
+    description: tenant-sync-api 서비스 루트 (로컬 compose host 18083)
+
+# 계약상 매 요청 mTLS 인증서-테넌트 바인딩 검증이 필수다(sync-auth.md 확정 —
+# 유일한 벤더-증권사 인증, 클라우드 측 테넌트 격리 강제 지점). 그래서 필수로 둔다.
+# 현재 인가 강제는 TenantResolver 데모 스텁(인증서 무관 tenant 1)이라 미구현이며,
+# 실제 강제·401/403 도메인 코드는 sync-auth 티켓에서 구현한다 — 요구 자체는 계약이 정한다.
+security:
+  - mutualTLS: []
+
+paths:
+  /api/v1/sync/bundle:
+    get:
+      operationId: pullBundle
+      summary: 커서 이후의 Event Bundle 1건을 Pull
+      description: >-
+        `after` 커서 초과분을 cursor 오름차순으로 묶어 번들 1개로 반환한다.
+        신규가 없으면 204. 재개점은 응답 봉투의 `cursor_to` 다(entry 별 `cursor` 아님).
+
+
+        테넌트 식별은 매 요청 mTLS 인증서-테넌트 바인딩 검증으로 결정된다(계약 필수 —
+        sync-auth.md). 쿼리·경로·헤더로 테넌트를 받지 않는다. 현재 인가 강제는
+        TenantResolver 데모 스텁(인증서 무관)이라 미구현이며, 실제 강제·401/403 도메인
+        코드는 sync-auth 계약(../../../../docs/contracts/sync-auth.md)에서 구현한다.
+
+
+        에러 시맨틱: 401·403·410 외 4xx 는 소비자 버그 신호이므로 재시도로 낫지 않는다
+        (fail-loud — 즉시 에러 로그, 해법은 수정 배포). 5xx·네트워크 오류만 일시 장애로
+        보고 다음 폴링 주기에 재시도한다(at-least-once — 멱등 upsert 가 중복 흡수).
+      parameters:
+        - name: after
+          in: query
+          required: true
+          description: 소비자의 마지막 committed cursor. 첫 동기화는 0. 0 미만은 400(SYNC4001).
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          example: 0
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            응답 번들에 담길 전달 레코드(entry) 수 상한. 생략 시 100, 허용 1..500,
+            범위 밖은 400(SYNC4002). 번들 개수 파라미터가 아니다 — 한 응답은 항상 번들 1개.
+          schema:
+            type: integer
+            format: int32
+            default: 100
+            minimum: 1
+            maximum: 500
+          example: 100
+      responses:
+        '200':
+          description: >-
+            신규/정정/무효화 전달 레코드를 담은 Event Bundle 1건. Content-Type 은
+            application/json, 필드 표기는 snake_case. 본문 바이트열 그대로가 체크섬 대상이다.
+          headers:
+            X-Bundle-Checksum:
+              $ref: '#/components/headers/BundleChecksum'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventBundle'
+        '204':
+          description: 신규 없음. 빈 번들은 만들지 않는다.
+        '400':
+          description: >-
+            소비자 버그 신호(재시도로 낫지 않음). 도메인 코드 SYNC4001(after<0)·
+            SYNC4002(limit 범위 밖). 수치 표현 자체가 불가한 값(정수 범위 밖·비수치)은
+            파라미터 바인딩 실패라 공통 400 코드로 나간다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidAfter:
+                  summary: after < 0
+                  value:
+                    isSuccess: false
+                    code: SYNC4001
+                    message: after 는 0 이상이어야 합니다 (첫 동기화는 0).
+                invalidLimit:
+                  summary: limit 범위 밖
+                  value:
+                    isSuccess: false
+                    code: SYNC4002
+                    message: limit 은 1..500 이어야 합니다.
+        '401':
+          description: >-
+            인증서 미제시·유효하지 않음. 도메인 코드는 sync-auth 계약에서 확정(현재 미구현).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >-
+            인증서는 유효하나 테넌트 인가 실패. 도메인 코드는 sync-auth 계약에서 확정(현재 미구현).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '5XX':
+          description: 서버 일시 장애. 소비자는 다음 폴링 주기에 재시도한다. 내부 메시지는 응답에 노출하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+      description: >-
+        온프렘 Sync Agent 의 클라이언트 인증서(mTLS) — 계약이 정한 유일 인증이며 매 요청
+        인증서-테넌트 바인딩을 검증한다(sync-auth.md). 바인딩·401/403 도메인 코드의 실제
+        강제는 sync-auth 티켓 구현 소관이며 현재는 TenantResolver 데모 스텁이라 미강제.
+
+  headers:
+    BundleChecksum:
+      description: >-
+        번들 단위 SHA-256. 대상은 응답 body 바이트열 그대로다. 소비자는 검증 실패 시
+        그 번들을 폐기하고 저장·전달 없이 재-Pull 한다.
+      required: true
+      schema:
+        type: string
+        pattern: '^sha256=[0-9a-f]{64}$'
+      example: sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+  schemas:
+    EventBundle:
+      type: object
+      description: >-
+        테넌트별 전달 레코드를 cursor 순으로 묶은 전송 단위(봉투). 필드 정의 SSOT 는
+        ../../../../docs/contracts/event-bundle-schema.md.
+      required: [bundle_id, tenant_id, generated_at, cursor_from, cursor_to, entries]
+      properties:
+        bundle_id:
+          type: string
+          format: uuid
+          description: 응답 인스턴스 식별용. 재-Pull 마다 새로 발번된다(멱등 키가 아니다 — dedup 은 cursor_from 기준).
+        tenant_id:
+          type: integer
+          format: int64
+        generated_at:
+          type: string
+          format: date-time
+          description: 번들 생성 시각(UTC ISO-8601). 매 응답 새로 찍혀 같은 범위라도 바이트가 달라진다.
+        cursor_from:
+          type: integer
+          format: int64
+          description: 번들 첫 entry 의 cursor. received_bundle dedup 키.
+        cursor_to:
+          type: integer
+          format: int64
+          description: 번들 마지막 entry 의 cursor. 소비자의 다음 재개점(commit 후 이 값으로 전진).
+        entries:
+          type: array
+          minItems: 1
+          description: 빈 번들은 만들지 않는다(신규 없음은 204).
+          items:
+            $ref: '#/components/schemas/BundleEntry'
+
+    BundleEntry:
+      description: >-
+        전달 레코드 하나. cursor·delivery_type 은 공통이고, 나머지 필드 형상은
+        delivery_type 으로 갈린다(oneOf·discriminator). null 값만 생략되고 빈 배열은
+        포함된다(@JsonInclude NON_NULL). 각 변형은 additionalProperties: false 로 허용
+        필드만 갖도록 조여, 서버 팩토리(BundleEntry.newResult·correction·invalidation)가
+        실제로 내는 3형상과만 일치한다.
+      oneOf:
+        - $ref: '#/components/schemas/NewEntry'
+        - $ref: '#/components/schemas/CorrectionEntry'
+        - $ref: '#/components/schemas/InvalidationEntry'
+      discriminator:
+        propertyName: delivery_type
+        mapping:
+          NEW: '#/components/schemas/NewEntry'
+          CORRECTION: '#/components/schemas/CorrectionEntry'
+          INVALIDATION: '#/components/schemas/InvalidationEntry'
+
+    NewEntry:
+      type: object
+      description: 신규 설명(NEW) — 본체·실행·배열 포함, target/reason 없음.
+      additionalProperties: false
+      required: [cursor, delivery_type, explanation_result, explanation_run, source_events, evidences]
+      properties:
+        cursor:
+          $ref: '#/components/schemas/EntryCursor'
+        delivery_type:
+          type: string
+          const: NEW
+        explanation_result:
+          $ref: '#/components/schemas/ExplanationResult'
+        explanation_run:
+          $ref: '#/components/schemas/ExplanationRun'
+        source_events:
+          $ref: '#/components/schemas/SourceEvents'
+        evidences:
+          $ref: '#/components/schemas/Evidences'
+
+    CorrectionEntry:
+      type: object
+      description: 정정(CORRECTION) — 대상·사유 + 재게시 본체·실행 + 빈 배열.
+      additionalProperties: false
+      required:
+        - cursor
+        - delivery_type
+        - target_explanation_result_id
+        - reason
+        - explanation_result
+        - explanation_run
+        - source_events
+        - evidences
+      properties:
+        cursor:
+          $ref: '#/components/schemas/EntryCursor'
+        delivery_type:
+          type: string
+          const: CORRECTION
+        target_explanation_result_id:
+          type: string
+          description: 정정 대상 원본 explanation_result_id.
+        reason:
+          type: string
+          description: 정정 사유.
+        explanation_result:
+          $ref: '#/components/schemas/ExplanationResult'
+        explanation_run:
+          $ref: '#/components/schemas/ExplanationRun'
+        source_events:
+          $ref: '#/components/schemas/SourceEvents'
+        evidences:
+          $ref: '#/components/schemas/Evidences'
+
+    InvalidationEntry:
+      type: object
+      description: 무효화(INVALIDATION) — 대상·사유만. 결과·실행·배열은 모두 생략된다.
+      additionalProperties: false
+      required: [cursor, delivery_type, target_explanation_result_id, reason]
+      properties:
+        cursor:
+          $ref: '#/components/schemas/EntryCursor'
+        delivery_type:
+          type: string
+          const: INVALIDATION
+        target_explanation_result_id:
+          type: string
+          description: 무효화 대상 원본 explanation_result_id.
+        reason:
+          type: string
+          description: 무효화 사유.
+
+    EntryCursor:
+      type: integer
+      format: int64
+      description: 번들 내 순서·도메인 반영 추적용. 재개점이 아니다(재개점은 봉투 cursor_to).
+
+    SourceEvents:
+      type: array
+      description: >-
+        근거 원천 이벤트. 현행 계약은 항상 빈 배열이다(rowMapper 가 List.of() 만 싣는다) —
+        경계면 컬럼 선별 ALPHA-395, 요소 스키마·계약 테스트 ALPHA-497 에서 확정하며 그때
+        maxItems 를 풀고 items 를 채운다(../../../../docs/contracts/event-bundle-schema.md).
+      maxItems: 0
+      items:
+        type: object
+        additionalProperties: true
+
+    Evidences:
+      type: array
+      description: >-
+        증거. source_events 와 동일하게 현행 항상 빈 배열이며 요소 형상은 미확정(ALPHA-395/497).
+      maxItems: 0
+      items:
+        type: object
+        additionalProperties: true
+
+    ExplanationResult:
+      type: object
+      description: >-
+        고객 노출 후보 문구 — Cloud Event Store explanation_result 경계면. 모든 키가 항상
+        직렬화된다(생략 없음) — 일부는 값이 null 일 수 있다. required 는 "키 존재"를 뜻하고,
+        null 허용은 type 배열([string, 'null'])로 표기한다.
+      required:
+        - explanation_result_id
+        - etf_instrument_id
+        - etf_ticker
+        - etf_name
+        - trade_date
+        - explanation_as_of
+        - explanation_type
+        - summary
+        - confidence_level
+        - primary_thread_id
+      properties:
+        explanation_result_id:
+          type: string
+          description: Cloud 발번 도메인 ID(TEXT). 멱등 upsert 키.
+        etf_instrument_id:
+          type: string
+        etf_ticker:
+          type: [string, 'null']
+          description: instrument LEFT JOIN 의 ticker — 매칭 없으면 null.
+        etf_name:
+          type: [string, 'null']
+          description: entity LEFT JOIN 의 display_name — 매칭 없으면 null.
+        trade_date:
+          type: string
+          format: date
+        explanation_as_of:
+          type: string
+          format: date-time
+        explanation_type:
+          type: string
+          description: explanation_result.explanation_type CHECK 제약.
+          enum: [PRICE_ONLY, EVENT_SUPPORTED, MIXED, UNCERTAIN]
+        summary:
+          type: string
+        confidence_level:
+          type: [string, 'null']
+          description: 미산정 시 null (DB CHECK — HIGH·MEDIUM·LOW 또는 NULL).
+          enum: [HIGH, MEDIUM, LOW, null]
+        primary_thread_id:
+          type: [string, 'null']
+          description: 대표 스레드 참조 — 없으면 null.
+
+    ExplanationRun:
+      type: object
+      description: 결과를 낸 실행 + 사용한 릴리스 번들 버전 — explanation_run 경계면. 두 키 모두 항상 존재.
+      required: [explanation_run_id, release_bundle_version]
+      properties:
+        explanation_run_id:
+          type: string
+        release_bundle_version:
+          type: string
+          description: explanation_run.bundle_version 값.
+
+    ErrorResponse:
+      type: object
+      description: >-
+        공통 응답 포맷(jvm-common ApiResponse) — 4xx/5xx 에만 적용된다.
+        성공(200) 번들 본문은 이 포맷으로 감싸지 않는다(체크섬이 원본 바이트 대상).
+      required: [isSuccess, code, message]
+      properties:
+        isSuccess:
+          type: boolean
+          const: false
+        code:
+          type: string
+          description: 도메인 코드(예 SYNC4001·SYNC4002) 또는 공통 코드.
+          example: SYNC4001
+        message:
+          type: string
+          example: after 는 0 이상이어야 합니다 (첫 동기화는 0).
