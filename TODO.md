@@ -5,6 +5,7 @@
 > 항목 착수 시 Jira 티켓을 만든다(issue-first).
 
 ## 0. 하네스 소수정 잔여
+- [ ] (하네스) edge-review 각도 보강 — CI/배포 워크플로 정확성 각도 신설(변경이 `.github/workflows/*deploy*`·배포 스크립트일 때: concurrency 부재·레지스트리/태그 미전달·`up -d` 등 fire-and-forget 명령의 무단언 성공). ALPHA-542 CD 리뷰에서 봇이 3건 잡고 로컬 게이트가 놓침 — H각도 신설과 같은 개선 패턴
 - [ ] (하네스) ADR-0009의 `docs/proposals/` 죽은 링크 정리 — git 이력에도 존재한 적 없는 디렉토리
 - [ ] (하네스) AGENTS.md 1행 `12-rule template` placeholder 제목 정리
 
@@ -37,8 +38,7 @@
 - [ ] Screening Worker — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
-- [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
-- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Publication API 호출 렌더링. 구 widget-ui 부활 아님 — Publication API 계약의 데모 소비자 (데모 토폴로지와 연동). 호스팅 위치(데모 compose 포함 vs 별도 정적 페이지) 결정 포함 — 단일 페이지+최소 mock 백엔드가 기본 프레임
+- [ ] **fan-out 발번기** — analysis-engine 의 `explanation_result(DRAFT)`를 sync outbox `tenant_delivery` 로 승격하는 cloud 서비스. 이게 있어야 파이프라인 산출물이 자동으로 sync 경계를 넘어 데모까지 관통한다 — 현재는 수동 시드(`scratchpad/seed-cloud-demo.sql`)로 대체 중. **데모 토폴로지(EC2+compose 가상 온프렘)·MTS 화면·배포 CD(deploy-demo-onprem.yml)는 구축 완료**(ALPHA-533·444·445·542, 브라우저 관통 검증) — 남은 건 이 데이터 자동화뿐
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속
@@ -50,5 +50,6 @@
 - [ ] 온프렘 릴리스 절차 문서화 — Rule Type 배포가 "소프트웨어 릴리스"인데 버전 정책·업그레이드 방법 미정
 
 ## 6. 인프라
+- [ ] **데모 온프렘 박스 하드닝** (ALPHA-445 코멘트에 상세) — ① sync mTLS 클라이언트 cert·인증서-테넌트 바인딩(현재 평문 HTTPS·`TenantResolver` 고정 1) ② compose 네트워크 세분화(ADR-0036 dmz/data/serving — 현재 단일망이라 sync-agent 가 DB 도달) ③ 박스 instance role ECR pull 스코핑(현재 `Resource=["*"]`). 데모는 동작하나 프로덕션급 신뢰경계엔 필요
 - [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
 - [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
