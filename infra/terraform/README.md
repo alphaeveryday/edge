@@ -94,7 +94,7 @@ cd ../envs/dev  && terraform apply
 ### 🔮 미구축 (후속 증분)
 
 - **WAF**(ALPHA-297) — super-admin ALB(`admin-api-dev`)에 부착(그 ALB 에만 — sync 는 trust store 가 게이트). 선행이던 ALB 는 ALPHA-473 으로 도입됨.
-- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033). compose 스택·`deploy-demo-onprem.yml`(SSM Run Command)·CloudFront `/api/*`→EC2 오리진 프록시는 온프렘 코드(sync-agent·compliance) 완료 후(ALPHA-445).
+- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스, ECR 이미지 참조, sync-agent→실 cloud). 박스 `apply`·`deploy-demo-onprem.yml`(SSM Run Command)·CloudFront `/api/*`→EC2 오리진 프록시·`tenant_delivery` 시드는 ALPHA-445.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > `data-pipeline` 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필은 `aws stepfunctions start-execution` 으로.

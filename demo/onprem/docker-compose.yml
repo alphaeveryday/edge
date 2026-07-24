@@ -1,0 +1,136 @@
+# edge 가상 온프렘 박스 전용 스택 (ALPHA-444) — demo-onprem EC2 에서 compose 하나로 온프렘 런타임 기동.
+# 루트 docker-compose.yml(로컬 풀스택)의 온프렘/데모 서브셋만 떼어, 이미지는 ECR 을 참조하고
+# sync-agent 는 실 cloud(sync-dev.edgesignal.dev)를 outbound Pull 한다. 근거: ADR-0017·0033.
+#
+# 로컬 풀스택과의 차이(의도적):
+#   - build: → image: (ECR edge/*:${IMAGE_TAG}). 박스는 소스 빌드를 하지 않는다(user-data 는 docker/compose 만).
+#   - SPRING_PROFILES_ACTIVE override 없음 → 이미지 기본 prod = ECS JSON 구조적 로깅(ALPHA-531).
+#   - sync-agent 대상 = 실 cloud sync 전용 mTLS ALB(로컬은 tenant-sync-api 컨테이너). trust store
+#     미주입 dev 라 현재는 클라이언트 cert 없이 평문 HTTPS — cert·인가는 후속(ALPHA-445).
+#   - cloud 서비스(postgres·flyway·super-admin-api·tenant-sync-api)는 없다 — AWS 에 있다.
+#   - 호스트 노출은 mock-broker 뿐(CloudFront 오리진). DB·앱 포트는 compose 내부망만(공개 박스 표면 최소화).
+#
+# 알려진 데모 단순화(박스 하드닝은 ALPHA-445):
+#   - 단일 기본 네트워크 — ADR-0036 의 sync-agent DMZ 경계(DB 접근 금지·내부 앱 egress 차단)를
+#     네트워크로 강제하지 않는다. 세분화(dmz/data/serving)는 하드닝에서.
+#   - sync-agent mTLS 클라이언트 cert·인증서-테넌트 바인딩 없음(dev trust store 미주입 전제).
+#   - 마이그레이션 번들이 없으면 flyway 는 0개 적용·성공 종료하고 앱이 validate 로 crash-loop 한다
+#     — 배포(ALPHA-445)가 up 전에 migrations-onprem 존재·SQL 개수를 preflight 로 게이트할 것.
+#   - 재배포 시 flyway-onprem(one-shot·불변 이미지)은 compose 가 기존 종료 컨테이너를 재사용해
+#     새 마이그레이션을 건너뛴다(config·이미지 불변이라 recreate 안 됨) → 배포가 앱 기동 전에
+#     `up --force-recreate flyway-onprem`(또는 rerun)으로 매 릴리스 스키마를 적용할 것(ALPHA-445).
+#
+# 마이그레이션 SQL 은 이 파일 옆 ${MIGRATIONS_ONPREM_DIR:-./migrations-onprem} 에 있어야 한다 —
+# 박스 배포(ALPHA-445 SSM)가 src/libs/schema/migrations-onprem 를 번들해 함께 올린다.
+# 레포에서 그대로 테스트하려면 MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem 로 실행.
+#
+# 배포·tenant_delivery 시드·CloudFront /api 오리진·mTLS cert 는 ALPHA-445. 검수 콘솔은 후속 증분.
+#
+# 사용(박스에서):
+#   IMAGE_TAG=0.1.0 docker compose -f docker-compose.yml up -d
+#   docker compose -f docker-compose.yml down [-v]
+
+services:
+  # 온프렘 PostgreSQL — 테넌트 물리 격리(ADR-0011). 호스트 미노출(내부망만).
+  postgres-onprem:
+    image: postgres:16
+    container_name: edge-postgres-onprem
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: edge_onprem
+      POSTGRES_USER: edge
+      POSTGRES_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
+    volumes:
+      - edge-postgres-onprem-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edge -d edge_onprem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # 온프렘 스키마(migrations-onprem) 적용 후 종료. SQL 은 배포 번들이 옆에 놓는다(위 헤더).
+  flyway-onprem:
+    image: flyway/flyway:10.21.0
+    container_name: edge-flyway-onprem
+    depends_on:
+      postgres-onprem:
+        condition: service_healthy
+    volumes:
+      - ${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}:/flyway/sql:ro
+    command: >-
+      -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      -user=edge -password=${ONPREM_DB_PASSWORD:-edge}
+      -connectRetries=10
+      -locations=filesystem:/flyway/sql
+      -ignoreMigrationPatterns=repeatable:missing
+      migrate
+
+  # DMZ 역할 — 실 cloud sync ALB 를 Pull + 체크섬 검증, DB 접근 없음(ADR-0036).
+  sync-agent:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/sync-agent:${IMAGE_TAG:-0.1.0}
+    container_name: edge-sync-agent
+    restart: unless-stopped
+    environment:
+      TENANT_SYNC_API_URL: ${TENANT_SYNC_API_URL:-https://sync-dev.edgesignal.dev}
+
+  # 내부망 역할 — sync-agent 폴링 → Raw Event Store 멱등 적재(sync_state cursor 권위).
+  intake:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/intake:${IMAGE_TAG:-0.1.0}
+    container_name: edge-intake
+    restart: unless-stopped
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+      sync-agent:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
+      SYNC_AGENT_URL: http://sync-agent:8080
+      INTAKE_POLL_MS: ${INTAKE_POLL_MS:-5000}
+
+  # 미점검 번들 파싱·상태 분기(state-machine.md): NEW=AUTO_PUBLISHED+자동게시 / CORRECTION / INVALIDATION.
+  screening-worker:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/screening-worker:${IMAGE_TAG:-0.1.0}
+    container_name: edge-screening-worker
+    restart: unless-stopped
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
+      SCREENING_POLL_MS: ${SCREENING_POLL_MS:-5000}
+
+  # 증권사 백엔드가 호출하는 조회 표면(Published만) — 온프렘 PG 조회, 노출 기록.
+  publication-api:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/publication-api:${IMAGE_TAG:-0.1.0}
+    container_name: edge-publication-api
+    restart: unless-stopped
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
+      # 종목 마스터 동기화 전 allowlist — 데모 시드 종목(069500·091160) 포함.
+      PUBLICATION_KNOWN_TICKERS: ${PUBLICATION_KNOWN_TICKERS:-069500,305720,091160}
+
+  # 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙. 화면 → mock-broker → publication-api 2홉.
+  # 유일한 호스트 노출 — CloudFront 오리진(/api/*). SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
+  mock-broker:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/mock-broker:${IMAGE_TAG:-0.1.0}
+    container_name: edge-mock-broker
+    restart: unless-stopped
+    depends_on:
+      - publication-api
+    environment:
+      PUBLICATION_API_URL: http://publication-api:8080
+    ports:
+      - "${MOCK_BROKER_PORT:-8080}:8080"
+
+volumes:
+  edge-postgres-onprem-data:
