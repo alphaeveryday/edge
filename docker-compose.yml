@@ -74,6 +74,8 @@ services:
       flyway-onprem:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
@@ -89,6 +91,8 @@ services:
       flyway:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
@@ -153,6 +157,8 @@ services:
       flyway-onprem:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
@@ -186,6 +192,8 @@ services:
       flyway:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
@@ -201,6 +209,8 @@ services:
     depends_on:
       - tenant-sync-api
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       TENANT_SYNC_API_URL: http://tenant-sync-api:8080
     ports:
       - "18085:8080"
@@ -218,6 +228,8 @@ services:
       sync-agent:
         condition: service_started
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
@@ -237,6 +249,8 @@ services:
       flyway-onprem:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
