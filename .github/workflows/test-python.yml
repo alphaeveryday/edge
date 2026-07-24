@@ -50,9 +50,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "src/uv.lock"
 
-      - name: uv sync (frozen)
+      - name: uv sync (locked)
         working-directory: src
-        run: uv sync --frozen
+        # --locked: 락파일이 pyproject 와 어긋나면 fail-loud (--frozen 은 낡은 락을 통과시킨다).
+        run: uv sync --locked
 
       - name: pytest ${{ matrix.app }}
         working-directory: src
