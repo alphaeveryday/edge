@@ -2,8 +2,7 @@
 #
 # deploy-* 워크플로는 dev 머지 후 CD 전용(빌드→ECR push)이라 테스트가 없다 — 머지 전
 # 기계 게이트는 이 워크플로가 유일하다(ALPHA-534). 어떤 secret 도 쓰지 않고 실제
-# dev/prod 자원(AWS·RDS)에 접속하지 않는다 — 단위 테스트는 fake I/O 로만 돈다.
-# 골든패스 E2E job(ephemeral Postgres + Flyway)은 후속 PR 에서 추가된다.
+# dev/prod 자원(AWS·RDS)에 접속하지 않는다 — DB 는 ephemeral 컨테이너, S3·LLM 은 fake.
 #
 # 이 레포(private, free 플랜)는 branch protection 을 쓸 수 없어 이 체크가 required 가
 # 아니므로 paths 필터가 안전하다. required 도입 시 필터를 걷어낼 것 — path 로 스킵된
@@ -22,6 +21,7 @@ on:
       - "src/pyproject.toml"
       - "src/uv.lock"
       - "src/.dockerignore"   # 이미지 컨텍스트 규칙 변경도 스모크 대상(deploy-* paths 와 일치)
+      - "src/libs/schema/migrations-cloud/**"   # e2e 가 실 스키마를 적용한다 — 스키마 변경도 게이트 대상
       - ".github/workflows/test-python.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다.
@@ -78,3 +78,51 @@ jobs:
       - name: docker build ${{ matrix.app }}
         run: docker build -f src/apps/cloud/${{ matrix.app }}/Dockerfile src
 
+
+  # ── 골든패스 E2E 1개 (뉴스 조립 → 분석 → 영속) ───────────────
+  # ephemeral Postgres 에 Flyway cloud 세트를 실제 적용한 뒤, assemble_events(분류 LLM
+  # fake) → analysis-engine(DeepSeek fake·S3 fake) 를 같은 DB 위에서 이어 돌린다.
+  # 두 코드베이스의 결정적 ID 수렴과 실 스키마 SQL 정합이 검증 대상이다(ALPHA-534).
+  # sync 는 무스코프다 — 이 테스트만 의도적으로 두 워크스페이스 멤버를 함께 쓴다.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: edge
+          POSTGRES_USER: edge
+          POSTGRES_PASSWORD: edge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edge -d edge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 버전은 libs/schema/build.gradle 의 Flyway 플러그인(10.21.0)과 맞춘다.
+      - name: Flyway migrate (cloud set)
+        run: >
+          docker run --rm --network host
+          -v "$PWD/src/libs/schema/migrations-cloud:/flyway/sql:ro"
+          flyway/flyway:10.21.0
+          -url=jdbc:postgresql://localhost:5432/edge -user=edge -password=edge migrate
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "src/uv.lock"
+
+      - name: uv sync (locked)
+        working-directory: src
+        run: uv sync --locked --python 3.12
+
+      - name: golden-path e2e
+        working-directory: src
+        env:
+          E2E_PGHOST: 127.0.0.1
+        run: uv run pytest apps/cloud/analysis-engine/tests/e2e -q
