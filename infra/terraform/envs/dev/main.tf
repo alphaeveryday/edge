@@ -131,7 +131,9 @@ module "super_admin_api" {
 
   # 앱이 JPA(JDBC)를 갖게 되면서 dev RDS 배선이 필수다(ALPHA-526) — 미주입 시 localhost
   # 폴백으로 부팅 실패(ddl-auto=validate 가 기동 시 접속). 비밀번호는 RDS 관리형 시크릿 주입.
+  # prod profile 은 ECS JSON 구조적 로깅(application-prod.yaml)만 켠다 — 로컬은 default 로 평문 유지(ALPHA-531).
   environment = {
+    SPRING_PROFILES_ACTIVE     = "prod"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     SPRING_DATASOURCE_USERNAME = module.rds.master_username
   }
@@ -202,7 +204,9 @@ module "tenant_sync_api" {
 
   # tenant_delivery(outbox) 조회 — 앱이 JDBC 를 갖게 되면서 dev RDS 배선이 필수다
   # (미주입 시 localhost 폴백 → DB health DOWN). 비밀번호는 RDS 관리형 시크릿 주입.
+  # prod profile 은 ECS JSON 구조적 로깅(application-prod.yaml)만 켠다 — 로컬은 default 로 평문 유지(ALPHA-531).
   environment = {
+    SPRING_PROFILES_ACTIVE     = "prod"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     SPRING_DATASOURCE_USERNAME = module.rds.master_username
   }
