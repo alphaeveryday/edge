@@ -1,8 +1,8 @@
 package com.edge.tenantconsole.controller;
 
 import com.edge.common.apipayload.ApiResponse;
-import com.edge.tenantconsole.mock.ScopeMockStore.MarketScope;
-import com.edge.tenantconsole.mock.ScopeMockStore.StockScope;
+import com.edge.tenantconsole.dto.MarketScopeResponse;
+import com.edge.tenantconsole.dto.StockScopeResponse;
 import com.edge.tenantconsole.service.ScopeService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,7 +13,7 @@ import java.util.List;
 
 /**
  * 제공 범위 표면(ALPHA-513) — tenant-console-ui scope 도메인 계약과 1:1.
- * 필드명은 UI 타입과 동일한 camelCase.
+ * 필드명은 UI 타입과 동일한 camelCase. 와이어 타입은 dto 패키지.
  */
 @RestController
 public class ScopeController {
@@ -22,18 +22,6 @@ public class ScopeController {
 
 	public ScopeController(ScopeService scopeService) {
 		this.scopeService = scopeService;
-	}
-
-	public record MarketScopeResponse(String market, boolean enabled, int stockCount) {
-		static MarketScopeResponse from(MarketScope m) {
-			return new MarketScopeResponse(m.market(), m.enabled(), m.stockCount());
-		}
-	}
-
-	public record StockScopeResponse(String code, String name, String market, boolean enabled) {
-		static StockScopeResponse from(StockScope s) {
-			return new StockScopeResponse(s.code(), s.name(), s.market(), s.enabled());
-		}
 	}
 
 	@GetMapping("/api/v1/scope/markets")
