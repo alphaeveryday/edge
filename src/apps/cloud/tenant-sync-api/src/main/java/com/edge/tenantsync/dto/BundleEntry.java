@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * 번들 엔트리 하나 = 테넌트별 전달 레코드 하나 (docs/contracts/event-bundle-schema.md).
  * NEW·CORRECTION 은 본체 전체를, INVALIDATION 은 대상 참조·사유만 담는다(빈 필드는 NON_NULL 생략).
- * source_events·evidences 요소 형상은 [합의 필요 — 경계면 컬럼 선정]이라 Map 으로 둔다.
+ * source_events·evidences 컬럼은 확정됐으나(ALPHA-395) 조립 조인 미구현(ALPHA-363)이라 Map 으로 둔다.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record BundleEntry(
