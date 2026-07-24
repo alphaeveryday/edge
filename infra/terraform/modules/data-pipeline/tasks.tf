@@ -117,6 +117,7 @@ locals {
     events   = local.db_env
     kis      = local.db_env
     bigkinds = local.db_env
+    rds_dart = local.db_env
   }
 
   secret_sets = {
@@ -168,6 +169,13 @@ locals {
     events = {
       LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+    }
+    # enrich-corp-code(ALPHA-491·532) — DB(company_profile UPDATE)와 OpenDART corpCode.xml
+    # 조회를 한 태스크가 다 한다. rds(DB password)·dart(disclosure 키) 두 세트의 합집합 —
+    # 결합 세트가 없으면 rds task 에서 source.enabled=false 로 조용히 skip 된다(events 와 같은 형태).
+    rds_dart = {
+      DATA_PIPELINE_DB__PASSWORD                     = "${var.db_password_secret_arn}:password::"
+      DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY = "${aws_secretsmanager_secret.dart.arn}:apikey::"
     }
   }
 

@@ -141,26 +141,36 @@ def test_universe_predicate_and_null_guard(tmp_path, monkeypatch):
     assert "DART_CORP_CODE IS NULL" in update_sql.upper()  # 시드·재실행 불가침
 
 
-def test_source_wide_error_aborts_before_opening_db(tmp_path, monkeypatch):
-    """키·IP·쿼터·점검 같은 소스 전체 오류(StopFetch)는 특정 종목 문제가 아니다 — DB 를 열지 않고
-    비0 으로 드러난다. 삼키면 '0건 갱신'이 성공으로 위장된다(Rule 12)."""
+def test_source_wide_error_aborts_when_candidates_exist(tmp_path, monkeypatch):
+    """채울 후보가 있는데 소스 전체 오류(StopFetch: 키·IP·쿼터·점검)면 비0 으로 막는다(다음 런
+    재시도). 삼키면 '0건 갱신'이 성공으로 위장된다(Rule 12)."""
     storage = _storage(tmp_path)
-
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _boom_connect(config):
-        raise AssertionError("소스 오류인데 DB 를 열었다")
-        yield  # pragma: no cover
-
-    monkeypatch.setattr(enrich_corp_code, "connect", _boom_connect)
+    conn = _FakeConn([("actor_samsung", "005930")])  # 채울 후보 있음
     source = _FakeSource(error=StopFetch("DART corpCode status=011 (사용할 수 없는 키)"))
+    monkeypatch.setattr(enrich_corp_code, "connect", _fake_connect(conn))
 
     assert enrich_corp_code.run(storage, "R1", db=_db(), source=source) == 1
+    assert _updates(conn) == []
     log = _log(storage)
     assert log["exit_code"] == 1
     assert log["failures"][0]["reasons"] == ["corp_map_error"]
     assert log["updated"] == 0
+
+
+def test_no_candidates_skips_corpcode_fetch(tmp_path, monkeypatch):
+    """EnrichCorpCode 는 매 SFN 런 FeatureParallel 앞 직렬이다 — 채울 NULL 후보가 없으면(정상 상태:
+    전부 충전됨) OpenDART 를 아예 안 불러야, corpCode.xml 장애가 feature/analyze 전체를 막지 않는다.
+    load_corp_map 이 불리면 StopFetch 로 exit 1 이 될 텐데, exit 0 이 곧 '안 불렀다'의 증거다."""
+    storage = _storage(tmp_path)
+    conn = _FakeConn([])  # 후보 0
+    source = _FakeSource(error=StopFetch("불리면 안 된다 — 후보 0 이면 corpCode 조회 skip"))
+    monkeypatch.setattr(enrich_corp_code, "connect", _fake_connect(conn))
+
+    assert enrich_corp_code.run(storage, "R1", db=_db(), source=source) == 0
+    assert _updates(conn) == []
+    log = _log(storage)
+    assert log["candidates"] == 0 and log["exit_code"] == 0
+    assert log["failures"] == []
 
 
 def test_db_error_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
