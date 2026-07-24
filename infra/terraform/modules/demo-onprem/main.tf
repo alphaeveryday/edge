@@ -166,6 +166,10 @@ resource "aws_instance" "this" {
   iam_instance_profile        = aws_iam_instance_profile.this.name
   associate_public_ip_address = true
 
+  # user_data_replace_on_change 는 두지 않는다 — user_data 에 compose_version 이 담겨,
+  # true 면 사소한 버전 범프도 인스턴스 교체(→ 루트 EBS·PG named volume 유실)를 부른다.
+  # 스왑은 fstab 등록으로 한 번만 만들면 재부팅·in-place 리사이징에도 지속되므로, 신규 박스는
+  # cloud-init 이 자동 생성하고 기존 박스는 일회성 조치로 얹는다(교체 훅 불필요).
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     compose_version = var.compose_version
   })
