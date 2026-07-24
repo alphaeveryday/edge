@@ -1,8 +1,9 @@
 package com.edge.publication.exposure;
 
+import com.edge.publication.entity.ExposureLog;
+import com.edge.publication.repository.ExposureLogRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -15,20 +16,15 @@ public class ExposureLogRecorder {
 
 	private static final Logger log = LoggerFactory.getLogger(ExposureLogRecorder.class);
 
-	private static final String INSERT_SQL = """
-			INSERT INTO exposure_log (publication_id, customer_hash, channel, summary_snapshot)
-			VALUES (?, ?, ?, ?)
-			""";
+	private final ExposureLogRepository exposureLogs;
 
-	private final JdbcTemplate jdbc;
-
-	public ExposureLogRecorder(JdbcTemplate jdbc) {
-		this.jdbc = jdbc;
+	public ExposureLogRecorder(ExposureLogRepository exposureLogs) {
+		this.exposureLogs = exposureLogs;
 	}
 
 	public void record(long publicationId, String ticker, String summarySnapshot,
 			String customerHash, String channel) {
-		jdbc.update(INSERT_SQL, publicationId, customerHash, channel, summarySnapshot);
+		exposureLogs.save(new ExposureLog(publicationId, customerHash, channel, summarySnapshot));
 		log.info("exposure recorded publication_id={} ticker={} channel={} customer_hash={}",
 				publicationId, ticker, channel, customerHash);
 	}

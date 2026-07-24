@@ -1,8 +1,9 @@
 package com.edge.publication.repository;
 
+import com.edge.publication.entity.AnalysisItem;
+import com.edge.publication.entity.Publication;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -16,9 +17,10 @@ import java.util.Set;
 
 /**
  * Published 설명 조회 — Publication API 의 유일한 데이터 소스.
- * 온프렘 Published Store(migrations-onprem: publication ⋈ analysis_item)를 조회하며,
+ * 온프렘 Published Store(publication ⋈ analysis_item)를 {@link PublicationRepository}로 조회하며,
  * WHERE 절이 Published(그리고 노출 가능 상태 AUTO_PUBLISHED·APPROVED)만 허용하므로
  * 그 외 상태는 이 층을 통과할 수 없다(제품 보장 — 계약 publication-api.md).
+ * 리포지토리 엔티티를 서비스가 쓰는 {@link PublishedExplanation} record 로 매핑한다.
  */
 @Component
 public class ExplanationStore {
@@ -38,23 +40,13 @@ public class ExplanationStore {
 		}
 	}
 
-	private static final String SERVE_SQL = """
-			SELECT p.publication_id, p.etf_ticker, a.etf_name, p.trade_date, a.summary,
-			       a.confidence_level, a.evidences::text AS evidences, p.published_at
-			FROM publication p
-			JOIN analysis_item a ON a.explanation_result_id = p.analysis_item_id
-			WHERE p.status = 'PUBLISHED'
-			  AND a.status IN ('AUTO_PUBLISHED', 'APPROVED')
-			  AND p.etf_ticker = ?
-			""";
-
-	private final JdbcTemplate jdbc;
+	private final PublicationRepository publications;
 	private final Set<String> knownTickers;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
-	public ExplanationStore(JdbcTemplate jdbc,
+	public ExplanationStore(PublicationRepository publications,
 			@Value("${publication.known-tickers}") Set<String> knownTickers) {
-		this.jdbc = jdbc;
+		this.publications = publications;
 		this.knownTickers = knownTickers;
 	}
 
@@ -69,24 +61,23 @@ public class ExplanationStore {
 	 * 거래일을 우선 정렬한다(과거일 검수분이 늦게 게시돼도 최신 거래일이 이긴다).
 	 */
 	public Optional<PublishedExplanation> findPublished(String ticker, LocalDate tradeDate) {
-		List<PublishedExplanation> rows = tradeDate == null
-				? jdbc.query(SERVE_SQL + " ORDER BY p.trade_date DESC, p.published_at DESC LIMIT 1",
-						rowMapper(), ticker)
-				: jdbc.query(SERVE_SQL + " AND p.trade_date = ? ORDER BY p.published_at DESC LIMIT 1",
-						rowMapper(), ticker, tradeDate);
-		return rows.stream().findFirst();
+		Optional<Publication> found = tradeDate == null
+				? publications.findLatestPublished(ticker, Limit.of(1))
+				: publications.findPublishedOn(ticker, tradeDate, Limit.of(1));
+		return found.map(this::toDomain);
 	}
 
-	private RowMapper<PublishedExplanation> rowMapper() {
-		return (rs, rowNum) -> new PublishedExplanation(
-				rs.getLong("publication_id"),
-				rs.getString("etf_ticker"),
-				rs.getString("etf_name"),
-				rs.getObject("trade_date", LocalDate.class),
-				rs.getString("summary"),
-				rs.getString("confidence_level"),
-				parseEvidences(rs.getString("evidences")),
-				rs.getObject("published_at", OffsetDateTime.class));
+	private PublishedExplanation toDomain(Publication p) {
+		AnalysisItem a = p.getAnalysisItem();
+		return new PublishedExplanation(
+				p.getPublicationId(),
+				p.getEtfTicker(),
+				a.getEtfName(),
+				p.getTradeDate(),
+				a.getSummary(),
+				a.getConfidenceLevel(),
+				parseEvidences(a.getEvidences()),
+				p.getPublishedAt());
 	}
 
 	/**
