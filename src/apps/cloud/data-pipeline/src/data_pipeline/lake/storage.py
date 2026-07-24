@@ -521,8 +521,10 @@ class LocalStorage:
         # 키 규약을 일치시켜 로컬 통과·배포 S3 불일치를 막는다.
         if not self.root.exists():
             return []
+        # as_posix(): Windows 에서 str() 은 백슬래시 키를 내놓아 빌더의 '/' prefix 와
+        # 영영 안 맞는다 — 키 규약은 OS 무관 forward-slash 다(S3 와 동형).
         keys = (
-            str(p.relative_to(self.root))
+            p.relative_to(self.root).as_posix()
             for p in self.root.rglob("*")
             if p.is_file()
         )

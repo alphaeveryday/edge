@@ -80,6 +80,18 @@ def test_local_list_keys_uses_string_prefix_like_s3(tmp_path):
     assert storage.list_keys("nope") == []
 
 
+def test_local_list_keys_are_posix_regardless_of_os(tmp_path):
+    # WHY: 키 규약은 OS 무관 forward-slash 다(빌더 SSOT·S3 동형). Windows 에서 str(Path)의
+    #      백슬래시가 새면 빌더 prefix 와 영영 안 맞아 레이크 전체가 '빈 것처럼' 보인다 —
+    #      스텝이 0행을 읽고도 성공(0)으로 끝나는 조용한 실패가 된다.
+    storage = LocalStorage(tmp_path)
+    storage.put_bytes("feature/news/assertions/language=ko/part-0.parquet", b"x")
+    assert storage.list_keys("feature/news/assertions/") == [
+        "feature/news/assertions/language=ko/part-0.parquet"
+    ]
+    assert all("\\" not in k for k in storage.list_keys(""))
+
+
 def test_disclosure_key_roundtrip_and_excludes_document_zip():
     # WHY: 정제(normalize_disclosure)는 raw 메타 ndjson 만 스캔하고 본문 documents/*.zip 은
     #      건드리면 안 된다(파싱 대상은 메타가 가리키는 본문) — is_ 판정이 zip 을 잡으면
