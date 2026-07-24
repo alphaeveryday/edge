@@ -51,6 +51,12 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · 
 - **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
   파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
   의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
+- **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
+  `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어 record)` 로 매핑해
+  반환한다(서비스는 여전히 mock record 반환). mock record(스토어 형)와 형식이 같아도
+  별도 타입이다 — DB 연동 시 `from()` 의 매핑원이 mock record 에서 repository record
+  로 바뀐다. 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은 tenant-sync-api·
+  publication-api dto 규약을 따른다 — mock 콘솔 모듈 중 첫 dto 패키지다(ALPHA-523).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 다.
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — jvm-common 봉투
   `{isSuccess,code,message,result}` 로 내려간다. 계약 DTO 는 `result` 안의
