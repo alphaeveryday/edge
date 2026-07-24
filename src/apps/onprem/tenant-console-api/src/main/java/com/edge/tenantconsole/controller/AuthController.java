@@ -2,6 +2,8 @@ package com.edge.tenantconsole.controller;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.LoginRequest;
+import com.edge.tenantconsole.dto.SessionResponse;
 import com.edge.tenantconsole.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
@@ -9,8 +11,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-import tools.jackson.databind.PropertyNamingStrategies;
-import tools.jackson.databind.annotation.JsonNaming;
 
 /**
  * 인증 표면 — 로그인·로그아웃·세션 조회(HTTP 관심사만). 인가·차단은
@@ -23,16 +23,6 @@ public class AuthController {
 
 	public AuthController(AuthService authService) {
 		this.authService = authService;
-	}
-
-	public record LoginRequest(String email, String password) {
-	}
-
-	@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-	public record SessionResponse(long memberId, String email, String name, String role) {
-		static SessionResponse from(SessionMember member) {
-			return new SessionResponse(member.memberId(), member.email(), member.name(), member.role());
-		}
 	}
 
 	@PostMapping("/api/v1/auth/login")
