@@ -728,14 +728,37 @@ resource "aws_scheduler_schedule" "daily" {
     mode = "OFF"
   }
 
+  # 운영 원장(ALPHA-530): daily 트리거가 SFN 을 **직접** 시작하지 않고 **Planner** 를 띄운다.
+  # Planner 가 실행 전 pipeline_run+expected_task 를 원장에 남기고(관측 정본) SFN 을 시작한다 —
+  # 그래야 SFN 이 아예 안 떠도 "실행 자체가 안 됐다"를 탐지할 수 있다(스펙 §5). 스케줄 시각은
+  # <aws.scheduler.scheduled-time> 를 env(OPS_SCHEDULED_TIME)로 넘겨 Planner 가 슬롯을 계산한다.
   target {
-    arn      = aws_sfn_state_machine.this.arn
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
-    input    = jsonencode({ mode = "incremental", run_id = "<aws.scheduler.scheduled-time>" })
+    input = jsonencode({
+      Cluster        = var.cluster_arn
+      TaskDefinition = aws_ecs_task_definition.ops.arn
+      LaunchType     = "FARGATE"
+      NetworkConfiguration = {
+        AwsvpcConfiguration = {
+          Subnets        = var.subnet_ids
+          SecurityGroups = [aws_security_group.task.id]
+          AssignPublicIp = "DISABLED"
+        }
+      }
+      Overrides = {
+        ContainerOverrides = [{
+          Name        = local.container_name
+          Command     = ["plan-run"]
+          Environment = [{ Name = "OPS_SCHEDULED_TIME", Value = "<aws.scheduler.scheduled-time>" }]
+        }]
+      }
+    })
 
     retry_policy {
       maximum_event_age_in_seconds = 86400
       maximum_retry_attempts       = 185
     }
+    dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
 }

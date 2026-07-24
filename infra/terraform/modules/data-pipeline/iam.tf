@@ -167,10 +167,25 @@ resource "aws_iam_role_policy" "scheduler" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["states:StartExecution"]
-      Resource = [aws_sfn_state_machine.this.arn]
-    }]
+    Statement = [
+      {
+        # 운영 원장(ALPHA-530): daily·reconcile 스케줄이 Planner/Reconciler ECS 태스크를 띄운다.
+        # StartExecution 은 이제 스케줄러가 아니라 Planner(ops_task 역할)가 소유한다(스펙 §5).
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = [aws_ecs_task_definition.ops.arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = [aws_iam_role.execution.arn, aws_iam_role.ops_task.arn]
+      },
+      {
+        # 전달 실패 이벤트를 DLQ 로 흘린다(스펙 §5).
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = [aws_sqs_queue.scheduler_dlq.arn]
+      },
+    ]
   })
 }

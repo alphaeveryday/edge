@@ -143,6 +143,19 @@ variable "schedule_state" {
   default     = "DISABLED"
 }
 
+# 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
+variable "reconcile_schedule_state" {
+  description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
+  type        = string
+  default     = "DISABLED"
+}
+
+variable "reconcile_schedule_expression" {
+  description = "Reconciler 실행 주기. 미실행·STALLED 탐지 지연 허용치에 맞춘다."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
 variable "alarm_email" {
   description = "raw ingest 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
   type        = string
