@@ -10,6 +10,13 @@ locals {
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
     "edge/schema-migrate", # Flyway one-off 이미지
+    # 데모 온프렘 박스(envs/demo-onprem)가 compose 로 pull 하는 온프렘/데모 런타임 이미지.
+    # cloud 앱과 달리 ECS 서비스가 아니라 EC2 compose 로 뜬다(ADR-0033) — 저장소만 foundation 소유.
+    "edge/publication-api",
+    "edge/screening-worker",
+    "edge/intake",
+    "edge/sync-agent",
+    "edge/mock-broker", # 데모 증권사 backend(Node) — demo/mock-broker
   ])
 }
 
