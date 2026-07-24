@@ -138,7 +138,7 @@ class DartDisclosureSource:
         self.planned_symbols = len(plan)
         if not plan:
             return
-        corp_map = self._load_corp_map()
+        corp_map = self.load_corp_map()
         fetched_at = datetime.now(timezone.utc).isoformat()
         bgn_de, end_de = _to_dart_date(from_date), _to_dart_date(to_date)
         for our_ticker, stock_code in plan:
@@ -305,8 +305,11 @@ class DartDisclosureSource:
             raise StopFetch(detail)
         raise ValueError(detail)
 
-    def _load_corp_map(self) -> dict[str, dict[str, str]]:
-        """corpCode.xml ZIP → {stock_code: {corp_code, corp_name}}. 런 내 메모리 캐시."""
+    def load_corp_map(self) -> dict[str, dict[str, str]]:
+        """corpCode.xml ZIP → {stock_code: {corp_code, corp_name}}. 런 내 메모리 캐시.
+
+        공시 수집(fetch)의 ticker→corp_code 해소에 쓰지만, corp_code enrichment 스텝
+        (ALPHA-491)도 같은 인덱스를 재사용한다 — 그래서 public 이다."""
         if self._corp_map is not None:
             return self._corp_map
         query = urllib.parse.urlencode({"crtfc_key": self.api_key or ""})
