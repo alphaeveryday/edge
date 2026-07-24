@@ -115,3 +115,29 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - `baselineOnMigrate = false` — 그린필드 DB. 기존 DB adoption이 아니다.
 - `cleanDisabled = true` — `flyway clean` 금지(데이터 전체 삭제 방지).
 - `validateMigrationNaming = true` — 파일명 규칙 위반 시 실패.
+
+## 물리 ERD 자동 생성 (파생물)
+
+Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 그리지 않고 **마이그레이션에서 생성**한다.
+`scripts/generate-erd.sh` 가 임시 pg18 클러스터에 두 세트를 적용하고 `scripts/gen-erd.sql`
+(pg_catalog → dbdiagram.io DBML, 외부 도구 없음)로 추출한다. 산출물은 `generated/` 에 커밋된다:
+
+- `generated/physical-erd.dbml` — cloud 세트(`migrations/`)
+- `generated/physical-erd-onprem.dbml` — 온프렘 세트(`migrations-onprem/`)
+
+**자동 갱신 — pre-commit 훅.** 마이그레이션을 바꿔 커밋하면 훅이 ERD 를 재생성해 그 커밋에 포함한다.
+클론당 1회 활성화한다:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+- 훅(`.githooks/pre-commit`)은 **스키마 마이그레이션이 스테이징된 커밋에서만** `generate-erd.sh` 를
+  돌려 `generated/*.dbml` 을 갱신·스테이징한다(일반 커밋은 즉시 통과).
+- **의존: PostgreSQL 18**(initdb·pg_ctl·psql). 없으면 훅은 커밋을 막지 않고 경고만 한다 — 이 경우
+  pg18 설치 후 `bash src/libs/schema/scripts/generate-erd.sh` 로 직접 재생성한다.
+- 훅은 **opt-in 이라 강제되지 않는다**(CI 게이트 없음). 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다.
+- 결정성: 클러스터 `--no-locale` + `gen-erd.sql` 의 `ORDER BY COLLATE "C"` + LF 고정
+  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다.
+- `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
+  문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.

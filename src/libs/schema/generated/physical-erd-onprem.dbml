@@ -1,0 +1,17 @@
+// AUTO-GENERATED from libs/schema Flyway migrations - DO NOT EDIT.
+// Regenerate: bash src/libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).
+// SSOT: libs/schema migrations. Derived physical ERD (dbdiagram.io syntax).
+
+Table "received_bundle" {
+  "cursor_from" bigint [pk]
+  "cursor_to" bigint [not null]
+  "checksum" varchar(72) [not null]
+  "body" bytea [not null]
+  "received_at" timestamptz [not null]
+}
+
+Table "sync_state" {
+  "single_row" boolean [pk]
+  "last_cursor" bigint [not null]
+  "last_synced_at" timestamptz
+}
