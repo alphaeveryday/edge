@@ -256,9 +256,10 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-assertions
 
-# 이벤트 조립(RDB+LLM, ALPHA-412) — canonical 뉴스 제목을 분류해 source_event 계보와
-# event_thread 를 만든다(분석엔진 추출 체인 이식, 결정적 ID 산식 동일). LLM 은 tag-news 와
-# 같은 LLM_* env. 창 미지정 = 오늘(KST) 하루(분류 비용이 기사 수 비례), 과거는 창으로 백필.
+# 이벤트 조립(RDB+LLM, ALPHA-412·ALPHA-545) — canonical 뉴스 제목을 v4 2콜(게이트/타입판별
+# → 타입별 추출)로 정규화해 source_event 계보·참여자(event_argument)·측정값(event_measure)·
+# event_thread 를 만든다(결정적 ID 산식 동일, stage 는 lifecycle 메뉴 밖이면 NULL). LLM 은
+# tag-news 와 같은 LLM_* env. 창 미지정 = 오늘(KST) 하루(LLM 비용이 기사 수 비례), 과거는 창으로 백필.
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 ```
