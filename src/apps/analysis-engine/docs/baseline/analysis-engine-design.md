@@ -3,397 +3,389 @@ doc_type: baseline
 status: Draft
 owner: engineering
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-07-22
 related:
+  - ../proposals/0004-dynamic-analyzer-extension.md
   - data-ingestion.md
-  - ../specs/etf-identity-decomposition.md
-  - ../specs/price-decomposition-engine.md
   - ../specs/data/news-ontology-types.md
   - ../specs/data/thread-types.md
-  - ../specs/data/disclosure-types.md
-  - ../specs/data/entity-master.md
-  - ../reference/logical-erd.dbml
-  - ../proposals/0002-relationship-graph.md
-  - ../proposals/0003-market-expectation.md
 ---
-# 아키텍처 (베이스라인) — 시스템·분석·설명
+# ETF 가격변동 설명 시스템 — 베이스라인 아키텍처
 
-> **이 문서가 소유**: 시스템 컨텍스트·컨테이너(C4 L1/L2) 정적 뷰 + 시스템 런타임·요구 동작 + **Analysis Engine(컨2)·Explanation Engine(컨3)의 컴포넌트(L3)·런타임·행동 계약·handoff 계약**.
-> **링크로 위임**: 수집(컨1) 내부와 **사건 색인(O1–O6·교차소스 정합)** → [data-ingestion.md](data-ingestion.md). 산식·이벤트/스레드/공시/엔티티 타입·O6 threading 알고리즘 → [`../specs`](../specs). 강등(C·D) 상세 → [proposals](../proposals). **기호(R·L*·A–G·O*·P*) 해독 → [용어 맵](../README.md#용어-맵-기호-해독)**.
-> ⚠️ **유실**: 구 `current-architecture.md`의 컨테이너 상세 lineage 표(기술·상태·미결정)는 커밋 전 삭제되어 복구 불가 — 필요 시 오너 재작성.
-> ✅ **재설계 확정 (2026-07-20)**: ① **event-price 정합검증(P5–P7·F) 전면 제거** — 어떤 단계도 이벤트의 가격 방향·타이밍 적합성을 판정하지 않는다. ② **route 게이트** — 시장으로 설명되면 종결. 시장 미설명 변동만 이벤트 패스: 테마 동조 → scope=테마, 소수 종목 잔차 → scope=top3. ③ **사건 색인(Event Intelligence)은 컨1 이관** — route 무관 상시 생산. 설명 에이전트는 scope 시드를 받되 색인을 자유 조회(PIT 내). 본 문서 §1·§3–§13에 반영 완료.
+> **이 문서가 소유**: 현재 만들어져 돌아가는 시스템의 전체 그림 — 시스템 컨텍스트(C4 L1)·컨테이너(C4 L2)·컨테이너별 컴포넌트(C4 L3), 그리고 하루가 실제로 설명되는 런타임 흐름.
+> **따로 뺀 것**: 동적 분석기를 연구 루프로 키우는 **확장안**은 아직 만들지 않은 미래라서 [제안 0004](../proposals/0004-dynamic-analyzer-extension.md)로 분리했다.
+> **더 깊은 계약**: 산식·이벤트/스레드 타입 정밀 규칙은 [`../specs`](../specs), 수집 내부는 [data-ingestion.md](data-ingestion.md).
 
-## 1. 시스템 요약
+이 문서는 어려운 약어를 쓰지 않는다. 단계 이름은 처음 나올 때 한글 이름과 짧은 설명을 함께 적고, 필요한 곳에만 원식(수식)을 보인다.
 
-가격 변동을 관측 가능한 **항등식(구성종목 기여·괴리·환율)**으로 먼저 분해하고, 움직임의 성격을 판정해 분석 scope를 확정한다. **시장으로 설명되지 않는 변동일 때만** 설명 에이전트가 그 scope에서 사건 색인을 조회해 설명을 만든다. 수집(컨1)이 원장과 **사건 색인**을, 분석(컨2)이 `explanation_route`·기여·분해를 **생산**하고, 설명(컨3)이 그것을 **소비**해 최종 설명 artifact를 만든다.
+---
 
-관통 원칙 넷:
+## 1. 무엇을 하는 시스템인가
 
-- **price-first** — 출발점은 항상 L1(항등식 분해)의 ETF 가격 관측. 이벤트는 route가 필요하다고 판단한 scope에만 붙는다.
-- **route-driven** — `explanation_route`(+scope)가 하류 개입 범위를 고정한다. 하류는 route·scope를 재계산하지 않는다.
-- **방향 불검증** — 이벤트는 scope 연관 + PIT 창으로만 설명에 참여한다. 이벤트-가격 방향·타이밍 적합성을 검증하는 단계는 존재하지 않는다. 방어선은 §9 관측/가설 분리 + honest unknown.
-- **PIT 재현** — `available_at`·`trade_date`·`asof`가 같은 재현 경계. 소급 병합 금지. 설명 에이전트의 자유 조회에도 동일 적용.
+**하나의 ETF가 오늘 왜 그렇게 움직였는지**를 사람이 읽을 수 있는 한 문단으로 설명해, 증권사 앱(MTS)에 올려 개인 투자자에게 보여주는 시스템이다.
 
+설명은 항상 **가격에서 출발**한다. 값이 얼마나 움직였는지 먼저 숫자로 분해해 그 움직임이 시장·테마·개별 중 어느 성격인지 정한다. 그 위에서 동적 분석기가 사건(뉴스·공시)을 끌어와 원인을 붙이되, **시장·업종으로 이미 설명되는 부분은 사건으로 중복 서사화하지 않는다**. 순서를 이렇게 고정하는 이유는, 사건부터 찾으면 "그날 있었던 아무 뉴스나" 원인처럼 붙기 때문이다. 가격이 먼저 움직임의 성격과 범위를 정하고, 사건은 그 위에서 설명에 참여한다.
 
+관통하는 원칙 넷:
 
-## 3. 정적 뷰 — 컨테이너 (C4 L2)
+- **가격 먼저(price-first)** — 출발점은 언제나 ETF 가격의 분해다. 분해가 경로(route)와 설명 범위(scope)를 정하고, 설명 자체는 언제나 동적 분석기가 만든다.
+- **경로는 범위를 정한다(route-driven)** — 경로와 분석 대상(scope)은 **무엇을 어느 범위로 주장할지**를 고정할 뿐, 동적 분석기를 켜고 끄지 않는다. 시장·테마·개별 어느 경로든 동적 분석기로 가며, 초기 컨텍스트는 경로로 제한하지 않는다(§5.2 규칙). 뒤 단계는 이 판정을 다시 계산하지 않는다.
+- **방향은 검증하지 않는다** — "이 뉴스가 가격을 올렸다"처럼 사건과 가격의 인과 방향을 판정하는 단계는 없다. 사건은 "같은 종목·같은 시간대"라는 근거로만 설명에 참여하고, 방어선은 관측·추정·가설을 문장에서 섞지 않는 것과 모르는 건 모른다고 적는 것이다.
+- **같은 입력이면 같은 결과(PIT 재현)** — 같은 날짜·같은 기준시점으로 다시 돌리면 같은 설명이 나와야 한다. 과거 데이터를 나중 값으로 덮어쓰지 않는다(point-in-time).
+
+---
+
+## 2. 전체 그림 — 시스템 컨텍스트 (C4 L1)
+
+> 바깥에서 본 한 장: 세 종류의 원천이 들어오고, 설명 한 편이 증권사 앱을 거쳐 투자자에게 나간다.
 
 ```mermaid
+%%{init:{"flowchart":{"defaultRenderer":"elk","curve":"linear"},"theme":"base","themeVariables":{"lineColor":"#1168bd","textColor":"#333333","fontSize":"14px"},"elk":{"edgeRouting":"ORTHOGONAL","nodePlacementStrategy":"BRANDES_KOEPF","mergeEdges":false,"ranksep":90,"nodeSpacing":70}}}%%
 flowchart TB
+    accTitle: 시스템 컨텍스트 (C4 L1)
+    accDescr: 뉴스·공시·시세 원천이 ETF 가격변동 설명 시스템으로 들어가 증권사 MTS를 거쳐 개인 투자자에게 설명이 게시된다
     classDef person fill:#08427b,stroke:#052e56,color:#fff
+    classDef system fill:#1168bd,stroke:#0b4884,color:#fff
     classDef external fill:#999,stroke:#6b6b6b,color:#fff
-    classDef container fill:#438dd5,stroke:#2e6295,color:#fff
-    classDef boundaryEl fill:#fff,stroke:#666,color:#333,stroke-dasharray:5 5
 
     subgraph INPUTS["외부 데이터 소스"]
-        NEWS["뉴스"]:::external
-        DISCLOSURE["공시"]:::external
-        MARKET["시세·지수·환율"]:::external
-        HOLDINGS["구성종목·NAV"]:::external
+        NEWS["<b>뉴스</b><br/>[External System]"]:::external
+        DISC["<b>공시</b><br/>[External System]"]:::external
+        MKT["<b>시세·NAV·구성종목</b><br/>[External System]"]:::external
+    end
+    SYS["<b>ETF 가격변동 설명 시스템</b><br/>[Software System]<br/>왜 움직였는지 한 편으로 설명"]:::system
+    subgraph OUTPUTS["외부 소비자"]
+        MTS["<b>증권사 MTS</b><br/>[External System]"]:::external
+        USER(["<b>개인 투자자</b><br/>[Person]"]):::person
+    end
+    NEWS --> SYS
+    DISC --> SYS
+    MKT --> SYS
+    SYS -->|"게시"| MTS --> USER
+    style INPUTS fill:none,stroke:#bbb,stroke-dasharray:3 3
+    style OUTPUTS fill:none,stroke:#bbb,stroke-dasharray:3 3
+```
+
+---
+
+## 3. 컨테이너 (C4 L2)
+
+> 네 개의 처리 단위가 저장소를 사이에 두고 한 방향으로 이어진다. 각 단계는 앞 단계가 저장소에 남긴 것만 읽는다 — 직접 호출하지 않는다.
+
+```mermaid
+%%{init:{"flowchart":{"defaultRenderer":"elk","curve":"linear"},"theme":"base","themeVariables":{"lineColor":"#1168bd","textColor":"#333333","fontSize":"14px"},"elk":{"edgeRouting":"ORTHOGONAL","nodePlacementStrategy":"BRANDES_KOEPF","mergeEdges":false,"ranksep":90,"nodeSpacing":60}}}%%
+flowchart TB
+    accTitle: 컨테이너 뷰 (C4 L2)
+    accDescr: 수집·정적 분석기·동적 분석기·설명 API 네 컨테이너가 원장·분석 마트·탐색 저장소를 경유해 이어진다
+    classDef external fill:#999,stroke:#6b6b6b,color:#fff
+    classDef container fill:#438dd5,stroke:#2e6295,color:#fff
+    classDef database fill:#438dd5,stroke:#2e6295,color:#fff
+    classDef boundaryEl fill:#fff,stroke:#666,color:#333,stroke-dasharray:5 5
+
+    subgraph INPUTS["외부 소스"]
+        SRC["<b>뉴스·공시·시세</b><br/>[External System]"]:::external
     end
     subgraph SYS["ETF 가격변동 설명 시스템"]
-        subgraph APP["애플리케이션 처리"]
-            INGESTION("1. Data Ingestion<br/>[Python Batch]<br/>원장 적재·사건 색인"):::container
-            ANALYSIS("2. Static Analysis Engine<br/>[Python Batch]<br/>항등식 분해·성격 판정·scope 라우팅"):::container
-            EXPLANATION("3. Explanation Engine<br/>[런타임 미정]<br/>설명 에이전트 — scope 소비·색인 조회"):::container
-            API("4. Explanation API<br/>[Serving]<br/>MTS에 게시"):::container
-            INGESTION ==>|저장소 경유| ANALYSIS ==>|저장소 경유| EXPLANATION ==>|저장소 경유| API
+        subgraph APP["처리 단계"]
+            INGEST("<b>1. 수집</b><br/>[Container: Python 배치]<br/>원장 적재 · 사건 색인"):::container
+            STATIC("<b>2. 정적 분석기</b><br/>[Container: Python 배치]<br/>가격 분해 · 경로 판정"):::container
+            DYN("<b>3. 동적 분석기</b><br/>[Container: 에이전트]<br/>남은 움직임을 사건으로 설명"):::container
+            API("<b>4. 설명 API</b><br/>[Container: Serving]<br/>MTS 게시 (읽기 전용)"):::container
+            INGEST ==>|"저장소 경유"| STATIC ==>|"저장소 경유"| DYN ==>|"저장소 경유"| API
         end
         subgraph DATA["데이터 저장·접근"]
-            DA("Data Access Boundary<br/>[논리 경계]"):::boundaryEl
-            LEDGER[("Normalized Ledger<br/>raw 입력 원장")]:::container
-            MART[("Analysis Mart<br/>기여·라우트·분해·사건 색인")]:::container
-            STORE[("Explanation Store<br/>게시된 설명")]:::container
+            DA("<b>데이터 접근 경계</b><br/>[논리 경계]"):::boundaryEl
+            LEDGER[("<b>Normalized Ledger</b><br/>[Database]<br/>정규화된 원장")]:::database
+            MART[("<b>Analysis Mart</b><br/>[Database]<br/>분해 결과 · 사건 색인")]:::database
+            STORE[("<b>Exploration Store</b><br/>[Database]<br/>게시된 설명")]:::database
             DA --> LEDGER
             DA --> MART
             DA --> STORE
         end
-        APP -.->|공통 데이터 접근| DA
+        APP -.->|"공통 데이터 접근"| DA
     end
-    subgraph OUTPUTS["외부 소비자"]
-        MTS["증권사 MTS"]:::external
-        INVESTOR(["개인 투자자"]):::person
-    end
-    NEWS --> INGESTION
-    DISCLOSURE --> INGESTION
-    MARKET --> INGESTION
-    HOLDINGS --> INGESTION
-    API --> MTS
-    MTS --> INVESTOR
-```
-
-| 컨테이너 | 책임 | 내부 상세 |
-|---|---|---|
-| Data Ingestion | 외부 원천 → 재현 가능한 logical ledger + **사건 색인(O1–O6·교차소스 정합) 상시 생산** | [data-ingestion.md](data-ingestion.md) |
-| Analysis Engine | 가격 항등식 분해 → 성격 판정 → scope 라우팅. **이벤트 데이터 불관여** | 본 문서 §5 |
-| Explanation Engine | route·scope 소비 + 사건 색인 자유 조회(PIT 내) → 설명 합성 | 본 문서 §6 |
-| Explanation API | 게시된 최종 설명 serving (판단 재수행 없음) | — (단일 책임) |
-| Normalized Ledger / Analysis Mart / Explanation Store | 단계별 저장 경계. 사건 색인은 컨1이 생산해 Analysis Mart 이벤트 축에 적재 — 저장 경계 재검토는 §13 | [../reference/logical-erd.dbml](../reference/logical-erd.dbml) |
-
-### 3.1 정적 뷰 — 통합 파이프라인 (전 컨테이너 가로 배치)
-
-> 컨1–컨4를 한 줄로 편 **컨테이너 단위 파이프라인 개요**다. 각 컨테이너 박스에 내부 단계를 순서대로 적었고, 컴포넌트 상세·상태(current/제안)·요구 동작 표는 컨1 → [data-ingestion.md](data-ingestion.md), 컨2 → §5, 컨3 → §6이 소유한다 — 이 그림은 흐름만 보인다.
-
-**사건 색인(컨1)은 route와 무관하게 Analysis Mart 이벤트 축을 상시 채우고, 컨2가 route·scope를 확정한 뒤에야 설명 에이전트(컨3)가 그 scope로 색인을 PIT 조회한다.**
-
-```mermaid
-%%{init: {
-  "flowchart": { "defaultRenderer": "elk", "curve": "linear" },
-  "theme": "base",
-  "themeVariables": { "lineColor": "#1168bd", "textColor": "#333333", "fontSize": "14px" },
-  "elk": {
-    "edgeRouting": "ORTHOGONAL",
-    "nodePlacementStrategy": "BRANDES_KOEPF",
-    "mergeEdges": false,
-    "ranksep": 70,
-    "nodeSpacing": 50
-  }
-}}%%
-flowchart LR
-    classDef person fill:#08427b,stroke:#052e56,color:#fff
-    classDef external fill:#999,stroke:#6b6b6b,color:#fff
-    classDef container fill:#438dd5,stroke:#2e6295,color:#fff
-    classDef database fill:#438dd5,stroke:#2e6295,color:#fff
-
-    subgraph INPUTS["외부 데이터 소스"]
-        NEWS["<b>뉴스</b><br/>[External System]"]:::external
-        DART["<b>공시</b><br/>[External System]"]:::external
-        MKT["<b>시세·NAV·구성종목</b><br/>[External System]"]:::external
-    end
-
-    subgraph SYS["ETF 가격변동 설명 시스템"]
-        C1("<b>1. Data Ingestion · 컨1</b><br/>[Container]<br/>뉴스·공시·시세 lane 수집<br/>사건 색인 O1–O6 상시 생산"):::container
-        LEDGER[("<b>Normalized Ledger</b><br/>[Database]<br/>raw 원장")]:::database
-        C2("<b>2. Analysis Engine · 컨2</b><br/>[Container]<br/>R → L0 → L1 → L2 → 경로 라우터<br/>항등식·공통요인 분해 → route+scope"):::container
-        MART[("<b>Analysis Mart</b><br/>[Database]<br/>route·기여·분해<br/>+ 사건 색인 축")]:::database
-        C3("<b>3. Explanation Engine · 컨3</b><br/>[Container]<br/>컨텍스트 로더 → A → B → E → L4·G<br/>scope 색인 조회 → 설명 합성"):::container
-        STORE[("<b>Explanation Store</b><br/>[Database]<br/>게시된 설명")]:::database
-        API("<b>4. Explanation API</b><br/>[Container]<br/>MTS 게시 (판단 없음)"):::container
-    end
-
     subgraph OUTPUTS["외부 소비자"]
         MTS["<b>증권사 MTS</b><br/>[External System]"]:::external
-        INVESTOR(["<b>개인 투자자</b><br/>[Person]"]):::person
     end
-
-    NEWS --> C1
-    DART --> C1
-    MKT --> C1
-    C1 -->|"raw"| LEDGER
-    C1 ==>|"사건 색인 · 상시 · route 무관"| MART
-    LEDGER ==>|"배치 handoff"| C2
-    C2 ==>|"route+scope · 기여 · 분해"| MART
-    MART ==>|"route·scope 로드"| C3
-    MART -.->|"자유 조회 · PIT 내"| C3
-    C3 ==>|"게시"| STORE
-    STORE ==> API
-    API ==>|"게시"| MTS
-    MTS --> INVESTOR
-
+    SRC --> INGEST
+    API --> MTS
+    style SYS fill:none,stroke:#444,stroke-dasharray:6 6
+    style APP fill:none,stroke:#888,stroke-dasharray:4 4
+    style DATA fill:none,stroke:#888,stroke-dasharray:4 4
     style INPUTS fill:none,stroke:#bbb,stroke-dasharray:3 3
     style OUTPUTS fill:none,stroke:#bbb,stroke-dasharray:3 3
-    style SYS fill:none,stroke:#444,stroke-dasharray:6 6
 ```
 
-## 4. 동작 뷰 — 시스템 런타임·요구 동작
+| 컨테이너 | 하는 일 | 남기는 저장소 | 상세 |
+|---|---|---|---|
+| **1. 수집** | 외부 원천을 다시 만들 수 있는 정규화된 원장으로 적재하고, 뉴스·공시를 사건 색인(정규 이벤트·스레드)으로 상시 승격 | Normalized Ledger | §6 · [data-ingestion.md](data-ingestion.md) |
+| **2. 정적 분석기** | ETF 가격을 항등식으로 분해 → 시장·업종으로 설명되는지 판정 → 경로와 분석 대상 확정. **사건 데이터는 보지 않는다** | Analysis Mart | §4 |
+| **3. 동적 분석기** | 경로·scope와 함께 받은 컨텍스트(시장·테마·주요 기여 종목 스레드)로 사건 색인을 조회해 설명을 만든다. 경로 무관 상시 실행 | Exploration Store | §5 |
+| **4. 설명 API** | 완성된 설명을 MTS에 게시(판단을 다시 하지 않는 읽기 전용) | — | §8 |
+
+세 저장소는 단계 사이의 경계다. 뒤 단계는 앞 단계가 남긴 저장소만 읽으므로, 단계를 따로 다시 돌리거나 백필해도 서로 어긋나지 않는다.
+
+---
+
+## 4. 정적 분석기 (Static Analysis Engine)
+
+가격만 보고 "이 움직임은 설명이 필요한가, 필요하면 어느 종목을 봐야 하는가"를 판정한다. 코드만으로 돌아가며 LLM이 개입하지 않는다.
+
+### 4.1 컴포넌트 (C4 L3)
 
 ```mermaid
-flowchart LR
-    IDX["뉴스·공시 → 사건 색인<br/>(컨1 · route 무관 상시)"] -.->|자유 조회| EV
-    P["가격·NAV·구성종목 수집"] --> I["가격 항등식 분해<br/>기여·괴리·환율"]
-    I --> G{"성격 판정·라우팅<br/>scope 확정 후 종료"}
-    G -- "정상 / 괴리·유동성 지배" --> O["가격 중심 설명"]
-    G -- "시장으로 설명" --> O
-    G -- "시장 미설명 · 테마⊥ 설명 (z2 < k)" --> T2["scope = 테마"]
-    G -- "시장·테마 모두 미설명" --> T1["scope = 기여 상위 3 종목"]
-    T1 --> EV["설명 에이전트<br/>scope 시드 + 색인 조회"]
-    T2 --> EV
-    EV --> O2["이벤트 포함 설명"]
-    O --> API["Explanation API 게시"]
-    O2 --> API
-```
-
-**하루의 동작.** 수집(컨1)은 route와 무관하게 하루 종일 돈다 — 뉴스·공시가 도착하는 대로 원장에 적재되고, 사건 색인(O1–O6)이 이를 `canonical_event`·`event_evidence`·`event_thread`로 승격해 이벤트 축에 쌓는다. 조용한 날의 문서도 똑같이 색인된다. 장 마감 후 시세·NAV·구성종목이 갖춰지면 분석(컨2)이 ETF마다 항등식 분해를 실행한다: 가격 변동이 구성종목 기여·괴리·환율 **관측**으로 나뉘고, 필요하면 공통요인 분해가 시장·테마⊥·고유 leg를 **추정**한다. 경로 라우터는 이 관측·추정만 보고 오늘의 route와 scope를 `explanation_route`에 기록한 뒤 끝난다 — 라우터는 이벤트를 본 적이 없다.
-
-**갈림 이후.** 대부분의 날은 여기서 종결된다: 게이트가 조용하면 `normal_range`, 괴리가 지배하면 `flow_dominated`, 시장이 설명하면 `market_explained` — 설명(컨3)은 가격·요인 문장만 만들고 이벤트는 조회하지 않는다. 시장으로 설명되지 않는 날에만 설명 에이전트가 깨어난다: 라우터가 남긴 scope(top3 구성종목 또는 테마)를 시드로 사건 색인에서 후보를 모으고, 과거 thread로 신규/후속·재보도를 가른 뒤, 시점상 부합하는 사건을 관측과 분리된 **가설**로 서술한다. 후보가 없으면 `유의하나 미설명`으로 끝난다. 완성된 설명은 `asof`와 함께 게시되고, 같은 `asof`로 재실행하면 같은 설명이 나온다.
-
-아래 §5–§6이 컨2·컨3 내부를 상세화한다.
-
-## 5. Analysis Engine (컨테이너 2)
-
-### 5.1 정적 — 컴포넌트 (C4 L3)
-
-```mermaid
+%%{init:{"flowchart":{"defaultRenderer":"elk","curve":"linear"},"theme":"base","themeVariables":{"lineColor":"#1168bd","textColor":"#333333","fontSize":"14px"},"elk":{"edgeRouting":"ORTHOGONAL","nodePlacementStrategy":"BRANDES_KOEPF","mergeEdges":false,"ranksep":90,"nodeSpacing":55}}}%%
 flowchart TB
+    accTitle: 정적 분석기 컴포넌트 (C4 L3)
+    accDescr: 이상 게이트에서 시작해 항등식 분해·공통요인 분해를 거쳐 경로 라우터가 경로와 분석 대상을 정해 분석 마트에 남긴다
     classDef component fill:#85bbf0,stroke:#5d82a8,color:#000
     classDef database fill:#438dd5,stroke:#2e6295,color:#fff
 
-    LEDGER[("Normalized Ledger<br/>가격·NAV·구성종목 raw")]:::database
-
-    subgraph AE["Analysis Engine · 컨테이너 2"]
-        R("타입 라우터 R"):::component
-        L0("이상 게이트 L0"):::component
-        L1("항등식 분해기 L1<br/>기여·괴리·FX"):::component
-        L2("공통요인 분해 L2<br/>시장·테마⊥·고유"):::component
-        ROUTER("경로 라우터<br/>성격 판정 → explanation_route + scope"):::component
-        R ==> L0 ==> L1 ==> L2 ==> ROUTER
+    LEDGER[("<b>Normalized Ledger</b><br/>[Database]")]:::database
+    subgraph C["2. 정적 분석기 · L3"]
+        GATE("<b>이상 게이트</b><br/>[Component]<br/>오늘 볼 만한 움직임인가"):::component
+        IDENT("<b>항등식 분해</b><br/>[Component]<br/>어느 종목이 얼마나 기여했나"):::component
+        FACTOR("<b>공통요인 분해</b><br/>[Component]<br/>시장·업종으로 설명되나"):::component
+        ROUTER("<b>경로 라우터</b><br/>[Component]<br/>경로 + 분석 대상 확정"):::component
+        GATE ==> IDENT ==> FACTOR ==> ROUTER
     end
-
-    MART[("Analysis Mart<br/>기여·라우트·분해")]:::database
-
-    LEDGER --> R
-    L1 --> MART
-    L2 --> MART
+    MART[("<b>Analysis Mart</b><br/>[Database]")]:::database
+    LEDGER --> GATE
     ROUTER --> MART
 ```
 
-두 서브엔진 — **ETF Identity**(제안): 유형 판정·이상 게이트·항등식 분해·성격 판정·scope 라우팅 / **Price Attribution**(current): L2 공통요인 분해(시장·테마⊥·고유) — 라우팅 판정의 입력. 구 Event Intelligence(O1–O6·교차소스 정합)는 **컨1로 이관**(2026-07-20 재설계) → [data-ingestion.md](data-ingestion.md). 정밀 계약은 [ETF 항등식 분해](../specs/etf-identity-decomposition.md)·[가격 분해 엔진](../specs/price-decomposition-engine.md) 소유.
+- **이상 게이트** — 오늘 그 ETF가 설명할 만큼 움직였는지 먼저 거른다. 기준(현재): ETF 하루 변동폭이 3% 이상, 그리고 KOSPI 대비 1%p 이상 차이. 못 넘으면 그날은 설명을 만들지 않는다.
+- **항등식 분해** — ETF 수익률을 구성종목별 기여로 쪼갠다. "어느 종목이 오늘 ETF를 움직였나"에 답한다. ETF는 정의상 구성종목의 가중합이므로 이 분해는 추정이 아니라 **관측**이다. (괴리·환율·부채·스왑 비용은 모두 iNAV에 이미 반영되어 있어 따로 고려하지 않는다.)
+- **공통요인 분해** — 움직인 종목의 수익률에서 시장 요인과 업종(피어) 요인을 차례로 걷어내, 그래도 남는 **고유 움직임**이 얼마인지 본다(§4.2).
+- **경로 라우터** — 분해 결과의 성격을 판정해 **경로(route)**와 **분석 대상(scope)**을 확정한다. 여기까지가 정적 분석기의 책임이고, 사건 해석은 하지 않는다.
 
-컴포넌트 계약 (블랙박스 수준 — 트리거·산식·임계·검증 절차는 소유 spec, 시스템 검증은 §12):
+### 4.2 어떻게 분해하나
 
-| 컴포넌트 | 역할 | 요구 동작 | 금지 | 입력 → 출력 |
-|---|---|---|---|---|
-| R 타입 라우터 (제안) | ETF 유형(국내 테마·섹터/해외지수/레버리지·인버스/채권)으로 분해 템플릿 선택 | **AE-R1** 유형 판정 후 템플릿 고정. 미확정·신규 상장은 `UNKNOWN` + review | 유형을 추정으로 채움 | `etf_reference` → `explanation_route.template` |
-| L0 이상 게이트 (제안) | 오늘 설명이 필요한 움직임인지 진입 판정 | **AE-R2** 미발화면 `normal_range` 기록 후 이후 단계 중단 | — | 시세 원장 → L0 라벨 |
-| L1 항등식 분해기 (current) | 가격 변동을 기여·괴리·환율 **관측**으로 분해 | **AE-R3** 항등식 분해 산출 · **AE-R4** holdings/NAV 결손 시 `fallback_2leg` + data gap | 결손 0 대체 · 회귀/추정으로 관측 대체 | 시세·NAV·구성종목 → `etf_contribution_observation`(+`_member`) |
-| L2 공통요인 분해 (current) | 구성종목 변동을 시장·테마⊥·고유 leg로 **추정** | **AE-R5** leg 분해 산출, 관측(L1)과 분리 표기 | route 확정(라우터 소관) | L1 산출 + 벤치마크 → `constituent_decomposition_observation` |
-| 경로 라우터 (제안) | 잔차 z-score 캐스케이드 → route·scope 확정. **여기서 컨2 종료** | **AE-R6** 괴리 지배 → `flow_dominated` · **AE-R7** `z1 < k` → `market_explained` 종결, 이벤트 패스 없음 · **AE-R8** `z2 < k` → `theme_comove`(테마), 그 외 → `concentrated`(기여 상위 3 종목). 산식·k=2 → [항등식 spec](../specs/etf-identity-decomposition.md) | 이벤트 조회 · **방향 적합성 판정** · 하류의 route/scope 재계산 | L1·L2 관측 → `explanation_route`(+`scope_targets[]`·`z1`·`z2`) |
+ETF 수익률에서 설명되는 요인을 **바깥에서 안으로** 차례로 걷어낸다. 각 단계는 "걷어내고 남은 값이 통계적으로 유의하게 크냐(표준편차의 2배 이상)"로 그 움직임의 **성격(경로)**을 정한다. 어느 경로로 판정되든 이후 동적 분석기로 넘어가며, 경로는 설명 범위(scope)만 바꾼다.
 
-### 5.2 동작 — 런타임 흐름
+```
+r0 = ETF 수익률
 
-```mermaid
-flowchart TD
-    L0{"총량 게이트 발화? (L0)"} -->|미발화| DONE["normal_range — 가격 중심 설명으로 종료"]
-    L0 -->|발화| L1["구성종목 기여·괴리·환율로 실제 분해 (L1 항등식)"]
-    L1 -->|입력 깨짐| FB["fallback_2leg — 2-leg 강등 + data gap"]
-    L1 -->|Δ괴리 기여 지배| FLOW["flow_dominated — 괴리·수급 설명으로 종료"]
-    L1 --> L2["공통요인 분해 (L2: 시장·테마⊥·고유)"]
-    L2 --> RT{"잔차 z-score 캐스케이드 (k=2)"}
-    RT -->|"z1 < k — 시장이 설명"| MKT["market_explained — 가격·시장 요인 설명으로 종료"]
-    RT -->|"z2 < k — 테마⊥가 설명"| T["theme_comove — scope = 테마"]
-    RT -->|"둘 다 특이"| C["concentrated — scope = 기여 상위 3 종목"]
-    DONE --> MART[("explanation_route + scope → Analysis Mart")]
-    FLOW --> MART
-    MKT --> MART
-    C --> MART
-    T --> MART
-    FB --> MART
+1) 시장 걷어내기
+   r1 = r0 − βm·rm − am
+   |r1|/σ(r1) < 2  → 시장으로 설명됨 (경로 = 시장)
+   그 이상          → 다음 단계
+
+2) 업종(피어) 걷어내기 — 단, 시장과 직교시킨 피어만
+   r2 = r1 − β⊥p·r⊥p − a⊥p
+   |r2|/σ(r2) < 2  → 업종으로 설명됨 (경로 = 테마)
+   그 이상          → 고유 움직임 (경로 = 개별 / concentrated)
+
+   r⊥p = (w1·p1 + w2·p2 + w3·p3) − βnm·rnm − anm
+        = 상위 3개 피어의 가중 수익률에서 시장 요인을 다시 걷어낸 값
 ```
 
-**동작 서술.** 매일 장 마감 후 `(market, etf, trade_date)`마다 한 번 돈다. R(타입 라우터)이 `etf_reference`에서 유형을 읽어 분해 템플릿을 고르고, L0(이상 게이트)이 오늘 움직임이 설명 대상인지 판정한다 — 조용하면 `normal_range` 기록만 남기고 그날 컨2는 끝난다. 발화하면 L1(항등식 분해)이 시세·NAV·구성종목으로 항등식을 실제 계산해 기여·괴리·환율 관측을 만든다. holdings/NAV가 비어 있으면 이 시점에 `fallback_2leg`로 강등되고 gap이 기록된다. Δ괴리 기여가 지배적이면 수급 설명으로 종결되고(`flow_dominated`), 아니면 L2(공통요인 분해)가 구성종목 변동을 시장·테마⊥·고유 leg로 쪼갠다. 경로 라우터는 이 위에서 **잔차 z-score 캐스케이드**를 돈다: 시장 제거 후 잔차가 평상 범위(`z1 < k`)면 `market_explained` 종결, 테마⊥까지 제거해 평상 범위(`z2 < k`)면 `theme_comove`(scope=테마), 그래도 특이하면 `concentrated`(scope=기여 상위 3 종목)를 `explanation_route`에 기록한다. 여기까지 컨2가 만진 데이터는 전부 가격 축이다 — 이벤트는 존재조차 모른 채 하루가 끝난다.
+- **피어 정의** — 같은 시장 안에서 상관관계가 가장 높은 상위 3개 종목이면서 GICS 소분류가 같은 종목. 회귀 계수는 과거 126일로 적합한다(같은 업종 강제 + 126일이 표본 밖 설명력을 유의하게 높인다는 게 검증됐다).
+- **왜 피어를 시장과 직교시키나** — 시장과 피어 수익률을 직교시키지 않고 따로 설명하면, 시장 때문에 생긴 피어 동조가 뭉개져 "시장 탓인지 업종 탓인지"가 흐려진다. 그래서 시장을 걷어낸 뒤의 피어 설명 범위만 본다. (대안으로 둘을 직교시키지 않는 안을 검토했으나 이 모호함 때문에 채택하지 않았다.)
+- **현재 제외** — 해외 주식이 한국 주식에 주는 영향은 지금은 배제한다(향후 확장, §12).
 
-## 6. Explanation Engine (컨테이너 3)
+### 4.3 경로(route)와 분석 대상(scope)
 
-### 6.1 정적 — 컴포넌트 (C4 L3)
+경로는 그 움직임의 **성격**과 설명의 **범위(scope)**를 정한다. 어느 경로든 동적 분석기로 넘어간다 — 경로는 무엇을 주장할지를 정할 뿐, 분석을 켜고 끄지 않는다.
+
+| 경로 | 성격 | 설명 범위(scope) |
+|---|---|---|
+| 시장 | 시장 요인이 움직임을 대부분 설명 | 시장 수준 서술 |
+| 테마 | 시장 걷어낸 뒤 업종(피어)이 설명 | 테마/피어 |
+| 개별 | 시장·업종으로도 안 남는 큰 잔차 | 그 소수 종목 |
+
+경로와 무관하게 동적 분석기가 실행되고, 초기 컨텍스트는 경로로 제한하지 않는다(적재 규칙은 §5.2). 경로는 설명이 어느 범위를 주장하는지만 바꾼다.
+
+> **향후 확장(정적 분석기)** — 아래는 아직 만들지 않은 실험 항목이다: 반복 패턴을 찾아 메커니즘으로 플래그화, 설명력 수치의 결과 정리·전달, 다중요인 PCA 회귀·파마-프렌치 팩터가 정상 수익률 설명력을 더 높여 에이전트 분석 범위를 줄여 주는지 실험. 동적 분석기 확장과 달리 별도 문서로 빼지 않고 여기 목록으로만 둔다.
+
+---
+
+## 5. 동적 분석기 (Dynamic Analysis Engine) — 현재 버전(V0)
+
+정적 분석기가 정한 경로·scope와 컨텍스트를 받아, 사건 색인을 조회해 **왜 그렇게 움직였는지**를 만든다. 시장·테마·개별 어느 경로든 실행되며, 다른 것은 scope와 컨텍스트의 넓이뿐이다. 현재 버전은 한 번 훑고 설명을 내는 단순한 에이전트다.
+
+### 5.1 컴포넌트 (C4 L3)
 
 ```mermaid
+%%{init:{"flowchart":{"defaultRenderer":"elk","curve":"linear"},"theme":"base","themeVariables":{"lineColor":"#1168bd","textColor":"#333333","fontSize":"14px"},"elk":{"edgeRouting":"ORTHOGONAL","nodePlacementStrategy":"BRANDES_KOEPF","mergeEdges":false,"ranksep":90,"nodeSpacing":55}}}%%
 flowchart TB
+    accTitle: 동적 분석기 V0 컴포넌트 (C4 L3)
+    accDescr: 컨텍스트 로더가 분석 마트를 읽어 에이전트에 넘기고 에이전트가 설명 기초를 만들어 탐색 저장소에 남긴다
     classDef component fill:#85bbf0,stroke:#5d82a8,color:#000
     classDef database fill:#438dd5,stroke:#2e6295,color:#fff
 
-    MART[("Analysis Mart<br/>라우트·기여·분해")]:::database
-    IDX[("사건 색인 — 컨1 생산<br/>canonical_event·evidence·thread")]:::database
-
-    subgraph EE["Explanation Engine · 컨테이너 3 — 설명 에이전트"]
-        CTX("컨텍스트 로더<br/>route·scope·기여·분해 로드"):::component
-        A("novelty 기준선 A"):::component
-        B("이벤트 수집 B<br/>scope 시드 + 자유 조회"):::component
-        E("중요도 E<br/>scope 소속·규모·완결성"):::component
-        G("설명 합성 L4·G<br/>서술·신뢰도·체크포인트"):::component
-        CTX ==> A ==> B ==> E ==> G
+    MART[("<b>Analysis Mart</b><br/>[Database]")]:::database
+    subgraph C["3. 동적 분석기 · L3 (V0)"]
+        LOADER("<b>컨텍스트 로더</b><br/>[Component]<br/>경로·대상·기본 맥락 로드"):::component
+        AGENT("<b>에이전트 워크플로</b><br/>[Component]<br/>맥락+목표 → LLM → 설명 초안"):::component
+        REGIME("<b>설명 기초 레짐</b><br/>[Component]<br/>서술 선택 · 척도 바인드"):::component
+        LOADER ==> AGENT ==> REGIME
     end
-
-    STORE[("Explanation Store<br/>게시된 최종 설명")]:::database
-
-    MART --> CTX
-    IDX --> A
-    IDX -.->|자유 조회 · PIT 내| B
-    G --> STORE
+    STORE[("<b>Exploration Store</b><br/>[Database]")]:::database
+    MART --> LOADER
+    REGIME --> STORE
 ```
 
-컨텍스트 로더 → A(novelty) → B(수집) → E(중요도) → G·L4(합성). 구 F(이벤트-가격 정합성 검사)는 **재설계로 제거**(방향 불검증 원칙). 기대 대비 차이(C)·영향 경로(D)는 소스 부재로 강등(§11). 최종 artifact는 컨테이너 4 Explanation API가 serving만 한다.
+### 5.2 무엇을 하나
 
-컴포넌트 계약 (블랙박스 수준 — 세부 판정·artifact 형식은 소유 spec, 시스템 검증은 §12):
+에이전트는 세 가지를 입력받아 한 번의 분석으로 설명 초안을 만든다:
 
-| 컴포넌트 | 역할 | 요구 동작 | 금지 | 입력 → 출력 |
-|---|---|---|---|---|
-| 컨텍스트 로더 (current) | `(…, asof)` 설명 요청의 분기점(route·scope) 고정 | **EE-R1** route·scope·기여·분해 로드 | route·scope 재계산·재해석 | mart → 실행 컨텍스트 |
-| A novelty 기준선 (current) | 후보가 신규/후속/재보도인지 판정 | **EE-R2** prior thread 기준 판정, thread 부재 시 미확정으로 유지 | consensus·기대치 추정 | `event_thread`·`canonical_event` → novelty 라벨 |
-| B 이벤트 수집 (current) | scope 시드 수집 + 색인 자유 조회 | **EE-R3** scope 연관 event를 `available_at ≤ asof` 창에서 수집 · **EE-R4** 맥락은 색인 자유 조회로 보강 | 원문 재파싱 · PIT 밖 조회 · **방향 적합성으로 채택/탈락** | scope + 사건 색인 → 후보 event 집합 |
-| E 중요도 (current) | 후보 서열화 | **EE-R5** scope 소속 확인 + 규모·완결성 서열화 | scope 밖 사건을 설명 대상으로 승격 | 후보 + holdings·disclosure fact → surviving 후보 |
-| G·L4 합성 (current) | 최종 문장·신뢰도·체크포인트 | **EE-R6** 관측/추정/가설 분리 서술 · **EE-R7** 무브보다 늦은 공개는 원인 서술 금지(사후 보도 표기) · **EE-R8** 후보 없으면 `유의하나 미설명`으로 종료 | 서사 보강 · 확정 원인 단정 | surviving + `event_evidence` → 설명 artifact |
+- **정적 분석 맥락** — 항등식·공통요인 분해 결과와 경로·scope.
+- **목표(Goal)** — 오늘 이 ETF의 움직임을 설명하라.
+- **시스템 맥락(System Context)** — 규칙·말투·금지사항.
 
-### 6.2 동작 — 런타임 흐름
+**초기 컨텍스트 적재 규칙** — 경로로 범위를 좁히지 않는다. 컨텍스트 로더는 언제나 다음을 넣는다:
+
+- **시장** 맥락(그날 시장 요인).
+- **테마** 맥락(관련 업종·피어).
+- **주요 ETF에 0.3% 이상 기여한 구성종목**의 **개별종목 사건 스레드**(그 종목의 최근 이벤트 계보).
+
+경로(시장/테마/개별)는 이 컨텍스트 위에서 **무엇을 주장할지의 범위(scope)**만 바꾼다 — 시장 경로라고 개별종목 스레드를 빼지 않는다. 이 셋을 LLM(현재 DeepSeek)에 넣어 **동적 분석 맥락**(설명 초안)을 얻고, 설명 기초 레짐이 서술을 다듬어 저장한다.
+
+> **확장(V1)은 여기 없다** — 에이전트를 "가설 → 실험 → 검증 → 리뷰" 연구 루프로 키우고, 과거 사건·시계열을 직접 질의하는 도구를 붙이는 확장은 [제안 0004 — 동적 분석기 확장](../proposals/0004-dynamic-analyzer-extension.md)에서 다룬다.
+
+---
+
+## 6. 수집 (Data Ingestion) · 뉴스 정규화
+
+외부 원천을 원장으로 적재하고, 뉴스·공시를 **정규 이벤트와 스레드**로 상시 승격한다. 시세·NAV·구성종목은 그대로 보존해 정적 분석기의 입력이 된다.
+
+### 6.1 컴포넌트 (C4 L3)
+
+```mermaid
+%%{init:{"flowchart":{"defaultRenderer":"elk","curve":"linear"},"theme":"base","themeVariables":{"lineColor":"#1168bd","textColor":"#333333","fontSize":"14px"},"elk":{"edgeRouting":"ORTHOGONAL","nodePlacementStrategy":"BRANDES_KOEPF","mergeEdges":false,"ranksep":90,"nodeSpacing":55}}}%%
+flowchart TB
+    accTitle: 수집 컴포넌트 (C4 L3)
+    accDescr: 뉴스·공시·시세 레인과 사건 색인이 정규화된 원장에 적재한다
+    classDef component fill:#85bbf0,stroke:#5d82a8,color:#000
+    classDef database fill:#438dd5,stroke:#2e6295,color:#fff
+
+    subgraph C["1. 수집 · L3"]
+        NL("<b>뉴스 레인</b><br/>[Component]<br/>수집·중복제거·링크"):::component
+        DL("<b>공시 레인</b><br/>[Component]<br/>원문 파싱·문서 레이크"):::component
+        ML("<b>시세 레인</b><br/>[Component]<br/>시세·NAV·구성종목 보존"):::component
+        IDX("<b>사건 색인</b><br/>[Component]<br/>정규 이벤트·근거·스레드"):::component
+        NL ==> IDX
+        DL ==> IDX
+    end
+    LEDGER[("<b>Normalized Ledger</b><br/>[Database]")]:::database
+    NL --> LEDGER
+    DL --> LEDGER
+    ML --> LEDGER
+    IDX --> LEDGER
+```
+
+### 6.2 뉴스 정규화 (v3) — 런타임 흐름
+
+뉴스 한 건을 정규 이벤트로 만드는 흐름이다. 값싼 분류로 먼저 거르고, 사건인 것만 비싼 LLM 추출에 넘긴 뒤, 결과를 규칙으로 검증해 확정한다.
 
 ```mermaid
 flowchart TD
-    CTX["route·scope·기여·분해 로드 (컨텍스트 로더)"] --> P{"route가 이벤트 패스를 여는가?"}
-    P -->|"종결 route (normal/flow/market_explained/fallback)"| PO["가격·요인·괴리 중심 설명 — 이벤트 생략"]
-    P -->|"concentrated · theme_comove"| A["신규/후속/재보도 판정 (A. novelty)"]
-    A --> B["scope 시드로 후보 수집 + 색인 자유 조회 (B)"]
-    B --> E1["scope 소속·규모·완결성 (E)"]
-    E1 --> G["최종 문장·신뢰도·주의사항 (L4·G)"]
-    PO --> G
-    G --> API["설명 결과 API 게시 (Explanation API)"]
+    A["기사 리드 3문장 로드"] --> G{"BERT 4진 분류<br/>사건 보도인가?"}
+    G -->|"분석·시황·홍보"| DROP["탈락 (사건 아님)"]
+    G -->|"사건 (신뢰도 통과)"| EX["LLM 추출<br/>타입 + 개체 + 수치"]
+    G -->|"경계값"| RE["LLM 재판정"]
+    RE --> EX
+    EX -->|"신뢰도 낮음"| RQ["리뷰 큐 (사람 확인)"]
+    EX --> SPAN["스팬 검증<br/>멘션·수치가 원문에 실제 있나"]
+    SPAN --> MAP["개체 매핑<br/>이름 → 종목 id"]
+    MAP --> COMP{"필수 역할 다 찼나?"}
+    COMP -->|"예"| NOV["신규성 판정<br/>(첫 보도·후속·재보도)"]
+    COMP -->|"아니오"| UNK["UNKNOWN 보류"]
+    NOV --> T[("정규 이벤트 · 스레드")]
 ```
 
-**동작 서술.** 설명 요청 `(market, etf, trade_date, asof)`이 오면 컨텍스트 로더가 그날의 `explanation_route`·scope·기여·분해를 읽어 분기점을 고정한다 — 첫 분기는 route의 재확인일 뿐 재계산이 아니다. 종결 route면 에이전트는 가격·요인·괴리 숫자만으로 문장을 만들고 끝난다. 이벤트 패스가 열린 날은: A(novelty)가 scope 연관 thread 이력으로 오늘 후보들이 신규인지 후속·재보도인지 기준선을 잡고, B(수집)가 scope 시드로 `available_at ≤ asof` 창에서 `canonical_event`를 모은다 — 맥락이 더 필요하면 색인을 자유 조회하되 원문으로는 내려가지 않는다. E(중요도)가 scope 소속과 규모·완결성으로 서열화하고, G·L4(합성)가 살아남은 후보를 관측(숫자)·추정(leg)·가설(사건)로 분리해 문장·신뢰도·checkpoint로 합성한다. 움직임보다 늦게 공개된 사건은 사후 보도로만 표기되고, 살아남은 후보가 없으면 `유의하나 미설명`이 그대로 출력된다.
+- **BERT 4진 분류** — 리드 3문장을 넷 중 하나로 나눈다: 사건 보도 / 분석·전망·해설 / 시황·시세 / 홍보·광고. 사건 보도만, 그것도 확신이 충분할 때(1등 확률과 2등과의 격차가 기준 이상)만 통과시킨다. 애매하면 LLM에 다시 물어본다.
+- **LLM 추출** — 사건으로 통과한 기사에서 **이벤트 타입·관련 개체·수치**를 뽑는다.
+- **규칙 검증(조립)** — 모델이 뽑은 멘션·수치가 원문에 실제로 있는지 문자열로 대조하고(없으면 그 인자만 버린다), 개체 이름을 종목 id로 매핑하고, 그 타입이 요구하는 필수 역할이 다 찼는지 본다.
+- **스레딩** — 필수 역할이 차면 같은 사건 계보(스레드)에 잇고 이 보도가 첫 보도인지·후속인지·단순 재보도인지 판정한다. 못 차면 `UNKNOWN`으로 보류한다. (신규성 판정 규칙의 정밀 계약은 [스레드 타입](../specs/data/thread-types.md).)
+- **정본(SSOT)** — 요구 필드는 온톨로지 리소스가 소유한다: 역할은 `event_type_profiles`, 수치 피처는 `feature_specs`, 스레드 식별은 `news_thread_contract`. 프롬프트도 여기서 기계로 생성해 검증과 같은 출처를 쓴다.
 
-## 7. explanation_route — 실행 스위치
+---
 
-route는 라벨이 아니라 "여기서 끝내도 되는가, 열리면 어느 scope를 보는가"를 고정하는 스위치다. 라우터는 scope 확정까지만 책임진다.
+## 7. 이벤트 타입 체계 (Event Taxonomy)
 
-| route | 뜻 | scope | 하류 호출 |
-|---|---|---|---|
-| `normal_range` | 총량 게이트 조용(`l0_entry` 미발화) | — | 없음 — price-only 종료 |
-| `flow_dominated` | Δ괴리 기여 지배(수급·유동성 우선) | — | 없음 — 괴리·수급 설명 종료 |
-| `market_explained` | 시장 공통요인이 변동을 설명 | — | 없음 — 가격·시장 요인 설명 종료 |
-| `theme_comove` | 시장 미설명 + 테마⊥가 설명(`z2 < k`) | 테마 | 설명 에이전트 이벤트 패스 |
-| `concentrated` | 시장·테마⊥ 모두 미설명 — 잔차 특이 | 기여 상위 3 종목 | 설명 에이전트 이벤트 패스 |
-| `fallback_2leg` | holdings/NAV 결손 | — | 2-leg 강등 + data gap 고지 |
+뉴스·공시가 주장하는 사건을 정해진 타입으로만 라벨링한다(모델이 라벨을 지어내지 못하게). 현재 체계는 **6개 대분류 · 44개 세부 타입**이다.
 
-`market_explained`·`theme_comove`는 구 `common_factor`의 분화(제안 이름 — §13). `scope_targets[]`는 구 `l3_targets`를 대체한다.
+| 대분류 | 세부 타입 수 | 예 |
+|---|---:|---|
+| 기업(Company) | 24 | 실적 발표, 계약 체결, 인수·합병, 제품 출시, 임원 변경 |
+| 매크로(Macro) | 7 | 기준금리 결정, 물가 발표, GDP 발표 |
+| 산업(Industry) | 5 | 공급능력 변화, 수요 변화, 원자재 가격 변화 |
+| 정책·규제(Policy) | 7 | 규제 변경, 관세 변경, 제재 부과 |
+| 외생(Exogenous) | 6 | 재해, 사고·운영 중단, 분쟁 |
+| 시장구조·정보(Market) | 6 | 애널리스트 등급 변경, 지수 편입·편출, 거래정지 |
 
-## 8. 모듈 책임
+- 각 타입은 **허용 술어**(예: ISSUE, RAISE, MAINTAIN)와 **필수 개체**(예: ISSUER, TARGET_COMPANY)를 갖고, 일부 타입은 **STAGE**(예정→확정처럼 여러 단계로 진행)를 갖는다.
+- 정밀 카탈로그(타입별 역할·술어·lifecycle·투영)는 [뉴스 온톨로지 타입](../specs/data/news-ontology-types.md)이 소유한다.
 
-| 컨테이너 | 모듈 | 책임 | 상태 |
-|---|---|---|---|
-| 1 | 사건 색인 (Event Intelligence) | 뉴스 envelope·공시 lake → `canonical_event`·`event_evidence`·`event_thread` 상시 생산, 교차소스 정합 | current — 컨2에서 이관(2026-07-20) |
-| 2 | ETF Identity | ETF 유형 판정·이상 게이트·항등식 분해·성격 판정·scope 라우팅. **여기서 역할 종료** | 제안 |
-| 2 | Price Attribution | L2 공통요인 분해(시장·테마⊥·고유) — 라우팅 판정 입력 | current (event-price 검증 제거) |
-| 2 | Analysis Mart handoff | route·기여·분해를 저장가능 artifact로 고정, 컨3 소비 경계 제공 | current+제안 |
-| 3 | 컨텍스트 로더 | route·scope·기여·분해 로드, 오늘 분기점 고정 (재계산 금지) | current |
-| 3 | novelty 기준선 A | prior thread·event로 신규/후속/재보도 판정 (consensus 추정 금지) | current |
-| 3 | 이벤트 수집 B | scope 시드 수집 + 색인 자유 조회(PIT 내, 원문 재파싱 금지) | current — 의미 변경 |
-| 3 | 중요도 E | event 엔티티의 scope 소속 확인 + 규모·완결성 | current |
-| 3 | 합성 G·L4 | surviving·caveat·confidence를 checkpoint·문장으로, 선후·미설명 정직 표기 | current |
+> **알려진 드리프트** — 이 표(44타입/6분류)는 본 아키텍처 원본 기준이다. 저장소의 [뉴스 온톨로지 카탈로그](../specs/data/news-ontology-types.md)는 `event_type_profiles_v0_1.json`(53타입/7패밀리)을 정본으로 삼는다. 두 수치가 다른 것은 스냅샷 세대 차이다 — 통일은 온톨로지 소유자 결정 안건(§12).
 
-## 9. 설계 원칙·결합 규칙
+---
 
-- **관측 / 추정 / 가설 분리** — L1 기여·괴리는 관측, L2 leg 분해는 추정, 이벤트 해석은 가설. 한 문장에 섞어 "관측된 움직임 = 확정 원인"으로 쓰지 않는다(L4 규율).
-- **방향 불검증** — 이벤트-가격 방향·타이밍 적합성을 판정하는 단계는 시스템 어디에도 없다. scope 안의 반대 방향 함의 사건도 수집될 수 있으며, 방어선은 관측/가설 분리와 honest unknown(EE-R6·R8)이다.
-- **precedence (서술 규율)** — 같은 thread의 최초 `available_at`이 선후 기준. 늦은 확인 공시가 먼저 나온 뉴스를 사후 보도로 오판하지 않는다. 움직임보다 늦게 공개된 사건은 원인 후보로 서술하지 않는다(EE-R7). 검증 파이프라인이 아니라 L4 서술 규율이다.
-- **교차소스 정합** — 같은 사건이 뉴스·공시에 나오면 source-neutral 같은 thread로 귀속(이중 계산 방지). 시점·최초성=최초 소스, 규모·상대방·계약기간=공시 권위. 컨1 사건 색인 소관 — 판정 알고리즘 상세는 [스레드 타입](../specs/data/thread-types.md) 소유.
-- **honest unknown** — scope에서 설명 후보를 찾지 못하면 억지로 고르지 않고 `유의하나 미설명`·`정상 변동 범위`로 종료. 서사 보강 금지.
-- **결합 authority** — 설명 에이전트 입력은 원문이 아니라 `canonical_event`+`event_evidence`+`event_thread`. 조인 축은 `event_id`+scope 엔티티+`available_at` 창. `dedup_cluster_id`는 seed일 뿐 조인·판정 키 아님.
-- **자유 조회 경계** — 에이전트의 조회 자유는 사건 색인·mart 산출물에 한정되고 `available_at ≤ asof`를 넘지 않는다. scope는 **설명 대상**을 고정하고, 조회는 맥락 확보 수단이다.
-- **데이터 이름 = 요구사항** — 설계 문서의 데이터 이름은 논리 계약이다([문서 작성 규칙](../README.md)). 물리 배치는 계약/스펙이 소유한다.
+## 8. 설명 API (Explanation API)
 
-## 10. Handoff 데이터 계약
+완성된 설명을 증권사 MTS에 게시한다. **판단을 다시 하지 않는 읽기 전용** 경계다 — 이미 저장된 설명을 그대로 내보낸다. 최종 화면은 ETF 등락률, 시장 대비 초과분, 기여 상위 종목, 핵심 원인 한 문단, 그리고 "아직 설명되지 않은 부분 몇 %"까지 사람이 읽을 수 있는 형태로 보여준다.
 
-수집 → 분석 → 설명 → API 최소 계약(빠른 조회용; grain·산식 세부는 소유 spec).
+---
 
-| 데이터 | grain | 생산 → 소비 | 상태 |
-|---|---|---|---|
-| `explanation_route` (+`scope_targets[]`) | (market, etf, trade_date) | ETF Identity → Explanation | 제안 |
-| `etf_contribution_observation` | (market, etf, trade_date) | ETF Identity(L1) → 라우팅 / Explanation / L4 | 제안 |
-| `etf_contribution_member` | (…, constituent) | ETF Identity(L1) → 라우팅(집중 판정) / Explanation | 제안 |
-| `constituent_decomposition_observation` | (market, constituent, trade_date) | Price Attribution(L2) → 라우팅(시장 설명 판정) / Explanation | 제안 |
-| `canonical_event` | event 1건 | 사건 색인(컨1) → Explanation(A·B·E) | current |
-| `event_evidence` | evidence 1건 | 사건 색인(컨1) → Explanation(A·B·G) | current |
-| `event_thread` / `_link` / `thread_discovery_snapshot` | thread / event 1건 | 사건 색인(컨1) → Explanation(A) | current, 일부 persistence `[INFERENCE]` |
-| disclosure fact (`dart_supply_contract_fact` 등) | fact 1건 | 공시 파이프라인 → Explanation(E) | current |
-| 최종 설명 artifact | (market, etf, trade_date, asof) | Explanation → Explanation API | 제안 |
+## 9. 런타임 — 하루가 어떻게 설명되나
 
-**폐기 (2026-07-20 재설계 — 생산 단계 소멸)**: `event_price_window` / `event_price_observation` / `event_confounder_link` / `hq_market_bridge` / `response_prior` — P5–P7 제거로 생산자 부재. 기존 산출물은 lineage 보존용으로만 남기고 신규 생산·소비 금지.
+정적 분석기부터 최종 설명까지의 한 흐름. 앞부분(게이트·분해)은 코드만으로 돌고, 이상 게이트만 통과하면 경로와 무관하게 동적 분석기(LLM)가 열린다 — 경로는 설명 범위(scope)만 바꾼다.
 
-## 11. 강등·fallback
+```mermaid
+flowchart TD
+    S["그날 ETF 수익률 로드"] --> L0{"이상 게이트<br/>|변동| ≥ 3%?"}
+    L0 -->|"아니오"| STOP["설명 안 만듦"]
+    L0 -->|"예"| L1["항등식 분해<br/>어느 종목이 움직였나"]
+    L1 --> L2["공통요인 분해<br/>경로·scope 확정<br/>(시장 / 테마 / 개별)"]
+    L2 --> CTX["컨텍스트 적재<br/>시장 + 테마 + 0.3%↑ 기여 종목 스레드"]
+    CTX --> EP["동적 분석기 에피소드<br/>(경로 무관 실행)"]
+    EP --> E1["① 관련 사건 찾기<br/>(개장 전~당일)"]
+    E1 --> E2["② 핵심 사건 자세히 보기"]
+    E2 --> E3["③ 결론 정리<br/>원인 · 참고 · 남은 %"]
+    E3 --> OUT[("최종 설명 → 게시")]
+```
 
-- **C. 기대 대비 차이** — analyst consensus·priced-in baseline 부재로 강등 → [제안 0003](../proposals/0003-market-expectation.md).
-- **D. 영향 경로** — 다중홉 관계 그래프 미운영, 직접 membership 단일 홉으로 단순화 → [제안 0002](../proposals/0002-relationship-graph.md). ETF→설명단위→event **2홉 캡** 강제.
-- **fallback_2leg** — 구성종목/NAV 결손 시 price-only + 강등 사실·data gap 고지. 실패를 0 대체로 숨기지 않는다.
+**예시 (KODEX 2차전지, 2026-07-09, ETF +4.6% / KOSPI +0.8%)**
 
-## 12. 검증 (baseline 계약)
+1. **이상 게이트** — ETF +4.6%로 3% 초과 → 분석 시작.
+2. **항등식 분해** — 에코프로비엠 +11.2%(ETF 기여 +1.10%p), 삼성SDI +6.9%(+0.59%p). 움직임이 2개 종목에 집중 → 분석 대상 확정.
+3. **공통요인 분해** — 에코프로비엠은 시장 +0.9%·섹터 +2.1%로 걷어내도 **+8.2%가 유의하게 남음**(경로 = 개별). 삼성SDI는 섹터로 설명됨(경로 = 테마). 두 종목 모두 0.3% 이상 기여 → 컨텍스트에 두 종목 스레드 + 시장·테마 적재.
+4. **동적 분석기** — (경로 무관 실행, 주장 scope는 에코프로비엠 잔차) ① 최근 사건 조회: 08:31 공시된 1.2조 공급계약(첫 공개), 09:05 같은 내용 뉴스, 14:40 목표주가 상향(뒤늦은 소식). ② 핵심 사건(공급계약) 상세: 금액 1.2조, 연매출의 21%, 과거 최대 계약의 3배 → 시장이 예상 못한 큰 계약. ③ 결론: 남은 +8.2%의 주요 원인 = 개장 전 공급계약. 삼성SDI는 섹터 상승으로 설명. 목표주가 상향은 상승 **이후**라 원인이 아니라 참고. 남은 미설명 약 8%.
+5. **게시** — "시장보다 크게 오른 날, 대부분이 2개 종목에 집중, 핵심 원인은 개장 전 공급계약"을 한 문단으로 MTS에 게시.
 
-- **PIT 재현** — 동일 `(market, etf_ticker, trade_date, asof)`에서 동일 route·동일 설명 artifact. 자유 조회를 포함해도 성립해야 한다(§9 자유 조회 경계).
-- **route 게이트** — 종결 route(`normal_range`·`flow_dominated`·`market_explained`·`fallback_2leg`) 날의 설명 에이전트 이벤트 소비 0건, artifact 이벤트 서사 0건(AE-R7·EE-R1 계열).
-- **scope 인용 경계** — 최종 artifact가 인용한 사건의 scope 연관 100%(EE-R5). 자유 조회는 맥락 확보 수단이지 인용 승격 경로가 아니다.
-- **방향 불검증** — 컨2 산출물과 설명 에이전트 입력 계약에 이벤트-가격 방향·타이밍 정합 필드가 존재하지 않는다(§9 방향 불검증). 폐기 계약(§10) 신규 생산 0건.
-- **handoff 최소성** — 설명 에이전트가 원문 재파싱 없이 `explanation_route`(+scope)와 사건 색인만으로 시작 가능(EE-R3·EE-R4).
-- **precedence / honest-unknown** — 무브보다 늦게 공개된 사건의 원인 서술 0건(EE-R7), surviving 없으면 `유의하나 미설명` 실제 출력(EE-R8).
-- **기준 라벨 벤치** — 라우터 판정은 [route 정답 라벨](../specs/route-ground-truth.md)("그날 가장 중요한 이슈가 시장/테마/개별 어디였나")과의 혼동행렬로 실측한다. 임계·route 설계 변경의 판정 기준 (2026-07-20 결정).
+---
 
-## 13. Open questions
+## 10. 설계 원칙
 
-**해소 (2026-07-20)**: 구 Q9 재설계 3문항 — ① event-price 정합검증은 P5–P7·F 포함 전면 제거. ② route 게이트는 시장 설명 시 종결, scope 대상은 {top3 구성종목, 테마}. ③ 사건 색인은 컨1 이관·상시 생산, 설명 에이전트는 자유 조회. 구 Q3(공시 P5 fan-out)·Q5(`response_prior` 소비)는 해당 기계 폐기로 무효.
+- **가격 먼저 / 경로가 범위를 정한다** — §1의 두 원칙. 가격 분해가 경로·scope를 정하고, 경로는 주장 범위만 바꿀 뿐 동적 분석기를 켜고 끄지 않는다.
+- **관측 · 추정 · 가설을 섞지 않는다** — 항등식 기여는 관측, 공통요인 분해는 추정, 사건 해석은 가설이다. 한 문장에서 뭉쳐 "관측된 움직임 = 확정 원인"으로 쓰지 않는다.
+- **방향 불검증 + 정직한 모름** — 사건과 가격의 인과 방향을 판정하지 않는다. 모르는 부분은 "약 N% 남음"처럼 드러낸다.
+- **같은 입력이면 같은 결과(PIT 재현)** — 같은 `(종목·거래일·기준시점)`이면 같은 경로·같은 설명. 과거를 나중 값으로 덮지 않는다.
 
-남은 질문:
+---
 
-1. 컨2 내부 실행 스케줄링 — 컨1 색인과 컨2 가격 축이 분리 실행되므로, 컨2 단일 DAG의 트리거·cut-off만 확정하면 되는가.
-2. 시장 설명 판정(AE-R7)에 L2 전체 분해가 필요한가, market leg만의 경량 계산으로 충분한가 — 판별력·임계는 [route 정답 라벨](../specs/route-ground-truth.md) 벤치로 실측해 결정.
-3. `event_thread*` 물리 저장소 확정(JSONL producer 이후 warehouse persistence 마감 위치).
-4. 교차소스 2차 부분일치 임계·review 회부 기준, 교차소스 확인을 `novelty_status` 확장 vs 별도 `link_kind` — 컨1 색인 소관으로 이관.
-5. §9 threading 잔여 파라미터 — `CORRECTION` 권위 숫자 임계, `TYPE_UNCERTAIN` 기준, anchor role 마킹.
-6. Explanation Store artifact 형식(문단+checkpoint vs 구조화 카드), 복수 통과 후보의 L4 우선순위, intraday refresh `asof` cadence.
-7. 사건 색인 저장 경계 — Analysis Mart 이벤트 축 유지 vs 컨1 산출물로서 Ledger 쪽 승격.
-8. 자유 조회의 인용 경계 — scope 밖 조회 결과를 최종 artifact에 맥락으로 인용 가능한가, 근거로는 금지인가(현재 계약: 대상 확정은 scope 내, EE-R5).
-9. route enum 이름 확정 — `market_explained`·`theme_comove`(제안)와 `scope_targets[]` 명명.
+## 11. 검증 (베이스라인 계약)
 
-## 14. 통합된 원본 / 참고
+- **PIT 재현** — 같은 `(시장, ETF 티커, 거래일, 기준시점)`에서 같은 경로·같은 설명이 나온다.
+- **경로 무관 실행 · 컨텍스트 규칙** — 모든 경로에서 동적 분석기가 실행되고, 초기 컨텍스트에는 시장·테마 + 그날 ETF에 0.3% 이상 기여한 구성종목의 개별종목 스레드가 빠짐없이 포함된다.
+- **정규화 스팬 검증** — 정규 이벤트의 모든 멘션·수치는 원문에 실제로 존재한다(지어낸 인자 0건).
+- **타입 구속** — 온톨로지 밖 타입은 통과하지 못한다(모델이 라벨을 발명하면 사유와 함께 탈락).
 
-- 이 문서로 통합·간소화된 원본: `design/analysis-engine.md`(컨2), `design/explanation-engine.md`(컨3). **§7 O6 threading 결정 알고리즘**(thread_key 직렬화·해시·흡수/분리·novelty 캐스케이드)은 미포함 → [스레드 타입](../specs/data/thread-types.md) 이관 후 원본 제거할 것(이관 전 삭제 시 유실).
-- 사건 색인(구 Event Intelligence) 상세는 컨1 이관에 따라 [data-ingestion.md](data-ingestion.md)와 [뉴스 ontology](../specs/data/news-ontology-types.md)·[스레드](../specs/data/thread-types.md)가 소유.
-- 수집(컨1): [data-ingestion.md](data-ingestion.md)
-- 정밀 계약: [ETF 항등식 분해](../specs/etf-identity-decomposition.md) · [가격 분해 엔진](../specs/price-decomposition-engine.md) · [뉴스 ontology](../specs/data/news-ontology-types.md) · [스레드](../specs/data/thread-types.md) · [공시](../specs/data/disclosure-types.md) · [엔티티 마스터](../specs/data/entity-master.md)
-- 참조 데이터: [logical-erd.dbml](../reference/logical-erd.dbml)
-- 강등 제안: [0002 관계 그래프](../proposals/0002-relationship-graph.md) · [0003 시장 기대](../proposals/0003-market-expectation.md)
+---
+
+## 12. 열린 질문 / 알려진 드리프트
+
+- **타입 수 불일치** — 본 문서 44타입/6분류 vs. 온톨로지 카탈로그 53타입/7패밀리. 스냅샷 세대 차이 — 통일 시점은 온톨로지 소유자 결정.
+- **동적 분석기 V0 → V1** — 현재는 한 번 훑는 단순 에이전트. 연구 루프 확장은 [제안 0004](../proposals/0004-dynamic-analyzer-extension.md).
+- **해외 → 한국 영향** — 정적 분석기에서 현재 배제. 통합은 향후 확장.
+- **작업 우선순위(현재)** — 정리된 파이프라인의 코드 구현·검증, 최종 설명의 질적 판단 메트릭, 타입·요구필드·요구피처·허용값 검증, 이벤트 수치가 정해진 타입 밖 값을 가질 때의 리뷰 큐화.
+
+---
+
+## 13. 참고
+
+- 수집 내부 상세: [data-ingestion.md](data-ingestion.md)
+- 정밀 계약: [뉴스 온톨로지 타입](../specs/data/news-ontology-types.md) · [스레드 타입](../specs/data/thread-types.md)
+- 동적 분석기 확장(드래프트): [제안 0004](../proposals/0004-dynamic-analyzer-extension.md)
