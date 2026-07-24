@@ -78,9 +78,11 @@ class _FakeCursor:
             self._rows = [(a,) for a in conn.assembled_articles if a in wanted]
         elif upper.startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID"):
             # 자연키 해소 — 로더 선적재 행이 있으면 그 ID, 없으면 방금 넣은 후보 해시
-            # (조회된 source_code 기준 — 벤더별 자연키).
+            # (조회된 source_code 기준 — 벤더별 자연키). available_at 은 **문서 행 값**
+            # (ALPHA-538: 비계가 지역 published 가 아니라 이 값을 실어야 순서 무관).
             source_code, wanted = params[0], set(params[1])
-            self._rows = [(a, conn.doc_overrides.get(a, _stable_id("doc", source_code, a)))
+            self._rows = [(a, conn.doc_overrides.get(a, _stable_id("doc", source_code, a)),
+                           conn.doc_available_at)
                           for a in wanted]
         elif upper.startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self._rows = list(conn.assertion_rows)
@@ -129,6 +131,9 @@ class _FakeConn:
                                            ("999999", "inst_OTHER")]
         self.assembled_articles = set(assembled_articles)
         self.doc_overrides = doc_overrides or {}
+        # document.available_at 대역 — load-documents 선적재분은 fetched 기반이라 기사
+        # published(09:00+09)와 다를 수 있다. 구분되는 값으로 둬서 어느 시각이 실렸는지 잡는다.
+        self.doc_available_at = "2026-07-15T08:30:00+09:00"
         self.assertion_rows = assertion_rows
         self.prior_thread_counts = prior_thread_counts or {}
         # 사전 존재하는 미연결 이벤트 행: (source_event_id, event_type_code, available_at,
@@ -251,11 +256,12 @@ def test_lineage_lands_on_loader_written_document(tmp_path, monkeypatch):
 
 
 def test_assertion_insert_is_a_scaffold_without_owned_columns(tmp_path, monkeypatch):
-    """document_assertion 비계 계약(ALPHA-538) — 이 스텝은 공유 결정값(자연키 + document
-    파생 available_at)만 싣는다. confidence·lifecycle_stage 를 실으면 load-assertions 와
-    '먼저 쓴 쪽이 이기는' 순서 의존이 부활한다(소유자는 각각 tag-news 체인·event grain).
-    stage 가 event grain(source_event)에는 계속 실리는 것까지 함께 고정한다 — 소유권
-    이동이지 값의 삭제가 아니다."""
+    """document_assertion 비계 계약(ALPHA-538) — 이 스텝은 공유 결정값(자연키 + **문서 행**
+    available_at)만 싣는다. confidence·lifecycle_stage 를 실으면 load-assertions 와
+    '먼저 쓴 쪽이 이기는' 순서 의존이 부활하고(소유자는 각각 tag-news 체인·event grain),
+    available_at 을 지역 published 값으로 실으면 load-documents 선적재 문서(fetched 기반)
+    에서 같은 순서 의존이 남는다(Codex #243 P2). stage 가 event grain(source_event)에는
+    계속 실리는 것까지 함께 고정한다 — 소유권 이동이지 값의 삭제가 아니다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
@@ -272,7 +278,8 @@ def test_assertion_insert_is_a_scaffold_without_owned_columns(tmp_path, monkeypa
     [row] = _batch(conn, "document_assertion")
     [se] = _batch(conn, "source_event")
     assert row[:4] == (_stable_id("asrt", doc_id, _ETYPE, _PRED), doc_id, _ETYPE, _PRED)
-    assert len(row) == 5 and row[4] == se[6]  # available_at — 이벤트와 같은 document 파생값
+    # available_at = 문서 행 값(fetched 기반 대역) — 기사 published 로 만든 이벤트 시각과 다르다.
+    assert len(row) == 5 and row[4] == conn.doc_available_at and row[4] != se[6]
     assert len(se) == 7 and se[4] is None  # lifecycle_stage 는 event grain 에 남는다("" → None)
 
 
