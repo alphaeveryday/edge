@@ -11,7 +11,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ..config import PipelineError, Settings
-from ..domain.models import Decomposition, KodexEvent
+from ..domain.models import Decomposition, EventContext
 from ..observability import log, utcnow_iso
 
 _DEFAULT_PREFIX = "operations_archive/etf_explanations/"
@@ -31,12 +31,12 @@ def _split_s3_uri(uri: str) -> tuple[str, str]:
     return bucket, key_prefix.rstrip("/")
 
 
-def _event_dict(event: KodexEvent, fields: tuple[str, ...]) -> dict[str, Any]:
+def _event_dict(event: EventContext, fields: tuple[str, ...]) -> dict[str, Any]:
     return {field: getattr(event, field) for field in fields}
 
 
-def archived_events(events: list[KodexEvent]) -> list[dict[str, Any]]:
-    """런 아카이브용 KODEX 이벤트 직렬화(novelty 포함)."""
+def archived_events(events: list[EventContext]) -> list[dict[str, Any]]:
+    """런 아카이브용 구성종목 이벤트 직렬화(novelty 포함)."""
     return [_event_dict(e, _ARCHIVE_EVENT_FIELDS) for e in events]
 
 
@@ -90,7 +90,7 @@ def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | 
 
 
 def write_explanation_to_s3(
-    s3, settings: Settings, explanation: dict[str, Any], events: list[KodexEvent]
+    s3, settings: Settings, explanation: dict[str, Any], events: list[EventContext]
 ) -> str:
     """DB FK 전제가 없을 때 설명을 S3 에 영속한다."""
     prefix = _result_prefix(settings)

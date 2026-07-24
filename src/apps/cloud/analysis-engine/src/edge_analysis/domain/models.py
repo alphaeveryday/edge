@@ -1,12 +1,13 @@
 """도메인 모델과 어휘 — 순수 데이터 + Explanation 접근자.
 
-I/O 없음. 구조화 객체(Member·Decomposition·PriceTrigger·KodexEvent)는 파이프라인이
+I/O 없음. 구조화 객체(Member·Decomposition·PriceTrigger·EventContext)는 파이프라인이
 주고받던 임시 ``dict[str, Any]`` payload 를 대체한다. Explanation 은 타입 없는 DeepSeek
 응답을 타입 있는 접근자로 감싸되 원본 payload 를 런 아카이브용으로 보존한다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 # observation 에 분해-산출 버전으로 스탬프된다(ALPHA-411).
@@ -73,8 +74,39 @@ class PriceTrigger:
 
 
 @dataclass(frozen=True, slots=True)
-class KodexEvent:
-    """파이프라인이 조립한 KODEX 구성종목 source event 1개."""
+class Participant:
+    """사건에서 확정된 참여자 1명(event_argument 1행).
+
+    ``slot`` 등 신규 온톨로지 컬럼은 백필 전 NULL 일 수 있다. ``ticker`` 는 entity 가
+    instrument 로 접지될 때만 채워진다(비종목 참여자는 None).
+    """
+
+    role_code: str
+    slot: str | None
+    entity_id: str
+    ticker: str | None
+    confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class Measure:
+    """사건에 붙은 정규화 측정값 1개(event_measure 1행)."""
+
+    role_code: str
+    value: Decimal | float | None
+    unit: str | None
+    basis: str
+    value_source: str
+    surface: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EventContext:
+    """파이프라인이 조립한 구성종목 source event 1개 — 참여자·측정값 전체 문맥.
+
+    ``entity_id``/``ticker`` 는 holdings 에 접지된 대표 참여자다(이 사건이 선별된 근거).
+    신규 온톨로지 필드(predicate_code 등)는 백필 전 데이터에서 None/빈 튜플이다.
+    """
 
     source_event_id: str
     event_type_code: str
@@ -84,6 +116,10 @@ class KodexEvent:
     thread_id: str | None
     novelty_status: str
     title: str
+    participants: tuple[Participant, ...] = ()
+    measures: tuple[Measure, ...] = ()
+    predicate_code: str | None = None
+    lifecycle_stage: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

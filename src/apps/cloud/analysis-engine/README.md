@@ -16,7 +16,8 @@ ETF **당일 설명 생성** 파이프라인 (Python, edge-cloud). 대상 ETF �
 price_movement_trigger 소비 (행 없음 = 평온 → 종료)
   → 구성종목 분해(가격 S3 읽기 — observation·packet 입력)
   → observation/route 적재 (소비한 trigger_id 에서 파생)
-  → DB 의 대상 ETF 구성종목 source_event/thread 조회 (assemble-events 산출)
+  → DB 의 대상 ETF 구성종목 source_event/thread 조회 — 참여자(event_argument)·측정값
+    (event_measure)을 사건 단위 EventContext 로 집계 (assemble-events 산출)
   → 분석 에이전트(DeepSeek) → explanation_result (DRAFT)
 ```
 
@@ -62,7 +63,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 ## 스키마 계약
 
-Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
+Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
 
 ## 주석 컨벤션
 

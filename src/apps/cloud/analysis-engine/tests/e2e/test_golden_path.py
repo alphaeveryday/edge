@@ -297,7 +297,7 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         archive = json.loads(s3.objects[archive_key])
         assert archive["outcome"] == "explained"
         assert archive["persistence"]["persisted"] == "rds"
-        assert [e["source_event_id"] for e in archive["kodex_events"]] == [evt_id], (
+        assert [e["source_event_id"] for e in archive["events"]] == [evt_id], (
             "엔진이 소비한 이벤트가 조립 단계의 결정적 ID 와 수렴하지 않는다"
         )
     finally:

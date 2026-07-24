@@ -49,7 +49,7 @@ class _FakeStore:
         self.calls.append("obs_route")
         return {"trigger_id": trigger_id, "obs_id": "cob_1", "route_id": "rte_1"}
 
-    def fetch_kodex_events(self, trade_date, tickers):
+    def fetch_event_contexts(self, trade_date, tickers):
         return []
 
     def explanation_prerequisites(self, settings, etf_instrument_id):
@@ -101,6 +101,9 @@ def test_triggered_day_persists_the_explanation():
     assert _run(store, s3) == 0
     assert store.calls == ["obs_route", "persist_explanation"]
     assert "explained" in _outcomes(s3)
+    bodies = [json.loads(p["Body"].decode("utf-8")) for p in s3.puts]
+    archive = next(b for b in bodies if b.get("outcome") == "explained")
+    assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
 
 
 def test_missing_prerequisites_fall_back_to_s3():

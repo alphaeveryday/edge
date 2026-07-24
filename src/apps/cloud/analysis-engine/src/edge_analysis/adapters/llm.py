@@ -12,7 +12,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from ..config import PipelineError
-from ..domain.models import Decomposition, Explanation, KodexEvent, PriceTrigger
+from ..domain.models import Decomposition, EventContext, Explanation, PriceTrigger
 from ..domain.packet import build_packet
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -85,7 +85,7 @@ def analyze(
     decomp: Decomposition,
     gate: PriceTrigger,
     route_code: str,
-    events: list[KodexEvent],
+    events: list[EventContext],
 ) -> Explanation:
     """분석 LLM 을 돌려 검증된 Explanation 을 반환한다.
 

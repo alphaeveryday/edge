@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from .models import Decomposition, KodexEvent, PriceTrigger
+from .models import Decomposition, EventContext, Measure, PriceTrigger
 
 _SYSTEM_RULES = (
     "[가격 분해]의 수치와 [뉴스 이벤트]의 제목만 근거로 판단하며, 없는 사실을 만들지 마라. "
@@ -21,6 +21,44 @@ _SYSTEM_RULES = (
 )
 
 
+def _format_value(value) -> str:
+    """Decimal/float 를 고정소수 문자열로(불필요한 소수부 0 제거)."""
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _measure_text(measure: Measure) -> str:
+    """측정값 1개의 프롬프트 표기 — 값이 미해석이면 원문 표면(surface)을 쓴다."""
+    value = _format_value(measure.value) if measure.value is not None else (measure.surface or "?")
+    unit = f" {measure.unit}" if measure.unit else ""
+    basis = f"({measure.basis})" if measure.basis != "UNKNOWN" else ""
+    return f"{measure.role_code} {value}{unit}{basis}"
+
+
+def _event_line(event: EventContext, name_by_ticker: dict[str, str]) -> str:
+    """이벤트 1건의 프롬프트 줄 — 참여자·측정값은 있을 때만 덧붙인다(구데이터 무변화)."""
+    # 종목명은 이 ETF 의 canonical holdings 에서 온다 — 구 KODEX_CONSTITUENTS
+    # 하드코딩 dict 은 다른 ETF 로 돌리면 무관한 이름을 붙였다(ALPHA-467).
+    name = name_by_ticker.get(event.ticker, event.ticker)
+    line = (
+        f"- {name}({event.ticker}) | {event.event_type_code}"
+        f" | {event.novelty_status} | 「{event.title}」"
+    )
+    # 대표 참여자 외 종목 접지 참여자만 — entity ULID 는 LLM 에게 노이즈라 뺀다.
+    extras = [
+        p for p in event.participants
+        if p.ticker and p.entity_id != event.entity_id
+    ]
+    if extras:
+        line += " | 참여: " + ", ".join(
+            f"{p.role_code}:{name_by_ticker.get(p.ticker, p.ticker)}({p.ticker})"
+            for p in extras
+        )
+    if event.measures:
+        line += " | 측정: " + ", ".join(_measure_text(m) for m in event.measures)
+    return line
+
+
 def build_packet(
     *,
     etf_ticker: str,
@@ -30,7 +68,7 @@ def build_packet(
     decomp: Decomposition,
     gate: PriceTrigger,
     route_code: str,
-    events: list[KodexEvent],
+    events: list[EventContext],
 ) -> tuple[str, str]:
     """분석 호출용 ``(system_prompt, user_packet)`` 을 반환한다."""
     proxy = decomp.proxy_ret
@@ -57,15 +95,10 @@ def build_packet(
         f"(비중 {decomp.coverage:.0%}). 나머지·NAV·괴리·환율은 미확보이므로 단정 금지."
     )
 
-    event_lines = []
-    for event in sorted(events, key=lambda e: e.available_at):
-        # 종목명은 이 ETF 의 canonical holdings 에서 온다 — 구 KODEX_CONSTITUENTS
-        # 하드코딩 dict 은 다른 ETF 로 돌리면 무관한 이름을 붙였다(ALPHA-467).
-        name = name_by_ticker.get(event.ticker, event.ticker)
-        event_lines.append(
-            f"- {name}({event.ticker}) | {event.event_type_code}"
-            f" | {event.novelty_status} | 「{event.title}」"
-        )
+    event_lines = [
+        _event_line(event, name_by_ticker)
+        for event in sorted(events, key=lambda e: e.available_at)
+    ]
     events_block = "\n".join(event_lines) if event_lines else "  (해당 없음)"
 
     packet = (
