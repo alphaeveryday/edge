@@ -46,3 +46,4 @@
 | [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 |
 | [0037](0037-compliance-engine-to-screening-worker.md) | 점검 실행 모듈 명칭 — Compliance Engine → Screening Worker | 승인됨 |
 | [0038](0038-jpa-onprem-read-standard.md) | 온프렘 조회 표준으로 JPA 도입 — 스키마는 Flyway SSOT, 앱은 validate-only | 승인됨 |
+| [0039](0039-entity-relation-schema.md) | 엔티티 관계 스키마 — 기존 3서브타입 유지, 관계·별칭·멘션 3테이블 추가 | 승인됨 |
