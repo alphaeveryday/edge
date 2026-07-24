@@ -18,6 +18,21 @@ output "mts_url" {
   value       = module.mts_site.url
 }
 
+output "mts_bucket" {
+  description = "MTS S3 버킷 이름 → vars.DEMO_MTS_BUCKET (deploy-demo-onprem.yml s3 sync 대상)"
+  value       = module.mts_site.bucket_name
+}
+
+output "mts_distribution_id" {
+  description = "MTS CloudFront 배포 ID → vars.DEMO_MTS_DISTRIBUTION_ID (CD 무효화)"
+  value       = module.mts_site.distribution_id
+}
+
+output "deploy_role_arn" {
+  description = "데모 배포 역할 ARN → vars.AWS_DEMO_DEPLOY_ROLE_ARN (deploy-demo-onprem.yml OIDC)"
+  value       = aws_iam_role.deploy.arn
+}
+
 output "cert_parameter_name" {
   description = "데모 mTLS cert SSM SecureString 파라미터 이름 — 운영자가 CLI(put-parameter)로 여기 생성·주입"
   value       = local.cert_param_name
