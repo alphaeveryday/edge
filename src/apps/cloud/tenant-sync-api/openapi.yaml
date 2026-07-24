@@ -277,8 +277,8 @@ components:
       type: array
       description: >-
         근거 원천 이벤트. 현행 계약은 항상 빈 배열이다(rowMapper 가 List.of() 만 싣는다) —
-        경계면 컬럼 선별 ALPHA-395, 요소 스키마·계약 테스트 ALPHA-497 에서 확정하며 그때
-        maxItems 를 풀고 items 를 채운다(../../../../docs/contracts/event-bundle-schema.md).
+        경계면 컬럼 선별은 확정(ALPHA-395), 기계가독 요소 스키마·계약 테스트는 ALPHA-497 에서
+        확정하며 그때 maxItems 를 풀고 items 를 채운다(../../../../docs/contracts/event-bundle-schema.md).
       maxItems: 0
       items:
         type: object
@@ -287,7 +287,7 @@ components:
     Evidences:
       type: array
       description: >-
-        증거. source_events 와 동일하게 현행 항상 빈 배열이며 요소 형상은 미확정(ALPHA-395/497).
+        증거. source_events 와 동일하게 현행 항상 빈 배열 — 컬럼 선별은 확정(ALPHA-395)이고 기계가독 요소 스키마만 ALPHA-497.
       maxItems: 0
       items:
         type: object

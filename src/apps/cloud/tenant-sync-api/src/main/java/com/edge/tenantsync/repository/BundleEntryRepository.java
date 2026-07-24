@@ -17,8 +17,8 @@ import java.util.List;
  * instrument·entity)과 조인해 조립 시점 상태를 싣는다(페이로드 비저장 —
  * event-bundle-schema.md "전달 레코드" 확정 결정). 번들 조립은 이 모듈 몫(ADR-0026).
  *
- * source_events·evidences 는 경계면 컬럼 선별이 미확정(ALPHA-363 lineage 경계면
- * 포함)이라 빈 배열로 싣는다 — 확정 시 이 조회에 lineage 조인을 추가한다.
+ * source_events·evidences 는 경계면 컬럼 선별은 확정됐으나(ALPHA-395) 조립 lineage 조인이
+ * 미구현(ALPHA-363)이라 빈 배열로 싣는다 — 조인 도입 시 이 조회에 컬럼을 채운다.
  */
 @Component
 public class BundleEntryRepository {
