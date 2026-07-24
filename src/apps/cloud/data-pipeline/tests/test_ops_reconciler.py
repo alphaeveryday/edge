@@ -62,6 +62,25 @@ def _entered(state, *, arn=None, succeeded=False, exit_code=0, submit_failed=Fal
     return events
 
 
+def _multi(state, occs):
+    """occs=[(arn, exit_code|None), ...] — 같은 state 를 여러 번 진입시킨 history(재시도 재현)."""
+    events, nid = [], 1
+    for arn, exit_code in occs:
+        events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskStateEntered",
+                       "stateEnteredEventDetails": {"name": state}})
+        nid += 1
+        if arn:
+            events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskSubmitted",
+                           "taskSubmittedEventDetails": {"output": json.dumps({"TaskArn": arn})}})
+            nid += 1
+        if exit_code is not None:
+            out = json.dumps({"Containers": [{"ExitCode": exit_code}]})
+            events.append({"id": nid, "previousEventId": nid - 1, "type": "TaskSucceeded",
+                           "taskSucceededEventDetails": {"output": out}})
+            nid += 1
+    return events
+
+
 def _reconcile(db, *, history=None, ecs=None):
     return reconcile_run(
         _ledger(db), run_key=_RUN_KEY, now=_NOW,
@@ -224,6 +243,30 @@ def test_reconcile_rejects_foreign_execution_by_input_hash():
     assert summary.get("launch_conflict") is True
     assert len(db.open_issues(states.ISSUE_LAUNCH_CONFLICT)) == 1
     assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_MISSED
+
+
+def test_retry_reconstructs_both_attempts_latest_wins():
+    """#2 — 재시도 히스토리 복원. 같은 state 두 번(첫 exit1·둘째 exit0) → attempt 2행(각 ARN)이
+    각각 FAILED·SUCCEEDED 로 보존되고, 앞 exit code 가 뒤 시도를 오염시키지 않으며, outcome 은
+    최신 occurrence 로 FULFILLED. (예전엔 state 별 뭉침이라 앞 exit1 이 뒤를 오판했다.)"""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_multi("CollectKisPrice", [("arn:task/1", 1), ("arn:task/2", 0)]))
+    attempts = {a["arn"]: a["status"] for a in db.attempts if a["etid"] == "e1"}
+    assert attempts == {"arn:task/1": states.EXEC_FAILED, "arn:task/2": states.EXEC_SUCCEEDED}
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+
+
+def test_retry_running_second_attempt_not_misjudged_by_stale_exit():
+    """#2 핵심 — 첫 시도 exit1, 둘째 아직 실행 중(exit 없음): 둘째를 stale exit1 로 FAILED 오판하지
+    않는다. 둘째 attempt 는 RUNNING, 작업 outcome 은 아직 확정 안 함(FAILED 아님)."""
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_multi("CollectKisPrice", [("arn:task/1", 1), ("arn:task/2", None)]))
+    attempts = {a["arn"]: a["status"] for a in db.attempts if a["etid"] == "e1"}
+    assert attempts["arn:task/1"] == states.EXEC_FAILED
+    assert attempts["arn:task/2"] == states.EXEC_RUNNING     # stale exit1 로 FAILED 오판 안 함
+    assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_FAILED
 
 
 def test_planner_missing_when_slot_has_no_run():

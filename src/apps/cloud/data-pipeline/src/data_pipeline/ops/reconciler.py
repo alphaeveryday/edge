@@ -14,12 +14,17 @@
   schedule 상 있어야 할 run_key 부재              → PLANNER_MISSING
   pipeline_run 있으나 SFN 실행 미확인             → LAUNCH_UNCONFIRMED
 
+**증거는 state 이름별이 아니라 실행 발생(occurrence)별로 본다** — 한 state 가 재시도·redrive 로
+여러 번 뜨면 각 진입(TaskStateEntered)이 별개 occurrence 다. 이름별로 뭉치면 앞 시도의 exit code
+가 남아 새 시도를 오판하고 앞 시도 ARN 을 잃는다(ALPHA-530 #2). occurrence 마다 자기 ECS ARN·exit
+code 를 들고, 원장의 `ops_task_attempt`(ARN 별)와 1:1 로 맞물린다. 작업의 최종 outcome 은 **최신
+occurrence** 로 판정하되, 각 occurrence 의 물리 attempt 는 모두 기록한다(재시도 이력 보존).
+
 **컨테이너 성패는 SFN TaskSucceeded 가 아니라 exit code 로 판정한다** — ecs:runTask.sync 는
 컨테이너가 non-zero 로 죽어도 TaskSucceeded 를 낼 수 있고(ASL 이 뒤 CheckExitCode Choice 로
-exit code 를 따로 본다), 그래서 TaskSucceeded 를 성공으로 믿으면 실패를 FULFILLED 로 덮는다.
-exit code 는 SFN history 이벤트 output(Containers[].ExitCode)에서 얻고, 없으면 ECS DescribeTasks
-로 확인한다(둘 다 없으면 단정하지 않는다). SFN 증거 자체를 못 얻으면 MISSED/BLOCKED 를 판정하지
-않는다 — "증거 없음"을 "미실행"으로 단정하면 실제 실행 중인 작업이 MISSED 가 된다(스펙 §3.4).
+exit code 를 따로 본다). exit code 는 SFN history 이벤트 output(Containers[].ExitCode)에서 얻고,
+없으면 ECS DescribeTasks 로 확인한다(둘 다 없으면 단정하지 않는다). SFN 증거 자체를 못 얻으면
+MISSED/BLOCKED 를 판정하지 않는다 — "증거 없음"을 "미실행"으로 단정하지 않는다(스펙 §3.4).
 """
 
 from __future__ import annotations
@@ -102,95 +107,101 @@ def paginate_history(sfn, execution_arn: str) -> list[dict]:
     return events
 
 
-def execution_evidence(events: list[dict]) -> dict[str, dict]:
-    """SFN history → state 이름별 증거. Parallel 브랜치가 섞여도 **previousEventId 체인**으로
-    각 이벤트를 자기 state 에 귀속시킨다(선형 'current' 추적은 브랜치 교차에서 오귀속한다).
+def _new_occ(entered_id) -> dict:
+    return {"entered_id": entered_id, "ecs_task_arn": None, "exit_code": None,
+            "sfn_completed": False, "sfn_terminal_failed": False, "failed_to_start": False}
 
-    state → {entered, ecs_task_arn, exit_code, sfn_completed, sfn_terminal_failed, failed_to_start}
+
+def execution_evidence(events: list[dict]) -> dict[str, list[dict]]:
+    """SFN history → {state 이름: [occurrence, ...]}(시간순). 각 occurrence 는 한 번의 실행 발생.
+
+    이벤트를 **자기 TaskStateEntered 의 id**(occurrence 키)에 귀속시킨다 — previousEventId 체인으로
+    올라가 그 진입 이벤트를 찾는다. 이렇게 하면 재시도(같은 state 재진입)가 별 occurrence 로 갈려
+    exit code 섞임·ARN 유실이 없다. Parallel 브랜치 교차도 체인이 갈라 처리한다.
     """
     by_id = {ev.get("id"): ev for ev in events if ev.get("id") is not None}
-    memo: dict[object, str | None] = {}
+    memo: dict[object, object] = {}   # eid -> 소속 entered-id(occurrence 키)
 
-    def owning_state(ev) -> str | None:
-        # id 없는 이벤트는 memo 키로 쓰지 않는다 — memo[None] 을 저장하면 다른 브랜치의 id 결측
-        # 이벤트가 그 값을 재사용해 오귀속한다(edge-review). id 있는 것만 캐싱한다.
+    def owning_entered_id(ev):
         chain: list[object] = []
         cur = ev
-        name = None
+        result = None
         while cur is not None:
             eid = cur.get("id")
             if eid is not None and eid in memo:
-                name = memo[eid]
+                result = memo[eid]
                 break
             if cur.get("type") == "TaskStateEntered":
-                name = cur.get("stateEnteredEventDetails", {}).get("name")
+                result = eid       # 진입 이벤트 자신의 id 가 occurrence 키
                 break
             if eid is not None:
-                if eid in chain:  # 순환 방지
+                if eid in chain:   # 순환 방지
                     break
                 chain.append(eid)
             prev = cur.get("previousEventId")
             cur = by_id.get(prev) if prev is not None else None
         for eid in chain:
-            memo[eid] = name
-        return name
+            memo[eid] = result
+        return result
 
-    evidence: dict[str, dict] = {}
-
-    def _slot(name: str) -> dict:
-        return evidence.setdefault(name, {
-            "entered": True, "ecs_task_arn": None, "exit_code": None,
-            "sfn_completed": False, "sfn_terminal_failed": False, "failed_to_start": False,
-        })
+    occ_by_id: dict[object, dict] = {}   # entered-id -> occurrence
+    name_by_id: dict[object, str] = {}   # entered-id -> state 이름
+    for ev in events:
+        if ev.get("type") == "TaskStateEntered":
+            eid = ev.get("id")
+            name = ev.get("stateEnteredEventDetails", {}).get("name")
+            if eid is not None and name:
+                name_by_id[eid] = name
+                occ_by_id.setdefault(eid, _new_occ(eid))
 
     for ev in events:
-        etype = ev.get("type", "")
-        if etype == "TaskStateEntered":
-            name = ev.get("stateEnteredEventDetails", {}).get("name")
-            if name:
-                _slot(name)
+        if ev.get("type") == "TaskStateEntered":
             continue
-        state = owning_state(ev)
-        if state is None:
+        oid = owning_entered_id(ev)
+        occ = occ_by_id.get(oid)
+        if occ is None:
             continue
-        e = _slot(state)
         details = next((v for k, v in ev.items() if k.endswith("EventDetails")), None) or {}
         arn = _find_task_arn(details)
         if arn:
-            e["ecs_task_arn"] = arn
+            occ["ecs_task_arn"] = arn
         exit_code = _find_exit_code(details)
         if exit_code is not None:
-            e["exit_code"] = exit_code
+            occ["exit_code"] = exit_code
+        etype = ev.get("type", "")
         if etype == "TaskSubmitFailed":
-            e["failed_to_start"] = True
+            occ["failed_to_start"] = True
         if etype == "TaskFailed":
-            if e["ecs_task_arn"]:
-                e["sfn_terminal_failed"] = True
+            if occ["ecs_task_arn"]:
+                occ["sfn_terminal_failed"] = True
             else:
-                e["failed_to_start"] = True
+                occ["failed_to_start"] = True
         if etype == "TaskSucceeded":
-            e["sfn_completed"] = True
-    return evidence
+            occ["sfn_completed"] = True
+
+    result: dict[str, list[dict]] = {}
+    for eid, occ in sorted(occ_by_id.items(), key=lambda kv: kv[0]):
+        name = name_by_id.get(eid)
+        if name:
+            result.setdefault(name, []).append(occ)
+    return result
 
 
-def _terminal_status(ev: dict | None, ecs, cluster_arn: str | None) -> str | None:
-    """증거 + ECS 로 컨테이너 **성패**를 판정. SUCCEEDED/FAILED, 확인 불가면 None(단정 안 함).
+def _terminal_status(occ: dict | None, ecs, cluster_arn: str | None) -> str | None:
+    """occurrence 의 컨테이너 **성패**. SUCCEEDED/FAILED, 확인 불가면 None(단정 안 함).
 
-    우선순위: SFN output 의 exit code → ECS DescribeTasks exit code. SFN TaskSucceeded 는
-    exit code 가 아니므로 성공 근거로 쓰지 않는다.
+    우선순위: SFN output exit code → ECS DescribeTasks exit code → (둘 다 없고) SFN 통합실패면 FAILED.
+    SFN TaskSucceeded 는 exit code 가 아니므로 성공 근거로 쓰지 않는다.
     """
-    if ev is None:
+    if occ is None:
         return None
-    if ev.get("exit_code") is not None:
-        return states.EXEC_SUCCEEDED if ev["exit_code"] == 0 else states.EXEC_FAILED
-    # exit code 가 없으면 **ECS 를 먼저** 물어본다(exit code 정본). ECS 가 확정하면 그걸 쓰고,
-    # 미확정(None)일 때에 한해 SFN 통합 실패(TaskFailed)를 실패 신호로 인정한다 — 통합 실패는
-    # 컨테이너가 exit code 를 못 낸 진짜 실패라 fail-loud 가 맞다(edge-review).
-    if ev.get("ecs_task_arn"):
-        ecs_status = _ecs_terminal_status(ecs, ev["ecs_task_arn"], cluster_arn)
+    if occ.get("exit_code") is not None:
+        return states.EXEC_SUCCEEDED if occ["exit_code"] == 0 else states.EXEC_FAILED
+    if occ.get("ecs_task_arn"):
+        ecs_status = _ecs_terminal_status(ecs, occ["ecs_task_arn"], cluster_arn)
         if ecs_status is not None:
             return ecs_status
-    if ev.get("sfn_terminal_failed"):
+    if occ.get("sfn_terminal_failed"):
         return states.EXEC_FAILED
     return None
 
@@ -222,29 +233,25 @@ def reconcile_run(
                "evidence_lost": [], "failed_to_start": [], "stalled": [], "fulfilled_late": [],
                "failed": []}
 
-    # Planner 가 이미 입력 충돌로 판정한 런은 reconcile 이 뒤엎지 않는다 — 그 이름을 차지한
-    # 다른 실행의 history 를 우리 런의 작업에 적용하면 안 된다(edge-review). 충돌 이슈는 유지.
+    # Planner 가 이미 입력 충돌로 판정한 런은 reconcile 이 뒤엎지 않는다.
     if run["launch_status"] == states.LAUNCH_CONFLICT:
         summary["launch_conflict"] = True
         return summary
 
-    # 확정된 sfn_execution_arn 은 우리 실행이라 신뢰한다. 없으면 expected_execution_arn(=locator)
-    # 인데, **입력 해시로 우리 실행인지 검증**한 뒤에만 채택한다 — 같은 이름에 다른 입력의 실행이
-    # 있으면(mode 다른 재계획) 그건 우리 게 아니다(스펙 §4 locator≠증거).
+    # 확정 sfn_execution_arn 은 우리 실행이라 신뢰. 없으면 expected(locator)를 input_hash 로 검증.
     confirmed_arn = run["sfn_execution_arn"]
     exec_arn = confirmed_arn or run["expected_execution_arn"]
     verify_hash = confirmed_arn is None
 
-    # ── SFN 실행 동기화 ──
-    evidence: dict[str, dict] = {}
+    evidence: dict[str, list[dict]] = {}
+    used_arn = None
     if exec_arn:
         try:
             desc = sfn.describe_execution(executionArn=exec_arn)
-            confirmed = desc.get("executionArn", exec_arn)
+            used_arn = desc.get("executionArn", exec_arn)
             if verify_hash and run["input_hash"]:
                 existing_hash = hashlib.sha256((desc.get("input") or "").encode("utf-8")).hexdigest()
                 if existing_hash != run["input_hash"]:
-                    # 예상 이름에 다른 입력의 실행 — 우리 게 아니다. 채택 안 하고 충돌로 드러낸다.
                     ledger.set_launch_result(run_id, launch_status=states.LAUNCH_CONFLICT)
                     ledger.open_or_bump_issue(
                         issue_type=states.ISSUE_LAUNCH_CONFLICT,
@@ -254,17 +261,14 @@ def reconcile_run(
                     summary["launch_conflict"] = True
                     return summary
             ledger.set_launch_result(
-                run_id, launch_status=states.LAUNCH_LAUNCHED, sfn_execution_arn=confirmed,
+                run_id, launch_status=states.LAUNCH_LAUNCHED, sfn_execution_arn=used_arn,
                 orchestration_status=_ORCH_MAP.get(desc.get("status", ""), states.ORCH_UNKNOWN))
-            evidence = execution_evidence(paginate_history(sfn, confirmed))
+            evidence = execution_evidence(paginate_history(sfn, used_arn))
             summary["evidence_ok"] = True
         except Exception:
             logger.exception("SFN describe/history 실패 — 증거 없이 판정하지 않는다")
 
     if not summary["evidence_ok"]:
-        # 증거를 못 얻었다. **미실행으로 단정하지 않는다**(실제 실행 중일 수 있다). 다만 Planner
-        # 가 pipeline_run 은 남겼는데 SFN 실행이 확인 안 되면(스케줄러 RunTask 성공≠Planner 성공)
-        # 그 공백을 LAUNCH_UNCONFIRMED 로 드러낸다(fail-loud, 스펙 §5).
         if run["launch_status"] in (states.LAUNCH_PLANNING, states.LAUNCH_UNKNOWN):
             ledger.open_or_bump_issue(
                 issue_type=states.ISSUE_LAUNCH_UNCONFIRMED,
@@ -279,60 +283,60 @@ def reconcile_run(
             continue
         _reconcile_task(ledger, task, run_id=run_id, evidence=evidence, ecs=ecs,
                         cluster_arn=cluster_arn, now=now, hard_deadline=hard_deadline,
-                        stalled_after_seconds=stalled_after_seconds, deps_done=deps_done,
-                        summary=summary)
+                        sfn_execution_arn=used_arn, stalled_after_seconds=stalled_after_seconds,
+                        deps_done=deps_done, summary=summary)
     return summary
 
 
-def _completed_task_keys(evidence: dict[str, dict]) -> set[str]:
-    """upstream 완료(성공) 판정 — exit0 또는 exit code 없이 완료 신호가 있는 카탈로그 작업."""
-    # 선행 완료 = **컨테이너 exit0 확인**. exit code 없는 TaskSucceeded 만으로 완료 처리하면
-    # 실제 실패한 선행 뒤의 downstream eligibility 를 잘못 열어 BLOCKED 여야 할 걸 MISSED 로
-    # 판정한다(edge-review). exit0 미확인이면 미완으로 본다(보수적 — downstream 은 BLOCKED).
+def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
+    """선행 완료 = 어느 occurrence든 컨테이너 exit0 확인. exit code 없는 TaskSucceeded 는 신뢰
+    안 한다(edge-review). exit0 미확인이면 미완으로 봐 downstream 은 BLOCKED(보수적·안전)."""
     done: set[str] = set()
     for entry in catalog.entries():
-        ev = evidence.get(entry.sfn_state_name)
-        if ev and ev.get("exit_code") == 0:
+        occs = evidence.get(entry.sfn_state_name, [])
+        if any(o.get("exit_code") == 0 for o in occs):
             done.add(entry.task_key)
     return done
 
 
 def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, hard_deadline,
-                    stalled_after_seconds, deps_done, summary):
+                    sfn_execution_arn, stalled_after_seconds, deps_done, summary):
     etid = task["expected_task_id"]
     entry = catalog.get(task["task_key"])
     if entry is None:
         return
-    ev = evidence.get(entry.sfn_state_name)
+    occs = evidence.get(entry.sfn_state_name, [])   # 시간순
     eligible_at = _parse_ts(task["eligible_at"])
-    deadline_at = _parse_ts(task["deadline_at"])
-    outcome = task["task_outcome"]
 
     deps_met = all(d in deps_done for d in entry.depends_on)
     if eligible_at is None and deps_met:
         ledger.set_eligible(etid)
         eligible_at = now
 
-    if ev and ev.get("entered"):
-        if ev.get("failed_to_start") and not ev.get("ecs_task_arn"):
-            ledger.update_task_outcome(
-                etid, task_outcome=states.OUTCOME_FAILED,
-                outcome_reason=states.REASON_FAILED_TO_START)
-            summary["failed_to_start"].append(task["task_key"])
-            return
-        if ev.get("ecs_task_arn"):
-            _reconcile_entered_with_arn(
-                ledger, task, ev, ecs=ecs, cluster_arn=cluster_arn, now=now, outcome=outcome,
-                run_id=run_id, stalled_after_seconds=stalled_after_seconds, summary=summary)
-            return
-        # 진입했으나 ECS 생성 확인 불가 — MISSED 로 단정하지 않는다(스펙 §7).
-        _open(ledger, states.ISSUE_EVIDENCE_LOST, f"evidence_lost:{run_id}:{task['task_key']}",
-              run_id, task, summary, "evidence_lost")
+    if not occs:
+        _judge_not_entered(ledger, task, eligible_at=eligible_at, now=now,
+                           hard_deadline=hard_deadline, deps_met=deps_met, run_id=run_id,
+                           summary=summary)
         return
 
-    # ── state 미진입 ──
+    # 1) 각 occurrence 의 물리 attempt 를 기록/확정한다(outcome 은 안 건드린다).
+    for occ in occs:
+        occ["_terminal"] = _terminal_status(occ, ecs, cluster_arn)   # 한 번 계산해 재사용
+        _reconcile_attempt(ledger, etid, occ, entry=entry, sfn_execution_arn=sfn_execution_arn,
+                           now=now, stalled_after_seconds=stalled_after_seconds, task=task,
+                           summary=summary)
+
+    # 2) **최신 occurrence** 로 작업 outcome 을 판정한다(재시도면 마지막 시도가 이긴다).
+    _judge_outcome(ledger, task, occs[-1], outcome=task["task_outcome"], run_id=run_id,
+                   summary=summary)
+
+
+def _judge_not_entered(ledger, task, *, eligible_at, now, hard_deadline, deps_met, run_id, summary):
+    etid = task["expected_task_id"]
+    outcome = task["task_outcome"]
     if outcome in (states.OUTCOME_FULFILLED, states.OUTCOME_FAILED):
         return
+    deadline_at = _parse_ts(task["deadline_at"])
     past_deadline = deadline_at is not None and now >= deadline_at
     past_hard = hard_deadline is not None and now >= hard_deadline
     if eligible_at is not None and (past_deadline or past_hard):
@@ -346,48 +350,66 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
         summary["blocked"].append(task["task_key"])
 
 
-def _reconcile_entered_with_arn(ledger, task, ev, *, ecs, cluster_arn, now, outcome, run_id,
-                                stalled_after_seconds, summary):
-    etid = task["expected_task_id"]
-    arn = ev["ecs_task_arn"]
-    terminal = _terminal_status(ev, ecs, cluster_arn)   # SUCCEEDED/FAILED/None(미확정)
-    attempts = ledger.attempts_for(etid)
-    matching = next((a for a in attempts if a["ecs_task_arn"] == arn), None)
-
-    if terminal == states.EXEC_SUCCEEDED:
-        _ensure_attempt(ledger, etid, arn, states.EXEC_SUCCEEDED, task, summary, matching)
-        if outcome != states.OUTCOME_FULFILLED:
-            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FULFILLED, fulfilled=True)
-            if outcome == states.OUTCOME_MISSED:  # 비래치: 늦은 성공(missed_at 보존)
-                ledger.resolve_issue(f"missed:{run_id}:{task['task_key']}",
-                                     resolution_reason="late_attempt_succeeded",
-                                     resolution_source="reconciler")
-                summary["fulfilled_late"].append(task["task_key"])
+def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stalled_after_seconds,
+                       task, summary):
+    """occurrence 하나의 물리 attempt 를 원장에 반영. ARN 없으면 물리 시도가 없다(건너뜀)."""
+    arn = occ.get("ecs_task_arn")
+    if not arn:
         return
-    if terminal == states.EXEC_FAILED:
-        _ensure_attempt(ledger, etid, arn, states.EXEC_FAILED, task, summary, matching)
-        if outcome != states.OUTCOME_FAILED:
-            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
-                                       outcome_reason="attempt_failed")
-            summary["failed"].append(task["task_key"])
-        return
-
-    # 미확정(ECS STOPPED 증거 없음) — RUNNING 을 뒤집지 않는다. 시간 초과면 STALLED(health).
+    terminal = occ["_terminal"]
+    matching = next((a for a in ledger.attempts_for(etid) if a["ecs_task_arn"] == arn), None)
     if matching is None:
-        ledger.backfill_attempt(expected_task_id=etid, ecs_task_arn=arn,
-                                execution_status=states.EXEC_RUNNING, sfn_state_name=task["task_key"])
+        # ECS ARN 은 있는데 원장에 attempt 없음 — 사후 복구 + LEDGER_GAP. state 이름·실행 ARN 을
+        # 채워 attempt↔SFN 계보를 잇는다(#5). exit code 도 남긴다.
+        ledger.backfill_attempt(
+            expected_task_id=etid, ecs_task_arn=arn,
+            execution_status=terminal or states.EXEC_RUNNING,
+            sfn_state_name=entry.sfn_state_name, sfn_execution_arn=sfn_execution_arn,
+            exit_code=occ.get("exit_code"))
         _open(ledger, states.ISSUE_LEDGER_GAP, f"ledger_gap:{etid}:{arn}", None, task, summary,
               "ledger_gap")
         return
     if matching["execution_status"] == states.EXEC_RUNNING:
-        started = _parse_ts(matching.get("started_at"))
-        if started is not None and (now - started).total_seconds() > stalled_after_seconds:
-            _open(ledger, states.ISSUE_STALLED, f"stalled:{matching['attempt_id']}", None, task,
-                  summary, "stalled")
+        if terminal is not None:
+            ledger.record_attempt_end(matching["attempt_id"], execution_status=terminal,
+                                      exit_code=occ.get("exit_code"))
+        else:
+            started = _parse_ts(matching.get("started_at"))
+            if started is not None and (now - started).total_seconds() > stalled_after_seconds:
+                _open(ledger, states.ISSUE_STALLED, f"stalled:{matching['attempt_id']}", None,
+                      task, summary, "stalled")
+
+
+def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
+    """작업 최종 outcome 을 **최신 occurrence** 로 판정한다(물리 attempt 는 이미 기록됨)."""
+    etid = task["expected_task_id"]
+    if latest.get("ecs_task_arn"):
+        terminal = latest.get("_terminal")
+        if terminal == states.EXEC_SUCCEEDED and outcome != states.OUTCOME_FULFILLED:
+            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FULFILLED, fulfilled=True)
+            if outcome == states.OUTCOME_MISSED:   # 비래치: 늦은 성공(missed_at 보존)
+                ledger.resolve_issue(f"missed:{run_id}:{task['task_key']}",
+                                     resolution_reason="late_attempt_succeeded",
+                                     resolution_source="reconciler")
+                summary["fulfilled_late"].append(task["task_key"])
+        elif terminal == states.EXEC_FAILED and outcome != states.OUTCOME_FAILED:
+            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
+                                       outcome_reason="attempt_failed")
+            summary["failed"].append(task["task_key"])
+        # terminal None → 미확정, 건드리지 않는다(attempt 는 RUNNING/STALLED 로 이미 처리).
+    elif latest.get("failed_to_start"):
+        # RunTask submit 실패 + ARN 없음 — 가짜 attempt 안 만들고 outcome 으로만(스펙 §6).
+        ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
+                                   outcome_reason=states.REASON_FAILED_TO_START)
+        summary["failed_to_start"].append(task["task_key"])
+    else:
+        # 진입했으나 ECS 생성 확인 불가 — MISSED 로 단정하지 않는다(스펙 §7).
+        _open(ledger, states.ISSUE_EVIDENCE_LOST, f"evidence_lost:{run_id}:{task['task_key']}",
+              run_id, task, summary, "evidence_lost")
 
 
 def _ecs_terminal_status(ecs, task_arn: str, cluster_arn: str | None) -> str | None:
-    """DescribeTasks 로 실제 종료 확인. STOPPED 면 exit code 로 성패, 아니면 None(단정 안 함).
+    """DescribeTasks 로 실제 종료 확인. STOPPED + exit code 있을 때만 성패, 아니면 None.
 
     **cluster 를 반드시 넘긴다** — 생략하면 default 클러스터를 조회해 실제 태스크를 못 찾는다.
     """
@@ -405,20 +427,8 @@ def _ecs_terminal_status(ecs, task_arn: str, cluster_arn: str | None) -> str | N
     containers = tasks[0].get("containers") or []
     exit_code = containers[0].get("exitCode") if containers else None
     if exit_code is None:
-        # STOPPED 인데 exit code 를 모른다 — FAILED 로 단정하지 않는다(exit0 이 유실됐을 수도).
-        return None
+        return None   # STOPPED 인데 exit code 미상 — FAILED 로 단정하지 않는다
     return states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
-
-
-def _ensure_attempt(ledger, etid, arn, status, task, summary, matching):
-    """attempt 가 없으면 backfill + LEDGER_GAP, 있는데 RUNNING 이면 확정 상태로 종료 기록."""
-    if matching is None:
-        ledger.backfill_attempt(expected_task_id=etid, ecs_task_arn=arn, execution_status=status,
-                                sfn_state_name=task["task_key"])
-        _open(ledger, states.ISSUE_LEDGER_GAP, f"ledger_gap:{etid}:{arn}", None, task, summary,
-              "ledger_gap")
-    elif matching["execution_status"] == states.EXEC_RUNNING:
-        ledger.record_attempt_end(matching["attempt_id"], execution_status=status)
 
 
 def _open(ledger, issue_type, dedupe_key, run_id, task, summary, bucket):
@@ -433,7 +443,7 @@ def detect_planner_missing(ledger: Ledger, *, expected_run_keys: list[str]) -> l
     """schedule 상 있어야 할 run_key 가 원장에 없으면 PLANNER_MISSING, 있으면 열린 이슈 RESOLVE.
 
     pipeline_run 이 0건이라고 정상으로 보지 않는다(스펙 §7). 늦게 run 이 생기면 거짓 경보를 닫는다.
-    호출부(entry)가 **스케줄 시각이 지난 슬롯만** 넘긴다 — 아직 예정 전인 슬롯을 결측으로 보지 않게.
+    호출부(entry)가 **스케줄 시각이 지난 슬롯만** 넘긴다.
     """
     missing: list[str] = []
     for run_key in expected_run_keys:
