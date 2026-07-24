@@ -16,6 +16,9 @@
 #   - sync-agent mTLS 클라이언트 cert·인증서-테넌트 바인딩 없음(dev trust store 미주입 전제).
 #   - 마이그레이션 번들이 없으면 flyway 는 0개 적용·성공 종료하고 앱이 validate 로 crash-loop 한다
 #     — 배포(ALPHA-445)가 up 전에 migrations-onprem 존재·SQL 개수를 preflight 로 게이트할 것.
+#   - 재배포 시 flyway-onprem(one-shot·불변 이미지)은 compose 가 기존 종료 컨테이너를 재사용해
+#     새 마이그레이션을 건너뛴다(config·이미지 불변이라 recreate 안 됨) → 배포가 앱 기동 전에
+#     `up --force-recreate flyway-onprem`(또는 rerun)으로 매 릴리스 스키마를 적용할 것(ALPHA-445).
 #
 # 마이그레이션 SQL 은 이 파일 옆 ${MIGRATIONS_ONPREM_DIR:-./migrations-onprem} 에 있어야 한다 —
 # 박스 배포(ALPHA-445 SSM)가 src/libs/schema/migrations-onprem 를 번들해 함께 올린다.

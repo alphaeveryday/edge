@@ -32,6 +32,10 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
   docker compose -f docker-compose.yml config      # 문법·해석 확인
 ```
 
+## 재배포 주의 (ALPHA-445 배포가 처리)
+
+`flyway-onprem` 은 one-shot·불변 이미지라 재배포(새 이미지·새 SQL) 시 `docker compose up` 이 기존 종료 컨테이너를 재사용해 **새 마이그레이션을 건너뛴다**. 매 릴리스 스키마를 적용하려면 배포가 앱 기동 전에 `docker compose up --force-recreate flyway-onprem`(또는 해당 서비스 rerun)을 먼저 돌려야 한다.
+
 ## 로컬 풀스택과의 차이
 
 - `build:` → `image:`(ECR). 박스는 소스 빌드 안 함.
