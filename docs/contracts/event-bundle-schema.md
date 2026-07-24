@@ -11,6 +11,8 @@
 
 **물리 정의는 [`src/libs/schema/migrations-cloud/`](../../src/libs/schema/migrations-cloud/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
 
+**v4 아규먼트 축 확장(ALPHA-544, `V202607242020__add_event_argument_axes.sql`)**: `event_measure` 신규(값형 아규먼트) + `event_argument.slot·mention_text·entity_kind·group_ord` + `source_event.predicate_code·confidence_level·completeness`. 전부 additive(nullable 컬럼·신규 테이블)라 **경계면 컬럼 선별(ALPHA-395)과 번들 형상에 영향 없음** — 번들 미탑재, reader 무영향. 값·참여자 축의 번들 탑재 여부는 검수 UI 요구 발생 시 별도 합의.
+
 아래는 Sync 채널이 실제로 소비하는 **경계면**만 추린 것이다. 47개 전체가 인터페이스는 아니다 — 나머지는 진기 측 내부 구현이며 양자 합의 없이 바뀔 수 있다.
 
 ### 번들에 실리는 것 (영서가 읽는 면)
