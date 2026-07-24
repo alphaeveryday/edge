@@ -14,7 +14,10 @@
 tag-news 와의 관계: tag-news 는 다중 assertion·역할 추출로 feature 존을 만들고(문서/
 assertion 사슬), 이 스텝은 엔진 분류기(기사당 1건, 제목만)로 **event 계보**를 만든다.
 두 분류기의 단일화는 로직 소유자 결정 사안(후속) — 그동안 양쪽 다 자연키/결정적 ID
-멱등이라 공존이 안전하다.
+멱등이라 공존이 안전하다. document_assertion 컬럼 소유권(ALPHA-538): 이 스텝의
+assertion INSERT 는 event_evidence FK 를 세우기 위한 **비계**라 공유·결정값만 싣는다 —
+`confidence` 는 tag-news 체인(load-assertions) 소유, `lifecycle_stage` 는 event grain
+(`source_event`) 소유. 그래서 두 스텝의 실행 순서가 이 테이블의 최종 행을 바꾸지 않는다.
 """
 
 from __future__ import annotations
@@ -342,8 +345,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
                              cls["confidence"]))
         assertions.append((
             _stable_id("asrt", document_id, cls["event_type_code"], cls["predicate_code"]),
-            document_id, cls["event_type_code"], cls["predicate_code"],
-            cls["confidence"], cls["lifecycle_stage"], available_at,
+            document_id, cls["event_type_code"], cls["predicate_code"], available_at,
         ))
 
     with conn.cursor() as cur:
@@ -358,9 +360,9 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             doc_entities,
         )
         cur.executemany(
+            # FK 비계 — 소유권 계약(모듈 독스트링)상 confidence·lifecycle_stage 는 안 싣는다.
             "INSERT INTO document_assertion (assertion_id, document_id, event_type_code,"
-            " predicate_code, confidence, lifecycle_stage, available_at)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            " predicate_code, available_at) VALUES (%s,%s,%s,%s,%s)"
             " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
             assertions,
         )

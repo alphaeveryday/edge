@@ -250,6 +250,32 @@ def test_lineage_lands_on_loader_written_document(tmp_path, monkeypatch):
     assert se[0] == _stable_id("evt", loader_asrt, "inst_SAMSUNG")
 
 
+def test_assertion_insert_is_a_scaffold_without_owned_columns(tmp_path, monkeypatch):
+    """document_assertion 비계 계약(ALPHA-538) — 이 스텝은 공유 결정값(자연키 + document
+    파생 available_at)만 싣는다. confidence·lifecycle_stage 를 실으면 load-assertions 와
+    '먼저 쓴 쪽이 이기는' 순서 의존이 부활한다(소유자는 각각 tag-news 체인·event grain).
+    stage 가 event grain(source_event)에는 계속 실리는 것까지 함께 고정한다 — 소유권
+    이동이지 값의 삭제가 아니다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    _setup(monkeypatch, conn)
+
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=lambda s, u: _classified("a1"),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    asrt_sql = next(s for s, _ in conn.batches
+                    if s.upper().startswith("INSERT INTO DOCUMENT_ASSERTION"))
+    assert "confidence" not in asrt_sql.lower() and "lifecycle_stage" not in asrt_sql.lower()
+    doc_id = _stable_id("doc", "bigkinds", "a1")
+    [row] = _batch(conn, "document_assertion")
+    [se] = _batch(conn, "source_event")
+    assert row[:4] == (_stable_id("asrt", doc_id, _ETYPE, _PRED), doc_id, _ETYPE, _PRED)
+    assert len(row) == 5 and row[4] == se[6]  # available_at — 이벤트와 같은 document 파생값
+    assert len(se) == 7 and se[4] is None  # lifecycle_stage 는 event grain 에 남는다("" → None)
+
+
 def test_fmp_article_documents_keep_their_vendor(tmp_path, monkeypatch):
     """en/fmp 기사가 분류돼도 document 자연키는 (fmp, article_id) — bigkinds 로 하드코딩하면
     LoadDocuments 가 fmp 로 적재한 행과 어긋난 중복 document 가 생긴다(Codex #137 P1)."""

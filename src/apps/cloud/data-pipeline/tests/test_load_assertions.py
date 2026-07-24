@@ -26,6 +26,10 @@ _INDEX = ResolutionIndex(by_key={
 })
 
 
+# document.available_at — 로더가 assertion 에 실어야 하는 값(ALPHA-538). tagged_at(02:00Z)·
+# published_at(09:00+09)과 다른 값으로 둬서 어느 시각이 실렸는지 구분 가능하게 한다.
+_DOC_AVAILABLE_AT = "2026-07-15T08:50:00+09:00"
+
 def _write_feature(storage, language: str, date: str, rows: list[dict]) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -70,11 +74,13 @@ class _FakeCursor:
         upper = sql.lstrip().upper()
         if upper.startswith("SELECT SOURCE_DOCUMENT_ID"):
             wanted = set(params[1])
-            self._rows = [(a, d) for a, d in conn.documents if a in wanted]
+            self._rows = [(a, d, conn.doc_available_at)
+                          for a, d in conn.documents if a in wanted]
         elif upper.startswith("INSERT INTO DOCUMENT_ASSERTION"):
             nk = (params[1], params[2], params[3])
             self.rowcount = 0 if nk in conn.existing_assertions else 1
-        elif upper.startswith("SELECT ASSERTION_ID"):
+        elif upper.startswith("UPDATE DOCUMENT_ASSERTION"):
+            # 소유 컬럼(confidence) 착지 + RETURNING assertion_id (ALPHA-538)
             self._one = ("asrt_EXISTING",)
         elif upper.startswith("INSERT INTO ASSERTION_ARGUMENT"):
             self.rowcount = 0 if (params[0], params[1], params[2]) in conn.existing_arguments else 1
@@ -96,6 +102,7 @@ class _FakeConn:
     def __init__(self, documents=None, existing_assertions=None, existing_arguments=None):
         self.log: list = []
         self.documents = documents or []          # (source_document_id, document_id)
+        self.doc_available_at = _DOC_AVAILABLE_AT  # document.available_at 로 SELECT 에 실림
         self.existing_assertions = existing_assertions or set()  # (doc_id, event, predicate)
         self.existing_arguments = existing_arguments or set()
 
@@ -130,7 +137,8 @@ def _log(storage) -> dict:
 
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):
     """주장 1건 = document_assertion 1행 + 해소된 argument — document_id 는 자연키로
-    해소된 실제 행이어야 FK 가 살고, available_at 은 주장이 생긴 시각(tagged_at)이다."""
+    해소된 실제 행이어야 FK 가 살고, available_at 은 **그 document 의 가용 시각**이다.
+    추출 시각(tagged_at)을 실으면 주장의 PIT 가 프로세스 시각으로 오염된다(ALPHA-538)."""
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion()])])
     conn = _FakeConn(documents=[("a1", "doc_D1")])
@@ -143,15 +151,17 @@ def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):
     assert assertion_id.startswith("asrt_")  # ADR-0027
     assert (document_id, event_type, predicate) == ("doc_D1", "SUPPLY_CONTRACT", "WIN")
     assert confidence == 0.9
-    assert available_at == "2026-07-15T02:00:00+00:00"
+    assert available_at == _DOC_AVAILABLE_AT  # tagged_at(02:00Z) 아님 — document 파생
     [(arg_assertion_id, role, entity_id, arg_conf)] = _inserts(conn, "assertion_argument")
     assert arg_assertion_id == assertion_id
     assert (role, entity_id) == ("ISSUER", "inst_SAMSUNG")
 
 
 def test_existing_assertion_unions_arguments_under_existing_id(tmp_path, monkeypatch):
-    """멱등 — 자연키가 이미 있으면(분석엔진 선적재 포함) 새 ULID 를 만들지 않고 **그 행의
-    assertion_id** 로 arguments 만 union 한다. 아니면 재실행마다 중복 계보가 쌓인다."""
+    """멱등 + 소유 컬럼 착지(ALPHA-538) — 자연키가 이미 있으면(assemble-events 의 비계
+    선생성 포함) 새 행을 만들지 않고 **그 행의 assertion_id** 로 arguments 만 union 하되,
+    소유 컬럼 confidence 는 UPDATE 로 확정 착지한다. 아니면 행 생성 경주에서 진 쪽의
+    판정이 조용히 유실돼 최종 행이 실행 순서를 탄다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion()])])
     conn = _FakeConn(documents=[("a1", "doc_D1")],
@@ -161,6 +171,9 @@ def test_existing_assertion_unions_arguments_under_existing_id(tmp_path, monkeyp
     assert load_assertions.run(storage, "R1", db=_db()) == 0
     log = _log(storage)
     assert log["created"] == 0 and log["already_present"] == 1
+    [(upd_conf, upd_doc, upd_event, upd_pred)] = [
+        p for sql, p in conn.log if sql.upper().startswith("UPDATE DOCUMENT_ASSERTION")]
+    assert (upd_conf, upd_doc, upd_event, upd_pred) == (0.9, "doc_D1", "SUPPLY_CONTRACT", "WIN")
     [(arg_assertion_id, _, entity_id, _)] = _inserts(conn, "assertion_argument")
     assert arg_assertion_id == "asrt_EXISTING"
     assert entity_id == "inst_SAMSUNG"
