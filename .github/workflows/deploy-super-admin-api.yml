@@ -9,7 +9,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/super-admin-api/**"
+      - "src/apps/cloud/super-admin-api/**"
       # 공유 경로 — 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
       - "src/libs/jvm-common/**"
       - "src/settings.gradle"
@@ -36,3 +36,4 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: super-admin-api
+      plane: cloud

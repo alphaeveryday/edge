@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: intake
+  datasource:
+    # 온프렘 Raw Event Store (libs/schema/migrations-onprem). 로컬 기본값은 compose 의
+    # postgres-onprem(:55433) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      # 스키마 SSOT 는 Flyway(libs/schema) — 앱은 consumer 다. 생성/변경 금지, 검증만(ADR-0038·
+      # libs/schema/README). 기동 시 매핑된 엔티티와 실제 스키마 정합을 확인하고 DDL 은 발행하지 않는다.
+      ddl-auto: validate
+    # 워커라 웹 요청 스코프가 없다 — 지연 로딩(OSIV)이 필요 없으므로 끈다.
+    open-in-view: false
+
+intake:
+  # DMZ Sync Agent 의 내부 표면. 외부 통신은 없다 — 이 URL 이 유일한 수신원(ADR-0036).
+  sync-agent-url: ${SYNC_AGENT_URL:http://localhost:18085}
+  # 계약 기본 1~5분 — 로컬 compose 는 시연을 위해 짧게 둔다(compose 에서 5000ms 주입).
+  poll-delay-ms: ${INTAKE_POLL_MS:60000}
+  # 한 틱에서 드레인할 최대 번들 수 — 무한 루프 방지 상한.
+  max-bundles-per-tick: 10

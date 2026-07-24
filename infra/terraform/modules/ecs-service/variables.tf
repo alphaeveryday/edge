@@ -14,7 +14,7 @@ variable "cluster_arn" {
 }
 
 variable "container_image" {
-  description = "ECR 이미지 URI (예: <acct>.dkr.ecr.<region>.amazonaws.com/edge/widget-api:0.0.1)"
+  description = "ECR 이미지 URI (예: <acct>.dkr.ecr.<region>.amazonaws.com/edge/super-admin-api:0.0.1)"
   type        = string
 }
 

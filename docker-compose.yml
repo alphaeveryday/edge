@@ -1,33 +1,33 @@
-# edge 로컬 통합 스택 — gateway + 백엔드 API + Postgres.
+# edge 로컬 통합 스택 — 백엔드 API + Postgres.
 #
-# 목적: "gateway 가 앞단, 나머지 API 는 뒤" 라는 배포 토폴로지(ECS + Service Connect)를
-#       로컬에서 동일하게 재현해 테스트한다.
+# 목적: 백엔드 API 를 ECS Service Connect 토폴로지와 동일하게 로컬에서 재현해 테스트한다.
+#       (gateway 는 은퇴 — ADR-0032. 공개 엣지는 super-admin 공개화 시점 ALB 직결로 재도입.)
 #
 # 핵심 정합성:
-#   - 서비스 이름(tenant-console-api·super-admin-api·gateway)을
-#     ECS Service Connect 의 dns_name(= Terraform 모듈 name)과 '똑같이' 둔다.
-#     → gateway 라우팅 설정이 http://tenant-console-api:8080 을 타깃하면 로컬·ECS 가 동일 동작.
+#   - 서비스 이름(tenant-console-api·super-admin-api·tenant-sync-api·publication-api)을
+#     ECS Service Connect 의 dns_name(= Terraform 모듈 name)과 '똑같이' 둔다
+#     → 서비스 간 호출 http://<name>:8080 이 로컬·ECS 에서 동일 동작.
 #   - 컨테이너 포트 8080, 빌드 컨텍스트 src/ (Dockerfile 규약과 동일).
 #   - Postgres 접속값(edge/edge/edge)·Flyway 는 docker-compose.schema.yml 과 일치.
-#
-# gateway 라우팅(ALPHA-294·301, 위젯 라우트는 하이브리드 피벗으로 제거 — ADR-0010):
-#    /api/v1/console/** → tenant-console-api, /api/v1/admin/** → super-admin-api
-#    (기본 uri 가 서비스명 http://<name>:8080 이라 compose 에서 별도 설정 없이 동작.)
-#    각 백엔드 host 포트(18081~)는 라우팅 우회 직접 테스트용으로 남겨 둔다.
+#   - DB 는 플레인별 2개: postgres(cloud, :55432) / postgres-onprem(온프렘, :55433,
+#     ADR-0011 물리 격리 재현). 로컬 시드는 cloud 쪽(seed-local-cloud — SSOT 밖)뿐이며,
+#     온프렘 데이터는 동기화 경로(sync-agent→intake→screening-worker)가 실적재한다.
 #
 # 사용:
-#   docker compose up --build          # 전체 기동(첫 실행은 gradle 빌드로 느림)
-#   docker compose up --build gateway  # 특정 서비스만
-#   docker compose down [-v]           # 정리(-v 는 DB 볼륨까지)
+#   docker compose up --build             # 전체 기동(첫 실행은 gradle 빌드로 느림)
+#   docker compose up --build <service>   # 특정 서비스만
+#   docker compose down [-v]              # 정리(-v 는 DB 볼륨까지)
+#   .dev/up-all.sh                        # 백엔드(이 파일) + 콘솔 UI 2종까지 한 줄 기동 (ALPHA-516)
 #
-# 테스트:
-#   # gateway 경유(라우팅)
-#   curl localhost:8080/actuator/health    # gateway
-#   # 백엔드 직접(라우팅 우회)
+# 테스트(각 백엔드 host 포트 직접):
 #   curl localhost:18081/actuator/health   # tenant-console-api
 #   curl localhost:18082/actuator/health   # super-admin-api
 #   curl "localhost:18083/api/v1/sync/bundle?after=0"   # tenant-sync-api (번들+체크섬 헤더)
-#   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # serving-api
+#   curl "localhost:18085/internal/v1/bundles?after=0"   # sync-agent — 검증 후 무변형 전달
+#   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
+#   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # publication-api
+#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세, AI 분석 탭만 실호출)
+#   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
 
 services:
   postgres:
@@ -48,6 +48,7 @@ services:
       retries: 10
 
   # SSOT 스키마(src/libs/schema)를 DB 에 적용하고 종료한다.
+  # 로컬 전용 시드(seed-local-cloud — SSOT 밖, CI·CD 미포함)를 함께 태운다.
   flyway:
     image: flyway/flyway:10.21.0
     container_name: edge-flyway
@@ -55,24 +56,28 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./src/libs/schema/migrations:/flyway/sql:ro
+      - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
+      - ./src/libs/schema/seed-local-cloud:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres:5432/edge
       -user=edge -password=edge
       -connectRetries=10
-      -locations=filesystem:/flyway/sql
+      -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
       migrate
 
+  # [edge-onprem] 검수 표면(Review Queue 목록·승인·반려) — 온프렘 PG 조회·전이.
   tenant-console-api:
     build:
       context: ./src
-      dockerfile: apps/tenant-console-api/Dockerfile
+      dockerfile: apps/onprem/tenant-console-api/Dockerfile
     container_name: edge-tenant-console-api
     depends_on:
-      flyway:
+      flyway-onprem:
         condition: service_completed_successfully
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
     ports:
@@ -81,51 +86,179 @@ services:
   super-admin-api:
     build:
       context: ./src
-      dockerfile: apps/super-admin-api/Dockerfile
+      dockerfile: apps/cloud/super-admin-api/Dockerfile
     container_name: edge-super-admin-api
     depends_on:
       flyway:
         condition: service_completed_successfully
     environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 스택 전용 데모 운영자 비밀번호 — application.yaml 은 기본값을 커밋하지
+      # 않는다(공개 엣지 fail-closed). super-admin-ui dev 자동 로그인 기본값과 짝.
+      ADMIN_BOOTSTRAP_OPERATOR_PASSWORD: demo-operator-1
+      # 로컬은 http 라 Secure 쿠키(기본 true)를 끈다 — 켜두면 브라우저가 세션
+      # 쿠키를 저장하지 않아 로그인이 조용히 풀린다.
+      SERVER_SERVLET_SESSION_COOKIE_SECURE: "false"
+    ports:
+      # 데모 자격증명이 실리는 서비스라 루프백만 바인딩 — 공유 네트워크에서
+      # 다른 호스트가 로그인 표면에 닿지 않게 한다.
+      - "127.0.0.1:18082:8080"
+
+  # [edge-onprem] 온프렘 PostgreSQL — 테넌트별 물리 격리(ADR-0011)를 컨테이너 분리로 재현.
+  # cloud postgres 와 절대 섞지 않는다. demo-onprem compose 추출(ALPHA-444/445)의 원형.
+  postgres-onprem:
+    image: postgres:16
+    container_name: edge-postgres-onprem
+    environment:
+      POSTGRES_DB: edge_onprem
+      POSTGRES_USER: edge
+      POSTGRES_PASSWORD: edge
+    ports:
+      - "55433:5432" # host 55433 → cloud(55432)와 구분
+    volumes:
+      - edge-postgres-onprem-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edge -d edge_onprem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # 온프렘 세트(migrations-onprem) 적용. 온프렘 데이터는 이제 동기화 경로가 실적재하므로
+  # 로컬 시드가 없다(구 seed-local-onprem 은 screening-worker 도입으로 제거 —
+  # ignoreMigrationPatterns 는 기존 로컬 볼륨의 히스토리에 남은 그 repeatable 항목 허용용).
+  # 주의: 구 시드를 적용했던 기존 볼륨은 낡은 게시 행이 grain 을 선점해 동기화 게시를 막는다
+  # — 이 전환에서 한 번은 `docker compose down -v` 로 볼륨을 리셋할 것.
+  flyway-onprem:
+    image: flyway/flyway:10.21.0
+    container_name: edge-flyway-onprem
+    depends_on:
+      postgres-onprem:
+        condition: service_healthy
+    volumes:
+      - ./src/libs/schema/migrations-onprem:/flyway/sql:ro
+    command: >-
+      -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      -user=edge -password=edge
+      -connectRetries=10
+      -locations=filesystem:/flyway/sql
+      -ignoreMigrationPatterns=repeatable:missing
+      migrate
+
+  # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만) — 온프렘 PG 조회.
+  publication-api:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/publication-api/Dockerfile
+    container_name: edge-publication-api
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      # 로컬 데모 한정 — 시드(seed-local-onprem)의 091160 을 지원 종목으로 인식시킨다
+      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160
+    ports:
+      - "18084:8080"
+
+  # [demo] 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙 — ADR-0035 런타임 경로 재현.
+  # 화면 → mock-broker → publication-api 실 HTTP 2홉. 고객 해시·채널 부착은 이 레이어 책임.
+  mock-broker:
+    build:
+      context: ./demo
+      dockerfile: mock-broker/Dockerfile
+    container_name: edge-mock-broker
+    depends_on:
+      - publication-api
+    environment:
+      PUBLICATION_API_URL: http://publication-api:8080
+    ports:
+      - "18090:8080"
+
+  # Sync Agent 가 Pull 하는 Cloud 표면(ADR-0010) — tenant_delivery(outbox) DB 조회.
+  # gateway 를 타지 않는다(sync 전용 mTLS ALB — ADR-0034).
+  tenant-sync-api:
+    build:
+      context: ./src
+      dockerfile: apps/cloud/tenant-sync-api/Dockerfile
+    container_name: edge-tenant-sync-api
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
     ports:
-      - "18082:8080"
-
-  # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만). 인메모리 시드 — DB 의존 없음.
-  serving-api:
-    build:
-      context: ./src
-      dockerfile: apps/serving-api/Dockerfile
-    container_name: edge-serving-api
-    ports:
-      - "18084:8080"
-
-  # Sync Agent 가 Pull 하는 Cloud 표면(ADR-0010). outbox 인메모리 스텁 — DB 의존 없음.
-  # gateway 를 타지 않는다(mTLS 직접 노출 유력 — TODO §6 gateway 존치 ADR과 함께 확정).
-  tenant-sync-api:
-    build:
-      context: ./src
-      dockerfile: apps/tenant-sync-api/Dockerfile
-    container_name: edge-tenant-sync-api
-    ports:
       - "18083:8080"
 
-  # 공개 엣지(단일 진입점). backends 를 http://<name>:8080 으로 프록시한다(ALPHA-294·301).
-  #   console→tenant-console-api · admin→super-admin-api
-  gateway:
+  # [edge-onprem] Sync Agent — DMZ 역할. Cloud pull + 체크섬 검증, DB 접근 없음(ADR-0036).
+  sync-agent:
     build:
       context: ./src
-      dockerfile: apps/gateway/Dockerfile
-    container_name: edge-gateway
+      dockerfile: apps/onprem/sync-agent/Dockerfile
+    container_name: edge-sync-agent
     depends_on:
-      tenant-console-api:
-        condition: service_started
-      super-admin-api:
-        condition: service_started
+      - tenant-sync-api
+    environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      TENANT_SYNC_API_URL: http://tenant-sync-api:8080
     ports:
-      - "8080:8080" # 로컬 단일 진입점(2라우트 프록시)
+      - "18085:8080"
+
+  # [edge-onprem] Intake — 내부망 역할. sync-agent 폴링 → Raw Event Store 멱등 적재.
+  # committed cursor(sync_state)의 권위 소유자(sync-protocol.md). 로컬은 5초 폴링(시연용).
+  intake:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/intake/Dockerfile
+    container_name: edge-intake
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+      sync-agent:
+        condition: service_started
+    environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      SYNC_AGENT_URL: http://sync-agent:8080
+      INTAKE_POLL_MS: "5000"
+    ports:
+      - "18086:8080"
+
+  # [edge-onprem] Screening Worker — 미점검 번들 파싱·상태 분기(state-machine.md).
+  # NEW=무조건 통과(AUTO_PUBLISHED)+자동 게시, CORRECTION=리비전 분리·재검수, INVALIDATION=즉시 비노출.
+  screening-worker:
+    build:
+      context: ./src
+      dockerfile: apps/onprem/screening-worker/Dockerfile
+    container_name: edge-screening-worker
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      # 로컬은 default profile — 평문 로그(ALPHA-531). 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+      SPRING_PROFILES_ACTIVE: ""
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: edge
+      SCREENING_POLL_MS: "5000"
+    ports:
+      - "18087:8080"
 
 volumes:
   edge-postgres-data:
+  edge-postgres-onprem-data:

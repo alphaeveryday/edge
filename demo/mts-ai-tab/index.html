@@ -7,98 +7,239 @@
 <link rel="stylesheet" href="css/colors_and_type.css">
 <link rel="stylesheet" href="css/edge-components.css">
 <style>
-  body{margin:0;background:#e4e4e7;font-family:"Pretendard",-apple-system,sans-serif}
-  a{color:#2e5aac;text-decoration:none}a:hover{color:#244a93}
+  /* 수령 디자인(KODEX 반도체 AI 분석.dc.html, ALPHA-485) 이식 — 정적 html+js 번역 */
+  body{margin:0;background:#fff;font-family:"Pretendard",-apple-system,sans-serif}
+  a{color:#2e5aac;text-decoration:none}a:hover{color:#24488c;text-decoration:underline}
+  input::placeholder{color:#a1a1aa}
   @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .fade-up{animation:fadeUp .25s ease both}
-  /* 디자인 시안의 iOS 프레임(402x874)을 단순 프레임으로 재현 */
-  .phone{width:402px;height:874px;border-radius:28px;overflow:hidden;
-         box-shadow:0 16px 48px rgba(24,24,27,.18);border:1px solid var(--gray-300);background:var(--gray-50)}
-  .mts-tab{flex:none;border:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;
-           padding:9px 10px;font-weight:400;color:var(--fg-3);border-bottom:2px solid transparent;white-space:nowrap}
-  .mts-tab.active{font-weight:600;color:var(--accent);border-bottom-color:var(--accent)}
+  /* 디자인의 iOS 프레임(393x852 + 다크 베젤) 정적 재현 */
+  .bezel{background:#1c1c1e;border-radius:54px;padding:6px;box-shadow:0 0 0 1px #3a3a3c,0 0 0 2px #0a0a0a;flex-shrink:0}
+  .device{width:393px;height:852px;background:#fff;border-radius:48px;overflow:hidden;position:relative;
+          font-family:Pretendard,-apple-system,sans-serif;color:#18181b}
+  .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:120px;height:34px;
+          background:#000;border-radius:20px;z-index:40}
+  .statusbar{position:absolute;top:0;left:0;right:0;height:47px;display:flex;align-items:flex-end;
+             justify-content:space-between;padding:0 30px 4px;z-index:30;pointer-events:none}
+  .screen{display:none;flex-direction:column;height:100%}
+  .screen.active{display:flex}
+  .iconbtn{border:none;background:none;padding:0;cursor:pointer;color:inherit;display:flex}
+  .toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:rgba(24,24,27,.88);
+         color:#fff;font-size:12px;padding:9px 16px;border-radius:999px;white-space:nowrap;z-index:50}
 </style>
 </head>
 <body>
-<div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:32px 0">
-<div class="phone">
-<div style="display:flex;flex-direction:column;height:100%;background:var(--gray-50);font-family:var(--font-sans);color:var(--fg-1)">
+<div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px">
+<div class="bezel">
+<div class="device">
+  <div class="island"></div>
+  <div class="statusbar">
+    <span class="num" style="font-size:15px;font-weight:600">15:30</span>
+    <span style="display:flex;gap:6px;align-items:center;color:#18181b">
+      <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+      <svg width="16" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/></svg>
+      <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0.5" y="0.5" width="21" height="11" rx="3" fill="none" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="1.6" fill="currentColor"/><path d="M23 4v4a2 2 0 0 0 0-4Z" fill="currentColor" opacity=".4"/></svg>
+    </span>
+  </div>
 
-  <!-- 종목 헤더 — 시세는 증권사 자체 데이터(목업 고정값), AI 분석만 Serving API 경유 -->
-  <div style="background:#fff;border-bottom:1px solid var(--border);padding:10px 16px 0;flex:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <!-- ═══ 홈 화면 ═══ -->
+  <section id="screen-home" class="screen active">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:62px 16px 10px;flex-shrink:0">
       <div style="display:flex;align-items:center;gap:8px">
-        <span id="etf-name" style="font-size:17px;font-weight:700;letter-spacing:-0.01em">KODEX 200</span>
-        <span id="etf-ticker" class="tag num" style="font-size:11px">069500</span>
-        <span class="chip" style="height:18px;font-size:10px">ETF</span>
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:#FFBC00;border-radius:4px;font-size:10px;font-weight:800;color:#60584C">KB</span>
+        <span style="font-size:15px;font-weight:700;color:#3f3a33">KB증권</span>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;color:var(--fg-3)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21l-8.5-8.5a5.5 5.5 0 1 1 8.5-6.9 5.5 5.5 0 1 1 8.5 6.9L11 21z"></path></svg>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16l6-4 6 4V4z"></path></svg>
+      <div style="display:flex;gap:14px;color:#71717a">
+        <button class="iconbtn" data-not-ready><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button>
+        <button class="iconbtn" data-not-ready><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
       </div>
     </div>
-    <div style="display:flex;align-items:flex-end;justify-content:space-between">
-      <div>
+    <div style="padding:4px 16px 12px;flex-shrink:0">
+      <button id="home-search-btn" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;background:#f4f4f5;border:1px solid #e4e4e7;border-radius:8px;font-family:inherit;font-size:14px;color:#a1a1aa;cursor:pointer;text-align:left">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        종목명·종목코드 검색
+      </button>
+    </div>
+    <div style="flex:1;overflow-y:auto;min-height:0">
+      <div id="home-indices" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:4px 16px 16px"></div>
+      <div style="padding:0 16px">
+        <button data-not-ready style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 0;border:none;background:none;font-family:inherit;cursor:pointer">
+          <span style="font-size:14px;font-weight:700;color:#18181b">관심종목</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div id="home-watchlist"></div>
+      </div>
+    </div>
+    <div style="display:flex;border-top:1px solid #e4e4e7;padding:8px 8px 6px;flex-shrink:0">
+      <button class="iconbtn" style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#3f3a33">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <span style="font-size:10px;font-weight:600">홈</span>
+      </button>
+      <button class="iconbtn" data-not-ready style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#a1a1aa">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        <span style="font-size:10px;font-weight:600">관심</span>
+      </button>
+      <button class="iconbtn" data-not-ready style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#a1a1aa">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5v4"/><rect width="4" height="6" x="7" y="9" rx="1"/><path d="M9 15v2"/><path d="M17 3v2"/><rect width="4" height="8" x="15" y="5" rx="1"/><path d="M17 13v3"/><path d="M3 3v16a2 2 0 0 0 2 2h16"/></svg>
+        <span style="font-size:10px;font-weight:600">주식</span>
+      </button>
+      <button class="iconbtn" data-not-ready style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#a1a1aa">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+        <span style="font-size:10px;font-weight:600">자산</span>
+      </button>
+      <button class="iconbtn" data-not-ready style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#a1a1aa">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+        <span style="font-size:10px;font-weight:600">메뉴</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ═══ 검색 화면 ═══ -->
+  <section id="screen-search" class="screen">
+    <div style="display:flex;align-items:center;gap:8px;padding:58px 16px 10px;border-bottom:1px solid #e4e4e7;flex-shrink:0">
+      <button id="search-back-btn" class="iconbtn" style="padding:4px;color:#52525b">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;padding:9px 12px;background:#f4f4f5;border:1px solid #e4e4e7;border-radius:8px">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="search-input" placeholder="종목명·종목코드 검색" style="flex:1;border:none;background:none;outline:none;font-family:inherit;font-size:14px;color:#18181b;min-width:0">
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;min-height:0;padding:8px 16px">
+      <div id="search-section-label" style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a1a1aa;padding:8px 0 4px">인기 검색 종목</div>
+      <div id="search-results"></div>
+      <div id="search-no-results" style="display:none;padding:32px 0;text-align:center;font-size:13px;color:#a1a1aa">검색 결과가 없습니다.</div>
+    </div>
+  </section>
+
+  <!-- ═══ 종목 상세 화면 ═══ -->
+  <section id="screen-stock" class="screen">
+    <!-- 앱 바 -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:62px 16px 8px;flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <button id="stock-back-btn" class="iconbtn" style="color:#52525b">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;background:#FFBC00;border-radius:4px;font-size:10px;font-weight:800;color:#60584C">KB</span>
+        <span style="font-size:13px;font-weight:700;color:#3f3a33">KB증권</span>
+      </div>
+      <div style="display:flex;gap:14px;color:#71717a">
+        <button id="stock-search-btn" class="iconbtn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+        <button class="iconbtn" data-not-ready><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+      </div>
+    </div>
+    <!-- 종목 헤더 — 시세는 증권사 자체 데이터(목업 고정값), AI 분석만 Publication API 경유 -->
+    <div style="padding:4px 16px 12px;border-bottom:1px solid #e4e4e7;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="display:flex;align-items:baseline;gap:8px">
-          <span class="num" style="font-size:24px;font-weight:700;letter-spacing:-0.01em;color:var(--down)">36,485</span>
-          <span class="delta delta-down num" style="font-size:12px">▼ 340</span>
-          <span class="delta delta-down num" style="font-size:12px">−0.92%</span>
+          <div id="st-name" style="font-size:17px;font-weight:700;letter-spacing:-.2px"></div>
+          <div id="st-code" class="num" style="font-size:11px;color:#71717a"></div>
+        </div>
+        <div style="display:flex;gap:14px">
+          <button id="fav-btn" class="iconbtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#71717a" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+          </button>
+          <button id="alert-btn" class="iconbtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#71717a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          </button>
         </div>
       </div>
-      <div class="num" style="display:grid;grid-template-columns:auto auto;gap:2px 12px;font-size:10.5px;color:var(--fg-3);text-align:right">
-        <span>고 <b style="color:var(--fg-1);font-weight:500">36,955</b></span>
-        <span>거래량 <b style="color:var(--fg-1);font-weight:500">6,214,830</b></span>
-        <span>저 <b style="color:var(--fg-1);font-weight:500">36,340</b></span>
-        <span>거래대금 <b style="color:var(--fg-1);font-weight:500">2,271억</b></span>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px">
+        <div id="st-price" class="num" style="font-size:24px;font-weight:700;letter-spacing:-.3px"></div>
+        <div id="st-chg" class="num" style="font-size:13px;font-weight:600"></div>
       </div>
     </div>
     <!-- 탭 바 -->
-    <div id="tab-bar" style="display:flex;gap:2px;margin-top:10px;overflow-x:auto;scrollbar-width:none"></div>
-  </div>
+    <div id="tab-bar" style="display:flex;gap:0;border-bottom:1px solid #e4e4e7;overflow-x:auto;flex-shrink:0;scrollbar-width:none"></div>
+    <!-- 콘텐츠 -->
+    <div style="flex:1;overflow-y:auto;min-height:0">
 
-  <!-- 탭 콘텐츠 -->
-  <div style="flex:1;overflow-y:auto;padding:12px 16px 24px;display:flex;flex-direction:column;gap:12px">
-
-    <!-- AI 분석 탭 -->
-    <div id="panel-ai" style="display:flex;flex-direction:column;gap:12px">
-      <div class="card" style="padding:16px 14px">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
-          <span style="font-size:15px;font-weight:700;letter-spacing:-0.01em">오늘의 가격 변동 분석</span>
-          <span id="analysis-meta" class="num" style="font-size:11px;color:var(--fg-3)"></span>
+      <!-- AI 분석 -->
+      <div id="panel-ai" style="display:none;padding:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid #e4e4e7">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="ai-date" class="num" style="font-size:12px;color:#71717a"></span>
+            <span id="ai-date-dot" style="font-size:12px;color:#d4d4d8;display:none">·</span>
+            <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#60584C;border:1px solid #f0d98a;background:#fff7dd;border-radius:3px;padding:2px 6px">AI 분석</span>
+          </div>
+          <span id="ai-published" class="num" style="font-size:11px;color:#a1a1aa"></span>
         </div>
         <!-- 로딩 스켈레톤 -->
-        <div id="analysis-loading" style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+        <div id="ai-loading" style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
           <span class="skel" style="width:92%"></span>
           <span class="skel" style="width:100%"></span>
           <span class="skel" style="width:96%"></span>
           <span class="skel" style="width:64%"></span>
         </div>
-        <!-- 200: 설명 본문 -->
-        <p id="analysis-text" style="display:none;margin:14px 0 0;font-size:14px;line-height:1.75;color:var(--fg-1);white-space:pre-line;text-wrap:pretty"></p>
-        <!-- 204/에러: 안내 문구 -->
-        <div id="analysis-empty" style="display:none;padding:36px 8px;text-align:center">
-          <p id="analysis-empty-text" style="margin:0;font-size:13px;line-height:1.6;color:var(--fg-3)"></p>
+        <!-- 200: 리포트 본문 (첫 블록=헤드라인, 이후 문단) -->
+        <div id="ai-body" style="display:none">
+          <h2 id="ai-headline" style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.45;margin:16px 0 14px;text-wrap:pretty"></h2>
+          <div id="ai-paragraphs"></div>
+        </div>
+        <!-- 204/에러: 안내 -->
+        <div id="ai-empty" style="display:none;padding:36px 8px;text-align:center">
+          <p id="ai-empty-text" style="margin:0;font-size:13px;line-height:1.6;color:#71717a"></p>
+        </div>
+        <!-- 디스클레이머 -->
+        <div style="background:#fafafa;border:1px solid #e4e4e7;border-radius:5px;padding:12px;margin:20px 0 8px">
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            <div>
+              <p style="font-size:11px;line-height:1.6;color:#71717a;margin:0">본 콘텐츠는 AI가 뉴스·공시 데이터를 기반으로 자동 생성한 참고 자료이며, 특정 종목의 매수·매도를 권유하는 투자 자문이 아닙니다. 분석 결과의 정확성·완전성은 보장되지 않으며, 투자에 대한 최종 판단과 책임은 투자자 본인에게 있습니다.</p>
+              <!-- 계약(publication-api.md): 응답의 disclaimer는 화면에 반드시 함께 노출한다 -->
+              <p id="ai-disclaimer" style="display:none;font-size:11px;line-height:1.6;color:#71717a;margin:6px 0 0"></p>
+            </div>
+          </div>
         </div>
       </div>
-      <div style="padding:0 2px">
-        <p style="margin:0;font-size:10.5px;line-height:1.6;color:var(--fg-4)">※ 본 정보는 뉴스·공시 데이터를 기반으로 자동 생성된 참고 자료로, 특정 종목의 매수·매도 추천이 아닙니다. 투자 판단의 최종 책임은 투자자 본인에게 있으며, 원금 손실이 발생할 수 있습니다.</p>
-        <!-- 계약(serving-api.md): 응답의 disclaimer는 화면에 반드시 함께 노출한다 -->
-        <p id="serving-disclaimer" style="display:none;margin:4px 0 0;font-size:10.5px;line-height:1.6;color:var(--fg-4)"></p>
-        <p class="num" style="margin:4px 0 0;font-size:10.5px;color:var(--fg-4)">자료: 한국거래소(KRX)·KIND · 문의 1588-0000</p>
+
+      <!-- 호가 -->
+      <div id="panel-book" style="display:none;padding:8px 16px 16px">
+        <div id="book-rows"></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#a1a1aa;margin-top:10px">
+          <span>매도잔량 128,441</span><span>15:30 장마감</span><span>매수잔량 96,205</span>
+        </div>
       </div>
-    </div>
 
-    <!-- 그 외 탭 (목업) -->
-    <div id="panel-other" style="display:none;padding:60px 16px;flex-direction:column;align-items:center;gap:8px">
-      <span id="other-tab-name" style="font-size:13px;font-weight:600;color:var(--fg-3)"></span>
-      <span style="font-size:12px;color:var(--fg-4)">이 탭은 목업입니다 — AI 분석 탭을 눌러 돌아가세요.</span>
+      <!-- 차트 -->
+      <div id="panel-chart" style="display:none;padding:12px 16px 16px">
+        <div id="chart-periods" style="display:flex;gap:4px;margin-bottom:12px"></div>
+        <svg viewBox="0 0 360 180" style="width:100%;display:block">
+          <line x1="0" y1="45" x2="360" y2="45" stroke="#f0f0f1" stroke-width="1"/>
+          <line x1="0" y1="90" x2="360" y2="90" stroke="#f0f0f1" stroke-width="1"/>
+          <line x1="0" y1="135" x2="360" y2="135" stroke="#f0f0f1" stroke-width="1"/>
+          <polyline points="0,96 30,88 60,92 90,74 120,66 150,72 180,52 210,44 240,50 270,38 300,30 330,118 360,124" fill="none" stroke="#1d4ed8" stroke-width="2"/>
+          <circle cx="330" cy="118" r="3" fill="#1d4ed8"/>
+        </svg>
+        <div class="num" style="display:flex;justify-content:space-between;font-size:10px;color:#a1a1aa;margin-top:6px">
+          <span>7/1</span><span>7/6</span><span>7/9</span><span>7/14</span><span>7/16</span>
+        </div>
+        <div id="chart-stats" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:16px"></div>
+      </div>
+
+      <!-- 뉴스·공시 -->
+      <div id="panel-news" style="display:none;padding:4px 16px 16px"></div>
+
+      <!-- 종목정보 -->
+      <div id="panel-info" style="display:none;padding:12px 16px 16px">
+        <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a1a1aa;padding-bottom:6px">구성종목 상위</div>
+        <div id="info-holdings"></div>
+      </div>
+
+      <!-- 커뮤니티 -->
+      <div id="panel-talk" style="display:none;padding:4px 16px 16px"></div>
+
+      <!-- 재무(상품정보) -->
+      <div id="panel-fin" style="display:none;padding:12px 16px 16px"></div>
     </div>
-  </div>
+  </section>
+
 </div>
 </div>
 </div>
 
-<script src="js/serving-api-mock.js"></script>
 <script src="js/broker-api.js"></script>
 <script src="js/app.js"></script>
 </body>

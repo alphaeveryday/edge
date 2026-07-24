@@ -9,48 +9,32 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
-variable "widget_api_image" {
-  description = "widget-api ECR 이미지 URI(:태그 포함)"
-  type        = string
-}
-
-variable "tenant_console_api_image" {
-  description = "tenant-console-api ECR 이미지 URI(:태그 포함)"
-  type        = string
-}
-
 variable "super_admin_api_image" {
   description = "super-admin-api ECR 이미지 URI(:태그 포함)"
   type        = string
 }
 
-variable "gateway_image" {
-  description = "gateway ECR 이미지 URI(:태그 포함)"
+variable "tenant_sync_api_image" {
+  description = "tenant-sync-api ECR 이미지 URI(:태그 포함). TF 소유 baseline — 실행 태그는 CD 소유"
   type        = string
 }
 
-variable "alb_allowed_cidrs" {
-  description = "임시 검증 ALB 인바운드 허용 CIDR"
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
+variable "sync_domain" {
+  description = "Sync 채널 고정 FQDN — 온프렘 sync-agent 의 outbound-Pull 단일 목적지. prod 는 sync.edgesignal.dev 로."
+  type        = string
+  default     = "sync-dev.edgesignal.dev"
+}
+
+variable "sync_mtls_trust_store_arn" {
+  description = "sync ALB mTLS trust store ARN. null=아직 mTLS 미적용(2단계 — CA·번들 준비 후 주입, ALPHA-447). 주입 전까지 sync 엔드포인트는 공개 도달"
+  type        = string
+  default     = null
 }
 
 variable "route53_zone_name" {
   description = "기존 Route53 호스팅 영역 이름(참조용)"
   type        = string
   default     = "edgesignal.dev"
-}
-
-variable "edge_domain" {
-  description = "엣지 ALB 에 붙일 도메인"
-  type        = string
-  default     = "edge-dev.edgesignal.dev"
-}
-
-variable "widget_domain" {
-  description = "widget-ui(임베드 위젯) CDN 도메인. prod 는 widget.edgesignal.dev 로."
-  type        = string
-  default     = "widget-dev.edgesignal.dev"
 }
 
 variable "console_domain" {
@@ -103,4 +87,10 @@ variable "admin_domain" {
   description = "super-admin-ui(운영 콘솔 SPA) CDN 도메인. prod 는 admin.edgesignal.dev 로."
   type        = string
   default     = "admin-dev.edgesignal.dev"
+}
+
+variable "admin_api_domain" {
+  description = "super-admin-api 공개 엣지 ALB 도메인(ADR-0034 — UI 도메인 admin-dev 와 짝). prod 는 admin-api.edgesignal.dev 로."
+  type        = string
+  default     = "admin-api-dev.edgesignal.dev"
 }

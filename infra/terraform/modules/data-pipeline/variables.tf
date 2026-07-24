@@ -89,6 +89,21 @@ variable "analysis_release_bundle_version" {
   default     = null
 }
 
+# ALPHA-470 — analyze 페이즈 Map 팬아웃의 유니버스 배열. 발화 무관 전량 병렬 분석한다.
+# ⚠️ SSOT 는 앱 config `sources.toml [krx_etf.source.etf_map]` 키다 — terraform 이 TOML 을
+# 못 읽어(네이티브 파서 없음) 여기 미러한다. 유니버스 변경(드묾) 시 두 곳을 함께 고쳐야 한다.
+variable "analysis_etf_universe" {
+  description = "분석 팬아웃 대상 ETF 티커 배열. sources.toml [krx_etf.source.etf_map] 키의 미러(SSOT=그쪽)."
+  type        = list(string)
+  default = [
+    "069500", "396500", "0167A0", "091160", "395160", "395270", "139260",
+    "091230", "469150", "455850", "474590", "471990", "475300", "0210A0",
+    "0182R0", "471780", "388420", "363580", "494220", "0093A0", "0190G0",
+    "0005G0", "471760", "266370", "486240", "475310", "476260", "261060",
+    "482030", "0176P0", "488210",
+  ]
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024
@@ -128,6 +143,35 @@ variable "schedule_state" {
   default     = "DISABLED"
 }
 
+# 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
+variable "reconcile_schedule_state" {
+  description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
+  type        = string
+  default     = "DISABLED"
+}
+
+variable "reconcile_schedule_expression" {
+  description = "Reconciler 실행 주기. 미실행·STALLED 탐지 지연 허용치에 맞춘다."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
+# Planner 의 비거래일(NON_TRADING_DAY) 판정용 KR 평일 공휴일(YYYY-MM-DD). 주말은 코드가 안다.
+# ⚠️ 완전한 거래소 캘린더 연동 전까지의 잠정 주입 지점 — 미설정이면 평일 공휴일에도 수집이 돈다.
+variable "kr_holidays" {
+  description = "KR 평일 휴장일 목록(YYYY-MM-DD). Planner 가 OPS_KR_HOLIDAYS 로 받는다."
+  type        = list(string)
+  default     = []
+}
+
+# Reconciler 의 PLANNER_MISSING 판정 기준 시각. schedule_expression(cron 40 15)의 HH:MM 과
+# 일치시켜야 한다 — 코드 하드코딩 대신 이 한 변수로 모아 드리프트를 막는다(edge-review).
+variable "daily_schedule_hhmm" {
+  description = "daily 스케줄 KST 시각 HH:MM. schedule_expression 과 일치해야 한다."
+  type        = string
+  default     = "15:40"
+}
+
 variable "alarm_email" {
   description = "raw ingest 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
   type        = string
@@ -147,7 +191,7 @@ variable "log_retention_days" {
 variable "tag_news_limit" {
   description = "tag-news 가 한 실행에서 새로 LLM 을 부를 기사 수 상한(비용 가드). 잔여는 다음 실행이 이어받는다."
   type        = number
-  default     = 500
+  default     = 10000
 }
 
 variable "state_machine_timeout_seconds" {

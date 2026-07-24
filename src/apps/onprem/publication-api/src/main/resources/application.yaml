@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: publication
+  datasource:
+    # 온프렘 Published Store (libs/schema/migrations-onprem 스키마). 로컬 기본값은
+    # compose 의 postgres-onprem(:55433) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      # 스키마 SSOT 는 Flyway(libs/schema) — 앱은 consumer 다. 생성/변경 금지, 검증만(ADR-0038·
+      # libs/schema/README). 기동 시 매핑된 엔티티와 실제 스키마 정합을 확인하고 DDL 은 발행하지 않는다.
+      ddl-auto: validate
+    # 조회는 리포지토리의 join fetch 로 즉시 로딩한다 — 뷰 렌더링 중 지연 로딩(OSIV)이 필요 없다.
+    open-in-view: false
+
+publication:
+  # 상장 여부 판별(404) — 종목 마스터 동기화 도입 전의 설정 allowlist.
+  # 404(미상장)와 204(상장이나 설명 없음)는 다른 질문이다.
+  known-tickers: ${PUBLICATION_KNOWN_TICKERS:069500,305720}

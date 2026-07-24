@@ -16,7 +16,7 @@ on:
   push:
     branches: [dev]
     # 스키마 SSOT가 바뀐 커밋에서만 실행한다. 마이그레이션 이미지는 src/libs/schema/ 컨텍스트만으로
-    # 자립 실행되므로(Flyway CLI + migrations/ + flyway.conf, gradle 무관) 이 필터가 정확하다.
+    # 자립 실행되므로(Flyway CLI + migrations-cloud/ + flyway.conf, gradle 무관) 이 필터가 정확하다.
     # self 를 포함해 이 워크플로 자체 수정도 트리거된다(파이프라인 변경 검증).
     paths:
       - "src/libs/schema/**"

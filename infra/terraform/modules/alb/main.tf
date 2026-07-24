@@ -1,6 +1,7 @@
-# 인터넷 facing Application Load Balancer (공개 엣지).
-# 목표 토폴로지에서는 gateway 앞에 선다. 현재는 gateway 부재로 widget-api 를
-# 임시 검증하기 위한 타깃그룹을 노출한다 — gateway 증분에서 타깃을 갈아끼운다.
+# 인터넷 facing Application Load Balancer (공개 엣지) — 재사용 모듈.
+# 진입점은 호스트(도메인) 단위로 분리한다 — 서비스당 ALB 1개, 경로 라우팅 없음(ADR-0034).
+# mTLS 는 리스너 단위 설정이라 인증 방식이 다른 표면(sync mTLS vs admin 일반 TLS)을 한
+# 진입점에 섞을 수 없는 것이 분리의 근거다. 현재 호출자: envs/dev 의 sync ALB.
 
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
@@ -105,5 +106,14 @@ resource "aws_lb_listener" "https" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.this.arn
+  }
+
+  # mTLS(verify) — trust store 가 주입된 경우에만. 검증 실패 연결은 핸드셰이크에서 끊긴다.
+  dynamic "mutual_authentication" {
+    for_each = var.mtls_trust_store_arn == null ? [] : [1]
+    content {
+      mode            = "verify"
+      trust_store_arn = var.mtls_trust_store_arn
+    }
   }
 }

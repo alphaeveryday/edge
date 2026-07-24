@@ -47,6 +47,7 @@ nav:
       - Sprint 2: retrospective/sprint-2.md
       - Sprint 3: retrospective/sprint-3.md
       - Sprint 4: retrospective/sprint-4.md
+      - Sprint 5: retrospective/sprint-5.md
   - Reference:
       - Context: reference/context.md
       - Scope: reference/scope.md
@@ -57,7 +58,7 @@ nav:
           - Sync Protocol: reference/contracts/sync-protocol.md
           - Event Bundle Schema: reference/contracts/event-bundle-schema.md
           - Sync Auth: reference/contracts/sync-auth.md
-          - Serving API: reference/contracts/serving-api.md
+          - Publication API: reference/contracts/publication-api.md
       - Domain:
           - State Machine: reference/domain/state-machine.md
           - Data Residency: reference/domain/data-residency.md

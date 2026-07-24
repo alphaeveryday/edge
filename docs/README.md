@@ -18,12 +18,18 @@
 | [contracts/sync-protocol.md](contracts/sync-protocol.md) | Sync 프로토콜 계약 (cursor·fan-out·멱등성·목표 계약) — 양단 모두 영서 소유 ([adr/0026](adr/0026-ownership-boundary-db.md)) | Sync 채널 양단을 만질 때 |
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
-| [contracts/serving-api.md](contracts/serving-api.md) | MTS/HTS 연동 방식 — Serving API | 증권사 연동 접점을 만질 때 |
+| [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |
 | [console-ia/](console-ia/) | Super Admin·Tenant Console IA | 콘솔 화면·메뉴를 만들 때 |
 | [adr/](adr/) | 결정 기록 — 무엇을 왜 그렇게 정했나 | 결정의 배경이 궁금할 때 |
+| [architecture/system-architecture.md](architecture/system-architecture.md) | **[뷰]** 논리 컴포넌트↔시스템 매핑 + 논리→배포 모듈 매핑표 | 논리 구조를 훑을 때 (상세: context.md) |
+| [architecture/application-architecture.md](architecture/application-architecture.md) | **[뷰]** 환경별 UI/API/저장소 계층 | 앱 계층을 훑을 때 (상세: context.md·console-ia) |
+| [architecture/information-architecture.md](architecture/information-architecture.md) | **[뷰]** 콘솔 정보구조 트리(위젯·고객사·슈퍼어드민) | 콘솔 IA를 훑을 때 (상세: console-ia) |
+| [architecture/cloud-architecture.md](architecture/cloud-architecture.md) | **[뷰]** AWS 클라우드 인프라 구성도 | 클라우드 배치를 훑을 때 (상세: infra/terraform/README·adr/0034·0028) |
+
+> **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 
 ## 읽는 순서
 1. [context.md](context.md) — 제품이 무엇이고 왜 피벗했는지, 컴포넌트 경계
@@ -35,7 +41,7 @@
 ## 팀 오너십
 
 - **김진기**: Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** (DB에 쓰는 것까지 — [adr/0026](adr/0026-ownership-boundary-db.md)).
-- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent, Compliance Engine, Tenant Console (API), Serving API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
+- **조영서**: DB를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api), 전달 레코드(fan-out), Sync Agent·Intake, Screening Worker, Tenant Console (API), Publication API, Super Admin Console API. Sync 프로토콜 양단을 단일 오너가 설계.
 - **정준영**: AI/ML — 설명 후보 생성, 신뢰도/반대 요인 산출.
 - 진기-영서 인터페이스는 **Cloud Event Store DB 스키마** 하나로 고정한다(db-as-contract). 스키마 변경은 반드시 양자 합의 ([contracts/event-bundle-schema.md](contracts/event-bundle-schema.md), [adr/0026](adr/0026-ownership-boundary-db.md)).
 
@@ -66,7 +72,7 @@
 | 11 Super Admin Console IA | console-ia/super-admin-console.md |
 | 12 Tenant Console IA | console-ia/tenant-console.md |
 | 13 데이터 저장 위치 기준 | domain/data-residency.md |
-| 14 MTS/HTS 연동 방식 | contracts/serving-api.md |
+| 14 MTS/HTS 연동 방식 | contracts/publication-api.md |
 | 15 ERD 방향 및 상태값 | domain/state-machine.md |
 | 16 MVP 제외 범위 | scope.md |
 | 17.1~17.3 구현 결정사항 | implementation.md |

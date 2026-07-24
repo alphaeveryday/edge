@@ -1,68 +1,213 @@
-# Sprint 1 회고 (KPT)
+# Sprint 1 회고록
 
-!!! info "회고 개요"
-    - **스프린트**: Sprint 1
-    - **일자**: 2026-06-24
-    - **참여자**: 정준영, 조영서, 김진기
-    - **방식**: KPT (Keep · Problem · Try)
-    - **스프린트 골**: 뉴스·가격 데이터를 수집해 분석 DB에 적재하고, ML 분류 결과를 API 표준 응답으로 반환하여 위젯에 띄우는 첫 번째 얇은 E2E 사이클을 만든다.
+<style>
+.retro-page {
+  max-width: 960px;
+}
+.retro-page h2 {
+  margin-top: 2.2rem;
+}
+.retro-muted {
+  color: #44546f;
+}
+.retro-info {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  margin: 1.2rem 0 1.6rem;
+  padding: 0.9rem 1rem;
+  border-radius: 2px;
+  background: #deebff;
+  color: #172b4d;
+}
+.retro-info-icon {
+  display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #0c66e4;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+}
+.retro-page table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.retro-page th,
+.retro-page td {
+  border: 1px solid #dfe1e6;
+  padding: 0.8rem;
+  vertical-align: top;
+}
+.retro-board td {
+  padding: 0.75rem 0.55rem;
+}
+.retro-meta th {
+  width: 30%;
+  background: #f4f5f7;
+  color: #172b4d;
+  text-align: left;
+}
+.retro-meta td {
+  color: #44546f;
+}
+.retro-board th {
+  color: #172b4d;
+  text-align: left;
+}
+.retro-board .keep {
+  background: #e6fcff;
+}
+.retro-board .problem {
+  background: #ffebe6;
+}
+.retro-board .try {
+  background: #e3fcef;
+}
+.retro-page .retro-board ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+.retro-page .retro-board li {
+  margin-left: 0;
+  position: relative;
+  padding-left: 0.9rem;
+}
+.retro-board li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+}
+.retro-actions ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.retro-board li + li,
+.retro-actions li + li {
+  margin-top: 0.55rem;
+}
+.retro-actions li {
+  list-style: none;
+  position: relative;
+  padding-left: 1.75rem;
+}
+.retro-actions li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.2rem;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c1c7d0;
+  border-radius: 2px;
+  background: #fff;
+  color: #0c66e4;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.retro-actions.done li::before {
+  content: "✓";
+}
+</style>
 
-## 📊 스프린트 요약
+<div class="retro-page">
 
-| 시작 커밋 | 최종 스코프 | 완료 | 이월 |
-|----------|------------|------|------|
-| 37 SP | 48 SP | 37 SP | 11 SP |
+<h2>📋 개요</h2>
 
-> 시작 커밋 37 SP를 100% 완료했다. 다만 스프린트 중 스코프가 48 SP로 늘며(순 +11) 11 SP를 이월했다 — 여러 스토리를 스프린트에서 빼고 대신 Spike·게이트웨이 스텁·E2E·분석 작업을 추가하는 스코프 재편이 잦았고, 이월분은 콘솔 트랙(Organization·Application·Embed Key)에 집중됐다. 달성률은 **시작 커밋 대비 100%, 최종 스코프 대비 77%**. (출처: Jira 스프린트 리포트 `SCRUM 1 스프린트`, 2026-06-17~06-23)
+<p class="retro-muted">
+회고 플레이에 대한 설명을 따라 지난 작업을 돌아보고 개선의 기회를 식별한다.
+</p>
 
-## ✅ KEEP — 잘 됐던 것, 계속 유지할 것
+<table class="retro-meta">
+  <tbody>
+    <tr>
+      <th>날짜</th>
+      <td>2026년 6월 24일</td>
+    </tr>
+    <tr>
+      <th>팀</th>
+      <td>Alpha Everyday</td>
+    </tr>
+    <tr>
+      <th>참여자</th>
+      <td>김진기, 조영서, 정준영</td>
+    </tr>
+  </tbody>
+</table>
 
-| 내용 | 제안자 |
-|------|--------|
-| 분석 트랙은 외부 의존 없이 독립적으로 진행할 수 있는 구조여서 집중도가 높았고, 계획한 작업을 거의 대부분 소화했다 → **트랙 독립성 유지** | 정준영 |
-| 스코프 이상을 스프린트 중간에 빠르게 감지해 작업물 손실 없이 Spike로 보존했다 → **스코프 변경 시 즉시 팀에 공유하는 습관 유지** | 김진기 |
-| 레포지토리 셋업을 스프린트 초반에 집중 처리해 후반에는 개발에만 집중할 수 있는 환경을 만들었다 → **공통 기반 작업은 초반 우선 수행** | 조영서 |
+<h2>💭 KPT 회고</h2>
 
-## ❗ PROBLEM — 문제가 됐던 것, 개선이 필요한 것
+<div class="retro-info">
+  <span class="retro-info-icon">i</span>
+  <span>KEEP, PROBLEM, TRY 항목을 아래 표에 정리한다. 이 항목을 바탕으로 다음 스프린트에서 개선할 Action Item을 정한다.</span>
+</div>
 
-| 내용 | 제안자 |
-|------|--------|
-| M2/M3 스토리가 플래닝 때 M1에 잘못 포함 → 스코프 경계 모호 | 김진기 |
-| 예비군 등 개인 일정으로 인한 가용 시간 감소를 플래닝 캐파에 미반영 → 콘솔 트랙 전부 이월 | 조영서 |
-| 분석 결과(FF5·SCM)가 위젯 E2E에 붙을 인터페이스 부재 → 트랙 간 연동 공백 | 정준영 |
-| 이슈를 막판에 일괄 완료 처리(bulk close) → 번다운 왜곡, 진척 파악 어려움 | 팀 전체 |
-| 스프린트 중 추가 스토리가 많음(약 12 SP) → 계획 안정성 저하 | 팀 전체 |
-| Admin Console의 화면 설계(UI/UX)와 API 스펙이 확정되지 않은 채 개발 진입 → 구현 착수 시점이 계속 밀림 | 조영서 |
-| 프로젝트 초기 세팅(프로젝트 구조)이 되어 있지 않은 채 개발 진입 → 코드 병합 시점이 계속 밀림 | 조영서 |
+<table class="retro-board">
+  <thead>
+    <tr>
+      <th class="keep">KEEP</th>
+      <th class="problem">PROBLEM</th>
+      <th class="try">TRY</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>
+        <ul>
+          <li>분석 트랙을 외부 의존 없이 독립적으로 진행하는 구조로 두어 집중도를 유지하고 계획 작업을 대부분 소화함</li>
+          <li>스코프 이탈을 스프린트 중간에 즉시 감지해 작업물을 잃지 않고 Spike로 보존함</li>
+          <li>레포지토리·공통 기반 셋업을 스프린트 초반에 몰아 처리해 후반을 개발에 집중함</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li>M2·M3 스토리가 플래닝 때 M1에 잘못 포함돼 스코프 경계가 모호했음</li>
+          <li>예비군 등 개인 일정에 따른 가용 시간 감소를 캐파에 반영하지 않아 콘솔 트랙이 전부 이월됨</li>
+          <li>분석 결과(FF5·SCM)를 위젯 E2E에 붙일 인터페이스가 없어 트랙 간 연동이 비었음</li>
+          <li>이슈를 막판에 일괄 완료(bulk close) 처리해 번다운이 왜곡되고 진척 파악이 어려웠음</li>
+          <li>스프린트 중 추가 스토리(약 12 SP)가 많아 계획 안정성이 떨어짐</li>
+          <li>Admin Console 화면 설계·API 스펙을 확정하지 않은 채 개발에 들어가 착수가 계속 밀림</li>
+          <li>프로젝트 초기 세팅(구조)이 안 된 채 개발에 들어가 코드 병합이 계속 밀림</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li>트랙 간 의존 작업(Gateway 스텁·인터페이스)을 스프린트 초반에 먼저 처리함</li>
+          <li>플래닝에서 개인 일정을 캐파에서 명시적으로 차감함</li>
+          <li>분석↔위젯 응답 계약을 공동 정의하는 세션을 잡음</li>
+          <li>데일리마다 Jira 상태를 갱신하고 스프린트 말 bulk close를 하지 않음</li>
+          <li>스프린트 중 추가 수용 기준(WIP 한도·버퍼)을 정함</li>
+          <li>다음 스프린트 Week 1에 핵심 화면 와이어프레임을 확정한 뒤 구현에 착수함</li>
+          <li>프로젝트 초기 세팅(모노레포 구조)을 먼저 끝내고 개발함</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
-## 🚀 TRY — 다음 스프린트에 시도할 것
+<h2>✅ Action Item</h2>
 
-| 내용 | 제안자 |
-|------|--------|
-| 트랙 간 의존 작업(Gateway 스텁·인터페이스)을 스프린트 초반에 먼저 처리 | 김진기 |
-| 플래닝 시 개인 일정을 캐파에서 명시적으로 차감 (→ AI-2) | 조영서 |
-| 분석↔위젯 응답 계약을 공동 정의하는 세션 잡기 | 정준영 |
-| 데일리마다 Jira 상태 실시간 갱신 (bulk close 금지) (→ AI-1) | 팀 전체 |
-| 스프린트 중 추가 수용 기준(WIP 한도·버퍼) 정하기 | 팀 전체 |
-| Sprint 2 Week 1에 Admin Console·위젯 핵심 화면 와이어프레임을 확정한 뒤 구현 착수 | 조영서 |
-| 프로젝트 초기 세팅(모노레포 구조 포함)을 먼저 끝내놓고 안정적으로 개발 (→ AI-3) | 조영서 |
+<p class="retro-muted">회고에서 나온 내용을 다음 스프린트에 적용하기 위한 후속 Action Item이다.</p>
 
-## 🎯 Action Items
+<div class="retro-actions">
+  <ul>
+    <li>매일 데일리 전에 팀원이 Jira 상태를 최신화했는지 확인한다 (스프린트 말 bulk close 0건)</li>
+    <li>스프린트 플래닝에서 각자의 가용 시간을 산정해 커밋 SP에 반영한다</li>
+    <li>모노레포 모듈 구조·브랜치 전략·공통 패키지 구성을 확정하고 README에 문서화한다</li>
+  </ul>
+</div>
 
-TRY 중 우선순위 상위 항목을 다음 스프린트(Sprint 2)의 실행 과제로 확정했다.
+</div>
 
-| 번호 | Action Item | 담당자 | 완료 기한 | 달성 여부 |
-|------|-------------|--------|-----------|-----------|
-| AI-1 | 매일 데일리 전에 팀원이 Jira 상태를 최신화했는지 확인한다 (스프린트 말 bulk close 0건 목표) | 김진기 | Sprint 2 전체 | 미확인 |
-| AI-2 | Sprint 플래닝에서 각자의 가용 시간을 산정해 커밋 SP에 반영한다 | 김진기 | Sprint 2 플래닝 (Week 1) | 미확인 |
-| AI-3 | Sprint 2 Week 1까지 모노레포 모듈 구조·브랜치 전략·공통 패키지 구성을 확정하고 README에 문서화한다 | 조영서 | Sprint 2 전체 | 미확인 |
-
-> 달성 여부 표기: `미확인` · `✅ 달성` · `❌ 미달성` · `🔄 진행중`
-
-## 🔁 이전 스프린트 Action Item 추적
-
-첫 스프린트로, 추적할 이전 스프린트의 Action Item이 없다. (해당 없음)
-
-## 📝 회고 개선 메모
-
-- PROBLEM 6·7이 "X가 안 된 채 개발 진입 → 밀림"으로 패턴이 겹친다. 각각 "Admin Console 설계 미확정" vs "프로젝트 구조·인프라 미비"로 구분을 명확히 하면 더 좋다. (기록은 원문 유지)
+??? note "이전 Action Item"
+    첫 스프린트로, 추적할 이전 스프린트의 Action Item이 없다.

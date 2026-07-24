@@ -1,27 +1,43 @@
 # Super Admin Console IA (Vendor Cloud)
 
+> 콘솔 재설계 IA 기준으로 정렬 ([../architecture/information-architecture.md](../architecture/information-architecture.md) 슈퍼 어드민 콘솔). 이 문서가 현행 SSOT이고 뷰는 논리 개요다 — 충돌 시 이 문서 우선.
+
 ```
 Super Admin Console
 ├── Tenants
-├── Event Pipeline
-└── Admin Activity Log
+└── Event Pipeline
 ```
 
-**Tenants**
+**Tenants** (= 테넌트 관리)
 
 - 생성: 테넌트명, 환경 구분(PoC/Production), 초기 Tenant Admin 이름·이메일, 메모
-- 목록: 테넌트명, 환경, 연결 상태(Sync 채널 기준: 정상/오류/미연결 — 테넌트 활성·비활성 개념 아님, 사용 중지/재개 기능 없음과 일관), 마지막 이벤트 동기화 시각, 생성일
+- 목록: 테넌트명, 환경, 연결 상태(Sync 채널 기준: 정상 / 동기화 지연 / 오류 / 미연결(온보딩 중) — 테넌트 활성·비활성 개념 아님, 사용 중지/재개 기능 없음과 일관), 마지막 이벤트 동기화 시각, 생성일. 필터: 상태, 테넌트 검색
 - 상세: 위 + 최근 동기화 결과, 최근 오류 메시지, 최근 24시간 전달 이벤트 수, 최근 24시간 정정/무효화 이벤트 수
 - **금지**: 테넌트 API Key 관리 ✕, 시장/종목 커버리지 세부 제어 ✕, 사용 중지/재개 버튼 ✕
 
-**Event Pipeline**
+**Event Pipeline** (= 가격 변동 분석 관리)
 
-- 데이터 소스 상태: 뉴스/공시/시세/수급 각각의 상태, 마지막 수집·정상 처리 시각, 최근 오류
-- 변동 이벤트 목록: 종목, 시장, 등락률, 방향, 생성 시각, 근거 개수, 상태
-- 변동 이벤트 상세: 종목명, 티커, 시장, 등락률, 기준 시각, 관련 뉴스/공시, 시세/수급 변화, AI 공통 설명 후보, 신뢰도, 반대 요인, 정정 등록, 무효화 등록
-- **정정/무효화 시 사유 입력 필수**
+- 데이터 소스 수집 상태: 뉴스 / 공시 / 시세 / 수급 / 실적·재무 / ETF 구성 종목 — 각 상태, 마지막 수집·정상 처리 시각, 최근 오류
+- 변동(분석) 이벤트 목록: 종목, 시장, 등락률, 방향, 생성 시각, 근거 개수, 상태. 필터: 상태(전체 / 분석 완료 / 분석 대기 / 분석 실패 / 제외됨), 시장, 종목 검색
+- 변동 이벤트 상세: 종목명, 티커, 시장, 등락률, 기준 시각, 관련 뉴스/공시, 시세/수급 변화, AI 공통 설명 후보, 신뢰도, 반대 요인, 분석 정보(변동 기준 시각·분석 완료 시각)
+- 관리 액션: 정정 등록(분석 결과 정정), 무효화 등록(분석 대상 제외). **정정/무효화 시 사유 입력 필수** — 사유는 이벤트 레코드에 보존된다
 
-**Admin Activity Log**
+## API 매핑 (super-admin-api)
 
-- 작업 유형: 테넌트 생성, 이벤트 정정, 이벤트 무효화
-- 목록: 작업 시각, 작업자, 유형, 대상, 사유 / 상세: 변경 전·후 내용 포함
+위 화면 표면의 코드 대응물 — `AdminAuthFilter` RULES 와 1:1 이며, 엔드포인트 추가
+시 이 표와 필터에 함께 행을 더한다(매핑 없는 표면은 fail-closed 403). 운영자는
+단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답은 현재
+`mock` 패키지 반환(ALPHA-515), DB 연동 시 도메인 단위 교체.
+
+| 화면 | 엔드포인트 |
+|---|---|
+| Tenants 목록/생성 | `GET /api/v1/tenants` · `POST /api/v1/tenants` |
+| Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
+| Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |
+| 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
+| 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |
+
+> mock 단계 임시 완화: 정정/무효화 **사유 입력 필수**는 현 UI 계약(사유 입력 없음)에
+> 맞춰 유예된다 — DB 연동 시 감사 레코드 보존과 함께 계약에 편입한다.
+
+> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.

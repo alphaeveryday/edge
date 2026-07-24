@@ -2,13 +2,21 @@
 # clean slate 라 전부 신규 생성(과거 import 대상은 삭제됨). env 의 ECS 는 이미지를 URI(tfvars)로,
 # schema-migrate 는 repo URL/ARN 을 data 로 참조 — 하드 크로스스택 의존 없음.
 locals {
+  # 은퇴 레포(gateway·widget-api)는 2단계 제거 완료(ADR-0032): 1단계에서 force_delete=true 를
+  # state 에 반영한 뒤(2026-07-21 apply), 2단계(ALPHA-475)에서 키를 빼 안전히 destroy 했다.
   image_repositories = toset([
-    "edge/widget-api",
-    "edge/gateway",
     "edge/super-admin-api",
+    "edge/tenant-sync-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
     "edge/schema-migrate", # Flyway one-off 이미지
+    # 데모 온프렘 박스(envs/demo-onprem)가 compose 로 pull 하는 온프렘/데모 런타임 이미지.
+    # cloud 앱과 달리 ECS 서비스가 아니라 EC2 compose 로 뜬다(ADR-0033) — 저장소만 foundation 소유.
+    "edge/publication-api",
+    "edge/screening-worker",
+    "edge/intake",
+    "edge/sync-agent",
+    "edge/mock-broker", # 데모 증권사 backend(Node) — demo/mock-broker
   ])
 }
 
@@ -16,6 +24,9 @@ resource "aws_ecr_repository" "this" {
   for_each             = local.image_repositories
   name                 = each.key
   image_tag_mutability = "MUTABLE"
+  # force_delete=false — RepositoryNotEmpty 가드(실수 삭제·리네임 방지). 레포 은퇴 시에는
+  # true 를 먼저 apply 한 뒤 키를 빼는 2단계로 제거한다(위 주석 — gateway·widget-api 전례).
+  force_delete = false
 
   image_scanning_configuration {
     scan_on_push = true

@@ -6,7 +6,7 @@
 
 > 결정 배경: [ADR-0016](adr/0016-single-repo-two-artifacts.md), [ADR-0011](adr/0011-rls-to-physical-isolation.md)
 
-- **단일 레포 유지**, 배포 아티팩트 2종으로 분리: `edge-cloud` (super-admin, tenant-sync-api, pipeline 연동) / `edge-onprem` (sync-agent, compliance-engine, tenant-console, serving-api).
+- **단일 레포 유지**, 배포 아티팩트 2종으로 분리: `edge-cloud` (super-admin, tenant-sync-api, pipeline 연동) / `edge-onprem` (sync-agent, intake, screening-worker, tenant-console, publication-api). sync-agent=DMZ Pull·검증, intake=내부망 수신·저장([adr/0036](adr/0036-sync-agent-intake-topology.md); 단일 모듈 옵션에서는 합침). **위젯 UI는 이 두 런타임 아티팩트와 별개인 정적 빌드 산출물**로 납품된다(컨테이너·compose 서비스가 아님, 증권사가 자기 환경에서 임베드·호스팅 — [adr/0035](adr/0035-widget-ui-build-artifact.md)).
 - 기존 Gradle 멀티모듈에서 **widget 모듈 삭제**, tenant-console은 onprem 아티팩트로 이동.
 - **shared-tenancy(RLS) 모듈 삭제.** On-Prem이 테넌트별 물리 격리이므로 RLS의 존재 이유가 소멸. "RLS 설계 → 물리 격리 전환" 의사결정 자체는 기술 스토리로 문서화해 보존 ([ADR-0011](adr/0011-rls-to-physical-isolation.md)).
 - Flyway 중앙화(shared-migration)는 유지하되 cloud/onprem 마이그레이션 세트를 분리.
@@ -15,7 +15,7 @@
 
 > 결정 배경: [ADR-0017](adr/0017-demo-topology-compose.md)
 
-- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Serving API, Compliance Engine, Tenant Console, Sync Agent, PostgreSQL, Redis).
+- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Publication API, Screening Worker, Tenant Console, Sync Agent, Intake, PostgreSQL, Redis).
 - 딜리버리 스토리: "증권사 서버에 Compose 파일 하나로 설치된다."
 - On-Prem 스택: **PostgreSQL + Redis 유지**.
 - Cloud 측은 기존 AWS 구조(ECS, Step Functions, RDS, 3-layer subnet) 유지하되 serving cluster 구성을 신규 컴포넌트에 맞게 개정.
@@ -64,7 +64,7 @@
   이 순서는 **CI가 강제하지 않는다** — 마이그레이션 CD(`schema-migrate`)와 앱 CD(`deploy-app`)는 분리돼 있어 앱 배포가 migrate를 기다리지 않는다. 확장 마이그레이션 PR을 먼저 머지해 `schema-migrate`가 초록인 것을 확인한 뒤 의존 코드 PR을 머지하는 것은 작성자 책임이다.
 
 **변경 체크리스트** — 스키마를 바꿀 때:
-- [ ] `libs/schema/migrations/`에 마이그레이션 추가(Flyway, timestamp 버전 `VyyyyMMddHHmm__`).
+- [ ] `libs/schema/migrations-cloud/`에 마이그레이션 추가(Flyway, timestamp 버전 `VyyyyMMddHHmm__`).
 - [ ] (생성기 도입 후) `libs/schema/generated/` 모델 재생성.
 - [ ] 마이그레이션과 생성 모델을 **같은 PR/커밋**으로 함께 올린다([ADR-0005](adr/0005-db-as-contract.md)).
 - [ ] 이 변경이 확장-수축 중 **어느 단계인지** PR 설명에 명시한다.
@@ -73,7 +73,7 @@
 **generated 모델 재생성**
 > **현황:** generated 모델 **생성기가 아직 없다.** ADR-0005·README의 "스키마 변경 시 generated
 > 동반 커밋" 규칙은 **그대로 유효하다.** 다만 그 **전제인 생성기가 아직 없어 현재 생성할 산출물이 없고**
-> (`generated/`는 비어 있음), 그 전까지는 `libs/schema/migrations/`의 Flyway SQL이 사실상 계약을 정의한다.
+> (`generated/`는 비어 있음), 그 전까지는 `libs/schema/migrations-cloud/`의 Flyway SQL이 사실상 계약을 정의한다.
 > 생성기는 별도 후속 티켓에서 도입하며, 도입되는 순간 아래 규칙이 그대로 적용된다(규칙 자체를 보류·완화하지 않는다).
 
 생성기 도입 이후의 규칙:
@@ -83,6 +83,6 @@
 
 ## 5. 현행 CD (지속적 배포)
 
-> 구 docs/architecture.md에서 흡수 — 현행 운영 사실. 배포 대상 앱 구성(widget-api·gateway 등)은 피벗([context.md](context.md)의 서비스/API 변경표)에 따라 개정 예정.
+> 구 docs/architecture.md에서 흡수 — 현행 운영 사실. 배포 대상 앱 구성은 피벗([context.md](context.md)의 서비스/API 변경표)에 따라 재편됐다(widget·gateway 제거 — ADR-0010·0032).
 
-dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 4종 widget-api·tenant-console-api·super-admin-api·gateway)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. 프론트별 워크플로(`deploy-<ui>.yml`, 3종 widget-ui·tenant-console-ui·super-admin-ui)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다. 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
+dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 2종 super-admin-api·tenant-sync-api — tenant-console-api 는 onprem 플레인이라 dev ECS·CD 에서 제거)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. 프론트별 워크플로(`deploy-<ui>.yml`, 2종 tenant-console-ui·super-admin-ui)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다. 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.

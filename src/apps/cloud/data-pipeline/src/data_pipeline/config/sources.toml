@@ -1,0 +1,282 @@
+# data-pipeline 수집 설정
+#
+# 구조와 공개값만 둔다. api_key 등 비밀값은 커밋하지 말고 환경변수로 주입한다.
+#   예) DATA_PIPELINE_NEWS__SOURCES__NAVER__API_KEY=...
+# 같은 경로의 환경변수가 이 파일 값을 덮어쓴다(env > file).
+#
+# 수집 대상은 [targets]만 바꾸면 fetcher의 대상이 바뀐다 — 코드 수정 불필요.
+
+# fmp 가 현재 유일하게 구현된 뉴스 수집 소스다(S002). api_key 는 env 로 주입:
+#   DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=...
+[news.sources.fmp]
+base_url = "https://financialmodelingprep.com/stable/news/stock"
+enabled = true
+
+# our_ticker → FMP 심볼. 검증된 매핑만 둔다 — 여기 없는 유니버스 종목은 FMP 로
+# 수집하지 않는다(검증 안 된 KR ADR 은 생략 = 제외, 후속 소스가 커버).
+# US 는 심볼 동일, BRK.B 는 FMP 대시 표기(BRK-B, analysis-engine 데이터 키와 일치).
+[news.sources.fmp.symbol_map]
+"005930" = "SSNLF"  # 삼성전자 (OTC ADR)
+"105560" = "KB"     # KB금융 (NYSE ADR)
+"055550" = "SHG"    # 신한지주 (NYSE ADR)
+NVDA = "NVDA"
+AAPL = "AAPL"
+MSFT = "MSFT"
+CAT = "CAT"
+GE = "GE"
+RTX = "RTX"
+"BRK.B" = "BRK-B"
+JPM = "JPM"
+V = "V"
+
+[news.sources.naver]
+base_url = "https://openapi.naver.com/v1/search/news.json"
+enabled = true
+
+[news.sources.hankyung]
+base_url = "https://www.hankyung.com/feed/finance"
+enabled = true
+
+# 국내 뉴스 소스 — BigKinds search.do raw 수집. 키 없음, 저부하 직렬 수집.
+# ingest-raw --source bigkinds 로 선택(미지정=fmp). CONTENT 는 BigKinds 응답 원본 필드로
+# 그대로 저장한다(본문 전문 크롤·요약·절단 없음).
+# **카테고리 주도 전체 수집(ALPHA-417)** — 검색어 없이(searchKey="") 카테고리의 그날 뉴스
+# 전체를 받는다. 종목 매핑은 정규화의 종목명 탐지(ALPHA-416) 소관. page_size 100 = API 상한,
+# max_pages 40 = 일 최대 4,000건 안전 상한(초과는 truncation 로그 + 다음 창 이어받기).
+# PoliteClient 1초 간격이면 하루 최대 ~40요청 — 구 종목별 수집(9종목×5페이지)과 비슷한 부하.
+[bigkinds_news]
+base_url = "https://www.bigkinds.or.kr/api/news/search.do"
+enabled = true
+page_size = 100
+max_pages = 40
+# 경제 대분류만 수집한다. 소비자(tag-news)는 경제 사건만 쓴다 — 온톨로지에 없는 유형은
+# 버려지는 게 아니라 가장 가까운 라벨로 굴절돼 조용히 오분류된다(ALPHA-360).
+# `002…` = 경제 대분류(2026-07-14 라이브 실측). CATEGORY 는 멀티라벨이라 경제를 **포함**하면
+# 수집된다. 언론사는 안 좁힌다(전체). **필수** — 검색어가 없으므로 카테고리마저 비면 전체
+# 뉴스 firehose 라 로드가 거부한다.
+category_codes = ["002000000"]
+
+# 가격(OHLCV) 소스 — FMP EOD(일봉, S004). api_key 는 env 로 주입:
+#   DATA_PIPELINE_PRICE__SOURCE__API_KEY=...
+[price.source]
+base_url = "https://financialmodelingprep.com/stable/historical-price-eod/full"
+enabled = true
+
+# our_ticker → FMP 심볼. 뉴스와 별개 맵이다 — 뉴스 맵의 KR 은 ADR(SSNLF·KB·SHG)로
+# 매핑돼 '그 회사 뉴스'엔 맞지만, 가격은 ADR 의 USD 시세를 KR 종목 가격으로 쓰면
+# 통화·거래시간이 어긋난다. 그래서 가격은 US 거래소-로컬 심볼만 두고, KR 은 FMP EOD 의
+# KRX 로컬 심볼이 검증되기 전까지 생략(=이 소스가 건너뜀, 후속). US 는 심볼 동일,
+# BRK.B 는 FMP 대시 표기(BRK-B).
+[price.source.symbol_map]
+NVDA = "NVDA"
+AAPL = "AAPL"
+MSFT = "MSFT"
+CAT = "CAT"
+GE = "GE"
+RTX = "RTX"
+"BRK.B" = "BRK-B"
+JPM = "JPM"
+V = "V"
+
+# 국내 가격 소스 — KIS(한국투자) REST 일봉 OHLCV(S004 국내). FMP(위 [price.source])와
+# 별개 벤더다. 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps)로 고른다:
+#   DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=...
+#   DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=...
+# ingest-price-raw --source kis 로 선택(미지정=fmp). 검증에 쓴 키는 폐기·재발급 대상.
+[kis_price.source]
+env = "prod"
+enabled = true
+
+# KIS 수집 대상은 정적 맵이 아니다(ALPHA-419) — canonical KR holdings 최신 스냅샷의
+# 구성종목·ETF 티커가 targets 에 union 되고, KRX 6자리 코드는 KIS 코드와 항등이라 맵 없이
+# 수집된다. symbol_map 은 항등이 아닌 예외(있다면)의 오버라이드 축으로만 쓴다:
+#   [kis_price.source.symbol_map]
+#   "우리티커" = "KIS코드"
+
+# 국내 종목별 투자자 수급 소스 — KIS investor-trade-by-stock-daily FHPTJ04160001 (ALPHA-482).
+# ETF 구성종목(개별주식)의 EOD 투자자별 순매수(개인·외국인·기관계 + 기관세분·연기금). 자격증명은 env:
+#   DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=...
+#   DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=...
+# 수집 유니버스는 가격과 같은 축 — canonical KR holdings 에서 파생(universe_from_holdings). ingest-raw-investor 로 실행.
+[kis_investor.source]
+env = "prod"
+enabled = true
+
+# 재무제표 소스 — FMP 재무제표(손익·재무상태·현금흐름, S035). api_key 는 env 로 주입:
+#   DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY=...
+# base_url 은 /stable 베이스만 둔다 — 3개 엔드포인트(income-statement·balance-sheet-
+# statement·cash-flow-statement)는 어댑터가 붙인다.
+[financial.source]
+base_url = "https://financialmodelingprep.com/stable"
+enabled = true
+
+# our_ticker → FMP 심볼. 가격과 같은 정책 — 재무제표는 US 거래소-로컬 심볼만 둔다.
+# KR 은 FMP 재무 커버리지가 약해 후속(DART 등)으로 미룬다(=이 소스가 건너뜀). US 는
+# 심볼 동일, BRK.B 는 FMP 대시 표기(BRK-B).
+[financial.source.symbol_map]
+NVDA = "NVDA"
+AAPL = "AAPL"
+MSFT = "MSFT"
+CAT = "CAT"
+GE = "GE"
+RTX = "RTX"
+"BRK.B" = "BRK-B"
+JPM = "JPM"
+V = "V"
+
+# 국내 재무제표 소스 — OpenDART 단일회사 주요계정(raw). 인증키는 env 로 주입:
+#   DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=...
+# ingest-raw-financial --source dart 로 선택(미지정=fmp). corp_code 는 corpCode.xml 로 런타임 매핑.
+[dart_financial.source]
+base_url = "https://opendart.fss.or.kr/api"
+enabled = true
+
+# our_ticker → KRX 6자리 종목코드. KR 은 대개 항등(005930→005930)이라 검증된 KR 타깃만 둔다.
+[dart_financial.source.symbol_map]
+"005930" = "005930"  # 삼성전자
+"000660" = "000660"  # SK하이닉스
+"009150" = "009150"  # 삼성전기
+"402340" = "402340"  # SK스퀘어
+"373220" = "373220"  # LG에너지솔루션
+"028260" = "028260"  # 삼성물산
+"032830" = "032830"  # 삼성생명
+"105560" = "105560"  # KB금융
+"055550" = "055550"  # 신한지주
+
+# ETF 구성종목(holdings) 소스 — FMP ETF holdings 스냅샷(US, ALPHA-337). api_key 는 env 로 주입:
+#   DATA_PIPELINE_ETF__SOURCE__API_KEY=...
+# ingest-raw-etf 로 실행(날짜창 없음 — 스냅샷). KR ETF 는 FMP 커버리지 밖이라 여기 없다(후속 별도 벤더).
+[etf.source]
+base_url = "https://financialmodelingprep.com/stable/etf/holdings"
+enabled = true
+
+# our_etf_id → FMP ETF 심볼. 종목맵과 별개 — 이 맵의 키가 곧 수집 유니버스다(targets 무관).
+# 소수 대표 US ETF 부터 시작한다(브로드마켓 4종). 추가는 여기만 바꾸면 된다(코드 수정 불필요).
+[etf.source.etf_map]
+SPY = "SPY"   # S&P 500
+QQQ = "QQQ"   # 나스닥 100
+DIA = "DIA"   # 다우 30
+IWM = "IWM"   # 러셀 2000
+
+# 국내 ETF NAV 소스 — KIS ETF NAV비교추이(일) FHPST02440200 (ALPHA-380). KRX getJsonData 는
+# 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를 쓴다. 자격증명은 env:
+#   DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=...
+#   DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=...
+# 수집 대상은 여기 없다 — 아래 [krx_etf.source.etf_map] 을 그대로 쓴다(구성종목과 같은 유니버스).
+# 창(--from/--to) 미지정이면 앱이 기본 소급창을 채운다. ingest-raw-nav 로 실행.
+[kis_nav.source]
+env = "prod"
+enabled = true
+
+# 국내 ETF 구성종목 소스 — KRX 정보데이터시스템 PDF(MDCSTAT05001, KR, ALPHA-336). FMP 는
+# KR ETF 커버리지 밖이라 별개 벤더다. 로그인 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입:
+#   DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=...
+#   DATA_PIPELINE_KRX_ETF__SOURCE__PW=...
+# ingest-raw-etf --source krx 로 실행(날짜창 없음 — 그날 trdDd PDF 스냅샷). 계정 파이프라인 전용.
+[krx_etf.source]
+enabled = true
+
+# our_etf_id → KRX ISIN(표준코드). US(FMP 심볼)와 달리 KRX 는 ISIN 으로 질의한다. 이 맵의
+# 키가 곧 수집 유니버스다(추가는 여기만 바꾸면 된다). ISIN = KR7 + 단축코드 + 00 + 체크디짓.
+#
+# 국내 반도체 30종 + KODEX 200 (ALPHA-454). 선정은 이름이 아니라 **실측 구성종목** 기준이다 —
+# 국내 상장 ETF 1,146종의 국가별·자산유형 비중을 받아 KR 99~105% & 실물주식 95%+ 만 남겼다.
+# 그래서 이름에 "반도체"가 있어도 합성(스왑 담보가 원화라 국가비중은 KR 100%인데 실물주식 0%)·
+# 레버리지(KR 114~157%)·채권혼합은 빠지고, 이름에 없는 UNICORN SK하이닉스밸류체인은 들어온다.
+# KODEX 200 은 반도체 밖 종목의 가격 수집을 위해 남긴다 — ingest_price_raw 의
+# _kr_holdings_universe() 가 holdings 에서 KIS 가격 수집 유니버스를 파생시키기 때문이다.
+# TIGER 미국S&P500(360750)은 해외기초라 제외했다(구성종목이 해외 티커).
+# ⚠ 표시는 영숫자 단축코드 — 두 가지가 걸려 있다.
+#  1) ISIN 포맷에 실측 대조군이 없어 미검증이다. 틀리면 빈 output 이 ETF 단위 실패로 격리돼
+#     (krx_etf.py, 조용한 0행 없음) 첫 런 로그에 드러난다. 그때만 고치면 된다.
+#  2) **이 7종은 ETF 자기 종가가 수집되지 않는다** — ingest_price_raw._kr_holdings_universe()
+#     와 kis_price.plan() 이 6자리 '숫자' 코드만 통과시켜서(isdigit) 영숫자 코드가 걸러진다.
+#     구성종목(전부 숫자 코드)은 정상 수집되지만 ETF 종가가 없어 price trigger 의 대조축이
+#     빈다 — 하류에서 원인 없이 missing_price 로만 집계된다. 후속: ALPHA-455.
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"   # KODEX 200 (시장지수 — 가격 유니버스 파생용)
+"396500" = "KR7396500001"   # TIGER 반도체TOP10
+"0167A0" = "KR70167A0001"   # SOL AI반도체TOP2플러스 ⚠
+"091160" = "KR7091160002"   # KODEX 반도체
+"395160" = "KR7395160005"   # KODEX AI반도체TOP2플러스
+"395270" = "KR7395270002"   # HANARO Fn K-반도체
+"139260" = "KR7139260004"   # TIGER 200 IT
+"091230" = "KR7091230003"   # TIGER 반도체
+"469150" = "KR7469150007"   # ACE AI반도체TOP3+
+"455850" = "KR7455850008"   # SOL AI반도체소부장
+"474590" = "KR7474590007"   # WON 반도체밸류체인액티브
+"471990" = "KR7471990002"   # KODEX AI반도체핵심장비
+"475300" = "KR7475300000"   # SOL 반도체전공정
+"0210A0" = "KR70210A0008"   # ACE K반도체TOP2+ ⚠
+"0182R0" = "KR70182R0003"   # 1Q K반도체TOP2+ ⚠
+"471780" = "KR7471780007"   # TIGER 코리아테크액티브
+"388420" = "KR7388420002"   # RISE 비메모리반도체액티브
+"363580" = "KR7363580002"   # KODEX 200IT TR
+"494220" = "KR7494220007"   # UNICORN SK하이닉스밸류체인액티브
+"0093A0" = "KR70093A0000"   # RISE AI반도체TOP10 ⚠
+"0190G0" = "KR70190G0006"   # KODEX 반도체타겟위클리커버드콜 ⚠
+"0005G0" = "KR70005G0001"   # IBK K-AI반도체코어테크 ⚠
+"471760" = "KR7471760009"   # TIGER AI반도체핵심공정
+"266370" = "KR7266370006"   # KODEX IT
+"486240" = "KR7486240005"   # DAISHIN343 AI반도체&인프라액티브
+"475310" = "KR7475310009"   # SOL 반도체후공정
+"476260" = "KR7476260005"   # HANARO 반도체핵심공정주도주
+"261060" = "KR7261060008"   # TIGER 코스닥150IT
+"482030" = "KR7482030004"   # KoAct 반도체&2차전지핵심소재액티브
+"0176P0" = "KR70176P0003"   # FOCUS AI반도체위클리고정커버드콜 ⚠
+"488210" = "KR7488210006"   # KIWOOM K-반도체북미공급망
+
+# 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
+# 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
+#   DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
+# ingest-raw-disclosure 로 실행. corp_code 는 corpCode.xml 로 런타임 매핑.
+[dart_disclosure.source]
+base_url = "https://opendart.fss.or.kr/api"
+enabled = true
+# 수집 대상 공시 유형 — report_nm 부분일치. "단일판매ㆍ공급계약체결" 은 "공급계약" 으로,
+# 사업부문 매출은 "사업보고서" 본문으로 잡는다(정정본 [기재정정]… 도 부분일치로 포함).
+report_name_filters = ["공급계약", "사업보고서"]
+
+# our_ticker → KRX 6자리 종목코드. KR 은 대개 항등(005930→005930)이라 검증된 KR 타깃만 둔다.
+[dart_disclosure.source.symbol_map]
+"005930" = "005930"  # 삼성전자
+"000660" = "000660"  # SK하이닉스
+"009150" = "009150"  # 삼성전기
+"402340" = "402340"  # SK스퀘어
+"373220" = "373220"  # LG에너지솔루션
+"028260" = "028260"  # 삼성물산
+"032830" = "032830"  # 삼성생명
+"105560" = "105560"  # KB금융
+"055550" = "055550"  # 신한지주
+
+# 수집 유니버스: US 9 + KR 10(소스 무관, KR 은 개별주 9 + ETF 091160). 소스별 심볼 번역은
+# 각 소스의 symbol_map
+# 참고 — targets 에 있어도 그 소스에 매핑이 없으면 해당 소스는 건너뛴다.
+[targets]
+symbols = [
+    # KR
+    "091160", # KODEX 반도체 (ETF — KIS 가격만 매핑, 뉴스·재무 소스는 매핑 없어 스킵)
+    "005930", # 삼성전자
+    "000660", # SK하이닉스
+    "009150", # 삼성전기
+    "402340", # SK스퀘어
+    "373220", # LG에너지솔루션
+    "028260", # 삼성물산
+    "032830", # 삼성생명
+    "105560", # KB금융
+    "055550", # 신한지주
+    # US
+    "NVDA", "AAPL", "MSFT", "CAT", "GE", "RTX", "BRK.B", "JPM", "V",
+]
+keywords = ["금리", "실적", "환율"]
+
+# ETF 가격변동 트리거(잠정 absolute gate) — load-price-triggers 가 쓴다(ALPHA-406).
+# 게이트 정책 정본 = 분석엔진 L0(결정 2026-07-17, ALPHA-411): 구성종목 가중 proxy 수익률
+# |r| >= 3%. relative gate 는 미구현(레이크에 벤치마크 지수 가격이 아직 없다 — 엔진과 동일).
+# 임계값 재조정은 로직 소유자(정준영) 소관이라 코드가 아닌 여기 두고, 적재 행의
+# detection_policy_version 으로 어느 정책의 행인지 남긴다.
+# 트리거 유니버스는 holdings∩마스터에서 파생한다(ALPHA-465) — 여기에 티커를 두지 않는다.
+# 단일 ETF 로 좁혀 돌리려면 etf_ticker 를 옵션으로 넣는다(dev 검증·백필용).
+[price_triggers]
+abs_threshold = 0.03   # 엔진 ABS_GATE_THRESHOLD 와 동일
+policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정책 이름

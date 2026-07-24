@@ -66,6 +66,7 @@ Default to surfacing uncertainty, not hiding it.
 - Hard rule: never commit or PR directly to `main`. Branch ladder is `feature/*`·`fix/*` → `dev` → `main`. Open PRs against `dev` (except a `dev` → `main` release PR).
 - Jira issue key: put it in the branch name (`feature/<KEY>-slug`) and reference it in the commit/PR footer as `Refs: <KEY>`. Keep the title pure Conventional Commits — the key lives only in the footer. For squash merges put `Refs:` at the bottom of the PR description (the PR template does this). Details in README.
 - Issue-first: feat/fix work requires a Jira issue (key required on the branch). Trivial docs/chore with no issue may be keyless (omit the `Refs:` footer). Branch types are only `feature/*`·`fix/*` — the prefix marks work nature, the commit `type` marks each change. Tracker is Jira; do not add GitHub issue templates.
+- Parallel work: concurrent sessions/branches must each use their own `git worktree` (never share one checkout — branches and working trees entangle) and take non-overlapping tickets/work units. Details in README "Git 컨벤션 › 병렬 작업".
 
 ## Instruction File Convention
 - AGENTS.md is the single source of truth (SSOT) for agent instructions.

@@ -1,0 +1,201 @@
+# 가상 온프렘 데모 박스 — 단일 EC2 + Docker Compose (ADR-0017·0033).
+# terraform 은 서버·부트스트랩까지만 만든다. 온프렘 스택(compose·이미지)은
+# CD(SSM Run Command)가 얹는다 — apply(인프라)와 코드 배포는 별개 수명주기다.
+
+data "aws_region" "current" {}
+
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+# ── IAM: SSM 관리형 + ECR pull + cert 파라미터 read ─────
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "this" {
+  name               = "${var.name}-ec2"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+}
+
+# SSM 관리형 인스턴스(에이전트 ↔ SSM 컨트롤플레인) — CD 가 SSM Run Command 로 배포하는 전제.
+# AWS 관리형 AmazonSSMManagedInstanceCore 대신 최소 인라인을 쓴다: 그 관리형 정책은
+# ssm:GetParameter* 를 Resource=* 로 허용해 아래 cert 한정 정책을 무효화하기 때문(계정 내 임의
+# Parameter Store 열람 가능). 여기 담은 건 에이전트 등록 + Run Command/Session 메시징 채널뿐이다.
+resource "aws_iam_role_policy" "ssm_core" {
+  name = "${var.name}-ssm-core"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      # AmazonSSMManagedInstanceCore 에서 ssm:GetParameter* 만 뺀 집합 — Run Command 가 문서를
+      # 가져와(GetDocument) 실행하는 데 필요한 문서·association 액션까지 포함한다.
+      # (파라미터 읽기는 아래 cert 한정 정책이 유일한 경로로 유지)
+      Action = [
+        "ssm:UpdateInstanceInformation",
+        "ssm:ListAssociations",
+        "ssm:ListInstanceAssociations",
+        "ssm:DescribeAssociation",
+        "ssm:UpdateAssociationStatus",
+        "ssm:UpdateInstanceAssociationStatus",
+        "ssm:GetDocument",
+        "ssm:DescribeDocument",
+        "ssm:GetManifest",
+        "ssm:GetDeployablePatchSnapshotForInstance",
+        "ssm:PutInventory",
+        "ssm:PutComplianceItems",
+        "ssm:PutConfigurePackageResult",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+# ECR pull(로그인 + 레이어). 저장소는 var 로 스코프(비면 전체).
+resource "aws_iam_role_policy" "ecr" {
+  name = "${var.name}-ecr-pull"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchCheckLayerAvailability",
+        ]
+        Resource = length(var.ecr_repository_arns) > 0 ? var.ecr_repository_arns : ["*"]
+      },
+    ]
+  })
+}
+
+# 데모 mTLS cert(SSM SecureString) read. 복호화는 aws/ssm 관리형 키 경유 조건으로 한정.
+resource "aws_iam_role_policy" "cert" {
+  name = "${var.name}-cert-read"
+  role = aws_iam_role.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = var.cert_parameter_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+        Condition = {
+          StringEquals = { "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com" }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "this" {
+  name = "${var.name}-ec2"
+  role = aws_iam_role.this.name
+}
+
+# ── 보안그룹: outbound all / inbound 는 prefix list(예: CloudFront)만. SSM·SSH inbound 0. ─
+resource "aws_security_group" "this" {
+  name        = "${var.name}-ec2"
+  description = "demo on-prem box ${var.name}"
+  vpc_id      = var.vpc_id
+  tags        = { Name = "${var.name}-ec2" }
+}
+
+resource "aws_vpc_security_group_egress_rule" "all" {
+  security_group_id = aws_security_group.this.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "all egress (ECR pull, cloud sync mTLS, SSM)"
+}
+
+# CloudFront 오리진 프리픽스 등에서만 mock-broker 포트로 인바운드. publication-api 는 비공개(내부 유지).
+resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
+  count             = length(var.ingress_prefix_list_ids)
+  security_group_id = aws_security_group.this.id
+  prefix_list_id    = var.ingress_prefix_list_ids[count.index]
+  ip_protocol       = "tcp"
+  from_port         = var.mock_broker_port
+  to_port           = var.mock_broker_port
+  description       = "mock-broker from allowed prefix list (e.g. CloudFront origin-facing)"
+}
+
+# ── EC2 ────────────────────────────────────────────────
+resource "aws_instance" "this" {
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  vpc_security_group_ids      = [aws_security_group.this.id]
+  iam_instance_profile        = aws_iam_instance_profile.this.name
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    compose_version = var.compose_version
+  })
+
+  root_block_device {
+    volume_size = var.root_volume_size
+    volume_type = var.root_volume_type
+    iops        = var.root_volume_iops
+    encrypted   = true
+  }
+
+  # IMDSv2 강제 — 공개 데모 박스라 IMDSv1(토큰 없는 metadata)로 instance-profile 자격증명이
+  # SSRF·컨테이너 탈출로 새는 걸 막는다. hop_limit=1: 호스트 docker 는 ECR pull 에 IMDS 를 쓰지만
+  # 컨테이너는 IMDS 에 닿지 못하게(온프렘 컨테이너는 AWS API 를 안 쓴다).
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  # CD(SSM Run Command)가 이 태그로 인스턴스를 스코프한다.
+  tags = {
+    Name        = var.name
+    "edge:role" = "demo-onprem"
+  }
+}
+
+resource "aws_eip" "this" {
+  count    = var.associate_eip ? 1 : 0
+  instance = aws_instance.this.id
+  domain   = "vpc"
+  tags     = { Name = "${var.name}-eip" }
+}

@@ -10,17 +10,17 @@
 
 ## 1. 인터페이스 계약 확정 — 병렬 개발 블로커 (진기·영서 합의 세션 1회)
 - [ ] **Event Bundle·Cloud Event Store 필드 스키마** 확정 → `docs/contracts/event-bundle-schema.md` 기입 (이벤트 타입별 필드·ID 체계·번들 JSON 구조·체크섬 대상 바이트)
-- [ ] **outbox 테이블 설계** — fan-out 규칙과 함께 계약에 편입
-- [ ] **Tenant Sync API 엔드포인트 계약** — 응답 포맷·번들 개수 상한·다음 cursor 전달·에러 시맨틱 → `docs/contracts/sync-protocol.md` 보강. 설계 입력으로 **일일 이벤트 규모 가정**을 함께 명시
 
-## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님)
-- [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Compliance Engine)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Compliance Engine 구현의 선행 조건)
+## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님 — 8월 중간평가 기준 재정렬 2026-07-23)
+- [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Screening Worker)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Screening Worker 구현의 선행 조건). 이 결정이 가드레일 엔진(Cloud, AI 산출물 검증)과 Screening Worker의 책임 분담·MVP Rule Type 목록까지 확정하며, 가드레일 룰에 [adr/0018](docs/adr/0018-rule-deployment-path.md)(룰=코드 릴리스) 적용 여부도 함께 정한다
+- [ ] **데모 시나리오·시드 데이터 확정** — 8월 중간평가에서 보여줄 종목·이벤트·스토리 대본 + 데이터 공급 방식(로컬/데모에서 data-pipeline 실수집 vs 픽스처 주입). 가상 MTS 화면 범위·모니터링 최소치 등 "어디까지 구현" 결정들의 상위 입력
+- [ ] **마일스톤 역산 로드맵** — 8월 중간평가·11월 데모데이 기준 Jira 에픽/스프린트 배분
 - [ ] **역할 4종 권한 매트릭스** 정의 — 인증 방식은 하이브리드로 확정([adr/0025](docs/adr/0025-onprem-auth-hybrid.md)), 매트릭스만 잔여 (ALPHA-118·119 선행 조건)
+- [ ] **테넌트(증권사) 온보딩 절차 정의** — super-admin 테넌트 등록 → 인증서 발급([adr/0012](docs/adr/0012-sync-cert-bootstrap.md)) → 온프렘 설치 config 산출물 형식·secrets/인증서 주입 방식 → compose 기동의 end-to-end. 8월 기준 "프로비저닝 스크립트 1개" 수준이면 충분
 - [ ] **외부 데이터 소스 약관 확인** — 빅카인즈·DART·KIS·FMP 수집 데이터의 **상용 제품 재제공** 허용 여부. 비개발 작업 중 최대 리스크 — 늦게 발견하면 제품을 되돌려야 함
 - [ ] **GitHub 플랜/공개 여부 결정** — private+free 플랜이라 **branch protection 불가** (main 직접 push 방지·required check·CODEOWNERS 강제 전부 규율로만 유지 중, schema-validate.yml 주석 참조). Team 플랜 업그레이드 vs public 전환
-- [ ] **OSS 라이선스 방침·인벤토리** — 온프렘 배포는 고객사 라이선스 실사 대상. GPL류 의존성 확인 + NOTICE 준비 + LICENSE 파일(proprietary 명시)
-- [ ] Exposure/Audit Log **보존 기간** (금융권 감사 요건)
-- [ ] **마일스톤 역산 로드맵** — 8월 중간평가·11월 데모데이 기준 Jira 에픽/스프린트 배분
+- [ ] **OSS 라이선스 방침·인벤토리** — 온프렘 배포는 고객사 라이선스 실사 대상. GPL류 의존성 확인 + NOTICE 준비 + LICENSE 파일(proprietary 명시). 8월 데모에는 불요 — 실증권사 실사 시점 대비
+- [ ] Exposure/Audit Log **보존 기간** (금융권 감사 요건) — 8월 데모에는 불요
 - [ ] (하네스) AGENTS.md **Rule 6 토큰 예산**(4k/task·30k/session) 처분 — 집행 불가능한 사문 규칙이라 edge-review 인용 flag의 노이즈 원천. 삭제/현실화/유지 중 팀 결정
 
 ## 3. 품질 게이트·저장소 자동화 (MVP 구현 전 안전망)
@@ -34,23 +34,21 @@
 - [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
-- [ ] Compliance Engine — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
-- [ ] Serving API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
+- [ ] Screening Worker — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
+- [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 데모 토폴로지 — EC2 1대 + Docker Compose 가상 온프렘 (8월 중간평가 → 11월 데모데이)
-- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Serving API 호출 렌더링. 구 widget-ui 부활 아님 — Serving API 계약의 데모 소비자 (데모 토폴로지와 연동)
+- [ ] 데모용 가상 MTS 화면 — mock 증권사 백엔드(고객 해시 생성) + Publication API 호출 렌더링. 구 widget-ui 부활 아님 — Publication API 계약의 데모 소비자 (데모 토폴로지와 연동). 호스팅 위치(데모 compose 포함 vs 별도 정적 페이지) 결정 포함 — 단일 페이지+최소 mock 백엔드가 기본 프레임
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속
 - [ ] **테스트 전략 문서** — 모듈별 요구 테스트 층(단위/통합) 기준 + **Event Bundle 계약 테스트**(진기-영서 양단이 같은 스키마로 검증, §1 계약 확정과 짝)
-- [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Serving API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
-- [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL)
+- [ ] jvm-common ExceptionAdvice 공통 응답 포맷 계약 테스트 2건 — ① 500 응답 내부 메시지 비노출 ② 프레임워크 예외의 공통 포맷 변환(깔때기, Boot 업그레이드 시 회귀 감지). 예외 처리 일원화 시점에 의도적 유예(2026-07-23)
+- [ ] **API 명세 2층 구조 확립** — 시맨틱 계약(멱등성·에러 의미·규칙)은 `docs/contracts/`(상위), 문법 명세(경로·필드·타입)는 모듈 코드 옆 기계가독 파일(tenant-sync-api `openapi.yaml`·Event Bundle JSON Schema — 위 계약 테스트의 "같은 스키마" 실체)로 두고 contracts/ 문서가 포인터로 가리킴. Publication API는 증권사 전달용 대외 산출물 — 처음부터 OpenAPI + writing-rules 톤 적용 (모듈 스캐폴드 시점에)
+- [ ] **관측성·운영 표준 수립** — 구조화 로깅+상관 ID(이벤트/cursor 추적), **Sync 중단 장애 알림 기준**(Dashboard 알림의 입력), 온프렘에서 벤더가 로그를 못 보는 제약 하의 진단 설계, 백업/복구 절차(RDS + 온프렘 PostgreSQL). **8월 데모는 최소 부분집합만** — Sync 중단 알림 기준+상관 ID 우선, worker/sync-agent 주기는 결정 항목이 아니라 config 기본값으로 이때 함께 확정
 - [ ] **Definition of Done 명문화** — 게이트(edge-review→docs-sync)+이슈 전환 기준을 README Git 컨벤션에 한 절로
-- [ ] gateway console 라우트 제거 — tenant-console 온프렘 재배치(데모 토폴로지) 시점에 (gateway = Super Admin·Tenant Sync API 전용 완성)
 - [ ] 온프렘 릴리스 절차 문서화 — Rule Type 배포가 "소프트웨어 릴리스"인데 버전 정책·업그레이드 방법 미정
 
 ## 6. 인프라
-- [ ] **widget 인프라 Terraform 삭제 후속 PR** — envs/dev의 widget_api ECS 모듈·RDS SG 규칙·widget_site(S3/CloudFront)·OIDC 역할 참조·variables/tfvars, foundation의 `edge/widget-api` ECR, modules/alb 주석("widget-api 임시 검증용") 갱신. terraform-plan 코멘트 리뷰 후 머지 (코드 재편 PR에서 의도적으로 분리)
 - [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
 - [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
-- [ ] Cloud serving cluster를 신규 컴포넌트(Tenant Sync API 등)에 맞게 개정 — 구 앱 배포 워크플로 정리 포함 (§4 코드베이스 재편과 연동). **gateway 존치 vs ALB 직결 ADR 포함** — 판단 조건 2개가 갖춰지는 시점에 결정: ① Tenant Sync API의 mTLS 노출 방식 확정(앱 직접 검증이면 gateway 경유 불가 → 존치 근거 하나 소멸) ② 콘솔 온프렘 재배치(console 라우트 소멸). 그 후 gateway에 남는 건 super-admin 앞 방어층뿐인데 ALB 리스너 규칙+망 제한으로 대체 가능성 있음

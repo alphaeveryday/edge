@@ -47,6 +47,29 @@ locals {
       command_expr = "States.Array('ingest-raw-disclosure', '--run-id', $.run_id)"
     },
     {
+      # ETF NAV(ALPHA-380·458) — KIS ETF NAV비교추이(일). 가격과 같은 kis task-def·같은
+      # 앱키를 쓰므로 CollectKisPrice 와 동시에 토큰을 발급한다. KIS 는 앱키당 분당 1회만
+      # 발급하므로 kis_auth 가 403(EGW00133)을 만나면 61초+지터(0~20초) 대기 후 최대 2회
+      # 재시도한다 — 그게 없으면 매 런에서 두 브랜치 중 하나가 죽는다(ALPHA-458 실측 근거).
+      state        = "CollectKisNav"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-nav', '--run-id', $.run_id)"
+    },
+    {
+      # ETF 프로필(ALPHA-462) — ETF 마스터의 표시명 출처. NAV·구성종목과 같은 kis 세트다.
+      state        = "CollectKisEtfProfile"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-etf-profile', '--run-id', $.run_id)"
+    },
+    {
+      # 종목별 투자자 수급(ALPHA-482) — KIS FHPTJ04160001. 가격·NAV·ETF프로필과 같은 kis 세트다
+      # (같은 앱키·task-def, kis_auth 재시도 공유). 수집 유니버스는 canonical KR holdings 파생
+      # (universe_from_holdings, 가격과 같은 축). NormalizeInvestor→LoadEtfFlow 체인의 raw 선행이다.
+      state        = "CollectKisInvestor"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
+    },
+    {
       state        = "CollectFmpEtf"
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
@@ -56,9 +79,11 @@ locals {
     # ① trdDd 백필 수단 부재 — 실패한 날의 스냅샷은 다음 런이 못 줍는다.
     # ② 휴장일 trdDd 응답의 정체 — 7-17 휴장일에도 응답이 왔고 as_of=당일로 라벨됐다
     #    (전 거래일 구성으로 추정. 휴장이면 구성 변동도 없어 실해는 없으나 확인 대상).
-    # KRX ETF 는 `trdDd`=오늘 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된
-    # 설계) — raw 전량성공 게이트라 실패 시 뒤 페이즈 전부가 막힌다.
-    # **ENABLED 로 바꾸기 전에 ALPHA-387 을 닫아라.**
+    # KRX ETF 는 `trdDd`=오늘 스냅샷이고 빈 응답을 fail-loud 한다(krx_etf.py 의 의도된 설계).
+    # ALPHA-460 이후 이 실패가 뒤 페이즈를 막지는 않는다 — 알림이 나가고 런은 FAILED 로
+    # 마감되며, 그날 ETF canonical 만 비고 나머지 소스는 정상 승격된다. 즉 ALPHA-387 은
+    # 더 이상 ENABLED 의 하드 블로커가 아니지만, **①(백필 수단 부재)이 남아 실패한 날의
+    # KRX 스냅샷은 여전히 영구 결손**이므로 닫는 게 맞다.
     {
       state        = "CollectKrxEtf"
       taskdef_key  = "krx"
@@ -102,6 +127,23 @@ locals {
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-etf', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
+    {
+      state        = "NormalizeEtfProfile"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-etf-profile', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      state        = "NormalizeEtfNav"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-etf-nav', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      # 투자자 수급 정제(ALPHA-482) — raw investor_flow_daily → canonical. 다른 normalize 와
+      # 같이 레이크만 읽어 시크릿 없는 bigkinds task-def 재사용. LoadEtfFlow 의 canonical 선행이다.
+      state        = "NormalizeInvestor"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-investor', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
   ]
 
   # feature/factor 스테이지(구 derive, ALPHA-386→408 개명). canonical 을 소비해 분석이 읽을
@@ -120,11 +162,6 @@ locals {
       command_expr = "States.Array('tag-news', '--run-id', $.run_id, '--limit', '${var.tag_news_limit}')"
     },
     {
-      state        = "LoadInstruments"
-      taskdef_key  = "rds"
-      command_expr = "States.Array('load-instruments', '--run-id', $.run_id)"
-    },
-    {
       # ETF 가격변동 트리거(ALPHA-406) — canonical 일봉 → price_movement_trigger.
       # 창 미지정 = canonical 전체 스캔 + 멱등 skip 이라 놓친 날을 다음 런이 자연 회복한다.
       state        = "LoadPriceTriggers"
@@ -132,11 +169,52 @@ locals {
       command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id)"
     },
     {
+      # ETF NAV 마트 적재(ALPHA-383) — canonical etf_nav → etf_nav_daily. feature 페이즈에
+      # 두는 이유는 의존이다: normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있다.
+      # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
+      state        = "LoadEtfNav"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-nav', '--run-id', $.run_id)"
+    },
+    {
       # 문서 마스터(ALPHA-374·410) — canonical 뉴스 → document. 창 미지정 = 전체 스캔 +
       # 자연키 멱등 skip. assertion 적재(LoadAssertions, 페이즈 뒤 직렬)의 FK 선행이다.
       state        = "LoadDocuments"
       taskdef_key  = "rds"
       command_expr = "States.Array('load-documents', '--run-id', $.run_id)"
+    },
+    {
+      # 공시 fact 적재(ALPHA-476) — canonical 공시 → document(DISCLOSURE)·disclosure_document·
+      # disclosure_fact. issuer 는 company_profile.dart_corp_code 로 해소하므로 **앞 직렬
+      # EnrichCorpCode 가 채운 뒤**라야 9→309 로 붙는다(rds task-def, DART API 불요).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(정정은 DO UPDATE).
+      state        = "LoadDisclosure"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-disclosure', '--run-id', $.run_id)"
+    },
+    {
+      # 가격 원장 적재(ALPHA-377) — canonical price_daily → price_daily. LoadEtfNav 와 같은 슬롯:
+      # normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있어 feature 페이즈에 둔다.
+      # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
+      state        = "LoadPriceDaily"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-price-daily', '--run-id', $.run_id)"
+    },
+    {
+      # ETF 구성종목 적재(ALPHA-379) — canonical etf_holdings → etf_holding_snapshot.
+      # LoadEtfNav·LoadPriceDaily 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(비중이 바뀐 정정만 UPDATE).
+      state        = "LoadEtfHoldings"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-holdings', '--run-id', $.run_id)"
+    },
+    {
+      # 투자자 수급 적재(ALPHA-385) — canonical investor_flow_daily → investor_flow_daily.
+      # LoadEtfNav·LoadPriceDaily·LoadEtfHoldings 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(순매수 값이 바뀐 정정만 UPDATE).
+      state        = "LoadEtfFlow"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id)"
     },
   ]
 
@@ -157,6 +235,17 @@ locals {
   feature_success_checks = [
     for index, _ in local.feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
+      StringEquals = "succeeded"
+    }
+  ]
+
+  # analyze 페이즈 Map(ALPHA-470) 결과 게이트 — Map 은 유니버스 순서를 보존하므로 인덱스별
+  # 성공 검사를 정적 생성한다(raw/normalize/feature 와 같은 패턴). INLINE Map 은
+  # ToleratedFailurePercentage(Distributed 전용)를 못 써 실패 격리는 per-item Catch 로,
+  # 런 성패는 이 게이트로 판정한다 — 1종이라도 실패면 fail-loud.
+  analysis_success_checks = [
+    for index, _ in var.analysis_etf_universe : {
+      Variable     = "$.analysis[${index}].status"
       StringEquals = "succeeded"
     }
   ]
@@ -200,6 +289,13 @@ locals {
                 ContainerOverrides = [{
                   Name        = local.container_name
                   "Command.$" = job.command_expr
+                  # 운영 원장(ALPHA-530 #5): 계측 작업(kis 수집·price 정제·price 적재)의 wrapper 가
+                  # attempt 에 SFN 실행 ARN·state 이름을 기록하도록 주입한다. 미계측 작업은 이 env 를
+                  # 안 읽어 무해하다($$.Execution.Id 는 실행 ARN 이라 attempt↔SFN 계보를 잇는다).
+                  Environment = [
+                    { Name = "OPS_SFN_STATE_NAME", Value = job.state },
+                    { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
+                  ]
                 }]
               }
             })
@@ -263,17 +359,49 @@ locals {
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next       = "RawIngestCheckResults"
       }
+      # raw 부분 실패는 뒤 페이즈를 **막지 않는다**(ALPHA-460) — 알리기만 하고 계속 간다.
+      # 예전엔 여기가 전량성공 게이트라 소스 하나가 죽으면 무관한 소스의 정제·분석까지 통째로
+      # 멈췄다. 뉴스 수집 실패가 가격 정제를 막는 건 의도가 아니고, 재무는 canonical 스텝조차
+      # 없어 아무것도 공급하지 않는데도 전체를 막았다.
+      #
+      # 막을 필요가 없는 근거: **정제는 빈 입력을 정상 성공으로 처리한다.** raw 키가 0개면
+      # 루프가 안 돌고 exit 0 이다(normalize_price.py 의 `for raw_key in raw_keys`). 그래서
+      # BigKinds 가 죽어도 NormalizeNews 는 이 런의 FMP raw 만 정제하고 성공한다 — 정제 잡별로
+      # "어느 raw 가 필수인가" 의존 맵을 ASL 에 적을 이유가 없다. 있는 만큼 처리한다.
       RawIngestCheckResults = {
         Type = "Choice"
         Choices = [{
           And  = local.raw_ingest_success_checks
           Next = "NormalizeParallel"
         }]
-        Default = "NotifyFailure"
+        Default = "NotifyRawPartial"
       }
-      # raw 전량 성공일 때만 정제로 넘어간다 — 이번 실행의 raw 수집이 불완전하면 정제를
-      # 헛돌리지 않는다. ALPHA-351 로 흔한 절단은 raw 브랜치에서 성공 처리되므로, 여기 걸리는
-      # 건 진짜 실패다.
+      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 tag-news·analyze 처럼
+      # LLM 을 부르는(소요시간 상한이 없는) 페이즈가 있고, 최상위 TimeoutSeconds 로 실행이
+      # 죽으면 States.Timeout 이 실행 자체를 끝내 **어떤 Catch 도 안 탄다**(아래 CloudWatch
+      # 알람 주석 참조). 즉 판정을 끝에 두면 "raw 부분 실패 + 그 뒤 타임아웃" 조합에서 run_id 가
+      # 박힌 알림이 영영 안 나가고, run 스코프 정제라 그 raw 는 아무도 못 줍는다.
+      # 타임아웃 알람은 실행 단위라 run_id·branch_results 를 담지 못해 대체재가 못 된다.
+      #
+      # 통보 뒤 NormalizeParallel 로 **계속 간다**(ResultPath = null 로 $ 를 보존). 런의 최종
+      # FAILED 마감은 파이프라인 끝 RawPartialCheck 가 맡는다 — 거긴 SNS 를 다시 쏘지 않는다
+      # (한 실패에 두 통이 가지 않게. 아래 ExecutionsFailed 알람을 안 거는 것과 같은 이유).
+      NotifyRawPartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "NormalizeParallel"
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}] raw 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
+      }
+      #
+      # analyze 까지 부분 입력으로 도는 것도 의도다: 준실시간에선 '완전한 입력'이라는 상태가
+      # 존재하지 않아 입력 완전성 게이트는 주기가 짧아질수록 '매번 불성립'으로 수렴한다.
+      # 대신 트리거 결측이 '데이터 없음'이 아니라 '움직임 없음'으로 나가는 위험이 남는데,
+      # 그건 게이트가 아니라 산출물이 두 상태를 구분해야 풀리는 문제다(ALPHA-452·453 소관).
       #
       # ⚠️ **정제는 이 실행의 raw 만 본다**(`--input-run-id $.run_id`, ALPHA-389). 예전엔
       # full-scan 이라 "이전 실패 실행이 저장한 raw 도 다음 성공 실행이 함께 주워간다"는
@@ -305,11 +433,11 @@ locals {
         Type = "Choice"
         Choices = [{
           And  = local.normalize_success_checks
-          Next = "FeatureParallel"
+          Next = "LoadInstruments"
         }]
         Default = "NotifyFailure"
       }
-      # 정제 전량 성공일 때만 feature 로 넘어간다 — 실행 내 순서 제어다.
+      # 정제 전량 성공일 때만 **마스터 적재**로 넘어간다 — 실행 내 순서 제어다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
@@ -317,6 +445,72 @@ locals {
       # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. tag-news 는 미태깅 기사만
       # 고르고(태거·온톨로지 버전 + 입력 지문으로 판정) load-instruments 는 자연키 멱등이라
       # 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
+      # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
+      # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
+      # unknown 으로 건너뛰고 **성공으로 끝난다** — 그 런은 조용히 데이터를 빠뜨린다.
+      # LoadAssertions 가 document FK 때문에 뒤 직렬인 것과 같은 이유·같은 형태다.
+      # 자연키 멱등이라 재실행 안전하고, 마스터가 없을 때만 발번한다(ADR-0027).
+      LoadInstruments = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "LoadInstrumentsCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('load-instruments', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      LoadInstrumentsCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "EnrichCorpCode"
+        }]
+        Default = "NotifyFailure"
+      }
+      # corp_code enrichment(ALPHA-491) — LoadInstruments 가 만든 company_profile 의 NULL
+      # dart_corp_code 를 OpenDART corpCode.xml 매칭으로 채운다. **LoadInstruments 뒤·FeatureParallel
+      # 앞 직렬**이다: FeatureParallel 의 LoadDisclosure 가 issuer 를 dart_corp_code 로 해소하므로
+      # 그 전에 채워져야 9→309 로 붙는다(같은 형태·같은 이유로 LoadInstruments 도 직렬 선행).
+      # DB(company_profile UPDATE)와 DART API 를 둘 다 부르므로 결합 시크릿 task-def(rds_dart)를 쓴다.
+      # 멱등: NULL 가드 UPDATE 라 재실행이 시드 9종·기존 충전분을 덮지 않는다.
+      EnrichCorpCode = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "EnrichCorpCodeCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds_dart"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('enrich-corp-code', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      EnrichCorpCodeCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "FeatureParallel"
+        }]
+        Default = "NotifyFailure"
+      }
       FeatureParallel = {
         Type       = "Parallel"
         Branches   = local.feature_branches
@@ -388,37 +582,137 @@ locals {
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"
           NumericEquals = 0
-          Next          = "RunAnalysis"
+          Next          = "SeedAnalysisUniverse"
         }]
         Default = "NotifyFailure"
       }
-      # analyze 페이즈(ALPHA-408) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
+      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
       # LoadAssertions 포함) 전량 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
       # (canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument·
       # document·assertion)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
       # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
       # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
       # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
-      RunAnalysis = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "AnalysisCheckExitCode"
+      #
+      # ALPHA-470 — 단일 ETF(env ALPHAMALE_ETF_TICKER 기본 091160) 순차 실행을 유니버스 전체
+      # 병렬 Map 으로 교체. JSONPath Map 은 정적 배열을 Items 로 못 받고 ItemsPath(상태 참조)만
+      # 받으므로, 앞의 SeedAnalysisUniverse Pass 가 var.analysis_etf_universe 를 상태에 심고
+      # Map 이 그 경로를 참조한다. 미발화 ETF 는 컨테이너가 exit 0(normal_variation)이라 실패로
+      # 안 잡힌다(daily_pipeline.py) — 전량 팬아웃해도 미발화분은 정상 종료다.
+      SeedAnalysisUniverse = {
+        Type       = "Pass"
+        Result     = var.analysis_etf_universe
+        ResultPath = "$.etf_universe"
+        Next       = "RunAnalysis"
+      }
+      RunAnalysis = {
+        Type      = "Map"
+        ItemsPath = "$.etf_universe"
+        # 각 이터레이션 입력을 { ticker } 로 성형 — 처리기 안에서 $.ticker 로 참조한다.
+        ItemSelector = { "ticker.$" = "$$.Map.Item.Value" }
+        # ResultPath 를 $.ecs·$.branch_results 가 아닌 $.analysis 로 둬야 뒤 RawPartialCheck 가
+        # 읽는 $.branch_results(RawIngestParallel 산출)가 덮이지 않고 보존된다(ALPHA-470 플랜 3절).
+        ResultPath = "$.analysis"
+        # ponytail: MaxConcurrency=10 — 서브넷 IP 는 넉넉(≈500 free)하나 DeepSeek/Fargate 부하를
+        # 보수적으로 둔다. 31종이 ~4 웨이브로 끝난다. 실측 후 부족하면 상향(최대 31=완전 병렬).
+        MaxConcurrency = 10
+        # INLINE Map 은 ToleratedFailurePercentage(Distributed 전용)를 못 쓴다. 실패 격리는
+        # ItemProcessor 안 per-item Catch 로(실패 이터레이션도 Pass 로 마감해 Map 을 안 죽임),
+        # 런 성패는 뒤 AnalysisResultCheck 가 판정한다 — 1종이라도 실패면 fail-loud(ADR-0028).
         Catch = [{
           ErrorEquals = ["States.ALL"]
           ResultPath  = "$.error"
           Next        = "NotifyFailure"
         }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.analysis.arn
-        })
-      })
-      AnalysisCheckExitCode = {
+        Next = "AnalysisResultCheck"
+        ItemProcessor = {
+          ProcessorConfig = { Mode = "INLINE" }
+          StartAt         = "AnalyzeOne"
+          States = {
+            AnalyzeOne = merge(local.ecs_run_task_base, {
+              Type = "Task"
+              Next = "AnalyzeOneCheckExitCode"
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.error"
+                Next        = "AnalyzeOneFailed"
+              }]
+              Parameters = merge(local.ecs_run_task_base.Parameters, {
+                TaskDefinition = aws_ecs_task_definition.analysis.arn
+                Overrides = {
+                  ContainerOverrides = [{
+                    Name = local.analysis_container_name
+                    # task-def 기본 env(091160 등) 중 이 하나만 덮는다 — 나머지(RESULT_S3_PREFIX·
+                    # RELEASE_BUNDLE_VERSION)는 task-def 값 유지(ECS 는 이름 단위로 override).
+                    Environment = [{
+                      Name      = "ALPHAMALE_ETF_TICKER"
+                      "Value.$" = "$.ticker"
+                    }]
+                  }]
+                }
+              })
+            })
+            AnalyzeOneCheckExitCode = {
+              Type = "Choice"
+              Choices = [{
+                Variable      = "$.ecs.Containers[0].ExitCode"
+                NumericEquals = 0
+                Next          = "AnalyzeOneSucceeded"
+              }]
+              Default = "AnalyzeOneFailed"
+            }
+            AnalyzeOneSucceeded = {
+              Type = "Pass"
+              End  = true
+              Parameters = {
+                "ticker.$"    = "$.ticker"
+                status        = "succeeded"
+                "exit_code.$" = "$.ecs.Containers[0].ExitCode"
+              }
+            }
+            # per-item 실패도 Pass 로 마감한다 — Type=Fail 이면 INLINE Map 전체가 죽어 격리가
+            # 깨진다. status=failed 를 결과에 남기고, 런 성패는 Map 뒤 AnalysisResultCheck 가 판정.
+            # (Catch·exit-code Default 양쪽에서 진입 — 둘 다 입력에 $.ticker 가 있다.)
+            AnalyzeOneFailed = {
+              Type = "Pass"
+              End  = true
+              Parameters = {
+                "ticker.$" = "$.ticker"
+                status     = "failed"
+              }
+            }
+          }
+        }
+      }
+      # analyze Map(ALPHA-470) 결과 게이트 — Map 은 격리를 위해 실패 이터레이션도 Pass 로
+      # 마감하므로 Map 자체는 늘 성공한다. 유니버스 전 항목이 succeeded 일 때만 통과하고,
+      # 하나라도 failed 면 NotifyFailure 로 fail-loud 한다(ADR-0028 analysis 전량성공 게이트).
+      # RawPartialCheck 의 $.branch_results 는 Map 이 ResultPath=$.analysis 라 보존된다.
+      AnalysisResultCheck = {
         Type = "Choice"
         Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "PipelineSucceeded"
+          And  = local.analysis_success_checks
+          Next = "RawPartialCheck"
         }]
         Default = "NotifyFailure"
+      }
+      # raw 부분 실패 런의 **마감 판정**(ALPHA-460) — 막는 게이트가 아니다. 다운스트림을 끝까지
+      # 돌린 뒤 raw 를 다시 보고, 부분 실패였으면 런을 FAILED 로 끝낸다. 알림은 이미 raw 직후
+      # NotifyRawPartial 이 쐈으므로 **여기선 SNS 를 안 탄다**(한 실패에 두 통 금지) — 곧장
+      # PipelineFailed 로 간다.
+      #
+      # 이 상태가 없으면 안 되는 이유: 알림만으로는 실행이 Succeed 로 남아 콘솔·ExecutionsFailed
+      # 지표에서 정상 런과 구분되지 않는다. raw 가 불완전한 런은 상태로도 실패여야 한다.
+      #
+      # `$.branch_results` 는 RawIngestParallel 이 쓴 뒤 여기까지 살아 있다 — 뒤 Task 들이
+      # ResultPath 를 `$.ecs` 로 쓰고 Parallel 들도 각자 다른 키를 써서 덮이지 않는다.
+      RawPartialCheck = {
+        Type = "Choice"
+        Choices = [{
+          And  = local.raw_ingest_success_checks
+          Next = "PipelineSucceeded"
+        }]
+        Default = "PipelineFailed"
       }
       PipelineSucceeded = { Type = "Succeed" }
       NotifyFailure = {
@@ -483,14 +777,43 @@ resource "aws_scheduler_schedule" "daily" {
     mode = "OFF"
   }
 
+  # 운영 원장(ALPHA-530): daily 트리거가 SFN 을 **직접** 시작하지 않고 **Planner** 를 띄운다.
+  # Planner 가 실행 전 pipeline_run+expected_task 를 원장에 남기고(관측 정본) SFN 을 시작한다 —
+  # 그래야 SFN 이 아예 안 떠도 "실행 자체가 안 됐다"를 탐지할 수 있다(스펙 §5). 스케줄 시각은
+  # <aws.scheduler.scheduled-time> 를 env(OPS_SCHEDULED_TIME)로 넘겨 Planner 가 슬롯을 계산한다.
+  #
+  # ⚠️ retry/DLQ 의미가 바뀐다(edge-review): 스케줄러는 **RunTask 제출**까지만 보므로 아래
+  # retry/DLQ 는 "Planner 컨테이너가 뜨지 못한" 경우만 덮는다. Planner 가 뜬 뒤 DB·StartExecution
+  # 실패로 exit≠0 이어도 스케줄러엔 성공으로 보인다 — 그 공백은 **Reconciler 가 메운다**:
+  # pipeline_run 이 없으면 PLANNER_MISSING, 있는데 SFN 실행이 확인 안 되면 LAUNCH_UNCONFIRMED
+  # (Planner 가 pipeline_run 을 먼저 커밋한 뒤 StartExecution 하므로 두 경우가 갈린다).
   target {
-    arn      = aws_sfn_state_machine.this.arn
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
-    input    = jsonencode({ mode = "incremental", run_id = "<aws.scheduler.scheduled-time>" })
+    input = jsonencode({
+      Cluster        = var.cluster_arn
+      TaskDefinition = aws_ecs_task_definition.ops.arn
+      LaunchType     = "FARGATE"
+      NetworkConfiguration = {
+        AwsvpcConfiguration = {
+          Subnets        = var.subnet_ids
+          SecurityGroups = [aws_security_group.task.id]
+          AssignPublicIp = "DISABLED"
+        }
+      }
+      Overrides = {
+        ContainerOverrides = [{
+          Name        = local.container_name
+          Command     = ["plan-run"]
+          Environment = [{ Name = "OPS_SCHEDULED_TIME", Value = "<aws.scheduler.scheduled-time>" }]
+        }]
+      }
+    })
 
     retry_policy {
       maximum_event_age_in_seconds = 86400
       maximum_retry_attempts       = 185
     }
+    dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
 }
