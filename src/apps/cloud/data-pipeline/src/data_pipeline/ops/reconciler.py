@@ -111,23 +111,25 @@ def execution_evidence(events: list[dict]) -> dict[str, dict]:
     memo: dict[object, str | None] = {}
 
     def owning_state(ev) -> str | None:
+        # id 없는 이벤트는 memo 키로 쓰지 않는다 — memo[None] 을 저장하면 다른 브랜치의 id 결측
+        # 이벤트가 그 값을 재사용해 오귀속한다(edge-review). id 있는 것만 캐싱한다.
         chain: list[object] = []
         cur = ev
+        name = None
         while cur is not None:
             eid = cur.get("id")
-            if eid in memo:
+            if eid is not None and eid in memo:
                 name = memo[eid]
                 break
             if cur.get("type") == "TaskStateEntered":
                 name = cur.get("stateEnteredEventDetails", {}).get("name")
                 break
-            if eid in chain:  # 순환 방지
-                name = None
-                break
-            chain.append(eid)
-            cur = by_id.get(cur.get("previousEventId"))
-        else:
-            name = None
+            if eid is not None:
+                if eid in chain:  # 순환 방지
+                    break
+                chain.append(eid)
+            prev = cur.get("previousEventId")
+            cur = by_id.get(prev) if prev is not None else None
         for eid in chain:
             memo[eid] = name
         return name
@@ -254,10 +256,13 @@ def reconcile_run(
 
 def _completed_task_keys(evidence: dict[str, dict]) -> set[str]:
     """upstream 완료(성공) 판정 — exit0 또는 exit code 없이 완료 신호가 있는 카탈로그 작업."""
+    # 선행 완료 = **컨테이너 exit0 확인**. exit code 없는 TaskSucceeded 만으로 완료 처리하면
+    # 실제 실패한 선행 뒤의 downstream eligibility 를 잘못 열어 BLOCKED 여야 할 걸 MISSED 로
+    # 판정한다(edge-review). exit0 미확인이면 미완으로 본다(보수적 — downstream 은 BLOCKED).
     done: set[str] = set()
     for entry in catalog.entries():
         ev = evidence.get(entry.sfn_state_name)
-        if ev and (ev.get("exit_code") == 0 or (ev.get("exit_code") is None and ev.get("sfn_completed"))):
+        if ev and ev.get("exit_code") == 0:
             done.add(entry.task_key)
     return done
 
@@ -369,6 +374,9 @@ def _ecs_terminal_status(ecs, task_arn: str, cluster_arn: str | None) -> str | N
         return None
     containers = tasks[0].get("containers") or []
     exit_code = containers[0].get("exitCode") if containers else None
+    if exit_code is None:
+        # STOPPED 인데 exit code 를 모른다 — FAILED 로 단정하지 않는다(exit0 이 유실됐을 수도).
+        return None
     return states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
 
 

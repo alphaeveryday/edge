@@ -78,6 +78,8 @@ resource "aws_ecs_task_definition" "ops" {
       # 봐서 실제 태스크를 못 찾는다, edge-review). Planner 의 비거래일 판정용 KR 공휴일 목록도.
       OPS_CLUSTER_ARN = var.cluster_arn
       OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
+      # Reconciler 의 "예정 지난 슬롯" 판정 기준 — schedule_expression 의 HH:MM 과 일치해야 한다.
+      OPS_DAILY_SCHED_HHMM = var.daily_schedule_hhmm
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

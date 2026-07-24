@@ -73,13 +73,20 @@ def derive_data_status(signals: dict) -> str:
       0건인데 증명 부족              → UNKNOWN
       유효 건수>0·알려진 결손/실패 없음 → VALID
     """
-    # 성공 exit(정확히 0)이 아니면 데이터 상태를 단정하지 않는다. exit_code 결측(None)도 포함 —
-    # 성공을 확인하지 못한 것이므로 VALID 로 올리지 않는다(H각도 crash-before-gate·coerce 방지).
-    if signals.get("exit_code") != 0:
+    # 성공 exit(정확히 정수 0)이 아니면 데이터 상태를 단정하지 않는다. exit_code 결측(None)·비정수·
+    # **bool**(False==0 이라 성공으로 위장) 전부 UNKNOWN — 성공을 확인하지 못한 것이다(H각도).
+    ec = signals.get("exit_code")
+    if not (isinstance(ec, int) and not isinstance(ec, bool) and ec == 0):
         return states.DATA_UNKNOWN
 
+    # 완전성은 기대집합(스냅샷)과 수신집합이 있어야 판정한다. 둘 다 있을 때만 VALID/INCOMPLETE 를
+    # 가르고, 없으면 **완전성 미확인**이라 records 가 있어도 VALID 로 단정하지 않는다(정직한 UNKNOWN,
+    # 스펙 §6). ⚠️ 운영 wiring: plan-run 이 universe_provider 를, observer 가 received_count 를 아직
+    # 공급하지 않아 프로덕션 data_status 는 UNKNOWN/INCOMPLETE/VALID_EMPTY 다(VALID 는 완전성
+    # wiring 후속 — false-VALID 를 내느니 UNKNOWN 이 맞다).
     expected, received = signals.get("expected_count"), signals.get("received_count")
-    if _num(expected) and _num(received) and received < expected:
+    completeness_known = _num(expected) and _num(received)
+    if completeness_known and received < expected:
         return states.DATA_INCOMPLETE
     failed = signals.get("failed_records")
     if failed is not None:
@@ -92,11 +99,13 @@ def derive_data_status(signals: dict) -> str:
     if not _num(records_out) or records_out < 0:
         return states.DATA_UNKNOWN            # 결측·음수·NaN·비수치 → VALID 로 위장 금지
     if records_out == 0:
-        if signals.get("request_completed") and signals.get("empty_allowed") \
-                and signals.get("trading_day", True):
-            return states.DATA_VALID_EMPTY   # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 입증
+        # 정상 0건: 요청완료+계약허용+거래일 무모순 전부 **명시적 True** 일 때만(truthy 문자열·정수를
+        # 증명으로 삼지 않는다). trading_day 는 미지정이면 무모순으로 본다.
+        if signals.get("request_completed") is True and signals.get("empty_allowed") is True \
+                and signals.get("trading_day", True) is not False:
+            return states.DATA_VALID_EMPTY
         return states.DATA_UNKNOWN           # 0건만으로 VALID_EMPTY 금지(테스트 22)
-    return states.DATA_VALID
+    return states.DATA_VALID if completeness_known else states.DATA_UNKNOWN
 
 
 def instrument(

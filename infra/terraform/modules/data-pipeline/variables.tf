@@ -164,6 +164,14 @@ variable "kr_holidays" {
   default     = []
 }
 
+# Reconciler 의 PLANNER_MISSING 판정 기준 시각. schedule_expression(cron 40 15)의 HH:MM 과
+# 일치시켜야 한다 — 코드 하드코딩 대신 이 한 변수로 모아 드리프트를 막는다(edge-review).
+variable "daily_schedule_hhmm" {
+  description = "daily 스케줄 KST 시각 HH:MM. schedule_expression 과 일치해야 한다."
+  type        = string
+  default     = "15:40"
+}
+
 variable "alarm_email" {
   description = "raw ingest 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
   type        = string

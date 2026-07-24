@@ -18,10 +18,19 @@ logger = logging.getLogger(__name__)
 
 # Reconciler advisory lock 키(임의 고정 정수 — 이 워크로드 전용 네임스페이스).
 _RECONCILE_LOCK = 0x0107_0530
-# daily 스케줄 시각(KST) — statemachine.tf 의 cron(40 15 ? * MON-FRI)과 **일치해야** 한다.
-# Reconciler 가 "예정 시각이 지난 슬롯만" PLANNER_MISSING 으로 보게 하는 기준(edge-review).
-_SCHED_HOUR, _SCHED_MIN = 15, 40
 _PLANNER_GRACE = timedelta(minutes=30)  # 예정 직후 Planner 가 뜰 여유 — 이만큼 지나야 결측 판정
+
+
+def _sched_hhmm() -> tuple[int, int]:
+    """daily 스케줄 시각(KST) HH:MM. **env(OPS_DAILY_SCHED_HHMM)로 주입** — statemachine.tf 의
+    schedule_expression 과 한 곳에서 오게 해 하드코딩 드리프트를 막는다(edge-review). 기본 15:40."""
+    raw = os.environ.get("OPS_DAILY_SCHED_HHMM", "15:40")
+    try:
+        h, m = raw.split(":")
+        return int(h), int(m)
+    except (ValueError, AttributeError):
+        logger.warning("OPS_DAILY_SCHED_HHMM 파싱 실패(%s) — 15:40 사용", raw)
+        return 15, 40
 
 
 def ledger_from_settings(settings) -> Ledger | None:
@@ -134,11 +143,12 @@ def _due_slot(now_kst: datetime) -> tuple[str, bool] | None:
     월요일 오전(오늘 미예정)엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다 — 아직 예정 전인
     오늘 슬롯을 결측으로 보지 않게(edge-review). grace 경과 여부는 PLANNER_MISSING 판정에 쓴다.
     """
+    hour, minute = _sched_hhmm()
     for back in range(7):
         cand = now_kst.date() - timedelta(days=back)
         if cand.weekday() >= 5:
             continue
-        sched = datetime.combine(cand, time(_SCHED_HOUR, _SCHED_MIN), tzinfo=planner.KST)
+        sched = datetime.combine(cand, time(hour, minute), tzinfo=planner.KST)
         if now_kst >= sched:
             return f"{catalog.PIPELINE_TYPE}:{cand.isoformat()}", now_kst >= sched + _PLANNER_GRACE
     return None

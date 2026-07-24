@@ -44,10 +44,23 @@ def test_zero_count_alone_is_not_valid_empty():
 
 def test_data_status_rules():
     assert d({"exit_code": 1, "records_out": 5}) == states.DATA_UNKNOWN       # 실패→단정 안 함
-    assert d({"exit_code": 0, "records_out": 5}) == states.DATA_VALID
+    # VALID 는 완전성 확인(expected+received) 이 있어야 한다 — 없으면 정직하게 UNKNOWN.
+    assert d({"exit_code": 0, "records_out": 5}) == states.DATA_UNKNOWN
+    assert d({"exit_code": 0, "records_out": 5, "expected_count": 5,
+              "received_count": 5}) == states.DATA_VALID
     assert d({"exit_code": 0, "records_out": 30, "expected_count": 31,
               "received_count": 30}) == states.DATA_INCOMPLETE               # 종목 누락
     assert d({"exit_code": 0, "records_out": 5, "failed_records": 2}) == states.DATA_INCOMPLETE
+    # 음수·NaN·비수치 records_out, 비수치 failed → VALID 승격/ crash 없이 UNKNOWN.
+    assert d({"exit_code": 0, "records_out": -1}) == states.DATA_UNKNOWN
+    assert d({"exit_code": 0, "records_out": float("nan")}) == states.DATA_UNKNOWN
+    assert d({"exit_code": 0, "records_out": 5, "failed_records": "x"}) == states.DATA_UNKNOWN
+
+
+def test_bool_exit_code_is_not_success():
+    """exit_code=False 는 성공 0 이 아니다 — False==0 우회를 막는다(edge-review H)."""
+    assert d({"exit_code": False, "records_out": 5, "expected_count": 5,
+              "received_count": 5}) == states.DATA_UNKNOWN
 
 
 # ── instrument ──
@@ -57,7 +70,8 @@ def test_instrument_records_attempt_and_fulfilled():
     rc = wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 10, "request_completed": True},
+        observe_data_fn=lambda ec: {"records_out": 10, "expected_count": 10,
+                                    "received_count": 10, "request_completed": True},
     )
     assert rc == 0
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FULFILLED
