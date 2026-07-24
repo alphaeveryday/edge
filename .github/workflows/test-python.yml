@@ -1,0 +1,121 @@
+# PR 검증 — Python 워크스페이스(analysis-engine·data-pipeline) 테스트 + 이미지 빌드 + 골든패스 E2E.
+#
+# deploy-* 워크플로는 dev 머지 후 CD 전용(빌드→ECR push)이라 테스트가 없다 — 머지 전
+# 기계 게이트는 이 워크플로가 유일하다(ALPHA-534). 어떤 secret 도 쓰지 않고 실제
+# dev/prod 자원(AWS·RDS)에 접속하지 않는다 — DB 는 ephemeral 컨테이너, S3·LLM 은 fake.
+#
+# 이 레포(private, free 플랜)는 branch protection 을 쓸 수 없어 이 체크가 required 가
+# 아니므로 paths 필터가 안전하다. required 도입 시 필터를 걷어낼 것 — path 로 스킵된
+# required check 는 Pending 으로 남아 PR 을 영구 차단한다(schema-validate.yml 헤더 참고).
+#
+# 주의: 두 앱 테스트를 한 pytest 호출로 합치면 같은 basename(test_config.py)이 충돌한다
+# (tests/ 에 __init__.py 없음) — 반드시 앱별로 실행한다.
+name: test-python
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "src/apps/analysis-engine/**"
+      - "src/apps/data-pipeline/**"
+      - "src/pyproject.toml"
+      - "src/uv.lock"
+      - "src/libs/schema/migrations/**"   # e2e 가 실 스키마를 적용한다 — 스키마 변경도 게이트 대상
+      - ".github/workflows/test-python.yml"
+
+# 최소 권한 — 체크아웃(읽기)만 필요하다.
+permissions:
+  contents: read
+
+# 같은 PR 의 이전 실행은 취소한다.
+concurrency:
+  group: test-python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 단위 테스트 (앱별 분리 실행) ─────────────────────────────
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [analysis-engine, data-pipeline]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "src/uv.lock"
+
+      - name: uv sync (frozen)
+        working-directory: src
+        run: uv sync --frozen
+
+      - name: pytest ${{ matrix.app }}
+        working-directory: src
+        run: uv run pytest apps/${{ matrix.app }}/tests -q
+
+  # ── 이미지 빌드 스모크 (push 없음) ───────────────────────────
+  # 머지 후 deploy-* 에서야 첫 docker build 가 도는 구멍을 막는다 — 패키징·Dockerfile
+  # 파손(예: 모듈 트리 개편)이 PR 단계에서 잡힌다.
+  image-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [analysis-engine, data-pipeline]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker build ${{ matrix.app }}
+        run: docker build -f src/apps/${{ matrix.app }}/Dockerfile src
+
+  # ── 골든패스 E2E 1개 (뉴스 조립 → 분석 → 영속) ───────────────
+  # ephemeral Postgres 에 Flyway cloud 세트를 실제 적용한 뒤, assemble_events(분류 LLM
+  # fake) → analysis-engine(DeepSeek fake·S3 fake) 를 같은 DB 위에서 이어 돌린다.
+  # 두 코드베이스의 결정적 ID 수렴과 실 스키마 SQL 정합이 검증 대상이다(ALPHA-534).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: edge
+          POSTGRES_USER: edge
+          POSTGRES_PASSWORD: edge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edge -d edge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 버전은 libs/schema/build.gradle 의 Flyway 플러그인(10.21.0)과 맞춘다.
+      - name: Flyway migrate (cloud set)
+        run: >
+          docker run --rm --network host
+          -v "$PWD/src/libs/schema/migrations:/flyway/sql:ro"
+          flyway/flyway:10.21.0
+          -url=jdbc:postgresql://localhost:5432/edge -user=edge -password=edge migrate
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "src/uv.lock"
+
+      - name: uv sync (frozen)
+        working-directory: src
+        run: uv sync --frozen
+
+      - name: golden-path e2e
+        working-directory: src
+        env:
+          E2E_PGHOST: 127.0.0.1
+        run: uv run pytest apps/analysis-engine/tests/e2e -q
