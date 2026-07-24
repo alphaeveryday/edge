@@ -100,19 +100,23 @@ locals {
   # rds task-def 에만 주입되므로, host 를 공용 env 에 두면 나머지 task-def 에서 db 섹션이
   # password 없이 구성돼 `load_settings()` 가 통째로 실패한다 — 수집·정제 스텝까지 전부.
   # 섹션은 있으면 완전해야 하고, 없으면 `db: DbConfig | None = None` 으로 조용히 생략된다.
+  # DB 접속 env — DbConfig 는 섹션이 있으면 완전(host+password)해야 하므로 이 host-env 를 받는
+  # task-def 는 아래 secret_sets 에서 password 도 함께 받아야 한다(부분 주입=load_settings 실패).
+  db_env = {
+    DATA_PIPELINE_DB__HOST = var.db_host
+    DATA_PIPELINE_DB__PORT = tostring(var.db_port)
+    DATA_PIPELINE_DB__NAME = var.db_name
+    DATA_PIPELINE_DB__USER = var.db_user
+  }
+
+  # 운영 원장(ALPHA-530): PRICE_COLLECTION_KIS(kis)·NORMALIZE_PRICE(bigkinds) 컨테이너가
+  # wrapper 로 attempt/data_status 를 **직접** 기록하려면 원장 DB 가 필요하다. rds·events 와 같은
+  # DB 접속(같은 Cloud Event Store, ops_ 테이블). 없으면 그 두 wrapper 가 no-op 이 된다(edge-review).
   env_sets = {
-    rds = {
-      DATA_PIPELINE_DB__HOST = var.db_host
-      DATA_PIPELINE_DB__PORT = tostring(var.db_port)
-      DATA_PIPELINE_DB__NAME = var.db_name
-      DATA_PIPELINE_DB__USER = var.db_user
-    }
-    events = {
-      DATA_PIPELINE_DB__HOST = var.db_host
-      DATA_PIPELINE_DB__PORT = tostring(var.db_port)
-      DATA_PIPELINE_DB__NAME = var.db_name
-      DATA_PIPELINE_DB__USER = var.db_user
-    }
+    rds      = local.db_env
+    events   = local.db_env
+    kis      = local.db_env
+    bigkinds = local.db_env
   }
 
   secret_sets = {
@@ -122,7 +126,10 @@ locals {
       DATA_PIPELINE_FINANCIAL__SOURCE__API_KEY  = "${aws_secretsmanager_secret.fmp.arn}:apikey::"
       DATA_PIPELINE_ETF__SOURCE__API_KEY        = "${aws_secretsmanager_secret.fmp.arn}:apikey::"
     }
-    bigkinds = {}
+    # bigkinds 는 벤더 시크릿이 없지만 원장 DB password 는 받는다(NORMALIZE_PRICE wrapper 기록용).
+    bigkinds = {
+      DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+    }
     # 가격(kis_price)·NAV(kis_nav)·투자자수급(kis_investor)은 같은 KIS 앱키를 쓰지만 설정 섹션이
     # 달라 env 도 따로다(같은 시크릿의 같은 필드를 세 이름으로 주입 — 새 시크릿 불요). 자격증명이
     # 없으면 소스가 enabled=false 로 조용히 skip(exit0)하므로, kis taskdef 로 도는 스텝은 모두
@@ -135,6 +142,8 @@ locals {
       DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET      = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
       DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
       DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+      # PRICE_COLLECTION_KIS wrapper 가 원장에 기록하려면 DB password 도 필요하다(ALPHA-530).
+      DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
     dart = {
       DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY  = "${aws_secretsmanager_secret.dart.arn}:apikey::"

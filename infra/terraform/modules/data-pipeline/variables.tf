@@ -143,6 +143,35 @@ variable "schedule_state" {
   default     = "DISABLED"
 }
 
+# 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
+variable "reconcile_schedule_state" {
+  description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
+  type        = string
+  default     = "DISABLED"
+}
+
+variable "reconcile_schedule_expression" {
+  description = "Reconciler 실행 주기. 미실행·STALLED 탐지 지연 허용치에 맞춘다."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
+# Planner 의 비거래일(NON_TRADING_DAY) 판정용 KR 평일 공휴일(YYYY-MM-DD). 주말은 코드가 안다.
+# ⚠️ 완전한 거래소 캘린더 연동 전까지의 잠정 주입 지점 — 미설정이면 평일 공휴일에도 수집이 돈다.
+variable "kr_holidays" {
+  description = "KR 평일 휴장일 목록(YYYY-MM-DD). Planner 가 OPS_KR_HOLIDAYS 로 받는다."
+  type        = list(string)
+  default     = []
+}
+
+# Reconciler 의 PLANNER_MISSING 판정 기준 시각. schedule_expression(cron 40 15)의 HH:MM 과
+# 일치시켜야 한다 — 코드 하드코딩 대신 이 한 변수로 모아 드리프트를 막는다(edge-review).
+variable "daily_schedule_hhmm" {
+  description = "daily 스케줄 KST 시각 HH:MM. schedule_expression 과 일치해야 한다."
+  type        = string
+  default     = "15:40"
+}
+
 variable "alarm_email" {
   description = "raw ingest 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
   type        = string
