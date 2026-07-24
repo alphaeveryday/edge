@@ -3,9 +3,10 @@ package com.edge.tenantconsole.service;
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.BootstrapAccounts;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
+import com.edge.tenantconsole.model.Member;
 import com.edge.tenantconsole.repository.MemberRepository;
-import com.edge.tenantconsole.repository.MemberRepository.Member;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -59,7 +60,8 @@ public class AuthService {
 			throw new GeneralException(ConsoleErrorStatus.LOGIN_INVALID);
 		}
 		ensureBootstrapped();
-		Member member = memberRepository.findActiveByEmail(normalize(email)).orElse(null);
+		Member member = memberRepository.findByEmailAndActiveTrue(normalize(email))
+				.map(Member::from).orElse(null);
 		// password_hash NULL = SSO 전용 계정(데모 로컬 로그인 불가) — 미존재와 같은 경로.
 		String hash = member == null || member.passwordHash() == null
 				? timingDummyHash : member.passwordHash();
@@ -119,8 +121,8 @@ public class AuthService {
 		}
 		transaction.executeWithoutResult(tx -> {
 			for (var account : accounts) {
-				memberRepository.insert(normalize(account.email()), account.name(), account.role(),
-						encoder.encode(account.password()));
+				memberRepository.save(new MemberEntity(normalize(account.email()), account.name(),
+						account.role(), encoder.encode(account.password())));
 				log.info("bootstrap member 시드: {} ({})", account.email(), account.role());
 			}
 		});

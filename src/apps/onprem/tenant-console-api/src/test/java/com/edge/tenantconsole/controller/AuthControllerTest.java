@@ -3,6 +3,7 @@ package com.edge.tenantconsole.controller;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantconsole.auth.BootstrapAccounts;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.service.AuthService;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,34 +27,36 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 인증 계약(ADR-0025 데모 경로)을 검증한다: 로그인 성공 = 역할 실린 세션,
  * 실패 사유는 구분 없는 401(계정 존재 여부 비노출), 로그아웃 = 세션 무효화.
- * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다.
+ * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다. 리포지토리(JPA)는
+ * 좁은 인터페이스라 페이크로 스텁한다.
  */
 class AuthControllerTest {
 
 	private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
 	private static final String PASSWORD = "demo-pw-1";
-	private static final MemberRepository.Member REVIEWER = new MemberRepository.Member(
+	private static final MemberEntity REVIEWER = new MemberEntity(
 			2L, "reviewer@demo.edge.local", "데모 검수자", "COMPLIANCE_REVIEWER", true,
 			ENCODER.encode(PASSWORD));
 
-	private static final class StubMembers extends MemberRepository {
-		MemberRepository.Member member = REVIEWER;
+	private static final class StubMembers implements MemberRepository {
+		MemberEntity member = REVIEWER;
 		Long lastLoginTouched = null;
 
-		StubMembers() {
-			super(null);
-		}
-
 		@Override
-		public Optional<MemberRepository.Member> findActiveByEmail(String email) {
+		public Optional<MemberEntity> findByEmailAndActiveTrue(String email) {
 			return Optional.ofNullable(
-					member != null && member.email().equals(email) ? member : null);
+					member != null && member.getEmail().equals(email) ? member : null);
 		}
 
 		@Override
 		public long count() {
 			// 시드 불필요 상태 — 로그인 경로의 지연 부트스트랩이 시드를 건너뛰게 한다.
 			return 1;
+		}
+
+		@Override
+		public MemberEntity save(MemberEntity m) {
+			return m;
 		}
 
 		@Override
@@ -111,7 +114,7 @@ class AuthControllerTest {
 
 	@Test
 	void SSO_전용_계정은_로컬_로그인이_거부된다() throws Exception {
-		members.member = new MemberRepository.Member(
+		members.member = new MemberEntity(
 				3L, "sso@demo.edge.local", "SSO 사용자", "OPERATOR", true, null);
 		mvc.perform(post("/api/v1/auth/login")
 						.contentType(MediaType.APPLICATION_JSON)

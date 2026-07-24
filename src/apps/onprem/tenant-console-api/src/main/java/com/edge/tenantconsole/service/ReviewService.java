@@ -2,11 +2,12 @@ package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
+import com.edge.tenantconsole.model.ReviewItem;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
-import com.edge.tenantconsole.repository.ReviewItemRepository.ReviewItem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,21 +34,22 @@ public class ReviewService {
 	}
 
 	public List<ReviewItem> list(String status) {
-		return reviewItemRepository.findByStatus(status, LIST_LIMIT);
+		return reviewItemRepository.findByStatusOrderByReceivedAtAsc(status, Limit.of(LIST_LIMIT))
+				.stream().map(ReviewItem::from).toList();
 	}
 
 	@Transactional
 	public void approve(String explanationResultId) {
-		ReviewItem item = reviewItemRepository.findById(explanationResultId)
+		ReviewItem item = reviewItemRepository.findById(explanationResultId).map(ReviewItem::from)
 				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.REVIEW_ITEM_NOT_FOUND));
 		if (item.etfTicker() == null) {
 			// ticker 는 게시(서빙 키) 필수 — 없는 항목은 승인해도 노출할 수 없다.
 			throw new GeneralException(ConsoleErrorStatus.NOT_PUBLISHABLE);
 		}
-		if (!reviewItemRepository.decide(explanationResultId, "APPROVED")) {
+		if (reviewItemRepository.decide(explanationResultId, "APPROVED") == 0) {
 			throw new GeneralException(ConsoleErrorStatus.NOT_IN_REVIEW);
 		}
-		if (!publicationRepository.publish(explanationResultId, item.etfTicker(), item.tradeDate())) {
+		if (publicationRepository.publish(explanationResultId, item.etfTicker(), item.tradeDate()) == 0) {
 			// grain 선점 — 전이도 함께 롤백된다(같은 트랜잭션). 검수자는 기존 게시를 내린 뒤 재시도.
 			throw new GeneralException(ConsoleErrorStatus.GRAIN_OCCUPIED);
 		}
@@ -64,7 +66,7 @@ public class ReviewService {
 		if (reviewItemRepository.findById(explanationResultId).isEmpty()) {
 			throw new GeneralException(ConsoleErrorStatus.REVIEW_ITEM_NOT_FOUND);
 		}
-		if (!reviewItemRepository.decide(explanationResultId, "REJECTED")) {
+		if (reviewItemRepository.decide(explanationResultId, "REJECTED") == 0) {
 			throw new GeneralException(ConsoleErrorStatus.NOT_IN_REVIEW);
 		}
 		log.info("review rejected id={} reason={}", explanationResultId, reason);

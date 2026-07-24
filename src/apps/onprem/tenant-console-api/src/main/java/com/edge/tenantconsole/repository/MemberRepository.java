@@ -1,64 +1,32 @@
 package com.edge.tenantconsole.repository;
 
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.stereotype.Repository;
+import com.edge.tenantconsole.entity.MemberEntity;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 /**
- * member 원장 접근 — writer = tenant-console-api(스키마 COMMENT). 데모 자체 계정
- * 경로(ADR-0025): 관리자 직접 등록만 있고 셀프 가입·초대 흐름은 없다.
+ * member 원장 접근 — writer = tenant-console-api(전유, 스키마 COMMENT). 좁은
+ * Repository 로 쓰는 연산만 노출한다(전체 CRUD·삭제 미노출 — 단일 writer 규율을
+ * 구조적으로 강제). last_login 갱신은 단일 UPDATE 시맨틱을 위해 native @Modifying.
  */
-@Repository
-public class MemberRepository {
+public interface MemberRepository extends Repository<MemberEntity, Long> {
 
-	public record Member(
-			long memberId,
-			String email,
-			String name,
-			String role,
-			boolean active,
-			String passwordHash
-	) {
-	}
+	Optional<MemberEntity> findByEmailAndActiveTrue(String email);
 
-	private final JdbcTemplate jdbc;
+	@Query("SELECT count(m) FROM MemberEntity m")
+	long count();
 
-	public MemberRepository(JdbcTemplate jdbc) {
-		this.jdbc = jdbc;
-	}
+	/** 부트스트랩 데모 계정 시드(member 전유 writer). */
+	MemberEntity save(MemberEntity member);
 
-	public Optional<Member> findActiveByEmail(String email) {
-		return jdbc.query("""
-				SELECT member_id, email, name, role, is_active, password_hash
-				FROM member WHERE email = ? AND is_active
-				""", rowMapper(), email).stream().findFirst();
-	}
-
-	public long count() {
-		Long n = jdbc.queryForObject("SELECT count(*) FROM member", Long.class);
-		return n == null ? 0 : n;
-	}
-
-	public void insert(String email, String name, String role, String passwordHash) {
-		jdbc.update("""
-				INSERT INTO member (email, name, role, password_hash)
-				VALUES (?, ?, ?, ?)
-				""", email, name, role, passwordHash);
-	}
-
-	public void touchLastLogin(long memberId) {
-		jdbc.update("UPDATE member SET last_login_at = now() WHERE member_id = ?", memberId);
-	}
-
-	private RowMapper<Member> rowMapper() {
-		return (rs, n) -> new Member(
-				rs.getLong("member_id"),
-				rs.getString("email"),
-				rs.getString("name"),
-				rs.getString("role"),
-				rs.getBoolean("is_active"),
-				rs.getString("password_hash"));
-	}
+	@Transactional
+	@Modifying
+	@Query(value = "UPDATE member SET last_login_at = now() WHERE member_id = :id",
+			nativeQuery = true)
+	void touchLastLogin(@Param("id") long id);
 }
