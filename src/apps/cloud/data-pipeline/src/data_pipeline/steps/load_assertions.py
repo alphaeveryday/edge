@@ -16,10 +16,11 @@ predicate_code)` 에 ON CONFLICT DO NOTHING(원자적 — #130 교훈). 신규�
 선적재 포함) 그 행의 assertion_id 를 자연키로 읽어 arguments 만 union 한다
 (`uq_assertion_argument` DO NOTHING). 같은 런 내 같은 키 주장은 arguments 를 접는다.
 
-⚠️ **수렴하는 건 assertion_id 뿐이다.** 이 테이블은 writer 가 둘인데(이 스텝·assemble-events)
-ON CONFLICT DO NOTHING 이라 `confidence`·`available_at`·`lifecycle_stage` 는 **먼저 쓴 쪽 값이
-남는다**. 두 writer 의 판정이 다르면 최종 행이 실행 순서를 탄다. 어느 쪽을 정본으로 둘지는
-assertion 단일화 결정 사안이라 여기서 정하지 않는다 — ID 만 먼저 결정적으로 맞춘 상태다.
+⚠️ **컬럼 소유권(ALPHA-538)** — 같은 자연키 행을 두 스텝(이 스텝·assemble-events)이 만들 수
+있지만, 컬럼별 공급자는 하나다: `confidence` 는 **이 스텝 소유**(assertion-grain 판정,
+행이 이미 있으면 UPDATE 로 확정 착지), `available_at` 은 **document 파생**(양쪽이 같은 값),
+`lifecycle_stage` 는 event grain(`source_event`) 소유라 여기선 싣지 않는다. 그래서 두 스텝이
+어느 순서로 돌아도 최종 행이 같다 — "먼저 쓴 쪽이 남는" 순서 의존은 ALPHA-538 로 제거됐다.
 
 ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 계열은 **hex 해시**라 시간
 정렬이 안 된다. 불투명성(ID 를 파싱해 의미를 얻지 못함)은 유지되고, ADR 이 자연키 파생을
@@ -31,7 +32,8 @@ ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 �
 건너뛴다 — load-documents 가 선행 스텝이라 다음 런이 자연 회복한다.
 
 `modality_code` 는 비운다 — 어휘 미정의(ALPHA-361). 값을 발명하면 그게 계약이 된다.
-`available_at` 은 feature `tagged_at`(주장이 생긴 시각, non-null)이다.
+`available_at` 은 **document 의 가용 시각**이다 — 주장의 PIT 기준은 원문 발행·수집이지
+추출 프로세스 시각(tagged_at)이 아니다(ALPHA-538 로 tagged_at 사용 폐지).
 """
 
 from __future__ import annotations
@@ -153,7 +155,6 @@ def run(
                             if entry is None:
                                 entry = candidates[nk] = {
                                     "confidence": _confidence(assertion.get("confidence")),
-                                    "available_at": row.get("tagged_at"),
                                     "arguments": [],
                                 }
                             else:
@@ -168,22 +169,23 @@ def run(
             article_ids_by_source: dict[str, set[str]] = {}
             for source_code, article_id, _e, _p in candidates:
                 article_ids_by_source.setdefault(source_code, set()).add(article_id)
-            doc_id_by_key: dict[tuple[str, str], str] = {}
+            doc_by_key: dict[tuple[str, str], tuple[str, object]] = {}
             with conn.cursor() as cur:
                 for source_code, ids in article_ids_by_source.items():
                     cur.execute(
-                        "SELECT source_document_id, document_id FROM document"
+                        "SELECT source_document_id, document_id, available_at FROM document"
                         " WHERE source_code = %s AND source_document_id = ANY(%s)",
                         (source_code, sorted(ids)),
                     )
-                    for sdi, did in cur.fetchall():
-                        doc_id_by_key[(source_code, sdi)] = did
+                    for sdi, did, avail in cur.fetchall():
+                        doc_by_key[(source_code, sdi)] = (did, avail)
 
             for (source_code, article_id, event_type, predicate), entry in sorted(candidates.items()):
-                document_id = doc_id_by_key.get((source_code, article_id))
-                if document_id is None:
+                doc_row = doc_by_key.get((source_code, article_id))
+                if doc_row is None:
                     missing_document += 1
                     continue
+                document_id, doc_available_at = doc_row
 
                 resolved_args: dict[tuple[str, str], float | None] = {}
                 for argument in entry["arguments"]:
@@ -217,15 +219,18 @@ def run(
                         " VALUES (%s, %s, %s, %s, %s, %s)"
                         " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
                         (assertion_id, document_id, event_type, predicate,
-                         entry["confidence"], entry["available_at"]),
+                         entry["confidence"], doc_available_at),
                     )
                     if cur.rowcount == 0:
-                        # 이미 있다(분석엔진 선적재 포함) — 그 행의 ID 로 arguments 만 union.
+                        # 이미 있다(assemble-events 의 FK 비계 선생성 포함) — 소유 컬럼
+                        # confidence 를 UPDATE 로 확정 착지시키고 그 행의 ID 로 arguments 를
+                        # union 한다. 행 생성 경주에서 져도 이 스텝의 판정이 유실되지 않는다.
                         already += 1
                         cur.execute(
-                            "SELECT assertion_id FROM document_assertion"
-                            " WHERE document_id = %s AND event_type_code = %s AND predicate_code = %s",
-                            (document_id, event_type, predicate),
+                            "UPDATE document_assertion SET confidence = %s"
+                            " WHERE document_id = %s AND event_type_code = %s"
+                            " AND predicate_code = %s RETURNING assertion_id",
+                            (entry["confidence"], document_id, event_type, predicate),
                         )
                         assertion_id = cur.fetchone()[0]
                     else:

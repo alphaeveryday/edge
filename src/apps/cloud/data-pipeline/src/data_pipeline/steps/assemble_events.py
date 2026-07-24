@@ -14,7 +14,10 @@
 tag-news 와의 관계: tag-news 는 다중 assertion·역할 추출로 feature 존을 만들고(문서/
 assertion 사슬), 이 스텝은 엔진 분류기(기사당 1건, 제목만)로 **event 계보**를 만든다.
 두 분류기의 단일화는 로직 소유자 결정 사안(후속) — 그동안 양쪽 다 자연키/결정적 ID
-멱등이라 공존이 안전하다.
+멱등이라 공존이 안전하다. document_assertion 컬럼 소유권(ALPHA-538): 이 스텝의
+assertion INSERT 는 event_evidence FK 를 세우기 위한 **비계**라 공유·결정값만 싣는다 —
+`confidence` 는 tag-news 체인(load-assertions) 소유, `lifecycle_stage` 는 event grain
+(`source_event`) 소유. 그래서 두 스텝의 실행 순서가 이 테이블의 최종 행을 바꾸지 않는다.
 """
 
 from __future__ import annotations
@@ -325,25 +328,28 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         article_ids_by_source: dict[str, list[str]] = {}
         for article_id, _r, _c, _at, source_code in pending:
             article_ids_by_source.setdefault(source_code, []).append(article_id)
-        doc_id_by_key: dict[tuple[str, str], str] = {}
+        # 문서 행의 available_at 까지 함께 읽는다 — 행이 load-documents 선적재분이면
+        # available_at 이 fetched 기반이라, 지역 published 값을 비계에 실으면 두 스텝의
+        # 실행 순서가 document_assertion.available_at 을 가른다(Codex #243 P2 수용).
+        # 비계는 항상 **문서 행 값**을 실어 load-assertions 와 같은 출처를 공유한다.
+        doc_by_key: dict[tuple[str, str], tuple[str, str]] = {}
         for source_code, ids in sorted(article_ids_by_source.items()):
             cur.execute(
-                "SELECT source_document_id, document_id FROM document"
+                "SELECT source_document_id, document_id, available_at FROM document"
                 " WHERE source_code = %s AND source_document_id = ANY(%s)",
                 (source_code, ids),
             )
-            for sdi, did in cur.fetchall():
-                doc_id_by_key[(source_code, sdi)] = did
+            for sdi, did, avail in cur.fetchall():
+                doc_by_key[(source_code, sdi)] = (did, avail)
 
     for article_id, row, cls, available_at, source_code in pending:
-        document_id = doc_id_by_key[(source_code, article_id)]
+        document_id, doc_available_at = doc_by_key[(source_code, article_id)]
         news_docs.append((document_id,))
         doc_entities.append((document_id, cls["entity_id"], row["title"], "mention",
                              cls["confidence"]))
         assertions.append((
             _stable_id("asrt", document_id, cls["event_type_code"], cls["predicate_code"]),
-            document_id, cls["event_type_code"], cls["predicate_code"],
-            cls["confidence"], cls["lifecycle_stage"], available_at,
+            document_id, cls["event_type_code"], cls["predicate_code"], doc_available_at,
         ))
 
     with conn.cursor() as cur:
@@ -358,21 +364,21 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             doc_entities,
         )
         cur.executemany(
+            # FK 비계 — 소유권 계약(모듈 독스트링)상 confidence·lifecycle_stage 는 안 싣는다.
             "INSERT INTO document_assertion (assertion_id, document_id, event_type_code,"
-            " predicate_code, confidence, lifecycle_stage, available_at)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            " predicate_code, available_at) VALUES (%s,%s,%s,%s,%s)"
             " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
             assertions,
         )
         cur.execute(
             "SELECT document_id, event_type_code, predicate_code, assertion_id"
             " FROM document_assertion WHERE document_id = ANY(%s)",
-            ([doc_id_by_key[(sc, a)] for a, _r, _c, _at, sc in pending],),
+            ([doc_by_key[(sc, a)][0] for a, _r, _c, _at, sc in pending],),
         )
         asrt_id_by_key = {(d, e, p): a for d, e, p, a in cur.fetchall()}
 
     for article_id, row, cls, available_at, source_code in pending:
-        document_id = doc_id_by_key[(source_code, article_id)]
+        document_id = doc_by_key[(source_code, article_id)][0]
         entity_id = cls["entity_id"]
         assertion_id = asrt_id_by_key[(document_id, cls["event_type_code"], cls["predicate_code"])]
         assertion_args.append((assertion_id, cls["role_code"], entity_id, cls["confidence"]))
