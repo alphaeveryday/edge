@@ -63,8 +63,9 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · 
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — jvm-common 봉투
   `{isSuccess,code,message,result}` 로 내려간다. 계약 DTO 는 `result` 안의
   camelCase 이고, 뮤테이션도 200 + `result` 생략이다(204 는 쓰지 않는다).
-  성공까지 감싸는 건 super-admin-api 한정 규약 — 타 API(tenant-console-api 등)는
-  raw DTO 성공을 유지하는 의도적 분기다(ALPHA-521, AGENTS Rule 7·11).
+  성공까지 봉투로 감싸는 건 콘솔 계열 API 규약이다 — super-admin-api·tenant-console-api
+  가 채택했다(ALPHA-521·522). 실계약 조회 표면(tenant-sync-api·publication-api)은 raw
+  DTO 성공을 유지하는 의도적 분기다(AGENTS Rule 7·11).
 - **정정/무효화 사유 필수·감사 레코드**(콘솔 IA)는 DB 연동 시 UI 계약과 함께
   편입한다 — mock 단계 UI 계약에는 사유 입력이 없다.
 

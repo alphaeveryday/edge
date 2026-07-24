@@ -93,7 +93,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 - 앱에 Flyway 의존성·마이그레이션 SQL을 두지 않는다(마이그레이션은 이 모듈에만 있다).
 - Spring Boot 앱은 기동 시 마이그레이션을 실행하지 않는다 — `spring.flyway.enabled=false`.
-- Hibernate/JPA는 스키마를 생성/변경하지 않는다 — `spring.jpa.hibernate.ddl-auto`는 `create`/`update` 금지, 필요 시 `validate`만 허용.
+- Hibernate/JPA는 스키마를 생성/변경하지 않는다 — `spring.jpa.hibernate.ddl-auto`는 `create`/`update` 금지, `validate`만 쓴다. 온프렘 조회 JPA 모듈들이 실제로 채택했다(ADR-0038).
 
 ## 마이그레이션 파일 — 세트 2개 (아티팩트 분리, ADR-0016)
 
