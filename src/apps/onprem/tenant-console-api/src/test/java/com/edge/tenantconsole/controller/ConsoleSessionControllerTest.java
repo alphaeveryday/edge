@@ -35,18 +35,21 @@ class ConsoleSessionControllerTest {
 	void 세션은_테넌트_컨텍스트를_포함한다() throws Exception {
 		mvc.perform(get("/api/v1/session"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.name").value("조영서"))
-				.andExpect(jsonPath("$.tenantName").value("KB증권"))
-				.andExpect(jsonPath("$.tenantMark").value("KB"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.name").value("조영서"))
+				.andExpect(jsonPath("$.result.tenantName").value("KB증권"))
+				.andExpect(jsonPath("$.result.tenantMark").value("KB"));
 	}
 
 	@Test
 	void 표시_이름_변경은_다음_조회에_반영된다() throws Exception {
 		mvc.perform(patch("/api/v1/session/profile")
 						.contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"김영서\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/session"))
-				.andExpect(jsonPath("$.name").value("김영서"));
+				.andExpect(jsonPath("$.result.name").value("김영서"));
 	}
 
 	@Test

@@ -34,18 +34,21 @@ class ScopeControllerTest {
 	void 시장_목록은_종목_수를_집계해_반환한다() throws Exception {
 		mvc.perform(get("/api/v1/scope/markets"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$[0].market").value("KRX"))
-				.andExpect(jsonPath("$[0].stockCount").value(8))
-				.andExpect(jsonPath("$[1].market").value("NASDAQ"))
-				.andExpect(jsonPath("$[1].stockCount").value(5));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result[0].market").value("KRX"))
+				.andExpect(jsonPath("$.result[0].stockCount").value(8))
+				.andExpect(jsonPath("$.result[1].market").value("NASDAQ"))
+				.andExpect(jsonPath("$.result[1].stockCount").value(5));
 	}
 
 	@Test
 	void 시장_토글은_제공_여부를_뒤집는다() throws Exception {
 		mvc.perform(post("/api/v1/scope/markets/KRX/toggle"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/scope/markets"))
-				.andExpect(jsonPath("$[0].enabled").value(false));
+				.andExpect(jsonPath("$.result[0].enabled").value(false));
 	}
 
 	@Test
@@ -59,10 +62,11 @@ class ScopeControllerTest {
 	@Test
 	void 종목_토글은_해당_종목만_바꾼다() throws Exception {
 		mvc.perform(post("/api/v1/scope/stocks/TSLA/toggle"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 		mvc.perform(get("/api/v1/scope/stocks"))
-				.andExpect(jsonPath("$[5].code").value("TSLA"))
-				.andExpect(jsonPath("$[5].enabled").value(false))
-				.andExpect(jsonPath("$[0].enabled").value(true));
+				.andExpect(jsonPath("$.result[5].code").value("TSLA"))
+				.andExpect(jsonPath("$.result[5].enabled").value(false))
+				.andExpect(jsonPath("$.result[0].enabled").value(true));
 	}
 }

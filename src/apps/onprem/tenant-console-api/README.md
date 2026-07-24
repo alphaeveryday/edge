@@ -48,6 +48,12 @@ scope(시장·종목 제공 범위) · members(사용자·초대) · session(테
   의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 라 기존 검수 표면(snake_case)과
   다르다. `final` 은 Java 예약어라 컴포넌트명은 `finalText`, JSON 은 `@JsonProperty`.
+- **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — 콘솔 전 표면이 jvm-common 봉투
+  `{isSuccess,code,message,result}` 로 내려간다. 계약 DTO 는 `result` 안에 있고(검수·인증
+  표면은 snake_case·ALPHA-513 표면은 camelCase — 네이밍은 위 규약대로), 뮤테이션도 200 +
+  `result` 생략이다(204 는 쓰지 않는다). 성공까지 감싸는 건 tenant-console-api 한정 규약 —
+  타 API(tenant-sync-api·publication-api 등)는 raw DTO 성공을 유지하는 의도적 분기다
+  (ALPHA-522, AGENTS Rule 7·11). super-admin-api 도 같은 통일을 별도로 진행한다(ALPHA-521).
 - **인가는 인증만 강제(전 역할)** — 로그인 화면 없는 mock 단계의 한시 예외
   (permission-matrix.md "콘솔 mock 표면" 절). 도메인 DB 전환 시 역할을 좁힌다.
 

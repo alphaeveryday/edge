@@ -1,9 +1,9 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.mock.ScreeningMockStore.AutoPublishCriteria;
 import com.edge.tenantconsole.mock.ScreeningMockStore.BannedWord;
 import com.edge.tenantconsole.service.ScreeningService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,48 +55,49 @@ public class ScreeningController {
 	}
 
 	@GetMapping("/api/v1/screening/words")
-	public List<BannedWordResponse> listWords() {
-		return screeningService.listWords().stream().map(BannedWordResponse::from).toList();
+	public ApiResponse<List<BannedWordResponse>> listWords() {
+		return ApiResponse.onSuccess(
+				screeningService.listWords().stream().map(BannedWordResponse::from).toList());
 	}
 
 	@PostMapping("/api/v1/screening/words")
-	public ResponseEntity<Void> addWord(@RequestBody(required = false) AddWordRequest request) {
+	public ApiResponse<Void> addWord(@RequestBody(required = false) AddWordRequest request) {
 		screeningService.addWord(
 				request == null ? null : request.text(),
 				request == null ? null : request.risk(),
 				request == null ? null : request.action());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/screening/words/{id}/toggle")
-	public ResponseEntity<Void> toggleWord(@PathVariable("id") long id) {
+	public ApiResponse<Void> toggleWord(@PathVariable("id") long id) {
 		screeningService.toggleWord(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@GetMapping("/api/v1/screening/criteria")
-	public CriteriaResponse getCriteria() {
-		return CriteriaResponse.from(screeningService.getCriteria());
+	public ApiResponse<CriteriaResponse> getCriteria() {
+		return ApiResponse.onSuccess(CriteriaResponse.from(screeningService.getCriteria()));
 	}
 
 	@PatchMapping("/api/v1/screening/criteria")
-	public ResponseEntity<Void> updateCriteria(
+	public ApiResponse<Void> updateCriteria(
 			@RequestBody(required = false) CriteriaPatchRequest request) {
 		screeningService.updateCriteria(
 				request == null ? null : request.minSources(),
 				request == null ? null : request.maxRisk());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@GetMapping("/api/v1/screening/disclaimer")
-	public DisclaimerResponse getDisclaimer() {
-		return new DisclaimerResponse(screeningService.getDisclaimer());
+	public ApiResponse<DisclaimerResponse> getDisclaimer() {
+		return ApiResponse.onSuccess(new DisclaimerResponse(screeningService.getDisclaimer()));
 	}
 
 	@PatchMapping("/api/v1/screening/disclaimer")
-	public ResponseEntity<Void> updateDisclaimer(
+	public ApiResponse<Void> updateDisclaimer(
 			@RequestBody(required = false) DisclaimerRequest request) {
 		screeningService.updateDisclaimer(request == null ? null : request.text());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }

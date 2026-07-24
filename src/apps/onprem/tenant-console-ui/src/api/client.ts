@@ -46,7 +46,13 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   }
 
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const json = await res.json();
+  // tenant-console-api 는 성공 응답도 공통 포맷(ApiResponse)로 감싼다 — result 만 벗겨 반환한다.
+  // (뮤테이션의 onSuccess(null) 은 result 가 생략돼 undefined → void 콜러 무영향)
+  if (json && typeof json === 'object' && 'isSuccess' in json) {
+    return (json as { result: T }).result;
+  }
+  return json as T;
 }
 
 export const apiClient = {

@@ -36,14 +36,17 @@ class MemberControllerTest {
 		mvc.perform(post("/api/v1/members/invitations")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"email\":\"new.user@kbsec.com\",\"role\":\"Compliance\"}"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/members"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$[5].email").value("new.user@kbsec.com"))
-				.andExpect(jsonPath("$[5].name").value("new.user"))
-				.andExpect(jsonPath("$[5].status").value("INVITED"))
-				.andExpect(jsonPath("$[5].lastLogin").value("—"));
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result[5].email").value("new.user@kbsec.com"))
+				.andExpect(jsonPath("$.result[5].name").value("new.user"))
+				.andExpect(jsonPath("$.result[5].status").value("INVITED"))
+				.andExpect(jsonPath("$.result[5].lastLogin").value("—"));
 	}
 
 	@Test

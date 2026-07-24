@@ -1,8 +1,8 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.mock.MemberMockStore.Member;
 import com.edge.tenantconsole.service.MemberService;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,15 +36,16 @@ public class MemberController {
 	}
 
 	@GetMapping("/api/v1/members")
-	public List<MemberResponse> list() {
-		return memberService.list().stream().map(MemberResponse::from).toList();
+	public ApiResponse<List<MemberResponse>> list() {
+		return ApiResponse.onSuccess(
+				memberService.list().stream().map(MemberResponse::from).toList());
 	}
 
 	@PostMapping("/api/v1/members/invitations")
-	public ResponseEntity<Void> invite(@RequestBody(required = false) InviteRequest request) {
+	public ApiResponse<Void> invite(@RequestBody(required = false) InviteRequest request) {
 		memberService.invite(
 				request == null ? null : request.email(),
 				request == null ? null : request.role());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }

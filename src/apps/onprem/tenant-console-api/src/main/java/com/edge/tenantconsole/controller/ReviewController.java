@@ -1,11 +1,11 @@
 package com.edge.tenantconsole.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.repository.ReviewItemRepository.ReviewItem;
 import com.edge.tenantconsole.service.ReviewService;
 import com.fasterxml.jackson.annotation.JsonInclude;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -66,24 +66,25 @@ public class ReviewController {
 	}
 
 	@GetMapping("/api/v1/review/items")
-	public List<ReviewItemResponse> list(
+	public ApiResponse<List<ReviewItemResponse>> list(
 			@RequestParam(value = "status", defaultValue = "REVIEW_REQUIRED") String status) {
 		if (!STATUSES.contains(status)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_STATUS_FILTER);
 		}
-		return reviewService.list(status).stream().map(ReviewItemResponse::from).toList();
+		return ApiResponse.onSuccess(
+				reviewService.list(status).stream().map(ReviewItemResponse::from).toList());
 	}
 
 	@PostMapping("/api/v1/review/items/{id}/approve")
-	public ResponseEntity<Void> approve(@PathVariable("id") String id) {
+	public ApiResponse<Void> approve(@PathVariable("id") String id) {
 		reviewService.approve(id);
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/review/items/{id}/reject")
-	public ResponseEntity<Void> reject(@PathVariable("id") String id,
+	public ApiResponse<Void> reject(@PathVariable("id") String id,
 			@RequestBody(required = false) RejectRequest request) {
 		reviewService.reject(id, request == null ? null : request.reason());
-		return ResponseEntity.noContent().build();
+		return ApiResponse.onSuccess(null);
 	}
 }
