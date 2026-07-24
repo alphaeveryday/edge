@@ -85,7 +85,9 @@ public class ExplanationStore {
 	 * 형상 위반(배열 아님·비객체 요소)은 조용히 빈 근거로 만들지 않고 즉시 실패시킨다
 	 * (Rule 12 fail-loud — 저장 데이터 오류를 200 응답이 은폐하면 안 된다).
 	 */
-	private List<PublishedExplanation.Evidence> parseEvidences(String json) {
+	// package-private: 계약 테스트(EventBundleContractTest)가 실제 파싱을 직접 검증한다 —
+	// 스키마 evidences 형상과 이 파싱 키(kind/title/source/published_at)의 드리프트를 잡는다.
+	List<PublishedExplanation.Evidence> parseEvidences(String json) {
 		if (json == null || json.isBlank()) {
 			return List.of();
 		}

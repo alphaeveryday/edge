@@ -6,6 +6,12 @@ DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 �
 이 모듈은 **Spring 앱이 아니다.** Flyway 마이그레이션을 실행하기만 하는 전용 Gradle 모듈이다
 (`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle`(Groovy)의 Flyway 플러그인 블록에 있다.
 
+`contracts/`에는 DB 마이그레이션 외의 **공유 와이어 계약**도 둔다 — `event-bundle.schema.json`
+(Event Bundle JSON Schema, ALPHA-497). Flyway 가 실행하지 않는 정적 자산이며, producer
+(tenant-sync-api)·consumer(publication-api) 가 `sourceSets.test.resources.srcDir` 로 이 파일을
+테스트 classpath 에 올려 같은 계약으로 검증한다(중복 없이 단일 SSOT). 계약 정의 SSOT 는
+[docs/contracts/event-bundle-schema.md](../../../docs/contracts/event-bundle-schema.md).
+
 ## 로컬 DB — Docker Postgres
 
 로컬 검증은 **Docker Postgres**(host port `55432`)를 쓴다. 기존 로컬 PostgreSQL은 기본 대상이 아니다.

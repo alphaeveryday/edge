@@ -25,7 +25,20 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	// 번들 와이어 계약 검증(JSON Schema 2020-12) — 문자열로 넘겨 검증기 자체 Jackson 과
+	// 앱의 tools.jackson(Boot4) 을 분리한다. 스키마 파일은 libs/schema 공유(아래 sourceSets).
+	testImplementation 'com.networknt:json-schema-validator:1.5.6'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// 번들 계약 SSOT(event-bundle.schema.json)를 테스트 classpath 에 올린다 — 복제 없이
+// producer(여기)·consumer(intake) 가 같은 파일을 검증에 쓴다(ALPHA-497).
+sourceSets {
+	test {
+		resources {
+			srcDir "$rootDir/libs/schema/contracts"
+		}
+	}
 }
 
 tasks.named('test') {
