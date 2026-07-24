@@ -87,27 +87,35 @@ def run(storage: Storage, run_id: str, *, db: DbConfig, source) -> int:
         return {**base, **over}
 
     # 키 미주입·비활성(로컬 등)은 실패가 아니라 명시적 skip — ingest 경로와 동일하게 존중한다
-    # (Rule 12: success 0건 위장 금지, 하지만 의도적 비활성은 error 아님).
+    # (Rule 12: success 0건 위장 금지, 하지만 의도적 비활성은 error 아님). SFN 게이트는 skip 에도
+    # exit0 이라 진행하므로(전 파이프라인 컨벤션), 이 skip 은 `status=skipped` 로그로 남겨
+    # `raw_ingest_skipped` CloudWatch 알람(tasks.tf, 수집기 skip 과 같은 그물)에 잡히게 한다 —
+    # 배선된 rds_dart task-def 는 DART 키를 갖지만, 누가 키를 빼면 공시가 조용히 비는 걸 드러낸다.
     if not source.enabled:
-        logger.info("enrich_corp_code: source disabled — skip")
+        logger.info("enrich_corp_code: source disabled — status=skipped")
         return _write_log(storage, run_id, started_at, _log_fields(status="skipped"))
-
-    # corpCode.xml 로드는 DB 트랜잭션 밖에서 먼저 한다 — 소스 전체 오류(키·쿼터·점검)면 DB 를 열
-    # 이유가 없고, 여기서 비0 로 드러낸다(부분 성공 위장 금지).
-    try:
-        corp_map = source.load_corp_map()
-    except Exception as exc:
-        logger.exception("corpCode.xml 로드 실패(소스 전체 오류)")
-        failures.append({"reasons": ["corp_map_error"], "error": str(exc)})
-        return _write_log(storage, run_id, started_at, _log_fields(exit_code=1))
 
     # 런 안에서 이미 쓴 corp_code — 두 종목이 같은 corp_code 로 매칭되면(오염) UNIQUE 위반이
     # 배치 전체를 롤백시키므로, 조용한 DO NOTHING 대신 둘째를 거절로 표면화한다.
     seen_corp_codes: set[str] = set()
     try:
         with connect(db) as conn:
+            # 후보(미충전 KR 회사)를 먼저 조회한다 — 채울 게 없으면 OpenDART 를 부르지 않는다.
+            # EnrichCorpCode 는 매 SFN 런 FeatureParallel 앞 직렬이라, 정상 상태(전부 충전됨)에서
+            # corpCode.xml 가용성에 feature/analyze 전체가 볼모잡히면 안 된다(Codex P2). corpCode
+            # 조회·소스 오류 fail-loud 는 실제 채울 후보가 있을 때만 한다(그땐 미충전이 남아 막는 게 맞다).
             rows = _null_kr_candidates(conn)
             candidates = len(rows)
+            if not rows:
+                logger.info("enrich_corp_code: 채울 NULL 후보 없음 — corpCode 조회 skip")
+                return _write_log(storage, run_id, started_at, _log_fields())
+            try:
+                corp_map = source.load_corp_map()
+            except Exception as exc:
+                # 소스 전체 오류(키·쿼터·점검) — 채울 후보가 남았으므로 비0 으로 막는다(다음 런 재시도).
+                logger.exception("corpCode.xml 로드 실패(소스 전체 오류)")
+                failures.append({"reasons": ["corp_map_error"], "error": str(exc)})
+                return _write_log(storage, run_id, started_at, _log_fields(exit_code=1))
             for actor_id, ticker in rows:
                 entry = corp_map.get(ticker)
                 if not entry:

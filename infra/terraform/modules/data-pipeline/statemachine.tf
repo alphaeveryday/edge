@@ -184,6 +184,15 @@ locals {
       command_expr = "States.Array('load-documents', '--run-id', $.run_id)"
     },
     {
+      # 공시 fact 적재(ALPHA-476) — canonical 공시 → document(DISCLOSURE)·disclosure_document·
+      # disclosure_fact. issuer 는 company_profile.dart_corp_code 로 해소하므로 **앞 직렬
+      # EnrichCorpCode 가 채운 뒤**라야 9→309 로 붙는다(rds task-def, DART API 불요).
+      # 창 미지정 = canonical 전체 스캔 + 멱등(정정은 DO UPDATE).
+      state        = "LoadDisclosure"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-disclosure', '--run-id', $.run_id)"
+    },
+    {
       # 가격 원장 적재(ALPHA-377) — canonical price_daily → price_daily. LoadEtfNav 와 같은 슬롯:
       # normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있어 feature 페이즈에 둔다.
       # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
@@ -461,6 +470,39 @@ locals {
         })
       })
       LoadInstrumentsCheckExitCode = {
+        Type = "Choice"
+        Choices = [{
+          Variable      = "$.ecs.Containers[0].ExitCode"
+          NumericEquals = 0
+          Next          = "EnrichCorpCode"
+        }]
+        Default = "NotifyFailure"
+      }
+      # corp_code enrichment(ALPHA-491) — LoadInstruments 가 만든 company_profile 의 NULL
+      # dart_corp_code 를 OpenDART corpCode.xml 매칭으로 채운다. **LoadInstruments 뒤·FeatureParallel
+      # 앞 직렬**이다: FeatureParallel 의 LoadDisclosure 가 issuer 를 dart_corp_code 로 해소하므로
+      # 그 전에 채워져야 9→309 로 붙는다(같은 형태·같은 이유로 LoadInstruments 도 직렬 선행).
+      # DB(company_profile UPDATE)와 DART API 를 둘 다 부르므로 결합 시크릿 task-def(rds_dart)를 쓴다.
+      # 멱등: NULL 가드 UPDATE 라 재실행이 시드 9종·기존 충전분을 덮지 않는다.
+      EnrichCorpCode = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "EnrichCorpCodeCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds_dart"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('enrich-corp-code', '--run-id', $.run_id)"
+            }]
+          }
+        })
+      })
+      EnrichCorpCodeCheckExitCode = {
         Type = "Choice"
         Choices = [{
           Variable      = "$.ecs.Containers[0].ExitCode"

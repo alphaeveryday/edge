@@ -353,8 +353,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `normalize-news` · `normalize-price` · `normalize-disclosure` · `normalize-disclosure-segment`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)
 
-**feature(구 derive, 병렬 4잡 + 직렬 1스텝)** — canonical 을 소비해 분석이 읽을 feature/factor
-산출물을 만든다. 정제 뒤라야 하고(전부 canonical 을 읽는다) 병렬 잡들은 서로 독립이다.
+**feature(구 derive, 병렬 잡 + 직렬 선행 2스텝: load-instruments → enrich-corp-code)** — canonical 을
+소비해 분석이 읽을 feature/factor 산출물을 만든다. 정제 뒤라야 하고(전부 canonical 을 읽는다) 병렬 잡들은 서로 독립이다.
 시크릿이 다른 잡은 task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread
 추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
@@ -365,11 +365,18 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
 - `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — DB 접속정보는 이 task-def 에만 주입한다.
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
+- `enrich-corp-code`(**직렬**, load-instruments 뒤 → FeatureParallel 앞, ALPHA-491·532, **rds_dart 세트**
+  =DB+DART) — company_profile 의 NULL dart_corp_code 를 corpCode.xml 매칭으로 채운다. LoadDisclosure 의
+  issuer 해소(9→309)가 그 값에 의존하므로 병렬 앞 직렬이다. DB·DART 를 둘 다 부르므로 rds·dart 결합
+  시크릿 task-def 를 쓴다(결합 없으면 rds 로 돌 때 source.enabled=false 로 skip). NULL 가드 멱등
 - `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 구성종목 가중 proxy
   3% 게이트(엔진 L0 정본, ALPHA-411). 창 미지정 = canonical 전체 스캔 + (etf, trade_date)
   멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
 - `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410) — canonical 뉴스 →
   document. 자연키 멱등, LoadAssertions 의 FK 선행
+- `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
+  document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
+  dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE
 - `load-assertions`(**직렬**, 페이즈 전량 성공 뒤 → analyze 앞, ALPHA-376·410) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   엔티티 해소·해소율은 quality log 로 남는다
@@ -392,7 +399,8 @@ ENTRYPOINT 가 그대로 돌며(command 미지정 = 오늘 Asia/Seoul), **featur
 `["--trade-date","YYYY-MM-DD","--request-id","manual-..."]` 로 덮는다.
 
 > ※ task-def 는 시크릿 세트 단위로 만든다(`tasks.tf` 의 `secret_sets` 맵에 키를 넣으면 자동 생성) —
-> 현재 7개: `fmp`·`bigkinds`(시크릿 없음)·`kis`·`dart`·`krx`·`deepseek`·`rds`. 전부 같은 이미지를
+> 현재 9개: `fmp`·`bigkinds`·`kis`·`dart`·`krx`·`deepseek`·`rds`·`events`(LLM+DB)·`rds_dart`(DB+DART).
+> 전부 같은 이미지를
 > 쓰고 command override 로 스텝을 고른다. 스케줄러는 여전히 `DISABLED` 라 실제 cron 기동은
 > 컷오버(스케줄러 ENABLED) 전까지 안 뜬다 — 브랜치 검증은 아래 수동 실행으로 한다.
 
