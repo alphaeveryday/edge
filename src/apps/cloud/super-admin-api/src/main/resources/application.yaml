@@ -18,13 +18,18 @@ server:
 spring:
   application:
     name: superadmin
-  # DB가 아직 연결되지 않은 단계라 DataSource 자동설정을 끈다.
-  # (data-jpa·postgresql 의존성은 두되 부팅 시 DB 접속을 시도하지 않게 함)
-  # DB 연동 시 이 exclude 블록을 지우고 spring.datasource.* 를 채운다.
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
-      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+  # Cloud DB(libs/schema migrations-cloud). 로컬 기본값은 compose 의 postgres(:55432)
+  # — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다(tenant-sync-api 와 동일).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/edge}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    # DDL 은 Flyway(libs/schema)가 SSOT(ADR-0005) — Hibernate 는 스키마를 만들거나
+    # 바꾸지 않고 엔티티↔테이블 정합만 검증한다. 앱은 마이그레이션을 돌리지 않는다.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
 
 admin:
   auth:

@@ -1,8 +1,8 @@
 package com.edge.superadmin.auth;
 
 import com.edge.superadmin.controller.TenantController;
-import com.edge.superadmin.mock.TenantMockStore;
 import com.edge.superadmin.service.TenantService;
+import com.edge.superadmin.support.FakeTenantRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.BeanDefinition;
@@ -45,7 +45,7 @@ class AdminAuthFilterTest {
 	@BeforeEach
 	void setUp() {
 		mvc = MockMvcBuilders
-				.standaloneSetup(new TenantController(new TenantService(new TenantMockStore())))
+				.standaloneSetup(new TenantController(new TenantService(new FakeTenantRepository())))
 				// 표면 전수 테스트가 빈 본문 POST 로 컨트롤러까지 들어간다 — 검증 400 이
 				// advice 없이 ServletException 으로 새지 않게 실제 배선과 같게 둔다.
 				.setControllerAdvice(new com.edge.common.exception.ExceptionAdvice())
