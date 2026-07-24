@@ -129,8 +129,28 @@ module "super_admin_api" {
   target_group_arn           = module.super_admin_alb.target_group_arn
   ingress_security_group_ids = [module.super_admin_alb.security_group_id]
 
+  # 앱이 JPA(JDBC)를 갖게 되면서 dev RDS 배선이 필수다(ALPHA-526) — 미주입 시 localhost
+  # 폴백으로 부팅 실패(ddl-auto=validate 가 기동 시 접속). 비밀번호는 RDS 관리형 시크릿 주입.
+  environment = {
+    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+    SPRING_DATASOURCE_USERNAME = module.rds.master_username
+  }
+  secrets = {
+    SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
+  }
+  secret_arns = [module.rds.master_user_secret_arn]
+
   # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다(sync 와 동일한 fresh apply 경쟁).
   depends_on = [module.super_admin_alb]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_super_admin_api" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.super_admin_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "super-admin-api to postgres"
 }
 
 resource "aws_route53_record" "admin_api" {

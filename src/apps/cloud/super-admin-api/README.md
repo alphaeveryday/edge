@@ -1,9 +1,10 @@
 # super-admin-api
 
-벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(현재 mock).
+벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants 는 JPA/DB, 그 외 mock).
 화면·금지 항목의 SSOT 는 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
-이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 아직 미배선이다
-(DataSource 자동설정 exclude — 연동 시 application.yaml 의 exclude 블록을 지운다).
+이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
+(JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
+sources·session·analyses 표면과 운영자 인증은 아직 in-memory(테이블 부재·ALPHA-474).
 
 ## 지켜야 할 로컬 불변식
 
@@ -48,14 +49,15 @@ super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 4�
 tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · analyses(가격 변동
 분석 목록·정정·제외/복원) · session(운영자 컨텍스트·프로필).
 
-- **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
-  파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
-  의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
+- **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
+  TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). sources·session·
+  analyses 는 아직 `mock` 패키지 in-memory 스토어(`*MockStore`)다. DB 연동은 이렇게
+  도메인 단위로 service 의 스토어 의존을 repository 로 교체하며 진행한다(UI 는 계약 불변).
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어 record)` 로 매핑해
-  반환한다(서비스는 여전히 mock record 반환). mock record(스토어 형)와 형식이 같아도
-  별도 타입이다 — DB 연동 시 `from()` 의 매핑원이 mock record 에서 repository record
-  로 바뀐다. 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은 tenant-sync-api·
+  반환한다(서비스는 tenants=JPA entity, 그 외=mock record 반환). 스토어 형과 형식이
+  같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다
+  (tenant 테이블 미보유 필드는 플레이스홀더). 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은 tenant-sync-api·
   publication-api dto 규약을 따른다 — mock 콘솔 모듈 중 첫 dto 패키지다(ALPHA-523).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 다.
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — jvm-common 봉투
@@ -70,13 +72,15 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · 
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` 4종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 (tenants 는 ALPHA-121) |
+| `mock` 패키지 `*MockStore` 3종(sources·session·analyses) | 도메인별 DB 연동 | service 의존을 repository 로 교체. tenants 는 JPA 전환 완료(ALPHA-526) |
 | config 부트스트랩 운영자 | ALPHA-474 | Spring Security + 운영자 IdP 연동 |
 
 ## 실행·확인
 
 ```bash
-# 루트에서
+# 루트에서 — compose 가 postgres·flyway(migrations-cloud)를 먼저 띄운다(depends_on).
+# JPA(ddl-auto=validate)라 tenant 스키마가 있어야 기동한다. tenant 테이블은 미시드라
+# GET /api/v1/tenants 는 생성 전까지 빈 목록이다.
 docker compose up --build super-admin-api      # host 18082
 curl localhost:18082/actuator/health
 curl -i -X POST localhost:18082/api/v1/auth/login \
@@ -85,5 +89,7 @@ curl -i -X POST localhost:18082/api/v1/auth/login \
 ```
 
 ```bash
-./gradlew :apps:cloud:super-admin-api:build    # 테스트 포함 (src/ 에서)
+# 테스트 포함 (src/ 에서). Testcontainers(Postgres) 통합 테스트가 있어 Docker 필요 —
+# 컨테이너에 Flyway 로 migrations-cloud 를 적용해 Hibernate validate 로 엔티티↔스키마 검증.
+./gradlew :apps:cloud:super-admin-api:build
 ```
