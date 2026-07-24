@@ -19,6 +19,12 @@ permissions:
   id-token: write
   contents: read
 
+# 데모 박스·MTS 버킷은 하나뿐 — 수동 재실행이 겹치면 두 런이 같은 박스에 SSM·같은 버킷 sync 를
+# 뒤섞어 마지막 완료분이 이긴다. 큐잉으로 직렬화(다른 deploy-*.yml 과 동일 규약).
+concurrency:
+  group: deploy-demo-onprem
+  cancel-in-progress: false
+
 jobs:
   images:
     name: build ${{ matrix.svc }}
@@ -94,8 +100,10 @@ jobs:
           [ "\$(ls migrations-onprem/*.sql 2>/dev/null | wc -l)" -gt 0 ] || { echo 'ERROR: migrations 번들 없음'; exit 1; }
           aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${REGISTRY}
           # 재배포 스키마 재적용: flyway 를 강제 재생성(one-shot·불변 이미지라 안 하면 기존 컨테이너 재사용).
-          IMAGE_TAG=${TAG} docker compose up -d --force-recreate flyway-onprem
-          IMAGE_TAG=${TAG} docker compose up -d
+          # IMAGE_REGISTRY 도 넘긴다 — 방금 push 한 ${REGISTRY} 와 compose 기본 레지스트리가
+          # 갈리면(다른 계정) 엉뚱한 곳에서 pull·auth 실패. push 대상과 일치시킨다.
+          IMAGE_REGISTRY=${REGISTRY} IMAGE_TAG=${TAG} docker compose up -d --force-recreate flyway-onprem
+          IMAGE_REGISTRY=${REGISTRY} IMAGE_TAG=${TAG} docker compose up -d
           sleep 20
           docker compose ps
           BOX
