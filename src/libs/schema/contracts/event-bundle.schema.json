@@ -124,7 +124,9 @@
           "description": "미산정 시 null (DB CHECK — HIGH·MEDIUM·LOW 또는 NULL).",
           "enum": ["HIGH", "MEDIUM", "LOW", null]
         },
-        "primary_thread_id": { "type": ["string", "null"], "description": "대표 스레드 참조 — 없으면 null." }
+        "primary_thread_id": { "type": ["string", "null"], "description": "대표 스레드 참조 — 없으면 null." },
+        "market_code": { "type": ["string", "null"], "description": "시장 코드(MIC) ← instrument.market_code. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional — 구현 시 required 승격." },
+        "observed_return": { "type": ["number", "null"], "description": "등락률 ← price_movement_trigger.observed_return. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional." }
       }
     },
 

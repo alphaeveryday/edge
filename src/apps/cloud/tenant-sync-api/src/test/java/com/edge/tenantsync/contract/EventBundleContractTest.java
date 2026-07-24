@@ -8,6 +8,7 @@ import com.edge.tenantsync.service.BundleSerializer;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SchemaValidatorsConfig;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import org.junit.jupiter.api.Test;
@@ -35,11 +36,14 @@ class EventBundleContractTest {
 
 	private static JsonSchema loadSchema() {
 		JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+		// format(uuid·date·date-time)을 annotation 이 아니라 assertion 으로 강제한다 — 켜지 않으면
+		// 잘못된 published_at 이 계약을 통과해 소비자 OffsetDateTime.parse 에서 크래시한다.
+		SchemaValidatorsConfig config = SchemaValidatorsConfig.builder().formatAssertionsEnabled(true).build();
 		try (InputStream in = EventBundleContractTest.class.getResourceAsStream("/event-bundle.schema.json")) {
 			if (in == null) {
 				throw new IllegalStateException("event-bundle.schema.json 이 테스트 classpath 에 없다 (build.gradle sourceSets)");
 			}
-			return factory.getSchema(in);
+			return factory.getSchema(in, config);
 		} catch (java.io.IOException e) {
 			throw new IllegalStateException(e);
 		}
@@ -89,5 +93,22 @@ class EventBundleContractTest {
 
 		assertThat(schema.validate(populated, InputFormat.JSON))
 				.as("363 후 populated flat 형상도 통과해야 한다").isEmpty();
+	}
+
+	@Test
+	void 잘못된_date_time_포맷은_거부된다() {
+		// evidences[].published_at 이 date-time 이 아니면 계약에서 거부되어야 한다 — 통과시키면
+		// 소비자(publication-api ExplanationStore) 의 OffsetDateTime.parse 가 크래시한다.
+		String badFormat = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
+				 "entries":[{"cursor":101,"delivery_type":"NEW",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],
+				   "evidences":[{"kind":"DISCLOSURE","title":"공시","source":"DART","published_at":"어제"}]}]}""";
+
+		assertThat(schema.validate(badFormat, InputFormat.JSON))
+				.as("date-time 포맷 위반은 거부되어야 한다(format assertion)").isNotEmpty();
 	}
 }

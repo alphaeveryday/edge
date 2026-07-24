@@ -107,7 +107,7 @@ reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·�
 - **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)`.
 - **채움 보증 확인(진기, CODEOWNERS 리뷰)**: nullable 선별 컬럼은 `source_event.event_date`·`document.title`·`document.published_at`이다(`document.document_type`·`source_code`는 NOT NULL). `document.title`·`document.published_at`("관련 뉴스/공시" 제목·날짜)·`source_event.event_date`(타임라인 축)는 결정적 채움 보증 확인 대상. 계약·구현(497)은 nullable 필드를 nullable로 모델링한다.
 
-**확정 후 형상** (ALPHA-363 조립 조인 구현 시 채워짐 — **현행 번들은 두 배열 모두 `[]`**, openapi `maxItems: 0`):
+**확정 후 형상** (ALPHA-363 조립 조인 구현 시 채워짐 — **현행 번들은 두 배열 모두 `[]`**. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
 
 ```json
 "source_events": [ { "source_event_id": "...", "source_class": "DISCLOSURE", "event_type_code": "...", "event_date": "2026-07-14" } ],
