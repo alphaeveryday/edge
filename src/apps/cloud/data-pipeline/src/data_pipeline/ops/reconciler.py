@@ -245,6 +245,10 @@ def reconcile_run(
 
     evidence: dict[str, list[dict]] = {}
     used_arn = None
+    # 실행이 아직 도는 중인가. **MISSED 판정을 보류하는 근거**다 — deadline 은 작업별 잠정
+    # 오프셋이라(카탈로그 주석) SFN 이 정상 실행 중인데도 뒤 스테이지가 아직 진입 안 한 시점을
+    # 자주 지난다. "안 돌았다"와 "아직 차례가 아니다"는 다르다(ALPHA-181).
+    execution_running = False
     if exec_arn:
         try:
             desc = sfn.describe_execution(executionArn=exec_arn)
@@ -260,9 +264,12 @@ def reconcile_run(
                         evidence={"expected_input_hash": run["input_hash"]})
                     summary["launch_conflict"] = True
                     return summary
+            orchestration = _ORCH_MAP.get(desc.get("status", ""), states.ORCH_UNKNOWN)
+            execution_running = orchestration == states.ORCH_RUNNING
             ledger.set_launch_result(
                 run_id, launch_status=states.LAUNCH_LAUNCHED, sfn_execution_arn=used_arn,
-                orchestration_status=_ORCH_MAP.get(desc.get("status", ""), states.ORCH_UNKNOWN))
+                orchestration_status=orchestration)
+            summary["orchestration"] = orchestration
             evidence = execution_evidence(paginate_history(sfn, used_arn))
             summary["evidence_ok"] = True
         except Exception:
@@ -284,7 +291,7 @@ def reconcile_run(
         _reconcile_task(ledger, task, run_id=run_id, evidence=evidence, ecs=ecs,
                         cluster_arn=cluster_arn, now=now, hard_deadline=hard_deadline,
                         sfn_execution_arn=used_arn, stalled_after_seconds=stalled_after_seconds,
-                        deps_done=deps_done, summary=summary)
+                        deps_done=deps_done, execution_running=execution_running, summary=summary)
     return summary
 
 
@@ -300,7 +307,8 @@ def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
 
 
 def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, hard_deadline,
-                    sfn_execution_arn, stalled_after_seconds, deps_done, summary):
+                    sfn_execution_arn, stalled_after_seconds, deps_done, execution_running,
+                    summary):
     etid = task["expected_task_id"]
     entry = catalog.get(task["task_key"])
     if entry is None:
@@ -316,7 +324,7 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
     if not occs:
         _judge_not_entered(ledger, task, eligible_at=eligible_at, now=now,
                            hard_deadline=hard_deadline, deps_met=deps_met, run_id=run_id,
-                           summary=summary)
+                           execution_running=execution_running, summary=summary)
         return
 
     # 1) 각 occurrence 의 물리 attempt 를 기록/확정한다(outcome 은 안 건드린다).
@@ -331,7 +339,8 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
                    summary=summary)
 
 
-def _judge_not_entered(ledger, task, *, eligible_at, now, hard_deadline, deps_met, run_id, summary):
+def _judge_not_entered(ledger, task, *, eligible_at, now, hard_deadline, deps_met, run_id,
+                       execution_running, summary):
     etid = task["expected_task_id"]
     outcome = task["task_outcome"]
     if outcome in (states.OUTCOME_FULFILLED, states.OUTCOME_FAILED):
@@ -339,6 +348,15 @@ def _judge_not_entered(ledger, task, *, eligible_at, now, hard_deadline, deps_me
     deadline_at = _parse_ts(task["deadline_at"])
     past_deadline = deadline_at is not None and now >= deadline_at
     past_hard = hard_deadline is not None and now >= hard_deadline
+    # 실행이 아직 도는 중이면 **작업별 deadline 만으로 MISSED 를 찍지 않는다**(ALPHA-181).
+    # deadline 은 작업별 잠정 오프셋이라(카탈로그: 스테이지별 SLA 가 코드에 없다) 정상 실행
+    # 중에도 뒤 스테이지에서 자주 지나간다. MISSED 는 "원래 실행돼야 했는데 아예 시작되지
+    # 않았다"는 원장의 핵심 지표이고, `missed_at` 은 COALESCE 라 한 번 찍히면 안 지워진다 —
+    # 거짓 양성이 영구 기록된다. 런 전체 하드 데드라인(hard_deadline)은 실행 중이어도 존중한다
+    # (그건 "이 런은 이미 끝났어야 한다"는 별개 사실이다).
+    if execution_running and past_deadline and not past_hard:
+        summary.setdefault("deadline_pending", []).append(task["task_key"])
+        return
     if eligible_at is not None and (past_deadline or past_hard):
         ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_MISSED, missed=True)
         _open(ledger, states.ISSUE_MISSED, f"missed:{run_id}:{task['task_key']}",
@@ -375,7 +393,10 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
                                       exit_code=occ.get("exit_code"))
         else:
             started = _parse_ts(matching.get("started_at"))
-            if started is not None and (now - started).total_seconds() > stalled_after_seconds:
+            # 작업별 임계가 정본 — 전역 상수는 미등록·폴백용이다(LLM 스텝은 1시간을 정상적으로
+            # 넘고, STALLED 는 resolve 경로가 없어 한 번 열리면 영구 OPEN 이다).
+            threshold = entry.stalled_after_seconds if entry is not None else stalled_after_seconds
+            if started is not None and (now - started).total_seconds() > threshold:
                 _open(ledger, states.ISSUE_STALLED, f"stalled:{matching['attempt_id']}", None,
                       task, summary, "stalled")
 

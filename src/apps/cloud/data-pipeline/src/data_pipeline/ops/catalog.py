@@ -37,6 +37,11 @@ class CatalogEntry:
     # deadline = expected_at + 이 오프셋. ⚠️ 스테이지별 SLA 가 코드에 없어(조사 결과) 잠정값이다
     # (스펙 §19: 확인 불가 요구사항은 가정으로 명시). 실측 후 조정 대상.
     deadline_offset_seconds: int = 3600
+    # RUNNING attempt 를 STALLED 로 의심하기까지의 시간. 작업마다 정상 실행 시간이 다르다 —
+    # LLM 스텝(tag-news·assemble-events)은 기본 1시간을 정상적으로 넘고, SFN 자체 타임아웃은
+    # 6시간이다. 전역 상수로 두면 그 스텝들이 **정상 실행 중에 STALLED 로 찍히고**, STALLED 는
+    # resolve 경로가 없어 영구 OPEN 으로 쌓인다(ALPHA-181).
+    stalled_after_seconds: int = 3600
     # ── 관측(_observe_from_log)이 로그를 찾고 해석하는 데 필요한 정적 속성 (ALPHA-181) ──
     # 수집 스텝만 벤더가 있다. 빈 문자열 = 정제·적재 스텝(collection_log 가 아니라 quality_log).
     # 이 한 필드가 "로그 2종·경로 빌더 2개" 분기를 대신한다.
@@ -47,6 +52,10 @@ class CatalogEntry:
     # 0건이 이 데이터셋의 계약상 정상인가. 기본 False = 0건이면 정직하게 UNKNOWN — 근거 없이
     # VALID_EMPTY 로 올리면 "할 일이 없었다"와 "증거가 없다"가 섞인다(derive_data_status 계약).
     empty_allowed: bool = False
+    # KR 거래일 달력을 따르는 작업인가(비거래일이면 Planner 가 SKIPPED). `is_trading_day` 는
+    # **KR 전용**이라 미국 시장 작업(FMP)에 걸면 KR 공휴일에 실제로 돈 수집이 "휴장이라 안 했다"로
+    # 기록된다. dataset 문자열로 가르지 않는 이유: `price_daily` 는 fmp·kis 공통이다(ALPHA-181).
+    kr_trading_calendar: bool = False
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
@@ -66,6 +75,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         depends_on=(),
         deadline_offset_seconds=3600,
         source_vendor="kis",
+        kr_trading_calendar=True,
         # 거래일에 가격 0건은 정상이 아니다 — VALID_EMPTY 를 막아 UNKNOWN 으로 남긴다.
         empty_allowed=False,
     ),
@@ -82,6 +92,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # (eligible 계산용 — 막는 게 아니라 언제 실행 가능해졌는지 판단).
         depends_on=("PRICE_COLLECTION_KIS",),
         deadline_offset_seconds=5400,
+        kr_trading_calendar=True,
     ),
     CatalogEntry(
         task_key="LOAD_PRICE_DAILY",
@@ -98,6 +109,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         deadline_offset_seconds=7200,
         # 적재 스텝의 quality_log 는 `_load` 접미사 파티션에 쓴다(정제 로그와 안 섞이게).
         log_dataset="price_daily_load",
+        kr_trading_calendar=True,
         empty_allowed=False,
     ),
 )
@@ -141,6 +153,8 @@ def content_hash() -> str:
             "ecs_task_definition": e.ecs_task_definition,
             "depends_on": sorted(e.depends_on),
             "deadline_offset_seconds": e.deadline_offset_seconds,
+            "stalled_after_seconds": e.stalled_after_seconds,
+            "kr_trading_calendar": e.kr_trading_calendar,
             "source_vendor": e.source_vendor,
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,
