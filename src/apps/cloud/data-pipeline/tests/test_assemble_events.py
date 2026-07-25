@@ -939,10 +939,10 @@ def test_quantity_unit_family_mismatch_stays_unresolved(tmp_path, monkeypatch):
     assert (years[4], years[5], years[7]) == (3.0, "YEARS", "PARSED")
 
 
-def test_primary_under_other_role_keeps_identity_anchor(tmp_path, monkeypatch):
-    """추출이 primary 를 다른 유효 역할(CUSTOMER)로만 묶으면 폴백 anchor 행(cls.role_code)을
-    여전히 세운다 — 단일 identity 타입에서 anchor 가 사라지면 thread_key 입력이 없어
-    이벤트가 UNKNOWN 으로 전락한다(Codex #255 P2)."""
+def test_primary_under_other_role_gets_no_fabricated_anchor(tmp_path, monkeypatch):
+    """추출이 primary 를 다른 유효 역할(CUSTOMER)로만 묶으면 그대로 둔다 — identity 폴백
+    (SUPPLIER=required_roles[0])을 지어내면 기사에 없는 공급사 주장이 생기고 다중 identity
+    타입의 thread_key 가 오염된다(Codex #255 P2 개정: 폴백은 primary 완전 부재 시에만)."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
@@ -957,6 +957,5 @@ def test_primary_under_other_role_keeps_identity_anchor(tmp_path, monkeypatch):
                                from_date="2026-07-15", to_date="2026-07-15") == 0
 
     args = {(a[1], a[2]): a for a in _batch(conn, "event_argument")}
-    # CUSTOMER 로 실린 primary + identity 폴백(SUPPLIER=required_roles[0]) 둘 다 선다.
-    assert set(args) == {("CUSTOMER", "inst_SAMSUNG"), ("SUPPLIER", "inst_SAMSUNG")}
-    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == (None, None, "ISSUER", None)
+    # CUSTOMER 로 실린 primary 만 선다 — SUPPLIER 폴백 조작 없음.
+    assert set(args) == {("CUSTOMER", "inst_SAMSUNG")}

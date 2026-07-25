@@ -682,7 +682,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         # 첫 행만 남긴다(PK 충돌 전에 결정적으로 접는다 — 같은 역할을 두 mention 이 주장해도
         # 행은 하나다).
         seen_args: set[tuple[str, str]] = set()
-        primary_bound = False
+        primary_present = False
         for part in cls["arguments"]:
             if part["entity_id"] is None:
                 continue  # entity_id NOT NULL PK — 미해소는 completeness 에만 반영(독스트링)
@@ -690,16 +690,17 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             if key in seen_args:
                 continue
             seen_args.add(key)
-            if part["entity_id"] == entity_id and part["role_code"] == cls["role_code"]:
-                # primary 가 '그 identity 역할로' 실렸을 때만 폴백 생략 — 다른 역할로만 묶였다면
-                # 단일 identity 타입의 anchor(thread_key 입력) 행이 사라진다(Codex #255 P2).
-                primary_bound = True
+            if part["entity_id"] == entity_id:
+                # primary 가 어떤 유효 역할로든 실렸으면 폴백 불필요 — 다중 identity 타입
+                # (SUPPLIER/CUSTOMER)에서 identity 역할을 지어내면 기사에 없는 공급사
+                # 주장이 생긴다(Codex #255 P2). anchor 부재는 unknown_thread 로 정직 강등.
+                primary_present = True
             event_args.append((source_event_id, part["role_code"], part["entity_id"],
                                cls["confidence"], part["slot"], part["mention_text"],
                                part["entity_kind"], part["group_ord"]))
-        if not primary_bound:
-            # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 참여자로 안 냈어도(빈 응답
-            # 포함) 이벤트의 anchor 행은 서야 thread identity(단일 identity 타입)가 산다.
+        if not primary_present:
+            # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 아무 역할로도 안 냈을 때만
+            # (빈 응답 포함) 이벤트의 anchor 행을 세운다.
             event_args.append((source_event_id, cls["role_code"], entity_id, cls["confidence"],
                                None, None, "ISSUER", None))
         for measure_ord, measure in enumerate(cls["measures"]):
