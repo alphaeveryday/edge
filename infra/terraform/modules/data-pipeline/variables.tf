@@ -143,6 +143,34 @@ variable "schedule_state" {
   default     = "DISABLED"
 }
 
+# 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
+# pre-EOD 15:00·15:30 = 정규장 마감구간(종가 동시호가) 뉴스를 EOD analyze 전에 적재. 23:50 = 장외/야간 마무리.
+variable "news_schedule_expressions" {
+  description = "뉴스 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 평일만."
+  type        = map(string)
+  default = {
+    "pre-eod-1" = "cron(0 15 ? * MON-FRI *)"
+    "pre-eod-2" = "cron(30 15 ? * MON-FRI *)"
+    "day-close" = "cron(50 23 ? * MON-FRI *)"
+  }
+}
+
+variable "news_schedule_state" {
+  description = "뉴스 SFN 스케줄 상태. 검증 동안 DISABLED, 컷오버 시 ENABLED."
+  type        = string
+  default     = "DISABLED"
+}
+
+variable "news_state_machine_timeout_seconds" {
+  # 인접 스케줄(15:00·15:30, 30분 간격)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 —
+  # 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를 동시 처리해 prior-count·
+  # lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유 + 30분 간격 아래.
+  # 초과분은 fail-loud 타임아웃(무한 LLM 을 조용한 레이스보다 낫게 — 타임아웃 알람이 잡는다).
+  description = "뉴스 SFN 실행 타임아웃. 인접 스케줄 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  type        = number
+  default     = 1500
+}
+
 # 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
 variable "reconcile_schedule_state" {
   description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."

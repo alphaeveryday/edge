@@ -24,7 +24,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
-    ├── data-pipeline/      # raw→normalize→feature→analyze Step Functions 배치 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
+    ├── data-pipeline/      # 시장 SFN(raw→normalize→feature→analyze) + 뉴스 SFN(ALPHA-553 지식 레인 분리) Step Functions 배치 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
@@ -95,6 +95,6 @@ cd ../envs/dev  && terraform apply
 - **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스, ECR 이미지 참조, sync-agent→실 cloud). MTS CloudFront 는 `static-site` 모듈의 선택적 `/api/*`→박스 오리진 프록시(`api_origin_domain`)로 브라우저 AI 탭이 박스 mock-broker 를 실호출한다. 이미지·compose·MTS UI 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 이미지 빌드→SSM Run Command 로 compose→MTS sync, ALPHA-542)가 한 번에 한다(전용 배포 역할 `deploy-role.tf`). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
-> `data-pipeline` 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필은 `aws stepfunctions start-execution` 으로.
+> `data-pipeline`(시장 `edge-dev-data-pipeline`) 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). **뉴스 `edge-dev-data-pipeline-news`(ALPHA-553)** 은 평일 15:00·15:30·23:50 KST 스케줄이나 **DISABLED** — PR2 로 시장 SFN 에서 뉴스 스텝을 뺀 뒤 ENABLED 컷오버한다(그 전 ENABLE 하면 두 SFN 이 event 를 동시에 써 threading 레이스). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필은 `aws stepfunctions start-execution` 으로.
 >
 > ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 비면 평일 휴장일에 Planner 가 런을 계획하고 KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다. 주말만 코드가 안다.
