@@ -29,7 +29,7 @@ PriceSourceAdapter = FmpPriceSource | KisDailyPriceSource
 logger = logging.getLogger(__name__)
 
 
-def _kr_holdings_universe(storage: Storage) -> list[str]:
+def _kr_holdings_universe(storage: Storage, *, include_etf: bool = True) -> list[str]:
     """canonical KR holdings **최신 스냅샷**의 구성종목·ETF 티커 목록(ALPHA-419).
 
     수집 유니버스를 holdings 에서 파생한다 — 정적 targets/symbol_map 은 유니버스와
@@ -38,6 +38,10 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
 
     티커 형태 판정은 `parse.krx_short_code` 하나로 간다(ALPHA-463) — 문자 섞인 신형
     단축코드를 빠뜨리지도, 6자 US 심볼을 KR 로 주워담지도 않는다.
+
+    `include_etf=False` 는 **ETF 자기 티커를 뺀 구성종목만** 낸다 — 공시(ALPHA-477)처럼
+    소비처가 발행회사 축인 소스용이다. ETF 는 DART 신고자가 아니라 corpCode.xml 에 아예
+    없으므로, 넣으면 31 종이 매 런 '미매핑'으로 잡혀 결측이 아닌 것을 결측으로 센다.
     """
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
@@ -51,7 +55,8 @@ def _kr_holdings_universe(storage: Storage) -> list[str]:
             continue
         for row in _read_parquet_rows(storage.get_bytes(key)):
             # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
-            for value in (row.get("constituent_ticker"), row.get("etf_id")):
+            fields = ("constituent_ticker", "etf_id") if include_etf else ("constituent_ticker",)
+            for value in (row.get(f) for f in fields):
                 code = krx_short_code(value)
                 if code:
                     tickers.add(code)

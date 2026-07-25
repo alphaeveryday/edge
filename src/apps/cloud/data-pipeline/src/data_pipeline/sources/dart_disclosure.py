@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
 from ..config import DartDisclosureSource as DartDisclosureSourceConfig
+from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,10 @@ class DartDisclosureSource:
         self.page_count = config.page_count
         self.max_pages = config.max_pages
         self.client = client
+        # 수집 유니버스를 canonical KR holdings 최신 스냅샷에서 파생한다(ALPHA-477) — 가격
+        # (ALPHA-419)·수급(ALPHA-482)과 같은 축. 정적 targets 는 유니버스와 어긋난다: 구성종목이
+        # 309 종으로 커지는 동안 공시는 KR 9 종에 묶여 있었다. 스텝이 이 플래그를 보고 union 한다.
+        self.universe_from_holdings = True
         self.fetch_failures: list[dict] = []
         self.planned_symbols: int | None = None
         self._corp_map: dict[str, dict[str, str]] | None = None
@@ -91,10 +96,19 @@ class DartDisclosureSource:
         return self.config_enabled and bool(self.api_key)
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
-        """수집 대상 → [(our_ticker, stock_code)]. 매핑 없는 심볼은 DART 로는 제외."""
+        """수집 대상 → [(our_ticker, stock_code)]. KR 단축코드는 **항등 매핑**이 기본이고
+        (KRX 코드가 곧 corpCode.xml 의 stock_code), symbol_map 은 항등이 아닌 예외의 오버라이드
+        축으로만 남는다(투자자 수급 plan 과 동형, ALPHA-477). KRX 코드 형태가 아닌 미매핑 심볼
+        (US 등)은 제외 — OpenDART 는 국내 전용이다.
+
+        형태 판정은 `parse.krx_short_code` 가 한다(ALPHA-463) — 문자 섞인 신형 단축코드
+        (0093A0 등)도 corpCode.xml 이 그대로 주므로 항등 대상이고, `ABCDEF` 같은 6자 US 심볼은
+        국내 API 로 새지 않는다. 항등 폴백 전에는 symbol_map 에 손으로 적은 9 종만 통과해,
+        holdings 로 넓힌 유니버스가 여기서 도로 잘려나갔다.
+        """
         out: list[tuple[str, str]] = []
         for our_ticker in symbols:
-            stock_code = self.symbol_map.get(our_ticker)
+            stock_code = self.symbol_map.get(our_ticker) or krx_short_code(our_ticker)
             if not stock_code:
                 logger.info("dart 공시 매핑 없음 — 이 소스는 건너뜀: %s", our_ticker)
                 continue
@@ -144,7 +158,13 @@ class DartDisclosureSource:
         for our_ticker, stock_code in plan:
             corp = corp_map.get(stock_code)
             if not corp:
-                self._note_failure(stock_code, our_ticker, "corpCode.xml 에 corp_code 없음")
+                # corpCode.xml 에 없는 종목(비상장 편입·해외 등)은 **구조적 미매핑**이다 —
+                # 유니버스를 holdings 로 넓힌 뒤로는 매 런 같은 몇 종이 걸리므로, 진짜 실패와
+                # 같이 세면 raw 페이즈가 매일 exit 1 이 된다(ALPHA-477). 결측으로 계속 세되
+                # (failed_targets·ops.failed_records 에 남는다) 런을 죽이진 않는다 — 격리
+                # ≠ 은폐, ADR-0030 의 부분 실패 판정과 같은 축.
+                self._note_failure(stock_code, our_ticker, "corpCode.xml 에 corp_code 없음",
+                                   kind="unmapped")
                 continue
             corp_code = corp["corp_code"]
             try:

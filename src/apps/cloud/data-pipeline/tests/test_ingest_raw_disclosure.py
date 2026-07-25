@@ -248,3 +248,73 @@ def test_disabled_skip_survives_log_write_failure(tmp_path):
                           storage=FailingStorage(tmp_path / "lake"))
 
     assert code == 1
+
+
+def _write_holdings(storage, as_of, rows) -> None:
+    """rows: [(constituent_ticker, etf_id)] → canonical KR holdings parquet."""
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from data_pipeline.lake import canonical_etf_holdings_partition
+
+    schema = pa.schema([("etf_id", pa.string()), ("constituent_ticker", pa.string())])
+    table = pa.Table.from_pylist(
+        [{"etf_id": e, "constituent_ticker": c} for c, e in rows], schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    prefix = canonical_etf_holdings_partition("KR", as_of)
+    storage.put_bytes(f"{prefix}/part-00000.parquet", buf.getvalue())
+
+
+class _UniverseFakeSource(FakeSource):
+    """universe_from_holdings 옵트인 소스 — 스텝이 넘긴 symbols 를 기록만 한다."""
+
+    universe_from_holdings = True
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.received: list[str] | None = None
+
+    def fetch(self, symbols, from_date=None, to_date=None):
+        self.received = list(symbols)
+        return iter(())
+
+
+def test_universe_derived_from_holdings_excludes_etf_itself(tmp_path):
+    # WHY: 공시 수집이 정적 targets(KR 9)에 묶여 유니버스(309 구성종목)를 못 따라왔다 —
+    #      corp_code 를 309 종 채워놔도(ALPHA-491) 그 회사 공시를 애초에 안 가져왔다(ALPHA-477).
+    #      단 ETF 자기 티커는 빼야 한다: ETF 는 DART 신고자가 아니라 corpCode.xml 에 없어,
+    #      넣으면 31 종이 매 런 '미매핑'으로 잡혀 결측이 아닌 것을 결측으로 센다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-14", [("111111", "091160")])  # 구 스냅샷 — 무시돼야 함
+    _write_holdings(storage, "2026-07-15", [("042700", "091160"), ("000660", "091160")])
+    source = _UniverseFakeSource(records=[])
+
+    code, storage = _run(tmp_path, source, storage=storage)
+
+    assert code == 0
+    assert {"042700", "000660"} <= set(source.received)  # 구성종목은 들어온다
+    assert "091160" not in source.received  # ETF 자신은 제외
+    assert "111111" not in source.received  # 최신 스냅샷만
+    assert "005930" in source.received  # 기존 targets 는 유지(union)
+    assert _log(storage, "r1")["symbols_from_holdings"] == 2
+
+
+def test_unmapped_targets_stay_success_but_counted(tmp_path):
+    # WHY: holdings 유니버스에는 corpCode.xml 에 없는 종목(비상장 편입 등)이 상수로 섞인다.
+    #      진짜 실패와 같이 세면 raw 페이즈가 **매 런** partial·exit 1 이 되어 SFN 게이트가
+    #      매일 깨진다 — 재시도로 낫지 않는 구조적 결측이라 런을 죽일 근거가 없다(ADR-0030).
+    #      그렇다고 지우면 조용한 결측이므로, 원장이 보는 계측에는 그대로 남아야 한다.
+    source = FakeSource(records=[_rec("A1")])
+    source.fetch_failures = [{"symbol": "999999", "our_ticker": "999999",
+                              "error": "corpCode.xml 에 corp_code 없음", "kind": "unmapped"}]
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "success"  # 런은 죽지 않는다
+    assert log["records_failed_targets"] == 1  # 그러나 유실은 계속 센다
+    assert log["ops"]["failed_records"] == 1
+    assert log["failed_targets"][0]["kind"] == "unmapped"

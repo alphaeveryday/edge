@@ -26,6 +26,7 @@ from ..lake import (
 )
 from ..sources import DartDisclosureSource, StopFetch
 from ..sources.dart_disclosure import BODY_FORMAT
+from .ingest_price_raw import _kr_holdings_universe
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,17 @@ def run(
     # 백필(사업보고서 다수)에서 전체 ZIP 을 메모리에 쌓으면 raw 를 하나도 못 쓰고 ECS 가 OOM
     # 날 수 있다(Codex #83 P2). 메타(작은 ndjson)만 파티션별로 버퍼링해 저장 단계에서 쓴다.
     try:
-        for record in source.fetch(settings.targets.symbols, from_date, to_date):
+        # 수집 유니버스 — 소스가 옵트인하면(ALPHA-477) canonical KR holdings 최신 스냅샷의
+        # **구성종목**을 targets 에 union 한다(가격·수급과 같은 축, 단 ETF 자기 티커는 제외 —
+        # ETF 는 DART 신고자가 아니다). holdings 읽기 실패도 이 try 안 — "결과는 항상
+        # collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
+        symbols = list(settings.targets.symbols)
+        log["symbols_from_holdings"] = 0
+        if getattr(source, "universe_from_holdings", False):
+            universe = _kr_holdings_universe(storage, include_etf=False)
+            log["symbols_from_holdings"] = len(set(universe) - set(symbols))
+            symbols = sorted(set(symbols) | set(universe))
+        for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
             market = record["market"]
             rcept_no = (record.get("rcept_no") or "").strip()
@@ -143,8 +154,13 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
     #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
+    #  - corpCode 미매핑(kind=unmapped)도 성공으로 본다(ALPHA-477): holdings 유니버스에는
+    #    DART 신고자가 아닌 종목이 상수로 섞여 매 런 같은 수가 걸린다 — 재시도로 낫지 않는
+    #    구조적 결측이라 런을 죽일 근거가 없다. 다만 failed_targets·ops.failed_records 에는
+    #    그대로 남겨 원장이 유실을 계속 본다(조용한 결측 금지 — 티켓 완료 조건).
+    _TOLERATED = {"truncation", "unmapped"}
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
-    real_failures = [f for f in failed_targets if f.get("kind") != "truncation"]
+    real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]
     if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
