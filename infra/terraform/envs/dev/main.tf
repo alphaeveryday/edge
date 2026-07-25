@@ -304,13 +304,12 @@ module "gha_deploy_dev" {
     module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
   ]
 
-  # UI 배포(deploy-ui.yml) 권한 — 3개 프론트 S3 sync + CloudFront 무효화.
+  # UI 배포(deploy-ui.yml) 권한 — 프론트 S3 sync + CloudFront 무효화.
+  # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032) — super-admin 만.
   ui_bucket_arns = [
-    module.tenant_console_site.bucket_arn,
     module.super_admin_site.bucket_arn,
   ]
   ui_distribution_arns = [
-    module.tenant_console_site.distribution_arn,
     module.super_admin_site.distribution_arn,
   ]
 }
@@ -389,17 +388,9 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 # ── 프론트 정적 호스팅 (S3 + CloudFront) ────────────────
 # 모듈·S3 이름은 앱 폴더명과 일치(widget-ui·tenant-console-ui·super-admin-ui).
 # 인증서는 foundation us-east-1 와일드카드(모든 서브도메인 커버).
-module "tenant_console_site" {
-  source = "../../modules/static-site"
-
-  name            = "${local.prefix}-tenant-console" # tenant-console-ui (테넌트 콘솔 SPA)
-  domain_name     = var.console_domain
-  zone_id         = data.aws_route53_zone.main.zone_id
-  certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
-  spa             = true
-}
-
-# super-admin-ui: 아직 빈 폴더지만 CDN 자리를 미리 세워둔다(빌드되면 s3 sync 만).
+# tenant-console 은 온프렘 플레인이라(ADR-0010·0016·0029·0032) cloud 정적 호스팅을 두지 않는다 —
+# 콘솔 SPA 는 온프렘 박스가 자기 API 와 같은 오리진(`/`·`/api/v1`)으로 서빙한다(후속 증분, ALPHA-423).
+# super-admin 만 cloud 플레인(Vendor Cloud 운영 콘솔).
 module "super_admin_site" {
   source = "../../modules/static-site"
 
@@ -411,11 +402,6 @@ module "super_admin_site" {
 }
 
 # 모듈 rename 은 state 상 이동으로 처리 — CloudFront 배포를 재생성하지 않고 보존한다.
-moved {
-  from = module.console_site
-  to   = module.tenant_console_site
-}
-
 moved {
   from = module.admin_site
   to   = module.super_admin_site

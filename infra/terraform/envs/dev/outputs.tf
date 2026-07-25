@@ -21,9 +21,7 @@ output "rds_master_user_secret_arn" {
 }
 
 # ── 프론트 CDN ───────────────────────────────────────────
-output "console_url" {
-  value = module.tenant_console_site.url
-}
+# tenant-console 은 온프렘 플레인(ADR-0032) — cloud CDN 출력 없음. admin_url 은 아래.
 
 # ── data-pipeline (raw → normalize → feature → analyze) ─
 output "data_pipeline_state_machine_arn" {
@@ -117,16 +115,6 @@ output "admin_url" {
 }
 
 # ── UI 배포용 값 (GitHub repo vars — deploy-ui.yml 콜러가 with 로 전달) ──
-output "tenant_console_ui_bucket" {
-  description = "→ vars.TENANT_CONSOLE_UI_BUCKET"
-  value       = module.tenant_console_site.bucket_name
-}
-
-output "tenant_console_ui_distribution_id" {
-  description = "→ vars.TENANT_CONSOLE_UI_DISTRIBUTION_ID"
-  value       = module.tenant_console_site.distribution_id
-}
-
 output "super_admin_ui_bucket" {
   description = "→ vars.SUPER_ADMIN_UI_BUCKET"
   value       = module.super_admin_site.bucket_name

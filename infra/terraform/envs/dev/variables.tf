@@ -37,11 +37,6 @@ variable "route53_zone_name" {
   default     = "edgesignal.dev"
 }
 
-variable "console_domain" {
-  description = "tenant-console-ui(콘솔 SPA) CDN 도메인. prod 는 app.edgesignal.dev 로."
-  type        = string
-  default     = "console-dev.edgesignal.dev"
-}
 
 variable "github_org_repo" {
   description = "OIDC 로 배포 역할을 assume 할 GitHub repo (owner/repo)"
