@@ -102,9 +102,13 @@ def run(
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, include_etf=False)
             etf_ids = _kr_etf_ids(storage)
-            log["symbols_from_holdings"] = len(set(universe) - set(symbols))
-            merged = (set(symbols) | set(universe)) - etf_ids
-            log["symbols_excluded_etf"] = len(set(symbols) | set(universe)) - len(merged)
+            union = set(symbols) | set(universe)
+            merged = union - etf_ids
+            # 차감 **뒤** 기준으로 센다 — fund-of-funds 스냅샷에서는 어떤 코드가
+            # constituent_ticker 이면서 etf_id 이기도 해, 차감 전에 세면 실제로 fetch 에
+            # 넘어가지도 않은 심볼을 '더했다'고 보고하게 된다.
+            log["symbols_from_holdings"] = len(merged - set(symbols))
+            log["symbols_excluded_etf"] = len(union) - len(merged)
             symbols = sorted(merged)
         for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
@@ -161,10 +165,10 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
     #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
-    #  - corpCode 미매핑(kind=unmapped)도 성공으로 본다(ALPHA-477): holdings 유니버스에는
-    #    DART 신고자가 아닌 종목이 상수로 섞여 매 런 같은 수가 걸린다 — 재시도로 낫지 않는
-    #    구조적 결측이라 런을 죽일 근거가 없다. 다만 failed_targets·ops.failed_records 에는
-    #    그대로 남겨 원장이 유실을 계속 본다(조용한 결측 금지 — 티켓 완료 조건).
+    #  - corpCode 미매핑(kind=unmapped)도 exit code 상으로는 성공으로 본다(ALPHA-477):
+    #    재시도로 낫지 않는 미매핑이라 런을 죽이면 다음 런도 같은 이유로 죽는다. 다만
+    #    failed_targets·ops.failed_records 에는 그대로 남아 원장이 유실을 계속 본다
+    #    (data_status=INCOMPLETE). 커버리지 구멍은 사실대로 드러낸다 — 조용한 결측 금지.
     _TOLERATED = {"truncation", "unmapped"}
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
     real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]

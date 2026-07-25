@@ -158,11 +158,15 @@ class DartDisclosureSource:
         for our_ticker, stock_code in plan:
             corp = corp_map.get(stock_code)
             if not corp:
-                # corpCode.xml 에 없는 종목(비상장 편입·해외 등)은 **구조적 미매핑**이다 —
-                # 유니버스를 holdings 로 넓힌 뒤로는 매 런 같은 몇 종이 걸리므로, 진짜 실패와
-                # 같이 세면 raw 페이즈가 매일 exit 1 이 된다(ALPHA-477). 결측으로 계속 세되
-                # (failed_targets·ops.failed_records 에 남는다) 런을 죽이진 않는다 — 격리
-                # ≠ 은폐, ADR-0030 의 부분 실패 판정과 같은 축.
+                # corpCode.xml 에 없는 종목(비상장 편입·해외 등)은 재시도로 낫지 않는 미매핑이라
+                # 진짜 실패(네트워크·쿼터)와 **exit code 상으로만** 가른다 — 이걸로 raw 페이즈를
+                # 막으면 다음 런도 같은 이유로 막힌다(ADR-0030 과 같은 축, ALPHA-477).
+                #
+                # ⚠️ 원장에서까지 빼지는 않는다: 해소 못 한 회사의 공시는 실제로 수집이 빠진
+                # 것이라 failed_targets·ops.failed_records 에 남고, 그 결과 data_status 는
+                # INCOMPLETE 가 된다(`ops/wrapper.py`). 그게 사실이다 — 커버리지 구멍을 VALID 로
+                # 위장하지 않는다(Rule 12). 이 수가 상시 0 이 아니면 줄일 곳은 여기가 아니라
+                # corp_code enrichment(ALPHA-491) 쪽이다.
                 self._note_failure(stock_code, our_ticker, "corpCode.xml 에 corp_code 없음",
                                    kind="unmapped")
                 continue
