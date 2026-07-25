@@ -187,3 +187,22 @@ def test_일별_어댑터는_필드_결측을_거르지_않는다():
 
     assert len(records) == 1
     assert src.fetch_failures == []
+
+
+@pytest.mark.parametrize("nav", [0, "0", 0.0, "0.00"])
+def test_값이_0_인_행은_결측이_아니다(nav):
+    """falsy 판정으로 결측을 가리면 nav=0 인 멀쩡한 원본이 격리돼 사라진다. iNAV 는
+    소급 조회가 안 돼 그 유실이 영구적이다 — 결측은 값이 아니라 존재 여부로만 본다."""
+    src = _source({"069500": _ok([{**LIVE_ROW, "nav": nav}])})
+    records = list(src.fetch())
+
+    assert len(records) == 1
+    assert src.fetch_failures == []
+
+
+@pytest.mark.parametrize("nav", [None, "", "   "])
+def test_없거나_공백뿐인_값은_결측이다(nav):
+    src = _source({"069500": _ok([{**LIVE_ROW, "nav": nav}])})
+    list(src.fetch())
+
+    assert "nav" in src.fetch_failures[0]["error"]

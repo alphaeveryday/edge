@@ -50,6 +50,16 @@ ROWS_PER_CALL = 30  # 응답 고정 행 수(실측) — 창 = interval_sec × �
 REQUIRED_ROW_FIELDS = ("bsop_hour", "nav")
 
 
+def _is_blank(value: object) -> bool:
+    """키가 없거나(None) 공백뿐인 문자열이면 결측.
+
+    falsy 판정(`value or ""`)을 쓰면 **숫자 0 이 결측이 된다** — nav 가 0 으로 오거나 KIS 가
+    수치 타입으로 바뀌면 멀쩡한 원본이 격리돼 사라진다. iNAV 는 소급 조회가 안 돼 그 유실이
+    영구적이라(ALPHA-555), 결측 판정은 값이 아니라 **존재 여부**만 본다.
+    """
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 class KisInavSource(KisNavSource):
     """장중 iNAV 어댑터. 날짜창 대신 간격(초)을 받는다 — 창은 간격 × 30 으로 정해진다."""
 
@@ -95,7 +105,7 @@ class KisInavSource(KisNavSource):
         defect = super()._row_defect(row)
         if defect is not None or not isinstance(row, dict):
             return defect
-        missing = [f for f in REQUIRED_ROW_FIELDS if not str(row.get(f) or "").strip()]
+        missing = [f for f in REQUIRED_ROW_FIELDS if _is_blank(row.get(f))]
         return f"필수 필드 결측: {', '.join(missing)}" if missing else None
 
     def _extra_provenance(self) -> dict[str, object]:
