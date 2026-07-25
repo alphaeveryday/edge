@@ -94,6 +94,12 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # 공시목록을 수집해 대상 유형(공급계약·사업보고서, report_nm 부분일치)만 추리고, 매칭 공시의
 # 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다. 날짜창은 뉴스와 동형(미지정=증분
 # 어제~오늘, 백필은 --from/--to). corp_code 는 corpCode.xml 로 런타임 매핑. 인증키는 env 주입.
+# 수집 대상은 canonical KR holdings 최신 스냅샷의 **구성종목** ∪ targets(가격과 같은 축,
+# ALPHA-477). KRX 단축코드는 corpCode 의 stock_code 와 항등이라 심볼맵 없이 수집되고,
+# symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가
+# 아니라 corpCode 에 없어, 남기면 매 런 미매핑으로 잡혀 원장이 영구 INCOMPLETE 가 된다.
+# corpCode 에 없는 종목은 kind=unmapped 로 런을 죽이지 않되(재시도로 낫지 않음) 계측에는
+# 남는다 — 커버리지 구멍은 data_status=INCOMPLETE 로 사실대로 드러난다.
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달
