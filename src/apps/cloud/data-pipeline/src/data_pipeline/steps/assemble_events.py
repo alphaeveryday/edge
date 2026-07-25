@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -353,7 +354,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     # 기본값은 지어낸 게 아니라 그 타입 자신의 allowed_predicates[0]이다). document_assertion
     # 자연키가 predicate NOT NULL 이라 비울 수 없다.
     predicate = item.get("predicate")
-    if predicate not in tv.predicates:
+    if not isinstance(predicate, str) or predicate not in tv.predicates:
         predicate = default_predicate(event_type)
     if predicate is None:
         # 타입에 허용 술어가 하나도 없다 = 온톨로지 리소스 이상 — 조용히 넘기면 적재에서
@@ -365,13 +366,17 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     # stage 통제: lifecycle 모델 메뉴 안 값만 실린다. 밖이면 NULL + 카운터 — 자유텍스트가
     # source_event.lifecycle_stage 를 오염시키던 결함(43종)의 수정이다.
     raw_stage = item.get("stage")
+    if not isinstance(raw_stage, str):
+        raw_stage = None  # 비스칼라 라벨은 결측과 동급 — frozenset 멤버십 TypeError 로 런을 굴리지 않는다
     stage = raw_stage if raw_stage and raw_stage in tv.stages else None
     stage_rejected = bool(raw_stage) and stage is None
     if stage_rejected:
         logger.warning("stage 메뉴 밖 값 → NULL: article=%s type=%s stage=%r",
                        gate_cls["article_id"], event_type, raw_stage)
 
-    confidence_level = _CONFIDENCE_LEVELS.get(item.get("confidence"))
+    raw_confidence = item.get("confidence")
+    confidence_level = (_CONFIDENCE_LEVELS.get(raw_confidence)
+                        if isinstance(raw_confidence, str) else None)
 
     participant_menu = (frozenset(tv.required_roles) | frozenset(tv.optional_roles)) - tv.quantity_roles
     participants: list[dict] = []
@@ -393,10 +398,12 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         covered_roles.add(role)
         participants.append({
             "role_code": role,
-            "slot": slot if slot in SLOT_VALUES else None,
+            "slot": slot if isinstance(slot, str) and slot in SLOT_VALUES else None,
             "mention_text": mention.strip(),
             "entity_id": entity_id,
-            "entity_kind": "ENTITY" if entity_id is not None else "ENTITY_UNLISTED",
+            # ticker 해소 = 상장 발행사 접지(계약 entity_kinds.ISSUER — persistence_key 가
+            # ticker 다). 미해소는 종별(회사/제품/기관) 판정 근거가 없다 — NULL 이 정직하다.
+            "entity_kind": "ISSUER" if entity_id is not None else None,
             "group_ord": group if isinstance(group, int) and not isinstance(group, bool) else None,
         })
 
@@ -412,6 +419,9 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             continue  # surface 없는 수량은 파서 입력이 없다 — 지어내지 않는다
         surface = surface.strip()
         parsed = parse_amount(surface)
+        if role in tv.currency_roles and parsed.value is not None and parsed.unit != "KRW":
+            # 통화 역할에 비통화 표면형(5%·3년)이 붙은 오추출 — 값을 지어내느니 미해결로 남긴다.
+            parsed = replace(parsed, value=None, unit=None, parse_flag="unit_mismatch")
         basis = raw.get("basis")
         group = raw.get("group")
         covered_roles.add(role)
@@ -421,7 +431,8 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             "value": parsed.value,
             "unit": parsed.unit,
             # basis 는 모델 명시가 메뉴 안이면 그 값, 아니면 surface 의 결정적 판정(총/연간).
-            "basis": basis if basis in BASIS_VALUES else parse_basis(surface),
+            "basis": (basis if isinstance(basis, str) and basis in BASIS_VALUES
+                      else parse_basis(surface)),
             "value_source": (VALUE_SOURCE_PARSED if parsed.value is not None
                              else VALUE_SOURCE_UNRESOLVED),
             "parse_flag": parsed.parse_flag,
@@ -654,7 +665,9 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             if key in seen_args:
                 continue
             seen_args.add(key)
-            if part["entity_id"] == entity_id:
+            if part["entity_id"] == entity_id and part["role_code"] == cls["role_code"]:
+                # primary 가 '그 identity 역할로' 실렸을 때만 폴백 생략 — 다른 역할로만 묶였다면
+                # 단일 identity 타입의 anchor(thread_key 입력) 행이 사라진다(Codex #255 P2).
                 primary_bound = True
             event_args.append((source_event_id, part["role_code"], part["entity_id"],
                                cls["confidence"], part["slot"], part["mention_text"],
@@ -663,7 +676,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 참여자로 안 냈어도(빈 응답
             # 포함) 이벤트의 anchor 행은 서야 thread identity(단일 identity 타입)가 산다.
             event_args.append((source_event_id, cls["role_code"], entity_id, cls["confidence"],
-                               None, None, "ENTITY", None))
+                               None, None, "ISSUER", None))
         for measure_ord, measure in enumerate(cls["measures"]):
             # measure_ord = 추출 순서(0..n) — 자연키. dart_rcept_no 는 뉴스 경로에선 없다.
             event_measures.append((source_event_id, measure_ord, measure["role_code"],

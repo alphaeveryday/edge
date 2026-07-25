@@ -251,8 +251,9 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     assert se[0] == evt_id and se[1] == "NEWS" and se[3] == "2026-07-15"
     [arg] = _batch(conn, "event_argument")
     assert (arg[0], arg[2]) == (evt_id, "inst_SAMSUNG")
-    # 참여자 없는 추출 → 구 단일역할과 동형의 폴백 행(신규 컬럼은 결측, kind 만 ENTITY).
-    assert arg[4:] == (None, None, "ENTITY", None)
+    # 참여자 없는 추출 → 구 단일역할과 동형의 폴백 행(신규 컬럼은 결측, kind 는 ticker
+    # 해소 = 발행사 접지라 ISSUER).
+    assert arg[4:] == (None, None, "ISSUER", None)
     [ev] = _batch(conn, "event_evidence")
     assert ev[1] == evt_id and ev[3] == "TITLE"
     # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 는 identity_roles 기반 계약 키.
@@ -516,8 +517,8 @@ def test_multi_company_participants_recorded_with_slot_and_group(tmp_path, monke
     args = {(r[1], r[2]): r for r in _batch(conn, "event_argument")}
     # 해소된 참여자 2명 전원 — primary 가 참여자로 실렸으니 폴백 행은 없다.
     assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX")}
-    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", "ENTITY", 0)
-    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", "ENTITY", 0)
+    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", "ISSUER", 0)
+    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", "ISSUER", 0)
     # 수량 — KR 파서가 value/unit 을 계산(1,883억원 → 1883e8 KRW), 추출 순서가 measure_ord.
     [meas] = _batch(conn, "event_measure")
     assert meas == (evt_id, 0, "CONTRACT_VALUE", "1,883억원", 188_300_000_000.0, "KRW",
@@ -850,3 +851,75 @@ def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
         cls = results[f"a{i}"]
         assert cls["primary_ticker"] == tickers[i]  # 배치 격리: 자기 입력 티커로 해소
         assert cls["entity_id"] == ("inst_SAMSUNG" if tickers[i] == "005930" else "inst_HYNIX")
+
+
+def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch):
+    """비스칼라 라벨({"predicate": []}·stage {}·slot []·basis []·confidence [])은 그 필드만
+    결측/기본값 처리한다 — frozenset·dict 멤버십 TypeError 가 run() 밖으로 새면 기형 기사
+    하나가 날짜 전체를 롤백시킨다(Codex #255 P2, Rule 12: 국소 실패)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [{"id": "a1", "predicate": [], "stage": {}, "confidence": [],
+          "participants": [{"role": "SUPPLIER", "slot": [], "mention": "삼성전자",
+                            "ticker": "005930", "group": 0}],
+          "measures": [{"role": "CONTRACT_VALUE", "surface": "총 1,883억원",
+                        "basis": [], "group": 0}]}])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [se] = _batch(conn, "source_event")
+    # predicate 는 타입 기본술어로, stage·confidence_level 은 NULL 로 강등 — 행은 산다.
+    assert (se[4], se[7], se[8]) == (None, _CONTRACT_PRED, None)
+    [arg] = _batch(conn, "event_argument")
+    assert arg[4] is None  # slot [] → NULL
+    [meas] = _batch(conn, "event_measure")
+    assert meas[6] == "TOTAL"  # basis [] → surface 결정 판정("총")
+
+
+def test_currency_role_with_noncurrency_surface_stays_unresolved(tmp_path, monkeypatch):
+    """통화 역할(CONTRACT_VALUE)에 비통화 표면형(5%)이 붙으면 값을 지어내지 않고
+    UNRESOLVED + unit_mismatch 로 남긴다 — PCT 값이 KRW 자리로 새면 임계·골드 대조가
+    전부 오염된다(Codex #255 P2)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item("a1", predicate=_CONTRACT_PRED,
+                       measures=[{"role": "CONTRACT_VALUE", "surface": "5%",
+                                  "basis": "TOTAL", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [meas] = _batch(conn, "event_measure")
+    assert (meas[4], meas[5], meas[7], meas[8]) == (None, None, "UNRESOLVED", "unit_mismatch")
+
+
+def test_primary_under_other_role_keeps_identity_anchor(tmp_path, monkeypatch):
+    """추출이 primary 를 다른 유효 역할(CUSTOMER)로만 묶으면 폴백 anchor 행(cls.role_code)을
+    여전히 세운다 — 단일 identity 타입에서 anchor 가 사라지면 thread_key 입력이 없어
+    이벤트가 UNKNOWN 으로 전락한다(Codex #255 P2)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item("a1", predicate=_CONTRACT_PRED,
+                       participants=[{"role": "CUSTOMER", "slot": "object",
+                                      "mention": "삼성전자", "ticker": "005930", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    args = {(a[1], a[2]): a for a in _batch(conn, "event_argument")}
+    # CUSTOMER 로 실린 primary + identity 폴백(SUPPLIER=required_roles[0]) 둘 다 선다.
+    assert set(args) == {("CUSTOMER", "inst_SAMSUNG"), ("SUPPLIER", "inst_SAMSUNG")}
+    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == (None, None, "ISSUER", None)
