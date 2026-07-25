@@ -419,8 +419,9 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             continue  # surface 없는 수량은 파서 입력이 없다 — 지어내지 않는다
         surface = surface.strip()
         parsed = parse_amount(surface)
-        if role in tv.currency_roles and parsed.value is not None and parsed.unit != "KRW":
+        if role in tv.currency_roles and parsed.value is not None and parsed.currency_marked is None:
             # 통화 역할에 비통화 표면형(5%·3년)이 붙은 오추출 — 값을 지어내느니 미해결로 남긴다.
+            # 판정축은 파서의 통화 표시(currency_marked): USD 등 비-KRW 통화는 보존한다(#255).
             parsed = replace(parsed, value=None, unit=None, parse_flag="unit_mismatch")
         basis = raw.get("basis")
         group = raw.get("group")
@@ -439,9 +440,11 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             "group_ord": group if isinstance(group, int) and not isinstance(group, bool) else None,
         })
 
-    # completeness: required_roles 가 추출(참여자∪수량, 해소 여부 무관)으로 다 채워졌는가 —
-    # 해소 실패는 적재 가능 여부의 문제지 '보도가 그 역할을 말했는가'의 문제가 아니다.
-    completeness = "complete" if frozenset(tv.required_roles) <= covered_roles else "partial"
+    # completeness: required 역할 ∪ required 수량이 추출(참여자∪수량, 해소 여부 무관)로 다
+    # 채워졌는가 — 해소 실패는 적재 가능 여부의 문제지 '보도가 그 역할을 말했는가'의 문제가
+    # 아니다. 수량 required(CONTRACT_VALUE 등)를 빼면 completeness 가 추출 품질을 과대평가한다.
+    required_for_completeness = frozenset(tv.required_roles) | tv.required_quantity_roles
+    completeness = "complete" if required_for_completeness <= covered_roles else "partial"
 
     return {
         **gate_cls,

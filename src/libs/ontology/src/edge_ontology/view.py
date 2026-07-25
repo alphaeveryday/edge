@@ -29,6 +29,7 @@ class TypeView:
     required_roles: tuple[str, ...]
     optional_roles: tuple[str, ...]
     quantity_roles: frozenset[str]
+    required_quantity_roles: frozenset[str]
     currency_roles: frozenset[str]
     role_menu: frozenset[str]
     identity_required: tuple[str, ...]
@@ -65,6 +66,8 @@ def load_ontology_view() -> OntologyView:
         optional = tuple(roles.get("optional") or [])
         quantities = spec.get("quantities") or {}
         quantity_roles = frozenset(quantities.keys())
+        required_quantity_roles = frozenset(
+            role for role, meta in quantities.items() if (meta or {}).get("required"))
         currency_roles = frozenset(
             role for role, meta in quantities.items() if (meta or {}).get("unit_family") == "CURRENCY"
         )
@@ -84,6 +87,7 @@ def load_ontology_view() -> OntologyView:
             required_roles=required,
             optional_roles=optional,
             quantity_roles=quantity_roles,
+            required_quantity_roles=required_quantity_roles,
             currency_roles=currency_roles,
             role_menu=frozenset(required) | frozenset(optional) | quantity_roles,
             identity_required=tuple(identity.get("required") or []),

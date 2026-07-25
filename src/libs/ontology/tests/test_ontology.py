@@ -76,6 +76,7 @@ def test_view_exposes_quantity_and_identity_axes():
     view = O.load_ontology_view()
     signing = view.types["COMPANY.CONTRACT.SIGNING"]
     assert signing.quantity_roles == {"CONTRACT_VALUE", "CONTRACT_DURATION"}
+    assert signing.required_quantity_roles == {"CONTRACT_VALUE"}  # completeness 판정 축(#255)
     assert signing.currency_roles == {"CONTRACT_VALUE"}
     assert signing.identity_required == ("SUPPLIER", "CUSTOMER", "CONTRACT_OBJECT")
 
