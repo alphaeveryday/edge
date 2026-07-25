@@ -54,6 +54,28 @@ def test_non_trading_day_skips_price_tasks_no_attempt():
     assert db.attempts == []
 
 
+def test_non_kr_task_is_not_skipped_on_kr_holiday(monkeypatch):
+    # WHY: `is_trading_day` 는 **KR 전용 달력**인데 `ingest_price_raw.DATASET` 은 fmp·kis 공통
+    #      `price_daily` 다. dataset 문자열로 SKIP 을 가르면 KR 공휴일에 **미국 시장 수집까지**
+    #      SKIPPED 로 계획되고, 그날 실제로 돈 FMP 수집의 결과(실패 포함)가 "휴장이라 안 했다"로
+    #      기록돼 사라진다(SKIPPED 면 wrapper 가 attempt 를 안 만든다). 판정 축은 명시 필드다.
+    import dataclasses
+
+    from data_pipeline.ops import catalog
+
+    kr = catalog.get("PRICE_COLLECTION_KIS")
+    us = dataclasses.replace(kr, task_key="PRICE_COLLECTION_FMP", sfn_state_name="CollectFmpPrice",
+                             source_vendor="fmp", kr_trading_calendar=False)
+    monkeypatch.setattr(catalog, "entries", lambda: (kr, us))
+
+    db = FakeOpsDB()
+    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
+             holidays=frozenset({"2026-07-24"}))
+    rows = {row["task_key"]: row for row in db.etasks.values()}
+    assert rows["PRICE_COLLECTION_KIS"]["plan_status"] == states.PLAN_SKIPPED
+    assert rows["PRICE_COLLECTION_FMP"]["plan_status"] == states.PLAN_DUE   # 미국장은 열려 있다
+
+
 def test_deterministic_execution_name_and_input():
     """시나리오 3 — 결정적 execution name·input·hash."""
     a = plan_run(_ledger(FakeOpsDB()), state_machine_arn=_ARN, scheduled_time=_SCHED,

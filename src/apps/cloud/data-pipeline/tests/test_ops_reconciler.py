@@ -81,22 +81,37 @@ def _multi(state, occs):
     return events
 
 
-def _reconcile(db, *, history=None, ecs=None):
+def _reconcile(db, *, history=None, ecs=None, status="RUNNING", stalled_after_seconds=None):
     return reconcile_run(
         _ledger(db), run_key=_RUN_KEY, now=_NOW,
-        sfn_client=FakeSfn(history=history or [], describe={"status": "RUNNING"}),
-        ecs_client=ecs or FakeEcs())
+        sfn_client=FakeSfn(history=history or [], describe={"status": status}),
+        ecs_client=ecs or FakeEcs(), stalled_after_seconds=stalled_after_seconds)
 
 
 def test_missed_when_state_not_entered_eligible_and_past_deadline():
-    """시나리오 10 — 미진입 + eligible + deadline 초과 → MISSED."""
+    """시나리오 10 — 미진입 + eligible + deadline 초과 → MISSED (실행이 끝난 뒤)."""
     db = FakeOpsDB()
     _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
-    _reconcile(db)
+    _reconcile(db, status="SUCCEEDED")
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_MISSED
     assert db.etasks_by_id["e1"]["missed_at"] == "SET"
     assert len(db.open_issues(states.ISSUE_MISSED)) == 1
+
+
+def test_running_execution_defers_missed_until_it_ends():
+    # WHY: deadline 은 작업별 **잠정** 오프셋이고(카탈로그: 스테이지별 SLA 가 코드에 없다) SFN
+    #      타임아웃은 6시간이다 — 정상 실행 중에도 뒤 스테이지의 deadline 은 자주 지난다.
+    #      "아직 차례가 아니다"를 "아예 시작되지 않았다"로 기록하면 MISSED 가 무의미해지고,
+    #      `missed_at` 은 COALESCE 라 나중에 성공해도 **지워지지 않는다**(영구 거짓 양성).
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    summary = _reconcile(db, status="RUNNING")
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_PENDING
+    assert db.etasks_by_id["e1"]["missed_at"] is None
+    assert db.open_issues(states.ISSUE_MISSED) == []
+    assert summary["deadline_pending"] == ["PRICE_COLLECTION_KIS"]
 
 
 def test_blocked_not_missed_when_never_eligible_past_hard_deadline():
@@ -120,6 +135,34 @@ def test_running_over_time_is_stalled_execution_status_preserved():
     _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
                ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "RUNNING"}}))
     assert db.attempts[0]["status"] == states.EXEC_RUNNING     # 뒤집지 않는다
+    assert len(db.open_issues(states.ISSUE_STALLED)) == 1
+
+
+def test_stalled_threshold_comes_from_the_catalog_entry(monkeypatch):
+    # WHY: 작업마다 정상 실행 시간이 다르다 — LLM 스텝(tag-news·assemble-events)은 전역 기본
+    #      1시간을 정상적으로 넘고 SFN 타임아웃은 6시간이다. 전역 상수로 판정하면 **정상 실행
+    #      중인 attempt 에 STALLED 가 붙고**, STALLED 는 resolve 경로가 없어 영구 OPEN 이다.
+    import dataclasses
+
+    from data_pipeline.ops import catalog
+
+    entry = catalog.get("PRICE_COLLECTION_KIS")
+    monkeypatch.setitem(catalog.CATALOG, "PRICE_COLLECTION_KIS",
+                        dataclasses.replace(entry, stalled_after_seconds=86400))
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1", "eligible_at": _OLD}])
+    db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:task/kis",
+                        "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
+                        "started_at": _OLD})
+    _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
+               ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "RUNNING"}}))
+    assert db.open_issues(states.ISSUE_STALLED) == []   # 이 작업엔 아직 정상 범위다
+
+    # 호출부가 명시하면 그게 이긴다(운영 오버라이드) — 인자를 받아놓고 조용히 무시하면
+    # "임계를 낮춰 조사한다"가 아무 효과 없이 통과한다(Codex #271).
+    _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
+               ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "RUNNING"}}),
+               stalled_after_seconds=1)
     assert len(db.open_issues(states.ISSUE_STALLED)) == 1
 
 

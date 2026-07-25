@@ -135,6 +135,12 @@ def instrument(
     expected = _safe(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key))
     if not expected:
         # 미등록 작업 또는 원장 조회 실패 — 본 작업만 돌린다(투명 통과, 스펙 §6).
+        # ⚠️ 여기엔 세 가지가 섞인다: ① 미등록(의도) ② 조회 실패(_safe 가 logger.exception 남김)
+        # ③ **run_id 불일치** — 등록됐고 DB 도 살아 있는데 `find_expected_task` 가 못 찾는 경우다.
+        # 수동·백필 런은 run_id 가 `make_run_id()` 타임스탬프라 `pipeline_run_id` 와 안 맞아서
+        # 계측이 통째로 사라지는데 exit 0 으로 끝난다. 조용히 넘어가면 "계측된 줄 알았다"가
+        # 된다(Rule 12) — 원장에 매칭되는 실행으로 돌리려면 `--run-id <pipeline_run_id>` 를 쓴다.
+        logger.info("원장 미매칭 — 계측 없이 진행(task=%s run_id=%s)", task_key, run_id)
         return run_fn()
     if expected.get("plan_status") == states.PLAN_SKIPPED:
         # SKIPPED 작업(비거래일 등)은 attempt 를 만들지 않는다 — SKIPPED→attempt 금지 불변식

@@ -625,6 +625,10 @@ DISABLED). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마
 
 - **MISSED**(미실행): Reconciler 가 증거(SFN history·ECS)로 판정. "attempt 행 없음"만으로 단정하지
   않는다 — 원장 누락은 `LEDGER_GAP` 으로 backfill, ECS 생성 확인 불가는 `EVIDENCE_LOST`.
+  **실행이 RUNNING 인 동안은 작업별 deadline 만으로 MISSED 를 찍지 않는다**(ALPHA-181) — deadline
+  오프셋은 스테이지별 SLA 가 없어 잠정값이라 정상 실행 중에도 뒤 스테이지에서 자주 지난다.
+  "아직 차례가 아니다"와 "아예 시작되지 않았다"는 다르고, `missed_at` 은 `COALESCE` 라 한 번
+  찍히면 지워지지 않는다. 런 전체 hard deadline(6h)은 실행 중이어도 존중한다 — 그게 안전망이다.
 - **미승격 raw 재처리**: 실패 런 raw 는 `normalize-<step> --input-run-id <실패 run_id>` 로 수동
   재처리(ADR-0030). 원장의 `ops_task_attempt`·`ops_reconciliation_issue` 가 어느 run 인지 알려준다.
 - **비래치 MISSED**: 늦게 성공하면 `MISSED → FULFILLED`(missed_at 보존, MISSED 이슈 RESOLVED).

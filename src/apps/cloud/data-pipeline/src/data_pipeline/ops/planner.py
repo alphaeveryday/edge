@@ -127,8 +127,12 @@ def plan_run(
 
 def _plan_expected_tasks(conn, run_id, *, trading, expected_at, as_of_date, universe_provider):
     for entry in catalog.entries():
-        # 비거래일 가격 수집은 SKIPPED(NON_TRADING_DAY) — attempt 안 생기고 MISSED 안 됨(스펙 §3.3).
-        skip = (not trading) and entry.dataset == "price_daily"
+        # 비거래일 KR 작업은 SKIPPED(NON_TRADING_DAY) — attempt 안 생기고 MISSED 안 됨(스펙 §3.3).
+        # ⚠️ 판정 축은 카탈로그의 명시 필드다. dataset 문자열(`price_daily`)로 가르면 **미국
+        # 시장 수집(FMP)까지 KR 공휴일에 SKIPPED** 된다 — `ingest_price_raw.DATASET` 이 fmp·kis
+        # 공통이고 `is_trading_day` 는 KR 전용 달력이기 때문이다. 그러면 그날 실제로 돈 미국
+        # 수집의 결과가 "휴장이라 안 했다"로 기록돼 사라진다(ALPHA-181).
+        skip = (not trading) and entry.kr_trading_calendar
         plan_status = states.PLAN_SKIPPED if skip else states.PLAN_DUE
         deadline_at = (
             datetime.fromisoformat(expected_at) + timedelta(seconds=entry.deadline_offset_seconds)
