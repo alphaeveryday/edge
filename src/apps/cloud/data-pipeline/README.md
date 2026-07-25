@@ -325,6 +325,13 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
+뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)으로 분리 중이다 — 시장 레인과
+자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(평일 15:00·15:30·23:50 KST, 기본
+DISABLED)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions → AssembleEvents`
+를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는 시장 SFN 이 단일
+writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세우기(위 시장 SFN 미변경), 시장 SFN
+에서 뉴스 스텝 제거는 PR2 다(설계 근거는 코드 주석·ALPHA-553).
+
 **raw 수집(10잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
 - `ingest-raw --source fmp`

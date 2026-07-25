@@ -267,8 +267,13 @@ locals {
 
   # 모든 페이즈가 동일한 브랜치 구조라 잡 리스트만 바꿔 한 빌더로 재생성한다(ALPHA-355·386).
   # analyze 페이즈는 예외 — 단일 태스크·다른 이미지라 빌더를 안 거치고 아래에 직접 정의한다.
+  # news_* 페이즈(ALPHA-553)는 news_pipeline.tf 가 정의한 잡 부분집합이다 — 같은 빌더를 재사용해
+  # 뉴스 SFN 브랜치를 만든다(빌더 중복 방지). 기존 raw/normalize/feature 출력은 불변(순수 additive).
   branches_by_phase = {
-    for phase, jobs in { raw = local.raw_ingest_jobs, normalize = local.normalize_jobs, feature = local.feature_jobs } :
+    for phase, jobs in {
+      raw      = local.raw_ingest_jobs, normalize = local.normalize_jobs, feature = local.feature_jobs,
+      news_raw = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs
+    } :
     phase => [
       for job in jobs : {
         StartAt = job.state
