@@ -1,6 +1,6 @@
 """Task instrumentation wrapper — 선택된 MVP 작업의 attempt 를 원장에 기록 (ALPHA-530, 스펙 §6).
 
-3작업(PRICE_COLLECTION_KIS·NORMALIZE_PRICE·LOAD_PRICE_DAILY)의 `run()` 을 감싸 pipeline run·
+등록 작업(카탈로그 24개)의 `run()` 을 감싸 pipeline run·
 task key·SFN state/execution·ECS Task ARN·시각·exit code·execution status·data status·failure
 reason 를 남긴다. **원장 기록 실패가 본 작업을 실패시키지 않는다**(스펙 §3.4) — 모든 원장 호출은
 예외를 삼키고 진행한다.

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
 from data_pipeline.ops import states
+from data_pipeline.ops import catalog
 from data_pipeline.ops.catalog import PIPELINE_TYPE
 from data_pipeline.ops.ledger import Ledger
 from data_pipeline.ops.planner import plan_run
@@ -36,8 +37,8 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.created is True and r2.created is False
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
-    # expected_task 도 중복 생성되지 않는다(3작업만).
-    assert len(db.etasks) == 3
+    # expected_task 도 중복 생성되지 않는다(등록 작업 수만큼만).
+    assert len(db.etasks) == len(catalog.entries()) == 24
 
 
 def test_non_trading_day_skips_price_tasks_no_attempt():
@@ -46,7 +47,14 @@ def test_non_trading_day_skips_price_tasks_no_attempt():
     ledger = _ledger(db)
     plan_run(ledger, state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
              holidays=frozenset({"2026-07-24"}))
+    kr_tasks = {e.task_key for e in catalog.entries() if e.kr_trading_calendar}
+    assert kr_tasks, "KR 달력 작업이 하나도 없다면 이 시나리오가 무의미하다"
     for row in db.etasks.values():
+        if row["task_key"] not in kr_tasks:
+            # 뉴스·공시·마스터처럼 KR 거래일과 무관한 작업은 휴장일에도 DUE 다 — SKIPPED 로
+            # 찍으면 그날 실제로 돈 결과가 "휴장이라 안 했다"로 사라진다(ALPHA-181).
+            assert row["plan_status"] == states.PLAN_DUE
+            continue
         assert row["plan_status"] == states.PLAN_SKIPPED
         assert row["skip_reason"] == states.SKIP_NON_TRADING_DAY
         # 축 분리: SKIPPED 면 outcome/data_status 는 NULL(attempt 안 붙는다).

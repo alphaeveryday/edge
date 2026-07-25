@@ -1,4 +1,4 @@
-"""run.py ↔ 원장 이음매 (ALPHA-530). CLI 핸들러(plan-run·reconcile) + 3작업 instrument 헬퍼.
+"""run.py ↔ 원장 이음매 (ALPHA-530). CLI 핸들러(plan-run·reconcile) + 계측 헬퍼.
 
 run.py 의 diff 를 작게 유지하려고 여기 모은다. 원장 커넥션은 **lazy** — settings.db 가 없으면
 Ledger 를 만들지 않고(instrument 는 투명 통과), plan-run·reconcile 은 fail-loud(원장 DB 필수).
@@ -81,7 +81,7 @@ def task_key_for(step: str, source: str | None) -> str | None:
 
 
 def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
-    """3작업 중 하나를 원장 계측으로 감싼다. 원장 없으면 run_fn 만 돈다(투명 통과)."""
+    """등록 작업 하나를 원장 계측으로 감싼다. 원장 없으면 run_fn 만 돈다(투명 통과)."""
     ledger = ledger_from_settings(settings)
     observe = None if ledger is None else (lambda ec: _observe_from_log(storage, task_key, run_id, ec))
     return wrapper.instrument(
