@@ -69,16 +69,19 @@ def run(
         # 성공으로 끝나면 감사 레코드 유실을 아무도 모른다. 비0이 raw 게이트(And)를 막는
         # 대가는 **아래 terminal 경로가 이미 같은 값으로 치르고 있다** — 여기만 exit 0 이면
         # 같은 장애가 어느 줄에서 났느냐로 결과가 갈린다(뒤집으려면 저장소 15곳을 함께).
-        reason = skip_reason or f"{vendor} disabled or missing credentials"
-        if skip_reason:
+        # **크리덴셜 결측이 우선이다.** 둘 다 해당할 때 달력 사유를 택하면 설정 장애가
+        # 정상 skip 으로 위장돼 알람도 로그도 안 뜬다 — 고쳐야 할 것이 조용해진다(Rule 12).
+        if not source.enabled:
+            reason = f"{vendor} disabled or missing credentials"
+            logger.warning("%s ETF 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
+        else:
             # **문구에 "수집 건너뜀" 을 넣지 마라.** tasks.tf 의 raw-ingest-skipped metric
             # filter 가 그 토큰으로 알람을 울리는데, 그 알람은 "skip 은 비정상"을 전제로 한다
             # (필터 주석: "정상 상태에서 발화가 없다"). 어댑터가 낸 skip 은 그 반대다 —
             # 달력상 예정된 정상 상태라, 같은 토큰을 쓰면 휴장일마다 오경보가 난다.
             # 드러남은 collection_log(status=skipped + reason)가 책임진다(Rule 12).
+            reason = skip_reason
             logger.info("%s ETF 수집 대상 시각 아님 — %s", vendor, reason)
-        else:
-            logger.warning("%s ETF 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
                                                                "reason": reason,

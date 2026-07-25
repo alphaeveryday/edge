@@ -227,6 +227,23 @@ def test_adapter_skip_does_not_trip_the_skip_alarm(tmp_path, caplog):
     assert "non-trading day" in caplog.text  # 그래도 로그로는 드러난다
 
 
+def test_credential_skip_wins_over_calendar_skip(tmp_path, caplog):
+    # WHY: 둘 다 해당할 때 달력 사유를 택하면 **설정 장애가 정상 skip 으로 위장**된다 —
+    #      알람도 안 울리고 로그 사유도 거짓이라, 고쳐야 할 것이 조용해진다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    config = EtfSource(base_url=settings.etf.source.base_url, api_key=None, etf_map=_MAP)
+    source = FmpEtfSource(config, FakeClient({}))
+    source.skip_reason = "non-trading day (KST 2026-07-25)"  # 달력도 동시에 해당
+
+    with caplog.at_level(logging.INFO):
+        ingest_raw_etf.run(settings, storage, source, "20260725T000000Z")
+
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["reason"] == "fmp disabled or missing credentials"  # 달력 사유가 덮지 않는다
+    assert "수집 건너뜀" in caplog.text  # 알람도 그대로 울린다
+
+
 def test_credential_skip_still_trips_the_alarm(tmp_path, caplog):
     # WHY: 크리덴셜 미주입은 설정 장애라 알람이 울려야 한다 — 위 분리가 이쪽까지
     #      조용하게 만들면 기존 탐지가 사라진다(회귀).
