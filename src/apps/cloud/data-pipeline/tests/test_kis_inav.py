@@ -8,6 +8,7 @@
 
 import json
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -206,3 +207,66 @@ def test_없거나_공백뿐인_값은_결측이다(nav):
     list(src.fetch())
 
     assert "nav" in src.fetch_failures[0]["error"]
+
+
+# ── 기준일 가드(ALPHA-557) ────────────────────────────────────────────────
+# WHY: 응답에 날짜가 없어 거래일을 수집 시각으로 붙이는데, KIS 는 오늘 데이터가 없어도
+#      직전 거래일 값을 준다. 두 성질이 겹치면 옛 값이 오늘 파티션에 앉는다(유령 as-of).
+#      2026-07-25 토요일 로컬 실행이 7/24 데이터 930행을 적재한 것이 실측 증거다.
+
+KST = timezone(timedelta(hours=9))
+
+
+def _at(monkeypatch, when: datetime):
+    """어댑터가 보는 '지금'(KST)을 고정한다."""
+    import data_pipeline.sources.kis_inav as mod
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when
+
+    monkeypatch.setattr(mod, "datetime", _Clock)
+
+
+@pytest.mark.parametrize(
+    "when, expected",
+    [
+        (datetime(2026, 7, 25, 14, 0, tzinfo=KST), "non-trading day"),   # 토
+        (datetime(2026, 7, 26, 14, 0, tzinfo=KST), "non-trading day"),   # 일
+        (datetime(2026, 7, 27, 8, 59, tzinfo=KST), "before market open"),  # 월, 개장 1분 전
+    ],
+)
+def test_오늘_데이터가_없는_시점은_수집하지_않는다(monkeypatch, when, expected):
+    """막지 않으면 옛 값이 오늘 날짜로 적재되고, 소급이 안 돼 교정 말고는 되돌릴 수 없다."""
+    _at(monkeypatch, when)
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    assert expected in src.skip_reason
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        datetime(2026, 7, 27, 9, 0, tzinfo=KST),    # 개장 정각 — 경계는 통과쪽
+        datetime(2026, 7, 27, 14, 0, tzinfo=KST),   # 장중
+        datetime(2026, 7, 27, 15, 45, tzinfo=KST),  # 장 마감 후 — 오늘 종가 구간이라 라벨이 맞다
+        datetime(2026, 7, 27, 23, 59, tzinfo=KST),  # 거래일 자정 직전
+    ],
+)
+def test_거래일_개장_이후는_수집한다(monkeypatch, when):
+    """장 마감 뒤까지 막으면 종가 구간(15:20~15:30 갱신분)을 영영 못 받는다 — 소급이 없다."""
+    _at(monkeypatch, when)
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    assert src.skip_reason is None
+
+
+def test_평일_공휴일은_휴장일로_본다(monkeypatch):
+    """주말만 거르면 평일 공휴일에 유령 as-of 가 그대로 들어온다. 휴장일 집합은 Planner·KRX
+    어댑터와 같은 env(OPS_KR_HOLIDAYS)를 써야 한다 — 복제하면 갈라진다."""
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-27")
+    _at(monkeypatch, datetime(2026, 7, 27, 14, 0, tzinfo=KST))
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    assert "non-trading day" in src.skip_reason

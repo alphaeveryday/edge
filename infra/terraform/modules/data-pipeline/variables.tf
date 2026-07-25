@@ -187,7 +187,7 @@ variable "reconcile_schedule_expression" {
 # Planner 의 비거래일(NON_TRADING_DAY) 판정용 KR 평일 공휴일(YYYY-MM-DD). 주말은 코드가 안다.
 # ⚠️ 완전한 거래소 캘린더 연동 전까지의 잠정 주입 지점 — 미설정이면 평일 공휴일에도 수집이 돈다.
 variable "kr_holidays" {
-  description = "KR 평일 휴장일 목록(YYYY-MM-DD). Planner·KRX 수집이 OPS_KR_HOLIDAYS 로 받는다."
+  description = "KR 평일 휴장일 목록(YYYY-MM-DD). Planner·KRX·KIS 수집이 OPS_KR_HOLIDAYS 로 받는다."
   type        = list(string)
   default     = []
 
