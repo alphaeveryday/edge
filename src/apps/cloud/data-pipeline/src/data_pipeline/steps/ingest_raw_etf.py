@@ -59,17 +59,21 @@ def run(
         "started_at": started_at.isoformat(),
     }
 
-    if not source.enabled:
+    # 어댑터가 "지금은 수집하면 안 된다"고 판단한 사유(선택). 크리덴셜 유무와 별개다 —
+    # 사유를 하나로 합치면 로그의 reason 이 거짓이 되고, 감사 레코드로 못 쓴다(ALPHA-557).
+    skip_reason = getattr(source, "skip_reason", None)
+    if not source.enabled or skip_reason:
         # 크리덴셜 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(ALPHA-451) — 예외를
         # 밖으로 던지지 않는다는 뜻의 best-effort 이지 exit 0 이 아니다. 기록을 못 남긴 채
         # 성공으로 끝나면 감사 레코드 유실을 아무도 모른다. 비0이 raw 게이트(And)를 막는
         # 대가는 **아래 terminal 경로가 이미 같은 값으로 치르고 있다** — 여기만 exit 0 이면
         # 같은 장애가 어느 줄에서 났느냐로 결과가 갈린다(뒤집으려면 저장소 15곳을 함께).
-        logger.warning("%s ETF 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
+        reason = skip_reason or f"{vendor} disabled or missing credentials"
+        logger.warning("%s ETF 수집 건너뜀 — %s", vendor, reason)
         try:
             _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": f"{vendor} disabled or missing credentials",
+                                                               "reason": reason,
                                                                "ops": {"records_out": 0, "failed_records": 0}})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")

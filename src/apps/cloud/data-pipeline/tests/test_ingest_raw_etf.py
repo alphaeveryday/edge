@@ -187,6 +187,27 @@ def test_disabled_source_skips_with_log(tmp_path):
     assert log["status"] == "skipped"
 
 
+def test_adapter_skip_reason_is_recorded_verbatim(tmp_path):
+    # WHY: 어댑터가 "지금은 수집하면 안 된다"고 판단하는 사유(iNAV 의 비거래일·개장 전,
+    #      ALPHA-557)는 크리덴셜 유무와 별개다. 하나로 합쳐 고정 문구를 남기면 감사
+    #      레코드의 reason 이 거짓이 되고, 운영자가 왜 안 걷혔는지 로그로 못 가린다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    config = EtfSource(
+        base_url=settings.etf.source.base_url, api_key="k", etf_map=_MAP,
+    )
+    source = FmpEtfSource(config, FakeClient({}))
+    source.skip_reason = "non-trading day (KST 2026-07-25)"  # 어댑터가 낸 사유
+
+    code = ingest_raw_etf.run(settings, storage, source, "20260725T000000Z")
+
+    assert code == 0  # skip 은 실패가 아니다 — 스케줄러가 휴장일마다 정상 통과해야 한다
+    assert storage.list_keys("raw") == []  # 오염된 raw 를 쓰지 않는다
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "skipped"
+    assert log["reason"] == "non-trading day (KST 2026-07-25)"
+
+
 def test_no_mapped_etfs_marks_skipped(tmp_path):
     # WHY: 활성 소스(키 주입됨)인데 etf_map 이 0개면 수집이 사실상 불가능하다 —
     #      success(0건)로 위장하지 않고 skip 으로 드러낸다.

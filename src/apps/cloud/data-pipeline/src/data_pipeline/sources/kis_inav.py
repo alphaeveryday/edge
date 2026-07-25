@@ -21,9 +21,9 @@ NAV 고 이건 장중 시각 grain 의 추정 NAV 다. 기존 `etf_nav` 테이�
 **응답에 날짜 필드가 없다** — `bsop_hour`(HHMMSS)만 온다(일별의 `stck_bsop_date` 에 해당
 하는 게 없다). 거래일은 수집 시각으로 붙일 수밖에 없는데, KIS 는 휴장일에도 빈 응답이 아니라
 **직전 거래일 데이터를 그대로 반복**한다(토요일 질의에 직전 금요일 데이터가 온 것이 실측
-증거). 그래서 휴장일에 이 어댑터를 돌리면 옛 값에 오늘 날짜가 붙는 유령 as-of 가 된다
-(ALPHA-387 의 as-of 오정렬과 같은 함정) — 가드는 스케줄 쪽(ALPHA-556)이 걸고, 여기서는
-부모가 붙이는 `fetched_at` 이 나중에 교정할 근거로 남는다.
+증거). 그래서 오늘 데이터가 없는 시점에 돌리면 옛 값에 오늘 날짜가 붙는 유령 as-of 가 된다
+(ALPHA-387 의 as-of 오정렬과 같은 함정) — `skip_reason` 이 거래일·개장 이후만 통과시켜 막고
+(ALPHA-557), 그래도 남는 오염은 부모가 붙이는 `fetched_at` 으로 교정한다.
 
 `KisNavSource` 를 상속한다 — 토큰 발급·단축코드 파생·`EGW00201` 재시도·rt_cd 판정·ETF 단위
 실패 격리가 전부 동일해서, 갈리는 건 엔드포인트와 질의 파라미터뿐이다. 부모가 그 둘을 훅
@@ -33,7 +33,10 @@ NAV 고 이건 장중 시각 grain 의 추정 NAV 다. 기존 `etf_nav` 테이�
 
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta, timezone
+
 from ..config import KisNavSource as KisNavSourceConfig
+from ..ops.trading_calendar import is_trading_day
 from .http import PoliteClient
 from .kis_nav import KisNavSource
 
@@ -48,6 +51,11 @@ DEFAULT_INTERVAL_SEC = 60
 ROWS_PER_CALL = 30  # 응답 고정 행 수(실측) — 창 = interval_sec × 이 값.
 # 행 식별에 필요한 필드 — 시각 축(bsop_hour)과 값(nav). 없으면 저장해도 못 쓴다.
 REQUIRED_ROW_FIELDS = ("bsop_hour", "nav")
+
+KST = timezone(timedelta(hours=9))
+# 정규장 개장 시각(KST). 이 전에는 **오늘 iNAV 가 아직 존재하지 않는다** — 그때 부르면 KIS 가
+# 빈 응답이 아니라 직전 거래일 값을 주고, 응답에 날짜가 없어 그게 오늘 것으로 라벨된다.
+MARKET_OPEN = time(9, 0)
 
 
 def _is_blank(value: object) -> bool:
@@ -85,6 +93,29 @@ class KisInavSource(KisNavSource):
     def window_sec(self) -> int:
         """1콜이 덮는 시간 폭. 폴링 주기가 이보다 길면 갭이 나고, 갭은 소급이 안 된다."""
         return self.interval_sec * ROWS_PER_CALL
+
+    @property
+    def skip_reason(self) -> str | None:
+        """지금 수집하면 안 되는 사유, 수집해도 되면 None (ALPHA-557).
+
+        이 API 는 응답에 날짜를 주지 않아 거래일을 **수집 시각으로** 붙일 수밖에 없다.
+        그런데 KIS 는 오늘 데이터가 없어도 빈 응답이 아니라 **직전 거래일 값을 그대로**
+        준다(2026-07-25 토요일 실행이 7/24 데이터 930행을 적재한 것이 실측 증거). 두 성질이
+        겹치면 옛 값이 오늘 날짜 파티션에 앉는 **유령 as-of** 가 된다(ALPHA-387 과 동형).
+
+        그래서 "오늘 데이터가 존재하는 시점"에만 수집한다 — 거래일이고 개장 이후.
+        장 마감 뒤(15:30~)는 막지 않는다: 그때 오는 건 오늘 종가 구간 값이라 라벨이 맞다.
+
+        실패가 아니라 skip 이다(exit 0) — 스케줄러가 붙으면 휴장일마다 정상적으로 지나간다.
+        거래일 판정은 `ops.trading_calendar.is_trading_day`(env `OPS_KR_HOLIDAYS`)를 그대로
+        쓴다. Planner·KRX 어댑터와 같은 휴장일 집합이어야 한다 — 복제하면 갈라진다.
+        """
+        now = datetime.now(KST)
+        if not is_trading_day(now.date()):
+            return f"non-trading day (KST {now.date().isoformat()})"
+        if now.time() < MARKET_OPEN:
+            return f"before market open (KST {now.strftime('%H:%M')} < 09:00)"
+        return None
 
     def _query_params(self, kis_symbol: str, d1: str, d2: str) -> dict[str, str]:
         """날짜(d1·d2)는 쓰지 않는다 — 이 API 가 시각·날짜 지정을 무시하기 때문이다(실측)."""
