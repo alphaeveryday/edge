@@ -1,7 +1,7 @@
 # publication-api
 
 증권사 백엔드가 호출하는 조회 표면 — `GET /api/v1/explanations/{etf_ticker}?trade_date=` [edge-onprem].
-계약은 [docs/contracts/publication-api.md](../../../../docs/contracts/publication-api.md)가 SSOT이고, 이 README는 이 모듈만의 비자명한 규율만 적는다.
+계약은 [docs/contracts/publication-api.md](../../../../docs/contracts/publication-api.md)가 시맨틱 SSOT이고, 문법 명세는 코드 옆 [openapi.yaml](openapi.yaml)(OpenAPI 3.1)이며, 이 README는 이 모듈만의 비자명한 규율만 적는다.
 
 ## 지켜야 할 로컬 불변식
 

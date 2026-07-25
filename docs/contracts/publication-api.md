@@ -1,6 +1,8 @@
 # MTS/HTS 연동 방식 — Publication API
 
-> 이 문서는 증권사 백엔드 개발자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수). 문법 명세(OpenAPI)는 publication-api 모듈 생성 시 코드 옆에 두고 이 문서가 상위 시맨틱이다.
+> 이 문서는 증권사 백엔드 개발자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수).
+>
+> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [publication-api/openapi.yaml](../../src/apps/onprem/publication-api/openapi.yaml)(OpenAPI 3.1, ALPHA-498). 이 문서(시맨틱 계약)가 상위 SSOT이고 openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다.
 
 ## 원칙 (확정)
 
@@ -59,11 +61,10 @@ X-Channel: MTS | HTS | INTERNAL
 | 404 | 알 수 없는 ETF 종목코드 |
 | 5xx | 서버 오류 — 증권사 백엔드는 폴백 문구 처리 권장(설명 미제공이 고객 화면 오류로 보이지 않게) |
 
-- 에러 body 형상은 `[확정 필요 — 공통 응답 포맷 정책, publication-api 모듈 스캐폴드 시]`.
+- 에러 body 형상은 jvm-common 공통 응답 포맷 `ApiResponse` — `{ "isSuccess": false, "code": "SERV4001", "message": "..." }`(result 생략). 도메인 코드 `SERV4001`~`SERV4004`(400)·`SERV4040`(404), 프레임워크 예외는 상태코드 기반 공통 코드(`COMMON404` 등). 성공(200) 본문은 이 포맷으로 감싸지 않는다. (확정 — ALPHA-498, 코드 `PublicationErrorStatus`·openapi `ErrorResponse`)
 
 ### 미확정 목록
 
 1. 식별자 체계 (종목코드 vs ISIN)
 2. 목록/배치 조회(여러 ETF 한 번에) 필요 여부 — MTS 관심목록 화면이 요구하면 추가
-3. 에러 body 공통 응답 포맷 정책
-4. 캐싱 지시(ETag 등) — 조회=노출 시맨틱과의 상호작용 검토 필요 (`[주의]` 증권사 백엔드가 응답을 캐시하면 Exposure Log가 실노출보다 적게 기록된다 — 연동 가이드에 캐시 금지 또는 노출 콜백(로드맵, [../roadmap.md](../roadmap.md)) 안내)
+3. 캐싱 지시(ETag 등) — 조회=노출 시맨틱과의 상호작용 검토 필요 (`[주의]` 증권사 백엔드가 응답을 캐시하면 Exposure Log가 실노출보다 적게 기록된다 — 연동 가이드에 캐시 금지 또는 노출 콜백(로드맵, [../roadmap.md](../roadmap.md)) 안내)
