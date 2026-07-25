@@ -890,10 +890,16 @@ def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
     _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
     _setup(monkeypatch, conn)
-    complete_fn = _llm_fn(
-        [_gate_item("a1", etype=_CONTRACT), None],
+    inner = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
         [{"id": "a1", "predicate": _CONTRACT_PRED, "stage": None,
-          "arguments": 1, "measures": 5, "confidence": "H"}, 7])
+          "arguments": 1, "measures": 5, "confidence": "H"}])
+
+    def complete_fn(system: str, user: str) -> str:
+        out = json.loads(inner(system, user))
+        out["items"] += [None, 7]  # 게이트·추출 응답 양쪽에 비객체 항목 주입
+        return json.dumps(out, ensure_ascii=False)
+
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
                                from_date="2026-07-15", to_date="2026-07-15") == 0
 
