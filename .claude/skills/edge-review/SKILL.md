@@ -38,7 +38,7 @@ git status --short
 ```
 - **커밋된 브랜치 변경 + 미커밋(staged/unstaged) + 미추적 새 파일을 모두** 범위에 넣는다(합집합, fallback 아님). `git diff dev...HEAD` 는 커밋분만, `git diff HEAD` 는 추적 파일의 미커밋 변경만(**미추적 새 파일은 안 나온다**). 미추적 파일은 `git ls-files --others --exclude-standard` 로 나열해 **경로를 지시문에 명시**하고 Codex 에게 직접 읽으라고 지시한다 — line-by-line·시크릿 스캔이 새 config/소스에 든 버그·토큰을 놓치지 않게.
 - 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`, 또는 커밋 SHA·베이스 브랜치를 지시문 범위로).
-- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI/infra? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
+- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI? · **IaC**(`infra/`·terraform `.tf`/`.tftpl` — I각도)? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
 
 ## Phase 1 — Codex 실행
 
@@ -90,6 +90,10 @@ echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
   - **crash-before-gate** — 비객체/비기대 타입 입력(`null`·`[]`·스칼라·키 누락)이 `.get()`·인덱싱·언패킹에서 터져 배치 전체를 죽이는가(행 단위로 격리돼야).
   - **coerce-to-passing** — 타입 강제가 bad 를 통과값으로 바꾸는가: `float("nan"/"inf")`(NaN 비교는 전부 False라 수치 게이트를 조용히 통과)·`int(-0.5)=0`·`float(True)=1.0`·관대한 `strptime`(`'202671'` 미패딩·`'20260231'` 비달력일)·공백만 문자열이 truthy.
   - **unchecked-field** — 게이트가 안 보는데 다운스트림 계약(정체성 키·참고값 등)이 요구하는 필드가 결측·불량이어도 passed 인가(예: `(market,ticker,trade_date)` 정체성 결측).
+- **I. IaC 교체·상태 안전성** (terraform·`infra/` 변경 시) — 인프라 변경이 **의도 밖의 리소스 교체·상태 손실**을 부르는지. 코드가 보통 넘어가는 이 함정들을 적대적으로 확인한다:
+  - **ForceNew 교체 함정** — 값이 바뀌면 리소스를 **destroy+recreate** 하는 replacement-only 속성(`aws_instance.ami`·`subnet_id`·`availability_zone`, `aws_db_instance` 일부 등)이 이 변경으로 드리프트하는가. 특히 **data-source 재조회**(`data.aws_ami` 필터·`most_recent`)나 var 기본값 변경으로 값이 달라지면, 무관한 apply(IAM·SG 한 줄)마저 stateful 리소스(루트 EBS·`aws_ebs_volume`·PG/Redis named volume·RDS)를 통째로 갈아엎어 **데이터가 유실**된다. `lifecycle { ignore_changes = [...] }`·`prevent_destroy`·명시적 `-replace` 경로 같은 방어가 있는지 확인 — 없으면 후보(교체가 plan 에 드러나는지 `terraform plan` 으로 검증 권함). "신규 리소스만 반영"이라는 주석·PR 설명은 **코드로 강제되지 않으면 근거가 아니다**.
+  - **와일드카드·most_recent 오선택** — AMI·이미지·리소스 이름 글롭이 의도 밖 변종을 고르는가(예: `al2023-ami-*` 가 ECS-optimized·minimal 변종을, `*-latest` 가 프리릴리스를 매치). `most_recent` 는 명명 규칙이 바뀌면 조용히 다른 이미지를 집으므로, 필터가 원하는 계열만 앵커하는지 본다.
+  - **시크릿·state 노출** — SecureString·비밀값을 terraform 이 관리해 평문이 state 에 들어가는가(demo-onprem 패턴 — cert 는 ARN 만 구성하고 값은 운영자 CLI 주입). `ignore_changes` 로 가려선 안 되는 보안 관련 드리프트를 가리는가.
 
 **검증 (같은 실행 안에서)**
 > 각 후보를 적대적으로 검증해 **CONFIRMED**(코드로 확증 — 실제 줄을 인용) 또는 **PLAUSIBLE**(현실적이나 미확증) 만 남겨라. 코드로 반증 가능한 것(실제 줄·불변식·이 diff 의 가드를 인용)은 버려라. 현실적 상태(경쟁·드문 에러 경로의 None·falsy-zero·경계 off-by-one·부분 실패)는 기본 PLAUSIBLE. 규칙 위반은 **정확한 규칙 번호와 정확한 줄을 인용할 수 있을 때만** 낸다 — 취향·막연한 "정신" 추론은 금지. 결함이 없으면 빈 배열을 반환하라. 지정된 JSON 스키마로만 응답하라.
