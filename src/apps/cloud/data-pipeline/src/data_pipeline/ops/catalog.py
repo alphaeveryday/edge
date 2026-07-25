@@ -118,6 +118,11 @@ CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"
 
+# `--source` 미지정 시 run.py 가 쓰는 기본 벤더(`args.source or "fmp"`). 벤더 인자가 없는
+# 카탈로그 엔트리는 이 벤더를 뜻한다 — 두 표현(`ingest-raw` 와 `ingest-raw --source fmp`)이
+# 같은 작업으로 해소돼야 한다.
+_DEFAULT_VENDOR = "fmp"
+
 
 def entries() -> tuple[CatalogEntry, ...]:
     """등록된 모든 카탈로그 엔트리(정의 순서)."""
@@ -126,6 +131,35 @@ def entries() -> tuple[CatalogEntry, ...]:
 
 def get(task_key: str) -> CatalogEntry | None:
     return CATALOG.get(task_key)
+
+
+def by_cli(step: str, source: str | None = None) -> CatalogEntry | None:
+    """CLI `(step, --source)` → 엔트리. 없으면 None(미등록 작업).
+
+    해소 규칙: **벤더를 명시한 엔트리가 우선**이고, 없으면 벤더 인자가 없는 엔트리로 떨어진다.
+    - `ingest-price-raw --source kis` → KIS 엔트리(명시 일치)
+    - `ingest-price-raw`(미지정=fmp) → KIS 엔트리와 안 맞음. FMP 는 미등록이라 None
+    - `normalize-price --source kis` → 벤더 축이 **없는** 스텝이라 `--source` 는 무시된다.
+      여기서 None 을 돌려주면 수동 회수(`--source` 를 습관적으로 붙이는 경우)의 계측이
+      조용히 끊긴다 — 실제 dispatch 는 source 를 안 보고 정상 실행한다.
+    벤더를 섞어 해소하면 원장이 남의 벤더 결과를 그 작업으로 기록하므로, 명시 일치가 항상 이긴다.
+    """
+    candidates = [e for e in _ENTRIES if e.cli_command and e.cli_command[0] == step]
+    # 이 스텝이 카탈로그에서 벤더로 갈리는가. 갈리는 스텝에 **모르는 벤더**가 오면 폴백하지
+    # 않는다 — 폴백하면 `ingest-raw --source bogus` 가 FMP 뉴스 작업으로 기록된다.
+    vendor_split = any("--source" in e.cli_command for e in candidates)
+    fallback = None
+    for entry in candidates:
+        if "--source" in entry.cli_command:
+            idx = entry.cli_command.index("--source") + 1
+            entry_vendor = entry.cli_command[idx] if idx < len(entry.cli_command) else ""
+            if source is not None and entry_vendor == source:
+                return entry
+        elif fallback is None:
+            fallback = entry
+    if vendor_split and source is not None and source != _DEFAULT_VENDOR:
+        return None
+    return fallback
 
 
 def by_sfn_state(state_name: str) -> CatalogEntry | None:

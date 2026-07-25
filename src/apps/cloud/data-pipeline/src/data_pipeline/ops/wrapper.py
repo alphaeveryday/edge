@@ -157,7 +157,23 @@ def instrument(
         sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
     ))
 
-    exit_code = run_fn()  # ← 본 작업. 여기서 던지면 계측이 삼키지 않고 그대로 전파한다.
+    try:
+        exit_code = run_fn()  # ← 본 작업. 예외는 삼키지 않고 그대로 전파한다.
+    except BaseException as exc:
+        # 예외로 죽어도 attempt 를 **RUNNING 으로 남기지 않는다**(ALPHA-181). 남기면 Reconciler 가
+        # 이미 끝난 실행을 STALLED 로 오판하고, STALLED 는 resolve 경로가 없어 영구 OPEN 이다.
+        # SystemExit(인자 검증 fail-loud)도 잡아야 해서 BaseException 이다 — 잡되 되던진다.
+        if attempt_id is not None:
+            _safe(lambda: ledger.record_attempt_end(
+                attempt_id, execution_status=states.EXEC_FAILED, exit_code=None,
+                failure_reason=f"{type(exc).__name__}: {exc}"[:500],
+                data_status=states.DATA_UNKNOWN,
+            ))
+        _safe(lambda: ledger.update_task_outcome(
+            expected_task_id, task_outcome=states.OUTCOME_FAILED,
+            data_status=states.DATA_UNKNOWN, current_attempt_id=attempt_id,
+        ))
+        raise
 
     signals = {"exit_code": exit_code}
     if observe_data_fn is not None:
