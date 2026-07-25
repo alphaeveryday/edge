@@ -1,0 +1,211 @@
+openapi: 3.1.0
+
+# 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
+# 시맨틱 계약(파라미터 의미·에러 시맨틱·Exposure Log·식별자 정책)의 SSOT 는
+# ../../../../docs/contracts/publication-api.md 이며, 이 문서는 그 하위 문법 층이다.
+# 응답 필드 표기는 snake_case (ExplanationResponse @JsonNaming SnakeCase).
+# 대외 산출물 — 표현은 writing-rules 준수(투자권유·예측이 아닌 "변동 요인 후보" 톤).
+info:
+  title: Publication API
+  version: 1.0.0
+  description: >-
+    증권사 백엔드가 호출하는 조회 표면. 특정 ETF·거래일의 **검수 완료 노출 문구**(변동 요인
+    후보 설명)를 반환한다 — 투자권유·예측이 아니다. 원본 고객 ID/계좌는 받지 않으며 고객 식별은
+    증권사가 생성한 해시(`X-Customer-Hash`)로만 한다(ADR-0013). 200 응답 시점이 Exposure Log
+    기록 시점이다. 시맨틱 계약 SSOT 는 ../../../../docs/contracts/publication-api.md.
+
+servers:
+  - url: /
+    description: publication-api 서비스 루트 (온프렘)
+
+# 벤더 API Key 없음 — Publication API 자체 인증은 증권사 내부 API GW 에 위임한다
+# (publication-api.md). 그래서 security 요구를 두지 않는다.
+security: []
+
+paths:
+  /api/v1/explanations/{etfTicker}:
+    get:
+      operationId: getExplanation
+      summary: ETF·거래일의 검수 완료 설명 조회
+      description: >-
+        해당 ETF 종목코드의 **노출 가능(Published) 설명**을 반환한다. `trade_date` 생략 시
+        최신 거래일 게시분(게시 시각이 아니라 거래일 기준 — 과거일 검수분이 늦게 게시돼도 최신
+        거래일이 이긴다). 노출 가능한 설명이 없으면 204(정상 — 모든 ETF 가 매일 설명을 갖지
+        않는다). **200 응답이 Exposure Log 기록 시점**이다 — 응답 문구 스냅샷·고객 해시·채널·시각이
+        기록돼 민원·감사 시 재현된다(204·에러는 기록하지 않는다).
+      parameters:
+        - name: etfTicker
+          in: path
+          required: true
+          description: 국내 상장 ETF 종목코드(MVP 커버리지 — ADR-0024). 미상장 코드는 404.
+          schema:
+            type: string
+          example: "069500"
+        - name: trade_date
+          in: query
+          required: false
+          description: >-
+            조회 거래일. 생략하거나 빈 값(`trade_date=`)이면 생략으로 처리해 최신 거래일 게시분을
+            반환한다(서버 `parseTradeDate` 의 `isBlank` 분기). 값을 지정하면 yyyy-MM-dd 형식이어야
+            하며, 비어 있지 않은데 형식이 틀리면 400(SERV4004).
+          schema:
+            # 서버가 실제로 받는 집합을 그대로 전사 — 빈 문자열(생략과 동치) 또는 yyyy-MM-dd.
+            # 코드 생성기·게이트웨이가 빈 값을 유효 입력으로 표현하도록 스키마 수준에서 인코딩한다.
+            type: string
+            anyOf:
+              - const: ""
+              - format: date
+          example: "2026-07-15"
+        - name: X-Customer-Hash
+          in: header
+          required: true
+          description: >-
+            증권사가 생성한 고객 식별 해시. **원본 고객 ID/계좌는 받지 않는다**(데이터 거주지·
+            ADR-0013). 누락·공백은 400(SERV4001). Exposure Log 에 이 해시로 기록된다.
+          schema:
+            type: string
+            # 빈 문자열 거부. 공백만 문자열까지의 거부는 서버 isBlank() 소관(위 description).
+            minLength: 1
+        - name: X-Channel
+          in: header
+          required: true
+          description: 노출 채널 — Exposure Log 채널값. 누락은 400(SERV4002), 허용값 밖은 400(SERV4003).
+          schema:
+            type: string
+            enum: [MTS, HTS, INTERNAL]
+      responses:
+        '200':
+          description: 노출 가능한 설명 1건. 본문 표기 snake_case. 이 응답이 Exposure Log 기록 시점.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplanationResponse'
+        '204':
+          description: 해당 ETF·거래일에 노출 가능한 설명이 없음(정상). 본문 없음, Exposure Log 기록 없음.
+        '400':
+          description: >-
+            요청 위반. 도메인 코드 — SERV4001(X-Customer-Hash 누락)·SERV4002(X-Channel 누락)·
+            SERV4003(X-Channel 허용값 밖)·SERV4004(trade_date 형식 위반).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missingCustomerHash:
+                  summary: X-Customer-Hash 누락
+                  value:
+                    isSuccess: false
+                    code: SERV4001
+                    message: X-Customer-Hash 헤더가 필요합니다.
+                invalidChannel:
+                  summary: X-Channel 허용값 밖
+                  value:
+                    isSuccess: false
+                    code: SERV4003
+                    message: X-Channel 은 MTS, HTS, INTERNAL 중 하나여야 합니다.
+        '404':
+          description: 알 수 없는 ETF 종목코드(SERV4040).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unknownEtf:
+                  summary: 미상장 코드
+                  value:
+                    isSuccess: false
+                    code: SERV4040
+                    message: 알 수 없는 ETF 종목코드입니다.
+        '5XX':
+          description: 서버 일시 장애. 증권사는 폴백(직전 노출분 유지 등)을 권장한다. 내부 메시지는 노출하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ExplanationResponse:
+      type: object
+      description: >-
+        고객에게 노출되는 검수 완료 설명. `summary`는 검수를 거친 **최종 노출 문구**(원본 AI 문구가
+        아니라 검수 반영본)이며, `disclaimer`는 화면에 반드시 함께 노출한다(투자권유 아님 안내).
+      required: [publication_id, etf, trade_date, summary, confidence_level, evidences, disclaimer, published_at]
+      properties:
+        publication_id:
+          type: string
+          description: 온프렘 발번 게시 식별자.
+        etf:
+          $ref: '#/components/schemas/EtfInfo'
+        trade_date:
+          type: string
+          format: date
+        summary:
+          type: string
+          description: 검수 완료 최종 노출 문구(변동 요인 후보 설명 — 투자권유·예측 아님).
+        confidence_level:
+          type: [string, 'null']
+          description: 신뢰도 — 미산정 시 null.
+          enum: [HIGH, MEDIUM, LOW, null]
+        evidences:
+          type: array
+          description: 근거 뉴스/공시 문서 목록("관련 뉴스/공시"). 없으면 빈 배열.
+          items:
+            $ref: '#/components/schemas/EvidenceItem'
+        disclaimer:
+          type: string
+          description: 테넌트 기본 안내 문구(투자권유 아님) — 화면 필수 노출.
+        published_at:
+          type: string
+          format: date-time
+          description: 게시 시각(오프셋 포함 ISO-8601).
+
+    EtfInfo:
+      type: object
+      required: [ticker, name]
+      properties:
+        ticker:
+          type: string
+        name:
+          type: [string, 'null']
+          description: ETF 표시명 — 종목 마스터 매칭이 없으면 null(키는 항상 존재).
+
+    EvidenceItem:
+      type: object
+      description: >-
+        근거 문서 하나 — 온프렘이 번들에서 받아 저장한 형상 그대로 서빙(ALPHA-395·497). 대외
+        노출용 계약이라 내부 wire 스키마(event-bundle)와 별개로 여기 정의한다.
+      required: [kind, title, source, published_at]
+      properties:
+        kind:
+          type: string
+          enum: [NEWS, DISCLOSURE]
+          description: 근거 종류.
+        title:
+          type: [string, 'null']
+          description: 헤드라인 — 없으면 null.
+        source:
+          type: string
+          description: 출처(예 DART·언론사).
+        published_at:
+          type: [string, 'null']
+          format: date-time
+          description: 문서 게시 시각 — 없으면 null.
+
+    ErrorResponse:
+      type: object
+      description: >-
+        공통 응답 포맷(jvm-common ApiResponse) — 4xx/5xx 에만 적용된다. 성공(200) 본문은
+        이 포맷으로 감싸지 않는다.
+      required: [isSuccess, code, message]
+      properties:
+        isSuccess:
+          type: boolean
+          const: false
+        code:
+          type: string
+          description: 도메인 코드(예 SERV4001) 또는 공통 코드(예 COMMON404).
+          example: SERV4001
+        message:
+          type: string
+          example: X-Customer-Hash 헤더가 필요합니다.
