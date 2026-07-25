@@ -114,3 +114,28 @@ def test_measure_sql_binds_group_supplier_contract_and_day_scope():
     assert "em.role_code = 'CONTRACT_VALUE'" in sql
     assert "se.event_type_code = 'COMPANY.CONTRACT.SIGNING'" in sql
     assert "se.event_date >= %s::date" in sql and "se.available_at >=" not in sql
+
+
+def test_window_boundary_uses_kst_day_not_session_tz():
+    """UTC 세션이 돌려준 시각으로도 ±7일 경계는 KST 달력일로 판정한다 — 사건은 KST 오전
+    10시(UTC 01시, 같은 날), 공시는 KST 08일 01시(UTC 07일 16시, 전일로 밀림)면 UTC 축으로는
+    8일 차라 승격을 잃지만 KST 축으로는 정확히 7일이라 승격해야 한다(Codex #265 P2)."""
+    event_at = D("2026-07-15T01:00:00+00:00")   # KST 07-15 10:00
+    fact_at = D("2026-07-07T16:00:00+00:00")    # KST 07-08 01:00
+    updates, ambiguous = match_candidates(
+        [_m(100_000.0, at=event_at)], [_f(100_000, at=fact_at)])
+    assert [u[0] for u in updates] == ["R1"] and ambiguous == 0
+
+    # 8일 차(KST)는 여전히 배제 — 경계가 물러지면 무관한 공시가 붙는다.
+    too_old, _ = match_candidates(
+        [_m(100_000.0, at=event_at)], [_f(100_000, at=D("2026-07-06T16:00:00+00:00"))])
+    assert too_old == []
+
+
+def test_fact_sql_prefilters_on_kst_day():
+    """공시 프리필터도 KST 달력일 축이어야 한다 — TIMESTAMPTZ 를 %s::date 와 직접 비교하면
+    UTC 세션에서 하한일 오전 9시 이전 공시가 파이썬 판정 전에 잘려, 유효한 금액이 모호로도
+    안 잡히고 조용히 PARSED 로 남는다(Codex #265 P2)."""
+    sql = dart_values._FACT_SQL
+    assert "(df.available_at AT TIME ZONE 'Asia/Seoul')::date" in sql
+    assert "df.available_at >=" not in sql

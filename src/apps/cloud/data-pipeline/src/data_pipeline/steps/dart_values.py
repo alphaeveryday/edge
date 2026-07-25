@@ -12,11 +12,21 @@ available_at ±7일. 후보 공시가 **정확히 1건**일 때만 승격하고,
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
 TOLERANCE = 0.08
 WINDOW_DAYS = 7
+_KST = timezone(timedelta(hours=9))
+
+
+def _kst_day(value: datetime):
+    """KST 달력일. 세션 TZ(RDS 기본 UTC)로 렌더된 시각을 그대로 ``.date()`` 하면 KST 오전이
+    전일로 밀려 ±7일 경계가 하루 어긋난다 — 사건은 밀리고 공시는 안 밀리는 짝에서 정확히
+    7일인데 8일로 읽혀 승격을 잃는다(Codex #265 P2). naive 는 이미 KST 로 본다."""
+    return (value if value.tzinfo is None else value.astimezone(_KST)).date()
+
 
 # 사건의 SUPPLIER 참여 instrument 를 equity_profile 로 발행회사 actor 에 접지한 PARSED KRW
 # 측정행. 공급사가 여럿이면 행이 곱해진다 — (사건, ord) 로 묶어 issuer 집합을 만든다.
@@ -50,6 +60,9 @@ _MEASURE_SQL = (
 )
 
 # 대조 대상 공급계약 공시 사실 — 창은 사건 창의 ±WINDOW_DAYS 를 SQL 에서 미리 좁힌다.
+# 축은 **KST 달력일**로 고정한다: TIMESTAMPTZ 를 %s::date 와 직접 비교하면 세션 TZ 로
+# 해석돼(UTC 세션) KST 하한일 오전 9시 이전 공시가 파이썬 판정 전에 잘려나가, 유효한 금액이
+# 모호로도 안 잡히고 조용히 PARSED 로 남는다(Codex #265 P2).
 _FACT_SQL = (
     "SELECT dd.issuer_actor_id, scf.contract_amount_krw, d.source_document_id, df.available_at"
     " FROM supply_contract_fact scf"
@@ -57,8 +70,8 @@ _FACT_SQL = (
     " JOIN disclosure_document dd ON dd.document_id = df.document_id"
     " JOIN document d ON d.document_id = df.document_id"
     " WHERE scf.contract_amount_krw IS NOT NULL AND scf.contract_amount_krw > 0"
-    " AND df.available_at >= %s::date - interval '7 days'"
-    " AND df.available_at < %s::date + interval '8 days'"
+    f" AND (df.available_at AT TIME ZONE 'Asia/Seoul')::date >= %s::date - {WINDOW_DAYS}"
+    f" AND (df.available_at AT TIME ZONE 'Asia/Seoul')::date <= %s::date + {WINDOW_DAYS}"
 )
 
 _UPDATE_SQL = (
@@ -83,7 +96,7 @@ def match_candidates(measures, facts, *, tolerance: float = TOLERANCE,
                 continue
             if abs(float(value) - float(amount)) / float(amount) >= tolerance:
                 continue
-            if abs((available_at.date() - fact_at.date()).days) > window_days:
+            if abs((_kst_day(available_at) - _kst_day(fact_at)).days) > window_days:
                 continue
             candidates[rcept_no] = (issuer, amount)
         if len(candidates) == 1:
