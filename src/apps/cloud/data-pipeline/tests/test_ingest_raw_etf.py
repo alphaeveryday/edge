@@ -5,6 +5,7 @@ ETF holdings 는 스냅샷이라 날짜창이 없고, 수집 대상이 etf_map(E
 """
 
 import json
+import logging
 
 from data_pipeline.config import EtfSource, load_settings
 from data_pipeline.sources.etf import FmpEtfSource
@@ -206,6 +207,33 @@ def test_adapter_skip_reason_is_recorded_verbatim(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "skipped"
     assert log["reason"] == "non-trading day (KST 2026-07-25)"
+
+
+def test_adapter_skip_does_not_trip_the_skip_alarm(tmp_path, caplog):
+    # WHY: tasks.tf 의 raw-ingest-skipped metric filter 가 "수집 건너뜀" 토큰으로 알람을
+    #      울린다. 그 알람은 "skip 은 비정상"을 전제로 설계됐다(필터 주석: 정상 상태에서
+    #      발화 없음). 어댑터가 낸 달력 skip 은 **예정된 정상 상태**라 같은 토큰을 쓰면
+    #      휴장일마다 오경보가 나고, 그러면 아무도 그 알람을 안 보게 된다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    config = EtfSource(base_url=settings.etf.source.base_url, api_key="k", etf_map=_MAP)
+    source = FmpEtfSource(config, FakeClient({}))
+    source.skip_reason = "non-trading day (KST 2026-07-25)"
+
+    with caplog.at_level(logging.INFO):
+        ingest_raw_etf.run(settings, storage, source, "20260725T000000Z")
+
+    assert "수집 건너뜀" not in caplog.text  # 알람 토큰
+    assert "non-trading day" in caplog.text  # 그래도 로그로는 드러난다
+
+
+def test_credential_skip_still_trips_the_alarm(tmp_path, caplog):
+    # WHY: 크리덴셜 미주입은 설정 장애라 알람이 울려야 한다 — 위 분리가 이쪽까지
+    #      조용하게 만들면 기존 탐지가 사라진다(회귀).
+    with caplog.at_level(logging.INFO):
+        _run(tmp_path, {}, api_key=None)
+
+    assert "수집 건너뜀" in caplog.text
 
 
 def test_no_mapped_etfs_marks_skipped(tmp_path):

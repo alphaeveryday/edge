@@ -97,4 +97,4 @@ cd ../envs/dev  && terraform apply
 
 > `data-pipeline`(시장 `edge-dev-data-pipeline`) 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). **뉴스 `edge-dev-data-pipeline-news`(ALPHA-553)** 은 평일 15:00·15:30·23:50 KST 스케줄이나 **DISABLED** — PR2 로 시장 SFN 에서 뉴스 스텝을 뺀 뒤 ENABLED 컷오버한다(그 전 ENABLE 하면 두 SFN 이 event 를 동시에 써 threading 레이스). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필은 `aws stepfunctions start-execution` 으로.
 >
-> ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 비면 평일 휴장일에 Planner 가 런을 계획하고 KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다. 주말만 코드가 안다.
+> ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 주말만 코드가 안다. 비면 세 곳이 함께 퇴화한다: Planner 가 평일 휴장일에 런을 계획하고, KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨하며, **KIS iNAV 가드(ALPHA-557)가 그날을 거래일로 보고 직전 거래일 값을 오늘 것으로 적재**한다(`planner`·`krx`·`kis` task-def 가 같은 `OPS_KR_HOLIDAYS` 를 받는다).
