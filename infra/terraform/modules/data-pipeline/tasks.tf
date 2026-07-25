@@ -118,7 +118,11 @@ locals {
   env_sets = {
     rds      = local.db_env
     events   = local.db_env
-    kis      = local.db_env
+    # iNAV(ALPHA-557)는 거래일·개장 이후에만 수집한다 — 응답에 날짜가 없어 거래일을 수집
+    # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
+    # 휴장일 집합을 봐야 한다. 안 주면 is_trading_day 가 평일 공휴일을 거래일로 보고 가드가
+    # 주말만 아는 상태로 **조용히 퇴화**한다(가드가 있는데 안 걸리는 게 제일 나쁘다).
+    kis      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
     bigkinds = local.db_env
     rds_dart = local.db_env
     krx      = { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) }

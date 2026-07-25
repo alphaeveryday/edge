@@ -129,8 +129,8 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SE
 # 국내 ETF 장중 iNAV 원본저장(Step1) — KIS ETF NAV비교추이(분), tr_id FHPST02440100(ALPHA-555).
 # 일별 NAV 와 같은 앱키·유니버스를 쓰되 시장코드가 "E"(일별은 "J")로 갈린다. 응답은 항상 30행
 # 고정이라 조회 창 = --interval-sec × 30 이고(미지정 60초 → 30분치), 날짜·시각 지정이 무시돼
-# **소급 백필이 없다** — 놓친 구간은 영구 유실이다. 휴장일엔 직전 거래일 데이터가 그대로 오므로
-# 가드(ALPHA-556)가 붙기 전까지는 장중에만 돌린다.
+# **소급 백필이 없다** — 놓친 구간은 영구 유실이다. 휴장일·개장 전에는 어댑터가 status=skipped
+# 로 막는다(ALPHA-557) — 그때 오는 건 직전 거래일 값이라 오늘 것으로 라벨하면 안 되기 때문.
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-inav --interval-sec 60
 
@@ -370,16 +370,20 @@ writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세�
 
 - `ingest-raw-inav`(국내 ETF **장중** iNAV, **kis 세트** — 일별 NAV 와 같은 앱키·유니버스)
   — **SFN 에 편입돼 있지 않다.** 위 raw 페이즈 잡 목록에 없고 `statemachine.tf` 에도 없다.
-  스케줄 편입은 ALPHA-556 소관이며, 그전까지는 아래 제약 때문에 **장중 수동 실행 전용**이다.
+  스케줄 편입은 ALPHA-556 소관이라, 그전까지는 **손으로 돌릴 때만** 수집된다(자동 수집 없음).
+  잘못된 시각에 돌리는 것 자체는 아래 가드가 막는다.
   - 일별(`FHPST02440200`)과 **시장코드가 갈린다**: iNAV 는 `FID_COND_MRKT_DIV_CODE="E"`, 일별은 `"J"`.
     `"J"` 로 보내면 전건 `rt_cd=2` 로 튕긴다(실측).
   - ⚠️ **소급 백필이 없다.** 날짜·시각 지정이 무시돼 항상 "지금 기준 최근 30행"만 온다 —
     놓친 구간은 영구 유실이다. 일별 NAV 처럼 창을 주고 나중에 주워올 수 없다.
     그래서 `--from/--to` 를 주면 **실행을 거부**한다(무시하고 돌면 갭을 못 메운 채 exit 0 이 된다).
-  - ⚠️ **기준일 가드가 아직 없다**(ALPHA-556). 응답에 날짜 필드가 없어(`bsop_hour` 만 옴) 거래일을
-    수집 시각으로 붙여야 하는데, KIS 는 휴장일에도 **직전 거래일 데이터를 반복**한다(위 ALPHA-387
-    과 같은 함정). 휴장일에 돌리면 옛 값에 오늘 날짜가 붙는다 — raw 의 `fetched_at` 이 그걸
-    나중에 교정할 근거다.
+  - **기준일 가드**(ALPHA-557): 응답에 날짜 필드가 없어(`bsop_hour` 만 옴) 거래일을 수집 시각으로
+    붙여야 하는데, KIS 는 오늘 데이터가 없어도 **직전 거래일 데이터를 반복**한다(위 ALPHA-387 과
+    같은 함정). 그래서 **거래일이고 09:00(KST) 이후**일 때만 수집하고, 아니면 `status=skipped`
+    + 사유로 남기고 raw 를 쓰지 않는다. 장 마감 후(15:30~)는 막지 않는다 — 그때 오는 건 오늘
+    종가 구간이라 라벨이 맞다. 휴장일 집합은 Planner·KRX 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다
+    (`kis` task-def 에도 주입). 이 skip 은 **정상 상태**라 raw-ingest-skipped 알람 토큰을 쓰지
+    않는다 — 드러남은 collection_log 가 맡는다.
 
 **정제(normalize, 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
