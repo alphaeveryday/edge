@@ -38,7 +38,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(등록 작업 수만큼만).
-    assert len(db.etasks) == len(catalog.entries()) == 24
+    assert len(db.etasks) == len(catalog.entries()) == 25
 
 
 def test_non_trading_day_skips_price_tasks_no_attempt():

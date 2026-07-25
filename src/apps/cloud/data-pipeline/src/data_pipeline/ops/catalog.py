@@ -8,7 +8,7 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 33개 중 24개**(ALPHA-181 — MVP 3작업에서 확대). 미등록 state 는
+**등록 범위: ECS Task state 33개 중 25개**(ALPHA-181 — MVP 3작업에서 확대). 미등록 state 는
 카탈로그에 없어 expected_task 가 안 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별
 작업이 아니라 manifest/completeness 로 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result
 소관이라 카탈로그에 넣지 않는다.
@@ -20,8 +20,11 @@
 | `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | DB env 가 없다. `tasks.tf` 가 명시하듯 host 만 주면 password 없는 DbConfig 로 `load_settings()` 가 통째로 실패해 **부분 주입이 불가능**하다 → 벤더 API 컨테이너에 RDS 마스터 비밀번호를 주는 신뢰경계 변경이 전제 |
 | `dart` | CollectDartFinancial·DartDisclosure | 〃 |
 | `krx` | CollectKrxEtf | 〃 |
-| `deepseek` | TagNews | 〃 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
+
+`TagNews`(deepseek)도 DB env 가 없어 자기 attempt 를 못 쓰지만, **FeatureCheckResults 게이트의
+멤버**라 빼면 의존 판정이 거짓이 된다 — 등록하되 `instrumented=False` 로 두고 Reconciler 의 SFN
+증거 backfill 에 맡긴다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다).
 
 ⚠️ 제외 8개 중 대부분이 **수집** 스텝이다 — 정제·적재는 다 덮이는데 수집 12개 중 5개만
 계측된다. 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387) 커버리지의 **모양**이 숫자보다
@@ -70,6 +73,11 @@ class CatalogEntry:
     # **KR 전용**이라 미국 시장 작업(FMP)에 걸면 KR 공휴일에 실제로 돈 수집이 "휴장이라 안 했다"로
     # 기록된다. dataset 문자열로 가르지 않는 이유: `price_daily` 는 fmp·kis 공통이다(ALPHA-181).
     kr_trading_calendar: bool = False
+    # 이 작업의 컨테이너가 **스스로 원장에 쓸 수 있는가**. False = task-def 에 DB env 가 없어
+    # wrapper 가 attempt 를 못 만든다 → 그 작업의 attempt 결측은 버그가 아니라 정상이고,
+    # Reconciler 가 SFN 증거로 backfill 하는 것이 유일·정확한 경로다(LEDGER_GAP 을 열지 않는다).
+    # 등록은 하는 이유: **게이트 멤버**라서 빠지면 의존 판정이 거짓이 된다(ALPHA-181).
+    instrumented: bool = True
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
@@ -200,6 +208,16 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
     ),
+    # ── 태깅 (deepseek task-def — DB env 없음) ─────────────────────────────────────
+    # 등록하되 `instrumented=False` 다. 이 컨테이너는 원장에 못 쓰지만 **FeatureCheckResults
+    # 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LoadAssertions 의 의존이 전부 충족된 것으로
+    # 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로 찍힌다(Codex #273 P1).
+    CatalogEntry(
+        task_key="TAG_NEWS", stage="feature", dataset="news_assertions", required=True,
+        cli_command=("tag-news",), sfn_state_name="TagNews",
+        ecs_task_definition="deepseek", depends_on=("NORMALIZE_NEWS",),
+        deadline_offset_seconds=7200, stalled_after_seconds=21600, instrumented=False,
+    ),
     # ── 적재 7 + 직렬 2 (rds task-def) ────────────────────────────────────────────
     CatalogEntry(
         task_key="LOAD_INSTRUMENTS", stage="feature", dataset="instrument_master", required=True,
@@ -250,7 +268,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         cli_command=("load-assertions",), sfn_state_name="LoadAssertions",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
         # ASL `FeatureCheckResults` = feature 전량 성공 게이트(직렬 진입 조건).
-        depends_on=("LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV",
+        depends_on=("TAG_NEWS", "LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV",
                     "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW", "LOAD_DOCUMENTS", "LOAD_DISCLOSURE"),
     ),
     # ── 이벤트 조립 (events task-def — LLM 분류 + DB 적재) ─────────────────────────
@@ -350,6 +368,7 @@ def content_hash() -> str:
             "deadline_offset_seconds": e.deadline_offset_seconds,
             "stalled_after_seconds": e.stalled_after_seconds,
             "kr_trading_calendar": e.kr_trading_calendar,
+            "instrumented": e.instrumented,
             "source_vendor": e.source_vendor,
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,

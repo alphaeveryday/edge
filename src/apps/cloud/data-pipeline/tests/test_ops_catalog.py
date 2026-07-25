@@ -41,7 +41,6 @@ _NOT_INSTRUMENTED = {
     "CollectDartFinancial": "dart task-def 에 DB env 없음",
     "CollectDartDisclosure": "dart task-def 에 DB env 없음",
     "CollectKrxEtf": "krx task-def 에 DB env 없음",
-    "TagNews": "deepseek task-def 에 DB env 없음",
     "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
 }
 
@@ -66,7 +65,9 @@ def test_catalog_and_asl_task_states_match_both_ways():
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
     assert registered.isdisjoint(_NOT_INSTRUMENTED), "제외 목록과 등록이 겹친다"
-    assert len(registered) == 24  # 커버리지를 숫자로 고정 — 조용한 축소 금지(Rule 12)
+    assert len(registered) == 25  # 커버리지를 숫자로 고정 — 조용한 축소 금지(Rule 12)
+    # 자기 기록이 불가능한데도 등록한 것은 **게이트 멤버**뿐이다 — 빠지면 의존 판정이 거짓이 된다.
+    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"TAG_NEWS"}
 
 
 # 페이즈 잡 맵의 삼중항(state·taskdef_key·command_expr). 인라인 직렬은 별도로 판다.
@@ -151,7 +152,10 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
     monkeypatch.delenv("OPS_SFN_STATE_NAME")
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
-    assert ops_entry.task_key_for("tag-news", None) is None   # 미등록(deepseek) = 통과
+    # TagNews 는 등록됐지만 자기 기록이 불가능하다(instrumented=False) — 해소는 되고, 그
+    # 컨테이너엔 원장 설정이 없어 wrapper 가 투명 통과한다.
+    assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
+    assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
 def test_env_state_that_contradicts_the_step_is_not_trusted(monkeypatch, caplog):
@@ -208,7 +212,9 @@ def test_dependencies_encode_the_asl_gates():
             "LOAD_ETF_FLOW", "LOAD_DOCUMENTS", "LOAD_DISCLOSURE"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
-    assert set(catalog.get("LOAD_ASSERTIONS").depends_on) == gate
+    # FeatureCheckResults 게이트는 로더 7개 + **TagNews** 다. TagNews 를 빼면 그것만 죽은 런에서
+    # 의존이 전부 충족된 것으로 보여 BLOCKED 여야 할 것이 MISSED 로 찍힌다(Codex #273 P1).
+    assert set(catalog.get("LOAD_ASSERTIONS").depends_on) == gate | {"TAG_NEWS"}
     assert catalog.get("ASSEMBLE_EVENTS").depends_on == ("LOAD_ASSERTIONS",)
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
     assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 8   # 정제 전량 성공 게이트
