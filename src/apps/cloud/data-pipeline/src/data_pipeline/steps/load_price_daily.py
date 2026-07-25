@@ -283,6 +283,16 @@ def run(
         "already_present": already, "created": created, "updated": updated,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 적재 탈락은 전부 in-band 유실이다 — 정체성 결측·
+        # 미등록 종목·모호 ticker·CHECK 위반 모두 실제 입력 행이 DB 에 안 들어간 것이라 failed 로
+        # 센다. 안 세면 부분 유실이 VALID 로 위장된다(edge-review G/H). 어느 skipped 버킷이
+        # 유실인지는 이 스텝만 아니까 판정이 여기 산다.
+        "ops": {
+            "records_out": already + created + updated,
+            "failed_records": (len(failures) + skipped_check_violation
+                               + skipped_unknown_instrument + skipped_ambiguous_ticker
+                               + skipped_missing_identity),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

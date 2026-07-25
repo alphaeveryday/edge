@@ -349,6 +349,15 @@ def run(
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ 유실이 아닌 것: `already_tagged`(멱등 재실행)·
+        # `no_mention`(유니버스 무관 기사)·`left_by_limit`(다음 런이 집는 백로그). 유실은
+        # **태깅을 시도했는데 결과가 없는 것** — LLM 오류·파싱 실패·제목 결측·문서분류 이상.
+        "ops": {
+            "records_out": rows_written,
+            "failed_records": len(failures) + sum(
+                status_counts.get(s, 0)
+                for s in ("llm_error", "llm_unparseable", "no_title", "bad_doc_class")),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, checked_date, run_id),

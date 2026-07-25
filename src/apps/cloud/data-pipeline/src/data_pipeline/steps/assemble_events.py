@@ -1175,6 +1175,14 @@ def run(
         "anchorless_events": anchorless_events,
         "dart_matched": dart_matched, "dart_ambiguous": dart_ambiguous,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ 유실이 아닌 것: `already_normalized`(멱등)·
+        # 유니버스 밖 기사. 유실은 **분류했는데 이벤트가 쓸모없게 된 것** — stage 오염으로 거절된
+        # 건과 아규먼트가 통째로 빈 건(event_argument 가 비면 threading·엔진 소비에서 빠진다).
+        # `arguments_unresolved`(일부 인자 미해소)는 이벤트 자체는 남으므로 세지 않는다.
+        "ops": {
+            "records_out": events_created,
+            "failed_records": len(failures) + stage_rejected + anchorless_events,
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

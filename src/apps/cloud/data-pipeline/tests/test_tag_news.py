@@ -317,6 +317,9 @@ def test_quality_log_records_what_happened(tmp_path):
     assert log["articles_tagged"] == 1
     assert log["articles_skipped_already_tagged"] == 0
     assert log["status_counts"] == {"ok": 1}
+    # 원장 봉투(ALPHA-181): 산출은 쓴 행이고, ok 판정은 유실이 아니다. 멱등 재실행의
+    # already_tagged·한도로 남긴 백로그(left_by_limit)를 유실로 세면 매 런 INCOMPLETE 가 된다.
+    assert log["ops"] == {"records_out": log["rows_written"], "failed_records": 0}
     assert log["tagger_version"] == TAGGER_VERSION
     assert log["ontology_version"] == ontology_version()
 

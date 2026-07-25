@@ -61,7 +61,11 @@ def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
 
 
 def _load_log(storage: Storage, prefix: str, run_id: str) -> dict | None:
-    """dataset 프리픽스 아래에서 이 run_id 의 로그(런당 1건)를 찾아 파싱. 없으면 None."""
+    """dataset 프리픽스 아래에서 이 run_id 의 로그(런당 1건)를 찾아 파싱. 없으면 None.
+
+    ponytail: dataset 프리픽스 전체 LIST(O(런 이력)). 등록 작업이 늘면 런당 LIST 도 같이 는다 —
+    이력이 커져 느려지면 날짜 후보(오늘·어제)로 정확 키를 만드는 쪽으로 좁혀라.
+    """
     import json
 
     for key in storage.list_keys(prefix):
@@ -74,48 +78,50 @@ def _load_log(storage: Storage, prefix: str, run_id: str) -> dict | None:
     return None
 
 
+def _log_prefix(entry: catalog.CatalogEntry, run_id: str) -> str:
+    """이 작업의 로그가 사는 dataset 프리픽스. 벤더가 있으면 collection_log, 없으면 quality_log.
+
+    키 자체를 만들지 않고 프리픽스만 만드는 이유: 날짜 세그먼트(started_date·checked_date)가
+    **런 시작 UTC 날짜**라 자정을 넘긴 런에서 우리가 추측한 날짜와 어긋난다. 경로 조립은
+    lake.storage 빌더(경로 규약 SSOT) 밖에서 하지 않는다 — 빌더로 만든 뒤 날짜 뒤를 자른다.
+    """
+    dataset = entry.log_partition_dataset()
+    if entry.source_vendor:
+        return collection_log_key(entry.source_vendor, dataset, "", run_id).split("/started_date=")[0] + "/"
+    return quality_log_key(dataset, "", run_id).split("/checked_date=")[0] + "/"
+
+
 def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: int) -> dict:
     """스텝이 남긴 S3 로그에서 data_status 신호를 뽑는다. 로그 없으면 {}(→ UNKNOWN, 스펙 §6).
 
     새 계측을 심지 않고 **이미 나오는 신호**를 읽는다(ALPHA-182 정신). 성공 exit 를 자동으로
     VALID 로 올리지 않는다 — derive_data_status 가 증명 규칙을 적용한다.
+
+    **task_key 분기가 없다**(ALPHA-181). 스텝이 로그에 남기는 `ops` 봉투(`records_out`·
+    `failed_records`)를 읽을 뿐이다. 이 둘은 스텝만 아는 **판정**이라 여기서 재구성할 수 없다 —
+    예컨대 적재의 `skipped_unknown_instrument` 는 in-band 유실이지만 `skipped_self`(ETF 자기보유
+    제외)는 정상 동작이다. 그래서 봉투는 그 카운터 옆(스텝 안)에 산다.
     """
-    if task_key == "PRICE_COLLECTION_KIS":
-        log = _load_log(
-            storage, collection_log_key("kis", "price_daily", "", run_id).split("/started_date=")[0] + "/",
-            run_id)
-        if not log:
-            return {"exit_code": exit_code}
-        status = log.get("status")
-        return {
-            "exit_code": exit_code,
-            "records_out": log.get("records_saved"),
-            "failed_records": log.get("records_failed_symbols", 0),
-            "request_completed": status in ("success", "skipped"),
-            # 거래일에 가격 0건은 정상이 아니다 — VALID_EMPTY 를 막아 UNKNOWN 으로 남긴다.
-            "empty_allowed": False,
-        }
-    dataset = "price_daily_load" if task_key == "LOAD_PRICE_DAILY" else "price_daily"
-    log = _load_log(
-        storage, f"operations_archive/data_quality_logs/dataset={dataset}/", run_id)
+    entry = catalog.get(task_key)
+    if entry is None:
+        return {"exit_code": exit_code}  # 미등록 작업 — 관측 대상이 아니다
+    log = _load_log(storage, _log_prefix(entry, run_id), run_id)
     if not log:
         return {"exit_code": exit_code}
-    if task_key == "LOAD_PRICE_DAILY":
-        records_out = (log.get("created", 0) + log.get("updated", 0) + log.get("already_present", 0))
-        # 적재 탈락은 전부 in-band 유실이다 — 정체성 결측·미등록 종목·모호 ticker·CHECK 위반 모두
-        # 실제 입력 행이 원장에 안 들어간 것이라 failed 로 센다. 안 세면 부분 유실이 VALID 로
-        # 위장된다(edge-review G/H). 미등록 종목은 마스터 갭이지만 그 행은 유실이 맞다.
-        failed = (len(log.get("failures", []))
-                  + log.get("skipped_check_violation", 0)
-                  + log.get("skipped_unknown_instrument", 0)
-                  + log.get("skipped_ambiguous_ticker", 0)
-                  + log.get("skipped_missing_identity", 0))
-    else:  # NORMALIZE_PRICE
-        records_out = log.get("records_passed")
-        failed = log.get("records_failed", 0)
+    ops = log.get("ops")
+    if not isinstance(ops, dict):
+        # 봉투 없음 = 신호 미제공. 조용히 낙관값(0건·허용)으로 메우지 않는다 — 그러면 유실이
+        # VALID 로 위장된다. UNKNOWN 으로 남기되 드러낸다(Rule 12).
+        logger.warning("ops 봉투 없음(task=%s run_id=%s) — data_status UNKNOWN", task_key, run_id)
+        return {"exit_code": exit_code}
     return {
-        "exit_code": exit_code, "records_out": records_out, "failed_records": failed,
-        "request_completed": True, "empty_allowed": False,
+        "exit_code": exit_code,
+        "records_out": ops.get("records_out"),
+        "failed_records": ops.get("failed_records"),
+        # collection_log 만 status 를 남긴다(수집기). quality_log 는 status 필드가 없고 성공
+        # 증명이 exit_code 라, exit_code==0 게이트를 통과한 시점에서 요청은 완료된 것이다.
+        "request_completed": log.get("status", "success") in ("success", "skipped"),
+        "empty_allowed": entry.empty_allowed,
     }
 
 

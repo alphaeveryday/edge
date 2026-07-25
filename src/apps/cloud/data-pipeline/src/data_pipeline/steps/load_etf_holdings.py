@@ -283,6 +283,13 @@ def run(
         "weight_sum_anomalies": weight_sum_anomalies,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ `skipped_self`(ETF 가 자기 자신을 보유로 들고 온
+        # 행 제외)는 **정상 동작이지 유실이 아니다** — 유실로 세면 매 런 INCOMPLETE 가 된다.
+        "ops": {
+            "records_out": already + created + updated,
+            "failed_records": (len(failures) + skipped_missing_identity + skipped_unknown_etf
+                               + skipped_unknown_constituent + skipped_bad_weight),
+        },
     }
     if weight_sum_anomalies:
         logger.warning("ETF 비중 합 이상 %d건 — 부분 커버리지/정제 점검 필요", len(weight_sum_anomalies))

@@ -266,6 +266,14 @@ def run(
         "facts_written": facts_written,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 산출은 fact 행이다(문서는 그 부속). 발행사 미해소·
+        # 보고일 결측·유효 fact 없음·거절은 그 공시가 fact 로 안 남은 유실이다.
+        "ops": {
+            "records_out": facts_written,
+            "failed_records": (len(failures) + skipped_missing_identity
+                               + skipped_unresolved_issuer + skipped_no_report_date
+                               + skipped_no_valid_fact + rejected_facts),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

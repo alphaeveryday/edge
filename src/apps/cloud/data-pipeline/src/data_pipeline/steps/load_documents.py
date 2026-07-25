@@ -169,6 +169,12 @@ def run(
         "already_present": already, "created": created,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 정체성·시각 결측은 그 기사가 문서 마스터에 안
+        # 들어간 유실이다(설명이 인용할 근거가 그만큼 없다).
+        "ops": {
+            "records_out": already + created,
+            "failed_records": len(failures) + skipped_missing_identity + skipped_no_available_at,
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

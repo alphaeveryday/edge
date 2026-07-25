@@ -37,6 +37,20 @@ class CatalogEntry:
     # deadline = expected_at + 이 오프셋. ⚠️ 스테이지별 SLA 가 코드에 없어(조사 결과) 잠정값이다
     # (스펙 §19: 확인 불가 요구사항은 가정으로 명시). 실측 후 조정 대상.
     deadline_offset_seconds: int = 3600
+    # ── 관측(_observe_from_log)이 로그를 찾고 해석하는 데 필요한 정적 속성 (ALPHA-181) ──
+    # 수집 스텝만 벤더가 있다. 빈 문자열 = 정제·적재 스텝(collection_log 가 아니라 quality_log).
+    # 이 한 필드가 "로그 2종·경로 빌더 2개" 분기를 대신한다.
+    source_vendor: str = ""
+    # 로그 파티션의 dataset 이 도메인 dataset 과 다를 때만 채운다(적재 스텝의 `_load` 접미사 등).
+    # 빈 문자열 = dataset 과 동일.
+    log_dataset: str = ""
+    # 0건이 이 데이터셋의 계약상 정상인가. 기본 False = 0건이면 정직하게 UNKNOWN — 근거 없이
+    # VALID_EMPTY 로 올리면 "할 일이 없었다"와 "증거가 없다"가 섞인다(derive_data_status 계약).
+    empty_allowed: bool = False
+
+    def log_partition_dataset(self) -> str:
+        """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
+        return self.log_dataset or self.dataset
 
 
 # 가격 수직 슬라이스 3작업. sfn_state_name 은 statemachine.tf 의 실제 state 와 일치해야 한다.
@@ -51,6 +65,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="kis",
         depends_on=(),
         deadline_offset_seconds=3600,
+        source_vendor="kis",
+        # 거래일에 가격 0건은 정상이 아니다 — VALID_EMPTY 를 막아 UNKNOWN 으로 남긴다.
+        empty_allowed=False,
     ),
     CatalogEntry(
         task_key="NORMALIZE_PRICE",
@@ -79,6 +96,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 가 canonical 을 쓴 뒤라야 이 작업이 읽을 대상이 있다는 것이 핵심 선행이다.
         depends_on=("NORMALIZE_PRICE",),
         deadline_offset_seconds=7200,
+        # 적재 스텝의 quality_log 는 `_load` 접미사 파티션에 쓴다(정제 로그와 안 섞이게).
+        log_dataset="price_daily_load",
+        empty_allowed=False,
     ),
 )
 
@@ -121,6 +141,9 @@ def content_hash() -> str:
             "ecs_task_definition": e.ecs_task_definition,
             "depends_on": sorted(e.depends_on),
             "deadline_offset_seconds": e.deadline_offset_seconds,
+            "source_vendor": e.source_vendor,
+            "log_dataset": e.log_dataset,
+            "empty_allowed": e.empty_allowed,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]

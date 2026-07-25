@@ -83,7 +83,11 @@ def run(storage: Storage, run_id: str, *, db: DbConfig, source) -> int:
         base = {"candidates": candidates, "updated": updated, "unmatched": unmatched,
                 "rejected": rejected, "updated_sample": updated_sample,
                 "unmatched_sample": unmatched_sample, "rejected_sample": rejected_sample,
-                "failures": failures, "exit_code": exit_code}
+                "failures": failures, "exit_code": exit_code,
+                # 원장 관측용 공통 봉투(ALPHA-181). unmatched(DART 가 모르는 회사)·rejected 는
+                # 그 회사의 corp_code 가 안 채워진 것이라 유실이다 — 공시 조인이 그만큼 빈다.
+                "ops": {"records_out": updated,
+                        "failed_records": len(failures) + unmatched + rejected}}
         return {**base, **over}
 
     # 키 미주입·비활성(로컬 등)은 실패가 아니라 명시적 skip — ingest 경로와 동일하게 존중한다

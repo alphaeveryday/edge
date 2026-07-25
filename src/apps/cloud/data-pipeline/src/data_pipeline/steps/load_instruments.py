@@ -285,6 +285,12 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "already_present": existing, "created": created, "created_rows": created_rows,
         "etfs_read": etfs_read, "etfs_already_present": etfs_existing, "etfs_created": etfs_created,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 마스터는 구성종목·ETF 두 축을 한 테이블에 적재하므로
+        # 둘을 합친다. MIC 미해소(skipped_no_mic)는 그 종목이 마스터에 안 들어간 유실이다.
+        "ops": {
+            "records_out": existing + created + etfs_existing + etfs_created,
+            "failed_records": len(failures) + skipped_no_mic,
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),
