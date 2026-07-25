@@ -20,12 +20,15 @@ const queryClient = new QueryClient({
   }),
 });
 
-// dev 한정 세션 쿠키 확보 후 렌더 — 첫 쿼리들이 401 로 헛돌지 않게 한다. 조건이
-// 정적(import.meta.env.DEV)이라 prod 번들에서는 분기·동적 import 청크가 통째로
-// 제거된다 — 데모 자격증명이 배포 번들에 실리지 않는다. 실패해도 화면은 띄운다
-// (각 쿼리의 에러 표면이 원인을 드러낸다 — 조용한 공백 화면 금지).
+// 세션 쿠키 확보 후 렌더 — 첫 쿼리들이 401 로 헛돌지 않게 한다(콘솔 API 는 fail-closed).
+// 로그인 화면(ALPHA-486/423) 도입 전까지의 임시 브릿지다. 두 빌드에서만 켠다:
+//   - dev(import.meta.env.DEV): 로컬 개발.
+//   - 데모 박스 서빙 빌드(VITE_DEMO_AUTOSESSION='true', Dockerfile 이 설정): SSM 터널 데모.
+// 두 조건 모두 정적이라, 실 온프렘 빌드(플래그 없음)에서는 분기·동적 import 청크가 통째로
+// 제거돼 데모 자격증명이 번들에 실리지 않는다. 실패해도 화면은 띄운다(각 쿼리 에러 표면이
+// 원인을 드러낸다 — 조용한 공백 화면 금지). 로그인 화면 도입 시 이 브릿지·플래그를 제거한다.
 async function bootstrapDevSession(): Promise<void> {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTOSESSION !== 'true') return;
   const { ensureDevSession } = await import('./api/devSession');
   await ensureDevSession();
 }

@@ -39,6 +39,8 @@ jobs:
           - { svc: intake, dockerfile: src/apps/onprem/intake/Dockerfile, context: src }
           - { svc: sync-agent, dockerfile: src/apps/onprem/sync-agent/Dockerfile, context: src }
           - { svc: mock-broker, dockerfile: demo/mock-broker/Dockerfile, context: demo }
+          - { svc: tenant-console-api, dockerfile: src/apps/onprem/tenant-console-api/Dockerfile, context: src }
+          - { svc: tenant-console-ui, dockerfile: src/apps/onprem/tenant-console-ui/Dockerfile, context: src }
     steps:
       - uses: actions/checkout@v4
       - name: Configure AWS credentials (OIDC)
@@ -109,7 +111,7 @@ jobs:
           # up -d 는 앱이 startup 후 crash-loop 해도 exit 0 이라 실패를 못 드러낸다(예: validate 실패).
           # 필수 서비스가 running 인지 단언해 fail-loud 한다(flyway 는 exited(0) 정상이라 제외).
           fail=0
-          for svc in postgres-onprem sync-agent intake screening-worker publication-api mock-broker; do
+          for svc in postgres-onprem sync-agent intake screening-worker publication-api mock-broker tenant-console-api tenant-console-ui; do
             state="\$(docker compose ps --format '{{.State}}' "\$svc" 2>/dev/null || echo missing)"
             echo "\$svc: \$state"
             [ "\$state" = running ] || fail=1

@@ -132,5 +132,33 @@ services:
     ports:
       - "${MOCK_BROKER_PORT:-8080}:8080"
 
+  # [edge-onprem] 검수 콘솔 API — 온프렘 PG 조회·전이. 세션 인증(ADR-0025). 호스트 미노출(내부망만).
+  # 기동 시 bootstrap-accounts(admin@demo.edge.local·reviewer@demo.edge.local)를 member 로 자동 시드.
+  tenant-console-api:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/tenant-console-api:${IMAGE_TAG:-0.1.0}
+    container_name: edge-tenant-console-api
+    restart: unless-stopped
+    depends_on:
+      flyway-onprem:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
+      SPRING_DATASOURCE_USERNAME: edge
+      SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
+      # 부트스트랩 비밀번호는 앱 기본값(demo-admin-1·demo-reviewer-1)을 그대로 쓴다 — override 를
+      # 열지 않는다. UI 자동로그인(ensureDevSession)이 빌드타임에 같은 기본값을 baked 하므로,
+      # API 쪽만 런타임에 바꾸면 두 값이 갈려 자동로그인이 401 로 깨진다(독립 설정 금지).
+
+  # [edge-onprem] 검수 콘솔 UI(nginx) — SPA 정적 + /api → tenant-console-api 프록시(한 오리진 co-host).
+  # 127.0.0.1:8090 에만 바인딩 — 공개 표면 0, SSM 터널로만 도달(내부 도구 자세). README 참조.
+  tenant-console-ui:
+    image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/tenant-console-ui:${IMAGE_TAG:-0.1.0}
+    container_name: edge-tenant-console-ui
+    restart: unless-stopped
+    depends_on:
+      - tenant-console-api
+    ports:
+      - "127.0.0.1:8090:80"
+
 volumes:
   edge-postgres-onprem-data:

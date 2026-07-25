@@ -6,7 +6,7 @@
 
 locals {
   # 박스가 compose 로 pull 하는 데모 이미지(ALPHA-533 foundation ECR). ARN 은 account/region 으로 구성.
-  demo_image_names = ["publication-api", "screening-worker", "intake", "sync-agent", "mock-broker"]
+  demo_image_names = ["publication-api", "screening-worker", "intake", "sync-agent", "mock-broker", "tenant-console-api", "tenant-console-ui"]
   demo_ecr_arns = [
     for n in local.demo_image_names :
     "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/${n}"
