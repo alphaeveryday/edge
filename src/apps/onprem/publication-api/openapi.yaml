@@ -44,7 +44,11 @@ paths:
         - name: trade_date
           in: query
           required: false
-          description: 조회 거래일(yyyy-MM-dd). 생략 시 최신 거래일 게시분. 형식이 틀린 값은 400(SERV4004).
+          description: >-
+            조회 거래일(yyyy-MM-dd). 생략하거나 빈 값(`trade_date=`)이면 생략으로 처리해 최신
+            거래일 게시분을 반환한다(서버 `parseTradeDate` 의 `isBlank` 분기). 값이 비어 있지
+            않은데 형식이 틀린 경우에만 400(SERV4004). 아래 `format: date` 는 비어 있지 않은
+            값의 형식 안내이며, 빈 값을 무효로 강제하지 않는다 — 연동사는 빈 값을 오류로 다루지 말 것.
           schema:
             type: string
             format: date
