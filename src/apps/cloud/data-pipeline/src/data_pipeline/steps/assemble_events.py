@@ -285,7 +285,11 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: OntologyView,
     items, allowed_by_id = _llm_items(chunk, entity_index)
     payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
     out: dict[str, dict] = {}
-    for item in payload.get("items", []):
+    raw_items = payload.get("items")
+    # items 컨테이너·항목이 비정형이어도 그 항목만 버린다(국소 실패) — 배치 전체 롤백 금지.
+    for item in (raw_items if isinstance(raw_items, list) else ()):
+        if not isinstance(item, dict):
+            continue
         validated = _validate_gate(item, view, entity_index, allowed_by_id)
         if validated is not None:
             out[validated["article_id"]] = validated
@@ -336,7 +340,10 @@ def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[d
         complete_fn, system,
         json.dumps({"event_type_code": event_type_code, "items": items}, ensure_ascii=False))
     out: dict[str, dict] = {}
-    for item in payload.get("items", []):
+    raw_items = payload.get("items")
+    for item in (raw_items if isinstance(raw_items, list) else ()):
+        if not isinstance(item, dict):
+            continue  # 비객체 항목(null·스칼라)은 그 항목만 결측 취급 — 날짜 롤백 금지
         article_id = str(item.get("id") or "")
         cls = gate.get(article_id)
         if cls is None or cls["event_type_code"] != event_type_code:
