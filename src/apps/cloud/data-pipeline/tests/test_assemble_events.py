@@ -13,6 +13,7 @@ stage 메뉴 통제(자유텍스트 오염 차단), novelty 세분(CORRECTION·D
 
 import io
 import json
+from datetime import datetime
 
 import pytest
 
@@ -159,6 +160,10 @@ class _FakeCursor:
             self._rows = [(t, s) for t, s in conn.thread_current_stages.items()]
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items()]
+        elif upper.startswith("SELECT EM.SOURCE_EVENT_ID"):
+            self._rows = list(conn.dart_measures)
+        elif upper.startswith("SELECT DD.ISSUER_ACTOR_ID"):
+            self._rows = list(conn.dart_facts)
 
     def executemany(self, sql, rows):
         self._conn.batches.append((" ".join(sql.split()), list(rows)))
@@ -176,7 +181,7 @@ class _FakeCursor:
 class _FakeConn:
     def __init__(self, instruments=None, assembled_articles=(), doc_overrides=None,
                  assertion_rows=None, prior_thread_counts=None, unthreaded_events=(),
-                 thread_current_stages=None):
+                 thread_current_stages=None, dart_measures=(), dart_facts=()):
         self.log: list = []
         self.batches: list = []
         self.instruments = instruments or [("005930", "inst_SAMSUNG"), ("000660", "inst_HYNIX"),
@@ -193,6 +198,9 @@ class _FakeConn:
         # 사전 존재하는 미연결 이벤트 행: (source_event_id, event_type_code, available_at,
         # lifecycle_stage, predicate_code, role_code, entity_id) — 역할당 한 행.
         self.unthreaded_events = list(unthreaded_events)
+        # DART 승격 대조 대역(ALPHA-547) — 측정행·공시 사실. 기본 빈 목록 = 승격 없음.
+        self.dart_measures = list(dart_measures)
+        self.dart_facts = list(dart_facts)
 
     def cursor(self):
         cur = _FakeCursor(self)
@@ -1077,3 +1085,37 @@ def test_unparseable_required_measure_keeps_completeness_partial(tmp_path, monke
     [meas] = _batch(conn, "event_measure")
     # 행은 남아 surface 를 보존한다 — 소비자가 value_source 로 재판정할 수 있다.
     assert (meas[3], meas[4], meas[7]) == ("대규모", None, "UNRESOLVED")
+
+
+# ── v4: DART 값 승격 (ALPHA-547) ─────────────────────────────────────────────
+def test_assemble_promotes_parsed_measure_to_dart_in_same_run(tmp_path, monkeypatch):
+    """조립 직후 같은 런에서 PARSED 금액이 공시 대조(동일 발행회사·±8%·±7일·후보 1건)로
+    DART 로 승격된다 — UPDATE 는 value_source·dart_rcept_no 만 만지고 rcept 번호가 lineage 로
+    남는다(ALPHA-547 컬럼 소유 분리)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 1,883억 공급계약")])
+    doc_id = _stable_id("doc", "bigkinds", "a1")
+    asrt_id = _stable_id("asrt", doc_id, _CONTRACT, _CONTRACT_PRED)
+    evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
+    conn = _FakeConn(
+        assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED),
+        dart_measures=[(evt_id, 0, 188_300_000_000.0, "actor_SAMSUNG",
+                        datetime.fromisoformat("2026-07-15T09:00:00+09:00"))],
+        dart_facts=[("actor_SAMSUNG", 190_000_000_000, "20260714000123",
+                     datetime.fromisoformat("2026-07-14T16:00:00+09:00"))],
+    )
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item("a1", predicate=_CONTRACT_PRED,
+                       measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
+                                  "basis": "TOTAL", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    updates = [rows for sql, rows in conn.batches
+               if sql.upper().startswith("UPDATE EVENT_MEASURE")]
+    assert updates == [[("20260714000123", evt_id, 0)]]
+    log = _log(storage)
+    assert (log["dart_matched"], log["dart_ambiguous"]) == (1, 0)

@@ -45,6 +45,7 @@ from ..db import connect, stable_domain_id
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 from ..tagging.ontology import default_predicate, identity_roles, load_profiles
+from .dart_values import match_dart_values
 
 logger = logging.getLogger(__name__)
 
@@ -1089,6 +1090,7 @@ def run(
     news_read = in_universe_count = already_normalized = 0
     classified = events_created = threaded = unknown_thread = 0
     stage_rejected = arguments_unresolved = anchorless_events = 0
+    dart_matched = dart_ambiguous = 0
     failures: list[dict] = []
     exit_code = 0
 
@@ -1144,12 +1146,19 @@ def run(
                 # 계약상 스레드가 안 선 사실이 묻힌다(ALPHA-457, Rule 12).
                 threaded += len(to_thread) - unknown
                 unknown_thread += unknown
+
+            # DART 값 승격(ALPHA-547) — 같은 런·같은 트랜잭션에서 PARSED 금액을 공시 사실과
+            # 대조해 승격한다. event_measure 의 INSERT writer 는 조립뿐이고, 이 호출은
+            # value_source·dart_rcept_no 두 컬럼만 UPDATE 한다(컬럼 소유 분리, ALPHA-538 규약).
+            if targets:
+                dart_matched, dart_ambiguous = match_dart_values(conn, targets[0], targets[-1])
     except Exception as exc:
         # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
         events_created = threaded = unknown_thread = 0
         stage_rejected = arguments_unresolved = anchorless_events = 0
+        dart_matched = dart_ambiguous = 0
         exit_code = 1
 
     log = {
@@ -1164,6 +1173,7 @@ def run(
         "stage_rejected": stage_rejected,
         "arguments_unresolved": arguments_unresolved,
         "anchorless_events": anchorless_events,
+        "dart_matched": dart_matched, "dart_ambiguous": dart_ambiguous,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -1176,9 +1186,9 @@ def run(
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
         " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
-        " failures=%d",
+        " dart_matched=%d dart_ambiguous=%d failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
         threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
-        len(failures),
+        dart_matched, dart_ambiguous, len(failures),
     )
     return exit_code
