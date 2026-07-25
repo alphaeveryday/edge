@@ -59,6 +59,17 @@ def test_range_takes_midpoint_and_inherits_right_unit():
     assert (parsed.value, parsed.unit, parsed.parse_flag) == (
         3_500_000_000_000.0, "KRW", FLAG_APPROX_OR_RANGE)
 
+    # 좌측이 자리표기를 안 가졌으면 작은 자리까지 물려받는다 — "1~2천억원" 은 1천억~2천억.
+    # 큰 자리만 물려받으면 1억+2천억의 중앙값(약 1000.5억)으로 계약 규모가 150배 깎인다.
+    assert parse_amount("1~2천억원").value == 150_000_000_000.0
+    assert parse_amount("1~2백만원").value == 1_500_000.0
+
+    # 좌측이 이미 작은 자리를 가졌으면 큰 자리만 — "3천~4천억원" 은 3500억(천 이중곱 방지).
+    assert parse_amount("3천~4천억원").value == 350_000_000_000.0
+
+    # 비통화 range 도 동형 — 물려받을 자리가 없으면 값 그대로.
+    assert parse_amount("50~60%").value == 55.0
+
 
 def test_approx_marker_flags_but_keeps_value():
     """'약 5000억원' — 근사 표지는 값을 버리지 않고 플래그로 드러낸다(버리면 손실,

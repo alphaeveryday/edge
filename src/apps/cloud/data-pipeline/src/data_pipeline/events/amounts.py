@@ -65,11 +65,12 @@ class _Run:
     currency_marked: bool | None
     had_unit_token: bool
     had_place: bool
+    first_small_product: float  # 첫 세그먼트의 작은 자리(천백십) 곱
     first_big_product: float  # 첫 세그먼트의 큰 자리(조억만) 곱 — range 좌측이 물려받는 몫
 
 
 def _segment_value(digits: str, places: str) -> tuple[float, float, float]:
-    """→ (그룹 내 가수, 큰 자리 곱, 세그먼트 전체 자리곱)."""
+    """→ (그룹 내 가수, 작은 자리 곱, 큰 자리 곱)."""
     number = float(digits.replace(",", ""))
     small = big = 1.0
     for char in places:
@@ -77,7 +78,7 @@ def _segment_value(digits: str, places: str) -> tuple[float, float, float]:
             small *= _SMALL_PLACES[char]
         else:
             big *= _BIG_PLACES[char]
-    return number * small, big, small * big
+    return number * small, small, big
 
 
 def _unit_after(text: str, end: int) -> tuple[str | None, bool | None]:
@@ -101,17 +102,17 @@ def _runs(text: str) -> list[_Run]:
     for group in grouped:
         total = 0.0
         pending = 0.0  # 아직 큰 자리(조억만)를 못 만난 가수
-        first_big_product = 1.0
+        first_small_product = first_big_product = 1.0
         had_place = False
         for index, match in enumerate(group):
-            mantissa, big, product = _segment_value(match.group(1), match.group(2))
+            mantissa, small, big = _segment_value(match.group(1), match.group(2))
             pending += mantissa
             if big > 1.0:
                 total += pending * big
                 pending = 0.0
             if index == 0:
-                first_big_product = big
-            if product >= _IMPLIED_KRW_THRESHOLD:
+                first_small_product, first_big_product = small, big
+            if small * big >= _IMPLIED_KRW_THRESHOLD:
                 had_place = True
         total += pending
         start, end = group[0].start(), group[-1].end()
@@ -123,7 +124,8 @@ def _runs(text: str) -> list[_Run]:
         currency_marked = marked
         if unit is None and had_place:
             unit, currency_marked = "KRW", False
-        runs.append(_Run(total, unit, currency_marked, marked is not None, had_place, first_big_product))
+        runs.append(_Run(total, unit, currency_marked, marked is not None, had_place,
+                         first_small_product, first_big_product))
     return runs
 
 
@@ -156,10 +158,15 @@ def parse_amount(surface: str | None) -> AmountParse:
         if left is not None and right is not None:
             left_value = left.value
             if left.unit is None:
-                # 좌측 경계는 '빠진 몫'만 물려받는다: 큰 자리(조억만)+단위. "3~4조원"→3×1e12,
-                # "3천~4천억원"→3천은 이미 작은 자리를 가졌으니 억(1e8)만 곱한다 — 첫
-                # 세그먼트 전체 곱(천×억)을 곱하면 천이 두 번 들어가 150조가 된다(#255 P2).
-                left_value *= right.first_big_product
+                # 좌측 경계는 '빠진 몫'만 물려받는다. 큰 자리(조억만)는 항상 빠졌고, 작은
+                # 자리(천백십)는 좌측이 이미 가졌으면 빠지지 않았다:
+                #   "3~4조원"    → 3×1e12         (좌측 자리 없음 → 전체)
+                #   "1~2천억원"  → 1×(1e3×1e8)    (좌측 자리 없음 → 천까지 물려받아 1500억)
+                #   "3천~4천억원" → 3천×1e8        (좌측이 천을 가졌으니 억만 — 천 이중곱 방지)
+                factor = right.first_big_product
+                if left.first_small_product == 1.0:
+                    factor *= right.first_small_product
+                left_value *= factor
             midpoint = (left_value + right.value) / 2.0
             if _is_calendar_year(midpoint, right.unit):
                 return AmountParse(None, None, FLAG_CALENDAR_YEAR, None)
