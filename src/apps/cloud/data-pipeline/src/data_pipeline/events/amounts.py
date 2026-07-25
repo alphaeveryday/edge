@@ -19,7 +19,10 @@ FLAG_NO_NUMBER = "no_number"
 # event_measure.basis CHECK 어휘 — 추출 계약(llm-extract-v4)과 동일.
 BASIS_VALUES = frozenset({"TOTAL", "ANNUAL", "UNKNOWN"})
 
-_PLACE_VALUES = {"조": 10**12, "억": 10**8, "만": 10**4, "천": 10**3, "백": 10**2, "십": 10}
+# 큰 자리(조억만)는 그룹 경계, 작은 자리(천백십)는 그룹 안 가수 배율이다 —
+# "1천200억" = (1천+200)×억. 세그먼트 독립 합산은 고차 자리를 마지막 세그먼트에만 곱한다.
+_SMALL_PLACES = {"천": 10**3, "백": 10**2, "십": 10}
+_BIG_PLACES = {"조": 10**12, "억": 10**8, "만": 10**4}
 # 만 이상의 자릿수 표기는 KR 뉴스 관례상 단위 없이도 원화로 읽는다.
 _IMPLIED_KRW_THRESHOLD = 10**4
 _SEGMENT_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)([조억만천백십]*)")
@@ -59,12 +62,16 @@ class _Run:
     first_place_product: float
 
 
-def _segment_value(digits: str, places: str) -> tuple[float, float]:
+def _segment_value(digits: str, places: str) -> tuple[float, float, float]:
+    """→ (그룹 내 가수, 큰 자리 곱, 세그먼트 전체 자리곱)."""
     number = float(digits.replace(",", ""))
-    product = 1.0
+    small = big = 1.0
     for char in places:
-        product *= _PLACE_VALUES[char]
-    return number * product, product
+        if char in _SMALL_PLACES:
+            small *= _SMALL_PLACES[char]
+        else:
+            big *= _BIG_PLACES[char]
+    return number * small, big, small * big
 
 
 def _unit_after(text: str, end: int) -> tuple[str | None, bool | None]:
@@ -87,15 +94,20 @@ def _runs(text: str) -> list[_Run]:
     runs: list[_Run] = []
     for group in grouped:
         total = 0.0
+        pending = 0.0  # 아직 큰 자리(조억만)를 못 만난 가수
         first_place_product = 1.0
         had_place = False
         for index, match in enumerate(group):
-            value, product = _segment_value(match.group(1), match.group(2))
-            total += value
+            mantissa, big, product = _segment_value(match.group(1), match.group(2))
+            pending += mantissa
+            if big > 1.0:
+                total += pending * big
+                pending = 0.0
             if index == 0:
                 first_place_product = product
             if product >= _IMPLIED_KRW_THRESHOLD:
                 had_place = True
+        total += pending
         start, end = group[0].start(), group[-1].end()
         unit, marked = _unit_after(text, end)
         if unit is None and text[:start].rstrip().endswith("$"):

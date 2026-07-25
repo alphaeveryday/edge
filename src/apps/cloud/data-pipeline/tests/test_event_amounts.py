@@ -29,6 +29,20 @@ def test_jo_eok_mixed_run_sums_place_values():
     assert (parsed.value, parsed.unit) == (1_200_000_000_000.0, "KRW")
 
 
+def test_grouped_small_places_scale_with_trailing_big_place():
+    """1천200억원 — 천백십은 그룹 안 가수라 뒤따르는 억이 그룹 전체(1200)를 곱해야 한다.
+    세그먼트 독립 합산은 1천+200억=200억1천으로 계약 규모를 6배 가까이 깎는다(Codex #255 P2)."""
+    parsed = parse_amount("1천200억원")
+    assert (parsed.value, parsed.unit, parsed.parse_flag) == (120_000_000_000.0, "KRW", FLAG_OK)
+
+    parsed = parse_amount("1천2백만원")
+    assert (parsed.value, parsed.unit) == (12_000_000.0, "KRW")
+
+    # 조 그룹 뒤 억 그룹 — 그룹 경계(조억만)는 종전대로 합산이다.
+    parsed = parse_amount("1조2천억원")
+    assert (parsed.value, parsed.unit) == (1_200_000_000_000.0, "KRW")
+
+
 def test_bare_place_value_implies_krw():
     """단위 토큰 없는 '5000억' — 만 이상 자릿수는 KR 뉴스 관례상 원화로 읽는다
     (currency_marked=False 로 명시/관례를 구분해 남긴다)."""
