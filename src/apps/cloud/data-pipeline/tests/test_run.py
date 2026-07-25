@@ -211,6 +211,47 @@ def test_nav_shares_the_krx_etf_universe(monkeypatch):
     assert captured["window"] == ("2026-07-14", "2026-07-17")
 
 
+def _spy_inav(monkeypatch):
+    """ingest-raw-inav 분기가 KisInavSource 에 넘긴 interval_sec 을 캡처한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    class _Spy(run_mod.KisInavSource):
+        def __init__(self, config, etf_map, client, interval_sec=None):
+            captured["interval_sec"] = interval_sec
+            captured["etf_map"] = etf_map
+            super().__init__(config, etf_map, client, interval_sec=interval_sec)
+
+    monkeypatch.setattr(run_mod, "KisInavSource", _Spy)
+    monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
+    return run_mod, captured
+
+
+def test_inav_interval_은_기본값과_명시값_모두_어댑터로_전달된다(monkeypatch):
+    # WHY: 간격이 곧 조회 창(간격×30)이라 이 배선이 끊기면 폴링 주기와 창이 어긋나 갭이
+    #      나는데, iNAV 는 소급 조회가 안 돼 그 갭이 영구 유실이다(ALPHA-555). 값으로 고정한다.
+    run_mod, captured = _spy_inav(monkeypatch)
+
+    assert main(["ingest-raw-inav"]) == 0
+    assert captured["interval_sec"] == run_mod.DEFAULT_INTERVAL_SEC
+    assert captured["etf_map"], "iNAV 유니버스가 비어 있으면 수집 대상이 0이다"
+
+    assert main(["ingest-raw-inav", "--interval-sec", "10"]) == 0
+    assert captured["interval_sec"] == 10
+
+
+def test_inav_interval_0_은_조용히_기본값이_되지_않는다(monkeypatch):
+    # WHY: 어댑터는 1 미만을 거부하는데, CLI 가 `or` 로 기본값을 채우면 0 이 falsy 라
+    #      그 가드를 우회해 "60초로 수집 성공"이 된다 — 설정 오류가 성공으로 기록되는
+    #      전형적 Rule 12 위반이다. 0 이 실제로 터지는지 값으로 고정한다.
+    _spy_inav(monkeypatch)
+
+    with pytest.raises(ValueError, match="interval_sec"):
+        main(["ingest-raw-inav", "--interval-sec", "0"])
+
+
 def _spy_tag_news(monkeypatch):
     """tag-news 분기가 tag_news.run 에 넘긴 (from_date, to_date) 를 캡처한다.
     tag-news 는 LLM_API_KEY 가 필수라 넣어 주고, complete_fn 은 클로저만 만들어 호출 안 한다."""

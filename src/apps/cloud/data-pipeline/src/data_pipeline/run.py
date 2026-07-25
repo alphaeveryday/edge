@@ -469,7 +469,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
             PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
-            interval_sec=args.interval_sec or DEFAULT_INTERVAL_SEC,
+            # `or` 로 쓰면 0 이 falsy 라 조용히 기본값이 된다 — 어댑터의 1 미만 가드를
+            # CLI 가 우회해 잘못된 입력이 성공으로 기록된다(Rule 12).
+            interval_sec=(
+                DEFAULT_INTERVAL_SEC if args.interval_sec is None else args.interval_sec
+            ),
         )
         return ingest_raw_etf.run(
             settings, storage, inav_source, run_id,
