@@ -38,7 +38,7 @@ git status --short
 ```
 - **커밋된 브랜치 변경 + 미커밋(staged/unstaged) + 미추적 새 파일을 모두** 범위에 넣는다(합집합, fallback 아님). `git diff dev...HEAD` 는 커밋분만, `git diff HEAD` 는 추적 파일의 미커밋 변경만(**미추적 새 파일은 안 나온다**). 미추적 파일은 `git ls-files --others --exclude-standard` 로 나열해 **경로를 지시문에 명시**하고 Codex 에게 직접 읽으라고 지시한다 — line-by-line·시크릿 스캔이 새 config/소스에 든 버그·토큰을 놓치지 않게.
 - 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`, 또는 커밋 SHA·베이스 브랜치를 지시문 범위로).
-- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI? · **IaC**(`infra/`·terraform `.tf`/`.tftpl` — I각도)? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
+- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI? · **IaC**(`infra/`·terraform `.tf`/`.tftpl` — I각도)? · **프론트 서빙·패키징**(UI Dockerfile·정적 호스팅 conf·`VITE_*` 빌드 플래그·서빙되는 `dist` — J각도)? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
 
 ## Phase 1 — Codex 실행
 
@@ -94,6 +94,10 @@ echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
   - **ForceNew 교체 함정** — 값이 바뀌면 리소스를 **destroy+recreate** 하는 replacement-only 속성(`aws_instance.ami`·`subnet_id`·`availability_zone`, `aws_db_instance` 일부 등)이 이 변경으로 드리프트하는가. 특히 **data-source 재조회**(`data.aws_ami` 필터·`most_recent`)나 var 기본값 변경으로 값이 달라지면, 무관한 apply(IAM·SG 한 줄)마저 stateful 리소스(루트 EBS·`aws_ebs_volume`·PG/Redis named volume·RDS)를 통째로 갈아엎어 **데이터가 유실**된다. `lifecycle { ignore_changes = [...] }`·`prevent_destroy`·명시적 `-replace` 경로 같은 방어가 있는지 확인 — 없으면 후보(교체가 plan 에 드러나는지 `terraform plan` 으로 검증 권함). "신규 리소스만 반영"이라는 주석·PR 설명은 **코드로 강제되지 않으면 근거가 아니다**.
   - **와일드카드·most_recent 오선택** — AMI·이미지·리소스 이름 글롭이 의도 밖 변종을 고르는가(예: `al2023-ami-*` 가 ECS-optimized·minimal 변종을, `*-latest` 가 프리릴리스를 매치). `most_recent` 는 명명 규칙이 바뀌면 조용히 다른 이미지를 집으므로, 필터가 원하는 계열만 앵커하는지 본다.
   - **시크릿·state 노출** — SecureString·비밀값을 terraform 이 관리해 평문이 state 에 들어가는가(demo-onprem 패턴 — cert 는 ARN 만 구성하고 값은 운영자 CLI 주입). `ignore_changes` 로 가려선 안 되는 보안 관련 드리프트를 가리는가.
+- **J. 프론트 서빙·빌드↔런타임 정합** (프론트 **서빙·패키징** 변경 시 — UI Dockerfile·정적 호스팅(nginx/서버가 SPA 서빙)·`VITE_*` 빌드 플래그·이미지에 굽는 `dist`) — **서빙되는 프로덕션 빌드가 실제로 동작하는지** 적대적으로 확인한다. dev 에서만 되는 걸 배포판에서 되는 것으로 착각하는 게 주범이다:
+  - **인증 경로 실재** — fail-closed API 를 쓰는 SPA 가 **서빙 빌드에서 세션을 확립할 수단**(로그인 화면/라우트 또는 세션 부트스트랩)을 실제로 갖는가. dev 전용 헬퍼(`import.meta.env.DEV` 게이트의 자동로그인 등)가 prod 번들에서 **스트립**되고 로그인 UI 도 없으면, 화면은 로드되나 전 API 가 401 → **죽은 껍데기**다(로드=동작 아님). 라우트 목록·`App.tsx`·`main.tsx` 의 DEV 게이트를 실제로 읽어 배포 경로를 확인한다(ALPHA-554 실증).
+  - **빌드↔런타임 설정 정합** — 빌드타임에 baked 되는 값(`VITE_*`·API base URL·자동로그인 자격증명)이 짝이 되는 **런타임 서비스 설정**(API 비밀번호·서비스 호스트·경로)과 일치하는가. 독립적으로 설정 가능한 두 기본값은 한쪽만(예: compose env) override 되면 조용히 어긋나 로그인·호출이 깨진다 — 빌드는 재빌드해야 바뀌므로 런타임 override 를 못 따라간다(ALPHA-554: compose 부트스트랩 비번 override vs UI baked 비번). 값을 한 소스로 묶었는지, 아니면 override 를 안 열었는지 본다.
+  - **서빙 번들 시크릿 노출 등급** — 서빙 빌드가 배포되면 안 되는 자격증명·토큰·시크릿을 **번들에 baked** 하는가. 데모 전용 플래그(예: `VITE_DEMO_AUTOSESSION`)로만 포함되고 실 빌드는 스트립되는지, 그리고 그 번들의 **노출 표면**(공개 CDN vs 내부 SSM 터널)이 담긴 자격증명 등급에 맞는지 확인. 공개 표면에 실 자격증명이 실리면 최우선 finding.
 
 **검증 (같은 실행 안에서)**
 > 각 후보를 적대적으로 검증해 **CONFIRMED**(코드로 확증 — 실제 줄을 인용) 또는 **PLAUSIBLE**(현실적이나 미확증) 만 남겨라. 코드로 반증 가능한 것(실제 줄·불변식·이 diff 의 가드를 인용)은 버려라. 현실적 상태(경쟁·드문 에러 경로의 None·falsy-zero·경계 off-by-one·부분 실패)는 기본 PLAUSIBLE. 규칙 위반은 **정확한 규칙 번호와 정확한 줄을 인용할 수 있을 때만** 낸다 — 취향·막연한 "정신" 추론은 금지. 결함이 없으면 빈 배열을 반환하라. 지정된 JSON 스키마로만 응답하라.
