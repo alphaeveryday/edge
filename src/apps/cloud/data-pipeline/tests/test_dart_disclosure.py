@@ -137,16 +137,41 @@ def test_unmapped_corp_code_noted_not_crash(tmp_path):
     assert records == []
     assert len(source.fetch_failures) == 1
     assert "corp_code 없음" in source.fetch_failures[0]["error"]
+    # kind=unmapped — holdings 유니버스에는 DART 신고자가 아닌 종목이 상수로 섞여 매 런 같은
+    # 수가 걸린다. 재시도로 낫지 않는 구조적 결측이라 스텝이 런을 죽이지 않게 구분한다
+    # (ALPHA-477). 계측에서는 빠지지 않는다 — 아래 스텝 테스트가 그걸 고정한다.
+    assert source.fetch_failures[0]["kind"] == "unmapped"
 
 
-def test_no_symbol_mapping_plans_zero(tmp_path):
-    # WHY: symbol_map 에 없는 심볼은 이 소스가 건너뛴다(후속 소스가 커버) — planned_symbols 가
-    #      0이어야 스텝이 'no mapped targets' skip 으로 드러낸다.
+def test_kr_short_code_plans_by_identity_without_symbol_map(tmp_path):
+    # WHY: symbol_map 이 곧 수집 유니버스이던 시절엔 손으로 적은 9 종만 통과해, holdings 로
+    #      넓힌 유니버스(309 구성종목)가 plan() 에서 도로 잘려나갔다(ALPHA-477). KRX 단축코드는
+    #      corpCode.xml 의 stock_code 와 같은 값이라 항등이 기본이어야 한다. 문자 섞인 신형
+    #      단축코드(0093A0)도 대상이다 — isdigit 로 보면 그게 조용히 빠진다(ALPHA-463).
     client = FakeClient()
     source = _source(tmp_path, client, api_key="k", symbol_map={})
 
-    assert list(source.fetch(["005930"])) == []
+    assert source.plan(["005930", "0093A0"]) == [("005930", "005930"), ("0093A0", "0093A0")]
+
+
+def test_non_kr_symbol_excluded_from_plan(tmp_path):
+    # WHY: 항등 폴백이 US 심볼까지 주워담으면 국내 전용 API 인 OpenDART 에 엉뚱한 질의가 간다.
+    #      targets 에는 US 9 종이 섞여 있으므로 형태 판정(krx_short_code)이 경계를 지켜야 한다.
+    client = FakeClient()
+    source = _source(tmp_path, client, api_key="k", symbol_map={})
+
+    assert source.plan(["AAPL", "NVDA"]) == []
+    assert list(source.fetch(["AAPL"])) == []
     assert source.planned_symbols == 0
+
+
+def test_symbol_map_overrides_identity(tmp_path):
+    # WHY: symbol_map 은 삭제된 게 아니라 '항등이 아닌 예외'의 오버라이드 축으로 남는다
+    #      (수급 소스와 동일 정책). 오버라이드가 항등을 이기지 못하면 예외 종목을 표현할 길이 없다.
+    client = FakeClient()
+    source = _source(tmp_path, client, api_key="k", symbol_map={"005930": "999999"})
+
+    assert source.plan(["005930"]) == [("005930", "999999")]
 
 
 def test_status_013_is_empty_window_no_failure(tmp_path):
