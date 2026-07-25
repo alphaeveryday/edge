@@ -46,7 +46,7 @@ def _event_line(event: EventContext, name_by_ticker: dict[str, str]) -> str:
     )
     # 대표 참여자 외 종목 접지 참여자만 — entity ULID 는 LLM 에게 노이즈라 뺀다.
     extras = [
-        p for p in event.participants
+        p for p in event.arguments
         if p.ticker and p.entity_id != event.entity_id
     ]
     if extras:

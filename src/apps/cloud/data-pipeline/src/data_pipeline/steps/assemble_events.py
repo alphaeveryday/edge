@@ -5,7 +5,7 @@
 위에, 실험실(event-ontology repo) normalize 의 v4 추출 계약을 포팅했다(ALPHA-545):
 
 - **2콜 체인**: (a) 게이트+타입판별 콜(doc_class·event_type_code·primary_ticker) →
-  (b) 타입별 추출 콜(predicate·stage·participants[]·measures[]·confidence). 프롬프트
+  (b) 타입별 추출 콜(predicate·stage·arguments[]·measures[]·confidence). 프롬프트
   메뉴(술어·역할·수량·단계)는 `edge_ontology` 뷰에서 파생해 검증과 같은 출처를 쓴다.
 - **기록 확장**: source_event 에 predicate_code·confidence_level·completeness,
   event_argument 에 slot·mention_text·entity_kind·group_ord(참여자 전원 — 다중역할),
@@ -56,7 +56,7 @@ DATASET = "source_event"
 ASSEMBLER_VERSION = "assemble-v4"
 
 CLASSIFY_BATCH = 40
-# 추출 콜은 항목당 출력(participants·measures JSON)이 게이트보다 훨씬 커서 배치를 줄인다
+# 추출 콜은 항목당 출력(arguments·measures JSON)이 게이트보다 훨씬 커서 배치를 줄인다
 # (이식원 run_extraction batch_size=10 과 동일) — 40이면 응답이 max_tokens 에 잘릴 수 있다.
 EXTRACT_BATCH = 10
 TITLE_EVIDENCE_TYPE = "TITLE"
@@ -221,7 +221,7 @@ def _extract_system(view: OntologyView, event_type_code: str) -> str:
     하고 산술은 절대 하지 않는다(value/unit 은 events/amounts.py 가 계산 — Rule 5).
     """
     tv = view.types[event_type_code]
-    participant_menu = sorted(
+    argument_menu = sorted(
         (frozenset(tv.required_roles) | frozenset(tv.optional_roles)) - tv.quantity_roles)
     stages = _stage_sequence(event_type_code)
     stage_line = " < ".join(stages) if stages else "(없음 — stage 는 항상 null)"
@@ -231,7 +231,7 @@ def _extract_system(view: OntologyView, event_type_code: str) -> str:
         "각 항목에 대해 아래 JSON 스키마의 오브젝트를 만든다.\n"
         '{"items":[{"id": <입력 id 그대로>, "predicate": <술어 메뉴 중 하나 또는 null>, '
         '"stage": <단계 메뉴 중 하나 또는 null>, '
-        '"participants":[{"role": <참여자 역할 메뉴 중 하나>, "slot": "subject|object|qualifier", '
+        '"arguments":[{"role": <참여자 역할 메뉴 중 하나>, "slot": "subject|object|qualifier", '
         '"mention": <제목 원문 그대로>, "ticker": <그 참여자가 입력 tickers 의 종목 자신일 때만 그 티커, '
         '아니면 "">, "group": <정수>}], '
         '"measures":[{"role": <수량 역할 메뉴 중 하나>, "surface": <제목 원문 표기 그대로>, '
@@ -241,10 +241,10 @@ def _extract_system(view: OntologyView, event_type_code: str) -> str:
         "- measures 의 surface 는 원문 표기 그대로(예: 2734억원). 숫자 계산·단위 환산 절대 금지 — 코드가 계산한다.\n"
         "- basis: 원문에 총액 명시=TOTAL, 연간 명시=ANNUAL, 그 외 UNKNOWN.\n"
         "- group: 같은 라인아이템(제품·계약 단위)끼리 같은 정수 서수, 단일 사안이면 0.\n"
-        "- participants=개체 역할만, measures=수량 역할만. 수량 역할을 participants 에 넣지 않는다.\n"
+        "- arguments=개체 역할만, measures=수량 역할만. 수량 역할을 arguments 에 넣지 않는다.\n"
         "- 메뉴에 없는 역할·술어·단계는 만들지 마라. 근거 없으면 null.\n"
         f"[술어 메뉴] {','.join(sorted(tv.predicates)) or '-'}\n"
-        f"[참여자 역할 메뉴] {','.join(participant_menu) or '-'}\n"
+        f"[참여자 역할 메뉴] {','.join(argument_menu) or '-'}\n"
         f"[수량 역할 메뉴] {','.join(sorted(tv.quantity_roles)) or '-'}\n"
         f"[단계 메뉴(순서축)] {stage_line}"
     )
@@ -378,15 +378,15 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     confidence_level = (_CONFIDENCE_LEVELS.get(raw_confidence)
                         if isinstance(raw_confidence, str) else None)
 
-    participant_menu = (frozenset(tv.required_roles) | frozenset(tv.optional_roles)) - tv.quantity_roles
-    participants: list[dict] = []
+    argument_menu = (frozenset(tv.required_roles) | frozenset(tv.optional_roles)) - tv.quantity_roles
+    arguments: list[dict] = []
     # primary 행은 항상 실린다(참여자로 해소되거나 폴백 행으로) — required 충족 판정에 포함.
     covered_roles: set[str] = {gate_cls["role_code"]}
-    for raw in item.get("participants") or []:
+    for raw in item.get("arguments") or []:
         if not isinstance(raw, dict):
             continue
         role = str(raw.get("role") or "")
-        if role not in participant_menu:
+        if role not in argument_menu:
             continue  # 메뉴 밖 역할 = 모델이 라벨을 발명 — 그 역할만 버린다
         mention = raw.get("mention")
         if not isinstance(mention, str) or not mention.strip():
@@ -396,7 +396,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         ticker = str(raw.get("ticker") or "")
         entity_id = entity_index.get(ticker) if ticker in allowed_tickers else None
         covered_roles.add(role)
-        participants.append({
+        arguments.append({
             "role_code": role,
             "slot": slot if isinstance(slot, str) and slot in SLOT_VALUES else None,
             "mention_text": mention.strip(),
@@ -453,7 +453,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         "stage_rejected": stage_rejected,
         "confidence_level": confidence_level,
         "completeness": completeness,
-        "participants": participants,
+        "arguments": arguments,
         "measures": measures,
     }
 
@@ -661,7 +661,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         # 행은 하나다).
         seen_args: set[tuple[str, str]] = set()
         primary_bound = False
-        for part in cls["participants"]:
+        for part in cls["arguments"]:
             if part["entity_id"] is None:
                 continue  # entity_id NOT NULL PK — 미해소는 completeness 에만 반영(독스트링)
             key = (part["role_code"], part["entity_id"])
@@ -1010,7 +1010,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
     classified = events_created = threaded = unknown_thread = 0
-    stage_rejected = participants_unresolved = 0
+    stage_rejected = arguments_unresolved = 0
     failures: list[dict] = []
     exit_code = 0
 
@@ -1042,9 +1042,9 @@ def run(
                 # 품질 카운터(Rule 12) — stage 오염 차단·엔티티 해소 실패를 로그로 드러낸다.
                 stage_rejected += sum(
                     1 for c in classifications.values() if c.get("stage_rejected"))
-                participants_unresolved += sum(
+                arguments_unresolved += sum(
                     1 for c in classifications.values()
-                    for p in c.get("participants", ()) if p["entity_id"] is None)
+                    for p in c.get("arguments", ()) if p["entity_id"] is None)
                 created = persist_normalization(conn, todo, classifications, date)
                 events_created += len(created)
                 # 유니버스(entity_index=holdings 파생 마스터) 전 구성종목 이벤트를 threading 한다
@@ -1064,7 +1064,7 @@ def run(
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
         events_created = threaded = unknown_thread = 0
-        stage_rejected = participants_unresolved = 0
+        stage_rejected = arguments_unresolved = 0
         exit_code = 1
 
     log = {
@@ -1077,7 +1077,7 @@ def run(
         "events_created": events_created, "threaded": threaded,
         "unknown_thread": unknown_thread,
         "stage_rejected": stage_rejected,
-        "participants_unresolved": participants_unresolved,
+        "arguments_unresolved": arguments_unresolved,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -1091,6 +1091,6 @@ def run(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
         " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
-        threaded, unknown_thread, stage_rejected, participants_unresolved, len(failures),
+        threaded, unknown_thread, stage_rejected, arguments_unresolved, len(failures),
     )
     return exit_code

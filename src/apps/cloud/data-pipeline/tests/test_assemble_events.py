@@ -74,9 +74,9 @@ def _gate_item(article_id: str, ticker: str = "005930", etype: str = _ETYPE,
 
 
 def _extract_item(article_id: str, predicate: str | None = _PRED, stage: str | None = None,
-                  participants=(), measures=(), confidence: str = "H") -> dict:
+                  arguments=(), measures=(), confidence: str = "H") -> dict:
     return {"id": article_id, "predicate": predicate, "stage": stage,
-            "participants": list(participants), "measures": list(measures),
+            "arguments": list(arguments), "measures": list(measures),
             "confidence": confidence}
 
 
@@ -99,7 +99,7 @@ def _llm_fn(gate_items=(), extract_items=(), calls: list | None = None):
 
 def _default_llm(article_id: str, ticker: str = "005930", etype: str = _ETYPE,
                  pred: str = _PRED, **extract_over):
-    """구 단일역할 경로와 동형의 최소 2콜 응답 — participants/measures 없는 이벤트."""
+    """구 단일역할 경로와 동형의 최소 2콜 응답 — arguments/measures 없는 이벤트."""
     return _llm_fn([_gate_item(article_id, ticker, etype)],
                    [_extract_item(article_id, predicate=pred, **extract_over)])
 
@@ -481,7 +481,7 @@ def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
 
 
 # ── v4: 다중 참여자·수량 기록 ────────────────────────────────────────────────
-def test_multi_company_participants_recorded_with_slot_and_group(tmp_path, monkeypatch):
+def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypatch):
     """멀티기업 기사 — 해소된 참여자 **전원**이 event_argument 에 slot·mention·group_ord 와
     함께 실리고(다중역할), 미해소 참여자(CONTRACT_OBJECT 개념)는 entity_id NOT NULL PK 라
     스킵하되 **completeness 에는 반영**된다(이식원 UNRESOLVED 규약 — 보도가 역할을 말한
@@ -497,7 +497,7 @@ def test_multi_company_participants_recorded_with_slot_and_group(tmp_path, monke
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
-            participants=[
+            arguments=[
                 {"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
                  "ticker": "005930", "group": 0},
                 {"role": "CUSTOMER", "slot": "object", "mention": "SK하이닉스",
@@ -528,7 +528,7 @@ def test_multi_company_participants_recorded_with_slot_and_group(tmp_path, monke
     [se] = _batch(conn, "source_event")
     assert (se[0], se[7], se[9]) == (evt_id, _CONTRACT_PRED, "complete")
     log = _log(storage)
-    assert log["participants_unresolved"] == 1
+    assert log["arguments_unresolved"] == 1
 
 
 def test_measure_role_outside_quantity_menu_is_dropped(tmp_path, monkeypatch):
@@ -543,7 +543,7 @@ def test_measure_role_outside_quantity_menu_is_dropped(tmp_path, monkeypatch):
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
-            participants=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+            arguments=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
                            "ticker": "005930", "group": 0}],
             measures=[
                 {"role": "CONTRACT_OBJECT", "surface": "HBM", "basis": "TOTAL", "group": 0},
@@ -864,7 +864,7 @@ def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch)
     complete_fn = _llm_fn(
         [_gate_item("a1", etype=_CONTRACT)],
         [{"id": "a1", "predicate": [], "stage": {}, "confidence": [],
-          "participants": [{"role": "SUPPLIER", "slot": [], "mention": "삼성전자",
+          "arguments": [{"role": "SUPPLIER", "slot": [], "mention": "삼성전자",
                             "ticker": "005930", "group": 0}],
           "measures": [{"role": "CONTRACT_VALUE", "surface": "총 1,883억원",
                         "basis": [], "group": 0}]}])
@@ -916,7 +916,7 @@ def test_primary_under_other_role_keeps_identity_anchor(tmp_path, monkeypatch):
     complete_fn = _llm_fn(
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item("a1", predicate=_CONTRACT_PRED,
-                       participants=[{"role": "CUSTOMER", "slot": "object",
+                       arguments=[{"role": "CUSTOMER", "slot": "object",
                                       "mention": "삼성전자", "ticker": "005930", "group": 0}])])
 
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,

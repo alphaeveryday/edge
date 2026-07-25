@@ -132,7 +132,7 @@ class _EventFetchConn:
         return _EventFetchCursor(self)
 
 
-def test_fetch_aggregates_all_participants_into_one_event_context():
+def test_fetch_aggregates_all_arguments_into_one_event_context():
     """다중 아규먼트 사건은 EventContext 1개로 모여야 한다 — 구 DISTINCT ON 단일행 붕괴는
     사건당 참여자 1명만 남겨 나머지 역할을 소실했다. 대표 ticker 는 정렬상 첫 행이 아니라
     holdings 접지 참여자다."""
@@ -147,9 +147,9 @@ def test_fetch_aggregates_all_participants_into_one_event_context():
     [ctx] = EventStore(conn).fetch_event_contexts(date(2026, 7, 16), ["005930"])
 
     assert (ctx.source_event_id, ctx.entity_id, ctx.ticker) == ("evt_1", "ent_samsung", "005930")
-    assert [p.role_code for p in ctx.participants] == ["ACQUIRER", "ISSUER"]  # 전원 보존
-    assert ctx.participants[0].ticker is None  # 비종목 entity 도 유지(LEFT JOIN)
-    assert ctx.participants[1].confidence == 0.9
+    assert [p.role_code for p in ctx.arguments] == ["ACQUIRER", "ISSUER"]  # 전원 보존
+    assert ctx.arguments[0].ticker is None  # 비종목 entity 도 유지(LEFT JOIN)
+    assert ctx.arguments[1].confidence == 0.9
     assert (ctx.predicate_code, ctx.lifecycle_stage) == ("DECLARE", "DECIDED")
     assert (ctx.thread_id, ctx.novelty_status) == ("thr_1", "FIRST_IN_THREAD")
 
@@ -187,7 +187,7 @@ def test_fetch_tolerates_null_ontology_columns_from_prebackfill_rows():
     assert (ctx.entity_id, ctx.ticker) == ("ent_s", "005930")
     assert (ctx.novelty_status, ctx.title) == ("UNKNOWN", "")  # 종전 폴백 유지
     assert ctx.predicate_code is None and ctx.lifecycle_stage is None
-    assert ctx.participants[0].slot is None
+    assert ctx.arguments[0].slot is None
     assert ctx.measures == ()
 
 

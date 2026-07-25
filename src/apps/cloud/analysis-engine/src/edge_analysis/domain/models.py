@@ -74,7 +74,7 @@ class PriceTrigger:
 
 
 @dataclass(frozen=True, slots=True)
-class Participant:
+class Argument:
     """사건에서 확정된 참여자 1명(event_argument 1행).
 
     ``slot`` 등 신규 온톨로지 컬럼은 백필 전 NULL 일 수 있다. ``ticker`` 는 entity 가
@@ -116,7 +116,7 @@ class EventContext:
     thread_id: str | None
     novelty_status: str
     title: str
-    participants: tuple[Participant, ...] = ()
+    arguments: tuple[Argument, ...] = ()
     measures: tuple[Measure, ...] = ()
     predicate_code: str | None = None
     lifecycle_stage: str | None = None

@@ -16,7 +16,7 @@ from ..domain.models import (
     EventContext,
     Explanation,
     Measure,
-    Participant,
+    Argument,
     PriceTrigger,
 )
 from ..observability import log, stable_id, utcnow_iso
@@ -163,9 +163,9 @@ class EventStore:
             )
             measure_rows = cur.fetchall()
 
-        participants: dict[str, list[Participant]] = {}
+        arguments: dict[str, list[Argument]] = {}
         for r in argument_rows:
-            participants.setdefault(str(r[0]), []).append(Participant(
+            arguments.setdefault(str(r[0]), []).append(Argument(
                 role_code=str(r[1]),
                 slot=r[2],
                 entity_id=str(r[3]),
@@ -187,9 +187,9 @@ class EventStore:
         contexts: list[EventContext] = []
         for h in heads:
             event_id = str(h[0])
-            event_participants = tuple(participants.get(event_id, ()))
+            event_arguments = tuple(arguments.get(event_id, ()))
             # 대표 참여자 = holdings 접지 참여자(이 사건이 선별된 근거) 중 첫 번째.
-            anchor = next((p for p in event_participants if p.ticker in wanted), None)
+            anchor = next((p for p in event_arguments if p.ticker in wanted), None)
             if anchor is None:
                 continue  # 선별·수집 사이 인자 소실(비정상) — 접지 없는 사건은 버린다.
             contexts.append(EventContext(
@@ -201,7 +201,7 @@ class EventStore:
                 thread_id=h[5],
                 novelty_status=h[6] or "UNKNOWN",
                 title=h[7] or "",
-                participants=event_participants,
+                arguments=event_arguments,
                 measures=tuple(measures.get(event_id, ())),
                 predicate_code=h[3],
                 lifecycle_stage=h[4],

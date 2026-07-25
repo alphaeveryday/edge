@@ -101,7 +101,7 @@ def _fake_classify(system: str, user: str) -> str:
     if "event_type_code" in payload:
         return json.dumps({"items": [{
             "id": ARTICLE_ID, "predicate": PREDICATE, "stage": None,
-            "participants": [], "measures": [], "confidence": "H",
+            "arguments": [], "measures": [], "confidence": "H",
         }]})
     return json.dumps({"items": [{
         "id": ARTICLE_ID, "doc_class": "EVENT", "event_type_code": EVENT_TYPE,
