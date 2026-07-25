@@ -474,6 +474,20 @@ def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     )
 
 
+def quality_log_prefix(dataset: str) -> str:
+    """그 dataset 의 품질 로그가 사는 프리픽스(날짜 이하 전부). 관측이 run_id 로 훑을 때 쓴다.
+
+    날짜 세그먼트를 부르는 쪽이 알 수 없어(런 시작 UTC 날짜라 자정 넘긴 런에서 어긋난다)
+    프리픽스가 필요하다 — 경로 조립은 여기(경로 규약 SSOT)에 둔다.
+    """
+    return f"operations_archive/data_quality_logs/dataset={dataset}/"
+
+
+def collection_log_prefix(source: str, dataset: str) -> str:
+    """그 (source, dataset) 수집 로그가 사는 프리픽스. quality_log_prefix 와 같은 이유."""
+    return f"operations_archive/collection_logs/source={source}/dataset={dataset}/"
+
+
 def collection_log_key(source: str, dataset: str, started_date: str, run_id: str) -> str:
     """수집 실행 로그(런당 1건) 키.
 

@@ -10,7 +10,7 @@ import logging
 import os
 from datetime import datetime, time, timedelta, timezone
 
-from ..lake import Storage, collection_log_key, quality_log_key
+from ..lake import Storage, collection_log_prefix, quality_log_prefix
 from . import catalog, planner, reconciler, states, wrapper
 from .ledger import Ledger
 
@@ -78,17 +78,17 @@ def _load_log(storage: Storage, prefix: str, run_id: str) -> dict | None:
     return None
 
 
-def _log_prefix(entry: catalog.CatalogEntry, run_id: str) -> str:
+def _log_prefix(entry: catalog.CatalogEntry) -> str:
     """이 작업의 로그가 사는 dataset 프리픽스. 벤더가 있으면 collection_log, 없으면 quality_log.
 
-    키 자체를 만들지 않고 프리픽스만 만드는 이유: 날짜 세그먼트(started_date·checked_date)가
-    **런 시작 UTC 날짜**라 자정을 넘긴 런에서 우리가 추측한 날짜와 어긋난다. 경로 조립은
-    lake.storage 빌더(경로 규약 SSOT) 밖에서 하지 않는다 — 빌더로 만든 뒤 날짜 뒤를 자른다.
+    키가 아니라 프리픽스인 이유: 날짜 세그먼트(started_date·checked_date)가 **런 시작 UTC
+    날짜**라 자정을 넘긴 런에서 우리가 추측한 날짜와 어긋난다. 프리픽스 조립은 lake.storage
+    빌더(경로 규약 SSOT)가 한다 — 여기서 키를 문자열로 자르면 파티션이 바뀔 때 조용히 어긋난다.
     """
     dataset = entry.log_partition_dataset()
     if entry.source_vendor:
-        return collection_log_key(entry.source_vendor, dataset, "", run_id).split("/started_date=")[0] + "/"
-    return quality_log_key(dataset, "", run_id).split("/checked_date=")[0] + "/"
+        return collection_log_prefix(entry.source_vendor, dataset)
+    return quality_log_prefix(dataset)
 
 
 def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: int) -> dict:
@@ -101,26 +101,38 @@ def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: i
     `failed_records`)를 읽을 뿐이다. 이 둘은 스텝만 아는 **판정**이라 여기서 재구성할 수 없다 —
     예컨대 적재의 `skipped_unknown_instrument` 는 in-band 유실이지만 `skipped_self`(ETF 자기보유
     제외)는 정상 동작이다. 그래서 봉투는 그 카운터 옆(스텝 안)에 산다.
+
+    ⚠️ 봉투의 스코프는 **이 런이 재판정한 범위**다(활동 기반). 그래서 입력을 매 런 다시 읽고
+    다시 거르는 스텝(적재·정제)은 이미 존재하던 행도 산출로 세지만, 이미 처리된 것을 건너뛰는
+    스텝(tag-news·assemble-events)은 no-op 재실행에서 0건 → UNKNOWN 이다. 산출과 유실이 같은
+    스코프에서 와야 옛 실패가 산출로 뒤집히지 않기 때문이다(비대칭 금지). 상태 기반 완전성
+    ("지금 이 데이터셋이 온전한가")은 스냅샷·완전성 축의 몫이다(ALPHA-490).
     """
     entry = catalog.get(task_key)
     if entry is None:
         return {"exit_code": exit_code}  # 미등록 작업 — 관측 대상이 아니다
-    log = _load_log(storage, _log_prefix(entry, run_id), run_id)
+    log = _load_log(storage, _log_prefix(entry), run_id)
     if not log:
         return {"exit_code": exit_code}
     ops = log.get("ops")
-    if not isinstance(ops, dict):
-        # 봉투 없음 = 신호 미제공. 조용히 낙관값(0건·허용)으로 메우지 않는다 — 그러면 유실이
-        # VALID 로 위장된다. UNKNOWN 으로 남기되 드러낸다(Rule 12).
-        logger.warning("ops 봉투 없음(task=%s run_id=%s) — data_status UNKNOWN", task_key, run_id)
+    # 봉투 없음/불완전 = 신호 미제공. 조용히 낙관값(0건·실패없음)으로 메우지 않는다 — 특히
+    # failed_records 결측을 '실패 0'으로 읽으면 derive_data_status 의 실패 게이트를 통째로
+    # 건너뛰어 유실이 VALID_EMPTY 로 위장된다. UNKNOWN 으로 남기되 드러낸다(Rule 12).
+    if (not isinstance(ops, dict)
+            or ops.get("records_out") is None or ops.get("failed_records") is None):
+        logger.warning("ops 봉투 없음/불완전(task=%s run_id=%s) — data_status UNKNOWN",
+                       task_key, run_id)
         return {"exit_code": exit_code}
+    # 요청 완료 증명은 로그 종류마다 다른 곳에서 온다. 수집(collection_log)은 status 가 정본이고
+    # **결측이면 완료로 치지 않는다**(중단·스키마 드리프트를 성공으로 위장 금지). 정제·적재
+    # (quality_log)는 status 필드 자체가 없고 성공 증명이 exit_code 라, exit_code==0 게이트를
+    # 통과한 시점에서 요청은 완료된 것이다.
+    completed = (log.get("status") in ("success", "skipped")) if entry.source_vendor else True
     return {
         "exit_code": exit_code,
         "records_out": ops.get("records_out"),
         "failed_records": ops.get("failed_records"),
-        # collection_log 만 status 를 남긴다(수집기). quality_log 는 status 필드가 없고 성공
-        # 증명이 exit_code 라, exit_code==0 게이트를 통과한 시점에서 요청은 완료된 것이다.
-        "request_completed": log.get("status", "success") in ("success", "skipped"),
+        "request_completed": completed,
         "empty_allowed": entry.empty_allowed,
     }
 

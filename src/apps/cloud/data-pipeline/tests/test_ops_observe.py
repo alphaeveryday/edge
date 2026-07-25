@@ -73,6 +73,32 @@ def test_missing_envelope_is_unknown_and_loud(tmp_path, caplog):
     assert "ops 봉투 없음" in caplog.text  # 조용히 넘어가지 않는다
 
 
+@pytest.mark.parametrize("ops", [
+    {"records_out": 0},                          # failed_records 누락
+    {"records_out": 0, "failed_records": None},  # null
+    {"failed_records": 0},                       # records_out 누락
+])
+def test_incomplete_envelope_does_not_pass_the_gate(tmp_path, ops):
+    # WHY: derive_data_status 는 `failed_records` 가 None 이면 **실패 검사 자체를 건너뛴다** —
+    #      결측을 '실패 0'으로 읽으면 0건 + 요청완료 + 계약허용이 모여 VALID_EMPTY 로 위장된다.
+    #      결측은 '실패 없음'이 아니라 '모른다'다(edge-review H).
+    storage = _storage(tmp_path)
+    entry = _entry("PRICE_COLLECTION_KIS")
+    _write_log(storage, entry, {"run_id": _RUN, "status": "success", "ops": ops})
+
+    assert _observe_from_log(storage, entry.task_key, _RUN, 0) == {"exit_code": 0}
+
+
+def test_collection_status_missing_is_not_completed(tmp_path):
+    # WHY: 수집 로그의 status 는 요청 완료의 정본이다. 결측(중단·스키마 드리프트)을 success 로
+    #      기본 처리하면 절단된 수집이 0건을 '정상 공백'으로 증명하게 된다.
+    storage = _storage(tmp_path)
+    entry = _entry("PRICE_COLLECTION_KIS")
+    _write_log(storage, entry, {"run_id": _RUN, "ops": {"records_out": 0, "failed_records": 0}})
+
+    assert _observe_from_log(storage, entry.task_key, _RUN, 0)["request_completed"] is False
+
+
 def test_non_dict_envelope_is_rejected(tmp_path):
     # WHY: 봉투 자리에 스칼라·리스트가 오면(직렬화 사고·스키마 드리프트) `.get()` 이 터지거나
     #      더 나쁘게는 통과값으로 강등될 수 있다 — 행 하나가 런을 죽이지도, 위장하지도 않는다.

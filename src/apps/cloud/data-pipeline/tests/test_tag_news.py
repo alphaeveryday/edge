@@ -105,6 +105,12 @@ def test_already_tagged_article_is_not_retagged(tmp_path):
     assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second)) == 0
     assert second == []  # 한 번도 안 불렀다
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 1
+    # 원장 봉투(ALPHA-181): 재실행은 아무것도 **재판정하지 않았다** — 건너뛴 기사를 산출로
+    # 세면 옛 실패(llm_unparseable 같은 비재시도 상태)가 실패 카운터 없이 산출로 뒤집힌다.
+    # 산출·유실은 같은 스코프에서 와야 한다. 0건 → UNKNOWN 이 정직한 결과다.
+    keys = [k for k in storage.list_keys("operations_archive/") if "run_id=R2/" in k]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["ops"] == {"records_out": 0, "failed_records": 0}
 
 
 def test_tagger_version_change_forces_retag(tmp_path):
@@ -317,9 +323,10 @@ def test_quality_log_records_what_happened(tmp_path):
     assert log["articles_tagged"] == 1
     assert log["articles_skipped_already_tagged"] == 0
     assert log["status_counts"] == {"ok": 1}
-    # 원장 봉투(ALPHA-181): 산출은 쓴 행이고, ok 판정은 유실이 아니다. 멱등 재실행의
-    # already_tagged·한도로 남긴 백로그(left_by_limit)를 유실로 세면 매 런 INCOMPLETE 가 된다.
-    assert log["ops"] == {"records_out": log["rows_written"], "failed_records": 0}
+    # 원장 봉투(ALPHA-181): 산출은 **기사 단위**(ok + 이미 태깅됨)다. rows_written 은 파티션
+    # 재작성 행수라 멱등 재실행이면 0 이고(다 돼 있는데 0건으로 보인다) 한 건만 바뀌어도 그
+    # 파티션의 과거 행까지 이 런의 산출로 부풀린다. 한도 백로그도 유실이 아니다.
+    assert log["ops"] == {"records_out": 1, "failed_records": 0}
     assert log["tagger_version"] == TAGGER_VERSION
     assert log["ontology_version"] == ontology_version()
 
