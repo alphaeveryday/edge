@@ -150,7 +150,9 @@ class _FakeCursor:
                         se_meta[r[0]] = (r[2], r[6], r[4], r[7])
             out = list(conn.unthreaded_events)
             for sid, (etype, avail, stage, predicate) in se_meta.items():
-                for role_code, entity_id in ea_by_se.get(sid, []):
+                # LEFT JOIN 모사 — 아규먼트 0건 이벤트도 role_code/entity_id NULL 한 행으로 나온다
+                # (INNER 로 모사하면 실 DB 와 갈려 anchorless 이벤트의 UNKNOWN 링크를 못 검증한다).
+                for role_code, entity_id in ea_by_se.get(sid) or [(None, None)]:
                     out.append((sid, etype, avail, stage, predicate, role_code, entity_id))
             self._rows = out
         elif upper.startswith("SELECT THREAD_ID, CURRENT_STAGE"):
@@ -911,8 +913,11 @@ def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
     # 다중 primary 타입이라 anchor 역할이 유일하지 않다 → 역할을 지어내지 않는다.
     assert _batch(conn, "event_argument") == []
     assert _batch(conn, "event_measure") == []
-    # 스레딩 조회(JOIN event_argument)에서 빠지는 손실을 전용 카운터로 드러낸다(Rule 12).
-    assert _log(storage)["anchorless_events"] == 1
+    # 아규먼트 0건이어도 계약대로 UNKNOWN 링크를 받고 지표에 잡힌다(LEFT JOIN, Codex #255 P2).
+    [link] = _batch(conn, "event_thread_link")
+    assert link[1] is None and link[3] == "UNKNOWN"
+    log = _log(storage)
+    assert log["unknown_thread"] == 1 and log["anchorless_events"] == 1
 
 
 def test_complete_json_rejects_nonobject_toplevel():

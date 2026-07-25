@@ -983,7 +983,10 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
             "SELECT se.source_event_id, se.event_type_code, se.available_at,"
             " se.lifecycle_stage, se.predicate_code, ea.role_code, ea.entity_id"
             " FROM source_event se"
-            " JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
+            # LEFT JOIN — 아규먼트 0건 이벤트(다중 primary 타입에서 anchor 조작을 안 한 건)도
+            # 스레딩에 넘겨 계약대로 UNKNOWN 링크를 받게 한다. INNER 면 그 이벤트가 조회에서
+            # 빠져 영구 미연결로 남고 unknown_thread 지표에서도 사라진다(Codex #255 P2).
+            " LEFT JOIN event_argument ea ON ea.source_event_id = se.source_event_id"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
             # event_status='ACTIVE' 는 엔진 read 경로(fetch_kodex_events)와 같은 필터 — 비활성
             # (REJECTED 등) 이벤트를 엮으면 prior_count 가 그걸 세 같은 스레드 첫 ACTIVE 를
@@ -1010,6 +1013,8 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
                                    "lifecycle_stage": stage, "predicate_code": predicate,
                                    "role_values": {}}
             role_lists[sid] = {}
+        if role_code is None:
+            continue  # 아규먼트 0건 — role_values 는 빈 맵으로 두고 identity 미충족 판정에 맡긴다
         role_lists[sid].setdefault(role_code, []).append(str(entity_id))
     for sid, roles in role_lists.items():
         events[sid]["role_values"] = {
