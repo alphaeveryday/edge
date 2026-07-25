@@ -264,9 +264,15 @@ def _complete_json(complete_fn, system: str, user: str) -> dict:
     last: Exception | None = None
     for _attempt in range(3):
         try:
-            return json.loads(complete_fn(system, user))
+            result = json.loads(complete_fn(system, user))
         except Exception as exc:  # llm.py 는 실패를 예외로 올린다(조용한 폴백 금지)
             last = exc
+            continue
+        if isinstance(result, dict):
+            return result
+        # 최상위가 배열·스칼라면 재시도 — 통과시키면 하류 payload.get("items") 이 opaque
+        # AttributeError 로 터져 날짜 전체가 롤백된다(Rule 12: 불명확 실패로 위장 금지).
+        last = TypeError(f"LLM 응답 최상위가 객체가 아님: {type(result).__name__}")
     raise RuntimeError(f"분류 LLM 호출이 재시도 후에도 실패: {last}")
 
 

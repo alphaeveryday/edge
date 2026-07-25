@@ -14,6 +14,8 @@ stage 메뉴 통제(자유텍스트 오염 차단), novelty 세분(CORRECTION·D
 import io
 import json
 
+import pytest
+
 from data_pipeline.config import DbConfig
 from data_pipeline.lake import LocalStorage, canonical_news_articles_partition
 from data_pipeline.steps import assemble_events
@@ -906,6 +908,16 @@ def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
     [arg] = _batch(conn, "event_argument")  # 폴백 anchor 행만
     assert (arg[1], arg[2]) == ("SUPPLIER", "inst_SAMSUNG")
     assert _batch(conn, "event_measure") == []
+
+
+def test_complete_json_rejects_nonobject_toplevel():
+    """LLM 최상위 응답이 배열·스칼라·null 이면 재시도 후 RuntimeError 로 명확히 실패한다 —
+    통과시키면 하류 payload.get("items") 이 opaque AttributeError 로 터져 날짜 전체가
+    롤백된다(Codex #255 계열의 최상위 판, item 가드가 못 덮는 구멍·Rule 12 명확 실패)."""
+    for bad in ("[1, 2]", "1", '"x"', "null"):
+        with pytest.raises(RuntimeError, match="재시도 후에도 실패"):
+            assemble_events._complete_json(lambda s, u: bad, "sys", "usr")
+    assert assemble_events._complete_json(lambda s, u: '{"items": []}', "s", "u") == {"items": []}
 
 
 def test_quantity_unit_family_mismatch_stays_unresolved(tmp_path, monkeypatch):
