@@ -126,6 +126,14 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-nav --from 2026-07-14 --to 2026-07-17
 
+# 국내 ETF 장중 iNAV 원본저장(Step1) — KIS ETF NAV비교추이(분), tr_id FHPST02440100(ALPHA-555).
+# 일별 NAV 와 같은 앱키·유니버스를 쓰되 시장코드가 "E"(일별은 "J")로 갈린다. 응답은 항상 30행
+# 고정이라 조회 창 = --interval-sec × 30 이고(미지정 60초 → 30분치), 날짜·시각 지정이 무시돼
+# **소급 백필이 없다** — 놓친 구간은 영구 유실이다. 휴장일엔 직전 거래일 데이터가 그대로 오므로
+# 가드(ALPHA-556)가 붙기 전까지는 장중에만 돌린다.
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-inav --interval-sec 60
+
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
@@ -344,6 +352,15 @@ writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세�
 - `ingest-raw-etf`(미국 ETF 구성종목, fmp 세트)
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
 - `ingest-raw-nav`(국내 ETF NAV, **kis 세트** — 단일 벤더라 `--source` 없음)
+- `ingest-raw-inav`(국내 ETF **장중** iNAV, **kis 세트** — 일별 NAV 와 같은 앱키·유니버스)
+  - 일별(`FHPST02440200`)과 **시장코드가 갈린다**: iNAV 는 `FID_COND_MRKT_DIV_CODE="E"`, 일별은 `"J"`.
+    `"J"` 로 보내면 전건 `rt_cd=2` 로 튕긴다(실측).
+  - ⚠️ **소급 백필이 없다.** 날짜·시각 지정이 무시돼 항상 "지금 기준 최근 30행"만 온다 —
+    놓친 구간은 영구 유실이다. 일별 NAV 처럼 창을 주고 나중에 주워올 수 없다.
+  - ⚠️ **기준일 가드가 아직 없다**(ALPHA-556). 응답에 날짜 필드가 없어(`bsop_hour` 만 옴) 거래일을
+    수집 시각으로 붙여야 하는데, KIS 는 휴장일에도 **직전 거래일 데이터를 반복**한다(위 ALPHA-387
+    과 같은 함정). 그래서 **지금은 장중에만 수동 실행**해야 하고, 휴장일 skip·스케줄 편입은
+    ALPHA-556 소관이다. raw 의 `fetched_at` 이 잘못 붙은 as-of 를 나중에 교정할 근거다.
   - ⚠️ KIS 토큰 발급은 앱키당 분당 1회라, 같은 앱키를 쓰는 `ingest-price-raw --source kis` 와
     **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 이미 나란히 편입돼 있고(ALPHA-458),
     `kis_auth` 가 이 코드를 만나면 61초 + 지터(0~20초) 대기 후 **최대 2회 재시도**(총 3회 시도)해
@@ -498,6 +515,13 @@ settings.targets.keywords            # ["금리", ...]
   구성종목**으로 펼쳐지고, 각 행에 벤더 기준일(FMP `updatedAt`·KRX `trd_dd`)·`our_etf_id`·`market`·
   `fetched_at` 를 부착한다. 같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver)
   소관. US=FMP(ALPHA-337)·KR=KRX 로그인 게이트 PDF(ALPHA-336) — 정규화는 `normalize-etf`(342·343).
+- **raw(ETF iNAV)** — `raw/source=kis/dataset=etf_inav/market=KR/ingest_date=…/run_id=…/` 에
+  run_id 별 append(ALPHA-555). 일별 NAV(`dataset=etf_nav`)와 **다른 축**이라 dataset 을 나눈다 —
+  저건 거래일 grain 종가 확정 NAV, 이건 장중 시각 grain 추정 NAV 다. 응답이 **항상 30행 고정**이라
+  조회 창 = `--interval-sec` × 30 이고, **소급 조회가 불가능**하다(`FID_INPUT_HOUR_1` 무시·`tr_cont`
+  없음 — 실측). 그래서 폴링 창을 겹치게 잡아 같은 시각이 여러 run 에 중복 수집되는 것이 **정상**이며,
+  겹침이 유일한 갭 방어 수단이라 raw 는 전부 보존하고 중복 제거는 canonical 소관이다.
+  각 행에 `interval_sec`·`our_etf_id`·`market`·`kis_symbol`·`fetched_at` 를 부착한다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
