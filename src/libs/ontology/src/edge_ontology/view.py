@@ -28,8 +28,11 @@ class TypeView:
     predicates: frozenset[str]
     required_roles: tuple[str, ...]
     optional_roles: tuple[str, ...]
+    primary_roles: tuple[str, ...]  # roles.primary — 게이트가 고른 티커가 맡을 수 있는 역할
     quantity_roles: frozenset[str]
+    required_quantity_roles: frozenset[str]
     currency_roles: frozenset[str]
+    quantity_unit_families: Mapping[str, str]
     role_menu: frozenset[str]
     identity_required: tuple[str, ...]
     identity_optional: tuple[str, ...]
@@ -63,11 +66,17 @@ def load_ontology_view() -> OntologyView:
         roles = spec.get("roles") or {}
         required = tuple(roles.get("required") or [])
         optional = tuple(roles.get("optional") or [])
+        primary = tuple(roles.get("primary") or [])
         quantities = spec.get("quantities") or {}
         quantity_roles = frozenset(quantities.keys())
+        required_quantity_roles = frozenset(
+            role for role, meta in quantities.items() if (meta or {}).get("required"))
         currency_roles = frozenset(
             role for role, meta in quantities.items() if (meta or {}).get("unit_family") == "CURRENCY"
         )
+        quantity_unit_families = MappingProxyType({
+            role: str((meta or {}).get("unit_family"))
+            for role, meta in quantities.items() if (meta or {}).get("unit_family")})
         model = lifecycle_models.get(spec.get("lifecycle_model")) or {}
         stages = frozenset(model.get("stages") or []) | frozenset(model.get("terminal") or [])
 
@@ -83,8 +92,11 @@ def load_ontology_view() -> OntologyView:
             predicates=frozenset(spec.get("predicates") or []),
             required_roles=required,
             optional_roles=optional,
+            primary_roles=primary,
             quantity_roles=quantity_roles,
+            required_quantity_roles=required_quantity_roles,
             currency_roles=currency_roles,
+            quantity_unit_families=quantity_unit_families,
             role_menu=frozenset(required) | frozenset(optional) | quantity_roles,
             identity_required=tuple(identity.get("required") or []),
             identity_optional=tuple(identity.get("optional_discriminators") or []),

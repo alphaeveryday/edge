@@ -95,11 +95,17 @@ class FakeAnalysisClient:
 
 
 def _fake_classify(system: str, user: str) -> str:
-    """분류 LLM fake — data-pipeline 단위 테스트와 동일한 응답 계약(JSON 문자열)."""
+    """조립 LLM fake — v4 2콜(게이트→타입별 추출) 계약(JSON 문자열). user 페이로드에
+    event_type_code 가 있으면 추출 콜, 없으면 게이트 콜(단위 테스트와 같은 구분 축)."""
+    payload = json.loads(user)
+    if "event_type_code" in payload:
+        return json.dumps({"items": [{
+            "id": ARTICLE_ID, "predicate": PREDICATE, "stage": None,
+            "arguments": [], "measures": [], "confidence": "H",
+        }]})
     return json.dumps({"items": [{
-        "id": ARTICLE_ID, "is_event": True,
-        "event_type_code": EVENT_TYPE, "predicate_code": PREDICATE,
-        "primary_ticker": SAMSUNG_TICKER, "lifecycle_stage": "", "confidence": 0.9,
+        "id": ARTICLE_ID, "doc_class": "EVENT", "event_type_code": EVENT_TYPE,
+        "primary_ticker": SAMSUNG_TICKER, "confidence": 0.9,
     }]})
 
 

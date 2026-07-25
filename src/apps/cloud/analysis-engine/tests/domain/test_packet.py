@@ -13,7 +13,7 @@ from edge_analysis.domain.models import (
     EventContext,
     Measure,
     Member,
-    Participant,
+    Argument,
     PriceTrigger,
 )
 from edge_analysis.domain.packet import build_packet
@@ -84,10 +84,10 @@ def _packet_for(events, name_by_ticker):
     return packet
 
 
-def test_event_line_stays_legacy_when_no_extra_participants_or_measures():
+def test_event_line_stays_legacy_when_no_extra_arguments_or_measures():
     """백필 전 구데이터(대표 참여자 1명·측정 0건)면 이벤트 줄은 종전과 동일해야 한다 —
     온톨로지 확장이 기존 프롬프트를 흔들면 안 된다."""
-    event = _context(participants=(Participant("ISSUER", None, "ent_A", "005930", None),))
+    event = _context(arguments=(Argument("ISSUER", None, "ent_A", "005930", None),))
 
     packet = _packet_for([event], {"005930": "삼성전자"})
 
@@ -95,14 +95,14 @@ def test_event_line_stays_legacy_when_no_extra_participants_or_measures():
     assert "참여:" not in packet and "측정:" not in packet
 
 
-def test_event_line_appends_participants_and_measures_when_present():
+def test_event_line_appends_arguments_and_measures_when_present():
     """대표 외 종목 접지 참여자와 측정값(값·단위·basis)은 줄 끝에 덧붙는다. 비종목
     entity ULID 는 LLM 노이즈라 프롬프트에서 뺀다."""
     event = _context(
-        participants=(
-            Participant("ISSUER", "subject", "ent_A", "005930", 0.9),
-            Participant("TARGET", "object", "ent_B", "042700", None),
-            Participant("REGULATOR", "qualifier", "ent_C", None, None),
+        arguments=(
+            Argument("ISSUER", "subject", "ent_A", "005930", 0.9),
+            Argument("TARGET", "object", "ent_B", "042700", None),
+            Argument("REGULATOR", "qualifier", "ent_C", None, None),
         ),
         measures=(
             Measure("DIVIDEND_PER_SHARE", Decimal("361.00000000"), "KRW", "TOTAL", "PARSED",
