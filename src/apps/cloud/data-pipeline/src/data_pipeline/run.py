@@ -161,14 +161,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "reconcile":
         return ops_entry.reconcile_cli(settings)
 
+    # 원장 계측은 **dispatch 를 한 번** 감싼다(ALPHA-181). 스텝마다 흩뿌리면 배선 지점이
+    # 33개가 되고, 그중 4곳은 `--source` 로 벤더가 갈려 오라벨 지점이 그만큼 늘어난다
+    # (원장이 남의 벤더 결과를 그 작업으로 기록한다). 정체성 해소는 task_key_for 한 곳이다.
+    task_key = ops_entry.task_key_for(args.step, args.source)
+    if task_key is None:
+        return _dispatch(args, settings, storage, run_id)   # 미등록 작업 — 계측 없이 그대로
+    return ops_entry.instrument(
+        settings, storage, task_key, run_id,
+        lambda: _dispatch(args, settings, storage, run_id),
+    )
+
+
+def _dispatch(args, settings, storage, run_id) -> int:
+    """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
     # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
-    # NORMALIZE_PRICE 는 운영 원장 계측 대상(ALPHA-530) — ledger 없으면 투명 통과.
     if args.step == "normalize-price":
-        return ops_entry.instrument(
-            settings, storage, "NORMALIZE_PRICE", run_id,
-            lambda: normalize_price.run(storage, run_id, args.input_run_id),
-        )
+        return normalize_price.run(storage, run_id, args.input_run_id)
     # 투자자 수급 정제도 raw 만 읽는 스텝이라 수집 창·벤더 인자가 없다 — 벤더는 raw 키의
     # source= 가 규정하고(현재 kis), 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-investor":
@@ -229,15 +239,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # 가격 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
     # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
-    # LOAD_PRICE_DAILY 는 운영 원장 계측 대상(ALPHA-530) — 정제→feature 게이트 직후 canonical
-    # 가격을 소비하는 독립 ECS 작업. ledger 없으면 투명 통과.
     if args.step == "load-price-daily":
-        return ops_entry.instrument(
-            settings, storage, "LOAD_PRICE_DAILY", run_id,
-            lambda: load_price_daily.run(
-                storage, run_id, db=db_config_from_env(settings.db),
-                from_date=args.from_date, to_date=args.to_date,
-            ),
+        return load_price_daily.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
         )
 
     # NAV 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
@@ -460,12 +465,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
-        # PRICE_COLLECTION_KIS 만 운영 원장 계측 대상(ALPHA-530) — FMP 가격은 미등록이라 그대로.
-        def _collect():
-            return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
-        if vendor == "kis":
-            return ops_entry.instrument(settings, storage, "PRICE_COLLECTION_KIS", run_id, _collect)
-        return _collect()
+        return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
     if args.step == "ingest-raw-investor":
         # 종목별 투자자 수급(ALPHA-482). KR·KIS 단일 벤더라 --source 분기가 없다. 수집
         # 유니버스는 canonical KR holdings 에서 파생한다(가격과 같은 축, universe_from_holdings).

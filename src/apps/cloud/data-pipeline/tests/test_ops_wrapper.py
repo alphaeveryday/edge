@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from data_pipeline.config import DbConfig
 from data_pipeline.ops import states, wrapper
 from data_pipeline.ops.ledger import Ledger
@@ -77,6 +79,26 @@ def test_instrument_records_attempt_and_fulfilled():
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FULFILLED
     assert db.etasks_by_id["et1"]["data_status"] == states.DATA_VALID
     assert len(db.attempts) == 1 and db.attempts[0]["status"] == states.EXEC_SUCCEEDED
+
+
+def test_step_exception_closes_the_attempt_instead_of_leaving_it_running():
+    # WHY: attempt 를 RUNNING 으로 남기면 Reconciler 가 **이미 끝난 실행을 STALLED** 로 오판하고,
+    #      STALLED 는 resolve 경로가 없어 영구 OPEN 으로 쌓인다. 계측이 dispatch 전체를 감싸면서
+    #      인자 검증 SystemExit 까지 이 경로로 들어온다(SystemExit 은 Exception 이 아니다).
+    #      예외 자체는 삼키지 않고 그대로 전파해야 한다 — 계측이 흐름을 바꾸면 안 된다.
+    db = FakeOpsDB()
+    _seed(db)
+
+    def _boom():
+        raise SystemExit("KIS 가격은 --from 없이 --to 만 지정할 수 없다")
+
+    with pytest.raises(SystemExit):
+        wrapper.instrument(_boom, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+                           ecs_task_arn="arn:task/1")
+    assert len(db.attempts) == 1
+    assert db.attempts[0]["status"] == states.EXEC_FAILED     # RUNNING 으로 안 남는다
+    assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FAILED
+    assert db.etasks_by_id["et1"]["data_status"] == states.DATA_UNKNOWN
 
 
 def test_instrument_incomplete_data_keeps_outcome_fulfilled():

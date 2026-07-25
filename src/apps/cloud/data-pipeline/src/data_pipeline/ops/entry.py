@@ -51,6 +51,35 @@ def _scheduled_time() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def task_key_for(step: str, source: str | None) -> str | None:
+    """이 실행이 어느 논리 작업인가. 미등록이면 None(계측 없이 통과, ALPHA-181).
+
+    **정본은 실제로 돌린 CLI 다.** 원장에 남길 것은 이 컨테이너가 *한 일*이지 오케스트레이터가
+    *의도한 일*이 아니다 — 둘이 어긋날 때 env 를 따르면 하지도 않은 작업을 FULFILLED 로 만든다.
+    `OPS_SFN_STATE_NAME`(env)은 그래서 정체성이 아니라 **드리프트 알람**으로 쓴다: 해소 결과와
+    다르면 경고를 남기고 CLI 를 따른다. env 를 정본으로 두면 벤더까지 맞춰 검증해야 하는데
+    (`ingest-raw` 의 fmp/bigkinds 처럼 한 스텝이 벤더로 갈린다) 그 규칙은 `catalog.by_cli` 에
+    이미 있다 — 두 곳에 두면 갈린다.
+
+    CLI 해소라야 수동 회수도 계측된다(`--run-id <원래 run_id>` 로 원장에 붙이는 경로는 env 없이
+    돈다, README 레시피).
+    """
+    entry = catalog.by_cli(step, source)
+    state = os.environ.get("OPS_SFN_STATE_NAME")
+    if state:
+        by_state = catalog.by_sfn_state(state)
+        # 두 해소가 다르면 전부 드리프트다 — 서로 다른 작업(override), state 이름만 바뀌고
+        # 카탈로그가 안 따라온 경우(by_state=None), 반대로 등록 state 인데 CLI 가 미등록인
+        # 경우(entry=None) 모두. 한쪽만 검사하면 알람이 반쪽이라 덮은 척만 한다.
+        if (by_state.task_key if by_state else None) != (entry.task_key if entry else None):
+            logger.warning(
+                "OPS_SFN_STATE_NAME=%s(%s) 과 실행(%s%s→%s)이 불일치 — 실행을 따른다",
+                state, by_state.task_key if by_state else "미등록", step,
+                f" --source {source}" if source else "",
+                entry.task_key if entry else "미등록")
+    return None if entry is None else entry.task_key
+
+
 def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
     """3작업 중 하나를 원장 계측으로 감싼다. 원장 없으면 run_fn 만 돈다(투명 통과)."""
     ledger = ledger_from_settings(settings)
