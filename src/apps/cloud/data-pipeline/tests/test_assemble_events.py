@@ -881,6 +881,27 @@ def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch)
     assert meas[6] == "TOTAL"  # basis [] → surface 결정 판정("총")
 
 
+def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
+    """arguments/measures 컨테이너 자체가 비리스트(정수 등 truthy 스칼라)여도 그 기사만
+    결측 취급한다 — `or []` 는 truthy 스칼라를 못 거르고 TypeError 로 날짜 전체를
+    롤백시킨다(Codex #255 P2). 이벤트는 폴백 anchor 로 살고 measure 는 0건이다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [{"id": "a1", "predicate": _CONTRACT_PRED, "stage": None,
+          "arguments": 1, "measures": 5, "confidence": "H"}])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [arg] = _batch(conn, "event_argument")  # 폴백 anchor 행만
+    assert (arg[1], arg[2]) == ("SUPPLIER", "inst_SAMSUNG")
+    assert _batch(conn, "event_measure") == []
+
+
 def test_quantity_unit_family_mismatch_stays_unresolved(tmp_path, monkeypatch):
     """수량 역할의 unit_family 와 파서 단위 소속이 다르면(CONTRACT_VALUE+5%,
     CONTRACT_DURATION+%) 값을 지어내지 않고 UNRESOLVED + unit_mismatch 로 남긴다 — PCT 가

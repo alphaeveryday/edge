@@ -391,7 +391,9 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     arguments: list[dict] = []
     # primary 행은 항상 실린다(참여자로 해소되거나 폴백 행으로) — required 충족 판정에 포함.
     covered_roles: set[str] = {gate_cls["role_code"]}
-    for raw in item.get("arguments") or []:
+    raw_arguments = item.get("arguments")
+    # 컨테이너 자체가 비리스트(스칼라 등)면 결측과 동급 — TypeError 로 날짜 전체를 굴리지 않는다.
+    for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
         if not isinstance(raw, dict):
             continue
         role = str(raw.get("role") or "")
@@ -417,7 +419,8 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         })
 
     measures: list[dict] = []
-    for raw in item.get("measures") or []:
+    raw_measures = item.get("measures")
+    for raw in (raw_measures if isinstance(raw_measures, list) else ()):
         if not isinstance(raw, dict):
             continue
         role = str(raw.get("role") or "")
