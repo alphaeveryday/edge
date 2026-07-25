@@ -5,9 +5,10 @@
 
 매칭 규약(v4 DART 레인): 공시 제출인과 같은 발행회사(공급계약 공시의 제출인은 **공급사**이므로
 사건의 ``SUPPLIER`` 참여자를 ``equity_profile`` 로 issuer actor 에 접지) · 상대오차
-``|value − dart| / dart < 0.08`` · 공시 ``available_at`` 이 사건
-available_at ±7일. 후보 공시가 **정확히 1건**일 때만 승격하고, 모호(2건 이상)하면 PARSED 를
-보존한 채 카운터로 드러낸다(Rule 12 — 조용한 오귀속보다 미승격이 싸다).
+``|value − dart| / dart < 0.08`` · 공시 available_at 이 사건 available_at ±7일(KST 달력일).
+승격은 **공급사 후보가 유일**하고 **후보 공시가 정확히 1건**일 때만 한다 — 둘 중 하나라도
+여럿이면 금액을 어느 제출인에 귀속할지 단정할 수 없으므로 PARSED 를 보존한 채 카운터로
+드러낸다(Rule 12 — 조용한 오귀속보다 미승격이 싸다).
 """
 from __future__ import annotations
 
@@ -99,7 +100,9 @@ def match_candidates(measures, facts, *, tolerance: float = TOLERANCE,
             if abs((_kst_day(available_at) - _kst_day(fact_at)).days) > window_days:
                 continue
             candidates[rcept_no] = (issuer, amount)
-        if len(candidates) == 1:
+        # 공급사가 여럿이면(무그룹 측정행 × 다중 공급사, 또는 같은 그룹의 컨소시엄) 금액을
+        # 특정 제출인에 귀속할 근거가 없다 — 근처 공시 1건을 가진 쪽으로 승격하면 조작이다.
+        if len(candidates) == 1 and len(issuers) == 1:
             updates.append((next(iter(candidates)), source_event_id, measure_ord))
         elif candidates:
             ambiguous += 1

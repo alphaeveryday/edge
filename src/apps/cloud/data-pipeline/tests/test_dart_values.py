@@ -51,9 +51,11 @@ def test_issuer_and_window_gates():
     assert len(near) == 1
 
 
-def test_wrapper_groups_participant_fanout_and_updates_once():
-    """참여자 2명 조인 곱으로 같은 측정행이 2행으로 와도 (사건, ord) 로 접혀 UPDATE 는
-    1건만 나간다 — 곱셈이 새면 승격이 중복 실행된다. UPDATE 는 PARSED 행만 만진다."""
+def test_wrapper_folds_supplier_fanout_before_judging():
+    """공급사 2명 조인 곱으로 같은 측정행이 2행으로 와도 (사건, ord) 로 **먼저 접힌다** —
+    곱셈이 새면 같은 측정행이 두 번 판정돼 모호 카운터가 2로 부풀거나 승격이 중복 실행된다.
+    접은 뒤 규약을 적용하므로 공급사 2명은 모호 1건이고, 공급사 1명은 UPDATE 1건이다
+    (UPDATE 는 PARSED 행만 만진다)."""
 
     class _Cur:
         def __init__(self, conn):
@@ -77,18 +79,24 @@ def test_wrapper_groups_participant_fanout_and_updates_once():
             return False
 
     class _Conn:
-        def __init__(self):
-            self.measures = [("evt1", 0, 100_000.0, "actor_A", _AT),
-                             ("evt1", 0, 100_000.0, "actor_B", _AT)]
+        def __init__(self, measures):
+            self.measures = measures
             self.facts = [_f(100_000)]
             self.updates: list = []
 
         def cursor(self):
             return _Cur(self)
 
-    conn = _Conn()
-    assert match_dart_values(conn, "2026-07-15", "2026-07-15") == (1, 0)
-    [(sql, rows)] = conn.updates
+    # 공급사 2명 → 접혀서 모호 1건(2건이 아니다), UPDATE 없음.
+    fanout = _Conn([("evt1", 0, 100_000.0, "actor_A", _AT),
+                    ("evt1", 0, 100_000.0, "actor_B", _AT)])
+    assert match_dart_values(fanout, "2026-07-15", "2026-07-15") == (0, 1)
+    assert fanout.updates == []
+
+    # 공급사 1명 → 승격 1건, UPDATE 는 PARSED 행만.
+    single = _Conn([("evt1", 0, 100_000.0, "actor_A", _AT)])
+    assert match_dart_values(single, "2026-07-15", "2026-07-15") == (1, 0)
+    [(sql, rows)] = single.updates
     assert rows == [("R1", "evt1", 0)]
     assert "value_source = 'PARSED'" in sql
 
@@ -139,3 +147,16 @@ def test_fact_sql_prefilters_on_kst_day():
     sql = dart_values._FACT_SQL
     assert "(df.available_at AT TIME ZONE 'Asia/Seoul')::date" in sql
     assert "df.available_at >=" not in sql
+
+
+def test_multiple_suppliers_keep_parsed_even_with_one_candidate():
+    """공급사 후보가 여럿이면(무그룹 측정행 × 다중 공급사, 컨소시엄) 근처 공시가 1건뿐이어도
+    승격하지 않는다 — 그 금액이 그 제출인의 계약이라는 근거가 없어, 승격하면 남의 rcept 를
+    lineage 로 박는 조작이다. 손실은 모호 카운터로 드러난다(Codex #265 P2, Rule 12)."""
+    updates, ambiguous = match_candidates(
+        [_m(100_000.0, issuers=("actor_A", "actor_B"))], [_f(100_000, issuer="actor_A")])
+    assert updates == [] and ambiguous == 1
+
+    # 공급사가 유일하면 종전대로 승격한다 — 규약이 과하게 조여지면 승격이 전멸한다.
+    ok, _ = match_candidates([_m(100_000.0, issuers=("actor_A",))], [_f(100_000)])
+    assert [u[0] for u in ok] == ["R1"]
