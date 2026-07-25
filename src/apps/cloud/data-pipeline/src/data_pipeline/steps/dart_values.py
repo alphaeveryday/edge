@@ -23,8 +23,10 @@ WINDOW_DAYS = 7
 #
 # 세 가지 좁히기가 정합성에 필수다(Codex #265 P2):
 # 1) group_ord 짝 — 멀티기업 기사는 (주체↔값)을 group_ord 로 묶는다. 조인을 안 좁히면
-#    group 0 금액이 group 1 발행회사의 공시로 승격돼 엉뚱한 rcept 번호가 붙는다. 어느 쪽이든
-#    group_ord 가 NULL(단일 그룹)이면 짝을 알 수 없으니 종전대로 그 역할 전원을 본다.
+#    group 0 금액이 group 1 발행회사의 공시로 승격돼 엉뚱한 rcept 번호가 붙는다. **측정행에
+#    group 이 있으면 공급사도 같은 group 이어야 한다** — 공급사 쪽 group 이 NULL(기형 LLM
+#    출력)이면 모든 그룹의 금액에 붙어 엉뚱한 공급사 공시로 승격된다. 측정행 자체가 무그룹
+#    (단일 그룹 기사)일 때만 그 역할 전원을 본다.
 # 2) 역할·타입 — 대조 대상이 supply_contract_fact(공급계약 금액)뿐이므로 측정행도 같은 의미로
 #    좁힌다. 배당·자기주식 등 다른 KRW 금액이 우연히 ±8% 안에 들면 무관한 공시로 상표가 바뀐다.
 # 3) 제출인 측 역할 — supply_contract_fact 는 **제출 회사**(단일판매·공급계약 체결 공시의
@@ -36,13 +38,15 @@ _MEASURE_SQL = (
     " JOIN source_event se ON se.source_event_id = em.source_event_id"
     " JOIN event_argument ea ON ea.source_event_id = em.source_event_id"
     " AND ea.role_code = 'SUPPLIER'"
-    " AND (em.group_ord IS NULL OR ea.group_ord IS NULL OR ea.group_ord = em.group_ord)"
+    " AND (em.group_ord IS NULL OR ea.group_ord = em.group_ord)"
     " JOIN equity_profile ep ON ep.instrument_id = ea.entity_id"
     " WHERE em.value_source = 'PARSED' AND em.unit = 'KRW' AND em.value IS NOT NULL"
     " AND em.role_code = 'CONTRACT_VALUE'"
     " AND se.event_type_code = 'COMPANY.CONTRACT.SIGNING'"
-    " AND se.available_at >= %s::date"
-    " AND se.available_at < %s::date + interval '1 day'"
+    # 창은 canonical 파티션 일자(published_date=KST)와 같은 축인 se.event_date(DATE)로 잡는다.
+    # available_at(TIMESTAMPTZ)을 %s::date 와 비교하면 세션 TZ 로 해석돼(RDS 기본 UTC) KST
+    # 오전 기사가 전일로 밀려, 조립은 됐는데 승격 대상에서 조용히 빠진다(Codex #265 P2).
+    " AND se.event_date >= %s::date AND se.event_date <= %s::date"
 )
 
 # 대조 대상 공급계약 공시 사실 — 창은 사건 창의 ±WINDOW_DAYS 를 SQL 에서 미리 좁힌다.

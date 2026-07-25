@@ -93,19 +93,24 @@ def test_wrapper_groups_participant_fanout_and_updates_once():
     assert "value_source = 'PARSED'" in sql
 
 
-def test_measure_sql_binds_group_pair_supplier_and_contract_scope():
-    """SQL 계약 — 순수 함수가 못 지키는 세 좁히기를 쿼리에서 고정한다(Codex #265 P2).
+def test_measure_sql_binds_group_supplier_contract_and_day_scope():
+    """SQL 계약 — 순수 함수가 못 지키는 네 좁히기를 쿼리에서 고정한다(Codex #265 P2).
 
-    (1) group_ord 짝: 멀티기업 기사는 (주체↔값)을 group_ord 로 묶는다. 조인이 안 좁혀지면
-        group 0 금액이 group 1 발행회사의 공시로 승격돼 엉뚱한 rcept 번호가 lineage 에 남는다.
+    (1) group_ord 짝: 멀티기업 기사는 (주체↔값)을 group_ord 로 묶는다. 측정행에 group 이 있으면
+        공급사도 같은 group 이어야 한다 — 공급사 group 이 NULL 이어도 통과시키면 기형 출력 하나가
+        모든 그룹 금액에 붙어 엉뚱한 rcept 번호가 lineage 에 남는다.
     (2) 역할·타입: 대조 대상이 supply_contract_fact 뿐이라, 배당·자기주식 같은 다른 KRW
         금액이 우연히 ±8% 안에 들면 무관한 공시로 출처가 둔갑한다.
     (3) 제출인 측 역할: 공급계약 공시의 제출인은 공급사다. 상장 CUSTOMER 의 issuer 를 후보에
         넣으면 고객사의 무관한 공시로 승격되거나 공급사 공시와 함께 모호로 빠져 승격을 잃는다.
-    셋 다 실 DB 없이는 값으로 검증할 수 없어 쿼리 계약을 직접 고정한다(기존 threading 의
+    (4) 창 축: canonical 파티션(published_date=KST)과 같은 축인 event_date 로 잡아야 한다 —
+        available_at::date 는 세션 TZ(RDS 기본 UTC)로 해석돼 KST 오전 기사가 조용히 빠진다.
+    넷 다 실 DB 없이는 값으로 검증할 수 없어 쿼리 계약을 직접 고정한다(기존 threading 의
     novelty 필터 테스트와 같은 방식)."""
     sql = dart_values._MEASURE_SQL
-    assert "ea.group_ord = em.group_ord" in sql
+    assert "(em.group_ord IS NULL OR ea.group_ord = em.group_ord)" in sql
+    assert "ea.group_ord IS NULL" not in sql  # 무그룹 공급사는 그룹 금액에 붙지 않는다
     assert "ea.role_code = 'SUPPLIER'" in sql
     assert "em.role_code = 'CONTRACT_VALUE'" in sql
     assert "se.event_type_code = 'COMPANY.CONTRACT.SIGNING'" in sql
+    assert "se.event_date >= %s::date" in sql and "se.available_at >=" not in sql
