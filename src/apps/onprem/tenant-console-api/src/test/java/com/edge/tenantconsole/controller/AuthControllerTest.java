@@ -60,6 +60,31 @@ class AuthControllerTest {
 		}
 
 		@Override
+		public Optional<MemberEntity> findById(Long id) {
+			return Optional.ofNullable(member);
+		}
+
+		@Override
+		public List<MemberEntity> findAllOrderByMemberId() {
+			return member == null ? List.of() : List.of(member);
+		}
+
+		@Override
+		public List<Long> lockActiveAdminIds() {
+			return List.of();
+		}
+
+		@Override
+		public boolean existsByEmail(String email) {
+			return member != null && member.getEmail().equals(email);
+		}
+
+		@Override
+		public int deactivate(long memberId) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long memberId) {
 			lastLoginTouched = memberId;
 		}

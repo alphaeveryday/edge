@@ -1,6 +1,7 @@
 package com.edge.tenantconsole.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
+import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.mock.SessionMockStore;
 import com.edge.tenantconsole.service.ConsoleSessionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,9 +17,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * UI 계약(tenant-console-ui session 도메인)을 검증한다: 사이드바·헤더가 쓰는 테넌트
- * 컨텍스트 형상과 표시 이름 변경 반영이 핵심이다.
+ * 컨텍스트 형상, 표시 이름 변경 반영, 그리고 role 은 mock 이 아니라 인증 주체
+ * (SessionMember)의 실 역할로 나가는지가 핵심이다(UI 관리자 가드의 근거).
  */
 class ConsoleSessionControllerTest {
+
+	private static final SessionMember REVIEWER =
+			new SessionMember(2L, "reviewer@demo.edge.local", "데모 검수자", "COMPLIANCE_REVIEWER");
 
 	private MockMvc mvc;
 
@@ -32,14 +37,17 @@ class ConsoleSessionControllerTest {
 	}
 
 	@Test
-	void 세션은_테넌트_컨텍스트를_포함한다() throws Exception {
-		mvc.perform(get("/api/v1/session"))
+	void 세션은_테넌트_컨텍스트와_실_role_을_포함한다() throws Exception {
+		mvc.perform(get("/api/v1/session").sessionAttr(SessionMember.SESSION_KEY, REVIEWER))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
 				.andExpect(jsonPath("$.result.name").value("조영서"))
 				.andExpect(jsonPath("$.result.tenantName").value("KB증권"))
-				.andExpect(jsonPath("$.result.tenantMark").value("KB"));
+				.andExpect(jsonPath("$.result.tenantMark").value("KB"))
+				// role·email 은 mock 자리표시가 아니라 인증 주체 본인이어야 한다.
+				.andExpect(jsonPath("$.result.role").value("COMPLIANCE_REVIEWER"))
+				.andExpect(jsonPath("$.result.email").value("reviewer@demo.edge.local"));
 	}
 
 	@Test
@@ -48,7 +56,7 @@ class ConsoleSessionControllerTest {
 						.contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"김영서\"}"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true));
-		mvc.perform(get("/api/v1/session"))
+		mvc.perform(get("/api/v1/session").sessionAttr(SessionMember.SESSION_KEY, REVIEWER))
 				.andExpect(jsonPath("$.result.name").value("김영서"));
 	}
 

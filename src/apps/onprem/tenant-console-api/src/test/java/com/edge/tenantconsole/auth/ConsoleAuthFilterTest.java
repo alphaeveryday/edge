@@ -3,7 +3,9 @@ package com.edge.tenantconsole.auth;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.ReviewController;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.mock.SessionMockStore;
+import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.service.ConsoleSessionService;
@@ -17,6 +19,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -62,15 +65,75 @@ class ConsoleAuthFilterTest {
 		}
 	}
 
+	/** 원장 대역 — 이메일→현재 role 맵에 있으면 활성 계정, 없으면 비활성/삭제(Optional.empty). */
+	private static final class StubMembers implements MemberRepository {
+		private final Map<String, String> activeRoleByEmail;
+
+		StubMembers(Map<String, String> activeRoleByEmail) {
+			this.activeRoleByEmail = activeRoleByEmail;
+		}
+
+		@Override
+		public Optional<MemberEntity> findByEmailAndActiveTrue(String email) {
+			String role = activeRoleByEmail.get(email);
+			return role == null ? Optional.empty()
+					: Optional.of(new MemberEntity(1L, email, "n", role, true, "h"));
+		}
+
+		@Override
+		public Optional<MemberEntity> findById(Long id) {
+			return Optional.empty();
+		}
+
+		@Override
+		public List<MemberEntity> findAllOrderByMemberId() {
+			return List.of();
+		}
+
+		@Override
+		public List<Long> lockActiveAdminIds() {
+			return List.of();
+		}
+
+		@Override
+		public boolean existsByEmail(String email) {
+			return false;
+		}
+
+		@Override
+		public int deactivate(long id) {
+			return 0;
+		}
+
+		@Override
+		public long count() {
+			return 0;
+		}
+
+		@Override
+		public MemberEntity save(MemberEntity member) {
+			return member;
+		}
+
+		@Override
+		public void touchLastLogin(long id) {
+		}
+	}
+
 	private MockMvc mvc;
 
 	@BeforeEach
 	void setUp() {
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications());
+		// 원장 현재 상태 — reviewer=CR·ro=RO 는 활성, downgraded 는 세션엔 CR 이나 원장은 RO(강등).
+		StubMembers members = new StubMembers(Map.of(
+				"reviewer@demo.edge.local", "COMPLIANCE_REVIEWER",
+				"ro@demo.edge.local", "READ_ONLY",
+				"downgraded@demo.edge.local", "READ_ONLY"));
 		mvc = MockMvcBuilders.standaloneSetup(
 						new ReviewController(reviewService),
 						new ConsoleSessionController(new ConsoleSessionService(new SessionMockStore())))
-				.addFilters(new ConsoleAuthFilter())
+				.addFilters(new ConsoleAuthFilter(members))
 				.build();
 	}
 
@@ -143,6 +206,28 @@ class ConsoleAuthFilterTest {
 							return request;
 						}))
 				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void 비활성화된_계정의_기존_세션은_다음_요청에서_401이다() throws Exception {
+		// 로그인 후 비활성화된 계정(원장에 활성 레코드 없음) — 세션 role 이 무엇이든 즉시
+		// 재로그인 요구다. deactivate 가 세션 만료를 기다리지 않고 반영된다(ALPHA-119).
+		SessionMember gone =
+				new SessionMember(9L, "gone@demo.edge.local", "탈퇴", "COMPLIANCE_REVIEWER");
+		mvc.perform(get("/api/v1/review/items").session(sessionOf(gone)))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.code").value("CNSL4011"));
+	}
+
+	@Test
+	void 인가는_세션이_아니라_원장의_현재_role_로_판정한다() throws Exception {
+		// 세션엔 CR 로 로그인했지만 원장에서 RO 로 강등된 계정 — 검수 액션은 세션 캐시가
+		// 아니라 원장 현재 role(RO)로 판정돼 즉시 거부된다(역할 회수 즉시 반영).
+		SessionMember staleCr =
+				new SessionMember(2L, "downgraded@demo.edge.local", "강등", "COMPLIANCE_REVIEWER");
+		mvc.perform(post("/api/v1/review/items/er-1/approve").session(sessionOf(staleCr)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
 	}
 
 	@Test

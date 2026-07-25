@@ -1,5 +1,7 @@
 package com.edge.tenantconsole.auth;
 
+import com.edge.tenantconsole.entity.MemberEntity;
+import com.edge.tenantconsole.repository.MemberRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -24,18 +26,25 @@ import java.util.regex.Pattern;
  * 그 매트릭스의 "API 매핑" 표와 1:1 이며, 엔드포인트 추가 시 표와 여기에 함께
  * 행을 더한다. 매핑 없는 /api/** 는 거부가 기본이다(fail-closed).
  *
- * 인가는 세션에 실린 role 을 신뢰한다 — 로그인 이후의 계정 비활성화·역할 회수는
- * 세션 만료·로그아웃 전까지 즉시 반영되지 않는다(데모 범위의 트레이드오프). 매
- * 요청 is_active·role 재검증은 사용자 관리(ALPHA-119)와 함께 도입한다.
+ * 인가는 매 요청 원장(member)에서 계정 상태를 재확인한다(ALPHA-119) — 세션 캐시가
+ * 아니라 현재 is_active·role 로 판정하므로, 로그인 이후의 비활성화·역할 변경이 세션
+ * 만료를 기다리지 않고 즉시 반영된다(비활성·삭제 계정은 세션 무효화 후 재로그인 요구).
  */
 @Component
 public class ConsoleAuthFilter extends OncePerRequestFilter {
 
 	private static final Logger log = LoggerFactory.getLogger(ConsoleAuthFilter.class);
 
+	private final MemberRepository memberRepository;
+
+	public ConsoleAuthFilter(MemberRepository memberRepository) {
+		this.memberRepository = memberRepository;
+	}
+
 	private static final Set<String> ANY_ROLE = Set.of(
 			"TENANT_ADMIN", "COMPLIANCE_REVIEWER", "OPERATOR", "READ_ONLY");
 	private static final Set<String> COMPLIANCE_REVIEWER_ONLY = Set.of("COMPLIANCE_REVIEWER");
+	private static final Set<String> TENANT_ADMIN_ONLY = Set.of("TENANT_ADMIN");
 
 	private record Rule(String method, Pattern path, Set<String> roles) {
 		boolean matches(String requestMethod, String requestPath) {
@@ -76,8 +85,11 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("POST", Pattern.compile("/api/v1/scope/markets/[^/]+/toggle"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/scope/stocks"), ANY_ROLE),
 			new Rule("POST", Pattern.compile("/api/v1/scope/stocks/[^/]+/toggle"), ANY_ROLE),
-			new Rule("GET", Pattern.compile("/api/v1/members"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/members/invitations"), ANY_ROLE),
+			// 사용자 관리(ALPHA-119) — mock 완화를 벗어나 permission-matrix.md 의 실
+			// 권한(Users & Roles = TENANT_ADMIN 전용)을 적용한다. member 원장 실데이터.
+			new Rule("GET", Pattern.compile("/api/v1/members"), TENANT_ADMIN_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/members"), TENANT_ADMIN_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/members/[^/]+/deactivate"), TENANT_ADMIN_ONLY),
 			new Rule("GET", Pattern.compile("/api/v1/session"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/session/profile"), ANY_ROLE));
 
@@ -108,6 +120,25 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
+		// 세션 캐시가 아니라 원장의 현재 상태로 인가한다(ALPHA-119) — 비활성화·역할 변경 즉시 반영.
+		MemberEntity current = memberRepository.findByEmailAndActiveTrue(member.email()).orElse(null);
+		if (current == null) {
+			// 계정이 비활성화·삭제됨 → 세션을 무효화하고 재로그인을 요구한다(fail-closed).
+			HttpSession session = request.getSession(false);
+			if (session != null) {
+				session.invalidate();
+			}
+			write(response, HttpServletResponse.SC_UNAUTHORIZED, "CNSL4011", "로그인이 필요합니다.");
+			return;
+		}
+
+		// 로그인 이후 role 이 원장에서 바뀌었으면 세션 주체를 갱신한다 — /session·/auth/session
+		// 이 stale role 을 반환하지 않게(인가는 아래에서 이미 current.getRole() 로 최신).
+		if (!current.getRole().equals(member.role())) {
+			request.getSession().setAttribute(SessionMember.SESSION_KEY, new SessionMember(
+					member.memberId(), member.email(), member.name(), current.getRole()));
+		}
+
 		Rule rule = RULES.stream()
 				.filter(r -> r.matches(request.getMethod(), path)).findFirst().orElse(null);
 		if (rule == null) {
@@ -117,7 +148,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			write(response, HttpServletResponse.SC_FORBIDDEN, "CNSL4030", "이 작업을 수행할 권한이 없습니다.");
 			return;
 		}
-		if (!rule.roles().contains(member.role())) {
+		if (!rule.roles().contains(current.getRole())) {
 			write(response, HttpServletResponse.SC_FORBIDDEN, "CNSL4030", "이 작업을 수행할 권한이 없습니다.");
 			return;
 		}

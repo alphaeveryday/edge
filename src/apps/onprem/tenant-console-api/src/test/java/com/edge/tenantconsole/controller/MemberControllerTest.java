@@ -1,7 +1,11 @@
 package com.edge.tenantconsole.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
-import com.edge.tenantconsole.mock.MemberMockStore;
+import com.edge.common.exception.GeneralException;
+import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.CreateMemberRequest;
+import com.edge.tenantconsole.error.ConsoleErrorStatus;
+import com.edge.tenantconsole.model.Member;
 import com.edge.tenantconsole.service.MemberService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,52 +13,114 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * UI 계약(tenant-console-ui users 도메인)을 검증한다: 초대는 INVITED 상태로 목록에
- * 추가되고, 역할 어휘(Admin·Compliance)는 닫혀 있다 — 임의 역할이 통과하면 권한
- * 모델 정합(ALPHA-119)이 시작부터 어긋난다.
+ * 사용자 관리 표면(ALPHA-119) HTTP 계약 검증 — WHY: (1) 목록·등록 응답은 UI 계약대로
+ * camelCase(is_active → status·last_login_at → lastLogin)로 나가고, (2) 등록·비활성화의
+ * 감사 주체(actor)는 요청 파라미터가 아니라 "세션"에서 취해 서비스로 전달돼야 하며
+ * (감사 주체 위조 방지), (3) 도메인 예외가 상태코드로 매핑된다(중복=409).
  */
 class MemberControllerTest {
 
+	private FakeService service;
 	private MockMvc mvc;
+	private final SessionMember admin =
+			new SessionMember(7, "admin@demo.edge.local", "관리자", "TENANT_ADMIN");
 
 	@BeforeEach
 	void setUp() {
-		mvc = MockMvcBuilders
-				.standaloneSetup(new MemberController(new MemberService(new MemberMockStore())))
+		service = new FakeService();
+		mvc = MockMvcBuilders.standaloneSetup(new MemberController(service))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
 
 	@Test
-	void 초대는_INVITED_상태로_목록에_추가된다() throws Exception {
-		mvc.perform(post("/api/v1/members/invitations")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"email\":\"new.user@kbsec.com\",\"role\":\"Compliance\"}"))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.isSuccess").value(true));
-
+	void 목록은_원장을_camelCase_로_반환한다() throws Exception {
+		service.listResult = List.of(
+				new Member(1, "a@kbsec.com", "김철수", "TENANT_ADMIN", true, "h", null),
+				new Member(2, "b@kbsec.com", "박영희", "OPERATOR", false, null, null));
 		mvc.perform(get("/api/v1/members"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
-				.andExpect(jsonPath("$.result[5].email").value("new.user@kbsec.com"))
-				.andExpect(jsonPath("$.result[5].name").value("new.user"))
-				.andExpect(jsonPath("$.result[5].status").value("INVITED"))
-				.andExpect(jsonPath("$.result[5].lastLogin").value("—"));
+				.andExpect(jsonPath("$.result[0].id").value(1))
+				.andExpect(jsonPath("$.result[0].email").value("a@kbsec.com"))
+				.andExpect(jsonPath("$.result[0].status").value("ACTIVE"))
+				.andExpect(jsonPath("$.result[1].status").value("INACTIVE"));
 	}
 
 	@Test
-	void 어휘_밖_역할_초대는_400이다() throws Exception {
-		mvc.perform(post("/api/v1/members/invitations")
+	void 등록은_세션의_actor_로_서비스를_호출하고_생성결과를_반환한다() throws Exception {
+		service.registerResult = new Member(9, "new@kbsec.com", "신규", "OPERATOR", true, null, null);
+		mvc.perform(post("/api/v1/members")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"email\":\"x@kbsec.com\",\"role\":\"Owner\"}"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("CNSL4003"));
+						.content("{\"email\":\"new@kbsec.com\",\"name\":\"신규\",\"role\":\"OPERATOR\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.id").value(9))
+				.andExpect(jsonPath("$.result.status").value("ACTIVE"));
+		// 감사 주체는 요청 본문이 아니라 세션에서 온다.
+		assertThat(service.capturedActor.memberId()).isEqualTo(7);
+	}
+
+	@Test
+	void 비활성화는_경로_id_와_세션_actor_로_서비스를_호출한다() throws Exception {
+		mvc.perform(post("/api/v1/members/9/deactivate")
+						.sessionAttr(SessionMember.SESSION_KEY, admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
+		assertThat(service.capturedDeactivateId).isEqualTo(9L);
+		assertThat(service.capturedActor.memberId()).isEqualTo(7);
+	}
+
+	@Test
+	void 중복_이메일_등록은_409_로_매핑된다() throws Exception {
+		service.registerThrow = new GeneralException(ConsoleErrorStatus.DUPLICATE_MEMBER_EMAIL);
+		mvc.perform(post("/api/v1/members")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"dup@kbsec.com\",\"name\":\"중복\",\"role\":\"OPERATOR\"}"))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("CNSL4093"));
+	}
+
+	/** MemberService 를 손수 대역화 — 컨트롤러의 HTTP·세션 관심사만 검증한다. */
+	private static final class FakeService extends MemberService {
+		List<Member> listResult = List.of();
+		Member registerResult;
+		RuntimeException registerThrow;
+		SessionMember capturedActor;
+		long capturedDeactivateId = -1;
+
+		FakeService() {
+			super(null, null);
+		}
+
+		@Override
+		public List<Member> list() {
+			return listResult;
+		}
+
+		@Override
+		public Member register(CreateMemberRequest request, SessionMember actor, String clientIp) {
+			this.capturedActor = actor;
+			if (registerThrow != null) {
+				throw registerThrow;
+			}
+			return registerResult;
+		}
+
+		@Override
+		public void deactivate(long memberId, SessionMember actor, String clientIp) {
+			this.capturedDeactivateId = memberId;
+			this.capturedActor = actor;
+		}
 	}
 }

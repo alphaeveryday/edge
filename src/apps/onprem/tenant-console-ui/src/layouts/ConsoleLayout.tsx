@@ -4,6 +4,7 @@ import { Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
+import { ROLE_LABEL } from '../domains/users';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 
 interface NavEntry {
@@ -12,6 +13,8 @@ interface NavEntry {
   icon: IconName;
   /** 이 경로들로 시작하면 active (상세 라우트 포함) */
   match: string[];
+  /** TENANT_ADMIN 전용 항목 — 그 외 역할에는 노출하지 않는다(permission-matrix.md). */
+  adminOnly?: boolean;
 }
 
 const NAV_SECTIONS: { section?: string; items: NavEntry[] }[] = [
@@ -31,7 +34,7 @@ const NAV_SECTIONS: { section?: string; items: NavEntry[] }[] = [
     section: '환경 설정',
     items: [
       { path: '/scope', label: '제공 범위 설정', icon: 'sliders', match: ['/scope'] },
-      { path: '/users', label: '사용자 및 권한', icon: 'users', match: ['/users'] },
+      { path: '/users', label: '사용자 및 권한', icon: 'users', match: ['/users'], adminOnly: true },
     ],
   },
 ];
@@ -112,7 +115,9 @@ export function ConsoleLayout() {
           {NAV_SECTIONS.map(({ section, items }) => (
             <div key={section ?? 'root'}>
               {section && <div className="nav-section">{section}</div>}
-              {items.map((item) => {
+              {items
+                .filter((item) => !item.adminOnly || session?.role === 'TENANT_ADMIN')
+                .map((item) => {
                 const active = item.match.some((m) => location.pathname.startsWith(m));
                 return (
                   <div
@@ -189,14 +194,16 @@ export function ConsoleLayout() {
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{session?.name}</div>
                   <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{session?.email}</div>
                   <div className="mt-1.5">
-                    <span className="chip">{session?.role}</span>
+                    <span className="chip">{session ? ROLE_LABEL[session.role] : ''}</span>
                   </div>
                 </div>
                 <div className="p-1">
-                  <div className="menu-item" onClick={() => navigate('/users')}>
-                    <Icon name="users" size={14} />
-                    사용자 및 권한
-                  </div>
+                  {session?.role === 'TENANT_ADMIN' && (
+                    <div className="menu-item" onClick={() => navigate('/users')}>
+                      <Icon name="users" size={14} />
+                      사용자 및 권한
+                    </div>
+                  )}
                   <div
                     className="menu-item"
                     onClick={() => {
