@@ -138,6 +138,19 @@ def test_running_over_time_is_stalled_execution_status_preserved():
     assert len(db.open_issues(states.ISSUE_STALLED)) == 1
 
 
+def test_uninstrumented_task_backfills_without_opening_ledger_gap():
+    # WHY: 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음 — TagNews)은 attempt 결측이
+    #      **정상**이다. LEDGER_GAP 을 열면 dedupe 키에 ECS ARN 이 들어가 런마다 새 이슈가 쌓이고
+    #      resolve 경로도 없어 영구 OPEN 이 된다. backfill 은 해야 한다 — 그게 유일한 증거다.
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "TAG_NEWS", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_entered("TagNews", arn="arn:task/tag", succeeded=True),
+               ecs=FakeEcs(tasks={"arn:task/tag": {"lastStatus": "STOPPED"}}))
+    assert len(db.attempts) == 1                       # 증거로 복구는 한다
+    assert db.attempts[0]["source"] == "RECONCILER_BACKFILL"
+    assert db.open_issues(states.ISSUE_LEDGER_GAP) == []
+
+
 def test_stalled_threshold_comes_from_the_catalog_entry(monkeypatch):
     # WHY: 작업마다 정상 실행 시간이 다르다 — LLM 스텝(tag-news·assemble-events)은 전역 기본
     #      1시간을 정상적으로 넘고 SFN 타임아웃은 6시간이다. 전역 상수로 판정하면 **정상 실행

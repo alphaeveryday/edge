@@ -383,8 +383,12 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
             execution_status=terminal or states.EXEC_RUNNING,
             sfn_state_name=entry.sfn_state_name, sfn_execution_arn=sfn_execution_arn,
             exit_code=occ.get("exit_code"))
-        _open(ledger, states.ISSUE_LEDGER_GAP, f"ledger_gap:{etid}:{arn}", None, task, summary,
-              "ledger_gap")
+        # 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음)은 attempt 결측이 **정상**이다 —
+        # 위 backfill 이 유일·정확한 경로이므로 LEDGER_GAP 을 열지 않는다. 열면 매 런 새 ARN 으로
+        # 새 이슈가 쌓이고(dedupe 키에 ARN 이 들어간다) resolve 경로도 없다(ALPHA-181).
+        if entry is None or entry.instrumented:
+            _open(ledger, states.ISSUE_LEDGER_GAP, f"ledger_gap:{etid}:{arn}", None, task, summary,
+                  "ledger_gap")
         return
     if matching["execution_status"] == states.EXEC_RUNNING:
         if terminal is not None:

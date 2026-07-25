@@ -8,10 +8,27 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**MVP 등록 범위**(스펙 §8): 가격 수직 슬라이스 3작업만. 나머지 SFN state 는 카탈로그에 없어
-expected_task 가 안 생기고, Reconciler 는 등록 작업만 대조한다. 확장은 아래 CATALOG 에 행 추가.
-종목 반복은 개별 작업이 아니라 manifest/completeness 로 관리하고(스펙 §3), 개별 품질 규칙은
-quality_check_result 소관이라 카탈로그에 넣지 않는다.
+**등록 범위: ECS Task state 33개 중 25개**(ALPHA-181 — MVP 3작업에서 확대). 미등록 state 는
+카탈로그에 없어 expected_task 가 안 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별
+작업이 아니라 manifest/completeness 로 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result
+소관이라 카탈로그에 넣지 않는다.
+
+**제외 9개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12):
+
+| 제외 | state | 왜 |
+|---|---|---|
+| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | DB env 가 없다. `tasks.tf` 가 명시하듯 host 만 주면 password 없는 DbConfig 로 `load_settings()` 가 통째로 실패해 **부분 주입이 불가능**하다 → 벤더 API 컨테이너에 RDS 마스터 비밀번호를 주는 신뢰경계 변경이 전제 |
+| `dart` | CollectDartFinancial·DartDisclosure | 〃 |
+| `krx` | CollectKrxEtf | 〃 |
+| `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
+
+`TagNews`(deepseek)도 DB env 가 없어 자기 attempt 를 못 쓰지만, **FeatureCheckResults 게이트의
+멤버**라 빼면 의존 판정이 거짓이 된다 — 등록하되 `instrumented=False` 로 두고 Reconciler 의 SFN
+증거 backfill 에 맡긴다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다).
+
+⚠️ 제외 8개 중 대부분이 **수집** 스텝이다 — 정제·적재는 다 덮이는데 수집 12개 중 5개만
+계측된다. 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387) 커버리지의 **모양**이 숫자보다
+중요하다. 해제는 위 신뢰경계 결정이 선행이다.
 """
 
 from __future__ import annotations
@@ -56,13 +73,20 @@ class CatalogEntry:
     # **KR 전용**이라 미국 시장 작업(FMP)에 걸면 KR 공휴일에 실제로 돈 수집이 "휴장이라 안 했다"로
     # 기록된다. dataset 문자열로 가르지 않는 이유: `price_daily` 는 fmp·kis 공통이다(ALPHA-181).
     kr_trading_calendar: bool = False
+    # 이 작업의 컨테이너가 **스스로 원장에 쓸 수 있는가**. False = task-def 에 DB env 가 없어
+    # wrapper 가 attempt 를 못 만든다 → 그 작업의 attempt 결측은 버그가 아니라 정상이고,
+    # Reconciler 가 SFN 증거로 backfill 하는 것이 유일·정확한 경로다(LEDGER_GAP 을 열지 않는다).
+    # 등록은 하는 이유: **게이트 멤버**라서 빠지면 의존 판정이 거짓이 된다(ALPHA-181).
+    instrumented: bool = True
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
         return self.log_dataset or self.dataset
 
 
-# 가격 수직 슬라이스 3작업. sfn_state_name 은 statemachine.tf 의 실제 state 와 일치해야 한다.
+# 등록 24작업. sfn_state_name·cli_command·ecs_task_definition 은 statemachine.tf 의 실제
+# state·command_expr·taskdef_key 와 일치해야 한다(test_ops_catalog 이 삼중항으로 대조한다).
+# 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
 _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="PRICE_COLLECTION_KIS",
@@ -102,15 +126,167 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         cli_command=("load-price-daily",),
         sfn_state_name="LoadPriceDaily",
         ecs_task_definition="rds",
-        # 정제→(LoadInstruments 직렬)→feature 게이트 뒤에야 canonical 가격을 읽을 수 있다.
-        # MASTER_LOAD 는 아직 카탈로그 미등록이라 의존에서 뺀다(등록 시 추가). NORMALIZE_PRICE
-        # 가 canonical 을 쓴 뒤라야 이 작업이 읽을 대상이 있다는 것이 핵심 선행이다.
-        depends_on=("NORMALIZE_PRICE",),
+        # 정제→(LoadInstruments·EnrichCorpCode 직렬)→feature 게이트 뒤에야 canonical 가격을
+        # 읽을 수 있다. 원래 주석이 "MASTER_LOAD 는 미등록이라 뺀다(등록 시 추가)"라고 예고했고
+        # ALPHA-181 에서 등록됐으므로 **형제 feature 6개와 같은 게이트 축**으로 맞춘다 — 안 그러면
+        # 같은 게이트가 닫힌 런에서 이 작업만 MISSED, 나머지는 BLOCKED 로 갈려 원장이 같은 원인을
+        # 다르게 기록한다(Rule 7 — 섞지 말고 하나를 고른다).
+        depends_on=("ENRICH_CORP_CODE",),
         deadline_offset_seconds=7200,
         # 적재 스텝의 quality_log 는 `_load` 접미사 파티션에 쓴다(정제 로그와 안 섞이게).
         log_dataset="price_daily_load",
         kr_trading_calendar=True,
         empty_allowed=False,
+    ),
+    # ── KIS 수집 4 ────────────────────────────────────────────────────────────────
+    # ⚠️ `kr_trading_calendar` 는 **기존 3작업 말고는 전부 False** 다(ALPHA-181). True 면 KR
+    # 휴장일에 Planner 가 SKIPPED 로 계획하는데, SFN 은 휴장일에도 돌아 컨테이너가 실제로
+    # 실행된다 — 그 실행 결과·실패가 원장에서 통째로 사라진다(SKIPPED 면 wrapper 가 attempt 를
+    # 안 만든다). 게다가 이 작업들은 휴장일에 할 일이 정말 없지도 않다: NAV·투자자는 소급창으로
+    # 직전 거래일을 회수하고, ETF 프로필은 날짜창 없는 전량 스냅샷이며, 적재 로더들은 창 미지정
+    # 이면 canonical 풀스캔으로 백로그를 줍는다. 0건이면 DUE 인 채 UNKNOWN 이 정직하다.
+    # (기존 3작업은 ALPHA-530 스펙 §3.3 의 결정이라 동작 보존을 위해 그대로 둔다.)
+    CatalogEntry(
+        task_key="NAV_COLLECTION_KIS", stage="raw", dataset="etf_nav", required=True,
+        cli_command=("ingest-raw-nav",), sfn_state_name="CollectKisNav",
+        ecs_task_definition="kis", source_vendor="kis",
+    ),
+    CatalogEntry(
+        task_key="ETF_PROFILE_COLLECTION_KIS", stage="raw", dataset="etf_profile", required=True,
+        cli_command=("ingest-raw-etf-profile",), sfn_state_name="CollectKisEtfProfile",
+        ecs_task_definition="kis", source_vendor="kis",
+    ),
+    CatalogEntry(
+        task_key="INVESTOR_COLLECTION_KIS", stage="raw", dataset="investor_flow_daily",
+        required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
+        ecs_task_definition="kis", source_vendor="kis",
+    ),
+    # ── BigKinds 뉴스 수집 ────────────────────────────────────────────────────────
+    # 뉴스는 휴장일에도 나온다 — kr_trading_calendar=False(비거래일에도 DUE).
+    CatalogEntry(
+        task_key="NEWS_COLLECTION_BIGKINDS", stage="raw", dataset="stock_news", required=True,
+        cli_command=("ingest-raw", "--source", "bigkinds"), sfn_state_name="CollectBigKindsNews",
+        ecs_task_definition="bigkinds", source_vendor="bigkinds",
+    ),
+    # ── 정제 8 (bigkinds task-def 재사용 — 레이크만 읽어 벤더 키 불요) ─────────────
+    # 정제의 depends_on 은 **비운다**: raw 부분실패는 뒤를 막지 않고(ADR-0030) 정제는 빈 입력을
+    # 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집 실패 런에서 **실제로 돌아 성공한 정제**가
+    # BLOCKED 로 오귀속된다. 반면 정제→feature 는 진짜 게이트라 아래에서 의존으로 그린다.
+    CatalogEntry(
+        task_key="NORMALIZE_NEWS", stage="normalize", dataset="news_articles", required=True,
+        cli_command=("normalize-news",), sfn_state_name="NormalizeNews",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_DISCLOSURE", stage="normalize", dataset="supply_contract_fact",
+        required=True, cli_command=("normalize-disclosure",), sfn_state_name="NormalizeDisclosure",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_DISCLOSURE_SEGMENT", stage="normalize",
+        dataset="business_segment_fact", required=True,
+        cli_command=("normalize-disclosure-segment",), sfn_state_name="NormalizeDisclosureSegment",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_ETF", stage="normalize", dataset="etf_holdings", required=True,
+        cli_command=("normalize-etf",), sfn_state_name="NormalizeEtf",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_ETF_PROFILE", stage="normalize", dataset="etf_profile", required=True,
+        cli_command=("normalize-etf-profile",), sfn_state_name="NormalizeEtfProfile",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_ETF_NAV", stage="normalize", dataset="etf_nav", required=True,
+        cli_command=("normalize-etf-nav",), sfn_state_name="NormalizeEtfNav",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_INVESTOR", stage="normalize", dataset="investor_flow_daily",
+        required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+    ),
+    # ── 태깅 (deepseek task-def — DB env 없음) ─────────────────────────────────────
+    # 등록하되 `instrumented=False` 다. 이 컨테이너는 원장에 못 쓰지만 **FeatureCheckResults
+    # 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LoadAssertions 의 의존이 전부 충족된 것으로
+    # 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로 찍힌다(Codex #273 P1).
+    CatalogEntry(
+        task_key="TAG_NEWS", stage="feature", dataset="news_assertions", required=True,
+        cli_command=("tag-news",), sfn_state_name="TagNews",
+        ecs_task_definition="deepseek", depends_on=("NORMALIZE_NEWS",),
+        deadline_offset_seconds=7200, stalled_after_seconds=21600, instrumented=False,
+    ),
+    # ── 적재 7 + 직렬 2 (rds task-def) ────────────────────────────────────────────
+    CatalogEntry(
+        task_key="LOAD_INSTRUMENTS", stage="feature", dataset="instrument_master", required=True,
+        cli_command=("load-instruments",), sfn_state_name="LoadInstruments",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+        # ASL `NormalizeCheckResults` = 정제 **전량 성공** 게이트. 하나라도 죽으면 이 뒤가 통째로
+        # 미진입인데, 의존을 비워 두면 그게 MISSED("시작조차 안 됐다")로 찍힌다 — 진실은
+        # BLOCKED(게이트가 닫혔다)다. ADR-0030 과 충돌하지 않는다: 그건 raw→정제 얘기고
+        # (그래서 정제 엔트리는 의존이 비어 있다) 여긴 정제→feature 게이트다.
+        depends_on=(
+            "NORMALIZE_NEWS", "NORMALIZE_PRICE", "NORMALIZE_DISCLOSURE",
+            "NORMALIZE_DISCLOSURE_SEGMENT", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
+            "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
+        ),
+    ),
+    CatalogEntry(
+        task_key="LOAD_PRICE_TRIGGERS", stage="feature", dataset="price_movement_trigger",
+        required=True, cli_command=("load-price-triggers",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadPriceTriggers",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_ETF_NAV", stage="feature", dataset="etf_nav_daily", required=True,
+        cli_command=("load-etf-nav",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfNav",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_ETF_HOLDINGS", stage="feature", dataset="etf_holding_snapshot",
+        required=True, cli_command=("load-etf-holdings",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfHoldings",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_ETF_FLOW", stage="feature", dataset="investor_flow_load", required=True,
+        cli_command=("load-etf-flow",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfFlow",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_DOCUMENTS", stage="feature", dataset="document", required=True,
+        cli_command=("load-documents",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadDocuments",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_DISCLOSURE", stage="feature", dataset="disclosure_document", required=True,
+        cli_command=("load-disclosure",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadDisclosure",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+    ),
+    CatalogEntry(
+        task_key="LOAD_ASSERTIONS", stage="feature", dataset="document_assertion", required=True,
+        cli_command=("load-assertions",), sfn_state_name="LoadAssertions",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+        # ASL `FeatureCheckResults` = feature 전량 성공 게이트(직렬 진입 조건).
+        depends_on=("TAG_NEWS", "LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV",
+                    "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW", "LOAD_DOCUMENTS", "LOAD_DISCLOSURE"),
+    ),
+    # ── 이벤트 조립 (events task-def — LLM 분류 + DB 적재) ─────────────────────────
+    # LLM 이라 정상 실행이 1시간을 넘는다. STALLED 임계를 SFN 타임아웃(6시간)에 맞춘다 —
+    # 기본 1시간이면 정상 실행 중에 STALLED 가 붙고 resolve 경로가 없어 영구 OPEN 이다.
+    CatalogEntry(
+        task_key="ASSEMBLE_EVENTS", stage="feature", dataset="source_event", required=True,
+        cli_command=("assemble-events",), depends_on=("LOAD_ASSERTIONS",),
+        sfn_state_name="AssembleEvents",
+        ecs_task_definition="events", deadline_offset_seconds=10800,
+        stalled_after_seconds=21600,
+    ),
+    # ── corp_code enrichment (rds_dart) ───────────────────────────────────────────
+    CatalogEntry(
+        task_key="ENRICH_CORP_CODE", stage="feature", dataset="company_profile", required=True,
+        cli_command=("enrich-corp-code",), depends_on=("LOAD_INSTRUMENTS",),
+        sfn_state_name="EnrichCorpCode",
+        ecs_task_definition="rds_dart", deadline_offset_seconds=7200,
     ),
 )
 
@@ -148,16 +324,19 @@ def by_cli(step: str, source: str | None = None) -> CatalogEntry | None:
     # 이 스텝이 카탈로그에서 벤더로 갈리는가. 갈리는 스텝에 **모르는 벤더**가 오면 폴백하지
     # 않는다 — 폴백하면 `ingest-raw --source bogus` 가 FMP 뉴스 작업으로 기록된다.
     vendor_split = any("--source" in e.cli_command for e in candidates)
+    # 미지정은 기본 벤더다 — ASL 이 `--source fmp` 를 명시하는 잡도 있고(CollectFmpNews) 사람이
+    # 생략하고 도는 경로도 있는데, 둘이 같은 작업으로 해소돼야 수동 회수가 계측된다.
+    vendor = source or _DEFAULT_VENDOR
     fallback = None
     for entry in candidates:
         if "--source" in entry.cli_command:
             idx = entry.cli_command.index("--source") + 1
             entry_vendor = entry.cli_command[idx] if idx < len(entry.cli_command) else ""
-            if source is not None and entry_vendor == source:
+            if entry_vendor == vendor:
                 return entry
         elif fallback is None:
             fallback = entry
-    if vendor_split and source is not None and source != _DEFAULT_VENDOR:
+    if vendor_split and vendor != _DEFAULT_VENDOR:
         return None
     return fallback
 
@@ -189,6 +368,7 @@ def content_hash() -> str:
             "deadline_offset_seconds": e.deadline_offset_seconds,
             "stalled_after_seconds": e.stalled_after_seconds,
             "kr_trading_calendar": e.kr_trading_calendar,
+            "instrumented": e.instrumented,
             "source_vendor": e.source_vendor,
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,

@@ -7,7 +7,7 @@ SFN/ECS 실행을 사후 복구 가능하게 관측하는 Postgres projection. �
 - `catalog`  : Task Catalog(안정적 카탈로그 ID·의존·content hash). 정적 의존의 SSOT
 - `ledger`   : 5테이블 repository(lazy 커넥션, 멱등 insert, bounded backoff)
 - `planner`  : 실행 전 pipeline_run+expected_task 원자 생성 → SFN StartExecution(멱등)
-- `wrapper`  : 3작업 instrumentation(attempt 시작/종료·data_status 관측)
+- `wrapper`  : 등록 작업 instrumentation(attempt 시작/종료·data_status 관측)
 - `reconciler`: 예정↔실제(SFN/ECS 증거) 대조 — MISSED/BLOCKED/STALLED/LEDGER_GAP 등
 
 `db.py`(레이크가 S3 SSOT 이듯 DB 접속 SSOT)를 재사용하되, 원장 커넥션은 **lazy** 다 — 원장
