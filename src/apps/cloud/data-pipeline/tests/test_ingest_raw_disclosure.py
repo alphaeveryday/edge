@@ -20,7 +20,9 @@ base_url = "https://fmp.example/stable/news/stock"
 base_url = "https://fmp.example/stable/historical-price-eod/full"
 
 [targets]
-symbols = ["005930"]
+# 운영 sources.toml 과 같은 모양 — KR 개별주·ETF(091160)·US 심볼이 섞여 있다. ETF 를 빼둔
+# CONFIG 로 테스트하면 '유니버스에 ETF 가 섞여 들어오는' 실제 경로를 못 밟는다(ALPHA-477).
+symbols = ["005930", "091160", "NVDA"]
 """
 
 
@@ -295,10 +297,14 @@ def test_universe_derived_from_holdings_excludes_etf_itself(tmp_path):
 
     assert code == 0
     assert {"042700", "000660"} <= set(source.received)  # 구성종목은 들어온다
-    assert "091160" not in source.received  # ETF 자신은 제외
     assert "111111" not in source.received  # 최신 스냅샷만
     assert "005930" in source.received  # 기존 targets 는 유지(union)
-    assert _log(storage, "r1")["symbols_from_holdings"] == 2
+    # ETF 는 holdings 파생분이든 **정적 targets 에 등재된 것이든** 빠져야 한다. 091160 은 운영
+    # sources.toml 의 targets 에도 있어, holdings 쪽만 걸러선 매 런 미매핑으로 남는다.
+    assert "091160" not in source.received
+    log = _log(storage, "r1")
+    assert log["symbols_from_holdings"] == 2
+    assert log["symbols_excluded_etf"] == 1  # 091160 — 뺀 사실이 로그로 드러난다
 
 
 def test_unmapped_targets_stay_success_but_counted(tmp_path):

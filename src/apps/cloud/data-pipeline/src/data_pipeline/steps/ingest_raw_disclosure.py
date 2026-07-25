@@ -26,7 +26,7 @@ from ..lake import (
 )
 from ..sources import DartDisclosureSource, StopFetch
 from ..sources.dart_disclosure import BODY_FORMAT
-from .ingest_price_raw import _kr_holdings_universe
+from .ingest_price_raw import _kr_etf_ids, _kr_holdings_universe
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +90,22 @@ def run(
     # 날 수 있다(Codex #83 P2). 메타(작은 ndjson)만 파티션별로 버퍼링해 저장 단계에서 쓴다.
     try:
         # 수집 유니버스 — 소스가 옵트인하면(ALPHA-477) canonical KR holdings 최신 스냅샷의
-        # **구성종목**을 targets 에 union 한다(가격·수급과 같은 축, 단 ETF 자기 티커는 제외 —
-        # ETF 는 DART 신고자가 아니다). holdings 읽기 실패도 이 try 안 — "결과는 항상
-        # collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
+        # **구성종목**을 targets 에 union 한다(가격·수급과 같은 축). holdings 읽기 실패도 이
+        # try 안 — "결과는 항상 collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
+        #
+        # ETF 자기 티커는 **출처와 무관하게** 뺀다: holdings 파생분만 걸러선 부족하고, 정적
+        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라
+        # corpCode.xml 에 없어, 남겨두면 매 런 미매핑으로 잡혀 ops.failed_records>0 →
+        # 원장이 영구 INCOMPLETE 가 된다(`ops/wrapper.py`). 결측이 아닌 것을 결측으로 세는 셈.
         symbols = list(settings.targets.symbols)
-        log["symbols_from_holdings"] = 0
+        log["symbols_from_holdings"] = log["symbols_excluded_etf"] = 0
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, include_etf=False)
+            etf_ids = _kr_etf_ids(storage)
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
-            symbols = sorted(set(symbols) | set(universe))
+            merged = (set(symbols) | set(universe)) - etf_ids
+            log["symbols_excluded_etf"] = len(set(symbols) | set(universe)) - len(merged)
+            symbols = sorted(merged)
         for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
             market = record["market"]

@@ -43,24 +43,42 @@ def _kr_holdings_universe(storage: Storage, *, include_etf: bool = True) -> list
     소비처가 발행회사 축인 소스용이다. ETF 는 DART 신고자가 아니라 corpCode.xml 에 아예
     없으므로, 넣으면 31 종이 매 런 '미매핑'으로 잡혀 결측이 아닌 것을 결측으로 센다.
     """
+    # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
+    fields = ("constituent_ticker", "etf_id") if include_etf else ("constituent_ticker",)
+    tickers: set[str] = set()
+    for row in _latest_kr_holdings_rows(storage):
+        for value in (row.get(f) for f in fields):
+            code = krx_short_code(value)
+            if code:
+                tickers.add(code)
+    return sorted(tickers)
+
+
+def _kr_etf_ids(storage: Storage) -> set[str]:
+    """canonical KR holdings 최신 스냅샷의 **ETF 자기 티커** 집합(ALPHA-477).
+
+    ETF 는 DART 신고자가 아니라 corpCode.xml 에 없다 — 공시 수집은 유니버스가 holdings 파생이든
+    정적 targets(091160 이 등재돼 있다)든 출처와 무관하게 이 집합을 빼야 한다. 안 빼면 매 런
+    같은 종이 미매핑으로 잡혀 `ops.failed_records>0` → 원장이 영구 INCOMPLETE 가 된다
+    (`ops/wrapper.py` 의 failed_records 판정).
+    """
+    return {code for row in _latest_kr_holdings_rows(storage)
+            if (code := krx_short_code(row.get("etf_id")))}
+
+
+def _latest_kr_holdings_rows(storage: Storage) -> list[dict]:
+    """canonical KR holdings **최신 스냅샷**의 행. 스냅샷이 없으면 빈 목록."""
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     dates.discard("")
     if not dates:
         return []
-    tickers: set[str] = set()
+    rows: list[dict] = []
     prefix = canonical_etf_holdings_partition("KR", max(dates))
     for key in storage.list_keys(prefix + "/"):
-        if not key.endswith(".parquet"):
-            continue
-        for row in _read_parquet_rows(storage.get_bytes(key)):
-            # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
-            fields = ("constituent_ticker", "etf_id") if include_etf else ("constituent_ticker",)
-            for value in (row.get(f) for f in fields):
-                code = krx_short_code(value)
-                if code:
-                    tickers.add(code)
-    return sorted(tickers)
+        if key.endswith(".parquet"):
+            rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+    return rows
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
