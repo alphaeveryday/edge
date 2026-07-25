@@ -81,11 +81,11 @@ def _multi(state, occs):
     return events
 
 
-def _reconcile(db, *, history=None, ecs=None, status="RUNNING"):
+def _reconcile(db, *, history=None, ecs=None, status="RUNNING", stalled_after_seconds=None):
     return reconcile_run(
         _ledger(db), run_key=_RUN_KEY, now=_NOW,
         sfn_client=FakeSfn(history=history or [], describe={"status": status}),
-        ecs_client=ecs or FakeEcs())
+        ecs_client=ecs or FakeEcs(), stalled_after_seconds=stalled_after_seconds)
 
 
 def test_missed_when_state_not_entered_eligible_and_past_deadline():
@@ -157,6 +157,13 @@ def test_stalled_threshold_comes_from_the_catalog_entry(monkeypatch):
     _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
                ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "RUNNING"}}))
     assert db.open_issues(states.ISSUE_STALLED) == []   # 이 작업엔 아직 정상 범위다
+
+    # 호출부가 명시하면 그게 이긴다(운영 오버라이드) — 인자를 받아놓고 조용히 무시하면
+    # "임계를 낮춰 조사한다"가 아무 효과 없이 통과한다(Codex #271).
+    _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
+               ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "RUNNING"}}),
+               stalled_after_seconds=1)
+    assert len(db.open_issues(states.ISSUE_STALLED)) == 1
 
 
 def test_confirmed_ecs_stopped_transitions_running_attempt():

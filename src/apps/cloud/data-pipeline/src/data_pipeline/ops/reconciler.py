@@ -39,7 +39,6 @@ from .ledger import Ledger
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_STALLED_AFTER_SEC = 3600
 _ORCH_MAP = {
     "RUNNING": states.ORCH_RUNNING, "SUCCEEDED": states.ORCH_SUCCEEDED,
     "FAILED": states.ORCH_FAILED, "TIMED_OUT": states.ORCH_TIMED_OUT,
@@ -214,7 +213,7 @@ def reconcile_run(
     ecs_client=None,
     cluster_arn: str | None = None,
     now: datetime | None = None,
-    stalled_after_seconds: int = _DEFAULT_STALLED_AFTER_SEC,
+    stalled_after_seconds: int | None = None,
 ) -> dict:
     """한 run 을 대조한다. 관측·판정 요약 dict 반환."""
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
@@ -393,9 +392,11 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
                                       exit_code=occ.get("exit_code"))
         else:
             started = _parse_ts(matching.get("started_at"))
-            # 작업별 임계가 정본 — 전역 상수는 미등록·폴백용이다(LLM 스텝은 1시간을 정상적으로
-            # 넘고, STALLED 는 resolve 경로가 없어 한 번 열리면 영구 OPEN 이다).
-            threshold = entry.stalled_after_seconds if entry is not None else stalled_after_seconds
+            # 작업별 임계가 정본이고, 호출부가 명시하면 그게 이긴다(운영 오버라이드).
+            # LLM 스텝은 1시간을 정상적으로 넘고, STALLED 는 resolve 경로가 없어 한 번 열리면
+            # 영구 OPEN 이라 전역 상수 하나로 판정하면 안 된다.
+            threshold = (stalled_after_seconds if stalled_after_seconds is not None
+                         else entry.stalled_after_seconds)
             if started is not None and (now - started).total_seconds() > threshold:
                 _open(ledger, states.ISSUE_STALLED, f"stalled:{matching['attempt_id']}", None,
                       task, summary, "stalled")
