@@ -209,3 +209,78 @@ def test_nav_shares_the_krx_etf_universe(monkeypatch):
     assert captured["etf_map"] == settings.krx_etf.source.etf_map
     assert captured["etf_map"], "NAV 유니버스가 비어 있으면 수집 대상이 0이다"
     assert captured["window"] == ("2026-07-14", "2026-07-17")
+
+
+def _spy_tag_news(monkeypatch):
+    """tag-news 분기가 tag_news.run 에 넘긴 (from_date, to_date) 를 캡처한다.
+    tag-news 는 LLM_API_KEY 가 필수라 넣어 주고, complete_fn 은 클로저만 만들어 호출 안 한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    def fake_run(storage, run_id, *, complete_fn, from_date, to_date, limit, concurrency):
+        captured["window"] = (from_date, to_date)
+        return 0
+
+    monkeypatch.setattr(run_mod.tag_news, "run", fake_run)
+    return run_mod, captured
+
+
+def test_tag_news_window_days_prunes_to_recent_partitions(monkeypatch):
+    # WHY: 일일 SFN 은 ASL 로 날짜 산술을 못 해 --window-days 만 넘긴다 — run 이 그걸 오늘−N
+    #      창으로 번역해야 read=O(전체 코퍼스) 풀스캔(실측 17분)이 최근 파티션으로 좁혀진다
+    #      (ALPHA-540). 배선이 끊기면 컴파일은 되고 매 런이 다시 전량 스캔하므로 값으로 고정.
+    run_mod, captured = _spy_tag_news(monkeypatch)
+    monkeypatch.setattr(run_mod, "default_window", lambda now, days: (f"from-{days}", f"to-{days}"))
+    assert main(["tag-news", "--run-id", "R1", "--window-days", "3"]) == 0
+    assert captured["window"] == ("from-3", "to-3")
+
+
+def test_tag_news_explicit_window_overrides_window_days(monkeypatch):
+    # WHY: 명시 --from/--to(백필)는 --window-days 보다 우선해야 한다 — 과거 구간 백필이
+    #      조용히 최근 N일로 좁혀지면 그 구간이 영영 태깅되지 않는다.
+    run_mod, captured = _spy_tag_news(monkeypatch)
+
+    def _boom(*a, **k):
+        raise AssertionError("명시 창이 있으면 default_window 를 부르면 안 된다")
+
+    monkeypatch.setattr(run_mod, "default_window", _boom)
+    assert main(["tag-news", "--run-id", "R", "--window-days", "3",
+                 "--from", "2026-01-01", "--to", "2026-01-05"]) == 0
+    assert captured["window"] == ("2026-01-01", "2026-01-05")
+
+
+def test_tag_news_without_window_is_full_scan(monkeypatch):
+    # WHY: --window-days 미주입(수동·백필 기본)은 풀스캔이어야 창 밖 미태깅·정정본 회수 경로가
+    #      살아 있다(백로그 보전). from/to 가 None 으로 넘어가 tag_news 가 전체 파티션을 본다.
+    run_mod, captured = _spy_tag_news(monkeypatch)
+
+    def _boom(*a, **k):
+        raise AssertionError("창 미주입은 풀스캔 — default_window 를 부르면 안 된다")
+
+    monkeypatch.setattr(run_mod, "default_window", _boom)
+    assert main(["tag-news", "--run-id", "R"]) == 0
+    assert captured["window"] == (None, None)
+
+
+def test_tag_news_negative_window_days_fails_loud(monkeypatch):
+    # WHY: 음수 --window-days 는 default_window 를 (오늘+N, 오늘) 역전 창으로 만들어
+    #      _partition_dates 가 전 파티션을 제외 → 0건 태깅 후 exit 0 으로 성공 위장한다.
+    #      그건 Rule 12 위반이라 조용히 0건이 아니라 즉시 실패해야 한다(SFN 이 성공으로 오판 금지).
+    run_mod, captured = _spy_tag_news(monkeypatch)
+
+    def _boom(*a, **k):
+        raise AssertionError("음수 창은 default_window 에 닿기 전에 거부돼야 한다")
+
+    monkeypatch.setattr(run_mod, "default_window", _boom)
+    with pytest.raises(SystemExit):
+        main(["tag-news", "--run-id", "R", "--window-days", "-3"])
+    assert "window" not in captured, "음수 창은 tag_news.run 에 닿으면 안 된다"
+
+    # 명시 --from 이 함께 와 창 계산이 무시되는 경로에서도 음수는 거부한다 — 잘못된 입력이
+    # "명시 창이 이겼으니 괜찮다"로 조용히 삼켜지면 안 된다(Rule 12, 가드는 분기 밖에 있어야).
+    with pytest.raises(SystemExit):
+        main(["tag-news", "--run-id", "R", "--from", "2026-01-01", "--window-days", "-3"])
+    assert "window" not in captured

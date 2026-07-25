@@ -6,17 +6,20 @@
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
-        [--source VENDOR] [--input-run-id RUN_ID] [--limit N]
+        [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
 
 태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
 (analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
 
 수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음).
-tag-news 는 같은 인자를 **태깅 대상 파티션 프루닝**에 쓴다(raw 수집 창이 아니라 canonical
+tag-news 는 --from/--to 를 **태깅 대상 파티션 프루닝**에 쓴다(raw 수집 창이 아니라 canonical
 published_date 범위이며, 미지정은 증분 기본창이 아니라 전체다):
-  - 미지정(스케줄 증분): 어제~오늘 UTC 창을 앱이 계산한다. EventBridge Scheduler 는
-    정적 입력만 넣어 '어제/오늘'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다.
-  - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다.
+  - 미지정: 풀스캔 — 창 밖 미태깅·정정본까지 쓸어담는 회수 경로다(수동 백필 기본).
+  - 일일 SFN: --window-days N 으로 오늘−N일 창을 앱이 계산해 좁힌다(read=O(전체 코퍼스)
+    스캔이 런타임을 지배하므로 창이 곧 속도). EventBridge Scheduler 는 정적 입력만 넣어
+    '오늘−N'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다. 넓게 둘수록(한 날짜가
+    N+1회 스캔) 일시적 llm_error 가 창 안에서 자가 회복한다.
+  - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다(--window-days 보다 우선).
 run_id 는 미지정 시 UTC 타임스탬프. 같은 run_id·창으로 재실행하면 raw 파티션 파일을
 같은 키에 다시 써 겹쳐쓰기된다(재현 실행).
 """
@@ -138,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
     # 수에 비례해서 실수로 큰 금액이 나가는 걸 호출부가 막을 수 있게 둔다. 미지정=대상 전부.
     parser.add_argument("--limit", type=int, default=None,
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
+    parser.add_argument("--window-days", type=int, default=None,
+                        help="tag-news: 태깅 대상 파티션을 오늘−N일 창으로 제한(미지정=풀스캔). --from/--to 가 우선")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -300,9 +305,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라
-    # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=전체). 비용이 LLM 호출 수에
-    # 비례하므로 창·--limit 이 곧 비용 통제다. 그래서 아래 증분 기본창(어제~오늘) 계산을 타지
-    # 않도록 여기서 분기한다 — 태깅에 기본창을 씌우면 과거 기사가 영영 태깅되지 않는다.
+    # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=풀스캔). 그래서 아래 증분 기본창
+    # (어제~오늘) 자동 계산을 타지 않도록 여기서 분기한다 — 태깅에 기본창을 조용히 씌우면 과거
+    # 기사가 영영 태깅되지 않는다(풀스캔이 곧 백로그·정정본 회수 경로다).
+    # 대신 일일 SFN 경로는 --window-days 로 창을 **명시 opt-in** 한다: read=O(전체 코퍼스) 스캔이
+    # 런타임을 지배하므로(LLM 아님) 창이 곧 속도다. 창 밖 회수는 넓은 창(N일=한 날짜가 N+1회
+    # 스캔돼 일시적 llm_error 자가 회복) + 필요 시 풀스캔 수동 실행이 맡는다(ALPHA-540).
     if args.step == "tag-news":
         # LLM 설정은 **여기서** env 로 읽는다. llm.py 는 인자만 받고 env 를 모른다 —
         # DATA_PIPELINE_* 는 수집 설정(load_settings) 네임스페이스인데 LLM 은 수집 소스가
@@ -318,8 +326,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
+        # 음수 창은 언제 주어지든(명시 --from/--to 와 함께라 무시될 때조차) 거부한다 — 잘못된
+        # 입력이 조용히 삼켜지지 않게(Rule 12). default_window 가 (오늘+N, 오늘) 역전 창을 만들면
+        # _partition_dates 가 전 파티션을 제외해 0건 태깅을 exit 0 성공으로 위장한다.
+        if args.window_days is not None and args.window_days < 0:
+            raise SystemExit(f"--window-days 는 음수일 수 없다: {args.window_days}")
+        # 명시 --from/--to 가 최우선(백필). 없고 --window-days 만 있으면 오늘−N일 창으로 좁힌다.
+        from_date, to_date = args.from_date, args.to_date
+        if from_date is None and to_date is None and args.window_days is not None:
+            from_date, to_date = default_window(datetime.now(timezone.utc), args.window_days)
         return tag_news.run(storage, run_id, complete_fn=complete_fn,
-                            from_date=args.from_date, to_date=args.to_date, limit=args.limit,
+                            from_date=from_date, to_date=to_date, limit=args.limit,
                             concurrency=concurrency)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.

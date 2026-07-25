@@ -194,6 +194,23 @@ variable "tag_news_limit" {
   default     = 10000
 }
 
+# 일일 SFN TagNews 의 태깅 대상 창(오늘−N일). read=O(전체 코퍼스) 스캔이 tag-news 런타임을
+# 지배하므로(실측 17분, LLM 아님) 창이 곧 속도다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 —
+# 한 날짜가 N+1회 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고, 창보다 오래된 정정본만
+# 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔 유지 — 이 변수는 SFN 경로만.
+variable "tag_news_window_days" {
+  description = "일일 SFN tag-news 태깅 대상 창(오늘−N일). 스캔 비용↔창 밖 회수 여유의 트레이드오프."
+  type        = number
+  default     = 3
+  validation {
+    # 음수는 역전 창(오늘+N,오늘)이라 전 파티션을 제외해 0건 태깅을 성공으로 위장하고(Rule 12),
+    # 소수는 command 로 "3.5" 가 실려 run.py 의 argparse type=int 가 거부해 매 런이 즉시 실패한다.
+    # 둘 다 plan 시점에 잡는다(run.py 도 음수는 런타임에 재차 거른다).
+    condition     = var.tag_news_window_days >= 0 && floor(var.tag_news_window_days) == var.tag_news_window_days
+    error_message = "tag_news_window_days 는 0 이상의 정수여야 한다(음수=역전 창, 소수=argparse int 거부)."
+  }
+}
+
 variable "state_machine_timeout_seconds" {
   type    = number
   default = 21600

@@ -185,10 +185,12 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 # llm_error(호출 자체 실패)는 판정이 아니라서 다음 런이 재시도한다.
 #
 # --from/--to 는 여기선 **태깅 대상 published_date 파티션**을 좁히는 창이다(raw 수집 창이
-# 아니고, 미지정은 증분 기본창이 아니라 전체). --limit 은 이번 런에서 새로 LLM 을 부를 기사
-# 수 상한 — mentions ≥ 1 게이트(유니버스 종목이 안 잡힌 기사는 태깅 안 함, ALPHA-416)·창·limit 이 곧 비용 통제다.
-LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50
-#   기간 지정: ... run tag-news --from 2026-07-01 --to 2026-07-08
+# 아니고, 미지정은 증분 기본창이 아니라 전체). 일일 SFN 은 --window-days N 으로 오늘−N일 창만
+# 스캔한다 — 전량 스캔(실측 17분)의 대부분은 LLM 이 아니라 canonical 스캔이라 창이 곧 속도다
+# (ALPHA-540). --limit 은 이번 런에서 새로 LLM 을 부를 기사 수 상한 — mentions ≥ 1
+# 게이트(유니버스 종목이 안 잡힌 기사는 태깅 안 함, ALPHA-416)·창·limit 이 곧 비용 통제다.
+LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50 --window-days 3
+#   기간 지정(백필): ... run tag-news --from 2026-07-01 --to 2026-07-08   # 미지정=풀스캔
 
 # 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일**을 읽어
 # entity/actor/company_profile/instrument/equity_profile 을 만든다. 이 저장소가 Cloud Event
@@ -358,8 +360,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 시크릿이 다른 잡은 task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread
 추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
-- `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 10000)을 넘겨 한 실행의
-  LLM 호출 수를 묶는다. 상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
+- `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 10000)·
+  `--window-days`(기본 3, 오늘−N일 창)를 넘겨 한 실행의 LLM 호출 수와 스캔 범위를 묶는다
+  (창 미지정은 풀스캔이라 스캔이 O(전체 코퍼스), ALPHA-540). 상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
   기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
