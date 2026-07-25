@@ -971,3 +971,60 @@ def test_primary_under_other_role_gets_no_fabricated_anchor(tmp_path, monkeypatc
     args = {(a[1], a[2]): a for a in _batch(conn, "event_argument")}
     # CUSTOMER 로 실린 primary 만 선다 — SUPPLIER 폴백 조작 없음.
     assert set(args) == {("CUSTOMER", "inst_SAMSUNG")}
+
+
+def test_out_of_range_group_ordinal_is_nulled(tmp_path, monkeypatch):
+    """SMALLINT 밖 group(999999)은 참여자·수량 모두 NULL 로 떨어뜨린다 — 그대로 INSERT 하면
+    Postgres range error 로 날짜 전체가 롤백된다(Codex #255 P2, 국소 실패 원칙). 음수 서수도
+    의미가 없어 NULL 이다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item(
+            "a1", predicate=_CONTRACT_PRED,
+            arguments=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+                        "ticker": "005930", "group": 999999}],
+            measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
+                       "basis": "TOTAL", "group": -1}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [arg] = _batch(conn, "event_argument")
+    assert arg[7] is None  # group_ord — 범위 밖은 NULL, 행은 산다
+    [meas] = _batch(conn, "event_measure")
+    assert meas[9] is None
+    assert meas[4] == 188_300_000_000.0  # 값은 그대로 — 서수만 떨어졌다
+
+
+def test_unextracted_anchor_role_keeps_completeness_partial(tmp_path, monkeypatch):
+    """추출이 primary(005930)를 CUSTOMER 로 내고 SUPPLIER 를 아예 안 냈으면 completeness 는
+    partial 이다 — required_roles[0](SUPPLIER)을 미리 충족으로 덮으면 기사에 없는 공급사를
+    '완비'로 위장해 다운스트림이 추출 품질을 과대평가한다(Codex #255 P2)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 HBM 구매계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item(
+            "a1", predicate=_CONTRACT_PRED,
+            arguments=[
+                {"role": "CUSTOMER", "slot": "subject", "mention": "삼성전자",
+                 "ticker": "005930", "group": 0},
+                {"role": "CONTRACT_OBJECT", "slot": "object", "mention": "HBM",
+                 "ticker": "", "group": 0},
+            ],
+            measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
+                       "basis": "TOTAL", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [se] = _batch(conn, "source_event")
+    assert se[9] == "partial"  # SUPPLIER 미추출 — 폴백 anchor 도 안 서므로 충족 아님
+    args = {a[1] for a in _batch(conn, "event_argument")}
+    assert args == {"CUSTOMER"}  # SUPPLIER 행 조작 없음

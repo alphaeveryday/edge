@@ -7,6 +7,7 @@ WHY: event_measure.value/unit 은 LLM 이 아니라 이 파서가 소유한다(R
 
 from data_pipeline.events.amounts import (
     FLAG_APPROX_OR_RANGE,
+    FLAG_CALENDAR_YEAR,
     FLAG_NO_NUMBER,
     FLAG_OK,
     parse_amount,
@@ -93,3 +94,19 @@ def test_basis_only_from_explicit_markers():
     assert parse_basis("연간 3000억원") == "ANNUAL"
     assert parse_basis("2조원 규모") == "UNKNOWN"
     assert parse_basis(None) == "UNKNOWN"
+
+
+def test_calendar_year_is_not_a_duration():
+    """'2028년 만기' — 역년은 만기일이지 기간이 아니다. YEARS 로 통과시키면 unit_family 가
+    DURATION_DAYS 와 맞아떨어져 2028년짜리 기간이 event_measure 에 적재되고(수천 배 오염)
+    만기 분석이 무의미해진다(Codex #255 P2). 실제 기간 표기는 그대로 살아야 한다."""
+    parsed = parse_amount("2028년 만기")
+    assert (parsed.value, parsed.unit, parsed.parse_flag) == (None, None, FLAG_CALENDAR_YEAR)
+
+    # 역년 범위(1900~2999)로 읽히는 range 중앙값도 거부한다.
+    assert parse_amount("2028~2030년").parse_flag == FLAG_CALENDAR_YEAR
+
+    # 진짜 기간은 보존 — 3년·10년·120년 계약은 정상 파싱이다.
+    assert (parse_amount("3년").value, parse_amount("3년").unit) == (3.0, "YEARS")
+    assert parse_amount("10년").value == 10.0
+    assert parse_amount("120년").value == 120.0

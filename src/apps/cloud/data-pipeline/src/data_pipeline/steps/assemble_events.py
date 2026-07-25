@@ -94,6 +94,18 @@ _UNIT_FAMILY = {
     "COUNT": "COUNT",
 }
 
+# group_ord 는 SMALLINT — 범위 밖 정수를 그대로 INSERT 하면 Postgres range error 로 날짜
+# 전체가 롤백된다(기형 LLM 필드 하나가 배치를 죽이면 안 된다 — 그 필드만 결측).
+_SMALLINT_MAX = 32767
+
+
+def _ordinal(value: object) -> int | None:
+    """SMALLINT 범위의 음이 아닌 서수만 통과 — 밖이면 NULL(그 필드만 결측)."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value if 0 <= value <= _SMALLINT_MAX else None
+
+
 # event_measure.value_source CHECK 어휘 — 이 스텝은 뉴스 파싱만 하므로 DART 는 내지 않는다
 # (DART 확정치 보강은 엔진 소비 확장의 소관).
 VALUE_SOURCE_PARSED = "PARSED"
@@ -402,8 +414,8 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
 
     argument_menu = (frozenset(tv.required_roles) | frozenset(tv.optional_roles)) - tv.quantity_roles
     arguments: list[dict] = []
-    # primary 행은 항상 실린다(참여자로 해소되거나 폴백 행으로) — required 충족 판정에 포함.
-    covered_roles: set[str] = {gate_cls["role_code"]}
+    # primary 의 역할 충족은 폴백 anchor 행이 실제로 설 때만 센다(아래 루프 뒤에서 판정).
+    covered_roles: set[str] = set()
     raw_arguments = item.get("arguments")
     # 컨테이너 자체가 비리스트(스칼라 등)면 결측과 동급 — TypeError 로 날짜 전체를 굴리지 않는다.
     for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
@@ -428,8 +440,15 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             # ticker 해소 = 상장 발행사 접지(계약 entity_kinds.ISSUER — persistence_key 가
             # ticker 다). 미해소는 종별(회사/제품/기관) 판정 근거가 없다 — NULL 이 정직하다.
             "entity_kind": "ISSUER" if entity_id is not None else None,
-            "group_ord": group if isinstance(group, int) and not isinstance(group, bool) else None,
+            "group_ord": _ordinal(group),
         })
+
+    # 폴백 anchor 행이 설 때만 그 역할을 충족으로 센다 — 추출이 primary 를 다른 유효 역할로
+    # 냈는데 required_roles[0](SUPPLIER)을 미리 덮으면 기사에 없는 공급사를 '충족'으로
+    # 위장해 completeness 가 추출 품질을 과대평가한다(Codex #255 P2, 폴백 조건과 동형).
+    primary_entity = entity_index.get(str(gate_cls.get("primary_ticker") or ""))
+    if primary_entity is None or not any(a["entity_id"] == primary_entity for a in arguments):
+        covered_roles.add(gate_cls["role_code"])
 
     measures: list[dict] = []
     raw_measures = item.get("measures")
@@ -465,7 +484,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             "value_source": (VALUE_SOURCE_PARSED if parsed.value is not None
                              else VALUE_SOURCE_UNRESOLVED),
             "parse_flag": parsed.parse_flag,
-            "group_ord": group if isinstance(group, int) and not isinstance(group, bool) else None,
+            "group_ord": _ordinal(group),
         })
 
     # completeness: required 역할 ∪ required 수량이 추출(참여자∪수량, 해소 여부 무관)로 다

@@ -15,6 +15,12 @@ from dataclasses import dataclass
 FLAG_OK = "ok"
 FLAG_APPROX_OR_RANGE = "approx_or_range"
 FLAG_NO_NUMBER = "no_number"
+FLAG_CALENDAR_YEAR = "calendar_year"
+
+# '2028년 만기' 는 만기일(역년)이지 기간이 아니다 — 재무 계약에 1900~2999'년짜리 기간'은
+# 없으므로 4자리 역년대 YEARS 는 날짜로 읽고 거부한다. 통과시키면 DURATION_DAYS 계열
+# 수량이 2028년짜리 기간으로 적재돼 만기·기간 분석이 수천 배 오염된다.
+_CALENDAR_YEAR_MIN, _CALENDAR_YEAR_MAX = 1900, 2999
 
 # event_measure.basis CHECK 어휘 — 추출 계약(llm-extract-v4)과 동일.
 BASIS_VALUES = frozenset({"TOTAL", "ANNUAL", "UNKNOWN"})
@@ -131,6 +137,12 @@ def _parse_single(text: str, *, allow_bare: bool = False) -> _Run | None:
     return None  # 0개 또는 애매(무관한 금액 여럿): 거부한다 — 절대 추측하지 않는다
 
 
+def _is_calendar_year(value: float | None, unit: str | None) -> bool:
+    """4자리 역년대 YEARS = 날짜 표기('2028년 만기') — 기간으로 읽지 않는다."""
+    return (unit == "YEARS" and value is not None and float(value).is_integer()
+            and _CALENDAR_YEAR_MIN <= value <= _CALENDAR_YEAR_MAX)
+
+
 def parse_amount(surface: str | None) -> AmountParse:
     if not surface or not surface.strip():
         return _NO_NUMBER
@@ -147,12 +159,16 @@ def parse_amount(surface: str | None) -> AmountParse:
                 # "3~4조원": 좌측 경계는 우측 경계의 자릿수·단위를 물려받는다
                 left_value *= right.first_place_product
             midpoint = (left_value + right.value) / 2.0
+            if _is_calendar_year(midpoint, right.unit):
+                return AmountParse(None, None, FLAG_CALENDAR_YEAR, None)
             return AmountParse(midpoint, right.unit, FLAG_APPROX_OR_RANGE, right.currency_marked)
         return _NO_NUMBER
 
     run = _parse_single(text)
     if run is None:
         return _NO_NUMBER
+    if _is_calendar_year(run.value, run.unit):
+        return AmountParse(None, None, FLAG_CALENDAR_YEAR, None)
     flag = FLAG_APPROX_OR_RANGE if approx else FLAG_OK
     return AmountParse(run.value, run.unit, flag, run.currency_marked)
 
