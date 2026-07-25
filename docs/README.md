@@ -22,6 +22,7 @@
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |
+| [domain/data-source-licensing.md](domain/data-source-licensing.md) | 외부 데이터 소스 재제공 리스크 스냅샷 (참고용·비블로커, best-effort) | 실증권사 납품/실사 대비·데이터 소스 라이선스가 궁금할 때 |
 | [console-ia/](console-ia/) | Super Admin·Tenant Console IA | 콘솔 화면·메뉴를 만들 때 |
 | [adr/](adr/) | 결정 기록 — 무엇을 왜 그렇게 정했나 | 결정의 배경이 궁금할 때 |
 | [architecture/system-architecture.md](architecture/system-architecture.md) | **[뷰]** 논리 컴포넌트↔시스템 매핑 + 논리→배포 모듈 매핑표 | 논리 구조를 훑을 때 (상세: context.md) |
