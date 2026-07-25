@@ -521,8 +521,10 @@ def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypa
     args = {(r[1], r[2]): r for r in _batch(conn, "event_argument")}
     # 해소된 참여자 2명 전원 — primary 가 참여자로 실렸으니 폴백 행은 없다.
     assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX")}
-    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", "ISSUER", 0)
-    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", "ISSUER", 0)
+    # entity_kind: SUPPLIER·CUSTOMER 는 계약(entity_mapping_contract)에 역할→종별 표가 없어
+    # NULL 이다 — 전원 ISSUER 로 실으면 다자 딜 행이 발행사 행과 구분되지 않는다(#255 P2).
+    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", None, 0)
+    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", None, 0)
     # 수량 — KR 파서가 value/unit 을 계산(1,883억원 → 1883e8 KRW), 추출 순서가 measure_ord.
     [meas] = _batch(conn, "event_measure")
     assert meas == (evt_id, 0, "CONTRACT_VALUE", "1,883억원", 188_300_000_000.0, "KRW",

@@ -106,6 +106,18 @@ def _ordinal(value: object) -> int | None:
     return value if 0 <= value <= _SMALLINT_MAX else None
 
 
+def _entity_kind(role: str | None, entity_id: str | None) -> str | None:
+    """역할→엔티티 종별. 계약(entity_mapping_contract_v0_1.yaml)은 아직 종별별 `used_for`
+    산문만 갖고 역할→종별 **표가 없다** — 코드가 표를 만들면 계약 밖 SSOT 가 생긴다
+    (Rule 7·11). 그래서 이름이 종별과 같은 ISSUER 만 확정하고 나머지는 NULL 로 둔다:
+    CUSTOMER·SUPPLIER·ACQUIRER·TARGET_COMPANY 는 계약상 COMPANY_ENTITY 후보인데 전원
+    ISSUER 로 실으면 다자 딜 행이 발행사 행과 구분되지 않아 역할-종별 검증이 불가능해진다
+    (Codex #255 P2). 표가 계약에 생기면 그때 여기서 읽는다."""
+    if entity_id is None or role != "ISSUER":
+        return None  # 미해소는 종별 근거가 없고, 계약에 표가 없는 역할은 지어내지 않는다
+    return "ISSUER"
+
+
 # event_measure.value_source CHECK 어휘 — 이 스텝은 뉴스 파싱만 하므로 DART 는 내지 않는다
 # (DART 확정치 보강은 엔진 소비 확장의 소관).
 VALUE_SOURCE_PARSED = "PARSED"
@@ -444,9 +456,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             "slot": slot if isinstance(slot, str) and slot in SLOT_VALUES else None,
             "mention_text": mention.strip(),
             "entity_id": entity_id,
-            # ticker 해소 = 상장 발행사 접지(계약 entity_kinds.ISSUER — persistence_key 가
-            # ticker 다). 미해소는 종별(회사/제품/기관) 판정 근거가 없다 — NULL 이 정직하다.
-            "entity_kind": "ISSUER" if entity_id is not None else None,
+            "entity_kind": _entity_kind(role, entity_id),
             "group_ord": _ordinal(group),
         })
 
@@ -742,7 +752,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 아무 역할로도 안 냈고
             # (빈 응답 포함) anchor 역할이 유일할 때만 이벤트의 anchor 행을 세운다.
             event_args.append((source_event_id, cls["anchor_role"], entity_id, cls["confidence"],
-                               None, None, "ISSUER", None))
+                               None, None, _entity_kind(cls["anchor_role"], entity_id), None))
         for measure_ord, measure in enumerate(cls["measures"]):
             # measure_ord = 추출 순서(0..n) — 자연키. dart_rcept_no 는 뉴스 경로에선 없다.
             event_measures.append((source_event_id, measure_ord, measure["role_code"],
