@@ -461,6 +461,13 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 장중 iNAV(ALPHA-555). 일별 NAV 와 같은 자격증명·유니버스를 쓰되 dataset 이 다르다 —
         # 거래일 grain 종가 NAV 와 장중 시각 grain 추정 NAV 는 다른 축이다.
         # 날짜창을 넘기지 않는다: 이 API 는 시각·날짜 지정을 무시하고 항상 최근 30행만 준다.
+        # 그래서 창을 준 실행은 **거부한다** — 무시하고 돌면 갭을 메우려던 운영자가 최근 30행을
+        # 받고 exit 0 을 보게 되고, 소급이 영구 불가한 구간을 복구한 줄 착각한다(Rule 12).
+        if args.from_date or args.to_date:
+            raise SystemExit(
+                "ingest-raw-inav 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜·시각 지정을 "
+                "무시하고 항상 최근 30행만 준다(소급 백필 불가). 갭은 폴링 창 겹침으로만 막는다."
+            )
         if settings.kis_nav is None:
             raise SystemExit("kis_nav.source 설정이 없다 — sources.toml 확인")
         if settings.krx_etf is None:

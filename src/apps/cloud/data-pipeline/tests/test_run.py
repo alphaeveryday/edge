@@ -252,6 +252,21 @@ def test_inav_interval_0_은_조용히_기본값이_되지_않는다(monkeypatch
         main(["ingest-raw-inav", "--interval-sec", "0"])
 
 
+def test_inav_은_날짜창을_거부한다(monkeypatch):
+    # WHY: 이 API 는 날짜·시각 지정을 무시하고 항상 최근 30행만 준다. 창을 조용히 무시하면
+    #      갭을 메우려 --from/--to 를 준 운영자가 최근 30행을 받고 exit 0 을 보게 되고,
+    #      소급이 영구 불가한 구간을 복구한 줄 착각한다 — 성공으로 위장된 실패다(Rule 12).
+    _spy_inav(monkeypatch)
+
+    for argv in (
+        ["ingest-raw-inav", "--from", "2026-07-24"],
+        ["ingest-raw-inav", "--to", "2026-07-24"],
+        ["ingest-raw-inav", "--from", "2026-07-23", "--to", "2026-07-24"],
+    ):
+        with pytest.raises(SystemExit, match="--from/--to"):
+            main(argv)
+
+
 def _spy_tag_news(monkeypatch):
     """tag-news 분기가 tag_news.run 에 넘긴 (from_date, to_date) 를 캡처한다.
     tag-news 는 LLM_API_KEY 가 필수라 넣어 주고, complete_fn 은 클로저만 만들어 호출 안 한다."""
