@@ -185,7 +185,11 @@ def test_quiet_day_is_gated_out_at_3pct(tmp_path, monkeypatch):
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _inserts(conn) == []
-    assert _quality_log(storage)["gated_out"] == 1
+    log = _quality_log(storage)
+    assert log["gated_out"] == 1
+    # 임계 미달은 **유실이 아니다** — 트리거는 입력 행마다 1:1 로 나오지 않는다. 봉투가 이걸
+    # 유실로 세면 잔잔한 날마다 원장이 INCOMPLETE 로 물든다(ALPHA-181).
+    assert log["ops"]["failed_records"] == 0
 
 
 def test_proxy_is_coverage_normalized_over_priced_subset(tmp_path, monkeypatch):

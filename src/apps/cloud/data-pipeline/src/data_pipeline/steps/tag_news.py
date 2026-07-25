@@ -349,6 +349,20 @@ def run(
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ 유실이 아닌 것: `already_tagged`(멱등 재실행)·
+        # `no_mention`(유니버스 무관 기사)·`left_by_limit`(다음 런이 집는 백로그). 유실은
+        # **태깅을 시도했는데 결과가 없는 것** — LLM 오류·파싱 실패·제목 결측·문서분류 이상.
+        # 봉투는 **이 런이 실제로 판정한 범위**만 말한다(기사 단위). `skipped`(이미 태깅됨)를
+        # 산출에 더하면 안 된다 — 그 기사들은 재판정하지 않으므로 옛 실패(`llm_unparseable` 등
+        # 비재시도 상태)가 산출로 뒤집힌다. `rows_written` 도 못 쓴다: 파티션 재작성 행수라
+        # 한 건만 바뀌어도 과거 행까지 부풀린다. 멱등 no-op 재실행은 0건 → UNKNOWN 이 정직하다
+        # (상태 기반 완전성은 ALPHA-490 소관).
+        "ops": {
+            "records_out": status_counts.get("ok", 0),
+            "failed_records": len(failures) + sum(
+                status_counts.get(s, 0)
+                for s in ("llm_error", "llm_unparseable", "no_title", "bad_doc_class")),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, checked_date, run_id),

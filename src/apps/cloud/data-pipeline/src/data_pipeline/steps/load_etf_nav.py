@@ -204,6 +204,12 @@ def run(
         "already_present": already, "created": created, "updated": updated,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 미등록 ETF·정체성 결측은 그 행이 DB 에 안 들어간
+        # 것이라 유실이다(마스터 갭이 원인이어도 유실은 유실).
+        "ops": {
+            "records_out": already + created + updated,
+            "failed_records": len(failures) + skipped_missing_identity + skipped_unknown_etf,
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

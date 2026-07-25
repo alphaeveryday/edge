@@ -59,7 +59,8 @@ def run(
         logger.warning("%s 재무제표 비활성(api_key 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": f"{vendor} disabled or no api_key"})
+                                                               "reason": f"{vendor} disabled or no api_key",
+                                                               "ops": {"records_out": 0, "failed_records": 0}})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
             return 1
@@ -138,6 +139,8 @@ def run(
             "failed_targets": failed_targets,
             "partitions": len(partitions),
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            # 원장 관측용 공통 봉투(ALPHA-181).
+            "ops": {"records_out": saved, "failed_records": len(failed_targets)},
         })
     except Exception:
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")

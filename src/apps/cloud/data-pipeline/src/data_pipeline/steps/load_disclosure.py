@@ -151,7 +151,7 @@ def run(
     skipped_missing_identity = skipped_unresolved_issuer = 0
     skipped_no_report_date = skipped_no_valid_fact = 0
     rejected_facts = 0
-    docs_created = docs_already = facts_written = 0
+    docs_created = docs_already = facts_written = facts_already = 0
     created_sample: list[dict] = []
     rejected_sample: list[dict] = []
     failures: list[dict] = []
@@ -236,6 +236,10 @@ def run(
                         cur.execute(child_sql, child_params)
                         if cur.rowcount == 1:
                             facts_written += 1
+                        else:
+                            # 변경 없음 = 이미 같은 값으로 적재돼 있다(멱등 재실행). 실패가
+                            # 아니라 정상 산출이라 따로 센다 — 안 세면 재실행이 0건으로 보인다.
+                            facts_already += 1
 
                 if created:
                     docs_created += 1
@@ -248,7 +252,7 @@ def run(
         # 사유를 로그에 태운다(Rule 12).
         logger.exception("공시 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
-        docs_created = facts_written = 0
+        docs_created = facts_written = facts_already = 0
         created_sample = []
         exit_code = 1
 
@@ -263,9 +267,17 @@ def run(
         "skipped_no_valid_fact": skipped_no_valid_fact,
         "rejected_facts": rejected_facts, "rejected_facts_sample": rejected_sample,
         "documents_already_present": docs_already, "documents_created": docs_created,
-        "facts_written": facts_written,
+        "facts_written": facts_written, "facts_already_present": facts_already,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 산출은 fact 행이다(문서는 그 부속). 발행사 미해소·
+        # 보고일 결측·유효 fact 없음·거절은 그 공시가 fact 로 안 남은 유실이다.
+        "ops": {
+            "records_out": facts_written + facts_already,
+            "failed_records": (len(failures) + skipped_missing_identity
+                               + skipped_unresolved_issuer + skipped_no_report_date
+                               + skipped_no_valid_fact + rejected_facts),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

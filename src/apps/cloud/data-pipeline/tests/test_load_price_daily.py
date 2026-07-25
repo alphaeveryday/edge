@@ -198,6 +198,9 @@ def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(t
     assert log["created"] == 1
     assert log["skipped_unknown_instrument"] == 2
     assert log["unknown_instruments"] == ["KR:000660", "KR:035420"]  # 목록으로 남긴다
+    # 미등록 종목 2건은 그 행이 DB 에 안 들어간 유실이다 — 원장 봉투가 이걸 세지 않으면
+    # 부분 유실이 VALID 로 위장된다(ALPHA-181). 새 skipped_* 버킷을 추가할 땐 합산도 같이.
+    assert log["ops"] == {"records_out": 1, "failed_records": 2}
 
 
 def test_KR_해소는_KOSPI_KOSDAQ_KONEX_MIC_를_모두_조회한다(tmp_path, monkeypatch):

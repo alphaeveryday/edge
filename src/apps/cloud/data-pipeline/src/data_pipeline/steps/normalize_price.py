@@ -393,6 +393,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_read": read,
                 "records_passed": len(passing),
                 "records_failed": len(failures),
+                # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
+                "ops": {"records_out": len(passing), "failed_records": len(failures)},
                 "failures": failures,
                 "canonical_written": canonical_written,
                 "canonical_partitions_written": parts_written,

@@ -278,6 +278,15 @@ def run(
         },
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ `rows_no_assertion` 은 유실이 아니다 — 모든 기사가
+        # 주장을 내지는 않는다(1:1 이 아니다). 유실은 **주장이 있었는데 못 실은 것**이다:
+        # malformed·문서 미적재·불완전/부분·해소 인자 없음.
+        "ops": {
+            "records_out": created + already,
+            "failed_records": (len(failures) + rows_malformed + missing_document
+                               + skipped_incomplete + skipped_partial
+                               + skipped_no_resolved_argument),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

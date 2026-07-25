@@ -582,6 +582,17 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. MVP 등록 3작업:
   `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
   canonical consumer). 종목 반복은 작업이 아니라 completeness/manifest, 개별 규칙은 quality_check.
+- **`ops` 로그 봉투**(ALPHA-181) — 모든 스텝이 자기 로그(collection_log·quality_log)에
+  `"ops": {"records_out": N, "failed_records": M}` 를 남긴다. 관측(`ops/entry.py:_observe_from_log`)은
+  **이 봉투만** 읽으므로 task_key 별 분기가 없다 — 새 작업을 카탈로그에 등록해도 리더를 안 고친다.
+  봉투가 스텝 안에 사는 이유: 어느 카운터가 유실인지는 스텝만 안다(적재의
+  `skipped_unknown_instrument` 는 유실, `skipped_self`·`gated_out`·`already_tagged` 는 정상 동작).
+  ⚠️ **스코프 규칙** — 산출과 유실은 *이 런이 재판정한 범위*에서 함께 온다. 재판정 없이 건너뛴
+  항목은 산출로도 유실로도 세지 않는다(세면 옛 실패가 산출로 뒤집힌다). 그래서 매 런 입력을 다시
+  읽고 다시 거르는 스텝(수집·정제·적재)은 기존 행도 산출로 세지만, 처리분을 건너뛰는 스텝
+  (`tag-news`·`assemble-events`·`enrich-corp-code`·`load-price-triggers`)은 no-op 재실행이 0건 →
+  `UNKNOWN` 이다. 상태 기반 완전성("지금 이 데이터셋이 온전한가")은 completeness 축 소관(ALPHA-490).
+  봉투가 없거나 두 키 중 하나라도 결측이면 리더는 낙관값으로 메우지 않고 warning + `UNKNOWN`(Rule 12).
 
 ### 실행 흐름 (스펙 §5)
 

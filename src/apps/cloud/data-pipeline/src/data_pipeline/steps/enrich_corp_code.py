@@ -83,7 +83,13 @@ def run(storage: Storage, run_id: str, *, db: DbConfig, source) -> int:
         base = {"candidates": candidates, "updated": updated, "unmatched": unmatched,
                 "rejected": rejected, "updated_sample": updated_sample,
                 "unmatched_sample": unmatched_sample, "rejected_sample": rejected_sample,
-                "failures": failures, "exit_code": exit_code}
+                "failures": failures, "exit_code": exit_code,
+                # 원장 관측용 공통 봉투(ALPHA-181). unmatched(DART 가 모르는 회사)·rejected 는
+                # 그 회사의 corp_code 가 안 채워진 것이라 유실이다 — 공시 조인이 그만큼 빈다.
+                # 후보(NULL corp_code)만 보는 스텝이라 다 채운 뒤 재실행은 0건 → UNKNOWN 이다.
+                # 산출과 유실이 같은 스코프에서 와야 해 그대로 둔다(entry._observe_from_log 주석).
+                "ops": {"records_out": updated,
+                        "failed_records": len(failures) + unmatched + rejected}}
         return {**base, **over}
 
     # 키 미주입·비활성(로컬 등)은 실패가 아니라 명시적 skip — ingest 경로와 동일하게 존중한다

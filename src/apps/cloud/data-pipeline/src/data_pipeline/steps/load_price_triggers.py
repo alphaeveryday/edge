@@ -478,6 +478,15 @@ def run(
         "coverage_min": min((c for m in coverage_by_etf_date.values() for c in m.values()),
                             default=None),
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ `gated_out`·`missing_price`·`missing_holdings` 는
+        # **유실이 아니다** — 임계 미달이라 트리거가 안 난 것이거나 평가 대상이 아직 없는 것이다
+        # (트리거는 입력 행마다 1:1로 나오지 않는다). 유실은 마스터가 모르는 ETF 뿐이다.
+        # `already`(현행 정책 행이 이미 있어 재평가 없이 건너뛴 셀)도 산출로 세지 않는다 —
+        # 재판정하지 않은 것을 이 런의 근거로 쓰면 유실 카운터와 스코프가 어긋난다.
+        "ops": {
+            "records_out": created,
+            "failed_records": len(failures) + skipped_unknown_etf,
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),

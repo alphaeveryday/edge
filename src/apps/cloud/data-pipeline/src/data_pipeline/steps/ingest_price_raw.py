@@ -104,7 +104,8 @@ def run(
         logger.warning("%s 가격 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
             _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": f"{vendor} disabled or missing credentials"})
+                                                               "reason": f"{vendor} disabled or missing credentials",
+                                                               "ops": {"records_out": 0, "failed_records": 0}})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
             return 1
@@ -187,6 +188,9 @@ def run(
             "failed_symbols": failed_symbols,
             "partitions": len(partitions),
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            # 원장 관측용 공통 봉투(ALPHA-181). 위 카운터의 **의미 선택**이다 — 절단(truncation)도
+            # 유실로 세서 창이 잘린 런이 VALID 로 올라가지 않게 한다(ALPHA-351 은 exit 만 성공).
+            "ops": {"records_out": saved, "failed_records": len(failed_symbols)},
         })
     except Exception:
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")

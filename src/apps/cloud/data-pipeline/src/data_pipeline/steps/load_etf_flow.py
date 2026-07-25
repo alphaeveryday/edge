@@ -273,6 +273,13 @@ def run(
         "already_present": already, "created": created, "updated": updated,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        # 원장 관측용 공통 봉투(ALPHA-181). 적재 탈락 4종 전부 in-band 유실이다.
+        "ops": {
+            "records_out": already + created + updated,
+            "failed_records": (len(failures) + skipped_missing_identity
+                               + skipped_unknown_instrument + skipped_ambiguous_ticker
+                               + skipped_load_violation),
+        },
     }
     try:
         storage.put_bytes(quality_log_key(DATASET, started_at.isoformat()[:10], run_id),
