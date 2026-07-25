@@ -1,12 +1,13 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-etf-profile
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
+        [--interval-sec N]
 
 태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
 (analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
@@ -34,7 +35,12 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
-from .lake import make_storage, raw_etf_nav_partition, raw_etf_profile_partition
+from .lake import (
+    make_storage,
+    raw_etf_inav_partition,
+    raw_etf_nav_partition,
+    raw_etf_profile_partition,
+)
 from .sources import (
     BigKindsNewsSource,
     DartDisclosureSource,
@@ -45,6 +51,7 @@ from .sources import (
     FmpPriceSource,
     KisDailyPriceSource,
     KisEtfProfileSource,
+    KisInavSource,
     KisInvestorSource,
     KisNavSource,
     KrxEtfSource,
@@ -78,6 +85,7 @@ from .steps import (
     normalize_price,
     tag_news,
 )
+from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
 
@@ -115,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-etf-profile",
+                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile",
                  "ingest-raw-investor",
                  "normalize-price", "normalize-investor",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
@@ -143,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
                         help="tag-news: 태깅 대상 파티션을 오늘−N일 창으로 제한(미지정=풀스캔). --from/--to 가 우선")
+    # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
+    # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
+    # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
+    parser.add_argument("--interval-sec", type=int, default=None,
+                        help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -443,6 +456,35 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_etf.run(
             settings, storage, nav_source, run_id,
             dataset="etf_nav", partition=raw_etf_nav_partition, job_name="ingest_raw_nav",
+        )
+    if args.step == "ingest-raw-inav":
+        # 장중 iNAV(ALPHA-555). 일별 NAV 와 같은 자격증명·유니버스를 쓰되 dataset 이 다르다 —
+        # 거래일 grain 종가 NAV 와 장중 시각 grain 추정 NAV 는 다른 축이다.
+        # 날짜창을 넘기지 않는다: 이 API 는 시각·날짜 지정을 무시하고 항상 최근 30행만 준다.
+        # 그래서 창을 준 실행은 **거부한다** — 무시하고 돌면 갭을 메우려던 운영자가 최근 30행을
+        # 받고 exit 0 을 보게 되고, 소급이 영구 불가한 구간을 복구한 줄 착각한다(Rule 12).
+        if args.from_date or args.to_date:
+            raise SystemExit(
+                "ingest-raw-inav 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜·시각 지정을 "
+                "무시하고 항상 최근 30행만 준다(소급 백필 불가). 갭은 폴링 창 겹침으로만 막는다."
+            )
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다 — sources.toml 확인")
+        if settings.krx_etf is None:
+            raise SystemExit("krx_etf.source 설정이 없다(NAV 유니버스 출처) — sources.toml 확인")
+        inav_source = KisInavSource(
+            settings.kis_nav.source,
+            settings.krx_etf.source.etf_map,
+            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            # `or` 로 쓰면 0 이 falsy 라 조용히 기본값이 된다 — 어댑터의 1 미만 가드를
+            # CLI 가 우회해 잘못된 입력이 성공으로 기록된다(Rule 12).
+            interval_sec=(
+                DEFAULT_INTERVAL_SEC if args.interval_sec is None else args.interval_sec
+            ),
+        )
+        return ingest_raw_etf.run(
+            settings, storage, inav_source, run_id,
+            dataset="etf_inav", partition=raw_etf_inav_partition, job_name="ingest_raw_inav",
         )
     if args.step == "ingest-price-raw":
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
