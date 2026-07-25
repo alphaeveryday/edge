@@ -1038,3 +1038,40 @@ def test_unextracted_anchor_role_keeps_completeness_partial(tmp_path, monkeypatc
     assert se[9] == "partial"  # SUPPLIER 미추출 — 폴백 anchor 도 안 서므로 충족 아님
     args = {a[1] for a in _batch(conn, "event_argument")}
     assert args == {"CUSTOMER"}  # SUPPLIER 행 조작 없음
+
+
+def test_unparseable_required_measure_keeps_completeness_partial(tmp_path, monkeypatch):
+    """required 참여자 전원 + required 수량(CONTRACT_VALUE)이 있어도 표면형이 숫자가 아니면
+    ('대규모') completeness 는 partial 이다 — 수량의 주장 자체가 값이라 UNRESOLVED 는 측정
+    부재와 같다. complete 로 세면 쓸 수 없는 값을 '완비'로 위장해 다운스트림이 계약 규모를
+    믿는다(Codex #255 P2). 참여자와 비대칭: 참여자 해소 실패는 링킹 문제라 충족을 유지한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article(
+        "a1", title="삼성전자, SK하이닉스와 HBM 공급계약",
+        mentions=json.dumps([{"market": "KR", "ticker": "005930"},
+                             {"market": "KR", "ticker": "000660"}]))])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item(
+            "a1", predicate=_CONTRACT_PRED,
+            arguments=[
+                {"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+                 "ticker": "005930", "group": 0},
+                {"role": "CUSTOMER", "slot": "object", "mention": "SK하이닉스",
+                 "ticker": "000660", "group": 0},
+                {"role": "CONTRACT_OBJECT", "slot": "qualifier", "mention": "HBM",
+                 "ticker": "", "group": 0},
+            ],
+            measures=[{"role": "CONTRACT_VALUE", "surface": "대규모",
+                       "basis": "TOTAL", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    [se] = _batch(conn, "source_event")
+    assert se[9] == "partial"  # 숫자 없는 required 수량 — 완비 아님
+    [meas] = _batch(conn, "event_measure")
+    # 행은 남아 surface 를 보존한다 — 소비자가 value_source 로 재판정할 수 있다.
+    assert (meas[3], meas[4], meas[7]) == ("대규모", None, "UNRESOLVED")

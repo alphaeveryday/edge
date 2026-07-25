@@ -481,7 +481,12 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             parsed = replace(parsed, value=None, unit=None, parse_flag="unit_mismatch")
         basis = raw.get("basis")
         group = raw.get("group")
-        covered_roles.add(role)
+        if parsed.value is not None:
+            # 수량은 '숫자'가 목적이라 파싱 실패(대규모·5%)는 그 측정이 없는 것과 같다 —
+            # 참여자와 비대칭인 이유: 참여자는 보도가 역할을 말했으면 충족이고 entity 해소
+            # 실패는 링킹 문제지만, 수량의 주장 자체가 값이다(Codex #255 P2). 행은 UNRESOLVED
+            # 로 남아 surface 는 보존된다 — 소비자는 value_source 로 재판정할 수 있다.
+            covered_roles.add(role)
         measures.append({
             "role_code": role,
             "surface": surface,
@@ -496,9 +501,10 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             "group_ord": _ordinal(group),
         })
 
-    # completeness: required 역할 ∪ required 수량이 추출(참여자∪수량, 해소 여부 무관)로 다
-    # 채워졌는가 — 해소 실패는 적재 가능 여부의 문제지 '보도가 그 역할을 말했는가'의 문제가
-    # 아니다. 수량 required(CONTRACT_VALUE 등)를 빼면 completeness 가 추출 품질을 과대평가한다.
+    # completeness: required 역할 ∪ required 수량이 다 채워졌는가. 참여자는 **해소 여부 무관**
+    # (보도가 역할을 말했으면 충족 — 해소 실패는 적재 가능 여부의 문제다), 수량은 **파싱 성공만**
+    # (숫자가 주장 자체라 UNRESOLVED 는 측정 부재와 같다). 수량 required 를 빼면 completeness
+    # 가 추출 품질을 과대평가하고, UNRESOLVED 를 세면 쓸 수 없는 값을 완비로 위장한다.
     required_for_completeness = frozenset(tv.required_roles) | tv.required_quantity_roles
     completeness = "complete" if required_for_completeness <= covered_roles else "partial"
 
