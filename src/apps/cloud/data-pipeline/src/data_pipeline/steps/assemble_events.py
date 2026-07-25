@@ -85,6 +85,15 @@ SLOT_VALUES = frozenset({"subject", "object", "qualifier"})
 # 추출 콜 confidence(H/M/L) → source_event.confidence_level CHECK 어휘 사상.
 _CONFIDENCE_LEVELS = {"H": "HIGH", "M": "MEDIUM", "L": "LOW"}
 
+# 파서 단위 → 온톨로지 unit_family (환산 없음 — 소속 판정만). RATIO 는 파서 문법에 증명
+# 단위가 없어 매핑이 없다 = RATIO 역할의 파스는 항상 미해결로 남는다(지어내지 않는다).
+_UNIT_FAMILY = {
+    "KRW": "CURRENCY", "USD": "CURRENCY",
+    "PCT": "PERCENT",
+    "DAYS": "DURATION_DAYS", "MONTHS": "DURATION_DAYS", "YEARS": "DURATION_DAYS",
+    "COUNT": "COUNT",
+}
+
 # event_measure.value_source CHECK 어휘 — 이 스텝은 뉴스 파싱만 하므로 DART 는 내지 않는다
 # (DART 확정치 보강은 엔진 소비 확장의 소관).
 VALUE_SOURCE_PARSED = "PARSED"
@@ -419,9 +428,12 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
             continue  # surface 없는 수량은 파서 입력이 없다 — 지어내지 않는다
         surface = surface.strip()
         parsed = parse_amount(surface)
-        if role in tv.currency_roles and parsed.value is not None and parsed.currency_marked is None:
-            # 통화 역할에 비통화 표면형(5%·3년)이 붙은 오추출 — 값을 지어내느니 미해결로 남긴다.
-            # 판정축은 파서의 통화 표시(currency_marked): USD 등 비-KRW 통화는 보존한다(#255).
+        expected_family = tv.quantity_unit_families.get(role)
+        if (parsed.value is not None and expected_family
+                and _UNIT_FAMILY.get(parsed.unit) != expected_family):
+            # 수량 역할의 unit_family 와 파서 단위 소속이 다르면(CONTRACT_VALUE+5%,
+            # CONTRACT_DURATION+%) 값을 지어내느니 미해결로 남긴다 — USD 등 통화는 보존,
+            # 파서가 증명 못 하는 family(RATIO)도 미해결이다(Codex #255 P2 일반화).
             parsed = replace(parsed, value=None, unit=None, parse_flag="unit_mismatch")
         basis = raw.get("basis")
         group = raw.get("group")

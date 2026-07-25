@@ -881,10 +881,11 @@ def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch)
     assert meas[6] == "TOTAL"  # basis [] → surface 결정 판정("총")
 
 
-def test_currency_role_with_noncurrency_surface_stays_unresolved(tmp_path, monkeypatch):
-    """통화 역할(CONTRACT_VALUE)에 비통화 표면형(5%)이 붙으면 값을 지어내지 않고
-    UNRESOLVED + unit_mismatch 로 남긴다 — PCT 값이 KRW 자리로 새면 임계·골드 대조가
-    전부 오염된다. 반대로 USD 명시 통화는 보존한다(환산 금지·강등 금지, Codex #255 P2)."""
+def test_quantity_unit_family_mismatch_stays_unresolved(tmp_path, monkeypatch):
+    """수량 역할의 unit_family 와 파서 단위 소속이 다르면(CONTRACT_VALUE+5%,
+    CONTRACT_DURATION+%) 값을 지어내지 않고 UNRESOLVED + unit_mismatch 로 남긴다 — PCT 가
+    KRW·일수 자리로 새면 임계·골드 대조가 오염된다. 소속이 맞으면 보존한다: USD 통화
+    (환산·강등 금지), 년(DURATION_DAYS 소속 YEARS)(Codex #255 P2 일반화)."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
@@ -895,14 +896,20 @@ def test_currency_role_with_noncurrency_surface_stays_unresolved(tmp_path, monke
                        measures=[{"role": "CONTRACT_VALUE", "surface": "5%",
                                   "basis": "TOTAL", "group": 0},
                                  {"role": "CONTRACT_VALUE", "surface": "3억달러",
+                                  "basis": "TOTAL", "group": 0},
+                                 {"role": "CONTRACT_DURATION", "surface": "5%",
+                                  "basis": "TOTAL", "group": 0},
+                                 {"role": "CONTRACT_DURATION", "surface": "3년",
                                   "basis": "TOTAL", "group": 0}])])
 
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
                                from_date="2026-07-15", to_date="2026-07-15") == 0
 
-    pct, usd = _batch(conn, "event_measure")
+    pct, usd, dur_pct, years = _batch(conn, "event_measure")
     assert (pct[4], pct[5], pct[7], pct[8]) == (None, None, "UNRESOLVED", "unit_mismatch")
     assert (usd[4], usd[5], usd[7]) == (300_000_000.0, "USD", "PARSED")
+    assert (dur_pct[4], dur_pct[7], dur_pct[8]) == (None, "UNRESOLVED", "unit_mismatch")
+    assert (years[4], years[5], years[7]) == (3.0, "YEARS", "PARSED")
 
 
 def test_primary_under_other_role_keeps_identity_anchor(tmp_path, monkeypatch):

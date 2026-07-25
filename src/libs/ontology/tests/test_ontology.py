@@ -78,6 +78,8 @@ def test_view_exposes_quantity_and_identity_axes():
     assert signing.quantity_roles == {"CONTRACT_VALUE", "CONTRACT_DURATION"}
     assert signing.required_quantity_roles == {"CONTRACT_VALUE"}  # completeness 판정 축(#255)
     assert signing.currency_roles == {"CONTRACT_VALUE"}
+    assert signing.quantity_unit_families == {
+        "CONTRACT_VALUE": "CURRENCY", "CONTRACT_DURATION": "DURATION_DAYS"}  # 단위 정합 축(#255)
     assert signing.identity_required == ("SUPPLIER", "CUSTOMER", "CONTRACT_OBJECT")
 
 

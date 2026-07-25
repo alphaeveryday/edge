@@ -31,6 +31,7 @@ class TypeView:
     quantity_roles: frozenset[str]
     required_quantity_roles: frozenset[str]
     currency_roles: frozenset[str]
+    quantity_unit_families: Mapping[str, str]
     role_menu: frozenset[str]
     identity_required: tuple[str, ...]
     identity_optional: tuple[str, ...]
@@ -71,6 +72,9 @@ def load_ontology_view() -> OntologyView:
         currency_roles = frozenset(
             role for role, meta in quantities.items() if (meta or {}).get("unit_family") == "CURRENCY"
         )
+        quantity_unit_families = MappingProxyType({
+            role: str((meta or {}).get("unit_family"))
+            for role, meta in quantities.items() if (meta or {}).get("unit_family")})
         model = lifecycle_models.get(spec.get("lifecycle_model")) or {}
         stages = frozenset(model.get("stages") or []) | frozenset(model.get("terminal") or [])
 
@@ -89,6 +93,7 @@ def load_ontology_view() -> OntologyView:
             quantity_roles=quantity_roles,
             required_quantity_roles=required_quantity_roles,
             currency_roles=currency_roles,
+            quantity_unit_families=quantity_unit_families,
             role_menu=frozenset(required) | frozenset(optional) | quantity_roles,
             identity_required=tuple(identity.get("required") or []),
             identity_optional=tuple(identity.get("optional_discriminators") or []),
