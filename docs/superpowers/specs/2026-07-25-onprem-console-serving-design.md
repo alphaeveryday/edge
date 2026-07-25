@@ -89,21 +89,25 @@ SSM 포트포워딩 커맨드를 `demo/onprem/README`(또는 스크립트)에 �
 
 ## 5. 완료 조건 (DoD)
 
-이 작업은 **서빙 배선까지** 보장한다:
+이 작업은 **서빙 배선 + 데모 로그인**까지 보장한다:
 
 - ✅ 터널로 `localhost:8090` → 콘솔 SPA 로드.
 - ✅ `/api/v1/auth/session` 이 `tenant-console-api` 에 도달해 **진짜 API 응답**(미인증 401/세션없음) 반환 — co-host + 프록시 배선 증명(SPA fallback 도, 연결 실패도 아님).
+- ✅ **브라우저 클릭스루** — 서빙 빌드(`VITE_DEMO_AUTOSESSION=true`)가 로드 시 `ensureDevSession`(임시 브릿지)으로 `admin@demo.edge.local` 자동 로그인(`POST /api/v1/auth/login` → 세션 쿠키)해, 대시보드·검수 등 화면이 데이터와 함께 뜬다. tenant-console-api 가 기동 시 bootstrap-accounts 를 `member` 로 자동 시드하므로 별도 시드 불필요. (로그인 화면 ALPHA-486/423 도입 전까지의 임시 경로 — 실 온프렘 빌드는 이 플래그 없이 빌드.)
 - ✅ 온프렘 8컨테이너 정상 `running`(기존 6 + console 2).
 
 ## 6. 범위 밖 (후속 증분)
 
-- **인증 배선·로그인 클릭스루** — `ConsoleAuthFilter` 는 fail-closed(ADR-0025, 세션 기반)이고 박스 `member` 테이블이 0행이라 **로그인할 계정이 없다**. demo 계정 시드 + 인증 흐름(로그인 → 세션 발급) 실동작 검증은 별도 증분. → 이 작업 후 콘솔은 "로그인 벽까지" 도달하며, 그 너머는 인증 증분이 연다.
-- **콘솔 기능 완성**(검수 워크플로·정책·감사 화면 등) — ALPHA-423 epic.
+- **콘솔 기능 완성**(검수 워크플로·정책·감사 화면 등) — ALPHA-423 epic. 로그인 후 도달하는 화면들의 실데이터 연결·완성이 여기 속한다.
+- **인증 하드닝** — 현재 데모용(bootstrap-accounts·세션 기반, `secure` 쿠키·표준 CSRF 미적용 — application.yaml 주석 "실계약 시점"). AD/SSO 연동·secure 쿠키·CSRF 는 프로덕션 증분(ADR-0025). 서빙 자체는 데모 로그인까지 동작.
+
+> 탐색 정정: 최초 spec 은 "인증은 로그인 벽까지, 별도 증분"으로 적었으나 `console.auth.bootstrap-accounts` 발견으로 **데모 로그인이 이 증분 안에서 실동작**한다(§5). 남는 건 화면 완성(기능)과 프로덕션 인증 하드닝뿐이다.
 - **static-site 모듈 force_destroy** — 무관(콘솔은 박스 서빙, S3 아님).
 
 ## 7. 리스크 · 주의
 
 - **세션 쿠키 통과**: ConsoleAuthFilter 가 HttpSession 기반이라 nginx 가 Cookie 헤더를 프록시해야 한다(§3.2). 누락 시 로그인해도 세션 유지 안 됨.
 - **API 포트 확정**: tenant-console-api 가 실제로 `:8080` 을 리슨하는지 구현 단계에서 확인(Spring 기본 8080 가정).
+- **ECR·배포역할 선행 apply(edge-review 발견)**: CD 가 `edge/tenant-console-api`·`edge/tenant-console-ui` 로 push 하려면 (1) `edge/tenant-console-ui` 저장소 존재(foundation/ecr.tf 신규 — **수동 foundation apply**), (2) 데모 배포역할 `demo_image_names` 에 콘솔 2종 포함(deploy-role.tf — **수동 demo-onprem apply**)가 **CD 실행보다 먼저**여야 한다. 안 그러면 repo 부재·PutImage AccessDenied 로 images job 이 실패해 배포가 안 뜬다. 배포 순서: foundation apply → demo-onprem apply → `deploy-demo-onprem.yml` 실행.
 - **t3.small 용량**: 온프렘에 JVM 1개(+nginx)가 더 붙는다. JVM 5개가 되므로 리사이징(ALPHA-543)의 스왑 여유를 재확인 — 배포 후 `free -h`·OOM 관찰.
 - **이미지 태그**: CD 가 `${IMAGE_TAG}=github.sha` 로 통일(기존 매트릭스와 동일) — compose 의 tenant-console-* 도 같은 태그를 받게 배선.

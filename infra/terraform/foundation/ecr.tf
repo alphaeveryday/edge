@@ -16,7 +16,8 @@ locals {
     "edge/screening-worker",
     "edge/intake",
     "edge/sync-agent",
-    "edge/mock-broker", # 데모 증권사 backend(Node) — demo/mock-broker
+    "edge/mock-broker",       # 데모 증권사 backend(Node) — demo/mock-broker
+    "edge/tenant-console-ui", # 검수 콘솔 UI(nginx) — 박스 co-host (ALPHA-554). tenant-console-api 는 위에 존재.
   ])
 }
 

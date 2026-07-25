@@ -2,8 +2,9 @@
  * dev 세션 부트스트랩 — 로그인 화면(ALPHA-486 범위 밖)이 생기기 전까지의 임시 경로.
  * 콘솔 API 는 fail-closed(전 표면 세션 필수)라, 세션이 없으면 데모 부트스트랩
  * 계정(tenant-console-api application.yaml 기본값과 동일한 결)으로 자동 로그인해
- * 세션 쿠키를 확보한다. main.tsx 가 import.meta.env.DEV 안에서만 동적 import 하므로
- * 이 파일(자격증명 포함)은 prod 번들에 실리지 않는다 — 로그인 화면 도입 시 제거한다.
+ * 세션 쿠키를 확보한다. main.tsx 가 dev 이거나 데모 박스 빌드(VITE_DEMO_AUTOSESSION='true')
+ * 일 때만 동적 import 하므로, 실 온프렘 빌드(플래그 없음)에는 이 파일(자격증명 포함)이
+ * 실리지 않는다 — 로그인 화면(ALPHA-486/423) 도입 시 이 브릿지·플래그를 제거한다.
  */
 import { apiClient, ApiError } from './client';
 

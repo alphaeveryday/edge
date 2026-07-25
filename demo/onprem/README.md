@@ -4,9 +4,10 @@
 
 관통 경로(고객경로): cloud 분석 → `tenant_delivery`(outbox) → **[sync 경계]** → `sync-agent` → `intake` → `screening-worker`(AUTO_PUBLISHED 자동 게시) → `publication-api` → `mock-broker` → MTS.
 
-## 서비스 (7 컨테이너)
+## 서비스 (9 컨테이너)
 
-`postgres-onprem` · `flyway-onprem` · `sync-agent` · `intake` · `screening-worker` · `publication-api` · `mock-broker`. 검수 콘솔(`tenant-console-api`)은 후속 증분.
+고객경로: `postgres-onprem` · `flyway-onprem` · `sync-agent` · `intake` · `screening-worker` · `publication-api` · `mock-broker`.
+검수 콘솔(내부 도구): `tenant-console-api`(세션 인증·온프렘 PG) · `tenant-console-ui`(nginx — SPA 정적 + `/api` 프록시 co-host).
 
 ## 마이그레이션 SQL 번들 (필수)
 
@@ -23,6 +24,21 @@
 | `ONPREM_DB_PASSWORD` | `edge` | 온프렘 PG 비밀번호(데모) |
 | `MOCK_BROKER_PORT` | `8080` | mock-broker 호스트 노출 포트(CloudFront 오리진) |
 | `INTAKE_POLL_MS` / `SCREENING_POLL_MS` | `5000` | 폴링 주기(데모 시연용 짧게) |
+
+데모 콘솔 계정 비밀번호는 앱·UI 양쪽 기본값(`demo-admin-1`·`demo-reviewer-1`)으로 **고정**한다 — compose override 를 열지 않는다. UI 자동로그인이 빌드타임에 같은 값을 baked 하므로 API 만 바꾸면 자동로그인이 깨지기 때문이다(로그인 화면 도입 시 이 제약 소멸).
+
+## 검수 콘솔 접근 (SSM 터널 — 공개 노출 없음)
+
+`tenant-console-ui`(nginx)는 박스 `127.0.0.1:8090` 에만 바인딩된다 — 박스 사설 IP·SG 인바운드로도 안 열리고 **SSM 포트포워딩으로만** 도달한다(프로덕션의 "증권사 내부망 전용" 자세와 동일). MTS/mock-broker(공개)와 분리된 내부 도구.
+
+```bash
+aws ssm start-session --target <instance-id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["8090"],"localPortNumber":["8090"]}'
+# 브라우저: http://localhost:8090  (데모 빌드는 admin@demo.edge.local 로 자동 로그인)
+```
+
+서빙 빌드는 로그인 화면(ALPHA-486/423) 도입 전까지 `ensureDevSession` 임시 브릿지로 `admin@demo.edge.local` 자동 로그인한다(Dockerfile `VITE_DEMO_AUTOSESSION=true`). `tenant-console-api` 는 기동 시 `member` 가 비어 있으면 bootstrap-accounts 를 자동 시드하므로 별도 시드가 필요 없다. 실 온프렘 빌드는 이 플래그 없이 빌드해 자동 로그인이 빠진다(로그인 화면 사용).
 
 ## 로컬에서 검증
 
@@ -45,4 +61,4 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
 
 ## 범위 밖 (후속)
 
-박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진·`tenant_delivery` 시드·mTLS cert 는 **ALPHA-445**. 검수 콘솔(`tenant-console-api` + `tenant-console-ui` 호스팅)은 고객경로 개통 후 증분. 이미지 재빌드·재푸시 자동화(CD 워크플로)는 Phase 3.
+박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진·`tenant_delivery` 시드·mTLS cert 는 **ALPHA-445**. 검수 콘솔 서빙(`tenant-console-api` + nginx `tenant-console-ui` co-host)은 ALPHA-554 로 편입됨 — 콘솔 기능 완성(검수 워크플로·정책·감사 화면)은 ALPHA-423 epic 후속.
