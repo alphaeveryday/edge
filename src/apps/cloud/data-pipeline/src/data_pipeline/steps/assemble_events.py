@@ -345,6 +345,13 @@ def _validate_gate(item: dict, view: OntologyView, entity_index: dict[str, str],
         "primary_ticker": ticker,
         "entity_id": entity_id,
         "role_code": role_code,
+        # 폴백 anchor 역할 — roles.primary 가 유일할 때만 존재한다. 다중 primary 타입
+        # (CONTRACT.SIGNING: SUPPLIER|CUSTOMER)은 게이트가 고른 티커가 어느 역할인지 코드가
+        # 모르므로 조작하면 없는 공급사 주장이 된다(Codex #255 P2). required_roles[0](=role_code,
+        # assertion_argument 레거시 grain)와 다를 수 있다 — LEGAL.REGULATORY_ACTION 은
+        # required[0]=AUTHORITY 지만 primary=[TARGET_COMPANY] 라, 기업 티커를 AUTHORITY 로
+        # 실으면 규제당국 주장이 조작된다.
+        "anchor_role": tv.primary_roles[0] if len(tv.primary_roles) == 1 else None,
         "confidence": confidence,
     }
 
@@ -447,8 +454,10 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     # 냈는데 required_roles[0](SUPPLIER)을 미리 덮으면 기사에 없는 공급사를 '충족'으로
     # 위장해 completeness 가 추출 품질을 과대평가한다(Codex #255 P2, 폴백 조건과 동형).
     primary_entity = entity_index.get(str(gate_cls.get("primary_ticker") or ""))
-    if primary_entity is None or not any(a["entity_id"] == primary_entity for a in arguments):
-        covered_roles.add(gate_cls["role_code"])
+    if (gate_cls["anchor_role"]
+            and (primary_entity is None
+                 or not any(a["entity_id"] == primary_entity for a in arguments))):
+        covered_roles.add(gate_cls["anchor_role"])
 
     measures: list[dict] = []
     raw_measures = item.get("measures")
@@ -723,10 +732,10 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             event_args.append((source_event_id, part["role_code"], part["entity_id"],
                                cls["confidence"], part["slot"], part["mention_text"],
                                part["entity_kind"], part["group_ord"]))
-        if not primary_present:
-            # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 아무 역할로도 안 냈을 때만
-            # (빈 응답 포함) 이벤트의 anchor 행을 세운다.
-            event_args.append((source_event_id, cls["role_code"], entity_id, cls["confidence"],
+        if not primary_present and cls["anchor_role"]:
+            # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 아무 역할로도 안 냈고
+            # (빈 응답 포함) anchor 역할이 유일할 때만 이벤트의 anchor 행을 세운다.
+            event_args.append((source_event_id, cls["anchor_role"], entity_id, cls["confidence"],
                                None, None, "ISSUER", None))
         for measure_ord, measure in enumerate(cls["measures"]):
             # measure_ord = 추출 순서(0..n) — 자연키. dart_rcept_no 는 뉴스 경로에선 없다.
@@ -1058,7 +1067,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
     classified = events_created = threaded = unknown_thread = 0
-    stage_rejected = arguments_unresolved = 0
+    stage_rejected = arguments_unresolved = anchorless_events = 0
     failures: list[dict] = []
     exit_code = 0
 
@@ -1093,6 +1102,13 @@ def run(
                 arguments_unresolved += sum(
                     1 for c in classifications.values()
                     for p in c.get("arguments", ()) if p["entity_id"] is None)
+                # 아규먼트 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지 않아
+                # (다중 primary) 폴백을 조작하지 않은 건. event_argument 가 비면 threading
+                # 조회(JOIN)와 엔진 소비에서 빠지므로 카운터로 드러낸다(Rule 12).
+                anchorless_events += sum(
+                    1 for c in classifications.values()
+                    if not c.get("anchor_role")
+                    and not any(p["entity_id"] is not None for p in c.get("arguments", ())))
                 created = persist_normalization(conn, todo, classifications, date)
                 events_created += len(created)
                 # 유니버스(entity_index=holdings 파생 마스터) 전 구성종목 이벤트를 threading 한다
@@ -1112,7 +1128,7 @@ def run(
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
         events_created = threaded = unknown_thread = 0
-        stage_rejected = arguments_unresolved = 0
+        stage_rejected = arguments_unresolved = anchorless_events = 0
         exit_code = 1
 
     log = {
@@ -1126,6 +1142,7 @@ def run(
         "unknown_thread": unknown_thread,
         "stage_rejected": stage_rejected,
         "arguments_unresolved": arguments_unresolved,
+        "anchorless_events": anchorless_events,
         "failures": failures, "exit_code": exit_code,
     }
     try:
@@ -1137,8 +1154,10 @@ def run(
 
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
-        " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d failures=%d",
+        " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
+        " failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
-        threaded, unknown_thread, stage_rejected, arguments_unresolved, len(failures),
+        threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
+        len(failures),
     )
     return exit_code

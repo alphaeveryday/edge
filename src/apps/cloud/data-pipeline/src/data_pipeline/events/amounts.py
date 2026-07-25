@@ -65,7 +65,7 @@ class _Run:
     currency_marked: bool | None
     had_unit_token: bool
     had_place: bool
-    first_place_product: float
+    first_big_product: float  # 첫 세그먼트의 큰 자리(조억만) 곱 — range 좌측이 물려받는 몫
 
 
 def _segment_value(digits: str, places: str) -> tuple[float, float, float]:
@@ -101,7 +101,7 @@ def _runs(text: str) -> list[_Run]:
     for group in grouped:
         total = 0.0
         pending = 0.0  # 아직 큰 자리(조억만)를 못 만난 가수
-        first_place_product = 1.0
+        first_big_product = 1.0
         had_place = False
         for index, match in enumerate(group):
             mantissa, big, product = _segment_value(match.group(1), match.group(2))
@@ -110,7 +110,7 @@ def _runs(text: str) -> list[_Run]:
                 total += pending * big
                 pending = 0.0
             if index == 0:
-                first_place_product = product
+                first_big_product = big
             if product >= _IMPLIED_KRW_THRESHOLD:
                 had_place = True
         total += pending
@@ -123,7 +123,7 @@ def _runs(text: str) -> list[_Run]:
         currency_marked = marked
         if unit is None and had_place:
             unit, currency_marked = "KRW", False
-        runs.append(_Run(total, unit, currency_marked, marked is not None, had_place, first_place_product))
+        runs.append(_Run(total, unit, currency_marked, marked is not None, had_place, first_big_product))
     return runs
 
 
@@ -156,8 +156,10 @@ def parse_amount(surface: str | None) -> AmountParse:
         if left is not None and right is not None:
             left_value = left.value
             if left.unit is None:
-                # "3~4조원": 좌측 경계는 우측 경계의 자릿수·단위를 물려받는다
-                left_value *= right.first_place_product
+                # 좌측 경계는 '빠진 몫'만 물려받는다: 큰 자리(조억만)+단위. "3~4조원"→3×1e12,
+                # "3천~4천억원"→3천은 이미 작은 자리를 가졌으니 억(1e8)만 곱한다 — 첫
+                # 세그먼트 전체 곱(천×억)을 곱하면 천이 두 번 들어가 150조가 된다(#255 P2).
+                left_value *= right.first_big_product
             midpoint = (left_value + right.value) / 2.0
             if _is_calendar_year(midpoint, right.unit):
                 return AmountParse(None, None, FLAG_CALENDAR_YEAR, None)

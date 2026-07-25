@@ -28,6 +28,7 @@ class TypeView:
     predicates: frozenset[str]
     required_roles: tuple[str, ...]
     optional_roles: tuple[str, ...]
+    primary_roles: tuple[str, ...]  # roles.primary — 게이트가 고른 티커가 맡을 수 있는 역할
     quantity_roles: frozenset[str]
     required_quantity_roles: frozenset[str]
     currency_roles: frozenset[str]
@@ -65,6 +66,7 @@ def load_ontology_view() -> OntologyView:
         roles = spec.get("roles") or {}
         required = tuple(roles.get("required") or [])
         optional = tuple(roles.get("optional") or [])
+        primary = tuple(roles.get("primary") or [])
         quantities = spec.get("quantities") or {}
         quantity_roles = frozenset(quantities.keys())
         required_quantity_roles = frozenset(
@@ -90,6 +92,7 @@ def load_ontology_view() -> OntologyView:
             predicates=frozenset(spec.get("predicates") or []),
             required_roles=required,
             optional_roles=optional,
+            primary_roles=primary,
             quantity_roles=quantity_roles,
             required_quantity_roles=required_quantity_roles,
             currency_roles=currency_roles,

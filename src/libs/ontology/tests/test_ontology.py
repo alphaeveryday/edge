@@ -81,6 +81,12 @@ def test_view_exposes_quantity_and_identity_axes():
     assert signing.quantity_unit_families == {
         "CONTRACT_VALUE": "CURRENCY", "CONTRACT_DURATION": "DURATION_DAYS"}  # 단위 정합 축(#255)
     assert signing.identity_required == ("SUPPLIER", "CUSTOMER", "CONTRACT_OBJECT")
+    # anchor 폴백 판정 축(#255): primary 가 둘이면 게이트 티커의 역할을 코드가 모른다.
+    assert signing.primary_roles == ("SUPPLIER", "CUSTOMER")
+    assert view.types["COMPANY.EARNINGS.RESULT_RELEASE"].primary_roles == ("ISSUER",)
+    # required[0] 와 primary 가 갈리는 타입 — 기업 티커를 AUTHORITY 로 실으면 조작이다.
+    regact = view.types["COMPANY.LEGAL.REGULATORY_ACTION"]
+    assert regact.required_roles[0] == "AUTHORITY" and regact.primary_roles == ("TARGET_COMPANY",)
 
 
 def test_thread_contract_novelty_vocab_matches_db_check():

@@ -887,7 +887,8 @@ def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
     """arguments/measures 컨테이너가 비리스트(정수 등 truthy 스칼라)여도, items 에 비객체
     항목(null·스칼라)이 섞여도 그 항목만 결측 취급한다 — `or []`·`.get` 은 truthy 스칼라와
     null 을 못 걸러 TypeError/AttributeError 로 날짜 전체를 롤백시킨다(Codex #255 P2).
-    이벤트는 폴백 anchor 로 살고 measure 는 0건이다."""
+    이벤트(source_event)는 살고, 다중 primary 타입(CONTRACT.SIGNING: SUPPLIER|CUSTOMER)이라
+    폴백 anchor 는 조작하지 않는다 — 손실은 로그 카운터로 드러난다(Codex #255 P2)."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 공급계약")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
@@ -905,9 +906,13 @@ def test_malformed_container_types_do_not_abort_run(tmp_path, monkeypatch):
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
                                from_date="2026-07-15", to_date="2026-07-15") == 0
 
-    [arg] = _batch(conn, "event_argument")  # 폴백 anchor 행만
-    assert (arg[1], arg[2]) == ("SUPPLIER", "inst_SAMSUNG")
+    [se] = _batch(conn, "source_event")  # 이벤트는 산다
+    assert se[9] == "partial"  # 아무것도 추출 못 했으니 완비 아님
+    # 다중 primary 타입이라 anchor 역할이 유일하지 않다 → 역할을 지어내지 않는다.
+    assert _batch(conn, "event_argument") == []
     assert _batch(conn, "event_measure") == []
+    # 스레딩 조회(JOIN event_argument)에서 빠지는 손실을 전용 카운터로 드러낸다(Rule 12).
+    assert _log(storage)["anchorless_events"] == 1
 
 
 def test_complete_json_rejects_nonobject_toplevel():
