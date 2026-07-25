@@ -112,12 +112,16 @@ locals {
   # 운영 원장(ALPHA-530): PRICE_COLLECTION_KIS(kis)·NORMALIZE_PRICE(bigkinds) 컨테이너가
   # wrapper 로 attempt/data_status 를 **직접** 기록하려면 원장 DB 가 필요하다. rds·events 와 같은
   # DB 접속(같은 Cloud Event Store, ops_ 테이블). 없으면 그 두 wrapper 가 no-op 이 된다(edge-review).
+  # KRX ETF 수집(ALPHA-387)은 as-of 라벨을 거래일 판정으로 정한다 — 비거래일 런은 KRX 가 직전
+  # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
+  # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
   env_sets = {
     rds      = local.db_env
     events   = local.db_env
     kis      = local.db_env
     bigkinds = local.db_env
     rds_dart = local.db_env
+    krx      = { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) }
   }
 
   secret_sets = {

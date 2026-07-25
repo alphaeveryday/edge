@@ -21,9 +21,10 @@ import json
 import logging
 import urllib.parse
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ..config import KrxEtfSource as KrxEtfSourceConfig
+from ..ops.trading_calendar import is_trading_day
 from .http import PoliteClient, StopFetch
 from .krx_auth import USER_AGENT, KrxAuth
 
@@ -35,6 +36,31 @@ BLD = "dbms/MDC/STAT/standard/MDCSTAT05001"  # ETF PDF 구성종목 서비스
 REFERER = "https://data.krx.co.kr/contents/MDC/mdiLoader/index.cmd?menuId=MDC0201030108"
 
 KST = timezone(timedelta(hours=9))
+
+# 직전 거래일 탐색 상한. 최장 연휴(설·추석 + 앞뒤 주말)보다 넉넉하다 — 넘어가면 달력이 아니라
+# OPS_KR_HOLIDAYS 주입이 잘못된 것이라 fail-loud 한다.
+MAX_LOOKBACK_DAYS = 10
+
+
+def _as_of(today: date) -> date:
+    """기준일(as-of) — 오늘이 KR 거래일이면 오늘, 아니면 직전 거래일 (ALPHA-387).
+
+    스케줄이 장 마감 후(15:40 KST)라 거래일 런에서는 그날 PDF 가 이미 게시돼 있다(dev 실측:
+    07-22·23·24 연속 스냅샷 내용 상이). 문제는 **비거래일 런**이다 — KRX 는 빈 응답이 아니라
+    직전 거래일 PDF 를 그대로 돌려주므로(dev 실측: 토 07-18 응답이 금 07-17 과 바이트 동일)
+    오늘로 라벨하면 존재하지 않는 거래일의 스냅샷이 canonical 에 as-of 로 남는다. 라벨을 실제
+    기준일로 되돌리면 그 런은 직전 거래일 스냅샷을 같은 as-of 로 다시 쓴다(멱등).
+
+    휴장일 집합은 Planner 와 **같은** `OPS_KR_HOLIDAYS`(env)를 본다 — 달력이 갈리면 Planner 가
+    비거래일로 건너뛴 날을 수집은 거래일로 라벨하는 모순이 생긴다.
+    """
+    for back in range(MAX_LOOKBACK_DAYS):
+        day = today - timedelta(days=back)
+        if is_trading_day(day):
+            return day
+    raise ValueError(
+        f"{today} 부터 {MAX_LOOKBACK_DAYS}일 안에 거래일이 없다 — OPS_KR_HOLIDAYS 주입 확인"
+    )
 
 
 def _short_code(isin: str) -> str:
@@ -93,9 +119,9 @@ class KrxEtfSource:
         if not plan:
             return
         fetched_at = datetime.now(timezone.utc).isoformat()
-        # 기준일 = 오늘(KST). ETF PDF 는 영업일에만 게시되므로 비영업일 run 은 빈 output→ETF
-        # 단위 실패로 드러난다(조용한 성공 금지). ponytail: trdDd 백필(--to 배선)은 필요 시 추가.
-        trd_dd = datetime.now(KST).strftime("%Y%m%d")
+        # 기준일 = 거래일이면 오늘, 비거래일이면 직전 거래일(_as_of 주석에 근거).
+        # ponytail: trdDd 백필(--to 배선)은 필요 시 추가.
+        trd_dd = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
         # 로그인 1회(ETF마다 로그인 금지). 실패는 fetch 밖으로 전파해 소스 전체를 중단한다.
         jsessionid = self.auth.session()
         for our_etf_id, isin in plan:
@@ -113,9 +139,9 @@ class KrxEtfSource:
     ) -> Iterator[dict]:
         """한 ETF 의 PDF 구성종목을 한 번 호출해 holdings 행을 낸다.
 
-        실패는 예외로 올려 호출부가 ETF 단위로 격리한다. 빈 output(비영업일·미게시·잘못된
-        ISIN) 은 정상 ETF 로는 나올 수 없어 fail-loud(격리해 partial/error 로 드러냄) — US
-        어댑터의 '빈 holdings' 처리와 동형이다.
+        실패는 예외로 올려 호출부가 ETF 단위로 격리한다. 빈 output(미게시·잘못된 ISIN) 은
+        정상 ETF 로는 나올 수 없어 fail-loud(격리해 partial/error 로 드러냄) — US 어댑터의
+        '빈 holdings' 처리와 동형이다.
         """
         body = urllib.parse.urlencode({
             "bld": BLD, "locale": "ko_KR",
@@ -142,7 +168,7 @@ class KrxEtfSource:
             # 금지 — ETF 실패로 올린다(US 어댑터의 '비배열 응답' 처리와 동형).
             raise ValueError(f"output 이상: {type(output).__name__}")
         if not output:
-            # 빈 output 은 정상 ETF 로는 나올 수 없다(비영업일·미게시·잘못된 ISIN) — fail-loud.
+            # 빈 output 은 정상 ETF 로는 나올 수 없다(미게시·잘못된 ISIN) — fail-loud.
             raise ValueError("empty output")
         for row in output:
             # 배열 안에 dict 아닌 행이 섞여도 한 행이 남은 수집을 끊지 않게 — 기록 후 스킵.

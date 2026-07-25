@@ -96,3 +96,5 @@ cd ../envs/dev  && terraform apply
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > `data-pipeline` 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필은 `aws stepfunctions start-execution` 으로.
+>
+> ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 비면 평일 휴장일에 Planner 가 런을 계획하고 KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다. 주말만 코드가 안다.

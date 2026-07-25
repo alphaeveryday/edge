@@ -7,12 +7,13 @@ FmpEtfSource(US)와 같은 관례 인터페이스를 지켜 ingest_raw_etf 스�
 
 import json
 import urllib.parse
+from datetime import date, datetime
 
 import pytest
 
 from data_pipeline.config import KrxEtfSource as KrxEtfSourceConfig
 from data_pipeline.sources.http import StopFetch
-from data_pipeline.sources.krx_etf import KrxEtfSource, _short_code
+from data_pipeline.sources.krx_etf import KST, KrxEtfSource, _as_of, _short_code
 
 
 class FakeAuth:
@@ -60,17 +61,44 @@ def test_short_code_derives_6digit_from_isin():
     assert _short_code("KR7360750004") == "360750"
 
 
+def test_as_of_labels_non_trading_day_with_previous_trading_day(monkeypatch):
+    # WHY: 비거래일 런에도 KRX 는 빈 응답이 아니라 **직전 거래일 PDF** 를 그대로 준다(dev 실측:
+    #      토 07-18 응답이 금 07-17 과 바이트 동일). 그걸 오늘로 라벨하면 존재하지 않는 거래일의
+    #      스냅샷이 canonical 에 as-of 로 남는다 — 라벨은 데이터의 실제 기준일이어야 한다.
+    monkeypatch.delenv("OPS_KR_HOLIDAYS", raising=False)
+    assert _as_of(date(2026, 7, 23)) == date(2026, 7, 23)  # 목요일(거래일) — 오늘 그대로
+    assert _as_of(date(2026, 7, 18)) == date(2026, 7, 17)  # 토요일 → 직전 금요일
+    # 평일 공휴일도 건너뛴다 — 달력은 Planner 와 같은 OPS_KR_HOLIDAYS 를 본다(판정 분기 금지).
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-17")
+    assert _as_of(date(2026, 7, 18)) == date(2026, 7, 16)
+
+
+def test_as_of_fails_loud_when_no_trading_day_in_range(monkeypatch):
+    # WHY: 탐색 상한(10일)을 넘기는 건 달력이 아니라 휴장일 주입이 잘못된 상황이다 —
+    #      조용히 아무 날짜나 찍으면 그 오라벨이 canonical 까지 그대로 흘러간다.
+    monkeypatch.setenv(
+        "OPS_KR_HOLIDAYS", ",".join(f"2026-07-{d:02d}" for d in range(9, 24))
+    )
+    with pytest.raises(ValueError, match="OPS_KR_HOLIDAYS"):
+        _as_of(date(2026, 7, 23))
+
+
 def test_fetch_attaches_meta_and_preserves_original():
     # WHY: raw 는 원본 필드를 무변형 보존하고 수집 메타(our_etf_id/market/isin/trd_dd/
     #      fetched_at)만 덧붙인다 — 특히 우리가 지정한 기준일(trd_dd)이 as-of 로 남아야 한다.
     src = _source({"KR7069500007": {"output": [
         {"COMPST_ISU_CD": "005930", "COMPST_ISU_NM": "삼성전자", "COMPST_RTO": "30.5"}]}})
+    # 자정을 넘겨도 안 깨지게 fetch 앞뒤로 기대값을 잡는다(둘 다 정답인 유일한 순간이다).
+    before = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
     rows = list(src.fetch())
+    after = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
 
     assert len(rows) == 1
     row = rows[0]
     assert row["our_etf_id"] == "069500" and row["market"] == "KR"
-    assert row["isin"] == "KR7069500007" and "trd_dd" in row and "fetched_at" in row
+    assert row["isin"] == "KR7069500007" and "fetched_at" in row
+    # 라벨은 실제 기준일(_as_of) — 오늘 날짜를 그대로 찍지 않는다(ALPHA-387).
+    assert row["trd_dd"] in {before, after}
     # 원본 필드 무변형 보존.
     assert row["COMPST_ISU_CD"] == "005930" and row["COMPST_RTO"] == "30.5"
 
