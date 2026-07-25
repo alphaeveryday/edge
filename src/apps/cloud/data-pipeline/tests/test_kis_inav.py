@@ -149,3 +149,41 @@ def test_일별_어댑터의_질의는_그대로다():
     assert params["FID_INPUT_DATE_2"] == ["20260717"]
     assert src.client.headers[0]["tr_id"] == "FHPST02440200"
     assert "interval_sec" not in records[0]  # 일별에는 간격 개념이 없다
+
+
+def test_필수_필드_결측_행은_격리되고_나머지는_수집된다():
+    """bsop_hour 없이는 시각 축을, nav 없이는 값을 못 만든다. 그런 행을 그대로 저장하면
+    collection_log 는 success 인데 다운스트림이 못 쓴다 — 수집 실패의 성공 위장이다(Rule 12)."""
+    broken = {k: v for k, v in LIVE_ROW.items() if k != "bsop_hour"}
+    src = _source({"069500": _ok([broken, LIVE_ROW])})
+    records = list(src.fetch())
+
+    assert [r["bsop_hour"] for r in records] == ["153000"]  # 성한 행은 계속 수집
+    assert len(src.fetch_failures) == 1
+    assert "bsop_hour" in src.fetch_failures[0]["error"]
+    assert src.fetch_failures[0]["our_etf_id"] == "069500"
+
+
+def test_빈_문자열도_결측으로_본다():
+    """KIS 는 값을 문자열로 준다 — 키는 있는데 빈 문자열이면 없는 것과 같다."""
+    src = _source({"069500": _ok([{**LIVE_ROW, "nav": ""}])})
+    list(src.fetch())
+
+    assert "nav" in src.fetch_failures[0]["error"]
+
+
+def test_일별_어댑터는_필드_결측을_거르지_않는다():
+    """bronze 무변형 — 일별 NAV 는 형태만 본다. iNAV 의 필수 필드 규칙이 부모로 새면
+    기존 수집이 조용히 좁아진다(Rule 3)."""
+    from data_pipeline.sources.kis_nav import KisNavSource
+
+    src = KisNavSource(
+        KisNavSourceConfig(app_key="k", app_secret="s"),
+        {"069500": "KR7069500007"},
+        FakeClient({"069500": _ok([{"nav": "1"}])}),
+    )
+    src.auth = FakeAuth()
+    records = list(src.fetch())
+
+    assert len(records) == 1
+    assert src.fetch_failures == []

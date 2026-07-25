@@ -152,6 +152,18 @@ class KisNavSource:
                 self._note_failure(kis_symbol, our_etf_id, str(exc))
                 continue
 
+    def _row_defect(self, row: object) -> str | None:
+        """이 행을 raw 로 낼 수 없으면 사유, 낼 수 있으면 None.
+
+        기본은 형태만 본다 — bronze 는 무변형 보존이라 값 판정은 canonical 소관이다.
+        다만 **행을 식별조차 못 하는 결손**은 격리해 드러낸다: 그런 행을 그대로 저장하면
+        저장은 success 인데 다운스트림이 쓸 수 없어 수집 실패가 성공으로 위장된다(Rule 12).
+        어느 필드가 그에 해당하는지는 엔드포인트마다 달라 하위 어댑터가 더한다.
+        """
+        if not isinstance(row, dict):
+            return f"malformed row: {type(row).__name__}"
+        return None
+
     def _query_params(self, kis_symbol: str, d1: str, d2: str) -> dict[str, str]:
         """이 엔드포인트의 질의 파라미터. 하위 어댑터가 오버라이드한다."""
         return {
@@ -199,17 +211,16 @@ class KisNavSource:
                     raise ValueError(f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}")
                 if not output:
                     raise ValueError("empty output — 응답 창에 데이터가 없거나 잘못된 종목코드")
-                # 배열 안에 dict 아닌 행이 섞여도 한 행이 ETF 전체를 끊지 않게 — 기록 후 스킵.
+                # 못 쓰는 행이 섞여도 한 행이 ETF 전체를 끊지 않게 — 기록 후 스킵.
                 rows = []
                 for row in output:
-                    if isinstance(row, dict):
+                    defect = self._row_defect(row)
+                    if defect is None:
                         rows.append(row)
                     else:
                         # our_etf_id 를 함께 남긴다 — symbol 만으로는 로그 소비자가
                         # 어느 ETF 의 원본 행이 유실됐는지 내부 식별자로 잇지 못한다.
-                        self._note_failure(
-                            kis_symbol, our_etf_id, f"malformed row: {type(row).__name__}"
-                        )
+                        self._note_failure(kis_symbol, our_etf_id, defect)
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:

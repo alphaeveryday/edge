@@ -27,7 +27,8 @@ NAV 고 이건 장중 시각 grain 의 추정 NAV 다. 기존 `etf_nav` 테이�
 
 `KisNavSource` 를 상속한다 — 토큰 발급·단축코드 파생·`EGW00201` 재시도·rt_cd 판정·ETF 단위
 실패 격리가 전부 동일해서, 갈리는 건 엔드포인트와 질의 파라미터뿐이다. 부모가 그 둘을 훅
-(`tr_id`·`path`·`_query_params`·`_extra_provenance`)으로 열어둬 오류 처리 코드는 한 벌만 산다.
+(`tr_id`·`path`·`_query_params`·`_row_defect`·`_extra_provenance`)으로 열어둬 오류 처리 코드는
+한 벌만 산다.
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ MARKET_DIV_INAV = "E"
 # 그보다 잘게 의미가 있는지는 장중 cls=1 측정이 정한다(ALPHA-556 열린 결정).
 DEFAULT_INTERVAL_SEC = 60
 ROWS_PER_CALL = 30  # 응답 고정 행 수(실측) — 창 = interval_sec × 이 값.
+# 행 식별에 필요한 필드 — 시각 축(bsop_hour)과 값(nav). 없으면 저장해도 못 쓴다.
+REQUIRED_ROW_FIELDS = ("bsop_hour", "nav")
 
 
 class KisInavSource(KisNavSource):
@@ -80,6 +83,20 @@ class KisInavSource(KisNavSource):
             "FID_INPUT_ISCD": kis_symbol,
             "FID_HOUR_CLS_CODE": str(self.interval_sec),
         }
+
+    def _row_defect(self, row: object) -> str | None:
+        """형태 검사(부모) + iNAV 가 행 식별에 요구하는 필드.
+
+        `bsop_hour` 없이는 시각 축을 못 만들고(자연키 결손), `nav` 없이는 담을 값이 없다.
+        둘 중 하나라도 빠진 행을 저장하면 collection_log 는 success 인데 다운스트림은 그 행을
+        못 쓴다 — 조용한 유실이라 여기서 ETF 단위 실패로 드러낸다(격리≠은폐, Rule 12).
+        값 자체의 타당성(범위·형식)은 판정하지 않는다 — 그건 canonical 소관이다.
+        """
+        defect = super()._row_defect(row)
+        if defect is not None or not isinstance(row, dict):
+            return defect
+        missing = [f for f in REQUIRED_ROW_FIELDS if not str(row.get(f) or "").strip()]
+        return f"필수 필드 결측: {', '.join(missing)}" if missing else None
 
     def _extra_provenance(self) -> dict[str, object]:
         """어느 간격으로 뽑은 표본인지 행에 새긴다.
