@@ -88,14 +88,17 @@ def test_fetch_attaches_meta_and_preserves_original():
     #      fetched_at)만 덧붙인다 — 특히 우리가 지정한 기준일(trd_dd)이 as-of 로 남아야 한다.
     src = _source({"KR7069500007": {"output": [
         {"COMPST_ISU_CD": "005930", "COMPST_ISU_NM": "삼성전자", "COMPST_RTO": "30.5"}]}})
+    # 자정을 넘겨도 안 깨지게 fetch 앞뒤로 기대값을 잡는다(둘 다 정답인 유일한 순간이다).
+    before = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
     rows = list(src.fetch())
+    after = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
 
     assert len(rows) == 1
     row = rows[0]
     assert row["our_etf_id"] == "069500" and row["market"] == "KR"
     assert row["isin"] == "KR7069500007" and "fetched_at" in row
     # 라벨은 실제 기준일(_as_of) — 오늘 날짜를 그대로 찍지 않는다(ALPHA-387).
-    assert row["trd_dd"] == _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
+    assert row["trd_dd"] in {before, after}
     # 원본 필드 무변형 보존.
     assert row["COMPST_ISU_CD"] == "005930" and row["COMPST_RTO"] == "30.5"
 
