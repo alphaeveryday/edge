@@ -11,6 +11,7 @@ from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth
 from .kis_etf_profile import KisEtfProfileSource
 from .kis_investor import KisInvestorSource
+from .kis_inav import KisInavSource
 from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
 from .krx_auth import KrxAuth
@@ -27,6 +28,7 @@ __all__ = [
     "KisDailyPriceSource",
     "KisEtfProfileSource",
     "KisInvestorSource",
+    "KisInavSource",
     "KisNavSource",
     "KisAuth",
     "KrxEtfSource",

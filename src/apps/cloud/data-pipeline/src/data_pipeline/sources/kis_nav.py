@@ -52,6 +52,10 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 class KisNavSource:
     source_name = "kis"
+    # 엔드포인트·질의 파라미터는 하위 어댑터가 갈아끼운다(kis_inav.KisInavSource) —
+    # rt_cd 판정·EGW00201 재시도·malformed 행 격리는 한 곳(_fetch_etf)에 남긴다.
+    tr_id = TR_ID_NAV_DAILY
+    path = PATH_NAV_DAILY
 
     def __init__(
         self,
@@ -135,6 +139,7 @@ class KisNavSource:
                 for row in self._fetch_etf(our_etf_id, kis_symbol, d1, d2, token):
                     # bronze 무변형: output 행 원본 보존 + 수집 provenance 만 부착.
                     record = dict(row)
+                    record.update(self._extra_provenance())
                     record["our_etf_id"] = our_etf_id
                     record["market"] = "KR"  # KIS ETF NAV 는 KRX 로컬 전용
                     record["kis_symbol"] = kis_symbol
@@ -147,6 +152,19 @@ class KisNavSource:
                 self._note_failure(kis_symbol, our_etf_id, str(exc))
                 continue
 
+    def _query_params(self, kis_symbol: str, d1: str, d2: str) -> dict[str, str]:
+        """이 엔드포인트의 질의 파라미터. 하위 어댑터가 오버라이드한다."""
+        return {
+            "FID_COND_MRKT_DIV_CODE": MARKET_DIV,
+            "FID_INPUT_ISCD": kis_symbol,
+            "FID_INPUT_DATE_1": d1,
+            "FID_INPUT_DATE_2": d2,
+        }
+
+    def _extra_provenance(self) -> dict[str, object]:
+        """raw 행에 덧붙일 어댑터 고유 필드. 일별 NAV 는 없다."""
+        return {}
+
     def _fetch_etf(
         self, our_etf_id: str, kis_symbol: str, d1: str, d2: str, token: str
     ) -> list[dict]:
@@ -155,19 +173,16 @@ class KisNavSource:
         실패는 예외로 올려 호출부가 ETF 단위로 격리한다. 빈 output 은 정상 ETF·정상 창으로는
         나올 수 없어(잘못된 코드·비영업일만 걸린 창) fail-loud 한다 — 조용한 success 0건 금지.
         """
-        params = {
-            "FID_COND_MRKT_DIV_CODE": MARKET_DIV,
-            "FID_INPUT_ISCD": kis_symbol,
-            "FID_INPUT_DATE_1": d1,
-            "FID_INPUT_DATE_2": d2,
-        }
-        url = self.base + PATH_NAV_DAILY + "?" + urllib.parse.urlencode(params)
+        url = (
+            self.base + self.path + "?"
+            + urllib.parse.urlencode(self._query_params(kis_symbol, d1, d2))
+        )
         headers = {
             "content-type": "application/json; charset=utf-8",
             "authorization": f"Bearer {token}",
             "appkey": self.app_key or "",
             "appsecret": self.app_secret or "",
-            "tr_id": TR_ID_NAV_DAILY,
+            "tr_id": self.tr_id,
             "custtype": "P",
         }
         for attempt in range(MAX_RATE_RETRY):
@@ -183,7 +198,7 @@ class KisNavSource:
                 if not isinstance(output, list):
                     raise ValueError(f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}")
                 if not output:
-                    raise ValueError("empty output — 창에 거래일이 없거나 잘못된 종목코드")
+                    raise ValueError("empty output — 응답 창에 데이터가 없거나 잘못된 종목코드")
                 # 배열 안에 dict 아닌 행이 섞여도 한 행이 ETF 전체를 끊지 않게 — 기록 후 스킵.
                 rows = []
                 for row in output:

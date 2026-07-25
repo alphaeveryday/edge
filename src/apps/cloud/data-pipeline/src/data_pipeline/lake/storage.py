@@ -119,6 +119,25 @@ def raw_etf_nav_partition(
     )
 
 
+def raw_etf_inav_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw ETF iNAV(etf_inav) 파티션 프리픽스 (끝 슬래시 없음).
+
+    일별 NAV(raw_etf_nav_partition)와 dataset 을 나눈다 — 같은 벤더의 다른 축이다(거래일
+    grain 종가 NAV vs 장중 시각 grain 추정 NAV). 한 dataset 에 섞으면 canonical 이 행마다
+    grain 을 되짚어야 한다.
+
+    장중 폴링이라 하루에 run 이 수십 개 들어온다. 소급 조회가 불가능해(ALPHA-555) 폴링
+    창을 겹치게 잡으므로 같은 시각이 여러 run 에 중복 수집되는 것이 **정상**이다 — 겹침이
+    유일한 갭 방어 수단이라 raw 는 전부 보존하고, 중복 제거는 canonical 소관이다.
+    """
+    return (
+        f"raw/source={source}/dataset=etf_inav/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_etf_profile_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
