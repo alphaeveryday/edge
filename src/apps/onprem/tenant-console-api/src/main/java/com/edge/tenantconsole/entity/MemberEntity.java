@@ -7,11 +7,14 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import java.time.OffsetDateTime;
+
 /**
  * member 원장 엔티티 — writer = tenant-console-api(전유, 스키마 COMMENT). 이 모듈이
- * 쓰는 컬럼만 부분 매핑한다(created_at 은 DB default 라 미매핑, last_login_at 은
- * native @Modifying 갱신이라 미매핑). DDL 은 Flyway 소유 — 매핑 검증(validate)·조회·
- * 부트스트랩 insert(save) 용.
+ * 쓰는·읽는 컬럼만 부분 매핑한다(created_at 은 DB default 라 미매핑). last_login_at 은
+ * 갱신은 native @Modifying(touchLastLogin)이 전담하지만, 사용자 목록(ALPHA-119)이
+ * 읽어야 하므로 읽기용으로 매핑한다(INSERT 시 null — 컬럼 nullable). DDL 은 Flyway
+ * 소유 — 매핑 검증(validate)·조회·insert(save) 용.
  */
 @Entity
 @Table(name = "member")
@@ -31,6 +34,9 @@ public class MemberEntity {
 
 	@Column(name = "password_hash")
 	private String passwordHash;
+
+	@Column(name = "last_login_at")
+	private OffsetDateTime lastLoginAt;
 
 	protected MemberEntity() {
 	}
@@ -77,5 +83,9 @@ public class MemberEntity {
 
 	public String getPasswordHash() {
 		return passwordHash;
+	}
+
+	public OffsetDateTime getLastLoginAt() {
+		return lastLoginAt;
 	}
 }

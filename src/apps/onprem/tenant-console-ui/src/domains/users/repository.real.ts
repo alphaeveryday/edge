@@ -5,5 +5,6 @@ import type { Member } from './types';
 
 export const realUsersRepository: UsersRepository = {
   list: () => apiClient.get<Member[]>('/members'),
-  invite: (email, role) => apiClient.post<void>('/members/invitations', { email, role }),
+  register: (input) => apiClient.post<Member>('/members', input),
+  deactivate: (id) => apiClient.post<void>(`/members/${id}/deactivate`),
 };

@@ -83,6 +83,9 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 | CR |
 | `POST /api/v1/review/items/{id}/reject` | 검수 액션 | CR |
+| `GET /api/v1/members` | Users & Roles 조회 | TA |
+| `POST /api/v1/members` | 사용자 등록 | TA |
+| `POST /api/v1/members/{id}/deactivate` | 사용자 비활성화 | TA |
 
 ### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
 
@@ -106,7 +109,6 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | 인증된 전 역할 |
 | `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경 (TA) | 인증된 전 역할 |
 | `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경 (CR) | 인증된 전 역할 |
-| `GET /api/v1/members` · `POST /api/v1/members/invitations` | Users & Roles (TA) | 인증된 전 역할 |
 | `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 (전 역할) | 인증된 전 역할 |
 
 인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),

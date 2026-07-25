@@ -45,6 +45,31 @@ class AuthServiceTest {
 		}
 
 		@Override
+		public Optional<MemberEntity> findById(Long id) {
+			return Optional.empty();
+		}
+
+		@Override
+		public List<MemberEntity> findAllOrderByMemberId() {
+			return List.copyOf(saved);
+		}
+
+		@Override
+		public List<Long> lockActiveAdminIds() {
+			return List.of();
+		}
+
+		@Override
+		public boolean existsByEmail(String email) {
+			return false;
+		}
+
+		@Override
+		public int deactivate(long id) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long id) {
 		}
 	}

@@ -6,4 +6,5 @@ import type { UsersRepository } from './repository';
 export const usersRepository: UsersRepository = realUsersRepository;
 
 export * from './types';
+export * from './labels';
 export type { UsersRepository } from './repository';

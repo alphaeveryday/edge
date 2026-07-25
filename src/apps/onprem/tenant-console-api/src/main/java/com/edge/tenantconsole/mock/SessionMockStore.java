@@ -16,8 +16,10 @@ public class SessionMockStore {
 			String tenantDomain, String tenantMark) {
 	}
 
+	// role 필드는 자리표시일 뿐이다 — 실제 응답의 role 은 ConsoleSessionController 가 인증
+	// 주체(SessionMember)의 현재 값으로 채운다(ALPHA-119). 여기 값은 출력에 쓰이지 않는다.
 	private SessionUser user = new SessionUser(
-			"조영서", "youngseo.cho@kbsec.com", "Admin", "KB증권", "kbsec.com", "KB");
+			"조영서", "youngseo.cho@kbsec.com", "TENANT_ADMIN", "KB증권", "kbsec.com", "KB");
 
 	public synchronized SessionUser current() {
 		return user;
