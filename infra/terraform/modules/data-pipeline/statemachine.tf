@@ -10,7 +10,18 @@ resource "aws_sns_topic_subscription" "email" {
 }
 
 locals {
-  raw_ingest_jobs = [
+  # US(FMP) 수집 잡 (ALPHA-558) — `var.us_fmp_enabled` 로 raw 병렬에 넣고 뺀다(제거 아니라 토글).
+  # false 면 아래 4잡이 raw_ingest_jobs 에 안 들어가 SFN 이 실행조차 안 하므로, 공용 FMP 키의
+  # bandwidth 소진 중(429 "Bandwidth Limit Reach") 매 런을 FAILED 로 마감하던 노이즈가 사라지고
+  # daily 런이 clean SUCCESS 로 돈다. KR 은 FMP 와 독립이라 그대로 수집된다(ADR-0030 격리와 무관 —
+  # 그건 **간헐 장애**용이고 이건 **의도적 장기 다운**이라 매일 알림보다 끄는 게 맞다, 별개 축).
+  # 복구 시 `us_fmp_enabled=true`. 다운 기간 공백은 소스마다 복구성이 다르다(전량 소급 아님):
+  #   - 가격·뉴스: windowed 소급 O — `ingest-price-raw --source fmp --from <시작> --to <오늘>` /
+  #     `ingest-raw --source fmp --from <시작> --to <오늘>` (FMP EOD·news 둘 다 날짜창 지원).
+  #   - 재무: 현재 재무제표 재조회라 다음 런이 그대로 주워온다(창 소급 불요, 공백 개념 없음).
+  #   - ETF holdings: **현재 스냅샷 엔드포인트라 다운 기간의 일별 holdings 는 영구 결손**(소급 불가).
+  #     단 US ETF holdings 는 ALPHA-371 로 이미 보류·미사용(constituent_mic 전량 null)이라 실손실 없음.
+  us_fmp_ingest_jobs = [
     {
       state        = "CollectFmpNews"
       taskdef_key  = "fmp"
@@ -26,6 +37,15 @@ locals {
       taskdef_key  = "fmp"
       command_expr = "States.Array('ingest-raw-financial', '--source', 'fmp', '--run-id', $.run_id)"
     },
+    {
+      state        = "CollectFmpEtf"
+      taskdef_key  = "fmp"
+      command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
+    },
+  ]
+
+  # KR 수집 잡 — FMP 와 독립이라 US 토글과 무관하게 항상 돈다.
+  kr_ingest_jobs = [
     {
       state        = "CollectBigKindsNews"
       taskdef_key  = "bigkinds"
@@ -69,11 +89,6 @@ locals {
       taskdef_key  = "kis"
       command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
     },
-    {
-      state        = "CollectFmpEtf"
-      taskdef_key  = "fmp"
-      command_expr = "States.Array('ingest-raw-etf', '--run-id', $.run_id)"
-    },
     # 기준일(ALPHA-387, dev 실측으로 확정): 스케줄이 장 마감 후(15:40 KST, ALPHA-414)라
     # **거래일 런은 그날 PDF 가 이미 게시돼 있다**(07-22·23·24 연속 스냅샷 내용 상이). 반면
     # 비거래일 런은 빈 응답이 아니라 직전 거래일 PDF 가 온다(토 07-18 응답 = 금 07-17 바이트
@@ -88,6 +103,9 @@ locals {
       command_expr = "States.Array('ingest-raw-etf', '--source', 'krx', '--run-id', $.run_id)"
     },
   ]
+
+  # raw 병렬 브랜치 = US(토글) + KR. 브랜치는 서로 독립이라 순서는 무관하다.
+  raw_ingest_jobs = concat(var.us_fmp_enabled ? local.us_fmp_ingest_jobs : [], local.kr_ingest_jobs)
 
   # raw 성공 뒤 도는 정제 스테이지(ALPHA-355). raw 와 같은 브랜치 구조를 재사용하되 잡만 다르다.
   # normalize 는 벤더 API 키가 필요 없고(레이크만 읽고 canonical 을 쓴다) 모든 task-def 가 같은

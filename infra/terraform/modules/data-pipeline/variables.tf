@@ -251,3 +251,15 @@ variable "state_machine_timeout_seconds" {
   type    = number
   default = 21600
 }
+
+# US(FMP) 수집 잡을 raw 병렬에 넣을지(ALPHA-558). false 면 CollectFmpNews·CollectFmpPrice·
+# CollectFmpFinancial·CollectFmpEtf 4잡이 raw_ingest_jobs 에서 빠져 SFN 이 실행조차 안 한다.
+# 기본 false — 공용 FMP 키의 bandwidth(rolling 30일) 소진 중, US 잡이 매 런 429 로 실패해 daily
+# 런을 FAILED 로 마감하던 노이즈를 없앤다(KR 은 독립이라 계속 수집). 복구 시 true 로 되돌린다 —
+# 다운 기간 공백의 소스별 복구성(가격·뉴스 windowed 소급 / 재무 재조회 / ETF holdings 영구결손)은
+# statemachine.tf 의 us_fmp_ingest_jobs 주석 참조(중복 방지).
+variable "us_fmp_enabled" {
+  description = "US(FMP) 수집 잡을 raw 병렬에 포함할지. 기본 false — FMP bandwidth 소진 중 daily 런을 clean 하게 유지(ALPHA-558)."
+  type        = bool
+  default     = false
+}
