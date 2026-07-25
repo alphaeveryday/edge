@@ -19,13 +19,23 @@ WINDOW_DAYS = 7
 
 # 사건 참여 instrument 를 equity_profile 로 발행회사 actor 에 접지한 PARSED KRW 측정행.
 # 참여자 여러 명이면 행이 곱해진다 — 파이썬에서 (사건, ord) 로 묶어 issuer 집합을 만든다.
+#
+# 두 가지 좁히기가 정합성에 필수다(Codex #265 P2):
+# 1) group_ord 짝 — 멀티기업 기사는 (주체↔값)을 group_ord 로 묶는다. 조인을 안 좁히면
+#    group 0 금액이 group 1 발행회사의 공시로 승격돼 엉뚱한 rcept 번호가 붙는다. 어느 쪽이든
+#    group_ord 가 NULL(단일 그룹·폴백 anchor)이면 짝을 알 수 없으니 종전대로 전 참여자를 본다.
+# 2) 역할·타입 — 대조 대상이 supply_contract_fact(공급계약 금액)뿐이므로 측정행도 같은 의미로
+#    좁힌다. 배당·자기주식 등 다른 KRW 금액이 우연히 ±8% 안에 들면 무관한 공시로 상표가 바뀐다.
 _MEASURE_SQL = (
     "SELECT em.source_event_id, em.measure_ord, em.value, ep.issuer_actor_id, se.available_at"
     " FROM event_measure em"
     " JOIN source_event se ON se.source_event_id = em.source_event_id"
     " JOIN event_argument ea ON ea.source_event_id = em.source_event_id"
+    " AND (em.group_ord IS NULL OR ea.group_ord IS NULL OR ea.group_ord = em.group_ord)"
     " JOIN equity_profile ep ON ep.instrument_id = ea.entity_id"
     " WHERE em.value_source = 'PARSED' AND em.unit = 'KRW' AND em.value IS NOT NULL"
+    " AND em.role_code = 'CONTRACT_VALUE'"
+    " AND se.event_type_code = 'COMPANY.CONTRACT.SIGNING'"
     " AND se.available_at >= %s::date"
     " AND se.available_at < %s::date + interval '1 day'"
 )

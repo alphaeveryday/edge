@@ -3,6 +3,7 @@
 오염되므로(잘못된 DART 승격 = 골드 대조 오염), 각 축의 경계에서 의도를 고정한다."""
 from datetime import datetime
 
+from data_pipeline.steps import dart_values
 from data_pipeline.steps.dart_values import match_candidates, match_dart_values
 
 D = datetime.fromisoformat
@@ -90,3 +91,18 @@ def test_wrapper_groups_participant_fanout_and_updates_once():
     [(sql, rows)] = conn.updates
     assert rows == [("R1", "evt1", 0)]
     assert "value_source = 'PARSED'" in sql
+
+
+def test_measure_sql_binds_group_pair_and_contract_scope():
+    """SQL 계약 — 순수 함수가 못 지키는 두 좁히기를 쿼리에서 고정한다(Codex #265 P2).
+
+    (1) group_ord 짝: 멀티기업 기사는 (주체↔값)을 group_ord 로 묶는다. 조인이 안 좁혀지면
+        group 0 금액이 group 1 발행회사의 공시로 승격돼 엉뚱한 rcept 번호가 lineage 에 남는다.
+    (2) 역할·타입: 대조 대상이 supply_contract_fact 뿐이라, 배당·자기주식 같은 다른 KRW
+        금액이 우연히 ±8% 안에 들면 무관한 공시로 출처가 둔갑한다.
+    둘 다 실 DB 없이는 값으로 검증할 수 없어 쿼리 계약을 직접 고정한다(기존 threading 의
+    novelty 필터 테스트와 같은 방식)."""
+    sql = dart_values._MEASURE_SQL
+    assert "ea.group_ord = em.group_ord" in sql
+    assert "em.role_code = 'CONTRACT_VALUE'" in sql
+    assert "se.event_type_code = 'COMPANY.CONTRACT.SIGNING'" in sql
