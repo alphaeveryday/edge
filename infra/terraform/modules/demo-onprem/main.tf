@@ -4,12 +4,15 @@
 
 data "aws_region" "current" {}
 
+# 표준 AL2023 만. `al2023-ami-*` 로 넓히면 most_recent 가 ECS-optimized(al2023-ami-ecs-*·
+# -ecs-neuron-*)나 minimal 변종을 골라, ecs-init 이 딸려와 부팅마다 ecs-agent 가 뜬다(무의미·메모리
+# 낭비). `al2023-ami-2023.*` 는 표준 이미지(al2023-ami-2023.x.YYYYMMDD.N-kernel-…)만 매치한다.
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023.*-x86_64"]
   }
   filter {
     name   = "architecture"
@@ -194,6 +197,15 @@ resource "aws_instance" "this" {
   tags = {
     Name        = var.name
     "edge:role" = "demo-onprem"
+  }
+
+  # ami 는 replacement-only 속성이다. 위 필터 교정으로 data.aws_ami 가 기존 박스의 AMI 와
+  # 다른 id 로 resolve 되면, 무관한 변경(IAM·SG)의 apply 마저 인스턴스 교체(→ 루트 EBS·PG
+  # named volume 유실)를 계획한다. AMI 드리프트를 무시해 기존 박스를 보존한다 — 신규 박스는
+  # create 시 교정된 AMI 를 받고(ignore_changes 는 update 에만 적용), 기존 박스의 AMI 갱신이
+  # 정말 필요하면 의도적 `-replace` 로 명시한다.
+  lifecycle {
+    ignore_changes = [ami]
   }
 }
 
