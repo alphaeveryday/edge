@@ -200,6 +200,7 @@ class Ledger:
         self, expected_task_id: str, *, task_outcome: str | None = None,
         data_status: str | None = None, outcome_reason: str | None = None,
         current_attempt_id: str | None = None, completeness: dict | None = None,
+        counters: dict | None = None,
         fulfilled: bool = False, missed: bool = False, blocked: bool = False,
     ) -> None:
         """expected_task 의 결과 축을 갱신. 시각 컬럼은 해당 전이일 때만 찍는다(비래치 규칙 보존).
@@ -218,6 +219,21 @@ class Ledger:
             sets.append("current_attempt_id=%s"); params.append(current_attempt_id)
         if completeness is not None:
             sets.append("completeness=%s::jsonb"); params.append(_jsonb(completeness))
+        # 카운터는 저장 전용(ALPHA-182) — 판정 축에 관여하지 않는다. **dict 를 받으면 두 컬럼을
+        # 항상 함께 쓴다**(값이 None 이어도 NULL 로 덮는다). 값별로 "None 이면 안 건드림"으로 두면
+        # 같은 expected_task 의 재시도가 봉투를 못 내놨을 때 **앞 시도의 카운터가 최신 판정에
+        # 그대로 붙어** 대시보드가 옛 수치를 지금 결과로 읽는다(edge-review 2패스 합치).
+        #
+        # **스코프는 판정이 아니라 시도(attempt)다.** 쓰는 주체는 wrapper 하나고, Reconciler 는
+        # 판정을 뒤집어도 이 인자를 안 넘겨 컬럼을 건드리지 않는다. 뒤집을 때 함께 NULL 로 지우는
+        # 안을 넣었다가 **되돌렸다**: Reconciler 는 expected_task 를 한 번 읽어 캐시된 outcome 으로
+        # 판정하므로, 그 사이 wrapper 가 성공+건수를 쓰면 방금 쓴 유효 카운터를 지운다(edge-review
+        # 3라운드). 제대로 하려면 UPDATE 에 "outcome 이 실제로 바뀔 때만" 조건을 걸어야 하는데,
+        # 그건 Reconciler 의 기존 경쟁 조건까지 손대는 별건이다(ALPHA-182 범위 밖).
+        # → 소비자는 "FAILED 옆의 건수는 앞 시도의 것일 수 있다"를 전제로 읽는다.
+        if counters is not None:
+            sets.append("records_out=%s"); params.append(counters.get("records_out"))
+            sets.append("failed_records=%s"); params.append(counters.get("failed_records"))
         if fulfilled:
             sets.append("fulfilled_at=COALESCE(fulfilled_at, now())")
         if missed:

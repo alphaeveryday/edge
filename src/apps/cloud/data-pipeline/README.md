@@ -653,6 +653,13 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   (`tag-news`·`assemble-events`·`enrich-corp-code`·`load-price-triggers`)은 no-op 재실행이 0건 →
   `UNKNOWN` 이다. 상태 기반 완전성("지금 이 데이터셋이 온전한가")은 completeness 축 소관(ALPHA-490).
   봉투가 없거나 두 키 중 하나라도 결측이면 리더는 낙관값으로 메우지 않고 warning + `UNKNOWN`(Rule 12).
+- **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
+  의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
+  런×작업마다 S3 로그를 뒤져야 한다). **판정 규칙은 그대로다** — 저장 전용이다. 결측·malformed
+  (음수·NaN·소수·BIGINT 초과)는 0 이 아니라 **NULL** 이고, 값이 있는데 못 쓰면 경고를 남긴다
+  ("신호 없음"이 "0건 처리"로 위장되지 않게, Rule 12). 스코프는 **그 작업의 마지막 시도**다 —
+  매 시도가 두 컬럼을 함께 덮고, Reconciler 는 판정을 뒤집어도 건수를 몰라 다시 쓰지 않는다.
+  그래서 `FAILED` 옆의 건수는 앞 시도의 것일 수 있다.
 
 ### 실행 흐름 (스펙 §5)
 

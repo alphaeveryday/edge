@@ -157,7 +157,8 @@ class _Cursor:
                "required": p[8], "expected_at": p[9], "deadline_at": p[10], "eligible_at": p[11],
                "expected_as_of_date": p[12], "expectation_snapshot_id": p[13], "skip_reason": p[14],
                "missed_at": None, "fulfilled_at": None, "blocked_at": None,
-               "outcome_reason": None, "current_attempt_id": None, "completeness": None}
+               "outcome_reason": None, "current_attempt_id": None, "completeness": None,
+               "records_out": None, "failed_records": None}
         self.db.etasks[key] = row
         self.db.etasks_by_id[p[0]] = row
         self._rows = [(p[0],)]
@@ -187,6 +188,10 @@ class _Cursor:
                 row[col] = p[i]; i += 1
         if "completeness=%s::jsonb" in s:
             row["completeness"] = p[i]; i += 1
+        # 실제 ledger 의 sets 순서와 같아야 한다 — 어긋나면 파라미터가 밀려 엉뚱한 컬럼에 박힌다.
+        for col in ("records_out", "failed_records"):
+            if f"{col}=%s" in s:
+                row[col] = p[i]; i += 1
         if "fulfilled_at=COALESCE" in s and row["fulfilled_at"] is None:
             row["fulfilled_at"] = "SET"
         if "missed_at=COALESCE" in s and row["missed_at"] is None:
