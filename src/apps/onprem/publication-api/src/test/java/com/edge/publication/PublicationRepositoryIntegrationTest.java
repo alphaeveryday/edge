@@ -166,7 +166,8 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 				saved.getRequestMetricId());
 		assertThat(row.get("method")).isEqualTo("GET");
 		assertThat(row.get("route")).isEqualTo("/api/v1/explanations/{etfTicker}");
-		assertThat(row.get("status_code")).isEqualTo((short) 404);
+		// PG JDBC 는 smallint 를 Integer 로 돌려준다 — 타입이 아니라 값으로 단언한다.
+		assertThat(((Number) row.get("status_code")).intValue()).isEqualTo(404);
 		assertThat(row.get("error_code")).isEqualTo("SERV4040");
 		assertThat(row.get("occurred_at")).isNotNull();  // DB DEFAULT now()
 	}

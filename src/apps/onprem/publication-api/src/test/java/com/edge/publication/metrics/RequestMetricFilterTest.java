@@ -8,6 +8,7 @@ import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.ServingRequestMetricRepository;
 import com.edge.publication.service.ExplanationService;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -22,6 +23,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -152,5 +154,49 @@ class RequestMetricFilterTest {
 	void API_밖_경로는_기록하지_않는다() throws Exception {
 		mvc.perform(get("/actuator/health"));
 		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
+	void 미처리_예외는_200_이_아니라_500_으로_기록된다() throws Exception {
+		// advice 밖으로 새는 예외는 컨테이너 ERROR dispatch 로 500 이 된다 — 래퍼 기본
+		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
+		MockMvc failing = MockMvcBuilders
+				.standaloneSetup(new ExplanationController(
+						new ExplanationService(new SeededStore(), new NoopRecorder())))
+				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					throw new RuntimeException("boom");
+				})
+				.build();
+
+		assertThatThrownBy(() -> failing.perform(get("/api/v1/explanations/069500")
+				.header("X-Customer-Hash", "h").header("X-Channel", "MTS")));
+
+		assertThat(metrics.saved).singleElement().satisfies(m -> {
+			assertThat(m.getStatusCode()).isEqualTo((short) 500);
+			assertThat(m.getErrorCode()).isNull();
+		});
+	}
+
+	@Test
+	void 비문자열_code_는_에러_코드로_강제되지_않는다() throws Exception {
+		// {"code":4001} 같은 비문자열 code 가 "4001" 로 변환돼 적재되면 문자열 도메인
+		// 어휘(SERV*·COMMON*)만 집계한다는 계약이 깨진다 — 미상(NULL)으로 수렴해야 한다.
+		MockMvc numericCode = MockMvcBuilders
+				.standaloneSetup(new ExplanationController(
+						new ExplanationService(new SeededStore(), new NoopRecorder())))
+				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					HttpServletResponse res = (HttpServletResponse) response;
+					res.setStatus(400);
+					res.setContentType("application/json");
+					res.getWriter().write("{\"code\":4001}");
+				})
+				.build();
+
+		numericCode.perform(get("/api/v1/explanations/069500"));
+
+		assertThat(metrics.saved).singleElement().satisfies(m -> {
+			assertThat(m.getStatusCode()).isEqualTo((short) 400);
+			assertThat(m.getErrorCode()).isNull();
+		});
 	}
 }

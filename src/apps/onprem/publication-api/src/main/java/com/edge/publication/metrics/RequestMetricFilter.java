@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 import org.springframework.web.util.pattern.PathPattern;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -31,7 +32,8 @@ import java.io.IOException;
 public class RequestMetricFilter extends OncePerRequestFilter {
 
 	private static final Logger log = LoggerFactory.getLogger(RequestMetricFilter.class);
-	/** 스키마 varchar 상한(serving_request_metric.route/error_code)과 동일. */
+	/** 스키마 varchar 상한(serving_request_metric.method/route/error_code)과 동일. */
+	private static final int METHOD_MAX_LENGTH = 10;
 	private static final int ROUTE_MAX_LENGTH = 150;
 	private static final int ERROR_CODE_MAX_LENGTH = 20;
 
@@ -53,20 +55,29 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 			FilterChain chain) throws ServletException, IOException {
 		// 에러 코드는 커밋된 응답 본문에만 있어 캐싱 래퍼로 감싼다 — 본문 복사는 finally
 		// 에서 항상 수행해 기록 여부와 무관하게 클라이언트 응답을 지킨다.
+		// (한계: 비동기 핸들러(Callable 등)는 현 표면에 없다 — 도입 시 이 필터의 async
+		// dispatch 처리를 함께 재설계해야 한다.)
 		ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
 		try {
 			chain.doFilter(request, wrapper);
+			record(request, wrapper.getStatus(), wrapper);
+		} catch (Exception e) {
+			// advice 밖으로 샌 미처리 예외 — 컨테이너 ERROR dispatch 로 500 이 되지만
+			// OncePerRequestFilter 는 그 dispatch 를 다시 타지 않으므로 여기서 실제
+			// 결말(500)로 기록한다. 래퍼 기본 상태(200)를 남기면 실패가 성공으로 적재된다.
+			record(request, 500, null);
+			throw e;
 		} finally {
-			record(request, wrapper);
 			wrapper.copyBodyToResponse();
 		}
 	}
 
-	private void record(HttpServletRequest request, ContentCachingResponseWrapper response) {
+	private void record(HttpServletRequest request, int status,
+			ContentCachingResponseWrapper bodySource) {
 		try {
-			int status = response.getStatus();
-			metrics.save(new ServingRequestMetric(request.getMethod(), route(request),
-					(short) status, status >= 400 ? errorCode(response) : null));
+			String errorCode = status >= 400 && bodySource != null ? errorCode(bodySource) : null;
+			metrics.save(new ServingRequestMetric(truncate(request.getMethod(), METHOD_MAX_LENGTH),
+					route(request), (short) status, errorCode));
 		} catch (Exception e) {
 			log.error("요청 메트릭 기록 실패 — 서빙 응답은 유지한다 (method={} uri={})",
 					request.getMethod(), request.getRequestURI(), e);
@@ -80,7 +91,7 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 			case null -> "UNMATCHED";   // 매핑 없는 요청(프레임워크 404 등)
 			default -> pattern.toString();
 		};
-		return route.length() > ROUTE_MAX_LENGTH ? route.substring(0, ROUTE_MAX_LENGTH) : route;
+		return truncate(route, ROUTE_MAX_LENGTH);
 	}
 
 	private String errorCode(ContentCachingResponseWrapper response) {
@@ -89,12 +100,20 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 			return null;
 		}
 		try {
-			String code = objectMapper.readTree(body).path("code").asString(null);
-			// 빈/과대 코드는 어휘 밖 — NULL(미상)로 수렴한다(ck_serving_request_metric_error_code).
-			return code == null || code.isBlank() || code.length() > ERROR_CODE_MAX_LENGTH
-					? null : code;
+			JsonNode codeNode = objectMapper.readTree(body).path("code");
+			// 어휘는 문자열 도메인 코드(SERV*·COMMON*)뿐 — 숫자/불리언의 문자열 강제 변환·
+			// 빈/과대 값은 NULL(미상)로 수렴한다(ck_serving_request_metric_error_code 규율).
+			if (!codeNode.isString()) {
+				return null;
+			}
+			String code = codeNode.asString();
+			return code.isBlank() || code.length() > ERROR_CODE_MAX_LENGTH ? null : code;
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	private static String truncate(String value, int maxLength) {
+		return value.length() > maxLength ? value.substring(0, maxLength) : value;
 	}
 }
