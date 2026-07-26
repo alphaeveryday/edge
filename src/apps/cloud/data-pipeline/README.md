@@ -119,8 +119,13 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # etf_map, 현재 KR 31종 — 국내 반도체 30종 + KODEX 200, ALPHA-454). 날짜창 없이 그날(trdDd)
 # PDF 전량을 append(US ETF 와 동형). 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
 # (현 유니버스엔 없다 — 경로만 유지). ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
+# --concurrency N 으로 ETF 를 동시 요청한다(미지정=1, 직렬). getJsonData 는 조회마다 집계를
+# 도느라 콜당 12~17초인데 전부 서버 대기라 동시성이 그대로 이득이다(2026-07-26 프로브 31종:
+# N=6 3.9배·N=12 6.8배, 콜 지연 +19%, JSESSIONID 공유에도 로그아웃 0건). 세션은 워커가
+# 공유하고 유량은 PoliteClient 가 묶는다. 이 플래그는 **이 조합에서만** 유효하며 다른 스텝·
+# 벤더에 주면 거부한다(조용히 무시되면 배선 오류가 안 드러난다).
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
-  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx --concurrency 8
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
