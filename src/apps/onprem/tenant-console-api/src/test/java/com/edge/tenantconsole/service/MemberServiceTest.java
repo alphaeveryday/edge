@@ -271,11 +271,36 @@ class MemberServiceTest {
 	}
 
 	@Test
-	void 같은_역할로의_변경은_no_op_이고_감사가_남지_않는다() {
-		// 변경이 없으면 감사 대상도 아니다 — 감사 로그가 실제 변경만 담게 유지한다(멱등).
+	void 같은_역할로의_변경은_원장으로_원자_검증되고_감사가_남지_않는다() {
+		// 변경이 없으면 감사 대상은 아니지만, no-op 판정도 stale 읽기가 아니라 조건부
+		// UPDATE 로 원장 현재값과 원자적으로 대조돼야 경쟁 변경을 성공으로 오인하지 않는다.
 		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
 		service.changeRole(42, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip");
-		assertThat(members.capturedRole).isNull();
+		assertThat(members.capturedRole).isEqualTo("OPERATOR");
+		assertThat(members.capturedExpectedRole).isEqualTo("OPERATOR");
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 같은_역할_변경도_경쟁이_감지되면_409_다() {
+		// 읽기와 검증 사이에 다른 트랜잭션이 역할을 바꿨으면 "이미 그 역할"이라는 성공
+		// 보고가 거짓이 된다 — no-op 경로도 조건부 갱신 0행이면 409 로 충돌을 드러낸다.
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		members.updateRoleRows = 0;
+		assertThatThrownBy(() -> service.changeRole(
+				42, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.ROLE_CONFLICT));
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 관리자에게_같은_역할_재지정은_LAST_ADMIN_이_아니다() {
+		// 강등이 아니면(같은 역할 재지정) 활성 관리자 수가 변하지 않는다 — 마지막 관리자
+		// 잠금은 실제 강등에만 건다.
+		members.target = new MemberEntity(1L, "admin@kbsec.com", "관리자", "TENANT_ADMIN", true, null);
+		members.activeAdminIds = new ArrayList<>(List.of(1L));
+		service.changeRole(1, new ChangeMemberRoleRequest("TENANT_ADMIN"), actor, "ip");
 		assertThat(actionLog.entries).isEmpty();
 	}
 

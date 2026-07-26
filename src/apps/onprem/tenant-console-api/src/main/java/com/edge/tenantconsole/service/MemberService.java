@@ -124,8 +124,9 @@ public class MemberService {
 	 * (permission-matrix.md): 자기 자신의 역할 변경은 403 — TA 가 스스로 CR 을 부여해
 	 * 검수·정책 권한을 얻는 우회를 막는다(타인 계정 경유는 차단 대신 감사로 추적).
 	 * 마지막 활성 관리자의 강등은 비활성화와 같은 이유(테넌트 잠금)로 409 — 같은 락을
-	 * 재사용해 동시 강등·비활성화 경쟁도 직렬화한다. 같은 역할로의 변경은 no-op(감사
-	 * 미기록). 성공 시 이전→새 역할을 MEMBER_ROLE_CHANGED 로 감사한다.
+	 * 재사용해 동시 강등·비활성화 경쟁도 직렬화한다. 갱신은 이전 역할 조건부 UPDATE 로
+	 * 원자 검증한다(같은 역할 재지정 포함) — 0행이면 경쟁 충돌 409 또는 대상 소멸 404.
+	 * 실제 전이만 이전→새 역할을 MEMBER_ROLE_CHANGED 로 감사한다(no-op 은 미기록).
 	 */
 	@Transactional
 	public void changeRole(long memberId, ChangeMemberRoleRequest request,
@@ -141,28 +142,28 @@ public class MemberService {
 			throw new GeneralException(ConsoleErrorStatus.SELF_ROLE_CHANGE);
 		}
 		String previousRole = target.getRole();
-		if (previousRole.equals(role)) {
-			return;  // 변경 없음 — 감사 로그가 실제 변경만 담게 유지한다(멱등).
-		}
-		// 관리자 강등이면 잠긴 활성 관리자 집합의 멤버십으로 판정한다(deactivate 와 동일한
-		// stale-read 경쟁 방어) — 이미 비활성인 관리자의 강등은 활성 수가 안 변하므로 허용.
-		if ("TENANT_ADMIN".equals(previousRole)) {
+		// 관리자 '강등'이면 잠긴 활성 관리자 집합의 멤버십으로 판정한다(deactivate 와 동일한
+		// stale-read 경쟁 방어). 같은 역할 재지정·이미 비활성인 관리자는 활성 수가 안 변한다.
+		if ("TENANT_ADMIN".equals(previousRole) && !previousRole.equals(role)) {
 			List<Long> activeAdmins = memberRepository.lockActiveAdminIds();
 			if (activeAdmins.contains(target.getMemberId()) && activeAdmins.size() <= 1) {
 				throw new GeneralException(ConsoleErrorStatus.LAST_ADMIN);
 			}
 		}
-		// 이전 역할 조건부 갱신 — 0행이면 읽기와 갱신 사이에 역할이 바뀐 경쟁(409, 화면은
-		// 새로고침 수렴)이거나 대상 소멸(404)이다. stale previousRole 로 틀린 감사를 남기지
-		// 않기 위해 갱신이 실제로 이전→새 전이였을 때만 기록한다.
+		// 이전 역할 조건부 갱신 — 같은 역할(no-op)이어도 태워서 원장 현재값과 원자 대조한다.
+		// 0행이면 읽기와 갱신 사이에 역할이 바뀐 경쟁(409, 화면은 새로고침 수렴)이거나 대상
+		// 소멸(404)이다 — stale 읽기로 틀린 감사·거짓 성공을 만들지 않는다.
 		if (memberRepository.updateRole(memberId, role, previousRole) == 0) {
 			throw memberRepository.findById(memberId).isPresent()
 					? new GeneralException(ConsoleErrorStatus.ROLE_CONFLICT)
 					: new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND);
 		}
-		actionLog.record(actor, "MEMBER_ROLE_CHANGED", "MEMBER", String.valueOf(memberId),
-				Map.of("email", target.getEmail(), "previousRole", previousRole, "newRole", role),
-				clientIp);
+		if (!previousRole.equals(role)) {
+			// 실제 전이만 감사 — no-op 재지정은 변경이 아니다.
+			actionLog.record(actor, "MEMBER_ROLE_CHANGED", "MEMBER", String.valueOf(memberId),
+					Map.of("email", target.getEmail(), "previousRole", previousRole, "newRole", role),
+					clientIp);
+		}
 	}
 
 	private static String normalize(String email) {
