@@ -27,10 +27,11 @@ public class TenantService {
 			"PoC", "POC", "Production", "PROD", "Prod", "PROD", "Dev", "DEV");
 
 	/**
-	 * 온보딩 연락 창구 이메일 — 로컬·도메인 비공백을 요구한다('@'만으로는 " @ " 같은
-	 * 무의미 값이 원장에 남는다). 형식 엄밀 검증은 목적이 아니다(내부 호스트 허용).
+	 * 온보딩 연락 창구 이메일 — '@' 정확히 1개, 로컬·도메인 비공백을 요구한다(" @ "·
+	 * "admin@@firm.com" 같은 무의미 값이 원장에 남지 않게 — UI 정규식과 동일 규율).
+	 * 형식 엄밀 검증은 목적이 아니다(내부 호스트 허용).
 	 */
-	private static final Pattern EMAIL = Pattern.compile("^\\S+@\\S+$");
+	private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+$");
 
 	/** 컬럼 VARCHAR 상한 — 초과 시 DB 가 던지기 전에 400 으로 드러낸다. */
 	private static final int NAME_MAX = 100;

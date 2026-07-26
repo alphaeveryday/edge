@@ -121,7 +121,7 @@ class TenantControllerTest {
 				.andExpect(status().isBadRequest());
 		// 온보딩 연락 창구가 되는 이메일 — '@' 없음·로컬/도메인 결측이 원장에 남으면
 		// 기록의 의미가 없다(UI 정규식은 직접 API 호출의 신뢰경계가 아니다).
-		for (String email : new String[] {"not-an-email", "a@", "@b.com", " @ "}) {
+		for (String email : new String[] {"not-an-email", "a@", "@b.com", " @ ", "admin@@firm.com"}) {
 			mvc.perform(post("/api/v1/tenants")
 							.contentType(MediaType.APPLICATION_JSON)
 							.content("{\"name\":\"대신증권\",\"env\":\"PoC\",\"admin\":\"홍길동\","
