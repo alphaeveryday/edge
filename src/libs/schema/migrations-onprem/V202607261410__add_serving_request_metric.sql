@@ -25,10 +25,12 @@ CREATE TABLE serving_request_metric (
 
     CONSTRAINT ck_serving_request_metric_status
         CHECK (status_code BETWEEN 100 AND 599),
-    -- 성공 행에 에러 코드가 실리는 모순 차단. 역방향(실패면 코드 필수)은 걸지 않는다
-    -- — 비JSON 에러 응답 등 코드를 알 수 없는 실패에서 NULL 이 정직한 값이다.
+    -- 성공 행에 에러 코드가 실리는 모순 + 빈/공백 코드(NULL 과 별도 집계되는 유령
+    -- 어휘)를 차단. 역방향(실패면 코드 필수)은 걸지 않는다 — 비JSON 에러 응답 등
+    -- 코드를 알 수 없는 실패에서 NULL 이 정직한 값이다.
     CONSTRAINT ck_serving_request_metric_error_code
-        CHECK (error_code IS NULL OR status_code >= 400)
+        CHECK (error_code IS NULL
+               OR (status_code >= 400 AND btrim(error_code, E' \t\n\r') <> ''))
 );
 
 COMMENT ON TABLE serving_request_metric IS
