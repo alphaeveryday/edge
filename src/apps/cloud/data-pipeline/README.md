@@ -71,6 +71,11 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
 # 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
 # 토큰은 run 당 1회 발급·재사용.
+# 페이지 종료 판정의 창 하한은 **거래일로 스냅**한다(ALPHA-567) — 서버가 FID_INPUT_DATE_1
+# (=시작일)로 하한을 걸어 창 안 첫 거래일만 주므로, 하한이 주말·공휴일이면 `earliest <= d1`
+# 이 영영 성립하지 않아 빈 페이지를 한 번 더 받아야 멈췄다(5일 소급이라 목·금 런은 매번).
+# 요청 하한은 원본을 유지하고 꽉 찬 페이지에선 달력을 믿지 않는다 — 휴장일 집합이 과잉일 때
+# 봉이 유실되지 않게. 집합은 Planner·KRX·투자자·iNAV 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다.
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달
