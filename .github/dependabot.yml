@@ -59,3 +59,29 @@ updates:
     open-pull-requests-limit: 2
     commit-message:
       prefix: "ci(deps)"
+
+  # 베이스 이미지(temurin·node·python·flyway 등) — Dockerfile 이 12곳에 흩어져
+  # 있어 캐치올 글롭으로 잡는다(매니페스트 없는 디렉토리는 무시된다).
+  - package-ecosystem: "docker"
+    directories:
+      - "**/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "build(deps)"
+
+  # terraform 루트 4곳 — provider 버전 제약·.terraform.lock.hcl 갱신.
+  - package-ecosystem: "terraform"
+    directories:
+      - "/infra/terraform/bootstrap"
+      - "/infra/terraform/foundation"
+      - "/infra/terraform/envs/dev"
+      - "/infra/terraform/envs/demo-onprem"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "build(deps)"
