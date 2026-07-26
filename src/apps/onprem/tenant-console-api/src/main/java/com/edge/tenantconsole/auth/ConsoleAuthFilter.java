@@ -60,6 +60,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	private static final List<Rule> RULES = List.of(
 			new Rule("GET", Pattern.compile("/api/v1/review/items"), ANY_ROLE),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve-edited"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/block"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout"), ANY_ROLE),

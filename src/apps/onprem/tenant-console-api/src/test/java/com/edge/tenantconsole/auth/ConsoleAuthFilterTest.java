@@ -210,6 +210,17 @@ class ConsoleAuthFilterTest {
 	}
 
 	@Test
+	void 수정_승인도_Compliance_Reviewer_전용이다() throws Exception {
+		mvc.perform(post("/api/v1/review/items/er-1/approve-edited").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/review/items/er-1/approve-edited").session(sessionOf(REVIEWER))
+						.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+						.content("{\"edited_summary\":\"수정 문구\"}"))
+				.andExpect(status().isOk());
+	}
+
+	@Test
 	void mock_콘솔_표면은_인증만_요구하고_전_역할을_허용한다() throws Exception {
 		// mock 데이터 단계(ALPHA-513)의 한시 결정 — 미인증은 여전히 401(fail-closed)
 		// 이고, 인증되면 역할과 무관하게 허용한다. 도메인별 DB 전환 시 이 테스트는

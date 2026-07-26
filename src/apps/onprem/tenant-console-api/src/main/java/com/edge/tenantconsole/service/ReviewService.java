@@ -2,7 +2,6 @@ package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
-import com.edge.tenantconsole.dto.ReviewApproveRequest;
 import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
@@ -58,12 +57,30 @@ public class ReviewService {
 	}
 
 	@Transactional
-	public void approve(String explanationResultId, ReviewApproveRequest request,
+	public void approve(String explanationResultId, String note, SessionMember actor,
+			String clientIp) {
+		approveInternal(explanationResultId, null, blankToNull(note), actor, clientIp);
+	}
+
+	/**
+	 * 수정 승인 — edited_summary 필수(누락·공백 400). 편집 문구가 published_summary 로
+	 * 게시되고 review_task 에 EDITED_APPROVED 로 영속된다. 전용 라우트인 이유: 선택
+	 * 바디로 겸하면 unknown 필드 무시 탓에 편집 필드 오타가 일반 승인으로 강등된다.
+	 */
+	@Transactional
+	public void approveEdited(String explanationResultId, String editedSummary, String note,
 			SessionMember actor, String clientIp) {
-		String editedSummary = normalizeEdit(request == null ? null : request.editedSummary());
-		String editedHeadline = normalizeEdit(request == null ? null : request.editedHeadline());
-		String note = blankToNull(request == null ? null : request.note());
-		boolean edited = editedSummary != null || editedHeadline != null;
+		if (editedSummary == null || editedSummary.isBlank()) {
+			// 편집 없는 수정 승인은 모순 — 원문이 게시되는데 기록만 EDITED 가 되는 것을 막는다.
+			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
+		}
+		approveInternal(explanationResultId, editedSummary.trim(), blankToNull(note), actor,
+				clientIp);
+	}
+
+	private void approveInternal(String explanationResultId, String editedSummary, String note,
+			SessionMember actor, String clientIp) {
+		boolean edited = editedSummary != null;
 		ReviewItem item = reviewItemRepository.findById(explanationResultId).map(ReviewItem::from)
 				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.REVIEW_ITEM_NOT_FOUND));
 		if (item.etfTicker() == null) {
@@ -80,9 +97,10 @@ public class ReviewService {
 			// grain 선점 — 전이도 함께 롤백된다(같은 트랜잭션). 검수자는 기존 게시를 내린 뒤 재시도.
 			throw new GeneralException(ConsoleErrorStatus.GRAIN_OCCUPIED);
 		}
+		// edited_headline 은 받지 않는다(서빙 노출 경로 없음 — ReviewEditedApproveRequest 주석).
 		reviewTaskRepository.save(new ReviewTaskEntity(explanationResultId,
 				edited ? "EDITED_APPROVED" : "APPROVED", actor.memberId(),
-				editedHeadline, editedSummary, note, OffsetDateTime.now()));
+				null, editedSummary, note, OffsetDateTime.now()));
 		// 자기 전이는 같은 트랜잭션에서 이력 원장에 기록한다(status_history writer 규약).
 		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(explanationResultId,
 				"REVIEW_REQUIRED", "APPROVED", "MEMBER", actor.memberId(), note));
@@ -136,17 +154,6 @@ public class ReviewService {
 		actionLog.record(actor, "REVIEW_BLOCKED", "ANALYSIS_ITEM", explanationResultId,
 				Map.of("reason", reason), clientIp);
 		log.info("review blocked id={} reason={}", explanationResultId, reason);
-	}
-
-	/** 편집 필드 정규화 — 공백뿐이면 400: 편집 의도가 일반 승인으로 조용히 강등되는 것을 막는다. */
-	private static String normalizeEdit(String value) {
-		if (value == null) {
-			return null;
-		}
-		if (value.isBlank()) {
-			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
-		}
-		return value.trim();
 	}
 
 	private static String blankToNull(String value) {

@@ -1,12 +1,9 @@
 package com.edge.tenantconsole.dto;
 
-import tools.jackson.databind.PropertyNamingStrategies;
-import tools.jackson.databind.annotation.JsonNaming;
-
 /**
- * 승인 요청(ALPHA-437) — 바디 없이 보내면 일반 승인, 편집 필드가 있으면 수정 승인
- * (EDITED_APPROVED·수정 문구로 게시). 필드는 검수 표면 규약대로 snake_case.
+ * 일반 승인 요청(ALPHA-437) — 선택 의견(note)만 받는다. 수정 승인은 전용 라우트
+ * (approve-edited·ReviewEditedApproveRequest)다 — 한 라우트의 선택 바디로 겸하면
+ * unknown 필드 무시(Jackson 기본) 탓에 편집 필드 오타가 일반 승인으로 강등된다.
  */
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-public record ReviewApproveRequest(String editedSummary, String editedHeadline, String note) {
+public record ReviewApproveRequest(String note) {
 }

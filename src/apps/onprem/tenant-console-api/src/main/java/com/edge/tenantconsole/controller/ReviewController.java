@@ -5,6 +5,7 @@ import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.dto.ReviewApproveRequest;
 import com.edge.tenantconsole.dto.ReviewBlockRequest;
+import com.edge.tenantconsole.dto.ReviewEditedApproveRequest;
 import com.edge.tenantconsole.dto.ReviewItemResponse;
 import com.edge.tenantconsole.dto.ReviewRejectRequest;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
@@ -54,7 +55,19 @@ public class ReviewController {
 	public ApiResponse<Void> approve(@PathVariable("id") String id,
 			@RequestBody(required = false) ReviewApproveRequest request,
 			HttpServletRequest httpRequest) {
-		reviewService.approve(id, request, actor(httpRequest), httpRequest.getRemoteAddr());
+		reviewService.approve(id, request == null ? null : request.note(),
+				actor(httpRequest), httpRequest.getRemoteAddr());
+		return ApiResponse.onSuccess(null);
+	}
+
+	@PostMapping("/api/v1/review/items/{id}/approve-edited")
+	public ApiResponse<Void> approveEdited(@PathVariable("id") String id,
+			@RequestBody(required = false) ReviewEditedApproveRequest request,
+			HttpServletRequest httpRequest) {
+		reviewService.approveEdited(id,
+				request == null ? null : request.editedSummary(),
+				request == null ? null : request.note(),
+				actor(httpRequest), httpRequest.getRemoteAddr());
 		return ApiResponse.onSuccess(null);
 	}
 

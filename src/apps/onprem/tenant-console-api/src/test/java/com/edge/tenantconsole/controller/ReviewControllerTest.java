@@ -196,10 +196,11 @@ class ReviewControllerTest {
 	}
 
 	@Test
-	void 수정_승인은_수정_문구로_게시하고_EDITED_APPROVED_를_남긴다() throws Exception {
+	void 수정_승인은_전용_라우트에서_수정_문구로_게시하고_EDITED_APPROVED_를_남긴다() throws Exception {
 		// WHY: 수정 승인의 노출 경로는 publication.published_summary 스냅샷(DDL 주석) —
-		// analysis_item 원문은 보존되고, 편집본·의견은 review_task 에 영속된다.
-		mvc.perform(post("/api/v1/review/items/er-rev-1/approve")
+		// analysis_item 원문은 보존되고, 편집본·의견은 review_task 에 영속된다. 의도는
+		// 라우트(approve-edited)에 실린다 — 선택 바디였다면 필드 오타가 일반 승인으로 강등된다.
+		mvc.perform(post("/api/v1/review/items/er-rev-1/approve-edited")
 						.sessionAttr(SessionMember.SESSION_KEY, REVIEWER)
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"edited_summary\":\"수정된 요약\",\"note\":\"문구 순화\"}"))
@@ -216,10 +217,10 @@ class ReviewControllerTest {
 	}
 
 	@Test
-	void 공백뿐인_수정_문구는_400_이고_일반_승인으로_강등되지_않는다() throws Exception {
+	void 수정_승인의_공백_수정_문구는_400_이고_일반_승인으로_강등되지_않는다() throws Exception {
 		// WHY: 편집 의도가 공백 강제 변환으로 조용히 일반 승인이 되면(coerce-to-passing)
 		// 감사와 실제 노출이 어긋난다 — ck_review_task_edited_content 와 같은 규율을 앱이 먼저.
-		mvc.perform(post("/api/v1/review/items/er-rev-1/approve")
+		mvc.perform(post("/api/v1/review/items/er-rev-1/approve-edited")
 						.sessionAttr(SessionMember.SESSION_KEY, REVIEWER)
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"edited_summary\":\"   \"}"))
@@ -229,6 +230,21 @@ class ReviewControllerTest {
 		assertThat(publications.published).isEmpty();
 		assertThat(tasks.saved).isEmpty();
 		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 수정_승인의_필드_오타는_400_이고_원문이_게시되지_않는다() throws Exception {
+		// WHY: unknown 필드 무시(Jackson 기본)로 편집 필드 오타가 "편집 없음"이 되면
+		// 검수자가 수정했다고 믿는 문구 대신 원문이 게시된다 — 전용 라우트에서 편집
+		// 필수를 강제해 이 강등 경로를 구조적으로 막는다.
+		mvc.perform(post("/api/v1/review/items/er-rev-1/approve-edited")
+						.sessionAttr(SessionMember.SESSION_KEY, REVIEWER)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"edited_summray\":\"수정된 요약\"}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("CNSL4003"));
+		assertThat(items.decisions).isEmpty();
+		assertThat(publications.published).isEmpty();
 	}
 
 	@Test
