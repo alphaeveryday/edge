@@ -21,10 +21,10 @@ COMMENT ON COLUMN tenant.initial_admin_email IS
 '초기 Tenant Admin 이메일 — 온보딩 연락 창구 기록.';
 COMMENT ON COLUMN tenant.memo IS '운영 메모(자유 서식).';
 
--- 환경 어휘 정렬 — 기존 행의 구 어휘를 옮기고, CHECK 는 확장-수축의 확장 단계로
--- 구 DEV 를 당분간 허용한다(앱 CD 수동 시대라 구 앱이 DEV 를 쓰는 창 존재 —
--- 앱 롤아웃 후 수축 마이그레이션에서 DEV 를 제거한다).
-UPDATE tenant SET environment = 'POC' WHERE environment = 'DEV';
+-- 환경 어휘 확장 — IA 의 PoC 를 허용값에 추가한다. 확장 단계는 어휘 허용까지만:
+-- 기존 DEV 행의 POC 백필과 CHECK 에서의 DEV 제거는 앱(super-admin-api·ui)이
+-- POC 읽기·쓰기를 지원하도록 롤아웃된 뒤의 수축 마이그레이션 몫이다 — 지금
+-- 백필하면 현재 배포본(Prod/Dev 만 처리)의 표시 계약이 깨진다.
 ALTER TABLE tenant DROP CONSTRAINT ck_tenant_environment;
 ALTER TABLE tenant ADD CONSTRAINT ck_tenant_environment
     CHECK (environment IN ('POC', 'PROD', 'DEV'));
