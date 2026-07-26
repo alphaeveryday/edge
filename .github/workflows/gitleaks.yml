@@ -1,0 +1,30 @@
+# 시크릿 스캔 (ALPHA-402) — gitleaks 로 커밋된 비밀값(API 키·토큰·개인키)을 검출한다.
+#
+# 지금까지는 edge-review 게이트의 스캔뿐이라 게이트를 안 거치는 커밋·직접 push 에
+# CI 백스톱이 없었다. gitleaks-action 은 조직 저장소에 라이선스 키를 요구하므로
+# MIT 인 gitleaks CLI(고정 버전 이미지)를 직접 실행한다. 오탐 관리:
+# .gitleaks.toml(정책)·.gitleaksignore(fingerprint 단위 예외 — 사유 주석 필수).
+# private/free 플랜은 브랜치 보호 불가라 체크는 advisory 다(pr-title-check 와 동일
+# 제약) — 머지 전 체크 확인은 pr-cycle 운영 규율.
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 전체 히스토리 검사 — 과거 커밋에 묻힌 비밀값도 유출이다.
+          fetch-depth: 0
+      - name: gitleaks detect (전체 히스토리)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            detect --source /repo --config /repo/.gitleaks.toml --no-banner --redact -v

@@ -1,0 +1,4 @@
+# fingerprint 단위 오탐 예외 — 형식: <commit>:<path>:<rule>:<line>. 사유 필수.
+
+# 삭제된 구 widget-ui 문서의 설치 예시 플레이스홀더(pub_live_acme_001) — 실제 키 아님.
+0a0ee7f96dad824e1a42278d8ce7a802975f8cd8:src/apps/widget-ui/notes/widget-data-attributes-note.md:generic-api-key:35
