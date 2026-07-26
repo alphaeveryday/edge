@@ -2,9 +2,11 @@ package com.edge.publication;
 
 import com.edge.publication.entity.ExposureLog;
 import com.edge.publication.entity.Publication;
+import com.edge.publication.entity.ServingRequestMetric;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExposureLogRepository;
 import com.edge.publication.repository.PublicationRepository;
+import com.edge.publication.repository.ServingRequestMetricRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +38,9 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 	private ExposureLogRepository exposureLogs;
 
 	@Autowired
+	private ServingRequestMetricRepository requestMetrics;
+
+	@Autowired
 	private ExplanationStore explanationStore;
 
 	@Autowired
@@ -44,6 +49,7 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 	@BeforeEach
 	void clean() {
 		jdbc.update("DELETE FROM exposure_log");
+		jdbc.update("DELETE FROM serving_request_metric");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
 	}
@@ -144,6 +150,26 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 		assertThat(row.get("customer_hash")).isEqualTo("hash-7");
 		assertThat(row.get("channel")).isEqualTo("MTS");
 		assertThat(row.get("summary_snapshot")).isEqualTo("변동 요인 후보 스냅샷");
+	}
+
+	@Test
+	void servingRequestMetric_save_는_요청_메트릭을_적재한다() {
+		// WHY: Dashboard(ALPHA-128) 집계의 데이터 소스 — 컬럼 매핑·CHECK(실패에만 에러
+		// 코드)와 occurred_at DB DEFAULT 가 실 스키마에서 성립해야 기간별 집계가 가능하다.
+		ServingRequestMetric saved = requestMetrics.save(new ServingRequestMetric(
+				"GET", "/api/v1/explanations/{etfTicker}", (short) 404, "SERV4040"));
+
+		assertThat(saved.getRequestMetricId()).isNotNull();
+		Map<String, Object> row = jdbc.queryForMap(
+				"SELECT method, route, status_code, error_code, occurred_at "
+						+ "FROM serving_request_metric WHERE request_metric_id = ?",
+				saved.getRequestMetricId());
+		assertThat(row.get("method")).isEqualTo("GET");
+		assertThat(row.get("route")).isEqualTo("/api/v1/explanations/{etfTicker}");
+		// PG JDBC 는 smallint 를 Integer 로 돌려준다 — 타입이 아니라 값으로 단언한다.
+		assertThat(((Number) row.get("status_code")).intValue()).isEqualTo(404);
+		assertThat(row.get("error_code")).isEqualTo("SERV4040");
+		assertThat(row.get("occurred_at")).isNotNull();  // DB DEFAULT now()
 	}
 
 	private void seedAnalysisItem(String id, String ticker, String name, LocalDate tradeDate,
