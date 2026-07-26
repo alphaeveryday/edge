@@ -2,6 +2,7 @@ package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.ChangeMemberRoleRequest;
 import com.edge.tenantconsole.dto.CreateMemberRequest;
 import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
@@ -19,7 +20,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 콘솔 사용자 관리(ALPHA-119) — member 원장 위 등록·목록·비활성화. 관리자 직접
+ * 콘솔 사용자 관리(ALPHA-119, 역할 변경은 ALPHA-499) — member 원장 위 등록·목록·
+ * 비활성화·역할 변경. 관리자 직접
  * 등록만(초대·재설정 메일 흐름 없음, ADR-0025)이라 중간 상태(INVITED)는 두지 않고
  * is_active 불리언만 쓴다. role 어휘는 원장 4종(ck_member_role)과 동일하다.
  *
@@ -115,6 +117,52 @@ public class MemberService {
 		}
 		actionLog.record(actor, "MEMBER_DEACTIVATED", "MEMBER", String.valueOf(memberId),
 				null, clientIp);
+	}
+
+	/**
+	 * 역할 부여·변경(ALPHA-499) — 어휘 밖 role 은 400, 대상 미존재는 404. 직무 분리
+	 * (permission-matrix.md): 자기 자신의 역할 변경은 403 — TA 가 스스로 CR 을 부여해
+	 * 검수·정책 권한을 얻는 우회를 막는다(타인 계정 경유는 차단 대신 감사로 추적).
+	 * 마지막 활성 관리자의 강등은 비활성화와 같은 이유(테넌트 잠금)로 409 — 같은 락을
+	 * 재사용해 동시 강등·비활성화 경쟁도 직렬화한다. 갱신은 이전 역할 조건부 UPDATE 로
+	 * 원자 검증한다(같은 역할 재지정 포함) — 0행이면 경쟁 충돌 409.
+	 * 실제 전이만 이전→새 역할을 MEMBER_ROLE_CHANGED 로 감사한다(no-op 은 미기록).
+	 */
+	@Transactional
+	public void changeRole(long memberId, ChangeMemberRoleRequest request,
+			SessionMember actor, String clientIp) {
+		String role = request == null ? null : request.role();
+		// role == null 을 ROLES.contains 앞에서 먼저 막는다(register 와 동일 — NPE→500 차단).
+		if (role == null || !ROLES.contains(role)) {
+			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
+		}
+		MemberEntity target = memberRepository.findById(memberId)
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND));
+		if (target.getMemberId() == actor.memberId()) {
+			throw new GeneralException(ConsoleErrorStatus.SELF_ROLE_CHANGE);
+		}
+		String previousRole = target.getRole();
+		// 관리자 '강등'이면 잠긴 활성 관리자 집합의 멤버십으로 판정한다(deactivate 와 동일한
+		// stale-read 경쟁 방어). 같은 역할 재지정·이미 비활성인 관리자는 활성 수가 안 변한다.
+		if ("TENANT_ADMIN".equals(previousRole) && !previousRole.equals(role)) {
+			List<Long> activeAdmins = memberRepository.lockActiveAdminIds();
+			if (activeAdmins.contains(target.getMemberId()) && activeAdmins.size() <= 1) {
+				throw new GeneralException(ConsoleErrorStatus.LAST_ADMIN);
+			}
+		}
+		// 이전 역할 조건부 갱신 — 같은 역할(no-op)이어도 태워서 원장 현재값과 원자 대조한다.
+		// 0행 = 읽기와 갱신 사이에 역할이 바뀐 경쟁이다(409, 화면은 새로고침 수렴) — member
+		// 는 하드 삭제 표면이 없어(단일 writer·is_active 토글만) 소멸 경로가 없고, 있어도
+		// 같은 영속성 컨텍스트의 재조회는 1차 캐시를 반환해 판별할 수 없다.
+		if (memberRepository.updateRole(memberId, role, previousRole) == 0) {
+			throw new GeneralException(ConsoleErrorStatus.ROLE_CONFLICT);
+		}
+		if (!previousRole.equals(role)) {
+			// 실제 전이만 감사 — no-op 재지정은 변경이 아니다.
+			actionLog.record(actor, "MEMBER_ROLE_CHANGED", "MEMBER", String.valueOf(memberId),
+					Map.of("email", target.getEmail(), "previousRole", previousRole, "newRole", role),
+					clientIp);
+		}
 	}
 
 	private static String normalize(String email) {

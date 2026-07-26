@@ -86,6 +86,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/members` | Users & Roles 조회 | TA |
 | `POST /api/v1/members` | 사용자 등록 | TA |
 | `POST /api/v1/members/{id}/deactivate` | 사용자 비활성화 | TA |
+| `PATCH /api/v1/members/{id}/role` | 역할 부여·변경 | TA — 자기 자신 대상은 서비스가 403(직무 분리) |
 
 ### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
 
@@ -120,5 +121,6 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 
 - ALPHA-118(콘솔 인증) — 역할 클레임을 세션에 싣는 구현. SSO/AD 와 데모 자체
   계정이 같은 클레임 형태로 수렴한다.
-- ALPHA-119(Users & Roles) — 사용자 등록·역할 부여 화면·API. 이 매트릭스의
-  Users & Roles 행이 요구 권한이다.
+- ALPHA-119(Users & Roles) — 사용자 등록 API 구현됨. 역할 부여·변경 API 는
+  ALPHA-499 로 구현됨(자기 자신 변경 403·전건 감사). 화면 실데이터 전환은
+  ALPHA-500. 이 매트릭스의 Users & Roles 행이 요구 권한이다.

@@ -90,6 +90,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("GET", Pattern.compile("/api/v1/members"), TENANT_ADMIN_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/members"), TENANT_ADMIN_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/members/[^/]+/deactivate"), TENANT_ADMIN_ONLY),
+			new Rule("PATCH", Pattern.compile("/api/v1/members/[^/]+/role"), TENANT_ADMIN_ONLY),
 			new Rule("GET", Pattern.compile("/api/v1/session"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/session/profile"), ANY_ROLE));
 

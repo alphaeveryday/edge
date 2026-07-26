@@ -3,6 +3,7 @@ package com.edge.tenantconsole.controller;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.ChangeMemberRoleRequest;
 import com.edge.tenantconsole.dto.CreateMemberRequest;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.Member;
@@ -17,6 +18,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -81,6 +83,51 @@ class MemberControllerTest {
 	}
 
 	@Test
+	void 역할_변경은_경로_id_와_세션_actor_로_서비스를_호출한다() throws Exception {
+		mvc.perform(patch("/api/v1/members/9/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":\"OPERATOR\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
+		assertThat(service.capturedChangeRoleId).isEqualTo(9L);
+		assertThat(service.capturedChangeRoleRequest.role()).isEqualTo("OPERATOR");
+		assertThat(service.capturedActor.memberId()).isEqualTo(7);
+	}
+
+	@Test
+	void 역할_변경의_비수치_경로변수는_500_이_아니라_400_이다() throws Exception {
+		// @PathVariable long 변환 실패는 프레임워크(ResponseEntityExceptionHandler)가 400 으로
+		// 처리한다 — advice 교체·직접 파싱 도입으로 500 이 새면 이 테스트가 잡는다(H각도).
+		mvc.perform(patch("/api/v1/members/abc/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":\"OPERATOR\"}"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 역할_변경의_비문자열_role_본문은_500_이_아니라_400_이다() throws Exception {
+		// role 에 객체가 오면 Jackson 바인딩 실패(HttpMessageNotReadable) — 400 이어야 한다.
+		mvc.perform(patch("/api/v1/members/9/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":{\"nested\":1}}"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 자기_자신_역할_변경은_403_으로_매핑된다() throws Exception {
+		service.changeRoleThrow = new GeneralException(ConsoleErrorStatus.SELF_ROLE_CHANGE);
+		mvc.perform(patch("/api/v1/members/7/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":\"COMPLIANCE_REVIEWER\"}"))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4031"));
+	}
+
+	@Test
 	void 중복_이메일_등록은_409_로_매핑된다() throws Exception {
 		service.registerThrow = new GeneralException(ConsoleErrorStatus.DUPLICATE_MEMBER_EMAIL);
 		mvc.perform(post("/api/v1/members")
@@ -96,11 +143,25 @@ class MemberControllerTest {
 		List<Member> listResult = List.of();
 		Member registerResult;
 		RuntimeException registerThrow;
+		RuntimeException changeRoleThrow;
 		SessionMember capturedActor;
 		long capturedDeactivateId = -1;
+		long capturedChangeRoleId = -1;
+		ChangeMemberRoleRequest capturedChangeRoleRequest;
 
 		FakeService() {
 			super(null, null);
+		}
+
+		@Override
+		public void changeRole(long memberId, ChangeMemberRoleRequest request,
+				SessionMember actor, String clientIp) {
+			this.capturedChangeRoleId = memberId;
+			this.capturedChangeRoleRequest = request;
+			this.capturedActor = actor;
+			if (changeRoleThrow != null) {
+				throw changeRoleThrow;
+			}
 		}
 
 		@Override

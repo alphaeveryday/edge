@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,6 +39,8 @@ class ConsoleAuthFilterTest {
 			new SessionMember(2L, "reviewer@demo.edge.local", "데모 검수자", "COMPLIANCE_REVIEWER");
 	private static final SessionMember READ_ONLY =
 			new SessionMember(4L, "ro@demo.edge.local", "열람자", "READ_ONLY");
+	private static final SessionMember ADMIN =
+			new SessionMember(1L, "admin@demo.edge.local", "관리자", "TENANT_ADMIN");
 
 	private static final class StubItems implements ReviewItemRepository {
 		@Override
@@ -106,6 +109,11 @@ class ConsoleAuthFilterTest {
 		}
 
 		@Override
+		public int updateRole(long id, String role, String expectedRole) {
+			return 0;
+		}
+
+		@Override
 		public long count() {
 			return 0;
 		}
@@ -129,7 +137,8 @@ class ConsoleAuthFilterTest {
 		StubMembers members = new StubMembers(Map.of(
 				"reviewer@demo.edge.local", "COMPLIANCE_REVIEWER",
 				"ro@demo.edge.local", "READ_ONLY",
-				"downgraded@demo.edge.local", "READ_ONLY"));
+				"downgraded@demo.edge.local", "READ_ONLY",
+				"admin@demo.edge.local", "TENANT_ADMIN"));
 		mvc = MockMvcBuilders.standaloneSetup(
 						new ReviewController(reviewService),
 						new ConsoleSessionController(new ConsoleSessionService(new SessionMockStore())))
@@ -177,6 +186,17 @@ class ConsoleAuthFilterTest {
 				.andExpect(status().isUnauthorized());
 		mvc.perform(get("/api/v1/session").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 역할_변경은_TENANT_ADMIN_전용이다() throws Exception {
+		// permission-matrix.md "Users & Roles = TA 전용" — 역할 부여·변경(ALPHA-499)도 동일.
+		mvc.perform(patch("/api/v1/members/9/role").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		// 이 셋업엔 MemberController 가 없어 404 = 필터를 통과했다는 증거다(로그인 테스트와 동일 기법).
+		mvc.perform(patch("/api/v1/members/9/role").session(sessionOf(ADMIN)))
+				.andExpect(status().isNotFound());
 	}
 
 	@Test
