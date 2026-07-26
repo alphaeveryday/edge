@@ -44,12 +44,12 @@ class FakeClient:
         return json.dumps(payload)
 
 
-def _source(responses, etf_map=None, auth=None):
+def _source(responses, etf_map=None, auth=None, concurrency=1):
     config = KrxEtfSourceConfig(
         mbr_id="id", pw="pw",
         etf_map=etf_map if etf_map is not None else {"069500": "KR7069500007"},
     )
-    src = KrxEtfSource(config, FakeClient(responses))
+    src = KrxEtfSource(config, FakeClient(responses), concurrency=concurrency)
     src.auth = auth or FakeAuth()
     return src
 
@@ -177,3 +177,82 @@ def test_disabled_without_credentials():
     # WHY: 자격증명은 env 로만 주입 — 없으면 이 소스는 비활성(스텝이 skip 으로 드러냄).
     config = KrxEtfSourceConfig(etf_map={"069500": "KR7069500007"})
     assert KrxEtfSource(config, FakeClient({})).enabled is False
+
+
+def _multi_etf_fixture(n=8):
+    """ETF n종 + 각 1행 응답. 병렬/직렬 동치 비교용."""
+    etf_map = {f"{100 + i:06d}": f"KR7{100 + i:06d}0" for i in range(n)}
+    responses = {
+        isin: {"output": [{"COMPST_ISU_CD": f"{i:06d}", "COMPST_ISU_NM": f"종목{i}",
+                           "COMPST_RTO": "1.0", "MKT_ID": "STK"}]}
+        for i, isin in enumerate(etf_map.values())
+    }
+    return etf_map, responses
+
+
+def test_concurrent_output_matches_serial():
+    # WHY: 병렬화는 **산출물을 바꾸지 않아야** 한다. 순서까지 같아야 raw ndjson 을 회귀 비교할
+    #      수 있고, 하류(normalize 의 파티션 병합)가 수집 타이밍에 흔들리지 않는다.
+    etf_map, responses = _multi_etf_fixture()
+
+    def collect(concurrency):
+        rows = list(_source(responses, etf_map=etf_map, concurrency=concurrency).fetch())
+        # fetched_at 은 수집 시각이라 런마다 다르다 — 비교 대상이 아니다.
+        return [{k: v for k, v in r.items() if k != "fetched_at"} for r in rows]
+
+    serial, parallel = collect(1), collect(4)
+    assert serial == parallel
+    assert len(serial) == 8
+
+
+def test_login_still_once_under_concurrency():
+    # WHY: 로그인은 run 당 1회 규약이다(계정당 동시세션 1개 — 사람이 겹치면 CD011). 팬아웃이
+    #      워커마다 로그인하면 그 규약이 깨져 수집 전체가 죽는다. 세션 쿠키는 문자열이라
+    #      공유해도 되고, 프로브에서도 6·8·12 동시에 로그아웃 0건이었다.
+    etf_map, responses = _multi_etf_fixture()
+    auth = FakeAuth()
+    src = _source(responses, etf_map=etf_map, auth=auth, concurrency=4)
+    list(src.fetch())
+    assert auth.calls == 1
+    assert set(src.client.cookies) == {"JSESSIONID=SESS123"}  # 전 워커가 같은 세션
+
+
+def test_failure_isolated_under_concurrency():
+    # WHY: 격리 규약이 동시성에서도 같아야 한다 — 한 ETF 의 이상 응답이 나머지를 죽이지 않고,
+    #      기록은 남아야 한다(격리≠은폐).
+    etf_map, responses = _multi_etf_fixture()
+    broken = list(etf_map.values())[3]
+    responses[broken] = {"output": []}  # 빈 output = fail-loud 대상
+    src = _source(responses, etf_map=etf_map, concurrency=4)
+    rows = list(src.fetch())
+    assert len(rows) == 7
+    assert [f["isin"] for f in src.fetch_failures] == [broken]
+
+
+def test_worker_side_failures_sorted_on_stopfetch(monkeypatch):
+    # WHY: malformed row 는 `_fetch_etf` **안**(워커 스레드)에서 기록돼 팬아웃의 입력순 기록을
+    #      우회한다. StopFetch 로 빠져나가도 스텝은 그때까지의 fetch_failures 를
+    #      status=stopped 로그에 쓰므로 그 목록도 결정적이어야 한다 — 정렬이 정상 종료 경로에만
+    #      있으면 중단 런의 failed_etfs 순서가 실행마다 달라진다.
+    #      빈 output 실패로는 이걸 못 잡는다(그건 이미 입력순 경로다) — 워커 경로를 직접 만든다.
+    etf_map, responses = _multi_etf_fixture(4)
+    src = _source(responses, etf_map=etf_map, concurrency=2)
+    plan = src.plan()
+    first, early, late = plan[0][0], plan[1][0], plan[3][0]
+
+    real = src._fetch_etf
+
+    def patched(our_etf_id, isin, *args, **kwargs):
+        if our_etf_id == first:
+            # 워커 스레드가 plan 역순으로 기록한 상황을 재현한 뒤 소스 전체를 중단시킨다.
+            src._note_failure("isin-late", late, "malformed row: str")
+            src._note_failure("isin-early", early, "malformed row: str")
+            raise StopFetch("HTTP 429")
+        return real(our_etf_id, isin, *args, **kwargs)
+
+    monkeypatch.setattr(src, "_fetch_etf", patched)
+
+    with pytest.raises(StopFetch):
+        list(src.fetch())
+
+    assert [f["our_etf_id"] for f in src.fetch_failures] == [early, late]  # plan 순

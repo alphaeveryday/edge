@@ -25,7 +25,8 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import KrxEtfSource as KrxEtfSourceConfig
 from ..ops.trading_calendar import is_trading_day
-from .http import PoliteClient, StopFetch
+from .fanout import fanout
+from .http import PoliteClient
 from .krx_auth import USER_AGENT, KrxAuth
 
 logger = logging.getLogger(__name__)
@@ -76,13 +77,18 @@ def _short_code(isin: str) -> str:
 class KrxEtfSource:
     source_name = "krx"
 
-    def __init__(self, config: KrxEtfSourceConfig, client: PoliteClient):
+    def __init__(self, config: KrxEtfSourceConfig, client: PoliteClient, concurrency: int = 1):
         self.config_enabled = config.enabled
         self.mbr_id = config.mbr_id
         self.pw = config.pw
         # our_etf_id → KRX ISIN(표준코드). 종목맵과 별개 — 이 맵의 키가 곧 수집 유니버스다.
         self.etf_map = config.etf_map
         self.client = client
+        # ETF 단위 동시 요청 수. 기본 1 = 직렬(이전과 동일). getJsonData 는 조회마다 집계를
+        # 도느라 콜당 12~17초인데 그 시간이 전부 서버 대기라, 동시성이 그대로 이득이 된다
+        # (2026-07-26 라이브 프로브 31종: N=1 대비 N=6 에서 3.9배, N=12 에서 6.8배. 콜 지연은
+        # 9.1s→10.8s 로 +19% 에 그쳐 세션 단위 직렬화가 없음을 확인).
+        self.concurrency = concurrency
         self.auth = KrxAuth(config.mbr_id or "", config.pw or "")
         # ETF 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다(격리≠은폐).
         self.fetch_failures: list[dict] = []
@@ -123,16 +129,24 @@ class KrxEtfSource:
         # ponytail: trdDd 백필(--to 배선)은 필요 시 추가.
         trd_dd = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
         # 로그인 1회(ETF마다 로그인 금지). 실패는 fetch 밖으로 전파해 소스 전체를 중단한다.
+        # 세션 쿠키는 문자열이라 워커가 공유해도 된다(프로브 실증: 6·8·12 동시에서 로그아웃·
+        # CD011 0건). 유량은 self.client(PoliteClient)가 묶는다 — 워커별 클라이언트 금지.
         jsessionid = self.auth.session()
-        for our_etf_id, isin in plan:
-            try:
-                yield from self._fetch_etf(our_etf_id, isin, trd_dd, jsessionid, fetched_at)
-            except StopFetch:
-                raise  # 4xx/429(미로그인 LOGOUT 포함) 는 소스 전체 문제 — 중단이 맞다
-            except Exception as exc:
-                # 요청 실패·깨진 JSON·이상/빈 응답은 ETF 단위로 격리 — 남은 ETF 계속.
-                self._note_failure(isin, our_etf_id, str(exc))
-                continue
+        try:
+            yield from fanout(
+                plan,
+                lambda pair: self._fetch_etf(pair[0], pair[1], trd_dd, jsessionid, fetched_at),
+                concurrency=self.concurrency,
+                on_failure=lambda pair, exc: self._note_failure(pair[1], pair[0], str(exc)),
+            )
+        finally:
+            # malformed row 는 `_fetch_etf` 안에서 기록한다 — 그 경로는 **워커 스레드**라
+            # 팬아웃의 입력순 기록을 우회한다. 두 경로가 섞이면 collection_log 의 실패 목록
+            # 순서가 실행마다 달라져 감사·회귀 비교가 흔들리므로 plan 순으로 되돌린다.
+            # **finally 인 이유**: StopFetch 로 빠져나가는 경로에서도 스텝이 그때까지의
+            # fetch_failures 를 status=stopped 로그에 쓴다 — 그 목록도 결정적이어야 한다.
+            order = {our_etf_id: i for i, (our_etf_id, _) in enumerate(plan)}
+            self.fetch_failures.sort(key=lambda f: order.get(f["our_etf_id"], len(order)))
 
     def _fetch_etf(
         self, our_etf_id: str, isin: str, trd_dd: str, jsessionid: str, fetched_at: str

@@ -97,7 +97,11 @@ KIS_MIN_INTERVAL_SEC = 0.5
 # 8190바이트 성공. 이 엔드포인트는 조회 때마다 집계를 도는지 원래 10초를 넘는다 — 느린 게 성질이다.
 # 전역 기본값(PoliteClient timeout=10.0)은 안 건드린다: 다른 소스는 10초로 충분하고, 전역을 올리면
 # 진짜로 죽은 엔드포인트를 기다리는 시간만 길어진다(Rule 3 — 느린 건 KRX 하나다).
-KRX_ETF_TIMEOUT_SEC = 45.0
+#
+# 45 → 60(ALPHA-569): 동시 요청을 걸면 콜 지연이 늘어난다. 2026-07-26 프로브 실측으로 N=6 에서
+# 최대 16.1초, N=12 에서 최대 20.3초였는데 **이건 휴장일(한산) 기준**이라 평일 기저(12~17초)
+# 에서는 30초대까지 올라갈 수 있다. 45초로는 여유가 아슬해 타임아웃 실패를 사게 된다.
+KRX_ETF_TIMEOUT_SEC = 60.0
 
 # 증분 기본 창의 소급 일수 — 어제부터(런 간 경계 겹침을 dedup 이 흡수하도록) 오늘까지.
 DEFAULT_LOOKBACK_DAYS = 1
@@ -154,9 +158,26 @@ def main(argv: list[str] | None = None) -> int:
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="대상 동시 요청 수(현재 ingest-raw-etf --source krx 전용). "
+                             "미지정=1(직렬, 이전과 동일). 유량은 소스의 min_interval 이 "
+                             "묶으므로 이 값은 '동시에 몇 개를 기다릴까'만 정한다.")
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
     args = parser.parse_args(argv)
+
+    # `--concurrency` 는 아직 KRX ETF 만 소비한다. 다른 스텝·벤더에서 조용히 무시하면 운영자가
+    # 병렬이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다(Rule 12).
+    # **parse 직후에 둔다** — dispatch 뒤에 두면 normalize·load·tag-news·재무처럼 앞에서
+    # 반환하는 스텝이 검증에 도달하지 못해 가드가 있으나 마나가 된다(리뷰 실증).
+    if args.concurrency is not None:
+        if args.concurrency < 1:
+            raise SystemExit(f"--concurrency 는 1 이상이어야 한다: {args.concurrency}")
+        if not (args.step == "ingest-raw-etf" and (args.source or "fmp") == "krx"):
+            raise SystemExit(
+                "--concurrency 는 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
+                f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
+            )
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -386,7 +407,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             if settings.krx_etf is None:
                 raise SystemExit("krx_etf.source 설정이 없다 — sources.toml 확인")
             etf_source = KrxEtfSource(
-                settings.krx_etf.source, PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC)
+                settings.krx_etf.source,
+                PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC),
+                concurrency=args.concurrency or 1,
             )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")

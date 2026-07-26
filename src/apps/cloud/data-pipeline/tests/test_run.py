@@ -97,15 +97,23 @@ def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     from data_pipeline import run as run_mod
 
-    measured_latency_sec = 12.4  # 라이브 실측 응답 시간
+    measured_latency_sec = 12.4  # 라이브 실측 응답 시간(직렬, 2026-07-15)
     assert run_mod.KRX_ETF_TIMEOUT_SEC > measured_latency_sec
+    # ALPHA-569: 동시 요청을 걸면 콜 지연이 늘어난다 — 2026-07-26 프로브에서 N=12 최대 20.3초.
+    #            그것도 휴장일(한산) 기준이라 평일엔 더 오른다. 동시성 도입 후에는 이 값 아래로
+    #            내리면 타임아웃 실패를 사게 되므로 함께 고정한다.
+    #            45초로는 여유가 아슬해 60초로 올렸다. 이 바닥을 고정한다 — 45 로 되돌리면
+    #            `45 > 20.3` 은 여전히 참이라 위 단언만으로는 회귀가 안 잡힌다.
+    concurrent_latency_sec = 20.3
+    assert run_mod.KRX_ETF_TIMEOUT_SEC > concurrent_latency_sec
+    assert run_mod.KRX_ETF_TIMEOUT_SEC >= 60.0
 
     captured = {}
 
     class _Spy(run_mod.KrxEtfSource):
-        def __init__(self, config, client):
+        def __init__(self, config, client, *args, **kwargs):
             captured["timeout"] = client.timeout
-            super().__init__(config, client)
+            super().__init__(config, client, *args, **kwargs)
 
     monkeypatch.setattr(run_mod, "KrxEtfSource", _Spy)
     monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
@@ -340,3 +348,36 @@ def test_tag_news_negative_window_days_fails_loud(monkeypatch):
     with pytest.raises(SystemExit):
         main(["tag-news", "--run-id", "R", "--from", "2026-01-01", "--window-days", "-3"])
     assert "window" not in captured
+
+
+def test_concurrency_rejected_where_it_is_ignored(monkeypatch, capsys):
+    # WHY: `--concurrency` 를 아직 KRX ETF 만 소비한다. 다른 스텝·벤더에서 조용히 무시하면
+    #      운영자가 병렬이 걸렸다고 오인하고, SFN command 배선 오류도 안 드러난다(Rule 12 —
+    #      무의미한 플래그를 성공으로 받는 CLI 는 거짓 신호다).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    # **조기 반환 스텝을 반드시 포함한다** — 검증이 dispatch 뒤에 있으면 normalize·load·
+    # tag-news·재무는 그 전에 반환해 가드를 통과해 버린다(리뷰 실증).
+    for argv in (
+        ["ingest-price-raw", "--source", "kis", "--concurrency", "8"],
+        ["ingest-raw-etf", "--source", "fmp", "--concurrency", "8"],
+        ["normalize-price", "--concurrency", "8"],
+        ["ingest-raw-financial", "--source", "dart", "--concurrency", "8"],
+        ["tag-news", "--concurrency", "8"],
+    ):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(argv)
+        assert "--concurrency" in str(err.value)
+
+
+def test_concurrency_rejects_non_positive(monkeypatch):
+    # WHY: 0·음수는 fanout 의 직렬 경로로 조용히 흘러 "병렬을 껐다"는 사실이 안 드러난다.
+    #      배선 실수(빈 문자열·오타)가 성능 저하로만 나타나면 원인을 못 찾는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    for bad in ("0", "-8"):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(["ingest-raw-etf", "--source", "krx", "--concurrency", bad])
+        assert "1 이상" in str(err.value)
