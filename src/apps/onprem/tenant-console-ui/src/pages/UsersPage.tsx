@@ -3,7 +3,7 @@ import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
 import { useSession } from '../domains/session/hooks';
 import type { Member, MemberRole } from '../domains/users';
 import { ROLE_LABEL } from '../domains/users';
-import { useDeactivateMember, useMembers, useRegisterMember } from '../domains/users/hooks';
+import { useChangeRole, useDeactivateMember, useMembers, useRegisterMember } from '../domains/users/hooks';
 import { LoadError } from './_shared/cells';
 
 export function UsersPage() {
@@ -13,6 +13,7 @@ export function UsersPage() {
   const { data: members = [], isError } = useMembers(isAdmin);
   const register = useRegisterMember();
   const deactivate = useDeactivateMember();
+  const changeRole = useChangeRole();
 
   const [registerOpen, setRegisterOpen] = useState(false);
   const [email, setEmail] = useState('');
@@ -20,6 +21,8 @@ export function UsersPage() {
   const [role, setRole] = useState<MemberRole>('COMPLIANCE_REVIEWER');
   const [password, setPassword] = useState('');
   const [deactivateTarget, setDeactivateTarget] = useState<Member | null>(null);
+  const [roleTarget, setRoleTarget] = useState<Member | null>(null);
+  const [newRole, setNewRole] = useState<MemberRole>('READ_ONLY');
 
   const confirmDeactivate = () => {
     if (!deactivateTarget) return;
@@ -34,6 +37,24 @@ export function UsersPage() {
         toast(msg ?? '비활성화하지 못했습니다.');
       },
     });
+  };
+
+  const confirmChangeRole = () => {
+    if (!roleTarget || newRole === roleTarget.role) return;
+    changeRole.mutate(
+      { id: roleTarget.id, role: newRole },
+      {
+        onSuccess: () => {
+          setRoleTarget(null);
+          toast('역할을 변경했습니다.');
+        },
+        onError: (err) => {
+          // 마지막 관리자 강등(409)·경쟁 변경(409)·자기 변경(403) 등 서버 사유를 그대로 보인다.
+          const msg = (err as { body?: { message?: string } })?.body?.message;
+          toast(msg ?? '역할을 변경하지 못했습니다.');
+        },
+      },
+    );
   };
 
   const submit = () => {
@@ -137,13 +158,27 @@ export function UsersPage() {
                 </td>
                 <td className="col-muted num">{m.lastLogin ?? '—'}</td>
                 <td style={{ textAlign: 'right' }}>
-                  {m.status === 'ACTIVE' ? (
-                    <button className="btn btn-sm" onClick={() => setDeactivateTarget(m)}>
-                      비활성화
-                    </button>
-                  ) : (
-                    <span style={{ color: 'var(--fg-4)' }}>—</span>
-                  )}
+                  <div className="flex items-center justify-end gap-1">
+                    {/* 자기 자신 역할 변경은 서버가 403(직무 분리, permission-matrix.md) — 버튼도 숨겨 이중 방어. */}
+                    {m.email !== session?.email && (
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setRoleTarget(m);
+                          setNewRole(m.role);
+                        }}
+                      >
+                        역할 변경
+                      </button>
+                    )}
+                    {m.status === 'ACTIVE' ? (
+                      <button className="btn btn-sm" onClick={() => setDeactivateTarget(m)}>
+                        비활성화
+                      </button>
+                    ) : (
+                      m.email === session?.email && <span style={{ color: 'var(--fg-4)' }}>—</span>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -199,6 +234,43 @@ export function UsersPage() {
             </button>
             <button className="btn btn-primary" onClick={submit}>
               등록
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={roleTarget !== null} title="역할 변경" onClose={() => setRoleTarget(null)}>
+        <div className="flex flex-col gap-3 p-4">
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+            <span className="font-semibold">{roleTarget?.name}</span>({roleTarget?.email})의 역할을
+            변경합니다. 현재 역할: {roleTarget ? ROLE_LABEL[roleTarget.role] : ''}
+          </div>
+          <div className="flex flex-col gap-1">
+            <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>새 역할</span>
+            <select
+              className="select w-full"
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value as MemberRole)}
+            >
+              <option value="TENANT_ADMIN">관리자</option>
+              <option value="COMPLIANCE_REVIEWER">검수자</option>
+              <option value="OPERATOR">운영자</option>
+              <option value="READ_ONLY">읽기 전용</option>
+            </select>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-4)', lineHeight: 1.6 }}>
+            역할 변경은 전건 감사 로그에 기록되며, 대상 사용자에게는 다음 요청부터 즉시 적용됩니다.
+          </div>
+          <div className="mt-1 flex justify-end gap-2">
+            <button className="btn" onClick={() => setRoleTarget(null)}>
+              취소
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={confirmChangeRole}
+              disabled={!roleTarget || newRole === roleTarget.role}
+            >
+              변경
             </button>
           </div>
         </div>
