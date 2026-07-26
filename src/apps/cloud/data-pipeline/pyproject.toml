@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
-    "boto3>=1.34", # 레이크 s3 백엔드 (local 백엔드·단위테스트는 미사용 — 지연 import)
+    "boto3>=1.43.56", # 레이크 s3 백엔드 (local 백엔드·단위테스트는 미사용 — 지연 import)
     "pyarrow>=17", # canonical parquet 적재(정제 Step2) — 지연 import
     "beautifulsoup4>=4.12", # 공시 정제 — DART 공급계약 본문(euc-kr HTML 테이블) 파싱(normalize-disclosure)
     "pandas>=2.2", # 공시 사업부문 정제 — 사업보고서 표 4-전략 추출(normalize-disclosure-segment)
