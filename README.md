@@ -157,6 +157,9 @@ git worktree prune                                               # 폴더를 그
 
 [Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
 Squash 머지 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목도 아래 형식을 그대로 따릅니다.
+`dev` 대상 PR 의 제목 형식(type·scope·마침표·키 위치)은 CI(`pr-title-check`)가 검증해 체크
+실패로 드러냅니다(브랜치 보호 불가 플랜이라 강제 차단은 아님 — 머지 전 체크 확인은 운영 규율).
+한국어·50자 규약은 기계 강제하지 않습니다(봇 PR·영문 용어 혼용, 리뷰 소관).
 
 ```
 type(scope): 제목

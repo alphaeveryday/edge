@@ -1,0 +1,48 @@
+# PR 제목 Conventional Commits 검증 (ALPHA-401)
+#
+# Squash 머지(feature/fix → dev)에서는 PR 제목이 곧 dev 의 최종 커밋 메시지다
+# (README "Git 컨벤션 › 커밋·PR 제목"이 SSOT — type 어휘·형식은 그 절과 1:1).
+# 형식 위반을 PR 체크 실패로 드러낸다 — private/free 플랜은 브랜치 보호를 못 써
+# 체크가 머지를 물리적으로 막지는 못한다(schema-validate·test-python 과 동일 제약).
+# 머지 전 체크 확인은 pr-cycle 운영 규율이 담당한다.
+# base=dev 만 검사한다 — dev→main 릴리스는 Merge commit 이라 PR 제목이 커밋
+# 메시지가 되지 않는다. 제목 길이(50자)는 강제하지 않는다 — 한국어 제목의 실측
+# 관행과 어긋나는 오탐을 피하고, 형식(구조)만 기계 검증한다.
+name: pr-title-check
+
+on:
+  pull_request:
+    # edited = 제목 수정. synchronize 도 포함해 모든 head SHA 에 체크가 남게 한다
+    # (required check 는 최신 커밋 기준으로 평가된다).
+    types: [opened, edited, reopened, synchronize]
+    branches: [dev]
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR 제목 형식 검증
+        env:
+          # PR 제목은 외부 입력이다 — run 스크립트에 직접 보간(${{ }})하면 셸 주입이
+          # 되므로 반드시 env 로만 전달한다.
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -u
+          ok=0
+          # type(scope): 제목 — type 은 README 어휘 9종, scope 는 소문자·숫자·하이픈
+          # (선택, 전역 변경은 생략), 제목은 공백이 아닌 문자로 시작해야 한다(공백뿐
+          # 제목 차단). "한국어 제목" 규약은 기계 강제하지 않는다 — 영문 용어 혼용
+          # 관행·봇 PR(dependabot 등 영문 제목)과 충돌하므로 언어는 리뷰 소관.
+          printf '%s' "$TITLE" \
+            | grep -qE '^(feat|fix|docs|refactor|test|chore|build|ci|perf)(\([a-z0-9-]+\))?: [^[:space:]].*$' \
+            || { echo "::error::PR 제목이 'type(scope): 제목' 형식이 아닙니다 — README › Git 컨벤션 › 커밋·PR 제목"; ok=1; }
+          # 제목은 마침표 없이 끝난다.
+          printf '%s' "$TITLE" | grep -qE '\.$' \
+            && { echo "::error::제목은 마침표로 끝나지 않습니다 — README › Git 컨벤션"; ok=1; }
+          # 이슈 키는 제목이 아니라 PR 설명 맨 아래 Refs: 푸터에만 둔다.
+          printf '%s' "$TITLE" | grep -qE 'ALPHA-[0-9]+' \
+            && { echo "::error::이슈 키는 제목이 아니라 PR 설명의 'Refs:' 푸터에 둡니다 — README › Git 컨벤션"; ok=1; }
+          [ "$ok" -eq 0 ] && echo "PR 제목 형식 OK"
+          exit "$ok"
