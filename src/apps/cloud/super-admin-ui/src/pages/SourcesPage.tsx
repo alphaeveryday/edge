@@ -88,6 +88,13 @@ function TaskRow({ task }: { task: TaskStatus }) {
           ? { label: '실행 중', tone: 'env' as BadgeTone }
           : (OUTCOME[task.outcome] ?? { label: task.outcome, tone: 'neutral' as BadgeTone });
 
+  /* 재시도가 시작돼도 원장은 이전 outcome 을 되돌리지 않는다(`record_attempt_start` 는 attempt 만
+     만든다). 그래서 "이전 시도는 실패했고 지금 다시 돌고 있다"는 **두 사실**이 동시에 참이다.
+     RUNNING 으로 outcome 을 덮어쓰면 실패했다는 사실이 지워지고, 안 보여주면 재시도 중인 걸
+     모른다 — 축을 합치지 않는다는 이 화면의 원칙대로 둘 다 낸다(Codex #297). */
+  const retrying =
+    task.executionStatus === 'RUNNING' && task.outcome !== null && task.outcome !== 'PENDING';
+
   const defect = dataDefect(task.dataStatus);
 
   return (
@@ -98,6 +105,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
       <td>
         <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
           <StatusBadge tone={badge.tone}>{badge.label}</StatusBadge>
+          {retrying && <StatusBadge tone="env">재시도 중</StatusBadge>}
           {/* 실행 성공 옆의 데이터 결손 — 이걸 빼면 불완전한 산출이 온전히 초록으로 보인다 */}
           {defect && <StatusBadge tone="warn">{defect}</StatusBadge>}
         </span>
