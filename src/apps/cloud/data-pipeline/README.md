@@ -346,7 +346,7 @@ DISABLED)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAs
 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세우기(위 시장 SFN 미변경), 시장 SFN
 에서 뉴스 스텝 제거는 PR2 다(설계 근거는 코드 주석·ALPHA-553).
 
-**raw 수집(10잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
+**raw 수집(12잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
 - `ingest-raw --source fmp`
 - `ingest-price-raw --source fmp`
@@ -371,6 +371,17 @@ writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세�
   - ⚠️ 잔여(ALPHA-387): **trdDd 백필 수단 부재** — `ingest-raw-etf` 는 `--from/--to` 를 안 받아
     실패한 날의 스냅샷을 다음 런이 못 줍는다(영구 결손, 별도 티켓). 빈 응답은 계속 fail-loud
     이고, ALPHA-460 이후 그 실패가 뒤 페이즈를 막지는 않는다(알림 + 런 FAILED 마감).
+- `ingest-raw-etf-profile`(국내 ETF 프로필 = ETF 마스터 표시명 출처, **kis 세트**, ALPHA-462)
+- `ingest-raw-investor`(종목별 투자자 수급, **kis 세트**, ALPHA-482) — 유니버스는 canonical KR
+  holdings 파생(가격과 같은 축). `NormalizeInvestor → LoadEtfFlow` 체인의 raw 선행이다.
+  - **EOD 서빙 블랙아웃 규약**(ALPHA-518·562): 확정 수급이 서빙되기 전에 질의하면 rt_cd=2
+    `msg_cd=OPSQ2001 msg1="TIME LIMIT 00:00 ~ 15:40"` 이 온다. 이건 데이터 결손이 아니라
+    **"지금이 서빙 개시 전"이라는 상시 조건**이라, 아무 때나 기다린다고 풀리지 않는다.
+    그래서 **거래일이고 남은 재시도 예산(5×15초) 안에 15:41(KST)을 넘길 수 있을 때만**
+    백오프로 대기하고, 아니면 대기 없이 그 심볼을 격리한다. 해소 시각이 msg1 의 상한 15:40 이
+    아니라 **15:41** 인 것은 실측이다(15:40:53~59 실패, 15:41:00 이후 성공). 거래일 조건을
+    빼면 비거래일 런이 심볼당 75초를 태워 유니버스 전체가 ~10시간이 된다(2026-07-26 실측:
+    28분에 22종목). 휴장일 집합은 Planner·KRX·iNAV 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다.
 
 **수집 — 상태머신 밖(수동 전용)**
 
