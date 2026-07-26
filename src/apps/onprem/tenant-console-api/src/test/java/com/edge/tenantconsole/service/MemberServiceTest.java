@@ -2,6 +2,7 @@ package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.ChangeMemberRoleRequest;
 import com.edge.tenantconsole.dto.CreateMemberRequest;
 import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
@@ -170,12 +171,133 @@ class MemberServiceTest {
 				.satisfies(e -> assertThat(e.action()).isEqualTo("MEMBER_DEACTIVATED"));
 	}
 
+	@Test
+	void 역할_변경은_원장을_갱신하고_이전과_새_역할을_감사한다() {
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		service.changeRole(42, new ChangeMemberRoleRequest("COMPLIANCE_REVIEWER"), actor, "10.0.0.9");
+		assertThat(members.capturedRoleTargetId).isEqualTo(42L);
+		assertThat(members.capturedRole).isEqualTo("COMPLIANCE_REVIEWER");
+		assertThat(actionLog.entries).singleElement().satisfies(e -> {
+			assertThat(e.action()).isEqualTo("MEMBER_ROLE_CHANGED");
+			assertThat(e.actor()).isEqualTo(actor);              // 세션 주체가 감사 주체
+			assertThat(e.targetId()).isEqualTo("42");
+			// 이전→새 역할이 함께 남아야 "무엇이 회수됐는지"를 감사만으로 재구성할 수 있다.
+			assertThat(e.detail()).containsEntry("email", "op@kbsec.com")
+					.containsEntry("previousRole", "OPERATOR")
+					.containsEntry("newRole", "COMPLIANCE_REVIEWER");
+			assertThat(e.clientIp()).isEqualTo("10.0.0.9");
+		});
+	}
+
+	@Test
+	void 어휘_밖_역할로의_변경은_원장에_닿기_전_400_이고_감사도_남지_않는다() {
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		assertThatThrownBy(() -> service.changeRole(
+				42, new ChangeMemberRoleRequest("Owner"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.INVALID_REQUEST));
+		assertThat(members.capturedRole).isNull();
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 역할_변경의_role_누락은_NPE_없이_400_이다() {
+		// register 와 동일 — Set.of 의 contains(null) NPE 로 400 대신 500 이 새는 우회 차단.
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		assertThatThrownBy(() -> service.changeRole(
+				42, new ChangeMemberRoleRequest(null), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.INVALID_REQUEST));
+		assertThat(members.capturedRole).isNull();
+	}
+
+	@Test
+	void 없는_대상_역할_변경은_404_이고_감사도_남지_않는다() {
+		members.target = null;  // findById 미존재
+		assertThatThrownBy(() -> service.changeRole(
+				999, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.MEMBER_NOT_FOUND));
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 자기_자신의_역할_변경은_403_이고_원장과_감사에_닿지_않는다() {
+		// 직무 분리(permission-matrix.md) — TA 가 스스로 CR 을 부여해 검수·정책 권한을
+		// 얻는 우회를 막는다. actor(7)와 대상이 같으면 어떤 역할로든 변경 금지.
+		members.target = new MemberEntity(7L, "admin@demo.edge.local", "관리자", "TENANT_ADMIN", true, null);
+		assertThatThrownBy(() -> service.changeRole(
+				7, new ChangeMemberRoleRequest("COMPLIANCE_REVIEWER"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.SELF_ROLE_CHANGE));
+		assertThat(members.capturedRole).isNull();
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 마지막_활성_관리자의_강등은_409_이고_감사도_남지_않는다() {
+		// 비활성화와 같은 이유 — 마지막 관리자의 role 을 바꾸면 사용자 관리 권한이 사라져
+		// 테넌트가 잠긴다. 같은 락(lockActiveAdminIds) 재사용으로 동시 강등 경쟁도 직렬화.
+		members.target = new MemberEntity(1L, "admin@kbsec.com", "관리자", "TENANT_ADMIN", true, null);
+		members.activeAdminIds = new ArrayList<>(List.of(1L));
+		assertThatThrownBy(() -> service.changeRole(
+				1, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.LAST_ADMIN));
+		assertThat(members.capturedRole).isNull();
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 다른_활성_관리자가_있으면_관리자_강등이_허용된다() {
+		members.target = new MemberEntity(1L, "admin@kbsec.com", "관리자", "TENANT_ADMIN", true, null);
+		members.activeAdminIds = new ArrayList<>(List.of(1L, 2L));
+		service.changeRole(1, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip");
+		assertThat(actionLog.entries).singleElement()
+				.satisfies(e -> assertThat(e.action()).isEqualTo("MEMBER_ROLE_CHANGED"));
+	}
+
+	@Test
+	void 비활성_관리자의_강등은_LAST_ADMIN_이_아니다() {
+		// 잠긴 활성 집합 멤버십으로 판정(비활성화와 동일) — 이미 비활성인 관리자는 강등해도
+		// 활성 관리자 수가 변하지 않으므로 막을 이유가 없다.
+		members.target = new MemberEntity(1L, "admin@kbsec.com", "관리자", "TENANT_ADMIN", false, null);
+		members.activeAdminIds = new ArrayList<>(List.of(2L));
+		service.changeRole(1, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip");
+		assertThat(actionLog.entries).singleElement()
+				.satisfies(e -> assertThat(e.action()).isEqualTo("MEMBER_ROLE_CHANGED"));
+	}
+
+	@Test
+	void 같은_역할로의_변경은_no_op_이고_감사가_남지_않는다() {
+		// 변경이 없으면 감사 대상도 아니다 — 감사 로그가 실제 변경만 담게 유지한다(멱등).
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		service.changeRole(42, new ChangeMemberRoleRequest("OPERATOR"), actor, "ip");
+		assertThat(members.capturedRole).isNull();
+		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 역할_갱신_영향_행이_0_이면_404_이고_감사도_남지_않는다() {
+		// findById 와 UPDATE 사이의 경쟁 백스톱(비활성화와 동일 규약) — 기록 없는 성공을 막는다.
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		members.updateRoleRows = 0;
+		assertThatThrownBy(() -> service.changeRole(
+				42, new ChangeMemberRoleRequest("READ_ONLY"), actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.MEMBER_NOT_FOUND));
+		assertThat(actionLog.entries).isEmpty();
+	}
+
 	/** member 원장 대역 — 저장 시 IDENTITY(100~)를 부여해 반환한다. */
 	private static final class FakeMembers implements MemberRepository {
 		final List<MemberEntity> saved = new ArrayList<>();
 		boolean existing = false;
 		int deactivateRows = 1;
-		MemberEntity target;                          // findById 반환(비활성화 대상)
+		int updateRoleRows = 1;
+		long capturedRoleTargetId = -1;               // updateRole 호출 캡처
+		String capturedRole;
+		MemberEntity target;                          // findById 반환(비활성화·역할변경 대상)
 		List<Long> activeAdminIds = new ArrayList<>();  // lockActiveAdminIds 반환(잠긴 활성 관리자)
 		private long nextId = 100;
 
@@ -205,6 +327,13 @@ class MemberServiceTest {
 		@Override
 		public int deactivate(long id) {
 			return deactivateRows;
+		}
+
+		@Override
+		public int updateRole(long id, String role) {
+			this.capturedRoleTargetId = id;
+			this.capturedRole = role;
+			return updateRoleRows;
 		}
 
 		@Override

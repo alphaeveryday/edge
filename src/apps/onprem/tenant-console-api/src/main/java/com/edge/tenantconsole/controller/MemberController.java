@@ -2,11 +2,13 @@ package com.edge.tenantconsole.controller;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.dto.ChangeMemberRoleRequest;
 import com.edge.tenantconsole.dto.CreateMemberRequest;
 import com.edge.tenantconsole.dto.MemberResponse;
 import com.edge.tenantconsole.service.MemberService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -15,7 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 콘솔 사용자 관리 표면(ALPHA-119) — 목록·등록·비활성화. member 원장 실데이터.
+ * 콘솔 사용자 관리 표면(ALPHA-119, 역할 변경은 ALPHA-499) — 목록·등록·비활성화·
+ * 역할 변경. member 원장 실데이터.
  * HTTP 관심사만: 감사 주체(actor)는 세션에서, client IP 는 요청에서 뽑아 서비스에
  * 넘긴다. 인가(TENANT_ADMIN)는 ConsoleAuthFilter 소관이라 여기서 role 을 다시 검사하지
  * 않는다. 필드는 tenant-console-ui users 타입과 1:1 camelCase.
@@ -47,6 +50,14 @@ public class MemberController {
 	public ApiResponse<Void> deactivate(@PathVariable long memberId,
 			HttpServletRequest httpRequest) {
 		memberService.deactivate(memberId, actor(httpRequest), httpRequest.getRemoteAddr());
+		return ApiResponse.onSuccess(null);
+	}
+
+	@PatchMapping("/api/v1/members/{memberId}/role")
+	public ApiResponse<Void> changeRole(@PathVariable long memberId,
+			@RequestBody(required = false) ChangeMemberRoleRequest request,
+			HttpServletRequest httpRequest) {
+		memberService.changeRole(memberId, request, actor(httpRequest), httpRequest.getRemoteAddr());
 		return ApiResponse.onSuccess(null);
 	}
 

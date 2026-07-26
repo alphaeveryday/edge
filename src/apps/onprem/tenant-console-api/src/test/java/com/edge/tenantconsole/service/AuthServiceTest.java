@@ -70,6 +70,11 @@ class AuthServiceTest {
 		}
 
 		@Override
+		public int updateRole(long id, String role) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long id) {
 		}
 	}

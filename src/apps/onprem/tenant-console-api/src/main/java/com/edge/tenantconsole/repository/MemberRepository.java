@@ -55,6 +55,15 @@ public interface MemberRepository extends Repository<MemberEntity, Long> {
 	@Query(value = "UPDATE member SET is_active = false WHERE member_id = :id", nativeQuery = true)
 	int deactivate(@Param("id") long id);
 
+	/**
+	 * 역할 변경(ALPHA-499) — role 단일 UPDATE. 반환값은 영향 행 수로, 0 이면 대상
+	 * 미존재(404)다. role 어휘 검증은 서비스(400) + ck_member_role 제약이 이중 방어한다.
+	 */
+	@Transactional
+	@Modifying
+	@Query(value = "UPDATE member SET role = :role WHERE member_id = :id", nativeQuery = true)
+	int updateRole(@Param("id") long id, @Param("role") String role);
+
 	@Transactional
 	@Modifying
 	@Query(value = "UPDATE member SET last_login_at = now() WHERE member_id = :id",

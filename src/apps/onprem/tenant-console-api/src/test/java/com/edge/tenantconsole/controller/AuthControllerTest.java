@@ -85,6 +85,11 @@ class AuthControllerTest {
 		}
 
 		@Override
+		public int updateRole(long memberId, String role) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long memberId) {
 			lastLoginTouched = memberId;
 		}

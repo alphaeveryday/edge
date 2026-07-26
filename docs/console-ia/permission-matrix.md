@@ -86,6 +86,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/members` | Users & Roles 조회 | TA |
 | `POST /api/v1/members` | 사용자 등록 | TA |
 | `POST /api/v1/members/{id}/deactivate` | 사용자 비활성화 | TA |
+| `PATCH /api/v1/members/{id}/role` | 역할 부여·변경 | TA — 자기 자신 대상은 서비스가 403(직무 분리) |
 
 ### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
 
