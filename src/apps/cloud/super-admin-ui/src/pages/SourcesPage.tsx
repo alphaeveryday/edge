@@ -2,6 +2,7 @@ import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type {
   DataStatus,
+  ExecutionStatus,
   LaunchStatus,
   OrchestrationStatus,
   TaskOutcome,
@@ -54,6 +55,18 @@ function dataDefect(status: DataStatus | null) {
   return DATA_DEFECT[status] ?? status;
 }
 
+/* outcome 이 PENDING 일 때 **시도 축**이 말해주는 것. PENDING 은 "아직 판정 못 함"이지 "대기"가
+ * 아니다 — 원장은 attempt 종료와 outcome 갱신을 별개 _safe 호출로 쓰므로, 앞만 커밋되면
+ * `PENDING + FAILED` 가 정상적으로 존재한다(Reconciler 가 고치기 전까지, dev 는 그마저 DISABLED).
+ * RUNNING 만 예외로 두면 **확정된 실패가 '대기'로** 보인다 — 관대해지는 쪽이라 위험하다. */
+const PENDING_BY_ATTEMPT: Record<ExecutionStatus, { label: string; tone: BadgeTone }> = {
+  RUNNING: { label: '실행 중', tone: 'env' },
+  FAILED: { label: '시도 실패', tone: 'blocked' },
+  TIMED_OUT: { label: '시도 시간초과', tone: 'blocked' },
+  // 시도는 끝났는데 판정이 안 쓰였다 — 원장 기록이 빠진 것이지 정상이 아니다.
+  SUCCEEDED: { label: '판정 누락', tone: 'warn' },
+};
+
 const STAGE_LABEL: Record<string, string> = {
   raw: '수집',
   normalize: '정제',
@@ -81,11 +94,13 @@ function TaskRow({ task }: { task: TaskStatus }) {
       ? { label: '계획 제외', tone: 'gated' as BadgeTone }
       : task.outcome === null
         ? { label: '판정 없음', tone: 'neutral' as BadgeTone }
-        : /* outcome 은 작업이 **끝나야** 쓰인다. 실행 중이면 PENDING 인 채로 시도만 RUNNING 이라,
-             이 분기가 없으면 런이 도는 내내 모든 진행 중 작업이 "대기"로 보인다 — 운영자가
-             화면을 보는 바로 그 시점에 "돌고 있다"와 "시작도 안 했다"가 구분되지 않는다. */
-          task.outcome === 'PENDING' && task.executionStatus === 'RUNNING'
-          ? { label: '실행 중', tone: 'env' as BadgeTone }
+        : /* outcome 은 작업이 **끝나야** 쓰인다. 그동안 PENDING 인 채로 시도 축만 움직이므로,
+             PENDING 이면 시도가 말해주는 것을 그대로 낸다. 시도가 아예 없을 때만 "대기"다. */
+          task.outcome === 'PENDING' && task.executionStatus !== null
+          ? (PENDING_BY_ATTEMPT[task.executionStatus] ?? {
+              label: task.executionStatus,
+              tone: 'neutral' as BadgeTone,
+            })
           : (OUTCOME[task.outcome] ?? { label: task.outcome, tone: 'neutral' as BadgeTone });
 
   /* 재시도가 시작돼도 원장은 이전 outcome 을 되돌리지 않는다(`record_attempt_start` 는 attempt 만
