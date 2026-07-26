@@ -7,6 +7,7 @@ edge 관례 인터페이스(격리·fail-loud·bronze 무변형)를 지키는지
 
 import json
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -16,6 +17,11 @@ from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_investor import KisInvestorSource
 
 _MAP = {"005930": "005930", "000660": "000660"}
+
+KST = timezone(timedelta(hours=9))
+# 거래일(월) 의 서빙 해소 시각(15:41 KST) 직후 — OPSQ2001 재시도가 살아 있는 구간.
+# 경계 자체를 다루지 않는 기존 테스트들은 여기에 시계를 못박아 실행 시각과 무관하게 만든다.
+_RETRYABLE_NOW = datetime(2026, 7, 27, 15, 41, 30, tzinfo=KST)
 
 
 def _qs(url: str, key: str) -> str:
@@ -45,16 +51,26 @@ _TOKEN = json.dumps({"access_token": "tok", "access_token_token_expired": "2026-
 
 
 class FakeClient:
-    """POST=토큰, GET=심볼별 페이지 응답(리스트를 순서대로 소비). 대기는 no-op."""
+    """POST=토큰, GET=심볼별 페이지 응답(리스트를 순서대로 소비). 대기는 기록만 하고 no-op.
 
-    _sleep = staticmethod(lambda secs: None)
+    심볼 값이 **호출가능**이면 리스트 대신 `(지금) -> 응답본문` 으로 부른다 — 응답이 시각에
+    달린 벤더(OPSQ2001 서빙 블랙아웃)를 모사하기 위함. `clock` 을 주면 `_sleep` 이 그 시계를
+    실제로 흐르게 해, 백오프가 해소 시각을 넘기는지를 테스트가 진짜로 검증한다(ALPHA-562).
+    """
 
-    def __init__(self, chunk_responses: dict[str, list[str]], token_body: str = _TOKEN):
+    def __init__(self, chunk_responses, token_body: str = _TOKEN, clock=None):
         self.chunk_responses = chunk_responses
         self.token_body = token_body
+        self.clock = clock
         self.calls: list[str] = []
         self.urls: list[str] = []
+        self.sleeps: list[float] = []   # 실제로 기다린 시간 — 헛기다림 검증용(ALPHA-562)
         self._idx: dict[str, int] = defaultdict(int)
+
+    def _sleep(self, secs):
+        self.sleeps.append(secs)
+        if self.clock is not None:
+            self.clock["now"] += timedelta(seconds=secs)
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         self.calls.append(method)
@@ -63,9 +79,46 @@ class FakeClient:
         self.urls.append(url)
         sym = _qs(url, "FID_INPUT_ISCD")
         pages = self.chunk_responses.get(sym, [])
+        if callable(pages):
+            return pages(self.clock["now"])
         idx = self._idx[sym]
         self._idx[sym] += 1
         return pages[idx] if idx < len(pages) else _EMPTY
+
+
+def _at(monkeypatch, when):
+    """어댑터가 보는 '지금'(KST)을 `when` 으로 못박고, 흐르게 할 수 있는 시계를 돌려준다.
+
+    OPSQ2001 재시도는 서빙 해소 시각(15:41 KST)까지 남은 시간에 좌우되므로(ALPHA-562), 경계
+    관련 테스트가 실행 시각에 따라 결과가 갈리지 않게 못박는다. 안 박으면 오전에 돌린 CI 와
+    오후에 돌린 CI 가 다른 것을 검증한다. `datetime` 서브클래스로 갈아끼우는 이유는 어댑터가
+    `strptime` 도 쓰기 때문 — 아무 객체나 넣으면 페이지네이션이 깨진다.
+    """
+    state = {"now": when}
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return state["now"]
+
+    monkeypatch.setattr(kis_investor, "datetime", _Clock)
+    return state
+
+
+def _boundary_until(clears, after):
+    """`clears` 전에는 OPSQ2001, 이후에는 `after` 페이지를 순서대로 주는 응답기.
+
+    벤더가 특정 시각에 스스로 풀리는 것을 모사한다 — 고정 페이지 리스트로는 "백오프가 해소
+    시각을 실제로 넘겼는가"를 검증할 수 없고, 넘기지 못하는 구현도 통과한다(Rule 9).
+    """
+    pages = list(after)
+
+    def _next(now):
+        if now < clears:
+            return _BOUNDARY
+        return pages.pop(0) if pages else _EMPTY
+
+    return _next
 
 
 def _source(chunk_responses, *, app_key="k", app_secret="s", symbol_map=None, client=None):
@@ -179,23 +232,25 @@ def test_egw00201_retried_then_succeeds():
     assert [r["stck_bsop_date"] for r in records] == ["20260703"]
 
 
-def test_opsq2001_boundary_retried_then_succeeds():
+def test_opsq2001_boundary_retried_then_succeeds(monkeypatch):
     # WHY: EOD 서빙경계(OPSQ2001, "TIME LIMIT 00:00 ~ 15:40")는 장마감 직후 ~1분 블랙아웃 후
     #      자가해소한다(ALPHA-518). 데이터 결손이 아니라 경계 레이스라 재시도로 복구해야 —
     #      첫 스케줄 런이 이걸 부분실패로 판정해 전체 FAILED 났다. 격리로 끝내면 안 된다.
+    _at(monkeypatch, _RETRYABLE_NOW)
     src = _source({"005930": [_BOUNDARY, _ok([_row("20260703")]), _EMPTY]})
     records = list(src.fetch(["005930"]))
     assert [r["stck_bsop_date"] for r in records] == ["20260703"]
     assert src.fetch_failures == []  # 재시도로 복구 → 격리 기록 없음
 
 
-def test_egw_and_opsq_have_independent_retry_budgets():
+def test_egw_and_opsq_have_independent_retry_budgets(monkeypatch):
     # WHY: 초당한도(EGW00201)와 서빙경계(OPSQ2001)는 성격이 달라 재시도 예산이 독립이어야 —
     #      공유 카운터면 EGW 재시도가 attempt 를 소비해 뒤이은 OPSQ 가 예산 부족으로 조기 격리되고,
     #      경계는 자가해소하는데 EGW 노이즈 때문에 종목을 잃어 이 티켓의 취지가 깨진다(ALPHA-518).
     #      최악 시퀀스(EGW 예산 전량 + OPSQ 예산 전량 소비 뒤 다음 콜에서 성공)를 상수로 구성한다 —
     #      이건 두 가지를 동시에 고정한다: (1) 두 예산의 독립성(공유 카운터면 OPSQ 가 조기 소진돼
     #      격리) (2) 루프 상한이 max 가 아니라 두 예산의 합이라는 것(max 면 마지막 성공 콜 전에 종료).
+    _at(monkeypatch, _RETRYABLE_NOW)
     egw_budget = kis_investor.MAX_RATE_RETRY - 1  # EGW 는 rate<MAX-1 이라 MAX-1 회 재시도
     opsq_budget = kis_investor.MAX_BOUNDARY_RETRY  # OPSQ 는 boundary<MAX 라 MAX 회 재시도
     pages = [_RATE] * egw_budget + [_BOUNDARY] * opsq_budget + [_ok([_row("20260703")]), _EMPTY]
@@ -205,15 +260,64 @@ def test_egw_and_opsq_have_independent_retry_budgets():
     assert src.fetch_failures == []
 
 
-def test_opsq2001_boundary_exhausted_isolated_per_symbol():
+def test_opsq2001_boundary_exhausted_isolated_per_symbol(monkeypatch):
     # WHY: 백오프가 소진되도록 경계가 안 풀리면(비정상) 조용한 성공이 아니라 심볼 단위 실패로
     #      기록돼 런을 partial 로 드러내야 한다(fail-loud) — 다른 심볼은 계속 수집.
     #      예산+1 회 연속 경계면 재시도를 다 쓰고도 성공 못 해 격리된다.
+    _at(monkeypatch, _RETRYABLE_NOW)
     boundary_pages = [_BOUNDARY] * (kis_investor.MAX_BOUNDARY_RETRY + 1)
     src = _source({"005930": boundary_pages, "000660": [_ok([_row("20260703")])]})
     records = list(src.fetch(["005930", "000660"]))
     assert [r["our_ticker"] for r in records] == ["000660"]
     assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
+
+
+@pytest.mark.parametrize(
+    "when, why",
+    [
+        (datetime(2026, 7, 26, 10, 0, tzinfo=KST), "비거래일(일) 오전 — 실측된 실행 시각"),
+        (datetime(2026, 7, 26, 16, 0, tzinfo=KST), "비거래일(일) 해소시각 이후 — 그날 EOD 자체가 없다"),
+        (datetime(2026, 7, 27, 15, 39, 44, tzinfo=KST), "거래일이지만 예산 75s 로도 15:40:59 라 15:41 미도달"),
+    ],
+)
+def test_opsq2001_isolated_without_waiting_when_it_cannot_clear(monkeypatch, when, why):
+    # WHY: `TIME LIMIT 00:00 ~ 15:40` 은 일시 장애가 아니라 "지금이 서빙 개시 전"이라는 상시
+    #      조건이라, 풀릴 수 없는 시점에는 기다려도 절대 안 풀린다. 그런데 예산은 심볼별로
+    #      독립이라(ALPHA-518) 헛기다림이 유니버스 크기만큼 곱해진다 — 2026-07-26 비거래일
+    #      실행에서 심볼당 75.8초가 실측됐고, 470종이면 ~10시간으로 SFN 6시간 타임아웃을
+    #      넘긴다. 그러니 대기 없이(sleeps 비어야 함) 콜 1회로 격리해야 한다.
+    #      "격리된다"만 보면 75초를 태우고 격리해도 통과하므로 대기 자체를 못박는다.
+    #      비거래일 케이스가 시각 양쪽에 있는 이유: 해소시각만 보고 거래일을 안 보면 같은
+    #      결함이 "일요일 16시"로 자리만 옮긴다.
+    _at(monkeypatch, when)
+    client = FakeClient({"005930": [_BOUNDARY] * 10, "000660": [_ok([_row("20260703")])]})
+    src = _source(None, client=client)
+    records = list(src.fetch(["005930", "000660"]))
+
+    assert client.sleeps == [], f"{why} — 자가해소 불가 구간에서 기다렸다"
+    assert client.urls.count(client.urls[0]) == 1  # 문제 심볼은 재질의 없이 1콜
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930"]
+    assert [r["our_ticker"] for r in records] == ["000660"]  # 다른 심볼은 계속 수집
+
+
+def test_opsq2001_waits_through_the_real_clearing_time(monkeypatch):
+    # WHY: 가드를 "해소시각 이전이면 무조건 포기"로 단순화하면 ALPHA-518 이 고친 레이스가
+    #      되살아난다 — 실측(15:40:53~59 실패, 15:41:00 이후 성공)대로 15:40:53 의 경계는
+    #      예산 안에 진짜로 풀린다. 벤더가 15:41 에 풀리는 것을 시계와 함께 모사해, 백오프가
+    #      **실제로 그 시각을 넘겼을 때만** 통과하게 한다. 고정 페이지 리스트로 첫 대기 직후
+    #      성공을 주면 해소시각을 못 넘기는 구현도 초록이라 회귀를 못 잡는다(Rule 9).
+    clears = datetime(2026, 7, 27, 15, 41, 0, tzinfo=KST)
+    clock = _at(monkeypatch, datetime(2026, 7, 27, 15, 40, 53, tzinfo=KST))
+    client = FakeClient(
+        {"005930": _boundary_until(clears, [_ok([_row("20260703")])])}, clock=clock
+    )
+    src = _source(None, client=client)
+    records = list(src.fetch(["005930"]))
+
+    assert client.sleeps == [kis_investor.BOUNDARY_BACKOFF_S]  # 15s 한 번으로 15:41:08
+    assert clock["now"] >= clears
+    assert [r["stck_bsop_date"] for r in records] == ["20260703"]
+    assert src.fetch_failures == []
 
 
 def test_kis_error_code_isolated_per_symbol():
