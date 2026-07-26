@@ -54,6 +54,9 @@ export function UsersPage() {
           // 마지막 관리자 강등(409)·경쟁 변경(409)·자기 변경(403) 등 서버 사유를 그대로 보인다.
           const msg = (err as { body?: { message?: string } })?.body?.message;
           toast(msg ?? '역할을 변경하지 못했습니다.');
+          // 실패 시에도 모달을 닫는다 — stale 현재 역할을 근거로 한 재시도가 방금 이루어진
+          // 다른 관리자의 변경을 확인 없이 덮어쓰지 않게, 갱신된 목록에서 다시 열게 한다.
+          setRoleTarget((current) => (current?.id === target.id ? null : current));
         },
       },
     );
