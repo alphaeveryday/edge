@@ -125,7 +125,7 @@ public class MemberService {
 	 * 검수·정책 권한을 얻는 우회를 막는다(타인 계정 경유는 차단 대신 감사로 추적).
 	 * 마지막 활성 관리자의 강등은 비활성화와 같은 이유(테넌트 잠금)로 409 — 같은 락을
 	 * 재사용해 동시 강등·비활성화 경쟁도 직렬화한다. 갱신은 이전 역할 조건부 UPDATE 로
-	 * 원자 검증한다(같은 역할 재지정 포함) — 0행이면 경쟁 충돌 409 또는 대상 소멸 404.
+	 * 원자 검증한다(같은 역할 재지정 포함) — 0행이면 경쟁 충돌 409.
 	 * 실제 전이만 이전→새 역할을 MEMBER_ROLE_CHANGED 로 감사한다(no-op 은 미기록).
 	 */
 	@Transactional
@@ -151,12 +151,11 @@ public class MemberService {
 			}
 		}
 		// 이전 역할 조건부 갱신 — 같은 역할(no-op)이어도 태워서 원장 현재값과 원자 대조한다.
-		// 0행이면 읽기와 갱신 사이에 역할이 바뀐 경쟁(409, 화면은 새로고침 수렴)이거나 대상
-		// 소멸(404)이다 — stale 읽기로 틀린 감사·거짓 성공을 만들지 않는다.
+		// 0행 = 읽기와 갱신 사이에 역할이 바뀐 경쟁이다(409, 화면은 새로고침 수렴) — member
+		// 는 하드 삭제 표면이 없어(단일 writer·is_active 토글만) 소멸 경로가 없고, 있어도
+		// 같은 영속성 컨텍스트의 재조회는 1차 캐시를 반환해 판별할 수 없다.
 		if (memberRepository.updateRole(memberId, role, previousRole) == 0) {
-			throw memberRepository.findById(memberId).isPresent()
-					? new GeneralException(ConsoleErrorStatus.ROLE_CONFLICT)
-					: new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND);
+			throw new GeneralException(ConsoleErrorStatus.ROLE_CONFLICT);
 		}
 		if (!previousRole.equals(role)) {
 			// 실제 전이만 감사 — no-op 재지정은 변경이 아니다.

@@ -58,7 +58,7 @@ public interface MemberRepository extends Repository<MemberEntity, Long> {
 	/**
 	 * 역할 변경(ALPHA-499) — 이전 역할 조건부 단일 UPDATE(낙관적). 읽어둔 이전 역할이
 	 * 그대로일 때만 갱신되므로, 경쟁 변경 시 0행이 되어 stale 이전 역할로 틀린 감사를
-	 * 남기는 것을 막는다(0행 = 경쟁 충돌 409 또는 대상 소멸 404 — 판정은 서비스).
+	 * 남기는 것을 막는다(0행 = 경쟁 충돌 409 — member 는 하드 삭제 표면이 없다).
 	 * role 어휘 검증은 서비스(400) + ck_member_role 제약이 이중 방어한다.
 	 */
 	@Transactional
