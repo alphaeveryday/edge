@@ -138,11 +138,15 @@ def test_min_interval_caps_average_rate_across_threads(monkeypatch):
         list(pool.map(lambda _: client.get("https://x.example/y"), range(calls)))
 
     assert len(sends) == calls
-    # **첫 발신부터 마지막 발신까지**를 잰다 — 스레드풀 생성·스케줄링·종료 같은 부대시간을
-    # 빼야 느린 CI 에서 결함 구현이 거짓 통과하지 않는다. 제한기가 없으면 발신이 전부 뭉쳐
-    # 이 구간이 0 에 가까우므로(실측 0.0002s), CI 속도와 무관하게 실패한다.
+    # **첫 발신부터 마지막 발신까지**를 잰다 — 스레드풀 생성·종료 같은 부대시간을 빼야 느린
+    # CI 에서 결함 구현이 거짓 통과하지 않는다.
+    #
+    # 기준은 이상값(interval × 19)이 아니라 그 **절반**이다. 실제 발신 시각은 계약이 아니기
+    # 때문이다(http.py 주석: 락이 urlopen 전에 풀려 슬롯 홀더가 선점되면 발신이 밀린다).
+    # 이상값을 그대로 단언하면 스케줄러 경합에서 올바른 구현을 간헐적으로 떨어뜨린다.
+    # 절반은 **회귀 바닥**이다 — 제한기가 없으면 이 구간이 0.07s 이하라(실측) 충분히 갈린다.
     span = max(sends) - min(sends)
-    assert span >= interval * (calls - 1)
+    assert span >= interval * (calls - 1) * 0.5
 
 
 def test_min_interval_spaces_serial_sends(monkeypatch):
