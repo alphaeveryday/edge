@@ -667,6 +667,23 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
 위함(ECS 안에서 자기 expected_task 를 만들면 불가능). `ExecutionAlreadyExists` 는 즉시 LAUNCHED
 로 보지 않고 DescribeExecution 으로 입력을 비교한다(동일=LAUNCHED, 상이=LAUNCH_CONFLICT).
 
+**슬롯 = 분(ALPHA-564).** 멱등키는 `run_key = <pipeline_type>:<YYYY-MM-DDTHH:MM>`(KST)이고
+`pipeline_run_id`·`execution_name` 이 여기서 결정적으로 파생된다. 날짜가 아니라 **시각**인 이유는
+`UNIQUE (run_key)` 가 곧 "한 슬롯 1회 계획"이라, 날짜로 두면 하루 여러 번 도는 레인(뉴스
+15:00·15:30·23:50, iNAV 15분)의 2회차부터가 1회차에 흡수되고 **수동·백필 실행이 원장에 들어올
+자리가 없기** 때문이다. 결과:
+
+- **애드혹 실행도 `plan-run` 으로 돌리면 관측된다** — 실행 분이 그 실행의 슬롯이 된다.
+  `start-execution` 을 직접 쓰면 원장에 안 남아 그 런은 대조 대상이 아니다.
+- 같은 분 재호출은 여전히 run 1개(Planner 재기동 무해). 수동 실행이 스케줄 분에 정확히 걸리면
+  그 슬롯으로 **흡수**되고 `created=False` 로 드러난다 — 새로 도는 게 없다는 뜻이니 로그를 보라.
+- 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slot` 도 그 함수를 쓴다 —
+  두 곳에서 조립하면 어긋나는 순간 없는 슬롯을 찾아 **실제 런이 영영 대조되지 않는다**. 같은
+  이유로 `OPS_DAILY_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 `schedule_expression` 의 cron
+  에서 뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다.
+- ⚠️ 주기 Reconciler 는 **스케줄 슬롯 하나만** 대조한다. 수동 슬롯은 `OPS_RUN_KEY` 로 지정해야
+  대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히 남는다(ALPHA-565).
+
 ### 실행 (로컬/수동)
 
 ```bash

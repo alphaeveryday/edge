@@ -7,6 +7,20 @@
 # ⚠️ 이 파일은 운영 배포하지 않는다(ALPHA-530 범위: 로컬 구현·검증까지). schedule state 기본
 # DISABLED, 적용 시 daily 트리거가 SFN 직접 시작에서 **Planner 경유**로 컷오버된다(스펙 §5).
 
+# Reconciler 가 "예정 지난 슬롯"을 만들 때 쓰는 KST 시각. **cron 에서 뽑는다 — 별도 변수로
+# 두지 않는다**(ALPHA-564). 슬롯 키가 HH:MM 을 담게 되면서, 이 값이 schedule_expression 과
+# 어긋나면 Reconciler 가 존재하지 않는 슬롯(`...T15:40`)을 찾는다 — 거짓 PLANNER_MISSING 을
+# 여는 데 그치지 않고 **실제 런(`...T15:30`)이 영영 대조되지 않는다**. 같은 사실을 두 변수가
+# 들고 있으면 언제 어긋나도 이상하지 않으므로 출처를 하나로 줄였다.
+# cron 이 아닌 표현식(rate 등)이면 plan 단계에서 실패한다 — Planner 설계가 일 1회 cron 슬롯을
+# 전제하므로 조용히 기본값으로 떨어지는 것보다 낫다(Rule 12).
+locals {
+  # [0]=분, [1]=시. format 의 %02d 가 한 자리 시각(cron(5 15 ...) → "15:05")도 zero-pad 한다 —
+  # `_sched_hhmm` 이 int() 로 파싱하므로 자릿수가 어긋나도 조용히 넘어가지 않게.
+  _daily_cron_hm      = regex("^cron\\(([0-9]+) ([0-9]+) ", var.schedule_expression)
+  daily_schedule_hhmm = format("%02d:%02d", tonumber(local._daily_cron_hm[1]), tonumber(local._daily_cron_hm[0]))
+}
+
 # ── Planner/Reconciler 전용 task 역할 ──
 resource "aws_iam_role" "ops_task" {
   name               = "${var.name}-ops-task"
@@ -68,18 +82,18 @@ resource "aws_ecs_task_definition" "ops" {
     essential = true
     command   = ["reconcile"]
     environment = [for k, v in merge(local.env, {
-      DATA_PIPELINE_DB__HOST  = var.db_host
-      DATA_PIPELINE_DB__PORT  = tostring(var.db_port)
-      DATA_PIPELINE_DB__NAME  = var.db_name
-      DATA_PIPELINE_DB__USER  = var.db_user
+      DATA_PIPELINE_DB__HOST = var.db_host
+      DATA_PIPELINE_DB__PORT = tostring(var.db_port)
+      DATA_PIPELINE_DB__NAME = var.db_name
+      DATA_PIPELINE_DB__USER = var.db_user
       # Planner 가 시작할 상태머신. 카탈로그 버전은 배포 SHA 를 CD 가 주입(없으면 unknown).
       OPS_STATE_MACHINE_ARN = aws_sfn_state_machine.this.arn
       # Reconciler 가 ECS DescribeTasks 를 이 클러스터로 조회한다(생략하면 default 클러스터를
       # 봐서 실제 태스크를 못 찾는다, edge-review). Planner 의 비거래일 판정용 KR 공휴일 목록도.
       OPS_CLUSTER_ARN = var.cluster_arn
       OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
-      # Reconciler 의 "예정 지난 슬롯" 판정 기준 — schedule_expression 의 HH:MM 과 일치해야 한다.
-      OPS_DAILY_SCHED_HHMM = var.daily_schedule_hhmm
+      # Reconciler 의 "예정 지난 슬롯" 판정 기준 — 위 locals 가 cron 에서 뽑는다(드리프트 불가).
+      OPS_DAILY_SCHED_HHMM = local.daily_schedule_hhmm
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
