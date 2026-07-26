@@ -399,7 +399,8 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
 
     불량 부분(메뉴 밖 역할·빈 mention·범위 밖 slot)은 그 부분만 떨어뜨리고 이벤트는 살린다
     (tagging 과 동일 — 한 역할의 환각이 사건 전체를 버리게 하지 않는다). 미해소 참여자는
-    entity_id 없이 보존해 completeness 판정에 쓰고, 적재부가 event_argument 스킵을 판단한다.
+    entity_id 없이 보존한다 — completeness 판정에 쓰이고, 적재도 표면형과 함께 남는다
+    (ALPHA-563).
     """
     event_type = gate_cls["event_type_code"]
     tv = view.types[event_type]
@@ -624,11 +625,11 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     실질 ko/bigkinds 만 다뤄 잠복했던 결함이라, 정본 로직이 아니라 실행부 결함 수정이다.
 
     v4 확장(ALPHA-545): source_event 에 predicate_code·confidence_level·completeness,
-    event_argument 에 slot·mention_text·entity_kind·group_ord(해소된 참여자 전원),
-    event_measure 신규(추출 순서 = measure_ord). **미해소 참여자는 event_argument 에 못
-    싣는다**(entity_id NOT NULL PK) — 버리는 게 아니라 completeness 판정엔 이미 반영됐고
-    (이식원 UNRESOLVED 규약), 적재만 스킵한다. primary 엔티티가 참여자로 해소되지 않았으면
-    구 단일역할 행(required_roles[0])을 폴백으로 실어 thread identity 연속성을 지킨다.
+    event_argument 에 slot·mention_text·entity_kind·group_ord, event_measure 신규(추출
+    순서 = measure_ord). **미해소 참여자도 싣는다**(ALPHA-563) — entity_id=NULL +
+    mention_text 로 남아 접지 질의에서만 빠진다. primary 엔티티가 참여자로 해소되지
+    않았으면 구 단일역할 행(required_roles[0])을 폴백으로 실어 thread identity 연속성을
+    지킨다.
     """
     created: list[dict] = []
     documents: list[tuple] = []
@@ -729,15 +730,21 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             cls["lifecycle_stage"], "ACTIVE", available_at,
             cls["predicate_code"], cls["confidence_level"], cls["completeness"],
         ))
-        # 참여자 전원(다중역할) — 해소된 것만 event_argument 로. 같은 (role, entity) 중복은
-        # 첫 행만 남긴다(PK 충돌 전에 결정적으로 접는다 — 같은 역할을 두 mention 이 주장해도
-        # 행은 하나다).
+        # 참여자 전원(다중역할) — **미해소 포함**(ALPHA-563). 참여자는 추출된 사실이고
+        # 엔티티 해소는 별도 레인이라(runbook 레인 B), 마스터에 없다는 이유로 사실을 지우지
+        # 않는다. 미해소는 entity_id=NULL + mention_text 로 남아 접지 질의에서만 빠진다.
+        # 중복은 (role, 접지 또는 표면형)으로 접는다 — 같은 역할·같은 대상을 두 번 주장해도
+        # 참여자는 하나다. 자연키 ON CONFLICT 는 접지된 행만 막아 주므로(UNIQUE 안의 NULL 은
+        # 서로 구분된다) 미해소의 재실행 중복은 이 접기 + **기사 단위 멱등**이 막는다:
+        # 자국(document_entity)과 이 행들은 run 전체를 감싼 한 트랜잭션에서 함께 커밋되고,
+        # 자국이 있는 기사는 assembled_source_ids 가 애초에 걸러 여기 오지 않는다.
         seen_args: set[tuple[str, str]] = set()
         primary_present = False
         for part in cls["arguments"]:
-            if part["entity_id"] is None:
-                continue  # entity_id NOT NULL PK — 미해소는 completeness 에만 반영(독스트링)
-            key = (part["role_code"], part["entity_id"])
+            identity = part["entity_id"] or part["mention_text"]
+            if identity is None:
+                continue  # 접지도 표면형도 없으면 근거 0 — ck_event_argument_grounding 과 같은 판정
+            key = (part["role_code"], identity)
             if key in seen_args:
                 continue
             seen_args.add(key)
@@ -1030,8 +1037,13 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
                                    "lifecycle_stage": stage, "predicate_code": predicate,
                                    "role_values": {}}
             role_lists[sid] = {}
-        if role_code is None:
-            continue  # 아규먼트 0건 — role_values 는 빈 맵으로 두고 identity 미충족 판정에 맡긴다
+        if role_code is None or entity_id is None:
+            # 아규먼트 0건, 또는 **미해소 참여자**(ALPHA-563) — 둘 다 identity 재료가 아니다.
+            # 미해소를 str(None)="None" 으로 실으면 서로 다른 사건(각자 다른 미해소 고객사)이
+            # 같은 thread_key 로 접혀 한 계보가 되고, 나중에 마스터가 채워져 해소되는 순간
+            # key 가 바뀌어 계보가 갈린다. 미해소는 값이 아니라 **부재**라, role_values 에서
+            # 빼 identity 미충족 → UNKNOWN 링크로 정직하게 강등한다.
+            continue
         role_lists[sid].setdefault(role_code, []).append(str(entity_id))
     for sid, roles in role_lists.items():
         events[sid]["role_values"] = {
@@ -1125,9 +1137,10 @@ def run(
                 arguments_unresolved += sum(
                     1 for c in classifications.values()
                     for p in c.get("arguments", ()) if p["entity_id"] is None)
-                # 아규먼트 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지 않아
-                # (다중 primary) 폴백을 조작하지 않은 건. event_argument 가 비면 threading
-                # 조회(JOIN)와 엔진 소비에서 빠지므로 카운터로 드러낸다(Rule 12).
+                # **접지** 참여자 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지
+                # 않아(다중 primary) 폴백을 조작하지 않은 건. 행 자체는 남지만(ALPHA-563
+                # 미해소 보존) 접지가 없어 thread identity 와 엔진 선별(EXISTS JOIN
+                # instrument)에서 빠지므로 카운터로 드러낸다(Rule 12).
                 anchorless_events += sum(
                     1 for c in classifications.values()
                     if not c.get("anchor_role")

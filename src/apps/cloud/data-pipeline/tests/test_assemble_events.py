@@ -494,10 +494,11 @@ def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
 
 # ── v4: 다중 참여자·수량 기록 ────────────────────────────────────────────────
 def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypatch):
-    """멀티기업 기사 — 해소된 참여자 **전원**이 event_argument 에 slot·mention·group_ord 와
-    함께 실리고(다중역할), 미해소 참여자(CONTRACT_OBJECT 개념)는 entity_id NOT NULL PK 라
-    스킵하되 **completeness 에는 반영**된다(이식원 UNRESOLVED 규약 — 보도가 역할을 말한
-    사실과 해소 가능 여부는 다른 축). 수량(CONTRACT_VALUE)은 event_measure 로 간다."""
+    """멀티기업 기사 — 참여자 **전원**이 event_argument 에 slot·mention·group_ord 와 함께
+    실린다(다중역할). 미해소 참여자(CONTRACT_OBJECT 개념)도 entity_id=NULL + mention 으로
+    **보존**된다(ALPHA-563) — 참여자는 추출된 사실이고 해소는 별도 레인이라, 마스터에
+    없다는 이유로 사실을 지우면 그 사건의 계약 대상이 영영 사라진다. 수량(CONTRACT_VALUE)은
+    event_measure 로 간다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article(
         "a1", title="삼성전자, SK하이닉스와 1,883억원 HBM 공급계약",
@@ -527,12 +528,15 @@ def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypa
     asrt_id = _stable_id("asrt", doc_id, _CONTRACT, _CONTRACT_PRED)
     evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
     args = {(r[1], r[2]): r for r in _batch(conn, "event_argument")}
-    # 해소된 참여자 2명 전원 — primary 가 참여자로 실렸으니 폴백 행은 없다.
-    assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX")}
+    # 해소 2명 + 미해소 1건 전원 — primary 가 참여자로 실렸으니 폴백 행은 없다.
+    assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX"),
+                         ("CONTRACT_OBJECT", None)}
     # entity_kind: SUPPLIER·CUSTOMER 는 계약(entity_mapping_contract)에 역할→종별 표가 없어
     # NULL 이다 — 전원 ISSUER 로 실으면 다자 딜 행이 발행사 행과 구분되지 않는다(#255 P2).
     assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", None, 0)
     assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", None, 0)
+    # 미해소 행: 접지는 없고 표면형만 남는다 — 접지 질의에선 빠지되 사실은 보존된다.
+    assert args[("CONTRACT_OBJECT", None)][4:] == ("qualifier", "HBM", None, 0)
     # 수량 — KR 파서가 value/unit 을 계산(1,883억원 → 1883e8 KRW), 추출 순서가 measure_ord.
     [meas] = _batch(conn, "event_measure")
     assert meas == (evt_id, 0, "CONTRACT_VALUE", "1,883억원", 188_300_000_000.0, "KRW",
@@ -1046,8 +1050,58 @@ def test_unextracted_anchor_role_keeps_completeness_partial(tmp_path, monkeypatc
 
     [se] = _batch(conn, "source_event")
     assert se[9] == "partial"  # SUPPLIER 미추출 — 폴백 anchor 도 안 서므로 충족 아님
-    args = {a[1] for a in _batch(conn, "event_argument")}
-    assert args == {"CUSTOMER"}  # SUPPLIER 행 조작 없음
+    args = {(a[1], a[2]) for a in _batch(conn, "event_argument")}
+    # 추출된 것만 — CUSTOMER(해소) + CONTRACT_OBJECT(미해소, 표면형 보존). SUPPLIER 행 조작 없음.
+    assert args == {("CUSTOMER", "inst_SAMSUNG"), ("CONTRACT_OBJECT", None)}
+
+
+def test_unresolved_participants_never_enter_thread_identity():
+    """미해소 참여자는 role_values 에서 빠진다(ALPHA-563) — thread_key 는 접지된 값만 쓴다.
+
+    WHY: entity_id 를 그대로 문자열화하면 미해소가 "None" 이라는 **값**으로 identity 에
+    섞인다. 그러면 서로 다른 두 사건(각자 다른 미해소 고객사)이 같은 thread_key 로 접혀
+    한 계보가 되고, 나중에 마스터가 채워져 해소되는 순간 key 가 바뀌어 계보가 갈린다.
+    미해소는 값이 아니라 **부재**라 identity 미충족(UNKNOWN 링크)으로 강등해야 한다.
+    """
+    conn = _FakeConn()
+    conn.unthreaded_events = [
+        ("evt_x", _CONTRACT, "2026-07-15T09:00:00+09:00", None, _CONTRACT_PRED,
+         "SUPPLIER", "inst_SUP"),
+        ("evt_x", _CONTRACT, "2026-07-15T09:00:00+09:00", None, _CONTRACT_PRED,
+         "CUSTOMER", None),          # 미해소 — identity 재료가 아니다
+    ]
+    [event] = assemble_events.fetch_unthreaded_events(conn, "2026-07-15")
+    assert event["role_values"] == {"SUPPLIER": "inst_SUP"}
+    assert "None" not in json.dumps(event["role_values"])
+
+
+def test_same_role_unresolved_participants_keep_separate_rows(tmp_path, monkeypatch):
+    """같은 역할의 미해소 참여자 둘은 각각 행으로 남는다(ALPHA-563).
+
+    WHY: 접기 키가 (role, entity_id) 이면 둘 다 None 이라 하나로 접힌다 — 고객사 2곳이
+    등장하는 계약 기사에서 상대방 구성이 조용히 반쪽이 된다. 표면형이 다르면 다른
+    참여자다(스키마도 UNIQUE 안의 NULL 을 서로 구분한다).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자, A사·B사와 공급계약")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item("a1", predicate=_CONTRACT_PRED, arguments=[
+            {"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+             "ticker": "005930", "group": 0},
+            {"role": "CUSTOMER", "slot": "object", "mention": "A사", "ticker": "", "group": 0},
+            {"role": "CUSTOMER", "slot": "object", "mention": "B사", "ticker": "", "group": 1},
+        ])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    rows = _batch(conn, "event_argument")
+    assert {r[5] for r in rows if r[1] == "CUSTOMER"} == {"A사", "B사"}
+    # 같은 표면형의 재주장은 접힌다 — 참여자가 둘로 늘어나면 안 된다.
+    assert len(rows) == 3
 
 
 def test_unparseable_required_measure_keeps_completeness_partial(tmp_path, monkeypatch):

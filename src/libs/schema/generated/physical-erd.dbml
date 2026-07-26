@@ -192,16 +192,13 @@ Table "etf_profile" {
 Table "event_argument" {
   "source_event_id" text [not null]
   "role_code" varchar(80) [not null]
-  "entity_id" text [not null]
+  "entity_id" text
   "confidence" float8
   "slot" varchar(10)
   "mention_text" text
   "entity_kind" varchar(30)
   "group_ord" smallint
-
-  indexes {
-    ("source_event_id", "role_code", "entity_id") [pk]
-  }
+  "event_argument_id" bigint [pk, increment]
 }
 
 Table "event_evidence" {
