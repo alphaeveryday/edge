@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from data_pipeline.config import DbConfig
 from data_pipeline.ops import states
 from data_pipeline.ops.ledger import Ledger
-from data_pipeline.ops.reconciler import detect_planner_missing, reconcile_run
+from data_pipeline.ops.reconciler import (
+    detect_planner_missing, execution_evidence, reconcile_run,
+)
 
 from opsfakes import FakeEcs, FakeOpsDB, FakeSfn
 
@@ -149,6 +153,51 @@ def test_leaked_success_does_not_turn_a_real_failure_green():
         "LoadDocuments", own_arn="arn:own", own_exit=1,
         leaked_arn="arn:other-ok", leaked_exit=0))
 
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
+
+
+@pytest.mark.parametrize("etype, detail_key", [
+    ("TaskSubmitted", "taskSubmittedEventDetails"),
+    ("TaskSucceeded", "taskSucceededEventDetails"),
+    ("TaskFailed", "taskFailedEventDetails"),
+    ("TaskTimedOut", "taskTimedOutEventDetails"),
+    ("TaskStartFailed", "taskStartFailedEventDetails"),
+])
+def test_every_whitelisted_event_type_still_yields_execution_evidence(etype, detail_key):
+    # WHY: 화이트리스트는 **양날**이다. 넓으면 남의 ARN 이 새고(ALPHA-566 의 원 결함), 좁으면
+    #      그 스텝이 ARN 을 못 얻어 attempt 를 못 찾는다 → 거짓 LEDGER_GAP·EVIDENCE_LOST 라는
+    #      반대 방향 오탐이 난다. 실패 계열(TaskFailed·TaskTimedOut·TaskStartFailed)은 ARN·
+    #      ExitCode 가 `cause`(JSON 문자열)에만 실리는 형상이라 특히 빠뜨리기 쉽다. 목록에서
+    #      한 줄만 지워도 깨지도록 5종을 전부 건다 — 안 그러면 3종은 지워도 아무도 모른다.
+    cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 7}]})
+    events = [
+        {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
+         "stateEnteredEventDetails": {"name": "LoadDocuments"}},
+        {"id": 2, "previousEventId": 1, "type": etype, detail_key: {"cause": cause}},
+    ]
+    occ = execution_evidence(events)["LoadDocuments"][0]
+
+    assert occ["ecs_task_arn"] == "arn:own"
+    assert occ["exit_code"] == 7
+
+
+def test_task_failed_with_arn_is_terminal_failure_not_failed_to_start():
+    # WHY: `TaskFailed` 분기는 ARN 유무로 갈린다 — 있으면 "떴다가 실패"(sfn_terminal_failed),
+    #      없으면 "뜨지도 못함"(failed_to_start)이고 후자는 FAILED_TO_START 로 기록된다.
+    #      TaskFailed 가 화이트리스트에서 빠지면 ARN 을 못 읽어 **실제로 실행된 작업이 시작조차
+    #      못 한 것으로 오분류**된다 — 복구 절차가 달라지는 실질 차이다.
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 1}]})
+    summary = _reconcile(db, status="FAILED", history=[
+        {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
+         "stateEnteredEventDetails": {"name": "LoadDocuments"}},
+        {"id": 2, "previousEventId": 1, "type": "TaskFailed",
+         "taskFailedEventDetails": {"error": "States.TaskFailed", "cause": cause}},
+    ])
+
+    assert summary["failed_to_start"] == []
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
 
 
