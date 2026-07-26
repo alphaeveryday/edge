@@ -6,6 +6,8 @@ settings:
 
 importers:
 
+  .: {}
+
   apps/cloud/super-admin-ui:
     dependencies:
       '@tanstack/react-query':

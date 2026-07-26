@@ -1,0 +1,94 @@
+# dependabot (ALPHA-403) — 3런타임(Gradle·pnpm·uv) + GitHub Actions 의존성 알림.
+#
+# 목적은 취약점 노출 인지다(금융권 납품 SCA 요구의 선행). 노이즈 관리:
+# 주 1회 월요일, 생태계별 PR 상한 소수, minor/patch 는 그룹 PR 로 묶는다.
+# 버전 업데이트 PR 은 브랜치 사다리(feature→dev→main)에 맞춰 전 항목
+# target-branch: dev 로 명시한다. 이 파일은 기본 브랜치(dev)에 병합된 뒤부터
+# 읽힌다 — 보안 경보(Dependabot alerts)의 PR 도 기본 브랜치 대상이다.
+# commit-message prefix 는 pr-title-check(Conventional Commits) 를 통과하는
+# 형식(build(deps): …)으로 맞춘다. 보안 경보(Dependabot alerts)는 이 파일이
+# 아니라 저장소 설정에서 켠다 — 이 파일은 버전 업데이트 PR 정책이다.
+#
+# npm: pnpm 워크스페이스 루트(/src)를 지정한다 — 공유 락파일(pnpm-lock.yaml)과
+# 각 패키지 매니페스트가 한 PR 에서 함께 갱신돼야 frozen-lockfile CI 가 깨지지
+# 않는다(패키지 디렉토리 개별 지정은 락파일 미갱신 PR 을 만든다). dependabot 의
+# 매니페스트 요구를 위해 최소 루트 package.json(private)을 함께 도입했다.
+
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/src"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      gradle-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/src"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "uv"
+    directory: "/src"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      uv-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "ci(deps)"
+
+  # 베이스 이미지(temurin·node·python·flyway 등) — Dockerfile 이 12곳에 흩어져
+  # 있어 캐치올 글롭으로 잡는다(매니페스트 없는 디렉토리는 무시된다).
+  - package-ecosystem: "docker"
+    directories:
+      - "/**/*"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "build(deps)"
+
+  # terraform 루트 4곳 — provider 버전 제약·.terraform.lock.hcl 갱신.
+  - package-ecosystem: "terraform"
+    directories:
+      - "/infra/terraform/bootstrap"
+      - "/infra/terraform/foundation"
+      - "/infra/terraform/envs/dev"
+      - "/infra/terraform/envs/demo-onprem"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "build(deps)"
