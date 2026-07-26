@@ -700,6 +700,15 @@ DISABLED). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마
 
 ### 복구 절차
 
+**증거의 출처 규칙(ALPHA-566).** occurrence 의 `ecs_task_arn`·`exit_code` 는 **그 태스크의 ECS
+생애주기 이벤트**(`TaskSubmitted`·`TaskSucceeded`·`TaskFailed`·`TaskTimedOut`·`TaskStartFailed`)
+에서만 읽는다. `TaskStateExited`·Choice·Pass·Parallel 의 details 는 실행 증거가 아니라 **상태
+데이터 흐름**이라, 그 `output` 에 앞 페이즈의 누적 JSON(다른 스텝의 `TaskArn`·`ExitCode`)이 그대로
+실려 온다. 이걸 안 가르면 남의 실행 결과를 주워 와 마지막 값으로 덮는다 — dev 실측에서 실패한
+투자자 태스크 1개가 성공한 17개 작업을 전부 FAILED + `LEDGER_GAP` 으로 만들었다. **양방향**이라
+순서가 반대면 성공 ARN 이 실패를 덮어 거짓 초록이 된다. 화이트리스트는 넓혀도(남의 ARN 유입)
+좁혀도(ARN 결측 → 거짓 `LEDGER_GAP`) 틀리므로, 5종 전부가 테스트로 걸려 있다.
+
 - **MISSED**(미실행): Reconciler 가 증거(SFN history·ECS)로 판정. "attempt 행 없음"만으로 단정하지
   않는다 — 원장 누락은 `LEDGER_GAP` 으로 backfill, ECS 생성 확인 불가는 `EVIDENCE_LOST`.
   **실행이 RUNNING 인 동안은 작업별 deadline 만으로 MISSED 를 찍지 않는다**(ALPHA-181) — deadline
