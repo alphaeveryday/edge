@@ -54,6 +54,25 @@ class PlanResult:
     conflict: bool = False
 
 
+def slot_run_key(slot_kst: datetime) -> str:
+    """슬롯 멱등키 — `<pipeline_type>:<YYYY-MM-DDTHH:MM>`(KST). **키 형식의 유일한 출처.**
+
+    분 단위인 이유는 두 가지다.
+
+    * 하루 1런 전제를 깬다. 날짜로 키를 만들면 DB `UNIQUE (run_key)` 가 "슬롯 = 하루"를 못박아
+      하루 여러 번 도는 레인(뉴스 15:00·15:30·23:50, iNAV 15분)과 **수동 실행이 원장에 들어올
+      자리가 없다**. run_key 의 계약은 원래 "이 슬롯은 한 번만 계획된다"지 "하루 한 번"이 아니다.
+    * 멱등을 유지한다. 같은 슬롯 재호출(Planner 재기동)은 여전히 같은 키 → run 1개다.
+
+    ⚠️ **`entry._due_slot` 이 이 함수를 써야 한다.** 두 곳에서 각자 조립하면 형식이 어긋나는
+    순간 Reconciler 가 존재하지 않는 슬롯을 찾아 PLANNER_MISSING 오탐을 낸다.
+
+    수동 실행은 `OPS_SCHEDULED_TIME` 없이 돌아 실행 분이 곧 슬롯이 된다 — `_due_slot` 은 설정된
+    HH:MM 만 만들므로 수동 슬롯과 겹치지 않고, 따라서 결측 판정 대상이 되지 않는다.
+    """
+    return f"{catalog.PIPELINE_TYPE}:{slot_kst.strftime('%Y-%m-%dT%H:%M')}"
+
+
 def _canonical_input(mode: str, run_id: str) -> str:
     """SFN 입력의 **결정적** 직렬화 — 같은 슬롯 재계획이 같은 문자열·해시를 내게(스펙 §5)."""
     return json.dumps({"mode": mode, "run_id": run_id}, sort_keys=True, separators=(",", ":"))
@@ -82,9 +101,10 @@ def plan_run(
     """한 슬롯을 계획하고 SFN 을 시작한다. 멱등 — 같은 scheduled_time 재호출은 run 1개만."""
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
 
-    day = scheduled_time.astimezone(KST).date()
+    slot = scheduled_time.astimezone(KST)
+    day = slot.date()
     trading = is_trading_day(day, holidays)
-    run_key = f"{catalog.PIPELINE_TYPE}:{day.isoformat()}"
+    run_key = slot_run_key(slot)
     pipeline_run_id = stable_domain_id("run", run_key)
     execution_name = run_key.replace(":", "-")
     input_json = _canonical_input(mode, pipeline_run_id)

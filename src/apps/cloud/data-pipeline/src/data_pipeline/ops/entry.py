@@ -189,6 +189,11 @@ def _due_slot(now_kst: datetime) -> tuple[str, bool] | None:
 
     월요일 오전(오늘 미예정)엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다 — 아직 예정 전인
     오늘 슬롯을 결측으로 보지 않게(edge-review). grace 경과 여부는 PLANNER_MISSING 판정에 쓴다.
+
+    키는 `planner.slot_run_key` 로 만든다 — Planner 가 쓰는 바로 그 함수다(ALPHA-564). 여기서
+    형식을 따로 조립하면 어긋나는 순간 있지도 않은 슬롯을 찾아 PLANNER_MISSING 오탐이 난다.
+    ⚠️ 스케줄이 하나(`OPS_DAILY_SCHED_HHMM`)라는 전제는 그대로다 — 하루 여러 스케줄의 결측
+    판정은 이 함수가 슬롯 목록을 돌려주도록 바뀌어야 한다(뉴스 레인이 Planner 를 탈 때, 별건).
     """
     hour, minute = _sched_hhmm()
     for back in range(7):
@@ -197,7 +202,7 @@ def _due_slot(now_kst: datetime) -> tuple[str, bool] | None:
             continue
         sched = datetime.combine(cand, time(hour, minute), tzinfo=planner.KST)
         if now_kst >= sched:
-            return f"{catalog.PIPELINE_TYPE}:{cand.isoformat()}", now_kst >= sched + _PLANNER_GRACE
+            return planner.slot_run_key(sched), now_kst >= sched + _PLANNER_GRACE
     return None
 
 
@@ -218,6 +223,11 @@ def reconcile_cli(settings) -> int:
         if run_key is None:
             logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
             return 0
+        # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slot` 이 만드는 스케줄 슬롯 하나만**
+        # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slot` 이
+        # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
+        # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
+        # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
         # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다. override 는 특정 런을 reconcile 하려는
         # 수동 지정이라(미래 슬롯일 수 있다) 결측 판정 대상이 아니다(edge-review).
         if not override and due and due[1]:

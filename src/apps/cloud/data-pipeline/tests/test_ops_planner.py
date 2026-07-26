@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 
 from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
+from data_pipeline.ops import entry
+from data_pipeline.ops import planner as planner_mod
 from data_pipeline.ops import states
 from data_pipeline.ops import catalog
 from data_pipeline.ops.catalog import PIPELINE_TYPE
@@ -39,6 +41,109 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(등록 작업 수만큼만).
     assert len(db.etasks) == len(catalog.entries()) == 25
+
+
+def test_same_day_different_slots_are_separate_runs():
+    # WHY: run_key 의 계약은 "이 **슬롯**은 한 번만 계획된다"지 "하루 한 번"이 아니다(ALPHA-564).
+    #      날짜로 키를 만들면 DB UNIQUE(run_key) 가 하루 1런을 못박아, 하루 여러 번 도는
+    #      레인(뉴스 15:00·15:30·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
+    #      수동 실행은 원장에 자리가 없다 — 실제로 2026-07-26 에 관측이 막혔다.
+    db = FakeOpsDB()
+    ledger = _ledger(db)
+    early = plan_run(ledger, state_machine_arn=_ARN,
+                     scheduled_time=datetime(2026, 7, 24, 6, 0, tzinfo=timezone.utc),  # KST 15:00
+                     sfn_client=FakeSfn())
+    late = plan_run(ledger, state_machine_arn=_ARN, scheduled_time=_SCHED,             # KST 15:40
+                    sfn_client=FakeSfn())
+
+    assert early.created is True and late.created is True
+    assert early.run_key == f"{PIPELINE_TYPE}:2026-07-24T15:00"
+    assert late.run_key == f"{PIPELINE_TYPE}:2026-07-24T15:40"
+    assert early.pipeline_run_id != late.pipeline_run_id
+    assert early.execution_name != late.execution_name  # SFN 이름도 갈려야 실행이 안 뭉친다
+    assert len(db.runs) == 2
+    assert len(db.etasks) == 2 * len(catalog.entries())  # 슬롯마다 자기 기대작업을 갖는다
+
+
+def test_same_slot_recall_is_still_idempotent_within_the_minute():
+    # WHY: 슬롯을 분 단위로 쪼개면서 "Planner 재기동 무해"라는 원 성질을 잃으면 안 된다.
+    #      같은 분 안의 재호출(재기동·중복 트리거)은 여전히 run 1개여야 한다.
+    db = FakeOpsDB()
+    ledger = _ledger(db)
+    r1 = plan_run(ledger, state_machine_arn=_ARN,
+                  scheduled_time=datetime(2026, 7, 24, 6, 40, 3, tzinfo=timezone.utc),
+                  sfn_client=FakeSfn())
+    r2 = plan_run(ledger, state_machine_arn=_ARN,
+                  scheduled_time=datetime(2026, 7, 24, 6, 40, 57, tzinfo=timezone.utc),
+                  sfn_client=FakeSfn())
+    assert r1.run_key == r2.run_key
+    assert r1.created is True and r2.created is False
+    assert len(db.runs) == 1
+
+
+def test_due_slot_key_matches_what_planner_planned():
+    # WHY: 키 형식이 Planner 와 Reconciler 두 곳에서 각자 조립되면, 어긋나는 순간 Reconciler 가
+    #      **있지도 않은 슬롯**을 찾아 PLANNER_MISSING 오탐을 낸다(원장이 거짓 경보를 내는 축).
+    #      _due_slot 은 여태 테스트가 없었다 — 형식을 바꾸는 이 변경에서 그 합치를 못박는다.
+    db = FakeOpsDB()
+    planned = plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED,
+                       sfn_client=FakeSfn())
+    # 그 슬롯이 지난 시각에 Reconciler 가 찾는 키.
+    due = entry._due_slot(datetime(2026, 7, 24, 16, 30, tzinfo=planner_mod.KST))
+
+    assert due is not None
+    assert due[0] == planned.run_key
+
+
+def test_manual_run_gets_its_own_slot_outside_the_schedule_minute():
+    # WHY: 수동 실행은 OPS_SCHEDULED_TIME 없이 돌아 실행 분이 슬롯이 된다. 스케줄 분과 다르면
+    #      자기 슬롯을 가지므로 (1) 스케줄 런의 자리를 뺏지 않고 (2) _due_slot 이 그 키를 만들지
+    #      않아 결측 판정 대상도 아니다 — 거짓 PLANNER_MISSING 이 안 난다.
+    db = FakeOpsDB()
+    manual = plan_run(_ledger(db), state_machine_arn=_ARN,
+                      scheduled_time=datetime(2026, 7, 24, 2, 51, tzinfo=timezone.utc),  # KST 11:51
+                      sfn_client=FakeSfn())
+    due = entry._due_slot(datetime(2026, 7, 24, 16, 30, tzinfo=planner_mod.KST))
+
+    assert manual.run_key == f"{PIPELINE_TYPE}:2026-07-24T11:51"
+    assert due is not None and due[0] != manual.run_key
+
+
+def test_manual_run_slot_comes_from_the_wall_clock_not_a_default(monkeypatch):
+    # WHY: "수동 실행은 실행 분이 슬롯이 된다"가 위 두 테스트가 기대는 계약인데, 정작 그 값을
+    #      만드는 건 `entry._scheduled_time()` 의 **env 부재 경로**다(EventBridge 만 넣는 값이라
+    #      수동 실행엔 없다). 그 경로가 고정 기본값이나 UTC naive 를 돌려주면 수동 실행이 엉뚱한
+    #      슬롯을 잡는데, plan_run 에 시각을 직접 넘기는 테스트로는 절대 안 드러난다.
+    monkeypatch.delenv("OPS_SCHEDULED_TIME", raising=False)
+    before = datetime.now(timezone.utc)
+    got = entry._scheduled_time()
+
+    assert got.tzinfo is not None                      # naive 면 KST 환산이 9시간 어긋난다
+    assert before <= got <= datetime.now(timezone.utc)  # 고정 기본값이 아니라 실제 지금
+
+    # env 가 있으면(스케줄 실행) 그 값이 이기고, 그것이 슬롯 키가 된다.
+    monkeypatch.setenv("OPS_SCHEDULED_TIME", "2026-07-24T06:40:00Z")
+    assert planner_mod.slot_run_key(
+        entry._scheduled_time().astimezone(planner_mod.KST)
+    ) == f"{PIPELINE_TYPE}:2026-07-24T15:40"
+
+
+def test_manual_run_on_the_schedule_minute_is_absorbed_not_duplicated():
+    # WHY: 위 성질의 **경계**다. 수동 실행이 하필 스케줄 분(15:40)에 걸리면 같은 슬롯이라
+    #      흡수된다 — 이건 결함이 아니라 슬롯 멱등의 정의다. 대신 흡수를 **조용히** 하면 안 된다:
+    #      운영자는 "돌렸다"고 믿는데 새로 도는 건 없기 때문이다(2026-07-26 에 중단된 실행을
+    #      가리키며 LAUNCHED 로 보고돼 실제로 겪은 함정). created=False 가 그 사실을 드러내고
+    #      CLI 로그가 그것을 찍는다 — 그 계약을 여기서 잠근다(Rule 12).
+    db = FakeOpsDB()
+    ledger = _ledger(db)
+    scheduled = plan_run(ledger, state_machine_arn=_ARN, scheduled_time=_SCHED,
+                         sfn_client=FakeSfn())
+    manual = plan_run(ledger, state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn())
+
+    assert manual.run_key == scheduled.run_key
+    assert scheduled.created is True
+    assert manual.created is False       # 흡수됐다는 사실이 반환값에 드러난다
+    assert len(db.runs) == 1
 
 
 def test_non_trading_day_skips_price_tasks_no_attempt():
@@ -90,23 +195,23 @@ def test_deterministic_execution_name_and_input():
                  sfn_client=(s1 := FakeSfn()))
     b = plan_run(_ledger(FakeOpsDB()), state_machine_arn=_ARN, scheduled_time=_SCHED,
                  sfn_client=(s2 := FakeSfn()))
-    assert a.execution_name == b.execution_name == "etf-daily-2026-07-24"
+    assert a.execution_name == b.execution_name == "etf-daily-2026-07-24T15-40"
     assert a.input_hash == b.input_hash
     assert s1.start_calls[0]["input"] == s2.start_calls[0]["input"]
     # run_id 는 run_key 에서 결정적으로 파생 → execution_name 멱등의 근거.
-    assert a.pipeline_run_id == stable_domain_id("run", f"{PIPELINE_TYPE}:2026-07-24")
+    assert a.pipeline_run_id == stable_domain_id("run", f"{PIPELINE_TYPE}:2026-07-24T15:40")
 
 
 def test_idempotent_recall_same_running_execution():
     """시나리오 4 — 같은 RUNNING execution 에 대한 멱등 재호출 → LAUNCHED."""
     db = FakeOpsDB()
-    run_key = f"{PIPELINE_TYPE}:2026-07-24"
+    run_key = f"{PIPELINE_TYPE}:2026-07-24T15:40"
     rid = stable_domain_id("run", run_key)
     same_input = json.dumps({"mode": "incremental", "run_id": rid},
                             sort_keys=True, separators=(",", ":"))
     sfn = FakeSfn(already_exists=True,
                   describe={"input": same_input, "status": "RUNNING",
-                            "executionArn": "arn:...:execution:sm:etf-daily-2026-07-24"})
+                            "executionArn": "arn:...:execution:sm:etf-daily-2026-07-24T15-40"})
     result = plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=sfn)
     assert result.launch_status == states.LAUNCH_LAUNCHED
     assert result.conflict is False

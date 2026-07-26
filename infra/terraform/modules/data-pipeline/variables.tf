@@ -135,6 +135,17 @@ variable "schedule_expression" {
 variable "schedule_timezone" {
   type    = string
   default = "Asia/Seoul"
+
+  # 원장 슬롯 키(ALPHA-564)가 cron 의 HH:MM 을 **KST 로 읽는다**(`ops_ledger.tf` locals). 파이프라인
+  # 전체가 KR 시장 기준이라 `planner.KST` 도 +9 고정이다. 이 타임존을 바꾸면 Planner 는 실제 예약
+  # 시각을 KST 로 환산해 다른 슬롯 키를 남기는데 Reconciler 는 cron 숫자 그대로를 찾아, **실제
+  # 런이 영영 대조되지 않고 조용히 통과한다**(원장이 관대해지는 방향). 소리 없이 어긋나느니
+  # plan 단계에서 멈춘다(Rule 12). KST 아닌 스케줄이 정말 필요해지면 슬롯 키에 타임존을 담는
+  # 설계 변경이 선행이다.
+  validation {
+    condition     = var.schedule_timezone == "Asia/Seoul"
+    error_message = "슬롯 키가 cron HH:MM 을 KST 로 해석한다 — Asia/Seoul 외 타임존은 지원하지 않는다(ALPHA-564)."
+  }
 }
 
 variable "schedule_state" {
@@ -198,14 +209,6 @@ variable "kr_holidays" {
     condition     = alltrue([for d in var.kr_holidays : can(formatdate("YYYY-MM-DD", "${d}T00:00:00Z"))])
     error_message = "kr_holidays 항목은 달력상 실재하는 YYYY-MM-DD 여야 한다(오타는 조용히 무시돼 그 날이 거래일로 처리된다)."
   }
-}
-
-# Reconciler 의 PLANNER_MISSING 판정 기준 시각. schedule_expression(cron 40 15)의 HH:MM 과
-# 일치시켜야 한다 — 코드 하드코딩 대신 이 한 변수로 모아 드리프트를 막는다(edge-review).
-variable "daily_schedule_hhmm" {
-  description = "daily 스케줄 KST 시각 HH:MM. schedule_expression 과 일치해야 한다."
-  type        = string
-  default     = "15:40"
 }
 
 variable "alarm_email" {
