@@ -80,6 +80,21 @@ def _find_key(obj, key: str):
     return None
 
 
+# ARN·exit code 를 **믿을 수 있는** 이벤트 — 그 태스크의 ECS 생애주기를 서술하는 것만이다.
+# `*StateExited`·Choice·Pass·Parallel 의 details 는 실행 증거가 아니라 **상태 데이터 흐름**이고,
+# 그 `output` 에는 앞 페이즈의 누적 JSON 이 그대로 실려 온다. `_find_key` 가 그 JSON 을 파고들기
+# 때문에, 이 목록으로 좁히지 않으면 **다른 스텝의 TaskArn·ExitCode 를 주워 와 마지막 값으로
+# 덮어쓴다**(ALPHA-566: 실패한 investor 태스크 1개가 성공한 17개 작업에 번져 전부 FAILED).
+# 양방향 결함이다 — 순서가 반대면 성공 ARN·exit 0 이 실패 작업을 덮어 거짓 초록이 된다.
+_ECS_EVIDENCE_EVENTS = frozenset({
+    "TaskSubmitted",    # runTask 응답 — 이 occurrence 의 TaskArn 이 처음 확정되는 곳
+    "TaskSucceeded",    # sync 통합의 종료 output(TaskArn + Containers[].ExitCode)
+    "TaskFailed",       # 실패 cause 에 같은 정보가 실린다
+    "TaskTimedOut",
+    "TaskStartFailed",
+})
+
+
 def _find_task_arn(details) -> str | None:
     arn = _find_key(details, "TaskArn")
     return arn if isinstance(arn, str) else None
@@ -161,13 +176,15 @@ def execution_evidence(events: list[dict]) -> dict[str, list[dict]]:
         if occ is None:
             continue
         details = next((v for k, v in ev.items() if k.endswith("EventDetails")), None) or {}
-        arn = _find_task_arn(details)
-        if arn:
-            occ["ecs_task_arn"] = arn
-        exit_code = _find_exit_code(details)
-        if exit_code is not None:
-            occ["exit_code"] = exit_code
         etype = ev.get("type", "")
+        # ECS 생애주기 이벤트에서만 실행 증거를 읽는다(_ECS_EVIDENCE_EVENTS 주석 참조).
+        if etype in _ECS_EVIDENCE_EVENTS:
+            arn = _find_task_arn(details)
+            if arn:
+                occ["ecs_task_arn"] = arn
+            exit_code = _find_exit_code(details)
+            if exit_code is not None:
+                occ["exit_code"] = exit_code
         if etype == "TaskSubmitFailed":
             occ["failed_to_start"] = True
         if etype == "TaskFailed":

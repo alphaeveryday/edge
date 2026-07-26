@@ -88,6 +88,70 @@ def _reconcile(db, *, history=None, ecs=None, status="RUNNING", stalled_after_se
         ecs_client=ecs or FakeEcs(), stalled_after_seconds=stalled_after_seconds)
 
 
+def _entered_then_downstream(state, *, own_arn, own_exit, leaked_arn, leaked_exit):
+    """자기 태스크가 끝난 뒤 **상태 output 이 앞 스텝 결과를 실어 나르는** 실 history 형상.
+
+    `TaskStateExited`·Choice·Pass·Parallel 의 details 에는 그 시점 상태 JSON 이 통째로 들어가고,
+    거기엔 앞 페이즈가 남긴 TaskArn·ExitCode 가 그대로 있다(2026-07-26 dev history 678 이벤트로
+    확인). 기존 픽스처는 이 이벤트들을 아예 안 만들어 이 경로를 못 밟았다 — 그래서 결함이
+    초록으로 통과했다.
+    """
+    stale = json.dumps({"raw": {"TaskArn": leaked_arn, "Containers": [{"ExitCode": leaked_exit}]}})
+    return [
+        {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
+         "stateEnteredEventDetails": {"name": state}},
+        {"id": 2, "previousEventId": 1, "type": "TaskSubmitted",
+         "taskSubmittedEventDetails": {"output": json.dumps({"TaskArn": own_arn})}},
+        {"id": 3, "previousEventId": 2, "type": "TaskSucceeded",
+         "taskSucceededEventDetails": {"output": json.dumps(
+             {"TaskArn": own_arn, "Containers": [{"ExitCode": own_exit}]})}},
+        # ↓ 여기부터가 오염원. 전부 이 occurrence 에 귀속되지만 실행 증거가 아니다.
+        {"id": 4, "previousEventId": 3, "type": "TaskStateExited",
+         "stateExitedEventDetails": {"name": state, "output": stale}},
+        {"id": 5, "previousEventId": 4, "type": "ChoiceStateEntered",
+         "stateEnteredEventDetails": {"name": f"{state}CheckExitCode", "input": stale}},
+        {"id": 6, "previousEventId": 5, "type": "ParallelStateExited",
+         "stateExitedEventDetails": {"name": "RawPhase", "output": stale}},
+    ]
+
+
+def test_downstream_state_output_does_not_overwrite_the_tasks_own_arn():
+    # WHY: 2026-07-26 dev 실측 — 실패한 investor 태스크 1개의 ARN·exit 1 이 상태 output 을 타고
+    #      뒤 스텝 17개에 번져, **SFN 에서 성공한 작업이 전부 FAILED + LEDGER_GAP** 이 됐다
+    #      (ALPHA-566). ARN 이 어긋나면 wrapper 가 남긴 진짜 attempt 를 못 찾아 "원장에 기록이
+    #      없다"로 오판하고 남의 실패를 backfill 한다. 자기 ECS 생애주기 이벤트만 믿어야 한다.
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
+                        "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+                        "started_at": _OLD})
+    summary = _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
+        "LoadDocuments", own_arn="arn:own", own_exit=0,
+        leaked_arn="arn:other-failed", leaked_exit=1))
+
+    assert summary["ledger_gap"] == []                       # 남의 ARN 으로 gap 을 열지 않는다
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert len(db.attempts) == 1                              # 가짜 attempt 를 만들지 않는다
+
+
+def test_leaked_success_does_not_turn_a_real_failure_green():
+    # WHY: 같은 결함의 **반대 방향**이다. 실패한 작업 뒤에 성공한 스텝의 ARN·exit 0 이 output 을
+    #      타고 흘러오면 실패가 FULFILLED 로 뒤집힌다 — 거짓 초록은 테스트가 초록이라 스스로
+    #      못 잡으므로(이 프로젝트 계측 결함의 일관된 실패 방향) 양방향을 함께 잠근다.
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+                "eligible_at": _OLD, "deadline_at": _PAST}])
+    db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
+                        "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
+                        "started_at": _OLD})
+    _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
+        "LoadDocuments", own_arn="arn:own", own_exit=1,
+        leaked_arn="arn:other-ok", leaked_exit=0))
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
+
+
 def test_missed_when_state_not_entered_eligible_and_past_deadline():
     """시나리오 10 — 미진입 + eligible + deadline 초과 → MISSED (실행이 끝난 뒤)."""
     db = FakeOpsDB()
