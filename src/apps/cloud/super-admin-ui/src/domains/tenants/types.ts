@@ -1,6 +1,7 @@
 /* tenants 도메인 — 테넌트(증권사) 관리. mock·real 공유 타입. */
 
-export type TenantEnv = 'Prod' | 'Dev';
+/** IA 어휘(PoC/Production) — 'Dev' 는 어휘 정렬(수축 마이그레이션) 전 레거시 행 표기. */
+export type TenantEnv = 'PoC' | 'Production' | 'Dev';
 
 export type TenantStatus =
   | 'ACTIVE' // 정상
@@ -15,6 +16,8 @@ export interface Tenant {
   status: TenantStatus;
   admin: string;
   email: string;
+  /** 운영 메모(온보딩 기록) — 확장 전 행은 빈 문자열. */
+  memo: string;
   created: string;
   lastSync: string;
   lastSyncAbs: string;

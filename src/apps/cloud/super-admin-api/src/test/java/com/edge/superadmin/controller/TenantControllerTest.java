@@ -18,10 +18,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * UI 계약(super-admin-ui tenants 도메인)을 검증한다: 목록은 최신순(id desc)으로 와이어
- * 형상(env 표기 Prod/Dev, tenant 테이블 미보유 필드는 플레이스홀더)을 내고, 생성은 검증 후
- * ONBOARDING 으로 저장돼 목록 맨 앞에 나타난다(콘솔 IA — 연결 상태는 Sync 채널 기준)가 핵심.
- * standalone 셋업은 in-memory 페이크 리포지토리를 쓴다(실 스키마 왕복은 TenantRepositoryTest).
+ * UI 계약(super-admin-ui tenants 도메인)을 검증한다(ALPHA-121): 목록은 최신순(id desc)
+ * 와이어 형상(env 표기 = IA 어휘 PoC/Production, 레거시 DEV 는 수축 전 Dev 로), 생성은
+ * 검증 후 ONBOARDING("미연결" — 연결 상태는 Sync 채널 기준)으로 저장돼 목록 맨 앞에
+ * 나타나며, 생성 폼 필드(초기 admin·메모)가 보존돼 응답에 실린다.
+ * standalone 셋업은 in-memory 페이크 리포지토리를 쓴다(실 스키마 왕복은 IT).
  */
 class TenantControllerTest {
 
@@ -30,9 +31,12 @@ class TenantControllerTest {
 	@BeforeEach
 	void setUp() {
 		FakeTenantRepository repository = new FakeTenantRepository(
-				new Tenant(1L, "미래에셋증권", "PROD", "ACTIVE", OffsetDateTime.now()),
-				new Tenant(2L, "한국투자증권", "PROD", "SYNC_DELAYED", OffsetDateTime.now()),
-				new Tenant(3L, "키움증권", "PROD", "ACTIVE", OffsetDateTime.now()));
+				new Tenant(1L, "미래에셋증권", "PROD", "ACTIVE", "김미래", "kim@mirae.com",
+						null, OffsetDateTime.now()),
+				new Tenant(2L, "한국투자증권", "DEV", "SYNC_DELAYED", null, null,
+						null, OffsetDateTime.now()),
+				new Tenant(3L, "키움증권", "PROD", "ACTIVE", "박키움", "park@kiwoom.com",
+						"PoC 협의 중", OffsetDateTime.now()));
 		mvc = MockMvcBuilders
 				.standaloneSetup(new TenantController(new TenantService(repository)))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -49,47 +53,67 @@ class TenantControllerTest {
 				// 최신(id desc)순 — 마지막 시드(id 3)가 맨 앞
 				.andExpect(jsonPath("$.result[0].id").value("3"))
 				.andExpect(jsonPath("$.result[0].name").value("키움증권"))
-				.andExpect(jsonPath("$.result[0].env").value("Prod")) // PROD→Prod 경계 변환
+				.andExpect(jsonPath("$.result[0].env").value("Production")) // PROD→Production(IA 어휘)
 				.andExpect(jsonPath("$.result[0].status").value("ACTIVE"))
-				.andExpect(jsonPath("$.result[1].status").value("SYNC_DELAYED"))
-				// tenant 테이블 미보유 필드는 플레이스홀더(스키마 확장 시 복원)
+				// 보존된 온보딩 기록이 응답에 실린다(플레이스홀더가 아니라 원장 값)
+				.andExpect(jsonPath("$.result[0].admin").value("박키움"))
+				.andExpect(jsonPath("$.result[0].email").value("park@kiwoom.com"))
+				.andExpect(jsonPath("$.result[0].memo").value("PoC 협의 중"))
+				// 레거시 DEV 행(수축 전)은 Dev 로 — 확장 전 데이터가 깨져 보이지 않는다
+				.andExpect(jsonPath("$.result[1].env").value("Dev"))
+				.andExpect(jsonPath("$.result[1].admin").value(""))  // 확장 전 행은 빈 문자열
+				// tenant 테이블 미보유 필드는 플레이스홀더(Sync 관측 편입 시 복원)
 				.andExpect(jsonPath("$.result[0].domain").value(""))
 				.andExpect(jsonPath("$.result[0].calls").value(0))
 				.andExpect(jsonPath("$.result[0].bars.length()").value(24));
 	}
 
 	@Test
-	void 생성은_ONBOARDING_으로_저장돼_최신순_맨_앞에_나온다() throws Exception {
+	void 생성은_ONBOARDING_으로_저장돼_초기_admin_메모와_함께_맨_앞에_나온다() throws Exception {
 		mvc.perform(post("/api/v1/tenants")
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"name\":\"대신증권\",\"env\":\"Dev\",\"admin\":\"홍길동\","
-								+ "\"email\":\"gd.hong@daishin.com\",\"memo\":\"PoC\"}"))
+						.content("{\"name\":\"대신증권\",\"env\":\"PoC\",\"admin\":\"홍길동\","
+								+ "\"email\":\"gd.hong@daishin.com\",\"memo\":\"8월 PoC 착수\"}"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true));
 
 		mvc.perform(get("/api/v1/tenants"))
 				.andExpect(jsonPath("$.result.length()").value(4))
 				.andExpect(jsonPath("$.result[0].name").value("대신증권"))
+				// 연결 상태는 Sync 채널 기준 — 신규 테넌트는 "미연결"(ONBOARDING)로 시작한다(IA).
 				.andExpect(jsonPath("$.result[0].status").value("ONBOARDING"))
-				.andExpect(jsonPath("$.result[0].env").value("Dev")); // Dev→DEV→Dev 왕복
+				.andExpect(jsonPath("$.result[0].env").value("PoC")) // PoC→POC→PoC 왕복
+				// 생성 폼 필드가 보존된다 — ALPHA-121 수용 기준의 핵심.
+				.andExpect(jsonPath("$.result[0].admin").value("홍길동"))
+				.andExpect(jsonPath("$.result[0].email").value("gd.hong@daishin.com"))
+				.andExpect(jsonPath("$.result[0].memo").value("8월 PoC 착수"));
 	}
 
 	@Test
 	void 지원하지_않는_env_는_400이다() throws Exception {
-		mvc.perform(post("/api/v1/tenants")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"name\":\"대신증권\",\"env\":\"Staging\",\"admin\":\"홍길동\","
-								+ "\"email\":\"gd.hong@daishin.com\"}"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("ADMN4001"));
+		// IA 어휘는 PoC/Production 뿐 — 구 표기(Dev)도 새 표면에서는 거부한다.
+		for (String env : new String[] {"Staging", "Dev", "Prod"}) {
+			mvc.perform(post("/api/v1/tenants")
+							.contentType(MediaType.APPLICATION_JSON)
+							.content("{\"name\":\"대신증권\",\"env\":\"" + env + "\",\"admin\":\"홍길동\","
+									+ "\"email\":\"gd.hong@daishin.com\"}"))
+					.andExpect(status().isBadRequest())
+					.andExpect(jsonPath("$.code").value("ADMN4001"));
+		}
 	}
 
 	@Test
-	void 필수_필드_누락은_400이다() throws Exception {
+	void 필수_필드_누락과_형식_밖_이메일은_400이다() throws Exception {
 		mvc.perform(post("/api/v1/tenants")
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"name\":\" \",\"env\":\"Dev\",\"admin\":\"홍길동\","
+						.content("{\"name\":\" \",\"env\":\"PoC\",\"admin\":\"홍길동\","
 								+ "\"email\":\"gd.hong@daishin.com\"}"))
+				.andExpect(status().isBadRequest());
+		// 온보딩 연락 창구가 되는 이메일 — '@' 없는 값이 원장에 남으면 기록의 의미가 없다.
+		mvc.perform(post("/api/v1/tenants")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"대신증권\",\"env\":\"PoC\",\"admin\":\"홍길동\","
+								+ "\"email\":\"not-an-email\"}"))
 				.andExpect(status().isBadRequest());
 		mvc.perform(post("/api/v1/tenants"))
 				.andExpect(status().isBadRequest());

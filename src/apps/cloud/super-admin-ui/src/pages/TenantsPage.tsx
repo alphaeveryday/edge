@@ -18,7 +18,7 @@ export function TenantsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [fName, setFName] = useState('');
-  const [fEnv, setFEnv] = useState<TenantEnv>('Prod');
+  const [fEnv, setFEnv] = useState<TenantEnv>('PoC');
   const [fAdmin, setFAdmin] = useState('');
   const [fEmail, setFEmail] = useState('');
   const [fMemo, setFMemo] = useState('');
@@ -35,7 +35,7 @@ export function TenantsPage() {
   const openCreate = () => {
     setCreateOpen(true);
     setFName('');
-    setFEnv('Prod');
+    setFEnv('PoC');
     setFAdmin('');
     setFEmail('');
     setFMemo('');
@@ -166,12 +166,16 @@ export function TenantsPage() {
           </div>
           <div className="flex flex-col gap-1">
             <span className="t-label">환경 구분</span>
+            {/* IA 어휘(PoC/Production) — 레거시 Dev 는 생성 선택지가 아니다. */}
             <div className="seg self-start">
-              <button className={fEnv === 'Dev' ? 'active' : ''} onClick={() => setFEnv('Dev')}>
-                Dev
+              <button className={fEnv === 'PoC' ? 'active' : ''} onClick={() => setFEnv('PoC')}>
+                PoC
               </button>
-              <button className={fEnv === 'Prod' ? 'active' : ''} onClick={() => setFEnv('Prod')}>
-                Prod
+              <button
+                className={fEnv === 'Production' ? 'active' : ''}
+                onClick={() => setFEnv('Production')}
+              >
+                Production
               </button>
             </div>
           </div>

@@ -60,6 +60,15 @@ export function TenantDetailPage() {
               <span className="t-body">{t.admin}</span>
               <a className="t-xs" href={`mailto:${t.email}`}>{t.email}</a>
             </div>
+            {t.memo && (
+              <>
+                <hr className="hr" />
+                <div className="flex flex-col gap-0.5">
+                  <span className="t-label">메모</span>
+                  <span className="t-body" style={{ whiteSpace: 'pre-wrap' }}>{t.memo}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
