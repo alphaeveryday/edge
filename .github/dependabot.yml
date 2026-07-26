@@ -1,0 +1,61 @@
+# dependabot (ALPHA-403) — 3런타임(Gradle·pnpm·uv) + GitHub Actions 의존성 알림.
+#
+# 목적은 취약점 노출 인지다(금융권 납품 SCA 요구의 선행). 노이즈 관리:
+# 주 1회 월요일, 생태계별 PR 상한 소수, minor/patch 는 그룹 PR 로 묶는다.
+# 기본 브랜치가 dev 라 target-branch 지정 없이 dev 대상 PR 이 생성된다.
+# commit-message prefix 는 pr-title-check(Conventional Commits) 를 통과하는
+# 형식(build(deps): …)으로 맞춘다. 보안 경보(Dependabot alerts)는 이 파일이
+# 아니라 저장소 설정에서 켠다 — 이 파일은 버전 업데이트 PR 정책이다.
+#
+# npm: pnpm 워크스페이스 루트(src/)에 package.json 이 없어(락파일만 존재)
+# 패키지 디렉토리 3곳을 직접 지정한다.
+
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      gradle-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/src/apps/onprem/tenant-console-ui"
+      - "/src/apps/cloud/super-admin-ui"
+      - "/src/libs/ui-kit"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "uv"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      uv-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "ci(deps)"
