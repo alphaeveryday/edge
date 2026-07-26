@@ -58,17 +58,22 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 		// (한계: 비동기 핸들러(Callable 등)는 현 표면에 없다 — 도입 시 이 필터의 async
 		// dispatch 처리를 함께 재설계해야 한다.)
 		ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
+		boolean recorded = false;
 		try {
 			chain.doFilter(request, wrapper);
 			record(request, wrapper.getStatus(), wrapper);
+			recorded = true;
 			// 본문 복사는 성공 경로에서만 — 예외 경로에서 부분 본문을 커밋하면 컨테이너
 			// ERROR 처리기가 정상 500 응답으로 교체할 수 없게 된다.
 			wrapper.copyBodyToResponse();
 		} catch (Exception e) {
 			// advice 밖으로 샌 미처리 예외 — 컨테이너 ERROR dispatch 로 500 이 되지만
 			// OncePerRequestFilter 는 그 dispatch 를 다시 타지 않으므로 여기서 실제
-			// 결말(500)로 기록하고, 응답은 복사 없이 ERROR 처리기에 맡긴다.
-			record(request, 500, null);
+			// 결말(500)로 기록하고, 응답은 복사 없이 ERROR 처리기에 맡긴다. 이미 기록된
+			// 요청(본문 복사 실패 등 기록 이후의 예외)은 이중 적재하지 않는다.
+			if (!recorded) {
+				record(request, 500, null);
+			}
 			throw e;
 		}
 	}

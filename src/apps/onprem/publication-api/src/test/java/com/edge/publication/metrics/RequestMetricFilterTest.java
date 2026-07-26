@@ -9,8 +9,11 @@ import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.ServingRequestMetricRepository;
 import com.edge.publication.service.ExplanationService;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponseWrapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -175,6 +178,29 @@ class RequestMetricFilterTest {
 			assertThat(m.getStatusCode()).isEqualTo((short) 500);
 			assertThat(m.getErrorCode()).isNull();
 		});
+	}
+
+	@Test
+	void 본문_복사_실패는_같은_요청을_이중_기록하지_않는다() throws Exception {
+		// 성공 기록(200) 후 클라이언트 절단 등으로 본문 복사가 실패하면, 예외 경로가 같은
+		// 요청을 500 으로 또 적재해 트래픽 수·에러율이 함께 왜곡된다 — 기록은 요청당 1회다.
+		MockHttpServletRequest request =
+				new MockHttpServletRequest("GET", "/api/v1/explanations/069500");
+		HttpServletResponse broken = new HttpServletResponseWrapper(new MockHttpServletResponse()) {
+			@Override
+			public jakarta.servlet.ServletOutputStream getOutputStream() {
+				throw new IllegalStateException("client disconnected");
+			}
+		};
+		RequestMetricFilter filter = new RequestMetricFilter(metrics);
+
+		assertThatThrownBy(() -> filter.doFilter(request, broken, (req, res) -> {
+			((HttpServletResponse) res).setStatus(200);
+			res.getWriter().write("{\"ok\":true}");
+		}));
+
+		assertThat(metrics.saved).singleElement()
+				.satisfies(m -> assertThat(m.getStatusCode()).isEqualTo((short) 200));
 	}
 
 	@Test
