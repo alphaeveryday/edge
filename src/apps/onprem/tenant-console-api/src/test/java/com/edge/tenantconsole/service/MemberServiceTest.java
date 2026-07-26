@@ -177,6 +177,8 @@ class MemberServiceTest {
 		service.changeRole(42, new ChangeMemberRoleRequest("COMPLIANCE_REVIEWER"), actor, "10.0.0.9");
 		assertThat(members.capturedRoleTargetId).isEqualTo(42L);
 		assertThat(members.capturedRole).isEqualTo("COMPLIANCE_REVIEWER");
+		// 조건부 갱신 — 읽어둔 이전 역할이 UPDATE 조건에 실려야 경쟁 변경 시 감사가 틀리지 않는다.
+		assertThat(members.capturedExpectedRole).isEqualTo("OPERATOR");
 		assertThat(actionLog.entries).singleElement().satisfies(e -> {
 			assertThat(e.action()).isEqualTo("MEMBER_ROLE_CHANGED");
 			assertThat(e.actor()).isEqualTo(actor);              // 세션 주체가 감사 주체
@@ -278,15 +280,26 @@ class MemberServiceTest {
 	}
 
 	@Test
-	void 역할_갱신_영향_행이_0_이면_404_이고_감사도_남지_않는다() {
-		// findById 와 UPDATE 사이의 경쟁 백스톱(비활성화와 동일 규약) — 기록 없는 성공을 막는다.
+	void 경쟁_변경으로_조건부_갱신이_빗나가면_409_이고_감사가_남지_않는다() {
+		// findById 와 UPDATE 사이에 다른 트랜잭션이 역할을 바꾸면 조건부 갱신(role=이전값)이
+		// 0행이 된다 — stale previousRole 로 틀린 감사를 남기는 대신 409 로 충돌을 드러내고,
+		// 화면은 새로고침으로 수렴한다(409 규약).
 		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
 		members.updateRoleRows = 0;
 		assertThatThrownBy(() -> service.changeRole(
 				42, new ChangeMemberRoleRequest("READ_ONLY"), actor, "ip"))
 				.isInstanceOfSatisfying(GeneralException.class,
-						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.MEMBER_NOT_FOUND));
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.ROLE_CONFLICT));
 		assertThat(actionLog.entries).isEmpty();
+	}
+
+	@Test
+	void 역할_변경_요청_본문_없음은_400_이다() {
+		members.target = new MemberEntity(42L, "op@kbsec.com", "운영자", "OPERATOR", true, null);
+		assertThatThrownBy(() -> service.changeRole(42, null, actor, "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.INVALID_REQUEST));
+		assertThat(members.capturedRole).isNull();
 	}
 
 	/** member 원장 대역 — 저장 시 IDENTITY(100~)를 부여해 반환한다. */
@@ -297,6 +310,7 @@ class MemberServiceTest {
 		int updateRoleRows = 1;
 		long capturedRoleTargetId = -1;               // updateRole 호출 캡처
 		String capturedRole;
+		String capturedExpectedRole;
 		MemberEntity target;                          // findById 반환(비활성화·역할변경 대상)
 		List<Long> activeAdminIds = new ArrayList<>();  // lockActiveAdminIds 반환(잠긴 활성 관리자)
 		private long nextId = 100;
@@ -330,9 +344,10 @@ class MemberServiceTest {
 		}
 
 		@Override
-		public int updateRole(long id, String role) {
+		public int updateRole(long id, String role, String expectedRole) {
 			this.capturedRoleTargetId = id;
 			this.capturedRole = role;
+			this.capturedExpectedRole = expectedRole;
 			return updateRoleRows;
 		}
 

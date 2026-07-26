@@ -152,8 +152,13 @@ public class MemberService {
 				throw new GeneralException(ConsoleErrorStatus.LAST_ADMIN);
 			}
 		}
-		if (memberRepository.updateRole(memberId, role) == 0) {
-			throw new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND);
+		// 이전 역할 조건부 갱신 — 0행이면 읽기와 갱신 사이에 역할이 바뀐 경쟁(409, 화면은
+		// 새로고침 수렴)이거나 대상 소멸(404)이다. stale previousRole 로 틀린 감사를 남기지
+		// 않기 위해 갱신이 실제로 이전→새 전이였을 때만 기록한다.
+		if (memberRepository.updateRole(memberId, role, previousRole) == 0) {
+			throw memberRepository.findById(memberId).isPresent()
+					? new GeneralException(ConsoleErrorStatus.ROLE_CONFLICT)
+					: new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND);
 		}
 		actionLog.record(actor, "MEMBER_ROLE_CHANGED", "MEMBER", String.valueOf(memberId),
 				Map.of("email", target.getEmail(), "previousRole", previousRole, "newRole", role),

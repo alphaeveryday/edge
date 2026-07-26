@@ -109,7 +109,7 @@ class ConsoleAuthFilterTest {
 		}
 
 		@Override
-		public int updateRole(long id, String role) {
+		public int updateRole(long id, String role, String expectedRole) {
 			return 0;
 		}
 

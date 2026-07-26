@@ -85,7 +85,7 @@ class AuthControllerTest {
 		}
 
 		@Override
-		public int updateRole(long memberId, String role) {
+		public int updateRole(long memberId, String role, String expectedRole) {
 			return 0;
 		}
 

@@ -96,6 +96,27 @@ class MemberControllerTest {
 	}
 
 	@Test
+	void 역할_변경의_비수치_경로변수는_500_이_아니라_400_이다() throws Exception {
+		// @PathVariable long 변환 실패는 프레임워크(ResponseEntityExceptionHandler)가 400 으로
+		// 처리한다 — advice 교체·직접 파싱 도입으로 500 이 새면 이 테스트가 잡는다(H각도).
+		mvc.perform(patch("/api/v1/members/abc/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":\"OPERATOR\"}"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 역할_변경의_비문자열_role_본문은_500_이_아니라_400_이다() throws Exception {
+		// role 에 객체가 오면 Jackson 바인딩 실패(HttpMessageNotReadable) — 400 이어야 한다.
+		mvc.perform(patch("/api/v1/members/9/role")
+						.sessionAttr(SessionMember.SESSION_KEY, admin)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"role\":{\"nested\":1}}"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
 	void 자기_자신_역할_변경은_403_으로_매핑된다() throws Exception {
 		service.changeRoleThrow = new GeneralException(ConsoleErrorStatus.SELF_ROLE_CHANGE);
 		mvc.perform(patch("/api/v1/members/7/role")
