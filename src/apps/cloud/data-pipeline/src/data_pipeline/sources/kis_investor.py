@@ -25,9 +25,10 @@ import json
 import logging
 import urllib.parse
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from ..config import KisInvestorSource as KisInvestorSourceConfig
+from ..ops.trading_calendar import is_trading_day
 from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
@@ -49,8 +50,36 @@ MAX_RATE_RETRY = 5
 BOUNDARY_MSG_CD = "OPSQ2001"
 MAX_BOUNDARY_RETRY = 5  # 재시도 횟수(×15s = 75s 대기 — 서빙경계 분(15:40→15:41) 전체 + 여유 흡수)
 BOUNDARY_BACKOFF_S = 15.0
+# ⚠️ 이 백오프는 **블랙아웃이 실제로 풀릴 수 있을 때만** 의미가 있다(ALPHA-562). msg1 의
+# `TIME LIMIT 00:00 ~ 15:40` 은 일시 장애가 아니라 "지금이 서빙 개시 전"이라는 상시 조건이라,
+# 한참 이른 시각·비거래일에는 75초를 기다려도 영원히 안 풀린다. 예산이 심볼별로 독립이라
+# (518 의 의도적 설계) 헛기다림이 유니버스 크기만큼 곱해진다 — 실측 75s × 470종 ≈ 10시간.
+#
+# 해소 시각은 msg1 의 상한(15:40)이 **아니라 그 분이 끝난 15:41** 이다: ALPHA-518 실측에서
+# 15:40:53~59 질의가 전부 OPSQ2001 이었고 15:41:00 이후에야 성공했다. 상한을 그대로 목표로
+# 삼으면 15:39:30 같은 시각이 "예산 안에 도달"로 오판돼 75초를 태우고도 격리된다.
+BOUNDARY_CLEARS_AT = time(15, 41)
 
 KST = timezone(timedelta(hours=9))
+
+
+def _boundary_can_clear(now_kst: datetime, seconds: float) -> bool:
+    """남은 예산 `seconds` 안에 서빙 블랙아웃이 풀릴 수 있는가.
+
+    풀릴 수 없으면 재시도는 전부 헛돈이므로 기다리지 않고 즉시 심볼을 격리한다. 두 조건이다:
+
+    * **거래일이어야 한다** — 서빙할 EOD 데이터 자체가 없는 날은 15:41 이 지나도 안 풀린다.
+      이걸 빼면 일요일 16:00 실행이 심볼당 75초를 다시 태운다(같은 결함이 시각만 옮겨간 것).
+    * **예산 안에 15:41 을 넘겨야 한다** — 넘길 수 있으면 실제로 자가해소되므로 백오프를 살린다.
+      "해소 시각 이전이면 무조건 포기"로 단순화하면 ALPHA-518 이 고친 15:40:53 레이스가 되살아난다.
+    """
+    if not is_trading_day(now_kst.date()):
+        return False
+    clears = now_kst.replace(
+        hour=BOUNDARY_CLEARS_AT.hour, minute=BOUNDARY_CLEARS_AT.minute,
+        second=0, microsecond=0,
+    )
+    return now_kst + timedelta(seconds=seconds) >= clears
 
 
 def _yyyymmdd(date_str: str | None) -> str | None:
@@ -289,10 +318,14 @@ class KisInvestorSource:
                 rate_retries += 1
                 continue
             # EOD 서빙경계 블랙아웃 — 자가해소라 레이트리밋보다 긴 백오프로 대기 후 재시도.
+            # 단 남은 예산 안에 풀릴 수 없으면(비거래일·해소시각 한참 전) 기다리지 않고 격리한다
+            # (ALPHA-562 — 아래로 떨어져 msg_cd·msg1 그대로 심볼 단위 실패가 된다).
             if data.get("msg_cd") == BOUNDARY_MSG_CD and boundary_retries < MAX_BOUNDARY_RETRY:
-                self.client._sleep(BOUNDARY_BACKOFF_S)
-                boundary_retries += 1
-                continue
+                remaining = (MAX_BOUNDARY_RETRY - boundary_retries) * BOUNDARY_BACKOFF_S
+                if _boundary_can_clear(datetime.now(KST), remaining):
+                    self.client._sleep(BOUNDARY_BACKOFF_S)
+                    boundary_retries += 1
+                    continue
             raise ValueError(
                 f"KIS rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
             )
