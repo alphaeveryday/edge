@@ -13,12 +13,8 @@
 - [ ] **Event Bundle·Cloud Event Store 필드 스키마** 확정 → `docs/contracts/event-bundle-schema.md` 기입 (이벤트 타입별 필드·ID 체계·번들 JSON 구조·체크섬 대상 바이트)
 
 ## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님 — 8월 중간평가 기준 재정렬 2026-07-23)
-- [ ] **위험 등급 산정 주체·기준** — Cloud(AI)인가 온프렘(Screening Worker)인가. 상태 분기의 핵심 입력인데 미정의 (§4 Screening Worker 구현의 선행 조건). 이 결정이 가드레일 엔진(Cloud, AI 산출물 검증)과 Screening Worker의 책임 분담·MVP Rule Type 목록까지 확정하며, 가드레일 룰에 [adr/0018](docs/adr/0018-rule-deployment-path.md)(룰=코드 릴리스) 적용 여부도 함께 정한다
 - [ ] **데모 시나리오·시드 데이터 확정** — 8월 중간평가에서 보여줄 종목·이벤트·스토리 대본 + 데이터 공급 방식(로컬/데모에서 data-pipeline 실수집 vs 픽스처 주입). 가상 MTS 화면 범위·모니터링 최소치 등 "어디까지 구현" 결정들의 상위 입력
-- [ ] **마일스톤 역산 로드맵** — 8월 중간평가·11월 데모데이 기준 Jira 에픽/스프린트 배분
-- [ ] **역할 4종 권한 매트릭스** 정의 — 인증 방식은 하이브리드로 확정([adr/0025](docs/adr/0025-onprem-auth-hybrid.md)), 매트릭스만 잔여 (ALPHA-118·119 선행 조건)
 - [ ] **테넌트(증권사) 온보딩 절차 정의** — super-admin 테넌트 등록 → 인증서 발급([adr/0012](docs/adr/0012-sync-cert-bootstrap.md)) → 온프렘 설치 config 산출물 형식·secrets/인증서 주입 방식 → compose 기동의 end-to-end. 8월 기준 "프로비저닝 스크립트 1개" 수준이면 충분
-- [ ] **외부 데이터 소스 약관 확인** — 빅카인즈·DART·KIS·FMP 수집 데이터의 **상용 제품 재제공** 허용 여부. 비개발 작업 중 최대 리스크 — 늦게 발견하면 제품을 되돌려야 함
 - [ ] **GitHub 플랜/공개 여부 결정** — private+free 플랜이라 **branch protection 불가** (main 직접 push 방지·required check·CODEOWNERS 강제 전부 규율로만 유지 중, schema-validate.yml 주석 참조). Team 플랜 업그레이드 vs public 전환
 - [ ] **OSS 라이선스 방침·인벤토리** — 온프렘 배포는 고객사 라이선스 실사 대상. GPL류 의존성 확인 + NOTICE 준비 + LICENSE 파일(proprietary 명시). 8월 데모에는 불요 — 실증권사 실사 시점 대비
 - [ ] Exposure/Audit Log **보존 기간** (금융권 감사 요건) — 8월 데모에는 불요
@@ -26,9 +22,6 @@
 
 ## 3. 품질 게이트·저장소 자동화 (MVP 구현 전 안전망)
 - [ ] **PR CI 구축** — 변경 모듈만 path-filter로 빌드/테스트 (JVM `gradlew build` · Node `pnpm test` · Python `pytest`). 현재 PR에서 도는 건 schema-validate·terraform-plan뿐 — 일반 코드 테스트가 PR에서 안 돎
-- [ ] **PR 제목 Conventional Commits 검증 CI** — squash 시 PR 제목 = 커밋 메시지인데 자동 체크 없음. 작고 효과 큼
-- [ ] **시크릿 스캔 CI** (gitleaks) — edge-review 수동 스캔의 CI 백스톱
-- [ ] **dependabot 도입** — 의존성 취약점 알림 (금융권 납품 시 SCA는 어차피 요구됨)
 - [ ] **린팅/포맷팅 도입** — eslint+prettier(TS)·ruff(Python)·spotless(JVM), 3런타임 전부 미설정. **시점 주의: 코드 재편(§4) 후 도입하거나 포맷 전용 커밋으로 분리** — 재편 diff에 포맷 노이즈 섞이면 리뷰 오염
 
 ## 4. MVP 구현 (§1 계약 확정 후, docs/implementation.md 기준)
