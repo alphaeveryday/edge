@@ -7,4 +7,5 @@ export const realUsersRepository: UsersRepository = {
   list: () => apiClient.get<Member[]>('/members'),
   register: (input) => apiClient.post<Member>('/members', input),
   deactivate: (id) => apiClient.post<void>(`/members/${id}/deactivate`),
+  changeRole: (id, role) => apiClient.patch<void>(`/members/${id}/role`, { role }),
 };

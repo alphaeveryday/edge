@@ -43,9 +43,11 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
 ## 콘솔 mock 표면 (ALPHA-513)
 
 tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 중 mock 잔여
-4종 — explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
-scope(시장·종목 제공 범위) · session(테넌트 컨텍스트·프로필). members(사용자 관리)는
-ALPHA-119 로 member 원장 실데이터로 전환됐다(등록·목록·비활성화 + 역할 변경 ALPHA-499).
+3종 — explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
+scope(시장·종목 제공 범위). members(사용자 관리)는 ALPHA-119 로 member 원장
+실데이터로 전환됐고(등록·목록·비활성화 + 역할 변경 ALPHA-499), session 은
+ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테넌트 컨텍스트는
+배포 설정(`console.tenant.*`, 온프렘 박스=테넌트 1:1)이 소스다.
 
 - **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
   파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
@@ -73,8 +75,7 @@ ALPHA-119 로 member 원장 실데이터로 전환됐다(등록·목록·비활�
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` 4종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
-| 부트스트랩 시드(데모 자체 계정) | ALPHA-500(화면) | Users & Roles 화면 실데이터 전환 — 등록·역할 부여 API 는 구현됨(ALPHA-119·499) |
+| `mock` 패키지 `*MockStore` 3종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
 | 데모 로그인 | 실증권사 계약 | SSO/AD(SAML/OIDC) 진입점 — 같은 세션 추상화로 수렴 |
 
 ## 실행·확인
@@ -89,12 +90,13 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 87건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
+테스트 91건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
-parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 사용자
-관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할 변경의 자기변경 403·조건부
-갱신 409·감사 기록), 콘솔 mock 표면의 UI 계약(camelCase·`final` 필드·상태
-전이·어휘 게이트·404)을 인코딩한다.
+parameter 우회 차단·매핑 부재 fail-closed·세션 주체=원장 정체성 SSOT, 부트스트랩
+멱등·해시 저장), 사용자 관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할
+변경의 자기변경 403·조건부 갱신 409·감사 기록), 세션 계약(주체 이름·설정 테넌트
+컨텍스트·프로필 원장 기록·길이 상한 400), 콘솔 mock 표면의 UI 계약(camelCase·
+`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
 단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
 Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
 `contextLoads` 가 `ddl-auto=validate` 로 엔티티↔실스키마 정합을, `ReviewMemberRepositoryIT`

@@ -13,4 +13,6 @@ export interface UsersRepository {
   list(): Promise<Member[]>;
   register(input: RegisterMemberInput): Promise<Member>;
   deactivate(id: number): Promise<void>;
+  /** 역할 부여·변경(ALPHA-499 API) — 자기 자신 대상은 서버가 403(직무 분리). */
+  changeRole(id: number, role: MemberRole): Promise<void>;
 }

@@ -1,10 +1,10 @@
 package com.edge.tenantconsole.auth;
 
+import com.edge.tenantconsole.config.TenantContextProperties;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.ReviewController;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
-import com.edge.tenantconsole.mock.SessionMockStore;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
@@ -13,6 +13,7 @@ import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Limit;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -68,9 +70,10 @@ class ConsoleAuthFilterTest {
 		}
 	}
 
-	/** 원장 대역 — 이메일→현재 role 맵에 있으면 활성 계정, 없으면 비활성/삭제(Optional.empty). */
+	/** 원장 대역 — 이메일→현재 role 맵에 있으면 활성 계정(id 1 고정), 없으면 비활성/삭제(Optional.empty). */
 	private static final class StubMembers implements MemberRepository {
 		private final Map<String, String> activeRoleByEmail;
+		long capturedUpdateNameId = -1;
 
 		StubMembers(Map<String, String> activeRoleByEmail) {
 			this.activeRoleByEmail = activeRoleByEmail;
@@ -114,6 +117,12 @@ class ConsoleAuthFilterTest {
 		}
 
 		@Override
+		public int updateName(long id, String name) {
+			this.capturedUpdateNameId = id;
+			return 1;
+		}
+
+		@Override
 		public long count() {
 			return 0;
 		}
@@ -128,20 +137,22 @@ class ConsoleAuthFilterTest {
 		}
 	}
 
+	private StubMembers members;
 	private MockMvc mvc;
 
 	@BeforeEach
 	void setUp() {
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications());
 		// 원장 현재 상태 — reviewer=CR·ro=RO 는 활성, downgraded 는 세션엔 CR 이나 원장은 RO(강등).
-		StubMembers members = new StubMembers(Map.of(
+		members = new StubMembers(Map.of(
 				"reviewer@demo.edge.local", "COMPLIANCE_REVIEWER",
 				"ro@demo.edge.local", "READ_ONLY",
 				"downgraded@demo.edge.local", "READ_ONLY",
 				"admin@demo.edge.local", "TENANT_ADMIN"));
 		mvc = MockMvcBuilders.standaloneSetup(
 						new ReviewController(reviewService),
-						new ConsoleSessionController(new ConsoleSessionService(new SessionMockStore())))
+						new ConsoleSessionController(new ConsoleSessionService(members),
+								new TenantContextProperties("KB증권", "kbsec.com", "KB")))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
 	}
@@ -237,6 +248,27 @@ class ConsoleAuthFilterTest {
 		mvc.perform(get("/api/v1/review/items").session(sessionOf(gone)))
 				.andExpect(status().isUnauthorized())
 				.andExpect(jsonPath("$.code").value("CNSL4011"));
+	}
+
+	@Test
+	void 세션의_memberId_가_원장과_다르면_원장_정체성으로_갱신된다() throws Exception {
+		// 정체성 SSOT 는 원장이다 — DB 재시드 등으로 같은 이메일이 다른 id 로 재생성되면
+		// 세션의 옛 id 로 다른 행을 갱신하는 사고를 막는다. REVIEWER 세션 id=2, 원장 id=1
+		// → 프로필 PATCH 는 원장 id(1)의 행을 갱신해야 한다.
+		mvc.perform(patch("/api/v1/session/profile").session(sessionOf(REVIEWER))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"새이름\"}"))
+				.andExpect(status().isOk());
+		assertThat(members.capturedUpdateNameId).isEqualTo(1L);
+	}
+
+	@Test
+	void 원장의_이름_변경이_다음_요청_세션_주체에_반영된다() throws Exception {
+		// 프로필 이름은 member 원장이 SSOT(ALPHA-500) — 같은 계정의 다른 세션(다른 탭)에서
+		// 바뀐 이름도 세션 캐시가 아니라 다음 요청의 원장 재검증으로 반영된다(role 과 동일
+		// 메커니즘). StubMembers 원장의 현재 이름("n")이 세션의 옛 이름을 대체해야 한다.
+		mvc.perform(get("/api/v1/session").session(sessionOf(REVIEWER)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.name").value("n"));
 	}
 
 	@Test

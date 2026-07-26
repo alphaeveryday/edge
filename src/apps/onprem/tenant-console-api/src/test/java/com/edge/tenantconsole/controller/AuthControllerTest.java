@@ -90,6 +90,11 @@ class AuthControllerTest {
 		}
 
 		@Override
+		public int updateName(long memberId, String name) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long memberId) {
 			lastLoginTouched = memberId;
 		}

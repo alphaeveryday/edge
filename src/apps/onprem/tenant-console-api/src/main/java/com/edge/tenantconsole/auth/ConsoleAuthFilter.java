@@ -133,11 +133,15 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		// 로그인 이후 role 이 원장에서 바뀌었으면 세션 주체를 갱신한다 — /session·/auth/session
-		// 이 stale role 을 반환하지 않게(인가는 아래에서 이미 current.getRole() 로 최신).
-		if (!current.getRole().equals(member.role())) {
-			request.getSession().setAttribute(SessionMember.SESSION_KEY, new SessionMember(
-					member.memberId(), member.email(), member.name(), current.getRole()));
+		// 세션 주체는 원장의 현재 정체성(id·name·role)으로 유지한다 — /session 등이 stale
+		// 값을 반환하지 않고(name 은 프로필 변경 ALPHA-500 이 원장에 기록), DB 재시드로
+		// 같은 이메일이 다른 id 로 재생성됐을 때 옛 id 로 다른 행을 갱신하는 사고를 막는다
+		// (인가는 아래에서 이미 current.getRole() 로 최신).
+		SessionMember fresh = new SessionMember(current.getMemberId(), member.email(),
+				current.getName(), current.getRole());
+		if (!fresh.equals(member)) {
+			request.getSession().setAttribute(SessionMember.SESSION_KEY, fresh);
+			member = fresh;
 		}
 
 		Rule rule = RULES.stream()
