@@ -1,6 +1,7 @@
 """저부하 HTTP 클라이언트 (프로토타입 PoliteClient 축소 이식).
 
-- 요청 간 최소 간격(직렬 호출 전제 — 어댑터가 심볼별로 순차 질의)
+- 요청 간 최소 간격 = **평균 발신률 상한**. 클라이언트 1개를 워커 여럿이 공유해도
+  전체 발신률이 1/min_interval 로 묶인다(thread-safe). 인접 간격은 보장 대상이 아니다
 - 5xx/일시 오류는 지수 백오프(1→2→4초) 재시도
 - 4xx/429 는 즉시 중단(StopFetch) — 키 오류·쿼터 초과를 재시도로 두드리지 않는다
 
@@ -15,6 +16,7 @@ stdlib(urllib)만 사용해 의존성 없이 단위테스트에서 import 된다
 
 from __future__ import annotations
 
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -43,15 +45,50 @@ class PoliteClient:
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0):
         self.min_interval = min_interval
         self.timeout = timeout
-        self._last_request_at = 0.0
+        # 다음 요청을 보낼 수 있는 가장 이른 시각(monotonic). 워커 여럿이 공유해도 전체
+        # 발신 속도가 1/min_interval 로 묶인다(_respect_interval 주석).
+        self._next_slot_at = 0.0
+        self._lock = threading.Lock()
 
     # 테스트에서 대기 없이 돌리도록 교체 가능한 지점.
     _sleep = staticmethod(time.sleep)
 
     def _respect_interval(self) -> None:
-        elapsed = time.monotonic() - self._last_request_at
-        if self._last_request_at and elapsed < self.min_interval:
-            self._sleep(self.min_interval - elapsed)
+        """다음 발신 슬롯까지 대기한다 — **평균 발신률을 1/min_interval 로 묶는다.**
+
+        보장하는 것과 못 하는 것을 구분해 둔다:
+
+        - **하는 일**: 발신 **슬롯 획득**을 1/min_interval 로 pace 한다. 병리적 스케줄링
+          지연이 없으면 실제 발신률이 그대로 따라가고, 그게 벤더 한도가 걸리는 축이다
+          (KIS `EGW00201` 은 초당 카운터, 앱키당 20/s 를 네 스텝이 나눠 쓴다).
+        - **보장하지 않음**: 실제 발신 시각. 인접 간격은 물론이고 **평균률도 엄밀히는 아니다** —
+          락이 `urlopen` **전에** 풀리므로, 슬롯을 딴 스레드가 요청 직전에 선점되면 뒤 슬롯
+          요청들이 먼저 나가고 지연분이 나중에 합류해 순간적으로 몰릴 수 있다(리뷰에서 배리어로
+          강제해 재현). 막으려면 `urlopen` 까지 락을 잡아야 하는데 그러면 I/O 가 직렬화돼
+          팬아웃이 무의미해진다. 그래서 예산은 문서 한도(20/s)에 **마진을 두고**(15/s) 잡는다 —
+          이 절충의 대가를 마진으로 치른다.
+
+        대기는 락 안에서 한다. 슬롯만 예약하고 락 밖에서 자도 평균률은 같지만, 락 안에서
+        기다리면 대기 자체가 직렬화돼 실측 간격이 더 고르게 나온다(같은 조건에서 인접 간격
+        0.021s vs 0.016s). I/O 는 여전히 락 밖이라 요청은 그대로 동시에 나간다.
+
+        다음 슬롯은 예약 시각이 아니라 **실제로 깬 시각** 기준이다. 이상 격자를 쓰면 늦게 깬
+        지연만큼 다음 간격이 깎인다. 실제 시각 기준이면 격자가 함께 밀려 느려지는 쪽으로만 틀린다.
+
+        간격 기준은 **발신 시각**(start-to-start)이다. 이전 구현은 직전 응답 **완료** 시각
+        기준이라 워커가 N개면 각자 마지막 완료만 보고 동시에 나가 유량이 N배로 샜다.
+
+        ⚠️ **직렬 경로도 빨라진다.** 옛 간격은 `RTT + min_interval`, 새 간격은
+        `max(RTT, min_interval)` 이다. 실측 기준:
+          - KIS  (RTT 0.78s, interval 0.5s): 0.78 → 1.28 req/s  (+64%)
+          - KRX  (RTT 12.4s, interval 1.0s): 0.0746 → 0.0806 req/s  (+8%)
+        KIS 4브랜치 합이 최대 5.1 req/s 라 문서값 20/s 대비 여유가 크다.
+        """
+        with self._lock:
+            wait = self._next_slot_at - time.monotonic()
+            if wait > 0:
+                self._sleep(wait)
+            self._next_slot_at = time.monotonic() + self.min_interval
 
     def request(
         self,
@@ -78,11 +115,9 @@ class PoliteClient:
             )
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    self._last_request_at = time.monotonic()
                     body = resp.read()
                     return body.decode("utf-8", errors="replace") if decode else body
             except urllib.error.HTTPError as exc:
-                self._last_request_at = time.monotonic()
                 if exc.code == 429 or 400 <= exc.code < 500:
                     try:
                         detail = exc.read().decode("utf-8", errors="replace")[:500]
@@ -94,7 +129,6 @@ class PoliteClient:
                     ) from exc
                 last_exc = exc  # 5xx → 재시도
             except (urllib.error.URLError, TimeoutError) as exc:
-                self._last_request_at = time.monotonic()
                 last_exc = exc
         raise RuntimeError(f"{method} 재시도 소진: {last_exc}")
 

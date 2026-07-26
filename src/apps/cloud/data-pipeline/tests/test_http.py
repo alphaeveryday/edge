@@ -6,7 +6,10 @@ get() 계약은 그대로여야 한다 — 이 회귀를 코드로 잠근다.
 """
 
 import io
+import threading
+import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -106,3 +109,60 @@ def test_request_raises_after_retry_exhaustion(monkeypatch):
 
     with pytest.raises(RuntimeError):
         _client(monkeypatch, handler).request("GET", "https://x.example/y")
+
+
+def _recording_client(monkeypatch, interval):
+    """urlopen 진입 시각을 기록하는 클라이언트."""
+    sends: list[float] = []
+
+    def handler(req):
+        sends.append(time.monotonic())  # list.append 는 GIL 하에서 원자적
+        return _Resp(b"{}")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: handler(req))
+    return PoliteClient(min_interval=interval), sends
+
+
+def test_min_interval_caps_average_rate_across_threads(monkeypatch):
+    # WHY: 어댑터를 팬아웃하면 워커 여럿이 한 클라이언트를 공유한다. 간격 처리가 스레드
+    #      안전하지 않으면 워커들이 같은 시각을 읽고 뭉쳐 나가 유량이 워커 수만큼 샌다 —
+    #      KIS 는 앱키당 초당 한도가 있고 그 예산을 네 스텝이 나눠 쓰므로(문서값 20/s) 그게
+    #      곧 한도 초과다. 계약은 **평균 발신률**이다(EGW00201 이 초당 카운터라 그 축이 걸린다).
+    #      인접 간격은 계약이 아니다 — 락이 urlopen 전에 풀려 원리적으로 보장할 수 없고,
+    #      보장하려면 I/O 를 직렬화해야 해서 팬아웃이 무의미해진다.
+    interval = 0.02
+    calls = 20
+    client, sends = _recording_client(monkeypatch, interval)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: client.get("https://x.example/y"), range(calls)))
+
+    assert len(sends) == calls
+    # **첫 발신부터 마지막 발신까지**를 잰다 — 스레드풀 생성·스케줄링·종료 같은 부대시간을
+    # 빼야 느린 CI 에서 결함 구현이 거짓 통과하지 않는다. 제한기가 없으면 발신이 전부 뭉쳐
+    # 이 구간이 0 에 가까우므로(실측 0.0002s), CI 속도와 무관하게 실패한다.
+    span = max(sends) - min(sends)
+    assert span >= interval * (calls - 1)
+
+
+def test_min_interval_spaces_serial_sends(monkeypatch):
+    # WHY: 슬롯 기준이 '직전 완료'에서 '직전 발신'으로 옮겨졌다. 단일 스레드에서는 경합이
+    #      없으므로 인접 간격이 결정적으로 지켜져야 한다 — 벤더가 의도한 최소 간격이 이 값이다.
+    interval = 0.02
+    client, sends = _recording_client(monkeypatch, interval)
+
+    for _ in range(5):
+        client.get("https://x.example/y")
+
+    gaps = [b - a for a, b in zip(sends, sends[1:])]
+    assert min(gaps) >= interval * 0.9
+
+
+def test_first_call_is_not_delayed(monkeypatch):
+    # WHY: 첫 요청까지 간격만큼 기다리면 모든 스텝이 매 런마다 공짜로 느려진다 — 슬롯이
+    #      0 에서 시작하므로 첫 콜은 즉시 나가야 한다.
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: _Resp(b"{}"))
+    client = PoliteClient(min_interval=5.0)
+    started = time.monotonic()
+    client.get("https://x.example/y")
+    assert time.monotonic() - started < 1.0
