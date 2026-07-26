@@ -41,11 +41,13 @@ export function UsersPage() {
 
   const confirmChangeRole = () => {
     if (!roleTarget || newRole === roleTarget.role) return;
+    const target = roleTarget;
     changeRole.mutate(
-      { id: roleTarget.id, role: newRole },
+      { id: target.id, role: newRole },
       {
         onSuccess: () => {
-          setRoleTarget(null);
+          // 늦게 도착한 콜백이 다른 대상의 모달을 닫지 않게, 요청 대상이 그대로일 때만 닫는다.
+          setRoleTarget((current) => (current?.id === target.id ? null : current));
           toast('역할을 변경했습니다.');
         },
         onError: (err) => {
@@ -268,7 +270,7 @@ export function UsersPage() {
             <button
               className="btn btn-primary"
               onClick={confirmChangeRole}
-              disabled={!roleTarget || newRole === roleTarget.role}
+              disabled={!roleTarget || newRole === roleTarget.role || changeRole.isPending}
             >
               변경
             </button>

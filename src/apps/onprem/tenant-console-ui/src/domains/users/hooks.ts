@@ -32,6 +32,8 @@ export function useChangeRole() {
   return useMutation({
     mutationFn: ({ id, role }: { id: number; role: MemberRole }) =>
       usersRepository.changeRole(id, role),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+    // 실패(경쟁 변경 409 등)에도 invalidate — 다른 관리자가 방금 바꾼 역할이 stale 로
+    // 남지 않게 성공·실패 모두 목록을 재조회한다.
+    onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }

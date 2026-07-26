@@ -90,6 +90,19 @@ class ConsoleSessionControllerTest {
 	}
 
 	@Test
+	void 과대_길이_표시_이름은_400_이고_원장에_닿지_않는다() throws Exception {
+		// 프로필은 전 역할 셀프서비스 표면 — blank 만 거르면 무제한 TEXT 가 원장에 영구
+		// 저장된다. 상한(100자) 초과는 400 으로 드러낸다(fail-loud).
+		mvc.perform(patch("/api/v1/session/profile")
+						.sessionAttr(SessionMember.SESSION_KEY, REVIEWER)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"" + "가".repeat(101) + "\"}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("CNSL4003"));
+		assertThat(members.capturedName).isNull();
+	}
+
+	@Test
 	void 원장_갱신_영향_행이_0_이면_404_다() throws Exception {
 		// 세션 주체는 통상 존재하지만, 기록 없는 성공을 만들지 않는 백스톱(fail-loud).
 		members.updateNameRows = 0;

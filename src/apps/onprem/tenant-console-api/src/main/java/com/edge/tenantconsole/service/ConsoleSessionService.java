@@ -18,15 +18,21 @@ public class ConsoleSessionService {
 		this.memberRepository = memberRepository;
 	}
 
+	/** 표시 이름 상한 — 전 역할 셀프서비스 표면이라 무제한 TEXT 영구 저장을 막는다. */
+	static final int MAX_NAME_LENGTH = 100;
+
 	/**
-	 * 표시 이름 변경 — blank 는 400, trim 후 세션 주체 본인의 원장 행을 UPDATE 한다.
-	 * 0행이면 404(기록 없는 성공 방지 백스톱). 갱신된 이름을 반환한다.
+	 * 표시 이름 변경 — blank·100자 초과는 400, trim 후 세션 주체 본인의 원장 행을
+	 * UPDATE 한다. 0행이면 404(기록 없는 성공 방지 백스톱). 갱신된 이름을 반환한다.
 	 */
 	public String updateDisplayName(long memberId, String name) {
 		if (name == null || name.isBlank()) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		String trimmed = name.trim();
+		if (trimmed.length() > MAX_NAME_LENGTH) {
+			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
+		}
 		if (memberRepository.updateName(memberId, trimmed) == 0) {
 			throw new GeneralException(ConsoleErrorStatus.MEMBER_NOT_FOUND);
 		}
