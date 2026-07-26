@@ -2,7 +2,7 @@
 # 빌드 컨텍스트 = src/ (pnpm 워크스페이스 루트). ui-kit 은 빌드 없는 소스 패키지라
 # vite 가 그 TS 소스를 직접 번들한다 — 워크스페이스 전체가 컨텍스트에 있어야 workspace:* 가 풀린다.
 #   docker build -f apps/onprem/tenant-console-ui/Dockerfile -t tenant-console-ui .
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY . .
