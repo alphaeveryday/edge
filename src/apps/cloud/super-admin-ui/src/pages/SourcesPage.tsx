@@ -118,10 +118,14 @@ function TaskRow({ task }: { task: TaskStatus }) {
 }
 
 export function SourcesPage() {
-  const { data: report, isPending, isError } = useSourceReport();
+  const { data: report, isPending, isError, dataUpdatedAt } = useSourceReport();
 
-  if (isError) return <LoadError />;
   if (isPending) return null;
+  /* 30초 폴링(hooks.ts)이 붙은 뒤로 isError 는 **두 가지**를 뜻한다 — 첫 조회부터 실패(보여줄 게
+     없다)와 갱신만 실패(마지막으로 받은 상태는 여전히 유효하다). 둘을 같이 다루면 일시적인
+     네트워크 한 번에 멀쩡한 운영 화면이 통째로 사라진다. 데이터가 없을 때만 에러 화면을 띄우고,
+     있으면 마지막 상태를 유지하되 **언제 것인지 밝힌다**(Codex #297). */
+  if (!report) return <LoadError />;
 
   const run = report.run;
   const orchestration = run?.orchestrationStatus
@@ -197,6 +201,13 @@ export function SourcesPage() {
           </>
         )}
       </div>
+      {isError && (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          <StatusBadge tone="warn">갱신 실패</StatusBadge>{' '}
+          마지막으로 받은 상태입니다({new Date(dataUpdatedAt).toLocaleString('ko-KR', { hour12: false })}
+          {') '}— 지금 원장과 다를 수 있습니다.
+        </p>
+      )}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
       </p>
