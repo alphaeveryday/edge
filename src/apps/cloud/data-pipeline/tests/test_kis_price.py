@@ -6,6 +6,7 @@
 
 import json
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -35,6 +36,12 @@ def _bar(date: str, close: str = "70000") -> dict:
 
 def _ok(bars: list[dict]) -> str:
     return json.dumps({"rt_cd": "0", "output2": bars})
+
+
+def _full_page(last: str, n: int = kis_price.PAGE_SIZE) -> list[dict]:
+    """`last` 부터 하루씩 과거로 n 개 봉(최신→과거) — 운영과 같은 꽉 찬 페이지."""
+    d = datetime.strptime(last, "%Y%m%d")
+    return [_bar((d - timedelta(days=i)).strftime("%Y%m%d")) for i in range(n)]
 
 
 _EMPTY = json.dumps({"rt_cd": "0", "output2": []})
@@ -144,6 +151,57 @@ def test_pagination_walks_back_and_dedups():
     records = list(src.fetch(["005930"], from_date="2026-07-01"))
     dates = [r["stck_bsop_date"] for r in records]
     assert dates == ["20260701", "20260702", "20260703"]  # 정렬·중복제거
+
+
+def test_non_trading_lower_bound_stops_on_first_page():
+    # WHY: 종료조건 `earliest <= d1` 은 d1 이 비거래일이면 **절대 성립하지 않는다** — 서버가
+    #      FID_INPUT_DATE_1(=시작일)로 하한을 걸어 창 안 첫 거래일만 주므로 earliest(월)가
+    #      d1(일)보다 항상 크다. 그래서 빈 페이지를 한 번 더 받아야 멈췄고, 가격 소급이 5일
+    #      고정이라 목·금 런은 매번 종목당 콜이 2배였다(2026-07-24 실런: price 1.58s vs
+    #      investor 0.78s/종목). 판정 하한을 거래일로 스냅해야 첫 페이지에서 멈춘다.
+    src = _source({"005930": [_ok([_bar("20260721"), _bar("20260720")]), _EMPTY]})
+    records = list(src.fetch(["005930"], from_date="2026-07-19"))  # 7/19 = 일요일
+    assert [r["stck_bsop_date"] for r in records] == ["20260720", "20260721"]
+    assert src.client.calls.count("GET") == 1  # 빈 두 번째 콜을 치지 않는다
+
+
+def test_holiday_set_lets_run_stop_a_page_earlier(monkeypatch):
+    # WHY: 스냅이 주말만 알면 **평일 공휴일**엔 가드가 조용히 퇴화한다 — tasks.tf 가 kis 에
+    #      OPS_KR_HOLIDAYS 를 주입하는 이유와 같은 축(ALPHA-557). 그 주입이 사라지면 이
+    #      테스트가 깨져 드러난다. 7/20(월)이 휴장이면 판정 하한은 7/21(화)라 첫 페이지에서 멈춘다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-20")
+    src = _source({"005930": [_ok([_bar("20260721")]), _EMPTY]})
+    list(src.fetch(["005930"], from_date="2026-07-19"))
+    assert src.client.calls.count("GET") == 1
+
+
+def test_over_inclusive_holiday_does_not_narrow_request_window(monkeypatch):
+    # WHY: kr_holidays 는 수동 갱신이라 **실제 거래일이 잘못 등재**될 수 있다. 스냅한 값을
+    #      요청 하한으로 보내면 그 날 봉이 창 밖으로 밀려 조용히 유실되고 collection_log 는
+    #      success 로 남는다(Rule 12 — 유실이 성공으로 위장). 그래서 스냅은 **종료 판정에만**
+    #      쓰고 요청에는 원본 d1 을 보낸다. 여기서 7/20 은 실제로 거래일인데 잘못 등재됐다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-20")
+    src = _source({"005930": [_ok([_bar("20260721"), _bar("20260720")]), _EMPTY]})
+    records = list(src.fetch(["005930"], from_date="2026-07-19"))
+    assert _qs(src.client.urls[0], "FID_INPUT_DATE_1") == "20260719"  # 요청 하한은 원본
+    assert "20260720" in [r["stck_bsop_date"] for r in records]  # 잘못 등재된 날의 봉도 보존
+
+
+def test_full_page_does_not_trust_calendar_at_boundary(monkeypatch):
+    # WHY: 잘못 등재된 휴장일이 **페이지 경계에 정확히 걸리면** 달력만 믿는 종료가 그 날 봉을
+    #      잘라먹는다 — 첫 페이지 earliest 가 곧 d1_stop 이라 종료하는데, 실제 거래일인 d1 의
+    #      봉은 다음 페이지에 있다. 유실인데 fetch_failures 도 없어 collection_log 는 success
+    #      로 남는다(Rule 12). 꽉 찬 페이지에선 아래에 더 있을 수 있으므로 달력을 믿지 않는다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-20")  # 실제로는 거래일인데 잘못 등재
+    src = _source({
+        "005930": [
+            _ok(_full_page("20261028")),   # 꽉 찬 100행, earliest = 20260721(= d1_stop)
+            _ok([_bar("20260720")]),       # d1 당일 봉은 여기 있다
+        ],
+    })
+    records = list(src.fetch(["005930"], from_date="2026-07-20"))
+    assert src.client.calls.count("GET") == 2  # 꽉 찬 페이지에서 멈추지 않는다
+    assert "20260720" in [r["stck_bsop_date"] for r in records]  # 경계 봉 유실 없음
 
 
 def test_egw00201_retried_then_succeeds():

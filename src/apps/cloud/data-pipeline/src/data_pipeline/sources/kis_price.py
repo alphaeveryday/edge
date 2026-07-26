@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 from ..config import KisPriceSource
+from ..ops.trading_calendar import is_trading_day
 from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
@@ -37,15 +38,57 @@ MARKET_DIV = "J"  # J: KRX 주식
 # 200 = 2만 영업일(~80년)이라 가장 오래된 KRX 종목의 일봉 백필도 하한(d1)에 먼저 닿아
 # 사실상 안 걸린다(다년 백필이 이 상한에 절단되지 않게 넉넉히 둔다).
 MAX_PAGES = 200
+# 콜당 응답 상한(라이브 실측 2026-07-26: 1년 7개월 창 요청에 output2 가 정확히 100행).
+# **단독으로 "창 소진" 신호로 쓰지 않는다** — 벤더가 비종단 부분 응답을 줄 수 있어서다.
+# 아래 종료조건에서 달력 기반 판정의 **교차 검증**으로만 쓴다(_stop_bound 주석).
+PAGE_SIZE = 100
 RATE_MSG_CD = "EGW00201"  # "초당 거래건수 초과" — HTTP 429 아님(200 본문). 어댑터가 재시도.
 MAX_RATE_RETRY = 5
 
 KST = timezone(timedelta(hours=9))
 
 
+# 창 하한을 거래일로 스냅할 때 앞으로 훑는 상한. 최장 연휴(설·추석 + 앞뒤 주말)보다 넉넉하다.
+MAX_SNAP_DAYS = 10
+
+
 def _yyyymmdd(date_str: str | None) -> str | None:
     """수집 창 날짜(YYYY-MM-DD) → KIS 파라미터 형식(YYYYMMDD). None 은 그대로 None."""
     return date_str.replace("-", "") if date_str else None
+
+
+def _stop_bound(d1: str) -> str:
+    """창 하한 d1 → **종료 판정용** 하한(그 날 이후 첫 거래일). 요청에는 쓰지 않는다.
+
+    `_fetch_symbol` 의 종료조건이 `earliest <= d1` 인데 d1 이 주말·공휴일이면 종료를 놓친다 —
+    이 엔드포인트는 `FID_INPUT_DATE_1` 을 **시작일**로 받아 서버가 하한을 이미 걸므로, 창 안
+    첫 거래일(earliest)이 비거래일 d1 보다 **항상** 커서 조건이 성립하지 않는다. 그래서 빈
+    페이지를 한 번 더 받아야 `new == 0` 으로 멈췄다. 가격 소급이 5일 고정(`run.py`
+    DEFAULT_PRICE_LOOKBACK_DAYS)이라 목·금 런은 d1 이 주말에 떨어져 **매번** 이 경로였다.
+
+    ⚠️ **요청 하한(FID_INPUT_DATE_1)은 원본 d1 을 그대로 쓴다.** 스냅한 값을 서버로 보내면
+    휴장일 집합이 **과잉**일 때(수동 갱신이라 실제 거래일이 잘못 등재될 수 있다) 그 날 봉이
+    창 밖으로 밀려 조용히 유실되고 collection_log 는 success 로 남는다(Rule 12 위반).
+
+    요청을 원본으로 둬도 **판정 하나만으로는 부족하다**: 잘못 등재된 날이 페이지 경계에
+    정확히 걸리면(첫 페이지 earliest 가 곧 d1_stop) 그 날 봉은 다음 페이지에 있는데 첫
+    페이지에서 종료해버린다. 그래서 종료조건이 **꽉 찬 페이지에서는 달력을 믿지 않는다** —
+    꽉 찼다는 건 아래에 더 있을 수 있다는 뜻이라 한 페이지 더 간다(아래 `page_full`).
+    달력 기반 종료는 달력 오류를 물려받을 수밖에 없으므로, 공식이 아니라 이 교차 검증으로 막는다.
+
+    집합이 **결손**이면 종료를 못 잡아 옛 동작(빈 콜 1회)으로 퇴화한다 — 낭비 쪽이다.
+
+    휴장일 집합은 `OPS_KR_HOLIDAYS`(env)로 KRX·iNAV 와 공유한다(tasks.tf 의 kis 환경).
+    상한 안에 거래일이 없으면(달력 주입 이상) 원본 d1 을 돌려줘 옛 동작으로 퇴화한다.
+    """
+    day = datetime.strptime(d1, "%Y%m%d").date()
+    for _ in range(MAX_SNAP_DAYS):
+        if is_trading_day(day):
+            return day.strftime("%Y%m%d")
+        day += timedelta(days=1)
+    logger.warning("창 하한 %s 이후 %d일 안에 거래일이 없다 — 스냅 생략(OPS_KR_HOLIDAYS 확인)",
+                   d1, MAX_SNAP_DAYS)
+    return d1
 
 
 class KisDailyPriceSource:
@@ -128,10 +171,14 @@ class KisDailyPriceSource:
         token = self.auth.token()
         end_default = datetime.now(KST).strftime("%Y%m%d")
         d1 = _yyyymmdd(from_date)
+        # 요청 하한은 d1 원본, 종료 판정 하한만 거래일로 스냅한다(_stop_bound 주석 — 유실 방지).
+        d1_stop = _stop_bound(d1) if d1 else None
         d2 = _yyyymmdd(to_date) or end_default
         for our_ticker, kis_symbol in plan:
             try:
-                yield from self._fetch_symbol(our_ticker, kis_symbol, d1, d2, token, fetched_at)
+                yield from self._fetch_symbol(
+                    our_ticker, kis_symbol, d1, d1_stop, d2, token, fetched_at
+                )
             except StopFetch:
                 raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
             except Exception as exc:
@@ -144,6 +191,7 @@ class KisDailyPriceSource:
         our_ticker: str,
         kis_symbol: str,
         d1: str | None,
+        d1_stop: str | None,
         d2: str,
         token: str,
         fetched_at: str,
@@ -203,7 +251,16 @@ class KisDailyPriceSource:
                     bars[day] = bar
                     new += 1
             earliest = min(b["stck_bsop_date"] for b in dated)
-            if new == 0 or (d1 and earliest <= d1):
+            # 요청은 d1(원본), 종료 판정은 d1_stop(거래일 스냅) — 둘을 섞으면 창이 좁아진다.
+            # `earliest <= d1` 은 달력과 무관한 정확한 종료다. 달력 기반(d1_stop)은 페이지가
+            # 꽉 차지 **않았을 때만** 믿는다 — 꽉 찬 페이지는 아래에 더 있을 수 있고, 휴장일
+            # 집합이 과잉이면 그 경계에서 실제 거래일 봉을 잘라먹는다(_stop_bound 주석).
+            page_full = len(raw_chunk) >= PAGE_SIZE
+            if (
+                new == 0
+                or (d1 and earliest <= d1)
+                or (d1_stop and earliest <= d1_stop and not page_full)
+            ):
                 truncated = False
                 break
             # 다음 페이지: 이번 배치 최소일 하루 전까지 과거로.
