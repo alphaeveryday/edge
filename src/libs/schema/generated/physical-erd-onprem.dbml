@@ -133,6 +133,15 @@ Table "screening_rule" {
   "created_at" timestamptz [not null]
 }
 
+Table "serving_request_metric" {
+  "request_metric_id" bigint [pk, increment]
+  "method" varchar(10) [not null]
+  "route" varchar(150) [not null]
+  "status_code" smallint [not null]
+  "error_code" varchar(20)
+  "occurred_at" timestamptz [not null]
+}
+
 Table "serving_scope" {
   "serving_scope_id" bigint [pk, increment]
   "scope_type" varchar(20) [not null]
