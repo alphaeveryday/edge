@@ -75,6 +75,11 @@ class AuthServiceTest {
 		}
 
 		@Override
+		public int updateName(long id, String name) {
+			return 0;
+		}
+
+		@Override
 		public void touchLastLogin(long id) {
 		}
 	}

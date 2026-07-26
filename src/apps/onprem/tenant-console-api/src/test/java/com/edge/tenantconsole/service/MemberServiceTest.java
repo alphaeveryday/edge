@@ -377,6 +377,11 @@ class MemberServiceTest {
 		}
 
 		@Override
+		public int updateName(long id, String name) {
+			return 0;
+		}
+
+		@Override
 		public List<MemberEntity> findAllOrderByMemberId() {
 			return List.copyOf(saved);
 		}

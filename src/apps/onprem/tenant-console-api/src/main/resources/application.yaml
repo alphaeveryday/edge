@@ -30,6 +30,13 @@ spring:
     enabled: false
 
 console:
+  tenant:
+    # 콘솔 헤더·사이드바 테넌트 컨텍스트(ALPHA-500) — 온프렘 박스=테넌트 1:1 이라
+    # 배포 설정이 소스다. 기본값은 데모(KB증권), 실 배포는 env 로 덮는다. 실 테넌트
+    # 신원(인증서 바인딩, ALPHA-447)과 별개의 표시값이다.
+    name: ${CONSOLE_TENANT_NAME:KB증권}
+    domain: ${CONSOLE_TENANT_DOMAIN:kbsec.com}
+    mark: ${CONSOLE_TENANT_MARK:KB}
   auth:
     # 데모 자체 계정 부트스트랩(ADR-0025) — member 0건일 때 1회 시드.
     # 아래 비밀번호 기본값은 로컬·데모 스택 전용이다(postgres edge/edge 와 같은 결) —

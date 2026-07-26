@@ -1,10 +1,10 @@
 package com.edge.tenantconsole.auth;
 
+import com.edge.tenantconsole.config.TenantContextProperties;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.ReviewController;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
-import com.edge.tenantconsole.mock.SessionMockStore;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
@@ -114,6 +114,11 @@ class ConsoleAuthFilterTest {
 		}
 
 		@Override
+		public int updateName(long id, String name) {
+			return 0;
+		}
+
+		@Override
 		public long count() {
 			return 0;
 		}
@@ -141,7 +146,8 @@ class ConsoleAuthFilterTest {
 				"admin@demo.edge.local", "TENANT_ADMIN"));
 		mvc = MockMvcBuilders.standaloneSetup(
 						new ReviewController(reviewService),
-						new ConsoleSessionController(new ConsoleSessionService(new SessionMockStore())))
+						new ConsoleSessionController(new ConsoleSessionService(members),
+								new TenantContextProperties("KB증권", "kbsec.com", "KB")))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
 	}
@@ -237,6 +243,16 @@ class ConsoleAuthFilterTest {
 		mvc.perform(get("/api/v1/review/items").session(sessionOf(gone)))
 				.andExpect(status().isUnauthorized())
 				.andExpect(jsonPath("$.code").value("CNSL4011"));
+	}
+
+	@Test
+	void 원장의_이름_변경이_다음_요청_세션_주체에_반영된다() throws Exception {
+		// 프로필 이름은 member 원장이 SSOT(ALPHA-500) — 같은 계정의 다른 세션(다른 탭)에서
+		// 바뀐 이름도 세션 캐시가 아니라 다음 요청의 원장 재검증으로 반영된다(role 과 동일
+		// 메커니즘). StubMembers 원장의 현재 이름("n")이 세션의 옛 이름을 대체해야 한다.
+		mvc.perform(get("/api/v1/session").session(sessionOf(REVIEWER)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.name").value("n"));
 	}
 
 	@Test

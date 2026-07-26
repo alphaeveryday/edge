@@ -68,6 +68,15 @@ public interface MemberRepository extends Repository<MemberEntity, Long> {
 	int updateRole(@Param("id") long id, @Param("role") String role,
 			@Param("expectedRole") String expectedRole);
 
+	/**
+	 * 프로필 표시 이름 변경(ALPHA-500) — 세션 주체 본인의 name 단일 UPDATE. 반환값은
+	 * 영향 행 수로, 0 이면 대상 미존재(404 백스톱 — 세션 주체라 통상 존재한다).
+	 */
+	@Transactional
+	@Modifying
+	@Query(value = "UPDATE member SET name = :name WHERE member_id = :id", nativeQuery = true)
+	int updateName(@Param("id") long id, @Param("name") String name);
+
 	@Transactional
 	@Modifying
 	@Query(value = "UPDATE member SET last_login_at = now() WHERE member_id = :id",
