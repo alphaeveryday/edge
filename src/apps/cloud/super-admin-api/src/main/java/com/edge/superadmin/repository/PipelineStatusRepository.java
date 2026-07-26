@@ -50,12 +50,16 @@ public interface PipelineStatusRepository {
 	 * 축</b>이다 — 실행이 성공(FULFILLED)해도 산출 데이터는 INCOMPLETE 일 수 있다. 이 축을 빼면
 	 * 데이터가 불완전한 작업이 화면에서 온전히 초록으로 보인다(Rule 12).
 	 *
+	 * <p>{@code executionStatus}는 <b>마지막 시도의 물리 상태</b>다(RUNNING·SUCCEEDED·…). outcome 은
+	 * wrapper 가 <b>끝날 때</b> 써서 실행 중엔 PENDING 으로 남는데, 그것만 보면 "돌고 있다"와 "아직
+	 * 시작도 안 했다"가 같은 값이 된다 — 원장이 답하려는 질문이 바로 후자라 둘을 갈라야 한다.
+	 *
 	 * <p>{@code recordsOut}·{@code failedRecords}는 <b>null 이 정상값</b>이다(ALPHA-182) — 신호가
 	 * 없거나 못 믿을 값이면 0 으로 메우지 않는다. 0 으로 내리면 화면에서 "0건 처리"와 "모름"이
 	 * 구분되지 않는다.
 	 */
 	record TaskStatus(String stage, String taskKey, String dataset, String planStatus,
-			String outcome, String dataStatus, Long recordsOut, Long failedRecords,
-			OffsetDateTime lastFinishedAt) {
+			String outcome, String dataStatus, String executionStatus, Long recordsOut,
+			Long failedRecords, OffsetDateTime lastFinishedAt) {
 	}
 }

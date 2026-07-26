@@ -37,11 +37,11 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 	private static final String SQL = """
 			SELECT r.run_key, r.launch_status, r.orchestration_status, r.trading_date,
 			       t.stage, t.task_key, t.dataset, t.plan_status, t.task_outcome, t.data_status,
-			       t.records_out, t.failed_records, a.finished_at
+			       t.records_out, t.failed_records, a.execution_status, a.finished_at
 			  FROM ops_expected_task t
 			  JOIN ops_pipeline_run r ON r.pipeline_run_id = t.pipeline_run_id
 			  LEFT JOIN LATERAL (
-			       SELECT finished_at FROM ops_task_attempt
+			       SELECT finished_at, execution_status FROM ops_task_attempt
 			        WHERE expected_task_id = t.expected_task_id
 			        ORDER BY started_at DESC NULLS LAST, attempt_id DESC
 			        LIMIT 1) a ON TRUE
@@ -88,6 +88,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 						rs.getString("plan_status"),
 						rs.getString("task_outcome"),
 						rs.getString("data_status"),
+						rs.getString("execution_status"),
 						// getLong 은 SQL NULL 을 0 으로 돌려준다 — wasNull 로 갈라야 "0건 처리"와
 						// "신호 없음"이 화면에서 구분된다(ALPHA-182 의 NULL 계약).
 						nullableLong(rs, "records_out"),

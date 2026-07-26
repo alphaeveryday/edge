@@ -25,12 +25,13 @@ public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks) {
 	}
 
 	public record TaskResponse(String stage, String taskKey, String dataset, String planStatus,
-			String outcome, String dataStatus, Long recordsOut, Long failedRecords,
-			String lastFinishedAt) {
+			String outcome, String dataStatus, String executionStatus, Long recordsOut,
+			Long failedRecords, String lastFinishedAt) {
 
 		public static TaskResponse from(TaskStatus t) {
 			return new TaskResponse(t.stage(), t.taskKey(), t.dataset(), t.planStatus(),
-					t.outcome(), t.dataStatus(), t.recordsOut(), t.failedRecords(),
+					t.outcome(), t.dataStatus(), t.executionStatus(), t.recordsOut(),
+					t.failedRecords(),
 					t.lastFinishedAt() == null ? null : t.lastFinishedAt().toString());
 		}
 	}

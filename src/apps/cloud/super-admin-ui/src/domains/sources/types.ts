@@ -22,6 +22,12 @@ export type TaskOutcome =
  */
 export type DataStatus = 'UNKNOWN' | 'VALID' | 'VALID_EMPTY' | 'INCOMPLETE' | 'INVALID';
 
+/**
+ * 마지막 **시도**의 물리 상태. outcome 은 wrapper 가 끝날 때 쓰므로 실행 중엔 PENDING 이다 —
+ * 이 축이 없으면 "돌고 있다"와 "아직 시작도 안 했다"가 화면에서 같은 값이 된다.
+ */
+export type ExecutionStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'TIMED_OUT';
+
 /** Planner 의 SFN 기동 결과. **기동 실패는 orchestration 이 영영 null** 이라 이 축이 따로 필요하다. */
 export type LaunchStatus =
   | 'PLANNING'
@@ -58,6 +64,8 @@ export interface TaskStatus {
   outcome: TaskOutcome | null;
   /** SKIPPED 작업은 null. UNKNOWN 은 "판정 근거 부족"이지 정상이라는 뜻이 아니다 */
   dataStatus: DataStatus | null;
+  /** 마지막 시도의 물리 상태. 시도가 없으면 null */
+  executionStatus: ExecutionStatus | null;
   /**
    * 이 작업의 마지막 시도가 낸 건수. **null 은 "모름"이지 0 이 아니다** — 신호가 없거나
    * 못 믿을 값이면 원장이 NULL 로 남긴다(ALPHA-182). 0 으로 표시하면 "0건 처리"와 구분이 사라진다.

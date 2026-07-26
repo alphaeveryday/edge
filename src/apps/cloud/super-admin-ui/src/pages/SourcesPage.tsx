@@ -81,7 +81,12 @@ function TaskRow({ task }: { task: TaskStatus }) {
       ? { label: '계획 제외', tone: 'gated' as BadgeTone }
       : task.outcome === null
         ? { label: '판정 없음', tone: 'neutral' as BadgeTone }
-        : (OUTCOME[task.outcome] ?? { label: task.outcome, tone: 'neutral' as BadgeTone });
+        : /* outcome 은 작업이 **끝나야** 쓰인다. 실행 중이면 PENDING 인 채로 시도만 RUNNING 이라,
+             이 분기가 없으면 런이 도는 내내 모든 진행 중 작업이 "대기"로 보인다 — 운영자가
+             화면을 보는 바로 그 시점에 "돌고 있다"와 "시작도 안 했다"가 구분되지 않는다. */
+          task.outcome === 'PENDING' && task.executionStatus === 'RUNNING'
+          ? { label: '실행 중', tone: 'env' as BadgeTone }
+          : (OUTCOME[task.outcome] ?? { label: task.outcome, tone: 'neutral' as BadgeTone });
 
   const defect = dataDefect(task.dataStatus);
 

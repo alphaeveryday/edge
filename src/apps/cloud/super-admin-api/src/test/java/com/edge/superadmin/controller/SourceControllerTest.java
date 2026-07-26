@@ -42,12 +42,12 @@ class SourceControllerTest {
 		return new PipelineRunStatus("etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED",
 				LocalDate.of(2026, 7, 27), List.of(
 				new TaskStatus("raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
-						"FULFILLED", "VALID", 2736L, 0L, FINISHED),
+						"FULFILLED", "VALID", "SUCCEEDED", 2736L, 0L, FINISHED),
 				new TaskStatus("raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
-						null, null, null, null, null),
+						null, null, null, null, null, null),
 				// 실행은 성공인데 데이터는 불완전 — 두 축이 따로 내려가는지 잠근다.
 				new TaskStatus("feature", "TAG_NEWS", "news_assertions", "DUE",
-						"FULFILLED", "INCOMPLETE", null, null, FINISHED)));
+						"FULFILLED", "INCOMPLETE", "SUCCEEDED", null, null, FINISHED)));
 	}
 
 	@Test

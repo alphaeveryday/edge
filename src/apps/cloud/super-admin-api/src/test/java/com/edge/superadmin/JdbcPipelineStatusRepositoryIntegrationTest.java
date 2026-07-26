@@ -54,11 +54,16 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 
 	private void insertAttempt(String id, String taskId, String arn, String finishedAt,
 			String startedAt) {
+		insertAttempt(id, taskId, arn, "SUCCEEDED", finishedAt, startedAt);
+	}
+
+	private void insertAttempt(String id, String taskId, String arn, String execStatus,
+			String finishedAt, String startedAt) {
 		jdbc.update("""
 				INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,
 				       execution_status, started_at, finished_at)
-				VALUES (?,?,?,'SUCCEEDED',?::timestamptz,?::timestamptz)
-				""", id, taskId, arn, startedAt, finishedAt);
+				VALUES (?,?,?,?,?::timestamptz,?::timestamptz)
+				""", id, taskId, arn, execStatus, startedAt, finishedAt);
 	}
 
 	@Test
@@ -85,6 +90,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 			// 실행은 성공(FULFILLED)인데 데이터는 불완전하다 — 이 두 축이 함께 와야
 			// 화면이 "완료"를 온전한 초록으로 그리지 않는다.
 			assertThat(t.dataStatus()).isEqualTo("INCOMPLETE");
+			assertThat(t.executionStatus()).isEqualTo("SUCCEEDED");
 			assertThat(t.recordsOut()).isEqualTo(2736L);
 			assertThat(t.failedRecords()).isEqualTo(4L);
 			assertThat(t.lastFinishedAt()).isNotNull();
@@ -190,6 +196,24 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// pipeline_run_id DESC 라 'r6b' 가 이긴다. 타이브레이커를 빼면 이 단언이 임의로 깨진다.
 		assertThat(repository.latestRun().orElseThrow().runKey())
 				.isEqualTo("etf-daily:2026-07-27T15:45");
+	}
+
+	@Test
+	void 실행_중인_작업은_outcome_PENDING_옆에_RUNNING_시도를_함께_낸다() {
+		// WHY: outcome 은 wrapper 가 **끝날 때** 쓴다. 실행 중엔 PENDING 인 채로 시도만 RUNNING 이라,
+		//      execution_status 를 안 실으면 런이 도는 내내 진행 중 작업이 "아직 시작도 안 함"과
+		//      같은 값으로 보인다 — 운영자가 화면을 보는 바로 그 시점이다(Codex #297 P2).
+		insertRun("r7", "etf-daily:2026-07-27T15:46", "LAUNCHED", "RUNNING", null,
+				"2026-07-27T12:00:00Z");
+		insertTask("t7", "r7", "raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "DUE",
+				"PENDING", "UNKNOWN", null, null);
+		insertAttempt("a7", "t7", "arn:aws:ecs:task/7", "RUNNING", null, "2026-07-27T12:05:00Z");
+
+		TaskStatus task = repository.latestRun().orElseThrow().tasks().getFirst();
+
+		assertThat(task.outcome()).isEqualTo("PENDING");
+		assertThat(task.executionStatus()).isEqualTo("RUNNING");
+		assertThat(task.lastFinishedAt()).isNull();   // 아직 안 끝났다
 	}
 
 	@Test
