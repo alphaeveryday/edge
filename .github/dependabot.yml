@@ -70,7 +70,7 @@ updates:
   # 있어 캐치올 글롭으로 잡는다(매니페스트 없는 디렉토리는 무시된다).
   - package-ecosystem: "docker"
     directories:
-      - "**/*"
+      - "/**/*"
     target-branch: "dev"
     schedule:
       interval: "weekly"
