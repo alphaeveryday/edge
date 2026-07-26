@@ -57,7 +57,9 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태) · 
   `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어 record)` 로 매핑해
   반환한다(서비스는 tenants=JPA entity, 그 외=mock record 반환). 스토어 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다
-  (tenant 테이블 미보유 필드는 플레이스홀더). 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은 tenant-sync-api·
+  (admin·email·memo 는 원장 값(ALPHA-121 온보딩 기록), Sync 관측 필드(domain·
+  lastSync·calls·bars)만 플레이스홀더 — 환경 어휘는 IA(PoC/Production, 구 표기는
+  전환 기간 수용·레거시 DEV 는 Dev 표기)). 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은 tenant-sync-api·
   publication-api dto 규약을 따른다 — mock 콘솔 모듈 중 첫 dto 패키지다(ALPHA-523).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 다.
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — jvm-common 봉투

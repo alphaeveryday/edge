@@ -27,22 +27,28 @@ class TenantRepositoryIntegrationTest extends CloudPostgresIntegrationTest {
 	private TenantService tenantService;
 
 	@Test
-	void create_는_env_를_대문자로_저장해_environment_CHECK_를_통과한다() {
-		// UI 는 Prod/Dev 를 보내지만 tenant.environment CHECK 는 대문자(PROD/DEV)다.
-		// service 가 대문자로 변환하지 않으면 여기서 CHECK 위반으로 INSERT 가 실패한다(Rule 9).
-		tenantService.create("페이크증권", "Dev", "관리자", "admin@fake.com");
+	void create_는_env_를_CHECK_어휘로_저장하고_온보딩_기록을_보존한다() {
+		// IA 는 PoC/Production 을 보내지만 tenant.environment CHECK 는 대문자(POC/PROD)다.
+		// service 가 변환하지 않으면 여기서 CHECK 위반으로 INSERT 가 실패한다(Rule 9).
+		// 초기 admin·메모는 확장 컬럼(V202607261530)에 실제로 왕복해야 한다(ALPHA-121).
+		tenantService.create("페이크증권", "PoC", "관리자", "admin@fake.com", "PoC 착수 예정");
 
 		assertThat(repository.findAllByOrderByIdDesc()).anySatisfy(t -> {
 			assertThat(t.getName()).isEqualTo("페이크증권");
-			assertThat(t.getEnv()).isEqualTo("DEV");
+			assertThat(t.getEnv()).isEqualTo("POC");
 			assertThat(t.getStatus()).isEqualTo("ONBOARDING");
+			assertThat(t.getInitialAdminName()).isEqualTo("관리자");
+			assertThat(t.getInitialAdminEmail()).isEqualTo("admin@fake.com");
+			assertThat(t.getMemo()).isEqualTo("PoC 착수 예정");
 		});
 	}
 
 	@Test
 	void save_후_findAll_은_최신순으로_왕복한다() {
-		repository.save(new Tenant("가나증권", "DEV", "ONBOARDING", OffsetDateTime.now()));
-		repository.save(new Tenant("다라증권", "PROD", "ACTIVE", OffsetDateTime.now()));
+		repository.save(new Tenant("가나증권", "DEV", "ONBOARDING", null, null, null,
+				OffsetDateTime.now()));
+		repository.save(new Tenant("다라증권", "PROD", "ACTIVE", "관리자", "a@b.com", null,
+				OffsetDateTime.now()));
 
 		List<Tenant> all = repository.findAllByOrderByIdDesc();
 

@@ -34,10 +34,10 @@ public class TenantController {
 	@PostMapping("/api/v1/tenants")
 	public ApiResponse<Void> create(@RequestBody(required = false) TenantCreateRequest request) {
 		if (request == null) {
-			tenantService.create(null, null, null, null);
+			tenantService.create(null, null, null, null, null);
 		} else {
-			// memo 는 UI 입력엔 있으나 mock 목록 표시에 없다 — DB 연동 시 보존 대상.
-			tenantService.create(request.name(), request.env(), request.admin(), request.email());
+			tenantService.create(request.name(), request.env(), request.admin(), request.email(),
+					request.memo());
 		}
 		return ApiResponse.onSuccess(null);
 	}

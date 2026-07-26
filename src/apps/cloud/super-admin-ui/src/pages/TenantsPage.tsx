@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
-import type { TenantEnv, TenantStatus } from '../domains/tenants';
+import type { TenantCreateEnv, TenantStatus } from '../domains/tenants';
 import { ENV_TONE, TENANT_STATUS_LABEL, TENANT_STATUS_TONE } from '../domains/tenants';
 import { useCreateTenant, useTenants } from '../domains/tenants/hooks';
 import { LoadError } from './_shared/LoadError';
@@ -18,7 +18,7 @@ export function TenantsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [fName, setFName] = useState('');
-  const [fEnv, setFEnv] = useState<TenantEnv>('Prod');
+  const [fEnv, setFEnv] = useState<TenantCreateEnv>('PoC');
   const [fAdmin, setFAdmin] = useState('');
   const [fEmail, setFEmail] = useState('');
   const [fMemo, setFMemo] = useState('');
@@ -35,7 +35,7 @@ export function TenantsPage() {
   const openCreate = () => {
     setCreateOpen(true);
     setFName('');
-    setFEnv('Prod');
+    setFEnv('PoC');
     setFAdmin('');
     setFEmail('');
     setFMemo('');
@@ -80,7 +80,7 @@ export function TenantsPage() {
           {segBtn('ALL', '전체 상태')}
           {segBtn('ACTIVE', '정상')}
           {segBtn('SYNC_DELAYED', '동기화 지연')}
-          {segBtn('ONBOARDING', '온보딩 중')}
+          {segBtn('ONBOARDING', '미연결(온보딩 중)')}
         </div>
         <div className="flex-1" />
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>{rows.length}개 테넌트</span>
@@ -166,12 +166,16 @@ export function TenantsPage() {
           </div>
           <div className="flex flex-col gap-1">
             <span className="t-label">환경 구분</span>
+            {/* IA 어휘(PoC/Production) — 레거시 Dev 는 생성 선택지가 아니다. */}
             <div className="seg self-start">
-              <button className={fEnv === 'Dev' ? 'active' : ''} onClick={() => setFEnv('Dev')}>
-                Dev
+              <button className={fEnv === 'PoC' ? 'active' : ''} onClick={() => setFEnv('PoC')}>
+                PoC
               </button>
-              <button className={fEnv === 'Prod' ? 'active' : ''} onClick={() => setFEnv('Prod')}>
-                Prod
+              <button
+                className={fEnv === 'Production' ? 'active' : ''}
+                onClick={() => setFEnv('Production')}
+              >
+                Production
               </button>
             </div>
           </div>

@@ -35,7 +35,8 @@ public class FakeTenantRepository implements TenantRepository {
 	@Override
 	public Tenant save(Tenant tenant) {
 		Tenant persisted = new Tenant(nextId++, tenant.getName(), tenant.getEnv(),
-				tenant.getStatus(),
+				tenant.getStatus(), tenant.getInitialAdminName(), tenant.getInitialAdminEmail(),
+				tenant.getMemo(),
 				tenant.getCreatedAt() == null ? OffsetDateTime.now() : tenant.getCreatedAt());
 		store.add(persisted);
 		return persisted;
