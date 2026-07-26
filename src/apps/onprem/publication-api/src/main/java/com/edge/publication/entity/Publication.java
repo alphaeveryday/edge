@@ -31,6 +31,9 @@ public class Publication {
 	// 조회 WHERE 절(PUBLISHED 만)이 이 값으로 걸린다.
 	private String status;
 
+	// 게시 시점 노출 문구 스냅샷(ALPHA-437 수정 승인) — NULL 은 자동 게시·구행(원문 노출).
+	private String publishedSummary;
+
 	private OffsetDateTime publishedAt;
 
 	// FK analysis_item_id → analysis_item.explanation_result_id(대상 PK 라 referencedColumnName 생략).
@@ -55,6 +58,10 @@ public class Publication {
 
 	public String getStatus() {
 		return status;
+	}
+
+	public String getPublishedSummary() {
+		return publishedSummary;
 	}
 
 	public OffsetDateTime getPublishedAt() {

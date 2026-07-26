@@ -3,9 +3,11 @@ package com.edge.tenantconsole.service;
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.dto.ReviewApproveRequest;
+import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.ReviewItem;
+import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewTaskRepository;
@@ -35,14 +37,18 @@ public class ReviewService {
 	private final ReviewItemRepository reviewItemRepository;
 	private final PublicationRepository publicationRepository;
 	private final ReviewTaskRepository reviewTaskRepository;
+	private final AnalysisItemStatusHistoryRepository statusHistoryRepository;
 	private final ConsoleActionLogService actionLog;
 
 	public ReviewService(ReviewItemRepository reviewItemRepository,
 			PublicationRepository publicationRepository,
-			ReviewTaskRepository reviewTaskRepository, ConsoleActionLogService actionLog) {
+			ReviewTaskRepository reviewTaskRepository,
+			AnalysisItemStatusHistoryRepository statusHistoryRepository,
+			ConsoleActionLogService actionLog) {
 		this.reviewItemRepository = reviewItemRepository;
 		this.publicationRepository = publicationRepository;
 		this.reviewTaskRepository = reviewTaskRepository;
+		this.statusHistoryRepository = statusHistoryRepository;
 		this.actionLog = actionLog;
 	}
 
@@ -77,6 +83,9 @@ public class ReviewService {
 		reviewTaskRepository.save(new ReviewTaskEntity(explanationResultId,
 				edited ? "EDITED_APPROVED" : "APPROVED", actor.memberId(),
 				editedHeadline, editedSummary, note, OffsetDateTime.now()));
+		// 자기 전이는 같은 트랜잭션에서 이력 원장에 기록한다(status_history writer 규약).
+		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(explanationResultId,
+				"REVIEW_REQUIRED", "APPROVED", "MEMBER", actor.memberId(), note));
 		actionLog.record(actor, edited ? "REVIEW_EDITED_APPROVED" : "REVIEW_APPROVED",
 				"ANALYSIS_ITEM", explanationResultId,
 				Map.of("ticker", item.etfTicker(), "tradeDate", String.valueOf(item.tradeDate())),
@@ -100,6 +109,8 @@ public class ReviewService {
 		}
 		reviewTaskRepository.save(new ReviewTaskEntity(explanationResultId, "REJECTED",
 				actor.memberId(), null, null, reason, OffsetDateTime.now()));
+		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(explanationResultId,
+				"REVIEW_REQUIRED", "REJECTED", "MEMBER", actor.memberId(), reason));
 		actionLog.record(actor, "REVIEW_REJECTED", "ANALYSIS_ITEM", explanationResultId,
 				Map.of("reason", reason), clientIp);
 		log.info("review rejected id={} reason={}", explanationResultId, reason);
@@ -118,7 +129,10 @@ public class ReviewService {
 		if (reviewItemRepository.decide(explanationResultId, "BLOCKED") == 0) {
 			throw new GeneralException(ConsoleErrorStatus.NOT_IN_REVIEW);
 		}
-		// 차단은 게시 무접촉·review_task 어휘 밖(ck_review_task_status) — 사유·주체는 감사가 담는다.
+		// 차단은 게시 무접촉·review_task 어휘 밖(ck_review_task_status) — 사유·주체는
+		// 이력 원장과 감사 로그가 담는다.
+		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(explanationResultId,
+				"REVIEW_REQUIRED", "BLOCKED", "MEMBER", actor.memberId(), reason));
 		actionLog.record(actor, "REVIEW_BLOCKED", "ANALYSIS_ITEM", explanationResultId,
 				Map.of("reason", reason), clientIp);
 		log.info("review blocked id={} reason={}", explanationResultId, reason);

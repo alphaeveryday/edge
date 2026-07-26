@@ -3,7 +3,9 @@ package com.edge.tenantconsole.controller;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
+import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
+import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewTaskRepository;
@@ -95,6 +97,16 @@ class ReviewControllerTest {
 		}
 	}
 
+	private static final class StubHistory implements AnalysisItemStatusHistoryRepository {
+		final List<AnalysisItemStatusHistoryEntity> saved = new ArrayList<>();
+
+		@Override
+		public AnalysisItemStatusHistoryEntity save(AnalysisItemStatusHistoryEntity history) {
+			saved.add(history);
+			return history;
+		}
+	}
+
 	/** 감사 기록 대역 — DB 없이 record 호출을 캡처한다(MemberServiceTest 와 동일 패턴). */
 	private static final class RecordingActionLog extends ConsoleActionLogService {
 		record Entry(SessionMember actor, String action, String targetType, String targetId,
@@ -117,6 +129,7 @@ class ReviewControllerTest {
 	private StubItems items;
 	private StubPublications publications;
 	private StubTasks tasks;
+	private StubHistory history;
 	private RecordingActionLog actionLog;
 	private MockMvc mvc;
 
@@ -125,10 +138,11 @@ class ReviewControllerTest {
 		items = new StubItems();
 		publications = new StubPublications();
 		tasks = new StubTasks();
+		history = new StubHistory();
 		actionLog = new RecordingActionLog();
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ReviewController(
-						new ReviewService(items, publications, tasks, actionLog)))
+						new ReviewService(items, publications, tasks, history, actionLog)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -170,6 +184,14 @@ class ReviewControllerTest {
 			assertThat(e.action()).isEqualTo("REVIEW_APPROVED");
 			assertThat(e.actor()).isEqualTo(REVIEWER);
 			assertThat(e.targetId()).isEqualTo("er-rev-1");
+		});
+		// 상태 변경 이력 원장(analysis_item_status_history) — 자기 전이는 같은 트랜잭션에서
+		// MEMBER 로 기록한다(스키마 COMMENT 의 writer 규약).
+		assertThat(history.saved).singleElement().satisfies(h -> {
+			assertThat(h.getFromStatus()).isEqualTo("REVIEW_REQUIRED");
+			assertThat(h.getToStatus()).isEqualTo("APPROVED");
+			assertThat(h.getActorType()).isEqualTo("MEMBER");
+			assertThat(h.getActorId()).isEqualTo(2L);
 		});
 	}
 
@@ -232,6 +254,7 @@ class ReviewControllerTest {
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("CNSL4091"));
 		assertThat(tasks.saved).isEmpty();
+		assertThat(history.saved).isEmpty();
 		assertThat(actionLog.entries).isEmpty();
 	}
 
@@ -258,6 +281,10 @@ class ReviewControllerTest {
 		});
 		assertThat(actionLog.entries).singleElement()
 				.satisfies(e -> assertThat(e.action()).isEqualTo("REVIEW_REJECTED"));
+		assertThat(history.saved).singleElement().satisfies(h -> {
+			assertThat(h.getToStatus()).isEqualTo("REJECTED");
+			assertThat(h.getReason()).isEqualTo("근거 불충분");
+		});
 	}
 
 	@Test
@@ -277,6 +304,12 @@ class ReviewControllerTest {
 			assertThat(e.action()).isEqualTo("REVIEW_BLOCKED");
 			assertThat(e.actor()).isEqualTo(REVIEWER);
 			assertThat(e.detail()).containsEntry("reason", "부정확한 수치");
+		});
+		assertThat(history.saved).singleElement().satisfies(h -> {
+			assertThat(h.getFromStatus()).isEqualTo("REVIEW_REQUIRED");
+			assertThat(h.getToStatus()).isEqualTo("BLOCKED");
+			assertThat(h.getActorType()).isEqualTo("MEMBER");
+			assertThat(h.getReason()).isEqualTo("부정확한 수치");
 		});
 	}
 

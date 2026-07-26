@@ -146,7 +146,7 @@ class ConsoleAuthFilterTest {
 	void setUp() {
 		// 검수 액션의 기록·감사는 이 테스트의 관심사 밖 — 최소 no-op 대역으로 채운다.
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications(),
-				task -> task, new ConsoleActionLogService(null, null) {
+				task -> task, historyRow -> historyRow, new ConsoleActionLogService(null, null) {
 					@Override
 					public void record(SessionMember actor, String action, String targetType,
 							String targetId, java.util.Map<String, Object> detail, String clientIp) {
