@@ -485,6 +485,8 @@ Table "ops_expected_task" {
   "idempotency_key" text [not null]
   "created_at" timestamptz [not null]
   "updated_at" timestamptz [not null]
+  "records_out" bigint
+  "failed_records" bigint
 }
 
 Table "ops_pipeline_run" {
