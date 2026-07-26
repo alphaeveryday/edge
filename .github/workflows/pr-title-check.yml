@@ -2,7 +2,9 @@
 #
 # Squash 머지(feature/fix → dev)에서는 PR 제목이 곧 dev 의 최종 커밋 메시지다
 # (README "Git 컨벤션 › 커밋·PR 제목"이 SSOT — type 어휘·형식은 그 절과 1:1).
-# 형식이 틀린 제목이 머지되면 히스토리를 되돌릴 수 없어 PR 체크로 막는다.
+# 형식 위반을 PR 체크 실패로 드러낸다 — private/free 플랜은 브랜치 보호를 못 써
+# 체크가 머지를 물리적으로 막지는 못한다(schema-validate·test-python 과 동일 제약).
+# 머지 전 체크 확인은 pr-cycle 운영 규율이 담당한다.
 # base=dev 만 검사한다 — dev→main 릴리스는 Merge commit 이라 PR 제목이 커밋
 # 메시지가 되지 않는다. 제목 길이(50자)는 강제하지 않는다 — 한국어 제목의 실측
 # 관행과 어긋나는 오탐을 피하고, 형식(구조)만 기계 검증한다.
