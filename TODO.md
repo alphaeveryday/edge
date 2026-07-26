@@ -26,9 +26,6 @@
 
 ## 3. 품질 게이트·저장소 자동화 (MVP 구현 전 안전망)
 - [ ] **PR CI 구축** — 변경 모듈만 path-filter로 빌드/테스트 (JVM `gradlew build` · Node `pnpm test` · Python `pytest`). 현재 PR에서 도는 건 schema-validate·terraform-plan뿐 — 일반 코드 테스트가 PR에서 안 돎
-- [ ] **PR 제목 Conventional Commits 검증 CI** — squash 시 PR 제목 = 커밋 메시지인데 자동 체크 없음. 작고 효과 큼
-- [ ] **시크릿 스캔 CI** (gitleaks) — edge-review 수동 스캔의 CI 백스톱
-- [ ] **dependabot 도입** — 의존성 취약점 알림 (금융권 납품 시 SCA는 어차피 요구됨)
 - [ ] **린팅/포맷팅 도입** — eslint+prettier(TS)·ruff(Python)·spotless(JVM), 3런타임 전부 미설정. **시점 주의: 코드 재편(§4) 후 도입하거나 포맷 전용 커밋으로 분리** — 재편 diff에 포맷 노이즈 섞이면 리뷰 오염
 
 ## 4. MVP 구현 (§1 계약 확정 후, docs/implementation.md 기준)
