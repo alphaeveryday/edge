@@ -91,15 +91,25 @@ class TenantControllerTest {
 
 	@Test
 	void 지원하지_않는_env_는_400이다() throws Exception {
-		// IA 어휘는 PoC/Production 뿐 — 구 표기(Dev)도 새 표면에서는 거부한다.
-		for (String env : new String[] {"Staging", "Dev", "Prod"}) {
-			mvc.perform(post("/api/v1/tenants")
-							.contentType(MediaType.APPLICATION_JSON)
-							.content("{\"name\":\"대신증권\",\"env\":\"" + env + "\",\"admin\":\"홍길동\","
-									+ "\"email\":\"gd.hong@daishin.com\"}"))
-					.andExpect(status().isBadRequest())
-					.andExpect(jsonPath("$.code").value("ADMN4001"));
-		}
+		mvc.perform(post("/api/v1/tenants")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"대신증권\",\"env\":\"Staging\",\"admin\":\"홍길동\","
+								+ "\"email\":\"gd.hong@daishin.com\"}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 구_표기_env_는_전환_기간_동안_수용된다() throws Exception {
+		// API·UI 는 독립 배포라 구 UI(Prod/Dev)가 신 API 를 부르는 창이 있다 — 어휘도
+		// 확장-수축을 따른다: 전환 기간 수용, 제거는 수축(구 UI 소멸) 시점.
+		mvc.perform(post("/api/v1/tenants")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"구표기증권\",\"env\":\"Prod\",\"admin\":\"홍길동\","
+								+ "\"email\":\"gd.hong@daishin.com\"}"))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/tenants"))
+				.andExpect(jsonPath("$.result[0].env").value("Production")); // Prod→PROD→Production
 	}
 
 	@Test
@@ -109,13 +119,27 @@ class TenantControllerTest {
 						.content("{\"name\":\" \",\"env\":\"PoC\",\"admin\":\"홍길동\","
 								+ "\"email\":\"gd.hong@daishin.com\"}"))
 				.andExpect(status().isBadRequest());
-		// 온보딩 연락 창구가 되는 이메일 — '@' 없는 값이 원장에 남으면 기록의 의미가 없다.
+		// 온보딩 연락 창구가 되는 이메일 — '@' 없음·로컬/도메인 결측이 원장에 남으면
+		// 기록의 의미가 없다(UI 정규식은 직접 API 호출의 신뢰경계가 아니다).
+		for (String email : new String[] {"not-an-email", "a@", "@b.com", " @ "}) {
+			mvc.perform(post("/api/v1/tenants")
+							.contentType(MediaType.APPLICATION_JSON)
+							.content("{\"name\":\"대신증권\",\"env\":\"PoC\",\"admin\":\"홍길동\","
+									+ "\"email\":\"" + email + "\"}"))
+					.andExpect(status().isBadRequest());
+		}
+		mvc.perform(post("/api/v1/tenants"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 과대_길이_메모는_400이다() throws Exception {
+		// 목록 응답이 memo 를 전건 실어 나른다 — 무제한 TEXT 저장이 응답을 팽창시킨다.
 		mvc.perform(post("/api/v1/tenants")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"name\":\"대신증권\",\"env\":\"PoC\",\"admin\":\"홍길동\","
-								+ "\"email\":\"not-an-email\"}"))
-				.andExpect(status().isBadRequest());
-		mvc.perform(post("/api/v1/tenants"))
+								+ "\"email\":\"gd.hong@daishin.com\",\"memo\":\"" + "가".repeat(2001)
+								+ "\"}"))
 				.andExpect(status().isBadRequest());
 	}
 }

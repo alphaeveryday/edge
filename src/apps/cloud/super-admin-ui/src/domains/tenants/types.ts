@@ -29,9 +29,12 @@ export interface Tenant {
   bars: number[];
 }
 
+/** 생성 표면의 환경 어휘 — 레거시 Dev 는 읽기 전용 표기라 생성 선택지가 아니다. */
+export type TenantCreateEnv = Exclude<TenantEnv, 'Dev'>;
+
 export interface NewTenant {
   name: string;
-  env: TenantEnv;
+  env: TenantCreateEnv;
   admin: string;
   email: string;
   memo: string;
