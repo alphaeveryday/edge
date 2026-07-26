@@ -2,7 +2,9 @@
 #
 # 목적은 취약점 노출 인지다(금융권 납품 SCA 요구의 선행). 노이즈 관리:
 # 주 1회 월요일, 생태계별 PR 상한 소수, minor/patch 는 그룹 PR 로 묶는다.
-# 기본 브랜치가 dev 라 target-branch 지정 없이 dev 대상 PR 이 생성된다.
+# 버전 업데이트 PR 은 브랜치 사다리(feature→dev→main)에 맞춰 전 항목
+# target-branch: dev 로 명시한다. 이 파일은 기본 브랜치(dev)에 병합된 뒤부터
+# 읽힌다 — 보안 경보(Dependabot alerts)의 PR 도 기본 브랜치 대상이다.
 # commit-message prefix 는 pr-title-check(Conventional Commits) 를 통과하는
 # 형식(build(deps): …)으로 맞춘다. 보안 경보(Dependabot alerts)는 이 파일이
 # 아니라 저장소 설정에서 켠다 — 이 파일은 버전 업데이트 PR 정책이다.
