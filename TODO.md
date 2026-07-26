@@ -15,6 +15,7 @@
 ## 2. PM/팀 확정·리스크 확인 (결정·조사 작업, 코딩 아님 — 8월 중간평가 기준 재정렬 2026-07-23)
 - [ ] **데모 시나리오·시드 데이터 확정** — 8월 중간평가에서 보여줄 종목·이벤트·스토리 대본 + 데이터 공급 방식(로컬/데모에서 data-pipeline 실수집 vs 픽스처 주입). 가상 MTS 화면 범위·모니터링 최소치 등 "어디까지 구현" 결정들의 상위 입력
 - [ ] **테넌트(증권사) 온보딩 절차 정의** — super-admin 테넌트 등록 → 인증서 발급([adr/0012](docs/adr/0012-sync-cert-bootstrap.md)) → 온프렘 설치 config 산출물 형식·secrets/인증서 주입 방식 → compose 기동의 end-to-end. 8월 기준 "프로비저닝 스크립트 1개" 수준이면 충분
+- [ ] **외부 데이터 소스 약관 — 잔여 확정** — 1차 조사 완료(ALPHA-399, docs/domain/data-source-licensing.md). 잔여: 조건부/금지 소스의 법률 검토·공급자 공식 확인(실계약 전 필수 — 문서 스스로 잠정 스냅샷임을 명시)
 - [ ] **GitHub 플랜/공개 여부 결정** — private+free 플랜이라 **branch protection 불가** (main 직접 push 방지·required check·CODEOWNERS 강제 전부 규율로만 유지 중, schema-validate.yml 주석 참조). Team 플랜 업그레이드 vs public 전환
 - [ ] **OSS 라이선스 방침·인벤토리** — 온프렘 배포는 고객사 라이선스 실사 대상. GPL류 의존성 확인 + NOTICE 준비 + LICENSE 파일(proprietary 명시). 8월 데모에는 불요 — 실증권사 실사 시점 대비
 - [ ] Exposure/Audit Log **보존 기간** (금융권 감사 요건) — 8월 데모에는 불요
@@ -28,7 +29,7 @@
 - [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
-- [ ] Screening Worker — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (§2 위험 등급 결정 선행)
+- [ ] Screening Worker — MVP Rule Type 목록·심각도→상태 분기 알고리즘 정의 후 구현 (**산정 주체 결정 완료 2026-07-26: 온프렘 Screening Worker** — Cloud AI 는 가드레일 제공만, 등급 기준은 증권사별 상이. 기준·Rule Type 목록·ADR-0018 적용은 ALPHA-429~431 구현에서 확정)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] **fan-out 발번기** — analysis-engine 의 `explanation_result(DRAFT)`를 sync outbox `tenant_delivery` 로 승격하는 cloud 서비스. 이게 있어야 파이프라인 산출물이 자동으로 sync 경계를 넘어 데모까지 관통한다 — 현재는 수동 시드(`scratchpad/seed-cloud-demo.sql`)로 대체 중. **데모 토폴로지(EC2+compose 가상 온프렘)·MTS 화면·배포 CD(deploy-demo-onprem.yml)는 구축 완료**(ALPHA-533·444·445·542, 브라우저 관통 검증) — 남은 건 이 데이터 자동화뿐
