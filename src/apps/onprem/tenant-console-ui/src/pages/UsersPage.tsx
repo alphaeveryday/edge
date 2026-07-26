@@ -241,7 +241,14 @@ export function UsersPage() {
         </div>
       </Modal>
 
-      <Modal open={roleTarget !== null} title="역할 변경" onClose={() => setRoleTarget(null)}>
+      <Modal
+        open={roleTarget !== null}
+        title="역할 변경"
+        // pending 중 닫기·재개봉을 막는다 — 늦은 성공 콜백이 재개봉된 모달을 닫는 경쟁 차단.
+        onClose={() => {
+          if (!changeRole.isPending) setRoleTarget(null);
+        }}
+      >
         <div className="flex flex-col gap-3 p-4">
           <div style={{ fontSize: 13, lineHeight: 1.6 }}>
             <span className="font-semibold">{roleTarget?.name}</span>({roleTarget?.email})의 역할을
@@ -264,7 +271,11 @@ export function UsersPage() {
             역할 변경은 전건 감사 로그에 기록되며, 대상 사용자에게는 다음 요청부터 즉시 적용됩니다.
           </div>
           <div className="mt-1 flex justify-end gap-2">
-            <button className="btn" onClick={() => setRoleTarget(null)}>
+            <button
+              className="btn"
+              onClick={() => setRoleTarget(null)}
+              disabled={changeRole.isPending}
+            >
               취소
             </button>
             <button
