@@ -36,15 +36,16 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
 - **운영 경로(설계)**: SSO/AD — 같은 `SessionMember` 로 수렴하는 별도 진입점,
   구현은 실계약 시점. `password_hash` NULL = SSO 전용 계정(로컬 로그인 거부).
 - **의도적 생략(데모 범위)**: 로그인 레이트리밋·계정 잠금 없음(내부망 전제).
-  세션 role 은 발급 시점 스냅샷이라 로그인 이후의 비활성화·역할 회수는 세션
-  만료 전까지 반영되지 않는다 — 매 요청 재검증은 사용자 관리(ALPHA-119)와 함께.
+  인가는 세션 캐시가 아니라 **매 요청 원장(member) 재검증**이다(ALPHA-119) —
+  비활성화는 세션 무효화 후 401, 역할 변경(ALPHA-499)은 다음 요청부터 즉시 반영.
   CSRF 는 세션 쿠키 SameSite=Strict·HttpOnly 로 경량 방어(운영은 표준 토큰 추가).
 
 ## 콘솔 mock 표면 (ALPHA-513)
 
-tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 5종 —
-explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
-scope(시장·종목 제공 범위) · members(사용자·초대) · session(테넌트 컨텍스트·프로필).
+tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 중 mock 잔여
+4종 — explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
+scope(시장·종목 제공 범위) · session(테넌트 컨텍스트·프로필). members(사용자 관리)는
+ALPHA-119 로 member 원장 실데이터로 전환됐다(등록·목록·비활성화 + 역할 변경 ALPHA-499).
 
 - **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
   파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
@@ -72,8 +73,8 @@ scope(시장·종목 제공 범위) · members(사용자·초대) · session(테
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` 5종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
-| 부트스트랩 시드(데모 자체 계정) | ALPHA-119 | 콘솔 Users & Roles 등록·역할 부여 화면·API |
+| `mock` 패키지 `*MockStore` 4종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
+| 부트스트랩 시드(데모 자체 계정) | ALPHA-500(화면) | Users & Roles 화면 실데이터 전환 — 등록·역할 부여 API 는 구현됨(ALPHA-119·499) |
 | 데모 로그인 | 실증권사 계약 | SSO/AD(SAML/OIDC) 진입점 — 같은 세션 추상화로 수렴 |
 
 ## 실행·확인
@@ -88,10 +89,12 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 47건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
+테스트 87건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
-parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 콘솔 mock
-표면의 UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
+parameter 우회 차단·매핑 부재 fail-closed, 부트스트랩 멱등·해시 저장), 사용자
+관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할 변경의 자기변경 403·조건부
+갱신 409·감사 기록), 콘솔 mock 표면의 UI 계약(camelCase·`final` 필드·상태
+전이·어휘 게이트·404)을 인코딩한다.
 단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
 Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
 `contextLoads` 가 `ddl-auto=validate` 로 엔티티↔실스키마 정합을, `ReviewMemberRepositoryIT`
