@@ -61,6 +61,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("GET", Pattern.compile("/api/v1/review/items"), ANY_ROLE),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/block"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/auth/session"), ANY_ROLE),
 			// ── 콘솔 mock 표면(ALPHA-513) — 인증만 강제(전 역할). UI 에 로그인·역할

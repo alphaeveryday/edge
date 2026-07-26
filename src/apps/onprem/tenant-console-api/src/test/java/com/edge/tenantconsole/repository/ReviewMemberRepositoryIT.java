@@ -53,9 +53,9 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 	void publish_는_grain_경합에서_한_번만_성공한다() {
 		seedItem("er-pub", "005930", "APPROVED");
 		LocalDate tradeDate = LocalDate.of(2026, 7, 15);
-		assertThat(publications.publish("er-pub", "005930", tradeDate)).isEqualTo(1);
+		assertThat(publications.publish("er-pub", "005930", tradeDate, "게시 문구")).isEqualTo(1);
 		// 같은 (ticker, trade_date) PUBLISHED grain 선점 — ON CONFLICT DO NOTHING → 0행.
-		assertThat(publications.publish("er-pub", "005930", tradeDate)).isZero();
+		assertThat(publications.publish("er-pub", "005930", tradeDate, "게시 문구")).isZero();
 	}
 
 	@Test

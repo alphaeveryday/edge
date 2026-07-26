@@ -8,6 +8,7 @@ import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
+import com.edge.tenantconsole.service.ConsoleActionLogService;
 import com.edge.tenantconsole.service.ConsoleSessionService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,7 +66,8 @@ class ConsoleAuthFilterTest {
 
 	private static final class StubPublications implements PublicationRepository {
 		@Override
-		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
+		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate,
+				String publishedSummary) {
 			return 1;
 		}
 	}
@@ -142,7 +144,14 @@ class ConsoleAuthFilterTest {
 
 	@BeforeEach
 	void setUp() {
-		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications());
+		// 검수 액션의 기록·감사는 이 테스트의 관심사 밖 — 최소 no-op 대역으로 채운다.
+		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications(),
+				task -> task, new ConsoleActionLogService(null, null) {
+					@Override
+					public void record(SessionMember actor, String action, String targetType,
+							String targetId, java.util.Map<String, Object> detail, String clientIp) {
+					}
+				});
 		// 원장 현재 상태 — reviewer=CR·ro=RO 는 활성, downgraded 는 세션엔 CR 이나 원장은 RO(강등).
 		members = new StubMembers(Map.of(
 				"reviewer@demo.edge.local", "COMPLIANCE_REVIEWER",
@@ -185,6 +194,18 @@ class ConsoleAuthFilterTest {
 				.andExpect(status().isForbidden())
 				.andExpect(jsonPath("$.code").value("CNSL4030"));
 		mvc.perform(post("/api/v1/review/items/er-1/approve").session(sessionOf(REVIEWER)))
+				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 차단도_Compliance_Reviewer_전용이다() throws Exception {
+		// permission-matrix.md "검수 액션(…차단)" = CR — 신설 라우트(ALPHA-437)도 동일 강제.
+		mvc.perform(post("/api/v1/review/items/er-1/block").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/review/items/er-1/block").session(sessionOf(REVIEWER))
+						.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+						.content("{\"reason\":\"사유\"}"))
 				.andExpect(status().isOk());
 	}
 

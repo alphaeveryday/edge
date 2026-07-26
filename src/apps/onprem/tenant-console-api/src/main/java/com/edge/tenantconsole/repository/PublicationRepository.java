@@ -18,15 +18,19 @@ import java.time.LocalDate;
 public interface PublicationRepository extends Repository<PublicationEntity, Long> {
 
 	/**
+	 * 게시 시점 노출 문구를 published_summary 로 스냅샷한다(ALPHA-437) — 수정 승인은
+	 * 편집 문구, 일반 승인은 원문(analysis_item.summary)이 실린다(DDL 주석의 필수화).
+	 *
 	 * @return 삽입된 행 수(1 = 게시, 0 = grain 선점).
 	 */
 	@Transactional
 	@Modifying
 	@Query(value = """
-			INSERT INTO publication (analysis_item_id, etf_ticker, trade_date)
-			VALUES (:analysisItemId, :etfTicker, :tradeDate)
+			INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, published_summary)
+			VALUES (:analysisItemId, :etfTicker, :tradeDate, :publishedSummary)
 			ON CONFLICT (etf_ticker, trade_date) WHERE status = 'PUBLISHED' DO NOTHING
 			""", nativeQuery = true)
 	int publish(@Param("analysisItemId") String analysisItemId, @Param("etfTicker") String etfTicker,
-			@Param("tradeDate") LocalDate tradeDate);
+			@Param("tradeDate") LocalDate tradeDate,
+			@Param("publishedSummary") String publishedSummary);
 }

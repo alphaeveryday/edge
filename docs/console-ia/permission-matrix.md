@@ -81,8 +81,9 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/auth/logout` | 인증(로그아웃) | 인증된 전 역할 |
 | `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
-| `POST /api/v1/review/items/{id}/approve` | 검수 액션 | CR |
-| `POST /api/v1/review/items/{id}/reject` | 검수 액션 | CR |
+| `POST /api/v1/review/items/{id}/approve` | 검수 액션 — 승인·수정 승인(선택 편집 바디) | CR |
+| `POST /api/v1/review/items/{id}/reject` | 검수 액션 — 반려(사유 필수) | CR |
+| `POST /api/v1/review/items/{id}/block` | 검수 액션 — 차단(사유 필수) | CR |
 | `GET /api/v1/members` | Users & Roles 조회 | TA |
 | `POST /api/v1/members` | 사용자 등록 | TA |
 | `POST /api/v1/members/{id}/deactivate` | 사용자 비활성화 | TA |
