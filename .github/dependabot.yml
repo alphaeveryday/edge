@@ -9,8 +9,10 @@
 # 형식(build(deps): …)으로 맞춘다. 보안 경보(Dependabot alerts)는 이 파일이
 # 아니라 저장소 설정에서 켠다 — 이 파일은 버전 업데이트 PR 정책이다.
 #
-# npm: pnpm 워크스페이스 루트(src/)에 package.json 이 없어(락파일만 존재)
-# 패키지 디렉토리 3곳을 직접 지정한다.
+# npm: pnpm 워크스페이스 루트(/src)를 지정한다 — 공유 락파일(pnpm-lock.yaml)과
+# 각 패키지 매니페스트가 한 PR 에서 함께 갱신돼야 frozen-lockfile CI 가 깨지지
+# 않는다(패키지 디렉토리 개별 지정은 락파일 미갱신 PR 을 만든다). dependabot 의
+# 매니페스트 요구를 위해 최소 루트 package.json(private)을 함께 도입했다.
 
 version: 2
 updates:
@@ -28,10 +30,7 @@ updates:
         update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
-    directories:
-      - "/src/apps/onprem/tenant-console-ui"
-      - "/src/apps/cloud/super-admin-ui"
-      - "/src/libs/ui-kit"
+    directory: "/src"
     target-branch: "dev"
     schedule:
       interval: "weekly"
