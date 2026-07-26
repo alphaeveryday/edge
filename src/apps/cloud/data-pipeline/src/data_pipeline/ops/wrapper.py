@@ -48,12 +48,54 @@ def _detect_ecs_task_arn() -> str | None:
 
 def _num(value) -> bool:
     """유한한 수치인가(bool 제외). malformed 신호(None·문자열·NaN·inf)를 걸러 crash·오판을 막는다."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        # 거대 int(예: 10**400)는 float 변환 자체가 불가라 isfinite 가 터진다. 봉투는 JSON 이라
+        # 임의 크기 정수가 들어올 수 있는데, 여기서 안 막으면 **작업이 성공한 뒤** 판정 단계에서
+        # 트레이스백으로 죽는다(exit 0 이 크래시로 뒤집힌다, edge-review H — crash-before-gate).
+        return False
 
 
 def _count(value) -> bool:
     """유효한 건수인가 — 유한 수치이면서 **음수 아님**. 음수 카운트는 malformed 다(게이트 우회 방지)."""
     return _num(value) and value >= 0
+
+
+# PostgreSQL BIGINT 범위. 넘는 값을 그대로 넘기면 UPDATE 가 통째로 실패하는데, 같은 문장에
+# task_outcome·data_status 가 실려 있어 **끝난 작업이 PENDING 으로 남아 MISSED 로 오판**된다.
+# 카운터 하나 지키자고 판정 축을 잃지 않는다 — 범위 밖은 저장을 포기하고 NULL 로 둔다.
+_BIGINT_MIN, _BIGINT_MAX = -(2**63), 2**63 - 1
+
+
+def _counter(value) -> int | None:
+    """원장에 **저장할** 건수 — 유효한 정수 카운트만, 그 외는 None(컬럼 NULL, ALPHA-182).
+
+    0 으로 메우지 않는 이유는 `derive_data_status` 가 근거 부족을 UNKNOWN 으로 남기는 이유와
+    같다 — 0 으로 쓰면 대시보드가 "0건 처리"와 "신호 없음"을 못 가른다(Rule 12).
+
+    소수는 절단하지 않고 버린다(`3.7 → 3` 금지). 건수가 소수로 오면 그건 봉투가 깨진 것이지
+    반올림할 값이 아니다 — 조용히 절단하면 깨진 계측이 그럴듯한 숫자로 위장한다.
+
+    **판정 게이트(`derive_data_status`)보다 엄격한 것은 의도다.** 판정은 "이 데이터를 믿어도
+    되나"를 정하고 여기는 "사람이 읽을 숫자를 쓸까"를 정한다 — 3.7 건이나 BIGINT 를 넘는 건수는
+    판정엔 그냥 양수지만 화면에 적을 수 있는 숫자는 아니다. 둘을 억지로 맞추려고 판정 규칙을
+    건드리지 마라(Rule 3 — 이 티켓은 판정 무변경이다).
+
+    값이 **있는데 못 쓰는** 경우엔 경고를 남긴다. 결측(None)은 리더가 이미 경고하지만
+    (`entry._observe_from_log`), 봉투는 멀쩡한데 값만 깨진 경우는 여기 말고 드러날 곳이 없다
+    (Rule 12 — 불확실을 숨기지 말고 드러낸다).
+    """
+    if value is None:
+        return None                      # 신호 없음 — 리더가 이미 경고한 경로다
+    if _count(value):
+        truncated = int(value)
+        if truncated == value and _BIGINT_MIN <= truncated <= _BIGINT_MAX:
+            return truncated
+    logger.warning("산출 카운터가 유효한 건수가 아니다(%r) — 원장에 NULL 로 남긴다", value)
+    return None
 
 
 def derive_data_status(signals: dict) -> str:
@@ -172,6 +214,9 @@ def instrument(
         _safe(lambda: ledger.update_task_outcome(
             expected_task_id, task_outcome=states.OUTCOME_FAILED,
             data_status=states.DATA_UNKNOWN, current_attempt_id=attempt_id,
+            # 이 시도는 산출을 세지 못했다 — 앞 시도의 카운터를 지운다. 안 지우면 실패 판정 옆에
+            # 성공했던 건수가 남아 대시보드가 "실패했지만 2736건 처리"로 읽는다.
+            counters={},
         ))
         raise
 
@@ -197,6 +242,10 @@ def instrument(
         task_outcome=states.OUTCOME_FULFILLED if exit_code == 0 else states.OUTCOME_FAILED,
         data_status=data_status, current_attempt_id=attempt_id,
         completeness=signals.get("completeness"),
+        # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
+        # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
+        counters={"records_out": _counter(signals.get("records_out")),
+                  "failed_records": _counter(signals.get("failed_records"))},
         fulfilled=exit_code == 0,
     ))
     return exit_code
