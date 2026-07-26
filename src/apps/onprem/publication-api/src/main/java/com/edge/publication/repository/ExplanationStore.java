@@ -69,12 +69,15 @@ public class ExplanationStore {
 
 	private PublishedExplanation toDomain(Publication p) {
 		AnalysisItem a = p.getAnalysisItem();
+		// 노출 문구는 게시 시점 스냅샷(published_summary)이 우선이다 — 수정 승인(ALPHA-437)의
+		// 편집 문구가 여기로 노출된다. NULL(자동 게시·기존 행)은 analysis_item 원문 폴백.
+		String summary = p.getPublishedSummary() != null ? p.getPublishedSummary() : a.getSummary();
 		return new PublishedExplanation(
 				p.getPublicationId(),
 				p.getEtfTicker(),
 				a.getEtfName(),
 				p.getTradeDate(),
-				a.getSummary(),
+				summary,
 				a.getConfidenceLevel(),
 				parseEvidences(a.getEvidences()),
 				p.getPublishedAt());

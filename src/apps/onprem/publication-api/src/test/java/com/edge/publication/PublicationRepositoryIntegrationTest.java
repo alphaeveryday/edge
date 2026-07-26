@@ -110,6 +110,25 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 	}
 
 	@Test
+	void ExplanationStore_는_published_summary_스냅샷을_우선하고_NULL_이면_원문으로_폴백한다() {
+		// WHY: 수정 승인(ALPHA-437)의 편집 문구는 publication.published_summary 스냅샷으로
+		// 노출된다 — 소비층이 이를 무시하면 검수 편집이 고객에게 닿지 않는다. NULL(자동
+		// 게시·기존 행)은 analysis_item 원문 폴백이라 구행 호환이 유지된다.
+		seedAnalysisItem("a-edit", "069500", "KODEX 200", LocalDate.of(2026, 7, 15), "APPROVED", null);
+		jdbc.update("""
+				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, published_summary)
+				VALUES (?, ?, ?, ?)
+				""", "a-edit", "069500", LocalDate.of(2026, 7, 15), "수정된 노출 문구");
+		assertThat(explanationStore.findPublished("069500", LocalDate.of(2026, 7, 15)))
+				.hasValueSatisfying(e -> assertThat(e.summary()).isEqualTo("수정된 노출 문구"));
+
+		seedAnalysisItem("a-orig", "305720", "원문", LocalDate.of(2026, 7, 15), "AUTO_PUBLISHED", null);
+		seedPublication("a-orig", "305720", LocalDate.of(2026, 7, 15), "PUBLISHED");
+		assertThat(explanationStore.findPublished("305720", LocalDate.of(2026, 7, 15)))
+				.hasValueSatisfying(e -> assertThat(e.summary()).isEqualTo("요약 a-orig"));
+	}
+
+	@Test
 	void exposureLog_save_는_노출_이력을_적재한다() {
 		// WHY: 조회=노출(ADR-0013) — 이 기록이 민원·감사 재현의 원천이다.
 		seedAnalysisItem("a-exp", "069500", "KODEX 200", LocalDate.of(2026, 7, 15), "AUTO_PUBLISHED", null);

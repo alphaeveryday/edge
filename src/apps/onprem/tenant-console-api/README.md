@@ -19,10 +19,16 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
   parameter(`;k=v`)를 벗긴 경로로 판정한다. MVC 의 PathPattern 매핑과 같은 기준을
   써야 `/api;x=y/...` 같은 우회로 필터가 통째로 건너뛰어지지 않는다.
 - **검수 전이 writer 분담** — 이 모듈은 `analysis_item` 의 검수 결정 전이
-  (REVIEW_REQUIRED→APPROVED|REJECTED)만 쓴다(수신·자동 분기는 screening-worker).
-  스키마 COMMENT 가 SSOT. `member` 는 이 모듈이 유일 writer.
-- **승인 = 전이+재발행 단일 트랜잭션** — 승인됐는데 게시가 안 되는 어중간한
-  상태를 남기지 않는다. grain 선점·ticker 결측은 409/전이 롤백으로 수렴.
+  (REVIEW_REQUIRED→APPROVED|REJECTED|BLOCKED, ALPHA-437)만 쓴다(수신·자동 분기는
+  screening-worker — BLOCKED 도 전이 원점이 다르다: worker=자동 분기, 콘솔=검수
+  차단). 스키마 COMMENT 가 SSOT. `member` 는 이 모듈이 유일 writer 이고,
+  `review_task`(생성·결정)·`analysis_item_status_history`(MEMBER 전이)도 분담
+  범위만 쓴다(CANCELLED·SYSTEM 은 screening-worker).
+- **검수 결정 = 전이+재발행+기록+감사 단일 트랜잭션** — 승인됐는데 게시가 안
+  되거나, 결정이 기록(review_task·status_history·console_action_log) 없이 남는
+  어중간한 상태를 만들지 않는다. grain 선점·ticker 결측은 409/전이 롤백으로 수렴.
+  수정 승인(approve-edited)의 편집 문구는 `publication.published_summary` 스냅샷
+  으로 게시된다(원문은 analysis_item 에 보존).
 
 ## 인증 (ADR-0025 하이브리드)
 
@@ -90,7 +96,8 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 91건 — 검수 계약(승인=전이+재발행, 반려 사유 필수, 409 수렴), 인증
+테스트 99건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단
+사유 필수, 편집 누락·오타 400 강등 차단, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
 parameter 우회 차단·매핑 부재 fail-closed·세션 주체=원장 정체성 SSOT, 부트스트랩
 멱등·해시 저장), 사용자 관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할
