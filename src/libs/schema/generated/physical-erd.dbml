@@ -665,6 +665,9 @@ Table "tenant" {
   "environment" varchar(10) [not null]
   "status" varchar(20) [not null]
   "created_at" timestamptz [not null]
+  "initial_admin_name" varchar(100)
+  "initial_admin_email" varchar(255)
+  "memo" text
 }
 
 Table "tenant_credential" {
