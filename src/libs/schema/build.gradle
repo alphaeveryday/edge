@@ -4,12 +4,12 @@ buildscript {
     repositories { mavenCentral() }
     dependencies {
         classpath 'org.postgresql:postgresql:42.7.4'
-        classpath 'org.flywaydb:flyway-database-postgresql:10.21.0'
+        classpath 'org.flywaydb:flyway-database-postgresql:13.0.0'
     }
 }
 
 plugins {
-    id 'org.flywaydb.flyway' version '10.21.0'
+    id 'org.flywaydb.flyway' version '13.0.0'
 }
 
 // url/user/password는 Gradle property → 환경변수 → 기본값(Docker Compose와 일치) 순으로 override 가능.
