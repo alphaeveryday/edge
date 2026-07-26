@@ -61,14 +61,15 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 		try {
 			chain.doFilter(request, wrapper);
 			record(request, wrapper.getStatus(), wrapper);
+			// 본문 복사는 성공 경로에서만 — 예외 경로에서 부분 본문을 커밋하면 컨테이너
+			// ERROR 처리기가 정상 500 응답으로 교체할 수 없게 된다.
+			wrapper.copyBodyToResponse();
 		} catch (Exception e) {
 			// advice 밖으로 샌 미처리 예외 — 컨테이너 ERROR dispatch 로 500 이 되지만
 			// OncePerRequestFilter 는 그 dispatch 를 다시 타지 않으므로 여기서 실제
-			// 결말(500)로 기록한다. 래퍼 기본 상태(200)를 남기면 실패가 성공으로 적재된다.
+			// 결말(500)로 기록하고, 응답은 복사 없이 ERROR 처리기에 맡긴다.
 			record(request, 500, null);
 			throw e;
-		} finally {
-			wrapper.copyBodyToResponse();
 		}
 	}
 
