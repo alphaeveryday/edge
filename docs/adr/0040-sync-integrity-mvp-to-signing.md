@@ -97,6 +97,12 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
     스키마를 `ApiResponse` 봉투로 감싸고 `X-Bundle-Checksum` 헤더 선언을 제거한다(현재 71–82행이
     `EventBundle`을 직접 참조하고 헤더를 선언 — README가 이 파일을 경로·필드·타입 문법 SSOT로 지정하므로,
     갱신하지 않으면 코드 생성기·계약 소비자가 이전 형상을 받는다).
+  - ⑦ **롤아웃 순서(요지 — 상세 runbook은 구현 티켓 소관)**: Cloud와 온프렘이 원자적으로 배포되지
+    않으므로 와이어 계약·저장 데이터 모두 staged **expand→transition→contract**다. 소비자(sync-agent·
+    intake·screening)를 **구·신 본문 형상 + 선택적 헤더를 모두 수용**하도록 먼저 배포 → Cloud 생산자를
+    봉투로 전환 → 기존 `screened_at IS NULL` direct-root 저장분이 소진된 뒤 구 형식 지원 제거. 순서를
+    어기면 Cloud 선전환 시 구 `BundleRelayService`가 헤더 결측을 거부하거나 구 파서가 `result` 래핑을
+    못 읽고, 미전환 저장 행 하나가 `ScreeningPoller`(첫 실패서 순서보존 중단) 전체를 막는다.
 - 승인 시 갱신 대상: docs/contracts/sync-protocol.md(무결성·응답 포맷 절), event-bundle-schema.md
   (체크섬 절), 에픽 ALPHA-420 DoD의 "번들 체크섬(SHA-256) 무결성 검증" 항목을 목표 계약으로 이동.
 - **잔여 리스크(수용, 재평가)**: 체크섬은 **`sync-agent` 수신 시점(`BundleRelayService`)에 1회만** 검증되고
