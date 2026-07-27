@@ -53,11 +53,14 @@ public final class DeliveryBundleParser {
 			throw new IllegalStateException("entry.source_events 가 배열이 아니다 — 출처 수 판정 불가, 계약 위반");
 		}
 		if (sourceEvents.isArray()) {
-			// 출처 수는 정책 게이트(SINGLE_SOURCE·min_source_count)의 입력이다 — 비객체
-			// 요소([null,…])가 건수로 세지면 malformed 근거가 출처 기준을 통과한다.
+			// 출처 수는 정책 게이트(SINGLE_SOURCE·min_source_count)의 입력이고, 런타임엔
+			// JSON Schema 검증 계층이 없다 — 식별 불가 요소([null,…]·{})가 건수로 세지면
+			// malformed 근거가 출처 기준을 통과한다. 출처로 인정하는 최소 조건은 문자열
+			// source_event_id(식별 가능성) — 요소 상세 스키마 전체 대조는 계약 테스트(ALPHA-497) 몫.
 			for (JsonNode sourceEvent : sourceEvents) {
-				if (!sourceEvent.isObject()) {
-					throw new IllegalStateException("entry.source_events 요소가 객체가 아니다 — 계약 위반");
+				if (!sourceEvent.isObject() || !sourceEvent.path("source_event_id").isString()) {
+					throw new IllegalStateException(
+							"entry.source_events 요소에 source_event_id(문자열)가 없다 — 계약 위반");
 				}
 			}
 		}
@@ -92,7 +95,7 @@ public final class DeliveryBundleParser {
 	private static DeliveryEntry.ExplanationResult parseResult(JsonNode result) {
 		return new DeliveryEntry.ExplanationResult(
 				strictString(result, "explanation_result_id"),
-				result.path("etf_instrument_id").asString(null),
+				strictString(result, "etf_instrument_id"),
 				strictString(result, "etf_ticker"),
 				result.path("etf_name").asString(null),
 				LocalDate.parse(result.path("trade_date").asString()),

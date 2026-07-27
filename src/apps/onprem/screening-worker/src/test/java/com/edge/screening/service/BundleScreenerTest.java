@@ -305,6 +305,30 @@ class BundleScreenerTest {
 	}
 
 	@Test
+	void source_events_요소에_source_event_id가_없으면_실패한다() {
+		// WHY: 런타임엔 JSON Schema 검증 계층이 없다 — 식별 불가 요소({})가 출처로
+		// 세지면 출처 게이트(SINGLE_SOURCE·min_source_count)가 malformed 로 충족된다.
+		Executable call = () -> screener.screen(15,
+				bundle("{\"cursor\":15,\"delivery_type\":\"NEW\",\"source_events\":[{}]," +
+						"\"explanation_result\":" + RESULT + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void etf_instrument_id가_문자열이_아니면_실패한다() {
+		// WHY: 도메인 식별자다 — 숫자가 "123" 으로 강제되면 조작된 정체성이 원장에
+		// 확정된다(explanation_result_id 와 동일한 강제 통과 차단).
+		Executable call = () -> screener.screen(16,
+				bundle("{\"cursor\":16,\"delivery_type\":\"NEW\",\"explanation_result\":" +
+						RESULT.replace("\"etf_instrument_id\":\"i-1\"", "\"etf_instrument_id\":11") + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
 	void cursor가_long_범위를_벗어나면_실패한다() {
 		// WHY: source_cursor 는 수신 원본↔항목의 감사 키다 — 오버플로 손실 변환된 값이
 		// 조용히 저장되면 추적 관계가 원본과 어긋난 채 확정된다.
