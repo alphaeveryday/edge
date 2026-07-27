@@ -405,7 +405,7 @@ locals {
       #
       # 막을 필요가 없는 근거: **정제는 빈 입력을 정상 성공으로 처리한다.** raw 키가 0개면
       # 루프가 안 돌고 exit 0 이다(normalize_price.py 의 `for raw_key in raw_keys`). 그래서
-      # BigKinds 가 죽어도 NormalizeNews 는 이 런의 FMP raw 만 정제하고 성공한다 — 정제 잡별로
+      # 수집 하나가 죽어도 그 데이터셋 정제는 남은 raw 만 정제하고 성공한다 — 정제 잡별로
       # "어느 raw 가 필수인가" 의존 맵을 ASL 에 적을 이유가 없다. 있는 만큼 처리한다.
       RawIngestCheckResults = {
         Type = "Choice"
@@ -415,7 +415,7 @@ locals {
         }]
         Default = "NotifyRawPartial"
       }
-      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 tag-news·analyze 처럼
+      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 analyze 처럼
       # LLM 을 부르는(소요시간 상한이 없는) 페이즈가 있고, 최상위 TimeoutSeconds 로 실행이
       # 죽으면 States.Timeout 이 실행 자체를 끝내 **어떤 Catch 도 안 탄다**(아래 CloudWatch
       # 알람 주석 참조). 즉 판정을 끝에 두면 "raw 부분 실패 + 그 뒤 타임아웃" 조합에서 run_id 가
@@ -481,9 +481,8 @@ locals {
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
       # 두 적재 잡은 **canonical 을 full-scan** 하므로 여기 걸린 건 자동 회복된다: 이번 실행이
-      # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. tag-news 는 미태깅 기사만
-      # 고르고(태거·온톨로지 버전 + 입력 지문으로 판정) load-instruments 는 자연키 멱등이라
-      # 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. load-instruments 는 자연키
+      # 멱등이라 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
       # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
       # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
       # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
