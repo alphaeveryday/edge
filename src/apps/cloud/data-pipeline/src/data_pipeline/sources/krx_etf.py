@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from ..config import KrxEtfSource as KrxEtfSourceConfig
 from ..ops.trading_calendar import is_trading_day
 from .fanout import fanout
-from .http import PoliteClient
+from .http import PoliteClient, StopFetch
 from .krx_auth import USER_AGENT, KrxAuth
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,8 @@ class KrxEtfSource:
         로그인은 run 당 1회 — 실패는 소스 전체 문제(자격증명·중복세션)라 격리하지 않고 예외로
         올린다(스텝이 error 로 드러냄). ETF 단위 실패(요청 실패·깨진 JSON·이상 응답·빈 output)는
         격리·기록하고 남은 ETF 를 계속 수집한다. StopFetch(4xx/429 — 미로그인 400 LOGOUT 포함)만
-        소스 전체를 중단한다(세션·쿼터 문제라 재시도·격리 대상이 아니다).
+        소스 전체를 중단한다(세션·쿼터 문제라 재시도·격리 대상이 아니다). 단 400 QUERYTIMEOUT
+        은 예외 — 그 질의 하나가 서버 계산 제한을 넘긴 것이라 ETF 단위로 격리한다(_fetch_etf).
         """
         self.fetch_failures = []
         plan = self.plan()
@@ -169,7 +170,19 @@ class KrxEtfSource:
             "Content-Type": "application/x-www-form-urlencoded",
             "Cookie": f"JSESSIONID={jsessionid}",
         }
-        raw = self.client.request("POST", GETJSONDATA_URL, headers=headers, data=body, decode=True)
+        try:
+            raw = self.client.request(
+                "POST", GETJSONDATA_URL, headers=headers, data=body, decode=True
+            )
+        except StopFetch as exc:
+            # 400 QUERYTIMEOUT 은 세션·쿼터가 아니라 **그 질의가 서버 계산 제한(≈61초)을 넘긴
+            # 것**이다(2026-07-27 열화 장애 라이브 실측 — 클라이언트 타임아웃 300초에도 서버가
+            # 60~61초에 스스로 끊었다). 소스 전체를 중단하면 ETF 하나의 열화가 나머지 전부를
+            # 죽이므로 이 ETF 만 격리한다. 본문 의미 판정은 어댑터 몫이라는 StopFetch.status/
+            # body 계약 그대로다(KIS 토큰 403 EGW00133 선례). LOGOUT 등 나머지 4xx 는 전체 중단.
+            if exc.status == 400 and "QUERYTIMEOUT" in exc.body:
+                raise ValueError(f"QUERYTIMEOUT: {exc}") from exc  # → ETF 단위 실패
+            raise
         try:
             data = json.loads(raw) if raw else {}
         except json.JSONDecodeError as exc:

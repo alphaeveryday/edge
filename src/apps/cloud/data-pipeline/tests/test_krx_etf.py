@@ -167,10 +167,29 @@ def test_malformed_row_skipped_others_preserved():
 
 def test_stopfetch_aborts_whole_source():
     # WHY: 4xx/429(미로그인 400 LOGOUT 포함)는 세션·쿼터 문제라 ETF 단위 격리 대상이
-    #      아니다 — 소스 전체를 중단해야 한다.
-    src = _source({"KR7069500007": StopFetch("400 LOGOUT")})
+    #      아니다 — 소스 전체를 중단해야 한다. 같은 400 이라도 QUERYTIMEOUT 이 아니면
+    #      격리 예외에 걸리지 않아야 한다(예외는 본문 어휘로만 판정).
+    src = _source({"KR7069500007": StopFetch("400 LOGOUT", status=400, body="LOGOUT")})
     with pytest.raises(StopFetch):
         list(src.fetch())
+
+
+def test_querytimeout_isolated_per_etf():
+    # WHY: KRX 는 자기 쿼리가 안 끝나면 60~61초에 400 QUERYTIMEOUT 으로 스스로 끊는다
+    #      (2026-07-27 열화 장애 라이브 실측). 세션·쿼터가 아니라 그 질의 하나가 무거웠다는
+    #      뜻이라 소스 전체 중단이 아니라 ETF 단위 격리가 맞다 — 전체 중단이면 ETF 하나의
+    #      열화가 나머지 31종 수집을 전부 죽인다.
+    src = _source({
+        "KR7069500007": StopFetch(
+            "HTTP 400: 수집 중단", status=400,
+            body='{"message":"QUERYTIMEOUT","bld":"dbms/MDC/STAT/standard/MDCSTAT05001"}',
+        ),
+        "KR7360750004": {"output": [{"COMPST_ISU_CD": "B"}]},
+    }, etf_map={"069500": "KR7069500007", "360750": "KR7360750004"})
+    rows = list(src.fetch())
+    assert len(rows) == 1  # 남은 ETF 는 계속 수집된다
+    assert [f["our_etf_id"] for f in src.fetch_failures] == ["069500"]
+    assert "QUERYTIMEOUT" in src.fetch_failures[0]["error"]
 
 
 def test_disabled_without_credentials():
