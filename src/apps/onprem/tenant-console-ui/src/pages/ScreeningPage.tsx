@@ -3,15 +3,20 @@ import { StatusBadge, Toggle, toast } from 'ui-kit';
 import type { RiskLevel } from '../domains/explanations';
 import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
-import { useBannedWords, useCriteria, useDisclaimer, useScreeningActions } from '../domains/screening/hooks';
+import { useBannedWords, useCriteria, useDisclaimer, usePolicyVersions, useScreeningActions } from '../domains/screening/hooks';
+import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
 
 const ACTION_LABEL: Record<WordAction, string> = { REVIEW: '검수 필요', BLOCK: '점검 차단' };
 
-type Tab = 'words' | 'rules' | 'disclaimer';
+type Tab = 'words' | 'rules' | 'disclaimer' | 'history';
 
 export function ScreeningPage() {
   const [tab, setTab] = useState<Tab>('words');
+  // 정책 변경(=새 버전 발행)은 CR 전용(permission-matrix) — 강제 지점은 API 필터이고,
+  // 화면은 비CR 에게 쓰기 컨트롤을 감춰 403 조작 시도를 예방한다(UsersPage 선례).
+  const { data: session } = useSession();
+  const canEdit = session?.role === 'COMPLIANCE_REVIEWER';
 
   return (
     <div className="flex max-w-[900px] flex-col gap-5">
@@ -25,16 +30,20 @@ export function ScreeningPage() {
         <div className={`tab${tab === 'disclaimer' ? ' active' : ''}`} onClick={() => setTab('disclaimer')}>
           면책 문구
         </div>
+        <div className={`tab${tab === 'history' ? ' active' : ''}`} onClick={() => setTab('history')}>
+          버전 이력
+        </div>
       </div>
 
-      {tab === 'words' && <WordsTab />}
-      {tab === 'rules' && <RulesTab />}
-      {tab === 'disclaimer' && <DisclaimerTab />}
+      {tab === 'words' && <WordsTab canEdit={canEdit} />}
+      {tab === 'rules' && <RulesTab canEdit={canEdit} />}
+      {tab === 'disclaimer' && <DisclaimerTab canEdit={canEdit} />}
+      {tab === 'history' && <HistoryTab />}
     </div>
   );
 }
 
-function WordsTab() {
+function WordsTab({ canEdit }: { canEdit: boolean }) {
   const { data: words = [], isError } = useBannedWords();
   const { addWord, toggleWord } = useScreeningActions();
 
@@ -63,6 +72,7 @@ function WordsTab() {
 
   return (
     <div className="flex flex-col gap-4">
+      {canEdit && (
       <div className="card card-pad">
         <div className="t-label mb-3">금칙어 등록</div>
         <div className="flex flex-wrap items-end gap-2">
@@ -94,6 +104,7 @@ function WordsTab() {
           </button>
         </div>
       </div>
+      )}
 
       <div className="card">
         <div className="card-head">
@@ -123,7 +134,11 @@ function WordsTab() {
                 </td>
                 <td className="col-muted">{ACTION_LABEL[w.action]}</td>
                 <td>
-                  <Toggle on={w.active} onToggle={() => toggleWord.mutate(w.id)} aria-label={`${w.text} 활성 여부`} />
+                  {canEdit ? (
+                    <Toggle on={w.active} onToggle={() => toggleWord.mutate(w.id)} aria-label={`${w.text} 활성 여부`} />
+                  ) : (
+                    <span className="col-muted">{w.active ? '활성' : '비활성'}</span>
+                  )}
                 </td>
                 <td className="col-muted num">{w.registeredAt}</td>
               </tr>
@@ -135,7 +150,7 @@ function WordsTab() {
   );
 }
 
-function RulesTab() {
+function RulesTab({ canEdit }: { canEdit: boolean }) {
   const { data: criteria, isError } = useCriteria();
   const { updateCriteria } = useScreeningActions();
 
@@ -159,6 +174,7 @@ function RulesTab() {
             <select
               className="select"
               style={{ height: 26, fontSize: 11 }}
+              disabled={!canEdit}
               value={criteria?.minSources ?? 2}
               onChange={(e) =>
                 updateCriteria.mutate({ minSources: Number(e.target.value) as 1 | 2 | 3 }, { onSuccess: changed })
@@ -174,6 +190,7 @@ function RulesTab() {
             <select
               className="select"
               style={{ height: 26, fontSize: 11 }}
+              disabled={!canEdit}
               value={criteria?.maxRisk ?? 'MEDIUM'}
               onChange={(e) =>
                 updateCriteria.mutate({ maxRisk: e.target.value as 'LOW' | 'MEDIUM' }, { onSuccess: changed })
@@ -229,7 +246,7 @@ function RulesTab() {
   );
 }
 
-function DisclaimerTab() {
+function DisclaimerTab({ canEdit }: { canEdit: boolean }) {
   const { data: saved, isError, isPending } = useDisclaimer();
   const { updateDisclaimer } = useScreeningActions();
   const [draft, setDraft] = useState<string>();
@@ -252,7 +269,7 @@ function DisclaimerTab() {
         <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.6 }}>
           모든 가격 변동 설명 하단에 자동으로 표기됩니다. 투자 권유로 오인되지 않도록 관계 법령에 맞게 작성하세요.
         </div>
-        <textarea className="textarea" rows={4} value={text} onChange={(e) => setDraft(e.target.value)} />
+        <textarea className="textarea" rows={4} value={text} readOnly={!canEdit} onChange={(e) => setDraft(e.target.value)} />
         <div
           className="rounded-[5px] p-3"
           style={{ border: '1px dashed var(--border-strong)', background: 'var(--bg-sunken)' }}
@@ -260,17 +277,67 @@ function DisclaimerTab() {
           <div className="t-label mb-1.5">제공 미리보기</div>
           <div style={{ fontSize: 11, color: 'var(--fg-3)', lineHeight: 1.6 }}>{text}</div>
         </div>
-        <div className="flex justify-end">
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              updateDisclaimer.mutate(text, { onSuccess: () => toast('면책 문구가 저장되었습니다.') })
-            }
-          >
-            저장
-          </button>
-        </div>
+        {canEdit && (
+          <div className="flex justify-end">
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                updateDisclaimer.mutate(text, { onSuccess: () => toast('면책 문구가 저장되었습니다.') })
+              }
+            >
+              저장
+            </button>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function HistoryTab() {
+  const { data: versions = [], isError } = usePolicyVersions();
+
+  if (isError) return <LoadError />;
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="t-label">정책 버전 이력</span>
+      </div>
+      {/* 정책은 불변 버전(ADR-0018) — 모든 변경이 새 버전 발행이라 이력이 곧 감사 추적이다. */}
+      <table className="table">
+        <thead>
+          <tr>
+            <th>버전</th>
+            <th>발행 시각</th>
+            <th>발행자</th>
+            <th>자동 제공</th>
+            <th>최소 출처</th>
+            <th>허용 위험</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody>
+          {versions.map((v) => (
+            <tr key={v.versionNo}>
+              <td className="num">v{v.versionNo}</td>
+              <td className="col-muted num">{v.publishedAt ? new Date(v.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}</td>
+              <td>{v.publishedBy ?? '—'}</td>
+              <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
+              <td className="num">{v.minSources ?? '—'}</td>
+              <td>{v.maxRisk ?? '—'}</td>
+              <td>{v.active ? <span className="chip">활성</span> : <span className="col-muted">종결</span>}</td>
+            </tr>
+          ))}
+          {versions.length === 0 && (
+            <tr>
+              <td colSpan={7} className="col-muted">
+                아직 발행된 정책 버전이 없습니다 — 금칙어·기준·문구를 변경하면 첫 버전이 발행됩니다.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

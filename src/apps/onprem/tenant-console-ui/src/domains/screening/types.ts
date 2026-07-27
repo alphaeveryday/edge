@@ -24,3 +24,14 @@ export interface NewBannedWord {
   risk: RiskLevel;
   action: WordAction;
 }
+
+export interface PolicyVersionSummary {
+  versionNo: number;
+  publishedAt: string;
+  /** 발행자 이름 — 원장 조회 실패(탈퇴 등) 시 null */
+  publishedBy: string | null;
+  active: boolean;
+  autoPublishEnabled: boolean;
+  minSources: number | null;
+  maxRisk: string | null;
+}

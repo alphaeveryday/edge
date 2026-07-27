@@ -30,7 +30,8 @@ public enum ConsoleErrorStatus implements BaseErrorCode {
 	NOT_PUBLISHABLE(HttpStatus.CONFLICT, "CNSL4092", "게시 정보(ticker)가 없어 승인할 수 없습니다."),
 	DUPLICATE_MEMBER_EMAIL(HttpStatus.CONFLICT, "CNSL4093", "이미 등록된 이메일입니다."),
 	LAST_ADMIN(HttpStatus.CONFLICT, "CNSL4094", "마지막 활성 관리자는 비활성화하거나 역할을 변경할 수 없습니다."),
-	ROLE_CONFLICT(HttpStatus.CONFLICT, "CNSL4095", "역할이 이미 변경됐습니다 — 목록을 새로고침한 뒤 다시 시도하세요.");
+	ROLE_CONFLICT(HttpStatus.CONFLICT, "CNSL4095", "역할이 이미 변경됐습니다 — 목록을 새로고침한 뒤 다시 시도하세요."),
+	POLICY_CONFLICT(HttpStatus.CONFLICT, "CNSL4096", "정책이 동시에 변경됐습니다 — 새로고침한 뒤 다시 시도하세요.");
 
 	private final HttpStatus httpStatus;
 	private final String code;
