@@ -24,11 +24,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * 상태 분기 계약(state-machine.md 확정 결정)을 검증한다:
- * NEW=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는 AUTO_PUBLISHED 만·근거는
- * screening_check) / 활성 정책 0건=NEW 진행 중단(무효화는 정책 무관 진행) / CORRECTION=구 리비전
- * 종결·비노출 + 새 리비전 REVIEW_REQUIRED(자동 노출 경로 없음) / INVALIDATION=즉시 비노출 /
- * 형상 위반=마킹 없이 실패.
+ * 상태 분기 계약(state-machine.md·ADR-0041)을 검증한다:
+ * NEW·CORRECTION 정정분=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는
+ * AUTO_PUBLISHED 만·근거는 screening_check) / 활성 정책 0건=NEW 진행 중단, CORRECTION 은
+ * 비노출 수행 + 정정분 REVIEW_REQUIRED 보존(무효화는 정책 무관 진행) / CORRECTION=구
+ * 리비전 종결·비노출 + supersedes 연결 / INVALIDATION=즉시 비노출 / 형상 위반=마킹 없이 실패.
  */
 class BundleScreenerTest {
 
@@ -229,9 +229,10 @@ class BundleScreenerTest {
 	}
 
 	@Test
-	void CORRECTION은_구_리비전을_종결하고_정정분은_검수_대기로만_들어간다() {
-		// WHY: 검수 없이 고객 노출 문구가 변경되는 경로는 존재하지 않는다(확정 원칙) —
-		// 정정분이 자동 게시되면 이 원칙이 깨진다.
+	void CORRECTION은_구_리비전을_종결하고_정정분은_정책_평가를_거친다() {
+		// WHY(결정 변경 2026-07-27): 정정분도 신규와 동일한 정책 평가 — 온보딩 철학
+		// (기본 자동 제공, 걸린 것만 검수)의 일관 적용. 청정 정정은 자동 게시되고,
+		// 구 리비전 종결·supersedes 연결·원장 보존은 불변이다.
 		String corrected = RESULT.replace("er-1", "er-2");
 		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
 				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"근거 공시 정정\"," +
@@ -240,8 +241,45 @@ class BundleScreenerTest {
 		assertThat(items.transitions).containsExactly("er-1:CORRECTED");
 		assertThat(publications.transitions).containsExactly("er-1:UNPUBLISHED");
 		assertThat(items.upserts).containsExactly(
-				new RecordingItems.Upserted("er-2", "er-1", "근거 공시 정정", "REVIEW_REQUIRED"));
+				new RecordingItems.Upserted("er-2", "er-1", "근거 공시 정정", "AUTO_PUBLISHED"));
+		assertThat(publications.published).containsExactly("er-2");   // 내려간 grain 에 재게시
+		assertThat(checks.appended).containsExactly("er-2:PASS:null:null");
+	}
+
+	@Test
+	void BLOCK_룰에_걸린_정정분은_BLOCKED로_적재되고_게시되지_않는다() {
+		rules = List.of(new ScreeningRule(1L, 10L, "BANNED_WORD", "{\"text\":\"급등 확실\"}", "BLOCK", true));
+		String corrected = RESULT.replace("er-1", "er-2")
+				.replace("\"summary\":\"s\"", "\"summary\":\"급등 확실 정정\"");
+
+		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
+				"\"explanation_result\":" + corrected + "}"));
+
+		assertThat(items.upserts).containsExactly(
+				new RecordingItems.Upserted("er-2", "er-1", "정정", "BLOCKED"));
 		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).containsExactly("er-2:BLOCK:1:급등 확실");
+	}
+
+	@Test
+	void 활성_정책이_없어도_CORRECTION은_비노출을_수행하고_정정분을_검수로_보존한다() {
+		// WHY: 정정의 1순위는 틀린 문구를 내리는 것(안전 조치)이다 — 정책이 비활성화된
+		// 구간에 정정이 막히면 틀린 게시가 계속 노출된다. 정정분은 판정할 정책이 없으니
+		// 자동 노출 없이 REVIEW_REQUIRED 로 보존한다(check 는 정책 부재로 미기록 — 로그 표면화).
+		activePolicy = Optional.empty();
+
+		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
+				"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
+
+		assertThat(items.transitions).containsExactly("er-1:CORRECTED");
+		assertThat(publications.transitions).containsExactly("er-1:UNPUBLISHED");
+		assertThat(items.upserts).containsExactly(
+				new RecordingItems.Upserted("er-2", "er-1", "정정", "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).isEmpty();
+		assertThat(pending.screened).containsExactly(2L);
 	}
 
 	@Test

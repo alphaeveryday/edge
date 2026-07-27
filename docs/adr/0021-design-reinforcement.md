@@ -12,7 +12,7 @@
 - Sync Agent DMZ 배치 + 단일 목적지 outbound 화이트리스트 확정 ([../context.md](../context.md))
 - cursor 발번 시점 = 테넌트별 outbox fan-out으로 확정, 인터페이스 계약 편입 ([../contracts/sync-protocol.md](../contracts/sync-protocol.md), [../contracts/event-bundle-schema.md](../contracts/event-bundle-schema.md))
 - gap 감지 조기 승격 검토 메모 ([../contracts/sync-protocol.md](../contracts/sync-protocol.md))
-- 정정 = 리비전 분리 모델 확정: 구 item CORRECTED 종결 + supersedes 참조 신규 리비전 재검수 ([../domain/state-machine.md](../domain/state-machine.md))
+- 정정 = 리비전 분리 모델 확정: 구 item CORRECTED 종결 + supersedes 참조 신규 리비전 재점검 (기록 당시 "재검수" — 신규 리비전의 라우팅은 [ADR-0041](0041-correction-same-screening.md)로 대체됨. 리비전 분리 자체는 유효 — [../domain/state-machine.md](../domain/state-machine.md))
 
 ## 대안
 정정을 단일 레코드의 상태 왕복으로 처리 — 리비전 분리를 택해 배제. 감사 재현은 리비전 체인을 따라 "어느 시점에 어느 문구가 노출되었는지"를 완전 복원한다.
