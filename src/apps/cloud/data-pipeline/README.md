@@ -344,12 +344,14 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 묶는다. 앞 3페이즈는 같은 브랜치 빌더가 잡 목록만 바꿔 찍어내고(구조 동일), analyze 는 단일
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
-뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)으로 분리 중이다 — 시장 레인과
-자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(평일 15:00·15:30·23:50 KST, 기본
-DISABLED)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions → AssembleEvents`
-를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는 시장 SFN 이 단일
-writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세우기(위 시장 SFN 미변경), 시장 SFN
-에서 뉴스 스텝 제거는 PR2 다(설계 근거는 코드 주석·ALPHA-553).
+뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)로 **분리 완료**다 — 시장
+레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(평일 15:00·15:30·23:50 KST,
+dev ENABLED 컷오버)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
+AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
+시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
+뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
+뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다. 뉴스 레인의
+운영 원장 편입은 후속(카탈로그 절 참고).
 
 **raw 수집(12잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
@@ -447,10 +449,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE
-- `load-assertions`(**직렬**, 페이즈 전량 성공 뒤 → analyze 앞, ALPHA-376·410) — feature assertion →
+- `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   엔티티 해소·해소율은 quality log 로 남는다
-- `assemble-events`(**직렬**, LoadAssertions 뒤 → analyze 앞, ALPHA-412, **events 세트**=LLM+DB) —
+- `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
   분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
   계보 조립 → event_thread threading. 결정적 ID 산식·프롬프트는 엔진과 동일(정본), 창 미지정 =
   오늘(KST) 하루. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028). 제목 분류 LLM 콜은
@@ -642,19 +644,22 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업**
-  (ECS Task state 33개 중, ALPHA-181 → 578). 제외 6개는 `fmp` 수집 4개(**FMP 공용키 bandwidth
-  한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을 등록하면 매 런 MISSED,
-  한도 회복·토글 on 과 함께 등록, ALPHA-558), `CollectDartFinancial`(**하류 소비자 0** —
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 21작업**
+  (ECS Task state 31개 중, ALPHA-181 → 578 → 553 PR2). 제외는 ① `fmp` 수집 4개(**FMP 공용키
+  bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을 등록하면 매 런
+  MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`(**하류 소비자 0** —
   `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할 이유 없는 실패 경보가
-  된다), `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록). `TagNews`·KRX
-  ETF·DART 공시 3개는 task-def 에 DB env 가 없어 자기 attempt 를 못 쓰지만 등록하되
-  `instrumented=False` 다 — Reconciler 의 SFN·ECS 증거 backfill 이 유일·정확한 기록 경로라
-  LEDGER_GAP 을 안 연다. 빼면 TagNews 는 그것만 죽은 런에서 LoadAssertions 가 BLOCKED 대신
-  MISSED 로 찍히고, 수집 2개는 **실패가 원장에 자리조차 없다**(ALPHA-578 — KRX 수집을 강제
-  종료했는데 화면에 아무것도 안 뜬 실증). 등록에 신뢰경계 변경(벤더 컨테이너에 RDS 접속 주입)은
-  필요 없다. 다만 이 3개는 실행 여부·성패만 얻고 `records_out`·`data_status` 는 못 얻는다 —
-  exit 0 인데 부분 유실인 경우는 S3 `collection_log` 를 봐야 한다. 수집 커버리지는 12개 중 7개다.
+  된다) ③ `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록) ④ **뉴스 레인
+  6작업**(BigKinds 수집·NormalizeNews·TagNews·LoadDocuments·LoadAssertions·AssembleEvents —
+  뉴스 SFN 이관, ALPHA-553 PR2. 그 레인은 Planner 를 안 거치므로 등록하면 매 일일런 MISSED 다.
+  뉴스 레인의 원장 편입(자체 pipeline_type·3슬롯 기대)은 후속 티켓). KRX ETF·DART 공시 2개는
+  task-def 에 DB env 가 없어 자기 attempt 를 못 쓰지만 등록하되 `instrumented=False` 다 —
+  Reconciler 의 SFN·ECS 증거 backfill 이 유일·정확한 기록 경로라 LEDGER_GAP 을 안 연다. 빼면
+  수집 실패가 **원장에 자리조차 없다**(ALPHA-578 — KRX 수집을 강제 종료했는데 화면에 아무것도
+  안 뜬 실증). 등록에 신뢰경계 변경(벤더 컨테이너에 RDS 접속 주입)은 필요 없다. 다만 이 2개는
+  실행 여부·성패만 얻고 `records_out`·`data_status` 는 못 얻는다 — exit 0 인데 부분 유실인
+  경우는 S3 `collection_log` 를 봐야 한다. 수집 커버리지는 시장 레인 11개 중 6개다(BigKinds
+  뉴스 수집은 뉴스 레인 이관).
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다.
   MVP 3작업(ALPHA-530)이었던 것:
   `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
@@ -683,7 +688,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ```
 EventBridge(daily) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot) → commit
                                        → 결정적 execution_name → SFN StartExecution
-각 ECS 태스크(27작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+각 ECS 태스크(21작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 

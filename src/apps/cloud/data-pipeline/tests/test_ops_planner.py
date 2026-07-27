@@ -40,7 +40,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(등록 작업 수만큼만).
-    assert len(db.etasks) == len(catalog.entries()) == 27
+    assert len(db.etasks) == len(catalog.entries()) == 21  # 27→21: 뉴스 레인 이관(ALPHA-553 PR2)
 
 
 def test_same_day_different_slots_are_separate_runs():

@@ -34,14 +34,21 @@ _ASL_INLINE_STATE = re.compile(r'^\s*(\w+)\s*=\s*merge\(local\.ecs_run_task_base
 
 # 계측하지 않는 ECS Task state 와 그 이유(카탈로그 docstring 의 표와 같은 근거).
 _NOT_INSTRUMENTED = {
-    "CollectFmpNews": "FMP bandwidth 한도 소진 → SFN 토글 off(ALPHA-558). 안 도는 스텝을 "
-                      "등록하면 매 런 MISSED — 한도 회복·토글 on 과 함께 등록",
+    "CollectFmpNews": "FMP bandwidth 한도 소진 → SFN 토글 off(ALPHA-558) + 뉴스 레인 이관"
+                      "(ALPHA-553 PR2). 잡 정의만 남고 시장 SFN 브랜치에 없다",
     "CollectFmpPrice": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectFmpFinancial": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectFmpEtf": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
     "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
+    # 뉴스 레인 이관(ALPHA-553 PR2) — 잡 정의는 statemachine.tf 에 남지만(news_pipeline.tf 가
+    # 부분집합 필터로 재사용) 시장 SFN 브랜치·일일런 기대에서 빠졌다. 뉴스 SFN 은 Planner 를
+    # 안 거치므로 등록하면 매 일일런 MISSED — 원장 편입은 후속(자체 pipeline_type).
+    "CollectBigKindsNews": "뉴스 레인 이관(ALPHA-553 PR2)",
+    "NormalizeNews": "뉴스 레인 이관(ALPHA-553 PR2)",
+    "TagNews": "뉴스 레인 이관(ALPHA-553 PR2)",
+    "LoadDocuments": "뉴스 레인 이관(ALPHA-553 PR2)",
 }
 
 
@@ -58,18 +65,23 @@ def test_catalog_and_asl_task_states_match_both_ways():
     """
     tf = _STATEMACHINE_TF.read_text(encoding="utf-8")
     asl_states = _asl_task_states(tf)
-    assert len(asl_states) == 33, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
+    # 33 → 31(ALPHA-553 PR2): LoadAssertions·AssembleEvents 인라인 직렬이 뉴스 SFN 으로 이관.
+    # 뉴스 잡 4개의 `state = "…"` 정의는 남는다 — news_pipeline.tf 가 부분집합 필터로 읽는다.
+    assert len(asl_states) == 31, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
     registered = {e.sfn_state_name for e in catalog.entries()}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
     assert registered.isdisjoint(_NOT_INSTRUMENTED), "제외 목록과 등록이 겹친다"
-    assert len(registered) == 27  # 커버리지를 숫자로 고정 — 조용한 축소 금지(Rule 12)
-    # 자기 기록이 불가능한데도 등록한 것들. 빼면 TagNews 는 의존 판정이 거짓이 되고(게이트 멤버),
-    # 수집 2개는 실패가 원장에 자리조차 없다(ALPHA-578) — 둘 다 Reconciler 증거 backfill 이 기록한다.
+    # 27 → 21(ALPHA-553 PR2): 뉴스 레인 6작업(수집·정제·태깅·문서·assertion·조립)이 뉴스 SFN
+    # 으로 이관 — 커버리지를 숫자로 고정해 조용한 축소를 막는 절이므로, 축소의 이유를 여기 남긴다
+    # (Rule 12). 뉴스 레인 원장 편입은 후속 티켓.
+    assert len(registered) == 21
+    # 자기 기록이 불가능한데도 등록한 것들 — 실패가 원장에 자리조차 없으면 안 된다(ALPHA-578).
+    # Reconciler 증거 backfill 이 기록한다. (TAG_NEWS 는 뉴스 레인 이관으로 목록에서 빠짐)
     assert {e.task_key for e in catalog.entries() if not e.instrumented} == {
-        "TAG_NEWS", "ETF_HOLDINGS_COLLECTION_KRX", "DISCLOSURE_COLLECTION_DART",
+        "ETF_HOLDINGS_COLLECTION_KRX", "DISCLOSURE_COLLECTION_DART",
     }
 
 
@@ -98,7 +110,7 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
            for m in _ASL_JOB_TRIPLE.finditer(tf)}
     asl.update({m.group("state"): (m.group("taskdef"), _asl_command_args(m.group("cmd")))
                 for m in _ASL_INLINE_CMD.finditer(tf)})
-    assert len(asl) >= 32, f"ASL 삼중항 파싱 실패: {len(asl)}"
+    assert len(asl) >= 27, f"ASL 삼중항 파싱 실패: {len(asl)}"
 
     for entry in catalog.entries():
         taskdef, args = asl[entry.sfn_state_name]
@@ -165,9 +177,8 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
     monkeypatch.delenv("OPS_SFN_STATE_NAME")
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
-    # TagNews 는 등록됐지만 자기 기록이 불가능하다(instrumented=False) — 해소는 되고, 그
-    # 컨테이너엔 원장 설정이 없어 wrapper 가 투명 통과한다.
-    assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
+    # tag-news 는 뉴스 레인 이관(ALPHA-553 PR2)으로 미등록 — 계측 없이 지나간다.
+    assert ops_entry.task_key_for("tag-news", None) is None
     # KRX·공시 수집도 같다 — 등록됐지만 자기 기록은 불가능(instrumented=False, ALPHA-578).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
     assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
@@ -205,11 +216,12 @@ def test_env_state_that_contradicts_the_step_is_not_trusted(monkeypatch, caplog)
 
 
 def test_serial_states_inject_ops_env():
-    # WHY: 인라인 직렬 4작업은 페이즈 빌더 밖이라 `OPS_SFN_STATE_NAME` 주입이 빠져 있었다.
+    # WHY: 인라인 직렬 작업은 페이즈 빌더 밖이라 `OPS_SFN_STATE_NAME` 주입이 빠져 있었다.
     #      없으면 그 attempt 의 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가
     #      끊긴다(Reconciler 가 backfill 때 일부러 채우는 그 계보).
+    #      (LoadAssertions·AssembleEvents 는 뉴스 SFN 이관 — ALPHA-553 PR2)
     tf = _STATEMACHINE_TF.read_text(encoding="utf-8")
-    for state in ("LoadInstruments", "EnrichCorpCode", "LoadAssertions", "AssembleEvents"):
+    for state in ("LoadInstruments", "EnrichCorpCode"):
         assert f'{{ Name = "OPS_SFN_STATE_NAME", Value = "{state}" }}' in tf, \
             f"{state} 에 OPS_SFN_STATE_NAME 주입이 없다"
 
@@ -223,17 +235,14 @@ def test_dependencies_encode_the_asl_gates():
         if e.stage == "normalize":
             assert e.depends_on == () or e.task_key == "NORMALIZE_PRICE", \
                 f"{e.task_key}: 정제에 raw 의존을 걸면 수집 실패 런에서 실제로 성공한 정제가 BLOCKED 다"
-    # feature 7개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만 다르면 안 된다.
+    # feature 로더 6개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만 다르면 안 된다.
+    # (LOAD_DOCUMENTS·LOAD_ASSERTIONS·ASSEMBLE_EVENTS 는 뉴스 레인 이관 — ALPHA-553 PR2)
     gate = {"LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
-            "LOAD_ETF_FLOW", "LOAD_DOCUMENTS", "LOAD_DISCLOSURE"}
+            "LOAD_ETF_FLOW", "LOAD_DISCLOSURE"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
-    # FeatureCheckResults 게이트는 로더 7개 + **TagNews** 다. TagNews 를 빼면 그것만 죽은 런에서
-    # 의존이 전부 충족된 것으로 보여 BLOCKED 여야 할 것이 MISSED 로 찍힌다(Codex #273 P1).
-    assert set(catalog.get("LOAD_ASSERTIONS").depends_on) == gate | {"TAG_NEWS"}
-    assert catalog.get("ASSEMBLE_EVENTS").depends_on == ("LOAD_ASSERTIONS",)
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
-    assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 8   # 정제 전량 성공 게이트
+    assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 7   # 정제 전량 성공 게이트
     # 참조 무결성 — 없는 task_key 를 가리키면 그 작업은 영원히 eligible 이 안 된다.
     keys = {e.task_key for e in catalog.entries()}
     for e in catalog.entries():

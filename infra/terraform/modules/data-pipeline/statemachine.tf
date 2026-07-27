@@ -242,22 +242,32 @@ locals {
     },
   ]
 
+  # 뉴스 레인 스텝은 뉴스 SFN(news_pipeline.tf) 소관 — 시장 SFN 페이즈에서 제외한다(ALPHA-553
+  # PR2). 잡 **정의**는 위 원본 리스트(raw_ingest_jobs 등)에 남는다: news_pipeline.tf 의
+  # news_* 부분집합 필터가 같은 리스트를 읽어 command_expr·taskdef_key 드리프트를 막는다(DRY).
+  # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다 — analyze 는
+  # 뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다.
+  market_excluded_states = ["CollectFmpNews", "CollectBigKindsNews", "NormalizeNews", "TagNews", "LoadDocuments"]
+  market_raw_jobs        = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_normalize_jobs  = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_feature_jobs    = [for j in local.feature_jobs : j if !contains(local.market_excluded_states, j.state)]
+
   raw_ingest_success_checks = [
-    for index, _ in local.raw_ingest_jobs : {
+    for index, _ in local.market_raw_jobs : {
       Variable     = "$.branch_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
 
   normalize_success_checks = [
-    for index, _ in local.normalize_jobs : {
+    for index, _ in local.market_normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
 
   feature_success_checks = [
-    for index, _ in local.feature_jobs : {
+    for index, _ in local.market_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
       StringEquals = "succeeded"
     }
@@ -297,7 +307,7 @@ locals {
   # 뉴스 SFN 브랜치를 만든다(빌더 중복 방지). 기존 raw/normalize/feature 출력은 불변(순수 additive).
   branches_by_phase = {
     for phase, jobs in {
-      raw      = local.raw_ingest_jobs, normalize = local.normalize_jobs, feature = local.feature_jobs,
+      raw      = local.market_raw_jobs, normalize = local.market_normalize_jobs, feature = local.market_feature_jobs,
       news_raw = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs
     } :
     phase => [
@@ -559,90 +569,20 @@ locals {
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next       = "FeatureCheckResults"
       }
+      # LoadAssertions·AssembleEvents 는 뉴스 SFN 의 직렬 꼬리로 이관됐다(ALPHA-553 PR2 —
+      # news_pipeline.tf). analyze 는 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다.
       FeatureCheckResults = {
         Type = "Choice"
         Choices = [{
           And  = local.feature_success_checks
-          Next = "LoadAssertions"
+          Next = "SeedAnalysisUniverse"
         }]
         Default = "NotifyFailure"
       }
-      # assertion 적재(ALPHA-376·410) — feature 병렬 페이즈 **뒤 직렬**이다: document FK
-      # 의존(LoadDocuments 산출)이 같은 페이즈 병렬이면 레이스라, 페이즈 전량 성공 뒤에 돈다.
-      # 자연키 멱등 + missing_document 는 다음 런 회복이라 재실행 안전.
-      LoadAssertions = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "LoadAssertionsCheckExitCode"
-        Catch = [{
-          ErrorEquals = ["States.ALL"]
-          ResultPath  = "$.error"
-          Next        = "NotifyFailure"
-        }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
-          Overrides = {
-            ContainerOverrides = [{
-              Name        = local.container_name
-              "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id)"
-              # 원장 계측(ALPHA-181): 페이즈 빌더(위)와 같은 주입 — 없으면 이 직렬 작업들의
-              # attempt 에 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
-              Environment = [
-                { Name = "OPS_SFN_STATE_NAME", Value = "LoadAssertions" },
-                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
-              ]
-            }]
-          }
-        })
-      })
-      LoadAssertionsCheckExitCode = {
-        Type = "Choice"
-        Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "AssembleEvents"
-        }]
-        Default = "NotifyFailure"
-      }
-      # 이벤트 조립(ALPHA-412) — 엔진 추출 체인(분류→event 계보→threading)의 이식.
-      # LoadAssertions 뒤 직렬: document/assertion 자연키 브리지가 선적재 행에 수렴하려면
-      # 로더들이 먼저다. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028).
-      AssembleEvents = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "AssembleEventsCheckExitCode"
-        Catch = [{
-          ErrorEquals = ["States.ALL"]
-          ResultPath  = "$.error"
-          Next        = "NotifyFailure"
-        }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.this["events"].arn
-          Overrides = {
-            ContainerOverrides = [{
-              Name        = local.container_name
-              "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id)"
-              # 원장 계측(ALPHA-181): 페이즈 빌더(위)와 같은 주입 — 없으면 이 직렬 작업들의
-              # attempt 에 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
-              Environment = [
-                { Name = "OPS_SFN_STATE_NAME", Value = "AssembleEvents" },
-                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
-              ]
-            }]
-          }
-        })
-      })
-      AssembleEventsCheckExitCode = {
-        Type = "Choice"
-        Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "SeedAnalysisUniverse"
-        }]
-        Default = "NotifyFailure"
-      }
-      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
-      # LoadAssertions 포함) 전량 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
+      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature 전량
+      # 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
       # (canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument·
-      # document·assertion)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
+      # document·assertion — event 는 뉴스 SFN 의 이전 런이 조립, ALPHA-553)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
       # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
       # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
       # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
