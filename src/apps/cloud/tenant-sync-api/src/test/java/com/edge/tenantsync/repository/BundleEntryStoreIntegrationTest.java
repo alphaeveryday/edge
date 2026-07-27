@@ -26,14 +26,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 참조 데이터 마이그레이션(entity 마스터 시드)과 섞이지 않도록 시드 ID 는 {@code it-}
  * 접두사를 쓰고 정리도 그 범위만 지운다.
  */
-class BundleEntryRepositoryIntegrationTest extends CloudPostgresIntegrationTest {
+class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 
 	private static final String ETF_ID = "it-etf-1";
 	private static final String ROUTE_ID = "it-route-1";
 	private static final String BUNDLE_VERSION = "it-bundle-1";
 
 	@Autowired
-	private BundleEntryRepository repository;
+	private BundleEntryStore repository;
 
 	@Autowired
 	private JdbcTemplate jdbc;

@@ -1,0 +1,71 @@
+package com.edge.tenantsync.repository;
+
+import com.edge.tenantsync.dto.BundleEntry;
+import com.edge.tenantsync.dto.DeliveryType;
+import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
+import java.time.LocalDate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * DeliveryRow→BundleEntry 매핑 분기를 검증한다. 특히 fail-loud(NEW·CORRECTION 인데 본체
+ * 결측)는 DB CHECK(ck_tenant_delivery_payload)가 시드를 막아 통합 테스트로 재현할 수 없다 —
+ * outbox 무결성 훼손이 조용한 skip 이 되면 전달 유실이 숨으므로(Rule 12) 여기서 고정한다.
+ */
+class BundleEntryStoreTest {
+
+	private static DeliveryRow row(String deliveryType, String resultId) {
+		return new DeliveryRow(7L, deliveryType, "expr-target", "사유", resultId,
+				"inst-etf-069500", "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
+				Instant.parse("2026-07-15T07:30:00Z"), "PRICE_ONLY", "요약", "MEDIUM",
+				"thr-0001", "exrun-0001", "rb-2026.07.0");
+	}
+
+	@Test
+	void 본체_결측_NEW_는_조용히_넘기지_않고_즉시_실패한다() {
+		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("NEW", null)))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("cursor=7");
+	}
+
+	@Test
+	void NEW_는_본체와_실행을_실어_대상_참조_없이_매핑한다() {
+		BundleEntry entry = BundleEntryStore.toEntry(new DeliveryRow(7L, "NEW", null, null,
+				"expr-1", "inst-etf-069500", "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
+				Instant.parse("2026-07-15T07:30:00Z"), "PRICE_ONLY", "요약", "MEDIUM",
+				"thr-0001", "exrun-0001", "rb-2026.07.0"));
+
+		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.NEW);
+		assertThat(entry.explanationResult().explanationResultId()).isEqualTo("expr-1");
+		assertThat(entry.explanationRun().releaseBundleVersion()).isEqualTo("rb-2026.07.0");
+		assertThat(entry.targetExplanationResultId()).isNull();
+		assertThat(entry.sourceEvents()).isEmpty();
+		assertThat(entry.evidences()).isEmpty();
+	}
+
+	@Test
+	void CORRECTION_은_대상_참조와_사유에_재게시_본체를_함께_매핑한다() {
+		BundleEntry entry = BundleEntryStore.toEntry(row("CORRECTION", "expr-2"));
+
+		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.CORRECTION);
+		assertThat(entry.targetExplanationResultId()).isEqualTo("expr-target");
+		assertThat(entry.reason()).isEqualTo("사유");
+		assertThat(entry.explanationResult().explanationResultId()).isEqualTo("expr-2");
+	}
+
+	@Test
+	void INVALIDATION_은_본체_없이_대상_참조와_사유만_매핑한다() {
+		BundleEntry entry = BundleEntryStore.toEntry(new DeliveryRow(7L, "INVALIDATION",
+				"expr-target", "사유", null, null, null, null, null, null, null, null, null,
+				null, null, null));
+
+		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.INVALIDATION);
+		assertThat(entry.targetExplanationResultId()).isEqualTo("expr-target");
+		assertThat(entry.reason()).isEqualTo("사유");
+		assertThat(entry.explanationResult()).isNull();
+		assertThat(entry.explanationRun()).isNull();
+	}
+}

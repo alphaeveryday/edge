@@ -1,10 +1,9 @@
 package com.edge.tenantsync.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
-import com.edge.tenantsync.dto.BundleEntry;
-import com.edge.tenantsync.dto.ExplanationResult;
-import com.edge.tenantsync.dto.ExplanationRun;
-import com.edge.tenantsync.repository.BundleEntryRepository;
+import com.edge.tenantsync.repository.BundleEntryStore;
+import com.edge.tenantsync.repository.DeliveryRow;
+import com.edge.tenantsync.repository.TenantDeliveryRepository;
 import com.edge.tenantsync.service.BundleSerializer;
 import com.edge.tenantsync.service.SyncBundleService;
 import com.edge.tenantsync.tenant.TenantResolver;
@@ -29,41 +28,39 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 계약(sync-protocol.md) 시맨틱을 검증한다 — 엔드포인트 동작이 아니라 소비자(Sync Agent)가
  * 의존하는 약속이 깨지면 실패해야 한다.
  * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다.
- * 저장소는 DB(JdbcTemplate) 구현이 됐으므로 시드 대역으로 대체한다 — 여기서 지키는
- * 것은 와이어 계약이고, 실 DB 경로는 BundleEntryRepositoryIntegrationTest 가 고정한다.
+ * 저장소는 시드 페이크(리포지토리 인터페이스 구현)로 대체하되 매핑(BundleEntryStore)은
+ * 실물을 통과시킨다 — 여기서 지키는 것은 와이어 계약이고, 실 DB 경로는
+ * BundleEntryStoreIntegrationTest 가 고정한다.
  */
 class SyncBundleControllerTest {
 
-	private static final ExplanationResult PUBLISHED = new ExplanationResult(
+	private static final DeliveryRow PUBLISHED_ROW = new DeliveryRow(
+			1L, "NEW", null, null,
 			"expr-20260715-069500-0001", "inst-etf-069500", "069500", "KODEX 200",
 			LocalDate.of(2026, 7, 15), Instant.parse("2026-07-15T07:30:00Z"),
 			"EVENT_SUPPORTED",
 			"반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
-			"MEDIUM", "thr-0001");
+			"MEDIUM", "thr-0001", "exrun-0001", "rb-2026.07.0");
 
-	private static final ExplanationResult REPUBLISHED = new ExplanationResult(
+	private static final DeliveryRow CORRECTION_ROW = new DeliveryRow(
+			2L, "CORRECTION", "expr-20260715-069500-0001", "근거 공시 정정",
 			"expr-20260715-069500-0002", "inst-etf-069500", "069500", "KODEX 200",
 			LocalDate.of(2026, 7, 15), Instant.parse("2026-07-15T07:30:00Z"),
 			"EVENT_SUPPORTED",
 			"정정된 공시 기준으로 재산출한 공개 정보 기반 변동 요인 후보입니다.",
-			"LOW", "thr-0001");
+			"LOW", "thr-0001", "exrun-0002", "rb-2026.07.0");
 
-	/** 시드 대역 — NEW → CORRECTION → INVALIDATION (온프렘 수신 세 경로 전부 자극). */
-	private static final class SeededRepository extends BundleEntryRepository {
-		private final List<BundleEntry> seed = List.of(
-				BundleEntry.newResult(1L, PUBLISHED,
-						new ExplanationRun("exrun-0001", "rb-2026.07.0"), List.of(), List.of()),
-				BundleEntry.correction(2L, PUBLISHED.explanationResultId(), "근거 공시 정정",
-						REPUBLISHED, new ExplanationRun("exrun-0002", "rb-2026.07.0")),
-				BundleEntry.invalidation(3L, REPUBLISHED.explanationResultId(), "오탐지 이벤트"));
+	private static final DeliveryRow INVALIDATION_ROW = new DeliveryRow(
+			3L, "INVALIDATION", "expr-20260715-069500-0002", "오탐지 이벤트",
+			null, null, null, null, null, null, null, null, null, null, null, null);
 
-		SeededRepository() {
-			super(null);
-		}
+	/** 시드 페이크 — NEW → CORRECTION → INVALIDATION (온프렘 수신 세 경로 전부 자극). */
+	private static final class FakeTenantDeliveryRepository implements TenantDeliveryRepository {
+		private final List<DeliveryRow> seed = List.of(PUBLISHED_ROW, CORRECTION_ROW, INVALIDATION_ROW);
 
 		@Override
-		public List<BundleEntry> findAfter(long tenantId, long afterCursor, int limit) {
-			return seed.stream().filter(e -> e.cursor() > afterCursor).limit(limit).toList();
+		public List<DeliveryRow> findAfter(long tenantId, long afterCursor, org.springframework.data.domain.Limit limit) {
+			return seed.stream().filter(r -> r.cursor() > afterCursor).limit(limit.max()).toList();
 		}
 	}
 
@@ -71,8 +68,8 @@ class SyncBundleControllerTest {
 
 	@BeforeEach
 	void setUp() {
-		SyncBundleService service =
-				new SyncBundleService(new SeededRepository(), new BundleSerializer());
+		SyncBundleService service = new SyncBundleService(
+				new BundleEntryStore(new FakeTenantDeliveryRepository()), new BundleSerializer());
 		mvc = MockMvcBuilders
 				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
 				.setControllerAdvice(new ExceptionAdvice())

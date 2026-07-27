@@ -7,3 +7,7 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/edge}
     username: ${SPRING_DATASOURCE_USERNAME:edge}
     password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      ddl-auto: validate   # DDL 은 Flyway(libs/schema) SSOT — 검증만 (ADR-0038)
+    open-in-view: false
