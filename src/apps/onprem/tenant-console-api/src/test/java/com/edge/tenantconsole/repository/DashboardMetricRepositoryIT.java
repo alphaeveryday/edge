@@ -25,26 +25,28 @@ class DashboardMetricRepositoryIT extends AbstractPostgresIntegrationTest {
 	@Autowired
 	private JdbcTemplate jdbc;
 
-	private void seed(int statusCode, String errorCode, String age) {
+	private void seedAt(int statusCode, String errorCode, Instant occurredAt) {
 		jdbc.update("""
 				INSERT INTO serving_request_metric (method, route, status_code, error_code, occurred_at)
-				VALUES ('GET', '/api/v1/explanations/{etfTicker}', ?, ?, now() - ?::interval)
-				""", statusCode, errorCode, age);
+				VALUES ('GET', '/api/v1/explanations/{etfTicker}', ?, ?, ?)
+				""", statusCode, errorCode, java.sql.Timestamp.from(occurredAt));
 	}
 
 	@Test
 	void 집계는_윈도_내_행만_세고_4xx_5xx_를_에러로_가른다() {
 		// 공유 컨테이너 격리 — 이 테이블의 writer IT 는 이 클래스뿐이라 비우고 시작한다.
 		jdbc.update("DELETE FROM serving_request_metric");
-		seed(200, null, "1 hour");
-		seed(204, null, "2 hours");
-		seed(404, "SERV4040", "3 hours");
-		seed(500, null, "4 hours");          // 비JSON 에러 등 코드 미상 실패도 에러로 집계
-		seed(500, "SERV5000", "25 hours");   // 윈도 밖 — 총량·에러 어느 쪽에도 안 잡혀야
+		Instant since = Instant.now().minus(Duration.ofHours(24));
+		seedAt(200, null, since);                         // 윈도 경계 정확히 = since — >= 라서 포함
+		seedAt(204, null, since.plus(Duration.ofHours(1)));
+		seedAt(400, "SERV4000", since.plus(Duration.ofHours(2)));  // 에러 경계 = 400 — >= 400 이라서 에러
+		seedAt(404, "SERV4040", since.plus(Duration.ofHours(3)));
+		seedAt(500, null, since.plus(Duration.ofHours(4)));        // 코드 미상 실패도 에러로 집계
+		seedAt(500, "SERV5000", since.minusSeconds(1));   // 윈도 밖 — 총량·에러 어느 쪽에도 안 잡혀야
 
-		TrafficSummary summary = metrics.summarizeSince(Instant.now().minus(Duration.ofHours(24)));
+		TrafficSummary summary = metrics.summarizeSince(since);
 
-		assertThat(summary).isEqualTo(new TrafficSummary(4, 2));
+		assertThat(summary).isEqualTo(new TrafficSummary(5, 3));
 	}
 
 	@Test

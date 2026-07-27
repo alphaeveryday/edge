@@ -53,7 +53,8 @@ tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 
 scope(시장·종목 제공 범위). members(사용자 관리)는 ALPHA-119 로 member 원장
 실데이터로 전환됐고(등록·목록·비활성화 + 역할 변경 ALPHA-499), session 은
 ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테넌트 컨텍스트는
-배포 설정(`console.tenant.*`, 온프렘 박스=테넌트 1:1)이 소스다.
+배포 설정(`console.tenant.*`, 온프렘 박스=테넌트 1:1)이 소스다. dashboard(제공
+트래픽 KPI)는 ALPHA-128 부터 serving_request_metric 집계 실데이터다(mock 단계 없음).
 
 - **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
   파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
