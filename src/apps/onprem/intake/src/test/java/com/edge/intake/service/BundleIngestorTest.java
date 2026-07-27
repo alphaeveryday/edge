@@ -100,6 +100,22 @@ class BundleIngestorTest {
 	}
 
 	@Test
+	void 실패_봉투는_저장_없이_실패한다() {
+		// WHY: ApiResponse.onFailure 도 non-null result 를 허용한다(ADR-0040) — 실패 봉투가 200 으로
+		// 오면(업스트림 버그·경계 오염) 성공 데이터로 처리돼 cursor 를 커밋하고 malformed 를 하류로
+		// 흘린다. isSuccess=false 는 봉투 감지 즉시 fail-loud 로 거부한다(저장·전진 없음).
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		Executable call = () -> new BundleIngestor(bundles, state).ingest(bundle(
+				"{\"isSuccess\":false,\"code\":\"SYNC5000\",\"message\":\"err\","
+						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(bundles.saved).isEmpty();
+		assertThat(state.advanced).isEmpty();
+	}
+
+	@Test
 	void 봉투에_cursor가_없으면_저장_없이_실패한다() {
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();

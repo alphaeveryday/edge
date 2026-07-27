@@ -22,8 +22,11 @@ public final class DeliveryBundleParser {
 
 	public List<DeliveryEntry> parse(long cursorFrom, byte[] body) {
 		JsonNode root = objectMapper.readTree(body);
-		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(result 아래에 번들), 구형은 루트가 곧 번들.
-		JsonNode bundle = root.path("result").isObject() ? root.path("result") : root;
+		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(isSuccess 로 식별, 번들은 result 아래),
+		// 구형은 루트가 곧 번들. isSuccess 마커로 판별한다(result 객체 유무는 malformed 를 봉투로
+		// 오인). 실패 봉투는 intake 적재 게이트가 이미 거르므로 저장분은 성공분뿐 — result 가
+		// 번들이 아니면 아래 entries 검사가 fail-loud 로 잡는다.
+		JsonNode bundle = root.has("isSuccess") ? root.path("result") : root;
 		JsonNode entries = bundle.path("entries");
 		if (!entries.isArray()) {
 			throw new IllegalStateException("번들 body 에 entries 배열이 없다 — 계약 위반 (cursor_from=" + cursorFrom + ")");
