@@ -144,7 +144,9 @@ public class BundleScreener {
 		int corrected = analysisItemRepository.transition(target, "CORRECTED");
 		int unpublished = publicationRepository.transitionByItem(target, "UNPUBLISHED");
 		if (corrected == 0) {
-			log.warn("CORRECTION 대상 미수신 target={} — gap 가능성(감지는 후속), 정정분은 정상 진입", target);
+			// 0행 = 대상 미수신(gap) 또는 이미 종결(멱등 재수신) — 리포지토리 계약상 구분
+			// 불가(read 미노출). 확정 오진을 피해 두 가능성을 그대로 표면화한다(gap 감지는 ALPHA-494).
+			log.warn("CORRECTION 대상 전이 0행 target={} — 미수신(gap) 또는 이미 종결(멱등 재수신), 정정분은 정상 진입", target);
 		}
 		// 정정분 = 새 리비전. 신규와 동일하게 정책 평가를 거친다(결정 변경 2026-07-27,
 		// ALPHA-430 — 온보딩 철학 "걸린 것만 검수"의 일관 적용). 구 게시는 위에서 내려갔으므로
