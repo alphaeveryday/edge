@@ -57,4 +57,12 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 			  AND status NOT IN ('CORRECTED', 'INVALIDATED')
 			""", nativeQuery = true)
 	int transition(@Param("explanationResultId") String explanationResultId, @Param("status") String status);
+
+	/**
+	 * 전이 직전 상태 조회 + 행 잠금(FOR UPDATE) — 이력(from_status)의 정확성을 콘솔 검수
+	 * 결정과의 레이스로부터 지킨다(잠금 후 transition 까지 같은 트랜잭션). 미수신이면 null.
+	 */
+	@Query(value = "SELECT status FROM analysis_item WHERE explanation_result_id = :explanationResultId FOR UPDATE",
+			nativeQuery = true)
+	String lockStatus(@Param("explanationResultId") String explanationResultId);
 }

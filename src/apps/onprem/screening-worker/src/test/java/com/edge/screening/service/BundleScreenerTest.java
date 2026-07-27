@@ -1,9 +1,11 @@
 package com.edge.screening.service;
 
+import com.edge.screening.entity.AnalysisItemStatusHistory;
 import com.edge.screening.entity.PolicyVersion;
 import com.edge.screening.entity.ReceivedBundle;
 import com.edge.screening.entity.ScreeningRule;
 import com.edge.screening.repository.AnalysisItemRepository;
+import com.edge.screening.repository.AnalysisItemStatusHistoryRepository;
 import com.edge.screening.repository.PendingBundleRepository;
 import com.edge.screening.repository.PolicyRepository;
 import com.edge.screening.repository.PublicationRepository;
@@ -43,6 +45,13 @@ class BundleScreenerTest {
 
 		final List<Upserted> upserts = new ArrayList<>();
 		final List<String> transitions = new ArrayList<>();
+		/** lockStatus 가 반환할 "전이 직전 상태" — 대상 미수신 시나리오는 null. */
+		String currentStatus = "AUTO_PUBLISHED";
+
+		@Override
+		public String lockStatus(String id) {
+			return currentStatus;
+		}
 
 		@Override
 		public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
@@ -92,6 +101,18 @@ class BundleScreenerTest {
 		}
 	}
 
+	/** 상태 이력 기록 대역 — SYSTEM 행 append 를 문자열로 수집한다. */
+	private static final class RecordingHistory implements AnalysisItemStatusHistoryRepository {
+		final List<String> rows = new ArrayList<>();
+
+		@Override
+		public AnalysisItemStatusHistory save(AnalysisItemStatusHistory h) {
+			rows.add(h.getAnalysisItemId() + ":" + h.getFromStatus() + "->" + h.getToStatus()
+					+ ":" + h.getActorType() + ":" + h.getReason());
+			return h;
+		}
+	}
+
 	/** 판정 근거 기록 대역 — screening_check append 를 문자열로 수집한다. */
 	private static final class RecordingChecks implements ScreeningCheckRepository {
 		final List<String> appended = new ArrayList<>();
@@ -107,6 +128,7 @@ class BundleScreenerTest {
 	private RecordingPublications publications;
 	private RecordingPending pending;
 	private RecordingChecks checks;
+	private RecordingHistory history;
 	private Optional<PolicyVersion> activePolicy;
 	private List<ScreeningRule> rules;
 	private BundleScreener screener;
@@ -117,12 +139,13 @@ class BundleScreenerTest {
 		publications = new RecordingPublications();
 		pending = new RecordingPending();
 		checks = new RecordingChecks();
+		history = new RecordingHistory();
 		// 기본 대역 = 관대한 활성 정책(자동 제공 ON·룰 없음) — 기존 NEW 자동 게시 케이스 유지.
 		activePolicy = Optional.of(new PolicyVersion(10L, true, null));
 		rules = List.of();
 		PolicyRepository policies = () -> activePolicy;
 		ScreeningRuleRepository ruleRepo = versionId -> rules;
-		screener = new BundleScreener(pending, items, publications, policies, ruleRepo, checks);
+		screener = new BundleScreener(pending, items, publications, policies, ruleRepo, checks, history);
 	}
 
 	private static byte[] bundle(String entries) {
@@ -219,7 +242,7 @@ class BundleScreenerTest {
 				return 0;
 			}
 		};
-		screener = new BundleScreener(pending, items, publications, () -> activePolicy, versionId -> rules, checks);
+		screener = new BundleScreener(pending, items, publications, () -> activePolicy, versionId -> rules, checks, history);
 
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
@@ -447,5 +470,96 @@ class BundleScreenerTest {
 
 		assertThat(items.upserts).hasSize(1);
 		assertThat(publications.published).isEmpty();
+	}
+
+	@Test
+	void NEW_진입은_SYSTEM_이력_행을_남긴다() {
+		// WHY: 감사 재현은 "언제 어떤 상태로 들어왔나"의 시점 원장을 요구한다(state-machine·
+		// exposure-log) — SYSTEM 진입 행이 없으면 자동 게시 항목의 이력이 완전히 빈다.
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(history.rows).containsExactly("er-1:null->AUTO_PUBLISHED:SYSTEM:null");
+	}
+
+	@Test
+	void BLOCK_진입도_SYSTEM_이력_행을_남긴다() {
+		rules = List.of(new ScreeningRule(1L, 10L, "BANNED_WORD", "{\"text\":\"급등 확실\"}", "BLOCK", true));
+		String risky = RESULT.replace("\"summary\":\"s\"", "\"summary\":\"급등 확실 전망\"");
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + risky + "}"));
+
+		assertThat(history.rows).containsExactly("er-1:null->BLOCKED:SYSTEM:null");
+	}
+
+	@Test
+	void CORRECTION은_구_리비전_전이와_정정분_진입_이력을_남긴다() {
+		// WHY: from_status 는 잠금(lockStatus) 후 전이라 실제 직전 상태다 — 정정 시점에
+		// 노출 중(AUTO_PUBLISHED)이었는지 검수 중이었는지가 민원 재현의 핵심 단서다.
+		items.currentStatus = "AUTO_PUBLISHED";
+		String corrected = RESULT.replace("er-1", "er-2");
+
+		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"근거 공시 정정\"," +
+				"\"explanation_result\":" + corrected + "}"));
+
+		assertThat(history.rows).containsExactly(
+				"er-1:AUTO_PUBLISHED->CORRECTED:SYSTEM:근거 공시 정정",
+				"er-2:null->AUTO_PUBLISHED:SYSTEM:근거 공시 정정");
+	}
+
+	@Test
+	void INVALIDATION은_SYSTEM_전이_이력을_남긴다() {
+		items.currentStatus = "AUTO_PUBLISHED";
+
+		screener.screen(3, bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
+				"\"target_explanation_result_id\":\"er-2\",\"reason\":\"오탐지\"}"));
+
+		assertThat(history.rows).containsExactly("er-2:AUTO_PUBLISHED->INVALIDATED:SYSTEM:오탐지");
+	}
+
+	@Test
+	void 재수신과_전이_0행은_이력을_남기지_않는다() {
+		// WHY: append-only 원장에 같은 전이가 중복되면 재현이 오염된다 — 실제 일어난
+		// 전이만 기록한다(upsert 0행 = 재수신, transition 0행 = 미수신/이미 종결).
+		items = new RecordingItems() {
+			@Override
+			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
+					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
+					String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
+					long sourceCursor, String status) {
+				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
+						threadId, evidencesJson, supersedesItemId, correctionReason, sourceCursor, status);
+				return 0;
+			}
+
+			@Override
+			public int transition(String id, String status) {
+				super.transition(id, status);
+				return 0;
+			}
+		};
+		items.currentStatus = null;   // 대상 미수신
+		screener = new BundleScreener(pending, items, publications, () -> activePolicy,
+				versionId -> rules, checks, history);
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+		screener.screen(3, bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
+				"\"target_explanation_result_id\":\"er-9\"}"));
+
+		assertThat(history.rows).isEmpty();
+	}
+
+	@Test
+	void 정책_0건_폴백의_정정분_보존도_진입_이력을_남긴다() {
+		activePolicy = Optional.empty();
+		items.currentStatus = "AUTO_PUBLISHED";
+
+		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
+				"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
+
+		assertThat(history.rows).containsExactly(
+				"er-1:AUTO_PUBLISHED->CORRECTED:SYSTEM:정정",
+				"er-2:null->REVIEW_REQUIRED:SYSTEM:정정");
 	}
 }

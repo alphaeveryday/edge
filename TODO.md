@@ -29,7 +29,7 @@
 - [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
-- [ ] Screening Worker — 점검 Audit 잔여 (ALPHA-431. 평가기·Rule Type 3종·상태 분기·screening_check 기록은 ALPHA-429, 정정분 동일 정책 평가는 ALPHA-430·ADR-0041 로 구현 완료 — **산정 주체 결정 2026-07-26: 온프렘 Screening Worker**, Cloud AI 는 가드레일 제공만)
+- [ ] Screening Worker — 위험등급 산정 구현 잔여 (평가기 429·정정 동일 평가 430(ADR-0041)·SYSTEM 상태 이력 431 구현 완료 — **산정 주체 결정 2026-07-26: 온프렘 Screening Worker**, Cloud AI 는 가드레일 제공만. 등급 컬럼·번들 확장·maxRisk 소비가 산정 티켓 몫)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] **fan-out 발번기** — analysis-engine 의 `explanation_result(DRAFT)`를 sync outbox `tenant_delivery` 로 승격하는 cloud 서비스. 이게 있어야 파이프라인 산출물이 자동으로 sync 경계를 넘어 데모까지 관통한다 — 현재는 수동 시드(`scratchpad/seed-cloud-demo.sql`)로 대체 중. **데모 토폴로지(EC2+compose 가상 온프렘)·MTS 화면·배포 CD(deploy-demo-onprem.yml)는 구축 완료**(ALPHA-533·444·445·542, 브라우저 관통 검증) — 남은 건 이 데이터 자동화뿐
