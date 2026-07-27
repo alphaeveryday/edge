@@ -63,9 +63,12 @@ public class ScreeningService {
 		this.actionLog = actionLog;
 	}
 
-	/** 발행 초안 — 활성 버전(+룰)의 복사본. sourceRuleId 는 토글 대상 식별용(신규 룰은 null). */
-	private record Draft(boolean autoPublishEnabled, Integer minSources, String maxRisk,
-			String disclaimer, List<DraftRule> rules) {
+	/**
+	 * 발행 초안 — 활성 버전(+룰)의 복사본. baseVersionId 는 이 초안의 기반(발행 시 종결
+	 * 대상 — 첫 발행은 null), sourceRuleId 는 토글 대상 식별용(신규 룰은 null).
+	 */
+	private record Draft(Long baseVersionId, boolean autoPublishEnabled, Integer minSources,
+			String maxRisk, String disclaimer, List<DraftRule> rules) {
 	}
 
 	private record DraftRule(Long sourceRuleId, String ruleType, String params, String action,
@@ -105,8 +108,8 @@ public class ScreeningService {
 		newRules.add(new DraftRule(null, "BANNED_WORD",
 				objectMapper.writeValueAsString(Map.of("text", text, "risk", risk)),
 				action, true, Instant.now()));
-		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(),
-						base.disclaimer(), newRules),
+		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
+						base.maxRisk(), base.disclaimer(), newRules),
 				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "risk", risk, "action", action));
 	}
 
@@ -116,7 +119,10 @@ public class ScreeningService {
 		List<DraftRule> newRules = new ArrayList<>();
 		DraftRule target = null;
 		for (DraftRule rule : base.rules()) {
-			if (rule.sourceRuleId() != null && rule.sourceRuleId() == id) {
+			// /words 표면은 금칙어 전용 — id 만 맞으면 다른 판정 룰(SINGLE_SOURCE 등)까지
+			// 뒤집을 수 있으면 금칙어 API 로 정책 전체를 바꾸는 우회가 된다.
+			if ("BANNED_WORD".equals(rule.ruleType())
+					&& rule.sourceRuleId() != null && rule.sourceRuleId() == id) {
 				target = new DraftRule(rule.sourceRuleId(), rule.ruleType(), rule.params(),
 						rule.action(), !rule.enabled(), rule.createdAt());
 				newRules.add(target);
@@ -127,8 +133,8 @@ public class ScreeningService {
 		if (target == null) {
 			throw new GeneralException(ConsoleErrorStatus.BANNED_WORD_NOT_FOUND);
 		}
-		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(),
-						base.disclaimer(), newRules),
+		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
+						base.maxRisk(), base.disclaimer(), newRules),
 				actor, clientIp, "POLICY_WORD_TOGGLED",
 				Map.of("ruleId", id, "enabled", target.enabled()));
 	}
@@ -147,9 +153,13 @@ public class ScreeningService {
 		if (maxRisk != null && !MAX_RISKS.contains(maxRisk)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
+		if (minSources == null && maxRisk == null) {
+			// 빈 PATCH 가 동일 내용의 새 버전을 발행하면 이력이 허위 변경으로 오염된다.
+			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
+		}
 		Draft base = loadBase();
 		// 부분 갱신(PATCH) — null 필드는 활성 버전 값 유지.
-		publish(new Draft(base.autoPublishEnabled(),
+		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(),
 						minSources == null ? base.minSources() : minSources,
 						maxRisk == null ? base.maxRisk() : maxRisk,
 						base.disclaimer(), base.rules()),
@@ -168,8 +178,8 @@ public class ScreeningService {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		Draft base = loadBase();
-		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(), text,
-						base.rules()),
+		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
+						base.maxRisk(), text, base.rules()),
 				actor, clientIp, "POLICY_DISCLAIMER_CHANGED", Map.of());
 	}
 
@@ -192,7 +202,8 @@ public class ScreeningService {
 	private Draft loadBase() {
 		Optional<PolicyVersionEntity> active = versions.findActive();
 		if (active.isEmpty()) {
-			return new Draft(true, DEFAULT_MIN_SOURCES, DEFAULT_MAX_RISK, DEFAULT_DISCLAIMER, List.of());
+			return new Draft(null, true, DEFAULT_MIN_SOURCES, DEFAULT_MAX_RISK, DEFAULT_DISCLAIMER,
+					List.of());
 		}
 		PolicyVersionEntity version = active.get();
 		List<DraftRule> copied = rules
@@ -201,19 +212,22 @@ public class ScreeningService {
 				.map(r -> new DraftRule(r.getScreeningRuleId(), r.getRuleType(), r.getParams(),
 						r.getAction(), r.isEnabled(), r.getCreatedAt()))
 				.toList();
-		return new Draft(version.isAutoPublishEnabled(), version.getMinSourceCount(),
-				version.getMaxRisk(), version.getDisclaimerText(), copied);
+		return new Draft(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
+				version.getMinSourceCount(), version.getMaxRisk(), version.getDisclaimerText(), copied);
 	}
 
 	/**
-	 * 발행 — 이전 활성 종결 → 신규 버전 INSERT → 룰 복사 INSERT 가 한 트랜잭션.
-	 * 종결이 먼저여야 활성 1건 부분 유니크를 통과한다. 경합(동시 발행)은 arbiter
-	 * 제약 위반으로 드러난다 — 코드로 재검사하지 않는다(TOCTOU).
+	 * 발행 — 초안의 기반 버전 종결 → 신규 버전 INSERT → 룰 복사 INSERT 가 한 트랜잭션.
+	 * 종결 대상은 재조회한 "현재 활성"이 아니라 **초안의 기반**이다 — 초안 로드 후
+	 * 경쟁자가 발행했다면 그 버전을 소급 종결하는 대신, 기반은 이미 종결돼 0행이고
+	 * 새 활성 INSERT 가 부분 유니크(arbiter) 위반으로 져서 409 로 드러난다(lost update 차단).
 	 */
 	private void publish(Draft draft, SessionMember actor, String clientIp, String action,
 			Map<String, Object> detail) {
 		try {
-			versions.findActive().ifPresent(v -> versions.deactivate(v.getPolicyVersionId()));
+			if (draft.baseVersionId() != null) {
+				versions.deactivate(draft.baseVersionId());
+			}
 			PolicyVersionEntity saved = versions.save(new PolicyVersionEntity(
 					versions.maxVersionNo() + 1, draft.disclaimer(), draft.autoPublishEnabled(),
 					draft.minSources(), draft.maxRisk(), actor.memberId()));

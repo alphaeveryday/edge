@@ -48,12 +48,28 @@ class ScreeningControllerTest {
 		final List<PolicyVersionEntity> stored = new ArrayList<>();
 		private long nextId = 1;
 		boolean failNextSave;
+		/** 경합 재현 훅 — findActive 1회 직후 실행(초안 로드와 발행 사이의 침입 발행). */
+		Runnable afterFindActive;
 
 		@Override
 		public Optional<PolicyVersionEntity> findActive() {
-			return stored.stream()
+			Optional<PolicyVersionEntity> active = stored.stream()
 					.filter(v -> v.getActivatedAt() != null && v.getDeactivatedAt() == null)
 					.findFirst();
+			if (afterFindActive != null) {
+				Runnable hook = afterFindActive;
+				afterFindActive = null;
+				hook.run();
+			}
+			return active;
+		}
+
+		/** 침입 발행 시뮬레이션 — arbiter 검사 없이 활성 버전을 심는다(경쟁 트랜잭션의 커밋). */
+		PolicyVersionEntity injectActive(int versionNo) {
+			PolicyVersionEntity intruder = new PolicyVersionEntity(versionNo, "침입 문구", true, 2, "MEDIUM", 9L);
+			ReflectionTestUtils.setField(intruder, "policyVersionId", nextId++);
+			stored.add(intruder);
+			return intruder;
 		}
 
 		@Override
@@ -74,6 +90,11 @@ class ScreeningControllerTest {
 		public PolicyVersionEntity save(PolicyVersionEntity version) {
 			if (failNextSave) {
 				failNextSave = false;
+				throw new DataIntegrityViolationException("uq_policy_version_active");
+			}
+			// 활성 1건 부분 유니크(uq_policy_version_active) 시뮬 — 활성이 남아 있는데
+			// 새 활성을 넣으면 실 DB 처럼 제약 위반이 난다.
+			if (stored.stream().anyMatch(v -> v.getActivatedAt() != null && v.getDeactivatedAt() == null)) {
 				throw new DataIntegrityViolationException("uq_policy_version_active");
 			}
 			ReflectionTestUtils.setField(version, "policyVersionId", nextId++);
@@ -333,6 +354,50 @@ class ScreeningControllerTest {
 				.andExpect(jsonPath("$.result[0].autoPublishEnabled").value(true))
 				.andExpect(jsonPath("$.result[1].versionNo").value(1))
 				.andExpect(jsonPath("$.result[1].active").value(false));
+	}
+
+	@Test
+	void 초안_로드_후_끼어든_발행은_소급_종결되지_않고_409로_진다() throws Exception {
+		// WHY: 발행은 초안의 기반 버전만 종결해야 한다 — 발행 직전 재조회로 "현재 활성"을
+		// 종결하면 경쟁자의 방금 발행분을 소급 종결하고 그 변경을 조용히 덮어쓴다(lost update).
+		addWord("급등 확실", "HIGH", "BLOCK");   // v1 활성
+		versions.afterFindActive = () -> {
+			versions.deactivate(versions.stored.get(0).getPolicyVersionId());
+			versions.injectActive(2);            // 경쟁 트랜잭션이 v2 를 발행·커밋
+		};
+
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":1}"))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("CNSL4096"));
+
+		// 침입자(v2)는 여전히 활성 — 소급 종결됐다면 lost update 다.
+		assertThat(versions.findActive().orElseThrow().getVersionNo()).isEqualTo(2);
+	}
+
+	@Test
+	void 토글은_금칙어가_아닌_룰을_대상으로_하면_404다() throws Exception {
+		// WHY: /words/{id}/toggle 은 금칙어 표면이다 — id 만 맞으면 SINGLE_SOURCE 등
+		// 다른 판정 룰까지 뒤집을 수 있으면 금칙어 API 로 정책 전체를 변경하는 우회가 된다.
+		addWord("급등 확실", "HIGH", "BLOCK");
+		long activeId = versions.findActive().orElseThrow().getPolicyVersionId();
+		ScreeningRuleEntity other = rules.save(new ScreeningRuleEntity(activeId, "SINGLE_SOURCE",
+				"{}", "REVIEW", true, Instant.now()));
+
+		mvc.perform(post("/api/v1/screening/words/" + other.getScreeningRuleId() + "/toggle")
+						.session(session()))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("CNSL4042"));
+	}
+
+	@Test
+	void 변경_필드가_없는_기준_PATCH는_400이다() throws Exception {
+		// WHY: 빈 PATCH 가 동일 내용의 새 버전을 발행하면 사용자는 변경이 반영됐다고
+		// 오인하고, 불변 버전 이력이 허위 변경으로 오염된다.
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{}"))
+				.andExpect(status().isBadRequest());
+		assertThat(versions.stored).isEmpty();
 	}
 
 	@Test
