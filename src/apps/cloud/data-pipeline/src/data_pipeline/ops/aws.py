@@ -30,3 +30,20 @@ def ecs_client():
     import boto3
 
     return boto3.client("ecs", region_name=_region())
+
+
+def ssm_client():
+    """KIS 토큰 공유 캐시 전용(ALPHA-573). **짧은 타임아웃·재시도 예산을 명시한다.**
+
+    이 캐시의 불변식은 "실패해도 최악이 캐시 없던 시절"인데, boto3 기본값(연결·읽기 각 60초,
+    재시도 5회)이면 SSM 이 블랙홀일 때 토큰 발급 전에 수 분을 동기 블록해 그 불변식이
+    뒤집힌다(edge-review 지적). 캐시 조회는 없으면 그만인 부가 경로라 빨리 포기해야 한다.
+    """
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "ssm",
+        region_name=_region(),
+        config=Config(connect_timeout=3, read_timeout=3, retries={"max_attempts": 2}),
+    )

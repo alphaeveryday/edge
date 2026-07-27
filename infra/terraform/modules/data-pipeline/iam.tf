@@ -52,11 +52,23 @@ resource "aws_iam_role_policy" "task" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
-      Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
+      },
+      {
+        # KIS 토큰 공유 캐시(ALPHA-573) — 이 역할까지가 읽기·쓰기 주체다. 시크릿(앱키)은 지금도
+        # execution 역할이 주입하고, 여긴 그 앱키로 받은 **토큰**만 다룬다. 실패하면 컨테이너가
+        # 각자 발급하는 현행 동작으로 폴백하므로 권한 부족이 런을 깨지는 않는다(느려질 뿐).
+        # SecureString 은 AWS 관리 키(alias/aws/ssm)를 쓴다 — 그 키 정책이 SSM 경유 호출에
+        # 계정 주체를 허용하므로 별도 kms 문장이 필요 없다.
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter", "ssm:PutParameter"]
+        Resource = [local.kis_token_param_arn]
+      },
+    ]
   })
 }
 
