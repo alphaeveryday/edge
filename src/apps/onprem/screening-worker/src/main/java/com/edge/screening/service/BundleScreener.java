@@ -69,7 +69,8 @@ public class BundleScreener {
 		List<DeliveryEntry> entries = parser.parse(cursorFrom, body);
 		// 정책은 번들당 1회, 판정이 필요한 entry(NEW·CORRECTION 의 정정분)를 처음 만날 때
 		// 로드한다 — INVALIDATION 만 실린 번들은 정책 없이도 진행돼야 한다(무효화는 안전
-		// 조치라 온보딩 전에도 반영). 정책 0건이면 게시된 것이 없어 정정 대상도 사실상 없다.
+		// 조치라 온보딩 전에도 반영). 정책 0건 시 NEW 는 진행 중단, CORRECTION 은 비노출
+		// 수행 + 정정분 보존(ADR-0041 폴백)이다.
 		ActivePolicy policy = null;
 		for (DeliveryEntry entry : entries) {
 			switch (entry.deliveryType()) {
@@ -149,11 +150,15 @@ public class BundleScreener {
 		// ALPHA-430 — 온보딩 철학 "걸린 것만 검수"의 일관 적용). 구 게시는 위에서 내려갔으므로
 		// 청정 정정은 같은 grain 에 재게시된다. supersedes 연결·원장 보존은 불변.
 		if (policy == null) {
-			// 정책 0건 구간(비활성화 등) — 판정할 기준이 없다. 자동 노출 없이 검수 대기로
-			// 보존한다(check 는 policy_version_id NOT NULL 이라 기록 불가 — 로그로 표면화).
-			upsertItem(entry, target, entry.reason(), "REVIEW_REQUIRED");
-			log.warn("CORRECTION 정정분 판정 보류 — 활성 정책 0건, REVIEW_REQUIRED 보존 (id={})",
-					result.explanationResultId());
+			// 정책 0건 구간(콘솔 발행 원자성상 정상 경로에선 없는 수동 개입 예외) — 판정할
+			// 기준이 없다. 자동 노출 없이 검수 대기로 보존한다(check 는 policy_version_id
+			// NOT NULL 이라 기록 불가 — 로그로 표면화). 혼합 번들 한계는 ADR-0041 참조.
+			if (upsertItem(entry, target, entry.reason(), "REVIEW_REQUIRED") == 0) {
+				log.info("CORRECTION 재수신 skip id={} — 기존 판정 보존(멱등)", result.explanationResultId());
+			} else {
+				log.warn("CORRECTION 정정분 판정 보류 — 활성 정책 0건, REVIEW_REQUIRED 보존 (id={})",
+						result.explanationResultId());
+			}
 			return;
 		}
 		applyDecision(entry, policy, target, entry.reason(), "CORRECTION");

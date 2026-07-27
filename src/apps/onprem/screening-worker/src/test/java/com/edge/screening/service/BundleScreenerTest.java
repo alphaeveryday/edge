@@ -26,9 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * 상태 분기 계약(state-machine.md·ADR-0041)을 검증한다:
  * NEW·CORRECTION 정정분=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는
- * AUTO_PUBLISHED 만·근거는 screening_check) / 활성 정책 0건=NEW·CORRECTION 진행 중단
- * (무효화는 정책 무관 진행) / CORRECTION=구 리비전 종결·비노출 + supersedes 연결 /
- * INVALIDATION=즉시 비노출 / 형상 위반=마킹 없이 실패.
+ * AUTO_PUBLISHED 만·근거는 screening_check) / 활성 정책 0건=NEW 진행 중단, CORRECTION 은
+ * 비노출 수행 + 정정분 REVIEW_REQUIRED 보존(무효화는 정책 무관 진행) / CORRECTION=구
+ * 리비전 종결·비노출 + supersedes 연결 / INVALIDATION=즉시 비노출 / 형상 위반=마킹 없이 실패.
  */
 class BundleScreenerTest {
 
