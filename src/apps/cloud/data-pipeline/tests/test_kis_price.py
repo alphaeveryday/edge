@@ -67,14 +67,14 @@ class FakeClient:
         return pages[idx] if idx < len(pages) else _EMPTY
 
 
-def _source(chunk_responses, *, app_key="k", app_secret="s", symbol_map=None, client=None):
+def _source(chunk_responses, *, app_key="k", app_secret="s", symbol_map=None, client=None, concurrency=1):
     config = KisPriceSource(
         env="prod",
         app_key=app_key,
         app_secret=app_secret,
         symbol_map=_MAP if symbol_map is None else symbol_map,
     )
-    return KisDailyPriceSource(config, client or FakeClient(chunk_responses))
+    return KisDailyPriceSource(config, client or FakeClient(chunk_responses), concurrency=concurrency)
 
 
 def test_disabled_without_credentials():
@@ -259,3 +259,51 @@ def test_max_pages_truncation_is_noted(monkeypatch):
     records = list(src.fetch(["005930"]))  # from_date 없음 → new==0 로만 멈춤
     assert len(records) == 2  # 2페이지분은 수집
     assert any("MAX_PAGES" in f["error"] for f in src.fetch_failures)
+
+
+# ── 병렬화 (ALPHA-570) ────────────────────────────────────────────────────────
+
+def _multi_symbol_fixture(n: int = 6) -> tuple[dict, dict]:
+    """심볼 n개, 각 1페이지 1봉 — 팬아웃 동등성·격리 검증용 최소 픽스처."""
+    symbol_map = {f"{i:06d}": f"{i:06d}" for i in range(1, n + 1)}
+    responses = {sym: [_ok([_bar("20260724", close=str(70000 + i))])]
+                 for i, sym in enumerate(symbol_map)}
+    return symbol_map, responses
+
+
+def test_동시수집_산출물이_직렬과_같다():
+    # WHY: 병렬화는 **산출물을 바꾸지 않아야** 한다. 순서까지 같아야 raw ndjson 회귀 비교가
+    #      되고, 하류(normalize 파티션 병합)가 수집 타이밍에 흔들리지 않는다. 가격은 심볼당
+    #      2콜(페이지네이션)이라 워커가 페이지 순서를 섞을 여지가 KRX 보다 크다.
+    symbol_map, responses = _multi_symbol_fixture()
+
+    def collect(concurrency):
+        src = _source(responses, symbol_map=symbol_map, concurrency=concurrency)
+        rows = list(src.fetch(list(symbol_map)))
+        return [{k: v for k, v in r.items() if k != "fetched_at"} for r in rows]
+
+    assert collect(1) == collect(4)
+    assert len(collect(1)) == 6
+
+
+def test_토큰은_동시성에서도_run_당_1회다():
+    # WHY: 토큰 발급이 심볼마다 나가면 KIS 분당 1회 제한(EGW00133)에 즉시 걸려 수집이 죽는다.
+    #      워커가 늘어도 발급은 fetch 시작의 1회여야 한다(ALPHA-458·573 의 전제).
+    symbol_map, responses = _multi_symbol_fixture()
+    src = _source(responses, symbol_map=symbol_map, concurrency=4)
+    list(src.fetch(list(symbol_map)))
+    assert src.client.calls.count("POST") == 1
+
+
+def test_실패격리와_기록순서가_동시성에서도_같다():
+    # WHY: 격리 규약(한 심볼의 이상 응답이 나머지를 안 죽인다)이 동시성에서도 같아야 하고,
+    #      fetch_failures 는 **plan 순**이어야 한다 — 완료 순으로 쌓이면 collection_log 의
+    #      실패 목록이 실행마다 달라져 감사·회귀 비교가 흔들린다.
+    symbol_map, responses = _multi_symbol_fixture()
+    broken = list(symbol_map)[3]
+    responses[broken] = ['{"rt_cd": "1", "msg_cd": "OPSQ0001", "msg1": "조회 오류"}']
+    src = _source(responses, symbol_map=symbol_map, concurrency=4)
+
+    rows = list(src.fetch(list(symbol_map)))
+    assert len(rows) == 5
+    assert [f["symbol"] for f in src.fetch_failures] == [broken]

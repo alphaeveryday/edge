@@ -30,6 +30,7 @@ from datetime import datetime, time, timedelta, timezone
 from ..config import KisInvestorSource as KisInvestorSourceConfig
 from ..ops.trading_calendar import is_trading_day
 from ..parse import krx_short_code
+from .fanout import fanout
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 
@@ -90,7 +91,7 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 class KisInvestorSource:
     source_name = "kis"
 
-    def __init__(self, config: KisInvestorSourceConfig, client: PoliteClient):
+    def __init__(self, config: KisInvestorSourceConfig, client: PoliteClient, concurrency: int = 1):
         self.env = config.env
         self.base = domain_for(config.env)
         self.app_key = config.app_key
@@ -100,6 +101,9 @@ class KisInvestorSource:
         # 건너뛴다 — KIS 는 국내(KRX) 전용이라 US 티커를 질의하면 안 된다(가격과 동일 정책).
         self.symbol_map = config.symbol_map
         self.client = client
+        # 워커 수. 유량은 이 값이 아니라 client(PoliteClient)의 발신률 상한이 묶는다 —
+        # 워커마다 클라이언트를 두면 앱키 예산이 워커 수만큼 샌다(ALPHA-568·570).
+        self.concurrency = concurrency
         self.auth = KisAuth(config.app_key or "", config.app_secret or "", client, config.env)
         # 심볼 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다(격리≠은폐).
         self.fetch_failures: list[dict] = []
@@ -167,15 +171,23 @@ class KisInvestorSource:
         end_default = datetime.now(KST).strftime("%Y%m%d")
         d1 = _yyyymmdd(from_date)
         d2 = _yyyymmdd(to_date) or end_default
-        for our_ticker, kis_symbol in plan:
-            try:
-                yield from self._fetch_symbol(our_ticker, kis_symbol, d1, d2, token, fetched_at)
-            except StopFetch:
-                raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
-            except Exception as exc:
+        try:
+            yield from fanout(
+                plan,
+                lambda pair: self._fetch_symbol(pair[0], pair[1], d1, d2, token, fetched_at),
+                concurrency=self.concurrency,
                 # 요청 실패·깨진 JSON·KIS 오류코드는 심볼 단위로 격리 — 남은 심볼 계속.
-                self._note_failure(kis_symbol, our_ticker, str(exc))
-                continue
+                # StopFetch(4xx/429)만 소스 전체를 중단한다(팬아웃이 그대로 전파한다).
+                on_failure=lambda pair, exc: self._note_failure(pair[1], pair[0], str(exc)),
+            )
+        finally:
+            # malformed 행·OPSQ2001 블랙아웃 기록은 `_fetch_symbol` 안에서 난다 — 그 경로는
+            # **워커 스레드**라 팬아웃의 입력순 기록을 우회한다. 두 경로가 섞이면
+            # collection_log 의 실패 목록 순서가 실행마다 달라지므로 plan 순으로 되돌린다
+            # (krx_etf·kis_price 와 동형). finally 인 이유는 StopFetch 로 빠져나가는 경로에서도
+            # 스텝이 그때까지의 목록을 status=stopped 로그에 쓰기 때문이다.
+            order = {our_ticker: i for i, (our_ticker, _) in enumerate(plan)}
+            self.fetch_failures.sort(key=lambda f: order.get(f["our_ticker"], len(order)))
 
     def _fetch_symbol(
         self,

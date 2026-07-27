@@ -71,8 +71,13 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
 # 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
 # 토큰은 run 당 1회 발급·재사용.
+# --concurrency N 으로 종목을 동시 요청하고, --min-interval S 로 발신 간격을 정한다(ALPHA-570).
+# **KIS 초당 한도는 브랜치가 아니라 앱키 단위**라, 동시에 도는 kis 스텝들의 1/min-interval 합이
+# 한도(문서값 실전 20/s) 아래여야 한다 — SFN 의 예산표는 statemachine.tf `kis_rate_budget` 한 곳.
+# 수동 실행은 기본값(직렬·0.5초)이라 다른 스텝과 겹쳐 돌리지 않는 한 예산을 넘지 않는다.
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
-  uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
+  uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis \
+    --concurrency 6 --min-interval 0.14
 # 백필 예: 2026-06 한 달
 #   ... run ingest-price-raw --source kis --from 2026-06-01 --to 2026-06-30
 
@@ -379,6 +384,10 @@ writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세�
 - `ingest-raw-etf-profile`(국내 ETF 프로필 = ETF 마스터 표시명 출처, **kis 세트**, ALPHA-462)
 - `ingest-raw-investor`(종목별 투자자 수급, **kis 세트**, ALPHA-482) — 유니버스는 canonical KR
   holdings 파생(가격과 같은 축). `NormalizeInvestor → LoadEtfFlow` 체인의 raw 선행이다.
+  - 가격과 함께 `--concurrency`·`--min-interval` 을 받는다(ALPHA-570). **KIS 초당 한도는 앱키
+    단위**라 kis 브랜치 4개가 예산을 나눠 쓰고, 그 분할표는 `statemachine.tf` 의
+    `kis_rate_budget` 한 곳에 있다(합이 검산 가능해야 하므로 값을 그쪽 밖에 흩지 않는다).
+    nav·profile 은 콜이 31건뿐이라 기본값(직렬·0.5초) 그대로다.
   - **EOD 서빙 블랙아웃 규약**(ALPHA-518·562): 확정 수급이 서빙되기 전에 질의하면 rt_cd=2
     `msg_cd=OPSQ2001 msg1="TIME LIMIT 00:00 ~ 15:40"` 이 온다. 이건 데이터 결손이 아니라
     **"지금이 서빙 개시 전"이라는 상시 조건**이라, 아무 때나 기다린다고 풀리지 않는다.

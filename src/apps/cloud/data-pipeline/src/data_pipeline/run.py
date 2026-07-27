@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -90,7 +91,31 @@ from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_comp
 from .ops import entry as ops_entry
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
+# SFN 은 브랜치마다 `--min-interval` 로 이 기본값을 덮는다(앱키 예산 분할, ALPHA-570) —
+# 예산표는 `statemachine.tf` 의 `kis_rate_budget` 한 곳에 있다. 수동 실행은 이 기본값이다.
 KIS_MIN_INTERVAL_SEC = 0.5
+# `--min-interval` 하한 — 이보다 작으면 한 브랜치가 혼자 KIS 문서값(실전 20/s)을 다 쓴다.
+MIN_INTERVAL_FLOOR_SEC = 0.05
+
+# `--concurrency`·`--min-interval` 을 실제로 소비하는 (step, source) 조합. 여기 없는 조합에서
+# 넘기면 **거부한다** — 조용히 무시하면 운영자가 병렬·예산이 걸렸다고 오인하고 SFN 배선
+# 오류도 안 드러난다(Rule 12, ALPHA-569 리뷰 실증).
+# 키는 `(step, --source 원값)` 이다. 단일 벤더 스텝(nav·profile·investor)은 `--source` 를
+# 아예 안 받으므로 None 이고, 다중 벤더 스텝은 벤더를 명시해야 통과한다 — `--source` 를 생략한
+# `ingest-price-raw`(=fmp)에 예산을 주면 거부되는 게 맞다(그 경로엔 KIS 앱키가 없다).
+CONCURRENCY_STEPS = frozenset({
+    ("ingest-raw-etf", "krx"),         # KRX 구성종목 PDF (ALPHA-569)
+    ("ingest-price-raw", "kis"),       # KIS 일봉 (ALPHA-570)
+    ("ingest-raw-investor", None),     # KIS 투자자 수급 (ALPHA-570)
+})
+# KIS 스텝 넷 — 같은 앱키를 나눠 쓰므로 넷 다 예산 조정 대상이다(팬아웃 여부와 무관하게,
+# 직렬로 도는 nav·profile 도 그 앱키의 초당 예산을 먹는다).
+MIN_INTERVAL_STEPS = frozenset({
+    ("ingest-price-raw", "kis"),
+    ("ingest-raw-investor", None),
+    ("ingest-raw-nav", None),
+    ("ingest-raw-etf-profile", None),
+})
 
 # KRX getJsonData(구성종목 PDF) 응답 타임아웃 — **기본 10초로는 100% 실패한다**(ALPHA-368).
 # 2026-07-15 라이브 실측: 같은 세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에
@@ -109,6 +134,15 @@ DEFAULT_LOOKBACK_DAYS = 1
 # 직전 거래일(금요일) 봉을 놓친다. raw 는 겹치는 거래일을 그대로 append 해 보존하고
 # (dedup 안 함), (market,ticker,trade_date) 정체성 병합은 후속 canonical 소관이다.
 DEFAULT_PRICE_LOOKBACK_DAYS = 5
+
+
+def _kis_min_interval(args) -> float:
+    """KIS 클라이언트의 요청 간 최소 간격 — SFN 이 준 예산, 없으면 코드 기본값.
+
+    `or` 를 쓰지 않는 이유: 0 은 falsy 라 조용히 기본값으로 되돌아간다(0 은 위 검증에서
+    이미 거부되지만, 여기 관례를 iNAV 의 `--interval-sec` 와 맞춰 둔다).
+    """
+    return KIS_MIN_INTERVAL_SEC if args.min_interval is None else args.min_interval
 
 
 def make_run_id(now: datetime | None = None) -> str:
@@ -159,9 +193,13 @@ def main(argv: list[str] | None = None) -> int:
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
     parser.add_argument("--concurrency", type=int, default=None,
-                        help="대상 동시 요청 수(현재 ingest-raw-etf --source krx 전용). "
+                        help="대상 동시 요청 수(KRX ETF·KIS 가격·KIS 투자자수급 전용). "
                              "미지정=1(직렬, 이전과 동일). 유량은 소스의 min_interval 이 "
                              "묶으므로 이 값은 '동시에 몇 개를 기다릴까'만 정한다.")
+    parser.add_argument("--min-interval", type=float, default=None,
+                        help=f"KIS 스텝의 요청 간 최소 간격 초(미지정={KIS_MIN_INTERVAL_SEC}). "
+                             "KIS 초당 한도는 브랜치가 아니라 **앱키** 단위라, 동시에 도는 "
+                             "kis 브랜치들의 1/min_interval 합이 한도 아래여야 한다(ALPHA-570).")
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
     args = parser.parse_args(argv)
@@ -173,10 +211,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.concurrency is not None:
         if args.concurrency < 1:
             raise SystemExit(f"--concurrency 는 1 이상이어야 한다: {args.concurrency}")
-        if not (args.step == "ingest-raw-etf" and (args.source or "fmp") == "krx"):
+        if (args.step, args.source) not in CONCURRENCY_STEPS:
             raise SystemExit(
-                "--concurrency 는 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
-                f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
+                f"--concurrency 를 쓰는 조합이 아니다: step={args.step}, source={args.source} — "
+                f"허용: {sorted(CONCURRENCY_STEPS)} (무시되므로 거부한다)"
+            )
+    # `--min-interval` 은 KIS 스텝만 소비한다. 다른 스텝에서 조용히 무시하면 운영자가 앱키
+    # 예산을 조정했다고 오인하고, SFN 배선 오류(엉뚱한 스텝에 예산을 준 것)도 안 드러난다.
+    if args.min_interval is not None:
+        # NaN 을 먼저 막는다 — `nan <= 0` 은 False 라 아래 비교를 그냥 통과하고, PoliteClient 의
+        # `elapsed < min_interval` 도 항상 False 가 돼 **상한이 통째로 사라진다**(edge-review).
+        # 하한(MIN_INTERVAL_FLOOR_SEC)을 두는 이유도 같다: 1e-9 는 0 이 아니지만 사실상 무제한이라
+        # 0 을 막은 의미가 없어진다. 한 브랜치가 혼자 문서값(20/s)을 다 쓰는 선에서 끊는다.
+        if not math.isfinite(args.min_interval) or args.min_interval < MIN_INTERVAL_FLOOR_SEC:
+            raise SystemExit(
+                f"--min-interval 은 {MIN_INTERVAL_FLOOR_SEC} 이상의 유한한 값이어야 한다: "
+                f"{args.min_interval} (그 아래는 앱키 초당 한도를 한 브랜치가 통째로 넘긴다)"
+            )
+        if (args.step, args.source) not in MIN_INTERVAL_STEPS:
+            raise SystemExit(
+                f"--min-interval 은 KIS 스텝 전용이다: step={args.step}, source={args.source} — "
+                f"허용: {sorted(MIN_INTERVAL_STEPS)} (무시되므로 거부한다)"
             )
 
     logging.basicConfig(
@@ -425,7 +480,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         profile_source = KisEtfProfileSource(
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            PoliteClient(min_interval=_kis_min_interval(args)),
         )
         return ingest_raw_etf.run(
             settings, storage, profile_source, run_id,
@@ -472,7 +527,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         nav_source = KisNavSource(
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            PoliteClient(min_interval=_kis_min_interval(args)),
             from_date,
             to_date,
         )
@@ -526,7 +581,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 # (증분=둘 다 미지정은 위에서 창을 채웠으므로 이 경로로 오지 않는다.)
                 raise SystemExit("KIS 가격은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
             price_source = KisDailyPriceSource(
-                settings.kis_price.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+                settings.kis_price.source,
+                PoliteClient(min_interval=_kis_min_interval(args)),
+                concurrency=args.concurrency or 1,
             )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
@@ -542,7 +599,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             # 무한정 과거로 돈다 — 무의미한 전량 페이지네이션 전에 fail-fast(가격과 동형).
             raise SystemExit("KIS 투자자 수급은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
         investor_source = KisInvestorSource(
-            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+            settings.kis_investor.source,
+            PoliteClient(min_interval=_kis_min_interval(args)),
+            concurrency=args.concurrency or 1,
         )
         return ingest_raw_investor.run(settings, storage, investor_source, run_id, from_date, to_date)
     if args.step == "ingest-raw-disclosure":

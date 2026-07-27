@@ -351,24 +351,135 @@ def test_tag_news_negative_window_days_fails_loud(monkeypatch):
 
 
 def test_concurrency_rejected_where_it_is_ignored(monkeypatch, capsys):
-    # WHY: `--concurrency` 를 아직 KRX ETF 만 소비한다. 다른 스텝·벤더에서 조용히 무시하면
-    #      운영자가 병렬이 걸렸다고 오인하고, SFN command 배선 오류도 안 드러난다(Rule 12 —
-    #      무의미한 플래그를 성공으로 받는 CLI 는 거짓 신호다).
+    # WHY: `--concurrency` 는 KRX ETF·KIS 가격·KIS 투자자수급만 소비한다(ALPHA-569·570).
+    #      나머지에서 조용히 무시하면 운영자가 병렬이 걸렸다고 오인하고, SFN command 배선
+    #      오류도 안 드러난다(Rule 12 — 무의미한 플래그를 성공으로 받는 CLI 는 거짓 신호다).
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     from data_pipeline import run as run_mod
 
     # **조기 반환 스텝을 반드시 포함한다** — 검증이 dispatch 뒤에 있으면 normalize·load·
     # tag-news·재무는 그 전에 반환해 가드를 통과해 버린다(리뷰 실증).
     for argv in (
-        ["ingest-price-raw", "--source", "kis", "--concurrency", "8"],
+        # 같은 스텝이라도 **벤더가 다르면 거부**다 — fmp 가격 경로엔 KIS 앱키가 없다.
+        ["ingest-price-raw", "--concurrency", "8"],
         ["ingest-raw-etf", "--source", "fmp", "--concurrency", "8"],
         ["normalize-price", "--concurrency", "8"],
         ["ingest-raw-financial", "--source", "dart", "--concurrency", "8"],
         ["tag-news", "--concurrency", "8"],
+        ["ingest-raw-nav", "--concurrency", "8"],  # nav 는 팬아웃 대상이 아니다(31콜)
     ):
         with pytest.raises(SystemExit) as err:
             run_mod.main(argv)
         assert "--concurrency" in str(err.value)
+
+
+def test_min_interval_rejected_outside_kis_steps(monkeypatch):
+    # WHY: `--min-interval` 은 KIS 앱키 예산을 나누는 손잡이다(ALPHA-570). 다른 스텝에서
+    #      조용히 무시되면 운영자가 예산을 조정했다고 오인하고, SFN 이 엉뚱한 브랜치에 예산을
+    #      준 배선 오류도 안 드러난다 — 그 사이 진짜 KIS 브랜치들은 합이 한도를 넘긴다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    for argv in (
+        ["ingest-raw-etf", "--source", "krx", "--min-interval", "0.2"],
+        ["normalize-price", "--min-interval", "0.2"],
+        ["tag-news", "--min-interval", "0.2"],
+        ["ingest-price-raw", "--min-interval", "0.2"],  # --source kis 없이는 FMP 경로다
+    ):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(argv)
+        assert "--min-interval" in str(err.value)
+
+
+def test_min_interval_rejects_non_positive(monkeypatch):
+    # WHY: 0·음수를 받으면 발신률 상한이 사라져 앱키 예산이 무한이 된다 — 한도를 지키려고
+    #      만든 손잡이가 한도를 없애는 손잡이가 된다. 배선 실수(빈 값·오타)를 성능이 아니라
+    #      즉시 실패로 드러낸다(Rule 12).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    # NaN 이 제일 위험하다 — `nan <= 0` 도 `elapsed < nan` 도 False 라 상한이 통째로 사라진다.
+    # 1e-9 는 0 이 아니지만 사실상 무제한이라 0 만 막으면 막은 게 아니다.
+    for bad in ("0", "-0.2", "nan", "1e-9"):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(["ingest-price-raw", "--source", "kis", "--min-interval", bad])
+        assert "이상의 유한한 값" in str(err.value)
+
+
+def test_kis_앱키_초당예산_합이_문서값_아래다():
+    # WHY: KIS 초당 한도는 **브랜치가 아니라 앱키 단위**(문서값 실전 20/s)인데, kis 브랜치는
+    #      각각 별개 ECS 태스크라 서로를 모른다 — 합을 지키는 장치가 `statemachine.tf` 의
+    #      정적 분할뿐이다. 브랜치를 더하거나(iNAV/ALPHA-556 이 5번째로 온다) min_interval 을
+    #      줄이면서 합을 안 세면 전 브랜치가 EGW00201 을 맞는다. 그 검산을 값으로 고정한다.
+    import pathlib as _p
+    import re
+
+    from data_pipeline.run import KIS_MIN_INTERVAL_SEC
+
+    here = _p.Path(__file__).resolve()
+    tf = next(
+        (parent / "infra/terraform/modules/data-pipeline/statemachine.tf"
+         for parent in here.parents
+         if (parent / "infra/terraform/modules/data-pipeline/statemachine.tf").exists()),
+        None,
+    )
+    if tf is None:  # 저장소 밖(패키지만 설치된 환경)에서는 검사할 대상이 없다
+        pytest.skip("statemachine.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+    text = tf.read_text()
+
+    # **표가 아니라 배선을 읽는다.** 예산표(locals)만 더하면 어느 브랜치가 어느 값을 받는지는
+    # 안 보이고, `command_expr` 이 실수로 다른 브랜치의 값을 참조해도 합이 맞아 통과한다 —
+    # 계약은 "각 브랜치에 실제로 배선된 값의 합"이다(edge-review 지적).
+    kis_jobs = dict(re.findall(
+        r'state\s*=\s*"(\w+)"\s*\n\s*taskdef_key\s*=\s*"kis"\s*\n\s*command_expr\s*=\s*"(.*?)"\n', text
+    ))
+    assert len(kis_jobs) == text.count('taskdef_key  = "kis"'), (
+        f"kis 브랜치 파싱 실패({len(kis_jobs)}) — statemachine.tf 형식이 바뀌었다"
+    )
+
+    budget = dict(re.findall(r'(\w+)\s*=\s*\{\s*min_interval\s*=\s*"([0-9.]+)"', text))
+    assert budget, "예산표(kis_rate_budget)를 못 찾았다 — 경로·형식 확인"
+
+    # 브랜치 ↔ 예산 키 대응도 고정한다. 합만 보면 price·investor 참조를 **맞바꿔도** 통과하는데,
+    # 그러면 콜 수가 2배인 price 가 절반 예산을 받아 94초 → 179초로 악화된다(edge-review 지적).
+    expected_keys = {"CollectKisPrice": "price", "CollectKisInvestor": "investor"}
+    # 파서가 대상을 못 찾으면 total=0 으로 한도 검사를 **조용히 통과**한다 — 브랜치가 실제로
+    # 있는지부터 못 박는다(edge-review 지적: 게이트가 0건에서 초록이면 게이트가 아니다).
+    assert set(expected_keys) <= set(kis_jobs), (
+        f"예산을 받아야 할 kis 브랜치가 안 보인다: {sorted(set(expected_keys) - set(kis_jobs))}"
+    )
+
+    total = 0.0
+    for state, command in kis_jobs.items():
+        # **필드명까지 본다.** `.\w+` 로 뭉뜽그리면 `--concurrency` 가 `.min_interval` 을 참조해도
+        # 통과하는데, 그러면 argparse 가 "0.14" 를 int 로 못 읽어 그 브랜치가 매 런 죽는다.
+        refs = {
+            flag: (key, field)
+            for flag, key, field in re.findall(
+                r"--(min-interval|concurrency)',\s*'\$\{local\.kis_rate_budget\.(\w+)\.(\w+)\}",
+                command,
+            )
+        }
+        if state in expected_keys:
+            want = expected_keys[state]
+            assert refs.get("min-interval") == (want, "min_interval"), (
+                f"{state} 의 --min-interval 배선이 kis_rate_budget.{want}.min_interval 이 아니다: {refs}"
+            )
+            assert refs.get("concurrency") == (want, "concurrency"), (
+                f"{state} 의 --concurrency 배선이 kis_rate_budget.{want}.concurrency 가 아니다: {refs}"
+            )
+            total += 1 / float(budget[want])
+            continue
+        # 예산표에 없는 브랜치(nav·profile)는 코드 기본값을 먹는다 — 그 몫도 같은 앱키에서 나간다.
+        # 여기서 배선이 보이면 표를 안 거친 값이라는 뜻이라, 합을 못 세므로 실패시킨다(조용한 통과 금지).
+        assert "--min-interval" not in command, (
+            f"{state} 가 예산표를 안 거치고 --min-interval 을 직접 받는다 — 합을 검산할 수 없다"
+        )
+        total += 1 / KIS_MIN_INTERVAL_SEC
+
+    assert total <= 20.0, (
+        f"kis 브랜치 {len(kis_jobs)}개에 배선된 초당 발신률 합이 {total:.1f}/s — 문서값 20/s 초과"
+    )
 
 
 def test_concurrency_rejects_non_positive(monkeypatch):

@@ -44,6 +44,41 @@ locals {
     },
   ]
 
+  # ── KIS 앱키 초당 예산 분할 (ALPHA-570) ────────────────────────────────────────
+  # KIS 의 초당 한도는 **브랜치가 아니라 앱키 단위**다(문서값 실전 20/s). 아래 4브랜치가
+  # 같은 앱키를 쓰고 각각 별개 ECS 태스크라 프로세스 공유 리미터가 불가능하다 — **정적 분할**뿐이다.
+  # `1/min_interval` 의 합이 곧 우리가 앱키에 거는 최대 발신률이다. **브랜치를 더하거나
+  # min_interval 을 줄일 땐 아래 합을 다시 계산하라**(iNAV/ALPHA-556 이 5번째로 온다).
+  #
+  # | 브랜치       | 콜 수 | rate 상한(=1/interval) | min_interval | 워커 | 예상 |
+  # |--------------|-------|------------------------|--------------|------|------|
+  # | price        |  664  | 7.1/s                  | 0.14         |  6   |  94s |
+  # | investor     |  332  | 3.7/s                  | 0.27         |  3   |  90s |
+  # | nav          |   31  | 2.0/s                  | 0.5(기본)    |  1   |  24s |
+  # | etf_profile  |   31  | 2.0/s                  | 0.5(기본)    |  1   |  24s |
+  # | **합**       | 1,058 | **14.8/s**             |              |      |      |
+  #
+  # 문서값 20/s 대비 26% 여유. rate 는 **상한**이고 실제 발신은 그 아래다 — 브랜치 시간은
+  # `콜 수 ÷ min(워커÷왕복, 1/interval)` 이다(ALPHA-568 의 리미터는 발신 슬롯을 start-to-start
+  # 로 잡는다). 직렬 브랜치는 워커가 1이라 왕복(0.78s)이 지배해 31콜 ≈ 24초이고, 예산은 다
+  # 안 쓴다 — 합을 상한으로 세는 게 안전한 방향이다.
+  # 워커 수는 Little's law 로 정했다(rate × 왕복 0.78s 실측) — 그보다 적으면 발신률이 예산에
+  # 못 미치고(price 5.5→6·investor 2.9→3), 많으면 대기만 늘 뿐 리미터가 어차피 묶는다.
+  #
+  # ⚠️ **이 정적 분할은 `PoliteClient` 가 스레드 안전할 때만 상한으로 성립한다**(ALPHA-568).
+  # 락이 없으면 워커들이 같은 `_last_request_at` 을 읽고 한꺼번에 나가 예산이 워커 수만큼 샌다.
+  # 그래서 이 배선은 568 머지 뒤에 들어가야 한다 — 순서는 568 → 569 → 570.
+  #
+  # ⚠️ 콜 수는 **2026-07-24 실런 실측**이다(티켓 ALPHA-570 의 초안 표는 price 332·nav 320 을
+  # 가정했는데 실제는 price 664(종목당 2콜)·nav 31 이었다). price 를 과소평가하면 그 브랜치가
+  # 그대로 새 병목이 되므로(4.9/s 면 135s) 실측으로 다시 나눴다.
+  # ⚠️ nav·profile 은 기본값(0.5s) 그대로 둔다 — 콜이 31건뿐이라 더 조여봐야 앱키 예산만
+  # 놀리고 그 브랜치가 느려진다. 팬아웃도 안 건다(직렬로도 24초).
+  kis_rate_budget = {
+    price    = { min_interval = "0.14", concurrency = "6" }
+    investor = { min_interval = "0.27", concurrency = "3" }
+  }
+
   # KR 수집 잡 — FMP 와 독립이라 US 토글과 무관하게 항상 돈다.
   kr_ingest_jobs = [
     {
@@ -54,7 +89,7 @@ locals {
     {
       state        = "CollectKisPrice"
       taskdef_key  = "kis"
-      command_expr = "States.Array('ingest-price-raw', '--source', 'kis', '--run-id', $.run_id)"
+      command_expr = "States.Array('ingest-price-raw', '--source', 'kis', '--run-id', $.run_id, '--concurrency', '${local.kis_rate_budget.price.concurrency}', '--min-interval', '${local.kis_rate_budget.price.min_interval}')"
     },
     {
       state        = "CollectDartFinancial"
@@ -87,7 +122,7 @@ locals {
       # (universe_from_holdings, 가격과 같은 축). NormalizeInvestor→LoadEtfFlow 체인의 raw 선행이다.
       state        = "CollectKisInvestor"
       taskdef_key  = "kis"
-      command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
+      command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id, '--concurrency', '${local.kis_rate_budget.investor.concurrency}', '--min-interval', '${local.kis_rate_budget.investor.min_interval}')"
     },
     # 기준일(ALPHA-387, dev 실측으로 확정): 스케줄이 장 마감 후(15:40 KST, ALPHA-414)라
     # **거래일 런은 그날 PDF 가 이미 게시돼 있다**(07-22·23·24 연속 스냅샷 내용 상이). 반면
