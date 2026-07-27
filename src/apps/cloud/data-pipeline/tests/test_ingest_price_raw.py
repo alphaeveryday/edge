@@ -276,6 +276,66 @@ def test_universe_derived_from_latest_holdings_snapshot(tmp_path):
     assert log["symbols_from_holdings"] == 3  # 042700·000660·091160 전부 targets 밖
 
 
+def test_universe_partial_snapshot_filled_from_older_partition(tmp_path):
+    # WHY: 최신 스냅샷이 부분(일부 ETF 수집 실패)이면 그게 곧 max(as_of_date)가 되어, 못 받은
+    #      ETF 의 구성종목이 다음 수집 유니버스에서 조용히 빠졌다(ALPHA-590 — 단일 ETF 소속
+    #      종목 68%, KODEX200 하나=전체 53%). ETF 별 최신 파티션의 합집합이어야 "전량 실패가
+    #      부분 성공보다 안전한" 역설이 사라진다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-24", [("005930", "069500"), ("111111", "091160")])
+    _write_holdings(storage, "2026-07-27", [("042700", "091160")])  # 069500 이 빠진 부분 스냅샷
+    source = _UniverseFakeSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1") == 0
+    # 069500 구성종목은 직전 파티션(07-24)에서 채워진다 — 부분 스냅샷이 유니버스를 못 줄인다.
+    assert {"005930", "069500", "042700", "091160"} <= set(source.received)
+    # 같은 ETF(091160)는 최신 파티션이 이긴다 — 구 스냅샷 구성종목을 되살리지 않는다.
+    assert "111111" not in source.received
+
+
+def test_universe_drops_etf_removed_from_config(tmp_path):
+    # WHY: ETF 목록의 정본은 config etf_map 이다(ALPHA-590). 파티션은 수집 결과라 폐지·제외된
+    #      ETF 행이 남는데, 그걸 되살리면 유령 ETF 의 구성종목을 소급 상한만큼 계속 수집한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-27", [("042700", "091160"), ("999999", "069500")])
+    rows = ingest_price_raw._latest_kr_holdings_rows(storage, frozenset({"091160"}))
+    assert {r["etf_id"] for r in rows} == {"091160"}
+
+
+def test_universe_ignores_malformed_partition_keys(tmp_path):
+    # WHY: 최신→과거 순회는 "사전순 정렬 = 시간순" 전제 위에 있다 — 비정상 키가 정렬 상위를
+    #      차지하면 소급 상한만 갉아먹어 정상 최신 파티션이 스캔에서 밀린다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "9999-99-99", [("111111", "069500")])  # 형태만 맞는 비달력일
+    _write_holdings(storage, "99991231", [("222222", "069500")])  # 비정준형(3.11+ 파싱 허용)
+    _write_holdings(storage, "2026-07-27", [("042700", "091160")])
+    rows = ingest_price_raw._latest_kr_holdings_rows(storage)
+    assert {r["etf_id"] for r in rows} == {"091160"}
+
+
+def test_universe_empty_expected_means_no_etfs(tmp_path):
+    # WHY: 빈 etf_map 은 "정본이 0종이라 말함"이고 krx_etf 섹션 부재(None)는 "정본 부재"다 —
+    #      둘을 구분하지 못하면 폐지된 ETF 가 파티션 잔재로 되살아난다(라운드2 리뷰 지적).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-27", [("042700", "091160")])
+    assert ingest_price_raw._latest_kr_holdings_rows(storage, frozenset()) == []
+    assert len(ingest_price_raw._latest_kr_holdings_rows(storage, None)) == 1
+
+
+def test_universe_missing_expected_etf_surfaced(tmp_path, caplog):
+    # WHY: config etf_map(정본)에 있는데 소급 상한 안 어느 파티션에도 없는 ETF 는 유니버스가
+    #      그만큼 좁게 돈다는 뜻이다 — 조용히 넘기면 아무도 모른다(Rule 12).
+    import logging
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-27", [("042700", "091160")])
+    with caplog.at_level(logging.WARNING):
+        ingest_price_raw._latest_kr_holdings_rows(storage, frozenset({"091160", "069500"}))
+    assert any("유니버스 결손" in r.message and "069500" in r.getMessage()
+               for r in caplog.records)
+
+
 def test_universe_includes_alphanumeric_short_codes(tmp_path):
     # WHY: KRX 가 번호를 소진해 신규 상장분 단축코드에는 문자가 섞인다(우리 ETF 31종 중 7종).
     #      숫자로만 거르면 그 7종이 유니버스에서 조용히 빠져 price_daily 에 영원히 안 들어오고,
