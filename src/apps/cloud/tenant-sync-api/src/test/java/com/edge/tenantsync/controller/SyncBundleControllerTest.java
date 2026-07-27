@@ -30,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 의존하는 약속이 깨지면 실패해야 한다.
  * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다.
  * 저장소는 DB(JdbcTemplate) 구현이 됐으므로 시드 대역으로 대체한다 — 여기서 지키는
- * 것은 와이어 계약이고, 실 DB 경로는 compose E2E 가 확인한다.
+ * 것은 와이어 계약이고, 실 DB 경로는 BundleEntryRepositoryIntegrationTest 가 고정한다.
  */
 class SyncBundleControllerTest {
 

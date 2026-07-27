@@ -32,4 +32,4 @@ curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 204
 
 로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드 4건(NEW·CORRECTION·INVALIDATION·최종 NEW)이다 — fan-out 발번기 도입 시 시드 제거.
 
-테스트 8건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 을 인코딩한다.
+테스트 19건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리를 고정한다(ALPHA-572).
