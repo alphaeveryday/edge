@@ -57,6 +57,21 @@ class IntakeRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
+	void relax_후_checksum_없이도_저장된다() {
+		// WHY: ADR-0040 확장 마이그레이션(V202607271500)이 received_bundle.checksum 의 NOT NULL·
+		// CHECK(^sha256=) 를 풀었다 — cloud 봉투 전환(T2) 후 X-Bundle-Checksum 헤더가 사라져 checksum
+		// 이 null 로 들어와도 INSERT 가 깨지면 안 된다. 이 제약이 살아 있으면 T2 배포가 전 번들을 거부한다.
+		int rows = jdbc.update(
+				"INSERT INTO received_bundle (cursor_from, cursor_to, body) VALUES (?, ?, ?)",
+				10L, 12L, "no-checksum".getBytes(StandardCharsets.UTF_8));
+		assertThat(rows).isEqualTo(1);
+
+		String checksum = jdbc.queryForObject(
+				"SELECT checksum FROM received_bundle WHERE cursor_from = 10", String.class);
+		assertThat(checksum).isNull();
+	}
+
+	@Test
 	void lastCursor_advance_는_committed_커서를_durable하게_전진시킨다() {
 		// WHY: committed cursor 는 권위 재개점(sync-protocol.md) — 이 값이 durable 하지 않으면
 		// 재기동 후 소비 완료 번들을 재수신하거나 유실한다.
