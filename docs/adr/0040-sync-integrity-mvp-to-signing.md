@@ -71,7 +71,12 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
 ## 결과
 - **후속 작업 범위(채택 시, 별도 티켓)** — 이 변경은 서버 한 곳이 아니라 이미 구축된 sync 경로 전체에
   파급된다. 이 ADR은 결정만 기록하고 구현은 후속 티켓이다:
-  - ① Cloud `SyncBundleController`(byte[]→봉투 반환)·`BundleSerializer`(SHA-256 경로 제거).
+  - ① Cloud `SyncBundleController`(byte[]→봉투 반환)·`BundleSerializer`(SHA-256 경로 제거). **주의**:
+    `BundleSerializer`가 유일하게 설정하는 `PropertyNamingStrategies.SNAKE_CASE`도 함께 사라진다 —
+    `EventBundle`에 필드 애너테이션이 없고 전역 Jackson naming 설정도 없어, Spring 기본 직렬화로 바꾸면
+    `bundleId`·`cursorFrom`처럼 camelCase가 나가 와이어 계약·intake 파서(`cursor_from`)가 깨진다.
+    봉투 내부 번들의 snake_case를 전역 `spring.jackson.property-naming-strategy` 또는 DTO 애너테이션으로
+    **대체 유지**하는 것을 범위에 명시해야 한다.
   - ② On-Prem `sync-agent` — `BundleRelayService`가 수신 바이트로 SHA-256을 계산해 `X-Bundle-Checksum`과
     대조하고 불일치 시 `CHECKSUM_MISMATCH`로 거부한다. 헤더가 사라지면 **모든 번들이 거부**되므로 이
     검증과 `BundleRelayController`의 헤더 릴레이를 함께 걷어내야 한다.
@@ -82,7 +87,10 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
     스크리닝이 마킹 없이 무한 재시도된다. 파서와 계약 테스트를 함께 갱신해야 한다.
   - ⑤ `received_bundle` 스키마의 `checksum VARCHAR(72) NOT NULL` + CHECK(`^sha256=…`) 제약 제거를 위한
     expand-contract 마이그레이션(`migrations-onprem`).
-  - ⑥ 계약 문서(sync-protocol.md·event-bundle-schema.md).
+  - ⑥ 계약 문서(sync-protocol.md·event-bundle-schema.md) **및 `tenant-sync-api/openapi.yaml`** — 200 응답
+    스키마를 `ApiResponse` 봉투로 감싸고 `X-Bundle-Checksum` 헤더 선언을 제거한다(현재 71–82행이
+    `EventBundle`을 직접 참조하고 헤더를 선언 — README가 이 파일을 경로·필드·타입 문법 SSOT로 지정하므로,
+    갱신하지 않으면 코드 생성기·계약 소비자가 이전 형상을 받는다).
 - 승인 시 갱신 대상: docs/contracts/sync-protocol.md(무결성·응답 포맷 절), event-bundle-schema.md
   (체크섬 절), 에픽 ALPHA-420 DoD의 "번들 체크섬(SHA-256) 무결성 검증" 항목을 목표 계약으로 이동.
 - **잔여 리스크(수용, 재평가)**: 체크섬은 **`sync-agent` 수신 시점(`BundleRelayService`)에 1회만** 검증되고
