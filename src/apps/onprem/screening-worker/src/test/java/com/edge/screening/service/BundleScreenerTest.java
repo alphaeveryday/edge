@@ -130,10 +130,30 @@ class BundleScreenerTest {
 				.getBytes(StandardCharsets.UTF_8);
 	}
 
+	/** 신형 와이어 형상 — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다(ADR-0040). */
+	private static byte[] envelopeBundle(String entries) {
+		return ("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":"
+				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}}")
+				.getBytes(StandardCharsets.UTF_8);
+	}
+
 	@Test
 	void NEW는_AUTO_PUBLISHED로_적재되고_자동_게시된다() {
 		// WHY: walking skeleton 정책 = 무조건 통과. 게시돼야 Publication API 가 서빙한다.
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
+		assertThat(publications.published).containsExactly("er-1");
+		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void 신형_봉투_번들도_NEW를_자동_게시한다() {
+		// WHY: cloud 봉투 전환(ADR-0040) 후 저장 body 는 ApiResponse 봉투(result 아래에 번들)다 —
+		// 파서는 구(root)·신(result) 형상을 모두 견뎌야 한다. 없으면 미점검 구형 저장분 하나가
+		// ScreeningPoller(첫 실패서 순서보존 중단)를 영구 차단한다.
+		screener.screen(1, envelopeBundle(
+				"{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
 		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");

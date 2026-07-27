@@ -34,4 +34,22 @@ class ChecksumTest {
 		assertThat(BundleRelayService.checksumMatches(BODY, null)).isFalse();
 		assertThat(BundleRelayService.checksumMatches(BODY, "md5=abc")).isFalse();
 	}
+
+	@Test
+	void 헤더가_없으면_검증을_생략하고_통과한다() {
+		// WHY: 봉투 전환(ADR-0040) 후 신형 와이어는 X-Bundle-Checksum 을 보내지 않는다 —
+		// 헤더 결측을 거부하면 신형 번들이 전부 막힌다. 검증 생략(통과)이 이중형상 관용의 핵심.
+		assertThat(BundleRelayService.shouldReject(BODY, null)).isFalse();
+	}
+
+	@Test
+	void 헤더가_있으면_검증한다_불일치와_형식위반은_거부한다() {
+		// WHY: 구형 와이어(헤더 있음)의 오염·위변조 감지는 유지돼야 한다 — 헤더가 존재하면
+		// 여전히 대조하고, 불일치·형식 위반은 거부한다.
+		assertThat(BundleRelayService.shouldReject(BODY, VALID)).isFalse();
+		byte[] tampered = BODY.clone();
+		tampered[2] ^= 1;
+		assertThat(BundleRelayService.shouldReject(tampered, VALID)).isTrue();
+		assertThat(BundleRelayService.shouldReject(BODY, "md5=abc")).isTrue();
+	}
 }

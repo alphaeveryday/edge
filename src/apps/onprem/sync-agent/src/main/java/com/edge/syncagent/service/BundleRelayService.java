@@ -35,7 +35,7 @@ public class BundleRelayService {
 		this.restClient = RestClient.create(tenantSyncApiUrl);
 	}
 
-	/** 검증 통과한 번들 바이트 + 체크섬 헤더 쌍. */
+	/** 검증 통과한 번들 바이트 + 체크섬 헤더 쌍(신형 봉투 와이어는 헤더가 없어 checksum=null). */
 	public record VerifiedBundle(byte[] body, String checksum) {
 	}
 
@@ -73,11 +73,21 @@ public class BundleRelayService {
 		}
 		byte[] body = response.getBody();
 		String checksum = response.getHeaders().getFirst(CHECKSUM_HEADER);
-		if (!checksumMatches(body, checksum)) {
+		// 헤더가 있을 때만 검증한다 — 봉투 전환(ADR-0040) 후 상류는 헤더를 보내지 않는다.
+		// 헤더 없음은 통과, 형식·불일치 헤더는 여전히 거부(전송 중 오염 신호).
+		if (shouldReject(body, checksum)) {
 			log.error("번들 체크섬 불일치 after={} — 전달하지 않는다 (header={})", afterCursor, checksum);
 			throw new GeneralException(SyncAgentErrorStatus.CHECKSUM_MISMATCH);
 		}
 		return Optional.of(new VerifiedBundle(body, checksum));
+	}
+
+	/**
+	 * 검증 관문: 헤더가 있을 때만 검증한다. 헤더 없음(신형 봉투 와이어) → 통과(false),
+	 * 형식 위반·불일치 헤더 → 거부(true). checksumMatches 의 형식 시맨틱은 건드리지 않는다.
+	 */
+	static boolean shouldReject(byte[] body, String checksumHeader) {
+		return checksumHeader != null && !checksumMatches(body, checksumHeader);
 	}
 
 	/** 계약 형식 sha256=<hex> — 수신 바이트에 대한 재계산 대조. */

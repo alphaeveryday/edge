@@ -67,6 +67,22 @@ class BundleIngestorTest {
 	}
 
 	@Test
+	void 신형_봉투_번들은_result_아래_cursor로_전진한다() {
+		// WHY: cloud 봉투 전환(ADR-0040) 후 body 는 ApiResponse 봉투(result 아래에 번들)다 —
+		// intake 는 구(root)·신(result) 형상을 모두 견뎌야 한다(이중형상 관용). 저장 body 는
+		// 봉투 원본 그대로 두고 파싱만 봉투 감지형으로 처리한다.
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		long advanced = new BundleIngestor(bundles, state).ingest(bundle(
+				"{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\","
+						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
+
+		assertThat(advanced).isEqualTo(3);
+		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3, "sha256=stub"));
+		assertThat(state.advanced).containsExactly(3L);
+	}
+
+	@Test
 	void 부분_겹침_번들은_전진하지_않는다() {
 		// WHY: cursor_from 이 저장돼 있는데(conflict-skip) 범위가 committed 를 넘는 번들에서
 		// 전진하면 겹치지 않은 구간이 영영 저장되지 않는다(at-least-once 위반 — 경쟁

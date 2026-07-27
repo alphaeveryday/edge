@@ -21,7 +21,10 @@ public final class DeliveryBundleParser {
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	public List<DeliveryEntry> parse(long cursorFrom, byte[] body) {
-		JsonNode entries = objectMapper.readTree(body).path("entries");
+		JsonNode root = objectMapper.readTree(body);
+		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(result 아래에 번들), 구형은 루트가 곧 번들.
+		JsonNode bundle = root.path("result").isObject() ? root.path("result") : root;
+		JsonNode entries = bundle.path("entries");
 		if (!entries.isArray()) {
 			throw new IllegalStateException("번들 body 에 entries 배열이 없다 — 계약 위반 (cursor_from=" + cursorFrom + ")");
 		}

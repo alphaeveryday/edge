@@ -46,10 +46,14 @@ public class BundleRelayController {
 		}
 		Optional<VerifiedBundle> bundle = bundleRelayService.pull(after, limit);
 		return bundle
-				.map(b -> ResponseEntity.ok()
-						.contentType(MediaType.APPLICATION_JSON)
-						.header(CHECKSUM_HEADER, b.checksum())
-						.body(b.body()))
+				.map(b -> {
+					var builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
+					// 신형 봉투 와이어는 checksum 이 없다 — 헤더도 부착하지 않아 하류로 그대로 전파.
+					if (b.checksum() != null) {
+						builder.header(CHECKSUM_HEADER, b.checksum());
+					}
+					return builder.body(b.body());
+				})
 				.orElseGet(() -> ResponseEntity.noContent().build());
 	}
 }

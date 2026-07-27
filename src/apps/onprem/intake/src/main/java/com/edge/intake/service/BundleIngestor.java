@@ -39,7 +39,9 @@ public class BundleIngestor {
 	 */
 	@Transactional
 	public long ingest(PulledBundle bundle) {
-		JsonNode envelope = objectMapper.readTree(bundle.body());
+		JsonNode root = objectMapper.readTree(bundle.body());
+		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(result 아래에 번들), 구형은 루트가 곧 번들.
+		JsonNode envelope = root.path("result").isObject() ? root.path("result") : root;
 		JsonNode from = envelope.path("cursor_from");
 		JsonNode to = envelope.path("cursor_to");
 		if (!from.isIntegralNumber() || !to.isIntegralNumber()) {
