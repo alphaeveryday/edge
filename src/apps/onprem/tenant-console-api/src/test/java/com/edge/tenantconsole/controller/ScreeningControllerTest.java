@@ -143,7 +143,8 @@ class ScreeningControllerTest {
 
 		@Override
 		public List<MemberEntity> findAllOrderByMemberId() {
-			return List.of();
+			return List.of(new MemberEntity(2L, "reviewer@demo.edge.local", "데모 검수자",
+					"COMPLIANCE_REVIEWER", true, null));
 		}
 
 		@Override

@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -184,19 +185,18 @@ public class ScreeningService {
 	}
 
 	public List<PolicyVersionSummary> listVersions() {
+		// 발행자 이름은 일괄 조회로 해석한다 — 버전마다 findById 를 부르면 이력이
+		// 길어질수록(모든 변경 = 새 버전) 이력 1페이지가 N+1 조회가 된다.
+		Map<Long, String> namesById = new HashMap<>();
+		for (MemberEntity member : members.findAllOrderByMemberId()) {
+			namesById.put(member.getMemberId(), member.getName());
+		}
 		return versions.findAllByOrderByVersionNoDesc().stream()
 				.map(v -> new PolicyVersionSummary(v.getVersionNo(), v.getActivatedAt(),
-						publisherName(v.getCreatedBy()),
+						v.getCreatedBy() == null ? null : namesById.get(v.getCreatedBy()),
 						v.getActivatedAt() != null && v.getDeactivatedAt() == null,
 						v.isAutoPublishEnabled(), v.getMinSourceCount(), v.getMaxRisk()))
 				.toList();
-	}
-
-	private String publisherName(Long memberId) {
-		if (memberId == null) {
-			return null;
-		}
-		return members.findById(memberId).map(MemberEntity::getName).orElse(null);
 	}
 
 	private Draft loadBase() {

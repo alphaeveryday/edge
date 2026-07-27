@@ -29,28 +29,30 @@ export function useScreeningActions() {
 
   const addWord = useMutation({
     mutationFn: (word: NewBannedWord) => screeningRepository.addWord(word),
-    onSuccess: () => {
+    // 실패(경합 409·stale id 404)도 원인이 낡은 캐시라 settle 시 무효화로 수렴한다.
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: WORDS_KEY });
       qc.invalidateQueries({ queryKey: VERSIONS_KEY }); // 모든 변경 = 새 버전 발행
     },
   });
   const toggleWord = useMutation({
     mutationFn: (id: number) => screeningRepository.toggleWord(id),
-    onSuccess: () => {
+    // 실패(경합 409·stale id 404)도 원인이 낡은 캐시라 settle 시 무효화로 수렴한다.
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: WORDS_KEY });
       qc.invalidateQueries({ queryKey: VERSIONS_KEY }); // 모든 변경 = 새 버전 발행
     },
   });
   const updateCriteria = useMutation({
     mutationFn: (patch: Partial<AutoPublishCriteria>) => screeningRepository.updateCriteria(patch),
-    onSuccess: () => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: CRITERIA_KEY });
       qc.invalidateQueries({ queryKey: VERSIONS_KEY });
     },
   });
   const updateDisclaimer = useMutation({
     mutationFn: (text: string) => screeningRepository.updateDisclaimer(text),
-    onSuccess: () => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: DISCLAIMER_KEY });
       qc.invalidateQueries({ queryKey: VERSIONS_KEY });
     },
