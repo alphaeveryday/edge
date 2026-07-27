@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_investor_partition
 from ..sources import KisInvestorSource, StopFetch
-from .ingest_price_raw import _kr_holdings_universe
+from .ingest_price_raw import _kr_holdings_universe, _krx_expected_etfs
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ def run(
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = 0
         if getattr(source, "universe_from_holdings", False):
-            universe = _kr_holdings_universe(storage)
+            universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
             symbols = sorted(set(symbols) | set(universe))
         for record in source.fetch(symbols, from_date, to_date):

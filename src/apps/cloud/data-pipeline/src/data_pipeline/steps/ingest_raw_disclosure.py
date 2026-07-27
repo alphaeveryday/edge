@@ -26,7 +26,7 @@ from ..lake import (
 )
 from ..sources import DartDisclosureSource, StopFetch
 from ..sources.dart_disclosure import BODY_FORMAT
-from .ingest_price_raw import _kr_etf_ids, _kr_holdings_universe
+from .ingest_price_raw import _kr_etf_ids, _kr_holdings_universe, _krx_expected_etfs
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +100,9 @@ def run(
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = log["symbols_excluded_etf"] = 0
         if getattr(source, "universe_from_holdings", False):
-            universe = _kr_holdings_universe(storage, include_etf=False)
-            etf_ids = _kr_etf_ids(storage)
+            expected = _krx_expected_etfs(settings)
+            universe = _kr_holdings_universe(storage, include_etf=False, expected_etfs=expected)
+            etf_ids = _kr_etf_ids(storage, expected)
             union = set(symbols) | set(universe)
             merged = union - etf_ids
             # 차감 **뒤** 기준으로 센다 — fund-of-funds 스냅샷에서는 어떤 코드가

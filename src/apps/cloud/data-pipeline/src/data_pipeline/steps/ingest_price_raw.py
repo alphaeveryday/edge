@@ -29,8 +29,20 @@ PriceSourceAdapter = FmpPriceSource | KisDailyPriceSource
 logger = logging.getLogger(__name__)
 
 
-def _kr_holdings_universe(storage: Storage, *, include_etf: bool = True) -> list[str]:
-    """canonical KR holdings **최신 스냅샷**의 구성종목·ETF 티커 목록(ALPHA-419).
+def _krx_expected_etfs(settings: Settings) -> frozenset[str]:
+    """수집 유니버스의 ETF 전체 집합 = config `krx_etf.source.etf_map` 의 키(ALPHA-590).
+
+    holdings 파티션이 아니라 config 가 정본이다 — 파티션은 수집 결과라 부분 실패로 줄 수
+    있지만 ETF 목록 자체는 설정이라 절대 줄면 안 된다.
+    """
+    return frozenset(settings.krx_etf.source.etf_map) if settings.krx_etf else frozenset()
+
+
+def _kr_holdings_universe(
+    storage: Storage, *, include_etf: bool = True,
+    expected_etfs: frozenset[str] = frozenset(),
+) -> list[str]:
+    """canonical KR holdings **ETF 별 최신 스냅샷 합집합**의 구성종목·ETF 티커 목록(ALPHA-419).
 
     수집 유니버스를 holdings 에서 파생한다 — 정적 targets/symbol_map 은 유니버스와
     어긋난다(구성종목 36개 중 2개만 등재됐던 원인, 뉴스 ALPHA-416·417 과 같은 축).
@@ -46,7 +58,7 @@ def _kr_holdings_universe(storage: Storage, *, include_etf: bool = True) -> list
     # 구성종목과 ETF 자신(etf_id=티커) 둘 다 — ETF 종가는 트리거·설명의 대조축이다.
     fields = ("constituent_ticker", "etf_id") if include_etf else ("constituent_ticker",)
     tickers: set[str] = set()
-    for row in _latest_kr_holdings_rows(storage):
+    for row in _latest_kr_holdings_rows(storage, expected_etfs):
         for value in (row.get(f) for f in fields):
             code = krx_short_code(value)
             if code:
@@ -54,7 +66,7 @@ def _kr_holdings_universe(storage: Storage, *, include_etf: bool = True) -> list
     return sorted(tickers)
 
 
-def _kr_etf_ids(storage: Storage) -> set[str]:
+def _kr_etf_ids(storage: Storage, expected_etfs: frozenset[str] = frozenset()) -> set[str]:
     """canonical KR holdings 최신 스냅샷의 **ETF 자기 티커** 집합(ALPHA-477).
 
     ETF 는 DART 신고자가 아니라 corpCode.xml 에 없다 — 공시 수집은 유니버스가 holdings 파생이든
@@ -62,22 +74,58 @@ def _kr_etf_ids(storage: Storage) -> set[str]:
     같은 종이 미매핑으로 잡혀 `ops.failed_records>0` → 원장이 영구 INCOMPLETE 가 된다
     (`ops/wrapper.py` 의 failed_records 판정).
     """
-    return {code for row in _latest_kr_holdings_rows(storage)
+    return {code for row in _latest_kr_holdings_rows(storage, expected_etfs)
             if (code := krx_short_code(row.get("etf_id")))}
 
 
-def _latest_kr_holdings_rows(storage: Storage) -> list[dict]:
-    """canonical KR holdings **최신 스냅샷**의 행. 스냅샷이 없으면 빈 목록."""
+# ETF 별 최신 스냅샷을 찾아 거슬러 올라가는 소급 상한(파티션 수). 부분 스냅샷 며칠을 메우는
+# 게 목적이라 이 정도면 충분하다 — 상한을 넘겨도 못 채운 ETF 는 데이터가 그만큼 오래 없다는
+# 뜻이고, 그 수집 결손 자체는 KRX 스텝이 매 런 partial/error 로 이미 드러낸다.
+UNIVERSE_LOOKBACK_PARTITIONS = 10
+
+
+def _latest_kr_holdings_rows(
+    storage: Storage, expected_etfs: frozenset[str] = frozenset()
+) -> list[dict]:
+    """canonical KR holdings 의 **ETF 별 최신 스냅샷 합집합** 행. 없으면 빈 목록 (ALPHA-590).
+
+    `max(as_of_date)` 파티션 하나만 읽으면 부분 스냅샷(일부 ETF 수집 실패)이 곧 유니버스가
+    된다 — 못 받은 ETF 의 구성종목이 다음 수집에서 조용히 빠진다(단일 ETF 소속 종목이 68%,
+    KODEX 200 하나만 빠져도 전체의 53% 소실). 최신→과거로 훑으며 아직 못 본 ETF 의 행만
+    채워 부분 실패가 유니버스를 축소하지 못하게 한다. `expected_etfs`(config etf_map 키 —
+    파티션이 아니라 config 가 ETF 목록의 정본)가 다 차면 멈추므로, 온전한 최신 스냅샷이
+    있는 평시에는 이전과 똑같이 파티션 하나만 읽는다.
+    """
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     dates.discard("")
-    if not dates:
-        return []
     rows: list[dict] = []
-    prefix = canonical_etf_holdings_partition("KR", max(dates))
-    for key in storage.list_keys(prefix + "/"):
-        if key.endswith(".parquet"):
-            rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+    seen: set[str] = set()
+    for depth, as_of in enumerate(sorted(dates, reverse=True)[:UNIVERSE_LOOKBACK_PARTITIONS]):
+        if expected_etfs and expected_etfs <= seen:
+            break
+        partition_rows: list[dict] = []
+        prefix = canonical_etf_holdings_partition("KR", as_of)
+        for key in storage.list_keys(prefix + "/"):
+            if key.endswith(".parquet"):
+                partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+        fresh = {etf for row in partition_rows
+                 if (etf := row.get("etf_id")) and etf not in seen}
+        if depth and fresh:
+            # 최신 파티션이 부분 스냅샷이었다는 뜻 — 조용한 보강 금지, 로그로 드러낸다.
+            logger.warning(
+                "KR holdings 유니버스 보강: 최신 스냅샷에 없는 ETF %d종을 as_of=%s 에서 채움 (%s)",
+                len(fresh), as_of, ",".join(sorted(fresh)),
+            )
+        rows.extend(row for row in partition_rows if row.get("etf_id") in fresh)
+        seen |= fresh
+    if expected_etfs - seen:
+        # 소급 상한 안에서도 못 채운 ETF — 유니버스가 그만큼 좁게 돈다는 사실을 드러낸다.
+        logger.warning(
+            "KR holdings 유니버스 결손: 최근 %d개 파티션에 없는 ETF %d종 (%s)",
+            UNIVERSE_LOOKBACK_PARTITIONS, len(expected_etfs - seen),
+            ",".join(sorted(expected_etfs - seen)),
+        )
     return rows
 
 
@@ -149,7 +197,7 @@ def run(
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = 0
         if getattr(source, "universe_from_holdings", False):
-            universe = _kr_holdings_universe(storage)
+            universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
             symbols = sorted(set(symbols) | set(universe))
         for record in source.fetch(symbols, from_date, to_date):
