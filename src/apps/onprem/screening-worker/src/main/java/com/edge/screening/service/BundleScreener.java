@@ -146,7 +146,7 @@ public class BundleScreener {
 		if (corrected == 0) {
 			// 0행 = 대상 미수신(gap) 또는 이미 종결(멱등 재수신) — 리포지토리 계약상 구분
 			// 불가(read 미노출). 확정 오진을 피해 두 가능성을 그대로 표면화한다(gap 감지는 ALPHA-494).
-			log.warn("CORRECTION 대상 전이 0행 target={} — 미수신(gap) 또는 이미 종결(멱등 재수신), 정정분은 정상 진입", target);
+			log.warn("CORRECTION 대상 전이 0행 target={} — 미수신(gap, 이때 정정분 FK 로 실패·재시도) 또는 이미 종결(멱등 재수신)", target);
 		}
 		// 정정분 = 새 리비전. 신규와 동일하게 정책 평가를 거친다(결정 변경 2026-07-27,
 		// ALPHA-430 — 온보딩 철학 "걸린 것만 검수"의 일관 적용). 구 게시는 위에서 내려갔으므로
