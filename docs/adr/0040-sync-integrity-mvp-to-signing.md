@@ -85,8 +85,14 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
   - ④ `screening-worker` `DeliveryBundleParser`는 저장된 body 루트에서 `readTree(body).path("entries")`로
     `entries`를 읽는다 — 봉투로 감싸이면 루트에 `entries`가 없어 매 번들이 계약 위반 예외로 실패하고
     스크리닝이 마킹 없이 무한 재시도된다. 파서와 계약 테스트를 함께 갱신해야 한다.
-  - ⑤ `received_bundle` 스키마의 `checksum VARCHAR(72) NOT NULL` + CHECK(`^sha256=…`) 제약 제거를 위한
-    expand-contract 마이그레이션(`migrations-onprem`).
+  - ⑤ `received_bundle.checksum`(VARCHAR(72) NOT NULL + CHECK `^sha256=…`) 제거는 단일 마이그레이션이
+    아니라 **expand→transition→contract** 순서다([[0005-db-as-contract]] — 신구 앱이 DB를 공유하므로):
+    **(expand)** 컬럼은 남기고 `NOT NULL`·CHECK 제약만 푸는 마이그레이션, **(transition)** 체크섬을 읽고
+    쓰는 코드 전부 배포·은퇴(sync-agent `BundleRelayService`, intake `BundleIngestor`·
+    `ReceivedBundleRepository`·`ReceivedBundle` 엔티티), **(contract)** 후속 마이그레이션으로 컬럼 drop +
+    `generated` 스키마 아티팩트(`physical-erd-onprem.dbml`) 갱신. 순서를 어기면 배포가 깨진다 — 컬럼 선-제거
+    시 구 intake의 INSERT·Hibernate validate 실패, `NOT NULL` 유지 상태에서 체크섬 생략 writer 배포 시 전
+    번들 거부.
   - ⑥ 계약 문서(sync-protocol.md·event-bundle-schema.md) **및 `tenant-sync-api/openapi.yaml`** — 200 응답
     스키마를 `ApiResponse` 봉투로 감싸고 `X-Bundle-Checksum` 헤더 선언을 제거한다(현재 71–82행이
     `EventBundle`을 직접 참조하고 헤더를 선언 — README가 이 파일을 경로·필드·타입 문법 SSOT로 지정하므로,
