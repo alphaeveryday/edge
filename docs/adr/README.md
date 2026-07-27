@@ -22,7 +22,7 @@
 | [0012](0012-sync-cert-bootstrap.md) | Sync 인증서 부트스트랩 — CSR 방식, 개인키 비반출 | 승인됨 |
 | [0013](0013-exposure-log-recording.md) | Exposure Log 기록 — 조회 시점 자동 기록, 고객 해시는 증권사 생성 | 승인됨 |
 | [0014](0014-correction-repreview.md) | 정정 이벤트 처리 — 무조건 재검수 | 승인됨 |
-| [0015](0015-sync-protocol-mvp.md) | Sync 프로토콜 — cursor 기반 delta, MVP 스펙과 목표 계약 분리 | 승인됨 |
+| [0015](0015-sync-protocol-mvp.md) | Sync 프로토콜 — cursor 기반 delta, MVP 스펙과 목표 계약 분리 | 대체됨 (→ [0040](0040-sync-integrity-mvp-to-signing.md)) |
 | [0016](0016-single-repo-two-artifacts.md) | 코드베이스 — 단일 레포, 배포 아티팩트 2종 | 승인됨 |
 | [0017](0017-demo-topology-compose.md) | 데모/개발 토폴로지 — 별도 EC2 + Docker Compose 가상 온프렘 | 승인됨 |
 | [0018](0018-rule-deployment-path.md) | Compliance Rule 배포 경로 — Rule Type은 릴리스, Sync 채널은 데이터 전용 | 승인됨 |
@@ -46,4 +46,4 @@
 | [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 |
 | [0037](0037-compliance-engine-to-screening-worker.md) | 점검 실행 모듈 명칭 — Compliance Engine → Screening Worker | 승인됨 |
 | [0038](0038-jpa-onprem-read-standard.md) | 온프렘 조회 표준으로 JPA 도입 — 스키마는 Flyway SSOT, 앱은 validate-only | 승인됨 |
-| [0040](0040-sync-integrity-mvp-to-signing.md) | Sync 번들 무결성 — 체크섬·byte[] 응답을 MVP에서 목표 계약(서명)으로 이관 | 제안됨 |
+| [0040](0040-sync-integrity-mvp-to-signing.md) | Sync 번들 무결성 — 체크섬·byte[] 응답을 MVP에서 목표 계약(서명)으로 이관 | 승인됨 |
