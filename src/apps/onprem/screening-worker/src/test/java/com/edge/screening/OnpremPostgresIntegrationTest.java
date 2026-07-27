@@ -4,8 +4,6 @@ import com.edge.screening.scheduler.ScreeningPoller;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -15,6 +13,11 @@ import org.testcontainers.utility.DockerImageName;
  * Hibernate ddl-auto=validate 로 엔티티↔스키마를 대조한다(ADR-0038). H2 는 JSONB·IDENTITY 등
  * Postgres 문법을 지원하지 않아 이 검증을 대체할 수 없다.
  *
+ * <p>컨테이너는 static 블록에서 1회 기동하는 싱글턴이다(@Container 생명주기 미사용) — 여러
+ * 통합 테스트 클래스가 같은 컨테이너·캐시된 Spring 컨텍스트를 공유하고, JVM 종료 시 Ryuk 이
+ * 정리한다. (@Container 로 관리하면 첫 클래스 종료 시 컨테이너가 내려가, 두 번째 클래스가
+ * 캐시된 컨텍스트의 죽은 JDBC URL 로 붙어 연결 실패가 난다 — tenant-console-api 베이스와 동일 규약.)
+ *
  * <p>flyway.locations 는 이 모듈 디렉터리(src/apps/onprem/screening-worker) 기준 상대 경로다 —
  * Gradle test 태스크의 작업 디렉터리가 모듈 디렉터리라 성립한다.
  */
@@ -22,13 +25,15 @@ import org.testcontainers.utility.DockerImageName;
 		"spring.flyway.enabled=true",
 		"spring.flyway.locations=filesystem:../../../libs/schema/migrations-onprem"
 })
-@Testcontainers
 abstract class OnpremPostgresIntegrationTest {
 
-	@Container
 	@ServiceConnection
 	static final PostgreSQLContainer POSTGRES =
 			new PostgreSQLContainer(DockerImageName.parse("postgres:16"));
+
+	static {
+		POSTGRES.start();
+	}
 
 	// @Scheduled 폴러(ScreeningPoller)를 무력화한다 — 통합테스트 컨텍스트는 캐시돼 살아 있어 폴러가
 	// 배경에서 미점검분을 점검·마킹하면 같은 Testcontainers DB 의 analysis_item·publication·
