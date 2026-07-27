@@ -39,6 +39,10 @@ public class AnalysisItemStatusHistoryEntity {
 	@Column(name = "reason")
 	private String reason;
 
+	/** DB DEFAULT now() 소유 — INSERT 에 싣지 않고 읽기 전용으로만 매핑한다(ALPHA-436 이력 표시). */
+	@Column(name = "occurred_at", insertable = false, updatable = false)
+	private java.time.OffsetDateTime occurredAt;
+
 	protected AnalysisItemStatusHistoryEntity() {
 	}
 
@@ -78,5 +82,9 @@ public class AnalysisItemStatusHistoryEntity {
 
 	public String getReason() {
 		return reason;
+	}
+
+	public java.time.OffsetDateTime getOccurredAt() {
+		return occurredAt;
 	}
 }

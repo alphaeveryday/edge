@@ -156,7 +156,8 @@ class ConsoleAuthFilterTest {
 	void setUp() {
 		// 검수 액션의 기록·감사는 이 테스트의 관심사 밖 — 최소 no-op 대역으로 채운다.
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications(),
-				task -> task, historyRow -> historyRow, new ConsoleActionLogService(null, null) {
+				task -> task, new StubHistoryRepo(), new StubCheckRepo(), new StubPolicyRules(),
+				members, new ConsoleActionLogService(null, null) {
 					@Override
 					public void record(SessionMember actor, String action, String targetType,
 							String targetId, java.util.Map<String, Object> detail, String clientIp) {
@@ -184,6 +185,37 @@ class ConsoleAuthFilterTest {
 								})))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
+	}
+
+	private static final class StubHistoryRepo
+			implements com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository {
+		@Override
+		public com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity save(
+				com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity history) {
+			return history;
+		}
+
+		@Override
+		public List<com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity>
+				findByAnalysisItemIdOrderByStatusHistoryIdAsc(String analysisItemId) {
+			return List.of();
+		}
+	}
+
+	private static final class StubCheckRepo
+			implements com.edge.tenantconsole.repository.ScreeningCheckRepository {
+		@Override
+		public List<com.edge.tenantconsole.entity.ScreeningCheckEntity>
+				findByAnalysisItemIdOrderByScreeningCheckId(String analysisItemId) {
+			return List.of();
+		}
+
+		@Override
+		public List<com.edge.tenantconsole.entity.ScreeningCheckEntity>
+				findByAnalysisItemIdInAndResultOrderByScreeningCheckId(
+						java.util.Collection<String> analysisItemIds, String result) {
+			return List.of();
+		}
 	}
 
 	/** 발행 대역 — 인가 판정만 보는 테스트라 IDENTITY 채번만 흉내낸다(리플렉션). */
@@ -235,6 +267,11 @@ class ConsoleAuthFilterTest {
 			org.springframework.test.util.ReflectionTestUtils.setField(rule, "screeningRuleId", nextId++);
 			stored.add(rule);
 			return rule;
+		}
+
+		@Override
+		public List<ScreeningRuleEntity> findByScreeningRuleIdIn(java.util.Collection<Long> ruleIds) {
+			return List.of();
 		}
 	}
 
@@ -290,6 +327,16 @@ class ConsoleAuthFilterTest {
 		mvc.perform(get("/api/v1/screening/versions").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isOk());
 		mvc.perform(get("/api/v1/screening/versions"))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void 검수_상세는_전_역할_조회다() throws Exception {
+		// WHY: 감사 열람(검사 결과·상태 이력)은 별도 Audit 메뉴가 아니라 상세로
+		// 확인한다(콘솔 IA) — 조회는 매트릭스대로 전 역할, 미인증은 fail-closed.
+		mvc.perform(get("/api/v1/review/items/er-1").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/review/items/er-1"))
 				.andExpect(status().isUnauthorized());
 	}
 

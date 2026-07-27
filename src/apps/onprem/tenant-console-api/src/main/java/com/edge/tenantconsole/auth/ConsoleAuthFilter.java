@@ -59,6 +59,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	// permission-matrix.md "API 매핑" 표의 코드 대응물.
 	private static final List<Rule> RULES = List.of(
 			new Rule("GET", Pattern.compile("/api/v1/review/items"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/review/items/[^/]+"), ANY_ROLE),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/approve-edited"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),

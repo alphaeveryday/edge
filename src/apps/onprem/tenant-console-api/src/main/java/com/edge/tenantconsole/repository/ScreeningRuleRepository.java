@@ -15,4 +15,7 @@ public interface ScreeningRuleRepository extends Repository<ScreeningRuleEntity,
 	List<ScreeningRuleEntity> findByPolicyVersionIdOrderByScreeningRuleId(long policyVersionId);
 
 	ScreeningRuleEntity save(ScreeningRuleEntity rule);
+
+	/** 검수 사유 파생용 룰 배치 조회(ALPHA-436) — check 의 rule_id 를 rule_type 으로 해석한다. */
+	java.util.List<ScreeningRuleEntity> findByScreeningRuleIdIn(java.util.Collection<Long> ruleIds);
 }
