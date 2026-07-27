@@ -263,18 +263,23 @@ class BundleScreenerTest {
 	}
 
 	@Test
-	void 활성_정책이_없으면_CORRECTION도_마킹_없이_실패한다() {
-		// WHY: 정정분 판정에도 정책이 필요하다. 정책 0건이면 애초에 게시된 것이 없어
-		// (NEW 진행 중단) 내릴 노출도 없다 — 실패·재시도가 안전하다.
+	void 활성_정책이_없어도_CORRECTION은_비노출을_수행하고_정정분을_검수로_보존한다() {
+		// WHY: 정정의 1순위는 틀린 문구를 내리는 것(안전 조치)이다 — 정책이 비활성화된
+		// 구간에 정정이 막히면 틀린 게시가 계속 노출된다. 정정분은 판정할 정책이 없으니
+		// 자동 노출 없이 REVIEW_REQUIRED 로 보존한다(check 는 정책 부재로 미기록 — 로그 표면화).
 		activePolicy = Optional.empty();
 
-		Executable call = () -> screener.screen(2,
-				bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-						"\"target_explanation_result_id\":\"er-1\"," +
-						"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
+		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
+				"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
 
-		assertThrows(IllegalStateException.class, call);
-		assertThat(pending.screened).isEmpty();
+		assertThat(items.transitions).containsExactly("er-1:CORRECTED");
+		assertThat(publications.transitions).containsExactly("er-1:UNPUBLISHED");
+		assertThat(items.upserts).containsExactly(
+				new RecordingItems.Upserted("er-2", "er-1", "정정", "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).isEmpty();
+		assertThat(pending.screened).containsExactly(2L);
 	}
 
 	@Test

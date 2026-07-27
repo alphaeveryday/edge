@@ -80,8 +80,10 @@ public class BundleScreener {
 					screenNew(entry, policy);
 				}
 				case "CORRECTION" -> {
+					// NEW 와 달리 정책 로드 실패로 막지 않는다 — 정정의 1순위는 틀린 게시를
+					// 내리는 것(안전 조치)이라, 정책 0건 구간에도 종결·비노출은 진행돼야 한다.
 					if (policy == null) {
-						policy = loadActivePolicy();
+						policy = loadActivePolicyOrNull();
 					}
 					screenCorrection(entry, policy);
 				}
@@ -95,13 +97,22 @@ public class BundleScreener {
 	}
 
 	private ActivePolicy loadActivePolicy() {
-		PolicyVersion version = policyRepository.findActive().orElseThrow(() -> new IllegalStateException(
-				"활성 점검 정책이 없다 — NEW·정정분 판정 불가(정책 부재 = 진행 중단), 콘솔 온보딩 발행 후 재시도된다"));
-		List<PolicyRule> rules = screeningRuleRepository
-				.findByPolicyVersionIdAndEnabledTrueOrderByScreeningRuleId(version.getPolicyVersionId())
-				.stream().map(this::toRule).toList();
-		return new ActivePolicy(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
-				version.getMinSourceCount(), rules);
+		ActivePolicy policy = loadActivePolicyOrNull();
+		if (policy == null) {
+			throw new IllegalStateException(
+					"활성 점검 정책이 없다 — NEW 판정 불가(정책 부재 = 진행 중단), 콘솔 온보딩 발행 후 재시도된다");
+		}
+		return policy;
+	}
+
+	private ActivePolicy loadActivePolicyOrNull() {
+		return policyRepository.findActive().map(version -> {
+			List<PolicyRule> rules = screeningRuleRepository
+					.findByPolicyVersionIdAndEnabledTrueOrderByScreeningRuleId(version.getPolicyVersionId())
+					.stream().map(this::toRule).toList();
+			return new ActivePolicy(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
+					version.getMinSourceCount(), rules);
+		}).orElse(null);
 	}
 
 	private PolicyRule toRule(ScreeningRule row) {
@@ -137,6 +148,14 @@ public class BundleScreener {
 		// 정정분 = 새 리비전. 신규와 동일하게 정책 평가를 거친다(결정 변경 2026-07-27,
 		// ALPHA-430 — 온보딩 철학 "걸린 것만 검수"의 일관 적용). 구 게시는 위에서 내려갔으므로
 		// 청정 정정은 같은 grain 에 재게시된다. supersedes 연결·원장 보존은 불변.
+		if (policy == null) {
+			// 정책 0건 구간(비활성화 등) — 판정할 기준이 없다. 자동 노출 없이 검수 대기로
+			// 보존한다(check 는 policy_version_id NOT NULL 이라 기록 불가 — 로그로 표면화).
+			upsertItem(entry, target, entry.reason(), "REVIEW_REQUIRED");
+			log.warn("CORRECTION 정정분 판정 보류 — 활성 정책 0건, REVIEW_REQUIRED 보존 (id={})",
+					result.explanationResultId());
+			return;
+		}
 		applyDecision(entry, policy, target, entry.reason(), "CORRECTION");
 		log.info("CORRECTION screened target={} corrected={} unpublished={} revision={}",
 				target, corrected, unpublished, result.explanationResultId());
