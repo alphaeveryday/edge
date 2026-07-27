@@ -49,8 +49,10 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
 ## 콘솔 mock 표면 (ALPHA-513)
 
 tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 중 mock 잔여
-3종 — explanations(가격 변동 설명·반입 상태) · screening(금칙어·기준·면책 문구) ·
-scope(시장·종목 제공 범위). members(사용자 관리)는 ALPHA-119 로 member 원장
+2종 — explanations(가격 변동 설명·반입 상태) · scope(시장·종목 제공 범위).
+screening(금칙어·기준·면책 문구)은 ALPHA-438 로 policy_version·screening_rule 실
+writer 로 전환됐다 — 모든 변경이 불변 버전 발행(ADR-0018)이고 쓰기는 CR 전용,
+온보딩 기본은 자동 제공 ON 이다. members(사용자 관리)는 ALPHA-119 로 member 원장
 실데이터로 전환됐고(등록·목록·비활성화 + 역할 변경 ALPHA-499), session 은
 ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테넌트 컨텍스트는
 배포 설정(`console.tenant.*`, 온프렘 박스=테넌트 1:1)이 소스다. dashboard(제공
