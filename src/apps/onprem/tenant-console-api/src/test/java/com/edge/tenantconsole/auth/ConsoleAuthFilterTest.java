@@ -4,6 +4,12 @@ import com.edge.tenantconsole.config.TenantContextProperties;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.DashboardController;
 import com.edge.tenantconsole.controller.ReviewController;
+import com.edge.tenantconsole.controller.ScreeningController;
+import com.edge.tenantconsole.entity.PolicyVersionEntity;
+import com.edge.tenantconsole.entity.ScreeningRuleEntity;
+import com.edge.tenantconsole.repository.PolicyVersionRepository;
+import com.edge.tenantconsole.repository.ScreeningRuleRepository;
+import com.edge.tenantconsole.service.ScreeningService;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.model.TrafficSummary;
@@ -23,6 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -166,9 +173,69 @@ class ConsoleAuthFilterTest {
 						new ConsoleSessionController(new ConsoleSessionService(members),
 								new TenantContextProperties("KB증권", "kbsec.com", "KB")),
 						new DashboardController(
-								new DashboardService(since -> new TrafficSummary(0, 0))))
+								new DashboardService(since -> new TrafficSummary(0, 0))),
+						new ScreeningController(new ScreeningService(new StubPolicyVersions(),
+								new StubPolicyRules(), members, new ConsoleActionLogService(null, null) {
+									@Override
+									public void record(SessionMember actor, String action, String targetType,
+											String targetId, java.util.Map<String, Object> detail,
+											String clientIp) {
+									}
+								})))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
+	}
+
+	/** 발행 대역 — 인가 판정만 보는 테스트라 IDENTITY 채번만 흉내낸다(리플렉션). */
+	private static final class StubPolicyVersions implements PolicyVersionRepository {
+		private final List<PolicyVersionEntity> stored = new ArrayList<>();
+		private long nextId = 1;
+
+		@Override
+		public Optional<PolicyVersionEntity> findActive() {
+			return stored.stream()
+					.filter(v -> v.getActivatedAt() != null && v.getDeactivatedAt() == null)
+					.findFirst();
+		}
+
+		@Override
+		public int maxVersionNo() {
+			return stored.stream().mapToInt(PolicyVersionEntity::getVersionNo).max().orElse(0);
+		}
+
+		@Override
+		public int deactivate(long id) {
+			return 0;
+		}
+
+		@Override
+		public PolicyVersionEntity save(PolicyVersionEntity version) {
+			org.springframework.test.util.ReflectionTestUtils.setField(version, "policyVersionId", nextId++);
+			stored.add(version);
+			return version;
+		}
+
+		@Override
+		public List<PolicyVersionEntity> findAllByOrderByVersionNoDesc() {
+			return List.copyOf(stored);
+		}
+	}
+
+	private static final class StubPolicyRules implements ScreeningRuleRepository {
+		private final List<ScreeningRuleEntity> stored = new ArrayList<>();
+		private long nextId = 1;
+
+		@Override
+		public List<ScreeningRuleEntity> findByPolicyVersionIdOrderByScreeningRuleId(long policyVersionId) {
+			return stored.stream().filter(r -> r.getPolicyVersionId() == policyVersionId).toList();
+		}
+
+		@Override
+		public ScreeningRuleEntity save(ScreeningRuleEntity rule) {
+			org.springframework.test.util.ReflectionTestUtils.setField(rule, "screeningRuleId", nextId++);
+			stored.add(rule);
+			return rule;
+		}
 	}
 
 	private MockHttpSession sessionOf(SessionMember member) {
@@ -191,6 +258,39 @@ class ConsoleAuthFilterTest {
 	void 조회는_전_역할_공통이다() throws Exception {
 		mvc.perform(get("/api/v1/review/items").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 정책_변경은_Compliance_Reviewer_전용이다() throws Exception {
+		// WHY: 정책 변경 = 새 버전 발행(permission-matrix "정책 변경" 행 = CR 전용).
+		// screening 도메인의 DB 전환으로 mock 한시 예외(전 역할)가 해제된다.
+		mvc.perform(post("/api/v1/screening/words").session(sessionOf(READ_ONLY))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/screening/words/1/toggle").session(sessionOf(ADMIN)))
+				.andExpect(status().isForbidden());
+		mvc.perform(patch("/api/v1/screening/criteria").session(sessionOf(READ_ONLY))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":1}"))
+				.andExpect(status().isForbidden());
+		mvc.perform(patch("/api/v1/screening/disclaimer").session(sessionOf(ADMIN))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"문구\"}"))
+				.andExpect(status().isForbidden());
+
+		mvc.perform(post("/api/v1/screening/words").session(sessionOf(REVIEWER))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 정책_조회는_전_역할이고_버전_이력도_조회다() throws Exception {
+		mvc.perform(get("/api/v1/screening/words").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/screening/versions").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/screening/versions"))
+				.andExpect(status().isUnauthorized());
 	}
 
 	@Test

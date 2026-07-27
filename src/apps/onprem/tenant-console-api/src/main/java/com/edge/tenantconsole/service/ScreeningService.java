@@ -1,18 +1,37 @@
 package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
+import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.entity.MemberEntity;
+import com.edge.tenantconsole.entity.PolicyVersionEntity;
+import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
-import com.edge.tenantconsole.mock.ScreeningMockStore;
-import com.edge.tenantconsole.mock.ScreeningMockStore.AutoPublishCriteria;
-import com.edge.tenantconsole.mock.ScreeningMockStore.BannedWord;
+import com.edge.tenantconsole.model.AutoPublishCriteria;
+import com.edge.tenantconsole.model.BannedWord;
+import com.edge.tenantconsole.model.PolicyVersionSummary;
+import com.edge.tenantconsole.repository.MemberRepository;
+import com.edge.tenantconsole.repository.PolicyVersionRepository;
+import com.edge.tenantconsole.repository.ScreeningRuleRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
- * 점검 기준 mock 표면(ALPHA-513) — 어휘 검증만 하고 mock 스토어에 위임한다.
- * DB 연동 시 스토어 의존을 repository 로 교체한다.
+ * 점검 정책 표면(ALPHA-438) — policy_version·screening_rule 실 writer. 모든 변경은
+ * 불변 버전 발행(ADR-0018)이다: 활성 버전(+룰)을 복사해 델타를 적용한 신규 버전을
+ * 한 트랜잭션으로 발행하고 이전 활성을 종결한다. 활성 1건은 DB 부분 유니크가
+ * arbiter — 발행 경합은 제약 위반으로 드러나 409 로 표면화한다(조용한 덮어쓰기 금지).
+ * 온보딩 기반값은 자동 제공 ON(걸린 것만 검수 — 사용자 결정 2026-07-27).
  */
 @Service
 public class ScreeningService {
@@ -22,51 +41,190 @@ public class ScreeningService {
 	// 자동 제공 허용 위험 상한에 HIGH 는 없다 — HIGH 는 항상 검수·차단 경로다(UI 계약).
 	private static final Set<String> MAX_RISKS = Set.of("LOW", "MEDIUM");
 
-	private final ScreeningMockStore store;
+	// 온보딩 기반값 — 첫 발행 전 GET 투영과 첫 발행의 기반이 같아야 화면과 발행 결과가
+	// 어긋나지 않는다. 자동 제공 ON 이 기본(걸린 것만 검수), 문구는 UI 시안 기본 문구.
+	private static final int DEFAULT_MIN_SOURCES = 2;
+	private static final String DEFAULT_MAX_RISK = "MEDIUM";
+	private static final String DEFAULT_DISCLAIMER =
+			"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
+					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
 
-	public ScreeningService(ScreeningMockStore store) {
-		this.store = store;
+	private final PolicyVersionRepository versions;
+	private final ScreeningRuleRepository rules;
+	private final MemberRepository members;
+	private final ConsoleActionLogService actionLog;
+	private final ObjectMapper objectMapper = new ObjectMapper();
+
+	public ScreeningService(PolicyVersionRepository versions, ScreeningRuleRepository rules,
+			MemberRepository members, ConsoleActionLogService actionLog) {
+		this.versions = versions;
+		this.rules = rules;
+		this.members = members;
+		this.actionLog = actionLog;
+	}
+
+	/** 발행 초안 — 활성 버전(+룰)의 복사본. sourceRuleId 는 토글 대상 식별용(신규 룰은 null). */
+	private record Draft(boolean autoPublishEnabled, Integer minSources, String maxRisk,
+			String disclaimer, List<DraftRule> rules) {
+	}
+
+	private record DraftRule(Long sourceRuleId, String ruleType, String params, String action,
+			boolean enabled, Instant createdAt) {
 	}
 
 	public List<BannedWord> listWords() {
-		return store.listWords();
+		Optional<PolicyVersionEntity> active = versions.findActive();
+		if (active.isEmpty()) {
+			return List.of();
+		}
+		List<ScreeningRuleEntity> versionRules =
+				rules.findByPolicyVersionIdOrderByScreeningRuleId(active.get().getPolicyVersionId());
+		List<BannedWord> words = new ArrayList<>();
+		for (ScreeningRuleEntity rule : versionRules) {
+			if (!"BANNED_WORD".equals(rule.getRuleType())) {
+				continue;
+			}
+			var params = objectMapper.readTree(rule.getParams());
+			words.add(new BannedWord(rule.getScreeningRuleId(),
+					params.path("text").asString(null), params.path("risk").asString(null),
+					rule.getAction(), rule.isEnabled(),
+					LocalDate.ofInstant(rule.getCreatedAt(), ZoneId.systemDefault()).toString()));
+		}
+		// 최신 등록 맨 위 — UI 목록 정렬 규약(구 mock 과 동일). 복사 발행이 상대 순서를
+		// 보존하므로 id 역순 = 등록 역순이다.
+		return words.reversed();
 	}
 
-	public void addWord(String text, String risk, String action) {
+	@Transactional
+	public void addWord(String text, String risk, String action, SessionMember actor, String clientIp) {
 		if (text == null || text.isBlank() || !RISKS.contains(risk) || !ACTIONS.contains(action)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		store.addWord(text, risk, action);
+		Draft base = loadBase();
+		List<DraftRule> newRules = new ArrayList<>(base.rules());
+		newRules.add(new DraftRule(null, "BANNED_WORD",
+				objectMapper.writeValueAsString(Map.of("text", text, "risk", risk)),
+				action, true, Instant.now()));
+		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(),
+						base.disclaimer(), newRules),
+				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "risk", risk, "action", action));
 	}
 
-	public void toggleWord(long id) {
-		if (!store.toggleWord(id)) {
+	@Transactional
+	public void toggleWord(long id, SessionMember actor, String clientIp) {
+		Draft base = loadBase();
+		List<DraftRule> newRules = new ArrayList<>();
+		DraftRule target = null;
+		for (DraftRule rule : base.rules()) {
+			if (rule.sourceRuleId() != null && rule.sourceRuleId() == id) {
+				target = new DraftRule(rule.sourceRuleId(), rule.ruleType(), rule.params(),
+						rule.action(), !rule.enabled(), rule.createdAt());
+				newRules.add(target);
+			} else {
+				newRules.add(rule);
+			}
+		}
+		if (target == null) {
 			throw new GeneralException(ConsoleErrorStatus.BANNED_WORD_NOT_FOUND);
 		}
+		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(),
+						base.disclaimer(), newRules),
+				actor, clientIp, "POLICY_WORD_TOGGLED",
+				Map.of("ruleId", id, "enabled", target.enabled()));
 	}
 
 	public AutoPublishCriteria getCriteria() {
-		return store.getCriteria();
+		Draft base = loadBase();
+		return new AutoPublishCriteria(
+				base.minSources() == null ? DEFAULT_MIN_SOURCES : base.minSources(), base.maxRisk());
 	}
 
-	public void updateCriteria(Integer minSources, String maxRisk) {
+	@Transactional
+	public void updateCriteria(Integer minSources, String maxRisk, SessionMember actor, String clientIp) {
 		if (minSources != null && (minSources < 1 || minSources > 3)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		if (maxRisk != null && !MAX_RISKS.contains(maxRisk)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		store.updateCriteria(minSources, maxRisk);
+		Draft base = loadBase();
+		// 부분 갱신(PATCH) — null 필드는 활성 버전 값 유지.
+		publish(new Draft(base.autoPublishEnabled(),
+						minSources == null ? base.minSources() : minSources,
+						maxRisk == null ? base.maxRisk() : maxRisk,
+						base.disclaimer(), base.rules()),
+				actor, clientIp, "POLICY_CRITERIA_CHANGED",
+				Map.of("minSources", minSources == null ? "unchanged" : minSources,
+						"maxRisk", maxRisk == null ? "unchanged" : maxRisk));
 	}
 
 	public String getDisclaimer() {
-		return store.getDisclaimer();
+		return loadBase().disclaimer();
 	}
 
-	public void updateDisclaimer(String text) {
+	@Transactional
+	public void updateDisclaimer(String text, SessionMember actor, String clientIp) {
 		if (text == null || text.isBlank()) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		store.updateDisclaimer(text);
+		Draft base = loadBase();
+		publish(new Draft(base.autoPublishEnabled(), base.minSources(), base.maxRisk(), text,
+						base.rules()),
+				actor, clientIp, "POLICY_DISCLAIMER_CHANGED", Map.of());
+	}
+
+	public List<PolicyVersionSummary> listVersions() {
+		return versions.findAllByOrderByVersionNoDesc().stream()
+				.map(v -> new PolicyVersionSummary(v.getVersionNo(), v.getActivatedAt(),
+						publisherName(v.getCreatedBy()),
+						v.getActivatedAt() != null && v.getDeactivatedAt() == null,
+						v.isAutoPublishEnabled(), v.getMinSourceCount(), v.getMaxRisk()))
+				.toList();
+	}
+
+	private String publisherName(Long memberId) {
+		if (memberId == null) {
+			return null;
+		}
+		return members.findById(memberId).map(MemberEntity::getName).orElse(null);
+	}
+
+	private Draft loadBase() {
+		Optional<PolicyVersionEntity> active = versions.findActive();
+		if (active.isEmpty()) {
+			return new Draft(true, DEFAULT_MIN_SOURCES, DEFAULT_MAX_RISK, DEFAULT_DISCLAIMER, List.of());
+		}
+		PolicyVersionEntity version = active.get();
+		List<DraftRule> copied = rules
+				.findByPolicyVersionIdOrderByScreeningRuleId(version.getPolicyVersionId())
+				.stream()
+				.map(r -> new DraftRule(r.getScreeningRuleId(), r.getRuleType(), r.getParams(),
+						r.getAction(), r.isEnabled(), r.getCreatedAt()))
+				.toList();
+		return new Draft(version.isAutoPublishEnabled(), version.getMinSourceCount(),
+				version.getMaxRisk(), version.getDisclaimerText(), copied);
+	}
+
+	/**
+	 * 발행 — 이전 활성 종결 → 신규 버전 INSERT → 룰 복사 INSERT 가 한 트랜잭션.
+	 * 종결이 먼저여야 활성 1건 부분 유니크를 통과한다. 경합(동시 발행)은 arbiter
+	 * 제약 위반으로 드러난다 — 코드로 재검사하지 않는다(TOCTOU).
+	 */
+	private void publish(Draft draft, SessionMember actor, String clientIp, String action,
+			Map<String, Object> detail) {
+		try {
+			versions.findActive().ifPresent(v -> versions.deactivate(v.getPolicyVersionId()));
+			PolicyVersionEntity saved = versions.save(new PolicyVersionEntity(
+					versions.maxVersionNo() + 1, draft.disclaimer(), draft.autoPublishEnabled(),
+					draft.minSources(), draft.maxRisk(), actor.memberId()));
+			for (DraftRule rule : draft.rules()) {
+				rules.save(new ScreeningRuleEntity(saved.getPolicyVersionId(), rule.ruleType(),
+						rule.params(), rule.action(), rule.enabled(), rule.createdAt()));
+			}
+			actionLog.record(actor, action, "POLICY_VERSION", String.valueOf(saved.getVersionNo()),
+					detail, clientIp);
+		} catch (DataIntegrityViolationException e) {
+			throw new GeneralException(ConsoleErrorStatus.POLICY_CONFLICT);
+		}
 	}
 }

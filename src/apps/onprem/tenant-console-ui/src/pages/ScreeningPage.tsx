@@ -3,12 +3,12 @@ import { StatusBadge, Toggle, toast } from 'ui-kit';
 import type { RiskLevel } from '../domains/explanations';
 import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
-import { useBannedWords, useCriteria, useDisclaimer, useScreeningActions } from '../domains/screening/hooks';
+import { useBannedWords, useCriteria, useDisclaimer, usePolicyVersions, useScreeningActions } from '../domains/screening/hooks';
 import { LoadError } from './_shared/cells';
 
 const ACTION_LABEL: Record<WordAction, string> = { REVIEW: '검수 필요', BLOCK: '점검 차단' };
 
-type Tab = 'words' | 'rules' | 'disclaimer';
+type Tab = 'words' | 'rules' | 'disclaimer' | 'history';
 
 export function ScreeningPage() {
   const [tab, setTab] = useState<Tab>('words');
@@ -25,11 +25,15 @@ export function ScreeningPage() {
         <div className={`tab${tab === 'disclaimer' ? ' active' : ''}`} onClick={() => setTab('disclaimer')}>
           면책 문구
         </div>
+        <div className={`tab${tab === 'history' ? ' active' : ''}`} onClick={() => setTab('history')}>
+          버전 이력
+        </div>
       </div>
 
       {tab === 'words' && <WordsTab />}
       {tab === 'rules' && <RulesTab />}
       {tab === 'disclaimer' && <DisclaimerTab />}
+      {tab === 'history' && <HistoryTab />}
     </div>
   );
 }
@@ -271,6 +275,54 @@ function DisclaimerTab() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function HistoryTab() {
+  const { data: versions = [], isError } = usePolicyVersions();
+
+  if (isError) return <LoadError />;
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="t-label">정책 버전 이력</span>
+      </div>
+      {/* 정책은 불변 버전(ADR-0018) — 모든 변경이 새 버전 발행이라 이력이 곧 감사 추적이다. */}
+      <table className="table">
+        <thead>
+          <tr>
+            <th>버전</th>
+            <th>발행 시각</th>
+            <th>발행자</th>
+            <th>자동 제공</th>
+            <th>최소 출처</th>
+            <th>허용 위험</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody>
+          {versions.map((v) => (
+            <tr key={v.versionNo}>
+              <td className="num">v{v.versionNo}</td>
+              <td className="col-muted num">{v.publishedAt ? v.publishedAt.slice(0, 19).replace('T', ' ') : '—'}</td>
+              <td>{v.publishedBy ?? '—'}</td>
+              <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
+              <td className="num">{v.minSources ?? '—'}</td>
+              <td>{v.maxRisk ?? '—'}</td>
+              <td>{v.active ? <span className="chip">활성</span> : <span className="col-muted">종결</span>}</td>
+            </tr>
+          ))}
+          {versions.length === 0 && (
+            <tr>
+              <td colSpan={7} className="col-muted">
+                아직 발행된 정책 버전이 없습니다 — 금칙어·기준·문구를 변경하면 첫 버전이 발행됩니다.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
