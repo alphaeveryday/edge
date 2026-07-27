@@ -77,6 +77,7 @@ Table "policy_version" {
   "created_at" timestamptz [not null]
   "activated_at" timestamptz
   "deactivated_at" timestamptz
+  "max_risk" varchar(10)
 }
 
 Table "publication" {
