@@ -34,13 +34,13 @@ _ASL_INLINE_STATE = re.compile(r'^\s*(\w+)\s*=\s*merge\(local\.ecs_run_task_base
 
 # 계측하지 않는 ECS Task state 와 그 이유(카탈로그 docstring 의 표와 같은 근거).
 _NOT_INSTRUMENTED = {
-    "CollectFmpNews": "fmp task-def 에 DB env 없음(부분 주입 불가 — 시크릿 경계 변경 필요)",
-    "CollectFmpPrice": "fmp task-def 에 DB env 없음",
-    "CollectFmpFinancial": "fmp task-def 에 DB env 없음",
-    "CollectFmpEtf": "fmp task-def 에 DB env 없음",
-    "CollectDartFinancial": "dart task-def 에 DB env 없음",
-    "CollectDartDisclosure": "dart task-def 에 DB env 없음",
-    "CollectKrxEtf": "krx task-def 에 DB env 없음",
+    "CollectFmpNews": "FMP bandwidth 한도 소진 → SFN 토글 off(ALPHA-558). 안 도는 스텝을 "
+                      "등록하면 매 런 MISSED — 한도 회복·토글 on 과 함께 등록",
+    "CollectFmpPrice": "FMP bandwidth 한도 소진 → SFN 토글 off",
+    "CollectFmpFinancial": "FMP bandwidth 한도 소진 → SFN 토글 off",
+    "CollectFmpEtf": "FMP bandwidth 한도 소진 → SFN 토글 off",
+    "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
+                            "대응할 이유 없는 실패 경보가 되므로 등록 보류",
     "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
 }
 
@@ -65,9 +65,12 @@ def test_catalog_and_asl_task_states_match_both_ways():
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
     assert registered.isdisjoint(_NOT_INSTRUMENTED), "제외 목록과 등록이 겹친다"
-    assert len(registered) == 25  # 커버리지를 숫자로 고정 — 조용한 축소 금지(Rule 12)
-    # 자기 기록이 불가능한데도 등록한 것은 **게이트 멤버**뿐이다 — 빠지면 의존 판정이 거짓이 된다.
-    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"TAG_NEWS"}
+    assert len(registered) == 27  # 커버리지를 숫자로 고정 — 조용한 축소 금지(Rule 12)
+    # 자기 기록이 불가능한데도 등록한 것들. 빼면 TagNews 는 의존 판정이 거짓이 되고(게이트 멤버),
+    # 수집 2개는 실패가 원장에 자리조차 없다(ALPHA-578) — 둘 다 Reconciler 증거 backfill 이 기록한다.
+    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {
+        "TAG_NEWS", "ETF_HOLDINGS_COLLECTION_KRX", "DISCLOSURE_COLLECTION_DART",
+    }
 
 
 # 페이즈 잡 맵의 삼중항(state·taskdef_key·command_expr). 인라인 직렬은 별도로 판다.
@@ -129,6 +132,16 @@ def test_by_cli_resolves_vendor_split_steps():
     assert catalog.by_cli("ingest-price-raw", "kis").task_key == "PRICE_COLLECTION_KIS"
     assert catalog.by_cli("ingest-price-raw", None) is None      # FMP 가격은 미등록
     assert catalog.by_cli("ingest-price-raw", "fmp") is None
+    # ALPHA-578: KRX ETF 수집이 등록되면서 이 스텝도 벤더로 갈린다. FMP 짝(CollectFmpEtf)은
+    # 토글 off 로 여전히 미등록이라, 벤더 미지정(=fmp)은 None 이어야 한다 — 폴백하면 US 수집
+    # 결과가 KR 작업으로 기록된다.
+    assert catalog.by_cli("ingest-raw-etf", "krx").task_key == "ETF_HOLDINGS_COLLECTION_KRX"
+    assert catalog.by_cli("ingest-raw-etf", None) is None
+    # 재무는 양쪽 다 미등록(FMP=토글 off, DART=하류 소비자 0) — 계측 없이 지나간다.
+    assert catalog.by_cli("ingest-raw-financial", "dart") is None
+    assert catalog.by_cli("ingest-raw-financial", None) is None
+    # 공시는 벤더 축이 없다(DART 단일) — --source 없이 해소된다.
+    assert catalog.by_cli("ingest-raw-disclosure").task_key == "DISCLOSURE_COLLECTION_DART"
     # 벤더 축이 없는 스텝은 --source 없이 해소된다.
     assert catalog.by_cli("normalize-price").task_key == "NORMALIZE_PRICE"
     assert catalog.by_cli("load-price-daily").task_key == "LOAD_PRICE_DAILY"
@@ -155,6 +168,9 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     # TagNews 는 등록됐지만 자기 기록이 불가능하다(instrumented=False) — 해소는 되고, 그
     # 컨테이너엔 원장 설정이 없어 wrapper 가 투명 통과한다.
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
+    # KRX·공시 수집도 같다 — 등록됐지만 자기 기록은 불가능(instrumented=False, ALPHA-578).
+    assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
+    assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
