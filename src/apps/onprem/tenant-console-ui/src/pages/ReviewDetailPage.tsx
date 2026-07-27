@@ -80,7 +80,7 @@ export function ReviewDetailPage() {
     <div className="flex max-w-[900px] flex-col gap-4">
       <div className="flex items-center gap-2">
         <Link to="/review" className="btn btn-sm btn-ghost">
-          <Icon name="arrow-left" className="ic" /> 목록
+          <Icon name="arrowLeft" className="ic" /> 목록
         </Link>
         <span className="font-semibold" style={{ fontSize: 15 }}>
           {it.name ?? '(종목 미상)'}
@@ -96,6 +96,20 @@ export function ReviewDetailPage() {
           수신 {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
         </span>
       </div>
+
+      {it.supersedesItemId && (
+        <div
+          className="rounded-[5px] p-3"
+          style={{ border: '1px solid var(--border-strong)', background: 'var(--bg-sunken)' }}
+        >
+          <div className="t-label mb-1.5">정정 리비전</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.6 }}>
+            원본 <span className="num">{it.supersedesItemId}</span> 의 정정본입니다
+            {it.correctionReason ? ` — 사유: ${it.correctionReason}` : ''}.
+            {inReview ? ' 승인 전까지 자동 노출되지 않습니다.' : ''}
+          </div>
+        </div>
+      )}
 
       {(it.reviewReasons.length > 0 || reviewChecks.length > 0) && (
         <div

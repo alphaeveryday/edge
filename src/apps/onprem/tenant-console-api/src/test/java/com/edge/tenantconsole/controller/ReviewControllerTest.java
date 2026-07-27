@@ -488,6 +488,18 @@ class ReviewControllerTest {
 	}
 
 	@Test
+	void 룰_무관_REVIEW는_자동_제공_기준_사유로_파생된다() throws Exception {
+		// WHY: 자동 제공 기준 미달(출처 임계·스위치 OFF)은 rule_id 없는 REVIEW 행이다 —
+		// 이를 버리면 정상 유입 경로의 항목이 사유 공백으로 보인다(검수자가 이유를 모름).
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", null, "REVIEW", "source_events=1",
+				OffsetDateTime.now()));
+
+		mvc.perform(get("/api/v1/review/items"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result[0].review_reasons[0]").value("AUTO_PUBLISH_CRITERIA"));
+	}
+
+	@Test
 	void 상세는_근거_사유_검사결과_상태이력을_한_번에_준다() throws Exception {
 		// WHY: 감사·노출 이력은 별도 메뉴가 아니다(콘솔 IA, 구 ALPHA-439 흡수) — 상세가
 		// "왜 검수로 왔고(사유·검사 결과) 어떤 전이를 거쳤나(이력)"를 재현해야 한다.

@@ -14,6 +14,9 @@ export interface ReviewItem {
   headline: string | null;
   confidenceLevel: string | null;
   status: string;
+  /** 정정 리비전이면 원본 항목 id·정정 사유(검수 맥락) */
+  supersedesItemId: string | null;
+  correctionReason: string | null;
   receivedAt: string | null;
   /** screening_check(result=REVIEW)의 rule_type 파생 */
   reviewReasons: string[];

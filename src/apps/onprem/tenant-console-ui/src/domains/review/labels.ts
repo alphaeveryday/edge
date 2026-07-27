@@ -7,8 +7,12 @@ export const REASON_LABEL: Record<ReviewReasonType, string> = {
   ASSERTIVE_EXPRESSION: '단정 표현',
 };
 
+/** 룰 무관 REVIEW(자동 제공 기준 미충족)의 서버 파생 마커 — rule_type 어휘 밖 상수. */
+export const AUTO_PUBLISH_CRITERIA = 'AUTO_PUBLISH_CRITERIA';
+
 /** 미지의 rule_type(신규 릴리스 선반영 등)은 원어 그대로 노출 — 조용히 숨기지 않는다. */
 export function reasonLabel(ruleType: string): string {
+  if (ruleType === AUTO_PUBLISH_CRITERIA) return '자동 제공 기준 미충족';
   return REASON_LABEL[ruleType as ReviewReasonType] ?? ruleType;
 }
 

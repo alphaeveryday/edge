@@ -14,6 +14,8 @@ interface WireItem {
   headline?: string;
   confidence_level?: string;
   status: string;
+  supersedes_item_id?: string;
+  correction_reason?: string;
   received_at?: string;
   review_reasons?: string[];
 }
@@ -41,6 +43,8 @@ function toItem(w: WireItem): ReviewItem {
     headline: w.headline ?? null,
     confidenceLevel: w.confidence_level ?? null,
     status: w.status,
+    supersedesItemId: w.supersedes_item_id ?? null,
+    correctionReason: w.correction_reason ?? null,
     receivedAt: w.received_at ?? null,
     reviewReasons: w.review_reasons ?? [],
   };
@@ -75,10 +79,10 @@ function toDetail(w: WireDetail): ReviewItemDetail {
 export const realReviewRepository: ReviewRepository = {
   listPending: () =>
     apiClient.get<WireItem[]>('/review/items?status=REVIEW_REQUIRED').then((r) => r.map(toItem)),
-  detail: (id) => apiClient.get<WireDetail>(`/review/items/${id}`).then(toDetail),
-  approve: (id, note) => apiClient.post<void>(`/review/items/${id}/approve`, { note }),
+  detail: (id) => apiClient.get<WireDetail>(`/review/items/${encodeURIComponent(id)}`).then(toDetail),
+  approve: (id, note) => apiClient.post<void>(`/review/items/${encodeURIComponent(id)}/approve`, { note }),
   approveEdited: (id, editedSummary, note) =>
-    apiClient.post<void>(`/review/items/${id}/approve-edited`, { edited_summary: editedSummary, note }),
-  reject: (id, reason) => apiClient.post<void>(`/review/items/${id}/reject`, { reason }),
-  block: (id, reason) => apiClient.post<void>(`/review/items/${id}/block`, { reason }),
+    apiClient.post<void>(`/review/items/${encodeURIComponent(id)}/approve-edited`, { edited_summary: editedSummary, note }),
+  reject: (id, reason) => apiClient.post<void>(`/review/items/${encodeURIComponent(id)}/reject`, { reason }),
+  block: (id, reason) => apiClient.post<void>(`/review/items/${encodeURIComponent(id)}/block`, { reason }),
 };

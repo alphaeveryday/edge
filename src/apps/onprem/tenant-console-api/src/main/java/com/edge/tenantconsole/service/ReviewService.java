@@ -47,6 +47,9 @@ public class ReviewService {
 
 	private static final Logger log = LoggerFactory.getLogger(ReviewService.class);
 	private static final int LIST_LIMIT = 100;
+	/** 룰 무관 REVIEW(자동 제공 스위치·출처 임계 미충족)의 파생 사유 마커 — rule_type
+	 * 어휘(스키마 CHECK)와 겹치지 않는 별도 상수. 버리면 정상 유입 항목이 사유 공백이 된다. */
+	private static final String AUTO_PUBLISH_CRITERIA_REASON = "AUTO_PUBLISH_CRITERIA";
 
 	private final ReviewItemRepository reviewItemRepository;
 	private final PublicationRepository publicationRepository;
@@ -102,7 +105,7 @@ public class ReviewService {
 				checks.stream().map(ScreeningCheckEntity::getScreeningRuleId).filter(id -> id != null).toList());
 		List<String> reviewReasons = checks.stream()
 				.filter(c -> "REVIEW".equals(c.getResult()))
-				.map(c -> c.getScreeningRuleId() == null ? null : ruleTypes.get(c.getScreeningRuleId()))
+				.map(c -> reasonOf(c, ruleTypes))
 				.filter(t -> t != null).distinct().toList();
 		List<ReviewItemDetail.ScreeningCheckView> checkViews = checks.stream()
 				.map(c -> new ReviewItemDetail.ScreeningCheckView(c.getResult(),
@@ -140,10 +143,9 @@ public class ReviewService {
 				checks.stream().map(ScreeningCheckEntity::getScreeningRuleId).filter(id -> id != null).toList());
 		Map<String, List<String>> byItem = new LinkedHashMap<>();
 		for (ScreeningCheckEntity check : checks) {
-			String type = check.getScreeningRuleId() == null ? null
-					: ruleTypes.get(check.getScreeningRuleId());
+			String type = reasonOf(check, ruleTypes);
 			if (type == null) {
-				continue;   // 룰 무관 REVIEW(자동 제공 스위치·출처 임계)는 rule_type 사유가 없다
+				continue;
 			}
 			List<String> list = byItem.computeIfAbsent(check.getAnalysisItemId(), k -> new ArrayList<>());
 			if (!list.contains(type)) {
@@ -151,6 +153,13 @@ public class ReviewService {
 			}
 		}
 		return byItem;
+	}
+
+	private static String reasonOf(ScreeningCheckEntity check, Map<Long, String> ruleTypes) {
+		if (check.getScreeningRuleId() == null) {
+			return AUTO_PUBLISH_CRITERIA_REASON;
+		}
+		return ruleTypes.get(check.getScreeningRuleId());
 	}
 
 	private Map<Long, String> ruleTypesById(Collection<Long> ruleIds) {

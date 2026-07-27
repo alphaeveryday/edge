@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
-import { REASON_LABEL, reasonLabel } from '../domains/review';
+import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
 import { useReviewItems } from '../domains/review/hooks';
 import { LoadError, StockCell } from './_shared/cells';
 
@@ -16,7 +16,7 @@ export function ReviewPage() {
   const { data: items = [], isError } = useReviewItems();
 
   const [q, setQ] = useState('');
-  const [fReason, setFReason] = useState<ReviewReasonType | 'ALL'>('ALL');
+  const [fReason, setFReason] = useState<string>('ALL');
 
   if (isError) return <LoadError />;
 
@@ -43,7 +43,7 @@ export function ReviewPage() {
         <select
           className="select"
           value={fReason}
-          onChange={(e) => setFReason(e.target.value as ReviewReasonType | 'ALL')}
+          onChange={(e) => setFReason(e.target.value)}
         >
           <option value="ALL">전체 사유</option>
           {(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => (
@@ -51,6 +51,7 @@ export function ReviewPage() {
               {REASON_LABEL[r]}
             </option>
           ))}
+          <option value={AUTO_PUBLISH_CRITERIA}>{reasonLabel(AUTO_PUBLISH_CRITERIA)}</option>
         </select>
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
