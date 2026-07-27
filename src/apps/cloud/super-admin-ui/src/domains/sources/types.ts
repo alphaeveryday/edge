@@ -54,6 +54,23 @@ export interface PipelineRun {
   tradingDate: string | null;
 }
 
+/** 원장 기록 출처. 사후 복구를 정상 계측과 뭉개면 "원장이 스스로 메운 행"이 관측된 실행처럼 보인다. */
+export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL';
+
+/** 물리 실행 시도 하나. 재시도가 있으면 여러 건이고, 시각 오름차순이라 **마지막이 최신**이다. */
+export interface Attempt {
+  /** 표시용. writer 가 안 채울 수 있어 null 가능 */
+  attemptNumber: number | null;
+  ecsTaskArn: string | null;
+  executionStatus: ExecutionStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** **null 은 "모름"이지 0(성공) 이 아니다** */
+  exitCode: number | null;
+  failureReason: string | null;
+  recordSource: RecordSource | null;
+}
+
 export interface TaskStatus {
   /** raw · normalize · feature — 파이프라인 순서 */
   stage: string;
@@ -64,7 +81,13 @@ export interface TaskStatus {
   outcome: TaskOutcome | null;
   /** SKIPPED 작업은 null. UNKNOWN 은 "판정 근거 부족"이지 정상이라는 뜻이 아니다 */
   dataStatus: DataStatus | null;
-  /** 마지막 시도의 물리 상태. 시도가 없으면 null */
+  /**
+   * **현재 시도**의 물리 상태. 시도가 없으면 null.
+   *
+   * 서버가 고른다 — 마지막 원소가 아니다. 마지막 RUNNING → 원장의 `current_attempt_id` →
+   * 순서상 마지막 순으로 해소한다(사후 복구가 시각을 흐트러뜨리고 지목은 작업 종료 시에만
+   * 쓰이기 때문). **화면에서 attempts 로 다시 계산하지 마라** — 서버와 다른 답이 나온다.
+   */
   executionStatus: ExecutionStatus | null;
   /**
    * 이 작업의 마지막 시도가 낸 건수. **null 은 "모름"이지 0 이 아니다** — 신호가 없거나
@@ -74,10 +97,50 @@ export interface TaskStatus {
   failedRecords: number | null;
   /** ISO 8601. 시도가 없으면 null */
   lastFinishedAt: string | null;
+  /** 언제 하기로 했나 */
+  expectedAt: string | null;
+  /** 언제까지였나 */
+  deadlineAt: string | null;
+  /**
+   * 언제 못 했다고 판정했나. **비래치라 나중에 FULFILLED 로 가도 남는다** — outcome 만 보면
+   * "늦게라도 됐다"와 "제때 됐다"가 같은 값이다.
+   */
+  missedAt: string | null;
+  fulfilledAt: string | null;
+  /** 왜 계획에서 빠졌나(예: NON_TRADING_DAY) */
+  skipReason: string | null;
+  /**
+   * 왜 그 귀결이 됐나(예: FAILED_TO_START). **시도 행이 없는 실패의 유일한 설명**이다 —
+   * ECS ARN 이 안 생긴 submit 실패는 원장에 시도 행 자체를 남기지 않는다.
+   */
+  outcomeReason: string | null;
+  /** 이 작업의 시도 전량(시각 오름차순). 시도가 없으면 빈 배열 */
+  attempts: Attempt[];
+}
+
+/** 이슈 스코프. Reconciler 가 무엇 단위로 연 불일치인지. */
+export type IssueScope = 'run' | 'task' | 'slot';
+
+/**
+ * Reconciler 가 연 예정↔실제 불일치. 원장은 판정해 저장하는데 화면이 안 보여주면
+ * 운영자에게는 없는 사실이다.
+ */
+export interface ReconciliationIssue {
+  /** MISSED·STALLED·INCOMPLETE·LEDGER_GAP·… 원장 어휘 그대로(새 값이 추가될 수 있다) */
+  issueType: string;
+  scope: IssueScope | null;
+  /** scope 가 task 일 때 그 작업 키. 그 외에는 null */
+  taskKey: string | null;
+  status: 'OPEN' | 'RESOLVED';
+  occurrenceCount: number;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  resolutionReason: string | null;
 }
 
 export interface SourceReport {
-  /** 최신 런. 원장에 런이 하나도 없으면 null(초기 환경 — 에러가 아니다) */
+  /** 지목한(또는 최신) 런. 원장에 런이 하나도 없으면 null(초기 환경 — 에러가 아니다) */
   run: PipelineRun | null;
   tasks: TaskStatus[];
+  issues: ReconciliationIssue[];
 }

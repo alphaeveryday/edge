@@ -1,5 +1,8 @@
 package com.edge.superadmin.controller;
 
+import com.edge.common.exception.ExceptionAdvice;
+import com.edge.superadmin.repository.PipelineStatusRepository.AttemptStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
@@ -19,10 +22,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * UI 계약(super-admin-ui sources 도메인) 검증 — 원장 4축 어휘가 뭉개지지 않고 그대로 내려오는지가
- * 핵심이다(ALPHA-514).
+ * 핵심이다(ALPHA-514, 드릴다운 574).
  */
 class SourceControllerTest {
 
+	private static final String RUN_KEY = "etf-daily:2026-07-27T15:40";
+
+	private static final OffsetDateTime STARTED =
+			OffsetDateTime.of(2026, 7, 27, 6, 35, 0, 0, ZoneOffset.UTC);
 	private static final OffsetDateTime FINISHED =
 			OffsetDateTime.of(2026, 7, 27, 6, 40, 0, 0, ZoneOffset.UTC);
 
@@ -30,7 +37,14 @@ class SourceControllerTest {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
 						new SourceService(new FakePipelineStatusRepository(run))))
+				.setControllerAdvice(new ExceptionAdvice())
 				.build();
+	}
+
+	private static AttemptStatus attempt(int number, String status, Integer exitCode,
+			String failureReason, String recordSource) {
+		return new AttemptStatus("att-" + number, number, "arn:aws:ecs:task/" + number, status,
+				STARTED, FINISHED, exitCode, failureReason, recordSource);
 	}
 
 	/**
@@ -39,15 +53,24 @@ class SourceControllerTest {
 	 * null 경로를 아예 안 밟아 결함이 초록으로 통과한다.
 	 */
 	private static PipelineRunStatus sampleRun() {
-		return new PipelineRunStatus("etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED",
+		return new PipelineRunStatus(RUN_KEY, "LAUNCHED", "FAILED",
 				LocalDate.of(2026, 7, 27), List.of(
+				// 실패 후 재시도로 성공 — 마지막 한 건만 보면 실패했다는 사실이 사라진다.
+				// 원장은 성공한 2번 시도를 현재 결과로 지목한다(current_attempt_id).
 				new TaskStatus("raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
-						"FULFILLED", "VALID", "SUCCEEDED", 2736L, 0L, FINISHED),
+						"FULFILLED", "VALID", 2736L, 0L, null, null, null, FINISHED, null, null,
+						List.of(attempt(1, "FAILED", 1, "ecs task exited", "WRAPPER"),
+								attempt(2, "SUCCEEDED", 0, null, "RECONCILER_BACKFILL")),
+						"att-2"),
 				new TaskStatus("raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
-						null, null, null, null, null, null),
+						null, null, null, null, null, null, null, null, "NON_TRADING_DAY", null,
+						List.of(), null),
 				// 실행은 성공인데 데이터는 불완전 — 두 축이 따로 내려가는지 잠근다.
 				new TaskStatus("feature", "TAG_NEWS", "news_assertions", "DUE",
-						"FULFILLED", "INCOMPLETE", "SUCCEEDED", null, null, FINISHED)));
+						"FULFILLED", "INCOMPLETE", null, null, null, null, null, FINISHED, null,
+						null, List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER")), "att-1")),
+				List.of(new IssueStatus("LEDGER_GAP", "task", "TAG_NEWS", "OPEN", 3,
+						STARTED, FINISHED, null)));
 	}
 
 	@Test
@@ -56,7 +79,7 @@ class SourceControllerTest {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
-				.andExpect(jsonPath("$.result.run.runKey").value("etf-daily:2026-07-27T15:40"))
+				.andExpect(jsonPath("$.result.run.runKey").value(RUN_KEY))
 				.andExpect(jsonPath("$.result.run.launchStatus").value("LAUNCHED"))
 				// WHY: 런 전체가 FAILED 여도 개별 작업은 FULFILLED 일 수 있다(dev 실측: orch=FAILED
 				//      인데 21/25 성공). 두 축이 함께 내려가야 화면이 그 모순을 보여준다 — 작업
@@ -91,7 +114,82 @@ class SourceControllerTest {
 		mvc(sampleRun()).perform(get("/api/v1/sources/report"))
 				.andExpect(jsonPath("$.result.tasks[1].planStatus").value("SKIPPED"))
 				.andExpect(jsonPath("$.result.tasks[1].outcome").doesNotExist())
-				.andExpect(jsonPath("$.result.tasks[1].lastFinishedAt").doesNotExist());
+				.andExpect(jsonPath("$.result.tasks[1].lastFinishedAt").doesNotExist())
+				// 왜 빠졌는지는 이 필드 말고 저장되는 곳이 없다 — 없으면 화면은 "그냥 안 했다"만 안다.
+				.andExpect(jsonPath("$.result.tasks[1].skipReason").value("NON_TRADING_DAY"));
+	}
+
+	@Test
+	void 시도_전량을_내리고_마지막_시도에서_실행상태를_파생한다() throws Exception {
+		// WHY: 예전 구현은 SQL 이 마지막 한 건만 남겨, **실패 후 재시도로 성공한 작업**이 화면에서
+		//      처음부터 성공한 것과 구분되지 않았다. 사후 복구(RECONCILER_BACKFILL)와 정상 계측도
+		//      마찬가지로 뭉개졌다 — 원장이 스스로 메운 행이 관측된 실행처럼 보이는 방향이다.
+		mvc(sampleRun()).perform(get("/api/v1/sources/report"))
+				.andExpect(jsonPath("$.result.tasks[0].attempts.length()").value(2))
+				.andExpect(jsonPath("$.result.tasks[0].attempts[0].executionStatus")
+						.value("FAILED"))
+				.andExpect(jsonPath("$.result.tasks[0].attempts[0].exitCode").value(1))
+				.andExpect(jsonPath("$.result.tasks[0].attempts[0].failureReason")
+						.value("ecs task exited"))
+				.andExpect(jsonPath("$.result.tasks[0].attempts[1].recordSource")
+						.value("RECONCILER_BACKFILL"))
+				// 표시용 executionStatus 는 **마지막 원소에서 파생**된다(정의는 한 곳에만 둔다).
+				.andExpect(jsonPath("$.result.tasks[0].executionStatus").value("SUCCEEDED"))
+				.andExpect(jsonPath("$.result.tasks[0].lastFinishedAt").exists());
+	}
+
+	@Test
+	void 실행상태는_시각_순서가_아니라_원장이_지목한_시도에서_나온다() throws Exception {
+		// WHY: Reconciler 의 사후 복구는 실제 실행 시각을 몰라 started_at 에 **복구 시각**을 넣는다
+		//      (ledger.py backfill_attempt). 그래서 뒤늦게 복구된 **옛 실패 시도**가 시각순으로는
+		//      맨 뒤에 온다 — 순서로 고르면 이미 성공한 작업이 화면에서 실패로 보인다.
+		//      원장의 current_attempt_id 가 그 답을 이미 갖고 있으므로 그걸 따른다.
+		PipelineRunStatus run = new PipelineRunStatus(RUN_KEY, "LAUNCHED", "SUCCEEDED", null,
+				List.of(new TaskStatus("raw", "NAV_COLLECTION_KIS", "etf_nav", "DUE",
+						"FULFILLED", "VALID", 30L, 0L, null, null, null, FINISHED, null, null,
+						List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER"),
+								// 시각상 마지막이지만 실제로는 먼저 있었던 실패의 사후 복구다.
+								attempt(2, "FAILED", 1, "ecs task exited",
+										"RECONCILER_BACKFILL")),
+						"att-1")),
+				List.of());
+
+		mvc(run).perform(get("/api/v1/sources/report"))
+				.andExpect(jsonPath("$.result.tasks[0].executionStatus").value("SUCCEEDED"))
+				// 이력 자체는 순서대로 전량 남는다 — 고르는 기준만 다르다.
+				.andExpect(jsonPath("$.result.tasks[0].attempts.length()").value(2))
+				.andExpect(jsonPath("$.result.tasks[0].attempts[1].executionStatus")
+						.value("FAILED"));
+	}
+
+	@Test
+	void 대조_이슈를_런과_함께_내린다() throws Exception {
+		// WHY: 원장은 이슈를 판정해 저장하는데 콘솔은 그동안 한 건도 보여주지 않았다 — 화면에
+		//      없으면 운영자에게는 없는 사실이다(dev 의 거짓 LEDGER_GAP 17건이 그렇게 묻혀 있었다).
+		mvc(sampleRun()).perform(get("/api/v1/sources/report"))
+				.andExpect(jsonPath("$.result.issues.length()").value(1))
+				.andExpect(jsonPath("$.result.issues[0].issueType").value("LEDGER_GAP"))
+				.andExpect(jsonPath("$.result.issues[0].status").value("OPEN"))
+				.andExpect(jsonPath("$.result.issues[0].occurrenceCount").value(3))
+				// 내부 ID 가 아니라 운영자가 아는 작업 이름으로 붙는다.
+				.andExpect(jsonPath("$.result.issues[0].taskKey").value("TAG_NEWS"));
+	}
+
+	@Test
+	void 런_키를_주면_그_런을_낸다() throws Exception {
+		mvc(sampleRun()).perform(get("/api/v1/sources/report").param("runKey", RUN_KEY))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.run.runKey").value(RUN_KEY));
+	}
+
+	@Test
+	void 없는_런_키는_빈_리포트가_아니라_404_다() throws Exception {
+		// WHY: 빈 리포트로 답하면 오타 친 런 키가 "원장이 비어 있다"로 보인다 — 운영자가 없는
+		//      사실을 있는 것처럼 읽는다. 두 상태는 다른 사실이라 다른 응답이어야 한다.
+		mvc(sampleRun()).perform(get("/api/v1/sources/report").param("runKey", "etf-daily:없는런"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("ADMN4041"));
 	}
 
 	@Test
@@ -101,6 +199,7 @@ class SourceControllerTest {
 		mvc(null).perform(get("/api/v1/sources/report"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.run").doesNotExist())
-				.andExpect(jsonPath("$.result.tasks.length()").value(0));
+				.andExpect(jsonPath("$.result.tasks.length()").value(0))
+				.andExpect(jsonPath("$.result.issues.length()").value(0));
 	}
 }

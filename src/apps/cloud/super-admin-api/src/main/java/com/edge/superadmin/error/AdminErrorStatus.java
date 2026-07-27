@@ -14,7 +14,9 @@ public enum AdminErrorStatus implements BaseErrorCode {
 	LOGIN_INVALID(HttpStatus.UNAUTHORIZED, "ADMN4010", "이메일 또는 비밀번호가 올바르지 않습니다."),
 	// ADMN4011(로그인 필요)·ADMN4030(권한 없음)은 AdminAuthFilter 가 직접 쓴다
 	// (필터는 advice 를 타지 않음) — 코드 공간만 여기 예약해 둔다.
-	ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4040", "분석 건을 찾을 수 없습니다.");
+	ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4040", "분석 건을 찾을 수 없습니다."),
+	// 빈 리포트로 대신하지 않는 이유: 지목한 런이 없는 것과 원장이 비어 있는 것은 다른 사실이다.
+	RUN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4041", "해당 파이프라인 실행을 찾을 수 없습니다.");
 
 	private final HttpStatus httpStatus;
 	private final String code;
