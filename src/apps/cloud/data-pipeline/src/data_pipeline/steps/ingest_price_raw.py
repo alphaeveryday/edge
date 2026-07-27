@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, canonical_etf_holdings_partition, collection_log_key, raw_price_partition
@@ -29,18 +29,19 @@ PriceSourceAdapter = FmpPriceSource | KisDailyPriceSource
 logger = logging.getLogger(__name__)
 
 
-def _krx_expected_etfs(settings: Settings) -> frozenset[str]:
+def _krx_expected_etfs(settings: Settings) -> frozenset[str] | None:
     """수집 유니버스의 ETF 전체 집합 = config `krx_etf.source.etf_map` 의 키(ALPHA-590).
 
     holdings 파티션이 아니라 config 가 정본이다 — 파티션은 수집 결과라 부분 실패로 줄 수
-    있지만 ETF 목록 자체는 설정이라 절대 줄면 안 된다.
+    있지만 ETF 목록 자체는 설정이라 절대 줄면 안 된다. `krx_etf` 섹션 자체가 없으면 정본이
+    **부재**한 것이라 None — 빈 etf_map(정본이 "0종"이라 말함)과 구분한다.
     """
-    return frozenset(settings.krx_etf.source.etf_map) if settings.krx_etf else frozenset()
+    return frozenset(settings.krx_etf.source.etf_map) if settings.krx_etf else None
 
 
 def _kr_holdings_universe(
     storage: Storage, *, include_etf: bool = True,
-    expected_etfs: frozenset[str] = frozenset(),
+    expected_etfs: frozenset[str] | None = None,
 ) -> list[str]:
     """canonical KR holdings **ETF 별 최신 스냅샷 합집합**의 구성종목·ETF 티커 목록(ALPHA-419).
 
@@ -66,7 +67,7 @@ def _kr_holdings_universe(
     return sorted(tickers)
 
 
-def _kr_etf_ids(storage: Storage, expected_etfs: frozenset[str] = frozenset()) -> set[str]:
+def _kr_etf_ids(storage: Storage, expected_etfs: frozenset[str] | None = None) -> set[str]:
     """canonical KR holdings 최신 스냅샷의 **ETF 자기 티커** 집합(ALPHA-477).
 
     ETF 는 DART 신고자가 아니라 corpCode.xml 에 없다 — 공시 수집은 유니버스가 holdings 파생이든
@@ -84,8 +85,20 @@ def _kr_etf_ids(storage: Storage, expected_etfs: frozenset[str] = frozenset()) -
 UNIVERSE_LOOKBACK_PARTITIONS = 10
 
 
+def _is_calendar_date(value: str) -> bool:
+    """실존하는 **정준형** YYYY-MM-DD 달력일인가.
+
+    라운드트립 동치로 판정한다 — 비달력일("2026-02-30")은 파싱에서, fromisoformat 이
+    3.11+ 에서 추가로 허용하는 비정준형("99991231"·"2026-W31-1")은 동치 비교에서 걸린다.
+    """
+    try:
+        return value == date.fromisoformat(value).isoformat()
+    except ValueError:
+        return False
+
+
 def _latest_kr_holdings_rows(
-    storage: Storage, expected_etfs: frozenset[str] = frozenset()
+    storage: Storage, expected_etfs: frozenset[str] | None = None
 ) -> list[dict]:
     """canonical KR holdings 의 **ETF 별 최신 스냅샷 합집합** 행. 없으면 빈 목록 (ALPHA-590).
 
@@ -97,12 +110,18 @@ def _latest_kr_holdings_rows(
     있는 평시에는 이전과 똑같이 파티션 하나만 읽는다.
     """
     marker = canonical_etf_holdings_partition("KR", "")  # ".../as_of_date="
-    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
-    dates.discard("")
+    found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    found.discard("")
+    # 최신→과거 순회는 "사전순 정렬 = 시간순"에 기대므로 실존 달력일만 취한다 — 비정상 키
+    # ("9999-99-99" 등 형태만 맞는 비달력일 포함)가 정렬 상위를 차지하면 소급 상한만
+    # 갉아먹고 정상 최신 파티션이 스캔에서 밀린다.
+    dates = {d for d in found if _is_calendar_date(d)}
+    if found - dates:
+        logger.warning("KR holdings 비정상 as_of_date 파티션 키 무시: %s", sorted(found - dates))
     rows: list[dict] = []
     seen: set[str] = set()
     for depth, as_of in enumerate(sorted(dates, reverse=True)[:UNIVERSE_LOOKBACK_PARTITIONS]):
-        if expected_etfs and expected_etfs <= seen:
+        if expected_etfs is not None and expected_etfs <= seen:
             break
         partition_rows: list[dict] = []
         prefix = canonical_etf_holdings_partition("KR", as_of)
@@ -111,6 +130,11 @@ def _latest_kr_holdings_rows(
                 partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
         fresh = {etf for row in partition_rows
                  if (etf := row.get("etf_id")) and etf not in seen}
+        if expected_etfs is not None:
+            # ETF 목록의 정본은 config — 폐지·제외된 ETF 행이 파티션에 남아 있어도 되살리지
+            # 않는다(안 거르면 유령 ETF 구성종목을 소급 상한만큼 계속 수집한다). None 은
+            # 정본 부재(krx_etf 섹션 없음)라 필터하지 않는다.
+            fresh &= expected_etfs
         if depth and fresh:
             # 최신 파티션이 부분 스냅샷이었다는 뜻 — 조용한 보강 금지, 로그로 드러낸다.
             logger.warning(
@@ -119,7 +143,7 @@ def _latest_kr_holdings_rows(
             )
         rows.extend(row for row in partition_rows if row.get("etf_id") in fresh)
         seen |= fresh
-    if expected_etfs - seen:
+    if expected_etfs and expected_etfs - seen:
         # 소급 상한 안에서도 못 채운 ETF — 유니버스가 그만큼 좁게 돈다는 사실을 드러낸다.
         logger.warning(
             "KR holdings 유니버스 결손: 최근 %d개 파티션에 없는 ETF %d종 (%s)",
