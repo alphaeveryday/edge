@@ -70,7 +70,8 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
 # symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
 # 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
-# 토큰은 run 당 1회 발급·재사용.
+# 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
+# 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달
@@ -359,9 +360,16 @@ writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR1 은 병행 세�
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
 - `ingest-raw-nav`(국내 ETF NAV, **kis 세트** — 단일 벤더라 `--source` 없음)
   - ⚠️ KIS 토큰 발급은 앱키당 분당 1회라, 같은 앱키를 쓰는 `ingest-price-raw --source kis` 와
-    **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 이미 나란히 편입돼 있고(ALPHA-458),
-    `kis_auth` 가 이 코드를 만나면 61초 + 지터(0~20초) 대기 후 **최대 2회 재시도**(총 3회 시도)해
-    흡수한다 — dev 실런으로 실증됨. 유량 제한이 아닌 4xx 는 기다려도 안 풀리므로 즉시 올린다.
+    **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 kis 브랜치가 4개 나란히 편입돼 있다
+    (price·nav·investor·etf_profile). 흡수는 두 겹이다:
+    - **공유 캐시(ALPHA-573)** — `KIS_TOKEN_CACHE_PARAM` env(터라폼이 kis task-def 에 주입,
+      SSM SecureString)가 있으면 발급한 토큰을 컨테이너 사이로 공유해 발급이 하루 1회로
+      수렴한다(토큰은 24h 유효). 403 을 맞으면 1분을 기다리기 전에 승자의 쓰기를 짧게
+      폴링(2초×5)해 그 토큰을 가져간다. **캐시가 없거나 실패하면 아래 대기·재시도로 폴백**한다
+      — 최악이 캐시 없던 시절의 동작이다. env 가 없는 로컬 실행은 항상 이 폴백 경로다.
+    - **대기·재시도(ALPHA-458)** — `kis_auth` 가 403 EGW00133 을 만나면 61초 + 지터(0~20초)
+      대기 후 재시도한다(예산 `TOKEN_RATE_LIMIT_MAX_RETRY = 4`, 총 5회 시도 — 동시 발급자
+      수보다 커야 한다). 유량 제한이 아닌 4xx 는 기다려도 안 풀리므로 즉시 올린다.
   - **기준일(as-of) 규약**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후, ALPHA-414)이라 거래일
     런은 그날 PDF 를 받는다(dev 실측: 07-22·23·24 스냅샷 내용 상이). 비거래일 런은 빈 응답이
     아니라 **직전 거래일 PDF** 가 온다(토 07-18 응답 = 금 07-17 바이트 동일) — 그래서 어댑터가

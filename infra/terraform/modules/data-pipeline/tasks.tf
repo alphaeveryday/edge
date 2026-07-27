@@ -122,7 +122,12 @@ locals {
     # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
     # 휴장일 집합을 봐야 한다. 안 주면 is_trading_day 가 평일 공휴일을 거래일로 보고 가드가
     # 주말만 아는 상태로 **조용히 퇴화**한다(가드가 있는데 안 걸리는 게 제일 나쁘다).
-    kis      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
+    # KIS_TOKEN_CACHE_PARAM(ALPHA-573): kis 브랜치 4개가 액세스 토큰을 공유할 SSM 파라미터
+    # 이름. 안 주면 컨테이너가 각자 발급해 분당 1회 제한에 줄을 선다(마지막 브랜치 222초 대기).
+    kis = merge(local.db_env, {
+      OPS_KR_HOLIDAYS       = join(",", var.kr_holidays)
+      KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+    })
     bigkinds = local.db_env
     rds_dart = local.db_env
     krx      = { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) }
