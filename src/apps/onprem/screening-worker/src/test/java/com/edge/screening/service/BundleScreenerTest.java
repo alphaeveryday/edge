@@ -161,6 +161,22 @@ class BundleScreenerTest {
 	}
 
 	@Test
+	void 실패_봉투는_마킹_없이_실패한다() {
+		// WHY: 봉투는 isSuccess=true(boolean) 만 성공 — 실패·타입 위반 봉투의 result 에 유효 entries 가
+		// 있어도 파싱·게시하면 고객 대면 오염 콘텐츠(AUTO_PUBLISHED)가 노출된다. 파서가 자체 fail-loud
+		// 로 거부한다(intake 게이트의 방어 심화). cursor 미전진·마킹 없음.
+		byte[] failure = ("{\"isSuccess\":false,\"code\":\"SYNC5000\",\"message\":\"err\",\"result\":"
+				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":["
+				+ "{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}]}}")
+				.getBytes(StandardCharsets.UTF_8);
+		Executable call = () -> screener.screen(1, failure);
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(publications.published).isEmpty();
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
 	void 활성_정책이_없으면_NEW는_마킹_없이_실패한다() {
 		// WHY: screening_check.policy_version_id 는 NOT NULL — 정책 없이 상태를 정하면
 		// 감사 근거 없는 전이가 된다. 정책 부재 = 진행 중단(DDL 주석 확정), 발행 후 재시도.
