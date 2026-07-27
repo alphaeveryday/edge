@@ -738,8 +738,8 @@ resource "aws_sfn_state_machine" "this" {
 
 # 상태머신 정의 안의 NotifyFailure 는 **정의가 살아 있을 때만** 통보한다. 최상위
 # TimeoutSeconds 로 실행이 죽으면 States.Timeout 이 실행 자체를 끝내므로 어떤 Catch 도
-# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. LLM 을 부르는 페이즈(feature 의 tag-news, analyze)가
-# 들어오면서 이 경로가 실질 도달 가능해졌다(LLM 호출은 소요시간 상한이 없다. tag_news_limit 이 1차 방어).
+# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. LLM 을 부르는 페이즈(analyze — tag-news 는 뉴스
+# SFN 이관, ALPHA-553)가 있어 이 경로가 실질 도달 가능하다(LLM 호출은 소요시간 상한이 없다).
 # 알람은 정의 밖에서 도는 유일한 통보 수단이라 그 구멍을 정확히 메운다.
 # ExecutionsFailed 는 안 건다 — NotifyFailure 가 이미 덮고, 겹치면 같은 실패에 두 통이 온다.
 resource "aws_cloudwatch_metric_alarm" "execution_timed_out" {

@@ -233,12 +233,13 @@ variable "tag_news_limit" {
   default     = 10000
 }
 
-# 일일 SFN TagNews 의 태깅 대상 창(오늘−N일). read=O(전체 코퍼스) 스캔이 tag-news 런타임을
-# 지배하므로(실측 17분, LLM 아님) 창이 곧 속도다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 —
-# 한 날짜가 N+1회 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고, 창보다 오래된 정정본만
-# 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔 유지 — 이 변수는 SFN 경로만.
+# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 평일 3슬롯 — ALPHA-553). read=O(전체 코퍼스)
+# 스캔 상한이 목적이다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 — 한 날짜가 슬롯×(N+1)회
+# 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고(멱등 skip 이라 재스캔 비용은 스캔뿐),
+# 창보다 오래된 정정본만 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔
+# 유지 — 이 변수는 SFN 경로만.
 variable "tag_news_window_days" {
-  description = "일일 SFN tag-news 태깅 대상 창(오늘−N일). 스캔 비용↔창 밖 회수 여유의 트레이드오프."
+  description = "뉴스 SFN tag-news 태깅 대상 창(오늘−N일). 스캔 비용↔창 밖 회수 여유의 트레이드오프."
   type        = number
   default     = 3
   validation {
