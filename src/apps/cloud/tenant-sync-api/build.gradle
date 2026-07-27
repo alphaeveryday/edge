@@ -28,6 +28,14 @@ dependencies {
 	// 번들 와이어 계약 검증(JSON Schema 2020-12) — 문자열로 넘겨 검증기 자체 Jackson 과
 	// 앱의 tools.jackson(Boot4) 을 분리한다. 스키마 파일은 libs/schema 공유(아래 sourceSets).
 	testImplementation 'com.networknt:json-schema-validator:1.5.6'
+	// 조회 SQL 을 실 Postgres 로 검증하는 통합 테스트 인프라(ALPHA-572) — 실 컨테이너에
+	// Flyway(migrations-cloud)를 적용해 현행 동작을 고정한다. super-admin-api(ALPHA-526) 미러.
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	// Boot 4 는 자동설정을 기술별 모듈로 분리했다 — Flyway 자동설정(FlywayAutoConfiguration)은
+	// spring-boot-flyway 에 있어 flyway-core 만으로는 마이그레이션이 실행되지 않는다.
+	testImplementation 'org.springframework.boot:spring-boot-flyway'
+	testImplementation 'org.flywaydb:flyway-database-postgresql'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -43,4 +51,7 @@ sourceSets {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	// Testcontainers 통합 테스트가 Flyway 로 적용할 cloud 마이그레이션의 절대 경로 —
+	// test 작업 디렉터리에 의존하지 않도록 build.gradle 위치 기준으로 해석한다.
+	systemProperty 'cloud.migrations.dir', file('../../../libs/schema/migrations-cloud').absolutePath
 }
