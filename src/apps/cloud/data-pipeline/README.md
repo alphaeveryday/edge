@@ -120,6 +120,10 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # etf_map, 현재 KR 31종 — 국내 반도체 30종 + KODEX 200, ALPHA-454). 날짜창 없이 그날(trdDd)
 # PDF 전량을 append(US ETF 와 동형). 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
 # (현 유니버스엔 없다 — 경로만 유지). ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
+# --deadline-sec N: 벽시계 상한(ALPHA-581) — 벤더 열화로 상한에 닿으면 받은 것은 저장하고
+# 미시도 ETF 를 failed_etfs 로 기록하며 조기 마감(status=partial). 판정은 ETF 사이에서만
+# 하므로 진행 중인 1콜만큼은 넘길 수 있다(SFN TimeoutSeconds 의 SIGKILL 대신 택한 설계).
+# 미지정=무제한(기존 동작). SFN 배선은 krx_etf_deadline_sec 변수(statemachine.tf).
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
 

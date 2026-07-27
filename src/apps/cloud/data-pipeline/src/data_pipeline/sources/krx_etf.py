@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.parse
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -76,13 +77,23 @@ def _short_code(isin: str) -> str:
 class KrxEtfSource:
     source_name = "krx"
 
-    def __init__(self, config: KrxEtfSourceConfig, client: PoliteClient):
+    def __init__(
+        self, config: KrxEtfSourceConfig, client: PoliteClient, deadline_sec: float | None = None
+    ):
         self.config_enabled = config.enabled
         self.mbr_id = config.mbr_id
         self.pw = config.pw
         # our_etf_id → KRX ISIN(표준코드). 종목맵과 별개 — 이 맵의 키가 곧 수집 유니버스다.
         self.etf_map = config.etf_map
         self.client = client
+        # 수집 루프의 벽시계 상한(초). None = 무제한(기본 — 이전과 동일).
+        #
+        # **왜 필요한가** (2026-07-27 실증): KRX 가 마감 직후 혼잡 구간에 느려지자 브랜치가
+        # 25분을 넘겨 끝날 기미가 없었고, 사람이 ECS 태스크를 SIGKILL 로 죽였다. 그 순간
+        # **이미 받아둔 24종이 저장 코드에 닿기 전에 함께 날아갔다**(스텝은 부분 저장 경로를
+        # 갖고 있었는데 프로세스가 그 앞에서 끊겼다). 끝나는 방식을 벤더나 사람이 아니라
+        # 우리가 정해야 한다 — 상한에 닿으면 스스로 접고 **받은 것은 저장**한다.
+        self.deadline_sec = deadline_sec
         self.auth = KrxAuth(config.mbr_id or "", config.pw or "")
         # ETF 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다(격리≠은폐).
         self.fetch_failures: list[dict] = []
@@ -105,6 +116,28 @@ class KrxEtfSource:
             {"isin": isin, "our_etf_id": our_etf_id, "error": reason}
         )
 
+    def _deadline_exceeded(self, started_at: float) -> bool:
+        return self.deadline_sec is not None and time.monotonic() - started_at >= self.deadline_sec
+
+    def _note_unattempted(self, remaining: list[tuple[str, str]], elapsed: float) -> None:
+        """상한에 걸려 **시도조차 못 한** 대상을 하나씩 기록한다.
+
+        개수만 남기지 않고 정체(ISIN)를 남기는 이유: "7종 실패"와 "12종은 시도조차 못 함"은
+        다른 사실이고, 뒤엣것의 목록이 없으면 다음 날 결손 범위를 알 수 없다. KRX 는 trdDd
+        백필 수단이 없어(ALPHA-387) 그날 못 받은 ETF 는 그날로 끝이다 — 무엇이 빠졌는지가
+        곧 복구 대상 목록이다.
+
+        기록 자리는 `fetch_failures` 그대로다. 스텝이 이 목록을 보고 status=partial 로 남기고
+        collection_log 에 실어 보내므로, 새 통로를 만들 이유가 없다(어휘 확장 금지).
+        """
+        logger.warning(
+            "krx ETF 수집 상한(%.0f초) 도달 — %.0f초 경과, 남은 %d종은 시도하지 않는다",
+            self.deadline_sec, elapsed, len(remaining),
+        )
+        reason = f"수집 상한 {self.deadline_sec:.0f}초 초과로 미시도(경과 {elapsed:.0f}초)"
+        for our_etf_id, isin in remaining:
+            self._note_failure(isin, our_etf_id, reason)
+
     def fetch(self) -> Iterator[dict]:
         """ETF 별로 그날(trdDd) PDF 구성종목 행을 낸다(ETF 당 1콜, 스냅샷).
 
@@ -124,7 +157,13 @@ class KrxEtfSource:
         trd_dd = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
         # 로그인 1회(ETF마다 로그인 금지). 실패는 fetch 밖으로 전파해 소스 전체를 중단한다.
         jsessionid = self.auth.session()
-        for our_etf_id, isin in plan:
+        started_at = time.monotonic()
+        for index, (our_etf_id, isin) in enumerate(plan):
+            # 상한을 넘겼으면 **대상 사이에서** 접는다. 여기서 return 하면 제너레이터가 정상
+            # 종료해 스텝이 지금까지 yield 한 행을 그대로 저장한다(중단이 아니라 조기 마감).
+            if self._deadline_exceeded(started_at):
+                self._note_unattempted(plan[index:], time.monotonic() - started_at)
+                return
             try:
                 yield from self._fetch_etf(our_etf_id, isin, trd_dd, jsessionid, fetched_at)
             except StopFetch:

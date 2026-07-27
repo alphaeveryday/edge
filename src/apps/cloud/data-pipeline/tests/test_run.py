@@ -103,9 +103,10 @@ def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     captured = {}
 
     class _Spy(run_mod.KrxEtfSource):
-        def __init__(self, config, client):
+        # 생성자에 인자가 늘어도(예: deadline_sec) 스파이가 깨지지 않게 그대로 넘긴다.
+        def __init__(self, config, client, *args, **kwargs):
             captured["timeout"] = client.timeout
-            super().__init__(config, client)
+            super().__init__(config, client, *args, **kwargs)
 
     monkeypatch.setattr(run_mod, "KrxEtfSource", _Spy)
     monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
@@ -340,3 +341,62 @@ def test_tag_news_negative_window_days_fails_loud(monkeypatch):
     with pytest.raises(SystemExit):
         main(["tag-news", "--run-id", "R", "--from", "2026-01-01", "--window-days", "-3"])
     assert "window" not in captured
+
+
+def test_deadline_rejected_where_it_is_ignored(monkeypatch):
+    # WHY: `--deadline-sec` 는 KRX ETF 만 소비한다. 다른 스텝에서 조용히 무시되면 운영자가
+    #      상한이 걸렸다고 오인하고(있다고 믿는데 안 걸린다), SFN 이 엉뚱한 브랜치에 상한을
+    #      준 배선 오류도 안 드러난다(Rule 12). 조기 반환 스텝을 포함해 검증 위치를 고정한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    for argv in (
+        ["ingest-raw-etf", "--source", "fmp", "--deadline-sec", "300"],
+        ["ingest-raw-etf", "--deadline-sec", "300"],  # --source 생략 = fmp 경로
+        ["ingest-price-raw", "--source", "kis", "--deadline-sec", "300"],
+        ["normalize-etf", "--deadline-sec", "300"],
+        ["tag-news", "--deadline-sec", "300"],
+    ):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(argv)
+        assert "--deadline-sec" in str(err.value)
+
+
+def test_deadline_rejects_non_positive_and_nan(monkeypatch):
+    # WHY: 0·음수는 첫 대상도 시도하기 전에 상한에 걸려 매 런이 0건 수집으로 끝난다 —
+    #      상한이 수집을 통째로 막는다. NaN 은 반대로 `경과 >= nan` 이 항상 False 라 상한이
+    #      **통째로 사라진다**. 둘 다 "있는데 안 걸린다/다 걸린다"라 즉시 실패가 맞다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    for bad in ("0", "-300", "nan"):
+        with pytest.raises(SystemExit) as err:
+            run_mod.main(["ingest-raw-etf", "--source", "krx", "--deadline-sec", bad])
+        assert "0 보다 큰 유한한 값" in str(err.value)
+
+
+def test_deadline_reaches_the_krx_source(monkeypatch):
+    # WHY: 파싱과 배선은 다른 일이다. `deadline_sec=args.deadline_sec` 한 줄이 지워져도
+    #      CLI 는 값을 받아들이고 어댑터만 조용히 무제한으로 돈다 — SFN 이 300초를 줬는데
+    #      25분을 도는 상태가 되고, 로그만 봐서는 상한이 걸린 줄 안다(edge-review 지적).
+    #      어댑터 단위 테스트는 값을 직접 세팅하므로 이 구간을 못 덮는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    class _Spy(run_mod.KrxEtfSource):
+        def __init__(self, config, client, *args, **kwargs):
+            super().__init__(config, client, *args, **kwargs)
+            captured["deadline_sec"] = self.deadline_sec
+
+    monkeypatch.setattr(run_mod, "KrxEtfSource", _Spy)
+    monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
+
+    assert main(["ingest-raw-etf", "--source", "krx", "--deadline-sec", "123"]) == 0
+    assert captured["deadline_sec"] == 123.0
+
+    # 미지정이면 무제한이 어댑터까지 그대로 가야 한다(기본 동작 불변).
+    captured.clear()
+    assert main(["ingest-raw-etf", "--source", "krx"]) == 0
+    assert captured["deadline_sec"] is None

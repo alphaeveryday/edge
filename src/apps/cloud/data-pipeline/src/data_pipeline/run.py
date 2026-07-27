@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -156,7 +157,23 @@ def main(argv: list[str] | None = None) -> int:
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
+    parser.add_argument("--deadline-sec", type=float, default=None,
+                        help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
+                             "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
     args = parser.parse_args(argv)
+
+    # `--deadline-sec` 를 소비하는 스텝에서만 받는다. 조용히 무시하면 운영자가 상한이 걸렸다고
+    # 오인하고, SFN 배선 오류(엉뚱한 브랜치에 상한을 준 것)도 안 드러난다(Rule 12).
+    if args.deadline_sec is not None:
+        # NaN 은 `<= 0` 도 `경과 >= nan` 도 False 라 **상한이 통째로 사라진다** — 값이 있으나
+        # 마나인 상태가 가장 나쁘다(있다고 믿는데 안 걸린다).
+        if not math.isfinite(args.deadline_sec) or args.deadline_sec <= 0:
+            raise SystemExit(f"--deadline-sec 은 0 보다 큰 유한한 값이어야 한다: {args.deadline_sec}")
+        if not (args.step == "ingest-raw-etf" and args.source == "krx"):
+            raise SystemExit(
+                "--deadline-sec 은 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
+                f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
+            )
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -386,7 +403,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             if settings.krx_etf is None:
                 raise SystemExit("krx_etf.source 설정이 없다 — sources.toml 확인")
             etf_source = KrxEtfSource(
-                settings.krx_etf.source, PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC)
+                settings.krx_etf.source,
+                PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC),
+                deadline_sec=args.deadline_sec,
             )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")

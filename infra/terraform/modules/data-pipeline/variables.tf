@@ -250,6 +250,19 @@ variable "tag_news_window_days" {
   }
 }
 
+variable "krx_etf_deadline_sec" {
+  description = "KRX ETF 구성종목 수집의 벽시계 상한(초). 닿으면 남은 ETF 를 미시도로 기록하고 받은 것은 저장한 뒤 조기 마감한다(ALPHA-581)."
+  type        = number
+  default     = 300
+  validation {
+    # 0·음수는 **첫 대상도 시도하기 전에** 상한에 걸려 매 런이 0건 수집으로 끝난다(상한이
+    # 수집을 통째로 막는다). 소수는 command 로 실려도 run.py 의 argparse type=float 가 받으므로
+    # 정수 강제는 하지 않는다 — 여기선 "0보다 큰가"만 본다(run.py 도 런타임에 재차 거른다).
+    condition     = var.krx_etf_deadline_sec > 0
+    error_message = "krx_etf_deadline_sec 는 0 보다 커야 한다(0 이하면 첫 대상도 못 시도하고 끝난다)."
+  }
+}
+
 variable "state_machine_timeout_seconds" {
   type    = number
   default = 21600
