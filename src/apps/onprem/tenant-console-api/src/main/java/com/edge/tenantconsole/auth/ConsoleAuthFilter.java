@@ -68,6 +68,7 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			// ── 콘솔 mock 표면(ALPHA-513) — 인증만 강제(전 역할). UI 에 로그인·역할
 			// 화면이 없는 mock 데이터 단계의 임시 완화로, 도메인별 DB 연동 시
 			// permission-matrix.md 의 역할 세분화(검수·정책=CR, 사용자·시장=TA)를 적용한다.
+			new Rule("GET", Pattern.compile("/api/v1/dashboard/traffic"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), ANY_ROLE),
