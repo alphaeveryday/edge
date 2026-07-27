@@ -54,14 +54,15 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
 ## 대안
 - **현행 유지(체크섬 MVP 존치)** — 근거는 "저비용 + 미래 서명 대비"다. 그러나 근거 없는 기능을
   MVP에 싣는 것은 Rule 2 위반이다. 완전성 트립와이어 이득은 **대부분** 파싱 실패 + 재-Pull과 겹치고,
-  겹치지 않는 잔여(종단 간 오염 탐지)는 확률·피해 반경이 낮아 수용한다(결과의 "잔여 리스크" 참조).
-  byte-exact 보존은 서명 착수 시점에 `byte[]`+서명을 함께 넣어도 소급 비용이 크지 않다. **단, 감사·
-  데이터 계보(lineage)가 증권사 연동의 *오늘의* 컴플라이언스 요구로 확인되면** byte-exact 보존은
-  정당해지고 이 정정은 철회 대상이 된다 — 그 경우 체크섬이 아니라 서명으로 바로 가는 것이 옳다.
-  또한 이 대안의 실질 무게는 **제거 비용**이다: 체크섬·byte[]·`received_bundle`(body+checksum) 원본
-  저장은 walking skeleton(sync-agent·intake)에 **이미 구축·동작 중**이라, 제거는 2개 모듈 + DB
-  마이그레이션을 걷어내는 실작업이고, 그 원본 저장은 장차 서명이 요구할 **바이트-정확 substrate**다 —
-  지금 제거했다가 서명 시점에 재구축하는 왕복이 이 판단의 핵심 트레이드오프다.
+  겹치지 않는 잔여(평문 홉 오염 탐지)는 **확률이 낮고 체크섬이 그 위험을 좁게만 커버**해 수용한다 —
+  단 피해 반경 자체는 고객 대면이다(결과의 "잔여 리스크" 참조). byte-exact 보존은 서명 착수 시점에
+  `byte[]`+서명을 함께 넣어도 소급 비용이 크지 않다. **단, 감사·데이터 계보(lineage)가 증권사 연동의
+  *오늘의* 컴플라이언스 요구로 확인되면** byte-exact 보존은 정당해지고 이 정정은 철회 대상이 된다 —
+  그 경우 체크섬이 아니라 서명으로 바로 가는 것이 옳다. 또한 이 대안의 실질 무게는 **제거 비용**이다:
+  체크섬·byte[]·`received_bundle`(body+checksum) 원본 저장은 walking skeleton(sync-agent·intake·
+  screening-worker)에 **이미 구축·동작 중**이라, 제거는 3개 모듈 + DB 마이그레이션을 걷어내는 실작업이고,
+  그 원본 저장은 장차 서명이 요구할 **바이트-정확 substrate**다 — 지금 제거했다가 서명 시점에 재구축하는
+  왕복이 이 판단의 핵심 트레이드오프다.
 - **지금 서명까지 당겨 구현** — 서명은 PKI·키 배포·감사 요구가 실재해야 값을 하는데 전용 티켓조차
   없다. MVP를 막을 사안이 아니라 후순위 유지가 맞다.
 - **체크섬만 빼고 `byte[]`는 유지** — `byte[]`의 유일한 목적이 체크섬 바이트 정합이라 함께 제거가
@@ -76,19 +77,30 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
     검증과 `BundleRelayController`의 헤더 릴레이를 함께 걷어내야 한다.
   - ③ `intake` `BundleIngestor`는 봉투 **본문 루트**에서 `cursor_from`·`cursor_to`를 `readTree().path()`로
     읽는다 — 본문이 `ApiResponse.result`로 감싸이면 두 필드가 결측이라 형상 위반 fail-loud로 떨어진다.
-  - ④ `received_bundle` 스키마의 `checksum VARCHAR(72) NOT NULL` + CHECK(`^sha256=…`) 제약 제거를 위한
+  - ④ `screening-worker` `DeliveryBundleParser`는 저장된 body 루트에서 `readTree(body).path("entries")`로
+    `entries`를 읽는다 — 봉투로 감싸이면 루트에 `entries`가 없어 매 번들이 계약 위반 예외로 실패하고
+    스크리닝이 마킹 없이 무한 재시도된다. 파서와 계약 테스트를 함께 갱신해야 한다.
+  - ⑤ `received_bundle` 스키마의 `checksum VARCHAR(72) NOT NULL` + CHECK(`^sha256=…`) 제약 제거를 위한
     expand-contract 마이그레이션(`migrations-onprem`).
-  - ⑤ 계약 문서(sync-protocol.md·event-bundle-schema.md).
+  - ⑥ 계약 문서(sync-protocol.md·event-bundle-schema.md).
 - 승인 시 갱신 대상: docs/contracts/sync-protocol.md(무결성·응답 포맷 절), event-bundle-schema.md
   (체크섬 절), 에픽 ALPHA-420 DoD의 "번들 체크섬(SHA-256) 무결성 검증" 항목을 목표 계약으로 이동.
-- **잔여 리스크(수용)**: TLS는 ALB에서 종단되고 ALB→tenant-sync-api 홉은 평문 HTTP다
-  ([[0034-host-per-edge-alb]], `infra/terraform/modules/alb/main.tf` target protocol=HTTP). 현행 체크섬은
-  이 평문 홉과 이후 릴레이·저장까지 포함해 수신 바이트를 검증하므로, 제거하면 그 구간에서 **유효한
-  JSON으로 변형되는 오염**은 파싱·cursor 전진을 통과해 탐지되지 않는다. 이 잔여를 수용하는 근거:
-  확률이 지극히 낮고(평문 홉도 TCP/이더넷 무결성을 갖고, 대부분의 오염은 JSON 파싱을 깬다), 노출
-  데이터가 비개인화 동기화 메타데이터라 피해 반경이 좁다([[0011-rls-to-physical-isolation]]·sync-auth.md의
-  단일계층 방어 판단과 같은 근거). 종단 간 무결성이 실제로 필요해지면 해법은 바이트-정확 **서명**이며
-  (그때 진정성까지 함께 얻는다), 이 ADR이 미루는 대상이 바로 그것이다.
+- **잔여 리스크(수용, 재평가)**: 체크섬은 **`sync-agent` 수신 시점(`BundleRelayService`)에 1회만** 검증되고
+  이후 재검증은 없다(intake·screening은 저장된 body를 그대로 파싱). 따라서 체크섬이 실제로 지키는 구간은
+  **와이어(클라우드 직렬화→agent 수신)**뿐이고, 그중 무방비 구간은 **ECS→ALB 평문 홉 하나**다(나머지
+  와이어는 TLS. [[0034-host-per-edge-alb]], `infra/terraform/modules/alb/main.tf` target protocol=HTTP).
+  - **피해 반경 정정**: 이전 판의 "비개인화 메타데이터라 반경 좁음"은 **틀렸다**. 번들 본체
+    (`explanation_result`)는 **고객 노출 후보 문구**이고(event-bundle-schema.md), walking skeleton에서 NEW는
+    스크리닝을 거쳐 **AUTO_PUBLISHED**로 자동 게시된다(`BundleScreener`·`PolicyEvaluator`). 이 평문 홉에서
+    `summary` 등이 **유효 JSON으로 오염**되면 고객 대면 게시까지 도달할 수 있어 반경은 **고객 대면**이다.
+  - **그럼에도 수용하는 근거**: (a) 확률이 지극히 낮다(단일 in-VPC TCP 홉의 TCP/이더넷 무결성, 유효
+    JSON을 내는 오염은 드묾). (b) 더 본질적으로 — **체크섬은 이 위험의 올바른 방어가 아니다.** 고객 대면
+    오염 표면의 대부분(agent 수신 *이후*의 저장·screening·게시)은 체크섬이 애초에 안 지킨다. 와이어 한 홉만
+    막는 발신자 체크섬으로 고객 대면 콘텐츠 무결성을 보증한다는 명제 자체가 성립하지 않는다. 그 보증이
+    실제로 필요하면 답은 **게시 지점까지의 종단 간 무결성 = 서명**(그때 진정성까지 함께)이고, 이 ADR이
+    미루는 대상이 바로 그것이다.
+  - 요컨대 체크섬 제거로 늘어나는 노출은 "평문 한 홉의 저확률 오염"으로 좁게 한정되며, 위험의 본체
+    (종단 간)는 체크섬 유무와 무관하게 서명 도입 전까지 남는다.
 - **[[0015-sync-protocol-mvp]] 상태 전환**: 승인 시 README 규약 그대로 ADR-0015 상태를 **`대체됨(→
   ADR-0040)`으로 표시**한다(승인된 결정이 바뀔 때의 표준 처리). 위 "승계"에서 ADR-0015의 유효 결정
   (cursor·폴링·at-least-once/멱등·gap)을 이 ADR이 그대로 재수록하므로, 상태 열의 `→` 포인터를 따르면
