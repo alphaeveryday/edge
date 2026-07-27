@@ -2,7 +2,7 @@ package com.edge.tenantsync.service;
 
 import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.EventBundle;
-import com.edge.tenantsync.repository.BundleEntryRepository;
+import com.edge.tenantsync.repository.BundleEntryStore;
 import com.edge.tenantsync.service.BundleSerializer.SerializedBundle;
 import org.springframework.stereotype.Service;
 
@@ -16,16 +16,16 @@ import java.util.Optional;
 @Service
 public class SyncBundleService {
 
-	private final BundleEntryRepository bundleEntryRepository;
+	private final BundleEntryStore bundleEntryStore;
 	private final BundleSerializer serializer;
 
-	public SyncBundleService(BundleEntryRepository bundleEntryRepository, BundleSerializer serializer) {
-		this.bundleEntryRepository = bundleEntryRepository;
+	public SyncBundleService(BundleEntryStore bundleEntryStore, BundleSerializer serializer) {
+		this.bundleEntryStore = bundleEntryStore;
 		this.serializer = serializer;
 	}
 
 	public Optional<SerializedBundle> pull(long tenantId, long afterCursor, int limit) {
-		List<BundleEntry> entries = bundleEntryRepository.findAfter(tenantId, afterCursor, limit);
+		List<BundleEntry> entries = bundleEntryStore.findAfter(tenantId, afterCursor, limit);
 		if (entries.isEmpty()) {
 			return Optional.empty();
 		}

@@ -21,8 +21,9 @@ dependencies {
 	implementation project(':libs:jvm-common') // 에러 응답 공통 포맷(ApiResponse)·에러 코드 규약
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
-	// 전달 레코드(tenant_delivery ⋈ 경계면 테이블) 조회 — event-bundle-schema.md
-	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	// 전달 레코드(tenant_delivery ⋈ 경계면 테이블) 조회 — event-bundle-schema.md.
+	// 영속성은 JPA(ddl-auto=validate, 스키마는 Flyway SSOT) — ADR-0038.
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	// 번들 와이어 계약 검증(JSON Schema 2020-12) — 문자열로 넘겨 검증기 자체 Jackson 과
