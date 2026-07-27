@@ -317,6 +317,21 @@ class BundleScreenerTest {
 	}
 
 	@Test
+	void 중복_source_event_id는_출처_1건으로_센다() {
+		// WHY: 출처 수는 자동 게시 임계의 입력이다 — 같은 출처가 두 번 실려 2건으로
+		// 세지면 단일 출처 콘텐츠가 검수 없이 자동 게시된다(와이어 스키마는 uniqueItems 미보장).
+		activePolicy = Optional.of(new PolicyVersion(10L, true, 2));
+
+		screener.screen(17, bundle("{\"cursor\":17,\"delivery_type\":\"NEW\"," +
+				"\"source_events\":[{\"source_event_id\":\"se-1\"},{\"source_event_id\":\"se-1\"}]," +
+				"\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts)
+				.containsExactly(new RecordingItems.Upserted("er-1", null, null, "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+	}
+
+	@Test
 	void etf_instrument_id가_문자열이_아니면_실패한다() {
 		// WHY: 도메인 식별자다 — 숫자가 "123" 으로 강제되면 조작된 정체성이 원장에
 		// 확정된다(explanation_result_id 와 동일한 강제 통과 차단).

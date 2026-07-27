@@ -6,7 +6,9 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 번들 JSON → typed VO 1회 파싱 + 계약 검증(안티커럽션 계층, ADR-0039 §2).
@@ -52,18 +54,6 @@ public final class DeliveryBundleParser {
 		if (!sourceEvents.isMissingNode() && !sourceEvents.isNull() && !sourceEvents.isArray()) {
 			throw new IllegalStateException("entry.source_events 가 배열이 아니다 — 출처 수 판정 불가, 계약 위반");
 		}
-		if (sourceEvents.isArray()) {
-			// 출처 수는 정책 게이트(SINGLE_SOURCE·min_source_count)의 입력이고, 런타임엔
-			// JSON Schema 검증 계층이 없다 — 식별 불가 요소([null,…]·{})가 건수로 세지면
-			// malformed 근거가 출처 기준을 통과한다. 출처로 인정하는 최소 조건은 문자열
-			// source_event_id(식별 가능성) — 요소 상세 스키마 전체 대조는 계약 테스트(ALPHA-497) 몫.
-			for (JsonNode sourceEvent : sourceEvents) {
-				if (!sourceEvent.isObject() || !sourceEvent.path("source_event_id").isString()) {
-					throw new IllegalStateException(
-							"entry.source_events 요소에 source_event_id(문자열)가 없다 — 계약 위반");
-				}
-			}
-		}
 		JsonNode result = entry.path("explanation_result");
 		return new DeliveryEntry(
 				cursor.asLong(),
@@ -72,7 +62,28 @@ public final class DeliveryBundleParser {
 				strictString(entry, "target_explanation_result_id"),
 				strictString(entry, "reason"),
 				evidences.isArray() ? evidences.toString() : "[]",
-				sourceEvents.isArray() ? sourceEvents.size() : 0);
+				sourceEvents.isArray() ? countDistinctSources(sourceEvents) : 0);
+	}
+
+	/**
+	 * 출처 수는 정책 게이트(SINGLE_SOURCE·min_source_count)의 입력이고, 런타임엔 JSON Schema
+	 * 검증 계층이 없다 — 식별 불가 요소([null,…]·{})가 건수로 세지면 malformed 근거가 출처
+	 * 기준을 통과한다. 출처로 인정하는 최소 조건은 문자열 source_event_id(식별 가능성)이고,
+	 * 같은 id 의 중복은 1건으로 센다(와이어 스키마가 uniqueItems 를 안 걸어, 중복이 단일
+	 * 출처를 다출처로 부풀리면 자동 게시 임계가 우회된다). 요소 상세 스키마 전체 대조는
+	 * 계약 테스트(ALPHA-497) 몫.
+	 */
+	private static int countDistinctSources(JsonNode sourceEvents) {
+		Set<String> sourceEventIds = new HashSet<>();
+		for (JsonNode sourceEvent : sourceEvents) {
+			JsonNode id = sourceEvent.path("source_event_id");
+			if (!sourceEvent.isObject() || !id.isString()) {
+				throw new IllegalStateException(
+						"entry.source_events 요소에 source_event_id(문자열)가 없다 — 계약 위반");
+			}
+			sourceEventIds.add(id.asString());
+		}
+		return sourceEventIds.size();
 	}
 
 	/**
