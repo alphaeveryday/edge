@@ -76,3 +76,4 @@ Default to surfacing uncertainty, not hiding it.
 - Nested files contain folder-specific content only. Do not copy root rules into them.
 - A per-module README (e.g. `src/apps/foo/README.md`) is added only when that package has non-obvious local concerns (its own build/run steps, env, quirks). Module roles live in the root README — do not duplicate.
 - `.claude/skills` and `.claude/rules` hold Claude-specific executable units, not prose that restates AGENTS.md. Do not put competing instructions in `.claude/rules`; AGENTS.md stays the SSOT.
+- Harness change history (what changed under `.claude/skills` and why) lives in `.claude/harness-changelog.md`. Not in CLAUDE.md — that file is always loaded into context, so keep it thin (ADR-0002). Not in `docs/` — that is the design-knowledge SSOT, and tooling history is neither design knowledge nor an operating rule.
