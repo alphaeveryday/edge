@@ -1,26 +1,32 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Delta, Icon, StatusBadge } from 'ui-kit';
-import type { ReviewReason } from '../domains/explanations';
-import { REASON_LABEL } from '../domains/explanations';
-import { useExplanations } from '../domains/explanations/hooks';
-import { LoadError, RiskCell, StockCell } from './_shared/cells';
+import { Icon, StatusBadge } from 'ui-kit';
+import type { ReviewReasonType } from '../domains/review';
+import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
+import { useReviewItems } from '../domains/review/hooks';
+import { LoadError, StockCell } from './_shared/cells';
 
+/**
+ * Review Queue 목록(ALPHA-436) — status=REVIEW_REQUIRED 논리 작업함의 실계약 조회.
+ * 등락률·위험 등급 컬럼은 실데이터 도착 전이라 두지 않는다(등락률=번들 확장 ALPHA-497,
+ * 위험 등급=산정 구현 후속) — 없는 값을 mock 으로 보여주지 않는다.
+ */
 export function ReviewPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError } = useExplanations();
+  const { data: items = [], isError } = useReviewItems();
 
   const [q, setQ] = useState('');
-  const [fReason, setFReason] = useState<ReviewReason | 'ALL'>('ALL');
+  const [fReason, setFReason] = useState<string>('ALL');
 
   if (isError) return <LoadError />;
 
   const keyword = q.trim().toLowerCase();
-  const pending = items.filter((it) => it.status === 'REVIEW_REQUIRED');
-  const filtered = pending.filter(
+  const filtered = items.filter(
     (it) =>
-      (!keyword || it.name.toLowerCase().includes(keyword) || it.code.toLowerCase().includes(keyword)) &&
-      (fReason === 'ALL' || it.reviewReason === fReason),
+      (!keyword ||
+        (it.name ?? '').toLowerCase().includes(keyword) ||
+        (it.ticker ?? '').toLowerCase().includes(keyword)) &&
+      (fReason === 'ALL' || it.reviewReasons.includes(fReason)),
   );
 
   return (
@@ -37,14 +43,15 @@ export function ReviewPage() {
         <select
           className="select"
           value={fReason}
-          onChange={(e) => setFReason(e.target.value as ReviewReason | 'ALL')}
+          onChange={(e) => setFReason(e.target.value)}
         >
           <option value="ALL">전체 사유</option>
-          {(Object.keys(REASON_LABEL) as ReviewReason[]).map((r) => (
+          {(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => (
             <option key={r} value={r}>
               {REASON_LABEL[r]}
             </option>
           ))}
+          <option value={AUTO_PUBLISH_CRITERIA}>{reasonLabel(AUTO_PUBLISH_CRITERIA)}</option>
         </select>
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
@@ -57,27 +64,35 @@ export function ReviewPage() {
           <thead>
             <tr>
               <th>종목</th>
-              <th>시장</th>
-              <th className="col-num">등락률</th>
+              <th>변동 요인 요약</th>
               <th>검수 사유</th>
-              <th>위험 등급</th>
-              <th className="col-muted">대기 시간</th>
+              <th className="col-muted">신뢰도</th>
+              <th className="col-muted">수신</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((it) => (
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/review/${it.id}`)}>
-                <StockCell name={it.name} code={it.code} />
-                <td className="col-muted">{it.market}</td>
-                <td className="col-num">
-                  <Delta direction={it.direction} pct={it.changePct} />
+                <StockCell name={it.name ?? '(종목 미상)'} code={it.ticker ?? '—'} />
+                <td style={{ maxWidth: 360 }}>
+                  <div className="truncate" title={it.summary}>
+                    {it.summary}
+                  </div>
                 </td>
                 <td>
-                  <StatusBadge tone="warn">{it.reviewReason ? REASON_LABEL[it.reviewReason] : ''}</StatusBadge>
+                  <div className="flex flex-wrap gap-1">
+                    {it.reviewReasons.map((r) => (
+                      <StatusBadge key={r} tone="warn">
+                        {reasonLabel(r)}
+                      </StatusBadge>
+                    ))}
+                  </div>
                 </td>
-                <RiskCell it={it} />
-                <td className="col-muted num">{it.receivedRelative}</td>
+                <td className="col-muted">{it.confidenceLevel ?? '—'}</td>
+                <td className="col-muted num">
+                  {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
+                </td>
                 <td className="text-right">
                   <button className="btn btn-sm">검수</button>
                 </td>

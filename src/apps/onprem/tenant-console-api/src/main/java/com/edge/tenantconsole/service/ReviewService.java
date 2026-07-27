@@ -2,21 +2,36 @@ package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.auth.SessionMember;
+import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
+import com.edge.tenantconsole.entity.ScreeningCheckEntity;
+import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.ReviewItem;
+import com.edge.tenantconsole.model.ReviewItemDetail;
+import com.edge.tenantconsole.model.ReviewListEntry;
 import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
+import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewTaskRepository;
+import com.edge.tenantconsole.repository.ScreeningCheckRepository;
+import com.edge.tenantconsole.repository.ScreeningRuleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import tools.jackson.databind.ObjectMapper;
+
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -32,28 +47,130 @@ public class ReviewService {
 
 	private static final Logger log = LoggerFactory.getLogger(ReviewService.class);
 	private static final int LIST_LIMIT = 100;
+	/** 룰 무관 REVIEW(자동 제공 스위치·출처 임계 미충족)의 파생 사유 마커 — rule_type
+	 * 어휘(스키마 CHECK)와 겹치지 않는 별도 상수. 버리면 정상 유입 항목이 사유 공백이 된다. */
+	private static final String AUTO_PUBLISH_CRITERIA_REASON = "AUTO_PUBLISH_CRITERIA";
 
 	private final ReviewItemRepository reviewItemRepository;
 	private final PublicationRepository publicationRepository;
 	private final ReviewTaskRepository reviewTaskRepository;
 	private final AnalysisItemStatusHistoryRepository statusHistoryRepository;
+	private final ScreeningCheckRepository screeningCheckRepository;
+	private final ScreeningRuleRepository screeningRuleRepository;
+	private final MemberRepository memberRepository;
 	private final ConsoleActionLogService actionLog;
+	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	public ReviewService(ReviewItemRepository reviewItemRepository,
 			PublicationRepository publicationRepository,
 			ReviewTaskRepository reviewTaskRepository,
 			AnalysisItemStatusHistoryRepository statusHistoryRepository,
+			ScreeningCheckRepository screeningCheckRepository,
+			ScreeningRuleRepository screeningRuleRepository,
+			MemberRepository memberRepository,
 			ConsoleActionLogService actionLog) {
 		this.reviewItemRepository = reviewItemRepository;
 		this.publicationRepository = publicationRepository;
 		this.reviewTaskRepository = reviewTaskRepository;
 		this.statusHistoryRepository = statusHistoryRepository;
+		this.screeningCheckRepository = screeningCheckRepository;
+		this.screeningRuleRepository = screeningRuleRepository;
+		this.memberRepository = memberRepository;
 		this.actionLog = actionLog;
 	}
 
 	public List<ReviewItem> list(String status) {
 		return reviewItemRepository.findByStatusOrderByReceivedAtAsc(status, Limit.of(LIST_LIMIT))
 				.stream().map(ReviewItem::from).toList();
+	}
+
+	/** 목록 + 파생 검수 사유(ALPHA-436) — 사유는 배치 조회로 해석한다(항목당 N+1 금지). */
+	public List<ReviewListEntry> listWithReasons(String status) {
+		List<ReviewItem> items = list(status);
+		Map<String, List<String>> reasons = reviewReasonsFor(
+				items.stream().map(ReviewItem::explanationResultId).toList());
+		return items.stream()
+				.map(i -> new ReviewListEntry(i,
+						reasons.getOrDefault(i.explanationResultId(), List.of())))
+				.toList();
+	}
+
+	/** 검수 상세(ALPHA-436, 구 439 흡수) — 근거·사유·검사 결과·상태 이력을 한 번에. */
+	public ReviewItemDetail detail(String explanationResultId) {
+		AnalysisItemEntity entity = reviewItemRepository.findById(explanationResultId)
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.REVIEW_ITEM_NOT_FOUND));
+		List<ScreeningCheckEntity> checks =
+				screeningCheckRepository.findByAnalysisItemIdOrderByScreeningCheckId(explanationResultId);
+		Map<Long, String> ruleTypes = ruleTypesById(
+				checks.stream().map(ScreeningCheckEntity::getScreeningRuleId).filter(id -> id != null).toList());
+		List<String> reviewReasons = checks.stream()
+				.filter(c -> "REVIEW".equals(c.getResult()))
+				.map(c -> reasonOf(c, ruleTypes))
+				.filter(t -> t != null).distinct().toList();
+		List<ReviewItemDetail.ScreeningCheckView> checkViews = checks.stream()
+				.map(c -> new ReviewItemDetail.ScreeningCheckView(c.getResult(),
+						c.getScreeningRuleId() == null ? null : ruleTypes.get(c.getScreeningRuleId()),
+						c.getMatchedText(), c.getCheckedAt()))
+				.toList();
+		List<AnalysisItemStatusHistoryEntity> history = statusHistoryRepository
+				.findByAnalysisItemIdOrderByStatusHistoryIdAsc(explanationResultId);
+		// 행위자 이름은 일괄 해석 — 이력이 길어질수록 행마다 findById 는 N+1 이 된다.
+		Map<Long, String> memberNames = new HashMap<>();
+		if (history.stream().anyMatch(h -> h.getActorId() != null)) {
+			for (MemberEntity member : memberRepository.findAllOrderByMemberId()) {
+				memberNames.put(member.getMemberId(), member.getName());
+			}
+		}
+		List<ReviewItemDetail.StatusChange> changes = history.stream()
+				.map(h -> new ReviewItemDetail.StatusChange(h.getFromStatus(), h.getToStatus(),
+						h.getActorType(),
+						h.getActorId() == null ? null : memberNames.get(h.getActorId()),
+						h.getReason(), h.getOccurredAt()))
+				.toList();
+		return new ReviewItemDetail(ReviewItem.from(entity),
+				objectMapper.readTree(entity.getEvidences() == null ? "[]" : entity.getEvidences()),
+				reviewReasons, checkViews, changes);
+	}
+
+	/** 항목들의 검수 사유 파생 — screening_check(result='REVIEW') → screening_rule.rule_type. */
+	private Map<String, List<String>> reviewReasonsFor(Collection<String> analysisItemIds) {
+		if (analysisItemIds.isEmpty()) {
+			return Map.of();
+		}
+		List<ScreeningCheckEntity> checks = screeningCheckRepository
+				.findByAnalysisItemIdInAndResultOrderByScreeningCheckId(analysisItemIds, "REVIEW");
+		Map<Long, String> ruleTypes = ruleTypesById(
+				checks.stream().map(ScreeningCheckEntity::getScreeningRuleId).filter(id -> id != null).toList());
+		Map<String, List<String>> byItem = new LinkedHashMap<>();
+		for (ScreeningCheckEntity check : checks) {
+			String type = reasonOf(check, ruleTypes);
+			if (type == null) {
+				continue;
+			}
+			List<String> list = byItem.computeIfAbsent(check.getAnalysisItemId(), k -> new ArrayList<>());
+			if (!list.contains(type)) {
+				list.add(type);
+			}
+		}
+		return byItem;
+	}
+
+	private static String reasonOf(ScreeningCheckEntity check, Map<Long, String> ruleTypes) {
+		if (check.getScreeningRuleId() == null) {
+			return AUTO_PUBLISH_CRITERIA_REASON;
+		}
+		return ruleTypes.get(check.getScreeningRuleId());
+	}
+
+	private Map<Long, String> ruleTypesById(Collection<Long> ruleIds) {
+		if (ruleIds.isEmpty()) {
+			return Map.of();
+		}
+		Map<Long, String> types = new HashMap<>();
+		for (ScreeningRuleEntity rule : screeningRuleRepository.findByScreeningRuleIdIn(ruleIds)) {
+			types.put(rule.getScreeningRuleId(), rule.getRuleType());
+		}
+		return types;
 	}
 
 	@Transactional

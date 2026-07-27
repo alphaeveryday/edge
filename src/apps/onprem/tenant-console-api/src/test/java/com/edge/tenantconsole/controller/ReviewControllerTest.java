@@ -4,11 +4,17 @@ import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
+import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
+import com.edge.tenantconsole.entity.ScreeningCheckEntity;
+import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
+import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewTaskRepository;
+import com.edge.tenantconsole.repository.ScreeningCheckRepository;
+import com.edge.tenantconsole.repository.ScreeningRuleRepository;
 import com.edge.tenantconsole.service.ConsoleActionLogService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
@@ -105,6 +111,107 @@ class ReviewControllerTest {
 			saved.add(history);
 			return history;
 		}
+
+		@Override
+		public List<AnalysisItemStatusHistoryEntity> findByAnalysisItemIdOrderByStatusHistoryIdAsc(
+				String analysisItemId) {
+			return saved.stream()
+					.filter(h -> h.getAnalysisItemId().equals(analysisItemId)).toList();
+		}
+	}
+
+	private static final class StubChecks implements ScreeningCheckRepository {
+		final List<ScreeningCheckEntity> rows = new ArrayList<>();
+
+		@Override
+		public List<ScreeningCheckEntity> findByAnalysisItemIdOrderByScreeningCheckId(String analysisItemId) {
+			return rows.stream().filter(c -> c.getAnalysisItemId().equals(analysisItemId)).toList();
+		}
+
+		@Override
+		public List<ScreeningCheckEntity> findByAnalysisItemIdInAndResultOrderByScreeningCheckId(
+				java.util.Collection<String> analysisItemIds, String result) {
+			return rows.stream().filter(c -> analysisItemIds.contains(c.getAnalysisItemId())
+					&& c.getResult().equals(result)).toList();
+		}
+	}
+
+	/** 룰 사전 대역 — 사유 파생(rule_id → rule_type)만 본다. 발행 표면은 관심사 밖. */
+	private static final class StubRules implements ScreeningRuleRepository {
+		final List<ScreeningRuleEntity> rows = new ArrayList<>();
+
+		@Override
+		public List<ScreeningRuleEntity> findByPolicyVersionIdOrderByScreeningRuleId(long policyVersionId) {
+			return List.of();
+		}
+
+		@Override
+		public ScreeningRuleEntity save(ScreeningRuleEntity rule) {
+			rows.add(rule);
+			return rule;
+		}
+
+		@Override
+		public List<ScreeningRuleEntity> findByScreeningRuleIdIn(java.util.Collection<Long> ruleIds) {
+			return rows.stream().filter(r -> ruleIds.contains(r.getScreeningRuleId())).toList();
+		}
+	}
+
+	private static final class StubMembersDict implements MemberRepository {
+		@Override
+		public Optional<MemberEntity> findById(Long id) {
+			return Optional.empty();
+		}
+
+		@Override
+		public Optional<MemberEntity> findByEmailAndActiveTrue(String email) {
+			return Optional.empty();
+		}
+
+		@Override
+		public List<MemberEntity> findAllOrderByMemberId() {
+			return List.of(new MemberEntity(2L, "reviewer@demo.edge.local", "데모 검수자",
+					"COMPLIANCE_REVIEWER", true, null));
+		}
+
+		@Override
+		public List<Long> lockActiveAdminIds() {
+			return List.of();
+		}
+
+		@Override
+		public boolean existsByEmail(String email) {
+			return false;
+		}
+
+		@Override
+		public long count() {
+			return 0;
+		}
+
+		@Override
+		public MemberEntity save(MemberEntity member) {
+			return member;
+		}
+
+		@Override
+		public int deactivate(long id) {
+			return 0;
+		}
+
+		@Override
+		public int updateRole(long id, String role, String expectedRole) {
+			return 0;
+		}
+
+		@Override
+		public int updateName(long id, String name) {
+			return 0;
+		}
+
+		@Override
+		public void touchLastLogin(long id) {
+		}
 	}
 
 	/** 감사 기록 대역 — DB 없이 record 호출을 캡처한다(MemberServiceTest 와 동일 패턴). */
@@ -130,6 +237,8 @@ class ReviewControllerTest {
 	private StubPublications publications;
 	private StubTasks tasks;
 	private StubHistory history;
+	private StubChecks checks;
+	private StubRules rules;
 	private RecordingActionLog actionLog;
 	private MockMvc mvc;
 
@@ -139,10 +248,13 @@ class ReviewControllerTest {
 		publications = new StubPublications();
 		tasks = new StubTasks();
 		history = new StubHistory();
+		checks = new StubChecks();
+		rules = new StubRules();
 		actionLog = new RecordingActionLog();
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ReviewController(
-						new ReviewService(items, publications, tasks, history, actionLog)))
+						new ReviewService(items, publications, tasks, history, checks, rules,
+								new StubMembersDict(), actionLog)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -359,5 +471,82 @@ class ReviewControllerTest {
 		mvc.perform(get("/api/v1/review/items").param("status", "WHATEVER"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("CNSL4002"));
+	}
+
+	@Test
+	void 목록은_screening_check에서_파생한_검수_사유를_담는다() throws Exception {
+		// WHY: 사유는 analysis_item 에 중복 저장하지 않고 screening_check(result=REVIEW)의
+		// rule_type 에서 파생한다(DDL 규약) — 화면 사유 필터·배너의 실데이터 원천.
+		rules.rows.add(withId(new ScreeningRuleEntity(1L, "ASSERTIVE_EXPRESSION",
+				"{\"text\":\"확실\"}", "REVIEW", true, java.time.Instant.now()), 7L));
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 7L, "REVIEW", "확실",
+				OffsetDateTime.now()));
+
+		mvc.perform(get("/api/v1/review/items"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result[0].review_reasons[0]").value("ASSERTIVE_EXPRESSION"));
+	}
+
+	@Test
+	void 룰_무관_REVIEW는_자동_제공_기준_사유로_파생된다() throws Exception {
+		// WHY: 자동 제공 기준 미달(출처 임계·스위치 OFF)은 rule_id 없는 REVIEW 행이다 —
+		// 이를 버리면 정상 유입 경로의 항목이 사유 공백으로 보인다(검수자가 이유를 모름).
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", null, "REVIEW", "source_events=1",
+				OffsetDateTime.now()));
+
+		mvc.perform(get("/api/v1/review/items"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result[0].review_reasons[0]").value("AUTO_PUBLISH_CRITERIA"));
+	}
+
+	@Test
+	void 상세는_근거_사유_검사결과_상태이력을_한_번에_준다() throws Exception {
+		// WHY: 감사·노출 이력은 별도 메뉴가 아니다(콘솔 IA, 구 ALPHA-439 흡수) — 상세가
+		// "왜 검수로 왔고(사유·검사 결과) 어떤 전이를 거쳤나(이력)"를 재현해야 한다.
+		items.item = new AnalysisItemEntity("er-rev-1", "069500", "KODEX 200",
+				LocalDate.of(2026, 7, 15), "정정 요약", null, "LOW", "REVIEW_REQUIRED", "er-0",
+				"근거 공시 정정",
+				OffsetDateTime.of(2026, 7, 15, 17, 0, 0, 0, ZoneOffset.ofHours(9)),
+				"[{\"kind\":\"DISCLOSURE\",\"title\":\"공급 계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\"}]");
+		rules.rows.add(withId(new ScreeningRuleEntity(1L, "BANNED_WORD",
+				"{\"text\":\"급등 확실\"}", "REVIEW", true, java.time.Instant.now()), 7L));
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 7L, "REVIEW", "급등 확실",
+				OffsetDateTime.now()));
+		checks.rows.add(new ScreeningCheckEntity(2L, "er-rev-1", null, "PASS", null,
+				OffsetDateTime.now()));
+		history.saved.add(new AnalysisItemStatusHistoryEntity("er-rev-1", null,
+				"REVIEW_REQUIRED", "SYSTEM", null, null));
+		history.saved.add(new AnalysisItemStatusHistoryEntity("er-rev-1", "REVIEW_REQUIRED",
+				"APPROVED", "MEMBER", 2L, "검수 완료"));
+
+		mvc.perform(get("/api/v1/review/items/er-rev-1"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.explanation_result_id").value("er-rev-1"))
+				.andExpect(jsonPath("$.result.summary").value("정정 요약"))
+				.andExpect(jsonPath("$.result.evidences[0].kind").value("DISCLOSURE"))
+				.andExpect(jsonPath("$.result.evidences[0].published_at").value("2026-07-14T09:00:00Z"))
+				.andExpect(jsonPath("$.result.review_reasons[0]").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result.checks.length()").value(2))
+				.andExpect(jsonPath("$.result.checks[0].result").value("REVIEW"))
+				.andExpect(jsonPath("$.result.checks[0].rule_type").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result.checks[0].matched_text").value("급등 확실"))
+				.andExpect(jsonPath("$.result.checks[1].result").value("PASS"))
+				.andExpect(jsonPath("$.result.history.length()").value(2))
+				.andExpect(jsonPath("$.result.history[0].to_status").value("REVIEW_REQUIRED"))
+				.andExpect(jsonPath("$.result.history[0].actor_type").value("SYSTEM"))
+				.andExpect(jsonPath("$.result.history[1].actor_name").value("데모 검수자"))
+				.andExpect(jsonPath("$.result.history[1].reason").value("검수 완료"));
+	}
+
+	@Test
+	void 상세_미존재는_404다() throws Exception {
+		mvc.perform(get("/api/v1/review/items/er-absent"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("CNSL4040"));
+	}
+
+	private static ScreeningRuleEntity withId(ScreeningRuleEntity rule, long id) {
+		org.springframework.test.util.ReflectionTestUtils.setField(rule, "screeningRuleId", id);
+		return rule;
 	}
 }

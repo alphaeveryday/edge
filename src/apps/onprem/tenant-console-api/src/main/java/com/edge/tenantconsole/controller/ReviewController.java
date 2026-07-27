@@ -6,6 +6,7 @@ import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.dto.ReviewApproveRequest;
 import com.edge.tenantconsole.dto.ReviewBlockRequest;
 import com.edge.tenantconsole.dto.ReviewEditedApproveRequest;
+import com.edge.tenantconsole.dto.ReviewItemDetailResponse;
 import com.edge.tenantconsole.dto.ReviewItemResponse;
 import com.edge.tenantconsole.dto.ReviewRejectRequest;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
@@ -48,7 +49,13 @@ public class ReviewController {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_STATUS_FILTER);
 		}
 		return ApiResponse.onSuccess(
-				reviewService.list(status).stream().map(ReviewItemResponse::from).toList());
+				reviewService.listWithReasons(status).stream().map(ReviewItemResponse::from).toList());
+	}
+
+	/** 검수 상세(ALPHA-436) — 근거·파생 사유·검사 결과·상태 이력(구 439 흡수)을 한 번에. */
+	@GetMapping("/api/v1/review/items/{id}")
+	public ApiResponse<ReviewItemDetailResponse> detail(@PathVariable("id") String id) {
+		return ApiResponse.onSuccess(ReviewItemDetailResponse.from(reviewService.detail(id)));
 	}
 
 	@PostMapping("/api/v1/review/items/{id}/approve")

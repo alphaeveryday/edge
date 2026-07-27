@@ -126,6 +126,11 @@ class ScreeningControllerTest {
 			stored.add(rule);
 			return rule;
 		}
+
+		@Override
+		public List<ScreeningRuleEntity> findByScreeningRuleIdIn(java.util.Collection<Long> ruleIds) {
+			return stored.stream().filter(r -> ruleIds.contains(r.getScreeningRuleId())).toList();
+		}
 	}
 
 	/** 발행자 이름 해석만 필요한 원장 대역 — 나머지는 이 테스트의 관심사 밖(no-op). */

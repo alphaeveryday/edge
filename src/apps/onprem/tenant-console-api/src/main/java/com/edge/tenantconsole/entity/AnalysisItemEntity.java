@@ -5,6 +5,8 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -50,6 +52,10 @@ public class AnalysisItemEntity {
 	@Column(name = "received_at")
 	private OffsetDateTime receivedAt;
 
+	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at}]) — 상세 화면 원천(ALPHA-436). */
+	@JdbcTypeCode(SqlTypes.JSON)
+	private String evidences;
+
 	protected AnalysisItemEntity() {
 	}
 
@@ -69,6 +75,16 @@ public class AnalysisItemEntity {
 		this.supersedesItemId = supersedesItemId;
 		this.correctionReason = correctionReason;
 		this.receivedAt = receivedAt;
+	}
+
+	/** 상세 픽스처용 — evidences 까지 채우는 오버로드. */
+	public AnalysisItemEntity(String explanationResultId, String etfTicker, String etfName,
+			LocalDate tradeDate, String summary, String headline, String confidenceLevel,
+			String status, String supersedesItemId, String correctionReason,
+			OffsetDateTime receivedAt, String evidences) {
+		this(explanationResultId, etfTicker, etfName, tradeDate, summary, headline,
+				confidenceLevel, status, supersedesItemId, correctionReason, receivedAt);
+		this.evidences = evidences;
 	}
 
 	public String getExplanationResultId() {
@@ -113,5 +129,9 @@ public class AnalysisItemEntity {
 
 	public OffsetDateTime getReceivedAt() {
 		return receivedAt;
+	}
+
+	public String getEvidences() {
+		return evidences;
 	}
 }

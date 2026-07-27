@@ -82,6 +82,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
 | `GET /api/v1/dashboard/traffic` | Dashboard 트래픽 KPI (24시간 요청·에러) | TA·CR·OP·RO |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
+| `GET /api/v1/review/items/{id}` | 검수 상세(근거·사유·검사 결과·상태 이력 — 감사 열람, ALPHA-436) | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 — 승인(선택 의견) | CR |
 | `POST /api/v1/review/items/{id}/approve-edited` | 검수 액션 — 수정 승인(edited_summary 필수) | CR |
 | `POST /api/v1/review/items/{id}/reject` | 검수 액션 — 반려(사유 필수) | CR |
