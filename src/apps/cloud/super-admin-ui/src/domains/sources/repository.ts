@@ -2,5 +2,6 @@
 import type { SourceReport } from './types';
 
 export interface SourcesRepository {
-  report(): Promise<SourceReport>;
+  /** @param runKey 볼 런의 슬롯 키. 없으면 최신 런 */
+  report(runKey?: string): Promise<SourceReport>;
 }

@@ -1,10 +1,15 @@
+import { Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
+import { ApiError } from '../api/client';
 import type {
+  Attempt,
   DataStatus,
   ExecutionStatus,
   LaunchStatus,
   OrchestrationStatus,
+  ReconciliationIssue,
   TaskOutcome,
   TaskStatus,
 } from '../domains/sources';
@@ -84,6 +89,107 @@ function finishedAt(iso: string | null) {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('ko-KR', { hour12: false });
 }
 
+/**
+ * 상세 줄용 짧은 시각. **날짜를 버리지 않는다** — 같은 런의 기록이라도 사후 복구는 며칠 뒤
+ * `now()` 로 찍히므로, 시:분만 쓰면 `23:50 → 09:00` 처럼 순서와 경과가 거꾸로 읽힌다.
+ */
+function clock(iso: string | null) {
+  if (iso === null) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleString('ko-KR', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+}
+
+/* 정상 계측(WRAPPER)과 사후 복구를 가른다 — 뭉개면 "원장이 스스로 메운 행"이 실제로 관측된
+ * 실행처럼 보인다. 관대해지는 방향이라 화면에서 반드시 구분한다. */
+const BACKFILL = 'RECONCILER_BACKFILL';
+
+/**
+ * 이 시도가 "그냥 잘 된 것"인가. 아니면 상세 줄에 펼쳐 보여줄 사유가 있다는 뜻이다.
+ * exit_code 는 **null(모름)을 성공으로 치지 않는다** — 0 일 때만 성공이다.
+ */
+function isClean(a: Attempt) {
+  return (
+    a.executionStatus === 'SUCCEEDED' &&
+    a.exitCode === 0 &&
+    a.failureReason === null &&
+    a.recordSource !== BACKFILL
+  );
+}
+
+/**
+ * 상세 줄을 펼칠 가치가 있는 작업인가.
+ *
+ * 25행 전부에 시각을 늘어놓으면 예외가 묻힌다 — `expected_at`·`deadline_at` 은 Planner 가 **모든**
+ * 작업에 채우므로 "값이 있으면 보여준다"는 규칙은 그대로 전 행 노출이 된다. 그래서 사유가 있는
+ * 행(재시도·미실행 판정·제외/귀결 사유·깨끗하지 않은 시도)만 펼치고, 그 행에서는 시각을 함께 낸다.
+ */
+function hasDetail(task: TaskStatus) {
+  return (
+    task.attempts.length > 1 ||
+    task.attempts.some((a) => !isClean(a)) ||
+    task.missedAt !== null ||
+    task.skipReason !== null ||
+    task.outcomeReason !== null
+  );
+}
+
+/* ECS Task ARN 은 길어서 전부 쓰면 줄이 묻힌다. 운영자가 로그를 찾을 때 쓰는 건 마지막 조각
+ * (task id)이라 그것만 낸다 — 이걸 아예 안 보여주면 실패한 시도에서 로그로 넘어갈 손잡이가 없다. */
+function taskId(arn: string | null) {
+  if (arn === null) return null;
+  const last = arn.split('/').pop();
+  return last === undefined || last === '' ? null : last;
+}
+
+function AttemptLine({ attempt, index }: { attempt: Attempt; index: number }) {
+  const span = `${clock(attempt.startedAt)} → ${clock(attempt.finishedAt)}`;
+  const id = taskId(attempt.ecsTaskArn);
+  return (
+    <span style={{ display: 'block' }}>
+      {`#${attempt.attemptNumber ?? index + 1} ${attempt.executionStatus} · ${span}`}
+      {/* exit_code 는 null 이면 "모름"이다 — 0(성공)으로 메우지 않는다 */}
+      {attempt.exitCode !== null && ` · exit ${attempt.exitCode}`}
+      {attempt.recordSource === BACKFILL && ' · 사후 복구 기록'}
+      {attempt.failureReason && ` · ${attempt.failureReason}`}
+      {id && ` · task ${id}`}
+    </span>
+  );
+}
+
+function TaskDetailRow({ task }: { task: TaskStatus }) {
+  const facts = [
+    task.expectedAt && `예정 ${clock(task.expectedAt)}`,
+    task.deadlineAt && `기한 ${clock(task.deadlineAt)}`,
+    // 비래치라 나중에 FULFILLED 로 가도 남는다 — "늦게라도 됐다"를 outcome 이 못 말해준다.
+    task.missedAt && `미실행 판정 ${clock(task.missedAt)}`,
+    task.fulfilledAt && `완료 ${clock(task.fulfilledAt)}`,
+    task.skipReason && `제외 사유 ${task.skipReason}`,
+    // 시도 행이 아예 없는 실패(FAILED_TO_START)의 유일한 설명이다.
+    task.outcomeReason && `귀결 사유 ${task.outcomeReason}`,
+  ].filter(Boolean);
+
+  return (
+    <tr>
+      <td />
+      <td colSpan={6} className="t-xs" style={{ color: 'var(--fg-3)', paddingTop: 0 }}>
+        {facts.length > 0 && <span style={{ display: 'block' }}>{facts.join(' · ')}</span>}
+        {task.attempts.map((a, i) => (
+          <AttemptLine key={a.ecsTaskArn ?? i} attempt={a} index={i} />
+        ))}
+      </td>
+    </tr>
+  );
+}
+
 function TaskRow({ task }: { task: TaskStatus }) {
   /* SKIPPED 는 outcome 이 없다 — "완료"로 칠하면 휴장이라 안 한 것과 해서 된 것이 같은 초록이 된다. */
   /* 원장 어휘가 늘어나면(소유는 data-pipeline) 여기 맵에 없는 값이 내려온다. undefined 를
@@ -123,6 +229,10 @@ function TaskRow({ task }: { task: TaskStatus }) {
           {retrying && <StatusBadge tone="env">재시도 중</StatusBadge>}
           {/* 실행 성공 옆의 데이터 결손 — 이걸 빼면 불완전한 산출이 온전히 초록으로 보인다 */}
           {defect && <StatusBadge tone="warn">{defect}</StatusBadge>}
+          {/* 시도가 2회 이상이면 상세 줄을 안 읽어도 재시도가 있었다는 것이 보여야 한다 */}
+          {task.attempts.length > 1 && (
+            <StatusBadge tone="neutral">{`시도 ${task.attempts.length}회`}</StatusBadge>
+          )}
         </span>
       </td>
       <td className="num">{finishedAt(task.lastFinishedAt)}</td>
@@ -132,10 +242,98 @@ function TaskRow({ task }: { task: TaskStatus }) {
   );
 }
 
-export function SourcesPage() {
-  const { data: report, isPending, isError } = useSourceReport();
+/** 서버가 "그런 런 없음"으로 낸 404 인가(AdminErrorStatus.RUN_NOT_FOUND). 라우팅 404 와 가른다. */
+function isRunNotFound(error: ApiError) {
+  return (
+    typeof error.body === 'object' &&
+    error.body !== null &&
+    (error.body as { code?: unknown }).code === 'ADMN4041'
+  );
+}
 
-  if (isError) return <LoadError />;
+const ISSUE_SCOPE_LABEL: Record<string, string> = { run: '런', task: '작업', slot: '슬롯' };
+
+/* 원장이 이미 판정해 저장해 둔 불일치다. 화면에 없으면 운영자에게는 없는 사실이라, 지금까지
+ * 콘솔은 이 표를 한 번도 그리지 않았다(dev 의 거짓 LEDGER_GAP 17건이 그렇게 묻혀 있었다).
+ * 여기서 이슈를 새로 판정하거나 심각도를 매기지 않는다 — 다섯 번째 어휘를 만들지 않는다. */
+function IssuesCard({ issues }: { issues: ReconciliationIssue[] }) {
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="t-label">대조 이슈</span>
+        <span className="t-xs num" style={{ color: 'var(--fg-3)' }}>
+          {`열림 ${issues.filter((i) => i.status === 'OPEN').length} / 전체 ${issues.length}`}
+        </span>
+      </div>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>유형</th>
+            <th>범위</th>
+            <th>대상</th>
+            <th>상태</th>
+            <th className="col-num">발생</th>
+            {/* 최초 관측이 없으면 발생 횟수만으로는 "언제부터 이러는지"를 알 수 없다 */}
+            <th>최초 관측</th>
+            <th>최근 관측</th>
+          </tr>
+        </thead>
+        <tbody>
+          {issues.map((issue) => (
+            <tr key={`${issue.issueType}-${issue.scope}-${issue.taskKey}-${issue.firstSeenAt}`}>
+              <td className="font-semibold">{issue.issueType}</td>
+              <td className="col-muted">
+                {issue.scope === null ? '—' : (ISSUE_SCOPE_LABEL[issue.scope] ?? issue.scope)}
+              </td>
+              <td className="col-muted">{issue.taskKey ?? '—'}</td>
+              <td>
+                <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                  <StatusBadge tone={issue.status === 'OPEN' ? 'blocked' : 'neutral'}>
+                    {issue.status === 'OPEN' ? '열림' : '해결됨'}
+                  </StatusBadge>
+                  {/* 자동 복구인지 운영자 조치인지 — 해결 사유가 없으면 둘이 같아 보인다 */}
+                  {issue.resolutionReason && (
+                    <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                      {issue.resolutionReason}
+                    </span>
+                  )}
+                </span>
+              </td>
+              <td className="col-num num">{issue.occurrenceCount.toLocaleString('ko-KR')}</td>
+              <td className="num">{finishedAt(issue.firstSeenAt)}</td>
+              <td className="num">{finishedAt(issue.lastSeenAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function SourcesPage() {
+  /* 런 주소지정 — 파라미터가 없으면 지금까지처럼 최신 런이다. 새 라우트를 만들지 않는 이유:
+   * 이 페이지가 이미 "실행 1건 상세"라, 드릴다운에 필요한 건 새 화면이 아니라 주소뿐이다. */
+  const [searchParams] = useSearchParams();
+  /* 공백만 있는 값은 지목이 아니다 — `?runKey=` 를 그대로 보내면 "지정한 실행"이라 표시해 놓고
+   * 실제로는 서버가 404 를 내거나(엄한 쪽) 최신 런을 준다(관대한 쪽). 둘 다 화면 문구와 어긋난다. */
+  const runKey = searchParams.get('runKey')?.trim() || undefined;
+  const { data: report, isPending, isError, error } = useSourceReport(runKey);
+
+  if (isError) {
+    /* 없는 런과 고장 난 서버는 다른 사실이다 — 404 를 일반 에러로 뭉개면 운영자가 오타를
+     * 장애로 읽는다(서버가 빈 리포트 대신 404 를 내는 이유와 같은 이유).
+     * 반대로 **모든 404 를 "없는 런"이라 부르면 반대 방향으로 틀린다** — 프록시 오설정·배포
+     * 불일치로 엔드포인트 자체가 404 면 실제 장애가 운영자 오타로 숨는다. 그래서 런을 지목한
+     * 요청이면서 서버가 그 코드(ADMN4041)를 낸 경우로 한정한다. */
+    if (runKey && error instanceof ApiError && error.status === 404 && isRunNotFound(error)) {
+      return (
+        <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
+          {`지정한 실행(${runKey})을 찾을 수 없습니다. 런 키를 확인해 주세요.`}
+        </div>
+      );
+    }
+    return <LoadError />;
+  }
   if (isPending) return null;
 
   const run = report.run;
@@ -155,7 +353,11 @@ export function SourcesPage() {
     <div className="flex max-w-[1100px] flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">데이터 소스 수집 상태</span>
+          <span className="t-label">
+            데이터 소스 수집 상태
+            {/* 지목해서 보는 중이면 그 사실을 밝힌다 — 옛 런을 최신 상태로 오독하면 안 된다 */}
+            {runKey && <span className="t-xs">{' · 지정한 실행'}</span>}
+          </span>
           {run && (
             <span className="t-xs num" style={{ color: 'var(--fg-3)' }}>
               {run.runKey}
@@ -205,13 +407,17 @@ export function SourcesPage() {
               </thead>
               <tbody>
                 {report.tasks.map((t) => (
-                  <TaskRow key={t.taskKey} task={t} />
+                  <Fragment key={t.taskKey}>
+                    <TaskRow task={t} />
+                    {hasDetail(t) && <TaskDetailRow task={t} />}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </>
         )}
       </div>
+      {report.issues.length > 0 && <IssuesCard issues={report.issues} />}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
       </p>
