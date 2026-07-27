@@ -177,3 +177,76 @@ def test_disabled_without_credentials():
     # WHY: 자격증명은 env 로만 주입 — 없으면 이 소스는 비활성(스텝이 skip 으로 드러냄).
     config = KrxEtfSourceConfig(etf_map={"069500": "KR7069500007"})
     assert KrxEtfSource(config, FakeClient({})).enabled is False
+
+
+# ── 수집 상한 (ALPHA-581) ─────────────────────────────────────────────────────
+
+def _clock(monkeypatch, ticks):
+    """`time.monotonic` 을 정해진 값 순서로 흐르게 한다(마지막 값은 이후 계속 재사용)."""
+    seq = list(ticks)
+    state = {"i": 0}
+
+    def fake_monotonic():
+        i = min(state["i"], len(seq) - 1)
+        state["i"] += 1
+        return seq[i]
+
+    monkeypatch.setattr("data_pipeline.sources.krx_etf.time.monotonic", fake_monotonic)
+
+
+def _multi_etf(n=4):
+    etf_map = {f"06950{i}": f"KR706950{i}0007" for i in range(n)}
+    responses = {
+        isin: {"output": [{"COMPST_ISU_CD": f"00593{i}", "COMPST_ISU_NM": f"종목{i}",
+                           "COMPST_RTO": "1.0", "MKT_ID": "STK"}]}
+        for i, isin in enumerate(etf_map.values())
+    }
+    return etf_map, responses
+
+
+def test_상한에_닿으면_받은_행을_버리지_않고_조기_마감한다(monkeypatch):
+    # WHY: 2026-07-27 15:40 런에서 KRX 가 느려져 브랜치가 25분을 넘겼고, 사람이 SIGKILL 로
+    #      죽이는 순간 **이미 받아둔 24종이 저장 코드에 닿기 전에 날아갔다**. 상한의 목적은
+    #      빨리 끝내는 게 아니라 **받은 것을 지키면서** 끝내는 것이다 — 조기 마감이 산출물을
+    #      0으로 만들면 이 설계는 실패한 것이다.
+    etf_map, responses = _multi_etf(4)
+    # 시각: fetch 시작(0) → 1번째 확인(0) → 2번째 확인(100, 상한 초과) → 경과 계산(100)
+    _clock(monkeypatch, [0, 0, 100, 100])
+    src = _source(responses, etf_map=etf_map)
+    src.deadline_sec = 50
+
+    rows = list(src.fetch())
+
+    assert len(rows) == 1, "상한 전에 받은 ETF 의 행은 그대로 나와야 한다"
+    assert src.planned_etfs == 4
+
+
+def test_상한에_걸린_대상은_정체를_남긴다(monkeypatch):
+    # WHY: "몇 종 실패"만으로는 다음 날 무엇을 복구할지 모른다. KRX 는 trdDd 백필 수단이 없어
+    #      (ALPHA-387) 그날 못 받은 ETF 는 그날로 끝이라, **미시도 목록이 곧 결손 목록**이다.
+    #      개수만 세는 구현으로 바뀌면 이 테스트가 깨져야 한다.
+    etf_map, responses = _multi_etf(4)
+    _clock(monkeypatch, [0, 0, 100, 100])
+    src = _source(responses, etf_map=etf_map)
+    src.deadline_sec = 50
+
+    list(src.fetch())
+
+    unattempted = [f for f in src.fetch_failures if "미시도" in f["error"]]
+    assert len(unattempted) == 3, "상한 뒤 남은 3종이 하나씩 기록돼야 한다"
+    assert [f["isin"] for f in unattempted] == sorted(etf_map.values())[1:]
+    assert all("50초" in f["error"] for f in unattempted)  # 어느 상한에 걸렸는지
+
+
+def test_상한_미지정이면_전량_수집한다(monkeypatch):
+    # WHY: 기본은 무제한이어야 로컬·수동 실행과 다른 스텝의 동작이 이 변경으로 안 바뀐다.
+    #      상한이 기본값으로 켜지면 느린 날 조용히 부분 수집이 되고 아무도 모른다.
+    etf_map, responses = _multi_etf(4)
+    _clock(monkeypatch, [0, 10_000, 20_000, 30_000, 40_000])  # 시간이 아무리 흘러도
+    src = _source(responses, etf_map=etf_map)
+    assert src.deadline_sec is None
+
+    rows = list(src.fetch())
+
+    assert len(rows) == 4
+    assert src.fetch_failures == []
