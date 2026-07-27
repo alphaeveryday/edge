@@ -69,8 +69,8 @@ sha256=<hex>` 헤더를 실으며, `BundleSerializer`가 직렬화를 한 번만
   맞다. 원본 보존이 필요하면 소비자가 수신 바이트를 저장하면 되고 서버 응답 형식과 무관하다.
 
 ## 결과
-- **후속 작업 범위(채택 시, 별도 티켓)** — 이 변경은 서버 한 곳이 아니라 이미 구축된 sync 경로 전체에
-  파급된다. 이 ADR은 결정만 기록하고 구현은 후속 티켓이다:
+- **후속 작업 범위(별도 티켓 — 구현 에픽 ALPHA-582)** — 이 변경은 서버 한 곳이 아니라 이미 구축된
+  sync 경로 전체에 파급된다. 이 ADR은 결정만 기록하고 구현은 후속 티켓(T1~T4)이다:
   - ① Cloud `SyncBundleController`(byte[]→봉투 반환)·`BundleSerializer`(SHA-256 경로 제거). **주의**:
     `BundleSerializer`가 유일하게 설정하는 `PropertyNamingStrategies.SNAKE_CASE`도 함께 사라진다 —
     `EventBundle`에 필드 애너테이션이 없고 전역 Jackson naming 설정도 없어, Spring 기본 직렬화로 바꾸면
