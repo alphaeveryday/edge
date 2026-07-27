@@ -356,6 +356,16 @@ module "data_pipeline" {
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
 
+  # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
+  # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
+  # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이
+  # 불가능한 TAG_NEWS(deepseek task-def 에 DB env 없음, ALPHA-181 명시적 제외)가 backfill 로
+  # PENDING→FULFILLED, 거짓 이슈 0건.
+  # ⚠️ 남는 사각(ALPHA-565): 주기 실행은 `_due_slot()` 의 스케줄 슬롯 하나만 대조한다 — 수동
+  # 슬롯은 OPS_RUN_KEY 를 명시해야 대조된다. 켜는 것이 그 사각을 만드는 건 아니다(지금은 아무
+  # 런도 대조되지 않으므로 순증).
+  reconcile_schedule_state = "ENABLED"
+
   # KR 평일 휴장일 2026 (ALPHA-387). 비면 Planner 는 휴장일에도 런을 계획하고, KRX 수집은 그날
   # 오는 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다 — 주말만 코드가 알기 때문이다.
   # ⚠️ **해마다 갱신해야 한다**(거래소 캘린더 연동 전까지의 수동 주입 지점, trading_calendar.py).
