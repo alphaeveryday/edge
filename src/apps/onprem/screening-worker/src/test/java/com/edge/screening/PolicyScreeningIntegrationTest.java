@@ -133,4 +133,35 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 		assertThatThrownBy(() -> checkRepository.append("it429-fk", versionB, ruleA, "REVIEW", "x"))
 				.isInstanceOf(DataIntegrityViolationException.class);
 	}
+
+	@Test
+	void 상태_전이_이력이_SYSTEM_체인으로_실테이블에_남는다() {
+		// WHY: 시점 상태 완전 재현(state-machine·exposure-log) — 진입(NULL→상태)과 정정
+		// 종결(실제 직전 상태→CORRECTED)이 actor CHECK(SYSTEM=actor_id NULL)를 통과하며
+		// 콘솔(436)이 읽는 원장에 그대로 쌓여야 한다.
+		seedActivePolicy(true, null);
+		screener.screen(90105L, newBundle("it431-h1", "IT431A", "무해한 요약"));
+		screener.screen(90106L, ("""
+				{"cursor_from":2,"cursor_to":2,"entries":[{"cursor":2,"delivery_type":"CORRECTION",
+				 "target_explanation_result_id":"it431-h1","reason":"근거 정정",
+				 "source_events":[],"evidences":[],
+				 "explanation_result":{"explanation_result_id":"it431-h2","etf_instrument_id":"i-431",
+				 "etf_ticker":"IT431A","etf_name":"KODEX 200","trade_date":"2026-07-15",
+				 "explanation_as_of":"2026-07-15T16:00:00+09:00","explanation_type":"EVENT_SUPPORTED",
+				 "summary":"정정 요약","confidence_level":"MEDIUM"}}]}""")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+		var rows = jdbc.queryForList("SELECT analysis_item_id, from_status, to_status, actor_type, "
+				+ "actor_id, reason FROM analysis_item_status_history "
+				+ "WHERE analysis_item_id IN ('it431-h1','it431-h2') ORDER BY status_history_id");
+		assertThat(rows).hasSize(3);
+		assertThat(rows.get(0)).containsEntry("analysis_item_id", "it431-h1")
+				.containsEntry("from_status", null).containsEntry("to_status", "AUTO_PUBLISHED")
+				.containsEntry("actor_type", "SYSTEM").containsEntry("actor_id", null);
+		assertThat(rows.get(1)).containsEntry("analysis_item_id", "it431-h1")
+				.containsEntry("from_status", "AUTO_PUBLISHED")   // 잠금 조회로 얻은 실제 직전 상태
+				.containsEntry("to_status", "CORRECTED").containsEntry("reason", "근거 정정");
+		assertThat(rows.get(2)).containsEntry("analysis_item_id", "it431-h2")
+				.containsEntry("from_status", null).containsEntry("to_status", "AUTO_PUBLISHED");
+	}
 }

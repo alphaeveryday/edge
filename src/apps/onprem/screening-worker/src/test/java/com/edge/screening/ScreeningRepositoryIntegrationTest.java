@@ -47,6 +47,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 		// screening_check(ALPHA-429)가 analysis_item 을 FK 참조한다 — 자식 먼저 지워야
 		// 공유 컨테이너에서 다른 IT 가 남긴 판정 근거가 이 클린업을 깨뜨리지 않는다.
 		jdbc.update("DELETE FROM screening_check");
+		jdbc.update("DELETE FROM analysis_item_status_history");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
 		jdbc.update("DELETE FROM received_bundle");

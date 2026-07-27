@@ -8,7 +8,9 @@ import com.edge.screening.policy.ActivePolicy;
 import com.edge.screening.policy.PolicyEvaluator;
 import com.edge.screening.policy.PolicyRule;
 import com.edge.screening.policy.ScreeningDecision;
+import com.edge.screening.entity.AnalysisItemStatusHistory;
 import com.edge.screening.repository.AnalysisItemRepository;
+import com.edge.screening.repository.AnalysisItemStatusHistoryRepository;
 import com.edge.screening.repository.PendingBundleRepository;
 import com.edge.screening.repository.PolicyRepository;
 import com.edge.screening.repository.PublicationRepository;
@@ -34,6 +36,8 @@ import java.util.List;
  *   신규와 동일한 정책 평가를 거친다(결정 변경 2026-07-27, ALPHA-430) — 청정 정정은 자동
  *   재게시, 걸리면 REVIEW_REQUIRED/BLOCKED. supersedes 연결·원장 보존 불변.
  * - INVALIDATION: item·게시분 INVALIDATED — 즉시 비노출(검수·정책 불요, 보수적 방향).
+ * 자기 소유 전이는 같은 트랜잭션에서 analysis_item_status_history 에 SYSTEM 행으로 남긴다
+ * (ALPHA-431 — 스키마 writer 분담: SYSTEM=이 모듈, MEMBER=콘솔 검수 결정).
  * 형상 위반(미지의 delivery_type·본체 결측)은 마킹 없이 실패 — 오류가 조용히 소화되지 않는다.
  */
 @Service
@@ -47,6 +51,7 @@ public class BundleScreener {
 	private final PolicyRepository policyRepository;
 	private final ScreeningRuleRepository screeningRuleRepository;
 	private final ScreeningCheckRepository screeningCheckRepository;
+	private final AnalysisItemStatusHistoryRepository statusHistoryRepository;
 	private final DeliveryBundleParser parser = new DeliveryBundleParser();
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -55,13 +60,15 @@ public class BundleScreener {
 			PublicationRepository publicationRepository,
 			PolicyRepository policyRepository,
 			ScreeningRuleRepository screeningRuleRepository,
-			ScreeningCheckRepository screeningCheckRepository) {
+			ScreeningCheckRepository screeningCheckRepository,
+			AnalysisItemStatusHistoryRepository statusHistoryRepository) {
 		this.pendingBundleRepository = pendingBundleRepository;
 		this.analysisItemRepository = analysisItemRepository;
 		this.publicationRepository = publicationRepository;
 		this.policyRepository = policyRepository;
 		this.screeningRuleRepository = screeningRuleRepository;
 		this.screeningCheckRepository = screeningCheckRepository;
+		this.statusHistoryRepository = statusHistoryRepository;
 	}
 
 	@Transactional
@@ -140,9 +147,15 @@ public class BundleScreener {
 		if (target == null) {
 			throw new IllegalStateException("CORRECTION 에 target_explanation_result_id 가 없다 — 계약 위반");
 		}
-		// 구 리비전 종결 + 게시분 즉시 비노출 — 대상 미수신(gap)은 로그로 표면화(gap 감지는 후속)
+		// 구 리비전 종결 + 게시분 즉시 비노출 — 대상 미수신(gap)은 로그로 표면화(gap 감지는 후속).
+		// 전이 직전 상태를 잠금 조회(lockStatus)해 이력 from_status 의 정확성을 보장한다(ALPHA-431).
+		String previousStatus = analysisItemRepository.lockStatus(target);
 		int corrected = analysisItemRepository.transition(target, "CORRECTED");
 		int unpublished = publicationRepository.transitionByItem(target, "UNPUBLISHED");
+		if (corrected == 1) {
+			statusHistoryRepository.save(new AnalysisItemStatusHistory(target, previousStatus,
+					"CORRECTED", entry.reason()));
+		}
 		if (corrected == 0) {
 			// 0행 = 대상 미수신(gap) 또는 이미 종결(멱등 재수신) — 리포지토리 계약상 구분
 			// 불가(read 미노출). 확정 오진을 피해 두 가능성을 그대로 표면화한다(gap 감지는 ALPHA-494).
@@ -158,6 +171,8 @@ public class BundleScreener {
 			if (upsertItem(entry, target, entry.reason(), "REVIEW_REQUIRED") == 0) {
 				log.info("CORRECTION 재수신 skip id={} — 기존 판정 보존(멱등)", result.explanationResultId());
 			} else {
+				statusHistoryRepository.save(new AnalysisItemStatusHistory(
+						result.explanationResultId(), null, "REVIEW_REQUIRED", entry.reason()));
 				log.warn("CORRECTION 정정분 판정 보류 — 활성 정책 0건, REVIEW_REQUIRED 보존 (id={})",
 						result.explanationResultId());
 			}
@@ -181,6 +196,9 @@ public class BundleScreener {
 			log.info("{} 재수신 skip id={} — 판정·게시 생략(멱등)", kind, result.explanationResultId());
 			return;
 		}
+		// 최초 진입(SYSTEM) 이력 — 감사 재현의 시점 원장(ALPHA-431). from NULL = 수신 진입.
+		statusHistoryRepository.save(new AnalysisItemStatusHistory(result.explanationResultId(),
+				null, decision.status(), correctionReason));
 		for (ScreeningDecision.Check check : decision.checks()) {
 			screeningCheckRepository.append(result.explanationResultId(), policy.policyVersionId(),
 					check.ruleId(), check.result(), check.matchedText());
@@ -208,8 +226,14 @@ public class BundleScreener {
 		if (target == null) {
 			throw new IllegalStateException("INVALIDATION 에 target_explanation_result_id 가 없다 — 계약 위반");
 		}
+		String previousStatus = analysisItemRepository.lockStatus(target);
 		int invalidated = analysisItemRepository.transition(target, "INVALIDATED");
 		int removed = publicationRepository.transitionByItem(target, "INVALIDATED");
+		if (invalidated == 1) {
+			// 자기 소유 전이는 같은 트랜잭션에서 SYSTEM 이력으로 남긴다(ALPHA-431, 스키마 writer 분담).
+			statusHistoryRepository.save(new AnalysisItemStatusHistory(target, previousStatus,
+					"INVALIDATED", entry.reason()));
+		}
 		if (invalidated == 0) {
 			log.warn("INVALIDATION 대상 미수신 target={} — gap 가능성(감지는 후속)", target);
 		}
