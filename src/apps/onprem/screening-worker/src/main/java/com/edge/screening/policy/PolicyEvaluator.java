@@ -65,6 +65,9 @@ public final class PolicyEvaluator {
 							"룰(rule_id=" + rule.ruleId() + ")의 params.text 가 없다 — 계약 위반");
 				}
 				DeliveryEntry.ExplanationResult result = entry.explanationResult();
+				// headline 은 현행 와이어 계약(event-bundle.schema.json)에 없어 항상 null 이다 —
+				// analysis_item 컬럼이 이미 있어 계약 확장 시 매칭이 자동으로 유효해지도록
+				// 선제 검사한다(그때 빼먹으면 조용한 우회 경로가 된다).
 				yield contains(result.headline(), text) || contains(result.summary(), text) ? text : null;
 			}
 			case "SINGLE_SOURCE" -> entry.sourceEventCount() < SINGLE_SOURCE_THRESHOLD

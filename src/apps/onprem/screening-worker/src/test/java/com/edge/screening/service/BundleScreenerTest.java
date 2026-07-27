@@ -254,6 +254,82 @@ class BundleScreenerTest {
 	}
 
 	@Test
+	void 빈_entries_번들은_마킹_없이_실패한다() {
+		// WHY: 와이어 계약은 minItems=1(빈 번들은 만들지 않는다 — 신규 없음은 204). 빈
+		// entries 를 성공 처리하면 그 cursor 구간이 "정상 점검됨"으로 영구 마킹돼
+		// 계약 위반이 은폐된다(Rule 12).
+		Executable call = () -> screener.screen(8, bundle(""));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void 정체성_필드가_문자열이_아니면_마킹_없이_실패한다() {
+		// WHY: Jackson 의 asString 은 숫자를 "123" 으로 강제한다 — 숫자 target 이 조용히
+		// 문자열이 되면 전이 0행 + 경고만 남기고 번들이 마킹돼, malformed 무효화가
+		// 재시도 없이 영구 소화된다(안티커럽션 계층이 막아야 할 강제 통과).
+		Executable invalidation = () -> screener.screen(9,
+				bundle("{\"cursor\":9,\"delivery_type\":\"INVALIDATION\",\"target_explanation_result_id\":123}"));
+		Executable brokenNew = () -> screener.screen(10,
+				bundle("{\"cursor\":10,\"delivery_type\":\"NEW\",\"explanation_result\":" +
+						RESULT.replace("\"er-1\"", "123") + "}"));
+
+		assertThrows(IllegalStateException.class, invalidation);
+		assertThrows(IllegalStateException.class, brokenNew);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void 노출_문면_필드가_문자열이_아니면_마킹_없이_실패한다() {
+		// WHY: summary 는 정책 매칭 대상이자 고객 노출 문면이다 — 숫자가 "123" 으로
+		// 강제되면 금칙어 게이트가 원본 malformed 를 못 보고 그대로 게시까지 간다.
+		Executable call = () -> screener.screen(12,
+				bundle("{\"cursor\":12,\"delivery_type\":\"NEW\",\"explanation_result\":" +
+						RESULT.replace("\"summary\":\"s\"", "\"summary\":123") + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void source_events_요소가_객체가_아니면_실패한다() {
+		// WHY: 출처 수는 정책 게이트(SINGLE_SOURCE·min_source_count)의 입력이다 —
+		// [null,null] 이 2건으로 세지면 malformed 근거가 출처 기준을 통과한다.
+		Executable call = () -> screener.screen(13,
+				bundle("{\"cursor\":13,\"delivery_type\":\"NEW\",\"source_events\":[null,null]," +
+						"\"explanation_result\":" + RESULT + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void cursor가_long_범위를_벗어나면_실패한다() {
+		// WHY: source_cursor 는 수신 원본↔항목의 감사 키다 — 오버플로 손실 변환된 값이
+		// 조용히 저장되면 추적 관계가 원본과 어긋난 채 확정된다.
+		Executable call = () -> screener.screen(14,
+				bundle("{\"cursor\":9223372036854775808,\"delivery_type\":\"NEW\",\"explanation_result\":" +
+						RESULT + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void params_text가_문자열이_아닌_룰은_실패한다() {
+		// WHY: {"text": true} 가 "true" 매칭룰로 조용히 동작하면 잘못 구성된 정책이
+		// 무력화된 채 정상인 척한다(Rule 12) — 설정 결함은 판정 전에 드러나야 한다.
+		rules = List.of(new ScreeningRule(1L, 10L, "BANNED_WORD", "{\"text\":true}", "BLOCK", true));
+
+		Executable call = () -> screener.screen(11,
+				bundle("{\"cursor\":11,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
 	void 미지의_delivery_type은_마킹_없이_실패한다() {
 		// WHY: 새 전달 유형이 조용히 소화되면(스킵+마킹) 그 번들의 의미가 영영 유실된다(Rule 12).
 		Executable call = () -> screener.screen(4,

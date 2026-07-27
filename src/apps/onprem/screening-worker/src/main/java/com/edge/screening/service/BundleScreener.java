@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -98,8 +99,15 @@ public class BundleScreener {
 
 	private PolicyRule toRule(ScreeningRule row) {
 		// params 는 인스턴스 설정값 JSONB — 텍스트 룰의 매칭 대상은 params.text (DDL 주석).
-		String text = objectMapper.readTree(row.getParams()).path("text").asString(null);
-		return new PolicyRule(row.getScreeningRuleId(), row.getRuleType(), text, row.getAction());
+		// 비문자열 text 를 asString 으로 강제하면({"text":true} → "true") 잘못 구성된
+		// 정책이 무력화된 채 정상인 척한다 — 설정 결함은 판정 전에 드러낸다(Rule 12).
+		JsonNode text = objectMapper.readTree(row.getParams()).path("text");
+		if (!text.isMissingNode() && !text.isNull() && !text.isString()) {
+			throw new IllegalStateException(
+					"룰(rule_id=" + row.getScreeningRuleId() + ")의 params.text 가 문자열이 아니다 — 계약 위반");
+		}
+		return new PolicyRule(row.getScreeningRuleId(), row.getRuleType(),
+				text.isString() ? text.asString() : null, row.getAction());
 	}
 
 	private void screenNew(DeliveryEntry entry, ActivePolicy policy) {
