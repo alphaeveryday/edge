@@ -1,5 +1,6 @@
 package com.edge.screening.repository;
 
+import com.edge.screening.entity.PolicyVersion;
 import com.edge.screening.service.BundleScreener;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.JsonSchema;
@@ -11,12 +12,14 @@ import org.mockito.ArgumentCaptor;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Consumer(wire) 측 계약 테스트 — 실제 wire 소비자 {@link BundleScreener}가 번들의
@@ -50,7 +53,15 @@ class EventBundleContractTest {
 		PendingBundleRepository pending = mock(PendingBundleRepository.class);
 		AnalysisItemRepository analysis = mock(AnalysisItemRepository.class);
 		PublicationRepository publications = mock(PublicationRepository.class);
-		BundleScreener screener = new BundleScreener(pending, analysis, publications);
+		PolicyRepository policies = mock(PolicyRepository.class);
+		ScreeningRuleRepository rules = mock(ScreeningRuleRepository.class);
+		ScreeningCheckRepository checks = mock(ScreeningCheckRepository.class);
+		// NEW 판정은 활성 정책이 전제 — 관대한 정책(자동 제공 ON·룰 없음)으로 통과시킨다.
+		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null)));
+		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
+		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+				any(), any(), any(), anyLong(), any())).thenReturn(1);
+		BundleScreener screener = new BundleScreener(pending, analysis, publications, policies, rules, checks);
 
 		// 계약을 만족하는 populated evidences 를 담은 NEW 번들을 실제로 screen 한다
 		String bundle = newBundleWith(

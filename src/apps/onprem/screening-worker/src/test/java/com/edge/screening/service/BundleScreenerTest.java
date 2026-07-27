@@ -1,9 +1,14 @@
 package com.edge.screening.service;
 
+import com.edge.screening.entity.PolicyVersion;
 import com.edge.screening.entity.ReceivedBundle;
+import com.edge.screening.entity.ScreeningRule;
 import com.edge.screening.repository.AnalysisItemRepository;
 import com.edge.screening.repository.PendingBundleRepository;
+import com.edge.screening.repository.PolicyRepository;
 import com.edge.screening.repository.PublicationRepository;
+import com.edge.screening.repository.ScreeningCheckRepository;
+import com.edge.screening.repository.ScreeningRuleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
@@ -13,14 +18,17 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * 상태 분기 계약(state-machine.md 확정 결정)을 검증한다:
- * NEW=AUTO_PUBLISHED+자동 게시 / CORRECTION=구 리비전 종결·비노출 + 새 리비전
- * REVIEW_REQUIRED(자동 노출 경로 없음) / INVALIDATION=즉시 비노출 / 형상 위반=마킹 없이 실패.
+ * NEW=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는 AUTO_PUBLISHED 만·근거는
+ * screening_check) / 활성 정책 0건=NEW 진행 중단(무효화는 정책 무관 진행) / CORRECTION=구 리비전
+ * 종결·비노출 + 새 리비전 REVIEW_REQUIRED(자동 노출 경로 없음) / INVALIDATION=즉시 비노출 /
+ * 형상 위반=마킹 없이 실패.
  */
 class BundleScreenerTest {
 
@@ -29,7 +37,7 @@ class BundleScreenerTest {
 			 "etf_name":"KODEX 200","trade_date":"2026-07-15","explanation_as_of":"2026-07-15T16:00:00+09:00",
 			 "explanation_type":"EVENT_SUPPORTED","summary":"s","confidence_level":"MEDIUM"}""";
 
-	private static final class RecordingItems implements AnalysisItemRepository {
+	private static class RecordingItems implements AnalysisItemRepository {
 		record Upserted(String id, String supersedes, String reason, String status) {
 		}
 
@@ -84,9 +92,23 @@ class BundleScreenerTest {
 		}
 	}
 
+	/** 판정 근거 기록 대역 — screening_check append 를 문자열로 수집한다. */
+	private static final class RecordingChecks implements ScreeningCheckRepository {
+		final List<String> appended = new ArrayList<>();
+
+		@Override
+		public void append(String analysisItemId, long policyVersionId, Long screeningRuleId,
+				String result, String matchedText) {
+			appended.add(analysisItemId + ":" + result + ":" + screeningRuleId + ":" + matchedText);
+		}
+	}
+
 	private RecordingItems items;
 	private RecordingPublications publications;
 	private RecordingPending pending;
+	private RecordingChecks checks;
+	private Optional<PolicyVersion> activePolicy;
+	private List<ScreeningRule> rules;
 	private BundleScreener screener;
 
 	@BeforeEach
@@ -94,7 +116,13 @@ class BundleScreenerTest {
 		items = new RecordingItems();
 		publications = new RecordingPublications();
 		pending = new RecordingPending();
-		screener = new BundleScreener(pending, items, publications);
+		checks = new RecordingChecks();
+		// 기본 대역 = 관대한 활성 정책(자동 제공 ON·룰 없음) — 기존 NEW 자동 게시 케이스 유지.
+		activePolicy = Optional.of(new PolicyVersion(10L, true, null));
+		rules = List.of();
+		PolicyRepository policies = () -> activePolicy;
+		ScreeningRuleRepository ruleRepo = versionId -> rules;
+		screener = new BundleScreener(pending, items, publications, policies, ruleRepo, checks);
 	}
 
 	private static byte[] bundle(String entries) {
@@ -109,6 +137,94 @@ class BundleScreenerTest {
 
 		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");
+		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void 활성_정책이_없으면_NEW는_마킹_없이_실패한다() {
+		// WHY: screening_check.policy_version_id 는 NOT NULL — 정책 없이 상태를 정하면
+		// 감사 근거 없는 전이가 된다. 정책 부재 = 진행 중단(DDL 주석 확정), 발행 후 재시도.
+		activePolicy = Optional.empty();
+
+		Executable call = () -> screener.screen(1,
+				bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+		assertThat(items.upserts).isEmpty();
+	}
+
+	@Test
+	void 활성_정책이_없어도_INVALIDATION은_진행된다() {
+		// WHY: 무효화는 잘못된 노출을 걷어내는 안전 조치다 — 온보딩(정책 발행) 전이라는
+		// 이유로 비노출이 멈추면 보수적 방향이 뒤집힌다.
+		activePolicy = Optional.empty();
+
+		screener.screen(3, bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
+				"\"target_explanation_result_id\":\"er-2\"}"));
+
+		assertThat(items.transitions).containsExactly("er-2:INVALIDATED");
+		assertThat(pending.screened).containsExactly(3L);
+	}
+
+	@Test
+	void BLOCK_룰에_걸린_NEW는_BLOCKED로_적재되고_게시되지_않는다() {
+		// WHY: 차단 판정이 게시를 막지 못하면 정책이 장식이 된다 — 게시는 AUTO_PUBLISHED 전용.
+		rules = List.of(new ScreeningRule(1L, 10L, "BANNED_WORD", "{\"text\":\"급등 확실\"}", "BLOCK", true));
+		String risky = RESULT.replace("\"summary\":\"s\"", "\"summary\":\"급등 확실 전망\"");
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + risky + "}"));
+
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "BLOCKED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).containsExactly("er-1:BLOCK:1:급등 확실");
+	}
+
+	@Test
+	void 자동_제공_스위치_OFF_정책은_NEW를_검수_대기로_보낸다() {
+		// WHY: 온보딩 기본값 = AUTO_PUBLISHED 0%(전건 검수, 티켓 확정). 스위치 OFF 근거는
+		// 룰 무관(rule_id NULL) REVIEW 행으로 남는다.
+		activePolicy = Optional.of(new PolicyVersion(10L, false, null));
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts)
+				.containsExactly(new RecordingItems.Upserted("er-1", null, null, "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).containsExactly("er-1:REVIEW:null:null");
+	}
+
+	@Test
+	void 청정_통과_NEW는_PASS_근거와_함께_게시된다() {
+		// WHY: 자동 게시에도 "어느 정책으로 통과했나"(PASS 행)가 남아야 민원 재현이 온전하다.
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
+		assertThat(publications.published).containsExactly("er-1");
+		assertThat(checks.appended).containsExactly("er-1:PASS:null:null");
+	}
+
+	@Test
+	void 재수신_NEW는_판정_기록도_게시도_남기지_않는다() {
+		// WHY: upsert 0행 = 이미 판정된 항목의 멱등 재수신 — check 를 또 쌓으면 append-only
+		// 감사 원장에 같은 판정이 중복돼 재현이 오염된다.
+		items = new RecordingItems() {
+			@Override
+			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
+					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
+					String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
+					long sourceCursor, String status) {
+				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
+						threadId, evidencesJson, supersedesItemId, correctionReason, sourceCursor, status);
+				return 0;
+			}
+		};
+		screener = new BundleScreener(pending, items, publications, () -> activePolicy, versionId -> rules, checks);
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(checks.appended).isEmpty();
+		assertThat(publications.published).isEmpty();
 		assertThat(pending.screened).containsExactly(1L);
 	}
 
