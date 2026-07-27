@@ -63,7 +63,7 @@ hooks.ts             페이지가 쓰는 hook (TanStack Query)
 ```
 
 도메인: `explanations`(가격 변동 설명·반입 상태) · `screening`(점검 기준) · `scope`(제공 범위) ·
-`users`(사용자·권한) · `session`(로그인 사용자·테넌트).
+`users`(사용자·권한) · `session`(로그인 사용자·테넌트) · `dashboard`(제공 API 트래픽 KPI, ALPHA-128).
 한글 라벨·배지 톤 매핑은 `explanations/labels.ts` (뷰 관심사 — 도메인 코드와 분리).
 
 ## 스타일 규약

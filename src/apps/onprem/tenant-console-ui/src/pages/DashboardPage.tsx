@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { Delta } from 'ui-kit';
+import { useTrafficSummary } from '../domains/dashboard/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
 import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
@@ -8,13 +9,19 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const explanationsQuery = useExplanations();
   const feedQuery = useFeedStatus();
+  const trafficQuery = useTrafficSummary();
 
-  if (explanationsQuery.isError || feedQuery.isError) return <LoadError />;
-  // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 둘 다 로드된 뒤 렌더
-  if (explanationsQuery.isPending || feedQuery.isPending) return null;
+  if (explanationsQuery.isError || feedQuery.isError || trafficQuery.isError) return <LoadError />;
+  // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 전부 로드된 뒤 렌더
+  if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending) return null;
 
   const items = explanationsQuery.data;
   const feed = feedQuery.data;
+  const traffic = trafficQuery.data;
+  const errorRate =
+    traffic.totalRequests === 0
+      ? '0%'
+      : `${((traffic.errorRequests / traffic.totalRequests) * 100).toFixed(1)}%`;
   const count = (status: string) => items.filter((it) => it.status === status).length;
 
   return (
@@ -66,6 +73,13 @@ export function DashboardPage() {
             <div className="kpi-label">제공 중단</div>
             <div className="kpi-value">{count('UNPUBLISHED')}</div>
             <div className="kpi-sub">운영자 수동 중단</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">제공 API 요청 (24시간)</div>
+            <div className="kpi-value">{traffic.totalRequests}</div>
+            <div className="kpi-sub">
+              에러 {traffic.errorRequests}건 · 에러율 {errorRate}
+            </div>
           </div>
         </div>
       </div>

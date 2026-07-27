@@ -2,14 +2,17 @@ package com.edge.tenantconsole.auth;
 
 import com.edge.tenantconsole.config.TenantContextProperties;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
+import com.edge.tenantconsole.controller.DashboardController;
 import com.edge.tenantconsole.controller.ReviewController;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
+import com.edge.tenantconsole.model.TrafficSummary;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.service.ConsoleActionLogService;
 import com.edge.tenantconsole.service.ConsoleSessionService;
+import com.edge.tenantconsole.service.DashboardService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -161,7 +164,9 @@ class ConsoleAuthFilterTest {
 		mvc = MockMvcBuilders.standaloneSetup(
 						new ReviewController(reviewService),
 						new ConsoleSessionController(new ConsoleSessionService(members),
-								new TenantContextProperties("KB증권", "kbsec.com", "KB")))
+								new TenantContextProperties("KB증권", "kbsec.com", "KB")),
+						new DashboardController(
+								new DashboardService(since -> new TrafficSummary(0, 0))))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
 	}
@@ -185,6 +190,16 @@ class ConsoleAuthFilterTest {
 	@Test
 	void 조회는_전_역할_공통이다() throws Exception {
 		mvc.perform(get("/api/v1/review/items").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 대시보드_트래픽은_인증_필수_전_역할_조회다() throws Exception {
+		// WHY: Dashboard 는 전 역할 공통 화면이다(permission-matrix) — 단 메트릭도
+		// 콘솔 내부 관측 데이터라 미인증엔 fail-closed(401)여야 한다.
+		mvc.perform(get("/api/v1/dashboard/traffic"))
+				.andExpect(status().isUnauthorized());
+		mvc.perform(get("/api/v1/dashboard/traffic").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isOk());
 	}
 
