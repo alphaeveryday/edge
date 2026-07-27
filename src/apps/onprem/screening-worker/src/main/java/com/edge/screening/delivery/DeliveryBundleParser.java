@@ -21,7 +21,22 @@ public final class DeliveryBundleParser {
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	public List<DeliveryEntry> parse(long cursorFrom, byte[] body) {
-		JsonNode entries = objectMapper.readTree(body).path("entries");
+		JsonNode root = objectMapper.readTree(body);
+		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(isSuccess 마커로 식별, 번들은 result 아래),
+		// 구형은 루트가 곧 번들. isSuccess 는 boolean true 만 수용 — 실패·타입 위반 봉투는 fail-loud
+		// 거부한다(intake 게이트의 방어 심화 + 롤링 배포·구버전 저장분 대비, 고객 대면 게시 경로).
+		JsonNode isSuccess = root.path("isSuccess");
+		JsonNode bundle;
+		if (isSuccess.isMissingNode()) {
+			bundle = root;
+		} else {
+			if (!isSuccess.isBoolean() || !isSuccess.asBoolean(false)) {
+				throw new IllegalStateException(
+						"봉투 isSuccess 가 true(boolean)가 아니다 — 계약 위반 (cursor_from=" + cursorFrom + ")");
+			}
+			bundle = root.path("result");
+		}
+		JsonNode entries = bundle.path("entries");
 		if (!entries.isArray()) {
 			throw new IllegalStateException("번들 body 에 entries 배열이 없다 — 계약 위반 (cursor_from=" + cursorFrom + ")");
 		}

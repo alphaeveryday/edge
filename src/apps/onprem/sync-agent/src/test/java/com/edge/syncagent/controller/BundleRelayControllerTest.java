@@ -54,6 +54,17 @@ class BundleRelayControllerTest {
 	}
 
 	@Test
+	void 체크섬이_없는_신형_번들은_헤더_없이_바이트만_전달된다() throws Exception {
+		// WHY: 봉투 전환(ADR-0040) 후 상류는 X-Bundle-Checksum 을 보내지 않는다 — 헤더를 붙이면
+		// 하류(intake)가 존재하지 않는 검증값을 기대하게 된다. 바이트는 그대로 무변형 전달.
+		mvcWith(stub(Optional.of(new BundleRelayService.VerifiedBundle(BODY, null))))
+				.perform(get("/internal/v1/bundles").param("after", "0"))
+				.andExpect(status().isOk())
+				.andExpect(header().doesNotExist("X-Bundle-Checksum"))
+				.andExpect(content().bytes(BODY));
+	}
+
+	@Test
 	void 신규_없음은_204_그대로다() throws Exception {
 		mvcWith(stub(Optional.empty()))
 				.perform(get("/internal/v1/bundles").param("after", "3"))

@@ -67,6 +67,22 @@ class BundleIngestorTest {
 	}
 
 	@Test
+	void 신형_봉투_번들은_result_아래_cursor로_전진한다() {
+		// WHY: cloud 봉투 전환(ADR-0040) 후 body 는 ApiResponse 봉투(result 아래에 번들)다 —
+		// intake 는 구(root)·신(result) 형상을 모두 견뎌야 한다(이중형상 관용). 저장 body 는
+		// 봉투 원본 그대로 두고 파싱만 봉투 감지형으로 처리한다.
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		long advanced = new BundleIngestor(bundles, state).ingest(bundle(
+				"{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\","
+						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
+
+		assertThat(advanced).isEqualTo(3);
+		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3, "sha256=stub"));
+		assertThat(state.advanced).containsExactly(3L);
+	}
+
+	@Test
 	void 부분_겹침_번들은_전진하지_않는다() {
 		// WHY: cursor_from 이 저장돼 있는데(conflict-skip) 범위가 committed 를 넘는 번들에서
 		// 전진하면 겹치지 않은 구간이 영영 저장되지 않는다(at-least-once 위반 — 경쟁
@@ -80,6 +96,22 @@ class BundleIngestorTest {
 				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":100}"));
 
 		assertThrows(IllegalStateException.class, call);
+		assertThat(state.advanced).isEmpty();
+	}
+
+	@Test
+	void 실패_봉투는_저장_없이_실패한다() {
+		// WHY: ApiResponse.onFailure 도 non-null result 를 허용한다(ADR-0040) — 실패 봉투가 200 으로
+		// 오면(업스트림 버그·경계 오염) 성공 데이터로 처리돼 cursor 를 커밋하고 malformed 를 하류로
+		// 흘린다. isSuccess=false 는 봉투 감지 즉시 fail-loud 로 거부한다(저장·전진 없음).
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		Executable call = () -> new BundleIngestor(bundles, state).ingest(bundle(
+				"{\"isSuccess\":false,\"code\":\"SYNC5000\",\"message\":\"err\","
+						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(bundles.saved).isEmpty();
 		assertThat(state.advanced).isEmpty();
 	}
 

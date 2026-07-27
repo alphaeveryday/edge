@@ -153,6 +153,13 @@ class BundleScreenerTest {
 				.getBytes(StandardCharsets.UTF_8);
 	}
 
+	/** 신형 와이어 형상 — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다(ADR-0040). */
+	private static byte[] envelopeBundle(String entries) {
+		return ("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":"
+				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}}")
+				.getBytes(StandardCharsets.UTF_8);
+	}
+
 	@Test
 	void NEW는_AUTO_PUBLISHED로_적재되고_자동_게시된다() {
 		// WHY: walking skeleton 정책 = 무조건 통과. 게시돼야 Publication API 가 서빙한다.
@@ -161,6 +168,35 @@ class BundleScreenerTest {
 		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");
 		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void 신형_봉투_번들도_NEW를_자동_게시한다() {
+		// WHY: cloud 봉투 전환(ADR-0040) 후 저장 body 는 ApiResponse 봉투(result 아래에 번들)다 —
+		// 파서는 구(root)·신(result) 형상을 모두 견뎌야 한다. 없으면 미점검 구형 저장분 하나가
+		// ScreeningPoller(첫 실패서 순서보존 중단)를 영구 차단한다.
+		screener.screen(1, envelopeBundle(
+				"{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
+		assertThat(publications.published).containsExactly("er-1");
+		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void 실패_봉투는_마킹_없이_실패한다() {
+		// WHY: 봉투는 isSuccess=true(boolean) 만 성공 — 실패·타입 위반 봉투의 result 에 유효 entries 가
+		// 있어도 파싱·게시하면 고객 대면 오염 콘텐츠(AUTO_PUBLISHED)가 노출된다. 파서가 자체 fail-loud
+		// 로 거부한다(intake 게이트의 방어 심화). cursor 미전진·마킹 없음.
+		byte[] failure = ("{\"isSuccess\":false,\"code\":\"SYNC5000\",\"message\":\"err\",\"result\":"
+				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":["
+				+ "{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}]}}")
+				.getBytes(StandardCharsets.UTF_8);
+		Executable call = () -> screener.screen(1, failure);
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(publications.published).isEmpty();
+		assertThat(pending.screened).isEmpty();
 	}
 
 	@Test

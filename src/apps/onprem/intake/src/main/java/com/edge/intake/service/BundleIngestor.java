@@ -39,7 +39,21 @@ public class BundleIngestor {
 	 */
 	@Transactional
 	public long ingest(PulledBundle bundle) {
-		JsonNode envelope = objectMapper.readTree(bundle.body());
+		JsonNode root = objectMapper.readTree(bundle.body());
+		// 이중 형상 수용(ADR-0040): 신형은 ApiResponse 봉투(isSuccess 마커로 식별, 번들은 result 아래),
+		// 구형은 루트가 곧 EventBundle(isSuccess 없음). result 객체 유무로 판별하면 cursor 만 있고
+		// entries 없는 malformed result 를 봉투로 오인하므로 isSuccess 로 판별한다. isSuccess 는
+		// boolean true 만 성공으로 수용 — false·타입 위반(문자열 "true" 등 코어션)은 fail-loud 거부.
+		JsonNode isSuccess = root.path("isSuccess");
+		JsonNode envelope;
+		if (isSuccess.isMissingNode()) {
+			envelope = root;
+		} else {
+			if (!isSuccess.isBoolean() || !isSuccess.asBoolean(false)) {
+				throw new IllegalStateException("봉투 isSuccess 가 true(boolean)가 아니다 — 계약 위반, 적재하지 않는다");
+			}
+			envelope = root.path("result");
+		}
 		JsonNode from = envelope.path("cursor_from");
 		JsonNode to = envelope.path("cursor_to");
 		if (!from.isIntegralNumber() || !to.isIntegralNumber()) {
