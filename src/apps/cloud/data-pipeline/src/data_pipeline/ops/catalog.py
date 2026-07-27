@@ -8,20 +8,21 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 33개 중 27개**(ALPHA-181 확대 → ALPHA-578 수집 2). 미등록 state 는
-카탈로그에 없어 expected_task 가 안 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별
-작업이 아니라 manifest/completeness 로 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result
-소관이라 카탈로그에 넣지 않는다.
+**등록 범위: ECS Task state 31개 중 21개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+뉴스 레인 이관으로 27→21). 미등록 state 는 카탈로그에 없어 expected_task 가 안 생기고,
+Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
+관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result 소관이라 카탈로그에 넣지 않는다.
 
-**제외 6개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12):
+**제외 10개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12):
 
 | 제외 | state | 왜 |
 |---|---|---|
 | `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다. DB env 부재는 아래 `instrumented=False` 로 해소되므로 더는 장애물이 아니다 |
+| 뉴스 레인 4 | CollectBigKindsNews·NormalizeNews·TagNews·LoadDocuments (+시장 SFN 에서 제거된 직렬 LoadAssertions·AssembleEvents) | **뉴스 SFN 이관**(ALPHA-553 PR2, `edge-dev-data-pipeline-news` 하루 3슬롯). 그 레인은 Planner 를 안 거치므로 등록하면 매 일일런 MISSED 다 → **뉴스 레인 원장 편입**(자체 pipeline_type·3슬롯 기대) 후속 티켓에서 되살린다 |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**`instrumented=False` 3개**(TagNews·CollectKrxEtf·CollectDartDisclosure) —
+**`instrumented=False` 2개**(CollectKrxEtf·CollectDartDisclosure) —
 task-def 에 DB env 가 없어(`tasks.tf`: host 만 주면 password 없는 DbConfig 로 `load_settings()` 가
 통째로 실패, 부분 주입 불가) 컨테이너가 자기 attempt 를 못 쓴다. 그렇다고 빼면 안 된다:
 Reconciler 의 SFN·ECS 증거 backfill 이 **유일하지만 정확한** 기록 경로이기 때문이다(그 경우
@@ -34,8 +35,9 @@ attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다). 즉 �
 컨테이너가 원장에 못 쓰기 때문이다. 즉 **exit 0 인데 부분 유실**(공시 미매핑 등)은 이 경로로
 안 보인다 — 그건 여전히 S3 `collection_log` 를 봐야 한다. 판정 시점도 Reconciler 실행 때다.
 
-⚠️ 수집 커버리지는 12개 중 7개다(FMP 4개는 토글 off, DART 재무는 소비자 0). 조용한 누락이 실제로
-나는 곳이 수집이므로(ALPHA-387·578) 커버리지의 **모양**이 숫자보다 중요하다.
+⚠️ 수집 커버리지는 시장 레인 11개 중 6개다(FMP 4개는 토글 off, DART 재무는 소비자 0, BigKinds
+뉴스는 뉴스 레인 이관). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
+**모양**이 숫자보다 중요하다.
 """
 
 from __future__ import annotations
@@ -91,7 +93,7 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 27작업. sfn_state_name·cli_command·ecs_task_definition 은 statemachine.tf 의 실제
+# 등록 21작업. sfn_state_name·cli_command·ecs_task_definition 은 statemachine.tf 의 실제
 # state·command_expr·taskdef_key 와 일치해야 한다(test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
 _ENTRIES: tuple[CatalogEntry, ...] = (
@@ -168,18 +170,16 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
         ecs_task_definition="kis", source_vendor="kis",
     ),
-    # ── BigKinds 뉴스 수집 ────────────────────────────────────────────────────────
-    # 뉴스는 휴장일에도 나온다 — kr_trading_calendar=False(비거래일에도 DUE).
-    CatalogEntry(
-        task_key="NEWS_COLLECTION_BIGKINDS", stage="raw", dataset="stock_news", required=True,
-        cli_command=("ingest-raw", "--source", "bigkinds"), sfn_state_name="CollectBigKindsNews",
-        ecs_task_definition="bigkinds", source_vendor="bigkinds",
-    ),
+    # ── 뉴스 레인 6작업(NEWS_COLLECTION_BIGKINDS·NORMALIZE_NEWS·TAG_NEWS·LOAD_DOCUMENTS·
+    # LOAD_ASSERTIONS·ASSEMBLE_EVENTS)은 카탈로그에 없다(ALPHA-553 PR2) ──────────────
+    # 뉴스 SFN(edge-dev-data-pipeline-news, 하루 3슬롯)으로 이관됐는데 그 레인은 Planner 를
+    # 안 거치므로(PR1 주석 — 운영 원장 미편입) 여기 남겨두면 매 일일런이 6작업 MISSED 를 연다.
+    # 커버리지 27→21 은 조용한 축소가 아니라 이 주석이 그 사실이다(Rule 12) — 뉴스 레인의
+    # 원장 편입(자체 pipeline_type·3슬롯 기대)은 후속 티켓에서 되살린다.
     # ── KRX·DART 수집 2 (DB env 없는 task-def — instrumented=False) ────────────────
-    # TagNews 와 같은 경로다: 컨테이너가 원장에 못 쓰므로 attempt 결측이 정상이고, Reconciler 의
-    # SFN·ECS 증거 backfill 이 유일·정확한 기록 경로다(LEDGER_GAP 을 열지 않는다). TagNews 는
-    # **게이트 멤버**라서 등록했지만 이 셋의 이유는 다르다 — 등록하지 않으면 수집 실패가 원장에
-    # **자리조차 없다**. 2026-07-27 KRX 수집을 손으로 죽였는데(exit 137) 화면에 아무것도 안 뜬
+    # 컨테이너가 원장에 못 쓰므로 attempt 결측이 정상이고, Reconciler 의 SFN·ECS 증거
+    # backfill 이 유일·정확한 기록 경로다(LEDGER_GAP 을 열지 않는다). 등록하지 않으면 수집
+    # 실패가 원장에 **자리조차 없다**. 2026-07-27 KRX 수집을 손으로 죽였는데(exit 137) 화면에 아무것도 안 뜬
     # 것이 그 실증이다. 등록만으로 그 종료가 FAILED 로 판정된다(_judge_outcome 은 terminal 을
     # 그대로 옮긴다). 비밀번호를 벤더 컨테이너에 주는 신뢰경계 변경은 여전히 필요 없다.
     # ⚠️ `stalled_after_seconds` 를 SFN 타임아웃에 맞춘다(AssembleEvents 와 같은 근거). 기본 1시간은
@@ -203,11 +203,6 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     # 정제의 depends_on 은 **비운다**: raw 부분실패는 뒤를 막지 않고(ADR-0030) 정제는 빈 입력을
     # 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집 실패 런에서 **실제로 돌아 성공한 정제**가
     # BLOCKED 로 오귀속된다. 반면 정제→feature 는 진짜 게이트라 아래에서 의존으로 그린다.
-    CatalogEntry(
-        task_key="NORMALIZE_NEWS", stage="normalize", dataset="news_articles", required=True,
-        cli_command=("normalize-news",), sfn_state_name="NormalizeNews",
-        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
-    ),
     CatalogEntry(
         task_key="NORMALIZE_DISCLOSURE", stage="normalize", dataset="supply_contract_fact",
         required=True, cli_command=("normalize-disclosure",), sfn_state_name="NormalizeDisclosure",
@@ -239,17 +234,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
     ),
-    # ── 태깅 (deepseek task-def — DB env 없음) ─────────────────────────────────────
-    # 등록하되 `instrumented=False` 다. 이 컨테이너는 원장에 못 쓰지만 **FeatureCheckResults
-    # 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LoadAssertions 의 의존이 전부 충족된 것으로
-    # 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로 찍힌다(Codex #273 P1).
-    CatalogEntry(
-        task_key="TAG_NEWS", stage="feature", dataset="news_assertions", required=True,
-        cli_command=("tag-news",), sfn_state_name="TagNews",
-        ecs_task_definition="deepseek", depends_on=("NORMALIZE_NEWS",),
-        deadline_offset_seconds=7200, stalled_after_seconds=21600, instrumented=False,
-    ),
-    # ── 적재 7 + 직렬 2 (rds task-def) ────────────────────────────────────────────
+    # ── 적재 6 (rds task-def) ─────────────────────────────────────────────────────
     CatalogEntry(
         task_key="LOAD_INSTRUMENTS", stage="feature", dataset="instrument_master", required=True,
         cli_command=("load-instruments",), sfn_state_name="LoadInstruments",
@@ -259,7 +244,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # BLOCKED(게이트가 닫혔다)다. ADR-0030 과 충돌하지 않는다: 그건 raw→정제 얘기고
         # (그래서 정제 엔트리는 의존이 비어 있다) 여긴 정제→feature 게이트다.
         depends_on=(
-            "NORMALIZE_NEWS", "NORMALIZE_PRICE", "NORMALIZE_DISCLOSURE",
+            "NORMALIZE_PRICE", "NORMALIZE_DISCLOSURE",
             "NORMALIZE_DISCLOSURE_SEGMENT", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
             "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
         ),
@@ -285,32 +270,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="rds", deadline_offset_seconds=7200,
     ),
     CatalogEntry(
-        task_key="LOAD_DOCUMENTS", stage="feature", dataset="document", required=True,
-        cli_command=("load-documents",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadDocuments",
-        ecs_task_definition="rds", deadline_offset_seconds=7200,
-    ),
-    CatalogEntry(
         task_key="LOAD_DISCLOSURE", stage="feature", dataset="disclosure_document", required=True,
         cli_command=("load-disclosure",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadDisclosure",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
-    ),
-    CatalogEntry(
-        task_key="LOAD_ASSERTIONS", stage="feature", dataset="document_assertion", required=True,
-        cli_command=("load-assertions",), sfn_state_name="LoadAssertions",
-        ecs_task_definition="rds", deadline_offset_seconds=7200,
-        # ASL `FeatureCheckResults` = feature 전량 성공 게이트(직렬 진입 조건).
-        depends_on=("TAG_NEWS", "LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV",
-                    "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW", "LOAD_DOCUMENTS", "LOAD_DISCLOSURE"),
-    ),
-    # ── 이벤트 조립 (events task-def — LLM 분류 + DB 적재) ─────────────────────────
-    # LLM 이라 정상 실행이 1시간을 넘는다. STALLED 임계를 SFN 타임아웃(6시간)에 맞춘다 —
-    # 기본 1시간이면 정상 실행 중에 STALLED 가 붙고 resolve 경로가 없어 영구 OPEN 이다.
-    CatalogEntry(
-        task_key="ASSEMBLE_EVENTS", stage="feature", dataset="source_event", required=True,
-        cli_command=("assemble-events",), depends_on=("LOAD_ASSERTIONS",),
-        sfn_state_name="AssembleEvents",
-        ecs_task_definition="events", deadline_offset_seconds=10800,
-        stalled_after_seconds=21600,
     ),
     # ── corp_code enrichment (rds_dart) ───────────────────────────────────────────
     CatalogEntry(

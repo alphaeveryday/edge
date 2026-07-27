@@ -356,6 +356,12 @@ module "data_pipeline" {
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
 
+  # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(15:00·15:30·23:50 KST 평일). 시장 SFN 의 뉴스 스텝
+  # 제거와 **같은 apply** 로 켠다 — 같은 event 를 두 SFN 이 동시에 쓰는 겹침 창이 구조적으로
+  # 생기지 않는다(PR1 이 DISABLED 로 세워 둔 컷오버 게이트). 수동 e2e 실증(07-27,
+  # manual-553-verify-20260727T132646Z)을 선행했다.
+  news_schedule_state = "ENABLED"
+
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
   # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이

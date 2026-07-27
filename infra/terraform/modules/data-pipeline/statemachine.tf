@@ -242,22 +242,32 @@ locals {
     },
   ]
 
+  # 뉴스 레인 스텝은 뉴스 SFN(news_pipeline.tf) 소관 — 시장 SFN 페이즈에서 제외한다(ALPHA-553
+  # PR2). 잡 **정의**는 위 원본 리스트(raw_ingest_jobs 등)에 남는다: news_pipeline.tf 의
+  # news_* 부분집합 필터가 같은 리스트를 읽어 command_expr·taskdef_key 드리프트를 막는다(DRY).
+  # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다 — analyze 는
+  # 뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다.
+  market_excluded_states = ["CollectFmpNews", "CollectBigKindsNews", "NormalizeNews", "TagNews", "LoadDocuments"]
+  market_raw_jobs        = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_normalize_jobs  = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_feature_jobs    = [for j in local.feature_jobs : j if !contains(local.market_excluded_states, j.state)]
+
   raw_ingest_success_checks = [
-    for index, _ in local.raw_ingest_jobs : {
+    for index, _ in local.market_raw_jobs : {
       Variable     = "$.branch_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
 
   normalize_success_checks = [
-    for index, _ in local.normalize_jobs : {
+    for index, _ in local.market_normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
       StringEquals = "succeeded"
     }
   ]
 
   feature_success_checks = [
-    for index, _ in local.feature_jobs : {
+    for index, _ in local.market_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
       StringEquals = "succeeded"
     }
@@ -297,7 +307,7 @@ locals {
   # 뉴스 SFN 브랜치를 만든다(빌더 중복 방지). 기존 raw/normalize/feature 출력은 불변(순수 additive).
   branches_by_phase = {
     for phase, jobs in {
-      raw      = local.raw_ingest_jobs, normalize = local.normalize_jobs, feature = local.feature_jobs,
+      raw      = local.market_raw_jobs, normalize = local.market_normalize_jobs, feature = local.market_feature_jobs,
       news_raw = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs
     } :
     phase => [
@@ -395,7 +405,7 @@ locals {
       #
       # 막을 필요가 없는 근거: **정제는 빈 입력을 정상 성공으로 처리한다.** raw 키가 0개면
       # 루프가 안 돌고 exit 0 이다(normalize_price.py 의 `for raw_key in raw_keys`). 그래서
-      # BigKinds 가 죽어도 NormalizeNews 는 이 런의 FMP raw 만 정제하고 성공한다 — 정제 잡별로
+      # 수집 하나가 죽어도 그 데이터셋 정제는 남은 raw 만 정제하고 성공한다 — 정제 잡별로
       # "어느 raw 가 필수인가" 의존 맵을 ASL 에 적을 이유가 없다. 있는 만큼 처리한다.
       RawIngestCheckResults = {
         Type = "Choice"
@@ -405,7 +415,7 @@ locals {
         }]
         Default = "NotifyRawPartial"
       }
-      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 tag-news·analyze 처럼
+      # ⚠️ **알림은 여기서 즉시 쏜다 — 끝으로 미루면 안 된다.** 뒤에는 analyze 처럼
       # LLM 을 부르는(소요시간 상한이 없는) 페이즈가 있고, 최상위 TimeoutSeconds 로 실행이
       # 죽으면 States.Timeout 이 실행 자체를 끝내 **어떤 Catch 도 안 탄다**(아래 CloudWatch
       # 알람 주석 참조). 즉 판정을 끝에 두면 "raw 부분 실패 + 그 뒤 타임아웃" 조합에서 run_id 가
@@ -471,9 +481,8 @@ locals {
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
       # 두 적재 잡은 **canonical 을 full-scan** 하므로 여기 걸린 건 자동 회복된다: 이번 실행이
-      # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. tag-news 는 미태깅 기사만
-      # 고르고(태거·온톨로지 버전 + 입력 지문으로 판정) load-instruments 는 자연키 멱등이라
-      # 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. load-instruments 는 자연키
+      # 멱등이라 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
       # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
       # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
       # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
@@ -559,90 +568,20 @@ locals {
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next       = "FeatureCheckResults"
       }
+      # LoadAssertions·AssembleEvents 는 뉴스 SFN 의 직렬 꼬리로 이관됐다(ALPHA-553 PR2 —
+      # news_pipeline.tf). analyze 는 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다.
       FeatureCheckResults = {
         Type = "Choice"
         Choices = [{
           And  = local.feature_success_checks
-          Next = "LoadAssertions"
+          Next = "SeedAnalysisUniverse"
         }]
         Default = "NotifyFailure"
       }
-      # assertion 적재(ALPHA-376·410) — feature 병렬 페이즈 **뒤 직렬**이다: document FK
-      # 의존(LoadDocuments 산출)이 같은 페이즈 병렬이면 레이스라, 페이즈 전량 성공 뒤에 돈다.
-      # 자연키 멱등 + missing_document 는 다음 런 회복이라 재실행 안전.
-      LoadAssertions = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "LoadAssertionsCheckExitCode"
-        Catch = [{
-          ErrorEquals = ["States.ALL"]
-          ResultPath  = "$.error"
-          Next        = "NotifyFailure"
-        }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
-          Overrides = {
-            ContainerOverrides = [{
-              Name        = local.container_name
-              "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id)"
-              # 원장 계측(ALPHA-181): 페이즈 빌더(위)와 같은 주입 — 없으면 이 직렬 작업들의
-              # attempt 에 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
-              Environment = [
-                { Name = "OPS_SFN_STATE_NAME", Value = "LoadAssertions" },
-                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
-              ]
-            }]
-          }
-        })
-      })
-      LoadAssertionsCheckExitCode = {
-        Type = "Choice"
-        Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "AssembleEvents"
-        }]
-        Default = "NotifyFailure"
-      }
-      # 이벤트 조립(ALPHA-412) — 엔진 추출 체인(분류→event 계보→threading)의 이식.
-      # LoadAssertions 뒤 직렬: document/assertion 자연키 브리지가 선적재 행에 수렴하려면
-      # 로더들이 먼저다. analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028).
-      AssembleEvents = merge(local.ecs_run_task_base, {
-        Type = "Task"
-        Next = "AssembleEventsCheckExitCode"
-        Catch = [{
-          ErrorEquals = ["States.ALL"]
-          ResultPath  = "$.error"
-          Next        = "NotifyFailure"
-        }]
-        Parameters = merge(local.ecs_run_task_base.Parameters, {
-          TaskDefinition = aws_ecs_task_definition.this["events"].arn
-          Overrides = {
-            ContainerOverrides = [{
-              Name        = local.container_name
-              "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id)"
-              # 원장 계측(ALPHA-181): 페이즈 빌더(위)와 같은 주입 — 없으면 이 직렬 작업들의
-              # attempt 에 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
-              Environment = [
-                { Name = "OPS_SFN_STATE_NAME", Value = "AssembleEvents" },
-                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
-              ]
-            }]
-          }
-        })
-      })
-      AssembleEventsCheckExitCode = {
-        Type = "Choice"
-        Choices = [{
-          Variable      = "$.ecs.Containers[0].ExitCode"
-          NumericEquals = 0
-          Next          = "SeedAnalysisUniverse"
-        }]
-        Default = "NotifyFailure"
-      }
-      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature(직렬
-      # LoadAssertions 포함) 전량 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
+      # analyze 페이즈(ALPHA-408·470) — 구 analysis-engine SFN 의 완전 흡수. feature 전량
+      # 성공일 때만 돈다: **분석은 feature 산출물만 읽는다**
       # (canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument·
-      # document·assertion)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
+      # document·assertion — event 는 뉴스 SFN 의 이전 런이 조립, ALPHA-553)가 페이즈 경계 계약이다. 지금은 날짜 동기(command
       # 미지정 = ENTRYPOINT 기본 = 오늘 Asia/Seoul)지만, 이 계약 덕에 나중에 수집 빈도가 줄면
       # 이 스텝만 가격이벤트 트리거 기반 비동기 실행으로 떼어낼 수 있다.
       # 특정일(trade_date) 수동 재실행은 SFN 라우팅이 아니라 ecs run-task 레시피다(tasks.tf 주석).
@@ -799,8 +738,8 @@ resource "aws_sfn_state_machine" "this" {
 
 # 상태머신 정의 안의 NotifyFailure 는 **정의가 살아 있을 때만** 통보한다. 최상위
 # TimeoutSeconds 로 실행이 죽으면 States.Timeout 이 실행 자체를 끝내므로 어떤 Catch 도
-# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. LLM 을 부르는 페이즈(feature 의 tag-news, analyze)가
-# 들어오면서 이 경로가 실질 도달 가능해졌다(LLM 호출은 소요시간 상한이 없다. tag_news_limit 이 1차 방어).
+# 타지 않고 — 즉 SNS 로 아무것도 안 나간다. LLM 을 부르는 페이즈(analyze — tag-news 는 뉴스
+# SFN 이관, ALPHA-553)가 있어 이 경로가 실질 도달 가능하다(LLM 호출은 소요시간 상한이 없다).
 # 알람은 정의 밖에서 도는 유일한 통보 수단이라 그 구멍을 정확히 메운다.
 # ExecutionsFailed 는 안 건다 — NotifyFailure 가 이미 덮고, 겹치면 같은 실패에 두 통이 온다.
 resource "aws_cloudwatch_metric_alarm" "execution_timed_out" {

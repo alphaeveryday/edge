@@ -125,13 +125,13 @@ def test_downstream_state_output_does_not_overwrite_the_tasks_own_arn():
     #      (ALPHA-566). ARN 이 어긋나면 wrapper 가 남긴 진짜 attempt 를 못 찾아 "원장에 기록이
     #      없다"로 오판하고 남의 실패를 backfill 한다. 자기 ECS 생애주기 이벤트만 믿어야 한다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
                         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
                         "started_at": _OLD})
     summary = _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
-        "LoadDocuments", own_arn="arn:own", own_exit=0,
+        "LoadDisclosure", own_arn="arn:own", own_exit=0,
         leaked_arn="arn:other-failed", leaked_exit=1))
 
     assert summary["ledger_gap"] == []                       # 남의 ARN 으로 gap 을 열지 않는다
@@ -144,13 +144,13 @@ def test_leaked_success_does_not_turn_a_real_failure_green():
     #      타고 흘러오면 실패가 FULFILLED 로 뒤집힌다 — 거짓 초록은 테스트가 초록이라 스스로
     #      못 잡으므로(이 프로젝트 계측 결함의 일관된 실패 방향) 양방향을 함께 잠근다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
                         "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
                         "started_at": _OLD})
     _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
-        "LoadDocuments", own_arn="arn:own", own_exit=1,
+        "LoadDisclosure", own_arn="arn:own", own_exit=1,
         leaked_arn="arn:other-ok", leaked_exit=0))
 
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
@@ -172,10 +172,10 @@ def test_every_whitelisted_event_type_still_yields_execution_evidence(etype, det
     cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 7}]})
     events = [
         {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
-         "stateEnteredEventDetails": {"name": "LoadDocuments"}},
+         "stateEnteredEventDetails": {"name": "LoadDisclosure"}},
         {"id": 2, "previousEventId": 1, "type": etype, detail_key: {"cause": cause}},
     ]
-    occ = execution_evidence(events)["LoadDocuments"][0]
+    occ = execution_evidence(events)["LoadDisclosure"][0]
 
     assert occ["ecs_task_arn"] == "arn:own"
     assert occ["exit_code"] == 7
@@ -187,12 +187,12 @@ def test_task_failed_with_arn_is_terminal_failure_not_failed_to_start():
     #      TaskFailed 가 화이트리스트에서 빠지면 ARN 을 못 읽어 **실제로 실행된 작업이 시작조차
     #      못 한 것으로 오분류**된다 — 복구 절차가 달라지는 실질 차이다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DOCUMENTS", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 1}]})
     summary = _reconcile(db, status="FAILED", history=[
         {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
-         "stateEnteredEventDetails": {"name": "LoadDocuments"}},
+         "stateEnteredEventDetails": {"name": "LoadDisclosure"}},
         {"id": 2, "previousEventId": 1, "type": "TaskFailed",
          "taskFailedEventDetails": {"error": "States.TaskFailed", "cause": cause}},
     ])
@@ -252,13 +252,13 @@ def test_running_over_time_is_stalled_execution_status_preserved():
 
 
 def test_uninstrumented_task_backfills_without_opening_ledger_gap():
-    # WHY: 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음 — TagNews)은 attempt 결측이
+    # WHY: 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음 — KRX 수집)은 attempt 결측이
     #      **정상**이다. LEDGER_GAP 을 열면 dedupe 키에 ECS ARN 이 들어가 런마다 새 이슈가 쌓이고
     #      resolve 경로도 없어 영구 OPEN 이 된다. backfill 은 해야 한다 — 그게 유일한 증거다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "TAG_NEWS", "expected_task_id": "e1", "eligible_at": _OLD}])
-    _reconcile(db, history=_entered("TagNews", arn="arn:task/tag", succeeded=True),
-               ecs=FakeEcs(tasks={"arn:task/tag": {"lastStatus": "STOPPED"}}))
+    _seed(db, [{"task_key": "ETF_HOLDINGS_COLLECTION_KRX", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_entered("CollectKrxEtf", arn="arn:task/krx", succeeded=True),
+               ecs=FakeEcs(tasks={"arn:task/krx": {"lastStatus": "STOPPED"}}))
     assert len(db.attempts) == 1                       # 증거로 복구는 한다
     assert db.attempts[0]["source"] == "RECONCILER_BACKFILL"
     assert db.open_issues(states.ISSUE_LEDGER_GAP) == []
