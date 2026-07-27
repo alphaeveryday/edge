@@ -1,6 +1,6 @@
 # ADR-0015: Sync 프로토콜 — cursor 기반 delta, MVP 스펙과 목표 계약 분리
 
-- 상태: 승인됨
+- 상태: 대체됨 (→ [ADR-0040](0040-sync-integrity-mvp-to-signing.md))
 - 날짜: 2026-07-12
 - 결정 로그: 확정 결정 #4 (2026-07-12)
 
