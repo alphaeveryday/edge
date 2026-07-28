@@ -9,6 +9,10 @@
 고객경로: `postgres-onprem` · `flyway-onprem` · `sync-agent` · `intake` · `screening-worker` · `publication-api` · `mock-broker`.
 검수 콘솔(내부 도구): `tenant-console-api`(세션 인증·온프렘 PG) · `tenant-console-ui`(nginx — SPA 정적 + `/api` 프록시 co-host).
 
+## 네트워크 3망 (dmz/data/serving — ALPHA-561, ADR-0036)
+
+compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 는 **dmz 만**이라 `postgres-onprem` 에 못 닿고(DMZ 컴포넌트의 DB 접근 금지), `intake` 가 dmz+data 브리지로 유일한 수신 경로다. `data` 는 `internal`(외부 라우팅 차단)이라 data 전용 서비스(`postgres-onprem`·`flyway-onprem`·`screening-worker`)는 인터넷 egress 가 불가하다. 서빙 면은 `mock-broker`(serving 만)→`publication-api`(data+serving), `tenant-console-ui`(serving 만)→`tenant-console-api`(data+serving). 배치 전체와 한계(dmz/serving 경유 egress 잔존)는 compose 헤더 주석 참조.
+
 ## 마이그레이션 SQL 번들 (필수)
 
 `flyway-onprem` 은 `${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}` 를 마운트한다. 박스엔 레포 소스가 없으므로 **배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 `src/libs/schema/migrations-onprem/` 를 이 파일 옆 `migrations-onprem/` 로 번들**해 함께 올린다. 번들이 없으면 스키마 미적용 → 앱이 `ddl-auto=validate` 로 부팅 실패하므로, CD 는 `compose up` 전에 SQL 개수 preflight 로 fail-loud 중단한다(ALPHA-560 검증 종결).
@@ -58,6 +62,7 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
 - `SPRING_PROFILES_ACTIVE` override 없음 → 이미지 기본 `prod` = ECS JSON 로깅(ALPHA-531). 로컬은 `""` 로 평문.
 - `sync-agent` 대상 = 실 cloud sync ALB(로컬은 컨테이너). trust store 미주입 dev 라 현재 평문 HTTPS — cert·인가는 후속.
 - cloud 서비스 없음(AWS 에 있음). 호스트 노출은 `mock-broker` 뿐(공개 박스 표면 최소화).
+- 네트워크 3망 세분화(위 절) — 로컬 풀스택은 단일 기본 네트워크(ECS Service Connect 토폴로지 재현이 목적, 망분리 미적용).
 
 ## 이 문서의 범위 밖 (완료·후속 현황)
 
