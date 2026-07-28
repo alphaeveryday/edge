@@ -113,7 +113,7 @@ export function GridPage() {
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">실행 격자</span>
+          <span className="t-label">파이프라인 실행 이력</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 모서리
             점=데이터 결손 · ·=카탈로그에 없음 · 셀을 누르면 그 실행의 드릴다운

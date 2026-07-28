@@ -47,7 +47,7 @@ sources 는 운영 원장(`ops_*`) 읽기 전용 조회다(ALPHA-514). session·
 ## 콘솔 화면 표면 (ALPHA-515 → 도메인별 DB 전환 중)
 
 super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 4종 —
-tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·실행 격자) · analyses(가격 변동
+tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파이프라인 실행 이력) · analyses(가격 변동
 분석 목록·정정·제외/복원) · session(운영자 컨텍스트·프로필).
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/

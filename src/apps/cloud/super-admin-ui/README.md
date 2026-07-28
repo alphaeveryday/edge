@@ -40,7 +40,7 @@ dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRu
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
 | `/sources` | 데이터 소스 수집 상태 |
-| `/grid` | 실행 격자 (슬롯×작업 30일 — 셀 클릭 시 `/sources?runKey=` 드릴다운) |
+| `/grid` | 파이프라인 실행 이력 (슬롯×작업 30일 격자 — 셀 클릭 시 `/sources?runKey=` 드릴다운) |
 | `/analyses` | 가격 변동 분석 목록 (검색·상태·시장 필터) |
 | `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 정정 · 제외/복원) |
 

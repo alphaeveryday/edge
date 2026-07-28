@@ -21,7 +21,7 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     section: '가격 변동 분석 관리',
     items: [
       { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
-      { path: '/grid', label: '실행 격자', icon: 'dashboard' },
+      { path: '/grid', label: '파이프라인 실행 이력', icon: 'dashboard' },
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
     ],
   },
@@ -79,7 +79,7 @@ export function AdminLayout() {
   } else if (path.startsWith('/sources')) {
     pageTitle = '데이터 소스 수집 상태';
   } else if (path.startsWith('/grid')) {
-    pageTitle = '실행 격자';
+    pageTitle = '파이프라인 실행 이력';
   } else if (path.startsWith('/analyses')) {
     pageTitle = '가격 변동 분석 목록';
   }
