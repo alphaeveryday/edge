@@ -114,11 +114,15 @@ jobs:
           exit 1
 
       # 버전은 libs/schema/build.gradle 의 Flyway 플러그인(10.21.0)과 맞춘다.
+      # DinD 에선 워크스페이스 서브경로 bind mount 가 빈 디렉터리로 잡히는 함정이 있다
+      # (루트 $PWD 마운트만 실제 내용이 실린다 — gitleaks 와 동일). 루트를 마운트하고
+      # -locations 로 컨테이너 안 경로를 지정한다.
       - name: Flyway migrate (cloud set)
         run: >
           docker run --rm --network host
-          -v "$PWD/src/libs/schema/migrations-cloud:/flyway/sql:ro"
+          -v "$PWD:/workspace:ro"
           flyway/flyway:10.21.0
+          -locations=filesystem:/workspace/src/libs/schema/migrations-cloud
           -url=jdbc:postgresql://localhost:${{ env.E2E_PGPORT }}/edge -user=edge -password=edge migrate
 
       - uses: astral-sh/setup-uv@v6
