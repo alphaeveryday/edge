@@ -245,9 +245,10 @@ variable "tag_news_window_days" {
   validation {
     # 음수는 역전 창(오늘+N,오늘)이라 전 파티션을 제외해 0건 태깅을 성공으로 위장하고(Rule 12),
     # 소수는 command 로 "3.5" 가 실려 run.py 의 argparse type=int 가 거부해 매 런이 즉시 실패한다.
-    # 둘 다 plan 시점에 잡는다(run.py 도 음수는 런타임에 재차 거른다).
-    condition     = var.tag_news_window_days >= 0 && floor(var.tag_news_window_days) == var.tag_news_window_days
-    error_message = "tag_news_window_days 는 0 이상의 정수여야 한다(음수=역전 창, 소수=argparse int 거부)."
+    # 상한(3650)은 run.py 공통 가드(ALPHA-592)와 짝 — 없으면 plan 은 통과하고 매 런이 거부된다.
+    # 셋 다 plan 시점에 잡는다(run.py 도 음수·상한은 런타임에 재차 거른다).
+    condition     = var.tag_news_window_days >= 0 && var.tag_news_window_days <= 3650 && floor(var.tag_news_window_days) == var.tag_news_window_days
+    error_message = "tag_news_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
   }
 }
 
