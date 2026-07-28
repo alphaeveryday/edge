@@ -4,22 +4,17 @@ import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantsync.repository.BundleEntryStore;
 import com.edge.tenantsync.repository.DeliveryRow;
 import com.edge.tenantsync.repository.TenantDeliveryRepository;
-import com.edge.tenantsync.service.BundleSerializer;
 import com.edge.tenantsync.service.SyncBundleService;
 import com.edge.tenantsync.tenant.TenantResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.HexFormat;
 import java.util.List;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -69,7 +64,7 @@ class SyncBundleControllerTest {
 	@BeforeEach
 	void setUp() {
 		SyncBundleService service = new SyncBundleService(
-				new BundleEntryStore(new FakeTenantDeliveryRepository()), new BundleSerializer());
+				new BundleEntryStore(new FakeTenantDeliveryRepository()));
 		mvc = MockMvcBuilders
 				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -77,42 +72,30 @@ class SyncBundleControllerTest {
 	}
 
 	@Test
-	void 체크섬은_수신_바이트로_재계산한_값과_일치한다() throws Exception {
-		// WHY: 온프렘 Sync Agent 는 응답 바이트 그대로 SHA-256 을 계산해 대조한다(무결성 계약).
-		// 서버가 체크섬을 다른 직렬화 결과로 만들면 모든 번들이 검증 실패로 버려진다.
-		MvcResult result = mvc.perform(get("/api/v1/sync/bundle").param("after", "0"))
-				.andExpect(status().isOk())
-				.andReturn();
-
-		byte[] body = result.getResponse().getContentAsByteArray();
-		String expected = "sha256=" + HexFormat.of()
-				.formatHex(MessageDigest.getInstance("SHA-256").digest(body));
-		assertThat(result.getResponse().getHeader(SyncBundleController.CHECKSUM_HEADER))
-				.isEqualTo(expected);
-	}
-
-	@Test
-	void 번들은_계약_JSON_형상을_따른다() throws Exception {
-		// WHY: 필드명(snake_case)·cursor 범위·엔트리 유형은 온프렘 파서와의 계약이다
+	void 성공은_공통_봉투로_감싸고_번들은_result_아래_계약_형상을_따른다() throws Exception {
+		// WHY: 200 은 프로젝트 공통 봉투(ApiResponse)로 나가고(ADR-0040), 번들은 result 아래에 온다.
+		// 필드명(snake_case)·cursor 범위·엔트리 유형은 온프렘 파서와의 계약이다
 		// (docs/contracts/event-bundle-schema.md — explanation_result 경계면, tenant_id 는 BIGINT).
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "0"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.tenant_id").value(1))
-				.andExpect(jsonPath("$.cursor_from").value(1))
-				.andExpect(jsonPath("$.cursor_to").value(3))
-				.andExpect(jsonPath("$.entries.length()").value(3))
-				.andExpect(jsonPath("$.entries[0].delivery_type").value("NEW"))
-				.andExpect(jsonPath("$.entries[0].explanation_result.etf_instrument_id").value("inst-etf-069500"))
-				.andExpect(jsonPath("$.entries[0].explanation_result.etf_ticker").value("069500"))
-				.andExpect(jsonPath("$.entries[0].explanation_result.etf_name").value("KODEX 200"))
-				.andExpect(jsonPath("$.entries[0].explanation_result.confidence_level").value("MEDIUM"))
-				.andExpect(jsonPath("$.entries[0].explanation_run.release_bundle_version").value("rb-2026.07.0"))
-				.andExpect(jsonPath("$.entries[1].delivery_type").value("CORRECTION"))
-				.andExpect(jsonPath("$.entries[1].reason").value("근거 공시 정정"))
-				.andExpect(jsonPath("$.entries[1].target_explanation_result_id").value("expr-20260715-069500-0001"))
-				.andExpect(jsonPath("$.entries[1].explanation_result.explanation_result_id").value("expr-20260715-069500-0002"))
-				.andExpect(jsonPath("$.entries[2].delivery_type").value("INVALIDATION"))
-				.andExpect(jsonPath("$.entries[2].explanation_result").doesNotExist());
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result.tenant_id").value(1))
+				.andExpect(jsonPath("$.result.cursor_from").value(1))
+				.andExpect(jsonPath("$.result.cursor_to").value(3))
+				.andExpect(jsonPath("$.result.entries.length()").value(3))
+				.andExpect(jsonPath("$.result.entries[0].delivery_type").value("NEW"))
+				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_instrument_id").value("inst-etf-069500"))
+				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_ticker").value("069500"))
+				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_name").value("KODEX 200"))
+				.andExpect(jsonPath("$.result.entries[0].explanation_result.confidence_level").value("MEDIUM"))
+				.andExpect(jsonPath("$.result.entries[0].explanation_run.release_bundle_version").value("rb-2026.07.0"))
+				.andExpect(jsonPath("$.result.entries[1].delivery_type").value("CORRECTION"))
+				.andExpect(jsonPath("$.result.entries[1].reason").value("근거 공시 정정"))
+				.andExpect(jsonPath("$.result.entries[1].target_explanation_result_id").value("expr-20260715-069500-0001"))
+				.andExpect(jsonPath("$.result.entries[1].explanation_result.explanation_result_id").value("expr-20260715-069500-0002"))
+				.andExpect(jsonPath("$.result.entries[2].delivery_type").value("INVALIDATION"))
+				.andExpect(jsonPath("$.result.entries[2].explanation_result").doesNotExist());
 	}
 
 	@Test
@@ -124,7 +107,6 @@ class SyncBundleControllerTest {
 	@Test
 	void 잘못된_파라미터는_400_공통_포맷으로_표면화한다() throws Exception {
 		// WHY: 401·403·410 외 4xx 는 소비자 버그 신호 — 재시도 없이 fail-loud (Rule 12).
-		// 에러 응답만 공통 응답 포맷(ApiResponse)을 쓴다 (성공 번들 본문은 계약 형상 그대로).
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "-1"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))

@@ -1,11 +1,11 @@
 package com.edge.tenantsync.controller;
 
+import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.exception.GeneralException;
+import com.edge.tenantsync.dto.EventBundle;
 import com.edge.tenantsync.error.SyncErrorStatus;
-import com.edge.tenantsync.service.BundleSerializer.SerializedBundle;
 import com.edge.tenantsync.service.SyncBundleService;
 import com.edge.tenantsync.tenant.TenantResolver;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -16,12 +16,12 @@ import java.util.Optional;
 /**
  * Sync Agent 가 Pull 하는 표면 — GET /api/v1/sync/bundle. 엔드포인트 계약은
  * docs/contracts/sync-protocol.md "엔드포인트 계약(확정)" 절이 SSOT 다.
- * HTTP 관심사만 담당한다: 파라미터 검증, 상태 코드, 체크섬 헤더.
+ * HTTP 관심사만 담당한다: 파라미터 검증, 상태 코드. 200 은 공통 봉투(ApiResponse),
+ * 신규 없음은 204 (ADR-0040 — byte[]·체크섬 헤더는 목표 계약으로 이관).
  */
 @RestController
 public class SyncBundleController {
 
-	static final String CHECKSUM_HEADER = "X-Bundle-Checksum";
 	private static final int LIMIT_DEFAULT = 100;
 	private static final int LIMIT_MAX = 500;
 
@@ -34,7 +34,7 @@ public class SyncBundleController {
 	}
 
 	@GetMapping("/api/v1/sync/bundle")
-	public ResponseEntity<byte[]> pull(
+	public ResponseEntity<ApiResponse<EventBundle>> pull(
 			@RequestParam("after") long after,
 			@RequestParam(value = "limit", defaultValue = "" + LIMIT_DEFAULT) int limit) {
 
@@ -47,13 +47,10 @@ public class SyncBundleController {
 			throw new GeneralException(SyncErrorStatus.INVALID_LIMIT);
 		}
 
-		Optional<SerializedBundle> bundle =
+		Optional<EventBundle> bundle =
 				syncBundleService.pull(tenantResolver.resolveTenantId(), after, limit);
 
-		return bundle.map(b -> ResponseEntity.ok()
-						.header(CHECKSUM_HEADER, b.checksum())
-						.contentType(MediaType.APPLICATION_JSON)
-						.body(b.body()))
+		return bundle.map(b -> ResponseEntity.ok(ApiResponse.onSuccess(b)))
 				.orElseGet(() -> ResponseEntity.noContent().build());
 	}
 }

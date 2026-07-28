@@ -1,10 +1,18 @@
 package com.edge.tenantsync.dto;
 
+import tools.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.annotation.JsonNaming;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/** Event Bundle 봉투 — 테넌트별 전달 레코드를 cursor 순으로 묶은 전송 단위. tenant_id 는 BIGINT(docs/contracts/event-bundle-schema.md). */
+/**
+ * Event Bundle — 테넌트별 전달 레코드를 cursor 순으로 묶은 전송 단위. tenant_id 는
+ * BIGINT(docs/contracts/event-bundle-schema.md). 와이어 필드는 snake_case(계약 SSOT) —
+ * BundleSerializer 제거(ADR-0040) 후 이 애너테이션이 유일한 naming 소스다.
+ */
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record EventBundle(
 		UUID bundleId,
 		long tenantId,

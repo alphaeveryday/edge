@@ -3,14 +3,15 @@ openapi: 3.1.0
 # 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
 # 시맨틱 계약(멱등성·cursor 규칙·에러 의미·전달 보장)의 SSOT 는
 # ../../../../docs/contracts/sync-protocol.md 이며, 이 문서는 그 하위 문법 층이다.
-# 본문 Event Bundle 봉투의 필드 표기는 snake_case (BundleSerializer 가 강제).
+# 번들(EventBundle) 필드 표기는 snake_case (DTO @JsonNaming). 200 응답은 공통 ApiResponse 봉투로 감싼다(ADR-0040).
 info:
   title: Tenant Sync API
   version: 1.0.0
   description: >-
     온프렘 Sync Agent 가 outbound-Pull 로 소비하는 Cloud 표면.
-    한 응답은 항상 Event Bundle 1개이며, 본문 바이트가 곧 무결성 체크섬 대상이다
-    (성공 본문에 공통 응답 포맷을 씌우지 않는다). 시맨틱 계약은
+    한 응답은 항상 Event Bundle 1개이며, 성공(200)은 공통 응답 포맷(ApiResponse)
+    봉투로 감싼다(번들은 result 아래). 전송 무결성은 mTLS/TLS 이며, 앱 레벨 체크섬은
+    목표 계약(서명)으로 이관됐다(ADR-0040). 시맨틱 계약은
     ../../../../docs/contracts/sync-protocol.md, 번들 필드 정의는
     ../../../../docs/contracts/event-bundle-schema.md 가 SSOT.
 
@@ -32,7 +33,7 @@ paths:
       summary: 커서 이후의 Event Bundle 1건을 Pull
       description: >-
         `after` 커서 초과분을 cursor 오름차순으로 묶어 번들 1개로 반환한다.
-        신규가 없으면 204. 재개점은 응답 봉투의 `cursor_to` 다(entry 별 `cursor` 아님).
+        신규가 없으면 204. 재개점은 `result.cursor_to` 다(entry 별 `cursor` 아님).
 
 
         테넌트 식별은 매 요청 mTLS 인증서-테넌트 바인딩 검증으로 결정된다(계약 필수 —
@@ -70,16 +71,13 @@ paths:
       responses:
         '200':
           description: >-
-            신규/정정/무효화 전달 레코드를 담은 Event Bundle 1건. Content-Type 은
-            application/json, 필드 표기는 snake_case. 본문 바이트열 그대로가 체크섬 대상이다.
-          headers:
-            X-Bundle-Checksum:
-              $ref: '#/components/headers/BundleChecksum'
+            신규/정정/무효화 전달 레코드를 담은 Event Bundle 1건을 공통 응답 포맷(ApiResponse)
+            봉투로 감싼다 — 번들은 `result` 아래. Content-Type 은 application/json, 번들 필드
+            표기는 snake_case.
           content:
             application/json:
               schema:
-                # 번들 구조 SSOT — libs/schema 의 JSON Schema 를 $ref 한다(ALPHA-497). 중복 정의 없음.
-                $ref: '../../../libs/schema/contracts/event-bundle.schema.json#/$defs/EventBundle'
+                $ref: '#/components/schemas/BundleEnvelope'
         '204':
           description: 신규 없음. 빈 번들은 만들지 않는다.
         '400':
@@ -134,23 +132,32 @@ components:
         인증서-테넌트 바인딩을 검증한다(sync-auth.md). 바인딩·401/403 도메인 코드의 실제
         강제는 sync-auth 티켓 구현 소관이며 현재는 TenantResolver 데모 스텁이라 미강제.
 
-  headers:
-    BundleChecksum:
-      description: >-
-        번들 단위 SHA-256. 대상은 응답 body 바이트열 그대로다. 소비자는 검증 실패 시
-        그 번들을 폐기하고 저장·전달 없이 재-Pull 한다.
-      required: true
-      schema:
-        type: string
-        pattern: '^sha256=[0-9a-f]{64}$'
-      example: sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-
   schemas:
+    BundleEnvelope:
+      type: object
+      description: >-
+        성공(200) 응답 봉투 — 공통 응답 포맷(jvm-common ApiResponse)의 성공 형태.
+        번들은 result 아래에 온다(ADR-0040).
+      required: [isSuccess, code, message, result]
+      properties:
+        isSuccess:
+          type: boolean
+          const: true
+        code:
+          type: string
+          description: 성공 공통 코드.
+          example: COMMON200
+        message:
+          type: string
+          example: 성공적으로 요청을 수행하였습니다.
+        result:
+          # 번들 구조 SSOT — libs/schema 의 JSON Schema 를 $ref 한다(ALPHA-497). 중복 정의 없음.
+          $ref: '../../../libs/schema/contracts/event-bundle.schema.json#/$defs/EventBundle'
     ErrorResponse:
       type: object
       description: >-
-        공통 응답 포맷(jvm-common ApiResponse) — 4xx/5xx 에만 적용된다.
-        성공(200) 번들 본문은 이 포맷으로 감싸지 않는다(체크섬이 원본 바이트 대상).
+        공통 응답 포맷(jvm-common ApiResponse)의 에러 형태 — 4xx/5xx 에 적용된다.
+        성공(200)도 공통 봉투(BundleEnvelope)로 감싼다 — ADR-0040 으로 체크섬 특례 폐기.
       required: [isSuccess, code, message]
       properties:
         isSuccess:

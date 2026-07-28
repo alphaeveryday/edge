@@ -4,7 +4,6 @@ import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.EventBundle;
 import com.edge.tenantsync.dto.ExplanationResult;
 import com.edge.tenantsync.dto.ExplanationRun;
-import com.edge.tenantsync.service.BundleSerializer;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
@@ -12,9 +11,9 @@ import com.networknt.schema.SchemaValidatorsConfig;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -60,7 +59,10 @@ class EventBundleContractTest {
 				BundleEntry.correction(102, "r0", "근거 공시 정정", result, run),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 
-		String json = new String(new BundleSerializer().serialize(bundle).body(), StandardCharsets.UTF_8);
+		// @JsonNaming 가드레일: BundleSerializer 제거(ADR-0040) 후엔 DTO의 @JsonNaming 이 유일한 snake_case
+		// 소스다. bare ObjectMapper(=production Spring mapper와 동일 경로) 직렬화가 스키마를 만족해야 한다.
+		// @JsonNaming 이 빠지면 camelCase 가 나와 required(bundle_id 등) 위반으로 이 테스트가 실패한다.
+		String json = new ObjectMapper().writeValueAsString(bundle);
 
 		Set<ValidationMessage> errors = schema.validate(json, InputFormat.JSON);
 		assertThat(errors).as("직렬화된 번들이 계약 스키마를 통과해야 한다: %s", errors).isEmpty();
