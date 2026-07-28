@@ -27,13 +27,20 @@ export const options = {
       rate: RATE,
       timeUnit: '1s',
       duration: DURATION,
-      preAllocatedVUs: 50,
+      // 런타임 VU 확장은 부하 발생기 자원을 소비해 측정을 왜곡한다 — RATE 에 비례해 선할당.
+      preAllocatedVUs: Math.min(Math.max(50, RATE), 500),
       maxVUs: 500,
     },
   },
   thresholds: {
     http_req_failed: ['rate<0.01'],
+    // 계약 밖 응답(201·3xx 등)은 http_req_failed 에 안 잡힌다 — check 실패를
+    // 실행 실패로 승격해 잘못된 실행이 성공 baseline 으로 기록되지 않게 한다.
+    // 200/204 만 정상이므로 단 1건의 이탈(404 등)도 fail-loud 로 드러낸다.
+    checks: ['rate==1'],
   },
+  // 기본 출력엔 p(99)가 없다 — README 기록 항목과 맞춘다.
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(95)', 'p(99)'],
 };
 
 // 200 응답 수 = exposure_log INSERT 수 — DB 카운트와 대조하는 교차 검증 지표.

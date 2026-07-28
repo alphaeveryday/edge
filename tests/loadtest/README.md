@@ -52,8 +52,8 @@ docker run --rm -i -e BASE_URL=http://host.docker.internal:18084 -e RATE=50 \
    ```
 
 2. `RATE` 를 단계적으로 올리며(예: 50 → 100 → 200 → 400) 각 단계를 같은 `DURATION` 으로 실행한다.
-3. 단계마다 기록: `http_req_duration` p95·p99, `http_reqs`(실제 처리율), `http_req_failed`, `dropped_iterations`(도착률을 못 따라간 수 — **포화 신호**), `exposure_writes`(200 응답 수).
-4. DB 카운트 재조회로 교차 검증: exposure_log 증가분 ≈ `exposure_writes`, serving_request_metric 증가분 ≈ 총 요청 수. 어긋나면 쓰기 누락이 있다는 뜻이다(fail-loud 감사 원장 — 그 자체가 finding).
+3. 단계마다 기록: `http_req_duration` p95·p99, `http_reqs`(실제 처리율), `http_req_failed`, `checks`(k6 출력값은 **성공 비율** — 100% 미만이면 기대 응답(200/204) 밖이 있었다는 뜻이고 threshold 가 실행을 실패로 승격), `dropped_iterations`(도착률을 못 따라간 수 — **포화 신호**), `exposure_writes`(200 응답 수).
+4. DB 카운트 재조회로 교차 검증 — **부하 종료 후 서버의 in-flight 처리가 끝나도록 잠시(수 초) 기다렸다가 조회한다**(`RequestMetricFilter` 는 응답 완료 후 저장하므로 즉시 조회하면 진행 중이던 요청분이 빠져 보인다). exposure_log 증가분 = `exposure_writes`(200 을 받았다면 서버가 기록을 커밋한 것 — 어긋나면 쓰기 누락 finding). 대기 후에도 serving_request_metric 증가분이 `http_reqs` 보다 적으면 — ① 포화 구간의 연결 실패·클라이언트 타임아웃으로 서버 미도달, ② 서버가 메트릭 저장 실패를 삼킨 경우(`RequestMetricFilter` 는 저장 실패 시 로그만 남기고 응답은 정상 유지). publication-api 로그의 저장 실패 유무로 구분해 기록한다.
 5. 수치는 Jira ALPHA-496 코멘트로 기록한다(전후 비교의 기준선이므로 실행 파라미터·머신 사양 포함).
 
 ## 재측정 (개선 전후 비교)
