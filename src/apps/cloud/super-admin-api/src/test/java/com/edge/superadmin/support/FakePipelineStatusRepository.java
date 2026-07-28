@@ -2,6 +2,7 @@ package com.edge.superadmin.support;
 
 import com.edge.superadmin.repository.PipelineStatusRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -14,9 +15,15 @@ import java.util.Optional;
 public class FakePipelineStatusRepository implements PipelineStatusRepository {
 
 	private final PipelineRunStatus run;
+	private final List<GridSlot> gridSlots;
 
 	public FakePipelineStatusRepository(PipelineRunStatus run) {
+		this(run, List.of());
+	}
+
+	public FakePipelineStatusRepository(PipelineRunStatus run, List<GridSlot> gridSlots) {
 		this.run = run;
+		this.gridSlots = gridSlots;
 	}
 
 	@Override
@@ -27,5 +34,10 @@ public class FakePipelineStatusRepository implements PipelineStatusRepository {
 	@Override
 	public Optional<PipelineRunStatus> runByKey(String runKey) {
 		return latestRun().filter(r -> r.runKey().equals(runKey));
+	}
+
+	@Override
+	public List<GridSlot> grid(int days) {
+		return gridSlots;
 	}
 }

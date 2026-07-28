@@ -13,3 +13,11 @@ export function useSourceReport(runKey?: string) {
     queryFn: () => sourcesRepository.report(runKey),
   });
 }
+
+/** 실행 격자(ALPHA-594). @param days 조회 창 — 캐시 키에 넣는 이유는 runKey 와 같다. */
+export function useSourceGrid(days?: number) {
+  return useQuery({
+    queryKey: ['sources', 'grid', days ?? null],
+    queryFn: () => sourcesRepository.grid(days),
+  });
+}

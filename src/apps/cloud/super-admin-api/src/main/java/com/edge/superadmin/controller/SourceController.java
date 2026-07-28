@@ -1,6 +1,7 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
+import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.service.SourceService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,5 +29,11 @@ public class SourceController {
 	public ApiResponse<SourceReportResponse> report(
 			@RequestParam(required = false) String runKey) {
 		return ApiResponse.onSuccess(sourceService.report(runKey));
+	}
+
+	/** 실행 격자(슬롯×작업) — 최근 {@code days}일의 런 전부(ALPHA-594). 범위 검증은 서비스가 한다. */
+	@GetMapping("/api/v1/sources/grid")
+	public ApiResponse<SourceGridResponse> grid(@RequestParam(defaultValue = "30") int days) {
+		return ApiResponse.onSuccess(sourceService.grid(days));
 	}
 }

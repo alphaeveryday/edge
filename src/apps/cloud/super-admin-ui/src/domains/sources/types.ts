@@ -144,3 +144,36 @@ export interface SourceReport {
   tasks: TaskStatus[];
   issues: ReconciliationIssue[];
 }
+
+/* ---------- 실행 격자 (ALPHA-594) ---------- */
+
+/**
+ * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축 분리(plan·outcome·data)와 건수 null
+ * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도·시각 축은 안 온다 — 셀에서 드릴다운으로 넘어가 본다.
+ */
+export interface GridCell {
+  stage: string;
+  taskKey: string;
+  planStatus: PlanStatus;
+  outcome: TaskOutcome | null;
+  dataStatus: DataStatus | null;
+  recordsOut: number | null;
+  failedRecords: number | null;
+  skipReason: string | null;
+  outcomeReason: string | null;
+}
+
+/** 격자 한 열 — 슬롯(런) 하나. tasks 가 빈 런(기동 실패 등)도 열로 온다 — 부재가 1급 신호다. */
+export interface GridSlot {
+  runKey: string;
+  launchStatus: LaunchStatus | null;
+  orchestrationStatus: OrchestrationStatus | null;
+  tradingDate: string | null;
+  tasks: GridCell[];
+}
+
+/** 실행 격자 응답. slots 는 계획 시각 오름차순 — **배열 순서가 곧 표시 순서**다. */
+export interface SourceGrid {
+  days: number;
+  slots: GridSlot[];
+}

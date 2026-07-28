@@ -21,6 +21,7 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     section: '가격 변동 분석 관리',
     items: [
       { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
+      { path: '/grid', label: '실행 격자', icon: 'dashboard' },
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
     ],
   },
