@@ -112,3 +112,18 @@ resource "aws_route_table_association" "data" {
   subnet_id      = aws_subnet.data[count.index].id
   route_table_id = aws_route_table.data.id
 }
+
+# ── S3 gateway VPC endpoint (ALPHA-349) ─────────────────
+# 무료(gateway 형은 과금 없음) — private(compute) 라우트 테이블에만 연결해 S3 트래픽
+# (data-pipeline 레이크 적재·ECR 레이어 pull 등)이 NAT 데이터 처리 요금을 우회한다.
+# data 라우트 테이블은 제외 — 격리 tier 에 없던 S3 도달성을 새로 부여하지 않는다.
+# Interface endpoint(ECR api/dkr·Logs 등)는 시간당 과금이라 범위 밖(NAT 처리량 실측 후 별도 판단).
+data "aws_region" "current" {}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.this.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = aws_route_table.private[*].id
+  tags              = { Name = "${var.name}-s3" }
+}
