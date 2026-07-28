@@ -3,18 +3,16 @@ package com.edge.syncagent.controller;
 import com.edge.common.exception.GeneralException;
 import com.edge.syncagent.error.SyncAgentErrorStatus;
 import com.edge.syncagent.service.BundleRelayService;
-import com.edge.syncagent.service.BundleRelayService.VerifiedBundle;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Optional;
-
 /**
  * Intake(내부망)가 폴링하는 내부 표면 — GET /internal/v1/bundles?after={cursor}.
- * 수신한 번들 바이트를 무변형 전달한다(204 포함).
+ * 수신한 응답 바이트를 무변형 전달한다 — 항상 200(신규 없음도 빈 공통 응답 포맷 바디,
+ * ADR-0042 로 204 폐지).
  * 이 표면은 DMZ→내부망 경계 메커니즘의 로컬 재현이다(ADR-0036 — 실배치에선
  * 증권사의 승인된 망연계 채널이 이 자리를 대신한다).
  */
@@ -43,11 +41,8 @@ public class BundleRelayController {
 		if (limit < 1 || limit > LIMIT_MAX) {
 			throw new GeneralException(SyncAgentErrorStatus.INVALID_LIMIT);
 		}
-		Optional<VerifiedBundle> bundle = bundleRelayService.pull(after, limit);
-		return bundle
-				.map(b -> ResponseEntity.ok()
-						.contentType(MediaType.APPLICATION_JSON)
-						.body(b.body()))
-				.orElseGet(() -> ResponseEntity.noContent().build());
+		return ResponseEntity.ok()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(bundleRelayService.pull(after, limit));
 	}
 }

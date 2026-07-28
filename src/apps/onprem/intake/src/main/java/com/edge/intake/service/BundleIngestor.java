@@ -54,7 +54,7 @@ public class BundleIngestor {
 		// 신규 없음(ADR-0042 M1): result "필드 자체 부재"만 신규 없음이다 — 생산자(ApiResponse.onSuccess(null)
 		// + @JsonInclude NON_NULL)는 필드를 생략하지 null 을 싣지 않는다. "result": null 명시는 NullNode
 		// (isMissingNode=false)라 아래 cursor 검증에서 계약 위반으로 떨어진다 — null 관용은 malformed 봉투를
-		// 신규 없음으로 오독할 통로라 열지 않는다. 204 수용(클라이언트 계층)은 과도기 — M3(ALPHA-600)에서 제거.
+		// 신규 없음으로 오독할 통로라 열지 않는다. 204 는 계약 밖 — 클라이언트 계층이 위반으로 거부한다(M3).
 		JsonNode envelope = root.path("result");
 		if (envelope.isMissingNode()) {
 			log.debug("신규 없음(result 생략 성공 포맷) — 저장·전진 없이 종료");
