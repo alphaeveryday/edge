@@ -72,7 +72,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 ### 배포 시 마이그레이션은 VPC 내부 ECS one-off task에서 실행한다
 
-운영/스테이징 RDS는 private 서브넷 + SG 제한이라 **GitHub-hosted 러너(VPC 밖)에서 직접 접속할 수 없다.**
+운영/스테이징 RDS는 private 서브넷 + SG 제한이라 **self-hosted 러너(VPC 밖)에서 직접 접속할 수 없다.**
 그래서 배포 워크플로는 러너에서 Flyway를 돌리지 않는다. 대신:
 
 1. 러너가 **OIDC로 AWS 인증**(장기 액세스 키 없음).
