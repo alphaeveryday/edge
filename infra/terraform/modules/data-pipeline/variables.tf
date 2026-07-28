@@ -261,8 +261,9 @@ variable "assemble_window_days" {
   validation {
     # 음수는 역전 창이라 전 파티션을 제외해 0건 조립을 성공으로 위장하고(Rule 12), 소수는
     # command 로 "1.5" 가 실려 run.py argparse type=int 가 거부해 매 런이 즉시 실패한다.
-    condition     = var.assemble_window_days >= 0 && floor(var.assemble_window_days) == var.assemble_window_days
-    error_message = "assemble_window_days 는 0 이상의 정수여야 한다(음수=역전 창, 소수=argparse int 거부)."
+    # 상한(3650)은 run.py 공통 가드와 짝 — 넘으면 date 연산 하한 초과로 로그 없이 크래시한다.
+    condition     = var.assemble_window_days >= 0 && var.assemble_window_days <= 3650 && floor(var.assemble_window_days) == var.assemble_window_days
+    error_message = "assemble_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
   }
 }
 

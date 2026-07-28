@@ -188,6 +188,11 @@ def main(argv: list[str] | None = None) -> int:
         # 성공으로 위장하므로, 언제 주어지든(명시 --from/--to 와 함께라 무시될 때조차) 거부.
         if args.window_days < 0:
             raise SystemExit(f"--window-days 는 음수일 수 없다: {args.window_days}")
+        # 상한: 창은 최근 파티션 소급 폭이다 — 비상식 값(예 800000)은 date 연산 하한을 넘겨
+        # collection_log 도 못 남기고 크래시한다(OverflowError). 과거 전체가 필요하면 창을
+        # 키우는 게 아니라 미지정 풀스캔(tag-news)·--from/--to 백필(assemble)이 그 경로다.
+        if args.window_days > 3650:
+            raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

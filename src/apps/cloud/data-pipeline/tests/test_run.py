@@ -456,3 +456,14 @@ def test_assemble_negative_window_days_fails_loud(monkeypatch):
         main(["assemble-events", "--run-id", "R", "--window-days", "-1"])
     assert "음수" in str(err.value)
     assert "window" not in captured  # 스텝까지 못 간다
+
+
+def test_absurd_window_days_fails_loud(monkeypatch):
+    # WHY: 상한 없는 창(예 800000)은 date 연산 하한을 넘겨 OverflowError 로 죽는데, 그
+    #      크래시는 collection_log 기록 밖이라 감사 레코드 없이 매 런 실패한다 — 파싱 직후
+    #      fail-loud 가 맞다(풀스캔은 미지정·--from/--to 가 정규 경로).
+    run_mod, captured = _spy_assemble(monkeypatch)
+    with pytest.raises(SystemExit) as err:
+        main(["assemble-events", "--run-id", "R", "--window-days", "800000"])
+    assert "상한" in str(err.value)
+    assert "window" not in captured
