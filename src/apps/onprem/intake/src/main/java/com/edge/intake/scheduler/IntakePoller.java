@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * 폴링 루프 — committed cursor(sync_state)에서 재개해 신규 번들이 없을 때까지 드레인.
@@ -45,7 +46,12 @@ public class IntakePoller {
 				if (bundle.isEmpty()) {
 					return;
 				}
-				cursor = bundleIngestor.ingest(bundle.get());
+				// 신규 없음(result 생략 성공 포맷, ADR-0042 M1)도 이번 틱 종료 — 204 경로와 같은 의미.
+				OptionalLong advanced = bundleIngestor.ingest(bundle.get());
+				if (advanced.isEmpty()) {
+					return;
+				}
+				cursor = advanced.getAsLong();
 			}
 			log.info("tick 상한 도달(maxBundlesPerTick={}) — 잔여분은 다음 틱에", maxBundlesPerTick);
 		} catch (Exception e) {
