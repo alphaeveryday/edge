@@ -54,4 +54,4 @@
 - 데모를 마음껏 apply/destroy해도 실 클라우드(`envs/dev`)는 안전.
 - 데모 스택은 foundation에만 의존 — dev와 디커플.
 - 실행 흐름: **terraform=서버·호스팅 인프라 / CD(SSM)=이미지·compose·콘텐츠** — 두 수명주기 분리.
-- 후속: 온프렘 코드 완료 시 compose·`deploy-demo-onprem.yml`·CloudFront API 오리진·SSM 배포권한(ALPHA-445).
+- 후속: 온프렘 코드 완료 시 compose·`deploy-demo-onprem.yml`·CloudFront API 오리진·SSM 배포권한(ALPHA-445). (실현됨 — 배포 CD 는 ALPHA-542 로 구축, 마이그레이션 preflight·flyway force-recreate·기동 단언 포함.)

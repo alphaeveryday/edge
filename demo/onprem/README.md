@@ -11,7 +11,7 @@
 
 ## 마이그레이션 SQL 번들 (필수)
 
-`flyway-onprem` 은 `${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}` 를 마운트한다. 박스엔 레포 소스가 없으므로 **배포(ALPHA-445 SSM)가 `src/libs/schema/migrations-onprem/` 를 이 파일 옆 `migrations-onprem/` 로 번들**해 함께 올려야 한다. 번들이 없으면 스키마 미적용 → 앱이 `ddl-auto=validate` 로 부팅 실패한다.
+`flyway-onprem` 은 `${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}` 를 마운트한다. 박스엔 레포 소스가 없으므로 **배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 `src/libs/schema/migrations-onprem/` 를 이 파일 옆 `migrations-onprem/` 로 번들**해 함께 올린다. 번들이 없으면 스키마 미적용 → 앱이 `ddl-auto=validate` 로 부팅 실패하므로, CD 는 `compose up` 전에 SQL 개수 preflight 로 fail-loud 중단한다(ALPHA-560 검증 종결).
 
 ## 환경 변수 (기본값)
 
@@ -48,7 +48,7 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
   docker compose -f docker-compose.yml config      # 문법·해석 확인
 ```
 
-## 재배포 주의 (ALPHA-445 배포가 처리)
+## 재배포 주의 (배포 CD 가 처리 — ALPHA-542)
 
 `flyway-onprem` 은 one-shot·불변 이미지라 재배포(새 이미지·새 SQL) 시 `docker compose up` 이 기존 종료 컨테이너를 재사용해 **새 마이그레이션을 건너뛴다**. 매 릴리스 스키마를 적용하려면 배포가 앱 기동 전에 `docker compose up --force-recreate flyway-onprem`(또는 해당 서비스 rerun)을 먼저 돌려야 한다.
 
@@ -59,6 +59,6 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
 - `sync-agent` 대상 = 실 cloud sync ALB(로컬은 컨테이너). trust store 미주입 dev 라 현재 평문 HTTPS — cert·인가는 후속.
 - cloud 서비스 없음(AWS 에 있음). 호스트 노출은 `mock-broker` 뿐(공개 박스 표면 최소화).
 
-## 범위 밖 (후속)
+## 이 문서의 범위 밖 (완료·후속 현황)
 
-박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진·`tenant_delivery` 시드·mTLS cert 는 **ALPHA-445**. 검수 콘솔 서빙(`tenant-console-api` + nginx `tenant-console-ui` co-host)은 ALPHA-554 로 편입됨 — 콘솔 기능 완성(검수 워크플로·정책·감사 화면)은 ALPHA-423 epic 후속.
+박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진은 **완료**(ALPHA-445 개통 + ALPHA-542 배포 CD — deploy-demo-onprem.yml). `tenant_delivery` 는 **수동 시드로 개통**(자동 발번 fan-out 은 ALPHA-493). 검수 콘솔 서빙(`tenant-console-api` + nginx `tenant-console-ui` co-host)도 ALPHA-554 로 완료. 잔여 후속: mTLS cert·인증서-테넌트 바인딩(ALPHA-447), 콘솔 기능 완성은 ALPHA-423 epic 경로로 진행 중(검수·정책·감사 열람은 436·438·431 완료).
