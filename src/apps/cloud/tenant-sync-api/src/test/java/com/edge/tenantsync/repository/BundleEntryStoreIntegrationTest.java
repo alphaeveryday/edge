@@ -185,7 +185,8 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 
 	@Test
 	void 신규_전달이_없으면_빈_리스트를_돌려준다() {
-		// WHY: 빈 결과는 컨트롤러 204(신규 없음)의 유일한 신호다 — null 이나 예외면 폴링이 깨진다.
+		// WHY: 빈 결과는 컨트롤러 "신규 없음"(200 + result 생략, ADR-0042)의 유일한 신호다 —
+		// null 이나 예외면 폴링이 깨진다.
 		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
 		seedRun("it-run-1", asOf);
 		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);

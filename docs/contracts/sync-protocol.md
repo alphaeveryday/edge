@@ -24,11 +24,11 @@
 - **경로·파라미터**: `GET /api/v1/sync/bundle?after={cursor}&limit={n}`
   - `after` = 소비자의 마지막 committed cursor(첫 동기화는 0). 0 미만은 400.
   - `limit` = **응답 번들에 담길 전달 레코드(entry) 수 상한** — 생략 시 100, 허용 1..500, 범위 밖은 400(`SYNC4002`). 수치 표현 자체가 불가한 값(정수 범위 밖·비수치)은 파라미터 바인딩 실패라 공통 400 으로 나간다. 한 응답은 항상 번들 1개다(번들 개수 파라미터가 아니다).
-- **응답 포맷 (200)**: 본문 = 공통 응답 포맷 `ApiResponse` 봉투(`{isSuccess,code,message,result}`)이고 Event Bundle은 `result` 아래에 온다([event-bundle-schema.md](event-bundle-schema.md)), `Content-Type: application/json`, 번들 필드 표기 snake_case(`bundle_id`·`cursor_from`·`delivery_type` …). 다른 엔드포인트와 동일한 봉투 규약이다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md) — byte[]·체크섬 특례 폐기).
+- **응답 포맷 (200)**: 본문 = 공통 응답 포맷(`ApiResponse`, `{isSuccess,code,message,result}`)이고 Event Bundle은 `result` 아래에 온다([event-bundle-schema.md](event-bundle-schema.md)), `Content-Type: application/json`, 번들 필드 표기 snake_case(`bundle_id`·`cursor_from`·`delivery_type` …). 다른 엔드포인트와 동일한 공통 응답 포맷 규약이다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md) — byte[]·체크섬 특례 폐기, [ADR-0042](../adr/0042-sync-pull-uniform-response.md) — 204 특례 폐지).
 - **다음 cursor 전달**: 번들의 `cursor_to`(`result.cursor_to`)가 재개점이다 — 소비자는 번들 commit(원본 저장 + cursor 전진)이 끝난 뒤 committed cursor를 `cursor_to`로 전진시키고, 다음 Pull 은 `after={committed cursor}` 로 요청한다. entry 별 `cursor`는 번들 내 순서와 도메인 반영 추적용이며 재개점이 아니다. 서버는 `after` 초과분을 cursor 오름차순으로 묶는다 — gap 감지는 목표 계약(아래).
-- **신규 없음**: `204 No Content` — 빈 번들은 만들지 않는다.
+- **신규 없음**: `200` + `result` 필드 생략 — 빈 번들은 만들지 않는다(`result` 부재가 "번들 없음"을 말한다, [ADR-0042](../adr/0042-sync-pull-uniform-response.md) — 204 는 검증 불가 fail-silent 라 폐지). `"result": null` 명시는 계약 밖(생산자는 필드를 생략한다).
 - **무결성**: MVP는 전송 계층(mTLS/TLS)에 위임 — 앱 레벨 체크섬 헤더(`X-Bundle-Checksum`)는 폐기됐다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md)). 발신자 서명 기반 무결성은 목표 계약(아래).
-- **에러 시맨틱**: 성공(200)·4xx/5xx 모두 공통 응답 포맷(jvm-common `ApiResponse`) — 200은 `result` 아래 번들, 에러는 `result` 없음.
+- **에러 시맨틱**: 성공(200)·4xx/5xx 모두 공통 응답 포맷(jvm-common `ApiResponse`) — 구분자는 `isSuccess` 다(성공=true·번들 있으면 `result` 아래·신규 없음이면 `result` 생략, 에러=false·`result` 없음).
   - `400 SYNC4001`(after 위반)·`400 SYNC4002`(limit 위반) — **소비자 버그 신호**. 401·403·410 외 4xx 는 재시도로 낫지 않는다: 소비자는 이를 **일시 장애로 취급하지 않고**(백오프·복구 대기 없음) 즉시 에러 로그로 표면화하며, 해법은 수정 배포다. 폴링 데몬 구조상 다음 주기의 재호출 자체는 발생하지만 그것이 복구 수단이 아니다(fail-loud).
   - 5xx·네트워크 오류 — 일시 장애로 보고 다음 폴링 주기에 재시도한다. at-least-once 이므로 재시도 중복은 멱등 upsert 가 흡수한다.
   - 인증서 관련 401·403 의 도메인 코드는 [sync-auth.md](sync-auth.md) 계약에서 추가한다.
