@@ -25,22 +25,39 @@
 
 | 제외 | state | 왜 |
 |---|---|---|
-| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 부재는 아래 `instrumented=False` 로 해소되므로 더는 장애물이 아니다 |
+| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**`instrumented=False` 3개**(TagNews·CollectKrxEtf·CollectDartDisclosure) —
-task-def 에 DB env 가 없어(`tasks.tf`: host 만 주면 password 없는 DbConfig 로 `load_settings()` 가
-통째로 실패, 부분 주입 불가) 컨테이너가 자기 attempt 를 못 쓴다. 그렇다고 빼면 안 된다:
-Reconciler 의 SFN·ECS 증거 backfill 이 **유일하지만 정확한** 기록 경로이기 때문이다(그 경우
-attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다). 즉 등록에 신뢰경계 변경 — 벤더 API
-컨테이너에 RDS 마스터 비밀번호를 주는 것 — 은 필요 없다.
+**`instrumented=False` 는 이제 `TagNews` 하나뿐이다**(ALPHA-596 이 krx·dart 를 승격). deepseek
+task-def 에 DB env 가 없어 그 컨테이너는 자기 attempt 를 못 쓰고, Reconciler 의 SFN·ECS 증거
+backfill 이 유일하지만 정확한 기록 경로다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을
+열지 않는다). 빼지 않고 등록하는 이유는 **NewsFeatureCheckResults 게이트의 멤버**라서다.
 
-**대신 무엇을 얻고 무엇을 못 얻는지 분명히 하자**(Rule 12). 얻는 것: 실행 여부와 성패
-(`task_outcome`·`execution_status` — ECS 종료가 증거다). 못 얻는 것: `records_out`·
-`failed_records`·`data_status` — 로그 관측(`_observe_from_log`)이 컨테이너 안에서 도는데 그
-컨테이너가 원장에 못 쓰기 때문이다. 즉 **exit 0 인데 부분 유실**(공시 미매핑 등)은 이 경로로
-안 보인다 — 그건 여전히 S3 `collection_log` 를 봐야 한다. 판정 시점도 Reconciler 실행 때다.
+krx·dart 를 풀 때 근거로 삼았던 것: "벤더 API 컨테이너에 RDS 접속을 주는 신뢰경계 변경이 전제"
+라는 서술이 **IAM·네트워크 층에서 이미 무너져 있었다**. 실행 역할이 task-def 전체 공유라
+`iam.tf` 가 DB 시크릿을 이미 허용하고, 보안그룹도 하나라 두 컨테이너는 그전에도 RDS 에 닿았다.
+결정적으로 `kis` 가 반례다 — 벤더 API 컨테이너인데 DB password 를 받는다. 즉 경계는 신뢰경계
+판단의 결과가 아니라 ALPHA-530 MVP 슬라이스가 고른 순서의 잔재였다. TagNews 도 같은 두 줄이면
+풀리지만, 그건 뉴스 레인 소관이라 이 티켓 범위 밖이다.
+
+원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
+않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
+
+⚠️ **`instrumented=True` 는 task-def 에 DB env 가 있다는 주장이다.** 없는 task-def 에 True 를
+달면 wrapper 가 `load_settings()` 단계에서 db 섹션 없이 뜨고, 그 작업은 **PENDING 행만 남긴 채
+조용히 계측 없이 돈다**(화면에서 "대기"로 굳는다). 코드 안에서는 확인할 수 없는 사실이라
+`test_instrumented_entries_have_db_env_in_taskdef` 가 `tasks.tf` 를 읽어 대조한다.
+
+**ALPHA-596 이 뒤집은 것.** 이 자리엔 원래 "krx·dart 는 DB env 가 없어 `instrumented=False`,
+등록에 신뢰경계 변경(벤더 컨테이너에 RDS 비밀번호)이 전제"라고 적혀 있었다. 실제 인프라를 읽어
+보니 그 전제는 **IAM·네트워크 층에서 이미 무너져 있었다**: 실행 역할이 task-def 전체 공유라
+`iam.tf` 가 DB 시크릿을 이미 허용하고, 보안그룹도 하나라 krx·dart 컨테이너는 그전에도 RDS 에
+닿았다. 결정적으로 `kis` 가 반례다 — 벤더 API 컨테이너인데 DB password 를 받는다. 즉 경계는
+신뢰경계 판단의 결과가 아니라 ALPHA-530 MVP 슬라이스가 고른 순서의 잔재였다.
+
+원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
+않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
 
 ⚠️ 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다(FMP 4개는 토글 off,
 DART 재무는 소비자 0). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
@@ -181,12 +198,22 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
         ecs_task_definition="kis", source_vendor="kis",
     ),
-    # ── KRX·DART 수집 2 (DB env 없는 task-def — instrumented=False) ────────────────
-    # 컨테이너가 원장에 못 쓰므로 attempt 결측이 정상이고, Reconciler 의 SFN·ECS 증거
-    # backfill 이 유일·정확한 기록 경로다(LEDGER_GAP 을 열지 않는다). 등록하지 않으면 수집
-    # 실패가 원장에 **자리조차 없다**. 2026-07-27 KRX 수집을 손으로 죽였는데(exit 137) 화면에 아무것도 안 뜬
-    # 것이 그 실증이다. 등록만으로 그 종료가 FAILED 로 판정된다(_judge_outcome 은 terminal 을
-    # 그대로 옮긴다). 비밀번호를 벤더 컨테이너에 주는 신뢰경계 변경은 여전히 필요 없다.
+    # ── KRX·DART 수집 2 ───────────────────────────────────────────────────────────
+    # 등록하지 않으면 수집 실패가 원장에 **자리조차 없다**. 2026-07-27 KRX 수집을 손으로
+    # 죽였는데(exit 137) 화면에 아무것도 안 뜬 것이 그 실증이다(ALPHA-578).
+    # ALPHA-596 에서 `tasks.tf` 가 두 task-def 에 DB env 를 주면서 **직접 계측**으로 올렸다 —
+    # 컨테이너 종료 즉시 판정되고, 그전엔 못 얻던 `records_out`·`failed_records`·`data_status` 가
+    # 함께 올라온다. 두 수집기 다 `collection_log` 에 `ops` 봉투를 이미 쓰고 있어서
+    # `_observe_from_log` 가 그대로 읽는다(새 계측을 심지 않는다 — ALPHA-182 정신).
+    # Reconciler backfill 은 이제 백스톱이다: attempt 가 없으면 그건 정상이 아니라 LEDGER_GAP 이다.
+    # ⚠️ **배선(terraform)이 먼저, 플래그 해제가 나중이다** — 이 순서를 지켜야 한다(edge-review).
+    # 이미지 배포(deploy-data-pipeline.yml)와 task-def apply(terraform-apply.yml)는 독립
+    # 워크플로라 순서 보장이 없다. 플래그가 먼저 뜨면 Reconciler 가 DB env 없는 컨테이너를 계측
+    # 대상으로 보고 **영구 거짓 LEDGER_GAP** 을 연다(resolve_issue 는 MISSED·PLANNER_MISSING
+    # 전용이라 자동 해소가 없다). 그래서 ALPHA-596 은 PR 을 둘로 쪼갰다 — #359 가 배선만 보내고
+    # (그 중간 상태는 wrapper 가 이미 기록하되 Reconciler 는 결측을 정상으로 봐 어느 순서로
+    # 배포돼도 안전하다), apply 성공 확인 뒤 이 플래그를 풀었다. FMP 를 되살릴 때도 같은 순서다.
+
     # ⚠️ `stalled_after_seconds` 를 SFN 타임아웃에 맞춘다(AssembleEvents 와 같은 근거). 기본 1시간은
     # 이 둘의 **정상 재시도**보다 짧다: PoliteClient 는 요청당 4회 시도 + 백오프(1·2·4초)라
     # KRX(타임아웃 45초·ETF 31종)는 최악 31×(45×4+7) ≈ 5,797초, DART 도 대상 corp 수만큼 직렬이다.
@@ -195,13 +222,13 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="ETF_HOLDINGS_COLLECTION_KRX", stage="raw", dataset="etf_holdings", required=True,
         cli_command=("ingest-raw-etf", "--source", "krx"), sfn_state_name="CollectKrxEtf",
-        ecs_task_definition="krx", source_vendor="krx", instrumented=False,
+        ecs_task_definition="krx", source_vendor="krx",
         stalled_after_seconds=21600,
     ),
     CatalogEntry(
         task_key="DISCLOSURE_COLLECTION_DART", stage="raw", dataset="disclosures", required=True,
         cli_command=("ingest-raw-disclosure",), sfn_state_name="CollectDartDisclosure",
-        ecs_task_definition="dart", source_vendor="dart", instrumented=False,
+        ecs_task_definition="dart", source_vendor="dart",
         stalled_after_seconds=21600,
     ),
     # ── 정제 8 (bigkinds task-def 재사용 — 레이크만 읽어 벤더 키 불요) ─────────────
