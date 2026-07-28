@@ -106,8 +106,14 @@ export function GridPage() {
     for (const cell of slot.tasks) cellByKey.set(`${slot.runKey}|${cell.taskKey}`, cell);
   }
 
-  const openDrilldown = (runKey: string) =>
-    navigate(`/sources?runKey=${encodeURIComponent(runKey)}`);
+  /* 셀 클릭은 그 작업을 지목해 드릴다운의 해당 행으로 바로 떨어진다 — 런 전체만 열면
+   * 방금 누른 작업을 목록에서 다시 찾아야 한다. 헤더 클릭은 런 전체. */
+  const openDrilldown = (runKey: string, taskKey?: string) =>
+    navigate(
+      `/sources?runKey=${encodeURIComponent(runKey)}${
+        taskKey ? `&task=${encodeURIComponent(taskKey)}` : ''
+      }`,
+    );
 
   return (
     <div className="flex flex-col gap-4">
@@ -202,7 +208,7 @@ export function GridPage() {
                             <td
                               key={slot.runKey}
                               title={cellTip(cell, slot.runKey)}
-                              onClick={() => openDrilldown(slot.runKey)}
+                              onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
                               style={{ padding: 2, cursor: 'pointer' }}
                             >
                               <div
