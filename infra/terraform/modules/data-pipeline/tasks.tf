@@ -109,9 +109,12 @@ locals {
     DATA_PIPELINE_DB__USER = var.db_user
   }
 
-  # 운영 원장(ALPHA-530): PRICE_COLLECTION_KIS(kis)·NORMALIZE_PRICE(bigkinds) 컨테이너가
-  # wrapper 로 attempt/data_status 를 **직접** 기록하려면 원장 DB 가 필요하다. rds·events 와 같은
-  # DB 접속(같은 Cloud Event Store, ops_ 테이블). 없으면 그 두 wrapper 가 no-op 이 된다(edge-review).
+  # 운영 원장(ALPHA-530): 계측 대상 컨테이너가 wrapper 로 attempt/data_status 를 **직접**
+  # 기록하려면 원장 DB 가 필요하다. rds·events 와 같은 DB 접속(같은 Cloud Event Store, ops_ 테이블).
+  # 없으면 그 wrapper 가 no-op 이 된다(edge-review) — 원장에 PENDING 행만 남아 화면이 "대기"로
+  # 굳고, 컨테이너 안에서만 도는 로그 관측(records_out·data_status)은 영영 못 올라온다.
+  # ⚠️ 여기 목록은 `catalog.py` 의 `instrumented=True` 집합과 **같아야 한다** — 어긋나면
+  # 그 작업이 조용히 계측 없이 돈다. test_ops_catalog 가 이 파일을 읽어 대조한다(ALPHA-596).
   # KRX ETF 수집(ALPHA-387)은 as-of 라벨을 거래일 판정으로 정한다 — 비거래일 런은 KRX 가 직전
   # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
   # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
@@ -130,7 +133,8 @@ locals {
     })
     bigkinds = local.db_env
     rds_dart = local.db_env
-    krx      = { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) }
+    krx      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
+    dart     = local.db_env
   }
 
   secret_sets = {
@@ -159,13 +163,19 @@ locals {
       # PRICE_COLLECTION_KIS wrapper 가 원장에 기록하려면 DB password 도 필요하다(ALPHA-530).
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
+    # DISCLOSURE_COLLECTION_DART wrapper 가 원장에 기록하려면 DB password 도 필요하다(ALPHA-596).
+    # 이 task-def 로는 CollectDartFinancial 도 도는데, 그건 하류 소비자가 0이라 카탈로그 미등록이다
+    # — 미등록 작업은 wrapper 가 투명 통과하므로(run.py `task_key_for` → None) 영향이 없다.
     dart = {
       DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY  = "${aws_secretsmanager_secret.dart.arn}:apikey::"
       DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY = "${aws_secretsmanager_secret.dart.arn}:apikey::"
+      DATA_PIPELINE_DB__PASSWORD                     = "${var.db_password_secret_arn}:password::"
     }
+    # ETF_HOLDINGS_COLLECTION_KRX wrapper 기록용(ALPHA-596) — 위 dart 와 같은 이유.
     krx = {
       DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID = "${aws_secretsmanager_secret.krx.arn}:mbr_id::"
       DATA_PIPELINE_KRX_ETF__SOURCE__PW     = "${aws_secretsmanager_secret.krx.arn}:pw::"
+      DATA_PIPELINE_DB__PASSWORD            = "${var.db_password_secret_arn}:password::"
     }
     # tag-news 의 LLM 설정은 DATA_PIPELINE_* 네임스페이스 밖이다 — LLM 은 수집 소스가 아니라
     # load_settings() 계약에 들지 않고, 호출부(run.py)가 env 를 직접 읽는다(analysis-engine
