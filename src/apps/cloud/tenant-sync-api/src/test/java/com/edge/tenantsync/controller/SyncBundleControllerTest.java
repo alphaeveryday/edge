@@ -15,6 +15,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -102,12 +104,13 @@ class SyncBundleControllerTest {
 	void 신규_없음은_result_생략_성공_포맷이다() throws Exception {
 		// WHY: 신규 없음도 isSuccess 형상을 실어야 소비자가 자기 인증한다(ADR-0042 — 204 는
 		// 검증 불가 fail-silent: 오설정 프록시의 204 가 "신규 없음"으로 위장하면 sync 가 조용히
-		// 영구 정지). result 부재만이 "번들 없음"의 표현이다.
+		// 영구 정지). result 는 "필드 부재"여야 한다 — doesNotExist() 는 null 명시도 통과시키므로
+		// 루트 키 부재를 단언한다(intake 는 "result": null 을 계약 위반으로 거부 — null 회귀 감지).
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "3"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
-				.andExpect(jsonPath("$.result").doesNotExist());
+				.andExpect(jsonPath("$", not(hasKey("result"))));
 	}
 
 	@Test
