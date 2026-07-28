@@ -57,14 +57,19 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	private static byte[] newBundle(String id, String ticker, String summary) {
-		return ("""
+		String inner = ("""
 				{"cursor_from":1,"cursor_to":1,"entries":[{"cursor":1,"delivery_type":"NEW",
 				 "source_events":[],"evidences":[],
 				 "explanation_result":{"explanation_result_id":"%s","etf_instrument_id":"i-1",
 				 "etf_ticker":"%s","etf_name":"KODEX 200","trade_date":"2026-07-15",
 				 "explanation_as_of":"2026-07-15T16:00:00+09:00","explanation_type":"EVENT_SUPPORTED",
-				 "summary":"%s","confidence_level":"MEDIUM"}}]}""")
-				.formatted(id, ticker, summary).getBytes(StandardCharsets.UTF_8);
+				 "summary":"%s","confidence_level":"MEDIUM"}}]}""").formatted(id, ticker, summary);
+		return envelope(inner).getBytes(StandardCharsets.UTF_8);
+	}
+
+	/** 신형 와이어 형상(ADR-0040 T4 후 유일 형상) — 저장 body 를 ApiResponse 봉투(result 아래)로 감싼다. */
+	private static String envelope(String innerBundleJson) {
+		return "{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":" + innerBundleJson + "}";
 	}
 
 	@Test
@@ -141,7 +146,7 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 		// 콘솔(436)이 읽는 원장에 그대로 쌓여야 한다.
 		seedActivePolicy(true, null);
 		screener.screen(90105L, newBundle("it431-h1", "IT431A", "무해한 요약"));
-		screener.screen(90106L, ("""
+		screener.screen(90106L, envelope("""
 				{"cursor_from":2,"cursor_to":2,"entries":[{"cursor":2,"delivery_type":"CORRECTION",
 				 "target_explanation_result_id":"it431-h1","reason":"근거 정정",
 				 "source_events":[],"evidences":[],
@@ -149,7 +154,7 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 				 "etf_ticker":"IT431A","etf_name":"KODEX 200","trade_date":"2026-07-15",
 				 "explanation_as_of":"2026-07-15T16:00:00+09:00","explanation_type":"EVENT_SUPPORTED",
 				 "summary":"정정 요약","confidence_level":"MEDIUM"}}]}""")
-				.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+				.getBytes(StandardCharsets.UTF_8));
 
 		var rows = jdbc.queryForList("SELECT analysis_item_id, from_status, to_status, actor_type, "
 				+ "actor_id, reason FROM analysis_item_status_history "

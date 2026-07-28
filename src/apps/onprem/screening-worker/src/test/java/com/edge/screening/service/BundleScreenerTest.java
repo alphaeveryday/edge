@@ -148,15 +148,16 @@ class BundleScreenerTest {
 		screener = new BundleScreener(pending, items, publications, policies, ruleRepo, checks, history);
 	}
 
+	/** 신형 와이어 형상(ADR-0040 T4 후 유일 형상) — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다. */
 	private static byte[] bundle(String entries) {
-		return ("{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}")
+		return ("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":"
+				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}}")
 				.getBytes(StandardCharsets.UTF_8);
 	}
 
-	/** 신형 와이어 형상 — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다(ADR-0040). */
-	private static byte[] envelopeBundle(String entries) {
-		return ("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":"
-				+ "{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}}")
+	/** 구형 direct-root 형상 — T4 후 봉투 아님으로 거부돼야 한다(회귀 감지용). */
+	private static byte[] directRootBundle(String entries) {
+		return ("{\"cursor_from\":1,\"cursor_to\":9,\"entries\":[" + entries + "]}")
 				.getBytes(StandardCharsets.UTF_8);
 	}
 
@@ -171,16 +172,16 @@ class BundleScreenerTest {
 	}
 
 	@Test
-	void 신형_봉투_번들도_NEW를_자동_게시한다() {
-		// WHY: cloud 봉투 전환(ADR-0040) 후 저장 body 는 ApiResponse 봉투(result 아래에 번들)다 —
-		// 파서는 구(root)·신(result) 형상을 모두 견뎌야 한다. 없으면 미점검 구형 저장분 하나가
-		// ScreeningPoller(첫 실패서 순서보존 중단)를 영구 차단한다.
-		screener.screen(1, envelopeBundle(
+	void 구형_direct_root_번들은_봉투_아님으로_거부된다() {
+		// WHY(Rule 9): T4 로 이중형상 폴백을 제거했다(ADR-0040) — 커토버 저장분 소진 후 저장 body 는
+		// 항상 봉투다. isSuccess 결측(구형 direct-root)은 이제 계약 위반으로 fail-loud 여야 한다.
+		// 구형 행 하나가 조용히 통과해 파싱·게시되면 T4 회귀(고객 대면 경로) — 마킹·게시 없이 실패한다.
+		Executable call = () -> screener.screen(1, directRootBundle(
 				"{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
-		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
-		assertThat(publications.published).containsExactly("er-1");
-		assertThat(pending.screened).containsExactly(1L);
+		assertThrows(IllegalStateException.class, call);
+		assertThat(publications.published).isEmpty();
+		assertThat(pending.screened).isEmpty();
 	}
 
 	@Test
