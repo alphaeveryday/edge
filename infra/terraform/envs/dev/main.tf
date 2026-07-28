@@ -269,6 +269,11 @@ module "tenant_sync_api" {
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
 
+  # 부팅 93s(0.25 vCPU) + ALB healthy 플립 ~60s(연속 200 2회×30s) > 기본 120s —
+  # grace 만료 시점에 unhealthy 로 태스크가 킬되는 롤아웃 실패 실증(ALPHA-604,
+  # deploy run 30348946092 4연속). 라이브는 CLI 로 선적용됨 — 이 값은 드리프트 해소.
+  health_check_grace_period_seconds = 300
+
   # tenant_delivery(outbox) 조회 — 앱이 JDBC 를 갖게 되면서 dev RDS 배선이 필수다
   # (미주입 시 localhost 폴백 → DB health DOWN). 비밀번호는 RDS 관리형 시크릿 주입.
   environment = {
