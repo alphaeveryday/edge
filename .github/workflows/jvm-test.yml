@@ -72,7 +72,9 @@ jobs:
           set -euo pipefail
           base="origin/${BASE_REF}"
           head="${HEAD_SHA}"
-          changed="$(git diff --name-only "${base}...${head}")"
+          # --no-renames: rename 을 A+D 로 풀어 원본·대상 경로가 모두 나오게 한다 —
+          # rename 감지 시 새 경로만 출력되면 원본 모듈의 깨진 참조가 빌드에서 빠진다.
+          changed="$(git diff --name-only --no-renames "${base}...${head}")"
           echo "── 변경 파일:"
           echo "${changed}"
 
@@ -82,13 +84,15 @@ jobs:
           all_targets=":libs:jvm-common:build :apps:cloud:tenant-sync-api:build :apps:cloud:super-admin-api:build :apps:onprem:tenant-console-api:build :apps:onprem:publication-api:build :apps:onprem:sync-agent:build :apps:onprem:intake:build :apps:onprem:screening-worker:build"
 
           # 전체 트리거 — 빌드 설정·공유 라이브러리(전 앱이 의존)·이 워크플로 자신.
-          if echo "${changed}" | grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat|gradle/)|src/libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml)'; then
+          # herestring(<<<) 사용: pipefail 하에서 echo | grep -q 는 grep 조기 종료 시
+          # echo 가 SIGPIPE(141)로 죽어 대형 diff 에서 파이프라인이 실패한다.
+          if grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|src/gradle/|src/libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
             targets="${all_targets}"
             echo "전체 트리거(빌드 설정/libs/워크플로 변경) — 전 모듈 실행"
           else
             targets=""
             while read -r dir module; do
-              if echo "${changed}" | grep -q "^${dir}"; then
+              if grep -q "^${dir}" <<< "${changed}"; then
                 targets="${targets} ${module}:build"
               fi
             done <<'MAP'
@@ -104,27 +108,26 @@ jobs:
 
           targets="$(echo "${targets}" | xargs || true)"
           if [ -z "${targets}" ]; then
-            # paths 필터와 매핑 목록이 같아 보통 도달하지 않는다 — 도달하면 감지 로직과
-            # paths 필터가 어긋났다는 뜻이므로 조용히 넘기지 않고 로그로 남긴다.
-            echo "::notice::변경된 JVM 모듈 없음 — 빌드를 건너뜀 (paths 필터와 감지 매핑 불일치 여부 확인 필요)"
-          else
-            echo "── 실행 대상: ${targets}"
+            # paths 필터와 매핑 목록이 같아 정상적으론 도달하지 않는다. 도달했다면
+            # 필터-매핑 드리프트(또는 GitHub 의 paths 평가 실패로 인한 무조건 실행)다 —
+            # 아무것도 검증하지 않은 job 이 green 으로 남으면 게이트가 검증한 것처럼
+            # 보이므로 fail-loud 로 끊는다(Rule 12).
+            echo "::error::워크플로는 트리거됐는데 매핑된 JVM 모듈이 없습니다 — paths 필터와 감지 매핑의 드리프트를 확인하세요."
+            exit 1
           fi
+          echo "── 실행 대상: ${targets}"
           echo "targets=${targets}" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 21
-        if: steps.detect.outputs.targets != ''
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        if: steps.detect.outputs.targets != ''
         uses: gradle/actions/setup-gradle@v4
 
       # build = compile + test + bootJar. Testcontainers IT 포함 — 러너 Docker 로 실행.
       - name: 변경 모듈 빌드/테스트
-        if: steps.detect.outputs.targets != ''
         working-directory: src
         run: ./gradlew ${{ steps.detect.outputs.targets }}
