@@ -55,11 +55,14 @@ function slotHeaderColor(slot: GridSlot) {
   return 'var(--fg-2, #374151)';
 }
 
-/** "etf-daily:2026-07-27T15:40" → "07-27\n15:40". 시각 없는 구형 키(날짜만)는 날짜만 낸다. */
+/** "etf-daily:2026-07-27T15:40" → "07-27\n15:40". 시각 없는 구형 키(날짜만)는 날짜만 낸다.
+ * 뉴스 레인(ALPHA-591)은 "뉴스" 접두를 붙인다 — 시장 15:40 과 뉴스 15:30 이 이웃 열이라
+ * 시각만으로는 어느 레인의 슬롯인지 안 갈린다. */
 function slotLabel(runKey: string) {
   const m = runKey.match(/(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}))?/);
   if (!m) return runKey;
-  return m[4] ? `${m[2]}-${m[3]}\n${m[4]}` : `${m[2]}-${m[3]}`;
+  const lane = runKey.startsWith('news:') ? '뉴스 ' : '';
+  return m[4] ? `${lane}${m[2]}-${m[3]}\n${m[4]}` : `${lane}${m[2]}-${m[3]}`;
 }
 
 function cellTip(cell: GridCell, runKey: string) {

@@ -33,6 +33,34 @@ def _sched_hhmm() -> tuple[int, int]:
         return 15, 40
 
 
+def _news_sched_hhmms() -> list[tuple[int, int]]:
+    """뉴스 레인 스케줄 시각(KST) 목록. env(OPS_NEWS_SCHED_HHMM, 쉼표 구분 "15:00,15:30,23:50")
+    — ops_ledger.tf 가 news_schedule_expressions cron 에서 뽑아 주입한다(드리프트 불가 패턴,
+    ALPHA-564 와 같은 이유). **미주입이면 빈 목록** = 뉴스 레인 결측 판정 없음 — 뉴스 스케줄이
+    아직 Planner 를 안 타는 배포에서 거짓 PLANNER_MISSING 을 열지 않기 위한 안전 기본값이다.
+
+    불량 항목은 제외가 아니라 **fail-loud** 다(edge-review, Rule 12). 한 항목만 조용히 버리면
+    그 슬롯의 run_key 가 영영 안 만들어져 PLANNER_MISSING 감시가 **관대한 방향으로** 축소된다
+    — Planner 가 안 떠도 아무 이슈가 안 열린다. daily 의 기본값 폴백(_sched_hhmm)과 다른
+    선택인 이유: 폴백할 정답값이 없고(슬롯 집합 자체가 값), 정상 경로에선 terraform 이 cron
+    에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다."""
+    raw = os.environ.get("OPS_NEWS_SCHED_HHMM", "")
+    if not raw.strip():
+        return []
+    slots: list[tuple[int, int]] = []
+    # 값이 있는데 항목이 비었으면(" ,"·후행 쉼표) 그것도 손상이다 — 빈 항목을 걸러 주면
+    # "15:00, ,23:50" 의 가운데 슬롯이 소리 없이 사라진다(위 fail-loud 와 같은 축).
+    for part in (p.strip() for p in raw.split(",")):
+        try:
+            h, m = part.split(":")
+            slots.append((int(h), int(m)))
+        except ValueError:
+            raise SystemExit(
+                f"OPS_NEWS_SCHED_HHMM 항목 파싱 실패({part!r}) — 슬롯을 조용히 제외하면 "
+                "그 슬롯의 PLANNER_MISSING 탐지가 사라진다. 값 전체를 고쳐라.")
+    return sorted(slots)
+
+
 def ledger_from_settings(settings) -> Ledger | None:
     """settings.db 가 있으면 Ledger, 없으면 None(원장 미설정 — instrument 는 통과)."""
     db = getattr(settings, "db", None)
@@ -168,42 +196,75 @@ def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: i
 
 # ── CLI 핸들러 ────────────────────────────────────────────
 def plan_run_cli(settings) -> int:
-    """EventBridge → Planner. 상태머신 ARN·원장 DB 필수(없으면 fail-loud). launch 성공만 exit 0."""
-    arn = os.environ.get("OPS_STATE_MACHINE_ARN")
-    if not arn:
-        raise SystemExit("OPS_STATE_MACHINE_ARN 없음 — plan-run 은 상태머신 ARN 필수")
+    """EventBridge → Planner. 상태머신 ARN·원장 DB 필수(없으면 fail-loud). launch 성공만 exit 0.
+
+    레인은 env(OPS_PIPELINE_TYPE, 기본 etf-daily)가 정한다 — 뉴스 스케줄은 news 를 주입하고,
+    레인에 맞는 상태머신 ARN(OPS_NEWS_STATE_MACHINE_ARN)을 쓴다(ALPHA-591). 모르는 레인은
+    fail-loud — 조용히 시장 레인으로 계획하면 하지도 않을 작업이 기대에 실린다.
+    """
+    pipeline_type = os.environ.get("OPS_PIPELINE_TYPE", catalog.PIPELINE_TYPE)
+    if pipeline_type == catalog.PIPELINE_TYPE:
+        arn = os.environ.get("OPS_STATE_MACHINE_ARN")
+        if not arn:
+            raise SystemExit("OPS_STATE_MACHINE_ARN 없음 — plan-run 은 상태머신 ARN 필수")
+    elif pipeline_type == catalog.NEWS_PIPELINE_TYPE:
+        arn = os.environ.get("OPS_NEWS_STATE_MACHINE_ARN")
+        if not arn:
+            raise SystemExit("OPS_NEWS_STATE_MACHINE_ARN 없음 — 뉴스 레인 plan-run 은 뉴스 SFN ARN 필수")
+    else:
+        raise SystemExit(f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — etf-daily·news 만 계획 가능")
     ledger = ledger_from_settings(settings)
     if ledger is None:
         raise SystemExit("db 설정 없음 — plan-run 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
-    result = planner.plan_run(ledger, state_machine_arn=arn, scheduled_time=_scheduled_time())
+    result = planner.plan_run(
+        ledger, state_machine_arn=arn, scheduled_time=_scheduled_time(),
+        pipeline_type=pipeline_type,
+    )
     logger.info(
-        "plan-run: run=%s launch=%s created=%s trading=%s",
-        result.pipeline_run_id, result.launch_status, result.created, result.trading_day,
+        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s",
+        pipeline_type, result.pipeline_run_id, result.launch_status, result.created,
+        result.trading_day,
     )
     # LAUNCHED 만 성공. FAILED/CONFLICT/UNKNOWN 은 비0 으로 드러낸다(fail-loud, Rule 12).
     return 0 if result.launch_status == states.LAUNCH_LAUNCHED else 1
 
 
-def _due_slot(now_kst: datetime) -> tuple[str, bool] | None:
-    """가장 최근에 **예정 시각이 지난** 평일 슬롯의 (run_key, grace_경과). 없으면 None.
+def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
+    """레인별로 **예정 시각이 지난** 슬롯들의 (run_key, grace_경과) 목록. 없으면 빈 목록.
 
+    레인마다 "가장 최근에 지난 슬롯이 있는 평일"을 찾아 **그날의 지난 슬롯 전부**를 돌려준다
+    (ALPHA-591). 시장 레인은 하루 1슬롯이라 종전과 같고, 뉴스 레인은 하루 3슬롯이라 최신
+    하나만 보면 15:30 이 지나는 순간 15:00 런이 영영 대조되지 않는다(ALPHA-565 사각의 확대재생산)
+    — 같은 날 슬롯을 전부 물고 있으면 주기 reconcile 이 자정까지 재대조해 늦은 종결도 판정한다.
     월요일 오전(오늘 미예정)엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다 — 아직 예정 전인
     오늘 슬롯을 결측으로 보지 않게(edge-review). grace 경과 여부는 PLANNER_MISSING 판정에 쓴다.
 
     키는 `planner.slot_run_key` 로 만든다 — Planner 가 쓰는 바로 그 함수다(ALPHA-564). 여기서
     형식을 따로 조립하면 어긋나는 순간 있지도 않은 슬롯을 찾아 PLANNER_MISSING 오탐이 난다.
-    ⚠️ 스케줄이 하나(`OPS_DAILY_SCHED_HHMM`)라는 전제는 그대로다 — 하루 여러 스케줄의 결측
-    판정은 이 함수가 슬롯 목록을 돌려주도록 바뀌어야 한다(뉴스 레인이 Planner 를 탈 때, 별건).
     """
-    hour, minute = _sched_hhmm()
-    for back in range(7):
-        cand = now_kst.date() - timedelta(days=back)
-        if cand.weekday() >= 5:
-            continue
-        sched = datetime.combine(cand, time(hour, minute), tzinfo=planner.KST)
-        if now_kst >= sched:
-            return planner.slot_run_key(sched), now_kst >= sched + _PLANNER_GRACE
-    return None
+    lanes: list[tuple[str, list[tuple[int, int]]]] = [
+        (catalog.PIPELINE_TYPE, [_sched_hhmm()]),
+        (catalog.NEWS_PIPELINE_TYPE, _news_sched_hhmms()),
+    ]
+    slots: list[tuple[str, bool]] = []
+    for lane, hhmms in lanes:
+        if not hhmms:
+            continue   # env 미주입 레인 — 결측 판정 대상 아님(_news_sched_hhmms 참조)
+        for back in range(7):
+            cand = now_kst.date() - timedelta(days=back)
+            if cand.weekday() >= 5:
+                continue
+            past = [
+                sched for h, m in hhmms
+                if now_kst >= (sched := datetime.combine(cand, time(h, m), tzinfo=planner.KST))
+            ]
+            if past:
+                slots.extend(
+                    (planner.slot_run_key(sched, lane), now_kst >= sched + _PLANNER_GRACE)
+                    for sched in past
+                )
+                break
+    return slots
 
 
 def reconcile_cli(settings) -> int:
@@ -213,25 +274,32 @@ def reconcile_cli(settings) -> int:
         raise SystemExit("db 설정 없음 — reconcile 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
     now = _scheduled_time()
     override = os.environ.get("OPS_RUN_KEY")
-    due = _due_slot(now.astimezone(planner.KST))
     cluster_arn = os.environ.get("OPS_CLUSTER_ARN")
     with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
         if not acquired:
             logger.info("reconcile: 다른 인스턴스가 락 보유 — skip")
             return 0
-        run_key = override or (due[0] if due else None)
-        if run_key is None:
-            logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
-            return 0
-        # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slot` 이 만드는 스케줄 슬롯 하나만**
-        # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slot` 이
-        # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
-        # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
-        # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
-        # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다. override 는 특정 런을 reconcile 하려는
-        # 수동 지정이라(미래 슬롯일 수 있다) 결측 판정 대상이 아니다(edge-review).
-        if not override and due and due[1]:
-            reconciler.detect_planner_missing(ledger, expected_run_keys=[run_key])
-        summary = reconciler.reconcile_run(ledger, run_key=run_key, cluster_arn=cluster_arn, now=now)
-        logger.info("reconcile: %s", summary)
+        if override:
+            # override 는 특정 런을 reconcile 하려는 수동 지정이라(미래 슬롯일 수 있다) 결측
+            # 판정 대상이 아니다(edge-review).
+            run_keys = [override]
+        else:
+            due = _due_slots(now.astimezone(planner.KST))
+            if not due:
+                logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
+                return 0
+            # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slots` 가 만드는 스케줄 슬롯**만
+            # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slots` 가
+            # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
+            # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
+            # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
+            # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다.
+            grace_passed = [key for key, grace in due if grace]
+            if grace_passed:
+                reconciler.detect_planner_missing(ledger, expected_run_keys=grace_passed)
+            run_keys = [key for key, _ in due]
+        for run_key in run_keys:
+            summary = reconciler.reconcile_run(
+                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now)
+            logger.info("reconcile: %s", summary)
     return 0

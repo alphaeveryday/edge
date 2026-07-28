@@ -18,9 +18,9 @@
 # 않게** 띄운다. PR2 가 시장 SFN 에서 뉴스 스텝을 빼야 겹침 자체가 사라져 컷오버가 안전해진다
 # (시장 스케줄이 DISABLED→ENABLED 컷오버를 ALPHA-489 로 한 것과 같은 순서).
 #
-# ⚠️ 운영 원장(ALPHA-530) 미편입: 뉴스 스케줄은 Planner(plan-run)를 안 거치고 SFN 을 직접
-# StartExecution 한다 — PR1 은 SFN 검증이 목적이라 ops 코드 변경을 피한다. 실행 중 실패는 이 SFN 의
-# NewsNotifyFailure(SNS)가 알리지만, "런 자체가 안 떴다" 탐지(Reconciler)는 없다. 원장 편입은 후속.
+# 운영 원장(ALPHA-591) 편입: 뉴스 스케줄은 daily 와 같이 **Planner(plan-run) 경유**다 —
+# OPS_PIPELINE_TYPE=news 로 자체 레인(카탈로그 6작업·하루 3슬롯 기대)을 계획하고 뉴스 SFN 을
+# 멱등 시작한다. Reconciler 가 "런 자체가 안 떴다"(PLANNER_MISSING)까지 탐지한다.
 
 locals {
   # 뉴스 레인 잡 = 기존 잡 리스트의 부분집합 재사용 — command_expr·taskdef_key 드리프트 방지(DRY).
@@ -128,6 +128,12 @@ locals {
             ContainerOverrides = [{
               Name        = local.container_name
               "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id)"
+              # 운영 원장(ALPHA-591): 직렬 state 는 페이즈 빌더 밖이라 별도 주입 — 없으면 이
+              # attempt 의 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
+              Environment = [
+                { Name = "OPS_SFN_STATE_NAME", Value = "NewsLoadAssertions" },
+                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
+              ]
             }]
           }
         })
@@ -147,11 +153,16 @@ locals {
           TaskDefinition = aws_ecs_task_definition.this["events"].arn
           Overrides = {
             ContainerOverrides = [{
-              Name        = local.container_name
+              Name = local.container_name
               # --window-days: 창을 [오늘−N, 오늘]로 겹친다(ALPHA-592). 23:50 슬롯은 체인
               # 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게 기본 경로라
               # (2026-07-28 00:03 read=0 실측), 겹침 없이는 늦저녁 기사가 영영 조립되지 않는다.
               "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id, '--window-days', '${var.assemble_window_days}')"
+              # NewsLoadAssertions 와 같은 이유의 원장 계보 주입(ALPHA-591).
+              Environment = [
+                { Name = "OPS_SFN_STATE_NAME", Value = "NewsAssembleEvents" },
+                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
+              ]
             }]
           }
         })
@@ -213,22 +224,6 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄이 SFN 을 직접 시작할 수 있게 scheduler 역할에 StartExecution 을 더한다(뉴스 SFN
-# 한정). daily·reconcile 의 기존 정책(ecs:RunTask)은 iam.tf 에 그대로 두고 여기에 얹는다 —
-# 뉴스 변경을 iam.tf 에서 분리해 이 파일에 모은다.
-resource "aws_iam_role_policy" "scheduler_news" {
-  name = "${var.name}-scheduler-news"
-  role = aws_iam_role.scheduler.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["states:StartExecution"]
-      Resource = [aws_sfn_state_machine.news.arn]
-    }]
-  })
-}
-
 # 뉴스 스케줄 3개(KST): pre-EOD 15:00·15:30(정규장 마감구간 뉴스 포함 — 마감 동시호가 15:20~15:30
 # 이 그날 종가를 결정하므로 고신호) + day-close 23:50(장외·야간 뉴스로 하루치 완결, assemble 단일일
 # 창의 오버나잇 갭 보전). analyze 는 시장 SFN 끝(≈장마감+10~15분)에 돌아 그때까지 적재된 event 를
@@ -253,30 +248,54 @@ resource "aws_scheduler_schedule" "news" {
 
   flexible_time_window { mode = "OFF" }
 
+  # 운영 원장(ALPHA-591): 뉴스 스케줄도 SFN 직접 시작이 아니라 **Planner 경유**다(daily 와 동형,
+  # statemachine.tf 의 aws_scheduler_schedule.daily 주석 참조). Planner 가 pipeline_run +
+  # expected_task 를 먼저 커밋하고 멱등 execution_name(run_key 파생 — 콜론 없는 charset)으로
+  # StartExecution 하므로, EventBridge 의 드문 중복 재전달이 같은 run_key 로 수렴해 run 1개다.
+  # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
+  # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
+  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석: 슬롯 간 비중첩 불변식이 이유.)
   target {
-    arn      = "arn:aws:scheduler:::aws-sdk:sfn:startExecution"
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
-    # run_id = 스케줄 시각(시장 daily 와 같은 관례). Input 은 SFN 입력 JSON 문자열이라 중첩 인코딩.
     # ⚠️ 플레이스홀더는 jsonencode **바깥**에서 주입한다(ALPHA-593) — jsonencode 가 `<`/`>` 를
-    # </> 로 이스케이프해 EventBridge 가 컨텍스트 속성 패턴을 인식하지 못하고,
-    # 리터럴 "<aws.scheduler.scheduled-time>" 이 run_id 로 흘러 하루 3슬롯의 raw 파티션 키가
-    # 충돌했다(뒤 런이 앞 런의 raw 를 덮어씀 — 2026-07-27 23:50 첫 스케줄 런 실측).
+    # </> 로 이스케이프해 EventBridge 가 컨텍스트 속성 패턴을 인식하지 못한다.
     input = replace(
       jsonencode({
-        StateMachineArn = aws_sfn_state_machine.news.arn
-        Input           = jsonencode({ run_id = "SCHEDULED_TIME_TOKEN" })
+        Cluster        = var.cluster_arn
+        TaskDefinition = aws_ecs_task_definition.ops.arn
+        LaunchType     = "FARGATE"
+        NetworkConfiguration = {
+          AwsvpcConfiguration = {
+            Subnets        = var.subnet_ids
+            SecurityGroups = [aws_security_group.task.id]
+            AssignPublicIp = "DISABLED"
+          }
+        }
+        Overrides = {
+          ContainerOverrides = [{
+            Name    = local.container_name
+            Command = ["plan-run"]
+            Environment = [
+              { Name = "OPS_SCHEDULED_TIME", Value = "SCHEDULED_TIME_TOKEN" },
+              { Name = "OPS_PIPELINE_TYPE", Value = "news" },
+            ]
+          }]
+        }
       }),
       "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
     )
 
-    # 재시도 0 (edge-review P1): StartExecution 에 멱등 Name 을 줄 수 없다 — dedup 키가 될
-    # scheduled-time 이 콜론을 담아 SFN 실행명 charset 을 위반한다. 대신 재시도를 없애 **ambiguous
-    # 결과 뒤 재전달로 같은 run_id 가 두 번 StartExecution 되는 주 벡터를 제거**한다(그 중복은
-    # AssembleEvents 동시 실행에서 threading 레이스를 낸다). 누락 전달은 다음 슬롯이 default_window
-    # (어제~오늘) 재수집 + 멱등 재처리로 자가 회복하므로 뉴스엔 재시도가 불필요하다(daily 15:40 은
-    # 하루 1회라 185회 재시도로 전달을 보장하지만, 뉴스는 하루 3슬롯이라 다음 슬롯이 백스톱).
-    # 잔여: EventBridge at-least-once 자체의 드문 중복 재전달은 남지만 같은 run_id 멱등 + DISABLED
-    # 컷오버 게이트로 유계다. 완전 멱등 실행(Planner 경유 launcher)은 운영 원장 편입 후속.
+    # 재시도 0 유지 — 사유가 바뀌었다(ALPHA-591 edge-review). 종전엔 멱등 Name 불가(콜론)가
+    # 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐지만, Planner 멱등은
+    # **같은 슬롯**의 중복만 막는다. 재시도 창이 슬롯 간격(30분)을 파고들면 지연 시작한 15:00
+    # 실행(SFN 타임아웃 1500s)이 15:30 실행과 겹쳐 **서로 다른 run 의 AssembleEvents 가 동시에**
+    # 돌고, threading 의 prior-count·lifecycle_stage read-before-write 레이스가 되살아난다 —
+    # PR1 이 "타임아웃 1500s < 30분 간격"으로 세운 비중첩 불변식은 시작 지연 ≈ 0 일 때만 성립.
+    # 재시도를 포기해도 잃는 게 거의 없다: EventBridge 드문 중복 재전달은 run_key 멱등이 흡수,
+    # 제출 실패로 슬롯이 누락되면 이번 티켓의 PLANNER_MISSING 탐지가 30분 뒤 이슈를 열고
+    # 데이터는 다음 슬롯 창 겹침이 자가 회복한다(daily 15:40 은 하루 1회+후행 슬롯 없음이라
+    # 24h·185회 재시도로 전달을 보장하는 것과 대비되는 지점).
     retry_policy {
       maximum_event_age_in_seconds = 3600
       maximum_retry_attempts       = 0

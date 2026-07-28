@@ -54,7 +54,7 @@ class PlanResult:
     conflict: bool = False
 
 
-def slot_run_key(slot_kst: datetime) -> str:
+def slot_run_key(slot_kst: datetime, pipeline_type: str = catalog.PIPELINE_TYPE) -> str:
     """슬롯 멱등키 — `<pipeline_type>:<YYYY-MM-DDTHH:MM>`(KST). **키 형식의 유일한 출처.**
 
     분 단위인 이유는 두 가지다.
@@ -64,13 +64,15 @@ def slot_run_key(slot_kst: datetime) -> str:
       자리가 없다**. run_key 의 계약은 원래 "이 슬롯은 한 번만 계획된다"지 "하루 한 번"이 아니다.
     * 멱등을 유지한다. 같은 슬롯 재호출(Planner 재기동)은 여전히 같은 키 → run 1개다.
 
-    ⚠️ **`entry._due_slot` 이 이 함수를 써야 한다.** 두 곳에서 각자 조립하면 형식이 어긋나는
+    ⚠️ **`entry._due_slots` 가 이 함수를 써야 한다.** 두 곳에서 각자 조립하면 형식이 어긋나는
     순간 Reconciler 가 존재하지 않는 슬롯을 찾아 PLANNER_MISSING 오탐을 낸다.
 
-    수동 실행은 `OPS_SCHEDULED_TIME` 없이 돌아 실행 분이 곧 슬롯이 된다 — `_due_slot` 은 설정된
+    수동 실행은 `OPS_SCHEDULED_TIME` 없이 돌아 실행 분이 곧 슬롯이 된다 — `_due_slots` 는 설정된
     HH:MM 만 만들므로 수동 슬롯과 겹치지 않고, 따라서 결측 판정 대상이 되지 않는다.
+
+    pipeline_type 이 키 접두라 레인이 달라지면 같은 분도 다른 슬롯이다(뉴스 15:00 ≠ 시장 15:00).
     """
-    return f"{catalog.PIPELINE_TYPE}:{slot_kst.strftime('%Y-%m-%dT%H:%M')}"
+    return f"{pipeline_type}:{slot_kst.strftime('%Y-%m-%dT%H:%M')}"
 
 
 def _canonical_input(mode: str, run_id: str) -> str:
@@ -93,18 +95,23 @@ def plan_run(
     state_machine_arn: str,
     scheduled_time: datetime,
     mode: str = "incremental",
+    pipeline_type: str = catalog.PIPELINE_TYPE,
     sfn_client=None,
     universe_provider=None,
     holidays=None,
     hard_deadline_seconds: int = 21600,
 ) -> PlanResult:
-    """한 슬롯을 계획하고 SFN 을 시작한다. 멱등 — 같은 scheduled_time 재호출은 run 1개만."""
+    """한 슬롯을 계획하고 SFN 을 시작한다. 멱등 — 같은 scheduled_time 재호출은 run 1개만.
+
+    pipeline_type 이 레인을 정한다(ALPHA-591) — run_key 접두와 기대 작업 집합(그 레인의
+    카탈로그)이 함께 갈린다. state_machine_arn 은 호출부가 레인에 맞는 것을 넘긴다.
+    """
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
 
     slot = scheduled_time.astimezone(KST)
     day = slot.date()
     trading = is_trading_day(day, holidays)
-    run_key = slot_run_key(slot)
+    run_key = slot_run_key(slot, pipeline_type)
     pipeline_run_id = stable_domain_id("run", run_key)
     execution_name = run_key.replace(":", "-")
     input_json = _canonical_input(mode, pipeline_run_id)
@@ -121,15 +128,16 @@ def plan_run(
     with ledger.connect_fn(ledger.db) as conn:
         run_id, created = Ledger._create_pipeline_run_tx(
             conn, pipeline_run_id,
-            run_key=run_key, execution_name=execution_name, pipeline_type=catalog.PIPELINE_TYPE,
+            run_key=run_key, execution_name=execution_name, pipeline_type=pipeline_type,
             schedule_slot=run_key, trading_date=day.isoformat(), hard_deadline_at=hard_deadline_at,
             catalog_version=catalog.version(), catalog_content_hash=catalog.content_hash(),
             image_digest=None, input_hash=input_hash, expected_execution_arn=expected_execution_arn,
         )
         if created:
             _plan_expected_tasks(
-                conn, run_id, trading=trading, expected_at=expected_at,
-                as_of_date=day.isoformat(), universe_provider=universe_provider,
+                conn, run_id, pipeline_type=pipeline_type, trading=trading,
+                expected_at=expected_at, as_of_date=day.isoformat(),
+                universe_provider=universe_provider,
             )
         # `with conn` 정상 종료 = commit. 여기까지 성공해야 아래 StartExecution 이 돈다.
 
@@ -145,8 +153,9 @@ def plan_run(
     )
 
 
-def _plan_expected_tasks(conn, run_id, *, trading, expected_at, as_of_date, universe_provider):
-    for entry in catalog.entries():
+def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, as_of_date,
+                         universe_provider):
+    for entry in catalog.entries(pipeline_type):
         # 비거래일 KR 작업은 SKIPPED(NON_TRADING_DAY) — attempt 안 생기고 MISSED 안 됨(스펙 §3.3).
         # ⚠️ 판정 축은 카탈로그의 명시 필드다. dataset 문자열(`price_daily`)로 가르면 **미국
         # 시장 수집(FMP)까지 KR 공휴일에 SKIPPED** 된다 — `ingest_price_raw.DATASET` 이 fmp·kis

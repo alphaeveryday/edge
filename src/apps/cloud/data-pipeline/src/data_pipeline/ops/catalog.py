@@ -8,21 +8,28 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 31개 중 21개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
-뉴스 레인 이관으로 27→21). 미등록 state 는 카탈로그에 없어 expected_task 가 안 생기고,
-Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
+**등록 범위: ECS Task state 33개 중 27개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27). state 수 33 = 시장 SFN
+31 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는 statemachine.tf
+잡 정의를 재사용해 이름이 겹치지 않는다). 미등록 state 는 카탈로그에 없어 expected_task 가 안
+생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result 소관이라 카탈로그에 넣지 않는다.
 
-**제외 10개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12):
+**레인(pipeline_type) 축**(ALPHA-591): 카탈로그는 시장 레인(`etf-daily`, 21작업)과 뉴스 레인
+(`news`, 6작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+뉴스 SFN 은 하루 3슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
+같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
+모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
+
+**제외 6개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12):
 
 | 제외 | state | 왜 |
 |---|---|---|
-| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다. DB env 부재는 아래 `instrumented=False` 로 해소되므로 더는 장애물이 아니다 |
-| 뉴스 레인 4 | CollectBigKindsNews·NormalizeNews·TagNews·LoadDocuments (+시장 SFN 에서 제거된 직렬 LoadAssertions·AssembleEvents) | **뉴스 SFN 이관**(ALPHA-553 PR2, `edge-dev-data-pipeline-news` 하루 3슬롯). 그 레인은 Planner 를 안 거치므로 등록하면 매 일일런 MISSED 다 → **뉴스 레인 원장 편입**(자체 pipeline_type·3슬롯 기대) 후속 티켓에서 되살린다 |
+| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 부재는 아래 `instrumented=False` 로 해소되므로 더는 장애물이 아니다 |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**`instrumented=False` 2개**(CollectKrxEtf·CollectDartDisclosure) —
+**`instrumented=False` 3개**(TagNews·CollectKrxEtf·CollectDartDisclosure) —
 task-def 에 DB env 가 없어(`tasks.tf`: host 만 주면 password 없는 DbConfig 로 `load_settings()` 가
 통째로 실패, 부분 주입 불가) 컨테이너가 자기 attempt 를 못 쓴다. 그렇다고 빼면 안 된다:
 Reconciler 의 SFN·ECS 증거 backfill 이 **유일하지만 정확한** 기록 경로이기 때문이다(그 경우
@@ -35,8 +42,8 @@ attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다). 즉 �
 컨테이너가 원장에 못 쓰기 때문이다. 즉 **exit 0 인데 부분 유실**(공시 미매핑 등)은 이 경로로
 안 보인다 — 그건 여전히 S3 `collection_log` 를 봐야 한다. 판정 시점도 Reconciler 실행 때다.
 
-⚠️ 수집 커버리지는 시장 레인 11개 중 6개다(FMP 4개는 토글 off, DART 재무는 소비자 0, BigKinds
-뉴스는 뉴스 레인 이관). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
+⚠️ 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다(FMP 4개는 토글 off,
+DART 재무는 소비자 0). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
 **모양**이 숫자보다 중요하다.
 """
 
@@ -87,14 +94,18 @@ class CatalogEntry:
     # Reconciler 가 SFN 증거로 backfill 하는 것이 유일·정확한 경로다(LEDGER_GAP 을 열지 않는다).
     # 등록은 하는 이유: **게이트 멤버**라서 빠지면 의존 판정이 거짓이 된다(ALPHA-181).
     instrumented: bool = True
+    # 이 작업이 속한 레인(ALPHA-591). Planner 가 `entries(pipeline_type)` 로 자기 레인만
+    # 계획한다 — 시장 일일런 기대에 뉴스 작업이 섞이면(또는 그 반대) 매 런 MISSED 다.
+    pipeline_type: str = "etf-daily"
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
         return self.log_dataset or self.dataset
 
 
-# 등록 21작업. sfn_state_name·cli_command·ecs_task_definition 은 statemachine.tf 의 실제
-# state·command_expr·taskdef_key 와 일치해야 한다(test_ops_catalog 이 삼중항으로 대조한다).
+# 등록 27작업(시장 21 + 뉴스 6). sfn_state_name·cli_command·ecs_task_definition 은
+# statemachine.tf·news_pipeline.tf 의 실제 state·command_expr·taskdef_key 와 일치해야 한다
+# (test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
 _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
@@ -170,12 +181,6 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
         ecs_task_definition="kis", source_vendor="kis",
     ),
-    # ── 뉴스 레인 6작업(NEWS_COLLECTION_BIGKINDS·NORMALIZE_NEWS·TAG_NEWS·LOAD_DOCUMENTS·
-    # LOAD_ASSERTIONS·ASSEMBLE_EVENTS)은 카탈로그에 없다(ALPHA-553 PR2) ──────────────
-    # 뉴스 SFN(edge-dev-data-pipeline-news, 하루 3슬롯)으로 이관됐는데 그 레인은 Planner 를
-    # 안 거치므로(PR1 주석 — 운영 원장 미편입) 여기 남겨두면 매 일일런이 6작업 MISSED 를 연다.
-    # 커버리지 27→21 은 조용한 축소가 아니라 이 주석이 그 사실이다(Rule 12) — 뉴스 레인의
-    # 원장 편입(자체 pipeline_type·3슬롯 기대)은 후속 티켓에서 되살린다.
     # ── KRX·DART 수집 2 (DB env 없는 task-def — instrumented=False) ────────────────
     # 컨테이너가 원장에 못 쓰므로 attempt 결측이 정상이고, Reconciler 의 SFN·ECS 증거
     # backfill 이 유일·정확한 기록 경로다(LEDGER_GAP 을 열지 않는다). 등록하지 않으면 수집
@@ -281,11 +286,70 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         sfn_state_name="EnrichCorpCode",
         ecs_task_definition="rds_dart", deadline_offset_seconds=7200,
     ),
+    # ══ 뉴스 레인 6작업 (pipeline_type="news" — 뉴스 SFN edge-dev-data-pipeline-news, 하루
+    # 3슬롯, ALPHA-591 원장 편입) ═══════════════════════════════════════════════════
+    # ALPHA-553 PR2 로 빠졌던 6작업의 복원이되 **그대로 복사가 아니다**:
+    # * 직렬 2개의 state 이름이 다르다 — 뉴스 SFN 은 NewsLoadAssertions·NewsAssembleEvents 다
+    #   (병렬 브랜치 4개는 statemachine.tf 잡 정의 재사용이라 이름 그대로).
+    # * depends_on 은 뉴스 SFN 의 게이트 축으로 다시 그렸다 — 옛 시장 의존(LOAD_ASSERTIONS ←
+    #   feature 7개 등)을 복사하면 뉴스 런에 존재하지 않는 작업을 기다려 영영 eligible 이 안 된다.
+    # * `kr_trading_calendar` 전부 False — 뉴스 SFN 은 공휴일에도 돈다(평일 크론). True 면 실행
+    #   결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 의 함정).
+    CatalogEntry(
+        # 뉴스는 휴장일에도 나온다 — kr_trading_calendar=False(비거래일에도 DUE).
+        task_key="NEWS_COLLECTION_BIGKINDS", stage="raw", dataset="stock_news", required=True,
+        cli_command=("ingest-raw", "--source", "bigkinds"), sfn_state_name="CollectBigKindsNews",
+        ecs_task_definition="bigkinds", source_vendor="bigkinds", pipeline_type="news",
+    ),
+    # 정제 의존은 시장 레인과 같은 이유로 비운다 — 뉴스 SFN 도 raw 부분 실패 시 통보 후 계속
+    # 진행한다(NewsNotifyRawPartial → NewsNormalizeParallel).
+    CatalogEntry(
+        task_key="NORMALIZE_NEWS", stage="normalize", dataset="news_articles", required=True,
+        cli_command=("normalize-news",), sfn_state_name="NormalizeNews",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400, pipeline_type="news",
+    ),
+    # ── 태깅 (deepseek task-def — DB env 없음) ─────────────────────────────────────
+    # 등록하되 `instrumented=False` 다. 이 컨테이너는 원장에 못 쓰지만 **NewsFeatureCheckResults
+    # 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LOAD_ASSERTIONS 의 의존이 전부 충족된 것으로
+    # 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로 찍힌다(Codex #273 P1 과 같은 축).
+    CatalogEntry(
+        task_key="TAG_NEWS", stage="feature", dataset="news_assertions", required=True,
+        cli_command=("tag-news",), sfn_state_name="TagNews",
+        ecs_task_definition="deepseek", depends_on=("NORMALIZE_NEWS",),
+        deadline_offset_seconds=7200, stalled_after_seconds=21600, instrumented=False,
+        pipeline_type="news",
+    ),
+    # NewsNormalizeCheckResults 게이트 뒤 병렬 — 시장 레인의 ENRICH_CORP_CODE 의존과 다르다
+    # (뉴스 SFN 엔 EnrichCorpCode 가 없다 — instrument 마스터는 교차 SFN 읽기 전용 공유).
+    CatalogEntry(
+        task_key="LOAD_DOCUMENTS", stage="feature", dataset="document", required=True,
+        cli_command=("load-documents",), depends_on=("NORMALIZE_NEWS",),
+        sfn_state_name="LoadDocuments",
+        ecs_task_definition="rds", deadline_offset_seconds=7200, pipeline_type="news",
+    ),
+    CatalogEntry(
+        task_key="LOAD_ASSERTIONS", stage="feature", dataset="document_assertion", required=True,
+        cli_command=("load-assertions",), sfn_state_name="NewsLoadAssertions",
+        ecs_task_definition="rds", deadline_offset_seconds=7200, pipeline_type="news",
+        # ASL `NewsFeatureCheckResults` = feature 전량 성공 게이트(직렬 진입 조건).
+        depends_on=("TAG_NEWS", "LOAD_DOCUMENTS"),
+    ),
+    # ── 이벤트 조립 (events task-def — LLM 분류 + DB 적재) ─────────────────────────
+    # LLM 이라 정상 실행이 1시간을 넘을 수 있다. STALLED 임계를 SFN 타임아웃에 맞춘다 —
+    # 기본 1시간이면 정상 실행 중에 STALLED 가 붙고 resolve 경로가 없어 영구 OPEN 이다.
+    CatalogEntry(
+        task_key="ASSEMBLE_EVENTS", stage="feature", dataset="source_event", required=True,
+        cli_command=("assemble-events",), depends_on=("LOAD_ASSERTIONS",),
+        sfn_state_name="NewsAssembleEvents",
+        ecs_task_definition="events", deadline_offset_seconds=10800,
+        stalled_after_seconds=21600, pipeline_type="news",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
-PIPELINE_TYPE = "etf-daily"
+PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
+NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
 
 # `--source` 미지정 시 run.py 가 쓰는 기본 벤더(`args.source or "fmp"`). 벤더 인자가 없는
 # 카탈로그 엔트리는 이 벤더를 뜻한다 — 두 표현(`ingest-raw` 와 `ingest-raw --source fmp`)이
@@ -293,9 +357,16 @@ PIPELINE_TYPE = "etf-daily"
 _DEFAULT_VENDOR = "fmp"
 
 
-def entries() -> tuple[CatalogEntry, ...]:
-    """등록된 모든 카탈로그 엔트리(정의 순서)."""
-    return _ENTRIES
+def entries(pipeline_type: str | None = None) -> tuple[CatalogEntry, ...]:
+    """카탈로그 엔트리(정의 순서). pipeline_type 지정 시 그 레인만, None 이면 전 레인.
+
+    Planner 는 자기 레인을 지정한다(다른 레인 작업을 기대에 섞으면 매 런 MISSED). Reconciler·
+    `by_cli`·`by_sfn_state` 는 전 레인이다 — 증거는 런의 SFN history 에서만 오고 state 이름이
+    레인 간 유일해 섞일 수 없다.
+    """
+    if pipeline_type is None:
+        return _ENTRIES
+    return tuple(e for e in _ENTRIES if e.pipeline_type == pipeline_type)
 
 
 def get(task_key: str) -> CatalogEntry | None:
@@ -365,6 +436,7 @@ def content_hash() -> str:
             "source_vendor": e.source_vendor,
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,
+            "pipeline_type": e.pipeline_type,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]

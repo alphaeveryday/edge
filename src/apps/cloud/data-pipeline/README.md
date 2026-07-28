@@ -352,8 +352,10 @@ dev ENABLED 컷오버)로 `news raw → NormalizeNews → [TagNews·LoadDocument
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
 뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
-뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다. 뉴스 레인의
-운영 원장 편입은 후속(카탈로그 절 참고).
+뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다. 뉴스 레인은
+운영 원장에 **자체 `pipeline_type`(`news`)·하루 3슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
+스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
+(카탈로그 절 참고).
 
 **raw 수집(12잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
@@ -647,22 +649,23 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 21작업**
-  (ECS Task state 31개 중, ALPHA-181 → 578 → 553 PR2). 제외는 ① `fmp` 수집 4개(**FMP 공용키
-  bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을 등록하면 매 런
-  MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`(**하류 소비자 0** —
-  `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할 이유 없는 실패 경보가
-  된다) ③ `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록) ④ **뉴스 레인
-  6작업**(BigKinds 수집·NormalizeNews·TagNews·LoadDocuments·LoadAssertions·AssembleEvents —
-  뉴스 SFN 이관, ALPHA-553 PR2. 그 레인은 Planner 를 안 거치므로 등록하면 매 일일런 MISSED 다.
-  뉴스 레인의 원장 편입(자체 pipeline_type·3슬롯 기대)은 후속 티켓). KRX ETF·DART 공시 2개는
-  task-def 에 DB env 가 없어 자기 attempt 를 못 쓰지만 등록하되 `instrumented=False` 다 —
-  Reconciler 의 SFN·ECS 증거 backfill 이 유일·정확한 기록 경로라 LEDGER_GAP 을 안 연다. 빼면
-  수집 실패가 **원장에 자리조차 없다**(ALPHA-578 — KRX 수집을 강제 종료했는데 화면에 아무것도
-  안 뜬 실증). 등록에 신뢰경계 변경(벤더 컨테이너에 RDS 접속 주입)은 필요 없다. 다만 이 2개는
-  실행 여부·성패만 얻고 `records_out`·`data_status` 는 못 얻는다 — exit 0 인데 부분 유실인
-  경우는 S3 `collection_log` 를 봐야 한다. 수집 커버리지는 시장 레인 11개 중 6개다(BigKinds
-  뉴스 수집은 뉴스 레인 이관).
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업 =
+  시장 레인(`etf-daily`) 21 + 뉴스 레인(`news`) 6**(ECS Task state 33개 중 — 시장 SFN 31 +
+  뉴스 SFN 직렬 2. ALPHA-181 → 578 → 553 PR2 → 591). 레인은 `CatalogEntry.pipeline_type` 축이고
+  Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
+  MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
+  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외는 ① `fmp` 수집
+  4개(**FMP 공용키 bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을
+  등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
+  (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
+  이유 없는 실패 경보가 된다) ③ `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐
+  거짓 초록). TagNews·KRX ETF·DART 공시 3개는 task-def 에 DB env 가 없어 자기 attempt 를 못
+  쓰지만 등록하되 `instrumented=False` 다 — Reconciler 의 SFN·ECS 증거 backfill 이 유일·정확한
+  기록 경로라 LEDGER_GAP 을 안 연다. 빼면 수집 실패가 **원장에 자리조차 없다**(ALPHA-578 —
+  KRX 수집을 강제 종료했는데 화면에 아무것도 안 뜬 실증). 등록에 신뢰경계 변경(벤더 컨테이너에
+  RDS 접속 주입)은 필요 없다. 다만 이들은 실행 여부·성패만 얻고 `records_out`·`data_status` 는
+  못 얻는다 — exit 0 인데 부분 유실인 경우는 S3 `collection_log` 를 봐야 한다. 수집 커버리지는
+  시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다.
   MVP 3작업(ALPHA-530)이었던 것:
   `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
@@ -689,9 +692,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ### 실행 흐름 (스펙 §5)
 
 ```
-EventBridge(daily) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot) → commit
-                                       → 결정적 execution_name → SFN StartExecution
-각 ECS 태스크(21작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+EventBridge(daily·news×3) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
+                                              → commit → 결정적 execution_name → SFN StartExecution
+                                                (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
+각 ECS 태스크(27작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 
@@ -709,12 +713,14 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   `start-execution` 을 직접 쓰면 원장에 안 남아 그 런은 대조 대상이 아니다.
 - 같은 분 재호출은 여전히 run 1개(Planner 재기동 무해). 수동 실행이 스케줄 분에 정확히 걸리면
   그 슬롯으로 **흡수**되고 `created=False` 로 드러난다 — 새로 도는 게 없다는 뜻이니 로그를 보라.
-- 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slot` 도 그 함수를 쓴다 —
+- 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slots` 도 그 함수를 쓴다 —
   두 곳에서 조립하면 어긋나는 순간 없는 슬롯을 찾아 **실제 런이 영영 대조되지 않는다**. 같은
-  이유로 `OPS_DAILY_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 `schedule_expression` 의 cron
-  에서 뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다.
-- ⚠️ 주기 Reconciler 는 **스케줄 슬롯 하나만** 대조한다. 수동 슬롯은 `OPS_RUN_KEY` 로 지정해야
-  대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히 남는다(ALPHA-565).
+  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각
+  스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다.
+- 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 평일"의 **그날 지난 스케줄 슬롯 전부**를
+  대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). ⚠️ 수동 슬롯은
+  여전히 `OPS_RUN_KEY` 로 지정해야 대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히
+  남는다(ALPHA-565).
 
 ### 실행 (로컬/수동)
 
@@ -726,9 +732,10 @@ OPS_STATE_MACHINE_ARN=arn:aws:states:…:stateMachine:edge-dev-data-pipeline \
 python -m data_pipeline.run reconcile
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 2개(daily=plan-run·
-reconcile) + DLQ. daily 스케줄이 SFN 직접 시작에서 **Planner 경유**로 컷오버된다(스케줄 state 기본
-DISABLED). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마, `ops_` 접두사).
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
+=plan-run, reconcile) + DLQ. daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
+(뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
+`ops_` 접두사).
 
 ### 복구 절차
 
