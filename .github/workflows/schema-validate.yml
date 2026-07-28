@@ -48,7 +48,7 @@ concurrency:
 
 jobs:
   migrate-and-validate:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
 
     # build.gradle의 Flyway 블록이 읽는 접속값. 아래에서 띄우는 ephemeral 컨테이너를 가리킨다.

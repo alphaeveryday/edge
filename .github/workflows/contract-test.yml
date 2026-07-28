@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   event-bundle-contract:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
 
     steps:
