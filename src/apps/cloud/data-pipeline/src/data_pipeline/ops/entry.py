@@ -37,7 +37,13 @@ def _news_sched_hhmms() -> list[tuple[int, int]]:
     """뉴스 레인 스케줄 시각(KST) 목록. env(OPS_NEWS_SCHED_HHMM, 쉼표 구분 "15:00,15:30,23:50")
     — ops_ledger.tf 가 news_schedule_expressions cron 에서 뽑아 주입한다(드리프트 불가 패턴,
     ALPHA-564 와 같은 이유). **미주입이면 빈 목록** = 뉴스 레인 결측 판정 없음 — 뉴스 스케줄이
-    아직 Planner 를 안 타는 배포에서 거짓 PLANNER_MISSING 을 열지 않기 위한 안전 기본값이다."""
+    아직 Planner 를 안 타는 배포에서 거짓 PLANNER_MISSING 을 열지 않기 위한 안전 기본값이다.
+
+    불량 항목은 제외가 아니라 **fail-loud** 다(edge-review, Rule 12). 한 항목만 조용히 버리면
+    그 슬롯의 run_key 가 영영 안 만들어져 PLANNER_MISSING 감시가 **관대한 방향으로** 축소된다
+    — Planner 가 안 떠도 아무 이슈가 안 열린다. daily 의 기본값 폴백(_sched_hhmm)과 다른
+    선택인 이유: 폴백할 정답값이 없고(슬롯 집합 자체가 값), 정상 경로에선 terraform 이 cron
+    에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다."""
     raw = os.environ.get("OPS_NEWS_SCHED_HHMM", "")
     slots: list[tuple[int, int]] = []
     for part in filter(None, (p.strip() for p in raw.split(","))):
@@ -45,7 +51,9 @@ def _news_sched_hhmms() -> list[tuple[int, int]]:
             h, m = part.split(":")
             slots.append((int(h), int(m)))
         except ValueError:
-            logger.warning("OPS_NEWS_SCHED_HHMM 항목 파싱 실패(%s) — 해당 슬롯 제외", part)
+            raise SystemExit(
+                f"OPS_NEWS_SCHED_HHMM 항목 파싱 실패({part!r}) — 슬롯을 조용히 제외하면 "
+                "그 슬롯의 PLANNER_MISSING 탐지가 사라진다. 값 전체를 고쳐라.")
     return sorted(slots)
 
 

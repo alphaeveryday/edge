@@ -298,6 +298,15 @@ def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
     ]
 
 
+def test_malformed_news_sched_env_fails_loud(monkeypatch):
+    # WHY: 불량 항목을 조용히 제외하면 그 슬롯의 run_key 가 영영 안 만들어져 PLANNER_MISSING
+    #      탐지가 관대한 방향으로 축소된다 — Planner 미기동이 아무 이슈 없이 지나간다(Rule 12).
+    #      부분 손상("15-30")이 나머지 슬롯만으로 성공 종료하면 안 된다.
+    monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15-30,23:50")
+    with pytest.raises(SystemExit, match="15-30"):
+        entry._news_sched_hhmms()
+
+
 def test_due_slots_without_news_env_has_no_news_slots(monkeypatch):
     # WHY: env 미주입(뉴스 스케줄이 아직 Planner 를 안 타는 배포)에 뉴스 슬롯을 지어내면
     #      존재할 수 없는 run 을 찾아 매 주기 거짓 PLANNER_MISSING 을 연다.
