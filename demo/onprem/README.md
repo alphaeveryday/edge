@@ -61,4 +61,4 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
 
 ## 이 문서의 범위 밖 (완료·후속 현황)
 
-박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진·`tenant_delivery` 시드는 **완료**(ALPHA-445 개통 + ALPHA-542 배포 CD — deploy-demo-onprem.yml). 검수 콘솔 서빙(`tenant-console-api` + nginx `tenant-console-ui` co-host)도 ALPHA-554 로 완료. 잔여 후속: mTLS cert·인증서-테넌트 바인딩(ALPHA-447), 콘솔 기능 완성은 ALPHA-423 epic 경로로 진행 중(검수·정책·감사 열람은 436·438·431 완료).
+박스 `terraform apply`·SSM 배포·CloudFront `/api` 오리진은 **완료**(ALPHA-445 개통 + ALPHA-542 배포 CD — deploy-demo-onprem.yml). `tenant_delivery` 는 **수동 시드로 개통**(자동 발번 fan-out 은 ALPHA-493). 검수 콘솔 서빙(`tenant-console-api` + nginx `tenant-console-ui` co-host)도 ALPHA-554 로 완료. 잔여 후속: mTLS cert·인증서-테넌트 바인딩(ALPHA-447), 콘솔 기능 완성은 ALPHA-423 epic 경로로 진행 중(검수·정책·감사 열람은 436·438·431 완료).
