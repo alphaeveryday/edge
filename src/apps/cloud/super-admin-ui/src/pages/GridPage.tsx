@@ -16,7 +16,7 @@
  */
 import { Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { GridCell } from '../domains/sources';
+import type { GridCell, GridSlot } from '../domains/sources';
 import { useSourceGrid } from '../domains/sources/hooks';
 import { LoadError } from './_shared/LoadError';
 
@@ -33,6 +33,27 @@ const OUTCOME_BG: Record<string, string> = {
 
 const STAGE_ORDER: Record<string, number> = { raw: 0, normalize: 1, feature: 2 };
 const STAGE_LABEL: Record<string, string> = { raw: '수집', normalize: '정제', feature: '적재·피처' };
+
+/* 헤더 색은 SourcesPage 의 상태 분류(blocked·warn 톤)를 따른다 — 같은 원장 어휘를 두 화면이
+ * 다르게 칠하면 운영자가 화면마다 다른 심각도로 읽는다. FAILED 만 강조하면 TIMED_OUT·ABORTED·
+ * LAUNCH_CONFLICT 슬롯이 정상색이라, 빈 열의 · 표시와 겹쳐 "카탈로그 변화"로 오독된다. */
+function slotHeaderColor(slot: GridSlot) {
+  if (
+    slot.orchestrationStatus === 'FAILED' ||
+    slot.orchestrationStatus === 'TIMED_OUT' ||
+    slot.launchStatus === 'LAUNCH_FAILED'
+  ) {
+    return 'var(--down, #b91c1c)';
+  }
+  if (
+    slot.orchestrationStatus === 'ABORTED' ||
+    slot.launchStatus === 'LAUNCH_CONFLICT' ||
+    slot.launchStatus === 'LAUNCH_UNKNOWN'
+  ) {
+    return '#b45309';
+  }
+  return 'var(--fg-2, #374151)';
+}
 
 /** "etf-daily:2026-07-27T15:40" → "07-27\n15:40". 시각 없는 구형 키(날짜만)는 날짜만 낸다. */
 function slotLabel(runKey: string) {
@@ -122,13 +143,9 @@ export function GridPage() {
                         whiteSpace: 'pre',
                         fontWeight: 500,
                         cursor: 'pointer',
-                        /* 런 실패와 기동 실패 둘 다 빨강 — 기동 실패는 orchestration 이 영영
-                         * null 이라 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
-                        color:
-                          slot.orchestrationStatus === 'FAILED' ||
-                          slot.launchStatus === 'LAUNCH_FAILED'
-                            ? 'var(--down, #b91c1c)'
-                            : 'var(--fg-2, #374151)',
+                        /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
+                         * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
+                        color: slotHeaderColor(slot),
                       }}
                     >
                       {slotLabel(slot.runKey)}
