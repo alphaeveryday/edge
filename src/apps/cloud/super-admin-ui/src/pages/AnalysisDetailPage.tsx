@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Delta, Icon, StatusBadge, formatDelta, toast } from 'ui-kit';
-import { ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
+import {
+  ANALYSIS_CONFIDENCE_LABEL,
+  ANALYSIS_STATUS_LABEL,
+  ANALYSIS_STATUS_TONE,
+} from '../domains/analyses';
 import { useAnalysis, useAnalysisActions } from '../domains/analyses/hooks';
 import { LoadError } from './_shared/LoadError';
 
@@ -65,13 +69,11 @@ export function AnalysisDetailPage() {
           <div className="card">
             <div className="card-head">
               <span className="t-label">분석 결과</span>
-              <div className={`score ${a.direction > 0 ? 'up' : 'down'}`}>
-                <span className="t-xs" style={{ color: 'var(--fg-3)' }}>영향도</span>
-                <span className="num">{a.score}</span>
-                <span className="bar">
-                  <i style={{ width: `${a.score}%` }} />
+              {a.confidence && (
+                <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                  신뢰도 <span className="num">{ANALYSIS_CONFIDENCE_LABEL[a.confidence]}</span>
                 </span>
-              </div>
+              )}
             </div>
             {editing ? (
               <div className="flex flex-col gap-2.5 p-4">

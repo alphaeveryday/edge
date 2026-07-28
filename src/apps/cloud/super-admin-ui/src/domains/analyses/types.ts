@@ -1,6 +1,9 @@
-/* analyses 도메인 — 가격 변동 분석 (공통 분석 산출물 운영). mock·real 공유 타입. */
+/* analyses 도메인 — 가격 변동 분석 (공통 분석 산출물 운영). 원장(explanation_*) 실조회 계약. */
 
 export type AnalysisMarket = 'KRX' | 'NASDAQ';
+
+/** 원장 confidence_level 어휘 그대로 — 화면이 새 판정을 만들지 않는다. */
+export type AnalysisConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 
 export type AnalysisStatus =
   | 'COMPLETED' // 분석 완료
@@ -29,8 +32,8 @@ export interface Analysis {
   basisTimeAbs: string;
   /** 분석 완료 시각 — 미완료면 '—' */
   doneTime: string;
-  /** 영향도 0~100 */
-  score: number;
+  /** 분석 신뢰도 — 결과가 아직 없으면 null */
+  confidence: AnalysisConfidence | null;
   /** 운영자 정정 여부 */
   corrected: boolean;
   result: string;

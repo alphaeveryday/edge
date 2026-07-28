@@ -14,9 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 가격 변동 분석 표면(ALPHA-515) — super-admin-ui analyses 도메인 계약과 1:1.
- * 필드명은 UI 타입과 동일한 camelCase. 정정/무효화 사유 필수·감사 레코드
- * (super-admin-console.md)는 DB 연동 시 UI 계약과 함께 편입한다.
+ * 가격 변동 분석 표면 — super-admin-ui analyses 도메인 계약과 1:1. 필드명은 UI 타입과
+ * 동일한 camelCase. 읽기는 설명 원장 실조회(ALPHA-601), 쓰기는 mock 잔존(ALPHA-602 예정 —
+ * 그 시점에 정정/무효화 사유 필수·감사 레코드도 계약에 편입된다).
  */
 @RestController
 public class AnalysisController {
@@ -29,8 +29,7 @@ public class AnalysisController {
 
 	@GetMapping("/api/v1/analyses")
 	public ApiResponse<List<AnalysisResponse>> list() {
-		return ApiResponse.onSuccess(
-				analysisService.list().stream().map(AnalysisResponse::from).toList());
+		return ApiResponse.onSuccess(analysisService.list());
 	}
 
 	@PatchMapping("/api/v1/analyses/{id}/result")

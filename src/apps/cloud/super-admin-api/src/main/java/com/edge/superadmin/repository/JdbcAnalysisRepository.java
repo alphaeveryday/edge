@@ -1,0 +1,111 @@
+package com.edge.superadmin.repository;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * {@link AnalysisRepository} 의 JdbcTemplate 구현 — 런 목록과 문서 근거를 두 조회로 읽어
+ * 조립한다(ALPHA-601, 선례 {@link JdbcPipelineStatusRepository}).
+ *
+ * <p><b>조인 하나로 합치지 않는 이유</b>: 근거는 런당 여러 개라 한 SELECT 로 붙이면 런 행이
+ * 근거 수만큼 불어나고, 중복을 코드에서 다시 걷어내야 한다(드릴다운과 같은 구조).
+ *
+ * <p>두 조회는 REPEATABLE READ 한 스냅샷 안에서 돈다 — 사이에 writer 가 커밋하면 "목록엔
+ * 있는데 근거가 빈" 어느 시점에도 존재하지 않은 조합이 조립된다.
+ */
+@Repository
+public class JdbcAnalysisRepository implements AnalysisRepository {
+
+	/**
+	 * 목록 창 상한 — 원장은 무기한 보존이라 무제한 스캔을 막는다. 런은 트리거(ETF×거래일)당
+	 * 1개 수준(현행 유니버스 31종)이라 200 이면 여러 거래일이 담긴다.
+	 */
+	// ponytail: 고정 LIMIT — 기간 파라미터·페이지네이션은 화면 요구가 생길 때
+	private static final int LIST_LIMIT = 200;
+
+	/**
+	 * 트리거→기여관찰→경로→런이 전부 1:1 체인이라(각 FK 에 UNIQUE) 행이 불어나지 않는다.
+	 * {@code explanation_result} 만 LEFT — 결과가 아직 없는 런도 목록에 남아야 한다.
+	 *
+	 * <p>동률 해소를 명시한다({@code explanation_run_id}) — {@code explanation_as_of} 에 유일성
+	 * 제약이 없어 동률이면 페이지 경계 행이 조회마다 달라진다.
+	 */
+	private static final String LIST_SQL = """
+			SELECT er.explanation_run_id, er.run_status, er.finished_at,
+			       tr.observed_return, tr.detected_at,
+			       e.display_name, i.ticker, i.market_code,
+			       res.summary, res.confidence_level
+			  FROM explanation_run er
+			  JOIN explanation_route rt ON rt.explanation_route_id = er.explanation_route_id
+			  JOIN etf_contribution_observation co
+			         ON co.contribution_observation_id = rt.contribution_observation_id
+			  JOIN price_movement_trigger tr
+			         ON tr.price_movement_trigger_id = co.price_movement_trigger_id
+			  JOIN instrument i ON i.instrument_id = tr.etf_instrument_id
+			  JOIN entity e ON e.entity_id = i.instrument_id
+			  LEFT JOIN explanation_result res ON res.explanation_run_id = er.explanation_run_id
+			 ORDER BY er.explanation_as_of DESC, er.explanation_run_id DESC
+			 LIMIT %d
+			""".formatted(LIST_LIMIT);
+
+	/**
+	 * DISTINCT — 같은 문서가 여러 주장·여러 단계(stage_code)로 한 런에 연결될 수 있는데,
+	 * 운영자에게 근거는 문서 단위다. 서브쿼리는 LIST_SQL 과 같은 창이라 한 스냅샷 안에서
+	 * 같은 런 집합을 본다. {@code document_id} 는 정렬 동률 해소용으로만 SELECT 에 남는다
+	 * (published_at 은 NULL 허용·비유일).
+	 */
+	private static final String EVIDENCE_SQL = """
+			SELECT DISTINCT ree.explanation_run_id, d.document_id, d.document_type, d.title,
+			       d.source_code, d.published_at
+			  FROM explanation_run_event_evidence ree
+			  JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
+			  JOIN document_assertion da ON da.assertion_id = ev.assertion_id
+			  JOIN document d ON d.document_id = da.document_id
+			 WHERE ree.explanation_run_id IN (
+			       SELECT explanation_run_id FROM explanation_run
+			        ORDER BY explanation_as_of DESC, explanation_run_id DESC
+			        LIMIT %d)
+			 ORDER BY ree.explanation_run_id, d.published_at ASC NULLS LAST, d.document_id
+			""".formatted(LIST_LIMIT);
+
+	private final JdbcTemplate jdbc;
+
+	public JdbcAnalysisRepository(JdbcTemplate jdbc) {
+		this.jdbc = jdbc;
+	}
+
+	@Override
+	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+	public List<AnalysisRow> list() {
+		Map<String, List<EvidenceRow>> evidenceByRun = new HashMap<>();
+		jdbc.query(EVIDENCE_SQL, rs -> {
+			evidenceByRun.computeIfAbsent(rs.getString("explanation_run_id"), k -> new ArrayList<>())
+					.add(new EvidenceRow(
+							rs.getString("document_type"),
+							rs.getString("title"),
+							rs.getString("source_code"),
+							rs.getObject("published_at", OffsetDateTime.class)));
+		});
+		return jdbc.query(LIST_SQL, (rs, i) -> new AnalysisRow(
+				rs.getString("explanation_run_id"),
+				rs.getString("display_name"),
+				rs.getString("ticker"),
+				rs.getString("market_code"),
+				rs.getDouble("observed_return"),
+				rs.getString("run_status"),
+				rs.getObject("detected_at", OffsetDateTime.class),
+				rs.getObject("finished_at", OffsetDateTime.class),
+				rs.getString("summary"),
+				rs.getString("confidence_level"),
+				List.copyOf(evidenceByRun.getOrDefault(
+						rs.getString("explanation_run_id"), List.of()))));
+	}
+}
