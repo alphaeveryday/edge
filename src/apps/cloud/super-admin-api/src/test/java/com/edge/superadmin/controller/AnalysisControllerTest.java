@@ -48,7 +48,7 @@ class AnalysisControllerTest {
 	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
 			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
-			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "", null, List.of());
+			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "   ", null, List.of());
 
 	private MockMvc mvc;
 
@@ -106,8 +106,8 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[1].direction").value(1))
 				.andExpect(jsonPath("$.result[1].doneTime").value("—"))
 				.andExpect(jsonPath("$.result[1].confidence").doesNotExist())
-				.andExpect(jsonPath("$.result[1].result")
-						.value("분석 대기 중입니다. 근거 데이터 수집이 완료되면 자동으로 분석이 시작됩니다."));
+				// 배지는 PENDING 으로 합쳐져도 본문은 run_status(RUNNING)의 진실을 말한다
+				.andExpect(jsonPath("$.result[1].result").value("분석이 진행 중입니다."));
 	}
 
 	/**

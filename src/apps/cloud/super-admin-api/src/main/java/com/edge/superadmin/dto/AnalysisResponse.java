@@ -59,7 +59,7 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				doneTime(status, row.finishedAt()),
 				row.confidenceLevel(),
 				false,
-				result(status, row.summary()),
+				result(row.runStatus(), row.summary()),
 				row.evidence().stream().map(EvidenceResponse::from).toList());
 	}
 
@@ -89,18 +89,25 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				? format(ABS_TIME, finishedAt) : "—";
 	}
 
-	private static String result(String status, String summary) {
+	/**
+	 * UI status 가 아니라 원장 {@code run_status} 로 문구를 고른다 — RUNNING 이 PENDING 배지로
+	 * 합쳐져도 "수집 대기" 문구를 이미 실행 중인 런에 붙이면 거짓이 된다(CANCELLED↔FAILED 도
+	 * 동일). 배지 어휘(4종)는 UI 계약 유지, 본문만 진실을 말한다.
+	 */
+	private static String result(String runStatus, String summary) {
 		// 빈 문자열도 결측이다 — 엔진이 모델 무응답 시 "" 를 저장할 수 있고(스키마도 허용),
 		// 그걸 본문처럼 내면 원장 불일치가 빈 화면 뒤로 숨는다.
 		if (summary != null && !summary.isBlank()) {
 			return summary;
 		}
-		return switch (status) {
+		return switch (runStatus) {
 			case "PENDING" -> "분석 대기 중입니다. 근거 데이터 수집이 완료되면 자동으로 분석이 시작됩니다.";
+			case "RUNNING" -> "분석이 진행 중입니다.";
 			case "FAILED" -> "분석이 실패했습니다. 실행 상세는 파이프라인 실행 이력에서 확인할 수 있습니다.";
+			case "CANCELLED" -> "분석이 취소되었습니다.";
 			// SUCCEEDED 런에 결과가 없거나 비어 있는 건 스키마가 막지 않는 원장 불일치다 —
 			// 빈 완료로 두면 운영자가 못 본다(Rule 12).
-			case "COMPLETED" -> "설명 본문이 원장에 없습니다 — 완료 런의 explanation_result 가 없거나 비어 있는 원장 불일치입니다.";
+			case "SUCCEEDED" -> "설명 본문이 원장에 없습니다 — 완료 런의 explanation_result 가 없거나 비어 있는 원장 불일치입니다.";
 			default -> "설명 결과가 원장에 없습니다.";
 		};
 	}
