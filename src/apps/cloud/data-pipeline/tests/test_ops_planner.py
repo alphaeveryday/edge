@@ -305,6 +305,13 @@ def test_malformed_news_sched_env_fails_loud(monkeypatch):
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15-30,23:50")
     with pytest.raises(SystemExit, match="15-30"):
         entry._news_sched_hhmms()
+    # 빈 **항목**도 손상이다("15:00, ,23:50" 의 가운데 슬롯이 소리 없이 사라진다) — 값 전체가
+    # 빈 것(미주입·컷오버 전)과 다르다.
+    monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00, ,23:50")
+    with pytest.raises(SystemExit):
+        entry._news_sched_hhmms()
+    monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "  ")
+    assert entry._news_sched_hhmms() == []
 
 
 def test_due_slots_without_news_env_has_no_news_slots(monkeypatch):

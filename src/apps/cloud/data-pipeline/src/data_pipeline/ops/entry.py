@@ -45,8 +45,12 @@ def _news_sched_hhmms() -> list[tuple[int, int]]:
     선택인 이유: 폴백할 정답값이 없고(슬롯 집합 자체가 값), 정상 경로에선 terraform 이 cron
     에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다."""
     raw = os.environ.get("OPS_NEWS_SCHED_HHMM", "")
+    if not raw.strip():
+        return []
     slots: list[tuple[int, int]] = []
-    for part in filter(None, (p.strip() for p in raw.split(","))):
+    # 값이 있는데 항목이 비었으면(" ,"·후행 쉼표) 그것도 손상이다 — 빈 항목을 걸러 주면
+    # "15:00, ,23:50" 의 가운데 슬롯이 소리 없이 사라진다(위 fail-loud 와 같은 축).
+    for part in (p.strip() for p in raw.split(",")):
         try:
             h, m = part.split(":")
             slots.append((int(h), int(m)))
