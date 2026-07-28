@@ -1,0 +1,133 @@
+# PR 검증 — 변경된 JVM 모듈의 빌드/테스트 게이트 (ALPHA-571).
+#
+# 배포 워크플로(push)의 Dockerfile 은 bootJar 만 실행해 테스트가 CI 에서 전혀 돌지
+# 않았다 — 엔티티↔DDL validate·요청 검증 회귀가 PR 체크 없이 dev 에 병합될 수 있는
+# 구멍을 이 게이트가 닫는다. 전 모듈 일괄이 아니라 변경 감지 기반이다(러너 2대뿐이라
+# 빌드 시간·큐 통제 — 감지 로직이 곧 이 워크플로의 핵심).
+#
+# 이중 구조: `on.paths` 는 무관 PR(문서·infra·python·UI)에서 러너 점유 자체를 막고,
+# job 안의 감지 step 이 변경 파일 → Gradle 모듈 매핑을 정한다. paths 만으로는 "어느
+# 모듈만 돌릴지"를 표현할 수 없다.
+#
+# Testcontainers IT 는 러너 Docker(DinD)로 실행된다 — test-python.yml 이 같은 방식으로
+# docker run + localhost 매핑 포트를 쓰는 선례. 러너는 컨테이너 안이지만 데몬을 공유해
+# localhost 포트 매핑이 동작한다.
+#
+# 이 레포(private, free 플랜)는 branch protection 을 쓸 수 없어 이 체크가 required 가
+# 아니므로 paths 필터가 안전하다. 훗날 required 로 지정하려면 paths 필터를 걷어내야
+# 한다 — path 로 걸러 스킵된 required check 는 Pending 으로 남아 PR 을 영구 차단한다
+# (schema-validate.yml 과 동일). paths 는 diff 앞 300개 파일까지만 평가된다는 한계도
+# 같다(그 창은 required 아님 + 로컬 edge-review 게이트가 감수).
+name: jvm-test
+
+on:
+  pull_request:
+    branches: [dev, main]
+    # JVM 모듈 9개 + 빌드 설정 + 이 워크플로 자신. (required check 도입 시 걷어낼 것 — 위 설명)
+    paths:
+      - "src/libs/schema/**"
+      - "src/libs/jvm-common/**"
+      - "src/apps/cloud/tenant-sync-api/**"
+      - "src/apps/cloud/super-admin-api/**"
+      - "src/apps/onprem/tenant-console-api/**"
+      - "src/apps/onprem/publication-api/**"
+      - "src/apps/onprem/sync-agent/**"
+      - "src/apps/onprem/intake/**"
+      - "src/apps/onprem/screening-worker/**"
+      - "src/gradle/**"
+      - "src/gradlew"
+      - "src/gradlew.bat"
+      - "src/settings.gradle"
+      - "src/build.gradle"
+      - "src/gradle.properties"
+      - ".github/workflows/jvm-test.yml"
+
+# 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret 도 쓰지 않는 검증 전용 워크플로).
+permissions:
+  contents: read
+
+# 같은 PR 의 이전 실행은 취소한다 — 러너 2대의 큐를 오래된 실행이 점유하지 않게.
+concurrency:
+  group: jvm-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changed-modules-build:
+    runs-on: [self-hosted, Linux, X64]
+    # 전체 모듈(빌드 설정·libs 변경) 실행의 상한. 단일 모듈 PR 은 훨씬 짧게 끝난다.
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # base 와의 merge-base diff(base...head)를 위해 전체 히스토리를 받는다.
+          fetch-depth: 0
+
+      - name: 변경 JVM 모듈 감지
+        id: detect
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          base="origin/${BASE_REF}"
+          head="${HEAD_SHA}"
+          # --no-renames: rename 을 A+D 로 풀어 원본·대상 경로가 모두 나오게 한다 —
+          # rename 감지 시 새 경로만 출력되면 원본 모듈의 깨진 참조가 빌드에서 빠진다.
+          changed="$(git diff --name-only --no-renames "${base}...${head}")"
+          echo "── 변경 파일:"
+          echo "${changed}"
+
+          # :libs:schema 는 Flyway 전용 모듈이라 build 태스크가 없다 — 대상에서 제외하고
+          # (마이그레이션 검증은 schema-validate.yml 소관), 스키마 변경의 영향은 아래
+          # 전체 트리거로 앱들의 JPA validate IT 가 잡는다.
+          all_targets=":libs:jvm-common:build :apps:cloud:tenant-sync-api:build :apps:cloud:super-admin-api:build :apps:onprem:tenant-console-api:build :apps:onprem:publication-api:build :apps:onprem:sync-agent:build :apps:onprem:intake:build :apps:onprem:screening-worker:build"
+
+          # 전체 트리거 — 빌드 설정·공유 라이브러리(전 앱이 의존)·이 워크플로 자신.
+          # herestring(<<<) 사용: pipefail 하에서 echo | grep -q 는 grep 조기 종료 시
+          # echo 가 SIGPIPE(141)로 죽어 대형 diff 에서 파이프라인이 실패한다.
+          if grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|src/gradle/|src/libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
+            targets="${all_targets}"
+            echo "전체 트리거(빌드 설정/libs/워크플로 변경) — 전 모듈 실행"
+          else
+            targets=""
+            while read -r dir module; do
+              if grep -q "^${dir}" <<< "${changed}"; then
+                targets="${targets} ${module}:build"
+              fi
+            done <<'MAP'
+          src/apps/cloud/tenant-sync-api/ :apps:cloud:tenant-sync-api
+          src/apps/cloud/super-admin-api/ :apps:cloud:super-admin-api
+          src/apps/onprem/tenant-console-api/ :apps:onprem:tenant-console-api
+          src/apps/onprem/publication-api/ :apps:onprem:publication-api
+          src/apps/onprem/sync-agent/ :apps:onprem:sync-agent
+          src/apps/onprem/intake/ :apps:onprem:intake
+          src/apps/onprem/screening-worker/ :apps:onprem:screening-worker
+          MAP
+          fi
+
+          targets="$(echo "${targets}" | xargs || true)"
+          if [ -z "${targets}" ]; then
+            # paths 필터와 매핑 목록이 같아 정상적으론 도달하지 않는다. 도달했다면
+            # 필터-매핑 드리프트(또는 GitHub 의 paths 평가 실패로 인한 무조건 실행)다 —
+            # 아무것도 검증하지 않은 job 이 green 으로 남으면 게이트가 검증한 것처럼
+            # 보이므로 fail-loud 로 끊는다(Rule 12).
+            echo "::error::워크플로는 트리거됐는데 매핑된 JVM 모듈이 없습니다 — paths 필터와 감지 매핑의 드리프트를 확인하세요."
+            exit 1
+          fi
+          echo "── 실행 대상: ${targets}"
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # build = compile + test + bootJar. Testcontainers IT 포함 — 러너 Docker 로 실행.
+      - name: 변경 모듈 빌드/테스트
+        working-directory: src
+        run: ./gradlew ${{ steps.detect.outputs.targets }}
