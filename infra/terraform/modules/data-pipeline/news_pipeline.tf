@@ -148,7 +148,10 @@ locals {
           Overrides = {
             ContainerOverrides = [{
               Name        = local.container_name
-              "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id)"
+              # --window-days: 창을 [오늘−N, 오늘]로 겹친다(ALPHA-592). 23:50 슬롯은 체인
+              # 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게 기본 경로라
+              # (2026-07-28 00:03 read=0 실측), 겹침 없이는 늦저녁 기사가 영영 조립되지 않는다.
+              "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id, '--window-days', '${var.assemble_window_days}')"
             }]
           }
         })
