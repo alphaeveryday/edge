@@ -5,12 +5,8 @@
 # 최소 스코프: 데모 ECR push · MTS S3 sync · CloudFront 무효화 · 박스 SSM Run Command(인스턴스 태그 스코프).
 
 locals {
-  # 박스가 compose 로 pull 하는 데모 이미지(ALPHA-533 foundation ECR). ARN 은 account/region 으로 구성.
-  demo_image_names = ["publication-api", "screening-worker", "intake", "sync-agent", "mock-broker", "tenant-console-api", "tenant-console-ui"]
-  demo_ecr_arns = [
-    for n in local.demo_image_names :
-    "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/${n}"
-  ]
+  # demo_image_names·demo_ecr_arns 는 main.tf locals 로 승격됨(ALPHA-559) —
+  # 배포 역할 push 스코프와 인스턴스 프로파일 pull 스코프가 같은 목록을 공유한다.
   deploy_github_org_repo = "alphaeveryday/edge"
 }
 
