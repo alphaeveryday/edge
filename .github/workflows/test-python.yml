@@ -87,24 +87,31 @@ jobs:
   e2e:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: edge
-          POSTGRES_USER: edge
-          POSTGRES_PASSWORD: edge
-        # 영속 self-hosted 러너에 5432 를 고정 점유하면 다른 Postgres·잔여 컨테이너와 충돌해
-        # 서비스 기동이 실패한다. 호스트 포트는 러너가 동적 할당하게 두고 아래에서 매핑값을 읽는다.
-        ports:
-          - 5432
-        options: >-
-          --health-cmd "pg_isready -U edge -d edge"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
+
+      # self-hosted 러너가 컨테이너 안에서 돌아 GitHub Actions 서비스 컨테이너(services:)를
+      # 쓸 수 없다("Container feature is not supported when runner is already running inside
+      # container" — DinD 로도 재활성화되지 않는다). DinD 로 직접 Postgres 를 띄운다(schema-validate 와 동일 패턴).
+      - name: Start ephemeral Postgres
+        run: |
+          set -euo pipefail
+          docker rm -f edge-e2e-pg >/dev/null 2>&1 || true
+          # 호스트 5432 고정 점유는 박스의 다른 Postgres·CI 컨테이너와 충돌한다 — 동적 할당 후 매핑 포트를 읽는다.
+          docker run -d --name edge-e2e-pg \
+            -e POSTGRES_DB=edge -e POSTGRES_USER=edge -e POSTGRES_PASSWORD=edge \
+            -p 5432 postgres:16
+          pgport="$(docker port edge-e2e-pg 5432/tcp | head -1 | sed 's/.*://')"
+          echo "E2E_PGPORT=${pgport}" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do
+            if docker exec edge-e2e-pg pg_isready -U edge -d edge >/dev/null 2>&1; then
+              echo "postgres ready on host port ${pgport}"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::ephemeral Postgres가 준비되지 않았습니다."
+          docker logs edge-e2e-pg || true
+          exit 1
 
       # 버전은 libs/schema/build.gradle 의 Flyway 플러그인(10.21.0)과 맞춘다.
       - name: Flyway migrate (cloud set)
@@ -112,7 +119,7 @@ jobs:
           docker run --rm --network host
           -v "$PWD/src/libs/schema/migrations-cloud:/flyway/sql:ro"
           flyway/flyway:10.21.0
-          -url=jdbc:postgresql://localhost:${{ job.services.postgres.ports['5432'] }}/edge -user=edge -password=edge migrate
+          -url=jdbc:postgresql://localhost:${{ env.E2E_PGPORT }}/edge -user=edge -password=edge migrate
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -127,5 +134,10 @@ jobs:
         working-directory: src
         env:
           E2E_PGHOST: 127.0.0.1
-          E2E_PGPORT: ${{ job.services.postgres.ports['5432'] }}
+          # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
         run: uv run pytest apps/cloud/analysis-engine/tests/e2e -q
+
+      # 영속 러너에 컨테이너·포트를 남기지 않는다.
+      - name: Tear down ephemeral Postgres
+        if: always()
+        run: docker rm -f edge-e2e-pg >/dev/null 2>&1 || true
