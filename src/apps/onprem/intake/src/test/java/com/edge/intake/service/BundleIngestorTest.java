@@ -9,6 +9,7 @@ import org.junit.jupiter.api.function.Executable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -64,12 +65,42 @@ class BundleIngestorTest {
 	void 정상_번들은_저장되고_cursor가_cursor_to로_전진한다() {
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();
-		long advanced = new BundleIngestor(bundles, state)
+		OptionalLong advanced = new BundleIngestor(bundles, state)
 				.ingest(envelope("{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}"));
 
-		assertThat(advanced).isEqualTo(3);
+		assertThat(advanced).hasValue(3);
 		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3));
 		assertThat(state.advanced).containsExactly(3L);
+	}
+
+	@Test
+	void result_생략_성공_포맷은_신규_없음으로_저장도_전진도_하지_않는다() {
+		// WHY(Rule 9): ADR-0042 M2 후 "신규 없음"의 유일한 와이어 표현은 result 필드가 생략된 200
+		// 성공 포맷이다 — 이를 계약 위반으로 다루면 신규 없음 틱마다 오류 루프가 된다(정상 no-op 이어야
+		// 폴러가 조용히 틱을 끝낸다). 저장·전진이 없어야 재개점이 오염되지 않는다.
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		OptionalLong advanced = new BundleIngestor(bundles, state)
+				.ingest(bundle("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\"}"));
+
+		assertThat(advanced).isEmpty();
+		assertThat(bundles.saved).isEmpty();
+		assertThat(state.advanced).isEmpty();
+	}
+
+	@Test
+	void result가_null_명시면_계약_위반으로_거부한다() {
+		// WHY: 생산자(ApiResponse.onSuccess(null) + @JsonInclude NON_NULL)는 필드를 생략하지 null 을
+		// 싣지 않는다 — "result": null 관용은 malformed 봉투를 신규 없음으로 오독할 통로다. 신규 없음은
+		// 오직 "필드 부재"만이다(엄격 구분).
+		RecordingBundleRepo bundles = new RecordingBundleRepo();
+		RecordingStateRepo state = new RecordingStateRepo();
+		Executable call = () -> new BundleIngestor(bundles, state)
+				.ingest(bundle("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":null}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(bundles.saved).isEmpty();
+		assertThat(state.advanced).isEmpty();
 	}
 
 	@Test
