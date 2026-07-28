@@ -251,10 +251,10 @@ resource "aws_scheduler_schedule" "news" {
   # 운영 원장(ALPHA-591): 뉴스 스케줄도 SFN 직접 시작이 아니라 **Planner 경유**다(daily 와 동형,
   # statemachine.tf 의 aws_scheduler_schedule.daily 주석 참조). Planner 가 pipeline_run +
   # expected_task 를 먼저 커밋하고 멱등 execution_name(run_key 파생 — 콜론 없는 charset)으로
-  # StartExecution 하므로, 종전의 "재시도 0"(scheduled-time 콜론 때문에 멱등 Name 불가 → 중복
-  # StartExecution 이 threading 레이스) 제약이 해소된다 — 재전달·재시도는 같은 run_key 로
-  # 수렴해 run 1개다. run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
+  # StartExecution 하므로, EventBridge 의 드문 중복 재전달이 같은 run_key 로 수렴해 run 1개다.
+  # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
   # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
+  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석: 슬롯 간 비중첩 불변식이 이유.)
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
@@ -286,11 +286,19 @@ resource "aws_scheduler_schedule" "news" {
       "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
     )
 
-    # Planner 경유로 멱등이 확보돼 재시도를 복원한다(위 주석). age 는 다음 슬롯이 백스톱이라
-    # 1시간이면 충분하다(daily 는 하루 1회라 24h·185회로 전달을 보장하는 것과 대비).
+    # 재시도 0 유지 — 사유가 바뀌었다(ALPHA-591 edge-review). 종전엔 멱등 Name 불가(콜론)가
+    # 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐지만, Planner 멱등은
+    # **같은 슬롯**의 중복만 막는다. 재시도 창이 슬롯 간격(30분)을 파고들면 지연 시작한 15:00
+    # 실행(SFN 타임아웃 1500s)이 15:30 실행과 겹쳐 **서로 다른 run 의 AssembleEvents 가 동시에**
+    # 돌고, threading 의 prior-count·lifecycle_stage read-before-write 레이스가 되살아난다 —
+    # PR1 이 "타임아웃 1500s < 30분 간격"으로 세운 비중첩 불변식은 시작 지연 ≈ 0 일 때만 성립.
+    # 재시도를 포기해도 잃는 게 거의 없다: EventBridge 드문 중복 재전달은 run_key 멱등이 흡수,
+    # 제출 실패로 슬롯이 누락되면 이번 티켓의 PLANNER_MISSING 탐지가 30분 뒤 이슈를 열고
+    # 데이터는 다음 슬롯 창 겹침이 자가 회복한다(daily 15:40 은 하루 1회+후행 슬롯 없음이라
+    # 24h·185회 재시도로 전달을 보장하는 것과 대비되는 지점).
     retry_policy {
       maximum_event_age_in_seconds = 3600
-      maximum_retry_attempts       = 10
+      maximum_retry_attempts       = 0
     }
     dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
