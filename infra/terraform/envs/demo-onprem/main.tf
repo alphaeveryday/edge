@@ -3,6 +3,16 @@ data "aws_caller_identity" "current" {}
 locals {
   prefix = "edge-demo-onprem"
 
+  # 박스가 compose 로 pull 하는 데모 이미지(ALPHA-533 foundation ECR). ARN 은 account/region
+  # 으로 구성한다. 소비처 2곳이 같은 목록을 공유한다(드리프트 방지, ALPHA-559):
+  #   ① deploy-role.tf — 배포 역할의 ECR push 스코프
+  #   ② module.demo_onprem.ecr_repository_arns — 인스턴스 프로파일의 pull 스코프
+  demo_image_names = ["publication-api", "screening-worker", "intake", "sync-agent", "mock-broker", "tenant-console-api", "tenant-console-ui"]
+  demo_ecr_arns = [
+    for n in local.demo_image_names :
+    "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/${n}"
+  ]
+
   # 데모 mTLS 클라이언트 인증서용 SSM SecureString. terraform 은 값을 관리하지 않는다 —
   # SecureString 을 terraform 이 관리하면 평문이 state 에 저장되고, refresh 가 수동 주입한
   # 실제 cert 를 공유 state 로 끌어와 노출한다. 운영자가 CLI 로 생성하고(아래 주석),
@@ -53,7 +63,9 @@ module "demo_onprem" {
   mock_broker_port        = var.mock_broker_port
   cert_parameter_arn      = local.cert_param_arn
   ingress_prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
-  # ECR 은 데모 이미지 저장소 확정 전까지 스코프 미지정(전체 pull). 저장소 생기면 좁힌다.
+  # pull 권한을 데모 이미지 7종으로 스코프 — 미주입 시 모듈이 ["*"] 폴백이라 계정 전체
+  # private ECR 이 열린다(ALPHA-559 하드닝).
+  ecr_repository_arns = local.demo_ecr_arns
 }
 
 # 가상 MTS 페이지 (S3 + CloudFront). CloudFront 의 /api/* → EC2 오리진 프록시 배선은
