@@ -116,11 +116,12 @@ reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·�
 
 **`observed_return`·`market_code`(검수 UI 목록의 시장·등락률)**: 번들에 **싣기로 결정**하되, `source_events`/`evidences` 배열이 아니라 **`explanation_result` 페이로드 확장**이다 — `market_code`는 `instrument`(이미 `etf_ticker`·`etf_name` 조인) 출처, `observed_return`은 `price_movement_trigger` 출처. **결정적 lineage 조인 경로·기계가독 스키마화·openapi(ALPHA-326) 반영은 ALPHA-497로 이연**한다 — `price_movement_trigger`는 `(etf_instrument_id, trade_date, detected_at)` 유니크라 단순 (종목·거래일) 조인은 다중 트리거 시 비결정적이므로 조인 경로 확정이 497 몫이다. 여기선 "싣는다"는 결정만 기록한다.
 
-## 체크섬 (무결성)
+## 무결성 (MVP: 전송 계층 · 목표 계약: 서명)
 
-- **대상 바이트: HTTP 응답 body 전체의 UTF-8 바이트열 그대로.** 서버는 직렬화한 바이트를 그대로 전송·보관하고, Sync Agent는 **재직렬화 없이 수신 바이트에 대해** SHA-256을 계산해 대조한다 (canonical-JSON 정규화 규칙을 계약에 넣지 않기 위한 선택 — 정규화는 양 언어 구현이 어긋나는 단골 지점).
-- 체크섬 값은 응답 헤더 `X-Bundle-Checksum: sha256=<hex>`로 전달한다 (body 밖 — body에 넣으면 자기 자신을 포함하는 순환).
-- 검증 실패 시 저장하지 않고 재시도([sync-protocol.md](sync-protocol.md)). 검증 통과한 **수신 바이트 원본을 Raw Event Store에 그대로 보존**한다 (수신 원본 불변 원칙, 목표 계약의 서명 검증도 같은 바이트 대상).
+MVP의 앱 레벨 발신자 체크섬(`X-Bundle-Checksum`)·byte[] 응답은 폐기됐다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md)). 200 응답은 공통 `ApiResponse` 봉투(result 아래 EventBundle)로 나간다.
+
+- **MVP**: 전송 무결성은 mTLS/TLS(전송 계층)에 위임한다. Sync Agent는 수신 바이트를 재직렬화 없이 그대로 릴레이하고, Intake는 수신 body 원본을 Raw Event Store에 보존한다(수신 원본 불변 원칙).
+- **목표 계약(서명)**: 종단 간 무결성·진정성이 필요해지면 벤더 개인키 기반 번들 서명을 도입한다 — "이 콘텐츠는 벤더가 발행한 원본"임을 증명. 서명 검증은 **수신 바이트 원본**을 대상으로 하며(같은 바이트 보존), canonical-JSON 정규화 규칙을 계약에 넣지 않기 위해 "받은 바이트 그대로"를 유지한다([sync-protocol.md](sync-protocol.md) 목표 계약).
 
 ## 미확정 요약
 

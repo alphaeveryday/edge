@@ -5,13 +5,13 @@
 
 ## 지켜야 할 로컬 불변식
 
-- **체크섬은 바이트에 대한 것** — `BundleSerializer`가 직렬화를 딱 한 번 하고, 그 바이트로 SHA-256을 계산하고, 같은 바이트를 body로 보낸다. 응답을 다시 직렬화하거나 body를 가공하는 필터를 끼우면 소비자의 무결성 검증이 전부 깨진다.
+- **snake_case 는 DTO `@JsonNaming` 으로** — BundleSerializer 제거(ADR-0040) 후 `EventBundle`·`BundleEntry`·`ExplanationResult`·`ExplanationRun` 각 record 의 `@JsonNaming(SnakeCaseStrategy)`가 유일한 naming 소스다. 애너테이션이 빠지면 Spring 기본 mapper 가 camelCase 로 내보내 계약이 깨진다(계약 테스트가 가드레일).
 - **테넌트 식별은 `TenantResolver`로만** — 쿼리·경로·헤더에서 테넌트를 받지 않는다(계약). 컨트롤러에 테넌트 파라미터를 추가하는 변경은 신뢰경계 위반이다.
-- **공통 응답 포맷은 에러에만** — 4xx/5xx는 jvm-common `ApiResponse`(도메인 코드 `SyncErrorStatus`, 글루는 jvm-common 공통 `ExceptionAdvice`). 성공(200) 번들 본문은 `ApiResponse`로 감싸지 않는다 — 계약 와이어 포맷 자체가 응답이고 체크섬이 그 바이트 대상이라, 감싸면 둘 다 깨진다.
+- **응답은 공통 봉투로** — 성공(200)은 `ApiResponse` 봉투(번들은 `result` 아래), 에러(4xx/5xx)도 `ApiResponse`(도메인 코드 `SyncErrorStatus`, 글루는 jvm-common `ExceptionAdvice`). ADR-0040 으로 byte[]·체크섬 특례가 폐기돼 성공도 다른 엔드포인트와 동일 봉투다.
 
 ## 구조 (layered)
 
-`controller`(HTTP 검증·상태코드) → `service`(SyncBundleService 오케스트레이션 + BundleSerializer) → `repository`(TenantDeliveryRepository — `tenant_delivery` ⋈ 경계면 테이블 JPQL 프로젝션 + BundleEntryStore — 와이어 매핑·delivery_type 분기) / `entity`(`@Immutable` 부분 매핑 — `ddl-auto=validate`, 스키마는 Flyway SSOT, ADR-0038) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.** 이 모듈의 DB 접근은 **읽기 전용**이다(outbox writer 는 fan-out 발번기 — 후속) — 리포지토리는 `Repository` 마커 상속으로 쓰기 표면을 봉인한다.
+`controller`(HTTP 검증·상태코드·봉투) → `service`(SyncBundleService 오케스트레이션) → `repository`(TenantDeliveryRepository — `tenant_delivery` ⋈ 경계면 테이블 JPQL 프로젝션 + BundleEntryStore — 와이어 매핑·delivery_type 분기) / `entity`(`@Immutable` 부분 매핑 — `ddl-auto=validate`, 스키마는 Flyway SSOT, ADR-0038) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.** 이 모듈의 DB 접근은 **읽기 전용**이다(outbox writer 는 fan-out 발번기 — 후속) — 리포지토리는 `Repository` 마커 상속으로 쓰기 표면을 봉인한다.
 `source_events`·`evidences` 는 경계면 컬럼 선별은 확정됐으나(ALPHA-395 — event-bundle-schema.md "경계면 컬럼") 조립 lineage 조인이 미구현(ALPHA-363)이라 빈 배열로 실린다 — 조인 도입 시 컬럼을 채운다.
 
 ## 스텁 → 실구현 교체 지점
@@ -25,11 +25,11 @@
 ```bash
 # 루트에서 (cloud PG + 스키마 + 로컬 시드 포함)
 docker compose up --build tenant-sync-api   # host 18083
-curl -i "localhost:18083/api/v1/sync/bundle?after=0"   # 200 + X-Bundle-Checksum
+curl -i "localhost:18083/api/v1/sync/bundle?after=0"   # 200 (ApiResponse 봉투, result 아래 번들)
 curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 204
 # bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:cloud:tenant-sync-api:bootRun)
 ```
 
 로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드 4건(NEW·CORRECTION·INVALIDATION·최종 NEW)이다 — fan-out 발번기 도입 시 시드 제거.
 
-테스트 19건 — 체크섬=수신 바이트, snake_case 형상, 204, fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리를 고정한다(ALPHA-572).
+테스트 21건 — 봉투 응답·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·204·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리를 고정한다(ALPHA-572).
