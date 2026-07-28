@@ -94,8 +94,10 @@ jobs:
           POSTGRES_DB: edge
           POSTGRES_USER: edge
           POSTGRES_PASSWORD: edge
+        # 영속 self-hosted 러너에 5432 를 고정 점유하면 다른 Postgres·잔여 컨테이너와 충돌해
+        # 서비스 기동이 실패한다. 호스트 포트는 러너가 동적 할당하게 두고 아래에서 매핑값을 읽는다.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U edge -d edge"
           --health-interval 5s
@@ -110,7 +112,7 @@ jobs:
           docker run --rm --network host
           -v "$PWD/src/libs/schema/migrations-cloud:/flyway/sql:ro"
           flyway/flyway:10.21.0
-          -url=jdbc:postgresql://localhost:5432/edge -user=edge -password=edge migrate
+          -url=jdbc:postgresql://localhost:${{ job.services.postgres.ports['5432'] }}/edge -user=edge -password=edge migrate
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -125,4 +127,5 @@ jobs:
         working-directory: src
         env:
           E2E_PGHOST: 127.0.0.1
+          E2E_PGPORT: ${{ job.services.postgres.ports['5432'] }}
         run: uv run pytest apps/cloud/analysis-engine/tests/e2e -q
