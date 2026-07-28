@@ -782,25 +782,33 @@ resource "aws_scheduler_schedule" "daily" {
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
-    input = jsonencode({
-      Cluster        = var.cluster_arn
-      TaskDefinition = aws_ecs_task_definition.ops.arn
-      LaunchType     = "FARGATE"
-      NetworkConfiguration = {
-        AwsvpcConfiguration = {
-          Subnets        = var.subnet_ids
-          SecurityGroups = [aws_security_group.task.id]
-          AssignPublicIp = "DISABLED"
+    # ⚠️ 플레이스홀더는 jsonencode 바깥 replace 로 주입한다(ALPHA-593, 뉴스 스케줄과 동일) —
+    # jsonencode 의 </> 이스케이프 때문에 EventBridge 가 치환하지 못해 리터럴이
+    # 전달됐고, Planner 의 `_scheduled_time()` 이 파싱 실패 → **now() 폴백으로 조용히**
+    # 동작해 왔다(정시 실행은 같은 분이라 자가 은폐, 지연 재시도(최대 24h·185회)는 원래
+    # 슬롯이 아닌 재시도 시각으로 run_key 를 만든다).
+    input = replace(
+      jsonencode({
+        Cluster        = var.cluster_arn
+        TaskDefinition = aws_ecs_task_definition.ops.arn
+        LaunchType     = "FARGATE"
+        NetworkConfiguration = {
+          AwsvpcConfiguration = {
+            Subnets        = var.subnet_ids
+            SecurityGroups = [aws_security_group.task.id]
+            AssignPublicIp = "DISABLED"
+          }
         }
-      }
-      Overrides = {
-        ContainerOverrides = [{
-          Name        = local.container_name
-          Command     = ["plan-run"]
-          Environment = [{ Name = "OPS_SCHEDULED_TIME", Value = "<aws.scheduler.scheduled-time>" }]
-        }]
-      }
-    })
+        Overrides = {
+          ContainerOverrides = [{
+            Name        = local.container_name
+            Command     = ["plan-run"]
+            Environment = [{ Name = "OPS_SCHEDULED_TIME", Value = "SCHEDULED_TIME_TOKEN" }]
+          }]
+        }
+      }),
+      "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
+    )
 
     retry_policy {
       maximum_event_age_in_seconds = 86400
