@@ -39,7 +39,7 @@
         "entries": {
           "type": "array",
           "minItems": 1,
-          "description": "빈 번들은 만들지 않는다(신규 없음은 204).",
+          "description": "빈 번들은 만들지 않는다(신규 없음은 result 필드 생략 — ADR-0042).",
           "items": { "$ref": "#/$defs/BundleEntry" }
         }
       }

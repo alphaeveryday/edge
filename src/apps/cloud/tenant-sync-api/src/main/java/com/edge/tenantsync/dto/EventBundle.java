@@ -24,7 +24,7 @@ public record EventBundle(
 
 	public static EventBundle of(long tenantId, List<BundleEntry> entries) {
 		if (entries.isEmpty()) {
-			throw new IllegalArgumentException("빈 번들은 만들 수 없다 — 신규 없음은 204 로 표현한다");
+			throw new IllegalArgumentException("빈 번들은 만들 수 없다 — 신규 없음은 result 생략으로 표현한다(ADR-0042)");
 		}
 		return new EventBundle(
 				UUID.randomUUID(), // 응답 인스턴스 식별용. 멱등 키는 (tenant_id, cursor) — 계약 참조.

@@ -3,15 +3,15 @@ openapi: 3.1.0
 # 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
 # 시맨틱 계약(멱등성·cursor 규칙·에러 의미·전달 보장)의 SSOT 는
 # ../../../../docs/contracts/sync-protocol.md 이며, 이 문서는 그 하위 문법 층이다.
-# 번들(EventBundle) 필드 표기는 snake_case (DTO @JsonNaming). 200 응답은 공통 ApiResponse 봉투로 감싼다(ADR-0040).
+# 번들(EventBundle) 필드 표기는 snake_case (DTO @JsonNaming). 성공은 항상 200 공통 응답 포맷(ApiResponse — ADR-0040·0042).
 info:
   title: Tenant Sync API
   version: 1.0.0
   description: >-
     온프렘 Sync Agent 가 outbound-Pull 로 소비하는 Cloud 표면.
-    한 응답은 항상 Event Bundle 1개이며, 성공(200)은 공통 응답 포맷(ApiResponse)
-    봉투로 감싼다(번들은 result 아래). 전송 무결성은 mTLS/TLS 이며, 앱 레벨 체크섬은
-    목표 계약(서명)으로 이관됐다(ADR-0040). 시맨틱 계약은
+    성공은 항상 200 공통 응답 포맷(ApiResponse)이다 — 번들 있음은 result 아래 Event Bundle
+    1개, 신규 없음은 result 필드 생략(ADR-0042, 204 폐지). 전송 무결성은 mTLS/TLS 이며,
+    앱 레벨 체크섬은 목표 계약(서명)으로 이관됐다(ADR-0040). 시맨틱 계약은
     ../../../../docs/contracts/sync-protocol.md, 번들 필드 정의는
     ../../../../docs/contracts/event-bundle-schema.md 가 SSOT.
 
@@ -33,7 +33,8 @@ paths:
       summary: 커서 이후의 Event Bundle 1건을 Pull
       description: >-
         `after` 커서 초과분을 cursor 오름차순으로 묶어 번들 1개로 반환한다.
-        신규가 없으면 204. 재개점은 `result.cursor_to` 다(entry 별 `cursor` 아님).
+        신규가 없으면 200 + `result` 필드 생략(빈 번들은 만들지 않는다 — ADR-0042).
+        재개점은 `result.cursor_to` 다(entry 별 `cursor` 아님).
 
 
         테넌트 식별은 매 요청 mTLS 인증서-테넌트 바인딩 검증으로 결정된다(계약 필수 —
@@ -71,15 +72,14 @@ paths:
       responses:
         '200':
           description: >-
-            신규/정정/무효화 전달 레코드를 담은 Event Bundle 1건을 공통 응답 포맷(ApiResponse)
-            봉투로 감싼다 — 번들은 `result` 아래. Content-Type 은 application/json, 번들 필드
+            성공 — 공통 응답 포맷(ApiResponse). 신규/정정/무효화 전달 레코드가 있으면 Event
+            Bundle 1건이 `result` 아래에 오고, **신규 없음이면 `result` 필드가 생략**된다
+            (ADR-0042 — 빈 번들은 만들지 않는다). Content-Type 은 application/json, 번들 필드
             표기는 snake_case.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BundleEnvelope'
-        '204':
-          description: 신규 없음. 빈 번들은 만들지 않는다.
         '400':
           description: >-
             소비자 버그 신호(재시도로 낫지 않음). 도메인 코드 SYNC4001(after<0)·
@@ -136,9 +136,9 @@ components:
     BundleEnvelope:
       type: object
       description: >-
-        성공(200) 응답 봉투 — 공통 응답 포맷(jvm-common ApiResponse)의 성공 형태.
-        번들은 result 아래에 온다(ADR-0040).
-      required: [isSuccess, code, message, result]
+        성공(200) 공통 응답 포맷(jvm-common ApiResponse)의 성공 형태. 번들은 result 아래에
+        오고, 신규 없음이면 result 필드가 생략된다(ADR-0042) — required 에서 제외한 이유.
+      required: [isSuccess, code, message]
       properties:
         isSuccess:
           type: boolean
@@ -157,7 +157,7 @@ components:
       type: object
       description: >-
         공통 응답 포맷(jvm-common ApiResponse)의 에러 형태 — 4xx/5xx 에 적용된다.
-        성공(200)도 공통 봉투(BundleEnvelope)로 감싼다 — ADR-0040 으로 체크섬 특례 폐기.
+        성공(200)도 공통 응답 포맷(BundleEnvelope)이다 — ADR-0040 으로 체크섬 특례 폐기.
       required: [isSuccess, code, message]
       properties:
         isSuccess:

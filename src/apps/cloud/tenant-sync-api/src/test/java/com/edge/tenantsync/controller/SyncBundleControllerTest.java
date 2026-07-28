@@ -72,8 +72,8 @@ class SyncBundleControllerTest {
 	}
 
 	@Test
-	void 성공은_공통_봉투로_감싸고_번들은_result_아래_계약_형상을_따른다() throws Exception {
-		// WHY: 200 은 프로젝트 공통 봉투(ApiResponse)로 나가고(ADR-0040), 번들은 result 아래에 온다.
+	void 성공은_공통_응답_포맷으로_감싸고_번들은_result_아래_계약_형상을_따른다() throws Exception {
+		// WHY: 200 은 공통 응답 포맷(ApiResponse)으로 나가고(ADR-0040), 번들은 result 아래에 온다.
 		// 필드명(snake_case)·cursor 범위·엔트리 유형은 온프렘 파서와의 계약이다
 		// (docs/contracts/event-bundle-schema.md — explanation_result 경계면, tenant_id 는 BIGINT).
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "0"))
@@ -99,9 +99,15 @@ class SyncBundleControllerTest {
 	}
 
 	@Test
-	void 신규_없음은_204다() throws Exception {
+	void 신규_없음은_result_생략_성공_포맷이다() throws Exception {
+		// WHY: 신규 없음도 isSuccess 형상을 실어야 소비자가 자기 인증한다(ADR-0042 — 204 는
+		// 검증 불가 fail-silent: 오설정 프록시의 204 가 "신규 없음"으로 위장하면 sync 가 조용히
+		// 영구 정지). result 부재만이 "번들 없음"의 표현이다.
 		mvc.perform(get("/api/v1/sync/bundle").param("after", "3"))
-				.andExpect(status().isNoContent());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("COMMON200"))
+				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 
 	@Test

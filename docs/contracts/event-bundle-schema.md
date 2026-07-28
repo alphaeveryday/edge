@@ -118,7 +118,7 @@ reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·�
 
 ## 무결성 (MVP: 전송 계층 · 목표 계약: 서명)
 
-MVP의 앱 레벨 발신자 체크섬(`X-Bundle-Checksum`)·byte[] 응답은 폐기됐다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md)). 200 응답은 공통 `ApiResponse` 봉투(result 아래 EventBundle)로 나간다.
+MVP의 앱 레벨 발신자 체크섬(`X-Bundle-Checksum`)·byte[] 응답은 폐기됐다([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md)). 성공은 항상 200 공통 응답 포맷(`ApiResponse`)이다 — 번들은 `result` 아래, 신규 없음은 `result` 필드 생략([ADR-0042](../adr/0042-sync-pull-uniform-response.md) — 204 폐지).
 
 - **MVP**: 전송 무결성은 mTLS/TLS(전송 계층)에 위임한다. Sync Agent는 수신 바이트를 재직렬화 없이 그대로 릴레이하고, Intake는 수신 body 원본을 Raw Event Store에 보존한다(수신 원본 불변 원칙).
 - **목표 계약(서명)**: 종단 간 무결성·진정성이 필요해지면 벤더 개인키 기반 번들 서명을 도입한다 — "이 콘텐츠는 벤더가 발행한 원본"임을 증명. 서명 검증은 **수신 바이트 원본**을 대상으로 하며(같은 바이트 보존), canonical-JSON 정규화 규칙을 계약에 넣지 않기 위해 "받은 바이트 그대로"를 유지한다([sync-protocol.md](sync-protocol.md) 목표 계약).

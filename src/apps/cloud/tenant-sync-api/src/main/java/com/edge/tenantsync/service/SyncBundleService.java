@@ -9,8 +9,9 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Pull 오케스트레이션: 전달 레코드 조회 → 번들 조립. 직렬화·봉투 씌우기는 상위(컨트롤러/
- * Spring MessageConverter) 소관이다. 반환이 empty 면 신규 없음 — HTTP 표현(204)은 컨트롤러 소관.
+ * Pull 오케스트레이션: 전달 레코드 조회 → 번들 조립. 직렬화·공통 응답 포맷 래핑은 상위
+ * (컨트롤러/Spring MessageConverter) 소관이다. 반환이 empty 면 신규 없음 — HTTP 표현
+ * (200 + result 생략, ADR-0042)은 컨트롤러 소관.
  */
 @Service
 public class SyncBundleService {
