@@ -16,3 +16,8 @@ output "target_group_arn" {
   description = "ECS 서비스가 load_balancer 로 등록할 타깃그룹"
   value       = aws_lb_target_group.this.arn
 }
+
+output "arn" {
+  description = "ALB ARN (WAFv2 WebACL association 등 리소스 연결용)"
+  value       = aws_lb.this.arn
+}

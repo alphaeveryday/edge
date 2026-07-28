@@ -92,7 +92,7 @@ module "rds" {
 # ── super-admin 공개 엣지 (ADR-0034, ALPHA-473) ─────────
 # 운영 콘솔 API 를 전용 ALB 로 직결한다 — 호스트 단위 1:1, 경로 라우팅 없음. sync ALB 와
 # 진입점을 공유하지 않는 이유는 mTLS 가 리스너 단위라서(공유 시 운영자 브라우저까지
-# 클라이언트 인증서 강제). WAFv2 부착은 ALPHA-297 후속.
+# 클라이언트 인증서 강제). WAFv2(AWS Managed rules)는 아래에서 이 ALB 에 부착한다(ALPHA-297).
 # ⚠️ 앱 인증 미구현(스캐폴드) — 현재 노출 표면은 actuator health 뿐(컨트롤러 0·DB 미배선).
 # 실기능 컨트롤러·DB 배선은 인증(ALPHA-474) 선행이 게이트다 — cross-tenant 운영자
 # 표면은 운영자 인증·인가를 요구한다(ADR-0008).
@@ -163,6 +163,75 @@ resource "aws_route53_record" "admin_api" {
     zone_id                = module.super_admin_alb.zone_id
     evaluate_target_health = false
   }
+}
+
+# ── super-admin ALB WAFv2 (ALPHA-297) ───────────────────
+# 공개 엣지의 최소 보안 백스톱 — AWS Managed rules 2종(공통 취약점 + known bad inputs)을
+# 기본 차단 동작(override 없음)으로 부착한다. 커스텀 룰·레이트리밋은 범위 밖(후속).
+# sync ALB 는 대상이 아니다 — trust store(mTLS)가 게이트(ALPHA-447).
+resource "aws_wafv2_web_acl" "super_admin" {
+  name  = "${local.prefix}-admin"
+  scope = "REGIONAL" # ALB 용 — CloudFront(GLOBAL/us-east-1)가 아니다
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "aws-managed-common"
+    priority = 1
+
+    # override_action none = 룰 그룹 자체의 차단 동작을 그대로 쓴다(count 로 무력화하지 않음).
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesCommonRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "aws-managed-common"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "aws-managed-known-bad-inputs"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "aws-managed-known-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.prefix}-admin"
+    sampled_requests_enabled   = true
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "super_admin_alb" {
+  resource_arn = module.super_admin_alb.arn
+  web_acl_arn  = aws_wafv2_web_acl.super_admin.arn
 }
 
 # ── Sync 채널 공개 엣지 (ADR-0034) ──────────────────────
