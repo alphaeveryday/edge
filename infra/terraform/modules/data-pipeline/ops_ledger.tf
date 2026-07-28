@@ -19,6 +19,16 @@ locals {
   # `_sched_hhmm` 이 int() 로 파싱하므로 자릿수가 어긋나도 조용히 넘어가지 않게.
   _daily_cron_hm      = regex("^cron\\(([0-9]+) ([0-9]+) ", var.schedule_expression)
   daily_schedule_hhmm = format("%02d:%02d", tonumber(local._daily_cron_hm[1]), tonumber(local._daily_cron_hm[0]))
+
+  # 뉴스 레인 슬롯 목록(ALPHA-591) — daily 와 같은 이유로 news_schedule_expressions cron 에서
+  # 뽑는다(`_news_sched_hhmms` 가 파싱). sort 로 키 순서 무관 결정적 값을 만든다.
+  _news_cron_hms = [
+    for k in sort(keys(var.news_schedule_expressions)) :
+    regex("^cron\\(([0-9]+) ([0-9]+) ", var.news_schedule_expressions[k])
+  ]
+  news_schedule_hhmm = join(",", sort([
+    for hm in local._news_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
+  ]))
 }
 
 # ── Planner/Reconciler 전용 task 역할 ──
@@ -36,16 +46,18 @@ resource "aws_iam_role_policy" "ops_task" {
     Statement = [
       {
         # Planner 가 SFN 을 시작한다(StartExecution 소유는 스케줄러가 아니라 Planner, 스펙 §5).
+        # 뉴스 SFN 도 Planner 경유다(ALPHA-591).
         Effect   = "Allow"
         Action   = ["states:StartExecution"]
-        Resource = [aws_sfn_state_machine.this.arn]
+        Resource = [aws_sfn_state_machine.this.arn, aws_sfn_state_machine.news.arn]
       },
       {
         # Planner(ExecutionAlreadyExists 확인)·Reconciler(실행 동기화·history)가 실행을 읽는다.
         Effect = "Allow"
         Action = ["states:DescribeExecution", "states:GetExecutionHistory"]
         Resource = [
-          "${replace(aws_sfn_state_machine.this.arn, ":stateMachine:", ":execution:")}:*"
+          "${replace(aws_sfn_state_machine.this.arn, ":stateMachine:", ":execution:")}:*",
+          "${replace(aws_sfn_state_machine.news.arn, ":stateMachine:", ":execution:")}:*",
         ]
       },
       {
@@ -94,6 +106,9 @@ resource "aws_ecs_task_definition" "ops" {
       OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
       # Reconciler 의 "예정 지난 슬롯" 판정 기준 — 위 locals 가 cron 에서 뽑는다(드리프트 불가).
       OPS_DAILY_SCHED_HHMM = local.daily_schedule_hhmm
+      # 뉴스 레인(ALPHA-591): Planner 의 뉴스 SFN ARN + Reconciler 의 뉴스 3슬롯 판정 기준.
+      OPS_NEWS_STATE_MACHINE_ARN = aws_sfn_state_machine.news.arn
+      OPS_NEWS_SCHED_HHMM        = local.news_schedule_hhmm
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
