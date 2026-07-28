@@ -90,15 +90,17 @@ public record AnalysisResponse(String id, String name, String code, String marke
 	}
 
 	private static String result(String status, String summary) {
-		if (summary != null) {
+		// 빈 문자열도 결측이다 — 엔진이 모델 무응답 시 "" 를 저장할 수 있고(스키마도 허용),
+		// 그걸 본문처럼 내면 원장 불일치가 빈 화면 뒤로 숨는다.
+		if (summary != null && !summary.isBlank()) {
 			return summary;
 		}
 		return switch (status) {
 			case "PENDING" -> "분석 대기 중입니다. 근거 데이터 수집이 완료되면 자동으로 분석이 시작됩니다.";
 			case "FAILED" -> "분석이 실패했습니다. 실행 상세는 파이프라인 실행 이력에서 확인할 수 있습니다.";
-			// SUCCEEDED 런에 결과 행이 없는 건 스키마가 막지 않는 원장 불일치다 — 빈 문자열로
-			// 완료처럼 두면 운영자가 못 본다(Rule 12).
-			case "COMPLETED" -> "설명 결과가 원장에 없습니다 — 완료 런에 explanation_result 가 없는 원장 불일치입니다.";
+			// SUCCEEDED 런에 결과가 없거나 비어 있는 건 스키마가 막지 않는 원장 불일치다 —
+			// 빈 완료로 두면 운영자가 못 본다(Rule 12).
+			case "COMPLETED" -> "설명 본문이 원장에 없습니다 — 완료 런의 explanation_result 가 없거나 비어 있는 원장 불일치입니다.";
 			default -> "설명 결과가 원장에 없습니다.";
 		};
 	}

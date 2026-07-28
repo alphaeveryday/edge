@@ -44,11 +44,11 @@ class AnalysisControllerTest {
 			"run-2", "TIGER 2차전지", "305540", "XKRX", 0.0518, "RUNNING",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, List.of());
 
-	/** SUCCEEDED 인데 결과 행이 없는 원장 불일치 — 빈 완료로 둔갑하면 안 된다. */
+	/** SUCCEEDED 인데 본문이 빈 원장 불일치 — 엔진이 "" 를 저장할 수 있다. null 과 동급 결측. */
 	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
 			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
-			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), null, null, List.of());
+			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "", null, List.of());
 
 	private MockMvc mvc;
 
@@ -90,13 +90,13 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[0].evidence[1].title").value("(제목 없음)"));
 	}
 
-	/** SUCCEEDED 런에 결과 행이 없는 건 원장 불일치 — 빈 완료로 숨기지 않는다(Rule 12). */
+	/** SUCCEEDED 런에 본문이 없거나 비면 원장 불일치 — 빈 완료로 숨기지 않는다(Rule 12). */
 	@Test
-	void 결과_없는_완료_런은_원장_불일치를_드러낸다() throws Exception {
+	void 본문_없는_완료_런은_원장_불일치를_드러낸다() throws Exception {
 		mvc.perform(get("/api/v1/analyses"))
 				.andExpect(jsonPath("$.result[2].status").value("COMPLETED"))
 				.andExpect(jsonPath("$.result[2].result")
-						.value("설명 결과가 원장에 없습니다 — 완료 런에 explanation_result 가 없는 원장 불일치입니다."));
+						.value("설명 본문이 원장에 없습니다 — 완료 런의 explanation_result 가 없거나 비어 있는 원장 불일치입니다."));
 	}
 
 	@Test
