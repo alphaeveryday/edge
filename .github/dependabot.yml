@@ -1,0 +1,18 @@
+# Dependabot 설정 — pnpm 워크스페이스 기준.
+#
+# 이 repo 의 JS 의존성은 src/ 가 pnpm 워크스페이스 루트다(pnpm-workspace.yaml + pnpm-lock.yaml).
+# pnpm 은 워크스페이스 하위 패키지 디렉터리에서의 업데이트를 지원하지 않아, Dependabot 이
+# 하위 디렉터리(예: src/apps/cloud/super-admin-ui)를 자동 감지하면 실패한다
+# ("Updating workspaces from inside a workspace subdirectory is not supported").
+# 아래에서 디렉터리를 루트(/src)로 명시해 보안 업데이트가 올바른 위치에서 돌게 한다.
+#
+# open-pull-requests-limit: 0 → 정기 버전 업데이트 PR 은 열지 않는다(불필요).
+# 보안 업데이트(취약점 알림 기반)는 이 한도와 무관하게 계속 동작하며, 위 directory 를 따라
+# pnpm 루트에서 수행된다. 보안 업데이트까지 끄려면 repo Settings > Code security 에서 해제한다.
+version: 2
+updates:
+  - package-ecosystem: "npm" # npm/yarn/pnpm 공통 생태계
+    directory: "/src"
+    schedule:
+      interval: "weekly" # 버전 업데이트는 아래 limit 0 으로 꺼져 있어 실질 무영향(필수 필드)
+    open-pull-requests-limit: 0
