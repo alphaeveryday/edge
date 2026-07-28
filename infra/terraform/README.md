@@ -75,7 +75,7 @@ cd ../envs/dev  && terraform apply
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
 | **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
-| **super-admin ALB 보호** | 공개 도달 — WAF·IP 제한 미구현(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있으나 dev 시크릿 미배선으로 닫힘 | 앱 인증 본격화(ALPHA-474)·WAFv2(ALPHA-297)·`allowed_cidrs` 운영 판단 |
+| **super-admin ALB 보호** | WAFv2 부착됨(ALPHA-297 — AWS Managed CommonRuleSet·KnownBadInputs, 차단 동작·CloudWatch 메트릭). IP 제한은 미적용(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있으나 dev 시크릿 미배선으로 닫힘 | 앱 인증 본격화(ALPHA-474)·`allowed_cidrs` 운영 판단·커스텀 룰/레이트리밋 후속 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
@@ -91,7 +91,6 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **WAF**(ALPHA-297) — super-admin ALB(`admin-api-dev`)에 부착(그 ALB 에만 — sync 는 trust store 가 게이트). 선행이던 ALB 는 ALPHA-473 으로 도입됨.
 - **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). MTS CloudFront 는 `static-site` 모듈의 선택적 `/api/*`→박스 오리진 프록시(`api_origin_domain`)로 브라우저 AI 탭이 박스 mock-broker 를 실호출한다. 검수 콘솔은 공개 노출 없이 nginx 가 `127.0.0.1:8090` 에만 바인딩 — SSM 터널 전용(내부 도구). 이미지·compose·MTS UI 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose→MTS sync, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
