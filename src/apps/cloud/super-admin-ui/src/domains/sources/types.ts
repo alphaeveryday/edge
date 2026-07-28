@@ -162,9 +162,10 @@ export interface GridCell {
   skipReason: string | null;
   outcomeReason: string | null;
   /**
-   * 지금 도는 물리 시도가 있는가. outcome 은 wrapper 가 끝날 때 써서 실행 중엔 PENDING 이라 —
-   * 이 축이 없으면 런이 도는 내내 "돌고 있다"와 "아직 시작도 안 했다"가 같은 회색 셀이 된다.
-   * 재시도 중이면 FAILED 와 running 이 **동시에 참**이다(덮지 않는다).
+   * 귀결이 아직 없는데(PENDING) 도는 물리 시도가 있는가. outcome 은 wrapper 가 끝날 때 써서
+   * 실행 중엔 PENDING 이라 — 이 축이 없으면 "돌고 있다"와 "아직 시작도 안 했다"가 같은 회색
+   * 셀이 된다. 귀결이 적힌 셀에서는 항상 false — 죽은 RUNNING 잔재가 판정 끝난 셀을 영구
+   * "실행 중"으로 만들지 않기 위해서다(서버가 판정한다 — 화면에서 다시 계산하지 마라).
    */
   running: boolean;
 }

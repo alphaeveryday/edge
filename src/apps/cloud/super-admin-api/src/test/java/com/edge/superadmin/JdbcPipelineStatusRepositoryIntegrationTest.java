@@ -417,10 +417,16 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				+ "WHERE expected_task_id='gt-old'");
 		// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 시도만 RUNNING 이라, 이 신호를 안
 		//      실으면 런이 도는 내내 진행 중 작업이 "시작 전"과 같은 셀이 된다. 끝난 시도가
-		//      섞여 있어도(재시도) RUNNING 하나로 참이어야 한다.
-		insertAttempt("ga-done", "gt-new-r", "arn:aws:ecs:task/g1", "FAILED",
+		//      섞여 있어도(첫 시도 실패 후 재시도) 귀결 전이면 참이어야 한다.
+		insertTask("gt-new-p", "g-new", "feature", "ASSEMBLE_EVENTS", "events", "DUE", "PENDING",
+				"UNKNOWN", null, null);
+		insertAttempt("ga-done", "gt-new-p", "arn:aws:ecs:task/g1", "FAILED",
 				daysAgo(1), daysAgo(1));
-		insertAttempt("ga-run", "gt-new-r", "arn:aws:ecs:task/g2", "RUNNING", null, daysAgo(1));
+		insertAttempt("ga-run", "gt-new-p", "arn:aws:ecs:task/g2", "RUNNING", null, daysAgo(1));
+		// WHY: 반대로 귀결이 이미 적힌 작업은 RUNNING **잔재**(강제 종료로 안 닫힌 시도)가 있어도
+		//      false 여야 한다 — 존재만 보면 죽은 시도가 판정 끝난 셀을 **영구히** "실행 중"으로
+		//      만든다(격자엔 드릴다운의 STALLED 이슈 표 같은 완화 장치가 없다).
+		insertAttempt("ga-dead", "gt-new-r", "arn:aws:ecs:task/g3", "RUNNING", null, daysAgo(1));
 
 		List<PipelineStatusRepository.GridSlot> slots = repository.grid(30);
 
@@ -429,7 +435,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// 셀은 런별로 묶이고, 한 런 안에서는 파이프라인 순서(raw→feature)다.
 		assertThat(slots.getLast().tasks())
 				.extracting(PipelineStatusRepository.GridCell::taskKey)
-				.containsExactly("PRICE_COLLECTION_KIS", "TAG_NEWS");
+				.containsExactly("PRICE_COLLECTION_KIS", "ASSEMBLE_EVENTS", "TAG_NEWS");
 		assertThat(slots.getFirst().tasks()).singleElement().satisfies(c -> {
 			assertThat(c.planStatus()).isEqualTo("SKIPPED");
 			assertThat(c.outcome()).isNull();
@@ -438,9 +444,10 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// 건수 NULL 은 격자 경로에서도 0 으로 뭉개지지 않는다(ALPHA-182).
 		assertThat(slots.getLast().tasks().getFirst().recordsOut()).isNull();
 		assertThat(slots.getLast().tasks().getFirst().failedRecords()).isEqualTo(4L);
-		// 실행 중 신호 — RUNNING 시도가 있는 작업만 참이다.
-		assertThat(slots.getLast().tasks().getFirst().running()).isTrue();
-		assertThat(slots.getLast().tasks().getLast().running()).isFalse();
+		// 실행 중 신호 — 귀결 전(PENDING)이면서 RUNNING 시도가 있는 작업만 참이다.
+		assertThat(slots.getLast().tasks().get(1).running()).isTrue();     // PENDING + RUNNING
+		assertThat(slots.getLast().tasks().getFirst().running()).isFalse(); // FAILED + 죽은 RUNNING 잔재
+		assertThat(slots.getLast().tasks().getLast().running()).isFalse();  // 시도 없음
 		assertThat(slots.getFirst().tasks().getFirst().running()).isFalse();
 		assertThat(slots.getLast().launchStatus()).isEqualTo("LAUNCHED");
 		assertThat(slots.getLast().orchestrationStatus()).isEqualTo("FAILED");

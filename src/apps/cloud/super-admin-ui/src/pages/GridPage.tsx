@@ -4,8 +4,8 @@
  * 실데이터로 검증한 규칙 그대로):
  *   기본색   = task_outcome (FULFILLED 초록 / FAILED 빨강 / BLOCKED 주황 / MISSED 흰+빨강 테두리
  *              / PENDING 회색)
- *   파란 테두리 = 실행 중인 시도 있음 (outcome 은 끝날 때 써서 실행 중엔 PENDING — 이 축이
- *              없으면 "돌고 있다"와 "시작 전"이 같은 회색이 된다)
+ *   파란 테두리 = 귀결 전(PENDING)에 도는 시도 있음 (outcome 은 끝날 때 써서 실행 중엔
+ *              PENDING — 이 축이 없으면 "돌고 있다"와 "시작 전"이 같은 회색이 된다)
  *   사선     = plan_status SKIPPED (비거래일 등 — 안 한 게 아니라 할 일이 아니었다)
  *   모서리 점 = failed_records>0 또는 data_status INCOMPLETE·INVALID ("실행 성공 ≠ 데이터 유효")
  *   빈칸 ·   = 그 슬롯의 카탈로그에 없던 작업 (뉴스 6작업이 07-28부터 시장 런에 없는 것이 실례)
@@ -194,8 +194,7 @@ export function GridPage() {
                                   height: 18,
                                   borderRadius: 3,
                                   background: bg,
-                                  /* 실행 중은 테두리로 겹쳐 그린다 — 배경(귀결)을 덮으면
-                                   * "재시도 중"(FAILED+running)에서 실패 사실이 사라진다. */
+                                  /* 실행 중은 배경(귀결 축)을 덮지 않고 테두리로 겹쳐 그린다 */
                                   border: cell.running
                                     ? '2px solid #3b82f6'
                                     : cell.outcome === 'MISSED'

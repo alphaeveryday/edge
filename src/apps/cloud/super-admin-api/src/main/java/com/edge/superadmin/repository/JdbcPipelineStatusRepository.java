@@ -121,9 +121,10 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			       r.trading_date,
 			       t.stage, t.task_key, t.plan_status, t.task_outcome, t.data_status,
 			       t.records_out, t.failed_records, t.skip_reason, t.outcome_reason,
-			       EXISTS (SELECT 1 FROM ops_task_attempt a
-			                WHERE a.expected_task_id = t.expected_task_id
-			                  AND a.execution_status = 'RUNNING') AS running
+			       (t.task_outcome = 'PENDING'
+			        AND EXISTS (SELECT 1 FROM ops_task_attempt a
+			                     WHERE a.expected_task_id = t.expected_task_id
+			                       AND a.execution_status = 'RUNNING')) AS running
 			  FROM ops_pipeline_run r
 			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = r.pipeline_run_id
 			 WHERE r.created_at >= now() - (? * interval '1 day')
