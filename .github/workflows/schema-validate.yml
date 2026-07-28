@@ -139,6 +139,8 @@ jobs:
       - name: Start ephemeral Postgres
         run: |
           set -euo pipefail
+          # self-hosted 러너는 영속이라 이전 실행의 컨테이너가 남아 이름·5432 포트가 충돌한다. 먼저 청소한다.
+          docker rm -f edge-ci-pg >/dev/null 2>&1 || true
           docker run -d --name edge-ci-pg \
             -e POSTGRES_DB=edge -e POSTGRES_USER=edge -e POSTGRES_PASSWORD=edge \
             -p 5432:5432 postgres:16
@@ -192,3 +194,8 @@ jobs:
         run: >
           ./gradlew :libs:schema:flywayValidate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
+
+      # 영속 러너에 컨테이너·5432 포트를 남기지 않는다(다른 워크플로의 Postgres와 충돌 방지).
+      - name: Tear down ephemeral Postgres
+        if: always()
+        run: docker rm -f edge-ci-pg >/dev/null 2>&1 || true
