@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -42,12 +41,9 @@ public class IntakePoller {
 		try {
 			long cursor = syncStateRepository.lastCursor();
 			for (int i = 0; i < maxBundlesPerTick; i++) {
-				Optional<PulledBundle> bundle = syncAgentClient.pull(cursor);
-				if (bundle.isEmpty()) {
-					return;
-				}
-				// 신규 없음(result 생략 성공 포맷, ADR-0042 M1)도 이번 틱 종료 — 204 경로와 같은 의미.
-				OptionalLong advanced = bundleIngestor.ingest(bundle.get());
+				PulledBundle bundle = syncAgentClient.pull(cursor);
+				// 신규 없음(result 생략 성공 포맷, ADR-0042)의 유일한 신호 — 이번 틱 종료.
+				OptionalLong advanced = bundleIngestor.ingest(bundle);
 				if (advanced.isEmpty()) {
 					return;
 				}

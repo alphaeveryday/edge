@@ -11,12 +11,11 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.util.Optional;
-
 /**
  * Cloud pull + 내부망 릴레이 — Sync Agent 의 전부다(ADR-0036). 수신 바이트를 무변형으로 넘긴다.
  * 앱 레벨 무결성(발신자 체크섬)은 목표 계약(서명)으로 이관됐고 전송 무결성은 mTLS/TLS 소관이라
- * (ADR-0040), 이 모듈은 순수 pull + 릴레이다.
+ * (ADR-0040), 이 모듈은 순수 pull + 릴레이다. 성공은 항상 바디 있는 200 이다 — 신규 없음도
+ * 빈 공통 응답 포맷 바디로 온다(ADR-0042, 204 폐지).
  */
 @Service
 public class BundleRelayService {
@@ -29,12 +28,8 @@ public class BundleRelayService {
 		this.restClient = RestClient.create(tenantSyncApiUrl);
 	}
 
-	/** 수신한 번들 바이트. */
-	public record VerifiedBundle(byte[] body) {
-	}
-
-	/** 신규 없음(204)이면 empty. 업스트림 오류는 예외로 표면화(fail-loud). */
-	public Optional<VerifiedBundle> pull(long afterCursor, int limit) {
+	/** 수신한 응답 바이트를 무변형 반환. 업스트림 오류·비포맷 응답은 예외로 표면화(fail-loud). */
+	public byte[] pull(long afterCursor, int limit) {
 		ResponseEntity<byte[]> response;
 		try {
 			response = restClient.get()
@@ -55,16 +50,14 @@ public class BundleRelayService {
 			log.warn("tenant-sync-api pull 실패 after={}", afterCursor, e);
 			throw new GeneralException(SyncAgentErrorStatus.UPSTREAM_FAILURE);
 		}
-		if (response.getStatusCode().value() == 204) {
-			return Optional.empty();
-		}
 		if (response.getBody() == null) {
-			// 계약: 신규 없음은 204 뿐 — 본문 없는 200 은 형상 위반이다. 조용히 무데이터로
-			// 오인하면 오류가 숨는다(fail-loud).
-			log.error("tenant-sync-api 가 본문 없는 {} 응답 — 계약 위반. after={}",
+			// 계약(ADR-0042): 성공은 항상 바디 있는 200 — 신규 없음도 빈 공통 응답 포맷 바디다.
+			// 바디 없는 성공(204 포함)은 상류가 낼 수 없는 응답이라 계약 위반이다. 조용히
+			// 무데이터로 오인하면 오설정 프록시의 204 가 sync 를 영구 정지시킨다(fail-loud).
+			log.error("tenant-sync-api 가 본문 없는 {} 응답 — 계약 위반(성공은 항상 바디, ADR-0042). after={}",
 					response.getStatusCode(), afterCursor);
 			throw new GeneralException(SyncAgentErrorStatus.UPSTREAM_MALFORMED);
 		}
-		return Optional.of(new VerifiedBundle(response.getBody()));
+		return response.getBody();
 	}
 }
