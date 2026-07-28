@@ -51,7 +51,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
 
-    # build.gradle의 Flyway 블록이 읽는 접속값. 아래에서 띄우는 ephemeral 컨테이너를 가리킨다.
+    # build.gradle의 Flyway 블록이 읽는 접속값. 포트는 자리표시자이며 "Start ephemeral Postgres"
+    # 스텝이 러너가 동적 할당한 실제 호스트 포트로 FLYWAY_URL 을 $GITHUB_ENV 에서 덮어쓴다.
     env:
       FLYWAY_URL: jdbc:postgresql://localhost:5432/edge
       FLYWAY_USER: edge
@@ -139,14 +140,19 @@ jobs:
       - name: Start ephemeral Postgres
         run: |
           set -euo pipefail
-          # self-hosted 러너는 영속이라 이전 실행의 컨테이너가 남아 이름·5432 포트가 충돌한다. 먼저 청소한다.
+          # self-hosted 러너는 영속이라 이전 실행의 컨테이너가 남아 이름 충돌이 난다. 먼저 청소한다.
           docker rm -f edge-ci-pg >/dev/null 2>&1 || true
+          # 호스트 5432 를 고정 점유하면 박스의 다른 Postgres·CI 컨테이너와 충돌한다.
+          # 러너가 동적 할당한 호스트 포트를 읽어 Flyway URL(env)에 넘긴다.
           docker run -d --name edge-ci-pg \
             -e POSTGRES_DB=edge -e POSTGRES_USER=edge -e POSTGRES_PASSWORD=edge \
-            -p 5432:5432 postgres:16
+            -p 5432 postgres:16
+          pgport="$(docker port edge-ci-pg 5432/tcp | head -1 | sed 's/.*://')"
+          echo "PGPORT=${pgport}" >> "$GITHUB_ENV"
+          echo "FLYWAY_URL=jdbc:postgresql://localhost:${pgport}/edge" >> "$GITHUB_ENV"
           for _ in $(seq 1 30); do
             if docker exec edge-ci-pg pg_isready -U edge -d edge >/dev/null 2>&1; then
-              echo "postgres ready"; exit 0
+              echo "postgres ready on host port ${pgport}"; exit 0
             fi
             sleep 2
           done
@@ -182,7 +188,7 @@ jobs:
       - name: Flyway migrate (onprem set)
         working-directory: src
         env:
-          FLYWAY_URL: jdbc:postgresql://localhost:5432/edge_onprem
+          FLYWAY_URL: jdbc:postgresql://localhost:${{ env.PGPORT }}/edge_onprem
         run: >
           ./gradlew :libs:schema:flywayMigrate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
@@ -190,7 +196,7 @@ jobs:
       - name: Flyway validate (onprem set)
         working-directory: src
         env:
-          FLYWAY_URL: jdbc:postgresql://localhost:5432/edge_onprem
+          FLYWAY_URL: jdbc:postgresql://localhost:${{ env.PGPORT }}/edge_onprem
         run: >
           ./gradlew :libs:schema:flywayValidate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
