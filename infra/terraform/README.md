@@ -16,7 +16,7 @@ infra/terraform/
 │   ├── dev/            # 실 벤더 클라우드 (모듈을 엮음, 구체값은 terraform.tfvars)
 │   └── demo-onprem/    # 가상 온프렘 데모 스택 (EC2 + MTS 사이트, dev와 별도 state — ADR-0033)
 └── modules/
-    ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, AZ override
+    ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, S3 gateway endpoint(private만), AZ override
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
     ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 호출자: sync·super-admin ALB)
