@@ -1090,6 +1090,7 @@ def run(
     complete_fn,
     from_date: str | None = None,
     to_date: str | None = None,
+    window_days: int | None = None,
     concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY,
 ) -> int:
     """canonical 뉴스 → v4 2콜 추출 → event 계보 조립 → threading. 성공 0, 장애 시 비0.
@@ -1097,6 +1098,11 @@ def run(
     창(from/to) 미지정이면 **오늘(Asia/Seoul) 하루**다 — 엔진의 일일 시맨틱을 따른다
     (tag-news 류의 전체 스캔 기본과 다름: 분류 LLM 비용이 기사 수에 비례한다). 과거
     구간은 창으로 백필한다. 이미 정규화된 기사(document 존재)는 건너뛰므로 멱등이다.
+
+    window_days(ALPHA-592)는 그 기준일에서 N일 소급해 창을 겹친다(from/to 명시가 우선).
+    뉴스 SFN 23:50 슬롯은 체인 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게
+    기본 경로라(2026-07-28 00:03 read=0 라이브 실측), 겹침 없이는 그날 늦저녁 기사가 영영
+    조립되지 않는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
     """
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
@@ -1107,8 +1113,9 @@ def run(
     exit_code = 0
 
     if from_date is None and to_date is None:
-        today = datetime.now(_KST).date().isoformat()
-        from_date = to_date = today
+        today = datetime.now(_KST).date()
+        from_date = (today - timedelta(days=window_days or 0)).isoformat()
+        to_date = today.isoformat()
 
     try:
         view = load_ontology_view()

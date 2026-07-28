@@ -1173,3 +1173,35 @@ def test_assemble_promotes_parsed_measure_to_dart_in_same_run(tmp_path, monkeypa
     assert updates == [[("20260714000123", evt_id, 0)]]
     log = _log(storage)
     assert (log["dart_matched"], log["dart_ambiguous"]) == (1, 0)
+
+
+def test_window_days_covers_yesterday_after_midnight_crossing(tmp_path, monkeypatch):
+    # WHY: 뉴스 23:50 슬롯은 체인 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게
+    #      기본 경로다 — 2026-07-28 00:03 첫 스케줄 런이 창=07-28 로 read=0(라이브 실측),
+    #      전날 늦저녁 기사가 영영 조립되지 않았다(ALPHA-592). window_days=1 이면 창이
+    #      [어제, 오늘]로 겹쳐 같은 시각에도 조립된다. 미지정은 현행(오늘 하루) 유지 —
+    #      그 대조가 이 사고의 회귀 재현이다.
+    class _Frozen(datetime):  # 사고 시각 그대로: 2026-07-28 00:03 KST
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2026, 7, 28, 0, 3, tzinfo=assemble_events._KST)
+            return base.astimezone(tz) if tz else base.replace(tzinfo=None)
+
+    monkeypatch.setattr(assemble_events, "datetime", _Frozen)
+
+    def _run(root, window_days):
+        storage = LocalStorage(root)
+        _write_news(storage, "ko", "2026-07-27", [_article("a1")])  # 전날 늦저녁 기사
+        conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+        _setup(monkeypatch, conn)
+        fn = _llm_fn([_gate_item("a1")], [_extract_item("a1")])
+        assert assemble_events.run(storage, "R", db=_db(), complete_fn=fn,
+                                   window_days=window_days) == 0
+        return conn
+
+    # 미지정 = 실행 시점 오늘(07-28) 하루 → 어제 기사를 못 본다(사고 재현·기본 동작 불변)
+    missed = _run(tmp_path / "default", None)
+    assert _batch(missed, "source_event") == []
+    # window_days=1 → [07-27, 07-28] 겹침 — 같은 자정 이후 시각에도 조립된다
+    covered = _run(tmp_path / "overlap", 1)
+    assert len(_batch(covered, "source_event")) == 1

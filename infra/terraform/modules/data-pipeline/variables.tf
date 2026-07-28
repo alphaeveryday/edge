@@ -245,9 +245,26 @@ variable "tag_news_window_days" {
   validation {
     # 음수는 역전 창(오늘+N,오늘)이라 전 파티션을 제외해 0건 태깅을 성공으로 위장하고(Rule 12),
     # 소수는 command 로 "3.5" 가 실려 run.py 의 argparse type=int 가 거부해 매 런이 즉시 실패한다.
-    # 둘 다 plan 시점에 잡는다(run.py 도 음수는 런타임에 재차 거른다).
-    condition     = var.tag_news_window_days >= 0 && floor(var.tag_news_window_days) == var.tag_news_window_days
-    error_message = "tag_news_window_days 는 0 이상의 정수여야 한다(음수=역전 창, 소수=argparse int 거부)."
+    # 상한(3650)은 run.py 공통 가드(ALPHA-592)와 짝 — 없으면 plan 은 통과하고 매 런이 거부된다.
+    # 셋 다 plan 시점에 잡는다(run.py 도 음수·상한은 런타임에 재차 거른다).
+    condition     = var.tag_news_window_days >= 0 && var.tag_news_window_days <= 3650 && floor(var.tag_news_window_days) == var.tag_news_window_days
+    error_message = "tag_news_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
+  }
+}
+
+# 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침 —
+# 자정 crossing(23:50 슬롯 기본 경로)과 overnight 갭(D 마감 후 기사를 D+1 런이 조립)을 함께
+# 닫는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
+variable "assemble_window_days" {
+  description = "뉴스 SFN assemble-events 조립 대상 창(오늘−N일). 자정 crossing·overnight 갭 방지 겹침."
+  type        = number
+  default     = 1
+  validation {
+    # 음수는 역전 창이라 전 파티션을 제외해 0건 조립을 성공으로 위장하고(Rule 12), 소수는
+    # command 로 "1.5" 가 실려 run.py argparse type=int 가 거부해 매 런이 즉시 실패한다.
+    # 상한(3650)은 run.py 공통 가드와 짝 — 넘으면 date 연산 하한 초과로 로그 없이 크래시한다.
+    condition     = var.assemble_window_days >= 0 && var.assemble_window_days <= 3650 && floor(var.assemble_window_days) == var.assemble_window_days
+    error_message = "assemble_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
   }
 }
 

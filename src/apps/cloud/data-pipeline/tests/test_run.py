@@ -400,3 +400,70 @@ def test_deadline_reaches_the_krx_source(monkeypatch):
     captured.clear()
     assert main(["ingest-raw-etf", "--source", "krx"]) == 0
     assert captured["deadline_sec"] is None
+
+
+def _spy_assemble(monkeypatch):
+    """assemble-events 분기가 assemble_events.run 에 넘긴 창을 캡처한다(_spy_tag_news 와 동형).
+    db 는 스파이가 안 쓰므로 db_config_from_env 를 항등으로 눌러 설정 결합을 끊는다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    def fake_run(storage, run_id, *, db, complete_fn, from_date, to_date, window_days,
+                 concurrency):
+        captured["window"] = (from_date, to_date, window_days)
+        return 0
+
+    monkeypatch.setattr(run_mod.assemble_events, "run", fake_run)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda base: base)
+    return run_mod, captured
+
+
+def test_assemble_window_days_reaches_step(monkeypatch):
+    # WHY: 파싱과 배선은 다른 일이다 — window_days 전달 한 줄이 지워져도 CLI 는 값을 받고
+    #      assemble 만 조용히 '실행 시점 오늘 하루'로 돈다. 자정 crossing 방지(ALPHA-592)가
+    #      이 배선 하나에 달렸다(2026-07-28 00:03 read=0 실사고의 재발 방지 축).
+    run_mod, captured = _spy_assemble(monkeypatch)
+    assert main(["assemble-events", "--run-id", "R", "--window-days", "1"]) == 0
+    assert captured["window"] == (None, None, 1)
+
+
+def test_assemble_explicit_window_beats_window_days(monkeypatch):
+    # WHY: 명시 --from/--to(백필·회수)는 창 폭보다 우선해야 한다 — 회수 실행이 조용히 최근
+    #      N일로 좁혀지면 그 구간이 영영 조립되지 않는다(tag-news 와 같은 규약).
+    run_mod, captured = _spy_assemble(monkeypatch)
+    assert main(["assemble-events", "--run-id", "R", "--window-days", "1",
+                 "--from", "2026-07-27", "--to", "2026-07-27"]) == 0
+    assert captured["window"] == ("2026-07-27", "2026-07-27", 1)
+
+
+def test_window_days_rejected_on_non_consuming_step(monkeypatch):
+    # WHY: 소비하지 않는 스텝이 조용히 받으면 운영자가 창이 걸렸다고 오인하고 SFN 배선
+    #      오류(엉뚱한 브랜치에 창을 준 것)도 안 드러난다 — --deadline-sec 과 같은 가드(Rule 12).
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit) as err:
+        main(["normalize-price", "--run-id", "R", "--window-days", "1"])
+    assert "tag-news·assemble-events" in str(err.value)
+
+
+def test_assemble_negative_window_days_fails_loud(monkeypatch):
+    # WHY: 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외 → 0건 조립을 exit 0
+    #      성공으로 위장한다(tag-news 음수 가드와 같은 축 — 이제 공통 가드 하나가 막는다).
+    run_mod, captured = _spy_assemble(monkeypatch)
+    with pytest.raises(SystemExit) as err:
+        main(["assemble-events", "--run-id", "R", "--window-days", "-1"])
+    assert "음수" in str(err.value)
+    assert "window" not in captured  # 스텝까지 못 간다
+
+
+def test_absurd_window_days_fails_loud(monkeypatch):
+    # WHY: 상한 없는 창(예 800000)은 date 연산 하한을 넘겨 OverflowError 로 죽는데, 그
+    #      크래시는 collection_log 기록 밖이라 감사 레코드 없이 매 런 실패한다 — 파싱 직후
+    #      fail-loud 가 맞다(풀스캔은 미지정·--from/--to 가 정규 경로).
+    run_mod, captured = _spy_assemble(monkeypatch)
+    with pytest.raises(SystemExit) as err:
+        main(["assemble-events", "--run-id", "R", "--window-days", "800000"])
+    assert "상한" in str(err.value)
+    assert "window" not in captured

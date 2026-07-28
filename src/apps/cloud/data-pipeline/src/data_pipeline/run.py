@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None,
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
-                        help="tag-news: 태깅 대상 파티션을 오늘−N일 창으로 제한(미지정=풀스캔). --from/--to 가 우선")
+                        help="tag-news·assemble-events: 대상 파티션을 오늘−N일 창으로 제한"
+                             "(미지정: tag-news=풀스캔, assemble-events=오늘 하루). --from/--to 가 우선")
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
@@ -174,6 +175,24 @@ def main(argv: list[str] | None = None) -> int:
                 "--deadline-sec 은 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
                 f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
             )
+
+    # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
+    # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
+    if args.window_days is not None:
+        if args.step not in ("tag-news", "assemble-events"):
+            raise SystemExit(
+                "--window-days 는 tag-news·assemble-events 에서만 쓴다 — "
+                f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            )
+        # 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외한다 — 0건 처리를 exit 0
+        # 성공으로 위장하므로, 언제 주어지든(명시 --from/--to 와 함께라 무시될 때조차) 거부.
+        if args.window_days < 0:
+            raise SystemExit(f"--window-days 는 음수일 수 없다: {args.window_days}")
+        # 상한: 창은 최근 파티션 소급 폭이다 — 비상식 값(예 800000)은 date 연산 하한을 넘겨
+        # collection_log 도 못 남기고 크래시한다(OverflowError). 과거 전체가 필요하면 창을
+        # 키우는 게 아니라 미지정 풀스캔(tag-news)·--from/--to 백필(assemble)이 그 경로다.
+        if args.window_days > 3650:
+            raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -324,7 +343,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         concurrency = int(os.environ.get("LLM_CONCURRENCY", assemble_events.DEFAULT_CLASSIFY_CONCURRENCY))
         return assemble_events.run(
             storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn,
-            from_date=args.from_date, to_date=args.to_date, concurrency=concurrency,
+            from_date=args.from_date, to_date=args.to_date,
+            window_days=args.window_days, concurrency=concurrency,
         )
 
     # 가격변동 트리거도 canonical 을 읽어 DB 에 쓰는 적재 스텝이다. 창(--from/--to)은 수집
@@ -361,11 +381,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         )
         # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
-        # 음수 창은 언제 주어지든(명시 --from/--to 와 함께라 무시될 때조차) 거부한다 — 잘못된
-        # 입력이 조용히 삼켜지지 않게(Rule 12). default_window 가 (오늘+N, 오늘) 역전 창을 만들면
-        # _partition_dates 가 전 파티션을 제외해 0건 태깅을 exit 0 성공으로 위장한다.
-        if args.window_days is not None and args.window_days < 0:
-            raise SystemExit(f"--window-days 는 음수일 수 없다: {args.window_days}")
+        # 음수·비소비 스텝 거부는 파싱 직후의 공통 가드가 맡는다(assemble-events 와 공유).
         # 명시 --from/--to 가 최우선(백필). 없고 --window-days 만 있으면 오늘−N일 창으로 좁힌다.
         from_date, to_date = args.from_date, args.to_date
         if from_date is None and to_date is None and args.window_days is not None:
