@@ -41,7 +41,7 @@ permissions:
 jobs:
   deploy:
     name: deploy ${{ inputs.app }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     defaults:
       run:
