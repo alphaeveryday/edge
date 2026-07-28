@@ -256,11 +256,18 @@ resource "aws_scheduler_schedule" "news" {
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:sfn:startExecution"
     role_arn = aws_iam_role.scheduler.arn
-    input = jsonencode({
-      StateMachineArn = aws_sfn_state_machine.news.arn
-      # run_id = 스케줄 시각(시장 daily 와 같은 관례). Input 은 SFN 입력 JSON 문자열이라 중첩 인코딩.
-      Input = jsonencode({ run_id = "<aws.scheduler.scheduled-time>" })
-    })
+    # run_id = 스케줄 시각(시장 daily 와 같은 관례). Input 은 SFN 입력 JSON 문자열이라 중첩 인코딩.
+    # ⚠️ 플레이스홀더는 jsonencode **바깥**에서 주입한다(ALPHA-593) — jsonencode 가 `<`/`>` 를
+    # </> 로 이스케이프해 EventBridge 가 컨텍스트 속성 패턴을 인식하지 못하고,
+    # 리터럴 "<aws.scheduler.scheduled-time>" 이 run_id 로 흘러 하루 3슬롯의 raw 파티션 키가
+    # 충돌했다(뒤 런이 앞 런의 raw 를 덮어씀 — 2026-07-27 23:50 첫 스케줄 런 실측).
+    input = replace(
+      jsonencode({
+        StateMachineArn = aws_sfn_state_machine.news.arn
+        Input           = jsonencode({ run_id = "SCHEDULED_TIME_TOKEN" })
+      }),
+      "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
+    )
 
     # 재시도 0 (edge-review P1): StartExecution 에 멱등 Name 을 줄 수 없다 — dedup 키가 될
     # scheduled-time 이 콜론을 담아 SFN 실행명 charset 을 위반한다. 대신 재시도를 없애 **ambiguous
