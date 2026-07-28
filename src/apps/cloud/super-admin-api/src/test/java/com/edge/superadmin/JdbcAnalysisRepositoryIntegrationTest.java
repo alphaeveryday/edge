@@ -64,6 +64,7 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 				INSERT INTO explanation_run_event_evidence (explanation_run_id, evidence_id, stage_code)
 				VALUES ('run-1', 'evd-1', 'S1'), ('run-1', 'evd-1', 'S2'), ('run-1', 'evd-2', 'S1')
 				""");
+		insertDisclosureFactEvidence();
 
 		// run-2: 결과 행이 아직 없는 런 (더 최신 as_of)
 		insertRunChain("2", "2026-07-28", "2026-07-28T15:40:00+09:00", 0.0518, "RUNNING", null);
@@ -118,6 +119,36 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 				""", "evd-" + n, "ev-" + n, "as-" + n);
 	}
 
+	/** 공시 정규화 사실 lineage 한 벌 — 발행회사 체인(entity→actor→company_profile) 포함. */
+	private void insertDisclosureFactEvidence() {
+		jdbc.update("""
+				INSERT INTO entity (entity_id, entity_type, display_name)
+				VALUES ('act-t601', 'ACTOR', '테스트전자')
+				""");
+		jdbc.update("INSERT INTO actor (actor_id, actor_type) VALUES ('act-t601', 'COMPANY')");
+		jdbc.update("INSERT INTO company_profile (actor_id) VALUES ('act-t601')");
+		jdbc.update("""
+				INSERT INTO document (document_id, document_type, source_code, source_document_id,
+				       title, published_at, available_at)
+				VALUES ('doc-3', 'DISCLOSURE', 'DART', 'rcp-1', '단일판매공급계약 체결',
+				        '2026-07-27T10:00:00+09:00'::timestamptz,
+				        '2026-07-27T10:05:00+09:00'::timestamptz)
+				""");
+		jdbc.update("""
+				INSERT INTO disclosure_document (document_id, issuer_actor_id, disclosure_type,
+				       parser_version)
+				VALUES ('doc-3', 'act-t601', 'SUPPLY_CONTRACT', 'pv1')
+				""");
+		jdbc.update("""
+				INSERT INTO disclosure_fact (fact_id, document_id, fact_type, available_at)
+				VALUES ('df-1', 'doc-3', 'SUPPLY_CONTRACT', '2026-07-27T10:05:00+09:00'::timestamptz)
+				""");
+		jdbc.update("""
+				INSERT INTO explanation_run_disclosure_fact (explanation_run_id, fact_id, stage_code)
+				VALUES ('run-1', 'df-1', 'S1')
+				""");
+	}
+
 	@Test
 	void 목록은_트리거부터_결과까지_조인해_최신순으로_낸다() {
 		List<AnalysisRow> rows = repository.list();
@@ -143,13 +174,16 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 		AnalysisRow done = repository.list().stream()
 				.filter(r -> r.runId().equals("run-1")).findFirst().orElseThrow();
 
-		// evd-1 이 S1·S2 두 단계에 연결돼 있어도 문서(doc-1)로는 1건 — 발행시각 없는
-		// 문서(doc-2)는 NULLS LAST 로 마지막이다
-		assertThat(done.evidence()).hasSize(2);
+		// evd-1 이 S1·S2 두 단계에 연결돼 있어도 문서(doc-1)로는 1건 — 공시 사실 lineage
+		// (doc-3)가 발행시각 순서로 합쳐지고, 발행시각 없는 문서(doc-2)는 NULLS LAST 로
+		// 마지막이다
+		assertThat(done.evidence()).hasSize(3);
 		assertThat(done.evidence().get(0).title()).isEqualTo("반도체 수출 반등");
 		assertThat(done.evidence().get(0).publishedAt()).isNotNull();
-		assertThat(done.evidence().get(1).title()).isEqualTo("발행시각 없는 기사");
-		assertThat(done.evidence().get(1).publishedAt()).isNull();
+		assertThat(done.evidence().get(1).title()).isEqualTo("단일판매공급계약 체결");
+		assertThat(done.evidence().get(1).documentType()).isEqualTo("DISCLOSURE");
+		assertThat(done.evidence().get(2).title()).isEqualTo("발행시각 없는 기사");
+		assertThat(done.evidence().get(2).publishedAt()).isNull();
 	}
 
 	@Test

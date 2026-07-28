@@ -37,7 +37,9 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				case "DISCLOSURE" -> "공시";
 				default -> e.documentType();
 			};
-			return new EvidenceResponse(type, e.title(), e.sourceCode(),
+			// document.title 은 NULL 허용 — UI 계약(title: string)을 깨지 않게 표시 폴백을 준다
+			return new EvidenceResponse(type, e.title() == null ? "(제목 없음)" : e.title(),
+					e.sourceCode(),
 					e.publishedAt() == null ? "—" : format(DOC_TIME, e.publishedAt()));
 		}
 	}
@@ -94,7 +96,10 @@ public record AnalysisResponse(String id, String name, String code, String marke
 		return switch (status) {
 			case "PENDING" -> "분석 대기 중입니다. 근거 데이터 수집이 완료되면 자동으로 분석이 시작됩니다.";
 			case "FAILED" -> "분석이 실패했습니다. 실행 상세는 파이프라인 실행 이력에서 확인할 수 있습니다.";
-			default -> ""; // COMPLETED 는 summary NOT NULL 이라 여기 오지 않는다
+			// SUCCEEDED 런에 결과 행이 없는 건 스키마가 막지 않는 원장 불일치다 — 빈 문자열로
+			// 완료처럼 두면 운영자가 못 본다(Rule 12).
+			case "COMPLETED" -> "설명 결과가 원장에 없습니다 — 완료 런에 explanation_result 가 없는 원장 불일치입니다.";
+			default -> "설명 결과가 원장에 없습니다.";
 		};
 	}
 

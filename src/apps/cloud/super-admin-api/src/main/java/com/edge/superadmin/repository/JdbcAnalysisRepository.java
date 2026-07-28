@@ -57,23 +57,38 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			""".formatted(LIST_LIMIT);
 
 	/**
-	 * DISTINCT — 같은 문서가 여러 주장·여러 단계(stage_code)로 한 런에 연결될 수 있는데,
-	 * 운영자에게 근거는 문서 단위다. 서브쿼리는 LIST_SQL 과 같은 창이라 한 스냅샷 안에서
-	 * 같은 런 집합을 본다. {@code document_id} 는 정렬 동률 해소용으로만 SELECT 에 남는다
-	 * (published_at 은 NULL 허용·비유일).
+	 * 문서 실체가 있는 lineage 두 갈래를 합친다 — 이벤트 근거(뉴스·공시 주장)와 공시 정규화
+	 * 사실({@code explanation_run_disclosure_fact}). 가격 관찰 lineage
+	 * ({@code explanation_run_event_price_observation})는 제목·출처 문안이 없는 수치 관찰이라
+	 * 여기서 문서처럼 그리지 않는다(문안을 지어내지 않는다 — 표시 계약이 생기면 별도 편입).
+	 *
+	 * <p>DISTINCT — 같은 문서가 여러 주장·여러 단계(stage_code)·두 lineage 로 한 런에 연결될
+	 * 수 있는데, 운영자에게 근거는 문서 단위다. 서브쿼리는 LIST_SQL 과 같은 창이라 한 스냅샷
+	 * 안에서 같은 런 집합을 본다. {@code document_id} 는 정렬 동률 해소용으로만 SELECT 에
+	 * 남는다(published_at 은 NULL 허용·비유일).
 	 */
 	private static final String EVIDENCE_SQL = """
-			SELECT DISTINCT ree.explanation_run_id, d.document_id, d.document_type, d.title,
-			       d.source_code, d.published_at
-			  FROM explanation_run_event_evidence ree
-			  JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
-			  JOIN document_assertion da ON da.assertion_id = ev.assertion_id
-			  JOIN document d ON d.document_id = da.document_id
-			 WHERE ree.explanation_run_id IN (
+			SELECT DISTINCT explanation_run_id, document_id, document_type, title,
+			       source_code, published_at
+			  FROM (
+			       SELECT ree.explanation_run_id, d.document_id, d.document_type, d.title,
+			              d.source_code, d.published_at
+			         FROM explanation_run_event_evidence ree
+			         JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
+			         JOIN document_assertion da ON da.assertion_id = ev.assertion_id
+			         JOIN document d ON d.document_id = da.document_id
+			       UNION ALL
+			       SELECT rdf.explanation_run_id, d.document_id, d.document_type, d.title,
+			              d.source_code, d.published_at
+			         FROM explanation_run_disclosure_fact rdf
+			         JOIN disclosure_fact df ON df.fact_id = rdf.fact_id
+			         JOIN document d ON d.document_id = df.document_id
+			       ) lineage
+			 WHERE explanation_run_id IN (
 			       SELECT explanation_run_id FROM explanation_run
 			        ORDER BY explanation_as_of DESC, explanation_run_id DESC
 			        LIMIT %d)
-			 ORDER BY ree.explanation_run_id, d.published_at ASC NULLS LAST, d.document_id
+			 ORDER BY explanation_run_id, published_at ASC NULLS LAST, document_id
 			""".formatted(LIST_LIMIT);
 
 	private final JdbcTemplate jdbc;

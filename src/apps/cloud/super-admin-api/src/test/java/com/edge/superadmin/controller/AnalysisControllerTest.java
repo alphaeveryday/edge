@@ -37,12 +37,18 @@ class AnalysisControllerTest {
 			"반도체 업황 회복 기대가 확산되며 상승.", "HIGH",
 			List.of(new EvidenceRow("NEWS", "반도체 수출 반등", "BIGKINDS",
 							OffsetDateTime.parse("2026-07-27T09:10:00+09:00")),
-					new EvidenceRow("DISCLOSURE", "잠정 실적 공시", "DART", null)));
+					new EvidenceRow("DISCLOSURE", null, "DART", null)));
 
 	/** 결과 행이 아직 없는 런 — summary·confidence 가 null 로 온다. */
 	private static final AnalysisRow PENDING_ROW = new AnalysisRow(
 			"run-2", "TIGER 2차전지", "305540", "XKRX", 0.0518, "RUNNING",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, List.of());
+
+	/** SUCCEEDED 인데 결과 행이 없는 원장 불일치 — 빈 완료로 둔갑하면 안 된다. */
+	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
+			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
+			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
+			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), null, null, List.of());
 
 	private MockMvc mvc;
 
@@ -50,7 +56,7 @@ class AnalysisControllerTest {
 	void setUp() {
 		mvc = MockMvcBuilders
 				.standaloneSetup(new AnalysisController(new AnalysisService(
-						new FakeAnalysisRepository(List.of(COMPLETED_ROW, PENDING_ROW)),
+						new FakeAnalysisRepository(List.of(COMPLETED_ROW, PENDING_ROW, MISMATCH_ROW)),
 						new AnalysisMockStore())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
@@ -62,7 +68,7 @@ class AnalysisControllerTest {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
-				.andExpect(jsonPath("$.result.length()").value(2))
+				.andExpect(jsonPath("$.result.length()").value(3))
 				.andExpect(jsonPath("$.result[0].id").value("run-1"))
 				.andExpect(jsonPath("$.result[0].name").value("KODEX 반도체"))
 				.andExpect(jsonPath("$.result[0].market").value("KRX"))
@@ -78,8 +84,19 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[0].evidence[0].type").value("뉴스"))
 				.andExpect(jsonPath("$.result[0].evidence[0].time").value("2026-07-27 09:10"))
 				.andExpect(jsonPath("$.result[0].evidence[1].type").value("공시"))
-				// 발행시각 없는 공시 — NULL 을 시각처럼 그리지 않는다
-				.andExpect(jsonPath("$.result[0].evidence[1].time").value("—"));
+				// 발행시각·제목 없는 공시 — NULL 을 시각처럼 그리지도, UI 계약(title: string)을
+				// 깨지도 않는다
+				.andExpect(jsonPath("$.result[0].evidence[1].time").value("—"))
+				.andExpect(jsonPath("$.result[0].evidence[1].title").value("(제목 없음)"));
+	}
+
+	/** SUCCEEDED 런에 결과 행이 없는 건 원장 불일치 — 빈 완료로 숨기지 않는다(Rule 12). */
+	@Test
+	void 결과_없는_완료_런은_원장_불일치를_드러낸다() throws Exception {
+		mvc.perform(get("/api/v1/analyses"))
+				.andExpect(jsonPath("$.result[2].status").value("COMPLETED"))
+				.andExpect(jsonPath("$.result[2].result")
+						.value("설명 결과가 원장에 없습니다 — 완료 런에 explanation_result 가 없는 원장 불일치입니다."));
 	}
 
 	@Test
