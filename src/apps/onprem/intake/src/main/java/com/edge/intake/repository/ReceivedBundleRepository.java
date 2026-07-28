@@ -20,10 +20,10 @@ public interface ReceivedBundleRepository extends Repository<ReceivedBundle, Lon
 	@Modifying
 	@Transactional
 	@Query(value = """
-			INSERT INTO received_bundle (cursor_from, cursor_to, checksum, body)
-			VALUES (:cursorFrom, :cursorTo, :checksum, :body)
+			INSERT INTO received_bundle (cursor_from, cursor_to, body)
+			VALUES (:cursorFrom, :cursorTo, :body)
 			ON CONFLICT (cursor_from) DO NOTHING
 			""", nativeQuery = true)
 	int save(@Param("cursorFrom") long cursorFrom, @Param("cursorTo") long cursorTo,
-			@Param("checksum") String checksum, @Param("body") byte[] body);
+			@Param("body") byte[] body);
 }

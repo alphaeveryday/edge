@@ -14,14 +14,13 @@ import java.util.Optional;
 
 /**
  * Intake(내부망)가 폴링하는 내부 표면 — GET /internal/v1/bundles?after={cursor}.
- * 검증 통과한 번들 바이트·체크섬 헤더를 무변형 전달한다(204 포함).
+ * 수신한 번들 바이트를 무변형 전달한다(204 포함).
  * 이 표면은 DMZ→내부망 경계 메커니즘의 로컬 재현이다(ADR-0036 — 실배치에선
  * 증권사의 승인된 망연계 채널이 이 자리를 대신한다).
  */
 @RestController
 public class BundleRelayController {
 
-	static final String CHECKSUM_HEADER = "X-Bundle-Checksum";
 	private static final int LIMIT_DEFAULT = 100;
 	// 업스트림 계약(sync-protocol.md)과 동일 상한 — 여기서 걸러야 잘못된 limit 이
 	// 업스트림 400(UPSTREAM_REJECTED 오인)으로 둔갑하지 않는다.
@@ -46,14 +45,9 @@ public class BundleRelayController {
 		}
 		Optional<VerifiedBundle> bundle = bundleRelayService.pull(after, limit);
 		return bundle
-				.map(b -> {
-					var builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
-					// 신형 봉투 와이어는 checksum 이 없다 — 헤더도 부착하지 않아 하류로 그대로 전파.
-					if (b.checksum() != null) {
-						builder.header(CHECKSUM_HEADER, b.checksum());
-					}
-					return builder.body(b.body());
-				})
+				.map(b -> ResponseEntity.ok()
+						.contentType(MediaType.APPLICATION_JSON)
+						.body(b.body()))
 				.orElseGet(() -> ResponseEntity.noContent().build());
 	}
 }

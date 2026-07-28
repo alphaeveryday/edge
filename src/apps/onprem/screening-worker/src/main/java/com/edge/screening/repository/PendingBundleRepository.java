@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * received_bundle 의 미점검분 조회·마킹 — Intake↔Screening 의 DB 매개 핸드오프.
- * 원본 컬럼(cursor·checksum·body)은 불변 — 이 저장소는 screened_at 만 갱신한다.
+ * 원본 컬럼(cursor·body)은 불변 — 이 저장소는 screened_at 만 갱신한다.
  * 조회·마킹만 노출하려 JpaRepository 가 아니라 Repository 마커를 상속한다. LIMIT·screened_at
  * 마킹은 native @Query 로 내려가고, 폴러가 쓰는 PendingBundle(cursor_from·body) 도메인 형상은
  * default 어댑터가 유지한다(호출부 무변경).

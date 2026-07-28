@@ -21,15 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class BundleIngestorTest {
 
 	private static final class RecordingBundleRepo implements ReceivedBundleRepository {
-		record Saved(long cursorFrom, long cursorTo, String checksum) {
+		record Saved(long cursorFrom, long cursorTo) {
 		}
 
 		final List<Saved> saved = new ArrayList<>();
 		boolean insertResult = true;
 
 		@Override
-		public int save(long cursorFrom, long cursorTo, String checksum, byte[] body) {
-			saved.add(new Saved(cursorFrom, cursorTo, checksum));
+		public int save(long cursorFrom, long cursorTo, byte[] body) {
+			saved.add(new Saved(cursorFrom, cursorTo));
 			return insertResult ? 1 : 0;
 		}
 	}
@@ -51,7 +51,7 @@ class BundleIngestorTest {
 	}
 
 	private static PulledBundle bundle(String json) {
-		return new PulledBundle(json.getBytes(StandardCharsets.UTF_8), "sha256=stub");
+		return new PulledBundle(json.getBytes(StandardCharsets.UTF_8));
 	}
 
 	@Test
@@ -62,7 +62,7 @@ class BundleIngestorTest {
 				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}"));
 
 		assertThat(advanced).isEqualTo(3);
-		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3, "sha256=stub"));
+		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3));
 		assertThat(state.advanced).containsExactly(3L);
 	}
 
@@ -78,7 +78,7 @@ class BundleIngestorTest {
 						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
 
 		assertThat(advanced).isEqualTo(3);
-		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3, "sha256=stub"));
+		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3));
 		assertThat(state.advanced).containsExactly(3L);
 	}
 

@@ -27,8 +27,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 
 	private static final LocalDate TRADE_DATE = LocalDate.of(2026, 7, 15);
-	// received_bundle CHECK(checksum ~ '^sha256=[0-9a-f]{64}$') 를 만족하는 형식.
-	private static final String CHECKSUM = "sha256=" + "b".repeat(64);
 
 	@Autowired
 	private AnalysisItemRepository items;
@@ -125,7 +123,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	private void seedBundle(long cursorFrom) {
-		jdbc.update("INSERT INTO received_bundle (cursor_from, cursor_to, checksum, body) VALUES (?, ?, ?, ?)",
-				cursorFrom, cursorFrom, CHECKSUM, ("body-" + cursorFrom).getBytes(StandardCharsets.UTF_8));
+		jdbc.update("INSERT INTO received_bundle (cursor_from, cursor_to, body) VALUES (?, ?, ?)",
+				cursorFrom, cursorFrom, ("body-" + cursorFrom).getBytes(StandardCharsets.UTF_8));
 	}
 }

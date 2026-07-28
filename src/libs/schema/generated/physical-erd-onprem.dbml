@@ -96,7 +96,6 @@ Table "publication" {
 Table "received_bundle" {
   "cursor_from" bigint [pk]
   "cursor_to" bigint [not null]
-  "checksum" varchar(72)
   "body" bytea [not null]
   "received_at" timestamptz [not null]
   "screened_at" timestamptz
