@@ -33,6 +33,7 @@ Super Admin Console
 |---|---|
 | Tenants 목록/생성 | `GET /api/v1/tenants` · `POST /api/v1/tenants` |
 | Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
+| Event Pipeline — 실행 격자 | `GET /api/v1/sources/grid` |
 | Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |

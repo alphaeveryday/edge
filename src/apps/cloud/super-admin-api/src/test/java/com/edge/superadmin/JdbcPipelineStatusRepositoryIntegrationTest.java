@@ -415,6 +415,12 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				null, null, null, null);
 		jdbc.update("UPDATE ops_expected_task SET skip_reason='NON_TRADING_DAY' "
 				+ "WHERE expected_task_id='gt-old'");
+		// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 시도만 RUNNING 이라, 이 신호를 안
+		//      실으면 런이 도는 내내 진행 중 작업이 "시작 전"과 같은 셀이 된다. 끝난 시도가
+		//      섞여 있어도(재시도) RUNNING 하나로 참이어야 한다.
+		insertAttempt("ga-done", "gt-new-r", "arn:aws:ecs:task/g1", "FAILED",
+				daysAgo(1), daysAgo(1));
+		insertAttempt("ga-run", "gt-new-r", "arn:aws:ecs:task/g2", "RUNNING", null, daysAgo(1));
 
 		List<PipelineStatusRepository.GridSlot> slots = repository.grid(30);
 
@@ -432,6 +438,10 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// 건수 NULL 은 격자 경로에서도 0 으로 뭉개지지 않는다(ALPHA-182).
 		assertThat(slots.getLast().tasks().getFirst().recordsOut()).isNull();
 		assertThat(slots.getLast().tasks().getFirst().failedRecords()).isEqualTo(4L);
+		// 실행 중 신호 — RUNNING 시도가 있는 작업만 참이다.
+		assertThat(slots.getLast().tasks().getFirst().running()).isTrue();
+		assertThat(slots.getLast().tasks().getLast().running()).isFalse();
+		assertThat(slots.getFirst().tasks().getFirst().running()).isFalse();
 		assertThat(slots.getLast().launchStatus()).isEqualTo("LAUNCHED");
 		assertThat(slots.getLast().orchestrationStatus()).isEqualTo("FAILED");
 		assertThat(slots.getLast().tradingDate()).isEqualTo("2026-07-27");

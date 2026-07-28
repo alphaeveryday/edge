@@ -204,16 +204,22 @@ class SourceControllerTest {
 
 	@Test
 	void 격자는_슬롯_배열_순서와_셀의_모든_축을_그대로_낸다() throws Exception {
-		// 픽스처는 이종을 섞는다 — 정상 슬롯·기동 실패 슬롯(작업 0개), 셀도 정상·SKIPPED·건수 결측.
+		// 픽스처는 이종을 섞는다 — 정상 슬롯·기동 실패 슬롯(작업 0개), 셀도 정상·SKIPPED·건수
+		// 결측·실행 중(PENDING+running).
 		List<GridSlot> slots = List.of(
 				new GridSlot("etf-daily:2026-07-26T15:40", "LAUNCHED", "SUCCEEDED",
 						LocalDate.of(2026, 7, 26), List.of(
 						new GridCell("raw", "PRICE_COLLECTION_KIS", "DUE", "FULFILLED", "VALID",
-								2736L, 0L, null, null),
+								2736L, 0L, null, null, false),
 						new GridCell("raw", "NEWS_COLLECTION_BIGKINDS", "SKIPPED", null, null,
-								null, null, "NON_TRADING_DAY", null),
+								null, null, "NON_TRADING_DAY", null, false),
 						new GridCell("feature", "TAG_NEWS", "DUE", "FULFILLED", "INCOMPLETE",
-								null, null, null, null))),
+								null, null, null, null, false),
+						// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 PENDING 인 채로
+						//      running 만 참이라, 이 축이 안 내려가면 런이 도는 내내 진행 중
+						//      작업이 "아직 시작도 안 함"과 같은 셀로 보인다(#297 P2 와 동형).
+						new GridCell("feature", "ASSEMBLE_EVENTS", "DUE", "PENDING", "UNKNOWN",
+								null, null, null, null, true))),
 				// WHY: 기동 실패는 orchestration 이 영영 null 이고 기대 작업도 없다 — 이 슬롯을
 				//      열에서 빼면 "아예 못 뜬 런"이 격자에서 사라진다(부재가 1급 신호인 화면).
 				new GridSlot("etf-daily:2026-07-27T15:40", "LAUNCH_FAILED", null, null, List.of()));
@@ -224,9 +230,10 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.slots.length()").value(2))
 				.andExpect(jsonPath("$.result.slots[0].runKey").value("etf-daily:2026-07-26T15:40"))
 				.andExpect(jsonPath("$.result.slots[0].tradingDate").value("2026-07-26"))
-				.andExpect(jsonPath("$.result.slots[0].tasks.length()").value(3))
+				.andExpect(jsonPath("$.result.slots[0].tasks.length()").value(4))
 				.andExpect(jsonPath("$.result.slots[0].tasks[0].outcome").value("FULFILLED"))
 				.andExpect(jsonPath("$.result.slots[0].tasks[0].recordsOut").value(2736))
+				.andExpect(jsonPath("$.result.slots[0].tasks[0].running").value(false))
 				// plan 축과 outcome 축은 격자에서도 합쳐지지 않는다.
 				.andExpect(jsonPath("$.result.slots[0].tasks[1].planStatus").value("SKIPPED"))
 				.andExpect(jsonPath("$.result.slots[0].tasks[1].outcome").doesNotExist())
@@ -235,6 +242,9 @@ class SourceControllerTest {
 				// 건수 결측은 0 이 아니라 부재다(ALPHA-182) — 격자 경로에서도 같은 계약.
 				.andExpect(jsonPath("$.result.slots[0].tasks[2].recordsOut").doesNotExist())
 				.andExpect(jsonPath("$.result.slots[0].tasks[2].dataStatus").value("INCOMPLETE"))
+				// 실행 중 축 — PENDING 과 running 이 함께 내려간다.
+				.andExpect(jsonPath("$.result.slots[0].tasks[3].outcome").value("PENDING"))
+				.andExpect(jsonPath("$.result.slots[0].tasks[3].running").value(true))
 				.andExpect(jsonPath("$.result.slots[1].launchStatus").value("LAUNCH_FAILED"))
 				.andExpect(jsonPath("$.result.slots[1].orchestrationStatus").doesNotExist())
 				.andExpect(jsonPath("$.result.slots[1].tasks.length()").value(0));

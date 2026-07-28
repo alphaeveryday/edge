@@ -161,6 +161,12 @@ export interface GridCell {
   failedRecords: number | null;
   skipReason: string | null;
   outcomeReason: string | null;
+  /**
+   * 지금 도는 물리 시도가 있는가. outcome 은 wrapper 가 끝날 때 써서 실행 중엔 PENDING 이라 —
+   * 이 축이 없으면 런이 도는 내내 "돌고 있다"와 "아직 시작도 안 했다"가 같은 회색 셀이 된다.
+   * 재시도 중이면 FAILED 와 running 이 **동시에 참**이다(덮지 않는다).
+   */
+  running: boolean;
 }
 
 /** 격자 한 열 — 슬롯(런) 하나. tasks 가 빈 런(기동 실패 등)도 열로 온다 — 부재가 1급 신호다. */

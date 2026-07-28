@@ -60,10 +60,16 @@ public interface PipelineStatusRepository {
 	 * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축을 합치지 않는 이유는
 	 * {@link TaskStatus} 와 같고, {@code recordsOut}·{@code failedRecords} 의 null 계약(모름 ≠ 0)도
 	 * 같다(ALPHA-182).
+	 *
+	 * <p>{@code running} — 지금 도는 물리 시도가 있는가. outcome 은 wrapper 가 <b>끝날 때</b> 써서
+	 * 실행 중엔 PENDING 이라, 이 축이 없으면 런이 도는 내내 "돌고 있다"와 "아직 시작도 안 했다"가
+	 * 같은 셀이 된다(수집 상태 화면이 executionStatus 를 싣는 것과 같은 이유). 재시도 중이면
+	 * FAILED 옆에 running 이 함께 참이다 — 덮지 않고 둘 다 낸다. 죽은 RUNNING 잔재의 한계는
+	 * {@link TaskStatus#currentAttempt()} 와 동일하다.
 	 */
 	record GridCell(String stage, String taskKey, String planStatus, String outcome,
 			String dataStatus, Long recordsOut, Long failedRecords, String skipReason,
-			String outcomeReason) {
+			String outcomeReason, boolean running) {
 	}
 
 	/**

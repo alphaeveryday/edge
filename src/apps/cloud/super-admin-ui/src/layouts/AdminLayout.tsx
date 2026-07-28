@@ -78,6 +78,8 @@ export function AdminLayout() {
     pageTitle = '테넌트 목록';
   } else if (path.startsWith('/sources')) {
     pageTitle = '데이터 소스 수집 상태';
+  } else if (path.startsWith('/grid')) {
+    pageTitle = '실행 격자';
   } else if (path.startsWith('/analyses')) {
     pageTitle = '가격 변동 분석 목록';
   }

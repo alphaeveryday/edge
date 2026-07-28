@@ -4,6 +4,8 @@
  * 실데이터로 검증한 규칙 그대로):
  *   기본색   = task_outcome (FULFILLED 초록 / FAILED 빨강 / BLOCKED 주황 / MISSED 흰+빨강 테두리
  *              / PENDING 회색)
+ *   파란 테두리 = 실행 중인 시도 있음 (outcome 은 끝날 때 써서 실행 중엔 PENDING — 이 축이
+ *              없으면 "돌고 있다"와 "시작 전"이 같은 회색이 된다)
  *   사선     = plan_status SKIPPED (비거래일 등 — 안 한 게 아니라 할 일이 아니었다)
  *   모서리 점 = failed_records>0 또는 data_status INCOMPLETE·INVALID ("실행 성공 ≠ 데이터 유효")
  *   빈칸 ·   = 그 슬롯의 카탈로그에 없던 작업 (뉴스 6작업이 07-28부터 시장 런에 없는 것이 실례)
@@ -45,6 +47,7 @@ function cellTip(cell: GridCell, runKey: string) {
     `귀결 ${cell.outcome ?? '—'} · 계획 ${cell.planStatus} · 데이터 ${cell.dataStatus ?? '—'}`,
     /* null 은 "모름"이지 0 이 아니다 — '—' 로 낸다(ALPHA-182) */
     `산출 ${cell.recordsOut ?? '—'} · 유실 ${cell.failedRecords ?? '—'}`,
+    cell.running ? '실행 중 (시도 진행)' : '',
     cell.skipReason ?? cell.outcomeReason ?? '',
   ]
     .filter(Boolean)
@@ -61,12 +64,12 @@ export function GridPage() {
   const slots = grid.slots;
 
   /* 행 = 창 안 어느 슬롯에든 등장한 작업의 합집합. 한 슬롯만 보면 카탈로그에서 빠진 작업
-   * (뉴스 레인 분리 등)이 행째로 사라져 "언제부터 없어졌나"를 못 본다. */
+   * (뉴스 레인 분리 등)이 행째로 사라져 "언제부터 없어졌나"를 못 본다.
+   * stage 는 마지막(최신) 슬롯의 값이 이긴다 — 카탈로그가 작업의 stage 를 옮기면 첫 등장에
+   * 고정할 경우 새 셀이 옛 stage 행에 계속 붙는다(현재 카탈로그가 행 축의 정본이다). */
   const taskStage = new Map<string, string>();
   for (const slot of slots) {
-    for (const cell of slot.tasks) {
-      if (!taskStage.has(cell.taskKey)) taskStage.set(cell.taskKey, cell.stage);
-    }
+    for (const cell of slot.tasks) taskStage.set(cell.taskKey, cell.stage);
   }
   const stages = [...new Set([...taskStage.values()])].sort(
     (a, b) => (STAGE_ORDER[a] ?? 9) - (STAGE_ORDER[b] ?? 9),
@@ -91,8 +94,8 @@ export function GridPage() {
         <div className="card-head">
           <span className="t-label">실행 격자</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            최근 {grid.days}일 · 색=귀결 · 사선=계획 스킵 · 모서리 점=데이터 결손 · ·=카탈로그에
-            없음 · 셀을 누르면 그 실행의 드릴다운
+            최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 모서리
+            점=데이터 결손 · ·=카탈로그에 없음 · 셀을 누르면 그 실행의 드릴다운
           </span>
         </div>
 
@@ -191,8 +194,11 @@ export function GridPage() {
                                   height: 18,
                                   borderRadius: 3,
                                   background: bg,
-                                  border:
-                                    cell.outcome === 'MISSED'
+                                  /* 실행 중은 테두리로 겹쳐 그린다 — 배경(귀결)을 덮으면
+                                   * "재시도 중"(FAILED+running)에서 실패 사실이 사라진다. */
+                                  border: cell.running
+                                    ? '2px solid #3b82f6'
+                                    : cell.outcome === 'MISSED'
                                       ? '2px solid #ef4444'
                                       : '1px solid #d1d5db',
                                   position: 'relative',
