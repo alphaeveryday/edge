@@ -1,6 +1,7 @@
 package com.edge.superadmin.service;
 
 import com.edge.common.exception.GeneralException;
+import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository;
@@ -31,6 +32,20 @@ public class SourceService {
 	 *                          오타 친 런 키가 "원장이 비어 있다"로 보이면 운영자는 없는 사실을
 	 *                          있는 것처럼 읽는다(빈 원장은 그 자체로 정상 상태다).
 	 */
+	/**
+	 * 실행 격자 — 최근 {@code days}일의 슬롯 전부(ALPHA-594).
+	 *
+	 * @param days 조회 창(일). 1 미만이면 창이 미래로 뒤집혀 <b>조용히 빈 격자</b>가 된다 —
+	 *             에러도 데이터도 아닌 화면은 운영자가 "원장이 비었다"로 오독하므로 잘못된
+	 *             요청으로 거절한다. 상한 366 은 무제한 스캔 방지다(원장은 무기한 보존).
+	 */
+	public SourceGridResponse grid(int days) {
+		if (days < 1 || days > 366) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		return SourceGridResponse.from(days, pipelineStatus.grid(days));
+	}
+
 	public SourceReportResponse report(String runKey) {
 		if (runKey == null) {
 			return pipelineStatus.latestRun()

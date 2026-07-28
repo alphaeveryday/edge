@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -108,10 +109,68 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			 ORDER BY (i.status = 'OPEN') DESC, i.last_seen_at DESC, i.issue_id
 			""";
 
+	/**
+	 * LEFT JOIN — 기대 작업이 하나도 안 적힌 런(기동 실패 등)도 슬롯으로 남는다. INNER 로 바꾸면
+	 * "아예 못 뜬 슬롯"이 격자에서 통째로 사라진다.
+	 *
+	 * <p>창의 기준은 {@code created_at}(계획 시각)이다 — 거래일({@code trading_date})은 비거래일
+	 * 런에서 NULL 이라 창 기준으로 쓰면 그 런들이 창 밖으로 새어 나간다.
+	 */
+	private static final String GRID_SQL = """
+			SELECT r.pipeline_run_id, r.run_key, r.launch_status, r.orchestration_status,
+			       r.trading_date,
+			       t.stage, t.task_key, t.plan_status, t.task_outcome, t.data_status,
+			       t.records_out, t.failed_records, t.skip_reason, t.outcome_reason,
+			       (t.task_outcome = 'PENDING'
+			        AND EXISTS (SELECT 1 FROM ops_task_attempt a
+			                     WHERE a.expected_task_id = t.expected_task_id
+			                       AND a.execution_status = 'RUNNING')) AS running
+			  FROM ops_pipeline_run r
+			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = r.pipeline_run_id
+			 WHERE r.created_at >= now() - (? * interval '1 day')
+			 ORDER BY r.created_at ASC, r.pipeline_run_id ASC,
+			          CASE t.stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, t.task_key
+			""";
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcPipelineStatusRepository(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<GridSlot> grid(int days) {
+		// 단일 SELECT 라 statement 스냅샷이 일관성을 보장한다 — 드릴다운(네 조회)과 달리
+		// REPEATABLE READ 로 올릴 이유가 없다.
+		Map<String, RunRow> headers = new LinkedHashMap<>();
+		Map<String, List<GridCell>> cells = new LinkedHashMap<>();
+		jdbc.query(GRID_SQL, rs -> {
+			String runId = rs.getString("pipeline_run_id");
+			if (!headers.containsKey(runId)) {
+				headers.put(runId, mapRun(rs, 0));
+				cells.put(runId, new ArrayList<>());
+			}
+			// LEFT JOIN 이라 작업 없는 런은 task 컬럼이 전부 NULL 인 한 행으로 온다.
+			if (rs.getString("task_key") != null) {
+				cells.get(runId).add(new GridCell(
+						rs.getString("stage"),
+						rs.getString("task_key"),
+						rs.getString("plan_status"),
+						rs.getString("task_outcome"),
+						rs.getString("data_status"),
+						nullableLong(rs, "records_out"),
+						nullableLong(rs, "failed_records"),
+						rs.getString("skip_reason"),
+						rs.getString("outcome_reason"),
+						rs.getBoolean("running")));
+			}
+		}, days);
+		return headers.entrySet().stream()
+				.map(e -> new GridSlot(e.getValue().runKey(), e.getValue().launchStatus(),
+						e.getValue().orchestrationStatus(), e.getValue().tradingDate(),
+						List.copyOf(cells.get(e.getKey()))))
+				.toList();
 	}
 
 	@Override

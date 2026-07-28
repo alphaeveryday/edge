@@ -33,6 +33,50 @@ public interface PipelineStatusRepository {
 	Optional<PipelineRunStatus> runByKey(String runKey);
 
 	/**
+	 * 최근 {@code days}일 안에 <b>계획된</b> 런 전부와 각 런의 기대 작업 — 실행 격자 화면의
+	 * 데이터원(ALPHA-594). 계획 시각 오름차순이라 격자에서 시간이 왼쪽→오른쪽으로 흐른다.
+	 *
+	 * <p>{@link TaskStatus} 를 재사용하지 않는 이유: 격자는 슬롯 수 × 작업 수(30일이면 수백 셀)라
+	 * 시도 전량·시각 4축을 실으면 드릴다운 한 화면 분량이 슬롯 수만큼 곱해진다. 셀이 답할
+	 * 질문(계획·귀결·데이터 상태·건수·사유)만 싣고, 나머지는 셀에서 런 드릴다운(ALPHA-574,
+	 * {@link #runByKey})으로 넘어가 본다.
+	 */
+	List<GridSlot> grid(int days);
+
+	/**
+	 * 격자 한 열 — 슬롯(런) 하나와 그 런의 기대 작업들.
+	 *
+	 * <p>{@code launchStatus} 를 함께 싣는 이유는 드릴다운과 같다 — <b>기동 실패는 orchestration
+	 * 이 영영 null 이라</b> 이 축이 없으면 "아예 못 뜬 슬롯"이 격자에서 "상태 없음"으로 보인다.
+	 *
+	 * <p>{@code tasks} 가 빈 런도 슬롯으로 낸다 — 기대 작업이 안 적힌 런(기동 실패 등)을 열에서
+	 * 빼면 부재가 화면에서 사라지는데, 부재야말로 이 원장이 답하려는 질문이다.
+	 */
+	record GridSlot(String runKey, String launchStatus, String orchestrationStatus,
+			LocalDate tradingDate, List<GridCell> tasks) {
+	}
+
+	/**
+	 * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축을 합치지 않는 이유는
+	 * {@link TaskStatus} 와 같고, {@code recordsOut}·{@code failedRecords} 의 null 계약(모름 ≠ 0)도
+	 * 같다(ALPHA-182).
+	 *
+	 * <p>{@code running} — <b>귀결이 아직 없는데(PENDING) 도는 물리 시도가 있는가</b>. outcome 은
+	 * wrapper 가 끝날 때 써서 실행 중엔 PENDING 이라, 이 축이 없으면 런이 도는 내내 "돌고 있다"와
+	 * "아직 시작도 안 했다"가 같은 셀이 된다(수집 상태 화면이 executionStatus 를 싣는 이유와 같다).
+	 *
+	 * <p>PENDING 조건을 거는 이유: RUNNING 시도의 <b>존재만</b> 보면, 강제 종료로 RUNNING 인 채
+	 * 남은 죽은 시도가 이미 판정 끝난 셀을 <b>영구히</b> "실행 중"으로 만든다 — 드릴다운은 같은
+	 * 화면의 STALLED 이슈 표가 그 잔재를 드러내지만 격자엔 그 장치가 없다. 귀결이 적히는 순간
+	 * 이 신호가 걷히므로 오표시가 유계다. 대가로 "판정 후 재시도 중"(FAILED+새 시도)은 격자에선
+	 * 안 보인다 — 그 정밀도는 시도 전량을 싣는 드릴다운(574) 소관이다.
+	 */
+	record GridCell(String stage, String taskKey, String planStatus, String outcome,
+			String dataStatus, Long recordsOut, Long failedRecords, String skipReason,
+			String outcomeReason, boolean running) {
+	}
+
+	/**
 	 * 런 하나와 그 런의 기대 작업들, 그리고 이 런에 걸린 대조 이슈들.
 	 *
 	 * @param runKey             슬롯 멱등키(예: {@code etf-daily:2026-07-27T15:40}) — 화면의 "언제 런"

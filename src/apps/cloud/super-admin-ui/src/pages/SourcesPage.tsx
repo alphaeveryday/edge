@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { ApiError } from '../api/client';
@@ -317,6 +317,10 @@ export function SourcesPage() {
   /* 공백만 있는 값은 지목이 아니다 — `?runKey=` 를 그대로 보내면 "지정한 실행"이라 표시해 놓고
    * 실제로는 서버가 404 를 내거나(엄한 쪽) 최신 런을 준다(관대한 쪽). 둘 다 화면 문구와 어긋난다. */
   const runKey = searchParams.get('runKey')?.trim() || undefined;
+  /* 격자 셀이 지목한 작업 — 있으면 그 작업 하나만 보여준다(셀을 누른 목적이 그 작업의 상세다).
+   * 원장에 없는 taskKey 면 전체 목록으로 폴백한다 — 지목 실패를 에러로 만들면 격자 쪽
+   * 오타가 화면 전체를 죽인다. */
+  const focusTask = searchParams.get('task')?.trim() || undefined;
   const { data: report, isPending, isError, error } = useSourceReport(runKey);
 
   if (isError) {
@@ -337,6 +341,10 @@ export function SourcesPage() {
   if (isPending) return null;
 
   const run = report.run;
+  const focusedExists = focusTask !== undefined && report.tasks.some((t) => t.taskKey === focusTask);
+  const visibleTasks = focusedExists
+    ? report.tasks.filter((t) => t.taskKey === focusTask)
+    : report.tasks;
   const orchestration = run?.orchestrationStatus
     ? (ORCHESTRATION[run.orchestrationStatus] ?? {
         label: run.orchestrationStatus,
@@ -393,6 +401,14 @@ export function SourcesPage() {
                 )}
               </p>
             )}
+            {focusedExists && (
+              <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+                {'격자에서 지목한 작업만 표시 중 · '}
+                <Link to={`/sources?runKey=${encodeURIComponent(runKey ?? '')}`}>
+                  이 실행의 전체 작업 보기
+                </Link>
+              </p>
+            )}
             <table className="table">
               <thead>
                 <tr>
@@ -406,10 +422,12 @@ export function SourcesPage() {
                 </tr>
               </thead>
               <tbody>
-                {report.tasks.map((t) => (
+                {visibleTasks.map((t) => (
                   <Fragment key={t.taskKey}>
                     <TaskRow task={t} />
-                    {hasDetail(t) && <TaskDetailRow task={t} />}
+                    {/* 지목된 작업은 사유가 없어도 펼친다 — 셀을 누른 목적이 그 작업의
+                        상세(시각·시도)이기 때문이다 */}
+                    {(hasDetail(t) || focusedExists) && <TaskDetailRow task={t} />}
                   </Fragment>
                 ))}
               </tbody>

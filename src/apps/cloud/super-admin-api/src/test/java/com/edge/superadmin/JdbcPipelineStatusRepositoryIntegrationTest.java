@@ -389,6 +389,88 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		assertThat(task.currentAttempt().finishedAt()).isNull();   // 아직 안 끝났다
 	}
 
+	/** 격자의 창은 now() 기준이라, 고정 날짜 픽스처는 시간이 지나면 창 밖으로 새어 테스트가 썩는다. */
+	private String daysAgo(int days) {
+		return java.time.OffsetDateTime.now().minusDays(days).toString();
+	}
+
+	@Test
+	void 격자는_창_안의_런만_계획순으로_작업까지_묶어_읽는다() {
+		// 창 밖(40일 전) — 결과에 나오면 안 된다.
+		insertRun("g-out", "etf-daily:2026-06-17T15:40", "LAUNCHED", "SUCCEEDED", null,
+				daysAgo(40));
+		insertTask("gt-out", "g-out", "raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
+				"FULFILLED", "VALID", 1L, 0L);
+		// 창 안 두 런 — 삽입은 최신부터 하지만 결과는 계획 시각 오름차순이어야 한다.
+		insertRun("g-new", "etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED", "2026-07-27",
+				daysAgo(1));
+		// stage 를 feature→raw 순으로 삽입 — 문자열 정렬이면 feature 가 앞이라 CASE 정렬이 검증된다.
+		insertTask("gt-new-f", "g-new", "feature", "TAG_NEWS", "news_assertions", "DUE",
+				"FULFILLED", "UNKNOWN", null, null);
+		insertTask("gt-new-r", "g-new", "raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
+				"FAILED", "UNKNOWN", null, 4L);
+		insertRun("g-old", "etf-daily:2026-07-26T15:40", "LAUNCHED", "SUCCEEDED", "2026-07-26",
+				daysAgo(2));
+		insertTask("gt-old", "g-old", "raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
+				null, null, null, null);
+		jdbc.update("UPDATE ops_expected_task SET skip_reason='NON_TRADING_DAY' "
+				+ "WHERE expected_task_id='gt-old'");
+		// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 시도만 RUNNING 이라, 이 신호를 안
+		//      실으면 런이 도는 내내 진행 중 작업이 "시작 전"과 같은 셀이 된다. 끝난 시도가
+		//      섞여 있어도(첫 시도 실패 후 재시도) 귀결 전이면 참이어야 한다.
+		insertTask("gt-new-p", "g-new", "feature", "ASSEMBLE_EVENTS", "events", "DUE", "PENDING",
+				"UNKNOWN", null, null);
+		insertAttempt("ga-done", "gt-new-p", "arn:aws:ecs:task/g1", "FAILED",
+				daysAgo(1), daysAgo(1));
+		insertAttempt("ga-run", "gt-new-p", "arn:aws:ecs:task/g2", "RUNNING", null, daysAgo(1));
+		// WHY: 반대로 귀결이 이미 적힌 작업은 RUNNING **잔재**(강제 종료로 안 닫힌 시도)가 있어도
+		//      false 여야 한다 — 존재만 보면 죽은 시도가 판정 끝난 셀을 **영구히** "실행 중"으로
+		//      만든다(격자엔 드릴다운의 STALLED 이슈 표 같은 완화 장치가 없다).
+		insertAttempt("ga-dead", "gt-new-r", "arn:aws:ecs:task/g3", "RUNNING", null, daysAgo(1));
+
+		List<PipelineStatusRepository.GridSlot> slots = repository.grid(30);
+
+		assertThat(slots).extracting(PipelineStatusRepository.GridSlot::runKey)
+				.containsExactly("etf-daily:2026-07-26T15:40", "etf-daily:2026-07-27T15:40");
+		// 셀은 런별로 묶이고, 한 런 안에서는 파이프라인 순서(raw→feature)다.
+		assertThat(slots.getLast().tasks())
+				.extracting(PipelineStatusRepository.GridCell::taskKey)
+				.containsExactly("PRICE_COLLECTION_KIS", "ASSEMBLE_EVENTS", "TAG_NEWS");
+		assertThat(slots.getFirst().tasks()).singleElement().satisfies(c -> {
+			assertThat(c.planStatus()).isEqualTo("SKIPPED");
+			assertThat(c.outcome()).isNull();
+			assertThat(c.skipReason()).isEqualTo("NON_TRADING_DAY");
+		});
+		// 건수 NULL 은 격자 경로에서도 0 으로 뭉개지지 않는다(ALPHA-182).
+		assertThat(slots.getLast().tasks().getFirst().recordsOut()).isNull();
+		assertThat(slots.getLast().tasks().getFirst().failedRecords()).isEqualTo(4L);
+		// 실행 중 신호 — 귀결 전(PENDING)이면서 RUNNING 시도가 있는 작업만 참이다.
+		assertThat(slots.getLast().tasks().get(1).running()).isTrue();     // PENDING + RUNNING
+		assertThat(slots.getLast().tasks().getFirst().running()).isFalse(); // FAILED + 죽은 RUNNING 잔재
+		assertThat(slots.getLast().tasks().getLast().running()).isFalse();  // 시도 없음
+		assertThat(slots.getFirst().tasks().getFirst().running()).isFalse();
+		assertThat(slots.getLast().launchStatus()).isEqualTo("LAUNCHED");
+		assertThat(slots.getLast().orchestrationStatus()).isEqualTo("FAILED");
+		assertThat(slots.getLast().tradingDate()).isEqualTo("2026-07-27");
+	}
+
+	@Test
+	void 기대작업이_없는_런도_격자_슬롯으로_온다() {
+		// WHY: 기동 실패 런은 기대 작업이 안 적힐 수 있다. INNER JOIN 이면 이 슬롯이 격자에서
+		//      통째로 사라진다 — "아예 못 뜬 런"이야말로 이 화면이 놓치면 안 되는 열이다.
+		insertRun("g-empty", "etf-daily:2026-07-27T16:00", "LAUNCH_FAILED", null, null,
+				daysAgo(1));
+
+		List<PipelineStatusRepository.GridSlot> slots = repository.grid(30);
+
+		assertThat(slots).singleElement().satisfies(s -> {
+			assertThat(s.runKey()).isEqualTo("etf-daily:2026-07-27T16:00");
+			assertThat(s.launchStatus()).isEqualTo("LAUNCH_FAILED");
+			assertThat(s.orchestrationStatus()).isNull();
+			assertThat(s.tasks()).isEmpty();
+		});
+	}
+
 	@Test
 	void 원장이_비어있으면_empty_다() {
 		// WHY: 초기 환경은 장애가 아니다. 예외를 던지면 콘솔 페이지가 통째로 안 뜬다.
