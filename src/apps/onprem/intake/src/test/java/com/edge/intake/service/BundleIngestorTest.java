@@ -54,12 +54,18 @@ class BundleIngestorTest {
 		return new PulledBundle(json.getBytes(StandardCharsets.UTF_8));
 	}
 
+	/** 신형 와이어 형상(ADR-0040 T4 후 유일 형상) — 번들을 ApiResponse 봉투(result 아래)로 감싼다. */
+	private static PulledBundle envelope(String innerBundleJson) {
+		return bundle("{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":"
+				+ innerBundleJson + "}");
+	}
+
 	@Test
 	void 정상_번들은_저장되고_cursor가_cursor_to로_전진한다() {
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();
 		long advanced = new BundleIngestor(bundles, state)
-				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}"));
+				.ingest(envelope("{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}"));
 
 		assertThat(advanced).isEqualTo(3);
 		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3));
@@ -67,19 +73,18 @@ class BundleIngestorTest {
 	}
 
 	@Test
-	void 신형_봉투_번들은_result_아래_cursor로_전진한다() {
-		// WHY: cloud 봉투 전환(ADR-0040) 후 body 는 ApiResponse 봉투(result 아래에 번들)다 —
-		// intake 는 구(root)·신(result) 형상을 모두 견뎌야 한다(이중형상 관용). 저장 body 는
-		// 봉투 원본 그대로 두고 파싱만 봉투 감지형으로 처리한다.
+	void 구형_direct_root_번들은_봉투_아님으로_거부된다() {
+		// WHY(Rule 9): T4 로 이중형상 폴백을 제거했다(ADR-0040) — 커토버 후 cloud 는 봉투만 보내므로
+		// isSuccess 결측(구형 root=EventBundle)은 이제 계약 위반으로 fail-loud 여야 한다(저장·전진 없음).
+		// 폴백이 살아 있으면 이 body 가 조용히 적재돼 T4 회귀.
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();
-		long advanced = new BundleIngestor(bundles, state).ingest(bundle(
-				"{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\","
-						+ "\"result\":{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}}"));
+		Executable call = () -> new BundleIngestor(bundles, state)
+				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":3,\"entries\":[]}"));
 
-		assertThat(advanced).isEqualTo(3);
-		assertThat(bundles.saved).containsExactly(new RecordingBundleRepo.Saved(1, 3));
-		assertThat(state.advanced).containsExactly(3L);
+		assertThrows(IllegalStateException.class, call);
+		assertThat(bundles.saved).isEmpty();
+		assertThat(state.advanced).isEmpty();
 	}
 
 	@Test
@@ -93,7 +98,7 @@ class BundleIngestorTest {
 		RecordingStateRepo state = new RecordingStateRepo();
 		state.committed = 3;
 		Executable call = () -> new BundleIngestor(bundles, state)
-				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":100}"));
+				.ingest(envelope("{\"cursor_from\":1,\"cursor_to\":100}"));
 
 		assertThrows(IllegalStateException.class, call);
 		assertThat(state.advanced).isEmpty();
@@ -119,7 +124,7 @@ class BundleIngestorTest {
 	void 봉투에_cursor가_없으면_저장_없이_실패한다() {
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();
-		Executable call = () -> new BundleIngestor(bundles, state).ingest(bundle("{\"entries\":[]}"));
+		Executable call = () -> new BundleIngestor(bundles, state).ingest(envelope("{\"entries\":[]}"));
 
 		assertThrows(IllegalStateException.class, call);
 		assertThat(bundles.saved).isEmpty();
@@ -134,7 +139,7 @@ class BundleIngestorTest {
 		RecordingStateRepo state = new RecordingStateRepo();
 		state.committed = 10;
 		Executable call = () -> new BundleIngestor(bundles, state)
-				.ingest(bundle("{\"cursor_from\":1,\"cursor_to\":3}"));
+				.ingest(envelope("{\"cursor_from\":1,\"cursor_to\":3}"));
 
 		assertThrows(IllegalStateException.class, call);
 		assertThat(bundles.saved).isEmpty();
@@ -146,7 +151,7 @@ class BundleIngestorTest {
 		RecordingBundleRepo bundles = new RecordingBundleRepo();
 		RecordingStateRepo state = new RecordingStateRepo();
 		Executable call = () -> new BundleIngestor(bundles, state)
-				.ingest(bundle("{\"cursor_from\":5,\"cursor_to\":3}"));
+				.ingest(envelope("{\"cursor_from\":5,\"cursor_to\":3}"));
 
 		assertThrows(IllegalStateException.class, call);
 		assertThat(bundles.saved).isEmpty();

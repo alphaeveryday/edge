@@ -56,6 +56,21 @@ MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
 
 `flyway-onprem` 은 one-shot·불변 이미지라 재배포(새 이미지·새 SQL) 시 `docker compose up` 이 기존 종료 컨테이너를 재사용해 **새 마이그레이션을 건너뛴다**. 매 릴리스 스키마를 적용하려면 배포가 앱 기동 전에 `docker compose up --force-recreate flyway-onprem`(또는 해당 서비스 rerun)을 먼저 돌려야 한다.
 
+## T4 배포 전 드레인 확인 (ALPHA-587 — 신형 봉투 전용 회귀 시 필수)
+
+`intake`·`screening-worker` 가 **신형 봉투 전용**(ADR-0040 T4, 이중형상 폴백 제거) 빌드로 넘어간 뒤부터 적용된다. `screening-worker` 는 저장된 `received_bundle.body` 를 되읽어 파싱하는데, T4 후엔 구형 direct-root(봉투 아님) body 를 계약 위반으로 **fail-loud** 한다. `ScreeningPoller` 는 순서보존이라 **미점검 구형 행 하나가 첫 실패에서 폴러 전체를 영구 차단**한다(ADR-0040 §⑦). 따라서 T4(ALPHA-587)를 포함한 빌드를 이 박스에 배포하기 **전에**, 커토버 이전 저장된 구형 미점검 행이 모두 소진(=0)됐는지 확인한다.
+
+`postgres-onprem` 은 `data` 내부망 전용이라 호스트 포트가 없다 — 박스에서 SSM(Run Command 또는 세션)으로 compose exec 해 조회한다. 판정은 **시각이 아니라 body 형상**으로 한다 — 신형 봉투는 최상위 `isSuccess` 키가 있고 구형 direct-root 는 없으므로, 미점검 행 중 `isSuccess` 결측(구형)을 직접 센다. cloud ECS 롤링 전환 중엔 구 task 가 커토버 시각 이후에도 direct-root 를 반환할 수 있어 `received_at` 시각 기준은 구형 행을 놓칠 수 있다(ADR-0040 §⑦ 의 실제 조건 = 모든 미점검 direct-root 소진):
+
+```bash
+docker compose exec postgres-onprem psql -U edge -d edge_onprem -c \
+ "SELECT count(*) FROM received_bundle
+  WHERE screened_at IS NULL
+    AND (convert_from(body, 'UTF8')::jsonb ->> 'isSuccess') IS NULL;"
+```
+
+= **0 이어야 배포**한다. 0 이 아니면 아직 구형 미점검 행이 남은 것 — T1 이중형상 빌드가 계속 소진하도록 두고 나중에 재확인한다. (T4 는 온프렘 전용이라 `dev` 머지가 이 박스를 자동배포하지 않으므로, 이 확인은 다음 `deploy-demo-onprem` 실행 직전 게이트다.)
+
 ## 로컬 풀스택과의 차이
 
 - `build:` → `image:`(ECR). 박스는 소스 빌드 안 함.

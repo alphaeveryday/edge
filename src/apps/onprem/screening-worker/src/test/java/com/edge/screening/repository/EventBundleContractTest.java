@@ -69,7 +69,9 @@ class EventBundleContractTest {
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"삼성전자 공급계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\"}]");
 		assertThat(schema.validate(bundle, InputFormat.JSON)).as("입력 번들 자체가 계약을 만족해야 한다").isEmpty();
 
-		screener.screen(101L, bundle.getBytes(StandardCharsets.UTF_8));
+		// 저장 body 는 신형 봉투(ADR-0040 T4) — 스키마 검증은 봉투 안 EventBundle(bundle) 대상이고,
+		// 파서 입력만 봉투로 감싼다.
+		screener.screen(101L, envelope(bundle).getBytes(StandardCharsets.UTF_8));
 
 		// analysis_item 으로 넘어가는 evidencesJson(12번째 인자)을 캡처한다
 		ArgumentCaptor<String> movedEvidences = ArgumentCaptor.forClass(String.class);
@@ -82,6 +84,11 @@ class EventBundleContractTest {
 		// (2) 형상 유지 — 옮긴 evidences 를 담은 번들이 다시 계약을 통과해야 한다(키 rename/transform 감지)
 		assertThat(schema.validate(newBundleWith(moved), InputFormat.JSON))
 				.as("BundleScreener 가 옮긴 evidences 가 계약 형상을 유지해야 한다: %s", moved).isEmpty();
+	}
+
+	/** 신형 와이어 형상(ADR-0040 T4 후 유일 형상) — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다. */
+	private static String envelope(String innerBundleJson) {
+		return "{\"isSuccess\":true,\"code\":\"COMMON200\",\"message\":\"성공\",\"result\":" + innerBundleJson + "}";
 	}
 
 	private static String newBundleWith(String evidencesJson) {
