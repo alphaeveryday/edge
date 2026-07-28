@@ -251,10 +251,19 @@ def test_running_over_time_is_stalled_execution_status_preserved():
     assert len(db.open_issues(states.ISSUE_STALLED)) == 1
 
 
-def test_uninstrumented_task_backfills_without_opening_ledger_gap():
-    # WHY: 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음 — KRX 수집)은 attempt 결측이
-    #      **정상**이다. LEDGER_GAP 을 열면 dedupe 키에 ECS ARN 이 들어가 런마다 새 이슈가 쌓이고
-    #      resolve 경로도 없어 영구 OPEN 이 된다. backfill 은 해야 한다 — 그게 유일한 증거다.
+def test_uninstrumented_task_backfills_without_opening_ledger_gap(monkeypatch):
+    # WHY: 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음)은 attempt 결측이 **정상**이다.
+    #      LEDGER_GAP 을 열면 dedupe 키에 ECS ARN 이 들어가 런마다 새 이슈가 쌓이고 resolve
+    #      경로도 없어 영구 OPEN 이 된다. backfill 은 해야 한다 — 그게 유일한 증거다.
+    #      ALPHA-596 이 krx·dart 를 계측으로 올려 현재 카탈로그엔 instrumented=False 가 0개다.
+    #      그래도 이 분기는 남는다(FMP 되살릴 때의 문) — 합성 엔트리로 계약을 계속 고정한다.
+    import dataclasses
+
+    from data_pipeline.ops import catalog
+
+    entry = catalog.get("ETF_HOLDINGS_COLLECTION_KRX")
+    monkeypatch.setitem(catalog.CATALOG, "ETF_HOLDINGS_COLLECTION_KRX",
+                        dataclasses.replace(entry, instrumented=False))
     db = FakeOpsDB()
     _seed(db, [{"task_key": "ETF_HOLDINGS_COLLECTION_KRX", "expected_task_id": "e1", "eligible_at": _OLD}])
     _reconcile(db, history=_entered("CollectKrxEtf", arn="arn:task/krx", succeeded=True),
@@ -262,6 +271,19 @@ def test_uninstrumented_task_backfills_without_opening_ledger_gap():
     assert len(db.attempts) == 1                       # 증거로 복구는 한다
     assert db.attempts[0]["source"] == "RECONCILER_BACKFILL"
     assert db.open_issues(states.ISSUE_LEDGER_GAP) == []
+
+
+def test_instrumented_collection_missing_attempt_opens_ledger_gap():
+    # WHY: ALPHA-596 이 KRX 수집을 직접 계측으로 올린 **대가**가 이것이다 — 이제 이 작업의 attempt
+    #      결측은 정상이 아니라 결함이다(wrapper 가 썼어야 한다). 위 테스트만 있으면 플래그를
+    #      뒤집어도 "backfill 되니 괜찮다"로 통과해, 계측이 조용히 죽은 상태와 구분이 안 된다.
+    #      backfill 자체는 계속 한다 — 증거를 버리는 게 아니라 이슈를 **함께** 여는 것이다.
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "ETF_HOLDINGS_COLLECTION_KRX", "expected_task_id": "e1", "eligible_at": _OLD}])
+    _reconcile(db, history=_entered("CollectKrxEtf", arn="arn:task/krx", succeeded=True),
+               ecs=FakeEcs(tasks={"arn:task/krx": {"lastStatus": "STOPPED"}}))
+    assert db.attempts[0]["source"] == "RECONCILER_BACKFILL"
+    assert len(db.open_issues(states.ISSUE_LEDGER_GAP)) == 1
 
 
 def test_stalled_threshold_comes_from_the_catalog_entry(monkeypatch):

@@ -7,13 +7,12 @@ from pathlib import Path
 
 from data_pipeline.ops import catalog
 
-_STATEMACHINE_TF = (
-    Path(__file__).resolve().parents[5]
-    / "infra/terraform/modules/data-pipeline/statemachine.tf"
-)
+_TF_MODULE = Path(__file__).resolve().parents[5] / "infra/terraform/modules/data-pipeline"
+_STATEMACHINE_TF = _TF_MODULE / "statemachine.tf"
+_TASKS_TF = _TF_MODULE / "tasks.tf"
 # 뉴스 SFN(ALPHA-553)의 직렬 2개(NewsLoadAssertions·NewsAssembleEvents)는 여기에만 있다 —
 # 병렬 브랜치 4개는 statemachine.tf 잡 정의를 부분집합 필터로 재사용한다.
-_NEWS_PIPELINE_TF = _STATEMACHINE_TF.parent / "news_pipeline.tf"
+_NEWS_PIPELINE_TF = _TF_MODULE / "news_pipeline.tf"
 
 
 def _combined_tf() -> str:
@@ -80,12 +79,77 @@ def test_catalog_and_asl_task_states_match_both_ways():
     assert len(registered) == 27
     assert len(catalog.entries("etf-daily")) == 21
     assert len(catalog.entries("news")) == 6
-    # 자기 기록이 불가능한데도 등록한 것들 — 실패가 원장에 자리조차 없으면 안 된다(ALPHA-578).
+    # 자기 기록이 불가능한데도 등록한 것 — 실패가 원장에 자리조차 없으면 안 된다(ALPHA-578).
     # Reconciler 증거 backfill 이 기록한다. TAG_NEWS 는 게이트 멤버라 빼면 의존 판정이 거짓이
-    # 된다(뉴스 레인 복귀로 재등록 — ALPHA-591).
-    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {
-        "TAG_NEWS", "ETF_HOLDINGS_COLLECTION_KRX", "DISCLOSURE_COLLECTION_DART",
+    # 된다(뉴스 레인 복귀로 재등록 — ALPHA-591). KRX·DART 는 ALPHA-596 이 배선과 함께 승격해
+    # 이 목록에서 빠졌다 — deepseek 만 남았다.
+    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"TAG_NEWS"}
+
+
+def _taskdefs_with_db_env() -> set[str]:
+    """`tasks.tf` 에서 DB 접속 env 를 **완전히** 받는 task-def 키. host(`db_env`)와 password 둘 다
+    있어야 한다 — `DbConfig` 는 부분 주입이면 `load_settings()` 단계에서 통째로 터진다.
+    """
+    # ⚠️ 주석을 먼저 걷어낸다. 배선을 뗄 때 가장 흔한 형태가 **삭제가 아니라 주석 처리**인데,
+    # 원문을 그대로 훑으면 `# DATA_PIPELINE_DB__PASSWORD = …` 를 배선으로 세어 **가드가 정확히
+    # 놓쳐야 할 상황에서 통과**한다. 이 파일은 주석이 설명의 대부분이라 실제로 밟는 경로다.
+    # HCL 주석은 `#`·`//`·`/* */` 세 형태다 — 하나만 걷으면 나머지로 그대로 우회된다.
+    # 줄 **선두**만 보는 이유: 값 안에 `//` 가 정상적으로 들어간다(`"s3://..."`). 줄 중간까지
+    # 자르면 배선이 멀쩡한데 가드가 실패하는 **반대 방향 오류**가 나고, 잘린 `}` 가 아래 블록
+    # 매칭까지 어긋내 오탐이 엉뚱한 곳에서 터진다. 주석 처리는 실제로 줄 선두에서 일어난다.
+    # 순서가 중요하다: **줄 주석을 먼저** 걷고 그다음 블록이다. 거꾸로 하면 `#` 주석 안의
+    # `sources/*.py`(tasks.tf:24 에 실제로 있다) 가 유령 블록을 열어 그 뒤 150여 줄을 통째로
+    # 먹고, 추출 집합이 비어 엉뚱한 곳에서 터진다(아래 sanity assert 가 잡긴 한다).
+    lines = _TASKS_TF.read_text(encoding="utf-8").splitlines()
+    tf = "\n".join(ln for ln in lines if not ln.lstrip().startswith(("#", "//")))
+    tf = re.sub(r"/\*.*?\*/", "", tf, flags=re.S)
+    # env_sets 는 `key = local.db_env` 또는 `key = merge(local.db_env, {...})`.
+    host = set(re.findall(r"^\s*(\w+)\s*=\s*(?:merge\(\s*)?local\.db_env\b", tf, re.M))
+    # secret_sets 의 password 는 블록 안에 있으니 블록 단위로 본다.
+    password = {
+        m.group("key")
+        for m in re.finditer(r"^\s{4}(?P<key>\w+)\s*=\s*\{(?P<body>.*?)^\s{4}\}", tf, re.M | re.S)
+        if "DATA_PIPELINE_DB__PASSWORD" in m.group("body")
     }
+    return host & password
+
+
+def test_instrumented_entries_have_db_env_in_taskdef():
+    """WHY: `instrumented=True` 는 "이 컨테이너가 자기 원장을 쓸 수 있다"는 **주장**인데 그 근거는
+    코드가 아니라 terraform 에 있다. 어긋나면 조용히 실패한다 — wrapper 가 `settings.db is None`
+    으로 투명 통과해(`entry.ledger_from_settings`) 작업은 exit 0 인데 원장엔 PENDING 행만 남고,
+    화면은 그걸 "대기"로 굳힌다(ALPHA-596 이 고친 바로 그 상태). 게다가 Reconciler 는 이제
+    `instrumented=True` 인 attempt 결측을 LEDGER_GAP 으로 여니 거짓 이슈까지 쌓인다.
+    테스트가 없으면 다음 사람이 플래그만 뒤집고 배선을 잊어도 전부 초록이다.
+    """
+    wired = _taskdefs_with_db_env()
+    assert "kis" in wired and "rds" in wired, f"파서가 깨졌다 — 추출된 task-def: {wired}"
+
+    missing = {
+        e.task_key: e.ecs_task_definition
+        for e in catalog.entries()
+        if e.instrumented and e.ecs_task_definition not in wired
+    }
+    assert not missing, (
+        f"DB env 없는 task-def 인데 instrumented=True: {missing} — "
+        f"tasks.tf 에 db_env+DATA_PIPELINE_DB__PASSWORD 를 주거나 instrumented=False 로 내려라"
+    )
+
+    # 역방향도 잠근다. DB env 가 배선된 task-def 인데 `instrumented=False` 면 그건 **반대 방향의
+    # 거짓말**이다: 컨테이너는 attempt 를 쓸 수 있는데 Reconciler 는 그 결측을 정상으로 보고
+    # LEDGER_GAP 을 안 연다 — wrapper 가 실제로 죽어도 원장이 조용히 넘어간다. 위 단언만 두면
+    # 누가 플래그를 False 로 되돌려도 조건에서 빠져 전부 초록이라(ALPHA-596 이 지운 상태로 복귀),
+    # 이 PR 이 세운 "등록 = 직접 계측" 불변식이 테스트로 지켜지지 않는다.
+    # 미배선 task-def 의 False 는 여전히 정상이다(FMP 를 되살릴 때의 문) — 그건 위 집합 밖이다.
+    lying = {
+        e.task_key: e.ecs_task_definition
+        for e in catalog.entries()
+        if not e.instrumented and e.ecs_task_definition in wired
+    }
+    assert not lying, (
+        f"DB env 가 배선됐는데 instrumented=False: {lying} — "
+        f"계측 가능한 작업의 attempt 결측이 LEDGER_GAP 없이 묻힌다"
+    )
 
 
 # 페이즈 잡 맵의 삼중항(state·taskdef_key·command_expr). 인라인 직렬은 별도로 판다.
@@ -185,10 +249,10 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
     monkeypatch.delenv("OPS_SFN_STATE_NAME")
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
-    # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 — 계측된다(자기 기록은 불가능
-    # 하지만 instrumented=False 라 attempt 결측이 정상, Reconciler backfill 이 기록).
+    # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 — 등록됐지만 자기 기록은 불가능
+    # (instrumented=False 라 attempt 결측이 정상, Reconciler backfill 이 기록).
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
-    # KRX·공시 수집도 같다 — 등록됐지만 자기 기록은 불가능(instrumented=False, ALPHA-578).
+    # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
     assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과

@@ -659,14 +659,20 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
   (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
   이유 없는 실패 경보가 된다) ③ `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐
-  거짓 초록). TagNews·KRX ETF·DART 공시 3개는 task-def 에 DB env 가 없어 자기 attempt 를 못
-  쓰지만 등록하되 `instrumented=False` 다 — Reconciler 의 SFN·ECS 증거 backfill 이 유일·정확한
-  기록 경로라 LEDGER_GAP 을 안 연다. 빼면 수집 실패가 **원장에 자리조차 없다**(ALPHA-578 —
-  KRX 수집을 강제 종료했는데 화면에 아무것도 안 뜬 실증). 등록에 신뢰경계 변경(벤더 컨테이너에
-  RDS 접속 주입)은 필요 없다. 다만 이들은 실행 여부·성패만 얻고 `records_out`·`data_status` 는
-  못 얻는다 — exit 0 인데 부분 유실인 경우는 S3 `collection_log` 를 봐야 한다. 수집 커버리지는
-  시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
-  근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다.
+  거짓 초록). **KRX ETF·DART 공시 2개는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
+  task-def 에 DB env 를 주면서, 컨테이너 종료 즉시 판정되고 그전엔 못 얻던 `records_out`·
+  `failed_records`·`data_status` 가 함께 올라온다("벤더 컨테이너에 RDS 접속을 주는 신뢰경계
+  변경"이라는 전제는 실측 결과 이미 무너져 있었다: 실행 역할·보안그룹이 task-def 전체 공유라
+  IAM·네트워크는 그전에도 열려 있었고, `kis` 가 벤더 컨테이너면서 DB password 를 받는 반례).
+  ⚠️ **배선이 먼저, 플래그 해제가 나중** — 이미지 CD 와 terraform apply 가 독립 워크플로라
+  플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰다).
+  남은 `instrumented=False` 는 **TagNews 하나** — deepseek task-def 에 DB env 가 없어 자기
+  attempt 를 못 쓰고 Reconciler backfill 이 유일·정확한 기록 경로다(그래서 LEDGER_GAP 을 안
+  연다). 빼면 안 되는 이유는 게이트 멤버라서다. 그 하나는 실행 여부·성패만 얻고
+  `records_out`·`data_status` 는 못 얻는다 — exit 0 인데 부분 유실이면 S3 `collection_log` 를
+  봐야 한다. 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
+  근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
+  `instrumented=True`↔`tasks.tf` DB env 배선 대조 포함(어긋나면 그 작업이 조용히 계측 없이 돈다).
   MVP 3작업(ALPHA-530)이었던 것:
   `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
   canonical consumer). 종목 반복은 작업이 아니라 completeness/manifest, 개별 규칙은 quality_check.
