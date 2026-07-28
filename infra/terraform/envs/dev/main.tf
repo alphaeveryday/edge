@@ -196,7 +196,7 @@ resource "aws_wafv2_web_acl" "super_admin" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "aws-managed-common"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
@@ -218,14 +218,14 @@ resource "aws_wafv2_web_acl" "super_admin" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "aws-managed-known-bad-inputs"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "${local.prefix}-admin"
-    sampled_requests_enabled   = true
+    sampled_requests_enabled   = false
   }
 }
 
