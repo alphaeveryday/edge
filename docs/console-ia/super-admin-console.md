@@ -26,8 +26,10 @@ Super Admin Console
 
 위 화면 표면의 코드 대응물 — `AdminAuthFilter` RULES 와 1:1 이며, 엔드포인트 추가
 시 이 표와 필터에 함께 행을 더한다(매핑 없는 표면은 fail-closed 403). 운영자는
-단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답은 현재
-`mock` 패키지 반환(ALPHA-515), DB 연동 시 도메인 단위 교체.
+단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답 원천은 도메인
+단위로 DB 전환 중이다(ALPHA-515 mock 출발): tenants=JPA(ALPHA-526) ·
+sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601),
+analyses 쓰기·session 은 아직 `mock` 패키지(ALPHA-602·474).
 
 | 화면 | 엔드포인트 |
 |---|---|

@@ -64,8 +64,9 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   전이·사유 필수·감사 레코드와 함께 ALPHA-602 가 교체한다. DB 연동은 이렇게 도메인
   단위로 service 의 스토어 의존을 repository 로 교체하며 진행한다.
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
-  `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어 record)` 로 매핑해
-  반환한다(tenants=JPA entity, sources=원장 조회 record, 그 외=mock record). 스토어 형과 형식이
+  `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
+  (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
+  service 가 변환, 그 외=mock record). 원천 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다
   (admin·email·memo 는 원장 값(ALPHA-121 온보딩 기록), Sync 관측 필드(domain·
   lastSync·calls·bars)만 플레이스홀더 — 환경 어휘는 IA(PoC/Production, 구 표기는
