@@ -1,7 +1,7 @@
 # ADR-0042: sync Pull 응답을 공통 응답 포맷으로 통일 — 신규 없음 204 폐지
 
-- 상태: 제안됨
-- 날짜: 2026-07-28
+- 상태: 승인됨
+- 날짜: 2026-07-28 (채택 2026-07-28)
 
 ## 맥락
 
@@ -30,11 +30,11 @@
 
 ## 결과
 
-- **마이그레이션은 확장-수축 3단계다** (ADR-0040 T1→T2→T4 패턴 재사용, 구현 티켓은 채택 시 별도):
+- **마이그레이션은 확장-수축 3단계다** (ADR-0040 T1→T2→T4 패턴 재사용, 구현 티켓: M1=ALPHA-598 · M2=ALPHA-599 · M3=ALPHA-600):
   - **M1 — 온프렘 소비자 관용(확장):** `intake` 가 `result` 생략 200 을 "신규 없음"으로 추가 수용한다(204 수용 유지). 데모 박스 배포.
   - **M2 — cloud 생산자 전환:** `SyncBundleController` 의 204 제거, 항상 200. `openapi.yaml`·[sync-protocol.md](../contracts/sync-protocol.md)("신규 없음: 204" 조항) 동반 갱신. dev 머지 시 cloud CD 자동.
   - **M3 — 온프렘 정리(수축):** `sync-agent`(`BundleRelayService`·릴레이 204 경로)와 `intake`(`SyncAgentClient`)의 204 분기 제거 — 이후 204 수신은 계약 위반으로 표면화. 데모 박스 배포.
   - 순서 위반(M1 전에 M2) 시 데모 박스가 신규 없음 틱마다 오류를 기록한다(cursor 오염은 없으나 정상 no-op 을 오류로 오독).
 - **과도기 비용을 다시 치른다.** ADR-0040 T4로 이중형상 과도기를 막 걷어냈는데 이 변경이 다시 3단계 롤아웃(과도기 이중 수용)을 요구한다. 대면 트래픽이 없는 데모 단계가 이 비용이 가장 쌀 때라는 판단이다.
 - **screening 은 무관하다.** 신규 없음 응답은 저장되지 않으므로 `received_bundle` 저장분은 항상 `result` 가 있는 포맷이고, `DeliveryBundleParser` 의 검증(minItems=1 포함)은 불변이다.
-- **용어(채택 시):** 이후 문서·주석은 "공통 응답 포맷(`ApiResponse`)" 표기를 쓰고, 구현 단계에서 계약 문서(sync-protocol·event-bundle-schema·openapi)의 "봉투" 표기도 이 용어로 정리한다.
+- **용어:** 이후 문서·주석은 "공통 응답 포맷(`ApiResponse`)" 표기를 쓰고, 구현 단계(ALPHA-599)에서 계약 문서(sync-protocol·event-bundle-schema·openapi)의 "봉투" 표기도 이 용어로 정리한다.
