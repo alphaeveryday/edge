@@ -11,23 +11,17 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.Optional;
 
 /**
- * Cloud pull + 무결성 검증 — Sync Agent 의 전부다(ADR-0036).
- * 수신 바이트 그대로 SHA-256 을 계산해 X-Bundle-Checksum 과 대조하고(재직렬화 금지 —
- * event-bundle-schema.md 체크섬 절), 통과한 바이트·헤더를 무변형으로 넘긴다.
- * 검증 실패 시 전달하지 않는다 — 계약: 저장 없이 재시도(다음 폴링).
+ * Cloud pull + 내부망 릴레이 — Sync Agent 의 전부다(ADR-0036). 수신 바이트를 무변형으로 넘긴다.
+ * 앱 레벨 무결성(발신자 체크섬)은 목표 계약(서명)으로 이관됐고 전송 무결성은 mTLS/TLS 소관이라
+ * (ADR-0040), 이 모듈은 순수 pull + 릴레이다.
  */
 @Service
 public class BundleRelayService {
 
 	private static final Logger log = LoggerFactory.getLogger(BundleRelayService.class);
-
-	static final String CHECKSUM_HEADER = "X-Bundle-Checksum";
 
 	private final RestClient restClient;
 
@@ -35,11 +29,11 @@ public class BundleRelayService {
 		this.restClient = RestClient.create(tenantSyncApiUrl);
 	}
 
-	/** 검증 통과한 번들 바이트 + 체크섬 헤더 쌍(신형 봉투 와이어는 헤더가 없어 checksum=null). */
-	public record VerifiedBundle(byte[] body, String checksum) {
+	/** 수신한 번들 바이트. */
+	public record VerifiedBundle(byte[] body) {
 	}
 
-	/** 신규 없음(204)이면 empty. 업스트림 오류·체크섬 불일치는 예외로 표면화(fail-loud). */
+	/** 신규 없음(204)이면 empty. 업스트림 오류는 예외로 표면화(fail-loud). */
 	public Optional<VerifiedBundle> pull(long afterCursor, int limit) {
 		ResponseEntity<byte[]> response;
 		try {
@@ -71,38 +65,6 @@ public class BundleRelayService {
 					response.getStatusCode(), afterCursor);
 			throw new GeneralException(SyncAgentErrorStatus.UPSTREAM_MALFORMED);
 		}
-		byte[] body = response.getBody();
-		String checksum = response.getHeaders().getFirst(CHECKSUM_HEADER);
-		// 헤더가 있을 때만 검증한다 — 봉투 전환(ADR-0040) 후 상류는 헤더를 보내지 않는다.
-		// 헤더 없음은 통과, 형식·불일치 헤더는 여전히 거부(전송 중 오염 신호).
-		if (shouldReject(body, checksum)) {
-			log.error("번들 체크섬 불일치 after={} — 전달하지 않는다 (header={})", afterCursor, checksum);
-			throw new GeneralException(SyncAgentErrorStatus.CHECKSUM_MISMATCH);
-		}
-		return Optional.of(new VerifiedBundle(body, checksum));
-	}
-
-	/**
-	 * 검증 관문: 헤더가 있을 때만 검증한다. 헤더 없음(신형 봉투 와이어) → 통과(false),
-	 * 형식 위반·불일치 헤더 → 거부(true). checksumMatches 의 형식 시맨틱은 건드리지 않는다.
-	 */
-	static boolean shouldReject(byte[] body, String checksumHeader) {
-		return checksumHeader != null && !checksumMatches(body, checksumHeader);
-	}
-
-	/** 계약 형식 sha256=<hex> — 수신 바이트에 대한 재계산 대조. */
-	static boolean checksumMatches(byte[] body, String checksumHeader) {
-		if (checksumHeader == null || !checksumHeader.startsWith("sha256=")) {
-			return false;
-		}
-		return checksumHeader.equals("sha256=" + sha256Hex(body));
-	}
-
-	private static String sha256Hex(byte[] body) {
-		try {
-			return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
-		} catch (NoSuchAlgorithmException e) {
-			throw new IllegalStateException("SHA-256 미지원 JVM", e);
-		}
+		return Optional.of(new VerifiedBundle(response.getBody()));
 	}
 }

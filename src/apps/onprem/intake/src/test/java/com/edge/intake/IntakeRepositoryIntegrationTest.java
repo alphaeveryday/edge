@@ -19,9 +19,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class IntakeRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 
-	// received_bundle CHECK(checksum ~ '^sha256=[0-9a-f]{64}$') 를 만족하는 형식.
-	private static final String CHECKSUM = "sha256=" + "a".repeat(64);
-
 	@Autowired
 	private ReceivedBundleRepository receivedBundles;
 
@@ -42,9 +39,9 @@ class IntakeRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	void save_는_신규_cursor를_저장하고_중복_cursor는_원본을_지킨다() {
 		// WHY: at-least-once 재-Pull 은 같은 cursor_from 을 다시 보낼 수 있다 — dedup 이 없으면
 		// 원본 바이트가 덮여 감사 추적이 깨진다(ON CONFLICT DO NOTHING 으로 최초분 보존).
-		assertThat(receivedBundles.save(1, 3, CHECKSUM, "first".getBytes(StandardCharsets.UTF_8)))
+		assertThat(receivedBundles.save(1, 3, "first".getBytes(StandardCharsets.UTF_8)))
 				.isEqualTo(1);
-		assertThat(receivedBundles.save(1, 9, CHECKSUM, "second".getBytes(StandardCharsets.UTF_8)))
+		assertThat(receivedBundles.save(1, 9, "second".getBytes(StandardCharsets.UTF_8)))
 				.isEqualTo(0); // 같은 cursor_from → skip
 
 		Long rows = jdbc.queryForObject("SELECT count(*) FROM received_bundle WHERE cursor_from = 1", Long.class);
@@ -54,21 +51,6 @@ class IntakeRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 		assertThat(cursorTo).isEqualTo(3L);
 		byte[] body = jdbc.queryForObject("SELECT body FROM received_bundle WHERE cursor_from = 1", byte[].class);
 		assertThat(new String(body, StandardCharsets.UTF_8)).isEqualTo("first");
-	}
-
-	@Test
-	void relax_후_checksum_없이도_저장된다() {
-		// WHY: ADR-0040 확장 마이그레이션(V202607271500)이 received_bundle.checksum 의 NOT NULL·
-		// CHECK(^sha256=) 를 풀었다 — cloud 봉투 전환(T2) 후 X-Bundle-Checksum 헤더가 사라져 checksum
-		// 이 null 로 들어와도 INSERT 가 깨지면 안 된다. 이 제약이 살아 있으면 T2 배포가 전 번들을 거부한다.
-		int rows = jdbc.update(
-				"INSERT INTO received_bundle (cursor_from, cursor_to, body) VALUES (?, ?, ?)",
-				10L, 12L, "no-checksum".getBytes(StandardCharsets.UTF_8));
-		assertThat(rows).isEqualTo(1);
-
-		String checksum = jdbc.queryForObject(
-				"SELECT checksum FROM received_bundle WHERE cursor_from = 10", String.class);
-		assertThat(checksum).isNull();
 	}
 
 	@Test
