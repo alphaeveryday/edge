@@ -9,6 +9,18 @@ Table "actor" {
   "country_code" varchar(2)
 }
 
+Table "admin_activity_log" {
+  "activity_id" bigint [pk, increment]
+  "actor_email" text [not null]
+  "actor_name" text
+  "action" varchar(40) [not null]
+  "target_type" varchar(30) [not null]
+  "target_id" text [not null]
+  "reason" text
+  "details" jsonb
+  "created_at" timestamptz [not null]
+}
+
 Table "assertion_argument" {
   "assertion_argument_id" bigint [pk, increment]
   "assertion_id" text [not null]
