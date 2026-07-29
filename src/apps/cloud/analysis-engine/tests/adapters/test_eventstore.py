@@ -314,19 +314,30 @@ def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
     assert conn.committed  # DRAFT 도 남긴다 — 게시만 안 할 뿐 결과는 보존
 
 
-def test_duplicate_result_id_skips_fanout():
-    """같은 result_id 재실행(ON CONFLICT 무삽입)이면 발번하지 않는다 — tenant_delivery 에
-    explanation_result_id 유니크가 없어 dedup 은 이 분기가 전담한다."""
+def test_duplicate_result_id_skips_fanout_lineage_and_logs_the_drop(capsys, monkeypatch):
+    """같은 result_id 재실행(ON CONFLICT 무삽입)이면 발번도 lineage 도 하지 않는다 —
+    tenant_delivery 에 explanation_result_id 유니크가 없어 발번 dedup 은 이 분기가
+    전담하고, 이번 런의 근거를 기존 run 에 섞으면 저장된 설명이 안 본 근거가 연결된다.
+    산출물은 버려지므로 조용히 지나가면 유실이 안 보인다(Rule 12) — 로그가 남아야 한다."""
+    import psycopg2.extras
+    monkeypatch.setattr(
+        psycopg2.extras, "execute_values",
+        lambda cur, sql, rows: cur._conn.value_batches.append((sql, list(rows))),
+    )
     conn = _FakeConn(result_insert_row=None)
 
     ids = EventStore(conn).persist_explanation(
         _settings(), "inst_ETF", Explanation({"explain": "본문"}),
         route_id="rte_1", bundle=None, primary_thread_id=None,
-        events=[_event("evt_1", None)],
+        events=[_event("evt_1", "evd_1")],
     )
 
     assert not any(s.startswith("INSERT INTO tenant_delivery") for s, _ in conn.executed)
+    assert conn.value_batches == []  # 기존 run 의 lineage 를 오염시키지 않는다
     assert (ids["publication_status"], ids["fanout_tenants"]) == (None, 0)
+    out = capsys.readouterr().out
+    assert "explanation_result.duplicate_skipped" in out
+    assert "explanation_result.stored" not in out  # 무저장 런은 성공 건으로 집계 금지
 
 
 def test_fetch_without_matching_events_skips_detail_queries():

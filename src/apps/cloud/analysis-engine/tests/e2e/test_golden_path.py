@@ -177,12 +177,14 @@ def _seed_event_store(conn) -> None:
         # 재실행 격리 — 시드 마스터(instrument 등)는 남기고 런 산출물만 비운다.
         cur.execute(
             "TRUNCATE document, source_event, event_thread, price_movement_trigger,"
-            " explanation_run, release_bundle, tenant_delivery CASCADE"
+            " explanation_run, release_bundle, tenant_delivery, tenant CASCADE"
         )
         # fan-out(ALPHA-493) 대상 테넌트 — 없으면 게시만 되고 발번 0건이 된다.
+        # 2건 시드: '전 테넌트' 계약은 단일 테넌트로는 반례(LIMIT 1·첫 행만 선택 회귀)를
+        # 못 잡는다 — 테넌트마다 1행·각자 cursor=1 을 단언해야 한다(Rule 9).
         cur.execute(
             "INSERT INTO tenant (tenant_name, environment, status)"
-            " VALUES ('e2e-tenant', 'DEV', 'ACTIVE')"
+            " VALUES ('e2e-tenant-a', 'DEV', 'ACTIVE'), ('e2e-tenant-b', 'DEV', 'ACTIVE')"
             " ON CONFLICT (tenant_name) DO NOTHING"
         )
         # FK: price_movement_trigger.etf_instrument_id → etf_profile — 프로파일이 먼저다.
@@ -293,16 +295,18 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             assert primary_thread == thread_id, "엔진이 소비한 thread 가 조립 산출물과 다르다"
             assert (tdate.isoformat(), bundle) == (TRADE_DATE, BUNDLE_VERSION)
 
-            # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션에서 전 테넌트에 NEW 1행.
-            # cursor=1(테넌트별 단조 시작), NEW 는 target/reason 없음(CHECK 계약).
+            # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션에서 **전 테넌트**에
+            # NEW 1행씩, 각자 cursor=1(테넌트별 단조 시작). NEW 는 target/reason 없음(CHECK).
             cur.execute(
                 "SELECT t.tenant_name, d.cursor, d.delivery_type, d.explanation_result_id,"
                 " d.target_explanation_result_id, d.reason"
                 " FROM tenant_delivery d JOIN tenant t ON t.tenant_id = d.tenant_id"
+                " ORDER BY t.tenant_name"
             )
             assert cur.fetchall() == [
-                ("e2e-tenant", 1, "NEW", result_id, None, None)
-            ], "게시된 설명이 outbox 로 발번되지 않았다(시드 없이 sync 가 설 수 없다)"
+                ("e2e-tenant-a", 1, "NEW", result_id, None, None),
+                ("e2e-tenant-b", 1, "NEW", result_id, None, None),
+            ], "게시된 설명이 전 테넌트 outbox 로 발번되지 않았다"
 
             # 근거 lineage — 설명이 무엇을 보고 쓰였는지 되짚을 수 있어야 한다(ALPHA-603).
             # 조립이 쓴 event_evidence 까지 조인해서 확인한다: 링크만 서고 실체를 못 가리키면
@@ -366,6 +370,6 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 "재실행이 그날 두 번째 PUBLISHED 를 만들었다 — 게시 게이트 회귀"
             )
             cur.execute("SELECT count(*) FROM tenant_delivery")
-            assert cur.fetchone() == (1,), "재실행이 outbox 에 중복 NEW 를 발번했다"
+            assert cur.fetchone() == (2,), "재실행이 outbox 에 중복 NEW 를 발번했다"
     finally:
         seed_conn.close()

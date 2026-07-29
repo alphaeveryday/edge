@@ -386,7 +386,9 @@ class EventStore:
                 for event in events
                 if event.evidence_id
             ]
-            if evidence_rows:
+            # 중복 result_id(무삽입)면 lineage 도 건너뛴다 — 이번 런의 근거를 기존 run 에
+            # 섞으면 저장된 설명이 실제로 안 본 근거가 연결된다.
+            if evidence_rows and published_row is not None:
                 execute_values(
                     cur,
                     "INSERT INTO explanation_run_event_evidence (explanation_run_id,"
@@ -400,6 +402,23 @@ class EventStore:
             if publication_status == "PUBLISHED":
                 fanout_tenants = self._fanout_new(cur, result_id)
         self._conn.commit()
+        if published_row is None:
+            # 같은 result_id 재실행(같은 초·같은 route) — 기존 행이 보존되고 이번 런의
+            # 산출물은 버려졌다. 조용히 지나가면 유실이 안 보인다(Rule 12). stored 로그를
+            # 찍지 않는다 — 아무것도 저장되지 않은 런이 성공 건으로 집계되면 안 된다.
+            log(
+                "explanation_result.duplicate_skipped",
+                reason="result_id_conflict",
+                explanation_result_id=result_id,
+                trade_date=settings.trade_date.isoformat(),
+            )
+            return {
+                "persisted": "rds",
+                "explanation_result_id": result_id,
+                "run_id": run_id,
+                "publication_status": None,
+                "fanout_tenants": 0,
+            }
         log(
             "explanation_result.stored",
             explanation_result_id=result_id,

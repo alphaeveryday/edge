@@ -23,7 +23,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 ```
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
-- **그날 첫 결과만 게시·발번한다** — 같은 (ETF, trade_date) 재실행은 DRAFT 보존 + 발번 생략(`publish_skipped` 로그). WITHDRAWN 후 재게시(CORRECTION 발번)는 후속 티켓 몫.
+- **그날 첫 결과만 게시·발번한다** — 같은 (ETF, trade_date) 재실행은 DRAFT 보존 + 발번 생략(`publish_skipped` 로그). 같은 초 재실행은 결정적 ID 가 같아 멱등 skip 이다(기존 행 보존, `duplicate_skipped` 로그). WITHDRAWN 후 재게시(CORRECTION 발번)는 후속 티켓 몫.
 - **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
 
 ## 구조
