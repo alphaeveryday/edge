@@ -1,8 +1,6 @@
 package com.edge.tenantconsole.repository;
 
-import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
-import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
 import com.edge.tenantconsole.service.ExplanationService;
@@ -14,14 +12,13 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * explanations 실전환(ALPHA-607)의 DB 계약을 실 Postgres 로 검증한다 — 손 대역이 우회하는
+ * explanations 읽기 표면(ALPHA-607)의 DB 계약을 실 Postgres 로 검증한다 — 손 대역이 우회하는
  * 실제 의미가 WHY(Rule 9): evidences JSONB 파싱, 검수 사유 파생(screening_check REVIEW·BLOCK
  * → rule_type→UI 어휘), 최종 문구의 publication.published_summary 스냅샷, 상태 필터
- * (RECEIVED·CORRECTED 제외), 반입 집계. 쓰기는 아직 mock 이라 원장 ID 는 404 라는 슬라이스
- * 경계도 함께 드러낸다(쓰기 전환에서 깨져야 정상). 시드는 테스트 한정 JdbcTemplate, id 는
+ * (RECEIVED·CORRECTED 제외), 반입 집계. 쓰기 표면(사후 운영 전이·감사)의 DB 계약은
+ * ExplanationWriteIT 가 담당한다(ALPHA-613). 시드는 테스트 한정 JdbcTemplate, id 는
  * it607- 접두로 격리하고, 목록은 공유 컨테이너 오염을 피해 내 id 로만 단언한다.
  */
 class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
@@ -231,22 +228,4 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		assertThat(feed.state()).isEqualTo(FeedStatus.NORMAL);   // 방금 반입 → 정상
 	}
 
-	@Test
-	void 실_설명_ID_쓰기는_아직_404다() {
-		// WHY: 읽기는 원장, 쓰기는 mock — 실 ID 는 mock 에 없어 404 다. 이 테스트는 쓰기
-		// 전환(원장 전이)에서 깨져야 정상이다. 조용한 성공 둔갑 방지(Rule 12).
-		seedItem("it607-write", "607WRT", "SK하이닉스", "AUTO_PUBLISHED", "LOW", "요약", "[]",
-				OffsetDateTime.now());
-
-		assertThatThrownBy(() -> explanations.stop("it607-write"))
-				.isInstanceOfSatisfying(GeneralException.class,
-						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
-	}
-
-	@Test
-	void 쓰기_입력_검증은_원장_조회_전에_400이다() {
-		assertThatThrownBy(() -> explanations.updateFinal("it607-any", ""))
-				.isInstanceOfSatisfying(GeneralException.class,
-						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.INVALID_REQUEST));
-	}
 }

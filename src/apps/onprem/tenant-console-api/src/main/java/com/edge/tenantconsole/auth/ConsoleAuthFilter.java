@@ -72,11 +72,10 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			// dashboard 조회 — 실 원장 조회(serving_request_metric, ALPHA-128).
 			// permission-matrix.md "Dashboard 트래픽 KPI" 행: 전 역할.
 			new Rule("GET", Pattern.compile("/api/v1/dashboard/traffic"), ANY_ROLE),
-			// explanations 실전환(ALPHA-607) — mock 완화를 벗어나 permission-matrix.md 의
-			// 실 권한을 적용한다: 조회는 전 역할, 최종 문구 수정은 CR, 노출 축소 조치
-			// (이관·중단)는 CR·OP. 화면에 없는 approve·reject·draft(ALPHA-513 잔재)는
-			// 제거됐다(현황판+사후 운영으로 역할 재정리, ALPHA-613). 쓰기는 아직 mock
-			// (원장 ID 는 404)이나 권한 경계는 매트릭스에 맞춰 좁힌다(전이는 ALPHA-613 이 채운다).
+			// explanations 실전환(ALPHA-607 읽기·613 쓰기) — permission-matrix.md 의 실
+			// 권한을 적용한다: 조회는 전 역할, 최종 문구 정정은 CR, 노출 축소 조치(이관·중단)는
+			// CR·OP. 화면에 없는 approve·reject·draft(ALPHA-513 잔재)는 제거됐다(현황판+사후
+			// 운영으로 역할 재정리, ALPHA-613). 쓰기 3종은 원장 전이·감사로 실전환됐다.
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), COMPLIANCE_REVIEWER_ONLY),

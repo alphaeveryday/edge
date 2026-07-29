@@ -29,7 +29,8 @@ export function useExplanationActions() {
     onSuccess: invalidate,
   });
   const stop = useMutation({
-    mutationFn: (id: string) => explanationsRepository.stop(id),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      explanationsRepository.stop(id, reason),
     onSuccess: invalidate,
   });
   const moveToReview = useMutation({

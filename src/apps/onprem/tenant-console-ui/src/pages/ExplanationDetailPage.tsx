@@ -21,6 +21,8 @@ export function ExplanationDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [stopping, setStopping] = useState(false);
+  const [stopReason, setStopReason] = useState('');
 
   if (isError) return <LoadError />;
   if (isLoading) return null;
@@ -75,7 +77,8 @@ export function ExplanationDetailPage() {
         </div>
         <div className="flex-1" />
         <div className="flex gap-2">
-          {canEditFinal && (
+          {/* 최종 문구는 게시본(published_summary)을 정정하므로 노출 중일 때만 — 미게시 건은 API 가 409 */}
+          {canEditFinal && PUBLISHED_STATUSES.includes(it.status) && (
             <button
               className="btn"
               onClick={() => {
@@ -100,19 +103,59 @@ export function ExplanationDetailPage() {
           )}
           {/* 실제 노출 중인 상태에서만 — 검수 대기·차단·반려 건은 승인/반려 플로우를 우회하지 않게 */}
           {canReduceExposure && PUBLISHED_STATUSES.includes(it.status) && (
-            <button
-              className="btn btn-danger"
-              onClick={() =>
-                stop.mutate(it.id, {
-                  onSuccess: () => toast(`${it.name} 설명 제공이 중단되었습니다.`),
-                })
-              }
-            >
+            <button className="btn btn-danger" onClick={() => setStopping(true)}>
               제공 중단
             </button>
           )}
         </div>
       </div>
+
+      {/* 제공 중단 사유 — 필수(감사·publication unpublish_reason). ReviewDetailPage 반려/차단 사유 패턴 이식 */}
+      {stopping && (
+        <div className="card card-pad flex flex-col gap-2">
+          <span className="t-label">제공 중단 사유</span>
+          <textarea
+            className="textarea"
+            rows={3}
+            placeholder="중단 사유를 입력하세요 — 감사 기록에 남습니다."
+            value={stopReason}
+            onChange={(e) => setStopReason(e.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              className="btn btn-sm"
+              onClick={() => {
+                setStopping(false);
+                setStopReason('');
+              }}
+            >
+              취소
+            </button>
+            <button
+              className="btn btn-sm btn-danger"
+              onClick={() => {
+                const reason = stopReason.trim();
+                if (!reason) {
+                  toast('제공 중단 사유를 입력하세요.');
+                  return;
+                }
+                stop.mutate(
+                  { id: it.id, reason },
+                  {
+                    onSuccess: () => {
+                      setStopping(false);
+                      setStopReason('');
+                      toast(`${it.name} 설명 제공이 중단되었습니다.`);
+                    },
+                  },
+                );
+              }}
+            >
+              제공 중단
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head">

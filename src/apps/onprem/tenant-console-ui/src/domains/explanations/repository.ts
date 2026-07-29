@@ -8,8 +8,8 @@ export interface ExplanationsRepository {
   feedStatus(): Promise<FeedStatus>;
   /** 최종 제공 문구 수정 (상세 화면) */
   updateFinal(id: string, final: string): Promise<void>;
-  /** 제공 중단 (운영자 수동) */
-  stop(id: string): Promise<void>;
+  /** 제공 중단 (운영자 수동) — 사유 필수 (감사·publication unpublish_reason) */
+  stop(id: string, reason: string): Promise<void>;
   /** 점검 차단 건을 검수 대기열로 이관 */
   moveToReview(id: string): Promise<void>;
 }

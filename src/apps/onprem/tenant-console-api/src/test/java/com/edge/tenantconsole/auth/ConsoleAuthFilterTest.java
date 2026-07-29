@@ -87,6 +87,16 @@ class ConsoleAuthFilterTest {
 				String publishedSummary) {
 			return 1;
 		}
+
+		@Override
+		public int updatePublishedSummary(String analysisItemId, String publishedSummary) {
+			return 1;
+		}
+
+		@Override
+		public int unpublish(String analysisItemId, String reason, Long memberId) {
+			return 1;
+		}
 	}
 
 	/** 원장 대역 — 이메일→현재 role 맵에 있으면 활성 계정(id 1 고정), 없으면 비활성/삭제(Optional.empty). */
@@ -481,6 +491,20 @@ class ConsoleAuthFilterTest {
 		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(OPERATOR)))
 				.andExpect(status().isNotFound());
 		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
+	}
+
+	@Test
+	void explanations_삭제된_액션은_인증돼도_403이다() throws Exception {
+		// WHY: approve·reject·draft(ALPHA-513 잔재)는 표면째 제거됐다(ALPHA-613) —
+		// permission-matrix.md 에 행이 없어 fail-closed(매핑 없는 표면 = 403)로 막힌다.
+		// CR 로 인증해도 라우트가 없으므로 통과(404)가 아니라 거부(403)여야 한다.
+		mvc.perform(post("/api/v1/explanations/expr-1/approve").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/explanations/expr-1/reject").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden());
+		mvc.perform(patch("/api/v1/explanations/expr-1/draft").session(sessionOf(REVIEWER)))
 				.andExpect(status().isForbidden());
 	}
 
