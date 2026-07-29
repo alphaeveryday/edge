@@ -1,6 +1,6 @@
 // 가상 MTS 화면 — 홈·검색·종목상세 3화면 (수령 디자인 KODEX 반도체 AI 분석.dc.html 번역, ALPHA-485).
-// AI 분석 탭만 BrokerApi(증권사 자체 API)를 호출하고, 시세·호가·뉴스 등 나머지는
-// 증권사 자체 데이터라는 전제로 화면 고정값(목업)을 쓴다.
+// AI 분석 탭과 시세(지수·관심종목·상세 헤더 가격)는 BrokerApi(증권사 자체 API)를 호출하고,
+// 호가·차트·뉴스 등 나머지는 증권사 자체 데이터라는 전제로 화면 고정값(목업)을 쓴다.
 (function () {
   'use strict';
 
@@ -8,21 +8,45 @@
   var DOWN = '#1d4ed8';
   var FLAT = '#71717a';
 
-  // 증권사 자체 종목 마스터(목업) — Publication API와 무관한 증권사 데이터.
+  // 시세(지수·관심종목)는 BrokerApi 경유 실데이터다 — 서버에서 숫자만 받고
+  // 표기(화살표·색·등락률·천단위)는 여기서 파생해 손 편집 불일치를 없앤다.
+  // 종목 유니버스(이름·ETF 여부)는 mock-broker 의 quotes-fallback.json 이 SSOT.
   // AI 분석 탭의 실제 상태는 온프렘 시드가 결정한다: 091160·069500=200, 305720=204, 비 ETF=404.
-  var STOCKS = [
-    { ticker: '091160', name: 'KODEX 반도체', code: '091160 · ETF', price: '132,230', chg: '▼ −9.49%', chgDetail: '▼ −13,870 (−9.49%)', color: DOWN },
-    { ticker: '069500', name: 'KODEX 200', code: '069500 · ETF', price: '108,000', chg: '▼ −3.48%', chgDetail: '▼ −3,890 (−3.48%)', color: DOWN },
-    { ticker: '305720', name: 'KODEX 2차전지산업', code: '305720 · ETF', price: '89,450', chg: '▲ +1.12%', chgDetail: '▲ +990 (+1.12%)', color: UP },
-    { ticker: '005930', name: '삼성전자', code: '005930', price: '255,000', chg: '▼ −4.85%', chgDetail: '▼ −13,000 (−4.85%)', color: DOWN },
-    { ticker: '000660', name: 'SK하이닉스', code: '000660', price: '1,921,000', chg: '▼ −8.72%', chgDetail: '▼ −183,500 (−8.72%)', color: DOWN },
-    { ticker: '133690', name: 'TIGER 미국나스닥100', code: '133690 · ETF', price: '186,800', chg: '▼ −1.94%', chgDetail: '▼ −3,700 (−1.94%)', color: DOWN },
-  ];
+  function fmtNum(n, decimals) {
+    return n.toLocaleString('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
 
-  var INDICES = [
-    { name: '코스피', value: '6,608.42', chg: '▼ −3.62%', color: DOWN },
-    { name: '코스닥', value: '788.15', chg: '▼ −2.41%', color: DOWN },
-  ];
+  // price=현재가, change=전일대비(부호 포함) → 표기 문자열·색 파생
+  function deriveChange(price, change, decimals) {
+    var prev = price - change;
+    var pct = prev ? (change / prev) * 100 : 0;
+    var arrow = change > 0 ? '▲ ' : change < 0 ? '▼ ' : '';
+    var sign = change > 0 ? '+' : change < 0 ? '−' : '';
+    var pctText = sign + Math.abs(pct).toFixed(2) + '%';
+    return {
+      color: change > 0 ? UP : change < 0 ? DOWN : FLAT,
+      chg: arrow + pctText,
+      chgDetail: arrow + sign + fmtNum(Math.abs(change), decimals) + ' (' + pctText + ')',
+    };
+  }
+
+  function stockView(q) {
+    var d = deriveChange(q.price, q.change, 0);
+    return {
+      ticker: q.ticker,
+      name: q.name,
+      code: q.ticker + (q.etf ? ' · ETF' : ''),
+      price: fmtNum(q.price, 0),
+      chg: d.chg,
+      chgDetail: d.chgDetail,
+      color: d.color,
+    };
+  }
+
+  function indexView(q) {
+    var d = deriveChange(q.value, q.change, 2);
+    return { name: q.name, value: fmtNum(q.value, 2), chg: d.chg, color: d.color };
+  }
 
   var TABS = ['호가', '차트', '뉴스·공시', 'AI 분석', '종목정보', '커뮤니티', '재무'];
   var AI_TAB = 'AI 분석';
@@ -83,7 +107,8 @@
   ];
 
   var state = {
-    stock: null,        // STOCKS 항목(또는 미지 티커의 임시 항목)
+    quotes: null,       // BrokerApi.getQuotes 응답 data — { indices, stocks } (숫자 원본)
+    stock: null,        // stockView 항목(또는 미지 티커의 임시 항목)
     tradeDate: null,    // 딥링크 ?trade_date= 전달값
     activeTab: '차트',
     fav: false,
@@ -122,9 +147,12 @@
   // ── 홈 ──────────────────────────────────────────────────────────
 
   function renderHome() {
+    if (!state.quotes) {
+      return;
+    }
     var grid = el('home-indices');
     grid.textContent = '';
-    INDICES.forEach(function (ix) {
+    state.quotes.indices.map(indexView).forEach(function (ix) {
       var card = document.createElement('div');
       card.style.cssText = 'border:1px solid #e4e4e7;border-radius:8px;padding:12px';
       card.innerHTML =
@@ -137,7 +165,7 @@
       card.children[2].style.color = ix.color;
       grid.appendChild(card);
     });
-    renderStockRows(el('home-watchlist'), STOCKS.slice(0, 4));
+    renderStockRows(el('home-watchlist'), state.quotes.stocks.slice(0, 4).map(stockView));
   }
 
   // 관심종목·검색 결과 공용 행 — 탭하면 종목 상세로
@@ -170,11 +198,12 @@
 
   function renderSearch() {
     var q = el('search-input').value.trim().toLowerCase();
+    var views = state.quotes ? state.quotes.stocks.map(stockView) : [];
     var filtered = q
-      ? STOCKS.filter(function (s) {
+      ? views.filter(function (s) {
           return s.name.toLowerCase().indexOf(q) !== -1 || s.code.indexOf(q) !== -1;
         })
-      : STOCKS;
+      : views;
     el('search-section-label').textContent = q ? '검색 결과' : '인기 검색 종목';
     renderStockRows(el('search-results'), filtered);
     el('search-no-results').style.display = q && filtered.length === 0 ? 'block' : 'none';
@@ -237,7 +266,7 @@
     bell.setAttribute('stroke', state.alertOn ? '#e0a800' : '#71717a');
   }
 
-  // ── AI 분석 탭 — 유일한 실데이터 경로 (BrokerApi 경유) ─────────
+  // ── AI 분석 탭 — BrokerApi 경유 실데이터 경로 ──────────────────
 
   function fetchAiAnalysis() {
     var seq = ++state.aiRequestSeq;
@@ -477,7 +506,6 @@
     showToast(state.alertOn ? '가격 알림이 설정되었습니다' : '가격 알림이 해제되었습니다');
   });
 
-  renderHome();
   renderBook();
   renderChart();
   renderNews();
@@ -485,16 +513,54 @@
   renderTalk();
   renderFin();
 
+  // 시세 조회 → 홈·종목상세 헤더 반영. 응답 data 부재(래퍼 폴백)면 마지막 화면을 유지한다.
+  function refreshQuotes() {
+    return window.BrokerApi.getQuotes().then(function (result) {
+      if (!result || !result.data) {
+        return;
+      }
+      state.quotes = result.data;
+      renderHome();
+      if (el('screen-search').classList.contains('active')) {
+        renderSearch(); // 첫 조회 실패 중 검색을 열었다가 복구된 경우까지 채운다
+      }
+      if (state.stock) {
+        var fresh = state.quotes.stocks.filter(function (q) {
+          return q.ticker === state.stock.ticker;
+        })[0];
+        if (fresh) {
+          state.stock = stockView(fresh);
+          // 이름·코드까지 갱신 — 실패 중 딥링크로 연 '알 수 없는 종목' 헤더가 복구되게
+          el('st-name').textContent = state.stock.name;
+          el('st-code').textContent = state.stock.code;
+          el('st-price').textContent = state.stock.price;
+          el('st-chg').textContent = state.stock.chgDetail;
+          el('st-chg').style.color = state.stock.color;
+        }
+      }
+    });
+  }
+
+  // 첫 시세를 받은 뒤 홈을 그리고 딥링크를 처리한다. 폴링 등록은 첫 조회 성패와 무관하다 —
+  // 첫 조회가 실패해도(예: 정적은 S3, /api 오리진만 장애) 폴링 주기가 살아 복구 시 화면이 채워진다.
   // 데모 조작 딥링크: ?ticker=·?trade_date= 가 있으면 종목 상세의 AI 분석 탭으로 직행한다.
   // 시나리오 표는 README 참조 (091160·069500=200, 305720=204, 미지 코드=404, 형식 오류=400→폴백).
-  var params = new URLSearchParams(location.search);
-  var ticker = params.get('ticker');
-  var tradeDate = params.get('trade_date');
-  if (ticker || tradeDate) {
-    ticker = ticker || '069500';
-    var found = STOCKS.filter(function (s) {
-      return s.ticker === ticker;
-    })[0];
-    openStock(found || { ticker: ticker, name: '알 수 없는 종목', code: ticker, price: '—', chg: '', chgDetail: '', color: FLAT }, tradeDate, AI_TAB);
-  }
+  refreshQuotes()
+    .catch(function (err) {
+      console.warn('[app] 초기 시세 반영 실패', err);
+    })
+    .then(function () {
+      var params = new URLSearchParams(location.search);
+      var ticker = params.get('ticker');
+      var tradeDate = params.get('trade_date');
+      if (ticker || tradeDate) {
+        ticker = ticker || '069500';
+        var found = (state.quotes ? state.quotes.stocks : []).filter(function (q) {
+          return q.ticker === ticker;
+        })[0];
+        openStock(found ? stockView(found) : { ticker: ticker, name: '알 수 없는 종목', code: ticker, price: '—', chg: '', chgDetail: '', color: FLAT }, tradeDate, AI_TAB);
+      }
+    });
+  // 서버 캐시 TTL(7초)보다 길게 — 폴링마다 캐시 만료가 보장돼 실효 갱신 주기가 14초로 늘지 않는다
+  setInterval(refreshQuotes, 8000);
 })();

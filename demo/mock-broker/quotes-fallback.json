@@ -1,0 +1,14 @@
+{
+  "indices": [
+    { "code": "KOSPI", "name": "코스피", "value": 6608.42, "change": -248.21 },
+    { "code": "KOSDAQ", "name": "코스닥", "value": 788.15, "change": -19.46 }
+  ],
+  "stocks": [
+    { "ticker": "091160", "name": "KODEX 반도체", "etf": true, "price": 132230, "change": -13870 },
+    { "ticker": "069500", "name": "KODEX 200", "etf": true, "price": 108000, "change": -3890 },
+    { "ticker": "305720", "name": "KODEX 2차전지산업", "etf": true, "price": 89450, "change": 990 },
+    { "ticker": "005930", "name": "삼성전자", "etf": false, "price": 255000, "change": -13000 },
+    { "ticker": "000660", "name": "SK하이닉스", "etf": false, "price": 1921000, "change": -183500 },
+    { "ticker": "133690", "name": "TIGER 미국나스닥100", "etf": true, "price": 186800, "change": -3700 }
+  ]
+}
