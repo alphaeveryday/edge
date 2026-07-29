@@ -147,8 +147,10 @@ module "super_admin_api" {
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
     # 부트스트랩 운영자 활성화(ALPHA-618) — 미주입 시 활성 계정 0(fail-closed 로그인 불가).
-    # apply 는 task-def 새 리비전(baseline)만 등록한다 — 실행 서비스 반영은 수동 update-service
-    # 1회 또는 다음 CD 롤아웃(CD 가 family 최신 리비전을 복제하므로 이후 자연 승계).
+    # apply 는 task-def 새 리비전(baseline)만 등록한다 — 실행 서비스 반영은 CD 롤아웃이 한다
+    # (CD 가 family 최신 리비전을 복제해 이미지만 교체 → 시크릿 자연 승계). baseline 을
+    # update-service 로 직접 굴리지 마라 — 이미지가 tfvars 핀(생성 기준선)이라 실행 중인
+    # semver 이미지를 되돌린다(infra/terraform/README "이미지 태그" 참조).
     ADMIN_BOOTSTRAP_OPERATOR_PASSWORD = "${data.aws_secretsmanager_secret.admin_bootstrap_operator.arn}:password::"
   }
   secret_arns = [
