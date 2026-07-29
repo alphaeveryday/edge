@@ -536,7 +536,8 @@ module "super_admin_site" {
   # 의 오리진 인증서 검증(SNI)이 *.edgesignal.dev ACM 과 일치해야 해서다. 콘솔 SPA 와
   # same-origin 이 되어 세션 쿠키(JSESSIONID, Secure·SameSite=Strict)가 실린다.
   # 쓰기 API(POST login·PATCH 정정 등)라 메서드는 7종 전체.
-  # spa=true 의 403/404→index.html 마스킹이 /api/* 에도 적용되나 미인증은 401(통과)이라 수용.
+  # SPA fallback 은 CF Function(default behavior 한정)이라 /api/* 의 403/404 JSON 도
+  # 왜곡 없이 통과한다(ALPHA-617 — 구 custom_error_response 마스킹 해소).
   api_origin_domain   = var.admin_api_domain
   api_origin_protocol = "https-only"
   api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
