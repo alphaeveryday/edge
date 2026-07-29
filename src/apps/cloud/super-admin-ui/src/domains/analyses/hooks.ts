@@ -18,12 +18,13 @@ export function useAnalysisActions() {
   const invalidate = () => qc.invalidateQueries({ queryKey: KEY });
 
   const correct = useMutation({
-    mutationFn: ({ id, result }: { id: string; result: string }) =>
-      analysesRepository.correct(id, result),
+    mutationFn: ({ id, result, reason }: { id: string; result: string; reason: string }) =>
+      analysesRepository.correct(id, result, reason),
     onSuccess: invalidate,
   });
   const exclude = useMutation({
-    mutationFn: (id: string) => analysesRepository.exclude(id),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      analysesRepository.exclude(id, reason),
     onSuccess: invalidate,
   });
   const restore = useMutation({
