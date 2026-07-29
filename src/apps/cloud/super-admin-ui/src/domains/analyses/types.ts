@@ -38,6 +38,10 @@ export interface Analysis {
   corrected: boolean;
   result: string;
   evidence: AnalysisEvidence[];
-  /** 이 분석의 근거 총 건수 — evidence 는 표시 상한까지만 담기므로 더 클 수 있다 */
-  evidenceTotal: number;
+  /**
+   * 이 분석의 근거 총 건수 — evidence 는 표시 상한까지만 담기므로 더 클 수 있다.
+   * optional 인 이유는 UI·API 가 따로 배포돼 **총 건수를 아직 안 주는 응답**을 만날 수
+   * 있어서다 — 타입이 필수라고 말하면 소비자가 폴백 없이 숫자로 다뤄 NaN 이 새어 나간다.
+   */
+  evidenceTotal?: number;
 }
