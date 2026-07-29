@@ -29,20 +29,16 @@
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**`instrumented=False` 는 이제 `TagNews` 하나뿐이다**(ALPHA-596 이 krx·dart 를 승격). deepseek
-task-def 에 DB env 가 없어 그 컨테이너는 자기 attempt 를 못 쓰고, Reconciler 의 SFN·ECS 증거
-backfill 이 유일하지만 정확한 기록 경로다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을
-열지 않는다). 빼지 않고 등록하는 이유는 **NewsFeatureCheckResults 게이트의 멤버**라서다.
+**`instrumented=False` 는 이제 `TagNews` 하나뿐이다**(ALPHA-596 이 krx·dart 를 승격). 이
+컨테이너는 아직 자기 attempt 를 못 쓰고, Reconciler 의 SFN·ECS 증거 backfill 이 유일하지만
+정확한 기록 경로다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다). 빼지 않고
+등록하는 이유는 **NewsFeatureCheckResults 게이트의 멤버**라서다.
 
-krx·dart 를 풀 때 근거로 삼았던 것: "벤더 API 컨테이너에 RDS 접속을 주는 신뢰경계 변경이 전제"
-라는 서술이 **IAM·네트워크 층에서 이미 무너져 있었다**. 실행 역할이 task-def 전체 공유라
-`iam.tf` 가 DB 시크릿을 이미 허용하고, 보안그룹도 하나라 두 컨테이너는 그전에도 RDS 에 닿았다.
-결정적으로 `kis` 가 반례다 — 벤더 API 컨테이너인데 DB password 를 받는다. 즉 경계는 신뢰경계
-판단의 결과가 아니라 ALPHA-530 MVP 슬라이스가 고른 순서의 잔재였다. TagNews 도 같은 두 줄이면
-풀리지만, 그건 뉴스 레인 소관이라 이 티켓 범위 밖이다.
-
-원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
-않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
+⏭ **deepseek task-def 의 DB env 배선은 ALPHA-610 이 이미 넣었다 — 플래그 전환만 남았다.**
+배선과 플래그를 한 배포에 묶을 수 없어서다: 이미지 CD 와 terraform-apply 가 독립 워크플로라
+플래그가 먼저 뜨면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다(ALPHA-596 이 #359→#362 로
+쪼갠 것과 같은 이유). 그동안 역방향 드리프트 가드는 `test_ops_catalog._WIRING_AHEAD_OF_FLAG` 로
+유예되고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다.
 
 ⚠️ **`instrumented=True` 는 task-def 에 DB env 가 있다는 주장이다.** 없는 task-def 에 True 를
 달면 wrapper 가 `load_settings()` 단계에서 db 섹션 없이 뜨고, 그 작업은 **PENDING 행만 남긴 채

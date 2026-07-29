@@ -135,6 +135,10 @@ locals {
     rds_dart = local.db_env
     krx      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
     dart     = local.db_env
+    # TAG_NEWS wrapper 기록용(ALPHA-610) — 위 krx·dart 와 같은 이유. 이 컨테이너는 기사별 LLM
+    # 실패를 격리해 exit 0 으로 끝나므로, 원장이 봉투(failed_records)를 읽지 못하면 전건 실패도
+    # 초록으로 보인다. **배선만 하는 배포다** — 카탈로그 플래그 전환은 다음 PR 이다(아래 참조).
+    deepseek = local.db_env
   }
 
   secret_sets = {
@@ -183,6 +187,9 @@ locals {
     # 주입하지 않는다.
     deepseek = {
       LLM_API_KEY = "${var.deepseek_secret_arn}:api_key::"
+      # TAG_NEWS wrapper 가 원장에 기록하려면 DB password 도 필요하다(ALPHA-610). host-env 는
+      # 위 env_sets.deepseek — 부분 주입이면 load_settings() 가 통째로 터진다.
+      DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
     rds = {
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"

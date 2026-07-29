@@ -86,6 +86,22 @@ def test_catalog_and_asl_task_states_match_both_ways():
     assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"TAG_NEWS"}
 
 
+# **배선이 플래그보다 한 배포 앞선** 작업(task_key). 비어 있는 것이 정상 상태다.
+#
+# WHY: 이미지 CD(deploy-data-pipeline.yml)와 terraform-apply.yml 은 같은 dev push 에서 **독립
+# 실행**돼 순서 보장이 없고, task-def 는 mutable `data-pipeline-latest` 를 참조한다. 배선과
+# 플래그를 한 PR 에 묶으면 이미지가 먼저 뜨는 순서에서 새 카탈로그(instrumented=True)가 DB env
+# 없는 옛 task revision 위에서 돌고, Reconciler 가 그 attempt 결측에 **LEDGER_GAP 을 연다**
+# (reconciler.py — resolve 경로가 없어 영구 OPEN 이다). 그래서 ALPHA-596(#359→#362)처럼 배선을
+# 한 배포 앞세운다.
+#
+# 이 유예는 그 한 배포 동안만 유효하다 — 다음 PR 이 플래그를 올리며 여기서 지운다. 잊어도
+# 조용히 넘어가지 않게 **만료 단언**을 함께 둔다(아래 `stale`): 플래그가 올라가는 순간 이
+# 목록이 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는
+# 다른 작업까지 덩달아 면제되지 않게 하기 위해서다.
+_WIRING_AHEAD_OF_FLAG = {"TAG_NEWS"}  # ALPHA-610 PR2 에서 제거
+
+
 def _taskdefs_with_db_env() -> set[str]:
     """`tasks.tf` 에서 DB 접속 env 를 **완전히** 받는 task-def 키. host(`db_env`)와 password 둘 다
     있어야 한다 — `DbConfig` 는 부분 주입이면 `load_settings()` 단계에서 통째로 터진다.
@@ -146,6 +162,16 @@ def test_instrumented_entries_have_db_env_in_taskdef():
         for e in catalog.entries()
         if not e.instrumented and e.ecs_task_definition in wired
     }
+    # 유예는 **스스로 만료한다**. 주석으로 "다음 PR 에서 지워라"만 적으면 안 지워도 초록이고,
+    # 그 task_key 는 역방향 가드에서 영구 제외된다 — 플래그가 False 로 회귀해도 아무도 모른다.
+    # 그래서 유예 항목이 실제로 위반 상태일 때만 유효하다고 단언한다: 플래그를 올리는 순간
+    # 그 키가 `lying` 에서 빠져 **유예 자체가 실패로 드러난다**(제거를 강제하는 코드다).
+    stale = _WIRING_AHEAD_OF_FLAG - set(lying)
+    assert not stale, (
+        f"만료된 유예: {stale} — 배선·플래그가 이미 일치한다. "
+        f"_WIRING_AHEAD_OF_FLAG 에서 지워 역방향 가드를 되살려라"
+    )
+    lying = {k: v for k, v in lying.items() if k not in _WIRING_AHEAD_OF_FLAG}
     assert not lying, (
         f"DB env 가 배선됐는데 instrumented=False: {lying} — "
         f"계측 가능한 작업의 attempt 결측이 LEDGER_GAP 없이 묻힌다"
