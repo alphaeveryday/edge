@@ -521,12 +521,18 @@
       }
       state.quotes = result.data;
       renderHome();
+      if (el('screen-search').classList.contains('active')) {
+        renderSearch(); // 첫 조회 실패 중 검색을 열었다가 복구된 경우까지 채운다
+      }
       if (state.stock) {
         var fresh = state.quotes.stocks.filter(function (q) {
           return q.ticker === state.stock.ticker;
         })[0];
         if (fresh) {
           state.stock = stockView(fresh);
+          // 이름·코드까지 갱신 — 실패 중 딥링크로 연 '알 수 없는 종목' 헤더가 복구되게
+          el('st-name').textContent = state.stock.name;
+          el('st-code').textContent = state.stock.code;
           el('st-price').textContent = state.stock.price;
           el('st-chg').textContent = state.stock.chgDetail;
           el('st-chg').style.color = state.stock.color;
@@ -535,20 +541,26 @@
     });
   }
 
-  // 첫 시세를 받은 뒤 홈을 그리고 딥링크를 처리한다 — 이후 7초 주기 갱신(서버 캐시 TTL 과 동일).
+  // 첫 시세를 받은 뒤 홈을 그리고 딥링크를 처리한다. 폴링 등록은 첫 조회 성패와 무관하다 —
+  // 첫 조회가 실패해도(예: 정적은 S3, /api 오리진만 장애) 폴링 주기가 살아 복구 시 화면이 채워진다.
   // 데모 조작 딥링크: ?ticker=·?trade_date= 가 있으면 종목 상세의 AI 분석 탭으로 직행한다.
   // 시나리오 표는 README 참조 (091160·069500=200, 305720=204, 미지 코드=404, 형식 오류=400→폴백).
-  refreshQuotes().then(function () {
-    var params = new URLSearchParams(location.search);
-    var ticker = params.get('ticker');
-    var tradeDate = params.get('trade_date');
-    if (ticker || tradeDate) {
-      ticker = ticker || '069500';
-      var found = (state.quotes ? state.quotes.stocks : []).filter(function (q) {
-        return q.ticker === ticker;
-      })[0];
-      openStock(found ? stockView(found) : { ticker: ticker, name: '알 수 없는 종목', code: ticker, price: '—', chg: '', chgDetail: '', color: FLAT }, tradeDate, AI_TAB);
-    }
-    setInterval(refreshQuotes, 7000);
-  });
+  refreshQuotes()
+    .catch(function (err) {
+      console.warn('[app] 초기 시세 반영 실패', err);
+    })
+    .then(function () {
+      var params = new URLSearchParams(location.search);
+      var ticker = params.get('ticker');
+      var tradeDate = params.get('trade_date');
+      if (ticker || tradeDate) {
+        ticker = ticker || '069500';
+        var found = (state.quotes ? state.quotes.stocks : []).filter(function (q) {
+          return q.ticker === ticker;
+        })[0];
+        openStock(found ? stockView(found) : { ticker: ticker, name: '알 수 없는 종목', code: ticker, price: '—', chg: '', chgDetail: '', color: FLAT }, tradeDate, AI_TAB);
+      }
+    });
+  // 서버 캐시 TTL(7초)보다 길게 — 폴링마다 캐시 만료가 보장돼 실효 갱신 주기가 14초로 늘지 않는다
+  setInterval(refreshQuotes, 8000);
 })();

@@ -85,14 +85,35 @@ async function getAiAnalysis(ticker, tradeDate) {
 let tokenCache = { accessToken: null, expiresAt: 0 };
 let dailyCandleCache = { date: null, bySymbol: null };
 let quotesCache = { at: 0, body: null };
+let quotesInFlight = null;
 
 function kstDateOf(value) {
-  // en-CA 로캘은 YYYY-MM-DD 형식 — KST 기준 날짜 문자열 비교용
-  return new Date(value).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+  // en-CA 로캘은 YYYY-MM-DD 형식 — KST 기준 날짜 문자열 비교용.
+  // null·비정상 시각은 null 반환 — new Date(null)=1970 이 날짜 비교를 오염시키지 않게.
+  const d = new Date(value);
+  if (value == null || isNaN(d.getTime())) {
+    return null;
+  }
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
 }
 
 function round2(n) {
   return Math.round(n * 100) / 100;
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+// 상류 decimal 문자열 → 숫자. 비정상 값은 OK 로 게시하지 않고 폴백으로 넘긴다(Rule 12).
+// Number() 단독은 null·빈 문자열을 0 으로 강제하므로 타입·공백을 먼저 거른다.
+function toFiniteNumber(value, label) {
+  const acceptable = typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
+  const n = acceptable ? Number(value) : NaN;
+  if (!Number.isFinite(n)) {
+    throw new Error('시세 값 비정상 (' + label + '=' + value + ')');
+  }
+  return n;
 }
 
 async function getAccessToken() {
@@ -141,11 +162,14 @@ async function getDailyCandles() {
     return dailyCandleCache.bySymbol;
   }
   const bySymbol = {};
+  // 캔들 응답은 { result: { candles, nextBefore } } envelope 다 (openapi.json allOf ApiResponse)
   for (const s of QUOTES_FALLBACK.stocks) {
-    bySymbol[s.ticker] = (await fetchOpenApi('/api/v1/candles?symbol=' + s.ticker + '&interval=1d&count=2')).candles;
+    bySymbol[s.ticker] = (await fetchOpenApi('/api/v1/candles?symbol=' + s.ticker + '&interval=1d&count=2')).result.candles;
+    await sleep(250); // 종목 6연속이 차트 그룹 한도(초당 5회)를 넘지 않게 간격을 둔다
   }
   for (const ix of QUOTES_FALLBACK.indices) {
-    bySymbol[ix.code] = (await fetchOpenApi('/api/v1/market-indicators/' + ix.code + '/candles?interval=1d&count=2')).candles;
+    bySymbol[ix.code] = (await fetchOpenApi('/api/v1/market-indicators/' + ix.code + '/candles?interval=1d&count=2')).result.candles;
+    await sleep(250);
   }
   dailyCandleCache = { date: today, bySymbol: bySymbol };
   return bySymbol;
@@ -153,16 +177,53 @@ async function getDailyCandles() {
 
 // 전일종가 = 현재가 시각(거래일)보다 앞선 가장 최근 일봉의 종가.
 // 장중(오늘 봉 유무 무관)·장전(마지막 체결=전일)·휴장(주말) 전부 이 규칙 하나로 맞는다.
-function computeChange(candles, priceTimestamp, lastPrice) {
-  const tradeDate = kstDateOf(priceTimestamp || Date.now());
+// 전일 봉이 없으면 등락을 지어내지 않고 던진다 — 호출측이 폴백 스냅샷으로 수렴(Rule 12).
+function computeChange(candles, priceTimestamp, lastPrice, label) {
+  // 체결 미발생(null)만 오늘로 간주 — 깨진 시각은 조용히 오늘로 대체하지 않고 던진다.
+  const tradeDate = priceTimestamp == null ? kstDateOf(Date.now()) : kstDateOf(priceTimestamp);
+  if (tradeDate == null) {
+    throw new Error('현재가 시각 비정상 (' + label + '=' + priceTimestamp + ')');
+  }
+  // 시각이 깨진 봉은 전일 후보에서 제외한다.
   const prev = (candles || []).find(function (c) {
-    return kstDateOf(c.timestamp) < tradeDate;
+    const candleDate = kstDateOf(c.timestamp);
+    return candleDate != null && candleDate < tradeDate;
   });
   if (!prev) {
-    console.warn('[mock-broker] 전일 봉 없음 — 등락 0 처리 (tradeDate=%s)', tradeDate);
-    return 0;
+    throw new Error('전일 봉 없음 (' + label + ', tradeDate=' + tradeDate + ')');
   }
-  return lastPrice - Number(prev.closePrice);
+  return lastPrice - toFiniteNumber(prev.closePrice, label + '.prevClose');
+}
+
+async function fetchLiveQuotes() {
+  const candlesBySymbol = await getDailyCandles();
+  const stockSymbols = QUOTES_FALLBACK.stocks.map(function (s) { return s.ticker; }).join(',');
+  const indexSymbols = QUOTES_FALLBACK.indices.map(function (ix) { return ix.code; }).join(',');
+  const [stockRes, indexRes] = await Promise.all([
+    fetchOpenApi('/api/v1/prices?symbols=' + stockSymbols),
+    fetchOpenApi('/api/v1/market-indicators/prices?symbols=' + indexSymbols),
+  ]);
+  const stockBySymbol = new Map(stockRes.result.map(function (p) { return [p.symbol, p]; }));
+  const indexBySymbol = new Map(indexRes.result.map(function (p) { return [p.symbol, p]; }));
+  const stocks = QUOTES_FALLBACK.stocks.map(function (s) {
+    const p = stockBySymbol.get(s.ticker);
+    if (!p) {
+      throw new Error('현재가 응답에 ' + s.ticker + ' 없음');
+    }
+    const last = toFiniteNumber(p.lastPrice, s.ticker);
+    return { ticker: s.ticker, name: s.name, etf: s.etf, price: last, change: computeChange(candlesBySymbol[s.ticker], p.timestamp, last, s.ticker) };
+  });
+  const indices = QUOTES_FALLBACK.indices.map(function (ix) {
+    const p = indexBySymbol.get(ix.code);
+    if (!p) {
+      throw new Error('지수 응답에 ' + ix.code + ' 없음');
+    }
+    const last = toFiniteNumber(p.lastPrice, ix.code);
+    return { code: ix.code, name: ix.name, value: last, change: round2(computeChange(candlesBySymbol[ix.code], p.timestamp, last, ix.code)) };
+  });
+  const body = { state: 'OK', data: { indices: indices, stocks: stocks } };
+  quotesCache = { at: Date.now(), body: body };
+  return body;
 }
 
 // resolve 값: { state: 'OK', data } | { state: 'FALLBACK', data: 스냅샷 }
@@ -171,43 +232,32 @@ async function getQuotes() {
   if (!QUOTES_ENABLED) {
     return { state: 'FALLBACK', data: QUOTES_FALLBACK };
   }
-  const now = Date.now();
-  if (quotesCache.body && now - quotesCache.at < QUOTES_CACHE_MS) {
+  if (quotesCache.body && Date.now() - quotesCache.at < QUOTES_CACHE_MS) {
     return quotesCache.body;
   }
-  try {
-    const candlesBySymbol = await getDailyCandles();
-    const stockSymbols = QUOTES_FALLBACK.stocks.map(function (s) { return s.ticker; }).join(',');
-    const indexSymbols = QUOTES_FALLBACK.indices.map(function (ix) { return ix.code; }).join(',');
-    const [stockRes, indexRes] = await Promise.all([
-      fetchOpenApi('/api/v1/prices?symbols=' + stockSymbols),
-      fetchOpenApi('/api/v1/market-indicators/prices?symbols=' + indexSymbols),
-    ]);
-    const stockBySymbol = new Map(stockRes.result.map(function (p) { return [p.symbol, p]; }));
-    const indexBySymbol = new Map(indexRes.result.map(function (p) { return [p.symbol, p]; }));
-    const stocks = QUOTES_FALLBACK.stocks.map(function (s) {
-      const p = stockBySymbol.get(s.ticker);
-      if (!p) {
-        throw new Error('현재가 응답에 ' + s.ticker + ' 없음');
-      }
-      const last = Number(p.lastPrice);
-      return { ticker: s.ticker, name: s.name, etf: s.etf, price: last, change: computeChange(candlesBySymbol[s.ticker], p.timestamp, last) };
-    });
-    const indices = QUOTES_FALLBACK.indices.map(function (ix) {
-      const p = indexBySymbol.get(ix.code);
-      if (!p) {
-        throw new Error('지수 응답에 ' + ix.code + ' 없음');
-      }
-      const last = Number(p.lastPrice);
-      return { code: ix.code, name: ix.name, value: last, change: round2(computeChange(candlesBySymbol[ix.code], p.timestamp, last)) };
-    });
-    const body = { state: 'OK', data: { indices: indices, stocks: stocks } };
-    quotesCache = { at: now, body: body };
-    return body;
-  } catch (err) {
-    console.warn('[mock-broker] 시세 소스 호출 실패 — 스냅샷 폴백', err.message);
-    return { state: 'FALLBACK', data: QUOTES_FALLBACK };
+  // 동시 요청은 진행 중 조회 하나를 공유한다 — 캐시가 비었을 때 관객 수만큼
+  // 토큰 발급·일봉 조회가 중복 실행되는 스탬피드 방지.
+  if (!quotesInFlight) {
+    quotesInFlight = fetchLiveQuotes()
+      .catch(function (err) {
+        console.warn('[mock-broker] 시세 소스 호출 실패 — 스냅샷 폴백', err.message);
+        return { state: 'FALLBACK', data: QUOTES_FALLBACK };
+      })
+      .finally(function () {
+        quotesInFlight = null;
+      });
   }
+  if (quotesCache.body) {
+    return quotesInFlight; // 웜(일봉 캐시됨) — 현재가 배치 2건뿐이라 그대로 기다린다
+  }
+  // 콜드 스타트는 일봉 웜업(수 초)에 응답을 묶지 않는다 — 1.5초 내 미완이면 스냅샷 즉답.
+  // 웜업은 뒤에서 계속 진행돼 다음 폴링(7초)이 실데이터로 채운다(화면 즉시 렌더 불변식 유지).
+  return Promise.race([
+    quotesInFlight,
+    sleep(1500).then(function () {
+      return { state: 'FALLBACK', data: QUOTES_FALLBACK };
+    }),
+  ]);
 }
 
 function sendJson(res, body) {

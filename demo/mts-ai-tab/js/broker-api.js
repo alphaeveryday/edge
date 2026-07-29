@@ -27,7 +27,8 @@
   // 시세(지수·관심종목) 조회 — 서버가 외부 소스 실패·키 미설정 시 스냅샷 폴백을 담아 항상 200 으로 준다.
   // resolve 값: { state: 'OK'|'FALLBACK', data: { indices, stocks } } | { state: 'FALLBACK', data: null }
   function getQuotes() {
-    return fetch('/api/broker/quotes')
+    // 타임아웃 필수 — 응답 없는 pending 이 부트 체인(딥링크 처리)을 무기한 붙들지 않게
+    return fetch('/api/broker/quotes', { signal: AbortSignal.timeout(5000) })
       .then(function (res) {
         return res.json();
       })
