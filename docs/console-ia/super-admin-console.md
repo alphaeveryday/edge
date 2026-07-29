@@ -29,7 +29,7 @@ Super Admin Console
 단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답 원천은 도메인
 단위로 DB 전환 중이다(ALPHA-515 mock 출발): tenants=JPA(ALPHA-526) ·
 sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601) ·
-session=인증 세션 주체(SessionOperator) 투영(ALPHA-608), analyses 쓰기만 아직 `mock` 패키지(ALPHA-602).
+session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰기=운영자 작업 원장 전이(ALPHA-602).
 
 | 화면 | 엔드포인트 |
 |---|---|
@@ -40,7 +40,8 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608), analyses 쓰기
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |
 
-> mock 단계 임시 완화: 정정/무효화 **사유 입력 필수**는 현 UI 계약(사유 입력 없음)에
-> 맞춰 유예된다 — DB 연동 시 감사 레코드 보존과 함께 계약에 편입한다.
+> 정정/무효화 **사유 입력 필수**는 쓰기 실전환(ALPHA-602)과 함께 계약에 편입됐다 — 정정은
+> 새 결과·사유가, 제외는 사유가 필수다(빈 값 400). UI 가 사유 입력을 받는다. 복원 사유는 선택.
+> 작업자·사유·변경 전후는 감사 원장(`admin_activity_log`)에 보존된다.
 
-> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.
+> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 현재 분석 정정/제외/복원이 append 되고 테넌트 생성 감사는 후속): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.

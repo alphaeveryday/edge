@@ -116,10 +116,43 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			 ORDER BY explanation_run_id, document_rank
 			""".formatted(LIST_LIMIT, EVIDENCE_LIMIT_PER_RUN);
 
+	/**
+	 * 운영자 작업 오버레이 — 창 안의 런별 최신 액션을 admin_activity_log 에서 유도한다(ALPHA-602).
+	 * explanation_result(파이프라인 소유)를 덮지 않는다: 정정 본문·제외 여부를 이 원장에서 읽어
+	 * 표시 층이 덧입힌다. 복원은 EXCLUDE 를 취소해 원상태(run_status)를 그대로 되살린다.
+	 *
+	 * <p>{@code excluded} = EXCLUDE/RESTORE 중 최신이 EXCLUDE. {@code corrected} = 정정 이력 존재.
+	 * {@code corrected_summary} = 최신 정정본(details.after). FILTER 로 액션별 집계를 분리한다 —
+	 * 해당 액션이 없으면 array 가 비어 [1] 이 NULL(제외 아님 / 정정본 없음).
+	 *
+	 * <p>창(LIMIT)은 LIST_SQL 과 같은 정렬의 explanation_run 상위 200 이다 — LIST_SQL 조인은 전부
+	 * 필수 1:1 체인(route→기여관찰→트리거→instrument→entity, 전부 NOT NULL)이라 런을 떨구지 않아
+	 * 두 창의 런 집합이 일치한다(EVIDENCE_SQL 과 같은 불변식).
+	 */
+	private static final String OVERLAY_SQL = """
+			SELECT target_id,
+			       bool_or(action = 'ANALYSIS_RESULT_CORRECTED') AS corrected,
+			       (array_agg(action ORDER BY activity_id DESC)
+			          FILTER (WHERE action IN ('ANALYSIS_EXCLUDED', 'ANALYSIS_RESTORED')))[1]
+			          = 'ANALYSIS_EXCLUDED' AS excluded,
+			       (array_agg(details ->> 'after' ORDER BY activity_id DESC)
+			          FILTER (WHERE action = 'ANALYSIS_RESULT_CORRECTED'))[1] AS corrected_summary
+			  FROM admin_activity_log
+			 WHERE target_type = 'ANALYSIS_RUN'
+			   AND target_id IN (
+			       SELECT explanation_run_id FROM explanation_run
+			        ORDER BY explanation_as_of DESC, explanation_run_id DESC
+			        LIMIT %d)
+			 GROUP BY target_id
+			""".formatted(LIST_LIMIT);
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcAnalysisRepository(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
+	}
+
+	private record Overlay(boolean excluded, boolean corrected, String correctedSummary) {
 	}
 
 	@Override
@@ -137,19 +170,34 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 							rs.getObject("published_at", OffsetDateTime.class)));
 			totalByRun.put(runId, rs.getInt("evidence_total"));
 		});
-		return jdbc.query(LIST_SQL, (rs, i) -> new AnalysisRow(
-				rs.getString("explanation_run_id"),
-				rs.getString("display_name"),
-				rs.getString("ticker"),
-				rs.getString("market_code"),
-				rs.getDouble("observed_return"),
-				rs.getString("run_status"),
-				rs.getObject("detected_at", OffsetDateTime.class),
-				rs.getObject("finished_at", OffsetDateTime.class),
-				rs.getString("summary"),
-				rs.getString("confidence_level"),
-				List.copyOf(evidenceByRun.getOrDefault(
-						rs.getString("explanation_run_id"), List.of())),
-				totalByRun.getOrDefault(rs.getString("explanation_run_id"), 0)));
+		Map<String, Overlay> overlayByRun = new HashMap<>();
+		jdbc.query(OVERLAY_SQL, rs -> {
+			overlayByRun.put(rs.getString("target_id"), new Overlay(
+					rs.getBoolean("excluded"), rs.getBoolean("corrected"),
+					rs.getString("corrected_summary")));
+		});
+		return jdbc.query(LIST_SQL, (rs, i) -> {
+			String runId = rs.getString("explanation_run_id");
+			Overlay overlay = overlayByRun.getOrDefault(runId, NO_OVERLAY);
+			return new AnalysisRow(
+					runId,
+					rs.getString("display_name"),
+					rs.getString("ticker"),
+					rs.getString("market_code"),
+					rs.getDouble("observed_return"),
+					rs.getString("run_status"),
+					rs.getObject("detected_at", OffsetDateTime.class),
+					rs.getObject("finished_at", OffsetDateTime.class),
+					rs.getString("summary"),
+					rs.getString("confidence_level"),
+					overlay.excluded(),
+					overlay.corrected(),
+					overlay.correctedSummary(),
+					List.copyOf(evidenceByRun.getOrDefault(runId, List.of())),
+					totalByRun.getOrDefault(runId, 0));
+		});
+
 	}
+
+	private static final Overlay NO_OVERLAY = new Overlay(false, false, null);
 }

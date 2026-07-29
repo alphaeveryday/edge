@@ -16,7 +16,9 @@ export function AnalysisDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [correctReason, setCorrectReason] = useState('');
   const [confirmingExclude, setConfirmingExclude] = useState(false);
+  const [excludeReason, setExcludeReason] = useState('');
 
   if (isError) return <LoadError />;
   if (isPending) return null;
@@ -91,18 +93,38 @@ export function AnalysisDetailPage() {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                 />
+                <div className="flex flex-col gap-1">
+                  <span className="t-label">
+                    정정 사유 <span style={{ color: 'var(--down)' }}>*</span>
+                  </span>
+                  <label className="field w-full box-border">
+                    <input
+                      placeholder="정정 사유 — 감사 기록에 보존됩니다"
+                      value={correctReason}
+                      onChange={(e) => setCorrectReason(e.target.value)}
+                    />
+                  </label>
+                </div>
                 <div className="flex justify-end gap-2">
-                  <button className="btn" onClick={() => setEditing(false)}>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setEditing(false);
+                      setCorrectReason('');
+                    }}
+                  >
                     취소
                   </button>
                   <button
                     className="btn btn-primary"
+                    disabled={!draft.trim() || !correctReason.trim() || correct.isPending}
                     onClick={() =>
                       correct.mutate(
-                        { id: a.id, result: draft },
+                        { id: a.id, result: draft, reason: correctReason },
                         {
                           onSuccess: () => {
                             setEditing(false);
+                            setCorrectReason('');
                             toast('분석 결과가 정정되었습니다.');
                           },
                         },
@@ -199,20 +221,38 @@ export function AnalysisDetailPage() {
                     <span className="t-xs" style={{ color: 'var(--down)', fontWeight: 600 }}>
                       이 종목을 분석 대상에서 제외하시겠습니까? 제외 후에는 테넌트에 분석 결과가 노출되지 않습니다.
                     </span>
+                    <label className="field w-full box-border">
+                      <input
+                        placeholder="제외 사유 (필수) — 감사 기록에 보존됩니다"
+                        value={excludeReason}
+                        onChange={(e) => setExcludeReason(e.target.value)}
+                      />
+                    </label>
                     <div className="flex gap-1.5">
-                      <button className="btn btn-sm flex-1 justify-center" onClick={() => setConfirmingExclude(false)}>
+                      <button
+                        className="btn btn-sm flex-1 justify-center"
+                        onClick={() => {
+                          setConfirmingExclude(false);
+                          setExcludeReason('');
+                        }}
+                      >
                         취소
                       </button>
                       <button
                         className="btn btn-sm flex-1 justify-center"
                         style={{ color: '#fff', background: 'var(--down)', borderColor: 'var(--down)' }}
+                        disabled={!excludeReason.trim() || exclude.isPending}
                         onClick={() =>
-                          exclude.mutate(a.id, {
-                            onSuccess: () => {
-                              setConfirmingExclude(false);
-                              toast('분석 대상에서 제외되었습니다.');
+                          exclude.mutate(
+                            { id: a.id, reason: excludeReason },
+                            {
+                              onSuccess: () => {
+                                setConfirmingExclude(false);
+                                setExcludeReason('');
+                                toast('분석 대상에서 제외되었습니다.');
+                              },
                             },
-                          })
+                          )
                         }
                       >
                         제외

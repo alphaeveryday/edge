@@ -15,15 +15,21 @@ public interface AnalysisRepository {
 	List<AnalysisRow> list();
 
 	/**
-	 * @param summary         결과가 아직 없는 런이면 null — 상태별 안내 문구는 표시 층이 정한다
-	 * @param confidenceLevel 결과가 없거나 원장이 판정을 비웠으면 null
-	 * @param evidenceTotal   이 런의 문서 근거 총 건수. {@code evidence} 는 표시 상한까지만
-	 *                        담기므로 둘이 다를 수 있다 — 화면이 "몇 건 중 몇 건"을 말하려면
-	 *                        잘라낸 사실이 계약에 있어야 한다
+	 * @param summary          결과가 아직 없는 런이면 null — 상태별 안내 문구는 표시 층이 정한다
+	 * @param confidenceLevel  결과가 없거나 원장이 판정을 비웠으면 null
+	 * @param excluded         운영자 제외 오버레이(admin_activity_log 최신 액션 유도) — run_status 를
+	 *                         덮지 않는다. 표시 층이 상태 배지만 EXCLUDED 로 바꾼다(ALPHA-602)
+	 * @param corrected        운영자 정정 이력 존재 여부(같은 원장에서 유도)
+	 * @param correctedSummary 최신 정정 본문(admin_activity_log details.after) — 정정 이력이 없으면
+	 *                         null. 표시 층이 있으면 원장 원본 대신 이 문구를 낸다(원본은 불변)
+	 * @param evidenceTotal    이 런의 문서 근거 총 건수. {@code evidence} 는 표시 상한까지만
+	 *                         담기므로 둘이 다를 수 있다 — 화면이 "몇 건 중 몇 건"을 말하려면
+	 *                         잘라낸 사실이 계약에 있어야 한다
 	 */
 	record AnalysisRow(String runId, String etfName, String ticker, String marketCode,
 			double observedReturn, String runStatus, OffsetDateTime detectedAt,
 			OffsetDateTime finishedAt, String summary, String confidenceLevel,
+			boolean excluded, boolean corrected, String correctedSummary,
 			List<EvidenceRow> evidence, int evidenceTotal) {
 	}
 
