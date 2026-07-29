@@ -44,9 +44,14 @@ UNIVERSE_COLUMNS = ("instrument_id", "sector_name", "industry_name", "market_cap
                     "listing_market", "ticker")
 
 # PIT 를 우회하거나 문장을 갈아탈 수 있는 토큰. 순수 WHERE 조건만 받는다.
+# `select` 를 막는다. 술어는 한 CTE 위의 WHERE 절이고, 서브쿼리는 그 표면을 벗어나 임의
+# 테이블을 읽는 경로다 - 실제로 모델이 `ticker IN (SELECT ticker FROM etf_constituents)` 를
+# 냈다. 존재하지 않는 테이블이라 그때는 그냥 죽었지만, 존재하는 테이블이면 PIT 클램프
+# 밖에서 읽힌다. `from` 도 같은 이유로 막는다(서브쿼리 없는 FROM 절은 있을 수 없다).
 _BANNED = re.compile(
-    r"(--|/\*|;)|\b(available_at|data_version|insert|update|delete|drop|create|alter|"
-    r"grant|copy|union|intersect|except|pg_sleep|pg_read_file|current_setting|set_config)\b",
+    r"(--|/\*|;)|\b(available_at|data_version|select|from|insert|update|delete|drop|create|"
+    r"alter|grant|copy|union|intersect|except|pg_sleep|pg_read_file|current_setting|"
+    r"set_config)\b",
     re.I,
 )
 
@@ -224,6 +229,24 @@ class CausalData:
             ex = {(str(a), str(b)[:10]) for a, b in exclude}
             out = [(a, b) for a, b in out if (a, str(b)[:10]) not in ex]
         return out
+
+    def industry_map(self, as_of_date: date | str) -> dict[str, str]:
+        """`{instrument_id: industry_name}` — PIT 상 최신 1건.
+
+        층화의 재료다. 이 맵이 없으면 `strata='date_industry'` 가 **조용히** `date` 로
+        붕괴한다(`_strata_key` 가 없는 키를 `'?'` 로 채워 전부 한 층이 된다). 선언과 실제가
+        갈라지는데 아무 신호가 없으므로, 균형검정이 통과해도 무엇을 통제했는지 알 수 없다.
+
+        전체를 한 번에 읽는다. 코호트에 어떤 종목이 들어올지는 추정 시점에야 정해지므로
+        부분집합을 미리 고를 수 없고, 분류 원장은 종목당 1행이라 크기가 작다.
+        """
+        d = as_of_date.isoformat() if isinstance(as_of_date, date) else str(as_of_date)[:10]
+        rows = self._rows("""
+            SELECT DISTINCT ON (ic.instrument_id) ic.instrument_id, ic.industry_name
+            FROM instrument_classification ic
+            WHERE ic.as_of_date <= %s AND ic.industry_name IS NOT NULL
+            ORDER BY ic.instrument_id, ic.as_of_date DESC""", [d])
+        return {str(i): str(n) for i, n in rows}
 
     # ── 정렬된 열 ───────────────────────────────────────────────────────
     _EXCESS = """

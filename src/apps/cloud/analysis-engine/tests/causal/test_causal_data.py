@@ -220,3 +220,14 @@ def test_treated_predicate_still_accepts_event_columns():
     conn = _FakeConn()
     CausalData(conn).cohort("event_type_code = 'X' AND industry_name = 'Y'", as_of=AS_OF)
     assert conn.executed
+
+
+def test_predicate_rejects_a_subquery():
+    """서브쿼리는 한 CTE 표면을 벗어나 PIT 클램프 밖에서 읽는 경로다.
+
+    모델이 `ticker IN (SELECT ticker FROM etf_constituents)` 를 냈다. 그 테이블이 없어서
+    그때는 죽었지만, 있는 테이블이면 조용히 미래를 읽는다.
+    """
+    with pytest.raises(PipelineError, match="쓸 수 없는 토큰"):
+        CausalData(_FakeConn()).cohort(
+            "ticker IN (SELECT ticker FROM etf_constituents)", as_of=AS_OF)

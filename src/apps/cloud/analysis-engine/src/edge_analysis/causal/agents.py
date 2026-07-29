@@ -92,7 +92,7 @@ def _pct(x: float | None) -> str:
 
 def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
           route_code: str, contributors: list[tuple[str, float]],
-          candidates: list[dict]) -> str:
+          candidates: list[dict], industry: dict | None = None) -> str:
     """셀 브리프. **타입 모집단·분포 사전·무게를 항상 싣는다.**"""
     L = [f"셀: {etf_name} {trade_date}",
          f"관측 등락 {_pct(observed)} · 시장·피어 제거 후 잔차 {_pct(residual)}"
@@ -118,6 +118,12 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
             L.append(f"     ETF 내 비중 {c['share'] * 100:.2f}%")
         if c.get("killed"):
             L.append(f"     [산술] 이미 기각됨 — {c['killed']}")
+    if industry:
+        # 실제 값을 싣는다. 원장의 industry_name 은 원천 원문(영어)이라, 어휘를 보여주지
+        # 않으면 모델이 한국어로 추측하고(`sector_name = '반도체'`) 대조군이 0건이 된다.
+        vocab = sorted({v for v in industry.values() if v})
+        L += ["", f"쓸 수 있는 industry_name 값 ({len(vocab)}종, 원문 그대로 써라):",
+              "  " + " · ".join(vocab[:40])]
     L += ["", "상승 비율이 50% 근처인 타입은 방향을 못 쓴다. 크기는 분위수로 판단해라.",
           "잔차를 설명할 수 없다면 빈 간선 목록을 내라."]
     return "\n".join(L)

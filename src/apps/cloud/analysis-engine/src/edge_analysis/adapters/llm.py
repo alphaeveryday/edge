@@ -117,6 +117,8 @@ def analyze(
             contributors=[(name_by_ticker.get(m.ticker) or m.ticker, m.contribution)
                           for m in decomp.members[:5]],
             candidates=_candidates(causal, events, name_by_ticker, decomp),
+            # 층화 재료. 넘기지 않으면 strata='date_industry' 가 조용히 date 로 붕괴한다.
+            industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
         )
         explanation = Explanation(raw)

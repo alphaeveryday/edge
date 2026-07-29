@@ -136,3 +136,17 @@ def test_residualized_string_does_not_satisfy_the_rule():
     """
     assert _violations(_price_pair(residualized="false"))
     assert _violations(_price_pair(residualized="true"))
+
+
+def test_malformed_node_id_is_a_violation_not_a_crash():
+    """LLM 오타가 런을 죽이면 안 된다.
+
+    모델이 `KODEX_반도체@t`(오프셋 없음)를 냈고, 규칙 검사 뒤쪽의 `parse` 재호출에서
+    ValueError 가 밖으로 튀어 파이프라인이 exit 1 로 죽었다. 형식 오류는 되먹임 대상이다.
+    """
+    dag = {"nodes": {"BAD@t": {"kind": "OBSERVABLE"}, "ETF@t0": {"kind": "TARGET"}},
+           "structures": [{"id": "A", "edges": [{"from": "BAD@t", "to": "ETF@t0"}]}]}
+
+    violations = G.validate(dag, require_competing=False)
+
+    assert any("시간 색인" in v for v in violations)
