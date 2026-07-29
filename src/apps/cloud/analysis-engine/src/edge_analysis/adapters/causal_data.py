@@ -66,7 +66,15 @@ def _guard(where: str, columns: tuple[str, ...]) -> str:
             f"코호트 술어에 쓸 수 없는 토큰: {hit.group()!r}. "
             "세미콜론·주석·DDL·집합연산은 금지이고 available_at 은 코드가 주입한다.\n"
             f"쓸 수 있는 컬럼: {', '.join(columns)}")
-    return w
+    # `%` 를 두 배로 만든다. 술어는 f-string 으로 SQL 에 박히고 그 SQL 은 `cur.execute(sql,
+    # params)` 를 거치므로, psycopg2 가 `%` 를 자기 플레이스홀더로 읽는다. 그래서
+    # `industry_name LIKE '%Semiconductor%'` - 이 함수 에러 메시지가 예로 드는 바로 그
+    # 술어가 - `IndexError: list index out of range` 로 죽는다. `as_of` 가 항상 파라미터로
+    # 붙으므로(cohort) 보간은 언제나 일어나고, 따라서 이 이스케이프도 언제나 필요하다.
+    #
+    # 실험(storm)은 DuckDB paramstyle 이라 이 경로를 밟지 않았다 - 클라우드 Postgres 에서
+    # 처음 드러났다(ALPHA-622 실검증).
+    return w.replace("%", "%%")
 
 
 class CausalData:
@@ -78,9 +86,27 @@ class CausalData:
 
     # ── 내부 ────────────────────────────────────────────────────────────
     def _rows(self, sql: str, params: tuple | list = ()) -> list[tuple]:
+        """질의 1건. **실패해도 트랜잭션을 오염시키지 않는다.**
+
+        SAVEPOINT 가 필요한 이유. 인과 경로는 잘못된 술어를 예외로 죽이지 않고 LLM 에게
+        되먹임한다(`_empty_cohorts`) - 설계상 옳다. 그런데 Postgres 는 문장 하나가 실패하면
+        **트랜잭션 전체를 중단**시켜, 그 뒤 모든 질의가 InFailedSqlTransaction 으로 죽는다.
+        그래서 삼킨 술어 오류 하나가 게시 단계(`explanation_prerequisites`)를 무너뜨렸다.
+
+        전체 롤백이 아니라 SAVEPOINT 인 이유: 같은 커넥션에 앞서 쌓인 작업을 버리지 않는다.
+        DuckDB(실험)에는 중단 상태가 없어 이 경로가 드러나지 않았다 - 클라우드에서 처음
+        나타났다(ALPHA-622 실행).
+        """
         with self._conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
+            cur.execute("SAVEPOINT causal_query")
+            try:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT causal_query")
+                raise
+            cur.execute("RELEASE SAVEPOINT causal_query")
+            return rows
 
     @staticmethod
     def _split(pairs) -> tuple[list[str], list[str]]:

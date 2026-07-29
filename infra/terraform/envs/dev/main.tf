@@ -362,6 +362,39 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
   description                  = "schema-migrate task to postgres"
 }
 
+# ── 에이전트 읽기전용 질의 one-off task (ALPHA-622) ──────
+# private RDS 는 VPC 밖에서 못 붙는다 — schema-migrate 와 같은 해법(VPC 내부 one-off task).
+# 이미지는 analysis 페이즈와 동일한 것을 쓴다(질의 코드가 같은 파이썬 패키지에 산다) —
+# 아래 data_pipeline 의 analysis_image 와 표현식을 공유해 태그가 갈라지지 않게 한다.
+module "db_query" {
+  source = "../../modules/db-query"
+
+  name   = "${local.prefix}-db-query"
+  region = var.region
+  vpc_id = module.network.vpc_id
+
+  # IAM DB 인증 토큰 정책(rds-db:connect)이 계정·DB 리소스 id 로 스코프된다 — 비밀번호가 없는 이유.
+  account_id     = data.aws_caller_identity.current.account_id
+  db_resource_id = module.rds.resource_id
+
+  image = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
+
+  db_host = module.rds.address
+  db_port = module.rds.port
+  db_name = module.rds.db_name
+
+  cpu_architecture = "X86_64"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_db_query" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.db_query.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "db-query task to postgres"
+}
+
 # GitHub Actions → AWS OIDC 배포 역할. provider 는 foundation 소유(create=false + data ARN).
 module "gha_deploy_dev" {
   source = "../../modules/github-oidc-deploy"

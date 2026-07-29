@@ -19,7 +19,12 @@ class _FakeCursor:
         self._conn = conn
 
     def execute(self, sql, params=None):
-        self._conn.executed.append((" ".join(sql.split()), params))
+        flat = " ".join(sql.split())
+        # SAVEPOINT 계열은 기록하지 않는다. 트랜잭션 오염 방지용 제어문이라 검사 대상이
+        # 아니고, 기록에 섞이면 모든 테스트가 `executed[-1]` 로 질의를 못 집는다.
+        if flat.split(None, 1)[0].upper() in ("SAVEPOINT", "RELEASE", "ROLLBACK"):
+            return
+        self._conn.executed.append((flat, params))
 
     def fetchall(self):
         return self._conn.rows
@@ -154,3 +159,29 @@ def test_universe_excludes_treated_pairs():
                                    exclude=[("I_A", date(2026, 7, 29))])
 
     assert out == [("I_B", date(2026, 7, 29))]
+
+
+@pytest.mark.parametrize("call", [
+    lambda cd, p: cd.cohort(p, as_of=AS_OF),
+    lambda cd, p: cd.universe(p, [date(2026, 7, 29)]),
+])
+def test_like_predicate_survives_parameter_binding(call):
+    """`LIKE '%...%'` 술어가 psycopg2 보간을 통과해야 한다.
+
+    이게 코호트의 주된 사용법이다 - 이 파일이 검사하는 `_guard` 의 에러 메시지도
+    `industry_name LIKE '%Semiconductor%'` 를 예로 든다. 그런데 술어는 f-string 으로
+    SQL 에 박히고 그 SQL 은 파라미터와 함께 execute 되므로, `%` 를 두 배로 만들지 않으면
+    psycopg2 가 그것을 플레이스홀더로 읽어 `IndexError` 로 죽는다.
+
+    실험은 DuckDB paramstyle 이라 이 경로를 안 밟았고, 가짜 커서는 SQL 을 파싱하지 않아
+    잡지 못했다. 클라우드 Postgres 에서 처음 드러났다(ALPHA-622).
+    """
+    conn = _FakeConn()
+
+    call(CausalData(conn), "industry_name LIKE '%Semiconductor%'")
+
+    sql, params = conn.executed[-1]
+    assert "'%%Semiconductor%%'" in sql, "술어의 % 가 이스케이프되지 않았다"
+    # psycopg2 의 클라이언트측 바인딩은 `sql % params` 와 같은 규칙을 쓴다. 이스케이프가
+    # 빠지면 여기서 IndexError 가 난다 - 운영에서 나는 것과 같은 예외다.
+    sql % tuple("x" for _ in params)
