@@ -51,4 +51,15 @@ dependencies {
     // 보일러플레이트(getter/생성자/빌더) 축소 — 컴파일 타임 전용.
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
+
+    // 직렬화 계약 테스트 — 소비자 앱 런타임과 동일한 Jackson 3(tools.jackson)로 와이어 키 집합을
+    // 고정한다(ALPHA-605: 중복 키 "success" 회귀 차단).
+    testImplementation 'tools.jackson.core:jackson-databind'
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.assertj:assertj-core'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }
