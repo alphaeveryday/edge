@@ -82,7 +82,10 @@ class ExplanationControllerTest {
 	@BeforeEach
 	void setUp() {
 		recorder = new CapturingRecorder();
-		ExplanationService service = new ExplanationService(new SeededStore(), recorder);
+		// 제공 범위 판정은 실 DB 통합 테스트(ExplanationScopeIntegrationTest) 소관 — 여기서는
+		// 행 부재(전부 제공)로 두어 기존 HTTP 계약만 검증한다.
+		ExplanationService service = new ExplanationService(
+				new SeededStore(), recorder, (scopeType, scopeKey) -> Optional.empty());
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
