@@ -23,7 +23,7 @@ const TOSS_CLIENT_ID = process.env.TOSS_CLIENT_ID || '';
 const TOSS_CLIENT_SECRET = process.env.TOSS_CLIENT_SECRET || '';
 const QUOTES_ENABLED = Boolean(TOSS_CLIENT_ID && TOSS_CLIENT_SECRET);
 const QUOTES_CACHE_MS = 7000; // 새로고침 연타·관객 다수에도 상류 호출은 7초 1회
-// 폴백 스냅샷이 곧 관심종목·지수 유니버스다 — 종목명·ETF 여부는 여기서, 숫자만 실시간 소스에서 온다.
+// 폴백 스냅샷이 곧 종목(검색 전체·관심종목=앞 4종)·지수 유니버스다 — 종목명·ETF 여부는 여기서, 숫자만 실시간 소스에서 온다.
 const QUOTES_FALLBACK = JSON.parse(fs.readFileSync(path.join(__dirname, 'quotes-fallback.json'), 'utf8'));
 
 // 데모용 고객 해시 — 실제 해시 생성 규칙·salt는 증권사 관리 영역(ADR-0013, 벤더 불관여).
