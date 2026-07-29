@@ -7,9 +7,6 @@ export const realExplanationsRepository: ExplanationsRepository = {
   list: () => apiClient.get<Explanation[]>('/explanations'),
   feedStatus: () => apiClient.get<FeedStatus>('/explanations/feed-status'),
   updateFinal: (id, final) => apiClient.patch<void>(`/explanations/${id}/final`, { final }),
-  stop: (id) => apiClient.post<void>(`/explanations/${id}/stop`),
+  stop: (id, reason) => apiClient.post<void>(`/explanations/${id}/stop`, { reason }),
   moveToReview: (id) => apiClient.post<void>(`/explanations/${id}/move-to-review`),
-  approve: (id, final, note) => apiClient.post<void>(`/explanations/${id}/approve`, { final, note }),
-  reject: (id, note) => apiClient.post<void>(`/explanations/${id}/reject`, { note }),
-  saveDraft: (id, final) => apiClient.patch<void>(`/explanations/${id}/draft`, { final }),
 };

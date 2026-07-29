@@ -83,9 +83,8 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 조회·표시 이름 변경 (member 원장, ALPHA-500) | 인증된 전 역할 |
 | `GET /api/v1/dashboard/traffic` | Dashboard 트래픽 KPI (24시간 요청·에러) | TA·CR·OP·RO |
 | `GET /api/v1/explanations` · `GET /api/v1/explanations/feed-status` | Price Movement Explanations 목록·상세·반입 상태 조회 (실전환 ALPHA-607) | TA·CR·OP·RO |
-| `PATCH /api/v1/explanations/{id}/final` | 최종 문구 수정 | CR |
-| `POST /api/v1/explanations/{id}/approve` · `.../reject` · `PATCH .../draft` | 검수 액션(승인·반려·임시 저장) | CR |
-| `POST /api/v1/explanations/{id}/stop` · `.../move-to-review` | 노출 축소 조치(제공 중단·검수로 이관) | CR·OP |
+| `PATCH /api/v1/explanations/{id}/final` | 최종 문구 정정(게시본 published_summary in-place, ALPHA-613) | CR |
+| `POST /api/v1/explanations/{id}/stop` · `.../move-to-review` | 노출 축소 조치(제공 중단 — 사유 필수 · 검수로 이관, ALPHA-613) | CR·OP |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
 | `GET /api/v1/review/items/{id}` | 검수 상세(근거·사유·검사 결과·상태 이력 — 감사 열람, ALPHA-436) | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 — 승인(선택 의견) | CR |
@@ -107,13 +106,15 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 tenant-console-ui 화면 계약대로 mock 표면을 먼저 열고 **인증만 강제(전 역할 허용)**
 하던 한시 예외(ALPHA-513, 2026-07-23 사용자 결정)는 도메인별 DB 전환으로 **전부
 해제됐다** — 사용자·세션=ALPHA-500, 정책=ALPHA-438, 제공 범위=ALPHA-606,
-explanations=ALPHA-607. 모든 표면이 위 "API 매핑" 표의 실 역할을 강제하고 실
-원장을 읽는다.
+explanations=ALPHA-607(읽기)·613(쓰기). 모든 표면이 위 "API 매핑" 표의 실 역할을
+강제하고 실 원장을 읽고 쓴다.
 
-유일한 잔여 seam: explanations **쓰기**(최종 문구·이관·중단·승인·반려·임시저장)는
-아직 mock 스토어 경유라 실 설명 ID 에 404 다. 쓰기 전환은 ALPHA-613 소관이고
-(시장·등락률 컬럼 복원은 별건 — ALPHA-497 materialization 후), 권한 경계는
-매트릭스대로 이미 좁혀져 있다.
+explanations **쓰기**(최종 문구 정정·검수 이관·제공 중단)도 원장 전이·행위자·감사로
+실전환됐다(ALPHA-613) — ExplanationMockStore 삭제로 콘솔 mock 이 완전히 소멸했다
+(잔여 seam 0). 화면·IA 에 없던 approve·reject·draft(ALPHA-513 잔재)는 표면째
+제거됐다: 판정 게이트(승인·반려)는 Review Queue 소관이고 explanations 는 현황판+사후
+운영에 한정된다(역할 분담, 사용자 결정 2026-07-29). 시장·등락률 컬럼 복원은
+별건이다(ALPHA-497 materialization 후).
 
 인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),
 운영 = SSO/AD(같은 세션 추상화로 수렴, 실계약 시점 구현). **의도적 생략(데모

@@ -1,22 +1,26 @@
 package com.edge.tenantconsole.service;
 
 import com.edge.common.exception.GeneralException;
+import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
+import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.PublicationEntity;
 import com.edge.tenantconsole.entity.ScreeningCheckEntity;
 import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
-import com.edge.tenantconsole.mock.ExplanationMockStore;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
 import com.edge.tenantconsole.model.FeedStatusAggregate;
+import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
 import com.edge.tenantconsole.repository.ExplanationLedgerRepository;
+import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.PublishedSummaryRepository;
 import com.edge.tenantconsole.repository.ScreeningCheckRepository;
 import com.edge.tenantconsole.repository.ScreeningRuleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -32,14 +36,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.LongPredicate;
 
 /**
- * 가격 변동 설명 표면 — 읽기(목록·반입 상태)는 온프렘 원장 실조회(ALPHA-607), 쓰기
- * (최종 문구·이관·중단·승인·반려·임시저장)는 아직 mock 스토어다. 원장의 설명 ID
- * (explanation_result_id)는 mock 에 없으므로 <b>실목록에서 고른 건의 쓰기는 전부
- * 404 로 실패한다</b> — 조용히 성공한 척하는 것보다 낫고, 원장 전이·행위자·감사와 함께
- * 쓰기 전환(ALPHA-613)이 이 자리를 교체한다.
+ * 가격 변동 설명 표면 — 읽기(목록·반입 상태)와 사후 운영 쓰기(최종 문구 정정·제공
+ * 중단·검수 이관)를 온프렘 원장으로 처리한다(ALPHA-607 읽기, ALPHA-613 쓰기 전환).
+ * 판정 게이트(승인·반려)는 Review Queue(ReviewService) 소관이고, 이 표면은 현황판+사후
+ * 운영에 한정된다(역할 분담, 사용자 결정 2026-07-29). 쓰기 3종은 ReviewService 와 동형
+ * (@Transactional 단일 트랜잭션 + 읽은 상태를 WHERE 에 박은 가드 UPDATE 0행=409 +
+ * status_history + console_action_log)이며, 행위자=SessionMember·clientIp 로 감사한다.
  *
  * <p>매핑(축소 계약, 사용자 결정 2026-07-29): name←etf_name, code←etf_ticker, status,
  * risk←confidence_level, reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
@@ -64,6 +68,9 @@ public class ExplanationService {
 	/** 사유를 노출하는 상태 — 승인·자동 제공·중단은 과거 REVIEW 검사가 남아도 사유가 없다(승인 시 해소). */
 	private static final Set<String> REASON_STATUSES = Set.of("REVIEW_REQUIRED", "BLOCKED", "REJECTED");
 
+	/** 노출 중 상태 — 제공 중단(stop)은 이 상태에서만 의미가 있다(labels.ts PUBLISHED_STATUSES 와 정합). */
+	private static final Set<String> SERVING_STATUSES = Set.of("AUTO_PUBLISHED", "APPROVED");
+
 	/**
 	 * 반입 상태 판정 임계 — 데모 휴리스틱(피드 SLA 미정, 후속 확정 대상). 최근 반입이
 	 * FRESH 이내면 정상, STALE 이내면 지연, 그 밖(또는 반입 이력 없음)은 중단으로 본다.
@@ -75,19 +82,25 @@ public class ExplanationService {
 	private final ScreeningCheckRepository screeningCheckRepository;
 	private final ScreeningRuleRepository screeningRuleRepository;
 	private final PublishedSummaryRepository publishedSummaryRepository;
-	private final ExplanationMockStore store;
+	private final PublicationRepository publicationRepository;
+	private final AnalysisItemStatusHistoryRepository statusHistoryRepository;
+	private final ConsoleActionLogService actionLog;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	public ExplanationService(ExplanationLedgerRepository ledger,
 			ScreeningCheckRepository screeningCheckRepository,
 			ScreeningRuleRepository screeningRuleRepository,
 			PublishedSummaryRepository publishedSummaryRepository,
-			ExplanationMockStore store) {
+			PublicationRepository publicationRepository,
+			AnalysisItemStatusHistoryRepository statusHistoryRepository,
+			ConsoleActionLogService actionLog) {
 		this.ledger = ledger;
 		this.screeningCheckRepository = screeningCheckRepository;
 		this.screeningRuleRepository = screeningRuleRepository;
 		this.publishedSummaryRepository = publishedSummaryRepository;
-		this.store = store;
+		this.publicationRepository = publicationRepository;
+		this.statusHistoryRepository = statusHistoryRepository;
+		this.actionLog = actionLog;
 	}
 
 	public List<Explanation> list() {
@@ -293,66 +306,93 @@ public class ExplanationService {
 		return since.compareTo(FEED_STALE) <= 0 ? FeedStatus.DELAYED : FeedStatus.STOPPED;
 	}
 
-	// ── 쓰기(아직 mock — 실 설명 ID 는 mock 에 없어 404) ──
+	// ── 사후 운영 쓰기(원장 전이·감사, ALPHA-613) — ReviewService 동형 ──
 
-	public void updateFinal(String id, String finalText) {
-		// 최종 제공 문구는 고객 노출 문면 — 빈 문구로의 교체는 막는다.
+	/**
+	 * 최종 제공 문구 정정 — 게시본(publication.published_summary)을 in-place 교체한다.
+	 * 상태 전이가 없어 status_history 는 기록하지 않고(무전이 이벤트로 이력 원장을
+	 * 오염시키지 않는다), 전후값만 감사 로그에 남긴다. 게시본 없는 항목은 409(NOT_PUBLISHED).
+	 */
+	@Transactional
+	public void updateFinal(String id, String finalText, SessionMember actor, String clientIp) {
+		// 최종 제공 문구는 고객 노출 문면 — 빈 문구로의 교체는 막는다(원장 조회 전).
 		requireText(finalText);
-		ensure(applyMock(id, mid -> store.updateFinal(mid, finalText)));
-	}
-
-	public void stop(String id) {
-		ensure(applyMock(id, store::stop));
-	}
-
-	public void moveToReview(String id) {
-		ensure(applyMock(id, store::moveToReview));
-	}
-
-	public void approve(String id, String finalText) {
-		requireText(finalText);
-		ensure(applyMock(id, mid -> store.approve(mid, finalText)));
-	}
-
-	public void reject(String id, String note) {
-		if (note == null || note.isBlank()) {
-			// 반려 사유는 감사 재현의 최소 단서다(state-machine.md 정정·검수 규율).
-			throw new GeneralException(ConsoleErrorStatus.REASON_REQUIRED);
+		// 없는 설명은 404(전이 3종 공통) — 게시본 없음(409)과 구분한다.
+		AnalysisItemEntity item = ledger.findById(id)
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
+		PublicationEntity published = publishedSummaryRepository
+				.findFirstByAnalysisItemIdAndStatusOrderByPublicationIdDesc(id, "PUBLISHED")
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.NOT_PUBLISHED));
+		// 게시 스냅샷이 null 이면 고객에게 모델 원문(summary)이 노출됐다(published_summary
+		// NULL = summary 노출, 스키마 규약) — 감사 before 는 실제 노출됐던 문구를 담아야
+		// 민원·감사에서 "무엇을 무엇으로 고쳤나"가 재현된다(널 기록은 원문 유실).
+		String before = published.getPublishedSummary() != null
+				? published.getPublishedSummary() : item.getSummary();
+		if (publicationRepository.updatePublishedSummary(id, finalText) == 0) {
+			// 조회~갱신 사이 게시본이 내려간 경합 — 같은 트랜잭션에서 롤백된다.
+			throw new GeneralException(ConsoleErrorStatus.NOT_PUBLISHED);
 		}
-		ensure(applyMock(id, store::reject));
-	}
-
-	public void saveDraft(String id, String finalText) {
-		// 임시 저장은 비우는 중간 상태를 허용한다 — null 만 거른다.
-		if (finalText == null) {
-			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
-		}
-		ensure(applyMock(id, mid -> store.saveDraft(mid, finalText)));
+		// summary 는 NOT NULL 이라 before 는 실질 비지 않지만, 방어적으로 널 허용 맵을 쓴다.
+		Map<String, Object> detail = new LinkedHashMap<>();
+		detail.put("before", before);
+		detail.put("after", finalText);
+		actionLog.record(actor, "EXPLANATION_FINAL_UPDATED", "ANALYSIS_ITEM", id, detail, clientIp);
+		log.info("explanation final updated id={}", id);
 	}
 
 	/**
-	 * 쓰기 seam — mock 스토어는 long 키다. 원장 설명 ID(expr_LOCAL…)는 숫자가 아니라
-	 * 파싱에서 걸러져 not-found(404)가 된다. 이 경로는 쓰기 전환 티켓에서 원장 전이로 교체된다.
+	 * 제공 중단 — 노출 중(AUTO_PUBLISHED|APPROVED) 항목을 UNPUBLISHED 로 내리고 게시본도
+	 * 함께 내린다(사유·실행자·시각 감사 메타). 사유 필수(400), 노출 중이 아니면 409
+	 * (NOT_SERVING), 게시본 불일치는 409(NOT_PUBLISHED)로 전이까지 롤백한다.
 	 */
-	private boolean applyMock(String id, LongPredicate write) {
-		long mockId;
-		try {
-			mockId = Long.parseLong(id);
-		} catch (NumberFormatException e) {
-			return false;
+	@Transactional
+	public void stop(String id, String reason, SessionMember actor, String clientIp) {
+		if (reason == null || reason.isBlank()) {
+			// 수동 중단 사유는 감사 재현의 최소 단서다(publication unpublish_reason 제약과 정합).
+			throw new GeneralException(ConsoleErrorStatus.REASON_REQUIRED);
 		}
-		return write.test(mockId);
+		AnalysisItemEntity item = ledger.findById(id)
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
+		String fromStatus = item.getStatus();
+		if (!SERVING_STATUSES.contains(fromStatus)) {
+			throw new GeneralException(ConsoleErrorStatus.NOT_SERVING);
+		}
+		if (ledger.unpublish(id, fromStatus) == 0) {
+			// 읽은 뒤 전이된 경합 — 노출 중이 아니게 됐다.
+			throw new GeneralException(ConsoleErrorStatus.NOT_SERVING);
+		}
+		if (publicationRepository.unpublish(id, reason.trim(), actor.memberId()) == 0) {
+			// 노출 중인데 게시본이 없는 불일치 — 전이까지 롤백(같은 트랜잭션).
+			throw new GeneralException(ConsoleErrorStatus.NOT_PUBLISHED);
+		}
+		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(id, fromStatus,
+				"UNPUBLISHED", "MEMBER", actor.memberId(), reason.trim()));
+		actionLog.record(actor, "EXPLANATION_STOPPED", "ANALYSIS_ITEM", id,
+				Map.of("reason", reason.trim(), "fromStatus", fromStatus), clientIp);
+		log.info("explanation stopped id={} fromStatus={}", id, fromStatus);
+	}
+
+	/**
+	 * 검수 이관 — 점검 차단(BLOCKED) 항목을 검수 대기(REVIEW_REQUIRED)로 되돌려 Review
+	 * Queue 로 유입시킨다. 차단이 아니면 409(NOT_BLOCKED). 게시 무접촉(차단은 미게시).
+	 */
+	@Transactional
+	public void moveToReview(String id, SessionMember actor, String clientIp) {
+		if (ledger.findById(id).isEmpty()) {
+			throw new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND);
+		}
+		if (ledger.moveBlockedToReview(id) == 0) {
+			throw new GeneralException(ConsoleErrorStatus.NOT_BLOCKED);
+		}
+		statusHistoryRepository.save(new AnalysisItemStatusHistoryEntity(id, "BLOCKED",
+				"REVIEW_REQUIRED", "MEMBER", actor.memberId(), null));
+		actionLog.record(actor, "EXPLANATION_MOVED_TO_REVIEW", "ANALYSIS_ITEM", id, null, clientIp);
+		log.info("explanation moved to review id={}", id);
 	}
 
 	private static void requireText(String text) {
 		if (text == null || text.isBlank()) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
-		}
-	}
-
-	private static void ensure(boolean found) {
-		if (!found) {
-			throw new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND);
 		}
 	}
 }

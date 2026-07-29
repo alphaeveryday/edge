@@ -72,18 +72,15 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			// dashboard 조회 — 실 원장 조회(serving_request_metric, ALPHA-128).
 			// permission-matrix.md "Dashboard 트래픽 KPI" 행: 전 역할.
 			new Rule("GET", Pattern.compile("/api/v1/dashboard/traffic"), ANY_ROLE),
-			// explanations 실전환(ALPHA-607) — mock 완화를 벗어나 permission-matrix.md 의
-			// 실 권한을 적용한다: 조회는 전 역할, 최종 문구·검수 액션(승인·반려·임시저장)은
-			// CR, 노출 축소 조치(이관·중단)는 CR·OP. 쓰기는 아직 mock(원장 ID 는 404)이나
-			// 권한 경계는 매트릭스에 맞춰 미리 좁힌다(쓰기 전환은 ALPHA-613 이 전이를 채운다).
+			// explanations 실전환(ALPHA-607 읽기·613 쓰기) — permission-matrix.md 의 실
+			// 권한을 적용한다: 조회는 전 역할, 최종 문구 정정은 CR, 노출 축소 조치(이관·중단)는
+			// CR·OP. 화면에 없는 approve·reject·draft(ALPHA-513 잔재)는 제거됐다(현황판+사후
+			// 운영으로 역할 재정리, ALPHA-613). 쓰기 3종은 원장 전이·감사로 실전환됐다.
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/stop"), COMPLIANCE_REVIEWER_OR_OPERATOR),
 			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/move-to-review"), COMPLIANCE_REVIEWER_OR_OPERATOR),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),
-			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/draft"), COMPLIANCE_REVIEWER_ONLY),
 			// 정책 조회는 전 역할, 변경(=새 버전 발행)은 CR 전용 — screening 도메인 DB
 			// 전환(ALPHA-438)으로 mock 한시 예외가 해제됐다(permission-matrix "정책 변경" 행).
 			new Rule("GET", Pattern.compile("/api/v1/screening/words"), ANY_ROLE),

@@ -87,6 +87,16 @@ class ConsoleAuthFilterTest {
 				String publishedSummary) {
 			return 1;
 		}
+
+		@Override
+		public int updatePublishedSummary(String analysisItemId, String publishedSummary) {
+			return 1;
+		}
+
+		@Override
+		public int unpublish(String analysisItemId, String reason, Long memberId) {
+			return 1;
+		}
 	}
 
 	/** 원장 대역 — 이메일→현재 role 맵에 있으면 활성 계정(id 1 고정), 없으면 비활성/삭제(Optional.empty). */
@@ -465,24 +475,36 @@ class ConsoleAuthFilterTest {
 	@Test
 	void explanations_역할이_permission_matrix로_세분화된다() throws Exception {
 		// WHY: explanations 실전환(ALPHA-607)으로 mock 완화(전 역할)가 해제된다 —
-		// 조회=전 역할, 최종 문구·승인/반려/임시저장=CR, 이관·중단=CR·OP. ExplanationController
-		// 는 이 셋업에 없어 통과 = 404(로그인 테스트와 동일 기법), 거부 = 403.
+		// 조회=전 역할, 최종 문구 수정=CR, 이관·중단=CR·OP. ExplanationController 는 이
+		// 셋업에 없어 통과 = 404(로그인 테스트와 동일 기법), 거부 = 403.
 		// 조회는 전 역할 — RO 통과
 		mvc.perform(get("/api/v1/explanations").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isNotFound());
 		mvc.perform(get("/api/v1/explanations"))
 				.andExpect(status().isUnauthorized());
-		// 최종 문구·검수 액션 = CR 전용 — OP·RO 는 403
+		// 최종 문구 수정 = CR 전용 — OP·RO 는 403
 		mvc.perform(patch("/api/v1/explanations/expr-1/final").session(sessionOf(OPERATOR))
 						.contentType(MediaType.APPLICATION_JSON).content("{\"final\":\"문구\"}"))
 				.andExpect(status().isForbidden())
 				.andExpect(jsonPath("$.code").value("CNSL4030"));
-		mvc.perform(post("/api/v1/explanations/expr-1/approve").session(sessionOf(READ_ONLY)))
-				.andExpect(status().isForbidden());
 		// 노출 축소 조치(이관·중단) = CR·OP — OP 통과, RO 는 403
 		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(OPERATOR)))
 				.andExpect(status().isNotFound());
 		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
+	}
+
+	@Test
+	void explanations_삭제된_액션은_인증돼도_403이다() throws Exception {
+		// WHY: approve·reject·draft(ALPHA-513 잔재)는 표면째 제거됐다(ALPHA-613) —
+		// permission-matrix.md 에 행이 없어 fail-closed(매핑 없는 표면 = 403)로 막힌다.
+		// CR 로 인증해도 라우트가 없으므로 통과(404)가 아니라 거부(403)여야 한다.
+		mvc.perform(post("/api/v1/explanations/expr-1/approve").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/explanations/expr-1/reject").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden());
+		mvc.perform(patch("/api/v1/explanations/expr-1/draft").session(sessionOf(REVIEWER)))
 				.andExpect(status().isForbidden());
 	}
 

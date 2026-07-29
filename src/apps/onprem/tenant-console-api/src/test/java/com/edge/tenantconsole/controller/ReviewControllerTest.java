@@ -91,6 +91,17 @@ class ReviewControllerTest {
 			this.capturedSummary = publishedSummary;
 			return publishResult ? 1 : 0;
 		}
+
+		// 검수 표면은 사후 운영 writer(ALPHA-613)를 쓰지 않는다 — no-op 대역.
+		@Override
+		public int updatePublishedSummary(String analysisItemId, String publishedSummary) {
+			return 0;
+		}
+
+		@Override
+		public int unpublish(String analysisItemId, String reason, Long memberId) {
+			return 0;
+		}
 	}
 
 	private static final class StubTasks implements ReviewTaskRepository {

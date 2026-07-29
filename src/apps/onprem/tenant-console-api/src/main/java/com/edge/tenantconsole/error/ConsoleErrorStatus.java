@@ -10,7 +10,7 @@ import org.springframework.http.HttpStatus;
  */
 public enum ConsoleErrorStatus implements BaseErrorCode {
 
-	REASON_REQUIRED(HttpStatus.BAD_REQUEST, "CNSL4001", "반려 사유는 비어 있을 수 없습니다."),
+	REASON_REQUIRED(HttpStatus.BAD_REQUEST, "CNSL4001", "사유는 비어 있을 수 없습니다."),
 	INVALID_STATUS_FILTER(HttpStatus.BAD_REQUEST, "CNSL4002", "지원하지 않는 상태 필터입니다."),
 	INVALID_REQUEST(HttpStatus.BAD_REQUEST, "CNSL4003", "요청 값이 올바르지 않습니다."),
 	// 로그인 실패 사유는 구분 없이 하나의 코드 — 계정 존재 여부 노출 방지.
@@ -31,7 +31,13 @@ public enum ConsoleErrorStatus implements BaseErrorCode {
 	DUPLICATE_MEMBER_EMAIL(HttpStatus.CONFLICT, "CNSL4093", "이미 등록된 이메일입니다."),
 	LAST_ADMIN(HttpStatus.CONFLICT, "CNSL4094", "마지막 활성 관리자는 비활성화하거나 역할을 변경할 수 없습니다."),
 	ROLE_CONFLICT(HttpStatus.CONFLICT, "CNSL4095", "역할이 이미 변경됐습니다 — 목록을 새로고침한 뒤 다시 시도하세요."),
-	POLICY_CONFLICT(HttpStatus.CONFLICT, "CNSL4096", "정책이 동시에 변경됐습니다 — 새로고침한 뒤 다시 시도하세요.");
+	POLICY_CONFLICT(HttpStatus.CONFLICT, "CNSL4096", "정책이 동시에 변경됐습니다 — 새로고침한 뒤 다시 시도하세요."),
+	// explanations 사후 운영 전이 충돌(ALPHA-613) — 화면 상태와 원장이 어긋난 경우로,
+	// 목록 새로고침으로 수렴한다. 최종 문구 수정은 게시본(PUBLISHED)이 있어야 하고,
+	// 제공 중단은 노출 중(AUTO_PUBLISHED·APPROVED)이어야 하며, 검수 이관은 차단(BLOCKED)에서만 가능하다.
+	NOT_PUBLISHED(HttpStatus.CONFLICT, "CNSL4097", "게시된 문구가 없어 최종 문구를 수정할 수 없습니다 — 목록을 새로고침한 뒤 다시 시도하세요."),
+	NOT_SERVING(HttpStatus.CONFLICT, "CNSL4098", "노출 중인 설명이 아니라 제공을 중단할 수 없습니다 — 이미 처리됐을 수 있습니다."),
+	NOT_BLOCKED(HttpStatus.CONFLICT, "CNSL4099", "점검 차단(BLOCKED) 상태가 아니라 검수로 이관할 수 없습니다 — 이미 처리됐을 수 있습니다.");
 
 	private final HttpStatus httpStatus;
 	private final String code;

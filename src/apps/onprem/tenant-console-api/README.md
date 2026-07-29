@@ -46,10 +46,14 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
   비활성화는 세션 무효화 후 401, 역할 변경(ALPHA-499)은 다음 요청부터 즉시 반영.
   CSRF 는 세션 쿠키 SameSite=Strict·HttpOnly 로 경량 방어(운영은 표준 토큰 추가).
 
-## 콘솔 mock 표면 (ALPHA-513)
+## 콘솔 도메인 표면 — DB 전환 완료 (ALPHA-513 → 도메인별 실전환)
 
-tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 중 mock 잔여
-1종 — explanations(가격 변동 설명·반입 상태).
+tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면은 **전 도메인이
+실 원장으로 전환됐다** — 마지막 explanations 쓰기 실전환(ALPHA-613)의
+`ExplanationMockStore` 삭제로 콘솔 mock 패키지가 소멸했다(mock 표면 0).
+explanations(가격 변동 설명)는 ALPHA-607(읽기 실조회)·613(쓰기 원장 전이·감사)으로
+전환됐다 — 조회는 현황판, 쓰기는 사후 운영(최종 문구 정정·검수 이관·제공 중단 — 사유
+필수)이고 판정 게이트(승인·반려)는 Review Queue 소관이다(역할 분담, 2026-07-29).
 scope(시장·종목 제공 범위)는 ALPHA-606 으로 serving_scope(옵트아웃 토글)·analysis_item
 (종목 유니버스) 실조회/전이로 전환됐다 — 행 부재 = 기본 제공, 시장 커버리지 토글은
 TA·종목 제외 토글은 CR 전용이다(serving_scope.scope_type 경계와 1:1). MVP 는 국내
@@ -62,17 +66,16 @@ ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테�
 배포 설정(`console.tenant.*`, 온프렘 박스=테넌트 1:1)이 소스다. dashboard(제공
 트래픽 KPI)는 ALPHA-128 부터 serving_request_metric 집계 실데이터다(mock 단계 없음).
 
-- **응답 원천은 `mock` 패키지** — 도메인별 in-memory 가변 스토어(`*MockStore`) 한
-  파일이 UI 구 mock 데이터의 이식본이다. DB 연동은 도메인 단위로 service 의 스토어
-  의존을 repository 로 교체하는 방식으로 진행한다(UI 는 계약 불변이라 무변경).
+- **응답 원천은 실 원장** — service 가 repository 로 온프렘 DB 를 실조회·전이한다.
+  DB 연동은 도메인 단위로 service 의 mock 스토어 의존을 repository 로 교체하며
+  진행했고(UI 는 계약 불변이라 무변경), 마지막 explanations 전환으로 `mock` 패키지가
+  사라졌다.
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어/도메인 record)` 로
   매핑해 반환한다(서비스는 여전히 mock/도메인 record 반환). mock record(스토어 형)와
   형식이 같아도 별도 타입이다 — DB 연동 시 `from()` 의 매핑원이 mock record 에서
   repository record 로 바뀐다. 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은
   tenant-sync-api·publication-api·super-admin-api(ALPHA-523) dto 규약을 따른다.
-  평면 패키지라 필드가 다른 두 반려 요청은 `ReviewRejectRequest`(reason)·
-  `ExplanationRejectRequest`(note)로 도메인 접두어를 붙였다(ALPHA-524).
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 라 기존 검수 표면(snake_case)과
   다르다. `final` 은 Java 예약어라 컴포넌트명은 `finalText`, JSON 은 `@JsonProperty`.
 - **성공·에러 모두 공통 응답 포맷(`ApiResponse`)** — 콘솔 전 표면이 jvm-common 봉투
@@ -81,14 +84,14 @@ ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테�
   `result` 생략이다(204 는 쓰지 않는다). 성공까지 봉투로 감싸는 건 콘솔 계열 API 규약이다
   — tenant-console-api·super-admin-api 가 채택했다(ALPHA-521·522). 실계약 조회 표면
   (tenant-sync-api·publication-api)은 raw DTO 성공을 유지하는 의도적 분기다(AGENTS Rule 7·11).
-- **인가는 인증만 강제(전 역할)** — 로그인 화면 없는 mock 단계의 한시 예외
-  (permission-matrix.md "콘솔 mock 표면" 절). 도메인 DB 전환 시 역할을 좁힌다.
+- **인가는 permission-matrix.md 역할을 강제** — mock 단계의 한시 예외(인증만 강제)는
+  전 도메인 DB 전환으로 해제됐다. ConsoleAuthFilter 가 매 요청 원장 role 로 라우트별
+  권한을 판정한다(fail-closed).
 
 ## 스텁 → 실구현 교체 지점
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` (잔여 `ExplanationMockStore`) | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
 | 데모 로그인 | 실증권사 계약 | SSO/AD(SAML/OIDC) 진입점 — 같은 세션 추상화로 수렴 |
 
 ## 실행·확인
