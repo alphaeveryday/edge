@@ -1,0 +1,16 @@
+# 마이그레이션 전방 리네임 복구 allowlist — schema-validate guard 가 읽는다.
+#
+# 용도: 병렬 PR 머지 경합으로 **미적용** 마이그레이션이 base 최신 버전보다 낮게
+# 착지(out-of-order)했을 때만, 그 파일을 내용 그대로 더 큰 버전으로 리네임해
+# 복구한다. 여기 선언된 쌍만 guard 의 리네임 금지에서 면제된다(그 외 리네임은
+# 종전대로 전면 거부). 선언 자체가 diff 에 드러나므로 "이 파일이 정말 미적용인가"를
+# 리뷰가 판단한다 — 적용된 파일을 올리면 배포 flywayMigrate 가
+# "applied migration not resolved" 로 fail-loud 한다.
+#
+# 형식: <구 파일명> <새 파일명>  (basename, 공백 구분, # 주석·빈 줄 무시)
+# 복구 머지 후 항목은 이력으로 남긴다(재사용 불가 — old 파일이 더는 존재하지 않는다).
+
+# 2026-07-29 ALPHA-623 — #389·#391 역행 착지 3건 복구
+V202607280001__update_event_argument_entity_kind_comment.sql V202607291710__update_event_argument_entity_kind_comment.sql
+V202607280002__seed_authority_actors.sql V202607291730__seed_authority_actors.sql
+V202607290001__add_instrument_classification.sql V202607291720__add_instrument_classification.sql

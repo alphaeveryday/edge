@@ -84,7 +84,7 @@ def test_authority_registry_matches_seed_migration():
     import re
 
     seed = Path(__file__).resolve().parents[3] / (
-        "libs/schema/migrations-cloud/V202607280002__seed_authority_actors.sql")
+        "libs/schema/migrations-cloud/V202607291730__seed_authority_actors.sql")
     sql = seed.read_text(encoding="utf-8")
     registry = O.load_authority_registry()
     for entity_id, entry in registry.entries.items():
