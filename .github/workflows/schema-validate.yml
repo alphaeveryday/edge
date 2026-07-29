@@ -87,21 +87,47 @@ jobs:
           for migdir in "src/libs/schema/migrations-cloud" "src/libs/schema/migrations-onprem"; do
             echo "── 세트 검사: ${migdir}"
 
-            # (a) 기존 마이그레이션 파일의 수정(M)/삭제(D)/이름변경(R) 금지 — 추가(A)만 허용.
-            changed="$(git diff --name-status --diff-filter=MDR "${base}...${head}" -- "${migdir}/")"
+            base_max="$(git ls-tree -r --name-only "${base}" -- "${migdir}/" \
+              | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1)"
+            base_max="${base_max:-0}"
+            echo "base('${BASE_REF}') ${migdir} 최신 마이그레이션 버전: ${base_max}"
+
+            # (a) 기존 마이그레이션 파일의 수정(M)/삭제(D) 금지 — 추가(A)만 허용.
+            changed="$(git diff --name-status --diff-filter=MD "${base}...${head}" -- "${migdir}/")"
             if [ -n "${changed}" ]; then
-              echo "::error::이미 존재하는 마이그레이션 파일을 수정/삭제/이름변경했습니다. 변경은 항상 새 V*.sql 추가로만 하세요(확장-수축)."
+              echo "::error::이미 존재하는 마이그레이션 파일을 수정/삭제했습니다. 변경은 항상 새 V*.sql 추가로만 하세요(확장-수축)."
               echo "${changed}"
               exit 1
+            fi
+
+            # (a') 이름변경(R)은 '전방 리네임'만 허용: 내용 동일(R100) + 새 버전 > 구 버전
+            #      + 새 버전 > base 최신. 미적용 마이그레이션이 base 전진으로 역행(out-of-order)
+            #      착지했을 때의 복구 경로다(ALPHA-623 — branch protection 부재로 아래 '한계'의
+            #      창이 실제로 열린다). 적용된 파일을 전방 리네임하면 CI 는 못 잡지만 배포
+            #      flywayMigrate 가 "applied migration not resolved" 로 fail-loud 한다.
+            renames="$(git diff --name-status --diff-filter=R "${base}...${head}" -- "${migdir}/")"
+            if [ -n "${renames}" ]; then
+              bad_renames="$(echo "${renames}" | while IFS="$(printf '\t')" read -r st old new; do
+                score="${st#R}"
+                oldv="$(echo "${old}" | sed -nE 's#.*/V([0-9]+)__.*#\1#p')"
+                newv="$(echo "${new}" | sed -nE 's#.*/V([0-9]+)__.*#\1#p')"
+                if [ "${score}" != "100" ] || [ -z "${oldv}" ] || [ -z "${newv}" ] \
+                   || [ "${newv}" -le "${oldv}" ] || [ "${newv}" -le "${base_max}" ]; then
+                  echo "  - ${old} -> ${new} (${st})"
+                fi
+              done)"
+              if [ -n "${bad_renames}" ]; then
+                echo "::error::허용되지 않는 마이그레이션 이름변경입니다. 리네임은 내용 동일(R100)·버전 전진(새>구, 새>base 최신)인 복구 리네임만 허용합니다."
+                echo "${bad_renames}"
+                exit 1
+              fi
+              echo "전방 리네임 허용:"
+              echo "${renames}"
             fi
 
             # (b) 새로 추가되는 마이그레이션 버전은 base 브랜치 해당 세트의 최신 버전보다 커야 한다(out-of-order 방지).
             added="$(git diff --name-only --diff-filter=A "${base}...${head}" -- "${migdir}/" | grep -E '/V[0-9]+__' || true)"
             if [ -n "${added}" ]; then
-              base_max="$(git ls-tree -r --name-only "${base}" -- "${migdir}/" \
-                | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1)"
-              base_max="${base_max:-0}"
-              echo "base('${BASE_REF}') ${migdir} 최신 마이그레이션 버전: ${base_max}"
               # 주의: set -e 하에서 while 본문이 실패하는 test로 끝나면 서브셸이 exit 1이 되어
               # 명령치환 할당이 죽는다. 조건 출력은 반드시 if/fi로 감싸 본문을 exit 0으로 끝낸다.
               bad="$(echo "${added}" | while IFS= read -r f; do
