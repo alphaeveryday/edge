@@ -1,13 +1,13 @@
 # super-admin-api
 
 벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses
-읽기는 DB, 그 외 mock). 화면·금지 항목의 SSOT 는
+는 DB, session 은 mock). 화면·금지 항목의 SSOT 는
 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
 sources 는 운영 원장(`ops_*`)·analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다
-(ALPHA-514·601). analyses 쓰기(정정·제외·복원)·session 표면과 운영자 인증은 아직
-in-memory(ALPHA-602·474).
+(ALPHA-514·601). analyses 쓰기(정정·제외·복원)는 운영자 작업 원장(`admin_activity_log`) 전이다
+(ALPHA-602). session 표면과 운영자 인증은 아직 in-memory(474).
 
 ## 지켜야 할 로컬 불변식
 
@@ -59,10 +59,12 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   않는 이유: `ddl-auto=validate` 환경에서 소유하지 않은 5테이블에 이 앱 기동을 묶지 않기
   위함이다. **analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회**
   (`repository/JdbcAnalysisRepository`, ALPHA-601 — 소유는 analysis-engine, 같은 이유로 JPA
-  없이 Jdbc). analyses 쓰기(정정·제외·복원)와 session 은 아직 `mock` 패키지 in-memory
-  스토어(`*MockStore`)다 — 실목록의 런 ID 는 mock 에 없어 쓰기는 404 로 실패하며, 원장
-  전이·사유 필수·감사 레코드와 함께 ALPHA-602 가 교체한다. DB 연동은 이렇게 도메인
-  단위로 service 의 스토어 의존을 repository 로 교체하며 진행한다.
+  없이 Jdbc). **analyses 쓰기(정정·제외·복원)는 운영자 작업 원장 전이**
+  (`repository/JdbcAnalysisWriteRepository`, ALPHA-602) — explanation_result(analysis-engine
+  소유)를 덮지 않고 super-admin-api **소유** 원장 `admin_activity_log` 에 작업자·사유·전후와 함께
+  append 하며, 정정 본문·제외 여부는 읽기가 그 원장에서 오버레이한다(원본 불변, 단일 writer 규약
+  유지). session 은 아직 `mock` 패키지 in-memory 스토어(`AdminSessionMockStore`)다. DB 연동은
+  이렇게 도메인 단위로 service 의 스토어 의존을 repository 로 교체하며 진행한다.
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
   (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
@@ -79,14 +81,15 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   성공까지 봉투로 감싸는 건 콘솔 계열 API 규약이다 — super-admin-api·tenant-console-api
   가 채택했다(ALPHA-521·522). 실계약 조회 표면(tenant-sync-api·publication-api)은 raw
   DTO 성공을 유지하는 의도적 분기다(AGENTS Rule 7·11).
-- **정정/무효화 사유 필수·감사 레코드**(콘솔 IA)는 DB 연동 시 UI 계약과 함께
-  편입한다 — mock 단계 UI 계약에는 사유 입력이 없다.
+- **정정/무효화 사유 필수·감사 레코드**(콘솔 IA)는 쓰기 실전환(ALPHA-602)과 함께 계약에
+  편입됐다 — 정정/제외는 사유 필수(빈 값 400), UI 가 사유를 받는다. 복원 사유는 선택.
+  작업자·사유·변경 전후는 `admin_activity_log` 원장에 보존된다(열람 API 없음 — DB 보존).
 
 ## 스텁 → 실구현 교체 지점
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` 2종(session·analyses 쓰기) | 도메인별 DB 연동 | service 의존을 repository 로 교체. tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601) 전환 완료, analyses 쓰기=ALPHA-602 |
+| `mock` 패키지 `AdminSessionMockStore`(session) | 도메인별 DB 연동 | service 의존을 repository 로 교체. tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601)·analyses 쓰기=운영자 작업 원장(ALPHA-602) 전환 완료, session 잔여 |
 | config 부트스트랩 운영자 | ALPHA-474 | Spring Security + 운영자 IdP 연동 |
 
 ## 실행·확인

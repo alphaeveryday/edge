@@ -211,11 +211,13 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 
 	/**
 	 * 오버레이는 admin_activity_log 의 런별 최신 액션에서 유도한다 — 제외/복원은 최신이 이기고
-	 * (run-2: 제외 후 복원 → 제외 아님), 정정은 제외와 독립이다(run-1: 정정+제외 → 둘 다 true).
+	 * (run-2: 제외 후 복원 → 제외 아님), 정정은 제외와 독립이며 최신 정정본이 오버레이된다
+	 * (run-1: 1차→2차 정정 후 제외 → excluded·corrected 둘 다 true, correctedSummary=2차).
 	 */
 	@Test
-	void 오버레이는_런별_최신_액션에서_제외_정정을_유도한다() {
-		insertActivity("run-1", "ANALYSIS_RESULT_CORRECTED");
+	void 오버레이는_런별_최신_액션에서_제외_정정_정정본을_유도한다() {
+		insertCorrection("run-1", "1차 정정본");
+		insertCorrection("run-1", "2차 정정본");
 		insertActivity("run-1", "ANALYSIS_EXCLUDED");
 		insertActivity("run-2", "ANALYSIS_EXCLUDED");
 		insertActivity("run-2", "ANALYSIS_RESTORED");
@@ -224,8 +226,10 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 				.collect(Collectors.toMap(AnalysisRow::runId, Function.identity()));
 		assertThat(byRun.get("run-1").corrected()).isTrue();
 		assertThat(byRun.get("run-1").excluded()).isTrue();
+		assertThat(byRun.get("run-1").correctedSummary()).isEqualTo("2차 정정본");
 		assertThat(byRun.get("run-2").corrected()).isFalse();
 		assertThat(byRun.get("run-2").excluded()).isFalse();
+		assertThat(byRun.get("run-2").correctedSummary()).isNull();
 	}
 
 	private void insertActivity(String runId, String action) {
@@ -233,5 +237,12 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 				INSERT INTO admin_activity_log (actor_email, action, target_type, target_id, reason)
 				VALUES ('ops@edge.io', ?, 'ANALYSIS_RUN', ?, 'test')
 				""", action, runId);
+	}
+
+	private void insertCorrection(String runId, String after) {
+		jdbc.update("""
+				INSERT INTO admin_activity_log (actor_email, action, target_type, target_id, reason, details)
+				VALUES ('ops@edge.io', 'ANALYSIS_RESULT_CORRECTED', 'ANALYSIS_RUN', ?, 'test', ?::jsonb)
+				""", runId, "{\"after\": \"" + after + "\"}");
 	}
 }

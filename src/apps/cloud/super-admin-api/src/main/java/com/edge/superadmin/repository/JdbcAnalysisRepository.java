@@ -93,19 +93,25 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 
 	/**
 	 * 운영자 작업 오버레이 — 창 안의 런별 최신 액션을 admin_activity_log 에서 유도한다(ALPHA-602).
-	 * run_status 를 덮지 않는다: 제외는 표시 배지만 바꾸는 오버레이라 복원이 원상태를 그대로
-	 * 되살린다({@code excluded} 만 false 로).
+	 * explanation_result(파이프라인 소유)를 덮지 않는다: 정정 본문·제외 여부를 이 원장에서 읽어
+	 * 표시 층이 덧입힌다. 복원은 EXCLUDE 를 취소해 원상태(run_status)를 그대로 되살린다.
 	 *
 	 * <p>{@code excluded} = EXCLUDE/RESTORE 중 최신이 EXCLUDE. {@code corrected} = 정정 이력 존재.
-	 * FILTER 로 정정 액션은 제외 판정에서 배제한다 — 정정만 있고 제외/복원이 없으면 array 가 비어
-	 * {@code excluded} 는 NULL(→ getBoolean 이 false).
+	 * {@code corrected_summary} = 최신 정정본(details.after). FILTER 로 액션별 집계를 분리한다 —
+	 * 해당 액션이 없으면 array 가 비어 [1] 이 NULL(제외 아님 / 정정본 없음).
+	 *
+	 * <p>창(LIMIT)은 LIST_SQL 과 같은 정렬의 explanation_run 상위 200 이다 — LIST_SQL 조인은 전부
+	 * 필수 1:1 체인(route→기여관찰→트리거→instrument→entity, 전부 NOT NULL)이라 런을 떨구지 않아
+	 * 두 창의 런 집합이 일치한다(EVIDENCE_SQL 과 같은 불변식).
 	 */
 	private static final String OVERLAY_SQL = """
 			SELECT target_id,
 			       bool_or(action = 'ANALYSIS_RESULT_CORRECTED') AS corrected,
 			       (array_agg(action ORDER BY activity_id DESC)
 			          FILTER (WHERE action IN ('ANALYSIS_EXCLUDED', 'ANALYSIS_RESTORED')))[1]
-			          = 'ANALYSIS_EXCLUDED' AS excluded
+			          = 'ANALYSIS_EXCLUDED' AS excluded,
+			       (array_agg(details ->> 'after' ORDER BY activity_id DESC)
+			          FILTER (WHERE action = 'ANALYSIS_RESULT_CORRECTED'))[1] AS corrected_summary
 			  FROM admin_activity_log
 			 WHERE target_type = 'ANALYSIS_RUN'
 			   AND target_id IN (
@@ -121,7 +127,7 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 		this.jdbc = jdbc;
 	}
 
-	private record Overlay(boolean excluded, boolean corrected) {
+	private record Overlay(boolean excluded, boolean corrected, String correctedSummary) {
 	}
 
 	@Override
@@ -138,8 +144,9 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 		});
 		Map<String, Overlay> overlayByRun = new HashMap<>();
 		jdbc.query(OVERLAY_SQL, rs -> {
-			overlayByRun.put(rs.getString("target_id"),
-					new Overlay(rs.getBoolean("excluded"), rs.getBoolean("corrected")));
+			overlayByRun.put(rs.getString("target_id"), new Overlay(
+					rs.getBoolean("excluded"), rs.getBoolean("corrected"),
+					rs.getString("corrected_summary")));
 		});
 		return jdbc.query(LIST_SQL, (rs, i) -> {
 			Overlay overlay = overlayByRun.getOrDefault(
@@ -157,10 +164,11 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 					rs.getString("confidence_level"),
 					overlay.excluded(),
 					overlay.corrected(),
+					overlay.correctedSummary(),
 					List.copyOf(evidenceByRun.getOrDefault(
 							rs.getString("explanation_run_id"), List.of())));
 		});
 	}
 
-	private static final Overlay NO_OVERLAY = new Overlay(false, false);
+	private static final Overlay NO_OVERLAY = new Overlay(false, false, null);
 }

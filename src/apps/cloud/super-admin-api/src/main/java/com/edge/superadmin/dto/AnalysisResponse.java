@@ -13,9 +13,10 @@ import java.util.List;
  * 원장(explanation_*)의 판정을 UI 어휘로 <b>번역만</b> 한다: {@code run_status}→status,
  * {@code confidence_level}→confidence. 새 판정을 만들지 않는다(SourceService 원칙).
  *
- * <p>{@code corrected}·EXCLUDED 는 운영자 작업 원장(admin_activity_log)에서 유도한 오버레이다
- * (ALPHA-602). 제외는 상태 배지만 EXCLUDED 로 바꾸고 완료시각·본문은 원래 run_status 기준을
- * 유지한다 — 복원이 원상태를 그대로 되살린다.
+ * <p>{@code corrected}·EXCLUDED·정정 본문은 운영자 작업 원장(admin_activity_log)에서 유도한
+ * 오버레이다(ALPHA-602). 제외는 상태 배지만 EXCLUDED 로 바꾸고 완료시각은 원래 run_status 기준을
+ * 유지한다(복원이 원상태 복구). 정정본이 있으면 원장 원본(파이프라인 소유·불변) 대신 정정 문구를
+ * 낸다 — 원본은 덮이지 않는다.
  */
 public record AnalysisResponse(String id, String name, String code, String market, int direction,
 		double changePct, String status, String basisTime, String basisTimeAbs, String doneTime,
@@ -63,7 +64,10 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				doneTime(underlyingStatus, row.finishedAt()),
 				row.confidenceLevel(),
 				row.corrected(),
-				result(row.runStatus(), row.summary()),
+				// 정정본이 있으면 그 문구를, 없으면 원장 원본을 상태 문구 규칙에 태운다.
+				row.correctedSummary() != null
+						? row.correctedSummary()
+						: result(row.runStatus(), row.summary()),
 				row.evidence().stream().map(EvidenceResponse::from).toList());
 	}
 

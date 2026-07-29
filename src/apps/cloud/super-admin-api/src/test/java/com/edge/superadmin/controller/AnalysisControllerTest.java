@@ -38,7 +38,7 @@ class AnalysisControllerTest {
 			"run-1", "KODEX 반도체", "091160", "XKRX", -0.0342, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-27T15:52:00+09:00"),
-			"반도체 업황 회복 기대가 확산되며 상승.", "HIGH", false, false,
+			"반도체 업황 회복 기대가 확산되며 상승.", "HIGH", false, false, null,
 			List.of(new EvidenceRow("NEWS", "반도체 수출 반등", "BIGKINDS",
 							OffsetDateTime.parse("2026-07-27T09:10:00+09:00")),
 					new EvidenceRow("DISCLOSURE", null, "DART", null)));
@@ -46,21 +46,25 @@ class AnalysisControllerTest {
 	/** 결과 행이 아직 없는 런 — summary·confidence 가 null 로 온다. */
 	private static final AnalysisRow PENDING_ROW = new AnalysisRow(
 			"run-2", "TIGER 2차전지", "305540", "XKRX", 0.0518, "RUNNING",
-			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, false, false,
+			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, false, false, null,
 			List.of());
 
 	/** SUCCEEDED 인데 본문이 빈 원장 불일치 — 엔진이 "" 를 저장할 수 있다. null 과 동급 결측. */
 	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
 			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
-			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "   ", null, false, false, List.of());
+			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "   ", null, false, false, null,
+			List.of());
 
-	/** 제외·정정 오버레이가 선 완료 런 — 상태는 EXCLUDED, 완료시각·정정 플래그는 원상태 기준. */
+	/**
+	 * 제외·정정 오버레이가 선 완료 런 — 상태는 EXCLUDED, 완료시각은 원상태 기준, 본문은 정정본
+	 * (원장 원본이 아니라 admin_activity_log 의 정정 문구).
+	 */
 	private static final AnalysisRow EXCLUDED_ROW = new AnalysisRow(
 			"run-4", "TIGER 미국나스닥100", "133690", "XNAS", 0.0812, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-25T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-25T15:52:00+09:00"),
-			"회계 이슈 미확인 보도로 급등 — 근거 신뢰도 미달로 제외.", "LOW", true, true, List.of());
+			"엔진 원본 설명.", "LOW", true, true, "운영자가 정정한 설명 본문.", List.of());
 
 	private static final SessionOperator OPERATOR = new SessionOperator("ops@edge.io", "운영자");
 
@@ -143,7 +147,9 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[3].status").value("EXCLUDED"))
 				.andExpect(jsonPath("$.result[3].corrected").value(true))
 				.andExpect(jsonPath("$.result[3].doneTime").value("2026-07-25 15:52 KST"))
-				.andExpect(jsonPath("$.result[3].confidence").value("LOW"));
+				.andExpect(jsonPath("$.result[3].confidence").value("LOW"))
+				// 본문은 원장 원본이 아니라 정정본을 낸다(원본 explanation_result 는 불변)
+				.andExpect(jsonPath("$.result[3].result").value("운영자가 정정한 설명 본문."));
 	}
 
 	@Test

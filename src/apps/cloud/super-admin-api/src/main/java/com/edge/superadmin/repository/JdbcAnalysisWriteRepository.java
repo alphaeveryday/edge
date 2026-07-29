@@ -13,14 +13,31 @@ import java.util.Map;
 /**
  * {@link AnalysisWriteRepository} 의 JdbcTemplate 구현(ALPHA-602). 분석 도메인 읽기
  * ({@link JdbcAnalysisRepository})가 JdbcTemplate 이라 쓰기도 같은 결로 맞춘다(이 앱에서 JPA 는
- * tenants 전용). 도메인 전이와 감사 append 를 {@code @Transactional} 로 한 단위에 묶는다.
+ * tenants 전용).
  *
- * <p>감사는 {@code admin_activity_log}(ALPHA-424 Admin Activity Log)에 append 한다 — 별도
- * 열람 API 는 없다(super-admin-console.md: UI-less, DB 보존). 정정/제외/복원 현재상태는 이 원장의
- * 런별 최신 액션에서 유도된다({@link JdbcAnalysisRepository} 오버레이).
+ * <p><b>explanation_result 를 쓰지 않는다.</b> 그 원장은 analysis-engine(pipeline) 소유이고
+ * super-admin-api 는 reader 다 — 소유자 밖 쓰기는 단일 writer 규약 위반(ADR-0005·implementation §4).
+ * 정정도 원본 결과를 덮지 않는다: 운영자 작업은 전부 super-admin-api 소유 원장
+ * {@code admin_activity_log}(ALPHA-424 Admin Activity Log)에만 append 하고, 정정된 본문·제외 여부는
+ * 읽기가 이 원장에서 오버레이한다({@link JdbcAnalysisRepository}). 원본 explanation_result 는
+ * 보존되고, 테넌트 전파(CORRECTION/INVALIDATION 이벤트)는 이 티켓 범위 밖(후속). 감사 열람 API 는
+ * 없다(super-admin-console.md: UI-less, DB 보존).
  */
 @Repository
 public class JdbcAnalysisWriteRepository implements AnalysisWriteRepository {
+
+	/** 런의 현재 노출 본문 = 최신 정정본(있으면) 아니면 원장 원본. 감사 "before" 와 정정 가능 판정에 쓴다. */
+	private static final String EFFECTIVE_SUMMARY_SQL = """
+			SELECT COALESCE(
+			       (SELECT details ->> 'after' FROM admin_activity_log
+			         WHERE target_type = 'ANALYSIS_RUN' AND target_id = er.explanation_run_id
+			           AND action = 'ANALYSIS_RESULT_CORRECTED'
+			         ORDER BY activity_id DESC LIMIT 1),
+			       res.summary) AS effective_summary
+			  FROM explanation_result res
+			  JOIN explanation_run er ON er.explanation_run_id = res.explanation_run_id
+			 WHERE er.explanation_run_id = ?
+			""";
 
 	private final JdbcTemplate jdbc;
 	private final ObjectMapper objectMapper;
@@ -33,15 +50,12 @@ public class JdbcAnalysisWriteRepository implements AnalysisWriteRepository {
 	@Override
 	@Transactional
 	public boolean correct(String runId, String result, String reason, SessionOperator actor) {
-		// 결과 행의 현재 본문을 감사 "before" 로 확보한다 — 없으면(미완·미존재 런) 정정 대상이 없다.
-		List<String> before = jdbc.queryForList(
-				"SELECT summary FROM explanation_result WHERE explanation_run_id = ?",
-				String.class, runId);
+		// 결과 행이 있어야 정정 대상이다 — 없으면(미완·미존재 런) false(404). before 는 현재
+		// 노출 본문(최신 정정본 우선)이라 연속 정정의 감사 체인이 실제 전이를 재현한다.
+		List<String> before = jdbc.queryForList(EFFECTIVE_SUMMARY_SQL, String.class, runId);
 		if (before.isEmpty()) {
 			return false;
 		}
-		jdbc.update("UPDATE explanation_result SET summary = ? WHERE explanation_run_id = ?",
-				result, runId);
 		Map<String, Object> details = new HashMap<>();
 		details.put("before", before.get(0));
 		details.put("after", result);
