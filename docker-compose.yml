@@ -163,8 +163,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: edge
-      # 로컬 데모 한정 — 시드(seed-local-onprem)의 091160 을 지원 종목으로 인식시킨다
-      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160
+      # 로컬 데모 한정 — 분석 유니버스 31종+204 시나리오(demo/onprem 과 동일, quotes-fallback.json 참조).
+      # 133690·비 ETF 는 의도적 제외 — AI 탭 404(미지원 종목) 시나리오 보존.
+      PUBLICATION_KNOWN_TICKERS: 069500,305720,091160,0005G0,0093A0,0167A0,0176P0,0182R0,0190G0,0210A0,091230,139260,261060,266370,363580,388420,395160,395270,396500,455850,469150,471760,471780,471990,474590,475300,475310,476260,482030,486240,488210,494220
     ports:
       - "18084:8080"
 
