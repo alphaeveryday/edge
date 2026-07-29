@@ -19,7 +19,7 @@ variable "certificate_arn" {
 }
 
 variable "spa" {
-  description = "SPA(클라이언트 사이드 라우팅)면 true — 403/404 를 /index.html(200) 로 재작성. 위젯 같은 정적 파일 묶음이면 false."
+  description = "SPA(클라이언트 사이드 라우팅)면 true — 확장자 없는 뷰어 요청을 CloudFront Function(viewer-request, default behavior 한정)으로 /index.html 리라이트. /api/* 의 에러는 손대지 않는다. 라우트 파라미터에 '.' 을 쓰지 않는 것이 전제. 위젯 같은 정적 파일 묶음이면 false."
   type        = bool
   default     = false
 }

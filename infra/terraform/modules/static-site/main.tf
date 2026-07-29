@@ -40,6 +40,17 @@ resource "aws_cloudfront_origin_access_control" "this" {
   signing_protocol                  = "sigv4"
 }
 
+# ── SPA fallback 함수 (spa=true 전용) ───────────────────
+# 확장자 없는 뷰어 요청을 /index.html 로 리라이트(viewer-request). default behavior 에만
+# 연결해 /api/* 의 403/404 JSON 이 왜곡 없이 통과한다 — 로직·전제는 spa-rewrite.js 주석 참조.
+resource "aws_cloudfront_function" "spa_rewrite" {
+  count   = var.spa ? 1 : 0
+  name    = "${var.name}-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = file("${path.module}/spa-rewrite.js")
+}
+
 # ── CloudFront 배포 ─────────────────────────────────────
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
@@ -78,6 +89,16 @@ resource "aws_cloudfront_distribution" "this" {
     cached_methods         = ["GET", "HEAD"]
     compress               = true
     cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # AWS Managed-CachingOptimized
+
+    # SPA fallback — 요청 단계 리라이트라 딥링크가 에러 경로를 타지 않고, 캐시 키도
+    # /index.html 로 수렴한다. 없는 정적 에셋(/assets/nope.js)은 S3 403 이 그대로 노출(정직한 에러).
+    dynamic "function_association" {
+      for_each = var.spa ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.spa_rewrite[0].arn
+      }
+    }
   }
 
   # /api/* → API 오리진. 캐시 비활성 + AllViewer 로 쿼리스트링(ticker 등)을 오리진에 전달.
@@ -92,19 +113,6 @@ resource "aws_cloudfront_distribution" "this" {
       compress                 = true
       cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
       origin_request_policy_id = "b689b0a8-53d0-40ab-baf2-68738e2966ac" # Managed-AllViewerExceptHostHeader
-    }
-  }
-
-  # SPA 라우팅: 존재하지 않는 경로도 index.html 로 200 응답(클라이언트 라우터가 처리).
-  # 배포 전역 적용이라 /api/* 의 403/404 도 index.html 200 으로 마스킹된다(401 은 통과) —
-  # API 오리진과 spa=true 병용 시 유의(mts_site 는 이 때문에 spa=false).
-  dynamic "custom_error_response" {
-    for_each = var.spa ? toset([403, 404]) : toset([])
-    content {
-      error_code            = custom_error_response.value
-      response_code         = 200
-      response_page_path    = "/index.html"
-      error_caching_min_ttl = 10
     }
   }
 
