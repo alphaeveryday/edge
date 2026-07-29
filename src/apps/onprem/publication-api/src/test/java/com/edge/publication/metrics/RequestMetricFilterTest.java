@@ -47,7 +47,7 @@ class RequestMetricFilterTest {
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
 		SeededStore() {
-			super(null, Set.of("069500", "305720"));
+			super(null, Set.of("069500", "305720"), java.time.Duration.ofSeconds(3));
 		}
 
 		@Override

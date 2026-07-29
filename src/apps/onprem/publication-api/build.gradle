@@ -24,6 +24,9 @@ dependencies {
 	// 온프렘 Published Store 조회·Exposure 기록 (migrations-onprem 스키마). JPA 로 매핑하되
 	// 스키마는 Flyway(libs/schema) SSOT — ddl-auto=validate 로 검증만 한다(ADR-0038).
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	// 조회 캐시(ALPHA-433) — 단일 인스턴스 인프로세스 캐시. 별도 캐시 서버(Redis)는 온프렘
+	// 반입 컴포넌트를 늘려 보류했다(버전은 Boot dependency management 관리).
+	implementation 'com.github.ben-manes.caffeine:caffeine'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	// 엔티티↔스키마 정합 검증: 실 Postgres 컨테이너에 onprem 마이그레이션을 적용하고
