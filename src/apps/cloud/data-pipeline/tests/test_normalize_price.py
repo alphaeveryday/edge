@@ -65,6 +65,24 @@ def test_both_vendors_normalize_and_pass(tmp_path):
     assert (log["records_read"], log["records_passed"], log["records_failed"]) == (2, 2, 0)
 
 
+def test_yahoo_normalizes_but_unknown_vendor_still_fails(tmp_path):
+    # WHY: 지수 시계열(로컬 전용 yahoo)은 raw 형태가 FMP 와 같아 같은 경로로 정제돼 canonical
+    #      에 들어가야 한다 — 벤더 허용목록에서 빠지면 수집은 success 인데 정제가 전량
+    #      unsupported_vendor 로 떨어져 분석엔진이 읽을 지수가 영영 안 생긴다(실측 회귀).
+    #      동시에 정말 모르는 벤더는 여전히 사유로 걸러져야 한다(조용한 통과 금지, Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("yahoo", "KR"),
+               [_fmp_row(our_ticker="KS11", market="KR", yahoo_symbol="^KS11")])
+    _write_raw(storage, _raw_key("mystery", "KR"), [_fmp_row(our_ticker="X", market="KR")])
+
+    assert normalize_price.run(storage, "N1") == 0
+    log = _quality_log(storage)
+    assert (log["records_passed"], log["records_failed"]) == (1, 1)
+    assert log["failures"][0]["reasons"] == ["unsupported_vendor"]
+    assert [r["ticker"] for r in _canonical_rows(storage, "KR", "2026-07-01")] == ["KS11"]
+
+
+
 def test_passing_rows_written_to_canonical(tmp_path):
     # WHY: 정제의 목적은 검증된 표준 봉을 canonical 로 넘기는 것 — 통과 행이 표준 스키마
     #      (market,ticker,trade_date,OHLCV,currency)로 canonical 에 적재돼야 다운스트림이 읽는다.

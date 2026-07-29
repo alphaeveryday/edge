@@ -1,0 +1,371 @@
+meta:
+  version: 0.1.0
+  date: '2026-07-28'
+  purpose: closed registry of authorities, courts, central banks and market institutions
+    so AUTHORITY_OR_RULE identity roles can resolve to a real entity
+  local_amendment:
+    # 관계층 role_bindings 와 같은 사정 — edge 에서 먼저 만들었다. 상류 백포트 대상.
+    # 계약 future_entity_backlog 의 `official_policy_rule_master` 의 최소 구현이다:
+    # 규제기관·법원·중앙은행만 담고, 규칙(RULE)·사건(LEGAL_ISSUE)은 담지 않는다
+    # (그쪽은 열린 집합이라 레지스트리로 못 닫는다).
+    why: AUTHORITY·COURT·CENTRAL_BANK 가 identity 인 타입이 100% UNKNOWN 이었다.
+      값을 담을 entity 행이 없어서다. actor_type 은 이미 스키마에 있었다
+      (V202607150001 ck_actor_type = COMPANY·GOVERNMENT·INSTITUTION·PERSON·OTHER).
+  matching:
+    # 별칭은 정규화 후 **완전일치**로만 건다. contains 매칭은 하지 않는다 —
+    # '금융위'가 '금융위원회 산하 …' 같은 문장에서 엉뚱한 기관을 물어온다.
+    # 정규화: NFKC → 공백·가운뎃점 제거 → casefold.
+    rule: exact match on normalized alias
+    ambiguous_rejected: ['정부', '당국', '금융당국', '규제당국', '법원', '검찰', '위원회']
+
+authorities:
+- entity_id: actor_auth_kr_ftc
+  display_name: 공정거래위원회
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [공정거래위원회, 공정위, 한국공정거래위원회]
+- entity_id: actor_auth_kr_fsc
+  display_name: 금융위원회
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [금융위원회, 금융위]
+- entity_id: actor_auth_kr_fss
+  display_name: 금융감독원
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [금융감독원, 금감원]
+- entity_id: actor_auth_kr_mfds
+  display_name: 식품의약품안전처
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [식품의약품안전처, 식약처]
+- entity_id: actor_auth_kr_motie
+  display_name: 산업통상자원부
+  aliases: [산업통상자원부, 산업부, 산자부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_msit
+  display_name: 과학기술정보통신부
+  aliases: [과학기술정보통신부, 과기정통부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_moef
+  display_name: 기획재정부
+  aliases: [기획재정부, 기재부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_molit
+  display_name: 국토교통부
+  aliases: [국토교통부, 국토부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_me
+  display_name: 환경부
+  aliases: [환경부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_moel
+  display_name: 고용노동부
+  aliases: [고용노동부, 노동부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_mohw
+  display_name: 보건복지부
+  aliases: [보건복지부, 복지부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_mnd
+  display_name: 국방부
+  aliases: [국방부]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_dapa
+  display_name: 방위사업청
+  aliases: [방위사업청, 방사청]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_kipo
+  display_name: 특허청
+  aliases: [특허청]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_customs
+  display_name: 관세청
+  aliases: [관세청]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_nts
+  display_name: 국세청
+  aliases: [국세청]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_kcc
+  display_name: 방송통신위원회
+  aliases: [방송통신위원회, 방통위]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_pipc
+  display_name: 개인정보보호위원회
+  aliases: [개인정보보호위원회, 개인정보위]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_nssc
+  display_name: 원자력안전위원회
+  aliases: [원자력안전위원회, 원안위]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_sflec
+  display_name: 증권선물위원회
+  aliases: [증권선물위원회, 증선위]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_prosecution
+  display_name: 대검찰청
+  aliases: [대검찰청, 검찰청, 서울중앙지방검찰청, 서울중앙지검]
+  actor_type: GOVERNMENT
+  country_code: KR
+- entity_id: actor_auth_kr_police
+  display_name: 경찰청
+  aliases: [경찰청, 국가수사본부]
+  actor_type: GOVERNMENT
+  country_code: KR
+
+- entity_id: actor_auth_kr_moe
+  display_name: 교육부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [교육부]
+- entity_id: actor_auth_kr_mofa
+  display_name: 외교부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [외교부]
+- entity_id: actor_auth_kr_mou
+  display_name: 통일부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [통일부]
+- entity_id: actor_auth_kr_moj
+  display_name: 법무부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [법무부]
+- entity_id: actor_auth_kr_mois
+  display_name: 행정안전부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [행정안전부, 행안부]
+- entity_id: actor_auth_kr_mcst
+  display_name: 문화체육관광부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [문화체육관광부, 문체부]
+- entity_id: actor_auth_kr_mafra
+  display_name: 농림축산식품부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [농림축산식품부, 농식품부]
+- entity_id: actor_auth_kr_mof
+  display_name: 해양수산부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [해양수산부, 해수부]
+- entity_id: actor_auth_kr_mss
+  display_name: 중소벤처기업부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [중소벤처기업부, 중기부]
+- entity_id: actor_auth_kr_mogef
+  display_name: 여성가족부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [여성가족부, 여가부]
+- entity_id: actor_auth_kr_mpva
+  display_name: 국가보훈부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [국가보훈부, 보훈부]
+- entity_id: actor_auth_kr_paps
+  display_name: 조달청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [조달청]
+- entity_id: actor_auth_kr_kostat
+  display_name: 통계청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [통계청]
+- entity_id: actor_auth_kr_kma
+  display_name: 기상청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [기상청]
+- entity_id: actor_auth_kr_forest
+  display_name: 산림청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [산림청]
+- entity_id: actor_auth_kr_kasa
+  display_name: 우주항공청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [우주항공청]
+- entity_id: actor_auth_kr_kdca
+  display_name: 질병관리청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [질병관리청, 질본]
+- entity_id: actor_auth_kr_nfa
+  display_name: 소방청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [소방청]
+- entity_id: actor_auth_kr_kcg
+  display_name: 해양경찰청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [해양경찰청, 해경]
+- entity_id: actor_auth_kr_mma
+  display_name: 병무청
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [병무청]
+
+courts:
+- entity_id: actor_court_kr_supreme
+  display_name: 대법원
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [대법원]
+- entity_id: actor_court_kr_constitutional
+  display_name: 헌법재판소
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [헌법재판소, 헌재]
+- entity_id: actor_court_kr_seoul_central
+  display_name: 서울중앙지방법원
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [서울중앙지방법원, 서울중앙지법]
+- entity_id: actor_court_kr_seoul_high
+  display_name: 서울고등법원
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [서울고등법원, 서울고법]
+- entity_id: actor_court_kr_patent
+  display_name: 특허법원
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [특허법원]
+
+central_banks:
+- entity_id: actor_cb_kr_bok
+  display_name: 한국은행
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [한국은행, 한은]
+- entity_id: actor_cb_us_fed
+  display_name: 미국 연방준비제도
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [연방준비제도, 연준, 미국연방준비제도, 연방준비제도이사회, fed, fomc, 연방공개시장위원회]
+- entity_id: actor_cb_eu_ecb
+  display_name: 유럽중앙은행
+  actor_type: GOVERNMENT
+  country_code: EU
+  aliases: [유럽중앙은행, ecb]
+- entity_id: actor_cb_jp_boj
+  display_name: 일본은행
+  actor_type: GOVERNMENT
+  country_code: JP
+  aliases: [일본은행, boj]
+
+institutions:
+- entity_id: actor_inst_kr_krx
+  display_name: 한국거래소
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국거래소, 거래소, krx]
+- entity_id: actor_inst_kr_ksd
+  display_name: 한국예탁결제원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국예탁결제원, 예탁결제원]
+- entity_id: actor_inst_kr_nps
+  display_name: 국민연금공단
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [국민연금공단, 국민연금]
+- entity_id: actor_inst_kr_kdb
+  display_name: 한국산업은행
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국산업은행, 산업은행, 산은]
+- entity_id: actor_inst_kr_nice
+  display_name: NICE신용평가
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [nice신용평가, 나이스신용평가]
+- entity_id: actor_inst_kr_kis
+  display_name: 한국신용평가
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국신용평가, 한신평]
+- entity_id: actor_inst_kr_kr_ratings
+  display_name: 한국기업평가
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국기업평가, 한기평]
+
+- entity_id: actor_inst_kr_kftc
+  display_name: 금융결제원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [금융결제원]
+- entity_id: actor_inst_kr_dtaq
+  display_name: 국방기술품질원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [국방기술품질원, 기품원]
+- entity_id: actor_inst_kr_kisa
+  display_name: 한국인터넷진흥원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국인터넷진흥원, kisa]
+
+foreign_authorities:
+- entity_id: actor_auth_us_sec
+  display_name: 미국 증권거래위원회
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [증권거래위원회, sec, 미국증권거래위원회]
+- entity_id: actor_auth_us_fda
+  display_name: 미국 식품의약국
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [식품의약국, fda, 미국식품의약국]
+- entity_id: actor_auth_us_ftc
+  display_name: 미국 연방거래위원회
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [연방거래위원회, ftc]
+- entity_id: actor_auth_us_doc
+  display_name: 미국 상무부
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [미국상무부, 상무부]
+- entity_id: actor_auth_us_doj
+  display_name: 미국 법무부
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [미국법무부, doj]
+- entity_id: actor_auth_eu_commission
+  display_name: 유럽연합 집행위원회
+  actor_type: GOVERNMENT
+  country_code: EU
+  aliases: [유럽연합집행위원회, eu집행위원회, eu집행위, 집행위원회]
+- entity_id: actor_auth_cn_samr
+  display_name: 중국 국가시장감독관리총국
+  actor_type: GOVERNMENT
+  country_code: CN
+  aliases: [국가시장감독관리총국, 시장감독관리총국, samr]

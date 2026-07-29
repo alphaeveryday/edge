@@ -1,0 +1,190 @@
+# 3. 관계(Relation) — 실체를 잇는 구조적 연결의 어휘.
+#
+# 역할(role_code)이 관계의 이름이고, 그 역할이 가리키는 entity_kind 가 치역이다
+# (정의역은 사건 타입 — 4. 사건층 process/types/*.yaml 이 어느 역할을 쓰는지 선언한다).
+# 종별의 persistence_key(../entity/entity_kinds_v0_1.yaml)가 그 역할 값을 무엇으로
+# 적재할지 정한다.
+#
+# 이 표가 관계 어휘의 SSOT 다 — 사건 타입에서 역파생하지 않는다. 타입이 여기 없는
+# 역할을 쓰면 process 레지스트리 적재가 죽는다(Rule 12).
+#
+# 출신: 구 entity_mapping_contract_v0_1.yaml 의 edge 로컬 증보 절(role_kinds,
+# unfillable_identity)이다. 상류(event-ontology repo)에는 아직 없다 — 백포트 대상.
+# 상류 확정본을 통째 교체하는 규약은 entity/·process/ 리소스에만 적용된다.
+
+meta:
+  version: 0.1.0
+  origin: edge-local amendment, pending upstream backport
+
+identity:
+  # 역할이 실체를 **어떻게** 해소하는가. 종(role_kinds)과 다른 축이다 — 종은 "무엇인가",
+  # 이건 "무엇으로 키를 삼는가"다. 두 축을 한 필드에 눌러 담았던 탓에 코드가 종별을 도로
+  # 쪼개는 하드코딩(CLOSED_SET_ROLES·MINTABLE_KINDS)을 갖고 있었다 — 이 절이 그걸 대체한다.
+  #
+  # scheme:
+  #   REGISTRY  닫힌 명부 완전일치. `sections` 가 볼 절을 좁힌다.
+  #   MINT      정규화 문자열 채번(열린 집합).
+  #   NONE      해소하지 않는다. 티커로 오는 것(발행사·상대방)과 동명이인.
+  # mint_fallback: REGISTRY 에서 못 찾으면 채번까지 갈지. 기본 false.
+  #
+  # sections 를 좁히는 이유: 좁히지 않으면 별칭 평면 하나를 공유해 COURT 자리에
+  # 규제기관이 해소된다(COURT+"공정거래위원회" → actor_auth_kr_ftc). 역할이 종을
+  # 좁혀야 하는데 안 좁히던 버그다.
+  roles:
+    AUTHORITY:    {scheme: REGISTRY, sections: [authorities, foreign_authorities]}
+    COURT:        {scheme: REGISTRY, sections: [courts]}
+    CENTRAL_BANK: {scheme: REGISTRY, sections: [central_banks]}
+    # 거래소는 명부에 있다(actor_inst_kr_krx). 채번만 하면 같은 기관이 AUTHORITY 자리에선
+    # actor_inst_kr_krx, EXCHANGE 자리에선 '한국거래소' 개념으로 갈린다 — 정체성 분열.
+    # 미등재 해외 거래소(나스닥 등)를 위해 채번 폴백은 남긴다.
+    EXCHANGE:     {scheme: REGISTRY, sections: [institutions], mint_fallback: true}
+    MARKET:       {scheme: REGISTRY, sections: [institutions], mint_fallback: true}
+  kind_default:
+    # 위 roles 에 없는 역할의 기본값 — 종별로 정한다.
+    # persistence_key 가 정규화 문자열인 종별은 MINT, 외부 키(ticker·group_key)나
+    # 동명이인 위험이 있는 종별은 NONE.
+    PRODUCT_OR_CONCEPT:  MINT
+    AUTHORITY_OR_RULE:   MINT     # RULE·LEGAL_ISSUE — 열린 집합이라 명부로 못 닫는다
+    LOCATION_OR_HAZARD:  MINT
+    INDEX_OR_EXCHANGE:   MINT
+    ISSUER:              NONE     # ticker 로 온다. 채번하면 상장사가 유령으로 갈린다
+    COMPANY_ENTITY:      NONE     # 미상장 상대방은 미해소 유지가 낫다
+    PERSON:              NONE     # 제목의 인물명은 동명이인을 못 가린다
+    COHORT:              NONE     # group_key 는 sector_map 자산이다
+
+role_kinds:
+  entity:
+    ISSUER:
+    - ISSUER
+    COMPANY_ENTITY:
+    - ACQUIRER
+    - ANALYST_FIRM
+    - CUSTOMER
+    - DEFENDANT
+    - INVESTOR
+    - MEMBER
+    - MERGING_ENTITY
+    - OPERATOR
+    - PARENT
+    - PARTNER
+    - PARTNER_2
+    - PLAINTIFF
+    - RATED_ENTITY
+    - RATING_AGENCY
+    - SELLER
+    - SHAREHOLDER
+    - SPUNOFF_UNIT
+    - SUPPLIER
+    - TARGET
+    - TARGET_COMPANY
+    PERSON:
+    - PERSON
+    AUTHORITY_OR_RULE:
+    - AUTHORITY
+    - CENTRAL_BANK
+    - COURT
+    - LEGAL_ISSUE
+    - RULE
+    PRODUCT_OR_CONCEPT:
+    - COMMODITY
+    - CONTRACT_OBJECT
+    - CURRENCY_PAIR
+    - DEBT_INSTRUMENT
+    - INDICATOR
+    - METRIC
+    - POLICY_RATE
+    - PRODUCT
+    - PRODUCT_FAMILY
+    - PRODUCT_OR_SCOPE
+    - PROJECT
+    - SERVICE
+    - STANDARD
+    - TECH_NODE
+    COHORT:
+    - INDUSTRY
+    LOCATION_OR_HAZARD:
+    - FACILITY
+    - GEOGRAPHY
+    - HAZARD
+    - LOCATION
+    - PATHOGEN
+    INDEX_OR_EXCHANGE:
+    - EXCHANGE
+    - INDEX
+    - MARKET
+  non_entity:
+    # 실체를 가리키지 않는 역할 — event_argument 에 적재하지 않는다. 값(2. 속성층)이거나
+    # 자유서술이다. identity 가 이들을 요구하는 타입은 현 저장모델로는 영구 UNKNOWN 이다
+    # (아래 unfillable_identity).
+    TIME:
+      why: 시간값 — event_argument.entity_id(NOT NULL FK→entity)에 실을 수 없다
+      roles:
+      - ANNOUNCED_DATE
+      - DURATION
+      - EFFECTIVE_DATE
+      - MATURITY_DATE
+      - PAYMENT_DATE
+      - PERIOD
+      - RECORD_DATE
+      - REPORTING_PERIOD
+      - REPORT_DATE
+    VALUE:
+      why: 수치값 — 2. 속성층의 quantity 다. event_measure 가 싣는다
+      roles:
+      - ACTUAL_VALUE
+      - AMOUNT
+      - BUYBACK_VALUE
+      - CAPACITY_SHARE
+      - CAPACITY_VALUE
+      - CHANGE_VALUE
+      - CONSENSUS_VALUE
+      - CONTRACT_DURATION
+      - CONTRACT_VALUE
+      - DEAL_VALUE
+      - ESTIMATE_CHANGE
+      - GUIDANCE_RANGE
+      - INTEREST_RATE
+      - NEW_VALUE
+      - OLD_VALUE
+      - OWNERSHIP_RATIO
+      - PENALTY_VALUE
+      - PRICE
+      - QUANTITY
+      - RATE
+      - SHARES
+    TEXT:
+      why: 자유서술 — 식별자가 없다. mention_text 로만 남는다
+      roles:
+      - DRIVER_HINT
+      - EXEMPTION
+      - OUTLOOK
+      - POSITION
+      - RATIONALE
+      - REASON
+      - USE_OF_PROCEEDS
+
+unfillable_identity:
+  # identity 가 non_entity 역할을 요구하는 타입 — event_argument.entity_id 가 NOT NULL FK 라
+  # 그 역할 값을 실을 자리가 없다. 추출이 아무리 좋아져도 novelty_status 는 영구 UNKNOWN 이다.
+  # 조용한 0% 를 막으려고 여기 적어둔다(Rule 12). 해소는 저장모델 결정 사안:
+  # (a) event_argument 에 비엔티티 값 슬롯 추가, 또는 (b) 시간값을 concept 로 등록.
+  # 건수는 alphamale interim 코퍼스(2026-06~07 뉴스 39,959건) 실측이다.
+  reporting_period:
+    roles: [REPORTING_PERIOD]
+    types:
+      COMPANY.EARNINGS.RESULT_RELEASE: 1916
+      COMPANY.EARNINGS.GUIDANCE_CHANGE: 165
+  effective_or_report_date:
+    roles: [ANNOUNCED_DATE, EFFECTIVE_DATE, PERIOD, REPORT_DATE]
+    types:
+      COMPANY.CAPITAL.SHARE_BUYBACK: 632
+      MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE: 445
+      MARKET_INFO.CREDIT.RATING_CHANGE: 212
+      MARKET_STRUCTURE.INDEX.INCLUSION: 124
+      INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE: 55
+      MACRO.MONETARY.POLICY_RATE_DECISION: 32
+  off_menu:
+    # 위 중에서도 더 나쁜 셋 — identity 가 그 타입의 required∪optional 에도 없는 역할을
+    # 요구한다. 추출기가 뽑을 근거조차 없다. 온톨로지 결함이지 추출 결함이 아니다.
+    types: [COMPANY.CAPITAL.SHARE_BUYBACK, MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE,
+            MARKET_INFO.CREDIT.RATING_CHANGE]

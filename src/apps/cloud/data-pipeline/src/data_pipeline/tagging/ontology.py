@@ -12,14 +12,12 @@
 검증 **양쪽의 같은 출처**가 된다 — 프롬프트와 검증이 서로 다른 목록을 보면 모델이 프롬프트를
 지켜도 검증에서 떨어지는 모순이 생긴다.
 
-프로필의 나머지 축(`lifecycle_model`·quantities 등)은 태깅 범위 밖이다 — lib 뷰(TypeView)
-소관이고 여기선 안 읽는다. `identity_roles` 는 thread 스텝(assemble_events)이
-`identity_roles()` 로 읽는다(ALPHA-457) — 태깅 자체는 여전히 안 쓴다.
+프로필의 나머지 축(`lifecycle_model`·quantities 등)은 태깅 범위 밖이다 — lib 의 사건층 뷰
+(`ProcessType`) 소관이고 여기선 안 읽는다. `identity_roles` 는 thread 스텝
+(assemble_events)이 `identity_roles()` 로 읽는다(ALPHA-457) — 태깅 자체는 여전히 안 쓴다.
 """
 
 from __future__ import annotations
-
-from functools import lru_cache
 
 import edge_ontology
 
@@ -33,14 +31,13 @@ DOC_CLASSES = (
 )
 
 
-@lru_cache(maxsize=1)
-def load_profiles() -> dict[str, dict]:
-    """event_type_id → 프로필 dict — lib 프로파일 뷰를 그대로 캐시한다.
+def process_types() -> edge_ontology.ProcessRegistry:
+    """사건 타입 레지스트리 — lib 의 4. 사건층 뷰를 그대로 쓴다(lib 이 캐시한다).
 
-    키 형상(allowed_predicates·required/optional/identity_roles·stage_sensitive)은
-    구 JSON 스냅샷과 동일하다 — 소비자(추출 검증·프롬프트 카탈로그)는 무변경.
+    타입당 술어·역할·속성·라이프사이클이 한 객체(`ProcessType`)에 접혀 있다. 태깅은 그중
+    허용 집합(술어·역할)만 본다.
     """
-    return edge_ontology.load_profiles()
+    return edge_ontology.load_process_registry()
 
 
 def ontology_version() -> str:
@@ -55,7 +52,7 @@ def ontology_version() -> str:
 
 def event_type_codes() -> tuple[str, ...]:
     """허용 event_type_code 전량(정렬). 프롬프트 구속과 검증이 같이 쓴다."""
-    return tuple(sorted(load_profiles()))
+    return tuple(sorted(process_types().types))
 
 
 def allowed_roles(event_type_code: str) -> frozenset[str]:
@@ -64,13 +61,13 @@ def allowed_roles(event_type_code: str) -> frozenset[str]:
     타입마다 역할이 다르다 — CONTRACT.SIGNING 의 SUPPLIER 를 EARNINGS.RESULT_RELEASE 에
     붙이면 안 된다. 그래서 검증은 '86개 전역 역할'이 아니라 **타입별** 집합으로 한다.
     """
-    profile = load_profiles()[event_type_code]
-    return frozenset(profile["required_roles"]) | frozenset(profile["optional_roles"])
+    pt = process_types()[event_type_code]
+    return frozenset(pt.required_roles) | frozenset(pt.optional_roles)
 
 
 def required_roles(event_type_code: str) -> frozenset[str]:
     """그 타입이 요구하는 role_code — 다 채워지면 completeness=complete."""
-    return frozenset(load_profiles()[event_type_code]["required_roles"])
+    return frozenset(process_types()[event_type_code].required_roles)
 
 
 def identity_roles(event_type_code: str) -> tuple[str, ...]:
@@ -82,12 +79,12 @@ def identity_roles(event_type_code: str) -> tuple[str, ...]:
     가 다르면 다른 thread 다. `frozenset`(required)과 달리 **tuple 로 순서를 보존**한다 —
     thread_key 가 역할 순서에 의존하는 결정적 문자열이라 집합이면 안 된다.
     """
-    return tuple(load_profiles()[event_type_code]["identity_roles"])
+    return process_types()[event_type_code].identity_roles
 
 
 def allowed_predicates(event_type_code: str) -> frozenset[str]:
     """그 타입이 허용하는 predicate_code."""
-    return frozenset(load_profiles()[event_type_code]["allowed_predicates"])
+    return frozenset(process_types()[event_type_code].predicates)
 
 
 def default_predicate(event_type_code: str) -> str | None:
@@ -100,7 +97,7 @@ def default_predicate(event_type_code: str) -> str | None:
 
     목록이 비면 None — 호출부가 사유로 드러낸다(조용한 빈 문자열 금지).
     """
-    predicates = load_profiles()[event_type_code]["allowed_predicates"]
+    predicates = process_types()[event_type_code].predicates
     return predicates[0] if predicates else None
 
 
@@ -112,10 +109,10 @@ def prompt_catalog() -> str:
     """
     lines = []
     for code in event_type_codes():
-        p = load_profiles()[code]
+        pt = process_types()[code]
         lines.append(
-            f"{code} | 술어: {','.join(p['allowed_predicates'])}"
-            f" | 필수: {','.join(p['required_roles']) or '-'}"
-            f" | 선택: {','.join(p['optional_roles']) or '-'}"
+            f"{code} | 술어: {','.join(pt.predicates)}"
+            f" | 필수: {','.join(pt.required_roles) or '-'}"
+            f" | 선택: {','.join(pt.optional_roles) or '-'}"
         )
     return "\n".join(lines)

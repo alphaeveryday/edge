@@ -30,7 +30,7 @@ src/
 │   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload)·예외 매핑 + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
 │   ├── py-common/            # Python · 공통 유틸
-│   └── ontology/             # Python · 이벤트 온톨로지 SSOT (53타입 어휘 리소스+로더)
+│   └── ontology/             # Python · 온톨로지 SSOT (존재 4층 어휘 리소스+로더)
 ├── settings.gradle           # JVM 루트 (Groovy DSL 멀티모듈)
 ├── pnpm-workspace.yaml       # Node 루트
 └── pyproject.toml            # Python 루트
@@ -82,7 +82,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 | `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·예외→공통 응답 포맷 매핑(`ExceptionAdvice`, auto-configuration 으로 웹 앱 활성) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
 | `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 — EDGE 디자인 토큰·컴포넌트 CSS·React 프리미티브 (소스 export 패키지) |
 | `py-common` | Python | Python 공통 유틸 |
-| `ontology` | Python | **이벤트 온톨로지 SSOT**(`edge_ontology`) — 53 이벤트 타입 어휘 리소스(YAML: 술어·역할·quantities·lifecycle·thread 계약) + 로더 뷰(registry/profiles/features/TypeView). 갱신은 실험실(event-ontology repo) 확정본을 통째 교체 + 어휘 변경 시 `ONTOLOGY_VERSION` 개정(ALPHA-539) |
+| `ontology` | Python | **온톨로지 SSOT**(`edge_ontology`) — 존재를 네 층으로 나눈 선험적 어휘. `entity`(실체 종별·기관 레지스트리) · `attribute`(속성 모형·공용 재무풀) · `relation`(역할 어휘·종별 결속) · `process`(53 사건 타입·술어·라이프사이클·thread 계약). 실제 사건 인스턴스와 절차적 지식은 이 lib 밖(data-pipeline·analysis-engine) 소관. 갱신은 실험실(event-ontology repo) 확정본을 통째 교체 + 어휘 변경 시 `ONTOLOGY_VERSION` 개정(ALPHA-539) |
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.

@@ -29,6 +29,7 @@
 | [architecture/application-architecture.md](architecture/application-architecture.md) | **[뷰]** 환경별 UI/API/저장소 계층 | 앱 계층을 훑을 때 (상세: context.md·console-ia) |
 | [architecture/information-architecture.md](architecture/information-architecture.md) | **[뷰]** 콘솔 정보구조 트리(위젯·고객사·슈퍼어드민) | 콘솔 IA를 훑을 때 (상세: console-ia) |
 | [architecture/cloud-architecture.md](architecture/cloud-architecture.md) | **[뷰]** AWS 클라우드 인프라 구성도 | 클라우드 배치를 훑을 때 (상세: infra/terraform/README·adr/0034·0028) |
+| [analysis-engine/ontology/ontology-system-spec.md](analysis-engine/ontology/ontology-system-spec.md) | 온톨로지 4층·선언 규칙·로더 게이트·DB 사상 SSOT | 온톨로지 리소스·로더·소비자를 변경할 때 |
 
 > **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 

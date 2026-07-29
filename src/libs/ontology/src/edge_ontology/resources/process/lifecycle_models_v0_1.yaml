@@ -1,0 +1,27 @@
+# 4. 사건(Process) — 모델별 순서 stage 시퀀스 (SSOT).
+# DEAL_LIFECYCLE = 스펙문서(event-argument-schema-v1.md) vocab A = 권위. 그 외는 predicates에서 정준화(v0.2, 발견 시 정련).
+# stages=[] = 라이프사이클 없음(단발 이벤트). 소비자는 여기만 import.
+
+meta: {version: 0.2.0, canonical_deal_source: event-argument-schema-v1.md, model_count: 20}
+
+models:
+  CAPITAL_ACTION_LIFECYCLE: {stages: [ANNOUNCED, FILED, PRICED, EFFECTIVE], terminal: [WITHDRAWN]}
+  CAPITAL_ACTION_NO_LIFECYCLE: {stages: [], terminal: []}
+  COMMERCIAL_LIFECYCLE: {stages: [ANNOUNCED, EFFECTIVE], terminal: [EXITED]}
+  CONFLICT_RESOLUTION_LIFECYCLE: {stages: [PROPOSED, AGREED, SIGNED, EFFECTIVE], terminal: [COLLAPSED]}
+  DATA_RELEASE_NO_LIFECYCLE: {stages: [], terminal: []}
+  DEAL_LIFECYCLE: {stages: [RUMORED, PROPOSED, PREFERRED_BIDDER, MOU_LOI, DEFINITIVE_SIGNED, EFFECTIVE, CLOSED], terminal: [CANCELLED]}
+  EXOGENOUS_SHOCK_NO_LIFECYCLE: {stages: [], terminal: []}
+  GOVERNANCE_LIFECYCLE: {stages: [NOMINATED, APPOINTED, EFFECTIVE], terminal: [WITHDRAWN]}
+  INDEX_REBALANCE_LIFECYCLE: {stages: [ANNOUNCED, EFFECTIVE], terminal: [REVERSED]}
+  LEGAL_REGULATORY_LIFECYCLE: {stages: [INVESTIGATED, CHARGED, RULED, RESOLVED], terminal: [DISMISSED]}
+  MARKET_OPERATIONS_LIFECYCLE: {stages: [OCCURRED, ONGOING, RESOLVED], terminal: []}
+  MARKET_STRUCTURE_LIFECYCLE: {stages: [ANNOUNCED, EFFECTIVE], terminal: [REVERSED]}
+  OFFERING_LIFECYCLE: {stages: [ANNOUNCED, EXECUTING, COMPLETED], terminal: [CANCELLED]}
+  OPERATIONS_LIFECYCLE: {stages: [OCCURRED, ONGOING, RESOLVED], terminal: []}
+  OWNERSHIP_DISCLOSURE_NO_LIFECYCLE: {stages: [], terminal: []}
+  POLICY_ACTION_LIFECYCLE: {stages: [ANNOUNCED, EFFECTIVE], terminal: []}
+  POLICY_LIFECYCLE: {stages: [PROPOSED, ANNOUNCED, EFFECTIVE], terminal: [REPEALED, LIFTED]}
+  PRODUCT_TECH_LIFECYCLE: {stages: [CONCEPT, PROTOTYPE_DEMO, SAMPLING, CUSTOMER_QUAL, MASS_PRODUCTION, SHIPPING], terminal: [DISCONTINUED, REJECTED]}
+  REVISION_NO_LIFECYCLE: {stages: [], terminal: []}
+  WORKFORCE_LIFECYCLE: {stages: [ANNOUNCED, EFFECTIVE], terminal: []}

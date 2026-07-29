@@ -111,7 +111,9 @@ def _norm_trade_date(raw: dict, key: str, reasons: list[str], *, kis: bool) -> s
 def _normalize(vendor: str, raw: dict) -> tuple[dict, list[str]]:
     """벤더 raw 행 → 표준 OHLCV 행 + 정규화(결측·비수치·날짜) 사유. 사유 있으면 게이트 생략."""
     reasons: list[str] = []
-    field_map = _FMP_MAP if vendor == "fmp" else _KIS_MAP
+    # KIS 만 자체 맵을 쓴다 — 나머지(FMP·Yahoo)는 같은 필드 이름(date/open/…/adjClose)이라
+    # FMP 맵을 공유한다. 새 벤더가 FMP 형태로 raw 를 내면 여기 손댈 게 없다.
+    field_map = _KIS_MAP if vendor == "kis" else _FMP_MAP
     is_kis = vendor == "kis"
     date_key = "stck_bsop_date" if is_kis else "date"
 
@@ -328,8 +330,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 잡을 통째로 무너뜨리지 않게 행 단위 실패로 격리한다(격리≠은폐, Rule 12).
                 failures.append({"raw_key": raw_key, "reasons": ["non_object_row"]})
                 continue
-            if vendor not in ("fmp", "kis"):
+            if vendor not in ("fmp", "kis", "yahoo"):
                 # 알 수 없는 가격 벤더 — 조용히 통과시키지 않고 사유로 드러낸다(Rule 12).
+                # yahoo 는 로컬 전용 수집이지만 raw 형태가 FMP 와 같아 같은 경로로 정제된다.
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
                 continue

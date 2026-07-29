@@ -10,8 +10,8 @@ from .ontology import (
     allowed_roles,
     default_predicate,
     event_type_codes,
-    load_profiles,
     ontology_version,
+    process_types,
     required_roles,
 )
 
@@ -24,7 +24,7 @@ __all__ = [
     "default_predicate",
     "event_type_codes",
     "extract_assertions",
-    "load_profiles",
     "ontology_version",
+    "process_types",
     "required_roles",
 ]

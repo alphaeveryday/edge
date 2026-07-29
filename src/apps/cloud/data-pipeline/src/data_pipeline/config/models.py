@@ -121,6 +121,31 @@ class KisPriceSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class YahooPriceSourceConfig(BaseModel):
+    """Yahoo(yfinance) 가격 소스 — **벤치마크 지수 시계열** 보강 (KR 전용).
+
+    인증이 없어 비밀값 필드도 없다. KR 개별주·ETF 자체 종가는 KIS 가 이미 커버하므로
+    (`ingest_price_raw` 가 holdings 에서 ETF 자신도 유니버스에 넣는다, ALPHA-419)
+    이 소스의 존재 이유는 `market_series` 를 채울 **지수**다 — 지수 시계열이 없어
+    L0 상대 게이트가 미적용이고 시장 성분 제거를 횡단면 평균으로 대신하고 있다.
+
+    `index_map` 은 targets/holdings 와 무관하게 **항상** 수집한다(지수는 우리 유니버스의
+    종목이 아니라 대조축이라 symbols 로 들어올 길이 없다).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    # our_key → Yahoo 심볼. 지수는 접미사 규칙이 없어 명시 맵으로만 둔다.
+    index_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # our_ticker → Yahoo 심볼 오버라이드. KOSDAQ(.KQ) 처럼 접미사 규칙에서 벗어나는 것만.
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # 맵에 없는 KR 단축코드에 붙일 기본 접미사. KOSPI=.KS 가 기본 — 추정이 위험한
+    # KOSDAQ 은 symbol_map 으로 명시한다(조용히 다른 시장 종목을 붙이지 않도록).
+    suffix: str = ".KS"
+
+
+
 class KisNavSource(BaseModel):
     """KIS(한국투자) 국내 ETF NAV 소스 — nav-comparison-daily-trend, tr_id FHPST02440200 (ALPHA-380).
 
@@ -290,6 +315,12 @@ class KisPriceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: KisPriceSource
+
+
+class YahooPriceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: YahooPriceSourceConfig
 
 
 class KisNavConfig(BaseModel):
