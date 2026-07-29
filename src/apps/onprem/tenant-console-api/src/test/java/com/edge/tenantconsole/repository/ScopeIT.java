@@ -61,8 +61,10 @@ class ScopeIT extends AbstractPostgresIntegrationTest {
 	void 종목_유니버스는_코드와_이름이_모두_있는_항목만_조회한다() {
 		String nonce = String.valueOf(System.nanoTime());
 		seedItem("er-" + nonce + "-a", "TICK" + nonce, "테스트 ETF " + nonce);
-		seedItem("er-" + nonce + "-noticker", null, null);          // ticker 결측 — 제외
-		seedItem("er-" + nonce + "-noname", "NONM" + nonce, null);  // 이름 결측 — 제외(UI 계약상 name 비-null)
+		seedItem("er-" + nonce + "-noticker", null, null);            // ticker 결측 — 제외
+		seedItem("er-" + nonce + "-noname", "NONM" + nonce, null);    // 이름 결측 — 제외(UI 계약상 name 비-null)
+		seedItem("er-" + nonce + "-blankticker", "   ", "공백 티커 " + nonce);   // 공백-only ticker — btrim 제외
+		seedItem("er-" + nonce + "-blankname", "BLNK" + nonce, "  \t ");        // 공백-only name — btrim 제외
 
 		List<StockScope> stocks = scope.listStocks();
 		assertThat(stocks).anySatisfy(s -> {
@@ -71,9 +73,12 @@ class ScopeIT extends AbstractPostgresIntegrationTest {
 			assertThat(s.market()).isEqualTo("KRX");   // ADR-0024 MVP — 온프렘엔 시장 분류 컬럼 없음
 			assertThat(s.enabled()).isTrue();          // 토글 이력 없음 = 옵트아웃 기본 제공
 		});
-		// 이름 결측 항목은 목록에도, 토글 대상에도 없다(유니버스 술어 일치).
+		// 결측·공백 코드/이름 항목은 목록에도, 토글 대상에도 없다(유니버스 nonblank 술어 일치).
 		assertThat(stocks).noneSatisfy(s -> assertThat(s.name()).isNull());
 		assertThat(stocks).noneSatisfy(s -> assertThat(s.code()).isEqualTo("NONM" + nonce));
+		assertThat(stocks).noneSatisfy(s -> assertThat(s.code().strip()).isEmpty());          // 공백 ticker 제외
+		assertThat(stocks).noneSatisfy(s -> assertThat(s.name().strip()).isEmpty());          // 공백 name 제외
+		assertThat(stocks).noneSatisfy(s -> assertThat(s.code()).isEqualTo("BLNK" + nonce));  // 공백 name 행 제외
 	}
 
 	@Test
@@ -110,6 +115,25 @@ class ScopeIT extends AbstractPostgresIntegrationTest {
 				.filter(s -> s.code().equals(ticker)).toList();
 		assertThat(forTicker).hasSize(1);
 		assertThat(forTicker.get(0).name()).isEqualTo("새 이름 " + nonce);
+	}
+
+	@Test
+	void 수신시각과_as_of가_모두_같으면_PK_최신으로_결정적으로_고른다() {
+		// WHY: received_at·explanation_as_of 까지 동률이면 최종 tie-breaker 는 PK
+		// (explanation_result_id DESC)뿐이다 — 이게 빠지거나 방향이 바뀌면 두 행 중 임의
+		// 행이 뽑혀 이름 선택이 비결정적이 된다. 두 시각을 모두 같게 두고 PK 만 다르게
+		// 넣어 결정성을 검증한다(Rule 9 — 반례 거부).
+		String nonce = String.valueOf(System.nanoTime());
+		String ticker = "PK" + nonce;
+		String sameAt = "timestamptz '2026-07-22 09:00:00+09'";
+		// 두 id 는 "...-" 까지 동일하고 그 뒤 'a' vs 'z' 로 갈린다 — PK DESC 는 'z' 행을 고른다.
+		seedItemAt("er-" + nonce + "-a-low", ticker, "낮은 PK 이름 " + nonce, sameAt, sameAt);
+		seedItemAt("er-" + nonce + "-z-high", ticker, "높은 PK 이름 " + nonce, sameAt, sameAt);
+
+		List<StockScope> forTicker = scope.listStocks().stream()
+				.filter(s -> s.code().equals(ticker)).toList();
+		assertThat(forTicker).hasSize(1);
+		assertThat(forTicker.get(0).name()).isEqualTo("높은 PK 이름 " + nonce);   // PK DESC → 'z' > 'a'
 	}
 
 	@Test
