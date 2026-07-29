@@ -55,7 +55,8 @@ resource "aws_cloudfront_distribution" "this" {
     origin_access_control_id = aws_cloudfront_origin_access_control.this.id
   }
 
-  # 선택: /api/* 를 프록시할 커스텀 오리진(데모 박스 mock-broker). 뷰어 HTTPS → 오리진 HTTP.
+  # 선택: /api/* 를 프록시할 커스텀 오리진. 뷰어는 항상 CloudFront 가 TLS 종단 —
+  # 오리진 쪽은 평문 박스(http-only, 데모 mock-broker) 또는 TLS ALB(https-only)를 변수로 고른다.
   dynamic "origin" {
     for_each = var.api_origin_domain != "" ? [1] : []
     content {
@@ -64,7 +65,7 @@ resource "aws_cloudfront_distribution" "this" {
       custom_origin_config {
         http_port              = var.api_origin_port
         https_port             = 443
-        origin_protocol_policy = "http-only" # 오리진(박스)은 평문 HTTP — CloudFront 가 뷰어 TLS 종단
+        origin_protocol_policy = var.api_origin_protocol
         origin_ssl_protocols   = ["TLSv1.2"]
       }
     }
@@ -86,7 +87,7 @@ resource "aws_cloudfront_distribution" "this" {
       path_pattern             = var.api_path_pattern
       target_origin_id         = "api"
       viewer_protocol_policy   = "redirect-to-https"
-      allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+      allowed_methods          = var.api_allowed_methods
       cached_methods           = ["GET", "HEAD"]
       compress                 = true
       cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
@@ -95,6 +96,8 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   # SPA 라우팅: 존재하지 않는 경로도 index.html 로 200 응답(클라이언트 라우터가 처리).
+  # 배포 전역 적용이라 /api/* 의 403/404 도 index.html 200 으로 마스킹된다(401 은 통과) —
+  # API 오리진과 spa=true 병용 시 유의(mts_site 는 이 때문에 spa=false).
   dynamic "custom_error_response" {
     for_each = var.spa ? toset([403, 404]) : toset([])
     content {

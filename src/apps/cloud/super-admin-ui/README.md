@@ -27,9 +27,9 @@ dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRu
 (`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `operator@edge.local`)으로
 자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
 자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront,
-`admin-dev.edgesignal.dev`)은 `/api` 오리진 연결·로그인 화면이 아직 없어 화면
-데이터가 비어 있다 — tenant-console-ui 와 같은 한계로, 배포 오리진 연결과 로그인
-화면(시안 수령 후)이 후속이다.
+`admin-dev.edgesignal.dev`)은 CloudFront 가 `/api/*` 를 admin ALB 로 프록시해
+same-origin 으로 API 에 닿는다(ALPHA-615). 다만 로그인 화면이 아직 없어 배포본은
+전 화면이 401/빈 데이터 상태로 뜬다 — 로그인 화면(시안 수령 후, ALPHA-616)이 후속이다.
 
 ## 라우트 / IA (디자인 v0.1)
 
