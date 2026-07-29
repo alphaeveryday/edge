@@ -17,11 +17,14 @@ public interface AnalysisRepository {
 	/**
 	 * @param summary         결과가 아직 없는 런이면 null — 상태별 안내 문구는 표시 층이 정한다
 	 * @param confidenceLevel 결과가 없거나 원장이 판정을 비웠으면 null
+	 * @param excluded        운영자 제외 오버레이(admin_activity_log 최신 액션 유도) — run_status 를
+	 *                        덮지 않는다. 표시 층이 상태 배지만 EXCLUDED 로 바꾼다(ALPHA-602)
+	 * @param corrected       운영자 정정 이력 존재 여부(같은 원장에서 유도)
 	 */
 	record AnalysisRow(String runId, String etfName, String ticker, String marketCode,
 			double observedReturn, String runStatus, OffsetDateTime detectedAt,
 			OffsetDateTime finishedAt, String summary, String confidenceLevel,
-			List<EvidenceRow> evidence) {
+			boolean excluded, boolean corrected, List<EvidenceRow> evidence) {
 	}
 
 	/** 설명실행이 실제 사용한 문서 근거 한 건(뉴스·공시). */

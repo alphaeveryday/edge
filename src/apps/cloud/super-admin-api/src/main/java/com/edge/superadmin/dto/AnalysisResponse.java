@@ -13,8 +13,9 @@ import java.util.List;
  * 원장(explanation_*)의 판정을 UI 어휘로 <b>번역만</b> 한다: {@code run_status}→status,
  * {@code confidence_level}→confidence. 새 판정을 만들지 않는다(SourceService 원칙).
  *
- * <p>{@code corrected} 는 항상 false — 정정 이력이 원장에 아직 없다. 쓰기 전환(ALPHA-602)
- * 에서 저장 위치가 생기면 함께 실값이 된다. EXCLUDED 도 같은 이유로 여기서는 도달 불가다.
+ * <p>{@code corrected}·EXCLUDED 는 운영자 작업 원장(admin_activity_log)에서 유도한 오버레이다
+ * (ALPHA-602). 제외는 상태 배지만 EXCLUDED 로 바꾸고 완료시각·본문은 원래 run_status 기준을
+ * 유지한다 — 복원이 원상태를 그대로 되살린다.
  */
 public record AnalysisResponse(String id, String name, String code, String market, int direction,
 		double changePct, String status, String basisTime, String basisTimeAbs, String doneTime,
@@ -45,7 +46,10 @@ public record AnalysisResponse(String id, String name, String code, String marke
 	}
 
 	public static AnalysisResponse from(AnalysisRow row) {
-		String status = uiStatus(row.runStatus());
+		String underlyingStatus = uiStatus(row.runStatus());
+		// 제외 오버레이는 상태 배지만 EXCLUDED 로 바꾼다 — 완료시각·본문은 원래 run_status
+		// 기준을 쓴다(제외된 완료 런도 분석 완료 시각·설명 본문을 잃지 않게).
+		String status = row.excluded() ? "EXCLUDED" : underlyingStatus;
 		return new AnalysisResponse(
 				row.runId(),
 				row.etfName(),
@@ -56,9 +60,9 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				status,
 				format(SHORT_TIME, row.detectedAt()),
 				format(ABS_TIME, row.detectedAt()),
-				doneTime(status, row.finishedAt()),
+				doneTime(underlyingStatus, row.finishedAt()),
 				row.confidenceLevel(),
-				false,
+				row.corrected(),
 				result(row.runStatus(), row.summary()),
 				row.evidence().stream().map(EvidenceResponse::from).toList());
 	}

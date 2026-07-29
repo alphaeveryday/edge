@@ -9,6 +9,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -195,5 +198,40 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 		assertThat(pending.confidenceLevel()).isNull();
 		assertThat(pending.finishedAt()).isNull();
 		assertThat(pending.evidence()).isEmpty();
+	}
+
+	/** 운영자 작업 원장이 비면 오버레이는 전부 false — 제외도 정정도 아니다(ALPHA-602). */
+	@Test
+	void 오버레이_기본값은_제외도_정정도_아니다() {
+		assertThat(repository.list()).allSatisfy(row -> {
+			assertThat(row.excluded()).isFalse();
+			assertThat(row.corrected()).isFalse();
+		});
+	}
+
+	/**
+	 * 오버레이는 admin_activity_log 의 런별 최신 액션에서 유도한다 — 제외/복원은 최신이 이기고
+	 * (run-2: 제외 후 복원 → 제외 아님), 정정은 제외와 독립이다(run-1: 정정+제외 → 둘 다 true).
+	 */
+	@Test
+	void 오버레이는_런별_최신_액션에서_제외_정정을_유도한다() {
+		insertActivity("run-1", "ANALYSIS_RESULT_CORRECTED");
+		insertActivity("run-1", "ANALYSIS_EXCLUDED");
+		insertActivity("run-2", "ANALYSIS_EXCLUDED");
+		insertActivity("run-2", "ANALYSIS_RESTORED");
+
+		Map<String, AnalysisRow> byRun = repository.list().stream()
+				.collect(Collectors.toMap(AnalysisRow::runId, Function.identity()));
+		assertThat(byRun.get("run-1").corrected()).isTrue();
+		assertThat(byRun.get("run-1").excluded()).isTrue();
+		assertThat(byRun.get("run-2").corrected()).isFalse();
+		assertThat(byRun.get("run-2").excluded()).isFalse();
+	}
+
+	private void insertActivity(String runId, String action) {
+		jdbc.update("""
+				INSERT INTO admin_activity_log (actor_email, action, target_type, target_id, reason)
+				VALUES ('ops@edge.io', ?, 'ANALYSIS_RUN', ?, 'test')
+				""", action, runId);
 	}
 }
