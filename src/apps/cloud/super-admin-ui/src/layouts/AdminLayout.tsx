@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useAnalyses } from '../domains/analyses/hooks';
-import { useSession, useUpdateDisplayName } from '../domains/session/hooks';
+import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 import { useTenants } from '../domains/tenants/hooks';
 
 interface NavEntry {
@@ -42,10 +43,12 @@ function EdgeMark() {
 export function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: session } = useSession();
   const { data: tenants } = useTenants();
   const { data: analyses } = useAnalyses();
   const updateName = useUpdateDisplayName();
+  const logout = useLogout();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -162,7 +165,19 @@ export function AdminLayout() {
                 <Icon name="settings" size={14} />
                 프로필 설정
               </div>
-              <div className="menu-item danger" onClick={() => toast('로그아웃되었습니다. (프로토타입)')}>
+              <div
+                className="menu-item danger"
+                onClick={() =>
+                  logout.mutate(undefined, {
+                    onSuccess: () => {
+                      // navigate 먼저, clear 나중 — 순서를 뒤집으면 마운트된 활성 쿼리들이
+                      // 일제히 refetch 하며 401 을 만나 '세션 만료' 배너로 오표면된다.
+                      navigate('/login');
+                      queryClient.clear();
+                    },
+                  })
+                }
+              >
                 <Icon name="logOut" size={14} />
                 로그아웃
               </div>

@@ -1,11 +1,14 @@
-/* EDGE Admin — 라우트 트리 (디자인 v0.1 IA).
+/* EDGE Admin — 라우트 트리 (디자인 v0.1 IA + 로그인 ALPHA-616).
  *
- *   AdminLayout   /tenants(/:id) · /sources · /grid · /analyses(/:id)
+ *   /login (공개)                  — 운영자 로그인
+ *   RequireSession ▸ AdminLayout  — /tenants(/:id) · /sources · /grid · /analyses(/:id)
  *
- * 운영자 인증 화면은 시안에 없다 — 진입은 테넌트 목록 직행 (ALPHA-487 범위 밖).
+ * 로그인 외 전 표면은 세션 필수(API fail-closed 와 짝) — 미인증·만료는 /login 으로 보낸다.
  */
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AdminLayout } from './layouts/AdminLayout';
+import { RequireSession } from './layouts/RequireSession';
+import { LoginPage } from './pages/LoginPage';
 import { TenantsPage } from './pages/TenantsPage';
 import { TenantDetailPage } from './pages/TenantDetailPage';
 import { SourcesPage } from './pages/SourcesPage';
@@ -16,13 +19,16 @@ import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
 export function App() {
   return (
     <Routes>
-      <Route element={<AdminLayout />}>
-        <Route path="/tenants" element={<TenantsPage />} />
-        <Route path="/tenants/:id" element={<TenantDetailPage />} />
-        <Route path="/sources" element={<SourcesPage />} />
-        <Route path="/grid" element={<GridPage />} />
-        <Route path="/analyses" element={<AnalysesPage />} />
-        <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireSession />}>
+        <Route element={<AdminLayout />}>
+          <Route path="/tenants" element={<TenantsPage />} />
+          <Route path="/tenants/:id" element={<TenantDetailPage />} />
+          <Route path="/sources" element={<SourcesPage />} />
+          <Route path="/grid" element={<GridPage />} />
+          <Route path="/analyses" element={<AnalysesPage />} />
+          <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<Navigate to="/tenants" replace />} />
     </Routes>
