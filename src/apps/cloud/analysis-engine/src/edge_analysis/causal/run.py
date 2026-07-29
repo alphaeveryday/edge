@@ -148,13 +148,18 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         violations = G.validate({"nodes": nodes, "structures": [{"id": "A", "edges": edges}]},
                                 grounded=set(grounded or ()), require_competing=False)
         if violations:
-            log("causal.structure_rejected", attempt=attempt, violations=len(violations))
+            # 위반 내용을 함께 남긴다 - 건수만으로는 사후에 무엇이 왜 거부됐는지 모른다.
+            log("causal.structure_rejected", attempt=attempt, violations=len(violations),
+                detail=violations[:5])
             feedback = "\n".join(f"- 구조 위반: {v}" for v in violations[:5])
             continue
         empty = _empty_cohorts(cd, designs, as_of=as_of, w0=w0, w1=w1)
         if not empty:
             break
-        log("causal.empty_cohort", attempt=attempt, edges=len(empty))
+        # 되먹임 텍스트를 함께 남긴다. 여기에 근본 원인이 들어 있다 - 술어가 0행을
+        # 돌려준 것인지 아예 실행되지 않은 것인지가 갈리고, 건수만 남기면 그 구별이
+        # 사라져 S3 trace 로 디버깅할 수 없다.
+        log("causal.empty_cohort", attempt=attempt, edges=len(empty), detail=empty[:5])
         feedback = "\n".join(empty)
         violations = []
     else:
