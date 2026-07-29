@@ -97,6 +97,9 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `PATCH /api/v1/members/{id}/role` | 역할 부여·변경 | TA — 자기 자신 대상은 서비스가 403(직무 분리) |
 | `GET /api/v1/screening/words` · `.../criteria` · `.../disclaimer` · `.../versions` | 정책 조회(금칙어·처리 기준·면책 문구·버전 이력) | TA·CR·OP·RO |
 | `POST /api/v1/screening/words` · `POST .../words/{id}/toggle` · `PATCH .../criteria` · `PATCH .../disclaimer` | 정책 변경(= 새 버전 발행, ALPHA-438) | CR |
+| `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | TA·CR·OP·RO |
+| `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경(시장 토글, ALPHA-606) | TA |
+| `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경(종목 토글, ALPHA-606) | CR |
 
 ### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
 
@@ -116,9 +119,6 @@ materialization 후 시장·등락률 복원과 함께), 권한 경계는 매트
 
 | 엔드포인트 | 매트릭스 행 (DB 전환 시 적용) | mock 단계 요구 역할 |
 |---|---|---|
-| `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | 인증된 전 역할 |
-| `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경 (TA) | 인증된 전 역할 |
-| `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경 (CR) | 인증된 전 역할 |
 | `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 (전 역할) | 인증된 전 역할 |
 
 인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),

@@ -39,15 +39,22 @@ public class AuthService {
 
 	public AuthService(BootstrapOperators bootstrapOperators) {
 		// 비밀번호 미주입(빈 값) 계정은 비활성 — 공개 엣지라 기본 비밀번호를 커밋하지
-		// 않으므로, env 미설정 배포는 로그인 불가로 닫힌 채 뜬다(fail-closed).
+		// 않으므로, env 미설정 배포는 로그인 불가로 닫힌 채 뜬다(fail-closed). name 도
+		// 같은 규율로 요구한다 — 세션 주체(SessionOperator)의 식별·표시에 실려 콘솔
+		// 프로필 조회(/api/v1/session)가 읽으므로, 빠진 계정을 활성화하면 인증 후 조회가
+		// 깨진다. 불완전한 계정은 조용히 통과시키지 않고 비활성으로 닫는다.
 		this.operators = bootstrapOperators.bootstrapOperators().stream()
 				.filter(o -> {
-					boolean enabled = o.password() != null && !o.password().isBlank();
-					if (!enabled) {
+					boolean hasPassword = o.password() != null && !o.password().isBlank();
+					boolean hasName = o.name() != null && !o.name().isBlank();
+					if (!hasPassword) {
 						log.warn("부트스트랩 운영자 {} 비활성 — 비밀번호 env 미주입 "
 								+ "(ADMIN_BOOTSTRAP_OPERATOR_PASSWORD)", o.email());
 					}
-					return enabled;
+					else if (!hasName) {
+						log.warn("부트스트랩 운영자 {} 비활성 — name 미설정", o.email());
+					}
+					return hasPassword && hasName;
 				})
 				.collect(Collectors.toUnmodifiableMap(
 						o -> normalize(o.email()),

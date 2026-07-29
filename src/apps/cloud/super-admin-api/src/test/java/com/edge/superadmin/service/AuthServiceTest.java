@@ -31,6 +31,17 @@ class AuthServiceTest {
 	}
 
 	@Test
+	void name_미설정_계정은_비활성이다() throws Exception {
+		// name 은 세션 주체(SessionOperator) 식별·콘솔 프로필 표시에 실린다 — 빠진
+		// 계정을 활성화하면 인증 후 /api/v1/session 조회가 NPE 로 깨지므로, 비밀번호와
+		// 같은 fail-closed 규율로 로그인 불가 상태로 닫혀야 한다(ALPHA-608).
+		AuthService service = new AuthService(new BootstrapOperators(List.of(
+				new BootstrapOperators.Operator("operator@edge.local", " ", "demo-operator-1"))));
+		assertThatThrownBy(() -> service.login("operator@edge.local", "demo-operator-1"))
+				.isInstanceOf(GeneralException.class);
+	}
+
+	@Test
 	void 비밀번호_env_미주입_계정은_비활성이다() throws Exception {
 		// 공개 엣지라 기본 비밀번호를 커밋하지 않는다 — env 미설정 배포는 계정이
 		// 비활성으로 남아 로그인 불가로 닫힌 채 떠야 한다(fail-closed).

@@ -23,6 +23,13 @@ from ..observability import log, stable_id, utcnow_iso
 
 _TITLE_EVIDENCE_TYPE = "TITLE"
 
+# explanation_run_event_evidence.stage_code — "이 근거를 어느 단계에서 썼나".
+# 우리 엔진은 당일 사건을 홀딩스로 걸러 LLM 을 한 번 부르는 단일 경로라 **후보 수집 이후의
+# 재심사 단계가 없다**. 설계 문서의 단계명(A·B·E·F·G·L4)을 빌려 쓰면 통과한 적 없는 관문을
+# 통과한 것처럼 기록되므로, 실제로 한 일만 말하는 값을 쓴다 — 프롬프트에 실었다.
+# 논리 계약(hq_run_evidence)에는 stage 축 자체가 없다(PK 가 run+evidence 2축).
+_PROMPT_STAGE_CODE = "PROMPT"
+
 
 def _iso(value: Any) -> str:
     """datetime/None 을 ISO 문자열로(None 이면 지금, naive 는 UTC 로 간주)."""
@@ -125,7 +132,7 @@ class EventStore:
             "SELECT DISTINCT ON (se.source_event_id)"
             " se.source_event_id, se.event_type_code, se.available_at,"
             " se.predicate_code, se.lifecycle_stage,"
-            " etl.thread_id, etl.novelty_status, ev.evidence_text"
+            " etl.thread_id, etl.novelty_status, ev.evidence_text, ev.evidence_id"
             " FROM source_event se"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
             " LEFT JOIN event_evidence ev ON ev.source_event_id = se.source_event_id"
@@ -205,6 +212,9 @@ class EventStore:
                 measures=tuple(measures.get(event_id, ())),
                 predicate_code=h[3],
                 lifecycle_stage=h[4],
+                # LEFT JOIN 이라 TITLE evidence 가 없는 사건은 None 이다 — 그 사건은
+                # 설명에는 실리되 lineage 에는 남길 근거가 없다(persist 가 세어 로그로 낸다).
+                evidence_id=str(h[8]) if h[8] is not None else None,
             ))
         return contexts
 
@@ -311,12 +321,15 @@ class EventStore:
         route_id: str,
         bundle: str | None,
         primary_thread_id: str | None,
-        event_count: int,
+        events: list[EventContext],
     ) -> dict[str, str]:
-        """explanation_run + explanation_result 를 적재한다(FK 전제는 충족 가정)."""
+        """explanation_run + explanation_result + 근거 lineage 를 적재한다(FK 전제는 충족 가정)."""
         import json
 
+        from psycopg2.extras import execute_values
+
         explanation_as_of = utcnow_iso()
+        event_count = len(events)
         run_id = stable_id(
             "run", etf_instrument_id, settings.trade_date.isoformat(),
             explanation_as_of, route_id,
@@ -347,6 +360,28 @@ class EventStore:
                     explanation.headline,
                 ),
             )
+            # 근거 lineage — "이 설명이 무엇을 보고 쓰였나"(ALPHA-603). 프롬프트에 실린
+            # 사건의 근거만 넣는다(events 는 packet 이 자르지 않고 통째로 싣는 그 목록이다).
+            evidence_rows = [
+                (run_id, event.evidence_id, _PROMPT_STAGE_CODE)
+                for event in events
+                if event.evidence_id
+            ]
+            if evidence_rows:
+                execute_values(
+                    cur,
+                    "INSERT INTO explanation_run_event_evidence (explanation_run_id,"
+                    " evidence_id, stage_code) VALUES %s"
+                    " ON CONFLICT (explanation_run_id, evidence_id, stage_code) DO NOTHING",
+                    evidence_rows,
+                )
         self._conn.commit()
-        log("explanation_result.stored", explanation_result_id=result_id, run_id=run_id)
+        log(
+            "explanation_result.stored",
+            explanation_result_id=result_id,
+            run_id=run_id,
+            evidence=len(evidence_rows),
+            # 근거 없는 사건 — 설명에는 실렸는데 되짚을 문서가 없다는 뜻이라 드러낸다.
+            events_without_evidence=event_count - len(evidence_rows),
+        )
         return {"persisted": "rds", "explanation_result_id": result_id, "run_id": run_id}

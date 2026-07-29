@@ -8,9 +8,16 @@
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 from edge_analysis.adapters.eventstore import EventStore
-from edge_analysis.domain.models import Decomposition, Measure, Member
+from edge_analysis.domain.models import (
+    Decomposition,
+    EventContext,
+    Explanation,
+    Measure,
+    Member,
+)
 from edge_analysis.observability import stable_id
 
 
@@ -137,7 +144,7 @@ def test_fetch_aggregates_all_arguments_into_one_event_context():
     사건당 참여자 1명만 남겨 나머지 역할을 소실했다. 대표 ticker 는 정렬상 첫 행이 아니라
     holdings 접지 참여자다."""
     heads = [("evt_1", "COMPANY.CAPITAL.DIVIDEND_DECISION", "2026-07-16T09:00:00+09:00",
-              "DECLARE", "DECIDED", "thr_1", "FIRST_IN_THREAD", "삼성전자 배당 결정")]
+              "DECLARE", "DECIDED", "thr_1", "FIRST_IN_THREAD", "삼성전자 배당 결정", "evd_1")]
     args = [
         ("evt_1", "ACQUIRER", "object", "ent_priv", None, None),  # 비종목 참여자가 먼저 정렬된다
         ("evt_1", "ISSUER", "subject", "ent_samsung", "005930", 0.9),
@@ -152,12 +159,14 @@ def test_fetch_aggregates_all_arguments_into_one_event_context():
     assert ctx.arguments[1].confidence == 0.9
     assert (ctx.predicate_code, ctx.lifecycle_stage) == ("DECLARE", "DECIDED")
     assert (ctx.thread_id, ctx.novelty_status) == ("thr_1", "FIRST_IN_THREAD")
+    assert ctx.evidence_id == "evd_1"  # 근거 lineage 키(ALPHA-603)
 
 
 def test_fetch_maps_measures_with_values_and_surface_fallback():
     """event_measure 행이 measure_ord 순으로 Measure 에 대응돼야 한다 — 값 미해석
     (UNRESOLVED)이면 value 없이 surface 만 남는다."""
-    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, "제목")]
+    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, "제목",
+              "evd_1")]
     args = [("evt_1", "ISSUER", "subject", "ent_s", "005930", None)]
     measures = [
         ("evt_1", "DIVIDEND_PER_SHARE", Decimal("361.00000000"), "KRW", "TOTAL", "PARSED",
@@ -178,7 +187,7 @@ def test_fetch_maps_measures_with_values_and_surface_fallback():
 def test_fetch_tolerates_null_ontology_columns_from_prebackfill_rows():
     """백필 전 구데이터(predicate/lifecycle/slot NULL·측정 0건)에서도 종전 필드가 그대로
     나와야 한다 — 신규 컬럼은 덧붙는 문맥이지 전제가 아니다."""
-    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, None)]
+    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, None, None)]
     args = [("evt_1", "ISSUER", None, "ent_s", "005930", None)]
     conn = _EventFetchConn(heads, args)
 
@@ -187,8 +196,68 @@ def test_fetch_tolerates_null_ontology_columns_from_prebackfill_rows():
     assert (ctx.entity_id, ctx.ticker) == ("ent_s", "005930")
     assert (ctx.novelty_status, ctx.title) == ("UNKNOWN", "")  # 종전 폴백 유지
     assert ctx.predicate_code is None and ctx.lifecycle_stage is None
+    assert ctx.evidence_id is None  # TITLE evidence 없는 사건(LEFT JOIN)
     assert ctx.arguments[0].slot is None
     assert ctx.measures == ()
+
+
+def _settings():
+    """persist_explanation 이 Settings 에서 읽는 건 trade_date 하나다(나머지는 연결·레이크용)."""
+    return SimpleNamespace(trade_date=date(2026, 7, 16))
+
+
+def _event(event_id: str, evidence_id: str | None) -> EventContext:
+    return EventContext(
+        source_event_id=event_id, event_type_code="NEWS",
+        available_at="2026-07-16T09:00:00+09:00", entity_id="ent_s", ticker="005930",
+        thread_id=None, novelty_status="UNKNOWN", title="제목", evidence_id=evidence_id,
+    )
+
+
+def test_persist_records_lineage_only_for_events_that_have_evidence(monkeypatch):
+    """설명이 실제로 본 근거만 lineage 로 남아야 한다 — 근거 없는 사건까지 실으면 FK 가
+    가리킬 실체가 없고, 반대로 통째로 빼면 콘솔 근거가 0건이 된다(ALPHA-603).
+
+    픽스처에 evidence 있는 사건과 없는 사건을 **섞는다** — 전부 있는 픽스처는 필터가
+    빠져도 초록으로 통과한다.
+    """
+    import psycopg2.extras
+    monkeypatch.setattr(
+        psycopg2.extras, "execute_values",
+        lambda cur, sql, rows: cur._conn.value_batches.append((" ".join(sql.split()), list(rows))),
+    )
+    conn = _FakeConn()
+    events = [_event("evt_1", "evd_1"), _event("evt_2", None), _event("evt_3", "evd_3")]
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문", "confidence": "HIGH"}),
+        route_id="rte_1", bundle="dev-mvp-0", primary_thread_id=None, events=events,
+    )
+
+    [(sql, rows)] = conn.value_batches
+    assert "INSERT INTO explanation_run_event_evidence" in sql
+    assert rows == [
+        (ids["run_id"], "evd_1", "PROMPT"),   # run_id 는 방금 만든 그 실행을 가리킨다
+        (ids["run_id"], "evd_3", "PROMPT"),
+    ]
+    assert conn.committed
+
+
+def test_persist_without_any_evidence_skips_the_lineage_insert(monkeypatch):
+    """근거가 하나도 없으면 빈 INSERT 를 던지지 않는다 — VALUES 가 비면 문법 오류다."""
+    import psycopg2.extras
+    monkeypatch.setattr(
+        psycopg2.extras, "execute_values",
+        lambda cur, sql, rows: cur._conn.value_batches.append((sql, list(rows))),
+    )
+    conn = _FakeConn()
+
+    EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None, events=[_event("evt_1", None)],
+    )
+
+    assert conn.value_batches == []
 
 
 def test_fetch_without_matching_events_skips_detail_queries():

@@ -4,6 +4,7 @@ import com.edge.tenantconsole.config.TenantContextProperties;
 import com.edge.tenantconsole.controller.ConsoleSessionController;
 import com.edge.tenantconsole.controller.DashboardController;
 import com.edge.tenantconsole.controller.ReviewController;
+import com.edge.tenantconsole.controller.ScopeController;
 import com.edge.tenantconsole.controller.ScreeningController;
 import com.edge.tenantconsole.entity.PolicyVersionEntity;
 import com.edge.tenantconsole.entity.ScreeningRuleEntity;
@@ -16,10 +17,14 @@ import com.edge.tenantconsole.model.TrafficSummary;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
+import com.edge.tenantconsole.repository.ScopeInstrumentRepository;
+import com.edge.tenantconsole.repository.ServingScopeRepository;
+import com.edge.tenantconsole.entity.ServingScopeEntity;
 import com.edge.tenantconsole.service.ConsoleActionLogService;
 import com.edge.tenantconsole.service.ConsoleSessionService;
 import com.edge.tenantconsole.service.DashboardService;
 import com.edge.tenantconsole.service.ReviewService;
+import com.edge.tenantconsole.service.ScopeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Limit;
@@ -185,7 +190,8 @@ class ConsoleAuthFilterTest {
 											String targetId, java.util.Map<String, Object> detail,
 											String clientIp) {
 									}
-								})))
+								})),
+						new ScopeController(new ScopeService(new StubScopes(), new StubInstruments())))
 				.addFilters(new ConsoleAuthFilter(members))
 				.build();
 	}
@@ -285,6 +291,36 @@ class ConsoleAuthFilterTest {
 		}
 	}
 
+	/** 인가 판정만 보는 테스트라 serving_scope 는 no-op 대역(토글 성공 경로만 통과시킨다). */
+	private static final class StubScopes implements ServingScopeRepository {
+		@Override
+		public List<ServingScopeEntity> findByScopeType(String scopeType) {
+			return List.of();
+		}
+
+		@Override
+		public Optional<ServingScopeEntity> findByScopeTypeAndScopeKey(String scopeType, String scopeKey) {
+			return Optional.empty();
+		}
+
+		@Override
+		public void toggle(String scopeType, String scopeKey, long updatedBy) {
+		}
+	}
+
+	/** 유니버스 대역 — 토글 성공 경로가 통과하도록 069500 이 존재한다고 답한다. */
+	private static final class StubInstruments implements ScopeInstrumentRepository {
+		@Override
+		public List<ScopeInstrumentRow> findUniverse() {
+			return List.of();
+		}
+
+		@Override
+		public boolean existsInUniverse(String etfTicker) {
+			return "069500".equals(etfTicker);
+		}
+	}
+
 	private MockHttpSession sessionOf(SessionMember member) {
 		MockHttpSession session = new MockHttpSession();
 		session.setAttribute(SessionMember.SESSION_KEY, member);
@@ -327,6 +363,40 @@ class ConsoleAuthFilterTest {
 		mvc.perform(post("/api/v1/screening/words").session(sessionOf(REVIEWER))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 제공_범위_변경은_시장은_TA_종목은_CR_전용이다() throws Exception {
+		// WHY: scope 도메인 DB 전환(ALPHA-606)으로 mock 한시 예외가 해제된다 —
+		// permission-matrix "제공 범위" 두 행 = serving_scope.scope_type 경계와 1:1이다:
+		// 시장 커버리지 토글은 시스템 설정(TA), 종목 제외 토글은 이해상충 통제(CR).
+		// 조회는 전 역할, 변경만 갈린다.
+		mvc.perform(get("/api/v1/scope/markets").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/scope/stocks").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+
+		// 시장 토글 = TA 전용 — CR·OP·RO 는 거부, TA 만 허용.
+		mvc.perform(post("/api/v1/scope/markets/KRX/toggle").session(sessionOf(REVIEWER)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/scope/markets/KRX/toggle").session(sessionOf(OPERATOR)))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/scope/markets/KRX/toggle").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/scope/markets/KRX/toggle").session(sessionOf(ADMIN)))
+				.andExpect(status().isOk());
+
+		// 종목 토글 = CR 전용 — TA·OP·RO 는 거부, CR 만 허용(069500 은 유니버스에 있음).
+		mvc.perform(post("/api/v1/scope/stocks/069500/toggle").session(sessionOf(ADMIN)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/scope/stocks/069500/toggle").session(sessionOf(OPERATOR)))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/scope/stocks/069500/toggle").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/scope/stocks/069500/toggle").session(sessionOf(REVIEWER)))
 				.andExpect(status().isOk());
 	}
 

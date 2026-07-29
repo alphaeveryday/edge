@@ -18,7 +18,8 @@ import java.util.List;
  */
 public record AnalysisResponse(String id, String name, String code, String market, int direction,
 		double changePct, String status, String basisTime, String basisTimeAbs, String doneTime,
-		String confidence, boolean corrected, String result, List<EvidenceResponse> evidence) {
+		String confidence, boolean corrected, String result, List<EvidenceResponse> evidence,
+		int evidenceTotal) {
 
 	/** 표시는 KST 로 통일한다 — 원장 시각은 TIMESTAMPTZ 라 시장별 현지시각은 보존돼 있지 않다. */
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -60,7 +61,9 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				row.confidenceLevel(),
 				false,
 				result(row.runStatus(), row.summary()),
-				row.evidence().stream().map(EvidenceResponse::from).toList());
+				row.evidence().stream().map(EvidenceResponse::from).toList(),
+				// 표시 상한에 잘린 만큼을 화면이 알아야 "N건"이 총 건수를 말할 수 있다.
+				row.evidenceTotal());
 	}
 
 	private static String uiStatus(String runStatus) {
