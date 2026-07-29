@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -236,7 +237,8 @@ def _empty_cohorts(cd, designs: list[EdgeDesign], *, as_of: str,
                        f"{type(exc).__name__}: {exc}")
             continue
         if not t:
-            out.append(f"- 처치 술어 `{d.treated}` 가 창 {w0}~{w1} 에서 0건이다.")
+            out.append(f"- 처치 술어 `{d.treated}` 가 창 {w0}~{w1} 에서 0건이다."
+                       + _surrogate_hint(d.treated))
             continue
         try:
             c = cd.universe(d.control, sorted({dt for _, dt in t}), exclude=t)
@@ -246,8 +248,26 @@ def _empty_cohorts(cd, designs: list[EdgeDesign], *, as_of: str,
             continue
         if not c:
             out.append(f"- 대조 술어 `{d.control}` 가 그 날짜들에서 0건이다 "
-                       f"(처치 {len(t)}건은 있다).")
+                       f"(처치 {len(t)}건은 있다)." + _surrogate_hint(d.control))
     return out
+
+
+# 티커꼴 리터럴: 6자리 숫자, 또는 KRX 신형(숫자 4 + 영문 1 + 숫자 1, 예 0007C0).
+_TICKER_LITERAL = re.compile(r"'(?:\d{6}|\d{4}[A-Z]\d)'")
+
+
+def _surrogate_hint(predicate: str) -> str:
+    """`instrument_id` 에 티커를 넣은 술어에 그 사실을 말해준다.
+
+    0건의 이유가 "그런 사건이 없다"가 아니라 "컬럼을 잘못 골랐다"일 때, 그 구별을 주지 않으면
+    LLM 이 설계를 고치는 대신 전략을 통째로 갈아탄다 - 실제로 그랬고, 갈아탄 전략(가격 노드
+    직결)이 구조 규칙에 걸려 2회차까지 소진됐다. `instrument_id` 는 불투명 서로게이트이고
+    티커는 `ticker` 컬럼에 있다.
+    """
+    if "instrument_id" not in predicate or not _TICKER_LITERAL.search(predicate):
+        return ""
+    return (" `instrument_id` 는 티커가 아니라 불투명 식별자(`inst_...`)다 - "
+            "티커로 고르려면 `ticker` 를 써라.")
 
 
 def _killed(r: EdgeResult) -> str | None:

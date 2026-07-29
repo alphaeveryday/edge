@@ -201,7 +201,10 @@ class CausalData:
                       AND ic.as_of_date <= p.trade_date
                     ORDER BY ic.as_of_date DESC LIMIT 1
                 ) cls ON TRUE
-                WHERE p.trade_date = ANY(%s) AND p.simple_return IS NOT NULL
+                -- ::date[] 캐스팅이 필요하다. 날짜를 ISO 문자열로 넘기므로 psycopg2 가
+                -- text[] 로 어댑트하고, `date = text` 비교는 연산자가 없어 실패한다.
+                -- 캐스팅이 없으면 **모든 대조군 질의가 죽어** 인과 설계가 성립하지 못한다.
+                WHERE p.trade_date = ANY(%s::date[]) AND p.simple_return IS NOT NULL
             )
             SELECT u.instrument_id, u.trade_date FROM u WHERE ({cl})
             ORDER BY u.trade_date, u.instrument_id LIMIT {int(limit)}"""
