@@ -185,3 +185,19 @@ def test_like_predicate_survives_parameter_binding(call):
     # psycopg2 의 클라이언트측 바인딩은 `sql % params` 와 같은 규칙을 쓴다. 이스케이프가
     # 빠지면 여기서 IndexError 가 난다 - 운영에서 나는 것과 같은 예외다.
     sql % tuple("x" for _ in params)
+
+
+def test_universe_casts_the_date_array():
+    """날짜 배열은 ``::date[]`` 로 캐스팅해야 한다.
+
+    ISO 문자열 리스트를 넘기면 psycopg2 가 ``text[]`` 로 어댑트하고 Postgres 에는
+    ``date = text`` 연산자가 없다. 캐스팅이 빠지면 모든 대조군 질의가 UndefinedFunction 으로
+    죽고, 대조군이 없으면 인과 설계가 성립하지 못한다 - 실제로 클라우드에서 그랬다.
+    DuckDB(실험)는 이 비교를 암묵 캐스팅으로 통과시켜 드러나지 않았다.
+    """
+    conn = _FakeConn()
+
+    CausalData(conn).universe("industry_name = 'X'", [date(2026, 7, 29)])
+
+    sql, _ = conn.executed[-1]
+    assert "ANY(%s::date[])" in sql
