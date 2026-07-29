@@ -201,7 +201,7 @@
     var views = state.quotes ? state.quotes.stocks.map(stockView) : [];
     var filtered = q
       ? views.filter(function (s) {
-          return s.name.toLowerCase().indexOf(q) !== -1 || s.code.indexOf(q) !== -1;
+          return s.name.toLowerCase().indexOf(q) !== -1 || s.code.toLowerCase().indexOf(q) !== -1;
         })
       : views;
     el('search-section-label').textContent = q ? '검색 결과' : '인기 검색 종목';
