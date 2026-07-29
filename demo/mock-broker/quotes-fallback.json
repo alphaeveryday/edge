@@ -21,6 +21,7 @@
     { "ticker": "139260", "name": "TIGER 200 IT", "etf": true, "price": 42780, "change": -2410 },
     { "ticker": "261060", "name": "TIGER 코스닥150IT", "etf": true, "price": 21930, "change": -1240 },
     { "ticker": "266370", "name": "KODEX IT", "etf": true, "price": 38460, "change": -2150 },
+    { "ticker": "300950", "name": "KODEX 게임산업", "etf": true, "price": 8340, "change": 65 },
     { "ticker": "363580", "name": "KODEX 200IT TR", "etf": true, "price": 16870, "change": -940 },
     { "ticker": "388420", "name": "RISE 비메모리반도체액티브", "etf": true, "price": 14520, "change": -1210 },
     { "ticker": "395160", "name": "KODEX AI반도체TOP2플러스", "etf": true, "price": 13980, "change": -1330 },
