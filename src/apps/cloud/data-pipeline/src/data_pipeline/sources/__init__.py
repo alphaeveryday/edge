@@ -15,6 +15,7 @@ from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
 from .krx_auth import KrxAuth
 from .krx_etf import KrxEtfSource
+from .yahoo_price import YahooPriceSource
 
 __all__ = [
     "BigKindsNewsSource",
@@ -33,4 +34,5 @@ __all__ = [
     "KrxAuth",
     "PoliteClient",
     "StopFetch",
+    "YahooPriceSource",
 ]

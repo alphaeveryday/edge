@@ -1,7 +1,7 @@
 [project]
 name = "edge-ontology"
 version = "0.1.0"
-description = "이벤트 온톨로지 SSOT — 53 이벤트 타입 어휘 리소스 + 로더 뷰(registry/profiles/features/TypeView)"
+description = "온톨로지 SSOT — 존재 4층(실체·속성·관계·사건) 어휘 리소스 + 로더 뷰"
 requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6",

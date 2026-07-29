@@ -120,6 +120,9 @@ class EventContext:
     measures: tuple[Measure, ...] = ()
     predicate_code: str | None = None
     lifecycle_stage: str | None = None
+    # BigKinds 스니펫(news_document.lead_text) — 제목이 못 담는 내용(금액·상대·조건)의
+    # 서술 맥락. 백필 전 데이터에서는 None 이다.
+    lead_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

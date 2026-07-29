@@ -38,13 +38,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from edge_ontology import OntologyView, load_lifecycle_models, load_ontology_view
+from edge_ontology import (ProcessRegistry, concept_key, load_process_registry,
+                           resolve_authority, role_entity_kind)
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
-from ..tagging.ontology import default_predicate, identity_roles, load_profiles
+from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
 logger = logging.getLogger(__name__)
@@ -80,8 +81,9 @@ LANGUAGES = ("ko", "en")
 # 이식원 계약을 그대로 쓰고, tag-news 체인은 불변이다.
 GATE_DOC_CLASSES = ("EVENT", "MARKET_COMMENTARY", "OPINION_OR_ANALYSIS", "PROMOTIONAL", "LIST")
 
-# event_argument.slot CHECK 어휘 — 추출 계약(llm-extract-v4)과 동일.
-SLOT_VALUES = frozenset({"subject", "object", "qualifier"})
+# event_argument.slot 은 LLM 이 아니라 온톨로지가 정한다(ALPHA-596) — (타입, 역할)만으로
+# 결정되므로 기사를 볼 필요가 없고, LLM 에 물으면 3값 중 무엇을 내도 범위검사를 통과해
+# 오류가 조용하다(AGENTS Rule 5). 어휘는 edge_ontology.relation.slots.SLOT_VALUES.
 
 # 추출 콜 confidence(H/M/L) → source_event.confidence_level CHECK 어휘 사상.
 _CONFIDENCE_LEVELS = {"H": "HIGH", "M": "MEDIUM", "L": "LOW"}
@@ -108,15 +110,30 @@ def _ordinal(value: object) -> int | None:
 
 
 def _entity_kind(role: str | None, entity_id: str | None) -> str | None:
-    """역할→엔티티 종별. 계약(entity_mapping_contract_v0_1.yaml)은 아직 종별별 `used_for`
-    산문만 갖고 역할→종별 **표가 없다** — 코드가 표를 만들면 계약 밖 SSOT 가 생긴다
-    (Rule 7·11). 그래서 이름이 종별과 같은 ISSUER 만 확정하고 나머지는 NULL 로 둔다:
-    CUSTOMER·SUPPLIER·ACQUIRER·TARGET_COMPANY 는 계약상 COMPANY_ENTITY 후보인데 전원
-    ISSUER 로 실으면 다자 딜 행이 발행사 행과 구분되지 않아 역할-종별 검증이 불가능해진다
-    (Codex #255 P2). 표가 계약에 생기면 그때 여기서 읽는다."""
-    if entity_id is None or role != "ISSUER":
-        return None  # 미해소는 종별 근거가 없고, 계약에 표가 없는 역할은 지어내지 않는다
-    return "ISSUER"
+    """역할→엔티티 종별. 온톨로지 관계층(`role_bindings_v0_1.yaml`)의 `role_kinds` 를 읽는다.
+
+    이 표가 없던 동안 코드는 이름이 종별과 같은 ISSUER 만 확정하고 나머지를 NULL 로 뒀다
+    (계약 밖 SSOT 를 만들지 않으려는 판단 — Rule 7·11). 표가 계약에 생겨서 그대로 읽는다.
+    종별은 그 값의 `persistence_key` 를 정한다 — 적재 경로 선택의 입력이다.
+
+    미해소(entity_id 없음)는 여전히 NULL 이다: 종별은 **해소된 엔티티**의 성질이고,
+    미해소 참여자는 event_argument 에 실리지도 않는다(entity_id NOT NULL PK).
+    """
+    if entity_id is None or role is None:
+        return None
+    return role_entity_kind(role)
+
+
+def _slot(event_type_code: str, role: str | None) -> str | None:
+    """역할→논항 자리. 온톨로지 관계층(`argument_slots_v0_1.yaml`)이 정본이다.
+
+    (타입, 역할)만으로 결정되므로 기사를 볼 필요가 없다 — 같은 역할이 타입에 따라 자리를
+    바꾸기 때문에 타입도 함께 받는다(ISSUER 는 배당결정 subject, 제품인증 object).
+    """
+    if role is None:
+        return None
+    process_type = load_process_registry().get(event_type_code)
+    return process_type.slot_of(role) if process_type else None
 
 
 # event_measure.value_source CHECK 어휘 — 이 스텝은 뉴스 파싱만 하므로 DART 는 내지 않는다
@@ -213,7 +230,7 @@ def read_daily_news(storage: Storage, published_date: str) -> list[dict]:
 
 
 # ── 분류·추출 (v4 2콜 체인 — 이식원 extract.py 의 게이트→타입별 추출 구조를 edge 관례로) ──
-def _classify_system(view: OntologyView) -> str:
+def _classify_system(view: ProcessRegistry) -> str:
     """게이트+타입판별 콜(a)의 system — 판별만 하고 인자 추출은 타입별 콜(b)이 한다."""
     types = "\n".join(
         f"- {tid} | pred:{','.join(sorted(tv.predicates))} | req:{','.join(tv.required_roles)}"
@@ -235,19 +252,17 @@ def _classify_system(view: OntologyView) -> str:
     )
 
 
-@lru_cache(maxsize=None)
 def _stage_sequence(event_type_code: str) -> tuple[str, ...]:
     """타입 lifecycle 모델의 순서축(stages + terminal) — 프롬프트 메뉴·검증·novelty 공용.
 
-    stage 어휘의 SSOT 는 edge_ontology 의 lifecycle_models 리소스다 — 프롬프트와 검증이
+    stage 어휘의 SSOT 는 edge_ontology 사건층의 lifecycle 리소스다 — 프롬프트와 검증이
     같은 출처를 봐야 모델이 프롬프트를 지켜도 검증에서 떨어지는 모순이 없다(tagging 과 동일 원칙).
     """
-    model = (load_profiles().get(event_type_code) or {}).get("lifecycle_model")
-    spec = load_lifecycle_models().get(model) or {}
-    return tuple(spec.get("stages") or []) + tuple(spec.get("terminal") or [])
+    process_type = load_process_registry().get(event_type_code)
+    return process_type.stages if process_type else ()
 
 
-def _extract_system(view: OntologyView, event_type_code: str) -> str:
+def _extract_system(view: ProcessRegistry, event_type_code: str) -> str:
     """타입별 추출 콜(b)의 system — 그 타입의 메뉴(술어·역할·수량·단계)만 싣는다.
 
     이식원 build_system_prompt 는 53타입 다이제스트를 한 콜에 다 실었지만, edge 는 게이트가
@@ -265,7 +280,7 @@ def _extract_system(view: OntologyView, event_type_code: str) -> str:
         "각 항목에 대해 아래 JSON 스키마의 오브젝트를 만든다.\n"
         '{"items":[{"id": <입력 id 그대로>, "predicate": <술어 메뉴 중 하나 또는 null>, '
         '"stage": <단계 메뉴 중 하나 또는 null>, '
-        '"arguments":[{"role": <참여자 역할 메뉴 중 하나>, "slot": "subject|object|qualifier", '
+        '"arguments":[{"role": <참여자 역할 메뉴 중 하나>, '
         '"mention": <제목 원문 그대로>, "ticker": <그 참여자가 입력 tickers 의 종목 자신일 때만 그 티커, '
         '아니면 "">, "group": <정수>}], '
         '"measures":[{"role": <수량 역할 메뉴 중 하나>, "surface": <제목 원문 표기 그대로>, '
@@ -309,7 +324,7 @@ def _llm_items(chunk: list[dict], entity_index: dict[str, str]) -> tuple[list[di
     return items, {i["id"]: set(i["tickers"]) for i in items}
 
 
-def _gate_batch(complete_fn, system: str, chunk: list[dict], view: OntologyView,
+def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegistry,
                 entity_index: dict[str, str]) -> dict[str, dict]:
     """게이트 콜 40건배치 1개 → {article_id: 검증된 게이트 판정}. 배치 로컬 dict 만 반환
     (공유상태 미접근)해 스레드에서 안전하게 돈다 — merge 는 호출부가 메인스레드에서 한다."""
@@ -327,7 +342,7 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: OntologyView,
     return out
 
 
-def _validate_gate(item: dict, view: OntologyView, entity_index: dict[str, str],
+def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, str],
                    allowed_by_id: dict[str, set[str]]) -> dict | None:
     article_id = item.get("id")
     if not article_id or item.get("doc_class") != "EVENT":
@@ -370,7 +385,7 @@ def _validate_gate(item: dict, view: OntologyView, entity_index: dict[str, str],
 
 
 def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[dict],
-                   gate: dict[str, dict], view: OntologyView,
+                   gate: dict[str, dict], view: ProcessRegistry,
                    entity_index: dict[str, str]) -> dict[str, dict]:
     """타입별 추출 콜 배치 1개 → {article_id: 게이트+추출 병합 분류}."""
     items, allowed_by_id = _llm_items(chunk, entity_index)
@@ -393,11 +408,11 @@ def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[d
     return out
 
 
-def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
+def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
                          entity_index: dict[str, str], allowed_tickers: set[str]) -> dict | None:
     """추출 콜 항목 1건 검증 — 라벨이 메뉴에 드는지는 코드가 판정한다(Rule 5).
 
-    불량 부분(메뉴 밖 역할·빈 mention·범위 밖 slot)은 그 부분만 떨어뜨리고 이벤트는 살린다
+    불량 부분(메뉴 밖 역할·빈 mention)은 그 부분만 떨어뜨리고 이벤트는 살린다
     (tagging 과 동일 — 한 역할의 환각이 사건 전체를 버리게 하지 않는다). 미해소 참여자는
     entity_id 없이 보존해 completeness 판정에 쓰고, 적재부가 event_argument 스킵을 판단한다.
     """
@@ -436,6 +451,7 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
     arguments: list[dict] = []
     # primary 의 역할 충족은 폴백 anchor 행이 실제로 설 때만 센다(아래 루프 뒤에서 판정).
     covered_roles: set[str] = set()
+    minted_concepts: dict[str, str] = {}   # 새로 세운 개념 entity_id → 표시명
     raw_arguments = item.get("arguments")
     # 컨테이너 자체가 비리스트(스칼라 등)면 결측과 동급 — TypeError 로 날짜 전체를 굴리지 않는다.
     for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
@@ -447,14 +463,31 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         mention = raw.get("mention")
         if not isinstance(mention, str) or not mention.strip():
             continue  # 역할만 있고 원문 근거가 없으면 안 채운 것과 같다
-        slot = raw.get("slot")
+        # slot 은 raw 에서 읽지 않는다 — 아래에서 온톨로지가 준다.
         group = raw.get("group")
         ticker = str(raw.get("ticker") or "")
         entity_id = entity_index.get(ticker) if ticker in allowed_tickers else None
+        if entity_id is None:
+            # 티커가 없는 참여자 — 규제기관·법원·중앙은행은 닫힌 집합이라 레지스트리로
+            # 해소한다(edge_ontology authority_registry). 이게 없으면 AUTHORITY 를
+            # identity 로 쓰는 타입이 통째로 UNKNOWN 이다. 못 찾으면 미해소 유지 —
+            # 지어내지 않는다.
+            entity_id = resolve_authority(role, mention.strip())
+        if entity_id is None:
+            # 개념·위치·규칙·지수처럼 persistence_key 가 정규화 문자열인 종별은 열린
+            # 집합이라 레지스트리가 불가능하다. 멘션에서 결정적으로 채번하고 concept 행을
+            # 함께 세운다(적재부가 FK 순서를 지킨다). 채번 산식은 stable_domain_id 하나뿐 —
+            # 다른 writer 와 갈리면 같은 개념에 다른 ID 가 나온다.
+            key = concept_key(role, mention.strip())
+            if key:
+                entity_id = stable_domain_id("concept", key)
+                # concept_type 은 종별 그대로 — 위치·규칙·제품이 한 통에 섞이면
+                # 소비자가 구분할 수 없다.
+                minted_concepts[entity_id] = (mention.strip(), role_entity_kind(role))
         covered_roles.add(role)
         arguments.append({
             "role_code": role,
-            "slot": slot if isinstance(slot, str) and slot in SLOT_VALUES else None,
+            "slot": tv.slot_of(role),
             "mention_text": mention.strip(),
             "entity_id": entity_id,
             "entity_kind": _entity_kind(role, entity_id),
@@ -528,10 +561,11 @@ def _validate_extraction(item: dict, view: OntologyView, gate_cls: dict,
         "completeness": completeness,
         "arguments": arguments,
         "measures": measures,
+        "concepts": minted_concepts,
     }
 
 
-def classify_titles(complete_fn, rows: list[dict], view: OntologyView,
+def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
                     entity_index: dict[str, str],
                     concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY) -> dict[str, dict]:
     """article_id → 검증된 v4 추출(게이트 EVENT + 해소 가능한 primary + 타입별 인자).
@@ -658,6 +692,28 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
     if not documents:
         return created
 
+    # 개념 entity 를 **먼저** 세운다 — event_argument.entity_id 가 FK → entity 라
+    # 순서가 뒤집히면 적재 전체가 FK 위반으로 롤백된다. 같은 정규화 멘션은 같은 ID 라
+    # 재실행·중복 기사에서 멱등이다(ON CONFLICT DO NOTHING).
+    concepts = {cid: pair for _a, _r, cls, _at, _sc in pending
+                for cid, pair in (cls.get("concepts") or {}).items()}
+    with conn.cursor() as cur:
+        if concepts:
+            cur.executemany(
+                "INSERT INTO entity (entity_id, entity_type, display_name, status)"
+                " VALUES (%s,'CONCEPT',%s,'ACTIVE') ON CONFLICT (entity_id) DO NOTHING",
+                [(cid, name) for cid, (name, _kind) in sorted(concepts.items())],
+            )
+            cur.executemany(
+                # concept_type 은 엔티티 종별 그대로(PRODUCT_OR_CONCEPT·LOCATION_OR_HAZARD
+                # ·AUTHORITY_OR_RULE·INDEX_OR_EXCHANGE) — 한 통에 섞으면 소비자가 제품과
+                # 위치를 구분할 수 없다. 정본 개념 그래프는 계약 백로그 소관이고, 이 행들은
+                # 멘션 파생이다(display_name 이 원문 표면형).
+                "INSERT INTO concept (concept_id, concept_type) VALUES (%s,%s)"
+                " ON CONFLICT (concept_id) DO NOTHING",
+                [(cid, kind) for cid, (_name, kind) in sorted(concepts.items())],
+            )
+
     with conn.cursor() as cur:
         cur.executemany(
             "INSERT INTO document (document_id, document_type, source_code, source_document_id,"
@@ -752,8 +808,10 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         if not primary_present and cls["anchor_role"]:
             # 구 단일역할 경로와 동형의 폴백 — 추출이 primary 를 아무 역할로도 안 냈고
             # (빈 응답 포함) anchor 역할이 유일할 때만 이벤트의 anchor 행을 세운다.
-            event_args.append((source_event_id, cls["anchor_role"], entity_id, cls["confidence"],
-                               None, None, _entity_kind(cls["anchor_role"], entity_id), None))
+            anchor_role = cls["anchor_role"]
+            event_args.append((source_event_id, anchor_role, entity_id, cls["confidence"],
+                               _slot(cls["event_type_code"], anchor_role), None,
+                               _entity_kind(anchor_role, entity_id), None))
         for measure_ord, measure in enumerate(cls["measures"]):
             # measure_ord = 추출 순서(0..n) — 자연키. dart_rcept_no 는 뉴스 경로에선 없다.
             event_measures.append((source_event_id, measure_ord, measure["role_code"],
@@ -1089,7 +1147,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = 0
     classified = events_created = threaded = unknown_thread = 0
-    stage_rejected = arguments_unresolved = anchorless_events = 0
+    stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
     dart_matched = dart_ambiguous = 0
     failures: list[dict] = []
     exit_code = 0
@@ -1099,7 +1157,7 @@ def run(
         from_date = to_date = today
 
     try:
-        view = load_ontology_view()
+        view = load_process_registry()
         all_dates = sorted(set().union(*[set(_partition_dates(storage, lang))
                                          for lang in LANGUAGES]) if LANGUAGES else set())
         targets = [d for d in all_dates
@@ -1125,6 +1183,10 @@ def run(
                 arguments_unresolved += sum(
                     1 for c in classifications.values()
                     for p in c.get("arguments", ()) if p["entity_id"] is None)
+                # 새로 세운 개념 수 — 열린 집합이라 무한정 늘 수 있고, 멘션 품질이 나쁘면
+                # 잡음 개념이 스레드를 갈라놓는다. 정규화 규칙을 조정할 근거가 이 수치다.
+                concepts_minted += sum(
+                    len(c.get("concepts") or {}) for c in classifications.values())
                 # 아규먼트 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지 않아
                 # (다중 primary) 폴백을 조작하지 않은 건. event_argument 가 비면 threading
                 # 조회(JOIN)와 엔진 소비에서 빠지므로 카운터로 드러낸다(Rule 12).
@@ -1157,7 +1219,7 @@ def run(
         logger.exception("이벤트 조립 실패(롤백)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
         events_created = threaded = unknown_thread = 0
-        stage_rejected = arguments_unresolved = anchorless_events = 0
+        stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
         dart_matched = dart_ambiguous = 0
         exit_code = 1
 
@@ -1173,6 +1235,7 @@ def run(
         "stage_rejected": stage_rejected,
         "arguments_unresolved": arguments_unresolved,
         "anchorless_events": anchorless_events,
+        "concepts_minted": concepts_minted,
         "dart_matched": dart_matched, "dart_ambiguous": dart_ambiguous,
         "failures": failures, "exit_code": exit_code,
     }
@@ -1186,9 +1249,11 @@ def run(
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
         " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
+        " concepts=%d"
         " dart_matched=%d dart_ambiguous=%d failures=%d",
         news_read, in_universe_count, already_normalized, classified, events_created,
         threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
+        concepts_minted,
         dart_matched, dart_ambiguous, len(failures),
     )
     return exit_code

@@ -50,6 +50,22 @@ def raw_price_partition(
     )
 
 
+def raw_price_5min_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 5분봉(price_5min) 파티션 프리픽스 (끝 슬래시 없음).
+
+    raw_price_partition(일봉)과 동형이나 파일 포맷은 ndjson 이 아니라 **parquet**(티커당 1개,
+    part-*.ndjson 관례 아님) — 벤더 원본이 이미 parquet 이고 종목당 수만 행(3~4년치 5분봉)이라
+    ndjson 재직렬화는 순수 비용이다. 그래서 is_raw_price_key 류 스캐너 대상이 아니다(마커가
+    dataset=price_daily 로 고정) — 이 데이터셋을 읽는 정제(normalize) 스텝은 아직 없다(후속).
+    """
+    return (
+        f"raw/source={source}/dataset=price_5min/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_investor_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:

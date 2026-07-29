@@ -49,6 +49,7 @@ from .sources import (
     KisNavSource,
     KrxEtfSource,
     PoliteClient,
+    YahooPriceSource,
 )
 from .steps import (
     assemble_events,
@@ -442,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "ingest-price-raw":
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
         # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).
-        # --source 로 벤더를 고른다(미지정=fmp, 기존 동작 보존; kis=국내 일봉).
+        # --source 로 벤더를 고른다(미지정=fmp, 기존 동작 보존; kis=국내 일봉; yahoo=지수).
         vendor = args.source or "fmp"
         if vendor == "fmp":
             price_source = FmpPriceSource(settings.price.source, PoliteClient())
@@ -458,8 +459,14 @@ def main(argv: list[str] | None = None) -> int:
             price_source = KisDailyPriceSource(
                 settings.kis_price.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
             )
+        elif vendor == "yahoo":
+            if settings.yahoo_price is None:
+                # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
+                raise SystemExit("yahoo_price.source 설정이 없다 — sources.toml 확인")
+            # 인증이 없어 PoliteClient 도 안 받는다 — yfinance 가 자체 HTTP 를 쓴다.
+            price_source = YahooPriceSource(settings.yahoo_price.source)
         else:
-            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis)")
+            raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis|yahoo)")
         # PRICE_COLLECTION_KIS 만 운영 원장 계측 대상(ALPHA-530) — FMP 가격은 미등록이라 그대로.
         def _collect():
             return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)

@@ -41,7 +41,7 @@ def test_snapshot_is_the_agreed_contract():
     # 산출물의 라벨 의미가 바뀌는데, ontology_version 만 보고는 못 알아챈다 — 스냅샷 교체를
     # 의식적 행위로 만들려고 계약 값을 고정한다.
     assert ontology.ontology_version() == "0.1.0"
-    assert len(ontology.load_profiles()) == 53
+    assert len(ontology.process_types().types) == 53
 
 
 def test_roles_are_scoped_per_type_not_global():

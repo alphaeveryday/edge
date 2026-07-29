@@ -1,0 +1,1636 @@
+{
+  "version": "2.0.0",
+  "darkMode": true,
+  "gridEnabling": false,
+  "currentViewName": null,
+  "defaultView": {
+    "detailLevel": "All",
+    "tablePositions": [
+      {
+        "name": "actor",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 1145
+      },
+      {
+        "name": "assertion_argument",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 1145
+      },
+      {
+        "name": "assertion_metric",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 1383
+      },
+      {
+        "name": "business_segment_fact",
+        "schemaName": "public",
+        "x": 3968.66845703125,
+        "y": 1166
+      },
+      {
+        "name": "company_profile",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 1717
+      },
+      {
+        "name": "concept",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 1435
+      },
+      {
+        "name": "disclosure_document",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 1104
+      },
+      {
+        "name": "disclosure_fact",
+        "schemaName": "public",
+        "x": 3097.68017578125,
+        "y": 1104
+      },
+      {
+        "name": "document",
+        "schemaName": "public",
+        "x": 12,
+        "y": 1104
+      },
+      {
+        "name": "document_assertion",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 1673
+      },
+      {
+        "name": "document_entity",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 2007
+      },
+      {
+        "name": "entity",
+        "schemaName": "public",
+        "x": 12,
+        "y": 1502
+      },
+      {
+        "name": "equity_profile",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 1460
+      },
+      {
+        "name": "etf_contribution_member",
+        "schemaName": "public",
+        "x": 3968.66845703125,
+        "y": 1564
+      },
+      {
+        "name": "etf_contribution_observation",
+        "schemaName": "public",
+        "x": 3097.68017578125,
+        "y": 1698
+      },
+      {
+        "name": "etf_holding_snapshot",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 1752
+      },
+      {
+        "name": "etf_nav_daily",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 2022
+      },
+      {
+        "name": "etf_profile",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 2643
+      },
+      {
+        "name": "event_argument",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 2622
+      },
+      {
+        "name": "event_evidence",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 1955
+      },
+      {
+        "name": "event_price_observation",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 2260
+      },
+      {
+        "name": "event_price_observation_peer",
+        "schemaName": "public",
+        "x": 3097.68017578125,
+        "y": 1406
+      },
+      {
+        "name": "event_thread",
+        "schemaName": "public",
+        "x": 12,
+        "y": 1740
+      },
+      {
+        "name": "event_thread_link",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 2829
+      },
+      {
+        "name": "explanation_result",
+        "schemaName": "public",
+        "x": 5381.2509765625,
+        "y": 1104
+      },
+      {
+        "name": "explanation_route",
+        "schemaName": "public",
+        "x": 3968.66845703125,
+        "y": 2350
+      },
+      {
+        "name": "explanation_route_decomposition",
+        "schemaName": "public",
+        "x": 4730.08740234375,
+        "y": 1208
+      },
+      {
+        "name": "explanation_route_target",
+        "schemaName": "public",
+        "x": 4730.08740234375,
+        "y": 1414
+      },
+      {
+        "name": "explanation_run",
+        "schemaName": "public",
+        "x": 4730.08740234375,
+        "y": 1684
+      },
+      {
+        "name": "explanation_run_disclosure_fact",
+        "schemaName": "public",
+        "x": 5381.2509765625,
+        "y": 1630
+      },
+      {
+        "name": "explanation_run_event_evidence",
+        "schemaName": "public",
+        "x": 5381.2509765625,
+        "y": 1900
+      },
+      {
+        "name": "explanation_run_event_price_observation",
+        "schemaName": "public",
+        "x": 5381.2509765625,
+        "y": 2170
+      },
+      {
+        "name": "instrument",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 2245
+      },
+      {
+        "name": "investor_flow_daily",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 3105
+      },
+      {
+        "name": "market_series",
+        "schemaName": "public",
+        "x": 12,
+        "y": 2010
+      },
+      {
+        "name": "news_document",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 2277
+      },
+      {
+        "name": "ops_expectation_snapshot",
+        "schemaName": "public",
+        "x": 349.0546875,
+        "y": 12
+      },
+      {
+        "name": "ops_expected_task",
+        "schemaName": "public",
+        "x": 885.7060546875,
+        "y": 12
+      },
+      {
+        "name": "ops_pipeline_run",
+        "schemaName": "public",
+        "x": 349.0546875,
+        "y": 442
+      },
+      {
+        "name": "ops_reconciliation_issue",
+        "schemaName": "public",
+        "x": 12,
+        "y": 12
+      },
+      {
+        "name": "ops_task_attempt",
+        "schemaName": "public",
+        "x": 1402.357421875,
+        "y": 12
+      },
+      {
+        "name": "price_daily",
+        "schemaName": "public",
+        "x": 1494.46630859375,
+        "y": 4144
+      },
+      {
+        "name": "price_decomposition",
+        "schemaName": "public",
+        "x": 3968.66845703125,
+        "y": 2663
+      },
+      {
+        "name": "price_decomposition_peer",
+        "schemaName": "public",
+        "x": 4730.08740234375,
+        "y": 2018
+      },
+      {
+        "name": "price_movement_trigger",
+        "schemaName": "public",
+        "x": 2283.08251953125,
+        "y": 2914
+      },
+      {
+        "name": "price_observation",
+        "schemaName": "public",
+        "x": 3097.68017578125,
+        "y": 2193
+      },
+      {
+        "name": "release_bundle",
+        "schemaName": "public",
+        "x": 12,
+        "y": 2344
+      },
+      {
+        "name": "source_event",
+        "schemaName": "public",
+        "x": 12,
+        "y": 2646
+      },
+      {
+        "name": "supply_contract_fact",
+        "schemaName": "public",
+        "x": 3968.66845703125,
+        "y": 1834
+      },
+      {
+        "name": "tenant",
+        "schemaName": "public",
+        "x": 12,
+        "y": 2980
+      },
+      {
+        "name": "tenant_credential",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 3487
+      },
+      {
+        "name": "tenant_delivery",
+        "schemaName": "public",
+        "x": 6001.13916015625,
+        "y": 1104
+      },
+      {
+        "name": "tenant_release_history",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 3725
+      },
+      {
+        "name": "tenant_sync_cursor",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 3963
+      },
+      {
+        "name": "thread_discovery_snapshot",
+        "schemaName": "public",
+        "x": 711.431640625,
+        "y": 3163
+      },
+      {
+        "name": "event_measure",
+        "schemaName": "public",
+        "x": 12,
+        "y": 4578
+      }
+    ],
+    "tableGroupCollapseStates": [],
+    "stickyNoteLayouts": [],
+    "referencePaths": [
+      {
+        "firstFieldNames": [
+          "actor_id",
+          "entity_type"
+        ],
+        "firstTableName": "actor",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id",
+          "entity_type"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "assertion_id"
+        ],
+        "firstTableName": "assertion_argument",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "assertion_id"
+        ],
+        "secondTableName": "document_assertion",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "entity_id"
+        ],
+        "firstTableName": "assertion_argument",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "assertion_id"
+        ],
+        "firstTableName": "assertion_metric",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "assertion_id"
+        ],
+        "secondTableName": "document_assertion",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "concept_id"
+        ],
+        "firstTableName": "business_segment_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "concept_id"
+        ],
+        "secondTableName": "concept",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "fact_id",
+          "fact_type"
+        ],
+        "firstTableName": "business_segment_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "fact_id",
+          "fact_type"
+        ],
+        "secondTableName": "disclosure_fact",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "actor_id",
+          "actor_type"
+        ],
+        "firstTableName": "company_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "actor_id",
+          "actor_type"
+        ],
+        "secondTableName": "actor",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "concept_id",
+          "entity_type"
+        ],
+        "firstTableName": "concept",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id",
+          "entity_type"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "parent_concept_id"
+        ],
+        "firstTableName": "concept",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "concept_id"
+        ],
+        "secondTableName": "concept",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "issuer_actor_id"
+        ],
+        "firstTableName": "disclosure_document",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "actor_id"
+        ],
+        "secondTableName": "company_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "document_id",
+          "document_type"
+        ],
+        "firstTableName": "disclosure_document",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id",
+          "document_type"
+        ],
+        "secondTableName": "document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "document_id"
+        ],
+        "firstTableName": "disclosure_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id"
+        ],
+        "secondTableName": "disclosure_document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "document_id"
+        ],
+        "firstTableName": "document_assertion",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id"
+        ],
+        "secondTableName": "document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "document_id"
+        ],
+        "firstTableName": "document_entity",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id"
+        ],
+        "secondTableName": "document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "entity_id"
+        ],
+        "firstTableName": "document_entity",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id",
+          "instrument_type"
+        ],
+        "firstTableName": "equity_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id",
+          "instrument_type"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "issuer_actor_id"
+        ],
+        "firstTableName": "equity_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "actor_id"
+        ],
+        "secondTableName": "company_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "constituent_instrument_id"
+        ],
+        "firstTableName": "etf_contribution_member",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "contribution_observation_id"
+        ],
+        "firstTableName": "etf_contribution_member",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "contribution_observation_id"
+        ],
+        "secondTableName": "etf_contribution_observation",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "price_movement_trigger_id"
+        ],
+        "firstTableName": "etf_contribution_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "price_movement_trigger_id"
+        ],
+        "secondTableName": "price_movement_trigger",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "constituent_instrument_id"
+        ],
+        "firstTableName": "etf_holding_snapshot",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "etf_instrument_id"
+        ],
+        "firstTableName": "etf_holding_snapshot",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "etf_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "etf_instrument_id"
+        ],
+        "firstTableName": "etf_nav_daily",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "etf_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id",
+          "instrument_type"
+        ],
+        "firstTableName": "etf_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id",
+          "instrument_type"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "primary_theme_concept_id"
+        ],
+        "firstTableName": "etf_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "concept_id"
+        ],
+        "secondTableName": "concept",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "tracking_market_series_id"
+        ],
+        "firstTableName": "etf_profile",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "market_series_id"
+        ],
+        "secondTableName": "market_series",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "entity_id"
+        ],
+        "firstTableName": "event_argument",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id"
+        ],
+        "firstTableName": "event_argument",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "assertion_id"
+        ],
+        "firstTableName": "event_evidence",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "assertion_id"
+        ],
+        "secondTableName": "document_assertion",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id"
+        ],
+        "firstTableName": "event_evidence",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id",
+          "anchor_evidence_id"
+        ],
+        "firstTableName": "event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id",
+          "evidence_id"
+        ],
+        "secondTableName": "event_evidence",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "benchmark_series_id"
+        ],
+        "firstTableName": "event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "market_series_id"
+        ],
+        "secondTableName": "market_series",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id"
+        ],
+        "firstTableName": "event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id"
+        ],
+        "firstTableName": "event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "peer_instrument_id"
+        ],
+        "firstTableName": "event_price_observation_peer",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "event_price_observation_id"
+        ],
+        "firstTableName": "event_price_observation_peer",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "event_price_observation_id"
+        ],
+        "secondTableName": "event_price_observation",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id",
+          "source_class"
+        ],
+        "firstTableName": "event_thread_link",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id",
+          "source_class"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "thread_id"
+        ],
+        "firstTableName": "event_thread_link",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "thread_id"
+        ],
+        "secondTableName": "event_thread",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "etf_instrument_id"
+        ],
+        "firstTableName": "explanation_result",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "etf_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_run_id"
+        ],
+        "firstTableName": "explanation_result",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_run_id"
+        ],
+        "secondTableName": "explanation_run",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "primary_thread_id"
+        ],
+        "firstTableName": "explanation_result",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "thread_id"
+        ],
+        "secondTableName": "event_thread",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "contribution_observation_id"
+        ],
+        "firstTableName": "explanation_route",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "contribution_observation_id"
+        ],
+        "secondTableName": "etf_contribution_observation",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "price_decomposition_id"
+        ],
+        "firstTableName": "explanation_route_decomposition",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "price_decomposition_id"
+        ],
+        "secondTableName": "price_decomposition",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_route_id"
+        ],
+        "firstTableName": "explanation_route_decomposition",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_route_id"
+        ],
+        "secondTableName": "explanation_route",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "target_entity_id"
+        ],
+        "firstTableName": "explanation_route_target",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_route_id"
+        ],
+        "firstTableName": "explanation_route_target",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_route_id"
+        ],
+        "secondTableName": "explanation_route",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_instrument_id"
+        ],
+        "firstTableName": "explanation_route_target",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "bundle_version"
+        ],
+        "firstTableName": "explanation_run",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "bundle_version"
+        ],
+        "secondTableName": "release_bundle",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_route_id"
+        ],
+        "firstTableName": "explanation_run",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_route_id"
+        ],
+        "secondTableName": "explanation_route",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "fact_id"
+        ],
+        "firstTableName": "explanation_run_disclosure_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "fact_id"
+        ],
+        "secondTableName": "disclosure_fact",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_run_id"
+        ],
+        "firstTableName": "explanation_run_disclosure_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_run_id"
+        ],
+        "secondTableName": "explanation_run",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "evidence_id"
+        ],
+        "firstTableName": "explanation_run_event_evidence",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "evidence_id"
+        ],
+        "secondTableName": "event_evidence",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_run_id"
+        ],
+        "firstTableName": "explanation_run_event_evidence",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_run_id"
+        ],
+        "secondTableName": "explanation_run",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "event_price_observation_id"
+        ],
+        "firstTableName": "explanation_run_event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "event_price_observation_id"
+        ],
+        "secondTableName": "event_price_observation",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_run_id"
+        ],
+        "firstTableName": "explanation_run_event_price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_run_id"
+        ],
+        "secondTableName": "explanation_run",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id",
+          "entity_type"
+        ],
+        "firstTableName": "instrument",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "entity_id",
+          "entity_type"
+        ],
+        "secondTableName": "entity",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id"
+        ],
+        "firstTableName": "investor_flow_daily",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "representative_document_id"
+        ],
+        "firstTableName": "news_document",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id"
+        ],
+        "secondTableName": "news_document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "theme_concept_id"
+        ],
+        "firstTableName": "news_document",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "concept_id"
+        ],
+        "secondTableName": "concept",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "document_id",
+          "document_type"
+        ],
+        "firstTableName": "news_document",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "document_id",
+          "document_type"
+        ],
+        "secondTableName": "document",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "pipeline_run_id"
+        ],
+        "firstTableName": "ops_expected_task",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "pipeline_run_id"
+        ],
+        "secondTableName": "ops_pipeline_run",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "expectation_snapshot_id"
+        ],
+        "firstTableName": "ops_expected_task",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "expectation_snapshot_id"
+        ],
+        "secondTableName": "ops_expectation_snapshot",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "expected_task_id"
+        ],
+        "firstTableName": "ops_task_attempt",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "expected_task_id"
+        ],
+        "secondTableName": "ops_expected_task",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id"
+        ],
+        "firstTableName": "price_daily",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "benchmark_series_id"
+        ],
+        "firstTableName": "price_decomposition",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "market_series_id"
+        ],
+        "secondTableName": "market_series",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "price_observation_id"
+        ],
+        "firstTableName": "price_decomposition",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "price_observation_id"
+        ],
+        "secondTableName": "price_observation",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "price_decomposition_id"
+        ],
+        "firstTableName": "price_decomposition_peer",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "price_decomposition_id"
+        ],
+        "secondTableName": "price_decomposition",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "peer_instrument_id"
+        ],
+        "firstTableName": "price_decomposition_peer",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "etf_instrument_id"
+        ],
+        "firstTableName": "price_movement_trigger",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "etf_profile",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "instrument_id"
+        ],
+        "firstTableName": "price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "instrument_id"
+        ],
+        "secondTableName": "instrument",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "price_movement_trigger_id"
+        ],
+        "firstTableName": "price_observation",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "price_movement_trigger_id"
+        ],
+        "secondTableName": "price_movement_trigger",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "contract_object_concept_id"
+        ],
+        "firstTableName": "supply_contract_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "concept_id"
+        ],
+        "secondTableName": "concept",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "counterparty_actor_id"
+        ],
+        "firstTableName": "supply_contract_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "actor_id"
+        ],
+        "secondTableName": "actor",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "fact_id",
+          "fact_type"
+        ],
+        "firstTableName": "supply_contract_fact",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "fact_id",
+          "fact_type"
+        ],
+        "secondTableName": "disclosure_fact",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "tenant_id"
+        ],
+        "firstTableName": "tenant_credential",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "tenant_id"
+        ],
+        "secondTableName": "tenant",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "explanation_result_id"
+        ],
+        "firstTableName": "tenant_delivery",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_result_id"
+        ],
+        "secondTableName": "explanation_result",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "target_explanation_result_id"
+        ],
+        "firstTableName": "tenant_delivery",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "explanation_result_id"
+        ],
+        "secondTableName": "explanation_result",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "tenant_id"
+        ],
+        "firstTableName": "tenant_delivery",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "tenant_id"
+        ],
+        "secondTableName": "tenant",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "bundle_version"
+        ],
+        "firstTableName": "tenant_release_history",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "bundle_version"
+        ],
+        "secondTableName": "release_bundle",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "tenant_id"
+        ],
+        "firstTableName": "tenant_release_history",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "tenant_id"
+        ],
+        "secondTableName": "tenant",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "tenant_id"
+        ],
+        "firstTableName": "tenant_sync_cursor",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "tenant_id"
+        ],
+        "secondTableName": "tenant",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id"
+        ],
+        "firstTableName": "thread_discovery_snapshot",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "thread_id"
+        ],
+        "firstTableName": "thread_discovery_snapshot",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "thread_id"
+        ],
+        "secondTableName": "event_thread",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "source_event_id"
+        ],
+        "firstTableName": "event_measure",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "source_event_id"
+        ],
+        "secondTableName": "source_event",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      }
+    ]
+  },
+  "views": {}
+}

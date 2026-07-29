@@ -263,9 +263,10 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     assert se[0] == evt_id and se[1] == "NEWS" and se[3] == "2026-07-15"
     [arg] = _batch(conn, "event_argument")
     assert (arg[0], arg[2]) == (evt_id, "inst_SAMSUNG")
-    # 참여자 없는 추출 → 구 단일역할과 동형의 폴백 행(신규 컬럼은 결측, kind 는 ticker
-    # 해소 = 발행사 접지라 ISSUER).
-    assert arg[4:] == (None, None, "ISSUER", None)
+    # 참여자 없는 추출 → 구 단일역할과 동형의 폴백 행. mention·group_ord 는 추출 산물이라
+    # 결측이지만 slot·entity_kind 는 **온톨로지가 준다** — (타입, 역할)만으로 결정되므로
+    # 추출이 비어도 채울 수 있다(ALPHA-596). ISSUER 는 ticker 해소라 발행사 접지.
+    assert arg[4:] == ("subject", None, "ISSUER", None)
     [ev] = _batch(conn, "event_evidence")
     assert ev[1] == evt_id and ev[3] == "TITLE"
     # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 는 identity_roles 기반 계약 키.
@@ -495,9 +496,10 @@ def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
 # ── v4: 다중 참여자·수량 기록 ────────────────────────────────────────────────
 def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypatch):
     """멀티기업 기사 — 해소된 참여자 **전원**이 event_argument 에 slot·mention·group_ord 와
-    함께 실리고(다중역할), 미해소 참여자(CONTRACT_OBJECT 개념)는 entity_id NOT NULL PK 라
-    스킵하되 **completeness 에는 반영**된다(이식원 UNRESOLVED 규약 — 보도가 역할을 말한
-    사실과 해소 가능 여부는 다른 축). 수량(CONTRACT_VALUE)은 event_measure 로 간다."""
+    함께 실린다(다중역할). 개념 참여자(CONTRACT_OBJECT='HBM')도 정규화 멘션에서 결정적으로
+    채번한 concept 엔티티로 실린다(FixB) — 예전에는 entity_id NOT NULL PK 라 통째로
+    빠졌고, 그게 CONTRACT.SIGNING 이 100% UNKNOWN 이던 원인이었다.
+    수량(CONTRACT_VALUE)은 event_measure 로 간다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article(
         "a1", title="삼성전자, SK하이닉스와 1,883억원 HBM 공급계약",
@@ -510,11 +512,11 @@ def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypa
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
             arguments=[
-                {"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+                {"role": "SUPPLIER", "mention": "삼성전자",
                  "ticker": "005930", "group": 0},
-                {"role": "CUSTOMER", "slot": "object", "mention": "SK하이닉스",
+                {"role": "CUSTOMER", "mention": "SK하이닉스",
                  "ticker": "000660", "group": 0},
-                {"role": "CONTRACT_OBJECT", "slot": "qualifier", "mention": "HBM",
+                {"role": "CONTRACT_OBJECT", "mention": "HBM",
                  "ticker": "", "group": 0},
             ],
             measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
@@ -527,22 +529,30 @@ def test_multi_company_arguments_recorded_with_slot_and_group(tmp_path, monkeypa
     asrt_id = _stable_id("asrt", doc_id, _CONTRACT, _CONTRACT_PRED)
     evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
     args = {(r[1], r[2]): r for r in _batch(conn, "event_argument")}
-    # 해소된 참여자 2명 전원 — primary 가 참여자로 실렸으니 폴백 행은 없다.
-    assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX")}
-    # entity_kind: SUPPLIER·CUSTOMER 는 계약(entity_mapping_contract)에 역할→종별 표가 없어
-    # NULL 이다 — 전원 ISSUER 로 실으면 다자 딜 행이 발행사 행과 구분되지 않는다(#255 P2).
-    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", None, 0)
-    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", None, 0)
+    # 참여자 3명 전원 — 회사 둘은 티커로, 개념 하나는 채번으로 해소된다.
+    concept_id = _stable_id("concept", "hbm")
+    assert set(args) == {("SUPPLIER", "inst_SAMSUNG"), ("CUSTOMER", "inst_HYNIX"),
+                         ("CONTRACT_OBJECT", concept_id)}
+    # entity_kind: 관계 어휘(role_bindings role_kinds)가 역할→종별을 정한다.
+    # SUPPLIER·CUSTOMER 는 COMPANY_ENTITY — 발행사(ISSUER)와 **다른 종별**이라 다자 딜의
+    # 상대방 행이 발행사 행과 구분된다(#255 P2 가 막으려던 뭉갬). 종별마다
+    # persistence_key 가 달라 적재 경로 선택의 입력이기도 하다.
+    assert args[("SUPPLIER", "inst_SAMSUNG")][4:] == ("subject", "삼성전자", "COMPANY_ENTITY", 0)
+    assert args[("CUSTOMER", "inst_HYNIX")][4:] == ("object", "SK하이닉스", "COMPANY_ENTITY", 0)
     # 수량 — KR 파서가 value/unit 을 계산(1,883억원 → 1883e8 KRW), 추출 순서가 measure_ord.
     [meas] = _batch(conn, "event_measure")
     assert meas == (evt_id, 0, "CONTRACT_VALUE", "1,883억원", 188_300_000_000.0, "KRW",
                     "TOTAL", "PARSED", "ok", 0, None)
-    # completeness: required=SUPPLIER·CONTRACT_OBJECT — 미해소 CONTRACT_OBJECT 도 추출은
-    # 됐으므로 complete. 미해소 수는 로그 카운터로 드러난다(Rule 12).
+    # 개념 행이 FK 대상으로 **먼저** 서 있어야 한다 — 순서가 뒤집히면 적재가 롤백된다.
+    assert (concept_id, "HBM") in _batch(conn, "entity")
+    assert (concept_id, "PRODUCT_OR_CONCEPT") in _batch(conn, "concept")
+    assert args[("CONTRACT_OBJECT", concept_id)][6] == "PRODUCT_OR_CONCEPT"
+    # completeness: required=SUPPLIER·CONTRACT_OBJECT 둘 다 채워져 complete.
     [se] = _batch(conn, "source_event")
     assert (se[0], se[7], se[9]) == (evt_id, _CONTRACT_PRED, "complete")
     log = _log(storage)
-    assert log["arguments_unresolved"] == 1
+    # 미해소 0 — 개념까지 해소됐다. 새로 세운 개념 수는 별도 카운터로 드러난다(Rule 12).
+    assert (log["arguments_unresolved"], log["concepts_minted"]) == (0, 1)
 
 
 def test_measure_role_outside_quantity_menu_is_dropped(tmp_path, monkeypatch):
@@ -557,7 +567,7 @@ def test_measure_role_outside_quantity_menu_is_dropped(tmp_path, monkeypatch):
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
-            arguments=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+            arguments=[{"role": "SUPPLIER", "mention": "삼성전자",
                            "ticker": "005930", "group": 0}],
             measures=[
                 {"role": "CONTRACT_OBJECT", "surface": "HBM", "basis": "TOTAL", "group": 0},
@@ -815,10 +825,10 @@ def test_classify_batches_run_concurrently_not_serialized(tmp_path):
     """
     import threading
 
-    from edge_ontology import load_ontology_view
+    from edge_ontology import load_process_registry
     from data_pipeline.steps.assemble_events import CLASSIFY_BATCH, classify_titles
 
-    view = load_ontology_view()
+    view = load_process_registry()
     entity_index = {"005930": "inst_SAMSUNG"}
     n_batches = 3
     rows = [{"article_id": f"a{i}", "title": f"제목{i}", "tickers": ["005930"]}
@@ -842,10 +852,10 @@ def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
     티커를 배치 걸쳐 교차시키고 각 기사의 결과 엔티티가 자기 입력 티커와 맞는지로 둘 다 잠근다.
     2콜 체인에선 게이트→추출 병합까지 거친 최종 결과가 기사 전량이어야 한다.
     """
-    from edge_ontology import load_ontology_view
+    from edge_ontology import load_process_registry
     from data_pipeline.steps.assemble_events import classify_titles
 
-    view = load_ontology_view()
+    view = load_process_registry()
     entity_index = {"005930": "inst_SAMSUNG", "000660": "inst_HYNIX"}
     n = 100
     tickers = ["005930" if i % 2 == 0 else "000660" for i in range(n)]
@@ -868,7 +878,7 @@ def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
 
 
 def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch):
-    """비스칼라 라벨({"predicate": []}·stage {}·slot []·basis []·confidence [])은 그 필드만
+    """비스칼라 라벨({"predicate": []}·stage {}·basis []·confidence [])은 그 필드만
     결측/기본값 처리한다 — frozenset·dict 멤버십 TypeError 가 run() 밖으로 새면 기형 기사
     하나가 날짜 전체를 롤백시킨다(Codex #255 P2, Rule 12: 국소 실패)."""
     storage = LocalStorage(tmp_path / "lake")
@@ -878,7 +888,7 @@ def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch)
     complete_fn = _llm_fn(
         [_gate_item("a1", etype=_CONTRACT)],
         [{"id": "a1", "predicate": [], "stage": {}, "confidence": [],
-          "arguments": [{"role": "SUPPLIER", "slot": [], "mention": "삼성전자",
+          "arguments": [{"role": "SUPPLIER", "mention": "삼성전자",
                             "ticker": "005930", "group": 0}],
           "measures": [{"role": "CONTRACT_VALUE", "surface": "총 1,883억원",
                         "basis": [], "group": 0}]}])
@@ -890,7 +900,8 @@ def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch)
     # predicate 는 타입 기본술어로, stage·confidence_level 은 NULL 로 강등 — 행은 산다.
     assert (se[4], se[7], se[8]) == (None, _CONTRACT_PRED, None)
     [arg] = _batch(conn, "event_argument")
-    assert arg[4] is None  # slot [] → NULL
+    # slot 은 LLM 이 아니라 온톨로지가 준다 — 기형 응답이 오염시킬 수 없다(ALPHA-596).
+    assert arg[4] == "subject"
     [meas] = _batch(conn, "event_measure")
     assert meas[6] == "TOTAL"  # basis [] → surface 결정 판정("총")
 
@@ -982,7 +993,7 @@ def test_primary_under_other_role_gets_no_fabricated_anchor(tmp_path, monkeypatc
     complete_fn = _llm_fn(
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item("a1", predicate=_CONTRACT_PRED,
-                       arguments=[{"role": "CUSTOMER", "slot": "object",
+                       arguments=[{"role": "CUSTOMER",
                                       "mention": "삼성전자", "ticker": "005930", "group": 0}])])
 
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
@@ -1005,7 +1016,7 @@ def test_out_of_range_group_ordinal_is_nulled(tmp_path, monkeypatch):
         [_gate_item("a1", etype=_CONTRACT)],
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
-            arguments=[{"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+            arguments=[{"role": "SUPPLIER", "mention": "삼성전자",
                         "ticker": "005930", "group": 999999}],
             measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
                        "basis": "TOTAL", "group": -1}])])
@@ -1033,9 +1044,9 @@ def test_unextracted_anchor_role_keeps_completeness_partial(tmp_path, monkeypatc
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
             arguments=[
-                {"role": "CUSTOMER", "slot": "subject", "mention": "삼성전자",
+                {"role": "CUSTOMER", "mention": "삼성전자",
                  "ticker": "005930", "group": 0},
-                {"role": "CONTRACT_OBJECT", "slot": "object", "mention": "HBM",
+                {"role": "CONTRACT_OBJECT", "mention": "HBM",
                  "ticker": "", "group": 0},
             ],
             measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
@@ -1047,7 +1058,9 @@ def test_unextracted_anchor_role_keeps_completeness_partial(tmp_path, monkeypatc
     [se] = _batch(conn, "source_event")
     assert se[9] == "partial"  # SUPPLIER 미추출 — 폴백 anchor 도 안 서므로 충족 아님
     args = {a[1] for a in _batch(conn, "event_argument")}
-    assert args == {"CUSTOMER"}  # SUPPLIER 행 조작 없음
+    # CONTRACT_OBJECT 는 개념 채번으로 실린다 — 그래도 SUPPLIER 행은 **조작하지 않는다**.
+    # 개념 해소가 없는 역할을 있는 것처럼 만들어 주지는 않는다는 뜻이다.
+    assert args == {"CUSTOMER", "CONTRACT_OBJECT"}
 
 
 def test_unparseable_required_measure_keeps_completeness_partial(tmp_path, monkeypatch):
@@ -1067,11 +1080,11 @@ def test_unparseable_required_measure_keeps_completeness_partial(tmp_path, monke
         [_extract_item(
             "a1", predicate=_CONTRACT_PRED,
             arguments=[
-                {"role": "SUPPLIER", "slot": "subject", "mention": "삼성전자",
+                {"role": "SUPPLIER", "mention": "삼성전자",
                  "ticker": "005930", "group": 0},
-                {"role": "CUSTOMER", "slot": "object", "mention": "SK하이닉스",
+                {"role": "CUSTOMER", "mention": "SK하이닉스",
                  "ticker": "000660", "group": 0},
-                {"role": "CONTRACT_OBJECT", "slot": "qualifier", "mention": "HBM",
+                {"role": "CONTRACT_OBJECT", "mention": "HBM",
                  "ticker": "", "group": 0},
             ],
             measures=[{"role": "CONTRACT_VALUE", "surface": "대규모",
@@ -1119,3 +1132,68 @@ def test_assemble_promotes_parsed_measure_to_dart_in_same_run(tmp_path, monkeypa
     assert updates == [[("20260714000123", evt_id, 0)]]
     log = _log(storage)
     assert (log["dart_matched"], log["dart_ambiguous"]) == (1, 0)
+
+
+def test_authority_participant_resolves_through_registry(tmp_path, monkeypatch):
+    """티커 없는 규제기관이 event_argument 에 실린다 — 레지스트리 해소(FixA).
+
+    WHY: entity_id 가 NOT NULL FK 라, 티커가 없는 AUTHORITY 는 해소 대상 행이 없어
+    적재에서 통째로 빠졌다. AUTHORITY 를 identity 로 쓰는 타입이 100% UNKNOWN 이던
+    직접 원인이다. 기관은 닫힌 집합이라 레지스트리로 결정적으로 해소한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    etype, pred = "COMPANY.LEGAL.REGULATORY_ACTION", "INVESTIGATE"
+    _write_news(storage, "ko", "2026-07-15",
+                [_article("a1", title="공정위, 삼성전자 조사 착수")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", etype, pred))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=etype)],
+        [_extract_item("a1", predicate=pred, arguments=[
+            {"role": "TARGET_COMPANY", "mention": "삼성전자",
+             "ticker": "005930", "group": 0},
+            # 기관은 티커가 없다 — 예전에는 여기서 미해소로 버려졌다.
+            {"role": "AUTHORITY", "mention": "공정위",
+             "ticker": "", "group": 0},
+        ])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    args = {(r[1], r[2]): r for r in _batch(conn, "event_argument")}
+    assert ("AUTHORITY", "actor_auth_kr_ftc") in args, args.keys()
+    # 종별이 기업과 갈린다 — 규제기관 행이 피조사 기업 행과 섞이지 않는다.
+    assert args[("AUTHORITY", "actor_auth_kr_ftc")][4:] == (
+        "subject", "공정위", "AUTHORITY_OR_RULE", 0)
+    assert args[("TARGET_COMPANY", "inst_SAMSUNG")][6] == "COMPANY_ENTITY"
+    # 그래도 스레드는 UNKNOWN 이다 — identity 에 LEGAL_ISSUE 가 남아 있다(개념 역할, FixB).
+    # 이 테스트가 검증하는 건 **적재**지 스레드 형성이 아니다. 뭉뚱그리면 안 된다.
+    [link] = _batch(conn, "event_thread_link")
+    assert link[3] == "UNKNOWN" and "LEGAL_ISSUE" in link[6]
+
+
+def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):
+    """레지스트리에 없는 기관은 지어내지 않는다 — 미해소로 남는다.
+
+    WHY: 못 찾을 때 임의 id 를 만들면 같은 기관이 표기마다 다른 엔티티가 되어
+    thread_key 가 갈라진다. 조용한 오해소보다 정직한 미해소가 낫다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    etype, pred = "COMPANY.LEGAL.REGULATORY_ACTION", "INVESTIGATE"
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="당국, 삼성전자 조사")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", etype, pred))
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=etype)],
+        [_extract_item("a1", predicate=pred, arguments=[
+            {"role": "TARGET_COMPANY", "mention": "삼성전자",
+             "ticker": "005930", "group": 0},
+            {"role": "AUTHORITY", "mention": "당국",
+             "ticker": "", "group": 0},
+        ])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    roles = {r[1] for r in _batch(conn, "event_argument")}
+    assert "AUTHORITY" not in roles
+    assert _log(storage)["arguments_unresolved"] == 1

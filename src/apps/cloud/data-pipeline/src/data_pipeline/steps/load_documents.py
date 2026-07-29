@@ -17,8 +17,11 @@ canonical 의 (source_vendor, article_id). `ON CONFLICT DO NOTHING` 으로 제�
 `published_at` 으로 대신한다 — "우리가 이 문서를 쓸 수 있게 된 시각"의 가장 보수적인
 근사가 수집 시각이다. 둘 다 없으면 그 행은 적재하지 않고 결손으로 센다.
 
-공시(document_type='DISCLOSURE')·`news_document`(lead_text)·`document_entity` 는
-범위 밖(별건) — 뉴스 경로를 먼저 세운다.
+`news_document.lead_text`(BigKinds 스니펫)도 여기서 채운다 — canonical 이 이미 갖고 있고
+(`normalize_news` 가 `CONTENT`→`lead_text`), 분석엔진 프롬프트가 제목만으로는 사건의
+내용을 못 본다. `assemble_events` 가 같은 행을 `document_id` 만으로 먼저 넣을 수 있어
+**UPSERT** 로 채운다(값이 실제로 달라질 때만 UPDATE — 멱등 집계가 거짓이 되지 않게).
+공시(document_type='DISCLOSURE')·`document_entity` 는 범위 밖(별건).
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ def run(
     """canonical 뉴스 → document 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_no_available_at = 0
-    already = created = 0
+    already = created = lead_written = 0
     created_sample: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -113,6 +116,7 @@ def run(
                             "published_at": row.get("published_at"),
                             "available_at": available_at,
                             "source_uri": row.get("url"),
+                            "lead_text": row.get("lead_text"),
                         })
 
         with connect(db) as conn:
@@ -143,6 +147,20 @@ def run(
                             doc["source_uri"],
                         ),
                     )
+                    # 스니펫은 document 가 **이미 있어도** 채운다 — 분석엔진이 제목만 보던
+                    # 원인이 여기였다. 값이 실제로 바뀔 때만 UPDATE(멱등 집계 보존).
+                    if doc["lead_text"]:
+                        with conn.cursor() as lead_cur:
+                            lead_cur.execute(
+                                "INSERT INTO news_document (document_id, lead_text)"
+                                " VALUES (%s, %s)"
+                                " ON CONFLICT (document_id) DO UPDATE"
+                                " SET lead_text = EXCLUDED.lead_text"
+                                " WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text",
+                                (document_id, doc["lead_text"]),
+                            )
+                            if lead_cur.rowcount:
+                                lead_written += 1
                     if cur.rowcount == 0:
                         already += 1
                         continue
@@ -167,6 +185,8 @@ def run(
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_no_available_at": skipped_no_available_at,
         "already_present": already, "created": created,
+        # 스니펫이 실제로 몇 건 채워졌는지 — 0 이면 canonical 에 lead_text 가 없다는 뜻이다.
+        "lead_text_written": lead_written,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
     }
