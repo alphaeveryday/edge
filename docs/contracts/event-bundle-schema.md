@@ -25,7 +25,7 @@
 | `explanation_run` | 어느 실행이 그 결과를 냈는지 + 사용한 릴리스 번들 버전 | `explanation_run_id` |
 | `source_event` | 설명이 근거로 삼은 소스 이벤트 | `source_event_id` |
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
-| `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363) | `(explanation_run_id, evidence_id, stage_code)` |
+| `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
 | `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
 | `event_thread` | 동일 실제 사건의 계보(정정·후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
