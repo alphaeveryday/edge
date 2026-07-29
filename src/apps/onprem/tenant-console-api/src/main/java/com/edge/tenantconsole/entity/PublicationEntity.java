@@ -36,6 +36,10 @@ public class PublicationEntity {
 
 	private String status;
 
+	/** 게시 시점 노출 문구 스냅샷 — explanations 최종 문구(final) 원천. NULL = summary 그대로 노출. */
+	@Column(name = "published_summary")
+	private String publishedSummary;
+
 	protected PublicationEntity() {
 	}
 
@@ -57,5 +61,9 @@ public class PublicationEntity {
 
 	public String getStatus() {
 		return status;
+	}
+
+	public String getPublishedSummary() {
+		return publishedSummary;
 	}
 }

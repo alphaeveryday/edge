@@ -7,9 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * explanations 도메인 mock 데이터 — UI 시안(v0.2) 목데이터를 서버로 이식한 in-memory
- * 가변 스토어. 상태 전이가 반영돼 UI 의 mutation → refetch 흐름이 실연동과 동일하게
- * 동작한다. DB 연동 시 이 스토어 호출부(service)를 repository 로 교체한다(ALPHA-513).
+ * explanations 도메인 mock 쓰기 seam(ALPHA-607 이후) — 읽기(목록·반입 상태)는 원장
+ * 실조회로 전환됐고, 이 스토어는 아직 mock 인 쓰기(최종 문구·이관·중단·승인·반려·임시
+ * 저장)의 상태 전이만 담는다. 실목록의 설명 ID(문자열)는 이 스토어의 long 키에 없어
+ * 서비스가 404 로 떨어뜨린다 — 쓰기 전환 티켓에서 원장 전이가 이 자리를 교체한다.
  * 상태 코드는 도메인 상태기계(state-machine.md) 어휘를 따른다.
  */
 @Component
@@ -36,23 +37,12 @@ public class ExplanationMockStore {
 	) {
 	}
 
-	public record FeedStatus(String state, String lastReceivedRelative, int todayReceived) {
-	}
-
 	private final Map<Long, Explanation> items = new LinkedHashMap<>();
 
 	public ExplanationMockStore() {
 		for (Explanation it : seed()) {
 			items.put(it.id(), it);
 		}
-	}
-
-	public synchronized List<Explanation> findAll() {
-		return List.copyOf(items.values());
-	}
-
-	public FeedStatus feedStatus() {
-		return new FeedStatus("NORMAL", "2분 전", 128);
 	}
 
 	public synchronized boolean updateFinal(long id, String finalText) {

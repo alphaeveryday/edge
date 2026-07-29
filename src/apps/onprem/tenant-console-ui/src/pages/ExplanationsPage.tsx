@@ -1,12 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Delta, Icon } from 'ui-kit';
-import type { Market, RiskLevel, ServeStatus } from '../domains/explanations';
+import { Icon } from 'ui-kit';
+import type { RiskLevel, ServeStatus } from '../domains/explanations';
 import { RISK_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
 import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
-
-const MARKETS: Market[] = ['KRX', 'NASDAQ'];
 
 export function ExplanationsPage() {
   const navigate = useNavigate();
@@ -14,7 +12,6 @@ export function ExplanationsPage() {
 
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<ServeStatus | 'ALL'>('ALL');
-  const [fMarket, setFMarket] = useState<Market | 'ALL'>('ALL');
   const [fRisk, setFRisk] = useState<RiskLevel | 'ALL'>('ALL');
 
   if (isError) return <LoadError />;
@@ -24,7 +21,6 @@ export function ExplanationsPage() {
     (it) =>
       (!keyword || it.name.toLowerCase().includes(keyword) || it.code.toLowerCase().includes(keyword)) &&
       (fStatus === 'ALL' || it.status === fStatus) &&
-      (fMarket === 'ALL' || it.market === fMarket) &&
       (fRisk === 'ALL' || it.risk === fRisk),
   );
 
@@ -53,18 +49,6 @@ export function ExplanationsPage() {
         </select>
         <select
           className="select"
-          value={fMarket}
-          onChange={(e) => setFMarket(e.target.value as Market | 'ALL')}
-        >
-          <option value="ALL">전체 시장</option>
-          {MARKETS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-        <select
-          className="select"
           value={fRisk}
           onChange={(e) => setFRisk(e.target.value as RiskLevel | 'ALL')}
         >
@@ -86,8 +70,6 @@ export function ExplanationsPage() {
           <thead>
             <tr>
               <th>종목</th>
-              <th>시장</th>
-              <th className="col-num">등락률</th>
               <th>제공 상태</th>
               <th>위험 등급</th>
               <th className="col-muted">반입</th>
@@ -98,10 +80,6 @@ export function ExplanationsPage() {
             {filtered.map((it) => (
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                 <StockCell name={it.name} code={it.code} />
-                <td className="col-muted">{it.market}</td>
-                <td className="col-num">
-                  <Delta direction={it.direction} pct={it.changePct} />
-                </td>
                 <StatusCell it={it} />
                 <RiskCell it={it} />
                 <td className="col-muted num">{it.receivedRelative}</td>

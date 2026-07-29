@@ -34,9 +34,13 @@ export function StatusCell({ it }: { it: Explanation }) {
 export function RiskCell({ it }: { it: Explanation }) {
   return (
     <td>
-      <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-        {RISK_LABEL[it.risk]}
-      </StatusBadge>
+      {it.risk ? (
+        <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
+          {RISK_LABEL[it.risk]}
+        </StatusBadge>
+      ) : (
+        <span style={{ color: 'var(--fg-4)' }}>—</span>
+      )}
     </td>
   );
 }

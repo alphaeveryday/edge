@@ -1,26 +1,26 @@
 package com.edge.tenantconsole.dto;
 
-import com.edge.tenantconsole.mock.ExplanationMockStore.Evidence;
-import com.edge.tenantconsole.mock.ExplanationMockStore.Explanation;
+import com.edge.tenantconsole.model.Explanation;
+import com.edge.tenantconsole.support.TimeText;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
 /**
- * 가격 변동 설명 응답(ALPHA-513) — tenant-console-ui explanations 타입과 1:1 camelCase.
- * `final` 은 Java 예약어라 컴포넌트명은 finalText, JSON 은 @JsonProperty 로 맞춘다.
- * null 필드는 생략(UI optional 계약). mock record(Explanation/Evidence)와 형식이 같아도
- * 와이어 형은 별도 타입으로 둔다. 중첩 근거는 EvidenceResponse.
+ * 가격 변동 설명 응답(ALPHA-607 실전환) — tenant-console-ui explanations 타입과 1:1
+ * camelCase. `final` 은 Java 예약어라 컴포넌트명은 finalText, JSON 은 @JsonProperty 로 맞춘다.
+ * null 필드는 생략(UI optional 계약). 원장 도메인(model.Explanation)을 UI 어휘로 번역만
+ * 한다: 근거 kind→공시/뉴스, 시각→KST 표시 문자열.
+ *
+ * <p>market·direction·changePct 는 온프렘 원장에 없어(ALPHA-497 이연) 축소 계약에서 빠졌다
+ * (사용자 결정 2026-07-29) — materialization 후 복원한다.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ExplanationResponse(
-		long id,
+		String id,
 		String name,
 		String code,
-		String market,
-		int direction,
-		double changePct,
 		String status,
 		String risk,
 		String reviewReason,
@@ -32,15 +32,22 @@ public record ExplanationResponse(
 ) {
 	public record EvidenceResponse(String type, String title, String source, String time) {
 
-		public static EvidenceResponse from(Evidence e) {
-			return new EvidenceResponse(e.type(), e.title(), e.source(), e.time());
+		public static EvidenceResponse from(Explanation.Evidence e) {
+			// kind CHECK 는 NEWS|DISCLOSURE 뿐 — 새 값이 생기면 라벨 없이 코드가 그대로 노출된다.
+			String type = switch (e.kind() == null ? "" : e.kind()) {
+				case "NEWS" -> "뉴스";
+				case "DISCLOSURE" -> "공시";
+				default -> e.kind();
+			};
+			// title·source 는 NULL 허용 — UI 계약(title·source: string)을 깨지 않게 폴백한다.
+			return new EvidenceResponse(type, e.title() == null ? "(제목 없음)" : e.title(),
+					e.source() == null ? "(출처 없음)" : e.source(), TimeText.doc(e.publishedAt()));
 		}
 	}
 
 	public static ExplanationResponse from(Explanation it) {
-		return new ExplanationResponse(it.id(), it.name(), it.code(), it.market(),
-				it.direction(), it.changePct(), it.status(), it.risk(), it.reviewReason(),
-				it.receivedRelative(), it.receivedAt(),
+		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.risk(),
+				it.reviewReason(), TimeText.relative(it.receivedAt()), TimeText.absolute(it.receivedAt()),
 				it.evidence().stream().map(EvidenceResponse::from).toList(),
 				it.original(), it.finalText());
 	}

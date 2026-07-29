@@ -17,4 +17,11 @@ public interface ScreeningCheckRepository extends Repository<ScreeningCheckEntit
 	/** 목록 검수 사유 배치 조회 — 항목당 개별 조회(N+1)를 피한다. */
 	List<ScreeningCheckEntity> findByAnalysisItemIdInAndResultOrderByScreeningCheckId(
 			Collection<String> analysisItemIds, String result);
+
+	/**
+	 * explanations 사유 배치 조회(ALPHA-607) — 검수 대기(REVIEW)와 차단(BLOCK) 분기를
+	 * 함께 읽는다. 차단 항목의 사유는 result='BLOCK' 행에 있어 REVIEW 만으로는 누락된다.
+	 */
+	List<ScreeningCheckEntity> findByAnalysisItemIdInAndResultInOrderByScreeningCheckId(
+			Collection<String> analysisItemIds, Collection<String> results);
 }

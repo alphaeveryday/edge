@@ -1,16 +1,23 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Delta, Icon, StatusBadge, toast } from 'ui-kit';
+import { Icon, StatusBadge, toast } from 'ui-kit';
 import {
-  MARKET_DESC, PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
+  PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
+import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
 
 export function ExplanationDetailPage() {
   const { id } = useParams();
-  const { explanation: it, isLoading, isError } = useExplanation(Number(id));
+  const { explanation: it, isLoading, isError } = useExplanation(id);
   const { updateFinal, stop, moveToReview } = useExplanationActions();
+  const { data: session } = useSession();
+  // 강제 지점은 API(ConsoleAuthFilter), 화면은 UX 게이트(permission-matrix "이중 방어").
+  // 최종 문구 수정 = CR, 노출 축소(이관·중단) = CR·OP.
+  const canEditFinal = session?.role === 'COMPLIANCE_REVIEWER';
+  const canReduceExposure =
+    session?.role === 'COMPLIANCE_REVIEWER' || session?.role === 'OPERATOR';
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -43,14 +50,10 @@ export function ExplanationDetailPage() {
             </span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 2 }}>
-            {MARKET_DESC[it.market]} · {it.receivedAt}
+            {it.receivedAt}
           </div>
         </div>
         <div className="flex items-center gap-8">
-          <div>
-            <div className="t-label">등락률</div>
-            <Delta direction={it.direction} pct={it.changePct} style={{ fontSize: 18, marginTop: 4, display: 'inline-block' }} />
-          </div>
           <div>
             <div className="t-label">제공 상태</div>
             <div className="mt-1.5">
@@ -60,24 +63,30 @@ export function ExplanationDetailPage() {
           <div>
             <div className="t-label">위험 등급</div>
             <div className="mt-1.5">
-              <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-                {RISK_LABEL[it.risk]}
-              </StatusBadge>
+              {it.risk ? (
+                <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
+                  {RISK_LABEL[it.risk]}
+                </StatusBadge>
+              ) : (
+                <span style={{ color: 'var(--fg-4)' }}>—</span>
+              )}
             </div>
           </div>
         </div>
         <div className="flex-1" />
         <div className="flex gap-2">
-          <button
-            className="btn"
-            onClick={() => {
-              setEditing(true);
-              setDraft(it.final);
-            }}
-          >
-            최종 문구 수정
-          </button>
-          {it.status === 'BLOCKED' && (
+          {canEditFinal && (
+            <button
+              className="btn"
+              onClick={() => {
+                setEditing(true);
+                setDraft(it.final);
+              }}
+            >
+              최종 문구 수정
+            </button>
+          )}
+          {canReduceExposure && it.status === 'BLOCKED' && (
             <button
               className="btn"
               onClick={() =>
@@ -90,7 +99,7 @@ export function ExplanationDetailPage() {
             </button>
           )}
           {/* 실제 노출 중인 상태에서만 — 검수 대기·차단·반려 건은 승인/반려 플로우를 우회하지 않게 */}
-          {PUBLISHED_STATUSES.includes(it.status) && (
+          {canReduceExposure && PUBLISHED_STATUSES.includes(it.status) && (
             <button
               className="btn btn-danger"
               onClick={() =>

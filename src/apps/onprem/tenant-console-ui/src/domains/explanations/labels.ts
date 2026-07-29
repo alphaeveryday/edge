@@ -58,8 +58,3 @@ export const FEED_DOT_COLOR: Record<FeedState, string> = {
   DELAYED: 'var(--warn)',
   STOPPED: 'var(--down)',
 };
-
-export const MARKET_DESC: Record<'KRX' | 'NASDAQ', string> = {
-  KRX: 'KRX · 한국거래소',
-  NASDAQ: 'NASDAQ · 미국',
-};
