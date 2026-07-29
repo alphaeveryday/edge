@@ -69,14 +69,13 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("POST", Pattern.compile("/api/v1/review/items/[^/]+/block"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/auth/session"), ANY_ROLE),
-			// ── 콘솔 mock 표면(ALPHA-513) — 인증만 강제(전 역할). UI 에 로그인·역할
-			// 화면이 없는 mock 데이터 단계의 임시 완화로, 도메인별 DB 연동 시
-			// permission-matrix.md 의 역할 세분화(검수·정책=CR, 사용자·시장=TA)를 적용한다.
+			// dashboard 조회 — 실 원장 조회(serving_request_metric, ALPHA-128).
+			// permission-matrix.md "Dashboard 트래픽 KPI" 행: 전 역할.
 			new Rule("GET", Pattern.compile("/api/v1/dashboard/traffic"), ANY_ROLE),
 			// explanations 실전환(ALPHA-607) — mock 완화를 벗어나 permission-matrix.md 의
 			// 실 권한을 적용한다: 조회는 전 역할, 최종 문구·검수 액션(승인·반려·임시저장)은
 			// CR, 노출 축소 조치(이관·중단)는 CR·OP. 쓰기는 아직 mock(원장 ID 는 404)이나
-			// 권한 경계는 매트릭스에 맞춰 미리 좁힌다(쓰기 전환 티켓이 전이를 채운다).
+			// 권한 경계는 매트릭스에 맞춰 미리 좁힌다(쓰기 전환은 ALPHA-613 이 전이를 채운다).
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), COMPLIANCE_REVIEWER_ONLY),

@@ -39,7 +39,7 @@ import java.util.function.LongPredicate;
  * (최종 문구·이관·중단·승인·반려·임시저장)는 아직 mock 스토어다. 원장의 설명 ID
  * (explanation_result_id)는 mock 에 없으므로 <b>실목록에서 고른 건의 쓰기는 전부
  * 404 로 실패한다</b> — 조용히 성공한 척하는 것보다 낫고, 원장 전이·행위자·감사와 함께
- * 쓰기 전환(후속 티켓, ALPHA-497 materialization 후)이 이 자리를 교체한다.
+ * 쓰기 전환(ALPHA-613)이 이 자리를 교체한다.
  *
  * <p>매핑(축소 계약, 사용자 결정 2026-07-29): name←etf_name, code←etf_ticker, status,
  * risk←confidence_level, reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
