@@ -29,16 +29,15 @@
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**`instrumented=False` 는 이제 `TagNews` 하나뿐이다**(ALPHA-596 이 krx·dart 를 승격). 이
-컨테이너는 아직 자기 attempt 를 못 쓰고, Reconciler 의 SFN·ECS 증거 backfill 이 유일하지만
-정확한 기록 경로다(그 경우 attempt 결측은 버그가 아니므로 LEDGER_GAP 을 열지 않는다). 빼지 않고
-등록하는 이유는 **NewsFeatureCheckResults 게이트의 멤버**라서다.
+**등록 27작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
+ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
+전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
-⏭ **deepseek task-def 의 DB env 배선은 ALPHA-610 이 이미 넣었다 — 플래그 전환만 남았다.**
-배선과 플래그를 한 배포에 묶을 수 없어서다: 이미지 CD 와 terraform-apply 가 독립 워크플로라
-플래그가 먼저 뜨면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다(ALPHA-596 이 #359→#362 로
-쪼갠 것과 같은 이유). 그동안 역방향 드리프트 가드는 `test_ops_catalog._WIRING_AHEAD_OF_FLAG` 로
-유예되고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다.
+**배선이 플래그보다 한 배포 앞선다**(ALPHA-596 #359→#362, ALPHA-610 #379→이 PR). 이미지 CD 와
+terraform-apply 가 독립 워크플로라 플래그가 먼저 뜨면 새 카탈로그가 DB env 없는 옛 task
+revision 위에서 돌고, Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다. 다음에 같은 승격을 할
+때도 이 순서를 지켜라 — `test_ops_catalog._WIRING_AHEAD_OF_FLAG` 가 그 중간 상태를 위한
+한 배포짜리 유예이고, 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다.
 
 ⚠️ **`instrumented=True` 는 task-def 에 DB env 가 있다는 주장이다.** 없는 task-def 에 True 를
 달면 wrapper 가 `load_settings()` 단계에서 db 섹션 없이 뜨고, 그 작업은 **PENDING 행만 남긴 채
@@ -331,15 +330,19 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         cli_command=("normalize-news",), sfn_state_name="NormalizeNews",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400, pipeline_type="news",
     ),
-    # ── 태깅 (deepseek task-def — DB env 없음) ─────────────────────────────────────
-    # 등록하되 `instrumented=False` 다. 이 컨테이너는 원장에 못 쓰지만 **NewsFeatureCheckResults
-    # 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LOAD_ASSERTIONS 의 의존이 전부 충족된 것으로
-    # 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로 찍힌다(Codex #273 P1 과 같은 축).
+    # ── 태깅 (deepseek task-def) ─────────────────────────────────────
+    # **NewsFeatureCheckResults 게이트의 멤버**라, 빼면 TagNews 만 죽은 런에서 LOAD_ASSERTIONS 의
+    # 의존이 전부 충족된 것으로 보여 BLOCKED 여야 할 것이 MISSED("시작조차 안 됐다")로
+    # 찍힌다(Codex #273 P1 과 같은 축).
+    # ALPHA-610 이 계측으로 올렸다. 이 스텝은 기사별 LLM 실패를 격리해 exit 0 으로 끝나는데
+    # (07-27 잔액 소진 때 940/940 전건 실패도 exit 0 였다 — ALPHA-589), `failed_records` 는
+    # ops 봉투에 이미 싣고 있었고 판정도 `derive_data_status` 에 이미 있었다(failed>0 →
+    # INCOMPLETE). 없던 것은 배선뿐이라, wrapper 가 안 돌아 그 봉투를 아무도 안 읽었다.
     CatalogEntry(
         task_key="TAG_NEWS", stage="feature", dataset="news_assertions", required=True,
         cli_command=("tag-news",), sfn_state_name="TagNews",
         ecs_task_definition="deepseek", depends_on=("NORMALIZE_NEWS",),
-        deadline_offset_seconds=7200, stalled_after_seconds=21600, instrumented=False,
+        deadline_offset_seconds=7200, stalled_after_seconds=21600,
         pipeline_type="news",
     ),
     # NewsNormalizeCheckResults 게이트 뒤 병렬 — 시장 레인의 ENRICH_CORP_CODE 의존과 다르다
