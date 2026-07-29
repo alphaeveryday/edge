@@ -70,6 +70,15 @@ class EventStore:
         self._conn.close()
 
     # -- 읽기 --------------------------------------------------------------- #
+    def causal_data(self):
+        """인과 설계용 조회 표면. **같은 커넥션**을 공유한다 - PIT 기준이 갈리면 안 된다.
+
+        `_conn` 을 밖으로 내보내지 않는다. 인과 엔진이 필요한 것은 코호트·정렬열·비중이고
+        그건 `CausalData` 의 계약이다.
+        """
+        from .causal_data import CausalData
+        return CausalData(self._conn)
+
     def load_entity_index(self) -> dict[str, str]:
         """ticker -> instrument entity_id (시드된 전 종목)."""
         with self._conn.cursor() as cur:

@@ -47,6 +47,24 @@ class Settings:
     release_bundle_version: str | None
     result_s3_prefix: str | None
     aws_profile: str | None
+    # 인과 설계 하네스 사용 여부. 기본 ON.
+    # OFF 로 둘 수 있게 한 이유: 인과 경로는 instrument_classification(V202607290001)을
+    # 요구하고, 백필 전에는 코호트가 비어 모든 셀이 UNCERTAIN 으로 떨어진다. 그때
+    # 조용히 품질이 내려가는 대신 ops 가 명시적으로 이전 경로를 고를 수 있어야 한다.
+    causal_enabled: bool = True
+
+
+def _flag(name: str, *, default: bool) -> bool:
+    """불리언 환경변수. 오타는 fail-loud - 조용히 default 로 떨어지면 안 된다."""
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    low = raw.strip().lower()
+    if low in ("1", "true", "yes", "on"):
+        return True
+    if low in ("0", "false", "no", "off"):
+        return False
+    raise PipelineError(f"invalid boolean {name}={raw!r}; expected true/false")
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -100,4 +118,5 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         release_bundle_version=_env("ALPHAMALE_RELEASE_BUNDLE_VERSION"),
         result_s3_prefix=_env("ALPHAMALE_RESULT_S3_PREFIX"),
         aws_profile=_env("AWS_PROFILE"),
+        causal_enabled=_flag("CAUSAL_ENABLED", default=True),
     )
