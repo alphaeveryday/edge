@@ -92,6 +92,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 3. **prod (후속)**: prod 인프라가 아직 없어 prod 마이그레이션 워크플로는 두지 않는다. prod env terraform(선행 티켓) 적용 후, 배포 role 을 `refs/heads/main` 으로 핀하고 동일 vars 를 채운 뒤 dev 와 같은 패턴의 prod 워크플로를 재도입한다. 승인 게이트가 필요하면 Pro 플랜의 environment protection(Required reviewers)을 쓴다.
 - (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (현재 private + free 플랜이라 branch protection 불가 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
   - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
+  - branch protection 도입 전까지는 이 창이 열려 있으므로(2026-07-29 ALPHA-623 실증 — 하루에 역행 착지 3건) **머지 직전에 최신 dev 대비 버전 단조성을 수동 재확인**한다. 역행 착지가 이미 일어났다면 **전방 리네임**으로 복구한다: 미적용 파일을 내용 그대로(R100) 더 큰 버전으로 리네임하고 그 쌍을 [`rename-recovery.allowlist`](rename-recovery.allowlist)에 선언 — guard 는 allowlist 에 선언된 전방 리네임(내용 동일 + 새>구 + 새>base 최신)만 허용하고 그 외 리네임은 종전대로 전면 거부한다(선언이 diff 에 드러나 "정말 미적용인가"를 리뷰가 판단). 적용된 파일이 잘못 올라가면 배포 `flywayMigrate`가 "applied migration not resolved"로 fail-loud 한다.
 
 ### JVM/Spring 앱은 schema **consumer**다
 

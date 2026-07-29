@@ -270,6 +270,10 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             release_bundle_version=BUNDLE_VERSION,
             result_s3_prefix="s3://e2e-lake/operations_archive/etf_explanations/",
             aws_profile=None,
+            # 이 골든패스는 이전(비인과) 경로의 계약을 고정한다 — fake 가 classic
+            # explanation JSON 을 반환하므로 인과 하네스(설계 제안 계약)와 맞지 않는다.
+            # 인과 경로 e2e 는 ALPHA-620/622 소관(공인 OFF 모드, config.py 주석 참조).
+            causal_enabled=False,
         )
         store = EventStore.connect(settings)
         try:

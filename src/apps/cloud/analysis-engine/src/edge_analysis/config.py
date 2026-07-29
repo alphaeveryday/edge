@@ -48,7 +48,7 @@ class Settings:
     result_s3_prefix: str | None
     aws_profile: str | None
     # 인과 설계 하네스 사용 여부. 기본 ON.
-    # OFF 로 둘 수 있게 한 이유: 인과 경로는 instrument_classification(V202607290001)을
+    # OFF 로 둘 수 있게 한 이유: 인과 경로는 instrument_classification(V202607291720)을
     # 요구하고, 백필 전에는 코호트가 비어 모든 셀이 UNCERTAIN 으로 떨어진다. 그때
     # 조용히 품질이 내려가는 대신 ops 가 명시적으로 이전 경로를 고를 수 있어야 한다.
     causal_enabled: bool = True
