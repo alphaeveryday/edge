@@ -31,18 +31,36 @@ variable "price_class" {
 }
 
 # ── 선택: /api/* 프록시 오리진 ─────────────────────────
-# 정적 사이트에 API 백엔드를 같은 도메인으로 붙일 때(데모 온프렘 MTS → 박스 mock-broker).
-# 비우면 정적 전용(기존 동작). 브라우저 mixed-content 회피: 뷰어는 HTTPS, 오리진은 HTTP.
+# 정적 사이트에 API 백엔드를 같은 도메인으로 붙일 때(데모 온프렘 MTS → 박스 mock-broker,
+# super-admin 콘솔 → admin ALB). 비우면 정적 전용(기존 동작). 뷰어는 항상 HTTPS —
+# 오리진 프로토콜은 api_origin_protocol 로 고른다(평문 박스 http-only | TLS ALB https-only).
 variable "api_origin_domain" {
-  description = "선택: api_path_pattern 을 프록시할 커스텀 오리진 도메인(예: 데모 박스 EC2 public DNS). 비우면 API 오리진 없음."
+  description = "선택: api_path_pattern 을 프록시할 커스텀 오리진 도메인(예: 데모 박스 EC2 public DNS, ALB 도메인). 비우면 API 오리진 없음."
   type        = string
   default     = ""
 }
 
 variable "api_origin_port" {
-  description = "API 오리진 HTTP 포트(api_origin_domain 설정 시)."
+  description = "API 오리진 HTTP 포트(http-only 일 때만 사용. https-only 는 443 고정)."
   type        = number
   default     = 8080
+}
+
+variable "api_origin_protocol" {
+  description = "API 오리진 프로토콜 정책. 평문 HTTP 박스(demo mock-broker)는 http-only, TLS ALB(super-admin)는 https-only(:443 고정) — https-only 는 오리진 도메인이 오리진 인증서와 SNI 일치해야 한다(ALB raw dns_name 불가)."
+  type        = string
+  default     = "http-only" # 기존 호출자(demo mts_site) 하위호환
+
+  validation {
+    condition     = contains(["http-only", "https-only"], var.api_origin_protocol)
+    error_message = "api_origin_protocol 은 http-only 또는 https-only 만 지원한다."
+  }
+}
+
+variable "api_allowed_methods" {
+  description = "API behavior 의 allowed_methods. CloudFront 는 [GET,HEAD] / [GET,HEAD,OPTIONS] / 7종 전체 세 조합만 허용 — 쓰기 API(POST·PATCH·DELETE)를 프록시하려면 7종 전체."
+  type        = list(string)
+  default     = ["GET", "HEAD", "OPTIONS"] # 기존 호출자 하위호환(읽기 전용)
 }
 
 variable "api_path_pattern" {

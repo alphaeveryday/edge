@@ -80,7 +80,7 @@ EDGE 클라우드(컨트롤 플레인)의 AWS 인프라 구성도. 고객사(Cus
 ## 트래픽 경로 요약
 
 1. **테넌트 동기화(반입)**: Relay Worker(고객사 DMZ) → Route 53(`sync-dev.edgesignal.dev`) → Internet Gateway → Tenant Sync용 ALB → Tenant Sync Service → Cache/RDS
-2. **슈퍼 어드민 콘솔**: Super Admin → CloudFront(`admin-dev.edgesignal.dev`, 정적 UI 자산) + Super Admin Console용 ALB(`admin-api-dev.edgesignal.dev`, API) → Super Admin Console Service
+2. **슈퍼 어드민 콘솔**: Super Admin → CloudFront(`admin-dev.edgesignal.dev`) 단일 진입 — 정적 UI 자산은 S3, `/api/*` 는 CloudFront 가 Super Admin Console용 ALB(`admin-api-dev.edgesignal.dev`) 오리진으로 프록시(same-origin 세션 쿠키, ALPHA-615) → Super Admin Console Service. ALB 직접 호출 경로도 유효하다(호스트 1:1은 유지 — ADR-0034)
 3. **분석 파이프라인**: EventBridge → Step Functions → ECS Task (raw → 정제 → **feature** → analyze) → S3 / RDS
 
 > ⚠️ 방화벽 화이트리스트·인증서는 **각 서비스 FQDN 기준**이어야 해당 ALB에 도달한다 — apex `edgesignal.dev`로는 sync ALB에 도달하지 못한다 ([../adr/0034](../adr/0034-host-per-edge-alb.md) 호스트 1:1).

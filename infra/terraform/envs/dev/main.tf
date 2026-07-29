@@ -93,9 +93,10 @@ module "rds" {
 # 운영 콘솔 API 를 전용 ALB 로 직결한다 — 호스트 단위 1:1, 경로 라우팅 없음. sync ALB 와
 # 진입점을 공유하지 않는 이유는 mTLS 가 리스너 단위라서(공유 시 운영자 브라우저까지
 # 클라이언트 인증서 강제). WAFv2(AWS Managed rules)는 아래에서 이 ALB 에 부착한다(ALPHA-297).
-# ⚠️ 앱 인증 미구현(스캐폴드) — 현재 노출 표면은 actuator health 뿐(컨트롤러 0·DB 미배선).
-# 실기능 컨트롤러·DB 배선은 인증(ALPHA-474) 선행이 게이트다 — cross-tenant 운영자
-# 표면은 운영자 인증·인가를 요구한다(ADR-0008).
+# 앱 인증은 커스텀 세션 필터(AdminAuthFilter, fail-closed) — 미인증 /api/** 는 401,
+# actuator health 만 무인증. 표준 인증·인가 고도화(IdP·CSRF)는 ALPHA-474 — cross-tenant
+# 운영자 표면은 운영자 인증·인가를 요구한다(ADR-0008). 이 ALB 는 아래 super_admin_site
+# CloudFront 의 /api/* 오리진이기도 하다(ALPHA-615).
 # tenant-console-api 는 onprem 플레인 앱(ADR-0029)이라 dev ECS 에서 제거됐다 —
 # 실 배포처는 데모 박스 compose 스택(ADR-0033).
 module "super_admin_alb" {
@@ -512,6 +513,16 @@ module "super_admin_site" {
   zone_id         = data.aws_route53_zone.main.zone_id
   certificate_arn = data.aws_acm_certificate.wildcard_cdn.arn
   spa             = true
+
+  # /api/* → super-admin ALB (ALPHA-615). ALB dns_name 이 아닌 admin_api_domain 을 쓰는
+  # 이유: ALB HTTP:80 은 443 으로 301 리다이렉트라 https-only(:443)가 필수인데, CloudFront
+  # 의 오리진 인증서 검증(SNI)이 *.edgesignal.dev ACM 과 일치해야 해서다. 콘솔 SPA 와
+  # same-origin 이 되어 세션 쿠키(JSESSIONID, Secure·SameSite=Strict)가 실린다.
+  # 쓰기 API(POST login·PATCH 정정 등)라 메서드는 7종 전체.
+  # spa=true 의 403/404→index.html 마스킹이 /api/* 에도 적용되나 미인증은 401(통과)이라 수용.
+  api_origin_domain   = var.admin_api_domain
+  api_origin_protocol = "https-only"
+  api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
 }
 
 # 모듈 rename 은 state 상 이동으로 처리 — CloudFront 배포를 재생성하지 않고 보존한다.
