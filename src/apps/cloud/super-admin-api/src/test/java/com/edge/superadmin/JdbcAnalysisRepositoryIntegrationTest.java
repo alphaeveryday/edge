@@ -184,6 +184,41 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 		assertThat(done.evidence().get(1).documentType()).isEqualTo("DISCLOSURE");
 		assertThat(done.evidence().get(2).title()).isEqualTo("발행시각 없는 기사");
 		assertThat(done.evidence().get(2).publishedAt()).isNull();
+		// 상한(20)에 안 걸린 런은 총 건수와 표시 건수가 같다 — 화면이 "3건 중 3건"을 말하지
+		// 않게 하는 근거
+		assertThat(done.evidenceTotal()).isEqualTo(3);
+	}
+
+	/**
+	 * 근거가 상한을 넘는 런 — 한 설명이 수십~수백 사건을 프롬프트에 싣기 때문에(dev 실측
+	 * 평균 56·최대 485) 상한 없이는 목록 응답 하나가 런 수만큼 곱해져 부푼다. 표시 건수를
+	 * 줄이되 <b>총 건수는 원본을 말해야</b> 한다 — 잘라낸 사실이 화면에서 사라지면 운영자는
+	 * 근거가 20건뿐이라고 읽는다(Rule 12).
+	 */
+	@Test
+	void 근거가_상한을_넘으면_20건만_싣고_총_건수는_원본을_말한다() {
+		insertRunChain("3", "2026-07-29", "2026-07-29T15:40:00+09:00",
+				-0.02, "SUCCEEDED", "2026-07-29T15:50:00+09:00");
+		for (int i = 1; i <= 25; i++) {
+			String n = "c" + i;
+			// 발행시각을 분 단위로 벌려 정렬(published_at ASC)이 결정적이게 둔다
+			insertDocumentEvidence(n, "근거 기사 " + i,
+					String.format("2026-07-29T09:%02d:00+09:00", i));
+			jdbc.update("""
+					INSERT INTO explanation_run_event_evidence (explanation_run_id, evidence_id,
+					       stage_code)
+					VALUES ('run-3', ?, 'PROMPT')
+					""", "evd-" + n);
+		}
+
+		AnalysisRow capped = repository.list().stream()
+				.filter(r -> r.runId().equals("run-3")).findFirst().orElseThrow();
+
+		assertThat(capped.evidence()).hasSize(20);
+		assertThat(capped.evidenceTotal()).isEqualTo(25);
+		// 상한은 정렬 뒤에 걸린다 — 잘리는 건 뒤쪽(늦게 발행된 기사)이다
+		assertThat(capped.evidence().get(0).title()).isEqualTo("근거 기사 1");
+		assertThat(capped.evidence().get(19).title()).isEqualTo("근거 기사 20");
 	}
 
 	@Test

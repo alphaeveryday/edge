@@ -38,4 +38,6 @@ export interface Analysis {
   corrected: boolean;
   result: string;
   evidence: AnalysisEvidence[];
+  /** 이 분석의 근거 총 건수 — evidence 는 표시 상한까지만 담기므로 더 클 수 있다 */
+  evidenceTotal: number;
 }
