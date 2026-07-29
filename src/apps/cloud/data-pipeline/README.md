@@ -666,9 +666,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   IAM·네트워크는 그전에도 열려 있었고, `kis` 가 벤더 컨테이너면서 DB password 를 받는 반례).
   ⚠️ **배선이 먼저, 플래그 해제가 나중** — 이미지 CD 와 terraform apply 가 독립 워크플로라
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰다).
-  남은 `instrumented=False` 는 **TagNews 하나** — deepseek task-def 에 DB env 가 없어 자기
-  attempt 를 못 쓰고 Reconciler backfill 이 유일·정확한 기록 경로다(그래서 LEDGER_GAP 을 안
-  연다). 빼면 안 되는 이유는 게이트 멤버라서다. 그 하나는 실행 여부·성패만 얻고
+  남은 `instrumented=False` 는 **TagNews 하나** — 자기 attempt 를 못 쓰고 Reconciler backfill 이
+  유일·정확한 기록 경로다(그래서 LEDGER_GAP 을 안 연다). 빼면 안 되는 이유는 게이트 멤버라서다.
+  **deepseek task-def 의 DB env 배선은 ALPHA-610 이 이미 넣었고, 플래그 전환만 남았다**(위
+  "배선이 먼저" 원칙대로 한 배포 앞세웠다 — 그동안 역방향 가드는 `_WIRING_AHEAD_OF_FLAG` 로
+  유예되며, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
+  그 하나는 실행 여부·성패만 얻고
   `records_out`·`data_status` 는 못 얻는다 — exit 0 인데 부분 유실이면 S3 `collection_log` 를
   봐야 한다. 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
