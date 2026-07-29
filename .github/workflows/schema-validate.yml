@@ -100,28 +100,37 @@ jobs:
               exit 1
             fi
 
-            # (a') 이름변경(R)은 '전방 리네임'만 허용: 내용 동일(R100) + 새 버전 > 구 버전
-            #      + 새 버전 > base 최신. 미적용 마이그레이션이 base 전진으로 역행(out-of-order)
-            #      착지했을 때의 복구 경로다(ALPHA-623 — branch protection 부재로 아래 '한계'의
-            #      창이 실제로 열린다). 적용된 파일을 전방 리네임하면 CI 는 못 잡지만 배포
-            #      flywayMigrate 가 "applied migration not resolved" 로 fail-loud 한다.
+            # (a') 이름변경(R)은 allowlist 에 선언된 '전방 리네임 복구'만 허용. 조건 전부 충족:
+            #      ① rename-recovery.allowlist 에 "<구> <신>" 쌍이 선언 ② 내용 동일(R100)
+            #      ③ 새 버전 > 구 버전 ④ 새 버전 > base 최신. 미적용 마이그레이션이 base
+            #      전진으로 역행(out-of-order) 착지했을 때의 복구 경로다(ALPHA-623 — branch
+            #      protection 부재로 아래 '한계'의 창이 실제로 열린다). 일반 규칙로 열지 않는
+            #      이유: 적용된 파일의 전방 리네임까지 초록이 되어 PR-시점 보호가 사라진다 —
+            #      allowlist 선언은 diff 에 드러나 "정말 미적용인가"를 리뷰가 판단하게 한다.
+            #      그래도 적용 파일이 올라가면 배포 flywayMigrate 가 fail-loud 로 최종 방어.
+            allowlist="src/libs/schema/rename-recovery.allowlist"
             renames="$(git diff --name-status --diff-filter=R "${base}...${head}" -- "${migdir}/")"
             if [ -n "${renames}" ]; then
               bad_renames="$(echo "${renames}" | while IFS="$(printf '\t')" read -r st old new; do
                 score="${st#R}"
+                oldb="$(basename "${old}")"; newb="$(basename "${new}")"
                 oldv="$(echo "${old}" | sed -nE 's#.*/V([0-9]+)__.*#\1#p')"
                 newv="$(echo "${new}" | sed -nE 's#.*/V([0-9]+)__.*#\1#p')"
-                if [ "${score}" != "100" ] || [ -z "${oldv}" ] || [ -z "${newv}" ] \
+                listed=""
+                if git cat-file -e "${head}:${allowlist}" 2>/dev/null; then
+                  listed="$(git show "${head}:${allowlist}" | grep -v '^[[:space:]]*#' | grep -F "${oldb} ${newb}" || true)"
+                fi
+                if [ -z "${listed}" ] || [ "${score}" != "100" ] || [ -z "${oldv}" ] || [ -z "${newv}" ] \
                    || [ "${newv}" -le "${oldv}" ] || [ "${newv}" -le "${base_max}" ]; then
-                  echo "  - ${old} -> ${new} (${st})"
+                  echo "  - ${old} -> ${new} (${st}, allowlist=$([ -n "${listed}" ] && echo yes || echo no))"
                 fi
               done)"
               if [ -n "${bad_renames}" ]; then
-                echo "::error::허용되지 않는 마이그레이션 이름변경입니다. 리네임은 내용 동일(R100)·버전 전진(새>구, 새>base 최신)인 복구 리네임만 허용합니다."
+                echo "::error::허용되지 않는 마이그레이션 이름변경입니다. 리네임은 ${allowlist} 에 선언된, 내용 동일(R100)·버전 전진(새>구, 새>base 최신)인 복구 리네임만 허용합니다."
                 echo "${bad_renames}"
                 exit 1
               fi
-              echo "전방 리네임 허용:"
+              echo "allowlist 선언된 전방 리네임 허용:"
               echo "${renames}"
             fi
 
