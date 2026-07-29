@@ -309,27 +309,6 @@ public class ExplanationService {
 		ensure(applyMock(id, store::moveToReview));
 	}
 
-	public void approve(String id, String finalText) {
-		requireText(finalText);
-		ensure(applyMock(id, mid -> store.approve(mid, finalText)));
-	}
-
-	public void reject(String id, String note) {
-		if (note == null || note.isBlank()) {
-			// 반려 사유는 감사 재현의 최소 단서다(state-machine.md 정정·검수 규율).
-			throw new GeneralException(ConsoleErrorStatus.REASON_REQUIRED);
-		}
-		ensure(applyMock(id, store::reject));
-	}
-
-	public void saveDraft(String id, String finalText) {
-		// 임시 저장은 비우는 중간 상태를 허용한다 — null 만 거른다.
-		if (finalText == null) {
-			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
-		}
-		ensure(applyMock(id, mid -> store.saveDraft(mid, finalText)));
-	}
-
 	/**
 	 * 쓰기 seam — mock 스토어는 long 키다. 원장 설명 ID(expr_LOCAL…)는 숫자가 아니라
 	 * 파싱에서 걸러져 not-found(404)가 된다. 이 경로는 쓰기 전환 티켓에서 원장 전이로 교체된다.

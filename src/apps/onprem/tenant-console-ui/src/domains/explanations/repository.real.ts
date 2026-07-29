@@ -9,7 +9,4 @@ export const realExplanationsRepository: ExplanationsRepository = {
   updateFinal: (id, final) => apiClient.patch<void>(`/explanations/${id}/final`, { final }),
   stop: (id) => apiClient.post<void>(`/explanations/${id}/stop`),
   moveToReview: (id) => apiClient.post<void>(`/explanations/${id}/move-to-review`),
-  approve: (id, final, note) => apiClient.post<void>(`/explanations/${id}/approve`, { final, note }),
-  reject: (id, note) => apiClient.post<void>(`/explanations/${id}/reject`, { note }),
-  saveDraft: (id, final) => apiClient.patch<void>(`/explanations/${id}/draft`, { final }),
 };

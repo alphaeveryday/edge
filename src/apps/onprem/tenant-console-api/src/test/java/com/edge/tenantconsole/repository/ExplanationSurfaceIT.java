@@ -238,9 +238,6 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		seedItem("it607-write", "607WRT", "SK하이닉스", "AUTO_PUBLISHED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
 
-		assertThatThrownBy(() -> explanations.approve("it607-write", "문구"))
-				.isInstanceOfSatisfying(GeneralException.class,
-						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
 		assertThatThrownBy(() -> explanations.stop("it607-write"))
 				.isInstanceOfSatisfying(GeneralException.class,
 						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
@@ -251,8 +248,5 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		assertThatThrownBy(() -> explanations.updateFinal("it607-any", ""))
 				.isInstanceOfSatisfying(GeneralException.class,
 						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.INVALID_REQUEST));
-		assertThatThrownBy(() -> explanations.reject("it607-any", "  "))
-				.isInstanceOfSatisfying(GeneralException.class,
-						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.REASON_REQUIRED));
 	}
 }

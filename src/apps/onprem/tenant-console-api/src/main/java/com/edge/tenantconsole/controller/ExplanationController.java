@@ -1,8 +1,6 @@
 package com.edge.tenantconsole.controller;
 
 import com.edge.common.apipayload.ApiResponse;
-import com.edge.tenantconsole.dto.ApproveRequest;
-import com.edge.tenantconsole.dto.ExplanationRejectRequest;
 import com.edge.tenantconsole.dto.ExplanationResponse;
 import com.edge.tenantconsole.dto.FeedStatusResponse;
 import com.edge.tenantconsole.dto.FinalRequest;
@@ -57,27 +55,6 @@ public class ExplanationController {
 	@PostMapping("/api/v1/explanations/{id}/move-to-review")
 	public ApiResponse<Void> moveToReview(@PathVariable("id") String id) {
 		explanationService.moveToReview(id);
-		return ApiResponse.onSuccess(null);
-	}
-
-	@PostMapping("/api/v1/explanations/{id}/approve")
-	public ApiResponse<Void> approve(@PathVariable("id") String id,
-			@RequestBody(required = false) ApproveRequest request) {
-		explanationService.approve(id, request == null ? null : request.finalText());
-		return ApiResponse.onSuccess(null);
-	}
-
-	@PostMapping("/api/v1/explanations/{id}/reject")
-	public ApiResponse<Void> reject(@PathVariable("id") String id,
-			@RequestBody(required = false) ExplanationRejectRequest request) {
-		explanationService.reject(id, request == null ? null : request.note());
-		return ApiResponse.onSuccess(null);
-	}
-
-	@PatchMapping("/api/v1/explanations/{id}/draft")
-	public ApiResponse<Void> saveDraft(@PathVariable("id") String id,
-			@RequestBody(required = false) FinalRequest request) {
-		explanationService.saveDraft(id, request == null ? null : request.finalText());
 		return ApiResponse.onSuccess(null);
 	}
 }

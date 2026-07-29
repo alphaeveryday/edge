@@ -12,10 +12,4 @@ export interface ExplanationsRepository {
   stop(id: string): Promise<void>;
   /** 점검 차단 건을 검수 대기열로 이관 */
   moveToReview(id: string): Promise<void>;
-  /** 검수 승인 후 제공 — 최종 문구·검수 의견 반영 */
-  approve(id: string, final: string, note: string): Promise<void>;
-  /** 검수 반려 */
-  reject(id: string, note: string): Promise<void>;
-  /** 검수 중 최종 문구 임시 저장 */
-  saveDraft(id: string, final: string): Promise<void>;
 }

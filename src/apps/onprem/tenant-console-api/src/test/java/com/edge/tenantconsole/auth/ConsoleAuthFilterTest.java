@@ -465,20 +465,18 @@ class ConsoleAuthFilterTest {
 	@Test
 	void explanations_역할이_permission_matrix로_세분화된다() throws Exception {
 		// WHY: explanations 실전환(ALPHA-607)으로 mock 완화(전 역할)가 해제된다 —
-		// 조회=전 역할, 최종 문구·승인/반려/임시저장=CR, 이관·중단=CR·OP. ExplanationController
-		// 는 이 셋업에 없어 통과 = 404(로그인 테스트와 동일 기법), 거부 = 403.
+		// 조회=전 역할, 최종 문구 수정=CR, 이관·중단=CR·OP. ExplanationController 는 이
+		// 셋업에 없어 통과 = 404(로그인 테스트와 동일 기법), 거부 = 403.
 		// 조회는 전 역할 — RO 통과
 		mvc.perform(get("/api/v1/explanations").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isNotFound());
 		mvc.perform(get("/api/v1/explanations"))
 				.andExpect(status().isUnauthorized());
-		// 최종 문구·검수 액션 = CR 전용 — OP·RO 는 403
+		// 최종 문구 수정 = CR 전용 — OP·RO 는 403
 		mvc.perform(patch("/api/v1/explanations/expr-1/final").session(sessionOf(OPERATOR))
 						.contentType(MediaType.APPLICATION_JSON).content("{\"final\":\"문구\"}"))
 				.andExpect(status().isForbidden())
 				.andExpect(jsonPath("$.code").value("CNSL4030"));
-		mvc.perform(post("/api/v1/explanations/expr-1/approve").session(sessionOf(READ_ONLY)))
-				.andExpect(status().isForbidden());
 		// 노출 축소 조치(이관·중단) = CR·OP — OP 통과, RO 는 403
 		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(OPERATOR)))
 				.andExpect(status().isNotFound());

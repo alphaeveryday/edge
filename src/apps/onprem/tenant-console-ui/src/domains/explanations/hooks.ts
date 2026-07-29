@@ -36,21 +36,6 @@ export function useExplanationActions() {
     mutationFn: (id: string) => explanationsRepository.moveToReview(id),
     onSuccess: invalidate,
   });
-  const approve = useMutation({
-    mutationFn: ({ id, final, note }: { id: string; final: string; note: string }) =>
-      explanationsRepository.approve(id, final, note),
-    onSuccess: invalidate,
-  });
-  const reject = useMutation({
-    mutationFn: ({ id, note }: { id: string; note: string }) =>
-      explanationsRepository.reject(id, note),
-    onSuccess: invalidate,
-  });
-  const saveDraft = useMutation({
-    mutationFn: ({ id, final }: { id: string; final: string }) =>
-      explanationsRepository.saveDraft(id, final),
-    onSuccess: invalidate,
-  });
 
-  return { updateFinal, stop, moveToReview, approve, reject, saveDraft };
+  return { updateFinal, stop, moveToReview };
 }
