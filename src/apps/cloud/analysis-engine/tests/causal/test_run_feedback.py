@@ -77,3 +77,33 @@ def test_brief_omits_the_predicate_code_when_absent():
                  candidates=[{"event_type_code": "T", "predicate_code": None}])
 
     assert "predicate_code" not in text
+
+
+def test_worked_example_in_the_prompt_actually_passes_the_guards():
+    """프롬프트 예시가 규칙을 통과해야 한다.
+
+    통과하지 않는 예시는 최악이다 - 모델이 그대로 따라 했는데 기각되면 되먹임이
+    자기모순이 되고, 무엇을 믿어야 할지 알 수 없어진다. 선언적 규칙 5회가 실패한 뒤
+    예시로 전환했으므로, 예시 자체를 검사에 걸어 둔다.
+    """
+    import json
+    import re
+
+    from edge_analysis.adapters.causal_data import COHORT_COLUMNS, UNIVERSE_COLUMNS, _guard
+    from edge_analysis.causal import graph as G
+    from edge_analysis.causal.agents import SYSTEM, parse
+
+    block = re.search(r"```json\n(.*?)\n```", SYSTEM, re.DOTALL)
+    assert block, "프롬프트에 json 예시 블록이 없다"
+    out = json.loads(block.group(1))
+
+    nodes, designs, _ = parse(out)
+    assert len(designs) == 1
+
+    # run.py:146 과 같은 형태로 만든다 - validate 는 timing 을 간선에서 읽는다.
+    edges = [{"from": d.src, "to": d.dst, "timing": d.timing} for d in designs]
+    assert G.validate({"nodes": nodes, "structures": [{"id": "A", "edges": edges}]},
+                      grounded={"evt_abc123"}, require_competing=False) == []
+
+    _guard(designs[0].treated, COHORT_COLUMNS)
+    _guard(designs[0].control, UNIVERSE_COLUMNS)

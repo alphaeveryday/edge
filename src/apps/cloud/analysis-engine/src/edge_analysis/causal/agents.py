@@ -56,6 +56,32 @@ SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸�
 **종목을 지목할 때는 `ticker` 를 쓴다.** `instrument_id` 도 쓸 수 있지만 그건 티커가 아니라
 불투명 식별자(`inst_01K...`)다 - 거기에 `'000660'` 같은 티커를 넣으면 0건이 나온다.
 
+**대조군은 다른 종목이다.** 같은 종목의 다른 날짜가 아니다. 처치 술어가 "이 종목에 이
+사건이 났다"면, 대조 술어는 "같은 날 그 사건이 나지 않은 **다른** 종목들"이다. 그래서 대조
+술어에는 사건 컬럼이 없다 - 사건이 없는 쪽을 고르는 것이므로 걸 조건이 없다.
+
+## 예시 하나 (이대로 따라 하면 통과한다)
+
+```json
+{"nodes": {
+   "SK하이닉스_실적발표@t0": {"kind": "SHOCK", "unit": "stock",
+       "measure": "분기 실적 공시", "member_events": ["evt_abc123"],
+       "tau": "2026-07-29T07:30:00+09:00"},
+   "KODEX반도체@t0": {"kind": "TARGET", "unit": "etf", "measure": "당일 등락"}},
+ "edges": [{"from": "SK하이닉스_실적발표@t0", "to": "KODEX반도체@t0",
+            "kind": "directed", "cause_label": "SK하이닉스 실적 발표",
+            "treated": "ticker = '000660' AND event_type_code = 'COMPANY.EARNINGS.RESULT_RELEASE'",
+            "control": "industry_name = 'Semiconductors' AND ticker != '000660'",
+            "strata": "date_industry", "timing": "scheduled",
+            "because": "메모리 가격 전망이 바뀌어 동종 밸류에이션이 함께 조정된다",
+            "false_if": "같은 산업 미지명 종목도 같은 폭으로 움직였다"}],
+ "missing": []}
+```
+
+처치는 사건 컬럼을 쓰고, 대조는 **종목 컬럼만** 쓴다. `industry_name` 값은 브리프에 실린
+것을 원문 그대로 쓴다. 가격 노드를 만들지 않았으므로 시장 통제 규칙이 걸리지 않는다 -
+가장 단순한 통과 형태다.
+
 **대조를 무엇 안에서 골랐으면 strata 도 그것이어야 한다.** 같은 날 같은 산업에서
 골랐으면 `date_industry`, 같은 날에서만 골랐으면 `date`.
 
