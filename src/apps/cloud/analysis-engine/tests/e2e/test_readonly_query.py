@@ -70,7 +70,9 @@ def test_reading_the_ledger_works(ro_conn):
 
 
 @pytest.mark.parametrize("sql", [
-    "INSERT INTO instrument (instrument_id, entity_type) VALUES ('x', 'INSTRUMENT')",
+    # entity_type 을 넣지 않는다 - GENERATED 컬럼이라 재작성 단계에서 먼저 거부되고,
+    # 그러면 읽기전용 규칙이 발동할 기회가 없어 이 테스트가 검사하려는 층을 못 건드린다.
+    "INSERT INTO instrument (instrument_id) VALUES ('x')",
     "UPDATE instrument SET ticker = 'zz'",
     "DELETE FROM instrument",
     "CREATE TABLE _should_not_exist (x int)",
