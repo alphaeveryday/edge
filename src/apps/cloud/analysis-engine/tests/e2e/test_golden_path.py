@@ -16,6 +16,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -175,7 +177,13 @@ def _seed_event_store(conn) -> None:
         # 재실행 격리 — 시드 마스터(instrument 등)는 남기고 런 산출물만 비운다.
         cur.execute(
             "TRUNCATE document, source_event, event_thread, price_movement_trigger,"
-            " explanation_run, release_bundle CASCADE"
+            " explanation_run, release_bundle, tenant_delivery CASCADE"
+        )
+        # fan-out(ALPHA-493) 대상 테넌트 — 없으면 게시만 되고 발번 0건이 된다.
+        cur.execute(
+            "INSERT INTO tenant (tenant_name, environment, status)"
+            " VALUES ('e2e-tenant', 'DEV', 'ACTIVE')"
+            " ON CONFLICT (tenant_name) DO NOTHING"
         )
         # FK: price_movement_trigger.etf_instrument_id → etf_profile — 프로파일이 먼저다.
         cur.execute(
@@ -271,8 +279,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # -- 3) 계약 단언: 영속·계보 연결·ID 수렴 --------------------------------
         with seed_conn.cursor() as cur:
             cur.execute(
-                "SELECT r.explanation_type, r.confidence_level, r.publication_status,"
-                " r.primary_thread_id, r.trade_date, n.bundle_version"
+                "SELECT r.explanation_result_id, r.explanation_type, r.confidence_level,"
+                " r.publication_status, r.primary_thread_id, r.trade_date, n.bundle_version"
                 " FROM explanation_result r JOIN explanation_run n"
                 " ON n.explanation_run_id = r.explanation_run_id"
                 " WHERE r.etf_instrument_id = %s",
@@ -280,10 +288,21 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             )
             rows = cur.fetchall()
             assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다(S3 폴백 아님)"
-            etype, confidence, status, primary_thread, tdate, bundle = rows[0]
-            assert (etype, confidence, status) == ("EVENT_SUPPORTED", "HIGH", "DRAFT")
+            result_id, etype, confidence, status, primary_thread, tdate, bundle = rows[0]
+            assert (etype, confidence, status) == ("EVENT_SUPPORTED", "HIGH", "PUBLISHED")
             assert primary_thread == thread_id, "엔진이 소비한 thread 가 조립 산출물과 다르다"
             assert (tdate.isoformat(), bundle) == (TRADE_DATE, BUNDLE_VERSION)
+
+            # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션에서 전 테넌트에 NEW 1행.
+            # cursor=1(테넌트별 단조 시작), NEW 는 target/reason 없음(CHECK 계약).
+            cur.execute(
+                "SELECT t.tenant_name, d.cursor, d.delivery_type, d.explanation_result_id,"
+                " d.target_explanation_result_id, d.reason"
+                " FROM tenant_delivery d JOIN tenant t ON t.tenant_id = d.tenant_id"
+            )
+            assert cur.fetchall() == [
+                ("e2e-tenant", 1, "NEW", result_id, None, None)
+            ], "게시된 설명이 outbox 로 발번되지 않았다(시드 없이 sync 가 설 수 없다)"
 
             # 근거 lineage — 설명이 무엇을 보고 쓰였는지 되짚을 수 있어야 한다(ALPHA-603).
             # 조립이 쓴 event_evidence 까지 조인해서 확인한다: 링크만 서고 실체를 못 가리키면
@@ -319,8 +338,34 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         archive = json.loads(s3.objects[archive_key])
         assert archive["outcome"] == "explained"
         assert archive["persistence"]["persisted"] == "rds"
+        assert archive["persistence"]["publication_status"] == "PUBLISHED"
         assert [e["source_event_id"] for e in archive["events"]] == [evt_id], (
             "엔진이 소비한 이벤트가 조립 단계의 결정적 ID 와 수렴하지 않는다"
         )
+
+        # -- 4) 같은 날 재실행: 게시 게이트(ALPHA-493) ---------------------------
+        # as_of 가 새로워 grain 유니크로는 못 막는 이중 게시·이중 NEW 발번을 앱 게이트가
+        # 막아야 한다 — 재실행분은 DRAFT 보존, outbox 는 불변이어야 정정이 아닌 재실행이
+        # 온프렘에 중복 전달되지 않는다. as_of 는 초 해상도라 같은 초의 재실행은 같은
+        # result_id(중복 skip 경로)로 붕괴한다 — 1초 지나 새 grain 으로 게이트를 태운다.
+        time.sleep(1)
+        rerun = replace(settings, request_id="e2e-req-2")
+        store2 = EventStore.connect(rerun)
+        try:
+            assert run(rerun, lake=LakeReader(s3, rerun.lake_bucket),
+                       store=store2, client=FakeAnalysisClient(), s3=s3) == 0
+        finally:
+            store2.close()
+        with seed_conn.cursor() as cur:
+            cur.execute(
+                "SELECT publication_status, count(*) FROM explanation_result"
+                " WHERE etf_instrument_id = %s GROUP BY publication_status",
+                (ETF_INSTRUMENT,),
+            )
+            assert dict(cur.fetchall()) == {"PUBLISHED": 1, "DRAFT": 1}, (
+                "재실행이 그날 두 번째 PUBLISHED 를 만들었다 — 게시 게이트 회귀"
+            )
+            cur.execute("SELECT count(*) FROM tenant_delivery")
+            assert cur.fetchone() == (1,), "재실행이 outbox 에 중복 NEW 를 발번했다"
     finally:
         seed_conn.close()

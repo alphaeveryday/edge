@@ -322,8 +322,9 @@ class EventStore:
         bundle: str | None,
         primary_thread_id: str | None,
         events: list[EventContext],
-    ) -> dict[str, str]:
-        """explanation_run + explanation_result + 근거 lineage 를 적재한다(FK 전제는 충족 가정)."""
+    ) -> dict[str, str | int | None]:
+        """explanation_run + explanation_result(게시 게이트) + 근거 lineage + fan-out 을
+        한 트랜잭션으로 적재한다(FK 전제는 충족 가정, ALPHA-493)."""
         import json
 
         from psycopg2.extras import execute_values
@@ -346,20 +347,38 @@ class EventStore:
                 " ON CONFLICT (explanation_run_id) DO NOTHING",
                 (run_id, route_id, bundle, explanation_as_of, "DAILY"),
             )
+            # 게시 게이트·cursor 채번 직렬화(ALPHA-493) — analyze 동시 실행이 같은 날
+            # PUBLISHED 를 이중 게시하거나 같은 테넌트 cursor 를 겹쳐 뽑지 못하게 전역 락
+            # 하나로 묶는다. fan-out 은 매번 전 테넌트 대상이라 테넌트별 락은 이득이 없다.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('tenant-delivery-fanout')::bigint)"
+            )
+            # 그날 첫 결과만 PUBLISHED — explanation_as_of 가 런마다 새로워 grain 부분
+            # 유니크(as_of 포함)는 같은 날 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만
+            # 보는 이유: WITHDRAWN 뒤 재산출은 재게시(CORRECTION) 시나리오라 후속 티켓
+            # 몫이고, 현재 cloud 에 WITHDRAWN writer 가 없어 도달 불가 경로다.
             cur.execute(
                 "INSERT INTO explanation_result (explanation_result_id, explanation_run_id,"
                 " etf_instrument_id, trade_date, explanation_as_of, primary_thread_id,"
                 " explanation_type, summary, confidence_level, stage_results,"
                 " publication_status, headline)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'DRAFT',%s)"
-                " ON CONFLICT (explanation_result_id) DO NOTHING",
+                " SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                " CASE WHEN EXISTS (SELECT 1 FROM explanation_result p"
+                "   WHERE p.etf_instrument_id = %s AND p.trade_date = %s"
+                "     AND p.publication_status = 'PUBLISHED')"
+                " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
+                " ON CONFLICT (explanation_result_id) DO NOTHING"
+                " RETURNING publication_status",
                 (
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
+                    etf_instrument_id, settings.trade_date.isoformat(),
                     explanation.headline,
                 ),
             )
+            published_row = cur.fetchone()
+            publication_status = published_row[0] if published_row else None
             # 근거 lineage — "이 설명이 무엇을 보고 쓰였나"(ALPHA-603). 프롬프트에 실린
             # 사건의 근거만 넣는다(events 는 packet 이 자르지 않고 통째로 싣는 그 목록이다).
             evidence_rows = [
@@ -375,6 +394,11 @@ class EventStore:
                     " ON CONFLICT (explanation_run_id, evidence_id, stage_code) DO NOTHING",
                     evidence_rows,
                 )
+            # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션이라 커밋된 행만
+            # 커서에 노출된다(sync-protocol). NEW 만 발번, CORRECTION·INVALIDATION 은 후속.
+            fanout_tenants = 0
+            if publication_status == "PUBLISHED":
+                fanout_tenants = self._fanout_new(cur, result_id)
         self._conn.commit()
         log(
             "explanation_result.stored",
@@ -383,5 +407,42 @@ class EventStore:
             evidence=len(evidence_rows),
             # 근거 없는 사건 — 설명에는 실렸는데 되짚을 문서가 없다는 뜻이라 드러낸다.
             events_without_evidence=event_count - len(evidence_rows),
+            publication_status=publication_status,
+            fanout_tenants=fanout_tenants,
         )
-        return {"persisted": "rds", "explanation_result_id": result_id, "run_id": run_id}
+        if publication_status == "DRAFT":
+            # 같은 날 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
+            log(
+                "explanation_result.publish_skipped",
+                reason="grain_already_published",
+                etf_instrument_id=etf_instrument_id,
+                trade_date=settings.trade_date.isoformat(),
+                explanation_result_id=result_id,
+            )
+        elif publication_status == "PUBLISHED" and fanout_tenants == 0:
+            # 게시는 됐는데 받을 테넌트가 없다 — 온보딩 전 상태라 런은 성공으로 둔다.
+            log("tenant_delivery.fanout_empty", explanation_result_id=result_id)
+        return {
+            "persisted": "rds",
+            "explanation_result_id": result_id,
+            "run_id": run_id,
+            "publication_status": publication_status,
+            "fanout_tenants": fanout_tenants,
+        }
+
+    @staticmethod
+    def _fanout_new(cur, explanation_result_id: str) -> int:
+        """게시된 설명을 전 테넌트 outbox 로 NEW 발번한다 — 게시와 같은 트랜잭션.
+
+        cursor 는 테넌트별 단조증가(sync-protocol.md) — 호출 전 잡은 advisory lock 이
+        동시 채번을 직렬화한다. 대상 = tenant 전 행(필터는 필요해질 때 후속).
+        """
+        cur.execute(
+            "INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type,"
+            " explanation_result_id)"
+            " SELECT t.tenant_id, COALESCE(MAX(d.cursor), 0) + 1, 'NEW', %s"
+            " FROM tenant t LEFT JOIN tenant_delivery d ON d.tenant_id = t.tenant_id"
+            " GROUP BY t.tenant_id",
+            (explanation_result_id,),
+        )
+        return cur.rowcount

@@ -32,7 +32,7 @@
 - [ ] Screening Worker — 위험등급 산정 구현 잔여 (평가기 429·정정 동일 평가 430(ADR-0041)·SYSTEM 상태 이력 431 구현 완료 — **산정 주체 결정 2026-07-26: 온프렘 Screening Worker**, Cloud AI 는 가드레일 제공만. 등급 컬럼·번들 확장·maxRisk 소비가 산정 티켓 몫)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
-- [ ] **fan-out 발번기** — analysis-engine 의 `explanation_result(DRAFT)`를 sync outbox `tenant_delivery` 로 승격하는 cloud 서비스. 이게 있어야 파이프라인 산출물이 자동으로 sync 경계를 넘어 데모까지 관통한다 — 현재는 수동 시드(`scratchpad/seed-cloud-demo.sql`)로 대체 중. **데모 토폴로지(EC2+compose 가상 온프렘)·MTS 화면·배포 CD(deploy-demo-onprem.yml)는 구축 완료**(ALPHA-533·444·445·542, 브라우저 관통 검증) — 남은 건 이 데이터 자동화뿐
+- [ ] **CORRECTION·INVALIDATION 발번** — NEW write-time fan-out 은 완료(ALPHA-493, analysis-engine 게시와 같은 트랜잭션). 정정·무효화 발번은 운영자 정정 모델(admin_activity_log 오버레이 — `JdbcAnalysisWriteRepository` "테넌트 전파는 후속" 주석)과의 접합 설계가 선행 입력
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속

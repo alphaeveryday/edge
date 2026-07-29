@@ -4,10 +4,12 @@
 -- schema-validate CI·schema-migrate CD(dev RDS)에는 절대 섞이지 않는다.
 -- repeatable(R__) + 전 구문 멱등 — 버전 순서를 오염시키지 않는다.
 --
--- 목적: fan-out 발번기 도입 전까지 동기화 경로(intake → sync-agent →
--- tenant-sync-api → cloud DB)를 시연할 전달 레코드 3건(NEW·CORRECTION·
--- INVALIDATION — 온프렘 수신 세 경로 전부 자극). 설명 체인은 FK 를 정직하게
--- 충족하는 최소 실데이터다(KODEX 200, 온프렘 데모 시드와 같은 종목·거래일).
+-- 목적: 동기화 경로(intake → sync-agent → tenant-sync-api → cloud DB)를
+-- 시연할 전달 레코드(NEW·CORRECTION·INVALIDATION — 온프렘 수신 세 경로 전부
+-- 자극). NEW 자동 발번은 analysis-engine 이 수행하지만(ALPHA-493) 엔진은 로컬
+-- compose 에 없고 CORRECTION·INVALIDATION 발번은 후속이라 이 시드를 유지한다.
+-- 설명 체인은 FK 를 정직하게 충족하는 최소 실데이터다(KODEX 200, 온프렘 데모
+-- 시드와 같은 종목·거래일). cursor 1–5 점유는 엔진 발번(MAX+1)과 충돌하지 않는다.
 -- ============================================================================
 
 -- 종목 마스터: KODEX 200 (V202607150004 시드에 없는 ETF — 로컬 전용 추가)
