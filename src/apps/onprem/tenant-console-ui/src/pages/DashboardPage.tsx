@@ -1,5 +1,4 @@
 import { useNavigate } from 'react-router-dom';
-import { Delta } from 'ui-kit';
 import { useTrafficSummary } from '../domains/dashboard/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
@@ -95,8 +94,6 @@ export function DashboardPage() {
           <thead>
             <tr>
               <th>종목</th>
-              <th>시장</th>
-              <th className="col-num">등락률</th>
               <th>제공 상태</th>
               <th>위험 등급</th>
               <th className="col-muted">반입</th>
@@ -109,10 +106,6 @@ export function DashboardPage() {
               .map((it) => (
                 <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                   <StockCell name={it.name} code={it.code} />
-                  <td className="col-muted">{it.market}</td>
-                  <td className="col-num">
-                    <Delta direction={it.direction} pct={it.changePct} />
-                  </td>
                   <StatusCell it={it} />
                   <RiskCell it={it} />
                   <td className="col-muted num">{it.receivedRelative}</td>

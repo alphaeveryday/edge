@@ -24,15 +24,13 @@ export interface Evidence {
 }
 
 export interface Explanation {
-  id: number;
+  /** 원장 설명 ID(explanation_result_id) — 실전환 후 문자열(ALPHA-607). */
+  id: string;
   name: string;
   code: string;
-  market: Market;
-  direction: 1 | -1;
-  /** 등락률(%) 절대값 */
-  changePct: number;
   status: ServeStatus;
-  risk: RiskLevel;
+  /** 위험 등급 — 원장 confidence_level 결측 시 생략(ALPHA-607). */
+  risk?: RiskLevel;
   /** 검수 대기·차단·반려 사유 (해당 상태일 때만) */
   reviewReason?: ReviewReason;
   /** 반입 상대 시각 ("9분 전") */

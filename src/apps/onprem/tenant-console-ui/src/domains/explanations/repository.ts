@@ -7,15 +7,15 @@ export interface ExplanationsRepository {
   /** 반입(수신) 상태 */
   feedStatus(): Promise<FeedStatus>;
   /** 최종 제공 문구 수정 (상세 화면) */
-  updateFinal(id: number, final: string): Promise<void>;
+  updateFinal(id: string, final: string): Promise<void>;
   /** 제공 중단 (운영자 수동) */
-  stop(id: number): Promise<void>;
+  stop(id: string): Promise<void>;
   /** 점검 차단 건을 검수 대기열로 이관 */
-  moveToReview(id: number): Promise<void>;
+  moveToReview(id: string): Promise<void>;
   /** 검수 승인 후 제공 — 최종 문구·검수 의견 반영 */
-  approve(id: number, final: string, note: string): Promise<void>;
+  approve(id: string, final: string, note: string): Promise<void>;
   /** 검수 반려 */
-  reject(id: number, note: string): Promise<void>;
+  reject(id: string, note: string): Promise<void>;
   /** 검수 중 최종 문구 임시 저장 */
-  saveDraft(id: number, final: string): Promise<void>;
+  saveDraft(id: string, final: string): Promise<void>;
 }

@@ -31,6 +31,8 @@ Tenant Console
 - 상세: 종목 기본 정보, 원본 AI 문구, 컴플라이언스 통과 후 문구, 최종 노출 문구, 관련 뉴스/공시, 시세·거래량·수급 변화, 이벤트 타임라인, 신뢰도, 반대 요인, 컴플라이언스 검사 결과, 상태 변경 이력
 - 관리 액션: **최종 문구 수정 / 검수로 이관 / 제공 중단(노출 중단) / 정정 등록**
 
+> 실전환 현황(ALPHA-607): 읽기(목록·상세·반입 상태)는 온프렘 원장 실조회로 전환됐다. **시장·등락률(방향)**은 온프렘 원장에 아직 없어(경계면 확장 [../contracts/event-bundle-schema.md](../contracts/event-bundle-schema.md) `observed_return`·`market_code`, ALPHA-497 이연) 목록·상세·Dashboard 요약에서 **한시 생략** — materialization 후 위 컬럼을 복원한다. 관리 액션(쓰기)은 아직 mock(실 설명 ID 는 404)으로 후속 쓰기 전환 티켓이 원장 전이로 교체한다. 권한은 [permission-matrix](permission-matrix.md) 적용.
+
 **Review Queue** (논리적 작업함, status=REVIEW_REQUIRED 목록)
 
 - 목록: 종목, 등락률, 변동 요인 요약, 위험 등급, 검수 사유, 생성 시각

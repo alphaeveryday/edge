@@ -81,6 +81,10 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/auth/logout` | 인증(로그아웃) | 인증된 전 역할 |
 | `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
 | `GET /api/v1/dashboard/traffic` | Dashboard 트래픽 KPI (24시간 요청·에러) | TA·CR·OP·RO |
+| `GET /api/v1/explanations` · `GET /api/v1/explanations/feed-status` | Price Movement Explanations 목록·상세·반입 상태 조회 (실전환 ALPHA-607) | TA·CR·OP·RO |
+| `PATCH /api/v1/explanations/{id}/final` | 최종 문구 수정 | CR |
+| `POST /api/v1/explanations/{id}/approve` · `.../reject` · `PATCH .../draft` | 검수 액션(승인·반려·임시 저장) | CR |
+| `POST /api/v1/explanations/{id}/stop` · `.../move-to-review` | 노출 축소 조치(제공 중단·검수로 이관) | CR·OP |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
 | `GET /api/v1/review/items/{id}` | 검수 상세(근거·사유·검사 결과·상태 이력 — 감사 열람, ALPHA-436) | TA·CR·OP·RO |
 | `POST /api/v1/review/items/{id}/approve` | 검수 액션 — 승인(선택 의견) | CR |
@@ -104,13 +108,14 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 (검수·정책·문구·종목 제외=CR, 사용자·시장 커버리지=TA, 이관·중단=CR·OP)로
 좁힌다. 역할 세분화 전까지 이 표면들은 실데이터를 다루지 않는다.
 
+**explanations 는 해제됨(ALPHA-607)**: Price Movement Explanations 표면은 위 "API 매핑"
+표로 이관돼 실 역할(조회=전 역할, 최종 문구·검수 액션=CR, 이관·중단=CR·OP)을 강제한다.
+읽기(목록·상세·반입 상태)는 원장 실조회이고, 쓰기(최종 문구·이관·중단·승인·반려·임시
+저장)는 아직 mock 이라 실 설명 ID 에 404 인 seam 이나(쓰기 전환 후속 티켓, ALPHA-497
+materialization 후 시장·등락률 복원과 함께), 권한 경계는 매트릭스대로 이미 좁혔다.
+
 | 엔드포인트 | 매트릭스 행 (DB 전환 시 적용) | mock 단계 요구 역할 |
 |---|---|---|
-| `GET /api/v1/explanations` · `GET /api/v1/explanations/feed-status` | 목록·상세 조회 | 인증된 전 역할 |
-| `PATCH /api/v1/explanations/{id}/final` | 최종 문구 수정 (CR) | 인증된 전 역할 |
-| `POST /api/v1/explanations/{id}/stop` | 제공 중단 (CR·OP) | 인증된 전 역할 |
-| `POST /api/v1/explanations/{id}/move-to-review` | 검수로 이관 (CR·OP) | 인증된 전 역할 |
-| `POST /api/v1/explanations/{id}/approve` · `.../reject` · `PATCH .../draft` | 검수 액션 (CR) | 인증된 전 역할 |
 | `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | 인증된 전 역할 |
 | `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경 (TA) | 인증된 전 역할 |
 | `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경 (CR) | 인증된 전 역할 |

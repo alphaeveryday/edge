@@ -9,7 +9,7 @@ export function useExplanations() {
   return useQuery({ queryKey: KEY, queryFn: () => explanationsRepository.list() });
 }
 
-export function useExplanation(id: number | undefined) {
+export function useExplanation(id: string | undefined) {
   const query = useExplanations();
   return { ...query, explanation: query.data?.find((it) => it.id === id) };
 }
@@ -24,30 +24,30 @@ export function useExplanationActions() {
   const invalidate = () => qc.invalidateQueries({ queryKey: KEY });
 
   const updateFinal = useMutation({
-    mutationFn: ({ id, final }: { id: number; final: string }) =>
+    mutationFn: ({ id, final }: { id: string; final: string }) =>
       explanationsRepository.updateFinal(id, final),
     onSuccess: invalidate,
   });
   const stop = useMutation({
-    mutationFn: (id: number) => explanationsRepository.stop(id),
+    mutationFn: (id: string) => explanationsRepository.stop(id),
     onSuccess: invalidate,
   });
   const moveToReview = useMutation({
-    mutationFn: (id: number) => explanationsRepository.moveToReview(id),
+    mutationFn: (id: string) => explanationsRepository.moveToReview(id),
     onSuccess: invalidate,
   });
   const approve = useMutation({
-    mutationFn: ({ id, final, note }: { id: number; final: string; note: string }) =>
+    mutationFn: ({ id, final, note }: { id: string; final: string; note: string }) =>
       explanationsRepository.approve(id, final, note),
     onSuccess: invalidate,
   });
   const reject = useMutation({
-    mutationFn: ({ id, note }: { id: number; note: string }) =>
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
       explanationsRepository.reject(id, note),
     onSuccess: invalidate,
   });
   const saveDraft = useMutation({
-    mutationFn: ({ id, final }: { id: number; final: string }) =>
+    mutationFn: ({ id, final }: { id: string; final: string }) =>
       explanationsRepository.saveDraft(id, final),
     onSuccess: invalidate,
   });

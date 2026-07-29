@@ -52,6 +52,8 @@ class ConsoleAuthFilterTest {
 			new SessionMember(2L, "reviewer@demo.edge.local", "데모 검수자", "COMPLIANCE_REVIEWER");
 	private static final SessionMember READ_ONLY =
 			new SessionMember(4L, "ro@demo.edge.local", "열람자", "READ_ONLY");
+	private static final SessionMember OPERATOR =
+			new SessionMember(3L, "op@demo.edge.local", "운영자", "OPERATOR");
 	private static final SessionMember ADMIN =
 			new SessionMember(1L, "admin@demo.edge.local", "관리자", "TENANT_ADMIN");
 
@@ -167,6 +169,7 @@ class ConsoleAuthFilterTest {
 		members = new StubMembers(Map.of(
 				"reviewer@demo.edge.local", "COMPLIANCE_REVIEWER",
 				"ro@demo.edge.local", "READ_ONLY",
+				"op@demo.edge.local", "OPERATOR",
 				"downgraded@demo.edge.local", "READ_ONLY",
 				"admin@demo.edge.local", "TENANT_ADMIN"));
 		mvc = MockMvcBuilders.standaloneSetup(
@@ -214,6 +217,13 @@ class ConsoleAuthFilterTest {
 		public List<com.edge.tenantconsole.entity.ScreeningCheckEntity>
 				findByAnalysisItemIdInAndResultOrderByScreeningCheckId(
 						java.util.Collection<String> analysisItemIds, String result) {
+			return List.of();
+		}
+
+		@Override
+		public List<com.edge.tenantconsole.entity.ScreeningCheckEntity>
+				findByAnalysisItemIdInAndResultInOrderByScreeningCheckId(
+						java.util.Collection<String> analysisItemIds, java.util.Collection<String> results) {
 			return List.of();
 		}
 	}
@@ -380,6 +390,30 @@ class ConsoleAuthFilterTest {
 						.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
 						.content("{\"edited_summary\":\"수정 문구\"}"))
 				.andExpect(status().isOk());
+	}
+
+	@Test
+	void explanations_역할이_permission_matrix로_세분화된다() throws Exception {
+		// WHY: explanations 실전환(ALPHA-607)으로 mock 완화(전 역할)가 해제된다 —
+		// 조회=전 역할, 최종 문구·승인/반려/임시저장=CR, 이관·중단=CR·OP. ExplanationController
+		// 는 이 셋업에 없어 통과 = 404(로그인 테스트와 동일 기법), 거부 = 403.
+		// 조회는 전 역할 — RO 통과
+		mvc.perform(get("/api/v1/explanations").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isNotFound());
+		mvc.perform(get("/api/v1/explanations"))
+				.andExpect(status().isUnauthorized());
+		// 최종 문구·검수 액션 = CR 전용 — OP·RO 는 403
+		mvc.perform(patch("/api/v1/explanations/expr-1/final").session(sessionOf(OPERATOR))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"final\":\"문구\"}"))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("CNSL4030"));
+		mvc.perform(post("/api/v1/explanations/expr-1/approve").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
+		// 노출 축소 조치(이관·중단) = CR·OP — OP 통과, RO 는 403
+		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(OPERATOR)))
+				.andExpect(status().isNotFound());
+		mvc.perform(post("/api/v1/explanations/expr-1/stop").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isForbidden());
 	}
 
 	@Test

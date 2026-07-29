@@ -134,6 +134,13 @@ class ReviewControllerTest {
 			return rows.stream().filter(c -> analysisItemIds.contains(c.getAnalysisItemId())
 					&& c.getResult().equals(result)).toList();
 		}
+
+		@Override
+		public List<ScreeningCheckEntity> findByAnalysisItemIdInAndResultInOrderByScreeningCheckId(
+				java.util.Collection<String> analysisItemIds, java.util.Collection<String> results) {
+			return rows.stream().filter(c -> analysisItemIds.contains(c.getAnalysisItemId())
+					&& results.contains(c.getResult())).toList();
+		}
 	}
 
 	/** 룰 사전 대역 — 사유 파생(rule_id → rule_type)만 본다. 발행 표면은 관심사 밖. */

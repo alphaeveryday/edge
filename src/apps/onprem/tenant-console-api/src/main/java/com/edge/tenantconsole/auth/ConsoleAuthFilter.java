@@ -44,6 +44,9 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 	private static final Set<String> ANY_ROLE = Set.of(
 			"TENANT_ADMIN", "COMPLIANCE_REVIEWER", "OPERATOR", "READ_ONLY");
 	private static final Set<String> COMPLIANCE_REVIEWER_ONLY = Set.of("COMPLIANCE_REVIEWER");
+	/** 노출 축소 방향의 즉시 조치(이관·중단)는 CR 과 OP 가 함께 수행한다(permission-matrix.md). */
+	private static final Set<String> COMPLIANCE_REVIEWER_OR_OPERATOR =
+			Set.of("COMPLIANCE_REVIEWER", "OPERATOR");
 	private static final Set<String> TENANT_ADMIN_ONLY = Set.of("TENANT_ADMIN");
 
 	private record Rule(String method, Pattern path, Set<String> roles) {
@@ -70,14 +73,18 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			// 화면이 없는 mock 데이터 단계의 임시 완화로, 도메인별 DB 연동 시
 			// permission-matrix.md 의 역할 세분화(검수·정책=CR, 사용자·시장=TA)를 적용한다.
 			new Rule("GET", Pattern.compile("/api/v1/dashboard/traffic"), ANY_ROLE),
+			// explanations 실전환(ALPHA-607) — mock 완화를 벗어나 permission-matrix.md 의
+			// 실 권한을 적용한다: 조회는 전 역할, 최종 문구·검수 액션(승인·반려·임시저장)은
+			// CR, 노출 축소 조치(이관·중단)는 CR·OP. 쓰기는 아직 mock(원장 ID 는 404)이나
+			// 권한 경계는 매트릭스에 맞춰 미리 좁힌다(쓰기 전환 티켓이 전이를 채운다).
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
-			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/stop"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/move-to-review"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/approve"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/reject"), ANY_ROLE),
-			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/draft"), ANY_ROLE),
+			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), COMPLIANCE_REVIEWER_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/stop"), COMPLIANCE_REVIEWER_OR_OPERATOR),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/move-to-review"), COMPLIANCE_REVIEWER_OR_OPERATOR),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/approve"), COMPLIANCE_REVIEWER_ONLY),
+			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/reject"), COMPLIANCE_REVIEWER_ONLY),
+			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/draft"), COMPLIANCE_REVIEWER_ONLY),
 			// 정책 조회는 전 역할, 변경(=새 버전 발행)은 CR 전용 — screening 도메인 DB
 			// 전환(ALPHA-438)으로 mock 한시 예외가 해제됐다(permission-matrix "정책 변경" 행).
 			new Rule("GET", Pattern.compile("/api/v1/screening/words"), ANY_ROLE),

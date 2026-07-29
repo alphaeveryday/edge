@@ -42,40 +42,40 @@ public class ExplanationController {
 	}
 
 	@PatchMapping("/api/v1/explanations/{id}/final")
-	public ApiResponse<Void> updateFinal(@PathVariable("id") long id,
+	public ApiResponse<Void> updateFinal(@PathVariable("id") String id,
 			@RequestBody(required = false) FinalRequest request) {
 		explanationService.updateFinal(id, request == null ? null : request.finalText());
 		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/stop")
-	public ApiResponse<Void> stop(@PathVariable("id") long id) {
+	public ApiResponse<Void> stop(@PathVariable("id") String id) {
 		explanationService.stop(id);
 		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/move-to-review")
-	public ApiResponse<Void> moveToReview(@PathVariable("id") long id) {
+	public ApiResponse<Void> moveToReview(@PathVariable("id") String id) {
 		explanationService.moveToReview(id);
 		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/approve")
-	public ApiResponse<Void> approve(@PathVariable("id") long id,
+	public ApiResponse<Void> approve(@PathVariable("id") String id,
 			@RequestBody(required = false) ApproveRequest request) {
 		explanationService.approve(id, request == null ? null : request.finalText());
 		return ApiResponse.onSuccess(null);
 	}
 
 	@PostMapping("/api/v1/explanations/{id}/reject")
-	public ApiResponse<Void> reject(@PathVariable("id") long id,
+	public ApiResponse<Void> reject(@PathVariable("id") String id,
 			@RequestBody(required = false) ExplanationRejectRequest request) {
 		explanationService.reject(id, request == null ? null : request.note());
 		return ApiResponse.onSuccess(null);
 	}
 
 	@PatchMapping("/api/v1/explanations/{id}/draft")
-	public ApiResponse<Void> saveDraft(@PathVariable("id") long id,
+	public ApiResponse<Void> saveDraft(@PathVariable("id") String id,
 			@RequestBody(required = false) FinalRequest request) {
 		explanationService.saveDraft(id, request == null ? null : request.finalText());
 		return ApiResponse.onSuccess(null);
