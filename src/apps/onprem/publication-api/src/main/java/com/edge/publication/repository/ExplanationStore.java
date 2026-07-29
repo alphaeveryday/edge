@@ -95,7 +95,9 @@ public class ExplanationStore {
 		return tradeDate == null ? ticker + "|latest" : ticker + "|" + tradeDate;
 	}
 
-	private Optional<PublishedExplanation> load(String ticker, LocalDate tradeDate) {
+	// package-private: 캐시 테스트(ExplanationStoreCacheTest)가 로더를 대역으로 바꿔
+	// positive/negative 캐싱을 엔티티 조립 없이 검증한다(엔티티는 JPA 전용 protected 생성자뿐).
+	Optional<PublishedExplanation> load(String ticker, LocalDate tradeDate) {
 		Optional<Publication> found = tradeDate == null
 				? publications.findLatestPublished(ticker, Limit.of(1))
 				: publications.findPublishedOn(ticker, tradeDate, Limit.of(1));
