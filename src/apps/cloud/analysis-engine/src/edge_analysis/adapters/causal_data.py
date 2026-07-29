@@ -66,6 +66,17 @@ def _guard(where: str, columns: tuple[str, ...]) -> str:
             f"코호트 술어에 쓸 수 없는 토큰: {hit.group()!r}. "
             "세미콜론·주석·DDL·집합연산은 금지이고 available_at 은 코드가 주입한다.\n"
             f"쓸 수 있는 컬럼: {', '.join(columns)}")
+    # 이 표면에 없는 컬럼을 실제로 되돌린다. `columns` 를 에러 메시지에만 쓰면 술어가 그냥
+    # Postgres 로 가서 UndefinedColumn 으로 죽고, 그 문구는 어떤 컬럼을 써야 하는지 말해주지
+    # 않는다 - 실제로 모델이 대조 술어에 처치 컬럼(event_type_code)을 써서 그렇게 죽었다.
+    # 전수 파싱은 하지 않는다(틀린 파서가 정상 술어를 막는다). 다른 표면의 컬럼을 끌어온
+    # 경우만 잡으면 관측된 실패 모드를 오탐 없이 덮는다.
+    wrong = sorted(c for c in set(COHORT_COLUMNS) - set(columns)
+                   if re.search(rf"\b{c}\b", w))
+    if wrong:
+        raise PipelineError(
+            f"이 술어에 쓸 수 없는 컬럼: {', '.join(wrong)}.\n"
+            f"쓸 수 있는 컬럼: {', '.join(columns)}")
     # `%` 를 두 배로 만든다. 술어는 f-string 으로 SQL 에 박히고 그 SQL 은 `cur.execute(sql,
     # params)` 를 거치므로, psycopg2 가 `%` 를 자기 플레이스홀더로 읽는다. 그래서
     # `industry_name LIKE '%Semiconductor%'` - 이 함수 에러 메시지가 예로 드는 바로 그
