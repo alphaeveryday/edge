@@ -29,7 +29,7 @@ Super Admin Console
 단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답 원천은 도메인
 단위로 DB 전환 중이다(ALPHA-515 mock 출발): tenants=JPA(ALPHA-526) ·
 sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601) ·
-analyses 쓰기=운영자 작업 원장 전이(ALPHA-602), session 은 아직 `mock` 패키지(474).
+session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰기=운영자 작업 원장 전이(ALPHA-602).
 
 | 화면 | 엔드포인트 |
 |---|---|

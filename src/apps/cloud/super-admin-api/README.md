@@ -1,13 +1,14 @@
 # super-admin-api
 
 벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses
-는 DB, session 은 mock). 화면·금지 항목의 SSOT 는
+는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
 sources 는 운영 원장(`ops_*`)·analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다
 (ALPHA-514·601). analyses 쓰기(정정·제외·복원)는 운영자 작업 원장(`admin_activity_log`) 전이다
-(ALPHA-602). session 표면과 운영자 인증은 아직 in-memory(474).
+(ALPHA-602). session 표면은 인증 세션 주체(SessionOperator) 투영으로 실전환됐다(ALPHA-608).
+운영자 인증은 아직 in-memory(474).
 
 ## 지켜야 할 로컬 불변식
 
@@ -63,12 +64,15 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   (`repository/JdbcAnalysisWriteRepository`, ALPHA-602) — explanation_result(analysis-engine
   소유)를 덮지 않고 super-admin-api **소유** 원장 `admin_activity_log` 에 작업자·사유·전후와 함께
   append 하며, 정정 본문·제외 여부는 읽기가 그 원장에서 오버레이한다(원본 불변, 단일 writer 규약
-  유지). session 은 아직 `mock` 패키지 in-memory 스토어(`AdminSessionMockStore`)다. DB 연동은
-  이렇게 도메인 단위로 service 의 스토어 의존을 repository 로 교체하며 진행한다.
+  유지). **session 은 인증 세션 주체(`SessionOperator`)를 투영해 반환한다**(ALPHA-608 — 별도
+  저장소·테이블 없이 config 부트스트랩 계정이 로그인 시 세션에 실린 값). DB 연동은 이렇게 도메인
+  단위로 service 의 스토어 의존을 repository·세션 주체로 교체하며 진행한다.
+
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
   (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
-  service 가 변환, 그 외=mock record). 원천 형과 형식이
+  service 가 변환, analyses 쓰기=mock record, session=세션 주체(`SessionOperator`) 투영을
+  `AdminSessionService` 가 구성). 원천 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다
   (admin·email·memo 는 원장 값(ALPHA-121 온보딩 기록), Sync 관측 필드(domain·
   lastSync·calls·bars)만 플레이스홀더 — 환경 어휘는 IA(PoC/Production, 구 표기는
@@ -89,7 +93,7 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `AdminSessionMockStore`(session) | 도메인별 DB 연동 | service 의존을 repository 로 교체. tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601)·analyses 쓰기=운영자 작업 원장(ALPHA-602) 전환 완료, session 잔여 |
+| (도메인별 mock 스토어 — 전환 완료) | — | tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601)·analyses 쓰기=운영자 작업 원장(ALPHA-602)·session=세션 주체 투영(ALPHA-608). `*MockStore` 전부 제거됨 |
 | config 부트스트랩 운영자 | ALPHA-474 | Spring Security + 운영자 IdP 연동 |
 
 ## 실행·확인

@@ -33,7 +33,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class AnalysisControllerTest {
 
-	/** 하락 −3.42% · 완료 · 근거 2건(뉴스·공시) — 번역 전부를 태우는 행. */
+	/**
+	 * 하락 −3.42% · 완료 · 근거 2건(뉴스·공시) — 번역 전부를 태우는 행.
+	 * 총 건수는 57 로 둔다: 표시 상한에 잘린 런에서 화면이 표시 건수가 아니라 총 건수를
+	 * 말하는지 확인하려면 둘이 달라야 한다.
+	 */
 	private static final AnalysisRow COMPLETED_ROW = new AnalysisRow(
 			"run-1", "KODEX 반도체", "091160", "XKRX", -0.0342, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"),
@@ -41,20 +45,21 @@ class AnalysisControllerTest {
 			"반도체 업황 회복 기대가 확산되며 상승.", "HIGH", false, false, null,
 			List.of(new EvidenceRow("NEWS", "반도체 수출 반등", "BIGKINDS",
 							OffsetDateTime.parse("2026-07-27T09:10:00+09:00")),
-					new EvidenceRow("DISCLOSURE", null, "DART", null)));
+					new EvidenceRow("DISCLOSURE", null, "DART", null)),
+			57);
 
 	/** 결과 행이 아직 없는 런 — summary·confidence 가 null 로 온다. */
 	private static final AnalysisRow PENDING_ROW = new AnalysisRow(
 			"run-2", "TIGER 2차전지", "305540", "XKRX", 0.0518, "RUNNING",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, false, false, null,
-			List.of());
+			List.of(), 0);
 
 	/** SUCCEEDED 인데 본문이 빈 원장 불일치 — 엔진이 "" 를 저장할 수 있다. null 과 동급 결측. */
 	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
 			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "   ", null, false, false, null,
-			List.of());
+			List.of(), 0);
 
 	/**
 	 * 제외·정정 오버레이가 선 완료 런 — 상태는 EXCLUDED, 완료시각은 원상태 기준, 본문은 정정본
@@ -64,7 +69,7 @@ class AnalysisControllerTest {
 			"run-4", "TIGER 미국나스닥100", "133690", "XNAS", 0.0812, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-25T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-25T15:52:00+09:00"),
-			"엔진 원본 설명.", "LOW", true, true, "운영자가 정정한 설명 본문.", List.of());
+			"엔진 원본 설명.", "LOW", true, true, "운영자가 정정한 설명 본문.", List.of(), 0);
 
 	private static final SessionOperator OPERATOR = new SessionOperator("ops@edge.io", "운영자");
 
@@ -107,6 +112,8 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[0].confidence").value("HIGH"))
 				.andExpect(jsonPath("$.result[0].corrected").value(false))
 				.andExpect(jsonPath("$.result[0].evidence.length()").value(2))
+				// 표시 상한에 잘린 런 — 총 건수는 실린 2건이 아니라 57건이다(화면 문구의 근거)
+				.andExpect(jsonPath("$.result[0].evidenceTotal").value(57))
 				.andExpect(jsonPath("$.result[0].evidence[0].type").value("뉴스"))
 				.andExpect(jsonPath("$.result[0].evidence[0].time").value("2026-07-27 09:10"))
 				.andExpect(jsonPath("$.result[0].evidence[1].type").value("공시"))

@@ -35,16 +35,29 @@ CREATE TABLE admin_activity_log (
     -- 대상 종류/식별자. 분석 액션은 explanation_run 을 가리킨다(target_id = explanation_run_id).
     target_type   VARCHAR(30) NOT NULL,
     target_id     TEXT NOT NULL,
-    -- 사유 — 정정/제외는 앱이 필수로 강제(빈 값 400), 복원은 선택이라 컬럼은 nullable.
+    -- 사유 — 정정/제외는 필수(앱이 빈 값 400), 복원은 선택이라 컬럼은 nullable. 필수는 아래
+    -- CHECK 로 스키마에서도 강제한다 — 앱 밖 writer(백필·후속 서비스)가 사유 없는 정정/제외
+    -- 감사를 남기지 못하게(감사 재현 요건, ADR-0005 스키마=계약).
     reason        TEXT,
     -- 변경 전후 등 부가 감사 페이로드(정정의 {before, after} 요약). 유연 저장은 JSONB
-    -- (dataops 원장 evidence/completeness 와 같은 결).
+    -- (dataops 원장 evidence/completeness 와 같은 결). 정정은 before/after 필수(아래 CHECK) —
+    -- 변경 전후가 빠진 정정 감사는 재현 불가(super-admin-console.md 감사 요건). 제외/복원은 없음.
     details       JSONB,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT ck_admin_activity_action CHECK (action IN
         ('ANALYSIS_RESULT_CORRECTED', 'ANALYSIS_EXCLUDED', 'ANALYSIS_RESTORED')),
-    CONSTRAINT ck_admin_activity_target_type CHECK (target_type IN ('ANALYSIS_RUN'))
+    CONSTRAINT ck_admin_activity_target_type CHECK (target_type IN ('ANALYSIS_RUN')),
+    -- 복원 외 액션(정정·제외)은 사유 필수 — 공백만도 불가. 복원은 nullable.
+    CONSTRAINT ck_admin_activity_reason CHECK (
+        action = 'ANALYSIS_RESTORED' OR (reason IS NOT NULL AND btrim(reason) <> '')),
+    -- 정정 감사는 before/after 를 담은 details 필수 — 재현 가능해야 한다(값은 null 허용, 키만 강제).
+    -- jsonb_typeof='object' 를 앞세운다: `?` 는 배열 원소도 매칭해 ['before','after'] 가 값 없이
+    -- 통과하고, NULL 이면 `?` 가 NULL 을 내 CHECK 가 통과된다(NULL≠FALSE) — 둘 다 막는다.
+    CONSTRAINT ck_admin_activity_correction_details CHECK (
+        action <> 'ANALYSIS_RESULT_CORRECTED'
+        OR (details IS NOT NULL AND jsonb_typeof(details) = 'object'
+            AND details ? 'before' AND details ? 'after'))
 );
 
 COMMENT ON TABLE admin_activity_log IS

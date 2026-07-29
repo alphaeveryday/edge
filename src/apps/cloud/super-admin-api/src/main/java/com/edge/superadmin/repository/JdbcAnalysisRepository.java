@@ -32,6 +32,14 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	private static final int LIST_LIMIT = 200;
 
 	/**
+	 * 런당 근거 표시 상한. 한 설명이 프롬프트에 싣는 사건 수가 수십~수백 건이라(dev 실측 평균
+	 * 56 · 최대 485) 상한이 없으면 목록 응답 하나가 {@code LIST_LIMIT} 배로 부푼다. 잘라낸
+	 * 만큼은 {@code evidenceTotal} 이 말해 준다 — 화면의 건수가 표시 건수로 축소되면 근거가
+	 * 그것뿐인 것처럼 읽힌다.
+	 */
+	private static final int EVIDENCE_LIMIT_PER_RUN = 20;
+
+	/**
 	 * 트리거→기여관찰→경로→런이 전부 1:1 체인이라(각 FK 에 UNIQUE) 행이 불어나지 않는다.
 	 * {@code explanation_result} 만 LEFT — 결과가 아직 없는 런도 목록에 남아야 한다.
 	 *
@@ -66,30 +74,47 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	 * 수 있는데, 운영자에게 근거는 문서 단위다. 서브쿼리는 LIST_SQL 과 같은 창이라 한 스냅샷
 	 * 안에서 같은 런 집합을 본다. {@code document_id} 는 정렬 동률 해소용으로만 SELECT 에
 	 * 남는다(published_at 은 NULL 허용·비유일).
+	 *
+	 * <p>런당 {@code EVIDENCE_LIMIT_PER_RUN} 건으로 자르되 {@code evidence_total} 을 같이 낸다
+	 * — 자른 사실을 표시 층이 알아야 "N건" 이 표시 건수로 둔갑하지 않는다. 상한은 DISTINCT
+	 * <b>뒤</b>에 걸린다(문서 단위로 20건이지 lineage 행 20건이 아니다).
 	 */
 	private static final String EVIDENCE_SQL = """
-			SELECT DISTINCT explanation_run_id, document_id, document_type, title,
-			       source_code, published_at
+			SELECT explanation_run_id, document_type, title, source_code, published_at,
+			       evidence_total
 			  FROM (
-			       SELECT ree.explanation_run_id, d.document_id, d.document_type, d.title,
-			              d.source_code, d.published_at
-			         FROM explanation_run_event_evidence ree
-			         JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
-			         JOIN document_assertion da ON da.assertion_id = ev.assertion_id
-			         JOIN document d ON d.document_id = da.document_id
-			       UNION ALL
-			       SELECT rdf.explanation_run_id, d.document_id, d.document_type, d.title,
-			              d.source_code, d.published_at
-			         FROM explanation_run_disclosure_fact rdf
-			         JOIN disclosure_fact df ON df.fact_id = rdf.fact_id
-			         JOIN document d ON d.document_id = df.document_id
-			       ) lineage
-			 WHERE explanation_run_id IN (
-			       SELECT explanation_run_id FROM explanation_run
-			        ORDER BY explanation_as_of DESC, explanation_run_id DESC
-			        LIMIT %d)
-			 ORDER BY explanation_run_id, published_at ASC NULLS LAST, document_id
-			""".formatted(LIST_LIMIT);
+			       SELECT explanation_run_id, document_id, document_type, title,
+			              source_code, published_at,
+			              ROW_NUMBER() OVER (PARTITION BY explanation_run_id
+			                                 ORDER BY published_at ASC NULLS LAST, document_id)
+			                  AS document_rank,
+			              COUNT(*) OVER (PARTITION BY explanation_run_id) AS evidence_total
+			         FROM (
+			              SELECT DISTINCT explanation_run_id, document_id, document_type, title,
+			                     source_code, published_at
+			                FROM (
+			                   SELECT ree.explanation_run_id, d.document_id, d.document_type,
+			                          d.title, d.source_code, d.published_at
+			                     FROM explanation_run_event_evidence ree
+			                     JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
+			                     JOIN document_assertion da ON da.assertion_id = ev.assertion_id
+			                     JOIN document d ON d.document_id = da.document_id
+			                   UNION ALL
+			                   SELECT rdf.explanation_run_id, d.document_id, d.document_type,
+			                          d.title, d.source_code, d.published_at
+			                     FROM explanation_run_disclosure_fact rdf
+			                     JOIN disclosure_fact df ON df.fact_id = rdf.fact_id
+			                     JOIN document d ON d.document_id = df.document_id
+			                   ) lineage
+			               WHERE explanation_run_id IN (
+			                     SELECT explanation_run_id FROM explanation_run
+			                      ORDER BY explanation_as_of DESC, explanation_run_id DESC
+			                      LIMIT %d)
+			              ) documents
+			       ) ranked
+			 WHERE document_rank <= %d
+			 ORDER BY explanation_run_id, document_rank
+			""".formatted(LIST_LIMIT, EVIDENCE_LIMIT_PER_RUN);
 
 	/**
 	 * 운영자 작업 오버레이 — 창 안의 런별 최신 액션을 admin_activity_log 에서 유도한다(ALPHA-602).
@@ -134,13 +159,16 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public List<AnalysisRow> list() {
 		Map<String, List<EvidenceRow>> evidenceByRun = new HashMap<>();
+		Map<String, Integer> totalByRun = new HashMap<>();
 		jdbc.query(EVIDENCE_SQL, rs -> {
-			evidenceByRun.computeIfAbsent(rs.getString("explanation_run_id"), k -> new ArrayList<>())
+			String runId = rs.getString("explanation_run_id");
+			evidenceByRun.computeIfAbsent(runId, k -> new ArrayList<>())
 					.add(new EvidenceRow(
 							rs.getString("document_type"),
 							rs.getString("title"),
 							rs.getString("source_code"),
 							rs.getObject("published_at", OffsetDateTime.class)));
+			totalByRun.put(runId, rs.getInt("evidence_total"));
 		});
 		Map<String, Overlay> overlayByRun = new HashMap<>();
 		jdbc.query(OVERLAY_SQL, rs -> {
@@ -149,10 +177,10 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 					rs.getString("corrected_summary")));
 		});
 		return jdbc.query(LIST_SQL, (rs, i) -> {
-			Overlay overlay = overlayByRun.getOrDefault(
-					rs.getString("explanation_run_id"), NO_OVERLAY);
+			String runId = rs.getString("explanation_run_id");
+			Overlay overlay = overlayByRun.getOrDefault(runId, NO_OVERLAY);
 			return new AnalysisRow(
-					rs.getString("explanation_run_id"),
+					runId,
 					rs.getString("display_name"),
 					rs.getString("ticker"),
 					rs.getString("market_code"),
@@ -165,9 +193,10 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 					overlay.excluded(),
 					overlay.corrected(),
 					overlay.correctedSummary(),
-					List.copyOf(evidenceByRun.getOrDefault(
-							rs.getString("explanation_run_id"), List.of())));
+					List.copyOf(evidenceByRun.getOrDefault(runId, List.of())),
+					totalByRun.getOrDefault(runId, 0));
 		});
+
 	}
 
 	private static final Overlay NO_OVERLAY = new Overlay(false, false, null);

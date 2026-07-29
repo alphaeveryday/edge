@@ -88,10 +88,14 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			new Rule("GET", Pattern.compile("/api/v1/screening/disclaimer"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/screening/disclaimer"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("GET", Pattern.compile("/api/v1/screening/versions"), ANY_ROLE),
+			// 제공 범위 조회는 전 역할, 변경은 통제 성격이 갈린다 — scope 도메인 DB
+			// 전환(ALPHA-606)으로 mock 한시 예외가 해제됐다. 시장 커버리지 토글은 시스템
+			// 설정(TA), 종목 제외 토글은 이해상충 컴플라이언스 통제(CR) — 경계는
+			// permission-matrix "제공 범위" 두 행 = serving_scope.scope_type 과 1:1이다.
 			new Rule("GET", Pattern.compile("/api/v1/scope/markets"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/scope/markets/[^/]+/toggle"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/scope/markets/[^/]+/toggle"), TENANT_ADMIN_ONLY),
 			new Rule("GET", Pattern.compile("/api/v1/scope/stocks"), ANY_ROLE),
-			new Rule("POST", Pattern.compile("/api/v1/scope/stocks/[^/]+/toggle"), ANY_ROLE),
+			new Rule("POST", Pattern.compile("/api/v1/scope/stocks/[^/]+/toggle"), COMPLIANCE_REVIEWER_ONLY),
 			// 사용자 관리(ALPHA-119) — mock 완화를 벗어나 permission-matrix.md 의 실
 			// 권한(Users & Roles = TENANT_ADMIN 전용)을 적용한다. member 원장 실데이터.
 			new Rule("GET", Pattern.compile("/api/v1/members"), TENANT_ADMIN_ONLY),

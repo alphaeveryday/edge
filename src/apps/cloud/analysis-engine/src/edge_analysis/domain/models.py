@@ -120,6 +120,9 @@ class EventContext:
     measures: tuple[Measure, ...] = ()
     predicate_code: str | None = None
     lifecycle_stage: str | None = None
+    # 이 사건의 제목 근거(event_evidence) — 설명 실행이 무엇을 근거로 썼는지 남기는
+    # lineage 키다. 해당 evidence 가 없는 사건에서는 None.
+    evidence_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
