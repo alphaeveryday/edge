@@ -2,12 +2,17 @@ package com.edge.publication.repository;
 
 import com.edge.publication.entity.AnalysisItem;
 import com.edge.publication.entity.Publication;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -43,11 +48,32 @@ public class ExplanationStore {
 	private final PublicationRepository publications;
 	private final Set<String> knownTickers;
 	private final ObjectMapper objectMapper = new ObjectMapper();
+	private final Cache<String, Optional<PublishedExplanation>> serveCache;
 
+	@Autowired
 	public ExplanationStore(PublicationRepository publications,
-			@Value("${publication.known-tickers}") Set<String> knownTickers) {
+			@Value("${publication.known-tickers}") Set<String> knownTickers,
+			@Value("${publication.serve-cache-ttl:3s}") Duration serveCacheTtl) {
+		this(publications, knownTickers, serveCacheTtl, Ticker.systemTicker());
+	}
+
+	// 테스트 시간 주입 시임 — TTL 만료(스테일 상한)를 실제 대기 없이 검증한다.
+	ExplanationStore(PublicationRepository publications, Set<String> knownTickers,
+			Duration serveCacheTtl, Ticker ticker) {
 		this.publications = publications;
 		this.knownTickers = knownTickers;
+		// 조회 캐시(ALPHA-433) — 급등 시 동일 종목 집중 조회(hot-key)의 중복 읽기를 제거한다.
+		// 응답은 고객별 요소가 없어 (ticker, trade_date) 단위로 공유 가능하고, Exposure 기록은
+		// 캐시와 무관하게 요청마다 남는다(조회=노출, ADR-0013 — 캐시는 read path 만 가린다).
+		// 검수·차단 이벤트의 프로세스 간 무효화 경로가 없으므로 TTL 이 곧 차단·정정 반영
+		// 지연의 상한이다 — 늘릴 때는 컴플라이언스 검토가 선행돼야 한다.
+		// "게시분 없음"(empty)도 캐시한다: 신규 게시 노출이 최대 TTL 만큼 늦는 대신
+		// 204 폭주도 같은 상한으로 막는다.
+		this.serveCache = Caffeine.newBuilder()
+				.expireAfterWrite(serveCacheTtl)
+				.maximumSize(10_000)
+				.ticker(ticker)
+				.build();
 	}
 
 	/** 상장 여부(404 판별) — 종목 마스터 동기화 전의 설정 allowlist. */
@@ -61,6 +87,15 @@ public class ExplanationStore {
 	 * 거래일을 우선 정렬한다(과거일 검수분이 늦게 게시돼도 최신 거래일이 이긴다).
 	 */
 	public Optional<PublishedExplanation> findPublished(String ticker, LocalDate tradeDate) {
+		// 같은 키의 동시 미스는 Caffeine 이 로더 1회로 합친다(stampede 방지).
+		return serveCache.get(cacheKey(ticker, tradeDate), key -> load(ticker, tradeDate));
+	}
+
+	private static String cacheKey(String ticker, LocalDate tradeDate) {
+		return tradeDate == null ? ticker + "|latest" : ticker + "|" + tradeDate;
+	}
+
+	private Optional<PublishedExplanation> load(String ticker, LocalDate tradeDate) {
 		Optional<Publication> found = tradeDate == null
 				? publications.findLatestPublished(ticker, Limit.of(1))
 				: publications.findPublishedOn(ticker, tradeDate, Limit.of(1));
