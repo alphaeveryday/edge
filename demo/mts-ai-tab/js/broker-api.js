@@ -24,5 +24,18 @@
       });
   }
 
-  window.BrokerApi = { getAiAnalysis: getAiAnalysis };
+  // 시세(지수·관심종목) 조회 — 서버가 외부 소스 실패·키 미설정 시 스냅샷 폴백을 담아 항상 200 으로 준다.
+  // resolve 값: { state: 'OK'|'FALLBACK', data: { indices, stocks } } | { state: 'FALLBACK', data: null }
+  function getQuotes() {
+    return fetch('/api/broker/quotes')
+      .then(function (res) {
+        return res.json();
+      })
+      .catch(function (err) {
+        console.warn('[broker-api] 시세 호출 실패', err);
+        return { state: 'FALLBACK', data: null };
+      });
+  }
+
+  window.BrokerApi = { getAiAnalysis: getAiAnalysis, getQuotes: getQuotes };
 })();

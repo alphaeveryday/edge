@@ -3,7 +3,7 @@
 FROM node:20-alpine
 
 WORKDIR /app
-COPY mock-broker/server.js ./
+COPY mock-broker/server.js mock-broker/quotes-fallback.json ./
 COPY mts-ai-tab ./mts-ai-tab
 
 ENV STATIC_DIR=/app/mts-ai-tab

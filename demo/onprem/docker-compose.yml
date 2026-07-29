@@ -154,6 +154,10 @@ services:
       - serving
     environment:
       PUBLICATION_API_URL: http://publication-api:8080
+      # 토스증권 Open API 키(실시간 시세) — 박스 /opt/edge-onprem/.env 에 1회 수동 배치(커밋 금지).
+      # 배포 번들 tar 는 덮어쓰기만 하므로 .env 는 재배포에도 유지된다. 미설정 시 폴백 스냅샷.
+      TOSS_CLIENT_ID: ${TOSS_CLIENT_ID:-}
+      TOSS_CLIENT_SECRET: ${TOSS_CLIENT_SECRET:-}
     ports:
       - "${MOCK_BROKER_PORT:-8080}:8080"
 

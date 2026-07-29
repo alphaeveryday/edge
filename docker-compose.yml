@@ -179,6 +179,9 @@ services:
       - publication-api
     environment:
       PUBLICATION_API_URL: http://publication-api:8080
+      # 토스증권 Open API 키(실시간 시세) — 리포 루트 .env(gitignore)에서 주입, 미설정 시 폴백 스냅샷
+      TOSS_CLIENT_ID: ${TOSS_CLIENT_ID:-}
+      TOSS_CLIENT_SECRET: ${TOSS_CLIENT_SECRET:-}
     ports:
       - "18090:8080"
 
