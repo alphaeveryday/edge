@@ -317,15 +317,22 @@ public class ExplanationService {
 	public void updateFinal(String id, String finalText, SessionMember actor, String clientIp) {
 		// 최종 제공 문구는 고객 노출 문면 — 빈 문구로의 교체는 막는다(원장 조회 전).
 		requireText(finalText);
+		// 없는 설명은 404(전이 3종 공통) — 게시본 없음(409)과 구분한다.
+		AnalysisItemEntity item = ledger.findById(id)
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
 		PublicationEntity published = publishedSummaryRepository
 				.findFirstByAnalysisItemIdAndStatusOrderByPublicationIdDesc(id, "PUBLISHED")
 				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.NOT_PUBLISHED));
-		String before = published.getPublishedSummary();
+		// 게시 스냅샷이 null 이면 고객에게 모델 원문(summary)이 노출됐다(published_summary
+		// NULL = summary 노출, 스키마 규약) — 감사 before 는 실제 노출됐던 문구를 담아야
+		// 민원·감사에서 "무엇을 무엇으로 고쳤나"가 재현된다(널 기록은 원문 유실).
+		String before = published.getPublishedSummary() != null
+				? published.getPublishedSummary() : item.getSummary();
 		if (publicationRepository.updatePublishedSummary(id, finalText) == 0) {
 			// 조회~갱신 사이 게시본이 내려간 경합 — 같은 트랜잭션에서 롤백된다.
 			throw new GeneralException(ConsoleErrorStatus.NOT_PUBLISHED);
 		}
-		// before 는 자동 게시본에서 null 일 수 있어 Map.of(널 불가) 대신 LinkedHashMap 을 쓴다.
+		// summary 는 NOT NULL 이라 before 는 실질 비지 않지만, 방어적으로 널 허용 맵을 쓴다.
 		Map<String, Object> detail = new LinkedHashMap<>();
 		detail.put("before", before);
 		detail.put("after", finalText);

@@ -20,3 +20,9 @@ COMMENT ON TABLE analysis_item IS
 -- 실행자·시각 메타). 게시 grain 규율(부분 유니크)은 불변.
 COMMENT ON TABLE publication IS
 '게시 원장(Published Store) — publication-api 서빙 소스. writer 는 전이별 분담: screening-worker(자동 게시·무효화·정정 UNPUBLISHED), tenant-console-api(검수 승인 재발행 + 사후 운영: 최종 문구 정정·수동 제공 중단).';
+
+-- analysis_item_status_history: 사후 운영 전이(수동 중단·검수 이관)도 tenant-console-api
+-- 가 같은 트랜잭션에서 MEMBER 이력으로 기록한다 — analysis_item COMMENT 의 writer
+-- 분담과 동일하게 status_history 소유 서술도 넓혀 SSOT 정합을 유지한다.
+COMMENT ON TABLE analysis_item_status_history IS
+'analysis_item 상태 변경 이력(append-only) — writer 는 analysis_item 과 동일한 전이 소유 분리를 따른다(각 모듈은 자기가 만든 전이만 같은 트랜잭션에서 기록): screening-worker = 자동 분기·Cloud 이벤트 반영, tenant-console-api = 검수 결정 + 사후 운영 전이(수동 제공 중단·검수 이관).';

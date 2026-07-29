@@ -85,6 +85,13 @@ class ExplanationWriteIT extends AbstractPostgresIntegrationTest {
 				+ "ORDER BY status_history_id DESC LIMIT 1", id);
 	}
 
+	/** 최신 감사 로그의 detail JSONB 에서 필드 하나를 뽑는다 — 전후값·사유의 필드 의미까지 단언하기 위함. */
+	private String logDetailField(String id, String field) {
+		return jdbc.queryForObject("SELECT detail ->> ? FROM console_action_log "
+				+ "WHERE target_id = ? ORDER BY console_action_log_id DESC LIMIT 1",
+				String.class, field, id);
+	}
+
 	// ── stop(제공 중단) ──
 
 	@Test
@@ -112,12 +119,14 @@ class ExplanationWriteIT extends AbstractPostgresIntegrationTest {
 		assertThat(hist.get("actor_id")).isEqualTo(member);
 		assertThat(hist.get("reason")).isEqualTo("이해상충 우려");
 
-		// 감사 로그 — 행위자·사유·이전 상태·client IP.
+		// 감사 로그 — 행위자·사유·이전 상태·client IP. detail 은 필드 의미까지 단언한다
+		// (문자열 contains 는 사유·상태가 엉뚱한 필드에 실려도 통과하므로 부족 — Rule 9).
 		Map<String, Object> log = lastLog("it613-stop");
 		assertThat(log.get("action")).isEqualTo("EXPLANATION_STOPPED");
 		assertThat(log.get("actor_id")).isEqualTo(member);
 		assertThat(log.get("client_ip")).isEqualTo("10.0.0.1");
-		assertThat((String) log.get("detail")).contains("이해상충 우려").contains("AUTO_PUBLISHED");
+		assertThat(logDetailField("it613-stop", "reason")).isEqualTo("이해상충 우려");
+		assertThat(logDetailField("it613-stop", "fromStatus")).isEqualTo("AUTO_PUBLISHED");
 	}
 
 	@Test
@@ -202,20 +211,50 @@ class ExplanationWriteIT extends AbstractPostgresIntegrationTest {
 		// 상태 전이가 없으므로 이력 원장은 오염되지 않는다.
 		assertThat(countHistory("it613-final")).isZero();
 
+		// 전후값의 필드 의미까지 단언 — before·after 가 뒤바뀌거나 다른 필드에 실리면 잡는다.
 		Map<String, Object> log = lastLog("it613-final");
 		assertThat(log.get("action")).isEqualTo("EXPLANATION_FINAL_UPDATED");
 		assertThat(log.get("actor_id")).isEqualTo(member);
-		assertThat((String) log.get("detail")).contains("이전 게시 문구").contains("정정된 문구");
+		assertThat(logDetailField("it613-final", "before")).isEqualTo("이전 게시 문구");
+		assertThat(logDetailField("it613-final", "after")).isEqualTo("정정된 문구");
+	}
+
+	@Test
+	void updateFinal_은_자동게시_null_스냅샷이면_노출됐던_모델_원문을_before_로_남긴다() {
+		long member = seedMember();
+		seedItem("it613-nullsnap", "613NUL", "AUTO_PUBLISHED", "노출됐던 모델 원문");
+		// 자동 게시본은 published_summary 가 NULL — 고객에게는 analysis_item.summary 가 노출된다.
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date) "
+				+ "VALUES ('it613-nullsnap', '613NUL', '2026-07-15')");
+
+		explanations.updateFinal("it613-nullsnap", "검수자 정정 문구", actor(member), "10.0.0.4");
+
+		assertThat(jdbc.queryForObject("SELECT published_summary FROM publication "
+				+ "WHERE analysis_item_id = 'it613-nullsnap'", String.class)).isEqualTo("검수자 정정 문구");
+		// WHY: 스냅샷 null 을 그대로 before=null 로 남기면 실제 노출됐던 원문을 감사에서
+		// 잃는다 — before 는 노출됐던 문구(summary 폴백)여야 민원·감사가 재현된다.
+		assertThat(logDetailField("it613-nullsnap", "before")).isEqualTo("노출됐던 모델 원문");
+		assertThat(logDetailField("it613-nullsnap", "after")).isEqualTo("검수자 정정 문구");
 	}
 
 	@Test
 	void updateFinal_은_게시본이_없으면_409다() {
 		long member = seedMember();
-		seedItem("it613-nofinal", "613NFN", "REVIEW_REQUIRED", "원본");   // 미게시
+		seedItem("it613-nofinal", "613NFN", "REVIEW_REQUIRED", "원본");   // 미게시(항목은 존재)
 
 		assertThatThrownBy(() -> explanations.updateFinal("it613-nofinal", "문구", actor(member), "ip"))
 				.isInstanceOfSatisfying(GeneralException.class,
 						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.NOT_PUBLISHED));
+	}
+
+	@Test
+	void updateFinal_은_없는_설명이면_404고_게시본_없음_409와_구분한다() {
+		long member = seedMember();
+
+		// 항목 자체가 없으면 게시본 없음(409)이 아니라 not-found(404) — 전이 3종 공통 계약.
+		assertThatThrownBy(() -> explanations.updateFinal("it613-ghost", "문구", actor(member), "ip"))
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
 	}
 
 	@Test
