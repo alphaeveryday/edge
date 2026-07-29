@@ -96,6 +96,12 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
 ## 7. Squash 머지 + 브랜치 삭제
 
 - `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계)을 통과했으면 **확인 없이 실행한다** — 루프 종료 조건(`+1` 또는 전건 비수용)이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
+- **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `src/libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(README "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
+  ```bash
+  git fetch origin dev --quiet
+  git ls-tree -r --name-only origin/dev -- src/libs/schema/migrations-cloud/ | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1   # onprem 세트도 동일
+  ```
+  역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신) 후 4단계 게이트부터 재진입한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - **worktree 사이클이면 `--delete-branch` 를 뺀다** — gh 가 로컬 브랜치를 지우려고 base(`dev`)로 전환을 시도하는데 `dev` 는 메인 체크아웃이 잡고 있어 실패한다. 머지 후 원격 브랜치는 `git push origin --delete <브랜치>` 로 지우고, 로컬 브랜치·폴더는 8단계에서 정리한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).

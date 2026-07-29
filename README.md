@@ -133,6 +133,10 @@ fix/*     ─┘
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
 - `dev` → **`main`에만** PR 한다.
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
+
+**스키마 마이그레이션 머지 게이트 (branch protection 도입 전 수동 규율)**
+- 마이그레이션(`src/libs/schema/migrations-*`)을 담은 PR은 **머지 직전** 최신 `dev`를 fetch 해 신규 버전이 해당 세트의 최고 버전보다 큰지 재확인한다. CI의 버전 단조성 guard 는 체크 실행 시점의 base 기준이라, 병렬 PR 이 순서대로 머지되면 역행 착지 창이 열린다(2026-07-29 하루 3건 실증, ALPHA-623).
+- 역행이면 **전방 리네임**(내용 그대로 더 큰 버전으로) 후 재검증한다. 규칙 상세와 복구 절차: [src/libs/schema/README.md](src/libs/schema/README.md) "CI 운영 설정".
 - 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
 
 ### 병렬 작업 (worktree)
