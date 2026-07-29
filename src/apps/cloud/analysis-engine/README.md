@@ -63,7 +63,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 ## 스키마 계약
 
-Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
+Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`·`explanation_run_event_evidence`(설명 실행이 사용한 근거 lineage — ALPHA-603). `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)과 `event_evidence` 는 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412). lineage 는 `event_evidence` 를 **참조만** 하고 그 행을 만들지 않는다.
 
 ## 주석 컨벤션
 

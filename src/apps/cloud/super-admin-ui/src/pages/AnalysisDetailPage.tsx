@@ -45,7 +45,14 @@ export function AnalysisDetailPage() {
           <div className="card">
             <div className="card-head">
               <span className="t-label">근거 데이터</span>
-              <span className="t-xs num" style={{ color: 'var(--fg-3)' }}>{a.evidence.length}건</span>
+              {/* 표시 상한에 잘렸으면 총 건수와 표시 건수를 같이 말한다 — 건수만 줄여 쓰면
+                  근거가 그것뿐인 것으로 읽힌다. UI 와 API 는 따로 배포돼 총 건수를 아직 안 주는
+                  응답을 만날 수 있다 — 그땐 종전대로 표시 건수를 말한다(빈 "건" 방지) */}
+              <span className="t-xs num" style={{ color: 'var(--fg-3)' }}>
+                {a.evidenceTotal ?? a.evidence.length}건
+                {(a.evidenceTotal ?? 0) > a.evidence.length
+                  && ` (상위 ${a.evidence.length}건 표시)`}
+              </span>
             </div>
             <div className="flex flex-col">
               {a.evidence.map((e, i) => (

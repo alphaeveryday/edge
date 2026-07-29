@@ -136,7 +136,7 @@ def _persist_explanation(
         route_id=prereqs["route"],
         bundle=prereqs["bundle"],
         primary_thread_id=_primary_thread_id(events),
-        event_count=len(events),
+        events=events,
     )
 
 

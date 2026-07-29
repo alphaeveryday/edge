@@ -17,11 +17,14 @@ public interface AnalysisRepository {
 	/**
 	 * @param summary         결과가 아직 없는 런이면 null — 상태별 안내 문구는 표시 층이 정한다
 	 * @param confidenceLevel 결과가 없거나 원장이 판정을 비웠으면 null
+	 * @param evidenceTotal   이 런의 문서 근거 총 건수. {@code evidence} 는 표시 상한까지만
+	 *                        담기므로 둘이 다를 수 있다 — 화면이 "몇 건 중 몇 건"을 말하려면
+	 *                        잘라낸 사실이 계약에 있어야 한다
 	 */
 	record AnalysisRow(String runId, String etfName, String ticker, String marketCode,
 			double observedReturn, String runStatus, OffsetDateTime detectedAt,
 			OffsetDateTime finishedAt, String summary, String confidenceLevel,
-			List<EvidenceRow> evidence) {
+			List<EvidenceRow> evidence, int evidenceTotal) {
 	}
 
 	/** 설명실행이 실제 사용한 문서 근거 한 건(뉴스·공시). */
