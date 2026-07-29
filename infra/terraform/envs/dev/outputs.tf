@@ -110,6 +110,29 @@ output "schema_migrate_log_group" {
   value       = module.schema_migrate.log_group_name
 }
 
+# ── 에이전트 질의 RunTask 용 값 (ALPHA-622) ──
+# 질의는 배치라 worker 클러스터에서 돈다(상시 API 와 자원 경쟁 안 하게).
+output "db_query_task_family" {
+  value = module.db_query.task_definition_family
+}
+
+output "db_query_cluster_arn" {
+  value = module.worker_cluster.cluster_arn
+}
+
+output "db_query_subnet_ids" {
+  description = "쉼표구분. private 서브넷."
+  value       = join(",", module.network.private_subnet_ids)
+}
+
+output "db_query_security_group_id" {
+  value = module.db_query.security_group_id
+}
+
+output "db_query_log_group" {
+  value = module.db_query.log_group_name
+}
+
 output "admin_url" {
   value = module.super_admin_site.url
 }

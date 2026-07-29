@@ -28,6 +28,12 @@ resource "aws_db_instance" "this" {
   # 마스터 비밀번호를 RDS 가 만들어 Secrets Manager 에 보관·로테이션(코드에 평문 없음).
   manage_master_user_password = true
 
+  # 에이전트 읽기전용 질의 경로는 비밀번호를 받지 않고 태스크 역할로
+  # rds:generate-db-auth-token 을 만들어 붙는다. 그래서 IAM 인증이 필요하다.
+  # Postgres 에서 이 플래그는 in-place 변경이다 — 재부팅도 다운타임도 없으니
+  # 운영 인스턴스에 그냥 apply 해도 된다(MySQL 과 달리 재시작이 걸리지 않는다).
+  iam_database_authentication_enabled = true
+
   allocated_storage = var.allocated_storage
   storage_type      = "gp3"
   storage_encrypted = true
