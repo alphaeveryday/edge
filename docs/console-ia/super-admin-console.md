@@ -28,8 +28,8 @@ Super Admin Console
 시 이 표와 필터에 함께 행을 더한다(매핑 없는 표면은 fail-closed 403). 운영자는
 단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답 원천은 도메인
 단위로 DB 전환 중이다(ALPHA-515 mock 출발): tenants=JPA(ALPHA-526) ·
-sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601),
-analyses 쓰기·session 은 아직 `mock` 패키지(ALPHA-602·474).
+sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601) ·
+session=인증 세션 주체(SessionOperator) 투영(ALPHA-608), analyses 쓰기만 아직 `mock` 패키지(ALPHA-602).
 
 | 화면 | 엔드포인트 |
 |---|---|
