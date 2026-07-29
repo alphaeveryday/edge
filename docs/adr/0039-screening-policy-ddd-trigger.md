@@ -21,7 +21,7 @@
 2. **전환 시 카빙 형태(그 커밋에서 할 일).**
    - `delivery/` — 안티커럽션 계층. 번들 JSON 을 typed VO(`DeliveryBundle`·`DeliveryEntry`)로 1회 파싱·계약 검증. 흩어진 `JsonNode.path(...).asString(null)` + `IllegalStateException` 을 대체한다.
    - `policy/` — 순수 결정 코어. `DeliveryEntry`(+ 기준) → `ScreeningDecision`. I/O 를 모른다. 실 스크리닝 규칙이 여기 쌓인다.
-   - **공유 `ledger` 커널** — `AnalysisItemStatus`·`PublicationStatus` 와 전이 규칙은 screening·`tenant-console-api` 두 컨텍스트가 공유하므로 `libs/jvm-common`(또는 공유 커널)으로 올린다. screening 안에만 두면 review 쪽과 드리프트한다.
+   - **공유 `ledger` 커널** *(원안 — 채택 시 유예로 대체됨, 아래 "발동 기록" 참조)* — `AnalysisItemStatus`·`PublicationStatus` 와 전이 규칙은 screening·`tenant-console-api` 두 컨텍스트가 공유하므로 `libs/jvm-common`(또는 공유 커널)으로 올린다. screening 안에만 두면 review 쪽과 드리프트한다.
    - `BundleScreener` 는 parse → decide → apply 오케스트레이터로 얇아진다.
 
 3. **불변식은 SQL 에 남긴다(전환해도 옮기지 않는다).** terminal 가드(`status NOT IN ('CORRECTED','INVALIDATED')`)와 게시 grain 유일성(`NOT EXISTS ... status='PUBLISHED'`)은 동시 writer(screening + tenant-console) 환경에서 DB 가 원자적으로 강제해야 정확하다. 도메인 코드는 *의도·결정*을 표현하고, SQL 은 *불변식*을 강제한다 — 같은 가드를 도메인에 복제하면 진실의 원천이 둘이 되어 스키마 SSOT 와 싸운다.
