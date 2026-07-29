@@ -102,7 +102,8 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
     L.append("")
     L.append(f"후보 사건 {len(candidates)}건:")
     for c in candidates:
-        L.append(f"  [{c['event_type_code']}] {c.get('label', '')} "
+        pred = f" predicate_code={c['predicate_code']}" if c.get("predicate_code") else ""
+        L.append(f"  [{c['event_type_code']}{pred}] {c.get('label', '')} "
                  f"{c.get('event_date', '')} 대상 {c.get('ticker', '?')}")
         if c.get("event_id"):
             L.append(f"     event_id={c['event_id']}  available_at={c.get('available_at', '')}")

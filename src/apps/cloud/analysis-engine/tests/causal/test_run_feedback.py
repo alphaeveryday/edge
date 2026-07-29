@@ -52,3 +52,28 @@ def test_brief_without_the_map_omits_the_section():
                  route_code="COMMON_FACTOR", contributors=[], candidates=[])
 
     assert "industry_name 값" not in text
+
+
+def test_brief_shows_the_predicate_code_when_present():
+    """술어에 쓸 수 있는 값을 안 보여주면 모델이 발명한다.
+
+    실제로 `predicate_code = 'EARNINGS_MISS'` 를 냈고 원장에 없는 값이라 0건이 됐다.
+    """
+    from edge_analysis.causal.agents import brief
+
+    text = brief(etf_name="X", trade_date="2026-07-29", observed=-0.08, residual=-0.03,
+                 route_code="COMMON_FACTOR", contributors=[],
+                 candidates=[{"event_type_code": "T", "predicate_code": "RESULT_BEAT"}])
+
+    assert "predicate_code=RESULT_BEAT" in text
+
+
+def test_brief_omits_the_predicate_code_when_absent():
+    """없는 값을 빈 문자열로 보여주면 그것이 유효한 값처럼 읽힌다."""
+    from edge_analysis.causal.agents import brief
+
+    text = brief(etf_name="X", trade_date="2026-07-29", observed=-0.08, residual=-0.03,
+                 route_code="COMMON_FACTOR", contributors=[],
+                 candidates=[{"event_type_code": "T", "predicate_code": None}])
+
+    assert "predicate_code" not in text
