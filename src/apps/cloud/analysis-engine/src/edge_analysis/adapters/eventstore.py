@@ -136,16 +136,23 @@ class EventStore:
         남는다(v4 온톨로지 이전의 손실). DISTINCT ON 은 이제 evidence fanout 방어만 한다
         (TITLE evidence 는 assertion 별로 여럿일 수 있다). 신규 온톨로지 컬럼
         (predicate_code·slot 등)은 백필 전 NULL 이어도 동작한다.
+
+        **스니펫(lead_text)** 은 evidence→assertion→document→news_document 로 잇는다.
+        제목만으로는 사건의 내용(금액·상대·조건)이 프롬프트에 닿지 않는다 — 측정값이
+        붙어도 서술 맥락이 없으면 LLM 이 제목을 재진술하는 데 그친다. 조인은 전부 PK
+        1:1 이라 DISTINCT ON 이 방어하는 fanout 을 늘리지 않는다. 백필 전에는 NULL 이다.
         """
         head_sql = (
             "SELECT DISTINCT ON (se.source_event_id)"
             " se.source_event_id, se.event_type_code, se.available_at,"
             " se.predicate_code, se.lifecycle_stage,"
-            " etl.thread_id, etl.novelty_status, ev.evidence_text, ev.evidence_id"
+            " etl.thread_id, etl.novelty_status, ev.evidence_text, ev.evidence_id, nd.lead_text"
             " FROM source_event se"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
             " LEFT JOIN event_evidence ev ON ev.source_event_id = se.source_event_id"
             " AND ev.evidence_type = %s"
+            " LEFT JOIN document_assertion da ON da.assertion_id = ev.assertion_id"
+            " LEFT JOIN news_document nd ON nd.document_id = da.document_id"
             " WHERE se.event_date = %s AND se.source_class = 'NEWS' AND se.event_status = 'ACTIVE'"
             " AND EXISTS (SELECT 1 FROM event_argument ea"
             " JOIN instrument i ON i.instrument_id = ea.entity_id"
@@ -224,6 +231,7 @@ class EventStore:
                 # LEFT JOIN 이라 TITLE evidence 가 없는 사건은 None 이다 — 그 사건은
                 # 설명에는 실리되 lineage 에는 남길 근거가 없다(persist 가 세어 로그로 낸다).
                 evidence_id=str(h[8]) if h[8] is not None else None,
+                lead_text=h[9],
             ))
         return contexts
 

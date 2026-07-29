@@ -10,8 +10,12 @@ from datetime import date
 
 from .models import Decomposition, EventContext, Measure, PriceTrigger
 
+# 근거 목록은 packet 이 실제로 싣는 것과 일치해야 한다 — "제목만"으로 적어두면 measures·
+# 참여자·스니펫을 붙여놓고 쓰지 말라고 지시하는 자기모순이 된다(ALPHA-544 이후 발생).
 _SYSTEM_RULES = (
-    "[가격 분해]의 수치와 [뉴스 이벤트]의 제목만 근거로 판단하며, 없는 사실을 만들지 마라. "
+    "[가격 분해]의 수치와 [뉴스 이벤트]에 제시된 항목(제목·스니펫·참여자·측정값)만 근거로 "
+    "판단하며, 없는 사실을 만들지 마라. 측정값은 원문에서 파싱된 값이라 그대로 인용할 수 "
+    "있고, 스니펫에 없는 수치를 지어내면 안 된다. "
     "가격 커버리지가 부분이면 그 한계를 반영하고 단정하지 마라. 숫자는 제공된 값만 인용한다. "
     "반드시 아래 JSON만 출력한다.\n"
     '{"verdict": <"공식 이벤트 선행"|"시장·섹터 주도"|"가격 선행·설명 후행"|"수급·흐름 추정"|"원인 미확인">, '
@@ -19,6 +23,10 @@ _SYSTEM_RULES = (
     '"confidence": <"높음"|"중간"|"보류">, '
     '"key_evidence": [{"signal": str, "why": str}], "unexplained": str}'
 )
+
+# 스니펫 절단 길이. 사건이 수십 건이면 프롬프트가 폭발하고, 리드문은 앞부분에 핵심이
+# 온다 — 자르는 사실은 프롬프트에 드러나지 않으므로 길이를 여기 한 곳에 둔다.
+_SNIPPET_CHARS = 180
 
 
 def _format_value(value) -> str:
@@ -36,7 +44,7 @@ def _measure_text(measure: Measure) -> str:
 
 
 def _event_line(event: EventContext, name_by_ticker: dict[str, str]) -> str:
-    """이벤트 1건의 프롬프트 줄 — 참여자·측정값은 있을 때만 덧붙인다(구데이터 무변화)."""
+    """이벤트 1건의 프롬프트 줄 — 참여자·측정값·스니펫은 있을 때만 덧붙인다(구데이터 무변화)."""
     # 종목명은 이 ETF 의 canonical holdings 에서 온다 — 구 KODEX_CONSTITUENTS
     # 하드코딩 dict 은 다른 ETF 로 돌리면 무관한 이름을 붙였다(ALPHA-467).
     name = name_by_ticker.get(event.ticker, event.ticker)
@@ -56,6 +64,11 @@ def _event_line(event: EventContext, name_by_ticker: dict[str, str]) -> str:
         )
     if event.measures:
         line += " | 측정: " + ", ".join(_measure_text(m) for m in event.measures)
+    if event.lead_text:
+        # 스니펫은 제목이 못 담는 내용(금액·상대·조건)의 서술 맥락이다. 길면 자른다 —
+        # 사건 수십 건이면 프롬프트가 폭발하고, 리드문은 앞부분에 핵심이 온다.
+        snippet = " ".join(event.lead_text.split())[:_SNIPPET_CHARS]
+        line += f" | 스니펫: {snippet}"
     return line
 
 
@@ -104,7 +117,7 @@ def build_packet(
     packet = (
         f"[데이터] {etf_name} ({etf_ticker}) {trade_date.isoformat()}\n\n"
         "[가격 분해]\n" + "\n".join(price_lines) + "\n\n"
-        f"[구성종목 뉴스 이벤트 {len(events)}건 (제목 기반)]\n" + events_block
+        f"[구성종목 뉴스 이벤트 {len(events)}건 (제목·스니펫·참여자·측정값)]\n" + events_block
     )
     system = f"너는 {etf_name} ETF의 당일 움직임을 설명하는 분석 에이전트다. " + _SYSTEM_RULES
     return system, packet

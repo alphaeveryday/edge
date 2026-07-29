@@ -152,7 +152,8 @@ def test_fetch_aggregates_all_arguments_into_one_event_context():
     사건당 참여자 1명만 남겨 나머지 역할을 소실했다. 대표 ticker 는 정렬상 첫 행이 아니라
     holdings 접지 참여자다."""
     heads = [("evt_1", "COMPANY.CAPITAL.DIVIDEND_DECISION", "2026-07-16T09:00:00+09:00",
-              "DECLARE", "DECIDED", "thr_1", "FIRST_IN_THREAD", "삼성전자 배당 결정", "evd_1")]
+              "DECLARE", "DECIDED", "thr_1", "FIRST_IN_THREAD", "삼성전자 배당 결정", "evd_1",
+              "삼성전자가 주당 361원 배당을 결정했다고 16일 공시했다.")]
     args = [
         ("evt_1", "ACQUIRER", "object", "ent_priv", None, None),  # 비종목 참여자가 먼저 정렬된다
         ("evt_1", "ISSUER", "subject", "ent_samsung", "005930", 0.9),
@@ -168,13 +169,14 @@ def test_fetch_aggregates_all_arguments_into_one_event_context():
     assert (ctx.predicate_code, ctx.lifecycle_stage) == ("DECLARE", "DECIDED")
     assert (ctx.thread_id, ctx.novelty_status) == ("thr_1", "FIRST_IN_THREAD")
     assert ctx.evidence_id == "evd_1"  # 근거 lineage 키(ALPHA-603)
+    assert ctx.lead_text.startswith("삼성전자가 주당 361원")  # 스니펫이 문맥으로 함께 온다
 
 
 def test_fetch_maps_measures_with_values_and_surface_fallback():
     """event_measure 행이 measure_ord 순으로 Measure 에 대응돼야 한다 — 값 미해석
     (UNRESOLVED)이면 value 없이 surface 만 남는다."""
     heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, "제목",
-              "evd_1")]
+              "evd_1", None)]
     args = [("evt_1", "ISSUER", "subject", "ent_s", "005930", None)]
     measures = [
         ("evt_1", "DIVIDEND_PER_SHARE", Decimal("361.00000000"), "KRW", "TOTAL", "PARSED",
@@ -195,7 +197,8 @@ def test_fetch_maps_measures_with_values_and_surface_fallback():
 def test_fetch_tolerates_null_ontology_columns_from_prebackfill_rows():
     """백필 전 구데이터(predicate/lifecycle/slot NULL·측정 0건)에서도 종전 필드가 그대로
     나와야 한다 — 신규 컬럼은 덧붙는 문맥이지 전제가 아니다."""
-    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, None, None)]
+    heads = [("evt_1", "NEWS", "2026-07-16T09:00:00+09:00", None, None, None, None, None,
+              None, None)]
     args = [("evt_1", "ISSUER", None, "ent_s", "005930", None)]
     conn = _EventFetchConn(heads, args)
 
@@ -205,6 +208,7 @@ def test_fetch_tolerates_null_ontology_columns_from_prebackfill_rows():
     assert (ctx.novelty_status, ctx.title) == ("UNKNOWN", "")  # 종전 폴백 유지
     assert ctx.predicate_code is None and ctx.lifecycle_stage is None
     assert ctx.evidence_id is None  # TITLE evidence 없는 사건(LEFT JOIN)
+    assert ctx.lead_text is None  # 스니펫 백필 전에도 동작한다
     assert ctx.arguments[0].slot is None
     assert ctx.measures == ()
 

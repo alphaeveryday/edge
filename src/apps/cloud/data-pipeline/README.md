@@ -77,6 +77,19 @@ DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__AP
 # 백필 예: 2026-06 한 달
 #   ... run ingest-price-raw --source kis --from 2026-06-01 --to 2026-06-30
 
+# 벤치마크 지수(^KS11·^KQ11) 원본저장(Step1) — Yahoo(yfinance). **로컬 전용 실험 소스**:
+# yfinance 는 local 의존그룹이라 클라우드 이미지에 없고 SFN 수집 잡에도 안 든다. 인증 없음.
+# 지수는 targets/holdings 와 무관하게 항상 계획에 들고(대조축이라 symbols 로 들어올 길이
+# 없다), KR 6자리 코드를 함께 넘기면 .KS 접미사로 받는다(KOSDAQ 은 symbol_map 으로 명시).
+uv sync --package data-pipeline --group local   # 로컬에만 설치. 미설치로 부르면 fail-loud
+uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source yahoo \
+  --from 2026-06-01 --to 2026-06-30
+# 클라우드(분석엔진)는 **s3 canonical 에서만 소비한다** — yfinance 를 클라우드에서 부르지
+# 않는다. 로컬 수집분을 태우려면 수집·정제 두 런을 s3 레이크(분석엔진이 읽는 버킷:
+# ALPHAMALE_LAKE_BUCKET, dev=edge-dev-pipeline-lake)로 돌린다:
+#   DATA_PIPELINE_STORAGE__BACKEND=s3 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
+#     ... run ingest-price-raw --source yahoo --from … --to …   # 그리고 같은 env 로 normalize-price
+
 # 재무제표(손익·재무상태·현금흐름) 원본저장(Step1) — FMP 재무 API. 날짜창 없음(매 실행이
 # 최근 N기를 재요청하는 point-in-time 폴링). 가격과 동형으로 받은 행을 ingest_date/run_id 에
 # 전부 append(중복 판정 안 함 — dedup·정정·point-in-time 은 후속 canonical). 심볼맵은 재무

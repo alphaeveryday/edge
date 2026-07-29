@@ -37,8 +37,8 @@ from .ontology import (
     allowed_roles,
     default_predicate,
     event_type_codes,
-    load_profiles,
     ontology_version,
+    process_types,
     prompt_catalog,
     required_roles,
 )
@@ -111,7 +111,7 @@ def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
         return None, ["event_not_object"]
 
     code = raw.get("event_type_code")
-    if code not in load_profiles():
+    if code not in process_types():
         # 온톨로지 밖 타입 = 모델이 라벨을 발명한 것. 사건 자체를 버린다(타입이 없으면
         # 역할 검증의 기준도 없다).
         return None, ["unknown_event_type"]

@@ -37,6 +37,7 @@ from .models import (
     PriceConfig,
     PriceTriggersConfig,
     StorageConfig,
+    YahooPriceConfig,
 )
 
 # 기본 설정은 패키지 안에 두고 모듈과 함께 배포한다(loader.py 옆). 이렇게 해야
@@ -81,6 +82,9 @@ class Settings(BaseSettings):
     # KIS(국내 가격) 도 독립 벤더라 섹션 생략 가능 — 미설정이면 ingest-price-raw --source kis
     # 진입점이 fail-loud 한다(FMP 만 돌리는 환경은 이 섹션이 없어도 된다).
     kis_price: KisPriceConfig | None = None
+    # Yahoo(yfinance) 가격 — **지수 시계열 전용** 보강 소스. 인증이 없어 크리덴셜 주입이
+    # 필요 없고, 섹션이 없으면 `ingest-price-raw --source yahoo` 가 fail-loud 한다.
+    yahoo_price: YahooPriceConfig | None = None
     # KIS ETF NAV(ALPHA-380) 도 독립 잡이라 섹션 생략 가능 — 미설정이면 ingest-raw-nav
     # 진입점이 fail-loud 한다. 수집 유니버스는 krx_etf.source.etf_map 을 공유한다.
     kis_nav: KisNavConfig | None = None

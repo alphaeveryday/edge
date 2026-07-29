@@ -88,6 +88,10 @@ def _inserts(conn) -> list:
     return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO DOCUMENT ")]
 
 
+def _news_doc_inserts(conn) -> list:
+    return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO NEWS_DOCUMENT ")]
+
+
 def test_new_article_becomes_a_news_document_row(tmp_path, monkeypatch):
     """document 는 assertion FK 의 뿌리다 — 자연키(source_code, source_document_id)와
     시간 축(published_at·available_at)이 canonical 그대로 실려야 다운스트림이 문서를 찾는다.
@@ -276,3 +280,54 @@ def test_document_id_is_derived_from_the_natural_key(tmp_path, monkeypatch):
     assert doc_id == stable_domain_id("doc", "bigkinds", "a1")
     # assemble-events 도 같은 재료로 같은 값을 낸다 — 공유가 끊기면 여기서 깨진다
     assert doc_id == assemble_events._stable_id("doc", "bigkinds", "a1")
+
+
+def test_lead_text_is_loaded_into_news_document(tmp_path, monkeypatch):
+    """BigKinds 스니펫이 news_document.lead_text 로 실려야 한다.
+
+    WHY: canonical 은 이미 `CONTENT`→`lead_text` 를 갖고 있는데 여기서 안 실으면
+    분석엔진 프롬프트가 **제목만** 보게 된다 — 사건의 내용(금액·상대·조건)이 설명에
+    도달하지 못한다. 적재 여부가 곧 그 축의 활용 가능성이라 계약으로 고정한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="삼성전자가 2734억원 규모 수주를 공시했다.")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    [(document_id, lead_text)] = _news_doc_inserts(conn)
+    assert lead_text == "삼성전자가 2734억원 규모 수주를 공시했다."
+    assert document_id == _inserts(conn)[0][0]  # document 와 같은 결정적 id 로 붙는다
+
+
+def test_lead_text_is_filled_even_when_document_already_exists(tmp_path, monkeypatch):
+    """document 가 이미 있어도(rowcount 0) 스니펫은 채운다.
+
+    WHY: `assemble_events` 가 `news_document(document_id)` 만 먼저 넣어두는 경로가 있어,
+    document 존재를 이유로 건너뛰면 이미 조립된 사건은 **영원히** 스니펫을 못 받는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [_article("a1", lead_text="리드문")])
+    conn = _FakeConn(existing=[("bigkinds", "a1")])
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert [p[1] for p in _news_doc_inserts(conn)] == ["리드문"]
+
+
+def test_missing_lead_text_writes_no_news_document_row(tmp_path, monkeypatch):
+    """스니펫이 없으면 행을 만들지 않는다 — 빈 lead_text 로 덮어 기존 값을 지우지 않도록."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [_article("a1", lead_text=None)])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert _news_doc_inserts(conn) == []

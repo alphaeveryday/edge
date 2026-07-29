@@ -27,6 +27,8 @@ from .models import (
     PriceSource,
     PriceTriggersConfig,
     StorageConfig,
+    YahooPriceConfig,
+    YahooPriceSourceConfig,
 )
 
 __all__ = [
@@ -52,6 +54,8 @@ __all__ = [
     "KisNavConfig",
     "KisPriceSource",
     "KisPriceConfig",
+    "YahooPriceSourceConfig",
+    "YahooPriceConfig",
     "KrxEtfSource",
     "KrxEtfConfig",
     "FinancialSource",

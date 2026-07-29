@@ -1,0 +1,89 @@
+# 1. 실체(Entity) — 독립적으로 존재하는 것의 분류.
+#
+# 각 종별은 persistence_key 로 정체성을 갖는다 — 그 키가 이 실체를 무엇으로 적재할지 정한다.
+# 역할(관계)이 어느 종별을 가리키는지는 이 층이 아니라 3. 관계층의
+# ../relation/role_bindings_v0_1.yaml 소관이다(그 파일은 edge 로컬 증보).
+#
+# 갱신 규약: 실험실(event-ontology repo) 확정본을 통째 교체한다.
+meta:
+  version: 0.1.0
+  date: '2026-07-08'
+  purpose: deterministic entity taxonomy used by ontology feature extraction and event projection
+  local_amendment:
+    # entity_kinds.PERSON 은 edge 에서 먼저 추가했다 — 상류 백포트가 필요하다.
+    # ONTOLOGY_VERSION 은 올리지 않는다: 타입·술어·역할 **어휘**는 그대로이고
+    # (constants.py 의 판번 기준), 기존 역할 위에 종별 투영을 얹었을 뿐이라
+    # 전 코퍼스 재태깅이 필요 없다.
+    also: entity_kinds.PERSON
+source_assets:
+  company_universe:
+    source: src/alphamale/news/universe/kr.py
+    artifact: data/processed/news/kr_universe_enriched.parquet
+    contract: every KRX-listed issuer has a full normalized-name alias; curated abbreviations add recall; ambiguous bare group tokens are dropped
+  news_ticker_mentions:
+    source: src/alphamale/news/linking/bigkinds.py + src/alphamale/news/linking/matching.py
+    tables:
+      - etf.news_article_mentions
+      - etf.news_articles.ticker
+      - etf.news_ner_done
+    contract: long aliases link directly; short aliases require NER ORG corroboration; primary mention is earliest match in title
+  sector_theme_groups:
+    source: src/alphamale/news/classification/sector_map.py
+    contract: deterministic title+lead keyword scan maps no-ticker articles to industry/theme/macro cohorts; multi-label with longest term per group
+  concept_normalizer:
+    source: src/alphamale/graph/normalize.py
+    contract: exact normalized product/company hits win; contains matching returns a concept only when the best-length candidate is unambiguous
+entity_kinds:
+  ISSUER:
+    current_mapping: KRX ticker via alias_map/news_article_mentions
+    persistence_key: ticker
+    confidence_rule: deterministic full/curated alias or short alias confirmed by NER ORG
+    used_for: company event primary roles, market cap/liquidity joins, sector spillover
+  COMPANY_ENTITY:
+    current_mapping: ticker when listed; otherwise normalized organization string retained as unresolved counterparty
+    persistence_key: ticker_or_normalized_name
+    confidence_rule: listed companies resolve deterministically; unlisted counterparties need future organization master
+    used_for: acquirer/target/customer/supplier/partner roles
+  PERSON:
+    current_mapping: normalized person name; actor_type=PERSON in the entity master
+    persistence_key: normalized_person_name
+    confidence_rule: source-backed mention plus issuer context; homonyms stay unresolved
+    used_for: insider transactions, executive changes, litigation parties
+  PRODUCT_OR_CONCEPT:
+    current_mapping: concept_id from product_to_concept exact/contains rules
+    persistence_key: concept_id
+    confidence_rule: exact or unique best-length contains; ambiguous contains returns miss
+    used_for: product launches, demand/supply/technology standards, commodity/product spillover
+  COHORT:
+    current_mapping: sector_map group_key
+    persistence_key: group_key
+    confidence_rule: longest keyword hit in title plus lead; industry groups have baskets, macro groups have no basket
+    used_for: no-single-issuer articles, peer sector direction keys, thematic/macro propagation
+  AUTHORITY_OR_RULE:
+    current_mapping: normalized name/string extracted from source document
+    persistence_key: normalized_authority_or_rule
+    confidence_rule: source-backed mention; no canonical regulator/rule master yet
+    used_for: policy, court, regulation, macro authority roles
+  LOCATION_OR_HAZARD:
+    current_mapping: normalized geography/hazard string from source text
+    persistence_key: normalized_location_or_hazard
+    confidence_rule: source-backed mention only; no geospatial asset exposure join yet
+    used_for: disaster, conflict, health, weather, exogenous event roles
+  INDEX_OR_EXCHANGE:
+    current_mapping: normalized index/exchange name from source text
+    persistence_key: normalized_index_or_exchange
+    confidence_rule: source-backed mention; future provider feeds needed for constituent/flow truth
+    used_for: index inclusion/exclusion, trading halt, exchange outage
+future_entity_backlog:
+  - id: unlisted_organization_master
+    why: counterparties/customers/suppliers outside KRX currently remain strings, so repeated entities are hard to deduplicate
+  - id: product_revenue_concept_graph
+    why: product concepts need issuer-specific revenue exposure to weight event impact
+  - id: supplier_customer_network
+    why: sector/theme spillover is coarse; direct upstream/downstream links require a licensed relationship graph
+  - id: official_policy_rule_master
+    why: policy/rule identifiers and lifecycle stages need a canonical authority calendar rather than news-only strings
+  - id: geospatial_asset_registry
+    why: disaster/conflict/health events need asset-location exposure, not only text geography hits
+  - id: index_constituent_flow_model
+    why: index/exchange events need official constituent files, passive AUM, and intraday flow timing
