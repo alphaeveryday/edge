@@ -19,6 +19,10 @@ _SETTINGS = SimpleNamespace(
     lake_bucket="test-lake",
     result_s3_prefix="s3://test-lake/operations_archive/etf_explanations/",
     release_bundle_version="b1",
+    # 이 파일의 두 테스트는 **이전 단일 프롬프트 경로**를 고정한다 - 인과 경로는
+    # 산업분류 원장을 요구하고 스텁 store 에 그게 없다. 인과 경로 스모크는
+    # tests/e2e/test_causal_pipeline.py 가 별도로 검증한다.
+    causal_enabled=False,
 )
 
 

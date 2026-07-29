@@ -95,10 +95,14 @@ def run(
             settings.trade_date, [h.ticker for h in holdings])
         log("events.ready", events=len(events))
 
+    # 인과 설계 하네스로 설명을 만든다. `analyze` 시그니처는 고정이고 의존성만 주입한다 —
+    # 클라우드 진입점(CLI·run)은 그대로다. store 커넥션을 공유하므로 PIT 기준이 갈리지 않는다.
     explanation = analyze(
         client, etf_ticker=settings.etf_ticker, etf_name=etf_name,
         name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
         decomp=decomp, gate=gate, route_code=route_code, events=events,
+        causal=store.causal_data() if settings.causal_enabled else None,
+        etf_instrument_id=etf_instrument_id,
     )
     outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, events)
     write_run_archive(s3, settings, {
