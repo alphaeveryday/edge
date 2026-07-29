@@ -17,9 +17,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 쓰기 원장 전이 통합 테스트(ALPHA-602) — 실 explanation_* + admin_activity_log 스키마
- * (Testcontainers + Flyway migrations-cloud)를 대상으로 정정(explanation_result 갱신 + 전후 감사)·
- * 제외/복원(감사 append)·없는 대상(404 신호)·오버레이 왕복(쓰기→읽기 반영)을 검증한다. 손 페이크
- * 만으로는 감사 JSONB·projection SQL 을 한 줄도 실행하지 않는다(Rule 9, 선례 JdbcAnalysisRepositoryIT).
+ * (Testcontainers + Flyway migrations-cloud)를 대상으로 정정(원본 explanation_result 불변 + 전후
+ * 감사)·제외/복원(감사 append)·없는 대상(404 신호)·오버레이 왕복(쓰기→읽기 반영)을 검증한다. 손
+ * 페이크만으로는 감사 JSONB·projection SQL 을 한 줄도 실행하지 않는다(Rule 9, 선례 JdbcAnalysisRepositoryIT).
  *
  * <p>@Transactional REPEATABLE_READ 스냅샷 격리는 여기서 검증하지 않는다(테스트 트랜잭션에
  * 참여하므로 안쪽 격리수준 미적용, 선례와 같은 한계).

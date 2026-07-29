@@ -30,7 +30,7 @@ public class AnalysisService {
 		return analyses.list().stream().map(AnalysisResponse::from).toList();
 	}
 
-	/** 분석 결과 정정 — 새 결과·사유 필수. explanation_result 갱신 + 감사(변경 전후) append. */
+	/** 분석 결과 정정 — 새 결과·사유 필수. 원본은 불변, 정정 문구·전후를 감사에 append(읽기가 오버레이). */
 	public void correct(String id, String result, String reason, SessionOperator actor) {
 		if (isBlank(result) || isBlank(reason)) {
 			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);

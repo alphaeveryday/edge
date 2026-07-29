@@ -50,6 +50,11 @@ public class JdbcAnalysisWriteRepository implements AnalysisWriteRepository {
 	@Override
 	@Transactional
 	public boolean correct(String runId, String result, String reason, SessionOperator actor) {
+		// 같은 런의 동시 정정을 직렬화한다 — before(현재 노출 본문) 조회와 append 사이에 다른
+		// 정정이 끼면 감사 체인(원본→A→B)이 실제 전이 순서를 잃는다. xact 스코프 advisory lock 이라
+		// 커밋 시 자동 해제되고, 소유하지 않은 도메인 테이블을 잠그지 않는다.
+		jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", rs -> { },
+				"analysis-correct:" + runId);
 		// 결과 행이 있어야 정정 대상이다 — 없으면(미완·미존재 런) false(404). before 는 현재
 		// 노출 본문(최신 정정본 우선)이라 연속 정정의 감사 체인이 실제 전이를 재현한다.
 		List<String> before = jdbc.queryForList(EFFECTIVE_SUMMARY_SQL, String.class, runId);

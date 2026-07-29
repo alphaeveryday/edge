@@ -6,18 +6,20 @@ import com.edge.superadmin.auth.SessionOperator;
  * analyses 화면의 쓰기(정정·제외·복원) 원장 전이(ALPHA-602). 읽기({@link AnalysisRepository})와
  * 분리한다 — 읽기는 조회 조립, 쓰기는 도메인 전이 + 감사 append 로 관심사가 다르다.
  *
- * <p>모든 전이는 <b>운영자 작업 원장(admin_activity_log)</b>에 사유·작업자와 함께 append 되고
- * (콘솔 첫 쓰기 표면의 감사 레코드, super-admin-console.md), 제외/정정 <b>현재상태</b>는 그 원장
- * 에서 유도한다({@link AnalysisRepository} 오버레이). 제외는 run_status 를 덮지 않아 복원이
- * 원상태를 그대로 되살린다. 도메인 전이와 감사 append 는 한 트랜잭션 안에서 원자적이다.
+ * <p>모든 전이는 <b>운영자 작업 원장(admin_activity_log, super-admin-api 소유)</b>에만 사유·작업자와
+ * 함께 append 된다(콘솔 첫 쓰기 표면의 감사 레코드, super-admin-console.md). 원본 결과 원장
+ * (explanation_result)은 analysis-engine 소유라 <b>덮지 않는다</b>(ADR-0005 단일 writer). 정정 본문·
+ * 제외 <b>현재상태</b>는 읽기가 이 원장에서 오버레이한다({@link AnalysisRepository}) — 제외는
+ * run_status 를, 정정은 원본 본문을 덮지 않아 복원·재현이 자명하다.
  *
  * <p>없는 대상은 {@code false} — 서비스가 404 로 옮긴다(조용한 성공 둔갑 방지, mock 때와 같은 의미).
  */
 public interface AnalysisWriteRepository {
 
 	/**
-	 * 결과 정정 — {@code explanation_result.summary} 를 새 문구로 갱신하고, 변경 전후를 감사에
-	 * 남긴다. 결과 행이 없는 런(미완·미존재)이면 정정 대상이 없어 {@code false}.
+	 * 결과 정정 — 원본 결과(explanation_result)는 덮지 않고, 정정 문구·사유·변경 전후를 감사에
+	 * append 한다(정정 본문은 읽기가 오버레이). 결과 행이 없는 런(미완·미존재)이면 정정 대상이
+	 * 없어 {@code false}.
 	 */
 	boolean correct(String runId, String result, String reason, SessionOperator actor);
 
