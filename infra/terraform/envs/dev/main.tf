@@ -59,6 +59,14 @@ data "aws_secretsmanager_secret" "deepseek" {
   name = "${local.prefix}-data-pipeline/deepseek/api-key"
 }
 
+# super-admin 부트스트랩 운영자 비밀번호(ALPHA-618) — 그릇이 TF 밖 CLI 로 먼저 생겨 모듈
+# 소유가 아니다(data 조회, deepseek 키와 같은 규율 — 값 없는 시크릿을 task 가 참조하면 기동이
+# 실패하므로 그릇+값 선생성이 순서 강제 장치다). 값 교체는 TF 밖 수동:
+# aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"password":"..."}'.
+data "aws_secretsmanager_secret" "admin_bootstrap_operator" {
+  name = "${local.prefix}-super-admin-api/bootstrap-operator/password"
+}
+
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
   source             = "../../modules/network"
@@ -138,8 +146,15 @@ module "super_admin_api" {
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
+    # 부트스트랩 운영자 활성화(ALPHA-618) — 미주입 시 활성 계정 0(fail-closed 로그인 불가).
+    # apply 는 task-def 새 리비전(baseline)만 등록한다 — 실행 서비스 반영은 수동 update-service
+    # 1회 또는 다음 CD 롤아웃(CD 가 family 최신 리비전을 복제하므로 이후 자연 승계).
+    ADMIN_BOOTSTRAP_OPERATOR_PASSWORD = "${data.aws_secretsmanager_secret.admin_bootstrap_operator.arn}:password::"
   }
-  secret_arns = [module.rds.master_user_secret_arn]
+  secret_arns = [
+    module.rds.master_user_secret_arn,
+    data.aws_secretsmanager_secret.admin_bootstrap_operator.arn,
+  ]
 
   # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다(sync 와 동일한 fresh apply 경쟁).
   depends_on = [module.super_admin_alb]

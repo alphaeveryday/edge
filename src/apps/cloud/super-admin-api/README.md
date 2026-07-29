@@ -34,8 +34,8 @@ sources 는 운영 원장(`ops_*`)·analyses 읽기는 설명 원장(`explanatio
   내부망 전제의 tenant-console 과 달리 기본 비밀번호를 커밋하지 않는다.
   `ADMIN_BOOTSTRAP_OPERATOR_PASSWORD` 미주입이면 계정이 비활성으로 남아 로그인
   불가(fail-closed, 기동 시 warn). 로컬은 compose 가 `demo-operator-1` 을 주입한다.
-  dev 배포도 현재 시크릿을 배선하지 않아 로그인 불가로 닫혀 있다 — 배선은
-  ALPHA-474(인증 본격 도입)와 함께.
+  dev 배포는 Secrets Manager 시크릿(`edge-dev-super-admin-api/bootstrap-operator/password`,
+  값은 TF 밖 수동 주입)을 ECS task secrets 로 배선한다(ALPHA-618).
 - **세션 쿠키는 Secure 고정** — 공개 HTTPS 엣지 전제. 로컬(http)은 표준 Spring
   env 오버라이드 `SERVER_SERVLET_SESSION_COOKIE_SECURE=false` 로 끈다(compose 는
   설정돼 있음 — bootRun 직접 기동 시 수동 export, 안 끄면 브라우저가 쿠키를
