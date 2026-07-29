@@ -79,11 +79,11 @@ def test_catalog_and_asl_task_states_match_both_ways():
     assert len(registered) == 27
     assert len(catalog.entries("etf-daily")) == 21
     assert len(catalog.entries("news")) == 6
-    # 자기 기록이 불가능한데도 등록한 것 — 실패가 원장에 자리조차 없으면 안 된다(ALPHA-578).
-    # Reconciler 증거 backfill 이 기록한다. TAG_NEWS 는 게이트 멤버라 빼면 의존 판정이 거짓이
-    # 된다(뉴스 레인 복귀로 재등록 — ALPHA-591). KRX·DART 는 ALPHA-596 이 배선과 함께 승격해
-    # 이 목록에서 빠졌다 — deepseek 만 남았다.
-    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"TAG_NEWS"}
+    # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
+    # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
+    # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
+    # FMP 를 되살릴 때처럼 정당한 미계측이 다시 생기면 여기서 명시적으로 다시 연다.
+    assert {e.task_key for e in catalog.entries() if not e.instrumented} == set()
 
 
 # **배선이 플래그보다 한 배포 앞선** 작업(task_key). 비어 있는 것이 정상 상태다.
@@ -95,11 +95,12 @@ def test_catalog_and_asl_task_states_match_both_ways():
 # (reconciler.py — resolve 경로가 없어 영구 OPEN 이다). 그래서 ALPHA-596(#359→#362)처럼 배선을
 # 한 배포 앞세운다.
 #
-# 이 유예는 그 한 배포 동안만 유효하다 — 다음 PR 이 플래그를 올리며 여기서 지운다. 잊어도
-# 조용히 넘어가지 않게 **만료 단언**을 함께 둔다(아래 `stale`): 플래그가 올라가는 순간 이
-# 목록이 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는
-# 다른 작업까지 덩달아 면제되지 않게 하기 위해서다.
-_WIRING_AHEAD_OF_FLAG = {"TAG_NEWS"}  # ALPHA-610 PR2 에서 제거
+# 이 유예는 그 한 배포 동안만 유효하다 — 플래그를 올리는 PR 이 여기서 지운다. 잊어도 조용히
+# 넘어가지 않게 **만료 단언**을 함께 둔다(아래 `stale`): 플래그가 올라가는 순간 이 목록이
+# 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는 다른
+# 작업까지 덩달아 면제되지 않게 하기 위해서다.
+# ALPHA-610 이 #379(배선)→#(이 PR, 플래그)로 실제로 밟은 경로이고, 지금은 비어 있는 것이 맞다.
+_WIRING_AHEAD_OF_FLAG: set[str] = set()
 
 
 def _taskdefs_with_db_env() -> set[str]:
@@ -275,8 +276,8 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
     monkeypatch.delenv("OPS_SFN_STATE_NAME")
     assert ops_entry.task_key_for("ingest-price-raw", "kis") == "PRICE_COLLECTION_KIS"
-    # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 — 등록됐지만 자기 기록은 불가능
-    # (instrumented=False 라 attempt 결측이 정상, Reconciler backfill 이 기록).
+    # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 → ALPHA-610 이 직접 계측으로 승격.
+    # 이제 attempt 결측은 정상이 아니라 LEDGER_GAP 이다(Reconciler backfill 은 백스톱).
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
     # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"

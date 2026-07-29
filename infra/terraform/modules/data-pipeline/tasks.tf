@@ -137,7 +137,8 @@ locals {
     dart     = local.db_env
     # TAG_NEWS wrapper 기록용(ALPHA-610) — 위 krx·dart 와 같은 이유. 이 컨테이너는 기사별 LLM
     # 실패를 격리해 exit 0 으로 끝나므로, 원장이 봉투(failed_records)를 읽지 못하면 전건 실패도
-    # 초록으로 보인다. **배선만 하는 배포다** — 카탈로그 플래그 전환은 다음 PR 이다(아래 참조).
+    # 초록으로 보인다. 이 배선(#379)이 한 배포 앞서고 카탈로그 플래그 전환이 뒤따랐다 —
+    # 순서를 뒤집으면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다.
     deepseek = local.db_env
   }
 
