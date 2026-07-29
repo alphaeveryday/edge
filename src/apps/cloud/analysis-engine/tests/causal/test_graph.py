@@ -96,3 +96,43 @@ def test_timing_replaces_manipulability_gate(timing):
                {"from": "A@t-2", "to": "B@t0", "timing": timing}]}]}
 
     assert not any("timing" in v for v in G.validate(dag))
+
+
+def _price_pair(residualized=None, with_market=False):
+    """가격→가격 간선 하나. 교란 통제 규칙의 최소 재현."""
+    nodes = {"SK@t0": {"kind": "OBSERVABLE"}, "ETF@t0": {"kind": "TARGET"}}
+    if residualized is not None:
+        nodes["SK@t0"]["residualized"] = residualized
+    edges = [{"from": "SK@t0", "to": "ETF@t0"}]
+    if with_market:
+        nodes["MARKET@t0"] = {"kind": "OBSERVABLE"}
+        edges.append({"from": "MARKET@t0", "to": "SK@t0"})
+    return {"nodes": nodes, "structures": [{"id": "A", "edges": edges}]}
+
+
+def _violations(dag):
+    return [v for v in G.validate(dag, require_competing=False) if "가격 노드끼리" in v]
+
+
+def test_bare_price_to_price_edge_is_rejected():
+    """두 가격은 시장 요인에 함께 흔들려 그 간선이 인과가 아니다."""
+    assert _violations(_price_pair())
+
+
+def test_market_parent_satisfies_the_rule():
+    """시장을 명시적으로 모형에 넣으면 교란이 통제된다."""
+    assert not _violations(_price_pair(with_market=True))
+
+
+def test_residualized_true_satisfies_the_rule():
+    assert not _violations(_price_pair(residualized=True))
+
+
+def test_residualized_string_does_not_satisfy_the_rule():
+    """문자열 "false" 는 truthy 다 - 통제 규칙이 그걸로 우회되면 안 된다.
+
+    프롬프트가 불리언을 요구하지만 모델은 문자열을 낼 수 있다. 통제 규칙은 닫힌 쪽으로
+    실패해야 한다 - 우회를 허용하면 교란된 간선이 인과로 게시된다.
+    """
+    assert _violations(_price_pair(residualized="false"))
+    assert _violations(_price_pair(residualized="true"))

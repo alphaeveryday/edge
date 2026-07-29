@@ -201,3 +201,22 @@ def test_universe_casts_the_date_array():
 
     sql, _ = conn.executed[-1]
     assert "ANY(%s::date[])" in sql
+
+
+def test_control_predicate_rejects_treated_only_columns():
+    """대조 표면에 없는 컬럼은 읽히는 메시지로 되돌린다.
+
+    `columns` 를 에러 문구에만 쓰면 술어가 Postgres 로 가서 UndefinedColumn 으로 죽고, 그
+    문구는 무엇을 써야 하는지 말해주지 않는다. 모델이 대조 술어에 event_type_code 를 써서
+    실제로 그렇게 죽었고, 되먹임이 쓸모없어 2회차가 소진됐다.
+    """
+    with pytest.raises(PipelineError, match="쓸 수 없는 컬럼"):
+        CausalData(_FakeConn()).universe(
+            "ticker = '000660' AND event_type_code != 'X'", [date(2026, 7, 29)])
+
+
+def test_treated_predicate_still_accepts_event_columns():
+    """처치 표면에는 사건 컬럼이 정당하다 - 검사가 정상 술어를 막으면 안 된다."""
+    conn = _FakeConn()
+    CausalData(conn).cohort("event_type_code = 'X' AND industry_name = 'Y'", as_of=AS_OF)
+    assert conn.executed

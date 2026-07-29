@@ -49,9 +49,12 @@ SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸�
 처치는 사건 기반, 대조는 금융상품 기반이다. 순수 WHERE 조건만 쓴다
 (세미콜론·주석·available_at 금지 - 시점 절은 코드가 넣는다).
 
-처치 컬럼: instrument_id · trade_date · event_type_code · predicate_code · role_code
-          · lifecycle_stage · sector_name · industry_name · market_cap · listing_market · ticker
-대조 컬럼: instrument_id · sector_name · industry_name · market_cap · listing_market · ticker
+처치 컬럼: ticker · trade_date · event_type_code · predicate_code · role_code
+          · lifecycle_stage · sector_name · industry_name · market_cap · listing_market
+대조 컬럼: ticker · sector_name · industry_name · market_cap · listing_market
+
+**종목을 지목할 때는 `ticker` 를 쓴다.** `instrument_id` 도 쓸 수 있지만 그건 티커가 아니라
+불투명 식별자(`inst_01K...`)다 - 거기에 `'000660'` 같은 티커를 넣으면 0건이 나온다.
 
 **대조를 무엇 안에서 골랐으면 strata 도 그것이어야 한다.** 같은 날 같은 산업에서
 골랐으면 `date_industry`, 같은 날에서만 골랐으면 `date`.
@@ -64,10 +67,16 @@ SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸�
    price_responsive(**가격을 보고 쓰인 것** - 역인과라 통계 주장 불가) · n/a
 3. 브리프의 [산술] 줄에서 이미 죽은 후보는 제안하지 마라.
 4. 원인을 못 찾으면 빈 간선 목록을 내라. **억지 설계는 UNCERTAIN 보다 나쁘다.**
+5. **가격 계열끼리 잇지 마라.** 두 가격은 시장 요인에 함께 흔들려 그 간선이 인과가 아니다.
+   꼭 이어야 하면 둘 중 하나를 해라: 노드 id 가 정확히 `MARKET@t±N` 인 노드를 만들어
+   **출발 노드의 부모로** 넣거나(이름을 번역하지 마라 - `시장_지수` 는 인식되지 않는다),
+   출발 노드에 `"residualized": true` 를 선언해라(시장 성분을 이미 제거한 계열이라는 뜻).
+   둘 다 없으면 구조 게이트에서 기각된다.
 
 JSON 하나만:
 {"nodes": {"id": {"kind": "...", "unit": "stock", "measure": "무엇을 재는가",
                    "member_events": ["브리프의 event_id"], "tau": "available_at",
+                   "residualized": true,
                    "effect": "CDE (MECHANISM 일 때만)"}},
  "edges": [{"from": "...", "to": "...", "kind": "directed|bidirected",
             "cause_label": "고객이 읽을 원인 이름",

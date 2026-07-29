@@ -360,8 +360,10 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
             if (nodes.get(a, {}).get("kind") == "OBSERVABLE"
                     and nodes.get(b, {}).get("kind") in ("OBSERVABLE", "TARGET")
                     and parse(a)[0].upper() != "MARKET"):
+                # `is not True` 로 조인다. 모델이 문자열 "false" 를 내면 truthy 라서
+                # 교란 통제 규칙이 조용히 우회된다 - 통제 규칙은 닫힌 쪽으로 실패해야 한다.
                 if not any(m in parents(ed, a) for m in mkt) and \
-                        not nodes[a].get("residualized"):
+                        nodes[a].get("residualized") is not True:
                     bad.append(f"{s.get('id')}·{a}→{b}: 가격 노드끼리 이으려면 MARKET 을 "
                                "양쪽 부모로 넣거나 residualized=true 를 선언해라")
 
