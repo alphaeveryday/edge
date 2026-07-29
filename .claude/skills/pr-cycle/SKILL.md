@@ -101,7 +101,7 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
   git fetch origin dev --quiet
   git ls-tree -r --name-only origin/dev -- src/libs/schema/migrations-cloud/ | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1   # onprem 세트도 동일
   ```
-  역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신) 후 4단계 게이트부터 재진입한다.
+  역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신 + `src/libs/schema/rename-recovery.allowlist` 에 쌍 선언 — guard 는 선언된 리네임만 허용) 후 4단계 게이트부터 재진입한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - **worktree 사이클이면 `--delete-branch` 를 뺀다** — gh 가 로컬 브랜치를 지우려고 base(`dev`)로 전환을 시도하는데 `dev` 는 메인 체크아웃이 잡고 있어 실패한다. 머지 후 원격 브랜치는 `git push origin --delete <브랜치>` 로 지우고, 로컬 브랜치·폴더는 8단계에서 정리한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
