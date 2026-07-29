@@ -22,14 +22,13 @@ pnpm --filter super-admin-ui typecheck
 
 dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRun 직접
 기동이면 `VITE_API_PROXY_TARGET=http://localhost:8080`)로 프록시한다 — same-origin 이
-되어 세션 쿠키(SameSite=Strict)가 실린다. 로그인 화면이 아직 없어(시안 미수령) 앱
-진입 시 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
-(`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `operator@edge.local`)으로
-자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
-자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront,
-`admin-dev.edgesignal.dev`)은 CloudFront 가 `/api/*` 를 admin ALB 로 프록시해
-same-origin 으로 API 에 닿는다(ALPHA-615). 다만 로그인 화면이 아직 없어 배포본은
-전 화면이 401/빈 데이터 상태로 뜬다 — 로그인 화면(시안 수령 후, ALPHA-616)이 후속이다.
+되어 세션 쿠키(SameSite=Strict)가 실린다. 진입은 로그인 화면(`/login`, ALPHA-616)
+경유가 유일한 경로다 — 미인증·만료는 `RequireSession` 가드가 `/login` 으로 보내고,
+로그인 후 원래 경로로 복귀한다(구 devSession 자동 로그인은 제거됨). 로컬 계정은
+`operator@edge.local` / `demo-operator-1`(compose 가 주입 — docker-compose.yml).
+정적 배포본(S3/CloudFront, `admin-dev.edgesignal.dev`)은 CloudFront 가 `/api/*` 를
+admin ALB 로 프록시해 same-origin 으로 API 에 닿고(ALPHA-615), 배포 계정 비밀번호는
+Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실데이터가 뜬다.
 
 ## 라우트 / IA (디자인 v0.1)
 
@@ -37,6 +36,7 @@ same-origin 으로 API 에 닿는다(ALPHA-615). 다만 로그인 화면이 아�
 
 | 경로 | 화면 |
 |---|---|
+| `/login` | 운영자 로그인 (레이아웃 밖 공개 라우트 — 세션 만료·서버 오류·차단 배너 포함) |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
 | `/sources` | 데이터 소스 수집 상태 |
@@ -44,7 +44,8 @@ same-origin 으로 API 에 닿는다(ALPHA-615). 다만 로그인 화면이 아�
 | `/analyses` | 가격 변동 분석 목록 (검색·상태·시장 필터) |
 | `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 정정 · 제외/복원) |
 
-진입(`/`)·미매칭(`*`)은 `/tenants` 로 리다이렉트. 운영자 인증 화면은 시안 미수령으로 없다 (후속).
+진입(`/`)·미매칭(`*`)은 `/tenants` 로 리다이렉트(미인증이면 가드가 `/login` 으로).
+2단계 인증(OTP) 뷰는 시안에 있으나 서버 2FA 미지원이라 범위 밖(ALPHA-474 계열 후속).
 **신규 IA 금지 항목 준수**: API Key 관리 메뉴 없음 · 테넌트 사용 중지/재개 버튼 없음 (epic ALPHA-424).
 
 ## 데이터 레이어
