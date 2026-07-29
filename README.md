@@ -102,7 +102,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 ```
 
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
-- `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md)).
+- `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장하며, 게시(PUBLISHED)와 같은 트랜잭션으로 sync outbox(`tenant_delivery`)에 테넌트별 NEW 를 발번합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md), ALPHA-493).
 - **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](src/apps/cloud/data-pipeline/README.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](docs/context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정분도 동일 정책 평가를 거치며(ALPHA-430·ADR-0041), 점검 Audit 은 후속(ALPHA-431)입니다.

@@ -47,7 +47,7 @@
 - **멱등 키**: 전달 단위는 `(tenant_id, cursor)` PK. On-Prem 소비 멱등은 별도 축 — 번들 단위는 `received_bundle.cursor_from`, 항목 단위는 도메인 ID(`explanation_result_id`) upsert.
 - **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 그 변경 자체는 다음 cursor(CORRECTION·INVALIDATION)로 다시 전달되므로 수렴한다.
 - **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 재게시(기존 `WITHDRAWN` + 새 행 `PUBLISHED`) → 새 행을 `CORRECTION`(대상=구 게시분, 사유 필수)으로 발번 / 재게시 없는 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다.
-- **fan-out 발번기 구현은 후속** — 도입 전까지 로컬·데모는 시드로 전달 레코드를 만든다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
+- **fan-out 발번기**: `NEW` 발번은 analysis-engine 이 `explanation_result` 게시와 **같은 트랜잭션**에서 수행한다(write-time fan-out, ALPHA-493 — 커밋된 행만 cursor 에 노출). 발번 로직이 원자성 때문에 analysis-engine 커밋 경로에 상주할 뿐, 전달 레코드의 **소유는 ADR-0026 그대로 조영서**다 — fan-out 규칙·`tenant_delivery` 형상 변경은 이 계약 문서를 거친다. 같은 날 재게시분은 DRAFT 보존·발번 생략(그날 첫 게시만 NEW). `CORRECTION`·`INVALIDATION` 발번은 후속(운영자 정정 모델 접합) — 그 전까지 두 유형의 수신 경로는 로컬 시드로 시연한다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
 
 `tenant_sync_cursor.last_cursor`(BIGINT)는 cursor 소비 추적이다 — 타입 정정은 `V202607150002`(근거: ADR-0015).
 

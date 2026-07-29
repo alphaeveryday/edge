@@ -18,10 +18,12 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
   → observation/route 적재 (소비한 trigger_id 에서 파생)
   → DB 의 대상 ETF 구성종목 source_event/thread 조회 — 참여자(event_argument)·측정값
     (event_measure)을 사건 단위 EventContext 로 집계 (assemble-events 산출)
-  → 분석 에이전트(DeepSeek) → explanation_result (DRAFT)
+  → 분석 에이전트(DeepSeek) → explanation_result (PUBLISHED) + tenant_delivery NEW
+    fan-out (전 테넌트, 게시와 같은 트랜잭션 — ALPHA-493)
 ```
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
+- **그날 첫 결과만 게시·발번한다** — 같은 (ETF, trade_date) 재실행은 DRAFT 보존 + 발번 생략(`publish_skipped` 로그). 같은 초 재실행은 결정적 ID 가 같아 멱등 skip 이다(기존 행 보존, `duplicate_skipped` 로그). WITHDRAWN 후 재게시(CORRECTION 발번)는 후속 티켓 몫.
 - **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
 
 ## 구조
@@ -63,7 +65,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 ## 스키마 계약
 
-Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`·`explanation_run_event_evidence`(설명 실행이 사용한 근거 lineage — ALPHA-603). `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)과 `event_evidence` 는 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412). lineage 는 `event_evidence` 를 **참조만** 하고 그 행을 만들지 않는다.
+Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`·`explanation_run_event_evidence`(설명 실행이 사용한 근거 lineage — ALPHA-603)·`tenant_delivery`(NEW write-time fan-out — ALPHA-493). `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)과 `event_evidence`·`tenant`(fan-out 대상 목록, writer 는 super-admin-api) 는 **읽기만** 한다(트리거·이벤트 계열 writer 는 data-pipeline — ALPHA-411·412). lineage 는 `event_evidence` 를 **참조만** 하고 그 행을 만들지 않는다.
 
 ## 주석 컨벤션
 

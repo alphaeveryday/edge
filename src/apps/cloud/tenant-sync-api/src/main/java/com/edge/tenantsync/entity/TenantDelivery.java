@@ -10,7 +10,7 @@ import java.io.Serializable;
 
 /**
  * 테넌트별 전달 레코드(outbox) — 번들 조립 원장(event-bundle-schema.md). 이 모듈은
- * reader 다(writer 는 fan-out 발번기 — ALPHA-493). 조회 전용이라 @Immutable, 조회가
+ * reader 다(writer 는 analysis-engine write-time fan-out — ALPHA-493). 조회 전용이라 @Immutable, 조회가
  * 읽는 컬럼만 부분 매핑한다(ADR-0038 — validate 는 매핑된 컬럼만 검사).
  * PK (tenant_id, cursor) = 전달 멱등 키 — JPQL 경로를 평평하게 유지하려 @IdClass.
  */

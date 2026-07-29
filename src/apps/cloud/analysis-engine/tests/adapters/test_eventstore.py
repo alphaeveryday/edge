@@ -25,12 +25,17 @@ class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self._row = None
+        self.rowcount = -1
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self._conn.executed.append((flat, params))
         if flat.startswith("SELECT price_movement_trigger_id"):
             self._row = self._conn.trigger_row
+        elif flat.startswith("INSERT INTO explanation_result"):
+            self._row = self._conn.result_insert_row  # RETURNING publication_status
+        elif flat.startswith("INSERT INTO tenant_delivery"):
+            self.rowcount = self._conn.fanout_rowcount
 
     def fetchone(self):
         return self._row
@@ -43,10 +48,12 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, trigger_row=None):
+    def __init__(self, trigger_row=None, result_insert_row=("PUBLISHED",), fanout_rowcount=1):
         self.executed = []
         self.value_batches = []
         self.trigger_row = trigger_row
+        self.result_insert_row = result_insert_row
+        self.fanout_rowcount = fanout_rowcount
         self.committed = False
 
     def cursor(self):
@@ -54,6 +61,7 @@ class _FakeConn:
 
     def commit(self):
         self.committed = True
+        self.executed.append(("COMMIT", None))
 
 
 _DECOMP = Decomposition(
@@ -258,6 +266,78 @@ def test_persist_without_any_evidence_skips_the_lineage_insert(monkeypatch):
     )
 
     assert conn.value_batches == []
+
+
+def test_persist_publishes_first_result_and_fans_out_atomically():
+    """게시·발번은 한 트랜잭션이어야 한다(ALPHA-493) — 발번만 먼저 커밋되면 sync 소비자
+    (BundleEntryStore)가 본체 조인에 실패해 fail-loud 로 죽는다. 락은 게시 게이트 판정
+    앞에 있어야 동시 런의 같은 날 이중 게시를 막는다."""
+    conn = _FakeConn()
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)],
+    )
+
+    sqls = [s for s, _ in conn.executed]
+    lock_idx = next(i for i, s in enumerate(sqls) if "pg_advisory_xact_lock" in s)
+    result_idx = next(i for i, s in enumerate(sqls)
+                      if s.startswith("INSERT INTO explanation_result"))
+    fanout_idx = next(i for i, s in enumerate(sqls)
+                      if s.startswith("INSERT INTO tenant_delivery"))
+    assert lock_idx < result_idx < fanout_idx < sqls.index("COMMIT")
+    assert sqls.count("COMMIT") == 1  # 중간 커밋이 생기면 원자성이 깨진다
+    assert conn.executed[fanout_idx][1] == (ids["explanation_result_id"],)
+    assert "'NEW'" in sqls[fanout_idx]  # CORRECTION·INVALIDATION 발번은 후속 티켓
+    assert (ids["publication_status"], ids["fanout_tenants"]) == ("PUBLISHED", 1)
+
+
+def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
+    """같은 날 재실행은 DRAFT 보존 + 발번 없음 — as_of 가 런마다 새로워 grain 유니크만으로는
+    이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(WITHDRAWN 재게시
+    = CORRECTION 은 후속 티켓 몫)."""
+    conn = _FakeConn(result_insert_row=("DRAFT",))
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)],
+    )
+
+    result_sql = next(s for s, _ in conn.executed
+                      if s.startswith("INSERT INTO explanation_result"))
+    assert "CASE WHEN EXISTS" in result_sql
+    assert "publication_status = 'PUBLISHED'" in result_sql
+    assert not any(s.startswith("INSERT INTO tenant_delivery") for s, _ in conn.executed)
+    assert (ids["publication_status"], ids["fanout_tenants"]) == ("DRAFT", 0)
+    assert conn.committed  # DRAFT 도 남긴다 — 게시만 안 할 뿐 결과는 보존
+
+
+def test_duplicate_result_id_skips_fanout_lineage_and_logs_the_drop(capsys, monkeypatch):
+    """같은 result_id 재실행(ON CONFLICT 무삽입)이면 발번도 lineage 도 하지 않는다 —
+    tenant_delivery 에 explanation_result_id 유니크가 없어 발번 dedup 은 이 분기가
+    전담하고, 이번 런의 근거를 기존 run 에 섞으면 저장된 설명이 안 본 근거가 연결된다.
+    산출물은 버려지므로 조용히 지나가면 유실이 안 보인다(Rule 12) — 로그가 남아야 한다."""
+    import psycopg2.extras
+    monkeypatch.setattr(
+        psycopg2.extras, "execute_values",
+        lambda cur, sql, rows: cur._conn.value_batches.append((sql, list(rows))),
+    )
+    conn = _FakeConn(result_insert_row=None)
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", "evd_1")],
+    )
+
+    assert not any(s.startswith("INSERT INTO tenant_delivery") for s, _ in conn.executed)
+    assert conn.value_batches == []  # 기존 run 의 lineage 를 오염시키지 않는다
+    assert (ids["publication_status"], ids["fanout_tenants"]) == (None, 0)
+    out = capsys.readouterr().out
+    assert "explanation_result.duplicate_skipped" in out
+    assert "explanation_result.stored" not in out  # 무저장 런은 성공 건으로 집계 금지
 
 
 def test_fetch_without_matching_events_skips_detail_queries():
