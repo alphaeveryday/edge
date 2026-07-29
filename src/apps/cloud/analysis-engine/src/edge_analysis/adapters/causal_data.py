@@ -7,7 +7,7 @@
     storm v_event_entity -> event_argument
     storm v_daily        -> price_daily          (simple_return·volume)
     storm v_hold         -> etf_holding_snapshot
-    storm v_entity.industry -> instrument_classification  (V202607290001 신설)
+    storm v_entity.industry -> instrument_classification  (V202607291720 신설)
 
 ID 공간은 하나다. `event_argument.entity_id` 가 곧 `instrument.instrument_id` 이고
 `price_daily.instrument_id`·`etf_holding_snapshot.constituent_instrument_id` 와 같다
