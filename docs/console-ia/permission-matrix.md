@@ -80,6 +80,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/auth/login` | 인증(로그인) | **공개** — 유일한 비인증 표면 |
 | `POST /api/v1/auth/logout` | 인증(로그아웃) | 인증된 전 역할 |
 | `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
+| `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 조회·표시 이름 변경 (member 원장, ALPHA-500) | 인증된 전 역할 |
 | `GET /api/v1/dashboard/traffic` | Dashboard 트래픽 KPI (24시간 요청·에러) | TA·CR·OP·RO |
 | `GET /api/v1/explanations` · `GET /api/v1/explanations/feed-status` | Price Movement Explanations 목록·상세·반입 상태 조회 (실전환 ALPHA-607) | TA·CR·OP·RO |
 | `PATCH /api/v1/explanations/{id}/final` | 최종 문구 수정 | CR |
@@ -101,25 +102,18 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경(시장 토글, ALPHA-606) | TA |
 | `POST /api/v1/scope/stocks/{code}/toggle` | 이해상충 제외 변경(종목 토글, ALPHA-606) | CR |
 
-### 콘솔 mock 표면 (ALPHA-513 — 한시 예외)
+### 콘솔 mock 한시 예외 — 종결 (2026-07-29)
 
-아래 표면은 tenant-console-ui 화면 계약대로 만든 **mock 데이터 반환 표면**이다
-(응답 원천 = `mock` 패키지 in-memory 스토어, DB 미연동). UI 에 로그인·역할 화면이
-없는(ALPHA-486 범위 밖) mock 단계라 **인증만 강제하고 역할은 전 역할 허용**으로
-등록한다 — "데모에서도 동일 적용" 원칙의 **명시적 한시 예외**(2026-07-23 사용자
-결정)로, 도메인이 DB 로 전환될 때마다 그 도메인의 행을 위 매트릭스의 역할
-(검수·정책·문구·종목 제외=CR, 사용자·시장 커버리지=TA, 이관·중단=CR·OP)로
-좁힌다. 역할 세분화 전까지 이 표면들은 실데이터를 다루지 않는다.
+tenant-console-ui 화면 계약대로 mock 표면을 먼저 열고 **인증만 강제(전 역할 허용)**
+하던 한시 예외(ALPHA-513, 2026-07-23 사용자 결정)는 도메인별 DB 전환으로 **전부
+해제됐다** — 사용자·세션=ALPHA-500, 정책=ALPHA-438, 제공 범위=ALPHA-606,
+explanations=ALPHA-607. 모든 표면이 위 "API 매핑" 표의 실 역할을 강제하고 실
+원장을 읽는다.
 
-**explanations 는 해제됨(ALPHA-607)**: Price Movement Explanations 표면은 위 "API 매핑"
-표로 이관돼 실 역할(조회=전 역할, 최종 문구·검수 액션=CR, 이관·중단=CR·OP)을 강제한다.
-읽기(목록·상세·반입 상태)는 원장 실조회이고, 쓰기(최종 문구·이관·중단·승인·반려·임시
-저장)는 아직 mock 이라 실 설명 ID 에 404 인 seam 이나(쓰기 전환 후속 티켓, ALPHA-497
-materialization 후 시장·등락률 복원과 함께), 권한 경계는 매트릭스대로 이미 좁혔다.
-
-| 엔드포인트 | 매트릭스 행 (DB 전환 시 적용) | mock 단계 요구 역할 |
-|---|---|---|
-| `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 (전 역할) | 인증된 전 역할 |
+유일한 잔여 seam: explanations **쓰기**(최종 문구·이관·중단·승인·반려·임시저장)는
+아직 mock 스토어 경유라 실 설명 ID 에 404 다. 쓰기 전환은 ALPHA-613 소관이고
+(시장·등락률 컬럼 복원은 별건 — ALPHA-497 materialization 후), 권한 경계는
+매트릭스대로 이미 좁혀져 있다.
 
 인증 방식은 하이브리드(ADR-0025): 데모 = 자체 계정(부트스트랩 시드, BCrypt),
 운영 = SSO/AD(같은 세션 추상화로 수렴, 실계약 시점 구현). **의도적 생략(데모
