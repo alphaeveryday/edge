@@ -49,7 +49,11 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
 ## 콘솔 mock 표면 (ALPHA-513)
 
 tenant-console-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 중 mock 잔여
-2종 — explanations(가격 변동 설명·반입 상태) · scope(시장·종목 제공 범위).
+1종 — explanations(가격 변동 설명·반입 상태).
+scope(시장·종목 제공 범위)는 ALPHA-606 으로 serving_scope(옵트아웃 토글)·analysis_item
+(종목 유니버스) 실조회/전이로 전환됐다 — 행 부재 = 기본 제공, 시장 커버리지 토글은
+TA·종목 제외 토글은 CR 전용이다(serving_scope.scope_type 경계와 1:1). MVP 는 국내
+상장 ETF 한정(ADR-0024)이라 시장은 KRX 하나이고 serving_scope 엔 MIC(XKRX)로 저장된다.
 screening(금칙어·기준·면책 문구)은 ALPHA-438 로 policy_version·screening_rule 실
 writer 로 전환됐다 — 모든 변경이 불변 버전 발행(ADR-0018)이고 쓰기는 CR 전용,
 온보딩 기본은 자동 제공 ON 이다. members(사용자 관리)는 ALPHA-119 로 member 원장
@@ -84,7 +88,7 @@ ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테�
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| `mock` 패키지 `*MockStore` 3종 | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
+| `mock` 패키지 `*MockStore` (잔여 `ExplanationMockStore`) | 도메인별 DB 연동 | service 의존을 repository 로 교체 + 필터 역할 세분화 |
 | 데모 로그인 | 실증권사 계약 | SSO/AD(SAML/OIDC) 진입점 — 같은 세션 추상화로 수렴 |
 
 ## 실행·확인
@@ -99,16 +103,18 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 99건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단
+테스트 131건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단
 사유 필수, 편집 누락·오타 400 강등 차단, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
 parameter 우회 차단·매핑 부재 fail-closed·세션 주체=원장 정체성 SSOT, 부트스트랩
 멱등·해시 저장), 사용자 관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할
 변경의 자기변경 403·조건부 갱신 409·감사 기록), 세션 계약(주체 이름·설정 테넌트
-컨텍스트·프로필 원장 기록·길이 상한 400), 콘솔 mock 표면의 UI 계약(camelCase·
-`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
+컨텍스트·프로필 원장 기록·길이 상한 400), 제공 범위 계약(serving_scope 옵트아웃
+upsert·시장 MIC 저장·유니버스 조회·시장 토글=TA·종목 토글=CR), 콘솔 mock 표면의
+UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
 단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
 Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
 `contextLoads` 가 `ddl-auto=validate` 로 엔티티↔실스키마 정합을, `ReviewMemberRepositoryIT`
-가 decide 가드·publish ON CONFLICT·활성 조회·save 를 실 쿼리로 확인한다(Docker 없으면
+가 decide 가드·publish ON CONFLICT·활성 조회·save 를, `ScopeIT` 가 serving_scope 옵트아웃
+upsert·MIC 저장·유니버스 조회를 실 쿼리로 확인한다(Docker 없으면
 JUnit `@EnabledIf` 로 disabled 로 보고 — 숨겨진 통과가 아니다; CI/Docker 에서 실행).
