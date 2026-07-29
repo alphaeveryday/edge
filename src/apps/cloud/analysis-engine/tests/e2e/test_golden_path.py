@@ -285,6 +285,22 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             assert primary_thread == thread_id, "엔진이 소비한 thread 가 조립 산출물과 다르다"
             assert (tdate.isoformat(), bundle) == (TRADE_DATE, BUNDLE_VERSION)
 
+            # 근거 lineage — 설명이 무엇을 보고 쓰였는지 되짚을 수 있어야 한다(ALPHA-603).
+            # 조립이 쓴 event_evidence 까지 조인해서 확인한다: 링크만 서고 실체를 못 가리키면
+            # 콘솔 근거는 여전히 0건이다.
+            cur.execute(
+                "SELECT ree.stage_code, ev.source_event_id"
+                " FROM explanation_run_event_evidence ree"
+                " JOIN explanation_run n ON n.explanation_run_id = ree.explanation_run_id"
+                " JOIN explanation_result r ON r.explanation_run_id = n.explanation_run_id"
+                " JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id"
+                " WHERE r.etf_instrument_id = %s",
+                (ETF_INSTRUMENT,),
+            )
+            assert cur.fetchall() == [("PROMPT", evt_id)], (
+                "설명 실행이 프롬프트에 실은 사건의 근거를 lineage 로 남기지 않았다"
+            )
+
             cur.execute(
                 "SELECT o.price_movement_trigger_id, m.constituent_instrument_id"
                 " FROM etf_contribution_observation o"
