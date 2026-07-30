@@ -149,15 +149,24 @@ def run(
                     )
                     # 스니펫은 document 가 **이미 있어도** 채운다 — 분석엔진이 제목만 보던
                     # 원인이 여기였다. 값이 실제로 바뀔 때만 UPDATE(멱등 집계 보존).
+                    #
+                    # ⚠️ id 는 위에서 계산한 `document_id` 가 아니라 **자연키로 되읽은 실제
+                    # 행 값**이어야 한다(ALPHA-628). 위 INSERT 가 DO NOTHING 이라 자연키가
+                    # 이미 있으면 기존 행의 id 가 남는데, ALPHA-456 이전에 적재된 행은 랜덤
+                    # ULID id 를 갖고 있어 계산값과 갈린다 — 계산값으로 넣으면 없는 문서를
+                    # 참조해 FK 가 터지고, 커밋 경계가 런 전체라 전량 롤백된다. 서브쿼리로
+                    # 넣어 왕복 없이 해결한다(assemble_events·load_assertions 의 자연키
+                    # 브리지와 같은 규칙, ALPHA-409).
                     if doc["lead_text"]:
                         with conn.cursor() as lead_cur:
                             lead_cur.execute(
                                 "INSERT INTO news_document (document_id, lead_text)"
-                                " VALUES (%s, %s)"
+                                " SELECT document_id, %s FROM document"
+                                " WHERE source_code = %s AND source_document_id = %s"
                                 " ON CONFLICT (document_id) DO UPDATE"
                                 " SET lead_text = EXCLUDED.lead_text"
                                 " WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text",
-                                (document_id, doc["lead_text"]),
+                                (doc["lead_text"], source_code, article_id),
                             )
                             if lead_cur.rowcount:
                                 lead_written += 1
