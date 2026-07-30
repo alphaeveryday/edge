@@ -6,9 +6,9 @@ FROM node:20-alpine AS build
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY . .
-# VITE_DEMO_AUTOSESSION — 데모 박스 빌드는 로그인 화면(ALPHA-486/423) 전까지 ensureDevSession
-# 임시 브릿지로 admin 자동로그인한다(SSM 터널 데모용). 실 온프렘 빌드는 이 플래그 없이 빌드.
-RUN pnpm install --frozen-lockfile && VITE_DEMO_AUTOSESSION=true pnpm --filter tenant-console-ui build
+# 데모 박스도 실 온프렘과 동일 빌드 — 자동 세션 플래그 없음. 콘솔이 CloudFront 로 공개되므로
+# (ALPHA-627) 자격증명 baked 빌드를 두지 않고, 로그인 화면(ALPHA-626)이 유일한 진입이다.
+RUN pnpm install --frozen-lockfile && pnpm --filter tenant-console-ui build
 
 # nginx 가 dist 를 서빙하고 /api 를 tenant-console-api 로 프록시한다(같은 오리진 co-host).
 FROM nginx:alpine AS runtime

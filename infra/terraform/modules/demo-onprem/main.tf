@@ -160,6 +160,18 @@ resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
   description       = "mock-broker from allowed prefix list (e.g. CloudFront origin-facing)"
 }
 
+# 검수 콘솔(tenant-console-ui) 포트 인바운드(ALPHA-627) — CloudFront 오리진 프록시 대상.
+# 진입 게이트는 콘솔 로그인 화면(ALPHA-626, autosession 폐기)이 담당한다.
+resource "aws_vpc_security_group_ingress_rule" "console_from_prefix" {
+  count             = var.console_port != null ? length(var.ingress_prefix_list_ids) : 0
+  security_group_id = aws_security_group.this.id
+  prefix_list_id    = var.ingress_prefix_list_ids[count.index]
+  ip_protocol       = "tcp"
+  from_port         = var.console_port
+  to_port           = var.console_port
+  description       = "tenant console from allowed prefix list (e.g. CloudFront origin-facing)"
+}
+
 # ── EC2 ────────────────────────────────────────────────
 resource "aws_instance" "this" {
   ami                         = data.aws_ami.al2023.id

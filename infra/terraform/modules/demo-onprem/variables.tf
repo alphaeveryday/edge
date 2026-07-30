@@ -43,6 +43,12 @@ variable "ingress_prefix_list_ids" {
   default     = []
 }
 
+variable "console_port" {
+  description = "검수 콘솔(tenant-console-ui nginx) 호스트 포트 — CloudFront 오리진이 프록시할 대상. null 이면 인바운드 없음(비공개 유지)"
+  type        = number
+  default     = null
+}
+
 variable "mock_broker_port" {
   description = "가상 증권사 backend(mock-broker) 컨테이너 포트 — CloudFront 오리진이 프록시할 대상"
   type        = number

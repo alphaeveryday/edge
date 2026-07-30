@@ -46,14 +46,13 @@ const queryClient = new QueryClient({
 });
 
 // 세션 쿠키 확보 후 렌더 — 첫 쿼리들이 401 로 헛돌지 않게 한다(콘솔 API 는 fail-closed).
-// 로그인 화면(ALPHA-626)과 공존하는 자동 세션 브릿지다. 두 빌드에서만 켠다:
-//   - dev(import.meta.env.DEV): 로컬 개발.
-//   - 데모 박스 서빙 빌드(VITE_DEMO_AUTOSESSION='true', Dockerfile 이 설정): SSM 터널 데모.
-// 두 조건 모두 정적이라, 실 온프렘 빌드(플래그 없음)에서는 분기·동적 import 청크가 통째로
-// 제거돼 데모 자격증명이 번들에 실리지 않는다 — 그 빌드는 로그인 화면이 유일한 진입이다.
+// vite dev 전용 자동 세션 브릿지 — 서빙 빌드(데모 박스 포함)는 조건이 정적 false 라 분기·
+// 동적 import 청크가 통째로 제거돼 자격증명이 번들에 실리지 않고, 로그인 화면(ALPHA-626)이
+// 유일한 진입이다. 데모 박스 빌드의 VITE_DEMO_AUTOSESSION 경로는 콘솔 CloudFront 공개
+// (ALPHA-627)와 함께 폐기했다 — 공개 표면에 무인증 관리자 세션을 둘 수 없다.
 // 실패해도 화면은 띄운다(가드가 /login 으로 보내 원인을 드러낸다 — 조용한 공백 화면 금지).
 async function bootstrapDevSession(): Promise<void> {
-  if (!import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTOSESSION !== 'true') return;
+  if (!import.meta.env.DEV) return;
   const { ensureDevSession } = await import('./api/devSession');
   await ensureDevSession();
 }

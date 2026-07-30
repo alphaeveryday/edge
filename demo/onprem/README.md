@@ -27,22 +27,29 @@ compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 
 | `MIGRATIONS_ONPREM_DIR` | `./migrations-onprem` | flyway 마이그레이션 소스 |
 | `ONPREM_DB_PASSWORD` | `edge` | 온프렘 PG 비밀번호(데모) |
 | `MOCK_BROKER_PORT` | `8080` | mock-broker 호스트 노출 포트(CloudFront 오리진) |
+| `CONSOLE_PORT` | `8090` | 검수 콘솔 호스트 노출 포트(CloudFront 오리진 — ALPHA-627) |
+| `CONSOLE_BOOTSTRAP_ADMIN_PASSWORD` | `demo-admin-1` | 콘솔 관리자 부트스트랩 비번 — **배포 박스는 `.env` 로 반드시 override**(공개 콘솔) |
+| `CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD` | `demo-reviewer-1` | 콘솔 검수자 부트스트랩 비번 — 위와 동일 |
 | `INTAKE_POLL_MS` / `SCREENING_POLL_MS` | `5000` | 폴링 주기(데모 시연용 짧게) |
 
-데모 콘솔 계정 비밀번호는 앱·UI 양쪽 기본값(`demo-admin-1`·`demo-reviewer-1`)으로 **고정**한다 — compose override 를 열지 않는다. UI 자동로그인이 빌드타임에 같은 값을 baked 하므로 API 만 바꾸면 자동로그인이 깨지기 때문이다(로그인 화면(ALPHA-626)이 생겼어도 데모 빌드가 자동로그인을 쓰는 한 이 제약은 유지).
+콘솔 부트스트랩 비번은 이제 서버(env)만 바꾸면 된다 — UI 자동로그인(빌드타임 baked 값 동조 제약)은 ALPHA-627 로 폐기됐다. 배포 박스는 `/opt/edge-onprem/.env` 에 기본값이 아닌 값을 수동 1회 주입한다(TOSS 키와 같은 패턴 — 커밋 금지). 부트스트랩 시드는 `member` 0건일 때 1회라, **이미 시드된 박스에서 비번을 바꾸려면 DB 의 member 를 비우거나 직접 갱신**해야 한다.
 
-## 검수 콘솔 접근 (SSM 터널 — 공개 노출 없음)
+## 검수 콘솔 접근 (CloudFront 공개 — 로그인 게이트)
 
-`tenant-console-ui`(nginx)는 박스 `127.0.0.1:8090` 에만 바인딩된다 — 박스 사설 IP·SG 인바운드로도 안 열리고 **SSM 포트포워딩으로만** 도달한다(프로덕션의 "증권사 내부망 전용" 자세와 동일). MTS/mock-broker(공개)와 분리된 내부 도구.
+`tenant-console-ui`(nginx)는 CloudFront(`https://demo-console.edgesignal.dev`)가 박스 `:8090` 오리진으로 프록시한다(ALPHA-627). 박스 SG 인바운드는 CloudFront origin-facing 프리픽스만 허용해 직접 접근은 막힌다. 진입은 로그인 화면(ALPHA-626)뿐 — 자동 세션(autosession) 빌드는 폐기됐고, 계정은 bootstrap-accounts(비번은 위 env 로 override)다.
+
+> 자세 결정(2026-07-30): 프로덕션의 "증권사 내부망 전용" 재현(SSM 터널)보다 시연 편의를 우선했다. 실 온프렘 납품 자세는 불변 — 이 공개는 데모 토폴로지 한정이다.
+
+SSM 포트포워딩 경로도 여전히 동작한다(비상용):
 
 ```bash
 aws ssm start-session --target <instance-id> \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["8090"],"localPortNumber":["8090"]}'
-# 브라우저: http://localhost:8090  (데모 빌드는 admin@demo.edge.local 로 자동 로그인)
+# 브라우저: http://localhost:8090  (동일하게 로그인 화면 진입)
 ```
 
-서빙 빌드는 `ensureDevSession` 자동 세션 브릿지로 `admin@demo.edge.local` 자동 로그인한다(Dockerfile `VITE_DEMO_AUTOSESSION=true` — 로그인 화면(ALPHA-626)과 공존하는 데모 편의 경로). `tenant-console-api` 는 기동 시 `member` 가 비어 있으면 bootstrap-accounts 를 자동 시드하므로 별도 시드가 필요 없다. 실 온프렘 빌드는 이 플래그 없이 빌드해 자동 로그인이 빠진다(로그인 화면이 유일한 진입).
+`tenant-console-api` 는 기동 시 `member` 가 비어 있으면 bootstrap-accounts 를 자동 시드하므로 별도 시드가 필요 없다.
 
 ## 로컬에서 검증
 
