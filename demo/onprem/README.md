@@ -28,11 +28,11 @@ compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 
 | `ONPREM_DB_PASSWORD` | `edge` | 온프렘 PG 비밀번호(데모) |
 | `MOCK_BROKER_PORT` | `8080` | mock-broker 호스트 노출 포트(CloudFront 오리진) |
 | `CONSOLE_PORT` | `8090` | 검수 콘솔 호스트 노출 포트(CloudFront 오리진 — ALPHA-627) |
-| `CONSOLE_BOOTSTRAP_ADMIN_PASSWORD` | `demo-admin-1` | 콘솔 관리자 부트스트랩 비번 — **배포 박스는 `.env` 로 반드시 override**(공개 콘솔) |
-| `CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD` | `demo-reviewer-1` | 콘솔 검수자 부트스트랩 비번 — 위와 동일 |
+| `CONSOLE_BOOTSTRAP_ADMIN_PASSWORD` | **필수(기본값 없음)** | 콘솔 관리자 부트스트랩 비번 — 공개 콘솔이라 미설정이면 compose 가 기동 거부(fail-loud) |
+| `CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD` | **필수(기본값 없음)** | 콘솔 검수자 부트스트랩 비번 — 위와 동일 |
 | `INTAKE_POLL_MS` / `SCREENING_POLL_MS` | `5000` | 폴링 주기(데모 시연용 짧게) |
 
-콘솔 부트스트랩 비번은 이제 서버(env)만 바꾸면 된다 — UI 자동로그인(빌드타임 baked 값 동조 제약)은 ALPHA-627 로 폐기됐다. 배포 박스는 `/opt/edge-onprem/.env` 에 기본값이 아닌 값을 수동 1회 주입한다(TOSS 키와 같은 패턴 — 커밋 금지). 부트스트랩 시드는 `member` 0건일 때 1회라, **이미 시드된 박스에서 비번을 바꾸려면 DB 의 member 를 비우거나 직접 갱신**해야 한다.
+콘솔 부트스트랩 비번은 서버(env)만 바꾸면 된다 — UI 자동로그인(빌드타임 baked 값 동조 제약)은 ALPHA-627 로 폐기됐다. 배포 박스는 `/opt/edge-onprem/.env` 에 앱 기본값(`demo-admin-1` 류)이 아닌 값을 수동 1회 주입한다(TOSS 키와 같은 패턴 — 커밋 금지). 공개 콘솔이라 compose 가 이 두 변수를 필수로 강제한다(미설정=기동 거부). 부트스트랩 시드는 `member` 0건일 때 1회라, **이미 시드된 박스에서 비번을 바꾸려면 DB 의 member 를 비우거나 직접 갱신**해야 한다 — env 변경만으로는 회전되지 않는다.
 
 ## 검수 콘솔 접근 (CloudFront 공개 — 로그인 게이트)
 
@@ -55,7 +55,10 @@ aws ssm start-session --target <instance-id> \
 
 ```bash
 # 이미지가 ECR 에 있어야 하고(ALPHA-533), docker 가 ECR 로그인돼 있어야 한다.
+# 콘솔 부트스트랩 비번은 필수 env 라 로컬 검증에도 값을 줘야 한다(로컬은 앱 기본값으로 충분).
 MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
+CONSOLE_BOOTSTRAP_ADMIN_PASSWORD=demo-admin-1 \
+CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD=demo-reviewer-1 \
   docker compose -f docker-compose.yml config      # 문법·해석 확인
 ```
 
