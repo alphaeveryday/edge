@@ -1,0 +1,890 @@
+meta:
+  version: 0.1.0
+  date: '2026-07-08'
+  type_count: 53
+  purpose: deterministic type-specific news event threading contract for assembled ontology events
+invariants:
+  dedup_cluster_id:
+    must_not_equal_thread_id: true
+    must_not_be_used_as_thread_id: true
+    meaning: near-duplicate text cluster only; never a lifecycle lineage identifier
+  thread_id:
+    source: stable hash of normalized thread_key
+    must_be_derived_from:
+    - event_type_id
+    - identity.required
+    - identity.optional_discriminators
+tables:
+  event_thread:
+    primary_key:
+    - thread_id
+    fields:
+      thread_id: stable thread identifier derived from thread_key
+      thread_key: normalized event identity string before hashing
+      event_type_id: ontology leaf type partition
+      current_stage: latest lifecycle_stage observed for the thread
+      opened_at: first available_at in the thread
+      latest_state_valid_from: available_at for current_stage
+      latest_state_valid_to: null unless closed or superseded
+  event_thread_link:
+    primary_key:
+    - event_id
+    fields:
+      event_id: canonical event id
+      thread_id: linked thread id or null for UNKNOWN
+      link_kind: PRIMARY
+      novelty_status: &id001
+      - FIRST_IN_THREAD
+      - FOLLOW_UP_STAGE
+      - CORRECTION
+      - DUPLICATE_REBROADCAST
+      - UNKNOWN
+      state_valid_from: event available_at
+      asof: PIT evaluation timestamp
+      model_version: threader/contract version
+      data_version: input data/schema version
+  thread_discovery_snapshot:
+    primary_key:
+    - event_id
+    fields:
+      event_id: canonical event id
+      thread_id: linked thread id or null for UNKNOWN
+      asof: PIT timestamp
+      n_prior_events: events already known in same thread before this event
+      days_since_prev_stage: elapsed days from previous event timestamp
+      novelty_flag: true only for FIRST_IN_THREAD
+      unknown_reason: null or missing/ambiguous identity reason
+types:
+  COMPANY.PRODUCT.LAUNCH:
+    identity:
+      required:
+      - ISSUER
+      - PRODUCT
+      optional_discriminators:
+      - PRODUCT_FAMILY
+      - CUSTOMER
+      - TECH_NODE
+      - EFFECTIVE_DATE
+      - QUANTITY
+      source: types/*.yaml roles.identity
+    relation: produces
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: &id002
+      - AMEND
+      - CORRECT
+      - CANCEL
+      - REVISE
+      - RESTATE
+  COMPANY.PRODUCT.CERTIFICATION:
+    identity:
+      required:
+      - ISSUER
+      - PRODUCT
+      - AUTHORITY
+      optional_discriminators:
+      - STANDARD
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: certified_for
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.M_AND_A.ACQUISITION:
+    identity:
+      required:
+      - ACQUIRER
+      - TARGET_COMPANY
+      optional_discriminators:
+      - SELLER
+      - DEAL_VALUE
+      - OWNERSHIP_RATIO
+      - AUTHORITY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: owns
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.INVESTMENT.STAKE_ACQUISITION:
+    identity:
+      required:
+      - INVESTOR
+      - TARGET_COMPANY
+      optional_discriminators:
+      - OWNERSHIP_RATIO
+      - DEAL_VALUE
+      - SELLER
+      source: types/*.yaml roles.identity
+    relation: has_stake
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CONTRACT.SIGNING:
+    identity:
+      required:
+      - SUPPLIER
+      - CUSTOMER
+      - CONTRACT_OBJECT
+      optional_discriminators:
+      - CONTRACT_VALUE
+      - CONTRACT_DURATION
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: supplies
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.ALLIANCE.PARTNERSHIP:
+    identity:
+      required:
+      - PARTNER
+      - PARTNER_2
+      - PROJECT
+      optional_discriminators:
+      - PRODUCT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.EARNINGS.GUIDANCE_CHANGE:
+    identity:
+      required:
+      - ISSUER
+      - METRIC
+      - REPORTING_PERIOD
+      optional_discriminators:
+      - OLD_VALUE
+      - NEW_VALUE
+      - GUIDANCE_RANGE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.EARNINGS.RESULT_RELEASE:
+    identity:
+      required:
+      - ISSUER
+      - REPORTING_PERIOD
+      optional_discriminators:
+      - METRIC
+      - ACTUAL_VALUE
+      - CONSENSUS_VALUE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  POLICY.TRADE.EXPORT_CONTROL:
+    identity:
+      required:
+      - AUTHORITY
+      - TARGET
+      - PRODUCT_OR_SCOPE
+      - GEOGRAPHY
+      optional_discriminators:
+      - EFFECTIVE_DATE
+      - EXEMPTION
+      source: types/*.yaml roles.identity
+    relation: restricts
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  POLICY.TRADE.TARIFF_CHANGE:
+    identity:
+      required:
+      - AUTHORITY
+      - TARGET
+      - PRODUCT_OR_SCOPE
+      - GEOGRAPHY
+      optional_discriminators:
+      - RATE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: tariff_applies_to
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  POLICY.SANCTION.IMPOSITION:
+    identity:
+      required:
+      - AUTHORITY
+      - TARGET
+      optional_discriminators:
+      - PRODUCT_OR_SCOPE
+      - GEOGRAPHY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: sanctions
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.LEGAL.REGULATORY_ACTION:
+    identity:
+      required:
+      - AUTHORITY
+      - TARGET_COMPANY
+      - LEGAL_ISSUE
+      optional_discriminators:
+      - PENALTY_VALUE
+      - COURT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.LEGAL.LAWSUIT:
+    identity:
+      required:
+      - DEFENDANT
+      - PLAINTIFF
+      - LEGAL_ISSUE
+      - COURT
+      optional_discriminators:
+      - PENALTY_VALUE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE:
+    identity:
+      required:
+      - COMMODITY
+      - PERIOD
+      optional_discriminators:
+      - CHANGE_VALUE
+      - DRIVER_HINT
+      - GEOGRAPHY
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  INDUSTRY.SUPPLY.CAPACITY_CHANGE:
+    identity:
+      required:
+      - INDUSTRY
+      - COMMODITY
+      - GEOGRAPHY
+      optional_discriminators:
+      - CAPACITY_VALUE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION:
+    identity:
+      required:
+      - OPERATOR
+      - FACILITY
+      - PRODUCT
+      optional_discriminators:
+      - LOCATION
+      - CAPACITY_SHARE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: operation_status
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.CYBER.SERVICE_DISRUPTION:
+    identity:
+      required:
+      - OPERATOR
+      - SERVICE
+      optional_discriminators:
+      - CUSTOMER
+      - LOCATION
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: service_status
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE:
+    identity:
+      required:
+      - ANALYST_FIRM
+      - RATED_ENTITY
+      - REPORT_DATE
+      optional_discriminators:
+      - OLD_VALUE
+      - NEW_VALUE
+      - RATIONALE
+      - ESTIMATE_CHANGE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_INFO.CREDIT.RATING_CHANGE:
+    identity:
+      required:
+      - RATING_AGENCY
+      - RATED_ENTITY
+      - REPORT_DATE
+      optional_discriminators:
+      - OLD_VALUE
+      - NEW_VALUE
+      - OUTLOOK
+      - DEBT_INSTRUMENT
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_STRUCTURE.INDEX.INCLUSION:
+    identity:
+      required:
+      - INDEX
+      - MEMBER
+      - EFFECTIVE_DATE
+      optional_discriminators:
+      - ANNOUNCED_DATE
+      source: types/*.yaml roles.identity
+    relation: member_of
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_STRUCTURE.TRADING_HALT:
+    identity:
+      required:
+      - MEMBER
+      - EXCHANGE
+      optional_discriminators:
+      - REASON
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: trading_status
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.MONETARY.POLICY_RATE_DECISION:
+    identity:
+      required:
+      - CENTRAL_BANK
+      - EFFECTIVE_DATE
+      optional_discriminators:
+      - OLD_VALUE
+      - NEW_VALUE
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CAPITAL.SHARE_BUYBACK:
+    identity:
+      required:
+      - ISSUER
+      - ANNOUNCED_DATE
+      optional_discriminators:
+      - BUYBACK_VALUE
+      - SHARES
+      - EFFECTIVE_DATE
+      - DURATION
+      source: types/*.yaml roles.identity
+    relation: null
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  POLICY.COURT.RULING:
+    identity:
+      required:
+      - COURT
+      - RULE
+      - GEOGRAPHY
+      optional_discriminators:
+      - TARGET
+      - LEGAL_ISSUE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: regulates_or_rule_status
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CAPITAL.DIVIDEND_DECISION:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - AMOUNT
+      - OLD_VALUE
+      - NEW_VALUE
+      - RECORD_DATE
+      - PAYMENT_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CAPITAL.EQUITY_ISSUANCE:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - AMOUNT
+      - PRICE
+      - QUANTITY
+      - INVESTOR
+      - USE_OF_PROCEEDS
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.FINANCING.DEBT_ISSUANCE:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - AMOUNT
+      - PRICE
+      - INTEREST_RATE
+      - MATURITY_DATE
+      - RATING_AGENCY
+      - DEBT_INSTRUMENT
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.M_AND_A.MERGER:
+    identity:
+      required:
+      - MERGING_ENTITY
+      optional_discriminators:
+      - TARGET_COMPANY
+      - ACQUIRER
+      - SELLER
+      - DEAL_VALUE
+      - OWNERSHIP_RATIO
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.PRODUCTION.CAPACITY_CHANGE:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - FACILITY
+      - PRODUCT
+      - QUANTITY
+      - AMOUNT
+      - LOCATION
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - PERSON
+      - POSITION
+      - EFFECTIVE_DATE
+      - REASON
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.INFLATION.DATA_RELEASE:
+    identity:
+      required:
+      - INDICATOR
+      optional_discriminators:
+      - AUTHORITY
+      - GEOGRAPHY
+      - REPORTING_PERIOD
+      - OLD_VALUE
+      - NEW_VALUE
+      - CONSENSUS_VALUE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.EMPLOYMENT.DATA_RELEASE:
+    identity:
+      required:
+      - INDICATOR
+      optional_discriminators:
+      - AUTHORITY
+      - GEOGRAPHY
+      - REPORTING_PERIOD
+      - OLD_VALUE
+      - NEW_VALUE
+      - CONSENSUS_VALUE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.GROWTH.GDP_RELEASE:
+    identity:
+      required:
+      - INDICATOR
+      optional_discriminators:
+      - AUTHORITY
+      - GEOGRAPHY
+      - REPORTING_PERIOD
+      - OLD_VALUE
+      - NEW_VALUE
+      - CONSENSUS_VALUE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.FX.EXCHANGE_RATE_POLICY:
+    identity:
+      required:
+      - AUTHORITY
+      optional_discriminators:
+      - POLICY_RATE
+      - CURRENCY_PAIR
+      - GEOGRAPHY
+      - AMOUNT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MACRO.CREDIT.LIQUIDITY_ACTION:
+    identity:
+      required:
+      - AUTHORITY
+      optional_discriminators:
+      - FACILITY
+      - AMOUNT
+      - INTEREST_RATE
+      - MATURITY_DATE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  INDUSTRY.SUPPLY.INVENTORY_CHANGE:
+    identity:
+      required:
+      - COMMODITY
+      optional_discriminators:
+      - GEOGRAPHY
+      - REPORTING_PERIOD
+      - OLD_VALUE
+      - NEW_VALUE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  INDUSTRY.DEMAND.DEMAND_CHANGE:
+    identity:
+      required:
+      - PRODUCT
+      optional_discriminators:
+      - GEOGRAPHY
+      - REPORTING_PERIOD
+      - OLD_VALUE
+      - NEW_VALUE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  INDUSTRY.TECHNOLOGY.STANDARD_CHANGE:
+    identity:
+      required:
+      - STANDARD
+      optional_discriminators:
+      - AUTHORITY
+      - INDUSTRY
+      - PRODUCT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  POLICY.REGULATION.RULE_CHANGE:
+    identity:
+      required:
+      - RULE
+      optional_discriminators:
+      - AUTHORITY
+      - INDUSTRY
+      - GEOGRAPHY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.DISASTER.OCCURRENCE:
+    identity:
+      required:
+      - HAZARD
+      optional_discriminators:
+      - LOCATION
+      - GEOGRAPHY
+      - QUANTITY
+      - AMOUNT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.CONFLICT.OUTBREAK:
+    identity:
+      required:
+      - LOCATION
+      optional_discriminators:
+      - GEOGRAPHY
+      - COMMODITY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.HEALTH.OUTBREAK:
+    identity:
+      required:
+      - PATHOGEN
+      optional_discriminators:
+      - LOCATION
+      - GEOGRAPHY
+      - QUANTITY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_INFO.ANALYST.RATING_CHANGE:
+    identity:
+      required:
+      - RATED_ENTITY
+      optional_discriminators:
+      - ANALYST_FIRM
+      - OLD_VALUE
+      - NEW_VALUE
+      - PRICE
+      - REPORTING_PERIOD
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_STRUCTURE.INDEX.EXCLUSION:
+    identity:
+      required:
+      - INDEX
+      - MEMBER
+      optional_discriminators:
+      - EFFECTIVE_DATE
+      - QUANTITY
+      - AMOUNT
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  MARKET_STRUCTURE.EXCHANGE_OUTAGE:
+    identity:
+      required:
+      - EXCHANGE
+      optional_discriminators:
+      - MARKET
+      - EFFECTIVE_DATE
+      - REASON
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.RESTRUCTURING.SPINOFF:
+    identity:
+      required:
+      - PARENT
+      - SPUNOFF_UNIT
+      optional_discriminators:
+      - SHAREHOLDER
+      - EFFECTIVE_DATE
+      - AMOUNT
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CAPITAL.STOCK_SPLIT:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - OLD_VALUE
+      - NEW_VALUE
+      - RECORD_DATE
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.COMMERCIAL.PRICING_ACTION:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - PRODUCT
+      - PRICE
+      - OLD_VALUE
+      - NEW_VALUE
+      - GEOGRAPHY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  EXOGENOUS.CONFLICT.RESOLUTION:
+    identity:
+      required:
+      - LOCATION
+      optional_discriminators:
+      - GEOGRAPHY
+      - AUTHORITY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.WORKFORCE.LAYOFF:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - QUANTITY
+      - LOCATION
+      - EFFECTIVE_DATE
+      - REASON
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.CAPITAL.IPO:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - EXCHANGE
+      - PRICE
+      - AMOUNT
+      - QUANTITY
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.COMMERCIAL.MARKET_ENTRY:
+    identity:
+      required:
+      - ISSUER
+      optional_discriminators:
+      - GEOGRAPHY
+      - PRODUCT
+      - AMOUNT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002
+  COMPANY.OWNERSHIP.INSIDER_TRANSACTION:
+    identity:
+      required:
+      - PERSON
+      - ISSUER
+      optional_discriminators:
+      - QUANTITY
+      - PRICE
+      - AMOUNT
+      - EFFECTIVE_DATE
+      source: types/*.yaml roles.identity
+    relation: event_only
+    missing_identity_policy: EMIT_UNKNOWN_LINK_ONLY
+    novelty_statuses: *id001
+    lifecycle:
+      correction_markers: *id002

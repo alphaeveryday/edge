@@ -1,0 +1,39 @@
+# policy.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  POLICY.COURT.RULING:
+    family: POLICY
+    lifecycle_model: LEGAL_REGULATORY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [RULE, UPHOLD, OVERTURN, DISMISS]
+    roles: {required: [COURT], optional: [RULE, TARGET, GEOGRAPHY, LEGAL_ISSUE, EFFECTIVE_DATE], identity: [COURT, RULE, GEOGRAPHY], primary: [TARGET]}
+
+  POLICY.REGULATION.RULE_CHANGE:
+    family: POLICY
+    lifecycle_model: POLICY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [ISSUE, REVISE, REPEAL, ENFORCE]
+    roles: {required: [RULE], optional: [AUTHORITY, INDUSTRY, GEOGRAPHY, EFFECTIVE_DATE], identity: [RULE], primary: [RULE]}
+    quantities:
+      PENALTY_CAP_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: 위반 시 벌금/과징금 상한 — 규제 강도}
+
+  POLICY.SANCTION.IMPOSITION:
+    family: POLICY
+    lifecycle_model: POLICY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [IMPOSE, LIFT, EXPAND]
+    roles: {required: [AUTHORITY, TARGET], optional: [PRODUCT_OR_SCOPE, GEOGRAPHY, EFFECTIVE_DATE], identity: [AUTHORITY, TARGET], primary: [TARGET]}
+
+  POLICY.TRADE.EXPORT_CONTROL:
+    family: POLICY
+    lifecycle_model: POLICY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [IMPOSE, EASE, EXPAND]
+    roles: {required: [AUTHORITY], optional: [TARGET, PRODUCT_OR_SCOPE, GEOGRAPHY, EFFECTIVE_DATE, EXEMPTION], identity: [AUTHORITY, TARGET, PRODUCT_OR_SCOPE, GEOGRAPHY], primary: [TARGET]}
+
+  POLICY.TRADE.TARIFF_CHANGE:
+    family: POLICY
+    lifecycle_model: POLICY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [RAISE, LOWER, IMPOSE, REMOVE]
+    roles: {required: [AUTHORITY], optional: [TARGET, PRODUCT_OR_SCOPE, GEOGRAPHY, RATE, EFFECTIVE_DATE], identity: [AUTHORITY, TARGET, PRODUCT_OR_SCOPE, GEOGRAPHY], primary: [TARGET]}

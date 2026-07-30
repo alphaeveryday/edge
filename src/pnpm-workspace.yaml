@@ -1,0 +1,4 @@
+# Node 워크스페이스 루트 (ADR-0001). Node 패키지(package.json 보유)만 멤버로 잡힌다.
+packages:
+  - "apps/*/*"
+  - "libs/*"

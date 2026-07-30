@@ -1,0 +1,814 @@
+meta:
+  version: 0.1.0
+  date: '2026-07-08'
+  type_count: 53
+  scope: Fields intentionally not required by current deterministic feature specs; add when upstream data contracts exist.
+current_source_contract:
+  available_now:
+  - BigKinds news document fields and text
+  - DART/parser-derived document rows already in data/events
+  - current ticker/entity alias maps
+  - daily price/market-cap/liquidity references used by common_blocks
+  not_available_now:
+  - canonical ex-ante consensus snapshots
+  - licensed analyst full-text/estimate panels
+  - complete supplier-customer/product revenue graph
+  - official legal/regulatory docket state
+  - intraday orderbook/passive-flow feeds
+  - geospatial asset exposure databases
+types:
+  COMPANY.PRODUCT.LAUNCH:
+    current_spec_part: types/company_product.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.PRODUCT.CERTIFICATION:
+    current_spec_part: types/company_product.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.M_AND_A.ACQUISITION:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.INVESTMENT.STAKE_ACQUISITION:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CONTRACT.SIGNING:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.ALLIANCE.PARTNERSHIP:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.EARNINGS.GUIDANCE_CHANGE:
+    current_spec_part: types/company_earnings.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.EARNINGS.RESULT_RELEASE:
+    current_spec_part: types/company_earnings.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  POLICY.TRADE.EXPORT_CONTROL:
+    current_spec_part: types/policy.yaml
+    add_later:
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  POLICY.TRADE.TARIFF_CHANGE:
+    current_spec_part: types/policy.yaml
+    add_later:
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  POLICY.SANCTION.IMPOSITION:
+    current_spec_part: types/policy.yaml
+    add_later:
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.LEGAL.REGULATORY_ACTION:
+    current_spec_part: types/company_legal.yaml
+    add_later:
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.LEGAL.LAWSUIT:
+    current_spec_part: types/company_legal.yaml
+    add_later:
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE:
+    current_spec_part: types/industry.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: commodity_inventory_price_curve
+      source: exchange/agency inventory and futures curve feed
+      reason: 뉴스 재고 보도만으로 동일 시리즈 vintage와 선물곡선 선반영을 복원할 수 없음
+      unlocks: inventory surprise net of curve pricing
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  INDUSTRY.SUPPLY.CAPACITY_CHANGE:
+    current_spec_part: types/industry.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  EXOGENOUS.CYBER.SERVICE_DISRUPTION:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: broker_report_fulltext_and_estimates
+      source: licensed analyst report/estimates feed
+      reason: 뉴스 제목은 목표가·투자의견 일부만 담고 EPS/NIM/세부 추정 변화를 누락
+      unlocks: estimate revision decomposition
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_INFO.CREDIT.RATING_CHANGE:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: broker_report_fulltext_and_estimates
+      source: licensed analyst report/estimates feed
+      reason: 뉴스 제목은 목표가·투자의견 일부만 담고 EPS/NIM/세부 추정 변화를 누락
+      unlocks: estimate revision decomposition
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_STRUCTURE.INDEX.INCLUSION:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: index_provider_proforma_flow
+      source: index-provider composition files + passive AUM model
+      reason: 현재 뉴스만으로 확정 편입/편출 수급과 free-float 조정을 계산하기 어려움
+      unlocks: expected passive buy/sell pressure
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_STRUCTURE.TRADING_HALT:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+  MACRO.MONETARY.POLICY_RATE_DECISION:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CAPITAL.SHARE_BUYBACK:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  POLICY.COURT.RULING:
+    current_spec_part: types/policy.yaml
+    add_later:
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CAPITAL.DIVIDEND_DECISION:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CAPITAL.EQUITY_ISSUANCE:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.FINANCING.DEBT_ISSUANCE:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.M_AND_A.MERGER:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.PRODUCTION.CAPACITY_CHANGE:
+    current_spec_part: types/company_product.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE:
+    current_spec_part: types/company_governance.yaml
+    add_later:
+    - id: executive_biography_graph
+      source: director/officer biography and tenure database
+      reason: 기사의 직함만으로 경력·독립성·승계 리스크를 정량화할 수 없음
+      unlocks: management-quality and governance factors
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MACRO.INFLATION.DATA_RELEASE:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MACRO.EMPLOYMENT.DATA_RELEASE:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MACRO.GROWTH.GDP_RELEASE:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MACRO.FX.EXCHANGE_RATE_POLICY:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: fx_intervention_and_reserve_data
+      source: central-bank reserve/intervention disclosures and FX tick data
+      reason: 외환 개입은 비공개/사후 공개가 많아 뉴스만으로 규모·타이밍이 불완전
+      unlocks: policy credibility and intervention effectiveness
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MACRO.CREDIT.LIQUIDITY_ACTION:
+    current_spec_part: types/macro.yaml
+    add_later:
+    - id: official_macro_vintage_calendar
+      source: official macro release vintage and survey consensus
+      reason: 현재 뉴스는 발표치만 있고 vintage/revision/consensus가 불완전
+      unlocks: revision-aware macro surprise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: issuer_credit_curve_panel
+      source: bond transactions/CDS/credit-rating history
+      reason: 현재 주식·뉴스 중심 데이터에는 issuer funding curve가 없음
+      unlocks: credit-spread-normalized financing shock
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  INDUSTRY.SUPPLY.INVENTORY_CHANGE:
+    current_spec_part: types/industry.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: commodity_inventory_price_curve
+      source: exchange/agency inventory and futures curve feed
+      reason: 뉴스 재고 보도만으로 동일 시리즈 vintage와 선물곡선 선반영을 복원할 수 없음
+      unlocks: inventory surprise net of curve pricing
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  INDUSTRY.DEMAND.DEMAND_CHANGE:
+    current_spec_part: types/industry.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  INDUSTRY.TECHNOLOGY.STANDARD_CHANGE:
+    current_spec_part: types/industry.yaml
+    add_later:
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  POLICY.REGULATION.RULE_CHANGE:
+    current_spec_part: types/policy.yaml
+    add_later:
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: canonical_legal_docket_state
+      source: court docket/regulator case feed
+      reason: 뉴스 요약만으로 청구액·절차·판결 확정성을 표준화하기 어려움
+      unlocks: case-stage transition and expected liability
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  EXOGENOUS.DISASTER.OCCURRENCE:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  EXOGENOUS.CONFLICT.OUTBREAK:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: commodity_inventory_price_curve
+      source: exchange/agency inventory and futures curve feed
+      reason: 뉴스 재고 보도만으로 동일 시리즈 vintage와 선물곡선 선반영을 복원할 수 없음
+      unlocks: inventory surprise net of curve pricing
+  EXOGENOUS.HEALTH.OUTBREAK:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: epidemiology_mobility_panel
+      source: official health surveillance + mobility restriction feed
+      reason: 뉴스 초기 보도는 사례 정의와 제한 조치를 일관되게 표준화하지 못함
+      unlocks: mobility/health sector shock severity
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_INFO.ANALYST.RATING_CHANGE:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: broker_report_fulltext_and_estimates
+      source: licensed analyst report/estimates feed
+      reason: 뉴스 제목은 목표가·투자의견 일부만 담고 EPS/NIM/세부 추정 변화를 누락
+      unlocks: estimate revision decomposition
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_STRUCTURE.INDEX.EXCLUSION:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: index_provider_proforma_flow
+      source: index-provider composition files + passive AUM model
+      reason: 현재 뉴스만으로 확정 편입/편출 수급과 free-float 조정을 계산하기 어려움
+      unlocks: expected passive buy/sell pressure
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  MARKET_STRUCTURE.EXCHANGE_OUTAGE:
+    current_spec_part: types/market.yaml
+    add_later:
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+  COMPANY.RESTRUCTURING.SPINOFF:
+    current_spec_part: types/company_deal.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CAPITAL.STOCK_SPLIT:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_expectation_snapshot
+      source: vendor consensus/calendar snapshot before available_at
+      reason: 현재 뉴스 본문에 예상치가 없으면 ex-ante 기대를 복원할 수 없음
+      unlocks: true surprise instead of raw level/change
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.COMMERCIAL.PRICING_ACTION:
+    current_spec_part: types/company_product.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  EXOGENOUS.CONFLICT.RESOLUTION:
+    current_spec_part: types/exogenous.yaml
+    add_later:
+    - id: geo_asset_map
+      source: plant/store/mine/shipping-lane geospatial asset database
+      reason: 현재 뉴스 텍스트의 지역 키워드는 실제 자산 노출량을 보장하지 않음
+      unlocks: hazard/conflict exposure by asset location
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: official_policy_calendar
+      source: government/regulator effective-date and rulemaking database
+      reason: 뉴스는 단계·시행일·적용 대상을 누락하거나 재보도할 수 있음
+      unlocks: rule-stage transitions without duplicate news noise
+    - id: commodity_inventory_price_curve
+      source: exchange/agency inventory and futures curve feed
+      reason: 뉴스 재고 보도만으로 동일 시리즈 vintage와 선물곡선 선반영을 복원할 수 없음
+      unlocks: inventory surprise net of curve pricing
+  COMPANY.WORKFORCE.LAYOFF:
+    current_spec_part: types/company_governance.yaml
+    add_later:
+    - id: workforce_location_and_union_panel
+      source: issuer workforce/union/site database
+      reason: 현재 뉴스 감원 수치는 현장별 인력 기준과 노조 노출이 불완전
+      unlocks: layoff intensity by geography/site
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.CAPITAL.IPO:
+    current_spec_part: types/company_capital.yaml
+    add_later:
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.COMMERCIAL.MARKET_ENTRY:
+    current_spec_part: types/company_product.yaml
+    add_later:
+    - id: segment_product_revenue_panel
+      source: issuer segment/product revenue history
+      reason: 현재 DART 파서의 segment/product coverage는 일부 fixture 중심이며 모든 issuer/product에 안정적이지 않음
+      unlocks: event exposure weighted by actual revenue share
+    - id: canonical_supply_chain_exposure
+      source: licensed supplier-customer/product revenue graph
+      reason: 현재 alias/sector map은 issuer·sector 중심이며 제품별 매출 연결은 부분적임
+      unlocks: direct upstream/downstream spillover weights
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress
+  COMPANY.OWNERSHIP.INSIDER_TRANSACTION:
+    current_spec_part: types/company_governance.yaml
+    add_later:
+    - id: beneficial_owner_history
+      source: DART/registry ownership time series + insiders master
+      reason: 현재 이벤트 기사만으로 내부자 기존 보유·관계자 지분 변화를 완전 복원하기 어려움
+      unlocks: ownership-delta normalized by prior stake
+    - id: intraday_microstructure_reaction
+      source: tick/orderbook/auction imbalance feed
+      reason: 현재 리서치 저장소는 일봉/기사 중심이며 장중 유동성·경매 수급이 없음
+      unlocks: flow-adjusted event windows and liquidity stress

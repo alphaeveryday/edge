@@ -1,0 +1,43 @@
+# 데모 스택(envs/demo-onprem)은 apply CD 밖이다(ADR-0033) — full plan(creds·default VPC 필요)
+# 대신 오프라인 terraform validate 로 HCL·모듈·remote-state 참조·프로바이더 스키마를 검증한다.
+# terraform-plan.yml(envs/dev 전용, OIDC creds)과 분리해, 데모만 바꾼 PR 이 dev plan(creds·drift)에
+# 묶이지 않게 한다. AWS 자격증명이 필요 없다(오프라인).
+name: terraform-validate-demo
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "infra/terraform/envs/demo-onprem/**"
+      - "infra/terraform/modules/demo-onprem/**"
+      # 데모가 재사용하는 공유 모듈만 추가(전체 modules/** 아님 — dev 전용 모듈 변경엔 안 돎).
+      # static-site 는 ALPHA-632 로 데모에서 빠졌다(클라우드 super-admin UI 전용) — 여기 두지 않는다.
+      - "infra/terraform/modules/proxy-site/**"
+      - ".github/workflows/terraform-validate-demo.yml"
+
+permissions:
+  contents: read # checkout only — 오프라인 validate 라 OIDC 불필요
+
+concurrency:
+  group: terraform-validate-demo-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"
+          terraform_wrapper: false
+
+      - name: terraform fmt check
+        run: terraform fmt -check -recursive infra/terraform/modules/demo-onprem infra/terraform/modules/proxy-site infra/terraform/envs/demo-onprem
+
+      - name: terraform init (backend 없이) + validate
+        working-directory: infra/terraform/envs/demo-onprem
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate

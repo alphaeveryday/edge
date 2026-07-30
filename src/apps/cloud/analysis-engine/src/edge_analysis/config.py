@@ -1,0 +1,122 @@
+"""설정: 환경변수를 검증된 ``Settings`` 로 로드한다.
+
+잘못되거나 빠진 값은 조용히 기본값으로 넘기지 않고 ``PipelineError`` 로 드러낸다 —
+잘못 설정된 태스크가 산출물 없이 '성공'하면 안 되기 때문이다(Rule 12).
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
+DEFAULT_ETF_TICKER = "091160"
+# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 계열은 thinking 기본 ON 이라
+# complete_json 이 thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
+DEFAULT_MODEL = "deepseek-v4-pro"
+
+
+class PipelineError(RuntimeError):
+    """치명적 파이프라인 오류 → 비0 종료 → Step Functions 실패."""
+
+
+@dataclass(frozen=True, slots=True)
+class PgConfig:
+    """Cloud Event Store(Postgres) 접속 설정."""
+
+    host: str
+    port: int
+    dbname: str
+    user: str
+    password: str | None
+    schema: str
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """한 번의 실행에 필요한 검증된 설정 묶음."""
+
+    trade_date: date
+    request_id: str
+    region: str
+    lake_bucket: str
+    etf_ticker: str
+    pg: PgConfig
+    deepseek_api_key: str
+    deepseek_model: str
+    release_bundle_version: str | None
+    result_s3_prefix: str | None
+    aws_profile: str | None
+    # 인과 설계 하네스 사용 여부. 기본 ON.
+    # OFF 로 둘 수 있게 한 이유: 인과 경로는 instrument_classification(V202607291720)을
+    # 요구하고, 백필 전에는 코호트가 비어 모든 셀이 UNCERTAIN 으로 떨어진다. 그때
+    # 조용히 품질이 내려가는 대신 ops 가 명시적으로 이전 경로를 고를 수 있어야 한다.
+    causal_enabled: bool = True
+
+
+def _flag(name: str, *, default: bool) -> bool:
+    """불리언 환경변수. 오타는 fail-loud - 조용히 default 로 떨어지면 안 된다."""
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    low = raw.strip().lower()
+    if low in ("1", "true", "yes", "on"):
+        return True
+    if low in ("0", "false", "no", "off"):
+        return False
+    raise PipelineError(f"invalid boolean {name}={raw!r}; expected true/false")
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    return value if value not in (None, "") else default
+
+
+def parse_trade_date(value: str | None) -> date:
+    """``YYYY-MM-DD`` 파싱. 빈 값이면 오늘(KST) — 트리거 없는 날도 돌게."""
+    if not value:
+        return datetime.now(KST).date()
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise PipelineError(f"invalid trade_date {value!r}; expected YYYY-MM-DD") from exc
+
+
+def _load_pg() -> PgConfig:
+    schema = _env("PGSCHEMA", "public")
+    # 스키마는 search_path 에 문자열로 박히므로 주입을 막는다(영숫자·밑줄만 허용).
+    if schema != schema.strip() or not schema.replace("_", "").isalnum():
+        raise PipelineError(f"invalid PGSCHEMA {schema!r}")
+    return PgConfig(
+        host=_env("PGHOST", "127.0.0.1"),
+        port=int(_env("PGPORT", "5432")),
+        dbname=_env("PGDATABASE", "postgres"),
+        user=_env("PGUSER", "postgres"),
+        password=_env("PGPASSWORD"),
+        schema=schema,
+    )
+
+
+def load_settings(*, trade_date: str | None = None, request_id: str | None = None) -> Settings:
+    """환경변수와 CLI 인자로 검증된 ``Settings`` 를 만든다.
+
+    Raises:
+        PipelineError: ``DEEPSEEK_API_KEY`` 누락 또는 잘못된 ``PGSCHEMA``.
+    """
+    api_key = _env("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise PipelineError("DEEPSEEK_API_KEY is not set")
+    return Settings(
+        trade_date=parse_trade_date(trade_date),
+        request_id=request_id or f"local-{datetime.now(KST).strftime('%Y%m%dT%H%M%S')}",
+        region=_env("AWS_REGION", "ap-northeast-2"),
+        lake_bucket=_env("ALPHAMALE_LAKE_BUCKET", "edge-dev-pipeline-lake"),
+        etf_ticker=_env("ALPHAMALE_ETF_TICKER", DEFAULT_ETF_TICKER),
+        pg=_load_pg(),
+        deepseek_api_key=api_key,
+        deepseek_model=_env("DEEPSEEK_MODEL", DEFAULT_MODEL),
+        release_bundle_version=_env("ALPHAMALE_RELEASE_BUNDLE_VERSION"),
+        result_s3_prefix=_env("ALPHAMALE_RESULT_S3_PREFIX"),
+        aws_profile=_env("AWS_PROFILE"),
+        causal_enabled=_flag("CAUSAL_ENABLED", default=True),
+    )

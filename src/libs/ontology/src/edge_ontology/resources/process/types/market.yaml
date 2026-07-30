@@ -1,0 +1,60 @@
+# market.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  MARKET_INFO.ANALYST.RATING_CHANGE:
+    family: MARKET_INFO
+    lifecycle_model: REVISION_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RAISE, LOWER, MAINTAIN, INITIATE]
+    roles: {required: [RATED_ENTITY], optional: [ANALYST_FIRM, OLD_VALUE, NEW_VALUE, PRICE, REPORTING_PERIOD], identity: [RATED_ENTITY], primary: [RATED_ENTITY]}
+
+  MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE:
+    family: MARKET_INFO
+    lifecycle_model: REVISION_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RAISE, LOWER, MAINTAIN, INITIATE]
+    roles: {required: [RATED_ENTITY], optional: [ANALYST_FIRM, OLD_VALUE, NEW_VALUE, RATIONALE, ESTIMATE_CHANGE], identity: [ANALYST_FIRM, RATED_ENTITY, REPORT_DATE], primary: [RATED_ENTITY, ANALYST_FIRM]}
+
+  MARKET_INFO.CREDIT.RATING_CHANGE:
+    family: MARKET_INFO
+    lifecycle_model: REVISION_NO_LIFECYCLE
+    stage_sensitive: false
+    predicates: [RAISE, LOWER, MAINTAIN, ASSIGN, WITHDRAW]
+    roles: {required: [RATED_ENTITY], optional: [RATING_AGENCY, OLD_VALUE, NEW_VALUE, OUTLOOK, DEBT_INSTRUMENT], identity: [RATING_AGENCY, RATED_ENTITY, REPORT_DATE], primary: [RATED_ENTITY, RATING_AGENCY]}
+    quantities:
+      RATED_DEBT_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: 등급 액션 대상 채무 잔액(DEBT_INSTRUMENT) — 파급 범위의 절대 크기}
+    entity_state:
+      debt_maturing_12m: {scope: RATED_ENTITY, dtype: float, unit_family: CURRENCY, desc: '12개월 내 만기 도래 채무 — 차환 리스크 임박도, 등급 액션이 실물 유동성 위기로 전이되는 1차 경로'}
+      cp_stb_outstanding: {scope: RATED_ENTITY, dtype: float, unit_family: CURRENCY, desc: CP·전단채 잔액 — 초단기 조달 의존도(롤오버 거부에 가장 취약한 구간)}
+      interest_coverage_ttm: {scope: RATED_ENTITY, dtype: float, unit_family: RATIO, desc: 이자보상배율 — 조달비용 상승의 이익 침식 민감도}
+      hybrid_perp_outstanding: {scope: RATED_ENTITY, dtype: float, unit_family: CURRENCY, desc: 신종자본증권 잔액 — 콜 스킵/스텝업 리스크가 등급 악화와 결합 시 자본성 인정 훼손}
+    derived:
+      refi_wall_pressure: {formula: debt_maturing_12m / total_cash, inputs: [debt_maturing_12m, total_cash], dtype: float, desc: 차환 절벽 압력 — 등급 액션이 조달비용 문제에서 유동성 위기로 전이되는 증폭 배수}
+
+  MARKET_STRUCTURE.EXCHANGE_OUTAGE:
+    family: MARKET_STRUCTURE
+    lifecycle_model: MARKET_OPERATIONS_LIFECYCLE
+    stage_sensitive: false
+    predicates: [OCCUR, SUSPEND, RESUME, REPORT]
+    roles: {required: [EXCHANGE], optional: [MARKET, EFFECTIVE_DATE, REASON], identity: [EXCHANGE], primary: [EXCHANGE]}
+
+  MARKET_STRUCTURE.INDEX.EXCLUSION:
+    family: MARKET_STRUCTURE
+    lifecycle_model: INDEX_REBALANCE_LIFECYCLE
+    stage_sensitive: false
+    predicates: [EXCLUDE]
+    roles: {required: [INDEX, MEMBER], optional: [EFFECTIVE_DATE, QUANTITY, AMOUNT], identity: [INDEX, MEMBER], primary: [MEMBER, INDEX]}
+
+  MARKET_STRUCTURE.INDEX.INCLUSION:
+    family: MARKET_STRUCTURE
+    lifecycle_model: MARKET_STRUCTURE_LIFECYCLE
+    stage_sensitive: true
+    predicates: [INCLUDE]
+    roles: {required: [INDEX, MEMBER], optional: [EFFECTIVE_DATE, ANNOUNCED_DATE], identity: [INDEX, MEMBER, EFFECTIVE_DATE], primary: [MEMBER, INDEX]}
+
+  MARKET_STRUCTURE.TRADING_HALT:
+    family: MARKET_STRUCTURE
+    lifecycle_model: MARKET_STRUCTURE_LIFECYCLE
+    stage_sensitive: true
+    predicates: [HALT, RESUME]
+    roles: {required: [MEMBER], optional: [EXCHANGE, REASON, EFFECTIVE_DATE], identity: [MEMBER, EXCHANGE], primary: [MEMBER]}

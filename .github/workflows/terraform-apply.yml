@@ -1,0 +1,51 @@
+# dev 로 머지(push)될 때 envs/dev 를 apply 한다 — PR plan 리뷰가 승인 게이트를 대신한다.
+# apply 역할(edge-tf-apply, trust=ref:refs/heads/dev)로만 assume — PR 컨텍스트는 이 sub 를 가질 수
+# 없으므로 이 역할을 assume 하지 못한다(보안 경계는 권한 범위가 아니라 trust). bootstrap·foundation 은
+# CD 대상이 아니다(수동). ecs-service 의 ignore_changes=[task_definition] 로 앱 CD 배포는 롤백되지 않는다.
+name: terraform-apply
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "infra/terraform/envs/dev/**"
+      - "infra/terraform/modules/**"
+      # demo 전용 모듈은 dev 가 안 쓴다 — carve-out 해서 demo-only 변경이 dev apply 에 안 묶이게.
+      - "!infra/terraform/modules/demo-onprem/**"
+      - ".github/workflows/terraform-plan.yml"
+      - ".github/workflows/terraform-apply.yml"
+
+permissions:
+  id-token: write # OIDC
+  contents: read # checkout
+
+# apply 는 직렬화하고, 실행 중이면 취소하지 않는다(state 일관성).
+concurrency:
+  group: terraform-dev-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: [self-hosted, Linux, X64]
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC · apply role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: terraform init
+        run: terraform init -input=false -lock-timeout=5m
+
+      - name: terraform apply
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m

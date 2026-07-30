@@ -1,0 +1,92 @@
+# UI 배포 재사용 워크플로 — 정적 프론트 하나를 빌드해 S3 에 sync 하고 CloudFront 를 무효화한다.
+#
+# 호출자(deploy-<ui>.yml)가 app 이름과 대상 버킷·배포 ID(repo vars)를 넘긴다.
+# OIDC 신뢰 경계 = dev 브랜치(push:dev → sub=ref:refs/heads/dev). `environment:` 를 쓰지 않는다
+# (Free+private 플랜은 environment 배포 브랜치 정책 강제 불가 — ALPHA-313). 역할·리전은 repo-level vars.
+#
+# 배포 방식: pnpm 워크스페이스에서 해당 앱만 빌드(dist/) → aws s3 sync --delete → CloudFront 무효화.
+# 대상은 super-admin-ui(콘솔 SPA, dist/ + assets). widget-ui 는 피벗으로 제거(ADR-0010),
+# tenant-console-ui 는 온프렘 플레인이라 cloud 배포처 없음(ADR-0032 — 박스가 자기 API 와 co-host).
+#
+# 배포 역할 권한(ALPHA-310): github-oidc-deploy 역할(schema-migrate·앱 배포와 공유)에 UI 권한이
+# 부여돼 있다 — 대상 버킷 S3 sync(ListBucket·Get/Put/DeleteObject)·CloudFront CreateInvalidation.
+# (infra/terraform/modules/github-oidc-deploy 의 ui_* 변수 · envs/dev 에서 프론트 배선.)
+name: deploy-ui
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: "배포할 UI 앱 이름 (pnpm 필터 = 패키지명)"
+        required: true
+        type: string
+      plane:
+        description: "배포 플레인 디렉터리 (cloud · onprem) — dist 경로 apps/<plane>/<app>/dist (ADR-0029)"
+        required: true
+        type: string
+      bucket:
+        description: "산출물을 sync 할 S3 버킷 이름"
+        required: true
+        type: string
+      distribution_id:
+        description: "배포 후 무효화할 CloudFront 배포 ID"
+        required: true
+        type: string
+
+# 호출자에게서 상속되는 상한 안에서만 유효. id-token: OIDC / contents: 체크아웃.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.app }}
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 을 먼저 설치해야 setup-node 의 pnpm 캐시가 동작한다.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: src/pnpm-lock.yaml
+
+      - name: Install & build
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --filter "${APP}" build
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Sync to S3 & invalidate CloudFront
+        env:
+          APP: ${{ inputs.app }}
+          PLANE: ${{ inputs.plane }}
+          BUCKET: ${{ inputs.bucket }}
+          DISTRIBUTION_ID: ${{ inputs.distribution_id }}
+        run: |
+          set -euo pipefail
+          # --delete 로 버킷을 dist/ 와 일치시킨다(삭제된 파일 제거). dist 는 src 기준 상대경로.
+          aws s3 sync "apps/${PLANE}/${APP}/dist" "s3://${BUCKET}" --delete
+          # 캐시 무효화 후 완료까지 대기 — 실패 시 워크플로가 빨간불이 되게.
+          id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \
+            --paths '/*' --query 'Invalidation.Id' --output text)"
+          echo "무효화 생성: ${id} → 완료 대기"
+          aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${id}"
+          echo "${APP} 배포 완료: s3://${BUCKET} (CloudFront ${DISTRIBUTION_ID} 무효화 완료)"

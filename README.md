@@ -3,91 +3,109 @@
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
 
-> **프로젝트 상태 — 초기 스캐폴드.** 디렉토리 골격과 설계 문서는 갖춰졌지만, 앱·라이브러리 구현은 아직 비어 있습니다(`.gitkeep`). 아래 구조와 [`docs/`](docs/)의 문서는 **현재 동작하는 시스템이 아니라 목표 아키텍처**를 기술합니다.
+> **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api·sync-agent·intake)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. 벤더 서빙 embed widget 서버(widget-api)는 하이브리드 온프렘 피벗([ADR-0010](docs/adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](docs/adr/0032-retire-gateway.md)로 삭제됐고 (위젯 **UI 자체는 빌드 산출물로 납품** — [ADR-0035](docs/adr/0035-widget-ui-build-artifact.md), 벤더 실행 서버 없음), 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](docs/implementation.md) §1). 동기화·반입 경로(sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](docs/adr/0036-sync-agent-intake-topology.md), screening-worker=정책 평가·상태 분기·자동 게시)까지 구현됐습니다.
 
 ## 한눈에 보기
 
 ```
 src/
-├── apps/                     # 배포되는 실행 단위
-│   ├── widget-ui/            # Node   · 외부 임베드 위젯
-│   ├── tenant-console-ui/    # Node   · 내부 관리자 콘솔
-│   ├── gateway/              # JVM    · 공개 엣지 (widget·console 앞단)
-│   ├── widget-api/           # JVM    · 외부용 · 읽기 전용 · 좁은 표면
-│   ├── tenant-console-api/   # JVM    · 내부용 · 읽기/쓰기 · 넓은 표면
-│   ├── data-pipeline/        # Python · 스케줄러 → DB 적재
-│   └── analysis-engine/      # Python · 스케줄러 → 분석 결과 DB 저장
-├── libs/                     # 가져다 쓰는 공유 코드
+├── apps/                     # 배포되는 실행 단위 (플레인별 그룹 — ADR-0029)
+│   ├── cloud/                #   edge-cloud (벤더 운영)
+│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
+│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
+│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
+│   │   └── analysis-engine/  # Python · 같은 SFN 의 analyze 페이즈 → 분석 결과 DB 저장
+│   └── onprem/               #   edge-onprem (증권사 관리 환경)
+│       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
+│       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
+│       ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
+│       ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
+│       ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
+│       └── publication-api/        # JVM  · MTS 조회 표면 (Published만)
+├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
-│   │   ├── migrations/       #   마이그레이션 (한 곳에서 관리)
-│   │   └── generated/        #   스키마에서 생성한 각 언어 모델
-│   ├── jvm-common/           # JVM    · 공유 도메인 + analysis_result 접근 로직
+│   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
+│   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
+│   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload)·예외 매핑 + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
-│   └── py-common/            # Python · 공통 유틸
-├── settings.gradle.kts       # JVM 루트
+│   ├── py-common/            # Python · 공통 유틸
+│   └── ontology/             # Python · 온톨로지 SSOT (존재 4층 어휘 리소스+로더)
+├── settings.gradle           # JVM 루트 (Groovy DSL 멀티모듈)
 ├── pnpm-workspace.yaml       # Node 루트
 └── pyproject.toml            # Python 루트
 ```
 
-위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `.dev/`(로컬 개발 도구·스크립트) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
+위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `.dev/`(로컬 개발 도구·스크립트) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
 
 ## 런타임별 워크스페이스
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
+JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 7개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle.kts` | gateway · widget-api · tenant-console-api · jvm-common |
-| Node | `src/pnpm-workspace.yaml` | widget-ui · tenant-console-ui · ui-kit |
-| Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common |
+| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
+| Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
+| Python | `src/pyproject.toml` | analysis-engine · data-pipeline · py-common · ontology |
 
 ## apps — 배포 단위
 
-| 앱 | 런타임 | 역할 |
-|---|---|---|
-| `widget-ui` | Node | 외부 사이트에 임베드되는 위젯 |
-| `tenant-console-ui` | Node | 내부 관리자용 콘솔 |
-| `gateway` | JVM | 공개 엣지. widget·console 트래픽을 모두 받아 라우트별 필터를 적용해 전달 |
-| `widget-api` | JVM | 외부용 API. **읽기 전용**, 좁은 표면(노출 최소화) |
-| `tenant-console-api` | JVM | 내부용 API. **읽기/쓰기**, 넓은 표면 |
-| `data-pipeline` | Python | 스케줄러로 동작 → DB에 데이터 적재 |
-| `analysis-engine` | Python | 스케줄러로 동작 → 분석 결과를 DB에 저장 |
+| 앱 | 런타임 | 아티팩트 | 역할 |
+|---|---|---|---|
+| `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, 디자인 v0.2 기준 재구축 — [console-ia](docs/console-ia/tenant-console.md)와의 IA 정렬은 후속). 전 도메인이 tenant-console-api 호출 — UI 자체 mock 레이어 없음 |
+| `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**). 전 도메인이 super-admin-api 호출 — UI 자체 mock 레이어 없음 |
+| `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API — 검수 표면(Review Queue 목록·승인·반려, 승인=전이+재발행 단일 트랜잭션) + 인증·인가(데모 자체 계정·세션·매 요청 원장 재검증 fail-closed, [permission-matrix](docs/console-ia/permission-matrix.md)) + 사용자 관리(등록·목록·비활성화, 실 DB + 감사 로그 `console_action_log` — ALPHA-119) + 가격 변동 설명 조회(explanations 목록·상세·반입 상태 원장 실조회, 쓰기는 mock 잔존 — ALPHA-607) + 나머지 콘솔 화면 표면(현재 `mock` 패키지 반환, 도메인별 DB 전환 예정 — ALPHA-513). 정책은 후속 |
+| `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
+| `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull + 번들 체크섬 검증, 내부망 무변형 전달. DB 접근 없음 ([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)) |
+| `intake` | JVM | **edge-onprem** | 내부망 — 검증된 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
+| `screening-worker` | JVM | **edge-onprem** | 점검 실행 — 미점검 번들 파싱·정책 평가(NEW=활성 정책 룰·임계값으로 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 분기, 근거는 screening_check — ALPHA-429, 정정=리비전 분리 후 신규와 동일 재점검(ADR-0041), 무효화=즉시 비노출) |
+| `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
+| `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 운영자 작업 원장 `admin_activity_log` 전이** — ALPHA-602, session 은 인증 세션 주체 투영 — ALPHA-608) |
+| `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
+| `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
-### 외부 표면 vs 내부 표면
-- **외부 경로**: `widget-ui` → `gateway`(widget 라우트) → `widget-api` (읽기 전용, 좁은 표면)
-- **콘솔 경로**: `tenant-console-ui` → `gateway`(console 라우트) → `tenant-console-api` (읽기/쓰기, 넓은 표면)
+sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
-`gateway`가 두 트래픽을 모두 앞단에서 받되 **라우트별 독립 필터(fail-closed)** 로 분리하고, `widget-api`는 읽기 전용으로 표면을 좁게 유지합니다. 신뢰 경계 상세는 [docs/architecture.md](docs/architecture.md) 참고.
+### 표면 분리
+- **콘솔 경로**: `tenant-console-ui` → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘에서 UI·API 동거)
+- **운영 경로**: `super-admin-ui` → `super-admin-api` (cross-tenant 읽기/쓰기, 최고 권한)
+
+클라우드 gateway는 은퇴했습니다([ADR-0032](docs/adr/0032-retire-gateway.md)) — super-admin 공개 도달이 필요해지면 ALB 직결(listener rule)로 재도입하고, admin은 운영자(소수·알려진 집합) 전용이라 망 수준(VPN/IP allowlist)으로 제한합니다. 고객 접점은 벤더가 아니라 증권사 MTS/HTS → 온프렘 Publication API 경로입니다. 신뢰 경계 상세는 [docs/context.md](docs/context.md)·[ADR-0008](docs/adr/0008-super-admin-console.md) 참고.
 
 ## libs — 공유 코드
 
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
 | `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
-| `jvm-common` | JVM | 공유 도메인 모델 + `analysis_result` 접근 로직 |
-| `ui-kit` | Node | `widget-ui`·`tenant-console-ui` 공유 디자인 시스템 |
+| `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·예외→공통 응답 포맷 매핑(`ExceptionAdvice`, auto-configuration 으로 웹 앱 활성) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
+| `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 — EDGE 디자인 토큰·컴포넌트 CSS·React 프리미티브 (소스 export 패키지) |
 | `py-common` | Python | Python 공통 유틸 |
+| `ontology` | Python | **온톨로지 SSOT**(`edge_ontology`) — 존재를 네 층으로 나눈 선험적 어휘. `entity`(실체 종별·기관 레지스트리) · `attribute`(속성 모형·공용 재무풀) · `relation`(역할 어휘·종별 결속) · `process`(53 사건 타입·술어·라이프사이클·thread 계약). 실제 사건 인스턴스와 절차적 지식은 이 lib 밖(data-pipeline·analysis-engine) 소관. 갱신은 실험실(event-ontology repo) 확정본을 통째 교체 + 어휘 변경 시 `ONTOLOGY_VERSION` 개정(ALPHA-539) |
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations/` — 스키마 변경은 여기서만 관리합니다.
-- `generated/` — 스키마로부터 각 언어용 모델을 생성합니다. JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
+- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `generated/` — 스키마로부터 각 언어용 모델을 생성합니다(생성기는 후속 티켓에서 도입; 그 전까지 Flyway SQL이 계약 SSOT). JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
 
 ## 데이터 흐름
 
 ```
-[스케줄러] ─→ data-pipeline ──→ DB ←── analysis-engine ←─ [스케줄러]
-                                  │            (분석 결과 저장)
-                                  │
-   외부:  widget-ui → gateway → widget-api (읽기) ─┘
-   콘솔:  tenant-console-ui → gateway → tenant-console-api (읽기/쓰기) ─┘
+[스케줄러] ─→ Planner ─→ 파이프라인 SFN: raw 수집 ─→ 정제 ─→ feature ─→ analyze ──→ DB
+           (원장 기록 후 시작)         └──── data-pipeline ────┘   (analysis-engine)   │
+                                                                                │
+   콘솔:  tenant-console-ui → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
+   운영:  super-admin-ui → super-admin-api (읽기/쓰기, cross-tenant) ─┘
 
-   schema(SSOT) ─→ generated 모델 ─→ 모든 JVM/Python 모듈이 공유
+   schema(Flyway SQL = 현재 SSOT) ─→ DB 계약 ─→ 모든 JVM/Python 모듈이 공유   (generated 모델은 후속 도입)
 ```
 
-- `data-pipeline`이 외부 데이터를 DB에 적재합니다.
-- `analysis-engine`이 적재된 데이터를 분석해 `analysis_result`로 DB에 저장합니다.
-- API 계층(`widget-api`/`tenant-console-api`)이 DB를 읽어 UI에 제공하며, `analysis_result` 접근은 `jvm-common`이 담당합니다.
+- `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
+- `analysis-engine`이 같은 SFN 의 마지막 페이즈(analyze)로 돌며 feature 산출물만 읽어 분석하고, Cloud Event Store(`explanation_result` 등)로 DB에 저장하며, 게시(PUBLISHED)와 같은 트랜잭션으로 sync outbox(`tenant_delivery`)에 테넌트별 NEW 를 발번합니다 ([ADR-0028](docs/adr/0028-unified-pipeline-sfn.md), ALPHA-493).
+- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](src/apps/cloud/data-pipeline/README.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
+- API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
+- 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](docs/context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정분도 동일 정책 평가를 거치며(ALPHA-430·ADR-0041), 점검 Audit 은 후속(ALPHA-431)입니다.
 
 ## Git 컨벤션
 
@@ -115,12 +133,37 @@ fix/*     ─┘
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
 - `dev` → **`main`에만** PR 한다.
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
+
+**스키마 마이그레이션 머지 게이트 (branch protection 도입 전 수동 규율)**
+- 마이그레이션(`src/libs/schema/migrations-*`)을 담은 PR은 **머지 직전** 최신 `dev`를 fetch 해 신규 버전이 해당 세트의 최고 버전보다 큰지 재확인한다. CI의 버전 단조성 guard 는 체크 실행 시점의 base 기준이라, 병렬 PR 이 순서대로 머지되면 역행 착지 창이 열린다(2026-07-29 하루 3건 실증, ALPHA-623).
+- 역행이면 **전방 리네임**(내용 그대로 더 큰 버전으로) 후 재검증한다. 규칙 상세와 복구 절차: [src/libs/schema/README.md](src/libs/schema/README.md) "CI 운영 설정".
 - 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
+
+### 병렬 작업 (worktree)
+
+여러 브랜치를 **동시에** 진행할 때(특히 에이전트 세션 여러 개)는 **하나의 체크아웃을 공유하지 않는다.** git 저장소 폴더 하나에는 브랜치·작업트리가 각각 하나뿐이라, 두 세션이 같은 폴더에서 일하면 한쪽의 브랜치 전환·파일 저장이 다른 쪽에 섞여 **커밋이 엉키고 작업이 유실**된다.
+
+동시 작업은 `git worktree`로 **폴더를 분리**한다 — 같은 `.git`(커밋 이력·원격)을 공유하면서 폴더·브랜치·작업트리는 따로 간다.
+
+```bash
+git worktree add ../edge-<슬러그> -b feature/<KEY>-<슬러그> dev   # 새 브랜치로 새 폴더
+git worktree add ../edge-<슬러그> feature/<KEY>-<슬러그>          # 기존 브랜치를 폴더로
+git worktree list                                                # 어떤 폴더가 어떤 브랜치인지
+git worktree remove ../edge-<슬러그>                             # 머지 후 정리
+git worktree prune                                               # 폴더를 그냥 지웠을 때 잔재 청소
+```
+
+- 메인 체크아웃은 `dev`용으로 두고, 실제 작업은 각 worktree 폴더에서 한다.
+- 같은 브랜치를 두 worktree에 동시 체크아웃하지 않는다 — git이 기본으로 막으며, `--force`로 우회하지 않는다(우회하면 엉킴 위험이 되살아난다).
+- **worktree는 파일·브랜치의 기술적 충돌만 막는다.** *두 세션이 같은 작업을 각자 하는 중복*은 못 막으므로, **겹치는 티켓·작업 단위를 동시에 잡지 않도록 배정으로 조율**한다(둘 다 필요 — 폴더 분리 + 비겹침 배정).
 
 ### 커밋·PR 제목
 
 [Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
 Squash 머지 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목도 아래 형식을 그대로 따릅니다.
+`dev` 대상 PR 의 제목 형식(type·scope·마침표·키 위치)은 CI(`pr-title-check`)가 검증해 체크
+실패로 드러냅니다(브랜치 보호 불가 플랜이라 강제 차단은 아님 — 머지 전 체크 확인은 운영 규율).
+한국어·50자 규약은 기계 강제하지 않습니다(봇 PR·영문 용어 혼용, 리뷰 소관).
 
 ```
 type(scope): 제목
@@ -132,8 +175,8 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `widget-ui` · `widget-api` · `gateway` · `tenant-console-ui` · `tenant-console-api` · `data-pipeline` · `analysis-engine`
-  - libs: `schema` · `jvm-common` · `ui-kit` · `py-common`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
+  - libs: `schema` · `jvm-common` · `ui-kit` · `py-common` · `ontology`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
 - **푸터 (Jira 이슈 키)** — 본문 아래 마지막 줄에 `Refs: <이슈키>`로 이슈를 참조합니다. 제목 형식(Conventional Commits)은 그대로 두고 키는 **푸터에만** 둡니다. 여러 이슈는 `Refs: ALPHA-121, ALPHA-122`.
@@ -141,7 +184,7 @@ Refs: ALPHA-121
 
 ### 예시
 ```
-feat(widget-api): 위젯 조회 엔드포인트 추가
+feat(tenant-console-api): 검수 승인 엔드포인트 추가
 fix(analysis-engine): 분석 결과 중복 저장 방지
 docs(repo): 모노레포 구조 README 작성
 chore(schema): 마이그레이션 도구 설정
@@ -185,12 +228,13 @@ Refs: ALPHA-121
 
 1. **스프린트에서 본인 티켓 확인** — 현재 열린 스프린트에 자신에게 할당된 이슈가 있는지 봅니다 (`assignee = currentUser() AND sprint in openSprints()`).
 2. **처리할 티켓 선택** — 무엇부터 할지 정합니다(각자 판단 또는 에이전트의 우선순위 추천). 기능·버그는 **이슈 우선** — 해당 이슈가 없으면 Jira 이슈를 먼저 만들고 키를 확보합니다.
-3. **브랜치 생성 + 즉시 push** — `git switch dev && git pull` 후 `feature/<이슈키>-<슬러그>`로 분기하고 곧바로 `git push -u origin <브랜치>`. 이 push가 Jira 자동화를 깨워 이슈를 **`해야 할 일` → `진행 중`** 으로 옮깁니다.
+3. **브랜치 생성 + 즉시 push** — `git switch dev && git pull` 후 `feature/<이슈키>-<슬러그>`로 분기하고 곧바로 `git push -u origin <브랜치>`. 다른 세션과 병렬이면 같은 체크아웃에서 분기하지 않고 위 [병렬 작업](#병렬-작업-worktree)대로 worktree 를 씁니다. 이 push가 Jira 자동화를 깨워 이슈를 **`해야 할 일` → `진행 중`** 으로 옮깁니다.
 4. **개발** — 위 [커밋·PR 제목](#커밋pr-제목) 형식(Conventional Commits)을 따르고, 논리 단위로 나눠 커밋합니다.
-5. **`dev` 대상 PR** — PR 설명 맨 아래에 `Refs: <이슈키>`(PR 템플릿이 자동 삽입). 브랜치에 키가 있으면 Jira가 PR을 해당 이슈에 자동 연결합니다.
-6. **`dev`로 Squash 머지** — PR 하나 = 커밋 하나로 `dev`에 합칩니다.
-7. **브랜치 삭제** — 머지 후 브랜치를 지우고, 다음 작업은 갱신된 `dev`에서 새로 분기합니다.
+5. **`dev` 대상 PR** — PR 을 올리기 전에 로컬 검수 게이트를 통과시킵니다: 코드 리뷰를 **수용한 지적이 없어질 때까지** 반복(반복 상한 있음)한 뒤 문서 정합성 점검 — 종료 조건·상한 등 상세 절차는 `.claude/skills/pr-cycle` §4(edge-review 수렴 루프·docs-sync). PR 설명 맨 아래에 `Refs: <이슈키>`(PR 템플릿이 자동 삽입). 브랜치에 키가 있으면 Jira가 PR을 해당 이슈에 자동 연결합니다.
+6. **Codex 리뷰 대응** — 자동 리뷰 결과를 확인하고, 수용한 지적은 반영 후 재리뷰를 요청합니다. 통과(👍) 또는 잔여 지적 전건 비수용이면 머지로 넘어갑니다.
+7. **`dev`로 Squash 머지** — PR 하나 = 커밋 하나로 `dev`에 합칩니다.
+8. **브랜치 삭제** — 머지 후 브랜치를 지우고, 다음 작업은 갱신된 `dev`에서 새로 분기합니다.
 
 > **왜 분기 직후 바로 push하나.** Jira의 "브랜치 생성 → 진행 중" 자동화는 **GitHub for Jira 연동(원격 이벤트)** 으로만 동작합니다. 로컬 전용 브랜치는 Jira가 알 수 없어 트리거되지 않습니다. 키가 들어간 브랜치를 **원격에 올리는 순간** 보드가 움직입니다. 그러니 브랜치는 **만들면 바로 push**하는 것을 습관으로 둡니다.
 
-> **한 사이클은 `dev`까지입니다.** 위 7단계는 티켓 한 장의 단위입니다. `dev → main`은 개별 티켓이 아니라 **릴리스 단위**로 묶는 별도 경계이며, Squash가 아닌 Merge commit을 씁니다 — 위 [머지 정책](#머지-정책) 참고.
+> **한 사이클은 `dev`까지입니다.** 위 8단계는 티켓 한 장의 단위입니다. `dev → main`은 개별 티켓이 아니라 **릴리스 단위**로 묶는 별도 경계이며, Squash가 아닌 Merge commit을 씁니다 — 위 [머지 정책](#머지-정책) 참고.

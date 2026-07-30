@@ -1,0 +1,272 @@
+# 3. 관계(Relation) — 사건 안에서 역할이 차지하는 논항 자리(argument slot).
+#
+# `event_argument.slot` 의 SSOT 다. 값은 스키마 CHECK 어휘 subject·object·qualifier.
+#   subject   그 사건을 일으키거나 겪는 주역
+#   object    그 행위가 향하는 대상
+#   qualifier 부수 정보 — 장소·근거·범위·규격
+#
+# 왜 온톨로지가 갖는가: slot 은 (타입, 역할)만으로 결정된다 — 기사를 볼 필요가 없다.
+# 예전에는 추출 LLM 이 아규먼트마다 판정했고 코드는 3값 범위만 검사했다. 셋 중 무엇을
+# 내도 통과하므로 오류가 조용했다(AGENTS Rule 5: 결정적 변환은 코드가 답한다).
+#
+# 왜 역할 전역이 아니라 (타입, 역할)인가: 같은 역할이 타입에 따라 자리를 바꾼다.
+#   ISSUER   — CAPITAL.DIVIDEND_DECISION subject / PRODUCT.CERTIFICATION object
+#              (기관이 인증하고 발행사는 받는다) / OWNERSHIP.INSIDER_TRANSACTION qualifier
+#              (임원이 매매한 주식의 발행사)
+#   EXCHANGE — MARKET_STRUCTURE.EXCHANGE_OUTAGE subject / CAPITAL.IPO qualifier(상장 장소)
+# 술어는 자리를 바꾸지 않는다(BUY/SELL 양쪽 다 PERSON=subject) — 방향 반대 술어를 가진
+# 4타입 전수 확인. 그래서 술어별 선언은 두지 않는다.
+#
+# 게이트: 한 타입 안에서 (entity_kind, slot) 이 같은 역할 쌍은 known_collisions 에
+# 사유와 함께 등재해야 적재를 통과한다(process 레지스트리 로더).
+#
+# 주의: 배정 근거는 이 저장소의 판단이며 상류(event-ontology repo)에 대응물이 없다 —
+# edge 로컬 증보, 백포트 대상. 어휘 소유자 검토 필요.
+
+meta:
+  version: 0.1.0
+  origin: edge-local amendment, pending upstream backport
+  pair_count: 154
+
+known_collisions:
+  # (entity_kind, slot) 이 겹치는 자리. 두 부류다.
+  #  vocabulary_defect — 역할이 둘일 이유가 없다. 어휘 정리로만 닫힌다(어휘 개정 = 재태깅).
+  #  slot_arity        — 3값 어휘의 한계. SOURCE·RECIPIENT 가 object 로 접혔다.
+  #                      slot CHECK 를 5값으로 넓히면 닫힌다(스키마 사안, 재태깅 없음).
+- type: COMPANY.ALLIANCE.PARTNERSHIP
+  roles: [PARTNER, PARTNER_2]
+  reason: vocabulary_defect
+  why: PARTNER_2 는 PARTNER 의 2번 슬롯이다 — 대칭 행위라 원리적으로 못 가른다. group_ord 로 대체
+- type: COMPANY.M_AND_A.MERGER
+  roles: [ACQUIRER, MERGING_ENTITY]
+  reason: vocabulary_defect
+  why: 대칭 어휘(MERGING_ENTITY)와 비대칭 어휘(ACQUIRER/TARGET_COMPANY)가 한 타입에 공존
+- type: COMPANY.PRODUCT.LAUNCH
+  roles: [PRODUCT_FAMILY, TECH_NODE]
+  reason: vocabulary_defect
+  why: 둘 다 대상의 규격 — 경계가 어디에도 선언돼 있지 않다
+- type: COMPANY.INVESTMENT.STAKE_ACQUISITION
+  roles: [SELLER, TARGET_COMPANY]
+  reason: slot_arity
+  why: SELLER 는 지분의 출처(SOURCE) — 3값에서 object 로 접힌다
+- type: COMPANY.M_AND_A.ACQUISITION
+  roles: [SELLER, TARGET_COMPANY]
+  reason: slot_arity
+  why: 동상
+- type: COMPANY.M_AND_A.MERGER
+  roles: [SELLER, TARGET_COMPANY]
+  reason: slot_arity
+  why: 동상
+- type: COMPANY.RESTRUCTURING.SPINOFF
+  roles: [SHAREHOLDER, SPUNOFF_UNIT]
+  reason: slot_arity
+  why: SHAREHOLDER 는 배정을 받는 쪽(RECIPIENT) — 3값에서 object 로 접힌다
+
+slots:
+  COMPANY.ALLIANCE.PARTNERSHIP:
+    PARTNER: subject
+    PARTNER_2: subject
+    PRODUCT: object
+    PROJECT: qualifier
+  COMPANY.CAPITAL.DIVIDEND_DECISION:
+    ISSUER: subject
+  COMPANY.CAPITAL.EQUITY_ISSUANCE:
+    INVESTOR: subject
+    ISSUER: subject
+  COMPANY.CAPITAL.IPO:
+    EXCHANGE: qualifier
+    ISSUER: subject
+  COMPANY.CAPITAL.SHARE_BUYBACK:
+    ISSUER: subject
+  COMPANY.CAPITAL.STOCK_SPLIT:
+    ISSUER: subject
+  COMPANY.COMMERCIAL.MARKET_ENTRY:
+    GEOGRAPHY: qualifier
+    ISSUER: subject
+    PRODUCT: object
+  COMPANY.COMMERCIAL.PRICING_ACTION:
+    GEOGRAPHY: qualifier
+    ISSUER: subject
+    PRODUCT: object
+  COMPANY.CONTRACT.SIGNING:
+    CONTRACT_OBJECT: object
+    CUSTOMER: object
+    SUPPLIER: subject
+  COMPANY.EARNINGS.GUIDANCE_CHANGE:
+    ISSUER: subject
+    METRIC: object
+  COMPANY.EARNINGS.RESULT_RELEASE:
+    ISSUER: subject
+    METRIC: qualifier
+  COMPANY.FINANCING.DEBT_ISSUANCE:
+    DEBT_INSTRUMENT: object
+    ISSUER: subject
+    RATING_AGENCY: qualifier
+  COMPANY.INVESTMENT.STAKE_ACQUISITION:
+    INVESTOR: subject
+    SELLER: object
+    TARGET_COMPANY: object
+  COMPANY.LEGAL.LAWSUIT:
+    COURT: qualifier
+    DEFENDANT: object
+    LEGAL_ISSUE: object
+    PLAINTIFF: subject
+  COMPANY.LEGAL.REGULATORY_ACTION:
+    AUTHORITY: subject
+    COURT: qualifier
+    LEGAL_ISSUE: object
+    TARGET_COMPANY: object
+  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE:
+    ISSUER: subject
+    PERSON: subject
+  COMPANY.M_AND_A.ACQUISITION:
+    ACQUIRER: subject
+    AUTHORITY: qualifier
+    SELLER: object
+    TARGET_COMPANY: object
+  COMPANY.M_AND_A.MERGER:
+    ACQUIRER: subject
+    MERGING_ENTITY: subject
+    SELLER: object
+    TARGET_COMPANY: object
+  COMPANY.OWNERSHIP.INSIDER_TRANSACTION:
+    ISSUER: qualifier
+    PERSON: subject
+  COMPANY.PRODUCT.CERTIFICATION:
+    AUTHORITY: subject
+    ISSUER: object
+    PRODUCT: object
+    STANDARD: qualifier
+  COMPANY.PRODUCT.LAUNCH:
+    CUSTOMER: object
+    ISSUER: subject
+    PRODUCT: object
+    PRODUCT_FAMILY: qualifier
+    TECH_NODE: qualifier
+  COMPANY.PRODUCTION.CAPACITY_CHANGE:
+    FACILITY: object
+    ISSUER: subject
+    LOCATION: qualifier
+    PRODUCT: object
+  COMPANY.RESTRUCTURING.SPINOFF:
+    PARENT: subject
+    SHAREHOLDER: object
+    SPUNOFF_UNIT: object
+  COMPANY.WORKFORCE.LAYOFF:
+    ISSUER: subject
+    LOCATION: qualifier
+  EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION:
+    FACILITY: object
+    LOCATION: qualifier
+    OPERATOR: subject
+    PRODUCT: object
+  EXOGENOUS.CONFLICT.OUTBREAK:
+    COMMODITY: object
+    GEOGRAPHY: qualifier
+    LOCATION: subject
+  EXOGENOUS.CONFLICT.RESOLUTION:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    LOCATION: subject
+  EXOGENOUS.CYBER.SERVICE_DISRUPTION:
+    CUSTOMER: object
+    LOCATION: qualifier
+    OPERATOR: subject
+    SERVICE: object
+  EXOGENOUS.DISASTER.OCCURRENCE:
+    GEOGRAPHY: qualifier
+    HAZARD: subject
+    LOCATION: object
+  EXOGENOUS.HEALTH.OUTBREAK:
+    GEOGRAPHY: qualifier
+    LOCATION: object
+    PATHOGEN: subject
+  INDUSTRY.DEMAND.DEMAND_CHANGE:
+    GEOGRAPHY: qualifier
+    PRODUCT: subject
+  INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE:
+    COMMODITY: subject
+    GEOGRAPHY: qualifier
+  INDUSTRY.SUPPLY.CAPACITY_CHANGE:
+    COMMODITY: object
+    GEOGRAPHY: qualifier
+    INDUSTRY: subject
+  INDUSTRY.SUPPLY.INVENTORY_CHANGE:
+    COMMODITY: subject
+    GEOGRAPHY: qualifier
+  INDUSTRY.TECHNOLOGY.STANDARD_CHANGE:
+    AUTHORITY: subject
+    INDUSTRY: object
+    PRODUCT: object
+    STANDARD: subject
+  MACRO.CREDIT.LIQUIDITY_ACTION:
+    AUTHORITY: subject
+    FACILITY: qualifier
+  MACRO.EMPLOYMENT.DATA_RELEASE:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    INDICATOR: subject
+  MACRO.FX.EXCHANGE_RATE_POLICY:
+    AUTHORITY: subject
+    CURRENCY_PAIR: qualifier
+    GEOGRAPHY: qualifier
+    POLICY_RATE: object
+  MACRO.GROWTH.GDP_RELEASE:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    INDICATOR: subject
+  MACRO.INFLATION.DATA_RELEASE:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    INDICATOR: subject
+  MACRO.MONETARY.POLICY_RATE_DECISION:
+    CENTRAL_BANK: subject
+    POLICY_RATE: qualifier
+  MARKET_INFO.ANALYST.RATING_CHANGE:
+    ANALYST_FIRM: subject
+    RATED_ENTITY: object
+  MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE:
+    ANALYST_FIRM: subject
+    RATED_ENTITY: object
+  MARKET_INFO.CREDIT.RATING_CHANGE:
+    DEBT_INSTRUMENT: object
+    RATED_ENTITY: object
+    RATING_AGENCY: subject
+  MARKET_STRUCTURE.EXCHANGE_OUTAGE:
+    EXCHANGE: subject
+    MARKET: object
+  MARKET_STRUCTURE.INDEX.EXCLUSION:
+    INDEX: qualifier
+    MEMBER: object
+  MARKET_STRUCTURE.INDEX.INCLUSION:
+    INDEX: qualifier
+    MEMBER: object
+  MARKET_STRUCTURE.TRADING_HALT:
+    EXCHANGE: subject
+    MEMBER: object
+  POLICY.COURT.RULING:
+    COURT: subject
+    GEOGRAPHY: qualifier
+    LEGAL_ISSUE: object
+    RULE: qualifier
+    TARGET: object
+  POLICY.REGULATION.RULE_CHANGE:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    INDUSTRY: object
+    RULE: object
+  POLICY.SANCTION.IMPOSITION:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    PRODUCT_OR_SCOPE: object
+    TARGET: object
+  POLICY.TRADE.EXPORT_CONTROL:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    PRODUCT_OR_SCOPE: object
+    TARGET: object
+  POLICY.TRADE.TARIFF_CHANGE:
+    AUTHORITY: subject
+    GEOGRAPHY: qualifier
+    PRODUCT_OR_SCOPE: object
+    TARGET: object

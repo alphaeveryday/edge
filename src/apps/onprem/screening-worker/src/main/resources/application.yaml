@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: screening
+  datasource:
+    # 온프렘 DB (libs/schema/migrations-onprem). 로컬 기본값은 compose 의
+    # postgres-onprem(:55433) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      # 스키마 SSOT 는 Flyway(libs/schema) — 앱은 consumer 다. 생성/변경 금지, 검증만(ADR-0038·
+      # libs/schema/README). 기동 시 매핑된 엔티티와 실제 스키마 정합을 확인하고 DDL 은 발행하지 않는다.
+      ddl-auto: validate
+    # 워커라 웹 요청 스코프가 없다 — 지연 로딩(OSIV)이 필요 없으므로 끈다.
+    open-in-view: false
+
+screening:
+  # 미점검 번들 폴링 주기 — 로컬 compose 는 시연을 위해 짧게(5000ms 주입).
+  poll-delay-ms: ${SCREENING_POLL_MS:60000}
+  # 한 틱에서 점검할 최대 번들 수.
+  max-bundles-per-tick: 10

@@ -1,0 +1,56 @@
+server:
+  servlet:
+    session:
+      cookie:
+        # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(ADR-0025 데모 범위):
+        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다.
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 SSO 모드에서는 표준 CSRF
+        # 토큰이 추가된다(실계약 시점).
+        # secure: 콘솔이 CloudFront(HTTPS)로 공개되면서 켠다(ALPHA-627) — http:// 진입 시
+        # 리다이렉트 전 평문 요청에 쿠키가 실리는 것을 차단. 로컬 개발·SSM 터널은 모두
+        # localhost 라 브라우저의 localhost 예외로 Secure 쿠키가 그대로 동작한다.
+        same-site: strict
+        http-only: true
+        secure: true
+
+spring:
+  application:
+    name: tenantconsole
+  datasource:
+    # 온프렘 DB (libs/schema/migrations-onprem). 로컬 기본값은 compose 의
+    # postgres-onprem(:55433) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/edge_onprem}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      # DDL 은 Flyway(libs/schema)가 SSOT — Hibernate 는 스키마를 생성/변경하지 않고
+      # 매핑↔실테이블 정합만 검증한다(불일치 시 기동 실패로 드러남). ADR-0005·0038.
+      ddl-auto: validate
+    # OSIV 비활성 — 영속성 컨텍스트를 트랜잭션 경계로 한정(레이지 로딩 경계 명확).
+    open-in-view: false
+  flyway:
+    # 앱은 기동 시 마이그레이션을 실행하지 않는다(libs/schema 전용) — README 규약.
+    enabled: false
+
+console:
+  tenant:
+    # 콘솔 헤더·사이드바 테넌트 컨텍스트(ALPHA-500) — 온프렘 박스=테넌트 1:1 이라
+    # 배포 설정이 소스다. 기본값은 데모(KB증권), 실 배포는 env 로 덮는다. 실 테넌트
+    # 신원(인증서 바인딩, ALPHA-447)과 별개의 표시값이다.
+    name: ${CONSOLE_TENANT_NAME:KB증권}
+    domain: ${CONSOLE_TENANT_DOMAIN:kbsec.com}
+    mark: ${CONSOLE_TENANT_MARK:KB}
+  auth:
+    # 데모 자체 계정 부트스트랩(ADR-0025) — member 0건일 때 1회 시드.
+    # 아래 비밀번호 기본값은 로컬·데모 스택 전용이다(postgres edge/edge 와 같은 결) —
+    # 데모 배포에서는 env 로 덮고, 운영은 SSO/AD 모드라 부트스트랩을 쓰지 않는다.
+    bootstrap-accounts:
+      - email: admin@demo.edge.local
+        name: 데모 관리자
+        role: TENANT_ADMIN
+        password: ${CONSOLE_BOOTSTRAP_ADMIN_PASSWORD:demo-admin-1}
+      - email: reviewer@demo.edge.local
+        name: 데모 검수자
+        role: COMPLIANCE_REVIEWER
+        password: ${CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD:demo-reviewer-1}

@@ -1,0 +1,35 @@
+# super-admin-ui dev 배포 — 자기 코드(또는 워크스페이스 공유 파일)가 바뀐 dev push 에서만
+# 트리거되는 독립 배포. 절차는 deploy-ui.yml 한 벌을 재사용한다.
+name: deploy-super-admin-ui
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/super-admin-ui/**"
+      # 소스 워크스페이스 의존성 — ui-kit 변경도 이 앱의 빌드 산출물을 바꾼다.
+      - "src/libs/ui-kit/**"
+      # 워크스페이스 공유 — 의존성 그래프에 영향.
+      - "src/pnpm-lock.yaml"
+      - "src/pnpm-workspace.yaml"
+      # 배포 절차 자체의 변경.
+      - ".github/workflows/deploy-ui.yml"
+      - ".github/workflows/deploy-super-admin-ui.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+# 같은 앱의 배포는 직렬화, 실행 중 배포는 취소하지 않는다.
+concurrency:
+  group: deploy-super-admin-ui
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-ui.yml
+    with:
+      app: super-admin-ui
+      plane: cloud
+      bucket: ${{ vars.SUPER_ADMIN_UI_BUCKET }}
+      distribution_id: ${{ vars.SUPER_ADMIN_UI_DISTRIBUTION_ID }}

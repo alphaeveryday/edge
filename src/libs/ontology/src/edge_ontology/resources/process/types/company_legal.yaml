@@ -1,0 +1,38 @@
+# company_legal.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
+
+types:
+  COMPANY.LEGAL.LAWSUIT:
+    family: COMPANY
+    lifecycle_model: LEGAL_REGULATORY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [FILE, SETTLE, DISMISS, RULE]
+    roles: {required: [DEFENDANT], optional: [PLAINTIFF, COURT, LEGAL_ISSUE, PENALTY_VALUE], identity: [DEFENDANT, PLAINTIFF, LEGAL_ISSUE, COURT], primary: [DEFENDANT, PLAINTIFF]}
+    note: "A formal lawsuit is filed/proceeds/settled between (usually private) parties. NOT a regulator's enforcement (use LEGAL.REGULATORY_ACTION); NOT a court's ruling itself (use POLICY.COURT.RULING); NOT informal disputes/complaints/shareholder demands."
+    quantities:
+      CLAIM_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: 청구액 — 크기의 출발점이나 전략적 인플레이션 관행(특히 미국 소송) 때문에 상한이 아니라 협상 앵커로 해석해야 함}
+      AWARDED_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: 판결 인용액(RULED 단계 이벤트 내용) — 청구액 대비 인용률이 실질 서프라이즈}
+      SETTLEMENT_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: '합의금(SETTLED 단계) — 미공개 합의 다수(NULL 정직성 유지), 공개 시 청구액 대비 비율이 정보'}
+    derived:
+      claim_to_mcap: {formula: 'CLAIM_AMOUNT / market_cap[DEFENDANT]', inputs: [CLAIM_AMOUNT, market_cap], dtype: float, desc: 청구액/시총 — FILED 단계 크기의 1차 스크린(1% 미만은 노이즈 가설)}
+      claim_to_cash: {formula: 'CLAIM_AMOUNT / total_cash[DEFENDANT]', inputs: [CLAIM_AMOUNT, total_cash], dtype: float, desc: 청구액/현금 — 전액 패소 가정 시 유동성 사건 전환 여부}
+      award_ratio: {formula: AWARDED_AMOUNT / CLAIM_AMOUNT, inputs: [AWARDED_AMOUNT, CLAIM_AMOUNT], dtype: float, desc: 인용률 — 청구액 앵커 대비 실제 판결의 서프라이즈 방향}
+      settlement_ratio: {formula: SETTLEMENT_AMOUNT / CLAIM_AMOUNT, inputs: [SETTLEMENT_AMOUNT, CLAIM_AMOUNT], dtype: float, desc: 합의금/청구액 — 낮은 비율 합의는 사실상 피고 승리로 해석}
+
+  COMPANY.LEGAL.REGULATORY_ACTION:
+    family: COMPANY
+    lifecycle_model: LEGAL_REGULATORY_LIFECYCLE
+    stage_sensitive: true
+    predicates: [INVESTIGATE, CHARGE, FINE, SETTLE, CLEAR]
+    roles: {required: [AUTHORITY, TARGET_COMPANY], optional: [LEGAL_ISSUE, PENALTY_VALUE, COURT, EFFECTIVE_DATE], identity: [AUTHORITY, TARGET_COMPANY, LEGAL_ISSUE], primary: [TARGET_COMPANY]}
+    note: "A government regulator/authority investigates, charges, fines, or settles with a company (antitrust/SEC/DOJ/FTC). NOT private litigation (use LEGAL.LAWSUIT); NOT rulemaking (use REGULATION.RULE_CHANGE)."
+    quantities:
+      PENALTY_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: 과징금/벌금 부과액(FINED/SETTLED 단계) — 절대액이 아니라 체급 대비 비율로만 의미}
+      STATUTORY_CAP_AMOUNT: {dtype: float, unit_family: CURRENCY, desc: '법정 상한 추정액(공정거래법: 관련매출의 최대 20%(담합) 등) — 조사 단계에서 최대 노출의 PIT 상한 추정치'}
+    entity_state:
+      related_revenue_base: {scope: TARGET_COMPANY, dtype: float, unit_family: CURRENCY, desc: 위반 관련 매출(과징금 산정 기준) — 공정위 과징금 = 관련매출 x 부과기준율이므로 조사 단계에서 상한 역산 가능}
+    derived:
+      penalty_to_op: {formula: 'PENALTY_AMOUNT / op_profit_ttm[TARGET_COMPANY]', inputs: [PENALTY_AMOUNT, op_profit_ttm], dtype: float, desc: 벌금/연간 영업이익 — 일회성 비용의 체급 환산 1호}
+      penalty_to_cash: {formula: 'PENALTY_AMOUNT / total_cash[TARGET_COMPANY]', inputs: [PENALTY_AMOUNT, total_cash], dtype: float, desc: 벌금/현금성 자산 — 지불능력. 1 근접 시 유동성 사건으로 성격 전환(증자·자산매각 연쇄)}
+      penalty_to_mcap: {formula: 'PENALTY_AMOUNT / market_cap[TARGET_COMPANY]', inputs: [PENALTY_AMOUNT, market_cap], dtype: float, desc: 벌금/시총 — 가격 반응과의 직접 비교 척도}
+      max_exposure_to_op: {formula: 'STATUTORY_CAP_AMOUNT / op_profit_ttm[TARGET_COMPANY]', inputs: [STATUTORY_CAP_AMOUNT, op_profit_ttm], dtype: float, desc: 조사 단계 최대 노출/영업이익 — 확정 전 단계의 크기 프록시(벌금 미확정 시 유일한 크기 축)}
+      penalty_vs_cap_ratio: {formula: PENALTY_AMOUNT / STATUTORY_CAP_AMOUNT, inputs: [PENALTY_AMOUNT, STATUTORY_CAP_AMOUNT], dtype: float, desc: 확정액/상한 — 낮으면 '우려 대비 경미' 서프라이즈로 FINED 단계 반등 소재}

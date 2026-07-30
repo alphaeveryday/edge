@@ -1,0 +1,56 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.0'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.edge'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation project(':libs:jvm-common') // 에러 코드 규약(로그 컨텍스트용 최소 사용)
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	// 웹 표면은 없지만 actuator health(compose 헬스체크)를 위해 webmvc 사용(intake 와 동일).
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// received_bundle 파싱 → analysis_item·publication 상태 분기 (migrations-onprem 스키마). JPA 로
+	// 매핑하되 스키마는 Flyway(libs/schema) SSOT — ddl-auto=validate 로 검증만 한다(ADR-0038).
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	runtimeOnly 'org.postgresql:postgresql'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	// 엔티티↔스키마 정합 검증: 실 Postgres 컨테이너에 onprem 마이그레이션을 적용하고
+	// Hibernate validate 를 실통과시킨다(H2 는 JSONB·IDENTITY 등 Postgres 문법 미지원).
+	// Boot 4 는 flyway-core 만으론 스키마 적용이 안 떠 spring-boot-flyway(autoconfig)가 필요하다.
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	testImplementation 'org.springframework.boot:spring-boot-flyway'
+	testImplementation 'org.flywaydb:flyway-core'
+	testImplementation 'org.flywaydb:flyway-database-postgresql'
+	// 실 wire 소비자(BundleScreener) 가 번들 evidences 를 analysis_item 으로 옮길 때 계약 형상을
+	// 유지하는지 검증(JSON Schema 2020-12). producer 와 같은 libs/schema 공유 스키마(아래 sourceSets).
+	testImplementation 'com.networknt:json-schema-validator:1.5.6'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// 번들 계약 SSOT(event-bundle.schema.json)를 테스트 classpath 에 올린다(producer 와 동일 파일).
+sourceSets {
+	test {
+		resources {
+			srcDir "$rootDir/libs/schema/contracts"
+		}
+	}
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

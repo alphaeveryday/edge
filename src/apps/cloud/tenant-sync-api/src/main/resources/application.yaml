@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: tenant-sync
+  datasource:
+    # Cloud Event Store (libs/schema/migrations-cloud). 로컬 기본값은 compose 의
+    # postgres(:55432) — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/edge}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    hibernate:
+      ddl-auto: validate   # DDL 은 Flyway(libs/schema) SSOT — 검증만 (ADR-0038)
+    open-in-view: false

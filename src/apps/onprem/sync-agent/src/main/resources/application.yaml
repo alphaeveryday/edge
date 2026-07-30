@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: sync-agent
+
+sync-agent:
+  # Cloud pull 대상 — 유일한 outbound 목적지(고정 FQDN 화이트리스트, sync-protocol.md).
+  # 로컬 기본값은 compose 의 tenant-sync-api. mTLS 클라이언트 인증서는 sync-auth 후속.
+  tenant-sync-api-url: ${TENANT_SYNC_API_URL:http://localhost:18083}

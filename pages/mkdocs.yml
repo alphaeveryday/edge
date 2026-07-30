@@ -1,0 +1,83 @@
+site_name: Edge Architecture Portal
+site_description: Edge 시스템 아키텍처 문서 포털 — 설계 문서·산출물·발전 과정
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: ko
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: 다크 모드로 전환
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: 라이트 모드로 전환
+
+plugins:
+  - search
+
+# sync 가 복사 시 포털 밖(루트 README 등) 링크를 GitHub 소스 URL 로 재작성하므로
+# not_found 는 기본(warn)으로 두어 --strict 가 진짜 깨진 링크를 잡게 한다.
+# 남는 건 디렉터리형 링크(](adr/))뿐이라 unrecognized 만 완화한다.
+validation:
+  links:
+    unrecognized_links: ignore
+
+# 회고 표준 템플릿은 산출물이 아니라 작성 참고용이므로 빌드/포털에서 제외한다.
+exclude_docs: |
+  retrospective/_template.md
+
+nav:
+  - Home: index.md
+  - Evolution: evolution.md
+  - Artifacts: artifacts.md
+  - Retrospective:
+      - Overview: retrospective/index.md
+      - Sprint 1: retrospective/sprint-1.md
+      - Sprint 2: retrospective/sprint-2.md
+      - Sprint 3: retrospective/sprint-3.md
+      - Sprint 4: retrospective/sprint-4.md
+      - Sprint 5: retrospective/sprint-5.md
+  - Reference:
+      - Context: reference/context.md
+      - Scope: reference/scope.md
+      - Implementation: reference/implementation.md
+      - Roadmap: reference/roadmap.md
+      - Writing Rules: reference/writing-rules.md
+      - Contracts:
+          - Sync Protocol: reference/contracts/sync-protocol.md
+          - Event Bundle Schema: reference/contracts/event-bundle-schema.md
+          - Sync Auth: reference/contracts/sync-auth.md
+          - Publication API: reference/contracts/publication-api.md
+      - Domain:
+          - State Machine: reference/domain/state-machine.md
+          - Data Residency: reference/domain/data-residency.md
+          - Exposure Log: reference/domain/exposure-log.md
+      - Console IA:
+          - Super Admin Console: reference/console-ia/super-admin-console.md
+          - Tenant Console: reference/console-ia/tenant-console.md
+      - ADR: reference/adr/README.md
+
+# reference/adr/ 아래 개별 ADR 은 빌드 시 복사되는 산출물이며 nav 에 나열하지 않는다
+# (README.md 만 nav 에 둔다). ADR 파일명 규칙이나 하위 폴더 유무와 무관하게
+# --strict 빌드가 "nav 에 없는 문서" 경고로 실패하지 않도록, README 를 뺀 전부를 대상으로 한다.
+not_in_nav: |
+  /reference/adr/**
+  !/reference/adr/README.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details

@@ -1,0 +1,93 @@
+<mxfile host="Electron" agent="OpenAI Codex">
+  <diagram id="ontology-architecture" name="Ontology architecture">
+    <mxGraphModel dx="2054" dy="1201" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1F2937;strokeColor=#111827;fontColor=#FFFFFF;fontSize=20;fontStyle=1;align=center;verticalAlign=middle;" value="edge_ontology — 선험적 어휘 SSOT&#xa;Process 인스턴스·복잡계 전개는 lib 밖 모듈이 담당" vertex="1">
+          <mxGeometry height="70" width="980" x="610" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;align=center;verticalAlign=middle;" value="data-pipeline&#xa;tagging · assemble_events&#xa;역할/slot/해소를 결정적으로 파생" vertex="1">
+          <mxGeometry height="100" width="310" x="80" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;align=center;verticalAlign=middle;" value="analysis-engine&#xa;eventstore · storm&#xa;유형·논항·event_argument.slot 소비" vertex="1">
+          <mxGeometry height="100" width="310" x="440" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="5" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#14532D;fontSize=14;align=center;verticalAlign=middle;" value="PostgreSQL&#xa;source_event · event_argument&#xa;slot · entity_id · entity_kind" vertex="1">
+          <mxGeometry height="100" width="300" x="1430" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="10" parent="1" style="swimlane;startSize=38;horizontal=1;rounded=1;html=1;whiteSpace=wrap;fillColor=#EDE9FE;strokeColor=#7C3AED;fontColor=#4C1D95;fontStyle=1;fontSize=18;container=1;pointerEvents=0;" value="4 · Process — 사건 유형" vertex="1">
+          <mxGeometry height="200" width="820" x="890" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="11" parent="10" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=14;align=center;verticalAlign=middle;" value="ProcessRegistry&#xa;53 event types · 7 families" vertex="1">
+          <mxGeometry height="90" width="210" x="30" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="12" parent="10" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=14;align=center;verticalAlign=middle;" value="ProcessType&#xa;predicates · roles · primary&#xa;stages · quantities · derived" vertex="1">
+          <mxGeometry height="90" width="230" x="300" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="13" parent="10" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=14;align=center;verticalAlign=middle;" value="resources/process/&#xa;types/*.yaml · lifecycle_models&#xa;thread contract" vertex="1">
+          <mxGeometry height="90" width="210" x="580" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="20" parent="1" style="swimlane;startSize=38;horizontal=1;rounded=1;html=1;whiteSpace=wrap;fillColor=#FFEDD5;strokeColor=#EA580C;fontColor=#7C2D12;fontStyle=1;fontSize=18;container=1;pointerEvents=0;" value="3 · Relation — 구조적 연결" vertex="1">
+          <mxGeometry height="230" width="940" x="510" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="21" parent="20" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#7C2D12;fontSize=14;align=center;verticalAlign=middle;" value="RelationVocabulary&#xa;87 roles = entity 50 + value/time/text 37" vertex="1">
+          <mxGeometry height="100" width="250" x="25" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="22" parent="20" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#78350F;fontSize=14;align=center;verticalAlign=middle;" value="종별&#xa;무엇인가?&#xa;role_kinds → EntityKind" vertex="1">
+          <mxGeometry height="100" width="170" x="325" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="23" parent="20" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#78350F;fontSize=14;align=center;verticalAlign=middle;" value="정체성&#xa;무엇으로 키 삼는가?&#xa;REGISTRY · MINT · NONE" vertex="1">
+          <mxGeometry height="100" width="180" x="530" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="24" parent="20" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#78350F;fontSize=14;align=center;verticalAlign=middle;" value="논항 자리&#xa;사건에서 어느 자리인가?&#xa;154 (type, role) pairs&#xa;subject · object · qualifier" vertex="1">
+          <mxGeometry height="120" width="170" x="745" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="30" parent="1" style="swimlane;startSize=38;horizontal=1;rounded=1;html=1;whiteSpace=wrap;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#14532D;fontStyle=1;fontSize=18;container=1;pointerEvents=0;" value="1 · Entity — 독립적 존재" vertex="1">
+          <mxGeometry height="220" width="790" x="100" y="860" as="geometry" />
+        </mxCell>
+        <mxCell id="31" parent="30" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontColor=#14532D;fontSize=13;align=center;verticalAlign=middle;" value="EntityKind&#xa;8 kinds = persistence-key buckets&#xa;ISSUER · COMPANY_ENTITY · PERSON · COHORT&#xa;PRODUCT/CONCEPT · AUTHORITY/RULE · LOCATION/HAZARD · INDEX/EXCHANGE" vertex="1">
+          <mxGeometry height="120" width="400" x="25" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="32" parent="30" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontColor=#14532D;fontSize=14;align=center;verticalAlign=middle;" value="AuthorityRegistry&#xa;68 closed-set actors&#xa;5 sections · alias normalization" vertex="1">
+          <mxGeometry height="120" width="280" x="470" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="40" parent="1" style="swimlane;startSize=38;horizontal=1;rounded=1;html=1;whiteSpace=wrap;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#0C4A6E;fontStyle=1;fontSize=18;container=1;pointerEvents=0;" value="2 · Attribute — 값의 모형" vertex="1">
+          <mxGeometry height="220" width="790" x="1010" y="860" as="geometry" />
+        </mxCell>
+        <mxCell id="41" parent="40" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontColor=#0C4A6E;fontSize=14;align=center;verticalAlign=middle;" value="Attribute&#xa;공용 풀 13&#xa;entity_state: is_listed · market_cap · revenue …" vertex="1">
+          <mxGeometry height="120" width="350" x="25" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="42" parent="40" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontColor=#0C4A6E;fontSize=14;align=center;verticalAlign=middle;" value="타입 고유 속성&#xa;QUANTITY 60 · STATE 21 · DERIVED 50&#xa;ProcessType이 조합" vertex="1">
+          <mxGeometry height="120" width="350" x="415" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="50" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontColor=#7F1D1D;fontSize=14;align=center;verticalAlign=middle;" value="반입 로더 게이트&#xa;명부·별칭 충돌 / 선언 밖 역할 / lifecycle·slot 누락 / (kind, slot) 충돌은 즉시 실패&#xa;7 known collisions는 reason·why가 있어야만 면제" vertex="1">
+          <mxGeometry height="230" width="310" x="1510" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="60" edge="1" parent="1" source="3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;fontColor=#1E3A8A;exitX=1;exitY=0.5;entryX=0;entryY=0.3;" target="11" value="읽기">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="61" edge="1" parent="1" source="4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;fontColor=#1E3A8A;exitX=1;exitY=0.5;entryX=0;entryY=0.7;" target="11" value="읽기">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="62" edge="1" parent="1" source="3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;fontColor=#14532D;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="5" value="적재">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="430" y="250" />
+              <mxPoint x="1430" y="250" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="63" edge="1" parent="1" source="12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7C3AED;fontColor=#4C1D95;exitX=0.35;exitY=1;entryX=0.65;entryY=0;" target="21" value="관계·속성으로 조합">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="65" edge="1" parent="1" source="22" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;fontColor=#7C2D12;exitX=0.3;exitY=1;entryX=0.7;entryY=0;" target="31" value="종별·명부 해소">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="66" edge="1" parent="1" source="23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;fontColor=#7C2D12;exitX=0.62;exitY=1;entryX=0.75;entryY=0;" target="32" value="키 선택">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

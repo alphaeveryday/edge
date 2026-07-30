@@ -1,0 +1,45 @@
+server:
+  servlet:
+    session:
+      cookie:
+        # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(tenant-console ADR-0025 와 같은 결):
+        # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다(같은 사이트
+        # 서브도메인발 CSRF 는 못 막는다 — 표준 CSRF 토큰은 ALPHA-474 에서 추가).
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다.
+        same-site: strict
+        http-only: true
+        # 공개 엣지(HTTPS ALB)라 Secure 고정 — 평문 HTTP 요청에 운영자 세션 쿠키가
+        # 실리지 않게 한다. 로컬(http)은 표준 Spring env 오버라이드로 끈다
+        # (SERVER_SERVLET_SESSION_COOKIE_SECURE=false — compose 설정됨). 커스텀
+        # env 기본값(${VAR:true})을 쓰지 않는 이유: 빈 문자열 주입 시 기본값이
+        # 무시돼 Secure 가 조용히 풀린다.
+        secure: true
+
+spring:
+  application:
+    name: superadmin
+  # Cloud DB(libs/schema migrations-cloud). 로컬 기본값은 compose 의 postgres(:55432)
+  # — 컨테이너에서는 SPRING_DATASOURCE_* 로 덮인다(tenant-sync-api 와 동일).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/edge}
+    username: ${SPRING_DATASOURCE_USERNAME:edge}
+    password: ${SPRING_DATASOURCE_PASSWORD:edge}
+  jpa:
+    # DDL 은 Flyway(libs/schema)가 SSOT(ADR-0005) — Hibernate 는 스키마를 만들거나
+    # 바꾸지 않고 엔티티↔테이블 정합만 검증한다. 앱은 마이그레이션을 돌리지 않는다.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+admin:
+  auth:
+    # 데모 운영자 부트스트랩 계정(config 전용 — DB 미배선 단계라 시드 없이 메모리 대조).
+    # 비밀번호는 env 주입만 허용 — 기본값을 커밋하지 않는다. 이 API 는 공개 엣지
+    # (admin-api-dev ALB, ALPHA-473)라 온프렘 내부망 전제의 tenant-console 과 달리
+    # 알려진 기본 비밀번호가 곧 원격 로그인이다. env 미설정이면 계정이 비활성으로
+    # 남아 로그인 불가(fail-closed) — 로컬은 compose 가 주입한다(demo-operator-1).
+    # 운영자 IdP 연동(ALPHA-474) 시 이 경로는 대체된다.
+    bootstrap-operators:
+      - email: operator@edge.local
+        name: EDGE 운영팀
+        password: ${ADMIN_BOOTSTRAP_OPERATOR_PASSWORD:}

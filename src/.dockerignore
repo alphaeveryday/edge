@@ -1,0 +1,13 @@
+# Docker 빌드 컨텍스트는 이 src/ 루트다(멀티프로젝트). 각 앱 Dockerfile 은
+# -f apps/<svc>/Dockerfile 로 지정하되 컨텍스트는 여기. 불필요·대용량 경로는 제외.
+**/build/
+**/.gradle
+**/node_modules
+node_modules
+**/dist
+.git
+.idea
+*.iml
+# 다른 런타임 산출물
+**/__pycache__
+**/.venv

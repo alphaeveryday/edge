@@ -1,0 +1,4 @@
+# Python 워크스페이스 루트 (ADR-0001 — 런타임별 워크스페이스 루트 분리, Python은 uv).
+# 멤버는 Python 패키지가 생길 때마다 추가한다 (analysis-engine·data-pipeline·libs/ontology).
+[tool.uv.workspace]
+members = ["apps/cloud/analysis-engine", "apps/cloud/data-pipeline", "libs/ontology"]

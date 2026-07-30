@@ -1,0 +1,261 @@
+"""CLI composition root: 인자 파싱 → 어댑터 조립 → 파이프라인 실행."""
+from __future__ import annotations
+
+import argparse
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .adapters.classification import (
+    connect,
+    latest_industry_csv,
+    load_classification,
+    read_industry_csv,
+    source_stamp,
+)
+from .adapters.eventstore import EventStore
+from .adapters.lake import LakeReader, make_s3_client
+from .adapters.llm import DeepSeekClient
+from .adapters.price_daily import (
+    COMMIT_BATCH_FILES,
+    load_price_daily,
+    read_daily_bars,
+    source_version,
+)
+from .adapters.readonly import connect_readonly, emit, run_query
+from .adapters.universe import load_universe
+from .config import PipelineError, _load_pg, load_settings, parse_trade_date
+from .observability import log
+from .pipeline import run
+
+
+def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    """CLI 인자(--trade-date·--request-id)와 서브커맨드를 파싱한다."""
+    parser = argparse.ArgumentParser(
+        prog="python -m edge_analysis",
+        description="Explain the target ETF's daily move.",
+    )
+    parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD (Asia/Seoul); default today")
+    parser.add_argument("--request-id", default=None, help="caller correlation id")
+    # 서브커맨드를 주지 않으면 종전처럼 설명 파이프라인이 돈다 - Step Functions 의 기동
+    # 커맨드를 바꾸지 않기 위해서다.
+    sub = parser.add_subparsers(dest="command")
+    loader = sub.add_parser(
+        "load-classification",
+        help="Load the FMP industry map into instrument_classification.",
+    )
+    loader.add_argument("--path", required=True,
+                        help="industry map CSV, or a directory to pick the latest from")
+    loader.add_argument("--as-of-date", default=None,
+                        help="YYYY-MM-DD classification as-of; default today (Asia/Seoul)")
+    loader.add_argument("--source", default="FMP", help="origin tag stored on every row")
+    loader.add_argument("--available-at", default=None,
+                        help="ISO timestamp; default the CSV filename stamp")
+
+    # 전 종목 원장. 분류·일봉보다 먼저 돌아야 한다 - 둘 다 instrument_id 에 FK 가 걸려 있어
+    # 원장이 없으면 전 종목이 미해소로 떨어진다.
+    universe = sub.add_parser(
+        "load-universe",
+        help="Create entity/instrument rows for every ticker in the industry map.",
+    )
+    universe.add_argument("--path", required=True,
+                          help="industry map CSV, or a directory to pick the latest from")
+    universe.add_argument("--source", default="FMP", help="origin tag recorded in the log")
+    universe.add_argument("--market-code", default="XKRX",
+                          help="MIC of the listing venue; XKRX matches the entity seed")
+
+    # 일봉 가격 원장. load-universe 뒤에 돌아야 한다 - instrument_id 해소가 전제다.
+    prices = sub.add_parser(
+        "load-price-daily",
+        help="Aggregate 5-minute parquet bars into price_daily rows.",
+    )
+    prices.add_argument("--path", required=True,
+                        help="5-minute parquet file, or a directory of *.parquet")
+    prices.add_argument("--source", default="FMP", help="origin tag recorded in the log")
+    prices.add_argument("--before", default=None,
+                        help="YYYY-MM-DD exclusive upper bound; skip bars on or after it")
+
+    # 읽기전용 원장 질의. 파이프라인과 같은 이미지에 얹는다 - 질의 전용 이미지를 따로
+    # 두면 스키마를 아는 코드가 두 곳으로 갈라진다.
+    querier = sub.add_parser("query", help="Run one read-only SQL query against the ledger.")
+    source = querier.add_mutually_exclusive_group(required=True)
+    source.add_argument("--sql", help="a single SELECT/WITH statement")
+    source.add_argument("--file", help="path to a file holding one statement")
+    return parser.parse_args(list(argv) if argv is not None else None)
+
+
+def load_classification_command(args: argparse.Namespace) -> int:
+    """산업분류 원장 적재: CSV 읽기 → 티커 해소 → UPSERT → 건수 로그.
+
+    ``load_settings`` 를 거치지 않는다 - 그건 DEEPSEEK_API_KEY 를 요구하고, 원장 적재는
+    LLM 키가 없는 운영 환경에서도 돌아야 한다. 필요한 설정은 Postgres 접속뿐이다.
+    """
+    path = Path(args.path)
+    if path.is_dir():
+        path = latest_industry_csv(path)
+    rows = read_industry_csv(path)
+    stamp = source_stamp(path)
+    as_of = parse_trade_date(args.as_of_date)
+    available_at = args.available_at or (stamp or datetime.now(timezone.utc)).isoformat()
+
+    conn = connect(_load_pg())
+    try:
+        counts = load_classification(
+            conn, rows,
+            as_of_date=as_of,
+            source=args.source,
+            data_version=path.stem,
+            available_at=available_at,
+        )
+        conn.commit()  # 한 스냅샷 = 한 트랜잭션. 어댑터는 커밋하지 않는다.
+    finally:
+        conn.close()
+
+    log("classification.loaded", path=str(path), rows=len(rows),
+        as_of_date=as_of.isoformat(), available_at=available_at, **counts)
+    if rows and not (counts["loaded"] + counts["updated"]):
+        # 한 건도 붙지 않은 적재는 성공이 아니다. 0 으로 끝내면 원장이 빈 채로 넘어가고
+        # 그 뒤 인과 셀이 전부 UNCERTAIN 으로 떨어진 이유를 여기서 찾지 못한다.
+        log("error", message=f"{path}: no rows loaded ({counts['unresolved']} unresolved)")
+        return 1
+    return 0
+
+
+def load_universe_command(args: argparse.Namespace) -> int:
+    """전 종목 원장 적재: CSV 읽기 → 티커 정규화 → entity·instrument UPSERT → 건수 로그.
+
+    ``load_settings`` 를 거치지 않는다 - 원장 적재는 LLM 키가 없는 운영 환경에서도 돌아야
+    한다(``load_classification_command`` 과 같은 이유).
+
+    분류와 **같은 CSV 를 같은 파서로** 읽는다. 원천이 갈라지면 원장에 있는 종목과 분류가
+    붙는 종목이 달라지고, 그 차이는 미해소 건수로만 드러난다.
+    """
+    path = Path(args.path)
+    if path.is_dir():
+        path = latest_industry_csv(path)
+    rows = read_industry_csv(path)
+    log("universe.read", path=str(path), rows=len(rows), market_code=args.market_code)
+
+    conn = connect(_load_pg())
+    try:
+        counts = load_universe(
+            conn, rows,
+            source=args.source,
+            data_version=path.stem,
+            market_code=args.market_code,
+        )
+        conn.commit()  # 한 스냅샷 = 한 트랜잭션. 어댑터는 커밋하지 않는다.
+    finally:
+        conn.close()
+
+    log("universe.loaded", path=str(path), rows=len(rows), source=args.source,
+        market_code=args.market_code, data_version=path.stem, **counts)
+    if rows and not (counts["loaded"] + counts["updated"]):
+        # 한 건도 붙지 않은 적재는 성공이 아니다. 0 으로 끝내면 일봉도 분류도 붙을 자리가
+        # 없는 채로 다음 단계가 돌고, 인과 셀이 전부 UNCERTAIN 이 된 이유를 여기서 못 찾는다.
+        log("error", message=f"{path}: no instruments loaded ({counts['unresolved']} rejected)")
+        return 1
+    return 0
+
+
+def load_price_daily_command(args: argparse.Namespace) -> int:
+    """일봉 원장 적재: 5분봉 parquet → 일봉 집산 → 티커 해소 → UPSERT → 건수 로그.
+
+    ``load_settings`` 를 거치지 않는다 - 원장 적재는 LLM 키가 없는 운영 환경에서도 돌아야
+    한다. 필요한 설정은 Postgres 접속뿐이다.
+
+    종목당 커밋하지 않는다 - 파일이 1272개라 fsync 가 그 수만큼 늘어난다. 대신
+    ``COMMIT_BATCH_FILES`` 개마다 한 트랜잭션으로 밀어 커밋한다. 가격은 분류 스냅샷과 달라
+    한 파일이 곧 한 종목의 독립된 시계열이라, 배치 경계가 원장의 시점을 섞지 않는다.
+    """
+    path = Path(args.path)
+    paths = sorted(path.glob("*.parquet")) if path.is_dir() else [path]
+    if not paths:
+        raise PipelineError(f"{path}: no parquet files")
+    # 스냅샷 식별자는 배치 전체가 하나여야 한다 - 파일마다 다르면 재적재 대조가 불가능하다.
+    data_version = source_version(max(paths, key=lambda item: item.stat().st_mtime))
+    before = parse_trade_date(args.before) if args.before else None
+
+    totals = {"loaded": 0, "updated": 0, "unresolved": 0, "duplicate": 0}
+    skipped: list[str] = []
+    conn = connect(_load_pg())
+    try:
+        batch: list = []
+        for done, source_path in enumerate(paths, start=1):
+            try:
+                bars = read_daily_bars(source_path)
+                # 상한이 있으면 **집산 뒤에** 자른다. 수익률은 직전 거래일 종가로 계산되므로
+                # 원봉을 먼저 자르면 경계일의 수익률이 사라진다. 이 상한이 필요한 이유는
+                # 정식 일봉 파이프라인이 이미 채운 최근 구간을 5분봉 파생값으로 덮지 않기
+                # 위해서다 - 두 원천의 종가는 완전히 일치하지 않는다.
+                batch.extend(b for b in bars if before is None or b.trade_date < before)
+            except PipelineError as exc:
+                # 심볼이 티커가 아닌 파일(지수 프록시 등) 하나가 1272개 적재를 죽이면 안 된다.
+                skipped.append(source_path.name)
+                log("price_daily.skipped", path=source_path.name, reason=str(exc))
+            if done % COMMIT_BATCH_FILES and done != len(paths):
+                continue
+            counts = load_price_daily(
+                conn, batch, source=args.source, data_version=data_version,
+            )
+            conn.commit()  # 어댑터는 커밋하지 않는다 - 배치 경계는 호출자가 정한다.
+            for key, value in counts.items():
+                totals[key] += value
+            log("price_daily.progress", files=done, of=len(paths), rows=len(batch), **counts)
+            batch = []
+    finally:
+        conn.close()
+
+    log("price_daily.loaded", path=str(path), files=len(paths), skipped=len(skipped),
+        data_version=data_version, **totals)
+    if not (totals["loaded"] + totals["updated"]):
+        # 한 건도 붙지 않은 적재는 성공이 아니다. 0 으로 끝내면 원장이 빈 채로 넘어가고
+        # 그 뒤 인과 셀이 전부 UNCERTAIN 으로 떨어진 이유를 여기서 찾지 못한다.
+        log("error", message=f"{path}: no rows loaded ({totals['unresolved']} unresolved)")
+        return 1
+    return 0
+
+
+def query_command(args: argparse.Namespace) -> int:
+    """읽기전용 질의 1건: 가드 → 상한 실행 → JSON Lines 출력.
+
+    ``load_settings`` 를 거치지 않는다 - 원장을 들여다보는 일에 LLM 키가 필요하지 않다.
+    """
+    sql = Path(args.file).read_text(encoding="utf-8") if args.file else args.sql
+    conn = connect_readonly(_load_pg())
+    try:
+        columns, rows = run_query(conn, sql)
+    finally:
+        conn.close()
+    emit(columns, rows)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """설정 로드·어댑터 조립·실행. 실패(PipelineError)는 로그 + 비0 종료."""
+    args = parse_args(argv)
+    try:
+        if args.command == "load-classification":
+            return load_classification_command(args)
+        if args.command == "load-universe":
+            return load_universe_command(args)
+        if args.command == "load-price-daily":
+            return load_price_daily_command(args)
+        if args.command == "query":
+            return query_command(args)
+        settings = load_settings(trade_date=args.trade_date, request_id=args.request_id)
+        s3 = make_s3_client(settings)
+        lake = LakeReader(s3, settings.lake_bucket)
+        client = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_model)
+        store = EventStore.connect(settings)
+        try:
+            return run(settings, lake=lake, store=store, client=client, s3=s3)
+        finally:
+            store.close()
+    except PipelineError as exc:
+        log("error", message=str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
