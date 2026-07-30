@@ -59,7 +59,11 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 	private static final String TASKS_SQL = """
 			SELECT expected_task_id, stage, task_key, dataset, plan_status, task_outcome,
 			       data_status, records_out, failed_records, expected_at, deadline_at,
-			       missed_at, fulfilled_at, skip_reason, outcome_reason, current_attempt_id
+			       missed_at, fulfilled_at, skip_reason, outcome_reason, current_attempt_id,
+			       completeness IS NOT NULL AS has_completeness,
+			       (completeness ->> 'expected')::bigint AS completeness_expected,
+			       (completeness ->> 'received')::bigint AS completeness_received,
+			       (completeness ->> 'missing')::bigint AS completeness_missing
 			  FROM ops_expected_task
 			 WHERE pipeline_run_id = ?
 			 ORDER BY CASE stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, task_key
@@ -251,6 +255,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 				// "신호 없음"이 화면에서 구분된다(ALPHA-182 의 NULL 계약).
 				nullableLong(rs, "records_out"),
 				nullableLong(rs, "failed_records"),
+				mapCompleteness(rs),
 				rs.getObject("expected_at", OffsetDateTime.class),
 				rs.getObject("deadline_at", OffsetDateTime.class),
 				rs.getObject("missed_at", OffsetDateTime.class),
@@ -259,6 +264,16 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 				rs.getString("outcome_reason"),
 				attempts.getOrDefault(rs.getString("expected_task_id"), List.of()),
 				rs.getString("current_attempt_id"));
+	}
+
+	private static CompletenessStatus mapCompleteness(ResultSet rs) throws SQLException {
+		if (!rs.getBoolean("has_completeness")) {
+			return null;
+		}
+		return new CompletenessStatus(
+				nullableLong(rs, "completeness_expected"),
+				nullableLong(rs, "completeness_received"),
+				nullableLong(rs, "completeness_missing"));
 	}
 
 	private static IssueStatus mapIssue(ResultSet rs, int rowNum) throws SQLException {

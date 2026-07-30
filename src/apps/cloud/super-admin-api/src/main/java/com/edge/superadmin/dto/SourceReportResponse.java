@@ -1,6 +1,7 @@
 package com.edge.superadmin.dto;
 
 import com.edge.superadmin.repository.PipelineStatusRepository.AttemptStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
@@ -21,9 +22,9 @@ import java.util.List;
  * <p>런이 없으면 {@code run} 이 null, {@code tasks}·{@code issues} 가 빈 배열이다 — 초기 환경의
  * 정상 상태이지 에러가 아니다. 다만 <b>지목한 런이 없는 경우는 여기로 오지 않는다</b>(404).
  *
- * <p>{@code completeness}(JSONB)는 아직 싣지 않는다. ALPHA-611부터 ETF 수집 3작업은 값을
- * 채우지만, API·UI에서 분모/분자 의미를 함께 노출하는 계약은 별도 범위다. 일부 작업만 배선된
- * 값을 설명 없이 섞어 내리지 않고 그 계약이 정해질 때 함께 얹는다.
+ * <p>{@code completeness}는 기대·수신 개체 수와 원장이 기록한 차이를 raw 숫자로 싣는다
+ * (ALPHA-630). 아직 완전성 미배선인 작업은 객체 자체가 null 이고, 수신 신호가 없으면 객체 안의
+ * {@code received}·{@code missing}이 null 이다 — 모름을 0으로 메우거나 API에서 다시 계산하지 않는다.
  */
 public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks,
 		List<IssueResponse> issues) {
@@ -39,7 +40,8 @@ public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks,
 	 */
 	public record TaskResponse(String stage, String taskKey, String dataset, String planStatus,
 			String outcome, String dataStatus, String executionStatus, Long recordsOut,
-			Long failedRecords, String lastFinishedAt, String expectedAt, String deadlineAt,
+			Long failedRecords, CompletenessResponse completeness, String lastFinishedAt,
+			String expectedAt, String deadlineAt,
 			String missedAt, String fulfilledAt, String skipReason, String outcomeReason,
 			List<AttemptResponse> attempts) {
 
@@ -48,11 +50,20 @@ public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks,
 			return new TaskResponse(t.stage(), t.taskKey(), t.dataset(), t.planStatus(),
 					t.outcome(), t.dataStatus(),
 					current == null ? null : current.executionStatus(),
-					t.recordsOut(), t.failedRecords(),
+					t.recordsOut(), t.failedRecords(), CompletenessResponse.from(t.completeness()),
 					iso(current == null ? null : current.finishedAt()),
 					iso(t.expectedAt()), iso(t.deadlineAt()), iso(t.missedAt()),
 					iso(t.fulfilledAt()), t.skipReason(), t.outcomeReason(),
 					t.attempts().stream().map(AttemptResponse::from).toList());
+		}
+	}
+
+	/** {@code missing}도 저장된 원장 값이다 — API에서 {@code expected - received}로 만들지 않는다. */
+	public record CompletenessResponse(Long expected, Long received, Long missing) {
+
+		private static CompletenessResponse from(CompletenessStatus completeness) {
+			return completeness == null ? null : new CompletenessResponse(
+					completeness.expected(), completeness.received(), completeness.missing());
 		}
 	}
 

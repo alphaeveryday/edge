@@ -110,6 +110,11 @@ public interface PipelineStatusRepository {
 	 * 없거나 못 믿을 값이면 0 으로 메우지 않는다. 0 으로 내리면 화면에서 "0건 처리"와 "모름"이
 	 * 구분되지 않는다.
 	 *
+	 * <p>{@code completeness}는 행 건수가 아니라 기대·수신 <b>개체 수</b>다(ALPHA-611).
+	 * 아직 배선되지 않은 작업은 객체 자체가 null 이고, 기대값만 고정됐지만 수신 신호를 못 얻은
+	 * 작업은 객체 안의 {@code received}·{@code missing}이 null 이다. 콘솔은 이 값을 다시 계산하지
+	 * 않고 원장에 기록된 사실 그대로 읽는다.
+	 *
 	 * <p>시각 넷은 <b>서로 다른 질문</b>에 답한다: {@code expectedAt}(언제 하기로 했나) ·
 	 * {@code deadlineAt}(언제까지였나) · {@code missedAt}(언제 못 했다고 판정했나) ·
 	 * {@code fulfilledAt}(언제 됐나). {@code missedAt} 은 비래치라 나중에 FULFILLED 로 가도 남는다 —
@@ -129,6 +134,7 @@ public interface PipelineStatusRepository {
 	 */
 	record TaskStatus(String stage, String taskKey, String dataset, String planStatus,
 			String outcome, String dataStatus, Long recordsOut, Long failedRecords,
+			CompletenessStatus completeness,
 			OffsetDateTime expectedAt, OffsetDateTime deadlineAt, OffsetDateTime missedAt,
 			OffsetDateTime fulfilledAt, String skipReason, String outcomeReason,
 			List<AttemptStatus> attempts, String currentAttemptId) {
@@ -187,6 +193,10 @@ public interface PipelineStatusRepository {
 			}
 			return attempts.getLast();
 		}
+	}
+
+	/** 기대·수신 개체 수와 그 차이. 세 값 모두 원장의 JSONB 값을 재계산 없이 옮긴다. */
+	record CompletenessStatus(Long expected, Long received, Long missing) {
 	}
 
 	/**

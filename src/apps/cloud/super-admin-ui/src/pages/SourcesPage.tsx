@@ -234,6 +234,14 @@ function TaskRow({ task }: { task: TaskStatus }) {
             <StatusBadge tone="neutral">{`시도 ${task.attempts.length}회`}</StatusBadge>
           )}
         </span>
+        {task.completeness && (
+          <span
+            className="t-xs num"
+            style={{ display: 'block', color: 'var(--fg-3)', marginTop: 4 }}
+          >
+            {`ETF 대조 · 기대 ${count(task.completeness.expected)} · 수집 ${count(task.completeness.received)} · 누락 ${count(task.completeness.missing)}`}
+          </span>
+        )}
       </td>
       <td className="num">{finishedAt(task.lastFinishedAt)}</td>
       <td className="col-num num">{count(task.recordsOut)}</td>

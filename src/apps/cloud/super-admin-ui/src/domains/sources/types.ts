@@ -71,6 +71,13 @@ export interface Attempt {
   recordSource: RecordSource | null;
 }
 
+/** Planner 기대 ETF 수와 실제 수집 ETF 수의 대조 결과. null 은 "모름"이지 0이 아니다. */
+export interface TaskCompleteness {
+  expected: number | null;
+  received: number | null;
+  missing: number | null;
+}
+
 export interface TaskStatus {
   /** raw · normalize · feature — 파이프라인 순서 */
   stage: string;
@@ -95,6 +102,8 @@ export interface TaskStatus {
    */
   recordsOut: number | null;
   failedRecords: number | null;
+  /** 기대 유니버스를 배선한 작업만 값이 있다. 행 수(recordsOut)와 다른 ETF entity 개수다. */
+  completeness: TaskCompleteness | null;
   /** ISO 8601. 시도가 없으면 null */
   lastFinishedAt: string | null;
   /** 언제 하기로 했나 */

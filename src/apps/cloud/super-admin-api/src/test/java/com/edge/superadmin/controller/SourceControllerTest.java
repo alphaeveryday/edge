@@ -2,6 +2,7 @@ package com.edge.superadmin.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.PipelineStatusRepository.AttemptStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.GridCell;
 import com.edge.superadmin.repository.PipelineStatusRepository.GridSlot;
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
@@ -68,16 +69,16 @@ class SourceControllerTest {
 				// 실패 후 재시도로 성공 — 마지막 한 건만 보면 실패했다는 사실이 사라진다.
 				// 원장은 성공한 2번 시도를 현재 결과로 지목한다(current_attempt_id).
 				new TaskStatus("raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
-						"FULFILLED", "VALID", 2736L, 0L, null, null, null, FINISHED, null, null,
+						"FULFILLED", "VALID", 2736L, 0L, null, null, null, null, FINISHED, null, null,
 						List.of(attempt(1, "FAILED", 1, "ecs task exited", "WRAPPER"),
 								attempt(2, "SUCCEEDED", 0, null, "RECONCILER_BACKFILL")),
 						"att-2"),
 				new TaskStatus("raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
-						null, null, null, null, null, null, null, null, "NON_TRADING_DAY", null,
+						null, null, null, null, null, null, null, null, null, "NON_TRADING_DAY", null,
 						List.of(), null),
 				// 실행은 성공인데 데이터는 불완전 — 두 축이 따로 내려가는지 잠근다.
 				new TaskStatus("feature", "TAG_NEWS", "news_assertions", "DUE",
-						"FULFILLED", "INCOMPLETE", null, null, null, null, null, FINISHED, null,
+						"FULFILLED", "INCOMPLETE", null, null, null, null, null, null, FINISHED, null,
 						null, List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER")), "att-1")),
 				List.of(new IssueStatus("LEDGER_GAP", "task", "TAG_NEWS", "OPEN", 3,
 						STARTED, FINISHED, null)));
@@ -114,7 +115,37 @@ class SourceControllerTest {
 				// 실행 성공 옆의 데이터 결손 — 이 축이 빠지면 불완전한 산출이 온전한 초록이 된다.
 				.andExpect(jsonPath("$.result.tasks[2].dataStatus").value("INCOMPLETE"))
 				.andExpect(jsonPath("$.result.tasks[2].recordsOut").doesNotExist())
-				.andExpect(jsonPath("$.result.tasks[2].failedRecords").doesNotExist());
+				.andExpect(jsonPath("$.result.tasks[2].failedRecords").doesNotExist())
+				// 완전성 미배선 작업은 빈 객체가 아니라 null — 기대값이 있는 UNKNOWN과 구분한다.
+				.andExpect(jsonPath("$.result.tasks[2].completeness").doesNotExist());
+	}
+
+	@Test
+	void ETF_완전성은_행_건수와_섞거나_재계산하지_않고_그대로_내려간다() throws Exception {
+		// WHY: recordsOut 은 구성종목 행 수, received 는 unique ETF 수다. API가 둘을 합치거나
+		//      expected-received 를 다시 계산하면 원장이 판정한 사실과 다른 다섯 번째 상태가 생긴다.
+		PipelineRunStatus run = new PipelineRunStatus(RUN_KEY, "LAUNCHED", "SUCCEEDED", null,
+				List.of(
+						new TaskStatus("raw", "ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "DUE",
+								"FULFILLED", "INCOMPLETE", 4120L, 0L,
+								new CompletenessStatus(33L, 32L, 1L),
+								null, null, null, FINISHED, null, null, List.of(), null),
+						// 기대 스냅샷은 있지만 observer가 수신 수를 못 낸 상태. null을 0으로 만들면
+						// "33개 모두 누락"이라는 거짓 사실이 된다.
+						new TaskStatus("raw", "NAV_COLLECTION_KIS", "etf_nav", "DUE",
+								"FULFILLED", "UNKNOWN", null, null,
+								new CompletenessStatus(33L, null, null),
+								null, null, null, FINISHED, null, null, List.of(), null)),
+				List.of());
+
+		mvc(run).perform(get("/api/v1/sources/report"))
+				.andExpect(jsonPath("$.result.tasks[0].recordsOut").value(4120))
+				.andExpect(jsonPath("$.result.tasks[0].completeness.expected").value(33))
+				.andExpect(jsonPath("$.result.tasks[0].completeness.received").value(32))
+				.andExpect(jsonPath("$.result.tasks[0].completeness.missing").value(1))
+				.andExpect(jsonPath("$.result.tasks[1].completeness.expected").value(33))
+				.andExpect(jsonPath("$.result.tasks[1].completeness.received").doesNotExist())
+				.andExpect(jsonPath("$.result.tasks[1].completeness.missing").doesNotExist());
 	}
 
 	@Test
@@ -156,7 +187,7 @@ class SourceControllerTest {
 		//      원장의 current_attempt_id 가 그 답을 이미 갖고 있으므로 그걸 따른다.
 		PipelineRunStatus run = new PipelineRunStatus(RUN_KEY, "LAUNCHED", "SUCCEEDED", null,
 				List.of(new TaskStatus("raw", "NAV_COLLECTION_KIS", "etf_nav", "DUE",
-						"FULFILLED", "VALID", 30L, 0L, null, null, null, FINISHED, null, null,
+						"FULFILLED", "VALID", 30L, 0L, null, null, null, null, FINISHED, null, null,
 						List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER"),
 								// 시각상 마지막이지만 실제로는 먼저 있었던 실패의 사후 복구다.
 								attempt(2, "FAILED", 1, "ecs task exited",
