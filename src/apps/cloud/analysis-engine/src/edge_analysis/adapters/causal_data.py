@@ -5,7 +5,7 @@
 
     storm v_event        -> source_event
     storm v_event_entity -> event_argument
-    storm v_daily        -> price_daily          (simple_return·volume)
+    storm v_daily        -> price_daily          (close_price·volume)
     storm v_hold         -> etf_holding_snapshot
     storm v_entity.industry -> instrument_classification  (V202607291720 신설)
 
@@ -204,23 +204,24 @@ class CausalData:
         if not ds:
             return []
         sql = f"""
-            WITH u AS (
-                SELECT p.instrument_id, p.trade_date,
+            WITH {self._RETURNS},
+            u AS (
+                SELECT r.instrument_id, r.trade_date,
                        i.ticker, cls.sector_name, cls.industry_name,
                        cls.market_cap, cls.listing_market
-                FROM price_daily p
-                JOIN instrument i ON i.instrument_id = p.instrument_id
+                FROM returns r
+                JOIN instrument i ON i.instrument_id = r.instrument_id
                 LEFT JOIN LATERAL (
                     SELECT sector_name, industry_name, market_cap, listing_market
                     FROM instrument_classification ic
-                    WHERE ic.instrument_id = p.instrument_id
-                      AND ic.as_of_date <= p.trade_date
+                    WHERE ic.instrument_id = r.instrument_id
+                      AND ic.as_of_date <= r.trade_date
                     ORDER BY ic.as_of_date DESC LIMIT 1
                 ) cls ON TRUE
                 -- ::date[] 캐스팅이 필요하다. 날짜를 ISO 문자열로 넘기므로 psycopg2 가
                 -- text[] 로 어댑트하고, `date = text` 비교는 연산자가 없어 실패한다.
                 -- 캐스팅이 없으면 **모든 대조군 질의가 죽어** 인과 설계가 성립하지 못한다.
-                WHERE p.trade_date = ANY(%s::date[]) AND p.simple_return IS NOT NULL
+                WHERE r.trade_date = ANY(%s::date[]) AND r.r IS NOT NULL
             )
             SELECT u.instrument_id, u.trade_date FROM u WHERE ({cl})
             ORDER BY u.trade_date, u.instrument_id LIMIT {int(limit)}"""
@@ -249,14 +250,25 @@ class CausalData:
         return {str(i): str(n) for i, n in rows}
 
     # ── 정렬된 열 ───────────────────────────────────────────────────────
-    _EXCESS = """
-        xs AS (SELECT trade_date, avg(simple_return) mkt, count(*) n
-               FROM price_daily WHERE simple_return IS NOT NULL
+    # price_daily는 관측 원장이다. 반환은 종목별 직전 거래일 종가에서 파생한다.
+    _RETURNS = """
+        returns AS (
+            SELECT instrument_id, trade_date,
+                   close_price / LAG(close_price) OVER (
+                       PARTITION BY instrument_id ORDER BY trade_date
+                   ) - 1 AS r
+            FROM price_daily
+            WHERE close_price > 0
+        )"""
+    _EXCESS = f"""
+        { _RETURNS },
+        xs AS (SELECT trade_date, avg(r) mkt, count(*) n
+               FROM returns WHERE r IS NOT NULL
                GROUP BY trade_date HAVING count(*) >= %s),
-        ex AS (SELECT p.instrument_id, p.trade_date,
-                      p.simple_return - xs.mkt AS ar, p.simple_return AS r
-               FROM price_daily p JOIN xs ON xs.trade_date = p.trade_date
-               WHERE p.simple_return IS NOT NULL)"""
+        ex AS (SELECT r.instrument_id, r.trade_date,
+                      r.r - xs.mkt AS ar, r.r
+               FROM returns r JOIN xs ON xs.trade_date = r.trade_date
+               WHERE r.r IS NOT NULL)"""
 
     def ar(self, pairs, *, min_cross: int = 50) -> np.ndarray:
         """쌍마다 **당일 초과수익**(횡단면 평균 대비). 순서 유지, 없으면 nan."""

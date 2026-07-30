@@ -178,12 +178,19 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
-      # 부트스트랩 비밀번호는 앱 기본값(demo-admin-1·demo-reviewer-1)을 그대로 쓴다 — override 를
-      # 열지 않는다. UI 자동로그인(ensureDevSession)이 빌드타임에 같은 기본값을 baked 하므로,
-      # API 쪽만 런타임에 바꾸면 두 값이 갈려 자동로그인이 401 로 깨진다(독립 설정 금지).
+      # 부트스트랩 비밀번호(ALPHA-627) — 콘솔이 CloudFront 로 공개되므로 기본값 폴백을 두지
+      # 않는다(:? = 미설정이면 compose 가 fail-loud). 배포 박스는 /opt/edge-onprem/.env 에
+      # 기본값(demo-admin-1 류)이 아닌 값을 수동 1회 주입한다(TOSS 키와 같은 패턴). 알려진
+      # 문서화 비번으로 공개 기동되는 사고를 구성 단계에서 차단한다. 로컬 검증은 README 참조.
+      # 주의: 부트스트랩 시드는 member 0건일 때 1회 — 이미 시드된 박스는 env 변경만으로
+      # 비번이 회전되지 않는다(README "환경 변수" 절).
+      CONSOLE_BOOTSTRAP_ADMIN_PASSWORD: ${CONSOLE_BOOTSTRAP_ADMIN_PASSWORD:?set-in-box-.env}
+      CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD: ${CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD:?set-in-box-.env}
 
   # [edge-onprem] 검수 콘솔 UI(nginx) — SPA 정적 + /api → tenant-console-api 프록시(한 오리진 co-host).
-  # 127.0.0.1:8090 에만 바인딩 — 공개 표면 0, SSM 터널로만 도달(내부 도구 자세). README 참조.
+  # 호스트 공개 바인딩(ALPHA-627) — CloudFront(demo-console 도메인)가 이 포트를 오리진으로 프록시하고,
+  # 박스 SG 인바운드는 CloudFront origin-facing 프리픽스로만 열린다(직접 접근 차단). 진입은 로그인
+  # 화면(ALPHA-626)뿐 — 자동 세션(autosession) 빌드는 폐기. README "검수 콘솔 접근" 참조.
   tenant-console-ui:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/tenant-console-ui:${IMAGE_TAG:-0.1.0}
     container_name: edge-tenant-console-ui
@@ -193,7 +200,7 @@ services:
     networks:
       - serving
     ports:
-      - "127.0.0.1:8090:80"
+      - "${CONSOLE_PORT:-8090}:80"
 
 # 3망 세분화(ALPHA-561, ADR-0036) — 배치 근거는 헤더 주석.
 networks:

@@ -4,6 +4,8 @@ import type { SessionUser } from './types';
 export interface SessionRepository {
   current(): Promise<SessionUser>;
   updateDisplayName(name: string): Promise<void>;
+  /** 세션 쿠키 발급 (POST /auth/login) */
+  login(email: string, password: string): Promise<void>;
   /** 서버 세션 무효화 (POST /auth/logout) */
   logout(): Promise<void>;
 }

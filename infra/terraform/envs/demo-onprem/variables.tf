@@ -40,6 +40,18 @@ variable "mock_broker_port" {
   default     = 8080
 }
 
+variable "console_domain" {
+  description = "데모 검수 콘솔 도메인 (foundation 와일드카드 하위) — ALPHA-627"
+  type        = string
+  default     = "demo-console.edgesignal.dev"
+}
+
+variable "console_port" {
+  description = "검수 콘솔(tenant-console-ui nginx) 호스트 포트 — CloudFront 오리진이 프록시할 대상"
+  type        = number
+  default     = 8090
+}
+
 variable "subnet_id" {
   description = "데모 박스를 둘 public 서브넷 ID. 비우면 default VPC 의 첫 public 서브넷(계정에 default VPC 없으면 이 변수로 지정)"
   type        = string

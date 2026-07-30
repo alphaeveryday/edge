@@ -4,10 +4,14 @@ server:
       cookie:
         # 세션 쿠키 기반 쓰기 API 의 CSRF 경량 방어(ADR-0025 데모 범위):
         # SameSite=Strict 로 크로스사이트 요청에 쿠키가 실리지 않게 한다.
-        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 SSO 모드·HTTPS 종단에서는
-        # secure 쿠키·표준 CSRF 토큰이 추가된다(실계약 시점).
+        # http-only 는 XSS 로부터 쿠키 탈취를 막는다. 운영 SSO 모드에서는 표준 CSRF
+        # 토큰이 추가된다(실계약 시점).
+        # secure: 콘솔이 CloudFront(HTTPS)로 공개되면서 켠다(ALPHA-627) — http:// 진입 시
+        # 리다이렉트 전 평문 요청에 쿠키가 실리는 것을 차단. 로컬 개발·SSM 터널은 모두
+        # localhost 라 브라우저의 localhost 예외로 Secure 쿠키가 그대로 동작한다.
         same-site: strict
         http-only: true
+        secure: true
 
 spring:
   application:

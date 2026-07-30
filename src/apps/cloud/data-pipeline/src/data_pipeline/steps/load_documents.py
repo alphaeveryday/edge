@@ -149,15 +149,24 @@ def run(
                     )
                     # 스니펫은 document 가 **이미 있어도** 채운다 — 분석엔진이 제목만 보던
                     # 원인이 여기였다. 값이 실제로 바뀔 때만 UPDATE(멱등 집계 보존).
+                    #
+                    # ⚠️ id 는 위에서 계산한 `document_id` 가 아니라 **자연키로 되읽은 실제
+                    # 행 값**이어야 한다(ALPHA-628). 위 INSERT 가 DO NOTHING 이라 자연키가
+                    # 이미 있으면 기존 행의 id 가 남는데, ALPHA-456 이전에 적재된 행은 랜덤
+                    # ULID id 를 갖고 있어 계산값과 갈린다 — 계산값으로 넣으면 없는 문서를
+                    # 참조해 FK 가 터지고, 커밋 경계가 런 전체라 전량 롤백된다. 서브쿼리로
+                    # 넣어 왕복 없이 해결한다(assemble_events·load_assertions 의 자연키
+                    # 브리지와 같은 규칙, ALPHA-409).
                     if doc["lead_text"]:
                         with conn.cursor() as lead_cur:
                             lead_cur.execute(
                                 "INSERT INTO news_document (document_id, lead_text)"
-                                " VALUES (%s, %s)"
+                                " SELECT document_id, %s FROM document"
+                                " WHERE source_code = %s AND source_document_id = %s"
                                 " ON CONFLICT (document_id) DO UPDATE"
                                 " SET lead_text = EXCLUDED.lead_text"
                                 " WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text",
-                                (document_id, doc["lead_text"]),
+                                (doc["lead_text"], source_code, article_id),
                             )
                             if lead_cur.rowcount:
                                 lead_written += 1
@@ -174,7 +183,9 @@ def run(
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
         logger.exception("문서 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
-        created, created_sample = 0, []
+        # 롤백됐으니 쓰기 카운터는 전부 0 이다 — lead_written 을 남기면 로그가 실제보다
+        # 많이 했다고 말한다(계측은 관대한 방향으로 틀리면 안 된다, Rule 12).
+        created, created_sample, lead_written = 0, [], 0
         exit_code = 1
 
     log = {
@@ -185,7 +196,9 @@ def run(
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_no_available_at": skipped_no_available_at,
         "already_present": already, "created": created,
-        # 스니펫이 실제로 몇 건 채워졌는지 — 0 이면 canonical 에 lead_text 가 없다는 뜻이다.
+        # **이번 런이 값을 바꾼** 건수다 — 이미 같은 값이면 UPSERT 의 WHERE 가 막아 안 센다.
+        # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "바뀐 게 없다"이고, 멱등 재실행·
+        # 롤백 런에서도 0 이다. 소스 결손을 보려면 canonical 쪽을 봐야 한다.
         "lead_text_written": lead_written,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
