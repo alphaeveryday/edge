@@ -196,7 +196,9 @@ def run(
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_no_available_at": skipped_no_available_at,
         "already_present": already, "created": created,
-        # 스니펫이 실제로 몇 건 채워졌는지 — 0 이면 canonical 에 lead_text 가 없다는 뜻이다.
+        # **이번 런이 값을 바꾼** 건수다 — 이미 같은 값이면 UPSERT 의 WHERE 가 막아 안 센다.
+        # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "바뀐 게 없다"이고, 멱등 재실행·
+        # 롤백 런에서도 0 이다. 소스 결손을 보려면 canonical 쪽을 봐야 한다.
         "lead_text_written": lead_written,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
