@@ -201,3 +201,17 @@ def test_universe_casts_the_date_array():
 
     sql, _ = conn.executed[-1]
     assert "ANY(%s::date[])" in sql
+
+def test_returns_are_derived_from_close_price_not_the_ledger_feature_column():
+    """원장은 관측값만 적재한다. 인과 피처가 그 NULL 컬럼에 의존하면 최근 코호트가 사라진다."""
+    conn = _FakeConn()
+    data = CausalData(conn)
+
+    data.universe("industry_name = 'X'", [date(2026, 7, 29)])
+    universe_sql, _ = conn.executed[-1]
+    data.ar(PAIRS)
+    excess_sql, _ = conn.executed[-1]
+
+    for sql in (universe_sql, excess_sql):
+        assert "simple_return" not in sql
+        assert "lag(close_price) over" in sql.lower()
