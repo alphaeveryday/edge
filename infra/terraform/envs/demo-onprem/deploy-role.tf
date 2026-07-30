@@ -2,7 +2,8 @@
 # 격리 스택이 자기 배포 역할을 소유한다(envs/dev 의 공유 배포 역할과 별개 — blast-radius 격리,
 # 모든 데모 리소스가 이 스택 state 안에 있어 ARN 참조가 깔끔). github-oidc-deploy 모듈은
 # schema-migrate/ECS 중심(필수 변수 migration·cluster·family)이라 재사용 대신 데모 전용으로 직접 둔다.
-# 최소 스코프: 데모 ECR push · MTS S3 sync · CloudFront 무효화 · 박스 SSM Run Command(인스턴스 태그 스코프).
+# 최소 스코프: 데모 ECR push · 박스 SSM Run Command(인스턴스 태그 스코프).
+# (구 MTS S3 sync·CloudFront 무효화 스코프는 ALPHA-632 로 제거 — S3 서빙 경로 자체가 없다.)
 
 locals {
   # demo_image_names·demo_ecr_arns 는 main.tf locals 로 승격됨(ALPHA-559) —
