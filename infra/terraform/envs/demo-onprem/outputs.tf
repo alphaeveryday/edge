@@ -13,6 +13,11 @@ output "demo_public_ip" {
   value       = module.demo_onprem.public_ip
 }
 
+output "console_url" {
+  description = "데모 검수 콘솔 URL (CloudFront, 로그인 게이트 — ALPHA-627)"
+  value       = "https://${var.console_domain}"
+}
+
 output "mts_url" {
   description = "가상 MTS 페이지 URL"
   value       = module.mts_site.url

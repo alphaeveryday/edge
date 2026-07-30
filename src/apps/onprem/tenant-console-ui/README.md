@@ -19,13 +19,14 @@ dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, boo
 기동이면 `VITE_API_PROXY_TARGET=http://localhost:8080`)로 프록시한다 — same-origin 이
 되어 세션 쿠키(SameSite=Strict)가 실린다. 진입은 로그인 화면(`/login`, ALPHA-626 —
 super-admin ALPHA-616 패턴 이식) — 미인증·만료는 `RequireSession` 가드가 `/login` 으로
-보내고, 로그인 후 원래 경로로 복귀한다. dev·데모 박스 빌드에서는
+보내고, 로그인 후 원래 경로로 복귀한다. vite dev 에서는
 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
 (`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `admin@demo.edge.local`)으로
-자동 로그인해 로그인 화면 없이 바로 진입한다 — **dev·`VITE_DEMO_AUTOSESSION` 빌드
-전용**(실 온프렘 번들에서는 정적으로 제거돼 자격증명이 실리지 않고, 로그인 화면이
-유일한 진입이다). 정적 배포본(S3/CloudFront)은
-`/api` 오리진이 아직 없어 데이터가 비어 있다 — 데모 런타임 오리진 연결은 ALPHA-445 후속.
+자동 로그인해 로그인 화면 없이 바로 진입한다 — **vite dev 전용**(서빙 빌드에서는
+정적으로 제거돼 자격증명이 실리지 않고, 로그인 화면이 유일한 진입이다. 데모 박스의
+`VITE_DEMO_AUTOSESSION` 자동 세션 빌드는 콘솔 CloudFront 공개와 함께 폐기 — ALPHA-627).
+데모 배포본은 CloudFront(`demo-console.edgesignal.dev`)가 박스 nginx(:8090)를 오리진으로
+프록시한다 — [demo/onprem/README](../../../../demo/onprem/README.md) "검수 콘솔 접근" 참조.
 
 ## 라우트 / IA (디자인 v0.2)
 

@@ -160,12 +160,37 @@ resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
   description       = "mock-broker from allowed prefix list (e.g. CloudFront origin-facing)"
 }
 
+# 검수 콘솔(tenant-console-ui) 포트 인바운드(ALPHA-627) — CloudFront 오리진 프록시 대상.
+# 진입 게이트는 콘솔 로그인 화면(ALPHA-626, autosession 폐기)이 담당한다.
+# 별도 SG 로 분리하는 이유: CloudFront origin-facing 프리픽스 리스트(weight 55)를 참조하는
+# 규칙은 SG 인바운드 할당량(기본 60)을 룰마다 55 씩 소비한다 — 기존 SG 에 두 번째 프리픽스
+# 규칙을 넣으면 110 > 60 으로 apply 가 실패한다. SG 를 나누면 각자 자기 할당량을 쓰고,
+# 인스턴스의 SG 목록 변경은 in-place 라 교체(EBS 유실)도 없다. egress 는 기본 SG 와
+# 합집합으로 적용되므로 여기엔 두지 않는다.
+resource "aws_security_group" "console" {
+  count       = var.console_port != null ? 1 : 0
+  name        = "${var.name}-console"
+  description = "demo on-prem box ${var.name} tenant console"
+  vpc_id      = var.vpc_id
+  tags        = { Name = "${var.name}-console" }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "console_from_prefix" {
+  count             = var.console_port != null ? length(var.ingress_prefix_list_ids) : 0
+  security_group_id = aws_security_group.console[0].id
+  prefix_list_id    = var.ingress_prefix_list_ids[count.index]
+  ip_protocol       = "tcp"
+  from_port         = var.console_port
+  to_port           = var.console_port
+  description       = "tenant console from allowed prefix list (e.g. CloudFront origin-facing)"
+}
+
 # ── EC2 ────────────────────────────────────────────────
 resource "aws_instance" "this" {
   ami                         = data.aws_ami.al2023.id
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
-  vpc_security_group_ids      = [aws_security_group.this.id]
+  vpc_security_group_ids      = concat([aws_security_group.this.id], aws_security_group.console[*].id)
   iam_instance_profile        = aws_iam_instance_profile.this.name
   associate_public_ip_address = true
 

@@ -61,6 +61,7 @@ module "demo_onprem" {
   root_volume_iops = var.root_volume_iops
 
   mock_broker_port        = var.mock_broker_port
+  console_port            = var.console_port
   cert_parameter_arn      = local.cert_param_arn
   ingress_prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   # pull 권한을 데모 이미지 7종으로 스코프 — 미주입 시 모듈이 ["*"] 폴백이라 계정 전체
