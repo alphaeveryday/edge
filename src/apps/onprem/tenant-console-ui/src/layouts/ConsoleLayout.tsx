@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
@@ -53,6 +54,7 @@ const PAGE_TITLES: [prefix: string, title: string][] = [
 export function ConsoleLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: session } = useSession();
   const logout = useLogout();
   const { data: feed } = useFeedStatus();
@@ -217,7 +219,19 @@ export function ConsoleLayout() {
                   </div>
                 </div>
                 <div className="p-1" style={{ borderTop: '1px solid var(--border-faint)' }}>
-                  <div className="menu-item danger" onClick={() => logout.mutate()}>
+                  <div
+                    className="menu-item danger"
+                    onClick={() =>
+                      logout.mutate(undefined, {
+                        onSuccess: () => {
+                          // navigate 먼저, clear 나중 — 순서를 뒤집으면 마운트된 활성 쿼리들이
+                          // 일제히 refetch 하며 401 을 만나 '세션 만료' 배너로 오표면된다.
+                          navigate('/login');
+                          queryClient.clear();
+                        },
+                      })
+                    }
+                  >
                     <Icon name="logOut" size={14} />
                     로그아웃
                   </div>
