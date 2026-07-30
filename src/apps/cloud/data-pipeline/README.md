@@ -267,7 +267,11 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # article_id)로 있으면 skip, 없을 때만 발번한다. ID 는 그 자연키에서 **결정적으로** 파생하는
 # doc_<해시>(db.stable_domain_id, ALPHA-456) — assemble-events 가 같은 값을 계산해야 하고,
 # 이 ID 가 assertion_id·source_event_id 의 재료라 랜덤이면 계보 전체가 랜덤을 상속한다.
-# ADR-0027 의 ULID 형식과 달라 시간 정렬은 안 된다(그 축은 available_at). --from/--to 는 published_date
+# ADR-0027 의 ULID 형식과 달라 시간 정렬은 안 된다(그 축은 available_at). ⚠️ 이 계약은 **소급되지
+# 않는다** — ALPHA-456 이전에 적재된 행(dev 6,674건)은 랜덤 ULID id 를 갖고 있어 계산값과 갈린다.
+# 그래서 이 문서를 참조하는 행은 계산값이 아니라 **자연키로 되읽은 id** 에 붙여야 한다(ALPHA-628).
+# 이 스텝이 함께 채우는 news_document.lead_text(분석엔진 프롬프트의 스니펫 축)가 그 규칙을 쓴다.
+# --from/--to 는 published_date
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-documents
