@@ -183,7 +183,9 @@ def run(
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
         logger.exception("문서 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
-        created, created_sample = 0, []
+        # 롤백됐으니 쓰기 카운터는 전부 0 이다 — lead_written 을 남기면 로그가 실제보다
+        # 많이 했다고 말한다(계측은 관대한 방향으로 틀리면 안 된다, Rule 12).
+        created, created_sample, lead_written = 0, [], 0
         exit_code = 1
 
     log = {

@@ -42,6 +42,9 @@ def _article(article_id: str, **over) -> dict:
     return row
 
 
+_ABSENT = object()   # "행이 없다" 와 "lead_text 가 NULL 이다" 를 가른다
+
+
 class _FakeCursor:
     """ON CONFLICT DO NOTHING 시맨틱 + `document` 자연키→id 해석 흉내.
 
@@ -59,6 +62,10 @@ class _FakeCursor:
         self._conn.log.append((flat, params))
         head = flat.upper()
         if head.startswith("INSERT INTO DOCUMENT"):
+            self._conn.document_inserts += 1
+            if (self._conn.fail_after is not None
+                    and self._conn.document_inserts > self._conn.fail_after):
+                raise RuntimeError("DB 가 런 도중 터졌다")   # 커밋 경계가 런 전체 = 전량 롤백
             key = (params[1], params[2])
             self.rowcount = 0 if key in self._conn.documents else 1
             self._conn.documents.setdefault(key, params[0])   # DO NOTHING = 기존 id 가 남는다
@@ -70,9 +77,20 @@ class _FakeCursor:
             else:
                 lead_text, source_code, source_document_id = params
                 document_id = self._conn.documents.get((source_code, source_document_id))
-            self.rowcount = 1 if document_id else 0
-            if document_id:
-                self._conn.news_documents.append((document_id, lead_text))
+            if not document_id:
+                self.rowcount = 0            # 서브쿼리가 0행 — 넣을 대상 자체가 없다
+                return
+            # `ON CONFLICT (document_id) DO UPDATE ... WHERE lead_text IS DISTINCT FROM`:
+            # 이미 같은 값이면 Postgres 는 **0행**을 돌려준다. 픽스처가 늘 1을 주면
+            # lead_text_written 이 멱등 재실행에서 부풀어도 초록으로 통과한다. 그 WHERE 가
+            # 실제로 SQL 에 있는지까지 본다 — 절을 지우면 같은 값도 UPDATE 돼 1행이 된다.
+            if (self._conn.lead_texts.get(document_id, _ABSENT) == lead_text
+                    and "IS DISTINCT FROM" in head):
+                self.rowcount = 0
+                return
+            self.rowcount = 1
+            self._conn.lead_texts[document_id] = lead_text
+            self._conn.news_documents.append((document_id, lead_text))
 
     def __enter__(self):
         return self
@@ -82,14 +100,20 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, existing: list[tuple] | dict[tuple, str] | None = None):
+    def __init__(self, existing: list[tuple] | dict[tuple, str] | None = None,
+                 lead_texts: dict[str, str | None] | None = None,
+                 fail_after: int | None = None):
         self.log: list = []
+        self.fail_after, self.document_inserts = fail_after, 0
         self.news_documents: list[tuple[str, str]] = []
         # 자연키 → **실제 행의** document_id. dict 로 주면 계산값과 다른 기존 id 를 심는 것이고
         # (ALPHA-628 회귀), list 로 주면 id 값은 상관없이 존재만 보는 테스트다.
         self.documents: dict[tuple, str] = (
             dict(existing) if isinstance(existing, dict)
             else {k: f"doc_pre{i}" for i, k in enumerate(existing or [])})
+        # document_id → 기존 news_document.lead_text. `assemble_events` 가 id 만 먼저 넣어둔
+        # 행은 None 으로 심는다 — 그게 UPSERT 가 존재하는 이유다.
+        self.lead_texts: dict[str, str | None] = dict(lead_texts or {})
 
     def cursor(self):
         return _FakeCursor(self)
@@ -337,7 +361,9 @@ def test_lead_text_is_filled_even_when_document_already_exists(tmp_path, monkeyp
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "ko", "2026-07-15", [_article("a1", lead_text="리드문")])
-    conn = _FakeConn(existing=[("bigkinds", "a1")])
+    # assemble_events 가 남긴 자국을 실제로 심는다 — document 행도, lead_text 없는
+    # news_document 행도 이미 있는 상태다. 안 심으면 이 테스트는 UPSERT 경로를 안 밟는다.
+    conn = _FakeConn(existing=[("bigkinds", "a1")], lead_texts={"doc_pre0": None})
     monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
 
     assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
@@ -366,6 +392,48 @@ def test_lead_text_attaches_to_the_existing_row_id_not_the_computed_one(tmp_path
     assert load_documents.run(storage, "run-1", db=_db()) == 0
 
     assert _news_doc_inserts(conn) == [(legacy_id, "리드문")]
+
+
+def test_unchanged_lead_text_is_not_counted_as_written(tmp_path, monkeypatch):
+    """이미 같은 값이면 DO UPDATE 의 WHERE 가 막아 0행 — 그걸 written 으로 세면 안 된다.
+
+    WHY: `lead_text_written` 은 "이번 런이 실제로 채운 건수"다. 멱등 재실행마다 전건을
+    다시 세면 그 수가 신선도 신호로서 무의미해지고, 0 이면 canonical 에 스니펫이 없다는
+    뜻이라던 로그 계약도 거짓이 된다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [_article("a1", lead_text="리드문")])
+    conn = _FakeConn(existing=[("bigkinds", "a1")], lead_texts={"doc_pre0": "리드문"})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db()) == 0
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_text_written"] == 0
+    assert _news_doc_inserts(conn) == []
+
+
+def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch):
+    """런 도중 터지면 앞서 성공한 UPSERT 도 롤백된다 — lead_text_written 도 0 이어야 한다.
+
+    WHY: `created` 는 이미 0 으로 되돌리는데 `lead_text_written` 만 남으면, 스니펫이 DB 에
+    실렸다고 믿고 분석엔진이 왜 제목만 보는지를 다시 찾게 된다. 계측이 틀릴 때 방향이
+    **관대한 쪽**이면 아무도 결손을 못 본다(Rule 12).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="리드문"), _article("a2", lead_text="리드문2")])
+    conn = _FakeConn(fail_after=1)   # a1 은 통과, a2 의 document INSERT 에서 터진다
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "R1", db=_db()) == 1
+    assert _news_doc_inserts(conn) == [(conn.documents[("bigkinds", "a1")], "리드문")]
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["created"] == 0
+    assert log["lead_text_written"] == 0, "롤백됐는데 스니펫을 채웠다고 로그가 주장한다"
 
 
 def test_missing_lead_text_writes_no_news_document_row(tmp_path, monkeypatch):
