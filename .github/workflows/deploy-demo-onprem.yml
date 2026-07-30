@@ -1,15 +1,16 @@
-# 데모 온프렘 박스 배포 CD — 이미지·compose·MTS UI 를 한 번에(ALPHA-542).
+# 데모 온프렘 박스 배포 CD — 이미지·compose 를 한 번에(ALPHA-542).
 #
-# 세 갈래(ADR-0033 의 인프라/런타임 분리 원칙):
+# 두 갈래(ADR-0033 의 인프라/런타임 분리 원칙):
 #   images  — 온프렘 4종 + mock-broker 를 amd64 로 빌드해 ECR push(GitHub 러너=amd64 네이티브).
+#             MTS 정적(demo/mts-ai-tab)은 mock-broker 이미지에 내장돼 함께 배포된다(ALPHA-632 —
+#             구 S3 sync 갈래 제거, 서빙 원칙: 모든 데모 표면은 박스가 서빙).
 #   compose — 번들(compose+migrations)을 base64 인라인으로 SSM Run Command 에 실어 박스에서
 #             docker compose up(재배포 시 flyway force-recreate 로 스키마 재적용). 박스는 태그로 타깃.
-#   mts     — demo/mts-ai-tab 정적을 MTS S3 에 sync + CloudFront 무효화(빌드 없음 — deploy-ui.yml 변형).
 #
 # OIDC 신뢰 = dev 브랜치. 역할·리소스는 데모 전용(envs/demo-onprem/deploy-role.tf), repo vars 로 주입.
 # 트리거는 수동(dispatch) — 데모 기동은 의도적. (push:dev 자동은 온프렘 앱 변경마다 재빌드라 보류.)
 # 선행: terraform apply(envs/demo-onprem) 로 역할·박스 존재 + repo vars 설정
-#   AWS_DEMO_DEPLOY_ROLE_ARN·DEMO_MTS_BUCKET·DEMO_MTS_DISTRIBUTION_ID (= terraform output).
+#   AWS_DEMO_DEPLOY_ROLE_ARN (= terraform output).
 name: deploy-demo-onprem
 
 on:
@@ -19,8 +20,8 @@ permissions:
   id-token: write
   contents: read
 
-# 데모 박스·MTS 버킷은 하나뿐 — 수동 재실행이 겹치면 두 런이 같은 박스에 SSM·같은 버킷 sync 를
-# 뒤섞어 마지막 완료분이 이긴다. 큐잉으로 직렬화(다른 deploy-*.yml 과 동일 규약).
+# 데모 박스는 하나뿐 — 수동 재실행이 겹치면 두 런이 같은 박스에 SSM 을 뒤섞어
+# 마지막 완료분이 이긴다. 큐잉으로 직렬화(다른 deploy-*.yml 과 동일 규약).
 concurrency:
   group: deploy-demo-onprem
   cancel-in-progress: false
@@ -156,28 +157,3 @@ jobs:
           aws ssm get-command-invocation --command-id "${cid}" --instance-id "${iid}" --region "${REGION}" --query 'StandardOutputContent' --output text
           # 폴링이 Success 없이 소진되면(계속 InProgress/Delayed) 실패로 끝낸다 — 미완 배포를 성공으로 보고 금지.
           [ "${st}" = "Success" ] || { echo "::error::SSM 배포가 제한 시간(≈400s) 내 완료되지 않음 (마지막 상태: ${st})"; exit 1; }
-
-  mts:
-    name: deploy MTS UI
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEMO_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Sync MTS static & invalidate CloudFront
-        env:
-          BUCKET: ${{ vars.DEMO_MTS_BUCKET }}
-          DISTRIBUTION_ID: ${{ vars.DEMO_MTS_DISTRIBUTION_ID }}
-        run: |
-          set -euo pipefail
-          # MTS 는 빌드 없는 정적(demo/mts-ai-tab). README 제외하고 버킷과 일치시킨다(--delete).
-          aws s3 sync demo/mts-ai-tab "s3://${BUCKET}" --delete --exclude README.md
-          id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \
-            --paths '/*' --query 'Invalidation.Id' --output text)"
-          echo "무효화 ${id} → 완료 대기"
-          aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${id}"
-          echo "MTS 배포 완료: s3://${BUCKET}"

@@ -29,7 +29,7 @@ infra/terraform/
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
 
-`ecs-service` 를 super-admin-api·tenant-sync-api 가, `static-site` 를 super-admin UI 와 데모 MTS 페이지가 동일 재사용한다(tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032).
+`ecs-service` 를 super-admin-api·tenant-sync-api 가, `static-site` 를 super-admin UI 가 쓴다(S3 정적 호스팅이 실물인 클라우드 표면 전용). 데모 표면(MTS·검수 콘솔)은 `proxy-site`(CloudFront→박스 오리진 창문)를 동일 재사용한다 — 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙한다. (tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032.)
 (tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
 두 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`. 진입점은 호스트 단위 1:1, ALB 경로 라우팅 없음(ADR-0034). 단 admin 콘솔 CDN(`admin-dev`)은 `/api/*` 를 admin ALB 오리진으로 프록시한다(same-origin 세션 쿠키, ALPHA-615) — ALB 계층의 1:1 은 그대로다.
 
@@ -91,7 +91,7 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). MTS CloudFront 는 `static-site` 모듈의 선택적 `/api/*`→박스 오리진 프록시(`api_origin_domain`)로 브라우저 AI 탭이 박스 mock-broker 를 실호출한다. 검수 콘솔은 전용 CloudFront(`demo-console.edgesignal.dev` → 박스 `:8090` 오리진, `envs/demo-onprem/console-site.tf`)로 공개하고 로그인 화면(ALPHA-626)이 게이트한다 — SSM 터널은 비상 경로(ALPHA-627, 구 127.0.0.1 전용 바인딩 폐기). 이미지·compose·MTS UI 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose→MTS sync, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
+- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). 데모 서빙(ALPHA-632)은 `proxy-site` 모듈 2개 인스턴스 — MTS(`demo-mts.edgesignal.dev` → 박스 `:8080` mock-broker, 정적은 이미지 내장)·검수 콘솔(`demo-console.edgesignal.dev` → 박스 `:8090` nginx)이며, 콘솔 진입은 로그인 화면(ALPHA-626)이 게이트한다 — SSM 터널은 비상 경로(ALPHA-627, 구 127.0.0.1 전용 바인딩 폐기). 구 MTS S3 버킷·sync 갈래는 제거됐다(정적도 박스가 서빙). 이미지·compose 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > `data-pipeline`(시장 `edge-dev-data-pipeline`) 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). **뉴스 `edge-dev-data-pipeline-news`(ALPHA-553)** 도 평일 15:00·15:30·23:50 KST 스케줄러 **ENABLED**(PR2 컷오버, 2026-07-27) — 두 스케줄 모두 SFN 직접 시작이 아니라 **ops task-def 의 `plan-run`(Planner) 경유**다(뉴스는 `OPS_PIPELINE_TYPE=news`, ALPHA-591). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필도 **`plan-run`** 으로 — 슬롯 키가 분 단위라(ALPHA-564) 그 실행이 자기 슬롯으로 원장에 남아 관측된다. `aws stepfunctions start-execution` 을 직접 쓰면 원장에 안 남아 대조 대상이 아니다. ⚠️ `schedule_expression`·`news_schedule_expressions` 의 cron HH:MM 이 곧 Reconciler 의 슬롯 기준이다(`OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM` 은 별도 변수가 아니라 여기서 파생) — cron 을 바꾸면 슬롯 기준도 같이 움직인다. `schedule_timezone` 은 `Asia/Seoul` 고정(validation).

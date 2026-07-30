@@ -69,23 +69,32 @@ module "demo_onprem" {
   ecr_repository_arns = local.demo_ecr_arns
 }
 
-# 가상 MTS 페이지 (S3 + CloudFront). CloudFront 의 /api/* → EC2 오리진 프록시 배선은
-# mock-broker 컨테이너가 생기는 런타임과 함께(ADR-0033 범위 밖).
+# 데모 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙하고, CloudFront 는 도메인별 창문이다.
+# 박스 SG 인바운드는 CloudFront origin-facing 프리픽스로만 열린다(demo-onprem 모듈).
+
+# 가상 MTS 페이지 — mock-broker(:8080)가 정적(mts-ai-tab, 이미지에 내장)+API 를 모두 서빙한다.
+# 구 S3 이중 서빙(이미지와 버킷에 정적 중복 + S3 sync CD 잡)을 제거하고 오리진을 박스로 일원화.
 module "mts_site" {
-  source = "../../modules/static-site"
+  source = "../../modules/proxy-site"
 
   name            = "${local.prefix}-mts"
   domain_name     = var.mts_domain
   zone_id         = data.terraform_remote_state.foundation.outputs.zone_id
   certificate_arn = data.terraform_remote_state.foundation.outputs.wildcard_cdn_certificate_arn
-  # 단일 페이지(클라이언트 탭 전환, pushState/해시 라우팅 없음)라 SPA fallback 불필요 — false.
-  # (spa=true 의 fallback 은 ALPHA-617 부터 CF Function 리라이트(default behavior 한정)라
-  #  /api/* 를 가리지 않지만, 이 페이지는 딥링크 자체가 없어 켤 이유가 없다.)
-  spa = false
+  origin_domain   = module.demo_onprem.public_dns
+  origin_port     = var.mock_broker_port
+}
 
-  # /api/* → 데모 박스 mock-broker(HTTP :mock_broker_port). 브라우저 MTS 의 AI 탭이
-  # 같은 도메인으로 박스를 실호출한다(mixed-content 회피: 뷰어 HTTPS, 오리진 HTTP).
-  # 박스 SG 인바운드는 CloudFront origin-facing 프리픽스로 이미 열려 있다.
-  api_origin_domain = module.demo_onprem.public_dns
-  api_origin_port   = var.mock_broker_port
+# 데모 검수 콘솔 — 박스 nginx(:8090)가 SPA 정적+API 프록시를 모두 담당한다(ALPHA-627).
+# 진입 게이트는 로그인 화면(ALPHA-626) — autosession 빌드는 폐기. 공개 자세 결정은
+# demo/onprem/README "검수 콘솔 접근" 참조.
+module "console_site" {
+  source = "../../modules/proxy-site"
+
+  name            = "${local.prefix}-console"
+  domain_name     = var.console_domain
+  zone_id         = data.terraform_remote_state.foundation.outputs.zone_id
+  certificate_arn = data.terraform_remote_state.foundation.outputs.wildcard_cdn_certificate_arn
+  origin_domain   = module.demo_onprem.public_dns
+  origin_port     = var.console_port
 }

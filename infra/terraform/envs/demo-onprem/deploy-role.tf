@@ -56,18 +56,8 @@ data "aws_iam_policy_document" "deploy_permissions" {
     ]
     resources = local.demo_ecr_arns
   }
-  # MTS 정적 sync (버킷 + 객체).
-  statement {
-    sid       = "MtsS3Sync"
-    actions   = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = [module.mts_site.bucket_arn, "${module.mts_site.bucket_arn}/*"]
-  }
-  # MTS CloudFront 무효화.
-  statement {
-    sid       = "MtsInvalidate"
-    actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-    resources = [module.mts_site.distribution_arn]
-  }
+  # (구 MtsS3Sync·MtsInvalidate 는 ALPHA-632 로 제거 — MTS 정적은 mock-broker 이미지가
+  #  서빙하므로 S3 sync·무효화 경로 자체가 없다.)
   # 박스 SSM Run Command — AWS 공개 문서 + 인스턴스는 태그(edge:role=demo-onprem)로 스코프.
   # 박스 ARN 이 아니라 태그라 인스턴스 재생성에도 안정.
   statement {
