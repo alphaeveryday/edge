@@ -20,17 +20,7 @@ output "console_url" {
 
 output "mts_url" {
   description = "가상 MTS 페이지 URL"
-  value       = module.mts_site.url
-}
-
-output "mts_bucket" {
-  description = "MTS S3 버킷 이름 → vars.DEMO_MTS_BUCKET (deploy-demo-onprem.yml s3 sync 대상)"
-  value       = module.mts_site.bucket_name
-}
-
-output "mts_distribution_id" {
-  description = "MTS CloudFront 배포 ID → vars.DEMO_MTS_DISTRIBUTION_ID (CD 무효화)"
-  value       = module.mts_site.distribution_id
+  value       = "https://${var.mts_domain}"
 }
 
 output "deploy_role_arn" {

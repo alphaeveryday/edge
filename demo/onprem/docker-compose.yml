@@ -8,7 +8,7 @@
 #   - sync-agent 대상 = 실 cloud sync 전용 mTLS ALB(로컬은 tenant-sync-api 컨테이너). trust store
 #     미주입 dev 라 현재는 클라이언트 cert 없이 평문 HTTPS — cert·인가는 후속(ALPHA-445).
 #   - cloud 서비스(postgres·flyway·super-admin-api·tenant-sync-api)는 없다 — AWS 에 있다.
-#   - 호스트 노출은 mock-broker 뿐(CloudFront 오리진). DB·앱 포트는 compose 내부망만(공개 박스 표면 최소화).
+#   - 호스트 노출은 CloudFront 오리진 2개(mock-broker·tenant-console-ui)뿐. DB·앱 포트는 compose 내부망만(공개 박스 표면 최소화).
 #
 # 네트워크 3망(dmz/data/serving, ALPHA-561) — ADR-0036 경계를 compose 네트워크로 강제:
 #   - sync-agent=dmz 만(외부와 닿는 유일 컴포넌트, postgres-onprem 에 못 닿음), intake=dmz+data(수신 브리지),
@@ -144,7 +144,8 @@ services:
       - serving
 
   # 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙. 화면 → mock-broker → publication-api 2홉.
-  # 유일한 호스트 노출 — CloudFront 오리진(/api/*). SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
+  # 호스트 노출(CloudFront 오리진) — 정적(mts-ai-tab, 이미지 내장)+API 를 모두 서빙(ALPHA-632).
+  # SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
   mock-broker:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/mock-broker:${IMAGE_TAG:-0.1.0}
     container_name: edge-mock-broker

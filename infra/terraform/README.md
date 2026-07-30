@@ -14,7 +14,7 @@ infra/terraform/
 ├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR · GitHub OIDC provider
 ├── envs/
 │   ├── dev/            # 실 벤더 클라우드 (모듈을 엮음, 구체값은 terraform.tfvars)
-│   └── demo-onprem/    # 가상 온프렘 데모 스택 (EC2 + MTS 사이트, dev와 별도 state — ADR-0033)
+│   └── demo-onprem/    # 가상 온프렘 데모 스택 (EC2 + 프록시 사이트 2종(MTS·콘솔), dev와 별도 state — ADR-0033)
 └── modules/
     ├── network/            # VPC, 3-tier 서브넷(public·private/compute·data/격리), IGW, NAT, S3 gateway endpoint(private만), AZ override
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
@@ -25,11 +25,12 @@ infra/terraform/
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
     ├── data-pipeline/      # 시장 SFN(raw→normalize→feature→analyze) + 뉴스 SFN(ALPHA-553 지식 레인 분리) Step Functions 배치 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
-    ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 프론트 CDN
+    ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
+    ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
 
-`ecs-service` 를 super-admin-api·tenant-sync-api 가, `static-site` 를 super-admin UI 와 데모 MTS 페이지가 동일 재사용한다(tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032).
+`ecs-service` 를 super-admin-api·tenant-sync-api 가, `static-site` 를 super-admin UI 가 쓴다(S3 정적 호스팅이 실물인 클라우드 표면 전용). 데모 표면(MTS·검수 콘솔)은 `proxy-site`(CloudFront→박스 오리진 창문)를 동일 재사용한다 — 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙한다. (tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032.)
 (tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
 두 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`. 진입점은 호스트 단위 1:1, ALB 경로 라우팅 없음(ADR-0034). 단 admin 콘솔 CDN(`admin-dev`)은 `/api/*` 를 admin ALB 오리진으로 프록시한다(same-origin 세션 쿠키, ALPHA-615) — ALB 계층의 1:1 은 그대로다.
 
@@ -54,7 +55,7 @@ cd ../envs/dev  && terraform apply
 ```
 
 - **envs/dev 는 Terraform CD 로 배포된다(ALPHA-311)**: `envs/dev/**`·`modules/**` 를 바꾼 PR 이 `terraform-plan.yml`(read-only 역할 `edge-tf-plan`)로 plan 을 PR 코멘트에 게시하고, dev 머지 시 `terraform-apply.yml`(`edge-tf-apply`, trust=`ref:refs/heads/dev`)이 apply 한다. 두 역할은 foundation `tf-cd.tf` 소유. 위 수동 apply 는 **bootstrap·foundation**(CD 대상 아님) 및 env 브레이크글래스용이다.
-- **envs/demo-onprem** 은 apply CD 밖이다(ADR-0033) — PR 에서 오프라인 `terraform validate`(전용 `terraform-validate-demo.yml`, creds 불필요)로만 검증하고, apply 는 수동. dev plan(`terraform-plan.yml`, OIDC creds)과 분리해 데모만 바꾼 PR 이 dev 자격/drift 에 묶이지 않게 한다. 데모 런타임(compose·sync·CloudFront API 오리진)은 온프렘 코드 완료 후 후속(ALPHA-445).
+- **envs/demo-onprem** 은 apply CD 밖이다(ADR-0033) — PR 에서 오프라인 `terraform validate`(전용 `terraform-validate-demo.yml`, creds 불필요)로만 검증하고, apply 는 수동. dev plan(`terraform-plan.yml`, OIDC creds)과 분리해 데모만 바꾼 PR 이 dev 자격/drift 에 묶이지 않게 한다. 데모 런타임(compose·sync·CloudFront 오리진)은 개통 완료(ALPHA-445·627·632 — 현황은 아래 "미구축" 절).
 - 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`·`envs/demo-onprem/backend.tf`(같은 버킷, 다른 key — 데모/실클라우드 격리).
 - env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
 - foundation 이 소유해야 하는 ECR 이 AWS 에 이미 수동 생성돼 있으면, 첫 apply 전에 해당
@@ -91,7 +92,7 @@ cd ../envs/dev  && terraform apply
 
 ### 🔮 미구축 (후속 증분)
 
-- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). MTS CloudFront 는 `static-site` 모듈의 선택적 `/api/*`→박스 오리진 프록시(`api_origin_domain`)로 브라우저 AI 탭이 박스 mock-broker 를 실호출한다. 검수 콘솔은 전용 CloudFront(`demo-console.edgesignal.dev` → 박스 `:8090` 오리진, `envs/demo-onprem/console-site.tf`)로 공개하고 로그인 화면(ALPHA-626)이 게이트한다 — SSM 터널은 비상 경로(ALPHA-627, 구 127.0.0.1 전용 바인딩 폐기). 이미지·compose·MTS UI 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose→MTS sync, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
+- **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). 데모 서빙(ALPHA-632)은 `proxy-site` 모듈 2개 인스턴스 — MTS(`demo-mts.edgesignal.dev` → 박스 `:8080` mock-broker, 정적은 이미지 내장)·검수 콘솔(`demo-console.edgesignal.dev` → 박스 `:8090` nginx)이며, 콘솔 진입은 로그인 화면(ALPHA-626)이 게이트한다 — SSM 터널은 비상 경로(ALPHA-627, 구 127.0.0.1 전용 바인딩 폐기). 구 MTS S3 버킷·sync 갈래는 제거됐다(정적도 박스가 서빙). 이미지·compose 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
 > `data-pipeline`(시장 `edge-dev-data-pipeline`) 은 스케줄러 ENABLED — 평일 15:40 KST 자동 실행(컷오버, ALPHA-489). **뉴스 `edge-dev-data-pipeline-news`(ALPHA-553)** 도 평일 15:00·15:30·23:50 KST 스케줄러 **ENABLED**(PR2 컷오버, 2026-07-27) — 두 스케줄 모두 SFN 직접 시작이 아니라 **ops task-def 의 `plan-run`(Planner) 경유**다(뉴스는 `OPS_PIPELINE_TYPE=news`, ALPHA-591). 구 `pipeline`(news) 은 DISABLED 라 수동. 애드혹·백필도 **`plan-run`** 으로 — 슬롯 키가 분 단위라(ALPHA-564) 그 실행이 자기 슬롯으로 원장에 남아 관측된다. `aws stepfunctions start-execution` 을 직접 쓰면 원장에 안 남아 대조 대상이 아니다. ⚠️ `schedule_expression`·`news_schedule_expressions` 의 cron HH:MM 이 곧 Reconciler 의 슬롯 기준이다(`OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM` 은 별도 변수가 아니라 여기서 파생) — cron 을 바꾸면 슬롯 기준도 같이 움직인다. `schedule_timezone` 은 `Asia/Seoul` 고정(validation).
