@@ -17,11 +17,14 @@ pnpm --filter tenant-console-ui typecheck
 
 dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, bootRun 직접
 기동이면 `VITE_API_PROXY_TARGET=http://localhost:8080`)로 프록시한다 — same-origin 이
-되어 세션 쿠키(SameSite=Strict)가 실린다. 로그인 화면이 아직 없어(ALPHA-486 범위 밖)
-앱 진입 시 [`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
+되어 세션 쿠키(SameSite=Strict)가 실린다. 진입은 로그인 화면(`/login`, ALPHA-626 —
+super-admin ALPHA-616 패턴 이식) — 미인증·만료는 `RequireSession` 가드가 `/login` 으로
+보내고, 로그인 후 원래 경로로 복귀한다. dev·데모 박스 빌드에서는
+[`src/api/devSession.ts`](src/api/devSession.ts)가 데모 부트스트랩 계정
 (`VITE_DEV_LOGIN_EMAIL`/`VITE_DEV_LOGIN_PASSWORD`, 기본 `admin@demo.edge.local`)으로
-자동 로그인해 세션을 확보한다 — **vite dev 전용**(prod 번들에서는 정적으로 제거돼
-자격증명이 실리지 않는다), 로그인 화면 도입 시 제거한다. 정적 배포본(S3/CloudFront)은
+자동 로그인해 로그인 화면 없이 바로 진입한다 — **dev·`VITE_DEMO_AUTOSESSION` 빌드
+전용**(실 온프렘 번들에서는 정적으로 제거돼 자격증명이 실리지 않고, 로그인 화면이
+유일한 진입이다). 정적 배포본(S3/CloudFront)은
 `/api` 오리진이 아직 없어 데이터가 비어 있다 — 데모 런타임 오리진 연결은 ALPHA-445 후속.
 
 ## 라우트 / IA (디자인 v0.2)
@@ -30,6 +33,7 @@ dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, boo
 
 | 경로 | 화면 |
 |---|---|
+| `/login` | 로그인 (레이아웃 밖 공개 라우트 — 세션 만료·서버 오류·차단 배너 포함) |
 | `/dashboard` | 대시보드 (KPI 6종 + 최근 설명 요약) |
 | `/explanations` · `/explanations/:id` | 가격 변동 설명 목록·상세 (최종 문구 수정 · 검수 이관 · 제공 중단) |
 | `/review` · `/review/:id` | 검수 대기 목록·상세 (임시 저장 · 반려 · 승인 후 제공) |
@@ -37,8 +41,8 @@ dev 서버는 `/api` 를 tenant-console-api(기본 `http://localhost:18081`, boo
 | `/scope` | 제공 범위 설정 (시장·종목 토글) |
 | `/users` | 사용자 및 권한 (+ 초대 모달) |
 
-진입(`/`)·미매칭(`*`)은 `/dashboard` 로 리다이렉트.
-인증·온보딩 화면은 시안 미수령으로 현재 IA에 없다 (후속 — ALPHA-486 범위 밖).
+진입(`/`)·미매칭(`*`)은 `/dashboard` 로 리다이렉트(미인증이면 가드가 `/login` 으로).
+온보딩 화면은 시안 미수령으로 현재 IA에 없다 (후속).
 
 ## 데이터 레이어 (핵심 규약)
 

@@ -29,7 +29,7 @@ compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 
 | `MOCK_BROKER_PORT` | `8080` | mock-broker 호스트 노출 포트(CloudFront 오리진) |
 | `INTAKE_POLL_MS` / `SCREENING_POLL_MS` | `5000` | 폴링 주기(데모 시연용 짧게) |
 
-데모 콘솔 계정 비밀번호는 앱·UI 양쪽 기본값(`demo-admin-1`·`demo-reviewer-1`)으로 **고정**한다 — compose override 를 열지 않는다. UI 자동로그인이 빌드타임에 같은 값을 baked 하므로 API 만 바꾸면 자동로그인이 깨지기 때문이다(로그인 화면 도입 시 이 제약 소멸).
+데모 콘솔 계정 비밀번호는 앱·UI 양쪽 기본값(`demo-admin-1`·`demo-reviewer-1`)으로 **고정**한다 — compose override 를 열지 않는다. UI 자동로그인이 빌드타임에 같은 값을 baked 하므로 API 만 바꾸면 자동로그인이 깨지기 때문이다(로그인 화면(ALPHA-626)이 생겼어도 데모 빌드가 자동로그인을 쓰는 한 이 제약은 유지).
 
 ## 검수 콘솔 접근 (SSM 터널 — 공개 노출 없음)
 
@@ -42,7 +42,7 @@ aws ssm start-session --target <instance-id> \
 # 브라우저: http://localhost:8090  (데모 빌드는 admin@demo.edge.local 로 자동 로그인)
 ```
 
-서빙 빌드는 로그인 화면(ALPHA-486/423) 도입 전까지 `ensureDevSession` 임시 브릿지로 `admin@demo.edge.local` 자동 로그인한다(Dockerfile `VITE_DEMO_AUTOSESSION=true`). `tenant-console-api` 는 기동 시 `member` 가 비어 있으면 bootstrap-accounts 를 자동 시드하므로 별도 시드가 필요 없다. 실 온프렘 빌드는 이 플래그 없이 빌드해 자동 로그인이 빠진다(로그인 화면 사용).
+서빙 빌드는 `ensureDevSession` 자동 세션 브릿지로 `admin@demo.edge.local` 자동 로그인한다(Dockerfile `VITE_DEMO_AUTOSESSION=true` — 로그인 화면(ALPHA-626)과 공존하는 데모 편의 경로). `tenant-console-api` 는 기동 시 `member` 가 비어 있으면 bootstrap-accounts 를 자동 시드하므로 별도 시드가 필요 없다. 실 온프렘 빌드는 이 플래그 없이 빌드해 자동 로그인이 빠진다(로그인 화면이 유일한 진입).
 
 ## 로컬에서 검증
 
