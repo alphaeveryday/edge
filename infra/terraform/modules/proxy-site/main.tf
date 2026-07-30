@@ -25,6 +25,9 @@ resource "aws_cloudfront_distribution" "this" {
 
   # 전 경로 캐시 비활성 — 세션 쿠키 인증 표면(콘솔)이 캐시로 교차 오염되면 안 되고,
   # AllViewerExceptHostHeader 로 쿠키·쿼리스트링을 오리진에 그대로 전달한다.
+  # 정적(MTS)도 캐시하지 않는 건 의도다: 무효화 경로가 없으므로(ALPHA-632 로 CD 무효화 잡 제거)
+  # 엣지 캐시를 켜면 이미지 재배포 후 최대 TTL 만큼 스테일이 남는다 — 데모 트래픽 규모에서
+  # 오리진 직행 비용이 스테일 함정보다 싸다.
   default_cache_behavior {
     target_origin_id         = "proxy"
     viewer_protocol_policy   = "redirect-to-https"

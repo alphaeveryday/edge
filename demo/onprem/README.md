@@ -88,7 +88,7 @@ docker compose exec postgres-onprem psql -U edge -d edge_onprem -c \
 - `build:` → `image:`(ECR). 박스는 소스 빌드 안 함.
 - `SPRING_PROFILES_ACTIVE` override 없음 → 이미지 기본 `prod` = ECS JSON 로깅(ALPHA-531). 로컬은 `""` 로 평문.
 - `sync-agent` 대상 = 실 cloud sync ALB(로컬은 컨테이너). trust store 미주입 dev 라 현재 평문 HTTPS — cert·인가는 후속.
-- cloud 서비스 없음(AWS 에 있음). 호스트 노출은 `mock-broker` 뿐(공개 박스 표면 최소화).
+- cloud 서비스 없음(AWS 에 있음). 호스트 노출은 CloudFront 오리진 2개 — `mock-broker`(:8080)·`tenant-console-ui`(:8090, ALPHA-627) — 뿐이고 DB·앱 포트는 내부망만(공개 박스 표면 최소화).
 - 네트워크 3망 세분화(위 절) — 로컬 풀스택은 단일 기본 네트워크(ECS Service Connect 토폴로지 재현이 목적, 망분리 미적용).
 
 ## 이 문서의 범위 밖 (완료·후속 현황)
