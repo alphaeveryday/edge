@@ -183,18 +183,23 @@ class Ledger:
             return str(cur.fetchone()[0]), False
 
     def find_expected_task(self, *, run_id: str, task_key: str) -> dict | None:
-        """(run, task_key) 로 expected_task 조회(wrapper 가 attempt 를 붙일 대상)."""
+        """(run, task_key) 로 expected_task와 고정된 기대 건수를 조회(wrapper 계측 입력)."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT expected_task_id, plan_status, task_outcome, data_status, required"
-                " FROM ops_expected_task WHERE pipeline_run_id=%s AND task_key=%s",
+                "SELECT et.expected_task_id, et.plan_status, et.task_outcome, et.data_status,"
+                " et.required, snap.expected_entity_count"
+                " FROM ops_expected_task et"
+                " LEFT JOIN ops_expectation_snapshot snap"
+                " ON snap.expectation_snapshot_id=et.expectation_snapshot_id"
+                " WHERE et.pipeline_run_id=%s AND et.task_key=%s",
                 (run_id, task_key),
             )
             row = cur.fetchone()
             if row is None:
                 return None
             return {"expected_task_id": str(row[0]), "plan_status": row[1],
-                    "task_outcome": row[2], "data_status": row[3], "required": row[4]}
+                    "task_outcome": row[2], "data_status": row[3], "required": row[4],
+                    "expected_count": row[5]}
 
     def update_task_outcome(
         self, expected_task_id: str, *, task_outcome: str | None = None,

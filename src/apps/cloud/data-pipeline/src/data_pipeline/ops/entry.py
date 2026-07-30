@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # Reconciler advisory lock 키(임의 고정 정수 — 이 워크로드 전용 네임스페이스).
 _RECONCILE_LOCK = 0x0107_0530
 _PLANNER_GRACE = timedelta(minutes=30)  # 예정 직후 Planner 가 뜰 여유 — 이만큼 지나야 결측 판정
+_ETF_UNIVERSE_TASK_KEYS = frozenset({
+    "NAV_COLLECTION_KIS",
+    "ETF_PROFILE_COLLECTION_KIS",
+    "ETF_HOLDINGS_COLLECTION_KRX",
+})
 
 
 def _sched_hhmm() -> tuple[int, int]:
@@ -185,13 +190,41 @@ def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: i
     # (quality_log)는 status 필드 자체가 없고 성공 증명이 exit_code 라, exit_code==0 게이트를
     # 통과한 시점에서 요청은 완료된 것이다.
     completed = (log.get("status") in ("success", "skipped")) if entry.source_vendor else True
-    return {
+    signals = {
         "exit_code": exit_code,
         "records_out": ops.get("records_out"),
         "failed_records": ops.get("failed_records"),
         "request_completed": completed,
         "empty_allowed": entry.empty_allowed,
     }
+    # 완전성의 실제값은 entity grain 을 아는 스텝만 선택적으로 낸다. 공통 필수 봉투로 올리면
+    # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
+    if "received_count" in ops:
+        signals["received_count"] = ops["received_count"]
+    return signals
+
+
+def _etf_universe_provider(settings):
+    """국내 ETF 3개 수집 작업의 기대 universe를 설정 정본에서 고정한다(ALPHA-611).
+
+    구성종목·NAV·프로필 실행도 모두 ``krx_etf.source.etf_map`` 을 쓰므로 키(our_etf_id)가
+    세 작업의 공통 entity grain 이다. 값(ISIN)이나 실행 결과에서 다시 만들면 기대값과 실제값이
+    같은 실패를 공유해 누락을 못 잡는다.
+    """
+    krx_etf = getattr(settings, "krx_etf", None)
+    if krx_etf is None:
+        raise SystemExit(
+            "krx_etf.source 설정 없음 — etf-daily 기대 universe를 계획할 수 없다"
+        )
+    entity_ids = tuple(sorted(krx_etf.source.etf_map))
+
+    def provide(task_key: str) -> dict | None:
+        if task_key not in _ETF_UNIVERSE_TASK_KEYS:
+            return None
+        # 작업별 snapshot JSON이 서로 공유된 mutable list를 갖지 않게 매번 새로 만든다.
+        return {"entity_kind": "ticker", "entity_ids": list(entity_ids)}
+
+    return provide
 
 
 # ── CLI 핸들러 ────────────────────────────────────────────
@@ -216,9 +249,14 @@ def plan_run_cli(settings) -> int:
     ledger = ledger_from_settings(settings)
     if ledger is None:
         raise SystemExit("db 설정 없음 — plan-run 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
+    universe_provider = (
+        _etf_universe_provider(settings)
+        if pipeline_type == catalog.PIPELINE_TYPE
+        else None
+    )
     result = planner.plan_run(
         ledger, state_machine_arn=arn, scheduled_time=_scheduled_time(),
-        pipeline_type=pipeline_type,
+        pipeline_type=pipeline_type, universe_provider=universe_provider,
     )
     logger.info(
         "plan-run: lane=%s run=%s launch=%s created=%s trading=%s",

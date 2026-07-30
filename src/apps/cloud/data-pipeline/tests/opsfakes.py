@@ -72,16 +72,25 @@ class _Cursor:
             self._get_run(p)
         elif "INSERT INTO ops_expectation_snapshot" in s:
             self.db.snapshots.append({"id": p[0], "run_id": p[1], "task_key": p[2],
-                                      "entity_ids": p[7]})
+                                      "expected_entity_count": p[6], "entity_ids": p[7]})
         elif "INSERT INTO ops_expected_task" in s:
             self._ins_etask(p)
         elif "SELECT expected_task_id FROM ops_expected_task WHERE pipeline_run_id" in s:
             row = self.db.etasks.get((p[0], p[1]))
             self._rows = [(row["expected_task_id"],)] if row else []
-        elif "SELECT expected_task_id, plan_status, task_outcome, data_status, required" in s:
+        elif "SELECT et.expected_task_id, et.plan_status, et.task_outcome" in s:
             row = self.db.etasks.get((p[0], p[1]))
-            self._rows = ([(row["expected_task_id"], row["plan_status"], row["task_outcome"],
-                            row["data_status"], row["required"])] if row else [])
+            if row:
+                snapshot = next(
+                    (snap for snap in self.db.snapshots
+                     if snap["id"] == row.get("expectation_snapshot_id")),
+                    None,
+                )
+                self._rows = [(
+                    row["expected_task_id"], row["plan_status"], row["task_outcome"],
+                    row["data_status"], row["required"],
+                    snapshot["expected_entity_count"] if snapshot else None,
+                )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)
         elif s.startswith("UPDATE ops_expected_task SET eligible_at"):
@@ -187,7 +196,7 @@ class _Cursor:
             if f"{col}=%s" in s:
                 row[col] = p[i]; i += 1
         if "completeness=%s::jsonb" in s:
-            row["completeness"] = p[i]; i += 1
+            row["completeness"] = json.loads(p[i]); i += 1
         # 실제 ledger 의 sets 순서와 같아야 한다 — 어긋나면 파라미터가 밀려 엉뚱한 컬럼에 박힌다.
         for col in ("records_out", "failed_records"):
             if f"{col}=%s" in s:

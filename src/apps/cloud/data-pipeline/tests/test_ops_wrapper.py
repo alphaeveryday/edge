@@ -18,14 +18,24 @@ def _ledger(db):
     return Ledger(db=_DB, connect_fn=db.connect)
 
 
-def _seed(db, run_id="R", task_key="LOAD_PRICE_DAILY", etid="et1"):
+def _seed(db, run_id="R", task_key="LOAD_PRICE_DAILY", etid="et1", expected_count=None):
+    snapshot_id = None
+    if expected_count is not None:
+        snapshot_id = f"snap-{etid}"
+        db.snapshots.append({
+            "id": snapshot_id,
+            "run_id": run_id,
+            "task_key": task_key,
+            "expected_entity_count": expected_count,
+            "entity_ids": None,
+        })
     row = {"expected_task_id": etid, "pipeline_run_id": run_id, "task_key": task_key,
            "plan_status": "DUE", "task_outcome": "PENDING", "data_status": "UNKNOWN",
            "required": True, "missed_at": None, "fulfilled_at": None, "blocked_at": None,
            "outcome_reason": None, "current_attempt_id": None, "completeness": None,
            "records_out": None, "failed_records": None,
            "stage": "feature", "dataset": "price_daily", "eligible_at": None,
-           "deadline_at": None}
+           "deadline_at": None, "expectation_snapshot_id": snapshot_id}
     db.etasks[(run_id, task_key)] = row
     db.etasks_by_id[etid] = row
     return etid
@@ -69,16 +79,19 @@ def test_bool_exit_code_is_not_success():
 # ── instrument ──
 def test_instrument_records_attempt_and_fulfilled():
     db = FakeOpsDB()
-    _seed(db)
+    _seed(db, expected_count=10)
     rc = wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 10, "expected_count": 10,
-                                    "received_count": 10, "request_completed": True},
+        observe_data_fn=lambda ec: {"records_out": 10, "received_count": 10,
+                                    "request_completed": True},
     )
     assert rc == 0
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FULFILLED
     assert db.etasks_by_id["et1"]["data_status"] == states.DATA_VALID
+    assert db.etasks_by_id["et1"]["completeness"] == {
+        "expected_count": 10, "received_count": 10, "missing_count": 0,
+    }
     assert len(db.attempts) == 1 and db.attempts[0]["status"] == states.EXEC_SUCCEEDED
 
 
@@ -105,16 +118,63 @@ def test_step_exception_closes_the_attempt_instead_of_leaving_it_running():
 def test_instrument_incomplete_data_keeps_outcome_fulfilled():
     """시나리오 D — 종목 누락(INCOMPLETE)이어도 실행 성공이면 attempt/outcome 은 실패 아님."""
     db = FakeOpsDB()
-    _seed(db)
+    _seed(db, expected_count=31)
     wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 30, "expected_count": 31, "received_count": 30},
+        observe_data_fn=lambda ec: {"records_out": 30, "received_count": 30},
     )
     row = db.etasks_by_id["et1"]
     assert row["task_outcome"] == states.OUTCOME_FULFILLED     # 실행 성공(축 분리)
     assert row["data_status"] == states.DATA_INCOMPLETE        # 데이터는 불완전
     assert db.attempts[0]["status"] == states.EXEC_SUCCEEDED   # attempt 실패로 안 바꾼다
+    assert row["completeness"] == {
+        "expected_count": 31, "received_count": 30, "missing_count": 1,
+    }
+
+
+def test_ledger_expected_count_overrides_observer_self_report():
+    """수집기가 분모도 30으로 줄여 신고해 30/30 만점을 만드는 축소 채점을 막는다."""
+    db = FakeOpsDB()
+    _seed(db, expected_count=31)
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/1",
+        observe_data_fn=lambda ec: {
+            "records_out": 30, "expected_count": 30, "received_count": 30,
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["data_status"] == states.DATA_INCOMPLETE
+    assert row["completeness"] == {
+        "expected_count": 31, "received_count": 30, "missing_count": 1,
+    }
+
+
+def test_missing_received_count_stays_unknown_and_clears_old_completeness():
+    """수신 신호가 사라진 재시도는 앞 시도의 31/31을 그대로 보이면 안 된다."""
+    db = FakeOpsDB()
+    _seed(db, expected_count=31)
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/1",
+        observe_data_fn=lambda ec: {
+            "records_out": 100, "failed_records": 0, "received_count": 31,
+        },
+    )
+    assert db.etasks_by_id["et1"]["data_status"] == states.DATA_VALID
+
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/2",
+        observe_data_fn=lambda ec: {"records_out": 100, "failed_records": 0},
+    )
+    row = db.etasks_by_id["et1"]
+    assert row["data_status"] == states.DATA_UNKNOWN
+    assert row["completeness"] == {
+        "expected_count": 31, "received_count": None, "missing_count": None,
+    }
 
 
 def test_instrument_passthrough_when_no_ledger():

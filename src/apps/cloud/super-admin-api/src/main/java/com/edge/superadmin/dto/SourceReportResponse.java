@@ -21,9 +21,9 @@ import java.util.List;
  * <p>런이 없으면 {@code run} 이 null, {@code tasks}·{@code issues} 가 빈 배열이다 — 초기 환경의
  * 정상 상태이지 에러가 아니다. 다만 <b>지목한 런이 없는 경우는 여기로 오지 않는다</b>(404).
  *
- * <p>{@code completeness}(JSONB)는 싣지 않는다 — 파이프라인에 그 신호를 <b>내는 스텝이 아직
- * 없어</b>(wrapper 가 {@code signals["completeness"]} 를 읽지만 아무도 넣지 않는다) 항상 NULL 이다.
- * 배선되면(ALPHA-490) 그때 얹는다.
+ * <p>{@code completeness}(JSONB)는 아직 싣지 않는다. ALPHA-611부터 ETF 수집 3작업은 값을
+ * 채우지만, API·UI에서 분모/분자 의미를 함께 노출하는 계약은 별도 범위다. 일부 작업만 배선된
+ * 값을 설명 없이 섞어 내리지 않고 그 계약이 정해질 때 함께 얹는다.
  */
 public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks,
 		List<IssueResponse> issues) {

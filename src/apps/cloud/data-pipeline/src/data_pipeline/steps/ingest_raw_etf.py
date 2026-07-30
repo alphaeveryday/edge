@@ -85,7 +85,9 @@ def run(
         try:
             _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
                                                                "reason": reason,
-                                                               "ops": {"records_out": 0, "failed_records": 0}})
+                                                               "ops": {"records_out": 0,
+                                                                       "failed_records": 0,
+                                                                       "received_count": 0}})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
             return 1
@@ -94,6 +96,7 @@ def run(
     # 파티션 키는 market 만(ingest_date 는 런 전체가 started_date 로 동일). raw 는 받은
     # 행을 그대로 append 해 전부 보존한다 — 중복 판정·upsert 는 후속 canonical 소관.
     partitions: dict[str, list[dict]] = defaultdict(list)
+    received_etf_ids: set[str] = set()
     fetched = 0
     status, error, reason = "success", None, None
     exit_code = 0
@@ -102,6 +105,9 @@ def run(
         for record in source.fetch():
             fetched += 1
             partitions[record["market"]].append(record)
+            # holdings/NAV는 1 ETF→N행이라 records_out이 entity 수가 아니다. 세 소스가 공통으로
+            # 붙이는 our_etf_id를 distinct로 세야 기대 snapshot과 같은 grain이 된다(ALPHA-611).
+            received_etf_ids.add(record["our_etf_id"])
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("ETF 수집 중단(4xx/429): %s", exc)
@@ -156,7 +162,8 @@ def run(
             "partitions": len(partitions),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             # 원장 관측용 공통 봉투(ALPHA-181). ETF 단위 실패는 그 ETF 구성 전량 유실이다.
-            "ops": {"records_out": saved, "failed_records": len(failed_etfs)},
+            "ops": {"records_out": saved, "failed_records": len(failed_etfs),
+                    "received_count": len(received_etf_ids)},
         })
     except Exception:
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
