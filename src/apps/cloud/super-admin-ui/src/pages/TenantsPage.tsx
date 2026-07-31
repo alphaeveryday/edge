@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
+import { Icon, Modal, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import type { TenantCreateEnv, TenantStatus } from '../domains/tenants';
 import { ENV_TONE, TENANT_STATUS_LABEL, TENANT_STATUS_TONE } from '../domains/tenants';
 import { apiMessage } from '../api/client';
@@ -26,7 +26,7 @@ export function TenantsPage() {
   const [fError, setFError] = useState('');
 
   if (tenantsQuery.isError) return <LoadError />;
-  if (tenantsQuery.isPending) return null;
+  if (tenantsQuery.isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();
   const rows = tenantsQuery.data

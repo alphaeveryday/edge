@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Delta, Icon, StatusBadge } from 'ui-kit';
+import { Delta, Icon, PageSkeleton, StatusBadge } from 'ui-kit';
 import type { AnalysisMarket, AnalysisStatus } from '../domains/analyses';
 import { ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
 import { useAnalyses } from '../domains/analyses/hooks';
@@ -15,7 +15,7 @@ export function AnalysesPage() {
   const [fMarket, setFMarket] = useState<AnalysisMarket | 'ALL'>('ALL');
 
   if (analysesQuery.isError) return <LoadError />;
-  if (analysesQuery.isPending) return null;
+  if (analysesQuery.isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();
   const rows = analysesQuery.data

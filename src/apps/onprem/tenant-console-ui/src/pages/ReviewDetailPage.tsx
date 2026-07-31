@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Icon, StatusBadge, toast } from 'ui-kit';
+import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   CHECK_RESULT_LABEL,
   EVIDENCE_KIND_LABEL,
@@ -31,7 +31,8 @@ export function ReviewDetailPage() {
   const [note, setNote] = useState('');
 
   if (isError) return <LoadError />;
-  if (isPending || !it) return null;
+  if (isPending) return <PageSkeleton rows={5} />;
+  if (!it) return null;
 
   const edited = finalText !== undefined && finalText.trim() !== it.summary;
   const inReview = it.status === 'REVIEW_REQUIRED';

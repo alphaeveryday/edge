@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Icon, Toggle, toast } from 'ui-kit';
+import { Icon, PageSkeleton, Toggle, toast } from 'ui-kit';
 import type { Market } from '../domains/explanations';
 import { useMarketScopes, useScopeActions, useStockScopes } from '../domains/scope/hooks';
 import { LoadError } from './_shared/cells';
@@ -18,7 +18,7 @@ export function ScopePage() {
 
   if (marketsQuery.isError || stocksQuery.isError) return <LoadError />;
   // 시장 상태를 모르는 채 종목 토글을 그리면 비활성 시장이 활성으로 보인다 — 둘 다 로드된 뒤 렌더
-  if (marketsQuery.isPending || stocksQuery.isPending) return null;
+  if (marketsQuery.isPending || stocksQuery.isPending) return <PageSkeleton />;
 
   const markets = marketsQuery.data;
   const stocks = stocksQuery.data;

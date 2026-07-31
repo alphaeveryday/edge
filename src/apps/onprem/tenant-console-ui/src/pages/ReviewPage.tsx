@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon, StatusBadge } from 'ui-kit';
+import { Icon, PageSkeleton, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
 import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
 import { useReviewItems } from '../domains/review/hooks';
@@ -13,12 +13,14 @@ import { LoadError, StockCell } from './_shared/cells';
  */
 export function ReviewPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError } = useReviewItems();
+  const { data: items = [], isError, isPending } = useReviewItems();
 
   const [q, setQ] = useState('');
   const [fReason, setFReason] = useState<string>('ALL');
 
   if (isError) return <LoadError />;
+  // 로딩 중 빈 목록이 "…없습니다" empty-state 로 오표시되지 않게 게이트한다.
+  if (isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();
   const filtered = items.filter(

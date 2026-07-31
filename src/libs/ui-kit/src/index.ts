@@ -3,4 +3,5 @@ export { Toggle, type ToggleProps } from './Toggle';
 export { Modal, type ModalProps } from './Modal';
 export { Toaster, toast } from './Toast';
 export { Icon, type IconName, type IconProps } from './Icon';
+export { PageSkeleton, type PageSkeletonProps } from './Skeleton';
 export { Delta, formatDelta, deltaClass, type DeltaProps } from './Delta';
