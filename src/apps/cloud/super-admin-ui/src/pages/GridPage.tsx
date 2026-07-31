@@ -16,6 +16,7 @@
  */
 import { Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { PageSkeleton } from 'ui-kit';
 import type { GridCell, GridSlot } from '../domains/sources';
 import { useSourceGrid } from '../domains/sources/hooks';
 import { LoadError } from './_shared/LoadError';
@@ -80,10 +81,10 @@ function cellTip(cell: GridCell, runKey: string) {
 
 export function GridPage() {
   const navigate = useNavigate();
-  const { data: grid, isPending, isError } = useSourceGrid();
+  const { data: grid, isPending, isError, error } = useSourceGrid();
 
-  if (isError) return <LoadError />;
-  if (isPending) return null;
+  if (isError) return <LoadError error={error} />;
+  if (isPending) return <PageSkeleton rows={6} />;
 
   const slots = grid.slots;
 

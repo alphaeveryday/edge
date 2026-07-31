@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Icon, StatusBadge, toast } from 'ui-kit';
+import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   CHECK_RESULT_LABEL,
   EVIDENCE_KIND_LABEL,
   ITEM_STATUS_LABEL,
   reasonLabel,
 } from '../domains/review';
+import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
@@ -30,7 +31,8 @@ export function ReviewDetailPage() {
   const [note, setNote] = useState('');
 
   if (isError) return <LoadError />;
-  if (isPending || !it) return null;
+  if (isPending) return <PageSkeleton rows={5} />;
+  if (!it) return null;
 
   const edited = finalText !== undefined && finalText.trim() !== it.summary;
   const inReview = it.status === 'REVIEW_REQUIRED';
@@ -40,9 +42,9 @@ export function ReviewDetailPage() {
     toast(msg);
     navigate('/review');
   };
+  // 서버 사유(상태 경쟁 409 등) 우선, 없으면 복구 안내 폴백 — 전역(일반 문구)보다 늦게 떠 덮는다.
   const fail = (err: unknown) => {
-    const msg = (err as { body?: { message?: string } })?.body?.message;
-    toast(msg ?? '처리하지 못했습니다 — 목록을 새로고침해 주세요.');
+    toast(apiMessage(err, '처리하지 못했습니다 — 목록을 새로고침해 주세요.'));
   };
 
   const approve = () => {

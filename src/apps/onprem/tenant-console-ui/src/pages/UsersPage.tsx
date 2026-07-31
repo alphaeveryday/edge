@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
+import { Icon, Modal, PageSkeleton, StatusBadge, toast } from 'ui-kit';
+import { apiMessage } from '../api/client';
 import { useSession } from '../domains/session/hooks';
 import type { Member, MemberRole } from '../domains/users';
 import { ROLE_LABEL } from '../domains/users';
@@ -10,7 +11,7 @@ export function UsersPage() {
   const { data: session } = useSession();
   const isAdmin = session?.role === 'TENANT_ADMIN';
   // 비관리자는 조회 자체를 보내지 않는다(403 대신 아래 권한 안내). 세션 로딩 중에도 대기.
-  const { data: members = [], isError } = useMembers(isAdmin);
+  const { data: members = [], isError, isPending } = useMembers(isAdmin);
   const register = useRegisterMember();
   const deactivate = useDeactivateMember();
   const changeRole = useChangeRole();
@@ -31,11 +32,8 @@ export function UsersPage() {
         setDeactivateTarget(null);
         toast('사용자를 비활성화했습니다.');
       },
-      onError: (err) => {
-        // 마지막 관리자(409) 등 서버 사유를 그대로 보인다.
-        const msg = (err as { body?: { message?: string } })?.body?.message;
-        toast(msg ?? '비활성화하지 못했습니다.');
-      },
+      // 서버 사유(마지막 관리자 409 등)가 없을 때도 맥락 폴백을 유지한다 — 전역(일반 문구)보다 늦게 떠 덮는다.
+      onError: (err) => toast(apiMessage(err, '비활성화하지 못했습니다.')),
     });
   };
 
@@ -51,9 +49,8 @@ export function UsersPage() {
           toast('역할을 변경했습니다.');
         },
         onError: (err) => {
-          // 마지막 관리자 강등(409)·경쟁 변경(409)·자기 변경(403) 등 서버 사유를 그대로 보인다.
-          const msg = (err as { body?: { message?: string } })?.body?.message;
-          toast(msg ?? '역할을 변경하지 못했습니다.');
+          // 서버 사유(마지막 관리자 강등·경쟁 변경 409 등) 우선, 없으면 맥락 폴백.
+          toast(apiMessage(err, '역할을 변경하지 못했습니다.'));
           // 실패 시에도 모달을 닫는다 — stale 현재 역할을 근거로 한 재시도가 방금 이루어진
           // 다른 관리자의 변경을 확인 없이 덮어쓰지 않게, 갱신된 목록에서 다시 열게 한다.
           setRoleTarget((current) => (current?.id === target.id ? null : current));
@@ -83,11 +80,8 @@ export function UsersPage() {
           setRegisterOpen(false);
           toast('사용자를 등록했습니다.');
         },
-        onError: (err) => {
-          // 중복 이메일(409)·유효성(400) 등 서버 사유를 그대로 보인다.
-          const msg = (err as { body?: { message?: string } })?.body?.message;
-          toast(msg ?? '사용자를 등록하지 못했습니다.');
-        },
+        // 서버 사유(중복 이메일 409·유효성 400) 우선, 없으면 맥락 폴백.
+        onError: (err) => toast(apiMessage(err, '사용자를 등록하지 못했습니다.')),
       },
     );
   };
@@ -103,6 +97,8 @@ export function UsersPage() {
   }
 
   if (isError) return <LoadError />;
+  // 세션·목록 로딩 중 빈 목록 오표시 방지 — 비관리자는 위 권한 안내가 먼저 잡는다.
+  if (isPending) return <PageSkeleton />;
 
   return (
     <div className="flex max-w-[960px] flex-col gap-4">

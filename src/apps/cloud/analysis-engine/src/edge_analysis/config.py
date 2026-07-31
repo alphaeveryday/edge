@@ -124,4 +124,6 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         aws_profile=_env("AWS_PROFILE"),
         causal_enabled=_flag("CAUSAL_ENABLED", default=True),
         causal_sandbox_enabled=_flag("CAUSAL_SANDBOX_ENABLED", default=True),
+        domain_docs_bucket=os.environ.get("EDGE_DOMAIN_BUCKET", "").strip(),
+        domain_docs_profile=os.environ.get("EDGE_AWS_PROFILE", "").strip(),
     )

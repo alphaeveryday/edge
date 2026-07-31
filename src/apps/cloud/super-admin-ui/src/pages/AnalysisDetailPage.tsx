@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Delta, Icon, StatusBadge, formatDelta, toast } from 'ui-kit';
+import { Delta, Icon, PageSkeleton, StatusBadge, formatDelta, toast } from 'ui-kit';
 import {
   ANALYSIS_CONFIDENCE_LABEL,
   ANALYSIS_STATUS_LABEL,
@@ -11,7 +11,7 @@ import { LoadError } from './_shared/LoadError';
 
 export function AnalysisDetailPage() {
   const { id } = useParams();
-  const { analysis: a, isPending, isError } = useAnalysis(id);
+  const { analysis: a, isPending, isError, error } = useAnalysis(id);
   const { correct, exclude, restore } = useAnalysisActions();
 
   const [editing, setEditing] = useState(false);
@@ -20,8 +20,8 @@ export function AnalysisDetailPage() {
   const [confirmingExclude, setConfirmingExclude] = useState(false);
   const [excludeReason, setExcludeReason] = useState('');
 
-  if (isError) return <LoadError />;
-  if (isPending) return null;
+  if (isError) return <LoadError error={error} />;
+  if (isPending) return <PageSkeleton rows={5} />;
   if (!a) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>
@@ -272,6 +272,7 @@ export function AnalysisDetailPage() {
               {a.status === 'EXCLUDED' && (
                 <button
                   className="btn justify-center"
+                  disabled={restore.isPending}
                   onClick={() =>
                     restore.mutate(a.id, { onSuccess: () => toast('분석 대상으로 복원되었습니다.') })
                   }

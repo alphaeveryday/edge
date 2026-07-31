@@ -47,14 +47,16 @@ super-admin ALPHA-616 패턴 이식) — 미인증·만료는 `RequireSession` �
 
 ## 데이터 레이어 (핵심 규약)
 
-화면 데이터는 전 도메인이 **tenant-console-api 호출**이다(ALPHA-513). mock 데이터는
-UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 API 쪽에서 도메인
-단위로 진행된다 — UI 는 그 전환을 알지 못한다(계약 불변).
+화면 데이터는 전 도메인이 **tenant-console-api 호출**이다(ALPHA-513). API 의 mock
+표면은 도메인 단위 실전환(ALPHA-602~614)으로 전부 실 DB 원장 조회가 됐고 `mock`
+패키지는 제거됐다 — UI 는 그 전환을 알지 못했다(계약 불변).
 
 - 페이지/컴포넌트는 repository 를 직접 import 하지 않는다. 도메인 hook(예: `useExplanations`)만 의존한다.
 - 공통 fetch 래퍼는 [`src/api/client.ts`](src/api/client.ts) (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증).
   tenant-console-api 성공 응답은 공통 봉투(`ApiResponse` — `{isSuccess,code,message,result}`)라, 래퍼가
-  `.result` 를 중앙에서 벗겨 반환한다 — 도메인별 repository·mock 은 봉투를 알지 못한다(계약 불변). ALPHA-522.
+  `.result` 를 중앙에서 벗겨 반환한다 — 도메인별 repository 는 봉투를 알지 못한다(계약 불변). ALPHA-522.
+  실패 봉투의 서버 사유(`message`)는 `apiMessage` 헬퍼가 우선 표시한다 — 전역 mutation
+  토스트(`src/main.tsx`)가 이 규약을 쓰고, 맥락 폴백이 필요한 화면만 로컬 onError 를 더한다(ALPHA-655).
 - hook 은 **TanStack Query** 기반 — mutation 성공 시 해당 도메인 쿼리를 invalidate 해 화면이 갱신된다.
 
 ### 도메인 구조 (`src/domains/<domain>/`)
@@ -77,5 +79,5 @@ hooks.ts             페이지가 쓰는 hook (TanStack Query)
 - 앱 자체 전역 CSS 는 [`src/styles/app.css`](src/styles/app.css) (tailwind 진입점) 하나뿐이다 — 구 `global.css` 체계는 폐기.
 - import 순서는 tailwind(preflight) → ui-kit 고정 (`src/main.tsx`).
 
-샘플 데이터는 가상 증권사 **KB증권** 기준 — 시안 목데이터는 tenant-console-api 의
-`mock` 패키지로 이식됐다.
+샘플 데이터는 가상 증권사 **KB증권** 기준 — 시안 목데이터는 실전환 과정에서
+tenant-console-api 의 DB 시드로 대체됐다(구 `mock` 패키지는 제거).

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StatusBadge, Toggle, toast } from 'ui-kit';
+import { PageSkeleton, StatusBadge, Toggle, toast } from 'ui-kit';
 import type { RiskLevel } from '../domains/explanations';
 import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
@@ -44,7 +44,7 @@ export function ScreeningPage() {
 }
 
 function WordsTab({ canEdit }: { canEdit: boolean }) {
-  const { data: words = [], isError } = useBannedWords();
+  const { data: words = [], isError, isPending } = useBannedWords();
   const { addWord, toggleWord } = useScreeningActions();
 
   const [text, setText] = useState('');
@@ -69,6 +69,8 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
   };
 
   if (isError) return <LoadError />;
+  // 로딩 중 빈 목록 오표시 방지
+  if (isPending) return <PageSkeleton />;
 
   return (
     <div className="flex flex-col gap-4">
@@ -151,12 +153,14 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
 }
 
 function RulesTab({ canEdit }: { canEdit: boolean }) {
-  const { data: criteria, isError } = useCriteria();
+  const { data: criteria, isError, isPending } = useCriteria();
   const { updateCriteria } = useScreeningActions();
 
   const changed = () => toast('자동 제공 기준이 변경되었습니다.');
 
   if (isError) return <LoadError />;
+  // 로드 전 select 기본값(2/MEDIUM)이 실제 설정처럼 보이지 않게 — 로드 후 렌더
+  if (isPending) return <PageSkeleton />;
 
   return (
     <div className="grid grid-cols-3 gap-3">
@@ -253,7 +257,7 @@ function DisclaimerTab({ canEdit }: { canEdit: boolean }) {
 
   if (isError) return <LoadError />;
   // 저장값 로드 전에 저장하면 빈 값으로 면책 문구를 덮어쓴다 — 로드 후 렌더
-  if (isPending) return null;
+  if (isPending) return <PageSkeleton />;
 
   const text = draft ?? saved;
 
@@ -295,9 +299,11 @@ function DisclaimerTab({ canEdit }: { canEdit: boolean }) {
 }
 
 function HistoryTab() {
-  const { data: versions = [], isError } = usePolicyVersions();
+  const { data: versions = [], isError, isPending } = usePolicyVersions();
 
   if (isError) return <LoadError />;
+  // 로딩 중 빈 이력 오표시 방지
+  if (isPending) return <PageSkeleton />;
 
   return (
     <div className="card">

@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { StatusBadge } from 'ui-kit';
+import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { ApiError } from '../api/client';
 import type {
@@ -344,9 +344,9 @@ export function SourcesPage() {
         </div>
       );
     }
-    return <LoadError />;
+    return <LoadError error={error} />;
   }
-  if (isPending) return null;
+  if (isPending) return <PageSkeleton rows={6} />;
 
   const run = report.run;
   const focusedExists = focusTask !== undefined && report.tasks.some((t) => t.taskKey === focusTask);

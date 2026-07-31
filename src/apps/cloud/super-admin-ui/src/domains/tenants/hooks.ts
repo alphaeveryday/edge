@@ -19,5 +19,7 @@ export function useCreateTenant() {
   return useMutation({
     mutationFn: (input: NewTenant) => tenantsRepository.create(input),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+    // 실패는 생성 모달이 인라인(fError)으로 표면화한다 — 전역 토스트와 중복 금지.
+    meta: { suppressGlobalToast: true },
   });
 }

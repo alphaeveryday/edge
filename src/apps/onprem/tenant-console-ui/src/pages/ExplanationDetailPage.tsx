@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Icon, StatusBadge, toast } from 'ui-kit';
+import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
@@ -25,7 +25,7 @@ export function ExplanationDetailPage() {
   const [stopReason, setStopReason] = useState('');
 
   if (isError) return <LoadError />;
-  if (isLoading) return null;
+  if (isLoading) return <PageSkeleton rows={5} />;
   if (!it) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
