@@ -99,6 +99,10 @@ class _Cursor:
                 (w["window_start"], w["generation"]) for w in self.db.windows.values()
                 if w["session_id"] == params[0] and w.get("checksum") is not None
             ]
+        elif s.startswith("SELECT phase FROM minute_ingestion_session"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["phase"],)]
         elif s.startswith("SELECT 1 FROM minute_ingestion_session"):
             if params[0] in self.db.sessions:  # watermark 선행 잠금 — 없으면 no-row
                 self._rows = [(1,)]
