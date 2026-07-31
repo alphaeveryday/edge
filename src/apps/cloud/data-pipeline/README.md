@@ -38,7 +38,9 @@
 > (session·window·news item/job·price job·outbox, ALPHA-661 — 상태 어휘는
 > `minute/states.py` 가 SQL CHECK 와 기계 동기화)과 session/window repository
 > (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)과 job/outbox
-> repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
+> repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664), artifact/manifest
+> 경계(결정적·불변 key·put_immutable, ALPHA-665 — raw 존의 run_id 예외는 storage.py
+> docstring 참조)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
 > 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행

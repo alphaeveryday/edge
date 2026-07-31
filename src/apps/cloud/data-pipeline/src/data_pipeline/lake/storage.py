@@ -4,7 +4,10 @@
 다른 곳에서 조립하지 말고 여기 빌더를 쓴다.
 
 - raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
-        가격·재무는 ingest_date(수집일). 각 빌더 주석 참고.
+        가격·재무는 ingest_date(수집일). 각 빌더 주석 참고. **예외: 1분 파이프라인의
+        minute artifact 는 run_id 없는 결정적·불변 키다**(v0.7 9절 — 재실행 no-op 전제,
+        raw_price_minute_artifact_key 주석 참고). 스캐너·보존 정책이 run_id= 존재를
+        전제하면 안 된다.
 - feature: canonical 에서 파생한 모델 산출물(LLM 태깅 등). canonical 과 마찬가지로 run_id 가
         없고 멱등이지만, canonical 이 **벤더 원본의 결정론적 정규화**인 반면 feature 는
         **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번
@@ -557,6 +560,41 @@ def collection_log_key(source: str, dataset: str, started_date: str, run_id: str
     return (
         f"operations_archive/collection_logs/source={source}/dataset={dataset}"
         f"/started_date={started_date}/run_id={run_id}/log.json"
+    )
+
+
+def raw_price_minute_artifact_key(
+    source: str, market: str, session_date: str, window_start_hhmm: str, generation: int
+) -> str:
+    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665).
+
+    다른 raw 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
+    바이트를 다시 PUT 하는 no-op 이어야 "S3 PUT 후 DB commit 전 종료 → artifact
+    재사용" 복구가 성립한다. 불변성은 generation 이 진다: correction 은 새 generation
+    → 새 key 라 기존 artifact 를 덮지 않는다.
+    """
+    return (
+        f"raw/source={source}/dataset=price_minute/market={market}"
+        f"/session_date={session_date}/window={window_start_hhmm}"
+        f"/generation={generation}/bars.ndjson"
+    )
+
+
+def minute_window_manifest_key(
+    dataset: str, source: str, market: str, session_date: str,
+    window_start_hhmm: str, generation: int,
+) -> str:
+    """window unit manifest(received/no_trade/missing/invalid)의 결정적 키.
+
+    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 벤더 원본이
+    아니라 수집 판정 기록이다(collection_logs 와 같은 결). canonical price_bars
+    (`canonical/dataset=price_bars/...`, ALPHA-648 확정 설계)와는 존이 달라 충돌하지
+    않는다.
+    """
+    return (
+        f"operations_archive/minute_manifests/dataset={dataset}/source={source}"
+        f"/market={market}/session_date={session_date}/window={window_start_hhmm}"
+        f"/generation={generation}/manifest.json"
     )
 
 

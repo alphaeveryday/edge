@@ -186,6 +186,9 @@ class FakePriceCollector:
                 f"memory://minute/{request.dataset}/{request.session_id}/"
                 f"{request.window_start.isoformat()}"
             ),
+            # unit 분류에 대한 placeholder checksum — 저장 manifest **바이트**의
+            # sha256 은 Worker(PR 4)가 artifacts.build_window_manifest 결과로 채운다.
+            # 이 값을 S3 manifest 재해시와 대조하면 안 된다.
             manifest_checksum=content_checksum(
                 [manifest["received"], manifest["no_trade"], manifest["missing"]]
             ),
