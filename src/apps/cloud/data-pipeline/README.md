@@ -711,7 +711,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이
   `ops.received_count`로 실제 unique ETF 수를 낸다. Wrapper는 원장의 기대값만 분모로 사용해
-  `{expected_count, received_count, missing_count}`을 `expected_task.completeness`에 저장한다.
+  `{expected, received, missing}`을 `expected_task.completeness`에 저장한다.
   따라서 현재 종목 수를 코드에 하드코딩하지 않으며, 수집기가 기대값까지 줄여 신고해 스스로
   만점 처리할 수 없다.
   이 선택 필드가 없는 나머지 작업은 기존처럼 완전성 미확인 `UNKNOWN`이다.

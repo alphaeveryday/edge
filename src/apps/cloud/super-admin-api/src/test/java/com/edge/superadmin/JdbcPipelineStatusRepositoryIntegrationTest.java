@@ -2,6 +2,7 @@ package com.edge.superadmin;
 
 import com.edge.superadmin.repository.PipelineStatusRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.AttemptStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
@@ -85,6 +86,11 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				""", id, type, scope, scopeKey, id, status, 2);
 	}
 
+	private void setCompleteness(String taskId, String completeness) {
+		jdbc.update("UPDATE ops_expected_task SET completeness=?::jsonb WHERE expected_task_id=?",
+				completeness, taskId);
+	}
+
 	@Test
 	void 최신_런의_모든_축을_컬럼명_그대로_읽는다() {
 		insertRun("r1", "etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED", "2026-07-27",
@@ -129,8 +135,42 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 
 		assertThat(task.recordsOut()).isNull();
 		assertThat(task.failedRecords()).isNull();
+		assertThat(task.completeness()).isNull();
 		assertThat(task.attempts()).isEmpty();       // 시도가 없으면 빈 목록이다(null 아님)
 		assertThat(task.currentAttempt()).isNull();
+	}
+
+	@Test
+	void ETF_완전성_JSONB의_저장값과_null_경계를_그대로_읽는다() {
+		// WHY: 객체 없음(미배선)과 객체 안의 수신값 없음(기대 스냅샷은 있음)은 다른 사실이다.
+		//      SQL에서 COALESCE하거나 차이를 재계산하면 둘 다 "0개 수신"으로 왜곡된다.
+		insertRun("r-completeness", "etf-daily:2026-07-27T15:42", "LAUNCHED", "SUCCEEDED",
+				"2026-07-27", "2026-07-27T08:00:00Z");
+		insertTask("t-complete", "r-completeness", "raw", "ETF_HOLDINGS_COLLECTION_KRX",
+				"etf_holdings", "DUE", "FULFILLED", "INCOMPLETE", 4120L, 0L);
+		// missing 을 일부러 33-32 와 다르게 둔다 — 이 값이 1 이면 재계산하는 리더도 통과해
+		// "원장 값 그대로"를 못 잠근다. 원장이 낸 판정이 정본이지 뺄셈 결과가 아니다.
+		setCompleteness("t-complete", "{\"expected\":33,\"received\":32,\"missing\":3}");
+		insertTask("t-unknown", "r-completeness", "raw", "NAV_COLLECTION_KIS",
+				"etf_nav", "DUE", "FULFILLED", "UNKNOWN", null, null);
+		setCompleteness("t-unknown", "{\"expected\":33,\"received\":null,\"missing\":null}");
+		insertTask("t-unwired", "r-completeness", "feature", "TAG_NEWS",
+				"news_assertions", "DUE", "FULFILLED", "UNKNOWN", null, null);
+
+		List<TaskStatus> tasks = repository.latestRun().orElseThrow().tasks();
+		TaskStatus complete = tasks.stream()
+				.filter(t -> t.taskKey().equals("ETF_HOLDINGS_COLLECTION_KRX"))
+				.findFirst().orElseThrow();
+		TaskStatus unknown = tasks.stream()
+				.filter(t -> t.taskKey().equals("NAV_COLLECTION_KIS"))
+				.findFirst().orElseThrow();
+		TaskStatus unwired = tasks.stream()
+				.filter(t -> t.taskKey().equals("TAG_NEWS"))
+				.findFirst().orElseThrow();
+
+		assertThat(complete.completeness()).isEqualTo(new CompletenessStatus(33L, 32L, 3L));
+		assertThat(unknown.completeness()).isEqualTo(new CompletenessStatus(33L, null, null));
+		assertThat(unwired.completeness()).isNull();
 	}
 
 	private void setCurrentAttempt(String taskId, String attemptId) {

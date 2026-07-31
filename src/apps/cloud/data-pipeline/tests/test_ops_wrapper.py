@@ -90,7 +90,7 @@ def test_instrument_records_attempt_and_fulfilled():
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FULFILLED
     assert db.etasks_by_id["et1"]["data_status"] == states.DATA_VALID
     assert db.etasks_by_id["et1"]["completeness"] == {
-        "expected_count": 10, "received_count": 10, "missing_count": 0,
+        "expected": 10, "received": 10, "missing": 0,
     }
     assert len(db.attempts) == 1 and db.attempts[0]["status"] == states.EXEC_SUCCEEDED
 
@@ -128,9 +128,7 @@ def test_instrument_incomplete_data_keeps_outcome_fulfilled():
     assert row["task_outcome"] == states.OUTCOME_FULFILLED     # 실행 성공(축 분리)
     assert row["data_status"] == states.DATA_INCOMPLETE        # 데이터는 불완전
     assert db.attempts[0]["status"] == states.EXEC_SUCCEEDED   # attempt 실패로 안 바꾼다
-    assert row["completeness"] == {
-        "expected_count": 31, "received_count": 30, "missing_count": 1,
-    }
+    assert row["completeness"] == {"expected": 31, "received": 30, "missing": 1}
 
 
 def test_ledger_expected_count_overrides_observer_self_report():
@@ -147,9 +145,7 @@ def test_ledger_expected_count_overrides_observer_self_report():
 
     row = db.etasks_by_id["et1"]
     assert row["data_status"] == states.DATA_INCOMPLETE
-    assert row["completeness"] == {
-        "expected_count": 31, "received_count": 30, "missing_count": 1,
-    }
+    assert row["completeness"] == {"expected": 31, "received": 30, "missing": 1}
 
 
 def test_missing_received_count_stays_unknown_and_clears_old_completeness():
@@ -172,9 +168,7 @@ def test_missing_received_count_stays_unknown_and_clears_old_completeness():
     )
     row = db.etasks_by_id["et1"]
     assert row["data_status"] == states.DATA_UNKNOWN
-    assert row["completeness"] == {
-        "expected_count": 31, "received_count": None, "missing_count": None,
-    }
+    assert row["completeness"] == {"expected": 31, "received": None, "missing": None}
 
 
 def test_instrument_passthrough_when_no_ledger():
