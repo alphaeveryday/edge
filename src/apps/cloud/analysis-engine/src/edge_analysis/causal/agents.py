@@ -163,6 +163,18 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
             G.parse(node)
         except ValueError as exc:
             raise PipelineError(f"nodes 의 {node!r}: {exc}") from exc
+        # 메타에서 graph.validate 가 **연산**하는 필드는 둘뿐이다 - member_events 는
+        # 순회하고(graph.py:381), seq_ignorability 는 `.strip()` 한다(:409). 나머지(kind·
+        # tau·effect)는 비교라 타입이 달라도 안 터진다. 이 둘만 막으면 충분하고, 더 막으면
+        # 스키마 검증기가 된다(Rule 2).
+        events = meta.get("member_events")
+        if events is not None and not isinstance(events, list):
+            raise PipelineError(
+                f"nodes 의 {node!r}: member_events 가 목록이 아니다: {type(events).__name__}")
+        seq = meta.get("seq_ignorability")
+        if seq is not None and not isinstance(seq, str):
+            raise PipelineError(
+                f"nodes 의 {node!r}: seq_ignorability 가 문자열이 아니다: {type(seq).__name__}")
     edges = _as_list(out, "edges")
     designs: list[EdgeDesign] = []
     for i, e in enumerate(edges):

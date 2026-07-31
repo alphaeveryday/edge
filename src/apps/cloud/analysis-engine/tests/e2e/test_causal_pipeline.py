@@ -669,6 +669,14 @@ def test_malformed_edge_shape_is_also_fed_back_not_raised():
                             "member_events": [EVENT_ID], "tau": "t+0"},
                "AR@t+0": {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}},
      "edges": [{**_edge(), "from": "DIVIDEND"}], "missing": []},
+    # graph.validate 가 **연산**하는 메타 필드. member_events 는 순회(graph.py:381),
+    # seq_ignorability 는 `.strip()`(:409) — 스칼라면 TypeError·AttributeError 로 샌다.
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock",
+                                            "measure": "배당", "member_events": 1, "tau": "t+0"}},
+     "edges": [_edge()], "missing": []},
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "MECHANISM", "unit": "stock",
+                                            "measure": "배당", "seq_ignorability": 1}},
+     "edges": [_edge()], "missing": []},
 ])
 def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
     """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.
