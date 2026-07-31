@@ -36,13 +36,10 @@ export function ReviewDetailPage() {
   const inReview = it.status === 'REVIEW_REQUIRED';
   const reviewChecks = it.checks.filter((c) => c.result === 'REVIEW');
 
+  // 액션 실패(상태 경쟁 409 등)는 전역 토스트가 서버 사유(body.message)로 표면화한다.
   const done = (msg: string) => () => {
     toast(msg);
     navigate('/review');
-  };
-  const fail = (err: unknown) => {
-    const msg = (err as { body?: { message?: string } })?.body?.message;
-    toast(msg ?? '처리하지 못했습니다 — 목록을 새로고침해 주세요.');
   };
 
   const approve = () => {
@@ -54,12 +51,11 @@ export function ReviewDetailPage() {
     if (edited) {
       actions.approveEdited.mutate(
         { editedSummary: text, note: note.trim() || null },
-        { onSuccess: done('수정 승인되어 제공됩니다.'), onError: fail },
+        { onSuccess: done('수정 승인되어 제공됩니다.') },
       );
     } else {
       actions.approve.mutate(note.trim() || null, {
         onSuccess: done('승인되어 제공됩니다.'),
-        onError: fail,
       });
     }
   };
@@ -72,7 +68,6 @@ export function ReviewDetailPage() {
     }
     actions[kind].mutate(reason, {
       onSuccess: done(kind === 'reject' ? '반려 처리했습니다.' : '차단 처리했습니다.'),
-      onError: fail,
     });
   };
 

@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'ui-kit';
 import { App } from './App';
-import { ApiError } from './api/client';
+import { ApiError, apiMessage } from './api/client';
 // tailwind(preflight) → ui-kit 순서 고정: preflight가 토큰·컴포넌트 스타일을 덮지 않게
 import './styles/app.css';
 import 'ui-kit/styles.css';
@@ -33,6 +33,7 @@ const queryClient = new QueryClient({
   // mutation 실패는 전역에서 토스트로 드러낸다 (Rule 12 — 조용한 실패 금지).
   // 401 은 로그인 화면의 만료 배너가 설명하므로 토스트 대신 세션 무효화만 하고,
   // 자체 에러 표면이 있는 뮤테이션(로그인 등)은 meta.suppressGlobalToast 로 중복을 끈다.
+  // 문구는 서버 봉투의 사유(body.message)를 우선하고(ALPHA-655), 없을 때만 HTTP 상태 문구다.
   mutationCache: new MutationCache({
     onError: (error, _variables, _onMutateResult, mutation) => {
       if (error instanceof ApiError && error.status === 401) {
@@ -40,7 +41,7 @@ const queryClient = new QueryClient({
         return;
       }
       if (mutation.meta?.suppressGlobalToast) return;
-      toast(error instanceof Error ? error.message : '요청이 실패했습니다.');
+      toast(apiMessage(error, error instanceof Error ? error.message : '요청이 실패했습니다.'));
     },
   }),
 });

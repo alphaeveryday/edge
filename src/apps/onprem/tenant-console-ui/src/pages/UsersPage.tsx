@@ -26,15 +26,11 @@ export function UsersPage() {
 
   const confirmDeactivate = () => {
     if (!deactivateTarget) return;
+    // 실패는 전역 토스트가 서버 사유(body.message)로 표면화한다 — 마지막 관리자(409) 등.
     deactivate.mutate(deactivateTarget.id, {
       onSuccess: () => {
         setDeactivateTarget(null);
         toast('사용자를 비활성화했습니다.');
-      },
-      onError: (err) => {
-        // 마지막 관리자(409) 등 서버 사유를 그대로 보인다.
-        const msg = (err as { body?: { message?: string } })?.body?.message;
-        toast(msg ?? '비활성화하지 못했습니다.');
       },
     });
   };
@@ -50,10 +46,8 @@ export function UsersPage() {
           setRoleTarget((current) => (current?.id === target.id ? null : current));
           toast('역할을 변경했습니다.');
         },
-        onError: (err) => {
-          // 마지막 관리자 강등(409)·경쟁 변경(409)·자기 변경(403) 등 서버 사유를 그대로 보인다.
-          const msg = (err as { body?: { message?: string } })?.body?.message;
-          toast(msg ?? '역할을 변경하지 못했습니다.');
+        onError: () => {
+          // 사유(마지막 관리자 강등·경쟁 변경 등 409/403)는 전역 토스트가 body.message 로 보인다.
           // 실패 시에도 모달을 닫는다 — stale 현재 역할을 근거로 한 재시도가 방금 이루어진
           // 다른 관리자의 변경을 확인 없이 덮어쓰지 않게, 갱신된 목록에서 다시 열게 한다.
           setRoleTarget((current) => (current?.id === target.id ? null : current));
@@ -79,14 +73,10 @@ export function UsersPage() {
     register.mutate(
       { email: emailValue, name: nameValue, role, password: passwordValue },
       {
+        // 실패(중복 이메일 409·유효성 400)는 전역 토스트가 서버 사유로 표면화한다.
         onSuccess: () => {
           setRegisterOpen(false);
           toast('사용자를 등록했습니다.');
-        },
-        onError: (err) => {
-          // 중복 이메일(409)·유효성(400) 등 서버 사유를 그대로 보인다.
-          const msg = (err as { body?: { message?: string } })?.body?.message;
-          toast(msg ?? '사용자를 등록하지 못했습니다.');
         },
       },
     );

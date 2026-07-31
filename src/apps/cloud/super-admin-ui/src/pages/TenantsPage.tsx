@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
 import type { TenantCreateEnv, TenantStatus } from '../domains/tenants';
 import { ENV_TONE, TENANT_STATUS_LABEL, TENANT_STATUS_TONE } from '../domains/tenants';
+import { apiMessage } from '../api/client';
 import { useCreateTenant, useTenants } from '../domains/tenants/hooks';
 import { LoadError } from './_shared/LoadError';
 
@@ -55,6 +56,8 @@ export function TenantsPage() {
           setFStatus('ALL');
           toast('테넌트가 생성되었습니다.');
         },
+        // 서버 실패 사유를 모달 안에 인라인으로 보인다(훅이 전역 토스트를 끔).
+        onError: (err) => setFError(apiMessage(err, '테넌트를 생성하지 못했습니다.')),
       },
     );
   };

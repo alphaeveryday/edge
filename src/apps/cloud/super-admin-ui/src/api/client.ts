@@ -18,6 +18,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 실패 봉투의 서버 사유(body.message)를 우선 반환한다 — 없으면 fallback.
+ * 서버는 실패에도 공통 포맷({isSuccess:false, code, message})을 실어 보내므로,
+ * HTTP 상태 문구("요청 실패 (409 Conflict)")보다 이 message 가 사용자 언어다.
+ */
+export function apiMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const msg = (err.body as { message?: string } | undefined)?.message;
+    if (msg) return msg;
+  }
+  return fallback;
+}
+
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   /** JSON 직렬화할 본문. 문자열이 아니면 JSON.stringify 된다. */
   body?: unknown;
