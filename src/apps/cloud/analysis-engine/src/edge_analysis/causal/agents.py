@@ -114,6 +114,29 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
     return "\n".join(L)
 
 
+def _as_list(out: dict, key: str) -> list:
+    """목록 필드. **falsy 비목록을 `[]` 로 접지 않는다** — `edges: {}` 를 "간선 없음"으로
+    읽으면 계약 위반이 정상 산출로 집계돼 되먹임 없이 UNCERTAIN 이 나간다."""
+    value = out.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PipelineError(f"제안의 {key} 가 목록이 아니다: {type(value).__name__}")
+    return value
+
+
+def _opt_str(e: dict, i: int, key: str, default: str) -> str:
+    """선택 문자열 필드. 비문자열이면 여기서 거부한다 — 그대로 `EdgeDesign` 에 실으면
+    `engine` 의 `NMIN.get`·`narrate` 의 `.strip()` 에서 터지고, 그건 parse 밖이라
+    되먹임이 못 잡는다(ALPHA-633)."""
+    value = e.get(key)
+    if value is None or value == "":
+        return default
+    if not isinstance(value, str):
+        raise PipelineError(f"간선 {i} 의 {key} 가 문자열이 아니다: {type(value).__name__}")
+    return value
+
+
 def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
     """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**
 
@@ -126,9 +149,12 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
     nodes = out.get("nodes")
     if not isinstance(nodes, dict):
         raise PipelineError(f"제안에 nodes 가 없다: {sorted(out)[:6]}")
-    edges = out.get("edges") or []
-    if not isinstance(edges, list):
-        raise PipelineError(f"제안의 edges 가 목록이 아니다: {type(edges).__name__}")
+    for node, meta in nodes.items():
+        # 노드 메타는 graph.validate 가 `m.get("kind")` 로 읽는다 - 여기서 안 거르면
+        # 그쪽에서 AttributeError 가 나고, 그건 parse 밖이라 되먹임이 못 잡는다.
+        if not isinstance(node, str) or not isinstance(meta, dict):
+            raise PipelineError(f"nodes 항목이 (문자열, 객체)가 아니다: {node!r}")
+    edges = _as_list(out, "edges")
     designs: list[EdgeDesign] = []
     for i, e in enumerate(edges):
         if not isinstance(e, dict):
@@ -141,19 +167,17 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
             # PipelineError 가 아니라 AttributeError 라 되먹임 대상이 못 된다.
             if not isinstance(value, str) or not value.strip():
                 raise PipelineError(f"간선 {i} 에 {key} 가 없다")
-        strata = e.get("strata") or "date"
+        strata = _opt_str(e, i, "strata", "date")
         if strata not in STRATA:
             raise PipelineError(f"간선 {i} strata={strata!r} 는 어휘 밖이다: {STRATA}")
         designs.append(EdgeDesign(
             src=e["from"], dst=e["to"], treated=e["treated"], control=e["control"],
-            strata=strata, scope=e.get("scope") or "type",
-            because=e.get("because") or "", false_if=e.get("false_if") or "",
-            timing=e.get("timing") or "unscheduled",
-            cause_label=e.get("cause_label") or e["from"]))
-    raw_missing = out.get("missing") or []
-    if not isinstance(raw_missing, list):
-        raise PipelineError(f"제안의 missing 이 목록이 아니다: {type(raw_missing).__name__}")
-    missing = [str(m) for m in raw_missing]
+            strata=strata, scope=_opt_str(e, i, "scope", "type"),
+            because=_opt_str(e, i, "because", ""),
+            false_if=_opt_str(e, i, "false_if", ""),
+            timing=_opt_str(e, i, "timing", "unscheduled"),
+            cause_label=_opt_str(e, i, "cause_label", e["from"])))
+    missing = [str(m) for m in _as_list(out, "missing")]
     return nodes, designs, missing
 
 

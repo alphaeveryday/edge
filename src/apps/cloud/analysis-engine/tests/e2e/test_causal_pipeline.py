@@ -652,3 +652,36 @@ def test_malformed_edge_shape_is_also_fed_back_not_raised():
 
     assert client.calls == 2, "형태 붕괴가 되먹임 재질의를 못 만들었다"
     assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
+
+
+@pytest.mark.parametrize("broken", [
+    {"nodes": _nodes(), "edges": {}, "missing": []},                    # falsy 비목록
+    {"nodes": _nodes(), "edges": [_edge()], "missing": 0},              # falsy 비목록
+    {"nodes": {"DIVIDEND@t+0": None}, "edges": [_edge()], "missing": []},   # 노드 메타 붕괴
+    {"nodes": _nodes(), "edges": [{**_edge(), "scope": ["type"]}], "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge(), "cause_label": 7}], "missing": []},
+])
+def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
+    """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.
+
+    WHY: 되먹임은 `except PipelineError` 하나로 받는다. 어떤 위반이 AttributeError·
+    TypeError 로 새면 그 입력만 유니버스 전체 런을 죽인다 — 고친 줄 알고 남겨두는 구멍이
+    정확히 이 모양이다. falsy 비목록(`edges: {}`)은 특히 위험하다: 예외조차 없이
+    "간선 없음"으로 접혀 계약 위반이 정상 산출로 집계된다.
+    """
+    with pytest.raises(PipelineError):
+        agents.parse(broken)
+
+
+def test_absent_optional_fields_still_parse():
+    """위 가드가 **정상 산출까지** 거부하면 안 된다 - 선택 필드 부재는 계약 위반이 아니다."""
+    minimal = {"nodes": _nodes(), "edges": [{
+        "from": "DIVIDEND@t+0", "to": "AR@t+0",
+        "treated": _TREATED_WHERE, "control": _CONTROL_WHERE}]}
+    nodes, designs, missing = agents.parse(minimal)
+
+    assert len(designs) == 1
+    assert (designs[0].strata, designs[0].scope) == ("date", "type")
+    assert designs[0].timing == "unscheduled"
+    assert designs[0].cause_label == "DIVIDEND@t+0"      # 없으면 from 으로 떨어진다
+    assert missing == []
