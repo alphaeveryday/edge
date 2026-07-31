@@ -385,6 +385,46 @@ class MinuteLedger:
         row = cur.fetchone()
         return None if row is None else row[0]
 
+    def release_window_claim(
+        self, *, session_id: str, window_start: datetime, worker_id: str, claim_token: int,
+    ) -> bool:
+        """내 claim 을 자발 반납한다(DUE 복귀) — drain 중 반복 실패 window 용.
+
+        lease 만료를 기다리면 drain ack 가 CLAIMED 잔존으로 계속 거부돼 세션이
+        DRAINING 에 고착된다. 반납된 DUE 는 ack 를 막지 않고, 잔여 판정(MISSING 등)은
+        EOD QC 소관이다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window
+                SET data_status = 'DUE', claimed_by = NULL, claim_token = NULL,
+                    lease_expires_at = NULL, updated_at = now()
+                WHERE session_id = %s AND window_start = %s
+                  AND claimed_by = %s AND claim_token = %s AND data_status = 'CLAIMED'
+                """,
+                (session_id, window_start, worker_id, claim_token),
+            )
+            return cur.rowcount == 1
+
+    def release_worker_fence(self, *, session_id: str, fence_token: int) -> bool:
+        """graceful 종료 시 session lease 를 즉시 반납한다 — token 은 유지.
+
+        반납 없이 죽으면 교체 Worker 가 lease 만료(기본 5분)까지 진입하지 못해
+        장중 window 여러 개가 밀린다. token 을 지우지 않으므로 구 프로세스의 잔여
+        쓰기는 계속 거부된다(다음 acquire 가 token 을 올린다).
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET lease_expires_at = NULL, updated_at = now()
+                WHERE session_id = %s AND worker_fencing_token = %s
+                """,
+                (session_id, fence_token),
+            )
+            return cur.rowcount == 1
+
     # ── watermark (ALPHA-663) ─────────────────────────────────
     def advance_watermarks(self, *, session_id: str) -> tuple[datetime | None, datetime | None]:
         """session watermark 두 개를 재계산해 저장하고 (processed, contiguous) 를 돌려준다.

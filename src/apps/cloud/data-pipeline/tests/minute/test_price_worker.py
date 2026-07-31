@@ -273,3 +273,35 @@ class TestCorrection:
         assert worker.tick(after_lease) == "DRAINING"  # 고아 회수·처리 후 ack 성공
         assert db.sessions[session_id]["phase"] == "DRAINED"
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
+
+    def test_drain_converges_even_with_persistent_failure(self, tmp_path):
+        # 벤더 장애가 지속돼도 drain 은 수렴해야 한다 — 실패 claim 을 DUE 로 반납,
+        # 잔여 판정은 EOD QC 소관
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+
+        class AlwaysExploding:
+            def collect(self, request, now):
+                raise RuntimeError("vendor 장기 장애")
+
+        worker.collector = AlwaysExploding()
+        assert worker.tick(NOW) == "WINDOW_FAILED"
+        ledger.request_drain(session_id=session_id, now=NOW)
+        after_lease = NOW + timedelta(seconds=61)
+        assert worker.tick(after_lease) == "DRAINING"  # 회수→재실패→반납→ack
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+        assert {w["data_status"] for w in db.windows.values()} == {"DUE"}  # QC 대상
+
+
+class TestGracefulHandoff:
+    def test_sigterm_releases_lease_for_immediate_takeover(self, tmp_path):
+        db = FakeMinuteDB()
+        first, ledger, session_id = build_worker(db, tmp_path, windows=5)
+        first.tick(NOW)  # 3개 처리
+        first.request_stop()
+        assert first.tick(NOW + timedelta(seconds=1)) == "STOPPED"
+        # 교체 Worker 가 lease 만료를 기다리지 않고 즉시 인계한다
+        replacement, _, _ = build_worker(db, tmp_path, worker_id="w2", windows=5)
+        replacement.session_id = session_id
+        assert replacement.tick(NOW + timedelta(seconds=2)) == "PROCESSED"
+        assert {w["data_status"] for w in db.windows.values()} == {"VALID"}

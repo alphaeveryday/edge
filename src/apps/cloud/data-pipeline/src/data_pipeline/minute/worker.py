@@ -89,6 +89,13 @@ class PriceWorker:
         STOPPED / DRAINING / DRAINED / IDLE / PROCESSED / WINDOW_FAILED
         """
         if self.stopping:
+            if self.fence_token is not None:
+                # lease 즉시 반납 — 교체 Worker 가 만료(수 분)를 기다리지 않게.
+                # token 은 유지되므로 이 프로세스의 잔여 쓰기는 계속 거부된다.
+                self.ledger.release_worker_fence(
+                    session_id=self.session_id, fence_token=self.fence_token
+                )
+                self.fence_token = None
             return "STOPPED"
         if not self._ensure_fence(now):
             return "STOPPED"
@@ -106,7 +113,13 @@ class PriceWorker:
                 )
                 if claim is None:
                     break
-                self._process(claim, now)
+                if not self._process(claim, now):
+                    # 반복 실패 window 를 CLAIMED 로 두면 ack 가 영구 거부된다 —
+                    # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다
+                    self.ledger.release_window_claim(
+                        session_id=self.session_id, window_start=claim["window_start"],
+                        worker_id=self.config.worker_id, claim_token=claim["claim_token"],
+                    )
             self.ledger.ack_drain(
                 session_id=self.session_id, fence_token=self.fence_token, now=now
             )
