@@ -163,14 +163,23 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
             G.parse(node)
         except ValueError as exc:
             raise PipelineError(f"nodes 의 {node!r}: {exc}") from exc
-        # 메타에서 graph.validate 가 **연산**하는 필드는 둘뿐이다 - member_events 는
-        # 순회하고(graph.py:381), seq_ignorability 는 `.strip()` 한다(:409). 나머지(kind·
-        # tau·effect)는 비교라 타입이 달라도 안 터진다. 이 둘만 막으면 충분하고, 더 막으면
-        # 스키마 검증기가 된다(Rule 2).
-        events = meta.get("member_events")
-        if events is not None and not isinstance(events, list):
+        # graph.validate 가 메타에서 **연산**하는 필드만 막는다(Rule 2 - 그 이상은 스키마
+        # 검증기가 된다). 적대적 스윕으로 센 목록이다:
+        #   kind            KINDS 조회의 **dict 키**(graph.py:308) - unhashable 이면 TypeError
+        #   member_events   순회 + 집합 원소(graph.py:381·386) - 목록·문자열 원소여야 한다
+        #   seq_ignorability `.strip()`(graph.py:409)
+        # tau·effect·unit·measure 는 비교·falsy 검사뿐이라 타입이 달라도 안 터진다.
+        if not isinstance(meta.get("kind"), str):
             raise PipelineError(
-                f"nodes 의 {node!r}: member_events 가 목록이 아니다: {type(events).__name__}")
+                f"nodes 의 {node!r}: kind 가 문자열이 아니다: {meta.get('kind')!r}")
+        events = meta.get("member_events")
+        if events is not None:
+            # `list[str]` 로 못박는다. graph.validate 가 원소를 **집합 원소로 쓰므로**
+            # (`x not in grounded`, graph.py:386) dict·list 원소는 unhashable TypeError 가
+            # 되고, event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
+            if not isinstance(events, list) or not all(isinstance(x, str) for x in events):
+                raise PipelineError(
+                    f"nodes 의 {node!r}: member_events 가 문자열 목록이 아니다: {events!r}")
         seq = meta.get("seq_ignorability")
         if seq is not None and not isinstance(seq, str):
             raise PipelineError(

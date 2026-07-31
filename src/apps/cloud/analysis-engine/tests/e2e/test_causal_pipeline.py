@@ -23,6 +23,7 @@ import pytest
 
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.causal import agents
+from edge_analysis.causal import graph as G
 from edge_analysis.causal.run import explain
 from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import (
@@ -674,6 +675,11 @@ def test_malformed_edge_shape_is_also_fed_back_not_raised():
     {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock",
                                             "measure": "배당", "member_events": 1, "tau": "t+0"}},
      "edges": [_edge()], "missing": []},
+    # 원소까지 못박아야 한다 — graph.py:386 이 집합 원소로 쓰므로 unhashable 원소는
+    # TypeError 다. event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
+                                            "member_events": [{"id": EVENT_ID}], "tau": "t+0"}},
+     "edges": [_edge()], "missing": []},
     {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "MECHANISM", "unit": "stock",
                                             "measure": "배당", "seq_ignorability": 1}},
      "edges": [_edge()], "missing": []},
@@ -702,3 +708,46 @@ def test_absent_optional_fields_still_parse():
     assert designs[0].timing == "unscheduled"
     assert designs[0].cause_label == "DIVIDEND@t+0"      # 없으면 from 으로 떨어진다
     assert missing == []
+
+
+# 노드 메타에 넣어 볼 불량값. unhashable(set·dict·list)이 핵심이다 - graph 가 종별을
+# 집합·사전 조회에 쓰므로 그 타입만 TypeError 를 낸다.
+_BAD_META_VALUES = [1, "x", [], {}, [{"id": 1}], [1], [[1]], None, True, 1.5]
+_META_FIELDS = ("kind", "member_events", "seq_ignorability", "tau", "effect", "unit", "measure")
+
+
+@pytest.mark.parametrize("kind", ["SHOCK", "MECHANISM", "OBSERVABLE", "CONFOUND"])
+@pytest.mark.parametrize("field", _META_FIELDS)
+def test_parse_survivors_never_explode_in_validate(kind, field):
+    """**parse 를 통과한 산출은 validate 에서 PipelineError 아닌 예외를 내지 않는다.**
+
+    WHY: 되먹임은 `except PipelineError` 하나로 받는다(run.explain). 게이트를 통과한 값이
+    하류에서 다시 읽힐 때 TypeError·AttributeError·ValueError 로 새면, 그 입력만 AnalyzeOne 을
+    죽이고 전량성공 게이트(ADR-0028)가 유니버스 33종 런을 FAILED 시킨다.
+
+    케이스를 하나씩 늘리는 대신 **불변식으로 박는다.** 리뷰 왕복마다 새 필드가 하나씩
+    나왔는데(노드 id 형식 → member_events 스칼라 → member_events 원소 → kind unhashable),
+    전부 이 한 문장의 사례였다. 새 메타 필드를 graph 가 연산하기 시작하면 여기서 깨진다.
+    """
+    target = {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}
+    edge = {**_edge(), "from": "DIVIDEND@t+0"}
+    for value in _BAD_META_VALUES:
+        meta = {"kind": kind, "unit": "stock", "measure": "배당",
+                "member_events": [EVENT_ID], "tau": "t+0", field: value}
+        proposal = {"nodes": {"DIVIDEND@t+0": meta, "AR@t+0": target},
+                    "edges": [edge], "missing": []}
+        try:
+            nodes, _designs, _missing = agents.parse(proposal)
+        except PipelineError:
+            continue                      # 게이트가 거부했다 - 되먹임 대상이다
+        try:
+            G.validate({"nodes": nodes,
+                        "structures": [{"id": "A", "edges": [
+                            {"from": "DIVIDEND@t+0", "to": "AR@t+0", "timing": "unscheduled"}]}]},
+                       grounded={EVENT_ID}, require_competing=False)
+        except PipelineError:
+            pass                          # 정규화된 거부 - 되먹임이 받는다
+        except Exception as exc:          # noqa: BLE001 — 이 테스트가 잡으려는 게 이것이다
+            raise AssertionError(
+                f"parse 를 통과한 {field}={value!r}(kind={kind})가 validate 에서 "
+                f"{type(exc).__name__} 로 샜다: {exc}") from exc
