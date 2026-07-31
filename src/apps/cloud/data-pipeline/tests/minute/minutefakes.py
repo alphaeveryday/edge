@@ -84,6 +84,8 @@ class _Cursor:
             self._refresh_window_count(params)
         elif "worker_fencing_token = worker_fencing_token + 1" in s:
             self._acquire_fence(params)
+        elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at = NULL"):
+            self._release_fence(params)
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at"):
             self._heartbeat(params)
         elif "FOR UPDATE OF c SKIP LOCKED" in s:
@@ -99,6 +101,12 @@ class _Cursor:
                 (w["window_start"], w["generation"]) for w in self.db.windows.values()
                 if w["session_id"] == params[0] and w.get("checksum") is not None
             ]
+        elif "SET data_status = 'DUE', claimed_by = NULL" in s:
+            self._release_claim(params)
+        elif s.startswith("SELECT phase FROM minute_ingestion_session"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["phase"],)]
         elif s.startswith("SELECT 1 FROM minute_ingestion_session"):
             if params[0] in self.db.sessions:  # watermark 선행 잠금 — 없으면 no-row
                 self._rows = [(1,)]
@@ -432,4 +440,23 @@ class _Cursor:
         row.update(status=status, attempt_count=row["attempt_count"] + 1,
                    next_attempt_at=next_attempt_at, last_error=error,
                    claimed_by=None, claim_expires_at=None)
+        self.rowcount = 1
+
+    def _release_claim(self, p):
+        session_id, window_start, worker_id, claim_token = p
+        window = self.db.windows.get((session_id, window_start))
+        if (window is None or window["claimed_by"] != worker_id
+                or window["claim_token"] != claim_token
+                or window["data_status"] != "CLAIMED"):
+            return
+        window.update(data_status="DUE", claimed_by=None, claim_token=None,
+                      lease_expires_at=None)
+        self.rowcount = 1
+
+    def _release_fence(self, p):
+        session_id, fence_token = p
+        row = self.db.sessions.get(session_id)
+        if row is None or row["worker_fencing_token"] != fence_token:
+            return
+        row["lease_expires_at"] = None
         self.rowcount = 1
