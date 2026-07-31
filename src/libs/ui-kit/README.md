@@ -9,7 +9,7 @@ claude.ai/design "EDGE Wireframe Design System"(프로젝트 f62e29bd)의 이식
 src/styles/tokens.css       디자인 토큰 (그레이스케일·액센트·방향 시맨틱·타입·간격) — colors_and_type.css 이식
 src/styles/components.css   컴포넌트 클래스 (.btn·.card·.table·.nav-item·.switch 등) — edge-components.css 이식
 src/styles/index.css        스타일 진입점 (tokens → components)
-src/*.tsx                   React 프리미티브: StatusBadge · Toggle · Modal · Toaster/toast · Icon · Delta
+src/*.tsx                   React 프리미티브: StatusBadge · Toggle · Modal · Toaster/toast · Icon · Delta · PageSkeleton
 ```
 
 ## 소비 방법 (소스 패키지)
