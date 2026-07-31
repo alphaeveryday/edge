@@ -1,0 +1,256 @@
+"""1분 파이프라인 session/window repository (ALPHA-662, 계획 §7 PR 2B 전반부).
+
+`db.py`(DB 접속 SSOT)를 재사용하고 커넥션은 lazy 다. ops Ledger(관측만)와 달리 이 원장은
+실행을 **제어**한다 — 쓰기 실패를 삼키면 Worker 가 유령 상태로 진행하므로 예외를 그대로
+올린다(fail loud). 그래서 ops 의 bounded-backoff·bool 반환 정책을 복제하지 않는다.
+
+멱등·경합 근거:
+  minute_ingestion_session  UNIQUE (dataset, source_group, session_date) — 슬롯 1회 계획.
+                            session_id 는 자연키에서 결정적 파생(stable_domain_id) —
+                            Planner 재기동이 같은 id 를 만든다.
+  minute_ingestion_window   PK (session_id, window_start) ON CONFLICT DO NOTHING —
+                            장 시작 시 하루치 미리 materialize(안 뜨면 MISSING 으로 관측).
+  claim                     FOR UPDATE SKIP LOCKED + lease — 동시 claim winner 1,
+                            lease 만료된 CLAIMED 는 재청구 가능.
+  fencing                   session.worker_fencing_token CAS — 새 Worker 가 token 을
+                            올리면 구 Worker 의 claim/기록이 전부 거부된다.
+
+watermark 계산·realtime/recovery 분리·drain 은 2B-2, S3+canonical+job/outbox 를 묶는
+commit transaction 은 PR 3 소관 — `record_window_outcome` 은 그 transaction 의 window
+갱신 조각으로 재사용된다.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+
+from ..config import DbConfig
+from ..db import connect as _default_connect
+from ..db import stable_domain_id
+from .states import RESULT_STATUSES, WINDOW_CLAIMED, WINDOW_DUE
+
+
+class UniverseConflictError(RuntimeError):
+    """같은 날짜의 non-finalized session 에 다른 universe 가 제시됐다 (v0.7 10.1).
+
+    새 session 을 만들지 않고 실패시킨다 — 장중 universe 교체는 session_epoch 설계 전까지
+    허용하지 않는다.
+    """
+
+
+@dataclass
+class MinuteLedger:
+    """session/window 원장 접근. connect_fn 은 테스트가 가짜 커넥션을 주입하는 이음매다."""
+
+    db: DbConfig
+    connect_fn: Callable = _default_connect
+
+    # ── session 계획 ──────────────────────────────────────────
+    def plan_session(
+        self,
+        *,
+        dataset: str,
+        source_group: str,
+        session_date: date,
+        universe_version: str,
+        universe_hash: str,
+        windows: Sequence[tuple[datetime, datetime]],
+    ) -> tuple[str, bool]:
+        """session + expected window 를 한 트랜잭션에 멱등 생성. (session_id, created).
+
+        재계획(같은 identity)은 no-op 이고, universe 가 다르면 UniverseConflictError.
+        window 의 scheduled_at 은 window_end 다 — bar 는 구간이 닫혀야 존재한다.
+        """
+        session_id = stable_domain_id("msn", dataset, source_group, session_date.isoformat())
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO minute_ingestion_session (
+                    session_id, dataset, source_group, session_date,
+                    universe_version, universe_hash, expected_window_count
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dataset, source_group, session_date) DO NOTHING
+                RETURNING session_id
+                """,
+                (session_id, dataset, source_group, session_date, universe_version,
+                 universe_hash, len(windows)),
+            )
+            created = cur.fetchone() is not None
+            if not created:
+                cur.execute(
+                    """
+                    SELECT session_id, universe_version, universe_hash, phase
+                    FROM minute_ingestion_session
+                    WHERE dataset = %s AND source_group = %s AND session_date = %s
+                    """,
+                    (dataset, source_group, session_date),
+                )
+                existing_id, existing_version, existing_hash, phase = cur.fetchone()
+                if (existing_version, existing_hash) != (universe_version, universe_hash):
+                    if phase != "FINALIZED":
+                        raise UniverseConflictError(
+                            f"session {existing_id} ({dataset}/{source_group}/{session_date}) 는 "
+                            f"universe {existing_version} 로 고정됐다 — {universe_version} 거부"
+                        )
+                session_id = existing_id
+            # 재계획에도 window INSERT 는 멱등이라 무해하다 — 누락분만 채워진다
+            for window_start, window_end in windows:
+                cur.execute(
+                    """
+                    INSERT INTO minute_ingestion_window (
+                        session_id, window_start, window_end, scheduled_at
+                    ) VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (session_id, window_start) DO NOTHING
+                    """,
+                    (session_id, window_start, window_end, window_end),
+                )
+        return session_id, created
+
+    # ── worker fence ──────────────────────────────────────────
+    def acquire_worker_fence(
+        self, *, session_id: str, worker_id: str, now: datetime, lease_seconds: int
+    ) -> int | None:
+        """session 의 worker lease 를 CAS 로 획득하고 증가한 fencing token 을 돌려준다.
+
+        살아 있는 lease 가 있으면 None — 호출자는 기다린다. 만료 lease 는 넘겨받으며,
+        token 증가가 구 Worker 의 이후 쓰기를 전부 거부되게 만든다(중복 Worker 대비).
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET worker_fencing_token = worker_fencing_token + 1,
+                    lease_expires_at = %s,
+                    heartbeat_at = %s,
+                    phase = CASE WHEN phase = 'PLANNED' THEN 'ACTIVE' ELSE phase END,
+                    updated_at = now()
+                WHERE session_id = %s
+                  AND (lease_expires_at IS NULL OR lease_expires_at < %s)
+                RETURNING worker_fencing_token
+                """,
+                (now + timedelta(seconds=lease_seconds), now, session_id, now),
+            )
+            row = cur.fetchone()
+            return None if row is None else row[0]
+
+    def heartbeat(
+        self, *, session_id: str, fence_token: int, now: datetime, lease_seconds: int
+    ) -> bool:
+        """lease 연장. 내 token 이 stale 이면 False — Worker 는 즉시 멈춰야 한다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET lease_expires_at = %s, heartbeat_at = %s, updated_at = now()
+                WHERE session_id = %s AND worker_fencing_token = %s
+                """,
+                (now + timedelta(seconds=lease_seconds), now, session_id, fence_token),
+            )
+            return cur.rowcount == 1
+
+    # ── window claim ──────────────────────────────────────────
+    def claim_due_window(
+        self,
+        *,
+        session_id: str,
+        worker_id: str,
+        fence_token: int,
+        now: datetime,
+        lease_seconds: int,
+    ) -> dict | None:
+        """가장 이른 due window 하나를 lease 로 claim 한다. 없으면 None.
+
+        due = scheduled_at 도달 + (DUE 이거나 lease 만료된 CLAIMED). FOR UPDATE SKIP LOCKED
+        로 동시 Worker 의 winner 는 1이다. stale fence 는 여기서부터 거부된다 — session 의
+        현재 token 과 일치하는 호출만 claim 이 성립한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window w
+                SET data_status = %s, claimed_by = %s, claim_token = %s,
+                    lease_expires_at = %s, attempt_count = attempt_count + 1,
+                    updated_at = now()
+                WHERE (w.session_id, w.window_start) = (
+                    SELECT c.session_id, c.window_start
+                    FROM minute_ingestion_window c
+                    JOIN minute_ingestion_session s ON s.session_id = c.session_id
+                    WHERE c.session_id = %s
+                      AND s.worker_fencing_token = %s
+                      AND c.scheduled_at <= %s
+                      AND (c.data_status = %s
+                           OR (c.data_status = %s AND c.lease_expires_at < %s))
+                    ORDER BY c.window_start
+                    LIMIT 1
+                    FOR UPDATE OF c SKIP LOCKED
+                )
+                RETURNING w.window_start, w.window_end, w.generation, w.attempt_count
+                """,
+                (WINDOW_CLAIMED, worker_id, fence_token,
+                 now + timedelta(seconds=lease_seconds),
+                 session_id, fence_token, now, WINDOW_DUE, WINDOW_CLAIMED, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "session_id": session_id,
+                "window_start": row[0],
+                "window_end": row[1],
+                "generation": row[2],
+                "attempt_count": row[3],
+            }
+
+    # ── window 결과 기록 (PR 3 commit transaction 의 window 조각) ──────
+    def record_window_outcome(
+        self,
+        *,
+        session_id: str,
+        window_start: datetime,
+        worker_id: str,
+        fence_token: int,
+        data_status: str,
+        expected_unit_count: int,
+        succeeded_unit_count: int,
+        failed_unit_count: int,
+        record_count: int,
+        checksum: str,
+        manifest_uri: str,
+        manifest_checksum: str,
+        missing_units: list[str] | None,
+        stage_timestamps: dict[str, str],
+    ) -> bool:
+        """claim 한 window 에 수집 결과를 기록한다. stale fence/claim 이면 False.
+
+        거부 조건 셋이 각자 다른 결함을 막는다: claimed_by(다른 Worker 의 claim),
+        claim_token(같은 Worker 의 옛 claim), session token(fence 를 뺏긴 구 Worker).
+        generation 은 여기서 +1 — correction 재기록도 같은 경로다.
+        """
+        if data_status not in RESULT_STATUSES:
+            raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window w
+                SET data_status = %s, expected_unit_count = %s, succeeded_unit_count = %s,
+                    failed_unit_count = %s, record_count = %s, generation = w.generation + 1,
+                    checksum = %s, manifest_uri = %s, manifest_checksum = %s,
+                    missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
+                    claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL,
+                    updated_at = now()
+                FROM minute_ingestion_session s
+                WHERE w.session_id = %s AND w.window_start = %s
+                  AND s.session_id = w.session_id
+                  AND w.claimed_by = %s AND w.claim_token = %s
+                  AND s.worker_fencing_token = %s
+                """,
+                (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
+                 record_count, checksum, manifest_uri, manifest_checksum,
+                 None if missing_units is None else json.dumps(missing_units),
+                 json.dumps(stage_timestamps, ensure_ascii=False),
+                 session_id, window_start, worker_id, fence_token, fence_token),
+            )
+            return cur.rowcount == 1
