@@ -18,7 +18,11 @@ from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.models import KST, plan_session_windows
-from data_pipeline.minute.repository import MinuteLedger, UniverseConflictError
+from data_pipeline.minute.repository import (
+    MinuteLedger,
+    SessionFinalizedError,
+    UniverseConflictError,
+)
 
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 7, 31)
@@ -63,6 +67,26 @@ class TestPlanSession:
         with pytest.raises(UniverseConflictError):
             plan(ledger, universe_version="univ-other", universe_hash="b" * 64)
         assert len(db.sessions) == 1
+
+    def test_replan_refreshes_window_count(self):
+        # 재계획이 window 를 더했으면 집계도 실제 행 수를 따라간다 — 아니면 완료 판정이
+        # 부족한 기대치로 session 을 조기 완료시킨다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger, windows=WINDOWS[:389])
+        assert db.sessions[session_id]["expected_window_count"] == 389
+        plan(ledger)  # 전체 390 으로 재계획
+        assert db.sessions[session_id]["expected_window_count"] == 390
+        assert len(db.windows) == 390
+
+    def test_finalized_session_replan_rejected(self):
+        # terminal session 에 DUE window 를 더하면 QC 뒤 유령 작업이 생긴다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        db.sessions[session_id]["phase"] = "FINALIZED"
+        with pytest.raises(SessionFinalizedError):
+            plan(ledger)
 
     def test_windows_materialized_upfront(self):
         # 하루치 미리 materialize — 프로세스가 안 떠도 due 시각이 지나면 MISSING 으로
@@ -198,12 +222,17 @@ class TestRecordOutcome:
         )
         return db, ledger, session_id, token, claim
 
-    def _record(self, ledger, session_id, claim, *, worker_id="w1", fence_token, status="VALID"):
+    def _record(
+        self, ledger, session_id, claim, *,
+        worker_id="w1", fence_token, status="VALID", checksum="c" * 64, claim_token=None,
+    ):
         return ledger.record_window_outcome(
             session_id=session_id, window_start=claim["window_start"],
-            worker_id=worker_id, fence_token=fence_token, data_status=status,
+            worker_id=worker_id, fence_token=fence_token,
+            claim_token=claim["claim_token"] if claim_token is None else claim_token,
+            data_status=status,
             expected_unit_count=348, succeeded_unit_count=348, failed_unit_count=0,
-            record_count=348, checksum="c" * 64, manifest_uri="memory://m",
+            record_count=348, checksum=checksum, manifest_uri="memory://m",
             manifest_checksum="d" * 64, missing_units=None,
             stage_timestamps={"collection_started_at": NOW.isoformat()},
         )
@@ -240,3 +269,46 @@ class TestRecordOutcome:
         db, ledger, session_id, token, claim = self._claimed()
         with pytest.raises(ValueError):
             self._record(ledger, session_id, claim, fence_token=token, status="DUE")
+
+    def test_late_write_from_expired_claim_rejected(self):
+        # 같은 Worker·같은 fence 라도 만료된 옛 claim 의 늦은 기록은 거부 —
+        # claim_token 이 claim 마다 고유해야 잡히는 결함이다
+        db, ledger, session_id, token, old_claim = self._claimed()
+        later = NOW + timedelta(seconds=61)
+        ledger.heartbeat(session_id=session_id, fence_token=token, now=later, lease_seconds=300)
+        new_claim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=later, lease_seconds=60,
+        )
+        assert new_claim["window_start"] == old_claim["window_start"]
+        assert new_claim["claim_token"] != old_claim["claim_token"]
+        assert self._record(
+            ledger, session_id, old_claim, fence_token=token,
+            claim_token=old_claim["claim_token"],
+        ) is False
+        assert self._record(ledger, session_id, new_claim, fence_token=token) is True
+
+    def test_same_checksum_rerun_keeps_generation(self):
+        # 값이 같은 재실행은 generation 불변 — "같은 checksum → artifact 재사용" 판정
+        # (계획 §8)의 전제. 바뀐 checksum 만 세대를 올린다
+        db, ledger, session_id, token, claim = self._claimed()
+        assert self._record(ledger, session_id, claim, fence_token=token) is True
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["generation"] == 1
+        # EOD 명시 재수집 경로를 흉내: window 를 다시 claimable 로 되돌려 재기록
+        window["data_status"] = "DUE"
+        rerun = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60,
+        )
+        assert self._record(ledger, session_id, rerun, fence_token=token) is True
+        assert window["generation"] == 1  # 같은 checksum — 불변
+        window["data_status"] = "DUE"
+        corrected = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60,
+        )
+        assert self._record(
+            ledger, session_id, corrected, fence_token=token, checksum="e" * 64
+        ) is True
+        assert window["generation"] == 2  # correction — 세대 증가

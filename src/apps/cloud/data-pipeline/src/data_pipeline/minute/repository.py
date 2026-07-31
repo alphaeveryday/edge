@@ -34,11 +34,15 @@ from .states import RESULT_STATUSES, WINDOW_CLAIMED, WINDOW_DUE
 
 
 class UniverseConflictError(RuntimeError):
-    """같은 날짜의 non-finalized session 에 다른 universe 가 제시됐다 (v0.7 10.1).
+    """같은 날짜의 session 에 다른 universe 가 제시됐다 (v0.7 10.1).
 
     새 session 을 만들지 않고 실패시킨다 — 장중 universe 교체는 session_epoch 설계 전까지
-    허용하지 않는다.
+    허용하지 않는다. FINALIZED 라도 조용히 넘기지 않는다(호출자가 날짜를 잘못 잡은 신호).
     """
+
+
+class SessionFinalizedError(RuntimeError):
+    """FINALIZED session 재계획 시도 — terminal session 에 window 를 더하지 않는다."""
 
 
 @dataclass
@@ -90,23 +94,39 @@ class MinuteLedger:
                 )
                 existing_id, existing_version, existing_hash, phase = cur.fetchone()
                 if (existing_version, existing_hash) != (universe_version, universe_hash):
-                    if phase != "FINALIZED":
-                        raise UniverseConflictError(
-                            f"session {existing_id} ({dataset}/{source_group}/{session_date}) 는 "
-                            f"universe {existing_version} 로 고정됐다 — {universe_version} 거부"
-                        )
+                    raise UniverseConflictError(
+                        f"session {existing_id} ({dataset}/{source_group}/{session_date}) 는 "
+                        f"universe {existing_version} 로 고정됐다 — {universe_version} 거부"
+                    )
+                if phase == "FINALIZED":
+                    # terminal session 에 DUE window 를 더하면 QC 뒤에 유령 작업이 생긴다
+                    raise SessionFinalizedError(
+                        f"session {existing_id} 는 FINALIZED 다 — 재계획 불가"
+                    )
                 session_id = existing_id
             # 재계획에도 window INSERT 는 멱등이라 무해하다 — 누락분만 채워진다
-            for window_start, window_end in windows:
-                cur.execute(
-                    """
-                    INSERT INTO minute_ingestion_window (
-                        session_id, window_start, window_end, scheduled_at
-                    ) VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (session_id, window_start) DO NOTHING
-                    """,
-                    (session_id, window_start, window_end, window_end),
-                )
+            cur.executemany(
+                """
+                INSERT INTO minute_ingestion_window (
+                    session_id, window_start, window_end, scheduled_at
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (session_id, window_start) DO NOTHING
+                """,
+                [(session_id, ws, we, we) for ws, we in windows],
+            )
+            # 재계획이 window 를 더했을 수 있다 — 집계는 실제 행 수가 정본
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET expected_window_count = (
+                        SELECT COUNT(*) FROM minute_ingestion_window
+                        WHERE session_id = %s
+                    ),
+                    updated_at = now()
+                WHERE session_id = %s
+                """,
+                (session_id, session_id),
+            )
         return session_id, created
 
     # ── worker fence ──────────────────────────────────────────
@@ -166,13 +186,18 @@ class MinuteLedger:
         due = scheduled_at 도달 + (DUE 이거나 lease 만료된 CLAIMED). FOR UPDATE SKIP LOCKED
         로 동시 Worker 의 winner 는 1이다. stale fence 는 여기서부터 거부된다 — session 의
         현재 token 과 일치하는 호출만 claim 이 성립한다.
+
+        claim_token 은 **claim 마다 고유**해야 한다(attempt_count 재사용) — session fence
+        를 그대로 쓰면 같은 Worker 의 만료된 옛 claim 과 새 claim 이 구분되지 않아, 늦게
+        도착한 옛 attempt 의 결과가 기록을 통과한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE minute_ingestion_window w
-                SET data_status = %s, claimed_by = %s, claim_token = %s,
-                    lease_expires_at = %s, attempt_count = attempt_count + 1,
+                SET data_status = %s, claimed_by = %s,
+                    claim_token = w.attempt_count + 1,
+                    lease_expires_at = %s, attempt_count = w.attempt_count + 1,
                     updated_at = now()
                 WHERE (w.session_id, w.window_start) = (
                     SELECT c.session_id, c.window_start
@@ -187,9 +212,10 @@ class MinuteLedger:
                     LIMIT 1
                     FOR UPDATE OF c SKIP LOCKED
                 )
-                RETURNING w.window_start, w.window_end, w.generation, w.attempt_count
+                RETURNING w.window_start, w.window_end, w.generation,
+                          w.attempt_count, w.claim_token
                 """,
-                (WINDOW_CLAIMED, worker_id, fence_token,
+                (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
                  session_id, fence_token, now, WINDOW_DUE, WINDOW_CLAIMED, now),
             )
@@ -202,6 +228,7 @@ class MinuteLedger:
                 "window_end": row[1],
                 "generation": row[2],
                 "attempt_count": row[3],
+                "claim_token": row[4],
             }
 
     # ── window 결과 기록 (PR 3 commit transaction 의 window 조각) ──────
@@ -212,6 +239,7 @@ class MinuteLedger:
         window_start: datetime,
         worker_id: str,
         fence_token: int,
+        claim_token: int,
         data_status: str,
         expected_unit_count: int,
         succeeded_unit_count: int,
@@ -226,8 +254,10 @@ class MinuteLedger:
         """claim 한 window 에 수집 결과를 기록한다. stale fence/claim 이면 False.
 
         거부 조건 셋이 각자 다른 결함을 막는다: claimed_by(다른 Worker 의 claim),
-        claim_token(같은 Worker 의 옛 claim), session token(fence 를 뺏긴 구 Worker).
-        generation 은 여기서 +1 — correction 재기록도 같은 경로다.
+        claim_token(같은 Worker 의 옛 claim — claim 마다 고유), session token(fence 를
+        뺏긴 구 Worker). generation 은 **checksum 이 실제로 바뀔 때만** +1 — 같은 데이터
+        재실행은 generation 불변이어야 "같은 checksum → artifact 재사용" 판정(계획 §8)이
+        성립한다.
         """
         if data_status not in RESULT_STATUSES:
             raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
@@ -236,7 +266,9 @@ class MinuteLedger:
                 """
                 UPDATE minute_ingestion_window w
                 SET data_status = %s, expected_unit_count = %s, succeeded_unit_count = %s,
-                    failed_unit_count = %s, record_count = %s, generation = w.generation + 1,
+                    failed_unit_count = %s, record_count = %s,
+                    generation = CASE WHEN w.checksum IS NOT DISTINCT FROM %s
+                                      THEN w.generation ELSE w.generation + 1 END,
                     checksum = %s, manifest_uri = %s, manifest_checksum = %s,
                     missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
                     claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL,
@@ -248,9 +280,9 @@ class MinuteLedger:
                   AND s.worker_fencing_token = %s
                 """,
                 (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
-                 record_count, checksum, manifest_uri, manifest_checksum,
+                 record_count, checksum, checksum, manifest_uri, manifest_checksum,
                  None if missing_units is None else json.dumps(missing_units),
                  json.dumps(stage_timestamps, ensure_ascii=False),
-                 session_id, window_start, worker_id, fence_token, fence_token),
+                 session_id, window_start, worker_id, claim_token, fence_token),
             )
             return cur.rowcount == 1

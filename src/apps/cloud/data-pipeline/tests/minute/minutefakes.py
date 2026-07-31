@@ -11,6 +11,7 @@ ephemeral DB 실측(계획 §16) 소관이다.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 
@@ -50,6 +51,10 @@ class _Cursor:
     def fetchone(self):
         return self._rows.pop(0) if self._rows else None
 
+    def executemany(self, sql, rows):
+        for params in rows:
+            self.execute(sql, params)
+
     def execute(self, sql, params=()):
         s = " ".join(sql.split())
         self._rows = []
@@ -60,6 +65,8 @@ class _Cursor:
             self._select_session(params)
         elif s.startswith("INSERT INTO minute_ingestion_window"):
             self._insert_window(params)
+        elif "SET expected_window_count = ( SELECT COUNT(*)" in s:
+            self._refresh_window_count(params)
         elif "worker_fencing_token = worker_fencing_token + 1" in s:
             self._acquire_fence(params)
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at"):
@@ -103,6 +110,16 @@ class _Cursor:
             "claimed_by": None, "claim_token": None, "lease_expires_at": None,
         }
 
+    def _refresh_window_count(self, p):
+        count_session_id, session_id = p
+        row = self.db.sessions.get(session_id)
+        if row is None:
+            return
+        row["expected_window_count"] = sum(
+            1 for w in self.db.windows.values() if w["session_id"] == count_session_id
+        )
+        self.rowcount = 1
+
     # ── fence ──
     def _acquire_fence(self, p):
         lease_until, now, session_id, now2 = p
@@ -129,7 +146,7 @@ class _Cursor:
 
     # ── window claim / outcome ──
     def _claim_window(self, p):
-        (claimed_status, worker_id, claim_token, lease_until,
+        (claimed_status, worker_id, lease_until,
          session_id, fence_token, now, due_status, claimed_filter, now2) = p
         session = self.db.sessions.get(session_id)
         if session is None or session["worker_fencing_token"] != fence_token:
@@ -143,18 +160,19 @@ class _Cursor:
         if not candidates:
             return
         window = min(candidates, key=lambda w: w["window_start"])
+        attempt = window["attempt_count"] + 1
         window.update(
-            data_status=claimed_status, claimed_by=worker_id, claim_token=claim_token,
-            lease_expires_at=lease_until, attempt_count=window["attempt_count"] + 1,
+            data_status=claimed_status, claimed_by=worker_id, claim_token=attempt,
+            lease_expires_at=lease_until, attempt_count=attempt,
         )
         self._rows = [
             (window["window_start"], window["window_end"],
-             window["generation"], window["attempt_count"])
+             window["generation"], window["attempt_count"], window["claim_token"])
         ]
 
     def _record_outcome(self, p):
-        (data_status, expected, succeeded, failed, records, checksum, manifest_uri,
-         manifest_checksum, missing_units, stage_timestamps,
+        (data_status, expected, succeeded, failed, records, checksum_case, checksum,
+         manifest_uri, manifest_checksum, missing_units, stage_timestamps,
          session_id, window_start, worker_id, claim_token, fence_token) = p
         session = self.db.sessions.get(session_id)
         window = self.db.windows.get((session_id, window_start))
@@ -165,13 +183,21 @@ class _Cursor:
             or session["worker_fencing_token"] != fence_token
         ):
             return
+        # CASE WHEN w.checksum IS NOT DISTINCT FROM %s — 같은 checksum 은 generation 불변
+        generation = (
+            window["generation"]
+            if window.get("checksum") == checksum_case
+            else window["generation"] + 1
+        )
         window.update(
             data_status=data_status, expected_unit_count=expected,
             succeeded_unit_count=succeeded, failed_unit_count=failed,
-            record_count=records, generation=window["generation"] + 1,
+            record_count=records, generation=generation,
             checksum=checksum, manifest_uri=manifest_uri,
-            manifest_checksum=manifest_checksum, missing_units=missing_units,
-            stage_timestamps=stage_timestamps,
+            manifest_checksum=manifest_checksum,
+            # 실제 PG 는 ::jsonb 로 파싱해 저장한다 — 문자열 그대로 두면 자료형이 갈린다
+            missing_units=None if missing_units is None else json.loads(missing_units),
+            stage_timestamps=json.loads(stage_timestamps),
             claimed_by=None, claim_token=None, lease_expires_at=None,
         )
         self.rowcount = 1
