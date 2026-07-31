@@ -65,9 +65,20 @@ def build_window_manifest(
     if unknown:
         raise ValueError(f"manifest unit 분류 미지 키: {sorted(unknown)}")
     for cls, ids in units.items():
-        # 문자열을 그대로 주면 sorted() 가 문자 단위 목록으로 조용히 쪼갠다
-        if isinstance(ids, str) or not all(isinstance(u, str) for u in ids):
-            raise ValueError(f"units[{cls!r}] 는 문자열 목록이어야 한다: {ids!r}")
+        # 문자열은 sorted() 가 문자 단위로 쪼개고, generator 는 검증이 소비해 버려
+        # 빈 목록이 정본에 남는다 — list/tuple 만 받는다
+        if not isinstance(ids, (list, tuple)) or not all(isinstance(u, str) for u in ids):
+            raise ValueError(f"units[{cls!r}] 는 문자열 list/tuple 이어야 한다: {ids!r}")
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"units[{cls!r}] 에 중복 unit: {sorted(ids)}")
+    seen: dict[str, str] = {}
+    for cls, ids in units.items():
+        for unit in ids:
+            if unit in seen:
+                # 분류는 상호 배타다 — 같은 unit 이 received 이자 missing 이면
+                # QC 와 orphan 복구가 서로 다른 판정을 내린다
+                raise ValueError(f"unit {unit!r} 가 {seen[unit]}/{cls} 에 중복 분류됐다")
+            seen[unit] = cls
     for name, value in (("window_start", window_start), ("window_end", window_end)):
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             # naive 를 astimezone 하면 호스트 로컬로 해석돼 환경별 checksum 이 갈린다

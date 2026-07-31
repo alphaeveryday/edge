@@ -72,7 +72,9 @@ class TestKeys:
 class TestSerialization:
     def test_records_bytes_deterministic(self):
         first = serialize_records(RECORDS)
-        second = serialize_records([dict(r) for r in RECORDS])
+        # 키 순서를 뒤집은 dict — sort_keys 정규화가 빠지면 다른 바이트가 된다
+        reordered = [dict(reversed(list(r.items()))) for r in RECORDS]
+        second = serialize_records(reordered)
         assert first == second
         assert sha256_bytes(first) == sha256_bytes(second)
         # 행 순서는 데이터의 일부다 — 호출자(collector)가 unit_id 정렬을 보장한다
@@ -88,6 +90,25 @@ class TestSerialization:
     def test_manifest_unknown_unit_class_rejected(self):
         with pytest.raises(ValueError, match="미지 키"):
             make_manifest(units={"receievd": ["100000"]})  # 오타가 조용히 빠지면 안 된다
+
+    def test_units_wrong_type_rejected(self):
+        # 문자열은 문자 단위로 쪼개지고 generator 는 소진돼 빈 목록이 남는다
+        with pytest.raises(ValueError, match="list/tuple"):
+            make_manifest(units={"received": "100000"})
+        with pytest.raises(ValueError, match="list/tuple"):
+            make_manifest(units={"received": (u for u in ["100000"])})
+
+    def test_units_cross_class_overlap_rejected(self):
+        # 분류는 상호 배타 — 한 unit 이 수신이자 누락이면 정본이 모순된다
+        with pytest.raises(ValueError, match="중복 분류"):
+            make_manifest(units={"received": ["100000"], "missing": ["100000"]})
+        with pytest.raises(ValueError, match="중복 unit"):
+            make_manifest(units={"received": ["100000", "100000"]})
+
+    def test_naive_datetime_rejected(self):
+        # naive 를 astimezone 하면 호스트 로컬 해석 — 환경별 checksum 이 갈린다
+        with pytest.raises(ValueError, match="aware"):
+            make_manifest(window_start=datetime(2026, 7, 31, 9, 0))
 
     def test_manifest_missing_field_rejected(self):
         manifest = make_manifest()
