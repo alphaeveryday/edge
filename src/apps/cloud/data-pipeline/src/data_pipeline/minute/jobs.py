@@ -220,57 +220,67 @@ class JobLedger:
         """
         table = _JOB_TABLES[kind]
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute(
-                f"""
-                UPDATE {table} j
-                SET status = 'CLAIMED', claimed_by = %s, lease_expires_at = %s,
-                    attempt_count = j.attempt_count + 1, updated_at = now()
-                WHERE j.job_id = (
-                    SELECT c.job_id FROM {table} c
-                    WHERE c.status = 'PENDING'
-                       OR (c.status = 'RETRY_WAIT' AND c.next_attempt_at <= %s)
-                       OR (c.status = 'CLAIMED' AND c.lease_expires_at < %s)
-                    ORDER BY c.created_at
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                RETURNING j.job_id, j.attempt_count
-                """,
-                (worker_id, now + timedelta(seconds=lease_seconds), now, now),
+            # stale 정리 후 다음 후보를 이어서 본다 — 정리 한 건에 None 을 돌려주면
+            # 호출자가 "없음"으로 읽고 뒤의 eligible job 이 wake-up 없이 고착된다.
+            # 각 반복이 job 하나를 소비(DEAD)하므로 루프는 유한하다.
+            while True:
+                claimed = self._claim_one(cur, table, kind, worker_id, now, lease_seconds)
+                if claimed is None or claimed != "STALE":
+                    return claimed
+
+    def _claim_one(self, cur, table, kind, worker_id, now, lease_seconds):
+        """한 건 claim 시도 — dict(성공)/None(후보 없음)/"STALE"(정리했으니 계속)."""
+        cur.execute(
+            f"""
+            UPDATE {table} j
+            SET status = 'CLAIMED', claimed_by = %s, lease_expires_at = %s,
+                attempt_count = j.attempt_count + 1, updated_at = now()
+            WHERE j.job_id = (
+                SELECT c.job_id FROM {table} c
+                WHERE c.status = 'PENDING'
+                   OR (c.status = 'RETRY_WAIT' AND c.next_attempt_at <= %s)
+                   OR (c.status = 'CLAIMED' AND c.lease_expires_at < %s)
+                ORDER BY c.created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
             )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            job_id, attempt_count = row
-            if kind == "price":
+            RETURNING j.job_id, j.attempt_count
+            """,
+            (worker_id, now + timedelta(seconds=lease_seconds), now, now),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        job_id, attempt_count = row
+        if kind == "price":  # noqa: SIM102 — stale 정리 분기
+            cur.execute(
+                """
+                SELECT j.generation, w.generation
+                FROM price_window_job j
+                JOIN minute_ingestion_window w
+                  ON w.session_id = j.session_id AND w.window_start = j.window_start
+                WHERE j.job_id = %s
+                FOR UPDATE OF w
+                """,
+                (job_id,),
+            )
+            # FOR UPDATE OF w — 비잠금 검사는 correction commit 과 TOCTOU 다
+            # (2B 에서 확립한 원칙): 잠그면 이 tx 가 끝날 때까지 세대 증가가 블록된다
+            job_generation, window_generation = cur.fetchone()
+            if job_generation < window_generation:
+                # stale 거부는 여기 한 곳 — 낮은 세대 job 은 실행하지 않고 격리
                 cur.execute(
                     """
-                    SELECT j.generation, w.generation
-                    FROM price_window_job j
-                    JOIN minute_ingestion_window w
-                      ON w.session_id = j.session_id AND w.window_start = j.window_start
-                    WHERE j.job_id = %s
-                    FOR UPDATE OF w
+                    UPDATE price_window_job
+                    SET status = 'DEAD', error_code = 'STALE',
+                        completed_at = %s, claimed_by = NULL,
+                        lease_expires_at = NULL, updated_at = now()
+                    WHERE job_id = %s AND claimed_by = %s
                     """,
-                    (job_id,),
+                    (now, job_id, worker_id),
                 )
-                # FOR UPDATE OF w — 비잠금 검사는 correction commit 과 TOCTOU 다
-                # (2B 에서 확립한 원칙): 잠그면 이 tx 가 끝날 때까지 세대 증가가 블록된다
-                job_generation, window_generation = cur.fetchone()
-                if job_generation < window_generation:
-                    # stale 거부는 여기 한 곳 — 낮은 세대 job 은 실행하지 않고 격리
-                    cur.execute(
-                        """
-                        UPDATE price_window_job
-                        SET status = 'DEAD', error_code = 'STALE',
-                            completed_at = %s, claimed_by = NULL,
-                            lease_expires_at = NULL, updated_at = now()
-                        WHERE job_id = %s AND claimed_by = %s
-                        """,
-                        (now, job_id, worker_id),
-                    )
-                    return None
-            return {"job_id": job_id, "attempt_count": attempt_count}
+                return "STALE"
+        return {"job_id": job_id, "attempt_count": attempt_count}
 
     def _transition(
         self, kind: str, job_id: str, worker_id: str, attempt: int, *, to_status: str,

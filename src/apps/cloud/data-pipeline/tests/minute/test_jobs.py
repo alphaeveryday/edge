@@ -372,3 +372,22 @@ class TestAtomicEnqueue:
         )
         assert created is True
         assert f"{PRICE_EVENT_TYPE}:{job_id}:0" in db.outbox
+
+    def test_stale_cleanup_continues_to_next_eligible(self):
+        # stale 정리 한 건에 None 을 돌려주면 뒤의 eligible job 이 wake-up 없이 고착된다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        db.windows[("msn_x", WINDOW_START)] = {
+            "session_id": "msn_x", "window_start": WINDOW_START, "generation": 2,
+        }
+        stale_id, _ = ledger.insert_price_job(
+            session_id="msn_x", window_start=WINDOW_START,
+            generation=1, trigger_schema_version="t1",
+        )
+        current_id, _ = ledger.insert_price_job(
+            session_id="msn_x", window_start=WINDOW_START,
+            generation=2, trigger_schema_version="t1",
+        )
+        claim = ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60)
+        assert claim is not None and claim["job_id"] == current_id
+        assert db.jobs[("price", stale_id)]["status"] == "DEAD"
