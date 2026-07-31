@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
+import { apiMessage } from '../api/client';
 import { useSession } from '../domains/session/hooks';
 import type { Member, MemberRole } from '../domains/users';
 import { ROLE_LABEL } from '../domains/users';
@@ -26,12 +27,13 @@ export function UsersPage() {
 
   const confirmDeactivate = () => {
     if (!deactivateTarget) return;
-    // 실패는 전역 토스트가 서버 사유(body.message)로 표면화한다 — 마지막 관리자(409) 등.
     deactivate.mutate(deactivateTarget.id, {
       onSuccess: () => {
         setDeactivateTarget(null);
         toast('사용자를 비활성화했습니다.');
       },
+      // 서버 사유(마지막 관리자 409 등)가 없을 때도 맥락 폴백을 유지한다 — 전역(일반 문구)보다 늦게 떠 덮는다.
+      onError: (err) => toast(apiMessage(err, '비활성화하지 못했습니다.')),
     });
   };
 
@@ -46,8 +48,9 @@ export function UsersPage() {
           setRoleTarget((current) => (current?.id === target.id ? null : current));
           toast('역할을 변경했습니다.');
         },
-        onError: () => {
-          // 사유(마지막 관리자 강등·경쟁 변경 등 409/403)는 전역 토스트가 body.message 로 보인다.
+        onError: (err) => {
+          // 서버 사유(마지막 관리자 강등·경쟁 변경 409 등) 우선, 없으면 맥락 폴백.
+          toast(apiMessage(err, '역할을 변경하지 못했습니다.'));
           // 실패 시에도 모달을 닫는다 — stale 현재 역할을 근거로 한 재시도가 방금 이루어진
           // 다른 관리자의 변경을 확인 없이 덮어쓰지 않게, 갱신된 목록에서 다시 열게 한다.
           setRoleTarget((current) => (current?.id === target.id ? null : current));
@@ -73,11 +76,12 @@ export function UsersPage() {
     register.mutate(
       { email: emailValue, name: nameValue, role, password: passwordValue },
       {
-        // 실패(중복 이메일 409·유효성 400)는 전역 토스트가 서버 사유로 표면화한다.
         onSuccess: () => {
           setRegisterOpen(false);
           toast('사용자를 등록했습니다.');
         },
+        // 서버 사유(중복 이메일 409·유효성 400) 우선, 없으면 맥락 폴백.
+        onError: (err) => toast(apiMessage(err, '사용자를 등록하지 못했습니다.')),
       },
     );
   };

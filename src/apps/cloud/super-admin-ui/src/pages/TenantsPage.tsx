@@ -152,7 +152,8 @@ export function TenantsPage() {
             <button className="btn" onClick={() => setCreateOpen(false)}>
               취소
             </button>
-            <button className="btn btn-primary" onClick={submitCreate}>
+            {/* pending 중 재제출 차단 — 전역 토스트를 끈 상태라 첫 요청의 실패가 무표시로 새는 경로를 막는다 */}
+            <button className="btn btn-primary" disabled={create.isPending} onClick={submitCreate}>
               생성
             </button>
           </>
