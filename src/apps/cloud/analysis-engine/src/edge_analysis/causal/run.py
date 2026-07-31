@@ -23,6 +23,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import PipelineError
 from ..observability import log
 from . import agents, fit
 from . import graph as G
@@ -138,7 +139,25 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     violations: list[str] = []
     feedback = ""
     for attempt in (1, 2):
-        nodes, designs, got = agents.parse(agents.propose(client, text, feedback=feedback))
+        # propose 는 **감싸지 않는다.** 전송·API 오류(402·타임아웃·응답 형태 붕괴)를
+        # `adapters/llm.py` 가 재시도 소진 후 PipelineError 로 올려 보낸다 - 계약 위반과
+        # **같은 타입**이다. 그건 모델이 계약을 어긴 게 아니라 **소스가 죽은 것**이라 런이
+        # 죽어야 한다. 같이 감싸면 크레딧이 바닥난 채 UNCERTAIN 설명으로 초록이 된다 -
+        # 2026-07-27 에 tag_news 가 402 를 삼켜 940/940 전건 실패에도 exit 0 이었던
+        # 그 사고다(ALPHA-589).
+        proposal = agents.propose(client, text, feedback=feedback)
+        try:
+            nodes, designs, got = agents.parse(proposal)
+        except PipelineError as exc:
+            # 계약을 어긴 산출은 되먹임 대상이다 - 구조 위반·빈 코호트와 같은 취급.
+            # 여기서 예외가 루프를 탈출하면 AnalyzeOne 이 exit 1 이 되고, analyze
+            # 전량성공 게이트(ADR-0028)에 걸려 **유니버스 전체 런**이 FAILED 된다.
+            # 실제로 2026-07-29·07-30 런이 간선 하나의 `treated` 결측으로 33종을 다
+            # 죽였다. 틀린 그래프는 강등되는데 깨진 산출은 런을 죽이던 비대칭이다.
+            log("causal.parse_rejected", attempt=attempt, error=str(exc))
+            feedback = f"- 산출 계약 위반: {exc}"
+            violations, designs = [str(exc)], []
+            continue
         missing = list(dict.fromkeys(missing + got))
         log("causal.proposed", attempt=attempt, nodes=len(nodes), edges=len(designs))
         if not designs:

@@ -23,7 +23,9 @@ import pytest
 
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.causal import agents
+from edge_analysis.causal import graph as G
 from edge_analysis.causal.run import explain
+from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import (
     Decomposition,
     EventContext,
@@ -212,6 +214,32 @@ PROPOSAL_BACKWARDS = {"nodes": _nodes("DIVIDEND@t+1"), "edges": [_edge("DIVIDEND
                       "missing": []}
 # 억지 설계는 UNCERTAIN 보다 나쁘다 - 못 찾으면 빈 목록.
 PROPOSAL_EMPTY = {"nodes": _nodes(), "edges": [], "missing": ["장중 체결 흐름(수급) 원장"]}
+# 계약 위반: treated 가 비었다. 2026-07-29·07-30 런을 죽인 실제 산출 모양이다
+# (`간선 N 에 treated 가 없다`) - agents.parse 가 PipelineError 로 거부한다.
+PROPOSAL_NO_TREATED = {"nodes": _nodes(), "edges": [{**_edge(), "treated": ""}], "missing": []}
+# 형태 붕괴: 간선이 객체가 아니다. 정규화 안 하면 `e.get` 이 AttributeError 를 내는데,
+# 그건 PipelineError 가 아니라 되먹임이 못 알아보고 런이 죽는다.
+PROPOSAL_EDGE_NOT_OBJECT = {"nodes": _nodes(), "edges": [None], "missing": []}
+
+
+class SequenceClient:
+    """호출마다 다른 산출을 주는 제안 스텁.
+
+    되먹임 재시도는 1·2회차 산출이 **달라야** 관찰된다 - FakeClient 는 같은 값을 반복해
+    "재시도가 실제로 일어났는가"를 구별하지 못한다.
+    """
+
+    def __init__(self, *proposals: dict) -> None:
+        self._proposals = list(proposals)
+        self.calls = 0
+        self.briefs: list[str] = []
+
+    def complete_json(self, system: str, user: str) -> dict:
+        assert system == agents.SYSTEM, "인과 경로가 아닌 프롬프트로 호출됐다"
+        out = self._proposals[min(self.calls, len(self._proposals) - 1)]
+        self.calls += 1
+        self.briefs.append(user)
+        return out
 
 
 def _candidates(share: float | None) -> list[dict]:
@@ -547,3 +575,179 @@ def test_analyze_signature_still_routes_by_the_causal_argument():
 
     assert client.calls == 1
     assert ex.explanation_type == "EVENT_SUPPORTED"
+
+
+# --------------------------------------------------------------------------- #
+# 계약 위반 산출 — 되먹임 대상이지 런 사망 사유가 아니다 (ALPHA-633)
+# --------------------------------------------------------------------------- #
+def test_broken_proposal_is_fed_back_and_retried():
+    """1회차가 계약을 어기면 사유를 되먹여 다시 묻는다 - 지금까지는 재시도조차 없었다.
+
+    WHY: 2026-07-30 스케줄 런(`etf-daily-2026-07-30T15-40`)이 `간선 8 에 treated 가 없다`
+    로 **1회차에서** 죽었다. AnalyzeOne 하나가 예외로 끝나면 analyze 전량성공
+    게이트(ADR-0028)가 유니버스 33종 런을 통째로 FAILED 시킨다. 구조 위반·빈 코호트는
+    되먹여 다시 묻는데 계약 위반만 죽이던 비대칭을 여기서 고정한다.
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))
+
+    assert client.calls == 2, "계약 위반이 되먹임 재질의를 못 만들었다"
+    assert "treated" in client.briefs[1], "2회차 프롬프트에 위반 사유가 안 실렸다"
+    # 2회차가 성사되면 결과는 정상 경로와 같아야 한다 - 강등이 아니라 회복이다.
+    ex = Explanation(raw)
+    assert ex.explanation_type == "EVENT_SUPPORTED"
+    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+
+
+def test_two_broken_proposals_degrade_instead_of_killing_the_run():
+    """2회차도 계약을 어기면 **예외 없이** 강등된다 - 구조 위반 2연속과 같은 결말.
+
+    WHY: 억지 설명을 만들지 않되 런은 살려야 한다. 여기서 예외가 새어 나가면 그 한 종목이
+    유니버스 전체를 FAILED 로 만든다(2026-07-29·07-30 런이 그랬다).
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_NO_TREATED)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))   # 예외가 나면 여기서 깨진다
+
+    assert client.calls == 2
+    assert Explanation(raw).explanation_type == "UNCERTAIN"
+    # 왜 설계를 못 세웠는지가 남아야 한다 - 건수만 남기면 사후에 원인을 못 가린다.
+    assert any("treated" in v for v in raw["causal"]["local_violations"])
+
+
+def test_transport_error_still_fails_loud():
+    """LLM 전송·API 오류는 여전히 전파된다 - 계약 위반만 되먹임으로 돌린다.
+
+    WHY: `adapters/llm.py` 의 DeepSeek 클라이언트는 402·타임아웃·응답 붕괴를 재시도 소진
+    후 **PipelineError** 로 올린다 - 계약 위반과 **같은 타입**이다. 그래서 propose 까지
+    한 try 로 감싸면 소스가 죽은 것을 모델이 계약을 어긴 것으로 오인해 UNCERTAIN 설명과
+    함께 런이 초록으로 끝난다. 2026-07-27 에 tag_news 가 402 를 삼켜 940/940 전건 실패에도
+    exit 0 이었던 그 사고다(ALPHA-589). 운영과 같은 타입으로 던져야 이 가드가 실물이다.
+    """
+    class _DeadClient:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            # adapters/llm.py:76 이 실제로 내는 것과 같은 타입·같은 모양이다.
+            raise PipelineError("DeepSeek call failed after retries: HTTP Error 402")
+
+    with pytest.raises(PipelineError, match="402"):
+        _explain(FakeCausalData(), _DeadClient(), candidates=_candidates(SHARE))
+
+
+def test_malformed_edge_shape_is_also_fed_back_not_raised():
+    """형태가 무너진 산출도 되먹임 대상이다 - 타입이 갈리면 되먹임이 못 알아본다.
+
+    WHY: `agents.parse` 가 결측 필드만 PipelineError 로 정규화하고 `edges: [null]` 같은
+    형태 붕괴는 `AttributeError` 로 흘리면, run.explain 의 `except PipelineError` 를
+    그대로 지나쳐 AnalyzeOne 이 죽고 유니버스 전체 런이 FAILED 된다. 게이트가 거르는
+    모든 위반은 **한 타입으로** 나와야 호출부가 다룰 수 있다.
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_EDGE_NOT_OBJECT, PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))   # AttributeError 면 여기서 깨진다
+
+    assert client.calls == 2, "형태 붕괴가 되먹임 재질의를 못 만들었다"
+    assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
+
+
+@pytest.mark.parametrize("broken", [
+    {"nodes": _nodes(), "edges": {}, "missing": []},                    # falsy 비목록
+    {"nodes": _nodes(), "edges": [_edge()], "missing": 0},              # falsy 비목록
+    {"nodes": {"DIVIDEND@t+0": None}, "edges": [_edge()], "missing": []},   # 노드 메타 붕괴
+    {"nodes": _nodes(), "edges": [{**_edge(), "scope": ["type"]}], "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge(), "cause_label": 7}], "missing": []},
+    # 어휘 밖 scope. 거르지 않으면 NMIN.get(scope, 8) 이 최소 표본을 30→8 로 낮춰
+    # 기각됐어야 할 설계가 통과한다 — 관대한 방향으로 새는 게이트다.
+    {"nodes": _nodes(), "edges": [{**_edge(), "scope": "garbage"}], "missing": []},
+    # 시간 색인 없는 노드 id. graph.validate 가 MARKET 목록을 만들며 다시 파싱할 때
+    # ValueError 로 새어 되먹임을 우회한다(graph.py:356) — 실제 호출로 재현됨.
+    {"nodes": {"DIVIDEND": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
+                            "member_events": [EVENT_ID], "tau": "t+0"},
+               "AR@t+0": {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}},
+     "edges": [{**_edge(), "from": "DIVIDEND"}], "missing": []},
+    # graph.validate 가 **연산**하는 메타 필드. member_events 는 순회(graph.py:381),
+    # seq_ignorability 는 `.strip()`(:409) — 스칼라면 TypeError·AttributeError 로 샌다.
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock",
+                                            "measure": "배당", "member_events": 1, "tau": "t+0"}},
+     "edges": [_edge()], "missing": []},
+    # 원소까지 못박아야 한다 — graph.py:386 이 집합 원소로 쓰므로 unhashable 원소는
+    # TypeError 다. event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
+                                            "member_events": [{"id": EVENT_ID}], "tau": "t+0"}},
+     "edges": [_edge()], "missing": []},
+    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "MECHANISM", "unit": "stock",
+                                            "measure": "배당", "seq_ignorability": 1}},
+     "edges": [_edge()], "missing": []},
+])
+def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
+    """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.
+
+    WHY: 되먹임은 `except PipelineError` 하나로 받는다. 어떤 위반이 AttributeError·
+    TypeError 로 새면 그 입력만 유니버스 전체 런을 죽인다 — 고친 줄 알고 남겨두는 구멍이
+    정확히 이 모양이다. falsy 비목록(`edges: {}`)은 특히 위험하다: 예외조차 없이
+    "간선 없음"으로 접혀 계약 위반이 정상 산출로 집계된다.
+    """
+    with pytest.raises(PipelineError):
+        agents.parse(broken)
+
+
+def test_absent_optional_fields_still_parse():
+    """위 가드가 **정상 산출까지** 거부하면 안 된다 - 선택 필드 부재는 계약 위반이 아니다."""
+    minimal = {"nodes": _nodes(), "edges": [{
+        "from": "DIVIDEND@t+0", "to": "AR@t+0",
+        "treated": _TREATED_WHERE, "control": _CONTROL_WHERE}]}
+    nodes, designs, missing = agents.parse(minimal)
+
+    assert len(designs) == 1
+    assert (designs[0].strata, designs[0].scope) == ("date", "type")
+    assert designs[0].timing == "unscheduled"
+    assert designs[0].cause_label == "DIVIDEND@t+0"      # 없으면 from 으로 떨어진다
+    assert missing == []
+
+
+# 노드 메타에 넣어 볼 불량값. unhashable(set·dict·list)이 핵심이다 - graph 가 종별을
+# 집합·사전 조회에 쓰므로 그 타입만 TypeError 를 낸다.
+_BAD_META_VALUES = [1, "x", [], {}, [{"id": 1}], [1], [[1]], None, True, 1.5]
+_META_FIELDS = ("kind", "member_events", "seq_ignorability", "tau", "effect", "unit", "measure")
+
+
+@pytest.mark.parametrize("kind", ["SHOCK", "MECHANISM", "OBSERVABLE", "CONFOUND"])
+@pytest.mark.parametrize("field", _META_FIELDS)
+def test_parse_survivors_never_explode_in_validate(kind, field):
+    """**parse 를 통과한 산출은 validate 에서 PipelineError 아닌 예외를 내지 않는다.**
+
+    WHY: 되먹임은 `except PipelineError` 하나로 받는다(run.explain). 게이트를 통과한 값이
+    하류에서 다시 읽힐 때 TypeError·AttributeError·ValueError 로 새면, 그 입력만 AnalyzeOne 을
+    죽이고 전량성공 게이트(ADR-0028)가 유니버스 33종 런을 FAILED 시킨다.
+
+    케이스를 하나씩 늘리는 대신 **불변식으로 박는다.** 리뷰 왕복마다 새 필드가 하나씩
+    나왔는데(노드 id 형식 → member_events 스칼라 → member_events 원소 → kind unhashable),
+    전부 이 한 문장의 사례였다. 새 메타 필드를 graph 가 연산하기 시작하면 여기서 깨진다.
+    """
+    target = {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}
+    edge = {**_edge(), "from": "DIVIDEND@t+0"}
+    for value in _BAD_META_VALUES:
+        meta = {"kind": kind, "unit": "stock", "measure": "배당",
+                "member_events": [EVENT_ID], "tau": "t+0", field: value}
+        proposal = {"nodes": {"DIVIDEND@t+0": meta, "AR@t+0": target},
+                    "edges": [edge], "missing": []}
+        try:
+            nodes, _designs, _missing = agents.parse(proposal)
+        except PipelineError:
+            continue                      # 게이트가 거부했다 - 되먹임 대상이다
+        try:
+            G.validate({"nodes": nodes,
+                        "structures": [{"id": "A", "edges": [
+                            {"from": "DIVIDEND@t+0", "to": "AR@t+0", "timing": "unscheduled"}]}]},
+                       grounded={EVENT_ID}, require_competing=False)
+        except PipelineError:
+            pass                          # 정규화된 거부 - 되먹임이 받는다
+        except Exception as exc:          # noqa: BLE001 — 이 테스트가 잡으려는 게 이것이다
+            raise AssertionError(
+                f"parse 를 통과한 {field}={value!r}(kind={kind})가 validate 에서 "
+                f"{type(exc).__name__} 로 샜다: {exc}") from exc

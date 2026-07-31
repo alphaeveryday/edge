@@ -23,7 +23,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import PipelineError
-from .engine import STRATA, EdgeDesign
+from . import graph as G
+from .engine import NMIN, STRATA, EdgeDesign
 
 SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸다 - 수치는 코드가 만든다.
 
@@ -114,28 +115,104 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
     return "\n".join(L)
 
 
+def _as_list(out: dict, key: str) -> list:
+    """목록 필드. **falsy 비목록을 `[]` 로 접지 않는다** — `edges: {}` 를 "간선 없음"으로
+    읽으면 계약 위반이 정상 산출로 집계돼 되먹임 없이 UNCERTAIN 이 나간다."""
+    value = out.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PipelineError(f"제안의 {key} 가 목록이 아니다: {type(value).__name__}")
+    return value
+
+
+def _opt_str(e: dict, i: int, key: str, default: str) -> str:
+    """선택 문자열 필드. 비문자열이면 여기서 거부한다 — 그대로 `EdgeDesign` 에 실으면
+    `engine` 의 `NMIN.get`·`narrate` 의 `.strip()` 에서 터지고, 그건 parse 밖이라
+    되먹임이 못 잡는다(ALPHA-633)."""
+    value = e.get(key)
+    if value is None or value == "":
+        return default
+    if not isinstance(value, str):
+        raise PipelineError(f"간선 {i} 의 {key} 가 문자열이 아니다: {type(value).__name__}")
+    return value
+
+
 def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
-    """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**"""
+    """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**
+
+    형태가 어긋난 산출(`edges: [null]`·스칼라 루트 등)도 여기서 전부 `PipelineError` 로
+    정규화한다. 타입이 갈리면 호출부(`run.explain`)의 되먹임이 그 예외를 못 알아보고
+    그대로 새어 나가, AnalyzeOne 하나가 유니버스 전체 런을 죽인다(ALPHA-633).
+    """
+    if not isinstance(out, dict):
+        raise PipelineError(f"제안이 객체가 아니다: {type(out).__name__}")
     nodes = out.get("nodes")
     if not isinstance(nodes, dict):
         raise PipelineError(f"제안에 nodes 가 없다: {sorted(out)[:6]}")
+    for node, meta in nodes.items():
+        # 노드 메타는 graph.validate 가 `m.get("kind")` 로 읽는다 - 여기서 안 거르면
+        # 그쪽에서 AttributeError 가 나고, 그건 parse 밖이라 되먹임이 못 잡는다.
+        if not isinstance(node, str) or not isinstance(meta, dict):
+            raise PipelineError(f"nodes 항목이 (문자열, 객체)가 아니다: {node!r}")
+        # 시간 색인(@t±N)까지 여기서 본다. graph.validate 는 첫 순회의 ValueError 만
+        # 위반으로 담고(graph.py:314), MARKET 목록을 만들며 **다시** 파싱할 때는 안 감싼다
+        # (graph.py:356) - 그 ValueError 는 parse 밖이라 되먹임이 못 잡는다. 형식 정본은
+        # graph.parse 하나다(정규식을 여기 복제하면 둘이 갈린다).
+        try:
+            G.parse(node)
+        except ValueError as exc:
+            raise PipelineError(f"nodes 의 {node!r}: {exc}") from exc
+        # graph.validate 가 메타에서 **연산**하는 필드만 막는다(Rule 2 - 그 이상은 스키마
+        # 검증기가 된다). 적대적 스윕으로 센 목록이다:
+        #   kind            KINDS 조회의 **dict 키**(graph.py:308) - unhashable 이면 TypeError
+        #   member_events   순회 + 집합 원소(graph.py:381·386) - 목록·문자열 원소여야 한다
+        #   seq_ignorability `.strip()`(graph.py:409)
+        # tau·effect·unit·measure 는 비교·falsy 검사뿐이라 타입이 달라도 안 터진다.
+        if not isinstance(meta.get("kind"), str):
+            raise PipelineError(
+                f"nodes 의 {node!r}: kind 가 문자열이 아니다: {meta.get('kind')!r}")
+        events = meta.get("member_events")
+        if events is not None:
+            # `list[str]` 로 못박는다. graph.validate 가 원소를 **집합 원소로 쓰므로**
+            # (`x not in grounded`, graph.py:386) dict·list 원소는 unhashable TypeError 가
+            # 되고, event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
+            if not isinstance(events, list) or not all(isinstance(x, str) for x in events):
+                raise PipelineError(
+                    f"nodes 의 {node!r}: member_events 가 문자열 목록이 아니다: {events!r}")
+        seq = meta.get("seq_ignorability")
+        if seq is not None and not isinstance(seq, str):
+            raise PipelineError(
+                f"nodes 의 {node!r}: seq_ignorability 가 문자열이 아니다: {type(seq).__name__}")
+    edges = _as_list(out, "edges")
     designs: list[EdgeDesign] = []
-    for i, e in enumerate(out.get("edges") or []):
+    for i, e in enumerate(edges):
+        if not isinstance(e, dict):
+            raise PipelineError(f"간선 {i} 가 객체가 아니다: {type(e).__name__}")
         if e.get("kind") == "bidirected":
             continue                      # 양방향은 설계가 아니라 가정이다
         for key in ("from", "to", "treated", "control"):
-            if not (e.get(key) or "").strip():
+            value = e.get(key)
+            # 문자열이 아닌 값(숫자·객체)도 여기서 걸러야 한다 - `.strip()` 이 터지면
+            # PipelineError 가 아니라 AttributeError 라 되먹임 대상이 못 된다.
+            if not isinstance(value, str) or not value.strip():
                 raise PipelineError(f"간선 {i} 에 {key} 가 없다")
-        strata = e.get("strata") or "date"
+        strata = _opt_str(e, i, "strata", "date")
         if strata not in STRATA:
             raise PipelineError(f"간선 {i} strata={strata!r} 는 어휘 밖이다: {STRATA}")
+        scope = _opt_str(e, i, "scope", "type")
+        # 어휘를 안 보면 미지 scope 가 engine 의 `NMIN.get(scope, 8)` 에서 **가장 관대한**
+        # 최소 표본(8)으로 떨어져, type(30) 이면 기각될 설계가 통과한다. NMIN 이 곧 어휘다.
+        if scope not in NMIN:
+            raise PipelineError(f"간선 {i} scope={scope!r} 는 어휘 밖이다: {sorted(NMIN)}")
         designs.append(EdgeDesign(
             src=e["from"], dst=e["to"], treated=e["treated"], control=e["control"],
-            strata=strata, scope=e.get("scope") or "type",
-            because=e.get("because") or "", false_if=e.get("false_if") or "",
-            timing=e.get("timing") or "unscheduled",
-            cause_label=e.get("cause_label") or e["from"]))
-    missing = [str(m) for m in (out.get("missing") or [])]
+            strata=strata, scope=scope,
+            because=_opt_str(e, i, "because", ""),
+            false_if=_opt_str(e, i, "false_if", ""),
+            timing=_opt_str(e, i, "timing", "unscheduled"),
+            cause_label=_opt_str(e, i, "cause_label", e["from"])))
+    missing = [str(m) for m in _as_list(out, "missing")]
     return nodes, designs, missing
 
 
