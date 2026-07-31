@@ -170,8 +170,9 @@ export function ConsoleLayout() {
                 borderRadius: 999, fontSize: 11, color: 'var(--fg-2)',
               }}
             >
-              <span className="dot" style={{ background: feed ? FEED_DOT_COLOR[feed.state] : 'var(--gray-400)' }} />
-              {feed ? (
+              {/* 재조회 실패 시 stale data 가 남아도 에러 신호가 우선한다 — 낡은 정상 상태를 현재처럼 보이지 않게 */}
+              <span className="dot" style={{ background: feed && !feedUnavailable ? FEED_DOT_COLOR[feed.state] : 'var(--gray-400)' }} />
+              {feed && !feedUnavailable ? (
                 <>
                   <span>반입 {FEED_LABEL[feed.state]}</span>
                   <span style={{ color: 'var(--fg-4)' }}>· 최근 반입 {feed.lastReceivedRelative}</span>
