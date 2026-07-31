@@ -21,6 +21,7 @@ class FakeMinuteDB:
         self.windows: dict[tuple, dict] = {}  # (session_id, window_start) -> row
         self.jobs: dict[tuple, dict] = {}     # (kind, job_id) -> row
         self.outbox: dict[str, dict] = {}     # event_id -> row
+        self.source_items: dict[tuple, dict] = {}  # (source_code, source_item_id) -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -116,6 +117,14 @@ class _Cursor:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("INSERT INTO news_source_item"):
+            self._insert_source_item(params)
+        elif s.startswith("SELECT content_checksum, generation FROM news_source_item"):
+            row = self.db.source_items.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["content_checksum"], row["generation"])]
+        elif s.startswith("UPDATE news_source_item"):
+            self._update_source_item(params)
         elif s.startswith("INSERT INTO news_extraction_job"):
             self._insert_job("news", params)
         elif s.startswith("INSERT INTO price_window_job"):
@@ -459,4 +468,26 @@ class _Cursor:
         if row is None or row["worker_fencing_token"] != fence_token:
             return
         row["lease_expires_at"] = None
+        self.rowcount = 1
+
+    # ── news_source_item (ALPHA-668) ──
+    def _insert_source_item(self, p):
+        source_code, source_item_id, canonical_article_id, first_seen, last_seen, checksum = p
+        key = (source_code, source_item_id)
+        if key in self.db.source_items:
+            return  # ON CONFLICT DO NOTHING
+        self.db.source_items[key] = {
+            "source_code": source_code, "source_item_id": source_item_id,
+            "canonical_article_id": canonical_article_id,
+            "first_seen_at": first_seen, "last_seen_at": last_seen,
+            "content_checksum": checksum, "generation": 1,
+        }
+        self._rows = [(1,)]
+
+    def _update_source_item(self, p):
+        last_seen, checksum, generation, source_code, source_item_id = p
+        row = self.db.source_items.get((source_code, source_item_id))
+        if row is None:
+            return
+        row.update(last_seen_at=last_seen, content_checksum=checksum, generation=generation)
         self.rowcount = 1
