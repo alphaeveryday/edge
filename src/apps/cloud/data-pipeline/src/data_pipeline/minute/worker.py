@@ -35,7 +35,12 @@ from .artifacts import (
     serialize_records,
     sha256_bytes,
 )
-from .commit import CanonicalWriter, MinuteCommitter
+from .commit import (
+    CanonicalWriter,
+    CommitRejectedError,
+    GenerationMismatchError,
+    MinuteCommitter,
+)
 from .models import KST, CollectionRequest, Universe
 from .repository import MinuteLedger
 
@@ -99,24 +104,32 @@ class PriceWorker:
         if phase not in ("ACTIVE",):
             return "DRAINED" if phase == "DRAINED" else "STOPPED"
 
+        # realtime(최신) 1건 + recovery(최고령) budget 을 **항상** 이어서 소진한다 —
+        # realtime 이 비었을 때만 recovery 를 보면 두 lane 의 due 조건이 같아 recovery
+        # 가 영영 안 돌고, backlog 복구가 최신 분 처리에 밀려 지연된다
+        processed = 0
+        failed = False
         claim = self.ledger.claim_due_window(
             session_id=self.session_id, worker_id=self.config.worker_id,
             fence_token=self.fence_token, now=now,
             lease_seconds=self.config.lease_seconds, lane="realtime",
         )
-        if claim is None:
-            for _ in range(self.config.recovery_budget_per_tick):
-                claim = self.ledger.claim_due_window(
-                    session_id=self.session_id, worker_id=self.config.worker_id,
-                    fence_token=self.fence_token, now=now,
-                    lease_seconds=self.config.lease_seconds, lane="recovery",
-                )
-                if claim is None:
-                    return "IDLE"
-                if not self._process(claim, now):
-                    return "WINDOW_FAILED"
-            return "PROCESSED"
-        return "PROCESSED" if self._process(claim, now) else "WINDOW_FAILED"
+        if claim is not None:
+            processed += 1
+            failed |= not self._process(claim, now)
+        for _ in range(self.config.recovery_budget_per_tick):
+            claim = self.ledger.claim_due_window(
+                session_id=self.session_id, worker_id=self.config.worker_id,
+                fence_token=self.fence_token, now=now,
+                lease_seconds=self.config.lease_seconds, lane="recovery",
+            )
+            if claim is None:
+                break
+            processed += 1
+            failed |= not self._process(claim, now)
+        if processed == 0:
+            return "IDLE"
+        return "WINDOW_FAILED" if failed else "PROCESSED"
 
     # ── 내부 ─────────────────────────────────────────────────
     def _ensure_fence(self, now: datetime) -> bool:
@@ -154,7 +167,7 @@ class PriceWorker:
             row = cur.fetchone()
             return "" if row is None else row[0]
 
-    def _predict_generation(self, claim: dict, result_checksum: str,
+    def _predict_generation(self, claim: dict, artifact_checksum: str,
                             units: dict[str, list[str]]) -> tuple[int, str, bytes, str]:
         """결정적 세대 예측 → (generation, artifact_key, manifest_bytes, manifest_checksum).
 
@@ -173,13 +186,13 @@ class PriceWorker:
                 window_start=claim["window_start"], window_end=claim["window_end"],
                 generation=generation,
                 expected_unit_ids=list(cfg.universe.unit_ids), units=units,
-                artifact_key=artifact_key, artifact_checksum=result_checksum,
+                artifact_key=artifact_key, artifact_checksum=artifact_checksum,
             )
             data = serialize_manifest(manifest)
             return artifact_key, data, sha256_bytes(data)
 
         current = claim["generation"]
-        if current == 0 or result_checksum != claim["checksum"]:
+        if current == 0 or artifact_checksum != claim["checksum"]:
             generation = current + 1 if current else 1
             return (generation, *manifest_for(generation))
         # records 동일 — manifest 까지 같아야 세대 유지
@@ -205,10 +218,16 @@ class PriceWorker:
                 "no_trade": manifest_units["no_trade"],
                 "missing": manifest_units["missing"],
             }
+            # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
+            # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
+            # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
+            # 이 값도 데이터 identity 로 동등하다.
+            artifact_bytes = serialize_records(list(records))
+            artifact_checksum = sha256_bytes(artifact_bytes)
             generation, artifact_key, manifest_bytes, manifest_checksum = (
-                self._predict_generation(claim, result.result_checksum, units)
+                self._predict_generation(claim, artifact_checksum, units)
             )
-            put_immutable(self.storage, artifact_key, serialize_records(list(records)))
+            put_immutable(self.storage, artifact_key, artifact_bytes)
             manifest_key = minute_window_manifest_key(
                 cfg.dataset, cfg.source, cfg.market, cfg.session_date,
                 claim["window_start"].astimezone(KST).strftime("%H%M"), generation,
@@ -221,7 +240,7 @@ class PriceWorker:
                 expected_unit_count=result.expected_count,
                 succeeded_unit_count=result.succeeded_count,
                 failed_unit_count=result.failed_count, record_count=len(records),
-                checksum=result.result_checksum, manifest_uri=manifest_key,
+                checksum=artifact_checksum, manifest_uri=manifest_key,
                 manifest_checksum=manifest_checksum,
                 missing_units=units["missing"] or None,
                 stage_timestamps=result.stage_timestamps,
@@ -231,6 +250,15 @@ class PriceWorker:
                 destination=cfg.destination, artifact_generation=generation,
             )
             return True
+        except GenerationMismatchError:
+            # 결정적 예측의 불변식 위반 — 재시도해도 똑같이 실패하며 잘못된 세대
+            # artifact 만 쌓인다. 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+            raise
+        except CommitRejectedError:
+            # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
+            # 다음 heartbeat 주기 tick 이 STOPPED 로 정지시킨다.
+            logger.warning("window %s commit 거부 — claim/fence 상실", claim["window_start"])
+            return False
         except Exception:
             # 한 window 의 실패를 다음 window 로 전파하지 않는다 — claim 은 lease 만료로
             # 재청구되고, 실패 자체는 크게 기록한다(조용한 폐기 금지, Rule 12)

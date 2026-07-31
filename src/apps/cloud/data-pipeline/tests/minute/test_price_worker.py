@@ -1,8 +1,9 @@
 """Price Worker loop 테스트 (ALPHA-667, 계획 §9 Worker loop 해당분).
 
 의도: 루프가 죽거나 헛돌면 장중 수집이 조용히 멈춘다 — fence 상실 즉시 정지,
-window 실패 격리(다음 window 진행), drain 수렴, 재시작 복구를 tick 단위(가상
-시계)로 고정한다. collector 는 주입 계약 — 토스 adapter 는 실측 후 별도.
+window 실패 격리(다음 window 진행), 두 lane 동시 소진(realtime 최신 + recovery
+backlog budget), drain 수렴, 재시작 복구를 tick 단위(가상 시계)로 고정한다.
+collector 는 주입 계약 — 토스 adapter 는 실측 후 별도.
 """
 
 from __future__ import annotations
@@ -11,12 +12,15 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
 from data_pipeline.lake.storage import LocalStorage
-from data_pipeline.minute.commit import MinuteCommitter
+from data_pipeline.minute.artifacts import sha256_bytes
+from data_pipeline.minute.commit import GenerationMismatchError, MinuteCommitter
 from data_pipeline.minute.fake_collector import FakePriceCollector
 from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
@@ -29,6 +33,7 @@ UNIVERSE = Universe(
     etf_ids=("500000",),
     constituent_ids=("100000", "100001"),
 )
+NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 앞쪽 window 들이 전부 due
 
 
 class RecordingCanonicalWriter:
@@ -64,44 +69,69 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3):
     return worker, ledger, session_id
 
 
-NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 3개 window 전부 due
+def run_until_idle(worker, start, limit=20):
+    states = []
+    for i in range(limit):
+        state = worker.tick(start + timedelta(seconds=i))
+        states.append(state)
+        if state != "PROCESSED":
+            return states
+    raise AssertionError(f"IDLE 에 도달하지 못했다: {states}")
 
 
 class TestHappyPath:
     def test_processes_all_windows_then_idle(self, tmp_path):
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path)
-        states = [worker.tick(NOW + timedelta(seconds=i)) for i in range(4)]
-        assert states == ["PROCESSED", "PROCESSED", "PROCESSED", "IDLE"]
-        statuses = {w["data_status"] for w in db.windows.values()}
-        assert statuses == {"VALID"}
+        # tick 당 최대 realtime 1 + recovery budget 2 = 3 — 한 tick 에 전부 처리
+        assert run_until_idle(worker, NOW) == ["PROCESSED", "IDLE"]
+        assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
         assert len(db.jobs) == 3 and len(db.outbox) == 3
-        # artifact + manifest 가 window 마다 저장됐다
         keys = worker.storage.list_keys("")
         assert sum(k.endswith("bars.ndjson") for k in keys) == 3
         assert sum(k.endswith("manifest.json") for k in keys) == 3
 
-    def test_realtime_first_newest_window(self, tmp_path):
+    def test_lanes_realtime_newest_plus_recovery_oldest(self, tmp_path):
+        # 한 tick = 최신 1(realtime) + 최고령 budget(recovery) — 최신 분이 backlog 에
+        # 밀리지 않으면서 hole 도 전진한다
         db = FakeMinuteDB()
-        worker, ledger, session_id = build_worker(db, tmp_path)
-        worker.tick(NOW)
-        # 최신 window(09:02~09:03)가 먼저 처리된다 — 장중 지연이 최신 분을 밀지 않게
-        done = [w for w in db.windows.values() if w["data_status"] == "VALID"]
-        assert done[0]["window_start"] == datetime(2026, 7, 31, 9, 2, tzinfo=KST)
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=5)
+        assert worker.tick(NOW) == "PROCESSED"
+        by_start = {
+            w["window_start"].strftime("%H%M"): w["data_status"]
+            for w in db.windows.values()
+        }
+        assert by_start["0904"] == "VALID"   # realtime — 최신
+        assert by_start["0900"] == "VALID"   # recovery 1 — 최고령
+        assert by_start["0901"] == "VALID"   # recovery 2
+        assert by_start["0902"] == "DUE" and by_start["0903"] == "DUE"
 
     def test_rerun_same_data_is_noop(self, tmp_path):
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path)
-        while worker.tick(NOW) == "PROCESSED":
-            pass
+        run_until_idle(worker, NOW)
         outbox_before = dict(db.outbox)
-        # EOD 명시 재수집 흉내 — 같은 데이터 재처리
         for window in db.windows.values():
-            window["data_status"] = "DUE"
-        while worker.tick(NOW + timedelta(minutes=1)) == "PROCESSED":
-            pass
+            window["data_status"] = "DUE"  # EOD 명시 재수집 흉내
+        run_until_idle(worker, NOW + timedelta(minutes=1))
         assert {w["generation"] for w in db.windows.values()} == {1}  # 세대 불변
         assert db.outbox == outbox_before  # 재발행 0
+
+    def test_manifest_checksum_matches_stored_bytes(self, tmp_path):
+        # manifest 의 artifact_checksum 은 저장된 bars.ndjson 바이트의 sha256 이어야
+        # 한다 — 소비자가 재해시로 검증하는 값이다
+        import json
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        run_until_idle(worker, NOW)
+        keys = worker.storage.list_keys("")
+        [artifact_key] = [k for k in keys if k.endswith("bars.ndjson")]
+        [manifest_key] = [k for k in keys if k.endswith("manifest.json")]
+        manifest = json.loads(worker.storage.get_bytes(manifest_key))
+        assert manifest["artifact_key"] == artifact_key
+        assert manifest["artifact_checksum"] == sha256_bytes(
+            worker.storage.get_bytes(artifact_key)
+        )
 
 
 class TestFailureIsolation:
@@ -110,8 +140,7 @@ class TestFailureIsolation:
         worker, ledger, session_id = build_worker(
             db, tmp_path, scenario={"scenario": "x", "missing_unit_ids": ["100000"]}
         )
-        states = [worker.tick(NOW + timedelta(seconds=i)) for i in range(3)]
-        assert states == ["PROCESSED"] * 3  # 일부 unit 실패가 window 진행을 막지 않는다
+        run_until_idle(worker, NOW)
         assert {w["data_status"] for w in db.windows.values()} == {"INCOMPLETE"}
         assert all(w["missing_units"] == ["100000"] for w in db.windows.values())
 
@@ -131,12 +160,22 @@ class TestFailureIsolation:
 
         worker.collector = ExplodingCollector()
         assert worker.tick(NOW) == "WINDOW_FAILED"  # 크게 기록, 루프는 산다
-        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"  # 다음 window 진행
-        # 실패한 window 는 lease 만료 후 재청구돼 처리된다
+        # 실패한 window(첫 호출=realtime 최신)는 lease 만료 후 재청구돼 처리된다
         later = NOW + timedelta(seconds=61)
-        while worker.tick(later) in ("PROCESSED",):
+        while worker.tick(later) == "PROCESSED":
             pass
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
+
+    def test_generation_mismatch_propagates(self, tmp_path):
+        # 결정적 예측의 불변식 위반은 window 실패로 위장하지 않고 크게 죽는다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        original = worker._predict_generation
+        worker._predict_generation = lambda claim, checksum, units: (
+            (99,) + original(claim, checksum, units)[1:]
+        )
+        with pytest.raises(GenerationMismatchError):
+            worker.tick(NOW)
 
 
 class TestFenceLifecycle:
@@ -150,21 +189,20 @@ class TestFenceLifecycle:
 
     def test_restart_recovers_with_new_fence(self, tmp_path):
         db = FakeMinuteDB()
-        first, ledger, session_id = build_worker(db, tmp_path)
-        first.tick(NOW)  # 1개 처리 후 "죽음"
+        first, ledger, session_id = build_worker(db, tmp_path, windows=5)
+        first.tick(NOW)  # 3개 처리 후 "죽음"
         later = NOW + timedelta(seconds=301)  # session lease 만료
-        replacement, _, _ = build_worker(db, tmp_path, worker_id="w2")
+        replacement, _, _ = build_worker(db, tmp_path, worker_id="w2", windows=5)
         replacement.session_id = session_id
-        states = [replacement.tick(later + timedelta(seconds=i)) for i in range(3)]
-        assert states == ["PROCESSED", "PROCESSED", "IDLE"]
+        assert run_until_idle(replacement, later) == ["PROCESSED", "IDLE"]
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
 
     def test_fence_loss_stops_on_heartbeat(self, tmp_path):
         db = FakeMinuteDB()
-        first, ledger, session_id = build_worker(db, tmp_path)
+        first, ledger, session_id = build_worker(db, tmp_path, windows=5)
         first.tick(NOW)
         later = NOW + timedelta(seconds=301)
-        takeover, _, _ = build_worker(db, tmp_path, worker_id="w2")
+        takeover, _, _ = build_worker(db, tmp_path, worker_id="w2", windows=5)
         takeover.session_id = session_id
         takeover.tick(later)  # fence 교체(token+1)
         # 구 Worker 의 다음 heartbeat 주기 tick — 즉시 정지해야 한다
@@ -175,17 +213,16 @@ class TestDrainAndStop:
     def test_draining_acks_then_drained(self, tmp_path):
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path)
-        while worker.tick(NOW) == "PROCESSED":
-            pass
+        run_until_idle(worker, NOW)
         ledger.request_drain(session_id=session_id, now=NOW)
-        assert worker.tick(NOW + timedelta(seconds=1)) == "DRAINING"  # ack 수행
+        assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINING"  # ack 수행
         assert db.sessions[session_id]["phase"] == "DRAINED"
-        assert worker.tick(NOW + timedelta(seconds=2)) == "DRAINED"
+        assert worker.tick(NOW + timedelta(seconds=31)) == "DRAINED"
 
     def test_sigterm_stops_without_new_claim(self, tmp_path):
         db = FakeMinuteDB()
-        worker, ledger, session_id = build_worker(db, tmp_path)
-        worker.tick(NOW)
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=5)
+        worker.tick(NOW)  # 3개 처리
         worker.request_stop()
         assert worker.tick(NOW + timedelta(seconds=1)) == "STOPPED"
         # 처리 안 된 window 는 그대로 남는다(다음 Worker 가 이어감) — 유실 아님
@@ -197,15 +234,14 @@ class TestCorrection:
     def test_late_correction_new_generation_and_event(self, tmp_path):
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
-        assert worker.tick(NOW) == "PROCESSED"
+        run_until_idle(worker, NOW)
         assert len(db.outbox) == 1
         db.windows[next(iter(db.windows))]["data_status"] = "DUE"  # EOD 재수집 지시 흉내
-        corrected = FakePriceCollector(
+        worker.collector = FakePriceCollector(
             {"scenario": "corr", "generation": 2,
              "correction": {"unit_ids": ["100000"], "close_delta": 7}},
             seed=42,
         )
-        worker.collector = corrected
         assert worker.tick(NOW + timedelta(minutes=1)) == "PROCESSED"
         window = next(iter(db.windows.values()))
         assert window["generation"] == 2
