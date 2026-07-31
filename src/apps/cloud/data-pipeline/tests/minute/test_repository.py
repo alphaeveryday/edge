@@ -585,3 +585,33 @@ class TestDrainRecovery:
         ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW)
         with pytest.raises(SessionFinalizedError):
             plan(ledger)
+
+
+class TestClaimChecksum:
+    def test_claim_returns_current_checksum_for_generation_prediction(self):
+        # Worker 의 세대 예측 재료 — 첫 claim 은 None, 기록 후 재claim 은 그 checksum
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        claim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        assert claim["checksum"] is None
+        ledger.record_window_outcome(
+            session_id=session_id, window_start=claim["window_start"],
+            worker_id="w1", fence_token=token, claim_token=claim["claim_token"],
+            data_status="VALID", expected_unit_count=348, succeeded_unit_count=348,
+            failed_unit_count=0, record_count=348, checksum="c" * 64,
+            manifest_uri="m", manifest_checksum="d" * 64, missing_units=None,
+            stage_timestamps={"collection_started_at": NOW},
+        )
+        db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
+        reclaim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        assert reclaim["checksum"] == "c" * 64
