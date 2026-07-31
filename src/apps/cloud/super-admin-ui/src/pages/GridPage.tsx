@@ -81,9 +81,9 @@ function cellTip(cell: GridCell, runKey: string) {
 
 export function GridPage() {
   const navigate = useNavigate();
-  const { data: grid, isPending, isError } = useSourceGrid();
+  const { data: grid, isPending, isError, error } = useSourceGrid();
 
-  if (isError) return <LoadError />;
+  if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
   const slots = grid.slots;

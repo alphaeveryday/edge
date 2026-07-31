@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Icon, Modal, Toaster, toast } from 'ui-kit';
+import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
@@ -57,8 +57,9 @@ export function ConsoleLayout() {
   const queryClient = useQueryClient();
   const { data: session } = useSession();
   const logout = useLogout();
-  const { data: feed } = useFeedStatus();
-  const { data: explanations } = useExplanations();
+  // 배지 데이터의 조회 실패는 조용히 사라지게 두지 않고 '확인 불가' 신호로 표면화한다 (Rule 12).
+  const { data: feed, isError: feedUnavailable } = useFeedStatus();
+  const { data: explanations, isError: pendingUnavailable } = useExplanations();
   const updateName = useUpdateDisplayName();
 
   const [accountOpen, setAccountOpen] = useState(false);
@@ -129,15 +130,17 @@ export function ConsoleLayout() {
                   >
                     <Icon name={item.icon} className="ic" />
                     <span className="flex-1">{item.label}</span>
-                    {item.path === '/review' && pendingCount > 0 && (
+                    {item.path === '/review' && (pendingUnavailable || pendingCount > 0) && (
                       <span
                         className="num inline-flex items-center justify-center"
+                        title={pendingUnavailable ? '검수 대기 수를 확인하지 못했습니다' : undefined}
                         style={{
-                          fontSize: 10, fontWeight: 700, background: 'var(--warn)', color: '#fff',
+                          fontSize: 10, fontWeight: 700, color: '#fff',
+                          background: pendingUnavailable ? 'var(--gray-400)' : 'var(--warn)',
                           borderRadius: 999, minWidth: 16, height: 16, padding: '0 4px',
                         }}
                       >
-                        {pendingCount}
+                        {pendingUnavailable ? '?' : pendingCount}
                       </span>
                     )}
                   </div>
@@ -159,7 +162,7 @@ export function ConsoleLayout() {
         >
           <div style={{ fontSize: 14, fontWeight: 600 }}>{pageTitle}</div>
           <div className="flex-1" />
-          {feed && (
+          {(feed || feedUnavailable) && (
             <div
               className="flex items-center gap-1.5 whitespace-nowrap"
               style={{
@@ -167,9 +170,15 @@ export function ConsoleLayout() {
                 borderRadius: 999, fontSize: 11, color: 'var(--fg-2)',
               }}
             >
-              <span className="dot" style={{ background: FEED_DOT_COLOR[feed.state] }} />
-              <span>반입 {FEED_LABEL[feed.state]}</span>
-              <span style={{ color: 'var(--fg-4)' }}>· 최근 반입 {feed.lastReceivedRelative}</span>
+              <span className="dot" style={{ background: feed ? FEED_DOT_COLOR[feed.state] : 'var(--gray-400)' }} />
+              {feed ? (
+                <>
+                  <span>반입 {FEED_LABEL[feed.state]}</span>
+                  <span style={{ color: 'var(--fg-4)' }}>· 최근 반입 {feed.lastReceivedRelative}</span>
+                </>
+              ) : (
+                <span>반입 상태 확인 불가</span>
+              )}
             </div>
           )}
           <div className="relative">
@@ -243,7 +252,10 @@ export function ConsoleLayout() {
 
         {/* pathname key로 리마운트 — 라우트 이동 시 스크롤 위치가 이전 화면 것을 물려받지 않게 */}
         <main key={location.pathname} className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+          {/* 렌더 예외를 흰 화면 대신 안내 카드로 — key 리마운트가 라우트 전환 시 리셋한다 */}
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
 

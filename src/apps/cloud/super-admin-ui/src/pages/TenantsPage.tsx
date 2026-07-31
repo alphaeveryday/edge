@@ -25,7 +25,7 @@ export function TenantsPage() {
   const [fMemo, setFMemo] = useState('');
   const [fError, setFError] = useState('');
 
-  if (tenantsQuery.isError) return <LoadError />;
+  if (tenantsQuery.isError) return <LoadError error={tenantsQuery.error} />;
   if (tenantsQuery.isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();

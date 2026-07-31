@@ -11,7 +11,7 @@ import { LoadError } from './_shared/LoadError';
 
 export function AnalysisDetailPage() {
   const { id } = useParams();
-  const { analysis: a, isPending, isError } = useAnalysis(id);
+  const { analysis: a, isPending, isError, error } = useAnalysis(id);
   const { correct, exclude, restore } = useAnalysisActions();
 
   const [editing, setEditing] = useState(false);
@@ -20,7 +20,7 @@ export function AnalysisDetailPage() {
   const [confirmingExclude, setConfirmingExclude] = useState(false);
   const [excludeReason, setExcludeReason] = useState('');
 
-  if (isError) return <LoadError />;
+  if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={5} />;
   if (!a) {
     return (

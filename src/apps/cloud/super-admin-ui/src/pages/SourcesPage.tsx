@@ -344,7 +344,7 @@ export function SourcesPage() {
         </div>
       );
     }
-    return <LoadError />;
+    return <LoadError error={error} />;
   }
   if (isPending) return <PageSkeleton rows={6} />;
 

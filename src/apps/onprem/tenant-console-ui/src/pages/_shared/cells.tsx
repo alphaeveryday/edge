@@ -26,7 +26,8 @@ export function StockCell({ name, code }: { name: string; code: string }) {
 export function StatusCell({ it }: { it: Explanation }) {
   return (
     <td>
-      <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status]}</StatusBadge>
+      {/* 서버가 UI 가 모르는 상태값을 보내도 빈 배지 대신 원문 코드를 보인다 */}
+      <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status] ?? it.status}</StatusBadge>
     </td>
   );
 }

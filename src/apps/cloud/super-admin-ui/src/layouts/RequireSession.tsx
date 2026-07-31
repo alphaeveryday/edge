@@ -21,6 +21,6 @@ export function RequireSession() {
       />
     );
   }
-  if (error) return <LoadError />;
+  if (error) return <LoadError error={error} />;
   return <Outlet />;
 }

@@ -14,7 +14,7 @@ export function AnalysesPage() {
   const [fStatus, setFStatus] = useState<AnalysisStatus | 'ALL'>('ALL');
   const [fMarket, setFMarket] = useState<AnalysisMarket | 'ALL'>('ALL');
 
-  if (analysesQuery.isError) return <LoadError />;
+  if (analysesQuery.isError) return <LoadError error={analysesQuery.error} />;
   if (analysesQuery.isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();
