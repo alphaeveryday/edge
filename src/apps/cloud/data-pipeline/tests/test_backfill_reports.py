@@ -76,7 +76,11 @@ def test_classification_columns_ride_on_every_record(tmp_path):
 
     log = backfill_reports(st, start="2026-07-01", end="2026-07-01",
                            ingest_date="2026-07-31", fetcher=f)
-    row = _rows(st, f"{log['prefix']}/part-2026-07-01.ndjson")[0]
+    # 키는 내용 지문을 담는다(덮어쓰기 방어) - 고정 경로를 손으로 쓰면 그 방어가 사라진
+    # 것도 모르고 지나간다. 원장 대신 프리픽스를 훑어 하나뿐임까지 본다.
+    keys = [k for k in st.list_keys(log["prefix"]) if k.endswith(".ndjson")]
+    assert len(keys) == 1, keys
+    row = _rows(st, keys[0])[0]
 
     assert row["kind"] == KIND_CURRENT and row["source_class"] == "GOV"
     assert row["report_type"] == "PRESS_RELEASE" and row["unit"] == "POLICY"

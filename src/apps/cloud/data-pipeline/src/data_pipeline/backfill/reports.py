@@ -133,10 +133,15 @@ def backfill_reports(storage: Storage, *, start: str, end: str,
                 r["fetched_at"] = stamp
             payload = ("\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
                        + "\n").encode("utf-8") if rows else b""
-            key = f"{prefix}/part-{day}.ndjson"
+            # 키에 내용 지문을 넣는다 - `refetch=True` 로 같은 날을 다시 받으면 고정 키가
+            # 앞선 객체를 덮어써 raw 보존 계약이 깨진다(재현·검증 불가). 같은 내용이면
+            # 같은 키라 재실행은 멱등이다. financial 은 상류 oid 를, 여기는 지문을 쓴다 -
+            # API 응답에는 버전 식별자가 없다.
+            digest = sha256(payload)
+            key = f"{prefix}/part-{day}-{digest[:12]}.ndjson"
             storage.put_bytes(key, payload)
             man.record(day, oid="", key=key, rows=len(rows),
-                       digest=sha256(payload), bytes_out=len(payload))
+                       digest=digest, bytes_out=len(payload))
             fetched += 1
         except (urllib.error.URLError, OSError, ValueError) as exc:
             man.fail(day, f"{type(exc).__name__}: {exc}")

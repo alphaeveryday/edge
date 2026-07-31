@@ -101,10 +101,16 @@ def backfill_financial(storage: Storage, *, dataset: HfDataset | None = None,
                 r["backfill_source"] = f"hf:{hf.repo}@{hf.revision}"
                 r["backfill_oid"] = oid
             payload = _ndjson(rows)
-            key = f"{prefix}/part-{ticker}.ndjson"
+            # **키에 내용 지문을 넣는다.** 같은 날 재개 run 에서 상류 파일이 바뀌면 고정 키는
+            # 앞선 객체를 덮어쓴다 - raw 는 전부 보존이 계약이고(dedup 은 canonical 소관),
+            # 덮으면 이미 canonical 로 올라간 행의 원본과 그 digest 가 사라져 재현·검증이
+            # 불가능해진다. oid 를 잘라 쓰지 않는 이유: 접두사가 같은 oid 가 충돌한다.
+            # 내용 주소라 같은 내용의 재실행은 같은 키 - 멱등이다.
+            digest = sha256(payload)
+            key = f"{prefix}/part-{ticker}-{digest[:12]}.ndjson"
             storage.put_bytes(key, payload)
             man.record(ticker, oid=oid, key=key, rows=len(rows),
-                       digest=sha256(payload), bytes_out=len(payload))
+                       digest=digest, bytes_out=len(payload))
             fetched += 1
         except (HfError, OSError, ValueError) as exc:
             man.fail(ticker, f"{type(exc).__name__}: {exc}")

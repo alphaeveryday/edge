@@ -121,6 +121,26 @@ def test_an_upstream_change_is_refetched_because_the_oid_moved(tmp_path):
     assert hf.fetched[-1] == "005930"
 
 
+def test_a_refetch_preserves_the_earlier_raw_object(tmp_path):
+    """상류가 바뀌어 다시 받아도 **앞선 원본이 남아야 한다.**
+
+    WHY: raw 는 전부 보존이 계약이고 중복 제거는 canonical 소관이다. 고정 키로 덮어쓰면
+    이미 canonical 로 올라간 행의 원본과 그 digest 가 사라져, 그 행을 재현하거나 검증할
+    방법이 없어진다 - 조용한 감사 구멍이다.
+    """
+    st, hf = LocalStorage(tmp_path), FakeHf()
+    log1 = backfill_financial(st, dataset=hf, ingest_date="2026-07-31")
+    hf.oids["005930"] = "oid-005930-v2"
+
+    log2 = backfill_financial(st, dataset=hf, ingest_date="2026-07-31")
+
+    assert log2["fetched"] == 1
+    parts = [k for k in st.list_keys(log1["prefix"])
+             if "005930" in k and k.endswith(".ndjson")]
+    assert len(parts) == 2, parts        # 옛 oid 판과 새 oid 판이 둘 다 남는다
+    assert len({_rows(st, k)[0]["backfill_oid"] for k in parts}) == 2
+
+
 def test_a_failure_is_recorded_not_skipped_silently(tmp_path):
     """빠진 것과 실패한 것은 다르다. 세지 않으면 결손이 숨는다."""
     st, hf = LocalStorage(tmp_path), FakeHf()
