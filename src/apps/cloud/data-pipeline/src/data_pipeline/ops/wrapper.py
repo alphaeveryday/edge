@@ -128,9 +128,8 @@ def derive_data_status(signals: dict) -> str:
 
     # 완전성은 기대집합(스냅샷)과 수신집합이 있어야 판정한다. 둘 다 있을 때만 VALID/INCOMPLETE 를
     # 가르고, 없으면 **완전성 미확인**이라 records 가 있어도 VALID 로 단정하지 않는다(정직한 UNKNOWN,
-    # 스펙 §6). ⚠️ 운영 wiring: plan-run 이 universe_provider 를, observer 가 received_count 를 아직
-    # 공급하지 않아 프로덕션 data_status 는 UNKNOWN/INCOMPLETE/VALID_EMPTY 다(VALID 는 완전성
-    # wiring 후속 — false-VALID 를 내느니 UNKNOWN 이 맞다).
+    # 스펙 §6). ETF 3개 수집 작업은 Planner snapshot과 스텝의 received_count가 이 축을 공급한다
+    # (ALPHA-611). 나머지 작업은 배선되기 전까지 false-VALID 대신 UNKNOWN이 맞다.
     expected, received = signals.get("expected_count"), signals.get("received_count")
     completeness_known = _count(expected) and _count(received)
     if completeness_known and received < expected:
@@ -190,6 +189,13 @@ def instrument(
         # 실행되더라도, 계획상 SKIP 된 작업에 실행 이력을 붙이면 축이 오염된다(edge-review).
         return run_fn()
     expected_task_id = expected["expected_task_id"]
+    # 기대값은 Planner가 실행 전에 고정한 snapshot만 정본이다. observer가 expected_count를
+    # 자기신고하도록 두면 수집기가 빠뜨린 대상을 분모에서도 줄여 스스로 만점 처리할 수 있다.
+    expected_count = _counter(expected.get("expected_count"))
+    unknown_completeness = (
+        {"expected_count": expected_count, "received_count": None, "missing_count": None}
+        if expected_count is not None else None
+    )
 
     arn = ecs_task_arn or _detect_ecs_task_arn()
     sfn_exec = sfn_execution_arn or os.environ.get("OPS_SFN_EXECUTION_ARN")
@@ -214,6 +220,7 @@ def instrument(
         _safe(lambda: ledger.update_task_outcome(
             expected_task_id, task_outcome=states.OUTCOME_FAILED,
             data_status=states.DATA_UNKNOWN, current_attempt_id=attempt_id,
+            completeness=unknown_completeness,
             # 이 시도는 산출을 세지 못했다 — 앞 시도의 카운터를 지운다. 안 지우면 실패 판정 옆에
             # 성공했던 건수가 남아 대시보드가 "실패했지만 2736건 처리"로 읽는다.
             counters={},
@@ -226,6 +233,22 @@ def instrument(
             signals.update(observe_data_fn(exit_code) or {})
         except Exception:
             logger.exception("data_status 신호 수집 실패 — UNKNOWN 으로 남긴다")
+    # observer의 self-report를 허용하지 않고 원장이 고정한 분모로 덮는다. 수신값도 저장 가능한
+    # 정수로 정규화해 malformed 신호가 판정·JSON 어디에서도 그럴듯한 숫자로 남지 않게 한다.
+    signals["expected_count"] = expected_count
+    received_count = _counter(signals.get("received_count"))
+    signals["received_count"] = received_count
+    completeness = (
+        {
+            "expected_count": expected_count,
+            "received_count": received_count,
+            "missing_count": (
+                None if received_count is None
+                else max(expected_count - received_count, 0)
+            ),
+        }
+        if expected_count is not None else None
+    )
     data_status = derive_data_status(signals)
     exec_status = states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
 
@@ -241,7 +264,7 @@ def instrument(
         expected_task_id,
         task_outcome=states.OUTCOME_FULFILLED if exit_code == 0 else states.OUTCOME_FAILED,
         data_status=data_status, current_attempt_id=attempt_id,
-        completeness=signals.get("completeness"),
+        completeness=completeness,
         # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
         # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),

@@ -93,6 +93,9 @@ def test_saves_ingest_date_partition_and_log(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "success"
     assert log["records_fetched"] == 3 and log["records_saved"] == 3
+    # 행 수(holdings 3행)가 아니라 기대 snapshot과 같은 ETF entity grain(2종)이다.
+    assert log["ops"]["records_out"] == 3
+    assert log["ops"]["received_count"] == 2
 
 
 def test_raw_preserves_duplicate_holding_rows(tmp_path):
@@ -106,6 +109,8 @@ def test_raw_preserves_duplicate_holding_rows(tmp_path):
     lines = storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()
     assert len(lines) == 2  # 둘 다 보존(버리지 않음)
     assert {json.loads(l)["weightPercentage"] for l in lines} == {7.5, 9.9}
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["ops"]["received_count"] == 1  # 같은 ETF의 중복 행은 entity 하나
 
 
 def test_all_etfs_failing_marks_run_error(tmp_path):
@@ -129,6 +134,7 @@ def test_partial_failure_marks_run_partial(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "partial"
     assert log["records_saved"] == 1 and log["records_failed_etfs"] == 1
+    assert log["ops"]["received_count"] == 1
 
 
 def test_error_object_response_is_failure(tmp_path):
@@ -186,6 +192,7 @@ def test_disabled_source_skips_with_log(tmp_path):
     assert storage.list_keys("raw") == []
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "skipped"
+    assert log["ops"]["received_count"] == 0
 
 
 def test_adapter_skip_reason_is_recorded_verbatim(tmp_path):
@@ -262,6 +269,7 @@ def test_no_mapped_etfs_marks_skipped(tmp_path):
     assert storage.list_keys("raw") == []
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "skipped" and log["reason"] == "no mapped etfs"
+    assert log["ops"]["received_count"] == 0
 
 
 def test_unexpected_failure_still_writes_log(tmp_path):

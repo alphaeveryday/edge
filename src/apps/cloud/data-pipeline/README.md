@@ -39,8 +39,8 @@
 Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `src/pyproject.toml`.
 
 ```bash
-uv sync                                  # src/ (Python 루트)에서 의존성 설치
-uv run --package data-pipeline pytest    # 테스트
+uv sync --package data-pipeline --group dev                         # src/에서 의존성 설치
+uv run --package data-pipeline --group dev pytest apps/cloud/data-pipeline/tests
 
 # 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
 # 날짜창 미지정 = 증분(어제~오늘, 앱이 계산). 백필은 --from/--to 로 구간 지정.
@@ -68,7 +68,7 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 수집 대상은
 # canonical KR holdings 의 ETF 별 최신 파티션 합집합(부분 스냅샷이 유니버스를 못 줄임,
 # ALPHA-590)의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가 holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 31종 중
+# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 33종 중
 # 7종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 7종이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
@@ -130,7 +130,8 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 31종 — 국내 반도체 30종 + KODEX 200, ALPHA-454). 날짜창 없이 그날(trdDd)
+# etf_map, 현재 KR 33종 — 국내 반도체 30종 + KODEX 200 + 섹터 2종, ALPHA-454·624). 날짜창 없이
+# 그날(trdDd)
 # PDF 전량을 append(US ETF 와 동형). 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
 # (현 유니버스엔 없다 — 경로만 유지). ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
 # --deadline-sec N: 벽시계 상한(ALPHA-581) — 벤더 열화로 상한에 닿으면 받은 것은 저장하고
@@ -142,9 +143,9 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
-# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 31종)을 그대로 공유한다
+# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 33종)을 그대로 공유한다
 # — 구성종목과 NAV 가 다른 목록을 보면 안 되기 때문. KIS 는 ISIN 이 아니라 6자리 단축코드로
-# 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 31종 중 7종 — 숫자로만 거르면 샌다).
+# 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 33종 중 7종 — 숫자로만 거르면 샌다).
 # 창(--from/--to)을 그대로 받아 1콜로 구간 거래일 NAV 를 받으므로 백필도 같은 명령이다.
 # raw 는 응답 행 전량 무변형(nav 외 stck_clpr·dprt 포함) append — 필드 선별은 canonical(382).
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
@@ -706,6 +707,14 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   (`tag-news`·`assemble-events`·`enrich-corp-code`·`load-price-triggers`)은 no-op 재실행이 0건 →
   `UNKNOWN` 이다. 상태 기반 완전성("지금 이 데이터셋이 온전한가")은 completeness 축 소관(ALPHA-490).
   봉투가 없거나 두 키 중 하나라도 결측이면 리더는 낙관값으로 메우지 않고 warning + `UNKNOWN`(Rule 12).
+- **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
+  `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
+  `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이
+  `ops.received_count`로 실제 unique ETF 수를 낸다. Wrapper는 원장의 기대값만 분모로 사용해
+  `{expected_count, received_count, missing_count}`을 `expected_task.completeness`에 저장한다.
+  따라서 현재 종목 수를 코드에 하드코딩하지 않으며, 수집기가 기대값까지 줄여 신고해 스스로
+  만점 처리할 수 없다.
+  이 선택 필드가 없는 나머지 작업은 기존처럼 완전성 미확인 `UNKNOWN`이다.
 - **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
   의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
   런×작업마다 S3 로그를 뒤져야 한다). **판정 규칙은 그대로다** — 저장 전용이다. 결측·malformed
@@ -802,10 +811,10 @@ edge-review 4라운드로 실질 결함은 수렴했고, 아래는 **의도적�
 - **SFN 통합 실패(TaskFailed) 를 실패로 인정** — exit code 를 못 얻고 ECS 도 미확정일 때 SFN
   TaskFailed 를 FAILED 로 본다. runTask.sync 의 TaskFailed 는 컨테이너 exit≠0 이 아니라 **작업
   자체가 실패**한 신호라 이게 맞다(exit code 는 우선 조회한다).
-- **완전성(VALID)의 스냅샷 wiring** — data_status 는 기대집합(expectation_snapshot)+수신집합이
-  있어야 VALID 를 낸다. 아직 plan-run 이 holdings 파생 universe 를, observer 가 received_count 를
-  공급하지 않아 프로덕션 data_status 는 UNKNOWN/INCOMPLETE/VALID_EMPTY 다(false-VALID 를 내느니
-  UNKNOWN — 스펙 §6). 유니버스 밖 결측 종목 탐지를 켜려면 스냅샷 wiring 이 후속이다.
+- **완전성(VALID)의 부분 배선** — ETF 3작업은 정적 `etf_map` snapshot과 `received_count`가
+  연결됐다(ALPHA-611). 반면 가격·수급·공시처럼 런타임 holdings에서 종목 유니버스를 파생하는
+  작업은 계획 시점의 독립 정본이 없어 여전히 `UNKNOWN`이다(false-VALID 를 내느니 UNKNOWN —
+  스펙 §6). 그 작업들의 스냅샷 배선은 별도 범위다.
 
 ## 범위에서 의도적으로 제외한 것 (후속)
 

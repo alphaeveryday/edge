@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -340,9 +341,59 @@ def test_plan_run_cli_news_lane_requires_news_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
+def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):
+    """WHY: 세 수집기의 분모는 실행 결과가 아니라 공통 etf_map 정본이어야 누락을 잡는다.
+
+    Planner CLI에서 provider를 빼먹으면 planner 모듈의 훅이 있어도 운영 snapshot은 0건이고,
+    반대로 모든 작업에 주면 아직 entity grain이 다른 작업까지 잘못된 3종 분모로 판정된다.
+    """
+    captured = {}
+    fake_ledger = object()
+    monkeypatch.setenv("OPS_PIPELINE_TYPE", PIPELINE_TYPE)
+    monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda settings: fake_ledger)
+
+    def fake_plan_run(ledger, **kwargs):
+        captured.update(kwargs)
+        assert ledger is fake_ledger
+        return SimpleNamespace(
+            pipeline_run_id="run-1",
+            launch_status=states.LAUNCH_LAUNCHED,
+            created=True,
+            trading_day=True,
+        )
+
+    monkeypatch.setattr(entry.planner, "plan_run", fake_plan_run)
+    settings = SimpleNamespace(
+        krx_etf=SimpleNamespace(
+            source=SimpleNamespace(etf_map={"396500": "KR7396500001",
+                                            "069500": "KR7069500007"})
+        )
+    )
+
+    assert entry.plan_run_cli(settings) == 0
+    provider = captured["universe_provider"]
+    targets = {
+        "NAV_COLLECTION_KIS",
+        "ETF_PROFILE_COLLECTION_KIS",
+        "ETF_HOLDINGS_COLLECTION_KRX",
+    }
+    snapshotted = {
+        item.task_key for item in catalog.entries(PIPELINE_TYPE)
+        if provider(item.task_key) is not None
+    }
+    assert snapshotted == targets
+    for task_key in targets:
+        assert provider(task_key) == {
+            "entity_kind": "ticker",
+            "entity_ids": ["069500", "396500"],
+        }
+
+
 def test_snapshot_created_when_universe_provided():
     """expectation_snapshot 이 provider 로 생성되고 expected_task 에 연결된다(스펙 §6)."""
     db = FakeOpsDB()
+    ledger = _ledger(db)
 
     def universe(task_key):
         if task_key == "PRICE_COLLECTION_KIS":
@@ -350,7 +401,16 @@ def test_snapshot_created_when_universe_provided():
                     "entity_ids": ["005930", "000660"]}
         return None
 
-    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
-             universe_provider=universe)
+    result = plan_run(
+        ledger, state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
+        universe_provider=universe,
+    )
     assert len(db.snapshots) == 1
     assert db.snapshots[0]["entity_ids"] == json.dumps(["005930", "000660"], ensure_ascii=False)
+    # LEFT JOIN이어야 snapshot 없는 나머지 작업도 wrapper 계측 대상에서 사라지지 않는다.
+    assert ledger.find_expected_task(
+        run_id=result.pipeline_run_id, task_key="PRICE_COLLECTION_KIS"
+    )["expected_count"] == 2
+    assert ledger.find_expected_task(
+        run_id=result.pipeline_run_id, task_key="NORMALIZE_PRICE"
+    )["expected_count"] is None
