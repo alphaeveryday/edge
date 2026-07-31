@@ -663,6 +663,12 @@ def test_malformed_edge_shape_is_also_fed_back_not_raised():
     # 어휘 밖 scope. 거르지 않으면 NMIN.get(scope, 8) 이 최소 표본을 30→8 로 낮춰
     # 기각됐어야 할 설계가 통과한다 — 관대한 방향으로 새는 게이트다.
     {"nodes": _nodes(), "edges": [{**_edge(), "scope": "garbage"}], "missing": []},
+    # 시간 색인 없는 노드 id. graph.validate 가 MARKET 목록을 만들며 다시 파싱할 때
+    # ValueError 로 새어 되먹임을 우회한다(graph.py:356) — 실제 호출로 재현됨.
+    {"nodes": {"DIVIDEND": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
+                            "member_events": [EVENT_ID], "tau": "t+0"},
+               "AR@t+0": {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}},
+     "edges": [{**_edge(), "from": "DIVIDEND"}], "missing": []},
 ])
 def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
     """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.

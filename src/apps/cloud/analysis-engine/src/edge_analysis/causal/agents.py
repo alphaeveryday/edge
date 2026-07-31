@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import PipelineError
+from . import graph as G
 from .engine import NMIN, STRATA, EdgeDesign
 
 SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸다 - 수치는 코드가 만든다.
@@ -154,6 +155,14 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
         # 그쪽에서 AttributeError 가 나고, 그건 parse 밖이라 되먹임이 못 잡는다.
         if not isinstance(node, str) or not isinstance(meta, dict):
             raise PipelineError(f"nodes 항목이 (문자열, 객체)가 아니다: {node!r}")
+        # 시간 색인(@t±N)까지 여기서 본다. graph.validate 는 첫 순회의 ValueError 만
+        # 위반으로 담고(graph.py:314), MARKET 목록을 만들며 **다시** 파싱할 때는 안 감싼다
+        # (graph.py:356) - 그 ValueError 는 parse 밖이라 되먹임이 못 잡는다. 형식 정본은
+        # graph.parse 하나다(정규식을 여기 복제하면 둘이 갈린다).
+        try:
+            G.parse(node)
+        except ValueError as exc:
+            raise PipelineError(f"nodes 의 {node!r}: {exc}") from exc
     edges = _as_list(out, "edges")
     designs: list[EdgeDesign] = []
     for i, e in enumerate(edges):
