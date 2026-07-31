@@ -21,6 +21,7 @@ from data_pipeline.lake.storage import LocalStorage, raw_price_minute_artifact_k
 from data_pipeline.minute.artifacts import put_immutable, serialize_records
 from data_pipeline.minute.commit import (
     CommitRejectedError,
+    GenerationMismatchError,
     MinuteCommitter,
     find_orphan_artifacts,
 )
@@ -77,6 +78,7 @@ def commit_kwargs(session_id, claim, token, *, checksum="c" * 64):
         missing_units=None, stage_timestamps={"collection_started_at": NOW},
         records=RECORDS, dataset="price_minute",
         trigger_schema_version="trig-1", destination="price-analysis-realtime",
+        artifact_generation=1,
     )
 
 
@@ -130,10 +132,9 @@ class TestCommitPriceWindow:
             session_id=session_id, worker_id="w1", fence_token=token,
             now=NOW, lease_seconds=60, lane="recovery",
         )
-        generation = committer.commit_price_window(
-            canonical_writer=writer,
-            **commit_kwargs(session_id, reclaim, token, checksum="e" * 64),
-        )
+        kwargs = commit_kwargs(session_id, reclaim, token, checksum="e" * 64)
+        kwargs["artifact_generation"] = 2  # Worker 는 checksum 변화를 보고 세대를 예상한다
+        generation = committer.commit_price_window(canonical_writer=writer, **kwargs)
         assert generation == 2
         assert len(db.jobs) == 2 and len(db.outbox) == 2  # correction event 정확히 1개 추가
 
@@ -218,3 +219,82 @@ class TestOrphanDetection:
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
             source="toss", market="KR", session_date="2026-07-31",
         ) == []
+
+
+class TestGenerationGuard:
+    def test_artifact_generation_mismatch_rejected(self):
+        # Worker 가 세대 2 로 PUT 했는데 checksum 이 같아 DB 는 1 을 확정 — 어긋난 채
+        # 진행하면 manifest_uri/job 세대가 갈려 정상 artifact 가 orphan 으로 오인된다
+        db, ledger, session_id, token, claim = ready_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        writer = FakeCanonicalWriter()
+        committer.commit_price_window(
+            canonical_writer=writer, **commit_kwargs(session_id, claim, token)
+        )
+        db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
+        reclaim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        kwargs = commit_kwargs(session_id, reclaim, token)  # 같은 checksum
+        kwargs["artifact_generation"] = 2  # 그런데 세대 2 로 PUT 했다고 주장
+        with pytest.raises(GenerationMismatchError):
+            committer.commit_price_window(canonical_writer=writer, **kwargs)
+        assert len(db.outbox) == 1  # 새 event 없음
+
+    def test_result_status_vocabulary_enforced_in_tx_path(self):
+        # _tx 직접 경로도 원장 축 값(DUE/MISSING)을 결과로 위장할 수 없다
+        db, ledger, session_id, token, claim = ready_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        kwargs = commit_kwargs(session_id, claim, token)
+        kwargs["data_status"] = "DUE"
+        with pytest.raises(ValueError, match="수집 결과 어휘"):
+            committer.commit_price_window(
+                canonical_writer=FakeCanonicalWriter(), **kwargs
+            )
+
+    def test_midway_failure_propagates_before_job_outbox(self):
+        # canonical 실패는 삼켜지지 않고 전파된다 — job/outbox 는 그 뒤라 미생성.
+        # (실DB 는 rollback 으로 canonical 도 사라진다 — fake 는 트랜잭션이 없어
+        # 그 부분은 검증 못 하는 천장. CI ephemeral DB/스테이징 실측 소관)
+        db, ledger, session_id, token, claim = ready_session()
+
+        class ExplodingWriter:
+            def upsert_tx(self, cur, *, dataset, window_start, records):
+                raise RuntimeError("canonical 장애")
+
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        with pytest.raises(RuntimeError, match="canonical 장애"):
+            committer.commit_price_window(
+                canonical_writer=ExplodingWriter(), **commit_kwargs(session_id, claim, token)
+            )
+        assert db.jobs == {} and db.outbox == {}
+
+
+class TestOrphanGenerations:
+    def test_prior_generation_artifact_is_not_orphan(self, tmp_path):
+        # correction 후 세대 1 artifact 는 immutable 정상 이력 — orphan 이 아니다
+        db, ledger, session_id, token, claim = ready_session()
+        storage = LocalStorage(root=tmp_path)
+        gen1 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        gen2 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 2)
+        gen3 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 3)
+        for key in (gen1, gen2, gen3):
+            put_immutable(storage, key, serialize_records(list(RECORDS)))
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        committer.commit_price_window(
+            canonical_writer=FakeCanonicalWriter(), **commit_kwargs(session_id, claim, token)
+        )
+        db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
+        reclaim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        kwargs = commit_kwargs(session_id, reclaim, token, checksum="e" * 64)
+        kwargs["artifact_generation"] = 2
+        committer.commit_price_window(canonical_writer=FakeCanonicalWriter(), **kwargs)
+        orphans = find_orphan_artifacts(
+            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
+            source="toss", market="KR", session_date="2026-07-31",
+        )
+        assert orphans == [gen3]  # 커밋 세대(2)보다 높은 것만 orphan

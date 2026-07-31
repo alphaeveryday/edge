@@ -47,6 +47,15 @@ class CommitRejectedError(RuntimeError):
     """fence/claim 이 더 이상 유효하지 않다 — canonical 을 포함해 아무것도 커밋되지 않았다."""
 
 
+class GenerationMismatchError(RuntimeError):
+    """artifact 를 PUT 한 세대와 DB 가 확정한 세대가 다르다 — 아무것도 커밋되지 않았다.
+
+    호출자(Worker)는 DB 기대 세대로 key 를 다시 만들어 PUT 하고 commit 을 재시도한다.
+    대조 없이 진행하면 window/job/outbox 세대와 manifest_uri 세대가 어긋나 정상
+    artifact 가 orphan 으로 오인된다.
+    """
+
+
 @dataclass
 class MinuteCommitter:
     """price window commit 경계. 뉴스는 PR 5 worker 가 같은 _tx 조각들로 자기 조합을 만든다."""
@@ -77,6 +86,7 @@ class MinuteCommitter:
         dataset: str,
         trigger_schema_version: str,
         destination: str,
+        artifact_generation: int,
     ) -> int:
         """한 트랜잭션에 canonical/window/job/outbox 를 확정하고 generation 을 돌려준다.
 
@@ -122,6 +132,12 @@ class MinuteCommitter:
             if generation is None:
                 # 위 FOR UPDATE 검증을 통과했으면 도달 불가 — 도달했다면 버그다
                 raise CommitRejectedError("window 갱신 실패 — claim 검증과 모순")
+            if generation != artifact_generation:
+                # 예외 → 트랜잭션 rollback — S3 의 잘못된 세대 artifact 만 남고
+                # (immutable·무해) DB 는 그대로다. Worker 가 맞는 세대로 재PUT·재commit.
+                raise GenerationMismatchError(
+                    f"artifact 세대 {artifact_generation} ≠ DB 확정 세대 {generation}"
+                )
             job_id, _ = JobLedger._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
@@ -160,16 +176,23 @@ def find_orphan_artifacts(
             """,
             (session_id,),
         )
+        # window(HHMM, KST 축) → 커밋된 현재 세대. 과거 세대 artifact 는 immutable
+        # 정상 이력이다 — orphan 은 "커밋 세대보다 **높은** 세대" 또는 "커밋 자체가
+        # 없는 window" 뿐이다.
         committed = {
-            raw_price_minute_artifact_key(
-                source, market, session_date,
-                ws.astimezone(KST).strftime("%H%M"),  # key 의 HHMM 은 세션 로컬(KST) 축
-                generation,
-            )
+            ws.astimezone(KST).strftime("%H%M"): generation
             for ws, generation in cur.fetchall()
         }
     prefix = f"raw/source={source}/dataset=price_minute/market={market}/session_date={session_date}/"
-    return sorted(
-        key for key in storage.list_keys(prefix)
-        if key.endswith("/bars.ndjson") and key not in committed
-    )
+    orphans = []
+    for key in storage.list_keys(prefix):
+        if not key.endswith("/bars.ndjson"):
+            continue
+        parts = dict(
+            segment.split("=", 1) for segment in key.split("/") if "=" in segment
+        )
+        window_hhmm = parts.get("window", "")
+        generation = int(parts.get("generation", "0"))
+        if committed.get(window_hhmm) is None or generation > committed[window_hhmm]:
+            orphans.append(key)
+    return sorted(orphans)

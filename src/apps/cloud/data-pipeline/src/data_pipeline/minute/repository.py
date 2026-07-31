@@ -318,8 +318,6 @@ class MinuteLedger:
         재실행은 generation 불변이어야 "같은 checksum → artifact 재사용" 판정(계획 §8)이
         성립한다.
         """
-        if data_status not in RESULT_STATUSES:
-            raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             if self._fenced_phase(cur, session_id, fence_token) not in ("ACTIVE", "DRAINING"):
                 return False
@@ -346,7 +344,11 @@ class MinuteLedger:
         성공 시 **확정된 generation** 을 돌려준다(같은 checksum 재실행=불변, 변화=+1) —
         commit 이 이 값으로 price job/event identity 를 만든다. claim 불일치는 None.
         fence/phase 검사는 호출자 몫(같은 트랜잭션에서 _fenced_phase 선행).
+        어휘 검증은 여기(모든 경로의 합류점)에 둔다 — 래퍼에만 두면 _tx 직접 호출이
+        DUE/MISSING 같은 원장 축 값을 결과로 위장할 수 있다.
         """
+        if data_status not in RESULT_STATUSES:
+            raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
         cur.execute(
             """
             UPDATE minute_ingestion_window w
