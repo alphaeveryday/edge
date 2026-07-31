@@ -572,3 +572,16 @@ class TestDrainRecovery:
         ledger.request_drain(session_id=session_id, now=NOW)
         assert ledger.ack_drain(session_id=session_id, fence_token=0, now=NOW) is False
         assert db.sessions[session_id]["phase"] == "DRAINING"
+
+    def test_drained_session_replan_rejected(self):
+        # 재계획이 DRAINED snapshot 경계를 우회해 DUE window 를 삽입하면 안 된다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger, windows=WINDOWS[:10])
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        ledger.request_drain(session_id=session_id, now=NOW)
+        ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW)
+        with pytest.raises(SessionFinalizedError):
+            plan(ledger)

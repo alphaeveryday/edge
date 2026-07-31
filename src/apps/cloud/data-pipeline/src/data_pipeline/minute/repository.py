@@ -49,7 +49,8 @@ class UniverseConflictError(RuntimeError):
 
 
 class SessionFinalizedError(RuntimeError):
-    """FINALIZED session 재계획 시도 — terminal session 에 window 를 더하지 않는다."""
+    """drain 경계 이후(DRAINING~FINALIZED/FAILED) session 재계획 시도 — snapshot 경계
+    뒤에 window 를 더하지 않는다."""
 
 
 @dataclass
@@ -105,10 +106,11 @@ class MinuteLedger:
                         f"session {existing_id} ({dataset}/{source_group}/{session_date}) 는 "
                         f"universe {existing_version} 로 고정됐다 — {universe_version} 거부"
                     )
-                if phase == "FINALIZED":
-                    # terminal session 에 DUE window 를 더하면 QC 뒤에 유령 작업이 생긴다
+                if phase not in ("PLANNED", "ACTIVE"):
+                    # DRAINING 부터는 재계획 금지 — DRAINED snapshot 경계 뒤에 DUE window
+                    # 를 삽입하면 claim/record 게이트를 planner 경로가 우회한다
                     raise SessionFinalizedError(
-                        f"session {existing_id} 는 FINALIZED 다 — 재계획 불가"
+                        f"session {existing_id} 는 {phase} 다 — 재계획 불가"
                     )
                 session_id = existing_id
             # 재계획에도 window INSERT 는 멱등이라 무해하다 — 누락분만 채워진다
