@@ -1,5 +1,5 @@
 import { useParams } from 'react-router-dom';
-import { StatusBadge } from 'ui-kit';
+import { PageSkeleton, StatusBadge } from 'ui-kit';
 import { ENV_TONE, TENANT_STATUS_LABEL, TENANT_STATUS_TONE } from '../domains/tenants';
 import { useTenant } from '../domains/tenants/hooks';
 import { LoadError } from './_shared/LoadError';
@@ -9,7 +9,7 @@ export function TenantDetailPage() {
   const { tenant: t, isPending, isError } = useTenant(id);
 
   if (isError) return <LoadError />;
-  if (isPending) return null;
+  if (isPending) return <PageSkeleton rows={5} />;
   if (!t) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>

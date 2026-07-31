@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon } from 'ui-kit';
+import { Icon, PageSkeleton } from 'ui-kit';
 import type { RiskLevel, ServeStatus } from '../domains/explanations';
 import { RISK_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
@@ -8,13 +8,15 @@ import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
 
 export function ExplanationsPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError } = useExplanations();
+  const { data: items = [], isError, isPending } = useExplanations();
 
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<ServeStatus | 'ALL'>('ALL');
   const [fRisk, setFRisk] = useState<RiskLevel | 'ALL'>('ALL');
 
   if (isError) return <LoadError />;
+  // 로딩 중 빈 목록이 "…없습니다" empty-state 로 오표시되지 않게 게이트한다.
+  if (isPending) return <PageSkeleton rows={6} />;
 
   const keyword = q.trim().toLowerCase();
   const filtered = items.filter(

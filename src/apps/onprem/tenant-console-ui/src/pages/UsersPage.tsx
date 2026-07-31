@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
+import { Icon, Modal, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import { apiMessage } from '../api/client';
 import { useSession } from '../domains/session/hooks';
 import type { Member, MemberRole } from '../domains/users';
@@ -11,7 +11,7 @@ export function UsersPage() {
   const { data: session } = useSession();
   const isAdmin = session?.role === 'TENANT_ADMIN';
   // 비관리자는 조회 자체를 보내지 않는다(403 대신 아래 권한 안내). 세션 로딩 중에도 대기.
-  const { data: members = [], isError } = useMembers(isAdmin);
+  const { data: members = [], isError, isPending } = useMembers(isAdmin);
   const register = useRegisterMember();
   const deactivate = useDeactivateMember();
   const changeRole = useChangeRole();
@@ -97,6 +97,8 @@ export function UsersPage() {
   }
 
   if (isError) return <LoadError />;
+  // 세션·목록 로딩 중 빈 목록 오표시 방지 — 비관리자는 위 권한 안내가 먼저 잡는다.
+  if (isPending) return <PageSkeleton />;
 
   return (
     <div className="flex max-w-[960px] flex-col gap-4">

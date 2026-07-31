@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Delta, Icon, StatusBadge, formatDelta, toast } from 'ui-kit';
+import { Delta, Icon, PageSkeleton, StatusBadge, formatDelta, toast } from 'ui-kit';
 import {
   ANALYSIS_CONFIDENCE_LABEL,
   ANALYSIS_STATUS_LABEL,
@@ -21,7 +21,7 @@ export function AnalysisDetailPage() {
   const [excludeReason, setExcludeReason] = useState('');
 
   if (isError) return <LoadError />;
-  if (isPending) return null;
+  if (isPending) return <PageSkeleton rows={5} />;
   if (!a) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>

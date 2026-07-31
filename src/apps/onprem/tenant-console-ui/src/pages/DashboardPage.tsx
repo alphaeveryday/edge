@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { PageSkeleton } from 'ui-kit';
 import { useTrafficSummary } from '../domains/dashboard/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
@@ -12,7 +13,7 @@ export function DashboardPage() {
 
   if (explanationsQuery.isError || feedQuery.isError || trafficQuery.isError) return <LoadError />;
   // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 전부 로드된 뒤 렌더
-  if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending) return null;
+  if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending) return <PageSkeleton rows={6} />;
 
   const items = explanationsQuery.data;
   const feed = feedQuery.data;
