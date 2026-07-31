@@ -18,6 +18,7 @@ no-op 시나리오가 되면 실패 경로 테스트가 아무것도 검증하�
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from itertools import combinations
 
 from ..ops.states import DATA_INCOMPLETE, DATA_VALID
@@ -77,13 +78,22 @@ class FakePriceCollector:
         self._missing = _id_set(scenario, "missing_unit_ids", "price")
         self._no_trade = _id_set(scenario, "no_trade_unit_ids", "price")
         self._stale = _id_set(scenario, "stale_unit_ids", "price")
-        # 한 unit 이 두 역할이면 분기 순서가 시나리오 의미를 임의로 정한다 — 배타 강제
-        for left, right in combinations(("missing", "no_trade", "stale"), 2):
+        self._correction_units = _id_set(correction, "unit_ids", "price.correction")
+        # 한 unit 이 두 역할이면 분기 순서가 시나리오 의미를 임의로 정한다 — 배타 강제.
+        # correction 은 bar 를 만드는 unit 에만 의미가 있으므로 missing/no_trade 와 배타
+        # (stale 과의 조합은 유효 — stale bar 의 값 정정).
+        exclusive = ("missing", "no_trade", "stale", "correction_units")
+        for left, right in combinations(exclusive, 2):
+            if {left, right} == {"stale", "correction_units"}:
+                continue
             overlap = getattr(self, f"_{left}") & getattr(self, f"_{right}")
             if overlap:
                 raise ValueError(f"price {left}/{right} 에 같은 unit: {sorted(overlap)}")
-        self._correction_units = _id_set(correction, "unit_ids", "price.correction")
         self._generation = _int_value(scenario, "generation", "price", default=1, minimum=1)
+        if self._correction_units and self._generation < 2:
+            # generation 1 이면 _bar 가 delta 를 적용하지 않는다 — 선언한 정정이 조용히
+            # no-op 이 되면 correction fixture 가 정상 데이터만 만들고도 초록이 된다
+            raise ValueError("correction 을 선언했으면 generation 은 2 이상이어야 한다")
         close_delta = correction.get("close_delta", 0)
         if isinstance(close_delta, bool) or not isinstance(close_delta, int):
             raise ValueError(f"price.correction.close_delta 는 정수여야 한다: {close_delta!r}")
@@ -197,7 +207,15 @@ class FakeNewsFeed:
     def __init__(self, scenario: dict, seed: int) -> None:
         _require_known_keys(scenario, _NEWS_SCENARIO_KEYS, "news")
         self._seed = seed
-        self._date = str(scenario.get("date_yyyymmdd", "20260731"))
+        date_value = scenario.get("date_yyyymmdd", "20260731")
+        if not isinstance(date_value, str):
+            raise ValueError(f"news.date_yyyymmdd 는 문자열이어야 한다: {date_value!r}")
+        try:
+            datetime.strptime(date_value, "%Y%m%d")
+        except ValueError as error:
+            # 비달력 날짜(20261399)는 parser 는 통과해도 normalize 게이트에서 전멸한다
+            raise ValueError(f"news.date_yyyymmdd 가 YYYYMMDD 달력일이 아니다: {date_value!r}") from error
+        self._date = date_value
         self._initial = _int_value(scenario, "initial_count", "news", default=0)
         self._new_per_poll = _int_value(scenario, "new_per_poll", "news", default=0)
         self._bursts = {}
@@ -218,17 +236,27 @@ class FakeNewsFeed:
                     f"duplicate.of_index={of_index} 는 poll {dup_poll} 시점 발행분"
                     f"({self._published_count(dup_poll)}건) 밖이다"
                 )
-            self._dup = (dup_poll, _int_value(dup, "position", "news.duplicate"), of_index)
+            position = _int_value(dup, "position", "news.duplicate")
+            if position > self._published_count(dup_poll):
+                # 범위 밖 position 을 feed 끝으로 접으면 페이지 예산 안에서 중복이 안
+                # 보여 dedupe 테스트가 조용히 무력화된다
+                raise ValueError(
+                    f"duplicate.position={position} 은 poll {dup_poll} 시점 feed 길이"
+                    f"({self._published_count(dup_poll)}) 를 넘는다"
+                )
+            self._dup = (dup_poll, position, of_index)
         corr = scenario.get("late_correction")
         self._corr = None
         if corr is not None:
             _require_known_keys(corr, _LATE_CORRECTION_KEYS, "news.late_correction")
-            corr_poll = _int_value(corr, "poll_index", "news.late_correction")
+            corr_poll = _int_value(corr, "poll_index", "news.late_correction", minimum=1)
             article_index = _int_value(corr, "article_index", "news.late_correction")
-            if article_index >= self._published_count(corr_poll):
+            if article_index >= self._published_count(corr_poll - 1):
+                # 정정 시점이 아니라 **그 이전 poll** 에 원본이 존재해야 원본→수정본
+                # lifecycle 이 성립한다 — 첫 등장부터 수정본이면 정정 시나리오가 아니다
                 raise ValueError(
-                    f"late_correction.article_index={article_index} 는 poll {corr_poll} "
-                    f"시점 발행분({self._published_count(corr_poll)}건) 밖이다"
+                    f"late_correction.article_index={article_index} 는 poll {corr_poll - 1} "
+                    f"시점 발행분({self._published_count(corr_poll - 1)}건) 밖이다"
                 )
             self._corr = (corr_poll, article_index)
 
@@ -264,6 +292,6 @@ class FakeNewsFeed:
         newest_first = list(range(total - 1, -1, -1))
         if self._dup and poll_index >= self._dup[0]:
             position, of_index = self._dup[1], self._dup[2]
-            newest_first.insert(min(position, len(newest_first)), of_index)
+            newest_first.insert(position, of_index)  # 범위는 __init__ 이 보증한다
         start = (page - 1) * page_size
         return [self._article(i, poll_index) for i in newest_first[start : start + page_size]]

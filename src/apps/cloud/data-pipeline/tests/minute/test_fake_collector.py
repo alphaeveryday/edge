@@ -127,6 +127,25 @@ class TestPriceScenarioValidation:
         with pytest.raises(ValueError, match="정수"):
             FakePriceCollector({"generation": 1.9}, seed=1)
 
+    def test_correction_without_generation_bump_fails_loud(self):
+        # generation 1 이면 delta 가 적용되지 않는다 — 선언한 정정의 조용한 no-op 차단
+        with pytest.raises(ValueError, match="generation"):
+            FakePriceCollector(
+                {"correction": {"unit_ids": ["100000"], "close_delta": 7}}, seed=1
+            )
+
+    def test_correction_overlapping_missing_fails_loud(self):
+        # missing unit 은 bar 를 안 만드니 정정이 물리적으로 불가능하다
+        with pytest.raises(ValueError, match="같은 unit"):
+            FakePriceCollector(
+                {
+                    "generation": 2,
+                    "missing_unit_ids": ["100000"],
+                    "correction": {"unit_ids": ["100000"], "close_delta": 7},
+                },
+                seed=1,
+            )
+
 
 class TestPriceScenarios:
     def test_normal_all_units_succeed(self):
@@ -243,6 +262,28 @@ class TestNewsFeed:
         feed = FakeNewsFeed(scenario("news_page_drift.json"), seed=7)
         with pytest.raises(ValueError, match="poll_index"):
             feed.fetch_page(-1, 1, 50)
+
+    def test_out_of_range_duplicate_position_fails_loud(self):
+        # 범위 밖 position 을 feed 끝으로 접으면 페이지 예산 안에서 중복이 안 보인다
+        config = scenario("news_duplicate.json") | {
+            "duplicate": {"poll_index": 0, "position": 100_000, "of_index": 10}
+        }
+        with pytest.raises(ValueError, match="position"):
+            FakeNewsFeed(config, seed=7)
+
+    def test_late_correction_needs_preexisting_original(self):
+        # 첫 등장부터 수정본이면 원본→수정본 lifecycle 이 성립하지 않는다
+        config = {
+            "initial_count": 0,
+            "new_per_poll": 1,
+            "late_correction": {"poll_index": 1, "article_index": 0},
+        }
+        with pytest.raises(ValueError, match="article_index"):
+            FakeNewsFeed(config, seed=7)
+
+    def test_invalid_calendar_date_fails_loud(self):
+        with pytest.raises(ValueError, match="달력일"):
+            FakeNewsFeed({"initial_count": 1, "date_yyyymmdd": "20261399"}, seed=7)
 
     def test_anchor_miss_burst_exceeds_page_budget(self):
         # burst 가 MAX_PAGES×page_size 를 넘으면 anchor 에 못 닿는다 → INCOMPLETE 경로 입력
