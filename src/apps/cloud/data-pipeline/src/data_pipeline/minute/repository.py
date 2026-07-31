@@ -31,7 +31,13 @@ from ..config import DbConfig
 from ..db import connect as _default_connect
 from ..db import stable_domain_id
 from .models import canonical_json
-from .states import RESULT_STATUSES, WINDOW_CLAIMED, WINDOW_DUE
+from .states import (
+    RESULT_STATUSES,
+    WINDOW_CLAIMED,
+    WINDOW_DUE,
+    WINDOW_VALID,
+    WINDOW_VALID_EMPTY,
+)
 
 
 class UniverseConflictError(RuntimeError):
@@ -43,7 +49,8 @@ class UniverseConflictError(RuntimeError):
 
 
 class SessionFinalizedError(RuntimeError):
-    """FINALIZED session 재계획 시도 — terminal session 에 window 를 더하지 않는다."""
+    """drain 경계 이후(DRAINING~FINALIZED/FAILED) session 재계획 시도 — snapshot 경계
+    뒤에 window 를 더하지 않는다."""
 
 
 @dataclass
@@ -85,11 +92,14 @@ class MinuteLedger:
             )
             created = cur.fetchone() is not None
             if not created:
+                # FOR UPDATE — phase 확인과 window 삽입 사이에 drain 전환이 끼어들면
+                # (TOCTOU) DRAINED 경계 뒤로 DUE 가 삽입된다. 행 잠금으로 직렬화한다.
                 cur.execute(
                     """
                     SELECT session_id, universe_version, universe_hash, phase
                     FROM minute_ingestion_session
                     WHERE dataset = %s AND source_group = %s AND session_date = %s
+                    FOR UPDATE
                     """,
                     (dataset, source_group, session_date),
                 )
@@ -99,10 +109,11 @@ class MinuteLedger:
                         f"session {existing_id} ({dataset}/{source_group}/{session_date}) 는 "
                         f"universe {existing_version} 로 고정됐다 — {universe_version} 거부"
                     )
-                if phase == "FINALIZED":
-                    # terminal session 에 DUE window 를 더하면 QC 뒤에 유령 작업이 생긴다
+                if phase not in ("PLANNED", "ACTIVE"):
+                    # DRAINING 부터는 재계획 금지 — DRAINED snapshot 경계 뒤에 DUE window
+                    # 를 삽입하면 claim/record 게이트를 planner 경로가 우회한다
                     raise SessionFinalizedError(
-                        f"session {existing_id} 는 FINALIZED 다 — 재계획 불가"
+                        f"session {existing_id} 는 {phase} 다 — 재계획 불가"
                     )
                 session_id = existing_id
             # 재계획에도 window INSERT 는 멱등이라 무해하다 — 누락분만 채워진다
@@ -150,6 +161,7 @@ class MinuteLedger:
                     updated_at = now()
                 WHERE session_id = %s
                   AND (lease_expires_at IS NULL OR lease_expires_at < %s)
+                  AND phase IN ('PLANNED', 'ACTIVE', 'DRAINING')
                 RETURNING worker_fencing_token
                 """,
                 (now + timedelta(seconds=lease_seconds), now, session_id, now),
@@ -160,13 +172,15 @@ class MinuteLedger:
     def heartbeat(
         self, *, session_id: str, fence_token: int, now: datetime, lease_seconds: int
     ) -> bool:
-        """lease 연장. 내 token 이 stale 이면 False — Worker 는 즉시 멈춰야 한다."""
+        """lease 연장. stale token 이거나 session 이 terminal(DRAINED 이후)이면 False —
+        어느 쪽이든 Worker 는 즉시 멈춰야 한다는 신호다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE minute_ingestion_session
                 SET lease_expires_at = %s, heartbeat_at = %s, updated_at = now()
                 WHERE session_id = %s AND worker_fencing_token = %s
+                  AND phase IN ('ACTIVE', 'DRAINING')
                 """,
                 (now + timedelta(seconds=lease_seconds), now, session_id, fence_token),
             )
@@ -174,24 +188,31 @@ class MinuteLedger:
 
     # ── window claim ──────────────────────────────────────────
     @staticmethod
-    def _fence_holds(cur, session_id: str, fence_token: int) -> bool:
-        """session 행을 잠그고 fence 를 검사한다.
+    def _fenced_phase(cur, session_id: str, fence_token: int) -> str | None:
+        """session 행을 잠그고 fence 를 검사한다. 유효하면 현재 phase, 아니면 None.
 
         비잠금 조인으로 검사하면 READ COMMITTED 스냅샷이 token 증가 **이전**을 볼 수
         있어, 새 Worker 가 fence 를 가져간 뒤에도 구 Worker 의 쓰기가 통과한다(P1).
         FOR UPDATE 로 잠그면 이 트랜잭션이 끝날 때까지 fence 교체(acquire)가 블록되므로
-        검사와 쓰기가 직렬화된다. session 당 Worker 는 하나라 경합 비용은 heartbeat 뿐.
+        검사와 쓰기가 직렬화된다. phase 를 함께 주는 이유: DRAINED 이후의 claim/기록은
+        fence 가 유효해도 거부해야 EOD snapshot 경계가 지켜진다.
         """
+        if fence_token < 1:
+            # 발급된 token 은 항상 1 이상이다 — 0 을 허용하면 fence 를 획득한 적 없는
+            # 호출이 기본값 0 과 일치해 통과한다(예: PLANNED→DRAINING 을 token 0 으로 ack)
+            return None
         cur.execute(
             """
-            SELECT worker_fencing_token FROM minute_ingestion_session
+            SELECT worker_fencing_token, phase FROM minute_ingestion_session
             WHERE session_id = %s
             FOR UPDATE
             """,
             (session_id,),
         )
         row = cur.fetchone()
-        return row is not None and row[0] == fence_token
+        if row is None or row[0] != fence_token:
+            return None
+        return row[1]
 
     def claim_due_window(
         self,
@@ -201,8 +222,13 @@ class MinuteLedger:
         fence_token: int,
         now: datetime,
         lease_seconds: int,
+        lane: str = "realtime",
     ) -> dict | None:
-        """가장 이른 due window 하나를 lease 로 claim 한다. 없으면 None.
+        """due window 하나를 lease 로 claim 한다. 없으면 None.
+
+        lane 이 순서를 정한다(v0.7 7절 — realtime 우선, recovery 는 bounded budget):
+        - "realtime": **최신** due window 부터 — 장중 지연이 최신 분 처리를 밀지 않게.
+        - "recovery": **최고령** backlog 부터 — 복구가 오래된 hole 을 먼저 메우게.
 
         due = scheduled_at 도달 + (DUE 이거나 lease 만료된 CLAIMED). FOR UPDATE SKIP LOCKED
         로 동시 Worker 의 winner 는 1이다. stale fence 는 여기서부터 거부된다 — session 의
@@ -212,11 +238,24 @@ class MinuteLedger:
         를 그대로 쓰면 같은 Worker 의 만료된 옛 claim 과 새 claim 이 구분되지 않아, 늦게
         도착한 옛 attempt 의 결과가 기록을 통과한다.
         """
+        if lane not in ("realtime", "recovery"):
+            raise ValueError(f"lane {lane!r} 는 realtime/recovery 만 허용된다")
+        order = "DESC" if lane == "realtime" else "ASC"
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if not self._fence_holds(cur, session_id, fence_token):
+            phase = self._fenced_phase(cur, session_id, fence_token)
+            if phase == "ACTIVE":
+                # 신규(DUE) + 만료 claim 재청구
+                due_condition = "(c.data_status = %s OR (c.data_status = %s AND c.lease_expires_at < %s))"
+                due_params = (WINDOW_DUE, WINDOW_CLAIMED, now)
+            elif phase == "DRAINING":
+                # drain 중엔 **만료된 고아 claim 회수만** — DUE 신규 claim 을 열면 drain 이
+                # 수렴하지 않고, 막으면 죽은 Worker 의 in-flight 가 CLAIMED 로 봉인된다
+                due_condition = "(c.data_status = %s AND c.lease_expires_at < %s)"
+                due_params = (WINDOW_CLAIMED, now)
+            else:
                 return None
             cur.execute(
-                """
+                f"""
                 UPDATE minute_ingestion_window w
                 SET data_status = %s, claimed_by = %s,
                     claim_token = w.attempt_count + 1,
@@ -227,9 +266,8 @@ class MinuteLedger:
                     FROM minute_ingestion_window c
                     WHERE c.session_id = %s
                       AND c.scheduled_at <= %s
-                      AND (c.data_status = %s
-                           OR (c.data_status = %s AND c.lease_expires_at < %s))
-                    ORDER BY c.window_start
+                      AND {due_condition}
+                    ORDER BY c.window_start {order}
                     LIMIT 1
                     FOR UPDATE OF c SKIP LOCKED
                 )
@@ -238,7 +276,7 @@ class MinuteLedger:
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
-                 session_id, now, WINDOW_DUE, WINDOW_CLAIMED, now),
+                 session_id, now, *due_params),
             )
             row = cur.fetchone()
             if row is None:
@@ -283,7 +321,7 @@ class MinuteLedger:
         if data_status not in RESULT_STATUSES:
             raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if not self._fence_holds(cur, session_id, fence_token):
+            if self._fenced_phase(cur, session_id, fence_token) not in ("ACTIVE", "DRAINING"):
                 return False
             cur.execute(
                 """
@@ -306,5 +344,94 @@ class MinuteLedger:
                  # 이 UTC Z 로 직렬화한다(json.dumps 는 datetime 에서 TypeError)
                  canonical_json(dict(stage_timestamps)),
                  session_id, window_start, worker_id, claim_token),
+            )
+            return cur.rowcount == 1
+
+    # ── watermark (ALPHA-663) ─────────────────────────────────
+    def advance_watermarks(self, *, session_id: str) -> tuple[datetime | None, datetime | None]:
+        """session watermark 두 개를 재계산해 저장하고 (processed, contiguous) 를 돌려준다.
+
+        processed_through   = 결과가 기록된 가장 최신 구간 — 앞쪽 hole 이 있어도 전진.
+        contiguous_complete_through = 처음부터 VALID/VALID_EMPTY 연속인 마지막 구간 —
+        첫 hole(미처리·INCOMPLETE·INVALID·MISSING)에서 멈추고, correction 이 hole 을
+        메우면 다시 전진한다 (v0.7 10.1). 계산과 저장은 **단일 UPDATE** 다 — 분리하면
+        늦은 계산 결과가 더 새 watermark 를 후퇴시키는 lost update 가 생긴다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            # session 행을 먼저 잠근다 — record 트랜잭션도 fence 검사로 같은 행을 잠그므로
+            # watermark 계산의 스냅샷이 진행 중인 기록과 인터리브되지 않는다(stale 후퇴 방지)
+            cur.execute(
+                """
+                SELECT 1 FROM minute_ingestion_session WHERE session_id = %s FOR UPDATE
+                """,
+                (session_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(f"session {session_id} 이 없다 — watermark 대상 오류")
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET processed_through = (
+                      SELECT MAX(window_end) FROM minute_ingestion_window
+                      WHERE session_id = %s AND data_status = ANY(%s)),
+                    contiguous_complete_through = (
+                      SELECT MAX(window_end) FROM minute_ingestion_window
+                      WHERE session_id = %s AND data_status = ANY(%s)
+                        AND window_start < COALESCE(
+                          (SELECT MIN(window_start) FROM minute_ingestion_window
+                            WHERE session_id = %s AND NOT data_status = ANY(%s)),
+                          'infinity'::timestamptz)),
+                    updated_at = now()
+                WHERE session_id = %s
+                RETURNING processed_through, contiguous_complete_through
+                """,
+                (session_id, sorted(RESULT_STATUSES),
+                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+                 session_id),
+            )
+            row = cur.fetchone()
+            return (None, None) if row is None else (row[0], row[1])
+
+    # ── drain (ALPHA-663) ─────────────────────────────────────
+    def request_drain(self, *, session_id: str, now: datetime) -> bool:
+        """drain 을 요청한다(EOD SFN 경로 — fence 무관). 이미 DRAINING 이후면 no-op False.
+
+        phase 를 DRAINING 으로 올려 두면 Worker 가 fence heartbeat 사이에 관측하고
+        새 claim 을 멈춘 뒤 ack 한다. SessionDrained 는 SQS drain 을 기다리지 않는다
+        (계획 §13) — window 원장 기준의 경계다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'DRAINING', drain_requested_at = %s, updated_at = now()
+                WHERE session_id = %s AND phase IN ('PLANNED', 'ACTIVE')
+                """,
+                (now, session_id),
+            )
+            return cur.rowcount == 1
+
+    def ack_drain(self, *, session_id: str, fence_token: int, now: datetime) -> bool:
+        """Worker 가 drain 관측을 ack 한다 — in-flight 를 끝냈고 새 claim 을 멈췄다는 표식.
+
+        stale fence 의 ack 는 거부한다: 구 Worker 의 ack 가 통과하면 새 Worker 가 아직
+        처리 중인데 DRAINED 로 넘어가 EOD QC 가 이른 snapshot 을 찍는다. CLAIMED window
+        가 남아 있어도 거부한다 — 미완료 in-flight 를 봉인하면 그 window 가 유실된다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            if self._fenced_phase(cur, session_id, fence_token) is None:
+                return False
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'DRAINED', drain_ack_at = %s, updated_at = now()
+                WHERE session_id = %s AND phase = 'DRAINING'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM minute_ingestion_window
+                    WHERE session_id = %s AND data_status = 'CLAIMED'
+                  )
+                """,
+                (now, session_id, session_id),
             )
             return cur.rowcount == 1
