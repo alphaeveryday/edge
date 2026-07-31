@@ -112,9 +112,20 @@ class Manifest:
     # ── 항목 ────────────────────────────────────────────────────────
     def record(self, ticker: str, *, oid: str, key: str, rows: int,
                digest: str, bytes_out: int) -> None:
-        self.items[ticker] = {"oid": oid, "key": key, "rows": rows,
-                              "sha256": digest, "bytes": bytes_out,
-                              "at": datetime.now(UTC).isoformat()}
+        """받은 것을 남긴다. **덮어쓴 항목도 보존한다.**
+
+        raw 객체는 내용 주소라 재수집에도 둘 다 남는데, 원장이 마지막 것만 들고 있으면
+        앞선 객체의 key·oid·sha256 이 사라진다 - 그 객체로 적재된 canonical 행을 어느
+        run·어느 상류 판에서 왔는지 되짚을 수 없다. 보존이 계약인 쪽은 raw 만이 아니다.
+        """
+        prior = self.items.get(ticker)
+        entry = {"oid": oid, "key": key, "rows": rows,
+                 "sha256": digest, "bytes": bytes_out,
+                 "at": datetime.now(UTC).isoformat()}
+        if prior and not prior.get("error"):
+            entry["superseded"] = [*prior.pop("superseded", []),
+                                   {k: v for k, v in prior.items() if k != "superseded"}]
+        self.items[ticker] = entry
 
     def fail(self, ticker: str, error: str) -> None:
         """실패도 남긴다. **빠진 것과 실패한 것은 다르다** - 세지 않으면 결손이 숨는다."""

@@ -140,6 +140,26 @@ def test_a_refetch_preserves_the_earlier_raw_object(tmp_path):
     assert len(parts) == 2, parts        # 옛 oid 판과 새 oid 판이 둘 다 남는다
     assert len({_rows(st, k)[0]["backfill_oid"] for k in parts}) == 2
 
+def test_the_ledger_keeps_the_superseded_entry_too(tmp_path):
+    """raw 객체는 둘 다 남는데 **원장이 마지막 것만 들고 있으면** 계보가 끊긴다.
+
+    WHY: 앞선 객체의 key·oid·sha256 이 사라지면 그 객체로 적재된 canonical 행이 어느 상류
+    판에서 왔는지 되짚을 수 없다 - 보존이 계약인 쪽은 raw 만이 아니다.
+    """
+    st, hf = LocalStorage(tmp_path), FakeHf()
+    backfill_financial(st, dataset=hf, ingest_date="2026-07-31")
+    hf.oids["005930"] = "oid-005930-v2"
+
+    backfill_financial(st, dataset=hf, ingest_date="2026-07-31")
+
+    man = Manifest.from_bytes(st.get_bytes(
+        manifest_key(SOURCE, DATASET, "backfill-dartlab-financial-20260731")))
+    it = man.items["005930"]
+    assert it["oid"] == "oid-005930-v2"
+    assert [p["oid"] for p in it["superseded"]] == ["oid-005930-v1"]
+    assert it["superseded"][0]["key"] != it["key"], "옛 객체의 키가 사라졌다"
+
+
 
 def test_a_failure_is_recorded_not_skipped_silently(tmp_path):
     """빠진 것과 실패한 것은 다르다. 세지 않으면 결손이 숨는다."""
