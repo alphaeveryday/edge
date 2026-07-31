@@ -167,13 +167,15 @@ class MinuteLedger:
     def heartbeat(
         self, *, session_id: str, fence_token: int, now: datetime, lease_seconds: int
     ) -> bool:
-        """lease 연장. 내 token 이 stale 이면 False — Worker 는 즉시 멈춰야 한다."""
+        """lease 연장. stale token 이거나 session 이 terminal(DRAINED 이후)이면 False —
+        어느 쪽이든 Worker 는 즉시 멈춰야 한다는 신호다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE minute_ingestion_session
                 SET lease_expires_at = %s, heartbeat_at = %s, updated_at = now()
                 WHERE session_id = %s AND worker_fencing_token = %s
+                  AND phase IN ('ACTIVE', 'DRAINING')
                 """,
                 (now + timedelta(seconds=lease_seconds), now, session_id, fence_token),
             )
@@ -231,8 +233,17 @@ class MinuteLedger:
             raise ValueError(f"lane {lane!r} 는 realtime/recovery 만 허용된다")
         order = "DESC" if lane == "realtime" else "ASC"
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if self._fenced_phase(cur, session_id, fence_token) != "ACTIVE":
-                # DRAINING 부터는 새 claim 금지 — in-flight 기록만 허용해야 drain 이 수렴
+            phase = self._fenced_phase(cur, session_id, fence_token)
+            if phase == "ACTIVE":
+                # 신규(DUE) + 만료 claim 재청구
+                due_condition = "(c.data_status = %s OR (c.data_status = %s AND c.lease_expires_at < %s))"
+                due_params = (WINDOW_DUE, WINDOW_CLAIMED, now)
+            elif phase == "DRAINING":
+                # drain 중엔 **만료된 고아 claim 회수만** — DUE 신규 claim 을 열면 drain 이
+                # 수렴하지 않고, 막으면 죽은 Worker 의 in-flight 가 CLAIMED 로 봉인된다
+                due_condition = "(c.data_status = %s AND c.lease_expires_at < %s)"
+                due_params = (WINDOW_CLAIMED, now)
+            else:
                 return None
             cur.execute(
                 f"""
@@ -246,8 +257,7 @@ class MinuteLedger:
                     FROM minute_ingestion_window c
                     WHERE c.session_id = %s
                       AND c.scheduled_at <= %s
-                      AND (c.data_status = %s
-                           OR (c.data_status = %s AND c.lease_expires_at < %s))
+                      AND {due_condition}
                     ORDER BY c.window_start {order}
                     LIMIT 1
                     FOR UPDATE OF c SKIP LOCKED
@@ -257,7 +267,7 @@ class MinuteLedger:
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
-                 session_id, now, WINDOW_DUE, WINDOW_CLAIMED, now),
+                 session_id, now, *due_params),
             )
             row = cur.fetchone()
             if row is None:
@@ -339,6 +349,16 @@ class MinuteLedger:
         늦은 계산 결과가 더 새 watermark 를 후퇴시키는 lost update 가 생긴다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            # session 행을 먼저 잠근다 — record 트랜잭션도 fence 검사로 같은 행을 잠그므로
+            # watermark 계산의 스냅샷이 진행 중인 기록과 인터리브되지 않는다(stale 후퇴 방지)
+            cur.execute(
+                """
+                SELECT 1 FROM minute_ingestion_session WHERE session_id = %s FOR UPDATE
+                """,
+                (session_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(f"session {session_id} 이 없다 — watermark 대상 오류")
             cur.execute(
                 """
                 UPDATE minute_ingestion_session
@@ -387,7 +407,8 @@ class MinuteLedger:
         """Worker 가 drain 관측을 ack 한다 — in-flight 를 끝냈고 새 claim 을 멈췄다는 표식.
 
         stale fence 의 ack 는 거부한다: 구 Worker 의 ack 가 통과하면 새 Worker 가 아직
-        처리 중인데 DRAINED 로 넘어가 EOD QC 가 이른 snapshot 을 찍는다.
+        처리 중인데 DRAINED 로 넘어가 EOD QC 가 이른 snapshot 을 찍는다. CLAIMED window
+        가 남아 있어도 거부한다 — 미완료 in-flight 를 봉인하면 그 window 가 유실된다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             if self._fenced_phase(cur, session_id, fence_token) is None:
@@ -397,7 +418,11 @@ class MinuteLedger:
                 UPDATE minute_ingestion_session
                 SET phase = 'DRAINED', drain_ack_at = %s, updated_at = now()
                 WHERE session_id = %s AND phase = 'DRAINING'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM minute_ingestion_window
+                    WHERE session_id = %s AND data_status = 'CLAIMED'
+                  )
                 """,
-                (now, session_id),
+                (now, session_id, session_id),
             )
             return cur.rowcount == 1

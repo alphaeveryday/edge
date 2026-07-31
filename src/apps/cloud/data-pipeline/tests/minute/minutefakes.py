@@ -77,6 +77,9 @@ class _Cursor:
             self._claim_window(params, newest_first="ORDER BY c.window_start DESC" in s)
         elif s.startswith("UPDATE minute_ingestion_window w SET data_status = %s, expected_unit_count"):
             self._record_outcome(params)
+        elif s.startswith("SELECT 1 FROM minute_ingestion_session"):
+            if params[0] in self.db.sessions:  # watermark 선행 잠금 — 없으면 no-row
+                self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
         elif "SET phase = 'DRAINING'" in s:
@@ -156,20 +159,30 @@ class _Cursor:
         row = self.db.sessions.get(session_id)
         if row is None or row["worker_fencing_token"] != token:
             return
+        if row["phase"] not in ("ACTIVE", "DRAINING"):
+            return  # terminal — Worker 정지 신호
         row["lease_expires_at"] = lease_until
         row["heartbeat_at"] = now
         self.rowcount = 1
 
     # ── window claim / outcome ──
     def _claim_window(self, p, *, newest_first):
-        (claimed_status, worker_id, lease_until,
-         session_id, now, due_status, claimed_filter, now2) = p
-        # fence 검사는 repository 가 _fence_holds(SELECT FOR UPDATE)로 먼저 한다
+        # fence·phase 검사는 repository 가 _fenced_phase 로 먼저 한다.
+        # ACTIVE 변형은 파라미터 8개(DUE+만료claim), DRAINING 변형은 7개(만료claim만)
+        if len(p) == 8:
+            (claimed_status, worker_id, lease_until,
+             session_id, now, due_status, claimed_filter, now2) = p
+            def eligible(w):
+                return (w["data_status"] == due_status
+                        or (w["data_status"] == claimed_filter and w["lease_expires_at"] < now))
+        else:
+            (claimed_status, worker_id, lease_until,
+             session_id, now, claimed_filter, now2) = p
+            def eligible(w):
+                return w["data_status"] == claimed_filter and w["lease_expires_at"] < now
         candidates = [
             w for w in self.db.windows.values()
-            if w["session_id"] == session_id and w["scheduled_at"] <= now
-            and (w["data_status"] == due_status
-                 or (w["data_status"] == claimed_filter and w["lease_expires_at"] < now))
+            if w["session_id"] == session_id and w["scheduled_at"] <= now and eligible(w)
         ]
         if not candidates:
             return
@@ -253,10 +266,13 @@ class _Cursor:
         self.rowcount = 1
 
     def _ack_drain(self, p):
-        now, session_id = p
+        now, session_id, session_id2 = p
         row = self.db.sessions.get(session_id)
         if row is None or row["phase"] != "DRAINING":
             return
+        if any(w["session_id"] == session_id2 and w["data_status"] == "CLAIMED"
+               for w in self.db.windows.values()):
+            return  # 미완료 in-flight 봉인 금지
         row["phase"] = "DRAINED"
         row["drain_ack_at"] = now
         self.rowcount = 1
