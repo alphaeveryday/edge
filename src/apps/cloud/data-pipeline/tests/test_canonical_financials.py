@@ -18,7 +18,7 @@ from data_pipeline.canonical.financials import (
     staging_ddl,
     unpivot_sql,
 )
-from data_pipeline.canonical.tables import DB_DRAFT, STATEMENT_LINE
+from data_pipeline.canonical.tables import DB_DRAFT, STATEMENT_LINE, latest_view
 
 
 def test_every_amount_column_becomes_its_own_row():
@@ -97,12 +97,33 @@ def test_available_at_comes_from_the_receipt_number():
 def test_identity_includes_ord_because_accounts_repeat():
     """SCE 는 같은 account_id 가 축마다 반복된다. ord 가 없으면 행이 뭉개진다."""
     assert STATEMENT_LINE.identity == (
-        "rcept_no", "fs_div", "sj_div", "ord", "period_kind", "amount_kind")
+        "rcept_no", "fs_div", "sj_div", "ord", "period_kind", "amount_kind",
+        "content_hash")
 
     sql = merge_sql(DB_DRAFT, "stg_x", run_id="r", ingest_date="d")
     for k in STATEMENT_LINE.identity:
         assert f"t.{k} = s.{k}" in sql
     assert "WHEN MATCHED" not in sql, "갱신 경로가 생기면 옛값을 잃는다"
+
+
+def test_a_corrected_amount_is_a_new_row_not_a_skipped_merge():
+    """정정공시로 **금액만** 바뀐 줄이 조용히 버려지면 canonical 이 옛값을 들고 있는다.
+
+    WHY: 정체가 (접수번호·구분·순번·기간·성격) 뿐이면 정정본은 `WHEN NOT MATCHED` 에서
+    걸러진다 - raw 는 새로 받았는데 canonical 은 갱신되지 않고, 그 불일치는 조회에서만
+    드러난다. 금액 지문을 정체에 넣어 새 행으로 쌓고(append-only), "지금 값"은
+    `latest_view` 가 fetched_at 으로 판정한다.
+    """
+    assert "content_hash" in STATEMENT_LINE.identity
+    assert "content_hash" in STATEMENT_LINE.column_names()
+
+    sql = unpivot_sql(DB_DRAFT, "stg_x", run_id="r", ingest_date="d")
+    assert "AS content_hash" in sql and "sha256" in sql
+
+    # 지금 값 판정에서는 지문을 뺀다 - 안 빼면 정정본과 원본이 둘 다 '지금 값'이 된다.
+    keys = tuple(k for k in STATEMENT_LINE.identity if k != "content_hash")
+    view = latest_view(STATEMENT_LINE, DB_DRAFT)
+    assert f"PARTITION BY {', '.join(keys)} ORDER BY fetched_at DESC" in view
 
 
 def test_merge_prunes_by_partition_keys():

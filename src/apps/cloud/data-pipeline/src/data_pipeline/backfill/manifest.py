@@ -36,6 +36,20 @@ def manifest_key(source: str, dataset: str, run_id: str, prefix: str = "") -> st
     return f"{prefix.rstrip('/')}/{key}" if prefix else key
 
 
+def _missing(exc: Exception) -> bool:
+    """'객체가 없다' 인가. 나머지(깨짐·권한·일시 오류)는 손상 신호다.
+
+    백엔드마다 신호가 다르다 - LocalStorage 는 `FileNotFoundError`, S3 는 botocore
+    `ClientError` 의 `Error.Code` 다. botocore 를 import 하지 않는다(어댑터 지연 로드
+    규약) - 응답 코드만 읽는다.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return True
+    err = getattr(exc, "response", None)
+    code = str(((err or {}).get("Error") or {}).get("Code", ""))
+    return code in ("NoSuchKey", "404", "NotFound")
+
+
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -74,13 +88,21 @@ class Manifest:
 
     @classmethod
     def load_or_new(cls, storage, **kw) -> Manifest:
-        """있으면 이어 쓰고 없으면 새로. **재개가 기본값이다.**"""
+        """있으면 이어 쓰고 없으면 새로. **재개가 기본값이다.**
+
+        **없는 것과 못 읽는 것을 가른다.** 깨진 JSON·지원 안 하는 version·권한 오류·일시적
+        스토리지 오류를 새 매니페스트로 덮으면, 다음 save 가 **유일한 재개·검증 원장을
+        지우고** 이미 끝난 run 을 처음부터 다시 돌린다 - 손상이 조용히 사라진다. 진짜
+        '없음'만 새로 시작한다.
+        """
         key = manifest_key(kw["source"], kw["dataset"], kw["run_id"],
                            kw.get("prefix", ""))
         try:
             return cls.from_bytes(storage.get_bytes(key))
-        except Exception:  # noqa: BLE001 - 없거나 못 읽으면 새로 시작한다
-            return cls(**kw)
+        except Exception as exc:
+            if _missing(exc):
+                return cls(**kw)
+            raise
 
     def save(self, storage) -> str:
         key = manifest_key(self.source, self.dataset, self.run_id, self.prefix)

@@ -170,6 +170,31 @@ def test_a_manifest_from_another_version_fails_loud():
         Manifest.from_bytes(json.dumps({"version": 0, "source": "x"}).encode())
 
 
+def test_an_unreadable_manifest_stops_instead_of_starting_over(tmp_path):
+    """깨진 매니페스트를 새 것으로 덮으면 **유일한 재개·검증 원장이 사라진다.**
+
+    WHY: 다음 save 가 그 자리를 덮어쓰고 이미 끝난 run 을 처음부터 다시 돌린다 - 손상은
+    조용히 사라지고, 재처리와 중복 적재의 원인을 사후에 찾을 수 없다. 진짜 '없음'만
+    새로 시작해야 한다.
+    """
+    st = LocalStorage(tmp_path)
+    st.put_bytes(manifest_key(SOURCE, DATASET, "backfill-x"), b"{not json")
+
+    with pytest.raises(Exception) as got:      # noqa: PT011 - json 예외 타입은 계약이 아니다
+        Manifest.load_or_new(st, source=SOURCE, dataset=DATASET, run_id="backfill-x")
+    assert not isinstance(got.value, FileNotFoundError)
+
+
+def test_a_missing_manifest_still_starts_a_fresh_one(tmp_path):
+    """반대 방향 - '없음'까지 막으면 첫 run 이 아예 못 돈다."""
+    got = Manifest.load_or_new(LocalStorage(tmp_path), source=SOURCE, dataset=DATASET,
+                               run_id="backfill-new", market="KR",
+                               ingest_date="2026-07-31", repo="fake/repo",
+                               revision="main", folder="financial")
+
+    assert got.items == {} and got.run_id == "backfill-new"
+
+
 def test_the_manifest_key_is_partitioned_by_source_dataset_and_run():
     got = manifest_key(SOURCE, DATASET, "backfill-x", "draft")
     assert got == ("draft/operations_archive/backfill_manifests/source=dartlab"

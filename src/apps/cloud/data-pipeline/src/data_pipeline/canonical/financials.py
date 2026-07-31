@@ -98,6 +98,8 @@ def unpivot_sql(database: str, staging: str, *, run_id: str,
       {case(2)} AS period_label,
       try_cast(replace({case(3)}, ',', '') AS decimal(38,6)) AS amount,
       {case(3)} AS amount_text,
+      -- 금액 지문. 정정본이 같은 정체로 들어와 MERGE 에서 조용히 건너뛰이지 않게 한다.
+      to_hex(sha256(to_utf8(coalesce({case(3)}, '')))) AS content_hash,
       currency, bsns_year, reprt_code, reprt_nm, rcept_no,
       our_ticker AS entity,
       market AS geo,

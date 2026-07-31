@@ -259,10 +259,17 @@ STATEMENT_LINE = Table(
         Column("reprt_code", "string", "11011 사업·11012 반기·11013 1Q·11014 3Q"),
         Column("reprt_nm", "string"),
         Column("rcept_no", "string", "접수번호 = 문서키"),
+        # **금액 지문.** 정정공시로 같은 (접수번호·구분·순번·기간·성격) 의 금액만 바뀌면
+        # 정체가 같아 `WHEN NOT MATCHED` 가 건너뛴다 - raw 는 새로 받았는데 canonical 은
+        # 옛 금액을 들고 있게 된다. 지문을 정체에 넣어 **정정본을 새 행**으로 만든다
+        # (append-only). reports 레인이 `content_hash` 로 하는 것과 같은 규약이고,
+        # `latest_view`·`as_of_sql` 은 정체에서 이 축을 빼므로 "지금 값"은 그대로 하나다.
+        Column("content_hash", "string", "금액 내용 지문. 정정으로 값이 바뀌면 새 행이다"),
         *spine_columns(),
     ),
     partition=("bsns_year", "bucket(32, entity)"),
-    identity=("rcept_no", "fs_div", "sj_div", "ord", "period_kind", "amount_kind"))
+    identity=("rcept_no", "fs_div", "sj_div", "ord", "period_kind", "amount_kind",
+              "content_hash"))
 
 # 공시 단위 메타. "이 접수번호에 무엇이 들어 있었나" 를 한 행으로 - 계정 단위 테이블을
 # 훑지 않고 결손을 판정하려면 이 요약이 필요하다.
