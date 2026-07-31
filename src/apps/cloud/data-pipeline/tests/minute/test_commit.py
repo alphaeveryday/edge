@@ -311,3 +311,23 @@ class TestOrphanGenerations:
             source="toss", market="KR", session_date="2026-07-31",
         )
         assert orphans == [bad]
+
+    def test_classification_only_correction_bumps_generation(self):
+        # records 는 같고 manifest(분류)만 바뀐 정정 — 세대가 안 오르면 같은 manifest
+        # key 에 다른 바이트를 PUT 해야 해 불변 계약과 충돌한다
+        db, ledger, session_id, token, claim = ready_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        writer = FakeCanonicalWriter()
+        committer.commit_price_window(
+            canonical_writer=writer, **commit_kwargs(session_id, claim, token)
+        )
+        db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
+        reclaim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        kwargs = commit_kwargs(session_id, reclaim, token)  # records checksum 동일
+        kwargs["manifest_checksum"] = "f" * 64              # 분류만 변경
+        kwargs["artifact_generation"] = 2
+        generation = committer.commit_price_window(canonical_writer=writer, **kwargs)
+        assert generation == 2

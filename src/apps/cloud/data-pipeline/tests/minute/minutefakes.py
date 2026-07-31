@@ -240,12 +240,14 @@ class _Cursor:
         )
         self._rows = [
             (window["window_start"], window["window_end"], window["generation"],
-             window.get("checksum"), window["attempt_count"], window["claim_token"])
+             window.get("checksum"), window.get("manifest_checksum"),
+             window["attempt_count"], window["claim_token"])
         ]
 
     def _record_outcome(self, p):
-        (data_status, expected, succeeded, failed, records, checksum_case, checksum,
-         manifest_uri, manifest_checksum, missing_units, stage_timestamps,
+        (data_status, expected, succeeded, failed, records, checksum_case,
+         manifest_checksum_case, checksum, manifest_uri, manifest_checksum,
+         missing_units, stage_timestamps,
          session_id, window_start, worker_id, claim_token) = p
         window = self.db.windows.get((session_id, window_start))
         # fence 검사는 repository 가 _fence_holds 로 먼저 한다 — 여기선 claim 만 검사
@@ -255,10 +257,11 @@ class _Cursor:
             or window["claim_token"] != claim_token
         ):
             return
-        # CASE WHEN w.checksum IS NOT DISTINCT FROM %s — 같은 checksum 은 generation 불변
+        # records checksum 과 manifest_checksum 둘 다 불변일 때만 generation 유지
         generation = (
             window["generation"]
-            if window.get("checksum") == checksum_case
+            if (window.get("checksum") == checksum_case
+                and window.get("manifest_checksum") == manifest_checksum_case)
             else window["generation"] + 1
         )
         window.update(

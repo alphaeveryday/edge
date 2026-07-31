@@ -272,7 +272,7 @@ class MinuteLedger:
                     FOR UPDATE OF c SKIP LOCKED
                 )
                 RETURNING w.window_start, w.window_end, w.generation,
-                          w.checksum, w.attempt_count, w.claim_token
+                          w.checksum, w.manifest_checksum, w.attempt_count, w.claim_token
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
@@ -286,11 +286,13 @@ class MinuteLedger:
                 "window_start": row[0],
                 "window_end": row[1],
                 "generation": row[2],
-                # Worker 가 세대를 **결정적으로** 예측하는 재료: 새 checksum 이 이 값과
-                # 같으면 세대 불변, 다르면 +1 — 예측이 틀리면 commit 이 rollback 한다
+                # Worker 가 세대를 **결정적으로** 예측하는 재료: 새 records checksum
+                # 과 manifest_checksum 이 **둘 다** 이 값과 같으면 세대 불변, 아니면 +1
+                # — 예측이 틀리면 commit 이 rollback 한다
                 "checksum": row[3],
-                "attempt_count": row[4],
-                "claim_token": row[5],
+                "manifest_checksum": row[4],
+                "attempt_count": row[5],
+                "claim_token": row[6],
             }
 
     # ── window 결과 기록 (PR 3 commit transaction 의 window 조각) ──────
@@ -344,7 +346,10 @@ class MinuteLedger:
     ) -> int | None:
         """window 갱신 조각 — commit transaction(3-2)이 자기 트랜잭션에서 재사용한다.
 
-        성공 시 **확정된 generation** 을 돌려준다(같은 checksum 재실행=불변, 변화=+1) —
+        성공 시 **확정된 generation** 을 돌려준다 — records checksum **과**
+        manifest_checksum 이 둘 다 불변일 때만 세대 유지, 어느 쪽이든 변하면 +1.
+        (분류만 바뀐 정정 — 예: missing→no_trade — 은 records 가 같아도 manifest 가
+        달라 새 세대·새 manifest key 를 받아야 불변 PUT 과 충돌하지 않는다.)
         commit 이 이 값으로 price job/event identity 를 만든다. claim 불일치는 None.
         fence/phase 검사는 호출자 몫(같은 트랜잭션에서 _fenced_phase 선행).
         어휘 검증은 여기(모든 경로의 합류점)에 둔다 — 래퍼에만 두면 _tx 직접 호출이
@@ -358,6 +363,7 @@ class MinuteLedger:
             SET data_status = %s, expected_unit_count = %s, succeeded_unit_count = %s,
                 failed_unit_count = %s, record_count = %s,
                 generation = CASE WHEN w.checksum IS NOT DISTINCT FROM %s
+                                       AND w.manifest_checksum IS NOT DISTINCT FROM %s
                                   THEN w.generation ELSE w.generation + 1 END,
                 checksum = %s, manifest_uri = %s, manifest_checksum = %s,
                 missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
@@ -368,7 +374,8 @@ class MinuteLedger:
             RETURNING w.generation
             """,
             (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
-             record_count, checksum, checksum, manifest_uri, manifest_checksum,
+             record_count, checksum, manifest_checksum, checksum, manifest_uri,
+             manifest_checksum,
              None if missing_units is None else json.dumps(missing_units),
              # CollectionResult.stage_timestamps 는 datetime 값이다 — canonical_json
              # 이 UTC Z 로 직렬화한다(json.dumps 는 datetime 에서 TypeError)
