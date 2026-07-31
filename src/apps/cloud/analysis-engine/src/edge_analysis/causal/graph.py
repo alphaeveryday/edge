@@ -314,6 +314,12 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
         except ValueError as e:
             bad.append(str(e))
 
+    # 이름을 한 번만 뽑아 재사용한다. 아래에서 `parse` 를 다시 부르면 위에서 이미 걸러낸
+    # 형식 오류 노드에서 ValueError 가 **밖으로 튀어** 런을 죽인다 - 실제로 모델이
+    # `KODEX_반도체@t`(오프셋 없음)를 내서 그렇게 죽었다. LLM 오타가 파이프라인을 멈추게
+    # 하면 안 된다. `off` 에 있는 노드만 형식이 성립한 것이다.
+    named = {n: parse(n)[0] for n in off}
+
     all_edges = [(e, s) for s in structs for e in (s.get("edges") or [])]
     for e, s in all_edges:
         a, b = e.get("from"), e.get("to")
@@ -353,22 +359,25 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
                            "방향 간선 금지 - 동시호가 안에 관측이 0개다")
 
     # 규칙 3 - 가격 노드 둘을 이으면 시장이 양쪽 부모여야 한다
-    mkt = [n for n, m in nodes.items() if parse(n)[0].upper() == "MARKET"]
+    mkt = [n for n in named if named[n].upper() == "MARKET"]
     for s in structs:
         ed = _edges(s)
         for a, b in ed:
             if (nodes.get(a, {}).get("kind") == "OBSERVABLE"
                     and nodes.get(b, {}).get("kind") in ("OBSERVABLE", "TARGET")
-                    and parse(a)[0].upper() != "MARKET"):
+                    and named.get(a, "").upper() != "MARKET"):
+                # `is not True` 로 조인다. 모델이 문자열 "false" 를 내면 truthy 라서
+                # 교란 통제 규칙이 조용히 우회된다 - 통제 규칙은 닫힌 쪽으로 실패해야 한다.
                 if not any(m in parents(ed, a) for m in mkt) and \
-                        not nodes[a].get("residualized"):
+                        nodes[a].get("residualized") is not True:
                     bad.append(f"{s.get('id')}·{a}→{b}: 가격 노드끼리 이으려면 MARKET 을 "
                                "양쪽 부모로 넣거나 residualized=true 를 선언해라")
 
     # 규칙 4 - TARGET 보존
     want = {m["key"] for m in ((scope or {}).get("members") or [])}
     if want:
-        got = {parse(n)[0] for n, m in nodes.items() if m.get("kind") == "TARGET"}
+        got = {named[n] for n, m in nodes.items()
+               if m.get("kind") == "TARGET" and n in named}
         if got != want:
             miss, extra = sorted(want - got), sorted(got - want)
             bad.append(f"TARGET 불일치 - 누락 {miss} · 임의추가 {extra}. "

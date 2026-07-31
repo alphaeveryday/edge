@@ -44,9 +44,14 @@ UNIVERSE_COLUMNS = ("instrument_id", "sector_name", "industry_name", "market_cap
                     "listing_market", "ticker")
 
 # PIT 를 우회하거나 문장을 갈아탈 수 있는 토큰. 순수 WHERE 조건만 받는다.
+# `select` 를 막는다. 술어는 한 CTE 위의 WHERE 절이고, 서브쿼리는 그 표면을 벗어나 임의
+# 테이블을 읽는 경로다 - 실제로 모델이 `ticker IN (SELECT ticker FROM etf_constituents)` 를
+# 냈다. 존재하지 않는 테이블이라 그때는 그냥 죽었지만, 존재하는 테이블이면 PIT 클램프
+# 밖에서 읽힌다. `from` 도 같은 이유로 막는다(서브쿼리 없는 FROM 절은 있을 수 없다).
 _BANNED = re.compile(
-    r"(--|/\*|;)|\b(available_at|data_version|insert|update|delete|drop|create|alter|"
-    r"grant|copy|union|intersect|except|pg_sleep|pg_read_file|current_setting|set_config)\b",
+    r"(--|/\*|;)|\b(available_at|data_version|select|from|insert|update|delete|drop|create|"
+    r"alter|grant|copy|union|intersect|except|pg_sleep|pg_read_file|current_setting|"
+    r"set_config)\b",
     re.I,
 )
 
@@ -65,6 +70,17 @@ def _guard(where: str, columns: tuple[str, ...]) -> str:
         raise PipelineError(
             f"코호트 술어에 쓸 수 없는 토큰: {hit.group()!r}. "
             "세미콜론·주석·DDL·집합연산은 금지이고 available_at 은 코드가 주입한다.\n"
+            f"쓸 수 있는 컬럼: {', '.join(columns)}")
+    # 이 표면에 없는 컬럼을 실제로 되돌린다. `columns` 를 에러 메시지에만 쓰면 술어가 그냥
+    # Postgres 로 가서 UndefinedColumn 으로 죽고, 그 문구는 어떤 컬럼을 써야 하는지 말해주지
+    # 않는다 - 실제로 모델이 대조 술어에 처치 컬럼(event_type_code)을 써서 그렇게 죽었다.
+    # 전수 파싱은 하지 않는다(틀린 파서가 정상 술어를 막는다). 다른 표면의 컬럼을 끌어온
+    # 경우만 잡으면 관측된 실패 모드를 오탐 없이 덮는다.
+    wrong = sorted(c for c in set(COHORT_COLUMNS) - set(columns)
+                   if re.search(rf"\b{c}\b", w))
+    if wrong:
+        raise PipelineError(
+            f"이 술어에 쓸 수 없는 컬럼: {', '.join(wrong)}.\n"
             f"쓸 수 있는 컬럼: {', '.join(columns)}")
     # `%` 를 두 배로 만든다. 술어는 f-string 으로 SQL 에 박히고 그 SQL 은 `cur.execute(sql,
     # params)` 를 거치므로, psycopg2 가 `%` 를 자기 플레이스홀더로 읽는다. 그래서
@@ -214,6 +230,24 @@ class CausalData:
             ex = {(str(a), str(b)[:10]) for a, b in exclude}
             out = [(a, b) for a, b in out if (a, str(b)[:10]) not in ex]
         return out
+
+    def industry_map(self, as_of_date: date | str) -> dict[str, str]:
+        """`{instrument_id: industry_name}` — PIT 상 최신 1건.
+
+        층화의 재료다. 이 맵이 없으면 `strata='date_industry'` 가 **조용히** `date` 로
+        붕괴한다(`_strata_key` 가 없는 키를 `'?'` 로 채워 전부 한 층이 된다). 선언과 실제가
+        갈라지는데 아무 신호가 없으므로, 균형검정이 통과해도 무엇을 통제했는지 알 수 없다.
+
+        전체를 한 번에 읽는다. 코호트에 어떤 종목이 들어올지는 추정 시점에야 정해지므로
+        부분집합을 미리 고를 수 없고, 분류 원장은 종목당 1행이라 크기가 작다.
+        """
+        d = as_of_date.isoformat() if isinstance(as_of_date, date) else str(as_of_date)[:10]
+        rows = self._rows("""
+            SELECT DISTINCT ON (ic.instrument_id) ic.instrument_id, ic.industry_name
+            FROM instrument_classification ic
+            WHERE ic.as_of_date <= %s AND ic.industry_name IS NOT NULL
+            ORDER BY ic.instrument_id, ic.as_of_date DESC""", [d])
+        return {str(i): str(n) for i, n in rows}
 
     # ── 정렬된 열 ───────────────────────────────────────────────────────
     # price_daily는 관측 원장이다. 반환은 종목별 직전 거래일 종가에서 파생한다.

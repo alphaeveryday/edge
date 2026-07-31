@@ -110,6 +110,16 @@ class FakeCausalData:
         return [(i, d) for i, d in self.control
                 if d in want and (i, d.isoformat()) not in ex]
 
+    def industry_map(self, as_of_date) -> dict[str, str]:
+        """처치·대조를 **다른 산업**으로 둔다.
+
+        같은 값을 주면 date_industry 층화가 통과하는지 검사할 수 없다 - 층이 하나면
+        층화하지 않은 것과 결과가 같아진다.
+        """
+        self.calls.append("industry_map")
+        return ({i: "Semiconductors" for i in _TREATED_IDS}
+                | {i: "Technology" for i in _CONTROL_IDS})
+
     # ── 정렬된 열 (입력 순서를 지킨다. 없으면 nan) ───────────────────────
     def _col(self, pairs, table: dict) -> np.ndarray:
         return np.array([table.get((str(i), _day(d)), np.nan) for i, d in pairs], dtype=float)

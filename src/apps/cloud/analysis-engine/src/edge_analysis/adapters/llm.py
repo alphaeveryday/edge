@@ -117,6 +117,8 @@ def analyze(
             contributors=[(name_by_ticker.get(m.ticker) or m.ticker, m.contribution)
                           for m in decomp.members[:5]],
             candidates=_candidates(causal, events, name_by_ticker, decomp),
+            # 층화 재료. 넘기지 않으면 strata='date_industry' 가 조용히 date 로 붕괴한다.
+            industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
         )
         explanation = Explanation(raw)
@@ -157,6 +159,9 @@ def _candidates(causal, events: list[EventContext], name_by_ticker: dict[str, st
             "event_id": e.source_event_id,
             "available_at": e.available_at,
             "event_type_code": e.event_type_code,
+            # 술어에 쓸 수 있는 값인데 안 보여주면 모델이 발명한다 - 실제로
+            # `predicate_code = 'EARNINGS_MISS'` 를 냈고 원장에 없는 값이라 0건이 됐다.
+            "predicate_code": e.predicate_code,
             "label": f"{name_by_ticker.get(e.ticker) or e.ticker} {e.title}"[:120],
             "event_date": e.available_at[:10],
             "ticker": e.ticker,

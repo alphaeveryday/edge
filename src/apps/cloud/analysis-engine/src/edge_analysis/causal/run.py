@@ -131,7 +131,7 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     # 확인할 수 없으므로, 사유를 돌려주고 한 번만 다시 묻는다.
     text = agents.brief(etf_name=etf_name, trade_date=trade_date.isoformat(),
                         observed=observed, residual=residual, route_code=route_code,
-                        contributors=contributors, candidates=screened)
+                        contributors=contributors, candidates=screened, industry=industry)
     nodes: dict = {}
     designs: list[EdgeDesign] = []
     missing: list[str] = []

@@ -50,9 +50,38 @@ SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸�
 처치는 사건 기반, 대조는 금융상품 기반이다. 순수 WHERE 조건만 쓴다
 (세미콜론·주석·available_at 금지 - 시점 절은 코드가 넣는다).
 
-처치 컬럼: instrument_id · trade_date · event_type_code · predicate_code · role_code
-          · lifecycle_stage · sector_name · industry_name · market_cap · listing_market · ticker
-대조 컬럼: instrument_id · sector_name · industry_name · market_cap · listing_market · ticker
+처치 컬럼: ticker · trade_date · event_type_code · predicate_code · role_code
+          · lifecycle_stage · sector_name · industry_name · market_cap · listing_market
+대조 컬럼: ticker · sector_name · industry_name · market_cap · listing_market
+
+**종목을 지목할 때는 `ticker` 를 쓴다.** `instrument_id` 도 쓸 수 있지만 그건 티커가 아니라
+불투명 식별자(`inst_01K...`)다 - 거기에 `'000660'` 같은 티커를 넣으면 0건이 나온다.
+
+**대조군은 다른 종목이다.** 같은 종목의 다른 날짜가 아니다. 처치 술어가 "이 종목에 이
+사건이 났다"면, 대조 술어는 "같은 날 그 사건이 나지 않은 **다른** 종목들"이다. 그래서 대조
+술어에는 사건 컬럼이 없다 - 사건이 없는 쪽을 고르는 것이므로 걸 조건이 없다.
+
+## 예시 하나 (이대로 따라 하면 통과한다)
+
+```json
+{"nodes": {
+   "SK하이닉스_실적발표@t0": {"kind": "SHOCK", "unit": "stock",
+       "measure": "분기 실적 공시", "member_events": ["evt_abc123"],
+       "tau": "2026-07-29T07:30:00+09:00"},
+   "KODEX반도체@t0": {"kind": "TARGET", "unit": "etf", "measure": "당일 등락"}},
+ "edges": [{"from": "SK하이닉스_실적발표@t0", "to": "KODEX반도체@t0",
+            "kind": "directed", "cause_label": "SK하이닉스 실적 발표",
+            "treated": "ticker = '000660' AND event_type_code = 'COMPANY.EARNINGS.RESULT_RELEASE'",
+            "control": "industry_name = 'Semiconductors' AND ticker != '000660'",
+            "strata": "date_industry", "timing": "scheduled",
+            "because": "메모리 가격 전망이 바뀌어 동종 밸류에이션이 함께 조정된다",
+            "false_if": "같은 산업 미지명 종목도 같은 폭으로 움직였다"}],
+ "missing": []}
+```
+
+처치는 사건 컬럼을 쓰고, 대조는 **종목 컬럼만** 쓴다. `industry_name` 값은 브리프에 실린
+것을 원문 그대로 쓴다. 가격 노드를 만들지 않았으므로 시장 통제 규칙이 걸리지 않는다 -
+가장 단순한 통과 형태다.
 
 **대조를 무엇 안에서 골랐으면 strata 도 그것이어야 한다.** 같은 날 같은 산업에서
 골랐으면 `date_industry`, 같은 날에서만 골랐으면 `date`.
@@ -65,10 +94,16 @@ SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸�
    price_responsive(**가격을 보고 쓰인 것** - 역인과라 통계 주장 불가) · n/a
 3. 브리프의 [산술] 줄에서 이미 죽은 후보는 제안하지 마라.
 4. 원인을 못 찾으면 빈 간선 목록을 내라. **억지 설계는 UNCERTAIN 보다 나쁘다.**
+5. **가격 계열끼리 잇지 마라.** 두 가격은 시장 요인에 함께 흔들려 그 간선이 인과가 아니다.
+   꼭 이어야 하면 둘 중 하나를 해라: 노드 id 가 정확히 `MARKET@t±N` 인 노드를 만들어
+   **출발 노드의 부모로** 넣거나(이름을 번역하지 마라 - `시장_지수` 는 인식되지 않는다),
+   출발 노드에 `"residualized": true` 를 선언해라(시장 성분을 이미 제거한 계열이라는 뜻).
+   둘 다 없으면 구조 게이트에서 기각된다.
 
 JSON 하나만:
 {"nodes": {"id": {"kind": "...", "unit": "stock", "measure": "무엇을 재는가",
                    "member_events": ["브리프의 event_id"], "tau": "available_at",
+                   "residualized": true,
                    "effect": "CDE (MECHANISM 일 때만)"}},
  "edges": [{"from": "...", "to": "...", "kind": "directed|bidirected",
             "cause_label": "고객이 읽을 원인 이름",
@@ -84,7 +119,7 @@ def _pct(x: float | None) -> str:
 
 def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
           route_code: str, contributors: list[tuple[str, float]],
-          candidates: list[dict]) -> str:
+          candidates: list[dict], industry: dict | None = None) -> str:
     """셀 브리프. **타입 모집단·분포 사전·무게를 항상 싣는다.**"""
     L = [f"셀: {etf_name} {trade_date}",
          f"관측 등락 {_pct(observed)} · 시장·피어 제거 후 잔차 {_pct(residual)}"
@@ -94,7 +129,8 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
     L.append("")
     L.append(f"후보 사건 {len(candidates)}건:")
     for c in candidates:
-        L.append(f"  [{c['event_type_code']}] {c.get('label', '')} "
+        pred = f" predicate_code={c['predicate_code']}" if c.get("predicate_code") else ""
+        L.append(f"  [{c['event_type_code']}{pred}] {c.get('label', '')} "
                  f"{c.get('event_date', '')} 대상 {c.get('ticker', '?')}")
         if c.get("event_id"):
             L.append(f"     event_id={c['event_id']}  available_at={c.get('available_at', '')}")
@@ -110,6 +146,12 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
             L.append(f"     ETF 내 비중 {c['share'] * 100:.2f}%")
         if c.get("killed"):
             L.append(f"     [산술] 이미 기각됨 — {c['killed']}")
+    if industry:
+        # 실제 값을 싣는다. 원장의 industry_name 은 원천 원문(영어)이라, 어휘를 보여주지
+        # 않으면 모델이 한국어로 추측하고(`sector_name = '반도체'`) 대조군이 0건이 된다.
+        vocab = sorted({v for v in industry.values() if v})
+        L += ["", f"쓸 수 있는 industry_name 값 ({len(vocab)}종, 원문 그대로 써라):",
+              "  " + " · ".join(vocab[:40])]
     L += ["", "상승 비율이 50% 근처인 타입은 방향을 못 쓴다. 크기는 분위수로 판단해라.",
           "잔차를 설명할 수 없다면 빈 간선 목록을 내라."]
     return "\n".join(L)

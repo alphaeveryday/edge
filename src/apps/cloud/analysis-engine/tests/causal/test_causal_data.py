@@ -202,16 +202,32 @@ def test_universe_casts_the_date_array():
     sql, _ = conn.executed[-1]
     assert "ANY(%s::date[])" in sql
 
-def test_returns_are_derived_from_close_price_not_the_ledger_feature_column():
-    """원장은 관측값만 적재한다. 인과 피처가 그 NULL 컬럼에 의존하면 최근 코호트가 사라진다."""
+
+def test_control_predicate_rejects_treated_only_columns():
+    """대조 표면에 없는 컬럼은 읽히는 메시지로 되돌린다.
+
+    `columns` 를 에러 문구에만 쓰면 술어가 Postgres 로 가서 UndefinedColumn 으로 죽고, 그
+    문구는 무엇을 써야 하는지 말해주지 않는다. 모델이 대조 술어에 event_type_code 를 써서
+    실제로 그렇게 죽었고, 되먹임이 쓸모없어 2회차가 소진됐다.
+    """
+    with pytest.raises(PipelineError, match="쓸 수 없는 컬럼"):
+        CausalData(_FakeConn()).universe(
+            "ticker = '000660' AND event_type_code != 'X'", [date(2026, 7, 29)])
+
+
+def test_treated_predicate_still_accepts_event_columns():
+    """처치 표면에는 사건 컬럼이 정당하다 - 검사가 정상 술어를 막으면 안 된다."""
     conn = _FakeConn()
-    data = CausalData(conn)
+    CausalData(conn).cohort("event_type_code = 'X' AND industry_name = 'Y'", as_of=AS_OF)
+    assert conn.executed
 
-    data.universe("industry_name = 'X'", [date(2026, 7, 29)])
-    universe_sql, _ = conn.executed[-1]
-    data.ar(PAIRS)
-    excess_sql, _ = conn.executed[-1]
 
-    for sql in (universe_sql, excess_sql):
-        assert "simple_return" not in sql
-        assert "lag(close_price) over" in sql.lower()
+def test_predicate_rejects_a_subquery():
+    """서브쿼리는 한 CTE 표면을 벗어나 PIT 클램프 밖에서 읽는 경로다.
+
+    모델이 `ticker IN (SELECT ticker FROM etf_constituents)` 를 냈다. 그 테이블이 없어서
+    그때는 죽었지만, 있는 테이블이면 조용히 미래를 읽는다.
+    """
+    with pytest.raises(PipelineError, match="쓸 수 없는 토큰"):
+        CausalData(_FakeConn()).cohort(
+            "ticker IN (SELECT ticker FROM etf_constituents)", as_of=AS_OF)
