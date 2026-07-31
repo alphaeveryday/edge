@@ -120,6 +120,8 @@ class PriceWorker:
                         session_id=self.session_id, window_start=claim["window_start"],
                         worker_id=self.config.worker_id, claim_token=claim["claim_token"],
                     )
+                else:
+                    self.ledger.advance_watermarks(session_id=self.session_id)
             self.ledger.ack_drain(
                 session_id=self.session_id, fence_token=self.fence_token, now=now
             )
@@ -152,6 +154,9 @@ class PriceWorker:
             failed |= not self._process(claim, now)
         if processed == 0:
             return "IDLE"
+        # 커밋된 진행을 session watermark 에 반영한다 — 안 하면 downstream(관측·drain
+        # 판단·EOD)이 진행을 보지 못한다. 부분 실패여도 커밋된 만큼은 전진한다.
+        self.ledger.advance_watermarks(session_id=self.session_id)
         return "WINDOW_FAILED" if failed else "PROCESSED"
 
     # ── 내부 ─────────────────────────────────────────────────

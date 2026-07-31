@@ -305,3 +305,15 @@ class TestGracefulHandoff:
         replacement.session_id = session_id
         assert replacement.tick(NOW + timedelta(seconds=2)) == "PROCESSED"
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
+
+
+class TestWatermarkWiring:
+    def test_processing_advances_session_watermarks(self, tmp_path):
+        # 커밋만 하고 watermark 를 안 밀면 downstream 이 세션 진행을 관측하지 못한다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path)
+        run_until_idle(worker, NOW)
+        session = db.sessions[session_id]
+        last_end = max(w["window_end"] for w in db.windows.values())
+        assert session["processed_through"] == last_end
+        assert session["contiguous_complete_through"] == last_end
