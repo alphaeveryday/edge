@@ -74,9 +74,17 @@ class _Cursor:
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at"):
             self._heartbeat(params)
         elif "FOR UPDATE OF c SKIP LOCKED" in s:
-            self._claim_window(params)
+            self._claim_window(params, newest_first="ORDER BY c.window_start DESC" in s)
         elif s.startswith("UPDATE minute_ingestion_window w SET data_status = %s, expected_unit_count"):
             self._record_outcome(params)
+        elif "AS processed" in s:
+            self._watermark_select(params)
+        elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
+            self._watermark_update(params)
+        elif "SET phase = 'DRAINING'" in s:
+            self._request_drain(params)
+        elif "SET phase = 'DRAINED'" in s:
+            self._ack_drain(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
@@ -153,7 +161,7 @@ class _Cursor:
         self.rowcount = 1
 
     # ── window claim / outcome ──
-    def _claim_window(self, p):
+    def _claim_window(self, p, *, newest_first):
         (claimed_status, worker_id, lease_until,
          session_id, now, due_status, claimed_filter, now2) = p
         # fence 검사는 repository 가 _fence_holds(SELECT FOR UPDATE)로 먼저 한다
@@ -165,7 +173,8 @@ class _Cursor:
         ]
         if not candidates:
             return
-        window = min(candidates, key=lambda w: w["window_start"])
+        pick = max if newest_first else min
+        window = pick(candidates, key=lambda w: w["window_start"])
         attempt = window["attempt_count"] + 1
         window.update(
             data_status=claimed_status, claimed_by=worker_id, claim_token=attempt,
@@ -205,4 +214,48 @@ class _Cursor:
             stage_timestamps=json.loads(stage_timestamps),
             claimed_by=None, claim_token=None, lease_expires_at=None,
         )
+        self.rowcount = 1
+
+    # ── watermark · drain (ALPHA-663) ──
+    def _watermark_select(self, p):
+        (sid1, result_statuses, sid2, ok_statuses, sid3, ok_statuses2) = p
+        rows = [w for w in self.db.windows.values() if w["session_id"] == sid1]
+        done = [w for w in rows if w["data_status"] in set(result_statuses)]
+        processed = max((w["window_end"] for w in done), default=None)
+        ok = set(ok_statuses)
+        holes = [w["window_start"] for w in rows if w["data_status"] not in ok]
+        first_hole = min(holes, default=None)
+        contiguous_rows = [
+            w for w in rows
+            if w["data_status"] in ok
+            and (first_hole is None or w["window_start"] < first_hole)
+        ]
+        contiguous = max((w["window_end"] for w in contiguous_rows), default=None)
+        self._rows = [(processed, contiguous)]
+
+    def _watermark_update(self, p):
+        processed, contiguous, session_id = p
+        row = self.db.sessions.get(session_id)
+        if row is None:
+            return
+        row["processed_through"] = processed
+        row["contiguous_complete_through"] = contiguous
+        self.rowcount = 1
+
+    def _request_drain(self, p):
+        now, session_id = p
+        row = self.db.sessions.get(session_id)
+        if row is None or row["phase"] not in ("PLANNED", "ACTIVE"):
+            return
+        row["phase"] = "DRAINING"
+        row["drain_requested_at"] = now
+        self.rowcount = 1
+
+    def _ack_drain(self, p):
+        now, session_id = p
+        row = self.db.sessions.get(session_id)
+        if row is None or row["phase"] != "DRAINING":
+            return
+        row["phase"] = "DRAINED"
+        row["drain_ack_at"] = now
         self.rowcount = 1

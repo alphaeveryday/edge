@@ -170,7 +170,9 @@ class TestClaim:
             now=NOW, lease_seconds=60,
         )
         assert first["window_start"] != second["window_start"]
-        assert first["window_start"] == datetime(2026, 7, 31, 9, 0, tzinfo=KST)
+        # realtime 기본 lane 은 최신 due 부터 — NOW=09:05 에 due 인 최신 window 는 09:04
+        assert first["window_start"] == datetime(2026, 7, 31, 9, 4, tzinfo=KST)
+        assert second["window_start"] == datetime(2026, 7, 31, 9, 3, tzinfo=KST)
 
     def test_stale_fence_cannot_claim(self):
         db, ledger, session_id, token = self._ready()
@@ -187,14 +189,14 @@ class TestClaim:
         db, ledger, session_id, token = self._ready()
         first = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=NOW, lease_seconds=60,
+            now=NOW, lease_seconds=60, lane="recovery",
         )
         # lease 만료 전엔 같은 window 재청구 불가(다음 window 로 감), 만료 후엔 재청구
         later = NOW + timedelta(seconds=61)
         ledger.heartbeat(session_id=session_id, fence_token=token, now=later, lease_seconds=300)
         reclaimed = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=later, lease_seconds=60,
+            now=later, lease_seconds=60, lane="recovery",
         )
         assert reclaimed["window_start"] == first["window_start"]
         assert reclaimed["attempt_count"] == 2
@@ -218,7 +220,7 @@ class TestRecordOutcome:
         )
         claim = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=NOW, lease_seconds=60,
+            now=NOW, lease_seconds=60, lane="recovery",
         )
         return db, ledger, session_id, token, claim
 
@@ -258,7 +260,7 @@ class TestRecordOutcome:
         # 새 Worker 가 만료 claim 을 넘겨받아 기록하는 경로는 살아 있다
         reclaim = ledger.claim_due_window(
             session_id=session_id, worker_id="w2", fence_token=token2,
-            now=later, lease_seconds=60,
+            now=later, lease_seconds=60, lane="recovery",
         )
         assert reclaim["window_start"] == claim["window_start"]
         assert self._record(
@@ -278,7 +280,7 @@ class TestRecordOutcome:
         ledger.heartbeat(session_id=session_id, fence_token=token, now=later, lease_seconds=300)
         new_claim = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=later, lease_seconds=60,
+            now=later, lease_seconds=60, lane="recovery",
         )
         assert new_claim["window_start"] == old_claim["window_start"]
         assert new_claim["claim_token"] != old_claim["claim_token"]
@@ -299,16 +301,126 @@ class TestRecordOutcome:
         window["data_status"] = "DUE"
         rerun = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=NOW, lease_seconds=60,
+            now=NOW, lease_seconds=60, lane="recovery",
         )
         assert self._record(ledger, session_id, rerun, fence_token=token) is True
         assert window["generation"] == 1  # 같은 checksum — 불변
         window["data_status"] = "DUE"
         corrected = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
-            now=NOW, lease_seconds=60,
+            now=NOW, lease_seconds=60, lane="recovery",
         )
         assert self._record(
             ledger, session_id, corrected, fence_token=token, checksum="e" * 64
         ) is True
         assert window["generation"] == 2  # correction — 세대 증가
+
+
+class TestWatermarks:
+    """계획 §7: window 3 누락에서 processed=5, contiguous=2 — 두 watermark 는 다른 질문에
+    답한다(processed=어디까지 기록됐나 / contiguous=어디까지 구멍 없이 완전한가)."""
+
+    def _session_with_outcomes(self, statuses):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger, windows=WINDOWS[:len(statuses)])
+        for (start, end), status in zip(WINDOWS, statuses):
+            if status is None:
+                continue  # 미처리 hole
+            window = db.windows[(session_id, start)]
+            window["data_status"] = status
+        return db, ledger, session_id
+
+    def test_hole_at_window3_processed5_contiguous2(self):
+        db, ledger, session_id = self._session_with_outcomes(
+            ["VALID", "VALID", None, "VALID", "VALID"]
+        )
+        processed, contiguous = ledger.advance_watermarks(session_id=session_id)
+        assert processed == WINDOWS[4][1]    # 5번째 window 끝 — hole 넘어 전진
+        assert contiguous == WINDOWS[1][1]   # 2번째 window 끝 — hole 에서 멈춤
+        session = db.sessions[session_id]
+        assert session["processed_through"] == processed
+        assert session["contiguous_complete_through"] == contiguous
+
+    def test_correction_fills_hole_and_contiguous_advances(self):
+        db, ledger, session_id = self._session_with_outcomes(
+            ["VALID", "VALID", "INCOMPLETE", "VALID", "VALID"]
+        )
+        _, contiguous = ledger.advance_watermarks(session_id=session_id)
+        assert contiguous == WINDOWS[1][1]  # INCOMPLETE 도 hole 이다
+        db.windows[(session_id, WINDOWS[2][0])]["data_status"] = "VALID"  # correction
+        _, contiguous = ledger.advance_watermarks(session_id=session_id)
+        assert contiguous == WINDOWS[4][1]  # hole 이 메워지면 끝까지 전진
+
+    def test_empty_session_watermarks_none(self):
+        db, ledger, session_id = self._session_with_outcomes([None, None])
+        processed, contiguous = ledger.advance_watermarks(session_id=session_id)
+        assert processed is None and contiguous is None
+
+
+class TestLanes:
+    def test_realtime_picks_newest_recovery_picks_oldest(self):
+        # v0.7 7절 — 장중 지연이 최신 분 처리를 밀지 않게 realtime 은 최신부터,
+        # recovery 는 가장 오래된 hole 부터 메운다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        late_now = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # window 10개 due
+        newest = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=late_now, lease_seconds=60, lane="realtime",
+        )
+        oldest = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=late_now, lease_seconds=60, lane="recovery",
+        )
+        assert newest["window_start"] == datetime(2026, 7, 31, 9, 9, tzinfo=KST)
+        assert oldest["window_start"] == datetime(2026, 7, 31, 9, 0, tzinfo=KST)
+
+    def test_unknown_lane_rejected(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        with pytest.raises(ValueError):
+            ledger.claim_due_window(
+                session_id=session_id, worker_id="w1", fence_token=1,
+                now=NOW, lease_seconds=60, lane="bulk",
+            )
+
+
+class TestDrain:
+    def _active(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        return db, ledger, session_id, token
+
+    def test_drain_request_then_ack(self):
+        db, ledger, session_id, token = self._active()
+        assert ledger.request_drain(session_id=session_id, now=NOW) is True
+        assert db.sessions[session_id]["phase"] == "DRAINING"
+        assert ledger.request_drain(session_id=session_id, now=NOW) is False  # 멱등 no-op
+        assert ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW) is True
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+
+    def test_stale_fence_ack_rejected(self):
+        # 구 Worker 의 ack 가 통과하면 새 Worker 처리 중에 DRAINED 로 넘어가
+        # EOD QC 가 이른 snapshot 을 찍는다
+        db, ledger, session_id, token = self._active()
+        ledger.request_drain(session_id=session_id, now=NOW)
+        later = NOW + timedelta(seconds=301)
+        ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w2", now=later, lease_seconds=300
+        )
+        assert ledger.ack_drain(session_id=session_id, fence_token=token, now=later) is False
+        assert db.sessions[session_id]["phase"] == "DRAINING"
+
+    def test_ack_without_drain_request_is_noop(self):
+        db, ledger, session_id, token = self._active()
+        assert ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW) is False
