@@ -230,3 +230,28 @@ def test_a_standalone_total_label_is_still_detected():
     rows = parse_table(bare_total)
     assert [r["is_total"] for r in rows] == [False, False, True]
     assert check(rows)["매출액"]["ok"] is True
+
+
+def test_a_share_column_without_percent_signs_is_still_read():
+    """비율 칸에 `%` 가 없는 표(실측 000500)가 **채택 근거를 잃지 않아야 한다.**
+
+    WHY: 합계 행이 없는 표는 "비중 합 = 100%" 가 유일한 자기검사다. `%` 를 요구하면 그
+    표의 share 가 전부 None 이 되어 `by="share"` 채택이 통째로 죽는다 - 열의 정체는
+    머리행이 이미 정했으므로 기호는 부수적이다.
+    """
+    no_total = """<TABLE><TR><TH>부문</TH><TH>매출액</TH><TH>비율</TH></TR>
+                  <TR><TD>기계부문</TD><TD>60,000</TD><TD>60.00</TD></TR>
+                  <TR><TD>전자부문</TD><TD>40,000</TD><TD>40.00</TD></TR></TABLE>"""
+
+    rows = parse_table(no_total)
+    assert [r["share"] for r in rows] == [pytest.approx(0.60), pytest.approx(0.40)]
+    got = check(rows)["매출액"]
+    assert got["ok"] is True and got["by"] == "share"
+
+
+def test_an_amount_in_the_share_column_is_not_read_as_a_ratio():
+    """반대 방향 - 자릿점 금액을 비율로 읽으면 6,000% 짜리 비중이 생긴다."""
+    wrong = """<TABLE><TR><TH>부문</TH><TH>매출액</TH><TH>비율</TH></TR>
+               <TR><TD>기계부문</TD><TD>60,000</TD><TD>60,000</TD></TR></TABLE>"""
+
+    assert [r["share"] for r in parse_table(wrong)] == [None]

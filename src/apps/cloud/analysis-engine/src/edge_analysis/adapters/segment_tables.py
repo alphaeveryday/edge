@@ -102,6 +102,24 @@ def _share(s: str) -> float | None:
     return (-v if neg else v) / 100.0
 
 
+def _bare_share(s: str) -> float | None:
+    """`%` 없는 비율 칸. **비율 열이라는 것은 머리행이 이미 정했다.**
+
+    자릿점이 있으면(`1,234`) 비율이 아니라 금액이므로 받지 않는다 - 비율 열에 금액이 온
+    표는 머리행 판정이 틀린 것이고, 그건 추측으로 메울 자리가 아니다.
+    """
+    t = (s or "").strip().replace(" ", "")
+    if not t or _GROUPED.search(t):
+        return None
+    neg = t.startswith("△")
+    t = t.lstrip("△-")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return (-v if neg or (s or "").strip().startswith("-") else v) / 100.0
+
+
 def _header_rows(table_xml: str, g: list[list[str]]) -> int:
     """머리행 수. **`<TH>` 를 믿되 자릿점 숫자가 있으면 데이터로 본다.**
 
@@ -214,7 +232,10 @@ def parse_table(table_xml: str) -> list[dict]:
                 continue
             share = _share(cell)
             if share is None and i in share_by_rev and share_by_rev[i] < len(row):
-                share = _share(row[share_by_rev[i]])
+                # **비율 열의 값은 `%` 없이 오기도 한다**(실측 000500 이 `50.05`). 열의
+                # 정체는 머리행이 이미 정했으므로, 기호가 없다고 버리면 합계 행 없는 표의
+                # 유일한 채택 근거(비중 합 = 100%)가 통째로 죽는다.
+                share = _share(row[share_by_rev[i]]) or _bare_share(row[share_by_rev[i]])
             out.append({"segment": seg, "period_label": _WS.sub(" ", head[i]).strip(),
                         "surface": cell.strip(), "value": val, "share": share,
                         "is_total": is_total})
