@@ -22,8 +22,11 @@ HuggingFace 공개 데이터셋. 종목 유니버스조차 그 데이터셋의 �
 패키지의 수명에 매인다.
 """
 
+from .classification import KINDS, ReportClass
 from .financial import backfill_financial
 from .hf import HfDataset
 from .manifest import Manifest
+from .reports import backfill_reports
 
-__all__ = ["HfDataset", "Manifest", "backfill_financial"]
+__all__ = ["KINDS", "HfDataset", "Manifest", "ReportClass",
+           "backfill_financial", "backfill_reports"]

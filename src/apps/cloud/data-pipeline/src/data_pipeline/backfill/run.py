@@ -19,6 +19,10 @@ from datetime import UTC, datetime
 from ..lake import LocalStorage, S3Storage
 from .financial import DATASET, SOURCE, backfill_financial, run_id_for
 from .manifest import Manifest
+from .reports import DATASET as REPORT_DATASET
+from .reports import SOURCE as REPORT_SOURCE
+from .reports import backfill_reports
+from .reports import run_id_for as report_run_id
 
 DRAFT = "draft"          # 승격 전 초안 접두사. 승격은 접두사 이동이다
 
@@ -33,13 +37,17 @@ def _storage(a):
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="data_pipeline.backfill.run")
-    ap.add_argument("cmd", choices=["financial", "verify"])
+    ap.add_argument("cmd", choices=["financial", "reports", "verify"])
     ap.add_argument("--bucket", default="")
     ap.add_argument("--local", default="")
     ap.add_argument("--draft", action="store_true",
                     help="draft/ 접두사 아래에만 쓴다 (승격 전 기본 권장)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--tickers", default="")
+    ap.add_argument("--start", default="", help="reports: 시작 발표일 YYYY-MM-DD")
+    ap.add_argument("--end", default="", help="reports: 종료 발표일 YYYY-MM-DD")
+    ap.add_argument("--sleep", type=float, default=0.4)
+    ap.add_argument("--source", default="", help="verify: 매니페스트 source (기본 dartlab)")
     ap.add_argument("--ingest-date", default="")
     ap.add_argument("--run-id", default="")
     ap.add_argument("--refetch", action="store_true")
@@ -62,10 +70,22 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(log, ensure_ascii=False, indent=1))
         return 0 if log["failed"] == 0 else 1
 
-    # verify — 재무 백필의 원장을 sha256 으로 대조한다.
-    run_id = a.run_id or run_id_for(a.ingest_date)
+    if a.cmd == "reports":
+        if not (a.start and a.end):
+            raise SystemExit("--start 와 --end 가 필요하다 (발표일 범위)")
+        log = backfill_reports(
+            storage, start=a.start, end=a.end, ingest_date=a.ingest_date,
+            run_id=a.run_id, key_prefix=prefix, refetch=a.refetch, sleep=a.sleep)
+        print(json.dumps(log, ensure_ascii=False, indent=1))
+        return 0 if log["failed"] == 0 else 1
+
+    # verify — 어느 백필의 원장인지 source 로 가른다(기본은 재무).
+    src = a.source or SOURCE
+    dataset = REPORT_DATASET if src == REPORT_SOURCE else DATASET
+    run_id = a.run_id or (report_run_id(a.ingest_date) if src == REPORT_SOURCE
+                          else run_id_for(a.ingest_date))
     man = Manifest.load_or_new(
-        storage, source=SOURCE, dataset=DATASET, market="KR", run_id=run_id,
+        storage, source=src, dataset=dataset, market="KR", run_id=run_id,
         ingest_date=a.ingest_date, repo="", revision="", folder="", prefix=prefix)
     if not man.items:
         raise SystemExit(f"매니페스트가 비었다 - run_id={run_id} 가 맞나")

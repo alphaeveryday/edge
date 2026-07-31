@@ -102,6 +102,30 @@ def raw_financial_partition(
     )
 
 
+def raw_report_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 보고서(reports) 파티션 프리픽스 (끝 슬래시 없음).
+
+    가격·재무와 동형(bronze 통일) — 원본을 수집일(ingest_date) 기준으로 run_id 별 append
+    한다. **발표일(published_date)로 파티션하지 않는 이유**: 한 번의 날짜 범위 백필이 여러
+    발표일을 한꺼번에 주고(뉴스처럼 발표일당 한 번 도는 구조가 아니다), 같은 발표일이 여러
+    백필 run 에 걸쳐 다시 들어온다. 발표일은 각 레코드에 보존돼 canonical 이 쓴다.
+
+    `market` 은 시장이 아니라 **지리 범위**를 담는다(KR·US·GLOBAL) — 보고서는 거래소에
+    속하지 않는다. 파티션 키 이름을 새로 만들지 않고 기존 규약을 재사용하는 편이, 스캐너·
+    로그 키·승격 절차를 하나로 유지한다.
+
+    광의의 보고서를 한 데이터셋에 담는다. 종류(basic·current·estimative·warning)와 출처
+    등급(신뢰도)은 레코드 컬럼이다 - raw 에서 종류별로 갈라 두면 분류 규칙이 바뀔 때
+    이미 쌓인 파티션을 옮겨야 한다. 종류로 테이블을 가르는 것은 canonical 소관이다.
+    """
+    return (
+        f"raw/source={source}/dataset=reports/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_etf_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
