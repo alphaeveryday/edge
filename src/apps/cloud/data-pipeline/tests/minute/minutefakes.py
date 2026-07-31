@@ -90,6 +90,15 @@ class _Cursor:
             self._claim_window(params, newest_first="ORDER BY c.window_start DESC" in s)
         elif s.startswith("UPDATE minute_ingestion_window w SET data_status = %s, expected_unit_count"):
             self._record_outcome(params)
+        elif s.startswith("SELECT claimed_by, claim_token FROM minute_ingestion_window"):
+            window = self.db.windows.get((params[0], params[1]))
+            if window is not None:
+                self._rows = [(window["claimed_by"], window["claim_token"])]
+        elif s.startswith("SELECT window_start, generation FROM minute_ingestion_window"):
+            self._rows = [
+                (w["window_start"], w["generation"]) for w in self.db.windows.values()
+                if w["session_id"] == params[0] and w.get("checksum") is not None
+            ]
         elif s.startswith("SELECT 1 FROM minute_ingestion_session"):
             if params[0] in self.db.sessions:  # watermark 선행 잠금 — 없으면 no-row
                 self._rows = [(1,)]
@@ -153,6 +162,7 @@ class _Cursor:
             "session_id": session_id, "window_start": window_start,
             "window_end": window_end, "scheduled_at": scheduled_at,
             "data_status": "DUE", "generation": 0, "attempt_count": 0,
+            "checksum": None,
             "claimed_by": None, "claim_token": None, "lease_expires_at": None,
         }
 
@@ -263,6 +273,7 @@ class _Cursor:
             claimed_by=None, claim_token=None, lease_expires_at=None,
         )
         self.rowcount = 1
+        self._rows = [(window["generation"],)]
 
     # ── watermark · drain (ALPHA-663) ──
     def _watermark_advance(self, p):

@@ -323,29 +323,55 @@ class MinuteLedger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             if self._fenced_phase(cur, session_id, fence_token) not in ("ACTIVE", "DRAINING"):
                 return False
-            cur.execute(
-                """
-                UPDATE minute_ingestion_window w
-                SET data_status = %s, expected_unit_count = %s, succeeded_unit_count = %s,
-                    failed_unit_count = %s, record_count = %s,
-                    generation = CASE WHEN w.checksum IS NOT DISTINCT FROM %s
-                                      THEN w.generation ELSE w.generation + 1 END,
-                    checksum = %s, manifest_uri = %s, manifest_checksum = %s,
-                    missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
-                    claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL,
-                    updated_at = now()
-                WHERE w.session_id = %s AND w.window_start = %s
-                  AND w.claimed_by = %s AND w.claim_token = %s
-                """,
-                (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
-                 record_count, checksum, checksum, manifest_uri, manifest_checksum,
-                 None if missing_units is None else json.dumps(missing_units),
-                 # CollectionResult.stage_timestamps 는 datetime 값이다 — canonical_json
-                 # 이 UTC Z 로 직렬화한다(json.dumps 는 datetime 에서 TypeError)
-                 canonical_json(dict(stage_timestamps)),
-                 session_id, window_start, worker_id, claim_token),
+            generation = self._record_window_outcome_tx(
+                cur, session_id=session_id, window_start=window_start,
+                worker_id=worker_id, claim_token=claim_token, data_status=data_status,
+                expected_unit_count=expected_unit_count,
+                succeeded_unit_count=succeeded_unit_count,
+                failed_unit_count=failed_unit_count, record_count=record_count,
+                checksum=checksum, manifest_uri=manifest_uri,
+                manifest_checksum=manifest_checksum, missing_units=missing_units,
+                stage_timestamps=stage_timestamps,
             )
-            return cur.rowcount == 1
+            return generation is not None
+
+    @staticmethod
+    def _record_window_outcome_tx(
+        cur, *, session_id, window_start, worker_id, claim_token, data_status,
+        expected_unit_count, succeeded_unit_count, failed_unit_count, record_count,
+        checksum, manifest_uri, manifest_checksum, missing_units, stage_timestamps,
+    ) -> int | None:
+        """window 갱신 조각 — commit transaction(3-2)이 자기 트랜잭션에서 재사용한다.
+
+        성공 시 **확정된 generation** 을 돌려준다(같은 checksum 재실행=불변, 변화=+1) —
+        commit 이 이 값으로 price job/event identity 를 만든다. claim 불일치는 None.
+        fence/phase 검사는 호출자 몫(같은 트랜잭션에서 _fenced_phase 선행).
+        """
+        cur.execute(
+            """
+            UPDATE minute_ingestion_window w
+            SET data_status = %s, expected_unit_count = %s, succeeded_unit_count = %s,
+                failed_unit_count = %s, record_count = %s,
+                generation = CASE WHEN w.checksum IS NOT DISTINCT FROM %s
+                                  THEN w.generation ELSE w.generation + 1 END,
+                checksum = %s, manifest_uri = %s, manifest_checksum = %s,
+                missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
+                claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL,
+                updated_at = now()
+            WHERE w.session_id = %s AND w.window_start = %s
+              AND w.claimed_by = %s AND w.claim_token = %s
+            RETURNING w.generation
+            """,
+            (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
+             record_count, checksum, checksum, manifest_uri, manifest_checksum,
+             None if missing_units is None else json.dumps(missing_units),
+             # CollectionResult.stage_timestamps 는 datetime 값이다 — canonical_json
+             # 이 UTC Z 로 직렬화한다(json.dumps 는 datetime 에서 TypeError)
+             canonical_json(dict(stage_timestamps)),
+             session_id, window_start, worker_id, claim_token),
+        )
+        row = cur.fetchone()
+        return None if row is None else row[0]
 
     # ── watermark (ALPHA-663) ─────────────────────────────────
     def advance_watermarks(self, *, session_id: str) -> tuple[datetime | None, datetime | None]:
