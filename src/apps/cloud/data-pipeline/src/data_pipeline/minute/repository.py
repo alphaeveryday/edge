@@ -192,6 +192,10 @@ class MinuteLedger:
         검사와 쓰기가 직렬화된다. phase 를 함께 주는 이유: DRAINED 이후의 claim/기록은
         fence 가 유효해도 거부해야 EOD snapshot 경계가 지켜진다.
         """
+        if fence_token < 1:
+            # 발급된 token 은 항상 1 이상이다 — 0 을 허용하면 fence 를 획득한 적 없는
+            # 호출이 기본값 0 과 일치해 통과한다(예: PLANNED→DRAINING 을 token 0 으로 ack)
+            return None
         cur.execute(
             """
             SELECT worker_fencing_token, phase FROM minute_ingestion_session

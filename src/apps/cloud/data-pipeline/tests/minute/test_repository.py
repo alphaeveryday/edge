@@ -562,3 +562,13 @@ class TestDrainRecovery:
         db = FakeMinuteDB()
         with pytest.raises(ValueError, match="session"):
             make_ledger(db).advance_watermarks(session_id="msn_ghost")
+
+    def test_unissued_token_zero_rejected(self):
+        # 발급된 적 없는 token 0 이 기본값 0 과 일치해 통과하면 fence 없는 호출이
+        # PLANNED session 을 DRAINED 로 봉인할 수 있다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        ledger.request_drain(session_id=session_id, now=NOW)
+        assert ledger.ack_drain(session_id=session_id, fence_token=0, now=NOW) is False
+        assert db.sessions[session_id]["phase"] == "DRAINING"
