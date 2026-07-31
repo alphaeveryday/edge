@@ -40,8 +40,9 @@
 > (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)과 job/outbox
 > repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664), artifact/manifest
 > 경계(결정적·불변 key·put_immutable, ALPHA-665), fenced commit transaction(canonical·
-> window·job·outbox 원자화 + orphan 검출, ALPHA-666 — canonical 실 writer 는 ALPHA-648
-> 조율·CanonicalWriter 경계)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
+> window·job·outbox 원자화 + orphan 검출, ALPHA-666), Price Worker loop(fence·2-lane·
+> 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식, 토스 adapter 는 실측 후)
+> 까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
 > 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
