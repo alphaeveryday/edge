@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from ..config import DbConfig
 from ..db import connect as _default_connect
 from ..db import stable_domain_id
+from .models import canonical_json
 from .states import RESULT_STATUSES, WINDOW_CLAIMED, WINDOW_DUE
 
 
@@ -269,7 +270,7 @@ class MinuteLedger:
         manifest_uri: str,
         manifest_checksum: str,
         missing_units: list[str] | None,
-        stage_timestamps: dict[str, str],
+        stage_timestamps: dict[str, datetime | str],
     ) -> bool:
         """claim 한 window 에 수집 결과를 기록한다. stale fence/claim 이면 False.
 
@@ -301,7 +302,9 @@ class MinuteLedger:
                 (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
                  record_count, checksum, checksum, manifest_uri, manifest_checksum,
                  None if missing_units is None else json.dumps(missing_units),
-                 json.dumps(stage_timestamps, ensure_ascii=False),
+                 # CollectionResult.stage_timestamps 는 datetime 값이다 — canonical_json
+                 # 이 UTC Z 로 직렬화한다(json.dumps 는 datetime 에서 TypeError)
+                 canonical_json(dict(stage_timestamps)),
                  session_id, window_start, worker_id, claim_token),
             )
             return cur.rowcount == 1

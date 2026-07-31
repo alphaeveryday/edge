@@ -87,8 +87,10 @@ class CollectionRequest(BaseModel):
     dataset: NonBlankStr
     window_start: AwareDatetime
     window_end: AwareDatetime
-    run_id: UUID
-    session_id: UUID
+    # ADR-0027 계열 TEXT 도메인 ID (ops·minute 원장의 stable_domain_id 와 같은 축) —
+    # UUID 타입으로 좁히면 원장이 만든 `msn_<hash>` session_id 가 여기서 거부된다
+    run_id: NonBlankStr
+    session_id: NonBlankStr
     execution_mode: ExecutionMode
     universe_version: NonBlankStr
     unit_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
