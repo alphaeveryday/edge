@@ -65,21 +65,19 @@
 
 **변경 체크리스트** — 스키마를 바꿀 때:
 - [ ] `libs/schema/migrations-cloud/`에 마이그레이션 추가(Flyway, timestamp 버전 `VyyyyMMddHHmm__`).
-- [ ] (생성기 도입 후) `libs/schema/generated/` 모델 재생성.
+- [ ] `libs/schema/scripts/generate-erd.sh`로 `libs/schema/generated/` 물리 ERD를 재생성.
 - [ ] 마이그레이션과 생성 모델을 **같은 PR/커밋**으로 함께 올린다([ADR-0005](adr/0005-db-as-contract.md)).
 - [ ] 이 변경이 확장-수축 중 **어느 단계인지** PR 설명에 명시한다.
 - [ ] 리뷰: `libs/schema`는 JVM·Python 양쪽 소비자가 영향을 받으므로 **양쪽 리뷰**를 받는다(CODEOWNERS로 강제 예정).
 
 **generated 모델 재생성**
-> **현황:** generated 모델 **생성기가 아직 없다.** ADR-0005·README의 "스키마 변경 시 generated
-> 동반 커밋" 규칙은 **그대로 유효하다.** 다만 그 **전제인 생성기가 아직 없어 현재 생성할 산출물이 없고**
-> (`generated/`는 비어 있음), 그 전까지는 `libs/schema/migrations-cloud/`의 Flyway SQL이 사실상 계약을 정의한다.
-> 생성기는 별도 후속 티켓에서 도입하며, 도입되는 순간 아래 규칙이 그대로 적용된다(규칙 자체를 보류·완화하지 않는다).
+`libs/schema/scripts/generate-erd.sh`가 cloud·onprem Flyway 세트를 PostgreSQL 18 임시
+클러스터에 적용해 `generated/physical-erd*.dbml`을 만든다. 실행법과 pre-commit 훅은
+[`libs/schema/README`](../src/libs/schema/README.md#물리-erd-자동-생성-파생물)가 SSOT다.
 
-생성기 도입 이후의 규칙:
 - `generated/`는 **손으로 고치지 않는다.** 항상 `schema`(마이그레이션/정의)로부터 생성한다.
 - 재생성은 스키마 변경과 **동일 PR**에 포함한다 — 정의와 모델이 어긋난 채 머지되면 안 된다.
-- 여러 런타임(JVM·Python)이 같은 정의에서 모델을 생성해 **동일한 계약**을 공유하도록 보장한다.
+- Flyway SQL이 계약 SSOT이고, DBML은 물리 구조를 검토하기 위한 파생물이다.
 
 ## 5. 현행 CD (지속적 배포)
 

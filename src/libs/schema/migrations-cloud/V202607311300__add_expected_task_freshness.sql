@@ -30,7 +30,8 @@ ALTER TABLE ops_expected_task
         OR
         (dataset_contract_key IS NOT NULL
             AND dataset_contract_version IS NOT NULL
-            AND dataset_contract_snapshot IS NOT NULL)
+            AND dataset_contract_snapshot IS NOT NULL
+            AND jsonb_typeof(dataset_contract_snapshot) = 'object')
     ),
     ADD CONSTRAINT ck_ops_expected_task_freshness_status CHECK (
         freshness_status IS NULL
@@ -39,20 +40,57 @@ ALTER TABLE ops_expected_task
     ADD CONSTRAINT ck_ops_expected_task_freshness_pair CHECK (
         (freshness_status IS NULL AND freshness_reason IS NULL AND observed_at IS NULL)
         OR
-        (freshness_status IS NOT NULL AND freshness_reason IS NOT NULL AND observed_at IS NOT NULL)
+        (freshness_status IS NOT NULL
+            AND freshness_status = 'UNKNOWN'
+            AND freshness_reason IS NOT NULL)
+        OR
+        (freshness_status IS NOT NULL
+            AND freshness_status IN ('FRESH', 'STALE')
+            AND freshness_reason IS NOT NULL
+            AND observed_at IS NOT NULL)
     ),
     ADD CONSTRAINT ck_ops_expected_task_freshness_applicability CHECK (
-        dataset_contract_key IS NOT NULL
+        (plan_status = 'DUE' AND dataset_contract_key IS NOT NULL)
         OR (
             actual_as_of_date IS NULL
+            AND collected_at IS NULL
             AND freshness_status IS NULL
             AND freshness_reason IS NULL
             AND freshness_evidence IS NULL
         )
     ),
+    ADD CONSTRAINT ck_ops_expected_task_contract_expected_as_of CHECK (
+        dataset_contract_key IS NULL
+        OR plan_status <> 'DUE'
+        OR expected_as_of_date IS NOT NULL
+    ),
+    ADD CONSTRAINT ck_ops_expected_task_contract_freshness_status CHECK (
+        dataset_contract_key IS NULL
+        OR plan_status <> 'DUE'
+        OR freshness_status IS NOT NULL
+    ),
     ADD CONSTRAINT ck_ops_expected_task_verified_as_of CHECK (
-        freshness_status NOT IN ('FRESH', 'STALE')
-        OR actual_as_of_date IS NOT NULL
+        freshness_status IS NULL
+        OR (
+            freshness_status = 'UNKNOWN'
+            AND (
+                observed_at IS NULL
+                OR actual_as_of_date IS NULL
+                OR actual_as_of_date > expected_as_of_date
+            )
+        )
+        OR (
+            freshness_status = 'FRESH'
+            AND expected_as_of_date IS NOT NULL
+            AND actual_as_of_date IS NOT NULL
+            AND actual_as_of_date = expected_as_of_date
+        )
+        OR (
+            freshness_status = 'STALE'
+            AND expected_as_of_date IS NOT NULL
+            AND actual_as_of_date IS NOT NULL
+            AND actual_as_of_date < expected_as_of_date
+        )
     );
 
 COMMENT ON COLUMN ops_expected_task.dataset_contract_key IS
@@ -71,7 +109,7 @@ COMMENT ON COLUMN ops_expected_task.collected_at IS
 'task 범위의 immutable 수집 산출물과 로그가 저장되어 관측 가능해진 UTC 시각. 벤더 기준일이 아니다.';
 
 COMMENT ON COLUMN ops_expected_task.observed_at IS
-'계약과 evidence를 비교해 freshness를 평가한 UTC 시각. freshness가 적용되지 않은 행은 NULL이다.';
+'계약과 evidence를 비교해 freshness를 평가한 UTC 시각. Monitor 평가 전 UNKNOWN 또는 freshness 비적용 행은 NULL이다.';
 
 COMMENT ON COLUMN ops_expected_task.freshness_status IS
 '데이터 기준일 상태의 독립 축: UNKNOWN·FRESH·STALE. NULL은 NOT_APPLICABLE이며 UNKNOWN과 다르다.';
