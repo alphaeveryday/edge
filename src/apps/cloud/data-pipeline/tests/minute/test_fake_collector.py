@@ -141,6 +141,13 @@ class TestPriceScenarioValidation:
                 {"generation": 2, "correction": {"unit_ids": ["100000"]}}, seed=1
             )
 
+    def test_correction_with_empty_units_fails_loud(self):
+        # 빈 unit_ids 는 generation/delta 가드를 모두 우회한다
+        with pytest.raises(ValueError, match="unit_ids"):
+            FakePriceCollector(
+                {"generation": 2, "correction": {"unit_ids": [], "close_delta": 7}}, seed=1
+            )
+
     def test_correction_overlapping_missing_fails_loud(self):
         # missing unit 은 bar 를 안 만드니 정정이 물리적으로 불가능하다
         with pytest.raises(ValueError, match="같은 unit"):

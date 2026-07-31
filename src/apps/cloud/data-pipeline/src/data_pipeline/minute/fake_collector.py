@@ -79,6 +79,9 @@ class FakePriceCollector:
         self._no_trade = _id_set(scenario, "no_trade_unit_ids", "price")
         self._stale = _id_set(scenario, "stale_unit_ids", "price")
         self._correction_units = _id_set(correction, "unit_ids", "price.correction")
+        if correction and not self._correction_units:
+            # 빈 대상 correction 블록은 generation/delta 가드를 모두 우회한다
+            raise ValueError("correction 블록에 unit_ids 가 비어 있다")
         # 한 unit 이 두 역할이면 분기 순서가 시나리오 의미를 임의로 정한다 — 배타 강제.
         # correction 은 bar 를 만드는 unit 에만 의미가 있으므로 missing/no_trade 와 배타
         # (stale 과의 조합은 유효 — stale bar 의 값 정정).
