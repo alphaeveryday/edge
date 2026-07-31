@@ -317,3 +317,15 @@ class TestWatermarkWiring:
         last_end = max(w["window_end"] for w in db.windows.values())
         assert session["processed_through"] == last_end
         assert session["contiguous_complete_through"] == last_end
+
+    def test_artifact_immutability_violation_propagates(self, tmp_path):
+        # 같은 세대 key 에 다른 바이트 = 결정성 붕괴 — window 실패로 위장해 영구
+        # 재시도하지 않고 크게 죽는다
+        from data_pipeline.lake.storage import raw_price_minute_artifact_key
+        from data_pipeline.minute.artifacts import ArtifactImmutabilityError
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        worker.storage.put_bytes(key, b"corrupted-preexisting")
+        with pytest.raises(ArtifactImmutabilityError):
+            worker.tick(NOW)

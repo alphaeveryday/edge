@@ -29,6 +29,7 @@ from ..lake.storage import (
     raw_price_minute_artifact_key,
 )
 from .artifacts import (
+    ArtifactImmutabilityError,
     build_window_manifest,
     put_immutable,
     serialize_manifest,
@@ -278,9 +279,9 @@ class PriceWorker:
                 destination=cfg.destination, artifact_generation=generation,
             )
             return True
-        except GenerationMismatchError:
-            # 결정적 예측의 불변식 위반 — 재시도해도 똑같이 실패하며 잘못된 세대
-            # artifact 만 쌓인다. 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+        except (GenerationMismatchError, ArtifactImmutabilityError):
+            # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
+            # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
             raise
         except CommitRejectedError:
             # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
