@@ -142,17 +142,32 @@ class JobLedger:
         )
         return cur.fetchone() is not None
 
-    def insert_news_job(self, **identity) -> tuple[str, bool]:
+    def insert_news_job(
+        self, *, source_code: str, article_id: str, input_fingerprint: str,
+        tagger_version: str, ontology_version: str,
+    ) -> tuple[str, bool]:
         """identity UNIQUE 충돌은 no-op — (job_id, created)."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            return self._insert_news_job_tx(cur, **identity)
+            return self._insert_news_job_tx(
+                cur, source_code=source_code, article_id=article_id,
+                input_fingerprint=input_fingerprint, tagger_version=tagger_version,
+                ontology_version=ontology_version,
+            )
 
-    def insert_price_job(self, **identity) -> tuple[str, bool]:
+    def insert_price_job(
+        self, *, session_id: str, window_start: datetime, generation: int,
+        trigger_schema_version: str,
+    ) -> tuple[str, bool]:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            return self._insert_price_job_tx(cur, **identity)
+            return self._insert_price_job_tx(
+                cur, session_id=session_id, window_start=window_start,
+                generation=generation, trigger_schema_version=trigger_schema_version,
+            )
 
     def enqueue_news_job(
-        self, *, destination: str, payload: dict, generation: int = 1, **identity,
+        self, *, destination: str, payload: dict, source_code: str, article_id: str,
+        input_fingerprint: str, tagger_version: str, ontology_version: str,
+        generation: int = 1,
     ) -> tuple[str, bool]:
         """job + wake-up event 를 **한 트랜잭션**에 INSERT — 사이에서 죽어도 유실 0.
 
@@ -160,7 +175,11 @@ class JobLedger:
         이전 시도가 job 만 남기고 죽었어도 재호출이 event 를 self-heal 한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            job_id, created = self._insert_news_job_tx(cur, **identity)
+            job_id, created = self._insert_news_job_tx(
+                cur, source_code=source_code, article_id=article_id,
+                input_fingerprint=input_fingerprint, tagger_version=tagger_version,
+                ontology_version=ontology_version,
+            )
             self._insert_outbox_tx(
                 cur,
                 event_id=build_event_id(NEWS_EVENT_TYPE, job_id),
@@ -313,10 +332,16 @@ class JobLedger:
         )
 
     # ── outbox ────────────────────────────────────────────────
-    def insert_outbox_event(self, **event) -> bool:
+    def insert_outbox_event(
+        self, *, event_id: str, event_type: str, destination: str,
+        aggregate_id: str, generation: int, payload: dict,
+    ) -> bool:
         """ON CONFLICT (event_id) DO NOTHING — 같은 논리 사건의 재삽입은 no-op."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            return self._insert_outbox_tx(cur, **event)
+            return self._insert_outbox_tx(
+                cur, event_id=event_id, event_type=event_type, destination=destination,
+                aggregate_id=aggregate_id, generation=generation, payload=payload,
+            )
 
     def claim_outbox_batch(
         self, *, relay_id: str, now: datetime, limit: int, lease_seconds: int,

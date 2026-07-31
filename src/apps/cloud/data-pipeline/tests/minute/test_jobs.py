@@ -340,9 +340,12 @@ class TestAtomicEnqueue:
         # job 확정과 wake-up event 는 한 트랜잭션 — 사이에서 죽으면 event 유실
         db = FakeMinuteDB()
         ledger = make_ledger(db)
+        before = db.connect_calls
         job_id, created = ledger.enqueue_news_job(
             destination="news-extraction-realtime", payload={"k": "v"}, **NEWS_IDENTITY,
         )
+        # 트랜잭션(=connect) 1회 — 회귀로 insert 가 커넥션을 따로 열면 여기서 터진다
+        assert db.connect_calls == before + 1
         assert created is True
         assert ("news", job_id) in db.jobs
         assert f"{NEWS_EVENT_TYPE}:{job_id}:0" in db.outbox

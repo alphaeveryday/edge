@@ -22,6 +22,7 @@ class FakeMinuteDB:
         self.jobs: dict[tuple, dict] = {}     # (kind, job_id) -> row
         self.outbox: dict[str, dict] = {}     # event_id -> row
         self._seq = 0                          # created_at 순서 흉내
+        self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
     def next_seq(self):
         self._seq += 1
@@ -37,6 +38,7 @@ class FakeMinuteDB:
 
     @contextmanager
     def connect(self, _db):
+        self.connect_calls += 1
         yield _Conn(self)
 
 
