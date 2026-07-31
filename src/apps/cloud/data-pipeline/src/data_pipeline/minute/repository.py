@@ -172,6 +172,26 @@ class MinuteLedger:
             return cur.rowcount == 1
 
     # ── window claim ──────────────────────────────────────────
+    @staticmethod
+    def _fence_holds(cur, session_id: str, fence_token: int) -> bool:
+        """session 행을 잠그고 fence 를 검사한다.
+
+        비잠금 조인으로 검사하면 READ COMMITTED 스냅샷이 token 증가 **이전**을 볼 수
+        있어, 새 Worker 가 fence 를 가져간 뒤에도 구 Worker 의 쓰기가 통과한다(P1).
+        FOR UPDATE 로 잠그면 이 트랜잭션이 끝날 때까지 fence 교체(acquire)가 블록되므로
+        검사와 쓰기가 직렬화된다. session 당 Worker 는 하나라 경합 비용은 heartbeat 뿐.
+        """
+        cur.execute(
+            """
+            SELECT worker_fencing_token FROM minute_ingestion_session
+            WHERE session_id = %s
+            FOR UPDATE
+            """,
+            (session_id,),
+        )
+        row = cur.fetchone()
+        return row is not None and row[0] == fence_token
+
     def claim_due_window(
         self,
         *,
@@ -192,6 +212,8 @@ class MinuteLedger:
         도착한 옛 attempt 의 결과가 기록을 통과한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            if not self._fence_holds(cur, session_id, fence_token):
+                return None
             cur.execute(
                 """
                 UPDATE minute_ingestion_window w
@@ -202,9 +224,7 @@ class MinuteLedger:
                 WHERE (w.session_id, w.window_start) = (
                     SELECT c.session_id, c.window_start
                     FROM minute_ingestion_window c
-                    JOIN minute_ingestion_session s ON s.session_id = c.session_id
                     WHERE c.session_id = %s
-                      AND s.worker_fencing_token = %s
                       AND c.scheduled_at <= %s
                       AND (c.data_status = %s
                            OR (c.data_status = %s AND c.lease_expires_at < %s))
@@ -217,7 +237,7 @@ class MinuteLedger:
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
-                 session_id, fence_token, now, WINDOW_DUE, WINDOW_CLAIMED, now),
+                 session_id, now, WINDOW_DUE, WINDOW_CLAIMED, now),
             )
             row = cur.fetchone()
             if row is None:
@@ -262,6 +282,8 @@ class MinuteLedger:
         if data_status not in RESULT_STATUSES:
             raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            if not self._fence_holds(cur, session_id, fence_token):
+                return False
             cur.execute(
                 """
                 UPDATE minute_ingestion_window w
@@ -273,16 +295,13 @@ class MinuteLedger:
                     missing_units = %s::jsonb, stage_timestamps = %s::jsonb,
                     claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL,
                     updated_at = now()
-                FROM minute_ingestion_session s
                 WHERE w.session_id = %s AND w.window_start = %s
-                  AND s.session_id = w.session_id
                   AND w.claimed_by = %s AND w.claim_token = %s
-                  AND s.worker_fencing_token = %s
                 """,
                 (data_status, expected_unit_count, succeeded_unit_count, failed_unit_count,
                  record_count, checksum, checksum, manifest_uri, manifest_checksum,
                  None if missing_units is None else json.dumps(missing_units),
                  json.dumps(stage_timestamps, ensure_ascii=False),
-                 session_id, window_start, worker_id, claim_token, fence_token),
+                 session_id, window_start, worker_id, claim_token),
             )
             return cur.rowcount == 1

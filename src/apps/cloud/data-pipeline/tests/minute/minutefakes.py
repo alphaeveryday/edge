@@ -61,6 +61,8 @@ class _Cursor:
         self.rowcount = 0
         if s.startswith("INSERT INTO minute_ingestion_session"):
             self._insert_session(params)
+        elif s.startswith("SELECT worker_fencing_token"):
+            self._fence_select(params)
         elif s.startswith("SELECT session_id, universe_version"):
             self._select_session(params)
         elif s.startswith("INSERT INTO minute_ingestion_window"):
@@ -73,7 +75,7 @@ class _Cursor:
             self._heartbeat(params)
         elif "FOR UPDATE OF c SKIP LOCKED" in s:
             self._claim_window(params)
-        elif "FROM minute_ingestion_session s WHERE w.session_id" in s:
+        elif s.startswith("UPDATE minute_ingestion_window w SET data_status = %s, expected_unit_count"):
             self._record_outcome(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
@@ -120,6 +122,12 @@ class _Cursor:
         )
         self.rowcount = 1
 
+    def _fence_select(self, p):
+        # SELECT ... FOR UPDATE — 단일 스레드 fake 라 락 자체는 no-op, 값만 준다
+        row = self.db.sessions.get(p[0])
+        if row is not None:
+            self._rows = [(row["worker_fencing_token"],)]
+
     # ── fence ──
     def _acquire_fence(self, p):
         lease_until, now, session_id, now2 = p
@@ -147,10 +155,8 @@ class _Cursor:
     # ── window claim / outcome ──
     def _claim_window(self, p):
         (claimed_status, worker_id, lease_until,
-         session_id, fence_token, now, due_status, claimed_filter, now2) = p
-        session = self.db.sessions.get(session_id)
-        if session is None or session["worker_fencing_token"] != fence_token:
-            return
+         session_id, now, due_status, claimed_filter, now2) = p
+        # fence 검사는 repository 가 _fence_holds(SELECT FOR UPDATE)로 먼저 한다
         candidates = [
             w for w in self.db.windows.values()
             if w["session_id"] == session_id and w["scheduled_at"] <= now
@@ -173,14 +179,13 @@ class _Cursor:
     def _record_outcome(self, p):
         (data_status, expected, succeeded, failed, records, checksum_case, checksum,
          manifest_uri, manifest_checksum, missing_units, stage_timestamps,
-         session_id, window_start, worker_id, claim_token, fence_token) = p
-        session = self.db.sessions.get(session_id)
+         session_id, window_start, worker_id, claim_token) = p
         window = self.db.windows.get((session_id, window_start))
+        # fence 검사는 repository 가 _fence_holds 로 먼저 한다 — 여기선 claim 만 검사
         if (
-            session is None or window is None
+            window is None
             or window["claimed_by"] != worker_id
             or window["claim_token"] != claim_token
-            or session["worker_fencing_token"] != fence_token
         ):
             return
         # CASE WHEN w.checksum IS NOT DISTINCT FROM %s — 같은 checksum 은 generation 불변
