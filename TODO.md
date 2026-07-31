@@ -44,6 +44,5 @@
 - [ ] 온프렘 릴리스 절차 문서화 — Rule Type 배포가 "소프트웨어 릴리스"인데 버전 정책·업그레이드 방법 미정
 
 ## 6. 인프라
-- [ ] **데모 온프렘 박스 하드닝** (ALPHA-445 코멘트에 상세) — ① sync mTLS 클라이언트 cert·인증서-테넌트 바인딩(현재 평문 HTTPS·`TenantResolver` 고정 1) ② compose 네트워크 세분화(ADR-0036 dmz/data/serving — 현재 단일망이라 sync-agent 가 DB 도달) ③ 박스 instance role ECR pull 스코핑(현재 `Resource=["*"]`). 데모는 동작하나 프로덕션급 신뢰경계엔 필요
+- [ ] **데모 온프렘 박스 하드닝 — sync mTLS 잔여** (**ALPHA-447**, 스프린트7 · ALPHA-445 코멘트에 상세) — 클라이언트 cert·인증서-테넌트 바인딩(현재 평문 HTTPS·`TenantResolver` 고정 1). 데모는 동작하나 프로덕션급 신뢰경계엔 필요
 - [ ] GitHub repo vars 수동 삭제 — `WIDGET_UI_BUCKET`·`WIDGET_UI_DISTRIBUTION_ID` (widget-ui CD 제거로 미사용)
-- [ ] S3 gateway VPC endpoint 적용 — NAT 비용 절감 (**ALPHA-349**, 백로그)
