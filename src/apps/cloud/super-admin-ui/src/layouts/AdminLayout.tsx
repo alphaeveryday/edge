@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Icon, Modal, Toaster, toast } from 'ui-kit';
+import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
@@ -237,7 +237,10 @@ export function AdminLayout() {
 
         {/* pathname key로 리마운트 — 라우트 이동 시 스크롤 위치가 이전 화면 것을 물려받지 않게 */}
         <main key={path} className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+          {/* 렌더 예외를 흰 화면 대신 안내 카드로 — key 리마운트가 라우트 전환 시 리셋한다 */}
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
 

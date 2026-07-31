@@ -6,9 +6,9 @@ import { LoadError } from './_shared/LoadError';
 
 export function TenantDetailPage() {
   const { id } = useParams();
-  const { tenant: t, isPending, isError } = useTenant(id);
+  const { tenant: t, isPending, isError, error } = useTenant(id);
 
-  if (isError) return <LoadError />;
+  if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={5} />;
   if (!t) {
     return (
