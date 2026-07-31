@@ -97,6 +97,9 @@ class FakePriceCollector:
         close_delta = correction.get("close_delta", 0)
         if isinstance(close_delta, bool) or not isinstance(close_delta, int):
             raise ValueError(f"price.correction.close_delta 는 정수여야 한다: {close_delta!r}")
+        if self._correction_units and close_delta == 0:
+            # delta 0 이면 값이 안 바뀐다 — generation 만 올라가는 무의미한 "정정" 차단
+            raise ValueError("correction 을 선언했으면 close_delta 는 0 이 아니어야 한다")
         self._close_delta = close_delta
 
     def _declared_units(self) -> frozenset[str]:
@@ -208,8 +211,9 @@ class FakeNewsFeed:
         _require_known_keys(scenario, _NEWS_SCENARIO_KEYS, "news")
         self._seed = seed
         date_value = scenario.get("date_yyyymmdd", "20260731")
-        if not isinstance(date_value, str):
-            raise ValueError(f"news.date_yyyymmdd 는 문자열이어야 한다: {date_value!r}")
+        if not isinstance(date_value, str) or len(date_value) != 8 or not date_value.isdigit():
+            # strptime 은 zero-padding 을 강제하지 않아 "2026731" 도 파싱된다 — 자릿수 먼저
+            raise ValueError(f"news.date_yyyymmdd 는 8자리 숫자여야 한다: {date_value!r}")
         try:
             datetime.strptime(date_value, "%Y%m%d")
         except ValueError as error:

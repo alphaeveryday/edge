@@ -134,6 +134,13 @@ class TestPriceScenarioValidation:
                 {"correction": {"unit_ids": ["100000"], "close_delta": 7}}, seed=1
             )
 
+    def test_correction_with_zero_delta_fails_loud(self):
+        # delta 0 이면 generation 만 올라가고 값은 그대로 — 무의미한 정정 차단
+        with pytest.raises(ValueError, match="close_delta"):
+            FakePriceCollector(
+                {"generation": 2, "correction": {"unit_ids": ["100000"]}}, seed=1
+            )
+
     def test_correction_overlapping_missing_fails_loud(self):
         # missing unit 은 bar 를 안 만드니 정정이 물리적으로 불가능하다
         with pytest.raises(ValueError, match="같은 unit"):
@@ -284,6 +291,9 @@ class TestNewsFeed:
     def test_invalid_calendar_date_fails_loud(self):
         with pytest.raises(ValueError, match="달력일"):
             FakeNewsFeed({"initial_count": 1, "date_yyyymmdd": "20261399"}, seed=7)
+        # strptime 은 미패딩("2026731")도 파싱한다 — 자릿수 강제까지 확인
+        with pytest.raises(ValueError, match="8자리"):
+            FakeNewsFeed({"initial_count": 1, "date_yyyymmdd": "2026731"}, seed=7)
 
     def test_anchor_miss_burst_exceeds_page_budget(self):
         # burst 가 MAX_PAGES×page_size 를 넘으면 anchor 에 못 닿는다 → INCOMPLETE 경로 입력
