@@ -115,16 +115,31 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
 
 
 def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
-    """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**"""
+    """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**
+
+    형태가 어긋난 산출(`edges: [null]`·스칼라 루트 등)도 여기서 전부 `PipelineError` 로
+    정규화한다. 타입이 갈리면 호출부(`run.explain`)의 되먹임이 그 예외를 못 알아보고
+    그대로 새어 나가, AnalyzeOne 하나가 유니버스 전체 런을 죽인다(ALPHA-633).
+    """
+    if not isinstance(out, dict):
+        raise PipelineError(f"제안이 객체가 아니다: {type(out).__name__}")
     nodes = out.get("nodes")
     if not isinstance(nodes, dict):
         raise PipelineError(f"제안에 nodes 가 없다: {sorted(out)[:6]}")
+    edges = out.get("edges") or []
+    if not isinstance(edges, list):
+        raise PipelineError(f"제안의 edges 가 목록이 아니다: {type(edges).__name__}")
     designs: list[EdgeDesign] = []
-    for i, e in enumerate(out.get("edges") or []):
+    for i, e in enumerate(edges):
+        if not isinstance(e, dict):
+            raise PipelineError(f"간선 {i} 가 객체가 아니다: {type(e).__name__}")
         if e.get("kind") == "bidirected":
             continue                      # 양방향은 설계가 아니라 가정이다
         for key in ("from", "to", "treated", "control"):
-            if not (e.get(key) or "").strip():
+            value = e.get(key)
+            # 문자열이 아닌 값(숫자·객체)도 여기서 걸러야 한다 - `.strip()` 이 터지면
+            # PipelineError 가 아니라 AttributeError 라 되먹임 대상이 못 된다.
+            if not isinstance(value, str) or not value.strip():
                 raise PipelineError(f"간선 {i} 에 {key} 가 없다")
         strata = e.get("strata") or "date"
         if strata not in STRATA:
@@ -135,7 +150,10 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
             because=e.get("because") or "", false_if=e.get("false_if") or "",
             timing=e.get("timing") or "unscheduled",
             cause_label=e.get("cause_label") or e["from"]))
-    missing = [str(m) for m in (out.get("missing") or [])]
+    raw_missing = out.get("missing") or []
+    if not isinstance(raw_missing, list):
+        raise PipelineError(f"제안의 missing 이 목록이 아니다: {type(raw_missing).__name__}")
+    missing = [str(m) for m in raw_missing]
     return nodes, designs, missing
 
 

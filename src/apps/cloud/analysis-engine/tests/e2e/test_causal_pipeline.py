@@ -23,8 +23,8 @@ import pytest
 
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.causal import agents
-from edge_analysis.config import PipelineError
 from edge_analysis.causal.run import explain
+from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import (
     Decomposition,
     EventContext,
@@ -216,6 +216,9 @@ PROPOSAL_EMPTY = {"nodes": _nodes(), "edges": [], "missing": ["장중 체결 흐
 # 계약 위반: treated 가 비었다. 2026-07-29·07-30 런을 죽인 실제 산출 모양이다
 # (`간선 N 에 treated 가 없다`) - agents.parse 가 PipelineError 로 거부한다.
 PROPOSAL_NO_TREATED = {"nodes": _nodes(), "edges": [{**_edge(), "treated": ""}], "missing": []}
+# 형태 붕괴: 간선이 객체가 아니다. 정규화 안 하면 `e.get` 이 AttributeError 를 내는데,
+# 그건 PipelineError 가 아니라 되먹임이 못 알아보고 런이 죽는다.
+PROPOSAL_EDGE_NOT_OBJECT = {"nodes": _nodes(), "edges": [None], "missing": []}
 
 
 class SequenceClient:
@@ -632,3 +635,20 @@ def test_transport_error_still_fails_loud():
 
     with pytest.raises(PipelineError, match="402"):
         _explain(FakeCausalData(), _DeadClient(), candidates=_candidates(SHARE))
+
+
+def test_malformed_edge_shape_is_also_fed_back_not_raised():
+    """형태가 무너진 산출도 되먹임 대상이다 - 타입이 갈리면 되먹임이 못 알아본다.
+
+    WHY: `agents.parse` 가 결측 필드만 PipelineError 로 정규화하고 `edges: [null]` 같은
+    형태 붕괴는 `AttributeError` 로 흘리면, run.explain 의 `except PipelineError` 를
+    그대로 지나쳐 AnalyzeOne 이 죽고 유니버스 전체 런이 FAILED 된다. 게이트가 거르는
+    모든 위반은 **한 타입으로** 나와야 호출부가 다룰 수 있다.
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_EDGE_NOT_OBJECT, PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))   # AttributeError 면 여기서 깨진다
+
+    assert client.calls == 2, "형태 붕괴가 되먹임 재질의를 못 만들었다"
+    assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
