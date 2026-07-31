@@ -272,7 +272,7 @@ class MinuteLedger:
                     FOR UPDATE OF c SKIP LOCKED
                 )
                 RETURNING w.window_start, w.window_end, w.generation,
-                          w.attempt_count, w.claim_token
+                          w.checksum, w.attempt_count, w.claim_token
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
@@ -286,8 +286,11 @@ class MinuteLedger:
                 "window_start": row[0],
                 "window_end": row[1],
                 "generation": row[2],
-                "attempt_count": row[3],
-                "claim_token": row[4],
+                # Worker 가 세대를 **결정적으로** 예측하는 재료: 새 checksum 이 이 값과
+                # 같으면 세대 불변, 다르면 +1 — 예측이 틀리면 commit 이 rollback 한다
+                "checksum": row[3],
+                "attempt_count": row[4],
+                "claim_token": row[5],
             }
 
     # ── window 결과 기록 (PR 3 commit transaction 의 window 조각) ──────

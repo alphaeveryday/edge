@@ -298,3 +298,16 @@ class TestOrphanGenerations:
             source="toss", market="KR", session_date="2026-07-31",
         )
         assert orphans == [gen3]  # 커밋 세대(2)보다 높은 것만 orphan
+
+    def test_malformed_key_listed_not_fatal(self, tmp_path):
+        # 형식 밖 키 하나가 스캔을 죽이면 다른 orphan 이 안 보인다 — 나열로 일관 처리
+        db, ledger, session_id, token, claim = ready_session()
+        storage = LocalStorage(root=tmp_path)
+        bad = ("raw/source=toss/dataset=price_minute/market=KR/session_date=2026-07-31"
+               "/window=0900/generation=abc/bars.ndjson")
+        storage.put_bytes(bad, b"junk")
+        orphans = find_orphan_artifacts(
+            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
+            source="toss", market="KR", session_date="2026-07-31",
+        )
+        assert orphans == [bad]

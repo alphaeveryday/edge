@@ -50,9 +50,11 @@ class CommitRejectedError(RuntimeError):
 class GenerationMismatchError(RuntimeError):
     """artifact 를 PUT 한 세대와 DB 가 확정한 세대가 다르다 — 아무것도 커밋되지 않았다.
 
-    호출자(Worker)는 DB 기대 세대로 key 를 다시 만들어 PUT 하고 commit 을 재시도한다.
-    대조 없이 진행하면 window/job/outbox 세대와 manifest_uri 세대가 어긋나 정상
-    artifact 가 orphan 으로 오인된다.
+    claim 이 현재 (generation, checksum) 을 돌려주므로 Worker 의 세대 예측은
+    결정적이다(같은 checksum=불변, 다르면 +1) — 이 예외는 정상 경로에서 도달하지
+    않는 불변식 위반이다. 도달했다면 잘못된 세대 key 에 PUT 된 artifact 가 남는데,
+    orphan 검출이 나열하고 EOD QC 가 격리한다(그때까지 그 세대의 정정이 막힐 수
+    있다 — put_immutable 이 다른 바이트 덮어쓰기를 거부하므로).
     """
 
 
@@ -93,6 +95,11 @@ class MinuteCommitter:
         멱등성은 아래에서 나온다 — 재실행 같은 checksum 이면 generation 불변 →
         같은 job_id/event_id → ON CONFLICT no-op(outbox 재발행 없음). correction 은
         generation+1 → 새 job/event 1개.
+
+        잠금 순서 천장: 이 경로는 session→window→job, price claim(jobs.py)은
+        job→window 순이라 드문 교차에서 PG 가 한쪽을 deadlock abort 할 수 있다 —
+        양쪽 호출자(Worker/Consumer 루프)는 실패를 다음 tick 에 재시도하므로 자가
+        회복된다. 순서 통일은 실측(계획 §16)에서 빈도가 나오면 한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             phase = MinuteLedger._fenced_phase(cur, session_id, fence_token)
@@ -191,8 +198,16 @@ def find_orphan_artifacts(
         parts = dict(
             segment.split("=", 1) for segment in key.split("/") if "=" in segment
         )
-        window_hhmm = parts.get("window", "")
-        generation = int(parts.get("generation", "0"))
+        window_hhmm = parts.get("window")
+        try:
+            generation = int(parts.get("generation", ""))
+        except ValueError:
+            generation = None
+        if window_hhmm is None or generation is None:
+            # 관리 prefix 의 형식 밖 키 — 한 개가 스캔 전체를 죽이면 안 되고,
+            # 조용히 건너뛰면 잔재가 영영 안 보인다 → orphan 으로 나열(일관 정책)
+            orphans.append(key)
+            continue
         if committed.get(window_hhmm) is None or generation > committed[window_hhmm]:
             orphans.append(key)
     return sorted(orphans)

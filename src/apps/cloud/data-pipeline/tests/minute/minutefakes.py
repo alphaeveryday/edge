@@ -239,8 +239,8 @@ class _Cursor:
             lease_expires_at=lease_until, attempt_count=attempt,
         )
         self._rows = [
-            (window["window_start"], window["window_end"],
-             window["generation"], window["attempt_count"], window["claim_token"])
+            (window["window_start"], window["window_end"], window["generation"],
+             window.get("checksum"), window["attempt_count"], window["claim_token"])
         ]
 
     def _record_outcome(self, p):
