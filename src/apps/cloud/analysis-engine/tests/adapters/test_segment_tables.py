@@ -186,3 +186,47 @@ def test_a_table_without_a_revenue_header_yields_nothing_instead_of_guessing():
     assert parse_table(other) == []
     assert parse_table("") == []
     assert parse_table("<TABLE></TABLE>") == []
+
+
+def test_a_revenue_breakdown_without_a_segment_header_is_not_adopted():
+    """부문 머리가 없는 표는 **부문 표가 아니다.**
+
+    WHY: 0번 열로 떨어뜨리면 매출을 종류별로 쪼갠 평범한 표(`구분 | 매출액`)가 부문 표로
+    채택된다. 합계가 맞으니 자기검사도 통과시키고, 그러면 부문이 아닌 것이 부문 노출도로
+    코호트에 흘러들어 노출도 회귀가 조용히 틀린 답을 낸다.
+    """
+    kinds = """<TABLE><TR><TH>구분</TH><TH>매출액</TH></TR>
+               <TR><TD>제품</TD><TD>60,000</TD></TR>
+               <TR><TD>상품</TD><TD>40,000</TD></TR>
+               <TR><TD>합계</TD><TD>100,000</TD></TR></TABLE>"""
+
+    assert parse_table(kinds) == [], "부문 선언이 없는 표가 채택됐다"
+
+
+def test_a_segment_named_with_the_total_syllable_is_still_a_segment():
+    """`기계부문` 은 합계가 아니다.
+
+    WHY: `계` 를 부분문자열로 찾으면 그 음절을 품은 정상 부문명이 합계로 접혀 `parts` 에서
+    빠진다. 그러면 부문 합이 총계보다 작아져 **정상 표가 자기검사에서 떨어진다**(60% 갭).
+    단독 라벨 `계` 만 총계로 본다.
+    """
+    machines = """<TABLE><TR><TH>부문</TH><TH>매출액</TH></TR>
+                  <TR><TD>기계부문</TD><TD>60,000</TD></TR>
+                  <TR><TD>전자부문</TD><TD>40,000</TD></TR>
+                  <TR><TD>합계</TD><TD>100,000</TD></TR></TABLE>"""
+
+    rows = parse_table(machines)
+    assert [r["segment"] for r in rows if not r["is_total"]] == ["기계부문", "전자부문"]
+    assert check(rows)["매출액"]["ok"] is True
+
+
+def test_a_standalone_total_label_is_still_detected():
+    """반대 방향 - 단독 `계` 를 놓치면 총계가 부문으로 더해져 합이 두 배가 된다."""
+    bare_total = """<TABLE><TR><TH>부문</TH><TH>매출액</TH></TR>
+                    <TR><TD>기계부문</TD><TD>60,000</TD></TR>
+                    <TR><TD>전자부문</TD><TD>40,000</TD></TR>
+                    <TR><TD>계</TD><TD>100,000</TD></TR></TABLE>"""
+
+    rows = parse_table(bare_total)
+    assert [r["is_total"] for r in rows] == [False, False, True]
+    assert check(rows)["매출액"]["ok"] is True

@@ -31,7 +31,12 @@ _NUM = re.compile(r"[△▲\-(]?\s*\d[\d,]*(?:\.\d+)?\s*\)?")
 _GROUPED = re.compile(r"\d{1,3}(?:,\d{3})+")
 _PCT = re.compile(r"(△?\s*-?\d+(?:\.\d+)?)\s*%")
 
-TOTAL_WORDS = ("합계", "총계", "총 계", "계", "소계", "합 계")
+# 부분문자열로 찾아도 되는 총계 낱말. **`계` 는 여기 없다** - `기계부문`·`설계` 처럼
+# 그 음절을 품은 정상 부문명이 합계로 오인돼 `parts` 에서 빠지고, 그러면 부문 합이
+# 총계보다 작아져 자기검사가 정상 표를 떨어뜨린다(관측 60% 갭).
+TOTAL_WORDS = ("합계", "총계", "총 계", "소계", "합 계")
+# 단독 라벨일 때만 총계로 보는 낱말. 칸 전체가 이것이어야 한다.
+TOTAL_EXACT = ("계",)
 SEG_WORDS = ("부문", "사업부문", "사업 부문", "세그먼트", "부  문")
 REV_WORDS = ("매출액", "매출", "영업수익", "수익")
 SHARE_WORDS = ("비중", "비율", "구성비")
@@ -139,6 +144,8 @@ def _is_total_row(row: list[str], upto: int) -> bool:
         t = (c or "").replace(" ", "")
         if any(w.replace(" ", "") in t for w in TOTAL_WORDS):
             return True
+        if t in TOTAL_EXACT:
+            return True
     return False
 
 
@@ -165,7 +172,17 @@ def parse_table(table_xml: str) -> list[dict]:
         parts = [p for p in h.split("\n") if p.strip()]
         return parts[-1] if parts else ""
 
-    seg_col = next((i for i, h in enumerate(head) if any(w in h for w in SEG_WORDS)), 0)
+    # **부문 머리행이 없으면 포기한다.** 0번 열로 떨어뜨리면 `구분 | 매출액` 처럼 매출을
+    # 종류별로 쪼갠 평범한 표가 부문 표로 채택된다 - 자기검사는 합계가 맞으니 통과시키고,
+    # 그러면 부문이 아닌 것이 부문 노출도로 코호트에 흘러든다. 이 파서의 전제는 추측하지
+    # 않는 것이므로, 열의 정체가 선언되지 않은 표는 채택하지 않는다.
+    #
+    # 공백을 지우고 맞춘다 - 실측 머리 셀이 `부  문`(자간 벌린 것)이고 격자가 그것을
+    # `부 문` 으로 정규화한다. 낱말 목록에 변형을 하나씩 더하는 것으로는 못 따라간다.
+    seg_col = next((i for i, h in enumerate(head)
+                    if any(w.replace(" ", "") in h.replace(" ", "") for w in SEG_WORDS)), -1)
+    if seg_col < 0:
+        return []
     rev_cols = [i for i, h in enumerate(head)
                 if any(w in h for w in REV_WORDS) and i != seg_col
                 and not any(w in _leaf(h) for w in SHARE_WORDS)]
