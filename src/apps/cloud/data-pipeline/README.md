@@ -37,7 +37,8 @@
 > fake collector·virtual clock 기반층(`minute/`, ALPHA-660)과 cloud 원장 스키마 6테이블
 > (session·window·news item/job·price job·outbox, ALPHA-661 — 상태 어휘는
 > `minute/states.py` 가 SQL CHECK 와 기계 동기화)과 session/window repository
-> (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
+> (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)과 job/outbox
+> repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
 > 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
