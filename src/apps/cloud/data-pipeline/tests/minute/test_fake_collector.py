@@ -33,8 +33,8 @@ def make_request(run_id=None, session_id=None) -> CollectionRequest:
         dataset="price_minute",
         window_start=start,
         window_end=start + timedelta(minutes=1),
-        run_id=run_id or uuid4(),
-        session_id=session_id or uuid4(),
+        run_id=run_id or f"run_{uuid4().hex}",
+        session_id=session_id or f"msn_{uuid4().hex}",
         execution_mode="resident",
         universe_version=UNIVERSE.universe_version,
         unit_ids=UNIVERSE.unit_ids,
@@ -47,7 +47,7 @@ NOW = datetime(2026, 7, 31, 9, 1, 5, tzinfo=KST)
 
 class TestPriceDeterminism:
     def test_same_seed_same_request_same_checksum(self):
-        run_id, session_id = uuid4(), uuid4()
+        run_id, session_id = f"run_{uuid4().hex}", f"msn_{uuid4().hex}"
         request = make_request(run_id, session_id)
         first, records_first, _ = FakePriceCollector(
             scenario("price_normal.json"), seed=42
@@ -70,7 +70,7 @@ class TestPriceDeterminism:
 
     def test_clock_change_does_not_change_checksum(self):
         # 계획 §6: 현재 시각을 바꿔도 explicit window 결과는 동일해야 한다
-        request = make_request(uuid4(), uuid4())
+        request = make_request(f"run_{uuid4().hex}", f"msn_{uuid4().hex}")
         collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
         early, _, _ = collector.collect(request, NOW)
         late, _, _ = collector.collect(request, NOW + timedelta(hours=3))
@@ -82,7 +82,7 @@ class TestPriceDeterminism:
     def test_same_instant_different_tz_same_records(self):
         # 같은 순간을 KST 로 주든 UTC 로 주든 결과가 같아야 한다 — digest 가
         # str(datetime) 표현이 아니라 UTC 정규화 값에서 유도됨을 고정한다
-        run_id, session_id = uuid4(), uuid4()
+        run_id, session_id = f"run_{uuid4().hex}", f"msn_{uuid4().hex}"
         kst_request = make_request(run_id, session_id)
         utc_request = kst_request.model_copy(
             update={
@@ -99,7 +99,7 @@ class TestPriceDeterminism:
     def test_unit_order_does_not_change_checksum(self):
         # universe_hash 가 순서 무관이듯 window 데이터 identity 도 순서 무관이어야 한다 —
         # 같은 멤버십의 다른 순서가 다른 checksum 이면 허위 correction 이 생긴다
-        run_id, session_id = uuid4(), uuid4()
+        run_id, session_id = f"run_{uuid4().hex}", f"msn_{uuid4().hex}"
         request = make_request(run_id, session_id)
         shuffled = request.model_copy(update={"unit_ids": tuple(reversed(request.unit_ids))})
         collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
@@ -110,7 +110,7 @@ class TestPriceDeterminism:
     def test_checksum_derives_from_data_not_generation(self):
         # 값이 같은 재실행(generation 만 증가)은 같은 checksum 이어야 한다 — 이게 깨지면
         # "같은 checksum → artifact 재사용·generation 불변" 판정(계획 §8)이 성립 안 한다
-        request = make_request(uuid4(), uuid4())
+        request = make_request(f"run_{uuid4().hex}", f"msn_{uuid4().hex}")
         first, _, _ = FakePriceCollector(scenario("price_normal.json"), seed=42).collect(
             request, NOW
         )
@@ -241,7 +241,7 @@ class TestPriceScenarios:
         assert all(r["ts"] < request.window_start for r in stale_records)
 
     def test_correction_changes_target_unit_only(self):
-        request = make_request(uuid4(), uuid4())
+        request = make_request(f"run_{uuid4().hex}", f"msn_{uuid4().hex}")
         config = scenario("price_correction.json")
         target_units = set(config["correction"]["unit_ids"])
         delta = config["correction"]["close_delta"]
