@@ -4,7 +4,10 @@
 다른 곳에서 조립하지 말고 여기 빌더를 쓴다.
 
 - raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
-        가격·재무는 ingest_date(수집일). 각 빌더 주석 참고.
+        가격·재무는 ingest_date(수집일). 각 빌더 주석 참고. **예외: 1분 파이프라인의
+        minute artifact 는 run_id 없는 결정적·불변 키다**(v0.7 9절 — 재실행 no-op 전제,
+        raw_price_minute_artifact_key 주석 참고). 스캐너·보존 정책이 run_id= 존재를
+        전제하면 안 된다.
 - feature: canonical 에서 파생한 모델 산출물(LLM 태깅 등). canonical 과 마찬가지로 run_id 가
         없고 멱등이지만, canonical 이 **벤더 원본의 결정론적 정규화**인 반면 feature 는
         **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번

@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timezone
 
 from ..lake.storage import Storage
-from .models import canonical_json
+from .models import _json_default, canonical_json
 
 _MANIFEST_FIELDS = frozenset(
     {"dataset", "session_id", "window_start", "window_end",
@@ -41,9 +41,15 @@ def serialize_records(records: list[dict]) -> bytes:
     """window record 들의 결정적 ndjson 직렬화 — 한 행 = canonical_json 한 줄.
 
     artifact checksum 은 이 바이트에서 유도한다: 직렬화가 결정적이지 않으면 같은
-    데이터가 다른 checksum 을 만들어 재실행 no-op 판정이 깨진다.
+    데이터가 다른 checksum 을 만들어 재실행 no-op 판정이 깨진다. record 는 dict 라
+    **sort_keys 로 키 순서를 정규화한다** — 호출자의 조립 순서가 바이트에 새면
+    의미상 같은 재실행이 ImmutabilityError 가 된다.
     """
-    return "".join(canonical_json(record) + "\n" for record in records).encode("utf-8")
+    return "".join(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":"),
+                   allow_nan=False, sort_keys=True, default=_json_default) + "\n"
+        for record in records
+    ).encode("utf-8")
 
 
 def build_window_manifest(
@@ -58,6 +64,14 @@ def build_window_manifest(
     unknown = set(units) - _UNIT_CLASSES
     if unknown:
         raise ValueError(f"manifest unit 분류 미지 키: {sorted(unknown)}")
+    for cls, ids in units.items():
+        # 문자열을 그대로 주면 sorted() 가 문자 단위 목록으로 조용히 쪼갠다
+        if isinstance(ids, str) or not all(isinstance(u, str) for u in ids):
+            raise ValueError(f"units[{cls!r}] 는 문자열 목록이어야 한다: {ids!r}")
+    for name, value in (("window_start", window_start), ("window_end", window_end)):
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            # naive 를 astimezone 하면 호스트 로컬로 해석돼 환경별 checksum 이 갈린다
+            raise ValueError(f"{name} 은 timezone-aware 여야 한다")
     return {
         "dataset": dataset,
         "session_id": session_id,
@@ -90,6 +104,11 @@ def put_immutable(storage: Storage, key: str, data: bytes) -> str:
     한다 — 백엔드별 not-found 예외(local FileNotFoundError vs S3 ClientError)를
     삼키다 진짜 장애를 miss 로 오독하는 경로를 피한다. 재실행은 예외 경로라
     GET-비교 비용은 무시할 수 있다.
+
+    천장: 존재확인→PUT 은 원자적이지 않다 — 동시 이중 writer 는 상위의 window
+    claim/fence 가 막고(같은 window 한 claim), 결정성이 유지되는 한 동시 PUT 도
+    같은 바이트라 무해하다. S3 조건부 PUT(If-None-Match) 도입은 스테이징 실측
+    (계획 §16)과 함께 판단한다.
     """
     checksum = sha256_bytes(data)
     if key in storage.list_keys(key):
