@@ -24,6 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..config import PipelineError
+from ..observability import log
 from .chain import KINDS, Edge, Interval, paths
 from .engine import EdgeDesign
 
@@ -146,6 +147,11 @@ class Proposal:
         항등식은 계산이고 탄력성은 출처 대조라, 코호트를 짜서 검정할 대상이 아니다.
         이 구분이 없으면 계산을 검정하거나 추정을 계산으로 위장하게 된다.
 
+        **역인과 위험이 적힌 간선은 뺀다.** 프롬프트가 "적힌 간선은 통계 주장에서
+        제외된다"고 약속하는데, `timing='price_responsive'` 로만 바꿔 보내면 그 약속을
+        지키는 게이트가 없다 - 가격을 보고 쓰인 기사가 사건 원인으로 검정되고 게시된다.
+        빼면 그 간선은 미측정으로 남아 예산의 blocked 로 세어지고 문장에 나오지 않는다.
+
         고객 문장에 쓰는 원인 이름은 **사슬의 뿌리**에서 온다. 통계 간선의 부모는 대개
         중간 매개(기대·심리)이고, 그걸 원인이라 쓰면 "주주환원 기대가 원인입니다" 같은
         말이 나간다 - 사람이 읽어야 하는 것은 그 기대를 만든 사건이다.
@@ -154,10 +160,10 @@ class Proposal:
             src=e.src, dst=e.dst, treated=e.exposure, control=e.reference,
             strata="date", scope="type", claims="L4",
             say=e.says, because=e.because, false_if=e.false_if, needs=e.needs,
-            timing=("price_responsive" if self.reverse.get((e.src, e.dst))
-                    else "unscheduled"),
+            timing="unscheduled",
             cause_label=self.label(e.src))
-            for e in self.chain if e.kind == "statistical"]
+            for e in self.chain
+            if e.kind == "statistical" and not self.reverse.get((e.src, e.dst))]
 
     def label(self, node: str) -> str:
         """사슬을 거슬러 올라가 뿌리의 이름. 없으면 노드 id 그대로."""
@@ -318,6 +324,15 @@ def parse(out: dict) -> Proposal:
                 "간선은 검정할 수 없다")
         eff = _iv(e.get("effect"), f"{tag} effect")
         src = str(e.get("source") or "").strip()
+        if eff and kind == "statistical":
+            # **통계 간선의 수치는 모델이 쓸 수 없다.** 프롬프트도 비우라고 하지만, 채워
+            # 오면 `measured()` 가 "이미 측정됨"으로 보고 덮지 않아 모델이 타이핑한 구간이
+            # 예산 계산에 들어간다 - 원장을 지나지 않은 수가 산출물을 흔드는 경로다.
+            # 되먹임으로 죽이지 않는 이유: 나머지 설계가 맞을 수 있고, 이 칸은 검정이
+            # 어차피 채운다. 버리는 사실만 로그로 남긴다.
+            log("causal.typed_effect_dropped", edge=f"{e['from']}→{e['to']}",
+                effect=[eff.lo, eff.hi])
+            eff = None
         if eff and kind != "statistical" and not src:
             raise PipelineError(
                 f"{tag} 에 수치({eff})는 있고 source 가 없다 - 출처를 대조할 수 없는 "
@@ -389,11 +404,18 @@ def measured(prop: Proposal, proofs: list) -> Proposal:
 
     귀무 산포를 반폭으로 쓰는 이유는 그것이 **이 검정이 실제로 만든 불확실성**이라서다.
     정규 근사 신뢰구간을 따로 만들면 원장에 없는 수가 산출물에 들어간다.
+
+    **통과한 증명만 되꽂는다.** `_pack` 은 게이트 실패에도 `R['effect']` 를 보존한다
+    (p 만 지운다) - 감사에 남겨야 하기 때문이다. 그 값을 예산에 먹이면 게이트가 기각한
+    수가 잔차 몫을 가져가고, 다중 간선 설명에서 **멀쩡한 간선이 예산 초과로 죽는다.**
+    기각된 간선은 미측정으로 남아 `budget` 의 blocked 로 세어진다.
     """
     got = {}
     for r in proofs:
         d = getattr(r, "design", None)
         if d is None or r.effect is None:
+            continue
+        if getattr(r, "gate_fail", None) or getattr(r, "status", "") != "통과":
             continue
         half = abs(r.null_sd or 0.0) * 1.96
         got[(d.src, d.dst)] = Interval(r.effect - half, r.effect + half)

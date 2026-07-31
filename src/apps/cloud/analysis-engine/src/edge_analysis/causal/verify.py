@@ -297,14 +297,19 @@ def gate(R: dict, led: SB.Ledger, p: dict) -> list[str]:
             bad.append("G4 R['test'].p 가 원장에 없다. 손으로 쓴 값은 받지 않는다.")
         else:
             declared = R.get("null_kind") or t.get("null_kind")
-            hit = next((c for c in same_p if c.get("null_kind") == declared), None)
+            # **가장 최근 일치를 고른다.** 여러 턴이 같은 p 를 낼 수 있다(같은 표본·같은
+            # 시드). 첫 일치를 고르면 이미 되먹임으로 폐기된 옛 턴의 호출에 결속되고,
+            # G7b 가 그 턴의 순열을 보고 지금 R 을 기각한다 - 지금 보고된 p 는 마지막
+            # 턴의 것이다.
+            hit = next((c for c in reversed(same_p)
+                        if c.get("null_kind") == declared), None)
             if hit is None:
                 bad.append(
                     f"G4 p={t['p']:.6g} 는 원장에 있지만 그 호출의 null_kind 는 "
                     f"{sorted({str(c.get('null_kind')) for c in same_p})} 이고 선언은 "
                     f"{declared!r} 다. 종류를 갈아 끼울 수 없다 - 어느 귀무로 얻은 p 인지가 "
                     "주장의 자격을 정한다.")
-                hit = same_p[0]
+                hit = same_p[-1]
     # G5 조정 실제 적용
     miss = [z for z in p["adjust"] if z not in (R.get("z") or {})]
     if miss:
@@ -357,25 +362,54 @@ def gate(R: dict, led: SB.Ledger, p: dict) -> list[str]:
     # 실행은 자유순열이다. 귀무 분산이 층 효과로 부풀어 p 가 보수적으로 나오거나(운이
     # 좋으면) 반대로 무의미해지는데, 어느 쪽이든 보고된 층화는 사실이 아니다.
     # G7 은 선언만 봤으므로 이 불일치를 통과시켰다.
-    if led.perms:
-        last = led.perms[-1]
+    #
+    # **G4 가 맞춘 호출의 순열을 본다 - 마지막 순열이 아니다.** 마지막만 보면 무층화로
+    # 재서 p 를 얻고 뒤에 층화 permute 를 한 번 더 부르는 것으로 통과한다(더미 순열).
+    # 그때 보고된 p 는 틀린 교환가능성에서 온 것인데 감사에는 층화로 남는다.
+    used = _perm_of(hit, led)
+    if used is not None:
         declared_strat = R.get("strata") is not None
-        if declared_strat and not last["stratified"]:
-            bad.append("G7b R['strata'] 에 층을 담았는데 permute 는 층 없이 불렸다 "
-                       f"(원장 {len(led.perms)}회, 마지막 stratified=False). 선언과 실행이 "
-                       "다르다 - permute(x, strata=...) 로 실제로 층 안에서 섞어라.")
-        elif not declared_strat and last["stratified"]:
-            bad.append(f"G7b permute 는 층 {last['n_strata']}개 안에서 섞었는데 R['strata'] "
-                       "는 None 이다. 실제로 쓴 층을 R 에 담아라 - 감사가 재구성돼야 한다.")
-        elif y is not None and last["len_x"] not in (-1, len(y)):
-            bad.append(f"G7b permute 에 넣은 x 길이 {last['len_x']} != y 길이 {len(y)}. "
-                       "귀무를 만든 표본과 검정한 표본이 다르다.")
+        where = f"(원장 {len(led.perms)}회 중 #{used['n']})"
+        if declared_strat and not used["stratified"]:
+            bad.append("G7b R['strata'] 에 층을 담았는데 보고된 p 를 만든 permute 는 층 없이 "
+                       f"불렸다 {where}. 선언과 실행이 다르다 - permute(x, strata=...) 로 "
+                       "실제로 층 안에서 섞어라.")
+        elif not declared_strat and used["stratified"]:
+            bad.append(f"G7b 보고된 p 를 만든 permute 는 층 {used['n_strata']}개 안에서 "
+                       f"섞었는데 R['strata'] 는 None 이다 {where}. 실제로 쓴 층을 R 에 "
+                       "담아라 - 감사가 재구성돼야 한다.")
+        elif y is not None and used["len_x"] not in (-1, len(y)):
+            bad.append(f"G7b permute 에 넣은 x 길이 {used['len_x']} != y 길이 {len(y)} "
+                       f"{where}. 귀무를 만든 표본과 검정한 표본이 다르다.")
+    elif R.get("strata") is not None and led.calls:
+        # 층화를 선언했는데 보고된 p 앞에 순열이 없다 - 그 층화는 실행되지 않았다.
+        bad.append("G7b R['strata'] 에 층을 담았는데 보고된 p 를 만든 순열이 원장에 없다. "
+                   "층화 귀무를 실제로 만들어라 - permute(x, strata=...).")
 
     # 단위 선언 일치 - 노드가 무엇을 재는지 선언했으면 검정도 그 단위여야 한다
     du = (p["nodes"].get(p["to"]) or {}).get("unit")
     if du and R.get("unit") and R["unit"] != du:
         bad.append(f"G1 unit={R['unit']!r} 인데 {p['to']} 선언은 {du!r} 다.")
     return bad
+
+
+def _perm_of(hit: dict | None, led: SB.Ledger) -> dict | None:
+    """G4 가 맞춘 placebo 호출의 **귀무를 만든 순열**. 없으면 None.
+
+    원장은 `perms_at` 에 그 호출 직전까지의 순열 수를 남긴다 - 마지막 순열을 보는 것과
+    다르다. 코드 턴이 무층화로 재서 p 를 얻은 뒤 층화 permute 를 한 번 더 부르면 마지막
+    순열은 층화지만 보고된 p 는 무층화에서 왔다.
+
+    `perms_at` 이 없는 원장(맞춘 호출이 없을 때)에는 마지막 순열로 떨어진다 - 결속할
+    근거가 없을 때 검사를 아예 건너뛰면 옛 구멍이 되살아난다.
+    """
+    if not led.perms:
+        return None
+    at = (hit or {}).get("perms_at")
+    if at is None:
+        return led.perms[-1]
+    return led.perms[at - 1] if at >= 1 else None
+
 
 
 def _user(p: dict, trace: list, turn: int, force: bool = False) -> str:

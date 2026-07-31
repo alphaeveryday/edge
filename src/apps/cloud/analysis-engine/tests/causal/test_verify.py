@@ -111,6 +111,13 @@ CODE_NO_STRATA = (CODE_OK.replace("permute(x, strata=blocks, n=200)", "permute(x
 CODE_NO_STRATA_JUSTIFIED = CODE_NO_STRATA.replace(
     "'strata': None", "'strata': None, 'strata_reason': '대조를 날짜와 무관하게 뽑았다'")
 
+# **더미 순열 우회.** 무층화로 재서 p 를 얻고, 그 뒤에 층화 permute 를 한 번 더 부른다.
+# 보고된 p 는 자유순열에서 왔는데 원장의 마지막 순열만 보면 층화로 보인다.
+CODE_DUMMY_STRATIFIED_PERM = CODE_NO_STRATA.replace(
+    "'strata': None",
+    "'strata': blocks").replace(
+    "R = {", "_dummy = permute(x, strata=blocks, n=200)\nR = {")
+
 
 def _verify(client, cd=None) -> V.EdgeProof:
     return V.verify(cd or _Cd(), client, DESIGN, _plan(), as_of=AS_OF, w0=W0,
@@ -237,6 +244,34 @@ def test_g7b_catches_a_declared_stratification_that_never_happened():
                      "stratified": True, "n_strata": 3}
     R2 = {**R, "strata": None, "strata_reason": "타입 전체에서 쌓아 날짜 효과가 없다"}
     assert any(b.startswith("G7b") and "R['strata']" in b for b in V.gate(R2, led, _plan()))
+
+
+def test_g7b_binds_to_the_permutation_that_produced_the_reported_p():
+    """더미 순열로 G7b 를 통과시킬 수 없다.
+
+    WHY: 무층화로 재서 p 를 얻고 **그 뒤에** 층화 permute 를 한 번 더 부르면, 원장의
+    마지막 순열은 층화다. 마지막만 보는 G7b 는 통과시키고 감사에는 층화로 남는다 -
+    보고된 p 는 틀린 교환가능성에서 온 것인데 게이트가 초록을 준다. 원장의 `perms_at` 로
+    보고된 p 의 순열에 결속한다.
+    """
+    client = _Client([{"code": CODE_DUMMY_STRATIFIED_PERM}, {"done": True}])
+
+    r = _verify(client)
+
+    assert r.status == "게이트실패"
+    assert any(b.startswith("G7b") and "층 없이 불렸다" in b for b in r.gate_fail), r.gate_fail
+    # 우회의 흔적이 원장에 남아야 사후에 재구성된다.
+    assert len(r.perms) == 2 and r.perms[-1]["stratified"] is True
+
+
+def test_g7b_accepts_the_stratified_permutation_bound_to_the_reported_p():
+    """반대 방향 - 정상 경로가 결속 검사로 죽으면 게이트가 쓸모없다."""
+    client = _Client([{"code": CODE_OK}, {"done": True}])
+
+    r = _verify(client)
+
+    assert r.status == "통과", r.gate_fail
+    assert not any(b.startswith("G7b") for b in r.gate_fail)
 
 
 def test_the_ledger_records_permutation_calls_so_execution_can_be_audited():

@@ -79,6 +79,11 @@ class Ledger:
                            # 단측/양측은 방향 주장을 세울 자격과 직결된다. 반환에 없으므로
                            # 호출 인자에서 받아 남긴다 - 없으면 placebo 의 기본값(양측).
                            "two_sided": bool(kw.get("two_sided", True)),
+                           # **이 p 를 만든 순열이 어느 것인가.** 직전까지 기록된 순열 수를
+                           # 남긴다. 이게 없으면 G7b 가 마지막 순열만 보고, 무층화로 재고
+                           # 나중에 층화 permute 를 한 번 더 부르는 것으로 통과한다 -
+                           # 보고된 p 는 틀린 교환가능성에서 왔는데 감사는 초록이 된다.
+                           "perms_at": len(self.perms),
                            **{k: r.get(k) for k in ("testable", "obs", "p", "n_null",
                                                     "null_sd", "null_kind", "reason")}})
         return r

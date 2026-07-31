@@ -286,12 +286,16 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     outcome = {prop.target} if prop.target else {d.dst for d in prop.designs}
     for r in [x for x in proofs if x.design.dst in outcome]:
         share = _share_of(cd, etf_instrument_id, trade_date, r)
+        contribution = (share * r.effect) if (share and r.effect is not None) else None
+        against = _countervailing(contribution if contribution is not None else r.effect,
+                                  residual)
         findings.append(EdgeFinding(
             cause=r.design.cause_label, because=r.design.because,
             effect=r.effect, p=r.p, n=r.n, share=share,
-            contribution=(share * r.effect) if (share and r.effect is not None) else None,
-            survived=r.significant and not budget["over_budget"],
-            killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)))
+            contribution=contribution,
+            survived=r.significant and not budget["over_budget"] and not against,
+            killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)
+            or (_COUNTER if against else None)))
     return narrate(CausalReport(
         etf_name=etf_name, trade_date=trade_date.isoformat(), observed=observed,
         residual=residual, route_code=route_code, top_contributors=contributors,
@@ -302,6 +306,25 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         proofs=[_audit_row(r) for r in proofs],
         falsification_surface=surface,
         data_requests=_requests(proofs, prop)))
+
+
+_COUNTER = ("설명해야 할 움직임과 **반대 방향**으로 밀었습니다 - 이 경로는 그 움직임을 "
+            "설명하지 않습니다(상쇄 요인).")
+
+
+def _countervailing(effect: float | None, residual: float) -> bool:
+    """이 경로가 잔차와 **반대 방향**인가.
+
+    예산 정합은 크기만 본다(`abs(mid) > cap`). 그래서 잔차가 -3% 인데 +2% 로 유의한
+    경로가 한도 안에 들어와 "원인으로 확인됐습니다"로 게시된다 - 설명해야 할 움직임을
+    설명하지 않고 반대로 민 것을 원인이라 부르는 문장이다. 상쇄 요인은 값 있는 사실이지만
+    원인 확정과는 다른 말이라, 여기서 갈라 문장에 사유를 남긴다.
+
+    부호가 없거나(측정 실패) 잔차가 0 이면 판정하지 않는다 - 없는 근거로 죽이지 않는다.
+    """
+    if effect is None or residual == 0.0 or effect == 0.0:
+        return False
+    return (effect > 0) != (residual > 0)
 
 
 def _empty_cohorts(cd, designs: list[EdgeDesign], *, as_of: str,

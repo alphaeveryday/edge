@@ -534,6 +534,26 @@ def test_zero_effect_design_finds_nothing_and_says_so():
     assert Explanation(raw).explanation_type == "UNCERTAIN"
 
 
+def test_a_significant_path_against_the_residual_is_not_published_as_the_cause():
+    """잔차와 **반대 방향**으로 유의한 경로는 원인 확정이 아니다.
+
+    WHY: 예산 정합은 크기만 본다(`abs(mid) > cap`). 잔차가 +4.21% 인데 -6% 로 유의한 경로는
+    한도 안에 들어와 통과하고, 고객에게 "이 원인이 확인됐습니다"로 나간다 - 설명해야 할
+    움직임을 설명하지 않고 반대로 민 것을 원인이라 부르는 문장이다. 상쇄 요인은 값 있는
+    사실이지만 원인 확정과는 다른 말이라 갈라서 사유를 남긴다.
+    """
+    cd = FakeCausalData(effect=-EFFECT)          # 잔차는 +, 효과는 -
+    client = FakeClient(PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))
+
+    assert raw["causal"]["residual"] > 0
+    assert raw["causal"]["survived"] == [], "반대 방향 경로가 원인으로 게시됐다"
+    rejected = raw["causal"]["rejected"]
+    assert [f["cause"] for f in rejected] == [CAUSE_LABEL]
+    assert "반대 방향" in rejected[0]["killed_by"]
+    assert Explanation(raw).explanation_type == "UNCERTAIN"
+
 # --------------------------------------------------------------------------- #
 # 5b 못 잰 간선 — **기각이 아니라 데이터 요청이다**
 # --------------------------------------------------------------------------- #
