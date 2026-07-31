@@ -146,10 +146,14 @@ export function TenantsPage() {
         open={createOpen}
         title="테넌트 생성"
         width={440}
-        onClose={() => setCreateOpen(false)}
+        // pending 중 닫기(취소·X·스크림) 차단 — 전역 토스트를 끈 상태라, 닫힌 모달의
+        // fError 로만 가는 실패가 무표시로 새지 않게 결과를 본 뒤에만 닫는다.
+        onClose={() => {
+          if (!create.isPending) setCreateOpen(false);
+        }}
         footer={
           <>
-            <button className="btn" onClick={() => setCreateOpen(false)}>
+            <button className="btn" disabled={create.isPending} onClick={() => setCreateOpen(false)}>
               취소
             </button>
             {/* pending 중 재제출 차단 — 전역 토스트를 끈 상태라 첫 요청의 실패가 무표시로 새는 경로를 막는다 */}
