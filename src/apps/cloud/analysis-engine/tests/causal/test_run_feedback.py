@@ -97,13 +97,12 @@ def test_worked_example_in_the_prompt_actually_passes_the_guards():
     assert block, "프롬프트에 json 예시 블록이 없다"
     out = json.loads(block.group(1))
 
-    nodes, designs, _ = parse(out)
-    assert len(designs) == 1
+    prop = parse(out)
+    assert len(prop.designs) == 1
 
-    # run.py:146 과 같은 형태로 만든다 - validate 는 timing 을 간선에서 읽는다.
-    edges = [{"from": d.src, "to": d.dst, "timing": d.timing} for d in designs]
-    assert G.validate({"nodes": nodes, "structures": [{"id": "A", "edges": edges}]},
+    # `prop.edges` 가 validate 가 보는 형태다 - timing 은 거기서 파생된다.
+    assert G.validate({"nodes": prop.nodes, "structures": [{"id": "A", "edges": prop.edges}]},
                       grounded={"evt_abc123"}, require_competing=False) == []
 
-    _guard(designs[0].treated, COHORT_COLUMNS)
-    _guard(designs[0].control, UNIVERSE_COLUMNS)
+    _guard(prop.designs[0].treated, COHORT_COLUMNS)
+    _guard(prop.designs[0].control, UNIVERSE_COLUMNS)

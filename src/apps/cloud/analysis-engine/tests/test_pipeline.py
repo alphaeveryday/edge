@@ -23,6 +23,9 @@ _SETTINGS = SimpleNamespace(
     # 산업분류 원장을 요구하고 스텁 store 에 그게 없다. 인과 경로 스모크는
     # tests/e2e/test_causal_pipeline.py 가 별도로 검증한다.
     causal_enabled=False,
+    causal_sandbox_enabled=True,
+    domain_docs_bucket="",
+    domain_docs_profile="",
 )
 
 

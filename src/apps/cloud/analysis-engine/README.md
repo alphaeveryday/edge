@@ -18,12 +18,10 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
   → observation/route 적재 (소비한 trigger_id 에서 파생)
   → DB 의 대상 ETF 구성종목 source_event/thread 조회 — 참여자(event_argument)·측정값
     (event_measure)을 사건 단위 EventContext 로 집계 (assemble-events 산출)
-  → 분석 에이전트(DeepSeek) → explanation_result (PUBLISHED) + tenant_delivery NEW
-    fan-out (전 테넌트, 게시와 같은 트랜잭션 — ALPHA-493)
+  → 분석 에이전트(DeepSeek) → explanation_result (DRAFT)
 ```
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
-- **그날 첫 결과만 게시·발번한다** — 같은 (ETF, trade_date) 재실행은 DRAFT 보존 + 발번 생략(`publish_skipped` 로그). 같은 초 재실행은 결정적 ID 가 같아 멱등 skip 이다(기존 행 보존, `duplicate_skipped` 로그). WITHDRAWN 후 재게시(CORRECTION 발번)는 후속 티켓 몫.
 - **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
 
 ## 구조
@@ -36,7 +34,32 @@ src/edge_analysis/
   __main__.py · cli.py · config.py · observability.py · pipeline.py
   domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
   adapters/   lake.py · eventstore.py · llm.py · archive.py  # I/O, 무거운 deps 지연 import
+  causal/     agents · verify · sandbox · chain · graph · fit · stats · engine · narrate · run
 ```
+
+### 인과 설계 하네스 (`causal/`)
+
+설명은 LLM 한 번 호출이 아니라 **에이전트 둘 + 코드 게이트**로 만든다
+([설계 문서](../../../../docs/analysis-engine/architecture/causal-design-harness.md)).
+
+```
+산술(무료) → 제안 에이전트(산문 DAG) → 구조 검사 → 반증 표면 열거 → 식별(조정/IV)
+          → 간선별 검정 에이전트(샌드박스에서 코드 실행 + G1~G7) → 적합 → 서술
+```
+
+- **제안**은 산문만 낸다: 노드가 무엇을 어떤 단위로 재는가, 간선이 무엇을 주장하나
+  (`say`·`because`·`false_if`·`claims`). 수치·부호를 쓸 자리가 없다.
+- **검정**은 간선 하나마다 파이썬을 써서 표본을 만들고 `placebo` 로 귀무분포를 붙인다.
+  값은 원장(`placebo` 호출 기록)에서만 읽는다 — 모델이 타이핑한 p 는 게이트 G4 가 거부한다.
+- **못 잰 것은 침묵이 아니라 요청**이다. `impossible` 이 `causal.data_requests`
+  (`need`·`grain`·`unlocks`·`edge`)로 쌓여 다음 수집 의제가 된다.
+- 감사 흔적은 `explanation.raw.causal.proofs[]` 에 남는다 — 술어·층화·조정집합·주장 층위·
+  원장 전량·에이전트가 쓴 코드. 이게 없으면 게이트 통과 사실만 남고 증거가 사라진다.
+
+> 샌드박스는 **LLM 이 쓴 코드를 실행한다**(입력에 외부 사건 제목이 섞이므로 프롬프트 주입
+> 표면이다). `as_of` 바인딩·창 절단·`__` 금지·import 허용목록·타임아웃으로 좁혀 두었지만
+> 제한 exec 는 완전한 격리가 아니다. 태스크는 최소권한 역할·읽기 전용 DB 사용자로 돌리고,
+> 필요하면 `CAUSAL_SANDBOX_ENABLED=false` 로 축약 경로(고정 추정량)로 내린다.
 
 ## 실행
 
@@ -58,6 +81,10 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 | `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
 | `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
+| `CAUSAL_ENABLED` | 인과 설계 하네스 사용(끄면 단일 프롬프트 경로) | `true` |
+| `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |
+| `EDGE_DOMAIN_BUCKET` | 도메인 문서(「사업의 내용」) RAG 저장소. 비면 조회 도구 미부착 | (없음) |
+| `EDGE_AWS_PROFILE` | 도메인 문서 버킷 접근 프로파일 (교차 계정일 때) | (기본 자격증명) |
 
 ## 배포
 
@@ -65,7 +92,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 
 ## 스키마 계약
 
-Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`·`explanation_run_event_evidence`(설명 실행이 사용한 근거 lineage — ALPHA-603)·`tenant_delivery`(NEW write-time fan-out — ALPHA-493). `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)과 `event_evidence`·`tenant`(fan-out 대상 목록, writer 는 super-admin-api) 는 **읽기만** 한다(트리거·이벤트 계열 writer 는 data-pipeline — ALPHA-411·412). lineage 는 `event_evidence` 를 **참조만** 하고 그 행을 만들지 않는다.
+Cloud Event Store(`libs/schema` SSOT, `public` 스키마)에서 **쓰는** 테이블은 분석 산출물뿐이다: `etf_contribution_observation`·`etf_contribution_member`·`explanation_route`·`explanation_run`·`explanation_result`. `price_movement_trigger`·`document`/`assertion`·`source_event`/`event_thread` 계열(`event_argument`·`event_measure` 포함)은 **읽기만** 한다(writer 는 data-pipeline — ALPHA-411·412).
 
 ## 주석 컨벤션
 

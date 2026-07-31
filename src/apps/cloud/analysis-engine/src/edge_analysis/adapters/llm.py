@@ -88,13 +88,25 @@ def analyze(
     route_code: str,
     events: list[EventContext],
     causal=None,
+    causal_sandbox: bool = True,
+    domain_docs=None,
     etf_instrument_id: str | None = None,
 ) -> Explanation:
     """검증된 Explanation 을 반환한다. **시그니처는 고정이다** - 클라우드 진입점이 이걸 부른다.
 
-    ``causal`` 이 주입되면 **인과 설계 하네스**로 설명을 만든다(비용 순 게이트:
-    산술 -> 제안 1회 -> 구조 -> 식별 -> 층화 순열 검정 -> 적합 -> 서술). 수치는 전부
-    코드가 만들고 모델은 설계만 낸다 - 실험판에서 모델이 보고한 수치는 날조였다.
+    ``causal`` 이 주입되면 **인과 설계 하네스**로 설명을 만든다(비용 순 게이트: 산술 ->
+    제안 1회 -> 구조 -> 형식 -> 식별 -> 간선별 검정 -> 예산 -> 서술). 제안 에이전트는
+    산문 DAG 를 내고, 검정 에이전트는 간선마다 샌드박스에서 **코드를 써서** 추정한다.
+    수치는 전부 원장에서 오고 모델이 타이핑할 자리가 없다 - 실험판에서 모델이 보고한
+    수치는 날조였다.
+
+    ``causal_sandbox=False`` 면 검정 에이전트 대신 축약 경로(고정 추정량)로 떨어진다.
+    ops 킬스위치다(``CAUSAL_SANDBOX_ENABLED``) - LLM 이 쓴 코드를 실행하는 위험을 끄고도
+    파이프라인이 돌아야 한다.
+
+    ``domain_docs`` 가 주입되면 제안이 `lookups` 로 물은 것을 정기보고서 「사업의 내용」
+    원문에서 찾아 붙이고 **다시 묻는다**. 없으면 조회 없이 진행한다 - 산업 구조를 모른다고
+    설명을 멈추지 않는다.
 
     ``causal`` 이 없으면 기존 단일 프롬프트 경로를 쓴다. 두 경로를 남겨 두는 이유는
     인과 경로가 산업분류 원장(V202607291720)을 요구하고, 그 백필 전에는 코호트가
@@ -120,6 +132,8 @@ def analyze(
             # 층화 재료. 넘기지 않으면 strata='date_industry' 가 조용히 date 로 붕괴한다.
             industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
+            sandbox=causal_sandbox,
+            docs=domain_docs,
         )
         explanation = Explanation(raw)
         if not explanation.is_valid:

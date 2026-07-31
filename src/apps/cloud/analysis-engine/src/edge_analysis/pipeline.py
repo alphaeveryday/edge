@@ -99,12 +99,22 @@ def run(
     # 인과 설계 하네스로 설명을 만든다. `analyze` 시그니처는 고정이고 의존성만 주입한다 —
     # 클라우드 진입점(CLI·run)은 그대로다. store 커넥션을 공유하므로 PIT 기준이 갈리지 않는다.
     causal = store.causal_data() if settings.causal_enabled else None
+    # 도메인 문서 조회는 **선택 의존**이다. 버킷이 없으면 붙이지 않고, 그러면 제안이
+    # `lookups` 로 물어도 조회 없이 진행한다 - 산업 지식이 없다고 설명을 멈추지 않는다.
+    domain_docs = None
+    if settings.domain_docs_bucket:
+        from .adapters.domain_docs import DomainDocs
+        domain_docs = DomainDocs(bucket=settings.domain_docs_bucket,
+                                 profile=settings.domain_docs_profile or None)
+        log("domain_docs.attached", bucket=settings.domain_docs_bucket)
     with collect_trace() as trace:
         explanation = analyze(
             client, etf_ticker=settings.etf_ticker, etf_name=etf_name,
             name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
             decomp=decomp, gate=gate, route_code=route_code, events=events,
             causal=causal,
+            causal_sandbox=settings.causal_sandbox_enabled,
+            domain_docs=domain_docs,
             etf_instrument_id=etf_instrument_id,
         )
     if causal is not None:

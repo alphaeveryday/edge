@@ -52,6 +52,16 @@ class Settings:
     # 요구하고, 백필 전에는 코호트가 비어 모든 셀이 UNCERTAIN 으로 떨어진다. 그때
     # 조용히 품질이 내려가는 대신 ops 가 명시적으로 이전 경로를 고를 수 있어야 한다.
     causal_enabled: bool = True
+    # 검정 에이전트의 **샌드박스 코드 실행** 사용 여부. 기본 ON — 간선마다 무엇을 어떻게
+    # 잴지는 데이터를 보고 정해야 하고, 그건 코드를 쓰는 일이다. OFF 면 축약 경로(고정
+    # 추정량)로 떨어진다: LLM 이 쓴 코드를 실행하는 위험을 끄고도 파이프라인이 돌아야 한다.
+    causal_sandbox_enabled: bool = True
+
+    # 도메인 문서 저장소(S3). 비어 있으면 조회 도구를 붙이지 않는다 - 도메인 지식이
+    # 없다고 설명을 멈추지 않는다. 접두사 배치는 인제스트가 만든다:
+    #   index/<sector>/<industry>/chunks.parquet · docs/<sector>/<industry>/<ticker>-<n>.txt
+    domain_docs_bucket: str = ""
+    domain_docs_profile: str = ""
 
 
 def _flag(name: str, *, default: bool) -> bool:
@@ -119,4 +129,7 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         result_s3_prefix=_env("ALPHAMALE_RESULT_S3_PREFIX"),
         aws_profile=_env("AWS_PROFILE"),
         causal_enabled=_flag("CAUSAL_ENABLED", default=True),
+        causal_sandbox_enabled=_flag("CAUSAL_SANDBOX_ENABLED", default=True),
+        domain_docs_bucket=os.environ.get("EDGE_DOMAIN_BUCKET", "").strip(),
+        domain_docs_profile=os.environ.get("EDGE_AWS_PROFILE", "").strip(),
     )

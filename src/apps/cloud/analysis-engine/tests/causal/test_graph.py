@@ -71,21 +71,33 @@ def test_time_reversal_is_rejected():
     assert any("시간 역행" in v for v in bad)
 
 
-def test_latent_mediator_must_declare_which_effect_it_claims():
-    """"접어라"가 아니라 "무엇을 주장하나"다 - CDE 는 do-계산으로 식별된다."""
-    nodes = {"M@t-1": {"kind": "MECHANISM"}, "X@t-2": {"kind": "TARGET"},
-             "Y@t0": {"kind": "TARGET"}}
+def test_node_kinds_are_gone_and_grounding_is_checked_by_content():
+    """종별 열거를 없앤 자리에 **내용 기반 접지**가 들어왔다.
+
+    이전 판은 노드마다 `kind` 를 6종 중에서 고르게 하고, `MECHANISM` 이면 CDE/NDE/NIE 를
+    선언하게 했다. 사슬의 매개(회계 항목·기대·수급)는 그 6칸에 안 맞는 것이 대부분이라
+    모델이 노드를 만드는 대신 칸을 채웠다. 지금은 자연어(`says`)와 관측 여부만 받고,
+    검사는 **사건을 참조한 노드가 실재하는 event_id 를 가리키는지**로 옮겼다.
+    """
+    nodes = {"COST@t-1": {"says": "원가율", "observed": "재무제표"},
+             "EVT@t-2": {"says": "공시", "observed": "공시 원장", "events": ["e1"]},
+             "AR@t0": {"says": "당일 초과수익", "observed": "일간 수익률"}}
     dag = {"nodes": nodes, "structures": [{"id": "A", "edges": [
-        {"from": "X@t-2", "to": "M@t-1", "timing": "n/a"},
-        {"from": "M@t-1", "to": "Y@t0", "timing": "n/a"}]}]}
+        {"from": "EVT@t-2", "to": "COST@t-1", "timing": "n/a"},
+        {"from": "COST@t-1", "to": "AR@t0", "timing": "n/a"}]}]}
 
-    assert any("effect=CDE" in v for v in G.validate(dag))
+    # 종별을 하나도 안 적었지만 통과한다 - 자유도가 규칙에 걸리지 않는다.
+    assert G.validate(dag, grounded={"e1"}, require_competing=False) == []
 
-    nodes["M@t-1"]["effect"] = "NDE"
-    assert any("seq_ignorability" in v for v in G.validate(dag))
+    # 접지는 여전히 강제된다. 실재하지 않는 event_id 는 날조다.
+    nodes["EVT@t-2"]["events"] = ["없는id"]
+    assert any("접지 실패" in v
+               for v in G.validate(dag, grounded={"e1"}, require_competing=False))
 
-    nodes["M@t-1"]["effect"] = "CDE"
-    assert not any("M@t-1" in v for v in G.validate(dag))
+    # 사건을 참조한 노드가 아예 없으면 이 셀의 설명이 저장소와 이어지지 않는다.
+    nodes["EVT@t-2"].pop("events")
+    assert any("접지된 노드가 없다" in v
+               for v in G.validate(dag, grounded={"e1"}, require_competing=False))
 
 
 @pytest.mark.parametrize("timing", ["scheduled", "unscheduled", "price_responsive", "n/a"])
@@ -96,57 +108,3 @@ def test_timing_replaces_manipulability_gate(timing):
                {"from": "A@t-2", "to": "B@t0", "timing": timing}]}]}
 
     assert not any("timing" in v for v in G.validate(dag))
-
-
-def _price_pair(residualized=None, with_market=False):
-    """가격→가격 간선 하나. 교란 통제 규칙의 최소 재현."""
-    nodes = {"SK@t0": {"kind": "OBSERVABLE"}, "ETF@t0": {"kind": "TARGET"}}
-    if residualized is not None:
-        nodes["SK@t0"]["residualized"] = residualized
-    edges = [{"from": "SK@t0", "to": "ETF@t0"}]
-    if with_market:
-        nodes["MARKET@t0"] = {"kind": "OBSERVABLE"}
-        edges.append({"from": "MARKET@t0", "to": "SK@t0"})
-    return {"nodes": nodes, "structures": [{"id": "A", "edges": edges}]}
-
-
-def _violations(dag):
-    return [v for v in G.validate(dag, require_competing=False) if "가격 노드끼리" in v]
-
-
-def test_bare_price_to_price_edge_is_rejected():
-    """두 가격은 시장 요인에 함께 흔들려 그 간선이 인과가 아니다."""
-    assert _violations(_price_pair())
-
-
-def test_market_parent_satisfies_the_rule():
-    """시장을 명시적으로 모형에 넣으면 교란이 통제된다."""
-    assert not _violations(_price_pair(with_market=True))
-
-
-def test_residualized_true_satisfies_the_rule():
-    assert not _violations(_price_pair(residualized=True))
-
-
-def test_residualized_string_does_not_satisfy_the_rule():
-    """문자열 "false" 는 truthy 다 - 통제 규칙이 그걸로 우회되면 안 된다.
-
-    프롬프트가 불리언을 요구하지만 모델은 문자열을 낼 수 있다. 통제 규칙은 닫힌 쪽으로
-    실패해야 한다 - 우회를 허용하면 교란된 간선이 인과로 게시된다.
-    """
-    assert _violations(_price_pair(residualized="false"))
-    assert _violations(_price_pair(residualized="true"))
-
-
-def test_malformed_node_id_is_a_violation_not_a_crash():
-    """LLM 오타가 런을 죽이면 안 된다.
-
-    모델이 `KODEX_반도체@t`(오프셋 없음)를 냈고, 규칙 검사 뒤쪽의 `parse` 재호출에서
-    ValueError 가 밖으로 튀어 파이프라인이 exit 1 로 죽었다. 형식 오류는 되먹임 대상이다.
-    """
-    dag = {"nodes": {"BAD@t": {"kind": "OBSERVABLE"}, "ETF@t0": {"kind": "TARGET"}},
-           "structures": [{"id": "A", "edges": [{"from": "BAD@t", "to": "ETF@t0"}]}]}
-
-    violations = G.validate(dag, require_competing=False)
-
-    assert any("시간 색인" in v for v in violations)

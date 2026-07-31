@@ -21,7 +21,6 @@ d-분리 검정에는 Σ(θ) 가 없다 - 정의되지 않는다. 억지로 계�
 from __future__ import annotations
 
 import math
-import sys
 
 import numpy as np
 
@@ -110,7 +109,13 @@ def local_fit(nodes: dict, edges: list, cols: dict) -> list:
 
 # ── 전역: Shipley's C ───────────────────────────────────────────────────
 def global_fit(local: list) -> dict:
-    """C = -2 Σ ln p_i ~ chi2(2k). 국소에서 조립된다 - 별도 적합 없음."""
+    """C = -2 Σ ln p_i ~ chi2(2k). 국소에서 조립된다 - 별도 적합 없음.
+
+    **일일 게시 경로는 이걸 쓰지 않는다**(`run.explain` 은 `chain.budget` 을 쓴다).
+    이 통계량이 답하는 것은 "이 DAG 가 모집단 공분산과 정합하나"이고, 귀속이 묻는 것은
+    "오늘 이 움직임을 어디까지 설명했나"다. 남겨둔 이유는 발견 루프(실험판)에서 구조
+    후보를 비교할 때 여전히 쓰이기 때문이다.
+    """
     ps = [max(r["p"], 1e-300) for r in local if r["testable"]]
     k = len(ps)
     if k == 0:
@@ -130,35 +135,35 @@ def global_fit(local: list) -> dict:
 def report(nodes: dict, edges: list, cols: dict, *, top: int = 8) -> str:
     L = local_fit(nodes, edges, cols)
     g = global_fit(L)
-    O = ["[국소 적합] 함의 조건부독립. **p 낮은 것이 빠진 간선이다** (= 수정지수)",
+    L2 = ["[국소 적합] 함의 조건부독립. **p 낮은 것이 빠진 간선이다** (= 수정지수)",
          f"  {'X':<22} {'Y':<22} {'|Z|':>3} {'n':>5} {'r':>7} {'p':>8}"]
     for r in L[:top]:
         if r["testable"]:
             flag = "  <- 위반" if r["p"] < 0.05 else ""
-            O.append(f"  {r['X'][:22]:<22} {r['Y'][:22]:<22} {len(r['Z']):>3} "
+            L2.append(f"  {r['X'][:22]:<22} {r['Y'][:22]:<22} {len(r['Z']):>3} "
                      f"{r['n']:>5} {r['r']:>+7.3f} {r['p']:>8.4f}{flag}")
         else:
-            O.append(f"  {r['X'][:22]:<22} {r['Y'][:22]:<22} {len(r['Z']):>3} "
+            L2.append(f"  {r['X'][:22]:<22} {r['Y'][:22]:<22} {len(r['Z']):>3} "
                      f"{'':>5} {'':>7} {'  미검정':>8}  {r['reason'][:40]}")
     if len(L) > top:
-        O.append(f"  ... 총 {len(L)}건")
+        L2.append(f"  ... 총 {len(L)}건")
     viol = [r for r in L if r["testable"] and r["p"] < 0.05]
-    O.append(f"  위반 {len(viol)}건 / 검정 {sum(1 for r in L if r['testable'])}건"
+    L2.append(f"  위반 {len(viol)}건 / 검정 {sum(1 for r in L if r['testable'])}건"
              f" / 미검정 {sum(1 for r in L if not r['testable'])}건")
-    O += ["", "[전역 적합] Shipley d-분리 검정 - 국소 p 를 합성한 것. 한 번만 본다"]
+    L2 += ["", "[전역 적합] Shipley d-분리 검정 - 국소 p 를 합성한 것. 한 번만 본다"]
     if not g["testable"]:
-        O.append(f"  불가: {g['reason']}")
+        L2.append(f"  불가: {g['reason']}")
     else:
-        O.append(f"  C = -2 Σ ln p = {g['C']:.2f}   df = 2k = {g['df']}   "
+        L2.append(f"  C = -2 Σ ln p = {g['C']:.2f}   df = 2k = {g['df']}   "
                  f"p = {g['p']:.4f}   C/df = {g['C_over_df']:.2f}")
         if "RMSEA" in g:
-            O.append(f"  RMSEA = {g['RMSEA']:.3f}   (N={g['N']})")
-        O.append("  p > 0.05 면 그래프가 데이터와 불일치한다는 증거가 없다"
+            L2.append(f"  RMSEA = {g['RMSEA']:.3f}   (N={g['N']})")
+        L2.append("  p > 0.05 면 그래프가 데이터와 불일치한다는 증거가 없다"
                  " (적합 증명이 아니다)." if g["p"] > 0.05 else
                  "  **p <= 0.05 - 그래프가 데이터와 불일치한다.** 위 위반 목록이 어디인지 말한다.")
         if g["n_untestable"]:
-            O.append(f"  주의: 미검정 {g['n_untestable']}건은 C 에 안 들어갔다 - "
+            L2.append(f"  주의: 미검정 {g['n_untestable']}건은 C 에 안 들어갔다 - "
                      "잠재가 있으면 CI 만으로 완비가 아니다(tetrad 필요).")
-    return "\n".join(O)
+    return "\n".join(L2)
 
 

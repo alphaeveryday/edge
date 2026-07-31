@@ -14,7 +14,7 @@ import pytest
 from edge_analysis.adapters.eventstore import EventStore
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.config import PipelineError
-from edge_analysis.domain.models import Decomposition, EventContext, Holding, Member, PriceTrigger
+from edge_analysis.domain.models import Decomposition, EventContext, Member, PriceTrigger
 from edge_analysis.pipeline import _primary_thread_id, run
 
 
