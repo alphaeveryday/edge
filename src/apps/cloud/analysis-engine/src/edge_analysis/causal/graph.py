@@ -17,18 +17,16 @@ from __future__ import annotations
 
 import itertools
 import re
-import sys
 
-# 노드 종별. 관측 여부가 함의의 검정 가능성을 정한다.
-KINDS = {
-    "TARGET":     {"observed": True},    # 설명 대상. scope() 가 정한다. LLM 변경 불가
-    "SHOCK":      {"observed": True},    # 사건 지시자. member_events 접지 필수
-    "OBSERVABLE": {"observed": True},    # observables() 로 해소되는 계열
-    "MECHANISM":  {"observed": False},   # 잠재 매개. 승격 규칙 통과해야 함
-    "CONFOUND":   {"observed": False},   # TARGET·SHOCK 공통부모
-    "CONJECTURE": {"observed": False},   # 저장소 밖. **게시 간선 금지**
-}
-LIMITS = {"edges": 12, "structures": (2, 3), "fanout": 6, "depth": 4}
+# 노드 명세는 자연어(`says`)와 관측 가능성(`observed`)뿐이다. 종별 열거(TARGET·SHOCK·
+# MECHANISM…)를 없앤 이유: 사슬의 매개는 회계 항목·기대·수급·경쟁 반응처럼 정해진 칸에
+# 안 맞는 것이 대부분이고, 칸을 강제하면 모델이 노드를 만들지 않고 칸을 채운다.
+# 함의의 검정 가능성에 필요한 것은 종별이 아니라 관측 여부 한 비트다.
+#
+# `edges` 상한을 12 에서 32 로 올렸다. 사건에서 가격까지 몇 단계인지 미리 알 수 없고,
+# 쪼갤수록 검정 지점이 늘어 주장이 강해지는 구조이므로 상한이 사슬을 자르면 안 된다.
+# 남긴 이유는 폭주 방어(토큰·시간)뿐이다.
+LIMITS = {"edges": 32, "structures": (2, 3), "fanout": 8, "depth": 12}
 _TAG = re.compile(r"^(?P<name>.+)@t(?P<off>[+-]?\d+)$")
 
 
@@ -38,6 +36,12 @@ def parse(nid: str) -> tuple[str, int]:
     if not m:
         raise ValueError(f"노드 id 에 시간 색인이 없다: {nid!r} (형식: 이름@t0, 이름@t-2)")
     return m.group("name"), int(m.group("off"))
+
+
+def _name(nid: str) -> str:
+    """시간 색인을 뗀 이름. 색인이 없으면 그대로 - 위반은 규칙 1 이 따로 보고한다."""
+    m = _TAG.match(nid)
+    return m.group("name") if m else nid
 
 
 # ── 그래프 기본 ────────────────────────────────────────────────────────
@@ -239,10 +243,6 @@ def minimal_backdoor(edges: list, X: str, Y: str, pool: set) -> list:
     return out
 
 
-def markov_equivalent(e1: list, e2: list) -> bool:
-    return skeleton(e1) == skeleton(e2) and colliders(e1) == colliders(e2)
-
-
 # ── 함의 조건부독립 ────────────────────────────────────────────────────
 def implied_ci(nodes: dict, edges: list, testable_only: bool = True) -> set:
     """함의 조건부독립 기저.
@@ -251,7 +251,7 @@ def implied_ci(nodes: dict, edges: list, testable_only: bool = True) -> set:
     `testable_only` 면 **관측 변수만 든 함의**만 남긴다. 잠재 매개를 조건집합에
     넣어야 하는 함의는 데이터로 검정할 수 없으므로 반증 표면이 아니다.
     """
-    obs = {n for n, m in nodes.items() if KINDS[m["kind"]]["observed"]}
+    obs = {n for n, m in nodes.items() if (m or {}).get("observed")}
     sk, out = skeleton(edges), set()
     ns = sorted(nodes)
     for X, Y in itertools.combinations(ns, 2):
@@ -271,24 +271,6 @@ def fmt_ci(ci: tuple) -> str:
     return f"{X} ⊥ {Y}" + (f" | {', '.join(sorted(Z))}" if Z else "")
 
 
-def discriminator(nodes: dict, sA: dict, sB: dict) -> dict:
-    """두 구조의 판별기준 - **계산된다.** 대칭차집합이 곧 검정 목록이다."""
-    eA, eB = _edges(sA), _edges(sB)
-    if markov_equivalent(eA, eB):
-        return {"distinguishable": False,
-                "why": "Markov 동등 - 같은 skeleton, 같은 비차폐 충돌자. "
-                       "어떤 관측 데이터로도 구별 불가하다",
-                "tests": []}
-    a, b = implied_ci(nodes, eA), implied_ci(nodes, eB)
-    only_a, only_b = a - b, b - a
-    return {"distinguishable": bool(only_a or only_b),
-            "why": (f"{sA['id']} 만 함의 {len(only_a)}개 · {sB['id']} 만 함의 {len(only_b)}개"
-                    if (only_a or only_b) else
-                    "Markov 비동등이나 **검정 가능한** 함의는 같다 - 잠재변수가 차이를 가린다"),
-            "tests": ([{"holds_in": sA["id"], "ci": fmt_ci(c)} for c in sorted(only_a, key=str)]
-                      + [{"holds_in": sB["id"], "ci": fmt_ci(c)} for c in sorted(only_b, key=str)])}
-
-
 def _edges(s: dict) -> list:
     return [(e["from"], e["to"]) for e in s.get("edges") or []]
 
@@ -302,23 +284,20 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
     structs = dag.get("structures") or []
     grounded = grounded if grounded is not None else set()
 
-    # 규칙 0 · 1 - 종별과 시간 색인
+    # 규칙 0 · 1 - 시간 색인. **종별 검사는 없앴다.**
+    #
+    # 노드가 무엇인지는 `says`(자연어)가 말하고, 관측 가능성만 `observed` 로 받는다.
+    # 종별 6종을 열거하면 모델은 자기가 세우려는 노드를 그 6칸에 억지로 넣는다 -
+    # 사슬의 매개(회계 항목·기대·수급·경쟁 반응)는 그 칸에 안 맞는 것이 대부분이다.
     off: dict = {}
     for n, m in nodes.items():
-        k = m.get("kind")
-        if k not in KINDS:
-            bad.append(f"{n}: 알 수 없는 종별 {k!r}. 허용: {', '.join(KINDS)}")
+        if not isinstance(m, dict):
+            bad.append(f"{n}: 노드 명세가 dict 가 아니다 - {type(m).__name__}")
             continue
         try:
             _, off[n] = parse(n)
         except ValueError as e:
             bad.append(str(e))
-
-    # 이름을 한 번만 뽑아 재사용한다. 아래에서 `parse` 를 다시 부르면 위에서 이미 걸러낸
-    # 형식 오류 노드에서 ValueError 가 **밖으로 튀어** 런을 죽인다 - 실제로 모델이
-    # `KODEX_반도체@t`(오프셋 없음)를 내서 그렇게 죽었다. LLM 오타가 파이프라인을 멈추게
-    # 하면 안 된다. `off` 에 있는 노드만 형식이 성립한 것이다.
-    named = {n: parse(n)[0] for n in off}
 
     all_edges = [(e, s) for s in structs for e in (s.get("edges") or [])]
     for e, s in all_edges:
@@ -345,80 +324,49 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
             bad.append(f"{tag}: timing 이 없거나 잘못됨 "
                        "(scheduled|unscheduled|price_responsive|n/a). "
                        "원인의 발생 시점이 결과에 대해 외생인가")
-        # CONJECTURE 는 게시 간선을 가질 수 없다
-        if nodes.get(a, {}).get("kind") == "CONJECTURE" and \
-                nodes.get(b, {}).get("kind") == "TARGET":
-            bad.append(f"{tag}: CONJECTURE → TARGET 게시 간선 금지. conjectures[] 로 보내라")
+        # CONJECTURE 는 게시 간선을 가질 수 없다 → **삭제.** 노드 종별 열거를 없앴다.
+        # 저장소 밖의 노드를 결과에 직접 잇는 것을 금지하던 규칙인데, 이제 그 자리는
+        # 예산이 잡는다 - 못 잰 간선은 예측이 없어 설명 몫을 못 가져가므로 문장에도
+        # 나오지 않는다. 금지 규칙 하나가 산술 하나로 대체된다.
 
-    # 규칙 2 - onset 게이트
+    # 규칙 2 - onset 게이트. 구성원 노드는 **코드가 준 scope** 로 알아낸다
+    # (모델의 종별 선언에 의존하지 않는다 - 선언을 없앴다).
     if onset == "GAP_OPEN":
+        keys = {m["key"] for m in ((scope or {}).get("members") or [])}
+        targets = {n for n in nodes if _name(n) in keys}
         for e, s in all_edges:
-            if (nodes.get(e.get("from"), {}).get("kind") == "TARGET"
-                    and nodes.get(e.get("to"), {}).get("kind") == "TARGET"):
+            if e.get("from") in targets and e.get("to") in targets:
                 bad.append(f"{s.get('id')}·{e['from']}→{e['to']}: GAP_OPEN 은 구성원 간 "
                            "방향 간선 금지 - 동시호가 안에 관측이 0개다")
 
-    # 규칙 3 - 가격 노드 둘을 이으면 시장이 양쪽 부모여야 한다
-    mkt = [n for n in named if named[n].upper() == "MARKET"]
-    for s in structs:
-        ed = _edges(s)
-        for a, b in ed:
-            if (nodes.get(a, {}).get("kind") == "OBSERVABLE"
-                    and nodes.get(b, {}).get("kind") in ("OBSERVABLE", "TARGET")
-                    and named.get(a, "").upper() != "MARKET"):
-                # `is not True` 로 조인다. 모델이 문자열 "false" 를 내면 truthy 라서
-                # 교란 통제 규칙이 조용히 우회된다 - 통제 규칙은 닫힌 쪽으로 실패해야 한다.
-                if not any(m in parents(ed, a) for m in mkt) and \
-                        nodes[a].get("residualized") is not True:
-                    bad.append(f"{s.get('id')}·{a}→{b}: 가격 노드끼리 이으려면 MARKET 을 "
-                               "양쪽 부모로 넣거나 residualized=true 를 선언해라")
-
-    # 규칙 4 - TARGET 보존
-    want = {m["key"] for m in ((scope or {}).get("members") or [])}
-    if want:
-        got = {named[n] for n, m in nodes.items()
-               if m.get("kind") == "TARGET" and n in named}
-        if got != want:
-            miss, extra = sorted(want - got), sorted(got - want)
-            bad.append(f"TARGET 불일치 - 누락 {miss} · 임의추가 {extra}. "
-                       "범위는 코드가 정한다")
-
-    # 규칙 5 - SHOCK 접지
+    # 규칙 5 - 접지. **`events` 를 적은 노드는 실재하는 사건을 가리켜야 한다.**
+    #
+    # 이전 판은 `kind == "SHOCK"` 인 노드에 이걸 요구했다. 종별 열거를 없앴으므로
+    # 기준을 선언에서 내용으로 옮긴다 - 사건을 참조한 노드만 검사하면 되고, 사건이
+    # 아닌 원인(수급·거시·경쟁 반응)은 종별을 고를 필요 없이 그냥 노드가 된다.
+    n_grounded = 0
     for n, m in nodes.items():
-        if m.get("kind") != "SHOCK":
-            continue
-        ev = m.get("member_events") or []
+        ev = (m or {}).get("events") or []
         if not ev:
-            bad.append(f"{n}: SHOCK 에 member_events 가 없다")
+            continue
+        n_grounded += 1
         for x in ev:
             if grounded and x not in grounded:
-                bad.append(f"{n}: member_events {x!r} 접지 실패 - 실재하지 않는 event_id")
-        if not m.get("tau"):
-            bad.append(f"{n}: tau 없음")
+                bad.append(f"{n}: events {x!r} 접지 실패 - 실재하지 않는 event_id")
+    if grounded and not n_grounded:
+        bad.append("사건에 접지된 노드가 없다 - 브리프의 event_id 를 참조하는 노드가 "
+                   "하나는 있어야 이 셀의 설명이 저장소와 이어진다")
 
-    # 규칙 6b - **매개 식별 조건.** "잠재 매개는 접어라"를 대체한다.
+    # 규칙 3·4·6b 삭제. **노드 종별 열거(KINDS)를 없앤 대가로 함께 나갔다.**
     #
-    # 이전 판은 자식 4개 미만 잠재 매개를 위반으로 찍었다. 과잉이다 - 매개 분석은
-    # SEM 의 핵심이고(Bollen-Pearl Myth 7), CDE 는 do-계산으로 완전히 특성화되며
-    # NDE/NIE 는 `eps_med ⊥ eps_out | (X 에 영향받지 않는 공변량)` 하에 식별된다.
+    #   3  가격 노드끼리 이으면 MARKET 을 부모로  → 요인 분해가 상류에서 이미 끝난다.
+    #      결과는 시장·피어 제거 후 잔차이므로 그래프가 다시 시장을 그릴 이유가 없다
+    #   4  TARGET 보존                            → 결론 노드는 `Proposal.target` 하나다
+    #   6b 잠재 매개에 CDE/NDE/NIE 선언 강제       → 간선 유형(identity·elasticity·
+    #      statistical)이 증명 양식을 정하므로 효과 어휘를 따로 받을 필요가 없다
     #
-    # 그래서 접으라고 하지 않는다. **어느 효과를 주장하는지 선언하게 한다.**
-    # 잠재 매개의 대가는 규칙이 아니라 산술로 이미 치러진다 - 함의가 줄고,
-    # fit.local_fit 이 그 함의를 "미검정(잠재)"으로 표시한다.
-    for s in structs:
-        ed = _edges(s)
-        used = {x for ab in ed for x in ab}
-        for n, m in nodes.items():
-            if m.get("kind") != "MECHANISM" or n not in used:
-                continue
-            eff = m.get("effect")
-            if eff not in ("CDE", "NDE", "NIE"):
-                bad.append(f"{s.get('id')}·{n}: 잠재 매개다. 어느 효과를 주장하나 - "
-                           "effect=CDE (do-계산으로 식별) 또는 NDE/NIE 를 선언해라")
-            elif eff in ("NDE", "NIE") and not (m.get("seq_ignorability") or "").strip():
-                bad.append(f"{s.get('id')}·{n}: {eff} 는 매개·결과 교란 독립을 요구한다. "
-                           "seq_ignorability 에 그 조건이 왜 성립하는지 써라 "
-                           "(안 되면 CDE 로 내려가라)")
+    # 셋 다 "무엇을 어떤 이름으로 부르라"는 요구였고, 사슬을 세우는 데 기여하지 않으면서
+    # 모델의 주의를 어휘 맞추기로 끌어갔다. 순 제약 수는 줄었다.
 
     # 규칙 7 - 예산
     lo, hi = LIMITS["structures"]
@@ -439,7 +387,7 @@ def validate(dag: dict, scope: dict | None = None, onset: str = "INTRADAY",
 
 
 def report(dag: dict, **kw) -> str:
-    """검증 + 계산된 반증 표면·판별기준을 한 장으로."""
+    """검증 + 계산된 반증 표면을 한 장으로."""
     nodes, structs = dag.get("nodes") or {}, dag.get("structures") or []
     L = []
     bad = validate(dag, **kw)
@@ -456,16 +404,6 @@ def report(dag: dict, **kw) -> str:
         if not ci:
             L.append("      **없음 - 이 구조는 관측으로 반증할 수 없다.** "
                      "잠재노드를 접거나 관측을 추가해라")
-
-    if len(structs) >= 2:
-        L.append("\n[판별기준] 계산 - discriminator 산문 필드는 없다")
-        for a, b in itertools.combinations(structs, 2):
-            d = discriminator(nodes, a, b)
-            L.append(f"  {a.get('id')} vs {b.get('id')}: "
-                     f"{'판별 가능' if d['distinguishable'] else '**판별 불가 - 거부**'}")
-            L.append(f"      {d['why']}")
-            for t in d["tests"]:
-                L.append(f"      {t['holds_in']} 에서만: {t['ci']}")
     return "\n".join(L)
 
 

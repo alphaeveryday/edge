@@ -1,14 +1,12 @@
-"""간선 추정과 게이트 — **모델은 설계를 선언하고, 코드가 실행한다.**
+"""간선 추정의 **축약 경로** — 설계를 술어로 선언하면 코드가 고정된 추정량을 돌린다.
 
-실험판(`experiments/storm`)의 검정 에이전트는 파이썬을 써서 샌드박스에서 `exec` 했다.
-프로덕션에서는 그러지 않는다. 두 가지 이유다:
+기본 경로가 아니다. 기본은 `verify.py` 의 **샌드박스 검정 에이전트**다(모델이 파이썬을
+써서 간선마다 추정량을 만든다). 이 모듈은 `CAUSAL_SANDBOX_ENABLED=false` 일 때만 쓰는
+격하 경로다 — 클라우드에서 모델 생성 코드 실행을 끄고도 파이프라인이 돌아야 하기 때문이다.
 
-1. 클라우드 서비스에서 모델 생성 코드를 실행하는 건 다른 종류의 위험이다.
-2. **필요가 없어졌다.** 처치·대조를 SQL 술어로 선언하면 나머지가 전부 코드에 고정된다 -
-   결과는 초과수익, 조정집합은 그래프에서 유도, 통계량은 OLS 계수, 귀무는 층화 순열.
-   그러면 실행 가능성이 **구성상** 보장된다.
-
-그게 실험판 실패의 대부분을 문법적으로 없앤다. 실측된 실패와 그 처방:
+축약 경로가 하는 일: 처치·대조를 SQL 술어로 받고 나머지를 전부 고정한다 - 결과는 초과수익,
+조정집합은 그래프에서 유도, 통계량은 OLS 계수, 귀무는 층화 순열, `null_kind` 는 label.
+그러면 실행 가능성이 **구성상** 보장되고 실험판에서 실측된 실패가 문법적으로 불가능해진다:
 
     단위 불일치 (스칼라를 8관측에 회귀)   -> x·y·z 가 같은 pairs 에서 나온다
     검정력 0 (단일 셀 n=8)               -> scope=type 이면 코호트가 타입 전체다
@@ -16,14 +14,15 @@
     손으로 쓴 p                           -> 모델이 수치를 쓸 자리가 없다
     층화 누락 (자유 순열)                 -> strata 를 선언하게 하고 코드가 만든다
 
-잃는 것: 모델이 새 추정량을 발명할 수 없다. 실측상 모델은 그걸 잘 못 했고(단위 불일치·
-퇴화 귀무·날조), 잘한 것은 **무엇을 무엇과 비교할지**였다. 그건 술어로 그대로 표현된다.
+**대가는 분명하다.** 추정량이 하나로 고정되므로 그 틀에 안 맞는 간선(사건연구·2단계
+도구변수·부분식별·항등식 분해)은 통째로 검정 불가가 된다. 그게 이 경로를 기본에서
+내린 이유다 - 무엇을 어떻게 재야 하는지는 간선마다 다르다. 여기 있는 게이트도
+`verify.gate` 의 부분집합이다(G1·G2·귀무 퇴화만; G4·G6·G7 은 구성상 자동 충족).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
 
 import numpy as np
 
@@ -33,6 +32,9 @@ from . import stats as S
 
 # scope 가 최소 표본을 정한다. cell 은 원리적으로 작다 - 막지 않고 요구만 낮춘다.
 NMIN = {"cell": 8, "type": 30}
+# 주장 층위. **무엇을 주장하느냐가 어떤 귀무를 써야 하는지를 정한다**(verify.NULL_OK).
+# 제안은 층위를 선언하고, 허용 귀무는 코드가 내려준다.
+CLAIMS = ("L2", "L3", "L4", "L4e")
 # 층화 어휘. 대조군을 무엇 안에서 골랐으면 귀무도 그 안에서 섞어야 한다.
 STRATA = ("date", "date_industry", "none")
 N_NULL = 1000
@@ -40,16 +42,25 @@ N_NULL = 1000
 
 @dataclass(frozen=True, slots=True)
 class EdgeDesign:
-    """간선 하나의 **조작적 정의**. 정의가 곧 설계다 - 문자열로 남아 감사·적층된다."""
+    """간선 하나의 **산문 + 조작적 정의**. 둘 다 남아 감사·적층된다.
+
+    산문(`say`·`because`·`false_if`)이 먼저다 - 무엇을 주장하고 무엇이면 죽는지를
+    쓰지 않은 간선은 검정할 대상이 없다. 술어(`treated`·`control`)는 **선택**이다:
+    샌드박스 검정 에이전트가 자기 코드로 비교군을 만들 수 있으므로 제안자의 술어는
+    힌트로 내려가고, 축약 경로(`estimate`)에서만 필수가 된다.
+    """
 
     src: str                     # DAG 노드 id (원인)
     dst: str                     # DAG 노드 id (결과)
-    treated: str                 # 처치 코호트 SQL 술어 (사건 기반)
-    control: str                 # 대조 코호트 SQL 술어 (금융상품 기반)
+    treated: str = ""            # 처치 코호트 SQL 술어 (사건 기반). 힌트
+    control: str = ""            # 대조 코호트 SQL 술어 (금융상품 기반). 힌트
     strata: str = "date"         # 귀무의 교환가능성. 설계가 조건화한 것을 보존한다
     scope: str = "type"          # cell | type
+    claims: str = "L2"           # 주장 층위. 허용 null_kind 를 정한다 (verify.NULL_OK)
+    say: str = ""                # 이 간선이 주장하는 것 한 문장
     because: str = ""            # 메커니즘. 반증층이 공격하는 표면
     false_if: str = ""           # 무엇이 보이면 이 간선이 죽나
+    needs: str = ""              # 지금 저장소에 없어서 못 세우는 것 (데이터 요청 씨앗)
     timing: str = "unscheduled"  # scheduled | unscheduled | price_responsive | n/a
     cause_label: str = ""        # 고객이 읽을 원인 이름
 
@@ -120,6 +131,12 @@ def estimate(cd, design: EdgeDesign, *, as_of: str, w0: date, w1: date,
     """
     if design.strata not in STRATA:
         raise PipelineError(f"strata={design.strata!r} 는 어휘 밖이다: {STRATA}")
+    if not (design.treated or "").strip() or not (design.control or "").strip():
+        # 축약 경로는 술어가 곧 설계다. 없으면 샌드박스 검정으로 가야 하는 간선이다 -
+        # 조용히 아무 대비나 만들면 무엇을 비교했는지 알 수 없는 수치가 나온다.
+        return EdgeResult(design=design, adjust=adjust,
+                          gate_fail=["처치·대조 술어가 없다 - 축약 경로로는 검정할 수 없다 "
+                                     "(샌드박스 검정 경로가 필요하다)"])
 
     treated = cd.cohort(design.treated, as_of=as_of, w0=w0, w1=w1)
     fail: list[str] = []

@@ -1,116 +1,200 @@
-"""제안 에이전트 — **모델이 내는 것은 설계뿐이다.**
+"""제안 에이전트 — **오늘 이 한 움직임의 인과 사슬을 그린다.**
 
-모델에게 묻지 않는 것과 그 이유:
+이 파일에서 가장 많이 한 일은 규칙을 **지운** 것이다. 남은 원칙은 하나다.
 
-    조정집합    그래프에서 유도된다. 실측 정답률 78%, 코드는 구성상 100%
-    통계량      데이터를 보기 전에 정할 수 없다. 실측: 스칼라를 8관측에 회귀하는 명세
-    모집단 크기  코호트 술어가 정한다
-    수치·p값    **날조가 전부 여기서 났다.** 쓸 자리를 두지 않는다
-    귀무 종류    주장이 정한다(귀속이면 label). 층화는 선언만 받고 코드가 만든다
+    기계가 검사할 수 있는 것은 프롬프트에서 뺀다. 검사할 수 없는 것만 남긴다.
 
-모델에게 묻는 것:
+시간 역행·미접지 노드·순환·어휘 위반·표본 부족·그레인 중복은 전부 코드가 잡아 사유와
+함께 되돌린다. 그러니 프롬프트에 적을 이유가 없다 - 적으면 지면만 먹고, 모델은 그 목록을
+채우는 데 주의를 쓴다. 반대로 **무엇이 원인인가·어떤 경로로 전달되나·어느 계수가
+필요한가·무엇이면 죽나**는 코드가 대신할 수 없다. 프롬프트는 그것만 묻는다.
 
-    처치·대조 술어   무엇을 무엇과 비교하나 — 이게 설계다
-    메커니즘        왜 그 경로인가. 반증층이 공격하는 표면
-    반증조건        무엇이 보이면 죽나
-    시점 외생성      원인의 발생 시점이 결과에 대해 외생인가(역인과 차단)
+**도메인 예시를 주지 않는다.** 형식(JSON 골격)은 보여주고 내용은 비운다. 예시를 한 번
+주면 모델은 그 모양으로만 답한다 - 사슬의 길이·매개의 종류·코호트의 정의를 예시가
+결정해버린다. 여기서 필요한 것은 정해진 몇 갈래가 아니라 모델이 가진 도메인 지식이
+그대로 나오는 것이므로, 방향을 정해주지 않는 쪽이 정확히 맞다.
 
-프롬프트에 **타입 모집단과 분포 사전을 항상 싣는다.** 실측: 모집단 한 줄을 보여주면
-인과 간선 5/5 가 타입 전체로 풀링했고, 안 보여주면 0/4 가 셀에 갇혔다(n=8 검정).
+수치를 금지하지 않는다는 것이 이전 판과의 가장 큰 차이다. 연역 사슬에서는 수치가 본질
+이므로 금지하면 사슬 자체가 불가능하다. 날조는 금지로 막지 않고 **출처 대조로 죽인다** -
+`source` 없는 값은 검정이 확인할 수 없어 그 자리에서 기각된다.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..config import PipelineError
-from . import graph as G
-from .engine import NMIN, STRATA, EdgeDesign
+from .chain import KINDS, Edge, Interval, paths
+from .engine import EdgeDesign
 
-SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸다 - 수치는 코드가 만든다.
+SYSTEM = """너는 **오늘 이 셀이 이만큼 움직인 이유**를 인과 사슬로 푼다.
+일반 법칙을 정리하는 자리가 아니다 - 설명 대상은 브리프에 적힌 잔차 하나다.
 
-## 무엇을 내나
+## 사슬
+사건에서 가격까지는 간접이다. 몇 단계인지, 무엇이 매개인지 정해진 목록은 없다.
+아는 만큼 쪼개라 - 실물 지표·회계 항목·기대·수급·경쟁 반응 무엇이든 노드가 된다.
+쪼갤수록 검정 지점이 늘어 주장이 강해지고, 뭉갤수록 검정 불가에 가까워진다.
+원인은 하나가 아니어도 된다.
 
-노드와 간선으로 된 그래프, 그리고 인과 간선마다 **처치·대조 코호트 SQL 술어**.
+간선은 셋 중 하나다. **증명 양식이 달라서 구분한다.**
 
-노드 id 는 `이름@t±N` 형식(N=거래일 오프셋). 시간 역행 간선 금지.
-노드 종별: TARGET(설명 대상) · SHOCK(사건) · OBSERVABLE(관측계열) ·
-          MECHANISM(잠재 매개, effect=CDE 선언 필수) · CONFOUND
+  identity     항등식. 오차가 없다. `formula` 와 입력 `source` 를 적어라
+  elasticity   계수가 필요한 연역. `effect` 에 계수 구간, `source` 에 계수의 근거
+  statistical  연역이 안 되는 자리. `exposure` 에 이 경로에 노출된 집합을,
+               `reference` 에 비교할 참조집합을 적고 `effect` 는 비워라 -
+               검정 세션이 데이터로 채운다. 참조집합 선택이 결론을 바꾸므로
+               그 선택도 `invariant_to` 에 걸어라
 
-**SHOCK 노드는 접지돼야 한다.** `member_events` 에 브리프의 `event_id` 를 그대로 적고,
-`tau` 에 그 사건의 `available_at` 을 적어라. 브리프에 없는 id 를 쓰면 구조 게이트에서
-기각된다 - 존재하지 않는 사건을 원인으로 세울 수 없다.
+`effect` 는 부모 변화에 대한 자식 변화의 비다(탄력성). 사슬의 절대 크기는 사건 노드의
+`value` 한 곳에서만 들어온다.
 
-간선 종류:
-  directed    보통 인과 간선
-  bidirected  **미지의 공통원인.** 조정으로 식별이 불가능해지고 검정 가능한 함의도
-              줄어든다 - 공짜가 아니다. 진짜 모를 때만 써라
+## 수치
+써라. 단 **모든 수치에 `source` 가 필요하다** - 어느 공시·어느 재무항목·어느 추정치인가.
+검정 세션이 그 출처를 조회해 대조한다. 출처 없는 값과 대조에서 어긋난 값은 그 자리에서
+죽으므로, 추측을 좁게 쓰는 것이 유일한 치명적 실수다. 모르면 넓은 구간을 써라.
+구간 폭은 감점이 아니다 - 무지의 정직한 크기다.
 
-## 술어
+## 예산
+브리프의 잔차가 설명할 총량이다. 경로 예측의 합이 그것을 넘으면 그래프가 기각된다.
+전부 설명하려 하지 마라 - **미설명분을 남기는 것이 초과보다 낫다.**
 
-처치는 사건 기반, 대조는 금융상품 기반이다. 순수 WHERE 조건만 쓴다
-(세미콜론·주석·available_at 금지 - 시점 절은 코드가 넣는다).
+## 불변
+간선마다 `invariant_to` 에 "이 주장이 의존하지 않는 것"을 적어라. 문턱·기준·기간·정의·
+참조집단 무엇이든. 코드가 그것들을 흔들어 예측 분포를 만들고, 흔들었을 때 결론이
+뒤집히면 간선이 죽는다. 반증 약속이므로 많이 적을수록 주장이 강해진다.
 
-처치 컬럼: ticker · trade_date · event_type_code · predicate_code · role_code
-          · lifecycle_stage · sector_name · industry_name · market_cap · listing_market
-대조 컬럼: ticker · sector_name · industry_name · market_cap · listing_market
+## 막힌 것
+못 재는 간선을 빼지 마라. `needs` 에 무엇이 있어야 서는지 적고 남겨라. 구조가 맞는데
+데이터가 없는 것은 실패가 아니라 수집 의제다. 반대로 잔차를 설명할 원인을 정말 못 찾으면
+빈 간선 목록을 내라 - 억지 사슬은 침묵보다 나쁘다.
 
-**종목을 지목할 때는 `ticker` 를 쓴다.** `instrument_id` 도 쓸 수 있지만 그건 티커가 아니라
-불투명 식별자(`inst_01K...`)다 - 거기에 `'000660'` 같은 티커를 넣으면 0건이 나온다.
+## 모르는 것
+산업 구조·공급망·원가 구성·계약 관행을 모르면 추측하지 말고 `lookups` 에 질의를 적어라.
+정기보고서 원문에서 찾아 붙이고 **다시 묻는다.** 무엇을 물을지는 네가 정한다 - 몇 개든,
+어느 층위든. 아는 것만으로 충분하면 빈 목록을 내라(그러면 조회 없이 바로 넘어간다).
 
-**대조군은 다른 종목이다.** 같은 종목의 다른 날짜가 아니다. 처치 술어가 "이 종목에 이
-사건이 났다"면, 대조 술어는 "같은 날 그 사건이 나지 않은 **다른** 종목들"이다. 그래서 대조
-술어에는 사건 컬럼이 없다 - 사건이 없는 쪽을 고르는 것이므로 걸 조건이 없다.
+관측이 가격을 보고 만들어졌을 위험이 있으면(사후 해설·가격 언급 기사) `reverse_risk` 에
+적어라. 이건 코드가 판별할 수 없고, 적힌 간선은 통계 주장에서 제외된다.
 
-## 예시 하나 (이대로 따라 하면 통과한다)
+JSON 하나만. 주석·설명 문장을 밖에 붙이지 마라.
+{"target": "설명 대상 노드 id",
+ "lookups": ["알아야 하는 것을 질의로. 없으면 빈 목록"],
+ "nodes": {"<id>": {"says": "이 노드가 무엇이며 무엇을 어떤 단위로 재는가",
+                    "observed": "어떻게 관측하나 (못 재면 null)",
+                    "value": [lo, hi],
+                    "events": ["브리프의 event_id (사건 노드일 때)"]}},
+ "edges": [{"from": "", "to": "", "kind": "identity|elasticity|statistical",
+            "says": "이 간선이 주장하는 것 한 문장",
+            "because": "왜 이 경로로 전달되나",
+            "false_if": "무엇이 관측되면 이 간선이 죽나",
+            "effect": [lo, hi], "formula": "", "source": "",
+            "exposure": "이 경로에 노출된 집합", "reference": "비교할 참조집합",
+            "invariant_to": [], "needs": null, "reverse_risk": null}],
+ "missing": ["확인에 필요한데 저장소에 없는 것"]}
 
+노드 id 는 `이름@t단계` 다 - 단계 숫자가 시간 순서이고, 그것만으로 비순환이 보장된다.
+`exposure` 는 사건 열(`event_type_code`·`predicate_code`·`ticker`·`industry_name` 등)을
+쓰고, `reference` 는 종목 속성(`instrument_id`·`ticker`·`sector_name`·`industry_name`·
+`market_cap`·`listing_market`)만 쓴다 - 참조집합은 사건이 없는 종목도 포함해야 한다.
+
+아래는 **형태 예시**다(도메인 판단이 아니라 모양만 보라 - 규칙을 통과하는 최소 골격).
 ```json
-{"nodes": {
-   "SK하이닉스_실적발표@t0": {"kind": "SHOCK", "unit": "stock",
-       "measure": "분기 실적 공시", "member_events": ["evt_abc123"],
-       "tau": "2026-07-29T07:30:00+09:00"},
-   "KODEX반도체@t0": {"kind": "TARGET", "unit": "etf", "measure": "당일 등락"}},
- "edges": [{"from": "SK하이닉스_실적발표@t0", "to": "KODEX반도체@t0",
-            "kind": "directed", "cause_label": "SK하이닉스 실적 발표",
-            "treated": "ticker = '000660' AND event_type_code = 'COMPANY.EARNINGS.RESULT_RELEASE'",
-            "control": "industry_name = 'Semiconductors' AND ticker != '000660'",
-            "strata": "date_industry", "timing": "scheduled",
-            "because": "메모리 가격 전망이 바뀌어 동종 밸류에이션이 함께 조정된다",
-            "false_if": "같은 산업 미지명 종목도 같은 폭으로 움직였다"}],
+{"target": "대상셀@t1",
+ "lookups": [],
+ "nodes": {
+   "지명종목_사건@t0": {"says": "지명 종목의 사건 - 크기를 %로 잰다",
+                        "observed": "공시 원문 대비 컨센서스",
+                        "value": [0.05, 0.15], "events": ["evt_abc123"]},
+   "대상셀@t1": {"says": "대상 셀의 당일 시장초과수익", "observed": "종가 기준 초과수익"}},
+ "edges": [{"from": "지명종목_사건@t0", "to": "대상셀@t1", "kind": "statistical",
+            "says": "지명 종목의 사건이 같은 산업 종목의 당일 초과수익을 움직인다",
+            "because": "같은 수요·가격 전망을 공유해 밸류에이션이 함께 조정된다",
+            "false_if": "같은 산업의 미지명 종목이 같은 폭으로 움직였다",
+            "effect": null, "formula": "", "source": "",
+            "exposure": "event_type_code = 'COMPANY.EARNINGS.RESULT_RELEASE' AND ticker = '000660'",
+            "reference": "industry_name = 'Semiconductors' AND ticker != '000660'",
+            "invariant_to": ["참조집합 정의", "창 길이"],
+            "needs": null, "reverse_risk": null}],
  "missing": []}
-```
+```"""
 
-처치는 사건 컬럼을 쓰고, 대조는 **종목 컬럼만** 쓴다. `industry_name` 값은 브리프에 실린
-것을 원문 그대로 쓴다. 가격 노드를 만들지 않았으므로 시장 통제 규칙이 걸리지 않는다 -
-가장 단순한 통과 형태다.
 
-**대조를 무엇 안에서 골랐으면 strata 도 그것이어야 한다.** 같은 날 같은 산업에서
-골랐으면 `date_industry`, 같은 날에서만 골랐으면 `date`.
+@dataclass(frozen=True, slots=True)
+class Proposal:
+    """모델 산출을 코드가 쓰는 모양으로. **어휘 밖 값은 여기서 fail-loud 한다.**"""
 
-## 규칙
+    target: str = ""
+    nodes: dict[str, Any] = field(default_factory=dict)
+    chain: list[Edge] = field(default_factory=list)
+    anchors: dict[str, Interval] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
+    reverse: dict[tuple[str, str], str] = field(default_factory=dict)
+    lookups: list[str] = field(default_factory=list)   # 알아야 하는 것. 코드가 조회한다
 
-1. 처치와 대조는 **겹치지 않는 대비**여야 한다. "사건이 났다 vs 안 났다"에 대비가
-   없으면(모두에게 걸렸으면) 다른 자리로 옮겨라 - 지명된 종목 vs 커버되지만 미지명 등.
-2. `timing` 을 반드시 선언한다: scheduled(예정된 일정) · unscheduled(예고 없음) ·
-   price_responsive(**가격을 보고 쓰인 것** - 역인과라 통계 주장 불가) · n/a
-3. 브리프의 [산술] 줄에서 이미 죽은 후보는 제안하지 마라.
-4. 원인을 못 찾으면 빈 간선 목록을 내라. **억지 설계는 UNCERTAIN 보다 나쁘다.**
-5. **가격 계열끼리 잇지 마라.** 두 가격은 시장 요인에 함께 흔들려 그 간선이 인과가 아니다.
-   꼭 이어야 하면 둘 중 하나를 해라: 노드 id 가 정확히 `MARKET@t±N` 인 노드를 만들어
-   **출발 노드의 부모로** 넣거나(이름을 번역하지 마라 - `시장_지수` 는 인식되지 않는다),
-   출발 노드에 `"residualized": true` 를 선언해라(시장 성분을 이미 제거한 계열이라는 뜻).
-   둘 다 없으면 구조 게이트에서 기각된다.
+    @property
+    def edges(self) -> list[dict]:
+        """식별·적합이 보는 간선 목록."""
+        return [{"from": e.src, "to": e.dst,
+                 "timing": ("price_responsive"
+                            if self.reverse.get((e.src, e.dst)) else "unscheduled")}
+                for e in self.chain]
 
-JSON 하나만:
-{"nodes": {"id": {"kind": "...", "unit": "stock", "measure": "무엇을 재는가",
-                   "member_events": ["브리프의 event_id"], "tau": "available_at",
-                   "residualized": true,
-                   "effect": "CDE (MECHANISM 일 때만)"}},
- "edges": [{"from": "...", "to": "...", "kind": "directed|bidirected",
-            "cause_label": "고객이 읽을 원인 이름",
-            "treated": "SQL 술어", "control": "SQL 술어",
-            "strata": "date|date_industry|none",
-            "timing": "...", "because": "메커니즘", "false_if": "무엇이면 죽나"}],
- "missing": ["확인에 필요한데 저장소에 없는 것"]}"""
+    @property
+    def designs(self) -> list[EdgeDesign]:
+        """검정 세션이 실제로 재야 하는 간선 = **statistical 뿐이다.**
+
+        항등식은 계산이고 탄력성은 출처 대조라, 코호트를 짜서 검정할 대상이 아니다.
+        이 구분이 없으면 계산을 검정하거나 추정을 계산으로 위장하게 된다.
+
+        고객 문장에 쓰는 원인 이름은 **사슬의 뿌리**에서 온다. 통계 간선의 부모는 대개
+        중간 매개(기대·심리)이고, 그걸 원인이라 쓰면 "주주환원 기대가 원인입니다" 같은
+        말이 나간다 - 사람이 읽어야 하는 것은 그 기대를 만든 사건이다.
+        """
+        return [EdgeDesign(
+            src=e.src, dst=e.dst, treated=e.exposure, control=e.reference,
+            strata="date", scope="type", claims="L4",
+            say=e.says, because=e.because, false_if=e.false_if, needs=e.needs,
+            timing=("price_responsive" if self.reverse.get((e.src, e.dst))
+                    else "unscheduled"),
+            cause_label=self.label(e.src))
+            for e in self.chain if e.kind == "statistical"]
+
+    def label(self, node: str) -> str:
+        """사슬을 거슬러 올라가 뿌리의 이름. 없으면 노드 id 그대로."""
+        seen = {node}
+        cur = node
+        while True:
+            ups = [e.src for e in self.chain if e.dst == cur and e.src not in seen]
+            if not ups:
+                break
+            cur = ups[0]
+            seen.add(cur)
+        says = str((self.nodes.get(cur) or {}).get("says") or "").strip()
+        return says.split(" (")[0].split(" - ")[0] if says else cur
+
+    @property
+    def needs(self) -> list[str]:
+        """간선을 지우지 않고 남긴 데이터 요청 씨앗."""
+        return [e.needs for e in self.chain if e.needs]
+
+    def routes(self) -> list:
+        """예산에 들어가는 경로들. `target` 으로 닿는 것만."""
+        return paths(self.chain, self.target, self.anchors)
+
+
+def _iv(raw: Any, where: str) -> Interval | None:
+    """`[lo, hi]` 또는 단일 수 → 구간. **모양이 틀리면 조용히 넘기지 않는다.**"""
+    if raw is None or raw == []:
+        return None
+    if isinstance(raw, (int, float)):
+        return Interval(float(raw), float(raw))
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        try:
+            lo, hi = float(raw[0]), float(raw[1])
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"{where}: 구간에 수가 아닌 값 {raw!r}") from exc
+        return Interval(min(lo, hi), max(lo, hi))
+    raise PipelineError(f"{where}: 구간은 [lo, hi] 여야 한다 - {raw!r}")
 
 
 def _pct(x: float | None) -> str:
@@ -120,20 +204,33 @@ def _pct(x: float | None) -> str:
 def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
           route_code: str, contributors: list[tuple[str, float]],
           candidates: list[dict], industry: dict | None = None) -> str:
-    """셀 브리프. **타입 모집단·분포 사전·무게를 항상 싣는다.**"""
+    """셀 브리프. **사실만 싣는다 - 어디를 보라는 지시를 넣지 않는다.**
+
+    이전 판은 여기에 "상승 비율이 50% 근처면 방향을 못 쓴다", "되도록 타입 전체로 쌓아라"
+    같은 줄을 넣었다. 그건 결론과 참조집합을 미리 정해주는 것이어서, 모델이 자기 도메인
+    지식으로 사슬을 세우는 대신 그 지시를 만족시키는 쪽으로 움직였다. 지시를 지우고
+    사실(모집단·분포·비중·측정값)만 남긴다.
+    """
     L = [f"셀: {etf_name} {trade_date}",
          f"관측 등락 {_pct(observed)} · 시장·피어 제거 후 잔차 {_pct(residual)}"
-         f" · route={route_code}"]
+         f" · route={route_code}",
+         f"설명 예산: {abs(residual) * 100:.2f}%p"]
     if contributors:
         L.append("기여 상위: " + ", ".join(f"{n}({_pct(c)})" for n, c in contributors[:5]))
     L.append("")
     L.append(f"후보 사건 {len(candidates)}건:")
     for c in candidates:
+        # `predicate_code` 를 보여주는 이유: 술어에 쓸 수 있는 값을 안 보이면 모델이
+        # 발명한다 - 실제로 원장에 없는 `predicate_code = 'EARNINGS_MISS'` 를 내 0건이 됐다.
         pred = f" predicate_code={c['predicate_code']}" if c.get("predicate_code") else ""
         L.append(f"  [{c['event_type_code']}{pred}] {c.get('label', '')} "
                  f"{c.get('event_date', '')} 대상 {c.get('ticker', '?')}")
         if c.get("event_id"):
             L.append(f"     event_id={c['event_id']}  available_at={c.get('available_at', '')}")
+        for m in c.get("measures") or []:
+            L.append(f"     측정: {m.get('role_code', '?')}={m.get('surface') or m.get('value')}"
+                     f" {m.get('unit') or ''} basis={m.get('basis', '?')}"
+                     f" 출처={m.get('value_source', '?')}")
         p = c.get("prior") or {}
         if p.get("n"):
             L.append(f"     타입 모집단: 사건 {p.get('events', 0)} · 종목 {p.get('instruments', 0)}"
@@ -152,119 +249,168 @@ def brief(*, etf_name: str, trade_date: str, observed: float, residual: float,
         vocab = sorted({v for v in industry.values() if v})
         L += ["", f"쓸 수 있는 industry_name 값 ({len(vocab)}종, 원문 그대로 써라):",
               "  " + " · ".join(vocab[:40])]
-    L += ["", "상승 비율이 50% 근처인 타입은 방향을 못 쓴다. 크기는 분위수로 판단해라.",
-          "잔차를 설명할 수 없다면 빈 간선 목록을 내라."]
     return "\n".join(L)
 
 
-def _as_list(out: dict, key: str) -> list:
-    """목록 필드. **falsy 비목록을 `[]` 로 접지 않는다** — `edges: {}` 를 "간선 없음"으로
-    읽으면 계약 위반이 정상 산출로 집계돼 되먹임 없이 UNCERTAIN 이 나간다."""
-    value = out.get(key)
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise PipelineError(f"제안의 {key} 가 목록이 아니다: {type(value).__name__}")
-    return value
+def _seq(raw: Any, where: str) -> list:
+    """목록이어야 하는 자리. **falsy 비목록을 조용히 빈 목록으로 접지 않는다.**
 
-
-def _opt_str(e: dict, i: int, key: str, default: str) -> str:
-    """선택 문자열 필드. 비문자열이면 여기서 거부한다 — 그대로 `EdgeDesign` 에 실으면
-    `engine` 의 `NMIN.get`·`narrate` 의 `.strip()` 에서 터지고, 그건 parse 밖이라
-    되먹임이 못 잡는다(ALPHA-633)."""
-    value = e.get(key)
-    if value is None or value == "":
-        return default
-    if not isinstance(value, str):
-        raise PipelineError(f"간선 {i} 의 {key} 가 문자열이 아니다: {type(value).__name__}")
-    return value
-
-
-def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
-    """모델 산출을 (nodes, designs, missing) 으로. **어휘 밖 값은 fail-loud.**
-
-    형태가 어긋난 산출(`edges: [null]`·스칼라 루트 등)도 여기서 전부 `PipelineError` 로
-    정규화한다. 타입이 갈리면 호출부(`run.explain`)의 되먹임이 그 예외를 못 알아보고
-    그대로 새어 나가, AnalyzeOne 하나가 유니버스 전체 런을 죽인다(ALPHA-633).
+    `edges: {}` 는 예외조차 없이 "간선 없음"으로 접혀 계약 위반이 정상 산출로 집계된다 -
+    그러면 UNCERTAIN 설명이 초록으로 게시된다. 게이트가 거르는 모든 위반은 **한 타입**
+    (PipelineError)으로 나와야 `run.explain` 의 되먹임이 알아본다(ALPHA-633).
     """
-    if not isinstance(out, dict):
-        raise PipelineError(f"제안이 객체가 아니다: {type(out).__name__}")
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PipelineError(f"{where}: 목록이어야 한다 - {type(raw).__name__}")
+    return list(raw)
+
+
+def parse(out: dict) -> Proposal:
+    """모델 산출을 `Proposal` 로. **여기서 잡는 것은 프롬프트에서 빠진 것들이다.**
+
+    유형별로 무엇이 반드시 있어야 하는지를 코드가 검사하므로 프롬프트가 그 목록을 다시
+    나열하지 않아도 된다. 어긋나면 사유가 그대로 되먹임 문장이 되어 다음 시도를 고친다.
+    """
     nodes = out.get("nodes")
+    lookups = [str(q).strip() for q in _seq(out.get("lookups"), "lookups")
+               if str(q).strip()]
     if not isinstance(nodes, dict):
+        # 조회만 먼저 요청하는 것은 유효한 산출이다 - 모르는 것을 물으려면 사슬을 먼저
+        # 그려야 한다는 요구는, 추측으로 그리게 만드는 요구다.
+        if lookups:
+            return Proposal(lookups=lookups)
         raise PipelineError(f"제안에 nodes 가 없다: {sorted(out)[:6]}")
-    for node, meta in nodes.items():
-        # 노드 메타는 graph.validate 가 `m.get("kind")` 로 읽는다 - 여기서 안 거르면
-        # 그쪽에서 AttributeError 가 나고, 그건 parse 밖이라 되먹임이 못 잡는다.
-        if not isinstance(node, str) or not isinstance(meta, dict):
-            raise PipelineError(f"nodes 항목이 (문자열, 객체)가 아니다: {node!r}")
-        # 시간 색인(@t±N)까지 여기서 본다. graph.validate 는 첫 순회의 ValueError 만
-        # 위반으로 담고(graph.py:314), MARKET 목록을 만들며 **다시** 파싱할 때는 안 감싼다
-        # (graph.py:356) - 그 ValueError 는 parse 밖이라 되먹임이 못 잡는다. 형식 정본은
-        # graph.parse 하나다(정규식을 여기 복제하면 둘이 갈린다).
-        try:
-            G.parse(node)
-        except ValueError as exc:
-            raise PipelineError(f"nodes 의 {node!r}: {exc}") from exc
-        # graph.validate 가 메타에서 **연산**하는 필드만 막는다(Rule 2 - 그 이상은 스키마
-        # 검증기가 된다). 적대적 스윕으로 센 목록이다:
-        #   kind            KINDS 조회의 **dict 키**(graph.py:308) - unhashable 이면 TypeError
-        #   member_events   순회 + 집합 원소(graph.py:381·386) - 목록·문자열 원소여야 한다
-        #   seq_ignorability `.strip()`(graph.py:409)
-        # tau·effect·unit·measure 는 비교·falsy 검사뿐이라 타입이 달라도 안 터진다.
-        if not isinstance(meta.get("kind"), str):
-            raise PipelineError(
-                f"nodes 의 {node!r}: kind 가 문자열이 아니다: {meta.get('kind')!r}")
-        events = meta.get("member_events")
-        if events is not None:
-            # `list[str]` 로 못박는다. graph.validate 가 원소를 **집합 원소로 쓰므로**
-            # (`x not in grounded`, graph.py:386) dict·list 원소는 unhashable TypeError 가
-            # 되고, event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
-            if not isinstance(events, list) or not all(isinstance(x, str) for x in events):
-                raise PipelineError(
-                    f"nodes 의 {node!r}: member_events 가 문자열 목록이 아니다: {events!r}")
-        seq = meta.get("seq_ignorability")
-        if seq is not None and not isinstance(seq, str):
-            raise PipelineError(
-                f"nodes 의 {node!r}: seq_ignorability 가 문자열이 아니다: {type(seq).__name__}")
-    edges = _as_list(out, "edges")
-    designs: list[EdgeDesign] = []
-    for i, e in enumerate(edges):
+    target = str(out.get("target") or "").strip()
+    if target and target not in nodes:
+        raise PipelineError(f"target={target!r} 이 nodes 에 없다")
+
+    anchors: dict[str, Interval] = {}
+    for nid, spec in nodes.items():
+        if isinstance(spec, dict):
+            got = _iv(spec.get("value"), f"노드 {nid} value")
+            if got:
+                anchors[nid] = got
+            # `events` 는 접지 검사(graph.validate)가 **순회하고 집합 원소로 쓴다.**
+            # 스칼라·unhashable 원소가 그대로 내려가면 TypeError 로 새어 되먹임을
+            # 우회한다 - 게이트가 거르는 위반은 전부 PipelineError 여야 한다(ALPHA-633).
+            for x in _seq(spec.get("events"), f"노드 {nid} events"):
+                if not isinstance(x, str):
+                    raise PipelineError(
+                        f"노드 {nid} events 원소가 문자열이 아니다 - "
+                        f"{type(x).__name__}. 사건 id 는 브리프의 event_id 다")
+
+    chain: list[Edge] = []
+    reverse: dict[tuple[str, str], str] = {}
+    for i, e in enumerate(_seq(out.get("edges"), "edges")):
         if not isinstance(e, dict):
-            raise PipelineError(f"간선 {i} 가 객체가 아니다: {type(e).__name__}")
-        if e.get("kind") == "bidirected":
-            continue                      # 양방향은 설계가 아니라 가정이다
-        for key in ("from", "to", "treated", "control"):
-            value = e.get(key)
-            # 문자열이 아닌 값(숫자·객체)도 여기서 걸러야 한다 - `.strip()` 이 터지면
-            # PipelineError 가 아니라 AttributeError 라 되먹임 대상이 못 된다.
-            if not isinstance(value, str) or not value.strip():
+            raise PipelineError(f"간선 {i} 가 객체가 아니다 - {type(e).__name__}")
+        for key in ("from", "to"):
+            if not str(e.get(key) or "").strip():
                 raise PipelineError(f"간선 {i} 에 {key} 가 없다")
-        strata = _opt_str(e, i, "strata", "date")
-        if strata not in STRATA:
-            raise PipelineError(f"간선 {i} strata={strata!r} 는 어휘 밖이다: {STRATA}")
-        scope = _opt_str(e, i, "scope", "type")
-        # 어휘를 안 보면 미지 scope 가 engine 의 `NMIN.get(scope, 8)` 에서 **가장 관대한**
-        # 최소 표본(8)으로 떨어져, type(30) 이면 기각될 설계가 통과한다. NMIN 이 곧 어휘다.
-        if scope not in NMIN:
-            raise PipelineError(f"간선 {i} scope={scope!r} 는 어휘 밖이다: {sorted(NMIN)}")
-        designs.append(EdgeDesign(
-            src=e["from"], dst=e["to"], treated=e["treated"], control=e["control"],
-            strata=strata, scope=scope,
-            because=_opt_str(e, i, "because", ""),
-            false_if=_opt_str(e, i, "false_if", ""),
-            timing=_opt_str(e, i, "timing", "unscheduled"),
-            cause_label=_opt_str(e, i, "cause_label", e["from"])))
-    missing = [str(m) for m in _as_list(out, "missing")]
-    return nodes, designs, missing
+        tag = f"간선 {i}({e['from']}→{e['to']})"
+        kind = str(e.get("kind") or "").strip()
+        if kind not in KINDS:
+            raise PipelineError(f"{tag} kind={kind!r} 는 {KINDS} 밖이다")
+        if not str(e.get("says") or e.get("because") or "").strip():
+            raise PipelineError(
+                f"{tag} 에 says·because 가 둘 다 없다 - 무엇을 주장하는지 쓰지 않은 "
+                "간선은 검정할 수 없다")
+        eff = _iv(e.get("effect"), f"{tag} effect")
+        src = str(e.get("source") or "").strip()
+        if eff and kind != "statistical" and not src:
+            raise PipelineError(
+                f"{tag} 에 수치({eff})는 있고 source 가 없다 - 출처를 대조할 수 없는 "
+                "값은 날조와 구별되지 않는다")
+        if kind == "identity" and not str(e.get("formula") or "").strip():
+            raise PipelineError(f"{tag} 는 항등식인데 formula 가 없다")
+        if kind == "statistical" and not str(
+                e.get("exposure") or e.get("needs") or "").strip():
+            raise PipelineError(
+                f"{tag} 는 통계 간선인데 exposure 도 needs 도 없다 - 무엇을 재야 하는지 "
+                "적지 않으면 검정 세션이 할 일이 없다")
+        if rv := str(e.get("reverse_risk") or "").strip():
+            reverse[(e["from"], e["to"])] = rv
+        chain.append(Edge(
+            src=e["from"], dst=e["to"], kind=kind,
+            says=str(e.get("says") or ""), because=str(e.get("because") or ""),
+            false_if=str(e.get("false_if") or ""),
+            effect=eff, formula=str(e.get("formula") or ""), source=src,
+            exposure=str(e.get("exposure") or ""),
+            reference=str(e.get("reference") or ""),
+            invariant_to=tuple(str(x) for x in _seq(e.get("invariant_to"),
+                                                    f"{tag} invariant_to")),
+            needs=str(e.get("needs") or "")))
+
+    if not target and chain:
+        # target 을 안 적었으면 아무 간선의 도착점도 아닌 노드가 결론이다.
+        sinks = {e.dst for e in chain} - {e.src for e in chain}
+        if len(sinks) == 1:
+            target = sinks.pop()
+        else:
+            raise PipelineError(
+                f"target 이 없고 종점이 {len(sinks)} 개다({sorted(sinks)[:4]}) - "
+                "설명 대상이 하나로 정해지지 않으면 예산을 계산할 수 없다")
+    return Proposal(target=target, nodes=nodes, chain=chain, anchors=anchors,
+                    missing=[str(m) for m in _seq(out.get("missing"), "missing")],
+                    reverse=reverse, lookups=lookups)
+
+
+def evidence(found: list[tuple[str, list[dict]]]) -> str:
+    """조회 결과를 되먹임 문장으로. **출처를 붙여 넘긴다.**
+
+    산문 근거도 수치와 같은 규율을 받는다 - 어느 회사 어느 공시 어느 문단에서 온 말인지
+    없으면, 모델이 그걸 읽고 쓴 문장을 사후에 확인할 수 없다. 그래서 도메인·티커·순서를
+    같이 싣고, 원문을 자르되 어디서 잘렸는지 알 수 있게 둔다.
+    """
+    L = ["## 물어본 것에 대한 답 (정기보고서 「사업의 내용」 원문)", ""]
+    for q, hits in found:
+        L.append(f"### {q}")
+        if not hits:
+            L.append("  (해당 도메인 문서에서 못 찾았다. 이 대목은 추측하지 말고 "
+                     "`needs` 나 `missing` 에 남겨라)")
+            L.append("")
+            continue
+        for h in hits:
+            L.append(f"  [{h['domain']} · {h['ticker']}#{h['ord']}] "
+                     f"{h['text'][:700].strip()}")
+        L.append("")
+    L.append("이 근거로 사슬을 다시 그려라. 읽고도 모르는 대목은 `needs` 에 남겨라 - "
+             "읽었다고 아는 척하는 것이 가장 나쁘다.")
+    return "\n".join(L)
+
+
+def measured(prop: Proposal, proofs: list) -> Proposal:
+    """검정 결과를 사슬에 되꽂는다. **statistical 칸의 구간은 데이터에서 온다.**
+
+    제안은 통계 간선의 배수를 비워서 낸다(모르는 것을 좁게 쓰지 않기 위해). 검정이
+    끝나면 추정치와 귀무 산포로 구간을 만들어 그 칸을 채운다 - 그래야 사슬이 끝까지
+    곱해져 점 예측이 되고, 예산 정합이 계산된다.
+
+    귀무 산포를 반폭으로 쓰는 이유는 그것이 **이 검정이 실제로 만든 불확실성**이라서다.
+    정규 근사 신뢰구간을 따로 만들면 원장에 없는 수가 산출물에 들어간다.
+    """
+    got = {}
+    for r in proofs:
+        d = getattr(r, "design", None)
+        if d is None or r.effect is None:
+            continue
+        half = abs(r.null_sd or 0.0) * 1.96
+        got[(d.src, d.dst)] = Interval(r.effect - half, r.effect + half)
+    if not got:
+        return prop
+    filled = [replace(e, effect=got[(e.src, e.dst)])
+              if (e.kind == "statistical" and not e.measured
+                  and (e.src, e.dst) in got) else e
+              for e in prop.chain]
+    return replace(prop, chain=filled)
 
 
 def propose(client, brief_text: str, *, feedback: str = "") -> dict[str, Any]:
     """제안. `feedback` 이 있으면 앞선 시도가 왜 안 됐는지 붙여 다시 묻는다.
 
-    프로덕션 에이전트는 **도구를 쓰지 않는다**(샌드박스 exec 없음). 그래서 제안 전에
-    자기 술어가 실제로 무언가를 맞히는지 확인할 방법이 없다 - 아무것도 못 맞히면
-    LLM 호출 1회가 통째로 낭비된다. 도구를 주는 대신 **사유를 돌려주고 한 번 더 묻는다.**
-    실험판에서 에이전트를 살린 것도 도구 개수가 아니라 교정을 담은 오류 메시지였다.
+    도구를 주지 않는 대신 사유를 돌려주고 한 번 더 묻는다 - 실험판에서 에이전트를 살린
+    것도 도구 개수가 아니라 교정을 담은 오류 메시지였다.
     """
     if not feedback:
         return client.complete_json(SYSTEM, brief_text)
@@ -274,6 +420,5 @@ def propose(client, brief_text: str, *, feedback: str = "") -> dict[str, Any]:
 
 {feedback}
 
-같은 술어를 다시 내지 마라. 술어를 넓히거나(산업 -> 섹터, 타입 정확일치 -> LIKE),
-대비를 다른 자리로 옮겨라. 넓혀도 안 되면 빈 간선 목록을 내라 - 억지 설계는
-UNCERTAIN 보다 나쁘다.""")
+같은 구조를 다시 내지 마라. 데이터가 없어서 막히는 것이면 간선을 지우지 말고 `needs` 에
+적어라 - 그건 유효한 산출이다. 정말 아무것도 못 세우면 빈 간선 목록을 내라.""")

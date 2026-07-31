@@ -105,6 +105,7 @@ def run(
             name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
             decomp=decomp, gate=gate, route_code=route_code, events=events,
             causal=causal,
+            causal_sandbox=settings.causal_sandbox_enabled,
             etf_instrument_id=etf_instrument_id,
         )
     if causal is not None:

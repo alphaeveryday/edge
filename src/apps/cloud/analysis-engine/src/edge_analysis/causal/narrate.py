@@ -25,6 +25,8 @@ VERDICT_LAGGED = "가격 선행·설명 후행"
 VERDICT_FLOW = "수급·흐름 추정"
 VERDICT_NONE = "원인 미확인"
 
+# 확신도 어휘. `높음`은 **표본외 확증이 있을 때만** 쓴다 - 단일 패스에서는 나오지 않는다
+# (`_verdict` 참고). 어휘를 지우지 않는 이유는 재현 검정이 붙으면 그 자리가 되기 때문이다.
 CONF_HIGH, CONF_MID, CONF_LOW = "높음", "중간", "보류"
 
 
@@ -73,10 +75,15 @@ class CausalReport:
     residual: float                 # 시장·피어 제거 후 남은 것
     top_contributors: list[tuple[str, float]] = field(default_factory=list)
     findings: list[EdgeFinding] = field(default_factory=list)
-    global_fit: dict[str, Any] = field(default_factory=dict)
+    budget: dict[str, Any] = field(default_factory=dict)
     local_violations: list[str] = field(default_factory=list)
+    spec_sensitive: bool = False    # 원장의 p 가 α 를 가로지른다 = 결론이 사양에 달렸다
     missing: list[str] = field(default_factory=list)   # 무엇이 없어서 못 했나
     route_code: str | None = None
+    # ── 감사 흔적. 고객 문장에는 안 들어가지만 **아카이브에는 반드시 남는다** ──
+    proofs: list[dict[str, Any]] = field(default_factory=list)          # 설계·산문·원장
+    falsification_surface: list[str] = field(default_factory=list)      # 함의 조건부독립
+    data_requests: list[dict[str, Any]] = field(default_factory=list)   # 못 잰 것의 요청
 
 
 def _headline(r: CausalReport, live: list[EdgeFinding]) -> str:
@@ -89,12 +96,19 @@ def _headline(r: CausalReport, live: list[EdgeFinding]) -> str:
 
 
 def _verdict(r: CausalReport, live: list[EdgeFinding]) -> tuple[str, str]:
-    """판정과 확신도. **검정을 통과한 것이 없으면 확신을 만들지 않는다.**"""
+    """판정과 확신도. **검정을 통과한 것이 없으면 확신을 만들지 않는다.**
+
+    단일 패스에는 **표본외 확증이 없다.** 그래서 유의한 간선이 있어도 확신도는 '중간'을
+    넘기지 않는다 - '높음'은 같은 설계가 다른 표본에서 재현됐을 때 쓸 말이고, 지금
+    파이프라인은 그 단계를 돌지 않는다. 감사 블록에 `status: 미확증`으로 남는다.
+
+    원장의 p 가 α 를 가로지르면(`spec_sensitive`) 확신도를 한 칸 더 내린다. 같은 간선을
+    여러 사양으로 재서 어떤 칸은 유의하고 어떤 칸은 아니었다면, 보고된 유의는 사양 선택의
+    산물일 수 있다. 게이트로 죽이지 않고 확신도로 반영하는 이유는, 여러 사양을 시도하는
+    것 자체가 정직한 탐색이어서다 - 막으면 모델이 한 번만 재고 끝낸다.
+    """
     if live:
-        strong = [f for f in live if f.p is not None and f.p < 0.05 and f.n >= 30]
-        if strong:
-            return VERDICT_EVENT, (CONF_HIGH if len(strong) == 1 else CONF_MID)
-        return VERDICT_EVENT, CONF_MID
+        return VERDICT_EVENT, (CONF_LOW if r.spec_sensitive else CONF_MID)
     if abs(r.residual) < abs(r.observed) * 0.5:
         # 잔차가 관측의 절반도 안 되면 움직임의 대부분이 시장·섹터에서 왔다
         return VERDICT_MIXED, CONF_MID
@@ -130,8 +144,11 @@ def _body(r: CausalReport, live: list[EdgeFinding], dead: list[EdgeFinding]) -> 
             if f.killed_by:
                 L.append(f"{f.cause}{_josa(f.cause, '을', '를')} 검토했습니다. "
                          f"{f.killed_by}")
-    if r.missing:
-        L.append("확인에 필요했지만 확보하지 못한 자료: " + ", ".join(r.missing[:3]) + ".")
+    # 무엇이 없어서 못 했는지는 **고객 문장에도** 남긴다. "확인되지 않았다"와
+    # "자료가 없어 확인하지 못했다"는 다른 말이고, 후자는 다음 수집 의제이기도 하다.
+    wants = list(r.missing) or [str(q.get("need")) for q in r.data_requests if q.get("need")]
+    if wants:
+        L.append("확인에 필요했지만 확보하지 못한 자료: " + ", ".join(wants[:3]) + ".")
     return " ".join(L)
 
 
@@ -141,6 +158,10 @@ def narrate(r: CausalReport) -> dict[str, Any]:
     반환 키는 `domain.models.Explanation` 이 읽는 것과 **정확히** 맞춘다:
     `verdict`·`explain`·`headline`·`confidence`. 나머지는 런 아카이브가 보존한다
     (DB 매핑이 버리는 필드를 남기는 게 raw 의 목적이다).
+
+    `causal` 블록은 **감사 흔적**이다. 여기에 설계(술어·층화·조정집합)·산문(주장·메커니즘·
+    반증조건)·원장(placebo 호출 전량)·에이전트가 쓴 코드·반증 표면·데이터 요청이 다 들어
+    간다. 이게 없으면 게이트를 통과했다는 사실만 남고 **통과의 증거가 사라진다.**
     """
     live = [f for f in r.findings if f.survived]
     dead = [f for f in r.findings if not f.survived]
@@ -154,11 +175,18 @@ def narrate(r: CausalReport) -> dict[str, Any]:
         "causal": {
             "residual": r.residual,
             "route_code": r.route_code,
-            "survived": [{"cause": f.cause, "effect": f.effect, "p": f.p, "n": f.n,
-                          "share": f.share, "contribution": f.contribution} for f in live],
+            # 단일 패스에는 표본외 확증이 없다. 있는 척하지 않는다.
+            "status": ("미확증(표본외 검정 없음)" if live else "게시 가능한 인과 주장 없음"),
+            "survived": [{"cause": f.cause, "because": f.because, "effect": f.effect,
+                          "p": f.p, "n": f.n, "share": f.share,
+                          "contribution": f.contribution} for f in live],
             "rejected": [{"cause": f.cause, "killed_by": f.killed_by} for f in dead],
-            "global_fit": r.global_fit,
+            "proofs": r.proofs,
+            "falsification_surface": r.falsification_surface,
+            "data_requests": r.data_requests,
+            "budget": r.budget,
             "local_violations": r.local_violations,
+            "spec_sensitive": r.spec_sensitive,
             "missing": r.missing,
         },
     }

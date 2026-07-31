@@ -22,10 +22,9 @@ import numpy as np
 import pytest
 
 from edge_analysis.adapters.llm import analyze
-from edge_analysis.causal import agents
-from edge_analysis.causal import graph as G
-from edge_analysis.causal.run import explain
 from edge_analysis.config import PipelineError
+from edge_analysis.causal import agents
+from edge_analysis.causal.run import explain
 from edge_analysis.domain.models import (
     Decomposition,
     EventContext,
@@ -110,16 +109,6 @@ class FakeCausalData:
         return [(i, d) for i, d in self.control
                 if d in want and (i, d.isoformat()) not in ex]
 
-    def industry_map(self, as_of_date) -> dict[str, str]:
-        """처치·대조를 **다른 산업**으로 둔다.
-
-        같은 값을 주면 date_industry 층화가 통과하는지 검사할 수 없다 - 층이 하나면
-        층화하지 않은 것과 결과가 같아진다.
-        """
-        self.calls.append("industry_map")
-        return ({i: "Semiconductors" for i in _TREATED_IDS}
-                | {i: "Technology" for i in _CONTROL_IDS})
-
     # ── 정렬된 열 (입력 순서를 지킨다. 없으면 nan) ───────────────────────
     def _col(self, pairs, table: dict) -> np.ndarray:
         return np.array([table.get((str(i), _day(d)), np.nan) for i, d in pairs], dtype=float)
@@ -150,6 +139,12 @@ class FakeCausalData:
     def required_effect(self, residual: float, share: float | None) -> float | None:
         return None if not share else residual / share
 
+    # 층화·어휘 재료. `adapters/llm.py` 가 브리프에 실어 준다 - 없으면 모델이
+    # industry_name 값을 한국어로 추측하고 대조군이 0건이 된다(#403).
+    def industry_map(self, trade_date: date) -> dict[str, str]:
+        self.calls.append("industry_map")
+        return {i: "Semiconductors" for i in _TREATED_IDS + _CONTROL_IDS}
+
     # ── 타입 사전 (분포 사실. 검정이 아니다) ────────────────────────────
     def type_population(self, event_type_code: str) -> dict:
         return {"events": 240, "instruments": 96, "dates": 180,
@@ -167,19 +162,75 @@ class FakeCausalData:
 
 
 class FakeClient:
-    """제안 LLM 스텁. **호출 횟수가 계약이다** - 산술로 죽은 셀은 여기 오지 않는다."""
+    """두 에이전트 스텁. **어느 프롬프트로 불렸는지가 계약이다.**
 
-    def __init__(self, proposal: dict) -> None:
-        self._proposal = proposal
+    제안(`agents.SYSTEM`)과 검정(`verify.SYSTEM` 을 포맷한 것)은 다른 세션이다. 검정
+    세션에는 파이썬 코드를 돌려주고, 그 코드는 **실제로 샌드박스에서 실행된다** -
+    여기서 잡고 싶은 것은 "모델이 수치를 만들 자리가 없다"는 계약이므로, 코드가 도구를
+    타고 스텁 데이터에 닿는 경로 전체가 진짜여야 한다.
+    """
+
+    def __init__(self, proposal: dict | list[dict],
+                 verify_turns: list[dict] | None = None) -> None:
+        # 제안을 **여러 개** 줄 수 있다 - 조회 왕복(lookups)처럼 같은 프롬프트로 두 번
+        # 이상 묻는 경로가 있고, 그때 무엇을 두 번째로 냈는지가 계약이다.
+        self._proposals = list(proposal) if isinstance(proposal, list) else [proposal]
+        self._verify = list(verify_turns if verify_turns is not None else VERIFY_TURNS)
         self.calls = 0
+        self.proposals = 0
+        self.verifies = 0
         self.briefs: list[str] = []
+        self.verify_prompts: list[str] = []
+        self._script: list[dict] = []
 
     def complete_json(self, system: str, user: str) -> dict:
-        # 인과 경로는 설계만 묻는다. 다른 프롬프트가 오면 경로가 갈렸다는 뜻이다.
-        assert system == agents.SYSTEM, "인과 경로가 아닌 프롬프트로 호출됐다"
         self.calls += 1
-        self.briefs.append(user)
-        return self._proposal
+        if system == agents.SYSTEM:
+            self.proposals += 1
+            self.briefs.append(user)
+            self._script = list(self._verify)      # 간선마다 대본을 처음부터
+            i = min(self.proposals - 1, len(self._proposals) - 1)
+            return self._proposals[i]
+        # 검정 세션. 다른 프롬프트가 오면 경로가 갈렸다는 뜻이다.
+        assert "R = {" in system and "간선" in system, "제안·검정 어느 프롬프트도 아니다"
+        self.verifies += 1
+        self.verify_prompts.append(system)
+        return self._script.pop(0) if self._script else {"thought": "끝", "done": True}
+
+
+# 검정 에이전트가 쓸 코드. **하네스가 실행한다** - 도구 이름·반환 모양이 틀리면 여기서 깨진다.
+VERIFY_CODE = """
+t = cohort("event_type_code = 'COMPANY.CAPITAL.DIVIDEND_DECISION'", w0='2026-05-01')
+days = sorted({d for _, d in t})
+c = universe("industry_name = 'Semiconductors'", days, exclude=t)
+pairs = list(t) + list(c)
+y = ar(pairs)
+x = np.array([1.0] * len(t) + [0.0] * len(c))
+blocks = np.array([str(d)[:10] for _, d in pairs])
+keep = np.isfinite(y)
+x, y, blocks = x[keep], y[keep], blocks[keep]
+
+def beta(world):
+    design = np.column_stack([np.ones(len(world['x'])), world['x']])
+    return float(np.linalg.lstsq(design, y, rcond=None)[0][1])
+
+res = placebo(beta, {'x': x}, permute(x, strata=blocks, n=200), null_kind='label')
+R = {'x': x, 'y': y, 'z': {}, 'unit': 'stock', 'effect': beta({'x': x}),
+     'test': res, 'null_kind': 'label', 'strata': blocks,
+     'units': sorted({i for i, _ in t})}
+print('n', len(y), 'effect', R['effect'], 'p', res['p'])
+"""
+
+VERIFY_TURNS = [{"thought": "타입 전체에서 대비를 쌓고 날짜 안에서 섞는다",
+                 "code": VERIFY_CODE},
+                {"thought": "R 완성", "done": True}]
+
+# 데이터가 없어 못 재는 간선. **기각이 아니라 요청이다.**
+VERIFY_IMPOSSIBLE = [{"thought": "장중 체결 흐름이 없으면 이 경로를 못 가른다",
+                      "impossible": "수급 경로를 분리할 체결 흐름 원장이 없다",
+                      "need": "장중 체결 흐름(투자자별 순매수) 일별 원장",
+                      "grain": "일별",
+                      "unlocks": "수급 주도와 사건 주도를 같은 셀에서 가를 수 있다"}]
 
 
 class LegacyClient:
@@ -202,54 +253,44 @@ _CONTROL_WHERE = "listing_market = 'KOSPI' AND industry_name = 'Semiconductors'"
 
 
 def _nodes(shock: str = "DIVIDEND@t+0") -> dict:
+    """사슬. **노드 종별을 선언하지 않는다** - 자연어(`says`)와 관측 여부만 든다."""
     return {
-        shock: {"kind": "SHOCK", "unit": "stock", "measure": "배당 확대 결정 공시",
-                "member_events": [EVENT_ID], "tau": "t+0"},
-        "AR@t+0": {"kind": "TARGET", "unit": "stock", "measure": "당일 시장대비 초과수익"},
+        shock: {"says": f"{CAUSE_LABEL} (배당총액 30% 증액)",
+                "observed": "공시 원장", "events": [EVENT_ID], "value": [0.30, 0.30]},
+        "PAYOUT@t+0": {"says": "주주환원 기대 상향 - 기대 배당수익률 변화폭",
+                       "observed": None},
+        "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"},
     }
 
 
-def _edge(shock: str = "DIVIDEND@t+0") -> dict:
-    return {"from": shock, "to": "AR@t+0", "kind": "directed",
-            "cause_label": CAUSE_LABEL,
-            "treated": _TREATED_WHERE, "control": _CONTROL_WHERE,
-            "strata": "date", "scope": "type", "timing": "unscheduled",
-            "because": "배당 확대는 주주환원 기대를 직접 올린다",
-            "false_if": "같은 날 지수 편입 변경이 있었다면 죽는다"}
+def _edge(shock: str = "DIVIDEND@t+0") -> list[dict]:
+    """항등식·탄력성 대신 **통계 간선 하나**로 끝나는 가장 짧은 사슬.
 
-
-PROPOSAL_OK = {"nodes": _nodes(), "edges": [_edge()], "missing": []}
-# 시간 역행: 원인이 결과보다 늦다. 구조 게이트(무료)가 추정 전에 잡아야 한다.
-PROPOSAL_BACKWARDS = {"nodes": _nodes("DIVIDEND@t+1"), "edges": [_edge("DIVIDEND@t+1")],
-                      "missing": []}
-# 억지 설계는 UNCERTAIN 보다 나쁘다 - 못 찾으면 빈 목록.
-PROPOSAL_EMPTY = {"nodes": _nodes(), "edges": [], "missing": ["장중 체결 흐름(수급) 원장"]}
-# 계약 위반: treated 가 비었다. 2026-07-29·07-30 런을 죽인 실제 산출 모양이다
-# (`간선 N 에 treated 가 없다`) - agents.parse 가 PipelineError 로 거부한다.
-PROPOSAL_NO_TREATED = {"nodes": _nodes(), "edges": [{**_edge(), "treated": ""}], "missing": []}
-# 형태 붕괴: 간선이 객체가 아니다. 정규화 안 하면 `e.get` 이 AttributeError 를 내는데,
-# 그건 PipelineError 가 아니라 되먹임이 못 알아보고 런이 죽는다.
-PROPOSAL_EDGE_NOT_OBJECT = {"nodes": _nodes(), "edges": [None], "missing": []}
-
-
-class SequenceClient:
-    """호출마다 다른 산출을 주는 제안 스텁.
-
-    되먹임 재시도는 1·2회차 산출이 **달라야** 관찰된다 - FakeClient 는 같은 값을 반복해
-    "재시도가 실제로 일어났는가"를 구별하지 못한다.
+    사슬을 길게 쓰는 것은 `test_chain.py` 가 따로 본다. 여기서는 파이프라인이 새 계약을
+    관통하는지만 본다 - 짧은 사슬도 유효한 산출이어야 한다.
     """
+    return [{"from": shock, "to": "PAYOUT@t+0", "kind": "elasticity",
+             "says": "배당 증액이 기대 배당수익률을 올린다",
+             "because": "배당총액 증액은 분자에 직접 들어간다",
+             "false_if": "발행주식수가 같은 비율로 늘었다면 상쇄된다",
+             "effect": [0.8, 1.0], "source": "직전 사업연도 배당총액·시가총액(공시)",
+             "invariant_to": ["배당총액을 총액으로 보나 주당으로 보나"]},
+            {"from": "PAYOUT@t+0", "to": "AR@t+0", "kind": "statistical",
+             "says": "주주환원 기대 상향이 당일 초과수익을 만들었다",
+             "because": "배당 확대는 주주환원 기대를 직접 올린다",
+             "false_if": "같은 날 지수 편입 변경이 있었다면 죽는다",
+             "exposure": _TREATED_WHERE, "reference": _CONTROL_WHERE,
+             "invariant_to": ["참조집단을 같은 산업으로 잡나 같은 시장으로 잡나",
+                              "반응을 당일로 재나 다음 거래일로 재나"]}]
 
-    def __init__(self, *proposals: dict) -> None:
-        self._proposals = list(proposals)
-        self.calls = 0
-        self.briefs: list[str] = []
 
-    def complete_json(self, system: str, user: str) -> dict:
-        assert system == agents.SYSTEM, "인과 경로가 아닌 프롬프트로 호출됐다"
-        out = self._proposals[min(self.calls, len(self._proposals) - 1)]
-        self.calls += 1
-        self.briefs.append(user)
-        return out
+PROPOSAL_OK = {"target": "AR@t+0", "nodes": _nodes(), "edges": _edge(), "missing": []}
+# 시간 역행: 원인이 결과보다 늦다. 구조 게이트(무료)가 추정 전에 잡아야 한다.
+PROPOSAL_BACKWARDS = {"target": "AR@t+0", "nodes": _nodes("DIVIDEND@t+1"),
+                      "edges": _edge("DIVIDEND@t+1"), "missing": []}
+# 억지 설계는 UNCERTAIN 보다 나쁘다 - 못 찾으면 빈 목록.
+PROPOSAL_EMPTY = {"target": "AR@t+0", "nodes": _nodes(), "edges": [],
+                  "missing": ["장중 체결 흐름(수급) 원장"]}
 
 
 def _candidates(share: float | None) -> list[dict]:
@@ -259,11 +300,28 @@ def _candidates(share: float | None) -> list[dict]:
              "prior": FakeCausalData().prior(EVENT_TYPE)}]
 
 
-def _explain(cd: FakeCausalData, client, *, candidates) -> dict:
+def _explain(cd: FakeCausalData, client, *, candidates, sandbox: bool = True,
+             docs=None) -> dict:
     return explain(cd, client, etf_name=ETF_NAME, etf_instrument_id=ETF_INSTRUMENT,
                    trade_date=TRADE_DATE, as_of=AS_OF, observed=OBSERVED,
                    route_code="CONCENTRATED", contributors=CONTRIBUTORS,
-                   candidates=candidates, grounded={EVENT_ID})
+                   candidates=candidates, grounded={EVENT_ID}, sandbox=sandbox,
+                   docs=docs)
+
+
+class FakeDocs:
+    """도메인 문서 스텁. **질의를 그대로 기록한다** - 누가 무엇을 물었는지가 계약이다."""
+
+    def __init__(self, hits: list[dict] | None = None) -> None:
+        self.queries: list[str] = []
+        self._hits = hits if hits is not None else [
+            {"domain": "Technology/Semiconductors", "ticker": "000660", "ord": 22,
+             "text": "웨이퍼는 일본·한국·독일·미국 주요 공급사로부터 300mm 완제품으로 "
+                     "공급받으며 중장기 협력 관계를 맺는다"}]
+
+    def search(self, query, *, domain=None, k=6):
+        self.queries.append(query)
+        return list(self._hits)
 
 
 # --------------------------------------------------------------------------- #
@@ -307,7 +365,8 @@ def test_planted_effect_survives_and_is_published_as_the_cause():
 
     assert ex.is_valid
     assert ex.explanation_type == "EVENT_SUPPORTED"
-    assert client.calls == 1                      # 제안은 1회. 재시도는 클라이언트 소관
+    assert client.proposals == 1                  # 제안은 1회. 나머지는 검정 세션이다
+    assert client.verifies >= 1, "검정 에이전트가 불리지 않았다 - 샌드박스 경로가 죽었다"
     survived = raw["causal"]["survived"]
     assert [f["cause"] for f in survived] == [CAUSE_LABEL]
     assert survived[0]["p"] < 0.05
@@ -321,6 +380,34 @@ def test_planted_effect_survives_and_is_published_as_the_cause():
     assert f"{OBSERVED * 100:+.2f}%" in body
     assert f"{RESIDUAL * 100:+.2f}%" in body
     assert "원인으로 확인됐습니다" in body
+
+
+def test_audit_block_carries_the_prose_the_ledger_and_the_agent_code():
+    """감사 흔적이 없으면 **통과했다는 사실만 남고 통과의 증거가 사라진다.**
+
+    사후에 "무엇을 무엇과 비교해서 이 p 가 나왔는가"를 재구성할 수 있어야 한다:
+    설계(층화·조정집합)·산문(주장·메커니즘·반증조건)·원장(placebo 호출 전량)·코드.
+    """
+    raw = _explain(FakeCausalData(), FakeClient(PROPOSAL_OK), candidates=_candidates(SHARE))
+
+    audit = raw["causal"]
+    assert audit["status"] == "미확증(표본외 검정 없음)", "단일 패스에 확증이 있는 척했다"
+    assert raw["confidence"] != "높음"
+    proof = audit["proofs"][0]
+    # 산문
+    assert proof["say"] and proof["because"] and proof["false_if"]
+    # 주장 층위와 허용 귀무 - 귀속(L4)에 date 귀무를 쓸 수 없다는 사실이 남는다
+    assert proof["claims"] == "L4" and proof["null_ok"] == ["label"]
+    assert proof["null_kind"] == "label"
+    # 설계
+    assert proof["strata_design"] == "date" and proof["strata_used"] is True
+    assert proof["unit"] == "stock"
+    # 원장과 코드 - 수치가 어디서 왔는지
+    assert proof["n_placebo"] >= 1 and proof["ledger"][0]["testable"] is True
+    assert proof["ledger"][0]["p"] == proof["p"]
+    assert any("placebo(" in c for c in proof["code"])
+    # 반증 표면은 그래프에서 열거된 것이다(손으로 쓰지 않는다)
+    assert isinstance(audit["falsification_surface"], list)
 
 
 def test_published_body_invents_no_number():
@@ -438,13 +525,118 @@ def test_zero_effect_design_finds_nothing_and_says_so():
 
     raw = _explain(cd, client, candidates=_candidates(SHARE))
 
-    assert client.calls == 1
+    assert client.proposals == 1
     assert raw["causal"]["survived"] == []
     rejected = raw["causal"]["rejected"]
     assert [f["cause"] for f in rejected] == [CAUSE_LABEL]
     assert "우연과 구별되는 차이는 없었습니다" in rejected[0]["killed_by"]
     assert "우연과 구별되는 차이는 없었습니다" in raw["explain"]
     assert Explanation(raw).explanation_type == "UNCERTAIN"
+
+
+# --------------------------------------------------------------------------- #
+# 5b 못 잰 간선 — **기각이 아니라 데이터 요청이다**
+# --------------------------------------------------------------------------- #
+def test_untestable_edge_becomes_a_concrete_data_request():
+    """데이터 부재는 침묵이 아니라 산출물이다.
+
+    구조가 맞는데 잴 수 없는 간선은 무엇이 있어야 서는지 남긴다 - 그게 다음 수집
+    의제가 된다. 지금 단계에서 중요한 것은 커버리지가 아니라 DAG 품질이다.
+    """
+    client = FakeClient(PROPOSAL_OK, verify_turns=VERIFY_IMPOSSIBLE)
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
+
+    reqs = raw["causal"]["data_requests"]
+    assert [q["need"] for q in reqs] == ["장중 체결 흐름(투자자별 순매수) 일별 원장"]
+    assert reqs[0]["grain"] == "일별" and reqs[0]["unlocks"]
+    assert reqs[0]["edge"] == "PAYOUT@t+0→AR@t+0"
+    assert raw["causal"]["proofs"][0]["status"] == "불가"
+    assert raw["causal"]["survived"] == []
+    # 고객 문장도 "확인 안 됨"과 "자료가 없어 확인 못 함"을 구분한다.
+    assert "자료가 없어 검정하지 못했습니다" in raw["causal"]["rejected"][0]["killed_by"]
+    assert "확보하지 못한 자료" in raw["explain"]
+
+
+def test_proposal_may_keep_an_edge_it_cannot_measure_yet():
+    """저장소에 없는 것을 노드로 세워도 된다 - `needs` 가 요청 큐로 나간다."""
+    edges = _edge()
+    edges[-1] = {**edges[-1], "needs": "애널리스트 목표주가 시계열"}
+    proposal = {"target": "AR@t+0", "nodes": _nodes(), "edges": edges, "missing": []}
+    client = FakeClient(proposal)
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
+
+    needs = [q["need"] for q in raw["causal"]["data_requests"]]
+    assert "애널리스트 목표주가 시계열" in needs
+    assert raw["causal"]["proofs"][0]["needs"] == "애널리스트 목표주가 시계열"
+    # 요청을 남겼다고 검정을 건너뛰지는 않는다 - 세울 수 있는 데까지 민다.
+    assert raw["causal"]["proofs"][0]["n"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# 5c 도메인 문서 조회 — **모르는 것을 묻는 것과 구조를 틀리는 것은 다른 일이다**
+# --------------------------------------------------------------------------- #
+def test_the_proposal_can_ask_for_domain_knowledge_before_drawing_the_chain():
+    """조회 요청은 유효한 산출이고, **시도 횟수를 쓰지 않는다.**
+
+    사슬을 그리려면 산업 구조를 알아야 하는데, "먼저 그려라"는 요구는 추측으로 그리게
+    만드는 요구다. 그래서 nodes 없이 lookups 만 낸 제안도 받고, 조회 결과를 붙여 다시
+    묻는다. 그 왕복이 구조 위반 예산(2회)을 먹으면 모델이 묻기를 포기한다.
+    """
+    asked = {"lookups": ["반도체 원재료 공급사 구성과 계약 형태"]}
+    client = FakeClient([asked, PROPOSAL_OK])       # 1턴 조회 요청 → 2턴 사슬
+    docs = FakeDocs()
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE), docs=docs)
+
+    assert docs.queries == ["반도체 원재료 공급사 구성과 계약 형태"]
+    assert client.proposals == 2, "조회 후 다시 묻지 않았다"
+    # 조회 결과가 되먹임으로 실제로 들어갔나 - 출처까지 붙어야 사후 확인이 된다.
+    second = client.briefs[-1]
+    assert "웨이퍼는 일본·한국·독일·미국" in second
+    assert "000660#22" in second
+    # 그리고 조회를 거쳐도 설명은 정상적으로 선다.
+    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+
+
+def test_without_a_document_store_the_proposal_proceeds_instead_of_stalling():
+    """도메인 지식이 없다고 설명을 멈추지 않는다 - 저장소는 선택 의존이다."""
+    client = FakeClient([{**PROPOSAL_OK, "lookups": ["알 수 없는 것"]}])
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE), docs=None)
+
+    assert client.proposals == 1
+    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+
+
+def test_a_failing_document_store_does_not_break_the_explanation():
+    """조회 실패는 설명 실패가 아니다 - 리전·자격증명 문제로 이쪽만 죽을 수 있다."""
+    class Boom:
+        def search(self, query, *, domain=None, k=6):
+            raise RuntimeError("S3 접근 불가")
+
+    client = FakeClient([{"lookups": ["무엇이든"]}, PROPOSAL_OK])
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE), docs=Boom())
+
+    assert client.proposals == 2
+    # 못 찾았다는 사실이 되먹임에 남아야 한다 - 그래야 모델이 추측하지 않는다.
+    assert "못 찾았다" in client.briefs[-1]
+    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+
+
+def test_sandbox_off_falls_back_to_the_reduced_path_without_calling_the_verifier():
+    """ops 킬스위치. 모델 코드를 실행하지 않고도 술어가 있는 간선은 검정된다."""
+    cd, client = FakeCausalData(), FakeClient(PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE), sandbox=False)
+
+    assert client.verifies == 0, "샌드박스를 껐는데 검정 에이전트를 불렀다"
+    survived = raw["causal"]["survived"]
+    assert survived and survived[0]["p"] < 0.05
+    assert raw["causal"]["proofs"][0]["turns"] == 0
+    assert raw["causal"]["proofs"][0]["code"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -468,12 +660,14 @@ _EVENT = EventContext(source_event_id=EVENT_ID, event_type_code=EVENT_TYPE,
                       novelty_status="NEW", title="분기 배당 확대 결정")
 
 
-def _settings(*, causal: bool) -> SimpleNamespace:
+def _settings(*, causal: bool, sandbox: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         trade_date=TRADE_DATE, request_id="req-causal-1", etf_ticker=ETF_TICKER,
         lake_bucket="test-lake",
         result_s3_prefix="s3://test-lake/operations_archive/etf_explanations/",
-        release_bundle_version="b1", causal_enabled=causal)
+        release_bundle_version="b1", causal_enabled=causal,
+        causal_sandbox_enabled=sandbox,
+        domain_docs_bucket="", domain_docs_profile="")
 
 
 class _FakeLake:
@@ -541,12 +735,14 @@ def test_run_takes_the_causal_route_and_persists_the_explanation():
 
     assert code == 0
     assert "causal_data" in store.calls and "persist_explanation" in store.calls
-    assert client.calls == 1
+    assert client.proposals == 1 and client.verifies >= 1
     assert store.persisted.explanation_type == "EVENT_SUPPORTED"
     archived = [a for a in _archives(s3) if a.get("outcome") == "explained"]
     assert archived, [a.get("outcome") for a in _archives(s3)]
-    # 런 아카이브는 DB 매핑이 버리는 감사 필드(잔차·기각 사유)를 보존한다.
-    assert archived[0]["explanation"]["causal"]["residual"] == RESIDUAL
+    # 런 아카이브는 DB 매핑이 버리는 감사 필드(잔차·설계·원장·기각 사유)를 보존한다.
+    causal = archived[0]["explanation"]["causal"]
+    assert causal["residual"] == RESIDUAL
+    assert causal["proofs"][0]["ledger"], "아카이브에 원장이 안 남았다"
 
 
 def test_run_falls_back_to_the_prompt_route_when_causal_is_disabled():
@@ -563,6 +759,23 @@ def test_run_falls_back_to_the_prompt_route_when_causal_is_disabled():
     assert client.systems and agents.SYSTEM not in client.systems
     assert store.persisted.explanation_type == "MIXED"
 
+
+def test_sandbox_killswitch_reaches_the_verifier_through_run():
+    """`CAUSAL_SANDBOX_ENABLED=false` 가 **실제로** 검정 세션을 끄는가.
+
+    WHY: 킬스위치는 배선이 끝까지 닿아야 킬스위치다. settings 에만 있고 analyze 로
+    안 넘어가면 ops 는 껐다고 믿는데 LLM 이 쓴 코드가 계속 실행된다 - 끈 줄 아는 스위치가
+    가장 위험하다. 그래서 값이 아니라 **검정 세션 호출 수 0** 을 본다.
+    """
+    cd, s3 = FakeCausalData(), _FakeS3()
+    store, client = _FakeStore(cd), FakeClient(PROPOSAL_OK)
+
+    code = run(_settings(causal=True, sandbox=False), lake=_FakeLake(), store=store,
+               client=client, s3=s3)
+
+    assert code == 0
+    assert client.proposals == 1, "제안은 그대로 돌아야 한다 - 샌드박스만 끈다"
+    assert client.verifies == 0, "샌드박스를 껐는데 검정 세션이 불렸다"
 
 def test_analyze_signature_still_routes_by_the_causal_argument():
     """`analyze` 시그니처는 고정이다 - causal 인자 하나가 경로를 정한다.
@@ -583,65 +796,65 @@ def test_analyze_signature_still_routes_by_the_causal_argument():
                  events=[_EVENT], causal=FakeCausalData(),
                  etf_instrument_id=ETF_INSTRUMENT)
 
-    assert client.calls == 1
+    assert client.proposals == 1 and client.verifies >= 1
     assert ex.explanation_type == "EVENT_SUPPORTED"
 
 
 # --------------------------------------------------------------------------- #
 # 계약 위반 산출 — 되먹임 대상이지 런 사망 사유가 아니다 (ALPHA-633)
+#
+# 새 계약(kind=identity|elasticity|statistical, exposure/reference)으로 이식했다.
+# 어휘는 갈렸지만 방어하는 결함은 같다: 계약 위반이 예외로 새면 AnalyzeOne 이 exit 1 이
+# 되고 analyze 전량성공 게이트(ADR-0028)가 유니버스 전체 런을 FAILED 시킨다.
 # --------------------------------------------------------------------------- #
+# 통계 간선인데 exposure·needs 가 둘 다 없다 - 무엇을 잴지 안 적은 산출.
+PROPOSAL_NO_EXPOSURE = {
+    "target": "AR@t+0", "nodes": _nodes(),
+    "edges": [_edge()[0], {k: v for k, v in _edge()[1].items() if k != "exposure"}],
+    "missing": []}
+# 형태 붕괴: 간선이 객체가 아니다. 타입이 갈리면 되먹임이 알아보지 못한다.
+PROPOSAL_EDGE_NOT_OBJECT = {"target": "AR@t+0", "nodes": _nodes(),
+                            "edges": [None], "missing": []}
+
+
 def test_broken_proposal_is_fed_back_and_retried():
-    """1회차가 계약을 어기면 사유를 되먹여 다시 묻는다 - 지금까지는 재시도조차 없었다.
+    """1회차가 계약을 어기면 사유를 되먹여 다시 묻는다.
 
-    WHY: 2026-07-30 스케줄 런(`etf-daily-2026-07-30T15-40`)이 `간선 8 에 treated 가 없다`
-    로 **1회차에서** 죽었다. AnalyzeOne 하나가 예외로 끝나면 analyze 전량성공
-    게이트(ADR-0028)가 유니버스 33종 런을 통째로 FAILED 시킨다. 구조 위반·빈 코호트는
-    되먹여 다시 묻는데 계약 위반만 죽이던 비대칭을 여기서 고정한다.
+    WHY: 2026-07-30 스케줄 런이 간선 하나의 필드 결측으로 **1회차에서** 죽어 유니버스
+    33종을 통째로 FAILED 시켰다. 구조 위반·빈 코호트는 되먹여 다시 묻는데 계약 위반만
+    죽이던 비대칭을 여기서 고정한다.
     """
-    cd = FakeCausalData()
-    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_OK)
+    client = FakeClient([PROPOSAL_NO_EXPOSURE, PROPOSAL_OK])
 
-    raw = _explain(cd, client, candidates=_candidates(SHARE))
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
 
-    assert client.calls == 2, "계약 위반이 되먹임 재질의를 못 만들었다"
-    assert "treated" in client.briefs[1], "2회차 프롬프트에 위반 사유가 안 실렸다"
+    assert client.proposals == 2, "계약 위반이 되먹임 재질의를 못 만들었다"
+    assert "exposure" in client.briefs[1], "2회차 프롬프트에 위반 사유가 안 실렸다"
     # 2회차가 성사되면 결과는 정상 경로와 같아야 한다 - 강등이 아니라 회복이다.
-    ex = Explanation(raw)
-    assert ex.explanation_type == "EVENT_SUPPORTED"
-    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+    assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
 
 
 def test_two_broken_proposals_degrade_instead_of_killing_the_run():
-    """2회차도 계약을 어기면 **예외 없이** 강등된다 - 구조 위반 2연속과 같은 결말.
+    """2회차도 계약을 어기면 **예외 없이** 강등된다 - 구조 위반 2연속과 같은 결말."""
+    client = FakeClient([PROPOSAL_NO_EXPOSURE, PROPOSAL_NO_EXPOSURE])
 
-    WHY: 억지 설명을 만들지 않되 런은 살려야 한다. 여기서 예외가 새어 나가면 그 한 종목이
-    유니버스 전체를 FAILED 로 만든다(2026-07-29·07-30 런이 그랬다).
-    """
-    cd = FakeCausalData()
-    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_NO_TREATED)
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
 
-    raw = _explain(cd, client, candidates=_candidates(SHARE))   # 예외가 나면 여기서 깨진다
-
-    assert client.calls == 2
+    assert client.proposals == 2
     assert Explanation(raw).explanation_type == "UNCERTAIN"
     # 왜 설계를 못 세웠는지가 남아야 한다 - 건수만 남기면 사후에 원인을 못 가린다.
-    assert any("treated" in v for v in raw["causal"]["local_violations"])
+    assert any("exposure" in v for v in raw["causal"]["local_violations"])
 
 
 def test_transport_error_still_fails_loud():
     """LLM 전송·API 오류는 여전히 전파된다 - 계약 위반만 되먹임으로 돌린다.
 
-    WHY: `adapters/llm.py` 의 DeepSeek 클라이언트는 402·타임아웃·응답 붕괴를 재시도 소진
-    후 **PipelineError** 로 올린다 - 계약 위반과 **같은 타입**이다. 그래서 propose 까지
-    한 try 로 감싸면 소스가 죽은 것을 모델이 계약을 어긴 것으로 오인해 UNCERTAIN 설명과
-    함께 런이 초록으로 끝난다. 2026-07-27 에 tag_news 가 402 를 삼켜 940/940 전건 실패에도
-    exit 0 이었던 그 사고다(ALPHA-589). 운영과 같은 타입으로 던져야 이 가드가 실물이다.
+    WHY: DeepSeek 클라이언트는 402·타임아웃·응답 붕괴를 재시도 소진 후 **PipelineError**
+    로 올린다 - 계약 위반과 같은 타입이다. propose 까지 한 try 로 감싸면 소스가 죽은 것을
+    계약 위반으로 오인해 UNCERTAIN 설명과 함께 런이 초록으로 끝난다(ALPHA-589).
     """
     class _DeadClient:
-        calls = 0
-
         def complete_json(self, system: str, user: str) -> dict:
-            # adapters/llm.py:76 이 실제로 내는 것과 같은 타입·같은 모양이다.
             raise PipelineError("DeepSeek call failed after retries: HTTP Error 402")
 
     with pytest.raises(PipelineError, match="402"):
@@ -649,58 +862,35 @@ def test_transport_error_still_fails_loud():
 
 
 def test_malformed_edge_shape_is_also_fed_back_not_raised():
-    """형태가 무너진 산출도 되먹임 대상이다 - 타입이 갈리면 되먹임이 못 알아본다.
+    """형태가 무너진 산출도 되먹임 대상이다 - 타입이 갈리면 되먹임이 못 알아본다."""
+    client = FakeClient([PROPOSAL_EDGE_NOT_OBJECT, PROPOSAL_OK])
 
-    WHY: `agents.parse` 가 결측 필드만 PipelineError 로 정규화하고 `edges: [null]` 같은
-    형태 붕괴는 `AttributeError` 로 흘리면, run.explain 의 `except PipelineError` 를
-    그대로 지나쳐 AnalyzeOne 이 죽고 유니버스 전체 런이 FAILED 된다. 게이트가 거르는
-    모든 위반은 **한 타입으로** 나와야 호출부가 다룰 수 있다.
-    """
-    cd = FakeCausalData()
-    client = SequenceClient(PROPOSAL_EDGE_NOT_OBJECT, PROPOSAL_OK)
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
 
-    raw = _explain(cd, client, candidates=_candidates(SHARE))   # AttributeError 면 여기서 깨진다
-
-    assert client.calls == 2, "형태 붕괴가 되먹임 재질의를 못 만들었다"
+    assert client.proposals == 2, "형태 붕괴가 되먹임 재질의를 못 만들었다"
     assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
 
 
 @pytest.mark.parametrize("broken", [
     {"nodes": _nodes(), "edges": {}, "missing": []},                    # falsy 비목록
-    {"nodes": _nodes(), "edges": [_edge()], "missing": 0},              # falsy 비목록
-    {"nodes": {"DIVIDEND@t+0": None}, "edges": [_edge()], "missing": []},   # 노드 메타 붕괴
-    {"nodes": _nodes(), "edges": [{**_edge(), "scope": ["type"]}], "missing": []},
-    {"nodes": _nodes(), "edges": [{**_edge(), "cause_label": 7}], "missing": []},
-    # 어휘 밖 scope. 거르지 않으면 NMIN.get(scope, 8) 이 최소 표본을 30→8 로 낮춰
-    # 기각됐어야 할 설계가 통과한다 — 관대한 방향으로 새는 게이트다.
-    {"nodes": _nodes(), "edges": [{**_edge(), "scope": "garbage"}], "missing": []},
-    # 시간 색인 없는 노드 id. graph.validate 가 MARKET 목록을 만들며 다시 파싱할 때
-    # ValueError 로 새어 되먹임을 우회한다(graph.py:356) — 실제 호출로 재현됨.
-    {"nodes": {"DIVIDEND": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
-                            "member_events": [EVENT_ID], "tau": "t+0"},
-               "AR@t+0": {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}},
-     "edges": [{**_edge(), "from": "DIVIDEND"}], "missing": []},
-    # graph.validate 가 **연산**하는 메타 필드. member_events 는 순회(graph.py:381),
-    # seq_ignorability 는 `.strip()`(:409) — 스칼라면 TypeError·AttributeError 로 샌다.
-    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock",
-                                            "measure": "배당", "member_events": 1, "tau": "t+0"}},
-     "edges": [_edge()], "missing": []},
-    # 원소까지 못박아야 한다 — graph.py:386 이 집합 원소로 쓰므로 unhashable 원소는
-    # TypeError 다. event_id 는 계약상 문자열이라 여기서 타입이 끝난다.
-    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "SHOCK", "unit": "stock", "measure": "배당",
-                                            "member_events": [{"id": EVENT_ID}], "tau": "t+0"}},
-     "edges": [_edge()], "missing": []},
-    {"nodes": {**_nodes(), "DIVIDEND@t+0": {"kind": "MECHANISM", "unit": "stock",
-                                            "measure": "배당", "seq_ignorability": 1}},
-     "edges": [_edge()], "missing": []},
+    {"nodes": _nodes(), "edges": _edge(), "missing": 0},                # falsy 비목록
+    {"nodes": _nodes(), "edges": [None], "missing": []},                # 간선 형태 붕괴
+    {"nodes": _nodes(), "edges": [{"to": "AR@t+0"}], "missing": []},    # from 결측
+    {"nodes": _nodes(), "edges": [{**_edge()[1], "kind": "directed"}], "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge()[1], "invariant_to": 1}], "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge()[0], "effect": "많이"}], "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge()[0], "kind": "identity", "formula": ""}],
+     "missing": []},
+    {"nodes": _nodes(), "edges": [{**_edge()[1], "says": "", "because": ""}], "missing": []},
+    {"nodes": _nodes(), "edges": _edge(), "missing": [], "target": "없는노드@t+0"},
+    {"nodes": _nodes(), "lookups": 3, "edges": _edge(), "missing": []},
 ])
 def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
     """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.
 
     WHY: 되먹임은 `except PipelineError` 하나로 받는다. 어떤 위반이 AttributeError·
-    TypeError 로 새면 그 입력만 유니버스 전체 런을 죽인다 — 고친 줄 알고 남겨두는 구멍이
-    정확히 이 모양이다. falsy 비목록(`edges: {}`)은 특히 위험하다: 예외조차 없이
-    "간선 없음"으로 접혀 계약 위반이 정상 산출로 집계된다.
+    TypeError 로 새면 그 입력만 유니버스 전체 런을 죽인다. falsy 비목록(`edges: {}`)은
+    특히 위험하다 - 예외조차 없이 "간선 없음"으로 접혀 계약 위반이 정상 산출로 집계된다.
     """
     with pytest.raises(PipelineError):
         agents.parse(broken)
@@ -709,55 +899,38 @@ def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
 def test_absent_optional_fields_still_parse():
     """위 가드가 **정상 산출까지** 거부하면 안 된다 - 선택 필드 부재는 계약 위반이 아니다."""
     minimal = {"nodes": _nodes(), "edges": [{
-        "from": "DIVIDEND@t+0", "to": "AR@t+0",
-        "treated": _TREATED_WHERE, "control": _CONTROL_WHERE}]}
-    nodes, designs, missing = agents.parse(minimal)
+        "from": "PAYOUT@t+0", "to": "AR@t+0", "kind": "statistical",
+        "says": "기대 상향이 당일 초과수익을 만들었다", "exposure": _TREATED_WHERE}]}
 
-    assert len(designs) == 1
-    assert (designs[0].strata, designs[0].scope) == ("date", "type")
-    assert designs[0].timing == "unscheduled"
-    assert designs[0].cause_label == "DIVIDEND@t+0"      # 없으면 from 으로 떨어진다
-    assert missing == []
+    prop = agents.parse(minimal)
 
-
-# 노드 메타에 넣어 볼 불량값. unhashable(set·dict·list)이 핵심이다 - graph 가 종별을
-# 집합·사전 조회에 쓰므로 그 타입만 TypeError 를 낸다.
-_BAD_META_VALUES = [1, "x", [], {}, [{"id": 1}], [1], [[1]], None, True, 1.5]
-_META_FIELDS = ("kind", "member_events", "seq_ignorability", "tau", "effect", "unit", "measure")
+    assert len(prop.designs) == 1
+    assert prop.target == "AR@t+0"          # 없으면 유일 종점으로 떨어진다
+    assert prop.designs[0].timing == "unscheduled"
+    assert prop.missing == []
 
 
-@pytest.mark.parametrize("kind", ["SHOCK", "MECHANISM", "OBSERVABLE", "CONFOUND"])
-@pytest.mark.parametrize("field", _META_FIELDS)
-def test_parse_survivors_never_explode_in_validate(kind, field):
+@pytest.mark.parametrize("field", ["says", "observed", "value", "events"])
+@pytest.mark.parametrize("value", [1, "x", [], {}, [{"id": 1}], [1], None, True, 1.5])
+def test_parse_survivors_never_explode_in_validate(field, value):
     """**parse 를 통과한 산출은 validate 에서 PipelineError 아닌 예외를 내지 않는다.**
 
-    WHY: 되먹임은 `except PipelineError` 하나로 받는다(run.explain). 게이트를 통과한 값이
-    하류에서 다시 읽힐 때 TypeError·AttributeError·ValueError 로 새면, 그 입력만 AnalyzeOne 을
-    죽이고 전량성공 게이트(ADR-0028)가 유니버스 33종 런을 FAILED 시킨다.
-
-    케이스를 하나씩 늘리는 대신 **불변식으로 박는다.** 리뷰 왕복마다 새 필드가 하나씩
-    나왔는데(노드 id 형식 → member_events 스칼라 → member_events 원소 → kind unhashable),
-    전부 이 한 문장의 사례였다. 새 메타 필드를 graph 가 연산하기 시작하면 여기서 깨진다.
+    WHY: 되먹임은 `except PipelineError` 하나로 받는다. 게이트를 통과한 값이 하류에서 다시
+    읽힐 때 TypeError·AttributeError·ValueError 로 새면 그 입력만 AnalyzeOne 을 죽이고
+    전량성공 게이트(ADR-0028)가 유니버스 전체 런을 FAILED 시킨다. 케이스를 하나씩 늘리는
+    대신 불변식으로 박는다 - 새 메타 필드를 graph 가 연산하기 시작하면 여기서 깨진다.
     """
-    target = {"kind": "TARGET", "unit": "stock", "measure": "초과수익"}
-    edge = {**_edge(), "from": "DIVIDEND@t+0"}
-    for value in _BAD_META_VALUES:
-        meta = {"kind": kind, "unit": "stock", "measure": "배당",
-                "member_events": [EVENT_ID], "tau": "t+0", field: value}
-        proposal = {"nodes": {"DIVIDEND@t+0": meta, "AR@t+0": target},
-                    "edges": [edge], "missing": []}
-        try:
-            nodes, _designs, _missing = agents.parse(proposal)
-        except PipelineError:
-            continue                      # 게이트가 거부했다 - 되먹임 대상이다
-        try:
-            G.validate({"nodes": nodes,
-                        "structures": [{"id": "A", "edges": [
-                            {"from": "DIVIDEND@t+0", "to": "AR@t+0", "timing": "unscheduled"}]}]},
-                       grounded={EVENT_ID}, require_competing=False)
-        except PipelineError:
-            pass                          # 정규화된 거부 - 되먹임이 받는다
-        except Exception as exc:          # noqa: BLE001 — 이 테스트가 잡으려는 게 이것이다
-            raise AssertionError(
-                f"parse 를 통과한 {field}={value!r}(kind={kind})가 validate 에서 "
-                f"{type(exc).__name__} 로 샜다: {exc}") from exc
+    from edge_analysis.causal import graph as G
+
+    nodes = _nodes()
+    nodes["DIVIDEND@t+0"] = {**nodes["DIVIDEND@t+0"], field: value}
+    out = {"target": "AR@t+0", "nodes": nodes, "edges": _edge(), "missing": []}
+    try:
+        prop = agents.parse(out)
+    except PipelineError:
+        return                              # 게이트가 잡았다 - 계약대로다
+
+    violations = G.validate({"nodes": prop.nodes,
+                             "structures": [{"id": "A", "edges": prop.edges}]},
+                            grounded={EVENT_ID}, require_competing=False)
+    assert isinstance(violations, list)     # 예외 없이 판정으로 끝나야 한다

@@ -27,8 +27,24 @@ def test_survived_finding_produces_event_verdict_that_maps_to_enum():
     raw = narrate(r)
 
     assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
-    assert Explanation(raw).confidence_level == "HIGH"
     assert Explanation(raw).is_valid
+
+
+def test_single_pass_never_claims_high_confidence():
+    """확신도 '높음'은 **표본외 확증이 있을 때** 쓰는 말이다.
+
+    지금 파이프라인은 같은 설계를 다른 표본에서 다시 돌리지 않는다. 유의한 간선
+    하나로 '높음'을 붙이면 없는 확증을 있는 척하는 것이 된다 - 실험판이 모든 판정을
+    `미확증`으로 내보낸 이유다.
+    """
+    r = _report(findings=[EdgeFinding(cause="공시", because="", effect=0.061, p=0.0001,
+                                      n=800, survived=True)])
+
+    raw = narrate(r)
+
+    assert raw["confidence"] == "중간"
+    assert Explanation(raw).confidence_level == "MEDIUM"
+    assert raw["causal"]["status"] == "미확증(표본외 검정 없음)"
 
 
 def test_no_surviving_cause_says_so_and_never_invents_confidence():
@@ -76,14 +92,37 @@ def test_missing_inputs_are_reported_rather_than_papered_over():
 
 def test_audit_block_is_preserved_for_the_archive():
     """DB 매핑이 버리는 것을 raw 가 남긴다 - 감사 경로가 끊기면 재현이 안 된다."""
-    r = _report(global_fit={"C": 12.3, "df": 10, "p": 0.26},
+    r = _report(budget={"residual": -0.0421, "share": 0.62,
+                        "unexplained": -0.016, "over_budget": False,
+                        "n_paths": 2, "n_measured": 1, "n_blocked": 1},
                 local_violations=["LOGCAP ⊥ RET | ..."],
+                falsification_surface=["MOM@t-7 ⊥ AR@t0 | EVT@t-1"],
+                data_requests=[{"need": "투자자별 순매수 일별", "grain": "일별"}],
+                proofs=[{"edge": "EVT@t-1→AR@t0", "say": "공시가 올렸다",
+                         "ledger": [{"n": 1, "p": 0.01}], "code": ["placebo(...)"]}],
                 findings=[EdgeFinding(cause="공시", because="", effect=0.06,
                                       p=0.01, n=100, survived=True)])
 
     audit = narrate(r)["causal"]
 
-    assert audit["global_fit"]["p"] == 0.26
+    # 예산 정합이 적합도 카이제곱을 대신한다. **미설명분이 산출물에 남아야 한다** -
+    # 설명 비율만 내면 남은 폭이 사라지고, 바텀업 귀속의 정직성 장치가 무력해진다.
+    assert audit["budget"]["share"] == 0.62
+    assert audit["budget"]["unexplained"] == -0.016
+    assert audit["budget"]["n_blocked"] == 1
     assert audit["local_violations"]
     assert audit["survived"][0]["n"] == 100
+    assert audit["survived"][0]["because"] == ""
     assert audit["residual"] == r.residual
+    # 검정가능성의 증거와 못 잰 것의 요청도 같이 남는다
+    assert audit["falsification_surface"] == ["MOM@t-7 ⊥ AR@t0 | EVT@t-1"]
+    assert audit["data_requests"][0]["need"] == "투자자별 순매수 일별"
+    assert audit["proofs"][0]["ledger"][0]["p"] == 0.01
+    assert audit["proofs"][0]["code"] == ["placebo(...)"]
+
+
+def test_data_requests_reach_the_customer_sentence_when_nothing_else_is_missing():
+    """'확인 안 됨'과 '자료가 없어 확인 못 함'은 다른 말이다."""
+    raw = narrate(_report(data_requests=[{"need": "장중 체결 흐름 원장"}]))
+
+    assert "확보하지 못한 자료: 장중 체결 흐름 원장" in raw["explain"]
