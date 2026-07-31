@@ -24,6 +24,8 @@ _SETTINGS = SimpleNamespace(
     # tests/e2e/test_causal_pipeline.py 가 별도로 검증한다.
     causal_enabled=False,
     causal_sandbox_enabled=True,
+    domain_docs_bucket="",
+    domain_docs_profile="",
 )
 
 

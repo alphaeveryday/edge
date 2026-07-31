@@ -83,6 +83,8 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
 | `CAUSAL_ENABLED` | 인과 설계 하네스 사용(끄면 단일 프롬프트 경로) | `true` |
 | `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |
+| `EDGE_DOMAIN_BUCKET` | 도메인 문서(「사업의 내용」) RAG 저장소. 비면 조회 도구 미부착 | (없음) |
+| `EDGE_AWS_PROFILE` | 도메인 문서 버킷 접근 프로파일 (교차 계정일 때) | (기본 자격증명) |
 
 ## 배포
 

@@ -89,6 +89,7 @@ def analyze(
     events: list[EventContext],
     causal=None,
     causal_sandbox: bool = True,
+    domain_docs=None,
     etf_instrument_id: str | None = None,
 ) -> Explanation:
     """검증된 Explanation 을 반환한다. **시그니처는 고정이다** - 클라우드 진입점이 이걸 부른다.
@@ -102,6 +103,10 @@ def analyze(
     ``causal_sandbox=False`` 면 검정 에이전트 대신 축약 경로(고정 추정량)로 떨어진다.
     ops 킬스위치다(``CAUSAL_SANDBOX_ENABLED``) - LLM 이 쓴 코드를 실행하는 위험을 끄고도
     파이프라인이 돌아야 한다.
+
+    ``domain_docs`` 가 주입되면 제안이 `lookups` 로 물은 것을 정기보고서 「사업의 내용」
+    원문에서 찾아 붙이고 **다시 묻는다**. 없으면 조회 없이 진행한다 - 산업 구조를 모른다고
+    설명을 멈추지 않는다.
 
     ``causal`` 이 없으면 기존 단일 프롬프트 경로를 쓴다. 두 경로를 남겨 두는 이유는
     인과 경로가 산업분류 원장(V202607291720)을 요구하고, 그 백필 전에는 코호트가
@@ -128,6 +133,7 @@ def analyze(
             industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
             sandbox=causal_sandbox,
+            docs=domain_docs,
         )
         explanation = Explanation(raw)
         if not explanation.is_valid:
