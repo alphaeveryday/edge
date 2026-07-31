@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import re
+from html import unescape
 
 _ROW = re.compile(r"<TR[^>]*>(.*?)</TR>", re.S | re.I)
 _CELL = re.compile(r"<T([DH])([^>]*)>(.*?)</T\1>", re.S | re.I)
@@ -42,8 +43,12 @@ REV_WORDS = ("매출액", "매출", "영업수익", "수익")
 SHARE_WORDS = ("비중", "비율", "구성비")
 
 
-def _text(html: str) -> str:
-    return _WS.sub(" ", _TAGS.sub(" ", html or "")).strip()
+def _text(html_fragment: str) -> str:
+    """셀 텍스트. **엔티티를 먼저 푼다** - `부 &nbsp;문` 처럼 자간을 엔티티로 벌린 실측 표가
+    있고, 풀지 않으면 그 문자열이 머리행 낱말과 영원히 안 맞는다(공백 정규화도 못 잡는다).
+    """
+    raw = unescape(html_fragment or "").replace("\xa0", " ")
+    return _WS.sub(" ", _TAGS.sub(" ", raw)).strip()
 
 
 def grid(table_xml: str) -> list[list[str]]:
@@ -205,9 +210,16 @@ def parse_table(table_xml: str) -> list[dict]:
                 if any(w in h for w in REV_WORDS) and i != seg_col
                 and not any(w in _leaf(h) for w in SHARE_WORDS)]
     if not rev_cols:
-        # 「매출액(비율)」처럼 합성된 열이거나 머리에 낱말이 없는 표. 숫자가 있는 열 중
-        # 가장 오른쪽을 쓰지 않는다 - 근거 없는 추측이므로 포기하는 쪽이 낫다.
-        return []
+        # **결합 열 폴백**: `매출액(비율)` 한 칸에 `52,576,287(100%)` 가 함께 오는 표가 실측에
+        # 있다. 매출 낱말이 있는 칸을 비율 낱말 때문에 통째로 버리면 그 표는 채택 자체가
+        # 불가능해진다 - `_to_num`·`_share` 가 한 칸에서 둘을 뽑을 수 있다. 순수 매출 열이
+        # 하나도 없을 때만 쓴다(있으면 그쪽이 정확하다).
+        rev_cols = [i for i, h in enumerate(head)
+                    if any(w in h for w in REV_WORDS) and i != seg_col]
+        if not rev_cols:
+            # 머리에 매출 낱말이 아예 없는 표. 숫자가 있는 열 중 가장 오른쪽을 쓰지 않는다 -
+            # 근거 없는 추측이므로 포기하는 쪽이 낫다.
+            return []
     share_by_rev = {}
     for i in rev_cols:
         nxt = i + 1

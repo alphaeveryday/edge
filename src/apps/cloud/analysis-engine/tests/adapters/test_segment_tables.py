@@ -255,3 +255,34 @@ def test_an_amount_in_the_share_column_is_not_read_as_a_ratio():
                <TR><TD>기계부문</TD><TD>60,000</TD><TD>60,000</TD></TR></TABLE>"""
 
     assert [r["share"] for r in parse_table(wrong)] == [None]
+
+
+def test_entities_in_the_header_do_not_hide_the_segment_column():
+    """`부 &nbsp;문` 처럼 자간을 엔티티로 벌린 머리행이 실측에 있다.
+
+    WHY: 엔티티를 풀지 않으면 그 문자열은 공백 정규화로도 `부문` 과 안 맞고, 부문 머리를
+    못 찾아 표가 통째로 버려진다 - 파서가 조용히 아무것도 안 내는 최악의 실패다.
+    """
+    spaced = """<TABLE><TR><TH>부 &nbsp;문</TH><TH>매출액</TH></TR>
+                <TR><TD>기계부문</TD><TD>60,000</TD></TR>
+                <TR><TD>전자부문</TD><TD>40,000</TD></TR>
+                <TR><TD>합계</TD><TD>100,000</TD></TR></TABLE>"""
+
+    rows = parse_table(spaced)
+    assert [r["segment"] for r in rows if not r["is_total"]] == ["기계부문", "전자부문"]
+
+
+def test_a_combined_amount_and_share_column_is_still_revenue():
+    """`매출액(비율)` 한 칸에 금액과 비중이 함께 오는 표(실측)가 버려지면 안 된다.
+
+    WHY: 비율 낱말 때문에 그 칸을 제외하면 매출 열이 하나도 남지 않아 표 전체가 포기된다.
+    한 칸에서 금액과 비중을 각각 뽑을 수 있으므로, 순수 매출 열이 없을 때만 폴백한다.
+    """
+    combined = """<TABLE><TR><TH>사업부문</TH><TH>매출액(비율)</TH></TR>
+                  <TR><TD>반도체 부문</TD><TD>60,000(60.0%)</TD></TR>
+                  <TR><TD>기타 부문</TD><TD>40,000(40.0%)</TD></TR></TABLE>"""
+
+    rows = parse_table(combined)
+    assert [r["value"] for r in rows] == [60000.0, 40000.0]
+    assert [r["share"] for r in rows] == [pytest.approx(0.60), pytest.approx(0.40)]
+    assert check(rows)["매출액(비율)"]["ok"] is True
