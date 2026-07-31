@@ -44,6 +44,9 @@ def _id_set(scenario: dict, key: str, where: str) -> frozenset[str]:
         raise ValueError(f"{where}.{key} 는 문자열 배열이어야 한다: {value!r}")
     if not all(isinstance(item, str) for item in value):
         raise ValueError(f"{where}.{key} 에 비문자열 항목이 있다: {value!r}")
+    if len(set(value)) != len(value):
+        # frozenset 으로 접으면 복붙 오류(다른 ID 를 의도한 중복)가 조용히 대상 하나로 준다
+        raise ValueError(f"{where}.{key} 에 중복 ID 가 있다: {sorted(value)}")
     return frozenset(value)
 
 

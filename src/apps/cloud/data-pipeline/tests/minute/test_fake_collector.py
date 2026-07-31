@@ -132,6 +132,11 @@ class TestPriceScenarioValidation:
         with pytest.raises(ValueError, match="문자열 배열"):
             FakePriceCollector({"missing_unit_ids": "100003"}, seed=1)
 
+    def test_duplicate_scenario_ids_fail_loud(self):
+        # 중복은 frozenset 으로 조용히 접힌다 — 다른 ID 를 의도한 복붙 오류일 수 있다
+        with pytest.raises(ValueError, match="중복 ID"):
+            FakePriceCollector({"missing_unit_ids": ["100003", "100003"]}, seed=1)
+
     def test_overlapping_roles_fail_loud(self):
         # 한 unit 이 missing 이자 no_trade 면 분기 순서가 의미를 임의로 정한다
         with pytest.raises(ValueError, match="같은 unit"):
