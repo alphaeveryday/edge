@@ -235,9 +235,11 @@ class FakeNewsFeed:
         self._bursts = {}
         for burst in scenario.get("bursts", ()):
             _require_known_keys(burst, _BURST_KEYS, "news.bursts[]")
-            self._bursts[_int_value(burst, "poll_index", "news.bursts[]")] = _int_value(
-                burst, "count", "news.bursts[]", minimum=1
-            )
+            poll_at = _int_value(burst, "poll_index", "news.bursts[]")
+            if poll_at in self._bursts:
+                # dict 덮어쓰기는 같은 poll 의 두 burst 를 조용히 하나로 줄인다
+                raise ValueError(f"news.bursts[] 에 poll_index={poll_at} 가 중복이다")
+            self._bursts[poll_at] = _int_value(burst, "count", "news.bursts[]", minimum=1)
         dup = scenario.get("duplicate")
         self._dup = None
         if dup is not None:

@@ -324,6 +324,21 @@ class TestNewsFeed:
         with pytest.raises(ValueError, match="article_index"):
             FakeNewsFeed(config, seed=7)
 
+    def test_duplicate_burst_poll_fails_loud(self):
+        # 같은 poll 의 두 burst 는 dict 덮어쓰기로 조용히 하나가 된다 — anchor-miss
+        # fixture 의 burst 가 줄어들면 실패 경로가 검증 없이 초록이 된다
+        with pytest.raises(ValueError, match="poll_index=3"):
+            FakeNewsFeed(
+                {
+                    "initial_count": 10,
+                    "bursts": [
+                        {"poll_index": 3, "count": 100},
+                        {"poll_index": 3, "count": 50},
+                    ],
+                },
+                seed=7,
+            )
+
     def test_invalid_calendar_date_fails_loud(self):
         with pytest.raises(ValueError, match="달력일"):
             FakeNewsFeed({"initial_count": 1, "date_yyyymmdd": "20261399"}, seed=7)
