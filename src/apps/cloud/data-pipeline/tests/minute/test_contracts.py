@@ -99,12 +99,13 @@ def make_result(**overrides) -> CollectionResult:
 
 
 class TestResultContract:
-    def test_status_must_be_data_status_vocabulary(self):
-        # ops/states.py 네 축을 섞지 않는다 — 실행 축(SUCCEEDED)이 데이터 축에 오면 거부
-        with pytest.raises(ValidationError):
-            make_result(status="SUCCEEDED")
-        with pytest.raises(ValidationError):
-            make_result(status="BOGUS")
+    def test_status_must_be_result_vocabulary(self):
+        # 축을 섞지 않는다 — 실행 축(SUCCEEDED)·원장 축(DUE)·ops 관측 축(UNKNOWN)이
+        # 결과에 오면 거부. UNKNOWN 을 허용하면 window CHECK(7어휘)가 저장에서 거부해
+        # 불확실성이 런타임 깊숙이에서 터진다
+        for bad in ("SUCCEEDED", "BOGUS", "UNKNOWN", "DUE", "MISSING"):
+            with pytest.raises(ValidationError):
+                make_result(status=bad)
 
     def test_unclassified_units_rejected(self):
         # 합이 모자라면 unit 이 조용히 사라진 것 — VALID 위장 금지 (Rule 12)

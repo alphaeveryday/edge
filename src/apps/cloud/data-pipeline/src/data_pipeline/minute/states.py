@@ -55,6 +55,14 @@ WINDOW_DATA_STATUSES = frozenset(
     }
 )
 
+# 수집 **결과**가 가질 수 있는 부분집합 — DUE/CLAIMED(처리 전)·MISSING(안 옴)은 원장이
+# 매기는 상태지 collector 출력이 아니고, ops 의 UNKNOWN(증거 없음)은 여기 없다:
+# collector 는 자기가 한 일을 항상 분류할 수 있어야 하며, UNKNOWN 결과를 허용하면
+# window CHECK(v0.7 정본 7어휘)가 첫 저장에서 거부한다.
+RESULT_STATUSES = frozenset(
+    {WINDOW_VALID, WINDOW_VALID_EMPTY, WINDOW_INCOMPLETE, WINDOW_INVALID}
+)
+
 # ── news_extraction_job.status · price_window_job.status (공유 lifecycle) ──
 JOB_PENDING = "PENDING"
 JOB_CLAIMED = "CLAIMED"
