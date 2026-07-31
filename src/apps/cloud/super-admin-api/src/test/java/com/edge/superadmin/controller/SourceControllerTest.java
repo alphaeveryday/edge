@@ -19,6 +19,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -117,7 +118,9 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.tasks[2].recordsOut").doesNotExist())
 				.andExpect(jsonPath("$.result.tasks[2].failedRecords").doesNotExist())
 				// 완전성 미배선 작업은 빈 객체가 아니라 null — 기대값이 있는 UNKNOWN과 구분한다.
-				.andExpect(jsonPath("$.result.tasks[2].completeness").doesNotExist());
+				// doesNotExist() 는 키 부재도 통과시켜 이 구분을 못 잠근다. 키는 있고 값이 null
+				// 이어야 TS 계약(TaskCompleteness | null)이 undefined 를 받지 않는다.
+				.andExpect(jsonPath("$.result.tasks[2].completeness").value(nullValue()));
 	}
 
 	@Test
@@ -126,9 +129,11 @@ class SourceControllerTest {
 		//      expected-received 를 다시 계산하면 원장이 판정한 사실과 다른 다섯 번째 상태가 생긴다.
 		PipelineRunStatus run = new PipelineRunStatus(RUN_KEY, "LAUNCHED", "SUCCEEDED", null,
 				List.of(
+						// missing 을 일부러 33-32 와 다르게 둔다 — 1 이면 재계산하는 API 도
+						// 통과해 "원장 값 그대로"라는 이 테스트의 전제를 못 잠근다.
 						new TaskStatus("raw", "ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "DUE",
 								"FULFILLED", "INCOMPLETE", 4120L, 0L,
-								new CompletenessStatus(33L, 32L, 1L),
+								new CompletenessStatus(33L, 32L, 3L),
 								null, null, null, FINISHED, null, null, List.of(), null),
 						// 기대 스냅샷은 있지만 observer가 수신 수를 못 낸 상태. null을 0으로 만들면
 						// "33개 모두 누락"이라는 거짓 사실이 된다.
@@ -142,10 +147,12 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.tasks[0].recordsOut").value(4120))
 				.andExpect(jsonPath("$.result.tasks[0].completeness.expected").value(33))
 				.andExpect(jsonPath("$.result.tasks[0].completeness.received").value(32))
-				.andExpect(jsonPath("$.result.tasks[0].completeness.missing").value(1))
+				.andExpect(jsonPath("$.result.tasks[0].completeness.missing").value(3))
 				.andExpect(jsonPath("$.result.tasks[1].completeness.expected").value(33))
-				.andExpect(jsonPath("$.result.tasks[1].completeness.received").doesNotExist())
-				.andExpect(jsonPath("$.result.tasks[1].completeness.missing").doesNotExist());
+				// 미관측은 키를 지우는 게 아니라 명시적 null 이다 — 지우면 UI 가 "누락 0" 과
+				// 구분할 근거를 잃는다. doesNotExist() 로는 그 차이를 잠글 수 없다.
+				.andExpect(jsonPath("$.result.tasks[1].completeness.received").value(nullValue()))
+				.andExpect(jsonPath("$.result.tasks[1].completeness.missing").value(nullValue()));
 	}
 
 	@Test

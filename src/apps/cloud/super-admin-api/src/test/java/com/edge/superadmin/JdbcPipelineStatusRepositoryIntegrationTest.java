@@ -148,7 +148,9 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				"2026-07-27", "2026-07-27T08:00:00Z");
 		insertTask("t-complete", "r-completeness", "raw", "ETF_HOLDINGS_COLLECTION_KRX",
 				"etf_holdings", "DUE", "FULFILLED", "INCOMPLETE", 4120L, 0L);
-		setCompleteness("t-complete", "{\"expected\":33,\"received\":32,\"missing\":1}");
+		// missing 을 일부러 33-32 와 다르게 둔다 — 이 값이 1 이면 재계산하는 리더도 통과해
+		// "원장 값 그대로"를 못 잠근다. 원장이 낸 판정이 정본이지 뺄셈 결과가 아니다.
+		setCompleteness("t-complete", "{\"expected\":33,\"received\":32,\"missing\":3}");
 		insertTask("t-unknown", "r-completeness", "raw", "NAV_COLLECTION_KIS",
 				"etf_nav", "DUE", "FULFILLED", "UNKNOWN", null, null);
 		setCompleteness("t-unknown", "{\"expected\":33,\"received\":null,\"missing\":null}");
@@ -166,7 +168,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				.filter(t -> t.taskKey().equals("TAG_NEWS"))
 				.findFirst().orElseThrow();
 
-		assertThat(complete.completeness()).isEqualTo(new CompletenessStatus(33L, 32L, 1L));
+		assertThat(complete.completeness()).isEqualTo(new CompletenessStatus(33L, 32L, 3L));
 		assertThat(unknown.completeness()).isEqualTo(new CompletenessStatus(33L, null, null));
 		assertThat(unwired.completeness()).isNull();
 	}
