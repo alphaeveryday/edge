@@ -242,10 +242,11 @@ class PriceWorker:
                 unit_ids=cfg.universe.unit_ids, failure_injection=None,
             )
             result, records, manifest_units = self.collector.collect(request, now)
+            # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
+            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다
             units = {
-                "received": manifest_units["received"],
-                "no_trade": manifest_units["no_trade"],
-                "missing": manifest_units["missing"],
+                cls: list(manifest_units.get(cls, []))
+                for cls in ("received", "no_trade", "missing", "invalid")
             }
             # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
             # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을

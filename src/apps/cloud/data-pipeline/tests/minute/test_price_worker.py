@@ -329,3 +329,34 @@ class TestWatermarkWiring:
         worker.storage.put_bytes(key, b"corrupted-preexisting")
         with pytest.raises(ArtifactImmutabilityError):
             worker.tick(NOW)
+
+
+class TestInvalidClassification:
+    def test_invalid_units_commit_invalid_outcome(self, tmp_path):
+        # collector 가 invalid 로 분류한 unit 은 버려지지 않고 INVALID 결과로 커밋된다
+        from data_pipeline.minute.models import CollectionResult
+
+        class InvalidatingCollector:
+            def collect(self, request, now):
+                result = CollectionResult(
+                    status="INVALID", expected_count=3, succeeded_count=2,
+                    failed_count=1, retry_count=0, artifact_uri="memory://x",
+                    manifest_checksum="a" * 64, result_checksum="b" * 64,
+                    watermark_before=None, watermark_after=request.window_end,
+                    generation=1,
+                    stage_timestamps={"collection_started_at": now},
+                )
+                records = (
+                    {"unit_id": "500000", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0},
+                    {"unit_id": "100001", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0},
+                )
+                manifest = {"received": ["100001", "500000"], "no_trade": [],
+                            "missing": [], "invalid": ["100000"]}
+                return result, records, manifest
+
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        worker.collector = InvalidatingCollector()
+        assert worker.tick(NOW) == "PROCESSED"
+        window = next(iter(db.windows.values()))
+        assert window["data_status"] == "INVALID"
