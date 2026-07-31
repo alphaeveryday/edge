@@ -272,6 +272,7 @@ export function AnalysisDetailPage() {
               {a.status === 'EXCLUDED' && (
                 <button
                   className="btn justify-center"
+                  disabled={restore.isPending}
                   onClick={() =>
                     restore.mutate(a.id, { onSuccess: () => toast('분석 대상으로 복원되었습니다.') })
                   }

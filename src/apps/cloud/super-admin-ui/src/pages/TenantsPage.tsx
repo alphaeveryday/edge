@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Icon, Modal, StatusBadge, toast } from 'ui-kit';
 import type { TenantCreateEnv, TenantStatus } from '../domains/tenants';
 import { ENV_TONE, TENANT_STATUS_LABEL, TENANT_STATUS_TONE } from '../domains/tenants';
+import { apiMessage } from '../api/client';
 import { useCreateTenant, useTenants } from '../domains/tenants/hooks';
 import { LoadError } from './_shared/LoadError';
 
@@ -55,6 +56,8 @@ export function TenantsPage() {
           setFStatus('ALL');
           toast('테넌트가 생성되었습니다.');
         },
+        // 서버 실패 사유를 모달 안에 인라인으로 보인다(훅이 전역 토스트를 끔).
+        onError: (err) => setFError(apiMessage(err, '테넌트를 생성하지 못했습니다.')),
       },
     );
   };
@@ -143,13 +146,18 @@ export function TenantsPage() {
         open={createOpen}
         title="테넌트 생성"
         width={440}
-        onClose={() => setCreateOpen(false)}
+        // pending 중 닫기(취소·X·스크림) 차단 — 전역 토스트를 끈 상태라, 닫힌 모달의
+        // fError 로만 가는 실패가 무표시로 새지 않게 결과를 본 뒤에만 닫는다.
+        onClose={() => {
+          if (!create.isPending) setCreateOpen(false);
+        }}
         footer={
           <>
-            <button className="btn" onClick={() => setCreateOpen(false)}>
+            <button className="btn" disabled={create.isPending} onClick={() => setCreateOpen(false)}>
               취소
             </button>
-            <button className="btn btn-primary" onClick={submitCreate}>
+            {/* pending 중 재제출 차단 — 전역 토스트를 끈 상태라 첫 요청의 실패가 무표시로 새는 경로를 막는다 */}
+            <button className="btn btn-primary" disabled={create.isPending} onClick={submitCreate}>
               생성
             </button>
           </>

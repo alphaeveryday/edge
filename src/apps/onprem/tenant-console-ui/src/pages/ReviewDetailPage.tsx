@@ -7,6 +7,7 @@ import {
   ITEM_STATUS_LABEL,
   reasonLabel,
 } from '../domains/review';
+import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
@@ -40,9 +41,9 @@ export function ReviewDetailPage() {
     toast(msg);
     navigate('/review');
   };
+  // 서버 사유(상태 경쟁 409 등) 우선, 없으면 복구 안내 폴백 — 전역(일반 문구)보다 늦게 떠 덮는다.
   const fail = (err: unknown) => {
-    const msg = (err as { body?: { message?: string } })?.body?.message;
-    toast(msg ?? '처리하지 못했습니다 — 목록을 새로고침해 주세요.');
+    toast(apiMessage(err, '처리하지 못했습니다 — 목록을 새로고침해 주세요.'));
   };
 
   const approve = () => {
