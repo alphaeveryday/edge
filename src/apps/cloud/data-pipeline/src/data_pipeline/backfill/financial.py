@@ -1,0 +1,139 @@
+"""재무제표 백필 — **전 계정 무변형. 주요계정으로 줄이지 않는다.**
+
+포워드 소스(`sources/dart_financial.py`)는 `fnlttSinglAcnt`(주요계정)를 쓴다. 그래서
+매출액·매출원가·판관비가 없고, 사슬의 탄력성 계수(원가구조·영업레버리지)와 사건 크기의
+정규화 분모(계약금액/매출)를 계산할 수 없다. 백필은 **전체 재무제표**를 받아 27열을
+그대로 낸다 - bronze 는 무변형이므로 계정을 고르지 않는다.
+
+    sj_div/sj_nm        재무제표 구분 (BS·IS·CIS·CF·SCE)
+    account_id/nm/detail 계정. account_nm 에 '매출액'·'매출원가'·'판매비와관리비'가 있다
+    thstrm/frmtrm/bfefrmtrm_amount  당기·전기·전전기. 누적(add_amount)·분기(q_amount) 별도
+    fs_div              CFS(연결) · OFS(별도). **섞으면 원가율이 통째로 틀린다**
+    reprt_code          11011(사업)·11012(반기)·11013(1분기)·11014(3분기)
+    rcept_no            접수번호 - 앞 8자리가 접수일이다(PIT 의 근거, canonical 이 쓴다)
+
+붙이는 것은 provenance 뿐이다(우리 티커·시장·수집 시각·입력 정체).
+
+**이 입력은 PIT 가 아니다.** 확인한 사실 - 005930·000660 모두 `(bsns_year, reprt_code)`
+조합마다 `rcept_no` 가 정확히 하나씩이고 둘 이상인 조합이 없다. 즉 정정공시 이력이 없고
+**최종 확정치만** 있다(2016년 이후). OpenDART 재무 API 자체가 (corp_code, bsns_year,
+reprt_code) 키라서 정정 전 수치를 지목할 파라미터가 없다 - 벤더가 빠뜨린 것이 아니다.
+
+따라서 `rcept_no` 앞 8자리로 "언제 처음 공개됐나"는 근사할 수 있지만, 정정 전 수치로
+되돌릴 수는 없다. 사후 정정된 값을 그 시점 값으로 쓰면 조용히 미래를 본다. 정정은 드물지만
+**분식·감사의견 변경·합병처럼 큰 사건에 몰려서** 하필 설명하려는 셀에서 틀릴 확률이 높다.
+진짜 PIT 는 `list.json`(정정 열거) + `document.xml`(rcept_no 원본) 파싱이 필요하고,
+그것은 이 백필의 범위 밖이다(별 source 로 추가할 자리).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+from datetime import UTC, datetime
+
+from ..lake import Storage, collection_log_key, raw_financial_partition
+from .hf import HfDataset, HfError
+from .manifest import Manifest, sha256
+
+logger = logging.getLogger(__name__)
+
+SOURCE = "dartlab"                  # 포워드는 source=dart — 파티션이 겹치지 않는다
+DATASET = "financial_statements"
+MARKET = "KR"
+FOLDER = "dart/finance"
+RUN_PREFIX = "backfill-dartlab-financial"
+
+
+def _rows_from_parquet(blob: bytes) -> list[dict]:
+    """parquet → dict 행. **열을 고르지 않는다** - 스키마 확장은 무변형에서 온다."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(io.BytesIO(blob))
+    return table.to_pylist()
+
+
+def _ndjson(rows: list[dict]) -> bytes:
+    return ("\n".join(json.dumps(r, ensure_ascii=False, default=str)
+                      for r in rows) + "\n").encode("utf-8")
+
+
+def run_id_for(ingest_date: str, tag: str = "") -> str:
+    """백필 run_id. **접두사가 격리 장치다** - 롤백은 이 파티션을 지우는 것이다."""
+    stamp = ingest_date.replace("-", "")
+    return f"{RUN_PREFIX}-{stamp}{('-' + tag) if tag else ''}"
+
+
+def backfill_financial(storage: Storage, *, dataset: HfDataset | None = None,
+                       limit: int | None = None, tickers: list[str] | None = None,
+                       ingest_date: str = "", run_id: str = "",
+                       key_prefix: str = "", refetch: bool = False,
+                       log_every: int = 25) -> dict:
+    """전 종목 재무 백필. 매니페스트로 재개하고, 끝에서 스스로 검증 가능한 상태를 남긴다.
+
+    `key_prefix` 가 있으면 그 아래에만 쓴다(`draft/`). 승격은 접두사 이동이므로 파티션
+    규약을 두 번 만들지 않는다. 포워드는 접두사가 없으니 초안이 프로덕션을 덮을 수 없다.
+    """
+    hf = dataset or HfDataset()
+    ingest_date = ingest_date or datetime.now(UTC).date().isoformat()
+    run_id = run_id or run_id_for(ingest_date)
+    universe = tickers or hf.tickers(FOLDER)
+    if limit:
+        universe = universe[:limit]
+
+    man = Manifest.load_or_new(
+        storage, source=SOURCE, dataset=DATASET, market=MARKET, run_id=run_id,
+        ingest_date=ingest_date, repo=hf.repo, revision=hf.revision, folder=FOLDER,
+        prefix=key_prefix)
+    prefix = raw_financial_partition(SOURCE, MARKET, ingest_date, run_id)
+    if key_prefix:
+        prefix = f"{key_prefix.rstrip('/')}/{prefix}"
+
+    oids = {f.path.rsplit("/", 1)[-1][:-len(".parquet")]: f.oid
+            for f in hf.files(FOLDER) if f.path.endswith(".parquet")}
+    logger.info("백필 시작 run_id=%s 대상=%d prefix=%s", run_id, len(universe), prefix)
+
+    fetched = skipped = 0
+    for i, ticker in enumerate(universe, 1):
+        oid = oids.get(ticker, "")
+        if not refetch and man.done(ticker, oid=oid):
+            skipped += 1
+            continue
+        try:
+            blob = hf.fetch(f"{FOLDER}/{ticker}.parquet")
+            rows = _rows_from_parquet(blob)
+            stamp = datetime.now(UTC).isoformat()
+            for r in rows:
+                r["our_ticker"] = ticker
+                r["market"] = MARKET
+                r["fetched_at"] = stamp
+                r["backfill_source"] = f"hf:{hf.repo}@{hf.revision}"
+                r["backfill_oid"] = oid
+            payload = _ndjson(rows)
+            key = f"{prefix}/part-{ticker}.ndjson"
+            storage.put_bytes(key, payload)
+            man.record(ticker, oid=oid, key=key, rows=len(rows),
+                       digest=sha256(payload), bytes_out=len(payload))
+            fetched += 1
+        except (HfError, OSError, ValueError) as exc:
+            man.fail(ticker, f"{type(exc).__name__}: {exc}")
+            logger.warning("백필 실패 %s: %s", ticker, exc)
+        if i % log_every == 0:
+            man.save(storage)          # 중간 저장 - 중단돼도 여기서 이어진다
+            logger.info("진행 %d/%d 받음=%d 건너뜀=%d 실패=%d",
+                        i, len(universe), fetched, skipped, len(man.failed))
+
+    man.close()
+    man_key = man.save(storage)
+    log = {"job": "backfill_financial", "source": SOURCE, "dataset": DATASET,
+           "market": MARKET, "run_id": run_id, "ingest_date": ingest_date,
+           "universe": len(universe), "fetched": fetched, "skipped": skipped,
+           "failed": len(man.failed), "rows": man.rows,
+           "manifest": man_key, "prefix": prefix,
+           "input": {"repo": hf.repo, "revision": hf.revision, "folder": FOLDER}}
+    key = collection_log_key(SOURCE, DATASET, ingest_date, run_id)
+    storage.put_bytes(f"{key_prefix.rstrip('/') + '/' if key_prefix else ''}{key}",
+                      json.dumps(log, ensure_ascii=False, indent=1).encode("utf-8"))
+    logger.info("백필 종료 %s", log)
+    return log
