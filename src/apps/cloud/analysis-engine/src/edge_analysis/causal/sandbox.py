@@ -153,6 +153,15 @@ _BANNED_NAMES = frozenset({
     "memoryview", "breakpoint", "id",
 })
 
+# 파일·프로세스에 닿는 **속성** 이름. numpy 를 통째로 주므로 `np.loadtxt` 처럼 금지 이름
+# (`open`)도, 막힌 import 도, 던더도 쓰지 않고 파일 경계를 넘는 경로가 남는다. 모듈을
+# 잘라 주는 것보다 이름을 막는 편이 numpy 의 지연 로드와 싸우지 않는다.
+_BANNED_ATTRS = frozenset({
+    "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile", "load", "save",
+    "savez", "savez_compressed", "memmap", "DataSource", "fromregex",
+    "ctypeslib", "system", "popen", "getenv", "putenv",
+})
+
 
 def _screen(code: str) -> None:
     """실행 전 소스 검사. 통과 못 하면 관측이 아니라 거부다.
@@ -176,6 +185,10 @@ def _screen(code: str) -> None:
             raise SandboxError(
                 f"`.{node.attr}` 처럼 밑줄로 시작하는 속성에 닿을 수 없다 - 내부 상태와 "
                 "던더는 제한 네임스페이스를 우회하는 경로다. 도구만 써라.")
+        if isinstance(node, ast.Attribute) and node.attr in _BANNED_ATTRS:
+            raise SandboxError(
+                f"`.{node.attr}` 는 파일·환경에 닿는 경로다 - 샌드박스는 도구가 준 배열만"
+                " 다룬다. 필요한 데이터는 cohort·universe·ar·mom·vol·docs 로 받아라.")
         if isinstance(node, ast.Name) and node.id in _BANNED_NAMES:
             raise SandboxError(
                 f"`{node.id}` 를 쓸 수 없다 - 반사(reflection)로 던더·바인딩 내부에 닿는 "

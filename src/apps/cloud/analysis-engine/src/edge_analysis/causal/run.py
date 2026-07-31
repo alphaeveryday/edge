@@ -304,16 +304,20 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
             survived=r.significant and not budget["over_budget"] and not against,
             killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)
             or (_COUNTER if against else None)))
-    for path, proof in _upstream(routes, by_edge, spoken):
+    for path, chain_proofs in _upstream(routes, by_edge, spoken):
         iv = path.predict()
         contribution = iv.mid if iv else None
         against = _countervailing(contribution, residual)
+        # **가장 약한 칸이 경로를 정한다.** p 는 최댓값(가장 약한 증거)을, n 은 최솟값을 쓴다 -
+        # 유의한 칸의 p 를 대표로 쓰면 경로 전체가 그만큼 강해 보인다.
+        weakest = max(chain_proofs, key=lambda x: (x.p is None, x.p or 0.0))
         findings.append(EdgeFinding(
-            cause=prop.label(path.cause), because=proof.design.because,
-            effect=contribution, p=proof.p, n=proof.n, share=None,
+            cause=prop.label(path.cause), because=weakest.design.because,
+            effect=contribution, p=weakest.p, n=min(x.n for x in chain_proofs), share=None,
             contribution=contribution,
-            survived=proof.significant and not budget["over_budget"] and not against,
-            killed_by=_killed(proof) or (budget["reason"] if budget["over_budget"] else None)
+            survived=(all(x.significant for x in chain_proofs)
+                      and not budget["over_budget"] and not against),
+            killed_by=_killed(weakest) or (budget["reason"] if budget["over_budget"] else None)
             or (_COUNTER if against else None)))
     return narrate(CausalReport(
         etf_name=etf_name, trade_date=trade_date.isoformat(), observed=observed,
@@ -333,6 +337,10 @@ def _upstream(routes: list, by_edge: dict, spoken: set) -> list[tuple]:
     여러 단계 사슬(사건 -> 매출 -> 수익률)에서 통계 간선은 상류에 있다. 그 경로의 검정
     근거는 그 통계 간선의 증명이고, 크기는 사슬 곱(`path.predict()`)이다. 통계 간선이
     없는 경로(전부 연역)는 검정 근거가 없어 문장에 쓰지 않는다 - 감사 블록에만 남는다.
+
+    통계 간선이 **둘 이상이면 전부** 돌려준다 - 하나만 보고 경로를 살리면 사건→매출은
+    유의한데 매출→수익률이 p≥0.05 인 경로가 "확인된 원인"으로 게시된다. 사슬은 가장 약한
+    칸만큼만 강하다.
     """
     out = []
     for path in routes:
@@ -341,11 +349,11 @@ def _upstream(routes: list, by_edge: dict, spoken: set) -> list[tuple]:
         stat = [(e.src, e.dst) for e in path.edges if e.kind == "statistical"]
         if not stat or any(k in spoken for k in stat):
             continue
-        proof = next((by_edge[k] for k in stat if k in by_edge), None)
-        if proof is None:
-            continue
+        proofs = [by_edge[k] for k in stat if k in by_edge]
+        if len(proofs) != len(stat):
+            continue          # 증명이 빠진 칸이 있다 - 경로를 원인으로 쓸 수 없다
         spoken.update(stat)
-        out.append((path, proof))
+        out.append((path, proofs))
     return out
 
 
@@ -527,16 +535,19 @@ def _requests(proofs: list[V.EdgeProof], prop: agents.Proposal) -> list[dict]:
     for r in proofs:
         if r.data_request:
             out.setdefault(str(r.data_request.get("need"))[:80], dict(r.data_request))
-    for d in prop.designs:
-        if not d.needs:
+    # **`prop.designs` 는 통계 간선뿐이다.** 항등식·탄력성 간선이 `needs` 를 달고 남으면
+    # 예산은 그 경로를 blocked 로 세는데 요청 큐에는 안 올라간다 - 무엇이 없어서 막혔는지가
+    # 산출물에서 사라진다. 사슬 전체를 훑는다.
+    for e in prop.chain:
+        if not e.needs:
             continue
-        key = d.needs[:80]
+        key = e.needs[:80]
         if key in out:
-            out[key]["edge"] = f"{out[key].get('edge', '')}, {d.src}→{d.dst}"
+            out[key]["edge"] = f"{out[key].get('edge', '')}, {e.src}→{e.dst}"
         else:
-            out[key] = {"need": d.needs, "grain": "미분류", "unlocks": d.say or d.because,
+            out[key] = {"need": e.needs, "grain": "미분류", "unlocks": e.says or e.because,
                         "why": "제안이 간선을 남기고 데이터를 요청했다",
-                        "edge": f"{d.src}→{d.dst}"}
+                        "edge": f"{e.src}→{e.dst}"}
     for m in prop.missing:
         out.setdefault(m[:80], {"need": m, "grain": "미분류", "unlocks": "",
                                 "why": "제안이 셀 수준에서 요청했다", "edge": ""})

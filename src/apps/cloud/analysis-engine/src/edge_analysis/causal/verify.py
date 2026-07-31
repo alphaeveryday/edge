@@ -214,8 +214,15 @@ def plan(nodes: dict, edges: list, design: EdgeDesign, *,
 def brief(p: dict) -> str:
     L = [f"간선  {p['from']}  →  {p['to']}", ""]
     for n, m in p["nodes"].items():
-        L.append(f"  [{n}]  kind={m.get('kind', '?')}  unit={m.get('unit', '?')}  "
-                 f"{m.get('measure', '')}")
+        # 새 계약의 노드 메타는 `says`(무엇을 어떤 단위로 재는가)·`observed`(어떻게 관측하나)
+        # 다. 옛 필드(kind·unit·measure)만 읽으면 검정 세션이 `kind=? unit=?` 만 보고 노드가
+        # 무엇인지 모른 채 코드를 쓴다 - 매개 노드(PAYOUT 등)에서 특히 치명적이다.
+        says = str(m.get("says") or m.get("measure") or "").strip()
+        obs = m.get("observed")
+        seen = "관측 불가(잠재)" if obs in (None, "", False) else str(obs)
+        L.append(f"  [{n}]  {says}")
+        L.append(f"          관측: {seen}"
+                 + (f"  단위: {m['unit']}" if m.get("unit") else ""))
     L += ["",
           f"주장     : {p['say']}",
           f"메커니즘 : {p['because']}",
@@ -294,6 +301,12 @@ def gate(R: dict, led: SB.Ledger, p: dict) -> list[str]:
     hit: dict | None = None
     if not isinstance(t, dict) or "p" not in t:
         bad.append("G4 test 가 placebo 결과가 아니다. R['test'] 에 placebo(...) 반환을 담아라.")
+    elif not isinstance(t.get("p"), (int, float)) or isinstance(t.get("p"), bool):
+        # 수가 아닌 p 를 그대로 빼면 `gate` 안에서 TypeError 가 나고, `verify` 는 그걸 잡지
+        # 않으므로 **깨진 한 턴이 설명 전체를 죽인다** - 게이트 기각으로 돌려주면 다음 턴이
+        # 고쳐 쓴다(ALPHA-633 과 같은 비대칭이다).
+        bad.append(f"G4 R['test'].p={t.get('p')!r} 가 수가 아니다. placebo(...) 반환을 "
+                   "그대로 담아라 - 손으로 채우지 마라.")
     else:
         same_p = [c for c in led.calls
                   if c.get("p") is not None and abs(c["p"] - t["p"]) < 1e-12]
