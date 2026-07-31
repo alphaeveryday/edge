@@ -560,6 +560,41 @@ def collection_log_key(source: str, dataset: str, started_date: str, run_id: str
     )
 
 
+def raw_price_minute_artifact_key(
+    source: str, market: str, session_date: str, window_start_hhmm: str, generation: int
+) -> str:
+    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665).
+
+    다른 raw 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
+    바이트를 다시 PUT 하는 no-op 이어야 "S3 PUT 후 DB commit 전 종료 → artifact
+    재사용" 복구가 성립한다. 불변성은 generation 이 진다: correction 은 새 generation
+    → 새 key 라 기존 artifact 를 덮지 않는다.
+    """
+    return (
+        f"raw/source={source}/dataset=price_minute/market={market}"
+        f"/session_date={session_date}/window={window_start_hhmm}"
+        f"/generation={generation}/bars.ndjson"
+    )
+
+
+def minute_window_manifest_key(
+    dataset: str, source: str, market: str, session_date: str,
+    window_start_hhmm: str, generation: int,
+) -> str:
+    """window unit manifest(received/no_trade/missing/invalid)의 결정적 키.
+
+    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 벤더 원본이
+    아니라 수집 판정 기록이다(collection_logs 와 같은 결). canonical price_bars
+    (`canonical/dataset=price_bars/...`, ALPHA-648 확정 설계)와는 존이 달라 충돌하지
+    않는다.
+    """
+    return (
+        f"operations_archive/minute_manifests/dataset={dataset}/source={source}"
+        f"/market={market}/session_date={session_date}/window={window_start_hhmm}"
+        f"/generation={generation}/manifest.json"
+    )
+
+
 # ── 백엔드 ──────────────────────────────────────────────
 class Storage(Protocol):
     """레이크 키-바이트 저장 계약. 키는 위 빌더가 만든 상대경로."""
