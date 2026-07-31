@@ -594,6 +594,35 @@ def test_proposal_may_keep_an_edge_it_cannot_measure_yet():
     assert raw["causal"]["proofs"][0]["n"] > 0
 
 
+def test_a_chain_measured_upstream_still_names_a_cause():
+    """통계 간선이 **상류**에 있는 사슬이 침묵하면 안 된다.
+
+    WHY: 사건 -> 매개(통계) -> 결과(연역) 사슬에서 결과에 직결된 간선은 연역이다. 결과에
+    직결된 증명만 문장에 쓰면 예산은 경로를 계산하고 감사에는 증명이 남는데 고객 문장은
+    "확인된 원인이 없습니다"가 된다 - 여러 단계로 쪼갤수록 침묵하는 역설이다.
+    """
+    # 통계 간선을 상류로 옮긴다: 사건 -> 기대(통계), 기대 -> AR(항등식).
+    nodes = {**_nodes(), "PAYOUT@t+0": {"says": "주주환원 기대 상향", "observed": "기대 배당수익률"}}
+    edges = [{"from": "DIVIDEND@t+0", "to": "PAYOUT@t+0", "kind": "statistical",
+              "says": "배당 확대가 기대를 올렸다", "because": "배당총액이 분자에 들어간다",
+              "false_if": "같은 산업 미지명 종목도 같은 폭으로 움직였다",
+              "exposure": _TREATED_WHERE, "reference": _CONTROL_WHERE,
+              "invariant_to": ["참조집단 정의"]},
+             {"from": "PAYOUT@t+0", "to": "AR@t+0", "kind": "identity",
+              "says": "기대 변화가 그대로 당일 초과수익이다",
+              "because": "할인율 경로가 하나뿐인 단순화",
+              "false_if": "같은 날 지수 편입 변경이 있었다",
+              "effect": [1.0, 1.0], "formula": "AR = ΔPAYOUT",
+              "source": "가정(단순화)", "invariant_to": []}]
+    client = FakeClient({"target": "AR@t+0", "nodes": nodes, "edges": edges, "missing": []})
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE))
+
+    survived = raw["causal"]["survived"]
+    assert survived, "측정된 상류 경로가 문장에서 사라졌다"
+    assert survived[0]["cause"] == CAUSE_LABEL
+    assert Explanation(raw).explanation_type == "EVENT_SUPPORTED"
+
 # --------------------------------------------------------------------------- #
 # 5c 도메인 문서 조회 — **모르는 것을 묻는 것과 구조를 틀리는 것은 다른 일이다**
 # --------------------------------------------------------------------------- #

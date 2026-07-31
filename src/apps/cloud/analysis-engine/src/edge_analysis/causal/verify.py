@@ -203,6 +203,10 @@ def plan(nodes: dict, edges: list, design: EdgeDesign, *,
         "control_hint": design.control,
         "strata_hint": design.strata,
         "needs": design.needs,
+        # **관측 단위는 코드가 안다.** 도구가 만드는 표본은 (instrument, date) 쌍이므로
+        # 종목 단위다 - 모델의 노드 선언을 기다리면(새 계약에는 `unit` 칸이 없다) G1 단위
+        # 검사가 조용히 꺼지고, `R['unit']='portfolio'` 로 셀 단위를 주장해도 통과한다.
+        "unit_expected": "stock",
         "prior": prior or {},
     }
 
@@ -386,10 +390,12 @@ def gate(R: dict, led: SB.Ledger, p: dict) -> list[str]:
         bad.append("G7b R['strata'] 에 층을 담았는데 보고된 p 를 만든 순열이 원장에 없다. "
                    "층화 귀무를 실제로 만들어라 - permute(x, strata=...).")
 
-    # 단위 선언 일치 - 노드가 무엇을 재는지 선언했으면 검정도 그 단위여야 한다
-    du = (p["nodes"].get(p["to"]) or {}).get("unit")
+    # 단위 일치 - 노드 선언이 있으면 그것을, 없으면 **코드가 아는 단위**를 쓴다.
+    du = (p["nodes"].get(p["to"]) or {}).get("unit") or p.get("unit_expected")
     if du and R.get("unit") and R["unit"] != du:
-        bad.append(f"G1 unit={R['unit']!r} 인데 {p['to']} 선언은 {du!r} 다.")
+        bad.append(f"G1 unit={R['unit']!r} 인데 표본은 {du!r} 단위다 - 도구는 "
+                   "(instrument, date) 쌍을 준다. 다른 단위를 주장하려면 그 표본을 "
+                   "직접 만들고 무엇을 셌는지 R 에 적어라.")
     return bad
 
 

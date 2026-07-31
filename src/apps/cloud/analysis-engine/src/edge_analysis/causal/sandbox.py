@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import ast
 import builtins
 import ctypes
 import datetime as dt
@@ -44,10 +45,13 @@ MAX_CODE_CHARS = 8000
 # 전면 차단하면 np.mean 같은 게 조용히 깨진다.
 ALLOWED_MODULES = ("numpy", "math", "statistics", "itertools", "functools",
                    "collections", "datetime", "random", "heapq", "bisect", "operator")
+# **반사(reflection) 빌트인을 넣지 않는다.** `getattr`·`type`·`object` 가 있으면 `__` 문자열
+# 검사를 우회해 던더에 닿는다(`getattr(x, '_'*2 + 'class' + '_'*2)`). 통계 코드에 필요한
+# 것도 아니다 - 없애는 것이 검사를 정교하게 만드는 것보다 싸고 확실하다.
 SAFE_BUILTINS = (
     "abs all any bool bytes callable chr complex dict divmod enumerate filter float format "
-    "frozenset getattr hasattr hash hex id int isinstance issubclass iter len list map max min "
-    "next object oct ord pow print range repr reversed round set slice sorted str sum tuple type "
+    "frozenset hash hex int isinstance issubclass iter len list map max min "
+    "next oct ord pow print range repr reversed round set slice sorted str sum tuple "
     "zip True False None NotImplemented Ellipsis"
 ).split()
 SAFE_EXC = (ValueError, TypeError, KeyError, IndexError, RuntimeError, ZeroDivisionError,
@@ -140,14 +144,42 @@ def _kill(t: threading.Thread) -> bool:
     return not t.is_alive()
 
 
+# 이름으로 막는 것들. 빌트인에서 빼도 도구·모듈이 물고 들어올 수 있어(예: numpy 객체의
+# 속성) 소스에서 이름 자체를 거부한다. **문자열 조합으로 우회할 수 없다** - AST 는 조합된
+# 문자열이 아니라 실제 참조를 본다.
+_BANNED_NAMES = frozenset({
+    "getattr", "hasattr", "setattr", "delattr", "vars", "globals", "locals",
+    "eval", "exec", "compile", "open", "input", "type", "object", "super",
+    "memoryview", "breakpoint", "id",
+})
+
+
 def _screen(code: str) -> None:
-    """실행 전 소스 검사. 통과 못 하면 관측이 아니라 거부다."""
+    """실행 전 소스 검사. 통과 못 하면 관측이 아니라 거부다.
+
+    문자열 검사만으로는 부족하다 - `getattr(x, '_'*2 + 'class' + '_'*2)` 는 `__` 를 담지
+    않으면서 던더에 닿는다. **AST 로 실제 참조를 본다**: 던더 속성 접근과 반사 이름을
+    거부하고, 빌트인 목록에서도 그 이름들을 뺀다(두 겹).
+    """
     if len(code) > MAX_CODE_CHARS:
         raise SandboxError(f"코드가 {len(code)}자다 - 상한 {MAX_CODE_CHARS}. 나눠서 실행해라.")
     if "__" in code:
         raise SandboxError(
             "`__` 를 쓸 수 없다. 던더 속성은 제한 네임스페이스를 우회하는 경로다 "
             "(도구의 __self__ 로 DB 커넥션에 닿는 것을 포함). 도구만 써라.")
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return          # 문법 오류는 거부가 아니라 관측이다 - exec 가 위치까지 알려준다
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            raise SandboxError(
+                f"`.{node.attr}` 처럼 밑줄로 시작하는 속성에 닿을 수 없다 - 내부 상태와 "
+                "던더는 제한 네임스페이스를 우회하는 경로다. 도구만 써라.")
+        if isinstance(node, ast.Name) and node.id in _BANNED_NAMES:
+            raise SandboxError(
+                f"`{node.id}` 를 쓸 수 없다 - 반사(reflection)로 던더·바인딩 내부에 닿는 "
+                "경로다. 계산에 필요한 것은 도구와 numpy 로 충분하다.")
 
 
 def tools(cd, *, as_of: str, w0: date, w1: date, trade_date: date,

@@ -274,6 +274,32 @@ def test_g7b_accepts_the_stratified_permutation_bound_to_the_reported_p():
     assert not any(b.startswith("G7b") for b in r.gate_fail)
 
 
+def test_g1_unit_check_is_live_without_a_declared_node_unit():
+    """단위 검사가 **모델 선언에 의존하면 꺼진다.**
+
+    WHY: 새 계약의 노드 메타에는 `unit` 칸이 없다(says·observed·value·events). 선언만
+    보면 정상 제안 전부에서 이 검사가 조용히 꺼지고, 검정이 `R['unit']='portfolio'` 로
+    셀 단위를 주장해도 배열·p 게이트만 통과하면 증명이 선다. 표본 단위는 도구가 정하므로
+    코드가 아는 사실이다 - 그것으로 검사한다.
+    """
+    led = SB.Ledger()
+    led.perms.append({"n": 1, "len_x": 60, "n_null": 200,
+                      "stratified": True, "n_strata": 3})
+    led.calls.append({"n": 1, "testable": True, "p": 0.01, "n_null": 200, "null_sd": 0.01,
+                      "null_kind": "label", "two_sided": False, "perms_at": 1})
+    R = {"x": [1, 0] * 30, "y": [0.1, 0.2] * 30, "z": {"S@t-3": [1, 2] * 30},
+         "null_kind": "label", "test": {"p": 0.01, "null_kind": "label"},
+         "strata": ["d1", "d2"] * 30, "unit": "portfolio"}
+
+    # 새 계약의 노드 메타는 `unit` 칸이 없다 - 그 형태로 계획을 만든다.
+    fresh = {n: {"says": m["measure"], "observed": "일간 수익률"} for n, m in NODES.items()}
+    p = V.plan(fresh, EDGES, DESIGN)
+    assert not (p["nodes"].get(p["to"]) or {}).get("unit"), "픽스처가 단위를 선언해 버렸다"
+    assert any(b.startswith("G1 unit") for b in V.gate(R, led, p))
+    # 종목 단위를 적으면 통과한다 - 검사가 정상 경로를 막지 않는다.
+    assert not any(b.startswith("G1 unit") for b in V.gate({**R, "unit": "stock"}, led, p))
+
+
 def test_the_ledger_records_permutation_calls_so_execution_can_be_audited():
     """도구를 감싸지 않으면 순열이 어떻게 만들어졌는지가 어디에도 남지 않는다."""
     led = SB.Ledger()

@@ -91,13 +91,35 @@ def test_dunder_access_is_refused_before_execution():
     assert cd.secret not in out
 
 
+def test_a_synthesized_dunder_name_cannot_reach_bound_internals():
+    """`__` 문자열 검사만으로는 못 막는다.
+
+    WHY: `getattr(x, '_'*2 + 'class' + '_'*2)` 는 소스에 `__` 를 담지 않으면서 던더에 닿고,
+    도구의 바인딩(`__self__`)을 지나 DB 커넥션까지 간다. 샌드박스는 **LLM 이 쓴 코드**를
+    실행하고 입력에 외부 사건 제목이 섞이므로 프롬프트 주입 표면이다 - 문자열 검사 하나에
+    기대면 안 된다. 이름을 빌트인에서 빼고 AST 로 참조를 본다(두 겹).
+    """
+    cd = _Cd()
+    ns, _ = _ns(cd)
+
+    for attempt in ("print(getattr(cohort, '_' * 2 + 'self' + '_' * 2))",
+                    "print(type(cohort).__mro__)",
+                    "print(vars(cohort))",
+                    "print(cohort._tools)"):
+        out = SB.observe(attempt, ns)
+        assert out.startswith("거부:"), attempt
+        assert cd.secret not in out, attempt
+
+
 def test_blocked_imports_and_missing_builtins_are_observations_not_crashes():
     ns, _ = _ns()
 
     assert "막혀 있다" in SB.observe("import os", ns)
     assert "막혀 있다" in SB.observe("import socket", ns)
-    # 실패는 관측이다 - 모델이 고쳐 쓴다. 하네스가 죽으면 안 된다.
-    assert "NameError" in SB.observe("open('x')", ns)
+    # 반사·파일 접근 이름은 **실행 전에** 거부된다 - 소스에 있으면 그 자체가 우회 시도다.
+    assert SB.observe("open('x')", ns).startswith("거부:")
+    # 그냥 없는 이름은 관측이다 - 모델이 고쳐 쓴다. 하네스가 죽으면 안 된다.
+    assert "NameError" in SB.observe("print(nonexistent_helper(1))", ns)
     assert "3" in SB.observe("print(sum([1, 2]))", ns)
 
 

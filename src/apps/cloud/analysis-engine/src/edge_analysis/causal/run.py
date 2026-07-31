@@ -280,11 +280,19 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         log("causal.fit_failed", error=f"{type(exc).__name__}: {exc}")
 
     # 8 서술
-    # 고객 문장에는 **결과 노드로 들어오는 간선만** 원인으로 쓴다. 교란 간선
-    # (모멘텀 -> 사건)은 식별에 필요한 구조일 뿐 "원인"이 아니다 - 실측 스모크에서
-    # "사전 모멘텀이 원인으로 확인됐습니다" 가 나왔다.
+    # 고객 문장에는 **결과 노드로 닿는 경로만** 원인으로 쓴다. 교란 간선(모멘텀 -> 사건)은
+    # 식별에 필요한 구조일 뿐 "원인"이 아니다 - 실측 스모크에서 "사전 모멘텀이 원인으로
+    # 확인됐습니다" 가 나왔다.
+    #
+    # **결과에 직결된 간선만 보면 여러 단계 사슬이 침묵한다.** 통계 간선이 상류에 있고
+    # (사건 -> 매출 변화) 하류가 연역이면(매출 변화 -> ETF 수익률), 예산은 경로를 계산하고
+    # 감사에는 증명이 남는데 문장은 "확인된 원인이 없습니다"가 된다. 측정된 경로를 원인으로
+    # 쓴다 - 경로의 통계 간선이 그 경로의 검정 근거다.
     outcome = {prop.target} if prop.target else {d.dst for d in prop.designs}
+    by_edge = {(x.design.src, x.design.dst): x for x in proofs}
+    spoken: set[tuple[str, str]] = set()
     for r in [x for x in proofs if x.design.dst in outcome]:
+        spoken.add((r.design.src, r.design.dst))
         share = _share_of(cd, etf_instrument_id, trade_date, r)
         contribution = (share * r.effect) if (share and r.effect is not None) else None
         against = _countervailing(contribution if contribution is not None else r.effect,
@@ -296,6 +304,17 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
             survived=r.significant and not budget["over_budget"] and not against,
             killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)
             or (_COUNTER if against else None)))
+    for path, proof in _upstream(routes, by_edge, spoken):
+        iv = path.predict()
+        contribution = iv.mid if iv else None
+        against = _countervailing(contribution, residual)
+        findings.append(EdgeFinding(
+            cause=prop.label(path.cause), because=proof.design.because,
+            effect=contribution, p=proof.p, n=proof.n, share=None,
+            contribution=contribution,
+            survived=proof.significant and not budget["over_budget"] and not against,
+            killed_by=_killed(proof) or (budget["reason"] if budget["over_budget"] else None)
+            or (_COUNTER if against else None)))
     return narrate(CausalReport(
         etf_name=etf_name, trade_date=trade_date.isoformat(), observed=observed,
         residual=residual, route_code=route_code, top_contributors=contributors,
@@ -306,6 +325,28 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         proofs=[_audit_row(r) for r in proofs],
         falsification_surface=surface,
         data_requests=_requests(proofs, prop)))
+
+
+def _upstream(routes: list, by_edge: dict, spoken: set) -> list[tuple]:
+    """측정된 경로 중 **결과에 직결된 간선으로 이미 말한 것이 아닌** 것들.
+
+    여러 단계 사슬(사건 -> 매출 -> 수익률)에서 통계 간선은 상류에 있다. 그 경로의 검정
+    근거는 그 통계 간선의 증명이고, 크기는 사슬 곱(`path.predict()`)이다. 통계 간선이
+    없는 경로(전부 연역)는 검정 근거가 없어 문장에 쓰지 않는다 - 감사 블록에만 남는다.
+    """
+    out = []
+    for path in routes:
+        if not path.measured:
+            continue
+        stat = [(e.src, e.dst) for e in path.edges if e.kind == "statistical"]
+        if not stat or any(k in spoken for k in stat):
+            continue
+        proof = next((by_edge[k] for k in stat if k in by_edge), None)
+        if proof is None:
+            continue
+        spoken.update(stat)
+        out.append((path, proof))
+    return out
 
 
 _COUNTER = ("설명해야 할 움직임과 **반대 방향**으로 밀었습니다 - 이 경로는 그 움직임을 "
@@ -417,8 +458,14 @@ def _budget_row(b: dict, routes: list) -> dict[str, Any]:
 
 
 def _prior_for(design: EdgeDesign, nodes: dict, candidates: list[dict]) -> dict:
-    """이 간선의 원인 노드에 붙은 타입 사전. 접지된 event_id 로 잇는다."""
-    ev = set((nodes.get(design.src) or {}).get("member_events") or [])
+    """이 간선의 원인 노드에 붙은 타입 사전. 접지된 event_id 로 잇는다.
+
+    새 계약은 접지 사건을 `events` 에 담는다(`graph.validate` 도 그 필드를 본다).
+    `member_events` 만 읽으면 정상 제안에서 항상 비고, 그러면 사건이 둘 이상인 셀에서
+    **다른 사건의 사전**이 검정 세션에 실린다 - 잘못된 모집단·귀무 맥락으로 유도된다.
+    """
+    meta = nodes.get(design.src) or {}
+    ev = {str(x) for x in (meta.get("events") or meta.get("member_events") or [])}
     for c in candidates:
         if c.get("event_id") and c["event_id"] in ev:
             return c.get("prior") or {}
