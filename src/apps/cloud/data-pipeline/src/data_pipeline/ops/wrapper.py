@@ -193,7 +193,7 @@ def instrument(
     # 자기신고하도록 두면 수집기가 빠뜨린 대상을 분모에서도 줄여 스스로 만점 처리할 수 있다.
     expected_count = _counter(expected.get("expected_count"))
     unknown_completeness = (
-        {"expected_count": expected_count, "received_count": None, "missing_count": None}
+        {"expected": expected_count, "received": None, "missing": None}
         if expected_count is not None else None
     )
 
@@ -240,9 +240,9 @@ def instrument(
     signals["received_count"] = received_count
     completeness = (
         {
-            "expected_count": expected_count,
-            "received_count": received_count,
-            "missing_count": (
+            "expected": expected_count,
+            "received": received_count,
+            "missing": (
                 None if received_count is None
                 else max(expected_count - received_count, 0)
             ),
