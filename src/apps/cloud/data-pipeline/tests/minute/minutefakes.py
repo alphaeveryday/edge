@@ -19,6 +19,13 @@ class FakeMinuteDB:
     def __init__(self):
         self.sessions: dict[str, dict] = {}   # session_id -> row
         self.windows: dict[tuple, dict] = {}  # (session_id, window_start) -> row
+        self.jobs: dict[tuple, dict] = {}     # (kind, job_id) -> row
+        self.outbox: dict[str, dict] = {}     # event_id -> row
+        self._seq = 0                          # created_at 순서 흉내
+
+    def next_seq(self):
+        self._seq += 1
+        return self._seq
 
     def session_by_identity(self, dataset, source_group, session_date):
         for row in self.sessions.values():
@@ -50,6 +57,10 @@ class _Cursor:
 
     def fetchone(self):
         return self._rows.pop(0) if self._rows else None
+
+    def fetchall(self):
+        rows, self._rows = self._rows, []
+        return rows
 
     def executemany(self, sql, rows):
         for params in rows:
@@ -86,6 +97,26 @@ class _Cursor:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("INSERT INTO news_extraction_job"):
+            self._insert_job("news", params)
+        elif s.startswith("INSERT INTO price_window_job"):
+            self._insert_job("price", params)
+        elif "SET status = 'CLAIMED'" in s:
+            self._claim_job("price" if "price_window_job" in s else "news", params)
+        elif s.startswith("SELECT j.generation, w.generation"):
+            self._job_window_generation(params)
+        elif "SET status = 'DEAD', error_code = 'STALE'" in s:
+            self._stale_dead(params)
+        elif "WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'" in s:
+            self._job_transition("price" if "price_window_job" in s else "news", params)
+        elif s.startswith("INSERT INTO dataset_commit_outbox"):
+            self._insert_outbox(params)
+        elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
+            self._claim_outbox(params)
+        elif "SET status = 'PUBLISHED'" in s:
+            self._mark_published(params)
+        elif s.startswith("UPDATE dataset_commit_outbox SET status = %s, attempt_count"):
+            self._publish_failure(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
@@ -275,4 +306,108 @@ class _Cursor:
             return  # 미완료 in-flight 봉인 금지
         row["phase"] = "DRAINED"
         row["drain_ack_at"] = now
+        self.rowcount = 1
+
+    # ── job / outbox (ALPHA-664) ──
+    def _insert_job(self, kind, p):
+        job_id = p[0]
+        if (kind, job_id) in self.db.jobs:
+            return  # ON CONFLICT DO NOTHING
+        row = {"job_id": job_id, "status": "PENDING", "claimed_by": None,
+               "lease_expires_at": None, "attempt_count": 0, "next_attempt_at": None,
+               "redrive_generation": 0, "result_checksum": None, "error_code": None,
+               "completed_at": None, "seq": self.db.next_seq()}
+        if kind == "news":
+            row.update(source_code=p[1], article_id=p[2], input_fingerprint=p[3],
+                       tagger_version=p[4], ontology_version=p[5])
+        else:
+            row.update(session_id=p[1], window_start=p[2], generation=p[3],
+                       trigger_schema_version=p[4])
+        self.db.jobs[(kind, job_id)] = row
+        self._rows = [(job_id,)]
+
+    def _claim_job(self, kind, p):
+        worker_id, lease_until, now, now2 = p
+        candidates = [
+            r for (k, _), r in self.db.jobs.items() if k == kind
+            and (r["status"] == "PENDING"
+                 or (r["status"] == "RETRY_WAIT" and r["next_attempt_at"] <= now)
+                 or (r["status"] == "CLAIMED" and r["lease_expires_at"] < now))
+        ]
+        if not candidates:
+            return
+        row = min(candidates, key=lambda r: r["seq"])
+        row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
+                   attempt_count=row["attempt_count"] + 1)
+        self._rows = [(row["job_id"], row["attempt_count"])]
+
+    def _job_window_generation(self, p):
+        row = self.db.jobs[("price", p[0])]
+        window = self.db.windows[(row["session_id"], row["window_start"])]
+        self._rows = [(row["generation"], window["generation"])]
+
+    def _stale_dead(self, p):
+        now, job_id, worker_id = p
+        row = self.db.jobs.get(("price", job_id))
+        if row is None or row["claimed_by"] != worker_id:
+            return
+        row.update(status="DEAD", error_code="STALE", completed_at=now,
+                   claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
+
+    def _job_transition(self, kind, p):
+        (to_status, next_attempt_at, result_checksum, error_code, completed,
+         job_id, worker_id) = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["claimed_by"] != worker_id or row["status"] != "CLAIMED":
+            return
+        row.update(status=to_status, next_attempt_at=next_attempt_at,
+                   result_checksum=result_checksum, error_code=error_code,
+                   completed_at=completed, claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
+
+    def _insert_outbox(self, p):
+        event_id, event_type, destination, aggregate_id, generation, payload = p
+        if event_id in self.db.outbox:
+            return
+        self.db.outbox[event_id] = {
+            "event_id": event_id, "event_type": event_type, "destination": destination,
+            "aggregate_id": aggregate_id, "generation": generation, "payload": json.loads(payload),
+            "status": "NEW", "attempt_count": 0, "next_attempt_at": None,
+            "claimed_by": None, "claim_expires_at": None, "published_at": None,
+            "last_error": None, "seq": self.db.next_seq(),
+        }
+        self._rows = [(event_id,)]
+
+    def _claim_outbox(self, p):
+        relay_id, claim_until, now, now2, limit = p
+        eligible = sorted(
+            (r for r in self.db.outbox.values()
+             if r["status"] == "NEW"
+             and (r["next_attempt_at"] is None or r["next_attempt_at"] <= now)
+             and (r["claimed_by"] is None or r["claim_expires_at"] < now)),
+            key=lambda r: r["seq"],
+        )[:limit]
+        for row in eligible:
+            row.update(claimed_by=relay_id, claim_expires_at=claim_until)
+        self._rows = [
+            (r["event_id"], r["event_type"], r["destination"], r["payload"]) for r in eligible
+        ]
+
+    def _mark_published(self, p):
+        now, event_id, relay_id = p
+        row = self.db.outbox.get(event_id)
+        if row is None or row["claimed_by"] != relay_id or row["status"] != "NEW":
+            return
+        row.update(status="PUBLISHED", published_at=now, claimed_by=None, claim_expires_at=None)
+        self.rowcount = 1
+
+    def _publish_failure(self, p):
+        status, next_attempt_at, error, event_id, relay_id = p
+        row = self.db.outbox.get(event_id)
+        if row is None or row["claimed_by"] != relay_id or row["status"] != "NEW":
+            return
+        row.update(status=status, attempt_count=row["attempt_count"] + 1,
+                   next_attempt_at=next_attempt_at, last_error=error,
+                   claimed_by=None, claim_expires_at=None)
         self.rowcount = 1
