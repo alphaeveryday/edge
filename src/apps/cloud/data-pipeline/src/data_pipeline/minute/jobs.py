@@ -77,51 +77,116 @@ class JobLedger:
     connect_fn: Callable = _default_connect
 
     # ── job identity INSERT ───────────────────────────────────
-    def insert_news_job(
-        self, *, source_code: str, article_id: str, input_fingerprint: str,
-        tagger_version: str, ontology_version: str,
+    # _tx 조각과 public 래퍼로 나눈다(ops Ledger 관례) — commit transaction(PR 3)과
+    # enqueue Task(PR 8)는 job+outbox 를 **한 트랜잭션**에 넣어야 한다. 각 메서드가
+    # 커넥션을 따로 열면 job 커밋 직후 프로세스가 죽었을 때 wake-up event 가 영구
+    # 유실된다(원자성은 enqueue_* 결합 메서드 또는 호출자의 cur 재사용으로 확보).
+
+    @staticmethod
+    def _insert_news_job_tx(
+        cur, *, source_code, article_id, input_fingerprint, tagger_version, ontology_version,
     ) -> tuple[str, bool]:
-        """identity UNIQUE 충돌은 no-op — (job_id, created)."""
         job_id = news_job_id(
             source_code=source_code, article_id=article_id,
             input_fingerprint=input_fingerprint, tagger_version=tagger_version,
             ontology_version=ontology_version,
         )
-        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO news_extraction_job (
-                    job_id, source_code, article_id, input_fingerprint,
-                    tagger_version, ontology_version
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (job_id) DO NOTHING
-                RETURNING job_id
-                """,
-                (job_id, source_code, article_id, input_fingerprint,
-                 tagger_version, ontology_version),
-            )
-            return job_id, cur.fetchone() is not None
+        cur.execute(
+            """
+            INSERT INTO news_extraction_job (
+                job_id, source_code, article_id, input_fingerprint,
+                tagger_version, ontology_version
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (job_id) DO NOTHING
+            RETURNING job_id
+            """,
+            (job_id, source_code, article_id, input_fingerprint,
+             tagger_version, ontology_version),
+        )
+        return job_id, cur.fetchone() is not None
 
-    def insert_price_job(
-        self, *, session_id: str, window_start: datetime, generation: int,
-        trigger_schema_version: str,
+    @staticmethod
+    def _insert_price_job_tx(
+        cur, *, session_id, window_start, generation, trigger_schema_version,
     ) -> tuple[str, bool]:
         job_id = price_job_id(
             session_id=session_id, window_start=window_start,
             generation=generation, trigger_schema_version=trigger_schema_version,
         )
+        cur.execute(
+            """
+            INSERT INTO price_window_job (
+                job_id, session_id, window_start, generation, trigger_schema_version
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (job_id) DO NOTHING
+            RETURNING job_id
+            """,
+            (job_id, session_id, window_start, generation, trigger_schema_version),
+        )
+        return job_id, cur.fetchone() is not None
+
+    @staticmethod
+    def _insert_outbox_tx(
+        cur, *, event_id, event_type, destination, aggregate_id, generation, payload,
+    ) -> bool:
+        cur.execute(
+            """
+            INSERT INTO dataset_commit_outbox (
+                event_id, event_type, destination, aggregate_id, generation, payload
+            ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (event_id) DO NOTHING
+            RETURNING event_id
+            """,
+            (event_id, event_type, destination, aggregate_id, generation,
+             canonical_json(payload)),
+        )
+        return cur.fetchone() is not None
+
+    def insert_news_job(self, **identity) -> tuple[str, bool]:
+        """identity UNIQUE 충돌은 no-op — (job_id, created)."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO price_window_job (
-                    job_id, session_id, window_start, generation, trigger_schema_version
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (job_id) DO NOTHING
-                RETURNING job_id
-                """,
-                (job_id, session_id, window_start, generation, trigger_schema_version),
+            return self._insert_news_job_tx(cur, **identity)
+
+    def insert_price_job(self, **identity) -> tuple[str, bool]:
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            return self._insert_price_job_tx(cur, **identity)
+
+    def enqueue_news_job(
+        self, *, destination: str, payload: dict, generation: int = 1, **identity,
+    ) -> tuple[str, bool]:
+        """job + wake-up event 를 **한 트랜잭션**에 INSERT — 사이에서 죽어도 유실 0.
+
+        event 는 job 존재 여부와 무관하게 멱등 INSERT 한다(둘 다 ON CONFLICT no-op) —
+        이전 시도가 job 만 남기고 죽었어도 재호출이 event 를 self-heal 한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            job_id, created = self._insert_news_job_tx(cur, **identity)
+            self._insert_outbox_tx(
+                cur,
+                event_id=build_event_id(NEWS_EVENT_TYPE, job_id),
+                event_type=NEWS_EVENT_TYPE, destination=destination,
+                aggregate_id=job_id, generation=generation, payload=payload,
             )
-            return job_id, cur.fetchone() is not None
+            return job_id, created
+
+    def enqueue_price_job(
+        self, *, destination: str, payload: dict, session_id: str,
+        window_start: datetime, generation: int, trigger_schema_version: str,
+    ) -> tuple[str, bool]:
+        """price job + PriceWindowCommitted event 를 한 트랜잭션에 — PR 3 commit 이
+        canonical/window 갱신과 같은 트랜잭션에서 이 _tx 조각들을 재사용한다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            job_id, created = self._insert_price_job_tx(
+                cur, session_id=session_id, window_start=window_start,
+                generation=generation, trigger_schema_version=trigger_schema_version,
+            )
+            self._insert_outbox_tx(
+                cur,
+                event_id=build_event_id(PRICE_EVENT_TYPE, job_id),
+                event_type=PRICE_EVENT_TYPE, destination=destination,
+                aggregate_id=job_id, generation=generation, payload=payload,
+            )
+            return job_id, created
 
     # ── job claim·전이 (lifecycle 공유 — 파라미터화) ───────────
     def claim_due_job(
@@ -248,24 +313,10 @@ class JobLedger:
         )
 
     # ── outbox ────────────────────────────────────────────────
-    def insert_outbox_event(
-        self, *, event_id: str, event_type: str, destination: str,
-        aggregate_id: str, generation: int, payload: dict,
-    ) -> bool:
+    def insert_outbox_event(self, **event) -> bool:
         """ON CONFLICT (event_id) DO NOTHING — 같은 논리 사건의 재삽입은 no-op."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO dataset_commit_outbox (
-                    event_id, event_type, destination, aggregate_id, generation, payload
-                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (event_id) DO NOTHING
-                RETURNING event_id
-                """,
-                (event_id, event_type, destination, aggregate_id, generation,
-                 canonical_json(payload)),
-            )
-            return cur.fetchone() is not None
+            return self._insert_outbox_tx(cur, **event)
 
     def claim_outbox_batch(
         self, *, relay_id: str, now: datetime, limit: int, lease_seconds: int,

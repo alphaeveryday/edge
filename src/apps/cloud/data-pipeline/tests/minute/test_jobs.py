@@ -333,3 +333,39 @@ class TestClaimAttemptFence:
                 event_id=event["event_id"], relay_id="r1", claim_token=event["claim_token"],
                 now=NOW, next_attempt_at=None, error="SQS 5xx",
             )
+
+
+class TestAtomicEnqueue:
+    def test_enqueue_creates_job_and_event_together(self):
+        # job 확정과 wake-up event 는 한 트랜잭션 — 사이에서 죽으면 event 유실
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, created = ledger.enqueue_news_job(
+            destination="news-extraction-realtime", payload={"k": "v"}, **NEWS_IDENTITY,
+        )
+        assert created is True
+        assert ("news", job_id) in db.jobs
+        assert f"{NEWS_EVENT_TYPE}:{job_id}:0" in db.outbox
+
+    def test_enqueue_self_heals_missing_event(self):
+        # 이전 시도가 job 만 남기고 죽었어도 재호출이 event 를 멱등 복구한다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
+        assert len(db.outbox) == 0
+        job_id2, created = ledger.enqueue_news_job(
+            destination="news-extraction-realtime", payload={"k": "v"}, **NEWS_IDENTITY,
+        )
+        assert job_id2 == job_id and created is False
+        assert f"{NEWS_EVENT_TYPE}:{job_id}:0" in db.outbox
+
+    def test_enqueue_price_job_event_pair(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, created = ledger.enqueue_price_job(
+            destination="price-analysis-realtime", payload={"w": "x"},
+            session_id="msn_x", window_start=WINDOW_START,
+            generation=1, trigger_schema_version="t1",
+        )
+        assert created is True
+        assert f"{PRICE_EVENT_TYPE}:{job_id}:0" in db.outbox
