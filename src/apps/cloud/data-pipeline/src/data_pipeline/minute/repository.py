@@ -92,11 +92,14 @@ class MinuteLedger:
             )
             created = cur.fetchone() is not None
             if not created:
+                # FOR UPDATE — phase 확인과 window 삽입 사이에 drain 전환이 끼어들면
+                # (TOCTOU) DRAINED 경계 뒤로 DUE 가 삽입된다. 행 잠금으로 직렬화한다.
                 cur.execute(
                     """
                     SELECT session_id, universe_version, universe_hash, phase
                     FROM minute_ingestion_session
                     WHERE dataset = %s AND source_group = %s AND session_date = %s
+                    FOR UPDATE
                     """,
                     (dataset, source_group, session_date),
                 )
