@@ -43,6 +43,7 @@ def make_manifest(**overrides):
         window_start=WINDOW_START,
         window_end=WINDOW_START + timedelta(minutes=1),
         generation=1,
+        expected_unit_ids=["100000", "100001", "100005"],
         units={"received": ["100001", "100000"], "no_trade": ["100005"], "missing": []},
         artifact_key="raw/.../bars.ndjson",
         artifact_checksum="a" * 64,
@@ -104,6 +105,13 @@ class TestSerialization:
             make_manifest(units={"received": ["100000"], "missing": ["100000"]})
         with pytest.raises(ValueError, match="중복 unit"):
             make_manifest(units={"received": ["100000", "100000"]})
+
+    def test_units_must_partition_expected(self):
+        # 조립에서 빠진 unit 은 어느 분류에도 없어 recovery 대상 복원이 불가능하다
+        with pytest.raises(ValueError, match="분할 불일치"):
+            make_manifest(units={"received": ["100000"]})  # 100001·100005 누락
+        with pytest.raises(ValueError, match="분할 불일치"):
+            make_manifest(units={"received": ["100000", "100001", "100005", "999999"]})
 
     def test_naive_datetime_rejected(self):
         # naive 를 astimezone 하면 호스트 로컬 해석 — 환경별 checksum 이 갈린다

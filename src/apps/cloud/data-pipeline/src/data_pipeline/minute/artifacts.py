@@ -54,7 +54,8 @@ def serialize_records(records: list[dict]) -> bytes:
 
 def build_window_manifest(
     *, dataset: str, session_id: str, window_start: datetime, window_end: datetime,
-    generation: int, units: dict[str, list[str]], artifact_key: str, artifact_checksum: str,
+    generation: int, expected_unit_ids: list[str] | tuple[str, ...],
+    units: dict[str, list[str]], artifact_key: str, artifact_checksum: str,
 ) -> dict:
     """window unit manifest — 소비자가 "무엇이 오고/무거래고/누락됐나"를 복원하는 정본.
 
@@ -79,6 +80,12 @@ def build_window_manifest(
                 # QC 와 orphan 복구가 서로 다른 판정을 내린다
                 raise ValueError(f"unit {unit!r} 가 {seen[unit]}/{cls} 에 중복 분류됐다")
             seen[unit] = cls
+    if set(seen) != set(expected_unit_ids):
+        # manifest 는 요청 universe 의 **완전분할**이다 — 조립에서 빠진 unit 은
+        # 어느 분류에도 없어 recovery 가 무엇을 재조회할지 복원하지 못한다
+        dropped = sorted(set(expected_unit_ids) - set(seen))
+        extra = sorted(set(seen) - set(expected_unit_ids))
+        raise ValueError(f"unit 분할 불일치 — 누락: {dropped[:5]}, 범위 밖: {extra[:5]}")
     for name, value in (("window_start", window_start), ("window_end", window_end)):
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             # naive 를 astimezone 하면 호스트 로컬로 해석돼 환경별 checksum 이 갈린다
