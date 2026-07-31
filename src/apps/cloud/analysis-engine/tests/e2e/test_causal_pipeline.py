@@ -23,6 +23,7 @@ import pytest
 
 from edge_analysis.adapters.llm import analyze
 from edge_analysis.causal import agents
+from edge_analysis.config import PipelineError
 from edge_analysis.causal.run import explain
 from edge_analysis.domain.models import (
     Decomposition,
@@ -614,17 +615,20 @@ def test_two_broken_proposals_degrade_instead_of_killing_the_run():
 
 
 def test_transport_error_still_fails_loud():
-    """LLM 전송·API 오류는 여전히 전파된다 - 계약 위반만 삼킨다.
+    """LLM 전송·API 오류는 여전히 전파된다 - 계약 위반만 되먹임으로 돌린다.
 
-    WHY: 2026-07-27 DeepSeek 크레딧 소진(402) 때 tag_news 는 940/940 전건 실패를 삼켜
-    exit 0 으로 초록이었다(ALPHA-589). 여기서 except 를 넓게 잡으면 같은 사고를 만든다 -
-    소스가 죽은 것과 모델이 계약을 어긴 것은 다르게 다뤄야 한다.
+    WHY: `adapters/llm.py` 의 DeepSeek 클라이언트는 402·타임아웃·응답 붕괴를 재시도 소진
+    후 **PipelineError** 로 올린다 - 계약 위반과 **같은 타입**이다. 그래서 propose 까지
+    한 try 로 감싸면 소스가 죽은 것을 모델이 계약을 어긴 것으로 오인해 UNCERTAIN 설명과
+    함께 런이 초록으로 끝난다. 2026-07-27 에 tag_news 가 402 를 삼켜 940/940 전건 실패에도
+    exit 0 이었던 그 사고다(ALPHA-589). 운영과 같은 타입으로 던져야 이 가드가 실물이다.
     """
     class _DeadClient:
         calls = 0
 
         def complete_json(self, system: str, user: str) -> dict:
-            raise RuntimeError("HTTP 402 Payment Required")
+            # adapters/llm.py:76 이 실제로 내는 것과 같은 타입·같은 모양이다.
+            raise PipelineError("DeepSeek call failed after retries: HTTP Error 402")
 
-    with pytest.raises(RuntimeError, match="402"):
+    with pytest.raises(PipelineError, match="402"):
         _explain(FakeCausalData(), _DeadClient(), candidates=_candidates(SHARE))
