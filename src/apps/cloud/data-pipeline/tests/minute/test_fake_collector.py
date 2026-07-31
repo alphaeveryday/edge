@@ -49,10 +49,10 @@ class TestPriceDeterminism:
     def test_same_seed_same_request_same_checksum(self):
         run_id, session_id = uuid4(), uuid4()
         request = make_request(run_id, session_id)
-        first, records_first = FakePriceCollector(scenario("price_normal.json"), seed=42).collect(
-            request, NOW
-        )
-        second, records_second = FakePriceCollector(
+        first, records_first, _ = FakePriceCollector(
+            scenario("price_normal.json"), seed=42
+        ).collect(request, NOW)
+        second, records_second, _ = FakePriceCollector(
             scenario("price_normal.json"), seed=42
         ).collect(request, NOW)
         assert first.result_checksum == second.result_checksum
@@ -60,16 +60,20 @@ class TestPriceDeterminism:
 
     def test_different_seed_different_checksum(self):
         request = make_request()
-        first, _ = FakePriceCollector(scenario("price_normal.json"), seed=42).collect(request, NOW)
-        second, _ = FakePriceCollector(scenario("price_normal.json"), seed=43).collect(request, NOW)
+        first, _, _ = FakePriceCollector(scenario("price_normal.json"), seed=42).collect(
+            request, NOW
+        )
+        second, _, _ = FakePriceCollector(scenario("price_normal.json"), seed=43).collect(
+            request, NOW
+        )
         assert first.result_checksum != second.result_checksum
 
     def test_clock_change_does_not_change_checksum(self):
         # 계획 §6: 현재 시각을 바꿔도 explicit window 결과는 동일해야 한다
         request = make_request(uuid4(), uuid4())
         collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
-        early, _ = collector.collect(request, NOW)
-        late, _ = collector.collect(request, NOW + timedelta(hours=3))
+        early, _, _ = collector.collect(request, NOW)
+        late, _, _ = collector.collect(request, NOW + timedelta(hours=3))
         assert early.result_checksum == late.result_checksum
         assert early.manifest_checksum == late.manifest_checksum
         # 실행 시각은 stage_timestamps 에만 나타난다
@@ -87,68 +91,123 @@ class TestPriceDeterminism:
             }
         )
         collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
-        kst_result, kst_records = collector.collect(kst_request, NOW)
-        utc_result, utc_records = collector.collect(utc_request, NOW)
+        kst_result, kst_records, _ = collector.collect(kst_request, NOW)
+        utc_result, utc_records, _ = collector.collect(utc_request, NOW)
         assert kst_result.result_checksum == utc_result.result_checksum
         assert [r["open"] for r in kst_records] == [r["open"] for r in utc_records]
 
-    def test_scenario_typo_key_fails_loud(self):
+
+class TestPriceScenarioValidation:
+    def test_typo_key_fails_loud(self):
         # fixture 키 오타가 조용히 no-op 시나리오가 되면 실패 경로 테스트가 무력화된다
         with pytest.raises(ValueError, match="미지 키"):
             FakePriceCollector({"scenario": "x", "missing_unit_idz": ["100003"]}, seed=1)
         with pytest.raises(ValueError, match="미지 키"):
             FakeNewsFeed({"scenario": "x", "initial_countt": 10}, seed=1)
 
+    def test_string_instead_of_list_fails_loud(self):
+        # "100003" 을 그대로 주면 문자 집합 {'1','0','3'} 이 돼 시나리오가 무력화된다
+        with pytest.raises(ValueError, match="문자열 배열"):
+            FakePriceCollector({"missing_unit_ids": "100003"}, seed=1)
+
+    def test_overlapping_roles_fail_loud(self):
+        # 한 unit 이 missing 이자 no_trade 면 분기 순서가 의미를 임의로 정한다
+        with pytest.raises(ValueError, match="같은 unit"):
+            FakePriceCollector(
+                {"missing_unit_ids": ["100003"], "no_trade_unit_ids": ["100003"]}, seed=1
+            )
+
+    def test_ghost_unit_fails_loud(self):
+        # 오타 ID 는 알려진 키 안에 숨으면 전 unit 성공으로 조용히 넘어간다 — collect 가 잡는다
+        collector = FakePriceCollector({"missing_unit_ids": ["999999"]}, seed=1)
+        with pytest.raises(ValueError, match="universe 에 없는 unit"):
+            collector.collect(make_request(), NOW)
+
+    def test_non_int_generation_fails_loud(self):
+        with pytest.raises(ValueError, match="정수"):
+            FakePriceCollector({"generation": 1.9}, seed=1)
+
 
 class TestPriceScenarios:
     def test_normal_all_units_succeed(self):
-        result, records = FakePriceCollector(scenario("price_normal.json"), seed=1).collect(
-            make_request(), NOW
-        )
+        result, records, manifest = FakePriceCollector(
+            scenario("price_normal.json"), seed=1
+        ).collect(make_request(), NOW)
         assert result.status == DATA_VALID
         assert result.expected_count == 348
         assert result.succeeded_count == 348
         assert result.failed_count == 0
         assert len(records) == 348
+        assert manifest["missing"] == [] and manifest["no_trade"] == []
 
     def test_partial_missing_is_failure(self):
-        result, records = FakePriceCollector(
-            scenario("price_partial_missing.json"), seed=1
-        ).collect(make_request(), NOW)
+        config = scenario("price_partial_missing.json")
+        result, records, manifest = FakePriceCollector(config, seed=1).collect(
+            make_request(), NOW
+        )
         assert result.status == DATA_INCOMPLETE
         assert result.failed_count == 5
         assert result.succeeded_count == 343
-        assert len(records) == 343
+        assert manifest["missing"] == sorted(config["missing_unit_ids"])
+        record_units = {r["unit_id"] for r in records}
+        assert record_units.isdisjoint(config["missing_unit_ids"])
 
     def test_no_trade_distinct_from_missing(self):
-        # 무거래는 성공(분봉 없음이 사실)이고 missing 은 실패다 — 계획 §9 구분
-        result, records = FakePriceCollector(scenario("price_no_trade.json"), seed=1).collect(
+        # 무거래는 성공(분봉 없음이 사실)이고 missing 은 실패다 — 계획 §9 구분.
+        # 개수 단언만으론 "no-trade unit 이 record 를 내고 정상 unit 이 누락"되는 상쇄를
+        # 못 잡는다 — unit 단위로 확인한다
+        config = scenario("price_no_trade.json")
+        no_trade_units = set(config["no_trade_unit_ids"])
+        result, records, manifest = FakePriceCollector(config, seed=1).collect(
             make_request(), NOW
         )
         assert result.status == DATA_VALID
         assert result.succeeded_count == 348
         assert result.failed_count == 0
-        assert len(records) == 348 - 7  # no-trade unit 은 record 가 없다
+        record_units = {r["unit_id"] for r in records}
+        assert record_units == set(UNIVERSE.unit_ids) - no_trade_units
+        assert manifest["no_trade"] == sorted(no_trade_units)
 
     def test_stale_bar_timestamp_outside_window(self):
         request = make_request()
-        _, records = FakePriceCollector(scenario("price_stale.json"), seed=1).collect(request, NOW)
+        _, records, _ = FakePriceCollector(scenario("price_stale.json"), seed=1).collect(
+            request, NOW
+        )
         stale_units = set(scenario("price_stale.json")["stale_unit_ids"])
         stale_records = [r for r in records if r["unit_id"] in stale_units]
         assert len(stale_records) == 3
         assert all(r["ts"] < request.window_start for r in stale_records)
 
-    def test_correction_bumps_generation_and_checksum(self):
+    def test_correction_changes_target_unit_only(self):
         request = make_request(uuid4(), uuid4())
-        original, _ = FakePriceCollector(scenario("price_normal.json"), seed=1).collect(
-            request, NOW
-        )
-        corrected, _ = FakePriceCollector(scenario("price_correction.json"), seed=1).collect(
+        config = scenario("price_correction.json")
+        target_units = set(config["correction"]["unit_ids"])
+        delta = config["correction"]["close_delta"]
+        original, original_records, _ = FakePriceCollector(
+            scenario("price_normal.json"), seed=1
+        ).collect(request, NOW)
+        corrected, corrected_records, _ = FakePriceCollector(config, seed=1).collect(
             request, NOW
         )
         assert original.generation == 1
         assert corrected.generation == 2
         assert original.result_checksum != corrected.result_checksum
+        # 지목한 unit 만 정확히 delta 만큼 바뀌고 나머지는 불변이어야 한다
+        by_unit_before = {r["unit_id"]: r for r in original_records}
+        for record in corrected_records:
+            before = by_unit_before[record["unit_id"]]
+            if record["unit_id"] in target_units:
+                assert record["close"] == before["close"] + delta
+            else:
+                assert record == before
+
+    def test_ohlc_invariants(self):
+        _, records, _ = FakePriceCollector(scenario("price_normal.json"), seed=1).collect(
+            make_request(), NOW
+        )
+        for r in records:
+            assert r["high"] >= max(r["open"], r["close"])
+            assert 0 < r["low"] <= min(r["open"], r["close"])
 
 
 class TestNewsFeed:
@@ -171,6 +230,19 @@ class TestNewsFeed:
         page = feed.fetch_page(config["duplicate"]["poll_index"], 1, 200)
         ids = [a["NEWS_ID"] for a in page]
         assert len(ids) == len(set(ids)) + 1  # 정확히 1건 중복 관측
+
+    def test_duplicate_of_nonexistent_article_fails_loud(self):
+        # 존재하지 않는 기사의 "중복"은 그냥 신규 기사라 dedupe 테스트가 무력화된다
+        config = scenario("news_duplicate.json") | {
+            "duplicate": {"poll_index": 0, "position": 0, "of_index": 100_000}
+        }
+        with pytest.raises(ValueError, match="발행분"):
+            FakeNewsFeed(config, seed=7)
+
+    def test_negative_poll_index_fails_loud(self):
+        feed = FakeNewsFeed(scenario("news_page_drift.json"), seed=7)
+        with pytest.raises(ValueError, match="poll_index"):
+            feed.fetch_page(-1, 1, 50)
 
     def test_anchor_miss_burst_exceeds_page_budget(self):
         # burst 가 MAX_PAGES×page_size 를 넘으면 anchor 에 못 닿는다 → INCOMPLETE 경로 입력

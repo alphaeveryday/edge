@@ -16,10 +16,14 @@ def _require_aware(value: datetime, name: str) -> datetime:
 
 
 class VirtualClock:
-    """테스트·시뮬레이션용 가상 시계. 뒤로는 가지 않는다."""
+    """테스트·시뮬레이션용 가상 시계. 뒤로는 가지 않는다.
+
+    now() 는 SystemClock 과 같은 계약으로 **항상 UTC 표현**을 반환한다 — 두 구현을
+    교체해도 직렬화·로그 키가 달라지지 않는다(aware 비교는 순간 기준이라 의미 불변).
+    """
 
     def __init__(self, start: datetime) -> None:
-        self._now = _require_aware(start, "start")
+        self._now = _require_aware(start, "start").astimezone(timezone.utc)
 
     def now(self) -> datetime:
         return self._now

@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from ..config.models import NonBlankStr
-from ..ops.states import DATA_STATUSES
+from ..ops.states import DATA_STATUSES, DATA_VALID, DATA_VALID_EMPTY
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -135,6 +135,9 @@ class CollectionResult(BaseModel):
                 f"unit 분류 불완전: succeeded({self.succeeded_count})+failed"
                 f"({self.failed_count}) != expected({self.expected_count})"
             )
+        if self.failed_count > 0 and self.status in (DATA_VALID, DATA_VALID_EMPTY):
+            # 실패가 있는데 VALID 면 status 만 믿는 소비자가 누락 window 를 정상 확정한다
+            raise ValueError(f"failed_count={self.failed_count} 인데 status={self.status}")
         return self
 
 
@@ -164,8 +167,8 @@ class Universe(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     universe_version: NonBlankStr
-    etf_ids: tuple[NonBlankStr, ...]
-    constituent_ids: tuple[NonBlankStr, ...]
+    etf_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
+    constituent_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
 
     @model_validator(mode="after")
     def _validate(self) -> Universe:

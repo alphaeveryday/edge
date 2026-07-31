@@ -64,6 +64,7 @@ class JsonlInstrumentationWriter:
             {key: record[key] for key in JSONL_FIELDS},  # 필드 순서 고정
             ensure_ascii=False,
             separators=(",", ":"),
+            allow_nan=False,  # NaN/Infinity 는 표준 JSON 이 아니다 — canonical_json 과 동일
             default=_json_default,
         )
         with self._path.open("a", encoding="utf-8") as handle:

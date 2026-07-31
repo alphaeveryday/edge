@@ -83,8 +83,8 @@ def make_result(**overrides) -> CollectionResult:
     base = dict(
         status="VALID",
         expected_count=348,
-        succeeded_count=343,
-        failed_count=5,
+        succeeded_count=348,
+        failed_count=0,
         retry_count=0,
         artifact_uri="memory://minute/price_minute/x/2026-07-31T09:00",
         manifest_checksum="a" * 64,
@@ -111,6 +111,13 @@ class TestResultContract:
         with pytest.raises(ValidationError):
             make_result(succeeded_count=347, failed_count=0)
 
+    def test_valid_status_with_failures_rejected(self):
+        # 실패가 있는데 VALID 면 status 만 믿는 소비자가 누락 window 를 정상 확정한다
+        with pytest.raises(ValidationError):
+            make_result(status="VALID", succeeded_count=343, failed_count=5)
+        ok = make_result(status="INCOMPLETE", succeeded_count=343, failed_count=5)
+        assert ok.failed_count == 5
+
     def test_counts_strict_no_coercion(self):
         # '3'(str)·True(bool) 가 수량으로 강제되면 잘못된 직렬화가 조용히 통과한다
         with pytest.raises(ValidationError):
@@ -124,6 +131,8 @@ class TestResultContract:
             make_result(result_checksum="")
         with pytest.raises(ValidationError):
             make_result(manifest_checksum="X" * 64)  # lowercase hex 만
+        with pytest.raises(ValidationError):
+            make_result(result_checksum="g" * 64)  # lowercase 라도 hex 밖 문자는 거부
 
     def test_stage_timestamps_must_have_evidence(self):
         with pytest.raises(ValidationError):
@@ -149,11 +158,14 @@ class TestUniverseFixture:
         assert len(universe.unit_ids) == 348
         assert len(set(universe.unit_ids)) == 348
 
-    def test_hash_deterministic(self):
-        first = load_universe(FIXTURES / "universe_348.json")
-        second = load_universe(FIXTURES / "universe_348.json")
-        assert first.universe_hash == second.universe_hash
-        assert len(first.universe_hash) == 64
+    def test_hash_pinned_golden_value(self):
+        # fixture 는 동결이다 — ID 하나를 바꾸고 개수·version 을 유지하는 드리프트도
+        # 여기서 터져야 한다(재계산-비교만으로는 못 잡는다)
+        universe = load_universe(FIXTURES / "universe_348.json")
+        assert (
+            universe.universe_hash
+            == "5b33574f724ecb10f7f3db0830c2fc6dfb45b386ee8f3a9c9ae43dab1e03d52e"
+        )
 
     def test_hash_is_membership_identity_not_order(self):
         # 같은 구성을 다른 순서로 로드해도 같은 universe 다 — 순서 차이가 세션 universe
@@ -199,6 +211,12 @@ class TestVirtualClock:
         assert clock.now() == datetime(2026, 7, 31, 9, 1, tzinfo=timezone.utc)
         with pytest.raises(ValueError):
             clock.advance(timedelta(seconds=-1))
+
+    def test_now_is_utc_like_system_clock(self):
+        # SystemClock 과 교체 가능해야 한다 — KST 로 만들어도 now() 표현은 UTC
+        clock = VirtualClock(datetime(2026, 7, 31, 9, 0, tzinfo=KST))
+        assert clock.now().tzinfo == timezone.utc
+        assert clock.now() == datetime(2026, 7, 31, 0, 0, tzinfo=timezone.utc)
 
 
 class TestJsonlWriter:
