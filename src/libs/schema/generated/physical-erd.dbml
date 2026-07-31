@@ -499,6 +499,15 @@ Table "ops_expected_task" {
   "updated_at" timestamptz [not null]
   "records_out" bigint
   "failed_records" bigint
+  "dataset_contract_key" text
+  "dataset_contract_version" text
+  "dataset_contract_snapshot" jsonb
+  "actual_as_of_date" date
+  "collected_at" timestamptz
+  "observed_at" timestamptz
+  "freshness_status" text
+  "freshness_reason" text
+  "freshness_evidence" jsonb
 }
 
 Table "ops_pipeline_run" {
