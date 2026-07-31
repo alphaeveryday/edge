@@ -1,0 +1,11 @@
+{
+ "scenario": "anchor_miss",
+ "initial_count": 120,
+ "new_per_poll": 3,
+ "bursts": [
+  {
+   "poll_index": 3,
+   "count": 450
+  }
+ ]
+}

@@ -1,0 +1,10 @@
+{
+ "scenario": "duplicate",
+ "initial_count": 120,
+ "new_per_poll": 3,
+ "duplicate": {
+  "poll_index": 2,
+  "position": 5,
+  "of_index": 100
+ }
+}

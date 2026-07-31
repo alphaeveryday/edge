@@ -1,0 +1,11 @@
+{
+ "scenario": "correction",
+ "generation": 2,
+ "correction": {
+  "unit_ids": [
+   "500003",
+   "100077"
+  ],
+  "close_delta": 7
+ }
+}
