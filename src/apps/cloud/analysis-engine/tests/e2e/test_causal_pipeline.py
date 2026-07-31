@@ -660,6 +660,9 @@ def test_malformed_edge_shape_is_also_fed_back_not_raised():
     {"nodes": {"DIVIDEND@t+0": None}, "edges": [_edge()], "missing": []},   # 노드 메타 붕괴
     {"nodes": _nodes(), "edges": [{**_edge(), "scope": ["type"]}], "missing": []},
     {"nodes": _nodes(), "edges": [{**_edge(), "cause_label": 7}], "missing": []},
+    # 어휘 밖 scope. 거르지 않으면 NMIN.get(scope, 8) 이 최소 표본을 30→8 로 낮춰
+    # 기각됐어야 할 설계가 통과한다 — 관대한 방향으로 새는 게이트다.
+    {"nodes": _nodes(), "edges": [{**_edge(), "scope": "garbage"}], "missing": []},
 ])
 def test_every_contract_violation_leaves_parse_as_pipeline_error(broken):
     """게이트가 거르는 **모든** 위반이 한 타입으로 나와야 호출부가 다룰 수 있다.

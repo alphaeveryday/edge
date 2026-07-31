@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import PipelineError
-from .engine import STRATA, EdgeDesign
+from .engine import NMIN, STRATA, EdgeDesign
 
 SYSTEM = """너는 ETF 당일 등락의 인과 설계자다. **설계만** 낸다 - 수치는 코드가 만든다.
 
@@ -170,9 +170,14 @@ def parse(out: dict) -> tuple[dict, list[EdgeDesign], list[str]]:
         strata = _opt_str(e, i, "strata", "date")
         if strata not in STRATA:
             raise PipelineError(f"간선 {i} strata={strata!r} 는 어휘 밖이다: {STRATA}")
+        scope = _opt_str(e, i, "scope", "type")
+        # 어휘를 안 보면 미지 scope 가 engine 의 `NMIN.get(scope, 8)` 에서 **가장 관대한**
+        # 최소 표본(8)으로 떨어져, type(30) 이면 기각될 설계가 통과한다. NMIN 이 곧 어휘다.
+        if scope not in NMIN:
+            raise PipelineError(f"간선 {i} scope={scope!r} 는 어휘 밖이다: {sorted(NMIN)}")
         designs.append(EdgeDesign(
             src=e["from"], dst=e["to"], treated=e["treated"], control=e["control"],
-            strata=strata, scope=_opt_str(e, i, "scope", "type"),
+            strata=strata, scope=scope,
             because=_opt_str(e, i, "because", ""),
             false_if=_opt_str(e, i, "false_if", ""),
             timing=_opt_str(e, i, "timing", "unscheduled"),
