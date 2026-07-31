@@ -125,6 +125,23 @@ def _bare_share(s: str) -> float | None:
     return (-v if neg or (s or "").strip().startswith("-") else v) / 100.0
 
 
+_BARE_NUM = re.compile(r"^[△▲(-]?\s*\d+(?:\.\d+)?\s*\)?%?$")
+
+
+def _is_data_row(cells: list[str]) -> bool:
+    """`<TH>` 로 온 행이 실은 데이터인가. **자릿점만 보면 작은 금액을 놓친다.**
+
+    실측 DART 표는 데이터 행도 `<TH>` 로 내는 경우가 있고, 그때 자릿점(`52,576,287`)이
+    데이터 판정의 근거였다. 금액이 `999`·`0` 처럼 작거나 단위가 조정된 표에서는 콤마가
+    없어 데이터 행이 머리행으로 세어지고, 그러면 본문이 0행이 되어 **파서가 조용히 빈
+    목록을 낸다** - 실패가 결손으로 위장되는 자리다.
+
+    칸 하나라도 **수만 담고 있으면** 데이터로 본다. 머리행의 기간 라벨은 낱말이 섞여
+    있어(`2026년 (제59기) 1분기`·`제79기 매출액`) 이 검사에 걸리지 않는다.
+    """
+    return any(_BARE_NUM.match(c.strip()) for c in cells if c.strip())
+
+
 def _header_rows(table_xml: str, g: list[list[str]]) -> int:
     """머리행 수. **`<TH>` 를 믿되 자릿점 숫자가 있으면 데이터로 본다.**
 
@@ -142,8 +159,8 @@ def _header_rows(table_xml: str, g: list[list[str]]) -> int:
         cells = [_text(b) for _k, _a, b in _CELL.findall(row_html)]
         if not kinds or kinds.count("H") <= kinds.count("D"):
             break
-        if any(_GROUPED.search(c) for c in cells):
-            break                          # 자릿점 숫자가 있으면 데이터다
+        if any(_GROUPED.search(c) for c in cells) or _is_data_row(cells):
+            break                          # 금액이 있으면 데이터다 (자릿점이 없어도)
         n += 1
     if n:
         return n

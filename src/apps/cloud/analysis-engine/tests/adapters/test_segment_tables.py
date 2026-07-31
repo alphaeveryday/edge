@@ -286,3 +286,21 @@ def test_a_combined_amount_and_share_column_is_still_revenue():
     assert [r["value"] for r in rows] == [60000.0, 40000.0]
     assert [r["share"] for r in rows] == [pytest.approx(0.60), pytest.approx(0.40)]
     assert check(rows)["매출액(비율)"]["ok"] is True
+
+
+def test_small_amounts_in_th_rows_are_data_not_headers():
+    """`<TH>` 로 온 데이터 행을 **자릿점으로만** 가르면 작은 금액을 놓친다.
+
+    WHY: 단위가 조정된 표(억원 단위 `999`)나 0 이 섞인 표에서는 콤마가 없다. 그러면 데이터
+    행이 머리행으로 세어져 본문이 0행이 되고, 파서가 조용히 빈 목록을 낸다 - 실패가 결손으로
+    위장되는 최악의 실패다.
+    """
+    small = """<TABLE>
+               <TR><TH>부문</TH><TH>매출액</TH></TR>
+               <TR><TH>기계부문</TH><TH>999</TH></TR>
+               <TR><TH>전자부문</TH><TH>1</TH></TR>
+               <TR><TH>합계</TH><TH>1000</TH></TR></TABLE>"""
+
+    rows = parse_table(small)
+    assert [r["segment"] for r in rows if not r["is_total"]] == ["기계부문", "전자부문"]
+    assert check(rows)["매출액"]["ok"] is True
