@@ -20,6 +20,8 @@ from data_pipeline.minute.models import (
     KST,
     WINDOWS_PER_SESSION,
     CollectionRequest,
+    CollectionResult,
+    Universe,
     canonical_json,
     content_checksum,
     load_universe,
@@ -70,6 +72,63 @@ class TestRequestContract:
         with pytest.raises(ValidationError):
             request.dataset = "other"
 
+    def test_empty_unit_ids_rejected(self):
+        # 빈 universe 요청이 통과하면 수집 0건이 VALID 로 커밋되고 watermark 만 전진한다
+        with pytest.raises(ValidationError):
+            make_request(unit_ids=())
+
+
+def make_result(**overrides) -> CollectionResult:
+    now = datetime(2026, 7, 31, 9, 1, tzinfo=KST)
+    base = dict(
+        status="VALID",
+        expected_count=348,
+        succeeded_count=343,
+        failed_count=5,
+        retry_count=0,
+        artifact_uri="memory://minute/price_minute/x/2026-07-31T09:00",
+        manifest_checksum="a" * 64,
+        result_checksum="b" * 64,
+        watermark_before=None,
+        watermark_after=now,
+        generation=1,
+        stage_timestamps={"collection_started_at": now},
+    )
+    base.update(overrides)
+    return CollectionResult(**base)
+
+
+class TestResultContract:
+    def test_status_must_be_data_status_vocabulary(self):
+        # ops/states.py 네 축을 섞지 않는다 — 실행 축(SUCCEEDED)이 데이터 축에 오면 거부
+        with pytest.raises(ValidationError):
+            make_result(status="SUCCEEDED")
+        with pytest.raises(ValidationError):
+            make_result(status="BOGUS")
+
+    def test_unclassified_units_rejected(self):
+        # 합이 모자라면 unit 이 조용히 사라진 것 — VALID 위장 금지 (Rule 12)
+        with pytest.raises(ValidationError):
+            make_result(succeeded_count=347, failed_count=0)
+
+    def test_counts_strict_no_coercion(self):
+        # '3'(str)·True(bool) 가 수량으로 강제되면 잘못된 직렬화가 조용히 통과한다
+        with pytest.raises(ValidationError):
+            make_result(expected_count="348")
+        with pytest.raises(ValidationError):
+            make_result(retry_count=True)
+
+    def test_checksum_format_enforced(self):
+        # 빈/임의 checksum 이 통과하면 재실행 no-op 판정이 서로 다른 artifact 를 동일시한다
+        with pytest.raises(ValidationError):
+            make_result(result_checksum="")
+        with pytest.raises(ValidationError):
+            make_result(manifest_checksum="X" * 64)  # lowercase hex 만
+
+    def test_stage_timestamps_must_have_evidence(self):
+        with pytest.raises(ValidationError):
+            make_result(stage_timestamps={})
+
 
 class TestSessionWindows:
     def test_390_windows_fixed(self):
@@ -96,6 +155,17 @@ class TestUniverseFixture:
         assert first.universe_hash == second.universe_hash
         assert len(first.universe_hash) == 64
 
+    def test_hash_is_membership_identity_not_order(self):
+        # 같은 구성을 다른 순서로 로드해도 같은 universe 다 — 순서 차이가 세션 universe
+        # 불일치(새 세션 거부)로 오판되면 안 된다
+        original = load_universe(FIXTURES / "universe_348.json")
+        reordered = Universe(
+            universe_version=original.universe_version,
+            etf_ids=tuple(reversed(original.etf_ids)),
+            constituent_ids=tuple(reversed(original.constituent_ids)),
+        )
+        assert original.universe_hash == reordered.universe_hash
+
 
 class TestCanonicalJson:
     def test_datetime_serialized_as_utc_z(self):
@@ -109,6 +179,13 @@ class TestCanonicalJson:
     def test_checksum_is_lowercase_sha256(self):
         digest = content_checksum(["a", 1])
         assert len(digest) == 64 and digest == digest.lower()
+
+    def test_nan_infinity_rejected(self):
+        # NaN/Infinity 는 표준 JSON 이 아니다 — 비정상 값에 유효한 checksum 을 주지 않는다
+        with pytest.raises(ValueError):
+            canonical_json([float("nan")])
+        with pytest.raises(ValueError):
+            canonical_json([float("inf")])
 
 
 class TestVirtualClock:

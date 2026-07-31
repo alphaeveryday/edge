@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+
+import pytest
 
 from data_pipeline.minute.fake_collector import FakeNewsFeed, FakePriceCollector
 from data_pipeline.minute.models import KST, CollectionRequest, load_universe
 from data_pipeline.ops.states import DATA_INCOMPLETE, DATA_VALID
+from data_pipeline.parse import bigkinds_date
 
 FIXTURES = Path(__file__).parent / "fixtures"
 UNIVERSE = load_universe(FIXTURES / "universe_348.json")
@@ -71,6 +74,30 @@ class TestPriceDeterminism:
         assert early.manifest_checksum == late.manifest_checksum
         # 실행 시각은 stage_timestamps 에만 나타난다
         assert early.stage_timestamps != late.stage_timestamps
+
+    def test_same_instant_different_tz_same_records(self):
+        # 같은 순간을 KST 로 주든 UTC 로 주든 결과가 같아야 한다 — digest 가
+        # str(datetime) 표현이 아니라 UTC 정규화 값에서 유도됨을 고정한다
+        run_id, session_id = uuid4(), uuid4()
+        kst_request = make_request(run_id, session_id)
+        utc_request = kst_request.model_copy(
+            update={
+                "window_start": kst_request.window_start.astimezone(timezone.utc),
+                "window_end": kst_request.window_end.astimezone(timezone.utc),
+            }
+        )
+        collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
+        kst_result, kst_records = collector.collect(kst_request, NOW)
+        utc_result, utc_records = collector.collect(utc_request, NOW)
+        assert kst_result.result_checksum == utc_result.result_checksum
+        assert [r["open"] for r in kst_records] == [r["open"] for r in utc_records]
+
+    def test_scenario_typo_key_fails_loud(self):
+        # fixture 키 오타가 조용히 no-op 시나리오가 되면 실패 경로 테스트가 무력화된다
+        with pytest.raises(ValueError, match="미지 키"):
+            FakePriceCollector({"scenario": "x", "missing_unit_idz": ["100003"]}, seed=1)
+        with pytest.raises(ValueError, match="미지 키"):
+            FakeNewsFeed({"scenario": "x", "initial_countt": 10}, seed=1)
 
 
 class TestPriceScenarios:
@@ -164,11 +191,12 @@ class TestNewsFeed:
         feed = FakeNewsFeed(config, seed=7)
         target = config["late_correction"]["article_index"]
         poll = config["late_correction"]["poll_index"]
+        target_id = f"01100901.20260731{target:06d}"
 
         def find(poll_index):
             for page in range(1, 10):
                 for article in feed.fetch_page(poll_index, page, 100):
-                    if article["NEWS_ID"] == f"NEWS-{target:07d}":
+                    if article["NEWS_ID"] == target_id:
                         return article
             raise AssertionError("대상 기사를 못 찾았다")
 
@@ -176,3 +204,13 @@ class TestNewsFeed:
         assert before["NEWS_ID"] == after["NEWS_ID"]
         assert before["PROVIDER_LINK_PAGE"] == after["PROVIDER_LINK_PAGE"]
         assert before["CONTENT"] != after["CONTENT"]
+
+    def test_articles_compatible_with_existing_bigkinds_parser(self):
+        # 계획 §10 은 기존 parser 재사용을 전제한다 — fake 기사가 `parse.bigkinds_date`
+        # 를 통과하지 못하면 후속 PR 의 뉴스 lifecycle 테스트가 게이트에서 전부 차단된다
+        feed = FakeNewsFeed(scenario("news_page_drift.json"), seed=7)
+        article = feed.fetch_page(0, 1, 1)[0]
+        assert bigkinds_date(article) == "2026-07-31"
+        assert bigkinds_date({"NEWS_ID": article["NEWS_ID"]}) == "2026-07-31"  # DATE 없이도
+        for field in ("TITLE", "CONTENT", "PROVIDER", "PROVIDER_LINK_PAGE"):
+            assert article[field]

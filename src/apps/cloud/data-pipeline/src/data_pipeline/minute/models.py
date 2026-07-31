@@ -19,13 +19,14 @@ import hashlib
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from ..config.models import NonBlankStr
+from ..ops.states import DATA_STATUSES
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -42,7 +43,8 @@ ExecutionMode = Literal["one_shot", "resident"]
 
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
-        if value.tzinfo is None:
+        # tzinfo 존재만으론 부족하다 — utcoffset() 이 None 이면 Python 기준 naive 다
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             raise ValueError("naive datetime 은 직렬화하지 않는다")
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(value, UUID):
@@ -51,9 +53,17 @@ def _json_default(value: object) -> str:
 
 
 def canonical_json(payload: object) -> str:
-    """고정 필드 순서(호출자가 array 순서로 고정)·UTC `Z`·공백 없는 결정적 JSON."""
+    """고정 필드 순서(호출자가 array 순서로 고정)·UTC `Z`·공백 없는 결정적 JSON.
+
+    NaN/Infinity 는 표준 JSON 이 아니라 거부한다(allow_nan=False) — 비정상 값에
+    유효한 checksum 을 부여하지 않는다.
+    """
     return json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), default=_json_default
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=_json_default,
     )
 
 
@@ -62,6 +72,11 @@ def content_checksum(payload: object) -> str:
 
 
 # ── 공통 계약 (계획 §4) ──
+
+# strict=True: '3'(str)·True(bool) 가 수량으로 조용히 강제되는 것을 막는다
+Count = Annotated[int, Field(strict=True, ge=0)]
+Generation = Annotated[int, Field(strict=True, ge=1)]
+Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class CollectionRequest(BaseModel):
@@ -76,7 +91,7 @@ class CollectionRequest(BaseModel):
     session_id: UUID
     execution_mode: ExecutionMode
     universe_version: NonBlankStr
-    unit_ids: tuple[NonBlankStr, ...]
+    unit_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
     failure_injection: str | None = None
 
     @model_validator(mode="after")
@@ -97,27 +112,29 @@ class CollectionResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: NonBlankStr
-    expected_count: int
-    succeeded_count: int
-    failed_count: int
-    retry_count: int
-    artifact_uri: str
-    manifest_checksum: str
-    result_checksum: str
+    expected_count: Count
+    succeeded_count: Count
+    failed_count: Count
+    retry_count: Count
+    artifact_uri: NonBlankStr
+    manifest_checksum: Sha256Hex
+    result_checksum: Sha256Hex
     watermark_before: AwareDatetime | None
     watermark_after: AwareDatetime | None
-    generation: int
-    stage_timestamps: dict[str, AwareDatetime]
+    generation: Generation
+    stage_timestamps: Annotated[dict[str, AwareDatetime], Field(min_length=1)]
 
     @model_validator(mode="after")
     def _validate(self) -> CollectionResult:
-        for name in ("expected_count", "succeeded_count", "failed_count", "retry_count"):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name} 은 음수일 수 없다")
-        if self.generation < 1:
-            raise ValueError("generation 은 1부터 시작한다")
-        if self.succeeded_count + self.failed_count > self.expected_count:
-            raise ValueError("succeeded+failed 가 expected 를 초과한다")
+        if self.status not in DATA_STATUSES:
+            # ops/states.py 의 data_status 축만 허용 — 실행 축(SUCCEEDED 등)과 섞지 않는다
+            raise ValueError(f"status {self.status!r} 는 data_status 어휘가 아니다")
+        if self.succeeded_count + self.failed_count != self.expected_count:
+            # 합이 모자라면 미분류 unit 이 조용히 사라진 것이다 — VALID 위장 금지
+            raise ValueError(
+                f"unit 분류 불완전: succeeded({self.succeeded_count})+failed"
+                f"({self.failed_count}) != expected({self.expected_count})"
+            )
         return self
 
 
@@ -165,7 +182,10 @@ class Universe(BaseModel):
 
     @property
     def universe_hash(self) -> str:
-        return content_checksum([self.universe_version, list(self.unit_ids)])
+        """멤버십 identity — 입력 순서에 불변(같은 구성·다른 순서 = 같은 hash)."""
+        return content_checksum(
+            [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
+        )
 
 
 def load_universe(path: Path) -> Universe:
