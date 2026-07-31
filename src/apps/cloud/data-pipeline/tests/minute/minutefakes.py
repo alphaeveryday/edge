@@ -104,6 +104,8 @@ class _Cursor:
         elif "SET status = 'CLAIMED'" in s:
             self._claim_job("price" if "price_window_job" in s else "news", params)
         elif s.startswith("SELECT j.generation, w.generation"):
+            # 직전 TOCTOU 수정의 핵심 — 잠금 구문이 사라지는 회귀를 fake 가 잡는다
+            assert "FOR UPDATE OF w" in s, "stale 검사는 window 행을 잠가야 한다"
             self._job_window_generation(params)
         elif "SET status = 'DEAD', error_code = 'STALE'" in s:
             self._stale_dead(params)
@@ -357,9 +359,10 @@ class _Cursor:
 
     def _job_transition(self, kind, p):
         (to_status, next_attempt_at, result_checksum, error_code, completed,
-         job_id, worker_id) = p
+         job_id, worker_id, attempt) = p
         row = self.db.jobs.get((kind, job_id))
-        if row is None or row["claimed_by"] != worker_id or row["status"] != "CLAIMED":
+        if (row is None or row["claimed_by"] != worker_id
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt):
             return
         row.update(status=to_status, next_attempt_at=next_attempt_at,
                    result_checksum=result_checksum, error_code=error_code,
@@ -391,21 +394,24 @@ class _Cursor:
         for row in eligible:
             row.update(claimed_by=relay_id, claim_expires_at=claim_until)
         self._rows = [
-            (r["event_id"], r["event_type"], r["destination"], r["payload"]) for r in eligible
+            (r["event_id"], r["event_type"], r["destination"], r["payload"],
+             r["claim_expires_at"]) for r in eligible
         ]
 
     def _mark_published(self, p):
-        now, event_id, relay_id = p
+        now, event_id, relay_id, claim_token = p
         row = self.db.outbox.get(event_id)
-        if row is None or row["claimed_by"] != relay_id or row["status"] != "NEW":
+        if (row is None or row["claimed_by"] != relay_id or row["status"] != "NEW"
+                or row["claim_expires_at"] != claim_token):
             return
         row.update(status="PUBLISHED", published_at=now, claimed_by=None, claim_expires_at=None)
         self.rowcount = 1
 
     def _publish_failure(self, p):
-        status, next_attempt_at, error, event_id, relay_id = p
+        status, next_attempt_at, error, event_id, relay_id, claim_token = p
         row = self.db.outbox.get(event_id)
-        if row is None or row["claimed_by"] != relay_id or row["status"] != "NEW":
+        if (row is None or row["claimed_by"] != relay_id or row["status"] != "NEW"
+                or row["claim_expires_at"] != claim_token):
             return
         row.update(status=status, attempt_count=row["attempt_count"] + 1,
                    next_attempt_at=next_attempt_at, last_error=error,

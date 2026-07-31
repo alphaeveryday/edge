@@ -110,7 +110,7 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         retry_at = NOW + timedelta(minutes=5)
         assert ledger.retry_job(
-            kind="news", job_id=job_id, worker_id="c1", now=NOW,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
             next_attempt_at=retry_at, error_code="LLM_TIMEOUT",
         ) is True
         early = NOW + timedelta(minutes=1)
@@ -125,7 +125,7 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         with pytest.raises(ValueError):
             ledger.retry_job(
-                kind="news", job_id=job_id, worker_id="c1", now=NOW,
+                kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
                 next_attempt_at=NOW, error_code="X",
             )
 
@@ -145,12 +145,14 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=1)
         later = NOW + timedelta(seconds=2)
         ledger.claim_due_job(kind="news", worker_id="c2", now=later, lease_seconds=60)
-        # c1 의 늦은 성공 보고는 거부 — claim 은 이미 c2 것이다
+        # c1 의 늦은 성공 보고는 거부 — claim 은 이미 c2 것이다 (attempt fence)
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c1", now=later, result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
+            result_checksum="e" * 64,
         ) is False
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c2", now=later, result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c2", attempt=2, now=later,
+            result_checksum="e" * 64,
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "SUCCEEDED"
 
@@ -160,7 +162,8 @@ class TestJobClaim:
         job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         assert ledger.dead_job(
-            kind="news", job_id=job_id, worker_id="c1", now=NOW, error_code="BUDGET",
+            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
+            error_code="BUDGET",
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "DEAD"
         assert ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60) is None
@@ -228,7 +231,8 @@ class TestOutbox:
         # claim 중(미만료)엔 다른 Relay 가 못 가져간다
         assert ledger.claim_outbox_batch(relay_id="r2", now=NOW, limit=10, lease_seconds=30) == []
         assert ledger.mark_published(
-            event_id=batch[0]["event_id"], relay_id="r1", now=NOW,
+            event_id=batch[0]["event_id"], relay_id="r1",
+            claim_token=batch[0]["claim_token"], now=NOW,
         ) is True
         assert db.outbox[batch[0]["event_id"]]["status"] == "PUBLISHED"
 
@@ -249,8 +253,8 @@ class TestOutbox:
         [event] = ledger.claim_outbox_batch(relay_id="r1", now=NOW, limit=1, lease_seconds=30)
         retry_at = NOW + timedelta(minutes=1)
         assert ledger.record_publish_failure(
-            event_id=event["event_id"], relay_id="r1", now=NOW,
-            next_attempt_at=retry_at, error="SQS 5xx",
+            event_id=event["event_id"], relay_id="r1", claim_token=event["claim_token"],
+            now=NOW, next_attempt_at=retry_at, error="SQS 5xx",
         ) is True
         row = db.outbox[event["event_id"]]
         assert row["status"] == "NEW" and row["attempt_count"] == 1
@@ -258,8 +262,8 @@ class TestOutbox:
         assert ledger.claim_outbox_batch(relay_id="r1", now=NOW, limit=1, lease_seconds=30) == []
         [again] = ledger.claim_outbox_batch(relay_id="r1", now=retry_at, limit=1, lease_seconds=30)
         assert ledger.record_publish_failure(
-            event_id=again["event_id"], relay_id="r1", now=retry_at,
-            next_attempt_at=None, error="destination 미정의", terminal=True,
+            event_id=again["event_id"], relay_id="r1", claim_token=again["claim_token"],
+            now=retry_at, next_attempt_at=None, error="destination 미정의", terminal=True,
         ) is True
         assert db.outbox[event["event_id"]]["status"] == "DEAD"
         assert ledger.claim_outbox_batch(
@@ -273,3 +277,59 @@ class TestOutbox:
             self._event(ledger, suffix=str(i))
         batch = ledger.claim_outbox_batch(relay_id="r1", now=NOW, limit=3, lease_seconds=30)
         assert [e["event_id"].rsplit(":", 1)[1] for e in batch] == ["0", "1", "2"]  # 오래된 순
+
+
+class TestClaimAttemptFence:
+    def test_same_worker_stale_attempt_report_rejected(self):
+        # 같은 worker 가 재claim 한 뒤 옛 attempt 의 늦은 보고는 attempt fence 로 거부
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
+        ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=1)
+        later = NOW + timedelta(seconds=2)
+        second = ledger.claim_due_job(kind="news", worker_id="c1", now=later, lease_seconds=60)
+        assert second["attempt_count"] == 2
+        assert ledger.succeed_job(
+            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
+            result_checksum="e" * 64,
+        ) is False
+        assert db.jobs[("news", job_id)]["status"] == "CLAIMED"  # 새 attempt 는 무사
+
+    def test_same_relay_stale_outbox_attempt_rejected(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id = news_job_id(**NEWS_IDENTITY)
+        ledger.insert_outbox_event(
+            event_id=f"{NEWS_EVENT_TYPE}:{job_id}:0", event_type=NEWS_EVENT_TYPE,
+            destination="news-extraction-realtime", aggregate_id=job_id,
+            generation=1, payload={"job_id": job_id},
+        )
+        [old] = ledger.claim_outbox_batch(relay_id="r1", now=NOW, limit=1, lease_seconds=1)
+        later = NOW + timedelta(seconds=2)
+        [new] = ledger.claim_outbox_batch(relay_id="r1", now=later, limit=1, lease_seconds=60)
+        assert new["claim_token"] != old["claim_token"]
+        # 옛 attempt 의 늦은 실패 보고가 새 claim 을 해제하면 안 된다
+        assert ledger.record_publish_failure(
+            event_id=old["event_id"], relay_id="r1", claim_token=old["claim_token"],
+            now=later, next_attempt_at=later + timedelta(minutes=1), error="stale",
+        ) is False
+        assert db.outbox[old["event_id"]]["claimed_by"] == "r1"
+        assert ledger.mark_published(
+            event_id=new["event_id"], relay_id="r1", claim_token=new["claim_token"], now=later,
+        ) is True
+
+    def test_transient_failure_requires_future_retry(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id = news_job_id(**NEWS_IDENTITY)
+        ledger.insert_outbox_event(
+            event_id=f"{NEWS_EVENT_TYPE}:{job_id}:0", event_type=NEWS_EVENT_TYPE,
+            destination="news-extraction-realtime", aggregate_id=job_id,
+            generation=1, payload={"job_id": job_id},
+        )
+        [event] = ledger.claim_outbox_batch(relay_id="r1", now=NOW, limit=1, lease_seconds=30)
+        with pytest.raises(ValueError, match="미래"):
+            ledger.record_publish_failure(
+                event_id=event["event_id"], relay_id="r1", claim_token=event["claim_token"],
+                now=NOW, next_attempt_at=None, error="SQS 5xx",
+            )

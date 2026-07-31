@@ -189,11 +189,16 @@ class JobLedger:
             return {"job_id": job_id, "attempt_count": attempt_count}
 
     def _transition(
-        self, kind: str, job_id: str, worker_id: str, *, to_status: str,
+        self, kind: str, job_id: str, worker_id: str, attempt: int, *, to_status: str,
         now: datetime, next_attempt_at: datetime | None = None,
         result_checksum: str | None = None, error_code: str | None = None,
     ) -> bool:
-        """CLAIMED(내 claim) → terminal/RETRY_WAIT 전이. stale claim 이면 False."""
+        """CLAIMED(내 claim) → terminal/RETRY_WAIT 전이. stale claim 이면 False.
+
+        attempt 는 claim 이 돌려준 값이다 — worker_id 만 보면 같은 Worker 가 재claim 한
+        뒤 옛 attempt 의 늦은 보고가 새 attempt 를 terminal 로 만든다(2B claim_token
+        과 같은 결).
+        """
         table = _JOB_TABLES[kind]
         completed = now if to_status in ("SUCCEEDED", "DEAD") else None
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
@@ -204,38 +209,42 @@ class JobLedger:
                     error_code = %s, completed_at = %s,
                     claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'
+                  AND attempt_count = %s
                 """,
                 (to_status, next_attempt_at, result_checksum, error_code, completed,
-                 job_id, worker_id),
+                 job_id, worker_id, attempt),
             )
             return cur.rowcount == 1
 
     def succeed_job(
-        self, *, kind: str, job_id: str, worker_id: str, now: datetime, result_checksum: str,
+        self, *, kind: str, job_id: str, worker_id: str, attempt: int,
+        now: datetime, result_checksum: str,
     ) -> bool:
         return self._transition(
-            kind, job_id, worker_id, to_status="SUCCEEDED", now=now,
+            kind, job_id, worker_id, attempt, to_status="SUCCEEDED", now=now,
             result_checksum=result_checksum,
         )
 
     def retry_job(
-        self, *, kind: str, job_id: str, worker_id: str, now: datetime,
+        self, *, kind: str, job_id: str, worker_id: str, attempt: int, now: datetime,
         next_attempt_at: datetime, error_code: str,
     ) -> bool:
         """transient 실패 — DB 가 다음 시각을 정하고 Consumer 는 visibility 를 맞춘다."""
         if next_attempt_at <= now:
             raise ValueError("next_attempt_at 은 미래여야 한다 — 즉시 재시도는 RETRY_WAIT 이 아니다")
         return self._transition(
-            kind, job_id, worker_id, to_status="RETRY_WAIT", now=now,
+            kind, job_id, worker_id, attempt, to_status="RETRY_WAIT", now=now,
             next_attempt_at=next_attempt_at, error_code=error_code,
         )
 
     def dead_job(
-        self, *, kind: str, job_id: str, worker_id: str, now: datetime, error_code: str,
+        self, *, kind: str, job_id: str, worker_id: str, attempt: int,
+        now: datetime, error_code: str,
     ) -> bool:
         """permanent 실패/예산 소진 — 조용한 폐기가 아니라 조회 가능한 terminal 격리."""
         return self._transition(
-            kind, job_id, worker_id, to_status="DEAD", now=now, error_code=error_code,
+            kind, job_id, worker_id, attempt, to_status="DEAD", now=now,
+            error_code=error_code,
         )
 
     # ── outbox ────────────────────────────────────────────────
@@ -277,16 +286,22 @@ class JobLedger:
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                 )
-                RETURNING o.event_id, o.event_type, o.destination, o.payload
+                RETURNING o.event_id, o.event_type, o.destination, o.payload,
+                          o.claim_expires_at
                 """,
                 (relay_id, now + timedelta(seconds=lease_seconds), now, now, limit),
             )
             return [
-                {"event_id": r[0], "event_type": r[1], "destination": r[2], "payload": r[3]}
+                {"event_id": r[0], "event_type": r[1], "destination": r[2],
+                 "payload": r[3], "claim_token": r[4]}
                 for r in cur.fetchall()
             ]
 
-    def mark_published(self, *, event_id: str, relay_id: str, now: datetime) -> bool:
+    def mark_published(
+        self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
+    ) -> bool:
+        """claim_token(=claim 이 돌려준 claim_expires_at)까지 대조한다 — relay_id 만
+        보면 같은 Relay 의 만료된 옛 attempt 가 새 claim 을 마감한다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -294,16 +309,22 @@ class JobLedger:
                 SET status = 'PUBLISHED', published_at = %s,
                     claimed_by = NULL, claim_expires_at = NULL
                 WHERE event_id = %s AND claimed_by = %s AND status = 'NEW'
+                  AND claim_expires_at = %s
                 """,
-                (now, event_id, relay_id),
+                (now, event_id, relay_id, claim_token),
             )
             return cur.rowcount == 1
 
     def record_publish_failure(
-        self, *, event_id: str, relay_id: str, now: datetime,
+        self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
         next_attempt_at: datetime | None, error: str, terminal: bool = False,
     ) -> bool:
-        """발행 실패 기록 — transient 는 재시도 예약, 지속 실패는 DEAD 로 조회 가능 격리."""
+        """발행 실패 기록 — transient 는 재시도 예약, 지속 실패는 DEAD 로 조회 가능 격리.
+
+        transient 는 **미래** next_attempt_at 이 필수다 — 없으면 claim 해제 즉시 다시
+        eligible 이 돼 같은 장애를 tight loop 로 두드린다."""
+        if not terminal and (next_attempt_at is None or next_attempt_at <= now):
+            raise ValueError("transient 실패는 미래 next_attempt_at 이 필요하다")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -312,7 +333,9 @@ class JobLedger:
                     next_attempt_at = %s, last_error = %s,
                     claimed_by = NULL, claim_expires_at = NULL
                 WHERE event_id = %s AND claimed_by = %s AND status = 'NEW'
+                  AND claim_expires_at = %s
                 """,
-                ("DEAD" if terminal else "NEW", next_attempt_at, error, event_id, relay_id),
+                ("DEAD" if terminal else "NEW", next_attempt_at, error, event_id,
+                 relay_id, claim_token),
             )
             return cur.rowcount == 1
