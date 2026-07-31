@@ -95,8 +95,18 @@ class PriceWorker:
 
         phase = self._session_phase()
         if phase == "DRAINING":
-            # 신규 claim 금지 상태 — in-flight 는 이미 없다(tick 은 window 단위 완결).
-            # ack 가 False 면 만료 안 된 CLAIMED 잔존(다른 원인) — 다음 tick 재시도.
+            # 신규(DUE) claim 은 원장이 금지하지만 **만료된 고아 CLAIMED 회수**는
+            # DRAINING 에서도 허용된다(2B-2) — 실패로 남은 window 를 여기서 회수해
+            # 처리하지 않으면 ack 가 CLAIMED 잔존으로 영구 거부돼 drain 이 안 끝난다.
+            for _ in range(self.config.recovery_budget_per_tick):
+                claim = self.ledger.claim_due_window(
+                    session_id=self.session_id, worker_id=self.config.worker_id,
+                    fence_token=self.fence_token, now=now,
+                    lease_seconds=self.config.lease_seconds, lane="recovery",
+                )
+                if claim is None:
+                    break
+                self._process(claim, now)
             self.ledger.ack_drain(
                 session_id=self.session_id, fence_token=self.fence_token, now=now
             )

@@ -246,3 +246,30 @@ class TestCorrection:
         window = next(iter(db.windows.values()))
         assert window["generation"] == 2
         assert len(db.outbox) == 2  # correction event 정확히 1개 추가
+
+    def test_drain_converges_after_failed_window(self, tmp_path):
+        # 실패로 CLAIMED 로 남은 window 가 있어도 drain 이 수렴해야 한다 —
+        # DRAINING 중 만료 고아 회수 → 처리 → ack
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+
+        class OnceExploding:
+            def __init__(self):
+                self.calls = 0
+
+            def collect(self, request, now):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("vendor 500")
+                return FakePriceCollector({"scenario": "normal"}, seed=42).collect(request, now)
+
+        worker.collector = OnceExploding()
+        assert worker.tick(NOW) == "WINDOW_FAILED"  # window 는 CLAIMED 로 잔존
+        ledger.request_drain(session_id=session_id, now=NOW)
+        early = worker.tick(NOW + timedelta(seconds=1))
+        assert early == "DRAINING"
+        assert db.sessions[session_id]["phase"] == "DRAINING"  # lease 미만료 — ack 거부
+        after_lease = NOW + timedelta(seconds=61)
+        assert worker.tick(after_lease) == "DRAINING"  # 고아 회수·처리 후 ack 성공
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+        assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
