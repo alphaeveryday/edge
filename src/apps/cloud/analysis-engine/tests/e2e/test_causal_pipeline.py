@@ -212,6 +212,29 @@ PROPOSAL_BACKWARDS = {"nodes": _nodes("DIVIDEND@t+1"), "edges": [_edge("DIVIDEND
                       "missing": []}
 # 억지 설계는 UNCERTAIN 보다 나쁘다 - 못 찾으면 빈 목록.
 PROPOSAL_EMPTY = {"nodes": _nodes(), "edges": [], "missing": ["장중 체결 흐름(수급) 원장"]}
+# 계약 위반: treated 가 비었다. 2026-07-29·07-30 런을 죽인 실제 산출 모양이다
+# (`간선 N 에 treated 가 없다`) - agents.parse 가 PipelineError 로 거부한다.
+PROPOSAL_NO_TREATED = {"nodes": _nodes(), "edges": [{**_edge(), "treated": ""}], "missing": []}
+
+
+class SequenceClient:
+    """호출마다 다른 산출을 주는 제안 스텁.
+
+    되먹임 재시도는 1·2회차 산출이 **달라야** 관찰된다 - FakeClient 는 같은 값을 반복해
+    "재시도가 실제로 일어났는가"를 구별하지 못한다.
+    """
+
+    def __init__(self, *proposals: dict) -> None:
+        self._proposals = list(proposals)
+        self.calls = 0
+        self.briefs: list[str] = []
+
+    def complete_json(self, system: str, user: str) -> dict:
+        assert system == agents.SYSTEM, "인과 경로가 아닌 프롬프트로 호출됐다"
+        out = self._proposals[min(self.calls, len(self._proposals) - 1)]
+        self.calls += 1
+        self.briefs.append(user)
+        return out
 
 
 def _candidates(share: float | None) -> list[dict]:
@@ -547,3 +570,61 @@ def test_analyze_signature_still_routes_by_the_causal_argument():
 
     assert client.calls == 1
     assert ex.explanation_type == "EVENT_SUPPORTED"
+
+
+# --------------------------------------------------------------------------- #
+# 계약 위반 산출 — 되먹임 대상이지 런 사망 사유가 아니다 (ALPHA-633)
+# --------------------------------------------------------------------------- #
+def test_broken_proposal_is_fed_back_and_retried():
+    """1회차가 계약을 어기면 사유를 되먹여 다시 묻는다 - 지금까지는 재시도조차 없었다.
+
+    WHY: 2026-07-30 스케줄 런(`etf-daily-2026-07-30T15-40`)이 `간선 8 에 treated 가 없다`
+    로 **1회차에서** 죽었다. AnalyzeOne 하나가 예외로 끝나면 analyze 전량성공
+    게이트(ADR-0028)가 유니버스 33종 런을 통째로 FAILED 시킨다. 구조 위반·빈 코호트는
+    되먹여 다시 묻는데 계약 위반만 죽이던 비대칭을 여기서 고정한다.
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_OK)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))
+
+    assert client.calls == 2, "계약 위반이 되먹임 재질의를 못 만들었다"
+    assert "treated" in client.briefs[1], "2회차 프롬프트에 위반 사유가 안 실렸다"
+    # 2회차가 성사되면 결과는 정상 경로와 같아야 한다 - 강등이 아니라 회복이다.
+    ex = Explanation(raw)
+    assert ex.explanation_type == "EVENT_SUPPORTED"
+    assert [f["cause"] for f in raw["causal"]["survived"]] == [CAUSE_LABEL]
+
+
+def test_two_broken_proposals_degrade_instead_of_killing_the_run():
+    """2회차도 계약을 어기면 **예외 없이** 강등된다 - 구조 위반 2연속과 같은 결말.
+
+    WHY: 억지 설명을 만들지 않되 런은 살려야 한다. 여기서 예외가 새어 나가면 그 한 종목이
+    유니버스 전체를 FAILED 로 만든다(2026-07-29·07-30 런이 그랬다).
+    """
+    cd = FakeCausalData()
+    client = SequenceClient(PROPOSAL_NO_TREATED, PROPOSAL_NO_TREATED)
+
+    raw = _explain(cd, client, candidates=_candidates(SHARE))   # 예외가 나면 여기서 깨진다
+
+    assert client.calls == 2
+    assert Explanation(raw).explanation_type == "UNCERTAIN"
+    # 왜 설계를 못 세웠는지가 남아야 한다 - 건수만 남기면 사후에 원인을 못 가린다.
+    assert any("treated" in v for v in raw["causal"]["local_violations"])
+
+
+def test_transport_error_still_fails_loud():
+    """LLM 전송·API 오류는 여전히 전파된다 - 계약 위반만 삼킨다.
+
+    WHY: 2026-07-27 DeepSeek 크레딧 소진(402) 때 tag_news 는 940/940 전건 실패를 삼켜
+    exit 0 으로 초록이었다(ALPHA-589). 여기서 except 를 넓게 잡으면 같은 사고를 만든다 -
+    소스가 죽은 것과 모델이 계약을 어긴 것은 다르게 다뤄야 한다.
+    """
+    class _DeadClient:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            raise RuntimeError("HTTP 402 Payment Required")
+
+    with pytest.raises(RuntimeError, match="402"):
+        _explain(FakeCausalData(), _DeadClient(), candidates=_candidates(SHARE))
