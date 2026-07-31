@@ -66,6 +66,23 @@ Table "concept" {
   "parent_concept_id" text
 }
 
+Table "dataset_commit_outbox" {
+  "event_id" text [pk]
+  "event_type" text [not null]
+  "destination" text [not null]
+  "aggregate_id" text [not null]
+  "generation" int [not null]
+  "payload" jsonb [not null]
+  "status" text [not null]
+  "attempt_count" int [not null]
+  "next_attempt_at" timestamptz
+  "claimed_by" text
+  "claim_expires_at" timestamptz
+  "published_at" timestamptz
+  "last_error" text
+  "created_at" timestamptz [not null]
+}
+
 Table "disclosure_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -401,6 +418,23 @@ Table "instrument" {
   "currency_code" varchar(3)
 }
 
+Table "instrument_classification" {
+  "instrument_id" text [not null]
+  "as_of_date" date [not null]
+  "sector_name" text
+  "industry_name" text
+  "market_cap" numeric(30,4)
+  "listing_market" varchar(30)
+  "is_primary_share" boolean
+  "source" varchar(40) [not null]
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("instrument_id", "as_of_date") [pk]
+  }
+}
+
 Table "investor_flow_daily" {
   "instrument_id" text [not null]
   "trade_date" date [not null]
@@ -449,6 +483,58 @@ Table "market_series" {
   "status" varchar(20) [not null]
 }
 
+Table "minute_ingestion_session" {
+  "session_id" text [pk]
+  "dataset" text [not null]
+  "source_group" text [not null]
+  "session_date" date [not null]
+  "universe_version" text [not null]
+  "universe_hash" text [not null]
+  "phase" text [not null]
+  "expected_window_count" int [not null]
+  "processed_through" timestamptz
+  "contiguous_complete_through" timestamptz
+  "finalized_through" timestamptz
+  "worker_fencing_token" bigint [not null]
+  "lease_expires_at" timestamptz
+  "heartbeat_at" timestamptz
+  "drain_requested_at" timestamptz
+  "drain_ack_at" timestamptz
+  "final_generation" int
+  "final_checksum" text
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "minute_ingestion_window" {
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "window_end" timestamptz [not null]
+  "scheduled_at" timestamptz [not null]
+  "data_status" text [not null]
+  "expected_unit_count" int
+  "succeeded_unit_count" int
+  "failed_unit_count" int
+  "record_count" int
+  "generation" int [not null]
+  "checksum" text
+  "manifest_uri" text
+  "manifest_checksum" text
+  "missing_units" jsonb
+  "claimed_by" text
+  "claim_token" bigint
+  "lease_expires_at" timestamptz
+  "attempt_count" int [not null]
+  "next_attempt_at" timestamptz
+  "stage_timestamps" jsonb
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "window_start") [pk]
+  }
+}
+
 Table "news_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -456,6 +542,42 @@ Table "news_document" {
   "representative_document_id" text
   "dedup_cluster_id" text
   "theme_concept_id" text
+}
+
+Table "news_extraction_job" {
+  "job_id" text [pk]
+  "source_code" text [not null]
+  "article_id" text [not null]
+  "input_fingerprint" text [not null]
+  "tagger_version" text [not null]
+  "ontology_version" text [not null]
+  "status" text [not null]
+  "claimed_by" text
+  "lease_expires_at" timestamptz
+  "attempt_count" int [not null]
+  "next_attempt_at" timestamptz
+  "redrive_generation" int [not null]
+  "result_checksum" text
+  "error_code" text
+  "completed_at" timestamptz
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "news_source_item" {
+  "source_code" text [not null]
+  "source_item_id" text [not null]
+  "canonical_article_id" text
+  "first_seen_at" timestamptz [not null]
+  "last_seen_at" timestamptz [not null]
+  "content_checksum" text [not null]
+  "generation" int [not null]
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+
+  indexes {
+    ("source_code", "source_item_id") [pk]
+  }
 }
 
 Table "ops_expectation_snapshot" {
@@ -644,6 +766,25 @@ Table "price_observation" {
   "data_version" varchar(50) [not null]
 }
 
+Table "price_window_job" {
+  "job_id" text [pk]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "generation" int [not null]
+  "trigger_schema_version" text [not null]
+  "status" text [not null]
+  "claimed_by" text
+  "lease_expires_at" timestamptz
+  "attempt_count" int [not null]
+  "next_attempt_at" timestamptz
+  "redrive_generation" int [not null]
+  "result_checksum" text
+  "error_code" text
+  "completed_at" timestamptz
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
 Table "release_bundle" {
   "bundle_version" varchar(30) [pk]
   "component_versions" jsonb [not null]
@@ -800,7 +941,9 @@ Ref: "explanation_run_event_evidence"."explanation_run_id" > "explanation_run"."
 Ref: "explanation_run_event_price_observation"."event_price_observation_id" > "event_price_observation"."event_price_observation_id"
 Ref: "explanation_run_event_price_observation"."explanation_run_id" > "explanation_run"."explanation_run_id"
 Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "entity_type")
+Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
+Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
@@ -815,6 +958,7 @@ Ref: "price_decomposition_peer"."peer_instrument_id" > "instrument"."instrument_
 Ref: "price_movement_trigger"."etf_instrument_id" > "etf_profile"."instrument_id"
 Ref: "price_observation"."instrument_id" > "instrument"."instrument_id"
 Ref: "price_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
+Ref: "price_window_job".("session_id", "window_start") > "minute_ingestion_window".("session_id", "window_start")
 Ref: "supply_contract_fact"."contract_object_concept_id" > "concept"."concept_id"
 Ref: "supply_contract_fact"."counterparty_actor_id" > "actor"."actor_id"
 Ref: "supply_contract_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")

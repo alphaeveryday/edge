@@ -91,7 +91,16 @@ CREATE TABLE minute_ingestion_window (
     CONSTRAINT ck_minute_window_half_open CHECK (window_start < window_end),
     CONSTRAINT ck_minute_window_status CHECK (
         data_status IN ('DUE','CLAIMED','VALID','VALID_EMPTY','INCOMPLETE','MISSING','INVALID')
-    )
+    ),
+    -- 코드(CollectionResult)의 ge=0 계약을 DB 도 보존한다 — 직접 SQL·버그 증감이
+    -- 음수 수량을 영구 기록하면 QC 집계가 오염된다
+    CONSTRAINT ck_minute_window_counts CHECK (
+        (expected_unit_count  IS NULL OR expected_unit_count  >= 0) AND
+        (succeeded_unit_count IS NULL OR succeeded_unit_count >= 0) AND
+        (failed_unit_count    IS NULL OR failed_unit_count    >= 0) AND
+        (record_count         IS NULL OR record_count         >= 0)
+    ),
+    CONSTRAINT ck_minute_window_generation CHECK (generation >= 0)
 );
 
 COMMENT ON TABLE minute_ingestion_window IS
@@ -175,14 +184,21 @@ CREATE TABLE price_window_job (
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (job_id),
-    CONSTRAINT fk_price_window_job_session
-        FOREIGN KEY (session_id) REFERENCES minute_ingestion_session (session_id),
+    -- session 이 아니라 **window 행**을 참조한다 — 존재하지 않는 window 의 job 이
+    -- 들어오면 stale-generation claim 조인이 빈손이 돼 job 이 고착된다. window 는
+    -- 장 시작 시 미리 materialize 되므로(v0.7 6절) job 이 window 를 앞설 수 없다.
+    CONSTRAINT fk_price_window_job_window
+        FOREIGN KEY (session_id, window_start)
+        REFERENCES minute_ingestion_window (session_id, window_start),
     CONSTRAINT uq_price_window_job_identity UNIQUE (
         session_id, window_start, generation, trigger_schema_version
     ),
     CONSTRAINT ck_price_job_status CHECK (
         status IN ('PENDING','CLAIMED','SUCCEEDED','RETRY_WAIT','DEAD')
-    )
+    ),
+    -- window generation 0 = 미커밋. job 은 커밋된 generation(>=1)에만 존재한다 —
+    -- generation 0 job 은 stale 검사(job.gen < window.gen)를 그대로 통과해 버린다
+    CONSTRAINT ck_price_job_generation CHECK (generation >= 1)
 );
 
 CREATE INDEX idx_price_job_eligible

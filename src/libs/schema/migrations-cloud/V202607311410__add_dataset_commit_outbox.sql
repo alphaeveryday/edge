@@ -39,7 +39,9 @@ CREATE TABLE dataset_commit_outbox (
     CONSTRAINT ck_outbox_status CHECK (status IN ('NEW','PUBLISHED','DEAD'))
 );
 
--- Relay 의 batch claim 은 미발행분만 본다
+-- Relay 의 batch claim 은 미발행분만 본다. claim 중(NEW + 미만료 claim_expires_at)
+-- 재스캔 배제까지 인덱스로 풀지는 PR 2C 의 실제 claim 쿼리와 함께 조정한다 —
+-- 신규 인덱스 추가는 forward-only migration 으로 부담이 없다.
 CREATE INDEX idx_outbox_pending
     ON dataset_commit_outbox (next_attempt_at, created_at)
     WHERE status = 'NEW';
