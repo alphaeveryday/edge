@@ -17,8 +17,10 @@ ETF 수집 완전성은 `ops_expected_task`에 기대·수집·누락 수를 남
 
 첫 freshness 수직 슬라이스는 장 마감 후 수집하는
 `ETF_HOLDINGS_COLLECTION_KRX`의 `etf_holdings` EOD 스냅샷이다. 이 수집기는 거래일에는 당일,
-비거래일에는 `OPS_KR_HOLIDAYS`를 이용한 직전 거래일을 `trd_dd`로 요청하고 raw 행의
-`trd_dd` 및 canonical 행의 `as_of_date`로 보존한다.
+비거래일에는 `OPS_KR_HOLIDAYS`를 이용한 직전 거래일을 `trdDd`로 요청한다. 현재 raw
+`trd_dd`는 KRX 응답 필드가 아니라 수집기가 그 요청값을 행에 덧붙인 provenance이고, canonical
+`as_of_date`도 이를 변환한 값이다. 둘은 요청한 날짜를 증명하지만 응답 내용의 실제 기준일을
+독립적으로 증명하지 않는다.
 
 [ADR-0030](0030-raw-phase-partial-failure.md)은 일부 raw 실패나 부분 입력이 뒤의 정제·feature·분석
 실행을 막지 않는다고 정했다. freshness는 데이터 상태와 외부 발행 판단을 위한 별도 사실이며,
@@ -39,6 +41,10 @@ ADR-0030의 실행 원칙을 바꾸면 안 된다.
   SSOT로 두지 않는다.
 - Planner가 기대 작업을 만들 때 적용한 계약 키·버전과 해석된 기대값을 원장에 snapshot한다.
   Monitor는 과거 작업을 현재 registry 값으로 소급 재판정하지 않는다.
+- 논리 이름 `expected_as_of`의 저장 SSOT는 기존
+  `ops_expected_task.expected_as_of_date`다. 새 expected-as-of 컬럼을 병행 추가하지 않는다.
+  Contract가 연결된 작업부터 Planner가 슬롯 날짜 대신 계약 규칙으로 해석한 날짜를 이 컬럼에
+  기록한다. 기존 행은 당시 기록을 유지하고 소급 수정하지 않는다.
 - 첫 계약은 `ETF_HOLDINGS_COLLECTION_KRX` 전달 경계를 대상으로 하며 다음 정책 코드를 가진다.
   cadence는 `MARKET_EVENT`, timezone은 `Asia/Seoul`, expected-as-of 규칙은
   `LATEST_KR_TRADING_DAY`, 허용 as-of lag는 0 거래일, retry owner는 `SFN`이다.
@@ -49,25 +55,31 @@ ADR-0030의 실행 원칙을 바꾸면 안 된다.
 
 | 값 | 의미 | 첫 수직 슬라이스 타입 |
 |---|---|---|
-| `expected_as_of` | 이 실행 슬롯이 받아야 하는 데이터의 업무 기준일. 실행 시각이나 수집 시각이 아니다. | `DATE` |
-| `actual_as_of` | 실제 수신 데이터가 나타내는 업무 기준일. KRX `trd_dd`/canonical `as_of_date`에서 얻는다. | `DATE` |
+| `expected_as_of` | 이 실행 슬롯이 받아야 하는 데이터의 업무 기준일. 기존 `expected_as_of_date`에 저장하며 실행 시각이나 수집 시각이 아니다. | `DATE` |
+| `actual_as_of` | 실제 수신 데이터가 나타내는 업무 기준일. 요청값과 독립된 source evidence로 검증될 때만 저장한다. | `DATE` |
 | `collected_at` | 해당 task 범위의 immutable 수집 산출물과 로그가 저장되어 관측 가능해진 시각. 벤더 기준일이 아니다. | `TIMESTAMPTZ` |
 | `observed_at` | Monitor가 계약과 증거를 비교해 freshness를 평가한 시각. 재평가하면 바뀔 수 있다. | `TIMESTAMPTZ` |
 
 - `expected_as_of`는 실제 시작 시각이나 `now()`가 아니라 Planner의 **예정 슬롯**을
   `Asia/Seoul`로 해석해 계산한다. 이 계약에서는 그 로컬 날짜 이하의 최근 한국 거래일이다.
   수동·백필 실행도 대상 슬롯/런의 값을 명시적으로 이어받고 현재 날짜로 다시 만들지 않는다.
-- `actual_as_of`는 수신한 ETF 행들이 하나의 유효한 `trd_dd`에 합의할 때만 설정한다.
-  값이 없거나 파싱할 수 없거나 행마다 다르면 날짜를 추정하지 않는다.
+- `actual_as_of`는 응답 메타데이터처럼 요청값과 독립된 source evidence가 하나의 유효한
+  업무 기준일을 증명할 때만 설정한다. 현재 adapter가 주입한 `trd_dd`와 여기서 파생한 canonical
+  `as_of_date`는 `requested_as_of` provenance이지 이 증거가 아니다. KRX 응답에서 신뢰할
+  실제 기준일을 확보하지 못하면 null로 두며, 요청일이나 파일 파티션 날짜로 추정하지 않는다.
+- source evidence가 행 단위라면 수신한 행들이 하나의 기준일에 합의해야 한다. 값이 없거나
+  파싱할 수 없거나 행마다 다르면 날짜를 설정하지 않는다.
 - EOD 기준일에 임의 시각을 붙여 `TIMESTAMPTZ`로 만들지 않는다. 장중 데이터셋은 후속 계약에서
   timestamp grain과 cutoff 규칙을 별도로 정의해야 하며, 이 ADR의 `DATE` 컬럼에 넣지 않는다.
 - `collected_at`과 `observed_at`은 UTC `TIMESTAMPTZ`로 저장하고 표시에만 계약 timezone을 쓴다.
   기존 행의 값이 없으면 null로 두며 계획 시각, attempt 종료 시각 또는 `0`으로 대체하지 않는다.
 
 예를 들어 2026-07-31(금) 슬롯은 `expected_as_of=2026-07-31`이다. 2026-08-01(토)에 같은 레인이
-실행되어 KRX가 `trd_dd=2026-07-31`을 반환해도 최근 거래일과 일치하므로 `FRESH`다. 이 수집
-산출물이 `2026-07-31T07:10:00Z`에 저장되고 Monitor가 `07:12:00Z`에 판정했다면 그 두 시각이
-각각 `collected_at`, `observed_at`이며 기준일을 대신하지 않는다.
+실행되면 기대값과 KRX 요청값은 모두 최근 거래일인 2026-07-31이다. 그러나 adapter가 행에 붙인
+`trd_dd=20260731`만 있고 응답 자체의 기준일 증거가 없다면 `actual_as_of`는 null이고 freshness는
+`UNKNOWN`이다. 독립 증거가 2026-07-31을 확인해야 `FRESH`가 된다. 산출물이
+`2026-08-01T07:10:00Z`에 저장되고 Monitor가 `07:12:00Z`에 판정했다면 그 두 시각이 각각
+`collected_at`, `observed_at`이며 어느 것도 실제 기준일 증거를 대신하지 않는다.
 
 ### freshness 판정
 
@@ -81,7 +93,8 @@ ADR-0030의 실행 원칙을 바꾸면 안 된다.
 
 | 조건 | `freshness_status` | reason |
 |---|---|---|
-| 평가 전이거나 기대/실제 기준일 증거가 없거나 형식이 잘못됨 | `UNKNOWN` | `EVIDENCE_MISSING` 또는 `AS_OF_INVALID` |
+| 평가 전이거나 기대/실제 기준일 증거가 없거나 요청값과 독립적으로 검증되지 않음 | `UNKNOWN` | `EVIDENCE_MISSING` 또는 `ACTUAL_AS_OF_UNVERIFIED` |
+| 기준일 evidence 형식이 잘못됨 | `UNKNOWN` | `AS_OF_INVALID` |
 | 수신 행에 둘 이상의 기준일이 섞임 | `UNKNOWN` | `ACTUAL_AS_OF_MIXED` |
 | `actual_as_of`가 `expected_as_of`보다 미래임 | `UNKNOWN` | `ACTUAL_AS_OF_AFTER_EXPECTED` |
 | 두 기준일이 같음(허용 lag 0 거래일 충족) | `FRESH` | `AS_OF_MATCH` |
@@ -121,14 +134,17 @@ plan/outcome/issue 축에서 드러내며 데이터의 나이와 섞지 않는�
 
 이 ADR 이후 구현은 한 PR에 합치지 않고 다음 순서를 지킨다.
 
-1. additive migration과 ETF freshness evidence writer
-2. Reconciler의 `STALE` 판정과 evidence/상태 전이
-3. 운영 조회 API
-4. UI 표시
-5. Impact Resolver와 Publish Gate
+1. KRX 응답에서 요청값과 독립된 `actual_as_of` evidence를 확보할 수 있는지 검증
+2. additive migration과 ETF freshness evidence writer
+3. Reconciler의 `STALE` 판정과 evidence/상태 전이
+4. 운영 조회 API
+5. UI 표시
+6. Impact Resolver와 Publish Gate
 
-writer가 먼저 nullable 필드를 채우고 observe-only로 검증한 뒤 reader, UI 순으로 배포한다.
-이 ADR에는 스키마, 파이프라인, API, UI 변경을 포함하지 않는다.
+독립 evidence를 확보하지 못하면 writer는 `actual_as_of=null`,
+`freshness_status=UNKNOWN`, reason=`ACTUAL_AS_OF_UNVERIFIED`를 저장하며 `FRESH`/`STALE`를
+만들지 않는다. writer가 먼저 nullable 필드를 채우고 observe-only로 검증한 뒤 reader, UI
+순으로 배포한다. 이 ADR에는 스키마, 파이프라인, API, UI 변경을 포함하지 않는다.
 
 ## 대안
 
@@ -155,7 +171,10 @@ KRX가 기준 시각을 제공하지 않는다. 자정이나 장 마감 시각�
 ## 결과
 
 - 실행 성공, 완전성, freshness와 향후 발행 결정을 각각 감사할 수 있다.
-- 비거래일 KRX 수집은 직전 거래일이 기대값이므로 주말·휴일마다 거짓 `STALE`이 생기지 않는다.
+- 비거래일 KRX 수집은 직전 거래일을 기존 `expected_as_of_date`에 기록하므로 슬롯 날짜와
+  계약 날짜가 갈리지 않는다.
+- 요청 기준일을 실제 기준일로 재사용하지 않으므로 오래된 응답에 거짓 `FRESH`를 주지 않는다.
+  검증 가능한 KRX evidence가 없을 때 `UNKNOWN`이 늘어나는 것은 의도한 fail-loud 결과다.
 - 계약 변경 뒤에도 원장에 snapshot된 버전과 기대값으로 과거 판정을 설명할 수 있다.
 - typed registry의 버전 관리와 Catalog 참조 무결성을 검증하는 테스트가 후속 구현의 의무가 된다.
 - 첫 범위는 KRX ETF holdings EOD뿐이다. NAV·ETF profile·장중 데이터, 단계별 lineage,
