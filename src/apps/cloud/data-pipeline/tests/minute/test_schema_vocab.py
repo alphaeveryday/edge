@@ -22,6 +22,10 @@ def check_vocab(constraint_name: str) -> frozenset[str]:
 
     버전순 **전체** migration 을 훑어 마지막 정의를 취한다 — 후속 forward migration 이
     같은 이름으로 CHECK 를 재생성해도 유효 스키마 기준으로 대조된다.
+
+    천장: DROP 후 **다른 이름**으로 교체하면 정적 파싱으론 못 잡는다 — 그 드리프트의
+    실물 검증 지점은 CI schema-validate 의 ephemeral DB 적용이고, 이름을 바꾸는 PR 이
+    이 테스트의 constraint 이름도 같이 바꾸는 것이 규약이다.
     """
     latest: frozenset[str] | None = None
     pattern = re.compile(
