@@ -50,3 +50,4 @@
 | [0040](0040-sync-integrity-mvp-to-signing.md) | Sync 번들 무결성 — 체크섬·byte[] 응답을 MVP에서 목표 계약(서명)으로 이관 | 승인됨 |
 | [0041](0041-correction-same-screening.md) | 정정 리비전도 신규와 동일한 정책 평가 — 0014 대체 | 승인됨 |
 | [0042](0042-sync-pull-uniform-response.md) | sync Pull 응답을 공통 응답 포맷으로 통일 — 신규 없음 204 폐지 | 승인됨 |
+| [0043](0043-dataset-contract-freshness.md) | Dataset Contract와 ETF freshness 상태 축 | 승인됨 |
