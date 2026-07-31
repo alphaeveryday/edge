@@ -33,7 +33,10 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 src/edge_analysis/
   __main__.py · cli.py · config.py · observability.py · pipeline.py
   domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
-  adapters/   lake.py · eventstore.py · llm.py · archive.py  # I/O, 무거운 deps 지연 import
+  adapters/   lake · eventstore · llm · archive · readonly · trace · universe · price_daily
+              causal_data   # 인과 조회 표면(코호트·정렬열·비중). PIT 를 코드가 바인딩한다
+              classification · segment_tables   # 산업분류 원장 적재 · 부문 매출 표 파서
+              domain_docs   # 「사업의 내용」 RAG 조회 (버킷 없으면 미부착)
   causal/     agents · verify · sandbox · chain · graph · fit · stats · engine · narrate · run
 ```
 

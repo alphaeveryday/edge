@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="P0-P9">
+    <mxGraphModel dx="1600" dy="1200" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t1" value="인과귀속 P0–P9 — 그림에 대한 진술에서 세계에 대한 진술로" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="100" y="20" width="1400" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="h1" value="데이터 표면 (읽기 전용 · PIT 강제)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="100" y="80" width="380" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="h2" value="파이프라인 — 코드가 소유하는 순서" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="620" y="80" width="760" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="h3" value="LLM 세션 — 발명이 필요한 두 곳" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="80" width="420" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="P0" value="P0 · 질문 고정&#xa;estimand = r⊥[ETF, d] 의 반사실&#xa;개입 정의 · 답의 형태(PN 경계)를 먼저 선언한다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="150" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P1" value="P1 · 지문 채취 — 가설 이전, LLM 이전&#xa;모양 · 폭 · 타이밍 · 수급 · 캘린더 · 교차자산&#xa;후보를 주는 게 아니라 후보를 죽일 재료를 만든다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="310" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P2" value="P2 · 다중 작업가설 — 어휘 무제한&#xa;최소 3개 · 서로 다른 채널/트리거 · 독립 생성&#xa;각 가설 = 변수집합 + 배정기제 + 예측 지문" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="470" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P3" value="P3 · 그래프화 + 공통원인 완비 의무&#xa;그린 변수들의 공통원인을 전수 선언 (Hernán 조건)&#xa;assignment=chosen → U ↔ (T,Y) 를 컴파일러가 삽입" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="630" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P4" value="P4 · 식별 또는 경계&#xa;do-계산 3값: identified / identified_under(A) / not_identified&#xa;점식별 실패는 종료가 아니다 → Manski 구간으로 내려간다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="790" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P5" value="P5 · 판별 검정 설계  ★ 교란 소거 의무가 여기 있다&#xa;① 가설쌍이 갈리는 관측  ② 선언된 U 마다 소거 검정 1개&#xa;U 에 판별기준을 못 만들면 그 U 는 미소거로 확정된다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="620" y="950" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P6" value="P6 · 민감도 — 식별 대신 쓰는 정직한 축&#xa;E-value · Rosenbaum Γ&#xa;뒤집으려면 U 가 얼마나 세야 하나를 수치로 낸다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1110" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P7" value="P7 · 음성대조 · 혼재 스크린&#xa;영향 없어야 할 결과/노출이 조용한가 (Lipsitch)&#xa;사건창 내 타 공시 보유 기업 제외 (Kothari–Warner)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1270" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P8" value="P8 · 처분 원장 — 검토한 전건에 판정&#xa;기여 / 비기여 / 미결, 각각 사유 필수. 침묵 금지&#xa;예산 보존 위반 · 미소거 U → claim_ceiling 강등" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1430" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P9" value="P9 · 누적&#xa;메커니즘 레지스트리 · 소환 track record&#xa;배제제약과 U 소거가 반복으로 검정된다" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=14;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1590" width="760" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="K1" value="조기 종료&#xa;산술 게이트 · 지문 불일치&#xa;LLM 호출 0회" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=12;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="100" y="160" width="380" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="D1" value="지문 원천&#xa;price_intraday · price_daily · investor_flow&#xa;etf_holding · 합성 캘린더 · 교차자산" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;fontSize=12;boundedLbl=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="300" width="380" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="D2" value="SQL 표면 (storm 이식)&#xa;&#xa;단일 SELECT · 큐레이트 뷰 · 스키마 문서 동봉&#xa;v_event · v_event_entity · v_arg&#xa;v_daily · v_intraday · v_hold · v_entity&#xa;v_flow · v_calendar&#xa;&#xa;코드가 강제: PIT 주입 · 금지 토큰 · 행 상한&#xa;라벨 누출 차단 · 원장 기록&#xa;&#xa;고정 함수 6개 → 자유 질의로 교체된 자리" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;fontSize=12;boundedLbl=1;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="100" y="470" width="380" height="590" as="geometry" />
+        </mxCell>
+        <mxCell id="D3" value="음성대조 · 혼재 카탈로그&#xa;동일 창 타 공시 · 무관 결과 지표&#xa;합성 이벤트(만기·리밸런스·락업)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;fontSize=12;boundedLbl=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1260" width="380" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="D4" value="mechanism_registry&#xa;edge_instance · amendment&#xa;append-only" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;boundedLbl=1;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="1580" width="380" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L2" value="가설 세션 × 3&#xa;병렬 · 독립 · 서로 못 봄&#xa;sql() 자유 질의 가능" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="470" width="380" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="L3" value="완비 라벨링 세션&#xa;공통원인 열거 · 배정기제 선언&#xa;sql() 로 교란 후보 확인" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="630" width="380" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="L5" value="판별 설계 세션&#xa;가설쌍 판별 + U 소거 검정&#xa;sql() 로 실행 가능성 확인" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="950" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="N1" value="폐쇄 불변식 — 이 셋이 그래프를 세계 진술로 만든다&#xa;&#xa;① 회계 폐쇄  설명 대상의 합이 맞아야 한다 (P0 → P8 예산 보존)&#xa;② 교란 폐쇄  그린 변수의 공통원인은 전수 선언, 선언된 U 는 P5 에서 소거되거나 P8 에 미소거로 남는다&#xa;③ 처분 폐쇄  검토한 후보에 침묵 없음 — 기여 · 비기여 · 미결 중 하나로 반드시 판정된다&#xa;&#xa;어휘는 열고(P2 무제한), 회계 · 교란 · 처분만 닫는다." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=16;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1750" width="1280" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e01" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P0" target="P1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P1" target="P2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P2" target="P3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e34" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P3" target="P4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e45" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P4" target="P5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e56" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P5" target="P6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e67" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P6" target="P7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e78" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P7" target="P8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e89" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="P8" target="P9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ek1" value="기각" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.25;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="P1" target="K1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#666666;" edge="1" parent="1" source="D1" target="P1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed2a" value="sql()" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#666666;fontColor=#666666;" edge="1" parent="1" source="D2" target="P2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed2b" value="sql()" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.37;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#666666;fontColor=#666666;" edge="1" parent="1" source="D2" target="P3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed2c" value="sql()" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.91;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#d79b00;fontColor=#d79b00;" edge="1" parent="1" source="D2" target="P5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#666666;" edge="1" parent="1" source="D3" target="P7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#82b366;" edge="1" parent="1" source="P9" target="D4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="el2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#9673a6;" edge="1" parent="1" source="P2" target="L2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="el3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#9673a6;" edge="1" parent="1" source="P3" target="L3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="el5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#d79b00;" edge="1" parent="1" source="P5" target="L5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="eU1" value="선언된 U 전량" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.85;exitDx=0;exitDy=0;entryX=1;entryY=0.15;entryDx=0;entryDy=0;strokeColor=#d79b00;strokeWidth=3;fontColor=#d79b00;fontStyle=1;" edge="1" parent="1" source="P3" target="P5">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1450" y="724" />
+              <mxPoint x="1450" y="967" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eU2" value="소거 실패 U → 미소거 확정" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.85;exitDx=0;exitDy=0;entryX=1;entryY=0.2;entryDx=0;entryDy=0;strokeColor=#d79b00;strokeWidth=3;fontColor=#d79b00;fontStyle=1;" edge="1" parent="1" source="P5" target="P8">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1470" y="1044" />
+              <mxPoint x="1470" y="1452" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eB" value="예산 · estimand 대조" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;dashed=1;strokeColor=#82b366;fontColor=#82b366;" edge="1" parent="1" source="P0" target="P8">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="550" y="232" />
+              <mxPoint x="550" y="1457" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
