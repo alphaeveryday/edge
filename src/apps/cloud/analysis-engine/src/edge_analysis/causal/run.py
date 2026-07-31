@@ -238,9 +238,17 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     proofs: list[V.EdgeProof] = []
     for d in prop.designs:
         p = V.plan(prop.nodes, prop.edges, d, prior=_prior_for(d, prop.nodes, screened))
-        if p["strategy"] == "none" and not sandbox:
-            proofs.append(_as_proof(EdgeResult(
-                design=d, gate_fail=["식별 전략 없음 (조정 불가·도구 없음)"]), p))
+        if p["strategy"] in ("none", "iv") and not sandbox:
+            # 축약 추정량은 고정 OLS + 라벨 순열이고 `p["iv"]` 를 쓰지 않는다. IV 설계를
+            # 그대로 통과시키면 조정으로 식별되지 않는 간선이 OLS 로 추정되고, 감사에는
+            # `strategy="iv"` 로 남는다 - **편향을 숨긴 채 검증됐다고 말하는 것**이다.
+            why = ("식별 전략 없음 (조정 불가·도구 없음)" if p["strategy"] == "none"
+                   else "IV 식별이 필요하다 - 축약 경로는 2SLS 를 실행하지 않는다 "
+                        "(CAUSAL_SANDBOX_ENABLED=true 로 검정 에이전트를 켜라)")
+            # 식별 전략을 **계획에서** 싣는다 - `EdgeResult` 기본값(adjustment)이 그대로
+            # 감사에 남으면 "IV 가 필요했다"는 사실이 사라지고 감사가 거짓이 된다.
+            proofs.append(_as_proof(EdgeResult(design=d, gate_fail=[why],
+                                               strategy=p["strategy"], iv=list(p["iv"])), p))
             continue
         if sandbox:
             # 식별이 안 서는 간선도 **검정 에이전트에게 준다** - 축약형·부분식별로 내려갈 수
@@ -262,7 +270,13 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     # 공분산과 정합하나"를 묻는 타입 수준 도구다. 우리 물음은 "오늘 이 움직임을 어디까지
     # 설명했나"이고, 그 답은 예산 정합이다 - 훨씬 싸고 훨씬 날카롭다.
     routes = agents.measured(prop, proofs).routes()
-    budget = chain.budget(routes, residual)
+    # 검정 표본은 **종목 단위**이고 잔차는 ETF 단위다. 환산하지 않고 비교하면 비중 작은
+    # 큰 효과가 한도를 넘겨 기각되고(6% 종목 효과 vs 4% ETF 잔차) 그 반대도 생긴다.
+    # 경로의 처치 단위가 ETF 에서 갖는 비중을 계수로 넘긴다 - 못 구하면 미측정이다.
+    by_edge = {(x.design.src, x.design.dst): x for x in proofs}
+    weights = {i: _weight_of(cd, etf_instrument_id, trade_date, path, by_edge)
+               for i, path in enumerate(routes)}
+    budget = chain.budget(routes, residual, weights=weights)
     log("causal.budget", share=round(budget["share"], 3),
         over=budget["over_budget"], measured=budget["n_measured"],
         blocked=budget["n_blocked"])
@@ -284,28 +298,14 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     # 식별에 필요한 구조일 뿐 "원인"이 아니다 - 실측 스모크에서 "사전 모멘텀이 원인으로
     # 확인됐습니다" 가 나왔다.
     #
-    # **결과에 직결된 간선만 보면 여러 단계 사슬이 침묵한다.** 통계 간선이 상류에 있고
-    # (사건 -> 매출 변화) 하류가 연역이면(매출 변화 -> ETF 수익률), 예산은 경로를 계산하고
-    # 감사에는 증명이 남는데 문장은 "확인된 원인이 없습니다"가 된다. 측정된 경로를 원인으로
-    # 쓴다 - 경로의 통계 간선이 그 경로의 검정 근거다.
+    # **경로가 단위다.** 결과에 직결된 간선의 `effect` 만 쓰면 두 가지가 틀린다: 상류
+    # 연역 홉이나 앵커가 크기를 바꾸는데 그게 반영되지 않고(부호까지 뒤집힐 수 있다),
+    # 통계 간선이 상류인 사슬은 아예 침묵한다 - 쪼갤수록 침묵하는 역설이었다. 측정된
+    # 경로를 먼저 말하고, 남은 증명(기각·미측정)은 그 뒤에 사유와 함께 싣는다.
     outcome = {prop.target} if prop.target else {d.dst for d in prop.designs}
-    by_edge = {(x.design.src, x.design.dst): x for x in proofs}
     spoken: set[tuple[str, str]] = set()
-    for r in [x for x in proofs if x.design.dst in outcome]:
-        spoken.add((r.design.src, r.design.dst))
-        share = _share_of(cd, etf_instrument_id, trade_date, r)
-        contribution = (share * r.effect) if (share and r.effect is not None) else None
-        against = _countervailing(contribution if contribution is not None else r.effect,
-                                  residual)
-        findings.append(EdgeFinding(
-            cause=r.design.cause_label, because=r.design.because,
-            effect=r.effect, p=r.p, n=r.n, share=share,
-            contribution=contribution,
-            survived=r.significant and not budget["over_budget"] and not against,
-            killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)
-            or (_COUNTER if against else None)))
-    for path, chain_proofs in _upstream(routes, by_edge, spoken):
-        iv = path.predict()
+    for i, path, chain_proofs in _measured_routes(routes, by_edge, spoken):
+        iv = chain._scaled(path.predict(), weights.get(i, 1.0))
         contribution = iv.mid if iv else None
         against = _countervailing(contribution, residual)
         # **가장 약한 칸이 경로를 정한다.** p 는 최댓값(가장 약한 증거)을, n 은 최솟값을 쓴다 -
@@ -313,12 +313,23 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         weakest = max(chain_proofs, key=lambda x: (x.p is None, x.p or 0.0))
         findings.append(EdgeFinding(
             cause=prop.label(path.cause), because=weakest.design.because,
-            effect=contribution, p=weakest.p, n=min(x.n for x in chain_proofs), share=None,
-            contribution=contribution,
+            effect=weakest.effect, p=weakest.p, n=min(x.n for x in chain_proofs),
+            share=weights.get(i), contribution=contribution,
             survived=(all(x.significant for x in chain_proofs)
                       and not budget["over_budget"] and not against),
             killed_by=_killed(weakest) or (budget["reason"] if budget["over_budget"] else None)
             or (_COUNTER if against else None)))
+    for r in [x for x in proofs if x.design.dst in outcome
+              and (x.design.src, x.design.dst) not in spoken]:
+        # 경로로 말하지 못한 증명 = 기각됐거나 사슬이 안 닫힌 것. 사유를 남긴다.
+        share = _share_of(cd, etf_instrument_id, trade_date, r)
+        findings.append(EdgeFinding(
+            cause=r.design.cause_label, because=r.design.because,
+            effect=r.effect, p=r.p, n=r.n, share=share,
+            contribution=(share * r.effect) if (share and r.effect is not None) else None,
+            survived=False,
+            killed_by=_killed(r) or (budget["reason"] if budget["over_budget"] else None)
+            or "사슬이 결과까지 닫히지 않았습니다 (경로 예측 없음)"))
     return narrate(CausalReport(
         etf_name=etf_name, trade_date=trade_date.isoformat(), observed=observed,
         residual=residual, route_code=route_code, top_contributors=contributors,
@@ -331,30 +342,42 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
         data_requests=_requests(proofs, prop)))
 
 
-def _upstream(routes: list, by_edge: dict, spoken: set) -> list[tuple]:
-    """측정된 경로 중 **결과에 직결된 간선으로 이미 말한 것이 아닌** 것들.
+def _measured_routes(routes: list, by_edge: dict, spoken: set) -> list[tuple]:
+    """측정된 경로와 그 경로의 통계 증명들. **경로 하나가 문장 하나다.**
 
-    여러 단계 사슬(사건 -> 매출 -> 수익률)에서 통계 간선은 상류에 있다. 그 경로의 검정
-    근거는 그 통계 간선의 증명이고, 크기는 사슬 곱(`path.predict()`)이다. 통계 간선이
-    없는 경로(전부 연역)는 검정 근거가 없어 문장에 쓰지 않는다 - 감사 블록에만 남는다.
-
-    통계 간선이 **둘 이상이면 전부** 돌려준다 - 하나만 보고 경로를 살리면 사건→매출은
+    통계 간선이 없는 경로(전부 연역)는 검정 근거가 없어 문장에 쓰지 않는다 - 감사 블록에만
+    남는다. 통계 간선이 둘 이상이면 **전부** 돌려준다: 하나만 보고 살리면 사건→매출은
     유의한데 매출→수익률이 p≥0.05 인 경로가 "확인된 원인"으로 게시된다. 사슬은 가장 약한
     칸만큼만 강하다.
     """
     out = []
-    for path in routes:
+    for i, path in enumerate(routes):
         if not path.measured:
             continue
         stat = [(e.src, e.dst) for e in path.edges if e.kind == "statistical"]
         if not stat or any(k in spoken for k in stat):
             continue
-        proofs = [by_edge[k] for k in stat if k in by_edge]
-        if len(proofs) != len(stat):
+        chain_proofs = [by_edge[k] for k in stat if k in by_edge]
+        if len(chain_proofs) != len(stat):
             continue          # 증명이 빠진 칸이 있다 - 경로를 원인으로 쓸 수 없다
         spoken.update(stat)
-        out.append((path, proofs))
+        out.append((i, path, chain_proofs))
     return out
+
+
+def _weight_of(cd, etf_instrument_id: str, trade_date: date, path, by_edge: dict):
+    """경로의 **셀 스케일 환산 계수** = 처치 단위가 ETF 에서 갖는 비중.
+
+    검정은 종목 단위로 재고 예산은 ETF 잔차와 비교한다. 이 계수가 없으면 두 단위가 섞여
+    비중 작은 큰 효과가 한도를 넘겨 기각된다. 못 구하면 `None` - 결측을 1 로 대체하면
+    그 경로가 조용히 부풀어 정상 그래프를 죽인다.
+    """
+    stat = [(e.src, e.dst) for e in path.edges if e.kind == "statistical"]
+    proofs = [by_edge[k] for k in stat if k in by_edge]
+    if not proofs:
+        return None
+    # 여러 통계 간선이 있으면 **뿌리 쪽** 처치가 셀에서 갖는 비중이 환산 계수다.
+    return _share_of(cd, etf_instrument_id, trade_date, proofs[0])
 
 
 _COUNTER = ("설명해야 할 움직임과 **반대 방향**으로 밀었습니다 - 이 경로는 그 움직임을 "

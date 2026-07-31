@@ -43,15 +43,37 @@ def test_negative_elasticity_does_not_silently_flip_the_sign():
     assert (both.lo, both.hi) == (-4.0, 6.0)
 
 
-def test_a_chain_multiplies_from_the_event_size_not_from_one():
-    """절대 크기는 **사건 노드 한 곳**에서만 들어온다 - 나머지는 배수다."""
+def test_a_deductive_chain_multiplies_from_the_event_size_not_from_one():
+    """연역 사슬의 절대 크기는 **사건 노드 한 곳**에서만 들어온다 - 나머지는 배수다."""
     edges = [_edge("EVT@t-1", "M@t0", eff=(0.5, 0.5)),
-             _edge("M@t0", "AR@t0", kind="statistical", eff=(0.2, 0.2))]
+             _edge("M@t0", "AR@t0", kind="identity", eff=(0.2, 0.2))]
     ps = C.paths(edges, "AR@t0", {"EVT@t-1": C.Interval(0.30, 0.30)})
 
     assert len(ps) == 1
     assert ps[0].predict() == C.Interval(0.03, 0.03)     # 0.30 × 0.5 × 0.2
+    assert ps[0].kinds == "e→i"
+
+
+def test_a_statistical_estimate_sets_the_scale_and_the_anchor_does_not_rescale_it():
+    """통계 추정치는 **절대값**이다 - 앵커를 다시 곱하면 같은 크기를 두 번 센다.
+
+    WHY: 검정은 그 종류의 실제 사건들로 코호트를 만들어 처치·대조 초과수익 차이를 잰다.
+    사건이 실제로 얼마였는지가 추정치 안에 이미 있다. 앵커(배당 30%)를 곱하면 6% 초과수익이
+    1.8% 로 줄고, 관계없는 노드의 `value` 가 경로를 조용히 부풀리거나 줄인다 - 예산이 그
+    수로 게시·기각을 정하므로 스케일이 갈리면 안 된다. 통계 간선 **뒤의** 연역 배수는
+    측정된 양을 다른 단위로 옮기는 변환이라 그대로 적용한다.
+    """
+    edges = [_edge("EVT@t-1", "M@t0", eff=(0.5, 0.5)),
+             _edge("M@t0", "AR@t0", kind="statistical", eff=(0.2, 0.2))]
+    ps = C.paths(edges, "AR@t0", {"EVT@t-1": C.Interval(0.30, 0.30)})
+
+    assert ps[0].predict() == C.Interval(0.2, 0.2)       # 앵커·상류 배수를 곱하지 않는다
     assert ps[0].kinds == "e→s"
+
+    after = [_edge("EVT@t-1", "M@t0", kind="statistical", eff=(0.2, 0.2)),
+             _edge("M@t0", "AR@t0", kind="identity", eff=(0.5, 0.5))]
+    ps2 = C.paths(after, "AR@t0", {"EVT@t-1": C.Interval(0.30, 0.30)})
+    assert ps2[0].predict() == C.Interval(0.1, 0.1)      # 0.2 × 0.5 (뒤의 변환은 적용)
 
 
 def test_an_unmeasured_step_yields_no_prediction_and_names_what_it_needs():
@@ -115,3 +137,35 @@ def test_the_widest_step_is_named_so_the_next_collection_knows_where_to_go():
     p = C.paths(edges, "VALUE@t0", {"EVT@t-1": C.Interval(0.1, 0.1)})[0]
 
     assert p.widest().says.startswith("개선이 몇 년")
+
+
+def test_the_cap_is_computed_on_same_direction_attribution_only():
+    """부호를 섞어 더하면 **반대 방향 경로가 한도를 보조한다.**
+
+    WHY: +2% 잔차에 +5%·-3% 두 경로가 있으면 합은 +2% 라 통과하고, 뒤에서 -3% 가 상쇄
+    요인으로 기각된 뒤 +5% 하나만 남아 잔차를 혼자 넘긴 채 "확인된 원인"으로 게시된다.
+    한도는 잔차와 같은 방향인 몫으로 잰다.
+    """
+    up = C.Path(cause="A", edges=[_edge("A@t0", "AR@t0", kind="statistical",
+                                        eff=(0.05, 0.05))])
+    down = C.Path(cause="B", edges=[_edge("B@t0", "AR@t0", kind="statistical",
+                                         eff=(-0.03, -0.03))])
+
+    got = C.budget([up, down], 0.02)
+
+    assert got["over_budget"] is True, "상쇄 경로가 한도를 보조했다"
+    assert "같은 방향" in got["reason"]
+
+
+def test_a_missing_scale_weight_counts_as_unmeasured_not_as_one():
+    """환산 계수 결측을 1 로 대체하면 그 경로가 조용히 부풀어 정상 그래프를 죽인다."""
+    p = C.Path(cause="A", edges=[_edge("A@t0", "AR@t0", kind="statistical",
+                                       eff=(0.06, 0.06))])
+
+    weighted = C.budget([p], 0.0421, weights={0: 0.24})
+    missing = C.budget([p], 0.0421, weights={0: None})
+
+    # 종목 6% × 비중 24% = 1.44%p → ETF 잔차 4.21% 안이다(환산 없으면 초과로 기각된다).
+    assert weighted["over_budget"] is False
+    assert weighted["explained"].mid == pytest.approx(0.0144)
+    assert missing["n_measured"] == 0 and missing["n_blocked"] == 1

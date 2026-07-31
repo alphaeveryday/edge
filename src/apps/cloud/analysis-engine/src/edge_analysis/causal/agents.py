@@ -293,18 +293,25 @@ def parse(out: dict) -> Proposal:
 
     anchors: dict[str, Interval] = {}
     for nid, spec in nodes.items():
-        if isinstance(spec, dict):
-            got = _iv(spec.get("value"), f"노드 {nid} value")
-            if got:
-                anchors[nid] = got
-            # `events` 는 접지 검사(graph.validate)가 **순회하고 집합 원소로 쓴다.**
-            # 스칼라·unhashable 원소가 그대로 내려가면 TypeError 로 새어 되먹임을
-            # 우회한다 - 게이트가 거르는 위반은 전부 PipelineError 여야 한다(ALPHA-633).
-            for x in _seq(spec.get("events"), f"노드 {nid} events"):
-                if not isinstance(x, str):
-                    raise PipelineError(
-                        f"노드 {nid} events 원소가 문자열이 아니다 - "
-                        f"{type(x).__name__}. 사건 id 는 브리프의 event_id 다")
+        # **비객체 노드 명세를 건너뛰지 않는다.** 건너뛰면 `nodes: {"A@t0": "..."}` 가
+        # Proposal 로 살아 나가고, `graph.validate` 의 접지 순회가 `(m or {}).get(...)` 에서
+        # AttributeError 로 새어 되먹임 경로(`except PipelineError`)를 우회한다 - 깨진 제안
+        # 하나가 유니버스 전체 런을 죽인다(ALPHA-633 과 같은 비대칭).
+        if not isinstance(spec, dict):
+            raise PipelineError(
+                f"노드 {nid} 명세가 객체가 아니다 - {type(spec).__name__}. "
+                "says·observed 를 담은 객체여야 한다")
+        got = _iv(spec.get("value"), f"노드 {nid} value")
+        if got:
+            anchors[nid] = got
+        # `events` 는 접지 검사(graph.validate)가 **순회하고 집합 원소로 쓴다.**
+        # 스칼라·unhashable 원소가 그대로 내려가면 TypeError 로 새어 되먹임을
+        # 우회한다 - 게이트가 거르는 위반은 전부 PipelineError 여야 한다(ALPHA-633).
+        for x in _seq(spec.get("events"), f"노드 {nid} events"):
+            if not isinstance(x, str):
+                raise PipelineError(
+                    f"노드 {nid} events 원소가 문자열이 아니다 - "
+                    f"{type(x).__name__}. 사건 id 는 브리프의 event_id 다")
 
     chain: list[Edge] = []
     reverse: dict[tuple[str, str], str] = {}

@@ -41,10 +41,13 @@ from . import stats as S
 EXEC_TIMEOUT = 120
 MAX_CODE_CHARS = 8000
 
-# 계산에 필요한 것만 연다. numpy 는 내부 모듈을 지연 로드하므로 접두사로 허용해야 한다 -
-# 전면 차단하면 np.mean 같은 게 조용히 깨진다.
-ALLOWED_MODULES = ("numpy", "math", "statistics", "itertools", "functools",
-                   "collections", "datetime", "random", "heapq", "bisect", "operator")
+# 계산에 필요한 것만 연다. **정확한 이름의 목록이다** - 최상위 접두사로 허용하면
+# `numpy.lib.format`(open_memmap)·`numpy.ctypeslib` 처럼 파일·FFI 에 닿는 하위 모듈이
+# 함께 열린다. numpy 는 자기 내부를 알아서 로드하므로 사용자 코드가 하위 모듈을 직접
+# import 할 이유가 없다(np.linalg 는 이미 속성으로 닿는다).
+ALLOWED_IMPORTS = ("numpy", "numpy.linalg", "numpy.random", "math", "statistics",
+                   "itertools", "functools", "collections", "datetime", "random",
+                   "heapq", "bisect", "operator")
 # **반사(reflection) 빌트인을 넣지 않는다.** `getattr`·`type`·`object` 가 있으면 `__` 문자열
 # 검사를 우회해 던더에 닿는다(`getattr(x, '_'*2 + 'class' + '_'*2)`). 통계 코드에 필요한
 # 것도 아니다 - 없애는 것이 검사를 정교하게 만드는 것보다 싸고 확실하다.
@@ -260,9 +263,12 @@ def _as_date(v, default: date) -> date:
 def namespace(tool_map: dict) -> dict:
     """제한 네임스페이스. 도구 원본을 `_TOOLS` 에 숨겨 두고 턴마다 복원한다."""
     def _imp(name, *a, **k):
-        if name.split(".")[0] in ALLOWED_MODULES:
+        # **하위 모듈까지 허용목록으로 본다.** 최상위만 보면 `numpy.lib.format.open_memmap`
+        # 처럼 파일을 여는 API 가 금지 이름·던더·open 없이 들어온다(`numpy.ctypeslib` 도
+        # 같은 부류다). 계산에 필요한 것은 numpy 본체와 linalg·random 뿐이다.
+        if name in ALLOWED_IMPORTS:
             return builtins.__import__(name, *a, **k)
-        raise ImportError(f"'{name}' 는 막혀 있다. 열린 것: {', '.join(ALLOWED_MODULES)}. "
+        raise ImportError(f"'{name}' 는 막혀 있다. 열린 것: {', '.join(ALLOWED_IMPORTS)}. "
                           "np(numpy)·dt(datetime) 는 이미 이름으로 있다.")
 
     safe = {k: getattr(builtins, k) for k in SAFE_BUILTINS if hasattr(builtins, k)}

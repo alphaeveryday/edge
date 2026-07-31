@@ -688,6 +688,37 @@ def test_sandbox_off_falls_back_to_the_reduced_path_without_calling_the_verifier
     assert raw["causal"]["proofs"][0]["code"] == []
 
 
+def test_the_reduced_path_refuses_an_iv_design_instead_of_running_ols(monkeypatch):
+    """축약 경로는 2SLS 를 실행하지 않는다 - IV 설계를 통과시키면 **편향을 숨긴다.**
+
+    WHY: 고정 OLS + 라벨 순열이 `p["iv"]` 를 쓰지 않으므로, 조정으로 식별되지 않는 간선이
+    OLS 로 추정되고 감사에는 `strategy="iv"` 로 남는다 - 검증됐다고 말하면서 편향을 실은
+    수를 게시하는 것이다. 못 하는 일은 못 한다고 말해야 한다.
+
+    식별 결과를 직접 갈아 끼운다: IV 로 떨어지는 그래프를 픽스처로 만들면 `identify` 의
+    현재 판정에 테스트가 묶여, 판정이 바뀌는 순간 이 방어가 **조용히 공허해진다**.
+    """
+    from edge_analysis.causal import run as R
+
+    real_plan = R.V.plan
+
+    def iv_plan(*a, **k):
+        return {**real_plan(*a, **k), "strategy": "iv", "iv": ["Z@t-1"],
+                "identified_by_adjustment": False}
+
+    monkeypatch.setattr(R.V, "plan", iv_plan)
+    client = FakeClient(PROPOSAL_OK)
+
+    raw = _explain(FakeCausalData(), client, candidates=_candidates(SHARE), sandbox=False)
+
+    assert client.verifies == 0
+    audited = raw["causal"]["proofs"]
+    assert audited and all(x["strategy"] == "iv" for x in audited)
+    for x in audited:
+        assert x["p"] is None, "IV 설계가 축약 경로에서 OLS 로 추정됐다"
+        assert any("IV" in g for g in x["gate_fail"]), x["gate_fail"]
+    assert raw["causal"]["survived"] == []
+
 # --------------------------------------------------------------------------- #
 # 6 PIT — as_of 없는 조회는 스텁이 죽인다
 # --------------------------------------------------------------------------- #

@@ -153,11 +153,28 @@ class Path:
         return "→".join(e.kind[0] for e in self.edges)
 
     def predict(self) -> Interval | None:
-        """앵커에서 시작해 사슬을 따라 배수를 곱한다. 한 칸이라도 비면 예측이 없다."""
+        """경로의 예측 크기. 한 칸이라도 비면 예측이 없다.
+
+        연역 사슬은 **앵커에서 시작해** 배수를 곱한다 - 절대 크기가 사건 노드의 `value` 한
+        곳에서만 들어오는 규약이다.
+
+        통계 간선이 있으면 **그 추정치가 스케일을 정한다.** 검정은 그 종류의 실제 사건들로
+        코호트를 만들어 처치·대조 차이를 재므로, 사건이 실제로 얼마였는지가 이미 추정치
+        안에 있다. 앵커를 다시 곱하면 같은 크기를 두 번 세고(배당 30% × 초과수익 6%),
+        관계없는 노드의 `value` 가 경로를 조용히 줄이거나 부풀린다. 통계 간선 **뒤의**
+        연역 배수는 그대로 적용한다 - 그건 측정된 양을 다른 단위로 옮기는 변환이다.
+        """
         if not self.measured:
             return None
-        out = self.anchor
-        for e in self.edges:
+        last = max((i for i, e in enumerate(self.edges) if e.kind == "statistical"),
+                   default=-1)
+        if last < 0:
+            out = self.anchor
+            rest = self.edges
+        else:
+            out = self.edges[last].effect
+            rest = self.edges[last + 1:]
+        for e in rest:
             out = multiply(out, e.effect)   # type: ignore[arg-type]
         return out
 
@@ -203,24 +220,38 @@ def paths(edges: list[Edge], target: str,
     return out
 
 
-def budget(ps: list[Path], residual: float, *, tol: float = 0.15) -> dict:
+def budget(ps: list[Path], residual: float, *, tol: float = 0.15,
+           weights: dict[int, float | None] | None = None) -> dict:
     """예산 정합. **합이 잔차를 넘으면 그래프가 틀렸다.**
 
     타입 수준 모형에서는 여러 원인이 각자 유의미해도 모순이 아니다. 귀속에서는 모순이다
     - 같은 한 움직임을 나눠 갖기 때문이다. 이 비대칭이 바텀업 그래프가 가진 가장 값싼
     기각 경로이고, 카이제곱 적합도가 못 하는 일이다.
 
+    `weights[i]` 는 경로 i 의 **셀 스케일 환산 계수**다(처치 단위가 ETF 에서 갖는 비중).
+    검정 표본은 종목 단위이고 잔차는 ETF 단위라, 환산하지 않고 비교하면 비중 작은 큰 효과가
+    한도를 넘겨 기각되고(6% 종목 효과 vs 4% ETF 잔차) 그 반대도 생긴다. 계수를 못 구한
+    경로는 **측정으로 세지 않는다** - 결측을 1 로 대체하면 그 자리가 조용히 틀린다.
+
+    한도 검사는 **잔차와 같은 방향인 몫**으로 한다. 부호를 섞어 더하면 반대 방향 경로가
+    한도를 보조해 준다 - +2% 잔차에 +5%·-3% 두 경로가 있으면 합이 +2% 라 통과하고, 뒤에서
+    -3% 가 상쇄 요인으로 기각된 뒤 +5% 만 남아 잔차를 혼자 넘긴 채 게시된다.
+
     `tol` 은 잔차 자체의 측정 오차(요인 분해·체결가 차이)를 감안한 여유다. 이걸 0 으로
     두면 정상 그래프가 반올림으로 기각된다.
     """
-    got = [(p, p.predict()) for p in ps]
-    done = [(p, iv) for p, iv in got if iv is not None]
-    blocked = [p for p, iv in got if iv is None]
+    w = weights or {}
+    got = [(i, p, _scaled(p.predict(), w.get(i, 1.0) if weights else 1.0))
+           for i, p in enumerate(ps)]
+    done = [(p, iv) for _i, p, iv in got if iv is not None]
+    blocked = [p for _i, p, iv in got if iv is None]
     lo = sum(iv.lo for _, iv in done)
     hi = sum(iv.hi for _, iv in done)
     mid = sum(iv.mid for _, iv in done)
+    same = sum(iv.mid for _, iv in done
+               if residual == 0.0 or (iv.mid > 0) == (residual > 0))
     cap = abs(residual) * (1 + tol)
-    over = abs(mid) > cap and cap > 0
+    over = abs(same) > cap and cap > 0
     share = (abs(mid) / abs(residual)) if residual else 0.0
     return {"residual": residual,
             "explained": Interval(min(lo, hi), max(lo, hi)),
@@ -231,8 +262,15 @@ def budget(ps: list[Path], residual: float, *, tol: float = 0.15) -> dict:
             "blocked": [{"cause": p.cause,
                          "needs": [e.needs or f"{e.src}→{e.dst}" for e in p.blocked]}
                         for p in blocked],
-            "reason": (f"귀속 합 {mid:+.2%} 가 잔차 {residual:+.2%} 를 넘는다 "
+            "reason": (f"같은 방향 귀속 합 {same:+.2%} 가 잔차 {residual:+.2%} 를 넘는다 "
                        f"(여유 {tol:.0%} 포함 한도 {cap:.2%})") if over else ""}
+
+
+def _scaled(iv: Interval | None, weight: float | None) -> Interval | None:
+    """경로 예측을 셀 스케일로. 계수가 없으면 **예측이 없다**(결측 != 1)."""
+    if iv is None or weight is None:
+        return None
+    return Interval(iv.lo * weight, iv.hi * weight)
 
 
 def verdict(iv: Interval | None, observed: float, daily_vol: float | None) -> str:

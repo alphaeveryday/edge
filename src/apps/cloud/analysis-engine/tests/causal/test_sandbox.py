@@ -111,6 +111,23 @@ def test_a_synthesized_dunder_name_cannot_reach_bound_internals():
         assert cd.secret not in out, attempt
 
 
+def test_file_capable_numpy_submodules_cannot_be_imported():
+    """최상위 이름만 허용하면 **하위 모듈로 파일을 연다.**
+
+    WHY: `import numpy.lib.format as fmt; fmt.open_memmap(...)` 는 `open` 도 던더도 금지
+    속성도 쓰지 않고 파일을 만든다(`numpy.ctypeslib` 은 FFI 다). 샌드박스는 프롬프트가
+    섞인 코드를 기본값으로 실행하므로 허용목록은 **정확한 이름**이어야 한다.
+    """
+    ns, _ = _ns()
+
+    for attempt in ("import numpy.lib.format as fmt",
+                    "import numpy.ctypeslib as c",
+                    "from numpy.lib import format"):
+        assert "막혀 있다" in SB.observe(attempt, ns), attempt
+    # 계산에 쓰는 것은 그대로 열려 있다.
+    assert "3" in SB.observe("import numpy.linalg as la\nprint(1 + 2)", ns)
+
+
 def test_blocked_imports_and_missing_builtins_are_observations_not_crashes():
     ns, _ = _ns()
 

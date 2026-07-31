@@ -183,3 +183,18 @@ def test_a_statistical_effect_typed_by_the_model_is_dropped():
     # 버렸으므로 검정 결과가 그 칸을 채울 수 있다.
     out = A.measured(prop, [_Proof(prop.designs[0], 0.05)])
     assert out.chain[0].effect.mid == pytest.approx(0.05)
+
+
+def test_a_non_object_node_spec_is_a_contract_violation_not_a_crash():
+    """비객체 노드 명세를 건너뛰면 **런이 죽는다.**
+
+    WHY: 건너뛰면 그 제안이 Proposal 로 살아 나가고, `graph.validate` 의 접지 순회가
+    `(m or {}).get(...)` 에서 AttributeError 로 샌다. 그건 `except PipelineError` 되먹임
+    경로 밖이라 깨진 제안 하나가 유니버스 전체 런을 FAILED 시킨다(ALPHA-633 과 같은 비대칭).
+    """
+    for bad in ("설명 문자열", ["events"], 7):
+        out = _base([{"from": "M@t0", "to": "AR@t0", "kind": "statistical",
+                      "says": "귀속", "exposure": "x"}])
+        out["nodes"]["M@t0"] = bad
+        with pytest.raises(PipelineError, match="객체가 아니다"):
+            A.parse(out)
