@@ -96,6 +96,28 @@ class TestPriceDeterminism:
         assert kst_result.result_checksum == utc_result.result_checksum
         assert [r["open"] for r in kst_records] == [r["open"] for r in utc_records]
 
+    def test_unit_order_does_not_change_checksum(self):
+        # universe_hash 가 순서 무관이듯 window 데이터 identity 도 순서 무관이어야 한다 —
+        # 같은 멤버십의 다른 순서가 다른 checksum 이면 허위 correction 이 생긴다
+        run_id, session_id = uuid4(), uuid4()
+        request = make_request(run_id, session_id)
+        shuffled = request.model_copy(update={"unit_ids": tuple(reversed(request.unit_ids))})
+        collector = FakePriceCollector(scenario("price_normal.json"), seed=42)
+        original, _, _ = collector.collect(request, NOW)
+        reordered, _, _ = collector.collect(shuffled, NOW)
+        assert original.result_checksum == reordered.result_checksum
+
+    def test_checksum_derives_from_data_not_generation(self):
+        # 값이 같은 재실행(generation 만 증가)은 같은 checksum 이어야 한다 — 이게 깨지면
+        # "같은 checksum → artifact 재사용·generation 불변" 판정(계획 §8)이 성립 안 한다
+        request = make_request(uuid4(), uuid4())
+        first, _, _ = FakePriceCollector(scenario("price_normal.json"), seed=42).collect(
+            request, NOW
+        )
+        rerun, _, _ = FakePriceCollector({"generation": 2}, seed=42).collect(request, NOW)
+        assert rerun.generation == 2
+        assert first.result_checksum == rerun.result_checksum
+
 
 class TestPriceScenarioValidation:
     def test_typo_key_fails_loud(self):
@@ -142,11 +164,13 @@ class TestPriceScenarioValidation:
             )
 
     def test_correction_with_empty_units_fails_loud(self):
-        # 빈 unit_ids 는 generation/delta 가드를 모두 우회한다
+        # 빈 unit_ids 는 generation/delta 가드를 모두 우회한다 ({} 블록 포함)
         with pytest.raises(ValueError, match="unit_ids"):
             FakePriceCollector(
                 {"generation": 2, "correction": {"unit_ids": [], "close_delta": 7}}, seed=1
             )
+        with pytest.raises(ValueError, match="unit_ids"):
+            FakePriceCollector({"generation": 2, "correction": {}}, seed=1)
 
     def test_correction_overlapping_missing_fails_loud(self):
         # missing unit 은 bar 를 안 만드니 정정이 물리적으로 불가능하다

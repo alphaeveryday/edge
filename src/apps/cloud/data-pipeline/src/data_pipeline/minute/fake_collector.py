@@ -79,8 +79,8 @@ class FakePriceCollector:
         self._no_trade = _id_set(scenario, "no_trade_unit_ids", "price")
         self._stale = _id_set(scenario, "stale_unit_ids", "price")
         self._correction_units = _id_set(correction, "unit_ids", "price.correction")
-        if correction and not self._correction_units:
-            # 빈 대상 correction 블록은 generation/delta 가드를 모두 우회한다
+        if "correction" in scenario and not self._correction_units:
+            # 빈/대상 없는 correction 블록({} 포함)은 generation/delta 가드를 모두 우회한다
             raise ValueError("correction 블록에 unit_ids 가 비어 있다")
         # 한 unit 이 두 역할이면 분기 순서가 시나리오 의미를 임의로 정한다 — 배타 강제.
         # correction 은 bar 를 만드는 unit 에만 의미가 있으므로 missing/no_trade 와 배타
@@ -152,7 +152,9 @@ class FakePriceCollector:
 
         received, no_trade, missing = [], [], []
         records: list[dict] = []
-        for unit_id in request.unit_ids:
+        # unit_id 정렬 순회 — 같은 멤버십을 다른 순서로 요청해도 records·checksum 이 같다
+        # (Universe.universe_hash 의 순서 무관 identity 와 같은 축)
+        for unit_id in sorted(request.unit_ids):
             if unit_id in self._missing:
                 missing.append(unit_id)
             elif unit_id in self._no_trade:
@@ -162,12 +164,14 @@ class FakePriceCollector:
                 records.append(self._bar(unit_id, request))
 
         manifest = {
-            "received": sorted(received),
-            "no_trade": sorted(no_trade),
-            "missing": sorted(missing),
+            "received": received,
+            "no_trade": no_trade,
+            "missing": missing,
         }
+        # checksum 은 **데이터에서만** 유도한다 — generation 이 들어가면 값이 같은
+        # 재실행이 다른 checksum 이 돼 "같은 checksum → generation 불변" 판정이 깨진다
         result_checksum = content_checksum(
-            [request.dataset, request.window_start, request.window_end, self._generation, records]
+            [request.dataset, request.window_start, request.window_end, records]
         )
         result = CollectionResult(
             status=DATA_VALID if not missing else DATA_INCOMPLETE,
