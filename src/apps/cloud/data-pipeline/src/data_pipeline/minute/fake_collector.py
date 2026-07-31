@@ -21,8 +21,8 @@ import hashlib
 from datetime import datetime
 from itertools import combinations
 
-from ..ops.states import DATA_INCOMPLETE, DATA_VALID
 from .models import CollectionRequest, CollectionResult, canonical_json, content_checksum
+from .states import WINDOW_INCOMPLETE, WINDOW_VALID
 
 
 def _digest(*parts: object) -> int:
@@ -177,7 +177,7 @@ class FakePriceCollector:
             [request.dataset, request.window_start, request.window_end, records]
         )
         result = CollectionResult(
-            status=DATA_VALID if not missing else DATA_INCOMPLETE,
+            status=WINDOW_VALID if not missing else WINDOW_INCOMPLETE,
             expected_count=len(request.unit_ids),
             succeeded_count=len(received) + len(no_trade),
             failed_count=len(missing),

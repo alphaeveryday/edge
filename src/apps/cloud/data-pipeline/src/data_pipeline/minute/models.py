@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from ..config.models import NonBlankStr
-from ..ops.states import DATA_STATUSES, DATA_VALID, DATA_VALID_EMPTY
+from .states import RESULT_STATUSES, WINDOW_VALID, WINDOW_VALID_EMPTY
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -126,16 +126,17 @@ class CollectionResult(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> CollectionResult:
-        if self.status not in DATA_STATUSES:
-            # ops/states.py 의 data_status 축만 허용 — 실행 축(SUCCEEDED 등)과 섞지 않는다
-            raise ValueError(f"status {self.status!r} 는 data_status 어휘가 아니다")
+        if self.status not in RESULT_STATUSES:
+            # 수집 결과 어휘만 허용 — 실행 축(SUCCEEDED)·원장 축(DUE/CLAIMED/MISSING)·
+            # ops 관측 축(UNKNOWN)이 오면 window CHECK 저장 전 여기서 터진다
+            raise ValueError(f"status {self.status!r} 는 수집 결과 어휘가 아니다")
         if self.succeeded_count + self.failed_count != self.expected_count:
             # 합이 모자라면 미분류 unit 이 조용히 사라진 것이다 — VALID 위장 금지
             raise ValueError(
                 f"unit 분류 불완전: succeeded({self.succeeded_count})+failed"
                 f"({self.failed_count}) != expected({self.expected_count})"
             )
-        if self.failed_count > 0 and self.status in (DATA_VALID, DATA_VALID_EMPTY):
+        if self.failed_count > 0 and self.status in (WINDOW_VALID, WINDOW_VALID_EMPTY):
             # 실패가 있는데 VALID 면 status 만 믿는 소비자가 누락 window 를 정상 확정한다
             raise ValueError(f"failed_count={self.failed_count} 인데 status={self.status}")
         return self

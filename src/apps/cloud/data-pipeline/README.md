@@ -34,8 +34,10 @@
 > (`load-price-triggers`, ALPHA-406→411) — 이 테이블의 **단일 writer** 이자 분석 SFN RDS
 > 영속 전제 체인의 첫 고리다.
 > **1분 가격·뉴스 파이프라인(장중)** 은 구현 중이다 — 현재는 공통 계약·fixture·결정적
-> fake collector·virtual clock 기반층(`minute/`, ALPHA-660)까지로, 실행 표면(CLI·스케줄·
-> vendor 실호출)은 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
+> fake collector·virtual clock 기반층(`minute/`, ALPHA-660)과 cloud 원장 스키마 6테이블
+> (session·window·news item/job·price job·outbox, ALPHA-661 — 상태 어휘는
+> `minute/states.py` 가 SQL CHECK 와 기계 동기화)까지로, 실행 표면(CLI·스케줄·vendor
+> 실호출)은 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
 
