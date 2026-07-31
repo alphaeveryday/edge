@@ -166,9 +166,12 @@ class JobLedger:
                     JOIN minute_ingestion_window w
                       ON w.session_id = j.session_id AND w.window_start = j.window_start
                     WHERE j.job_id = %s
+                    FOR UPDATE OF w
                     """,
                     (job_id,),
                 )
+                # FOR UPDATE OF w — 비잠금 검사는 correction commit 과 TOCTOU 다
+                # (2B 에서 확립한 원칙): 잠그면 이 tx 가 끝날 때까지 세대 증가가 블록된다
                 job_generation, window_generation = cur.fetchone()
                 if job_generation < window_generation:
                     # stale 거부는 여기 한 곳 — 낮은 세대 job 은 실행하지 않고 격리
@@ -176,7 +179,8 @@ class JobLedger:
                         """
                         UPDATE price_window_job
                         SET status = 'DEAD', error_code = 'STALE',
-                            completed_at = %s, updated_at = now()
+                            completed_at = %s, claimed_by = NULL,
+                            lease_expires_at = NULL, updated_at = now()
                         WHERE job_id = %s AND claimed_by = %s
                         """,
                         (now, job_id, worker_id),

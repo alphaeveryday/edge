@@ -8,7 +8,7 @@ SQL 경로 그대로 검증한다.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -51,15 +51,13 @@ class TestDeterministicIds:
             session_id="msn_x", window_start=WINDOW_START,
             generation=1, trigger_schema_version="trig-1",
         )
-        # 같은 순간의 UTC 표현도 같은 ID — canonical Z 정규화
+        # 같은 순간의 UTC 표현도 같은 ID — canonical Z 정규화가 깨지면 KST/UTC 호출자가
+        # 같은 window 에 다른 job 을 만든다
         second = price_job_id(
-            session_id="msn_x", window_start=WINDOW_START.astimezone(tz=None).astimezone(),
+            session_id="msn_x", window_start=WINDOW_START.astimezone(timezone.utc),
             generation=1, trigger_schema_version="trig-1",
         )
-        assert first == price_job_id(
-            session_id="msn_x", window_start=WINDOW_START,
-            generation=1, trigger_schema_version="trig-1",
-        )
+        assert first == second
         assert len(first) == 64 and first == first.lower()
 
     def test_different_generation_different_job(self):
