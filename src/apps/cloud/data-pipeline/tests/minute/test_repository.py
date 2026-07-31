@@ -424,3 +424,60 @@ class TestDrain:
     def test_ack_without_drain_request_is_noop(self):
         db, ledger, session_id, token = self._active()
         assert ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW) is False
+
+
+class TestDrainBoundary:
+    """DRAINED 는 EOD snapshot 경계다 — 그 뒤의 claim·fence 재획득·기록이 뚫리면
+    QC 가 찍은 snapshot 과 원장이 어긋난다."""
+
+    def _drained(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        ledger.request_drain(session_id=session_id, now=NOW)
+        ledger.ack_drain(session_id=session_id, fence_token=token, now=NOW)
+        return db, ledger, session_id, token
+
+    def test_no_claim_after_drained(self):
+        db, ledger, session_id, token = self._drained()
+        assert ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60,
+        ) is None
+
+    def test_no_fence_reacquire_after_drained(self):
+        db, ledger, session_id, token = self._drained()
+        later = NOW + timedelta(seconds=301)  # lease 만료 뒤에도
+        assert ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w2", now=later, lease_seconds=60
+        ) is None
+
+    def test_no_new_claim_during_draining_but_inflight_record_ok(self):
+        # DRAINING: 새 claim 은 금지, in-flight 기록은 허용 — 이게 뒤집히면 drain 이
+        # 수렴하지 않거나 마지막 window 가 유실된다
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        session_id, _ = plan(ledger)
+        token = ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+        )
+        claim = ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60, lane="recovery",
+        )
+        ledger.request_drain(session_id=session_id, now=NOW)
+        assert ledger.claim_due_window(
+            session_id=session_id, worker_id="w1", fence_token=token,
+            now=NOW, lease_seconds=60,
+        ) is None
+        assert ledger.record_window_outcome(
+            session_id=session_id, window_start=claim["window_start"],
+            worker_id="w1", fence_token=token, claim_token=claim["claim_token"],
+            data_status="VALID", expected_unit_count=348, succeeded_unit_count=348,
+            failed_unit_count=0, record_count=348, checksum="c" * 64,
+            manifest_uri="memory://m", manifest_checksum="d" * 64,
+            missing_units=None, stage_timestamps={"collection_started_at": NOW},
+        ) is True

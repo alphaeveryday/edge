@@ -156,6 +156,7 @@ class MinuteLedger:
                     updated_at = now()
                 WHERE session_id = %s
                   AND (lease_expires_at IS NULL OR lease_expires_at < %s)
+                  AND phase IN ('PLANNED', 'ACTIVE', 'DRAINING')
                 RETURNING worker_fencing_token
                 """,
                 (now + timedelta(seconds=lease_seconds), now, session_id, now),
@@ -180,24 +181,27 @@ class MinuteLedger:
 
     # ── window claim ──────────────────────────────────────────
     @staticmethod
-    def _fence_holds(cur, session_id: str, fence_token: int) -> bool:
-        """session 행을 잠그고 fence 를 검사한다.
+    def _fenced_phase(cur, session_id: str, fence_token: int) -> str | None:
+        """session 행을 잠그고 fence 를 검사한다. 유효하면 현재 phase, 아니면 None.
 
         비잠금 조인으로 검사하면 READ COMMITTED 스냅샷이 token 증가 **이전**을 볼 수
         있어, 새 Worker 가 fence 를 가져간 뒤에도 구 Worker 의 쓰기가 통과한다(P1).
         FOR UPDATE 로 잠그면 이 트랜잭션이 끝날 때까지 fence 교체(acquire)가 블록되므로
-        검사와 쓰기가 직렬화된다. session 당 Worker 는 하나라 경합 비용은 heartbeat 뿐.
+        검사와 쓰기가 직렬화된다. phase 를 함께 주는 이유: DRAINED 이후의 claim/기록은
+        fence 가 유효해도 거부해야 EOD snapshot 경계가 지켜진다.
         """
         cur.execute(
             """
-            SELECT worker_fencing_token FROM minute_ingestion_session
+            SELECT worker_fencing_token, phase FROM minute_ingestion_session
             WHERE session_id = %s
             FOR UPDATE
             """,
             (session_id,),
         )
         row = cur.fetchone()
-        return row is not None and row[0] == fence_token
+        if row is None or row[0] != fence_token:
+            return None
+        return row[1]
 
     def claim_due_window(
         self,
@@ -227,7 +231,8 @@ class MinuteLedger:
             raise ValueError(f"lane {lane!r} 는 realtime/recovery 만 허용된다")
         order = "DESC" if lane == "realtime" else "ASC"
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if not self._fence_holds(cur, session_id, fence_token):
+            if self._fenced_phase(cur, session_id, fence_token) != "ACTIVE":
+                # DRAINING 부터는 새 claim 금지 — in-flight 기록만 허용해야 drain 이 수렴
                 return None
             cur.execute(
                 f"""
@@ -297,7 +302,7 @@ class MinuteLedger:
         if data_status not in RESULT_STATUSES:
             raise ValueError(f"data_status {data_status!r} 는 수집 결과 어휘가 아니다")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if not self._fence_holds(cur, session_id, fence_token):
+            if self._fenced_phase(cur, session_id, fence_token) not in ("ACTIVE", "DRAINING"):
                 return False
             cur.execute(
                 """
@@ -330,37 +335,34 @@ class MinuteLedger:
         processed_through   = 결과가 기록된 가장 최신 구간 — 앞쪽 hole 이 있어도 전진.
         contiguous_complete_through = 처음부터 VALID/VALID_EMPTY 연속인 마지막 구간 —
         첫 hole(미처리·INCOMPLETE·INVALID·MISSING)에서 멈추고, correction 이 hole 을
-        메우면 다시 전진한다 (v0.7 10.1).
+        메우면 다시 전진한다 (v0.7 10.1). 계산과 저장은 **단일 UPDATE** 다 — 분리하면
+        늦은 계산 결과가 더 새 watermark 를 후퇴시키는 lost update 가 생긴다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                  (SELECT MAX(window_end) FROM minute_ingestion_window
-                    WHERE session_id = %s AND data_status = ANY(%s)) AS processed,
-                  (SELECT MAX(window_end) FROM minute_ingestion_window
-                    WHERE session_id = %s AND data_status = ANY(%s)
-                      AND window_start < COALESCE(
-                        (SELECT MIN(window_start) FROM minute_ingestion_window
-                          WHERE session_id = %s AND NOT data_status = ANY(%s)),
-                        'infinity'::timestamptz)
-                  ) AS contiguous
+                UPDATE minute_ingestion_session
+                SET processed_through = (
+                      SELECT MAX(window_end) FROM minute_ingestion_window
+                      WHERE session_id = %s AND data_status = ANY(%s)),
+                    contiguous_complete_through = (
+                      SELECT MAX(window_end) FROM minute_ingestion_window
+                      WHERE session_id = %s AND data_status = ANY(%s)
+                        AND window_start < COALESCE(
+                          (SELECT MIN(window_start) FROM minute_ingestion_window
+                            WHERE session_id = %s AND NOT data_status = ANY(%s)),
+                          'infinity'::timestamptz)),
+                    updated_at = now()
+                WHERE session_id = %s
+                RETURNING processed_through, contiguous_complete_through
                 """,
                 (session_id, sorted(RESULT_STATUSES),
                  session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
-                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY]),
+                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+                 session_id),
             )
-            processed, contiguous = cur.fetchone()
-            cur.execute(
-                """
-                UPDATE minute_ingestion_session
-                SET processed_through = %s, contiguous_complete_through = %s,
-                    updated_at = now()
-                WHERE session_id = %s
-                """,
-                (processed, contiguous, session_id),
-            )
-            return processed, contiguous
+            row = cur.fetchone()
+            return (None, None) if row is None else (row[0], row[1])
 
     # ── drain (ALPHA-663) ─────────────────────────────────────
     def request_drain(self, *, session_id: str, now: datetime) -> bool:
@@ -388,7 +390,7 @@ class MinuteLedger:
         처리 중인데 DRAINED 로 넘어가 EOD QC 가 이른 snapshot 을 찍는다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            if not self._fence_holds(cur, session_id, fence_token):
+            if self._fenced_phase(cur, session_id, fence_token) is None:
                 return False
             cur.execute(
                 """

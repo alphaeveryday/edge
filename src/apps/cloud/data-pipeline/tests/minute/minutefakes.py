@@ -77,10 +77,8 @@ class _Cursor:
             self._claim_window(params, newest_first="ORDER BY c.window_start DESC" in s)
         elif s.startswith("UPDATE minute_ingestion_window w SET data_status = %s, expected_unit_count"):
             self._record_outcome(params)
-        elif "AS processed" in s:
-            self._watermark_select(params)
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
-            self._watermark_update(params)
+            self._watermark_advance(params)
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
@@ -134,7 +132,7 @@ class _Cursor:
         # SELECT ... FOR UPDATE — 단일 스레드 fake 라 락 자체는 no-op, 값만 준다
         row = self.db.sessions.get(p[0])
         if row is not None:
-            self._rows = [(row["worker_fencing_token"],)]
+            self._rows = [(row["worker_fencing_token"], row["phase"])]
 
     # ── fence ──
     def _acquire_fence(self, p):
@@ -144,6 +142,8 @@ class _Cursor:
             return
         if row["lease_expires_at"] is not None and row["lease_expires_at"] >= now:
             return  # 살아 있는 lease — CAS 실패
+        if row["phase"] not in ("PLANNED", "ACTIVE", "DRAINING"):
+            return  # DRAINED 이후엔 fence 재획득 금지 — EOD snapshot 경계
         row["worker_fencing_token"] += 1
         row["lease_expires_at"] = lease_until
         row["heartbeat_at"] = now
@@ -217,30 +217,31 @@ class _Cursor:
         self.rowcount = 1
 
     # ── watermark · drain (ALPHA-663) ──
-    def _watermark_select(self, p):
-        (sid1, result_statuses, sid2, ok_statuses, sid3, ok_statuses2) = p
+    def _watermark_advance(self, p):
+        (sid1, result_statuses, sid2, ok_statuses, sid3, ok_statuses2, sid4) = p
+        # 파라미터 배선 자체를 검증한다 — 서브쿼리 하나에 다른 session 을 넘기는 회귀가
+        # fake 재구현 뒤에 숨지 않게 (Rule 9)
+        assert sid1 == sid2 == sid3 == sid4, "watermark 서브쿼리 session 파라미터 불일치"
+        assert list(ok_statuses) == list(ok_statuses2), "contiguous 상태 목록 불일치"
+        session = self.db.sessions.get(sid4)
+        if session is None:
+            return
         rows = [w for w in self.db.windows.values() if w["session_id"] == sid1]
         done = [w for w in rows if w["data_status"] in set(result_statuses)]
         processed = max((w["window_end"] for w in done), default=None)
         ok = set(ok_statuses)
         holes = [w["window_start"] for w in rows if w["data_status"] not in ok]
         first_hole = min(holes, default=None)
-        contiguous_rows = [
-            w for w in rows
-            if w["data_status"] in ok
-            and (first_hole is None or w["window_start"] < first_hole)
-        ]
-        contiguous = max((w["window_end"] for w in contiguous_rows), default=None)
-        self._rows = [(processed, contiguous)]
-
-    def _watermark_update(self, p):
-        processed, contiguous, session_id = p
-        row = self.db.sessions.get(session_id)
-        if row is None:
-            return
-        row["processed_through"] = processed
-        row["contiguous_complete_through"] = contiguous
+        contiguous = max(
+            (w["window_end"] for w in rows
+             if w["data_status"] in ok
+             and (first_hole is None or w["window_start"] < first_hole)),
+            default=None,
+        )
+        session["processed_through"] = processed
+        session["contiguous_complete_through"] = contiguous
         self.rowcount = 1
+        self._rows = [(processed, contiguous)]
 
     def _request_drain(self, p):
         now, session_id = p
