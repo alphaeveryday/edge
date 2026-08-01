@@ -21,6 +21,7 @@ import urllib.request
 from collections.abc import Callable
 
 from . import states
+from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,17 @@ def instrument(
         # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
                   "failed_records": _counter(signals.get("failed_records"))},
+        freshness=(
+            {
+                "actual_as_of_date": None,
+                "status": states.FRESHNESS_UNKNOWN,
+                "reason": states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED,
+                "evidence": None,
+            }
+            if expected.get("dataset_contract_key") == ETF_HOLDINGS_KRX_EOD
+            and signals.get("artifact_observed") is True
+            else None
+        ),
         fulfilled=exit_code == 0,
     ))
     return exit_code

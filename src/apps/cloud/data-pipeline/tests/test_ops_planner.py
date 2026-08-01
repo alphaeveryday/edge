@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import dataclasses
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from data_pipeline.ops import entry
 from data_pipeline.ops import planner as planner_mod
 from data_pipeline.ops import states
 from data_pipeline.ops import catalog
+from data_pipeline.ops import contracts
 from data_pipeline.ops.catalog import PIPELINE_TYPE
 from data_pipeline.ops.ledger import Ledger
 from data_pipeline.ops.planner import plan_run
@@ -167,6 +169,53 @@ def test_non_trading_day_skips_price_tasks_no_attempt():
         # 축 분리: SKIPPED 면 outcome/data_status 는 NULL(attempt 안 붙는다).
         assert row["task_outcome"] is None and row["data_status"] is None
     assert db.attempts == []
+
+
+def test_krx_contract_is_snapshotted_with_interpreted_expected_as_of():
+    """WHY: 비거래일 슬롯 날짜를 expected-as-of로 쓰면 직전 거래일 데이터가 거짓 STALE이 된다."""
+    db = FakeOpsDB()
+    sunday = datetime(2026, 7, 26, 6, 40, tzinfo=timezone.utc)
+    plan_run(
+        _ledger(db), state_machine_arn=_ARN, scheduled_time=sunday, sfn_client=FakeSfn(),
+        holidays=frozenset({"2026-07-24"}),
+    )
+
+    row = db.etasks[(
+        next(iter(db.runs_by_id)), "ETF_HOLDINGS_COLLECTION_KRX"
+    )]
+    assert row["expected_as_of_date"] == "2026-07-23"
+    assert row["dataset_contract_key"] == contracts.ETF_HOLDINGS_KRX_EOD
+    assert row["dataset_contract_version"] == "1"
+    assert row["dataset_contract_snapshot"]["expected_as_of"] == "2026-07-23"
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+    assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
+    assert row["observed_at"] is None
+
+
+def test_uncontracted_tasks_remain_freshness_not_applicable():
+    """WHY: 계약 미연결의 NULL과 증거 부족 UNKNOWN을 섞으면 적용 범위를 알 수 없다."""
+    db = FakeOpsDB()
+    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn())
+    row = next(row for row in db.etasks.values() if row["task_key"] == "NORMALIZE_ETF")
+    assert row["dataset_contract_key"] is None
+    assert row["freshness_status"] is None
+    assert row["freshness_reason"] is None
+
+
+def test_planner_fails_loud_when_catalog_required_conflicts_with_contract(monkeypatch):
+    """WHY: additive 전환 중 required가 둘이면 불일치를 조용히 선택해선 안 된다."""
+    krx = catalog.get("ETF_HOLDINGS_COLLECTION_KRX")
+    assert krx is not None
+    monkeypatch.setattr(
+        catalog, "entries",
+        lambda pipeline_type=None: (dataclasses.replace(krx, required=False),),
+    )
+
+    with pytest.raises(ValueError, match="required"):
+        plan_run(
+            _ledger(FakeOpsDB()), state_machine_arn=_ARN,
+            scheduled_time=_SCHED, sfn_client=FakeSfn(),
+        )
 
 
 def test_non_kr_task_is_not_skipped_on_kr_holiday(monkeypatch):

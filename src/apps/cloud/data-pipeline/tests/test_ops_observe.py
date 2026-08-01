@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 
 import pytest
 
 from data_pipeline.lake import LocalStorage, collection_log_key, quality_log_key
-from data_pipeline.ops import catalog, states, wrapper
+from data_pipeline.ops import catalog, entry as ops_entry, states, wrapper
 from data_pipeline.ops.entry import _observe_from_log
 
 _RUN = "20260725T060000Z"
@@ -127,6 +128,117 @@ def test_non_dict_envelope_is_rejected(tmp_path):
     _write_log(storage, entry, {"run_id": _RUN, "ops": "nope"})
 
     assert _observe_from_log(storage, "NORMALIZE_PRICE", _RUN, 0) == {"exit_code": 0}
+
+
+def test_non_object_log_is_not_collection_artifact_evidence(tmp_path):
+    """WHY: 파일 존재만으로 raw 산출물까지 존재한다고 추정하면 collected_at이 거짓이 된다."""
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    dataset = entry.log_partition_dataset()
+    key = collection_log_key(entry.source_vendor, dataset, "2026-07-25", _RUN)
+    storage.put_bytes(key, b"[]")
+
+    assert _observe_from_log(storage, entry.task_key, _RUN, 0) == {"exit_code": 0}
+
+
+def test_only_current_positive_collection_log_proves_artifact(tmp_path):
+    """WHY: 같은 run_id 재시도가 옛 로그를 새 산출물로 오인하면 Monitor 평가가 부당하게 지워진다."""
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    _write_log(
+        storage,
+        entry,
+        {
+            "run_id": _RUN,
+            "source_vendor": "krx",
+            "started_at": "2026-07-25T06:00:00+00:00",
+            "finished_at": "2026-07-25T06:01:00+00:00",
+            "records_saved": 10,
+            "status": "success",
+            "ops": {"records_out": 10, "failed_records": 0},
+        },
+    )
+
+    old = _observe_from_log(
+        storage, entry.task_key, _RUN, 0,
+        not_before=datetime.fromisoformat("2026-07-25T07:00:00+00:00"),
+    )
+    current = _observe_from_log(
+        storage, entry.task_key, _RUN, 0,
+        not_before=datetime.fromisoformat("2026-07-25T05:00:00+00:00"),
+    )
+
+    assert "artifact_observed" not in old
+    assert current["artifact_observed"] is True
+
+
+def test_instrument_uses_actual_run_boundary_for_artifact_log(monkeypatch, tmp_path):
+    """WHY: 재시도 경계가 wrapper 진입 시각이면 직전 ECS 시도의 늦은 로그를 현재 산출물로 오인한다."""
+    expected_boundary = datetime.fromisoformat("2026-07-25T07:00:00+00:00")
+    captured = {}
+
+    class Clock:
+        phase = "before-wrapper"
+
+        @classmethod
+        def now(cls, tz):
+            assert cls.phase == "during-run"
+            return expected_boundary
+
+    def fake_wrapper(run_fn, **kwargs):
+        Clock.phase = "during-run"
+        exit_code = run_fn()
+        Clock.phase = "after-run"
+        kwargs["observe_data_fn"](exit_code)
+        return exit_code
+
+    def fake_observer(storage, task_key, run_id, exit_code, *, not_before):
+        captured["not_before"] = not_before
+        return {}
+
+    monkeypatch.setattr(ops_entry, "datetime", Clock)
+    monkeypatch.setattr(ops_entry, "ledger_from_settings", lambda settings: object())
+    monkeypatch.setattr(ops_entry.wrapper, "instrument", fake_wrapper)
+    monkeypatch.setattr(ops_entry, "_observe_from_log", fake_observer)
+
+    assert ops_entry.instrument(
+        object(), _storage(tmp_path), "ETF_HOLDINGS_COLLECTION_KRX", _RUN, lambda: 0
+    ) == 0
+    assert captured["not_before"] == expected_boundary
+
+
+def test_incomplete_collection_log_cannot_prove_artifact(tmp_path):
+    """WHY: ops 카운터만 그럴듯한 깨진 로그가 collected_at을 전진시키면 안 된다."""
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    _write_log(
+        storage,
+        entry,
+        {
+            "run_id": _RUN,
+            "started_at": datetime.now().astimezone().isoformat(),
+            "status": "success",
+            "ops": {"records_out": 10, "failed_records": 0},
+        },
+    )
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert "artifact_observed" not in signals
+
+
+def test_non_contract_quality_log_does_not_emit_collection_warning(tmp_path, caplog):
+    """WHY: KRX freshness 검증이 정상 정제 작업마다 경고를 내면 운영 경고가 상시 노이즈가 된다."""
+    storage = _storage(tmp_path)
+    entry = _entry("NORMALIZE_PRICE")
+    _write_log(
+        storage,
+        entry,
+        {"run_id": _RUN, "ops": {"records_out": 10, "failed_records": 0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert "완전한 collection_log" not in caplog.text
 
 
 @pytest.mark.parametrize("status,completed", [

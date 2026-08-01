@@ -778,6 +778,15 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   따라서 현재 종목 수를 코드에 하드코딩하지 않으며, 수집기가 기대값까지 줄여 신고해 스스로
   만점 처리할 수 없다.
   이 선택 필드가 없는 나머지 작업은 기존처럼 완전성 미확인 `UNKNOWN`이다.
+- **Dataset Contract / freshness 첫 슬라이스**(ADR-0043, ALPHA-654) —
+  `ETF_HOLDINGS_COLLECTION_KRX`는 Catalog가 별도 typed registry의
+  `ETF_HOLDINGS_KRX_EOD` 계약 key만 참조한다. Planner는 계약 version·정책·해석한
+  `LATEST_KR_TRADING_DAY`를 snapshot하고, 기존 `expected_as_of_date`에 그 거래일을 저장한다.
+  KRX 응답에는 요청한 `trdDd`와 독립적인 actual-as-of evidence가 없으므로 wrapper는 현재 시도의
+  raw 산출물과 수집 로그가 실제로 관측됐을 때도 `actual_as_of_date=NULL`,
+  `freshness_status=UNKNOWN`, reason=`ACTUAL_AS_OF_UNVERIFIED`를 기록한다. 이때
+  `collected_at`만 채우고 Monitor 평가 시각인 `observed_at`은 NULL로 남긴다. 계약 미연결 작업의
+  freshness NULL은 `UNKNOWN`이 아니라 `NOT_APPLICABLE`이다.
 - **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
   의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
   런×작업마다 S3 로그를 뒤져야 한다). **판정 규칙은 그대로다** — 저장 전용이다. 결측·malformed

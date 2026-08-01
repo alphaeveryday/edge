@@ -90,6 +90,7 @@ class _Cursor:
                     row["expected_task_id"], row["plan_status"], row["task_outcome"],
                     row["data_status"], row["required"],
                     snapshot["expected_entity_count"] if snapshot else None,
+                    row.get("dataset_contract_key"),
                 )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)
@@ -165,6 +166,11 @@ class _Cursor:
                "dataset": p[4], "plan_status": p[5], "task_outcome": p[6], "data_status": p[7],
                "required": p[8], "expected_at": p[9], "deadline_at": p[10], "eligible_at": p[11],
                "expected_as_of_date": p[12], "expectation_snapshot_id": p[13], "skip_reason": p[14],
+               "dataset_contract_key": p[16], "dataset_contract_version": p[17],
+               "dataset_contract_snapshot": json.loads(p[18]) if p[18] else None,
+               "freshness_status": p[19], "freshness_reason": p[20],
+               "actual_as_of_date": None, "collected_at": None, "observed_at": None,
+               "freshness_evidence": None,
                "missed_at": None, "fulfilled_at": None, "blocked_at": None,
                "outcome_reason": None, "current_attempt_id": None, "completeness": None,
                "records_out": None, "failed_records": None}
@@ -201,6 +207,18 @@ class _Cursor:
         for col in ("records_out", "failed_records"):
             if f"{col}=%s" in s:
                 row[col] = p[i]; i += 1
+        if "actual_as_of_date=%s" in s:
+            row["actual_as_of_date"] = p[i]; i += 1
+        if "collected_at=now()" in s:
+            row["collected_at"] = "SET"
+        if "observed_at=NULL" in s:
+            row["observed_at"] = None
+        for col in ("freshness_status", "freshness_reason"):
+            if f"{col}=%s" in s:
+                row[col] = p[i]; i += 1
+        if "freshness_evidence=%s::jsonb" in s:
+            row["freshness_evidence"] = json.loads(p[i]) if p[i] else None
+            i += 1
         if "fulfilled_at=COALESCE" in s and row["fulfilled_at"] is None:
             row["fulfilled_at"] = "SET"
         if "missed_at=COALESCE" in s and row["missed_at"] is None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.ops import states, wrapper
+from data_pipeline.ops import contracts, states, wrapper
 from data_pipeline.ops.ledger import Ledger
 
 from opsfakes import FakeOpsDB
@@ -18,7 +18,10 @@ def _ledger(db):
     return Ledger(db=_DB, connect_fn=db.connect)
 
 
-def _seed(db, run_id="R", task_key="LOAD_PRICE_DAILY", etid="et1", expected_count=None):
+def _seed(
+    db, run_id="R", task_key="LOAD_PRICE_DAILY", etid="et1", expected_count=None,
+    contract_key=None,
+):
     snapshot_id = None
     if expected_count is not None:
         snapshot_id = f"snap-{etid}"
@@ -34,11 +37,93 @@ def _seed(db, run_id="R", task_key="LOAD_PRICE_DAILY", etid="et1", expected_coun
            "required": True, "missed_at": None, "fulfilled_at": None, "blocked_at": None,
            "outcome_reason": None, "current_attempt_id": None, "completeness": None,
            "records_out": None, "failed_records": None,
+           "dataset_contract_key": contract_key,
+           "freshness_status": states.FRESHNESS_UNKNOWN if contract_key else None,
+           "freshness_reason": states.FRESHNESS_EVIDENCE_MISSING if contract_key else None,
+           "actual_as_of_date": None, "collected_at": None, "observed_at": None,
+           "freshness_evidence": None,
            "stage": "feature", "dataset": "price_daily", "eligible_at": None,
            "deadline_at": None, "expectation_snapshot_id": snapshot_id}
     db.etasks[(run_id, task_key)] = row
     db.etasks_by_id[etid] = row
     return etid
+
+
+def test_krx_artifact_records_unverified_freshness_without_monitor_time():
+    """WHY: KRX 요청일은 actual-as-of 증거가 아니지만, 저장된 로그의 존재 자체는 수집 시각이다."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+
+    wrapper.instrument(
+        lambda: 0, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/krx",
+        observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 10, "failed_records": 0,
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] is None
+    assert row["collected_at"] == "SET"
+    assert row["observed_at"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+    assert row["freshness_reason"] == states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
+    assert row["freshness_evidence"] is None
+
+
+def test_krx_without_artifact_keeps_planner_evidence_missing():
+    """WHY: exit code만으로 immutable 산출물이 생겼다고 추정하면 collected_at이 거짓 시각이 된다."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+
+    wrapper.instrument(
+        lambda: 0, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/krx",
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["collected_at"] is None
+    assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
+
+
+def test_uncontracted_artifact_does_not_gain_freshness():
+    """WHY: 계약 미연결 작업의 NULL은 UNKNOWN이 아니라 NOT_APPLICABLE이다."""
+    db = FakeOpsDB()
+    _seed(db)
+
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/load",
+        observe_data_fn=lambda ec: {"artifact_observed": True},
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["collected_at"] is None
+    assert row["freshness_status"] is None
+
+
+def test_new_krx_artifact_invalidates_previous_monitor_observation():
+    """WHY: 재시도의 새 산출물을 Monitor의 옛 observed_at으로 평가된 것처럼 남기면 안 된다."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+    db.etasks_by_id["et1"]["observed_at"] = "OLD_MONITOR_TIME"
+
+    wrapper.instrument(
+        lambda: 0, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/retry",
+        observe_data_fn=lambda ec: {"artifact_observed": True},
+    )
+
+    assert db.etasks_by_id["et1"]["observed_at"] is None
 
 
 # ── derive_data_status (스펙 §3.3·§6) ──

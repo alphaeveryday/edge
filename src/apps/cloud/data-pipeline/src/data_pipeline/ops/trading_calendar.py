@@ -12,7 +12,10 @@ MON-FRI 라(statemachine.tf) 주말은 대개 안 들어오지만, **평일 공�
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
+
+# 최장 연휴보다 넉넉하다. 이 안에 거래일이 없으면 달력 주입 오류로 보고 fail-loud한다.
+MAX_LOOKBACK_DAYS = 10
 
 
 def _env_holidays() -> frozenset[str]:
@@ -29,3 +32,17 @@ def is_trading_day(day: date, holidays: frozenset[str] | None = None) -> bool:
         return False
     hset = _env_holidays() if holidays is None else holidays
     return day.isoformat() not in hset
+
+
+def latest_kr_trading_day(
+    day: date,
+    holidays: frozenset[str] | None = None,
+) -> date:
+    """day 이하의 최근 KR 거래일. Planner와 KRX 요청일 계산의 단일 규칙이다."""
+    for back in range(MAX_LOOKBACK_DAYS):
+        candidate = day - timedelta(days=back)
+        if is_trading_day(candidate, holidays):
+            return candidate
+    raise ValueError(
+        f"{day} 부터 {MAX_LOOKBACK_DAYS}일 안에 거래일이 없다 — OPS_KR_HOLIDAYS 주입 확인"
+    )
