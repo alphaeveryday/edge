@@ -593,7 +593,10 @@ class TestCliGuards:
         # claim 에 안 잡힌다. 그걸 완료로 읽으면 남은 event 를 두고 성공으로 끝난다.
         db = FakeMinuteDB()
         enqueue(db, "e1")
-        db.outbox["e1"]["next_attempt_at"] = NOW + timedelta(hours=1)  # 재시도 대기
+        # ⚠️ 진입점은 주입된 NOW 가 아니라 **실 벽시계**로 tick 을 돈다 — 고정 시각
+        # 기준으로 재시도 대기를 잡으면 그 시각이 지나는 순간 픽스처가 조용히 무효가
+        # 되고(대기 행이 claim 돼 발행된다) 테스트가 하루 뒤에 깨진다(2026-07-31 실증).
+        db.outbox["e1"]["next_attempt_at"] = datetime.now(timezone.utc) + timedelta(hours=1)
         settings = SimpleNamespace(
             db=_DB,
             minute_relay=SimpleNamespace(
