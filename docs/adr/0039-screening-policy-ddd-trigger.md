@@ -24,7 +24,7 @@
    - **공유 `ledger` 커널** *(원안 — 채택 시 유예로 대체됨, 아래 "발동 기록" 참조)* — `AnalysisItemStatus`·`PublicationStatus` 와 전이 규칙은 screening·`tenant-console-api` 두 컨텍스트가 공유하므로 `libs/jvm-common`(또는 공유 커널)으로 올린다. screening 안에만 두면 review 쪽과 드리프트한다.
    - `BundleScreener` 는 parse → decide → apply 오케스트레이터로 얇아진다.
 
-3. **불변식은 SQL 에 남긴다(전환해도 옮기지 않는다).** terminal 가드(`status NOT IN ('CORRECTED','INVALIDATED')`)와 게시 grain 유일성(`NOT EXISTS ... status='PUBLISHED'`)은 동시 writer(screening + tenant-console) 환경에서 DB 가 원자적으로 강제해야 정확하다. 도메인 코드는 *의도·결정*을 표현하고, SQL 은 *불변식*을 강제한다 — 같은 가드를 도메인에 복제하면 진실의 원천이 둘이 되어 스키마 SSOT 와 싸운다.
+3. **불변식은 SQL 에 남긴다(전환해도 옮기지 않는다).** terminal 가드(기록 당시 `status NOT IN ('CORRECTED','INVALIDATED')` — CORRECTED 폐지(ADR-0044) 후 현행은 `status <> 'INVALIDATED'`)와 게시 grain 유일성(`NOT EXISTS ... status='PUBLISHED'`)은 동시 writer(screening + tenant-console) 환경에서 DB 가 원자적으로 강제해야 정확하다. 도메인 코드는 *의도·결정*을 표현하고, SQL 은 *불변식*을 강제한다 — 같은 가드를 도메인에 복제하면 진실의 원천이 둘이 되어 스키마 SSOT 와 싸운다.
 
 4. **방아쇠 전에는 위생만 유지한다.** 새 delivery_type 분기나 `if` 하나가 붙어도 `BundleScreener` 안에 둔다. 단 새 로직을 넣을 때 "무엇을 할지 정하는 줄(결정)"과 "실제로 쓰는 줄(I/O)"이 뒤엉키지 않게만 한다 — 이는 DDD 가 아니라 위생이며, 방아쇠가 왔을 때 `policy` 추출을 리라이트가 아닌 이동으로 만든다.
 
