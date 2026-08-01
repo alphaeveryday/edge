@@ -15,6 +15,20 @@ import json
 from contextlib import contextmanager
 
 
+def _expired(lease_expires_at, now) -> bool:
+    """NULL lease 는 **만료로 본다** — 실제 SQL(`IS NULL OR < now`)과 같은 의미다.
+
+    fake 가 `None < now` 로 계산하면 TypeError 로 죽어, 이 고착 복구 가드를 아예
+    테스트할 수 없다(그러면 SQL 에서 빠져도 아무도 모른다).
+    """
+    return lease_expires_at is None or lease_expires_at < now
+
+
+def _job_kind(sql: str) -> str:
+    """SQL 이 어느 job 테이블을 보는지 — 두 테이블이 lifecycle 을 공유해서 필요하다."""
+    return "price" if "price_window_job" in sql else "news"
+
+
 class FakeMinuteDB:
     def __init__(self):
         self.sessions: dict[str, dict] = {}   # session_id -> row
@@ -146,8 +160,52 @@ class _Cursor:
             self._insert_job("news", params)
         elif s.startswith("INSERT INTO price_window_job"):
             self._insert_job("price", params)
+        elif s.startswith("SELECT status, next_attempt_at, redrive_generation"):
+            self._fetch_job(_job_kind(s), params)
+        elif "SET status = 'CLAIMED'" in s and "redrive_generation = %s" in s:
+            # 메시지 기반 claim(ALPHA-672) — 일반 폴링 claim 보다 **먼저** 걸러야 한다
+            # (접두가 겹친다). 세대 가드가 SQL 에서 빠지면 redrive 가 무효가 되므로
+            # fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
+            for clause in (
+                "WHERE job_id = %s AND redrive_generation = %s",
+                "status = 'PENDING'",
+                "status = 'RETRY_WAIT' AND next_attempt_at <= %s",
+                "status = 'CLAIMED' AND (lease_expires_at IS NULL",
+            ):
+                assert clause in s, f"claim_job SQL 에 {clause} 가 없다"
+            self._claim_job_by_id(_job_kind(s), params)
         elif "SET status = 'CLAIMED'" in s:
             self._claim_job("price" if "price_window_job" in s else "news", params)
+        elif "SET lease_expires_at = %s, updated_at" in s:
+            # heartbeat — attempt fence 가 빠지면 옛 attempt 가 새 claim 의 lease 를
+            # 연장해 두 실행이 동시에 살아 있게 된다
+            for clause in ("claimed_by = %s", "status = 'CLAIMED'", "attempt_count = %s"):
+                assert clause in s, f"heartbeat_job SQL 에 {clause} 가 없다"
+            self._heartbeat_job(_job_kind(s), params)
+        elif "SET status = 'DEAD', error_code = %s" in s and "redrive_generation = %s" in s:
+            for clause in (
+                "status IN ('PENDING', 'RETRY_WAIT', 'CLAIMED')",
+                "status <> 'CLAIMED' OR lease_expires_at IS NULL OR lease_expires_at < %s",
+            ):
+                assert clause in s, f"dead_on_dlq SQL 에 {clause} 가 없다"
+            self._dead_on_dlq(_job_kind(s), params)
+        elif s.startswith("SELECT status, redrive_generation, lease_expires_at, error_code FROM"):
+            assert "FOR UPDATE" in s, "redrive 는 job 행을 잠그고 상태를 봐야 한다"
+            row = self.db.jobs.get((_job_kind(s), params[0]))
+            if row is not None:
+                self._rows = [(row["status"], row["redrive_generation"],
+                               row["lease_expires_at"], row["error_code"])]
+        elif s.startswith("SELECT destination, generation, payload"):
+            row = self.db.outbox.get(params[0])
+            if row is not None:
+                self._rows = [(row["destination"], row["generation"], row["payload"],
+                               row["status"])]
+        elif "SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1" in s:
+            # 관측한 상태·세대를 CAS 에 그대로 되건다 — 빠지면 그새 바뀐 job 을
+            # 덮어써 진행 중인 실행이나 방금 끝난 결과를 잃는다
+            for clause in ("status = %s", "redrive_generation = %s"):
+                assert clause in s, f"redrive SQL 에 {clause} 가 없다"
+            self._redrive_job(_job_kind(s), params)
         elif s.startswith("SELECT j.generation, w.generation"):
             # 직전 TOCTOU 수정의 핵심 — 잠금 구문이 사라지는 회귀를 fake 가 잡는다
             assert "FOR UPDATE OF w" in s, "stale 검사는 window 행을 잠가야 한다"
@@ -155,15 +213,34 @@ class _Cursor:
         elif "SET status = 'DEAD', error_code = 'STALE'" in s:
             self._stale_dead(params)
         elif "WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'" in s:
+            # 세대 fence 가 빠지면 옛 실행의 늦은 보고가 redrive 로 만든 새 세대를
+            # 마감한다 — fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
+            assert "redrive_generation = %s" in s, "전이 SQL 에 세대 fence 가 없다"
             self._job_transition("price" if "price_window_job" in s else "news", params)
+        elif s.startswith("UPDATE dataset_commit_outbox SET last_error = concat_ws"):
+            # 덧붙이기다 — 덮어쓰면 Relay 가 왜 포기했는지(redrive 판단의 근거)가 사라진다
+            row = self.db.outbox.get(params[1])
+            if row is not None:
+                row["last_error"] = " | ".join(
+                    part for part in (row["last_error"], params[0]) if part
+                )
+                self.rowcount = 1
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
-        elif s.startswith("SELECT status, COUNT(*) FROM dataset_commit_outbox"):
+        elif s.startswith("SELECT o.status, COUNT(*) FROM dataset_commit_outbox"):
             # DEAD 도 미발행이다 — SQL 이 NEW 만 세도록 바뀌면 배출 게이트가 격리분을
             # 남긴 채 성공으로 끝난다(fake 가 하드코딩하면 그 회귀가 숨는다)
-            assert "'NEW', 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            assert "o.status = 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            # redrive 가 만든 더 새 delivery 가 있으면 그 DEAD 는 대체된 것이다
+            assert "NOT EXISTS" in s, "대체된 DEAD 제외 절이 없다"
             counts: dict[str, int] = {}
             for row in self.db.outbox.values():
+                if row["status"] == "DEAD" and any(
+                    other["aggregate_id"] == row["aggregate_id"]
+                    and other["seq"] > row["seq"]
+                    for other in self.db.outbox.values()
+                ):
+                    continue   # 더 새 delivery 가 대신한다
                 if row["status"] in ("NEW", "DEAD"):
                     counts[row["status"]] = counts.get(row["status"], 0) + 1
             self._rows = sorted(counts.items())
@@ -399,14 +476,72 @@ class _Cursor:
             r for (k, _), r in self.db.jobs.items() if k == kind
             and (r["status"] == "PENDING"
                  or (r["status"] == "RETRY_WAIT" and r["next_attempt_at"] <= now)
-                 or (r["status"] == "CLAIMED" and r["lease_expires_at"] < now))
+                 or (r["status"] == "CLAIMED" and _expired(r["lease_expires_at"], now)))
         ]
         if not candidates:
             return
         row = min(candidates, key=lambda r: r["seq"])
         row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
                    attempt_count=row["attempt_count"] + 1)
-        self._rows = [(row["job_id"], row["attempt_count"])]
+        self._rows = [(row["job_id"], row["attempt_count"], row["redrive_generation"])]
+
+    # ── 메시지 기반 job 경로 (ALPHA-672) ──
+    def _fetch_job(self, kind, p):
+        row = self.db.jobs.get((kind, p[0]))
+        if row is not None:
+            self._rows = [(row["status"], row["next_attempt_at"],
+                           row["redrive_generation"], row["attempt_count"])]
+
+    def _claim_job_by_id(self, kind, p):
+        worker_id, lease_until, job_id, generation, now, now2 = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["redrive_generation"] != generation:
+            return
+        eligible = (
+            row["status"] == "PENDING"
+            or (row["status"] == "RETRY_WAIT" and row["next_attempt_at"] is not None
+                and row["next_attempt_at"] <= now)
+            or (row["status"] == "CLAIMED" and _expired(row["lease_expires_at"], now2))
+        )
+        if not eligible:
+            return
+        row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
+                   attempt_count=row["attempt_count"] + 1)
+        self.rowcount = 1
+        self._rows = [(row["attempt_count"],)]
+
+    def _heartbeat_job(self, kind, p):
+        lease_until, job_id, worker_id, attempt, generation = p
+        row = self.db.jobs.get((kind, job_id))
+        if (row is None or row["claimed_by"] != worker_id
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
+            return
+        row["lease_expires_at"] = lease_until
+        self.rowcount = 1
+
+    def _dead_on_dlq(self, kind, p):
+        error_code, now, job_id, generation, now2 = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["redrive_generation"] != generation:
+            return
+        if row["status"] not in ("PENDING", "RETRY_WAIT", "CLAIMED"):
+            return
+        if row["status"] == "CLAIMED" and not _expired(row["lease_expires_at"], now2):
+            return  # 살아 있는 lease — 실행 중이다
+        row.update(status="DEAD", error_code=error_code, completed_at=now,
+                   claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
+
+    def _redrive_job(self, kind, p):
+        now, job_id, status, generation = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["status"] != status or row["redrive_generation"] != generation:
+            return
+        row.update(status="RETRY_WAIT", redrive_generation=generation + 1,
+                   next_attempt_at=now, attempt_count=0, completed_at=None,
+                   claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
 
     def _job_window_generation(self, p):
         row = self.db.jobs[("price", p[0])]
@@ -424,10 +559,11 @@ class _Cursor:
 
     def _job_transition(self, kind, p):
         (to_status, next_attempt_at, result_checksum, error_code, completed,
-         job_id, worker_id, attempt) = p
+         job_id, worker_id, attempt, generation) = p
         row = self.db.jobs.get((kind, job_id))
         if (row is None or row["claimed_by"] != worker_id
-                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt):
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
             return
         row.update(status=to_status, next_attempt_at=next_attempt_at,
                    result_checksum=result_checksum, error_code=error_code,
