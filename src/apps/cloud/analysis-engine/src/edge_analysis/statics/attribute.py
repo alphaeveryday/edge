@@ -98,15 +98,16 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
     if types:
-        from .paneltest import _EXPOSURE
+        from .paneltest import FEATURES
         tuples, rejected = propose(ask, facts=facts, event_types=types,
-                                   measurable=list(_EXPOSURE))
+                                   measurable=list(FEATURES))
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
                    for t in tuples]
 
-    # 몫 배정: 성립 튜플의 점 방아쇠 타입과 창의 타입이 일치할 때만 처치가 된다.
+    # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
+    # 패널이 성립해도 오늘 이 셀이 취약성을 안 갖추면 이 셀의 원인이 아니다.
     passing = {t.trigger.ident: (t, r) for t, r in reports
-               if r.verdict == "성립" and t.trigger.kind == "점"}
+               if t.trigger.kind == "점" and r.applies_today}
     rows = []
     for s in shares:
         wtypes = {labels[e] for e in s.window.event_ids}
@@ -130,10 +131,18 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     for t, r in reports:
         vuln = " ∧ ".join(f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.vulnerabilities) or "—"
+        apply_say = ("오늘 적용" if r.applies_today else
+                     "오늘 부적용 - " + ("취약성 미충족" if r.vuln_satisfied is False else
+                                        "환원 불일치" if r.reduction.startswith("불일치") else
+                                        "패널 미성립"))
         block += [f"[{t.channel}] {t.trigger.kind}:{t.trigger.ident[:44]} 부호{t.sign:+d}",
                   f"    취약성 {vuln} · 노출 {t.exposure.ident}/{t.exposure.transform}",
-                  f"    환원: {t.reduction_note[:90]}",
-                  f"    패널: {r.line}"]
+                  f"    환원(가설): {t.reduction_note[:90]}",
+                  f"    패널: {r.line}",
+                  f"    오늘: {r.vuln_today or ('미평가 - 패널이 먼저 서야 한다' if t.vulnerabilities else '취약성 없음')} → **{apply_say}**",
+                  f"    환원 검사: {r.reduction}"]
+        if r.counterfactual:
+            block.append(f"    반사실: {r.counterfactual}")
     if rejected:
         block.append(f"거부된 제출 {len(rejected)}건 (검증기가 죽임): "
                      + " | ".join(x[:60] for x in rejected[:3]))
