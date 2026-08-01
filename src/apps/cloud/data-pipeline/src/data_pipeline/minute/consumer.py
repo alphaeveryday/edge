@@ -41,12 +41,19 @@ import re
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import EVENT_TYPE_JOB_KINDS, JOB_EVENT_TYPES, JobLedger, build_event_id
+from .jobs import (
+    DESTINATION_JOB_KINDS,
+    EVENT_TYPE_JOB_KINDS,
+    JOB_EVENT_TYPES,
+    JobLedger,
+    build_event_id,
+)
+from .relay import KNOWN_DESTINATIONS
 from .states import JOB_DEAD, JOB_RETRY_WAIT, JOB_SUCCEEDED
 
 logger = logging.getLogger(__name__)
@@ -774,3 +781,245 @@ class MinuteConsumer:
     def _now(self, now: datetime) -> datetime:
         """tick 시작 시각 + 그동안 흐른 시간 — retry 시각·lease 가 실제 '지금' 기준이 되게."""
         return now + timedelta(seconds=time.monotonic() - self._tick_started)
+
+
+@dataclass
+class DlqReconciler:
+    """DLQ 에 도착한 메시지와 DB job 상태를 대사한다 (v0.7 12.4).
+
+    메시지가 DLQ 에 있다 = transport 예산(maxReceiveCount)이 먼저 소진됐다는 뜻이다.
+    그런데 DB job 이 아직 non-terminal 이면 원장과 실제가 갈린 것이라, `SQS_MAX_RECEIVE`
+    사유의 DEAD 로 수렴시킨다 — 그래야 운영자가 조회하고 redrive 할 수 있다.
+
+    ⚠️ **이 DLQ 에 올 수 없는 사건**(destination↔kind 불일치)은 건드리지 않는다 —
+    그 메시지의 DLQ 도착은 발행 배선이 틀렸다는 뜻이지 그 job 이 죽었다는 근거가 아니다.
+
+    ⚠️ **메시지를 지우지 않는다.** 지우면 근거가 사라지고, 남기면 보존기간까지 남아
+    사람이 볼 수 있다. 판정은 멱등이라(이미 DEAD 면 CAS no-op) 반복 실행이 안전하고,
+    이번에 못 죽인 것(살아 있는 lease)은 **다음 실행**(주기 잡)이 수렴시킨다 — 한 실행
+    안에서는 이미 판정한 메시지를 다시 세지 않는다(안 그러면 재수신이 종료를 막는다).
+    """
+
+    jobs: JobLedger
+    queue: object
+    queue_urls: Mapping[str, str]   # destination -> DLQ URL
+    batch_size: int = 10
+    wait_seconds: int = 20
+    visibility_seconds: int = 60
+    stopping: bool = False
+    # 이번 실행에서 이미 판정한 메시지 — 지우지 않으므로 visibility 가 풀리면 같은
+    # 메시지가 다시 온다. 그걸 "새 일감"으로 세면 종료 조건(받은 게 없다)이 영원히
+    # 성립하지 않아 일회성 명령이 안 끝난다. MessageId 는 배달이 반복돼도 같다.
+    seen: set = field(default_factory=set)
+
+    def request_stop(self) -> None:
+        self.stopping = True
+
+    def tick(self, now: datetime) -> Counter:
+        counts: Counter = Counter()
+        if self.stopping:
+            return Counter(stopped=1)
+        for _destination, queue_url in sorted(self.queue_urls.items()):
+            messages = self.queue.receive(
+                queue_url=queue_url, max_messages=self.batch_size,
+                wait_seconds=self.wait_seconds,
+                visibility_seconds=self.visibility_seconds,
+            )
+            for message in messages:
+                counts["received"] += 1
+                if message.message_id in self.seen:
+                    counts["repeat"] += 1
+                    continue
+                self.seen.add(message.message_id)
+                counts[self._reconcile(message, _destination, now)] += 1
+        return counts
+
+    def _reconcile(
+        self, message: ConsumerMessage, destination: str, now: datetime
+    ) -> str:
+        try:
+            delivery = parse_delivery(message.body)
+        except ValueError:
+            # DLQ 의 poison 은 여기서 판정할 수 없다 — 어느 job 인지 모른다.
+            logger.exception("DLQ 메시지 파싱 실패: %s", message.message_id)
+            return "poison"
+        if delivery.kind != DESTINATION_JOB_KINDS.get(destination):
+            # 이 DLQ 에 올 수 없는 사건이다 = 발행 destination 이 잘못됐다는 뜻이라,
+            # 이 메시지의 DLQ 도착은 그 job 이 죽었다는 근거가 아니다. 여기서 DEAD 로
+            # 확정하면 배선 오류 하나가 멀쩡한 다른 레인의 job 을 죽인다.
+            logger.error(
+                "DLQ(%s)에 %s 사건이 있다 — 발행 배선 오류: %s",
+                destination, delivery.kind, delivery.event_id,
+            )
+            return "misrouted"
+        job = self.jobs.fetch_job(kind=delivery.kind, job_id=delivery.job_id)
+        if job is None:
+            logger.error("DLQ 메시지가 가리키는 job 행이 없다: %s", delivery.event_id)
+            return "orphan"
+        if delivery.redrive_generation != job["redrive_generation"]:
+            # 세대가 다르면 이 메시지는 그 job 의 **현재** 배달이 아니다. 낡은 배달로
+            # 살아 있는 세대를 죽이면 운영자의 redrive 가 통째로 무효가 된다.
+            return (
+                "superseded" if delivery.redrive_generation < job["redrive_generation"]
+                else "ahead"
+            )
+        if job["status"] in (JOB_SUCCEEDED, JOB_DEAD):
+            return "terminal"
+        if self.jobs.dead_on_dlq(
+            kind=delivery.kind, job_id=delivery.job_id,
+            redrive_generation=delivery.redrive_generation, now=now,
+        ):
+            logger.error(
+                "DLQ 도착 + DB non-terminal(%s) → DEAD(SQS_MAX_RECEIVE): %s",
+                job["status"], delivery.event_id,
+            )
+            return "dead"
+        # 살아 있는 lease(실행 중)거나 그새 상태가 바뀌었다 — 다음 회차가 본다.
+        return "deferred"
+
+
+def _resolve_queue_urls(settings) -> Mapping[str, str]:
+    """DLQ 매핑을 읽고 **원 큐와 겹치지 않는지** 확인한다.
+
+    DLQ 자리에 원 큐 URL 이 들어가면 reconciler 가 정상 배달 중인 메시지를 전부
+    "DLQ 도착"으로 읽어 **살아 있는 job 을 몰살**한다. 되돌리는 데 job 수만큼의 redrive
+    가 필요한 사고다.
+
+    그래서 relay 큐 매핑을 **함께 요구한다.** "있으면 검사"로 두면 그 설정이 없는
+    프로세스에서 검사가 통째로 꺼지는데, 그건 사고가 나는 바로 그 상황(원 큐 URL 을
+    DLQ 자리에 붙여넣은 일회성 실행)이다. 같은 환경의 같은 형태 env 라 요구 비용은 낮다.
+    """
+    if settings.minute_consumer is None:
+        raise SystemExit(
+            "minute_consumer 설정 없음 — dlq-reconcile 은 destination→DLQ 매핑 필수"
+            '(DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS=\'{"<destination>":"<url>"}\')'
+        )
+    if settings.minute_relay is None:
+        raise SystemExit(
+            "minute_relay 설정 없음 — dlq-reconcile 은 원 큐 매핑도 필요하다"
+            "(DLQ 자리에 원 큐가 들어갔는지 대조해야 살아 있는 job 몰살을 막는다)"
+        )
+    dlq_urls = dict(settings.minute_consumer.dlq_urls)
+    # 두 매핑 모두 **어휘 전체**를 덮어야 한다. relay 설정이 부실하면 `missing` 비교가
+    # 통과해 버려(둘 다 한 레인만 있으면 교집합이 빈다) 나머지 레인은 아무도 대사하지
+    # 않는다 — relay CLI 의 기동 검증은 이 경로에서 돌지 않는다.
+    for name, mapping in (
+        ("minute_relay.queue_urls", settings.minute_relay.queue_urls),
+        ("minute_consumer.dlq_urls", dlq_urls),
+    ):
+        unknown = sorted(set(mapping) - KNOWN_DESTINATIONS)
+        absent = sorted(KNOWN_DESTINATIONS - set(mapping))
+        if unknown or absent:
+            raise SystemExit(
+                f"{name} 이 큐 어휘와 다르다 — 미지: {unknown}, 누락: {absent}"
+            )
+    duplicated = sorted(
+        url for url in set(dlq_urls.values())
+        if sum(1 for value in dlq_urls.values() if value == url) > 1
+    )
+    if duplicated:
+        # 두 레인이 같은 DLQ 를 가리키면 한쪽은 한 번도 조회되지 않는데 명령은 성공한다
+        raise SystemExit(f"두 destination 이 같은 DLQ 를 가리킨다: {duplicated}")
+    shared = sorted(set(dlq_urls.values()) & set(settings.minute_relay.queue_urls.values()))
+    if shared:
+        raise SystemExit(
+            f"DLQ 매핑이 원 큐와 같은 URL 을 가리킨다: {shared} — "
+            "정상 배달 중인 job 이 전부 DEAD 가 된다"
+        )
+    return dlq_urls
+
+
+def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
+    """DLQ 대사 진입점 — `python -m data_pipeline.run dlq-reconcile`.
+
+    주기 실행용이다(상주 아님): 보이는 메시지를 다 훑으면 끝난다. 지우지 않으므로
+    같은 메시지를 다음 실행이 다시 보지만 판정은 멱등이다.
+    """
+    import signal
+    from datetime import timezone
+
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — dlq-reconcile 은 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    # 설정 검증을 **먼저** 끝낸다 — 인자 평가 순서에 기대면(뒤 인자에서 None 참조)
+    # 리팩터링 한 번에 AttributeError 로 바뀐다.
+    queue_urls = _resolve_queue_urls(settings)
+    options = settings.minute_consumer
+    reconciler = DlqReconciler(
+        jobs=JobLedger(db=settings.db),
+        queue=SqsQueue(wait_seconds=options.wait_seconds), queue_urls=queue_urls,
+        batch_size=options.batch_size, wait_seconds=options.wait_seconds,
+        visibility_seconds=options.visibility_seconds,
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(received, lambda *_: reconciler.request_stop())
+    totals: Counter = Counter()
+    ticks = 0
+    quiet_rounds = 0
+    quiet = False
+    while max_ticks is None or ticks < max_ticks:
+        counts = reconciler.tick(datetime.now(timezone.utc))
+        ticks += 1
+        totals += counts
+        if counts["stopped"]:
+            break
+        # **새로 본 메시지**가 없으면 한 바퀴 다 돈 것으로 본다. received 로 판정하면,
+        # 지우지 않은 메시지가 visibility 만료로 다시 보이는 순간 종료 조건이 영원히
+        # 성립하지 않는다. 다만 SQS receive 는 표본이라 "이번에 새 게 없었다"가
+        # "남은 게 없다"는 증명은 아니다 — 연속 2회를 보고 끝낸다(그래도 다음 실행이
+        # 다시 훑는다는 전제는 유지된다).
+        quiet_rounds = quiet_rounds + 1 if counts["received"] == counts["repeat"] else 0
+        if quiet_rounds >= 2:
+            quiet = True
+            break
+    logger.info("dlq-reconcile 종료 — %d tick, %s", ticks, dict(sorted(totals.items())))
+    # 판정 불가(poison·orphan·ahead)는 사람이 봐야 한다 — 0 으로 끝내면 아무도 모른다.
+    # misrouted 도 포함한다 — 배선 오류는 대사로 풀리지 않고(그 job 은 남의 레인이라
+    # 건드리지 않는다) 사람이 발행 쪽을 고쳐야 한다. 빼면 exit 0 으로 묻힌다.
+    unresolved = (
+        totals["poison"] + totals["orphan"] + totals["ahead"] + totals["misrouted"]
+    )
+    if unresolved:
+        logger.error("판정하지 못한 DLQ 메시지 %d건 — 사람이 봐야 한다", unresolved)
+    if not quiet:
+        # max-ticks 상한이나 SIGTERM 으로 끊겼다 = 남은 메시지를 **보지도 못했다**.
+        # 성공으로 보고하면 부분 실행이 완료로 위장된다(Rule 12).
+        logger.error("DLQ 대사가 중단됐다(%d tick) — 재실행이 필요하다", ticks)
+    return 0 if quiet and not unresolved else 1
+
+
+def redrive_cli(
+    settings, *, kind: str, job_id: str, reason: str,
+    destination: str | None = None,
+) -> int:
+    """DB-first redrive 진입점.
+
+    `python -m data_pipeline.run redrive --kind news --job-id <id> --reason "<사유>"`
+
+    콘솔에서 DLQ 메시지만 blind redrive 하지 않는다(v0.7 12.4): 여기서 DB 를 먼저
+    되돌리고 새 delivery event 를 남기면 Relay 가 그걸 발행한다. 기존 DLQ 메시지는
+    옮기지 않는다 — 세대가 낡아 Consumer 가 superseded 로 버린다.
+
+    `--reason` 은 필수다. 되돌리기 어려운 수동 개입이라 근거를 원장에 남긴다.
+    `--destination` 은 배선이 어긋난 채 커밋된 행을 바로잡을 때만 쓴다(미지정=직전 값 복사).
+    """
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — redrive 는 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    if kind not in JOB_EVENT_TYPES:
+        raise SystemExit(f"--kind 는 {sorted(JOB_EVENT_TYPES)} 중 하나다: {kind!r}")
+    from datetime import timezone
+
+    import getpass
+    import socket
+
+    try:
+        event_id = JobLedger(db=settings.db).redrive_job(
+            kind=kind, job_id=job_id, now=datetime.now(timezone.utc),
+            # 누가 했는지는 추론이 아니라 실행 환경에서 얻는다(감사 기록의 절반이다)
+            actor=f"{getpass.getuser()}@{socket.gethostname()}", reason=reason,
+            destination=destination,
+        )
+    except (LookupError, ValueError) as error:
+        raise SystemExit(f"redrive 중단: {error}") from error
+    logger.info("redrive 완료 — 새 delivery event: %s", event_id)
+    print(event_id)
+    return 0
