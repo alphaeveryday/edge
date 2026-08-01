@@ -58,6 +58,24 @@ class TracingClient:
         return out
 
 
+def _first_object(text: str) -> dict[str, Any]:
+    """응답 문자열에서 **첫 JSON 객체 하나**를 꺼낸다.
+
+    `json_object` 포맷을 요구해도 모델은 객체 뒤에 설명 문장이나 두 번째 객체를 붙인다 -
+    그러면 `json.loads` 가 `Extra data` 로 죽고, 재시도 3회가 같은 습관에 다 타서 런
+    전체가 넘어진다(2026-08-01 ref-20260801-01: 검정 세션 한 턴이 유니버스 런을 죽였다).
+    관대하게 읽되 **앞부분을 버리지는 않는다** - 첫 객체가 모델의 답이고, 뒤에 붙은 것은
+    군더더기다.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        obj, _end = json.JSONDecoder().raw_decode(text.lstrip())
+        if not isinstance(obj, dict):
+            raise
+        return obj
+
+
 class DeepSeekClient:
     """파싱된 JSON 객체를 반환하는 OpenAI 호환 DeepSeek 채팅 클라이언트."""
 
@@ -101,7 +119,7 @@ class DeepSeekClient:
                 )
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                     payload = json.load(resp)
-                return json.loads(payload["choices"][0]["message"]["content"])
+                return _first_object(payload["choices"][0]["message"]["content"])
             except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
                 last = exc
         raise PipelineError(f"DeepSeek call failed after retries: {last}")

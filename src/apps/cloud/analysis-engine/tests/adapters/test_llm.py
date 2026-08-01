@@ -6,9 +6,11 @@ DeepSeek HTTP 호출은 I/O 라 여기서 유닛테스트하지 않는다. analy
 
 from datetime import date
 
+import json
+
 import pytest
 
-from edge_analysis.adapters.llm import TracingClient, analyze
+from edge_analysis.adapters.llm import TracingClient, _first_object, analyze
 from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import Decomposition, PriceTrigger
 from edge_analysis.observability import collect_trace
@@ -73,3 +75,20 @@ def test_tracing_client_never_writes_prompts_to_stdout(capsys):
         TracingClient(_FakeClient({"ok": 1})).complete_json("SECRET-SYSTEM", "SECRET-USER")
 
     assert "SECRET" not in capsys.readouterr().out
+
+
+def test_trailing_text_after_the_json_object_is_tolerated():
+    """`json_object` 를 요구해도 모델은 객체 뒤에 문장을 붙인다.
+
+    실측(2026-08-01 ref-20260801-01): flash 응답이 `Extra data: line 3 column 1` 로
+    파싱에 실패했고 재시도 3회가 같은 습관에 다 타 런 전체가 exit 1 했다. 첫 객체가
+    모델의 답이고 뒤에 붙은 것은 군더더기다.
+    """
+    assert _first_object('{"verdict": "x"}\n\n설명을 덧붙이자면...') == {"verdict": "x"}
+    assert _first_object('  {"a": 1}  ') == {"a": 1}
+
+
+def test_a_non_object_response_still_fails_loud():
+    # 배열·스칼라를 통과시키면 뒤의 계약 검사가 AttributeError 로 새어 나간다.
+    with pytest.raises(json.JSONDecodeError):
+        _first_object('[1, 2] 뒤에 뭔가')
