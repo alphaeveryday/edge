@@ -160,6 +160,11 @@ public class BundleScreener {
 		if (target == null) {
 			throw new IllegalStateException("INVALIDATION 에 target_explanation_result_id 가 없다 — 계약 위반");
 		}
+		if (entry.reason() == null || entry.reason().isBlank()) {
+			// 와이어 계약(InvalidationEntry)·발번 측 CHECK 가 사유를 필수로 강제한다 —
+			// 여기서 통과시키면 사유 없는 무효화가 상태 이력에 남아 감사 재현이 깨진다.
+			throw new IllegalStateException("INVALIDATION 에 reason 이 없다 — 계약 위반(사유 필수, 감사 재현)");
+		}
 		String previousStatus = analysisItemRepository.lockStatus(target);
 		int invalidated = analysisItemRepository.transition(target, "INVALIDATED");
 		int removed = publicationRepository.transitionByItem(target, "INVALIDATED");
