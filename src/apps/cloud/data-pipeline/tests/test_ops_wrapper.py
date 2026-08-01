@@ -119,6 +119,32 @@ def test_krx_without_artifact_keeps_planner_evidence_missing():
     assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
 
 
+def test_unobserved_retry_resets_prior_collection_evidence():
+    """WHY: 재시도는 같은 raw 키를 덮어쓴다 — 로그를 못 남기고 죽은 재시도가 앞 시도의
+    collected_at 을 물려받으면, 옛 수집 시각이 바뀐 raw 객체의 증거로 남는다(관대한 방향).
+    미관측 시도는 EVIDENCE_MISSING 으로 리셋해야 한다."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+    # 앞 시도가 남긴 수집 증거
+    prior = db.etasks_by_id["et1"]
+    prior["collected_at"] = "SET"
+    prior["freshness_reason"] = states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
+
+    wrapper.instrument(
+        lambda: 1, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/krx",
+        observe_data_fn=lambda ec: {"artifact_observed": None},
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["collected_at"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+    assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
+
+
 def test_uncontracted_artifact_does_not_gain_freshness():
     """WHY: 계약 미연결 작업의 NULL은 UNKNOWN이 아니라 NOT_APPLICABLE이다."""
     db = FakeOpsDB()

@@ -211,6 +211,8 @@ class _Cursor:
             row["actual_as_of_date"] = p[i]; i += 1
         if "collected_at=now()" in s:
             row["collected_at"] = "SET"
+        elif "collected_at=NULL" in s:
+            row["collected_at"] = None
         if "observed_at=NULL" in s:
             row["observed_at"] = None
         for col in ("freshness_status", "freshness_reason"):

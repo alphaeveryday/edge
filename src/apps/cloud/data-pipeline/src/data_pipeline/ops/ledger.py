@@ -252,7 +252,11 @@ class Ledger:
             sets.append("failed_records=%s"); params.append(counters.get("failed_records"))
         if freshness is not None:
             sets.append("actual_as_of_date=%s"); params.append(freshness.get("actual_as_of_date"))
-            sets.append("collected_at=now()")
+            # 수집 시각은 산출물을 **관측한** 시도만 주장한다(collected 플래그). counters 와 같은
+            # 이유로 dict 를 받으면 전 컬럼을 항상 덮는다 — 미관측 재시도에 "None 이면 안 건드림"
+            # 을 적용하면, 같은 raw 키를 덮어쓴 재시도가 로그를 못 남기고 죽었을 때 **앞 시도의
+            # collected_at 이 바뀐 raw 객체에 그대로 붙어** 남는다(edge-review 2라운드).
+            sets.append("collected_at=now()" if freshness.get("collected") else "collected_at=NULL")
             # 새 immutable 산출물은 Monitor의 과거 평가를 무효화한다. writer는 평가 시각을 만들지 않는다.
             sets.append("observed_at=NULL")
             sets.append("freshness_status=%s"); params.append(freshness["status"])

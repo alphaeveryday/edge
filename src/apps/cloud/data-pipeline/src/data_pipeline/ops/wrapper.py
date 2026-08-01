@@ -270,15 +270,22 @@ def instrument(
         # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
                   "failed_records": _counter(signals.get("failed_records"))},
+        # 계약 연결 작업은 **매 시도** freshness 를 덮는다. 관측 시도만 조건으로 걸면
+        # 미관측 재시도(raw 는 덮어썼는데 로그를 못 남기고 죽음)가 앞 시도의 수집 증거를
+        # 물려받는다 — 미관측은 EVIDENCE_MISSING 으로 리셋하는 쪽이 엄격한 방향이다.
         freshness=(
             {
                 "actual_as_of_date": None,
+                "collected": signals.get("artifact_observed") is True,
                 "status": states.FRESHNESS_UNKNOWN,
-                "reason": states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED,
+                "reason": (
+                    states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
+                    if signals.get("artifact_observed") is True
+                    else states.FRESHNESS_EVIDENCE_MISSING
+                ),
                 "evidence": None,
             }
             if expected.get("dataset_contract_key") == ETF_HOLDINGS_KRX_EOD
-            and signals.get("artifact_observed") is True
             else None
         ),
         fulfilled=exit_code == 0,
