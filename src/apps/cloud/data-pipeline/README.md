@@ -848,6 +848,9 @@ DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs
 # redrive(1분 파이프라인, ALPHA-672) — **막힌 것**만 되살린다(DEAD job 또는 Relay 가
 # 발행 불가로 격리한 DEAD delivery event). 정상 진행 중이거나 SUCCEEDED 는 거부한다.
 # --reason 은 필수다: 실행자와 함께 대체되는 delivery event 행에 남는 유일한 감사 근거다.
+# 배선이 어긋난 채 커밋된 행(Relay 가 destination↔event_type 불일치로 격리)은
+# --destination 으로 올바른 큐를 지정해 바로잡는다 — event_id 가 결정적이라
+# producer 를 고쳐 재실행해도 그 행은 안 바뀐다(미지정=직전 event 값 복사).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run redrive --kind news --job-id <job_id> --reason "큐 URL 오타 수정 후 재시도"
 ```

@@ -504,6 +504,7 @@ class JobLedger:
 
     def redrive_job(
         self, *, kind: str, job_id: str, now: datetime, actor: str, reason: str,
+        destination: str | None = None,
     ) -> str:
         """막힌 job 을 한 트랜잭션에서 다시 깨운다 — 새 delivery event_id 를 돌려준다.
 
@@ -513,8 +514,11 @@ class JobLedger:
         (또는 그 반대)가 생기지 않는다. 기존 DLQ 메시지는 옮기지 않는다 — 그 메시지의
         세대는 이미 낡아서 Consumer 가 superseded 로 버린다.
 
-        payload/destination 은 **직전 event 에서 복사**한다. 지어내면 그 job 을 만든
-        commit 이 실은 뭘 보냈는지와 갈리고, 그건 아무도 대조하지 않는다.
+        payload 는 **직전 event 에서 복사**한다. 지어내면 그 job 을 만든 commit 이 실은
+        뭘 보냈는지와 갈리고, 그건 아무도 대조하지 않는다. destination 도 기본은 복사이나
+        `destination` 인자로 **운영자가 고칠 수 있다** — 배선이 어긋난 채 커밋된 행은
+        그 값이 컬럼에 박혀 있어(결정적 event_id + ON CONFLICT DO NOTHING 이라 producer 를
+        고쳐 재실행해도 그 행은 안 바뀐다) 여기서 바로잡지 않으면 복구 경로가 아예 없다.
 
         대상은 **"막힌 것 전부"** 다 — DEAD job(Consumer 가 포기)뿐 아니라 job 은
         멀쩡한데 delivery event 가 DEAD 인 것(Relay 가 그 event 를 격리)까지다. PR 6 은
@@ -581,7 +585,7 @@ class JobLedger:
                     f"직전 delivery event 가 없다: {previous_event_id} — "
                     "payload 를 복원할 근거가 없어 redrive 를 중단한다"
                 )
-            destination, data_generation, payload, event_status = previous
+            previous_destination, data_generation, payload, event_status = previous
             if status != "DEAD" and event_status != "DEAD":
                 # **막혔다는 근거**가 없다. 정상 진행 중인 job 의 세대를 올리면 지금
                 # 큐에 있는 배달이 superseded 로 버려지고 재시도 예산까지 초기화된다 —
@@ -590,13 +594,15 @@ class JobLedger:
                     f"{job_id} 는 막혀 있지 않다(job={status}, event={event_status}) — "
                     "redrive 대상은 DEAD job 이거나 DEAD delivery event 다"
                 )
-            if DESTINATION_JOB_KINDS.get(destination) != EVENT_TYPE_JOB_KINDS.get(event_type):
-                # 그 행의 destination 이 사건 종류와 어긋난다 — 복사해 만든 새 event 도
-                # 같은 이유로 곧장 DEAD 가 된다(세대만 오른다). 고칠 곳은 **쓰는 쪽**이고,
-                # 그 job 은 올바른 destination 으로 다시 커밋돼야 한다.
+            # destination 은 복사가 기본이고, 운영자가 준 값이 있으면 그걸 쓴다.
+            # 어느 쪽이든 **사건 종류와 맞아야** 한다 — 어긋난 값으로 새 event 를 만들면
+            # Relay 가 곧장 다시 격리해 세대만 오른다.
+            target = destination or previous_destination
+            if DESTINATION_JOB_KINDS.get(target) != EVENT_TYPE_JOB_KINDS.get(event_type):
                 raise ValueError(
-                    f"{previous_event_id} 는 destination({destination})과 event_type"
-                    f"({event_type})이 어긋난다 — 복사해도 같은 이유로 다시 DEAD 다"
+                    f"destination({target})이 event_type({event_type})과 어긋난다 — "
+                    f"올바른 큐를 `destination` 으로 지정하라"
+                    f"(가능: {sorted(d for d, k in DESTINATION_JOB_KINDS.items() if k == kind)})"
                 )
             if event_status == "DEAD":
                 # Relay 가 "이 event 는 못 나간다"고 판정했던 것이다(미정의 destination·
@@ -624,7 +630,7 @@ class JobLedger:
                 raise RuntimeError(f"redrive CAS 거부 — {job_id} 의 상태가 그새 바뀌었다")
             event_id = build_event_id(event_type, job_id, generation + 1)
             if not self._insert_outbox_tx(
-                cur, event_id=event_id, event_type=event_type, destination=destination,
+                cur, event_id=event_id, event_type=event_type, destination=target,
                 aggregate_id=job_id, generation=data_generation, payload=payload,
             ):
                 # 같은 세대의 event 가 이미 있다 = 이 세대를 만든 redrive 가 이미
@@ -644,8 +650,9 @@ class JobLedger:
             )
         # 로그는 **커밋 뒤**다 — 트랜잭션 안에서 찍으면 롤백된 redrive 의 기록만 남는다
         logger.warning(
-            "redrive: %s job %s (%s, 세대 %d→%d) → %s [%s: %s]",
-            kind, job_id, status, generation, generation + 1, event_id, actor, reason,
+            "redrive: %s job %s (%s, 세대 %d→%d, → %s) → %s [%s: %s]",
+            kind, job_id, status, generation, generation + 1, target, event_id,
+            actor, reason,
         )
         return event_id
 

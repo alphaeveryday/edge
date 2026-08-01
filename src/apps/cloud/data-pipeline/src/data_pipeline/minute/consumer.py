@@ -950,7 +950,10 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
     return 0 if quiet and not unresolved else 1
 
 
-def redrive_cli(settings, *, kind: str, job_id: str, reason: str) -> int:
+def redrive_cli(
+    settings, *, kind: str, job_id: str, reason: str,
+    destination: str | None = None,
+) -> int:
     """DB-first redrive 진입점.
 
     `python -m data_pipeline.run redrive --kind news --job-id <id> --reason "<사유>"`
@@ -960,6 +963,7 @@ def redrive_cli(settings, *, kind: str, job_id: str, reason: str) -> int:
     옮기지 않는다 — 세대가 낡아 Consumer 가 superseded 로 버린다.
 
     `--reason` 은 필수다. 되돌리기 어려운 수동 개입이라 근거를 원장에 남긴다.
+    `--destination` 은 배선이 어긋난 채 커밋된 행을 바로잡을 때만 쓴다(미지정=직전 값 복사).
     """
     if settings.db is None:
         raise SystemExit("db 설정 없음 — redrive 는 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
@@ -975,6 +979,7 @@ def redrive_cli(settings, *, kind: str, job_id: str, reason: str) -> int:
             kind=kind, job_id=job_id, now=datetime.now(timezone.utc),
             # 누가 했는지는 추론이 아니라 실행 환경에서 얻는다(감사 기록의 절반이다)
             actor=f"{getpass.getuser()}@{socket.gethostname()}", reason=reason,
+            destination=destination,
         )
     except (LookupError, ValueError) as error:
         raise SystemExit(f"redrive 중단: {error}") from error

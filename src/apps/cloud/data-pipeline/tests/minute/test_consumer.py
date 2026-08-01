@@ -1108,15 +1108,31 @@ class TestRedrive:
         with pytest.raises(ValueError, match="actor"):
             ledger.redrive_job(kind="news", job_id=job_id, now=NOW, actor="", reason="x")
 
-    def test_mismatched_destination_event_is_not_redrivable(self):
-        # 복사해 만든 새 event 도 같은 이유로 곧장 DEAD 가 된다 — 세대만 오른다.
-        # 고칠 곳은 쓰는 쪽이고, 그 job 은 올바른 destination 으로 다시 커밋돼야 한다.
+    def test_misrouted_event_is_repaired_by_giving_the_right_queue(self):
+        # ⚠️ 배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있고, event_id 가 결정적
+        # 이라(ON CONFLICT DO NOTHING) producer 를 고쳐 재실행해도 그 행은 안 바뀐다 —
+        # 여기서 바로잡지 못하면 수동 SQL 말고는 복구 경로가 없다(#456 봇 2차 지적).
         db, ledger, job_id, _body = self._dead_job()
         event = db.outbox[build_event_id(NEWS_EVENT_TYPE, job_id, 0)]
         event.update(status="DEAD", destination="price-analysis-realtime")
+
+        # 그대로 복사하면 Relay 가 곧장 다시 격리한다 — 거부하고 가능한 큐를 알려준다
         with pytest.raises(ValueError, match="어긋난다"):
             ledger.redrive_job(kind="news", job_id=job_id, now=NOW,
                                actor="tester@host", reason="테스트")
+
+        event_id = ledger.redrive_job(
+            kind="news", job_id=job_id, now=NOW, actor="oncall@host",
+            reason="destination 오배선 정정", destination="news-extraction-realtime",
+        )
+        assert db.outbox[event_id]["destination"] == "news-extraction-realtime"
+        assert db.outbox[event_id]["status"] == "NEW"
+
+    def test_corrected_destination_must_match_the_event_type(self):
+        db, ledger, job_id, _body = self._dead_job()
+        with pytest.raises(ValueError, match="어긋난다"):
+            ledger.redrive_job(kind="news", job_id=job_id, now=NOW, actor="a@b",
+                               reason="테스트", destination="price-analysis-realtime")
 
     def test_relay_dead_event_is_recoverable(self):
         # PR 6 은 outbox DEAD 를 좁게 판정하면서 복구를 이 PR 에 위임했다 — job 은
