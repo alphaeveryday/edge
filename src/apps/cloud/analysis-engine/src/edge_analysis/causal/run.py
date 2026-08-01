@@ -23,11 +23,13 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
 import numpy as np
 
+from ..adapters.causal_data import COHORT_COLUMNS, UNIVERSE_COLUMNS
 from ..observability import log
 from . import chain
 from . import p0_question as p0
@@ -47,6 +49,10 @@ from .engine import EdgeDesign, EdgeResult, arithmetic_gate, estimate
 N_HYPOTHESES = 3
 # 결과 산포를 잴 대조 표본의 하한. 이보다 적으면 E-value 의 분모가 잡음이다.
 _SD_MIN = 30
+# 참조집합에 들어오면 안 되는 컬럼. `cd.universe` 는 종목 속성만 받고 날짜는 코드가
+# 창으로 붙인다 - 모델이 여기 `trade_date` 를 박으면 창이 하루로 접힌다.
+_NOT_UNIVERSE = r"\b(?:" + "|".join(
+    c for c in COHORT_COLUMNS if c not in UNIVERSE_COLUMNS) + r")\b"
 
 
 def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: date,
@@ -162,6 +168,11 @@ def _designs(g: WorldGraph) -> list[EdgeDesign]:
 
     `cause_label` 은 그 간선을 그린 가설의 뿌리 이름이다 - 통계 간선의 부모는 대개 중간
     매개(기대·심리)라 그걸 원인이라 쓰면 "주주환원 기대가 원인입니다" 가 고객에게 나간다.
+
+    `control`(참조집합)은 **종목 속성 술어만** 쓸 수 있다 - 날짜는 코드가 창으로 붙인다.
+    사건 컬럼이나 `trade_date` 가 섞이면 `cd.universe` 가 거부하고, 그러면 E-value 분모가
+    통째로 미산출된다(2026-08-01 nanfix-20260801-01: 6/6 sd_failed). 여기서 걸러 빈
+    문자열로 내려보내면 뒤가 산업 동종군 폴백으로 비교군을 만든다.
     """
     out: list[EdgeDesign] = []
     for e in g.edges:
@@ -171,9 +182,13 @@ def _designs(g: WorldGraph) -> list[EdgeDesign]:
         owner = next((h for h in g.hypotheses
                       if any(x.get("from") == src and x.get("to") == dst
                              for x in h.edges)), None)
+        control = str(e.get("reference") or "")
+        if control and re.search(_NOT_UNIVERSE, control):
+            log("causal.reference_rejected", edge=f"{src}->{dst}", predicate=control[:120])
+            control = ""
         out.append(EdgeDesign(
             src=src, dst=dst,
-            treated=e.get("exposure") or "", control=e.get("reference") or "",
+            treated=e.get("exposure") or "", control=control,
             strata="date", scope="type", claims="L4",
             say=e.get("says") or "", because=e.get("because") or "",
             false_if=e.get("false_if") or "", needs=e.get("needs") or "",
