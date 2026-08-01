@@ -280,6 +280,28 @@ class CausalData:
             JOIN ex ON ex.instrument_id = k.i AND ex.trade_date = k.d"""
         return self._aligned(pairs, sql, [min_cross, ids, ds])
 
+    def ar_history(self, instrument_id: str, trade_date: date, *, days: int = 250,
+                   min_cross: int = 50) -> np.ndarray:
+        """이 종목 자신의 과거 일별 초과수익. **귀무분포의 재료다 - 당일은 뺀다.**
+
+        정규분포를 가정하지 않고 경험분위를 쓰기 위해 원계열을 그대로 돌려준다. 일별
+        초과수익은 꼬리가 두꺼워서 정규 근사가 극단값의 p 를 체계적으로 낮게 준다 -
+        하필 우리가 판정을 내리는 자리에서 틀린다.
+        """
+        rows = self._rows(
+            f"""WITH {self._EXCESS},
+            cal AS (SELECT trade_date, row_number() OVER (ORDER BY trade_date) rn
+                    FROM (SELECT DISTINCT trade_date FROM price_daily
+                          WHERE trade_date <= %s) t)
+            SELECT ex.ar FROM cal c0
+            JOIN cal c1 ON c1.rn BETWEEN c0.rn - %s AND c0.rn - 1
+            JOIN ex ON ex.instrument_id = %s AND ex.trade_date = c1.trade_date
+            WHERE c0.trade_date = %s""",
+            (min_cross, trade_date.isoformat(), days, instrument_id,
+             trade_date.isoformat()))
+        out = np.array([float(r[0]) for r in rows if r[0] is not None], dtype=float)
+        return out[np.isfinite(out)]
+
     def _windowed(self, pairs, agg: str, days: int, lag: int, min_cross: int) -> np.ndarray:
         if not pairs:
             return np.array([], dtype=float)

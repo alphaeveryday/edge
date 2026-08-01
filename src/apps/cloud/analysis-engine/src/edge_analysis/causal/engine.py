@@ -91,20 +91,6 @@ class EdgeResult:
         return self.passed and self.p is not None and self.p < 0.05
 
 
-def identify(nodes: dict, edges: list, src: str, dst: str) -> dict:
-    """**식별 전략을 코드가 정한다.** 조정이 되면 조정, 안 되면 IV, 둘 다 없으면 불가.
-
-    조정집합을 모델에게 묻지 않는다 - 실측 정답률 78% 인데 코드는 구성상 100% 다.
-    """
-    d, b = G.split(edges)
-    pool = set(nodes)
-    zs = G.admg_minimal_backdoor(d, b, src, dst, pool)
-    if zs:
-        return {"strategy": "adjustment", "adjust": zs[0], "alternatives": zs[1:], "iv": []}
-    ivs = G.iv_candidates(d, b, src, dst, pool)
-    return {"strategy": "iv" if ivs else "none", "adjust": [], "alternatives": [], "iv": ivs}
-
-
 def _strata_key(strata: str, pairs, industry: dict | None) -> np.ndarray | None:
     if strata == "none":
         return None

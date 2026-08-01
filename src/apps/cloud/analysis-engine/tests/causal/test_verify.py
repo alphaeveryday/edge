@@ -18,10 +18,15 @@ TRADE_DATE = date(2026, 7, 16)
 W0 = date(2026, 5, 18)
 AS_OF = "2026-07-16T15:40:00+09:00"
 
+# `observed` 는 새 노드 계약의 필수 칸이다 - P4 는 관측 노드에서만 조정집합을 고르므로
+# 이 칸이 비면 뒷문을 막을 후보가 0개가 되고 계획이 조용히 `strategy=none` 으로 떨어진다.
 NODES = {
-    "S@t-3": {"kind": "OBSERVABLE", "unit": "stock", "measure": "사전 모멘텀"},
-    "EVT@t-1": {"kind": "SHOCK", "unit": "stock", "measure": "공시 발생 지시자"},
-    "AR@t0": {"kind": "TARGET", "unit": "stock", "measure": "당일 초과수익"},
+    "S@t-3": {"kind": "OBSERVABLE", "unit": "stock", "measure": "사전 모멘텀",
+              "observed": "직전 3거래일 누적 수익률"},
+    "EVT@t-1": {"kind": "SHOCK", "unit": "stock", "measure": "공시 발생 지시자",
+                "observed": "공시 원장의 발생 여부"},
+    "AR@t0": {"kind": "TARGET", "unit": "stock", "measure": "당일 초과수익",
+              "observed": "종가 기준 초과수익"},
 }
 EDGES = [{"from": "S@t-3", "to": "EVT@t-1"}, {"from": "S@t-3", "to": "AR@t0"},
          {"from": "EVT@t-1", "to": "AR@t0"}]
@@ -141,14 +146,37 @@ def test_plan_derives_the_adjustment_set_and_the_allowed_null_from_the_claim():
 def test_brief_reports_when_adjustment_cannot_identify_and_lists_instruments():
     edges = EDGES + [{"from": "EVT@t-1", "to": "AR@t0", "kind": "bidirected"},
                      {"from": "Z@t-9", "to": "EVT@t-1"}]
-    nodes = {**NODES, "Z@t-9": {"kind": "OBSERVABLE", "unit": "stock", "measure": "도구"}}
+    nodes = {**NODES, "Z@t-9": {"kind": "OBSERVABLE", "unit": "stock", "measure": "도구",
+                                "observed": "9거래일 전 일정 공표"}}
 
     p = V.plan(nodes, edges, DESIGN)
     text = V.brief(p)
 
     assert p["identified_by_adjustment"] is False
     assert p["iv"] == ["Z@t-9"]
-    assert "조정으로는 식별 불가" in text and "도구변수 후보" in text
+    # "뒷문이 열려 있지 않다" 는 삭제됐다 - 빈 조정집합은 세계가 아니라 그래프에 대한
+    # 진술이고, 그 문구가 검정 세션에게 교란이 없다고 오인시켰다. 대신 식별 상태와
+    # **무엇이 막고 있는지**가 나가야 한다.
+    assert "뒷문이 열려 있지 않다" not in text
+    assert "식별상태 : identified_under" in text
+    assert "막고 있는 미관측 공통원인" in text and "도구변수 후보" in text
+
+
+def test_a_latent_node_never_enters_the_adjustment_set():
+    """미관측 노드로 조건화하는 계획은 실행할 수 없다 - 조건화할 열이 없기 때문이다.
+
+    `observed` 를 안 적은 노드가 조정집합에 들어가면 검정 세션은 그 열을 만들어 내거나
+    (날조) 대리물로 갈아치운다(설계 변경). 둘 다 원장에 남지 않는다. 그래서 뒷문을
+    실제로 막는 노드라도 미관측이면 후보에서 빠지고, 계획은 식별 실패를 그대로 적어야
+    한다 - 억지로 채운 조정집합보다 그쪽이 정직하다.
+    """
+    nodes = {**NODES, "S@t-3": {**NODES["S@t-3"], "observed": None}}
+
+    p = V.plan(nodes, EDGES, DESIGN)
+
+    assert "S@t-3" not in p["adjust"], "미관측 교란이 조정집합에 들어갔다"
+    assert p["status"] == "not_identified" and p["strategy"] == "none"
+    assert "조정집합 : 없음" in V.brief(p) and "점식별 불가" in V.brief(p)
 
 
 # --------------------------------------------------------------------------- #

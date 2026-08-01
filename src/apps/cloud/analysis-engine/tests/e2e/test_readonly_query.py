@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 import secrets
 
-import psycopg2
 import pytest
 
 from edge_analysis.adapters.readonly import connect_readonly, run_query
@@ -23,6 +22,8 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("E2E_PGHOST"),
     reason="ephemeral Postgres 필요 — CI e2e job 전용(E2E_PGHOST 미설정)",
 )
+# skipif 뒤에 둔다 - 모듈 상단 import 는 수집 단계를 죽여 스킵을 무력화한다.
+psycopg2 = pytest.importorskip("psycopg2")
 
 _MASTER = {
     "host": os.environ.get("E2E_PGHOST", "127.0.0.1"),

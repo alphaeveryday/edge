@@ -90,15 +90,20 @@ def analyze(
     causal=None,
     causal_sandbox: bool = True,
     domain_docs=None,
+    causal_sql=None,
+    causal_registry_root=None,
     etf_instrument_id: str | None = None,
 ) -> Explanation:
     """검증된 Explanation 을 반환한다. **시그니처는 고정이다** - 클라우드 진입점이 이걸 부른다.
 
-    ``causal`` 이 주입되면 **인과 설계 하네스**로 설명을 만든다(비용 순 게이트: 산술 ->
-    제안 1회 -> 구조 -> 형식 -> 식별 -> 간선별 검정 -> 예산 -> 서술). 제안 에이전트는
-    산문 DAG 를 내고, 검정 에이전트는 간선마다 샌드박스에서 **코드를 써서** 추정한다.
-    수치는 전부 원장에서 오고 모델이 타이핑할 자리가 없다 - 실험판에서 모델이 보고한
-    수치는 날조였다.
+    ``causal`` 이 주입되면 **P0–P9 인과귀속**으로 설명을 만든다: 질문 고정 → 지문 →
+    다중 가설 → 공통원인 완비 그래프 → 식별 3값 → 판별 검정 → 추정 → 예산 → 민감도 →
+    음성대조 → 처분 원장 → 누적. 수치는 전부 원장에서 오고 모델이 타이핑할 자리가
+    없다 - 실험판에서 모델이 보고한 수치는 날조였다.
+
+    ``causal_sql`` 은 P2·P3·P5 가 쓰는 자유 질의 표면이다(`adapters.sql_surface`).
+    없으면 세 단계가 조회 없이 돌고 판별 검정이 전부 실행 불가가 되므로 **주장 상한이
+    자동으로 내려간다** - 조용히 나빠지지 않고 산출물에 드러난다.
 
     ``causal_sandbox=False`` 면 검정 에이전트 대신 축약 경로(고정 추정량)로 떨어진다.
     ops 킬스위치다(``CAUSAL_SANDBOX_ENABLED``) - LLM 이 쓴 코드를 실행하는 위험을 끄고도
@@ -133,7 +138,7 @@ def analyze(
             industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
             sandbox=causal_sandbox,
-            docs=domain_docs,
+            docs=domain_docs, sql=causal_sql, registry_root=causal_registry_root,
         )
         explanation = Explanation(raw)
         if not explanation.is_valid:

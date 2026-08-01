@@ -22,7 +22,7 @@ from .adapters.trace import write_agent_trace
 from .config import PipelineError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
 from .domain.models import EventContext
-from .observability import collect_trace, log
+from .observability import collect_trace, log, utcnow_iso
 
 _MARKET = "KR"
 
@@ -96,9 +96,31 @@ def run(
             settings.trade_date, [h.ticker for h in holdings])
         log("events.ready", events=len(events))
 
-    # 인과 설계 하네스로 설명을 만든다. `analyze` 시그니처는 고정이고 의존성만 주입한다 —
+    # P0–P9 인과귀속으로 설명을 만든다. `analyze` 시그니처는 고정이고 의존성만 주입한다 —
     # 클라우드 진입점(CLI·run)은 그대로다. store 커넥션을 공유하므로 PIT 기준이 갈리지 않는다.
     causal = store.causal_data() if settings.causal_enabled else None
+    # P2·P3·P5 의 자유 질의 표면. 같은 커넥션·같은 시점이라 두 표면이 갈리지 않는다.
+    causal_sql = (store.sql_surface(as_of=utcnow_iso(), trade_date=settings.trade_date)
+                  if causal is not None else None)
+    # canonical(S3) 온톨로지 표면. **선택 의존**이고 셋이 다 있어야 붙는다. 안 붙으면
+    # 재무·지배구조 어휘가 프롬프트에 아예 안 실리고 P8 이 그 영역을 미개봉으로 적는다 -
+    # 조용히 빈 것과 알고 없는 것을 가르는 자리다.
+    if causal_sql is not None and settings.canonical_manifest and settings.canonical_database:
+        from .adapters.canonical_surface import (CanonicalSurface, Surfaces,
+                                                 athena_runner, load_manifest)
+        manifest = load_manifest(settings.canonical_manifest)
+        canonical_sql = CanonicalSurface(
+            athena_runner(database=settings.canonical_database,
+                          output=settings.canonical_output,
+                          profile=settings.domain_docs_profile),
+            manifest,
+            # ★ 시점은 **거래일**이다. `utcnow` 를 쓰면 그날 이후 정정된 값이 보인다 -
+            # Postgres 쪽은 `available_at <= as_of` 로 사건 공개 시각을 다루지만
+            # canonical 은 날짜 단위 공표축이라 기준이 다르다.
+            as_of=settings.trade_date)
+        causal_sql = Surfaces(causal_sql, canonical_sql)
+        log("canonical.attached", database=settings.canonical_database,
+            tables=len(manifest.get("tables") or ()))
     # 도메인 문서 조회는 **선택 의존**이다. 버킷이 없으면 붙이지 않고, 그러면 제안이
     # `lookups` 로 물어도 조회 없이 진행한다 - 산업 지식이 없다고 설명을 멈추지 않는다.
     domain_docs = None
@@ -114,7 +136,8 @@ def run(
             decomp=decomp, gate=gate, route_code=route_code, events=events,
             causal=causal,
             causal_sandbox=settings.causal_sandbox_enabled,
-            domain_docs=domain_docs,
+            domain_docs=domain_docs, causal_sql=causal_sql,
+            causal_registry_root=settings.causal_registry_root or None,
             etf_instrument_id=etf_instrument_id,
         )
     if causal is not None:

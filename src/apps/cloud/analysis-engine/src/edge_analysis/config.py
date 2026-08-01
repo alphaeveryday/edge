@@ -62,6 +62,16 @@ class Settings:
     #   index/<sector>/<industry>/chunks.parquet · docs/<sector>/<industry>/<ticker>-<n>.txt
     domain_docs_bucket: str = ""
     domain_docs_profile: str = ""
+    # 메커니즘 레지스트리 뿌리(P9). 비어 있으면 소환 기록을 남기지 않는다 - 단일 사례
+    # 귀속은 반복으로만 검정력을 얻으므로, 이 경로가 비면 그 축적이 통째로 없다는 뜻이다.
+    causal_registry_root: str = ""
+    # canonical(S3) PIT 표면. 셋이 다 있어야 붙는다 - 하나라도 비면 재무·지배구조 어휘가
+    # 프롬프트에 아예 안 실리고, 그 사실이 P8 커버리지 원장에 `unavailable` 로 남는다.
+    # **Cube 를 쓰지 않는 이유**: Cube 는 `*_latest` 라 시점 창이 없다 - 과거를 설명하면서
+    # 나중에 정정된 값을 보게 되고, 에러 없이 조용히 미래를 본다.
+    canonical_manifest: str = ""    # pit-manifest.yml 경로 (data-pipeline 이 생성)
+    canonical_database: str = ""    # Glue 데이터베이스
+    canonical_output: str = ""      # Athena 결과 s3:// 경로
 
 
 def _flag(name: str, *, default: bool) -> bool:
@@ -132,4 +142,8 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         causal_sandbox_enabled=_flag("CAUSAL_SANDBOX_ENABLED", default=True),
         domain_docs_bucket=os.environ.get("EDGE_DOMAIN_BUCKET", "").strip(),
         domain_docs_profile=os.environ.get("EDGE_AWS_PROFILE", "").strip(),
+        causal_registry_root=os.environ.get("CAUSAL_REGISTRY_ROOT", "").strip(),
+        canonical_manifest=os.environ.get("CANONICAL_MANIFEST", "").strip(),
+        canonical_database=os.environ.get("CANONICAL_DATABASE", "").strip(),
+        canonical_output=os.environ.get("CANONICAL_ATHENA_OUTPUT", "").strip(),
     )

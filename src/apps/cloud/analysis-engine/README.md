@@ -10,7 +10,7 @@ ETF **당일 설명 생성** 파이프라인 (Python, edge-cloud). 대상 ETF �
 > 조립한 `source_event` 계보를 읽는다. 뉴스 읽기·제목 분류·계보 조립·threading 은 feature
 > 페이즈(data-pipeline)로 이관됐다.
 
-## 흐름
+## 흐름 ([설계도](../../../../docs/analysis-engine/architecture/analysis-engine-logic.drawio) · [PNG](../../../../docs/analysis-engine/architecture/analysis-engine-logic.png))
 
 ```
 price_movement_trigger 소비 (행 없음 = 평온 → 종료)
@@ -35,29 +35,71 @@ src/edge_analysis/
   domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
   adapters/   lake · eventstore · llm · archive · readonly · trace · universe · price_daily
               causal_data   # 인과 조회 표면(코호트·정렬열·비중). PIT 를 코드가 바인딩한다
+              sql_surface   # P2·P3·P5 의 자유 SELECT 표면. 시점 클램프가 뷰 안에 있다
+              canonical_surface   # canonical(S3) PIT 자유 SELECT · 온톨로지 21표. 클램프가 뷰 안에 있다
               classification · segment_tables   # 산업분류 원장 적재 · 부문 매출 표 파서
               domain_docs   # 「사업의 내용」 RAG 조회 (버킷 없으면 미부착)
-  causal/     agents · verify · sandbox · chain · graph · fit · stats · engine · narrate · run
+  causal/     contracts · p0_question … p9_registry · run    # P0–P9 귀속 파이프라인
+              graph · verify · sandbox · chain · engine · stats · fit   # 검정 실행 기계
 ```
 
-### 인과 설계 하네스 (`causal/`)
+### 인과귀속 P0–P9 (`causal/`)
 
-설명은 LLM 한 번 호출이 아니라 **에이전트 둘 + 코드 게이트**로 만든다
-([설계 문서](../../../../docs/analysis-engine/architecture/causal-design-harness.md)).
+설명은 LLM 한 번 호출이 아니라 **단계별 폐쇄를 강제하는 파이프라인**으로 만든다
+([설계도](../../../../docs/analysis-engine/architecture/causal-attribution-p0p9.drawio)).
 
 ```
-산술(무료) → 제안 에이전트(산문 DAG) → 구조 검사 → 반증 표면 열거 → 식별(조정/IV)
-          → 간선별 검정 에이전트(샌드박스에서 코드 실행 + G1~G7) → 적합 → 서술
+P0 질문 고정 → 산술 게이트 → P1 지문 → P2 다중가설 → P3 그래프+공통원인 완비
+   → P4 식별 3값 → P5 판별 검정 → 검정 실행 → 예산 → P6 민감도
+   → P7 음성대조·혼재 스크린 → P8 처분 원장 → P9 누적
 ```
 
-- **제안**은 산문만 낸다: 노드가 무엇을 어떤 단위로 재는가, 간선이 무엇을 주장하나
-  (`say`·`because`·`false_if`·`claims`). 수치·부호를 쓸 자리가 없다.
+**닫는 것은 어휘가 아니라 다섯이다.** 가설 생성(P2)에는 골격도 후보 목록도 주지 않는다 —
+어휘를 닫으면 새 메커니즘을 영영 못 본다. 대신:
+
+- **회계 폐쇄** — 귀속의 합이 잔차를 넘으면 그래프가 틀렸다. 카이제곱보다 싸고 날카롭다
+- **교란 폐쇄** — 그린 변수의 공통원인을 전수 선언한다(Hernán 조건). `assignment=chosen`
+  (기업이 고른 사건: 배당·자사주·가이던스)이면 **컴파일러가 `U ↔ (T,Y)` 를 심고 모델이
+  지울 수 없다**. 선언된 U 는 P5 에서 소거 검정을 받거나 P8 에 미소거로 남는다
+- **처분 폐쇄** — 검토한 후보에 침묵이 없다. 기여 / 비기여 / 미결 중 하나로 반드시 판정된다
+- **커버리지 폐쇄** — 메커니즘 영역 8종(정보·공통충격·수급·미시구조·피드백·제도·측정·무사건)
+  마다 열었는지 적는다. 후보는 공시·뉴스에서 오므로 적지 않으면 정보 영역으로 쏠리고,
+  **안 봤다와 보고 좁혔다가 산출물에서 같은 모양(부재)이 된다**
+- **관계 폐쇄** — 가설 쌍마다 관계를 판정한다(Zaks 2017). `share` 는 `coincident` 에서만
+  정의되므로 배타·포섭·직렬 쌍을 평탄하게 더하면 **정상 그래프를 산술이 죽인다**
+
+따라서 **미소거 U 가 하나라도 있으면 "원인으로 확인됐습니다" 가 구조적으로 나갈 수 없다** —
+`p8_findings.narrate` 가 주장 상한을 어긴 문장을 `PipelineError` 로 막는다.
+
+**원인 하나를 고르는 일이 아니다.** 가설마다 `role` 을 붙여 인과 패키지를 배경조건·촉발원·
+전달경로·증폭·종료로 갈라 보고한다 — Flash Crash 를 "대규모 매도가 원인"으로 끝내면
+유동성 고갈(증폭)과 거래정지(종료)가 같은 칸에 들어가 개입 설계가 달라진다는 사실을 잃는다.
+역할 신고는 지문의 default/deviant 가 감사한다(Halpern-Hitchcock: 배경조건 ≡ 그 참조류에서
+전형적 · 촉발원 ≡ 이례적). `probable_cause` 는 **복수**다 — NTSB 규약이 병렬 나열을 명시
+허용하고 실제 Asiana 214 의 PC 는 4개다.
+
+- **식별은 3값**이다: `identified` / `identified_under(가정)` / `not_identified`.
+  빈 조정집합은 "뒷문이 없다"가 아니라 "조정으로 막을 것이 없다"이고, 그 둘은 U 가
+  걸려 있을 때 정반대다. `not_identified` 는 실패가 아니라 정상 종료다
+- **식별이 안 되면 민감도**(P6 E-value)가 주장의 강도를 수치로 낸다 — 뒤집으려면 미관측
+  교란이 처치·결과 양쪽과 얼마나 강하게 연관돼야 하는가
 - **검정**은 간선 하나마다 파이썬을 써서 표본을 만들고 `placebo` 로 귀무분포를 붙인다.
-  값은 원장(`placebo` 호출 기록)에서만 읽는다 — 모델이 타이핑한 p 는 게이트 G4 가 거부한다.
-- **못 잰 것은 침묵이 아니라 요청**이다. `impossible` 이 `causal.data_requests`
-  (`need`·`grain`·`unlocks`·`edge`)로 쌓여 다음 수집 의제가 된다.
-- 감사 흔적은 `explanation.raw.causal.proofs[]` 에 남는다 — 술어·층화·조정집합·주장 층위·
-  원장 전량·에이전트가 쓴 코드. 이게 없으면 게이트 통과 사실만 남고 증거가 사라진다.
+  값은 원장(`placebo` 호출 기록)에서만 읽는다 — 모델이 타이핑한 p 는 게이트 G4 가 거부한다
+- **못 잰 것은 침묵이 아니라 요청**이다. `impossible`·실행 불가 판별 검정·측정 불가 지문 축이
+  전부 처분 원장에 `undetermined` 로 남아 다음 수집 의제가 된다
+- 감사 흔적은 `explanation.raw.causal` 에 남는다 — 처분 전건·미소거 U·식별 상태와 가정·
+  판별 검정·민감도·음성대조·원장 전량·에이전트가 쓴 코드
+
+**표면은 둘인데 에이전트에게는 하나로 보인다.** P2·P3·P5 가 받는 것은 `Surfaces` 파사드
+하나고, 질의에 뜬 뷰 이름으로 Postgres(`sql_surface`)와 canonical(`canonical_surface`)이
+갈린다 — 어느 저장소에 사는지를 모델이 알아야 하면 그걸 맞추느라 질의가 틀린다.
+**Cube 는 안 쓴다**: `*_latest` 에는 시점 창이 없어서 과거를 설명하면서 그 뒤에 정정된
+재무·수정된 컨센서스를 보게 되고, **에러 없이 조용히 미래를 본다** — 인과 귀속에서 이보다
+나쁜 실패는 없다. 그래서 `canonical.tables.as_of_sql` 쪽을 쓰되, 그 함수가 data-pipeline 에
+있으므로 **생성 매니페스트**(`infra/canonical/pit-manifest.yml`)로 잇는다 — import 하면
+psycopg3·lxml 이 딸려와 드라이버가 이중이 되고, 재구현하면 정정 처리 로직이 두 벌이 된다.
+`CANONICAL_*` 셋이 다 있어야 붙고, 안 붙으면 그 어휘는 실리지 않은 채 P8 커버리지 원장에
+**미개봉**으로 남는다(`Surfaces.missing`).
 
 > 샌드박스는 **LLM 이 쓴 코드를 실행한다**(입력에 외부 사건 제목이 섞이므로 프롬프트 주입
 > 표면이다). `as_of` 바인딩·창 절단·`__` 금지·import 허용목록·타임아웃으로 좁혀 두었지만
@@ -84,10 +126,14 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 | `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
 | `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
-| `CAUSAL_ENABLED` | 인과 설계 하네스 사용(끄면 단일 프롬프트 경로) | `true` |
+| `CAUSAL_ENABLED` | P0–P9 인과귀속 사용(끄면 단일 프롬프트 경로) | `true` |
 | `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |
+| `CAUSAL_REGISTRY_ROOT` | P9 메커니즘 레지스트리 경로. 비면 소환 기록을 남기지 않는다 — 단일 사례 귀속은 반복으로만 검정력을 얻으므로 이 경로가 비면 그 축적이 통째로 없다 | (없음) |
 | `EDGE_DOMAIN_BUCKET` | 도메인 문서(「사업의 내용」) RAG 저장소. 비면 조회 도구 미부착 | (없음) |
 | `EDGE_AWS_PROFILE` | 도메인 문서 버킷 접근 프로파일 (교차 계정일 때) | (기본 자격증명) |
+| `CANONICAL_MANIFEST` | 생성 매니페스트(`infra/canonical/pit-manifest.yml`) 경로. 비면 재무·컨센서스·지배구조 어휘가 표면에 안 실린다 | (없음) |
+| `CANONICAL_DATABASE` | canonical PIT 질의가 도는 Glue 데이터베이스 | (없음) — 예: `edge_lake_draft` |
+| `CANONICAL_ATHENA_OUTPUT` | Athena 결과 저장 `s3://` 경로 | (없음) |
 
 ## 배포
 
