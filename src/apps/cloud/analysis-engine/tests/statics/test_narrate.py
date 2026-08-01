@@ -109,3 +109,17 @@ def test_unexplained_becomes_interval_when_edges_apply():
     s2 = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                  edges=(e, bad))
     assert "미설명 [" not in s2 and "서사가 아니라 데이터다" in s2
+
+
+def test_rejected_route_suppresses_all_magnitude_quotes():
+    # 13차: 게이트 D 가 거절한 셀에서 [채널]이 크기를 인용하면 산문이 자기모순이다.
+    # 존재 판정은 패널(타 종목) 소관이라 살아남고, 크기만 보류된다. [몫]도 구간
+    # 회계를 접고 점 어법으로 후퇴한다.
+    rows = [_row("잔여1", 0.0129)]
+    e = Edge(channel="P판가", event_type="T.X", verdict="성립", applied=True,
+             iset_lo=0.0003, iset_hi=0.0128)
+    s = narrate(ticker="T", name="N", day="d", route="거절", rows=rows, grounded={},
+                edges=(e,))
+    assert "점귀속은 거절된다" in s                       # 귀속 형태 선언
+    assert "크기는 **보류** — 셀 점귀속 거절" in s        # 채널판이 인용을 거부
+    assert "기여는 많아야" not in s and "미설명 [" not in s  # 크기 인용 전무

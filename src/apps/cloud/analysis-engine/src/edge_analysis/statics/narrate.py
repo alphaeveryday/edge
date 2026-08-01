@@ -163,9 +163,9 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         share_bits.append(f"나머지 {len(rest)}창 합 {_pct(sum(r.share.log_ret for r in rest))}")
     # 적용 엣지가 있으면 미설명도 구간이 된다: 하루 총합 − Σ식별집합.
     # 점을 지어내지 않고 크기 층(항등식)과 인과 층(iset)을 화해시키는 유일한 형태.
-    # 모순(iset 없는 적용 엣지)이 하나라도 있으면 뺄 수 없다 - 점 어법으로 후퇴.
+    # 모순(iset 없는 적용 엣지)이 하나라도 있거나 셀 점귀속이 거절이면 뺄 수 없다.
     applied = [e for e in edges if e.applied]
-    if applied and all(e.iset_lo is not None for e in applied):
+    if applied and route != "거절" and all(e.iset_lo is not None for e in applied):
         # iset 은 ar(산술) 단위, 몫은 로그 - 이 크기(±3%)에서 격차 <1bp 라 선형으로
         # 통일한다 ([채널] 문장과 같은 렌더). ponytail: 큰 수익률 셀이 오면 로그 정합.
         lin = lambda x: f"{x * 100:+.2f}%p"  # noqa: E731
@@ -186,7 +186,13 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     for e in edges:
         if not e.applied:
             continue
-        if e.contradiction:
+        if route == "거절":
+            # 게이트가 이 셀의 점귀속을 거절했다 - 두 줄 위에서 거절한 주장을
+            # 여기서 인용하면 산문이 자기모순이다. 존재 판정만 남긴다.
+            size = ("크기는 **보류** — 셀 점귀속 거절(요인 오염). 타입 엣지의 존재는 "
+                    "패널(타 종목) 소관이라 살아남지만, 오늘 이 종목의 크기는 "
+                    "요인 재구성 전에 인용 금지")
+        elif e.contradiction:
             size = "크기는 **보류** — SEM 구간이 하루 총합과 모순 (과대식별 검산 실패)"
         elif e.iset_lo is not None and e.iset_hi is not None:
             size = (f"기여는 많아야 {e.iset_hi * 100:+.2f}%p "

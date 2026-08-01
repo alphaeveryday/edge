@@ -201,6 +201,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 채널판을 산문에 배선한다 - 표·블록·산문이 같은 값에서 나와야 한다는 계약의
     # 채널 확장. 성립-미적용의 사유는 applies_today 의 부정을 그대로 옮긴다.
     day_total = sum(s.log_ret for s in shares)
+    cell_route = _route_gate(lake, instrument_id, day)
     edges = []
     for t, r in reports:
         why = ("" if r.applies_today else
@@ -214,8 +215,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                           iset_hi=iset[1] if iset else None,
                           contradiction=r.ci_lo is not None and iset is None))
 
-    story = narrate(ticker=ticker, name=instrument_id[:20], day=day,
-                    route=_route_gate(lake, instrument_id, day),
+    story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
                     edges=tuple(edges))
 
@@ -240,7 +240,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if r.contribution is not None:
             # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
             iset = _iset(r, day_total)
-            say = (f"식별집합 [{iset[0] * 100:+.2f}, {iset[1] * 100:+.2f}]%p" if iset else
+            say = ("셀 점귀속 거절(요인 오염) - 인용 금지, 요인 재구성 후 재계산"
+                   if cell_route == "거절" else
+                   f"식별집합 [{iset[0] * 100:+.2f}, {iset[1] * 100:+.2f}]%p" if iset else
                    f"**과대식별 모순** - 구간이 하루 총합 {day_total * 100:+.2f}%p 와 안 겹친다")
             block.append(f"    SEM 기여(일 단위): {r.contribution * 100:+.2f}%p "
                          f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {say}")
