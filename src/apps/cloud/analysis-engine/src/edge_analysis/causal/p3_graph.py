@@ -444,6 +444,14 @@ def _parse(out: dict[str, Any], hypotheses: list[Hypothesis],
             carried += 1
     if carried:
         log("causal.p3.carried_over", nodes=carried)
+    # 접지 타입도 합집합의 일부다. 모델이 노드를 다시 타이핑하면 이 값이 떨어져 나가고,
+    # 그러면 검정이 다시 사람 말에서 코호트를 짜려다 0행이 된다.
+    for h in hypotheses:
+        for nid, spec in (h.nodes or {}).items():
+            code = isinstance(spec, dict) and spec.get("event_type_code")
+            if code and isinstance(clean.get(nid), dict) \
+                    and not clean[nid].get("event_type_code"):
+                clean[nid] = {**clean[nid], "event_type_code": code}
 
     if sql is None:
         # 조회 없이 한 완비 선언이라는 사실은 선언 자체에 붙어야 한다 - 나중에 이 문장만
