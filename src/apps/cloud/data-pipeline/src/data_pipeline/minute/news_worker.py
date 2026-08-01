@@ -47,6 +47,7 @@ from .news_overlap import (
     NewsPage,
     NewsSourceLedger,
     blocking_quality_reasons,
+    blocks_extraction,
     build_observations,
     observation_checksum,
     poll_new_articles,
@@ -215,14 +216,19 @@ class NewsWorker(MinuteWorkerLoop):
             # 재부상·재정렬로 anchor 뒤에 온 신규분이 유실된다(ALPHA-668 계약)
             observations = build_observations(outcome.observed_articles)
             # 기존 뉴스 품질 게이트 재사용 — 분석에 못 쓰는 기사에 LLM job 을 만들지
-            # 않는다(관측은 남긴다). 상한은 session_date: 그날 세션이 미래 발행일을
-            # 정상으로 인증하지 않게 한다.
+            # 않는다(관측은 남긴다). 사유는 **전부** 기록하되(manifest·EOD 입력) job 을
+            # 막는 건 내재 사유뿐이다 — 시각 상대 사유(미래 발행일)로 막으면 내용이
+            # 그대로인 기사가 다음 세션에 해제돼도 재관측이 변화를 안 내 영구 누락된다.
             blocked = {
                 o.source_item_id: reasons
                 for o in observations
                 if (reasons := blocking_quality_reasons(
                     o.row, max_published_date=cfg.session_date))
             }
+            no_job_ids = frozenset(
+                item_id for item_id, reasons in blocked.items()
+                if blocks_extraction(reasons)
+            )
             # window checksum 은 **관측 데이터** identity 다(판정 맥락은 manifest 가
             # 기록한다) — 같은 기사 집합을 같은 내용으로 다시 봤다면 같은 값이다
             checksum = observation_checksum(observations)
@@ -251,7 +257,7 @@ class NewsWorker(MinuteWorkerLoop):
                 worker_id=cfg.worker_id, fence_token=self.fence_token,
                 claim_token=claim["claim_token"], dataset=cfg.dataset,
                 source_code=cfg.source_code, observations=observations,
-                blocked_ids=frozenset(blocked), truncated=outcome.truncated,
+                blocked_ids=no_job_ids, truncated=outcome.truncated,
                 head_anchor_ids=head_anchor_ids,
                 # truncated 면 성공 anchor 를 전진시키지 않는다 — 못 따라잡은 구간을
                 # 다음 poll 이 계속 목표로 삼아야 한다
@@ -268,9 +274,11 @@ class NewsWorker(MinuteWorkerLoop):
                 ontology_version=cfg.ontology_version, now=now,
             )
             if blocked:
-                # 조용한 폐기 금지 — 무엇을 왜 안 보냈는지 남긴다(Rule 12)
-                logger.warning("news poll %s 품질 게이트 차단 %d건: %s",
-                               claim["window_start"], len(blocked), sorted(blocked))
+                # 조용한 폐기 금지 — 무엇이 왜 걸렸는지, 그중 무엇이 job 에서 빠졌는지
+                # 남긴다(Rule 12)
+                logger.warning("news poll %s 품질 사유 %d건(job 차단 %d건): %s",
+                               claim["window_start"], len(blocked), len(no_job_ids),
+                               sorted(blocked.items()))
             if result["stale_ids"]:
                 # 순서가 뒤집힌 도착 — 원장이 최신본을 지켰고 추출은 만들지 않았다.
                 # realtime 단일 writer 에선 드물다(now 가 단조) — 보이면 다른 writer 나

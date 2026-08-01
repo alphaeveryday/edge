@@ -303,6 +303,30 @@ class TestQualityGate:
             ["01100901.20260731000001", ["missing_title"]]
         ]
 
+    def test_future_dated_article_still_gets_a_job(self, tmp_path):
+        # 미래 발행일은 **판정 기준이 날마다 움직이는** 사유다(session_date 상대).
+        # 이걸로 job 을 막으면, 내용이 그대로인 그 기사는 다음 세션에 조건이 풀려도
+        # 재관측이 created/content_changed 를 안 내 영구히 추출되지 않는다. 그래서
+        # 기록만 하고 job 은 만든다 — 봇 리뷰 P2 회귀 방지.
+        class FutureDatedFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [{"NEWS_ID": "01100901.20260805000000", "DATE": "20260805",
+                         "TITLE": "내일 기사", "CONTENT": "c", "PROVIDER": "p",
+                         "PROVIDER_LINK_PAGE": "https://news.example/f"}]
+
+        db = FakeMinuteDB()
+        worker, _, _ = build_worker(db, tmp_path, feed=FutureDatedFeed())
+        assert worker.tick(NOW) == "PROCESSED"
+        assert len(db.jobs) == 1, "시각 상대 사유로 job 을 막으면 영구 누락이 된다"
+        # 사유 자체는 기록에 남는다 — EOD 가 하루 단위로 판정할 입력이다
+        [key] = worker.storage.list_keys("operations_archive/")
+        manifest = json.loads(worker.storage.get_bytes(key))
+        assert manifest["quality_blocked"] == [
+            ["01100901.20260805000000", ["implausible_published_at"]]
+        ]
+
     def test_titleless_article_does_not_stall_the_lane(self, tmp_path):
         # 제목 없는 행이 poll 판정 단계에서 터지면 그 행은 소스에 남아 있으므로 **매
         # poll 이 같은 자리에서 죽는다** — 뉴스 레인 전체가 영구히 멈춘다. 관측은 하되

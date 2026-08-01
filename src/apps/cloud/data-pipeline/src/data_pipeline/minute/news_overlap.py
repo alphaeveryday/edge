@@ -294,13 +294,25 @@ class NewsIdentityConflictError(ValueError):
     """
 
 
-def blocking_quality_reasons(article: dict, *, max_published_date: str) -> list[str]:
-    """기존 뉴스 품질 게이트(quality.validate_news_meta)의 blocking 사유만 (정상=[]).
+# job 을 막는 사유는 **행 자체의 성질**인 것만이다. `implausible_published_at` 은
+# 판정 기준(session_date)이 날마다 움직이는 **시각 상대적** 사유라 빠진다: 오늘 미래로
+# 찍힌 기사가 내일은 통과하는데, 내용이 그대로면 재관측이 created/content_changed 를
+# 내지 않아 그 시점의 해제가 job 으로 이어지지 못한다 — 영구 누락이 된다. 반대로 내재
+# 사유(제목 결측·발행시각 파싱 불가)는 행이 고쳐질 때만 풀리고, 그건 content_changed 로
+# 잡히므로 안전하다. 시각 상대 사유는 기록만 하고 EOD(PR 8)가 하루 단위로 판정한다.
+_JOB_BLOCKING_REASONS = frozenset({"missing_title", "unparseable_published_at"})
 
-    분석에 쓸 수 없는 기사(제목 없음·발행시각 파싱 불가·비현실 날짜)에 LLM 추출 job 을
-    만들지 않기 위해서다 — 배치 정제가 canonical 진입을 막는 바로 그 기준을 재사용한다
-    (게이트 SSOT 는 quality/news.py 하나여야 한다). 관측 자체는 막지 않는다: 원장은
-    본 것을 기록하고, 나중에 제목이 채워지면 content_changed 로 job 이 생긴다.
+
+def blocking_quality_reasons(article: dict, *, max_published_date: str) -> list[str]:
+    """기존 뉴스 품질 게이트(quality.validate_news_meta)의 blocking 사유 (정상=[]).
+
+    분석에 쓸 수 없는 기사(제목 없음·발행시각 파싱 불가·비현실 날짜)를 드러내려고
+    배치 정제가 canonical 진입을 막는 바로 그 기준을 재사용한다 — 게이트 SSOT 는
+    quality/news.py 하나여야 한다. 관측 자체는 막지 않는다: 원장은 본 것을 기록하고,
+    나중에 제목이 채워지면 content_changed 로 job 이 생긴다.
+
+    반환에는 사유 전부가 담긴다(기록용). 그중 **job 을 실제로 막는 것**은
+    `blocks_extraction` 이 정하는 내재 사유뿐이다.
     """
     reasons = validate_news_meta(
         {
@@ -314,6 +326,11 @@ def blocking_quality_reasons(article: dict, *, max_published_date: str) -> list[
         max_published_date=max_published_date,
     )
     return [reason for reason in reasons if reason in BLOCKING_REASONS]
+
+
+def blocks_extraction(reasons) -> bool:
+    """이 사유들이 **추출 job 을 막는가** — 시각 상대 사유만 있으면 막지 않는다."""
+    return bool(set(reasons) & _JOB_BLOCKING_REASONS)
 
 
 def build_observations(articles) -> tuple[NewsObservation, ...]:
