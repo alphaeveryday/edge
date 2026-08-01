@@ -95,7 +95,13 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
 
 ## 7. Squash 머지 + 브랜치 삭제
 
-- `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계)을 통과했으면 **확인 없이 실행한다** — 루프 종료 조건(`+1` 또는 전건 비수용)이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
+- **GitHub 체크 전건 통과 확인 (머지 전 필수)** — Codex `+1` 은 리뷰어 판정일 뿐 CI 통과가 아니다. 머지 직전에 체크가 끝날 때까지 기다려 결과를 확인한다:
+  ```bash
+  gh pr checks <N> --watch --fail-fast   # 0=전건 통과, 1=실패 있음, 8=대기 중
+  ```
+  - 실패가 있으면 **머지하지 않는다** — `gh run view --log-failed` 로 원인을 보고 고친 뒤 4단계 게이트부터 재진입한다(Flyway 버전 충돌처럼 머지 후엔 dev 전체를 세우는 실패가 여기서 잡힌다).
+  - "no checks reported" 로 끝나면 통과가 아니라 **워크플로가 아예 안 돈 것**이다(Actions 한도 소진기 push 는 job 이 시작되지 않고 소급 실행도 없다). 왜 안 돌았는지 확인 전에는 머지하지 않는다.
+- `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계) 통과 + 위 체크 전건 통과면 **확인 없이 실행한다** — 그 둘이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
 - **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `src/libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(README "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
   ```bash
   git fetch origin dev --quiet
@@ -120,5 +126,5 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
 
 ## 테스트 시나리오
 
-- **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → Codex 리뷰 풀링, finding 1건 수용·수정·`@codex review` 재요청, `+1` 확인 → 확인 없이 Squash 머지·브랜치 삭제(7단계 — `+1`이 곧 머지 게이트) → 이슈 완료 전환.
+- **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → Codex 리뷰 풀링, finding 1건 수용·수정·`@codex review` 재요청, `+1` 확인 → `gh pr checks` 전건 통과 확인 → 확인 없이 Squash 머지·브랜치 삭제(7단계 — `+1`+체크 통과가 곧 머지 게이트) → 이슈 완료 전환.
 - **에러 흐름**: edge-review 게이트가 `./gradlew :apps:onprem:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.
