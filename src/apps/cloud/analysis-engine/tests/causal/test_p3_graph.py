@@ -24,7 +24,8 @@ NODES = {
     TREAT: {"says": "자사주 취득 결정", "observed": None, "events": ["e1"]},
     OUT: {"says": "당일 초과수익", "observed": "종가 기준 초과수익", "events": []},
 }
-EDGES = [{"from": TREAT, "to": OUT}]
+# `kind` 는 필수다 - 없으면 그 간선은 검정을 조용히 빠져나간다(run._designs).
+EDGES = [{"from": TREAT, "to": OUT, "kind": "statistical"}]
 H = Hypothesis(hid="H1", says="자사주 취득 결정이 당일 초과수익을 만들었다",
                treatment=TREAT, outcome=OUT, assignment="chosen")
 Q = Question(etf_instrument_id="091160", etf_name="테스트 ETF", trade_date=date(2026, 7, 16),
@@ -113,13 +114,13 @@ def test_an_all_simultaneous_chain_must_declare_why_it_can_point_an_arrow():
     now = {"BUYBACK@t+0": {"says": "취득 결정", "observed": None, "events": ["e1"]},
            OUT: NODES[OUT]}
     h = replace(H, treatment="BUYBACK@t+0")
-    g = WorldGraph(nodes=now, edges=[{"from": "BUYBACK@t+0", "to": OUT}],
+    g = WorldGraph(nodes=now, edges=[{"from": "BUYBACK@t+0", "to": OUT, "kind": "statistical"}],
                    latents=compile_latents([h], []), hypotheses=[h],
                    completeness="두 변수쌍을 훑었다")
 
     assert any("simultaneous" in b for b in validate(g, grounded={"e1"}))
 
-    declared = replace(g, edges=[{"from": "BUYBACK@t+0", "to": OUT, "simultaneous": True,
+    declared = replace(g, edges=[{"from": "BUYBACK@t+0", "to": OUT, "kind": "statistical", "simultaneous": True,
                                   "simultaneous_why": "결정 공시와 체결이 같은 장중에 있다"}])
     assert validate(declared, grounded={"e1"}) == []
 
@@ -145,7 +146,7 @@ def test_a_structure_violation_comes_back_as_feedback_and_the_next_try_is_accept
     """거부는 침묵이 아니라 교정이다. 위반 문장을 안 돌려주면 모델은 같은 그래프를 다시
     내거나 구조를 통째로 갈아탄다 - 클라우드 실행에서 실제로 그랬고 회차가 소진됐다.
     """
-    broken = _payload(edges=[{"from": OUT, "to": TREAT}])
+    broken = _payload(edges=[{"from": OUT, "to": TREAT, "kind": "statistical"}])
     client = _Client([broken, _payload()])
 
     g = build(client, None, question=Q, hypotheses=[H], grounded={"e1"})
@@ -160,7 +161,7 @@ def test_three_failed_tries_hand_over_the_violations_instead_of_forcing_a_graph(
     밀면 그 셀은 근거 없이 확정된 것처럼 원장에 남는다.
     """
     late = {**NODES, "BUYBACK@t+1": NODES[TREAT]}
-    client = _Client([_payload(nodes=late, edges=[{"from": "BUYBACK@t+1", "to": OUT}])])
+    client = _Client([_payload(nodes=late, edges=[{"from": "BUYBACK@t+1", "to": OUT, "kind": "statistical"}])])
 
     g = build(client, None, question=Q, hypotheses=[H], grounded={"e1"})
 

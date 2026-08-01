@@ -31,6 +31,7 @@ from typing import Any
 
 from ..config import PipelineError
 from ..observability import log
+from . import chain
 from .contracts import (
     ASSIGNMENT_SAY,
     COMPILED_LATENT,
@@ -82,7 +83,8 @@ JSON 하나만. 조회거나 그래프거나 둘 중 하나다.
   "nodes": {"<이름@t±N>": {"says": "이 노드가 무엇이며 무엇을 어떤 단위로 재는가",
                            "observed": "어떻게 관측하나 (못 재면 null)",
                            "events": ["접지된 event_id"]}},
-  "edges": [{"from": "", "to": "", "says": "이 간선이 주장하는 것 한 문장",
+  "edges": [{"from": "", "to": "", "kind": "statistical|identity|elasticity",
+             "says": "이 간선이 주장하는 것 한 문장",
              "because": "왜 이 경로로 전달되나",
              "false_if": "무엇이 관측되면 이 간선이 죽나",
              "simultaneous": false, "simultaneous_why": "",
@@ -97,6 +99,18 @@ JSON 하나만. 조회거나 그래프거나 둘 중 하나다.
 `blocked_by` 에는 네가 그린 노드 id 만 써라. 배정이 `chosen`·`scheduled` 인 처치에는 코드가
 U 를 자동으로 심는다 - 네가 안 적어도 들어가고 지울 수 없으니, 그 자리 말고 **네가 아는
 다른 공통원인**에 지면을 써라. 위 골격은 모양이지 내용이 아니다 - 예시는 주지 않는다.
+
+## kind 가 그 간선의 운명을 정한다
+`statistical` 만 검정 대상이다. 코호트를 짜고 표본을 만들고 위약분포를 붙이는 것은 이
+간선들뿐이고, **비워 두면 그 간선은 검정 없이 지나간다** - 어떤 수치도 붙지 않고 예산에도
+들어가지 않는다. 실제로 그렇게 돌아 검정 0건으로 끝난 런이 있다.
+
+  statistical  코호트로 재야 아는 것 (사건 → 초과수익, 수급 → 가격)
+  identity     정의상 참인 계산 (구성종목 기여의 합 = ETF 기여). 검정 대상이 아니다
+  elasticity   외부 출처의 계수를 빌려 쓰는 것 (금리 1%p → 밸류에이션 X%)
+
+`identity` 를 `statistical` 로 적으면 계산을 검정하게 되고, 반대로 적으면 추정치가 정의처럼
+보고된다. 애매하면 `statistical` 이다 - 재 보고 아닌 것이 낫다.
 
 ## exposure · reference 는 문장이 아니라 술어다
 이 둘은 **그대로 SQL 의 WHERE 에 들어간다.** "삼성전자 실적 발표를 접한 투자자" 같은
@@ -217,6 +231,13 @@ def validate(g: WorldGraph, *, grounded: set[str]) -> list[str]:
         if a not in g.nodes or b not in g.nodes:
             bad.append(f"{tag}: nodes 에 선언 안 됨")
             continue
+        # `kind` 없는 간선은 **조용히 검정을 빠져나간다**(`run._designs` 는 statistical 만
+        # 고른다). 그러면 그래프가 멀쩡한데 검정 0건·예산 0.0 으로 끝나고, 산출물에는
+        # "재 봤는데 아무것도 안 나왔다"와 구분되지 않는 모양이 남는다(2026-08-01 실측).
+        if str(e.get("kind") or "") not in chain.KINDS:
+            bad.append(f"{tag}: kind 가 없거나 어휘 밖이다({e.get('kind')!r}). "
+                       f"{list(chain.KINDS)} 중 하나를 적어라 - statistical 만 검정 대상이라 "
+                       "비우면 이 간선은 검정 없이 지나간다")
         if a not in off or b not in off:
             continue                      # 색인 위반은 규칙 1 이 이미 보고했다
         dir_e.append((a, b))
