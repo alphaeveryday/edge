@@ -32,6 +32,7 @@ from .models import (
     KisInvestorConfig,
     KisNavConfig,
     KisPriceConfig,
+    MinuteRelayConfig,
     KrxEtfConfig,
     NewsConfig,
     PriceConfig,
@@ -98,6 +99,9 @@ class Settings(BaseSettings):
     # ETF 가격변동 트리거(ALPHA-406)는 load-price-triggers 만 쓴다 — 미설정이면 그 진입점이
     # fail-loud 한다(트리거를 안 돌리는 환경은 생략 가능).
     price_triggers: PriceTriggersConfig | None = None
+    # 1분 Outbox Relay(ALPHA-670)는 `relay` 스텝만 쓴다 — 미설정이면 그 진입점이
+    # fail-loud 한다(Relay 를 안 돌리는 환경은 생략 가능).
+    minute_relay: MinuteRelayConfig | None = None
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

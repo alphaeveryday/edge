@@ -158,11 +158,26 @@ class _Cursor:
             self._job_transition("price" if "price_window_job" in s else "news", params)
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
+        elif s.startswith("SELECT status, COUNT(*) FROM dataset_commit_outbox"):
+            # DEAD 도 미발행이다 — SQL 이 NEW 만 세도록 바뀌면 배출 게이트가 격리분을
+            # 남긴 채 성공으로 끝난다(fake 가 하드코딩하면 그 회귀가 숨는다)
+            assert "'NEW', 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            counts: dict[str, int] = {}
+            for row in self.db.outbox.values():
+                if row["status"] in ("NEW", "DEAD"):
+                    counts[row["status"]] = counts.get(row["status"], 0) + 1
+            self._rows = sorted(counts.items())
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
-            self._claim_outbox(params)
+            self._claim_outbox(params, s)
         elif "SET status = 'PUBLISHED'" in s:
+            # CAS 가드를 fake 가 Python 으로 재현하므로, SQL 에서 빠지면 여기서 못 잡는다
+            # — 절의 존재를 못 박는다(옛 Relay 가 새 claim 을 마감하는 회귀, Rule 9)
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"mark_published SQL 에 {clause} 가 없다"
             self._mark_published(params)
         elif s.startswith("UPDATE dataset_commit_outbox SET status = %s, attempt_count"):
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
@@ -432,11 +447,34 @@ class _Cursor:
         }
         self._rows = [(event_id,)]
 
-    def _claim_outbox(self, p):
-        relay_id, claim_until, now, now2, limit = p
+    def _claim_outbox(self, p, sql=""):
+        # 실제 RETURNING 에 attempt_count 가 없으면 Relay 의 backoff 가 IndexError 로
+        # 죽는다 — fake 가 합성해 주면 그 회귀가 여기서 숨는다(Rule 9)
+        assert "o.attempt_count" in sql, "outbox claim 은 attempt_count 를 반환해야 한다"
+        # 아래 의미는 fake 가 **합성**한다 — SQL 에서 가드가 빠져도 fake 만 보면 통과하므로
+        # (실DB 에선 조기 재claim·claim 탈취·중복 발행) 절의 존재를 여기서 못 박는다(Rule 9)
+        for clause in (
+            "c.status = 'NEW'",
+            "c.next_attempt_at IS NULL OR c.next_attempt_at <= %s",
+            "c.claimed_by IS NULL OR c.claim_expires_at < %s",
+            "FOR UPDATE SKIP LOCKED",
+            "ORDER BY c.created_at",
+        ):
+            assert clause in sql, f"outbox claim SQL 에 {clause} 가 없다"
+        # destination 필터가 있는 변형은 파라미터가 6개다(SQL 과 파라미터 수를 함께 본다)
+        excluded = ()
+        destination = None
+        if "c.destination = %s" in sql:
+            relay_id, claim_until, now, now2, destination, limit = p
+        elif "NOT (c.destination = ANY(%s))" in sql:
+            relay_id, claim_until, now, now2, excluded, limit = p
+        else:
+            relay_id, claim_until, now, now2, limit = p
         eligible = sorted(
             (r for r in self.db.outbox.values()
              if r["status"] == "NEW"
+             and (destination is None or r["destination"] == destination)
+             and r["destination"] not in set(excluded)
              and (r["next_attempt_at"] is None or r["next_attempt_at"] <= now)
              and (r["claimed_by"] is None or r["claim_expires_at"] < now)),
             key=lambda r: r["seq"],
@@ -445,7 +483,7 @@ class _Cursor:
             row.update(claimed_by=relay_id, claim_expires_at=claim_until)
         self._rows = [
             (r["event_id"], r["event_type"], r["destination"], r["payload"],
-             r["claim_expires_at"]) for r in eligible
+             r["claim_expires_at"], r["attempt_count"]) for r in eligible
         ]
 
     def _mark_published(self, p):

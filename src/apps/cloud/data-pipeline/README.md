@@ -45,8 +45,10 @@
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
-> adapter 는 운영 승인 후)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
-> 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
+> adapter 는 운영 승인 후), Outbox Relay(destination 별 claim·SQS batch 발행·재시도,
+> ALPHA-670 — `run relay` 가 이 트랙의 **첫 실행 표면**이다)까지다. 스케줄·vendor
+> 실호출·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9).
+> 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
 
@@ -821,6 +823,15 @@ OPS_STATE_MACHINE_ARN=arn:aws:states:…:stateMachine:edge-dev-data-pipeline \
   python -m data_pipeline.run plan-run
 # Reconciler — 예정↔실제 대조(advisory lock 으로 중복 실행 방지).
 python -m data_pipeline.run reconcile
+# Outbox Relay(1분 파이프라인, ALPHA-670) — outbox NEW → SQS 발행. 상주(ECS Service)가
+# 기본이고 --max-ticks 는 로컬 확인·일회성 배출용이다(그 모드는 **미발행 0건을 확인**해야
+# exit 0 — IDLE 은 "지금 집을 게 없다"일 뿐이라 완료 판정에 못 쓴다).
+# 큐 매핑은 필수: 빠지면 그 큐의 event 가 전부 DEAD 가 되므로 기동을 거부한다.
+# 큐 매핑은 **JSON 한 변수**로 준다 — destination 이름에 하이픈이 있어 nested 형태
+# (…__QUEUE_URLS__price-analysis-realtime=)는 셸이 변수 할당으로 파싱하지 못한다.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+  python -m data_pipeline.run relay --max-ticks 5
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯

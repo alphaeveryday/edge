@@ -365,6 +365,36 @@ class DartDisclosureConfig(BaseModel):
     source: DartDisclosureSource
 
 
+class MinuteRelayConfig(BaseModel):
+    """1분 Outbox Relay 설정 — `relay` 스텝만 쓴다(ALPHA-670).
+
+    큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다 —
+    **JSON 한 변수**다: `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS={"<destination>":"<url>",…}`.
+    nested 형태(`…__QUEUE_URLS__<destination>`)는 쓰지 않는다 — destination 이름에
+    하이픈이 있어 셸이 변수 할당으로 파싱하지 못한다(실증: `command not found`).
+    destination 은 outbox 행이
+    들고 있는 값이고(계획 §11 큐 3종: price-analysis-realtime·news-extraction-realtime·
+    news-extraction-backfill), 매핑에 없는 destination 의 event 는 Relay 가 DEAD 로
+    격리한다 — 프로세스를 죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_urls: dict[NonBlankStr, NonBlankStr]
+    batch_limit: int = Field(default=10, ge=1, le=10)  # SQS SendMessageBatch 상한
+    # 상한을 둔다 — 큰 값(10^15)은 pydantic 을 통과한 뒤 timedelta 범위를 넘겨 claim
+    # 전에 매번 crash 하고, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
+    # 기본 150초 = batch_limit(10) × SQS 호출 예산(15초). 발행이 lease 보다 오래 걸리면
+    # 경쟁 Relay 가 같은 행을 탈취한다(minute/relay.py __post_init__ 이 조합을 검증한다).
+    lease_seconds: int = Field(default=150, ge=15, le=3600)
+    retry_base_seconds: int = Field(default=2, ge=1, le=3600)
+    retry_max_seconds: int = Field(default=300, ge=1, le=86_400)
+    # tick 사이 대기(초). ECS 상주 서비스라 짧게 돈다 — 발행 지연 목표는 수초(v0.7 11.1).
+    # 상한을 둔다: `1e309` 는 inf 로 파싱돼 gt=0 을 통과하고 time.sleep(inf) 가
+    # OverflowError 를 내며, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
+    tick_seconds: float = Field(default=1.0, gt=0, le=60)
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 
