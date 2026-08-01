@@ -149,17 +149,40 @@ def _verdict(kind: str, name: str, r: dict, what: str) -> NegativeControl:
 
 
 # ── 그래프에서 술어 캐기 ────────────────────────────────────────────────
+# v_cohort 의 컬럼. 술어는 이 위에서만 성립한다.
+_COHORT_COLS = ("instrument_id", "trade_date", "source_event_id", "event_type_code",
+                "predicate_code", "role_code", "lifecycle_stage", "sector_name",
+                "industry_name", "market_cap", "listing_market", "ticker")
+_PREDICATE = re.compile(
+    r"\b(?:" + "|".join(_COHORT_COLS) + r")\b\s*(?:=|<>|!=|<|>|~|IS\b|IN\b|NOT\b|LIKE\b|BETWEEN\b)",
+    re.IGNORECASE)
+
+
+def _sql_predicate(raw: object) -> str:
+    """SQL 술어처럼 생긴 것만 통과시킨다. **아니면 빈 문자열이다.**
+
+    P3 는 `exposure` 를 "이 경로에 노출된 집합" 으로 받는데, 모델은 그 자리에 산문을 쓴다 -
+    2026-07-30 실측에서 `WHERE (삼성전자 실적 발표를 접한 투자자)` 가 그대로 실행돼
+    `SyntaxError` 로 음성대조 전량이 죽었다. 문법이 우연히 맞는 산문이면 더 나쁘다:
+    조용히 엉뚱한 코호트가 잡히고 "검사했다"고 기록된다. 그래서 **컬럼 이름 위의 비교식**
+    이라는 최소 형태를 요구하고, 아니면 버려서 접지 사건 폴백으로 내려보낸다.
+    """
+    s = str(raw or "").strip()
+    return s if s and _PREDICATE.search(s) else ""
+
+
 def _predicates(graph: WorldGraph) -> tuple[str, str]:
     """P3 간선의 (exposure, reference). 처치 노드에서 나가는 간선을 먼저 본다.
 
-    노드에는 술어가 없다(P3 규약: nodes 는 says/observed/events). exposure 가 아예 없으면
-    가설이 접지한 `source_event_id` 로 만든다 - 그게 후보 사건 자체이므로 가장 좁고 정확한
-    처치 정의다. 대신 그 술어로는 타입·역할을 알 수 없어 노출 대조는 조회가 한 번 더 든다.
+    노드에는 술어가 없다(P3 규약: nodes 는 says/observed/events). exposure 가 아예 없거나
+    술어가 아니면 가설이 접지한 `source_event_id` 로 만든다 - 그게 후보 사건 자체이므로
+    가장 좁고 정확한 처치 정의다. 대신 그 술어로는 타입·역할을 알 수 없어 노출 대조는
+    조회가 한 번 더 든다.
     """
     treatments = {h.treatment for h in graph.hypotheses}
     edges = sorted(graph.edges, key=lambda e: 0 if e.get("from") in treatments else 1)
-    exposure = next((s for e in edges if (s := str(e.get("exposure") or "").strip())), "")
-    reference = next((s for e in edges if (s := str(e.get("reference") or "").strip())), "")
+    exposure = next((s for e in edges if (s := _sql_predicate(e.get("exposure")))), "")
+    reference = next((s for e in edges if (s := _sql_predicate(e.get("reference")))), "")
     if not exposure:
         events = list(dict.fromkeys(ev for h in graph.hypotheses for ev in h.events))
         if events:

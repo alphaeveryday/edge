@@ -143,15 +143,27 @@ def _views() -> str:
         LEFT JOIN entity e ON e.entity_id = i.instrument_id
         LEFT JOIN _cls c ON c.instrument_id = i.instrument_id
     ),
+    _title AS (
+        -- 제목은 `source_event` 에 없다 — 근거 문서 lineage 에 있다(evidence_type='TITLE').
+        -- 사건당 1건으로 접어서 붙인다: 그냥 조인하면 v_event 가 근거 수만큼 부풀고
+        -- 사건 건수 집계가 조용히 틀어진다. 선택 규칙은 eventstore.fetch_event_contexts
+        -- 와 같다(evidence_id 최소) — 두 경로가 같은 제목을 보여야 한다.
+        SELECT DISTINCT ON (ev.source_event_id)
+               ev.source_event_id, ev.evidence_text AS title
+        FROM event_evidence ev
+        WHERE ev.evidence_type = 'TITLE'
+        ORDER BY ev.source_event_id, ev.evidence_id
+    ),
     v_event AS (
         SELECT se.source_event_id, ea.entity_id AS instrument_id, ea.role_code,
                se.event_date AS trade_date, se.available_at,
                se.event_type_code, se.predicate_code, se.lifecycle_stage,
-               se.event_status, se.title,
+               se.event_status, t.title,
                etl.thread_id, etl.novelty_status
         FROM source_event se
         JOIN event_argument ea ON ea.source_event_id = se.source_event_id
         LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id
+        LEFT JOIN _title t ON t.source_event_id = se.source_event_id
         WHERE se.event_status = 'ACTIVE'
           AND se.event_date IS NOT NULL
           AND se.available_at <= %(as_of)s
