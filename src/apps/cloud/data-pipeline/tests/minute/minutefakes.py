@@ -161,7 +161,7 @@ class _Cursor:
                 "WHERE job_id = %s AND redrive_generation = %s",
                 "status = 'PENDING'",
                 "status = 'RETRY_WAIT' AND next_attempt_at <= %s",
-                "status = 'CLAIMED' AND lease_expires_at < %s",
+                "status = 'CLAIMED' AND (lease_expires_at IS NULL",
             ):
                 assert clause in s, f"claim_job SQL 에 {clause} 가 없다"
             self._claim_job_by_id(_job_kind(s), params)
@@ -176,7 +176,7 @@ class _Cursor:
         elif "SET status = 'DEAD', error_code = %s" in s and "redrive_generation = %s" in s:
             for clause in (
                 "status IN ('PENDING', 'RETRY_WAIT', 'CLAIMED')",
-                "status <> 'CLAIMED' OR lease_expires_at < %s",
+                "status <> 'CLAIMED' OR lease_expires_at IS NULL OR lease_expires_at < %s",
             ):
                 assert clause in s, f"dead_on_dlq SQL 에 {clause} 가 없다"
             self._dead_on_dlq(_job_kind(s), params)
@@ -189,7 +189,8 @@ class _Cursor:
         elif s.startswith("SELECT destination, generation, payload"):
             row = self.db.outbox.get(params[0])
             if row is not None:
-                self._rows = [(row["destination"], row["generation"], row["payload"])]
+                self._rows = [(row["destination"], row["generation"], row["payload"],
+                               row["status"])]
         elif "SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1" in s:
             # 관측한 상태·세대를 CAS 에 그대로 되건다 — 빠지면 그새 바뀐 job 을
             # 덮어써 진행 중인 실행이나 방금 끝난 결과를 잃는다
@@ -209,12 +210,20 @@ class _Cursor:
             self._job_transition("price" if "price_window_job" in s else "news", params)
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
-        elif s.startswith("SELECT status, COUNT(*) FROM dataset_commit_outbox"):
+        elif s.startswith("SELECT o.status, COUNT(*) FROM dataset_commit_outbox"):
             # DEAD 도 미발행이다 — SQL 이 NEW 만 세도록 바뀌면 배출 게이트가 격리분을
             # 남긴 채 성공으로 끝난다(fake 가 하드코딩하면 그 회귀가 숨는다)
-            assert "'NEW', 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            assert "o.status = 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            # redrive 가 만든 더 새 delivery 가 있으면 그 DEAD 는 대체된 것이다
+            assert "NOT EXISTS" in s, "대체된 DEAD 제외 절이 없다"
             counts: dict[str, int] = {}
             for row in self.db.outbox.values():
+                if row["status"] == "DEAD" and any(
+                    other["aggregate_id"] == row["aggregate_id"]
+                    and other["seq"] > row["seq"]
+                    for other in self.db.outbox.values()
+                ):
+                    continue   # 더 새 delivery 가 대신한다
                 if row["status"] in ("NEW", "DEAD"):
                     counts[row["status"]] = counts.get(row["status"], 0) + 1
             self._rows = sorted(counts.items())

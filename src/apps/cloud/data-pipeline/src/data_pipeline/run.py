@@ -174,7 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kind", default=None, choices=["news", "price"],
                         help="redrive: 되살릴 job 의 종류(news=news_extraction_job, price=price_window_job)")
     parser.add_argument("--job-id", default=None,
-                        help="redrive: 되살릴 job_id(결정적 ID). DEAD 인 job 만 대상이다")
+                        help="redrive: 되살릴 job_id(결정적 ID). 대상은 **막힌 것**이다 — "
+                             "DEAD job 이거나 Relay 가 발행 불가로 격리한 DEAD delivery event. "
+                             "정상 진행 중이거나 SUCCEEDED 인 job 은 거부된다")
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")

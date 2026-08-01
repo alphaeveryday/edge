@@ -38,6 +38,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -56,6 +57,12 @@ logger = logging.getLogger(__name__)
 SQS_RECEIVE_LIMIT = 10
 SQS_MAX_LONG_POLL_SECONDS = 20
 SQS_MAX_VISIBILITY_SECONDS = 43_200
+
+# SQS 호출 하나의 시간 예산 — relay 와 같은 값·같은 근거(connect 5s + read 10s).
+# heartbeat 가 visibility 만료 전에 **도착**할 수 있는지 검증하는 데 쓴다.
+SQS_CALL_BUDGET_SECONDS = 15
+# long polling 위에 얹는 read timeout 여유 — SQS 는 WaitTimeSeconds 직후에 응답한다.
+_READ_TIMEOUT_MARGIN_SECONDS = 10
 
 # backoff 지수 상한 — 복원·마이그레이션으로 큰 attempt_count 가 들어와도 2**n 이
 # 거대 정수가 되지 않게(relay 와 같은 이유·같은 값).
@@ -131,6 +138,14 @@ def _reject_json_constant(token: str):
     raise ValueError(f"표준 JSON 이 아닌 상수: {token}")
 
 
+def _reject_non_finite(text: str) -> float:
+    """`1e9999` 처럼 **리터럴이 넘쳐** inf 가 되는 경로 — parse_constant 를 우회한다."""
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError(f"유한하지 않은 수: {text}")
+    return value
+
+
 # job_id 는 결정적 sha256 hex 다(v0.7 10.6) — 형상을 강제해야 서로게이트·제어문자 같은
 # 이상 문자열이 DB 파라미터 인코딩 단계까지 내려가 tick 을 반복해서 죽이지 않는다.
 _JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -150,9 +165,11 @@ def parse_delivery(body: str) -> JobDelivery:
     try:
         event = json.loads(
             body, object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_json_constant,
+            parse_constant=_reject_json_constant, parse_float=_reject_non_finite,
         )
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
+        # RecursionError 도 여기서 접는다 — 깊게 중첩한 본문 하나가 파서 재귀 한도를
+        # 넘기면 ValueError 가 아니라서 호출자의 격리를 빠져나가 tick 을 죽인다.
         raise ValueError(f"메시지 본문이 유효한 JSON 이 아니다: {error}") from error
     if not isinstance(event, dict):
         raise ValueError(f"메시지 본문이 객체가 아니다: {type(event).__name__}")
@@ -186,6 +203,14 @@ def parse_delivery(body: str) -> JobDelivery:
         raise ValueError(f"job_id 가 sha256 hex 형상이 아니다: {job_id!r}")
     if build_event_id(event_type, job_id, generation) != event_id:
         raise ValueError(f"event_id 가 유도식과 다르다: {event_id!r}")
+    # payload 는 kernel 에겐 불투명하지만(스키마는 7B/7C 소관), **identity 만은**
+    # 봉투와 대조한다 — event_id 는 job A 를 가리키는데 payload 가 B 를 가리키면,
+    # payload 를 믿는 handler 가 B 를 처리하고 kernel 은 A 를 SUCCEEDED 로 확정한다.
+    payload_job_id = payload.get("job_id")
+    if payload_job_id is not None and payload_job_id != job_id:
+        raise ValueError(
+            f"payload.job_id({payload_job_id!r})가 event_id 의 job({job_id})과 다르다"
+        )
     return JobDelivery(
         event_id=event_id, event_type=event_type, kind=kind, job_id=job_id,
         redrive_generation=generation, payload=payload,
@@ -199,15 +224,19 @@ class SqsQueue:
     이 인터페이스만 본다(테스트는 fake 를 끼운다).
     """
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, *, wait_seconds: int = 0):
         self._client = client
+        # ReceiveMessage 는 long polling 동안 응답을 붙들고 있다 — SDK read timeout 이
+        # 그보다 짧으면 **빈 큐를 조회할 때마다** ReadTimeoutError 가 난다(저트래픽일수록
+        # 잦다). 발행용 기본값(10초)을 그대로 쓰면 20초 long poll 이 매번 터진다.
+        self._read_timeout = max(10, wait_seconds + _READ_TIMEOUT_MARGIN_SECONDS)
 
     @property
     def client(self):  # pragma: no cover - 실 AWS 경로
         if self._client is None:
             from ..ops.aws import sqs_client
 
-            self._client = sqs_client()
+            self._client = sqs_client(read_timeout=self._read_timeout)
         return self._client
 
     def receive(
@@ -223,14 +252,20 @@ class SqsQueue:
         messages = []
         for entry in response.get("Messages", ()):
             handle, body = entry.get("ReceiptHandle"), entry.get("Body")
-            if not isinstance(handle, str) or not handle or not isinstance(body, str):
+            message_id = entry.get("MessageId")
+            # MessageId 도 필수다 — 빈 문자열로 강제하면 여러 메시지가 같은 키가 돼
+            # reconciler 의 "이미 판정함" 집합에서 뒤엣것이 통째로 접힌다.
+            if (
+                not isinstance(handle, str) or not handle
+                or not isinstance(body, str)
+                or not isinstance(message_id, str) or not message_id
+            ):
                 # ack 할 수 없는 메시지 = 우리가 다룰 수 없다. 크게 남기고 넘긴다 —
                 # 조용히 빈 본문으로 만들면 그 자리에서 job 이 사라진다.
-                logger.error("SQS 응답에 ReceiptHandle/Body 가 없다: %r", entry.get("MessageId"))
+                logger.error("SQS 응답에 MessageId/ReceiptHandle/Body 가 없다: %r", entry)
                 continue
             messages.append(ConsumerMessage(
-                message_id=str(entry.get("MessageId") or ""),
-                receipt_handle=handle, body=body,
+                message_id=message_id, receipt_handle=handle, body=body,
             ))
         return tuple(messages)
 
@@ -286,13 +321,18 @@ class ConsumerConfig:
             raise ValueError(f"wait_seconds 는 0..{SQS_MAX_LONG_POLL_SECONDS} 이다")
         if not 1 <= self.visibility_seconds <= SQS_MAX_VISIBILITY_SECONDS:
             raise ValueError(f"visibility_seconds 는 1..{SQS_MAX_VISIBILITY_SECONDS} 이다")
-        if self.heartbeat_seconds < 1 or self.heartbeat_seconds * 2 > self.visibility_seconds:
-            # 만료 전에 최소 한 번은 연장이 돌아야 한다 — 아니면 heartbeat 가 있으나
-            # 마나가 돼 긴 job 의 메시지가 재배달되고 같은 LLM 호출이 중복된다.
+        if self.heartbeat_seconds < 1:
+            raise ValueError("heartbeat_seconds 는 1 이상이다")
+        # 만료 전에 연장이 **도착**해야 한다: 최악은 heartbeat 주기를 다 기다린 뒤
+        # SQS 호출이 예산만큼 걸리는 경우다. 주기만 보고(×2) 검증하면 visibility 2초에
+        # heartbeat 1초 같은 조합이 통과하는데, 그 호출은 최대 15초라 절대 못 닿는다.
+        # ⚠️ 남은 천장: heartbeat 는 배치를 **직렬로** 민다 — batch_size 가 크면 뒤쪽
+        # 메시지는 앞쪽 호출 시간만큼 늦으므로 visibility 도 그만큼 키워야 한다.
+        if self.heartbeat_seconds + SQS_CALL_BUDGET_SECONDS > self.visibility_seconds:
             raise ValueError(
-                f"heartbeat_seconds({self.heartbeat_seconds}) × 2 가 "
-                f"visibility_seconds({self.visibility_seconds}) 를 넘는다 — "
-                "만료 전에 연장이 한 번도 못 돈다"
+                f"visibility_seconds({self.visibility_seconds}) 가 "
+                f"heartbeat_seconds({self.heartbeat_seconds}) + SQS 호출 예산"
+                f"({SQS_CALL_BUDGET_SECONDS}초)보다 짧다 — 연장이 만료 전에 못 닿는다"
             )
         if self.lease_seconds < self.visibility_seconds:
             # DB lease 가 delivery 창보다 짧으면, 메시지가 아직 안 보이는 동안 job 만
@@ -315,13 +355,20 @@ class ConsumerConfig:
             raise ValueError("max_attempts 는 1 이상이다")
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Claimed:
-    """claim 까지 끝난 메시지 — 실행 스레드에 넘어가는 단위."""
+    """claim 까지 끝난 메시지 — 실행 스레드에 넘어가는 단위.
+
+    `lock`/`settled` 는 heartbeat(본 스레드)와 마감(실행 스레드)의 **visibility 쓰기
+    경합**을 막는다. 둘이 겹치면 실행 스레드가 DB 시각에 맞춰 놓은 재시도 visibility 를
+    본 스레드의 연장이 덮어써, 이미 eligible 인 job 의 wake-up 이 수 분간 숨는다.
+    """
 
     message: ConsumerMessage
     delivery: JobDelivery
     attempt: int
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    settled: bool = False
 
 
 @dataclass
@@ -383,20 +430,25 @@ class MinuteConsumer:
         # claim 은 **본 스레드에서 먼저** 끝낸다 — 실행 스레드가 각자 claim 하면
         # heartbeat 가 "무엇을 연장해야 하는지"를 경합 없이 알 수 없다.
         running: dict[object, _Claimed] = {}
-        last_heartbeat = time.monotonic()
-        for message in messages:
-            prepared = self._prepare(message, now)
-            if isinstance(prepared, str):
-                counts[prepared] += 1
-            else:
-                running[self._pool.submit(self._execute, prepared, now)] = prepared
-            # 배치가 크고 원장 왕복이 느리면 이 루프만으로 앞서 제출한 job 의 lease·
-            # visibility 가 만료된다 — 아래 heartbeat 루프에 들어가기 전에도 민다.
-            if running and time.monotonic() - last_heartbeat >= self.config.heartbeat_seconds:
-                self._heartbeat_running(running, now)
-                last_heartbeat = time.monotonic()
-        pending = set(running)
+        pending: set = set()
         try:
+            # ⚠️ claim(=제출)까지 **try 안**이다. 여기서 원장 예외가 나면 이미 제출한
+            # 실행이 관리 밖에 남아, 아무도 lease 를 연장하지 않는 채 pool 에서 계속
+            # 돈다(다음 tick 이 _tick_started 를 덮어 기록 시각까지 어긋난다).
+            last_heartbeat = time.monotonic()
+            for message in messages:
+                prepared = self._prepare(message, now)
+                if isinstance(prepared, str):
+                    counts[prepared] += 1
+                else:
+                    future = self._pool.submit(self._execute, prepared, now)
+                    running[future] = prepared
+                    pending.add(future)
+                # 배치가 크고 원장 왕복이 느리면 이 루프만으로 앞서 제출한 job 의 lease·
+                # visibility 가 만료된다 — 아래 heartbeat 루프에 들어가기 전에도 민다.
+                if pending and time.monotonic() - last_heartbeat >= self.config.heartbeat_seconds:
+                    self._heartbeat_running(running, now)
+                    last_heartbeat = time.monotonic()
             while pending:
                 done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
                 for future in pending:
@@ -406,14 +458,20 @@ class MinuteConsumer:
                 for future in done:
                     counts[future.result()] += 1
         finally:
+            # 예외로 빠져나가도 in-flight 는 **끝까지 heartbeat 하며** 기다린다. 그냥
+            # 두면 남은 실행이 lease 만료로 재청구돼 같은 외부 호출이 중복된다.
             if pending:
-                # 한 future 의 예외로 여기 왔다. 남은 실행은 claim 을 쥔 채 pool 에서
-                # 계속 도는데, 그냥 빠져나가면 아무도 lease 를 연장하지 않고 다음 tick 이
-                # _tick_started 를 덮어 기록 시각까지 어긋난다. 끝날 때까지 기다린다 —
-                # 결과 집계는 잃지만 원장은 자기 손으로 마감한다.
                 logger.error("tick 이 예외로 중단됐다 — 실행 중 job %d건을 마저 기다린다",
                              len(pending))
-                wait(pending)
+            while pending:
+                done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
+                for future in pending:
+                    self._heartbeat(running[future], now)
+                for future in done:
+                    error = future.exception()
+                    if error is not None:
+                        # 이미 예외 처리 중이라 올리지는 못한다 — 조용히 버리지도 않는다
+                        logger.error("중단된 tick 의 잔여 job 실패: %r", error)
         return counts
 
     def _heartbeat_running(self, running: dict, now: datetime) -> None:
@@ -512,6 +570,9 @@ class MinuteConsumer:
         try:
             checksum = self.handler(
                 job_id=delivery.job_id, payload=delivery.payload, attempt=claimed.attempt,
+                # 도메인 결과 writer(7B/7C)도 자기 쓰기를 fence 할 수 있어야 한다 —
+                # kernel 의 CAS 는 job 행만 지킨다.
+                redrive_generation=delivery.redrive_generation,
             )
         except PermanentJobError as error:
             logger.error("job %s permanent 실패: %s", delivery.job_id, error)
@@ -525,23 +586,28 @@ class MinuteConsumer:
             logger.exception("job %s 처리 중 미분류 예외", delivery.job_id)
             return self._finish_retry(claimed, "UNCLASSIFIED", now)
         if not isinstance(checksum, str) or not checksum.strip():
-            # handler 계약 위반 — 같은 코드가 다시 같은 값을 돌려준다(재시도 무의미).
+            # handler 계약 위반 — 근거가 **코드**(배포 회귀·adapter 결함)라 그 job 의
+            # 성질이 아니다. 첫 시도에 terminal 로 확정하면 배포를 고쳐도 영향받은 job
+            # 전부를 사람이 하나씩 redrive 해야 한다. 예산이 판정하게 둔다.
             logger.error(
                 "handler 가 result_checksum 문자열을 돌려주지 않았다: %r", checksum
             )
-            return self._finish_dead(claimed, "RESULT_CONTRACT", now)
-        if not self.jobs.succeed_job(
-            kind=delivery.kind, job_id=delivery.job_id,
-            worker_id=self.config.consumer_id, attempt=claimed.attempt,
-            redrive_generation=delivery.redrive_generation,
-            now=self._now(now), result_checksum=checksum,
-        ):
-            # claim 상실 뒤의 늦은 보고 — 지금 이 job 은 남의 것이다. 메시지를 지우면
-            # 새 소유자의 wake-up 까지 함께 지운다.
-            logger.warning("성공 기록 거부(claim 상실) — 삭제하지 않는다: %s", delivery.job_id)
-            return "lost"
-        self._delete(claimed.message)
-        return "succeeded"
+            return self._finish_retry(claimed, "RESULT_CONTRACT", now)
+        with claimed.lock:
+            claimed.settled = True   # 이 뒤로 heartbeat 는 visibility 를 건드리지 않는다
+            if not self.jobs.succeed_job(
+                kind=delivery.kind, job_id=delivery.job_id,
+                worker_id=self.config.consumer_id, attempt=claimed.attempt,
+                redrive_generation=delivery.redrive_generation,
+                now=self._now(now), result_checksum=checksum,
+            ):
+                # claim 상실 뒤의 늦은 보고 — 지금 이 job 은 남의 것이다. 메시지를 지우면
+                # 새 소유자의 wake-up 까지 함께 지운다.
+                logger.warning("성공 기록 거부(claim 상실) — 삭제하지 않는다: %s",
+                               delivery.job_id)
+                return "lost"
+            self._delete(claimed.message)
+            return "succeeded"
 
     def _finish_retry(self, claimed: _Claimed, error_code: str, now: datetime) -> str:
         if claimed.attempt >= self.config.max_attempts:
@@ -559,36 +625,53 @@ class MinuteConsumer:
             * 2 ** min(claimed.attempt - 1, _MAX_BACKOFF_EXPONENT),
             self.config.retry_max_seconds,
         )
-        moment = self._now(now)
-        if not self.jobs.retry_job(
-            kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
-            worker_id=self.config.consumer_id, attempt=claimed.attempt,
-            redrive_generation=claimed.delivery.redrive_generation, now=moment,
-            next_attempt_at=moment + timedelta(seconds=delay), error_code=error_code,
-        ):
-            logger.warning(
-                "재시도 기록 거부(claim 상실): %s", claimed.delivery.job_id
+        with claimed.lock:
+            claimed.settled = True
+            moment = self._now(now)
+            next_attempt_at = moment + timedelta(seconds=delay)
+            if not self.jobs.retry_job(
+                kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
+                worker_id=self.config.consumer_id, attempt=claimed.attempt,
+                redrive_generation=claimed.delivery.redrive_generation, now=moment,
+                next_attempt_at=next_attempt_at, error_code=error_code,
+            ):
+                logger.warning(
+                    "재시도 기록 거부(claim 상실): %s", claimed.delivery.job_id
+                )
+                return "lost"
+            # DB 가 정한 시각과 visibility 를 **맞춘다** — 짧으면 이른 배달이 헛돌고,
+            # 길면 재시도가 그만큼 늦어진다(권위는 어디까지나 DB 쪽 값이다).
+            # 기록이 지연됐으면 그만큼 빼서 **남은 시간**으로 건다 — 기록 전 계산한
+            # delay 를 그대로 걸면 이미 도래한 재시도가 그 시간만큼 더 숨는다.
+            self._change_visibility(
+                claimed.message, (next_attempt_at - self._now(now)).total_seconds()
             )
-            return "lost"
-        # DB 가 정한 시각과 visibility 를 **맞춘다** — 짧으면 이른 배달이 헛돌고,
-        # 길면 재시도가 그만큼 늦어진다(권위는 어디까지나 DB 쪽 값이다).
-        self._change_visibility(claimed.message, delay)
-        return "retried"
+            return "retried"
 
     def _finish_dead(self, claimed: _Claimed, error_code: str, now: datetime) -> str:
-        if not self.jobs.dead_job(
-            kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
-            worker_id=self.config.consumer_id, attempt=claimed.attempt,
-            redrive_generation=claimed.delivery.redrive_generation,
-            now=self._now(now), error_code=error_code,
-        ):
-            logger.warning("DEAD 기록 거부(claim 상실): %s", claimed.delivery.job_id)
-            return "lost"
-        self._delete(claimed.message)
-        return "dead"
+        with claimed.lock:
+            claimed.settled = True
+            if not self.jobs.dead_job(
+                kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
+                worker_id=self.config.consumer_id, attempt=claimed.attempt,
+                redrive_generation=claimed.delivery.redrive_generation,
+                now=self._now(now), error_code=error_code,
+            ):
+                logger.warning("DEAD 기록 거부(claim 상실): %s", claimed.delivery.job_id)
+                return "lost"
+            self._delete(claimed.message)
+            return "dead"
 
     # ── SQS 부수효과 (실패해도 DB 판정이 권위) ─────────────────
     def _heartbeat(self, claimed: _Claimed, now: datetime) -> None:
+        with claimed.lock:
+            if claimed.settled:
+                # 실행 스레드가 이미 마감했다 — 여기서 visibility 를 밀면 그쪽이
+                # DB 시각에 맞춰 둔 재시도가 그만큼 숨는다.
+                return
+            self._heartbeat_locked(claimed, now)
+
+    def _heartbeat_locked(self, claimed: _Claimed, now: datetime) -> None:
         if not self.jobs.heartbeat_job(
             kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
             worker_id=self.config.consumer_id, attempt=claimed.attempt,
@@ -739,6 +822,15 @@ def _resolve_queue_urls(settings) -> Mapping[str, str]:
             f"DLQ 매핑이 원 큐와 같은 URL 을 가리킨다: {shared} — "
             "정상 배달 중인 job 이 전부 DEAD 가 된다"
         )
+    # 원 큐 destination 을 **전부** 덮어야 한다. 하나만 빠져도 그 레인의 job 은 DLQ 에
+    # 메시지가 쌓여도 아무도 대사하지 않아 원장에서 영원히 non-terminal 로 남는데,
+    # 명령은 나머지만 훑고 성공으로 끝나 부분 커버리지가 초록으로 보인다(Rule 12).
+    missing = sorted(set(settings.minute_relay.queue_urls) - set(dlq_urls))
+    if missing:
+        raise SystemExit(
+            f"DLQ 매핑에 빠진 destination 이 있다: {missing} — "
+            "그 레인의 job 은 아무도 대사하지 않는다"
+        )
     return dlq_urls
 
 
@@ -758,7 +850,8 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
     queue_urls = _resolve_queue_urls(settings)
     options = settings.minute_consumer
     reconciler = DlqReconciler(
-        jobs=JobLedger(db=settings.db), queue=SqsQueue(), queue_urls=queue_urls,
+        jobs=JobLedger(db=settings.db),
+        queue=SqsQueue(wait_seconds=options.wait_seconds), queue_urls=queue_urls,
         batch_size=options.batch_size, wait_seconds=options.wait_seconds,
         visibility_seconds=options.visibility_seconds,
     )
@@ -766,20 +859,33 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
         signal.signal(received, lambda *_: reconciler.request_stop())
     totals: Counter = Counter()
     ticks = 0
+    quiet_rounds = 0
+    swept = False
     while max_ticks is None or ticks < max_ticks:
         counts = reconciler.tick(datetime.now(timezone.utc))
         ticks += 1
         totals += counts
-        # **새로 본 메시지**가 없으면 끝난다. received 로 판정하면, 지우지 않은 메시지가
-        # visibility 만료로 다시 보이는 순간 종료 조건이 영원히 성립하지 않는다.
-        if counts["stopped"] or counts["received"] == counts["repeat"]:
+        if counts["stopped"]:
+            break
+        # **새로 본 메시지**가 없으면 한 바퀴 다 돈 것으로 본다. received 로 판정하면,
+        # 지우지 않은 메시지가 visibility 만료로 다시 보이는 순간 종료 조건이 영원히
+        # 성립하지 않는다. 다만 SQS receive 는 표본이라 "이번에 새 게 없었다"가
+        # "남은 게 없다"는 증명은 아니다 — 연속 2회를 보고 끝낸다(그래도 다음 실행이
+        # 다시 훑는다는 전제는 유지된다).
+        quiet_rounds = quiet_rounds + 1 if counts["received"] == counts["repeat"] else 0
+        if quiet_rounds >= 2:
+            swept = True
             break
     logger.info("dlq-reconcile 종료 — %d tick, %s", ticks, dict(sorted(totals.items())))
     # 판정 불가(poison·orphan·ahead)는 사람이 봐야 한다 — 0 으로 끝내면 아무도 모른다.
     unresolved = totals["poison"] + totals["orphan"] + totals["ahead"]
     if unresolved:
         logger.error("판정하지 못한 DLQ 메시지 %d건 — 사람이 봐야 한다", unresolved)
-    return 1 if unresolved else 0
+    if not swept:
+        # max-ticks 상한이나 SIGTERM 으로 끊겼다 = 남은 메시지를 **보지도 못했다**.
+        # 성공으로 보고하면 부분 실행이 완료로 위장된다(Rule 12).
+        logger.error("DLQ 를 끝까지 훑지 못했다(%d tick 에서 중단) — 재실행이 필요하다", ticks)
+    return 0 if swept and not unresolved else 1
 
 
 def redrive_cli(settings, *, kind: str, job_id: str) -> int:

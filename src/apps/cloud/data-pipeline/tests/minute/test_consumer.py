@@ -30,6 +30,7 @@ from minutefakes import FakeMinuteDB
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.consumer import (
     ConsumerConfig,
+    SqsQueue,
     ConsumerMessage,
     DlqReconciler,
     MinuteConsumer,
@@ -134,7 +135,7 @@ def make_consumer(db, sqs, handler, **config_overrides):
 
 
 def recording_handler(calls, *, result="checksum-1"):
-    def handler(*, job_id, payload, attempt):
+    def handler(*, job_id, payload, attempt, **_):
         calls.append({"job_id": job_id, "payload": payload, "attempt": attempt})
         return result
     return handler
@@ -189,11 +190,26 @@ class TestParseDelivery:
             # job_id 가 sha256 hex 형상이 아니다
             '{"event_id": "NewsExtractionRequested:not-a-hash:0",'
             ' "event_type": "NewsExtractionRequested", "payload": {}}',
+            # 리터럴 오버플로 — parse_constant 를 우회해 inf 가 payload 로 들어간다
+            '{"event_id": "NewsExtractionRequested:' + "a" * 64 + ':0",'
+            ' "event_type": "NewsExtractionRequested", "payload": {"x": 1e9999}}',
+            # payload identity 가 봉투와 다르다 — payload 를 믿는 handler 가 다른 job 을
+            # 처리하고 kernel 은 봉투의 job 을 SUCCEEDED 로 확정한다
+            '{"event_id": "NewsExtractionRequested:' + "a" * 64 + ':0",'
+            ' "event_type": "NewsExtractionRequested",'
+            ' "payload": {"job_id": "' + "b" * 64 + '"}}',
         ],
     )
     def test_contract_violations_raise(self, body):
         # ⚠️ **ValueError 여야** 한다 — 호출자는 그것만 잡아 poison 으로 격리하므로,
         # 다른 예외(TypeError 등)가 새면 메시지 한 건이 tick 을 통째로 죽인다
+        with pytest.raises(ValueError):
+            parse_delivery(body)
+
+    def test_deeply_nested_body_is_poison_not_a_crash(self):
+        # 파서 재귀 한도를 넘기는 본문은 RecursionError 를 내는데, 그건 ValueError 가
+        # 아니라 호출자의 격리를 빠져나가 tick 을 통째로 죽인다(DLQ 에서도 매번 죽는다)
+        body = '{"event_id": "x", "event_type": "y", "payload": ' + "[" * 20_000 + "]" * 20_000 + "}"
         with pytest.raises(ValueError):
             parse_delivery(body)
 
@@ -204,12 +220,35 @@ class TestParseDelivery:
         assert make_consumer(db, sqs, recording_handler([])).tick(NOW)["poison"] == 1
 
 
+class TestSqsQueue:
+    def test_read_timeout_outlives_long_polling(self):
+        # ReceiveMessage 는 long polling 동안 응답을 붙들고 있다 — 발행용 기본값(10초)
+        # 그대로면 20초 long poll 이 **빈 큐마다** ReadTimeoutError 를 낸다
+        assert SqsQueue(wait_seconds=20)._read_timeout > 20
+        assert SqsQueue(wait_seconds=0)._read_timeout >= 10
+
+    def test_incomplete_response_entries_are_skipped(self):
+        # MessageId 가 없으면 "이미 판정함" 집합에서 여러 건이 한 키로 접힌다
+        class Stub:
+            def receive_message(self, **kwargs):
+                return {"Messages": [
+                    {"MessageId": "m1", "ReceiptHandle": "r1", "Body": "{}"},
+                    {"ReceiptHandle": "r2", "Body": "{}"},        # MessageId 없음
+                    {"MessageId": "m3", "Body": "{}"},            # handle 없음
+                ]}
+
+        messages = SqsQueue(Stub()).receive(
+            queue_url=QUEUE, max_messages=10, wait_seconds=0, visibility_seconds=30
+        )
+        assert [m.message_id for m in messages] == ["m1"]
+
+
 class TestConsumerConfig:
     def test_heartbeat_must_fit_inside_visibility(self):
         # 만료 전에 연장이 한 번도 못 돌면 heartbeat 가 있으나 마나다 — 긴 job 의
         # 메시지가 재배달돼 같은 LLM 호출이 중복된다
-        with pytest.raises(ValueError, match="heartbeat_seconds"):
-            make_config(visibility_seconds=60, heartbeat_seconds=40)
+        with pytest.raises(ValueError, match="SQS 호출 예산"):
+            make_config(visibility_seconds=60, heartbeat_seconds=50)
 
     def test_lease_must_outlive_one_delivery(self):
         with pytest.raises(ValueError, match="lease_seconds"):
@@ -389,7 +428,7 @@ class TestFailureClassification:
         job_id, body = enqueue_news(ledger, db)
         message = sqs.send(QUEUE, body)
 
-        def handler(*, job_id, payload, attempt):
+        def handler(*, job_id, payload, attempt, **_):
             raise error
 
         counts = make_consumer(db, sqs, handler, **config_overrides).tick(NOW)
@@ -441,7 +480,7 @@ class TestFailureClassification:
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)]["attempt_count"] = 2   # 다음 claim 이 3회차
 
-        def handler(*, job_id, payload, attempt):
+        def handler(*, job_id, payload, attempt, **_):
             raise TransientJobError("5xx")
 
         sqs.send(QUEUE, body)
@@ -457,7 +496,7 @@ class TestFailureClassification:
         # 복원·마이그레이션으로 들어온 큰 attempt_count 에서 2**n 이 터지지 않아야 한다
         db.jobs[("news", job_id)]["attempt_count"] = 10_000
 
-        def handler(*, job_id, payload, attempt):
+        def handler(*, job_id, payload, attempt, **_):
             raise TransientJobError("5xx")
 
         sqs.send(QUEUE, body)
@@ -465,18 +504,21 @@ class TestFailureClassification:
 
         assert sqs.visibility_changes[0][1] == 900   # retry_max
 
-    def test_non_string_result_is_contract_failure(self):
+    def test_non_string_result_retries_not_dead(self):
+        # handler 계약 위반의 근거는 **코드**(배포 회귀·adapter 결함)라 그 job 의 성질이
+        # 아니다. 첫 시도에 terminal 로 확정하면 배포를 고쳐도 영향받은 job 전부를
+        # 사람이 하나씩 redrive 해야 한다 — 예산이 판정하게 둔다.
         db, sqs = FakeMinuteDB(), FakeSqs()
         ledger = JobLedger(db=_DB, connect_fn=db.connect)
         job_id, body = enqueue_news(ledger, db)
-        sqs.send(QUEUE, body)
+        message = sqs.send(QUEUE, body)
 
-        counts = make_consumer(
-            db, sqs, lambda *, job_id, payload, attempt: None
-        ).tick(NOW)
+        counts = make_consumer(db, sqs, lambda **_: None).tick(NOW)
 
-        assert counts["dead"] == 1
-        assert db.jobs[("news", job_id)]["error_code"] == "RESULT_CONTRACT"
+        assert counts["retried"] == 1
+        row = db.jobs[("news", job_id)]
+        assert row["status"] == "RETRY_WAIT" and row["error_code"] == "RESULT_CONTRACT"
+        assert message.receipt_handle not in sqs.deleted
 
     def test_lost_claim_does_not_ack(self):
         # 늦은 보고 — 지금 이 job 은 남의 것이다. 지우면 새 소유자의 wake-up 이 사라진다
@@ -485,7 +527,7 @@ class TestFailureClassification:
         job_id, body = enqueue_news(ledger, db)
         message = sqs.send(QUEUE, body)
 
-        def steal(*, job_id, payload, attempt):
+        def steal(*, job_id, payload, attempt, **_):
             db.jobs[("news", job_id)].update(claimed_by="other", attempt_count=99)
             return "checksum-1"
 
@@ -510,22 +552,22 @@ class TestHeartbeat:
         message = sqs.send(QUEUE, body)
         leases = []
 
-        def slow(*, job_id, payload, attempt):
+        def slow(*, job_id, payload, attempt, **_):
             assert extended.wait(10), "heartbeat 가 돌지 않았다"
             leases.append(db.jobs[("news", job_id)]["lease_expires_at"])
             return "checksum-1"
 
         consumer = make_consumer(
-            db, sqs, slow, heartbeat_seconds=1, visibility_seconds=2, lease_seconds=2
+            db, sqs, slow, heartbeat_seconds=1, visibility_seconds=20, lease_seconds=20
         )
         counts = consumer.tick(NOW)
 
         assert counts["succeeded"] == 1
         # 실행 중 연장이 최소 1회 — visibility 는 설정값 전체로 다시 민다
-        assert (message.receipt_handle, 2) in sqs.visibility_changes
+        assert (message.receipt_handle, 20) in sqs.visibility_changes
         # DB lease 도 **함께** 밀린다. visibility 만 밀면 처리 시간이 lease 를 넘는
         # 순간 그 job 이 다른 Consumer 에게 eligible 로 보여 LLM 호출이 중복된다.
-        assert leases[0] > NOW + timedelta(seconds=2)   # claim 당시 lease = now+2
+        assert leases[0] > NOW + timedelta(seconds=20)   # claim 당시 lease = now+20
 
 
     def test_lost_lease_does_not_extend_visibility(self):
@@ -538,12 +580,12 @@ class TestHeartbeat:
         sqs.send(QUEUE, body)
         attempted = threading.Event()
 
-        def slow(*, job_id, payload, attempt):
+        def slow(*, job_id, payload, attempt, **_):
             assert attempted.wait(10), "heartbeat 가 돌지 않았다"
             return "checksum-1"
 
         consumer = make_consumer(
-            db, sqs, slow, heartbeat_seconds=1, visibility_seconds=2, lease_seconds=2
+            db, sqs, slow, heartbeat_seconds=1, visibility_seconds=20, lease_seconds=20
         )
 
         def refuse(**kwargs):
@@ -578,15 +620,15 @@ class TestHeartbeat:
         sqs2.send(QUEUE, body2)
         message1 = sqs2.queues[QUEUE][0]
 
-        def handler(*, job_id, payload, attempt):
+        def handler(*, job_id, payload, attempt, **_):
             if job_id == first:
                 # 두 번째 claim 이 도는 동안 실행 중인 상태로 남는다
                 assert extended.wait(10), "prepare 루프가 heartbeat 를 돌리지 않았다"
             return "checksum-1"
 
         consumer = make_consumer(
-            db, sqs2, handler, heartbeat_seconds=1, visibility_seconds=2,
-            lease_seconds=2, max_concurrency=2,
+            db, sqs2, handler, heartbeat_seconds=1, visibility_seconds=20,
+            lease_seconds=20, max_concurrency=2,
         )
         original_fetch = consumer.jobs.fetch_job
         calls = []
@@ -601,7 +643,7 @@ class TestHeartbeat:
         counts = consumer.tick(NOW)
 
         assert counts["succeeded"] == 2
-        assert (message1.receipt_handle, 2) in sqs2.visibility_changes
+        assert (message1.receipt_handle, 20) in sqs2.visibility_changes
 
 
 class TestGenerationOrdering:
@@ -751,7 +793,7 @@ class TestLifecycle:
         sqs.send(QUEUE, body2)
         finished = threading.Event()
 
-        def handler(*, job_id, payload, attempt):
+        def handler(*, job_id, payload, attempt, **_):
             if job_id == first:
                 raise SystemExit("원장 장애를 흉내낸다 — kernel 이 분류하지 않는 예외")
             assert finished.wait(5)
@@ -919,16 +961,39 @@ class TestRedrive:
         db.jobs[("news", job_id)].update(
             status="CLAIMED", claimed_by="c1", lease_expires_at=NOW + timedelta(seconds=60)
         )
+        db.outbox[build_event_id(NEWS_EVENT_TYPE, job_id, 0)]["status"] = "DEAD"
         with pytest.raises(ValueError, match="실행 중"):
             ledger.redrive_job(kind="news", job_id=job_id, now=NOW)
 
-    def test_expired_claim_is_redrivable(self):
+    def test_dead_job_with_stale_lease_is_redrivable(self):
+        # DEAD 인데 lease 잔재가 남아 있어도 대상이다 — 실행 중이 아니다
         db, ledger, job_id, _body = self._dead_job()
         db.jobs[("news", job_id)].update(
-            status="CLAIMED", claimed_by="c1", lease_expires_at=NOW - timedelta(seconds=1)
+            claimed_by="c1", lease_expires_at=NOW - timedelta(seconds=1)
         )
         assert ledger.redrive_job(kind="news", job_id=job_id, now=NOW)
         assert db.jobs[("news", job_id)]["status"] == "RETRY_WAIT"
+
+    def test_healthy_job_is_refused(self):
+        # 막혔다는 근거가 없으면 거절한다 — 정상 진행 중인 job 의 세대를 올리면 지금
+        # 큐에 있는 배달이 superseded 로 버려지고 재시도 예산까지 초기화된다
+        db = FakeMinuteDB()
+        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        job_id, _body = enqueue_news(ledger, db)
+        with pytest.raises(ValueError, match="막혀 있지 않다"):
+            ledger.redrive_job(kind="news", job_id=job_id, now=NOW)
+
+    def test_superseded_dead_event_stops_blocking_the_drain_gate(self):
+        # redrive 로 복구를 끝냈는데도 옛 DEAD 행이 계속 미발행으로 집계되면, 배출
+        # 게이트(relay --max-ticks)가 영원히 "미발행 남음"으로 실패한다
+        db, ledger, job_id, _body = self._dead_job()
+        db.outbox[build_event_id(NEWS_EVENT_TYPE, job_id, 0)]["status"] = "DEAD"
+        assert ledger.count_unpublished()["DEAD"] == 1
+
+        event_id = ledger.redrive_job(kind="news", job_id=job_id, now=NOW)
+        db.outbox[event_id]["status"] = "PUBLISHED"   # Relay 가 새 세대를 발행했다
+
+        assert ledger.count_unpublished() == {"NEW": 0, "DEAD": 0}
 
     def test_relay_dead_event_is_recoverable(self):
         # PR 6 은 outbox DEAD 를 좁게 판정하면서 복구를 이 PR 에 위임했다 — job 은
@@ -1081,10 +1146,43 @@ class TestCliGuards:
         )
         monkeypatch.setattr("data_pipeline.minute.consumer.JobLedger",
                             lambda db: ledger)
-        monkeypatch.setattr("data_pipeline.minute.consumer.SqsQueue", lambda: sqs)
+        monkeypatch.setattr("data_pipeline.minute.consumer.SqsQueue", lambda **_: sqs)
 
         assert dlq_reconcile_cli(settings) == 0
         assert db.jobs[("news", job_id)]["error_code"] == "SQS_MAX_RECEIVE"
+
+    def test_partial_destination_coverage_is_rejected(self):
+        # 한 레인의 DLQ 가 빠지면 그 레인의 job 은 아무도 대사하지 않는데, 명령은
+        # 나머지만 훑고 성공으로 끝나 부분 커버리지가 초록으로 보인다
+        settings = self._Settings(
+            self._Consumer({"news-extraction-realtime": DLQ}),
+            self._Relay({"news-extraction-realtime": QUEUE,
+                         "price-analysis-realtime": "https://sqs.test/price"}),
+        )
+        with pytest.raises(SystemExit, match="빠진 destination"):
+            _resolve_queue_urls(settings)
+
+    def test_truncated_scan_is_not_reported_as_success(self, monkeypatch):
+        # --max-ticks 상한이나 SIGTERM 으로 끊기면 남은 메시지를 **보지도 못했다** —
+        # 성공으로 보고하면 부분 실행이 완료로 위장된다(Rule 12)
+        db = FakeMinuteDB()
+        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        sqs = FakeSqs()
+        for index in range(3):
+            _job_id, body = enqueue_news(ledger, db, article_id=f"art-{index}")
+            sqs.send(DLQ, body)
+        settings = SimpleNamespace(
+            db=_DB,
+            minute_consumer=SimpleNamespace(
+                dlq_urls={"news-extraction-realtime": DLQ},
+                batch_size=1, wait_seconds=0, visibility_seconds=60,
+            ),
+            minute_relay=SimpleNamespace(queue_urls={"news-extraction-realtime": QUEUE}),
+        )
+        monkeypatch.setattr("data_pipeline.minute.consumer.JobLedger", lambda db: ledger)
+        monkeypatch.setattr("data_pipeline.minute.consumer.SqsQueue", lambda **_: sqs)
+
+        assert dlq_reconcile_cli(settings, max_ticks=1) == 1
 
     def test_distinct_urls_pass(self):
         settings = self._Settings(

@@ -255,7 +255,8 @@ class JobLedger:
                 SELECT c.job_id FROM {table} c
                 WHERE c.status = 'PENDING'
                    OR (c.status = 'RETRY_WAIT' AND c.next_attempt_at <= %s)
-                   OR (c.status = 'CLAIMED' AND c.lease_expires_at < %s)
+                   OR (c.status = 'CLAIMED' AND (c.lease_expires_at IS NULL
+                                                 OR c.lease_expires_at < %s))
                 ORDER BY c.created_at
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -413,6 +414,9 @@ class JobLedger:
         SUCCEEDED 를 보고 삭제돼 **운영자의 redrive 가 통째로 사라진다**.
         """
         table = _JOB_TABLES[kind]
+        # lease 가 NULL 인 CLAIMED 도 회수 대상이다 — NULL 비교는 참이 안 되므로 빼
+        # 두면 그 행은 어떤 경로로도 못 집고 DLQ 대사도 못 죽여 영구 고착된다
+        # (복원·구 writer 가 남길 수 있는 형상).
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -422,7 +426,8 @@ class JobLedger:
                 WHERE job_id = %s AND redrive_generation = %s
                   AND (status = 'PENDING'
                        OR (status = 'RETRY_WAIT' AND next_attempt_at <= %s)
-                       OR (status = 'CLAIMED' AND lease_expires_at < %s))
+                       OR (status = 'CLAIMED' AND (lease_expires_at IS NULL
+                                                   OR lease_expires_at < %s)))
                 RETURNING attempt_count
                 """,
                 (worker_id, now + timedelta(seconds=lease_seconds), job_id,
@@ -482,7 +487,8 @@ class JobLedger:
                     claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE job_id = %s AND redrive_generation = %s
                   AND status IN ('PENDING', 'RETRY_WAIT', 'CLAIMED')
-                  AND (status <> 'CLAIMED' OR lease_expires_at < %s)
+                  AND (status <> 'CLAIMED'
+                       OR lease_expires_at IS NULL OR lease_expires_at < %s)
                 """,
                 (DLQ_ERROR_CODE, now, job_id, redrive_generation, now),
             )
@@ -539,8 +545,8 @@ class JobLedger:
             previous_event_id = build_event_id(event_type, job_id, generation)
             cur.execute(
                 """
-                SELECT destination, generation, payload FROM dataset_commit_outbox
-                WHERE event_id = %s
+                SELECT destination, generation, payload, status
+                FROM dataset_commit_outbox WHERE event_id = %s
                 """,
                 (previous_event_id,),
             )
@@ -551,7 +557,23 @@ class JobLedger:
                     f"직전 delivery event 가 없다: {previous_event_id} — "
                     "payload 를 복원할 근거가 없어 redrive 를 중단한다"
                 )
-            destination, data_generation, payload = previous
+            destination, data_generation, payload, event_status = previous
+            if status != "DEAD" and event_status != "DEAD":
+                # **막혔다는 근거**가 없다. 정상 진행 중인 job 의 세대를 올리면 지금
+                # 큐에 있는 배달이 superseded 로 버려지고 재시도 예산까지 초기화된다 —
+                # 되살리는 명령이 오히려 멀쩡한 진행을 되돌린다.
+                raise ValueError(
+                    f"{job_id} 는 막혀 있지 않다(job={status}, event={event_status}) — "
+                    "redrive 대상은 DEAD job 이거나 DEAD delivery event 다"
+                )
+            if event_status == "DEAD":
+                # Relay 가 "이 event 는 못 나간다"고 판정했던 것이다(미정의 destination·
+                # 크기 초과·본문 결함). 원인을 고치지 않았으면 같은 destination·payload
+                # 로 만든 새 event 도 같은 이유로 다시 DEAD 가 된다.
+                logger.warning(
+                    "직전 event %s 는 Relay 가 발행 불가로 판정한 것이다 — 원인(설정·"
+                    "크기·본문)을 고쳤는지 확인하라", previous_event_id,
+                )
             # attempt_count 를 0 으로 되돌린다 — 운영자가 명시적으로 다시 시도하라고
             # 한 것이라 예산도 새로 준다. 소진된 채로 두면 첫 실패에 다시 DEAD 가 돼
             # redrive 가 사실상 아무것도 하지 않는다.
@@ -665,13 +687,23 @@ class JobLedger:
 
         **DEAD 도 미발행이다** — 격리됐을 뿐 큐에 나간 적이 없다. 빼고 세면 격리분을
         남긴 채 배출 성공으로 보고하게 된다. 둘을 나눠 돌려주는 이유는 조치가 달라서다:
-        NEW 는 기다리면 나가고, DEAD 는 사람이 봐야 한다(redrive=PR 7A).
+        NEW 는 기다리면 나가고, DEAD 는 사람이 봐야 한다(redrive).
+
+        단 **더 새 delivery 가 있는 DEAD 는 제외**한다(ALPHA-672) — redrive 가 만든 새
+        세대 event 가 이미 그 일을 대신하기 때문이다. 안 빼면 복구를 끝내도 배출 게이트
+        (`relay --max-ticks`)가 영원히 "미발행 남음"으로 실패한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT status, COUNT(*) FROM dataset_commit_outbox
-                WHERE status IN ('NEW', 'DEAD') GROUP BY status
+                SELECT o.status, COUNT(*) FROM dataset_commit_outbox o
+                WHERE o.status = 'NEW'
+                   OR (o.status = 'DEAD' AND NOT EXISTS (
+                        SELECT 1 FROM dataset_commit_outbox n
+                        WHERE n.aggregate_id = o.aggregate_id
+                          AND n.created_at > o.created_at
+                   ))
+                GROUP BY o.status
                 """
             )
             counts = dict(cur.fetchall())
