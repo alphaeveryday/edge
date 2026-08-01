@@ -160,6 +160,37 @@ class TestLaneIsolation:
         assert relay.tick(NOW) == "PARTIAL"
         assert db.outbox["news1"]["status"] == "PUBLISHED", "가격 장애가 뉴스를 굶겼다"
 
+    def test_lane_is_claimed_right_before_its_publish(self, tmp_path):
+        # ⚠️ 전부 집어놓고 순차 발행하면 뒤 레인의 lease 가 자기 차례 전에 흘러가
+        # 다른 Relay 가 탈취한다 — lease 검증(batch × 호출 예산)이 무의미해진다.
+        # claim 은 그 레인을 발행하기 **직전**에 일어나야 한다.
+        db = FakeMinuteDB()
+        enqueue(db, "p1", destination="price-analysis-realtime")
+        enqueue(db, "n1", destination="news-extraction-realtime")
+        order: list[str] = []
+
+        class OrderRecordingPublisher(FakePublisher):
+            def publish_batch(self, queue_url, messages):
+                order.append(f"publish:{queue_url}")
+                return super().publish_batch(queue_url, messages)
+
+        relay = build_relay(db, publisher=OrderRecordingPublisher())
+        original_claim = relay.jobs.claim_outbox_batch
+
+        def recording_claim(**kwargs):
+            claimed = original_claim(**kwargs)
+            if claimed:
+                order.append(f"claim:{kwargs.get('destination')}")
+            return claimed
+
+        relay.jobs.claim_outbox_batch = recording_claim
+        assert relay.tick(NOW) == "PUBLISHED"
+        # 각 레인의 claim 바로 뒤에 그 레인의 발행이 온다(claim 을 몰아서 하지 않는다)
+        assert order == [
+            "claim:news-extraction-realtime", "publish:https://sqs/news",
+            "claim:price-analysis-realtime", "publish:https://sqs/price",
+        ]
+
     def test_unknown_destination_rows_are_still_claimed(self, tmp_path):
         # destination 별 claim 은 설정에 없는 큐의 행을 건너뛴다 — 그것만 따로 집어
         # 격리하지 않으면 영원히 NEW 로 남아 아무도 모른다
@@ -277,15 +308,20 @@ class TestRetryBudget:
         assert relay.tick(NOW + timedelta(hours=21)) == "PUBLISHED"
         assert db.outbox["e1"]["status"] == "PUBLISHED"
 
-    def test_sender_fault_is_terminal_immediately(self, tmp_path):
-        # 요청 자체가 틀린 실패(SenderFault)는 재시도해도 같다
+    def test_terminal_failure_is_recorded_as_dead(self, tmp_path):
+        # publisher 가 terminal 로 분류한 실패(메시지 자체가 못 실림)는 재시도 예약 없이
+        # 조회 가능한 DEAD 로 간다. **무엇이 terminal 인지의 판정**은 SqsPublisher 소관이라
+        # TestSqsResponseGate 가 실제 응답으로 검증한다(여기서 SenderFault 를 논하지 않는다).
         db = FakeMinuteDB()
         enqueue(db, "e1")
         relay = build_relay(
-            db, publisher=FakePublisher(failures=[PublishFailure("e1", "InvalidParameter", True)])
+            db, publisher=FakePublisher(
+                failures=[PublishFailure("e1", "InvalidMessageContents", True)]
+            )
         )
         assert relay.tick(NOW) == "PARTIAL"
         assert db.outbox["e1"]["status"] == "DEAD"
+        assert db.outbox["e1"]["next_attempt_at"] is None
 
 
 class TestConcurrencyAndCrash:

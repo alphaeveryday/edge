@@ -442,6 +442,16 @@ class _Cursor:
         # 실제 RETURNING 에 attempt_count 가 없으면 Relay 의 backoff 가 IndexError 로
         # 죽는다 — fake 가 합성해 주면 그 회귀가 여기서 숨는다(Rule 9)
         assert "o.attempt_count" in sql, "outbox claim 은 attempt_count 를 반환해야 한다"
+        # 아래 의미는 fake 가 **합성**한다 — SQL 에서 가드가 빠져도 fake 만 보면 통과하므로
+        # (실DB 에선 조기 재claim·claim 탈취·중복 발행) 절의 존재를 여기서 못 박는다(Rule 9)
+        for clause in (
+            "c.status = 'NEW'",
+            "c.next_attempt_at IS NULL OR c.next_attempt_at <= %s",
+            "c.claimed_by IS NULL OR c.claim_expires_at < %s",
+            "FOR UPDATE SKIP LOCKED",
+            "ORDER BY c.created_at",
+        ):
+            assert clause in sql, f"outbox claim SQL 에 {clause} 가 없다"
         # destination 필터가 있는 변형은 파라미터가 6개다(SQL 과 파라미터 수를 함께 본다)
         excluded = ()
         destination = None

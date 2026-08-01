@@ -23,6 +23,12 @@ Worker 안에 넣지 않는 이유(v0.7 11.1): 가격 Service scale-in 이 뉴�
 
 재시도 권위는 PostgreSQL 이다(v0.7 12.4) — SQS 는 wake-up transport 일 뿐이고, 몇 번
 시도했고 언제 다시 할지는 outbox 행에만 있다.
+
+**알려진 천장**: outbox `payload` 는 JSONB 라 스키마상 크기 상한이 없다. 충분히 큰 행
+하나는 claim 의 fetch 단계(드라이버가 행을 물질화한다)에서 메모리를 소진할 수 있는데,
+그건 이 모듈의 격리(행 단위 직렬화 try)보다 앞이라 잡지 못한다 — 재기동마다 같은 행을
+다시 읽어 crash-loop 이 된다. 제대로 된 해소는 **쓰는 쪽**(commit)에 크기 계약을 두는
+것이고(그 계약이 없으면 Relay 가 방어할 지점이 없다), 그건 writer 변경이라 별건이다.
 """
 
 from __future__ import annotations
@@ -324,33 +330,15 @@ class OutboxRelay:
             # 진행 중 batch 는 이미 끝났다(tick 단위) — claim 을 잡은 채 죽지 않는다.
             # 잡힌 채 남더라도 claim_expires_at 만료로 다음 Relay 가 회수한다.
             return "STOPPED"
-        # **destination 별로 나눠 집는다** — 한 번에 집으면 장애 난 레인의 오래된 재시도
-        # 행이 batch 를 채워 멀쩡한 레인이 계속 밀린다(가격 장애가 뉴스 발행을 막지
-        # 않는다는 게 공용 Relay 의 근거였다 — v0.7 11.1).
-        by_destination: dict[str, list[dict]] = {}
-        for destination in sorted(self.config.queue_urls):
-            claimed = self.jobs.claim_outbox_batch(
-                relay_id=self.config.relay_id, now=now,
-                limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
-                destination=destination,
-            )
-            if claimed:
-                by_destination[destination] = claimed
-        # 설정에 없는 destination 으로 쓰인 행은 위 루프가 집지 않는다 — 남겨두면 영원히
-        # NEW 로 남아 아무도 모른다. **그것만** 집어 격리한다(전역으로 집은 뒤 골라내면
-        # 처리하지 않을 정상 행까지 lease 로 묶어 그만큼 발행이 밀린다).
-        for event in self.jobs.claim_outbox_batch(
-            relay_id=self.config.relay_id, now=now,
-            limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
-            exclude_destinations=tuple(self.config.queue_urls),
-        ):
-            by_destination.setdefault(event["destination"], []).append(event)
-        if not by_destination:
-            return "IDLE"
+        # **destination 별로 집고 바로 발행한다.** 나눠 집는 이유는 레인 격리다 — 한 번에
+        # 집으면 장애 난 레인의 오래된 재시도 행이 batch 를 채워 멀쩡한 레인이 계속
+        # 밀린다(가격 장애가 뉴스 발행을 막지 않는다는 게 공용 Relay 의 근거 — v0.7 11.1).
+        # 그리고 **집은 뒤 바로 발행해야** 한다: 전부 집어놓고 순차 발행하면 뒤 레인의
+        # lease 가 자기 차례 전에 흘러가 다른 Relay 가 탈취하고, lease 검증이 무의미해진다.
         published = failed = 0
-        # destination 정렬 — 같은 batch 를 두 번 돌려도 순서가 같아 로그가 비교 가능하다
-        for destination in sorted(by_destination):
-            events = by_destination[destination]
+        claimed_any = False
+        for destination, events in self._claim_lanes(now):
+            claimed_any = True
             queue_url = self.config.queue_urls.get(destination)
             if queue_url is None:
                 # ⚠️ 예외를 던지지 않는다 — 그 event 는 outbox 에 남아 있어 다음 tick 도
@@ -418,7 +406,33 @@ class OutboxRelay:
                     failed += self._record_failures(
                         [event], now, error="발행 결과 미보고", terminal=False
                     )
+        if not claimed_any:
+            return "IDLE"
         return "PUBLISHED" if failed == 0 else "PARTIAL"
+
+    def _claim_lanes(self, now: datetime):
+        """destination 하나씩 claim 해 (destination, events) 로 넘긴다 — 발행 직전에 집는다.
+
+        마지막에 설정 밖 destination 을 쓸어 담는다. 그 행들은 위 루프가 건드리지 않아
+        남겨두면 영원히 NEW 로 남는다 — **그것만** 집는다(전역으로 집은 뒤 골라내면
+        처리하지 않을 정상 행까지 lease 로 묶여 그만큼 발행이 밀린다).
+        """
+        for destination in sorted(self.config.queue_urls):
+            events = self.jobs.claim_outbox_batch(
+                relay_id=self.config.relay_id, now=now,
+                limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
+                destination=destination,
+            )
+            if events:
+                yield destination, events
+        orphans: dict[str, list[dict]] = {}
+        for event in self.jobs.claim_outbox_batch(
+            relay_id=self.config.relay_id, now=now,
+            limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
+            exclude_destinations=tuple(self.config.queue_urls),
+        ):
+            orphans.setdefault(event["destination"], []).append(event)
+        yield from sorted(orphans.items())
 
     def _record_failures(
         self, events, now: datetime, error: str, terminal: bool
