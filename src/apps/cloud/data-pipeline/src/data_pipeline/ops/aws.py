@@ -64,7 +64,11 @@ def sqs_client():
     return boto3.client(
         "sqs",
         region_name=_region(),
+        # `max_attempts` 는 **초기 호출을 뺀 재시도 횟수**라 1 이면 총 2회 시도가 된다 —
+        # 응답만 유실된 경우 SDK 가 같은 batch 를 다시 보내 outbox 가 모르는 중복 발행이
+        # 생긴다. 총 시도 수를 1 로 못 박는다.
         config=Config(
-            connect_timeout=5, read_timeout=10, retries={"max_attempts": 1}
+            connect_timeout=5, read_timeout=10,
+            retries={"mode": "standard", "total_max_attempts": 1},
         ),
     )

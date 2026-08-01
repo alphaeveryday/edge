@@ -16,6 +16,11 @@ Worker 안에 넣지 않는 이유(v0.7 11.1): 가격 Service scale-in 이 뉴�
 한다(조회 가능한 terminal 상태 — v0.7 11.1). 예외로 죽이면 그 행이 outbox 에 남아 있는
 한 다음 tick 도 같은 자리에서 죽어 **가격·뉴스·백필 세 큐가 전부 영구히 멈춘다**.
 
+⚠️ **반대로 일시 실패는 횟수로 포기하지 않는다.** DEAD 는 event 자체가 발행 불가일 때만
+이다 — 시도 예산을 두면 몇 분짜리 큐 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데
+이 단계엔 redrive 경로가 없다(PR 7A). 지연은 알람(backlog·oldest-age, PR 7D)이 잡지만
+유실은 아무도 되돌리지 못한다.
+
 재시도 권위는 PostgreSQL 이다(v0.7 12.4) — SQS 는 wake-up transport 일 뿐이고, 몇 번
 시도했고 언제 다시 할지는 outbox 행에만 있다.
 """
@@ -23,8 +28,9 @@ Worker 안에 넣지 않는 이유(v0.7 11.1): 가격 Service scale-in 이 뉴�
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from .jobs import JobLedger
@@ -90,6 +96,20 @@ class RelayConfig:
                 f"queue_urls 에 필수 destination 이 없다: {sorted(missing)} — "
                 "설정 누락이면 그 큐의 event 가 전부 DEAD 로 격리된다"
             )
+        unknown = set(self.queue_urls) - KNOWN_DESTINATIONS
+        if unknown:
+            # 어휘 밖 키는 오타이거나 미승인 큐다 — 그 destination 의 event 가 엉뚱한
+            # 큐로 나가 PUBLISHED 로 확정되면 설정을 고쳐도 되살아나지 않는다
+            raise ValueError(f"queue_urls 에 정의되지 않은 destination 이 있다: {sorted(unknown)}")
+        shared = [
+            url for url in set(self.queue_urls.values())
+            if sum(1 for value in self.queue_urls.values() if value == url) > 1
+        ]
+        if shared:
+            # 같은 URL 로 묶이면 다른 큐의 Consumer 가 wake-up 을 못 받는데, event 는
+            # PUBLISHED 로 확정돼 나중에 URL 을 고쳐도 재평가되지 않는다(v0.7 12.1 —
+            # 가격·뉴스는 큐를 공유하지 않는다)
+            raise ValueError(f"두 destination 이 같은 큐를 가리킨다: {sorted(shared)}")
         if self.batch_limit < 1:
             raise ValueError("batch_limit 은 1 이상이어야 한다")
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
@@ -113,7 +133,7 @@ def _chunk_by_size(messages: list[OutboxMessage]) -> list[list[OutboxMessage]]:
     """건수(10)와 **합계 바이트**(1 MiB) 둘 다로 쪼갠다.
 
     건수만 보면 큰 메시지 몇 건이 한 요청에 몰려 `BatchRequestTooLong` 으로 **요청
-    전체**가 거부된다 — 같은 묶음이 반복 실패하다 예산을 소진해 전부 DEAD 가 된다.
+    전체**가 거부된다 — 같은 묶음이 영원히 재시도되며 그 destination 의 배달이 막힌다.
     """
     chunks: list[list[OutboxMessage]] = []
     current: list[OutboxMessage] = []
@@ -177,29 +197,42 @@ class SqsPublisher:
                     for entry_id, message in by_id.items()
                 ],
             )
-            seen: set[str] = set()
+            # 응답을 Id 로 **한 번에** 모은 뒤 판정한다 — 목록을 순서대로 훑으며 확정하면
+            # 같은 Id 가 양쪽에 온 모순 응답에서 먼저 본 쪽(성공)이 이겨 버린다.
+            verdicts: dict[str, list[tuple[str, dict]]] = {}
             for kind in ("Successful", "Failed"):
                 for entry in response.get(kind, ()):
                     # 보낸 Id 와 **정확히** 대조한다. int() 로 강제하면 "-1"·"00" 같은
                     # 응답이 엉뚱한 message 를 가리켜 다른 event 가 PUBLISHED 로 확정되고
                     # (재발행 대상에서 빠져) 조용히 유실된다.
-                    message = by_id.get(entry.get("Id"))
-                    if message is None or message.event_id in seen:
-                        # 보내지 않은 Id·중복 보고 — 어느 event 의 결과인지 알 수 없다.
-                        # 버리면 해당 event 는 아래 "미보고" 경로로 재시도된다(안전한 쪽).
-                        logger.error("SQS 응답의 Id 가 요청과 안 맞는다: %r", entry.get("Id"))
+                    entry_id = entry.get("Id")
+                    if entry_id not in by_id:
+                        logger.error("SQS 응답의 Id 가 요청과 안 맞는다: %r", entry_id)
                         continue
-                    seen.add(message.event_id)
-                    if kind == "Successful":
-                        published.add(message.event_id)
-                    else:
-                        failures.append(PublishFailure(
-                            message.event_id,
-                            f"{entry.get('Code')}: {entry.get('Message')}",
-                            # SenderFault = 요청 자체가 틀렸다 — 재시도 무의미
-                            # `bool("false")` 는 True 다 — 진짜 bool 만 terminal 로 본다
-                            terminal=entry.get("SenderFault") is True,
-                        ))
+                    verdicts.setdefault(entry_id, []).append((kind, entry))
+            for entry_id, reported in verdicts.items():
+                message = by_id[entry_id]
+                if len(reported) > 1:
+                    # 성공이자 실패 — 발행 여부를 알 수 없다. 성공으로 접으면 행이 NEW 에서
+                    # 빠져 재평가되지 않는다. 미보고로 두면 Relay 가 재시도한다(안전한 쪽).
+                    logger.error("SQS 응답이 모순이다(성공·실패 동시): %s", message.event_id)
+                    continue
+                kind, entry = reported[0]
+                if kind == "Failed":
+                    failures.append(PublishFailure(
+                        message.event_id,
+                        f"{entry.get('Code')}: {entry.get('Message')}",
+                        # SenderFault = 요청 자체가 틀렸다 — 재시도 무의미.
+                        # `bool("false")` 는 True 라 진짜 bool 만 terminal 로 본다
+                        terminal=entry.get("SenderFault") is True,
+                    ))
+                elif entry.get("MessageId"):
+                    published.add(message.event_id)
+                else:
+                    # 성공 항목의 필수 필드(MessageId)가 없다 = 큐가 받았다는 근거가 없다.
+                    # 근거 없는 성공을 확정하면 그 자리에서 유실이 영구화된다.
+                    # (본문 무결성 MD5 는 SDK 계층이 본다 — 여기서 재구현하지 않는다.)
+                    logger.error("SQS 성공 항목에 MessageId 가 없다: %s", message.event_id)
         return frozenset(published), tuple(failures)
 
 
@@ -211,12 +244,15 @@ class OutboxRelay:
     publisher: object  # publish_batch(queue_url, messages) -> (published_ids, failures)
     config: RelayConfig
     stopping: bool = False  # SIGTERM — 진행 중 batch 를 끝내고 다음 tick 에 멈춘다
+    # tick 안의 **경과 시간**만 재는 기준점(벽시계 아님) — backoff 가 실패 시각 기준이 되게
+    _tick_started: float = field(default=0.0, repr=False)
 
     def request_stop(self) -> None:
         self.stopping = True
 
     def tick(self, now: datetime) -> str:
         """한 사이클. 반환은 관측용: STOPPED / IDLE / PUBLISHED / PARTIAL."""
+        self._tick_started = time.monotonic()
         if self.stopping:
             # 진행 중 batch 는 이미 끝났다(tick 단위) — claim 을 잡은 채 죽지 않는다.
             # 잡힌 채 남더라도 claim_expires_at 만료로 다음 Relay 가 회수한다.
@@ -297,6 +333,7 @@ class OutboxRelay:
         하나도 안 된 tick 이 PUBLISHED 로 보고된다(Rule 12).
         """
         attempted = 0
+        elapsed = timedelta(seconds=int(time.monotonic() - self._tick_started))
         for event in events:
             # ⚠️ **일시 실패는 횟수로 포기하지 않는다.** 시도 예산을 두면 몇 분짜리 SQS
             # 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데, 이 단계엔 redrive 경로가
@@ -304,7 +341,14 @@ class OutboxRelay:
             # 잡지만(backlog·oldest-age, PR 7D) 유실은 아무도 못 되돌린다.
             # DEAD 는 **event 자체가 발행 불가**일 때만이다(미정의 destination·크기 초과·
             # SenderFault) — 그건 재시도해도 결과가 같다.
-            next_attempt_at = None if terminal else now + timedelta(
+            # backoff 는 **실패한 시각** 기준이어야 한다 — tick 시작 시각으로 재면 발행이
+            # 오래 걸린 경우(예: 10초 timeout, 2초 backoff) next_attempt_at 이 기록 시점에
+            # 이미 과거다. 그러면 다음 tick 이 같은 행을 즉시 재claim 하고, claim 이
+            # created_at 순이라 batch_limit 이 작을 때 뒤의 정상 event 가 장애 해소까지
+            # 한 번도 못 나간다(FIFO 독점).
+            # 벽시계 권위는 주입된 now 하나로 두고(가상 시계 원칙), 경과는 monotonic 으로
+            # **기간만** 잰다. 초 단위로 절삭해 테스트 결정성을 유지한다.
+            next_attempt_at = None if terminal else now + elapsed + timedelta(
                 seconds=min(
                     self.config.retry_base_seconds * (2 ** event["attempt_count"]),
                     self.config.retry_max_seconds,
@@ -364,6 +408,7 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     logger.info("relay 시작: id=%s 큐 %s", relay.config.relay_id, sorted(options.queue_urls))
     ticks = 0
     partial = 0
+    state = "IDLE"
     while max_ticks is None or ticks < max_ticks:
         state = relay.tick(datetime.now(timezone.utc))
         ticks += 1
@@ -373,7 +418,11 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
             return 0
         if state == "IDLE":
             time.sleep(options.tick_seconds)
-    # bounded 모드(--max-ticks)는 게이트로 쓰인다 — 발행 실패가 있었는데 exit 0 이면
-    # 호출자가 "다 나갔다"로 오독한다. 상주 모드는 여기 도달하지 않는다.
-    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d", ticks, partial)
-    return 1 if partial else 0
+    # bounded 모드(--max-ticks)는 배출 게이트로 쓰인다. **비운 걸 확인한 tick(IDLE) 로
+    # 끝났을 때만** 0 이다 — 실패가 있었거나(PARTIAL) 아직 일이 남은 채 상한에 걸렸으면
+    # backlog 가 남았는데 호출자가 "다 나갔다"로 오독한다. 정확히 마지막 tick 에 다
+    # 비워진 경우도 1 이 되는데(확인할 tick 이 없다), tick 하나를 더 주면 해소된다.
+    drained = state == "IDLE" and partial == 0
+    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d, 마지막 상태 %s",
+                ticks, partial, state)
+    return 0 if drained else 1

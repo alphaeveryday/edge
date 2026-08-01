@@ -377,8 +377,9 @@ class JobLedger:
                 """,
                 (relay_id, now + timedelta(seconds=lease_seconds), now, now, limit),
             )
-            # attempt_count 는 Relay 의 backoff·예산 소진 판정 재료다 — 이 값 없이는
-            # 지수 backoff 도 "지속 실패 격리"도 만들 수 없다(ALPHA-670)
+            # attempt_count 는 Relay 의 지수 backoff 재료다 — 이 값 없이는 재시도 간격을
+            # 시도 횟수에 따라 벌릴 수 없다(ALPHA-670). 시도 횟수로 DEAD 를 만들지는
+            # 않는다 — terminal 은 "재시도해도 같은 결과"일 때만이다.
             return [
                 {"event_id": r[0], "event_type": r[1], "destination": r[2],
                  "payload": r[3], "claim_token": r[4], "attempt_count": r[5]}
@@ -407,7 +408,11 @@ class JobLedger:
         self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
         next_attempt_at: datetime | None, error: str, terminal: bool = False,
     ) -> bool:
-        """발행 실패 기록 — transient 는 재시도 예약, 지속 실패는 DEAD 로 조회 가능 격리.
+        """발행 실패 기록 — transient 는 재시도 예약, terminal 은 DEAD 로 조회 가능 격리.
+
+        ⚠️ terminal 판정의 주체는 **호출자(Relay)** 이고, 기준은 "재시도해도 결과가 같은가"
+        다(미정의 destination·크기 초과·SenderFault). 일시 실패를 시도 횟수로 DEAD 로
+        바꾸지 않는다 — 몇 분짜리 큐 장애가 되돌릴 수 없는 유실이 된다(ALPHA-670).
 
         transient 는 **미래** next_attempt_at 이 필수다 — 없으면 claim 해제 즉시 다시
         eligible 이 돼 같은 장애를 tight loop 로 두드린다."""

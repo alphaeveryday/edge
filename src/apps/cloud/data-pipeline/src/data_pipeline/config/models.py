@@ -379,9 +379,11 @@ class MinuteRelayConfig(BaseModel):
 
     queue_urls: dict[NonBlankStr, NonBlankStr]
     batch_limit: int = Field(default=10, ge=1, le=10)  # SQS SendMessageBatch 상한
-    lease_seconds: int = Field(default=60, ge=1)
-    retry_base_seconds: int = Field(default=2, ge=1)
-    retry_max_seconds: int = Field(default=300, ge=1)
+    # 상한을 둔다 — 큰 값(10^15)은 pydantic 을 통과한 뒤 timedelta 범위를 넘겨 claim
+    # 전에 매번 crash 하고, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
+    lease_seconds: int = Field(default=60, ge=1, le=3600)
+    retry_base_seconds: int = Field(default=2, ge=1, le=3600)
+    retry_max_seconds: int = Field(default=300, ge=1, le=86_400)
     # tick 사이 대기(초). ECS 상주 서비스라 짧게 돈다 — 발행 지연 목표는 수초(v0.7 11.1).
     # 상한을 둔다: `1e309` 는 inf 로 파싱돼 gt=0 을 통과하고 time.sleep(inf) 가
     # OverflowError 를 내며, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.

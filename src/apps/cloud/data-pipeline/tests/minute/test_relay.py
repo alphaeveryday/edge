@@ -114,13 +114,22 @@ class TestPublishing:
             "payload": {"job_id": "job-1", "generation": 2},
         }
 
-    def test_routing_covers_all_three_queues(self, tmp_path):
+    def test_each_destination_goes_to_its_own_queue(self, tmp_path):
+        # ⚠️ URL **집합**만 비교하면 price↔news 를 서로 바꿔 보내도 통과한다 — 잘못된
+        # Consumer 가 깨어나고 행은 PUBLISHED 로 확정돼 설정을 고쳐도 안 되살아난다
         db = FakeMinuteDB()
         for index, destination in enumerate(sorted(QUEUES)):
             enqueue(db, f"e{index}", destination=destination)
         relay = build_relay(db)
         assert relay.tick(NOW) == "PUBLISHED"
-        assert {url for url, _ in relay.publisher.sent} == set(QUEUES.values())
+        routed = {
+            url: {m.event_id for m in messages} for url, messages in relay.publisher.sent
+        }
+        expected = {
+            QUEUES[destination]: {f"e{index}"}
+            for index, destination in enumerate(sorted(QUEUES))
+        }
+        assert routed == expected
 
     def test_backlog_drains_across_ticks(self, tmp_path):
         # batch 상한을 넘는 backlog 도 tick 을 거듭해 비워야 한다 — 남으면 oldest-age 가 안 준다
@@ -250,20 +259,27 @@ class TestConcurrencyAndCrash:
         assert alive.tick(NOW + timedelta(seconds=30)) == "IDLE"  # lease 유효 — 침범 금지
         assert alive.tick(NOW + timedelta(seconds=61)) == "PUBLISHED"
 
-    def test_mark_failure_after_claim_loss_does_not_corrupt(self, tmp_path):
-        # 발행 후 DB 기록 전에 claim 을 잃으면 행은 NEW 로 남아 재발행된다 —
-        # 중복은 Consumer 의 event_id 멱등이 흡수한다(v0.7 9절 복구 표)
+    def test_crash_after_publish_before_mark_republishes_same_event_id(self, tmp_path):
+        # 발행은 나갔는데 DB 기록 전에 죽으면 행은 NEW 로 남아 **다시 발행**된다.
+        # 중복은 Consumer 가 event_id 로 흡수한다(v0.7 9절 복구 표) — 유실은 불가.
+        class CrashAfterSend(FakePublisher):
+            def publish_batch(self, queue_url, messages):
+                result = super().publish_batch(queue_url, messages)
+                raise RuntimeError("전송 직후 프로세스 종료")
+
         db = FakeMinuteDB()
         enqueue(db, "e1")
-        relay = build_relay(db, relay_id="relay-1", lease_seconds=60)
-        batch = relay.jobs.claim_outbox_batch(
-            relay_id="relay-1", now=NOW, limit=10, lease_seconds=60
-        )
-        db.outbox["e1"]["claim_expires_at"] = NOW + timedelta(seconds=999)  # 다른 claim 흉내
-        assert relay.jobs.mark_published(
-            event_id="e1", relay_id="relay-1", claim_token=batch[0]["claim_token"], now=NOW
-        ) is False
+        crashing = CrashAfterSend()
+        relay = build_relay(db, publisher=crashing, relay_id="relay-1", lease_seconds=60)
+        assert relay.tick(NOW) == "PARTIAL"  # 전송됐는지 알 수 없다 → 재시도 예약
         assert db.outbox["e1"]["status"] == "NEW"
+
+        alive = build_relay(db, relay_id="relay-2")
+        # next_attempt_at 이 지난 뒤 다른 Relay 가 같은 event 를 다시 발행한다
+        assert alive.tick(NOW + timedelta(seconds=61)) == "PUBLISHED"
+        [(_, messages)] = alive.publisher.sent
+        assert messages[0].event_id == "e1", "재발행이 같은 event_id 로 나가지 않았다"
+        assert json.loads(messages[0].body)["event_id"] == "e1"
 
 
 class TestShutdown:
@@ -293,6 +309,13 @@ class TestConfigGuards:
         partial = {k: v for k, v in QUEUES.items() if k != "news-extraction-backfill"}
         with pytest.raises(ValueError, match="news-extraction-backfill"):
             RelayConfig(relay_id="r", queue_urls=partial)
+
+    def test_shared_queue_url_refuses_to_start(self):
+        # 세 destination 이 한 큐를 가리키면 다른 큐의 Consumer 가 wake-up 을 못 받는데
+        # event 는 PUBLISHED 로 확정돼 URL 을 고쳐도 되살아나지 않는다(v0.7 12.1)
+        same = dict.fromkeys(QUEUES, "https://sqs/one")
+        with pytest.raises(ValueError, match="같은 큐"):
+            RelayConfig(relay_id="r", queue_urls=same)
 
     def test_backoff_cap_is_respected(self, tmp_path):
         db = FakeMinuteDB()
@@ -325,14 +348,17 @@ class TestSqsResponseGate:
             self.requests.append(kwargs)
             if self.responses:
                 return self.responses.pop(0)
-            return {"Successful": [{"Id": e["Id"]} for e in kwargs["Entries"]]}
+            return {"Successful": [
+                {"Id": e["Id"], "MessageId": f"m-{e['Id']}", "MD5OfMessageBody": "x"}
+                for e in kwargs["Entries"]
+            ]}
 
     def _messages(self, count, body="{}"):
         return tuple(OutboxMessage(f"e{i}", body) for i in range(count))
 
     def test_partial_batch_failure_maps_to_right_events(self):
         stub = self.StubSqs([{
-            "Successful": [{"Id": "0"}, {"Id": "2"}],
+            "Successful": [{"Id": "0", "MessageId": "m0"}, {"Id": "2", "MessageId": "m2"}],
             "Failed": [{"Id": "1", "Code": "InternalError", "Message": "boom"}],
         }])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(3))
@@ -351,23 +377,31 @@ class TestSqsResponseGate:
     def test_unknown_id_never_marks_another_event_published(self, bogus_id):
         # ⚠️ int() 강제였다면 "-1" 이 chunk[-1](마지막 event)을 PUBLISHED 로 확정해
         # 그 event 가 재발행 대상에서 빠진 채 조용히 유실된다
-        stub = self.StubSqs([{"Successful": [{"Id": bogus_id}]}])
+        stub = self.StubSqs([{"Successful": [{"Id": bogus_id, "MessageId": "m?"}]}])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(3))
         assert published == frozenset(), f"보내지 않은 Id({bogus_id!r})가 성공 처리됐다"
         assert failures == ()
 
-    def test_duplicate_id_reported_once(self):
+    def test_contradictory_id_is_left_unreported(self):
+        # ⚠️ 같은 Id 가 성공·실패 양쪽에 오면 발행 여부를 **알 수 없다**. 성공으로 접으면
+        # 행이 NEW 에서 빠져 재평가되지 않는다 — 미보고로 둬야 Relay 가 재시도한다.
         stub = self.StubSqs([{
-            "Successful": [{"Id": "0"}],
+            "Successful": [{"Id": "0", "MessageId": "m0"}],
             "Failed": [{"Id": "0", "Code": "InternalError", "Message": "boom"}],
         }])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
-        # 같은 Id 가 양쪽에 오면 먼저 온 판정만 쓴다 — 성공/실패를 동시에 세지 않는다
-        assert published == frozenset({"e0"}) and failures == ()
+        assert published == frozenset(), "모순 응답을 성공으로 확정했다"
+        assert failures == ()
+
+    def test_successful_without_message_id_is_not_published(self):
+        # 큐가 받았다는 근거(MessageId)가 없는 성공 항목 — 확정하면 유실이 영구화된다
+        stub = self.StubSqs([{"Successful": [{"Id": "0"}]}])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        assert published == frozenset() and failures == ()
 
     def test_missing_entry_is_left_unreported(self):
         # 응답에 아예 없는 event 는 성공도 실패도 아니다 — Relay 가 "미보고"로 재시도한다
-        stub = self.StubSqs([{"Successful": [{"Id": "0"}]}])
+        stub = self.StubSqs([{"Successful": [{"Id": "0", "MessageId": "m0"}]}])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(2))
         assert published == frozenset({"e0"}) and failures == ()
 
@@ -409,6 +443,32 @@ class TestCliGuards:
     def test_missing_db_config_fails_loud(self):
         with pytest.raises(SystemExit, match="db 설정 없음"):
             relay_cli(self._settings(minute_relay=object()))
+
+    def test_bounded_mode_signals_remaining_backlog(self, monkeypatch):
+        # ⚠️ 상한에 걸려 backlog 를 남긴 채 끝났는데 exit 0 이면, 일회성 배출 게이트가
+        # "다 나갔다"로 오독한다(남은 wake-up 은 상주 Relay 가 없으면 발행되지 않는다)
+        db = FakeMinuteDB()
+        for index in range(25):
+            enqueue(db, f"e{index}")
+        settings = SimpleNamespace(
+            db=_DB,
+            minute_relay=SimpleNamespace(
+                queue_urls=QUEUES, batch_limit=10, lease_seconds=60,
+                retry_base_seconds=2, retry_max_seconds=300, tick_seconds=0.0,
+            ),
+        )
+        monkeypatch.setattr(
+            "data_pipeline.minute.relay.JobLedger",
+            lambda db: JobLedger(db=_DB, connect_fn=db_.connect),
+        )
+        db_ = db
+        monkeypatch.setattr(
+            "data_pipeline.minute.relay.SqsPublisher",
+            lambda: FakePublisher(),
+        )
+        assert relay_cli(settings, max_ticks=1) == 1  # 15건 남았다
+        assert relay_cli(settings, max_ticks=5) == 0  # 비우고 IDLE 로 확인됨
+        assert {r["status"] for r in db.outbox.values()} == {"PUBLISHED"}
 
     def test_missing_queue_mapping_fails_loud(self):
         # 큐 매핑 없이 뜨면 **모든** event 가 미정의 destination 으로 DEAD 된다 —
