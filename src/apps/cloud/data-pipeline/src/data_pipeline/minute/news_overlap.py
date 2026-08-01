@@ -89,8 +89,11 @@ def poll_new_articles(
             raise ValueError(f"anchor_ids 원소가 비어 있거나 문자열이 아니다: {anchor!r}")
     seen_new: set[str] = set()
     observed_signatures: dict[str, tuple[str, str]] = {}
-    new_articles: list[dict] = []
-    observed_articles: list[dict] = []
+    # news_id → 대표 행(가장 강한 identity). 두 결과 목록은 **끝에서 이 하나를 보고**
+    # 만든다 — 목록마다 따로 교체하면 승격이 한쪽에만 반영돼 같은 source item 이
+    # 서로 다른 article_id 로 처리된다(원장은 URL, canonical/job 은 fallback).
+    representative: dict[str, dict] = {}
+    new_ids: list[str] = []
     next_anchor: list[str] = []
     reached = False
     pages_used = 0
@@ -133,43 +136,36 @@ def poll_new_articles(
             article_id = news_article_id(row)
             signature = (article_content_checksum(row), article_id)
             previous_signature = observed_signatures.get(news_id)
-            if previous_signature is not None and previous_signature != signature:
+            if previous_signature is None:
+                observed_signatures[news_id] = signature
+                representative[news_id] = row
+                if page == 1 and len(next_anchor) < anchor_size:
+                    next_anchor.append(news_id)
+            elif previous_signature != signature:
                 previous_checksum, previous_article_id = previous_signature
-                # fallback(URL 없음) → URL identity 는 **승격**이지 충돌이 아니다 —
-                # 원장(_observe_tx)의 단방향 승격 계약과 같은 축이다. 같은 poll 에
-                # URL 없는 노출과 URL 있는 노출이 함께 오는 것은 정상 형상이라,
-                # 이를 충돌로 접으면 page 가 반복 실패하고 승격도 영영 못 한다.
-                promotable = (
-                    previous_checksum == signature[0]
-                    and previous_article_id == fallback_id
-                    and article_id != fallback_id
-                )
-                if promotable:
+                # identity 는 **격자**다: fallback(NEWS_ID) < URL. 같은 본문이면
+                # 한쪽이 fallback 인 조합은 도착 **순서와 무관하게** 승격이거나
+                # 무시이고 충돌이 아니다(원장 _observe_tx 의 단방향 승격과 같은 축).
+                # 순서에 따라 충돌로 갈리면 정상 중복 노출이 page 를 반복 실패시킨다.
+                same_content = previous_checksum == signature[0]
+                if same_content and previous_article_id == fallback_id != article_id:
                     observed_signatures[news_id] = signature
-                    # 관측 목록의 대표 행도 URL 있는 쪽으로 교체 — 원장이 더 강한
-                    # identity 증거를 보게 한다
-                    for index, seen_row in enumerate(observed_articles):
-                        if seen_row.get("NEWS_ID") == news_id:
-                            observed_articles[index] = row
-                            break
+                    representative[news_id] = row  # 더 강한 identity 로 교체
+                elif same_content and article_id == fallback_id != previous_article_id:
+                    pass  # 이미 더 강한 identity 보유 — 약한 중복은 무시
                 else:
                     # 그 밖의 불일치(본문 상충·URL↔다른 URL)는 하나를 임의 선택하면
                     # correction 이나 canonical 변경을 숨긴다. raw 는 보존하되
                     # (adapter 소관) poll 판정은 실패시킨다.
                     raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
-            elif previous_signature is None:
-                observed_signatures[news_id] = signature
-                observed_articles.append(row)
-                if page == 1 and len(next_anchor) < anchor_size:
-                    next_anchor.append(news_id)
-        for news_id, row in validated_rows:
+        for news_id, _ in validated_rows:
             if news_id in anchor_ids:
                 reached = True
                 break
             if news_id in seen_new:
-                continue  # poll 내 duplicate — 첫 관측 유지
+                continue  # poll 내 duplicate — 대표 행 하나로 수렴
             seen_new.add(news_id)
-            new_articles.append(row)
+            new_ids.append(news_id)
         if reached:
             break
         if page_is_last:
@@ -185,8 +181,9 @@ def poll_new_articles(
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
         truncated = not reached
     return PollOutcome(
-        new_articles=tuple(new_articles),
-        observed_articles=tuple(observed_articles),
+        # 두 목록 모두 대표 행에서 만든다 — 승격이 한쪽에만 반영되는 경로가 없다
+        new_articles=tuple(representative[news_id] for news_id in new_ids),
+        observed_articles=tuple(representative.values()),
         reached_anchor=reached,
         truncated=truncated,
         # 첫 조회 snapshot 에서만 유도한다. live feed 를 다시 읽으면 새로 끼어든

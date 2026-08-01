@@ -536,3 +536,50 @@ class TestPollUrlPromotion:
                 ContentConflictFeed(), poll_index=0, anchor_ids=frozenset(),
                 max_pages=2, page_size=10,
             )
+
+    def test_promotion_is_order_independent(self):
+        # identity 격자는 순서와 무관하다 — URL 이 먼저 오든 fallback 이 먼저 오든
+        # 같은 결과여야 하고, 어느 쪽도 충돌이 아니다
+        def feed_with(order):
+            class OrderedFeed:
+                def fetch_page(self, poll_index, page, page_size):
+                    return [] if page > 1 else list(order)
+            return OrderedFeed()
+
+        fallback_row = {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c"}
+        url_row = {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c",
+                   "PROVIDER_LINK_PAGE": "https://news.example/a"}
+        for order in (
+            [fallback_row, url_row],
+            [url_row, fallback_row],
+            [fallback_row, url_row, fallback_row],
+            [url_row, fallback_row, url_row],
+        ):
+            outcome = poll_new_articles(
+                feed_with(order), poll_index=0, anchor_ids=frozenset(),
+                max_pages=2, page_size=10,
+            )
+            assert len(outcome.observed_articles) == 1
+            assert outcome.observed_articles[0].get("PROVIDER_LINK_PAGE")
+
+    def test_new_and_observed_share_the_promoted_row(self):
+        # 두 목록이 갈리면 원장은 URL 로, canonical/job 은 fallback 으로 처리돼
+        # 같은 source item 이 두 article_id 로 쪼개진다
+        class PagedPromotionFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page == 1:
+                    return [{"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c"}]
+                if page == 2:
+                    return [{"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c",
+                             "PROVIDER_LINK_PAGE": "https://news.example/a"}]
+                return []
+
+        outcome = poll_new_articles(
+            PagedPromotionFeed(), poll_index=0, anchor_ids=frozenset(),
+            max_pages=3, page_size=1,
+        )
+        assert len(outcome.new_articles) == 1 and len(outcome.observed_articles) == 1
+        assert outcome.new_articles[0] is outcome.observed_articles[0]
+        assert news_article_id(outcome.new_articles[0]) == news_article_id(
+            {"PROVIDER_LINK_PAGE": "https://news.example/a"}
+        )
