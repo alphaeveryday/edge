@@ -583,3 +583,46 @@ class TestPollUrlPromotion:
         assert news_article_id(outcome.new_articles[0]) == news_article_id(
             {"PROVIDER_LINK_PAGE": "https://news.example/a"}
         )
+
+    def test_anchor_above_unseen_rows_is_not_silent_success(self):
+        # 서버가 옛 head 를 맨 위로 다시 올리면 anchor 뒤에 신규분이 온다.
+        # 거기서 멈추고 성공으로 접으면 그 기사들이 recovery 없이 유실된다.
+        class ResurfacedAnchorFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "a1", "TITLE": "a", "CONTENT": "ca"},
+                    {"NEWS_ID": "new-1", "TITLE": "n1", "CONTENT": "c1"},
+                    {"NEWS_ID": "new-2", "TITLE": "n2", "CONTENT": "c2"},
+                    {"NEWS_ID": "a2", "TITLE": "a2", "CONTENT": "ca2"},
+                    {"NEWS_ID": "old", "TITLE": "o", "CONTENT": "co"},
+                ]
+
+        outcome = poll_new_articles(
+            ResurfacedAnchorFeed(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
+            max_pages=2, page_size=10,
+        )
+        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["new-1", "new-2"]
+        assert outcome.reached_anchor is True
+        assert outcome.truncated is True  # frontier 미증명 — recovery 예약 대상
+
+    def test_ordered_anchor_run_stays_clean_frontier(self):
+        # 정상 피드: anchor 는 연속 구간이라 그 뒤로 anchor(또는 더 오래된 행)만 온다.
+        # 이 경우는 truncated 로 위장 승격되면 안 된다(매 poll 이 INCOMPLETE 가 된다)
+        class OrderedFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "new-1", "TITLE": "n1", "CONTENT": "c1"},
+                    {"NEWS_ID": "a1", "TITLE": "a1", "CONTENT": "ca1"},
+                    {"NEWS_ID": "a2", "TITLE": "a2", "CONTENT": "ca2"},
+                ]
+
+        outcome = poll_new_articles(
+            OrderedFeed(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
+            max_pages=2, page_size=10,
+        )
+        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["new-1"]
+        assert outcome.reached_anchor is True and outcome.truncated is False

@@ -96,6 +96,8 @@ def poll_new_articles(
     new_ids: list[str] = []
     next_anchor: list[str] = []
     reached = False
+    seen_anchors: set[str] = set()
+    anchor_disordered = False
     pages_used = 0
     feed_ended = False
     for page in range(1, max_pages + 1):
@@ -161,7 +163,23 @@ def poll_new_articles(
         for news_id, _ in validated_rows:
             if news_id in anchor_ids:
                 reached = True
-                break
+                seen_anchors.add(news_id)
+                continue  # anchor 행 자체는 신규가 아니다
+            if reached:
+                # anchor 는 직전 head 의 **연속 구간**이라, 정상 피드라면 첫 anchor
+                # 뒤로 나머지 anchor 들이 이어진 뒤에야 더 오래된 행이 나온다.
+                # 아직 못 본 anchor 가 남았는데 비-anchor 행이 끼면 newest-first 가
+                # 깨진 것이다(예: 서버가 옛 head 를 맨 위로 다시 올림) — 그 행이
+                # old 인지 신규인지 ID 만으로 증명할 수 없다. 여기서 멈추고 성공으로
+                # 접으면 신규분이 recovery 도 없이 유실되므로, 후보로 담고 frontier
+                # 는 미증명으로 표시한다. 과수집은 원장(observe)이 dedupe 해 무해
+                # 하지만 과소수집은 유실이다. anchor 를 전부 본 뒤의 비-anchor 행은
+                # 정상적인 과거분이라 담지 않는다.
+                if len(seen_anchors) < len(anchor_ids) and news_id not in seen_new:
+                    anchor_disordered = True
+                    seen_new.add(news_id)
+                    new_ids.append(news_id)
+                continue
             if news_id in seen_new:
                 continue  # poll 내 duplicate — 대표 행 하나로 수렴
             seen_new.add(news_id)
@@ -179,7 +197,8 @@ def poll_new_articles(
     else:
         # anchor 가 피드에서 사라졌더라도 연속성을 증명하지 못했다. feed 끝을 anchor
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
-        truncated = not reached
+        # 순서가 깨진 anchor 도달도 frontier 를 증명하지 못한 것은 마찬가지다.
+        truncated = not reached or anchor_disordered
     return PollOutcome(
         # 두 목록 모두 대표 행에서 만든다 — 승격이 한쪽에만 반영되는 경로가 없다
         new_articles=tuple(representative[news_id] for news_id in new_ids),
