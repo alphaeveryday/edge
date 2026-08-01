@@ -10,8 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 
 /**
- * publication 게시 원장 쓰기 — 이 모듈은 자동 게시·무효화·정정 UNPUBLISHED 전이만 쓴다
- * (검수 승인 재발행은 tenant-console-api — 스키마 COMMENT 의 writer 분담). grain 선점 INSERT·
+ * publication 게시 원장 쓰기 — 이 모듈은 자동 게시·무효화 전이만 쓴다
+ * (검수 승인 재발행·수동 제공 중단은 tenant-console-api — 스키마 COMMENT 의 writer 분담). grain 선점 INSERT·
  * 게시분 가드 UPDATE 는 save() 로 표현 불가라 native @Query 로 옮긴다 — 쓰기만 노출하려
  * Repository 마커를 상속한다.
  */
@@ -37,7 +37,7 @@ public interface PublicationRepository extends Repository<Publication, Long> {
 	int publish(@Param("analysisItemId") String analysisItemId, @Param("etfTicker") String etfTicker,
 			@Param("tradeDate") LocalDate tradeDate);
 
-	/** 대상 item 의 게시분 상태 전이(UNPUBLISHED·INVALIDATED) — 즉시 비노출. @return 전이 행 수. */
+	/** 대상 item 의 게시분 상태 전이(INVALIDATED) — 즉시 비노출. @return 전이 행 수. */
 	@Modifying
 	@Transactional
 	@Query(value = """

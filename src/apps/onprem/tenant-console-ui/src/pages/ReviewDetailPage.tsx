@@ -99,20 +99,6 @@ export function ReviewDetailPage() {
         </span>
       </div>
 
-      {it.supersedesItemId && (
-        <div
-          className="rounded-[5px] p-3"
-          style={{ border: '1px solid var(--border-strong)', background: 'var(--bg-sunken)' }}
-        >
-          <div className="t-label mb-1.5">정정 리비전</div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.6 }}>
-            원본 <span className="num">{it.supersedesItemId}</span> 의 정정본입니다
-            {it.correctionReason ? ` — 사유: ${it.correctionReason}` : ''}.
-            {inReview ? ' 승인 전까지 자동 노출되지 않습니다.' : ''}
-          </div>
-        </div>
-      )}
-
       {(it.reviewReasons.length > 0 || reviewChecks.length > 0) && (
         <div
           className="rounded-[5px] p-3"

@@ -32,8 +32,14 @@ public class BundleEntryStore {
 		if ("INVALIDATION".equals(row.deliveryType())) {
 			return BundleEntry.invalidation(row.cursor(), row.targetExplanationResultId(), row.reason());
 		}
+		if (!"NEW".equals(row.deliveryType())) {
+			// 2형상 계약(ADR-0044) 밖의 값 — DB CHECK 가 막지만, 뚫렸다면 조용히 NEW 로
+			// 치환하지 않는다(fail-loud).
+			throw new IllegalStateException(
+					"전달 레코드 cursor=" + row.cursor() + " 의 delivery_type=" + row.deliveryType() + " 은 폐지·미지 유형이다");
+		}
 
-		// NEW·CORRECTION 은 본체 필수 — 결측은 outbox 무결성 훼손이므로 즉시 실패(fail-loud).
+		// NEW 는 본체 필수 — 결측은 outbox 무결성 훼손이므로 즉시 실패(fail-loud).
 		if (row.explanationResultId() == null) {
 			throw new IllegalStateException(
 					"전달 레코드 cursor=" + row.cursor() + " (" + row.deliveryType() + ") 의 explanation_result 를 찾지 못했다");
@@ -50,10 +56,6 @@ public class BundleEntryStore {
 				row.confidenceLevel(),
 				row.primaryThreadId());
 		ExplanationRun run = new ExplanationRun(row.explanationRunId(), row.bundleVersion());
-
-		if ("CORRECTION".equals(row.deliveryType())) {
-			return BundleEntry.correction(row.cursor(), row.targetExplanationResultId(), row.reason(), result, run);
-		}
 		return BundleEntry.newResult(row.cursor(), result, run, List.of(), List.of());
 	}
 }

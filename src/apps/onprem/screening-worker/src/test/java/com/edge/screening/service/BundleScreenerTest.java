@@ -26,11 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * 상태 분기 계약(state-machine.md·ADR-0041)을 검증한다:
- * NEW·CORRECTION 정정분=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는
- * AUTO_PUBLISHED 만·근거는 screening_check) / 활성 정책 0건=NEW 진행 중단, CORRECTION 은
- * 비노출 수행 + 정정분 REVIEW_REQUIRED 보존(무효화는 정책 무관 진행) / CORRECTION=구
- * 리비전 종결·비노출 + supersedes 연결 / INVALIDATION=즉시 비노출 / 형상 위반=마킹 없이 실패.
+ * 상태 분기 계약(state-machine.md·ADR-0044)을 검증한다:
+ * NEW=활성 정책 평가(AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED, 게시는 AUTO_PUBLISHED 만·
+ * 근거는 screening_check) / 활성 정책 0건=NEW 진행 중단(무효화는 정책 무관 진행) /
+ * INVALIDATION=즉시 비노출 / CORRECTION=폐지 유형으로 fail-loud / 형상 위반=마킹 없이 실패.
  */
 class BundleScreenerTest {
 
@@ -40,7 +39,7 @@ class BundleScreenerTest {
 			 "explanation_type":"EVENT_SUPPORTED","summary":"s","confidence_level":"MEDIUM"}""";
 
 	private static class RecordingItems implements AnalysisItemRepository {
-		record Upserted(String id, String supersedes, String reason, String status) {
+		record Upserted(String id, String status) {
 		}
 
 		final List<Upserted> upserts = new ArrayList<>();
@@ -56,9 +55,8 @@ class BundleScreenerTest {
 		@Override
 		public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 				OffsetDateTime asOf, String type, String summary, String headline, String confidence,
-				String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
-				long sourceCursor, String status) {
-			upserts.add(new Upserted(id, supersedesItemId, correctionReason, status));
+				String threadId, String evidencesJson, long sourceCursor, String status) {
+			upserts.add(new Upserted(id, status));
 			return 1;
 		}
 
@@ -166,7 +164,7 @@ class BundleScreenerTest {
 		// WHY: walking skeleton 정책 = 무조건 통과. 게시돼야 Publication API 가 서빙한다.
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
-		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");
 		assertThat(pending.screened).containsExactly(1L);
 	}
@@ -235,7 +233,7 @@ class BundleScreenerTest {
 
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + risky + "}"));
 
-		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "BLOCKED"));
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", "BLOCKED"));
 		assertThat(publications.published).isEmpty();
 		assertThat(checks.appended).containsExactly("er-1:BLOCK:1:급등 확실");
 	}
@@ -249,7 +247,7 @@ class BundleScreenerTest {
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
 		assertThat(items.upserts)
-				.containsExactly(new RecordingItems.Upserted("er-1", null, null, "REVIEW_REQUIRED"));
+				.containsExactly(new RecordingItems.Upserted("er-1", "REVIEW_REQUIRED"));
 		assertThat(publications.published).isEmpty();
 		assertThat(checks.appended).containsExactly("er-1:REVIEW:null:null");
 	}
@@ -259,7 +257,7 @@ class BundleScreenerTest {
 		// WHY: 자동 게시에도 "어느 정책으로 통과했나"(PASS 행)가 남아야 민원 재현이 온전하다.
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
-		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", null, null, "AUTO_PUBLISHED"));
+		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");
 		assertThat(checks.appended).containsExactly("er-1:PASS:null:null");
 	}
@@ -272,10 +270,9 @@ class BundleScreenerTest {
 			@Override
 			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
-					String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
-					long sourceCursor, String status) {
+					String threadId, String evidencesJson, long sourceCursor, String status) {
 				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
-						threadId, evidencesJson, supersedesItemId, correctionReason, sourceCursor, status);
+						threadId, evidencesJson, sourceCursor, status);
 				return 0;
 			}
 		};
@@ -286,60 +283,6 @@ class BundleScreenerTest {
 		assertThat(checks.appended).isEmpty();
 		assertThat(publications.published).isEmpty();
 		assertThat(pending.screened).containsExactly(1L);
-	}
-
-	@Test
-	void CORRECTION은_구_리비전을_종결하고_정정분은_정책_평가를_거친다() {
-		// WHY(결정 변경 2026-07-27): 정정분도 신규와 동일한 정책 평가 — 온보딩 철학
-		// (기본 자동 제공, 걸린 것만 검수)의 일관 적용. 청정 정정은 자동 게시되고,
-		// 구 리비전 종결·supersedes 연결·원장 보존은 불변이다.
-		String corrected = RESULT.replace("er-1", "er-2");
-		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"근거 공시 정정\"," +
-				"\"explanation_result\":" + corrected + "}"));
-
-		assertThat(items.transitions).containsExactly("er-1:CORRECTED");
-		assertThat(publications.transitions).containsExactly("er-1:UNPUBLISHED");
-		assertThat(items.upserts).containsExactly(
-				new RecordingItems.Upserted("er-2", "er-1", "근거 공시 정정", "AUTO_PUBLISHED"));
-		assertThat(publications.published).containsExactly("er-2");   // 내려간 grain 에 재게시
-		assertThat(checks.appended).containsExactly("er-2:PASS:null:null");
-	}
-
-	@Test
-	void BLOCK_룰에_걸린_정정분은_BLOCKED로_적재되고_게시되지_않는다() {
-		rules = List.of(new ScreeningRule(1L, 10L, "BANNED_WORD", "{\"text\":\"급등 확실\"}", "BLOCK", true));
-		String corrected = RESULT.replace("er-1", "er-2")
-				.replace("\"summary\":\"s\"", "\"summary\":\"급등 확실 정정\"");
-
-		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
-				"\"explanation_result\":" + corrected + "}"));
-
-		assertThat(items.upserts).containsExactly(
-				new RecordingItems.Upserted("er-2", "er-1", "정정", "BLOCKED"));
-		assertThat(publications.published).isEmpty();
-		assertThat(checks.appended).containsExactly("er-2:BLOCK:1:급등 확실");
-	}
-
-	@Test
-	void 활성_정책이_없어도_CORRECTION은_비노출을_수행하고_정정분을_검수로_보존한다() {
-		// WHY: 정정의 1순위는 틀린 문구를 내리는 것(안전 조치)이다 — 정책이 비활성화된
-		// 구간에 정정이 막히면 틀린 게시가 계속 노출된다. 정정분은 판정할 정책이 없으니
-		// 자동 노출 없이 REVIEW_REQUIRED 로 보존한다(check 는 정책 부재로 미기록 — 로그 표면화).
-		activePolicy = Optional.empty();
-
-		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
-				"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
-
-		assertThat(items.transitions).containsExactly("er-1:CORRECTED");
-		assertThat(publications.transitions).containsExactly("er-1:UNPUBLISHED");
-		assertThat(items.upserts).containsExactly(
-				new RecordingItems.Upserted("er-2", "er-1", "정정", "REVIEW_REQUIRED"));
-		assertThat(publications.published).isEmpty();
-		assertThat(checks.appended).isEmpty();
-		assertThat(pending.screened).containsExactly(2L);
 	}
 
 	@Test
@@ -425,7 +368,7 @@ class BundleScreenerTest {
 				"\"explanation_result\":" + RESULT + "}"));
 
 		assertThat(items.upserts)
-				.containsExactly(new RecordingItems.Upserted("er-1", null, null, "REVIEW_REQUIRED"));
+				.containsExactly(new RecordingItems.Upserted("er-1", "REVIEW_REQUIRED"));
 		assertThat(publications.published).isEmpty();
 	}
 
@@ -463,6 +406,21 @@ class BundleScreenerTest {
 				bundle("{\"cursor\":11,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
 		assertThrows(IllegalStateException.class, call);
+		assertThat(pending.screened).isEmpty();
+	}
+
+	@Test
+	void 폐지된_CORRECTION은_마킹_없이_실패한다() {
+		// WHY(ADR-0044): 정정 전달은 계약에서 폐지됐다 — 구 형상이 조용히 소화되면(스킵+마킹)
+		// 정정 의도가 유실된 채 cursor 가 전진한다. 미지 유형과 동일하게 fail-loud.
+		Executable call = () -> screener.screen(2,
+				bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
+						"\"target_explanation_result_id\":\"er-1\",\"reason\":\"근거 공시 정정\"," +
+						"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
+
+		assertThrows(IllegalStateException.class, call);
+		assertThat(items.upserts).isEmpty();
+		assertThat(items.transitions).isEmpty();
 		assertThat(pending.screened).isEmpty();
 	}
 
@@ -529,22 +487,6 @@ class BundleScreenerTest {
 	}
 
 	@Test
-	void CORRECTION은_구_리비전_전이와_정정분_진입_이력을_남긴다() {
-		// WHY: from_status 는 잠금(lockStatus) 후 전이라 실제 직전 상태다 — 정정 시점에
-		// 노출 중(AUTO_PUBLISHED)이었는지 검수 중이었는지가 민원 재현의 핵심 단서다.
-		items.currentStatus = "AUTO_PUBLISHED";
-		String corrected = RESULT.replace("er-1", "er-2");
-
-		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"근거 공시 정정\"," +
-				"\"explanation_result\":" + corrected + "}"));
-
-		assertThat(history.rows).containsExactly(
-				"er-1:AUTO_PUBLISHED->CORRECTED:SYSTEM:근거 공시 정정",
-				"er-2:null->AUTO_PUBLISHED:SYSTEM:근거 공시 정정");
-	}
-
-	@Test
 	void INVALIDATION은_SYSTEM_전이_이력을_남긴다() {
 		items.currentStatus = "AUTO_PUBLISHED";
 
@@ -562,10 +504,9 @@ class BundleScreenerTest {
 			@Override
 			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
-					String threadId, String evidencesJson, String supersedesItemId, String correctionReason,
-					long sourceCursor, String status) {
+					String threadId, String evidencesJson, long sourceCursor, String status) {
 				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
-						threadId, evidencesJson, supersedesItemId, correctionReason, sourceCursor, status);
+						threadId, evidencesJson, sourceCursor, status);
 				return 0;
 			}
 
@@ -584,19 +525,5 @@ class BundleScreenerTest {
 				"\"target_explanation_result_id\":\"er-9\"}"));
 
 		assertThat(history.rows).isEmpty();
-	}
-
-	@Test
-	void 정책_0건_폴백의_정정분_보존도_진입_이력을_남긴다() {
-		activePolicy = Optional.empty();
-		items.currentStatus = "AUTO_PUBLISHED";
-
-		screener.screen(2, bundle("{\"cursor\":2,\"delivery_type\":\"CORRECTION\"," +
-				"\"target_explanation_result_id\":\"er-1\",\"reason\":\"정정\"," +
-				"\"explanation_result\":" + RESULT.replace("er-1", "er-2") + "}"));
-
-		assertThat(history.rows).containsExactly(
-				"er-1:AUTO_PUBLISHED->CORRECTED:SYSTEM:정정",
-				"er-2:null->REVIEW_REQUIRED:SYSTEM:정정");
 	}
 }

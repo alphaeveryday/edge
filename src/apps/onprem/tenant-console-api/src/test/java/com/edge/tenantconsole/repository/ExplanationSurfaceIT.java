@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * explanations 읽기 표면(ALPHA-607)의 DB 계약을 실 Postgres 로 검증한다 — 손 대역이 우회하는
  * 실제 의미가 WHY(Rule 9): evidences JSONB 파싱, 검수 사유 파생(screening_check REVIEW·BLOCK
  * → rule_type→UI 어휘), 최종 문구의 publication.published_summary 스냅샷, 상태 필터
- * (RECEIVED·CORRECTED 제외), 반입 집계. 쓰기 표면(사후 운영 전이·감사)의 DB 계약은
+ * (RECEIVED·INVALIDATED 제외), 반입 집계. 쓰기 표면(사후 운영 전이·감사)의 DB 계약은
  * ExplanationWriteIT 가 담당한다(ALPHA-613). 시드는 테스트 한정 JdbcTemplate, id 는
  * it607- 접두로 격리하고, 목록은 공유 컨테이너 오염을 피해 내 id 로만 단언한다.
  */
@@ -207,14 +207,14 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
-	void 수신전_정정_리비전은_목록에서_빠진다() {
+	void 수신전_무효화_항목은_목록에서_빠진다() {
 		seedItem("it607-received", "607RCV", "카카오", "RECEIVED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
-		seedItem("it607-corrected", "607COR", "네이버", "CORRECTED", "LOW", "요약", "[]",
+		seedItem("it607-invalidated", "607INV", "네이버", "INVALIDATED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
 
 		List<String> ids = explanations.list().stream().map(Explanation::id).toList();
-		assertThat(ids).doesNotContain("it607-received", "it607-corrected");
+		assertThat(ids).doesNotContain("it607-received", "it607-invalidated");
 	}
 
 	@Test

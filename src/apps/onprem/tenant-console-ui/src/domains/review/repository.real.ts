@@ -14,8 +14,6 @@ interface WireItem {
   headline?: string;
   confidence_level?: string;
   status: string;
-  supersedes_item_id?: string;
-  correction_reason?: string;
   received_at?: string;
   review_reasons?: string[];
 }
@@ -43,8 +41,6 @@ function toItem(w: WireItem): ReviewItem {
     headline: w.headline ?? null,
     confidenceLevel: w.confidence_level ?? null,
     status: w.status,
-    supersedesItemId: w.supersedes_item_id ?? null,
-    correctionReason: w.correction_reason ?? null,
     receivedAt: w.received_at ?? null,
     reviewReasons: w.review_reasons ?? [],
   };

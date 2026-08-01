@@ -293,14 +293,14 @@ def test_persist_publishes_first_result_and_fans_out_atomically():
     assert lock_idx < result_idx < fanout_idx < sqls.index("COMMIT")
     assert sqls.count("COMMIT") == 1  # 중간 커밋이 생기면 원자성이 깨진다
     assert conn.executed[fanout_idx][1] == (ids["explanation_result_id"],)
-    assert "'NEW'" in sqls[fanout_idx]  # CORRECTION·INVALIDATION 발번은 후속 티켓
+    assert "'NEW'" in sqls[fanout_idx]  # INVALIDATION 발번은 후속(ALPHA-440), CORRECTION 은 폐지(ADR-0044)
     assert (ids["publication_status"], ids["fanout_tenants"]) == ("PUBLISHED", 1)
 
 
 def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
     """같은 날 재실행은 DRAFT 보존 + 발번 없음 — as_of 가 런마다 새로워 grain 유니크만으로는
-    이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(WITHDRAWN 재게시
-    = CORRECTION 은 후속 티켓 몫)."""
+    이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(무효화 후 재발번
+    허용 여부는 발번 정책 소관 — ADR-0044)."""
     conn = _FakeConn(result_insert_row=("DRAFT",))
 
     ids = EventStore(conn).persist_explanation(

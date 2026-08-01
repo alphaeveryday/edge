@@ -11,9 +11,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * DeliveryRow→BundleEntry 매핑 분기를 검증한다. 특히 fail-loud(NEW·CORRECTION 인데 본체
- * 결측)는 DB CHECK(ck_tenant_delivery_payload)가 시드를 막아 통합 테스트로 재현할 수 없다 —
- * outbox 무결성 훼손이 조용한 skip 이 되면 전달 유실이 숨으므로(Rule 12) 여기서 고정한다.
+ * DeliveryRow→BundleEntry 매핑 분기를 검증한다. 특히 fail-loud(NEW 인데 본체 결측,
+ * 폐지·미지 유형)는 DB CHECK(ck_tenant_delivery_payload·type)가 시드를 막아 통합 테스트로
+ * 재현할 수 없다 — outbox 무결성 훼손이 조용한 skip 이 되면 전달 유실이 숨으므로(Rule 12)
+ * 여기서 고정한다.
  */
 class BundleEntryStoreTest {
 
@@ -47,13 +48,12 @@ class BundleEntryStoreTest {
 	}
 
 	@Test
-	void CORRECTION_은_대상_참조와_사유에_재게시_본체를_함께_매핑한다() {
-		BundleEntry entry = BundleEntryStore.toEntry(row("CORRECTION", "expr-2"));
-
-		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.CORRECTION);
-		assertThat(entry.targetExplanationResultId()).isEqualTo("expr-target");
-		assertThat(entry.reason()).isEqualTo("사유");
-		assertThat(entry.explanationResult().explanationResultId()).isEqualTo("expr-2");
+	void 폐지된_CORRECTION_유형은_조용히_매핑하지_않고_즉시_실패한다() {
+		// 정정 전달은 계약에서 폐지됐다(ADR-0044) — NEW 로 치환돼 나가면 정정 서사가
+		// 신규로 둔갑해 전달되므로 fail-loud 가 맞다.
+		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("CORRECTION", "expr-2")))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("폐지");
 	}
 
 	@Test

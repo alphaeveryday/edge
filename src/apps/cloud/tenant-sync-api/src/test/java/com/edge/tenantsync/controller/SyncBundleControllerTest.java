@@ -39,21 +39,13 @@ class SyncBundleControllerTest {
 			"반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
 			"MEDIUM", "thr-0001", "exrun-0001", "rb-2026.07.0");
 
-	private static final DeliveryRow CORRECTION_ROW = new DeliveryRow(
-			2L, "CORRECTION", "expr-20260715-069500-0001", "근거 공시 정정",
-			"expr-20260715-069500-0002", "inst-etf-069500", "069500", "KODEX 200",
-			LocalDate.of(2026, 7, 15), Instant.parse("2026-07-15T07:30:00Z"),
-			"EVENT_SUPPORTED",
-			"정정된 공시 기준으로 재산출한 공개 정보 기반 변동 요인 후보입니다.",
-			"LOW", "thr-0001", "exrun-0002", "rb-2026.07.0");
-
 	private static final DeliveryRow INVALIDATION_ROW = new DeliveryRow(
-			3L, "INVALIDATION", "expr-20260715-069500-0002", "오탐지 이벤트",
+			2L, "INVALIDATION", "expr-20260715-069500-0001", "오탐지 이벤트",
 			null, null, null, null, null, null, null, null, null, null, null, null);
 
-	/** 시드 페이크 — NEW → CORRECTION → INVALIDATION (온프렘 수신 세 경로 전부 자극). */
+	/** 시드 페이크 — NEW → INVALIDATION (온프렘 수신 두 경로 전부 자극. CORRECTION 은 폐지 — ADR-0044). */
 	private static final class FakeTenantDeliveryRepository implements TenantDeliveryRepository {
-		private final List<DeliveryRow> seed = List.of(PUBLISHED_ROW, CORRECTION_ROW, INVALIDATION_ROW);
+		private final List<DeliveryRow> seed = List.of(PUBLISHED_ROW, INVALIDATION_ROW);
 
 		@Override
 		public List<DeliveryRow> findAfter(long tenantId, long afterCursor, org.springframework.data.domain.Limit limit) {
@@ -84,20 +76,18 @@ class SyncBundleControllerTest {
 				.andExpect(jsonPath("$.code").value("COMMON200"))
 				.andExpect(jsonPath("$.result.tenant_id").value(1))
 				.andExpect(jsonPath("$.result.cursor_from").value(1))
-				.andExpect(jsonPath("$.result.cursor_to").value(3))
-				.andExpect(jsonPath("$.result.entries.length()").value(3))
+				.andExpect(jsonPath("$.result.cursor_to").value(2))
+				.andExpect(jsonPath("$.result.entries.length()").value(2))
 				.andExpect(jsonPath("$.result.entries[0].delivery_type").value("NEW"))
 				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_instrument_id").value("inst-etf-069500"))
 				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_ticker").value("069500"))
 				.andExpect(jsonPath("$.result.entries[0].explanation_result.etf_name").value("KODEX 200"))
 				.andExpect(jsonPath("$.result.entries[0].explanation_result.confidence_level").value("MEDIUM"))
 				.andExpect(jsonPath("$.result.entries[0].explanation_run.release_bundle_version").value("rb-2026.07.0"))
-				.andExpect(jsonPath("$.result.entries[1].delivery_type").value("CORRECTION"))
-				.andExpect(jsonPath("$.result.entries[1].reason").value("근거 공시 정정"))
+				.andExpect(jsonPath("$.result.entries[1].delivery_type").value("INVALIDATION"))
+				.andExpect(jsonPath("$.result.entries[1].reason").value("오탐지 이벤트"))
 				.andExpect(jsonPath("$.result.entries[1].target_explanation_result_id").value("expr-20260715-069500-0001"))
-				.andExpect(jsonPath("$.result.entries[1].explanation_result.explanation_result_id").value("expr-20260715-069500-0002"))
-				.andExpect(jsonPath("$.result.entries[2].delivery_type").value("INVALIDATION"))
-				.andExpect(jsonPath("$.result.entries[2].explanation_result").doesNotExist());
+				.andExpect(jsonPath("$.result.entries[1].explanation_result").doesNotExist());
 	}
 
 	@Test

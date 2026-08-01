@@ -12,9 +12,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 미점검 번들 폴링 — cursor 순 처리(sync-protocol.md: 정정·무효화는 항상 원본보다 늦게
+ * 미점검 번들 폴링 — cursor 순 처리(sync-protocol.md: 무효화는 항상 원본보다 늦게
  * 도착하므로 순차 소비가 순서를 담보한다). 번들 실패는 뒤 번들 처리도 멈춘다 —
- * 순서를 건너뛰면 정정이 원본보다 먼저 적용될 수 있다.
+ * 순서를 건너뛰면 무효화가 원본보다 먼저 적용될 수 있다.
  */
 @Component
 public class ScreeningPoller {
@@ -46,7 +46,7 @@ public class ScreeningPoller {
 			try {
 				bundleScreener.screen(bundle.cursorFrom(), bundle.body());
 			} catch (Exception e) {
-				// 순서 보존: 실패 번들 뒤는 처리하지 않는다(정정이 원본을 앞지르면 안 된다).
+				// 순서 보존: 실패 번들 뒤는 처리하지 않는다(무효화가 원본을 앞지르면 안 된다).
 				log.error("번들 점검 실패 cursor_from={} — 순서 보존을 위해 이번 틱 중단, 다음 틱 재시도",
 						bundle.cursorFrom(), e);
 				return;

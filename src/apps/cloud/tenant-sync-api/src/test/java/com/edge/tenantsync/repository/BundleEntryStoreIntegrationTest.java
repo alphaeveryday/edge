@@ -97,37 +97,6 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 	}
 
 	@Test
-	void CORRECTION_전달은_대상_참조와_사유에_재게시_본체를_함께_싣는다() {
-		// WHY: 정정은 항상 새 ID 의 재게시 본체를 동반한다(리비전 분리, state-machine.md) —
-		// 대상 참조·사유만 오면 온프렘이 무엇으로 교체할지 알 수 없다.
-		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
-		seedRun("it-run-old", asOf);
-		seedResult("it-res-old", "it-run-old", LocalDate.of(2026, 7, 15), asOf, null);
-		seedRun("it-run-fix", asOf);
-		seedResult("it-res-fix", "it-run-fix", LocalDate.of(2026, 7, 15), asOf, null);
-		seedDelivery(tenantId, 1, "CORRECTION", "it-res-fix", "it-res-old", "수치 정정");
-
-		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
-
-		assertThat(entries).hasSize(1);
-		BundleEntry entry = entries.getFirst();
-		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.CORRECTION);
-		assertThat(entry.targetExplanationResultId()).isEqualTo("it-res-old");
-		assertThat(entry.reason()).isEqualTo("수치 정정");
-		// 재게시 본체는 NEW 와 같은 전체 스냅샷이어야 한다(계약 스키마가 CORRECTION 에도
-		// explanation_result 전체·run·빈 배열을 필수로 요구) — 분기별 매핑이 부분 누락되면 여기서 깨진다.
-		assertThat(entry.explanationResult().explanationResultId()).isEqualTo("it-res-fix");
-		assertThat(entry.explanationResult().etfTicker()).isEqualTo("069500");
-		assertThat(entry.explanationResult().tradeDate()).isEqualTo(LocalDate.of(2026, 7, 15));
-		assertThat(entry.explanationResult().explanationAsOf()).isEqualTo(asOf);
-		assertThat(entry.explanationResult().summary()).isEqualTo("요약 it-res-fix");
-		assertThat(entry.explanationRun().explanationRunId()).isEqualTo("it-run-fix");
-		assertThat(entry.explanationRun().releaseBundleVersion()).isEqualTo(BUNDLE_VERSION);
-		assertThat(entry.sourceEvents()).isEmpty();
-		assertThat(entry.evidences()).isEmpty();
-	}
-
-	@Test
 	void INVALIDATION_전달은_본체_없이_대상_참조와_사유만_싣는다() {
 		// WHY: 무효화는 기존 게시분을 내리라는 지시라 본체가 없다 — 여기 본체가 실리면
 		// 온프렘이 무효화를 재게시로 오해한다.

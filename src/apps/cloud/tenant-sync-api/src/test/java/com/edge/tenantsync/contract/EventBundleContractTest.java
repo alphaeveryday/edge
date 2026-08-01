@@ -56,7 +56,6 @@ class EventBundleContractTest {
 		ExplanationRun run = new ExplanationRun("run1", "v1");
 		EventBundle bundle = EventBundle.of(1L, List.of(
 				BundleEntry.newResult(101, result, run, List.of(), List.of()),
-				BundleEntry.correction(102, "r0", "근거 공시 정정", result, run),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 
 		// @JsonNaming 가드레일: BundleSerializer 제거(ADR-0040) 후엔 DTO의 @JsonNaming 이 유일한 snake_case
@@ -79,6 +78,23 @@ class EventBundleContractTest {
 
 		assertThat(schema.validate(bad, InputFormat.JSON))
 				.as("계약을 위반한 번들(INVALIDATION+result)은 거부되어야 한다").isNotEmpty();
+	}
+
+	@Test
+	void 폐지된_CORRECTION_형상은_계약에서_거부된다() {
+		// ADR-0044 — 전달 유형은 NEW·INVALIDATION 2형상뿐이다. 구 CORRECTION 형상(대상·사유
+		// + 재게시 본체)이 계약을 통과하면 폐지가 와이어에서 강제되지 않는다.
+		String correction = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":102,"cursor_to":102,
+				 "entries":[{"cursor":102,"delivery_type":"CORRECTION","target_explanation_result_id":"r0",
+				   "reason":"근거 공시 정정",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],"evidences":[]}]}""";
+
+		assertThat(schema.validate(correction, InputFormat.JSON))
+				.as("폐지된 CORRECTION 형상은 거부되어야 한다(ADR-0044)").isNotEmpty();
 	}
 
 	@Test

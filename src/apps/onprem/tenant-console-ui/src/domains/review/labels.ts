@@ -35,6 +35,5 @@ export const ITEM_STATUS_LABEL: Record<string, string> = {
   REJECTED: '검수 반려',
   BLOCKED: '점검 차단',
   UNPUBLISHED: '제공 중단',
-  CORRECTED: '정정됨',
   INVALIDATED: '무효화',
 };
