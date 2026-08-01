@@ -211,3 +211,21 @@ def test_a_reference_predicate_with_a_date_column_is_dropped_before_the_universe
     assert len(designs) == 1
     assert designs[0].control == "", "날짜가 섞인 참조집합이 그대로 내려갔다"
     assert designs[0].treated == "event_type_code = 'DIV'", "처치 술어까지 지우면 안 된다"
+
+
+def test_one_failing_edge_session_does_not_kill_the_run():
+    """한 간선의 검정이 죽어도 **나머지는 돈다.** ALPHA-633 과 같은 비대칭이다.
+
+    실측 두 번: (1) ref-20260801-01 — 응답 파싱 실패가 런을 exit 1 시켰다.
+    (2) parse-20260801-01 — 격리는 됐는데 그 폴백이 빈 설계에서 KeyError 를 내
+    다시 죽었다. 실패는 침묵이 아니라 gate_fail 을 단 증명으로 남아야 한다.
+    """
+    from edge_analysis.causal.engine import EdgeDesign, EdgeResult
+    from edge_analysis.causal.run import _as_proof
+
+    proof = _as_proof(EdgeResult(design=EdgeDesign(src=TREAT, dst=OUT),
+                                 gate_fail=["검정 실패: PipelineError: 응답 파싱 실패"]), {})
+
+    assert proof.strategy == "none"
+    assert proof.adjust == [] and proof.iv == []
+    assert "검정 실패" in proof.gate_fail[0]
