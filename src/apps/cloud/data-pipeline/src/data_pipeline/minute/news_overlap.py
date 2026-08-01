@@ -37,7 +37,8 @@ from datetime import datetime
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
-from ..parse import bigkinds_date, news_article_id, parse_datetime
+from ..parse import bigkinds_date, news_article_id, normalize_url, parse_datetime
+from ..quality import BLOCKING_REASONS, validate_news_meta
 from .models import canonical_json
 
 
@@ -237,10 +238,17 @@ def article_content_checksum(article: dict) -> str:
     노출 위치(page)나 provenance 는 drift 로 항상 변한다 — 내용이 같은데 위치가
     바뀌었다고 재추출하면 LLM 비용이 헛돈다. CONTENT 결측은 기존 normalize/tag
     계약의 유효한 `lead_text=None`이며 문자열 "None"과는 다른 값으로 해시한다.
+
+    **TITLE 결측(None)도 같은 축이다** — 형상 위반이 아니라 품질 게이트
+    (`quality.validate_news_meta` 의 `missing_title`)가 판정할 데이터 조건이다.
+    여기서 raise 하면 그 행 하나가 poll 전체를 실패시키는데, 소스에 계속 남아 있으므로
+    다음 poll 도 같은 자리에서 죽어 **뉴스 레인이 영구히 멈춘다**. 결측(None)과 문자열
+    "None" 은 서로 다른 값으로 해시되므로 정정 은폐 위험은 없다(비문자열 타입은 그대로
+    fail loud — 그건 응답 형상이 바뀌었다는 신호다).
     """
     title = article.get("TITLE")
-    if not isinstance(title, str):
-        raise ValueError(f"기사 TITLE 이 문자열이 아니다: {title!r}")
+    if title is not None and not isinstance(title, str):
+        raise ValueError(f"기사 TITLE 이 문자열/None 이 아니다: {title!r}")
     content = article.get("CONTENT")
     if content is not None and not isinstance(content, str):
         # str() 강제는 1/"1"을 같은 lead로 접는다. None만 기존 정규화 계약상 허용.
@@ -253,12 +261,185 @@ def article_content_checksum(article: dict) -> str:
     return hashlib.sha256(canonical_json(values).encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class NewsObservation:
+    """관측 기사 하나의 원장 입력 — identity 와 추출 입력 fingerprint.
+
+    `id_from_url` 은 canonical_article_id 의 근거가 URL 인지다(원장의 단방향 승격
+    판정 입력). row 는 canonical writer 로 넘길 벤더 원본이다.
+    """
+
+    source_item_id: str
+    article_id: str
+    id_from_url: bool
+    content_checksum: str
+    row: dict
+
+
+@dataclass(frozen=True)
+class RejectedArticle:
+    """기사 하나가 계약을 어겨 격리됐다 — 사유와 함께 window 결과에 드러낸다."""
+
+    source_item_id: str
+    reason: str
+
+
+class NewsIdentityConflictError(ValueError):
+    """같은 source item 에 서로 다른 URL canonical identity가 붙었다.
+
+    **지속되는** 위반이라 다른 ValueError 와 구분한다: 충돌하는 행은 소스에 남아 매
+    poll 재관측되므로, poll 전체를 실패시키면 그 한 건이 뉴스 레인을 영구히 막는다.
+    커밋 경로는 이 타입만 격리하고 나머지 ValueError(같은 tick 이중 관측·계약 위반)는
+    전파해 poll 을 재시도시킨다.
+    """
+
+
+# job 을 막는 사유는 **행 자체의 성질**인 것만이다. `implausible_published_at` 은
+# 판정 기준(session_date)이 날마다 움직이는 **시각 상대적** 사유라 빠진다: 오늘 미래로
+# 찍힌 기사가 내일은 통과하는데, 내용이 그대로면 재관측이 created/content_changed 를
+# 내지 않아 그 시점의 해제가 job 으로 이어지지 못한다 — 영구 누락이 된다. 반대로 내재
+# 사유(제목 결측·발행시각 파싱 불가)는 행이 고쳐질 때만 풀리고, 그건 content_changed 로
+# 잡히므로 안전하다. 시각 상대 사유는 기록만 하고 EOD(PR 8)가 하루 단위로 판정한다.
+_JOB_BLOCKING_REASONS = frozenset({"missing_title", "unparseable_published_at"})
+
+
+def blocking_quality_reasons(article: dict, *, max_published_date: str) -> list[str]:
+    """기존 뉴스 품질 게이트(quality.validate_news_meta)의 blocking 사유 (정상=[]).
+
+    분석에 쓸 수 없는 기사(제목 없음·발행시각 파싱 불가·비현실 날짜)를 드러내려고
+    배치 정제가 canonical 진입을 막는 바로 그 기준을 재사용한다 — 게이트 SSOT 는
+    quality/news.py 하나여야 한다. 관측 자체는 막지 않는다: 원장은 본 것을 기록하고,
+    나중에 제목이 채워지면 content_changed 로 job 이 생긴다.
+
+    반환에는 사유 전부가 담긴다(기록용). 그중 **job 을 실제로 막는 것**은
+    `blocks_extraction` 이 정하는 내재 사유뿐이다.
+    """
+    reasons = validate_news_meta(
+        {
+            "title": article.get("TITLE"),
+            "published_at": parse_datetime(bigkinds_date(article)),
+            # url·publisher 는 non-blocking 경고라 판정에 영향이 없지만, 게이트가 보는
+            # 행 모양을 그대로 넘겨 사유 목록이 배치와 같은 의미를 갖게 한다
+            "normalized_url": normalize_url(article.get("PROVIDER_LINK_PAGE")),
+            "publisher": article.get("PROVIDER"),
+        },
+        max_published_date=max_published_date,
+    )
+    return [reason for reason in reasons if reason in BLOCKING_REASONS]
+
+
+def blocks_extraction(reasons) -> bool:
+    """이 사유들이 **추출 job 을 막는가** — 시각 상대 사유만 있으면 막지 않는다."""
+    return bool(set(reasons) & _JOB_BLOCKING_REASONS)
+
+
+def build_observations(articles) -> tuple[NewsObservation, ...]:
+    """PollOutcome.observed_articles **전량** → 원장 입력. source_item_id 오름차순.
+
+    정렬 이유 둘: (1) 같은 관측 집합이 항상 같은 window checksum 을 만든다,
+    (2) 겹치는 기사를 두 transaction 이 같은 순서로 잠가 deadlock 이 나지 않는다.
+
+    행 형상(ID·제목·본문 타입)은 컨트롤러가 이미 검증했다 — 여기서 다시 감싸지
+    않는다. 지속되는 identity 충돌 격리는 커밋 경로(commit_news_window) 소관이다.
+    """
+    observations = [
+        NewsObservation(
+            source_item_id=article["NEWS_ID"],
+            article_id=news_article_id(article),
+            # news_article_id 의 URL 분기와 **같은 판정**을 써야 한다 — 여기서 다르게
+            # 유도하면 원장이 fallback 승격을 URL identity 와 뒤바꿔 판정한다
+            id_from_url=any(
+                normalize_url(candidate)
+                for candidate in (article.get("url"), article.get("PROVIDER_LINK_PAGE"))
+            ),
+            content_checksum=article_content_checksum(article),
+            row=article,
+        )
+        for article in articles
+    ]
+    return tuple(sorted(observations, key=lambda o: o.source_item_id))
+
+
+def observation_checksum(observations: tuple[NewsObservation, ...]) -> str:
+    """poll 관측 집합의 데이터 identity — window generation 판정 입력.
+
+    관측 순서·조회 시각과 무관하다(build_observations 가 정렬). 같은 기사 집합을
+    같은 내용으로 다시 관측하면 같은 값이라 재poll 이 세대를 올리지 않는다.
+    """
+    return hashlib.sha256(
+        canonical_json(
+            [[o.source_item_id, o.content_checksum, o.article_id] for o in observations]
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 @dataclass
 class NewsSourceLedger:
     """news_source_item 관측 원장 — NEWS_ID 재관측/본문 변경을 DB 로 판정한다."""
 
     db: DbConfig
     connect_fn: Callable = _default_connect
+
+    # ── poll anchor (ALPHA-669) ───────────────────────────────
+    def read_anchor(self, *, session_id: str, source_code: str) -> dict | None:
+        """직전 성공 anchor·마지막 poll head 와 각 시각을 읽는다. 없으면 None(첫 poll).
+
+        비잠금 read 다 — 이 행의 유일한 writer 는 fence 를 쥔 Worker 하나이고, 쓰기는
+        비교 없는 upsert 라 TOCTOU 로 잃을 상태가 없다. 늦은 read 로 anchor 를 넓게
+        잡으면 과수집(원장이 dedupe)일 뿐 유실이 아니다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT success_anchor_ids, head_anchor_ids,
+                       success_poll_at, head_poll_at
+                FROM news_poll_anchor
+                WHERE session_id = %s AND source_code = %s
+                """,
+                (session_id, source_code),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "success_anchor_ids": tuple(row[0]), "head_anchor_ids": tuple(row[1]),
+                # 두 시각이 lag 의 **권위 신호**다 — anchor 값이 같아도(빈 응답으로
+                # head 를 보존한 경우) 직전 poll 이 anchor 에 못 닿았으면 lagging 이다
+                "success_poll_at": row[2], "head_poll_at": row[3],
+            }
+
+    @staticmethod
+    def _upsert_anchor_tx(
+        cur, *, session_id: str, source_code: str, head_anchor_ids: tuple[str, ...],
+        success_anchor_ids: tuple[str, ...] | None, now: datetime,
+    ) -> None:
+        """anchor 두 개를 갱신한다 — 호출자 transaction 안(관측·job 과 원자적).
+
+        `success_anchor_ids=None` 은 **이번 poll 이 truncated** 라는 뜻이다: head 만
+        전진시키고 성공 anchor 는 그대로 둔다. truncated poll 의 head 로 성공 anchor
+        를 덮으면 아직 못 따라잡은 구간이 영영 조회 범위 밖으로 나간다(v0.7 8절).
+        """
+        advance = success_anchor_ids is not None
+        head_json = canonical_json(list(head_anchor_ids))
+        success_json = canonical_json(list(success_anchor_ids or ()))
+        cur.execute(
+            """
+            INSERT INTO news_poll_anchor (
+                session_id, source_code, success_anchor_ids, head_anchor_ids,
+                success_poll_at, head_poll_at
+            ) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s)
+            ON CONFLICT (session_id, source_code) DO UPDATE
+            SET head_anchor_ids = EXCLUDED.head_anchor_ids,
+                head_poll_at = EXCLUDED.head_poll_at,
+                success_anchor_ids = CASE WHEN %s THEN EXCLUDED.success_anchor_ids
+                                          ELSE news_poll_anchor.success_anchor_ids END,
+                success_poll_at = CASE WHEN %s THEN EXCLUDED.success_poll_at
+                                       ELSE news_poll_anchor.success_poll_at END,
+                updated_at = now()
+            """,
+            (session_id, source_code, success_json, head_json,
+             now if advance else None, now, advance, advance),
+        )
 
     def observe(
         self, *, source_code: str, source_item_id: str, canonical_article_id: str,
@@ -353,7 +534,9 @@ class NewsSourceLedger:
             # stale 분기보다 **먼저** 판정한다 — 늦게 도착한 관측이라도 같은 NEWS_ID 에
             # 다른 URL identity 가 붙었다는 사실은 유효하다. stale 로 먼저 반환하면
             # 그 충돌(별도 canonical/job 가능성)이 조용히 사라진다.
-            raise ValueError("같은 NEWS_ID에 서로 다른 URL canonical identity가 충돌한다")
+            raise NewsIdentityConflictError(
+                "같은 NEWS_ID에 서로 다른 URL canonical identity가 충돌한다"
+            )
         if now < last_seen_at:
             # 오래된 payload는 최신 content를 되돌릴 수 없다. 다만 URL identity 승격은
             # content 신선도와 **독립**이다 — fallback 보다 강한 증거는 늦게 와도

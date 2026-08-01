@@ -43,7 +43,9 @@
 > window·job·outbox 원자화 + orphan 검출, ALPHA-666), Price Worker loop(fence·2-lane·
 > 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식, 토스 adapter 는 실측 후),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
-> 격자 승격, ALPHA-668)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
+> 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
+> 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
+> adapter 는 운영 승인 후)까지로, 실행 표면(CLI·스케줄·vendor 실호출)은
 > 아직 없다. 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행

@@ -1,4 +1,9 @@
-"""1분 Price Worker loop (ALPHA-667, 계획 §9 Worker loop — 토스 adapter 는 별도).
+"""1분 Worker tick 루프 골격 + Price Worker (ALPHA-667, 계획 §9 — 토스 adapter 는 별도).
+
+`MinuteWorkerLoop` 는 가격·뉴스가 공유하는 tick 골격(fence 유지·phase 관측·2-lane
+claim·drain 수렴)이고, window 하나를 어떻게 처리하는지(`_process`)만 구현체가 채운다.
+뉴스 Worker(ALPHA-669, news_worker.py)가 같은 골격을 쓴다 — 이 fencing/drain 논리를
+복제하면 한쪽만 고쳐지는 divergence 가 생긴다.
 
 tick 단위로 도는 상주 루프다. 벽시계를 직접 읽지 않는다 — clock 은 주입되고 tick 이
 호출될 때마다 now 를 받는다(가상 시계 테스트 원칙). collector 는 CollectionRequest
@@ -65,20 +70,16 @@ class WorkerConfig:
     recovery_budget_per_tick: int = 2
 
 
-@dataclass
-class PriceWorker:
-    """tick 을 외부(엔트리포인트/테스트)가 돌리는 수동 루프 — sleep 은 호출자 소관."""
+class MinuteWorkerLoop:
+    """tick 골격 — 구현체(가격/뉴스)는 `_process(claim, now) -> bool` 만 채운다.
 
-    session_id: str
-    ledger: MinuteLedger
-    committer: MinuteCommitter
-    storage: Storage
-    collector: object  # CollectionRequest 계약 — collect(request, now) -> (result, records, manifest)
-    canonical_writer: CanonicalWriter
-    config: WorkerConfig
-    fence_token: int | None = None
-    stopping: bool = False  # SIGTERM — 새 claim 중단, 다음 tick 에서 STOPPED
-    _last_heartbeat: datetime | None = field(default=None, repr=False)
+    필드는 dataclass 인 구현체가 선언한다(session_id·ledger·config·fence_token·
+    stopping·_last_heartbeat). config 는 worker_id 와 lease/heartbeat/recovery budget
+    을 제공하는 어떤 설정이든 된다.
+    """
+
+    def _process(self, claim: dict, now: datetime) -> bool:
+        raise NotImplementedError
 
     def request_stop(self) -> None:
         """SIGTERM 핸들러가 부른다 — 진행 중 tick 을 끊지 않고 다음 tick 에 멈춘다."""
@@ -195,6 +196,22 @@ class PriceWorker:
             )
             row = cur.fetchone()
             return "" if row is None else row[0]
+
+
+@dataclass
+class PriceWorker(MinuteWorkerLoop):
+    """tick 을 외부(엔트리포인트/테스트)가 돌리는 수동 루프 — sleep 은 호출자 소관."""
+
+    session_id: str
+    ledger: MinuteLedger
+    committer: MinuteCommitter
+    storage: Storage
+    collector: object  # CollectionRequest 계약 — collect(request, now) -> (result, records, manifest)
+    canonical_writer: CanonicalWriter
+    config: WorkerConfig
+    fence_token: int | None = None
+    stopping: bool = False  # SIGTERM — 새 claim 중단, 다음 tick 에서 STOPPED
+    _last_heartbeat: datetime | None = field(default=None, repr=False)
 
     def _predict_generation(self, claim: dict, artifact_checksum: str,
                             units: dict[str, list[str]]) -> tuple[int, str, bytes, str]:
