@@ -13,6 +13,7 @@ fixture 는 `tests/fixtures/toss/`(2026-08-01 dev VPC 에서 실호출 녹화). 
 
 from __future__ import annotations
 
+import gzip
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from data_pipeline.minute.models import KST, CollectionRequest
 from data_pipeline.minute.states import (
     WINDOW_INCOMPLETE,
+    WINDOW_INVALID,
     WINDOW_VALID,
     WINDOW_VALID_EMPTY,
 )
@@ -50,9 +52,12 @@ def candle_rows(name: str) -> list[dict]:
 
 
 class FakeResponse:
+    """실제 전송처럼 **gzip 바이트 + Content-Encoding 헤더**로 돌려준다 —
+    평문으로 흉내 내면 gzip 해제 코드가 사라져도 테스트가 통과한다(Rule 9)."""
+
     def __init__(self, payload: dict, headers: dict | None = None, status: int = 200):
-        self._body = json.dumps(payload).encode()
-        self.headers = headers or {}
+        self._body = gzip.compress(json.dumps(payload).encode())
+        self.headers = {"Content-Encoding": "gzip", **(headers or {})}
         self.status = status
 
     def read(self):
@@ -156,17 +161,24 @@ class TestClient:
         import urllib.error
 
         def http_error(status, body):
+            import email.message
+            headers = email.message.Message()
+            headers["Retry-After"] = "1"          # 실측 429 가 주는 헤더
+            headers["Content-Encoding"] = "gzip"
             return urllib.error.HTTPError(
-                "u", status, "err", {}, __import__("io").BytesIO(json.dumps(body).encode())
+                "u", status, "err", headers,
+                __import__("io").BytesIO(gzip.compress(json.dumps(body).encode())),
             )
 
         client, slept, _, calls = make_client([
             TOKEN,
             http_error(429, fixture("error_rate_limited")["body"]),
             {"result": {"candles": candle_rows("candles_stock_1m")[:1]}},
-        ])
+        ], min_interval=0.2)
         assert len(client.candles("005930")) == 1
-        assert slept, "429 를 맞고 물러나지 않았다"
+        # ⚠️ 벤더가 `Retry-After: 1` 을 줬으면 그게 권위다 — 우리 backoff(0.2s)로
+        # 먼저 두드리면 아직 제한된 구간에서 예산만 태운다
+        assert max(slept) >= 1.0, f"Retry-After 를 무시했다: {slept}"
 
     def test_permanent_errors_are_not_retried(self):
         # 없는 종목을 다시 물어도 같은 답이다 — 재시도는 한도만 먹고 window 를 늦춘다
@@ -211,12 +223,14 @@ def make_request(unit_ids):
 
 
 class StubClient:
+    retry_count = 0
+
     def __init__(self, by_symbol):
         self.by_symbol = by_symbol
         self.calls = []
 
-    def candles(self, symbol, *, interval="1m", count=1, before=None):
-        self.calls.append(symbol)
+    def candles(self, symbol, *, interval="1m", count=1, before=None, kind="stock"):
+        self.calls.append({"symbol": symbol, "before": before, "kind": kind})
         outcome = self.by_symbol[symbol]
         if isinstance(outcome, Exception):
             raise outcome
@@ -249,7 +263,7 @@ class TestCollector:
         )
 
         assert manifest == {"received": ["005930"], "no_trade": ["001527"],
-                            "missing": ["000660"]}
+                            "missing": ["000660"], "invalid": []}
         assert result.status == WINDOW_INCOMPLETE
         # 거래 없는 분은 **성공**으로 센다 — 실패로 세면 매분 재시도가 붙는다
         assert (result.succeeded_count, result.failed_count) == (2, 1)
@@ -285,6 +299,57 @@ class TestCollector:
         )
         assert manifest["received"] == ["005930"] and manifest["missing"] == ["999999"]
         assert result.status == WINDOW_INCOMPLETE
+
+    def test_request_window_is_pinned_with_before(self):
+        # ⚠️ 최신 캔들을 그냥 받으면, 348종 수집에 70초가 걸리는 사이 최신 봉이 다음
+        # 분으로 넘어가 뒤쪽 종목이 통째로 missing 이 된다(과거 window 재시도도 불가)
+        client = StubClient({"005930": (parsed("candles_stock_1m", "005930"),)})
+        TossPriceCollector(client=client).collect(make_request(["005930"]), WINDOW_END)
+        assert client.calls[0]["before"] == WINDOW_END
+
+    def test_index_symbols_use_the_index_endpoint(self):
+        # 지수는 전용 경로다(실측 fixture) — 주식 경로로 부르면 404 다
+        client = StubClient({"KOSPI": ()})
+        TossPriceCollector(client=client, index_symbols=frozenset({"KOSPI"})).collect(
+            make_request(["KOSPI"]), WINDOW_END)
+        assert client.calls[0]["kind"] == "index"
+
+    def test_shape_violation_is_invalid_not_missing(self):
+        # 재시도로 안 풀리는 것을 missing 으로 접으면 같은 손상 응답을 끝없이 다시 부른다
+        client = StubClient({"005930": ValueError("OHLC 정합 위반")})
+        result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"] and manifest["missing"] == []
+        assert result.status == WINDOW_INVALID
+
+    def test_duplicate_candle_for_one_window_is_invalid(self):
+        # 첫 건을 조용히 채택하면 벤더가 순서를 바꾸는 것만으로 값과 세대가 흔들린다
+        one = parsed("candles_stock_1m", "005930")
+        two = one.__class__(**{**one.__dict__, "close": one.close + 1})
+        client = StubClient({"005930": (one, two)})
+        _result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"]
+
+    def test_zero_volume_with_moving_price_is_invalid(self):
+        # 우리가 아는 형상이 아니다 — no_trade 로 접으면 그 가격이 조용히 버려진다
+        base = parsed("candles_stock_1m", "005930")
+        odd = base.__class__(**{**base.__dict__, "volume": base.volume.__class__(0)})
+        client = StubClient({"005930": (odd,)})
+        _result, records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"] and records == ()
+
+    def test_retry_pressure_and_elapsed_are_reported(self):
+        # 0 으로 고정하면 429 압력과 70초 지연이 관측에서 사라진다
+        client = StubClient({"005930": (parsed("candles_stock_1m", "005930"),)})
+        client.retry_count = 2
+        ticks = iter([WINDOW_END + timedelta(seconds=70)])
+        collector = TossPriceCollector(client=client, clock=lambda: next(ticks))
+        result, _records, _manifest = collector.collect(make_request(["005930"]), WINDOW_END)
+        assert result.retry_count == 0     # 이 window 안에서 늘어난 만큼만 센다
+        assert result.stage_timestamps["collection_finished_at"] > (
+            result.stage_timestamps["collection_started_at"])
 
     def test_checksum_is_order_independent(self):
         # 같은 멤버십을 다른 순서로 요청해도 같은 checksum — 아니면 재실행마다 세대가 오른다

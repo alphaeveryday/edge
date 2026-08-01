@@ -47,8 +47,12 @@ BASE_URL = "https://openapi.tossinvest.com"
 
 # API 가 스스로 알려주는 어휘다(400 응답의 `data.allowedValues`) — 실측으로 확인했다.
 SUPPORTED_INTERVALS = ("1m", "1d")
+# 캔들 하나가 덮는 구간 길이 — timestamp 가 구간의 **끝**이라 window_start 를 여기서 뺀다
+INTERVAL_SECONDS = {"1m": 60, "1d": 86_400}
 # 400 응답의 `data.constraint` 가 준 값.
 MAX_COUNT = 200
+# 가격·거래량 크기 상한 — 소스가 지수표기 거대값을 줘도 artifact 에 싣지 않는다
+MAX_MAGNITUDE = Decimal("1e15")
 # 초당 5회(X-RateLimit-Limit). 간격으로 환산해 호출 전에 지킨다 — 429 를 맞고 나서
 # 물러나는 것보다 애초에 안 넘는 게 싸다(429 는 그 콜이 통째로 버려진다).
 RATE_LIMIT_PER_SECOND = 5
@@ -63,11 +67,14 @@ _PRICE_FIELDS = (("open", "openPrice"), ("high", "highPrice"),
 class TossApiError(RuntimeError):
     """토스 API 가 구조화된 오류를 준 경우. `code` 로 재시도 여부를 가른다."""
 
-    def __init__(self, status: int, code: str, message: str, *, request_id: str = ""):
+    def __init__(self, status: int, code: str, message: str, *, request_id: str = "",
+                 retry_after: float | None = None):
         super().__init__(f"toss {status} {code}: {message} (requestId={request_id})")
         self.status = status
         self.code = code
         self.request_id = request_id
+        # 벤더가 "언제 다시 오라"고 말했으면 그게 권위다(실측: 429 에 `Retry-After: 1`)
+        self.retry_after = retry_after
 
     @property
     def retryable(self) -> bool:
@@ -76,7 +83,7 @@ class TossApiError(RuntimeError):
         `stock-not-found`(404)·`invalid-request`(400)는 같은 요청을 다시 보내도 같은
         답이 온다. 그걸 재시도로 돌리면 한도만 먹고 window 가 늦어진다.
         """
-        return self.status == 429 or self.status >= 500
+        return self.status in (0, 429) or self.status >= 500   # 0 = 전송 실패
 
 
 @dataclass(frozen=True)
@@ -112,10 +119,14 @@ def _to_decimal(raw: object, field_name: str, symbol: str) -> Decimal:
         raise ValueError(f"{symbol} 캔들의 {field_name} 를 못 읽는다: {raw!r}") from error
     if not value.is_finite():
         raise ValueError(f"{symbol} 캔들의 {field_name} 가 유한하지 않다: {raw!r}")
+    if abs(value) >= MAX_MAGNITUDE:
+        # `1E+999` 같은 값도 Decimal 로는 유한하다 — 여기서 안 막으면 artifact 에 실린
+        # 뒤 NUMERIC 저장이나 분석 단계에서야 터진다(그때는 어느 window 인지 못 찾는다)
+        raise ValueError(f"{symbol} 캔들의 {field_name} 가 범위를 벗어났다: {raw!r}")
     return value
 
 
-def parse_candle(raw: dict, symbol: str) -> Candle:
+def parse_candle(raw: dict, symbol: str, *, interval: str = "1m") -> Candle:
     """응답 캔들 한 건 → `Candle`. 필드가 빠지거나 형이 다르면 즉시 raise 한다.
 
     조용히 기본값을 넣지 않는 이유(Rule 12): 가격이 0 이나 None 으로 접히면 그 window 가
@@ -140,6 +151,10 @@ def parse_candle(raw: dict, symbol: str) -> Candle:
     volume = _to_decimal(raw.get("volume"), "volume", symbol)
     if volume < 0:
         raise ValueError(f"{symbol} 캔들 거래량이 음수다: {raw!r}")
+    if min(values.values()) <= 0:
+        # OHLC **상호관계**만 보면 전부 -1 인 행이 통과한다(레포 공통 게이트의
+        # non_positive_price 불변식과 같은 축)
+        raise ValueError(f"{symbol} 캔들 가격이 양수가 아니다: {raw!r}")
     if not (values["low"] <= values["open"] <= values["high"]
             and values["low"] <= values["close"] <= values["high"]):
         # OHLC 정합은 소스가 깨질 수 있는 축이다 — 통과시키면 canonical 이 그대로 받는다
@@ -147,10 +162,15 @@ def parse_candle(raw: dict, symbol: str) -> Candle:
     currency = raw.get("currency")
     if currency is not None and not isinstance(currency, str):
         raise ValueError(f"{symbol} 캔들 currency 형이 예상 밖이다: {currency!r}")
+    span = INTERVAL_SECONDS.get(interval)
+    if span is None:
+        # 어휘 밖 interval 로 파싱하면 window 길이를 우리가 지어내게 된다
+        raise ValueError(f"interval 은 {sorted(INTERVAL_SECONDS)} 만 된다: {interval!r}")
     return Candle(
         symbol=symbol,
-        # ⚠️ ts 는 구간의 **끝**이다 — window_start 는 1분 전이다
-        window_start=end.__class__.fromtimestamp(end.timestamp() - 60, tz=end.tzinfo),
+        # ⚠️ ts 는 구간의 **끝**이다 — window_start 는 그 interval 만큼 앞이다
+        # (1d 를 60초로 접으면 일봉 소비자의 날짜 창이 통째로 어긋난다)
+        window_start=end.__class__.fromtimestamp(end.timestamp() - span, tz=end.tzinfo),
         window_end=end,
         volume=volume, currency=currency, **values,
     )
@@ -165,7 +185,9 @@ class TossOpenApiClient:
     """
 
     client_id: str
-    client_secret: str
+    # repr 에서 뺀다 — client 를 예외 컨텍스트나 디버그 로그에 %r 로 남기면
+    # 자격증명이 그대로 중앙 로그에 박힌다
+    client_secret: str = field(repr=False)
     base_url: str = BASE_URL
     min_interval: float = MIN_INTERVAL_SECONDS
     max_retries: int = 3
@@ -179,6 +201,9 @@ class TossOpenApiClient:
     # 시작하는 순간 truthiness 검사가 매번 거짓이 돼 **간격이 통째로 안 걸린다**
     # (테스트가 실제로 잡았다 — falsy-zero).
     _last_call_at: float | None = field(default=None, repr=False)
+    # 실제 재시도 횟수 — collector 가 window 결과의 retry_count 로 싣는다(0 고정이면
+    # 429 압력이 관측에서 통째로 사라진다)
+    retry_count: int = field(default=0, repr=False)
 
     # ── 운반 ──────────────────────────────────────────────────
     def _open(self, request):
@@ -211,25 +236,38 @@ class TossOpenApiClient:
         except urllib.error.HTTPError as error:
             payload = _decode(error.read(), error.headers)
             detail = payload.get("error") if isinstance(payload, dict) else None
+            retry_after = _retry_after(error.headers)
             if isinstance(detail, dict):
                 raise TossApiError(
                     error.code, str(detail.get("code", "")), str(detail.get("message", "")),
-                    request_id=str(detail.get("requestId", "")),
+                    request_id=str(detail.get("requestId", "")), retry_after=retry_after,
                 ) from error
             # 구조화 오류가 아니면 코드만 들고 올린다 — 본문을 지어내지 않는다
-            raise TossApiError(error.code, "unstructured", str(payload)[:200]) from error
+            raise TossApiError(error.code, "unstructured", str(payload)[:200],
+                               retry_after=retry_after) from error
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+            # ⚠️ 전송 실패(연결 끊김·timeout·손상 gzip)도 **같은 타입으로** 올린다.
+            # HTTPError 만 감싸면 이것들이 종목 단위 격리를 빠져나가, 200번째 종목의
+            # timeout 하나가 앞서 모은 199종까지 버리고 window 를 통째로 죽인다.
+            raise TossApiError(0, "transport", f"{type(error).__name__}: {error}") from error
 
     def _call(self, path: str, *, token: str | None = None, form: dict | None = None):
-        """재시도는 **재시도로 풀리는 오류에만**(429·5xx). 429 는 Retry-After 를 따른다."""
-        for attempt in range(1, self.max_retries + 1):
+        """재시도는 **재시도로 풀리는 오류에만**(429·5xx·전송 실패).
+
+        `max_retries` 는 **최초 호출 뒤 추가 시도 횟수**다(0 이면 재시도 없음).
+        429 는 벤더가 준 `Retry-After` 를 따른다 — 우리 backoff(0.2s)가 그보다 짧으면
+        아직 제한된 구간에서 다시 두드려 예산만 태우고 그 종목이 missing 이 된다.
+        """
+        for attempt in range(self.max_retries + 1):
             try:
                 return self._request(path, token=token, form=form)
             except TossApiError as error:
                 if not error.retryable or attempt == self.max_retries:
                     raise
-                delay = self.min_interval * (2 ** (attempt - 1))
-                logger.warning("토스 %s — %d/%d 재시도(%.2fs 대기)",
-                               error, attempt, self.max_retries, delay)
+                delay = max(error.retry_after or 0.0, self.min_interval * (2 ** attempt))
+                logger.warning("토스 %s — 재시도 %d/%d(%.2fs 대기)",
+                               error, attempt + 1, self.max_retries, delay)
+                self.retry_count += 1
                 self.sleep(delay)
         raise AssertionError("unreachable")
 
@@ -261,22 +299,54 @@ class TossOpenApiClient:
 
     # ── 분봉 ──────────────────────────────────────────────────
     def candles(self, symbol: str, *, interval: str = "1m", count: int = 1,
-                before: datetime | None = None) -> tuple[Candle, ...]:
+                before: datetime | None = None,
+                kind: str = "stock") -> tuple[Candle, ...]:
         """최신순 캔들. 없는 종목(404 `stock-not-found`)은 `TossApiError` 로 올린다."""
         if interval not in SUPPORTED_INTERVALS:
             # API 도 400 으로 거부하지만, 한도를 먹기 전에 우리가 먼저 막는다
             raise ValueError(f"interval 은 {SUPPORTED_INTERVALS} 만 된다: {interval!r}")
         if not 1 <= count <= MAX_COUNT:
             raise ValueError(f"count 는 1..{MAX_COUNT} 다: {count}")
-        query = {"symbol": symbol, "interval": interval, "count": count}
+        query = {"interval": interval, "count": count}
         if before is not None:
+            # ⚠️ `before` 는 **inclusive** 다(실측: 다음 페이지 첫 캔들 = nextBefore 값).
+            # 그래서 특정 window 를 집으려면 그 window_end 를 그대로 주면 된다.
             query["before"] = before.isoformat()
-        payload, _ = self._call("/api/v1/candles?" + urllib.parse.urlencode(query),
-                                token=self.token())
+        if kind == "index":
+            # 지수는 전용 경로다(실측 fixture) — 주식 경로로 부르면 404 다
+            path = f"/api/v1/market-indicators/{urllib.parse.quote(symbol)}/candles?"
+        else:
+            path = "/api/v1/candles?"
+            query["symbol"] = symbol
+        try:
+            payload, _ = self._call(path + urllib.parse.urlencode(query), token=self.token())
+        except TossApiError as error:
+            if error.status != 401:
+                raise
+            # 서버가 로컬 만료시각보다 먼저 토큰을 무효화했다. 캐시를 버리고 **한 번만**
+            # 다시 발급한다 — 안 그러면 남은 유효기간 내내 전 종목이 401→missing 이다.
+            logger.warning("토스 401 — 캐시 토큰 폐기 후 재발급")
+            self._token, self._token_expires_at = "", 0.0
+            payload, _ = self._call(path + urllib.parse.urlencode(query), token=self.token())
+        if not isinstance(payload, dict):
+            # 벤더가 배열·문자열을 주면 .get 이 AttributeError 를 내고 그건 호출자의
+            # ValueError 격리를 빠져나간다 — 형상 오류로 정직하게 올린다
+            raise ValueError(f"{symbol} 응답 최상위가 객체가 아니다: {str(payload)[:120]}")
         result = payload.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("candles"), list):
             raise ValueError(f"{symbol} 분봉 응답 형상이 다르다: {str(payload)[:200]}")
-        return tuple(parse_candle(row, symbol) for row in result["candles"])
+        return tuple(parse_candle(row, symbol, interval=interval)
+                     for row in result["candles"])
+
+
+def _retry_after(headers) -> float | None:
+    """`Retry-After` 초 단위. 형식이 다르면 None — 우리 backoff 가 대신한다."""
+    raw = headers.get("Retry-After") if headers else None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _decode(raw: bytes, headers) -> dict:
