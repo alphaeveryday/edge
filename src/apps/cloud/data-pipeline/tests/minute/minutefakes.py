@@ -119,10 +119,17 @@ class _Cursor:
             self._ack_drain(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
-        elif s.startswith("SELECT content_checksum, generation FROM news_source_item"):
+        elif s.startswith(
+            "SELECT content_checksum, generation, canonical_article_id, last_seen_at "
+            "FROM news_source_item"
+        ):
+            assert "FOR UPDATE" in s, "source item 비교는 행을 잠가야 한다"
             row = self.db.source_items.get((params[0], params[1]))
             if row is not None:
-                self._rows = [(row["content_checksum"], row["generation"])]
+                self._rows = [(
+                    row["content_checksum"], row["generation"],
+                    row["canonical_article_id"], row["last_seen_at"],
+                )]
         elif s.startswith("UPDATE news_source_item"):
             self._update_source_item(params)
         elif s.startswith("INSERT INTO news_extraction_job"):
@@ -485,9 +492,12 @@ class _Cursor:
         self._rows = [(1,)]
 
     def _update_source_item(self, p):
-        last_seen, checksum, generation, source_code, source_item_id = p
+        last_seen, checksum, generation, canonical_article_id, source_code, source_item_id = p
         row = self.db.source_items.get((source_code, source_item_id))
         if row is None:
             return
-        row.update(last_seen_at=last_seen, content_checksum=checksum, generation=generation)
+        row.update(
+            last_seen_at=last_seen, content_checksum=checksum, generation=generation,
+            canonical_article_id=canonical_article_id,
+        )
         self.rowcount = 1
