@@ -219,7 +219,7 @@ class BundleScreenerTest {
 		activePolicy = Optional.empty();
 
 		screener.screen(3, bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
-				"\"target_explanation_result_id\":\"er-2\"}"));
+				"\"target_explanation_result_id\":\"er-2\",\"reason\":\"오탐지\"}"));
 
 		assertThat(items.transitions).containsExactly("er-2:INVALIDATED");
 		assertThat(pending.screened).containsExactly(3L);
@@ -283,6 +283,24 @@ class BundleScreenerTest {
 		assertThat(checks.appended).isEmpty();
 		assertThat(publications.published).isEmpty();
 		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void reason_없는_INVALIDATION은_마킹_없이_실패한다() {
+		// WHY: 와이어 계약·발번 측 CHECK 가 무효화 사유를 필수로 강제한다(감사 재현) —
+		// 소비자가 결측을 통과시키면 사유 없는 무효화 이력이 남고, 계약 위반 번들이
+		// 조용히 소화된다(Rule 12). 공백만인 사유도 사유가 아니다.
+		Executable missing = () -> screener.screen(3,
+				bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
+						"\"target_explanation_result_id\":\"er-2\"}"));
+		Executable blank = () -> screener.screen(4,
+				bundle("{\"cursor\":4,\"delivery_type\":\"INVALIDATION\"," +
+						"\"target_explanation_result_id\":\"er-2\",\"reason\":\"  \"}"));
+
+		assertThrows(IllegalStateException.class, missing);
+		assertThrows(IllegalStateException.class, blank);
+		assertThat(items.transitions).isEmpty();
+		assertThat(pending.screened).isEmpty();
 	}
 
 	@Test
@@ -522,7 +540,7 @@ class BundleScreenerTest {
 
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 		screener.screen(3, bundle("{\"cursor\":3,\"delivery_type\":\"INVALIDATION\"," +
-				"\"target_explanation_result_id\":\"er-9\"}"));
+				"\"target_explanation_result_id\":\"er-9\",\"reason\":\"오탐지\"}"));
 
 		assertThat(history.rows).isEmpty();
 	}
