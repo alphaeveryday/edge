@@ -47,7 +47,7 @@ class TestSeedPoll:
         outcome = poll_new_articles(
             feed, poll_index=0, anchor_ids=frozenset(), max_pages=2, page_size=50,
         )
-        assert len(outcome.new_articles) == 100  # budget 만큼
+        assert len(outcome.frontier_new_articles) == 100  # budget 만큼
         assert outcome.reached_anchor is True
         assert outcome.truncated is True  # 120건 중 100건 — 더 있다, 위장 금지
         assert len(outcome.next_anchor_ids) == 10
@@ -57,7 +57,7 @@ class TestSeedPoll:
         outcome = poll_new_articles(
             feed, poll_index=0, anchor_ids=frozenset(), max_pages=2, page_size=50,
         )
-        assert len(outcome.new_articles) == 30
+        assert len(outcome.frontier_new_articles) == 30
         assert outcome.truncated is False
 
     def test_partial_page_does_not_hide_later_pages(self):
@@ -79,7 +79,7 @@ class TestSeedPoll:
             SoftCappedFeed(), poll_index=1, anchor_ids=frozenset({"anchor"}),
             max_pages=3, page_size=2,
         )
-        assert [row["NEWS_ID"] for row in outcome.new_articles] == ["new-2", "new-1"]
+        assert [row["NEWS_ID"] for row in outcome.frontier_new_articles] == ["new-2", "new-1"]
         assert outcome.reached_anchor is True and outcome.truncated is False
 
     def test_explicit_non_empty_last_page_completes_seed(self):
@@ -96,7 +96,7 @@ class TestSeedPoll:
             ExplicitLastPageFeed(), poll_index=0, anchor_ids=frozenset(),
             max_pages=1, page_size=100,
         )
-        assert [row["NEWS_ID"] for row in outcome.new_articles] == ["only"]
+        assert [row["NEWS_ID"] for row in outcome.frontier_new_articles] == ["only"]
         assert outcome.truncated is False
 
 
@@ -107,7 +107,7 @@ class TestFrontier:
         outcome = poll_new_articles(
             feed, poll_index=1, anchor_ids=anchors, max_pages=4, page_size=50,
         )
-        assert len(outcome.new_articles) == 7  # new_per_poll 만큼만 — drift 무관
+        assert len(outcome.frontier_new_articles) == 7  # new_per_poll 만큼만 — drift 무관
         assert outcome.reached_anchor is True and outcome.truncated is False
         assert outcome.pages_used == 1
 
@@ -118,7 +118,7 @@ class TestFrontier:
         outcome = poll_new_articles(
             feed, poll_index=1, anchor_ids=anchors, max_pages=4, page_size=50,
         )
-        assert outcome.new_articles == ()
+        assert outcome.frontier_new_articles == ()
         assert outcome.reached_anchor is True and outcome.truncated is False
 
     def test_duplicate_news_id_deduped(self):
@@ -131,7 +131,7 @@ class TestFrontier:
         outcome = poll_new_articles(
             feed, poll_index=1, anchor_ids=anchors, max_pages=4, page_size=50,
         )
-        ids = [a["NEWS_ID"] for a in outcome.new_articles]
+        ids = [a["NEWS_ID"] for a in outcome.frontier_new_articles]
         assert len(ids) == len(set(ids)) == 3  # 중복만 제거하고 정상 신규 3건은 보존
 
     def test_anchor_miss_burst_marks_truncated(self):
@@ -147,7 +147,7 @@ class TestFrontier:
         )
         assert outcome.reached_anchor is False
         assert outcome.truncated is True
-        assert len(outcome.new_articles) == 400  # budget 상한까지는 확보
+        assert len(outcome.frontier_new_articles) == 400  # budget 상한까지는 확보
         # realtime은 이 head로 전진하고, 이전 성공 anchor는 recovery용으로 보존한다.
         assert outcome.next_anchor_ids[0] == feed.fetch_page(1, 1, 1)[0]["NEWS_ID"]
 
@@ -160,7 +160,7 @@ class TestFrontier:
             max_pages=4, page_size=50,
         )
         assert outcome.reached_anchor is False and outcome.truncated is True
-        assert len(outcome.new_articles) == 20
+        assert len(outcome.frontier_new_articles) == 20
 
     def test_page_one_is_not_refetched_for_next_anchor(self):
         # live feed는 호출 사이 새 기사가 끼어든다. page 1을 다시 읽어 미처리 ID를
@@ -206,7 +206,7 @@ class TestFrontier:
         before = next(
             row for row in feed.fetch_page(0, 1, 20) if row["NEWS_ID"] == target
         )
-        assert outcome.new_articles == ()
+        assert outcome.frontier_new_articles == ()
         assert article_content_checksum(observed[target]) != article_content_checksum(before)
 
     def test_conflicting_duplicate_payload_fails_loud(self):
@@ -500,7 +500,7 @@ class TestPollUrlPromotion:
         assert len(outcome.observed_articles) == 1
         # 관측 대표 행은 더 강한 identity(URL) 쪽으로 교체된다
         assert outcome.observed_articles[0].get("PROVIDER_LINK_PAGE")
-        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["dup-1"]
+        assert [r["NEWS_ID"] for r in outcome.frontier_new_articles] == ["dup-1"]
 
     def test_conflicting_urls_in_same_poll_still_fail(self):
         # 승격이 아닌 진짜 충돌(URL↔다른 URL)은 계속 fail loud
@@ -578,51 +578,44 @@ class TestPollUrlPromotion:
             PagedPromotionFeed(), poll_index=0, anchor_ids=frozenset(),
             max_pages=3, page_size=1,
         )
-        assert len(outcome.new_articles) == 1 and len(outcome.observed_articles) == 1
-        assert outcome.new_articles[0] is outcome.observed_articles[0]
-        assert news_article_id(outcome.new_articles[0]) == news_article_id(
+        assert len(outcome.frontier_new_articles) == 1 and len(outcome.observed_articles) == 1
+        assert outcome.frontier_new_articles[0] is outcome.observed_articles[0]
+        assert news_article_id(outcome.frontier_new_articles[0]) == news_article_id(
             {"PROVIDER_LINK_PAGE": "https://news.example/a"}
         )
 
-    def test_anchor_above_unseen_rows_is_not_silent_success(self):
-        # 서버가 옛 head 를 맨 위로 다시 올리면 anchor 뒤에 신규분이 온다.
-        # 거기서 멈추고 성공으로 접으면 그 기사들이 recovery 없이 유실된다.
+    def test_resurfaced_anchor_rows_reach_the_ledger(self):
+        # 서버가 직전 head 블록을 통째로 상단에 재부상시키면 그 뒤에 신규분이 온다.
+        # 위치로는 신규를 증명할 수 없으므로(anchor 뒤다) frontier 에는 안 들어가지만,
+        # **원장 입력(observed_articles)에는 반드시 있어야** created=True 로 잡힌다.
+        # 여기서 빠지면 그 기사는 어떤 경로로도 복구되지 않는다.
         class ResurfacedAnchorFeed:
             def fetch_page(self, poll_index, page, page_size):
                 if page > 1:
                     return []
                 return [
                     {"NEWS_ID": "a1", "TITLE": "a", "CONTENT": "ca"},
+                    {"NEWS_ID": "a2", "TITLE": "a2", "CONTENT": "ca2"},
                     {"NEWS_ID": "new-1", "TITLE": "n1", "CONTENT": "c1"},
                     {"NEWS_ID": "new-2", "TITLE": "n2", "CONTENT": "c2"},
-                    {"NEWS_ID": "a2", "TITLE": "a2", "CONTENT": "ca2"},
-                    {"NEWS_ID": "old", "TITLE": "o", "CONTENT": "co"},
                 ]
 
         outcome = poll_new_articles(
             ResurfacedAnchorFeed(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
             max_pages=2, page_size=10,
         )
-        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["new-1", "new-2"]
-        assert outcome.reached_anchor is True
-        assert outcome.truncated is True  # frontier 미증명 — recovery 예약 대상
+        observed = [r["NEWS_ID"] for r in outcome.observed_articles]
+        assert "new-1" in observed and "new-2" in observed
+        assert outcome.frontier_new_articles == ()  # 위치로는 증명 불가 — 원장 소관
 
-    def test_ordered_anchor_run_stays_clean_frontier(self):
-        # 정상 피드: anchor 는 연속 구간이라 그 뒤로 anchor(또는 더 오래된 행)만 온다.
-        # 이 경우는 truncated 로 위장 승격되면 안 된다(매 poll 이 INCOMPLETE 가 된다)
-        class OrderedFeed:
-            def fetch_page(self, poll_index, page, page_size):
-                if page > 1:
-                    return []
-                return [
-                    {"NEWS_ID": "new-1", "TITLE": "n1", "CONTENT": "c1"},
-                    {"NEWS_ID": "a1", "TITLE": "a1", "CONTENT": "ca1"},
-                    {"NEWS_ID": "a2", "TITLE": "a2", "CONTENT": "ca2"},
-                ]
-
+    def test_frontier_is_a_subset_of_observed(self):
+        # 계약: frontier ⊂ observed. Worker 가 observed 전량을 원장에 넣으면
+        # frontier 만 보고 job 을 만들 때 생기는 유실 경로가 구조적으로 사라진다
+        feed = drift_feed()
+        anchors = anchors_from(feed, 0)
         outcome = poll_new_articles(
-            OrderedFeed(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
-            max_pages=2, page_size=10,
+            feed, poll_index=1, anchor_ids=anchors, max_pages=4, page_size=50,
         )
-        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["new-1"]
-        assert outcome.reached_anchor is True and outcome.truncated is False
+        observed_ids = {r["NEWS_ID"] for r in outcome.observed_articles}
+        frontier_ids = {r["NEWS_ID"] for r in outcome.frontier_new_articles}
+        assert frontier_ids and frontier_ids <= observed_ids

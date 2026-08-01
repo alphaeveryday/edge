@@ -50,9 +50,19 @@ class NewsPage:
 class PollOutcome:
     """한 poll 의 판정 — Worker 가 이 값으로 window 상태·recovery 를 정한다.
 
-    - new_articles: frontier 앞 신규 기사(최신순, duplicate NEWS_ID 는 첫 관측만)
-    - observed_articles: 조회한 page 의 관측 기사. anchor 뒤 overlap 행도 포함해
-      기존 기사의 본문·canonical identity 정정을 원장이 다시 비교할 수 있게 한다.
+    ⚠️ **신규 판정의 권위는 이 컨트롤러가 아니라 원장(`NewsSourceLedger.observe`)이다.**
+    위치(anchor 앞/뒤)로 신규를 증명하려는 시도는 근본적으로 불완전하다 — 서버가 직전
+    head 블록을 통째로 상단에 재부상시키면 그 **뒤**에 신규분이 오고, ID 만으로는 그
+    행이 신규인지 과거분인지 구분할 수 없다. 그래서 Worker(5-2)는 반드시
+    `observed_articles` **전량**을 observe 하고 `created`/`content_changed` 로 job 을
+    정한다. `frontier_new_articles` 만 보고 job 을 만들면 그 신규분이 유실된다.
+    과수집은 원장이 dedupe 해 무해하고(created=False), 과소수집은 유실이다.
+
+    - observed_articles: 조회한 page 의 관측 기사 전량(대표 행). **원장 입력**이다 —
+      anchor 뒤 overlap 행도 포함해 재부상 신규분과 기존 기사의 본문·canonical
+      identity 정정을 원장이 판정할 수 있게 한다.
+    - frontier_new_articles: anchor 앞이라 **위치로도** 신규가 증명된 부분집합.
+      관측·지표용이며 job 판정의 근거로 단독 사용 금지(위 경고).
     - reached_anchor: anchor 를 만났나 (앵커가 없던 첫 poll 은 True — seed 성공)
     - truncated: page budget 이 신규분을 다 못 담았다 — 성공으로 위장 금지 대상
     - next_anchor_ids: 이번 최신 page 상단 ID들. 성공이면 durable success anchor,
@@ -61,8 +71,8 @@ class PollOutcome:
     - pages_used: 관측용
     """
 
-    new_articles: tuple[dict, ...]
     observed_articles: tuple[dict, ...]
+    frontier_new_articles: tuple[dict, ...]
     reached_anchor: bool
     truncated: bool
     next_anchor_ids: tuple[str, ...]
@@ -93,11 +103,9 @@ def poll_new_articles(
     # 만든다 — 목록마다 따로 교체하면 승격이 한쪽에만 반영돼 같은 source item 이
     # 서로 다른 article_id 로 처리된다(원장은 URL, canonical/job 은 fallback).
     representative: dict[str, dict] = {}
-    new_ids: list[str] = []
+    frontier_ids: list[str] = []
     next_anchor: list[str] = []
     reached = False
-    seen_anchors: set[str] = set()
-    anchor_disordered = False
     pages_used = 0
     feed_ended = False
     for page in range(1, max_pages + 1):
@@ -162,28 +170,15 @@ def poll_new_articles(
                     raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
         for news_id, _ in validated_rows:
             if news_id in anchor_ids:
+                # anchor 도달 = 이 page 를 끝까지 훑을 이유는 없어졌다. 다만 위치로
+                # 신규를 **증명**하는 건 여기까지다 — anchor 뒤 행의 신규 여부는
+                # 원장이 판정한다(observed_articles 는 이미 page 전량을 담는다).
                 reached = True
-                seen_anchors.add(news_id)
-                continue  # anchor 행 자체는 신규가 아니다
-            if reached:
-                # anchor 는 직전 head 의 **연속 구간**이라, 정상 피드라면 첫 anchor
-                # 뒤로 나머지 anchor 들이 이어진 뒤에야 더 오래된 행이 나온다.
-                # 아직 못 본 anchor 가 남았는데 비-anchor 행이 끼면 newest-first 가
-                # 깨진 것이다(예: 서버가 옛 head 를 맨 위로 다시 올림) — 그 행이
-                # old 인지 신규인지 ID 만으로 증명할 수 없다. 여기서 멈추고 성공으로
-                # 접으면 신규분이 recovery 도 없이 유실되므로, 후보로 담고 frontier
-                # 는 미증명으로 표시한다. 과수집은 원장(observe)이 dedupe 해 무해
-                # 하지만 과소수집은 유실이다. anchor 를 전부 본 뒤의 비-anchor 행은
-                # 정상적인 과거분이라 담지 않는다.
-                if len(seen_anchors) < len(anchor_ids) and news_id not in seen_new:
-                    anchor_disordered = True
-                    seen_new.add(news_id)
-                    new_ids.append(news_id)
-                continue
+                break
             if news_id in seen_new:
                 continue  # poll 내 duplicate — 대표 행 하나로 수렴
             seen_new.add(news_id)
-            new_ids.append(news_id)
+            frontier_ids.append(news_id)
         if reached:
             break
         if page_is_last:
@@ -197,12 +192,11 @@ def poll_new_articles(
     else:
         # anchor 가 피드에서 사라졌더라도 연속성을 증명하지 못했다. feed 끝을 anchor
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
-        # 순서가 깨진 anchor 도달도 frontier 를 증명하지 못한 것은 마찬가지다.
-        truncated = not reached or anchor_disordered
+        truncated = not reached
     return PollOutcome(
         # 두 목록 모두 대표 행에서 만든다 — 승격이 한쪽에만 반영되는 경로가 없다
-        new_articles=tuple(representative[news_id] for news_id in new_ids),
         observed_articles=tuple(representative.values()),
+        frontier_new_articles=tuple(representative[news_id] for news_id in frontier_ids),
         reached_anchor=reached,
         truncated=truncated,
         # 첫 조회 snapshot 에서만 유도한다. live feed 를 다시 읽으면 새로 끼어든
