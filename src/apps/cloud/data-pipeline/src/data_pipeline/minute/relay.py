@@ -63,6 +63,10 @@ TERMINAL_ERROR_CODES = frozenset({
 # SQS 호출 하나의 시간 예산(connect 5s + read 10s) — lease 하한 계산에 쓴다
 SQS_CALL_BUDGET_SECONDS = 15
 
+# backoff 지수 상한 — 2**30 초면 이미 어떤 cap 도 넘는다. 상한 없이 두면 큰
+# attempt_count 가 거대 정수 연산을 일으킨다.
+_MAX_BACKOFF_EXPONENT = 30
+
 SQS_BATCH_LIMIT = 10
 SQS_MAX_MESSAGE_BYTES = 1_048_576
 SQS_MAX_BATCH_BYTES = 1_048_576
@@ -78,7 +82,12 @@ class OutboxMessage:
 
 @dataclass(frozen=True)
 class PublishFailure:
-    """발행 실패 한 건. `terminal` 이면 재시도해도 결과가 같다는 뜻이다."""
+    """발행 실패 한 건. `terminal` 이면 재시도해도 결과가 같다는 뜻이다.
+
+    ⚠️ `terminal` 은 **메시지 자체가 못 실리는 경우**만이다(TERMINAL_ERROR_CODES·크기
+    초과). SenderFault 는 "호출자 측 오류"라는 뜻일 뿐이라 단독으로는 근거가 아니다 —
+    잘못된 큐 URL·권한 오류도 SenderFault 이고 그건 배포로 고쳐진다.
+    """
 
     event_id: str
     error: str
@@ -268,7 +277,13 @@ class SqsPublisher:
                         # 결함이 아니다 — 그걸 DEAD 로 확정하면 URL 오타 하나가 레인
                         # 전체를 되돌릴 수 없게 만든다(redrive 는 PR 7A).
                         # terminal 은 **그 메시지 자체가 못 실리는 경우**로 좁힌다.
-                        terminal=code in TERMINAL_ERROR_CODES,
+                        # 코드가 메시지 결함이면서 **필수 필드 SenderFault 도 참**일
+                        # 때만 terminal 이다. 필드가 없거나 False 인 모순 응답을
+                        # terminal 로 접으면 malformed 응답 한 번이 영구 누락을 만든다.
+                        terminal=(
+                            code in TERMINAL_ERROR_CODES
+                            and entry.get("SenderFault") is True
+                        ),
                     ))
                 elif not _non_blank_text(entry.get("MessageId")):
                     # 성공 항목의 필수 필드가 없다 = 큐가 받았다는 근거가 없다.
@@ -334,15 +349,28 @@ class OutboxRelay:
                     events, now, error=f"미정의 destination: {destination}", terminal=True
                 )
                 continue
+            # 직렬화는 **event 단위로** 격리한다 — payload 는 JSONB 라 크기 상한이 없어
+            # 거대 행 하나가 OOM·직렬화 예외를 낼 수 있는데, 묶어서 만들면 그 하나가
+            # 같은 destination 의 정상 행까지 끌고 가 그 큐가 통째로 고착된다.
+            messages = []
+            for event in events:
+                try:
+                    messages.append(
+                        OutboxMessage(event["event_id"], build_message_body(event))
+                    )
+                except Exception as error:  # noqa: BLE001 — 행 단위 격리가 목적
+                    logger.exception("event %s 직렬화 실패 — 격리", event["event_id"])
+                    failed += self._record_failures(
+                        [event], now, error=f"직렬화 실패: {error}", terminal=False
+                    )
+            if not messages:
+                continue
+            sendable_events = {event["event_id"]: event for event in events}
+            events = [sendable_events[m.event_id] for m in messages]
             try:
-                # 직렬화도 try 안에서 한다 — payload 는 JSONB 라 크기 상한이 없고,
-                # 밖에서 만들면 거대 행 하나의 OOM·직렬화 예외가 **기록 없이** 프로세스를
-                # 죽인다. 그러면 lease 만료 후 같은 행을 다시 집어 crash-loop 이 된다.
-                messages = tuple(
-                    OutboxMessage(event["event_id"], build_message_body(event))
-                    for event in events
+                published_ids, failures = self.publisher.publish_batch(
+                    queue_url, tuple(messages)
                 )
-                published_ids, failures = self.publisher.publish_batch(queue_url, messages)
             except Exception as error:
                 # 큐·네트워크 장애 — batch 전체를 transient 로 되돌린다. 기록마저 실패하면
                 # claim 만료로 회수되므로 유실은 없다.
@@ -405,9 +433,13 @@ class OutboxRelay:
             # 한 번도 못 나간다(FIFO 독점).
             # 벽시계 권위는 주입된 now 하나로 두고(가상 시계 원칙), 경과는 monotonic 으로
             # **기간만** 잰다. 초 단위로 절삭해 테스트 결정성을 유지한다.
+            # 지수를 **먼저** 제한한다 — 복원·마이그레이션으로 큰 attempt_count 가 들어온
+            # 행에서 2**n 이 거대 정수가 되면 기록 전에 MemoryError 가 나고, attempt_count
+            # 는 그대로라 lease 만료 때마다 같은 행이 프로세스를 죽인다.
+            capped_exponent = min(event["attempt_count"], _MAX_BACKOFF_EXPONENT)
             next_attempt_at = None if terminal else now + elapsed + timedelta(
                 seconds=min(
-                    self.config.retry_base_seconds * (2 ** event["attempt_count"]),
+                    self.config.retry_base_seconds * (2 ** capped_exponent),
                     self.config.retry_max_seconds,
                 )
             )
@@ -475,13 +507,13 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
             # 상주 모드의 SIGTERM 은 정상 종료다. bounded 모드는 배출 게이트라
             # "비운 걸 확인"하지 못한 채 끝난 것이므로 성공으로 보고하지 않는다.
             return 0 if max_ticks is None else 1
+
         if state == "IDLE":
             time.sleep(options.tick_seconds)
-    # bounded 모드(--max-ticks)는 배출 게이트로 쓰인다. **비운 걸 확인한 tick(IDLE) 로
-    # 끝났을 때만** 0 이다 — 실패가 있었거나(PARTIAL) 아직 일이 남은 채 상한에 걸렸으면
-    # backlog 가 남았는데 호출자가 "다 나갔다"로 오독한다. 정확히 마지막 tick 에 다
-    # 비워진 경우도 1 이 되는데(확인할 tick 이 없다), tick 하나를 더 주면 해소된다.
-    drained = state == "IDLE" and partial == 0
-    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d, 마지막 상태 %s",
-                ticks, partial, state)
-    return 0 if drained else 1
+    # bounded 모드(--max-ticks)는 배출 게이트로 쓰인다. IDLE 은 "지금 집을 게 없다"는
+    # 뜻일 뿐이라(재시도 대기·타 Relay 점유 행은 claim 에 안 잡힌다) 완료 판정에 쓸 수
+    # 없다 — **미발행 행을 실제로 세서** 판정한다.
+    remaining = relay.jobs.count_unpublished()
+    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d, 미발행 %d건",
+                ticks, partial, remaining)
+    return 0 if remaining == 0 and partial == 0 else 1

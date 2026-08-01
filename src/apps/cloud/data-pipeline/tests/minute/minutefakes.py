@@ -158,8 +158,12 @@ class _Cursor:
             self._job_transition("price" if "price_window_job" in s else "news", params)
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
+        elif s.startswith("SELECT COUNT(*) FROM dataset_commit_outbox"):
+            self._rows = [(
+                sum(1 for r in self.db.outbox.values() if r["status"] == "NEW"),
+            )]
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
-            self._claim_outbox(params)
+            self._claim_outbox(params, s)
         elif "SET status = 'PUBLISHED'" in s:
             self._mark_published(params)
         elif s.startswith("UPDATE dataset_commit_outbox SET status = %s, attempt_count"):
@@ -432,7 +436,10 @@ class _Cursor:
         }
         self._rows = [(event_id,)]
 
-    def _claim_outbox(self, p):
+    def _claim_outbox(self, p, sql=""):
+        # 실제 RETURNING 에 attempt_count 가 없으면 Relay 의 backoff 가 IndexError 로
+        # 죽는다 — fake 가 합성해 주면 그 회귀가 여기서 숨는다(Rule 9)
+        assert "o.attempt_count" in sql, "outbox claim 은 attempt_count 를 반환해야 한다"
         relay_id, claim_until, now, now2, limit = p
         eligible = sorted(
             (r for r in self.db.outbox.values()

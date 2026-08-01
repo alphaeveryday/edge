@@ -386,6 +386,18 @@ class JobLedger:
                 for r in cur.fetchall()
             ]
 
+    def count_unpublished(self) -> int:
+        """아직 발행되지 않은 outbox event 수(NEW 전량 — 재시도 대기분 포함).
+
+        배출 게이트(`relay --max-ticks`)가 "다 나갔나"를 판정하는 근거다. claim 결과가
+        비었다는 것(IDLE)은 **지금 집을 게 없다**는 뜻일 뿐이다 — next_attempt_at 이
+        미래인 행이나 다른 Relay 가 쥔 행은 claim 에 안 잡히므로, IDLE 을 완료로 읽으면
+        남은 event 를 두고 성공으로 끝난다(Rule 12).
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM dataset_commit_outbox WHERE status = 'NEW'")
+            return cur.fetchone()[0]
+
     def mark_published(
         self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
     ) -> bool:

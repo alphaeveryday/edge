@@ -168,6 +168,19 @@ class TestOneEventCannotStopTheRelay:
         assert db.outbox["huge"]["status"] == "DEAD"
         assert "상한" in db.outbox["huge"]["last_error"]
 
+    def test_unserializable_event_is_isolated_from_its_batch(self, tmp_path):
+        # 거대·비직렬화 payload 한 건이 같은 destination 의 정상 행까지 끌고 가면
+        # 그 큐가 통째로 고착된다 — 행 단위로 격리해야 나머지가 흐른다
+        db = FakeMinuteDB()
+        enqueue(db, "bad")
+        enqueue(db, "good")
+        db.outbox["bad"]["payload"] = {"nan": float("nan")}  # canonical_json 이 거부
+        relay = build_relay(db)
+        assert relay.tick(NOW) == "PARTIAL"
+        assert db.outbox["good"]["status"] == "PUBLISHED"
+        assert db.outbox["bad"]["status"] == "NEW"
+        assert "직렬화 실패" in db.outbox["bad"]["last_error"]
+
     def test_publish_exception_retries_whole_batch(self, tmp_path):
         db = FakeMinuteDB()
         enqueue(db, "e1")
@@ -498,6 +511,25 @@ class TestCliGuards:
 
     def _settings(self, *, db=None, minute_relay=None):
         return SimpleNamespace(db=db, minute_relay=minute_relay)
+
+    def test_bounded_mode_counts_delayed_backlog(self, monkeypatch):
+        # ⚠️ IDLE 은 "지금 집을 게 없다"일 뿐이다 — 재시도 대기(next_attempt_at 미래) 행은
+        # claim 에 안 잡힌다. 그걸 완료로 읽으면 남은 event 를 두고 성공으로 끝난다.
+        db = FakeMinuteDB()
+        enqueue(db, "e1")
+        db.outbox["e1"]["next_attempt_at"] = NOW + timedelta(hours=1)  # 재시도 대기
+        settings = SimpleNamespace(
+            db=_DB,
+            minute_relay=SimpleNamespace(
+                queue_urls=QUEUES, batch_limit=10, lease_seconds=150,
+                retry_base_seconds=2, retry_max_seconds=300, tick_seconds=0.0,
+            ),
+        )
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.relay.JobLedger",
+                            lambda db: JobLedger(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.minute.relay.SqsPublisher", lambda: FakePublisher())
+        assert relay_cli(settings, max_ticks=1) == 1, "대기 중 backlog 를 완료로 보고했다"
 
     def test_bounded_mode_sigterm_is_not_success(self, monkeypatch):
         # 일회성 배출 중 SIGTERM 이면 "비운 걸 확인"하지 못한 채 끝난 것이다 —
