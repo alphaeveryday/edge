@@ -445,7 +445,7 @@ class _Cursor:
             row.update(claimed_by=relay_id, claim_expires_at=claim_until)
         self._rows = [
             (r["event_id"], r["event_type"], r["destination"], r["payload"],
-             r["claim_expires_at"]) for r in eligible
+             r["claim_expires_at"], r["attempt_count"]) for r in eligible
         ]
 
     def _mark_published(self, p):

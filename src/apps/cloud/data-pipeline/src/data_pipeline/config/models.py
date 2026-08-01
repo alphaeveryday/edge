@@ -365,6 +365,28 @@ class DartDisclosureConfig(BaseModel):
     source: DartDisclosureSource
 
 
+class MinuteRelayConfig(BaseModel):
+    """1분 Outbox Relay 설정 — `relay` 스텝만 쓴다(ALPHA-670).
+
+    큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다:
+    `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__<destination>`. destination 은 outbox 행이
+    들고 있는 값이고(계획 §11 큐 3종: price-analysis-realtime·news-extraction-realtime·
+    news-extraction-backfill), 매핑에 없는 destination 의 event 는 Relay 가 DEAD 로
+    격리한다 — 프로세스를 죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_urls: dict[NonBlankStr, NonBlankStr]
+    batch_limit: int = Field(default=10, ge=1, le=10)  # SQS SendMessageBatch 상한
+    lease_seconds: int = Field(default=60, ge=1)
+    retry_base_seconds: int = Field(default=2, ge=1)
+    retry_max_seconds: int = Field(default=300, ge=1)
+    max_attempts: int = Field(default=8, ge=1)
+    # tick 사이 대기(초). ECS 상주 서비스라 짧게 돈다 — 발행 지연 목표는 수초(v0.7 11.1).
+    tick_seconds: float = Field(default=1.0, gt=0)
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 

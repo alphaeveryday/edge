@@ -373,13 +373,15 @@ class JobLedger:
                     FOR UPDATE SKIP LOCKED
                 )
                 RETURNING o.event_id, o.event_type, o.destination, o.payload,
-                          o.claim_expires_at
+                          o.claim_expires_at, o.attempt_count
                 """,
                 (relay_id, now + timedelta(seconds=lease_seconds), now, now, limit),
             )
+            # attempt_count 는 Relay 의 backoff·예산 소진 판정 재료다 — 이 값 없이는
+            # 지수 backoff 도 "지속 실패 격리"도 만들 수 없다(ALPHA-670)
             return [
                 {"event_id": r[0], "event_type": r[1], "destination": r[2],
-                 "payload": r[3], "claim_token": r[4]}
+                 "payload": r[3], "claim_token": r[4], "attempt_count": r[5]}
                 for r in cur.fetchall()
             ]
 

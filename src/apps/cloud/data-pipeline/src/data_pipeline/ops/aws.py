@@ -47,3 +47,10 @@ def ssm_client():
         region_name=_region(),
         config=Config(connect_timeout=3, read_timeout=3, retries={"max_attempts": 2}),
     )
+
+
+def sqs_client():
+    """Outbox Relay 발행용(ALPHA-670). SFN/ECS 와 같은 관례 — region 명시·지연 import."""
+    import boto3
+
+    return boto3.client("sqs", region_name=_region())

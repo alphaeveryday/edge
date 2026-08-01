@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
+from .minute.relay import relay_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
@@ -133,7 +134,10 @@ def main(argv: list[str] | None = None) -> int:
                  "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
-                 "plan-run", "reconcile"],
+                 "plan-run", "reconcile",
+                 # 1분 파이프라인(ALPHA-670): relay=outbox→SQS 발행 상주 루프. 원장 DB +
+                 # minute_relay 큐 매핑 필수, storage/수집창과 무관.
+                 "relay"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -159,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
+    parser.add_argument("--max-ticks", type=int, default=None,
+                        help="relay: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용")
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
@@ -176,6 +182,15 @@ def main(argv: list[str] | None = None) -> int:
                 "--deadline-sec 은 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
                 f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
             )
+
+    if args.max_ticks is not None:
+        if args.step != "relay":
+            raise SystemExit(
+                "--max-ticks 는 relay 에서만 쓴다 — "
+                f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            )
+        if args.max_ticks < 1:
+            raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
@@ -210,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         return ops_entry.plan_run_cli(settings)
     if args.step == "reconcile":
         return ops_entry.reconcile_cli(settings)
+    if args.step == "relay":
+        return relay_cli(settings, max_ticks=args.max_ticks)
 
     # 원장 계측은 **dispatch 를 한 번** 감싼다(ALPHA-181). 스텝마다 흩뿌리면 배선 지점이
     # 33개가 되고, 그중 4곳은 `--source` 로 벤더가 갈려 오라벨 지점이 그만큼 늘어난다
