@@ -580,6 +580,43 @@ def raw_price_minute_artifact_key(
     )
 
 
+def raw_news_minute_page_key(
+    source: str, market: str, session_date: str, window_start_hhmm: str,
+    attempt: int, page: int,
+) -> str:
+    """1분 뉴스 poll 이 받은 **벤더 page 원본**의 키 (ALPHA-669, v0.7 8절).
+
+    가격 artifact 와 달리 축이 generation 이 아니라 **attempt** 다 — 뉴스 feed 는
+    라이브라서 같은 window 를 재poll 하면 다른 rows 가 온다. generation 축을 쓰면
+    재시도가 같은 key 에 다른 바이트를 PUT 해 ArtifactImmutabilityError 로 그 window
+    가 영구히 막힌다. attempt 는 window claim 이 DB 에서 증가시키는 값이라 프로세스
+    재시작 뒤에도 단조롭다.
+    """
+    return (
+        f"raw/source={source}/dataset=news_minute/market={market}"
+        f"/session_date={session_date}/window={window_start_hhmm}"
+        f"/attempt={attempt}/page={page}.ndjson"
+    )
+
+
+def news_poll_manifest_key(
+    dataset: str, source: str, market: str, session_date: str,
+    window_start_hhmm: str, attempt: int,
+) -> str:
+    """뉴스 poll 판정 기록의 키 (ALPHA-669).
+
+    가격 manifest 와 달리 축이 generation 이 아니라 **attempt** 다 — 라이브 소스라
+    같은 window 의 재poll 은 다른 관측을 낳는데, DB 가 확정하는 generation 은 커밋이
+    성공해야 오른다. commit 실패 뒤 재poll 이 같은 generation key 에 다른 바이트를
+    PUT 하면 그 window 가 불변 위반으로 영구히 막힌다(raw page key 와 같은 이유).
+    """
+    return (
+        f"operations_archive/minute_manifests/dataset={dataset}/source={source}"
+        f"/market={market}/session_date={session_date}/window={window_start_hhmm}"
+        f"/attempt={attempt}/poll.json"
+    )
+
+
 def minute_window_manifest_key(
     dataset: str, source: str, market: str, session_date: str,
     window_start_hhmm: str, generation: int,

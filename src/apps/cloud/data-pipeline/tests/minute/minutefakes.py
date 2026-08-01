@@ -22,6 +22,7 @@ class FakeMinuteDB:
         self.jobs: dict[tuple, dict] = {}     # (kind, job_id) -> row
         self.outbox: dict[str, dict] = {}     # event_id -> row
         self.source_items: dict[tuple, dict] = {}  # (source_code, source_item_id) -> row
+        self.anchors: dict[tuple, dict] = {}   # (session_id, source_code) -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -132,6 +133,15 @@ class _Cursor:
                 )]
         elif s.startswith("UPDATE news_source_item"):
             self._update_source_item(params)
+        elif s.startswith("INSERT INTO news_poll_anchor"):
+            self._upsert_anchor(params)
+        elif s.startswith("SELECT success_anchor_ids, head_anchor_ids"):
+            row = self.db.anchors.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(
+                    row["success_anchor_ids"], row["head_anchor_ids"],
+                    row["success_poll_at"], row["head_poll_at"],
+                )]
         elif s.startswith("INSERT INTO news_extraction_job"):
             self._insert_job("news", params)
         elif s.startswith("INSERT INTO price_window_job"):
@@ -490,6 +500,29 @@ class _Cursor:
             "content_checksum": checksum, "generation": 1,
         }
         self._rows = [(1,)]
+
+    # ── news_poll_anchor (ALPHA-669) ──
+    def _upsert_anchor(self, p):
+        (session_id, source_code, success_json, head_json, success_at, head_at,
+         advance, advance2) = p
+        assert advance is advance2, "success anchor 전진 조건이 두 컬럼에서 갈렸다"
+        key = (session_id, source_code)
+        row = self.db.anchors.get(key)
+        if row is None:
+            self.db.anchors[key] = {
+                "session_id": session_id, "source_code": source_code,
+                # 실제 PG 는 ::jsonb 로 파싱해 저장한다 — 문자열로 두면 자료형이 갈린다
+                "success_anchor_ids": json.loads(success_json),
+                "head_anchor_ids": json.loads(head_json),
+                "success_poll_at": success_at, "head_poll_at": head_at,
+            }
+            self.rowcount = 1
+            return
+        row.update(head_anchor_ids=json.loads(head_json), head_poll_at=head_at)
+        if advance:
+            row.update(success_anchor_ids=json.loads(success_json),
+                       success_poll_at=success_at)
+        self.rowcount = 1
 
     def _update_source_item(self, p):
         last_seen, checksum, generation, canonical_article_id, source_code, source_item_id = p

@@ -564,6 +564,21 @@ Table "news_extraction_job" {
   "updated_at" timestamptz [not null]
 }
 
+Table "news_poll_anchor" {
+  "session_id" text [not null]
+  "source_code" text [not null]
+  "success_anchor_ids" jsonb [not null]
+  "head_anchor_ids" jsonb [not null]
+  "success_poll_at" timestamptz
+  "head_poll_at" timestamptz
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "source_code") [pk]
+  }
+}
+
 Table "news_source_item" {
   "source_code" text [not null]
   "source_item_id" text [not null]
@@ -947,6 +962,7 @@ Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."sessio
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
+Ref: "news_poll_anchor"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "ops_expected_task"."pipeline_run_id" > "ops_pipeline_run"."pipeline_run_id"
 Ref: "ops_expected_task"."expectation_snapshot_id" > "ops_expectation_snapshot"."expectation_snapshot_id"
 Ref: "ops_task_attempt"."expected_task_id" > "ops_expected_task"."expected_task_id"
