@@ -236,3 +236,17 @@ def test_propose_rejects_tautological_vulnerability():
     assert any("동어반복" in r for r in rejected)
     assert all(not (t.exposure.ident == v.family and t.exposure.transform == v.transform)
                for t in valid for v in t.vulnerabilities)
+
+
+def test_thin_inus_falls_back_to_moderator_mode_not_undetermined():
+    # §14: 충족 클래스가 얇으면 조건화(표본 분할) 대신 매개변수화 - 엣지는 전체
+    # 패널로 검정하고 취약성은 조절 대비로, 오늘 적용은 여전히 충족을 요구한다.
+    thin = _tuple(vuln_family="거래량", vuln_tr="수준", pct=0.97)   # 충족 ~3%
+    r = edge_test(_Lake(n=400), thin, "2026-06-01", cell_instrument_id="i0")
+    assert r.mode == "조절자" and r.verdict in ("성립", "불성립")   # 판정불가 전멸 탈출
+    assert r.n == 400                                              # 전체 패널 검정력
+    assert "조절" in r.moderation
+    # 오늘 적용은 INUS 그대로: p0.97 임계를 오늘 못 넘으면 부적용.
+    low_today = edge_test(_Lake(n=400, today=(1.0, -9.9)), thin, "2026-06-01",
+                          cell_instrument_id="i0")
+    assert low_today.vuln_satisfied is False and not low_today.applies_today

@@ -144,6 +144,8 @@ class EdgeReport:
     contribution: float | None = None    # SEM: τ̂ × (오늘 노출 − 패널 평균) [ar 단위]
     ci_lo: float | None = None
     ci_hi: float | None = None
+    mode: str = "조건화"             # 조건화 | 조절자 (§14: 얇은 충족 클래스의 매개변수화)
+    moderation: str = ""             # 조절 대비 (조절자 모드에서만)
     reason: str = ""
 
     @property
@@ -245,10 +247,21 @@ def edge_test(lake, t: HypothesisTuple, day: str,
         pv = pctile(feats[key])
         mask &= (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
     opposite = int((~mask).sum())
-    if mask.sum() < MIN_N:
-        return EdgeReport("판정불가", int(mask.sum()), None, None, None, None,
-                          reason=f"취약성 조건화 후 n={int(mask.sum())} < {MIN_N} - "
-                                 "조건이 표본을 죽인다 (임계를 완화하거나 백필)")
+
+    # ── §14 정합: 상태로 표본을 쪼개면 검정력이 죽는다 - 조건화 대신 매개변수화.
+    # 충족 클래스가 얇으면 **조절자 모드**: 엣지 존재는 전체 패널의 용량-반응으로
+    # 검정하고(검정력은 전체 n), 취약성은 교호 대비로 보고한다. 오늘 적용은
+    # 여전히 충족을 요구한다(INUS 유지) - 검정과 적용의 분리다.
+    # (6개 라이브의 지배적 실패가 조건화 전멸(n=23·6·6)이었다 - 설계가 경고한
+    # 바로 그 함정을 구현이 밟고 있었다.)
+    mode = "조건화"
+    test_mask = mask
+    if t.vulnerabilities and mask.sum() < MIN_N <= len(ar):
+        mode = "조절자"
+        test_mask = np.ones(len(ar), dtype=bool)
+    if test_mask.sum() < MIN_N:
+        return EdgeReport("판정불가", int(test_mask.sum()), None, None, None, None,
+                          reason=f"패널 n={int(test_mask.sum())} < {MIN_N}")
 
     def dose(sub: np.ndarray) -> tuple[float | None, float | None, np.ndarray | None]:
         xs, ars = x[sub], ar[sub]
@@ -257,14 +270,27 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             return None, None, None
         return float(ars[hi].mean()), float(ars[~hi].mean()), hi
 
-    eff_hi, eff_lo, hi = dose(mask)
+    eff_hi, eff_lo, hi = dose(test_mask)
     if hi is None:
-        return EdgeReport("판정불가", int(mask.sum()), None, None, None, None,
+        return EdgeReport("판정불가", int(test_mask.sum()), None, None, None, None,
                           reason="노출 분산 부족 - 상·하위가 갈리지 않는다 (게이트 A)")
 
     sign = float(t.sign)
-    p = _stratified_p(ar[mask], hi, dates[mask], sign)
-    verdict = edge_gate(int(mask.sum()), p)
+    p = _stratified_p(ar[test_mask], hi, dates[test_mask], sign)
+    verdict = edge_gate(int(test_mask.sum()), p)
+
+    # 조절 대비: 충족·미충족 클래스의 효과 차 (교호항의 최소형). 클래스별 dose 가
+    # 정의될 때만 - 아니면 '조절 검정력 부족'으로 남는다.
+    moderation = ""
+    if mode == "조절자":
+        s_hi, s_lo, _ = dose(mask) if mask.sum() >= 6 else (None, None, None)
+        u_hi, u_lo, _ = dose(~mask) if opposite >= 6 else (None, None, None)
+        if s_hi is not None and u_hi is not None:
+            moderation = (f"조절 대비: 충족(n={int(mask.sum())}) {s_hi - s_lo:+.2%} vs "
+                          f"미충족(n={opposite}) {u_hi - u_lo:+.2%}")
+        else:
+            moderation = (f"조절 검정력 부족 (충족 n={int(mask.sum())}) - "
+                          "엣지는 무조건부, 취약성은 오늘 적용에만 걸린다")
 
     # ── 반사실 쌍 (§14): 취약성 미충족 부류의 효과. positivity 없으면 침묵 ──
     counterfactual = ""
@@ -284,7 +310,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     if verdict == "성립":
         from .sem import exposure_slope
         try:
-            tau, se = exposure_slope(ar[mask], x[mask], dates[mask])
+            tau, se = exposure_slope(ar[test_mask], x[test_mask], dates[test_mask])
         except ValueError:
             tau = se = None
 
@@ -298,7 +324,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             x_today = float(row[0][0])
             today_pct = float((x <= x_today).mean())
             if tau is not None:
-                dx = x_today - float(x[mask].mean())
+                dx = x_today - float(x[test_mask].mean())
                 contrib = tau * dx
                 ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
             sat = True
@@ -341,10 +367,11 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     if unmeasured_vulns:
         vuln_bits.append("패널 미조건화: " + "·".join(unmeasured_vulns))
 
-    return EdgeReport(verdict, int(mask.sum()), p, eff_hi, eff_lo, today_pct,
+    return EdgeReport(verdict, int(test_mask.sum()), p, eff_hi, eff_lo, today_pct,
                       vuln_today=" · ".join(vuln_bits), vuln_satisfied=vuln_sat,
                       counterfactual=counterfactual, reduction=reduction,
-                      contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi)
+                      contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
+                      mode=mode, moderation=moderation)
 
 
 def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:

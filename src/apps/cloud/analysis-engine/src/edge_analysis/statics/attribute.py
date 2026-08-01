@@ -170,6 +170,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                   f"    패널: {r.line}",
                   f"    오늘: {r.vuln_today or ('미평가 - 패널이 먼저 서야 한다' if t.vulnerabilities else '취약성 없음')} → **{apply_say}**",
                   f"    환원 검사: {r.reduction}"]
+        if r.mode == "조절자":
+            block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
         if r.contribution is not None:
             block.append(f"    SEM 기여: {r.contribution * 100:+.2f}%p "
                          f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] "
