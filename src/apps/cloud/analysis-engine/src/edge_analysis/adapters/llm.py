@@ -189,15 +189,19 @@ def analyze(
     """
     if causal is not None:
         from ..causal.run import explain
+        # 셀의 as_of 는 하나다. 후보 사전과 본 파이프라인이 다른 시점을 보면
+        # 게이트와 검정이 서로 다른 세계에서 돈다.
+        cell_as_of = utcnow_iso()
         raw = explain(
             causal, client, etf_name=etf_name, etf_instrument_id=etf_instrument_id or "",
-            trade_date=trade_date, as_of=utcnow_iso(),
+            trade_date=trade_date, as_of=cell_as_of,
             observed=(decomp.proxy_ret if decomp.proxy_ret is not None
                       else (gate.observed_return or 0.0)),
             route_code=route_code,
             contributors=[(name_by_ticker.get(m.ticker) or m.ticker, m.contribution)
                           for m in decomp.members[:5]],
-            candidates=_candidates(causal, events, name_by_ticker, decomp),
+            candidates=_candidates(causal, events, name_by_ticker, decomp,
+                                   trade_date=trade_date, as_of=cell_as_of),
             # 층화 재료. 넘기지 않으면 strata='date_industry' 가 조용히 date 로 붕괴한다.
             industry=causal.industry_map(trade_date),
             grounded={e.source_event_id for e in events},
@@ -220,11 +224,13 @@ def analyze(
 
 
 def _candidates(causal, events: list[EventContext], name_by_ticker: dict[str, str],
-                decomp: Decomposition) -> list[dict]:
+                decomp: Decomposition, *, trade_date: date, as_of: str) -> list[dict]:
     """후보를 조립한다. **타입 사전과 비중을 코드가 붙인다** - 모델이 물어볼 수 없다.
 
     실측: 모집단을 보여주면 인과 간선 5/5 가 타입 전체로 풀링했고, 안 보여주면 0/4 가
-    셀에 갇혀 n=8 검정을 냈다. 그래서 프롬프트에 항상 싣는다.
+    셀에 갇혀 n=8 검정을 냈다. 그래서 프롬프트에 항상 싣는다. 사전은 셀 시점으로
+    클램프된다(`causal_data.prior`) - 후보 브리프의 '타입 과거'가 미래를 보면
+    산술 게이트와 P2 의 크기 감각이 같이 오염된다.
     """
     share_of = {m.ticker: m.weight for m in decomp.members}
     out, seen = [], {}
@@ -232,7 +238,7 @@ def _candidates(causal, events: list[EventContext], name_by_ticker: dict[str, st
         prior = seen.get(e.event_type_code)
         if prior is None:
             try:
-                prior = causal.prior(e.event_type_code)
+                prior = causal.prior(e.event_type_code, as_of=as_of, trade_date=trade_date)
             except Exception:  # noqa: BLE001 — 사전 없음이 설명을 막지 않는다
                 prior = {}
             seen[e.event_type_code] = prior

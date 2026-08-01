@@ -362,33 +362,46 @@ class CausalData:
         return residual / share
 
     # ── 타입 사전 (분포 사실. 검정이 아니다) ────────────────────────────
-    def type_population(self, event_type_code: str) -> dict:
-        """같은 설계를 몇 번 쌓을 수 있나. 유효 n 은 **금융상품 군집** 기준이다."""
+    def type_population(self, event_type_code: str, *, as_of: str,
+                        trade_date: date) -> dict:
+        """같은 설계를 몇 번 쌓을 수 있나. 유효 n 은 **금융상품 군집** 기준이다.
+
+        `as_of`·`trade_date` 는 **필수**다(cohort 와 같은 규율 - 선택으로 두면 잊는다).
+        타입 모집단에 셀 이후 사건이 섞이면 '과거'가 미래를 본다: 재실행마다 값이
+        바뀌고(레지스트리의 재현 원칙 위반), 산술 게이트 판정이 미래 사건에 좌우된다.
+        """
         r = self._rows(
             "SELECT count(DISTINCT se.source_event_id), count(DISTINCT ea.entity_id),"
             " count(DISTINCT se.event_date), min(se.event_date), max(se.event_date)"
             " FROM source_event se JOIN event_argument ea"
             " ON ea.source_event_id = se.source_event_id"
-            " WHERE se.event_type_code = %s AND se.event_status = 'ACTIVE'",
-            (event_type_code,))
+            " WHERE se.event_type_code = %s AND se.event_status = 'ACTIVE'"
+            " AND se.event_date < %s AND se.available_at <= %s",
+            (event_type_code, trade_date.isoformat(), as_of))
         if not r:
             return {}
         ev, ent, dys, d0, d1 = r[0]
         return {"events": ev or 0, "instruments": ent or 0, "dates": dys or 0,
                 "first": d0, "last": d1, "effective_n": ent or 0}
 
-    def prior(self, event_type_code: str, *, need: float | None = None,
-              min_cross: int = 50) -> dict:
+    def prior(self, event_type_code: str, *, as_of: str, trade_date: date,
+              need: float | None = None, min_cross: int = 50) -> dict:
         """사건 타입의 **분포 사실**. p값도 유의성 판정도 주지 않는다.
 
         쓰임은 하나다 - 이 타입이 이만한 움직임을 낼 수 있나. 분위수가 답한다.
         `need` 를 주면 그 크기 이상이 과거 몇 건이었는지 **빈도**로 답한다.
+
+        분포는 **셀 이전**(`event_date < trade_date` · `available_at <= as_of`)만 본다.
+        클램프 없이는 산술 게이트의 '타입 과거 최대'가 미래 극단값으로 부풀어
+        오늘 죽었어야 할 후보가 다음 달 사건 덕에 살아남는다 - 선견은 결과를
+        좋아지게 만들어 사후에 탐지되지 않는다(cohort 도크스트링과 같은 근거).
         """
         sql = f"""WITH {self._EXCESS},
             j AS (SELECT ex.ar FROM source_event se
                   JOIN event_argument ea ON ea.source_event_id = se.source_event_id
                   JOIN ex ON ex.instrument_id = ea.entity_id AND ex.trade_date = se.event_date
-                  WHERE se.event_type_code = %s AND se.event_status = 'ACTIVE')
+                  WHERE se.event_type_code = %s AND se.event_status = 'ACTIVE'
+                    AND se.event_date < %s AND se.available_at <= %s)
             SELECT count(*), avg(CASE WHEN ar > 0 THEN 1.0 ELSE 0.0 END),
                    percentile_cont(0.50) WITHIN GROUP (ORDER BY abs(ar)),
                    percentile_cont(0.75) WITHIN GROUP (ORDER BY abs(ar)),
@@ -397,9 +410,11 @@ class CausalData:
                    sum(CASE WHEN abs(ar) >= %s THEN 1 ELSE 0 END)
             FROM j"""
         need_abs = abs(need) if need is not None else float("inf")
-        r = self._rows(sql, [min_cross, event_type_code, need_abs])
+        r = self._rows(sql, [min_cross, event_type_code, trade_date.isoformat(),
+                             as_of, need_abs])
         n, pos, q50, q75, q90, mx, k = r[0] if r else (0, None, None, None, None, None, 0)
-        out = {"type": event_type_code, "n": int(n or 0), **self.type_population(event_type_code)}
+        out = {"type": event_type_code, "n": int(n or 0),
+               **self.type_population(event_type_code, as_of=as_of, trade_date=trade_date)}
         if not n:
             return out
         out.update(up_ratio=float(pos or 0), abs_q50=float(q50 or 0),

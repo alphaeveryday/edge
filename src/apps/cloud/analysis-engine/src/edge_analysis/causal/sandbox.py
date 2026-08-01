@@ -242,11 +242,16 @@ def tools(cd, *, as_of: str, w0: date, w1: date, trade_date: date,
         return [{"domain": h["domain"], "ticker": h["ticker"], "ord": h["ord"],
                  "text": h["text"][:1000]} for h in hits]
 
+    def prior(event_type_code: str, need: float | None = None) -> dict:
+        """타입 분포 사실. **시점은 코드가 박는다** — 셀 이후 사건이 '과거 최대'에
+        섞이면 선견이고, 그 선견은 결과를 좋아지게 만들어 사후에 안 보인다."""
+        return cd.prior(event_type_code, need=need, as_of=as_of, trade_date=trade_date)
+
     return {
         "np": np, "dt": dt,
         "TRADE_DATE": trade_date, "W0": w0, "W1": w1, "ETF": etf_instrument_id,
         "cohort": cohort, "universe": universe, "weight": weight, "docs": read,
-        "ar": cd.ar, "mom": cd.mom, "vol": cd.vol, "prior": cd.prior,
+        "ar": cd.ar, "mom": cd.mom, "vol": cd.vol, "prior": prior,
         "permute": led.wrap_permute, "placebo": led.wrap_placebo,
         "fit": S.fit, "predict": S.predict, "residualize": S.residualize,
     }, led

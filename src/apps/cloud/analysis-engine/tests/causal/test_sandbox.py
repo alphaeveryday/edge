@@ -48,7 +48,7 @@ class _Cd:
     def weight(self, etf, trade_date, units=None):
         return {"share": 0.24, "n_hold": 10}
 
-    def prior(self, code, *, need=None, min_cross=50):
+    def prior(self, code, *, as_of="", trade_date=None, need=None, min_cross=50):
         return {"type": code, "n": 12}
 
 

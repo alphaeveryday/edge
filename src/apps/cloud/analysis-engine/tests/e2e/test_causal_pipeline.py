@@ -184,11 +184,12 @@ class FakeCausalData:
         return {i: "Semiconductors" for i in _TREATED_IDS + _CONTROL_IDS}
 
     # ── 타입 사전 (분포 사실. 검정이 아니다) ────────────────────────────
-    def type_population(self, event_type_code: str) -> dict:
+    def type_population(self, event_type_code: str, *, as_of: str = "", trade_date=None) -> dict:
         return {"events": 240, "instruments": 96, "dates": 180,
                 "first": "2024-01-02", "last": "2026-07-10", "effective_n": 96}
 
-    def prior(self, event_type_code: str, *, need: float | None = None,
+    def prior(self, event_type_code: str, *, as_of: str = "", trade_date=None,
+              need: float | None = None,
               min_cross: int = 50) -> dict:
         self.calls.append("prior")
         out = {"type": event_type_code, "n": 240, **self.type_population(event_type_code),
