@@ -108,6 +108,11 @@ def plan_run(
     """
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
 
+    # 무결성 검사는 계획 생성 여부와 무관하게 매 호출 실행한다 — created=False(멱등 재호출)
+    # 경로에서만 검사를 건너뛰면, required 가 어긋난 빌드가 이미 계획된 슬롯을 재호출할 때
+    # fail-loud 없이 SFN 시작까지 진행한다(완료조건 ⑥의 우회로).
+    _check_contract_integrity(pipeline_type)
+
     slot = scheduled_time.astimezone(KST)
     day = slot.date()
     trading = is_trading_day(day, holidays)
@@ -153,6 +158,18 @@ def plan_run(
     )
 
 
+def _check_contract_integrity(pipeline_type):
+    for entry in catalog.entries(pipeline_type):
+        if not entry.contract_key:
+            continue
+        contract = contracts.require(entry.contract_key)
+        if entry.required != contract.required:
+            raise ValueError(
+                f"{entry.task_key}: Catalog required={entry.required}와 "
+                f"Contract required={contract.required} 불일치"
+            )
+
+
 def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, slot_date,
                          universe_provider, holidays):
     for entry in catalog.entries(pipeline_type):
@@ -163,12 +180,8 @@ def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, s
         # 수집의 결과가 "휴장이라 안 했다"로 기록돼 사라진다(ALPHA-181).
         skip = (not trading) and entry.kr_trading_calendar
         plan_status = states.PLAN_SKIPPED if skip else states.PLAN_DUE
+        # required 불일치는 plan_run 진입부의 _check_contract_integrity 가 이미 걸렀다.
         contract = contracts.require(entry.contract_key) if entry.contract_key else None
-        if contract is not None and entry.required != contract.required:
-            raise ValueError(
-                f"{entry.task_key}: Catalog required={entry.required}와 "
-                f"Contract required={contract.required} 불일치"
-            )
         expected_as_of = (
             contracts.resolve_expected_as_of(contract, slot_date, holidays)
             if contract is not None else slot_date

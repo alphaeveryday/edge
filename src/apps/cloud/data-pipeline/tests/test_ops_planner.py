@@ -218,6 +218,42 @@ def test_planner_fails_loud_when_catalog_required_conflicts_with_contract(monkey
         )
 
 
+def test_required_conflict_fails_loud_even_on_idempotent_replan(monkeypatch):
+    """WHY: 검사가 created=True 경로에만 있으면, required 가 어긋난 빌드가 이미 계획된
+    슬롯을 재호출할 때(created=False) 검사 없이 SFN 시작까지 진행한다 — 우회로다."""
+    db = FakeOpsDB()
+    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn())
+
+    krx = catalog.get("ETF_HOLDINGS_COLLECTION_KRX")
+    monkeypatch.setattr(
+        catalog, "entries",
+        lambda pipeline_type=None: (dataclasses.replace(krx, required=False),),
+    )
+
+    with pytest.raises(ValueError, match="required"):
+        plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED,
+                 sfn_client=FakeSfn())
+
+
+def test_contracted_task_skipped_by_calendar_keeps_freshness_null(monkeypatch):
+    """WHY: 계약 연결 + SKIPPED 조합에 UNKNOWN 을 쓰면 DB 의 freshness applicability
+    CHECK 와 충돌하고, "관측 대상 아님"과 "증거 없음"이 화면에서 섞인다(완료조건 ③)."""
+    krx = catalog.get("ETF_HOLDINGS_COLLECTION_KRX")
+    monkeypatch.setattr(
+        catalog, "entries",
+        lambda pipeline_type=None: (dataclasses.replace(krx, kr_trading_calendar=True),),
+    )
+    db = FakeOpsDB()
+    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
+             holidays=frozenset({"2026-07-24"}))
+
+    row = next(iter(db.etasks.values()))
+    assert row["plan_status"] == states.PLAN_SKIPPED
+    assert row["dataset_contract_key"] == contracts.ETF_HOLDINGS_KRX_EOD
+    assert row["freshness_status"] is None
+    assert row["freshness_reason"] is None
+
+
 def test_non_kr_task_is_not_skipped_on_kr_holiday(monkeypatch):
     # WHY: `is_trading_day` 는 **KR 전용 달력**인데 `ingest_price_raw.DATASET` 은 fmp·kis 공통
     #      `price_daily` 다. dataset 문자열로 SKIP 을 가르면 KR 공휴일에 **미국 시장 수집까지**

@@ -74,6 +74,33 @@ def test_krx_artifact_records_unverified_freshness_without_monitor_time():
     assert row["freshness_evidence"] is None
 
 
+def test_krx_trd_dd_matching_expected_as_of_never_promotes_fresh():
+    """WHY: trd_dd 는 우리가 보낸 요청값이라 expected_as_of 와 같은 달력 규칙에서 나온다 —
+    이 일치는 증거가 아니라 동어반복이다. 이걸 actual 로 승격하면 달력 오류 하나로 거짓
+    FRESH 가 나온다(완료조건 ②, ALPHA-653: KRX 응답에는 기준일 필드가 없다)."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+    db.etasks_by_id["et1"]["expected_as_of_date"] = "2026-07-24"
+
+    wrapper.instrument(
+        lambda: 0, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/krx",
+        observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 10, "failed_records": 0,
+            # 요청값이 기대 기준일과 정확히 일치하는 관측 신호 — 그래도 승격 금지
+            "trd_dd": "2026-07-24", "actual_as_of_date": "2026-07-24",
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+    assert row["freshness_reason"] == states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
+
+
 def test_krx_without_artifact_keeps_planner_evidence_missing():
     """WHY: exit code만으로 immutable 산출물이 생겼다고 추정하면 collected_at이 거짓 시각이 된다."""
     db = FakeOpsDB()
