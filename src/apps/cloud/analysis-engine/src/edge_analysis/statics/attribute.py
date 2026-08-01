@@ -118,32 +118,19 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         screens = []
 
     # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
-    # 크기(§10): 식별집합 = SEM 신뢰구간 ∩ (0, 창의 몫]. 공집합 = 모형 모순 -
-    # 크기를 삼키지 않고 배정을 보류한다 (sem.clip_to_share 의 계약).
+    # 크기는 창 행에 싣지 않는다 - SEM 기여는 **일 단위** 추정량이라(패널이 일간 ar)
+    # 15분 창의 몫으로 클립하는 것은 범주 오류다 (8차 정정). 창 행은 존재 판정만,
+    # 크기의 식별집합은 튜플 블록에서 일 단위 상한(하루 총합)과 교차한다.
     passing = {t.trigger.ident: (t, r) for t, r in reports
                if t.trigger.kind == "점" and r.applies_today}
-    contradiction: list[str] = []
     rows = []
     for s in shares:
         wtypes = {labels[e] for e in s.window.event_ids}
         hit = next((passing[w] for w in wtypes if w in passing), None)
         if hit is not None:
             t, r = hit
-            est = lo = hi = None
-            if r.ci_lo is not None:
-                share = s.log_ret
-                lo2 = max(r.ci_lo, 0.0) if share >= 0 else max(r.ci_lo, share)
-                hi2 = min(r.ci_hi, share) if share >= 0 else min(r.ci_hi, 0.0)
-                if lo2 <= hi2:
-                    est = min(max(r.contribution, lo2), hi2)
-                    lo, hi = lo2, hi2
-                else:
-                    contradiction.append(
-                        f"{t.trigger.ident[:30]}: SEM 구간 [{r.ci_lo * 100:+.2f},"
-                        f"{r.ci_hi * 100:+.2f}]% 이 창 몫 {share * 100:+.2f}%p 와 모순 - "
-                        "크기 배정 보류 (과대식별 검산 실패)")
             rows.append(Row(s, treatment=f"{t.trigger.ident[:14]}→{t.channel}",
-                            verdict="성립", est=est, lo=lo, hi=hi))
+                            verdict="성립"))
         elif s.window.kind == "event" or (s.window.kind == "gap" and s.window.event_ids):
             rows.append(Row(s, treatment=",".join(s.window.event_ids)[:20],
                             verdict="판정불가"))
@@ -173,13 +160,16 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if r.mode == "조절자":
             block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
         if r.contribution is not None:
-            block.append(f"    SEM 기여: {r.contribution * 100:+.2f}%p "
-                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] "
-                         "(τ̂ × 오늘 노출편차 · 사건 고정효과)")
+            # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
+            day_total = sum(s.log_ret for s in shares)
+            lo2 = max(r.ci_lo, 0.0) if day_total >= 0 else max(r.ci_lo, day_total)
+            hi2 = min(r.ci_hi, day_total) if day_total >= 0 else min(r.ci_hi, 0.0)
+            iset = (f"식별집합 [{lo2 * 100:+.2f}, {hi2 * 100:+.2f}]%p" if lo2 <= hi2 else
+                    f"**과대식별 모순** - 구간이 하루 총합 {day_total * 100:+.2f}%p 와 안 겹친다")
+            block.append(f"    SEM 기여(일 단위): {r.contribution * 100:+.2f}%p "
+                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {iset}")
         if r.counterfactual:
             block.append(f"    반사실: {r.counterfactual}")
-    for c in contradiction:
-        block.append(f"[과대식별 검산] {c}")
     if memory:
         block.append("회상(과거 셀): " + " | ".join(memory[:3]))
     if rejected:
