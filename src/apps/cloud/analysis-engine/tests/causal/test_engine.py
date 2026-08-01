@@ -56,6 +56,13 @@ class _FakeData:
     def vol(self, pairs, **kw):
         return np.abs(self.rng.normal(0.02, 0.005, size=len(pairs)))
 
+    def flow(self, pairs, *, kind: str = "institution_total"):
+        # 표면이 있다는 사실만 고정한다 - 없으면 tools 조립이 AttributeError 로 죽는다.
+        return self.vol(pairs)
+
+    def ids(self, names):
+        return {str(n): f"inst_{n}" for n in (names or [])}
+
 
 DESIGN = EdgeDesign(src="EVT@t-2", dst="RET@t0",
                     treated="event_type_code = 'X'",

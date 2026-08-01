@@ -280,6 +280,51 @@ class CausalData:
             JOIN ex ON ex.instrument_id = k.i AND ex.trade_date = k.d"""
         return self._aligned(pairs, sql, [min_cross, ids, ds])
 
+    # 투자자 유형별 순매수 대금. `v_flow` 와 같은 원장이다.
+    FLOW_KINDS = ("individual", "foreign", "institution_total", "pension",
+                  "investment_trust", "financial_invest", "private_fund",
+                  "insurance", "bank")
+
+    def flow(self, pairs, *, kind: str = "institution_total") -> np.ndarray:
+        """쌍마다 **그날 그 투자자 유형의 순매수 대금**. 순서 유지, 없으면 nan.
+
+        수급을 결과로 쓰는 간선은 이것 없이는 잴 수 없다 - 검정 에이전트가 원장에
+        `net_flow` 를 요청했고("제공된 함수는 수익률 관련(ar·mom·vol)뿐"), 데이터는
+        `investor_flow_daily` 에 이미 있었다(2026-08-01 fb-20260801-01 data_request).
+        음수가 정상이다(순매도). grain 은 **개별주식**이다.
+        """
+        if kind not in self.FLOW_KINDS:
+            raise PipelineError(
+                f"쓸 수 없는 투자자 유형: {kind}. {list(self.FLOW_KINDS)} 중 하나여야 한다")
+        if not pairs:
+            return np.array([], dtype=float)
+        ids, ds = self._split(pairs)
+        sql = ("SELECT k.i, k.d, f.net_val_" + kind + " FROM unnest(%s::text[], %s::date[])"
+               " AS k(i, d) JOIN investor_flow_daily f"
+               " ON f.instrument_id = k.i AND f.trade_date = k.d")
+        return self._aligned(pairs, sql, [ids, ds])
+
+    def ids(self, names: list[str]) -> dict[str, str]:
+        """티커·표시명 -> instrument_id. **조정집합을 짜려면 id 를 알아야 한다.**
+
+        검정 에이전트가 "SK하이닉스의 instrument_id 를 알 수 없어 조정집합을 구성할 수
+        없다"고 요청했다(fb-20260801-01). 술어로 우회하면 종목명을 `ticker` 에 넣는
+        0행 오검사로 빠지므로, 이름에서 id 로 가는 길을 표면에 둔다.
+        """
+        keys = [str(n).strip() for n in (names or []) if str(n).strip()]
+        if not keys:
+            return {}
+        rows = self._rows(
+            "SELECT i.ticker, e.display_name, i.instrument_id FROM instrument i"
+            " LEFT JOIN entity e ON e.entity_id = i.instrument_id"
+            " WHERE i.ticker = ANY(%s) OR e.display_name = ANY(%s)", [keys, keys])
+        out: dict[str, str] = {}
+        for ticker, name, iid in rows:
+            for k in (ticker, name):
+                if k and str(k) in keys:
+                    out[str(k)] = str(iid)
+        return out
+
     def ar_history(self, instrument_id: str, trade_date: date, *, days: int = 250,
                    min_cross: int = 50) -> np.ndarray:
         """이 종목 자신의 과거 일별 초과수익. **귀무분포의 재료다 - 당일은 뺀다.**
