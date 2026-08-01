@@ -202,7 +202,9 @@ class TestRetryBudget:
             at = NOW + timedelta(hours=attempt)
             assert relay.tick(at) == "PARTIAL"
             delays.append((db.outbox["e1"]["next_attempt_at"] - at).total_seconds())
-        assert delays == [2, 4, 8]
+        # 계약은 "실패 시점부터 최소 base*2**n" — tick 안에서 흐른 시간이 더해진다
+        for delay, expected in zip(delays, [2, 4, 8], strict=True):
+            assert expected <= delay < expected + 1, f"backoff {delay} 이 {expected} 미만이다"
 
     def test_long_outage_never_turns_transient_into_dead(self, tmp_path):
         # ⚠️ 시도 횟수로 포기하면 몇 분짜리 SQS 장애가 event 를 되돌릴 수 없는 DEAD 로
@@ -312,6 +314,12 @@ class TestConfigGuards:
         with pytest.raises(ValueError, match="news-extraction-backfill"):
             RelayConfig(relay_id="r", queue_urls=partial)
 
+    def test_short_lease_refuses_to_start(self):
+        # 발행이 lease 보다 오래 걸리면 다른 Relay 가 같은 행을 집고, 두 쪽 기록이 서로
+        # claim_token 불일치로 거부되는 동안 메시지만 중복 발행된다(행은 NEW 로 고착)
+        with pytest.raises(ValueError, match="lease_seconds"):
+            RelayConfig(relay_id="r", queue_urls=QUEUES, lease_seconds=1)
+
     def test_shared_queue_url_refuses_to_start(self):
         # 세 destination 이 한 큐를 가리키면 다른 큐의 Consumer 가 wake-up 을 못 받는데
         # event 는 PUBLISHED 로 확정돼 URL 을 고쳐도 되살아나지 않는다(v0.7 12.1)
@@ -326,7 +334,10 @@ class TestConfigGuards:
                             retry_base_seconds=2, retry_max_seconds=5)
         for attempt in range(4):
             relay.tick(NOW + timedelta(hours=attempt))
-        assert (db.outbox["e1"]["next_attempt_at"] - (NOW + timedelta(hours=3))).total_seconds() == 5
+        capped = (
+            db.outbox["e1"]["next_attempt_at"] - (NOW + timedelta(hours=3))
+        ).total_seconds()
+        assert 5 <= capped < 6, f"cap(5초)을 넘겼다: {capped}"
 
 
 class TestEnvelopeDeterminism:
@@ -418,11 +429,17 @@ class TestSqsResponseGate:
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
         assert published == frozenset() and failures == ()
 
-    def test_successful_without_message_id_is_not_published(self):
-        # 큐가 받았다는 근거(MessageId)가 없는 성공 항목 — 확정하면 유실이 영구화된다
-        stub = self.StubSqs([{"Successful": [{"Id": "0"}]}])
+    @pytest.mark.parametrize("message_id", [None, "", "   ", True, 1])
+    def test_successful_without_valid_message_id_is_not_published(self, message_id):
+        # 큐가 받았다는 근거(MessageId)가 없는 성공 항목 — 확정하면 유실이 영구화된다.
+        # MD5 는 **올바르게** 준다: 그래야 MessageId 게이트만 단독으로 검증된다(Rule 9).
+        entry = {"Id": "0", "MD5OfMessageBody": md5(b"{}").hexdigest()}
+        if message_id is not None:
+            entry["MessageId"] = message_id
+        stub = self.StubSqs([{"Successful": [entry]}])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
-        assert published == frozenset() and failures == ()
+        assert published == frozenset(), f"MessageId={message_id!r} 를 발행 근거로 받았다"
+        assert failures == ()
 
     def test_missing_entry_is_left_unreported(self):
         # 응답에 아예 없는 event 는 성공도 실패도 아니다 — Relay 가 "미보고"로 재시도한다

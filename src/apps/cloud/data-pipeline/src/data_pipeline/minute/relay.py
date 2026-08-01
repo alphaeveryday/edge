@@ -54,6 +54,9 @@ KNOWN_DESTINATIONS = frozenset({
 # ⚠️ 이 숫자는 **벤더 계약**이라 드리프트한다. 상한을 작게 잡으면 멀쩡한 메시지가
 # terminal(DEAD)로 확정되고 상수를 고쳐도 그 행은 재평가되지 않는다 — 바꿀 때 문서로
 # 재확인할 것(과거 256 KiB 였다).
+# claim lease 하한 — SQS 호출 예산(connect 5s + read 10s)의 배수. 아래 __post_init__ 참조.
+MIN_LEASE_SECONDS = 30
+
 SQS_BATCH_LIMIT = 10
 SQS_MAX_MESSAGE_BYTES = 1_048_576
 SQS_MAX_BATCH_BYTES = 1_048_576
@@ -113,8 +116,22 @@ class RelayConfig:
             raise ValueError(f"두 destination 이 같은 큐를 가리킨다: {sorted(shared)}")
         if self.batch_limit < 1:
             raise ValueError("batch_limit 은 1 이상이어야 한다")
+        if self.lease_seconds < MIN_LEASE_SECONDS:
+            # 발행이 lease 보다 오래 걸리면 그 사이 다른 Relay 가 같은 행을 집는다.
+            # 두 Relay 의 기록이 서로 claim_token 불일치로 거부되는 동안 메시지만 중복
+            # 발행되고 행은 NEW 로 남아 매 tick 같은 자리를 차지한다. SQS 호출 예산
+            # (connect 5s + read 10s, 배치 여러 번)보다 넉넉해야 한다.
+            raise ValueError(
+                f"lease_seconds 는 {MIN_LEASE_SECONDS} 이상이어야 한다 — "
+                "발행 도중 만료되면 경쟁 Relay 가 같은 행을 탈취한다"
+            )
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_base_seconds <= retry_max_seconds 여야 하고 둘 다 양수다")
+
+
+def _non_blank_text(value: object) -> bool:
+    """SQS 응답의 필수 문자열 필드가 실제로 채워졌나 — truthiness 만 보면 True·1 도 통과한다."""
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _body_md5(body: str) -> str:
@@ -226,7 +243,7 @@ class SqsPublisher:
                 kind, entry = reported[0]
                 if kind == "Failed":
                     code = entry.get("Code")
-                    if not isinstance(code, str) or not code.strip():
+                    if not _non_blank_text(code):
                         # Code 는 실패 항목의 필수 필드다. 없으면 무엇이 왜 실패했는지
                         # 모르는 것이라, SenderFault 하나로 비가역 DEAD 를 확정하지
                         # 않는다 — 미보고로 두면 다음 응답에서 제대로 판정된다.
@@ -239,7 +256,7 @@ class SqsPublisher:
                         # `bool("false")` 는 True 라 진짜 bool 만 terminal 로 본다
                         terminal=entry.get("SenderFault") is True,
                     ))
-                elif not entry.get("MessageId"):
+                elif not _non_blank_text(entry.get("MessageId")):
                     # 성공 항목의 필수 필드가 없다 = 큐가 받았다는 근거가 없다.
                     # 근거 없는 성공을 확정하면 그 자리에서 유실이 영구화된다.
                     logger.error("SQS 성공 항목에 MessageId 가 없다: %s", message.event_id)
@@ -353,7 +370,10 @@ class OutboxRelay:
         하나도 안 된 tick 이 PUBLISHED 로 보고된다(Rule 12).
         """
         attempted = 0
-        elapsed = timedelta(seconds=int(time.monotonic() - self._tick_started))
+        # 반올림하지 않는다 — 내림하면 실제 실패 시각보다 이른 시각이 나와(경과 10.9→10,
+        # base 1) backoff 가 사실상 사라지고, 올림하면 설정한 간격에 매번 1초가 얹힌다.
+        # 계약은 "**실패한 시점**부터 최소 base*2**n"이다.
+        elapsed = timedelta(seconds=time.monotonic() - self._tick_started)
         for event in events:
             # ⚠️ **일시 실패는 횟수로 포기하지 않는다.** 시도 예산을 두면 몇 분짜리 SQS
             # 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데, 이 단계엔 redrive 경로가
