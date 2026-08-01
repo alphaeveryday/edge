@@ -9,7 +9,7 @@
 - **스키마 SSOT 는 Flyway 다(ADR-0005·0038).** 앱은 `ddl-auto=validate` 로 스키마를 읽기 전용으로 따르고, 상태 전이·게시 grain 선점은 native SQL 로 쓴다. 애그리거트가 자기 영속성을 소유하는 클래식 DDD 는 이 경계와 정면충돌한다.
 - **얇은 레이어드가 관례다.** 온프렘 모듈은 controller/service/repository 를 형식만 유지한 최소 두께이며, 오버엔지니어링을 명시적으로 배제해 왔다.
 
-동시에 screening 은 이 레포에서 **도메인 규칙이 실제로 쌓일 유일한 모듈**이다. 현재는 walking skeleton 국면이라 판정 로직이 delivery_type 3분기(NEW/CORRECTION/INVALIDATION — ADR-0014·0015) **뿐**이고, 이는 도메인 규칙이 아니라 전달 프로토콜 분기다. `BundleScreener` 는 이 분기 + JSON 계약 파싱 + repository 호출이 한 클래스에 섞여 있지만, 로직 총량이 얇아(≈150줄) 지금은 트랜잭션 스크립트가 정직하다.
+동시에 screening 은 이 레포에서 **도메인 규칙이 실제로 쌓일 유일한 모듈**이다. 현재는 walking skeleton 국면이라 판정 로직이 delivery_type 분기(기록 당시 NEW/CORRECTION/INVALIDATION 3분기 — CORRECTION 은 이후 [ADR-0044](0044-correction-abolition.md)로 폐지돼 현행은 2분기) **뿐**이고, 이는 도메인 규칙이 아니라 전달 프로토콜 분기다. `BundleScreener` 는 이 분기 + JSON 계약 파싱 + repository 호출이 한 클래스에 섞여 있지만, 로직 총량이 얇아(≈150줄) 지금은 트랜잭션 스크립트가 정직하다.
 
 문제는 "언제 이 정직함이 깨지는가"를 취향이 아니라 관측 가능한 기준으로 고정하는 것이다. 미리 지으면(선제적 DDD) 정작 규칙이 도착했을 때 예측한 경계가 틀려 두 번 일하고, 너무 늦으면 규칙이 `if` 로 흩어져 추적 불능이 된다.
 

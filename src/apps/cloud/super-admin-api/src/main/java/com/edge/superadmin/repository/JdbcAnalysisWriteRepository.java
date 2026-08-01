@@ -20,7 +20,8 @@ import java.util.Map;
  * 정정도 원본 결과를 덮지 않는다: 운영자 작업은 전부 super-admin-api 소유 원장
  * {@code admin_activity_log}(ALPHA-424 Admin Activity Log)에만 append 하고, 정정된 본문·제외 여부는
  * 읽기가 이 원장에서 오버레이한다({@link JdbcAnalysisRepository}). 원본 explanation_result 는
- * 보존되고, 테넌트 전파(CORRECTION/INVALIDATION 이벤트)는 이 티켓 범위 밖(후속). 감사 열람 API 는
+ * 보존되고, 테넌트 전파는 INVALIDATION 발번(ALPHA-440)만 후속이다 — CORRECTION 전달은
+ * 폐지됐다(ADR-0044). 감사 열람 API 는
  * 없다(super-admin-console.md: UI-less, DB 보존).
  */
 @Repository
