@@ -38,7 +38,7 @@ git status --short
 ```
 - **커밋된 브랜치 변경 + 미커밋(staged/unstaged) + 미추적 새 파일을 모두** 범위에 넣는다(합집합, fallback 아님). `git diff dev...HEAD` 는 커밋분만, `git diff HEAD` 는 추적 파일의 미커밋 변경만(**미추적 새 파일은 안 나온다**). 미추적 파일은 `git ls-files --others --exclude-standard` 로 나열해 **경로를 지시문에 명시**하고 Codex 에게 직접 읽으라고 지시한다 — line-by-line·시크릿 스캔이 새 config/소스에 든 버그·토큰을 놓치지 않게.
 - 인자로 PR 번호·브랜치·경로가 오면 그 대상을 본다(`gh pr diff <N>`, 또는 커밋 SHA·베이스 브랜치를 지시문 범위로).
-- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI? · **IaC**(`infra/`·terraform `.tf`/`.tftpl` — I각도)? · **프론트 서빙·패키징**(UI Dockerfile·정적 호스팅 conf·`VITE_*` 빌드 플래그·서빙되는 `dist` — J각도)? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)?
+- **변경 영역을 판정**해 아래 조건부 각도를 켠다: schema(`libs/schema`)? · gateway/`*-api`(JVM 신뢰경계)? · `data-pipeline`/`analysis-engine`(Python 레이크)? · UI(`*-ui`/`ui-kit`)? · 전역 설정/CI? · **IaC**(`infra/`·terraform `.tf`/`.tftpl` — I각도)? · **프론트 서빙·패키징**(UI Dockerfile·정적 호스팅 conf·`VITE_*` 빌드 플래그·서빙되는 `dist` — J각도)? · **검증·정규화·파싱·품질 게이트 코드**(`validate_*`·`check_*`·`normalize*`·타입 강제·게이트 — 언어 무관)? · **문서화된 실행 경로**(README·runbook 에 추가·변경된 실행 명령·env 예시, 새 엔트리포인트·설정 표면 — K각도)?
 
 ## Phase 1 — Codex 실행
 
@@ -98,6 +98,11 @@ echo "codex exit=$?"                   # 0 이 아니면 이 패스는 실패다
   - **인증 경로 실재** — fail-closed API 를 쓰는 SPA 가 **서빙 빌드에서 세션을 확립할 수단**(로그인 화면/라우트 또는 세션 부트스트랩)을 실제로 갖는가. dev 전용 헬퍼(`import.meta.env.DEV` 게이트의 자동로그인 등)가 prod 번들에서 **스트립**되고 로그인 UI 도 없으면, 화면은 로드되나 전 API 가 401 → **죽은 껍데기**다(로드=동작 아님). 라우트 목록·`App.tsx`·`main.tsx` 의 DEV 게이트를 실제로 읽어 배포 경로를 확인한다(ALPHA-554 실증).
   - **빌드↔런타임 설정 정합** — 빌드타임에 baked 되는 값(`VITE_*`·API base URL·자동로그인 자격증명)이 짝이 되는 **런타임 서비스 설정**(API 비밀번호·서비스 호스트·경로)과 일치하는가. 독립적으로 설정 가능한 두 기본값은 한쪽만(예: compose env) override 되면 조용히 어긋나 로그인·호출이 깨진다 — 빌드는 재빌드해야 바뀌므로 런타임 override 를 못 따라간다(ALPHA-554: compose 부트스트랩 비번 override vs UI baked 비번). 값을 한 소스로 묶었는지, 아니면 override 를 안 열었는지 본다.
   - **서빙 번들 시크릿 노출 등급** — 서빙 빌드가 배포되면 안 되는 자격증명·토큰·시크릿을 **번들에 baked** 하는가. 데모 전용 플래그(예: `VITE_DEMO_AUTOSESSION`)로만 포함되고 실 빌드는 스트립되는지, 그리고 그 번들의 **노출 표면**(공개 CDN vs 내부 SSM 터널)이 담긴 자격증명 등급에 맞는지 확인. 공개 표면에 실 자격증명이 실리면 최우선 finding.
+- **K. 문서화된 실행 경로의 실행 가능성** (diff 가 **문서에 실행 명령·env 예시를 추가·변경**할 때 — README·runbook 의 `python -m …`·CLI 호출·`VAR=… command` 블록, 새 엔트리포인트·설정 표면 도입 시 특히) — "문서가 코드와 맞는가"(그건 docs-sync 소관)가 아니라 **그 명령을 그대로 쳤을 때 되는가**를 본다. 새 실행 표면의 첫 문서 경로가 죽어 있으면 배포·인수인계 시점에야 드러난다. 문서에 적힌 형태를 **코드가 실제로 받는 형태와 대조**하라:
+  - **셸이 파싱하는가** — 변수명에 하이픈·점·공백이 들어간 prefix assignment(`A__b-c=v cmd`)는 bash 가 할당으로 읽지 않아 그 줄이 통째로 실패한다(`command not found`). 설정 키가 도메인 값(큐 이름·소스 코드 등)에서 파생되면 env 변수명 규칙을 벗어나기 쉽다 — 그 경우 JSON 한 변수 같은 대체 형태가 문서와 코드 양쪽에 있어야 한다.
+  - **로더가 그 형태를 받는가** — nested 구분자·JSON·파일 경로 중 무엇을 쓰는지 로더 설정(`env_prefix`·`env_nested_delimiter`·복합 타입 파싱)과 대조한다. 문서 형태와 로더가 갈리면 기동 자체가 안 된다.
+  - **필수 인자·전제가 문서에 다 있는가** — 그 명령이 요구하는 다른 env(DB·자격증명)나 선행 상태가 빠져 있으면 따라 한 사람은 실패만 본다.
+  - 확인 비용이 명령 한 번이면 **실제로 돌려 보라**(read-only 샌드박스라 못 돌리면 그 사실과 함께 후보로 낸다). ALPHA-670 실증: 새 relay 엔트리포인트의 README 예시가 `DATA_PIPELINE_…__QUEUE_URLS__price-analysis-realtime=` 형태라 셸이 못 읽어 첫 문서 실행 경로가 통째로 불가였는데, 로컬 게이트 7라운드(수용 46건)가 코드만 보느라 놓치고 봇이 잡음.
 
 **검증 (같은 실행 안에서)**
 > 각 후보를 적대적으로 검증해 **CONFIRMED**(코드로 확증 — 실제 줄을 인용) 또는 **PLAUSIBLE**(현실적이나 미확증) 만 남겨라. 코드로 반증 가능한 것(실제 줄·불변식·이 diff 의 가드를 인용)은 버려라. 현실적 상태(경쟁·드문 에러 경로의 None·falsy-zero·경계 off-by-one·부분 실패)는 기본 PLAUSIBLE. 규칙 위반은 **정확한 규칙 번호와 정확한 줄을 인용할 수 있을 때만** 낸다 — 취향·막연한 "정신" 추론은 금지. 결함이 없으면 빈 배열을 반환하라. 지정된 JSON 스키마로만 응답하라.
