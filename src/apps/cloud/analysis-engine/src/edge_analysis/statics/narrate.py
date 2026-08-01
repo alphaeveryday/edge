@@ -42,6 +42,23 @@ class Conditional:
     n_opposite: int          # 반대 상태의 역사 사례 수 (positivity)
     interaction_significant: bool
 
+@dataclass(frozen=True, slots=True)
+class Edge:
+    """채널판 문장의 재료 — 전부 paneltest 가 계산한 값이다.
+
+    가드 (자격 없는 문장은 생성 시점에 죽는다):
+      - applied 인데 verdict != 성립 → 게이트 없는 적용 주장 (NarrationError)
+      - 성립인데 미적용이면 why_not 필수 — 반증을 침묵으로 삼키면 기각 위장이다
+      - 과대식별 모순이면 크기(구간) 인용 금지 — '크기 보류' 어법만 허용
+    """
+    channel: str                     # 닫힌 어휘의 채널
+    event_type: str                  # 사건 타입 (점) 또는 계열 ident
+    verdict: str                     # 성립 | 불성립 | 판정불가
+    applied: bool                    # 오늘 적용 (INUS 충족 + 환원 미불일치)
+    why_not: str = ""                # 성립-미적용의 사유 (필수)
+    iset_lo: float | None = None     # 일 단위 식별집합 (CI ∩ (0, 하루 총합])
+    iset_hi: float | None = None
+    contradiction: bool = False      # 과대식별 모순 — 크기 주장 금지
 
 @dataclass(frozen=True, slots=True)
 class BaseRate:
@@ -59,6 +76,7 @@ def _pct(logret: float) -> str:
 def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list[Row],
             grounded: dict[str, str], premium: PathVerdict | None = None,
             after_close: tuple[str, ...] = (),
+            edges: tuple[Edge, ...] = (),
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -120,6 +138,19 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             f"최대 몫 {_pct(biggest.share.log_ret)} 이 사건 없는 구간"
             f"({biggest.share.window.name})에서 나왔다 — 보도된 사건으로 하루를 "
             "설명하려는 서사는 데이터가 반박한다")
+    for e in edges:
+        if e.applied and e.verdict != "성립":
+            raise NarrationError(f"{e.channel}·{e.event_type}: 게이트 없는 적용 주장 — "
+                                 "패널이 서지 않은 엣지는 오늘을 설명할 수 없다")
+        if e.verdict == "성립" and not e.applied:
+            if not e.why_not:
+                raise NarrationError(f"{e.channel}·{e.event_type}: 성립-미적용의 사유가 없다 — "
+                                     "반증을 침묵으로 삼키면 기각 위장이다")
+            negatives.append(f"{e.channel}·{e.event_type}: 패널은 서지만 오늘 {e.why_not} — "
+                             "오늘의 원인 자격 없음")
+        elif e.verdict == "불성립":
+            negatives.append(f"{e.channel}·{e.event_type}: 그 채널 엣지가 패널에서 서지 않는다 "
+                             "— 원인이 아니다")
     out.append("[아닌 것 먼저] " + ("; ".join(negatives) if negatives else "배제된 후보 없음"))
 
     # ── 3. 몫 — 미설명이 최대면 선두. 서술은 목록이 아니라 요약이다 ─────
@@ -135,7 +166,21 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     else:
         out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 
-    # ── 4. 성립한 것 — 접지 id 와 구간을 달고서만 ───────────────────────
+    # ── 4. 채널판 — 오늘 적용된 엣지만. 크기는 일 단위 식별집합 어법으로 ─
+    for e in edges:
+        if not e.applied:
+            continue
+        if e.contradiction:
+            size = "크기는 **보류** — SEM 구간이 하루 총합과 모순 (과대식별 검산 실패)"
+        elif e.iset_lo is not None and e.iset_hi is not None:
+            size = (f"기여는 많아야 {e.iset_hi * 100:+.2f}%p "
+                    f"(식별집합 [{e.iset_lo * 100:+.2f}, {e.iset_hi * 100:+.2f}]%p) — "
+                    "상한 밖 주장은 금지")
+        else:
+            size = "크기 미상 (τ̂ 추정 불가) — 존재 판정만 말한다"
+        out.append(f"[채널] {e.channel}·{e.event_type}: 패널 성립 · 오늘 취약성 충족 · "
+                   f"환원 일치 → **오늘 적용**. {size}.")
+    # ── 4½. 성립한 창 — 접지 id 와 구간을 달고서만 ──────────────────────
     positives: list[str] = []
     for r in rows:
         if r.verdict == "성립" and r.est is not None:
@@ -215,4 +260,4 @@ def _selfcheck() -> None:
 
 _selfcheck()
 
-__all__ = ["BaseRate", "Conditional", "MIN_OPPOSITE", "NarrationError", "narrate"]
+__all__ = ["BaseRate", "Conditional", "Edge", "MIN_OPPOSITE", "NarrationError", "narrate"]

@@ -22,7 +22,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from .duck import CausalLake
 from .hypothesize import propose
-from .narrate import narrate
+from .narrate import Edge, narrate
 from .paneltest import EdgeReport, edge_test
 from .render import Row, render
 from .tree import Share, decompose
@@ -34,6 +34,18 @@ KST = timezone(timedelta(hours=9))
 
 def _kst(ts) -> datetime:
     return ts.astimezone(KST).replace(tzinfo=None) if ts.tzinfo else ts
+
+
+def _iset(r: EdgeReport, day_total: float) -> tuple[float, float] | None:
+    """일 단위 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합]. None = CI 없음 또는 모순(§10).
+
+    블록과 산문이 이 한 곳에서 같은 값을 얻는다 - 표·산문 동일 객체 계약의 채널판.
+    """
+    if r.ci_lo is None or r.ci_hi is None:
+        return None
+    lo = max(r.ci_lo, 0.0) if day_total >= 0 else max(r.ci_lo, day_total)
+    hi = min(r.ci_hi, day_total) if day_total >= 0 else min(r.ci_hi, 0.0)
+    return (lo, hi) if lo <= hi else None
 
 
 def load_cell(lake: CausalLake, ticker: str, instrument_id: str, day: str):
@@ -138,8 +150,25 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
             rows.append(Row(s))
     record(root, day=day, cell=f"{ticker}/{day}", reports=reports, screens=screens)
 
+    # 채널판을 산문에 배선한다 - 표·블록·산문이 같은 값에서 나와야 한다는 계약의
+    # 채널 확장. 성립-미적용의 사유는 applies_today 의 부정을 그대로 옮긴다.
+    day_total = sum(s.log_ret for s in shares)
+    edges = []
+    for t, r in reports:
+        why = ("" if r.applies_today else
+               "취약성 미충족 (INUS)" if r.vuln_satisfied is False else
+               "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
+               "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
+        iset = _iset(r, day_total)
+        edges.append(Edge(channel=t.channel, event_type=t.trigger.ident,
+                          verdict=r.verdict, applied=r.applies_today, why_not=why,
+                          iset_lo=iset[0] if iset else None,
+                          iset_hi=iset[1] if iset else None,
+                          contradiction=r.ci_lo is not None and iset is None))
+
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=None,
-                    rows=rows, grounded=labels, after_close=tuple(after_close))
+                    rows=rows, grounded=labels, after_close=tuple(after_close),
+                    edges=tuple(edges))
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
     if not types:
@@ -161,13 +190,11 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
             block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
         if r.contribution is not None:
             # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
-            day_total = sum(s.log_ret for s in shares)
-            lo2 = max(r.ci_lo, 0.0) if day_total >= 0 else max(r.ci_lo, day_total)
-            hi2 = min(r.ci_hi, day_total) if day_total >= 0 else min(r.ci_hi, 0.0)
-            iset = (f"식별집합 [{lo2 * 100:+.2f}, {hi2 * 100:+.2f}]%p" if lo2 <= hi2 else
-                    f"**과대식별 모순** - 구간이 하루 총합 {day_total * 100:+.2f}%p 와 안 겹친다")
+            iset = _iset(r, day_total)
+            say = (f"식별집합 [{iset[0] * 100:+.2f}, {iset[1] * 100:+.2f}]%p" if iset else
+                   f"**과대식별 모순** - 구간이 하루 총합 {day_total * 100:+.2f}%p 와 안 겹친다")
             block.append(f"    SEM 기여(일 단위): {r.contribution * 100:+.2f}%p "
-                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {iset}")
+                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {say}")
         if r.counterfactual:
             block.append(f"    반사실: {r.counterfactual}")
     if memory:
