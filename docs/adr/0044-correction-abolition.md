@@ -50,8 +50,10 @@
 - 계약: `event-bundle.schema.json` oneOf 3→2 형상, `tenant_delivery` CHECK 2분기
   (마이그레이션 `V202608011200`), [event-bundle-schema.md](../contracts/event-bundle-schema.md)·
   [sync-protocol.md](../contracts/sync-protocol.md) 전달 유형 서술 축소.
-- 온프렘: `analysis_item` 에서 CORRECTED 상태·`supersedes_item_id`·`correction_reason` 제거
-  (`V202608011210` — 기존 CORRECTED 행은 INVALIDATED 로 이관하고 이관 이력을 남긴다).
+- 온프렘: `analysis_item` 에서 CORRECTED 상태를 제거하고 기존 CORRECTED 행은 INVALIDATED 로
+  이관·이력을 남긴다(`V202608011210`). `supersedes_item_id`·`correction_reason` 은 writer/reader
+  코드만 제거하고 컬럼은 폐기 표기로 존치 — expand-contract 에 따라 소비자 배포 후 별도 수축
+  마이그레이션에서 DROP 한다.
   `analysis_item_status_history` 의 CHECK 어휘는 append-only 원장 보존을 위해 유지한다 —
   과거 이력 전용 어휘이며 새 쓰기는 없다.
 - 코드: screening-worker `screenCorrection`·tenant-sync-api CORRECTION 매핑·검수 콘솔

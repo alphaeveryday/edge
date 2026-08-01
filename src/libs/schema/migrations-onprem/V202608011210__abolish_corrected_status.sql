@@ -30,11 +30,13 @@ ALTER TABLE analysis_item
         CHECK (status IN ('RECEIVED', 'AUTO_PUBLISHED', 'REVIEW_REQUIRED', 'APPROVED',
                           'REJECTED', 'BLOCKED', 'UNPUBLISHED', 'INVALIDATED'));
 
--- 리비전 체인(정정분→원본 참조)은 폐지된 개념 — FK·자기참조 CHECK 는 컬럼과 함께
--- 내려간다.
-ALTER TABLE analysis_item
-    DROP COLUMN supersedes_item_id,
-    DROP COLUMN correction_reason;
+-- 리비전 체인 컬럼(supersedes_item_id·correction_reason)은 이 판에서 지우지 않는다
+-- — expand-contract(implementation.md §4): writer/reader 제거(이 PR 코드)가 전부
+-- 배포된 뒤 별도 수축 마이그레이션에서 DROP 한다. 여기서는 폐기 표기만 남긴다.
+COMMENT ON COLUMN analysis_item.supersedes_item_id IS
+'[폐기 예정 — ADR-0044] 구 정정 리비전 체인. writer 제거됨, 수축 마이그레이션에서 DROP.';
+COMMENT ON COLUMN analysis_item.correction_reason IS
+'[폐기 예정 — ADR-0044] 구 정정 사유. writer 제거됨, 수축 마이그레이션에서 DROP.';
 
 COMMENT ON TABLE analysis_item IS
 '분석 항목 상태 원장(state-machine.md) — PK = Cloud 발번 explanation_result_id(멱등 upsert 키). writer 는 전이별 분담: screening-worker(수신·자동 분기·Cloud 무효화 반영), tenant-console-api(검수 결정·사후 운영 전이).';

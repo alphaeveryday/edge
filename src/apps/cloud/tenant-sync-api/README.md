@@ -30,6 +30,6 @@ curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 200 (신규 없음 — 
 # bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:cloud:tenant-sync-api:bootRun)
 ```
 
-로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드다 — NEW 자동 발번은 analysis-engine 소관이지만(ALPHA-493) 엔진이 로컬 compose 에 없고 CORRECTION·INVALIDATION 발번은 후속이라 시드를 유지한다.
+로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드다 — NEW 자동 발번은 analysis-engine 소관이지만(ALPHA-493) 엔진이 로컬 compose 에 없고 INVALIDATION 발번은 후속(ALPHA-440)이라 시드를 유지한다(CORRECTION 은 폐지 — ADR-0044).
 
 테스트 21건 — 공통 응답 포맷·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·신규 없음 result 생략·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리를 고정한다(ALPHA-572).
