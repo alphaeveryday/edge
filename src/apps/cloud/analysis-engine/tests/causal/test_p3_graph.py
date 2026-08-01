@@ -18,6 +18,7 @@ from typing import Any
 
 from edge_analysis.causal.contracts import Hypothesis, Question, WorldGraph
 from edge_analysis.causal.p3_graph import MAX_TRIES, build, compile_latents, validate
+from edge_analysis.causal.run import _designs
 
 TREAT, OUT = "BUYBACK@t-1", "AR@t+0"
 NODES = {
@@ -189,3 +190,24 @@ def test_a_hypothesis_node_dropped_by_the_merge_is_carried_back_in():
     assert "UNWIND@t-1" in g.nodes, "빠진 가설 노드가 복구되지 않았다"
     assert g.nodes["UNWIND@t-1"]["carried_over"] == "H9", "복구 사실이 원장에 안 남았다"
     assert not [v for v in g.violations if "UNWIND@t-1" in v], g.violations
+
+
+def test_a_reference_predicate_with_a_date_column_is_dropped_before_the_universe_query():
+    """참조집합은 **종목 속성만**이다 - 날짜는 코드가 창으로 붙인다.
+
+    실측(2026-08-01 nanfix-20260801-01): 모델이 `trade_date = '2026-07-30'` 을 참조집합에
+    박아 `cd.universe` 가 여섯 간선 모두 거부했고, E-value 분모가 통째로 미산출됐다.
+    거부해서 죽이는 대신 빈 문자열로 내려보내야 산업 동종군 폴백이 비교군을 만든다.
+    """
+    g = WorldGraph(
+        nodes=NODES,
+        edges=[{"from": TREAT, "to": OUT, "kind": "statistical",
+                "exposure": "event_type_code = 'DIV'",
+                "reference": "industry_name = '반도체' AND trade_date = '2026-07-30'"}],
+        hypotheses=[H])
+
+    designs = _designs(g)
+
+    assert len(designs) == 1
+    assert designs[0].control == "", "날짜가 섞인 참조집합이 그대로 내려갔다"
+    assert designs[0].treated == "event_type_code = 'DIV'", "처치 술어까지 지우면 안 된다"
