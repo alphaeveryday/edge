@@ -30,6 +30,7 @@ contributing / not_contributing / undetermined - **검토한 것은 반드시 �
 """
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -95,7 +96,11 @@ def _josa(word: str, with_jong: str, without_jong: str) -> str:
 
 
 def _num(v: Any) -> float | None:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    """수치를 JSON 으로. **비유한값은 `None`** - NaN 은 값이 아니라 '못 쟀다'이다."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
 
 
 def _iv(v: Any) -> list[float] | None:
@@ -116,8 +121,15 @@ def _mid(v: Any) -> float | None:
 
 def _plain(v: Any) -> Any:
     """직렬화 가능한 값만 남긴다. 지문 축의 `value` 는 배열·날짜 무엇이든 올 수 있고,
-    아카이브에서 json 이 터지면 **감사 흔적이 통째로 사라진다** - 문자열로라도 남긴다."""
-    if v is None or isinstance(v, (str, int, float, bool)):
+    아카이브에서 json 이 터지면 **감사 흔적이 통째로 사라진다** - 문자열로라도 남긴다.
+
+    NaN·Inf 는 여기서 `None` 으로 접는다. `json.dumps` 기본값은 그것을 `NaN` 리터럴로
+    쓰는데 그건 JSON 이 아니라서 Postgres `json` 캐스팅이 거부한다 - 실제로 설명을 다
+    만들어 놓고 영속 단계에서 런이 죽어 아카이브까지 함께 사라졌다(union-20260801-01).
+    """
+    if isinstance(v, float):
+        return v if math.isfinite(v) else None
+    if v is None or isinstance(v, (str, int, bool)):
         return v
     if isinstance(v, (list, tuple)):
         return [_plain(x) for x in v]
