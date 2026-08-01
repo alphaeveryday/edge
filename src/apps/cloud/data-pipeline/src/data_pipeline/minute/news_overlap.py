@@ -106,6 +106,7 @@ def poll_new_articles(
     frontier_ids: list[str] = []
     next_anchor: list[str] = []
     reached = False
+    frontier_proven = False
     pages_used = 0
     feed_ended = False
     for page in range(1, max_pages + 1):
@@ -168,19 +169,27 @@ def poll_new_articles(
                     # correction 이나 canonical 변경을 숨긴다. raw 는 보존하되
                     # (adapter 소관) poll 판정은 실패시킨다.
                     raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
+        page_had_non_anchor = False
         for news_id, _ in validated_rows:
             if news_id in anchor_ids:
-                # anchor 도달 = 이 page 를 끝까지 훑을 이유는 없어졌다. 다만 위치로
-                # 신규를 **증명**하는 건 여기까지다 — anchor 뒤 행의 신규 여부는
-                # 원장이 판정한다(observed_articles 는 이미 page 전량을 담는다).
+                # 위치로 신규를 **증명**하는 건 여기까지다 — anchor 뒤 행의 신규
+                # 여부는 원장이 판정한다(observed_articles 가 page 전량을 담는다).
                 reached = True
-                break
+                continue
+            page_had_non_anchor = True
+            if reached:
+                continue  # anchor 뒤 — 원장 소관
             if news_id in seen_new:
                 continue  # poll 내 duplicate — 대표 행 하나로 수렴
             seen_new.add(news_id)
             frontier_ids.append(news_id)
-        if reached:
+        if reached and page_had_non_anchor:
+            # 직전 head 창 **너머**까지 읽었다는 증거가 이 page 안에 있다 — 멈춘다.
+            frontier_proven = True
             break
+        # anchor 로만 채워진 page 는 그 증거가 없다(재부상 블록이 page 를 통째로
+        # 채운 경우). 여기서 멈추면 뒤 page 의 신규분이 **fetch 조차 안 돼** 원장
+        # 안전망 밖으로 사라지므로, budget 안에서 한 page 더 읽어 증거를 만든다.
         if page_is_last:
             feed_ended = True
             break
@@ -192,7 +201,9 @@ def poll_new_articles(
     else:
         # anchor 가 피드에서 사라졌더라도 연속성을 증명하지 못했다. feed 끝을 anchor
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
-        truncated = not reached
+        # anchor 로만 채워진 page 로 budget 이 끝난 경우도 마찬가지 — 그 너머를 읽지
+        # 못했으니 증명이 없다(feed 끝을 본 경우는 그 자체가 증명이라 예외).
+        truncated = not reached or not (frontier_proven or feed_ended)
     return PollOutcome(
         # 두 목록 모두 대표 행에서 만든다 — 승격이 한쪽에만 반영되는 경로가 없다
         observed_articles=tuple(representative.values()),
