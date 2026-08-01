@@ -4,10 +4,13 @@ BigKinds 는 시각 커서가 없다(확정 — 재토론 금지). 그래서 증
 anchor 를 만날 때까지" 훑는 방식이다:
 
 - **anchor** = 직전 성공 poll 의 최신 page 상단 NEWS_ID 집합. 이번 poll 에서 anchor
-  를 만나면 그 앞까지가 신규분이다(frontier success). page drift(새 기사가 앞에
-  끼어 위치가 밀림)가 있어도 ID 기준으로 겹쳐 읽는다. 단, BigKinds 는 page 간
-  snapshot 을 보장하지 않으므로 poll 도중 삭제·재정렬로 앞 page 로 이동한 행은
-  PR 8의 EOD full-day reconciliation 이 최종 대조한다.
+  를 만나면 조회를 멈춘다 — 그 앞은 위치로도 신규가 증명된 구간이다. page drift
+  (새 기사가 앞에 끼어 위치가 밀림)가 있어도 ID 기준이라 안전하다.
+  **단 anchor 도달은 완전성 증명이 아니다** — BigKinds 는 page 간 snapshot 을
+  보장하지 않아 재정렬·재부상 시 신규분이 anchor 뒤나 다음 page 에 남을 수 있고,
+  ID 만으로는 구분할 수 없다. 이 계열은 위치 기반 휴리스틱으로 막을 수 없어(반례가
+  계속 나온다) 아키텍처가 지정한 두 장치가 맡는다: **원장(관측 전량 판정)** 과
+  **EOD full-day reconciliation(PR 8)**. 이 컨트롤러의 책임은 저지연 전달이다.
 - anchor 미도달 = 신규분이 page budget 을 넘었다는 뜻 — 잘라서 성공으로 위장하지
   않고 **미완(truncated)** 으로 표시한다(fail loud). 호출자(Worker, 5-2)가
   INCOMPLETE 로 기록하고 recovery 를 예약한다.
@@ -58,13 +61,22 @@ class PollOutcome:
     정한다. `frontier_new_articles` 만 보고 job 을 만들면 그 신규분이 유실된다.
     과수집은 원장이 dedupe 해 무해하고(created=False), 과소수집은 유실이다.
 
+    ⚠️ **완전성은 이 컨트롤러가 보장하지 않는다.** 소스가 newest-first 를 어기면
+    신규분이 anchor 뒤·다음 page 에 남을 수 있고 ID 만으로는 알 수 없다. 매 poll 을
+    full budget 으로 읽으면 증명은 되지만 호출량이 배가 돼 차단 위험(ALPHA-645)이
+    커지고 adaptive overlap 의 목적이 사라진다. 완전성은 아키텍처가 지정한 두 장치가
+    진다 — 원장(관측 전량의 신규/정정 판정)과 **EOD full-day reconciliation(PR 8)**.
+    이 컨트롤러의 책임은 저지연 전달이다.
+
     - observed_articles: 조회한 page 의 관측 기사 전량(대표 행). **원장 입력**이다 —
       anchor 뒤 overlap 행도 포함해 재부상 신규분과 기존 기사의 본문·canonical
       identity 정정을 원장이 판정할 수 있게 한다.
     - frontier_new_articles: anchor 앞이라 **위치로도** 신규가 증명된 부분집합.
       관측·지표용이며 job 판정의 근거로 단독 사용 금지(위 경고).
     - reached_anchor: anchor 를 만났나 (앵커가 없던 첫 poll 은 True — seed 성공)
-    - truncated: page budget 이 신규분을 다 못 담았다 — 성공으로 위장 금지 대상
+    - truncated: **budget 안에서 anchor 에 닿지 못했다**(또는 seed 가 budget 을
+      다 썼다). 이것만이 이 컨트롤러가 판정할 수 있는 미완이다 — `truncated=False`
+      는 "budget 이 모자라지 않았다"는 뜻이지 **완전성 증명이 아니다**(아래 참조).
     - next_anchor_ids: 이번 최신 page 상단 ID들. 성공이면 durable success anchor,
       truncated면 다음 realtime poll의 head로 쓰되 이전 성공 anchor는 recovery용으로
       보존한다(두 frontier의 durable 저장은 Worker 5-2 소관).
@@ -106,7 +118,6 @@ def poll_new_articles(
     frontier_ids: list[str] = []
     next_anchor: list[str] = []
     reached = False
-    frontier_proven = False
     pages_used = 0
     feed_ended = False
     for page in range(1, max_pages + 1):
@@ -169,27 +180,31 @@ def poll_new_articles(
                     # correction 이나 canonical 변경을 숨긴다. raw 는 보존하되
                     # (adapter 소관) poll 판정은 실패시킨다.
                     raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
-        page_had_non_anchor = False
         for news_id, _ in validated_rows:
             if news_id in anchor_ids:
-                # 위치로 신규를 **증명**하는 건 여기까지다 — anchor 뒤 행의 신규
-                # 여부는 원장이 판정한다(observed_articles 가 page 전량을 담는다).
                 reached = True
                 continue
-            page_had_non_anchor = True
             if reached:
-                continue  # anchor 뒤 — 원장 소관
+                continue  # anchor 뒤 — 신규 여부는 원장이 판정한다
             if news_id in seen_new:
                 continue  # poll 내 duplicate — 대표 행 하나로 수렴
             seen_new.add(news_id)
             frontier_ids.append(news_id)
-        if reached and page_had_non_anchor:
-            # 직전 head 창 **너머**까지 읽었다는 증거가 이 page 안에 있다 — 멈춘다.
-            frontier_proven = True
+        if reached:
+            # anchor 를 만났으면 이 poll 의 조회는 여기까지다.
+            #
+            # ⚠️ 이것은 **완전성 증명이 아니다.** 소스가 newest-first 를 어기면
+            # (직전 head 블록 재부상 등) 신규분이 anchor 뒤나 다음 page 에 남을 수
+            # 있고, ID 만으로는 그것을 알 수 없다. 위치 기반으로 완전성을 증명하려던
+            # 시도는 반례가 계속 나와 전부 걷어냈다 — 매 poll 을 full budget 으로
+            # 읽으면 증명은 되지만 호출량이 배로 늘어 차단 위험(ALPHA-645)이 커지고,
+            # adaptive overlap 의 목적 자체가 사라진다.
+            #
+            # 그래서 완전성은 **아키텍처가 지정한 두 장치**가 진다:
+            #   1) 원장(observe) — 관측된 모든 행의 신규/정정 판정(과수집 무해)
+            #   2) EOD full-day reconciliation(PR 8) — 하루 단위 전량 대조
+            # 이 컨트롤러는 저지연 전달만 책임진다.
             break
-        # anchor 로만 채워진 page 는 그 증거가 없다(재부상 블록이 page 를 통째로
-        # 채운 경우). 여기서 멈추면 뒤 page 의 신규분이 **fetch 조차 안 돼** 원장
-        # 안전망 밖으로 사라지므로, budget 안에서 한 page 더 읽어 증거를 만든다.
         if page_is_last:
             feed_ended = True
             break
@@ -201,9 +216,7 @@ def poll_new_articles(
     else:
         # anchor 가 피드에서 사라졌더라도 연속성을 증명하지 못했다. feed 끝을 anchor
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
-        # anchor 로만 채워진 page 로 budget 이 끝난 경우도 마찬가지 — 그 너머를 읽지
-        # 못했으니 증명이 없다(feed 끝을 본 경우는 그 자체가 증명이라 예외).
-        truncated = not reached or not (frontier_proven or feed_ended)
+        truncated = not reached
     return PollOutcome(
         # 두 목록 모두 대표 행에서 만든다 — 승격이 한쪽에만 반영되는 경로가 없다
         observed_articles=tuple(representative.values()),

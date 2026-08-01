@@ -620,9 +620,9 @@ class TestPollUrlPromotion:
         frontier_ids = {r["NEWS_ID"] for r in outcome.frontier_new_articles}
         assert frontier_ids and frontier_ids <= observed_ids
 
-    def test_anchor_filled_page_keeps_reading_within_budget(self):
-        # 재부상 블록이 page 를 통째로 채우면 거기서 멈출 근거가 없다 — 뒤 page 의
-        # 신규분이 fetch 조차 안 되면 원장 안전망 밖으로 사라진다
+    def test_anchor_stops_the_poll_without_claiming_completeness(self):
+        # anchor 도달 = 조회 종료. 완전성은 원장·EOD 가 지므로 여기서 더 읽어
+        # "증명"하려 들지 않는다(호출량 배증 = 차단 위험, ALPHA-645)
         class AnchorFilledFirstPage:
             def __init__(self):
                 self.pages_fetched = []
@@ -632,44 +632,13 @@ class TestPollUrlPromotion:
                 if page == 1:
                     return [{"NEWS_ID": f"a{i}", "TITLE": "a", "CONTENT": "c"}
                             for i in range(1, 3)]
-                if page == 2:
-                    return [{"NEWS_ID": "new-1", "TITLE": "n", "CONTENT": "cn"}]
-                return []
+                return [{"NEWS_ID": "new-1", "TITLE": "n", "CONTENT": "cn"}]
 
         feed = AnchorFilledFirstPage()
         outcome = poll_new_articles(
             feed, poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
             max_pages=3, page_size=2,
         )
-        assert feed.pages_fetched[:2] == [1, 2]  # page 2 를 반드시 읽는다
-        observed = [r["NEWS_ID"] for r in outcome.observed_articles]
-        assert "new-1" in observed  # 원장이 판정할 수 있다
-
-    def test_budget_exhausted_by_anchor_pages_is_incomplete(self):
-        # anchor 로만 채워진 page 로 budget 이 끝나면 그 너머를 못 읽었다 — 증명 없음
-        class AllAnchorFeed:
-            def fetch_page(self, poll_index, page, page_size):
-                return [{"NEWS_ID": f"a{page}", "TITLE": "a", "CONTENT": "c"}]
-
-        outcome = poll_new_articles(
-            AllAnchorFeed(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
-            max_pages=2, page_size=1,
-        )
+        assert feed.pages_fetched == [1]  # 저지연 경로 — 추가 조회 없음
         assert outcome.reached_anchor is True
-        assert outcome.truncated is True  # recovery 예약 대상
-
-    def test_feed_end_after_anchor_page_is_complete(self):
-        # 빈 page 로 feed 끝을 확인했으면 그 자체가 증명 — INCOMPLETE 로 위장 승격 금지
-        class AnchorsThenEnd:
-            def fetch_page(self, poll_index, page, page_size):
-                if page == 1:
-                    return [{"NEWS_ID": "a1", "TITLE": "a", "CONTENT": "c"},
-                            {"NEWS_ID": "a2", "TITLE": "a", "CONTENT": "c"}]
-                return []
-
-        outcome = poll_new_articles(
-            AnchorsThenEnd(), poll_index=1, anchor_ids=frozenset({"a1", "a2"}),
-            max_pages=3, page_size=2,
-        )
-        assert outcome.reached_anchor is True and outcome.truncated is False
-        assert outcome.frontier_new_articles == ()
+        assert outcome.truncated is False  # budget 은 모자라지 않았다(완전성 주장 아님)
