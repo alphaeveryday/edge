@@ -5,7 +5,8 @@
 
 - 발행 못 할 event 하나(미정의 destination·크기 초과)가 나머지 큐를 막지 않는가
 - 발행 결과를 모르는 event 를 성공으로 접지 않는가(유실 은폐 금지)
-- 실패가 backlog 를 영원히 붙잡지 않는가(예산 소진 → 조회 가능한 DEAD)
+- 발행 불가 event 만 DEAD 로 격리하는가(일시 장애는 **횟수로 포기하지 않는다** — 이
+  단계엔 redrive 가 없어 DEAD 가 곧 유실이다)
 - 경쟁 Relay·crash 에서 event 하나가 두 번 처리되거나 사라지지 않는가
 """
 
@@ -15,6 +16,7 @@ import json
 import sys
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
+from hashlib import md5
 from pathlib import Path
 
 import pytest
@@ -349,7 +351,10 @@ class TestSqsResponseGate:
             if self.responses:
                 return self.responses.pop(0)
             return {"Successful": [
-                {"Id": e["Id"], "MessageId": f"m-{e['Id']}", "MD5OfMessageBody": "x"}
+                {"Id": e["Id"], "MessageId": f"m-{e['Id']}",
+                 # 실제 SQS 는 받은 본문의 MD5 를 돌려준다 — 아무 값이나 넣으면
+                 # 무결성 게이트가 검증되지 않는다(Rule 9)
+                 "MD5OfMessageBody": md5(e["MessageBody"].encode()).hexdigest()}
                 for e in kwargs["Entries"]
             ]}
 
@@ -357,8 +362,12 @@ class TestSqsResponseGate:
         return tuple(OutboxMessage(f"e{i}", body) for i in range(count))
 
     def test_partial_batch_failure_maps_to_right_events(self):
+        body_md5 = md5(b"{}").hexdigest()
         stub = self.StubSqs([{
-            "Successful": [{"Id": "0", "MessageId": "m0"}, {"Id": "2", "MessageId": "m2"}],
+            "Successful": [
+                {"Id": "0", "MessageId": "m0", "MD5OfMessageBody": body_md5},
+                {"Id": "2", "MessageId": "m2", "MD5OfMessageBody": body_md5},
+            ],
             "Failed": [{"Id": "1", "Code": "InternalError", "Message": "boom"}],
         }])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(3))
@@ -393,6 +402,22 @@ class TestSqsResponseGate:
         assert published == frozenset(), "모순 응답을 성공으로 확정했다"
         assert failures == ()
 
+    def test_body_md5_mismatch_is_not_published(self):
+        # ⚠️ 큐가 받은 본문이 보낸 것과 다르면 발행됐다고 할 수 없다. 확정하면 그 행은
+        # 다시 claim 되지 않아 손상된 채 영구화된다 — 무결성은 **우리가** 본다.
+        stub = self.StubSqs([{"Successful": [
+            {"Id": "0", "MessageId": "m0", "MD5OfMessageBody": md5("다른 본문".encode()).hexdigest()}
+        ]}])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        assert published == frozenset() and failures == ()
+
+    def test_failed_entry_without_code_is_not_terminal(self):
+        # Code 없는 실패 항목은 무엇이 왜 실패했는지 모른다 — SenderFault 하나로
+        # 비가역 DEAD 를 확정하지 않는다(다음 응답이 제대로 판정한다)
+        stub = self.StubSqs([{"Failed": [{"Id": "0", "SenderFault": True}]}])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        assert published == frozenset() and failures == ()
+
     def test_successful_without_message_id_is_not_published(self):
         # 큐가 받았다는 근거(MessageId)가 없는 성공 항목 — 확정하면 유실이 영구화된다
         stub = self.StubSqs([{"Successful": [{"Id": "0"}]}])
@@ -401,7 +426,9 @@ class TestSqsResponseGate:
 
     def test_missing_entry_is_left_unreported(self):
         # 응답에 아예 없는 event 는 성공도 실패도 아니다 — Relay 가 "미보고"로 재시도한다
-        stub = self.StubSqs([{"Successful": [{"Id": "0", "MessageId": "m0"}]}])
+        stub = self.StubSqs([{"Successful": [
+            {"Id": "0", "MessageId": "m0", "MD5OfMessageBody": md5(b"{}").hexdigest()}
+        ]}])
         published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(2))
         assert published == frozenset({"e0"}) and failures == ()
 

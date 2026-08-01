@@ -27,6 +27,7 @@ Worker 안에 넣지 않는 이유(v0.7 11.1): 가격 Service scale-in 이 뉴�
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Mapping
@@ -114,6 +115,11 @@ class RelayConfig:
             raise ValueError("batch_limit 은 1 이상이어야 한다")
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_base_seconds <= retry_max_seconds 여야 하고 둘 다 양수다")
+
+
+def _body_md5(body: str) -> str:
+    """SQS 가 돌려주는 MD5OfMessageBody 와 대조할 값 — 보안이 아니라 전송 무결성 확인용."""
+    return hashlib.md5(body.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def build_message_body(event: dict) -> str:
@@ -219,20 +225,34 @@ class SqsPublisher:
                     continue
                 kind, entry = reported[0]
                 if kind == "Failed":
+                    code = entry.get("Code")
+                    if not isinstance(code, str) or not code.strip():
+                        # Code 는 실패 항목의 필수 필드다. 없으면 무엇이 왜 실패했는지
+                        # 모르는 것이라, SenderFault 하나로 비가역 DEAD 를 확정하지
+                        # 않는다 — 미보고로 두면 다음 응답에서 제대로 판정된다.
+                        logger.error("SQS 실패 항목에 Code 가 없다: %s", message.event_id)
+                        continue
                     failures.append(PublishFailure(
                         message.event_id,
-                        f"{entry.get('Code')}: {entry.get('Message')}",
+                        f"{code}: {entry.get('Message')}",
                         # SenderFault = 요청 자체가 틀렸다 — 재시도 무의미.
                         # `bool("false")` 는 True 라 진짜 bool 만 terminal 로 본다
                         terminal=entry.get("SenderFault") is True,
                     ))
-                elif entry.get("MessageId"):
-                    published.add(message.event_id)
-                else:
-                    # 성공 항목의 필수 필드(MessageId)가 없다 = 큐가 받았다는 근거가 없다.
+                elif not entry.get("MessageId"):
+                    # 성공 항목의 필수 필드가 없다 = 큐가 받았다는 근거가 없다.
                     # 근거 없는 성공을 확정하면 그 자리에서 유실이 영구화된다.
-                    # (본문 무결성 MD5 는 SDK 계층이 본다 — 여기서 재구현하지 않는다.)
                     logger.error("SQS 성공 항목에 MessageId 가 없다: %s", message.event_id)
+                elif entry.get("MD5OfMessageBody") != _body_md5(message.body):
+                    # 본문 무결성은 **우리가** 검증한다. SDK 가 대신 본다고 가정하지
+                    # 않는다 — 확인하지 않은 전제를 근거로 삼으면 그 전제가 틀렸을 때
+                    # 손상된 본문이 PUBLISHED 로 확정되고 그 행은 다시 claim 되지 않는다.
+                    logger.error(
+                        "SQS 응답 MD5 불일치 — 큐가 받은 본문이 보낸 것과 다르다: %s",
+                        message.event_id,
+                    )
+                else:
+                    published.add(message.event_id)
         return frozenset(published), tuple(failures)
 
 
