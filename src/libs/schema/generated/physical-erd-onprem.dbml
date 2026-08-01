@@ -16,8 +16,6 @@ Table "analysis_item" {
   "confidence_level" varchar(20)
   "primary_thread_id" text
   "evidences" jsonb
-  "supersedes_item_id" text
-  "correction_reason" text
   "source_cursor" bigint
   "status" varchar(20) [not null]
   "received_at" timestamptz [not null]
@@ -157,7 +155,6 @@ Table "sync_state" {
   "last_synced_at" timestamptz
 }
 
-Ref: "analysis_item"."supersedes_item_id" > "analysis_item"."explanation_result_id"
 Ref: "analysis_item_status_history"."actor_id" > "member"."member_id"
 Ref: "analysis_item_status_history"."analysis_item_id" > "analysis_item"."explanation_result_id"
 Ref: "console_action_log"."actor_id" > "member"."member_id"
