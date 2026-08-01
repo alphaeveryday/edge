@@ -1,0 +1,18 @@
+{
+  "body": {
+    "error": {
+      "code": "invalid-request",
+      "data": {
+        "allowedValues": [
+          "1m",
+          "1d"
+        ],
+        "field": "interval"
+      },
+      "message": "지원하지 않는 캔들 주기입니다.",
+      "requestId": "2a3C2OyE9T4v0yz4"
+    }
+  },
+  "request_path": "/api/v1/candles?symbol=005930&interval=5m&count=1",
+  "status": 400
+}
