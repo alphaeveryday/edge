@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
+import json
+
 import pytest
 
 from edge_analysis.causal.contracts import (
@@ -328,3 +330,21 @@ def test_an_underpowered_cell_cannot_reach_the_confirmation():
     assert f.ceiling == "mechanism_compatible", f.ceiling_why
     assert "검정력 미달" in f.ceiling_why and "검출 하한" in f.ceiling_why
     assert CONFIRMED_PHRASE not in narrate(f)["explain"]
+
+
+def test_non_finite_numbers_are_folded_to_null_in_the_audit_block():
+    """NaN 은 값이 아니라 '못 쟀다'이고, JSON 리터럴로 쓰면 **원장이 통째로 사라진다.**
+
+    실측(union-20260801-01): 검정 원장의 `obs` 가 NaN 이라 `json.dumps` 가 `NaN` 을
+    찍었고, Postgres `json` 캐스팅이 그것을 거부해 설명을 다 만들어 놓고 영속 단계에서
+    런이 죽었다 - 런 아카이브까지 함께 날아갔다.
+    """
+    proof = replace(PROOF, effect=float("nan"), p=float("inf"),
+                    ledger=[{"obs": float("nan"), "perms_at": 2}])
+
+    block = audit_block(plan=CLEARED, **_kw(proofs=[proof]))
+    dumped = json.dumps(block, ensure_ascii=False, allow_nan=False)   # 여기서 터지면 실패다
+
+    assert "NaN" not in dumped and "Infinity" not in dumped
+    assert block["proofs"][0].get("effect") is None
+    assert block["proofs"][0]["ledger"][0]["obs"] is None
