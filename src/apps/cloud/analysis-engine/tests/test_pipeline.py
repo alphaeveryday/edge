@@ -26,6 +26,8 @@ _SETTINGS = SimpleNamespace(
     causal_sandbox_enabled=True,
     domain_docs_bucket="",
     domain_docs_profile="",
+    causal_registry_root="",
+    canonical_manifest="", canonical_database="", canonical_output="",
 )
 
 

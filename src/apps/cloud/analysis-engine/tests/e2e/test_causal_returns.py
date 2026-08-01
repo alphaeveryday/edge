@@ -5,16 +5,17 @@ import os
 from datetime import date
 
 import numpy as np
-import psycopg2
 import pytest
 
 from edge_analysis.adapters.causal_data import CausalData
-
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("E2E_PGHOST"),
     reason="ephemeral Postgres 필요 — CI e2e job 전용(E2E_PGHOST 미설정)",
 )
+# skipif 뒤에 둔다. 모듈 상단에서 import 하면 psycopg2 없는 환경에서 **수집 단계**가
+# 죽어 스킵이 작동하지 않는다 - 스킵 조건이 있는데도 전체 스위트가 못 돈다.
+psycopg2 = pytest.importorskip("psycopg2")
 
 
 def _pg_kwargs() -> dict:

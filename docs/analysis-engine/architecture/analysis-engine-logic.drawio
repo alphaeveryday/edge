@@ -1,0 +1,407 @@
+<mxfile host="Electron" pages="2">
+  <diagram name="run() 제어 흐름" id="0">
+    <mxGraphModel dx="1001" dy="690" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="3300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=26;fontStyle=1;" value="analysis-engine — analyze 페이즈 run() 로직" vertex="1">
+          <mxGeometry height="40" width="1200" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=13;fontColor=#555555;" value="edge_analysis/pipeline.py::run — 통합 파이프라인 SFN(raw→정제→feature→analyze)의 마지막 페이즈. feature 산출물만 읽는다(ADR-0028 · ALPHA-411/412)." vertex="1">
+          <mxGeometry height="30" width="1400" x="40" y="62" as="geometry" />
+        </mxCell>
+        <mxCell id="lgA" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=12;" value="입력 표면 (읽기 전용)" vertex="1">
+          <mxGeometry height="30" width="340" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lgB" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;" value="제어 흐름 (코드 소유)" vertex="1">
+          <mxGeometry height="30" width="600" x="520" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lgC" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=12;" value="산출물 · 예외" vertex="1">
+          <mxGeometry height="30" width="380" x="1300" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="① 진입 · composition root&#xa;python -m edge_analysis [--trade-date --request-id]&#xa;cli.py 가 Settings·LakeReader·EventStore·DeepSeekClient·s3 를 조립해 주입&#xa;트리거 없으면 오늘(Asia/Seoul)" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="in_env" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="환경변수 → Settings&#xa;ALPHAMALE_ETF_TICKER(091160)&#xa;CAUSAL_ENABLED · CAUSAL_SANDBOX_ENABLED&#xa;CAUSAL_REGISTRY_ROOT · EDGE_DOMAIN_BUCKET&#xa;PG* · DEEPSEEK_API_KEY" vertex="1">
+          <mxGeometry height="100" width="340" x="40" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="② 마스터 해소&#xa;store.load_entity_index()  → ticker→instrument_id 전량&#xa;store.resolve_etf_instrument(ticker) → (instrument_id, display_name)" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="in_master" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" value="Postgres (Cloud Event Store)&#xa;instrument · entity.display_name" vertex="1">
+          <mxGeometry height="80" width="340" x="40" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="마스터에 ETF 있나?" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="PipelineError · 비0 종료&#xa;폴백 instrument_id 금지 —&#xa;남의 계보를 조용히 오염(ALPHA-467)" vertex="1">
+          <mxGeometry height="80" width="380" x="1300" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="③ 가격 로드 (L1 재료)&#xa;lake.load_holdings(ticker, KR, trade_date) → canonical holdings + asof&#xa;lake.load_returns(KR, trade_date) → ticker→일간수익률&#xa;표시명(name_by_ticker)은 이 ETF holdings 에서만 파생" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="in_lake" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" value="S3 raw lake&#xa;ALPHAMALE_LAKE_BUCKET&#xa;canonical holdings · daily returns" vertex="1">
+          <mxGeometry height="90" width="340" x="40" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="holdings 가 비었나?" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="PipelineError&#xa;구성종목 0 · proxy_ret None 인 packet 을 보내면&#xa;입력 결손이 정상 분석으로 위장된다(Rule 12)" vertex="1">
+          <mxGeometry height="80" width="380" x="1300" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="④ 분해 (순수 도메인 · domain/decomposition.py)&#xa;member.contribution = weight × ret,  가격 없는 종목은 제외&#xa;proxy_ret = Σ(w·r) / Σw   ← 커버리지 정규화, 트리거 writer 와 같은 산식&#xa;rank = |contribution| 내림차순 · top1 · top3 · advancing · coverage" vertex="1">
+          <mxGeometry height="100" width="600" x="520" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑤ L0 게이트 = 계산이 아니라 소비 (ALPHA-411)&#xa;store.fetch_price_trigger(etf_instrument_id, trade_date)&#xa;이행기 중복이면 최신 detected_at" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="950" as="geometry" />
+        </mxCell>
+        <mxCell id="in_trig" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" value="price_movement_trigger&#xa;(writer = data-pipeline load-price-triggers)" vertex="1">
+          <mxGeometry height="80" width="340" x="40" y="950" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="트리거 행이 있나?" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="1080" as="geometry" />
+        </mxCell>
+        <mxCell id="a_calm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="평온한 날 = 일급 답&#xa;run archive {outcome: normal_variation}&#xa;→ log(done) · return 0" vertex="1">
+          <mxGeometry height="80" width="380" x="1300" y="1080" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑥ 라우팅 (decide_route)&#xa;top1 ≥ 0.5 → CONCENTRATED (단일 종목 주도)&#xa;그 외 → COMMON_FACTOR&#xa;event_search 는 두 경로 모두 True" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="1220" as="geometry" />
+        </mxCell>
+        <mxCell id="n7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑦ L1 · route 계보 적재 (트리거 insert 없음)&#xa;obs_id = stable_id(&quot;cob&quot;, trigger_id) · route_id = stable_id(&quot;rte&quot;, obs_id)&#xa;ON CONFLICT DO NOTHING (재실행 멱등)" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="1360" as="geometry" />
+        </mxCell>
+        <mxCell id="w1" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=10;" value="WRITE&#xa;etf_contribution_observation&#xa;etf_contribution_member (종목별 비중·수익·기여·순위)&#xa;explanation_route (route_code · event_search_required)" vertex="1">
+          <mxGeometry height="110" width="380" x="1300" y="1350" as="geometry" />
+        </mxCell>
+        <mxCell id="n8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑧ 사건 문맥 조회 (읽기 전용 · ALPHA-412)&#xa;store.fetch_event_contexts(trade_date, holdings 전 티커)&#xa;3쿼리 분리 — head(DISTINCT ON) · 참여자 전원 · 측정값 전부&#xa;단일 조인이면 사건당 참여자 1명으로 붕괴" vertex="1">
+          <mxGeometry height="100" width="600" x="520" y="1500" as="geometry" />
+        </mxCell>
+        <mxCell id="in_ev" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" value="source_event · event_thread&#xa;event_argument(slot·entity_id) · event_measure&#xa;(writer = data-pipeline assemble-events)" vertex="1">
+          <mxGeometry height="100" width="340" x="40" y="1500" as="geometry" />
+        </mxCell>
+        <mxCell id="n9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑨ 인과 표면 주입 — 같은 커넥션 = 같은 PIT 기준&#xa;causal_data()   고정 함수 표면(코호트·정렬열·비중·industry_map)&#xa;sql_surface(as_of=now, trade_date)   P2·P3·P5 의 자유 SELECT (시점 클램프는 뷰 안)&#xa;DomainDocs   버킷 있을 때만 부착 — 없으면 조회 없이 진행" vertex="1">
+          <mxGeometry height="100" width="600" x="520" y="1650" as="geometry" />
+        </mxCell>
+        <mxCell id="in_docs" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" value="EDGE_DOMAIN_BUCKET (선택)&#xa;정기보고서 「사업의 내용」 RAG" vertex="1">
+          <mxGeometry height="80" width="340" x="40" y="1660" as="geometry" />
+        </mxCell>
+        <mxCell id="n10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑩ adapters/llm.py::analyze — 시그니처 고정 · 의존성만 주입&#xa;후보(_candidates)를 코드가 조립: event_id · available_at · event_type_code&#xa;· predicate_code · share(비중) · prior(타입 사전) — 모델이 발명할 자리를 없앤다" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="1800" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="CAUSAL_ENABLED?" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="1940" as="geometry" />
+        </mxCell>
+        <mxCell id="n11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;fontStyle=1;" value="⑪ 인과귀속 P0–P9 (causal/run.py::explain)&#xa;→ 2페이지 상세. 산출 = Explanation.raw (verdict · 본문 · raw.causal 감사블록)" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="2080" as="geometry" />
+        </mxCell>
+        <mxCell id="n12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="단일 프롬프트 경로 (fallback)&#xa;domain/packet.py::build_packet&#xa;→ client.complete_json(system, packet)&#xa;산업분류 원장 백필 전 코호트 공백 대비" vertex="1">
+          <mxGeometry height="90" width="380" x="1300" y="2080" as="geometry" />
+        </mxCell>
+        <mxCell id="d5" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="Explanation.is_valid?  (verdict + 본문)" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="2220" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="PipelineError&#xa;빈 설명을 영속하지 않는다" vertex="1">
+          <mxGeometry height="60" width="380" x="1300" y="2230" as="geometry" />
+        </mxCell>
+        <mxCell id="n13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑫ 에이전트 trace 기록 (인과 경로일 때만)&#xa;write_agent_trace(s3, settings, collect_trace())" vertex="1">
+          <mxGeometry height="70" width="600" x="520" y="2360" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_trace" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" value="S3 · agent trace&#xa;(내용 없는 파일은 만들지 않는다)" vertex="1">
+          <mxGeometry height="70" width="380" x="1300" y="2360" as="geometry" />
+        </mxCell>
+        <mxCell id="n14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑬ _persist_explanation&#xa;store.explanation_prerequisites → {etf_profile 존재, explanation_route id, release_bundle}&#xa;primary_thread_id = thread_id 붙은 첫 이벤트 (events[0] 아님 — unthreaded 가 먼저 오면 계보 단절)" vertex="1">
+          <mxGeometry height="90" width="600" x="520" y="2490" as="geometry" />
+        </mxCell>
+        <mxCell id="d6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="FK 전제가 다 있나?" vertex="1">
+          <mxGeometry height="80" width="600" x="520" y="2620" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_fb" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="S3 폴백 · 임의 FK 값을 만들지 않는다&#xa;write_explanation_to_s3(...)&#xa;log(explanation_result.skipped, missing=[...])" vertex="1">
+          <mxGeometry height="80" width="380" x="1300" y="2620" as="geometry" />
+        </mxCell>
+        <mxCell id="n15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑭ 한 트랜잭션 (store.persist_explanation)&#xa;explanation_run → explanation_result(DRAFT/게시 게이트)&#xa;→ explanation_run_event_evidence (stage_code=PROMPT)&#xa;→ _fanout_new: 테넌트마다 tenant_delivery NEW 1행 (advisory lock 으로 cursor 직렬화)" vertex="1">
+          <mxGeometry height="110" width="600" x="520" y="2760" as="geometry" />
+        </mxCell>
+        <mxCell id="w2" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=10;" value="WRITE (원자적)&#xa;explanation_run · explanation_result&#xa;explanation_run_event_evidence&#xa;tenant_delivery(NEW) — write-time fan-out, ALPHA-493" vertex="1">
+          <mxGeometry height="120" width="380" x="1300" y="2750" as="geometry" />
+        </mxCell>
+        <mxCell id="n16" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑮ 런 아카이브 — 매 런 1건 (평온 종료 포함, ALPHA-415)&#xa;{result prefix}/runs/etf=…/trade_date=…/{request_id}.json&#xa;분해 요약 · 소비 트리거 · route · 이벤트 · LLM 원문 · 영속 결과&#xa;기록 실패는 런을 죽이지 않는다" vertex="1">
+          <mxGeometry height="100" width="600" x="520" y="2940" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_arch" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" value="S3 · run archive&#xa;operations_archive/etf_explanations/" vertex="1">
+          <mxGeometry height="80" width="340" x="40" y="2950" as="geometry" />
+        </mxCell>
+        <mxCell id="n17" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1;" value="return 0" vertex="1">
+          <mxGeometry height="60" width="240" x="700" y="3110" as="geometry" />
+        </mxCell>
+        <mxCell id="e_a" edge="1" parent="1" source="n1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_b" edge="1" parent="1" source="n2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_c" edge="1" parent="1" source="d1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="e1" value="없음">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_d" edge="1" parent="1" source="d1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n3" value="있음">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_e" edge="1" parent="1" source="n3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_f" edge="1" parent="1" source="d2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="e2" value="예">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_g" edge="1" parent="1" source="d2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n4" value="아니오">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_h" edge="1" parent="1" source="n4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_i" edge="1" parent="1" source="n5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_j" edge="1" parent="1" source="d3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="a_calm" value="없음 (평온)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_k" edge="1" parent="1" source="d3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n6" value="있음">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_l" edge="1" parent="1" source="n6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_m" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_n" edge="1" parent="1" source="n8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_o" edge="1" parent="1" source="n9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_p" edge="1" parent="1" source="n10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_q" edge="1" parent="1" source="d4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n11" value="true">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_r" edge="1" parent="1" source="d4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n12" value="false">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_s" edge="1" parent="1" source="n11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_t" edge="1" parent="1" source="n12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="d5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_u" edge="1" parent="1" source="d5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="e3" value="아니오">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_v" edge="1" parent="1" source="d5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n13" value="예">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_w" edge="1" parent="1" source="n13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="s3_trace">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_x" edge="1" parent="1" source="n13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n14">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_y" edge="1" parent="1" source="n14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_z" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="s3_fb" value="결손">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_aa" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n15" value="충족">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ab" edge="1" parent="1" source="n15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="w2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ac" edge="1" parent="1" source="n15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ad" edge="1" parent="1" source="n16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="s3_arch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ae" edge="1" parent="1" source="n16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n17">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_af" edge="1" parent="1" source="in_env" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ag" edge="1" parent="1" source="in_master" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ah" edge="1" parent="1" source="in_lake" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ai" edge="1" parent="1" source="in_trig" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_aj" edge="1" parent="1" source="in_ev" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ak" edge="1" parent="1" source="in_docs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_al" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="w1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="P0–P9 인과귀속" id="1">
+    <mxGraphModel dx="1334" dy="920" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="2700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="p2t" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=26;fontStyle=1;" value="causal/run.py::explain — P0–P9 단계별 폐쇄" vertex="1">
+          <mxGeometry height="40" width="1200" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p2s" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=13;fontColor=#555555;" value="어느 단계도 건너뛰지 않는다 — 후보가 산술로 전멸하거나 가설이 0개여도 P8 은 돈다(처분 폐쇄). 수치는 전부 원장에서 오고 모델이 타이핑할 자리가 없다." vertex="1">
+          <mxGeometry height="30" width="1500" x="40" y="62" as="geometry" />
+        </mxCell>
+        <mxCell id="lg1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;" value="코드 소유 (결정적)" vertex="1">
+          <mxGeometry height="30" width="240" x="40" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="lg2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=12;" value="LLM 세션" vertex="1">
+          <mxGeometry height="30" width="200" x="300" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="lg3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=12;" value="게이트 · 분기" vertex="1">
+          <mxGeometry height="30" width="200" x="520" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="q0" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P0 · 질문 고정 (p0_question.ask)&#xa;반사실을 문장으로 정의 · residual(잔차) 산출 · Šidák 스캔 보정 p_scan&#xa;답의 형태를 먼저 선언한다 — 무료" vertex="1">
+          <mxGeometry height="90" width="760" x="440" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="ag" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="산술 게이트 (engine.arithmetic_gate) — LLM 전에 돈다&#xa;무게 없는 원인은 여기서 죽는다: share·prior 로 잔차를 못 채우면 killed&#xa;가장 싼 게이트가 가장 세다" vertex="1">
+          <mxGeometry height="90" width="760" x="440" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="q1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P1 · 지문 채취 (p1_fingerprint.take)&#xa;모양 · 폭 · 시점 · 사전표류 · 크기. 가설 이전, LLM 이전&#xa;후보가 전멸해도 뜬다 — 못 잰 축이 P8 의 미결 항목이 된다" vertex="1">
+          <mxGeometry height="90" width="760" x="440" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="ne" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="no_explanandum?  (잔차가 이 셀 자신의 귀무분포 안)" vertex="1">
+          <mxGeometry height="80" width="760" x="440" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="ne_y" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="alive = []&#xa;LLM 을 부르지 않는다 — 부르면 반드시 무언가를 찾아내고&#xa;그 서사는 검출 하한 아래라 반증 불가능하다" vertex="1">
+          <mxGeometry height="80" width="420" x="1300" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="q2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P2 · 다중 가설 (p2_hypotheses.propose · n=3, 세션 독립)&#xa;어휘 무제한 — 골격도 후보 목록도 주지 않는다. 어휘를 닫으면 새 메커니즘을 영영 못 본다&#xa;가설마다 role: 배경조건 · 촉발원 · 전달경로 · 증폭 · 종료 (probable_cause 는 복수)" vertex="1">
+          <mxGeometry height="100" width="760" x="440" y="680" as="geometry" />
+        </mxCell>
+        <mxCell id="q3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P3 · 그래프 + 공통원인 완비 (p3_graph.build)&#xa;그린 변수의 공통원인을 전수 선언(Hernán 조건)&#xa;assignment=chosen(배당·자사주·가이던스)이면 컴파일러가 U ↔ (T,Y) 를 심고 모델이 지울 수 없다&#xa;구조 위반(시간 역행 등)은 violations 로 적재" vertex="1">
+          <mxGeometry height="110" width="760" x="440" y="820" as="geometry" />
+        </mxCell>
+        <mxCell id="q4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P4 · 식별 3값 (p4_identify.identify_all)&#xa;identified / identified_under(가정) / not_identified&#xa;빈 조정집합 ≠ 뒷문 없음. not_identified 는 실패가 아니라 정상 종료&#xa;지지집합(support)은 타입 과거 최대에서 — 유계 가정 없이는 Manski 경계가 무한하다" vertex="1">
+          <mxGeometry height="110" width="760" x="440" y="970" as="geometry" />
+        </mxCell>
+        <mxCell id="q5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P5 · 판별 설계 (p5_discriminate.design) ★&#xa;선언된 U 마다 소거 검정을 설계. 못 적으면 미소거로 확정&#xa;미소거 U 가 하나라도 있으면 &quot;원인으로 확인됐습니다&quot; 가 구조적으로 나갈 수 없다" vertex="1">
+          <mxGeometry height="100" width="760" x="440" y="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="gv" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="graph.violations 있나?" vertex="1">
+          <mxGeometry height="80" width="760" x="440" y="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="gv_y" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="estimate_skipped&#xa;구조 검사는 무료, 검정은 가장 비싸다 —&#xa;시간 역행 그래프로 세션을 열면 그 추정치가 처분까지 올라간다" vertex="1">
+          <mxGeometry height="80" width="420" x="1300" y="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="est" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="검정 실행 (_estimate) — 가장 비싸다.  간선 하나마다 표본을 만든다&#xa;statistical 간선만 대상 · ADMG(방향 + 잠재 양방향)로 브리프를 만들어 U 를 보게 한다&#xa;placebo 로 귀무분포를 붙이고, 값은 원장 호출 기록에서만 읽는다 — 모델이 타이핑한 p 는 게이트 G4 가 거부" vertex="1">
+          <mxGeometry height="110" width="760" x="440" y="1390" as="geometry" />
+        </mxCell>
+        <mxCell id="sbx" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="CAUSAL_SANDBOX_ENABLED&#xa;true → LLM 이 쓴 코드를 제한 exec&#xa;   (as_of 바인딩 · 창 절단 · __ 금지 · import 허용목록 · 타임아웃)&#xa;false → 축약 경로(고정 추정량). 같은 산출 계약(_as_proof)&#xa;ops 킬스위치 — 프롬프트 주입 표면이다" vertex="1">
+          <mxGeometry height="130" width="360" x="40" y="1380" as="geometry" />
+        </mxCell>
+        <mxCell id="bud" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="예산 (chain.budget) — 회계 폐쇄&#xa;사슬을 세우고 statistical 칸을 검정 결과로 채운다&#xa;귀속의 합이 잔차를 넘으면(over_budget) 그래프가 틀렸다 — 카이제곱보다 싸고 날카롭다&#xa;관계 폐쇄: share 는 coincident 쌍에서만 정의된다(배타·포섭·직렬을 평탄 합산 금지)" vertex="1">
+          <mxGeometry height="110" width="760" x="440" y="1550" as="geometry" />
+        </mxCell>
+        <mxCell id="q6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P6 · 민감도 (p6_sensitivity.evaluate) — E-value&#xa;식별이 안 될 때 강도를 재는 유일한 축: 미관측 교란이 처치·결과와 얼마나 강해야 뒤집히나&#xa;결과 산포는 대조 표본(n ≥ 30)에서 — 귀무 산포로 대신하면 E-value 가 부풀어 오른다" vertex="1">
+          <mxGeometry height="100" width="760" x="440" y="1710" as="geometry" />
+        </mxCell>
+        <mxCell id="q7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P7 · 음성대조 · 혼재 스크린 (p7_negative + _screen)&#xa;영향 없어야 할 자리가 조용한가 · 같은 날 다른 공시로 처치군이 오염됐나&#xa;처치군을 특정하지 못하면 &quot;검사했다&quot; 고 말하지 않는다" vertex="1">
+          <mxGeometry height="100" width="760" x="440" y="1860" as="geometry" />
+        </mxCell>
+        <mxCell id="q8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P8 · 처분 원장 (p8_findings.dispose → narrate) — 조건 없이 돈다&#xa;검토한 전건을 기여 / 비기여 / 미결 중 하나로 판정. 침묵 금지&#xa;screened 전량을 넘긴다 — 죽은 후보만 넘기면 산술 통과 후 가설로 못 선 후보가 원장에서 사라진다&#xa;커버리지 폐쇄: 메커니즘 8영역(정보·공통충격·수급·미시구조·피드백·제도·측정·무사건) 개방 여부 기재&#xa;narrate 가 주장 상한을 어긴 문장을 PipelineError 로 막는다" vertex="1">
+          <mxGeometry height="140" width="760" x="440" y="2010" as="geometry" />
+        </mxCell>
+        <mxCell id="q9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="P9 · 누적 (p9_registry.record)&#xa;CAUSAL_REGISTRY_ROOT 있을 때만 — 단일 사례 귀속은 반복으로만 검정력을 얻는다&#xa;비면 소환 기록 없음을 로그로 남긴다(조용히 사라지지 않는다)" vertex="1">
+          <mxGeometry height="90" width="760" x="440" y="2200" as="geometry" />
+        </mxCell>
+        <mxCell id="out" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="Explanation.raw&#xa;verdict · 본문 · raw.causal 감사블록&#xa;(처분 전건 · 미소거 U · 식별 상태와 가정 · 판별 검정 · 민감도 · 음성대조 · 원장 전량 · 에이전트가 쓴 코드)" vertex="1">
+          <mxGeometry height="90" width="760" x="440" y="2350" as="geometry" />
+        </mxCell>
+        <mxCell id="sql" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="자유 질의 표면 (sql_surface)&#xa;P2 · P3 · P5 만 쓴다. 시점 클램프는 뷰 안&#xa;없으면 세 단계가 조회 없이 돌고&#xa;판별 검정이 전부 실행 불가 →&#xa;주장 상한이 자동으로 내려간다" vertex="1">
+          <mxGeometry height="130" width="360" x="40" y="820" as="geometry" />
+        </mxCell>
+        <mxCell id="cd" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="고정 함수 표면 (causal_data)&#xa;코호트 · 정렬열 · 비중 · industry_map&#xa;검정은 무엇을 잴지 정해진 뒤의 일" vertex="1">
+          <mxGeometry height="90" width="360" x="40" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="p_a" edge="1" parent="1" source="q0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="ag">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_b" edge="1" parent="1" source="ag" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_c" edge="1" parent="1" source="q1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="ne">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_d" edge="1" parent="1" source="ne" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="ne_y" value="예">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_e" edge="1" parent="1" source="ne" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="q2" value="아니오 (alive &gt; 0)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_f" edge="1" parent="1" source="q2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_g" edge="1" parent="1" source="q3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_h" edge="1" parent="1" source="q4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_i" edge="1" parent="1" source="q5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="gv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_j" edge="1" parent="1" source="gv" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="gv_y" value="있음">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_k" edge="1" parent="1" source="gv" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="est" value="없음">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_l" edge="1" parent="1" source="est" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="bud">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_m" edge="1" parent="1" source="sbx" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="est">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_n" edge="1" parent="1" source="bud" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_o" edge="1" parent="1" source="q6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_p" edge="1" parent="1" source="q7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_q" edge="1" parent="1" source="q8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="q9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_r" edge="1" parent="1" source="q9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_s" edge="1" parent="1" source="ne_y" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.25;entryDx=0;entryDy=0;" target="q8" value="alive = [] 여도 P8 은 돈다">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1750" y="600" />
+              <mxPoint x="1750" y="2045" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p_t" edge="1" parent="1" source="sql" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="q3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p_u" edge="1" parent="1" source="cd" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="q4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

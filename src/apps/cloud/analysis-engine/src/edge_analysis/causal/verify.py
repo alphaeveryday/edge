@@ -25,7 +25,7 @@ import numpy as np
 
 from ..observability import log
 from . import sandbox as SB
-from .engine import NMIN, EdgeDesign, identify
+from .engine import NMIN, EdgeDesign
 
 MAX_TURNS = 6
 
@@ -176,15 +176,24 @@ class EdgeProof:
 
 
 def plan(nodes: dict, edges: list, design: EdgeDesign, *,
-         prior: dict | None = None) -> dict:
+         prior: dict | None = None, ident=None) -> dict:
     """간선의 검정 브리프를 **코드가** 만든다. 조정집합·모집단·허용 귀무 전부 여기서.
 
     배제제약 열거(도구변수 후보)도 그래프에서 알고리즘적이다 - 에이전트가 발명할 일이
-    아니다. 조정으로 식별이 안 되면 그 사실과 대안을 **알려주고** 검정을 맡긴다.
+    아니다.
+
+    `ident` 는 P4 가 낸 `Identification` 이다. 안 주면 여기서 `nodes`·`edges` 로 최소
+    그래프를 만들어 **같은 구현**(`p4_identify.identify`)을 부른다 - 식별 구현이 둘이면
+    브리프에 적힌 전략과 P8 이 원장에 적는 전략이 갈린다. 옛 2값 `engine.identify` 는
+    그래서 삭제됐다.
+
+    3값을 그대로 싣는 이유: `adjust=[]` 는 "뒷문이 없다"가 아니라 "조정으로 막을 것이
+    없다"이고, 그 둘은 U 가 걸려 있을 때 정반대다. 검정 세션이 그 차이를 봐야 축약형·
+    부분식별로 내려갈지 `impossible` 을 낼지 고를 수 있다.
     """
     a, b = design.src, design.dst
-    ident = identify(nodes, edges, a, b)
-    zs = ident["adjust"]
+    ident = ident if ident is not None else _identify(nodes, edges, a, b)
+    zs = list(ident.adjust)
     claims = design.claims if design.claims in NULL_OK else "L2"
     keep = [n for n in [a, b, *zs] if n in nodes]
     return {
@@ -193,10 +202,15 @@ def plan(nodes: dict, edges: list, design: EdgeDesign, *,
         "timing": design.timing,
         "nodes": {n: nodes[n] for n in keep},
         "adjust": zs,
-        "adjust_alt": ident["alternatives"],
-        "identified_by_adjustment": ident["strategy"] == "adjustment",
-        "strategy": ident["strategy"],
-        "iv": ident["iv"],
+        "adjust_alt": [list(x) for x in ident.alternatives],
+        "identified_by_adjustment": ident.status == "identified",
+        "status": ident.status,
+        "strategy": _STRATEGY[ident.status] if not ident.iv else "iv",
+        "iv": list(ident.iv),
+        "assumptions": list(ident.assumptions),
+        "blocked_by": list(ident.blocked_by),
+        "bounds": ident.bounds,
+        "bounds_note": ident.bounds_note,
         "n_min": NMIN.get(design.scope, 8),
         "null_ok": sorted(NULL_OK[claims]),
         "treated_hint": design.treated,
@@ -211,18 +225,40 @@ def plan(nodes: dict, edges: list, design: EdgeDesign, *,
     }
 
 
+_STRATEGY = {"identified": "adjustment", "identified_under": "adjustment",
+             "not_identified": "none"}
+
+
+def _identify(nodes: dict, edges: list, a: str, b: str):
+    """`nodes`·`edges` 만 있을 때의 최소 그래프. **완비 선언이 없다고 적는다.**
+
+    선언 없는 그래프에서 빈 조정집합은 "교란이 없다"와 "아무도 교란을 안 그렸다"가
+    구별되지 않는다 - P4 가 그 경우를 `identified_under` 로 강등하는데, 그 강등이 여기서도
+    그대로 일어나야 한다. 편의를 위해 완비를 지어내면 옛 체제가 되살아난다.
+    """
+    from . import graph as _G
+    from .contracts import Latent, WorldGraph
+    from .p4_identify import identify as _p4
+
+    d, bi = _G.split(edges)
+    lat = [Latent(uid=f"U#{i}", between=pair, says="선언된 미지의 공통원인",
+                  source="declared") for i, pair in enumerate(bi)]
+    return _p4(WorldGraph(nodes=dict(nodes),
+                          edges=[{"from": x, "to": y} for x, y in d],
+                          latents=lat), a, b)
+
+
 def brief(p: dict) -> str:
     L = [f"간선  {p['from']}  →  {p['to']}", ""]
     for n, m in p["nodes"].items():
-        # 새 계약의 노드 메타는 `says`(무엇을 어떤 단위로 재는가)·`observed`(어떻게 관측하나)
-        # 다. 옛 필드(kind·unit·measure)만 읽으면 검정 세션이 `kind=? unit=?` 만 보고 노드가
-        # 무엇인지 모른 채 코드를 쓴다 - 매개 노드(PAYOUT 등)에서 특히 치명적이다.
-        says = str(m.get("says") or m.get("measure") or "").strip()
+        # 노드 메타는 `says`(무엇을 어떤 단위로 재는가)·`observed`(어떻게 관측하나) 둘뿐이다.
+        # 옛 어휘(kind·unit·measure) 폴백을 지웠다 - 그걸 만드는 생산자가 하나도 없는데
+        # 폴백만 남으면 옛 어휘가 유효한 것처럼 보여 픽스처가 다시 그쪽으로 샌다(실측).
+        says = str(m.get("says") or "").strip()
         obs = m.get("observed")
         seen = "관측 불가(잠재)" if obs in (None, "", False) else str(obs)
         L.append(f"  [{n}]  {says}")
-        L.append(f"          관측: {seen}"
-                 + (f"  단위: {m['unit']}" if m.get("unit") else ""))
+        L.append(f"          관측: {seen}")
     L += ["",
           f"주장     : {p['say']}",
           f"메커니즘 : {p['because']}",
@@ -231,15 +267,23 @@ def brief(p: dict) -> str:
           f"범위     : scope={p['scope']}  최소표본 n≥{p['n_min']}",
           f"주장층위 : {p['claims']} ({CLAIM_SAY.get(p['claims'], '')}) "
           f"→ 허용 null_kind = {p['null_ok']}",
-          f"조정집합 : {p['adjust'] if p['adjust'] else '없음 (뒷문이 열려 있지 않다)'}"]
-    if not p["identified_by_adjustment"]:
-        L.append("           **조정으로는 식별 불가** - X <-> Y 미지의 공통원인이 있다.")
-        if p["iv"]:
-            L.append(f"           도구변수 후보 (배제제약 성립): {p['iv']}")
-            L.append("           2단계로 추정해라. 1단계 Z→X, 2단계 예측값→Y.")
-        else:
-            L.append("           도구변수 후보 없음. 축약형·부분식별로 내려가거나 "
-                     "impossible 을 내라.")
+          f"식별상태 : {p['status']}",
+          f"조정집합 : {p['adjust'] if p['adjust'] else '없음'}"]
+    # **"뒷문이 열려 있지 않다" 를 여기서 지웠다.** 빈 조정집합은 세계에 대한 진술이
+    # 아니라 그래프에 대한 진술이고, 그 문구가 검정 세션에게 교란이 없다고 오인시켰다.
+    if p["blocked_by"]:
+        L.append(f"           막고 있는 미관측 공통원인: {p['blocked_by']}")
+    if p["assumptions"]:
+        L.append("           **이 가정 아래에서만 식별된다** - 가정이 깨지면 추정도 깨진다:")
+        L += [f"             · {a}" for a in p["assumptions"]]
+    if p["status"] == "not_identified":
+        L.append("           **점식별 불가.** 축약형·부분식별로 내려가거나 impossible 을 내라.")
+        if p["bounds"]:
+            lo, hi = p["bounds"]
+            L.append(f"           가정 아래 경계: [{lo:+.2%}, {hi:+.2%}] - {p['bounds_note']}")
+    if p["iv"]:
+        L.append(f"           도구변수 후보 (배제제약 성립): {p['iv']}")
+        L.append("           2단계로 추정해라. 1단계 Z→X, 2단계 예측값→Y.")
     if p["adjust_alt"]:
         L.append(f"           (동등 대안: {p['adjust_alt']})")
     if p["treated_hint"] or p["control_hint"]:

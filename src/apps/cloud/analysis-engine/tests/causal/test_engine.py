@@ -5,6 +5,9 @@
   · x·y·z 가 같은 pairs 에서 나온다 (단위 불일치 불가)
   · 순열은 설계가 조건화한 것을 보존한다 (층화)
   · 산술 게이트가 LLM 전에 돈다 (무게 없는 원인은 무료로 죽는다)
+
+식별 테스트는 `test_p4_identify.py` 로 이사했다 - 2값 `engine.identify` 가 삭제되고
+3값 `p4_identify.identify` 하나로 통합됐다.
 """
 
 import dataclasses
@@ -14,12 +17,7 @@ import numpy as np
 import pytest
 
 from edge_analysis.causal import graph as G
-from edge_analysis.causal.engine import (
-    EdgeDesign,
-    arithmetic_gate,
-    estimate,
-    identify,
-)
+from edge_analysis.causal.engine import EdgeDesign, arithmetic_gate, estimate
 from edge_analysis.config import PipelineError
 
 D0, D1 = date(2026, 7, 1), date(2026, 7, 29)
@@ -132,36 +130,6 @@ def test_unknown_strata_vocabulary_is_rejected():
     with pytest.raises(PipelineError, match="strata"):
         estimate(_FakeData(), dataclasses.replace(DESIGN, strata="whatever"),
                  as_of=AS_OF, w0=D0, w1=D1, adjust=[])
-
-
-def test_identify_picks_adjustment_when_confounder_is_measured():
-    nodes = {"S@t-3": {}, "X@t-2": {}, "Y@t0": {}}
-    edges = [{"from": "S@t-3", "to": "X@t-2"}, {"from": "S@t-3", "to": "Y@t0"},
-             {"from": "X@t-2", "to": "Y@t0"}]
-
-    got = identify(nodes, edges, "X@t-2", "Y@t0")
-
-    assert got["strategy"] == "adjustment"
-    assert got["adjust"] == ["S@t-3"]
-
-
-def test_identify_falls_back_to_iv_when_bidirected_blocks_adjustment():
-    nodes = {"Z@t-9": {}, "X@t-2": {}, "Y@t0": {}}
-    edges = [{"from": "Z@t-9", "to": "X@t-2"}, {"from": "X@t-2", "to": "Y@t0"},
-             {"from": "X@t-2", "to": "Y@t0", "kind": "bidirected"}]
-
-    got = identify(nodes, edges, "X@t-2", "Y@t0")
-
-    assert got["strategy"] == "iv"
-    assert got["iv"] == ["Z@t-9"]
-
-
-def test_identify_reports_none_when_no_strategy_exists():
-    nodes = {"X@t-2": {}, "Y@t0": {}}
-    edges = [{"from": "X@t-2", "to": "Y@t0"},
-             {"from": "X@t-2", "to": "Y@t0", "kind": "bidirected"}]
-
-    assert identify(nodes, edges, "X@t-2", "Y@t0")["strategy"] == "none"
 
 
 def test_arithmetic_gate_kills_weightless_cause_for_free():
