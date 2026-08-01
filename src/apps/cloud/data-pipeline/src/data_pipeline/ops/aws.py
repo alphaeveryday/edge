@@ -50,7 +50,21 @@ def ssm_client():
 
 
 def sqs_client():
-    """Outbox Relay 발행용(ALPHA-670). SFN/ECS 와 같은 관례 — region 명시·지연 import."""
-    import boto3
+    """Outbox Relay 발행용(ALPHA-670). region 명시·지연 import 는 SFN/ECS 와 같은 관례.
 
-    return boto3.client("sqs", region_name=_region())
+    **SDK 자체 재시도를 끈다**(`max_attempts=1`). 재시도 권위는 PostgreSQL 뿐이라는 게
+    확정 계약인데(v0.7 12.4), boto3 기본 정책이 자기 backoff 로 여러 번 재호출하면 그
+    동안 outbox 의 attempt_count·next_attempt_at 은 그대로라 DB 가 아는 시도 횟수와
+    실제가 갈린다. 게다가 그 사이 claim lease 가 만료돼 다른 Relay 가 같은 event 를
+    집어 중복 발행이 늘어난다. 한 번 실패하면 DB 에 기록하고 다음 tick 이 정한다.
+    """
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "sqs",
+        region_name=_region(),
+        config=Config(
+            connect_timeout=5, read_timeout=10, retries={"max_attempts": 1}
+        ),
+    )

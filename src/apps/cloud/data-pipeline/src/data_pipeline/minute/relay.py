@@ -32,9 +32,24 @@ from .models import canonical_json
 
 logger = logging.getLogger(__name__)
 
-# SQS 상한 — SendMessageBatch 는 요청당 10건, 메시지 하나는 256KiB.
+# 계획 §11·v0.7 12.1 이 고정한 큐 3종. 이 어휘를 두는 이유는 **기동 시 검증**이다:
+# 매핑에 빠진 destination 이 있으면 그 큐로 갈 event 가 전부 DEAD 로 몰살되는데,
+# DEAD 는 스스로 풀리지 않는다(redrive 는 PR 7A). 설정 오타 하나가 배달을 통째로
+# 파괴하는 경로라, 런타임 격리에 맡기지 않고 기동을 거부해 배포 실패로 드러낸다.
+KNOWN_DESTINATIONS = frozenset({
+    "price-analysis-realtime",
+    "news-extraction-realtime",
+    "news-extraction-backfill",
+})
+
+# SQS 상한 (docs: SQS Developer Guide "Amazon SQS message quotas", 2026-08 확인) —
+# 배치 요청당 10건, 메시지 하나 1 MiB, 배치 합계도 1 MiB(SendMessageBatch API 참조).
+# ⚠️ 이 숫자는 **벤더 계약**이라 드리프트한다. 상한을 작게 잡으면 멀쩡한 메시지가
+# terminal(DEAD)로 확정되고 상수를 고쳐도 그 행은 재평가되지 않는다 — 바꿀 때 문서로
+# 재확인할 것(과거 256 KiB 였다).
 SQS_BATCH_LIMIT = 10
-SQS_MAX_MESSAGE_BYTES = 262_144
+SQS_MAX_MESSAGE_BYTES = 1_048_576
+SQS_MAX_BATCH_BYTES = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -64,14 +79,19 @@ class RelayConfig:
     # transient 재시도 간격 = base * 2**attempt, cap 까지. DB 가 시각의 권위다.
     retry_base_seconds: int = 2
     retry_max_seconds: int = 300
-    # 이 횟수를 채우면 DEAD 로 격리한다 — 조용히 무한 재시도하면 backlog 가 영원히 안 준다
-    max_attempts: int = 8
 
     def __post_init__(self) -> None:
+        missing = KNOWN_DESTINATIONS - set(self.queue_urls)
+        if missing:
+            # 런타임 DEAD 격리는 **한 건짜리 사고**를 막는 장치지, 설정 누락 같은
+            # 전면적 사고까지 감당하지 못한다 — 그 경우 해당 큐의 event 가 전부
+            # 되돌릴 수 없는 DEAD 가 된다. 여기서 기동을 막는다.
+            raise ValueError(
+                f"queue_urls 에 필수 destination 이 없다: {sorted(missing)} — "
+                "설정 누락이면 그 큐의 event 가 전부 DEAD 로 격리된다"
+            )
         if self.batch_limit < 1:
             raise ValueError("batch_limit 은 1 이상이어야 한다")
-        if self.max_attempts < 1:
-            raise ValueError("max_attempts 는 1 이상이어야 한다")
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_base_seconds <= retry_max_seconds 여야 하고 둘 다 양수다")
 
@@ -87,6 +107,29 @@ def build_message_body(event: dict) -> str:
         "event_type": event["event_type"],
         "payload": event["payload"],
     })
+
+
+def _chunk_by_size(messages: list[OutboxMessage]) -> list[list[OutboxMessage]]:
+    """건수(10)와 **합계 바이트**(1 MiB) 둘 다로 쪼갠다.
+
+    건수만 보면 큰 메시지 몇 건이 한 요청에 몰려 `BatchRequestTooLong` 으로 **요청
+    전체**가 거부된다 — 같은 묶음이 반복 실패하다 예산을 소진해 전부 DEAD 가 된다.
+    """
+    chunks: list[list[OutboxMessage]] = []
+    current: list[OutboxMessage] = []
+    current_bytes = 0
+    for message in messages:
+        size = len(message.body.encode("utf-8"))
+        if current and (
+            len(current) >= SQS_BATCH_LIMIT or current_bytes + size > SQS_MAX_BATCH_BYTES
+        ):
+            chunks.append(current)
+            current, current_bytes = [], 0
+        current.append(message)
+        current_bytes += size
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 class SqsPublisher:
@@ -123,27 +166,40 @@ class SqsPublisher:
                 ))
             else:
                 sendable.append(message)
-        for start in range(0, len(sendable), SQS_BATCH_LIMIT):
-            chunk = sendable[start : start + SQS_BATCH_LIMIT]
+        for chunk in _chunk_by_size(sendable):
+            # Id 는 요청 안에서만 유일하면 된다 — event_id 를 그대로 쓰면 SQS 의 Id 제약
+            # (영숫자·하이픈·언더스코어 80자)에 걸릴 수 있어 순번을 쓴다
+            by_id = {str(index): message for index, message in enumerate(chunk)}
             response = self.client.send_message_batch(
                 QueueUrl=queue_url,
                 Entries=[
-                    # Id 는 요청 안에서만 유일하면 된다 — event_id 를 그대로 쓰면 SQS 의
-                    # Id 문자 제약(영숫자·하이픈·언더스코어 80자)에 걸릴 수 있어 순번을 쓴다
-                    {"Id": str(index), "MessageBody": message.body}
-                    for index, message in enumerate(chunk)
+                    {"Id": entry_id, "MessageBody": message.body}
+                    for entry_id, message in by_id.items()
                 ],
             )
-            for entry in response.get("Successful", ()):
-                published.add(chunk[int(entry["Id"])].event_id)
-            for entry in response.get("Failed", ()):
-                message = chunk[int(entry["Id"])]
-                failures.append(PublishFailure(
-                    message.event_id,
-                    f"{entry.get('Code')}: {entry.get('Message')}",
-                    # SenderFault = 요청 자체가 틀렸다(잘못된 큐·형식) — 재시도 무의미
-                    terminal=bool(entry.get("SenderFault")),
-                ))
+            seen: set[str] = set()
+            for kind in ("Successful", "Failed"):
+                for entry in response.get(kind, ()):
+                    # 보낸 Id 와 **정확히** 대조한다. int() 로 강제하면 "-1"·"00" 같은
+                    # 응답이 엉뚱한 message 를 가리켜 다른 event 가 PUBLISHED 로 확정되고
+                    # (재발행 대상에서 빠져) 조용히 유실된다.
+                    message = by_id.get(entry.get("Id"))
+                    if message is None or message.event_id in seen:
+                        # 보내지 않은 Id·중복 보고 — 어느 event 의 결과인지 알 수 없다.
+                        # 버리면 해당 event 는 아래 "미보고" 경로로 재시도된다(안전한 쪽).
+                        logger.error("SQS 응답의 Id 가 요청과 안 맞는다: %r", entry.get("Id"))
+                        continue
+                    seen.add(message.event_id)
+                    if kind == "Successful":
+                        published.add(message.event_id)
+                    else:
+                        failures.append(PublishFailure(
+                            message.event_id,
+                            f"{entry.get('Code')}: {entry.get('Message')}",
+                            # SenderFault = 요청 자체가 틀렸다 — 재시도 무의미
+                            # `bool("false")` 는 True 다 — 진짜 bool 만 terminal 로 본다
+                            terminal=entry.get("SenderFault") is True,
+                        ))
         return frozenset(published), tuple(failures)
 
 
@@ -219,6 +275,8 @@ class OutboxRelay:
                     else:
                         # claim 을 잃은 뒤의 성공 보고 — 메시지는 이미 나갔고 행은 NEW 로
                         # 남아 재발행된다. Consumer 가 event_id 로 흡수한다(v0.7 9절).
+                        # 깨끗한 성공이 아니므로 tick 상태에 드러낸다(PARTIAL).
+                        failed += 1
                         logger.warning("published 기록 거부(claim 상실): %s", event["event_id"])
                 else:
                     # 성공에도 실패에도 없는 event — 발행 여부를 모른다. 성공으로 접으면
@@ -232,28 +290,35 @@ class OutboxRelay:
     def _record_failures(
         self, events, now: datetime, error: str, terminal: bool
     ) -> int:
-        recorded = 0
+        """실패를 기록하고 **시도한 건수**를 돌려준다.
+
+        기록 성공 수가 아니라 시도 수인 이유: CAS 가 거부돼도(다른 Relay 가 lease 를
+        가져감) 이 tick 에서 발행에 실패한 사실은 그대로다. 성공 수로 세면 발행이
+        하나도 안 된 tick 이 PUBLISHED 로 보고된다(Rule 12).
+        """
+        attempted = 0
         for event in events:
-            attempt = event["attempt_count"] + 1
-            # 예산을 소진했으면 transient 여도 격리한다 — 안 그러면 backlog 가 영원히
-            # 안 줄고 oldest-age 알람만 계속 울린다(운영자가 볼 수 있는 상태로 옮긴다)
-            is_terminal = terminal or attempt >= self.config.max_attempts
-            next_attempt_at = None if is_terminal else now + timedelta(
+            # ⚠️ **일시 실패는 횟수로 포기하지 않는다.** 시도 예산을 두면 몇 분짜리 SQS
+            # 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데, 이 단계엔 redrive 경로가
+            # 없다(PR 7A) — 큐가 복구돼도 그 행은 영원히 발행되지 않는다. 지연은 알람이
+            # 잡지만(backlog·oldest-age, PR 7D) 유실은 아무도 못 되돌린다.
+            # DEAD 는 **event 자체가 발행 불가**일 때만이다(미정의 destination·크기 초과·
+            # SenderFault) — 그건 재시도해도 결과가 같다.
+            next_attempt_at = None if terminal else now + timedelta(
                 seconds=min(
                     self.config.retry_base_seconds * (2 ** event["attempt_count"]),
                     self.config.retry_max_seconds,
                 )
             )
-            if self.jobs.record_publish_failure(
+            attempted += 1
+            if not self.jobs.record_publish_failure(
                 event_id=event["event_id"], relay_id=self.config.relay_id,
                 claim_token=event["claim_token"], now=now,
-                next_attempt_at=next_attempt_at, error=error, terminal=is_terminal,
+                next_attempt_at=next_attempt_at, error=error, terminal=terminal,
             ):
-                recorded += 1
-            else:
                 # claim 상실 — 다른 Relay 가 이 event 를 가져갔다. 기록은 그쪽이 한다.
                 logger.warning("실패 기록 거부(claim 상실): %s", event["event_id"])
-        return recorded
+        return attempted
 
 
 def relay_cli(settings, *, max_ticks: int | None = None) -> int:
@@ -291,7 +356,6 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
             batch_limit=options.batch_limit, lease_seconds=options.lease_seconds,
             retry_base_seconds=options.retry_base_seconds,
             retry_max_seconds=options.retry_max_seconds,
-            max_attempts=options.max_attempts,
         ),
     )
     for received in (signal.SIGTERM, signal.SIGINT):
@@ -299,13 +363,17 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
         signal.signal(received, lambda *_: relay.request_stop())
     logger.info("relay 시작: id=%s 큐 %s", relay.config.relay_id, sorted(options.queue_urls))
     ticks = 0
+    partial = 0
     while max_ticks is None or ticks < max_ticks:
         state = relay.tick(datetime.now(timezone.utc))
         ticks += 1
+        partial += state == "PARTIAL"
         if state == "STOPPED":
-            logger.info("relay 종료(SIGTERM) — %d tick", ticks)
+            logger.info("relay 종료(SIGTERM) — %d tick, PARTIAL %d", ticks, partial)
             return 0
         if state == "IDLE":
             time.sleep(options.tick_seconds)
-    logger.info("relay 종료(max-ticks %d 도달)", ticks)
-    return 0
+    # bounded 모드(--max-ticks)는 게이트로 쓰인다 — 발행 실패가 있었는데 exit 0 이면
+    # 호출자가 "다 나갔다"로 오독한다. 상주 모드는 여기 도달하지 않는다.
+    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d", ticks, partial)
+    return 1 if partial else 0

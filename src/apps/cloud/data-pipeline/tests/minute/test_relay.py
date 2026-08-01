@@ -25,6 +25,7 @@ from minutefakes import FakeMinuteDB
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.jobs import JobLedger
 from data_pipeline.minute.relay import (
+    OutboxMessage,
     OutboxRelay,
     relay_cli,
     PublishFailure,
@@ -150,7 +151,7 @@ class TestOneEventCannotStopTheRelay:
     def test_oversized_message_is_terminal(self, tmp_path):
         # 재시도해도 영원히 안 들어가는 메시지 — transient 로 두면 backlog 가 안 빈다
         db = FakeMinuteDB()
-        enqueue(db, "huge", payload={"blob": "x" * 300_000})
+        enqueue(db, "huge", payload={"blob": "x" * 1_100_000})  # 1 MiB 초과
         relay = build_relay(db, publisher=SqsPublisher(client=object()))
         assert relay.tick(NOW) == "PARTIAL"
         assert db.outbox["huge"]["status"] == "DEAD"
@@ -192,18 +193,23 @@ class TestRetryBudget:
             delays.append((db.outbox["e1"]["next_attempt_at"] - at).total_seconds())
         assert delays == [2, 4, 8]
 
-    def test_budget_exhaustion_isolates_as_dead(self, tmp_path):
-        # 무한 재시도는 backlog 를 영원히 붙잡는다 — 예산을 소진하면 조회 가능한
-        # terminal 로 옮겨 운영자가 보게 한다(v0.7 11.1)
+    def test_long_outage_never_turns_transient_into_dead(self, tmp_path):
+        # ⚠️ 시도 횟수로 포기하면 몇 분짜리 SQS 장애가 event 를 되돌릴 수 없는 DEAD 로
+        # 만든다 — 이 단계엔 redrive 가 없어(PR 7A) 큐가 복구돼도 영원히 미발행이다.
+        # 지연은 알람이 잡지만 유실은 아무도 못 되돌린다.
         db = FakeMinuteDB()
         enqueue(db, "e1")
-        relay = build_relay(db, publisher=FakePublisher(failures=[PublishFailure("e1", "503")]),
-                            max_attempts=3)
-        for attempt in range(3):
+        broken = FakePublisher(failures=[PublishFailure("e1", "ServiceUnavailable: 503")])
+        relay = build_relay(db, publisher=broken)
+        for attempt in range(20):
             relay.tick(NOW + timedelta(hours=attempt))
         row = db.outbox["e1"]
-        assert row["status"] == "DEAD" and row["attempt_count"] == 3
-        assert row["next_attempt_at"] is None
+        assert row["status"] == "NEW", "일시 장애가 event 를 영구 폐기했다"
+        assert row["attempt_count"] == 20 and row["next_attempt_at"] is not None
+        # 큐가 돌아오면 그대로 발행된다
+        relay.publisher = FakePublisher()
+        assert relay.tick(NOW + timedelta(hours=21)) == "PUBLISHED"
+        assert db.outbox["e1"]["status"] == "PUBLISHED"
 
     def test_sender_fault_is_terminal_immediately(self, tmp_path):
         # 요청 자체가 틀린 실패(SenderFault)는 재시도해도 같다
@@ -274,17 +280,25 @@ class TestShutdown:
 class TestConfigGuards:
     @pytest.mark.parametrize(
         ("field", "value"),
-        [("batch_limit", 0), ("max_attempts", 0), ("retry_base_seconds", 0)],
+        [("batch_limit", 0), ("retry_base_seconds", 0)],
     )
     def test_invalid_config_fails_loud(self, field, value):
         with pytest.raises(ValueError):
             RelayConfig(relay_id="r", queue_urls=QUEUES, **{field: value})
 
+    def test_missing_known_destination_refuses_to_start(self):
+        # ⚠️ 런타임 DEAD 격리는 한 건짜리 사고용이다. 큐 매핑에서 destination 하나가
+        # 빠지면 그 큐로 갈 event 가 **전부** DEAD 가 되는데 DEAD 는 스스로 안 풀린다
+        # (redrive=PR 7A). 설정 오타를 데이터 파괴가 아니라 배포 실패로 만든다.
+        partial = {k: v for k, v in QUEUES.items() if k != "news-extraction-backfill"}
+        with pytest.raises(ValueError, match="news-extraction-backfill"):
+            RelayConfig(relay_id="r", queue_urls=partial)
+
     def test_backoff_cap_is_respected(self, tmp_path):
         db = FakeMinuteDB()
         enqueue(db, "e1")
         relay = build_relay(db, publisher=FakePublisher(failures=[PublishFailure("e1", "503")]),
-                            retry_base_seconds=2, retry_max_seconds=5, max_attempts=99)
+                            retry_base_seconds=2, retry_max_seconds=5)
         for attempt in range(4):
             relay.tick(NOW + timedelta(hours=attempt))
         assert (db.outbox["e1"]["next_attempt_at"] - (NOW + timedelta(hours=3))).total_seconds() == 5
@@ -295,6 +309,95 @@ class TestEnvelopeDeterminism:
         event = {"event_id": "e1", "event_type": "NewsExtractionRequested",
                  "payload": {"b": 2, "a": 1}}
         assert build_message_body(event) == build_message_body(dict(event))
+
+
+class TestSqsResponseGate:
+    """SqsPublisher 가 **실제 SQS 응답 형상**을 소비하는 경로. FakePublisher 로는
+    이 게이트가 전혀 검증되지 않는다(응답을 event_id 집합으로 선처리하므로) — 여기서만
+    Id 대조·청킹 경계가 반례에 걸린다."""
+
+    class StubSqs:
+        def __init__(self, responses=None):
+            self.responses = list(responses or [])
+            self.requests: list[dict] = []
+
+        def send_message_batch(self, **kwargs):
+            self.requests.append(kwargs)
+            if self.responses:
+                return self.responses.pop(0)
+            return {"Successful": [{"Id": e["Id"]} for e in kwargs["Entries"]]}
+
+    def _messages(self, count, body="{}"):
+        return tuple(OutboxMessage(f"e{i}", body) for i in range(count))
+
+    def test_partial_batch_failure_maps_to_right_events(self):
+        stub = self.StubSqs([{
+            "Successful": [{"Id": "0"}, {"Id": "2"}],
+            "Failed": [{"Id": "1", "Code": "InternalError", "Message": "boom"}],
+        }])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(3))
+        assert published == frozenset({"e0", "e2"})
+        assert [(f.event_id, f.terminal) for f in failures] == [("e1", False)]
+
+    def test_sender_fault_entry_is_terminal(self):
+        stub = self.StubSqs([{
+            "Failed": [{"Id": "0", "Code": "InvalidParameterValue",
+                        "Message": "bad", "SenderFault": True}],
+        }])
+        _, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        assert failures[0].terminal is True
+
+    @pytest.mark.parametrize("bogus_id", ["-1", "00", " 0", "9", "", "abc"])
+    def test_unknown_id_never_marks_another_event_published(self, bogus_id):
+        # ⚠️ int() 강제였다면 "-1" 이 chunk[-1](마지막 event)을 PUBLISHED 로 확정해
+        # 그 event 가 재발행 대상에서 빠진 채 조용히 유실된다
+        stub = self.StubSqs([{"Successful": [{"Id": bogus_id}]}])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(3))
+        assert published == frozenset(), f"보내지 않은 Id({bogus_id!r})가 성공 처리됐다"
+        assert failures == ()
+
+    def test_duplicate_id_reported_once(self):
+        stub = self.StubSqs([{
+            "Successful": [{"Id": "0"}],
+            "Failed": [{"Id": "0", "Code": "InternalError", "Message": "boom"}],
+        }])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        # 같은 Id 가 양쪽에 오면 먼저 온 판정만 쓴다 — 성공/실패를 동시에 세지 않는다
+        assert published == frozenset({"e0"}) and failures == ()
+
+    def test_missing_entry_is_left_unreported(self):
+        # 응답에 아예 없는 event 는 성공도 실패도 아니다 — Relay 가 "미보고"로 재시도한다
+        stub = self.StubSqs([{"Successful": [{"Id": "0"}]}])
+        published, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(2))
+        assert published == frozenset({"e0"}) and failures == ()
+
+    def test_chunks_by_count_of_ten(self):
+        stub = self.StubSqs()
+        published, _ = SqsPublisher(client=stub).publish_batch("q", self._messages(23))
+        assert [len(r["Entries"]) for r in stub.requests] == [10, 10, 3]
+        assert len(published) == 23
+
+    def test_chunks_by_total_bytes(self):
+        # 건수만 보면 큰 메시지 5건이 한 요청에 몰려 BatchRequestTooLong 으로 요청
+        # 전체가 거부되고, 같은 묶음이 예산 소진까지 반복 실패한다
+        stub = self.StubSqs()
+        big = tuple(OutboxMessage(f"e{i}", "x" * 400_000) for i in range(5))
+        published, _ = SqsPublisher(client=stub).publish_batch("q", big)
+        assert [len(r["Entries"]) for r in stub.requests] == [2, 2, 1]
+        assert len(published) == 5
+        for request in stub.requests:
+            total = sum(len(e["MessageBody"].encode()) for e in request["Entries"])
+            assert total <= 1_048_576
+
+    def test_oversized_single_message_never_reaches_sqs(self):
+        stub = self.StubSqs()
+        published, failures = SqsPublisher(client=stub).publish_batch(
+            "q", (OutboxMessage("big", "x" * 1_100_000), OutboxMessage("ok", "{}"))
+        )
+        assert published == frozenset({"ok"})
+        assert failures[0].event_id == "big" and failures[0].terminal is True
+        # 상한 초과분은 요청에 실리지 않는다 — 실리면 요청 전체가 거부된다
+        assert [len(r["Entries"]) for r in stub.requests] == [1]
 
 
 class TestCliGuards:
