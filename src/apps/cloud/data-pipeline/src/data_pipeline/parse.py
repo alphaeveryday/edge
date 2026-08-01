@@ -122,7 +122,7 @@ def krx_short_code(value: object) -> str | None:
     return code if _KRX_SHORT_CODE.match(code) else None
 
 
-_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
+_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})(\d{6})")
 
 
 def bigkinds_date(record: dict) -> str | None:
@@ -140,6 +140,34 @@ def bigkinds_date(record: dict) -> str | None:
         day = match.group(1)
         return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
     return None
+
+
+def bigkinds_datetime(record: dict) -> str | None:
+    """BigKinds row 의 발행 **시각**(YYYY-MM-DD HH:MM:SS) — 날짜는 bigkinds_date SSOT,
+    시각은 NEWS_ID 임베드 타임스탬프에서 온다.
+
+    인과귀속의 시간 분해는 τ(초 단위)로 하루를 자른다 — 날짜 해상도로는 모든 사건이
+    09:00 KST 한 창에 뭉쳐 분해가 퇴화한다(2026-08-01 실측: RDB available_at distinct
+    62개, 셀 하나에서 77건 병합). NEWS_ID 는 `언론사코드.YYYYMMDDHHMMSS연번` 꼴로
+    시각을 이미 갖고 있었고, 종전 정규식이 날짜 8자리만 캡처해 버리고 있었다.
+
+    두 가지를 지킨다:
+    - **파티션 불변식**: 반환값의 날짜부는 bigkinds_date 와 항상 같다. NEWS_ID 의
+      날짜가 DATE 필드와 어긋나면 그 시각은 버린다 — published_date 파티션과
+      published_at 이 드리프트하면 멱등 병합이 다른 파티션에 같은 기사를 만든다.
+    - **자정 폴백**: 시각 6자리가 시계로 성립하지 않으면(25시 등) 날짜만 돌려준다.
+      쓰레기 시각이 parse_datetime 에서 None 이 되면 행 전체가 게이트에서 죽는다 —
+      시각을 잃는 것과 기사를 잃는 것은 다른 사고다."""
+    day = bigkinds_date(record)
+    if day is None:
+        return None
+    match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
+    if match:
+        d, t = match.groups()
+        same_day = f"{d[:4]}-{d[4:6]}-{d[6:8]}" == day
+        if same_day and t[:2] < "24" and t[2:4] < "60" and t[4:6] < "60":
+            return f"{day} {t[:2]}:{t[2:4]}:{t[4:6]}"
+    return day
 
 
 def news_article_id(record: dict) -> str:

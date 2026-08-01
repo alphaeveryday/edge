@@ -43,9 +43,9 @@ from ..lake import (
     parse_raw_news_key,
     quality_log_key,
 )
-# BigKinds 날짜 파생(bigkinds_date)은 parse 의 벤더 date SSOT — ingest 도 같은 함수를 써
-# raw 파티션 published_date 와 canonical published_at 이 드리프트하지 않는다.
-from ..parse import bigkinds_date, news_article_id, normalize_url, parse_datetime, url_hash
+# BigKinds 발행 시각 파생(bigkinds_datetime)은 parse 의 벤더 SSOT — 날짜부가 ingest 의
+# bigkinds_date(raw 파티션 published_date)와 항상 같다는 불변식을 그 함수가 보장한다.
+from ..parse import bigkinds_datetime, news_article_id, normalize_url, parse_datetime, url_hash
 from ..quality import BLOCKING_REASONS, validate_news_meta
 
 logger = logging.getLogger(__name__)
@@ -161,9 +161,10 @@ def _normalize(vendor: str, record: dict) -> dict:
         url = _text(record, "PROVIDER_LINK_PAGE")
         publisher = _text(record, "PROVIDER")
         market = "KR"
-        # BigKinds 발행시각은 날짜 단위(시각 없음) — bigkinds_date 가 None 이면 가짜 문자열을
         # 조립하지 않고 그대로 None → parse_datetime(None)=None → 게이트가 unparseable 로 잡음.
-        published_at = parse_datetime(bigkinds_date(record))
+        # 시각은 NEWS_ID 임베드에서 온다(초 단위) — 날짜부는 bigkinds_date 와 동일함이
+        # bigkinds_datetime 의 불변식이라 published_date 파티션은 종전과 같다.
+        published_at = parse_datetime(bigkinds_datetime(record))
         lead = _text(record, "CONTENT")
     else:  # fmp
         title = _text(record, "title")

@@ -132,3 +132,31 @@ def test_normalize_url_non_string_returns_none_not_crash():
     assert normalize_url(123) is None
     assert normalize_url([]) is None
     assert normalize_url(None) is None
+
+
+def test_bigkinds_datetime_recovers_seconds_from_news_id():
+    # WHY: 인과귀속의 시간 분해는 τ 초 단위로 하루를 자른다 — 날짜 해상도로는 하루의
+    #      모든 사건이 09:00 한 창에 뭉쳐 퇴화한다(2026-08-01 실측, 설계 블로커 4).
+    #      NEWS_ID 가 시각을 이미 갖고 있으므로 여기서 복원돼야 한다.
+    from data_pipeline.parse import bigkinds_datetime
+    r = {"DATE": "20260601", "NEWS_ID": "01100701.20260601060314001"}
+    assert bigkinds_datetime(r) == "2026-06-01 06:03:14"
+    assert parse_datetime(bigkinds_datetime(r)) == "2026-06-01T06:03:14+00:00"
+
+
+def test_bigkinds_datetime_keeps_partition_invariant_on_date_mismatch():
+    # WHY: published_at[:10] 이 published_date 파티션과 어긋나면 멱등 병합이 같은
+    #      기사를 두 파티션에 만든다 — DATE 가 날짜 SSOT 이므로 NEWS_ID 시각은 버린다.
+    from data_pipeline.parse import bigkinds_date, bigkinds_datetime
+    r = {"DATE": "20260602", "NEWS_ID": "01100701.20260601060314001"}
+    assert bigkinds_datetime(r) == "2026-06-02"           # 자정 폴백
+    assert bigkinds_datetime(r)[:10] == bigkinds_date(r)  # 불변식
+
+
+def test_bigkinds_datetime_invalid_clock_falls_back_to_date_not_none():
+    # WHY: 쓰레기 시각이 parse_datetime 에서 None 이 되면 게이트가 행 전체를 죽인다 —
+    #      시각을 잃는 것과 기사를 잃는 것은 다른 사고다.
+    from data_pipeline.parse import bigkinds_datetime
+    assert bigkinds_datetime({"NEWS_ID": "01100701.20260601256199001"}) == "2026-06-01"
+    assert bigkinds_datetime({"DATE": "20260601"}) == "2026-06-01"   # 시각 원천 없음
+    assert bigkinds_datetime({}) is None
