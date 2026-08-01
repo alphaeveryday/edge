@@ -829,6 +829,39 @@ class TestLifecycle:
         # 두 번째 job 은 자기 손으로 마감했다 — CLAIMED 로 남지 않는다
         assert db.jobs[("news", second)]["status"] == "SUCCEEDED"
 
+    def test_first_heartbeat_accounts_for_time_already_spent(self, env):
+        # prepare 에 거의 한 주기를 쓰고 또 한 주기를 기다리면, 설정 검증이 보장한
+        # "만료 전에 연장이 도착한다"가 깨진다 — 대기는 **남은 시간**이어야 한다
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        _job_id, message = env.enqueue()
+        released = threading.Event()
+
+        def slow(*, job_id, payload, attempt, **_):
+            assert released.wait(10)
+            return CHECKSUM
+
+        consumer = make_consumer(
+            db, sqs, slow, heartbeat_seconds=2, visibility_seconds=40,
+            lease_seconds=40, batch_size=1,
+        )
+        original_fetch = consumer.jobs.fetch_job
+
+        def slow_fetch(**kwargs):
+            time.sleep(1.9)      # 주기(2초)를 **거의** 다 쓴다 — 검사는 아직 안 걸린다
+            return original_fetch(**kwargs)
+
+        consumer.jobs.fetch_job = slow_fetch
+        started = time.monotonic()
+        threading.Timer(2.5, released.set).start()
+        consumer.tick(NOW)
+        elapsed = time.monotonic() - started
+
+        # 남은 시간(0.1초)만 기다렸다면 heartbeat 은 ~2초에 돈다. 주기를 새로 주면
+        # ~3.9초라 handler 가 풀리는 2.5초를 넘겨 연장이 아예 안 돈다.
+        assert (message.receipt_handle, 40) in sqs.visibility_changes, (
+            f"heartbeat 대기가 경과 시간을 무시했다({elapsed:.1f}s)"
+        )
+
     def test_heartbeat_failure_does_not_abandon_in_flight_work(self, env):
         # heartbeat 는 best-effort 다 — 여기서 예외가 새면 정리 루프까지 무너져 남은
         # 실행이 lease 연장 없이 계속 돌고 재청구·중복 실행이 된다

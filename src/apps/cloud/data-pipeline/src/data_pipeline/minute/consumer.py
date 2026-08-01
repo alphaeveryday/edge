@@ -476,11 +476,9 @@ class MinuteConsumer:
                     self._heartbeat_running(running, now)
                     last_heartbeat = time.monotonic()
             while pending:
-                done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
-                for future in pending:
-                    # 아직 안 끝난 것 = 실행 중이거나 pool 대기열에 있는 것. 둘 다 claim 은
-                    # 이미 잡혀 있으므로 visibility 와 lease 를 함께 민다.
-                    self._heartbeat(running[future], now)
+                done, pending, last_heartbeat = self._await_round(
+                    pending, running, now, last_heartbeat
+                )
                 failure = None
                 for future in done:
                     # 하나가 터져도 **나머지 결과는 센다** — 먼저 raise 하면 같은
@@ -499,15 +497,33 @@ class MinuteConsumer:
                 logger.error("tick 이 예외로 중단됐다 — 실행 중 job %d건을 마저 기다린다",
                              len(pending))
             while pending:
-                done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
-                for future in pending:
-                    self._heartbeat(running[future], now)
+                done, pending, last_heartbeat = self._await_round(
+                    pending, running, now, last_heartbeat
+                )
                 for future in done:
                     error = future.exception()
                     if error is not None:
                         # 이미 예외 처리 중이라 올리지는 못한다 — 조용히 버리지도 않는다
                         logger.error("중단된 tick 의 잔여 job 실패: %r", error)
         return counts
+
+    def _await_round(self, pending: set, running: dict, now: datetime,
+                     last_heartbeat: float) -> tuple:
+        """다음 heartbeat 시각까지만 기다리고, 때가 됐으면 in-flight 를 민다.
+
+        ⚠️ 대기 시간은 **마지막 heartbeat 이후 남은 시간**이다. 매번 주기 전체를 새로
+        주면 claim 루프에 이미 쓴 시간이 무시돼, 설정 검증이 보장한 "만료 전에 연장이
+        도착한다"가 깨진다(거의 한 주기를 쓰고 또 한 주기를 기다리게 된다).
+        """
+        remaining = self.config.heartbeat_seconds - (time.monotonic() - last_heartbeat)
+        done, pending = wait(pending, timeout=max(0.0, remaining))
+        if pending and time.monotonic() - last_heartbeat >= self.config.heartbeat_seconds:
+            for future in pending:
+                # 아직 안 끝난 것 = 실행 중이거나 pool 대기열에 있는 것. 둘 다 claim 은
+                # 이미 잡혀 있으므로 visibility 와 lease 를 함께 민다.
+                self._heartbeat(running[future], now)
+            last_heartbeat = time.monotonic()
+        return done, pending, last_heartbeat
 
     def _heartbeat_running(self, running: dict, now: datetime) -> None:
         for future, claimed in running.items():
