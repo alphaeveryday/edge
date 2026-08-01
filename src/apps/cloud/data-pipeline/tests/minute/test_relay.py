@@ -144,6 +144,46 @@ class TestPublishing:
         assert {r["status"] for r in db.outbox.values()} == {"PUBLISHED"}
 
 
+class TestLaneIsolation:
+    def test_failing_lane_does_not_starve_healthy_lanes(self, tmp_path):
+        # ⚠️ 공용 Relay 를 쓰는 근거가 "가격 장애가 뉴스 발행을 막지 않는다"(v0.7 11.1)다.
+        # 전역 FIFO 로 집으면 장애 레인의 오래된 재시도 행이 매 batch 를 채워 그 근거가
+        # claim 층에서 무너진다 — destination 별로 나눠 집어야 한다.
+        db = FakeMinuteDB()
+        for index in range(30):  # 가격 레인이 batch 를 가득 채울 만큼 오래된 행
+            enqueue(db, f"price{index}", destination="price-analysis-realtime")
+        enqueue(db, "news1", destination="news-extraction-realtime")  # 가장 나중에 들어옴
+        failing = FakePublisher(failures=[
+            PublishFailure(f"price{i}", "ServiceUnavailable: 503") for i in range(30)
+        ])
+        relay = build_relay(db, publisher=failing, batch_limit=10)
+        assert relay.tick(NOW) == "PARTIAL"
+        assert db.outbox["news1"]["status"] == "PUBLISHED", "가격 장애가 뉴스를 굶겼다"
+
+    def test_unknown_destination_rows_are_still_claimed(self, tmp_path):
+        # destination 별 claim 은 설정에 없는 큐의 행을 건너뛴다 — 그것만 따로 집어
+        # 격리하지 않으면 영원히 NEW 로 남아 아무도 모른다
+        db = FakeMinuteDB()
+        enqueue(db, "orphan", destination="retired-queue")
+        enqueue(db, "ok")
+        relay = build_relay(db)
+        assert relay.tick(NOW) == "PARTIAL"
+        assert db.outbox["orphan"]["status"] == "DEAD"
+        assert db.outbox["ok"]["status"] == "PUBLISHED"
+
+    def test_sweep_does_not_lease_healthy_rows(self, tmp_path):
+        # 전역으로 집은 뒤 골라내면 처리하지 않을 정상 행까지 lease 로 묶여 그만큼
+        # 발행이 밀린다 — 집을 것만 집어야 한다
+        db = FakeMinuteDB()
+        for index in range(15):
+            enqueue(db, f"e{index}")
+        relay = build_relay(db, batch_limit=10)
+        relay.tick(NOW)
+        leftover = [r for r in db.outbox.values() if r["status"] == "NEW"]
+        assert len(leftover) == 5
+        assert all(r["claimed_by"] is None for r in leftover), "처리 안 할 행을 묶어뒀다"
+
+
 class TestOneEventCannotStopTheRelay:
     def test_unknown_destination_is_isolated_not_fatal(self, tmp_path):
         # ⚠️ 예외로 죽으면 그 행이 outbox 에 남아 다음 tick 도 같은 자리에서 죽고,
@@ -581,7 +621,7 @@ class TestCliGuards:
             lambda: FakePublisher(),
         )
         assert relay_cli(settings, max_ticks=1) == 1  # 15건 남았다
-        assert relay_cli(settings, max_ticks=5) == 0  # 비우고 IDLE 로 확인됨
+        assert relay_cli(settings, max_ticks=5) == 0  # 미발행 0건으로 확인됨
         assert {r["status"] for r in db.outbox.values()} == {"PUBLISHED"}
 
     def test_missing_queue_mapping_fails_loud(self):

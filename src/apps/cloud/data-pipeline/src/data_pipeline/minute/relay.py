@@ -276,7 +276,8 @@ class SqsPublisher:
                         # SenderFault 인데, 그건 배포로 고쳐지는 설정 문제지 event 의
                         # 결함이 아니다 — 그걸 DEAD 로 확정하면 URL 오타 하나가 레인
                         # 전체를 되돌릴 수 없게 만든다(redrive 는 PR 7A).
-                        # terminal 은 **그 메시지 자체가 못 실리는 경우**로 좁힌다.
+                        # terminal 은 **그 메시지 자체가 못 실리는 경우**로 좁힌다:
+                        # 코드가 결함 목록에 있고 SenderFault 도 참일 때만.
                         # 코드가 메시지 결함이면서 **필수 필드 SenderFault 도 참**일
                         # 때만 terminal 이다. 필드가 없거나 False 인 모순 응답을
                         # terminal 로 접으면 malformed 응답 한 번이 영구 누락을 만든다.
@@ -323,15 +324,29 @@ class OutboxRelay:
             # 진행 중 batch 는 이미 끝났다(tick 단위) — claim 을 잡은 채 죽지 않는다.
             # 잡힌 채 남더라도 claim_expires_at 만료로 다음 Relay 가 회수한다.
             return "STOPPED"
-        batch = self.jobs.claim_outbox_batch(
+        # **destination 별로 나눠 집는다** — 한 번에 집으면 장애 난 레인의 오래된 재시도
+        # 행이 batch 를 채워 멀쩡한 레인이 계속 밀린다(가격 장애가 뉴스 발행을 막지
+        # 않는다는 게 공용 Relay 의 근거였다 — v0.7 11.1).
+        by_destination: dict[str, list[dict]] = {}
+        for destination in sorted(self.config.queue_urls):
+            claimed = self.jobs.claim_outbox_batch(
+                relay_id=self.config.relay_id, now=now,
+                limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
+                destination=destination,
+            )
+            if claimed:
+                by_destination[destination] = claimed
+        # 설정에 없는 destination 으로 쓰인 행은 위 루프가 집지 않는다 — 남겨두면 영원히
+        # NEW 로 남아 아무도 모른다. **그것만** 집어 격리한다(전역으로 집은 뒤 골라내면
+        # 처리하지 않을 정상 행까지 lease 로 묶어 그만큼 발행이 밀린다).
+        for event in self.jobs.claim_outbox_batch(
             relay_id=self.config.relay_id, now=now,
             limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
-        )
-        if not batch:
-            return "IDLE"
-        by_destination: dict[str, list[dict]] = {}
-        for event in batch:
+            exclude_destinations=tuple(self.config.queue_urls),
+        ):
             by_destination.setdefault(event["destination"], []).append(event)
+        if not by_destination:
+            return "IDLE"
         published = failed = 0
         # destination 정렬 — 같은 batch 를 두 번 돌려도 순서가 같아 로그가 비교 가능하다
         for destination in sorted(by_destination):
@@ -514,6 +529,11 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     # 뜻일 뿐이라(재시도 대기·타 Relay 점유 행은 claim 에 안 잡힌다) 완료 판정에 쓸 수
     # 없다 — **미발행 행을 실제로 세서** 판정한다.
     remaining = relay.jobs.count_unpublished()
-    logger.info("relay 종료(max-ticks %d 도달) — PARTIAL %d, 미발행 %d건",
-                ticks, partial, remaining)
-    return 0 if remaining == 0 and partial == 0 else 1
+    logger.info(
+        "relay 종료(max-ticks %d 도달) — PARTIAL %d, 미발행 NEW %d건·DEAD %d건",
+        ticks, partial, remaining["NEW"], remaining["DEAD"],
+    )
+    if remaining["DEAD"]:
+        # DEAD 도 큐에 나간 적이 없다 — 기다려서 풀리지 않으므로 사람이 봐야 한다
+        logger.error("격리된 미발행 event %d건 — redrive 필요(PR 7A)", remaining["DEAD"])
+    return 0 if partial == 0 and not any(remaining.values()) else 1

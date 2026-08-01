@@ -158,10 +158,12 @@ class _Cursor:
             self._job_transition("price" if "price_window_job" in s else "news", params)
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
-        elif s.startswith("SELECT COUNT(*) FROM dataset_commit_outbox"):
-            self._rows = [(
-                sum(1 for r in self.db.outbox.values() if r["status"] == "NEW"),
-            )]
+        elif s.startswith("SELECT status, COUNT(*) FROM dataset_commit_outbox"):
+            counts: dict[str, int] = {}
+            for row in self.db.outbox.values():
+                if row["status"] in ("NEW", "DEAD"):
+                    counts[row["status"]] = counts.get(row["status"], 0) + 1
+            self._rows = sorted(counts.items())
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
             self._claim_outbox(params, s)
         elif "SET status = 'PUBLISHED'" in s:
@@ -440,10 +442,20 @@ class _Cursor:
         # 실제 RETURNING 에 attempt_count 가 없으면 Relay 의 backoff 가 IndexError 로
         # 죽는다 — fake 가 합성해 주면 그 회귀가 여기서 숨는다(Rule 9)
         assert "o.attempt_count" in sql, "outbox claim 은 attempt_count 를 반환해야 한다"
-        relay_id, claim_until, now, now2, limit = p
+        # destination 필터가 있는 변형은 파라미터가 6개다(SQL 과 파라미터 수를 함께 본다)
+        excluded = ()
+        destination = None
+        if "c.destination = %s" in sql:
+            relay_id, claim_until, now, now2, destination, limit = p
+        elif "NOT (c.destination = ANY(%s))" in sql:
+            relay_id, claim_until, now, now2, excluded, limit = p
+        else:
+            relay_id, claim_until, now, now2, limit = p
         eligible = sorted(
             (r for r in self.db.outbox.values()
              if r["status"] == "NEW"
+             and (destination is None or r["destination"] == destination)
+             and r["destination"] not in set(excluded)
              and (r["next_attempt_at"] is None or r["next_attempt_at"] <= now)
              and (r["claimed_by"] is None or r["claim_expires_at"] < now)),
             key=lambda r: r["seq"],

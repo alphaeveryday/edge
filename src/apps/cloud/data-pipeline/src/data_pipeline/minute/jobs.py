@@ -355,12 +355,34 @@ class JobLedger:
 
     def claim_outbox_batch(
         self, *, relay_id: str, now: datetime, limit: int, lease_seconds: int,
+        destination: str | None = None,
+        exclude_destinations: tuple[str, ...] = (),
     ) -> list[dict]:
         """미발행(NEW) event 를 batch claim 한다 — claim 은 status 가 아니라
-        claimed_by/claim_expires_at 이다(Relay crash 가 CLAIMED 고착을 만들지 않게)."""
+        claimed_by/claim_expires_at 이다(Relay crash 가 CLAIMED 고착을 만들지 않게).
+
+        `destination` 을 주면 그 큐의 event 만 집는다. **Relay 는 destination 별로 나눠
+        claim 한다** — 전역 FIFO 로 집으면 장애 난 레인의 오래된 재시도 행이 매 batch 를
+        채워 멀쩡한 레인이 계속 밀린다. 가격 장애가 뉴스 발행을 막지 않는다는 게 공용
+        Relay 를 쓰는 근거였다(v0.7 11.1) — 그 근거가 claim 층에서 무너진다.
+
+        `exclude_destinations` 는 그 나머지를 쓸어 담는 반대편이다(설정에 없는 큐로 쓰인
+        행 — 안 집으면 영원히 NEW 로 남아 아무도 모른다). **집을 것만 집어야 한다** —
+        전역으로 집은 뒤 골라내면 처리하지 않을 행까지 lease 로 묶어 그만큼 지연된다.
+        """
+        if destination is not None and exclude_destinations:
+            raise ValueError("destination 과 exclude_destinations 는 함께 쓸 수 없다")
+        destination_filter = ""
+        destination_params: tuple = ()
+        if destination is not None:
+            destination_filter = " AND c.destination = %s"
+            destination_params = (destination,)
+        elif exclude_destinations:
+            destination_filter = " AND NOT (c.destination = ANY(%s))"
+            destination_params = (sorted(exclude_destinations),)
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 UPDATE dataset_commit_outbox o
                 SET claimed_by = %s, claim_expires_at = %s
                 WHERE o.event_id IN (
@@ -368,6 +390,7 @@ class JobLedger:
                     WHERE c.status = 'NEW'
                       AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= %s)
                       AND (c.claimed_by IS NULL OR c.claim_expires_at < %s)
+                      {destination_filter}
                     ORDER BY c.created_at
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
@@ -375,7 +398,8 @@ class JobLedger:
                 RETURNING o.event_id, o.event_type, o.destination, o.payload,
                           o.claim_expires_at, o.attempt_count
                 """,
-                (relay_id, now + timedelta(seconds=lease_seconds), now, now, limit),
+                (relay_id, now + timedelta(seconds=lease_seconds), now, now,
+                 *destination_params, limit),
             )
             # attempt_count 는 Relay 의 지수 backoff 재료다 — 이 값 없이는 재시도 간격을
             # 시도 횟수에 따라 벌릴 수 없다(ALPHA-670). 시도 횟수로 DEAD 를 만들지는
@@ -386,17 +410,27 @@ class JobLedger:
                 for r in cur.fetchall()
             ]
 
-    def count_unpublished(self) -> int:
-        """아직 발행되지 않은 outbox event 수(NEW 전량 — 재시도 대기분 포함).
+    def count_unpublished(self) -> dict[str, int]:
+        """발행되지 않은 outbox event 수를 상태별로 — {"NEW": n, "DEAD": n}.
 
         배출 게이트(`relay --max-ticks`)가 "다 나갔나"를 판정하는 근거다. claim 결과가
         비었다는 것(IDLE)은 **지금 집을 게 없다**는 뜻일 뿐이다 — next_attempt_at 이
         미래인 행이나 다른 Relay 가 쥔 행은 claim 에 안 잡히므로, IDLE 을 완료로 읽으면
         남은 event 를 두고 성공으로 끝난다(Rule 12).
+
+        **DEAD 도 미발행이다** — 격리됐을 뿐 큐에 나간 적이 없다. 빼고 세면 격리분을
+        남긴 채 배출 성공으로 보고하게 된다. 둘을 나눠 돌려주는 이유는 조치가 달라서다:
+        NEW 는 기다리면 나가고, DEAD 는 사람이 봐야 한다(redrive=PR 7A).
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM dataset_commit_outbox WHERE status = 'NEW'")
-            return cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT status, COUNT(*) FROM dataset_commit_outbox
+                WHERE status IN ('NEW', 'DEAD') GROUP BY status
+                """
+            )
+            counts = dict(cur.fetchall())
+            return {"NEW": counts.get("NEW", 0), "DEAD": counts.get("DEAD", 0)}
 
     def mark_published(
         self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
@@ -423,8 +457,10 @@ class JobLedger:
         """발행 실패 기록 — transient 는 재시도 예약, terminal 은 DEAD 로 조회 가능 격리.
 
         ⚠️ terminal 판정의 주체는 **호출자(Relay)** 이고, 기준은 "재시도해도 결과가 같은가"
-        다(미정의 destination·크기 초과·SenderFault). 일시 실패를 시도 횟수로 DEAD 로
-        바꾸지 않는다 — 몇 분짜리 큐 장애가 되돌릴 수 없는 유실이 된다(ALPHA-670).
+        다 — 미정의 destination·크기 초과·메시지 본문 결함처럼 **그 event 자체가 못 나가는**
+        경우만이다. SenderFault 는 단독 근거가 아니다(잘못된 큐 URL·권한 오류도 SenderFault
+        인데 그건 배포로 고쳐진다). 일시 실패를 시도 횟수로 DEAD 로 바꾸지도 않는다 —
+        몇 분짜리 큐 장애가 되돌릴 수 없는 유실이 된다(ALPHA-670).
 
         transient 는 **미래** next_attempt_at 이 필수다 — 없으면 claim 해제 즉시 다시
         eligible 이 돼 같은 장애를 tight loop 로 두드린다."""
