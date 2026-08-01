@@ -420,6 +420,22 @@ def _parse(out: dict[str, Any], hypotheses: list[Hypothesis],
     # 모든 가설의 outcome 이 nodes 에 없다는 위반으로 되돌아온다.
     if hypotheses and OUTCOME_ID not in clean:
         clean[OUTCOME_ID] = {**hypotheses[0].nodes.get(OUTCOME_ID, {}), "events": []}
+    # 합집합은 **줄어들 수 없다.** 이 단계의 일은 합치고 공통원인을 얹는 것이지 가설의
+    # 노드를 재타이핑하는 것이 아닌데, 실제로 h3 의 처치 노드가 통째로 빠져 위반 하나로
+    # 검정 전체가 스킵됐다(2026-08-01 flash-20260801-01). 빠진 것은 그 가설의 정의
+    # 그대로 되돌려 놓는다 - 안 그린 가설은 식별도 처분도 못 받기 때문이다.
+    carried = 0
+    for h in hypotheses:
+        for nid, spec in (h.nodes or {}).items():
+            if nid in clean or not isinstance(spec, dict):
+                continue
+            clean[nid] = {**spec, "says": str(spec.get("says") or ""),
+                          "observed": spec.get("observed") or None,
+                          "events": [str(x) for x in (spec.get("events") or [])],
+                          "carried_over": h.hid}
+            carried += 1
+    if carried:
+        log("causal.p3.carried_over", nodes=carried)
 
     if sql is None:
         # 조회 없이 한 완비 선언이라는 사실은 선언 자체에 붙어야 한다 - 나중에 이 문장만
