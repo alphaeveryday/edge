@@ -76,7 +76,12 @@ K각도가 볼 기회가 없다 — pr-cycle 게이트는 edge-review 루프를 
 README.md`·`bootstrap/README.md`), 자격증명이 있는 환경에서 그걸 "확인"하려고 돌리면
 README 한 줄 때문에 실제 인프라가 바뀐다. 허용 범위는 이것뿐이다:
 
-- 셸 파싱 확인(`bash -n`, 변수 할당 형태를 no-op 명령으로 — `VAR=… true`)
+- **prefix env 할당(`VAR=… command`)이 있으면 no-op 실행이 필수다** — `VAR=… true` 로
+  그 줄을 실제로 돌린다. `bash -n` 은 **이 유형을 못 잡는다**: `A__b-c=v true` 는 문법상
+  유효해(이름이 `A__b-c=v` 인 명령 호출로 파싱된다) exit 0 이고, 실행해야 비로소
+  `command not found` 가 난다(실측). 문법 검사만 하고 "확인함"이라 쓰면 이 게이트가
+  잡으려던 바로 그 케이스를 통과시킨다.
+- 그 밖의 형태는 `bash -n` 으로 문법만 봐도 된다(파이프·따옴표 깨짐 등).
 - 설정 로더가 그 env 를 받는지(설정 **로드만**)
 - 명령 자체가 제공하는 읽기 전용 경로(`--help`·`--dry-run`·`terraform plan` 등)
 
