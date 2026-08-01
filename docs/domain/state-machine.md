@@ -1,6 +1,6 @@
-# 상태 머신 — 데이터 플로우 · 정정/무효화 · 상태값
+# 상태 머신 — 데이터 플로우 · 무효화 · 상태값
 
-콘텐츠가 수신부터 노출·정정까지 거치는 상태와 전이, 리비전 모델을 정의한다.
+콘텐츠가 수신부터 노출·무효화까지 거치는 상태와 전이를 정의한다.
 전체 구조는 [../context.md](../context.md), Sync 채널 계약은 [../contracts/sync-protocol.md](../contracts/sync-protocol.md).
 
 ## 데이터 플로우
@@ -24,22 +24,15 @@
 | 차단 | BLOCKED | 고객 화면 비노출 |
 | 검수 승인 | APPROVED | Published Store 저장 → Publication Cache 반영 → 조회 가능 |
 | 반려 | REJECTED | 고객 화면 비노출 |
-| 정정 | CORRECTED (아래 [컴플라이언스 플로우](#컴플라이언스-플로우--정정무효화-처리-확정-결정) 참조) | **기존 발행분 노출 중단 후 정정분 재점검**(정책 평가 — 청정이면 자동 재게시) |
 | 무효화 | INVALIDATED | Publication Cache 제거 + publications.status → INVALIDATED 전이, 즉시 비노출 |
 
-## 컴플라이언스 플로우 — 정정/무효화 처리 (확정 결정)
+## 컴플라이언스 플로우 — 무효화 처리 (확정 결정)
 
-**원칙: 고객 노출 문구는 활성 점검 정책(policy_version·screening_rule)을 통과한 것만 나간다 — 신규·정정 동일.**
-(구 원칙 "정정은 무조건 재검수"는 2026-07-27 결정으로 대체됐다 — ALPHA-438 온보딩 철학
-"기본 자동 제공, 점검에 걸린 것만 검수"의 일관 적용. 결정 기록은 ALPHA-430 코멘트.)
+**원칙: 고객 노출 문구는 활성 점검 정책(policy_version·screening_rule)을 통과한 것만 나가고, 오류가 발견된 설명은 고치지 않고 내린다.**
 
 - **무효화(INVALIDATED)**: 노출 "제거"는 점검·검수 불요. 온프렘이 무효화 이벤트 수신 즉시 Publication Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용. Publication Cache는 내부망 자원이므로 처리 주체는 Intake·온프렘 내부 흐름이지 DMZ의 Sync Agent가 아니다.)
-- **정정(CORRECTED)**: 노출 "변경"은 정정분을 신규와 동일하게 재점검한다.
-    1. Cloud가 정정 이벤트 발행 (Super Admin은 정정 시 사유 입력 필수)
-    2. On-Prem이 수신 → 기존 발행 콘텐츠 즉시 **UNPUBLISHED** (고객 화면에서 제거)
-    3. 정정 문구(새 리비전)가 **활성 정책 평가**를 거친다 — 룰 히트 시 REVIEW_REQUIRED/BLOCKED, 청정 통과 + 자동 제공 기준 충족 시 AUTO_PUBLISHED 로 같은 grain 에 재게시
-    4. REVIEW_REQUIRED 로 간 정정분은 검수자 승인 후에만 재발행
-- 확장 로드맵(MVP 아님): "정정분은 항상 검수" 를 테넌트 정책 옵션(정책 버전 스위치)으로 분기 — 보수적 증권사용.
+- **무효화의 단위는 특정 설명(리비전)이다** — (종목, 거래일) 슬롯을 봉인하지 않는다. 무효화 이후 같은 종목에 새 설명(NEW)을 발번할 수 있는지는 발번 정책 소관(현행 day-grain 게이트 유지)이다 ([ADR-0044](../adr/0044-correction-abolition.md)).
+- **정정(CORRECTION) 전달은 폐지됐다** (2026-08-01, [ADR-0044](../adr/0044-correction-abolition.md) — 구 리비전 분리 모델·정정 재점검(ADR-0041)·`supersedes_item_id` 체인 일괄 제거). 설명은 당일 소멸성 콘텐츠라 정정 재게시의 실익이 없고, 오류 발견 시 비노출이 더 보수적이다. Cloud 운영자 정정 오버레이(admin_activity_log)는 cloud 콘솔 내부 표시로 유지되며 테넌트로 전파되지 않는다.
 
 ## ERD 방향 및 상태값
 
@@ -48,12 +41,12 @@
 `event` / `evidence` / `analysis_item` / `screening_check` / `review_task` / `publication` / `exposure_log`
 
 - `analysis_item.analysis_type`: 현재 **PRICE_MOVEMENT**만 사용. 향후 MARKET_BRIEFING, DISCLOSURE_SUMMARY 확장 가능하나 MVP UI 비노출.
-- **정정 시 레코드 모델 (확정, 2026-07-13)**: 정정은 단일 레코드의 상태 왕복이 아니라 **리비전 분리**로 처리한다. ① 기존 analysis_item은 **CORRECTED로 종결(terminal 상태)** ② 해당 publication은 UNPUBLISHED로 전이 ③ 정정 문구는 원본을 참조하는(`supersedes_item_id`) **새 analysis_item 리비전**으로 생성되어 신규와 동일한 정책 평가로 진입한다(2026-07-27 결정 — 청정이면 AUTO_PUBLISHED 재게시, 룰 히트 시 REVIEW_REQUIRED/BLOCKED). 즉 위 [데이터 플로우](#데이터-플로우) 표의 CORRECTED는 구 리비전의 최종 상태이고, 재점검 대상은 신규 리비전이다. 감사 재현은 리비전 체인을 따라 "어느 시점에 어느 문구가 노출되었는지"를 완전 복원한다.
+- 감사 재현은 `analysis_item_status_history`(append-only)와 exposure log 로 "어느 시점에 어느 문구가 노출되었는지"를 복원한다. (구 정정 리비전 체인은 폐지 — 과거 이력의 CORRECTED 어휘는 상태 이력 원장에만 남는다, ADR-0044.)
 
 **상태값**:
 
 | 엔티티 | 상태 |
 | --- | --- |
-| analysis_items.status | RECEIVED, AUTO_PUBLISHED, REVIEW_REQUIRED, APPROVED, REJECTED, BLOCKED, UNPUBLISHED, CORRECTED, INVALIDATED |
+| analysis_items.status | RECEIVED, AUTO_PUBLISHED, REVIEW_REQUIRED, APPROVED, REJECTED, BLOCKED, UNPUBLISHED, INVALIDATED |
 | review_tasks.status | PENDING, APPROVED, EDITED_APPROVED, REJECTED, CANCELLED |
 | publications.status | PUBLISHED, UNPUBLISHED, INVALIDATED |

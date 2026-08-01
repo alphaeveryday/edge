@@ -22,14 +22,14 @@ Tenant Console
 - 주요 현황 — 가격 변동 설명 반입 상태: 자동 제공 / 검수 대기 / 점검 차단 / 검수 반려 / 제공 중단 건수
 - 제공 API 트래픽(최근 24시간): 요청 수, 에러 건수·에러율 (원천 = serving_request_metric, ALPHA-128)
 - 최근 가격 변동 설명 요약: 종목, 등락률, 제공 상태, 위험 등급
-- 이벤트 수신 상태, 정정·무효화 알림, 최근 장애 알림
+- 이벤트 수신 상태, 무효화 알림, 최근 장애 알림
 
 **Price Movement Explanations**
 
 - 목록: 종목, 시장, 등락률, 변동 요인 요약, 위험 등급, 상태, 생성 시각, 노출 시각
 - 필터: 상태(전체 / 자동 제공 / 검수 대기 / 점검 차단 / 검수 반려 / 제공 중단), 시장(전체 / KRX — **MVP는 국내 상장 ETF 한정**, NASDAQ 등 해외는 커버리지 확장 시 [../adr/0024](../adr/0024-scope-domestic-etf.md)), 위험 등급(전체 / 저위험 / 중위험 / 고위험), 종목 검색
 - 상세: 종목 기본 정보, 원본 AI 문구, 컴플라이언스 통과 후 문구, 최종 노출 문구, 관련 뉴스/공시, 시세·거래량·수급 변화, 이벤트 타임라인, 신뢰도, 반대 요인, 컴플라이언스 검사 결과, 상태 변경 이력
-- 관리 액션: **최종 문구 정정 / 검수로 이관 / 제공 중단(노출 중단 — 사유 필수) / 정정 등록**
+- 관리 액션: **최종 문구 정정 / 검수로 이관 / 제공 중단(노출 중단 — 사유 필수)** (구 "정정 등록"은 CORRECTION 폐지로 삭제 — [../adr/0044](../adr/0044-correction-abolition.md))
 - 판정 게이트(승인·반려)는 Review Queue 소관이다 — explanations 는 현황판+사후 운영에 한정된다(역할 분담, 사용자 결정 2026-07-29).
 
 > 실전환 현황(ALPHA-607 읽기·613 쓰기): 읽기(목록·상세·반입 상태)와 사후 운영 쓰기(최종 문구 정정·검수 이관·제공 중단)가 온프렘 원장 전이·행위자·감사로 실전환됐다 — `ExplanationMockStore` 삭제로 콘솔 mock 이 소멸했다. 화면·IA 에 없던 approve·reject·draft(ALPHA-513 잔재)는 표면째 제거됐다. **시장·등락률(방향)**은 온프렘 원장에 아직 없어(경계면 확장 [../contracts/event-bundle-schema.md](../contracts/event-bundle-schema.md) `observed_return`·`market_code`, ALPHA-497 이연) 목록·상세·Dashboard 요약에서 **한시 생략** — materialization 후 위 컬럼을 복원한다. 권한은 [permission-matrix](permission-matrix.md) 적용.

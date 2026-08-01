@@ -7,7 +7,7 @@
 > **상태: 합의 진행 (v4, 2026-07-24)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했고, 전달 레코드(outbox)를 `tenant_delivery`로 확정했다(ALPHA-396). `source_events`·`evidences` 경계면 컬럼까지 확정했다(ALPHA-395, 아래 "경계면 컬럼" 절). 영서 단독 결정은 모두 확정됐고, 열린 항목은 진기 확인 대상(스키마 `tenant`·`tenant_credential` 정의, 선별 nullable 컬럼 채움 보증)뿐이다.
 
 - 오너십 경계: **김진기** — Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** / **조영서** — DB를 소비하는 이후 전부: **Event Bundle 생성(tenant-sync-api의 DB 조회·조립)**, 전달 레코드, Sync Agent, 온프렘 ([../adr/0026](../adr/0026-ownership-boundary-db.md)).
-- 전송 단위: Event Bundle (신규 + 정정 + 무효화). 무결성은 번들 단위 SHA-256 체크섬. 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
+- 전송 단위: Event Bundle (신규 + 무효화 — 정정(CORRECTION)은 폐지, [ADR-0044](../adr/0044-correction-abolition.md)). 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
 
 ## Cloud Event Store 스키마
 
@@ -27,7 +27,7 @@
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
 | `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
 | `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
-| `event_thread` | 동일 실제 사건의 계보(정정·후속 판정의 기준) | `thread_id` |
+| `event_thread` | 동일 실제 사건의 계보(후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
 | `instrument` · `entity` | 번들의 `etf_ticker`·`etf_name` 공급(조인) — 온프렘 서빙 키가 ticker 라서 경계면에 포함 (확정 2026-07-21) | `instrument_id` = `entity_id` |
 
@@ -37,17 +37,17 @@
 
 - 도메인 ID(`explanation_result_id` 등)는 **Cloud 발번 TEXT** — 물리 스키마 기준. On-Prem 멱등 upsert 키 = 이 도메인 ID.
 - `tenant_id`는 BIGINT(identity). 전달 단위의 멱등 처리 기준은 테넌트별 단조증가 cursor(ADR-0015 확정)이며, 저장 구조 차원의 키 설계는 전달 레코드 설계(미확정 — 아래)와 함께 확정한다.
-- 정정·무효화는 대상을 `target_explanation_result_id`로 참조한다. 정정으로 생기는 재게시본은 **새 `explanation_result_id`** — On-Prem 리비전 분리 모델의 소스([../domain/state-machine.md](../domain/state-machine.md)).
+- 무효화는 대상을 `target_explanation_result_id`로 참조한다 — 무효화의 단위는 특정 설명(리비전)이다([../domain/state-machine.md](../domain/state-machine.md), ADR-0044).
 
 ## 전달 레코드 (확정 — 2026-07-21, ALPHA-396)
 
 번들은 테넌트별 전달 레코드를 cursor 순으로 묶어 생성한다 — cursor 발번 시점은 테넌트별 fan-out(ADR-0021 확정). 설계는 영서 단독 결정으로 다음과 같이 확정한다:
 
-- **저장 구조**: `tenant_delivery` — 물리 정의는 `migrations-cloud/V202607211740__add_tenant_delivery.sql`(SQL이 계약). 컬럼: `(tenant_id, cursor)` PK · `delivery_type` · `explanation_result_id` · `target_explanation_result_id` · `reason` · `created_at`. 유형별 페이로드 형상(NEW=결과만 / CORRECTION=결과+대상+사유 / INVALIDATION=대상+사유)은 CHECK 로 강제 — 와이어 JSON 봉투와 1:1.
+- **저장 구조**: `tenant_delivery` — 물리 정의는 `migrations-cloud/V202607211740__add_tenant_delivery.sql`(SQL이 계약). 컬럼: `(tenant_id, cursor)` PK · `delivery_type` · `explanation_result_id` · `target_explanation_result_id` · `reason` · `created_at`. 유형별 페이로드 형상(NEW=결과만 / INVALIDATION=대상+사유)은 CHECK 로 강제(2형상 축소는 `V202608011200`, ADR-0044) — 와이어 JSON 봉투와 1:1.
 - **멱등 키**: 전달 단위는 `(tenant_id, cursor)` PK. On-Prem 소비 멱등은 별도 축 — 번들 단위는 `received_bundle.cursor_from`, 항목 단위는 도메인 ID(`explanation_result_id`) upsert.
-- **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 그 변경 자체는 다음 cursor(CORRECTION·INVALIDATION)로 다시 전달되므로 수렴한다.
-- **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 재게시(기존 `WITHDRAWN` + 새 행 `PUBLISHED`) → 새 행을 `CORRECTION`(대상=구 게시분, 사유 필수)으로 발번 / 재게시 없는 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다.
-- **fan-out 발번기**: `NEW` 발번은 analysis-engine 이 `explanation_result` 게시와 **같은 트랜잭션**에서 수행한다(write-time fan-out, ALPHA-493 — 커밋된 행만 cursor 에 노출). 발번 로직이 원자성 때문에 analysis-engine 커밋 경로에 상주할 뿐, 전달 레코드의 **소유는 ADR-0026 그대로 조영서**다 — fan-out 규칙·`tenant_delivery` 형상 변경은 이 계약 문서를 거친다. 같은 날 재게시분은 DRAFT 보존·발번 생략(그날 첫 게시만 NEW). `CORRECTION`·`INVALIDATION` 발번은 후속(운영자 정정 모델 접합) — 그 전까지 두 유형의 수신 경로는 로컬 시드로 시연한다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
+- **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 게시 철회는 다음 cursor(INVALIDATION)로 다시 전달되므로 수렴한다.
+- **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다. (구 재게시→`CORRECTION` 매핑은 폐지 — ADR-0044.)
+- **fan-out 발번기**: `NEW` 발번은 analysis-engine 이 `explanation_result` 게시와 **같은 트랜잭션**에서 수행한다(write-time fan-out, ALPHA-493 — 커밋된 행만 cursor 에 노출). 발번 로직이 원자성 때문에 analysis-engine 커밋 경로에 상주할 뿐, 전달 레코드의 **소유는 ADR-0026 그대로 조영서**다 — fan-out 규칙·`tenant_delivery` 형상 변경은 이 계약 문서를 거친다. 같은 날 재게시분은 DRAFT 보존·발번 생략(그날 첫 게시만 NEW). `INVALIDATION` 발번은 후속(ALPHA-440 — 운영자 무효화 모델 접합) — 그 전까지 무효화 수신 경로는 로컬 시드로 시연한다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
 
 `tenant_sync_cursor.last_cursor`(BIGINT)는 cursor 소비 추적이다 — 타입 정정은 `V202607150002`(근거: ADR-0015).
 
@@ -75,16 +75,6 @@
       "evidences": []
     },
     {
-      "cursor": 102,
-      "delivery_type": "CORRECTION",
-      "target_explanation_result_id": "...",
-      "reason": "근거 공시 정정",
-      "explanation_result": { "...": "정정분 전체 — 신규와 동일 형상, 새 ID" },
-      "explanation_run": { "...": "..." },
-      "source_events": [],
-      "evidences": []
-    },
-    {
       "cursor": 103,
       "delivery_type": "INVALIDATION",
       "target_explanation_result_id": "...",
@@ -94,8 +84,8 @@
 }
 ```
 
-- **NEW·CORRECTION은 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
-- CORRECTION 수신 시 On-Prem 동작(기존 발행분 UNPUBLISHED → 새 리비전은 신규와 동일한 정책 재점검, ADR-0041)은 [../domain/state-machine.md](../domain/state-machine.md) 소관 — 이 계약은 "정정분이 전체 형상 + 사유 + 대상 참조로 도착한다"까지만 정의한다.
+- **NEW는 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
+- INVALIDATION 수신 시 On-Prem 동작(item·게시분 즉시 비노출)은 [../domain/state-machine.md](../domain/state-machine.md) 소관. 정정(CORRECTION) 형상은 계약에서 폐지됐다 — 소비자는 미지 유형과 동일하게 거부한다([ADR-0044](../adr/0044-correction-abolition.md)).
 
 ### `source_events`·`evidences` 경계면 컬럼 (확정 — 2026-07-24, ALPHA-395)
 
