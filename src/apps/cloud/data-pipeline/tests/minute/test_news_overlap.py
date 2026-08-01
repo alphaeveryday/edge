@@ -443,6 +443,31 @@ class TestSourceLedger:
             self._observe(ledger, now=datetime(2026, 7, 31, 9, 5))
 
 
+    def test_stale_promotes_url_even_when_content_differs(self):
+        # URL identity 승격은 content 신선도와 독립이다 — 함께 달라졌다고 승격까지
+        # 버리면 fallback mapping 이 영구히 남는다
+        db = FakeMinuteDB()
+        ledger = NewsSourceLedger(db=_DB, connect_fn=db.connect)
+        item = "01100901.20260731000001"
+        url_id = news_article_id({"PROVIDER_LINK_PAGE": "https://news.example/a"})
+        fallback_id = news_article_id({"NEWS_ID": item})
+        # 최신 관측: URL 없이 checksum B
+        self._observe(ledger, item=item, checksum="b" * 64, now=NOW + timedelta(seconds=10))
+        row = db.source_items[("bigkinds", item)]
+        assert row["canonical_article_id"] == fallback_id
+        # 지연 recovery: 정상 URL + 이전 checksum A (content 도 다름)
+        stale = self._observe(
+            ledger, item=item, checksum="a" * 64, canonical_article_id=url_id,
+            canonical_id_from_url=True, now=NOW,
+        )
+        assert stale["stale"] is True
+        assert stale["content_changed"] is False  # 최신 content 는 되돌리지 않는다
+        assert stale["canonical_changed"] is True  # URL 승격은 살아남는다
+        row = db.source_items[("bigkinds", item)]
+        assert row["canonical_article_id"] == url_id
+        assert row["content_checksum"] == "b" * 64  # content 는 최신 유지
+
+
 class TestAnchorValidation:
     def test_corrupt_anchor_fails_loud(self):
         # 손상된 커서는 어떤 ID 와도 안 맞아 매 poll 이 truncated 로 끝난다 —
@@ -453,3 +478,61 @@ class TestAnchorValidation:
                 poll_new_articles(
                     feed, poll_index=1, anchor_ids=corrupt, max_pages=2, page_size=50,
                 )
+
+class TestPollUrlPromotion:
+    def test_same_poll_fallback_then_url_is_promotion_not_conflict(self):
+        # 같은 poll 에 URL 없는 노출과 URL 있는 노출이 함께 오는 건 정상 형상 —
+        # 충돌로 접으면 page 가 반복 실패하고 승격도 영영 못 한다
+        class MixedIdentityFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c"},
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c",
+                     "PROVIDER_LINK_PAGE": "https://news.example/a"},
+                ]
+
+        outcome = poll_new_articles(
+            MixedIdentityFeed(), poll_index=0, anchor_ids=frozenset(),
+            max_pages=2, page_size=10,
+        )
+        assert len(outcome.observed_articles) == 1
+        # 관측 대표 행은 더 강한 identity(URL) 쪽으로 교체된다
+        assert outcome.observed_articles[0].get("PROVIDER_LINK_PAGE")
+        assert [r["NEWS_ID"] for r in outcome.new_articles] == ["dup-1"]
+
+    def test_conflicting_urls_in_same_poll_still_fail(self):
+        # 승격이 아닌 진짜 충돌(URL↔다른 URL)은 계속 fail loud
+        class ConflictingFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c",
+                     "PROVIDER_LINK_PAGE": "https://news.example/a"},
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c",
+                     "PROVIDER_LINK_PAGE": "https://news.example/b"},
+                ]
+
+        with pytest.raises(ValueError, match="payload가 충돌"):
+            poll_new_articles(
+                ConflictingFeed(), poll_index=0, anchor_ids=frozenset(),
+                max_pages=2, page_size=10,
+            )
+
+    def test_conflicting_content_in_same_poll_still_fails(self):
+        class ContentConflictFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c1"},
+                    {"NEWS_ID": "dup-1", "TITLE": "t", "CONTENT": "c2"},
+                ]
+
+        with pytest.raises(ValueError, match="payload가 충돌"):
+            poll_new_articles(
+                ContentConflictFeed(), poll_index=0, anchor_ids=frozenset(),
+                max_pages=2, page_size=10,
+            )

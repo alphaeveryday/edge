@@ -129,16 +129,35 @@ def poll_new_articles(
                 # 숨는다. 크게 실패시켜 형상 변화를 드러낸다(fail loud).
                 raise ValueError(f"NEWS_ID 가 비어 있거나 문자열이 아니다: {news_id!r}")
             validated_rows.append((news_id, row))
-            signature = (
-                article_content_checksum(row),
-                news_article_id(row),
-            )
+            fallback_id = news_article_id({"NEWS_ID": news_id})
+            article_id = news_article_id(row)
+            signature = (article_content_checksum(row), article_id)
             previous_signature = observed_signatures.get(news_id)
             if previous_signature is not None and previous_signature != signature:
-                # 같은 identity의 상충 payload 중 하나를 임의 선택하면 correction 또는
-                # canonical URL 변경을 숨긴다. raw는 보존하되 poll 판정은 실패시킨다.
-                raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
-            if previous_signature is None:
+                previous_checksum, previous_article_id = previous_signature
+                # fallback(URL 없음) → URL identity 는 **승격**이지 충돌이 아니다 —
+                # 원장(_observe_tx)의 단방향 승격 계약과 같은 축이다. 같은 poll 에
+                # URL 없는 노출과 URL 있는 노출이 함께 오는 것은 정상 형상이라,
+                # 이를 충돌로 접으면 page 가 반복 실패하고 승격도 영영 못 한다.
+                promotable = (
+                    previous_checksum == signature[0]
+                    and previous_article_id == fallback_id
+                    and article_id != fallback_id
+                )
+                if promotable:
+                    observed_signatures[news_id] = signature
+                    # 관측 목록의 대표 행도 URL 있는 쪽으로 교체 — 원장이 더 강한
+                    # identity 증거를 보게 한다
+                    for index, seen_row in enumerate(observed_articles):
+                        if seen_row.get("NEWS_ID") == news_id:
+                            observed_articles[index] = row
+                            break
+                else:
+                    # 그 밖의 불일치(본문 상충·URL↔다른 URL)는 하나를 임의 선택하면
+                    # correction 이나 canonical 변경을 숨긴다. raw 는 보존하되
+                    # (adapter 소관) poll 판정은 실패시킨다.
+                    raise ValueError(f"같은 NEWS_ID의 payload가 충돌한다: {news_id}")
+            elif previous_signature is None:
                 observed_signatures[news_id] = signature
                 observed_articles.append(row)
                 if page == 1 and len(next_anchor) < anchor_size:
@@ -302,9 +321,11 @@ class NewsSourceLedger:
             # 그 충돌(별도 canonical/job 가능성)이 조용히 사라진다.
             raise ValueError("같은 NEWS_ID에 서로 다른 URL canonical identity가 충돌한다")
         if now < last_seen_at:
-            # 오래된 payload는 최신 content를 되돌릴 수 없다. 다만 content가 동일하면
-            # NEWS_ID fallback보다 강한 URL identity 증거만 단방향 승격한다.
-            if canonical_changed and not content_changed:
+            # 오래된 payload는 최신 content를 되돌릴 수 없다. 다만 URL identity 승격은
+            # content 신선도와 **독립**이다 — fallback 보다 강한 증거는 늦게 와도
+            # 유효하고 단방향이라 되돌릴 위험이 없다. content 가 함께 달라졌다는
+            # 이유로 승격까지 버리면 fallback mapping 이 영구히 남는다.
+            if canonical_changed:
                 cur.execute(
                     """
                     UPDATE news_source_item
@@ -317,13 +338,9 @@ class NewsSourceLedger:
                 )
             return {
                 "created": False, "content_changed": False,
-                "canonical_changed": canonical_changed and not content_changed,
+                "canonical_changed": canonical_changed,
                 "stale": True, "generation": generation,
-                "canonical_article_id": (
-                    effective_article_id
-                    if canonical_changed and not content_changed
-                    else previous_article_id
-                ),
+                "canonical_article_id": effective_article_id,
             }
         if now == last_seen_at and content_changed:
             # 동형 Worker 두 lane이 같은 tick 시각을 공유할 수 있다. 다른 payload를
