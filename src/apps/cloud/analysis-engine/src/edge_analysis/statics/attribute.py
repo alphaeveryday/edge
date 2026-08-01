@@ -36,6 +36,13 @@ def _kst(ts) -> datetime:
     return ts.astimezone(KST).replace(tzinfo=None) if ts.tzinfo else ts
 
 
+def _clip(lo: float, hi: float, cap: float) -> tuple[float, float] | None:
+    """부분식별의 공용 교차: [lo,hi] ∩ (0 방향 cap]. None = 모순 (방향이 어긋난다)."""
+    a = max(lo, 0.0) if cap >= 0 else max(lo, cap)
+    b = min(hi, cap) if cap >= 0 else min(hi, 0.0)
+    return (a, b) if a <= b else None
+
+
 def _iset(r: EdgeReport, day_total: float) -> tuple[float, float] | None:
     """일 단위 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합]. None = CI 없음 또는 모순(§10).
 
@@ -43,9 +50,68 @@ def _iset(r: EdgeReport, day_total: float) -> tuple[float, float] | None:
     """
     if r.ci_lo is None or r.ci_hi is None:
         return None
-    lo = max(r.ci_lo, 0.0) if day_total >= 0 else max(r.ci_lo, day_total)
-    hi = min(r.ci_hi, day_total) if day_total >= 0 else min(r.ci_hi, 0.0)
-    return (lo, hi) if lo <= hi else None
+    return _clip(r.ci_lo, r.ci_hi, day_total)
+
+
+MIN_BETA_N = 40     # 갭 β 추정의 최소 표본 (60d 창 기준 - 이보다 얇으면 부재 선언)
+
+
+def _beta_ci(xs, ys) -> tuple[float, float] | None:
+    """OLS 기울기의 95% CI. 분산 없으면 None. 순수 함수 - 단위검정 대상."""
+    import numpy as np
+    x, y = np.asarray(xs, float), np.asarray(ys, float)
+    n = len(x)
+    sxx = float(((x - x.mean()) ** 2).sum())
+    if n < 3 or sxx <= 0.0:
+        return None
+    beta = float(((x - x.mean()) * (y - y.mean())).sum() / sxx)
+    resid = y - y.mean() - beta * (x - x.mean())
+    se = float((resid @ resid / (n - 2) / sxx) ** 0.5)
+    return beta - 1.96 * se, beta + 1.96 * se
+
+
+def gap_covariate(lake, ticker: str, day: str, gap_share: float):
+    """§9: 갭은 더 잘리지 않으므로 공변량으로만 좁힌다 - 그리고 그 좁힘도
+    **부분식별**이다. β 의 CI × 직전 미국 세션 수익률 → 갭 몫의 설명 구간.
+    점 β 로 곱하면 크기 층이 다시 점 주장으로 오염된다.
+
+    재료가 없으면 GapCovariate(reason=...) 부재 선언 - 침묵 금지. 부재의 사유가
+    곧 백필 요청이다 (docs/analysis-engine/data-backfill-requests.md).
+    """
+    from .narrate import GapCovariate
+    try:
+        rows = lake.sql(f"""
+            WITH d AS (
+              SELECT CAST(ts AS DATE) AS dt,
+                     first(open ORDER BY ts) AS o, last(close ORDER BY ts) AS c
+              FROM bars_5m WHERE symbol = '{ticker}' GROUP BY 1
+            ),
+            gap AS (
+              SELECT dt, ln(o / NULLIF(lag(c) OVER (ORDER BY dt), 0)) AS g FROM d
+            ),
+            us AS (SELECT CAST(date AS DATE) AS ud, change_pct / 100.0 AS r FROM us_market)
+            SELECT g.dt, g.g,
+                   (SELECT u.r FROM us u WHERE u.ud < g.dt ORDER BY u.ud DESC LIMIT 1)
+            FROM gap g WHERE g.dt <= DATE '{day}' AND g.g IS NOT NULL
+            ORDER BY g.dt DESC LIMIT 121
+        """)
+    except Exception:                       # us_market 뷰 부재 등
+        rows = []
+    today = next((r for r in rows if str(r[0]) == day), None)
+    hist = [(float(r[2]), float(r[1])) for r in rows
+            if str(r[0]) != day and r[2] is not None]
+    if today is None or today[2] is None:
+        return GapCovariate(reason="직전 미국 세션 수익률 없음 (us_market 커버리지 밖 - 백필 필요)")
+    if len(hist) < MIN_BETA_N:
+        return GapCovariate(reason=f"β 표본 {len(hist)} < {MIN_BETA_N} (us_market {len(hist)}일 - 백필 필요)")
+    ci = _beta_ci([h[0] for h in hist], [h[1] for h in hist])
+    if ci is None:
+        return GapCovariate(reason="β 추정 불가 (공변량 분산 없음)")
+    us_t = float(today[2])
+    lo, hi = sorted((ci[0] * us_t, ci[1] * us_t))
+    clipped = _clip(lo, hi, gap_share)
+    return GapCovariate(factor_ret=us_t, n=len(hist), beta_lo=ci[0], beta_hi=ci[1],
+                        explained=clipped, contradiction=clipped is None)
 
 
 def _assign_rows(shares, labels: dict[str, str], passing: dict, refuted: set[str]) -> list[Row]:
@@ -226,9 +292,11 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                           iset_hi=iset[1] if iset else None,
                           contradiction=r.ci_lo is not None and iset is None))
 
+    gwin = next((s for s in shares if s.window.kind == "gap"), None)
+    gcov = gap_covariate(lake, ticker, day, gwin.log_ret) if gwin is not None else None
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
-                    edges=tuple(edges))
+                    edges=tuple(edges), gap_cov=gcov)
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
     if not types and not anomalous:

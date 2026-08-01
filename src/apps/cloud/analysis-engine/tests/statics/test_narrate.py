@@ -123,3 +123,49 @@ def test_rejected_route_suppresses_all_magnitude_quotes():
     assert "점귀속은 거절된다" in s                       # 귀속 형태 선언
     assert "크기는 **보류** — 셀 점귀속 거절" in s        # 채널판이 인용을 거부
     assert "기여는 많아야" not in s and "미설명 [" not in s  # 크기 인용 전무
+
+
+def _gap_row(log_ret: float) -> Row:
+    w = Window("갭", datetime(2026, 6, 1, 8), datetime(2026, 6, 1, 9), "gap", ())
+    return Row(Share(w, log_ret))
+
+
+def test_gap_covariate_is_partial_identified_never_a_point():
+    # 16차 (§9): 갭 공변량도 부분식별 - β CI × 야간 지수 → 설명 구간, 잔여 구간.
+    from edge_analysis.statics.narrate import GapCovariate
+    rows = [_gap_row(-0.06), _row("잔여1", -0.02)]
+    g = GapCovariate(factor_ret=-0.03, n=120, beta_lo=1.0, beta_hi=1.5,
+                     explained=(-0.045, -0.03))
+    s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                gap_cov=g)
+    assert "[갭]" in s and "β [1.00, 1.50]" in s and "공통충격" in s
+    assert "[-4.50, -3.00]%p" in s and "[-3.00, -1.50]%p" in s   # 설명·잔여 둘 다 구간
+    assert "구간이 정직하다" in s
+    # 방향 모순 → 공통충격 설명 0 어법.
+    c = GapCovariate(factor_ret=+0.02, n=120, beta_lo=1.0, beta_hi=1.5,
+                     explained=None, contradiction=True)
+    s2 = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                 gap_cov=c)
+    assert "방향이 어긋난다" in s2 and "공통충격 설명 0" in s2
+
+
+def test_gap_covariate_absence_needs_reason_and_names_backfill():
+    from edge_analysis.statics.narrate import GapCovariate
+    rows = [_gap_row(-0.06)]
+    s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                gap_cov=GapCovariate(reason="us_market 10일 - 백필 필요"))
+    assert "공변량 미계측" in s and "백필" in s and "통째로 미설명" in s
+    with pytest.raises(NarrationError, match="사유가 없다"):
+        narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                gap_cov=GapCovariate())
+
+
+def test_beta_ci_is_sane_on_synthetic_slope():
+    from edge_analysis.statics.attribute import _beta_ci
+    import numpy as np
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=200)
+    y = 1.2 * x + rng.normal(scale=0.1, size=200)
+    lo, hi = _beta_ci(x, y)
+    assert lo < 1.2 < hi and hi - lo < 0.1          # 참 기울기 포함 + 좁은 구간
+    assert _beta_ci([1.0, 1.0, 1.0], [1, 2, 3]) is None   # 분산 없음 → 부재

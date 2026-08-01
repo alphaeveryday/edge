@@ -60,6 +60,23 @@ class Edge:
     iset_hi: float | None = None
     contradiction: bool = False      # 과대식별 모순 — 크기 주장 금지
 
+
+@dataclass(frozen=True, slots=True)
+class GapCovariate:
+    """§9 갭 공변량의 재료 — 부분식별. β CI × 직전 미국 세션 → 갭 설명 구간.
+
+    가드: 부재는 reason 필수 (침묵 금지 - 부재의 사유가 곧 백필 요청이다).
+    구간 없이 점 β 주장은 아예 표현할 수 없다 (필드가 없다).
+    """
+    factor: str = "미국지수"
+    factor_ret: float | None = None      # 직전 미국 세션 수익률
+    n: int = 0                           # β 표본
+    beta_lo: float | None = None
+    beta_hi: float | None = None
+    explained: tuple[float, float] | None = None   # 갭 몫과 교차된 설명 구간
+    contradiction: bool = False          # 방향 모순 - 공통충격 설명 0
+    reason: str = ""                     # 부재 선언 (factor_ret 이 None 이면 필수)
+
 @dataclass(frozen=True, slots=True)
 class BaseRate:
     """조건부 기저율 — '이상이 아니라 규칙'을 말할 자격."""
@@ -77,6 +94,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             grounded: dict[str, str], premium: PathVerdict | None = None,
             after_close: tuple[str, ...] = (),
             edges: tuple[Edge, ...] = (),
+            gap_cov: GapCovariate | None = None,
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -182,6 +200,27 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     else:
         out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 
+    # ── 3¾. 갭 공변량 (§9) — 부분식별. 부재도 문장이다 ──────────────────
+    if gap_cov is not None and gap is not None:
+        gshare = gap.share.log_ret
+        if gap_cov.factor_ret is None:
+            if not gap_cov.reason:
+                raise NarrationError("갭 공변량 부재에 사유가 없다 - 침묵은 백필 좌표를 지운다")
+            out.append(f"[갭] 공변량 미계측 — {gap_cov.reason}. "
+                       f"갭 {_pct(gshare)} 는 통째로 미설명에 남는다.")
+        elif gap_cov.contradiction:
+            out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% 는 "
+                       f"갭 {_pct(gshare)} 와 방향이 어긋난다 — 공통충격 설명 0, "
+                       "갭 전체가 종목 고유·기타 후보다.")
+        else:
+            e_lo, e_hi = gap_cov.explained
+            r_lo, r_hi = gshare - e_hi, gshare - e_lo
+            out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% × "
+                       f"β [{gap_cov.beta_lo:.2f}, {gap_cov.beta_hi:.2f}] (n={gap_cov.n}) → "
+                       f"갭 {_pct(gshare)} 중 [{e_lo * 100:+.2f}, {e_hi * 100:+.2f}]%p 는 공통충격 — "
+                       f"종목 고유 후보는 [{r_lo * 100:+.2f}, {r_hi * 100:+.2f}]%p 만. "
+                       "점이 아니라 구간이 정직하다.")
+
     # ── 4. 채널판 — 오늘 적용된 엣지만. 크기는 일 단위 식별집합 어법으로 ─
     for e in edges:
         if not e.applied:
@@ -283,4 +322,5 @@ def _selfcheck() -> None:
 
 _selfcheck()
 
-__all__ = ["BaseRate", "Conditional", "Edge", "MIN_OPPOSITE", "NarrationError", "narrate"]
+__all__ = ["BaseRate", "Conditional", "Edge", "GapCovariate", "MIN_OPPOSITE",
+           "NarrationError", "narrate"]
