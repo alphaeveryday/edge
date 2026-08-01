@@ -227,11 +227,13 @@ class SqsQueue:
     이 인터페이스만 본다(테스트는 fake 를 끼운다).
     """
 
-    def __init__(self, client=None, *, wait_seconds: int = 0):
+    def __init__(self, client=None, *, wait_seconds: int):
         self._client = client
         # ReceiveMessage 는 long polling 동안 응답을 붙들고 있다 — SDK read timeout 이
         # 그보다 짧으면 **빈 큐를 조회할 때마다** ReadTimeoutError 가 난다(저트래픽일수록
         # 잦다). 발행용 기본값(10초)을 그대로 쓰면 20초 long poll 이 매번 터진다.
+        # 그래서 `wait_seconds` 에 기본값을 두지 않는다 — 호출부가 자기 long poll 값을
+        # 말하지 않으면 이 어긋남이 조용히 되살아난다.
         self._read_timeout = max(10, wait_seconds + _READ_TIMEOUT_MARGIN_SECONDS)
 
     @property
@@ -459,8 +461,17 @@ class MinuteConsumer:
                     # 아직 안 끝난 것 = 실행 중이거나 pool 대기열에 있는 것. 둘 다 claim 은
                     # 이미 잡혀 있으므로 visibility 와 lease 를 함께 민다.
                     self._heartbeat(running[future], now)
+                failure = None
                 for future in done:
-                    counts[future.result()] += 1
+                    # 하나가 터져도 **나머지 결과는 센다** — 먼저 raise 하면 같은
+                    # 집합의 완료분이 집계에서 통째로 사라진다(관측이 거짓이 된다).
+                    error = future.exception()
+                    if error is None:
+                        counts[future.result()] += 1
+                    else:
+                        failure = failure or error
+                if failure is not None:
+                    raise failure
         finally:
             # 예외로 빠져나가도 in-flight 는 **끝까지 heartbeat 하며** 기다린다. 그냥
             # 두면 남은 실행이 lease 만료로 재청구돼 같은 외부 호출이 중복된다.
@@ -919,7 +930,11 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
             break
     logger.info("dlq-reconcile 종료 — %d tick, %s", ticks, dict(sorted(totals.items())))
     # 판정 불가(poison·orphan·ahead)는 사람이 봐야 한다 — 0 으로 끝내면 아무도 모른다.
-    unresolved = totals["poison"] + totals["orphan"] + totals["ahead"]
+    # misrouted 도 포함한다 — 배선 오류는 대사로 풀리지 않고(그 job 은 남의 레인이라
+    # 건드리지 않는다) 사람이 발행 쪽을 고쳐야 한다. 빼면 exit 0 으로 묻힌다.
+    unresolved = (
+        totals["poison"] + totals["orphan"] + totals["ahead"] + totals["misrouted"]
+    )
     if unresolved:
         logger.error("판정하지 못한 DLQ 메시지 %d건 — 사람이 봐야 한다", unresolved)
     if not quiet:
@@ -930,7 +945,9 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
 
 
 def redrive_cli(settings, *, kind: str, job_id: str, reason: str) -> int:
-    """DB-first redrive 진입점 — `python -m data_pipeline.run redrive --kind news --job-id X`.
+    """DB-first redrive 진입점.
+
+    `python -m data_pipeline.run redrive --kind news --job-id <id> --reason "<사유>"`
 
     콘솔에서 DLQ 메시지만 blind redrive 하지 않는다(v0.7 12.4): 여기서 DB 를 먼저
     되돌리고 새 delivery event 를 남기면 Relay 가 그걸 발행한다. 기존 DLQ 메시지는

@@ -217,10 +217,13 @@ class _Cursor:
             # 마감한다 — fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
             assert "redrive_generation = %s" in s, "전이 SQL 에 세대 fence 가 없다"
             self._job_transition("price" if "price_window_job" in s else "news", params)
-        elif s.startswith("UPDATE dataset_commit_outbox SET last_error = %s WHERE"):
+        elif s.startswith("UPDATE dataset_commit_outbox SET last_error = concat_ws"):
+            # 덧붙이기다 — 덮어쓰면 Relay 가 왜 포기했는지(redrive 판단의 근거)가 사라진다
             row = self.db.outbox.get(params[1])
             if row is not None:
-                row["last_error"] = params[0]
+                row["last_error"] = " | ".join(
+                    part for part in (row["last_error"], params[0]) if part
+                )
                 self.rowcount = 1
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)

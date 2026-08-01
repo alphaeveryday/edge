@@ -518,8 +518,9 @@ class JobLedger:
         lease 가 만료되면 그때 하면 된다).
 
         감사 기록: 누가(`actor`)·왜(`reason`) 했는지를 **대체되는 event 행의
-        `last_error`** 에 남긴다 — 같은 트랜잭션이라 전이와 갈리지 않고, 그 행은 이후
-        아무도 덮지 않는다(발행 대상에서 빠졌으므로). DEAD 사유(`error_code`)도 덮지
+        `last_error`** 에 **덧붙인다**(덮어쓰지 않는다 — Relay 가 왜 그 event 를
+        포기했는지가 거기 유일하게 남아 있고, 그게 redrive 판단의 근거였다).
+        같은 트랜잭션이라 전이와 갈리지 않고, 그 행은 이후 아무도 건드리지 않는다. DEAD 사유(`error_code`)도 덮지
         않아 무엇을 되살렸는지가 남는다. ⚠️ 천장: 전용 감사 테이블이 아니라 여러 번의
         redrive 이력이 쌓이지는 않는다(세대마다 행이 하나씩 생기므로 세대별로는 남는다).
         """
@@ -619,7 +620,9 @@ class JobLedger:
                 )
             cur.execute(
                 """
-                UPDATE dataset_commit_outbox SET last_error = %s WHERE event_id = %s
+                UPDATE dataset_commit_outbox
+                SET last_error = concat_ws(' | ', last_error, %s)
+                WHERE event_id = %s
                 """,
                 (f"redrive by {actor} at {now.isoformat()}: {reason}", previous_event_id),
             )

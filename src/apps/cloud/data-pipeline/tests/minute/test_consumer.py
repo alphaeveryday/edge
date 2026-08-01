@@ -130,6 +130,22 @@ def enqueue_news(ledger, db, *, article_id=None, payload=None) -> tuple[str, str
     return job_id, build_message_body(event)
 
 
+@pytest.fixture
+def env():
+    """db·큐·원장 셋업 한 벌 + job 하나 넣기. 같은 4~5줄이 테스트마다 복붙돼 있었다."""
+    db, sqs = FakeMinuteDB(), FakeSqs()
+    ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    holder = SimpleNamespace(db=db, sqs=sqs, ledger=ledger)
+
+    def enqueue(queue_url=QUEUE, **kwargs):
+        """job+event 를 실제 경로로 만들고 큐에 실어 (job_id, 메시지)를 돌려준다."""
+        job_id, body = enqueue_news(ledger, db, **kwargs)
+        return job_id, sqs.send(queue_url, body)
+
+    holder.enqueue = enqueue
+    return holder
+
+
 def make_consumer(db, sqs, handler, **config_overrides):
     return MinuteConsumer(
         jobs=JobLedger(db=_DB, connect_fn=db.connect), queue=sqs, handler=handler,
@@ -249,7 +265,7 @@ class TestSqsQueue:
                     {"MessageId": "m3", "Body": "{}"},            # handle 없음
                 ]}
 
-        messages = SqsQueue(Stub()).receive(
+        messages = SqsQueue(Stub(), wait_seconds=0).receive(
             queue_url=QUEUE, max_messages=10, wait_seconds=0, visibility_seconds=30
         )
         assert [m.message_id for m in messages] == ["m1"]
@@ -302,11 +318,9 @@ class TestConsumerConfig:
 
 
 class TestStatusGate:
-    def test_success_records_and_acks(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        message = sqs.send(QUEUE, body)
+    def test_success_records_and_acks(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, message = env.enqueue()
         calls = []
         consumer = make_consumer(db, sqs, recording_handler(calls))
 
@@ -319,12 +333,10 @@ class TestStatusGate:
         assert row["status"] == "SUCCEEDED" and row["result_checksum"] == CHECKSUM
         assert sqs.deleted == [message.receipt_handle]
 
-    def test_duplicate_delivery_runs_once(self):
+    def test_duplicate_delivery_runs_once(self, env):
         # 같은 메시지가 두 번 와도 두 번째는 SUCCEEDED 를 보고 실행 없이 지운다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        _job_id, body = enqueue_news(ledger, db)
-        message = sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        _job_id, message = env.enqueue()
         calls = []
         consumer = make_consumer(db, sqs, recording_handler(calls))
         consumer.tick(NOW)
@@ -336,9 +348,8 @@ class TestStatusGate:
         assert len(calls) == 1
         assert sqs.deleted == [message.receipt_handle, message.receipt_handle]
 
-    def test_dead_job_is_acked_without_running(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_dead_job_is_acked_without_running(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)]["status"] = "DEAD"
         sqs.send(QUEUE, body)
@@ -348,11 +359,10 @@ class TestStatusGate:
 
         assert counts["terminal"] == 1 and calls == []
 
-    def test_retry_wait_before_next_attempt_does_not_run(self):
+    def test_retry_wait_before_next_attempt_does_not_run(self, env):
         # **DB 가 정한 시각**이 권위다 — 배달이 왔다고 실행하면 재시도 간격이 SQS
         # 배달 주기로 바뀐다. visibility 만 남은 시간으로 민다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(
             status="RETRY_WAIT", next_attempt_at=NOW + timedelta(seconds=120)
@@ -366,11 +376,10 @@ class TestStatusGate:
         assert sqs.visibility_changes == [(message.receipt_handle, 120)]
         assert sqs.deleted == []   # 아직 할 일이 남았다 — 지우면 유실이다
 
-    def test_missing_job_row_is_not_deleted(self):
+    def test_missing_job_row_is_not_deleted(self, env):
         # job 과 event 는 같은 트랜잭션에서 쓰인다(2C) — 없다는 건 계약이 깨졌다는
         # 뜻이고, 지우면 근거가 사라진다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         del db.jobs[("news", job_id)]
         sqs.send(QUEUE, body)
@@ -402,9 +411,8 @@ class TestStatusGate:
 
 
 class TestClaimContention:
-    def test_live_lease_blocks_second_consumer(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_live_lease_blocks_second_consumer(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(
             status="CLAIMED", claimed_by="other", attempt_count=1,
@@ -419,9 +427,8 @@ class TestClaimContention:
         assert sqs.deleted == []          # 남의 job 의 wake-up 을 지우지 않는다
         assert db.jobs[("news", job_id)]["claimed_by"] == "other"
 
-    def test_expired_lease_is_reclaimed(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_expired_lease_is_reclaimed(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(
             status="CLAIMED", claimed_by="dead-consumer", attempt_count=1,
@@ -489,9 +496,8 @@ class TestFailureClassification:
         assert row["error_code"] == "RETRY_BUDGET_EXHAUSTED"
         assert sqs.deleted == [message.receipt_handle]
 
-    def test_backoff_grows_with_attempt(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_backoff_grows_with_attempt(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)]["attempt_count"] = 2   # 다음 claim 이 3회차
 
@@ -504,9 +510,8 @@ class TestFailureClassification:
         # base 5 × 2**(3-1) = 20
         assert sqs.visibility_changes[0][1] == 20
 
-    def test_backoff_capped(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_backoff_capped(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         # 복원·마이그레이션으로 들어온 큰 attempt_count 에서 2**n 이 터지지 않아야 한다
         db.jobs[("news", job_id)]["attempt_count"] = 10_000
@@ -519,14 +524,12 @@ class TestFailureClassification:
 
         assert sqs.visibility_changes[0][1] == 900   # retry_max
 
-    def test_non_string_result_retries_not_dead(self):
+    def test_non_string_result_retries_not_dead(self, env):
         # handler 계약 위반의 근거는 **코드**(배포 회귀·adapter 결함)라 그 job 의 성질이
         # 아니다. 첫 시도에 terminal 로 확정하면 배포를 고쳐도 영향받은 job 전부를
         # 사람이 하나씩 redrive 해야 한다 — 예산이 판정하게 둔다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        message = sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, message = env.enqueue()
 
         counts = make_consumer(db, sqs, lambda **_: None).tick(NOW)
 
@@ -535,25 +538,21 @@ class TestFailureClassification:
         assert row["status"] == "RETRY_WAIT" and row["error_code"] == "RESULT_CONTRACT"
         assert message.receipt_handle not in sqs.deleted
 
-    def test_short_digest_result_is_a_contract_failure(self):
+    def test_short_digest_result_is_a_contract_failure(self, env):
         # 레포의 checksum 은 전부 소문자 sha256 hex 다(models.Sha256Hex) — 잘린 값을
         # 성공으로 확정하면 나중에 아무와도 대조되지 않는다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, _message = env.enqueue()
 
         counts = make_consumer(db, sqs, lambda **_: "abc123").tick(NOW)
 
         assert counts["retried"] == 1
         assert db.jobs[("news", job_id)]["error_code"] == "RESULT_CONTRACT"
 
-    def test_lost_claim_does_not_ack(self):
+    def test_lost_claim_does_not_ack(self, env):
         # 늦은 보고 — 지금 이 job 은 남의 것이다. 지우면 새 소유자의 wake-up 이 사라진다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        message = sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, message = env.enqueue()
 
         def steal(*, job_id, payload, attempt, **_):
             db.jobs[("news", job_id)].update(claimed_by="other", attempt_count=99)
@@ -598,14 +597,12 @@ class TestHeartbeat:
         assert leases[0] > NOW + timedelta(seconds=40)   # claim 당시 lease = now+40
 
 
-    def test_lost_lease_does_not_extend_visibility(self):
+    def test_lost_lease_does_not_extend_visibility(self, env):
         # heartbeat CAS 가 거부됐다 = lease 를 뺏겼거나 그새 끝났다. 그런데도 visibility 를
         # 밀면, 방금 끝난 실행이 DB 시각에 맞춰 놓은 재시도 visibility 를 덮어 재시도가
         # 몇 분 밀린다(DB 가 권위라는 계약이 무너진다).
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        _job_id, body = enqueue_news(ledger, db)
-        sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        _job_id, _message = env.enqueue()
         attempted = threading.Event()
 
         def slow(*, job_id, payload, attempt, **_):
@@ -626,12 +623,11 @@ class TestHeartbeat:
         assert sqs.visibility_changes == []
 
 
-    def test_heartbeat_runs_during_a_slow_prepare_loop(self):
+    def test_heartbeat_runs_during_a_slow_prepare_loop(self, env):
         # claim 은 본 스레드에서 직렬로 돈다 — 배치가 크고 원장 왕복이 느리면 이 루프만
         # 으로 앞서 제출한 job 의 lease·visibility 가 만료되고, 그때 heartbeat 루프에는
         # 아직 들어가지도 않았다. 다른 Consumer 가 같은 LLM job 을 재claim 하게 된다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         first, body1 = enqueue_news(ledger, db, article_id="a-1")
         _second, body2 = enqueue_news(ledger, db, article_id="a-2")
         message1 = sqs.send(QUEUE, body1)
@@ -675,11 +671,10 @@ class TestHeartbeat:
 
 
 class TestGenerationOrdering:
-    def test_stale_generation_message_is_dropped(self):
+    def test_stale_generation_message_is_dropped(self, env):
         # redrive 뒤에 도착한 옛 세대 배달 — 더 높은 세대 event 가 durable 하게
         # 존재하므로 이 메시지는 지운다(안 지우면 매 배달마다 같은 판정을 반복한다)
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)]["redrive_generation"] = 1
         message = sqs.send(QUEUE, body)
@@ -690,10 +685,9 @@ class TestGenerationOrdering:
         assert counts["superseded"] == 1 and calls == []
         assert sqs.deleted == [message.receipt_handle]
 
-    def test_future_generation_message_is_surfaced(self):
+    def test_future_generation_message_is_surfaced(self, env):
         # job 보다 앞선 세대 = 원자 동기화가 깨졌다는 신호. 실행도 삭제도 하지 않는다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, _body = enqueue_news(ledger, db)
         sqs.send(QUEUE, build_message_body({
             "event_id": build_event_id(NEWS_EVENT_TYPE, job_id, 3),
@@ -705,13 +699,11 @@ class TestGenerationOrdering:
 
         assert counts["ahead"] == 1 and calls == [] and sqs.deleted == []
 
-    def test_redrive_between_read_and_claim_is_rejected(self):
+    def test_redrive_between_read_and_claim_is_rejected(self, env):
         # 상태 읽기와 claim 사이에 redrive 가 끼면 옛 세대가 새 세대 job 을 실행하고
         # SUCCEEDED 로 마감한다 — 그러면 redrive 가 통째로 사라진다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, _message = env.enqueue()
         consumer = make_consumer(db, sqs, recording_handler([]))
         original_fetch = consumer.jobs.fetch_job
 
@@ -729,9 +721,8 @@ class TestGenerationOrdering:
 
 
 class TestPriceStale:
-    def test_stale_window_generation_is_dead_and_acked(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_stale_window_generation_is_dead_and_acked(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         db.windows[("msn_x", WINDOW_START)] = {
             "session_id": "msn_x", "window_start": WINDOW_START, "generation": 2,
         }
@@ -754,9 +745,8 @@ class TestPriceStale:
 
 
 class TestLifecycle:
-    def test_stop_blocks_new_receive(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_stop_blocks_new_receive(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         enqueue_news(ledger, db)
         consumer = make_consumer(db, sqs, recording_handler([]))
         consumer.request_stop()
@@ -769,10 +759,9 @@ class TestLifecycle:
         # long polling(최대 20초) 중에 SIGTERM 이 오면 이미 받아 둔 메시지가 손에 있다.
         # 그걸로 새 LLM 작업을 시작하면 종료 유예 직전에 걸어 CLAIMED lease 만 남는다 —
         # 즉시 다시 보이게 돌려주고 다음 Consumer 가 집게 한다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
+        db = FakeMinuteDB()
         ledger = JobLedger(db=_DB, connect_fn=db.connect)
         job_id, body = enqueue_news(ledger, db)
-        message = sqs.send(QUEUE, body)
         calls = []
 
         class StoppingSqs(FakeSqs):
@@ -793,11 +782,10 @@ class TestLifecycle:
         assert db.jobs[("news", job_id)]["status"] == "PENDING"   # claim 도 안 했다
         assert sqs.visibility_changes == [(message.receipt_handle, 0)]
 
-    def test_over_budget_claim_does_not_run_handler(self):
+    def test_over_budget_claim_does_not_run_handler(self, env):
         # 외부 호출 뒤 기록 전에 죽는 패턴이 반복되면 attempt 는 오르는데 handler 는
         # 계속 불린다 — 예산을 실패 뒤에만 보면 DB 가 아무것도 막지 못한다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)]["attempt_count"] = 3   # 다음 claim = 4 > max_attempts 3
         message = sqs.send(QUEUE, body)
@@ -809,12 +797,11 @@ class TestLifecycle:
         assert db.jobs[("news", job_id)]["error_code"] == "RETRY_BUDGET_EXHAUSTED"
         assert sqs.deleted == [message.receipt_handle]
 
-    def test_batch_exception_waits_for_remaining_work(self):
+    def test_batch_exception_waits_for_remaining_work(self, env):
         # 한 future 의 예외로 tick 이 풀리면 나머지 실행은 claim 을 쥔 채 pool 에서
         # 계속 돈다 — 그냥 빠져나가면 lease 를 아무도 연장하지 않고, 다음 tick 이
         # _tick_started 를 덮어 기록 시각까지 어긋난다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         first, body1 = enqueue_news(ledger, db, article_id="a-1")
         second, body2 = enqueue_news(ledger, db, article_id="a-2")
         sqs.send(QUEUE, body1)
@@ -835,13 +822,11 @@ class TestLifecycle:
         # 두 번째 job 은 자기 손으로 마감했다 — CLAIMED 로 남지 않는다
         assert db.jobs[("news", second)]["status"] == "SUCCEEDED"
 
-    def test_heartbeat_failure_does_not_abandon_in_flight_work(self):
+    def test_heartbeat_failure_does_not_abandon_in_flight_work(self, env):
         # heartbeat 는 best-effort 다 — 여기서 예외가 새면 정리 루프까지 무너져 남은
         # 실행이 lease 연장 없이 계속 돌고 재청구·중복 실행이 된다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
-        job_id, body = enqueue_news(ledger, db)
-        sqs.send(QUEUE, body)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
+        job_id, _message = env.enqueue()
         attempted = threading.Event()
 
         def slow(*, job_id, payload, attempt, **_):
@@ -873,9 +858,8 @@ class TestLifecycle:
         assert sqs.receive_calls[0]["wait_seconds"] == 20
         assert sqs.receive_calls[0]["max_messages"] == 5
 
-    def test_burst_runs_each_job_exactly_once(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_burst_runs_each_job_exactly_once(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_ids = []
         for index in range(100):
             job_id, body = enqueue_news(ledger, db, article_id=f"art-{index:04d}")
@@ -900,9 +884,8 @@ class TestDlqReconciler:
             queue_urls={"news-extraction-realtime": DLQ},
         )
 
-    def test_non_terminal_job_converges_to_dead(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_non_terminal_job_converges_to_dead(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         message = sqs.send(DLQ, body)
 
@@ -914,9 +897,8 @@ class TestDlqReconciler:
         # 지우지 않는다 — 근거는 보존기간까지 남아야 사람이 본다
         assert sqs.deleted == [] and message.receipt_handle not in sqs.deleted
 
-    def test_terminal_job_is_untouched(self):
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+    def test_terminal_job_is_untouched(self, env):
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(status="SUCCEEDED", result_checksum="c")
         sqs.send(DLQ, body)
@@ -926,11 +908,10 @@ class TestDlqReconciler:
         assert counts["terminal"] == 1
         assert db.jobs[("news", job_id)]["status"] == "SUCCEEDED"
 
-    def test_live_lease_is_deferred_then_converges(self):
+    def test_live_lease_is_deferred_then_converges(self, env):
         # 실행 중인 job 을 DLQ 도착만으로 죽이면 곧 기록될 결과가 버려진다.
         # 판정은 반복되므로 lease 가 만료된 다음 회차가 수렴시킨다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(
             status="CLAIMED", claimed_by="c1", lease_expires_at=NOW + timedelta(seconds=60)
@@ -945,12 +926,11 @@ class TestDlqReconciler:
         sqs.redeliver(DLQ, message)
         assert self._reconciler(db, sqs).tick(NOW + timedelta(seconds=120))["dead"] == 1
 
-    def test_misrouted_event_does_not_kill_another_lane(self):
+    def test_misrouted_event_does_not_kill_another_lane(self, env):
         # 가격 사건이 뉴스 DLQ 에 있다 = 발행 배선 오류다. 그 도착은 price job 이
         # 죽었다는 근거가 아닌데, kind 만 보고 죽이면 배선 오류 하나가 멀쩡한 다른
         # 레인의 job 을 몰살한다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         db.windows[("msn_x", WINDOW_START)] = {
             "session_id": "msn_x", "window_start": WINDOW_START, "generation": 1,
         }
@@ -966,11 +946,10 @@ class TestDlqReconciler:
         assert counts["misrouted"] == 1
         assert db.jobs[("price", job_id)]["status"] == "PENDING"
 
-    def test_claimed_with_null_lease_is_recoverable(self):
+    def test_claimed_with_null_lease_is_recoverable(self, env):
         # 복원·구 writer 가 남길 수 있는 형상이다. NULL 비교는 참이 안 되므로 예외
         # 절이 없으면 claim 도 대사도 못 해 그 job 이 영구 고착된다.
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(
             status="CLAIMED", claimed_by="ghost", lease_expires_at=None
@@ -980,11 +959,10 @@ class TestDlqReconciler:
         assert self._reconciler(db, sqs).tick(NOW)["dead"] == 1
         assert db.jobs[("news", job_id)]["error_code"] == "SQS_MAX_RECEIVE"
 
-    def test_older_generation_does_not_kill_redriven_job(self):
+    def test_older_generation_does_not_kill_redriven_job(self, env):
         # 운영자가 방금 redrive 한 job 을, 낡은 배달이 뒤늦게 DLQ 에 닿았다는 이유로
         # 죽이면 redrive 가 무효가 된다
-        db, sqs = FakeMinuteDB(), FakeSqs()
-        ledger = JobLedger(db=_DB, connect_fn=db.connect)
+        db, sqs, ledger = env.db, env.sqs, env.ledger
         job_id, body = enqueue_news(ledger, db)
         db.jobs[("news", job_id)].update(status="RETRY_WAIT", redrive_generation=1)
         sqs.send(DLQ, body)

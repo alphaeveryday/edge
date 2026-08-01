@@ -40,7 +40,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import JobLedger
+from .jobs import EVENT_TYPE_JOB_KINDS, JobLedger
 from .models import canonical_json
 
 logger = logging.getLogger(__name__)
@@ -361,6 +361,31 @@ class OutboxRelay:
                     events, now, error=f"미정의 destination: {destination}", terminal=True
                 )
                 continue
+            # destination 과 event_type 이 어긋나면 **발행하지 않는다** — 큐는
+            # 가격·뉴스를 공유하지 않는다(v0.7 12.1). 그대로 내보내면 그 큐의
+            # Consumer 가 자기 테이블이 아니라며 처리도 삭제도 못 해 DLQ 로 가고,
+            # 대사도 남의 레인이라 건드리지 않아 아무도 해소하지 못한다.
+            # DEAD 가 아니라 transient 인 이유: 근거가 **쓰는 쪽 코드**라 배포로
+            # 바뀐다(이 모듈의 terminal 기준은 "event 자체가 못 나갈 때"다).
+            mismatched = [
+                event for event in events
+                if DESTINATION_JOB_KINDS.get(destination)
+                != EVENT_TYPE_JOB_KINDS.get(event["event_type"])
+            ]
+            if mismatched:
+                logger.error(
+                    "destination %r 에 %s 사건이 실려 있다 — 쓰는 쪽 배선 오류",
+                    destination, sorted({e["event_type"] for e in mismatched}),
+                )
+                failed += self._record_failures(
+                    mismatched, now,
+                    error=f"destination {destination} 과 event_type 이 어긋난다",
+                    terminal=False,
+                )
+                mismatched_ids = {event["event_id"] for event in mismatched}
+                events = [e for e in events if e["event_id"] not in mismatched_ids]
+                if not events:
+                    continue
             # 직렬화는 **event 단위로** 격리한다 — payload 는 JSONB 라 크기 상한이 없어
             # 거대 행 하나가 OOM·직렬화 예외를 낼 수 있는데, 묶어서 만들면 그 하나가
             # 같은 destination 의 정상 행까지 끌고 가 그 큐가 통째로 고착된다.

@@ -25,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
-from data_pipeline.minute.jobs import JobLedger
+from data_pipeline.minute.jobs import JOB_EVENT_TYPES, JobLedger
 from data_pipeline.minute.relay import (
+    DESTINATION_JOB_KINDS,
     OutboxMessage,
     OutboxRelay,
     relay_cli,
@@ -67,10 +68,18 @@ class FakePublisher:
         )
 
 
-def enqueue(db, event_id, destination="price-analysis-realtime", payload=None):
+def enqueue(db, event_id, destination="price-analysis-realtime", payload=None,
+            event_type=None):
     jobs = JobLedger(db=_DB, connect_fn=db.connect)
     jobs.insert_outbox_event(
-        event_id=event_id, event_type="PriceWindowCommitted", destination=destination,
+        # 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1) — 픽스처가 그 계약을 어기면
+        # Relay 의 배선 검사를 밟지 않아 정작 검사 자체가 검증되지 않는다
+        event_id=event_id,
+        # 어휘 밖 destination(오타·폐기된 큐)은 매핑이 없다 — 그 격리 경로는
+        # 배선 검사보다 앞이라 event_type 이 무엇이든 결과가 같다
+        event_type=event_type
+        or JOB_EVENT_TYPES[DESTINATION_JOB_KINDS.get(destination, "price")],
+        destination=destination,
         aggregate_id="job-" + event_id, generation=1,
         payload=payload or {"job_id": "job-" + event_id},
     )
@@ -159,6 +168,25 @@ class TestLaneIsolation:
         relay = build_relay(db, publisher=failing, batch_limit=10)
         assert relay.tick(NOW) == "PARTIAL"
         assert db.outbox["news1"]["status"] == "PUBLISHED", "가격 장애가 뉴스를 굶겼다"
+
+    def test_mismatched_event_type_is_not_published(self, tmp_path):
+        # 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1). 어긋난 채 내보내면 그 큐의
+        # Consumer 가 자기 테이블이 아니라며 처리도 삭제도 못 해 DLQ 로 가고, 대사도
+        # 남의 레인이라 건드리지 않아 아무도 해소하지 못한다.
+        db = FakeMinuteDB()
+        enqueue(db, "wrong", destination="news-extraction-realtime",
+                event_type="PriceWindowCommitted")
+        enqueue(db, "right", destination="news-extraction-realtime")
+        relay = build_relay(db)
+
+        assert relay.tick(NOW) == "PARTIAL"
+
+        assert db.outbox["right"]["status"] == "PUBLISHED"   # 옆 event 는 나간다
+        # DEAD 가 아니다 — 근거가 쓰는 쪽 코드라 배포로 바뀐다(재시도 예약)
+        assert db.outbox["wrong"]["status"] == "NEW"
+        assert db.outbox["wrong"]["next_attempt_at"] is not None
+        [(_, messages)] = relay.publisher.sent
+        assert [m.event_id for m in messages] == ["right"]
 
     def test_lane_is_claimed_right_before_its_publish(self, tmp_path):
         # ⚠️ 전부 집어놓고 순차 발행하면 뒤 레인의 lease 가 자기 차례 전에 흘러가
