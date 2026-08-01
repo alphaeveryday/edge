@@ -108,13 +108,15 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
 
     # ── 2. 아닌 것 먼저 (NTSB) ──────────────────────────────────────────
     negatives: list[str] = []
+    refuted_windows: Counter[str] = Counter()   # 같은 라벨 반복은 개수로 접는다
     for r in rows:
         for eid in r.share.window.event_ids:
             if eid not in grounded:
                 raise NarrationError(f"접지 안 된 사건 인용: {eid} — 근거를 지어낼 수 없다")
         if r.share.window.kind == "event" and r.verdict == "불성립":
-            evs = " · ".join(grounded[e] for e in r.share.window.event_ids)
-            negatives.append(f"{evs}: 그 타입 엣지가 패널에서 서지 않는다 — 원인이 아니다")
+            refuted_windows[" · ".join(sorted({grounded[e] for e in r.share.window.event_ids}))] += 1
+    negatives += [f"{lab}{f' (창 ×{n})' if n > 1 else ''}: 그 타입 엣지가 패널에서 "
+                  "서지 않는다 — 원인이 아니다" for lab, n in refuted_windows.most_common()]
     if after_close:
         for eid in after_close:
             if eid not in grounded:
@@ -199,7 +201,8 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         counts = Counter(grounded[e] for r in unknown for e in r.share.window.event_ids)
         evs = " · ".join(f"{lab} ×{n}" if n > 1 else lab
                          for lab, n in counts.most_common())
-        out.append(f"[모른다] {evs}: 패널 표본이 없어 판정불가 — 기각이 아니라 미지다.")
+        out.append(f"[모른다] {evs}: 성립·적용된 엣지가 닿지 않은 창 — 기각이 아니라 미지다. "
+                   "(사유는 채널판에 - 여기서 지어내지 않는다)")
 
     # ── 6. 조건 — 자격 셋을 전부 갖출 때만 ──────────────────────────────
     if conditional is not None:

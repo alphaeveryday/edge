@@ -48,6 +48,64 @@ def _iset(r: EdgeReport, day_total: float) -> tuple[float, float] | None:
     return (lo, hi) if lo <= hi else None
 
 
+def _assign_rows(shares, labels: dict[str, str], passing: dict, refuted: set[str]) -> list[Row]:
+    """창 행의 3값 배정. 산문의 자기모순을 여기서 막는다 (10차 정정).
+
+    - 성립·적용 튜플의 타입을 담은 창 → 성립 (처치 표기)
+    - 창의 접지 타입 **전부**가 패널 기각(불성립)된 창 → 불성립 - '원인이 아니다'
+      를 창 수준에서 말할 자격은 모든 후보가 기각됐을 때뿐이다
+    - 나머지 사건 창 → 판정불가. 사유는 창이 모른다 - 채널판이 말한다
+      (기존엔 불성립 타입의 창까지 '표본이 없어 판정불가'로 뭉개 [아닌 것 먼저]
+       의 엣지 문장과 산문 안에서 모순됐다)
+    """
+    rows: list[Row] = []
+    for s in shares:
+        wtypes = {labels[e] for e in s.window.event_ids}
+        hit = next((passing[w] for w in wtypes if w in passing), None)
+        if hit is not None:
+            t, _ = hit
+            rows.append(Row(s, treatment=f"{t.trigger.ident[:14]}→{t.channel}",
+                            verdict="성립"))
+        elif wtypes and wtypes <= refuted:
+            rows.append(Row(s, treatment=" · ".join(sorted(wtypes))[:44],
+                            verdict="불성립"))
+        elif s.window.kind == "event" or (s.window.kind == "gap" and s.window.event_ids):
+            rows.append(Row(s, treatment=",".join(s.window.event_ids)[:20],
+                            verdict="판정불가"))
+        else:
+            rows.append(Row(s))
+    return rows
+
+
+def _route_gate(lake, instrument_id: str, day: str):
+    """귀속 게이트 D (요인 오염) 1단 배선. 광역 ETF(구성 ≥100종목) 내 비중이
+    상한을 넘으면 이 셀의 점귀속은 **거절** - 자기 사건이 요인을 움직이는 대형주는
+    요인을 빼면 효과가 같이 빠진다 (gates.route 의 저주 그대로).
+
+    비중 미계측(PIT 상 스냅샷 부재)이나 상한 미만은 None - 나머지 게이트(A·B·C·E)
+    가 미배선이라 '점추정'을 선언할 자격이 아직 없다. 부분 배선의 정직한 어법:
+    거절은 말할 수 있고, 통과는 아직 말할 수 없다.
+    """
+    # 상한 0.05 = gates.route 의 weight_cap 과 동일 계약 (한 곳이 바뀌면 둘 다).
+    try:
+        w = lake.sql(f"""
+            WITH broad AS (
+              SELECT etf_instrument_id, max(trade_date) AS d
+              FROM rdb.public.etf_holding_snapshot
+              WHERE trade_date <= DATE '{day}'
+              GROUP BY 1 HAVING count(DISTINCT constituent_instrument_id) >= 100
+            )
+            SELECT max(h.weight_ratio)
+            FROM rdb.public.etf_holding_snapshot h
+            JOIN broad b ON b.etf_instrument_id = h.etf_instrument_id AND b.d = h.trade_date
+            WHERE h.constituent_instrument_id = '{instrument_id}'
+        """)
+    except Exception:
+        return None
+    weight = w[0][0] if w and w[0] else None
+    return "거절" if weight is not None and float(weight) >= 0.05 else None
+
+
 def load_cell(lake: CausalLake, ticker: str, instrument_id: str, day: str):
     """셀 재료 조립. smoke 와 같은 규약 (마감 동시호가 포함 · 마감 후 = 알리바이)."""
     d = datetime.strptime(day, "%Y-%m-%d")
@@ -135,19 +193,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 크기의 식별집합은 튜플 블록에서 일 단위 상한(하루 총합)과 교차한다.
     passing = {t.trigger.ident: (t, r) for t, r in reports
                if t.trigger.kind == "점" and r.applies_today}
-    rows = []
-    for s in shares:
-        wtypes = {labels[e] for e in s.window.event_ids}
-        hit = next((passing[w] for w in wtypes if w in passing), None)
-        if hit is not None:
-            t, r = hit
-            rows.append(Row(s, treatment=f"{t.trigger.ident[:14]}→{t.channel}",
-                            verdict="성립"))
-        elif s.window.kind == "event" or (s.window.kind == "gap" and s.window.event_ids):
-            rows.append(Row(s, treatment=",".join(s.window.event_ids)[:20],
-                            verdict="판정불가"))
-        else:
-            rows.append(Row(s))
+    refuted = {t.trigger.ident for t, r in reports
+               if t.trigger.kind == "점" and r.verdict == "불성립"}
+    rows = _assign_rows(shares, labels, passing, refuted)
     record(root, day=day, cell=f"{ticker}/{day}", reports=reports, screens=screens)
 
     # 채널판을 산문에 배선한다 - 표·블록·산문이 같은 값에서 나와야 한다는 계약의
@@ -166,7 +214,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                           iset_hi=iset[1] if iset else None,
                           contradiction=r.ci_lo is not None and iset is None))
 
-    story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=None,
+    story = narrate(ticker=ticker, name=instrument_id[:20], day=day,
+                    route=_route_gate(lake, instrument_id, day),
                     rows=rows, grounded=labels, after_close=tuple(after_close),
                     edges=tuple(edges))
 
