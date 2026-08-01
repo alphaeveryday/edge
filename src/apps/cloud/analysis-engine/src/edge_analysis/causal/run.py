@@ -217,19 +217,30 @@ def _estimate(cd, client, g: WorldGraph, idents: list, *, as_of: str, w0: date, 
     by_pair = {(i.src, i.dst): i for i in idents}
     proofs: list[V.EdgeProof] = []
     for d in _designs(g):
-        p = V.plan(g.nodes, edges, d, prior=_prior_for(d, g, screened),
-                   ident=by_pair.get((d.src, d.dst)))
-        if sandbox:
-            proofs.append(V.verify(cd, client, d, p, as_of=as_of, w0=w0, w1=w1,
-                                   trade_date=trade_date,
-                                   etf_instrument_id=etf_instrument_id, docs=docs))
-        elif p["strategy"] == "none":
+        # 간선 하나의 검정 세션이 죽어도 **나머지는 돈다.** 안 그러면 모델의 형식 습관
+        # 하나가 유니버스 런 전체를 넘어뜨린다(ALPHA-633 과 같은 비대칭 - 2026-08-01
+        # ref-20260801-01 에서 검정 한 턴의 파싱 실패로 런이 exit 1 했다). 실패는 침묵이
+        # 아니라 `gate_fail` 을 단 증명으로 남아 P8 이 미결로 처분한다.
+        try:
+            p = V.plan(g.nodes, edges, d, prior=_prior_for(d, g, screened),
+                       ident=by_pair.get((d.src, d.dst)))
+            if sandbox:
+                proofs.append(V.verify(cd, client, d, p, as_of=as_of, w0=w0, w1=w1,
+                                       trade_date=trade_date,
+                                       etf_instrument_id=etf_instrument_id, docs=docs))
+            elif p["strategy"] == "none":
+                proofs.append(_as_proof(EdgeResult(
+                    design=d, gate_fail=["식별 전략 없음 (조정 불가·도구 없음)"]), p))
+            else:
+                proofs.append(_as_proof(
+                    estimate(cd, d, as_of=as_of, w0=w0, w1=w1, adjust=p["adjust"],
+                             industry=industry), p))
+        except Exception as exc:  # noqa: BLE001 - 한 간선의 실패가 런을 죽이지 않는다
+            log("causal.estimate_failed", edge=f"{d.src}->{d.dst}",
+                error=f"{type(exc).__name__}: {exc}"[:300])
             proofs.append(_as_proof(EdgeResult(
-                design=d, gate_fail=["식별 전략 없음 (조정 불가·도구 없음)"]), p))
-        else:
-            proofs.append(_as_proof(
-                estimate(cd, d, as_of=as_of, w0=w0, w1=w1, adjust=p["adjust"],
-                         industry=industry), p))
+                design=d,
+                gate_fail=[f"검정 실패: {type(exc).__name__}: {exc}"[:300]]), {}))
     log("causal.verified", edges=len(proofs),
         passed=sum(1 for r in proofs if r.passed),
         significant=sum(1 for r in proofs if r.significant),
