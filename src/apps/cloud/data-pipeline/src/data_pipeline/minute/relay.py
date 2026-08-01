@@ -17,9 +17,9 @@ Worker 안에 넣지 않는 이유(v0.7 11.1): 가격 Service scale-in 이 뉴�
 한 다음 tick 도 같은 자리에서 죽어 **가격·뉴스·백필 세 큐가 전부 영구히 멈춘다**.
 
 ⚠️ **반대로 일시 실패는 횟수로 포기하지 않는다.** DEAD 는 event 자체가 발행 불가일 때만
-이다 — 시도 예산을 두면 몇 분짜리 큐 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데
-이 단계엔 redrive 경로가 없다(PR 7A). 지연은 알람(backlog·oldest-age, PR 7D)이 잡지만
-유실은 아무도 되돌리지 못한다.
+이다 — 시도 예산을 두면 몇 분짜리 큐 장애가 멀쩡한 event 를 DEAD 로 만든다. redrive
+(ALPHA-672)로 되돌릴 수는 있지만 **스스로 풀리지는 않는다**: 사람이 알아채고 명령을
+쳐야 한다. 지연은 알람(backlog·oldest-age, PR 7D)이 잡고, DEAD 는 사람이 본다.
 
 재시도 권위는 PostgreSQL 이다(v0.7 12.4) — SQS 는 wake-up transport 일 뿐이고, 몇 번
 시도했고 언제 다시 할지는 outbox 행에만 있다.
@@ -40,20 +40,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import JobLedger
+from .jobs import DESTINATION_JOB_KINDS, EVENT_TYPE_JOB_KINDS, JobLedger
 from .models import canonical_json
 
 logger = logging.getLogger(__name__)
 
 # 계획 §11·v0.7 12.1 이 고정한 큐 3종. 이 어휘를 두는 이유는 **기동 시 검증**이다:
 # 매핑에 빠진 destination 이 있으면 그 큐로 갈 event 가 전부 DEAD 로 몰살되는데,
-# DEAD 는 스스로 풀리지 않는다(redrive 는 PR 7A). 설정 오타 하나가 배달을 통째로
+# DEAD 는 스스로 풀리지 않는다(redrive 는 사람이 친다). 설정 오타 하나가 배달을 통째로
 # 파괴하는 경로라, 런타임 격리에 맡기지 않고 기동을 거부해 배포 실패로 드러낸다.
 KNOWN_DESTINATIONS = frozenset({
     "price-analysis-realtime",
     "news-extraction-realtime",
     "news-extraction-backfill",
 })
+
 
 # SQS 상한 (docs: SQS Developer Guide "Amazon SQS message quotas", 2026-08 확인) —
 # 배치 요청당 10건, 메시지 하나 1 MiB, 배치 합계도 1 MiB(SendMessageBatch API 참조).
@@ -167,7 +168,7 @@ def _body_md5(body: str) -> str:
 def build_message_body(event: dict) -> str:
     """큐에 실리는 결정적 envelope.
 
-    payload 만 보내지 않고 event_id/event_type 을 함께 싣는다 — Consumer(PR 7A)의 멱등
+    payload 만 보내지 않고 event_id/event_type 을 함께 싣는다 — Consumer(ALPHA-672)의 멱등
     키가 event_id 이고, 같은 논리 사건의 재전달은 **같은 event_id** 로 오기 때문이다.
     """
     return canonical_json({
@@ -281,7 +282,7 @@ class SqsPublisher:
                         # 계약이 아니다**. 잘못된 큐 URL(NonExistentQueue)·권한 오류도
                         # SenderFault 인데, 그건 배포로 고쳐지는 설정 문제지 event 의
                         # 결함이 아니다 — 그걸 DEAD 로 확정하면 URL 오타 하나가 레인
-                        # 전체를 되돌릴 수 없게 만든다(redrive 는 PR 7A).
+                        # 전체를 사람 손으로만 되돌릴 수 있게 만든다(job 수만큼의 redrive).
                         # terminal 은 **그 메시지 자체가 못 실리는 경우**로 좁힌다:
                         # 코드가 결함 목록에 있고 SenderFault 도 참일 때만.
                         # 코드가 메시지 결함이면서 **필수 필드 SenderFault 도 참**일
@@ -352,6 +353,33 @@ class OutboxRelay:
                     events, now, error=f"미정의 destination: {destination}", terminal=True
                 )
                 continue
+            # destination 과 event_type 이 어긋나면 **발행하지 않는다** — 큐는
+            # 가격·뉴스를 공유하지 않는다(v0.7 12.1). 그대로 내보내면 그 큐의
+            # Consumer 가 자기 테이블이 아니라며 처리도 삭제도 못 해 DLQ 로 가고,
+            # 대사도 남의 레인이라 건드리지 않아 아무도 해소하지 못한다.
+            # **terminal 이다.** 배포로 바뀌는 건 앞으로 쓰일 행이고, 이미 쓰인 이
+            # 행의 destination·event_type 은 컬럼에 박혀 있어 영영 그대로다 — transient
+            # 로 두면 매 tick 이 같은 자리에서 거부하며 그 행이 영구 고착된다
+            # (이 모듈의 terminal 기준 그대로: 재시도해도 결과가 같다).
+            mismatched = [
+                event for event in events
+                if DESTINATION_JOB_KINDS.get(destination)
+                != EVENT_TYPE_JOB_KINDS.get(event["event_type"])
+            ]
+            if mismatched:
+                logger.error(
+                    "destination %r 에 %s 사건이 실려 있다 — 쓰는 쪽 배선 오류",
+                    destination, sorted({e["event_type"] for e in mismatched}),
+                )
+                failed += self._record_failures(
+                    mismatched, now,
+                    error=f"destination {destination} 과 event_type 이 어긋난다",
+                    terminal=True,
+                )
+                mismatched_ids = {event["event_id"] for event in mismatched}
+                events = [e for e in events if e["event_id"] not in mismatched_ids]
+                if not events:
+                    continue
             # 직렬화는 **event 단위로** 격리한다 — payload 는 JSONB 라 크기 상한이 없어
             # 거대 행 하나가 OOM·직렬화 예외를 낼 수 있는데, 묶어서 만들면 그 하나가
             # 같은 destination 의 정상 행까지 끌고 가 그 큐가 통째로 고착된다.
@@ -460,9 +488,9 @@ class OutboxRelay:
         elapsed = timedelta(seconds=time.monotonic() - self._tick_started)
         for event in events:
             # ⚠️ **일시 실패는 횟수로 포기하지 않는다.** 시도 예산을 두면 몇 분짜리 SQS
-            # 장애가 event 를 되돌릴 수 없는 DEAD 로 만드는데, 이 단계엔 redrive 경로가
-            # 없다(PR 7A) — 큐가 복구돼도 그 행은 영원히 발행되지 않는다. 지연은 알람이
-            # 잡지만(backlog·oldest-age, PR 7D) 유실은 아무도 못 되돌린다.
+            # 장애가 멀쩡한 event 를 DEAD 로 만드는데, 큐가 복구돼도 그 행은 스스로
+            # 돌아오지 않는다 — 사람이 redrive 를 쳐야 한다(ALPHA-672). 지연은 알람이
+            # 잡지만(backlog·oldest-age, PR 7D) 격리는 사람이 봐야 풀린다.
             # DEAD 는 **event 자체가 발행 불가**일 때만이다(미정의 destination·크기 초과·
             # SenderFault) — 그건 재시도해도 결과가 같다.
             # backoff 는 **실패한 시각** 기준이어야 한다 — tick 시작 시각으로 재면 발행이
@@ -516,7 +544,7 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     if settings.minute_relay is None:
         raise SystemExit(
             "minute_relay 설정 없음 — relay 는 destination→큐 매핑 필수"
-            "(DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__<destination> 주입)"
+            "(DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{\"<destination>\":\"<url>\"}' 주입)"
         )
     options = settings.minute_relay
     relay = OutboxRelay(
@@ -559,5 +587,8 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     )
     if remaining["DEAD"]:
         # DEAD 도 큐에 나간 적이 없다 — 기다려서 풀리지 않으므로 사람이 봐야 한다
-        logger.error("격리된 미발행 event %d건 — redrive 필요(PR 7A)", remaining["DEAD"])
+        logger.error(
+            "격리된 미발행 event %d건 — `run redrive --kind … --job-id … --reason …` 필요",
+            remaining["DEAD"],
+        )
     return 0 if partial == 0 and not any(remaining.values()) else 1

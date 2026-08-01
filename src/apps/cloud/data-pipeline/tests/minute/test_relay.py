@@ -5,8 +5,8 @@
 
 - 발행 못 할 event 하나(미정의 destination·크기 초과)가 나머지 큐를 막지 않는가
 - 발행 결과를 모르는 event 를 성공으로 접지 않는가(유실 은폐 금지)
-- 발행 불가 event 만 DEAD 로 격리하는가(일시 장애는 **횟수로 포기하지 않는다** — 이
-  단계엔 redrive 가 없어 DEAD 가 곧 유실이다)
+- 발행 불가 event 만 DEAD 로 격리하는가(일시 장애는 **횟수로 포기하지 않는다** —
+  DEAD 는 redrive(ALPHA-672)로 되돌릴 수 있을 뿐 스스로 풀리지 않는다)
 - 경쟁 Relay·crash 에서 event 하나가 두 번 처리되거나 사라지지 않는가
 """
 
@@ -25,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
-from data_pipeline.minute.jobs import JobLedger
+from data_pipeline.minute.jobs import JOB_EVENT_TYPES, JobLedger
 from data_pipeline.minute.relay import (
+    DESTINATION_JOB_KINDS,
     OutboxMessage,
     OutboxRelay,
     relay_cli,
@@ -67,10 +68,18 @@ class FakePublisher:
         )
 
 
-def enqueue(db, event_id, destination="price-analysis-realtime", payload=None):
+def enqueue(db, event_id, destination="price-analysis-realtime", payload=None,
+            event_type=None):
     jobs = JobLedger(db=_DB, connect_fn=db.connect)
     jobs.insert_outbox_event(
-        event_id=event_id, event_type="PriceWindowCommitted", destination=destination,
+        # 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1) — 픽스처가 그 계약을 어기면
+        # Relay 의 배선 검사를 밟지 않아 정작 검사 자체가 검증되지 않는다
+        event_id=event_id,
+        # 어휘 밖 destination(오타·폐기된 큐)은 매핑이 없다 — 그 격리 경로는
+        # 배선 검사보다 앞이라 event_type 이 무엇이든 결과가 같다
+        event_type=event_type
+        or JOB_EVENT_TYPES[DESTINATION_JOB_KINDS.get(destination, "price")],
+        destination=destination,
         aggregate_id="job-" + event_id, generation=1,
         payload=payload or {"job_id": "job-" + event_id},
     )
@@ -159,6 +168,26 @@ class TestLaneIsolation:
         relay = build_relay(db, publisher=failing, batch_limit=10)
         assert relay.tick(NOW) == "PARTIAL"
         assert db.outbox["news1"]["status"] == "PUBLISHED", "가격 장애가 뉴스를 굶겼다"
+
+    def test_mismatched_event_type_is_not_published(self, tmp_path):
+        # 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1). 어긋난 채 내보내면 그 큐의
+        # Consumer 가 자기 테이블이 아니라며 처리도 삭제도 못 해 DLQ 로 가고, 대사도
+        # 남의 레인이라 건드리지 않아 아무도 해소하지 못한다.
+        db = FakeMinuteDB()
+        enqueue(db, "wrong", destination="news-extraction-realtime",
+                event_type="PriceWindowCommitted")
+        enqueue(db, "right", destination="news-extraction-realtime")
+        relay = build_relay(db)
+
+        assert relay.tick(NOW) == "PARTIAL"
+
+        assert db.outbox["right"]["status"] == "PUBLISHED"   # 옆 event 는 나간다
+        # **terminal 이다** — 배포로 바뀌는 건 앞으로 쓰일 행이고, 이 행의 destination·
+        # event_type 은 컬럼에 박혀 있어 영영 그대로다. transient 로 두면 매 tick 이 같은
+        # 자리에서 거부하며 영구 고착된다(#456 봇 지적).
+        assert db.outbox["wrong"]["status"] == "DEAD"
+        [(_, messages)] = relay.publisher.sent
+        assert [m.event_id for m in messages] == ["right"]
 
     def test_lane_is_claimed_right_before_its_publish(self, tmp_path):
         # ⚠️ 전부 집어놓고 순차 발행하면 뒤 레인의 lease 가 자기 차례 전에 흘러가
@@ -292,7 +321,7 @@ class TestRetryBudget:
 
     def test_long_outage_never_turns_transient_into_dead(self, tmp_path):
         # ⚠️ 시도 횟수로 포기하면 몇 분짜리 SQS 장애가 event 를 되돌릴 수 없는 DEAD 로
-        # 만든다 — 이 단계엔 redrive 가 없어(PR 7A) 큐가 복구돼도 영원히 미발행이다.
+        # 만든다 — 큐가 복구돼도 그 행은 스스로 안 돌아온다(사람이 redrive 를 쳐야 한다).
         # 지연은 알람이 잡지만 유실은 아무도 못 되돌린다.
         db = FakeMinuteDB()
         enqueue(db, "e1")
@@ -398,7 +427,7 @@ class TestConfigGuards:
     def test_missing_known_destination_refuses_to_start(self):
         # ⚠️ 런타임 DEAD 격리는 한 건짜리 사고용이다. 큐 매핑에서 destination 하나가
         # 빠지면 그 큐로 갈 event 가 **전부** DEAD 가 되는데 DEAD 는 스스로 안 풀린다
-        # (redrive=PR 7A). 설정 오타를 데이터 파괴가 아니라 배포 실패로 만든다.
+        # (redrive 는 사람이 친다). 설정 오타를 데이터 파괴가 아니라 배포 실패로 만든다.
         partial = {k: v for k, v in QUEUES.items() if k != "news-extraction-backfill"}
         with pytest.raises(ValueError, match="news-extraction-backfill"):
             RelayConfig(relay_id="r", queue_urls=partial)

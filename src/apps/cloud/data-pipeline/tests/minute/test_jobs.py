@@ -99,7 +99,8 @@ class TestJobClaim:
         ledger = make_ledger(db)
         job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
         claim = ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
-        assert claim == {"job_id": job_id, "attempt_count": 1}
+        # redrive_generation 도 돌려준다 — 전이 CAS 가 이 값을 fence 로 쓴다(ALPHA-672)
+        assert claim == {"job_id": job_id, "attempt_count": 1, "redrive_generation": 0}
         assert ledger.claim_due_job(kind="news", worker_id="c2", now=NOW, lease_seconds=60) is None
 
     def test_retry_wait_gates_on_next_attempt_at(self):
@@ -110,7 +111,8 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         retry_at = NOW + timedelta(minutes=5)
         assert ledger.retry_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=NOW,
             next_attempt_at=retry_at, error_code="LLM_TIMEOUT",
         ) is True
         early = NOW + timedelta(minutes=1)
@@ -125,7 +127,8 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         with pytest.raises(ValueError):
             ledger.retry_job(
-                kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
+                kind="news", job_id=job_id, worker_id="c1", attempt=1,
+                redrive_generation=0, now=NOW,
                 next_attempt_at=NOW, error_code="X",
             )
 
@@ -147,12 +150,12 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c2", now=later, lease_seconds=60)
         # c1 의 늦은 성공 보고는 거부 — claim 은 이미 c2 것이다 (attempt fence)
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is False
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c2", attempt=2, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c2", attempt=2,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "SUCCEEDED"
 
@@ -162,8 +165,8 @@ class TestJobClaim:
         job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         assert ledger.dead_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
-            error_code="BUDGET",
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=NOW, error_code="BUDGET",
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "DEAD"
         assert ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60) is None
@@ -290,8 +293,8 @@ class TestClaimAttemptFence:
         second = ledger.claim_due_job(kind="news", worker_id="c1", now=later, lease_seconds=60)
         assert second["attempt_count"] == 2
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is False
         assert db.jobs[("news", job_id)]["status"] == "CLAIMED"  # 새 attempt 는 무사
 
