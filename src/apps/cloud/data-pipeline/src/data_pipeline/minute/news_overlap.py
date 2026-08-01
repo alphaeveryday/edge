@@ -17,6 +17,12 @@ anchor 를 만날 때까지" 훑는 방식이다:
 feed 는 주입 계약(fetch_page(poll_index, page, page_size))이다. 실제 BigKinds
 wrapper(5-2)는 `NewsPage`로 명시적 isLimitPage를 보존하고, 결정적 fake의 list 반환은
 빈 page를 종료 신호로 쓴다. HTTP/parser는 기존 sources/bigkinds.py를 재사용한다.
+
+**raw 보존 책임은 feed adapter 에 있다** — 판정보다 먼저다. adapter 가 fetch 시점에
+벤더 응답 원본을 raw 존에 쓰고, 이 컨트롤러는 판정만 한다. 컨트롤러가 payload 충돌
+같은 이유로 예외를 던져도 이미 받은 page 의 raw 는 남아야 하기 때문이다(레이크 규약:
+raw 는 전부 보존). PollOutcome 을 받은 뒤에 raw 를 쓰도록 5-2 를 배선하면 예외
+경로에서 원본이 사라진다 — 그렇게 하지 말 것.
 """
 
 from __future__ import annotations
@@ -75,6 +81,12 @@ def poll_new_articles(
     """
     if max_pages < 1 or page_size < 1 or anchor_size < 1:
         raise ValueError("max_pages/page_size/anchor_size 는 양수여야 한다")
+    for anchor in anchor_ids:
+        # 손상된 커서(빈 문자열·비문자열)는 어떤 NEWS_ID 와도 안 맞아 매 poll 이
+        # budget 을 다 쓰고 truncated 로 끝난다 — 원인은 안 드러난 채 recovery 만
+        # 영구 반복된다. 커서가 깨졌다는 사실을 여기서 드러낸다.
+        if not isinstance(anchor, str) or not anchor.strip() or anchor != anchor.strip():
+            raise ValueError(f"anchor_ids 원소가 비어 있거나 문자열이 아니다: {anchor!r}")
     seen_new: set[str] = set()
     observed_signatures: dict[str, tuple[str, str]] = {}
     new_articles: list[dict] = []
@@ -227,6 +239,11 @@ class NewsSourceLedger:
         """
         if type(canonical_id_from_url) is not bool:
             raise ValueError("canonical_id_from_url 은 bool 이어야 한다")
+        if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+            # TIMESTAMPTZ 는 naive 를 서버 timezone 으로 접어 저장하고 aware 로 돌려준다 —
+            # 다음 관측의 stale 비교가 naive/aware TypeError 로 터진다. fake 는 값을 그대로
+            # 보관해 이 격차를 못 잡으므로 계약 시점에 막는다.
+            raise ValueError("now 는 timezone-aware 여야 한다")
         fallback_article_id = news_article_id({"NEWS_ID": source_item_id})
         if not canonical_id_from_url and canonical_article_id != fallback_article_id:
             raise ValueError("URL 없는 canonical_article_id 는 NEWS_ID fallback 이어야 한다")
@@ -279,6 +296,11 @@ class NewsSourceLedger:
         effective_article_id = (
             canonical_article_id if canonical_changed else previous_article_id
         )
+        if url_conflict:
+            # stale 분기보다 **먼저** 판정한다 — 늦게 도착한 관측이라도 같은 NEWS_ID 에
+            # 다른 URL identity 가 붙었다는 사실은 유효하다. stale 로 먼저 반환하면
+            # 그 충돌(별도 canonical/job 가능성)이 조용히 사라진다.
+            raise ValueError("같은 NEWS_ID에 서로 다른 URL canonical identity가 충돌한다")
         if now < last_seen_at:
             # 오래된 payload는 최신 content를 되돌릴 수 없다. 다만 content가 동일하면
             # NEWS_ID fallback보다 강한 URL identity 증거만 단방향 승격한다.
@@ -307,8 +329,6 @@ class NewsSourceLedger:
             # 동형 Worker 두 lane이 같은 tick 시각을 공유할 수 있다. 다른 payload를
             # 선착순으로 고르면 결과가 lock 순서에 의존하므로 크게 실패시킨다.
             raise ValueError("같은 관측 시각에 content checksum 이 충돌한다")
-        if url_conflict:
-            raise ValueError("같은 NEWS_ID에 서로 다른 URL canonical identity가 충돌한다")
         if now == last_seen_at and not canonical_changed:
             return {
                 "created": False, "content_changed": False,

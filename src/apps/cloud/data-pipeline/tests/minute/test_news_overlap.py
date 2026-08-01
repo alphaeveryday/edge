@@ -415,3 +415,41 @@ class TestSourceLedger:
             )
         assert db.connect_calls == before + 1
         assert result["created"] is True
+
+    def test_stale_observation_still_reports_url_conflict(self):
+        # 늦게 도착한 관측이라도 같은 NEWS_ID 에 다른 URL identity 가 붙은 사실은
+        # 유효하다 — stale 로 먼저 접으면 별도 canonical/job 가능성이 사라진다
+        db = FakeMinuteDB()
+        ledger = NewsSourceLedger(db=_DB, connect_fn=db.connect)
+        item = "01100901.20260731000001"
+        url_a = news_article_id({"PROVIDER_LINK_PAGE": "https://news.example/a"})
+        url_b = news_article_id({"PROVIDER_LINK_PAGE": "https://news.example/b"})
+        self._observe(ledger, item=item)  # fallback identity 로 최초 관측
+        self._observe(
+            ledger, item=item, canonical_article_id=url_a, canonical_id_from_url=True,
+            now=NOW + timedelta(seconds=5),
+        )  # URL identity 승격
+        with pytest.raises(ValueError, match="URL canonical identity"):
+            self._observe(
+                ledger, item=item, canonical_article_id=url_b,
+                canonical_id_from_url=True, now=NOW,  # 지연 도착(stale)
+            )
+
+    def test_naive_now_rejected(self):
+        # TIMESTAMPTZ 는 naive 를 서버 tz 로 접어 저장한다 — 다음 stale 비교가 터진다
+        db = FakeMinuteDB()
+        ledger = NewsSourceLedger(db=_DB, connect_fn=db.connect)
+        with pytest.raises(ValueError, match="timezone-aware"):
+            self._observe(ledger, now=datetime(2026, 7, 31, 9, 5))
+
+
+class TestAnchorValidation:
+    def test_corrupt_anchor_fails_loud(self):
+        # 손상된 커서는 어떤 ID 와도 안 맞아 매 poll 이 truncated 로 끝난다 —
+        # 원인이 안 드러난 채 recovery 만 영구 반복되는 것을 막는다
+        feed = drift_feed()
+        for corrupt in (frozenset({""}), frozenset({" "}), frozenset({" id"})):
+            with pytest.raises(ValueError, match="anchor_ids"):
+                poll_new_articles(
+                    feed, poll_index=1, anchor_ids=corrupt, max_pages=2, page_size=50,
+                )
