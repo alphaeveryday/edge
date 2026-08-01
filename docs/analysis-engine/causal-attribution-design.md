@@ -312,7 +312,7 @@ $$(\text{채널}, \; \text{노출원}, \; \text{부호}, \; \text{강도}\in\tex
 1. **시계열이 canonical 에 없다** — raw 11GB → 등뼈 정합 (티커→entity · 거래일→period_key · 공표시각→available_at)
 2. **뉴스 실체 해소 미완** — 이름→티커. 지분·임원 간선 `resolved=False` 와 같은 원인. 안 되면 사건이 그래프 밖에 뜬다
 3. **정정 계열의 PIT** — 수정주가·리비전 수급은 `available_at` 갱신 필수. 벤더가 조용히 덮어쓰면 우리도 조용히 미래를 본다. 등뼈의 `available_basis`(EXACT/DERIVED/ESTIMATED) 를 비우지 않는다
-4. **τ 해상도** (스모크 실측 2026-08-01) — RDB `source_event.available_at` 이 전체 30,785건에 distinct 62개 = **날짜 해상도**다. 초 단위 τ 는 뉴스 저장소(`canonical_event.published_at`)에만 있다. 이 상태로는 하루의 모든 사건이 09:00 KST 한 창에 뭉쳐 시간 분해가 퇴화한다 (셀 000660·2026-06-01 에서 77건이 창 하나로 병합됨을 확인). 적재 시 `published_at` → `available_at` 승격이 필요하다
+4. **τ 해상도** (스모크 실측 2026-08-01) — RDB `source_event.available_at` 이 전체 30,785건에 distinct 62개 = **날짜 해상도**다. `document.published_at` 도 99.6%가 자정 — 평탄화는 문서 적재 상류다. **근원 확정: `data_pipeline/parse.py` `_BIGKINDS_NEWS_ID_TS = r"\.(\d{8})\d{6}"` — NEWS_ID 에 초 단위 시각(14자리)이 있는데 캡처가 날짜 8자리뿐이다.** 수술 경로: parse(시각 캡처) → normalize_news:166 → canonical published_at → load_documents → 사건 조립 시 available_at 승격. 이 상태로는 하루의 모든 사건이 09:00 KST 한 창에 뭉쳐 시간 분해가 퇴화한다 (셀 000660·2026-06-01 에서 77건 병합 실측)
 
 ## 20. 개발 계획과 P0–P9 매핑
 

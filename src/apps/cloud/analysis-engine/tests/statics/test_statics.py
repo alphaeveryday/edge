@@ -117,3 +117,61 @@ def test_render_table_self_audits():
     rows = [Row(s) for s in shares]
     out = render(rows)
     assert "합계" in out and "미설명" in out        # 미설명이 1급 항목이다
+
+
+# ── 서술 계약 — 정성 품질은 가드로 강제된다 ─────────────────────────────
+def _rows_for_narration():
+    from datetime import datetime
+    from edge_analysis.statics import Share
+    from edge_analysis.statics.windows import Window
+    o = datetime(2026, 6, 1, 9, 0)
+    gap = Share(Window("갭", o, o, "gap", ()), 0.02)
+    ev = Share(Window("창@10:00", datetime(2026, 6, 1, 10, 0),
+                      datetime(2026, 6, 1, 10, 15), "event", ("e1",)), -0.006)
+    return gap, ev
+
+
+def test_narration_refuses_ungrounded_citation():
+    from edge_analysis.statics import NarrationError, Row, narrate
+    _, ev = _rows_for_narration()
+    with pytest.raises(NarrationError):
+        narrate(ticker="t", name="n", day="d", route=None,
+                rows=[Row(ev, verdict="성립", est=-0.005)], grounded={})
+
+
+def test_narration_negatives_precede_shares_and_unknown_is_not_rejection():
+    from edge_analysis.statics import Row, narrate
+    gap, ev = _rows_for_narration()
+    txt = narrate(ticker="t", name="n", day="d", route=None,
+                  rows=[Row(gap), Row(ev, verdict="판정불가")], grounded={"e1": "국방AI"})
+    assert txt.index("[아닌 것 먼저]") < txt.index("[몫]")
+    assert "기각이 아니라 미지" in txt and "시간 알리바이" in txt
+
+
+def test_narration_counterfactual_needs_positivity_and_significance():
+    from edge_analysis.statics import Conditional, NarrationError, Row, narrate
+    gap, ev = _rows_for_narration()
+    rows = [Row(gap), Row(ev, verdict="판정불가")]
+    ok = Conditional("포지셔닝", -1.8, -0.4, n_opposite=41, interaction_significant=True)
+    txt = narrate(ticker="t", name="n", day="d", route=None, rows=rows,
+                  grounded={"e1": "x"}, conditional=ok)
+    assert "정상이었다면" in txt and "41건" in txt
+    for bad in (Conditional("포지셔닝", -1.8, -0.4, 2, True),
+                Conditional("포지셔닝", -1.8, -0.4, 41, False)):
+        with pytest.raises(NarrationError):
+            narrate(ticker="t", name="n", day="d", route=None, rows=rows,
+                    grounded={"e1": "x"}, conditional=bad)
+
+
+def test_narration_dedupes_unknown_labels():
+    from edge_analysis.statics import Row, narrate
+    from datetime import datetime
+    from edge_analysis.statics import Share
+    from edge_analysis.statics.windows import Window
+    evs = tuple(f"e{i}" for i in range(30))
+    w = Share(Window("갭", datetime(2026, 6, 1, 9, 0), datetime(2026, 6, 1, 9, 0),
+                     "gap", evs), 0.01)
+    txt = narrate(ticker="t", name="n", day="d", route=None,
+                  rows=[Row(w, verdict="판정불가")],
+                  grounded={e: "같은타입" for e in evs})
+    assert "같은타입 ×30" in txt and txt.count("같은타입") == 1

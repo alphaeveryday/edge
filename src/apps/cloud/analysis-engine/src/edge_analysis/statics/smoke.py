@@ -15,6 +15,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from .duck import CausalLake
 from .gates import edge_gate
+from .narrate import narrate
 from .render import Row, render
 from .tree import decompose
 from .windows import build_windows
@@ -39,9 +40,17 @@ def run(ticker: str, instrument_id: str, day: str) -> str:
     # 마감 시각보다 뒤여야 한다. KRX 전역 상수: [09:00, 15:35).
     session_close = datetime.combine(d.date(), time(15, 35))
 
-    taus: list[tuple[datetime, str]] = []
+    taus = []
+    labels: dict[str, str] = {}
     if lake.exists.get("rdb") is True:
-        taus = [(_kst_naive(t), str(e)) for t, e in lake.taus(instrument_id, day)]
+        for t, e in lake.taus(instrument_id, day):
+            taus.append((_kst_naive(t), str(e)))
+            labels[str(e)] = str(e)[:16]        # 접지 = RDB 에 실재하는 id 만 이 dict 에 든다
+        for eid, code in lake.sql(
+                "SELECT source_event_id, event_type_code FROM rdb.public.source_event "
+                f"WHERE source_event_id IN ({','.join(repr(e) for _, e in taus)})" if taus else
+                "SELECT NULL, NULL WHERE FALSE"):
+            labels[str(eid)] = str(code)         # 표시는 사건 타입으로
 
     bars = [(ts if ts.tzinfo is None else ts.replace(tzinfo=None), float(c))
             for ts, c in lake.bars(ticker, day)]
@@ -58,7 +67,10 @@ def run(ticker: str, instrument_id: str, day: str) -> str:
                             verdict=edge_gate(0, None)))
         else:
             rows.append(Row(s))
-    return render(rows)
+    table = render(rows)
+    story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=None,
+                    rows=rows, grounded=labels)
+    return table + "\n\n" + story
 
 
 if __name__ == "__main__":

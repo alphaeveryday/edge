@@ -9,6 +9,7 @@ P0–P9 와의 관계: P1 지문을 먹이고 P2 어휘를 닫는다 (설계 §2
 """
 from .frame import PathVerdict, validate_edge
 from .gates import EdgeVerdict, GateInputs, edge_gate, route
+from .narrate import BaseRate, Conditional, NarrationError, narrate
 from .render import Row, render
 from .sem import EdgeEstimate, clip_to_share, exposure_slope, rank_with_ties
 from .tree import Share, decompose
@@ -17,8 +18,9 @@ from .vocab import (CHANNELS, ExposureSource, Feature, HypothesisTuple,
 from .windows import Window, build_windows
 
 __all__ = [
-    "CHANNELS", "EdgeEstimate", "EdgeVerdict", "ExposureSource", "Feature",
-    "GateInputs", "HypothesisTuple", "PathVerdict", "Row", "SERIES_FAMILIES",
-    "Share", "TRANSFORMS", "Trigger", "VocabError", "Vulnerability", "Window",
-    "build_windows", "clip_to_share", "decompose", "edge_gate", "exposure_slope",
-    "rank_with_ties", "render", "route", "validate_edge"]
+    "BaseRate", "CHANNELS", "Conditional", "EdgeEstimate", "EdgeVerdict",
+    "ExposureSource", "Feature", "GateInputs", "HypothesisTuple", "NarrationError",
+    "PathVerdict", "Row", "SERIES_FAMILIES", "Share", "TRANSFORMS", "Trigger",
+    "VocabError", "Vulnerability", "Window", "build_windows", "clip_to_share",
+    "decompose", "edge_gate", "exposure_slope", "narrate", "rank_with_ties",
+    "render", "route", "validate_edge"]
