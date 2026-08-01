@@ -151,3 +151,54 @@ def test_reduction_check_flags_today_misalignment():
     r = edge_test(lake, T, "2026-06-01", cell_instrument_id="i0")
     assert r.reduction.startswith("불일치")
     assert not r.applies_today
+
+
+def test_relation_transmission_edge_tests_but_never_assigns():
+    class RelLake:
+        """전이 패널 스텁: 동일산업 피어(rel=1)만 +2% 반응."""
+
+        def __init__(self, n=200, seed=3):
+            rng = np.random.default_rng(seed)
+            rel = (np.arange(n) % 4 == 0).astype(int)          # 25% 피어
+            ar = 0.02 * rel + rng.normal(scale=0.004, size=n)
+            d = [f"2026-0{1 + i % 5}-01" for i in range(n)]
+            self.rows = [(f"i{k}", d[k], float(ar[k]), int(rel[k])) for k in range(n)]
+
+        def sql(self, q):
+            assert "industry_name" in q                        # 전이 SQL 만 와야 한다
+            return self.rows
+
+    t = HypothesisTuple(
+        vulnerabilities=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
+        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),
+        from_role="SUPPLIER", to_role="ISSUER", outcome="수익률", sign=1)
+    r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
+    assert r.verdict == "성립" and r.p < 0.05
+    assert r.assignable is False and not r.applies_today       # 엣지만, 몫 배정 금지
+    t2 = HypothesisTuple(vulnerabilities=(), trigger=Trigger("점", "X"), channel="C원가",
+                         exposure=ExposureSource("관계", "SUPPLIES_TO", hops=1),
+                         from_role="a", to_role="b", outcome="수익률", sign=1)
+    assert "못 잰다" in edge_test(RelLake(), t2, "2026-06-01").reason
+
+
+def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
+    from edge_analysis.statics.paneltest import grid_screen
+
+    class GridLake:
+        """4피처 격자 스텁: 첫 피처(cum20)에만 진짜 효과."""
+
+        def __init__(self, n=300, seed=4):
+            rng = np.random.default_rng(seed)
+            f = rng.normal(size=(n, 4))
+            hi = f[:, 0] >= np.quantile(f[:, 0], 0.8)
+            ar = 0.02 * hi + rng.normal(scale=0.004, size=n)
+            d = [f"2026-0{1 + i % 5}-01" for i in range(n)]
+            self.rows = [(f"i{k}", d[k], float(ar[k]), *map(float, f[k])) for k in range(n)]
+
+        def sql(self, q):
+            return self.rows
+
+    hits = grid_screen(GridLake(), "2026-06-01", ["COMPANY.PRODUCT.LAUNCH"])
+    assert hits and hits[0]["exposure"] == "가격잔차/누적"       # 심은 효과가 1위
+    assert hits[0]["p2"] < 0.05 and hits[0]["direction"] == "+"
+    assert all(h["p2"] <= 1.0 for h in hits if "p2" in h)       # 양측 보정 상한

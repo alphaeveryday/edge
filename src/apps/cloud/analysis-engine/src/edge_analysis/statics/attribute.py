@@ -98,11 +98,14 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
     if types:
-        from .paneltest import FEATURES
+        from .paneltest import FEATURES, grid_screen
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES))
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
                    for t in tuples]
+        screens = grid_screen(lake, day, types)
+    else:
+        screens = []
 
     # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
     # 패널이 성립해도 오늘 이 셀이 취약성을 안 갖추면 이 셀의 원인이 아니다.
@@ -146,6 +149,16 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     if rejected:
         block.append(f"거부된 제출 {len(rejected)}건 (검증기가 죽임): "
                      + " | ".join(x[:60] for x in rejected[:3]))
+    if screens:
+        block.append("")
+        block.append("── 격자 스크린 (탐색 - 방향 사후·p 양측. 확증은 튜플 게이트만) " + "─" * 8)
+        for s in screens:
+            if "p2" in s:
+                block.append(f"  {s['type'][:40]:<40} {s['exposure']:<14} n={s['n']:<5} "
+                             f"p₂={s['p2']:.3f} 방향{s['direction']} "
+                             f"상위 {s['hi'] * 100:+.2f}% vs 하위 {s['lo'] * 100:+.2f}%")
+            else:
+                block.append(f"  {s['type'][:40]:<40} {s['status']}")
     return render(rows) + "\n\n" + story + "\n" + "\n".join(block)
 
 
