@@ -1274,17 +1274,24 @@ def test_two_rival_hypotheses_are_judged_exclusive_and_that_forgives_the_budget(
 # --------------------------------------------------------------------------- #
 # 산술 게이트 — 가장 싼 게이트가 가장 먼저, 가장 세게 돈다
 # --------------------------------------------------------------------------- #
-def test_zero_weight_candidates_die_before_the_llm_is_ever_called():
+def test_zero_weight_candidates_die_but_the_cell_still_seeks_other_causes():
+    """산술 기각은 **후보**를 죽이지 셀을 죽이지 않는다.
+
+    잔차가 실재하면 P2 가 후보 밖 원인(수급·미시구조·무사건)을 찾으러 돈다 -
+    ETF 기여 1위의 57%가 당일 사건이 없다(설계 §2). 종전 계약(후보 전멸 = LLM 0회)은
+    그 셀 전부를 구조적으로 설명 불가로 만들어 폐기됐다. 산술의 자리는 그대로다:
+    죽은 후보는 죽은 채로 P2 에 넘어가고, 죽은 후보로 검정 표본을 뽑지 않는다.
+    """
     cd, client = FakeCausalData(share=0.0), FakeClient()
 
     raw = _explain(cd, client, candidates=_candidates(0.0))
 
-    assert client.calls == 0, "산술로 죽을 셀에 LLM 비용을 썼다"
-    assert "cohort" not in cd.calls, "검정 표본을 뽑았다 - 순서가 거꾸로다"
-    assert Explanation(raw).explanation_type == "UNCERTAIN"
-    assert _by_name(raw, CAUSE_LABEL)["verdict"] == "not_contributing"
-    assert "비중이 없어" in _by_name(raw, CAUSE_LABEL)["why"]
-    assert "확인되지 않았습니다" in raw["explain"]
+    assert client.calls > 0, "설명항이 실재하는데 LLM 이 한 번도 안 불렸다"
+    # 산술의 자리는 그대로다: 죽은 후보는 죽은 채로 원장에 남고 부활하지 않는다.
+    dead = _by_name(raw, CAUSE_LABEL)
+    assert dead["verdict"] == "not_contributing"
+    assert "비중이 없어" in dead["why"]
+    assert CAUSE_LABEL not in raw["causal"]["probable_cause"]
 
 
 def test_arithmetic_rejection_body_invents_no_number():
@@ -1294,13 +1301,14 @@ def test_arithmetic_rejection_body_invents_no_number():
 
 
 def test_required_effect_beyond_the_type_maximum_dies_on_arithmetic():
-    """비중이 있어도 필요 초과수익이 타입 과거 최대를 넘으면 통계를 볼 필요가 없다."""
+    """비중이 있어도 필요 초과수익이 타입 과거 최대를 넘으면 **그 후보**는 통계 없이
+    죽는다. 셀은 계속된다 - 기각 사유가 원장에 남고, P2 는 다른 원인을 찾으러 돈다."""
     tiny = 0.052            # 실측 사례: 비중 5.20% 로 잔차를 설명하려면 세 자리가 필요했다
     client = FakeClient()
 
     raw = _explain(FakeCausalData(share=tiny), client, candidates=_candidates(tiny))
 
-    assert client.calls == 0
+    assert client.calls > 0, "설명항이 실재하는데 LLM 이 한 번도 안 불렸다"
     killed = _by_name(raw, CAUSE_LABEL)["why"]
     assert f"{abs(RESIDUAL) / tiny * 100:.0f}%" in killed
     assert f"{ABS_MAX * 100:.1f}%" in killed

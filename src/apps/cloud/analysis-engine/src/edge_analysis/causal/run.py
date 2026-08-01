@@ -103,10 +103,14 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     if q.no_explanandum:
         log("causal.no_explanandum", residual=round(q.residual, 5),
             p_scan=q.p_scan, note=q.null_note)
-        alive = []
 
-    if alive:
-        # P2 ─ 어휘 무제한. 세션 n개 독립
+    # **사건 후보의 생존 여부는 LLM 호출 조건이 아니다.** P2 의 계약은 후보 목록 밖
+    # 원인(수급·미시구조·공통충격·무사건)을 1급으로 세우는 것이고(DOMAIN_SAY 에
+    # flow·no_event 가 있다), 실측으로 ETF 기여 1위의 57%가 당일 사건이 없다.
+    # 종전 `if alive:` 는 "설명할 것 없음"과 "사건 후보 없음"을 접어서 그 셀 전부를
+    # 구조적으로 설명 불가로 만들었다 - LLM 을 막는 것은 무설명항 게이트 하나뿐이다.
+    if not q.no_explanandum:
+        # P2 ─ 어휘 무제한. 세션 n개 독립. 죽은 후보도 사유와 함께 넘긴다
         hyps = p2.propose(client, sql, question=q, fingerprint=fp,
                           candidates=screened, n=N_HYPOTHESES)
         if hyps:
