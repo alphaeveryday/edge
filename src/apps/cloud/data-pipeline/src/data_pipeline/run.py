@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
+from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.relay import relay_cli
 from .lake import (
     make_storage,
@@ -137,7 +138,11 @@ def main(argv: list[str] | None = None) -> int:
                  "plan-run", "reconcile",
                  # 1분 파이프라인(ALPHA-670): relay=outbox→SQS 발행 상주 루프. 원장 DB +
                  # minute_relay 큐 매핑 필수, storage/수집창과 무관.
-                 "relay"],
+                 "relay",
+                 # 1분 Consumer 운영(ALPHA-672): dlq-reconcile=DLQ 도착과 DB job 상태
+                 # 대사(주기 실행), redrive=DEAD job 을 DB 부터 되살려 새 delivery event
+                 # 생성. 둘 다 원장 DB 필수, storage/수집창과 무관.
+                 "dlq-reconcile", "redrive"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -164,7 +169,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
     parser.add_argument("--max-ticks", type=int, default=None,
-                        help="relay: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용")
+                        help="relay: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용. "
+                             "dlq-reconcile: 대사 회차 상한(미지정=보이는 메시지를 다 훑을 때까지)")
+    parser.add_argument("--kind", default=None, choices=["news", "price"],
+                        help="redrive: 되살릴 job 의 종류(news=news_extraction_job, price=price_window_job)")
+    parser.add_argument("--destination", default=None,
+                        help="redrive: 새 delivery 를 실을 큐(미지정=직전 event 값 복사). "
+                             "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
+                             "여기서 바로잡지 않으면 복구 경로가 없다")
+    parser.add_argument("--reason", default=None,
+                        help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
+                             "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
+    parser.add_argument("--job-id", default=None,
+                        help="redrive: 되살릴 job_id(결정적 ID). 대상은 **막힌 것**이다 — "
+                             "DEAD job 이거나 Relay 가 발행 불가로 격리한 DEAD delivery event. "
+                             "정상 진행 중이거나 SUCCEEDED 인 job 은 거부된다")
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
@@ -184,13 +203,26 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.max_ticks is not None:
-        if args.step != "relay":
+        if args.step not in ("relay", "dlq-reconcile"):
             raise SystemExit(
-                "--max-ticks 는 relay 에서만 쓴다 — "
+                "--max-ticks 는 relay·dlq-reconcile 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
+
+    # redrive 는 되돌리기 어려운 상태 전이(DEAD→RETRY_WAIT + 새 delivery event)라
+    # 대상을 추측하지 않는다. 다른 스텝에서 주어지면 조용히 무시하지 말고 거부한다
+    # (--deadline-sec·--window-days 와 같은 이유 — 배선 오류가 안 드러난다).
+    if args.step == "redrive":
+        if not args.kind or not args.job_id or not (args.reason or "").strip():
+            raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
+    elif (args.kind is not None or args.job_id is not None
+          or args.reason is not None or args.destination is not None):
+        raise SystemExit(
+            "--kind·--job-id·--reason·--destination 은 redrive 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
@@ -227,6 +259,11 @@ def main(argv: list[str] | None = None) -> int:
         return ops_entry.reconcile_cli(settings)
     if args.step == "relay":
         return relay_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "dlq-reconcile":
+        return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "redrive":
+        return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
+                           reason=args.reason, destination=args.destination)
 
     # 원장 계측은 **dispatch 를 한 번** 감싼다(ALPHA-181). 스텝마다 흩뿌리면 배선 지점이
     # 33개가 되고, 그중 4곳은 `--source` 로 벤더가 갈려 오라벨 지점이 그만큼 늘어난다

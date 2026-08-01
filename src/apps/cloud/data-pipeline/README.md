@@ -46,8 +46,12 @@
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
 > adapter 는 운영 승인 후), Outbox Relay(destination 별 claim·SQS batch 발행·재시도,
-> ALPHA-670 — `run relay` 가 이 트랙의 **첫 실행 표면**이다)까지다. 스케줄·vendor
-> 실호출·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9).
+> ALPHA-670 — `run relay` 가 이 트랙의 **첫 실행 표면**이다), SQS Consumer 공통 kernel
+> (long polling→DB 상태 확인→멱등 claim→실행→성공/재시도/격리, visibility+DB lease
+> heartbeat, **DB 가 정한 시각으로 visibility 조정**, ALPHA-672 — handler 는 7B·7C 가
+> 채운다)과 그 복구 경로(DLQ reconciler `run dlq-reconcile` + **DB-first** redrive
+> `run redrive`: DEAD→RETRY_WAIT·세대 증가·새 delivery event 를 한 트랜잭션에)까지다.
+> 스케줄·vendor 실호출·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9).
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
@@ -832,6 +836,23 @@ python -m data_pipeline.run reconcile
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
   python -m data_pipeline.run relay --max-ticks 5
+# DLQ 대사(1분 파이프라인, ALPHA-672) — DLQ 에 도착했는데 DB job 이 non-terminal 이면
+# SQS_MAX_RECEIVE 사유로 DEAD 에 CAS 한다. **주기 실행**이고 메시지는 지우지 않는다
+# (근거 보존). 원 큐 매핑도 함께 요구한다 — DLQ 자리에 원 큐가 들어가면 정상 배달
+# 중인 job 이 전부 DEAD 가 되므로 겹치면 기동을 거부한다. 두 매핑 모두 큐 3종을 다
+# 채워야 한다(빠진 레인은 아무도 대사하지 않는다). 끊긴 대사는 exit 1 이다.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs…/price-dlq","news-extraction-realtime":"https://sqs…/news-dlq","news-extraction-backfill":"https://sqs…/backfill-dlq"}' \
+  python -m data_pipeline.run dlq-reconcile --max-ticks 5
+# redrive(1분 파이프라인, ALPHA-672) — **막힌 것**만 되살린다(DEAD job 또는 Relay 가
+# 발행 불가로 격리한 DEAD delivery event). 정상 진행 중이거나 SUCCEEDED 는 거부한다.
+# --reason 은 필수다: 실행자와 함께 대체되는 delivery event 행에 남는 유일한 감사 근거다.
+# 배선이 어긋난 채 커밋된 행(Relay 가 destination↔event_type 불일치로 격리)은
+# --destination 으로 올바른 큐를 지정해 바로잡는다 — event_id 가 결정적이라
+# producer 를 고쳐 재실행해도 그 행은 안 바뀐다(미지정=직전 event 값 복사).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run redrive --kind news --job-id <job_id> --reason "큐 URL 오타 수정 후 재시도"
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
