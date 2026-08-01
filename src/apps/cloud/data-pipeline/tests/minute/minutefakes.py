@@ -159,6 +159,9 @@ class _Cursor:
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
         elif s.startswith("SELECT status, COUNT(*) FROM dataset_commit_outbox"):
+            # DEAD 도 미발행이다 — SQL 이 NEW 만 세도록 바뀌면 배출 게이트가 격리분을
+            # 남긴 채 성공으로 끝난다(fake 가 하드코딩하면 그 회귀가 숨는다)
+            assert "'NEW', 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
             counts: dict[str, int] = {}
             for row in self.db.outbox.values():
                 if row["status"] in ("NEW", "DEAD"):
@@ -167,8 +170,14 @@ class _Cursor:
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
             self._claim_outbox(params, s)
         elif "SET status = 'PUBLISHED'" in s:
+            # CAS 가드를 fake 가 Python 으로 재현하므로, SQL 에서 빠지면 여기서 못 잡는다
+            # — 절의 존재를 못 박는다(옛 Relay 가 새 claim 을 마감하는 회귀, Rule 9)
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"mark_published SQL 에 {clause} 가 없다"
             self._mark_published(params)
         elif s.startswith("UPDATE dataset_commit_outbox SET status = %s, attempt_count"):
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")

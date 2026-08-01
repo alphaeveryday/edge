@@ -410,6 +410,16 @@ class OutboxRelay:
             return "IDLE"
         return "PUBLISHED" if failed == 0 else "PARTIAL"
 
+    def _claim_time(self, now: datetime) -> datetime:
+        """지금 이 claim 의 시각 = tick 시작 + 그동안 흐른 시간.
+
+        lease 만료는 claim 시각 기준으로 잡힌다 — tick 시작 시각을 그대로 쓰면 앞 레인
+        발행에 쓴 시간만큼 뒤 레인의 실질 lease 가 깎여, 발행 도중 만료·탈취를 막으려고
+        둔 lease 가드가 무의미해진다. 벽시계 권위는 주입된 now 하나이고(가상 시계 원칙)
+        경과만 monotonic 으로 잰다 — backoff 와 같은 축.
+        """
+        return now + timedelta(seconds=time.monotonic() - self._tick_started)
+
     def _claim_lanes(self, now: datetime):
         """destination 하나씩 claim 해 (destination, events) 로 넘긴다 — 발행 직전에 집는다.
 
@@ -419,7 +429,7 @@ class OutboxRelay:
         """
         for destination in sorted(self.config.queue_urls):
             events = self.jobs.claim_outbox_batch(
-                relay_id=self.config.relay_id, now=now,
+                relay_id=self.config.relay_id, now=self._claim_time(now),
                 limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
                 destination=destination,
             )
@@ -427,7 +437,7 @@ class OutboxRelay:
                 yield destination, events
         orphans: dict[str, list[dict]] = {}
         for event in self.jobs.claim_outbox_batch(
-            relay_id=self.config.relay_id, now=now,
+            relay_id=self.config.relay_id, now=self._claim_time(now),
             limit=self.config.batch_limit, lease_seconds=self.config.lease_seconds,
             exclude_destinations=tuple(self.config.queue_urls),
         ):
