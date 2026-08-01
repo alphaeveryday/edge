@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .gates import EdgeVerdict, edge_gate
-from .vocab import EXPOSURE_CUT, HypothesisTuple, MIN_N, Vulnerability
+from .vocab import ALPHA, EXPOSURE_CUT, HypothesisTuple, MIN_N, Vulnerability
 
 PERMS = 1000        # 전역 상수 - 가설별 지정 금지 (§13)
 SEED = 0
@@ -59,11 +59,29 @@ WITH r0 AS (
     FROM rdb.public.price_daily
     WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
 ),
+cls AS (
+    SELECT instrument_id, industry_name FROM (
+        SELECT instrument_id, industry_name,
+               row_number() OVER (PARTITION BY instrument_id ORDER BY as_of_date DESC) rn
+        FROM rdb.public.instrument_classification
+        WHERE as_of_date <= DATE '{day}' AND industry_name IS NOT NULL) WHERE rn = 1
+),
+r1 AS (
+    SELECT r0.instrument_id, r0.trade_date, r0.log_return, r0.volume,
+           r0.log_return - avg(r0.log_return) OVER (PARTITION BY r0.trade_date) AS ar_mkt,
+           cls.industry_name AS ind
+    FROM r0 LEFT JOIN cls ON cls.instrument_id = r0.instrument_id
+    WHERE r0.log_return IS NOT NULL
+),
 r AS (
+    -- 학술 수리 ① (17차): 등가중 시장 차감만으로는 산업 공행이 잔차에 남아
+    -- 사건연구의 횡단면 독립 가정을 깬다. 시장 차감 뒤 산업층을 한 번 더
+    -- 차감한다 (산업 표본 ≥5 일 때만 - 얇은 산업은 시장 잔차 유지).
     SELECT instrument_id, trade_date, log_return, volume,
-           log_return - avg(log_return) OVER (PARTITION BY trade_date) AS ar
-    FROM r0
-    WHERE log_return IS NOT NULL
+           CASE WHEN ind IS NOT NULL AND count(*) OVER di >= 5
+                THEN ar_mkt - avg(ar_mkt) OVER di ELSE ar_mkt END AS ar
+    FROM r1
+    WINDOW di AS (PARTITION BY trade_date, ind)
 ),
 f AS (
     SELECT instrument_id, trade_date, ar,
@@ -117,14 +135,7 @@ SELECT z_ar, z_tv_chg FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE
 # 위약이 '같은 날 시장 전체'인 이유: 날짜 층화 순열이 공통충격을 소거하므로,
 # 남는 대비가 정확히 '관계가 있느냐'다. 산업 분류는 셀 시점 이전 최신(PIT).
 _RELATION_PANEL = _BASE + """
-, cls AS (
-    SELECT instrument_id, industry_name FROM (
-        SELECT instrument_id, industry_name,
-               row_number() OVER (PARTITION BY instrument_id ORDER BY as_of_date DESC) rn
-        FROM rdb.public.instrument_classification
-        WHERE as_of_date <= DATE '{day}' AND industry_name IS NOT NULL) WHERE rn = 1
-),
-ev AS (
+, ev AS (
     SELECT DISTINCT ea.entity_id AS iid, se.event_date AS d
     FROM rdb.public.source_event se
     JOIN rdb.public.event_argument ea ON ea.source_event_id = se.source_event_id
@@ -233,12 +244,22 @@ def _cols(t: HypothesisTuple) -> tuple[list[tuple[str, str]], str] | None:
             ", ".join(f"g.{c}" for _, c in need if c is not None))
 
 
+def _two_sided(p1: float) -> float:
+    """단측 순열 p → 양측. 학술 수리 ② (17차): 확증 게이트의 부호는 오늘 셀을
+    본 에이전트가 고른다 - 방향 채굴을 단측 p 로 보상하면 위양성이 최대 2배다.
+    부호는 효과 방향 보고에만 쓰고, 게이트는 양측으로 선다 (격자와 동일 규약)."""
+    return min(2.0 * min(p1, 1.0 - p1), 1.0)
+
+
 def edge_test(lake, t: HypothesisTuple, day: str,
-              cell_instrument_id: str = "") -> EdgeReport:
+              cell_instrument_id: str = "", m_tests: int = 1) -> EdgeReport:
     """튜플 → 패널 검정 → 오늘 적용 판정. 표본이 얇으면 판정불가 —
-    **다른 표본을 찾으러 가지 않는다.**"""
+    **다른 표본을 찾으러 가지 않는다.**
+
+    m_tests: 이 셀에서 함께 검정되는 튜플 수. 학술 수리 ③ (17차): 셀 단위
+    Bonferroni - 게이트 α = ALPHA / m. 셀당 3튜플이면 명목 FWER 5% 유지."""
     if t.exposure.kind == "관계":
-        return _relation_test(lake, t, day)
+        return _relation_test(lake, t, day, m_tests=m_tests)
     got = _cols(t)
     if got is None:
         return _unmeasurable(
@@ -323,8 +344,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                           reason="노출 분산 부족 - 상·하위가 갈리지 않는다 (게이트 A)")
 
     sign = float(t.sign)
-    p = _stratified_p(ar[test_mask], hi, dates[test_mask], sign)
-    verdict = edge_gate(int(test_mask.sum()), p)
+    p = _two_sided(_stratified_p(ar[test_mask], hi, dates[test_mask], sign))
+    verdict = edge_gate(int(test_mask.sum()), p, alpha=ALPHA / max(m_tests, 1))
 
     # 조절 대비: 충족·미충족 클래스의 효과 차 (교호항의 최소형). 클래스별 dose 가
     # 정의될 때만 - 아니면 '조절 검정력 부족'으로 남는다.
@@ -422,7 +443,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       trigger_fired=trigger_fired, trigger_note=trigger_note)
 
 
-def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:
+def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> EdgeReport:
     """전이 패널 (§16): 사건 종목의 동일산업 피어가 비피어보다 부호 방향으로
     더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을 소거하므로
     남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
@@ -466,8 +487,9 @@ def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:
 
     sign = float(t.sign)
     sub = ar[mask]
-    p = _stratified_p(sub, hi, dates[mask], sign)
-    return EdgeReport(edge_gate(int(mask.sum()), p), int(mask.sum()), p,
+    p = _two_sided(_stratified_p(sub, hi, dates[mask], sign))
+    return EdgeReport(edge_gate(int(mask.sum()), p, alpha=ALPHA / max(m_tests, 1)),
+                      int(mask.sum()), p,
                       float(sub[hi].mean()), float(sub[~hi].mean()), None,
                       vuln_today="전이: 취약성은 피어 측 - 오늘 셀 평가 없음",
                       assignable=False,

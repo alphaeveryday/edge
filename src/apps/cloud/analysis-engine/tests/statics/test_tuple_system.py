@@ -294,3 +294,18 @@ def test_propose_rejects_unfired_series_trigger():
                               series_families=["가격잔차"])
     assert [t.trigger.ident for t in valid] == ["가격잔차"]
     assert any("미발화 계열 방아쇠 날조" in r for r in rejected)
+
+
+def test_gate_is_two_sided_with_cell_bonferroni():
+    # 학술 수리 ②③ (17차): 방향 채굴 보상(양측 p₂) + 셀 단위 FWER(α/m).
+    from edge_analysis.statics.paneltest import _two_sided
+    assert _two_sided(0.03) == 0.06 and abs(_two_sided(0.97) - 0.06) < 1e-12  # 대칭
+    assert _two_sided(0.5) == 1.0
+    # 강한 합성 효과는 α/3 에서도 성립 - 검정력이 죽지 않는다.
+    r3 = edge_test(_Lake(effect=0.03), _tuple(vuln_family="거래량", vuln_tr="수준"),
+                   "2026-06-01", m_tests=3)
+    assert r3.verdict == "성립"
+    # p₂=0.04 는 m=1 성립, m=3(α=0.0167) 불성립 - Bonferroni 가 실제로 문다.
+    from edge_analysis.statics.gates import edge_gate
+    assert edge_gate(400, 0.04) == "성립"
+    assert edge_gate(400, 0.04, alpha=0.05 / 3) == "불성립"

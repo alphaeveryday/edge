@@ -257,7 +257,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES),
                                    series_families=anomalous)
-        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
+        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
+                                 m_tests=len(tuples)))
                    for t in tuples]
         screens = grid_screen(lake, day, types) if types else []
     else:
@@ -304,6 +305,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         quiet = ("계열 z 미계측 (가격계열 결손 - 발화 판정 불가)" if not zs
                  else "계열 이상 없음 (" + " · ".join(f"{f} z={z:+.1f}" for f, z in sorted(zs.items())) + ")")
         block.append(f"장중 접지 사건이 없고 {quiet} - 가설 단계를 건너뛴다.")
+    if reports:
+        block.append(f"검정 규약: 산업층 이중차감 ar · 양측 p₂ · 셀 Bonferroni "
+                     f"α=0.05/{len(reports)} (학술 수리 ①②③)")
     for t, r in reports:
         vuln = " ∧ ".join(f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.vulnerabilities) or "—"
