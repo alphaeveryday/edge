@@ -258,10 +258,15 @@ def _prior_for(d: EdgeDesign, g: WorldGraph, screened: list[dict]) -> dict:
 
 
 def _as_proof(r: EdgeResult, p: dict) -> V.EdgeProof:
-    """축약 경로 결과를 검정 결과 모양으로. **두 경로가 같은 산출 계약을 쓴다.**"""
+    """축약 경로 결과를 검정 결과 모양으로. **두 경로가 같은 산출 계약을 쓴다.**
+
+    설계 자체가 실패한 간선은 `p` 가 비어 온다 - 그 자리에서 KeyError 를 내면 격리해
+    살려 둔 런이 다시 죽는다(실측 2026-08-01 parse-20260801-01). 없는 설계는 빈 값이다.
+    """
     return V.EdgeProof(
         design=r.design, status="통과" if r.passed else "미통과",
-        strategy=p["strategy"], adjust=list(p["adjust"]), iv=list(p["iv"]),
+        strategy=p.get("strategy") or "none", adjust=list(p.get("adjust") or ()),
+        iv=list(p.get("iv") or ()),
         n=r.n, effect=r.effect, p=r.p, null_sd=r.null_sd, null_kind=r.null_kind,
         unit="stock", strata_declared=r.design.strata != "none", strata_reason="",
         units=list(r.treated_ids), gate_fail=list(r.gate_fail),
