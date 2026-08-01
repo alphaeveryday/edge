@@ -58,9 +58,13 @@ SQS_RECEIVE_LIMIT = 10
 SQS_MAX_LONG_POLL_SECONDS = 20
 SQS_MAX_VISIBILITY_SECONDS = 43_200
 
+# delete·visibility 변경에 쓰는 read timeout. receive 와 **다른 클라이언트**를 쓰는
+# 이유는 아래 SqsQueue.control_client 주석에 있다.
+_CONTROL_READ_TIMEOUT_SECONDS = 10
 # SQS 호출 하나의 시간 예산 — relay 와 같은 값·같은 근거(connect 5s + read 10s).
-# heartbeat 가 visibility 만료 전에 **도착**할 수 있는지 검증하는 데 쓴다.
-SQS_CALL_BUDGET_SECONDS = 15
+# heartbeat 가 visibility 만료 전에 **도착**할 수 있는지 검증하는 데 쓴다. 이 값이
+# 참이려면 그 호출이 실제로 짧은 timeout 을 써야 한다(control_client).
+SQS_CALL_BUDGET_SECONDS = 5 + _CONTROL_READ_TIMEOUT_SECONDS
 # long polling 위에 얹는 read timeout 여유 — SQS 는 WaitTimeSeconds 직후에 응답한다.
 _READ_TIMEOUT_MARGIN_SECONDS = 10
 
@@ -227,27 +231,44 @@ class SqsQueue:
     """
 
     def __init__(self, client=None, *, wait_seconds: int):
-        self._client = client
         # ReceiveMessage 는 long polling 동안 응답을 붙들고 있다 — SDK read timeout 이
         # 그보다 짧으면 **빈 큐를 조회할 때마다** ReadTimeoutError 가 난다(저트래픽일수록
         # 잦다). 발행용 기본값(10초)을 그대로 쓰면 20초 long poll 이 매번 터진다.
         # 그래서 `wait_seconds` 에 기본값을 두지 않는다 — 호출부가 자기 long poll 값을
         # 말하지 않으면 이 어긋남이 조용히 되살아난다.
-        self._read_timeout = max(10, wait_seconds + _READ_TIMEOUT_MARGIN_SECONDS)
+        self._receive_timeout = max(10, wait_seconds + _READ_TIMEOUT_MARGIN_SECONDS)
+        self._injected = client
+        self._receive_client = client
+        self._control_client = client
 
     @property
-    def client(self):  # pragma: no cover - 실 AWS 경로
-        if self._client is None:
+    def receive_client(self):  # pragma: no cover - 실 AWS 경로
+        if self._receive_client is None:
             from ..ops.aws import sqs_client
 
-            self._client = sqs_client(read_timeout=self._read_timeout)
-        return self._client
+            self._receive_client = sqs_client(read_timeout=self._receive_timeout)
+        return self._receive_client
+
+    @property
+    def control_client(self):  # pragma: no cover - 실 AWS 경로
+        """delete·visibility 변경 전용 — **짧은** timeout 을 쓴다.
+
+        receive 와 한 클라이언트를 쓰면 long poll 만큼 늘려 둔 read timeout 이 이
+        빠른 호출에도 적용된다. 그러면 멈춘 heartbeat 하나가 그만큼 붙들려, 같은 배치
+        뒤쪽 메시지의 연장이 만료 뒤에 도착한다(설정 검증이 쓰는 호출 예산도 거짓이
+        된다). 여기는 빨리 실패하는 게 맞다 — 판정 권위는 어차피 DB 에 있다.
+        """
+        if self._control_client is None:
+            from ..ops.aws import sqs_client
+
+            self._control_client = sqs_client(read_timeout=_CONTROL_READ_TIMEOUT_SECONDS)
+        return self._control_client
 
     def receive(
         self, *, queue_url: str, max_messages: int, wait_seconds: int,
         visibility_seconds: int,
     ) -> tuple[ConsumerMessage, ...]:
-        response = self.client.receive_message(
+        response = self.receive_client.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=max_messages,
             WaitTimeSeconds=wait_seconds,          # long polling
@@ -274,12 +295,12 @@ class SqsQueue:
         return tuple(messages)
 
     def delete(self, *, queue_url: str, receipt_handle: str) -> None:
-        self.client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        self.control_client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
     def change_visibility(
         self, *, queue_url: str, receipt_handle: str, seconds: int
     ) -> None:
-        self.client.change_message_visibility(
+        self.control_client.change_message_visibility(
             QueueUrl=queue_url, ReceiptHandle=receipt_handle, VisibilityTimeout=seconds
         )
 

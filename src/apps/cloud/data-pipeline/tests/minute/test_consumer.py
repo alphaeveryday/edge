@@ -246,8 +246,21 @@ class TestSqsQueue:
     def test_read_timeout_outlives_long_polling(self):
         # ReceiveMessage 는 long polling 동안 응답을 붙들고 있다 — 발행용 기본값(10초)
         # 그대로면 20초 long poll 이 **빈 큐마다** ReadTimeoutError 를 낸다
-        assert SqsQueue(wait_seconds=20)._read_timeout > 20
-        assert SqsQueue(wait_seconds=0)._read_timeout >= 10
+        assert SqsQueue(wait_seconds=20)._receive_timeout > 20
+        assert SqsQueue(wait_seconds=0)._receive_timeout >= 10
+
+    def test_control_calls_do_not_inherit_the_long_receive_timeout(self):
+        # 한 클라이언트를 공유하면 long poll 만큼 늘린 timeout 이 delete·visibility
+        # 같은 빠른 호출에도 걸린다 — 멈춘 heartbeat 하나가 그만큼 붙들려 같은 배치
+        # 뒤쪽 메시지의 연장이 만료 뒤에 도착하고, 설정 검증의 호출 예산도 거짓이 된다
+        from data_pipeline.minute.consumer import (
+            _CONTROL_READ_TIMEOUT_SECONDS,
+            SQS_CALL_BUDGET_SECONDS,
+        )
+
+        queue = SqsQueue(wait_seconds=20)
+        assert queue._receive_timeout > _CONTROL_READ_TIMEOUT_SECONDS
+        assert SQS_CALL_BUDGET_SECONDS >= _CONTROL_READ_TIMEOUT_SECONDS
 
     def test_incomplete_response_entries_are_skipped(self):
         # MessageId 가 없으면 "이미 판정함" 집합에서 여러 건이 한 키로 접힌다
