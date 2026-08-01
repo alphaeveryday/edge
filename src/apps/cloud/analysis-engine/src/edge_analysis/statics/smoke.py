@@ -42,15 +42,22 @@ def run(ticker: str, instrument_id: str, day: str) -> str:
 
     taus = []
     labels: dict[str, str] = {}
+    after_close: list[str] = []
     if lake.exists.get("rdb") is True:
         for t, e in lake.taus(instrument_id, day):
-            taus.append((_kst_naive(t), str(e)))
-            labels[str(e)] = str(e)[:16]        # 접지 = RDB 에 실재하는 id 만 이 dict 에 든다
-        for eid, code in lake.sql(
-                "SELECT source_event_id, event_type_code FROM rdb.public.source_event "
-                f"WHERE source_event_id IN ({','.join(repr(e) for _, e in taus)})" if taus else
-                "SELECT NULL, NULL WHERE FALSE"):
-            labels[str(eid)] = str(code)         # 표시는 사건 타입으로
+            t = _kst_naive(t)
+            if t >= session_close:
+                after_close.append(str(e))   # 마감 후 보도 — 창이 아니라 알리바이로 간다
+            else:
+                taus.append((t, str(e)))
+        ids = [e for _, e in taus] + after_close
+        for eid in ids:
+            labels[eid] = eid[:16]
+        if ids:
+            for eid, code in lake.sql(
+                    "SELECT source_event_id, event_type_code FROM rdb.public.source_event "
+                    f"WHERE source_event_id IN ({','.join(repr(e) for e in ids)})"):
+                labels[str(eid)] = str(code)
 
     bars = [(ts if ts.tzinfo is None else ts.replace(tzinfo=None), float(c))
             for ts, c in lake.bars(ticker, day)]
@@ -69,7 +76,7 @@ def run(ticker: str, instrument_id: str, day: str) -> str:
             rows.append(Row(s))
     table = render(rows)
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=None,
-                    rows=rows, grounded=labels)
+                    rows=rows, grounded=labels, after_close=tuple(after_close))
     return table + "\n\n" + story
 
 

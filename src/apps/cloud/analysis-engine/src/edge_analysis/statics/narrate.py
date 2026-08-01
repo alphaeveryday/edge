@@ -58,6 +58,7 @@ def _pct(logret: float) -> str:
 
 def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list[Row],
             grounded: dict[str, str], premium: PathVerdict | None = None,
+            after_close: tuple[str, ...] = (),
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -96,6 +97,15 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         if r.share.window.kind == "event" and r.verdict == "불성립":
             evs = " · ".join(grounded[e] for e in r.share.window.event_ids)
             negatives.append(f"{evs}: 그 타입 엣지가 패널에서 서지 않는다 — 원인이 아니다")
+    if after_close:
+        for eid in after_close:
+            if eid not in grounded:
+                raise NarrationError(f"접지 안 된 사건 인용: {eid} — 근거를 지어낼 수 없다")
+        counts = Counter(grounded[e] for e in after_close)
+        folded = " · ".join(f"{lab} ×{n}" if n > 1 else lab for lab, n in counts.most_common(4))
+        negatives.append(
+            f"마감 후 보도 {len(after_close)}건({folded}{' 외' if len(counts) > 4 else ''}): "
+            "오늘 수익률은 장중에 이미 실현됐다 — 오늘의 원인이 될 수 없다 (시간 알리바이)")
     gap = next((r for r in rows if r.share.window.kind == "gap"), None)
     intraday_events = [r for r in rows if r.share.window.kind == "event"]
     if gap is not None and abs(gap.share.log_ret) > sum(
@@ -103,16 +113,27 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         negatives.append(
             f"하루의 최대 몫이 갭({_pct(gap.share.log_ret)})인데 장전 사건이 없다 — "
             "장중 국내 사건 전체가 주범 후보에서 밀려난다 (시간 알리바이)")
+    biggest = max(rows, key=lambda r: abs(r.share.log_ret), default=None)
+    if (biggest is not None and biggest.share.window.kind == "residual"
+            and abs(biggest.share.log_ret) > abs(total) * 0.5):
+        negatives.append(
+            f"최대 몫 {_pct(biggest.share.log_ret)} 이 사건 없는 구간"
+            f"({biggest.share.window.name})에서 나왔다 — 보도된 사건으로 하루를 "
+            "설명하려는 서사는 데이터가 반박한다")
     out.append("[아닌 것 먼저] " + ("; ".join(negatives) if negatives else "배제된 후보 없음"))
 
-    # ── 3. 몫 — 미설명이 최대면 선두 ────────────────────────────────────
-    share_bits = [f"{r.share.window.name} {_pct(r.share.log_ret)}" for r in rows]
+    # ── 3. 몫 — 미설명이 최대면 선두. 서술은 목록이 아니라 요약이다 ─────
+    top = sorted(rows, key=lambda r: -abs(r.share.log_ret))[:4]
+    rest = [r for r in rows if r not in top]
+    share_bits = [f"{r.share.window.name} {_pct(r.share.log_ret)}" for r in top]
+    if rest:
+        share_bits.append(f"나머지 {len(rest)}창 합 {_pct(sum(r.share.log_ret for r in rest))}")
     unexp_line = (f"미설명 {_pct(unexplained)} — 우리가 설명하지 못하는 몫이고, "
                   "이것을 줄이는 것은 서사가 아니라 데이터다")
     if abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0):
-        out.append(f"[몫] **{unexp_line}**. 분해: " + " · ".join(share_bits))
+        out.append(f"[몫] **{unexp_line}**. 상위: " + " · ".join(share_bits))
     else:
-        out.append("[몫] " + " · ".join(share_bits) + f". {unexp_line}")
+        out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 
     # ── 4. 성립한 것 — 접지 id 와 구간을 달고서만 ───────────────────────
     positives: list[str] = []

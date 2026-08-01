@@ -56,8 +56,8 @@ class CausalLake:
         self.exists["bars_5m"] = self.con.execute("SELECT count(*) FROM bars_5m").fetchone()[0]
 
     def _backfill(self, d: Path) -> None:
-        """로컬 백필: us_market.parquet(전일 미국장) · fx_usdkrw.parquet(환율)."""
-        for name in ("us_market", "fx_usdkrw"):
+        """로컬 백필: us_market(전일 미국장) · fx_usdkrw(환율) · tau_sidecar(초 단위 τ)."""
+        for name in ("us_market", "fx_usdkrw", "tau_sidecar"):
             f = d / f"{name}.parquet"
             if f.is_file():
                 self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")
@@ -111,16 +111,33 @@ class CausalLake:
         return float(row[0][0])
 
     def taus(self, instrument_id: str, day: str) -> list[tuple]:
-        """그날(KST) 그 종목의 사건 (available_at KST naive, source_event_id)."""
+        """그날(KST) 그 종목의 사건 (τ KST naive, source_event_id).
+
+        τ 사이드카가 있으면 **초 단위 발행시각**을 쓴다 — RDB available_at 은
+        블로커 4(날짜 해상도) 재적재 전까지 자정이라, 사슬
+        event→evidence→assertion→document.source_document_id(=article_id) 로
+        사이드카와 크로스 스토어 조인해 승격한다. 사이드카에 없는 사건은
+        available_at 폴백 — 부재를 침묵시키지 않고 그대로 드러낸다(09:00 뭉침).
+        """
         if self.exists.get("rdb") is not True:
             raise RuntimeError("RDB 부재 — coverage 참조")
+        promote = ""
+        if self.exists.get("tau_sidecar"):
+            promote = (
+                "LEFT JOIN rdb.public.event_evidence ev ON ev.source_event_id=e.source_event_id "
+                "LEFT JOIN rdb.public.document_assertion da ON da.assertion_id=ev.assertion_id "
+                "LEFT JOIN rdb.public.document doc ON doc.document_id=da.document_id "
+                "LEFT JOIN tau_sidecar sc ON sc.article_id=doc.source_document_id ")
+        t_expr = ("coalesce(min(sc.published_kst), min(CAST(e.available_at AS TIMESTAMP)))"
+                  if promote else "min(CAST(e.available_at AS TIMESTAMP))")
         return self.sql(
-            "SELECT CAST(e.available_at AS TIMESTAMP) AS t, e.source_event_id "
+            f"SELECT {t_expr} AS t, e.source_event_id "
             "FROM rdb.public.source_event e "
             "JOIN rdb.public.event_argument a ON a.source_event_id=e.source_event_id "
+            + promote +
             f"WHERE a.entity_id='{instrument_id}' "
             f"AND CAST(CAST(e.available_at AS TIMESTAMP) AS DATE)=DATE '{day}' "
-            "GROUP BY 1,2 ORDER BY 1")
+            "GROUP BY e.source_event_id ORDER BY 1")
 
 
 __all__ = ["CausalLake", "RDB_TABLES"]

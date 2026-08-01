@@ -312,7 +312,7 @@ $$(\text{채널}, \; \text{노출원}, \; \text{부호}, \; \text{강도}\in\tex
 1. **시계열이 canonical 에 없다** — raw 11GB → 등뼈 정합 (티커→entity · 거래일→period_key · 공표시각→available_at)
 2. **뉴스 실체 해소 미완** — 이름→티커. 지분·임원 간선 `resolved=False` 와 같은 원인. 안 되면 사건이 그래프 밖에 뜬다
 3. **정정 계열의 PIT** — 수정주가·리비전 수급은 `available_at` 갱신 필수. 벤더가 조용히 덮어쓰면 우리도 조용히 미래를 본다. 등뼈의 `available_basis`(EXACT/DERIVED/ESTIMATED) 를 비우지 않는다
-4. **τ 해상도** (스모크 실측 2026-08-01 · **코드 수술 완료**) — RDB `source_event.available_at` 이 전체 30,785건에 distinct 62개 = 날짜 해상도였다. 근원: `parse.py` 정규식이 NEWS_ID 의 14자리 시각 중 날짜 8자리만 캡처. **`bigkinds_datetime()` 신설로 초 단위 복원** (파티션 불변식: 날짜부 = `bigkinds_date` · 쓰레기 시각은 자정 폴백 — 행을 죽이지 않는다), `normalize_news` 가 이를 쓴다. **남은 것은 운영이다**: canonical 재정제(멱등 병합이 published_at 을 갱신) → `load_documents` 재실행 → 사건 조립 시 `available_at` 승격. 그 전까지 기존 행은 자정 그대로다
+4. **τ 해상도** (스모크 실측 2026-08-01 · **코드 수술 완료**) — RDB `source_event.available_at` 이 전체 30,785건에 distinct 62개 = 날짜 해상도였다. 근원: `parse.py` 정규식이 NEWS_ID 의 14자리 시각 중 날짜 8자리만 캡처. **`bigkinds_datetime()` 신설로 초 단위 복원** (파티션 불변식: 날짜부 = `bigkinds_date` · 쓰레기 시각은 자정 폴백 — 행을 죽이지 않는다), `normalize_news` 가 이를 쓴다. **남은 것은 운영이다**: canonical 재정제(멱등 병합이 published_at 을 갱신) → `load_documents` 재실행 → 사건 조립 시 `available_at` 승격. 그 전까지 기존 행은 자정 그대로다. **임시 다리: `statics/tau_sidecar.py`** — raw 를 읽기 전용 파싱해 (article_id→초 단위 KST) 로컬 parquet 를 만들고, `duck.taus` 가 RDB 사슬(event→evidence→assertion→document.source_document_id)과 크로스 스토어 조인해 τ 를 승격한다 (000660·2026-06-01 실가동: 창 46개로 분산, 마감 후 24건 자동 알리바이). 부수 확인: BigKinds 시각은 KST 벽시계인데 기존 파이프라인이 UTC 로 라벨한다(+9h) — 재적재 시 Asia/Seoul 부착 필요
 
 ## 20. 개발 계획과 P0–P9 매핑
 
