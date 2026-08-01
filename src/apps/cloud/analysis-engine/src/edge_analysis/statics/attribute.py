@@ -91,14 +91,24 @@ def cell_facts(ticker: str, day: str, shares: list[Share],
 
 
 def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -> str:
+    import os
+    from .registry import recall, record
     shares, labels, after_close = load_cell(lake, ticker, instrument_id, day)
     facts, types = cell_facts(ticker, day, shares, labels, after_close)
+    root = os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")
 
     tuples: list[HypothesisTuple] = []
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
+    memory: list[str] = []
     if types:
         from .paneltest import FEATURES, grid_screen
+        # 회상이 기록보다 먼저다 (P9 교훈). 과거 셀들의 스크린·게이트 이력은
+        # PIT 안전한 사실이고, 가설 에이전트의 어포던스로 들어간다.
+        memory = recall(root, day=day, types=types)
+        if memory:
+            facts += "\n과거 셀 이력 (어포던스 - 확증 아님):\n" + "\n".join(
+                f"  - {m}" for m in memory)
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES))
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
@@ -108,22 +118,38 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         screens = []
 
     # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
-    # 패널이 성립해도 오늘 이 셀이 취약성을 안 갖추면 이 셀의 원인이 아니다.
+    # 크기(§10): 식별집합 = SEM 신뢰구간 ∩ (0, 창의 몫]. 공집합 = 모형 모순 -
+    # 크기를 삼키지 않고 배정을 보류한다 (sem.clip_to_share 의 계약).
     passing = {t.trigger.ident: (t, r) for t, r in reports
                if t.trigger.kind == "점" and r.applies_today}
+    contradiction: list[str] = []
     rows = []
     for s in shares:
         wtypes = {labels[e] for e in s.window.event_ids}
         hit = next((passing[w] for w in wtypes if w in passing), None)
         if hit is not None:
-            t, _ = hit
+            t, r = hit
+            est = lo = hi = None
+            if r.ci_lo is not None:
+                share = s.log_ret
+                lo2 = max(r.ci_lo, 0.0) if share >= 0 else max(r.ci_lo, share)
+                hi2 = min(r.ci_hi, share) if share >= 0 else min(r.ci_hi, 0.0)
+                if lo2 <= hi2:
+                    est = min(max(r.contribution, lo2), hi2)
+                    lo, hi = lo2, hi2
+                else:
+                    contradiction.append(
+                        f"{t.trigger.ident[:30]}: SEM 구간 [{r.ci_lo * 100:+.2f},"
+                        f"{r.ci_hi * 100:+.2f}]% 이 창 몫 {share * 100:+.2f}%p 와 모순 - "
+                        "크기 배정 보류 (과대식별 검산 실패)")
             rows.append(Row(s, treatment=f"{t.trigger.ident[:14]}→{t.channel}",
-                            verdict="성립"))
+                            verdict="성립", est=est, lo=lo, hi=hi))
         elif s.window.kind == "event" or (s.window.kind == "gap" and s.window.event_ids):
             rows.append(Row(s, treatment=",".join(s.window.event_ids)[:20],
                             verdict="판정불가"))
         else:
             rows.append(Row(s))
+    record(root, day=day, cell=f"{ticker}/{day}", reports=reports, screens=screens)
 
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=None,
                     rows=rows, grounded=labels, after_close=tuple(after_close))
@@ -144,8 +170,16 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                   f"    패널: {r.line}",
                   f"    오늘: {r.vuln_today or ('미평가 - 패널이 먼저 서야 한다' if t.vulnerabilities else '취약성 없음')} → **{apply_say}**",
                   f"    환원 검사: {r.reduction}"]
+        if r.contribution is not None:
+            block.append(f"    SEM 기여: {r.contribution * 100:+.2f}%p "
+                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] "
+                         "(τ̂ × 오늘 노출편차 · 사건 고정효과)")
         if r.counterfactual:
             block.append(f"    반사실: {r.counterfactual}")
+    for c in contradiction:
+        block.append(f"[과대식별 검산] {c}")
+    if memory:
+        block.append("회상(과거 셀): " + " | ".join(memory[:3]))
     if rejected:
         block.append(f"거부된 제출 {len(rejected)}건 (검증기가 죽임): "
                      + " | ".join(x[:60] for x in rejected[:3]))

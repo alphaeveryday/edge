@@ -141,6 +141,9 @@ class EdgeReport:
     counterfactual: str = ""         # 반사실 쌍 (positivity 통과 시에만 채워진다)
     reduction: str = "—"             # 환원 검사: 일치 · 불일치 · 표본부족 · —(미실행)
     assignable: bool = True          # False = 엣지 검정만 유효, 몫 배정 불가 (전이 등)
+    contribution: float | None = None    # SEM: τ̂ × (오늘 노출 − 패널 평균) [ar 단위]
+    ci_lo: float | None = None
+    ci_hi: float | None = None
     reason: str = ""
 
     @property
@@ -273,6 +276,18 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     elif t.vulnerabilities:
         counterfactual = f"반대(미충족) 사례 {opposite}건 < {MIN_OPPOSITE} - 반사실 침묵 (positivity)"
 
+    # ── SEM 계수 (§10): 성립 엣지에만 크기를 붙인다. 게이트는 크기를 만들지
+    # 않지만(§11), 게이트를 통과한 엣지의 크기는 사건 고정효과 기울기에서 온다.
+    # 오늘 기여 = τ̂ × (오늘 노출 − 패널 평균 노출) - FE 가 수준을 흡수하므로
+    # 기울기 × 편차만이 정직한 추정대상이다.
+    tau = se = contrib = ci_lo = ci_hi = None
+    if verdict == "성립":
+        from .sem import exposure_slope
+        try:
+            tau, se = exposure_slope(ar[mask], x[mask], dates[mask])
+        except ValueError:
+            tau = se = None
+
     # ── 오늘 셀: 노출 백분위 + 취약성 충족 (INUS 의 적용 판정) ──────────
     today_pct = None
     vuln_bits: list[str] = []
@@ -280,7 +295,12 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     if cell_instrument_id:
         row = lake.sql(_TODAY_ROW.format(iid=cell_instrument_id, day=day, cols=col_sql))
         if row and row[0][0] is not None:
-            today_pct = float((x <= float(row[0][0])).mean())
+            x_today = float(row[0][0])
+            today_pct = float((x <= x_today).mean())
+            if tau is not None:
+                dx = x_today - float(x[mask].mean())
+                contrib = tau * dx
+                ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
             sat = True
             for v in t.vulnerabilities:
                 key = f"{v.family}/{v.transform}"
@@ -323,7 +343,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     return EdgeReport(verdict, int(mask.sum()), p, eff_hi, eff_lo, today_pct,
                       vuln_today=" · ".join(vuln_bits), vuln_satisfied=vuln_sat,
-                      counterfactual=counterfactual, reduction=reduction)
+                      counterfactual=counterfactual, reduction=reduction,
+                      contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi)
 
 
 def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:

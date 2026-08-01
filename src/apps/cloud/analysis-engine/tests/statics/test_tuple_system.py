@@ -202,3 +202,37 @@ def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
     assert hits and hits[0]["exposure"] == "가격잔차/누적"       # 심은 효과가 1위
     assert hits[0]["p2"] < 0.05 and hits[0]["direction"] == "+"
     assert all(h["p2"] <= 1.0 for h in hits if "p2" in h)       # 양측 보정 상한
+
+
+def test_sem_magnitude_attached_only_when_passing():
+    r = edge_test(_Lake(), T, "2026-06-01", cell_instrument_id="i0")
+    assert r.verdict == "성립" and r.contribution is not None
+    assert r.ci_lo <= r.contribution <= r.ci_hi        # 점추정이 구간 안
+    r2 = edge_test(_Lake(effect=0.0), T, "2026-06-01", cell_instrument_id="i0")
+    assert r2.verdict == "불성립" and r2.contribution is None   # 게이트 탈락 = 크기 없음
+
+
+def test_registry_recall_before_record_and_pit(tmp_path):
+    from edge_analysis.statics.registry import recall, record
+    assert recall(tmp_path, day="2026-06-02", types=["T1"]) == []   # 첫 소환 = 빈손
+    record(tmp_path, day="2026-06-01", cell="c1",
+           screens=[{"type": "T1", "exposure": "가격잔차/누적", "n": 100,
+                     "p2": 0.01, "direction": "+"}])
+    record(tmp_path, day="2026-06-02", cell="c2",
+           screens=[{"type": "T1", "exposure": "가격잔차/누적", "n": 100,
+                     "p2": 0.001, "direction": "+"}])
+    m = recall(tmp_path, day="2026-06-02", types=["T1"])            # 당일 것은 제외
+    assert len(m) == 1 and "p₂=0.010" in m[0]                       # PIT: 6/1 만 보인다
+
+
+def test_propose_rejects_tautological_vulnerability():
+    # 6차 라이브 실측: 취약성=노출 같은 피처 → INUS 내용 0 + 표본 파괴.
+    taut = _h()
+    taut["vulnerabilities"] = [{"family": "가격잔차", "transform": "누적",
+                                "comparator": ">=", "percentile": 0.9}]  # 노출과 동일
+    ok = _h(channel="FX환", ident="MARKET_STRUCTURE.INDEX.INCLUSION")
+    ask = lambda s, u: {"hypotheses": [taut, ok, _h(channel="K위험")]}   # noqa: E731
+    valid, rejected = propose(ask, facts="f", event_types=ETYPES)
+    assert any("동어반복" in r for r in rejected)
+    assert all(not (t.exposure.ident == v.family and t.exposure.transform == v.transform)
+               for t in valid for v in t.vulnerabilities)

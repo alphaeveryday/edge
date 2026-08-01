@@ -50,7 +50,8 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 - 가설 정확히 {n}개, **서로 다른 채널**로 (같은 채널 = 같은 가설의 변주다)
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
-- 취약성은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다"""
+- 취약성은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
+- 취약성 피처는 노출 피처와 **달라야 한다** - 같으면 조건이 아니라 동어반복이고 표본만 죽는다"""
 
 
 def _parse(h: dict) -> HypothesisTuple:
@@ -91,6 +92,15 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                 continue
             if t.trigger.kind == "점" and t.trigger.ident not in event_types:
                 rejected.append(f"[{i}] 접지 밖 사건타입 날조: {t.trigger.ident!r}")
+                continue
+            if t.exposure.kind == "속성" and any(
+                    v.family == t.exposure.ident and v.transform == t.exposure.transform
+                    for v in t.vulnerabilities):
+                # 6차 라이브 실측: 같은 피처를 취약성과 노출에 쓰면 INUS 내용이 0이고
+                # 조건화가 노출 상위만 남겨 용량-반응 자체를 파괴한다 (n=23·6·6 전멸).
+                rejected.append(f"[{i}] 취약성이 노출과 같은 피처"
+                                f"({t.exposure.ident}/{t.exposure.transform}) - "
+                                "조건이 아니라 동어반복이다. 다른 계열족으로 세워라")
                 continue
             if t.channel in seen_ch:
                 rejected.append(f"[{i}] 채널 중복: {t.channel} - 같은 채널은 같은 가설의 변주다")
