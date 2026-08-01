@@ -17,7 +17,7 @@ from .adapters.archive import (
 )
 from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
-from .adapters.llm import AnalysisClient, analyze
+from .adapters.llm import AnalysisClient, TracingClient, analyze
 from .adapters.trace import write_agent_trace
 from .config import PipelineError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
@@ -130,8 +130,11 @@ def run(
                                  profile=settings.domain_docs_profile or None)
         log("domain_docs.attached", bucket=settings.domain_docs_bucket)
     with collect_trace() as trace:
+        # 인과 경로만 프롬프트·응답을 남긴다 — trace 를 쓰지 않는 단일 프롬프트 경로에
+        # 데코레이터를 끼우면 버퍼 없이 도는 호출에 비용만 붙는다.
         explanation = analyze(
-            client, etf_ticker=settings.etf_ticker, etf_name=etf_name,
+            TracingClient(client) if causal is not None else client,
+            etf_ticker=settings.etf_ticker, etf_name=etf_name,
             name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
             decomp=decomp, gate=gate, route_code=route_code, events=events,
             causal=causal,

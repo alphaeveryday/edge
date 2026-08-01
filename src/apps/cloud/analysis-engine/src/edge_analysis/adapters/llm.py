@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from datetime import date
@@ -14,7 +15,7 @@ from typing import Any, Protocol
 from ..config import PipelineError
 from ..domain.models import Decomposition, EventContext, Explanation, PriceTrigger
 from ..domain.packet import build_packet
-from ..observability import utcnow_iso
+from ..observability import record, utcnow_iso
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
@@ -25,6 +26,36 @@ class AnalysisClient(Protocol):
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
         """system·user 프롬프트로 JSON 객체 응답을 반환한다."""
         ...
+
+
+class TracingClient:
+    """``complete_json`` 호출마다 프롬프트·응답 원문을 trace 에 남기는 데코레이터.
+
+    P2·P3·P5·검정 에이전트가 **전부 이 한 지점**을 지나므로 여기만 감싸면 세션 전량이
+    순서대로 남는다. `record` 를 쓰는 이유는 stdout 금지다 — CloudWatch 로 프롬프트가
+    새면 안 되고, 원문은 S3 ``traces/`` 로만 흐른다.
+    """
+
+    def __init__(self, inner: AnalysisClient) -> None:
+        """감쌀 클라이언트를 보관한다."""
+        self._inner = inner
+        self._seq = 0
+
+    def complete_json(self, system: str, user: str) -> dict[str, Any]:
+        """호출을 그대로 위임하고 요청·응답을 trace 에 적는다."""
+        self._seq += 1
+        seq, started = self._seq, time.monotonic()
+        record("llm.request", seq=seq, system=system, user=user)
+        try:
+            out = self._inner.complete_json(system, user)
+        except Exception as exc:
+            # 실패한 호출도 남긴다 - 재시도 루프의 어느 턴이 죽었는지가 디버깅의 본체다.
+            record("llm.failed", seq=seq, error=str(exc),
+                   elapsed_s=round(time.monotonic() - started, 2))
+            raise
+        record("llm.response", seq=seq, elapsed_s=round(time.monotonic() - started, 2),
+               response=out)
+        return out
 
 
 class DeepSeekClient:

@@ -8,9 +8,10 @@ from datetime import date
 
 import pytest
 
-from edge_analysis.adapters.llm import analyze
+from edge_analysis.adapters.llm import TracingClient, analyze
 from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import Decomposition, PriceTrigger
+from edge_analysis.observability import collect_trace
 
 _GATE = PriceTrigger("pmt_1", 0.05, "abs", abs_gate=True, rel_gate=False)
 _DECOMP = Decomposition(members=[], proxy_ret=0.05, covered_weight=1.0, total_weight=1.0,
@@ -41,3 +42,34 @@ def test_analyze_wraps_a_valid_response():
 def test_analyze_rejects_a_response_missing_required_fields():
     with pytest.raises(PipelineError):
         _analyze({"headline": "no verdict, no body"})
+
+
+class _BoomClient:
+    def complete_json(self, system, user):
+        raise PipelineError("upstream 500")
+
+
+def test_tracing_client_records_prompt_and_response_in_order():
+    with collect_trace() as trace:
+        TracingClient(_FakeClient({"ok": 1})).complete_json("SYS", "USER")
+
+    assert [(e["event"], e["seq"]) for e in trace] == [("llm.request", 1), ("llm.response", 1)]
+    assert (trace[0]["system"], trace[0]["user"]) == ("SYS", "USER")
+    assert trace[1]["response"] == {"ok": 1}
+
+
+def test_tracing_client_records_the_failed_turn_before_reraising():
+    # 재시도 루프의 어느 턴이 죽었는지가 디버깅의 본체다 — 실패가 흔적 없이 사라지면 안 된다.
+    with collect_trace() as trace:
+        with pytest.raises(PipelineError):
+            TracingClient(_BoomClient()).complete_json("SYS", "USER")
+
+    assert [e["event"] for e in trace] == ["llm.request", "llm.failed"]
+
+
+def test_tracing_client_never_writes_prompts_to_stdout(capsys):
+    # `log` 의 프롬프트 금지 계약을 지킨다 — 원문은 S3 traces/ 로만 흐른다.
+    with collect_trace():
+        TracingClient(_FakeClient({"ok": 1})).complete_json("SECRET-SYSTEM", "SECRET-USER")
+
+    assert "SECRET" not in capsys.readouterr().out

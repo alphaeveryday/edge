@@ -52,6 +52,23 @@ def log(event: str, **fields: object) -> None:
         _dropped += 1
 
 
+def record(event: str, **fields: object) -> None:
+    """trace 버퍼에만 남긴다 — **stdout 으로는 절대 나가지 않는다.**
+
+    프롬프트·응답 원문은 CloudWatch 로 흘리지 않는다(`log` 의 금지 계약을 지킨다). 대신
+    같은 순서열에 끼워 넣어 어느 단계의 호출인지 앞뒤 `log` 이벤트로 읽히게 한다.
+    수집 중이 아니면(`collect_trace` 밖) 조용히 버린다 — 관측이 없는 진입점의 메모리를
+    잡지 않는다.
+    """
+    global _dropped
+    if _buffer is None:
+        return
+    if len(_buffer) < _limit:
+        _buffer.append({"ts": utcnow_iso(), "event": event, **fields})
+    else:
+        _dropped += 1
+
+
 @contextmanager
 def collect_trace(limit: int = TRACE_LIMIT) -> Iterator[list[dict[str, object]]]:
     """블록 안의 ``log()`` 이벤트를 순서대로 모아 리스트로 넘긴다.
