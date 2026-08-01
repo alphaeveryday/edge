@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -70,26 +71,32 @@ class DeepSeekClient:
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
         """system·user 프롬프트로 채팅을 호출해 파싱된 JSON 객체를 반환한다.
 
+        재시도가 **결정론적 실패를 반복하지 않게** 한다: temperature=0 이라 같은
+        요청은 같은 응답을 낳는다. 응답이 잘렸으면(finish_reason=length) 다음
+        시도의 max_tokens 를 늘리고, 형식만 어긋났으면(울타리·앞뒤 산문) 수리를
+        먼저 시도한다 — 동일 요청 3연발은 셀 하나를 통째로 죽이는 비용이다
+        (검정 에이전트의 긴 코드 턴에서 실측된 실패 양식, STORM llm.salvage 계보).
+
         Raises:
-            PipelineError: 3회 재시도 후에도 실패하면.
+            PipelineError: 3회 시도 후에도 실패하면.
         """
-        body = json.dumps(
-            {
-                "model": self._model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "response_format": {"type": "json_object"},
-                # v4 계열은 thinking 기본 ON — 켜지면 구조화 JSON 출력이 깨진다(vllm#41132).
-                # 응답이 순수 JSON 오브젝트여야 파싱되므로 non-thinking 으로 고정한다.
-                "thinking": {"type": "disabled"},
-                "temperature": 0.0,
-                "max_tokens": 8000,
-            }
-        ).encode("utf-8")
         last: Exception | None = None
-        for _ in range(3):  # 일시적 네트워크·파싱 실패는 3회까지 재시도.
+        max_tokens = 8000
+        for _ in range(3):
+            body = json.dumps(
+                {
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    # v4 계열은 thinking 기본 ON — 켜지면 구조화 JSON 출력이 깨진다(vllm#41132).
+                    "thinking": {"type": "disabled"},
+                    "temperature": 0.0,
+                    "max_tokens": max_tokens,
+                }
+            ).encode("utf-8")
             try:
                 req = urllib.request.Request(
                     DEEPSEEK_URL,
@@ -101,10 +108,36 @@ class DeepSeekClient:
                 )
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                     payload = json.load(resp)
-                return json.loads(payload["choices"][0]["message"]["content"])
+                choice = payload["choices"][0]
+                content = choice["message"]["content"]
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError as exc:
+                    fixed = _salvage(content)
+                    if fixed is not None:
+                        return fixed
+                    if choice.get("finish_reason") == "length":
+                        max_tokens = min(max_tokens * 2, 32000)
+                    last = exc
             except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
                 last = exc
         raise PipelineError(f"DeepSeek call failed after retries: {last}")
+
+
+def _salvage(content: str) -> dict[str, Any] | None:
+    """형식만 어긋난 응답의 수리 — 마크다운 울타리·앞뒤 산문을 걷고 가장 바깥
+    ``{...}`` 만 파싱한다. 수리 불가면 None (호출부가 재시도를 결정한다)."""
+    s = (content or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", s).strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        out = json.loads(s[i:j + 1])
+    except json.JSONDecodeError:
+        return None
+    return out if isinstance(out, dict) else None
 
 
 def analyze(
