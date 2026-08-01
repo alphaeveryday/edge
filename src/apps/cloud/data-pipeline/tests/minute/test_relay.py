@@ -5,8 +5,8 @@
 
 - 발행 못 할 event 하나(미정의 destination·크기 초과)가 나머지 큐를 막지 않는가
 - 발행 결과를 모르는 event 를 성공으로 접지 않는가(유실 은폐 금지)
-- 발행 불가 event 만 DEAD 로 격리하는가(일시 장애는 **횟수로 포기하지 않는다** — 이
-  단계엔 redrive 가 없어 DEAD 가 곧 유실이다)
+- 발행 불가 event 만 DEAD 로 격리하는가(일시 장애는 **횟수로 포기하지 않는다** —
+  DEAD 는 redrive(ALPHA-672)로 되돌릴 수 있을 뿐 스스로 풀리지 않는다)
 - 경쟁 Relay·crash 에서 event 하나가 두 번 처리되거나 사라지지 않는가
 """
 
@@ -320,7 +320,7 @@ class TestRetryBudget:
 
     def test_long_outage_never_turns_transient_into_dead(self, tmp_path):
         # ⚠️ 시도 횟수로 포기하면 몇 분짜리 SQS 장애가 event 를 되돌릴 수 없는 DEAD 로
-        # 만든다 — 이 단계엔 redrive 가 없어(PR 7A) 큐가 복구돼도 영원히 미발행이다.
+        # 만든다 — 큐가 복구돼도 그 행은 스스로 안 돌아온다(사람이 redrive 를 쳐야 한다).
         # 지연은 알람이 잡지만 유실은 아무도 못 되돌린다.
         db = FakeMinuteDB()
         enqueue(db, "e1")
@@ -426,7 +426,7 @@ class TestConfigGuards:
     def test_missing_known_destination_refuses_to_start(self):
         # ⚠️ 런타임 DEAD 격리는 한 건짜리 사고용이다. 큐 매핑에서 destination 하나가
         # 빠지면 그 큐로 갈 event 가 **전부** DEAD 가 되는데 DEAD 는 스스로 안 풀린다
-        # (redrive=PR 7A). 설정 오타를 데이터 파괴가 아니라 배포 실패로 만든다.
+        # (redrive 는 사람이 친다). 설정 오타를 데이터 파괴가 아니라 배포 실패로 만든다.
         partial = {k: v for k, v in QUEUES.items() if k != "news-extraction-backfill"}
         with pytest.raises(ValueError, match="news-extraction-backfill"):
             RelayConfig(relay_id="r", queue_urls=partial)
