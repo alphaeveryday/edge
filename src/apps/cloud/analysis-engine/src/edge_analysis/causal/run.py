@@ -54,7 +54,8 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
             contributors: list[tuple[str, float]], candidates: list[dict],
             window_days: int = 60, industry: dict | None = None,
             grounded: set[str] | None = None, sandbox: bool = True,
-            docs=None, sql=None, registry_root=None) -> dict[str, Any]:
+            docs=None, sql=None, registry_root=None,
+            intraday: dict | None = None) -> dict[str, Any]:
     """한 셀의 인과 설명. `Explanation.raw` 계약에 맞는 dict 를 돌려준다.
 
     **어느 단계도 건너뛰지 않는다.** 후보가 산술로 전멸하거나 가설이 0개여도 P8 은 돈다 -
@@ -66,6 +67,12 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     """
     w1 = trade_date
     w0 = date.fromordinal(max(trade_date.toordinal() - window_days, 1))
+
+    # 접지 기본값: 후보가 이미 접지된 event_id 를 들고 있으면 그것이 곧 접지 집합이다.
+    # None 인 채 사건이 있으면 P3 의 접지 요구가 통째로 꺼진다 - 조용한 풋건을 막는다.
+    if grounded is None:
+        grounded = {c.get("event_id") or c.get("source_event_id")
+                    for c in candidates} - {None}
 
     # P0 ─ 반사실을 먼저 정의한다
     q = p0.ask(cd, etf_name=etf_name, etf_instrument_id=etf_instrument_id,
@@ -80,7 +87,7 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     log("causal.screened", candidates=len(screened), alive=len(alive))
 
     # P1 ─ 지문. 후보가 전멸해도 뜬다(무엇을 못 쟀는지가 P8 의 미결 항목이 된다)
-    fp = p1.take(cd, sql, question=q, candidates=screened)
+    fp = p1.take(cd, sql, question=q, candidates=screened, intraday=intraday)
 
     graph = WorldGraph()
     idents: list = []

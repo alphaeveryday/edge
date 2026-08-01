@@ -373,7 +373,8 @@ def _type_extremity(cd, q: Question, candidates: list[dict]) -> Axis:
 
 
 # ── 진입점 ──────────────────────────────────────────────────────────────
-def take(cd, sql, *, question: Question, candidates: list[dict]) -> Fingerprint:
+def take(cd, sql, *, question: Question, candidates: list[dict],
+         intraday: dict[str, Axis] | None = None) -> Fingerprint:
     """지문을 뜬다. **여기서 나온 `kills` 가 P2 프롬프트에 그대로 실린다.**
 
     축의 순서가 곧 읽는 순서다. 모양 → 넓이 → 시점 → 사전 표류 → 크기. 앞의 축이 뒤의 축을
@@ -381,15 +382,24 @@ def take(cd, sql, *, question: Question, candidates: list[dict]) -> Fingerprint:
 
     잴 수 있는 축과 없는 축을 한 목록에 섞어 담는다. 나누면 `brief()` 가 부재를 각주로 밀고,
     각주로 밀린 부재는 읽히지 않는다 - 없는 데이터를 전제한 가설이 그 틈으로 들어온다.
+
+    `intraday` 는 statics 다리(`intraday_axes.measure`)가 잰 일중 축이다. 있으면
+    placeholder 를 실측으로 **대체**한다 - 5분봉·τ 사이드카가 생긴 뒤에도 부재를
+    선언하는 것은 이제 거짓이고, 가장 강한 킬러(갭 지배·사건 없는 최대 몫·마감 후
+    알리바이)를 P2 에게 숨기는 일이었다. 없으면 종전대로 부재가 남는다.
     """
     cands = list(candidates or [])
+    intr = intraday or {}
     axes = [
         _measured("shape", lambda: _shape(cd, question)),
-        Axis(name="intraday_shape", available=False, missing_input=NO_INTRADAY["intraday_shape"]),
+        intr.get("intraday_shape") or Axis(
+            name="intraday_shape", available=False,
+            missing_input=NO_INTRADAY["intraday_shape"]),
         _measured("breadth", lambda: _breadth(cd, question, cands)),
         _measured("event_timing", lambda: _event_timing(sql, question, cands)),
-        Axis(name="intraday_timing", available=False,
-             missing_input=NO_INTRADAY["intraday_timing"]),
+        intr.get("intraday_timing") or Axis(
+            name="intraday_timing", available=False,
+            missing_input=NO_INTRADAY["intraday_timing"]),
         _measured("pre_drift", lambda: _pre_drift(cd, question, cands)),
         _measured("type_extremity", lambda: _type_extremity(cd, question, cands)),
     ]
