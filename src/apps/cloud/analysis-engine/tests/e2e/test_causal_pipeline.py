@@ -257,15 +257,15 @@ H_REBAL = {"hypothesis": {
     "says": "지수 사업자 리뷰 결과가 확정되면서 패시브 자금이 정해진 날짜에 정해진 수량을 "
             "사야 했고, 그 매수가 당일 초과수익을 만들었다",
     "cause_label": REBAL_LABEL,
-    "treatment": "REBAL@t-1", "outcome": "AR@t+0", "assignment": "mechanical",
+    "treatment": "REBAL@t-1", "outcome": "설명대상_잔차@t0", "assignment": "mechanical",
     # 역할·영역은 P2 파서가 **필수**로 받는다. 지수 규칙이 정해진 날에 정해진 수량을 사게
     # 만든 것이므로 연쇄를 시작한 촉발원이고, 원인은 공시의 내용이 아니라 추종 자금의
     # 강제 매수라서 영역은 information 이 아니라 flow 다.
     "role": "trigger", "domain": "flow",
     "nodes": {"REBAL@t-1": {"says": "지수 사업자가 확정한 비중 상향 결정",
                             "observed": "지수 사업자 리뷰 결과 공시"},
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "REBAL@t-1", "to": "AR@t+0",
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "REBAL@t-1", "to": "설명대상_잔차@t0",
                "says": "확정된 비중 상향이 당일 초과수익을 만든다",
                "because": "패시브 추종 자금은 재량이 없어 확정일에 사야 한다"}],
     "predicts": ["리뷰 확정 다음 거래일에 대상 종목의 거래대금이 평소보다 크다"],
@@ -276,16 +276,18 @@ H_REBAL = {"hypothesis": {
 H_DIVIDEND = {"hypothesis": {
     "says": "이사회가 배당 총액을 늘리기로 하면서 주주환원 기대가 올라 당일 초과수익이 생겼다",
     "cause_label": CAUSE_LABEL,
-    "treatment": "DIVIDEND@t-1", "outcome": "AR@t+0", "assignment": "chosen",
+    "treatment": "DIVIDEND@t-1", "outcome": "설명대상_잔차@t0", "assignment": "chosen",
     # 이사회 결정이 새 정보를 주어 기대를 바꾼 자리 - 촉발원이고 정보·기대 영역이다.
     "role": "trigger", "domain": "information",
     "nodes": {"DIVIDEND@t-1": {"says": "분기 배당 확대 결정 공시", "observed": "공시 원장",
                                "events": [EVENT_ID]},
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "DIVIDEND@t-1", "to": "AR@t+0",
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "DIVIDEND@t-1", "to": "설명대상_잔차@t0",
                "says": "배당 확대 결정이 당일 초과수익을 만들었다",
                "because": "주주환원 확대는 기대 현금흐름의 배분 경로를 직접 바꾼다"}],
     "predicts": ["같은 타입 사건에서 발행 주체의 초과수익이 참조집단보다 높다"],
+    "distinguishes": ["리밸런스 경로면 거래대금이 먼저 튀지만 배당 경로는 거래대금 "
+                      "없이 가격만 움직인다"],
     "denies": ["발행 주체가 아닌 참여자도 같은 폭으로 오른다"],
     "events": [EVENT_ID]}}
 
@@ -295,8 +297,8 @@ H_BACKWARDS = {"hypothesis": {
     "treatment": "DIVIDEND@t+1",
     "nodes": {"DIVIDEND@t+1": {"says": "분기 배당 확대 결정 공시", "observed": "공시 원장",
                                "events": [EVENT_ID]},
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "DIVIDEND@t+1", "to": "AR@t+0",
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "DIVIDEND@t+1", "to": "설명대상_잔차@t0",
                "says": "배당 확대 결정이 당일 초과수익을 만들었다",
                "because": "주주환원 확대는 기대 현금흐름의 배분 경로를 직접 바꾼다"}]}}
 
@@ -319,15 +321,15 @@ _NODES_OK = {
                   "observed": "지수 사업자 리뷰 결과 공시", "events": []},
     "DIVIDEND@t-1": {"says": "분기 배당 확대 결정 공시", "observed": "공시 원장",
                      "events": [EVENT_ID]},
-    "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률", "events": []},
+    "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률", "events": []},
 }
 _EDGES_OK = [
-    {"from": "REBAL@t-1", "to": "AR@t+0", "kind": "statistical",
+    {"from": "REBAL@t-1", "to": "설명대상_잔차@t0", "kind": "statistical",
      "says": "확정된 비중 상향이 당일 초과수익을 만든다",
      "because": "패시브 추종 자금은 재량이 없어 확정일에 사야 한다",
      "false_if": "대상이 아닌 종목이 같은 폭으로 움직였다면 죽는다",
      "exposure": REBAL_WHERE, "reference": CONTROL_WHERE},
-    {"from": "DIVIDEND@t-1", "to": "AR@t+0", "kind": "statistical",
+    {"from": "DIVIDEND@t-1", "to": "설명대상_잔차@t0", "kind": "statistical",
      "says": "배당 확대 결정이 당일 초과수익을 만들었다",
      "because": "주주환원 확대는 기대 현금흐름의 배분 경로를 직접 바꾼다",
      "false_if": "발행 주체가 아닌 참여자도 같이 올랐다면 죽는다",
@@ -336,7 +338,7 @@ _EDGES_OK = [
 GRAPH_OK = _graph(_NODES_OK, _EDGES_OK)
 P3_OK = [{"thought": "대조군 술어가 원장에서 몇 건인지 본다", "sql": Q_P3}, GRAPH_OK]
 
-_NODES_BACK = {"DIVIDEND@t+1": _NODES_OK["DIVIDEND@t-1"], "AR@t+0": _NODES_OK["AR@t+0"]}
+_NODES_BACK = {"DIVIDEND@t+1": _NODES_OK["DIVIDEND@t-1"], "설명대상_잔차@t0": _NODES_OK["설명대상_잔차@t0"]}
 P3_BACKWARDS = [_graph(_NODES_BACK, [{**_EDGES_OK[1], "from": "DIVIDEND@t+1"}])]
 
 # P5. latent 하나(코드가 심은 U)와 가설쌍 하나를 처분한다.
@@ -399,8 +401,8 @@ VERIFY_IMPOSSIBLE = [{"thought": "장중 체결 흐름이 없으면 이 경로�
                       "grain": "일별",
                       "unlocks": "수급 주도와 사건 주도를 같은 셀에서 가를 수 있다"}]
 
-VERIFY_OK = {"REBAL@t-1→AR@t+0": VERIFY_TURNS,
-             "DIVIDEND@t-1→AR@t+0": VERIFY_IMPOSSIBLE}
+VERIFY_OK = {"REBAL@t-1→설명대상_잔차@t0": VERIFY_TURNS,
+             "DIVIDEND@t-1→설명대상_잔차@t0": VERIFY_IMPOSSIBLE}
 _VERIFY_UNSCRIPTED = [{"thought": "대본에 없는 간선이다",
                        "impossible": "이 간선을 잴 설계가 없다",
                        "need": "대본 밖 간선의 관측", "grain": "일별", "unlocks": ""}]
@@ -663,11 +665,13 @@ def test_the_event_timing_axis_rereads_the_publication_time_when_sql_is_there():
 # --------------------------------------------------------------------------- #
 # P2 가설 — 세션을 n번 따로 돌린다. 한 세션에 n개를 시키면 첫 번째의 변주가 나온다
 # --------------------------------------------------------------------------- #
-def test_hypotheses_come_from_independent_sessions_that_only_learn_each_others_channel():
+def test_later_sessions_see_the_earlier_predictions_but_not_the_narrative():
     """문맥을 끊지 않으면 Chamberlin 이 말한 분산이 생기지 않는다.
 
-    완전 독립은 아니다 - 앞선 세션이 쓴 **채널 이름만** 넘어간다. 그 절충이 실제로
-    그 선을 지키는지(이름은 가고 내용은 안 간다) 여기서 고정한다.
+    완전 독립도 아니다. 앞선 세션의 **채널 이름과 `predicts` 만** 넘어간다 - 갈릴 재료는
+    주고 베낄 재료는 막는 선이다. 이름만 넘기던 앞선 규약은 중복은 줄였지만 대립을 만들지
+    못했다(2026-07-30 실측: 채널은 셋 다 달랐는데 두 가설의 예측이 같아 어떤 관측으로도
+    갈리지 않았다). 그 선이 실제로 지켜지는지 여기서 고정한다.
     """
     client = FakeClient()
 
@@ -677,8 +681,9 @@ def test_hypotheses_come_from_independent_sessions_that_only_learn_each_others_c
     for idx in range(1, N_HYPOTHESES + 1):
         assert sum(1 for u in client.p2_prompts if f"[세션 {idx}]" in u) >= 1
     second = next(u for u in client.p2_prompts if "[세션 2]" in u)
-    assert f"앞선 세션이 이미 낸 채널: {REBAL_LABEL}" in second
-    assert H_REBAL["hypothesis"]["says"] not in second, "앞 세션의 내용이 새어 나갔다"
+    assert REBAL_LABEL in second, "앞선 채널 이름이 안 갔다 - 중복을 피할 수 없다"
+    assert H_REBAL["hypothesis"]["predicts"][0] in second, "앞선 예측이 안 갔다 - 갈릴 수 없다"
+    assert H_REBAL["hypothesis"]["says"] not in second, "앞 세션의 서사가 새어 나갔다"
     # 두 세션의 산출이 서로 다른 가설로 원장에 남는다.
     hids = {(d.get("evidence") or {}).get("hid") for d in raw["causal"]["dispositions"]}
     assert {"h1", "h2"} <= hids, hids
@@ -745,7 +750,7 @@ def test_a_chosen_assignment_compiles_a_latent_the_model_never_wrote():
     lat = raw["causal"]["graph"]["latents"]
     assert [u["uid"] for u in lat] == ["U_DIVIDEND@t-1"], lat
     assert lat[0]["source"] == "compiled"
-    assert lat[0]["between"] == ["DIVIDEND@t-1", "AR@t+0"]
+    assert lat[0]["between"] == ["DIVIDEND@t-1", "설명대상_잔차@t0"]
     # mechanical 배정에는 심지 않는다 - 규칙이 아무 데나 U 를 뿌리면 상한이 무의미해진다.
     assert not any(u["between"][0] == "REBAL@t-1" for u in lat)
 
@@ -791,11 +796,11 @@ def test_the_compiled_latent_makes_the_edge_not_identified_and_the_verifier_sees
     raw = _explain(FakeCausalData(), client, sql=FakeSql())
 
     ident = {i["edge"]: i for i in raw["causal"]["identification"]}
-    assert ident["DIVIDEND@t-1->AR@t+0"]["status"] == "not_identified"
-    assert ident["DIVIDEND@t-1->AR@t+0"]["blocked_by"], "무엇이 막는지 안 적었다"
-    assert ident["REBAL@t-1->AR@t+0"]["status"] == "identified"
+    assert ident["DIVIDEND@t-1->설명대상_잔차@t0"]["status"] == "not_identified"
+    assert ident["DIVIDEND@t-1->설명대상_잔차@t0"]["blocked_by"], "무엇이 막는지 안 적었다"
+    assert ident["REBAL@t-1->설명대상_잔차@t0"]["status"] == "identified"
 
-    brief = client.prompt_for("DIVIDEND@t-1→AR@t+0")
+    brief = client.prompt_for("DIVIDEND@t-1→설명대상_잔차@t0")
     assert "식별상태 : not_identified" in brief
     assert "막고 있는 미관측 공통원인" in brief
     assert "점식별 불가" in brief
@@ -887,12 +892,12 @@ def test_every_edge_gets_a_sensitivity_row_even_when_the_e_value_cannot_be_compu
     raw = _explain(FakeCausalData(), FakeClient(), sql=FakeSql())
 
     rows = {s["edge"]: s for s in raw["causal"]["sensitivities"]}
-    assert set(rows) == {"REBAL@t-1->AR@t+0", "DIVIDEND@t-1->AR@t+0"}
-    assert rows["REBAL@t-1->AR@t+0"]["e_value"] > 1.0
-    assert "위험비" in rows["REBAL@t-1->AR@t+0"]["says"]
+    assert set(rows) == {"REBAL@t-1->설명대상_잔차@t0", "DIVIDEND@t-1->설명대상_잔차@t0"}
+    assert rows["REBAL@t-1->설명대상_잔차@t0"]["e_value"] > 1.0
+    assert "위험비" in rows["REBAL@t-1->설명대상_잔차@t0"]["says"]
     # 검정이 불가였던 간선은 분자가 없다 - 수치를 지어내지 않고 사유를 적는다.
-    assert rows["DIVIDEND@t-1->AR@t+0"]["e_value"] == 1.0
-    assert "미산출" in rows["DIVIDEND@t-1->AR@t+0"]["says"]
+    assert rows["DIVIDEND@t-1->설명대상_잔차@t0"]["e_value"] == 1.0
+    assert "미산출" in rows["DIVIDEND@t-1->설명대상_잔차@t0"]["says"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1000,7 +1005,7 @@ def test_the_audit_block_keeps_the_prose_the_ledger_and_the_agent_code():
     """
     raw = _explain(FakeCausalData(), FakeClient(), sql=FakeSql())
 
-    proof = next(p for p in raw["causal"]["proofs"] if p["edge"] == "REBAL@t-1->AR@t+0")
+    proof = next(p for p in raw["causal"]["proofs"] if p["edge"] == "REBAL@t-1->설명대상_잔차@t0")
     assert proof["because"] and proof["false_if"]
     assert proof["unit"] == "stock" and proof["null_kind"] == "label"
     assert proof["strata_declared"] is True
@@ -1013,12 +1018,12 @@ def test_an_unmeasurable_edge_becomes_a_data_request_not_a_rejection():
     """데이터 부재는 침묵이 아니라 산출물이다 - 그게 다음 수집 의제가 된다."""
     raw = _explain(FakeCausalData(), FakeClient(), sql=FakeSql())
 
-    proof = next(p for p in raw["causal"]["proofs"] if p["edge"] == "DIVIDEND@t-1->AR@t+0")
+    proof = next(p for p in raw["causal"]["proofs"] if p["edge"] == "DIVIDEND@t-1->설명대상_잔차@t0")
     assert proof["status"] == "불가"
     req = proof["data_request"]
     assert req["need"] == "장중 체결 흐름(투자자별 순매수) 일별 원장"
     assert req["grain"] == "일별" and req["unlocks"]
-    assert req["edge"] == "DIVIDEND@t-1→AR@t+0"
+    assert req["edge"] == "DIVIDEND@t-1→설명대상_잔차@t0"
     # 기각이 아니라 미결이다 - "찾아봤는데 없다"와 "볼 자료가 없었다"는 다른 말이다.
     assert _by_name(raw, CAUSE_LABEL)["verdict"] == "undetermined"
 
@@ -1029,7 +1034,7 @@ def test_the_verify_brief_carries_the_type_population_not_a_verdict():
 
     _explain(FakeCausalData(), client, sql=FakeSql())
 
-    brief = client.prompt_for("DIVIDEND@t-1→AR@t+0")
+    brief = client.prompt_for("DIVIDEND@t-1→설명대상_잔차@t0")
     assert "타입 모집단" in brief and "유효n≈96" in brief
     assert f"최대 {ABS_MAX * 100:.1f}%" in brief
     assert "p=" not in brief          # p값을 보여주면 모델이 그걸 베낀다
@@ -1069,13 +1074,14 @@ H_AMPLIFY = {"hypothesis": {
     "says": "직전 거래일까지 호가가 얕아져 있어서 같은 크기의 매수가 평소보다 큰 가격 "
             "변화를 만들었다",
     "cause_label": AMP_LABEL,
-    "treatment": "ILLIQ@t-1", "outcome": "AR@t+0", "assignment": "natural",
+    "treatment": "ILLIQ@t-1", "outcome": "설명대상_잔차@t0", "assignment": "natural",
     # 연쇄를 **시작한** 것이 아니라 결과를 **키운** 것이다. 몫이 커도 촉발원이 아니다.
     "role": "amplifier", "domain": "microstructure",
     "nodes": {"ILLIQ@t-1": _AMP_NODE,
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "ILLIQ@t-1", "to": "AR@t+0", "says": _AMP_SAYS, "because": _AMP_WHY}],
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "ILLIQ@t-1", "to": "설명대상_잔차@t0", "says": _AMP_SAYS, "because": _AMP_WHY}],
     "predicts": ["직전 거래일 비유동성이 높았던 종목의 가격 반응이 더 크다"],
+    "distinguishes": ["비유동성 경로면 유동성 상위 종목에서 효과가 사라진다"],
     "denies": ["유동성이 두터웠던 종목에서도 같은 폭의 반응이 난다"],
     "events": []}}
 
@@ -1084,14 +1090,14 @@ H_AMPLIFY = {"hypothesis": {
 # 칸은 갈린다. 역할은 기여도와 다른 축이라는 것이 정확히 이 뜻이다.
 _NODES_AMP = {**_NODES_OK, "ILLIQ@t-1": {**_AMP_NODE, "events": []}}
 _EDGES_AMP = [*_EDGES_OK,
-              {"from": "ILLIQ@t-1", "to": "AR@t+0", "kind": "statistical",
+              {"from": "ILLIQ@t-1", "to": "설명대상_잔차@t0", "kind": "statistical",
                "says": _AMP_SAYS, "because": _AMP_WHY,
                "false_if": "유동성이 두터운 종목도 같은 폭으로 올랐다면 죽는다",
                "exposure": REBAL_WHERE, "reference": CONTROL_WHERE}]
 P3_AMP = [_graph(_NODES_AMP, _EDGES_AMP)]
-VERIFY_AMP = {"REBAL@t-1→AR@t+0": VERIFY_TURNS,
-              "ILLIQ@t-1→AR@t+0": VERIFY_TURNS,
-              "DIVIDEND@t-1→AR@t+0": VERIFY_IMPOSSIBLE}
+VERIFY_AMP = {"REBAL@t-1→설명대상_잔차@t0": VERIFY_TURNS,
+              "ILLIQ@t-1→설명대상_잔차@t0": VERIFY_TURNS,
+              "DIVIDEND@t-1→설명대상_잔차@t0": VERIFY_IMPOSSIBLE}
 
 
 def test_an_amplifier_that_passes_its_test_lands_beside_the_cause_not_in_it():
@@ -1124,7 +1130,7 @@ def test_an_amplifier_that_passes_its_test_lands_beside_the_cause_not_in_it():
 # 가설이 전부 information 인 세계. 후보 목록이 공시·뉴스에서 오므로 **가만히 두면 이렇게
 # 된다** - 그 편향이 산출물에서 보이는지가 계약이다.
 P3_INFO_ONLY = [_graph({"DIVIDEND@t-1": _NODES_OK["DIVIDEND@t-1"],
-                        "AR@t+0": _NODES_OK["AR@t+0"]}, [_EDGES_OK[1]])]
+                        "설명대상_잔차@t0": _NODES_OK["설명대상_잔차@t0"]}, [_EDGES_OK[1]])]
 
 
 def test_hypotheses_that_all_come_from_one_domain_leave_the_other_domains_on_the_ledger(
@@ -1174,12 +1180,12 @@ H_RIVAL_INDEX = {"hypothesis": {
     "says": "지수 리뷰가 확정되면서 패시브 자금이 편입 대상만 사야 했고 그 매수가 대상 "
             "종목의 초과수익을 만들었다",
     "cause_label": INDEX_LABEL,
-    "treatment": "INDEX@t-1", "outcome": "AR@t+0", "assignment": "mechanical",
+    "treatment": "INDEX@t-1", "outcome": "설명대상_잔차@t0", "assignment": "mechanical",
     "role": "trigger", "domain": "flow",
     "nodes": {"INDEX@t-1": {"says": "지수 사업자가 확정한 편입 비중 상향",
                             "observed": "지수 사업자 리뷰 결과 공시"},
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "INDEX@t-1", "to": "AR@t+0",
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "INDEX@t-1", "to": "설명대상_잔차@t0",
                "says": "확정된 편입이 대상 종목에만 초과수익을 만든다",
                "because": "패시브 추종 자금은 재량이 없어 확정일에 대상만 산다"}],
     "predicts": [_ONLY_TARGETS], "denies": [_PEERS_TOO], "events": []}}
@@ -1188,29 +1194,30 @@ H_RIVAL_PEER = {"hypothesis": {
     "says": "동종기업의 실적 서프라이즈가 같은 수요 사이클을 공유하는 섹터 전체의 기대를 "
             "올려 편입 여부와 무관하게 같은 폭이 나왔다",
     "cause_label": PEER_LABEL,
-    "treatment": "PEER@t-1", "outcome": "AR@t+0", "assignment": "natural",
+    "treatment": "PEER@t-1", "outcome": "설명대상_잔차@t0", "assignment": "natural",
     "role": "trigger", "domain": "common_shock",
     "nodes": {"PEER@t-1": {"says": "동종기업 실적 서프라이즈 공시", "observed": "공시 원장"},
-              "AR@t+0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
-    "edges": [{"from": "PEER@t-1", "to": "AR@t+0",
+              "설명대상_잔차@t0": {"says": "당일 시장대비 초과수익", "observed": "일간 수익률"}},
+    "edges": [{"from": "PEER@t-1", "to": "설명대상_잔차@t0",
                "says": "동종기업 실적이 섹터 전체를 함께 올린다",
                "because": "같은 수요 사이클을 공유하므로 한 곳의 실적이 나머지 기대를 바꾼다"}],
-    "predicts": [_PEERS_TOO], "denies": [_ONLY_TARGETS], "events": []}}
+    "predicts": [_PEERS_TOO], "denies": [_ONLY_TARGETS],
+    "distinguishes": [_ONLY_TARGETS], "events": []}}
 
 _NODES_RIVAL = {
     "INDEX@t-1": {"says": "지수 사업자가 확정한 편입 비중 상향",
                   "observed": "지수 사업자 리뷰 결과 공시", "events": []},
     "PEER@t-1": {"says": "동종기업 실적 서프라이즈 공시", "observed": "공시 원장", "events": []},
     "DIVIDEND@t-1": _NODES_OK["DIVIDEND@t-1"],
-    "AR@t+0": _NODES_OK["AR@t+0"],
+    "설명대상_잔차@t0": _NODES_OK["설명대상_잔차@t0"],
 }
 _EDGES_RIVAL = [
-    {"from": "INDEX@t-1", "to": "AR@t+0", "kind": "statistical",
+    {"from": "INDEX@t-1", "to": "설명대상_잔차@t0", "kind": "statistical",
      "says": "확정된 편입이 대상 종목에만 초과수익을 만든다",
      "because": "패시브 추종 자금은 재량이 없어 확정일에 대상만 산다",
      "false_if": _PEERS_TOO + "면 죽는다",
      "exposure": REBAL_WHERE, "reference": CONTROL_WHERE},
-    {"from": "PEER@t-1", "to": "AR@t+0", "kind": "statistical",
+    {"from": "PEER@t-1", "to": "설명대상_잔차@t0", "kind": "statistical",
      "says": "동종기업 실적이 섹터 전체를 함께 올린다",
      "because": "같은 수요 사이클을 공유하므로 한 곳의 실적이 나머지 기대를 바꾼다",
      "false_if": _ONLY_TARGETS + "면 죽는다",
@@ -1223,9 +1230,9 @@ P3_RIVAL = [_graph(_NODES_RIVAL, _EDGES_RIVAL)]
 _VERIFY_PEER = [{"thought": "동종기업 타입에서 같은 대비를 쌓는다",
                  "code": VERIFY_CODE.replace(REBAL_TYPE, PEER_TYPE)},
                 {"thought": "R 완성", "done": True}]
-VERIFY_RIVAL = {"INDEX@t-1→AR@t+0": VERIFY_TURNS,
-                "PEER@t-1→AR@t+0": _VERIFY_PEER,
-                "DIVIDEND@t-1→AR@t+0": VERIFY_IMPOSSIBLE}
+VERIFY_RIVAL = {"INDEX@t-1→설명대상_잔차@t0": VERIFY_TURNS,
+                "PEER@t-1→설명대상_잔차@t0": _VERIFY_PEER,
+                "DIVIDEND@t-1→설명대상_잔차@t0": VERIFY_IMPOSSIBLE}
 
 
 def test_two_rival_hypotheses_are_judged_exclusive_and_that_forgives_the_budget(monkeypatch):
@@ -1343,14 +1350,14 @@ def test_sandbox_off_falls_back_to_the_reduced_path_without_calling_the_verifier
     assert client.verifies == 0, "샌드박스를 껐는데 검정 에이전트를 불렀다"
     assert client.p2 and client.p3 and client.p5, "샌드박스만 꺼야 하는데 앞단까지 껐다"
     proofs = {p["edge"]: p for p in raw["causal"]["proofs"]}
-    assert proofs["REBAL@t-1->AR@t+0"]["p"] < 0.05
-    assert proofs["REBAL@t-1->AR@t+0"]["turns"] == 0
+    assert proofs["REBAL@t-1->설명대상_잔차@t0"]["p"] < 0.05
+    assert proofs["REBAL@t-1->설명대상_잔차@t0"]["turns"] == 0
     # 감사 블록은 빈 값을 키째로 뺀다 - 코드 한 줄도 안 돌았다는 뜻이다.
-    assert proofs["REBAL@t-1->AR@t+0"].get("code", []) == []
-    assert proofs["REBAL@t-1->AR@t+0"].get("ledger", []) == []
+    assert proofs["REBAL@t-1->설명대상_잔차@t0"].get("code", []) == []
+    assert proofs["REBAL@t-1->설명대상_잔차@t0"].get("ledger", []) == []
     # 식별이 안 서는 간선은 축약 경로가 **추정하지 않는다** - OLS 로 밀면 편향을 숨긴다.
-    assert proofs["DIVIDEND@t-1->AR@t+0"].get("p") is None
-    assert any("식별 전략 없음" in g for g in proofs["DIVIDEND@t-1->AR@t+0"]["gate_fail"])
+    assert proofs["DIVIDEND@t-1->설명대상_잔차@t0"].get("p") is None
+    assert any("식별 전략 없음" in g for g in proofs["DIVIDEND@t-1->설명대상_잔차@t0"]["gate_fail"])
 
 
 def test_transport_error_still_fails_loud():

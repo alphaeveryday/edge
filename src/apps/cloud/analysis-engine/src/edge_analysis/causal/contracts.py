@@ -22,6 +22,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
 
+# 결과 노드 id. **코드가 고정한다** - 세션마다 이름을 새로 지으면 P3 에서 결론 노드가
+# 여러 개로 갈리고, 그러면 예산이 정의되지 않아 검정이 통째로 스킵된다(2026-07-30 실측:
+# 세 세션이 세 이름을 써서 값이 전부 버려졌다). 이름 짓기는 생성의 자유가 아니라 좌표계다.
+OUTCOME_ID = "설명대상_잔차@t0"
+
 # ── 어휘 ────────────────────────────────────────────────────────────────
 # 배정 기제. **`chosen` 이면 컴파일러가 U 를 심는다** - 모델이 지울 수 없다.
 # 근거: 기업이 고르는 사건(배당·자사주·가이던스·M&A)은 좋은 사적 정보와 함께 온다
@@ -377,6 +382,11 @@ class Hypothesis:
     edges: list[dict[str, Any]] = field(default_factory=list)
     predicts: list[str] = field(default_factory=list)   # 이 가설이 예측하는 관측
     denies: list[str] = field(default_factory=list)     # 이 가설이면 관측되지 않아야 할 것
+    # 앞선 세션의 가설과 **갈리는 관측**. 독립 생성만으로는 경쟁이 생기지 않는다 -
+    # 2026-07-30 실측에서 세 세션이 서로 무관한 세 종목 이야기를 냈고 h2·h3 는 예측이
+    # 사실상 같아(둘 다 "SK하이닉스가 가장 많이 빠진다") 어떤 관측으로도 갈리지 않았다.
+    # 대립 없는 다중가설은 Platt 의 strong inference 가 아니라 그냥 목록이다.
+    distinguishes: list[str] = field(default_factory=list)
     events: list[str] = field(default_factory=list)     # 접지된 source_event_id
     anchor: tuple[float, float] | None = None
     anchor_source: str = ""
@@ -780,8 +790,8 @@ class Findings:
 
 __all__ = [
     "ASSIGNMENT_SAY", "CEILING_SAY", "COMPILED_LATENT", "DEVIANCE_RANK",
-    "DIRECTED_RELATIONS", "DOMAIN_SAY", "MODALITY_SAY", "RELATION_SAY", "ROLE_NEEDS",
-    "ROLE_SAY",
+    "DIRECTED_RELATIONS", "DOMAIN_SAY", "MODALITY_SAY", "OUTCOME_ID", "RELATION_SAY",
+    "ROLE_NEEDS", "ROLE_SAY",
     "Assignment", "Axis", "ClaimCeiling", "ConfoundingScreen", "Deviance",
     "Discriminator", "DiscriminationPlan", "Disposition", "Domain", "DomainCoverage",
     "Findings", "Fingerprint", "Hypothesis", "IdentStatus", "Identification", "Latent",
