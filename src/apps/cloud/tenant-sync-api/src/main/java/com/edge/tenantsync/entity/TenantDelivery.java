@@ -31,7 +31,7 @@ public class TenantDelivery {
 
 	private String deliveryType;
 
-	// NEW·CORRECTION 만 본체 참조 — INVALIDATION 은 NULL(ck_tenant_delivery_payload).
+	// NEW 만 본체 참조 — INVALIDATION 은 NULL(ck_tenant_delivery_payload).
 	private String explanationResultId;
 
 	private String targetExplanationResultId;

@@ -46,10 +46,9 @@
     },
 
     "BundleEntry": {
-      "description": "전달 레코드 하나. delivery_type 으로 형상이 갈린다(oneOf). 서버 팩토리(BundleEntry.newResult·correction·invalidation)가 내는 3형상과만 일치.",
+      "description": "전달 레코드 하나. delivery_type 으로 형상이 갈린다(oneOf). 서버 팩토리(BundleEntry.newResult·invalidation)가 내는 2형상과만 일치(CORRECTION 은 폐지 — ADR-0044).",
       "oneOf": [
         { "$ref": "#/$defs/NewEntry" },
-        { "$ref": "#/$defs/CorrectionEntry" },
         { "$ref": "#/$defs/InvalidationEntry" }
       ]
     },
@@ -62,23 +61,6 @@
       "properties": {
         "cursor": { "$ref": "#/$defs/EntryCursor" },
         "delivery_type": { "const": "NEW" },
-        "explanation_result": { "$ref": "#/$defs/ExplanationResult" },
-        "explanation_run": { "$ref": "#/$defs/ExplanationRun" },
-        "source_events": { "$ref": "#/$defs/SourceEvents" },
-        "evidences": { "$ref": "#/$defs/Evidences" }
-      }
-    },
-
-    "CorrectionEntry": {
-      "type": "object",
-      "description": "정정(CORRECTION) — 대상·사유 + 재게시 본체·실행 + 배열.",
-      "additionalProperties": false,
-      "required": ["cursor", "delivery_type", "target_explanation_result_id", "reason", "explanation_result", "explanation_run", "source_events", "evidences"],
-      "properties": {
-        "cursor": { "$ref": "#/$defs/EntryCursor" },
-        "delivery_type": { "const": "CORRECTION" },
-        "target_explanation_result_id": { "type": "string", "description": "정정 대상 원본 explanation_result_id." },
-        "reason": { "type": "string", "description": "정정 사유." },
         "explanation_result": { "$ref": "#/$defs/ExplanationResult" },
         "explanation_run": { "$ref": "#/$defs/ExplanationRun" },
         "source_events": { "$ref": "#/$defs/SourceEvents" },

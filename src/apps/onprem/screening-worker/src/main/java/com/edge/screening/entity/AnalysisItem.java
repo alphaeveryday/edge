@@ -25,7 +25,7 @@ public class AnalysisItem {
 
 	private LocalDate tradeDate;
 
-	// 상태 가드 전이(CORRECTED·INVALIDATED 는 terminal)의 WHERE 절이 이 값으로 걸린다.
+	// 상태 가드 전이(INVALIDATED 는 terminal)의 WHERE 절이 이 값으로 걸린다.
 	private String status;
 
 	/** evidences JSONB — upsert 는 native 로 CAST(:json AS jsonb) 하며, 이 매핑은 타입 정합 검증용. */

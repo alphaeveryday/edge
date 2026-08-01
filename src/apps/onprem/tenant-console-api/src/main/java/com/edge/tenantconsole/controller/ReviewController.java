@@ -34,7 +34,7 @@ public class ReviewController {
 	// 상태 필터 어휘 = analysis_item.status CHECK(state-machine.md)와 동일.
 	private static final Set<String> STATUSES = Set.of(
 			"RECEIVED", "AUTO_PUBLISHED", "REVIEW_REQUIRED", "APPROVED",
-			"REJECTED", "BLOCKED", "UNPUBLISHED", "CORRECTED", "INVALIDATED");
+			"REJECTED", "BLOCKED", "UNPUBLISHED", "INVALIDATED");
 
 	private final ReviewService reviewService;
 

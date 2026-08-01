@@ -58,7 +58,7 @@ public class ExplanationService {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
-	/** 화면 노출 상태(labels.ts ServeStatus 6종) — 수신 전(RECEIVED)·정정 리비전(CORRECTED·INVALIDATED)은 제외. */
+	/** 화면 노출 상태(labels.ts ServeStatus 6종) — 수신 전(RECEIVED)·무효화(INVALIDATED)는 제외. */
 	private static final List<String> VISIBLE_STATUSES = List.of(
 			"AUTO_PUBLISHED", "APPROVED", "REVIEW_REQUIRED", "BLOCKED", "REJECTED", "UNPUBLISHED");
 

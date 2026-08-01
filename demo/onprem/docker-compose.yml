@@ -108,7 +108,7 @@ services:
       SYNC_AGENT_URL: http://sync-agent:8080
       INTAKE_POLL_MS: ${INTAKE_POLL_MS:-5000}
 
-  # 미점검 번들 파싱·상태 분기(state-machine.md): NEW=AUTO_PUBLISHED+자동게시 / CORRECTION / INVALIDATION.
+  # 미점검 번들 파싱·상태 분기(state-machine.md): NEW=AUTO_PUBLISHED+자동게시 / INVALIDATION=즉시 비노출 (CORRECTION 은 폐지 — ADR-0044).
   screening-worker:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/screening-worker:${IMAGE_TAG:-0.1.0}
     container_name: edge-screening-worker

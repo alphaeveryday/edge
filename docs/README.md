@@ -67,7 +67,7 @@
 | 4 Cloud/On-Premise 책임 분리 | context.md |
 | 5 서비스/API 변경표 | context.md |
 | 6 데이터 플로우 | domain/state-machine.md |
-| 7 컴플라이언스 플로우 — 정정/무효화 처리 | domain/state-machine.md |
+| 7 컴플라이언스 플로우 — 무효화 처리 | domain/state-machine.md |
 | 8 Sync 프로토콜 계약 | contracts/sync-protocol.md |
 | 9 인증서/Cloud Sync 인증 정책 | contracts/sync-auth.md |
 | 10 Exposure Log/고객 식별 | domain/exposure-log.md |

@@ -50,7 +50,7 @@ class ReviewControllerTest {
 
 	private static final AnalysisItemEntity PENDING = new AnalysisItemEntity(
 			"er-rev-1", "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
-			"정정 요약", null, "LOW", "REVIEW_REQUIRED", "er-0", "근거 공시 정정",
+			"검수 대기 요약", null, "LOW", "REVIEW_REQUIRED",
 			OffsetDateTime.of(2026, 7, 15, 17, 0, 0, 0, ZoneOffset.ofHours(9)));
 
 	private static final SessionMember REVIEWER =
@@ -285,9 +285,7 @@ class ReviewControllerTest {
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("COMMON200"))
 				.andExpect(jsonPath("$.result[0].explanation_result_id").value("er-rev-1"))
-				.andExpect(jsonPath("$.result[0].status").value("REVIEW_REQUIRED"))
-				.andExpect(jsonPath("$.result[0].supersedes_item_id").value("er-0"))
-				.andExpect(jsonPath("$.result[0].correction_reason").value("근거 공시 정정"));
+				.andExpect(jsonPath("$.result[0].status").value("REVIEW_REQUIRED"));
 	}
 
 	@Test
@@ -302,7 +300,7 @@ class ReviewControllerTest {
 
 		assertThat(items.decisions).containsExactly("er-rev-1:APPROVED");
 		assertThat(publications.published).containsExactly("er-rev-1");
-		assertThat(publications.capturedSummary).isEqualTo("정정 요약");  // 원문 스냅샷
+		assertThat(publications.capturedSummary).isEqualTo("검수 대기 요약");  // 원문 스냅샷
 		assertThat(tasks.saved).singleElement().satisfies(t -> {
 			assertThat(t.getStatus()).isEqualTo("APPROVED");
 			assertThat(t.getAnalysisItemId()).isEqualTo("er-rev-1");
@@ -522,8 +520,7 @@ class ReviewControllerTest {
 		// WHY: 감사·노출 이력은 별도 메뉴가 아니다(콘솔 IA, 구 ALPHA-439 흡수) — 상세가
 		// "왜 검수로 왔고(사유·검사 결과) 어떤 전이를 거쳤나(이력)"를 재현해야 한다.
 		items.item = new AnalysisItemEntity("er-rev-1", "069500", "KODEX 200",
-				LocalDate.of(2026, 7, 15), "정정 요약", null, "LOW", "REVIEW_REQUIRED", "er-0",
-				"근거 공시 정정",
+				LocalDate.of(2026, 7, 15), "검수 대기 요약", null, "LOW", "REVIEW_REQUIRED",
 				OffsetDateTime.of(2026, 7, 15, 17, 0, 0, 0, ZoneOffset.ofHours(9)),
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"공급 계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\"}]");
 		rules.rows.add(withId(new ScreeningRuleEntity(1L, "BANNED_WORD",
@@ -540,7 +537,7 @@ class ReviewControllerTest {
 		mvc.perform(get("/api/v1/review/items/er-rev-1"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.explanation_result_id").value("er-rev-1"))
-				.andExpect(jsonPath("$.result.summary").value("정정 요약"))
+				.andExpect(jsonPath("$.result.summary").value("검수 대기 요약"))
 				.andExpect(jsonPath("$.result.evidences[0].kind").value("DISCLOSURE"))
 				.andExpect(jsonPath("$.result.evidences[0].published_at").value("2026-07-14T09:00:00Z"))
 				.andExpect(jsonPath("$.result.review_reasons[0]").value("BANNED_WORD"))

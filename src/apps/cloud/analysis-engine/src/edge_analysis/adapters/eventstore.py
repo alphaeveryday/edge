@@ -383,8 +383,8 @@ class EventStore:
             )
             # 그날 첫 결과만 PUBLISHED — explanation_as_of 가 런마다 새로워 grain 부분
             # 유니크(as_of 포함)는 같은 날 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만
-            # 보는 이유: WITHDRAWN 뒤 재산출은 재게시(CORRECTION) 시나리오라 후속 티켓
-            # 몫이고, 현재 cloud 에 WITHDRAWN writer 가 없어 도달 불가 경로다.
+            # 보는 이유: 무효화(WITHDRAWN) 후 재발번 허용 여부는 발번 정책 소관(ADR-0044)
+            # 이고, 현재 cloud 에 WITHDRAWN writer 가 없어 도달 불가 경로다.
             cur.execute(
                 "INSERT INTO explanation_result (explanation_result_id, explanation_run_id,"
                 " etf_instrument_id, trade_date, explanation_as_of, primary_thread_id,"
@@ -425,7 +425,8 @@ class EventStore:
                     evidence_rows,
                 )
             # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션이라 커밋된 행만
-            # 커서에 노출된다(sync-protocol). NEW 만 발번, CORRECTION·INVALIDATION 은 후속.
+            # 커서에 노출된다(sync-protocol). NEW 만 발번, INVALIDATION 발번은 후속
+            # (ALPHA-440). CORRECTION 은 폐지(ADR-0044).
             fanout_tenants = 0
             if publication_status == "PUBLISHED":
                 fanout_tenants = self._fanout_new(cur, result_id)

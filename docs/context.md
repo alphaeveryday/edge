@@ -25,7 +25,7 @@
 
 1. 고객 데이터 비반출 — 고객 ID, 보유/관심 종목, 노출 이력이 벤더 클라우드로 나가지 않는다.
 2. 컴플라이언스 통제권 — 증권사별 정책 적용, 검수 워크플로우, 감사 로그가 증권사 환경 안에 있다.
-3. **"고객 노출 문구는 활성 점검 정책을 통과한 것만 나간다 — 신규·정정 동일"** — 정정분도 신규와 같은 정책 재점검을 거치며, 걸린 것만 검수로 간다 ([domain/state-machine.md](domain/state-machine.md), [ADR-0041](adr/0041-correction-same-screening.md) — 구 "무조건 재검수" 원칙 대체).
+3. **"고객 노출 문구는 활성 점검 정책을 통과한 것만 나가고, 오류가 발견된 설명은 고치지 않고 내린다"** — 정정(CORRECTION) 전달은 폐지됐고 무효화(INVALIDATION)가 유일한 사후 조치다 ([domain/state-machine.md](domain/state-machine.md), [ADR-0044](adr/0044-correction-abolition.md)).
 
 **MVP 제공 기능**: ETF별 가격 변동 이벤트 탐지 / 뉴스·공시·시세·수급 기반 변동 요인 후보 생성 / AI 설명 후보 생성 / 증권사별 컴플라이언스 정책 적용 / 자동 노출·검수 대기·차단 라우팅 / 검수자 승인·수정 승인·반려·차단 / 고객 노출 이력 및 민원 대응용 재현
 
@@ -86,7 +86,7 @@ flowchart TB
 | Data Pipeline | 뉴스/공시/시세/수급 수집 (Step Functions + ECS 워커 구조 유지) |
 | Common Analysis Engine | 가격 변동 이벤트 생성, 공통 변동 요인 후보 생성 |
 | (AI 설명 생성) | AI 설명 후보 + 근거 데이터 연결, 신뢰도/반대 요인 산출 |
-| Cloud Event Store | 비개인화 이벤트·설명 후보·근거 저장, 정정/무효화 이벤트 발행 |
+| Cloud Event Store | 비개인화 이벤트·설명 후보·근거 저장, 무효화 이벤트 발행 |
 | Tenant Sync API | Sync Agent(DMZ)가 Pull하는 Event Bundle 제공 (cursor 기반 delta) |
 | Super Admin Console + super-admin-api | 테넌트 생성, 파이프라인 조회, 공통 이벤트 정정/무효화 |
 | Data Source Monitor | 소스별 수집 상태 모니터링 |
@@ -117,7 +117,7 @@ flowchart TB
 | tenant-console-api | **이동** | 증권사 On-Premise. 설명 조회, 검수, 컴플라이언스 정책, 감사 로그, 설정 |
 | gateway | **제거** | 앱 레벨 프록시 폐지(ADR-0032). 공개 엣지는 super-admin 공개화 시 ALB 직결. On-Prem은 증권사 내부 API GW |
 | widget-api | **제거** | 벤더 서빙 위젯 서버 제거 유지. 단 EDGE 위젯 UI는 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅) — [ADR-0035](adr/0035-widget-ui-build-artifact.md) |
-| Tenant Sync API | **신규** | Vendor Cloud. cursor 기반 delta sync, 신규/정정/무효화 이벤트 전달, mTLS |
+| Tenant Sync API | **신규** | Vendor Cloud. cursor 기반 delta sync, 신규/무효화 이벤트 전달, mTLS |
 | Sync Agent (DMZ) + Intake (내부망) | **신규** | On-Premise 2모듈([ADR-0036](adr/0036-sync-agent-intake-topology.md)). Sync Agent=DMZ outbound Pull·검증, Intake=내부망 수신·저장. 단일 모듈 옵션 |
 | Screening Worker | **신규** | On-Premise. 금칙어/금지 표현/자동노출·검수·차단 기준(점검) 적용 |
 | Publication API | **신규** | On-Premise. Published 데이터만 조회 제공 |

@@ -244,7 +244,7 @@ services:
       - "18086:8080"
 
   # [edge-onprem] Screening Worker — 미점검 번들 파싱·상태 분기(state-machine.md).
-  # NEW=무조건 통과(AUTO_PUBLISHED)+자동 게시, CORRECTION=리비전 분리·재검수, INVALIDATION=즉시 비노출.
+  # NEW=무조건 통과(AUTO_PUBLISHED)+자동 게시, INVALIDATION=즉시 비노출 (CORRECTION 은 폐지 — ADR-0044).
   screening-worker:
     build:
       context: ./src

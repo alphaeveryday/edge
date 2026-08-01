@@ -27,10 +27,10 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 	@Query(value = """
 			INSERT INTO analysis_item (explanation_result_id, etf_instrument_id, etf_ticker, etf_name,
 			    trade_date, explanation_as_of, explanation_type, summary, headline, confidence_level,
-			    primary_thread_id, evidences, supersedes_item_id, correction_reason, source_cursor, status)
+			    primary_thread_id, evidences, source_cursor, status)
 			VALUES (:explanationResultId, :etfInstrumentId, :etfTicker, :etfName, :tradeDate, :explanationAsOf,
 			    :explanationType, :summary, :headline, :confidenceLevel, :primaryThreadId,
-			    CAST(:evidencesJson AS jsonb), :supersedesItemId, :correctionReason, :sourceCursor, :status)
+			    CAST(:evidencesJson AS jsonb), :sourceCursor, :status)
 			ON CONFLICT (explanation_result_id) DO NOTHING
 			""", nativeQuery = true)
 	int upsert(@Param("explanationResultId") String explanationResultId,
@@ -40,13 +40,12 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 			@Param("explanationType") String explanationType, @Param("summary") String summary,
 			@Param("headline") String headline, @Param("confidenceLevel") String confidenceLevel,
 			@Param("primaryThreadId") String primaryThreadId, @Param("evidencesJson") String evidencesJson,
-			@Param("supersedesItemId") String supersedesItemId,
-			@Param("correctionReason") String correctionReason, @Param("sourceCursor") long sourceCursor,
+			@Param("sourceCursor") long sourceCursor,
 			@Param("status") String status);
 
 	/**
-	 * Cloud 이벤트 반영 전이(CORRECTED·INVALIDATED). terminal 상태(CORRECTED·INVALIDATED)는
-	 * 덮어쓰지 않는다 — 리비전 종결 이력은 불변이다(state-machine.md).
+	 * Cloud 이벤트 반영 전이(INVALIDATED). terminal 상태(INVALIDATED)는 덮어쓰지 않는다 —
+	 * 종결 이력은 불변이다(state-machine.md).
 	 * @return 전이된 행 수(0 = 대상 미수신 또는 이미 종결).
 	 */
 	@Modifying
@@ -54,7 +53,7 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 	@Query(value = """
 			UPDATE analysis_item SET status = :status, updated_at = now()
 			WHERE explanation_result_id = :explanationResultId
-			  AND status NOT IN ('CORRECTED', 'INVALIDATED')
+			  AND status <> 'INVALIDATED'
 			""", nativeQuery = true)
 	int transition(@Param("explanationResultId") String explanationResultId, @Param("status") String status);
 

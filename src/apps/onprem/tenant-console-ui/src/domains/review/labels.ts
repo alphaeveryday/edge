@@ -35,6 +35,7 @@ export const ITEM_STATUS_LABEL: Record<string, string> = {
   REJECTED: '검수 반려',
   BLOCKED: '점검 차단',
   UNPUBLISHED: '제공 중단',
+  // CORRECTED 는 폐지 어휘(ADR-0044)지만 append-only 상태 이력의 과거 행 표시에 필요해 라벨만 유지.
   CORRECTED: '정정됨',
   INVALIDATED: '무효화',
 };
