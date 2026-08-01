@@ -48,11 +48,21 @@ _INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg"}
 
 # 공통 피처 CTE. 창은 전부 [t-20, t-1]·[t-60, t-1] - **당일 제외 = PIT**.
 _BASE = """
-WITH r AS (
-    SELECT instrument_id, trade_date, log_return, volume,
+WITH r0 AS (
+    SELECT instrument_id, trade_date, volume,
            -- turnover_value 는 전량 NULL(실측 0/176k) - volume(82%)이 거래량 축이다.
-           log_return - avg(log_return) OVER (PARTITION BY trade_date) AS ar
+           -- log_return 은 최근일 NULL(5,803/176k, 파생 미실행) - close 로 유도한다.
+           -- 신뢰 순서: 파이프라인 log_return(SSOT) > 수정종가 유도 > 종가 유도.
+           coalesce(log_return,
+                    ln(adjusted_close_price / NULLIF(lag(adjusted_close_price) OVER w, 0)),
+                    ln(close_price / NULLIF(lag(close_price) OVER w, 0))) AS log_return
     FROM rdb.public.price_daily
+    WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
+),
+r AS (
+    SELECT instrument_id, trade_date, log_return, volume,
+           log_return - avg(log_return) OVER (PARTITION BY trade_date) AS ar
+    FROM r0
     WHERE log_return IS NOT NULL
 ),
 f AS (
@@ -96,6 +106,11 @@ FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}'
 
 _TODAY_ROW = _BASE + """
 SELECT {cols} FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE '{day}'
+"""
+
+# 오늘 셀의 계열 혁신 z (발화 판정 + 가설 어포던스의 단일 원천).
+_TODAY_Z = _BASE + """
+SELECT z_ar, z_tv_chg FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE '{day}'
 """
 
 # 전이 패널 (§16 관계 노출): 사건 종목의 동일산업 피어(관계=1) vs 비피어(위약=0).
@@ -146,14 +161,18 @@ class EdgeReport:
     ci_hi: float | None = None
     mode: str = "조건화"             # 조건화 | 조절자 (§14: 얇은 충족 클래스의 매개변수화)
     moderation: str = ""             # 조절 대비 (조절자 모드에서만)
+    trigger_fired: bool | None = None   # 계열 방아쇠의 오늘 발화 (None = 점 또는 미계측 처리 전)
+    trigger_note: str = ""           # 오늘 방아쇠 어법 (계열에서만)
     reason: str = ""
 
     @property
     def applies_today(self) -> bool:
-        """오늘 셀에 몫을 배정할 자격. 성립 + 배정가능 + 취약성 미위반 + 환원 미불일치."""
+        """오늘 셀에 몫을 배정할 자격. 성립 + 배정가능 + 취약성 미위반 +
+        환원 미불일치 + (계열이면) 오늘 방아쇠 발화."""
         return (self.verdict == "성립" and self.assignable
                 and self.vuln_satisfied is not False
-                and not self.reduction.startswith("불일치"))
+                and not self.reduction.startswith("불일치")
+                and self.trigger_fired is not False)
 
     @property
     def line(self) -> str:
@@ -168,6 +187,20 @@ class EdgeReport:
 
 def _unmeasurable(reason: str) -> EdgeReport:
     return EdgeReport("판정불가", 0, None, None, None, None, reason=reason)
+
+
+def series_z(lake, instrument_id: str, day: str) -> dict[str, float]:
+    """오늘 셀의 계열족별 혁신 z (60d 창, 당일 제외 = PIT).
+
+    계열 방아쇠의 발화 판정(edge_test)과 가설 에이전트의 어포던스(run_cell)가
+    이 한 함수를 쓴다 - 발화 기준이 두 곳에서 갈리면 접지가 무너진다.
+    """
+    rows = lake.sql(_TODAY_Z.format(iid=instrument_id, day=day))
+    if not rows:
+        return {}
+    # 컬럼 순서는 _TODAY_Z 의 (z_ar, z_tv_chg) - _INNOVATION 의 (가격잔차, 거래량).
+    return {fam: float(z) for fam, z in zip(("가격잔차", "거래량"), rows[0])
+            if z is not None}
 
 
 def _pctile(v: np.ndarray) -> np.ndarray:
@@ -215,6 +248,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     unmeasured_vulns = [f"{v.family}/{v.transform}" for v in t.vulnerabilities
                         if (v.family, v.transform) not in FEATURES]
 
+    trigger_fired: bool | None = None   # 점 방아쇠는 접지(셀 사건 목록)가 발화다
+    trigger_note = ""
     if t.trigger.kind == "점":
         sql = _POINT_PANEL.format(etype=t.trigger.ident, cmp="<", day=day,
                                   clock="00:00:00", cols=col_sql)
@@ -224,6 +259,18 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             return _unmeasurable(f"계열 방아쇠 {t.trigger.ident!r} 의 혁신값은 아직 못 잰다 - "
                                  f"재는 것: {sorted(_INNOVATION)}")
         sql = _SERIES_PANEL.format(innov=innov, z=Z_ANOM, day=day, cols=col_sql)
+        # 오늘 방아쇠 발화 판정 - 패널은 역사(|z|≥2 였던 날들)이고, 오늘 적용은
+        # 오늘도 방아쇠가 당겨졌을 때만이다. 점 방아쇠의 접지(셀 사건 목록)와
+        # 대칭인 계열의 접지가 바로 이것이다. 미계측 = 부적용 (발화를 지어내지 않는다).
+        if cell_instrument_id:
+            z = series_z(lake, cell_instrument_id, day).get(t.trigger.ident)
+            if z is None:
+                trigger_fired, trigger_note = False, \
+                    f"오늘 방아쇠: {t.trigger.ident} z 미계측 - 발화 판정 불가 → 부적용"
+            else:
+                trigger_fired = bool(abs(z) >= Z_ANOM)
+                trigger_note = (f"오늘 방아쇠: {t.trigger.ident} z={z:+.1f} → "
+                                + ("발화" if trigger_fired else f"미발화 (|z| < {Z_ANOM})"))
 
     raw = [row for row in lake.sql(sql) if all(v is not None for v in row[2:])]
     if len(raw) < MIN_N:
@@ -371,7 +418,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       vuln_today=" · ".join(vuln_bits), vuln_satisfied=vuln_sat,
                       counterfactual=counterfactual, reduction=reduction,
                       contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
-                      mode=mode, moderation=moderation)
+                      mode=mode, moderation=moderation,
+                      trigger_fired=trigger_fired, trigger_note=trigger_note)
 
 
 def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:

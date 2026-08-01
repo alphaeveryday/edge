@@ -31,8 +31,9 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 계열족 9: {families}
 변환 5: {transforms}
 비교: [">=", "<="] · 결과종류: ["수익률", "전이"] · 부호: 1 | -1
-방아쇠: {{"kind": "점", "ident": <아래 접지 목록의 사건타입>}} 또는 {{"kind": "계열", "ident": <계열족>}}
+방아쇠: {{"kind": "점", "ident": <아래 접지 목록의 사건타입>}} 또는 {{"kind": "계열", "ident": <오늘 발화 계열족>}}
 이 셀에 접지된 사건 타입 (점 방아쇠는 이 목록에서만): {event_types}
+오늘 |z|≥2 로 발화한 계열족 (계열 방아쇠는 이 목록에서만): {series_families}
 지금 패널로 잴 수 있는 노출 (계열족, 변환): {measurable}
   - 다른 조합도 어휘상 합법이지만 판정불가로 남는다. 검정되길 원하면 여기서 골라라.
 
@@ -68,6 +69,7 @@ def _parse(h: dict) -> HypothesisTuple:
 
 def propose(ask: Ask, *, facts: str, event_types: list[str],
             measurable: list[tuple[str, str]] = (),
+            series_families: list[str] = (),
             n: int = 3) -> tuple[list[HypothesisTuple], list[str]]:
     """튜플 후보를 받는다. 반환: (유효 튜플들, 거부 사유들 - 감사용).
 
@@ -77,6 +79,7 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     """
     system = _SYSTEM.format(channels=sorted(CHANNELS), families=sorted(SERIES_FAMILIES),
                             transforms=sorted(TRANSFORMS), event_types=event_types,
+                            series_families=sorted(series_families),
                             measurable=sorted(measurable), n=n)
     rejected: list[str] = []
     valid: list[HypothesisTuple] = []
@@ -92,6 +95,12 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                 continue
             if t.trigger.kind == "점" and t.trigger.ident not in event_types:
                 rejected.append(f"[{i}] 접지 밖 사건타입 날조: {t.trigger.ident!r}")
+                continue
+            if t.trigger.kind == "계열" and t.trigger.ident not in series_families:
+                # 점의 접지 = 셀 사건 목록, 계열의 접지 = 오늘 발화(|z|≥2) 목록.
+                # 발화 안 한 계열로 오늘을 설명하는 가설은 방아쇠 날조다.
+                rejected.append(f"[{i}] 미발화 계열 방아쇠 날조: {t.trigger.ident!r} - "
+                                f"오늘 발화: {sorted(series_families) or '없음'}")
                 continue
             if t.exposure.kind == "속성" and any(
                     v.family == t.exposure.ident and v.transform == t.exposure.transform

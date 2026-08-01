@@ -73,7 +73,8 @@ def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PROD
 class _Lake:
     """가짜 패널. 취약성(거래량/수준) 충족 반쪽에서만 용량-반응이 실재한다."""
 
-    def __init__(self, n=400, effect=0.02, seed=1, today=(1.0, 1.0), today_n=0):
+    def __init__(self, n=400, effect=0.02, seed=1, today=(1.0, 1.0), today_n=0,
+                 today_z=(3.0, 0.5)):
         rng = np.random.default_rng(seed)
         x = rng.normal(size=n)                       # 노출
         v = rng.normal(size=n)                       # 취약성 피처
@@ -86,8 +87,11 @@ class _Lake:
         self.today_row = [today]
         self.today_panel = [(f"t{k}", "2026-06-01", 0.01 * (k % 2), float(k), float(k))
                             for k in range(today_n)]
+        self.today_z = [today_z]
 
     def sql(self, q):
+        if "SELECT z_ar, z_tv_chg" in q:
+            return self.today_z                     # 오늘 계열 혁신 z (발화 판정)
         if "trade_date = DATE" in q and "instrument_id = '" in q:
             return self.today_row                    # 오늘 셀 피처
         if "se.event_date = DATE" in q:
@@ -250,3 +254,43 @@ def test_thin_inus_falls_back_to_moderator_mode_not_undetermined():
     low_today = edge_test(_Lake(n=400, today=(1.0, -9.9)), thin, "2026-06-01",
                           cell_instrument_id="i0")
     assert low_today.vuln_satisfied is False and not low_today.applies_today
+
+
+def test_series_trigger_requires_today_firing_for_application():
+    # 14차: 계열 방아쇠의 접지 = 오늘 발화. 패널은 역사(|z|≥2 였던 날들)이고,
+    # 오늘 적용은 오늘도 방아쇠가 당겨졌을 때만이다 - 점 방아쇠의 셀 사건 접지와 대칭.
+    t = _tuple(trigger=("계열", "가격잔차"), vuln_family="거래량", vuln_tr="수준")
+    fired = edge_test(_Lake(today_z=(3.2, 0.1)), t, "2026-06-01", cell_instrument_id="i0")
+    unfired = edge_test(_Lake(today_z=(0.4, 0.1)), t, "2026-06-01", cell_instrument_id="i0")
+    assert fired.trigger_fired is True and "발화" in fired.trigger_note
+    assert unfired.trigger_fired is False and not unfired.applies_today
+    # 미계측이면 발화를 지어내지 않는다 → 부적용.
+    silent = edge_test(_Lake(today_z=(None, None)), t, "2026-06-01", cell_instrument_id="i0")
+    assert silent.trigger_fired is False and "미계측" in silent.trigger_note
+
+
+def test_propose_rejects_unfired_series_trigger():
+    # 발화 안 한 계열로 오늘을 설명하는 가설은 방아쇠 날조 - 점의 접지 밖 사건타입과 동급.
+    from edge_analysis.statics.hypothesize import propose
+    def ask(system, user):
+        assert "오늘 |z|≥2 로 발화한 계열족" in system
+        return {"hypotheses": [
+            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+                                  "comparator": ">=", "percentile": 0.9}],
+             "trigger": {"kind": "계열", "ident": "수급"},          # 미발화 - 날조
+             "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
+                                              "transform": "누적"},
+             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": 1,
+             "reduction_note": "x"},
+            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+                                  "comparator": ">=", "percentile": 0.9}],
+             "trigger": {"kind": "계열", "ident": "가격잔차"},      # 발화 - 유효
+             "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
+                                              "transform": "누적"},
+             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": -1,
+             "reduction_note": "y"}]}
+    valid, rejected = propose(ask, facts="f", event_types=[],
+                              measurable=[("가격잔차", "누적")],
+                              series_families=["가격잔차"])
+    assert [t.trigger.ident for t in valid] == ["가격잔차"]
+    assert any("미발화 계열 방아쇠 날조" in r for r in rejected)

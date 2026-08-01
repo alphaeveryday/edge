@@ -171,19 +171,29 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
     memory: list[str] = []
-    if types:
-        from .paneltest import FEATURES, grid_screen
+    from .paneltest import FEATURES, Z_ANOM, grid_screen, series_z
+    # 계열 방아쇠의 접지 = 오늘 발화(|z|≥2, 60d). 점 사건이 없어도 계열 이상이
+    # 있으면 가설 단계는 돈다 - 무사건 폭락일이 계열 방아쇠의 존재 이유다
+    # (14차 정정: 기계는 e1113ce 부터 있었는데 이 게이트가 점 사건에만 걸려
+    # 정확히 그 날들에 절대 발화할 수 없었다 - 선언≠배선).
+    zs = series_z(lake, instrument_id, day)
+    anomalous = sorted(f for f, z in zs.items() if abs(z) >= Z_ANOM)
+    if types or anomalous:
         # 회상이 기록보다 먼저다 (P9 교훈). 과거 셀들의 스크린·게이트 이력은
         # PIT 안전한 사실이고, 가설 에이전트의 어포던스로 들어간다.
         memory = recall(root, day=day, types=types)
         if memory:
             facts += "\n과거 셀 이력 (어포던스 - 확증 아님):\n" + "\n".join(
                 f"  - {m}" for m in memory)
+        if anomalous:
+            facts += ("\n오늘 계열 이상 (계열 방아쇠는 이 계열족에서만): "
+                      + " · ".join(f"{f} z={zs[f]:+.1f}" for f in anomalous))
         tuples, rejected = propose(ask, facts=facts, event_types=types,
-                                   measurable=list(FEATURES))
+                                   measurable=list(FEATURES),
+                                   series_families=anomalous)
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
                    for t in tuples]
-        screens = grid_screen(lake, day, types)
+        screens = grid_screen(lake, day, types) if types else []
     else:
         screens = []
 
@@ -207,6 +217,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         why = ("" if r.applies_today else
                "취약성 미충족 (INUS)" if r.vuln_satisfied is False else
                "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
+               "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
                "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
         iset = _iset(r, day_total)
         edges.append(Edge(channel=t.channel, event_type=t.trigger.ident,
@@ -220,14 +231,18 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                     edges=tuple(edges))
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
-    if not types:
-        block.append("장중 접지 사건이 없어 가설 단계를 건너뛴다 - 계열 방아쇠 판은 아직 없다.")
+    if not types and not anomalous:
+        # 부재≠판정: z 를 못 잰 것(가격계열 결손)과 조용한 것(|z|<2 관측)은 다르다.
+        quiet = ("계열 z 미계측 (가격계열 결손 - 발화 판정 불가)" if not zs
+                 else "계열 이상 없음 (" + " · ".join(f"{f} z={z:+.1f}" for f, z in sorted(zs.items())) + ")")
+        block.append(f"장중 접지 사건이 없고 {quiet} - 가설 단계를 건너뛴다.")
     for t, r in reports:
         vuln = " ∧ ".join(f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.vulnerabilities) or "—"
         apply_say = ("오늘 적용" if r.applies_today else
                      "오늘 부적용 - " + ("취약성 미충족" if r.vuln_satisfied is False else
                                         "환원 불일치" if r.reduction.startswith("불일치") else
+                                        "방아쇠 미발화" if r.trigger_fired is False else
                                         "패널 미성립"))
         block += [f"[{t.channel}] {t.trigger.kind}:{t.trigger.ident[:44]} 부호{t.sign:+d}",
                   f"    취약성 {vuln} · 노출 {t.exposure.ident}/{t.exposure.transform}",
@@ -235,6 +250,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                   f"    패널: {r.line}",
                   f"    오늘: {r.vuln_today or ('미평가 - 패널이 먼저 서야 한다' if t.vulnerabilities else '취약성 없음')} → **{apply_say}**",
                   f"    환원 검사: {r.reduction}"]
+        if r.trigger_note:
+            block.append(f"    {r.trigger_note}")
         if r.mode == "조절자":
             block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
         if r.contribution is not None:
