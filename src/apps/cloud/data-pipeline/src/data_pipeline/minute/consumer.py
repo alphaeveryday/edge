@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -110,17 +111,49 @@ class JobDelivery:
     payload: dict
 
 
+def _reject_duplicate_keys(pairs):
+    """같은 키가 두 번 나오면 raise — 기본 json.loads 는 **마지막 값으로 조용히 접는다**.
+
+    접히면 `{"event_id": <가짜>, "event_id": <진짜>}` 같은 본문이 계약 검사를 통과해
+    엉뚱한 job 을 claim 한다. 전송 경계의 입력이라 관대할 이유가 없다(Rule 12).
+    """
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"중복 키: {key!r}")
+        seen[key] = value
+    return seen
+
+
+def _reject_json_constant(token: str):
+    """NaN/Infinity 거부 — 표준 JSON 이 아니고, NaN 은 어떤 비교도 False 라 하류
+    수치 게이트를 조용히 통과한다(canonical_json 의 allow_nan=False 와 같은 규약)."""
+    raise ValueError(f"표준 JSON 이 아닌 상수: {token}")
+
+
+# job_id 는 결정적 sha256 hex 다(v0.7 10.6) — 형상을 강제해야 서로게이트·제어문자 같은
+# 이상 문자열이 DB 파라미터 인코딩 단계까지 내려가 tick 을 반복해서 죽이지 않는다.
+_JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
 def parse_delivery(body: str) -> JobDelivery:
     """Relay 가 실은 envelope(`relay.build_message_body`)을 되읽는다.
 
     미지 키·틀린 타입·형식 밖 event_id 는 즉시 raise 한다 — 조용히 기본값을 넣으면
     엉뚱한 job 을 실행하거나(같은 큐의 다른 사건) 없는 job 을 만들어낸다. 호출자는 이
     실패를 poison 으로 세고 메시지를 **남긴다**(DLQ 가 근거를 보존한다).
+
+    ⚠️ 여기서 나가는 예외는 **ValueError 하나로 모은다** — 호출자가 그것만 잡아
+    격리하므로, 다른 예외 종류가 새면 메시지 한 건이 tick 을 통째로 죽이고 뒤의
+    멀쩡한 메시지까지 막는다.
     """
     try:
-        event = json.loads(body)
+        event = json.loads(
+            body, object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
     except ValueError as error:
-        raise ValueError(f"메시지 본문이 JSON 이 아니다: {error}") from error
+        raise ValueError(f"메시지 본문이 유효한 JSON 이 아니다: {error}") from error
     if not isinstance(event, dict):
         raise ValueError(f"메시지 본문이 객체가 아니다: {type(event).__name__}")
     expected = {"event_id", "event_type", "payload"}
@@ -134,18 +167,24 @@ def parse_delivery(body: str) -> JobDelivery:
     )
     if not isinstance(payload, dict):
         raise ValueError(f"payload 가 객체가 아니다: {type(payload).__name__}")
+    # 타입 검사가 **조회보다 먼저**다 — dict.get 에 리스트를 넣으면 TypeError 가 나고
+    # 그건 ValueError 가 아니라 호출자의 격리를 빠져나간다.
+    if not isinstance(event_type, str):
+        raise ValueError(f"event_type 이 문자열이 아니다: {type(event_type).__name__}")
+    if not isinstance(event_id, str):
+        raise ValueError(f"event_id 가 문자열이 아니다: {type(event_id).__name__}")
     kind = EVENT_TYPE_JOB_KINDS.get(event_type)
     if kind is None:
         raise ValueError(f"정의되지 않은 event_type: {event_type!r}")
-    if not isinstance(event_id, str):
-        raise ValueError(f"event_id 가 문자열이 아니다: {type(event_id).__name__}")
     parts = event_id.split(":")
     if len(parts) != 3 or not parts[2].isdigit():
         raise ValueError(f"event_id 형식이 아니다: {event_id!r}")
     job_id, generation = parts[1], int(parts[2])
     # 재조립해 **정확히** 대조한다 — 접두 event_type 불일치나 "007" 같은 비정규 표기를
     # 통과시키면 같은 job 이 서로 다른 event_id 로 두 번 살아난다(멱등 키가 깨진다).
-    if not job_id or build_event_id(event_type, job_id, generation) != event_id:
+    if not _JOB_ID_PATTERN.match(job_id):
+        raise ValueError(f"job_id 가 sha256 hex 형상이 아니다: {job_id!r}")
+    if build_event_id(event_type, job_id, generation) != event_id:
         raise ValueError(f"event_id 가 유도식과 다르다: {event_id!r}")
     return JobDelivery(
         event_id=event_id, event_type=event_type, kind=kind, job_id=job_id,
@@ -226,6 +265,21 @@ class ConsumerConfig:
     def __post_init__(self) -> None:
         if self.kind not in JOB_EVENT_TYPES:
             raise ValueError(f"kind 는 {sorted(JOB_EVENT_TYPES)} 중 하나다: {self.kind!r}")
+        for name in ("consumer_id", "queue_url"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} 은 비어 있지 않은 문자열이어야 한다: {value!r}")
+        # **타입부터 강제한다.** 아래 범위 비교는 float 을 통과시키는데, NaN 은 모든
+        # 비교가 False 라 `max_attempts=nan` 이면 예산 검사(`attempt >= max_attempts`)가
+        # 영원히 거짓이 돼 **재시도 예산이 통째로 사라지고**, 소수 batch_size 는 botocore
+        # 가 첫 receive 에서 거부해 Consumer 가 기동 즉시 죽는다(설정이 그대로면 재기동
+        # 해도 같은 자리다). bool 은 int 의 하위형이라 명시적으로 뺀다.
+        for name in ("batch_size", "wait_seconds", "visibility_seconds",
+                     "heartbeat_seconds", "max_concurrency", "lease_seconds",
+                     "retry_base_seconds", "retry_max_seconds", "max_attempts"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{name} 은 정수여야 한다: {value!r}")
         if not 1 <= self.batch_size <= SQS_RECEIVE_LIMIT:
             raise ValueError(f"batch_size 는 1..{SQS_RECEIVE_LIMIT} 이다")
         if not 0 <= self.wait_seconds <= SQS_MAX_LONG_POLL_SECONDS:
@@ -249,8 +303,14 @@ class ConsumerConfig:
             )
         if self.max_concurrency < 1:
             raise ValueError("max_concurrency 는 1 이상이다")
+        if self.lease_seconds > SQS_MAX_VISIBILITY_SECONDS:
+            # 상한을 둔다 — 거대한 값은 timedelta 연산에서 터지고(OverflowError) 설정이
+            # 그대로면 재기동해도 같은 자리에서 죽는다(relay lease 와 같은 이유).
+            raise ValueError(f"lease_seconds 는 {SQS_MAX_VISIBILITY_SECONDS} 이하다")
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_base_seconds <= retry_max_seconds 여야 하고 둘 다 양수다")
+        if self.retry_max_seconds > SQS_MAX_VISIBILITY_SECONDS:
+            raise ValueError(f"retry_max_seconds 는 {SQS_MAX_VISIBILITY_SECONDS} 이하다")
         if self.max_attempts < 1:
             raise ValueError("max_attempts 는 1 이상이다")
 
@@ -307,6 +367,13 @@ class MinuteConsumer:
             wait_seconds=self.config.wait_seconds,
             visibility_seconds=self.config.visibility_seconds,
         )
+        if self.stopping:
+            # long polling(최대 20초) 중에 SIGTERM 이 왔다 — 받아 둔 메시지로 **새 작업을
+            # 시작하지 않는다**(종료 유예 직전에 LLM 호출을 걸면 강제 종료로 CLAIMED
+            # lease 만 남는다). 즉시 다시 보이게 돌려주고 다음 Consumer 가 집게 한다.
+            for message in messages:
+                self._change_visibility(message, 0)
+            return Counter(stopped=1, released=len(messages))
         if not messages:
             return Counter(idle=1)
         return self._run(messages, now)
@@ -316,22 +383,43 @@ class MinuteConsumer:
         # claim 은 **본 스레드에서 먼저** 끝낸다 — 실행 스레드가 각자 claim 하면
         # heartbeat 가 "무엇을 연장해야 하는지"를 경합 없이 알 수 없다.
         running: dict[object, _Claimed] = {}
+        last_heartbeat = time.monotonic()
         for message in messages:
             prepared = self._prepare(message, now)
             if isinstance(prepared, str):
                 counts[prepared] += 1
-                continue
-            running[self._pool.submit(self._execute, prepared, now)] = prepared
+            else:
+                running[self._pool.submit(self._execute, prepared, now)] = prepared
+            # 배치가 크고 원장 왕복이 느리면 이 루프만으로 앞서 제출한 job 의 lease·
+            # visibility 가 만료된다 — 아래 heartbeat 루프에 들어가기 전에도 민다.
+            if running and time.monotonic() - last_heartbeat >= self.config.heartbeat_seconds:
+                self._heartbeat_running(running, now)
+                last_heartbeat = time.monotonic()
         pending = set(running)
-        while pending:
-            done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
-            for future in pending:
-                # 아직 안 끝난 것 = 실행 중이거나 pool 대기열에 있는 것. 둘 다 claim 은
-                # 이미 잡혀 있으므로 visibility 와 lease 를 함께 민다.
-                self._heartbeat(running[future], now)
-            for future in done:
-                counts[future.result()] += 1
+        try:
+            while pending:
+                done, pending = wait(pending, timeout=self.config.heartbeat_seconds)
+                for future in pending:
+                    # 아직 안 끝난 것 = 실행 중이거나 pool 대기열에 있는 것. 둘 다 claim 은
+                    # 이미 잡혀 있으므로 visibility 와 lease 를 함께 민다.
+                    self._heartbeat(running[future], now)
+                for future in done:
+                    counts[future.result()] += 1
+        finally:
+            if pending:
+                # 한 future 의 예외로 여기 왔다. 남은 실행은 claim 을 쥔 채 pool 에서
+                # 계속 도는데, 그냥 빠져나가면 아무도 lease 를 연장하지 않고 다음 tick 이
+                # _tick_started 를 덮어 기록 시각까지 어긋난다. 끝날 때까지 기다린다 —
+                # 결과 집계는 잃지만 원장은 자기 손으로 마감한다.
+                logger.error("tick 이 예외로 중단됐다 — 실행 중 job %d건을 마저 기다린다",
+                             len(pending))
+                wait(pending)
         return counts
+
+    def _heartbeat_running(self, running: dict, now: datetime) -> None:
+        for future, claimed in running.items():
+            if not future.done():
+                self._heartbeat(claimed, now)
 
     # ── 메시지 한 건 ──────────────────────────────────────────
     def _prepare(self, message: ConsumerMessage, now: datetime) -> _Claimed | str:
@@ -375,19 +463,25 @@ class MinuteConsumer:
             # 이미 끝난 일 — 중복 배달이다. 실행하지 않고 ack (v0.7 12.4).
             self._delete(message)
             return "terminal"
+        # 시각은 **한 번만** 읽는다 — tick 시작 시각으로 비교하면 long polling(최대
+        # 20초)과 앞선 메시지 처리에 쓴 시간이 통째로 무시돼, 이미 재시도 시각에 닿은
+        # job 을 deferred 로 분류하고 그만큼 또 미룬다(DB 가 정한 시각보다 늦어진다).
+        moment = self._now(now)
         if (
             job["status"] == JOB_RETRY_WAIT
             and job["next_attempt_at"] is not None
-            and job["next_attempt_at"] > now
+            and job["next_attempt_at"] > moment
         ):
             # **DB 가 정한 시각**까지 안 깨운다 — 여기서 실행하면 재시도 간격이
             # SQS 배달 주기로 바뀌어 DB 의 retry 권위가 사라진다(LLM 호출 0).
-            self._change_visibility(message, (job["next_attempt_at"] - now).total_seconds())
+            self._change_visibility(
+                message, (job["next_attempt_at"] - moment).total_seconds()
+            )
             return "deferred"
         claim = self.jobs.claim_job(
             kind=delivery.kind, job_id=delivery.job_id,
             redrive_generation=delivery.redrive_generation,
-            worker_id=self.config.consumer_id, now=self._now(now),
+            worker_id=self.config.consumer_id, now=moment,
             lease_seconds=self.config.lease_seconds,
         )
         if claim == "STALE":
@@ -399,7 +493,19 @@ class MinuteConsumer:
             # 다른 Consumer 가 쥐고 있거나 그새 상태가 바뀌었다. 지우지 않고 두면
             # visibility 만료 뒤 다시 판정한다(그때 terminal 이면 그때 지운다).
             return "contended"
-        return _Claimed(message=message, delivery=delivery, attempt=claim["attempt_count"])
+        claimed = _Claimed(
+            message=message, delivery=delivery, attempt=claim["attempt_count"]
+        )
+        if claim["attempt_count"] > self.config.max_attempts:
+            # 예산을 **실행 전에** 본다. 실패 뒤에만 보면, 외부 호출 후 기록 전에
+            # 죽는 패턴이 반복될 때 attempt 는 오르는데 handler 는 계속 불려 DB 예산이
+            # 아무것도 막지 못한다(실질 상한이 SQS maxReceiveCount 로 넘어간다).
+            logger.error(
+                "job %s 가 예산(%d회)을 넘긴 attempt %d 로 claim 됐다 — 실행 없이 DEAD",
+                delivery.job_id, self.config.max_attempts, claim["attempt_count"],
+            )
+            return self._finish_dead(claimed, "RETRY_BUDGET_EXHAUSTED", now)
+        return claimed
 
     def _execute(self, claimed: _Claimed, now: datetime) -> str:
         delivery = claimed.delivery
@@ -427,6 +533,7 @@ class MinuteConsumer:
         if not self.jobs.succeed_job(
             kind=delivery.kind, job_id=delivery.job_id,
             worker_id=self.config.consumer_id, attempt=claimed.attempt,
+            redrive_generation=delivery.redrive_generation,
             now=self._now(now), result_checksum=checksum,
         ):
             # claim 상실 뒤의 늦은 보고 — 지금 이 job 은 남의 것이다. 메시지를 지우면
@@ -455,7 +562,8 @@ class MinuteConsumer:
         moment = self._now(now)
         if not self.jobs.retry_job(
             kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
-            worker_id=self.config.consumer_id, attempt=claimed.attempt, now=moment,
+            worker_id=self.config.consumer_id, attempt=claimed.attempt,
+            redrive_generation=claimed.delivery.redrive_generation, now=moment,
             next_attempt_at=moment + timedelta(seconds=delay), error_code=error_code,
         ):
             logger.warning(
@@ -471,6 +579,7 @@ class MinuteConsumer:
         if not self.jobs.dead_job(
             kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
             worker_id=self.config.consumer_id, attempt=claimed.attempt,
+            redrive_generation=claimed.delivery.redrive_generation,
             now=self._now(now), error_code=error_code,
         ):
             logger.warning("DEAD 기록 거부(claim 상실): %s", claimed.delivery.job_id)
@@ -483,12 +592,16 @@ class MinuteConsumer:
         if not self.jobs.heartbeat_job(
             kind=claimed.delivery.kind, job_id=claimed.delivery.job_id,
             worker_id=self.config.consumer_id, attempt=claimed.attempt,
+            redrive_generation=claimed.delivery.redrive_generation,
             now=self._now(now), lease_seconds=self.config.lease_seconds,
         ):
-            # lease 를 뺏겼다 — 지금 돌고 있는 실행의 결과는 attempt fence 에 걸려
-            # 거부된다. 끊지는 않는다(중간에 죽이면 외부 부수효과가 미완으로 남는다).
+            # lease 를 뺏겼거나 **그새 끝났다**. 끊지는 않는다(중간에 죽이면 외부
+            # 부수효과가 미완으로 남는다). visibility 도 **밀지 않는다** — 방금 끝난
+            # 실행이 DB 가 정한 재시도 시각에 맞춰 놓은 visibility 를 여기서 덮으면
+            # 그 재시도가 몇 분 밀린다(DB 가 권위라는 계약이 무너진다).
             logger.warning("lease 연장 거부 — 이 실행의 기록은 거부된다: %s",
                            claimed.delivery.job_id)
+            return
         self._change_visibility(claimed.message, self.config.visibility_seconds)
 
     def _delete(self, message: ConsumerMessage) -> None:
@@ -527,7 +640,8 @@ class DlqReconciler:
 
     ⚠️ **메시지를 지우지 않는다.** 지우면 근거가 사라지고, 남기면 보존기간까지 남아
     사람이 볼 수 있다. 판정은 멱등이라(이미 DEAD 면 CAS no-op) 반복 실행이 안전하고,
-    이번에 못 죽인 것(살아 있는 lease)은 다음 회차가 수렴시킨다.
+    이번에 못 죽인 것(살아 있는 lease)은 **다음 실행**(주기 잡)이 수렴시킨다 — 한 실행
+    안에서는 이미 판정한 메시지를 다시 세지 않는다(안 그러면 재수신이 종료를 막는다).
     """
 
     jobs: JobLedger
@@ -537,6 +651,10 @@ class DlqReconciler:
     wait_seconds: int = 20
     visibility_seconds: int = 60
     stopping: bool = False
+    # 이번 실행에서 이미 판정한 메시지 — 지우지 않으므로 visibility 가 풀리면 같은
+    # 메시지가 다시 온다. 그걸 "새 일감"으로 세면 종료 조건(받은 게 없다)이 영원히
+    # 성립하지 않아 일회성 명령이 안 끝난다. MessageId 는 배달이 반복돼도 같다.
+    seen: set = field(default_factory=set)
 
     def request_stop(self) -> None:
         self.stopping = True
@@ -551,8 +669,12 @@ class DlqReconciler:
                 wait_seconds=self.wait_seconds,
                 visibility_seconds=self.visibility_seconds,
             )
-            counts["received"] += len(messages)
             for message in messages:
+                counts["received"] += 1
+                if message.message_id in self.seen:
+                    counts["repeat"] += 1
+                    continue
+                self.seen.add(message.message_id)
                 counts[self._reconcile(message, now)] += 1
         return counts
 
@@ -594,21 +716,29 @@ def _resolve_queue_urls(settings) -> Mapping[str, str]:
 
     DLQ 자리에 원 큐 URL 이 들어가면 reconciler 가 정상 배달 중인 메시지를 전부
     "DLQ 도착"으로 읽어 **살아 있는 job 을 몰살**한다. 되돌리는 데 job 수만큼의 redrive
-    가 필요한 사고라, 두 설정이 같은 프로세스에 다 있을 때는 기동에서 막는다.
+    가 필요한 사고다.
+
+    그래서 relay 큐 매핑을 **함께 요구한다.** "있으면 검사"로 두면 그 설정이 없는
+    프로세스에서 검사가 통째로 꺼지는데, 그건 사고가 나는 바로 그 상황(원 큐 URL 을
+    DLQ 자리에 붙여넣은 일회성 실행)이다. 같은 환경의 같은 형태 env 라 요구 비용은 낮다.
     """
     if settings.minute_consumer is None:
         raise SystemExit(
             "minute_consumer 설정 없음 — dlq-reconcile 은 destination→DLQ 매핑 필수"
             '(DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS=\'{"<destination>":"<url>"}\')'
         )
+    if settings.minute_relay is None:
+        raise SystemExit(
+            "minute_relay 설정 없음 — dlq-reconcile 은 원 큐 매핑도 필요하다"
+            "(DLQ 자리에 원 큐가 들어갔는지 대조해야 살아 있는 job 몰살을 막는다)"
+        )
     dlq_urls = dict(settings.minute_consumer.dlq_urls)
-    if settings.minute_relay is not None:
-        shared = sorted(set(dlq_urls.values()) & set(settings.minute_relay.queue_urls.values()))
-        if shared:
-            raise SystemExit(
-                f"DLQ 매핑이 원 큐와 같은 URL 을 가리킨다: {shared} — "
-                "정상 배달 중인 job 이 전부 DEAD 가 된다"
-            )
+    shared = sorted(set(dlq_urls.values()) & set(settings.minute_relay.queue_urls.values()))
+    if shared:
+        raise SystemExit(
+            f"DLQ 매핑이 원 큐와 같은 URL 을 가리킨다: {shared} — "
+            "정상 배달 중인 job 이 전부 DEAD 가 된다"
+        )
     return dlq_urls
 
 
@@ -623,10 +753,12 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
 
     if settings.db is None:
         raise SystemExit("db 설정 없음 — dlq-reconcile 은 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    # 설정 검증을 **먼저** 끝낸다 — 인자 평가 순서에 기대면(뒤 인자에서 None 참조)
+    # 리팩터링 한 번에 AttributeError 로 바뀐다.
+    queue_urls = _resolve_queue_urls(settings)
     options = settings.minute_consumer
     reconciler = DlqReconciler(
-        jobs=JobLedger(db=settings.db), queue=SqsQueue(),
-        queue_urls=_resolve_queue_urls(settings),
+        jobs=JobLedger(db=settings.db), queue=SqsQueue(), queue_urls=queue_urls,
         batch_size=options.batch_size, wait_seconds=options.wait_seconds,
         visibility_seconds=options.visibility_seconds,
     )
@@ -638,7 +770,9 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
         counts = reconciler.tick(datetime.now(timezone.utc))
         ticks += 1
         totals += counts
-        if counts["stopped"] or not counts["received"]:
+        # **새로 본 메시지**가 없으면 끝난다. received 로 판정하면, 지우지 않은 메시지가
+        # visibility 만료로 다시 보이는 순간 종료 조건이 영원히 성립하지 않는다.
+        if counts["stopped"] or counts["received"] == counts["repeat"]:
             break
     logger.info("dlq-reconcile 종료 — %d tick, %s", ticks, dict(sorted(totals.items())))
     # 판정 불가(poison·orphan·ahead)는 사람이 봐야 한다 — 0 으로 끝내면 아무도 모른다.

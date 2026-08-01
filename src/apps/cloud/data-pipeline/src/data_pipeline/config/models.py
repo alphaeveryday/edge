@@ -369,7 +369,9 @@ class MinuteRelayConfig(BaseModel):
     """1분 Outbox Relay 설정 — `relay` 스텝만 쓴다(ALPHA-670).
 
     큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다 —
-    **JSON 한 변수**다: `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS={"<destination>":"<url>",…}`.
+    **JSON 한 변수**다(JSON 전체를 홑따옴표로 감싼다 — 안 감싸면 셸이 안쪽 따옴표를
+    먹어 로더가 파싱에 실패한다):
+    `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"<destination>":"<url>",…}'`.
     nested 형태(`…__QUEUE_URLS__<destination>`)는 쓰지 않는다 — destination 이름에
     하이픈이 있어 셸이 변수 할당으로 파싱하지 못한다(실증: `command not found`).
     destination 은 outbox 행이
@@ -399,17 +401,20 @@ class MinuteConsumerConfig(BaseModel):
     """1분 Consumer 운영 설정 — 현재는 `dlq-reconcile` 만 쓴다(ALPHA-672).
 
     큐 URL 은 환경마다 다르므로 env 로 온다 — `MINUTE_RELAY__QUEUE_URLS` 와 같은 이유로
-    **JSON 한 변수**다(destination 이름에 하이픈이 있어 nested 형태를 셸이 못 파싱한다):
-    `DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS={"<destination>":"<dlq url>"}`.
+    **JSON 한 변수**다(destination 이름에 하이픈이 있어 nested 형태를 셸이 못 파싱한다).
+    JSON 전체를 홑따옴표로 감싸야 셸이 안쪽 따옴표를 먹지 않는다:
+    `DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"<destination>":"<dlq url>"}'`.
 
     ⚠️ 여기 **원 큐 URL 을 넣으면 안 된다** — reconciler 가 정상 배달을 전부 "DLQ 도착"
-    으로 읽어 살아 있는 job 을 DEAD 로 만든다. relay 설정이 같이 있는 프로세스에서는
-    기동 시 겹침을 막지만(minute/consumer.py), 그 설정이 없으면 검출할 수단이 없다.
+    으로 읽어 살아 있는 job 을 DEAD 로 만든다. 그래서 `dlq-reconcile` 은 relay 큐 매핑을
+    함께 요구하고 겹치면 기동을 거부한다(minute/consumer.py).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    dlq_urls: dict[NonBlankStr, NonBlankStr]
+    # 빈 매핑은 거부한다 — 검증을 통과한 뒤 reconciler 가 큐를 하나도 안 보고 성공으로
+    # 끝나, 실제 DLQ 의 non-terminal job 이 남아도 운영 게이트가 초록이 된다(Rule 12).
+    dlq_urls: dict[NonBlankStr, NonBlankStr] = Field(min_length=1)
     batch_size: int = Field(default=10, ge=1, le=10)  # SQS ReceiveMessage 상한
     wait_seconds: int = Field(default=20, ge=0, le=20)  # long polling 상한
     # 대사 중 그 메시지를 다른 실행이 다시 집지 않을 만큼만. 지우지 않으므로 이 시간이

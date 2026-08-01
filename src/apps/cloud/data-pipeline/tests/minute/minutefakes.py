@@ -180,17 +180,20 @@ class _Cursor:
             ):
                 assert clause in s, f"dead_on_dlq SQL 에 {clause} 가 없다"
             self._dead_on_dlq(_job_kind(s), params)
-        elif s.startswith("SELECT status, redrive_generation FROM"):
+        elif s.startswith("SELECT status, redrive_generation, lease_expires_at FROM"):
             assert "FOR UPDATE" in s, "redrive 는 job 행을 잠그고 상태를 봐야 한다"
             row = self.db.jobs.get((_job_kind(s), params[0]))
             if row is not None:
-                self._rows = [(row["status"], row["redrive_generation"])]
+                self._rows = [(row["status"], row["redrive_generation"],
+                               row["lease_expires_at"])]
         elif s.startswith("SELECT destination, generation, payload"):
             row = self.db.outbox.get(params[0])
             if row is not None:
                 self._rows = [(row["destination"], row["generation"], row["payload"])]
         elif "SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1" in s:
-            for clause in ("status = 'DEAD'", "redrive_generation = %s"):
+            # 관측한 상태·세대를 CAS 에 그대로 되건다 — 빠지면 그새 바뀐 job 을
+            # 덮어써 진행 중인 실행이나 방금 끝난 결과를 잃는다
+            for clause in ("status = %s", "redrive_generation = %s"):
                 assert clause in s, f"redrive SQL 에 {clause} 가 없다"
             self._redrive_job(_job_kind(s), params)
         elif s.startswith("SELECT j.generation, w.generation"):
@@ -200,6 +203,9 @@ class _Cursor:
         elif "SET status = 'DEAD', error_code = 'STALE'" in s:
             self._stale_dead(params)
         elif "WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'" in s:
+            # 세대 fence 가 빠지면 옛 실행의 늦은 보고가 redrive 로 만든 새 세대를
+            # 마감한다 — fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
+            assert "redrive_generation = %s" in s, "전이 SQL 에 세대 fence 가 없다"
             self._job_transition("price" if "price_window_job" in s else "news", params)
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
@@ -451,7 +457,7 @@ class _Cursor:
         row = min(candidates, key=lambda r: r["seq"])
         row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
                    attempt_count=row["attempt_count"] + 1)
-        self._rows = [(row["job_id"], row["attempt_count"])]
+        self._rows = [(row["job_id"], row["attempt_count"], row["redrive_generation"])]
 
     # ── 메시지 기반 job 경로 (ALPHA-672) ──
     def _fetch_job(self, kind, p):
@@ -479,10 +485,11 @@ class _Cursor:
         self._rows = [(row["attempt_count"],)]
 
     def _heartbeat_job(self, kind, p):
-        lease_until, job_id, worker_id, attempt = p
+        lease_until, job_id, worker_id, attempt, generation = p
         row = self.db.jobs.get((kind, job_id))
         if (row is None or row["claimed_by"] != worker_id
-                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt):
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
             return
         row["lease_expires_at"] = lease_until
         self.rowcount = 1
@@ -501,9 +508,9 @@ class _Cursor:
         self.rowcount = 1
 
     def _redrive_job(self, kind, p):
-        now, job_id, generation = p
+        now, job_id, status, generation = p
         row = self.db.jobs.get((kind, job_id))
-        if row is None or row["status"] != "DEAD" or row["redrive_generation"] != generation:
+        if row is None or row["status"] != status or row["redrive_generation"] != generation:
             return
         row.update(status="RETRY_WAIT", redrive_generation=generation + 1,
                    next_attempt_at=now, attempt_count=0, completed_at=None,
@@ -526,10 +533,11 @@ class _Cursor:
 
     def _job_transition(self, kind, p):
         (to_status, next_attempt_at, result_checksum, error_code, completed,
-         job_id, worker_id, attempt) = p
+         job_id, worker_id, attempt, generation) = p
         row = self.db.jobs.get((kind, job_id))
         if (row is None or row["claimed_by"] != worker_id
-                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt):
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
             return
         row.update(status=to_status, next_attempt_at=next_attempt_at,
                    result_checksum=result_checksum, error_code=error_code,

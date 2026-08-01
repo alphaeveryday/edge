@@ -21,6 +21,7 @@ PostgreSQL 이 논리 job/retry 의 SSOT 이고 SQS 는 wake-up transport 다(v0
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -28,6 +29,8 @@ from datetime import datetime, timedelta
 from ..config import DbConfig
 from ..db import connect as _default_connect
 from .models import canonical_json
+
+logger = logging.getLogger(__name__)
 
 NEWS_EVENT_TYPE = "NewsExtractionRequested"
 PRICE_EVENT_TYPE = "PriceWindowCommitted"
@@ -257,17 +260,19 @@ class JobLedger:
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
             )
-            RETURNING j.job_id, j.attempt_count
+            RETURNING j.job_id, j.attempt_count, j.redrive_generation
             """,
             (worker_id, now + timedelta(seconds=lease_seconds), now, now),
         )
         row = cur.fetchone()
         if row is None:
             return None
-        job_id, attempt_count = row
+        job_id, attempt_count, redrive_generation = row
         if kind == "price" and self._reject_if_stale(cur, job_id, worker_id, now):
             return "STALE"
-        return {"job_id": job_id, "attempt_count": attempt_count}
+        # redrive_generation 을 함께 돌려준다 — 전이 CAS 가 이 값을 fence 로 쓴다.
+        return {"job_id": job_id, "attempt_count": attempt_count,
+                "redrive_generation": redrive_generation}
 
     @staticmethod
     def _reject_if_stale(cur, job_id: str, worker_id: str, now: datetime) -> bool:
@@ -306,7 +311,8 @@ class JobLedger:
         return True
 
     def _transition(
-        self, kind: str, job_id: str, worker_id: str, attempt: int, *, to_status: str,
+        self, kind: str, job_id: str, worker_id: str, attempt: int,
+        redrive_generation: int, *, to_status: str,
         now: datetime, next_attempt_at: datetime | None = None,
         result_checksum: str | None = None, error_code: str | None = None,
     ) -> bool:
@@ -315,6 +321,11 @@ class JobLedger:
         attempt 는 claim 이 돌려준 값이다 — worker_id 만 보면 같은 Worker 가 재claim 한
         뒤 옛 attempt 의 늦은 보고가 새 attempt 를 terminal 로 만든다(2B claim_token
         과 같은 결).
+
+        ⚠️ `redrive_generation` 도 함께 fence 한다. attempt 만으로는 부족하다 —
+        lease 만료 뒤에도 살아 있는 옛 실행이 있는 사이 redrive 가 attempt_count 를
+        0 으로 되돌리면, 새 세대의 첫 claim 이 **같은 attempt 번호**를 갖는다. 그러면
+        옛 실행의 늦은 보고가 새 세대를 마감해 운영자의 redrive 가 통째로 사라진다.
         """
         table = _JOB_TABLES[kind]
         completed = now if to_status in ("SUCCEEDED", "DEAD") else None
@@ -326,42 +337,44 @@ class JobLedger:
                     error_code = %s, completed_at = %s,
                     claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'
-                  AND attempt_count = %s
+                  AND attempt_count = %s AND redrive_generation = %s
                 """,
                 (to_status, next_attempt_at, result_checksum, error_code, completed,
-                 job_id, worker_id, attempt),
+                 job_id, worker_id, attempt, redrive_generation),
             )
             return cur.rowcount == 1
 
     def succeed_job(
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
-        now: datetime, result_checksum: str,
+        redrive_generation: int, now: datetime, result_checksum: str,
     ) -> bool:
         return self._transition(
-            kind, job_id, worker_id, attempt, to_status="SUCCEEDED", now=now,
-            result_checksum=result_checksum,
+            kind, job_id, worker_id, attempt, redrive_generation,
+            to_status="SUCCEEDED", now=now, result_checksum=result_checksum,
         )
 
     def retry_job(
-        self, *, kind: str, job_id: str, worker_id: str, attempt: int, now: datetime,
+        self, *, kind: str, job_id: str, worker_id: str, attempt: int,
+        redrive_generation: int, now: datetime,
         next_attempt_at: datetime, error_code: str,
     ) -> bool:
         """transient 실패 — DB 가 다음 시각을 정하고 Consumer 는 visibility 를 맞춘다."""
         if next_attempt_at <= now:
             raise ValueError("next_attempt_at 은 미래여야 한다 — 즉시 재시도는 RETRY_WAIT 이 아니다")
         return self._transition(
-            kind, job_id, worker_id, attempt, to_status="RETRY_WAIT", now=now,
+            kind, job_id, worker_id, attempt, redrive_generation,
+            to_status="RETRY_WAIT", now=now,
             next_attempt_at=next_attempt_at, error_code=error_code,
         )
 
     def dead_job(
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
-        now: datetime, error_code: str,
+        redrive_generation: int, now: datetime, error_code: str,
     ) -> bool:
         """permanent 실패/예산 소진 — 조용한 폐기가 아니라 조회 가능한 terminal 격리."""
         return self._transition(
-            kind, job_id, worker_id, attempt, to_status="DEAD", now=now,
-            error_code=error_code,
+            kind, job_id, worker_id, attempt, redrive_generation,
+            to_status="DEAD", now=now, error_code=error_code,
         )
 
     # ── 메시지 기반 경로 (Consumer 계약 v0.7 12.4) ─────────────
@@ -420,11 +433,12 @@ class JobLedger:
                 return None
             if kind == "price" and self._reject_if_stale(cur, job_id, worker_id, now):
                 return "STALE"
-            return {"job_id": job_id, "attempt_count": row[0]}
+            return {"job_id": job_id, "attempt_count": row[0],
+                    "redrive_generation": redrive_generation}
 
     def heartbeat_job(
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
-        now: datetime, lease_seconds: int,
+        redrive_generation: int, now: datetime, lease_seconds: int,
     ) -> bool:
         """실행 중 job 의 lease 를 연장한다. 내 claim 이 아니면 False.
 
@@ -438,9 +452,10 @@ class JobLedger:
                 f"""
                 UPDATE {table} SET lease_expires_at = %s, updated_at = now()
                 WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'
-                  AND attempt_count = %s
+                  AND attempt_count = %s AND redrive_generation = %s
                 """,
-                (now + timedelta(seconds=lease_seconds), job_id, worker_id, attempt),
+                (now + timedelta(seconds=lease_seconds), job_id, worker_id, attempt,
+                 redrive_generation),
             )
             return cur.rowcount == 1
 
@@ -474,7 +489,7 @@ class JobLedger:
             return cur.rowcount == 1
 
     def redrive_job(self, *, kind: str, job_id: str, now: datetime) -> str:
-        """DEAD job 을 한 트랜잭션에서 되살린다 — 새 delivery event_id 를 돌려준다.
+        """막힌 job 을 한 트랜잭션에서 다시 깨운다 — 새 delivery event_id 를 돌려준다.
 
         v0.7 12.4: 콘솔에서 메시지만 blind redrive 하지 않는다. **DB 가 먼저**다 —
         `DEAD → RETRY_WAIT`, `redrive_generation` 증가, 증가한 세대로 만든 새 outbox
@@ -484,23 +499,42 @@ class JobLedger:
 
         payload/destination 은 **직전 event 에서 복사**한다. 지어내면 그 job 을 만든
         commit 이 실은 뭘 보냈는지와 갈리고, 그건 아무도 대조하지 않는다.
+
+        대상은 **"막힌 것 전부"** 다 — DEAD job(Consumer 가 포기)뿐 아니라 job 은
+        멀쩡한데 delivery event 가 DEAD 인 것(Relay 가 그 event 를 격리)까지다. PR 6 은
+        outbox DEAD 를 좁게 판정하면서 복구를 이 PR 에 위임했는데, job 상태만 보면
+        그쪽은 여전히 영구 고착이다(Relay 는 NEW 만 집는다).
+
+        거절은 둘: **SUCCEEDED**(다시 할 일이 없다)와 **살아 있는 lease 의 CLAIMED**
+        (지금 누가 돌고 있고, 세대를 올리면 그 실행의 결과가 fence 에 걸려 버려진다 —
+        lease 가 만료되면 그때 하면 된다).
+
+        감사 기록의 천장: 누가·왜 redrive 했는지는 **로그**에만 남는다(원장 컬럼 없음).
+        DEAD 사유(`error_code`)는 덮지 않아 다음 시도 전까지는 조회된다. 조회 가능한
+        이력이 필요해지면 그때 감사 테이블을 만든다 — migration 이 필요한 별건이다.
         """
         table = _JOB_TABLES[kind]
         event_type = JOB_EVENT_TYPES[kind]
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT status, redrive_generation FROM {table} WHERE job_id = %s FOR UPDATE",
+                f"""
+                SELECT status, redrive_generation, lease_expires_at
+                FROM {table} WHERE job_id = %s FOR UPDATE
+                """,
                 (job_id,),
             )
             row = cur.fetchone()
             if row is None:
                 raise LookupError(f"{kind} job 이 없다: {job_id}")
-            status, generation = row
-            if status != "DEAD":
-                # 살아 있는 job 을 RETRY_WAIT 으로 되돌리면 진행 중인 attempt 의 보고가
-                # 거부되고(attempt fence) 그 실행은 흔적 없이 버려진다.
+            status, generation, lease_expires_at = row
+            if status == "SUCCEEDED":
+                raise ValueError(f"{job_id} 는 이미 SUCCEEDED 다 — 다시 깨울 일이 없다")
+            if status == "CLAIMED" and (
+                lease_expires_at is not None and lease_expires_at >= now
+            ):
                 raise ValueError(
-                    f"redrive 대상은 DEAD 뿐이다 — {job_id} 는 {status} 다"
+                    f"{job_id} 는 실행 중이다(lease {lease_expires_at.isoformat()}) — "
+                    "지금 세대를 올리면 그 실행의 결과가 버려진다"
                 )
             previous_event_id = build_event_id(event_type, job_id, generation)
             cur.execute(
@@ -521,15 +555,16 @@ class JobLedger:
             # attempt_count 를 0 으로 되돌린다 — 운영자가 명시적으로 다시 시도하라고
             # 한 것이라 예산도 새로 준다. 소진된 채로 두면 첫 실패에 다시 DEAD 가 돼
             # redrive 가 사실상 아무것도 하지 않는다.
+            # error_code 는 **덮지 않는다** — 왜 죽었는지가 유일한 조회 근거다.
             cur.execute(
                 f"""
                 UPDATE {table}
                 SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1,
                     next_attempt_at = %s, attempt_count = 0, completed_at = NULL,
                     claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
-                WHERE job_id = %s AND status = 'DEAD' AND redrive_generation = %s
+                WHERE job_id = %s AND status = %s AND redrive_generation = %s
                 """,
-                (now, job_id, generation),
+                (now, job_id, status, generation),
             )
             if cur.rowcount != 1:
                 raise RuntimeError(f"redrive CAS 거부 — {job_id} 의 상태가 그새 바뀌었다")
@@ -545,6 +580,10 @@ class JobLedger:
                     f"redrive event 가 이미 있다: {event_id} — "
                     "job.redrive_generation 과 outbox 가 어긋났다"
                 )
+            logger.warning(
+                "redrive: %s job %s (%s, 세대 %d→%d) → %s",
+                kind, job_id, status, generation, generation + 1, event_id,
+            )
             return event_id
 
     # ── outbox ────────────────────────────────────────────────

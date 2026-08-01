@@ -516,7 +516,7 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     if settings.minute_relay is None:
         raise SystemExit(
             "minute_relay 설정 없음 — relay 는 destination→큐 매핑 필수"
-            "(DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__<destination> 주입)"
+            "(DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{\"<destination>\":\"<url>\"}' 주입)"
         )
     options = settings.minute_relay
     relay = OutboxRelay(
