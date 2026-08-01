@@ -174,15 +174,21 @@ def _sql_predicate(raw: object) -> str:
 def _predicates(graph: WorldGraph) -> tuple[str, str]:
     """P3 간선의 (exposure, reference). 처치 노드에서 나가는 간선을 먼저 본다.
 
-    노드에는 술어가 없다(P3 규약: nodes 는 says/observed/events). exposure 가 아예 없거나
-    술어가 아니면 가설이 접지한 `source_event_id` 로 만든다 - 그게 후보 사건 자체이므로
-    가장 좁고 정확한 처치 정의다. 대신 그 술어로는 타입·역할을 알 수 없어 노출 대조는
-    조회가 한 번 더 든다.
+    exposure 가 없거나 술어가 아니면 **접지된 노드의 타입 코드**로 만든다. `source_event_id
+    IN (...)` 은 이 셀의 사건 하나라 n=1 이 되고 게이트 G2 에서 죽는다 - 같은 타입 전체가
+    처치군이어야 표본이 쌓인다(2026-08-01 tools-20260801-01: 4/4 가 "이벤트 코드를 알 수
+    없어 코호트가 비었다"). 타입도 없으면 그때 사건 id 로 좁힌다 - 좁은 정의라도 있는 것이
+    아무것도 없는 것보다 낫고, 그 좁음은 G2 가 사유로 남긴다.
     """
     treatments = {h.treatment for h in graph.hypotheses}
     edges = sorted(graph.edges, key=lambda e: 0 if e.get("from") in treatments else 1)
     exposure = next((s for e in edges if (s := _sql_predicate(e.get("exposure")))), "")
     reference = next((s for e in edges if (s := _sql_predicate(e.get("reference")))), "")
+    if not exposure:
+        types = [t for n in treatments
+                 if (t := str((graph.nodes.get(n) or {}).get("event_type_code") or ""))]
+        if types:
+            exposure = _in("event_type_code", list(dict.fromkeys(types)))
     if not exposure:
         events = list(dict.fromkeys(ev for h in graph.hypotheses for ev in h.events))
         if events:

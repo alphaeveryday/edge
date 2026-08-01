@@ -186,9 +186,16 @@ def _designs(g: WorldGraph) -> list[EdgeDesign]:
         if control and re.search(_NOT_UNIVERSE, control):
             log("causal.reference_rejected", edge=f"{src}->{dst}", predicate=control[:120])
             control = ""
+        # 처치 술어가 비면 **접지된 원인 노드의 타입 코드**로 만든다. 검정 에이전트가
+        # 사람 말 노드에서 코호트를 짜려다 0행이 되고 n=1 로 G2 에서 죽던 자리다
+        # (2026-08-01 tools-20260801-01: 4/4 "이벤트 코드를 알 수 없다").
+        treated = str(e.get("exposure") or "")
+        if not treated:
+            code = str((g.nodes.get(src) or {}).get("event_type_code") or "")
+            treated = f"event_type_code = '{code}'" if code else ""
         out.append(EdgeDesign(
             src=src, dst=dst,
-            treated=e.get("exposure") or "", control=control,
+            treated=treated, control=control,
             strata="date", scope="type", claims="L4",
             say=e.get("says") or "", because=e.get("because") or "",
             false_if=e.get("false_if") or "", needs=e.get("needs") or "",
