@@ -49,8 +49,13 @@ def ssm_client():
     )
 
 
-def sqs_client():
-    """Outbox Relay 발행용(ALPHA-670). region 명시·지연 import 는 SFN/ECS 와 같은 관례.
+def sqs_client(read_timeout: int = 10):
+    """Outbox Relay 발행/Consumer 수신용. region 명시·지연 import 는 SFN/ECS 와 같은 관례.
+
+    ⚠️ `read_timeout` 은 **long polling 보다 길어야 한다**(ALPHA-672). ReceiveMessage 는
+    `WaitTimeSeconds` 동안 응답을 붙들고 있으므로, 기본 10초로 20초 long poll 을 하면
+    빈 큐를 조회할 때마다 botocore 가 ReadTimeoutError 를 낸다 — 저트래픽일수록 더 자주
+    터진다. 수신 쪽은 wait 보다 넉넉한 값을 주입한다(발행 기본값은 그대로).
 
     **SDK 자체 재시도를 끈다**(`max_attempts=1`). 재시도 권위는 PostgreSQL 뿐이라는 게
     확정 계약인데(v0.7 12.4), boto3 기본 정책이 자기 backoff 로 여러 번 재호출하면 그
@@ -68,7 +73,7 @@ def sqs_client():
         # 응답만 유실된 경우 SDK 가 같은 batch 를 다시 보내 outbox 가 모르는 중복 발행이
         # 생긴다. 총 시도 수를 1 로 못 박는다.
         config=Config(
-            connect_timeout=5, read_timeout=10,
+            connect_timeout=5, read_timeout=read_timeout,
             retries={"mode": "standard", "total_max_attempts": 1},
         ),
     )
