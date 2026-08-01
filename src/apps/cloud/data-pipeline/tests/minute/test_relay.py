@@ -241,27 +241,27 @@ class TestConcurrencyAndCrash:
         # 집으면 같은 메시지가 두 번 나간다. lease 가 살아 있는 동안은 침범 금지.
         db = FakeMinuteDB()
         enqueue(db, "e1")
-        first = build_relay(db, relay_id="relay-1", lease_seconds=60)
-        second = build_relay(db, relay_id="relay-2", lease_seconds=60)
+        first = build_relay(db, relay_id="relay-1", lease_seconds=150)
+        second = build_relay(db, relay_id="relay-2", lease_seconds=150)
         held = first.jobs.claim_outbox_batch(
-            relay_id="relay-1", now=NOW, limit=10, lease_seconds=60
+            relay_id="relay-1", now=NOW, limit=10, lease_seconds=150
         )
         assert [e["event_id"] for e in held] == ["e1"]
         assert second.tick(NOW) == "IDLE"
         assert not second.publisher.sent, "lease 유효 구간에서 두 번째 Relay 가 발행했다"
         # 발행까지 끝난 뒤에도 재발행하지 않는다
-        assert first.tick(NOW + timedelta(seconds=61)) == "PUBLISHED"
-        assert second.tick(NOW + timedelta(seconds=62)) == "IDLE"
+        assert first.tick(NOW + timedelta(seconds=151)) == "PUBLISHED"
+        assert second.tick(NOW + timedelta(seconds=152)) == "IDLE"
 
     def test_crash_before_publish_is_reclaimed_after_lease(self, tmp_path):
         # claim 만 하고 죽은 event 는 lease 만료 후 다른 Relay 가 회수한다(유실 0)
         db = FakeMinuteDB()
         enqueue(db, "e1")
-        dead = build_relay(db, relay_id="relay-dead", lease_seconds=60)
-        dead.jobs.claim_outbox_batch(relay_id="relay-dead", now=NOW, limit=10, lease_seconds=60)
+        dead = build_relay(db, relay_id="relay-dead", lease_seconds=150)
+        dead.jobs.claim_outbox_batch(relay_id="relay-dead", now=NOW, limit=10, lease_seconds=150)
         alive = build_relay(db, relay_id="relay-2")
-        assert alive.tick(NOW + timedelta(seconds=30)) == "IDLE"  # lease 유효 — 침범 금지
-        assert alive.tick(NOW + timedelta(seconds=61)) == "PUBLISHED"
+        assert alive.tick(NOW + timedelta(seconds=100)) == "IDLE"  # lease 유효 — 침범 금지
+        assert alive.tick(NOW + timedelta(seconds=151)) == "PUBLISHED"
 
     def test_crash_after_publish_before_mark_republishes_same_event_id(self, tmp_path):
         # 발행은 나갔는데 DB 기록 전에 죽으면 행은 NEW 로 남아 **다시 발행**된다.
@@ -274,13 +274,13 @@ class TestConcurrencyAndCrash:
         db = FakeMinuteDB()
         enqueue(db, "e1")
         crashing = CrashAfterSend()
-        relay = build_relay(db, publisher=crashing, relay_id="relay-1", lease_seconds=60)
+        relay = build_relay(db, publisher=crashing, relay_id="relay-1", lease_seconds=150)
         assert relay.tick(NOW) == "PARTIAL"  # 전송됐는지 알 수 없다 → 재시도 예약
         assert db.outbox["e1"]["status"] == "NEW"
 
         alive = build_relay(db, relay_id="relay-2")
         # next_attempt_at 이 지난 뒤 다른 Relay 가 같은 event 를 다시 발행한다
-        assert alive.tick(NOW + timedelta(seconds=61)) == "PUBLISHED"
+        assert alive.tick(NOW + timedelta(seconds=151)) == "PUBLISHED"
         [(_, messages)] = alive.publisher.sent
         assert messages[0].event_id == "e1", "재발행이 같은 event_id 로 나가지 않았다"
         assert json.loads(messages[0].body)["event_id"] == "e1"
@@ -314,11 +314,14 @@ class TestConfigGuards:
         with pytest.raises(ValueError, match="news-extraction-backfill"):
             RelayConfig(relay_id="r", queue_urls=partial)
 
-    def test_short_lease_refuses_to_start(self):
-        # 발행이 lease 보다 오래 걸리면 다른 Relay 가 같은 행을 집고, 두 쪽 기록이 서로
-        # claim_token 불일치로 거부되는 동안 메시지만 중복 발행된다(행은 NEW 로 고착)
+    def test_lease_must_cover_worst_case_publish_time(self):
+        # 한 batch 는 최악의 경우 건수만큼 요청으로 쪼개진다(큰 메시지는 하나씩) —
+        # 그 전부를 못 견디는 lease 는 발행 도중 만료돼 경쟁 Relay 가 행을 탈취하고,
+        # 양쪽 기록이 서로 거부되는 동안 메시지만 중복 발행된다
         with pytest.raises(ValueError, match="lease_seconds"):
-            RelayConfig(relay_id="r", queue_urls=QUEUES, lease_seconds=1)
+            RelayConfig(relay_id="r", queue_urls=QUEUES, batch_limit=10, lease_seconds=60)
+        # 건수를 줄이면 짧은 lease 도 안전하다
+        RelayConfig(relay_id="r", queue_urls=QUEUES, batch_limit=2, lease_seconds=30)
 
     def test_shared_queue_url_refuses_to_start(self):
         # 세 destination 이 한 큐를 가리키면 다른 큐의 Consumer 가 wake-up 을 못 받는데
@@ -385,10 +388,22 @@ class TestSqsResponseGate:
         assert published == frozenset({"e0", "e2"})
         assert [(f.event_id, f.terminal) for f in failures] == [("e1", False)]
 
-    def test_sender_fault_entry_is_terminal(self):
+    def test_sender_fault_alone_is_not_terminal(self):
+        # ⚠️ SenderFault 는 "호출자 측 오류"일 뿐이다. 잘못된 큐 URL·권한 오류도 여기
+        # 해당하는데 그건 배포로 고쳐지는 설정 문제지 event 의 결함이 아니다 —
+        # DEAD 로 확정하면 URL 오타 하나가 레인 전체를 되돌릴 수 없게 만든다.
         stub = self.StubSqs([{
-            "Failed": [{"Id": "0", "Code": "InvalidParameterValue",
-                        "Message": "bad", "SenderFault": True}],
+            "Failed": [{"Id": "0", "Code": "AWS.SimpleQueueService.NonExistentQueue",
+                        "Message": "no queue", "SenderFault": True}],
+        }])
+        _, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
+        assert failures[0].terminal is False, "설정으로 고쳐질 실패를 영구 폐기했다"
+
+    def test_message_defect_code_is_terminal(self):
+        # 본문 자체가 SQS 규격을 어긴 경우만 재시도해도 결과가 같다
+        stub = self.StubSqs([{
+            "Failed": [{"Id": "0", "Code": "InvalidMessageContents",
+                        "Message": "bad chars", "SenderFault": True}],
         }])
         _, failures = SqsPublisher(client=stub).publish_batch("q", self._messages(1))
         assert failures[0].terminal is True
@@ -484,6 +499,29 @@ class TestCliGuards:
     def _settings(self, *, db=None, minute_relay=None):
         return SimpleNamespace(db=db, minute_relay=minute_relay)
 
+    def test_bounded_mode_sigterm_is_not_success(self, monkeypatch):
+        # 일회성 배출 중 SIGTERM 이면 "비운 걸 확인"하지 못한 채 끝난 것이다 —
+        # 상주 Relay 가 없으면 남은 event 는 계속 미발행이므로 성공으로 보고하지 않는다
+        db = FakeMinuteDB()
+        enqueue(db, "e1")
+        settings = SimpleNamespace(
+            db=_DB,
+            minute_relay=SimpleNamespace(
+                queue_urls=QUEUES, batch_limit=10, lease_seconds=150,
+                retry_base_seconds=2, retry_max_seconds=300, tick_seconds=0.0,
+            ),
+        )
+        stopper = FakePublisher()
+        monkeypatch.setattr("data_pipeline.minute.relay.JobLedger",
+                            lambda db: JobLedger(db=_DB, connect_fn=db_.connect))
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.relay.SqsPublisher", lambda: stopper)
+        original = OutboxRelay.tick
+        monkeypatch.setattr(OutboxRelay, "tick",
+                            lambda self, now: "STOPPED")
+        assert relay_cli(settings, max_ticks=5) == 1
+        monkeypatch.setattr(OutboxRelay, "tick", original)
+
     def test_missing_db_config_fails_loud(self):
         with pytest.raises(SystemExit, match="db 설정 없음"):
             relay_cli(self._settings(minute_relay=object()))
@@ -497,7 +535,7 @@ class TestCliGuards:
         settings = SimpleNamespace(
             db=_DB,
             minute_relay=SimpleNamespace(
-                queue_urls=QUEUES, batch_limit=10, lease_seconds=60,
+                queue_urls=QUEUES, batch_limit=10, lease_seconds=150,
                 retry_base_seconds=2, retry_max_seconds=300, tick_seconds=0.0,
             ),
         )

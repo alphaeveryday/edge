@@ -381,9 +381,9 @@ class MinuteRelayConfig(BaseModel):
     batch_limit: int = Field(default=10, ge=1, le=10)  # SQS SendMessageBatch 상한
     # 상한을 둔다 — 큰 값(10^15)은 pydantic 을 통과한 뒤 timedelta 범위를 넘겨 claim
     # 전에 매번 crash 하고, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
-    # 하한 30초 — 발행이 lease 보다 오래 걸리면 경쟁 Relay 가 같은 행을 탈취한다
-    # (minute/relay.py MIN_LEASE_SECONDS 와 같은 근거)
-    lease_seconds: int = Field(default=60, ge=30, le=3600)
+    # 기본 150초 = batch_limit(10) × SQS 호출 예산(15초). 발행이 lease 보다 오래 걸리면
+    # 경쟁 Relay 가 같은 행을 탈취한다(minute/relay.py __post_init__ 이 조합을 검증한다).
+    lease_seconds: int = Field(default=150, ge=15, le=3600)
     retry_base_seconds: int = Field(default=2, ge=1, le=3600)
     retry_max_seconds: int = Field(default=300, ge=1, le=86_400)
     # tick 사이 대기(초). ECS 상주 서비스라 짧게 돈다 — 발행 지연 목표는 수초(v0.7 11.1).

@@ -54,8 +54,14 @@ KNOWN_DESTINATIONS = frozenset({
 # ⚠️ 이 숫자는 **벤더 계약**이라 드리프트한다. 상한을 작게 잡으면 멀쩡한 메시지가
 # terminal(DEAD)로 확정되고 상수를 고쳐도 그 행은 재평가되지 않는다 — 바꿀 때 문서로
 # 재확인할 것(과거 256 KiB 였다).
-# claim lease 하한 — SQS 호출 예산(connect 5s + read 10s)의 배수. 아래 __post_init__ 참조.
-MIN_LEASE_SECONDS = 30
+# 재시도해도 결과가 같은 실패 — **메시지 자체**의 결함만 넣는다. 큐·권한·스로틀링처럼
+# 배포나 시간으로 풀리는 것은 여기 없다(DEAD 는 이 단계에서 되돌릴 수 없다).
+TERMINAL_ERROR_CODES = frozenset({
+    "InvalidMessageContents",  # 본문에 SQS 가 허용하지 않는 문자
+})
+
+# SQS 호출 하나의 시간 예산(connect 5s + read 10s) — lease 하한 계산에 쓴다
+SQS_CALL_BUDGET_SECONDS = 15
 
 SQS_BATCH_LIMIT = 10
 SQS_MAX_MESSAGE_BYTES = 1_048_576
@@ -85,7 +91,9 @@ class RelayConfig:
     # destination -> queue URL. 큐는 환경마다 다르므로 설정에서 온다(계획 §11 큐 3종).
     queue_urls: Mapping[str, str]
     batch_limit: int = 10
-    lease_seconds: int = 60
+    # 기본 batch_limit(10) × 호출 예산(15초)을 견디는 값. 길수록 crash 후 회수가
+    # 늦어지지만(최악 이 값만큼), 짧으면 정상 발행 중에 탈취가 일어난다.
+    lease_seconds: int = 150
     # transient 재시도 간격 = base * 2**attempt, cap 까지. DB 가 시각의 권위다.
     retry_base_seconds: int = 2
     retry_max_seconds: int = 300
@@ -116,14 +124,16 @@ class RelayConfig:
             raise ValueError(f"두 destination 이 같은 큐를 가리킨다: {sorted(shared)}")
         if self.batch_limit < 1:
             raise ValueError("batch_limit 은 1 이상이어야 한다")
-        if self.lease_seconds < MIN_LEASE_SECONDS:
-            # 발행이 lease 보다 오래 걸리면 그 사이 다른 Relay 가 같은 행을 집는다.
-            # 두 Relay 의 기록이 서로 claim_token 불일치로 거부되는 동안 메시지만 중복
-            # 발행되고 행은 NEW 로 남아 매 tick 같은 자리를 차지한다. SQS 호출 예산
-            # (connect 5s + read 10s, 배치 여러 번)보다 넉넉해야 한다.
+        # 한 batch 는 최악의 경우 **건수만큼의 요청**으로 쪼개진다(큰 메시지는 합계
+        # 상한 때문에 하나씩 나간다). 그 전부를 견디지 못하는 lease 는 발행 도중
+        # 만료돼 다른 Relay 가 같은 행을 탈취하고, 양쪽 기록이 서로 거부되는 동안
+        # 메시지만 중복 발행되며 행은 NEW 로 고착된다.
+        required_lease = self.batch_limit * SQS_CALL_BUDGET_SECONDS
+        if self.lease_seconds < required_lease:
             raise ValueError(
-                f"lease_seconds 는 {MIN_LEASE_SECONDS} 이상이어야 한다 — "
-                "발행 도중 만료되면 경쟁 Relay 가 같은 행을 탈취한다"
+                f"lease_seconds({self.lease_seconds}) 가 최악의 발행 시간"
+                f"({self.batch_limit}건 × {SQS_CALL_BUDGET_SECONDS}초 = {required_lease}초)"
+                "보다 짧다 — 발행 도중 만료되면 경쟁 Relay 가 같은 행을 탈취한다"
             )
         if self.retry_base_seconds < 1 or self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_base_seconds <= retry_max_seconds 여야 하고 둘 다 양수다")
@@ -252,9 +262,13 @@ class SqsPublisher:
                     failures.append(PublishFailure(
                         message.event_id,
                         f"{code}: {entry.get('Message')}",
-                        # SenderFault = 요청 자체가 틀렸다 — 재시도 무의미.
-                        # `bool("false")` 는 True 라 진짜 bool 만 terminal 로 본다
-                        terminal=entry.get("SenderFault") is True,
+                        # ⚠️ SenderFault 는 "호출자 측 오류"라는 뜻일 뿐 **영구 오류라는
+                        # 계약이 아니다**. 잘못된 큐 URL(NonExistentQueue)·권한 오류도
+                        # SenderFault 인데, 그건 배포로 고쳐지는 설정 문제지 event 의
+                        # 결함이 아니다 — 그걸 DEAD 로 확정하면 URL 오타 하나가 레인
+                        # 전체를 되돌릴 수 없게 만든다(redrive 는 PR 7A).
+                        # terminal 은 **그 메시지 자체가 못 실리는 경우**로 좁힌다.
+                        terminal=code in TERMINAL_ERROR_CODES,
                     ))
                 elif not _non_blank_text(entry.get("MessageId")):
                     # 성공 항목의 필수 필드가 없다 = 큐가 받았다는 근거가 없다.
@@ -320,11 +334,14 @@ class OutboxRelay:
                     events, now, error=f"미정의 destination: {destination}", terminal=True
                 )
                 continue
-            messages = tuple(
-                OutboxMessage(event["event_id"], build_message_body(event))
-                for event in events
-            )
             try:
+                # 직렬화도 try 안에서 한다 — payload 는 JSONB 라 크기 상한이 없고,
+                # 밖에서 만들면 거대 행 하나의 OOM·직렬화 예외가 **기록 없이** 프로세스를
+                # 죽인다. 그러면 lease 만료 후 같은 행을 다시 집어 crash-loop 이 된다.
+                messages = tuple(
+                    OutboxMessage(event["event_id"], build_message_body(event))
+                    for event in events
+                )
                 published_ids, failures = self.publisher.publish_batch(queue_url, messages)
             except Exception as error:
                 # 큐·네트워크 장애 — batch 전체를 transient 로 되돌린다. 기록마저 실패하면
@@ -455,7 +472,9 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
         partial += state == "PARTIAL"
         if state == "STOPPED":
             logger.info("relay 종료(SIGTERM) — %d tick, PARTIAL %d", ticks, partial)
-            return 0
+            # 상주 모드의 SIGTERM 은 정상 종료다. bounded 모드는 배출 게이트라
+            # "비운 걸 확인"하지 못한 채 끝난 것이므로 성공으로 보고하지 않는다.
+            return 0 if max_ticks is None else 1
         if state == "IDLE":
             time.sleep(options.tick_seconds)
     # bounded 모드(--max-ticks)는 배출 게이트로 쓰인다. **비운 걸 확인한 tick(IDLE) 로
