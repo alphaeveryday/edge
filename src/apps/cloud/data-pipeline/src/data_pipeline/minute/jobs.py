@@ -12,6 +12,10 @@ PostgreSQL 이 논리 job/retry 의 SSOT 이고 SQS 는 wake-up transport 다(v0
   DEAD('STALE') CAS (v0.7 10.5).
 - outbox 는 ON CONFLICT (event_id) DO NOTHING — 같은 논리 사건의 일반 재전달은 같은
   event_id, 수동 redrive 만 redrive_generation 을 올린다.
+- 메시지 기반 경로(ALPHA-672, Consumer 계약): fetch_job/claim_job/heartbeat_job 은
+  "메시지가 지목한 job" 을 다루고, dead_on_dlq·redrive_job 이 DEAD 를 되돌리는 유일한
+  장치다. redrive 는 job.redrive_generation 증가와 새 outbox event 를 **한 트랜잭션**
+  에 넣는다(PR 2C 에서 미뤄둔 원자 동기화) — 갈리면 깨울 메시지 없는 job 이 남는다.
 """
 
 from __future__ import annotations
@@ -33,6 +37,15 @@ _JOB_TABLES = {
     "news": "news_extraction_job",
     "price": "price_window_job",
 }
+
+# kind ↔ event_type. 두 축은 1:1 이다 — 큐에서 온 메시지의 event_type 으로 어느 job
+# 테이블을 볼지 정하고(consumer), redrive 는 반대로 kind 에서 event_id 를 짓는다.
+JOB_EVENT_TYPES = {"news": NEWS_EVENT_TYPE, "price": PRICE_EVENT_TYPE}
+EVENT_TYPE_JOB_KINDS = {event: kind for kind, event in JOB_EVENT_TYPES.items()}
+
+# 논리 job 이 non-terminal 인데 메시지가 DLQ 에 도착했을 때의 사유(v0.7 12.4).
+# transport 예산(maxReceiveCount)이 먼저 소진된 것이라 job 자체의 결함과 구분한다.
+DLQ_ERROR_CODE = "SQS_MAX_RECEIVE"
 
 
 # ── 결정적 ID (v0.7 10.6 유도식) ──
@@ -252,35 +265,45 @@ class JobLedger:
         if row is None:
             return None
         job_id, attempt_count = row
-        if kind == "price":  # noqa: SIM102 — stale 정리 분기
-            cur.execute(
-                """
-                SELECT j.generation, w.generation
-                FROM price_window_job j
-                JOIN minute_ingestion_window w
-                  ON w.session_id = j.session_id AND w.window_start = j.window_start
-                WHERE j.job_id = %s
-                FOR UPDATE OF w
-                """,
-                (job_id,),
-            )
-            # FOR UPDATE OF w — 비잠금 검사는 correction commit 과 TOCTOU 다
-            # (2B 에서 확립한 원칙): 잠그면 이 tx 가 끝날 때까지 세대 증가가 블록된다
-            job_generation, window_generation = cur.fetchone()
-            if job_generation < window_generation:
-                # stale 거부는 여기 한 곳 — 낮은 세대 job 은 실행하지 않고 격리
-                cur.execute(
-                    """
-                    UPDATE price_window_job
-                    SET status = 'DEAD', error_code = 'STALE',
-                        completed_at = %s, claimed_by = NULL,
-                        lease_expires_at = NULL, updated_at = now()
-                    WHERE job_id = %s AND claimed_by = %s
-                    """,
-                    (now, job_id, worker_id),
-                )
-                return "STALE"
+        if kind == "price" and self._reject_if_stale(cur, job_id, worker_id, now):
+            return "STALE"
         return {"job_id": job_id, "attempt_count": attempt_count}
+
+    @staticmethod
+    def _reject_if_stale(cur, job_id: str, worker_id: str, now: datetime) -> bool:
+        """claim 한 price job 이 stale 이면 DEAD('STALE') 로 격리한다. 격리했으면 True.
+
+        stale 거부는 **claim 시점 한 곳**이다(v0.7 10.5) — 그래서 claim 하는 두 경로
+        (폴링 claim_due_job·메시지 기반 claim_job)가 이 검사를 공유한다. 한쪽에만
+        두면 그 쪽으로 들어온 낮은 세대 job 이 이미 정정된 window 를 다시 설명한다.
+        """
+        cur.execute(
+            """
+            SELECT j.generation, w.generation
+            FROM price_window_job j
+            JOIN minute_ingestion_window w
+              ON w.session_id = j.session_id AND w.window_start = j.window_start
+            WHERE j.job_id = %s
+            FOR UPDATE OF w
+            """,
+            (job_id,),
+        )
+        # FOR UPDATE OF w — 비잠금 검사는 correction commit 과 TOCTOU 다
+        # (2B 에서 확립한 원칙): 잠그면 이 tx 가 끝날 때까지 세대 증가가 블록된다
+        job_generation, window_generation = cur.fetchone()
+        if job_generation >= window_generation:
+            return False
+        cur.execute(
+            """
+            UPDATE price_window_job
+            SET status = 'DEAD', error_code = 'STALE',
+                completed_at = %s, claimed_by = NULL,
+                lease_expires_at = NULL, updated_at = now()
+            WHERE job_id = %s AND claimed_by = %s
+            """,
+            (now, job_id, worker_id),
+        )
+        return True
 
     def _transition(
         self, kind: str, job_id: str, worker_id: str, attempt: int, *, to_status: str,
@@ -340,6 +363,189 @@ class JobLedger:
             kind, job_id, worker_id, attempt, to_status="DEAD", now=now,
             error_code=error_code,
         )
+
+    # ── 메시지 기반 경로 (Consumer 계약 v0.7 12.4) ─────────────
+    def fetch_job(self, *, kind: str, job_id: str) -> dict | None:
+        """job 상태 조회 — 실행 전 판정용(terminal 이면 실행 없이 ack, 이른 RETRY_WAIT
+        이면 visibility 만 조정). **이 읽기로 상태를 확정하지 않는다** — 실행 자격은
+        claim_job 의 CAS 가 정한다(비잠금 읽기는 그 자체로 TOCTOU).
+        """
+        table = _JOB_TABLES[kind]
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT status, next_attempt_at, redrive_generation, attempt_count
+                FROM {table} WHERE job_id = %s
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {"status": row[0], "next_attempt_at": row[1],
+                    "redrive_generation": row[2], "attempt_count": row[3]}
+
+    def claim_job(
+        self, *, kind: str, job_id: str, redrive_generation: int, worker_id: str,
+        now: datetime, lease_seconds: int,
+    ) -> dict | None | str:
+        """메시지가 지목한 job 하나를 CAS 로 claim 한다 — dict/None/"STALE".
+
+        `claim_due_job` 이 "아무 eligible job 하나"를 고르는 폴링용이라면 이쪽은
+        Consumer 용이다: 무엇을 할지는 메시지가 이미 정했고 DB 는 **자격만** 판정한다.
+
+        `redrive_generation` 을 WHERE 에 바인딩하는 이유: 상태 읽기와 claim 사이에
+        redrive 가 끼면(DEAD→RETRY_WAIT + generation 증가) 옛 세대 메시지가 새 세대의
+        job 을 집어 실행하고 SUCCEEDED 로 마감한다. 그러면 redrive 가 만든 새 메시지는
+        SUCCEEDED 를 보고 삭제돼 **운영자의 redrive 가 통째로 사라진다**.
+        """
+        table = _JOB_TABLES[kind]
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET status = 'CLAIMED', claimed_by = %s, lease_expires_at = %s,
+                    attempt_count = attempt_count + 1, updated_at = now()
+                WHERE job_id = %s AND redrive_generation = %s
+                  AND (status = 'PENDING'
+                       OR (status = 'RETRY_WAIT' AND next_attempt_at <= %s)
+                       OR (status = 'CLAIMED' AND lease_expires_at < %s))
+                RETURNING attempt_count
+                """,
+                (worker_id, now + timedelta(seconds=lease_seconds), job_id,
+                 redrive_generation, now, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            if kind == "price" and self._reject_if_stale(cur, job_id, worker_id, now):
+                return "STALE"
+            return {"job_id": job_id, "attempt_count": row[0]}
+
+    def heartbeat_job(
+        self, *, kind: str, job_id: str, worker_id: str, attempt: int,
+        now: datetime, lease_seconds: int,
+    ) -> bool:
+        """실행 중 job 의 lease 를 연장한다. 내 claim 이 아니면 False.
+
+        SQS visibility 만 연장하고 DB lease 를 두면, 처리 시간이 lease 를 넘는 순간
+        그 job 이 다른 Consumer 에게 eligible 로 보여 같은 LLM 호출이 중복된다 —
+        lease 는 "지금 누가 하고 있다"의 유일한 근거다.
+        """
+        table = _JOB_TABLES[kind]
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {table} SET lease_expires_at = %s, updated_at = now()
+                WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'
+                  AND attempt_count = %s
+                """,
+                (now + timedelta(seconds=lease_seconds), job_id, worker_id, attempt),
+            )
+            return cur.rowcount == 1
+
+    def dead_on_dlq(
+        self, *, kind: str, job_id: str, redrive_generation: int, now: datetime,
+    ) -> bool:
+        """DLQ 도착 + DB non-terminal → `SQS_MAX_RECEIVE` 사유 DEAD CAS (v0.7 12.4).
+
+        세 가드가 다 있어야 한다:
+        - `redrive_generation` 일치 — 옛 세대 메시지가 뒤늦게 DLQ 에 닿았을 뿐인데
+          운영자가 방금 redrive 한 새 세대를 죽이면 redrive 가 무효가 된다.
+        - non-terminal 만 — SUCCEEDED 를 DEAD 로 덮으면 끝난 일이 실패로 뒤집힌다.
+        - **살아 있는 lease 를 가진 CLAIMED 는 건드리지 않는다** — 지금 누가 실행
+          중이라는 뜻이고, 그 결과는 곧 기록된다. DLQ 도착은 transport 사정이지 그
+          job 이 죽었다는 근거가 아니다. 재조정은 반복 실행되므로 lease 가 만료되면
+          다음 회차가 수렴시킨다(관측 안 됨을 없음으로 읽지 않는다).
+        """
+        table = _JOB_TABLES[kind]
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET status = 'DEAD', error_code = %s, completed_at = %s,
+                    claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
+                WHERE job_id = %s AND redrive_generation = %s
+                  AND status IN ('PENDING', 'RETRY_WAIT', 'CLAIMED')
+                  AND (status <> 'CLAIMED' OR lease_expires_at < %s)
+                """,
+                (DLQ_ERROR_CODE, now, job_id, redrive_generation, now),
+            )
+            return cur.rowcount == 1
+
+    def redrive_job(self, *, kind: str, job_id: str, now: datetime) -> str:
+        """DEAD job 을 한 트랜잭션에서 되살린다 — 새 delivery event_id 를 돌려준다.
+
+        v0.7 12.4: 콘솔에서 메시지만 blind redrive 하지 않는다. **DB 가 먼저**다 —
+        `DEAD → RETRY_WAIT`, `redrive_generation` 증가, 증가한 세대로 만든 새 outbox
+        event INSERT 가 같은 트랜잭션이라 "job 은 살아났는데 깨울 메시지가 없다"
+        (또는 그 반대)가 생기지 않는다. 기존 DLQ 메시지는 옮기지 않는다 — 그 메시지의
+        세대는 이미 낡아서 Consumer 가 superseded 로 버린다.
+
+        payload/destination 은 **직전 event 에서 복사**한다. 지어내면 그 job 을 만든
+        commit 이 실은 뭘 보냈는지와 갈리고, 그건 아무도 대조하지 않는다.
+        """
+        table = _JOB_TABLES[kind]
+        event_type = JOB_EVENT_TYPES[kind]
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT status, redrive_generation FROM {table} WHERE job_id = %s FOR UPDATE",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise LookupError(f"{kind} job 이 없다: {job_id}")
+            status, generation = row
+            if status != "DEAD":
+                # 살아 있는 job 을 RETRY_WAIT 으로 되돌리면 진행 중인 attempt 의 보고가
+                # 거부되고(attempt fence) 그 실행은 흔적 없이 버려진다.
+                raise ValueError(
+                    f"redrive 대상은 DEAD 뿐이다 — {job_id} 는 {status} 다"
+                )
+            previous_event_id = build_event_id(event_type, job_id, generation)
+            cur.execute(
+                """
+                SELECT destination, generation, payload FROM dataset_commit_outbox
+                WHERE event_id = %s
+                """,
+                (previous_event_id,),
+            )
+            previous = cur.fetchone()
+            if previous is None:
+                # payload 없이 event 를 만들면 Consumer 가 계약 위반으로 죽는다.
+                raise LookupError(
+                    f"직전 delivery event 가 없다: {previous_event_id} — "
+                    "payload 를 복원할 근거가 없어 redrive 를 중단한다"
+                )
+            destination, data_generation, payload = previous
+            # attempt_count 를 0 으로 되돌린다 — 운영자가 명시적으로 다시 시도하라고
+            # 한 것이라 예산도 새로 준다. 소진된 채로 두면 첫 실패에 다시 DEAD 가 돼
+            # redrive 가 사실상 아무것도 하지 않는다.
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1,
+                    next_attempt_at = %s, attempt_count = 0, completed_at = NULL,
+                    claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
+                WHERE job_id = %s AND status = 'DEAD' AND redrive_generation = %s
+                """,
+                (now, job_id, generation),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"redrive CAS 거부 — {job_id} 의 상태가 그새 바뀌었다")
+            event_id = build_event_id(event_type, job_id, generation + 1)
+            if not self._insert_outbox_tx(
+                cur, event_id=event_id, event_type=event_type, destination=destination,
+                aggregate_id=job_id, generation=data_generation, payload=payload,
+            ):
+                # 같은 세대의 event 가 이미 있다 = 이 세대를 만든 redrive 가 이미
+                # 있었다는 뜻이다. job 쪽 CAS 가 통과했는데 여기서 충돌하는 건 두 값이
+                # 어긋났다는 신호라 조용히 넘기지 않는다(트랜잭션 전체가 롤백된다).
+                raise RuntimeError(
+                    f"redrive event 가 이미 있다: {event_id} — "
+                    "job.redrive_generation 과 outbox 가 어긋났다"
+                )
+            return event_id
 
     # ── outbox ────────────────────────────────────────────────
     def insert_outbox_event(
