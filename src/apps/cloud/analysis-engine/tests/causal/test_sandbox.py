@@ -45,6 +45,13 @@ class _Cd:
     def vol(self, pairs, **kw):
         return np.ones(len(pairs))
 
+    def flow(self, pairs, *, kind: str = "institution_total"):
+        # 표면이 있다는 사실만 고정한다 - 없으면 tools 조립이 AttributeError 로 죽는다.
+        return self.vol(pairs)
+
+    def ids(self, names):
+        return {str(n): f"inst_{n}" for n in (names or [])}
+
     def weight(self, etf, trade_date, units=None):
         return {"share": 0.24, "n_hold": 10}
 

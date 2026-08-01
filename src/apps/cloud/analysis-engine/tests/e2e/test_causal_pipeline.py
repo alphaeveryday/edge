@@ -164,6 +164,16 @@ class FakeCausalData:
         self.calls.append("vol")
         return self._col(pairs, self._vol)
 
+    def flow(self, pairs, *, kind: str = "institution_total") -> np.ndarray:
+        # 수급 결과 열. 값은 쓰지 않고 **표면이 있다는 사실**만 고정한다 - 없으면
+        # sandbox.tools 가 AttributeError 로 죽어 검정이 통째로 사라진다.
+        self.calls.append(f"flow:{kind}")
+        return self._col(pairs, self._vol) * -1e9
+
+    def ids(self, names) -> dict:
+        self.calls.append("ids")
+        return {str(n): f"inst_{n}" for n in (names or [])}
+
     # ── 크기 정합 ───────────────────────────────────────────────────────
     def weight(self, etf_instrument_id: str, trade_date: date, units=None) -> dict:
         self.calls.append("weight")

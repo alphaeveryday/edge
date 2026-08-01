@@ -191,7 +191,7 @@ def _screen(code: str) -> None:
         if isinstance(node, ast.Attribute) and node.attr in _BANNED_ATTRS:
             raise SandboxError(
                 f"`.{node.attr}` 는 파일·환경에 닿는 경로다 - 샌드박스는 도구가 준 배열만"
-                " 다룬다. 필요한 데이터는 cohort·universe·ar·mom·vol·docs 로 받아라.")
+                " 다룬다. 필요한 데이터는 cohort·universe·ar·mom·vol·flow·ids·docs 로 받아라.")
         if isinstance(node, ast.Name) and node.id in _BANNED_NAMES:
             raise SandboxError(
                 f"`{node.id}` 를 쓸 수 없다 - 반사(reflection)로 던더·바인딩 내부에 닿는 "
@@ -247,6 +247,7 @@ def tools(cd, *, as_of: str, w0: date, w1: date, trade_date: date,
         "TRADE_DATE": trade_date, "W0": w0, "W1": w1, "ETF": etf_instrument_id,
         "cohort": cohort, "universe": universe, "weight": weight, "docs": read,
         "ar": cd.ar, "mom": cd.mom, "vol": cd.vol, "prior": cd.prior,
+        "flow": cd.flow, "ids": cd.ids,
         "permute": led.wrap_permute, "placebo": led.wrap_placebo,
         "fit": S.fit, "predict": S.predict, "residualize": S.residualize,
     }, led

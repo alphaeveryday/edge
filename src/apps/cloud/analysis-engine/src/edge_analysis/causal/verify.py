@@ -69,6 +69,14 @@ TOOLS = """검정 도구. **전략은 없다 - 네가 만든다.** 시점(as_of)
   ar(pairs)                  -> np.array  당일 초과수익(횡단면 평균 대비). 없으면 nan
   mom(pairs, days=20, lag=1) -> np.array  사건 전 누적 초과수익
   vol(pairs, days=20, lag=1) -> np.array  사건 전 수익률 표준편차
+  flow(pairs, kind="institution_total") -> np.array
+      그날 그 투자자 유형의 **순매수 대금**. 음수가 정상이다(순매도). grain 은 개별주식.
+      kind: individual · foreign · institution_total · pension · investment_trust
+      · financial_invest · private_fund · insurance · bank
+      **수급을 결과로 쓰는 간선은 이것으로 잰다** - ar 로는 못 잰다.
+  ids(["005930", "SK하이닉스"]) -> {이름: instrument_id}
+      티커·표시명에서 id 를 찾는다. 조정집합·exclude 에 종목을 넣으려면 id 가 필요하다.
+      술어의 `ticker` 에 종목명을 넣으면 0행이 되므로 그 우회를 쓰지 마라.
   weight(units=None)         -> dict      이 ETF 내 비중. 키: share · members · n_hold
   prior(event_type_code, need=None) -> dict
       타입 분포 사실. 키: n · up_ratio · abs_q50 · abs_q75 · abs_q90 · abs_max
