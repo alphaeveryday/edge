@@ -161,8 +161,22 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     share_bits = [f"{r.share.window.name} {_pct(r.share.log_ret)}" for r in top]
     if rest:
         share_bits.append(f"나머지 {len(rest)}창 합 {_pct(sum(r.share.log_ret for r in rest))}")
-    unexp_line = (f"미설명 {_pct(unexplained)} — 우리가 설명하지 못하는 몫이고, "
-                  "이것을 줄이는 것은 서사가 아니라 데이터다")
+    # 적용 엣지가 있으면 미설명도 구간이 된다: 하루 총합 − Σ식별집합.
+    # 점을 지어내지 않고 크기 층(항등식)과 인과 층(iset)을 화해시키는 유일한 형태.
+    # 모순(iset 없는 적용 엣지)이 하나라도 있으면 뺄 수 없다 - 점 어법으로 후퇴.
+    applied = [e for e in edges if e.applied]
+    if applied and all(e.iset_lo is not None for e in applied):
+        # iset 은 ar(산술) 단위, 몫은 로그 - 이 크기(±3%)에서 격차 <1bp 라 선형으로
+        # 통일한다 ([채널] 문장과 같은 렌더). ponytail: 큰 수익률 셀이 오면 로그 정합.
+        lin = lambda x: f"{x * 100:+.2f}%p"  # noqa: E731
+        exp_lo = sum(e.iset_lo for e in applied)
+        exp_hi = sum(e.iset_hi for e in applied)
+        unexp_line = (f"미설명 [{lin(unexplained - exp_hi)}, {lin(unexplained - exp_lo)}] "
+                      f"— 적용 채널의 식별집합 [{lin(exp_lo)}, {lin(exp_hi)}]을 뺀 구간. "
+                      "점이 아니라 구간이 정직하다")
+    else:
+        unexp_line = (f"미설명 {_pct(unexplained)} — 우리가 설명하지 못하는 몫이고, "
+                      "이것을 줄이는 것은 서사가 아니라 데이터다")
     if abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0):
         out.append(f"[몫] **{unexp_line}**. 상위: " + " · ".join(share_bits))
     else:

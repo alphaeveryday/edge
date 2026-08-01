@@ -92,3 +92,20 @@ def test_repeated_refuted_windows_fold_into_one_sentence():
     rows = _assign_rows(shares, labels, passing={}, refuted={"T.SAME"})
     s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded=labels)
     assert s.count("서지 않는다") == 1 and "T.SAME (창 ×5)" in s
+
+
+def test_unexplained_becomes_interval_when_edges_apply():
+    # 12차: [몫]과 [채널]의 화해 - 적용 엣지의 식별집합을 빼면 미설명도 구간이 된다.
+    # 점을 지어내지 않는 유일한 회계 형태다.
+    rows = [_row("잔여1", 0.0129)]
+    e = Edge(channel="P판가", event_type="T.X", verdict="성립", applied=True,
+             iset_lo=0.0003, iset_hi=0.0128)
+    s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                edges=(e,))
+    assert "미설명 [+0.01%p, +1.26%p]" in s and "점이 아니라 구간이 정직하다" in s
+    # 모순 엣지(iset 없음)가 섞이면 뺄 수 없다 - 점 어법으로 후퇴.
+    bad = Edge(channel="C", event_type="T.Y", verdict="성립", applied=True,
+               contradiction=True)
+    s2 = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                 edges=(e, bad))
+    assert "미설명 [" not in s2 and "서사가 아니라 데이터다" in s2
