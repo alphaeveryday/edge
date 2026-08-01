@@ -257,6 +257,57 @@ def record(findings: Findings, graph: WorldGraph, plan: DiscriminationPlan,
     return out
 
 
+def recall(root: Path | str, hypotheses: list[Hypothesis]) -> dict[str, Any]:
+    """오늘 세운 기제들의 과거 track record — **record 보다 먼저 부른다.**
+
+    헤더의 약속("같은 기제를 다른 날 다시 소환했을 때 같은 부호가 나오는지가
+    유일한 검정")은 읽기가 배선돼야 약속이다. 종전에는 record 만 불려 레지스트리가
+    write-only 였다 - 셀마다 기억 0에서 시작하고, PROMOTE_AT 은 아무도 심사하지
+    않는 임계였다(에이전트 층 감사 4라운드).
+
+    record 뒤에 부르면 오늘 소환이 자기 이력에 들어가 첫 소환이 재소환으로 보인다.
+    반환은 산출물 감사 블록용 요약이고, 이력 없는 기제는 싣지 않는다 - 첫 소환에
+    이력이 없는 것이 정직한 상태다.
+    """
+    root = Path(root)
+    mechs = latest(root, "mechanism")
+    out_m: dict[str, Any] = {}
+    if mechs and hypotheses:
+        insts = list(latest(root, "edge_instance").values())
+        for h in hypotheses:
+            mid = mechanism_id(h)
+            m = mechs.get(mid)
+            if not m:
+                continue
+            mine = [r for r in insts if r.get("mechanism_id") == mid]
+            verdicts: dict[str, int] = {}
+            effects: list[float] = []
+            for r in mine:
+                v = str(r.get("verdict") or "undetermined")
+                verdicts[v] = verdicts.get(v, 0) + 1
+                if isinstance(r.get("effect"), (int, float)):
+                    effects.append(float(r["effect"]))
+            out_m[mid] = {
+                "hid": h.hid,
+                "cause_label": h.cause_label,
+                "n_invocations": int(m.get("n_invocations", 0)),
+                "first_seen": m.get("first_seen"),
+                "last_seen": m.get("last_seen"),
+                "verdicts": verdicts,
+                # 재소환 검정의 최소형: 효과 부호가 소환들 사이에 일관한가.
+                # 2회 미만이면 None - 검정이 아직 정의되지 않는다.
+                "sign_consistent": (len({e > 0 for e in effects}) <= 1
+                                    if len(effects) >= 2 else None),
+            }
+    due = [{"claim": r["claim"], "kind": r.get("kind"), "why": r.get("why"),
+            "seen_in_cells": int(r.get("seen_in_cells", 0))}
+           for r in latest(root, "amendment").values() if r.get("promote_candidate")]
+    if not out_m and not due:
+        return {}
+    return {"mechanisms": out_m,
+            "promote_due": sorted(due, key=lambda r: -r["seen_in_cells"])}
+
+
 if __name__ == "__main__":
     import tempfile
     from datetime import date

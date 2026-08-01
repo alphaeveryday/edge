@@ -155,8 +155,17 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     findings = p8.dispose(**kw)
     raw = p8.narrate(findings, p8.audit_block(**kw))
 
-    # P9 ─ 누적. 뿌리가 없으면 건너뛰되 그 사실을 로그로 남긴다
+    # P9 ─ 회상 → 누적. **회상이 기록보다 먼저다** - 오늘 소환이 자기 이력에 들어가면
+    # 첫 소환이 재소환으로 보인다. 회상은 산출물 감사 블록에 실린다: 같은 기제가 지난
+    # 셀들에서 몇 번 불려 어떤 처분을 받았고 부호가 일관했는지가 독자에게 보여야
+    # 재소환 검정(레지스트리 헤더의 약속)이 시작된다. 종전에는 record 만 배선돼
+    # 레지스트리가 write-only 였다.
     if registry_root:
+        history = p9.recall(registry_root, list(graph.hypotheses))
+        if history:
+            raw.setdefault("causal", {})["mechanism_history"] = history
+            log("causal.p9.recalled", mechanisms=len(history.get("mechanisms", {})),
+                promote_due=len(history.get("promote_due", [])))
         rec = p9.record(findings, graph, plan, root=registry_root, idents=idents)
         log("causal.p9.recorded", **{k: v for k, v in rec.items() if k != "mechanism_ids"})
     else:
