@@ -57,7 +57,7 @@ SCHEMA = """단일 SQL 표면 (PostgreSQL). **SELECT 하나만.** 조회 키는 
                    event_type_code · predicate_code · lifecycle_stage · event_status
                    title · thread_id · novelty_status
                    사건 × 등장 엔티티. 다종목 사건은 여러 행이다
-  v_measure        source_event_id · measure_code · measure_value · unit_code · value_source
+  v_measure        source_event_id · role_code · value · unit · basis · value_source · surface
                    사건의 수치 역할인자. 앵커(사건이 실제로 얼마였나)의 출처
   v_instrument     instrument_id · ticker · display_name · instrument_type
                    sector_name · industry_name · market_cap · listing_market
@@ -169,8 +169,12 @@ def _views() -> str:
           AND se.available_at <= %(as_of)s
     ),
     v_measure AS (
-        SELECT em.source_event_id, em.measure_code, em.measure_value,
-               em.unit_code, em.value_source
+        -- 컬럼 이름은 `event_measure` 실물이다(V202607242020). `measure_code`·
+        -- `measure_value`·`unit_code` 는 존재한 적이 없어 이 뷰를 쓰는 질의가 전부
+        -- UndefinedColumn 으로 죽었다 - 뷰 하나가 P1 지문 축과 P7 스크린을 같이 무너뜨린다.
+        -- 이름은 도메인 모델(`Measure`)과 eventstore 조회에 맞춘다.
+        SELECT em.source_event_id, em.role_code, em.value, em.unit, em.basis,
+               em.value_source, em.surface
         FROM event_measure em
         JOIN source_event se ON se.source_event_id = em.source_event_id
         WHERE se.available_at <= %(as_of)s
