@@ -303,6 +303,36 @@ class TestQualityGate:
             ["01100901.20260731000001", ["missing_title"]]
         ]
 
+    def test_titleless_article_does_not_stall_the_lane(self, tmp_path):
+        # 제목 없는 행이 poll 판정 단계에서 터지면 그 행은 소스에 남아 있으므로 **매
+        # poll 이 같은 자리에서 죽는다** — 뉴스 레인 전체가 영구히 멈춘다. 관측은 하되
+        # job 만 막아야 한다(품질 게이트가 판정). 봇 리뷰 P2 회귀 방지.
+        def row(index, **overrides):
+            article = {"NEWS_ID": f"01100901.2026073100000{index}", "DATE": "20260731",
+                       "TITLE": f"제목 {index}", "CONTENT": "c", "PROVIDER": "p",
+                       "PROVIDER_LINK_PAGE": f"https://news.example/{index}"}
+            article.update(overrides)
+            return article
+
+        class TitlelessFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                # 제목이 아예 없는 행(키 결측)과 None 인 행 — 둘 다 정상 기사와 섞여 온다
+                titleless = row(1)
+                del titleless["TITLE"]
+                return [row(0), titleless, row(2, TITLE=None)]
+
+        db = FakeMinuteDB()
+        worker, _, _ = build_worker(db, tmp_path, feed=TitlelessFeed(), windows=2)
+        assert worker.tick(NOW) == "PROCESSED", "제목 없는 행 하나가 poll 을 죽였다"
+        assert len(db.source_items) == 3, "제목 없는 행도 관측 원장에는 남아야 한다"
+        assert len(db.jobs) == 1  # 정상 기사만 추출 대상
+        assert statuses(db)["0901"] == "VALID"
+        # 다음 poll 도 같은 행을 다시 보지만 레인은 계속 흐른다
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        assert statuses(db)["0900"] == "VALID_EMPTY"
+
     def test_stale_observation_creates_neither_canonical_nor_job(self, tmp_path):
         # 순서가 뒤집혀 도착한 관측(원장이 더 최신을 보유)은 realtime 경로에서 아무것도
         # 만들지 않는다: 본문은 원장이 이미 거부했고, 우리가 든 행은 옛 텍스트라 canonical

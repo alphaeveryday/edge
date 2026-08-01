@@ -238,10 +238,17 @@ def article_content_checksum(article: dict) -> str:
     노출 위치(page)나 provenance 는 drift 로 항상 변한다 — 내용이 같은데 위치가
     바뀌었다고 재추출하면 LLM 비용이 헛돈다. CONTENT 결측은 기존 normalize/tag
     계약의 유효한 `lead_text=None`이며 문자열 "None"과는 다른 값으로 해시한다.
+
+    **TITLE 결측(None)도 같은 축이다** — 형상 위반이 아니라 품질 게이트
+    (`quality.validate_news_meta` 의 `missing_title`)가 판정할 데이터 조건이다.
+    여기서 raise 하면 그 행 하나가 poll 전체를 실패시키는데, 소스에 계속 남아 있으므로
+    다음 poll 도 같은 자리에서 죽어 **뉴스 레인이 영구히 멈춘다**. 결측(None)과 문자열
+    "None" 은 서로 다른 값으로 해시되므로 정정 은폐 위험은 없다(비문자열 타입은 그대로
+    fail loud — 그건 응답 형상이 바뀌었다는 신호다).
     """
     title = article.get("TITLE")
-    if not isinstance(title, str):
-        raise ValueError(f"기사 TITLE 이 문자열이 아니다: {title!r}")
+    if title is not None and not isinstance(title, str):
+        raise ValueError(f"기사 TITLE 이 문자열/None 이 아니다: {title!r}")
     content = article.get("CONTENT")
     if content is not None and not isinstance(content, str):
         # str() 강제는 1/"1"을 같은 lead로 접는다. None만 기존 정규화 계약상 허용.

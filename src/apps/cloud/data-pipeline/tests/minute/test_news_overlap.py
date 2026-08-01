@@ -294,6 +294,18 @@ class TestContentChecksum:
         corrected = {**article, "DATE": "20260801"}
         assert article_content_checksum(article) != article_content_checksum(corrected)
 
+    def test_missing_title_is_a_data_condition_not_a_shape_violation(self):
+        # 제목 결측은 품질 게이트(missing_title)가 판정할 데이터 조건이다 — 여기서
+        # raise 하면 그 행이 소스에 남아 있는 한 매 poll 이 같은 자리에서 죽어 뉴스
+        # 레인이 영구히 멈춘다(ALPHA-669 봇 리뷰). 결측과 문자열 "None" 은 계속 구분된다.
+        base = {"NEWS_ID": "x", "CONTENT": "본문", "DATE": "20260731"}
+        assert article_content_checksum(base) != article_content_checksum(
+            {**base, "TITLE": "None"}
+        )
+        assert article_content_checksum(base) == article_content_checksum(
+            {**base, "TITLE": None}
+        )
+
     def test_missing_content_is_distinct_from_literal_none(self):
         base = {"NEWS_ID": "same", "TITLE": "제목", "DATE": "20260731"}
         assert article_content_checksum(base) != article_content_checksum(
@@ -302,7 +314,7 @@ class TestContentChecksum:
 
     @pytest.mark.parametrize(
         ("field", "value"),
-        [("TITLE", None), ("TITLE", 1), ("TITLE", []), ("TITLE", {}),
+        [("TITLE", 1), ("TITLE", []), ("TITLE", {}),
          ("CONTENT", 1), ("CONTENT", []), ("CONTENT", {})],
     )
     def test_invalid_content_field_types_fail_loud(self, field, value):
