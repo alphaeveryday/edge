@@ -168,3 +168,24 @@ def test_three_failed_tries_hand_over_the_violations_instead_of_forcing_a_graph(
     assert len(client.users) == MAX_TRIES, "시도 상한을 안 지켰다"
     assert any("역행" in b for b in g.violations), g.violations
     assert g.hypotheses == [H], "처분할 가설이 사라지면 침묵이 된다"
+
+
+def test_a_hypothesis_node_dropped_by_the_merge_is_carried_back_in():
+    """합집합은 줄어들 수 없다. **안 그린 가설은 식별도 처분도 못 받는다.**
+
+    실측(2026-08-01 flash-20260801-01): P3 가 h3 의 처치 노드를 통째로 빠뜨렸고, 그
+    위반 하나로 `estimate_skipped` 가 걸려 검정이 전부 스킵됐다. 합치는 단계의 일은
+    공통원인을 얹는 것이지 가설의 노드를 재타이핑하는 것이 아니므로, 누락은 위반으로
+    되돌리기 전에 그 가설의 정의 그대로 복구한다.
+    """
+    other = Hypothesis(hid="H9", says="파생 청산이 초과수익을 만들었다",
+                       treatment="UNWIND@t-1", outcome=OUT, assignment="natural",
+                       nodes={"UNWIND@t-1": {"says": "파생 강제청산", "events": []}})
+    # 모델이 낸 그래프에는 H9 의 처치가 없다.
+    client = _Client([_payload()])
+
+    g = build(client, None, question=Q, hypotheses=[H, other], grounded={"e1"})
+
+    assert "UNWIND@t-1" in g.nodes, "빠진 가설 노드가 복구되지 않았다"
+    assert g.nodes["UNWIND@t-1"]["carried_over"] == "H9", "복구 사실이 원장에 안 남았다"
+    assert not [v for v in g.violations if "UNWIND@t-1" in v], g.violations
