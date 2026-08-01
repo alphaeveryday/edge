@@ -827,10 +827,10 @@ python -m data_pipeline.run reconcile
 # 기본이고 --max-ticks 는 로컬 확인·일회성 배출용이다(그 모드는 **미발행 0건을 확인**해야
 # exit 0 — IDLE 은 "지금 집을 게 없다"일 뿐이라 완료 판정에 못 쓴다).
 # 큐 매핑은 필수: 빠지면 그 큐의 event 가 전부 DEAD 가 되므로 기동을 거부한다.
+# 큐 매핑은 **JSON 한 변수**로 준다 — destination 이름에 하이픈이 있어 nested 형태
+# (…__QUEUE_URLS__price-analysis-realtime=)는 셸이 변수 할당으로 파싱하지 못한다.
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__price-analysis-realtime=https://sqs…/price \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__news-extraction-realtime=https://sqs…/news \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__news-extraction-backfill=https://sqs…/backfill \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
   python -m data_pipeline.run relay --max-ticks 5
 ```
 

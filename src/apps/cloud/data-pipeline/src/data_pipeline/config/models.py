@@ -368,8 +368,11 @@ class DartDisclosureConfig(BaseModel):
 class MinuteRelayConfig(BaseModel):
     """1분 Outbox Relay 설정 — `relay` 스텝만 쓴다(ALPHA-670).
 
-    큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다:
-    `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS__<destination>`. destination 은 outbox 행이
+    큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다 —
+    **JSON 한 변수**다: `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS={"<destination>":"<url>",…}`.
+    nested 형태(`…__QUEUE_URLS__<destination>`)는 쓰지 않는다 — destination 이름에
+    하이픈이 있어 셸이 변수 할당으로 파싱하지 못한다(실증: `command not found`).
+    destination 은 outbox 행이
     들고 있는 값이고(계획 §11 큐 3종: price-analysis-realtime·news-extraction-realtime·
     news-extraction-backfill), 매핑에 없는 destination 의 event 는 Relay 가 DEAD 로
     격리한다 — 프로세스를 죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
