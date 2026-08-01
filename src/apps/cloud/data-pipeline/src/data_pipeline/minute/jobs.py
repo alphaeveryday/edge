@@ -46,6 +46,14 @@ _JOB_TABLES = {
 JOB_EVENT_TYPES = {"news": NEWS_EVENT_TYPE, "price": PRICE_EVENT_TYPE}
 EVENT_TYPE_JOB_KINDS = {event: kind for kind, event in JOB_EVENT_TYPES.items()}
 
+# 큐마다 실리는 사건의 종류. 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1)는 계약을
+# 발행(Relay)·대사(DLQ reconciler)·복구(redrive)가 **같은 한 곳**을 보고 대조한다.
+DESTINATION_JOB_KINDS = {
+    "price-analysis-realtime": "price",
+    "news-extraction-realtime": "news",
+    "news-extraction-backfill": "news",
+}
+
 # 논리 job 이 non-terminal 인데 메시지가 DLQ 에 도착했을 때의 사유(v0.7 12.4).
 # transport 예산(maxReceiveCount)이 먼저 소진된 것이라 job 자체의 결함과 구분한다.
 DLQ_ERROR_CODE = "SQS_MAX_RECEIVE"
@@ -581,6 +589,14 @@ class JobLedger:
                 raise ValueError(
                     f"{job_id} 는 막혀 있지 않다(job={status}, event={event_status}) — "
                     "redrive 대상은 DEAD job 이거나 DEAD delivery event 다"
+                )
+            if DESTINATION_JOB_KINDS.get(destination) != EVENT_TYPE_JOB_KINDS.get(event_type):
+                # 그 행의 destination 이 사건 종류와 어긋난다 — 복사해 만든 새 event 도
+                # 같은 이유로 곧장 DEAD 가 된다(세대만 오른다). 고칠 곳은 **쓰는 쪽**이고,
+                # 그 job 은 올바른 destination 으로 다시 커밋돼야 한다.
+                raise ValueError(
+                    f"{previous_event_id} 는 destination({destination})과 event_type"
+                    f"({event_type})이 어긋난다 — 복사해도 같은 이유로 다시 DEAD 다"
                 )
             if event_status == "DEAD":
                 # Relay 가 "이 event 는 못 나간다"고 판정했던 것이다(미정의 destination·

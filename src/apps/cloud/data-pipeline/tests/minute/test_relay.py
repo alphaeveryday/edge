@@ -182,9 +182,10 @@ class TestLaneIsolation:
         assert relay.tick(NOW) == "PARTIAL"
 
         assert db.outbox["right"]["status"] == "PUBLISHED"   # 옆 event 는 나간다
-        # DEAD 가 아니다 — 근거가 쓰는 쪽 코드라 배포로 바뀐다(재시도 예약)
-        assert db.outbox["wrong"]["status"] == "NEW"
-        assert db.outbox["wrong"]["next_attempt_at"] is not None
+        # **terminal 이다** — 배포로 바뀌는 건 앞으로 쓰일 행이고, 이 행의 destination·
+        # event_type 은 컬럼에 박혀 있어 영영 그대로다. transient 로 두면 매 tick 이 같은
+        # 자리에서 거부하며 영구 고착된다(#456 봇 지적).
+        assert db.outbox["wrong"]["status"] == "DEAD"
         [(_, messages)] = relay.publisher.sent
         assert [m.event_id for m in messages] == ["right"]
 

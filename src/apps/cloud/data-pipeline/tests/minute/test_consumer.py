@@ -1108,6 +1108,16 @@ class TestRedrive:
         with pytest.raises(ValueError, match="actor"):
             ledger.redrive_job(kind="news", job_id=job_id, now=NOW, actor="", reason="x")
 
+    def test_mismatched_destination_event_is_not_redrivable(self):
+        # 복사해 만든 새 event 도 같은 이유로 곧장 DEAD 가 된다 — 세대만 오른다.
+        # 고칠 곳은 쓰는 쪽이고, 그 job 은 올바른 destination 으로 다시 커밋돼야 한다.
+        db, ledger, job_id, _body = self._dead_job()
+        event = db.outbox[build_event_id(NEWS_EVENT_TYPE, job_id, 0)]
+        event.update(status="DEAD", destination="price-analysis-realtime")
+        with pytest.raises(ValueError, match="어긋난다"):
+            ledger.redrive_job(kind="news", job_id=job_id, now=NOW,
+                               actor="tester@host", reason="테스트")
+
     def test_relay_dead_event_is_recoverable(self):
         # PR 6 은 outbox DEAD 를 좁게 판정하면서 복구를 이 PR 에 위임했다 — job 은
         # 멀쩡한데 delivery event 만 DEAD 면 Relay 는 NEW 만 집으므로 영구 고착이다

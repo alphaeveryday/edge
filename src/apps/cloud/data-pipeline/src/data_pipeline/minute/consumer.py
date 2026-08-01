@@ -46,8 +46,14 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import EVENT_TYPE_JOB_KINDS, JOB_EVENT_TYPES, JobLedger, build_event_id
-from .relay import DESTINATION_JOB_KINDS, KNOWN_DESTINATIONS
+from .jobs import (
+    DESTINATION_JOB_KINDS,
+    EVENT_TYPE_JOB_KINDS,
+    JOB_EVENT_TYPES,
+    JobLedger,
+    build_event_id,
+)
+from .relay import KNOWN_DESTINATIONS
 from .states import JOB_DEAD, JOB_RETRY_WAIT, JOB_SUCCEEDED
 
 logger = logging.getLogger(__name__)

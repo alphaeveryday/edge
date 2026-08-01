@@ -40,7 +40,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import EVENT_TYPE_JOB_KINDS, JobLedger
+from .jobs import DESTINATION_JOB_KINDS, EVENT_TYPE_JOB_KINDS, JobLedger
 from .models import canonical_json
 
 logger = logging.getLogger(__name__)
@@ -55,14 +55,6 @@ KNOWN_DESTINATIONS = frozenset({
     "news-extraction-backfill",
 })
 
-# 큐마다 실리는 사건의 종류. 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1)는 계약을
-# 소비단이 대조하는 데 쓴다 — 어느 큐에 무엇이 오는지가 어휘와 함께 한 곳에 있어야
-# 발행(Relay)과 대사(DLQ reconciler)가 갈리지 않는다.
-DESTINATION_JOB_KINDS = {
-    "price-analysis-realtime": "price",
-    "news-extraction-realtime": "news",
-    "news-extraction-backfill": "news",
-}
 
 # SQS 상한 (docs: SQS Developer Guide "Amazon SQS message quotas", 2026-08 확인) —
 # 배치 요청당 10건, 메시지 하나 1 MiB, 배치 합계도 1 MiB(SendMessageBatch API 참조).
@@ -365,8 +357,10 @@ class OutboxRelay:
             # 가격·뉴스를 공유하지 않는다(v0.7 12.1). 그대로 내보내면 그 큐의
             # Consumer 가 자기 테이블이 아니라며 처리도 삭제도 못 해 DLQ 로 가고,
             # 대사도 남의 레인이라 건드리지 않아 아무도 해소하지 못한다.
-            # DEAD 가 아니라 transient 인 이유: 근거가 **쓰는 쪽 코드**라 배포로
-            # 바뀐다(이 모듈의 terminal 기준은 "event 자체가 못 나갈 때"다).
+            # **terminal 이다.** 배포로 바뀌는 건 앞으로 쓰일 행이고, 이미 쓰인 이
+            # 행의 destination·event_type 은 컬럼에 박혀 있어 영영 그대로다 — transient
+            # 로 두면 매 tick 이 같은 자리에서 거부하며 그 행이 영구 고착된다
+            # (이 모듈의 terminal 기준 그대로: 재시도해도 결과가 같다).
             mismatched = [
                 event for event in events
                 if DESTINATION_JOB_KINDS.get(destination)
@@ -380,7 +374,7 @@ class OutboxRelay:
                 failed += self._record_failures(
                     mismatched, now,
                     error=f"destination {destination} 과 event_type 이 어긋난다",
-                    terminal=False,
+                    terminal=True,
                 )
                 mismatched_ids = {event["event_id"] for event in mismatched}
                 events = [e for e in events if e["event_id"] not in mismatched_ids]
