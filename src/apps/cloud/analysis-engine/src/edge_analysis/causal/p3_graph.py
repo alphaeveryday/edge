@@ -34,6 +34,7 @@ from ..observability import log
 from .contracts import (
     ASSIGNMENT_SAY,
     COMPILED_LATENT,
+    OUTCOME_ID,
     Hypothesis,
     Latent,
     Question,
@@ -85,8 +86,8 @@ JSON 하나만. 조회거나 그래프거나 둘 중 하나다.
              "because": "왜 이 경로로 전달되나",
              "false_if": "무엇이 관측되면 이 간선이 죽나",
              "simultaneous": false, "simultaneous_why": "",
-             "exposure": "이 경로에 노출된 집합 (사건 술어)",
-             "reference": "비교할 참조집합 (종목 속성 술어)"}],
+             "exposure": "이 경로에 노출된 집합 - v_cohort 컬럼 위의 SQL 불리언 식",
+             "reference": "비교할 참조집합 - 같은 형식"}],
   "latents": [{"uid": "U_<이름>", "between": ["<노드 a>", "<노드 b>"],
                "says": "이 미관측 공통원인이 무엇인가",
                "blocked_by": ["이걸로 조건화하면 막힌다고 보는 관측 노드 id"]}],
@@ -95,7 +96,19 @@ JSON 하나만. 조회거나 그래프거나 둘 중 하나다.
 `completeness` 를 비우면 거부한다 - 완비 선언 없는 그래프는 인과 그래프가 아니다.
 `blocked_by` 에는 네가 그린 노드 id 만 써라. 배정이 `chosen`·`scheduled` 인 처치에는 코드가
 U 를 자동으로 심는다 - 네가 안 적어도 들어가고 지울 수 없으니, 그 자리 말고 **네가 아는
-다른 공통원인**에 지면을 써라. 위 골격은 모양이지 내용이 아니다 - 예시는 주지 않는다."""
+다른 공통원인**에 지면을 써라. 위 골격은 모양이지 내용이 아니다 - 예시는 주지 않는다.
+
+## exposure · reference 는 문장이 아니라 술어다
+이 둘은 **그대로 SQL 의 WHERE 에 들어간다.** "삼성전자 실적 발표를 접한 투자자" 같은
+산문을 쓰면 실행되지 않고, 그러면 그 간선의 음성대조가 통째로 사라진다. 쓸 수 있는
+컬럼은 `v_cohort` 의 것뿐이다 - `instrument_id` · `trade_date` · `source_event_id` ·
+`event_type_code` · `predicate_code` · `role_code` · `lifecycle_stage` · `sector_name` ·
+`industry_name` · `market_cap` · `listing_market` · `ticker`.
+
+`ticker` 는 **종목 코드**다(`'005930'`). 거기에 종목명을 넣으면 문법은 맞고 결과는 0행이라
+"검사했는데 아무것도 없었다"로 조용히 기록된다 - 가장 나쁜 실패다. 이름으로 걸러야 하면
+`instrument_id` 를 써라. 어느 컬럼으로도 못 적겠으면 **빈 문자열로 두어라** - 그러면
+코드가 접지된 `source_event_id` 로 처치를 정의한다."""
 
 
 def _pair(a: str, b: str) -> tuple[str, str]:
@@ -382,6 +395,10 @@ def _parse(out: dict[str, Any], hypotheses: list[Hypothesis],
         clean[str(k)] = {**m, "says": str(m.get("says") or ""),
                          "observed": obs if isinstance(obs, str) and obs.strip() else None,
                          "events": [str(x) for x in (m.get("events") or [])]}
+    # 결과 노드는 P2 와 같은 자리에 같은 정의로 있어야 한다 - 합치는 단계에서 빠뜨리면
+    # 모든 가설의 outcome 이 nodes 에 없다는 위반으로 되돌아온다.
+    if hypotheses and OUTCOME_ID not in clean:
+        clean[OUTCOME_ID] = {**hypotheses[0].nodes.get(OUTCOME_ID, {}), "events": []}
 
     if sql is None:
         # 조회 없이 한 완비 선언이라는 사실은 선언 자체에 붙어야 한다 - 나중에 이 문장만

@@ -35,6 +35,7 @@ from . import p0_question as P0
 from .contracts import (
     ASSIGNMENT_SAY,
     DOMAIN_SAY,
+    OUTCOME_ID,
     ROLE_SAY,
     Fingerprint,
     Hypothesis,
@@ -44,6 +45,13 @@ from .graph import parse as _parse_nid
 
 MAX_TRIES = 3        # 가설 제출 시도. 조회는 여기 들지 않는다
 MAX_LOOKUPS = 6      # 세션당 조회 상한
+
+
+def outcome_node(question: Question) -> dict[str, str]:
+    """고정 결과 노드의 명세. **정의도 코드가 준다** - 같은 id 를 세션마다 다르게 설명하면
+    합칠 때 같은 자리에 다른 것이 들어온다."""
+    return {"says": question.explanandum,
+            "observed": "v_daily.ar (설명 대상의 횡단면 평균 대비 초과수익)"}
 
 # 단위가 붙은 수만 본다. 연도·건수·`@t-2` 까지 잡으면 정상 서술이 죽고, 되물음이 형식
 # 시비로 3회를 태운다. 놓치는 쪽으로 기운 검사이며 실제 방어는 프롬프트가 한다.
@@ -66,8 +74,14 @@ SYSTEM = f"""너는 **오늘 이 셀의 잔차를 설명할 작업가설 하나*
 쪼갤수록 검정 지점이 늘어 주장이 강해지고, 뭉갤수록 검정 불가에 가까워진다.
 
 노드 id 는 `이름@t±N` 이다. 시간 색인이 없으면 거부된다 (`배당공시@t0` · `수급@t+1` ·
-`선반영@t-2`). 간선은 원인에서 결과로 가고, `treatment` 에서 `outcome` 까지 **방향
-경로가 간선으로 이어져야** 한다 - 닿지 않는 원인은 귀속이 아니다.
+`선반영@t-2`). 간선은 원인에서 결과로 간다.
+
+**결과 노드는 `{OUTCOME_ID}` 로 고정이다.** 이름을 새로 짓지 마라 - 세션마다 다른
+이름을 쓰면 합칠 때 결론이 여러 개가 되고 그러면 예산이 정의되지 않아 네 가설의 값이
+통째로 버려진다. 정의는 코드가 넣으니 `nodes` 에 적을 필요도 없다. 네 일은 `treatment`
+에서 그 id 까지 **방향 경로를 간선으로 잇는 것**이다 - 중간이 비면 매개 노드를 세워라.
+개별 종목의 움직임을 원인으로 쓰려면 그 종목 노드에서 `{OUTCOME_ID}` 로 가는 간선을
+직접 그리지 말고, **왜 그 종목이 움직였는지**를 먼저 그려라.
 
 ## 역할
 원인 하나를 고르는 일이 아니다. 사건을 만든 **인과 패키지를 재구성**하고 각 요소가 어떤
@@ -125,6 +139,16 @@ denies 가 이 가설의 목숨이다. 어떤 관측으로도 죽지 않는 문�
 잔차, 같은 산업 미노출 종목의 동반 이동). 억지 사슬보다 낫다. 정말 아무것도 세울 수
 없을 때만 none 을 내라 - 그때도 무엇이 없어서인지 적어라.
 
+## 앞선 세션과 갈려야 한다
+앞선 세션의 `predicts` 를 아래에 준다(서사·노드는 주지 않는다 - 베낄 재료는 막고, 갈릴
+재료만 준다). 네 가설이 그것들과 **어떤 관측에서 갈리는지** `distinguishes` 에 적어라.
+
+"둘 다 SK하이닉스가 가장 많이 빠진다고 예측한다" 면 그 둘은 두 가설이 아니라 한 가설이다.
+어떤 관측으로도 갈리지 않는 가설을 추가하면 목록만 길어지고 판별은 불가능해진다
+(Platt 1964: 대립 없는 다중가설은 강한 추론이 아니다). 못 갈리겠으면 **다른 메커니즘
+영역으로 옮겨라** - 정보·공통충격·수급·미시구조·피드백·제도·측정·무사건 중 앞선 세션이
+열지 않은 곳이 있다.
+
 JSON 하나만. 셋 중 하나다. 밖에 설명 문장을 붙이지 마라.
   {{"sql": "SELECT ..."}}                조회하고 다시 묻는다
   {{"hypothesis": {{...}}}}                아래 모양
@@ -133,7 +157,7 @@ JSON 하나만. 셋 중 하나다. 밖에 설명 문장을 붙이지 마라.
 {{"hypothesis": {{
   "says": "이 가설이 주장하는 것 한 문장",
   "cause_label": "가치채널 또는 트리거 이름 - 앞선 세션과 겹치면 거부된다",
-  "treatment": "원인 노드 id", "outcome": "결과 노드 id",
+  "treatment": "원인 노드 id",
   "assignment": "mechanical|scheduled|natural|chosen",
   "role": "background|trigger|transmission|amplifier|terminator",
   "domain": "information|common_shock|flow|microstructure|feedback|institution|measurement|no_event",
@@ -142,6 +166,7 @@ JSON 하나만. 셋 중 하나다. 밖에 설명 문장을 붙이지 마라.
   "edges": [{{"from": "<id>", "to": "<id>", "says": "이 간선이 주장하는 것",
              "because": "왜 이 경로로 전달되나"}}],
   "predicts": ["..."], "denies": ["..."],
+  "distinguishes": ["앞선 세션의 예측과 **갈리는** 관측. 앞선 예측이 있을 때만 필수"],
   "events": ["후보 목록의 event_id. 접지되는 사건이 없으면 빈 목록"],
   "anchor": [lo, hi], "anchor_source": "수치를 썼다면 그 값이 어디서 왔는가"}}}}"""
 
@@ -154,11 +179,12 @@ def propose(client, sql, *, question: Question, fingerprint: Fingerprint,
     문맥에 남아 있고 모델은 그것과 정합한 것을 쓴다 - 그건 하나의 가설을 세 번 쓴 것이지
     셋이 아니다. Chamberlin 이 말한 분산은 문맥을 끊어야 생긴다.
 
-    완전한 독립은 아니다. n번째 세션에는 **앞선 세션이 쓴 채널 이름만** 준다(내용은 주지
-    않는다). 이름조차 안 주면 세 세션이 가장 눈에 띄는 채널 하나로 수렴해 같은 가설 세 개가
-    나오고, 내용을 주면 그걸 읽고 정합을 맞춘다 - 이름만 주는 것이 중복을 줄이면서 문맥
-    오염을 막는 유일한 자리다. `author` 에 세션 인덱스가 남으므로 이 절충은 사후에
-    감사된다(어느 가설이 몇 번째 세션에서 나왔는지, 채널이 실제로 갈렸는지).
+    완전한 독립은 아니다. n번째 세션에는 앞선 세션이 쓴 **채널 이름과 `predicts` 만** 준다
+    (서사·노드·간선은 주지 않는다). 아무것도 안 주면 세 세션이 가장 눈에 띄는 채널 하나로
+    수렴하고, 서사를 주면 그걸 읽고 정합을 맞춘다. 예측만 주는 것이 그 사이다 - **갈릴
+    재료는 주고 베낄 재료는 막는다.** 이름만 주던 앞선 규약은 중복은 줄였지만 대립을
+    만들지 못했다(2026-07-30 실측: 채널 이름은 셋 다 달랐는데 h2·h3 의 예측이 같아 어떤
+    관측으로도 갈리지 않았다). `author` 에 세션 인덱스가 남아 이 절충은 사후 감사된다.
 
     한 세션이 빈손으로 끝나도 전체는 계속한다. **길이 0 도 유효한 반환이다** - 억지 가설로
     자리를 채우는 것보다 낫다. 그 경우 P8 은 후보를 `undetermined` 로 처분한다.
@@ -169,8 +195,7 @@ def propose(client, sql, *, question: Question, fingerprint: Fingerprint,
     out: list[Hypothesis] = []
     for idx in range(1, n + 1):
         h = _session(client, sql, question=question, fingerprint=fingerprint,
-                     candidates=candidates, idx=idx, events_ok=events_ok,
-                     used=[x.cause_label for x in out])
+                     candidates=candidates, idx=idx, events_ok=events_ok, prior=out)
         if h is not None:
             out.append(h)
     log("causal.p2.done", asked=n, got=len(out),
@@ -180,7 +205,7 @@ def propose(client, sql, *, question: Question, fingerprint: Fingerprint,
 
 def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
              candidates: list[dict], idx: int, events_ok: set[str],
-             used: list[str]) -> Hypothesis | None:
+             prior: list[Hypothesis]) -> Hypothesis | None:
     """세션 하나. 가설 하나를 받거나 빈손으로 끝난다.
 
     시도(가설 제출)와 조회를 따로 센다. 모르는 것을 묻는 데 시도를 물리면 모델은 추측으로
@@ -191,7 +216,7 @@ def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
     system = SYSTEM + ("\n\n## SQL 표면\n" + sql.schema() if sql is not None else
                        "\n\n## SQL 표면\n이 셀에는 조회 표면이 없다. sql 을 내면 시도가 하나 "
                        "깎인다 - 아는 것만으로 세우고, 확인이 필요한 것은 denies 에 적어라.")
-    head = _head(question, fingerprint, candidates, idx, used)
+    head = _head(question, fingerprint, candidates, idx, prior)
     trace: list[str] = []
     queries: list[str] = []
     tries = 0
@@ -229,13 +254,15 @@ def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
         try:
             h = _hypothesis(out["hypothesis"], hid=f"h{idx}", author=f"session{idx}",
                             queries=list(queries), fingerprint=fingerprint,
-                            events_ok=events_ok, used=used)
+                            events_ok=events_ok, prior=prior,
+                            outcome_spec=outcome_node(question))
         except PipelineError as exc:
             log("causal.p2.reject", session=idx, tries=tries, why=str(exc)[:120])
             trace.append(f"거부: {exc}")
             continue
         log("causal.p2.hypothesis", session=idx, hid=h.hid, channel=h.cause_label,
-            assignment=h.assignment, tries=tries, queries=len(queries))
+            assignment=h.assignment, tries=tries, queries=len(queries),
+            distinguishes=len(h.distinguishes))
         return h
 
     log("causal.p2.empty", session=idx, tries=tries, queries=len(queries))
@@ -243,13 +270,17 @@ def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
 
 
 def _head(question: Question, fingerprint: Fingerprint, candidates: list[dict],
-          idx: int, used: list[str]) -> str:
-    """세션 머리. 질문 · 지문 · 후보 · 이미 쓴 채널 순."""
+          idx: int, prior: list[Hypothesis]) -> str:
+    """세션 머리. 질문 · 지문 · 후보 · 앞선 세션의 채널과 예측 순."""
     L = [P0.brief(question), "", fingerprint.brief(), "", _candidates(candidates),
          "", f"[세션 {idx}]"]
-    if used:
-        L += ["앞선 세션이 이미 낸 채널: " + " · ".join(used),
-              "같은 채널은 내지 마라. 그쪽 내용은 알려주지 않는다 - 겹치는 것만 피하면 된다."]
+    if prior:
+        L.append("앞선 세션이 이미 낸 채널과 그 예측 - **같은 채널 금지, 같은 예측이면 "
+                 "같은 가설이다**:")
+        for h in prior:
+            L.append(f"  [{h.cause_label}]")
+            L += [f"    - {p}" for p in h.predicts]
+        L.append("네 가설이 위 예측들과 갈리는 관측을 `distinguishes` 에 적어라.")
     return "\n".join(L)
 
 
@@ -296,7 +327,7 @@ def _candidates(cs: list[dict]) -> str:
 
 def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
                 fingerprint: Fingerprint, events_ok: set[str],
-                used: list[str]) -> Hypothesis:
+                prior: list[Hypothesis], outcome_spec: dict[str, str]) -> Hypothesis:
     """모델 산출 -> `Hypothesis`. **여기서 거부한 사유가 그대로 되먹임 문장이 된다.**
 
     검사는 전부 뒤에서 갈리는 조건이다: 어휘 밖 `assignment` 는 P3 의 U 삽입을 무력화하고,
@@ -309,14 +340,17 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
     says = _text(raw.get("says"), "says", "이 가설이 주장하는 것 한 문장이 필요하다")
     label = _text(raw.get("cause_label"), "cause_label",
                   "채널 이름이 세션 간 중복 판정의 키다")
+    used = [h.cause_label for h in prior]
     if _norm(label) in {_norm(u) for u in used}:
         raise PipelineError(f"cause_label={label!r} 는 앞선 세션이 이미 쓴 채널이다. 다른 "
                             f"가치채널이나 다른 트리거로 세워라 - 이미 쓴 것: {' · '.join(used)}")
 
     treatment = _node(raw.get("treatment"), "treatment")
-    outcome = _node(raw.get("outcome"), "outcome")
+    # 결과는 받지 않는다 - 코드가 정한다. 모델이 `outcome` 을 보내도 무시한다.
+    outcome = OUTCOME_ID
     if treatment == outcome:
-        raise PipelineError(f"treatment 와 outcome 이 같다: {treatment!r}")
+        raise PipelineError(f"treatment 가 결과 노드와 같다: {treatment!r}. 결과를 만든 "
+                            "원인을 세워라")
 
     assignment = str(raw.get("assignment") or "").strip()
     if assignment not in ASSIGNMENT_SAY:
@@ -326,7 +360,7 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
 
     nodes = raw.get("nodes")
     if not isinstance(nodes, dict) or not nodes:
-        raise PipelineError("nodes 가 비었다 - treatment·outcome 을 포함한 객체여야 한다")
+        raise PipelineError("nodes 가 비었다 - treatment 를 포함한 객체여야 한다")
     for nid, spec in nodes.items():
         _node(nid, "nodes 의 키")
         # 비객체 명세를 통과시키면 P3 의 접지 순회가 AttributeError 로 새어 되먹임 경로를
@@ -334,21 +368,31 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
         if not isinstance(spec, dict):
             raise PipelineError(f"노드 {nid} 명세가 객체가 아니다 - {type(spec).__name__}. "
                                 "says·observed 를 담은 객체여야 한다")
-    for slot, nid in (("treatment", treatment), ("outcome", outcome)):
-        if nid not in nodes:
-            raise PipelineError(f"{slot}={nid!r} 이 nodes 에 없다")
+    if treatment not in nodes:
+        raise PipelineError(f"treatment={treatment!r} 이 nodes 에 없다")
+    # 결과 노드는 코드가 심는다(모델이 적었어도 덮어쓴다) - 정의가 세션마다 갈리면 같은
+    # id 가 다른 것을 뜻하게 되고, 그건 이름이 갈리는 것과 같은 병이다.
+    nodes = {**nodes, OUTCOME_ID: dict(outcome_spec)}
 
     edges = _edges(raw.get("edges"), nodes)
     if not _reaches(edges, treatment, outcome):
-        raise PipelineError(f"{treatment} 에서 {outcome} 로 가는 방향 경로가 없다. 이어지지 "
-                            "않은 원인은 귀속이 아니다 - 매개 노드를 세워 잇거나 outcome 을 "
-                            "고쳐라")
+        raise PipelineError(f"{treatment} 에서 결과 노드 `{OUTCOME_ID}` 로 가는 방향 경로가 "
+                            "없다. 결과 노드 이름은 고칠 수 없으니 매개 노드를 세워 그 id "
+                            "까지 간선으로 이어라 - 닿지 않는 원인은 귀속이 아니다")
 
     predicts = _lines(raw.get("predicts"), "predicts",
                       "이 가설이 참이면 관측되어야 할 것을 최소 하나 적어라")
     denies = _lines(raw.get("denies"), "denies",
                     "이 가설이 참이면 관측되지 않아야 할 것을 최소 하나 적어라 - 어떤 "
                     "관측으로도 죽지 않는 문장은 가설이 아니다")
+    # 앞선 가설이 있으면 **갈리는 관측**이 필수다. 없으면 그건 새 가설이 아니라 같은
+    # 가설을 다른 이름으로 쓴 것이고, P5 가 판별자를 만들 자리도 없다. 3회 안에 못 대면
+    # 이 세션은 빈손으로 끝난다 - 대립 없는 가설을 목록에 채우는 것보다 낫다.
+    distinguishes = _lines(
+        raw.get("distinguishes"), "distinguishes",
+        "앞선 세션의 예측과 갈리는 관측을 최소 하나 적어라 - 같은 관측을 예측하는 두 "
+        "문장은 두 가설이 아니다. 못 갈리겠으면 앞선 세션이 열지 않은 메커니즘 영역으로 "
+        "옮겨라", need=1 if prior else 0)
 
     events = [str(e).strip() for e in _lines(raw.get("events"), "events", "", need=0)]
     bad = [e for e in events if e not in events_ok]
@@ -379,13 +423,14 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
     # "골격을 주면 모델이 노드를 만들지 않고 칸을 채운다"는 이 파이프라인의 전제를
     # 우리가 어기는 것이다. 못 읽으면 유추하고, 유추했다는 사실을 원장에 적는다.
     role, role_src = _role_of(raw, edges=edges, treatment=treatment, outcome=outcome)
-    domain, dom_src = _domain_of(raw, says=says, blob=blob, events=events)
+    domain, dom_src = _domain_of(raw, says=says, label=label)
 
     return Hypothesis(hid=hid, says=says, treatment=treatment, outcome=outcome,
                       assignment=assignment, role=role, domain=domain,
                       role_source=role_src, domain_source=dom_src,
                       nodes=dict(nodes), edges=edges,
-                      predicts=predicts, denies=denies, events=events, anchor=anchor,
+                      predicts=predicts, denies=denies, distinguishes=distinguishes,
+                      events=events, anchor=anchor,
                       anchor_source=source, cause_label=label, author=author,
                       queries=queries)
 
@@ -420,15 +465,19 @@ _DOMAIN_ALIAS = {
     "무사건": "no_event", "우연": "no_event", "잡음": "no_event", "noise": "no_event",
 }
 # 영역 유추용 본문 단서. 신고가 없을 때만 본다.
+# ★ 전부 한국어 2글자 이상이다. `VI`·`PBR` 같은 짧은 라틴 토큰은 넣지 마라 - 부분
+# 일치라 노드 id·영문 서술 아무 데나 걸린다. 실측: `VI` 하나 때문에 배당 공시 가설이
+# `institution` 으로 유추됐다. 그리고 **틀린 유추는 기본값보다 나쁘다** - 커버리지
+# 원장이 "그 영역을 열었다"고 거짓말을 하게 되고, 그 원장이 침묵을 잡으라고 있는 것이다.
 _DOMAIN_HINT = (
-    ("flow", ("순매수", "순매도", "기관", "외국인", "연기금", "패시브", "리밸런",
-              "자금유", "환매", "설정")),
-    ("microstructure", ("유동성", "거래대금", "호가", "스프레드", "체결", "회전율")),
-    ("feedback", ("추가 매도", "연쇄", "악순환", "되먹임", "증폭", "손절")),
-    ("institution", ("상한가", "하한가", "공매도", "거래정지", "규제", "지수 편입",
-                     "정기변경", "VI", "서킷")),
-    ("measurement", ("기준가", "액면", "정정", "오기", "시각", "결측")),
-    ("common_shock", ("환율", "금리", "유가", "지수", "섹터", "업종", "해외")),
+    ("flow", ("순매수", "순매도", "기관 매도", "기관 매수", "외국인", "연기금", "패시브",
+              "리밸런", "자금유입", "자금유출", "환매", "설정액", "수급")),
+    ("microstructure", ("유동성", "거래대금", "호가", "스프레드", "회전율", "체결강도")),
+    ("feedback", ("추가 매도", "연쇄", "악순환", "되먹임", "손절", "반대매매")),
+    ("institution", ("상한가", "하한가", "공매도", "거래정지", "지수 편입", "정기변경",
+                     "서킷브레이커", "변동성완화")),
+    ("measurement", ("기준가", "액면분할", "정정공시", "결측")),
+    ("common_shock", ("환율", "금리", "유가", "섹터 전반", "업종 전반", "해외 증시")),
 )
 
 
@@ -453,24 +502,25 @@ def _role_of(raw: Any, *, edges: list[dict[str, Any]], treatment: str,
     return ("trigger" if direct else "transmission"), "inferred"
 
 
-def _domain_of(raw: Any, *, says: str, blob: str,
-               events: list[str]) -> tuple[str, str]:
+def _domain_of(raw: Any, *, says: str, label: str) -> tuple[str, str]:
     """메커니즘 영역. **거부하지 않는다.**
 
-    유추는 본문 단서 -> 접지 사건 유무 순이다. 사건에 붙었으면 공시·뉴스에서 온 것이므로
-    `information` 이 맞고, 아무 단서도 없으면 그것도 `information` 이다 - 커버리지 원장이
-    "정보 영역만 열렸다"를 그대로 보여주는 편이 낫다. 유추로 다양성을 위조하지 않는다.
+    ★ 뒤지는 것은 `says` 와 `cause_label` 뿐이다 - 모델이 스스로 주장한 한 줄. 직렬화한
+    JSON 전체를 뒤지면 노드 id·predicts·denies 의 부수 토큰이 걸린다(실측: `VI`).
+
+    ★ 단서가 **여러 영역에 걸리면 유추하지 않는다.** 순서로 tie-break 하면 목록 배열이
+    판정을 정하게 되고, 그건 자료가 아니라 내 코드 순서다. 애매하면 기본값으로 두는 편이
+    낫다 - 커버리지 원장이 "정보 영역만 열렸다"를 그대로 보여주는 것이 편향을 숨기는
+    것보다 정직하다. **유추로 다양성을 위조하지 않는다.**
     """
     got = _norm_token(raw.get("domain") if isinstance(raw, dict) else "")
     if got in DOMAIN_SAY:
         return got, "declared"
     if got in _DOMAIN_ALIAS:
         return _DOMAIN_ALIAS[got], "declared"
-    hay = f"{says} {blob}"
-    for dom, keys in _DOMAIN_HINT:
-        if any(k in hay for k in keys):
-            return dom, "inferred"
-    return "information", "inferred"
+    hay = f"{says} {label}"
+    hits = [dom for dom, keys in _DOMAIN_HINT if any(k in hay for k in keys)]
+    return (hits[0], "inferred") if len(hits) == 1 else ("information", "inferred")
 
 
 def _text(raw: Any, where: str, why: str = "") -> str:
@@ -600,11 +650,10 @@ if __name__ == "__main__":
                                 kills=("공시 정보 경로",))])
     CAND = [{"event_type_code": "DIV", "event_id": "e1", "label": "배당", "share": 0.1}]
     GOOD = {"says": "지수 편입 규칙이 기계적 매수를 만든다", "cause_label": "지수수급",
-            "treatment": "편입@t0", "outcome": "가격@t+1", "assignment": "mechanical",
-            "nodes": {"편입@t0": {"says": "지수 편입"}, "수급@t+0": {"says": "패시브 매수"},
-                      "가격@t+1": {"says": "당일 초과수익"}},
+            "treatment": "편입@t0", "assignment": "mechanical",
+            "nodes": {"편입@t0": {"says": "지수 편입"}, "수급@t+0": {"says": "패시브 매수"}},
             "edges": [{"from": "편입@t0", "to": "수급@t+0"},
-                      {"from": "수급@t+0", "to": "가격@t+1"}],
+                      {"from": "수급@t+0", "to": OUTCOME_ID}],
             "predicts": ["리밸런스일에 거래량이 튄다"], "denies": ["비편입 피어가 같이 오른다"],
             "events": []}
 
@@ -626,13 +675,24 @@ if __name__ == "__main__":
             return "1행"
 
     # 1 세션 인덱스가 author 에 남고, 채널이 겹치면 거부된 뒤 다시 물어 통과한다.
+    OTHER = {**GOOD, "cause_label": "실적기대",
+             "distinguishes": ["편입 경로면 비편입 피어가 조용하지만 실적 경로면 같이 움직인다"]}
     c = _Client([{"hypothesis": GOOD},
-                 {"hypothesis": GOOD},                                   # 채널 중복 -> 거부
-                 {"hypothesis": {**GOOD, "cause_label": "실적기대"}}])
+                 {"hypothesis": OTHER | {"cause_label": "지수수급"}},     # 채널 중복 -> 거부
+                 {"hypothesis": OTHER}])
     hs = propose(c, None, question=Q, fingerprint=FP, candidates=CAND, n=2)
     assert [h.author for h in hs] == ["session1", "session2"], hs
     assert [h.cause_label for h in hs] == ["지수수급", "실적기대"], hs
     assert "이미 쓴 채널" in c.seen[2], c.seen[2]
+    # 앞선 세션의 예측이 두 번째 세션 머리에 실린다 - 갈릴 재료가 없으면 갈릴 수 없다.
+    assert "리밸런스일에 거래량이 튄다" in c.seen[1], c.seen[1]
+
+    # 1b 앞선 가설이 있는데 갈리는 관측을 못 대면 거부된다. **대립 없는 가설은 목록만
+    # 길게 한다** - 2026-07-30 실측에서 h2·h3 가 같은 관측을 예측해 판별이 불가능했다.
+    c = _Client([{"hypothesis": GOOD}, {"hypothesis": {**GOOD, "cause_label": "다른채널"}}])
+    hs = propose(c, None, question=Q, fingerprint=FP, candidates=CAND, n=2)
+    assert [h.cause_label for h in hs] == ["지수수급"], hs
+    assert "distinguishes" in c.seen[-1], c.seen[-1]
 
     # 2 어휘 밖 assignment · denies 누락 · 출처 없는 수치는 각각 거부되고 되물음이 된다.
     for bad, mark in (({**GOOD, "assignment": "endogenous"}, "어휘 밖"),
@@ -660,13 +720,23 @@ if __name__ == "__main__":
     assert hs and "선반영" in hs[0].says, hs
     assert "지문이 이미 죽인 부류다" in c.seen[1], c.seen[1]
 
-    # 5 접지되지 않는 event_id · 닿지 않는 outcome · 시간 색인 없는 노드는 거부된다.
+    # 5 접지되지 않는 event_id · 결과에 닿지 않는 사슬 · 시간 색인 없는 노드는 거부된다.
     for bad, mark in (({**GOOD, "events": ["e9"]}, "원장에 없는 id"),
                       ({**GOOD, "edges": [{"from": "편입@t0", "to": "수급@t+0"}]}, "방향 경로"),
                       ({**GOOD, "treatment": "편입"}, "시간 색인")):
         c = _Client([{"hypothesis": bad}])
         assert propose(c, None, question=Q, fingerprint=FP, candidates=CAND, n=1) == []
         assert mark in c.seen[-1], (mark, c.seen[-1])
+
+    # 5b 결과 노드는 코드가 정한다 - 모델이 제 이름을 보내도 무시되고, 정의까지 덮어쓴다.
+    # 이름이 갈리면 P3 에서 결론이 여러 개가 되어 예산이 정의되지 않는다(2026-07-30 실측).
+    c = _Client([{"hypothesis": {**GOOD, "outcome": "내맘대로_결론@t0",
+                                 "nodes": {**GOOD["nodes"],
+                                           OUTCOME_ID: {"says": "제멋대로 쓴 정의"}}}}])
+    hs = propose(c, None, question=Q, fingerprint=FP, candidates=CAND, n=1)
+    assert hs and hs[0].outcome == OUTCOME_ID, hs
+    assert hs[0].nodes[OUTCOME_ID]["says"] == Q.explanandum, hs[0].nodes[OUTCOME_ID]
+    assert "내맘대로_결론@t0" not in hs[0].nodes, hs[0].nodes
 
     # 6 none 은 그 자리에서 세션을 끝낸다 - 시도를 태우지 않는다.
     c = _Client([{"none": "후보가 전부 산술로 죽었다"}, {"hypothesis": GOOD}])
