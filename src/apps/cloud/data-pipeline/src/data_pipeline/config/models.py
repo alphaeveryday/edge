@@ -402,8 +402,10 @@ class MinuteConsumerConfig(BaseModel):
 
     큐 URL 은 환경마다 다르므로 env 로 온다 — `MINUTE_RELAY__QUEUE_URLS` 와 같은 이유로
     **JSON 한 변수**다(destination 이름에 하이픈이 있어 nested 형태를 셸이 못 파싱한다).
-    JSON 전체를 홑따옴표로 감싸야 셸이 안쪽 따옴표를 먹지 않는다:
-    `DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"<destination>":"<dlq url>"}'`.
+    JSON 전체를 홑따옴표로 감싸야 셸이 안쪽 따옴표를 먹지 않는다. 큐 어휘 3종을
+    **전부** 채워야 한다(하나라도 빠지면 그 레인은 아무도 대사하지 않으므로 기동 거부):
+    `DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"<url>",
+    "news-extraction-realtime":"<url>","news-extraction-backfill":"<url>"}'`.
 
     ⚠️ 여기 **원 큐 URL 을 넣으면 안 된다** — reconciler 가 정상 배달을 전부 "DLQ 도착"
     으로 읽어 살아 있는 job 을 DEAD 로 만든다. 그래서 `dlq-reconcile` 은 relay 큐 매핑을

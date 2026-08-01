@@ -173,6 +173,9 @@ def main(argv: list[str] | None = None) -> int:
                              "dlq-reconcile: 대사 회차 상한(미지정=보이는 메시지를 다 훑을 때까지)")
     parser.add_argument("--kind", default=None, choices=["news", "price"],
                         help="redrive: 되살릴 job 의 종류(news=news_extraction_job, price=price_window_job)")
+    parser.add_argument("--reason", default=None,
+                        help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
+                             "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
     parser.add_argument("--job-id", default=None,
                         help="redrive: 되살릴 job_id(결정적 ID). 대상은 **막힌 것**이다 — "
                              "DEAD job 이거나 Relay 가 발행 불가로 격리한 DEAD delivery event. "
@@ -208,11 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     # 대상을 추측하지 않는다. 다른 스텝에서 주어지면 조용히 무시하지 말고 거부한다
     # (--deadline-sec·--window-days 와 같은 이유 — 배선 오류가 안 드러난다).
     if args.step == "redrive":
-        if not args.kind or not args.job_id:
-            raise SystemExit("redrive 는 --kind 와 --job-id 가 필요하다")
-    elif args.kind is not None or args.job_id is not None:
+        if not args.kind or not args.job_id or not (args.reason or "").strip():
+            raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
+    elif args.kind is not None or args.job_id is not None or args.reason is not None:
         raise SystemExit(
-            "--kind·--job-id 는 redrive 에서만 쓴다 — "
+            "--kind·--job-id·--reason 은 redrive 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -254,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "dlq-reconcile":
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "redrive":
-        return redrive_cli(settings, kind=args.kind, job_id=args.job_id)
+        return redrive_cli(settings, kind=args.kind, job_id=args.job_id, reason=args.reason)
 
     # 원장 계측은 **dispatch 를 한 번** 감싼다(ALPHA-181). 스텝마다 흩뿌리면 배선 지점이
     # 33개가 되고, 그중 4곳은 `--source` 로 벤더가 갈려 오라벨 지점이 그만큼 늘어난다

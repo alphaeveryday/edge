@@ -15,6 +15,15 @@ import json
 from contextlib import contextmanager
 
 
+def _expired(lease_expires_at, now) -> bool:
+    """NULL lease 는 **만료로 본다** — 실제 SQL(`IS NULL OR < now`)과 같은 의미다.
+
+    fake 가 `None < now` 로 계산하면 TypeError 로 죽어, 이 고착 복구 가드를 아예
+    테스트할 수 없다(그러면 SQL 에서 빠져도 아무도 모른다).
+    """
+    return lease_expires_at is None or lease_expires_at < now
+
+
 def _job_kind(sql: str) -> str:
     """SQL 이 어느 job 테이블을 보는지 — 두 테이블이 lifecycle 을 공유해서 필요하다."""
     return "price" if "price_window_job" in sql else "news"
@@ -180,12 +189,12 @@ class _Cursor:
             ):
                 assert clause in s, f"dead_on_dlq SQL 에 {clause} 가 없다"
             self._dead_on_dlq(_job_kind(s), params)
-        elif s.startswith("SELECT status, redrive_generation, lease_expires_at FROM"):
+        elif s.startswith("SELECT status, redrive_generation, lease_expires_at, error_code FROM"):
             assert "FOR UPDATE" in s, "redrive 는 job 행을 잠그고 상태를 봐야 한다"
             row = self.db.jobs.get((_job_kind(s), params[0]))
             if row is not None:
                 self._rows = [(row["status"], row["redrive_generation"],
-                               row["lease_expires_at"])]
+                               row["lease_expires_at"], row["error_code"])]
         elif s.startswith("SELECT destination, generation, payload"):
             row = self.db.outbox.get(params[0])
             if row is not None:
@@ -208,6 +217,11 @@ class _Cursor:
             # 마감한다 — fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
             assert "redrive_generation = %s" in s, "전이 SQL 에 세대 fence 가 없다"
             self._job_transition("price" if "price_window_job" in s else "news", params)
+        elif s.startswith("UPDATE dataset_commit_outbox SET last_error = %s WHERE"):
+            row = self.db.outbox.get(params[1])
+            if row is not None:
+                row["last_error"] = params[0]
+                self.rowcount = 1
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
         elif s.startswith("SELECT o.status, COUNT(*) FROM dataset_commit_outbox"):
@@ -459,7 +473,7 @@ class _Cursor:
             r for (k, _), r in self.db.jobs.items() if k == kind
             and (r["status"] == "PENDING"
                  or (r["status"] == "RETRY_WAIT" and r["next_attempt_at"] <= now)
-                 or (r["status"] == "CLAIMED" and r["lease_expires_at"] < now))
+                 or (r["status"] == "CLAIMED" and _expired(r["lease_expires_at"], now)))
         ]
         if not candidates:
             return
@@ -484,7 +498,7 @@ class _Cursor:
             row["status"] == "PENDING"
             or (row["status"] == "RETRY_WAIT" and row["next_attempt_at"] is not None
                 and row["next_attempt_at"] <= now)
-            or (row["status"] == "CLAIMED" and row["lease_expires_at"] < now2)
+            or (row["status"] == "CLAIMED" and _expired(row["lease_expires_at"], now2))
         )
         if not eligible:
             return
@@ -510,7 +524,7 @@ class _Cursor:
             return
         if row["status"] not in ("PENDING", "RETRY_WAIT", "CLAIMED"):
             return
-        if row["status"] == "CLAIMED" and not row["lease_expires_at"] < now2:
+        if row["status"] == "CLAIMED" and not _expired(row["lease_expires_at"], now2):
             return  # 살아 있는 lease — 실행 중이다
         row.update(status="DEAD", error_code=error_code, completed_at=now,
                    claimed_by=None, lease_expires_at=None)

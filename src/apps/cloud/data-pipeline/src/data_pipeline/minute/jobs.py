@@ -494,7 +494,9 @@ class JobLedger:
             )
             return cur.rowcount == 1
 
-    def redrive_job(self, *, kind: str, job_id: str, now: datetime) -> str:
+    def redrive_job(
+        self, *, kind: str, job_id: str, now: datetime, actor: str, reason: str,
+    ) -> str:
         """막힌 job 을 한 트랜잭션에서 다시 깨운다 — 새 delivery event_id 를 돌려준다.
 
         v0.7 12.4: 콘솔에서 메시지만 blind redrive 하지 않는다. **DB 가 먼저**다 —
@@ -515,16 +517,18 @@ class JobLedger:
         (지금 누가 돌고 있고, 세대를 올리면 그 실행의 결과가 fence 에 걸려 버려진다 —
         lease 가 만료되면 그때 하면 된다).
 
-        감사 기록의 천장: 누가·왜 redrive 했는지는 **로그**에만 남는다(원장 컬럼 없음).
-        DEAD 사유(`error_code`)는 덮지 않아 다음 시도 전까지는 조회된다. 조회 가능한
-        이력이 필요해지면 그때 감사 테이블을 만든다 — migration 이 필요한 별건이다.
+        감사 기록: 누가(`actor`)·왜(`reason`) 했는지를 **대체되는 event 행의
+        `last_error`** 에 남긴다 — 같은 트랜잭션이라 전이와 갈리지 않고, 그 행은 이후
+        아무도 덮지 않는다(발행 대상에서 빠졌으므로). DEAD 사유(`error_code`)도 덮지
+        않아 무엇을 되살렸는지가 남는다. ⚠️ 천장: 전용 감사 테이블이 아니라 여러 번의
+        redrive 이력이 쌓이지는 않는다(세대마다 행이 하나씩 생기므로 세대별로는 남는다).
         """
         table = _JOB_TABLES[kind]
         event_type = JOB_EVENT_TYPES[kind]
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT status, redrive_generation, lease_expires_at
+                SELECT status, redrive_generation, lease_expires_at, error_code
                 FROM {table} WHERE job_id = %s FOR UPDATE
                 """,
                 (job_id,),
@@ -532,9 +536,20 @@ class JobLedger:
             row = cur.fetchone()
             if row is None:
                 raise LookupError(f"{kind} job 이 없다: {job_id}")
-            status, generation, lease_expires_at = row
+            status, generation, lease_expires_at, error_code = row
+            if not actor.strip() or not reason.strip():
+                # 되돌리기 어려운 수동 개입이다 — 근거 없는 실행을 원장에 남기지 않는다
+                raise ValueError("redrive 는 actor 와 reason 이 필요하다")
             if status == "SUCCEEDED":
                 raise ValueError(f"{job_id} 는 이미 SUCCEEDED 다 — 다시 깨울 일이 없다")
+            if error_code == "STALE":
+                # 세대가 지난 window 의 job 이다(v0.7 10.5). 되살려도 claim 이 같은
+                # 비교에서 다시 DEAD 로 보내므로, terminal 이던 행을 성공할 수 없는
+                # non-terminal 로 바꿔 놓기만 한다 — 그 window 의 일은 correction
+                # commit 이 만든 새 세대 job 이 이미 맡고 있다.
+                raise ValueError(
+                    f"{job_id} 는 STALE 이다 — 새 세대 job 이 대신하므로 redrive 대상이 아니다"
+                )
             if status == "CLAIMED" and (
                 lease_expires_at is not None and lease_expires_at >= now
             ):
@@ -602,11 +617,18 @@ class JobLedger:
                     f"redrive event 가 이미 있다: {event_id} — "
                     "job.redrive_generation 과 outbox 가 어긋났다"
                 )
-            logger.warning(
-                "redrive: %s job %s (%s, 세대 %d→%d) → %s",
-                kind, job_id, status, generation, generation + 1, event_id,
+            cur.execute(
+                """
+                UPDATE dataset_commit_outbox SET last_error = %s WHERE event_id = %s
+                """,
+                (f"redrive by {actor} at {now.isoformat()}: {reason}", previous_event_id),
             )
-            return event_id
+        # 로그는 **커밋 뒤**다 — 트랜잭션 안에서 찍으면 롤백된 redrive 의 기록만 남는다
+        logger.warning(
+            "redrive: %s job %s (%s, 세대 %d→%d) → %s [%s: %s]",
+            kind, job_id, status, generation, generation + 1, event_id, actor, reason,
+        )
+        return event_id
 
     # ── outbox ────────────────────────────────────────────────
     def insert_outbox_event(

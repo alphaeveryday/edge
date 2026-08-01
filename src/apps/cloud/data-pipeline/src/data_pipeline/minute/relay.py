@@ -55,6 +55,15 @@ KNOWN_DESTINATIONS = frozenset({
     "news-extraction-backfill",
 })
 
+# 큐마다 실리는 사건의 종류. 큐는 가격·뉴스를 공유하지 않는다(v0.7 12.1)는 계약을
+# 소비단이 대조하는 데 쓴다 — 어느 큐에 무엇이 오는지가 어휘와 함께 한 곳에 있어야
+# 발행(Relay)과 대사(DLQ reconciler)가 갈리지 않는다.
+DESTINATION_JOB_KINDS = {
+    "price-analysis-realtime": "price",
+    "news-extraction-realtime": "news",
+    "news-extraction-backfill": "news",
+}
+
 # SQS 상한 (docs: SQS Developer Guide "Amazon SQS message quotas", 2026-08 확인) —
 # 배치 요청당 10건, 메시지 하나 1 MiB, 배치 합계도 1 MiB(SendMessageBatch API 참조).
 # ⚠️ 이 숫자는 **벤더 계약**이라 드리프트한다. 상한을 작게 잡으면 멀쩡한 메시지가

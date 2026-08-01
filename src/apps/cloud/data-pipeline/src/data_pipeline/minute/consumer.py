@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from .jobs import EVENT_TYPE_JOB_KINDS, JOB_EVENT_TYPES, JobLedger, build_event_id
+from .relay import DESTINATION_JOB_KINDS, KNOWN_DESTINATIONS
 from .states import JOB_DEAD, JOB_RETRY_WAIT, JOB_SUCCEEDED
 
 logger = logging.getLogger(__name__)
@@ -199,15 +200,17 @@ def parse_delivery(body: str) -> JobDelivery:
     job_id, generation = parts[1], int(parts[2])
     # 재조립해 **정확히** 대조한다 — 접두 event_type 불일치나 "007" 같은 비정규 표기를
     # 통과시키면 같은 job 이 서로 다른 event_id 로 두 번 살아난다(멱등 키가 깨진다).
-    if not _JOB_ID_PATTERN.match(job_id):
+    if not _JOB_ID_PATTERN.fullmatch(job_id):
         raise ValueError(f"job_id 가 sha256 hex 형상이 아니다: {job_id!r}")
     if build_event_id(event_type, job_id, generation) != event_id:
         raise ValueError(f"event_id 가 유도식과 다르다: {event_id!r}")
     # payload 는 kernel 에겐 불투명하지만(스키마는 7B/7C 소관), **identity 만은**
     # 봉투와 대조한다 — event_id 는 job A 를 가리키는데 payload 가 B 를 가리키면,
     # payload 를 믿는 handler 가 B 를 처리하고 kernel 은 A 를 SUCCEEDED 로 확정한다.
-    payload_job_id = payload.get("job_id")
-    if payload_job_id is not None and payload_job_id != job_id:
+    # 키가 **있으면** 반드시 일치해야 한다 — `null` 을 예외로 두면 그 한 값이 검사를
+    # 통째로 우회한다(경계 입력에 관대할 이유가 없다).
+    if "job_id" in payload and payload["job_id"] != job_id:
+        payload_job_id = payload["job_id"]
         raise ValueError(
             f"payload.job_id({payload_job_id!r})가 event_id 의 job({job_id})과 다르다"
         )
@@ -323,16 +326,17 @@ class ConsumerConfig:
             raise ValueError(f"visibility_seconds 는 1..{SQS_MAX_VISIBILITY_SECONDS} 이다")
         if self.heartbeat_seconds < 1:
             raise ValueError("heartbeat_seconds 는 1 이상이다")
-        # 만료 전에 연장이 **도착**해야 한다: 최악은 heartbeat 주기를 다 기다린 뒤
-        # SQS 호출이 예산만큼 걸리는 경우다. 주기만 보고(×2) 검증하면 visibility 2초에
-        # heartbeat 1초 같은 조합이 통과하는데, 그 호출은 최대 15초라 절대 못 닿는다.
-        # ⚠️ 남은 천장: heartbeat 는 배치를 **직렬로** 민다 — batch_size 가 크면 뒤쪽
-        # 메시지는 앞쪽 호출 시간만큼 늦으므로 visibility 도 그만큼 키워야 한다.
-        if self.heartbeat_seconds + SQS_CALL_BUDGET_SECONDS > self.visibility_seconds:
+        # 만료 전에 연장이 **도착**해야 한다. 최악은 heartbeat 주기를 다 기다린 뒤,
+        # 그 배치의 앞선 메시지들 연장이 각각 예산만큼 걸리는 경우다 — heartbeat 는
+        # 배치를 **직렬로** 민다. 주기만 보고 검증하면(×2) visibility 2초에 heartbeat
+        # 1초 같은 조합이 통과하는데 SQS 호출 하나가 최대 15초다.
+        required = self.heartbeat_seconds + self.batch_size * SQS_CALL_BUDGET_SECONDS
+        if required > self.visibility_seconds:
             raise ValueError(
-                f"visibility_seconds({self.visibility_seconds}) 가 "
-                f"heartbeat_seconds({self.heartbeat_seconds}) + SQS 호출 예산"
-                f"({SQS_CALL_BUDGET_SECONDS}초)보다 짧다 — 연장이 만료 전에 못 닿는다"
+                f"visibility_seconds({self.visibility_seconds}) 가 최악의 연장 지연"
+                f"(heartbeat {self.heartbeat_seconds}초 + {self.batch_size}건 × "
+                f"{SQS_CALL_BUDGET_SECONDS}초 = {required}초)보다 짧다 — "
+                "뒤쪽 메시지의 연장이 만료 전에 못 닿는다"
             )
         if self.lease_seconds < self.visibility_seconds:
             # DB lease 가 delivery 창보다 짧으면, 메시지가 아직 안 보이는 동안 job 만
@@ -585,12 +589,15 @@ class MinuteConsumer:
             # 네트워크·일시 장애가 여기로 온다). 재시도로 보내고 예산이 판정한다.
             logger.exception("job %s 처리 중 미분류 예외", delivery.job_id)
             return self._finish_retry(claimed, "UNCLASSIFIED", now)
-        if not isinstance(checksum, str) or not checksum.strip():
+        if not isinstance(checksum, str) or not _JOB_ID_PATTERN.fullmatch(checksum):
             # handler 계약 위반 — 근거가 **코드**(배포 회귀·adapter 결함)라 그 job 의
             # 성질이 아니다. 첫 시도에 terminal 로 확정하면 배포를 고쳐도 영향받은 job
             # 전부를 사람이 하나씩 redrive 해야 한다. 예산이 판정하게 둔다.
+            # 형상까지 본다 — 레포의 checksum 은 전부 소문자 sha256 hex 다
+            # (models.Sha256Hex). 아무 문자열이나 받으면 오타·잘린 digest 가
+            # SUCCEEDED 로 확정돼 나중에 아무와도 대조되지 않는다.
             logger.error(
-                "handler 가 result_checksum 문자열을 돌려주지 않았다: %r", checksum
+                "handler 가 sha256 hex result_checksum 을 돌려주지 않았다: %r", checksum
             )
             return self._finish_retry(claimed, "RESULT_CONTRACT", now)
         with claimed.lock:
@@ -664,6 +671,15 @@ class MinuteConsumer:
 
     # ── SQS 부수효과 (실패해도 DB 판정이 권위) ─────────────────
     def _heartbeat(self, claimed: _Claimed, now: datetime) -> None:
+        # ⚠️ 여기서 예외가 새면 정리 루프(finally)까지 무너진다 — 남은 실행이 lease
+        # 연장 없이 계속 돌아 재청구·중복 실행이 된다. keepalive 는 best-effort 다:
+        # 실패해도 판정 권위는 DB CAS 에 있고, 크게 기록만 남긴다.
+        try:
+            self._heartbeat_guarded(claimed, now)
+        except Exception:
+            logger.exception("heartbeat 실패: %s", claimed.delivery.job_id)
+
+    def _heartbeat_guarded(self, claimed: _Claimed, now: datetime) -> None:
         with claimed.lock:
             if claimed.settled:
                 # 실행 스레드가 이미 마감했다 — 여기서 visibility 를 밀면 그쪽이
@@ -721,6 +737,9 @@ class DlqReconciler:
     그런데 DB job 이 아직 non-terminal 이면 원장과 실제가 갈린 것이라, `SQS_MAX_RECEIVE`
     사유의 DEAD 로 수렴시킨다 — 그래야 운영자가 조회하고 redrive 할 수 있다.
 
+    ⚠️ **이 DLQ 에 올 수 없는 사건**(destination↔kind 불일치)은 건드리지 않는다 —
+    그 메시지의 DLQ 도착은 발행 배선이 틀렸다는 뜻이지 그 job 이 죽었다는 근거가 아니다.
+
     ⚠️ **메시지를 지우지 않는다.** 지우면 근거가 사라지고, 남기면 보존기간까지 남아
     사람이 볼 수 있다. 판정은 멱등이라(이미 DEAD 면 CAS no-op) 반복 실행이 안전하고,
     이번에 못 죽인 것(살아 있는 lease)은 **다음 실행**(주기 잡)이 수렴시킨다 — 한 실행
@@ -758,16 +777,27 @@ class DlqReconciler:
                     counts["repeat"] += 1
                     continue
                 self.seen.add(message.message_id)
-                counts[self._reconcile(message, now)] += 1
+                counts[self._reconcile(message, _destination, now)] += 1
         return counts
 
-    def _reconcile(self, message: ConsumerMessage, now: datetime) -> str:
+    def _reconcile(
+        self, message: ConsumerMessage, destination: str, now: datetime
+    ) -> str:
         try:
             delivery = parse_delivery(message.body)
         except ValueError:
             # DLQ 의 poison 은 여기서 판정할 수 없다 — 어느 job 인지 모른다.
             logger.exception("DLQ 메시지 파싱 실패: %s", message.message_id)
             return "poison"
+        if delivery.kind != DESTINATION_JOB_KINDS.get(destination):
+            # 이 DLQ 에 올 수 없는 사건이다 = 발행 destination 이 잘못됐다는 뜻이라,
+            # 이 메시지의 DLQ 도착은 그 job 이 죽었다는 근거가 아니다. 여기서 DEAD 로
+            # 확정하면 배선 오류 하나가 멀쩡한 다른 레인의 job 을 죽인다.
+            logger.error(
+                "DLQ(%s)에 %s 사건이 있다 — 발행 배선 오류: %s",
+                destination, delivery.kind, delivery.event_id,
+            )
+            return "misrouted"
         job = self.jobs.fetch_job(kind=delivery.kind, job_id=delivery.job_id)
         if job is None:
             logger.error("DLQ 메시지가 가리키는 job 행이 없다: %s", delivery.event_id)
@@ -816,20 +846,31 @@ def _resolve_queue_urls(settings) -> Mapping[str, str]:
             "(DLQ 자리에 원 큐가 들어갔는지 대조해야 살아 있는 job 몰살을 막는다)"
         )
     dlq_urls = dict(settings.minute_consumer.dlq_urls)
+    # 두 매핑 모두 **어휘 전체**를 덮어야 한다. relay 설정이 부실하면 `missing` 비교가
+    # 통과해 버려(둘 다 한 레인만 있으면 교집합이 빈다) 나머지 레인은 아무도 대사하지
+    # 않는다 — relay CLI 의 기동 검증은 이 경로에서 돌지 않는다.
+    for name, mapping in (
+        ("minute_relay.queue_urls", settings.minute_relay.queue_urls),
+        ("minute_consumer.dlq_urls", dlq_urls),
+    ):
+        unknown = sorted(set(mapping) - KNOWN_DESTINATIONS)
+        absent = sorted(KNOWN_DESTINATIONS - set(mapping))
+        if unknown or absent:
+            raise SystemExit(
+                f"{name} 이 큐 어휘와 다르다 — 미지: {unknown}, 누락: {absent}"
+            )
+    duplicated = sorted(
+        url for url in set(dlq_urls.values())
+        if sum(1 for value in dlq_urls.values() if value == url) > 1
+    )
+    if duplicated:
+        # 두 레인이 같은 DLQ 를 가리키면 한쪽은 한 번도 조회되지 않는데 명령은 성공한다
+        raise SystemExit(f"두 destination 이 같은 DLQ 를 가리킨다: {duplicated}")
     shared = sorted(set(dlq_urls.values()) & set(settings.minute_relay.queue_urls.values()))
     if shared:
         raise SystemExit(
             f"DLQ 매핑이 원 큐와 같은 URL 을 가리킨다: {shared} — "
             "정상 배달 중인 job 이 전부 DEAD 가 된다"
-        )
-    # 원 큐 destination 을 **전부** 덮어야 한다. 하나만 빠져도 그 레인의 job 은 DLQ 에
-    # 메시지가 쌓여도 아무도 대사하지 않아 원장에서 영원히 non-terminal 로 남는데,
-    # 명령은 나머지만 훑고 성공으로 끝나 부분 커버리지가 초록으로 보인다(Rule 12).
-    missing = sorted(set(settings.minute_relay.queue_urls) - set(dlq_urls))
-    if missing:
-        raise SystemExit(
-            f"DLQ 매핑에 빠진 destination 이 있다: {missing} — "
-            "그 레인의 job 은 아무도 대사하지 않는다"
         )
     return dlq_urls
 
@@ -860,7 +901,7 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
     totals: Counter = Counter()
     ticks = 0
     quiet_rounds = 0
-    swept = False
+    quiet = False
     while max_ticks is None or ticks < max_ticks:
         counts = reconciler.tick(datetime.now(timezone.utc))
         ticks += 1
@@ -874,26 +915,28 @@ def dlq_reconcile_cli(settings, *, max_ticks: int | None = None) -> int:
         # 다시 훑는다는 전제는 유지된다).
         quiet_rounds = quiet_rounds + 1 if counts["received"] == counts["repeat"] else 0
         if quiet_rounds >= 2:
-            swept = True
+            quiet = True
             break
     logger.info("dlq-reconcile 종료 — %d tick, %s", ticks, dict(sorted(totals.items())))
     # 판정 불가(poison·orphan·ahead)는 사람이 봐야 한다 — 0 으로 끝내면 아무도 모른다.
     unresolved = totals["poison"] + totals["orphan"] + totals["ahead"]
     if unresolved:
         logger.error("판정하지 못한 DLQ 메시지 %d건 — 사람이 봐야 한다", unresolved)
-    if not swept:
+    if not quiet:
         # max-ticks 상한이나 SIGTERM 으로 끊겼다 = 남은 메시지를 **보지도 못했다**.
         # 성공으로 보고하면 부분 실행이 완료로 위장된다(Rule 12).
-        logger.error("DLQ 를 끝까지 훑지 못했다(%d tick 에서 중단) — 재실행이 필요하다", ticks)
-    return 0 if swept and not unresolved else 1
+        logger.error("DLQ 대사가 중단됐다(%d tick) — 재실행이 필요하다", ticks)
+    return 0 if quiet and not unresolved else 1
 
 
-def redrive_cli(settings, *, kind: str, job_id: str) -> int:
+def redrive_cli(settings, *, kind: str, job_id: str, reason: str) -> int:
     """DB-first redrive 진입점 — `python -m data_pipeline.run redrive --kind news --job-id X`.
 
     콘솔에서 DLQ 메시지만 blind redrive 하지 않는다(v0.7 12.4): 여기서 DB 를 먼저
     되돌리고 새 delivery event 를 남기면 Relay 가 그걸 발행한다. 기존 DLQ 메시지는
     옮기지 않는다 — 세대가 낡아 Consumer 가 superseded 로 버린다.
+
+    `--reason` 은 필수다. 되돌리기 어려운 수동 개입이라 근거를 원장에 남긴다.
     """
     if settings.db is None:
         raise SystemExit("db 설정 없음 — redrive 는 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
@@ -901,9 +944,14 @@ def redrive_cli(settings, *, kind: str, job_id: str) -> int:
         raise SystemExit(f"--kind 는 {sorted(JOB_EVENT_TYPES)} 중 하나다: {kind!r}")
     from datetime import timezone
 
+    import getpass
+    import socket
+
     try:
         event_id = JobLedger(db=settings.db).redrive_job(
-            kind=kind, job_id=job_id, now=datetime.now(timezone.utc)
+            kind=kind, job_id=job_id, now=datetime.now(timezone.utc),
+            # 누가 했는지는 추론이 아니라 실행 환경에서 얻는다(감사 기록의 절반이다)
+            actor=f"{getpass.getuser()}@{socket.gethostname()}", reason=reason,
         )
     except (LookupError, ValueError) as error:
         raise SystemExit(f"redrive 중단: {error}") from error
