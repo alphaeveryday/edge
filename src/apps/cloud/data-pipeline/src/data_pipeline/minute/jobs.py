@@ -628,7 +628,25 @@ class JobLedger:
             )
             if cur.rowcount != 1:
                 raise RuntimeError(f"redrive CAS 거부 — {job_id} 의 상태가 그새 바뀌었다")
+            # 복사한 payload 가 **그 자체로** 발행 불가면 새 event 도 곧장 DEAD 다 —
+            # 세대만 오르고 job 은 계속 안 나간다. 크기는 여기서 결정적으로 검사할 수
+            # 있으니(엔벨로프까지 같은 함수로 만든다) 만들기 전에 막는다. 고칠 곳은
+            # **쓰는 쪽의 크기 계약**이고, 그 job 은 줄어든 payload 로 다시 커밋돼야 한다.
+            # 지연 import: relay 가 이 모듈을 import 하므로 최상단이면 순환이다.
+            from .relay import SQS_MAX_MESSAGE_BYTES, build_message_body
+
             event_id = build_event_id(event_type, job_id, generation + 1)
+            body_bytes = len(
+                build_message_body({
+                    "event_id": event_id, "event_type": event_type, "payload": payload,
+                }).encode("utf-8")
+            )
+            if body_bytes > SQS_MAX_MESSAGE_BYTES:
+                raise ValueError(
+                    f"payload 가 SQS 상한을 넘는다({body_bytes}B > "
+                    f"{SQS_MAX_MESSAGE_BYTES}B) — 복사해도 같은 이유로 다시 DEAD 다. "
+                    "쓰는 쪽 크기 계약으로 고치고 그 job 을 다시 커밋해야 한다"
+                )
             if not self._insert_outbox_tx(
                 cur, event_id=event_id, event_type=event_type, destination=target,
                 aggregate_id=job_id, generation=data_generation, payload=payload,

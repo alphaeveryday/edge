@@ -1128,6 +1128,16 @@ class TestRedrive:
         assert db.outbox[event_id]["destination"] == "news-extraction-realtime"
         assert db.outbox[event_id]["status"] == "NEW"
 
+    def test_oversized_payload_is_not_redrivable(self):
+        # 크기 초과로 격리된 event 를 그대로 복사하면 새 event 도 곧장 DEAD 다 —
+        # 세대만 오르고 job 은 계속 안 나간다(#456 봇 3차 지적). 고칠 곳은 쓰는 쪽이다.
+        db, ledger, job_id, _body = self._dead_job()
+        event = db.outbox[build_event_id(NEWS_EVENT_TYPE, job_id, 0)]
+        event.update(status="DEAD", payload={"body": "x" * 1_100_000})
+        with pytest.raises(ValueError, match="SQS 상한"):
+            ledger.redrive_job(kind="news", job_id=job_id, now=NOW,
+                               actor="tester@host", reason="테스트")
+
     def test_corrected_destination_must_match_the_event_type(self):
         db, ledger, job_id, _body = self._dead_job()
         with pytest.raises(ValueError, match="어긋난다"):
