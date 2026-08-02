@@ -40,6 +40,7 @@ from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.eod import qc_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.relay import relay_cli
+from .minute.worker import price_worker_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
@@ -150,7 +151,10 @@ def main(argv: list[str] | None = None) -> int:
                  "qc-minute-session",
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
-                 "plan-minute-session", "drain-minute-session"],
+                 "plan-minute-session", "drain-minute-session",
+                 # 1분 Price Worker(ALPHA-706): 상주 수집 루프(ECS Service). 원장 DB +
+                 # 토스 자격증명 + storage(artifact PUT) + --universe(planner 와 동일 파일).
+                 "price-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -177,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
     parser.add_argument("--max-ticks", type=int, default=None,
-                        help="relay: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용. "
+                        help="relay·price-worker: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용. "
                              "dlq-reconcile: 대사 회차 상한(미지정=보이는 메시지를 다 훑을 때까지)")
     parser.add_argument("--kind", default=None, choices=["news", "price"],
                         help="redrive: 되살릴 job 의 종류(news=news_extraction_job, price=price_window_job)")
@@ -190,11 +194,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-group", default=None,
                         help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
     parser.add_argument("--session-date", default=None,
-                        help="plan-minute-session: 세션 날짜 YYYY-MM-DD")
+                        help="plan-minute-session·price-worker: 세션 날짜 YYYY-MM-DD"
+                             "(price-worker 미지정=오늘 KST — planner 와 같은 값이어야 "
+                             "같은 session_id 가 유도된다)")
     parser.add_argument("--universe", default=None,
-                        help="plan-minute-session: 가격 세션의 universe JSON 경로(필수). "
-                             "window 범위와 universe_hash 가 여기서 나온다 — 빠뜨리면 "
-                             "시간외 구간이 무신호로 누락되므로 거부한다")
+                        help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
+                             "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
+                             "여기서 나온다 — 갈리면 Worker 가 처리를 거부한다")
     parser.add_argument("--session-id", default=None,
                         help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
@@ -225,9 +231,9 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.max_ticks is not None:
-        if args.step not in ("relay", "dlq-reconcile"):
+        if args.step not in ("relay", "dlq-reconcile", "price-worker"):
             raise SystemExit(
-                "--max-ticks 는 relay·dlq-reconcile 에서만 쓴다 — "
+                "--max-ticks 는 relay·dlq-reconcile·price-worker 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
@@ -258,11 +264,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step != "plan-minute-session" and (
         args.dataset is not None or args.source_group is not None
-        or args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
-            "--dataset·--source-group·--session-date·--universe 는 plan-minute-session "
-            f"에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+            "--dataset·--source-group 은 plan-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+    if args.step not in ("plan-minute-session", "price-worker") and (
+        args.session_date is not None or args.universe is not None
+    ):
+        raise SystemExit(
+            "--session-date·--universe 는 plan-minute-session·price-worker 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
@@ -311,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step == "drain-minute-session":
         return drain_session_cli(settings, session_id=args.session_id)
+    if args.step == "price-worker":
+        return price_worker_cli(settings, session_date=args.session_date,
+                                universe=args.universe, max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

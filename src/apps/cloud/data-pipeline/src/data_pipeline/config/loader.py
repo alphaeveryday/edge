@@ -33,6 +33,7 @@ from .models import (
     KisNavConfig,
     KisPriceConfig,
     MinuteConsumerConfig,
+    MinutePriceWorkerConfig,
     MinuteRelayConfig,
     KrxEtfConfig,
     NewsConfig,
@@ -106,6 +107,9 @@ class Settings(BaseSettings):
     # 1분 Consumer 운영 설정(ALPHA-672)은 `dlq-reconcile` 만 쓴다 — 미설정이면 그
     # 진입점이 fail-loud 한다.
     minute_consumer: MinuteConsumerConfig | None = None
+    # 1분 Price Worker(ALPHA-706)는 `price-worker` 스텝만 쓴다 — 미설정이면 그
+    # 진입점이 fail-loud 한다(토스 자격증명은 env 로만).
+    minute_price_worker: MinutePriceWorkerConfig | None = None
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

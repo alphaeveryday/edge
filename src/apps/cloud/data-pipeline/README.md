@@ -81,7 +81,13 @@
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
 > exit code 가 아니라 출력(`created`·`drain_requested`)이 말한다. ⚠️ `--dataset`·
 > `--source-group` 은 어휘 밖이면 거부한다: 오타 값으로 세션이 서면 그것을 처리하는
-> Worker 배선이 없어 하루가 통째로 안 돌면서도 원장은 정상으로 보인다)까지다.
+> Worker 배선이 없어 하루가 통째로 안 돌면서도 원장은 정상으로 보인다), **상주 Price
+> Worker 엔트리포인트**(ALPHA-706 — `run price-worker`, ECS Service 명령. session 은
+> 결정적 유도라 설정 source 오배선은 세션 부재로 기동 거부되고, destination·자격증명·
+> lease 조합(lease ≥ (1+budget)×75초, session_lease ≥ heartbeat 주기+최악 tick)은
+> 기동·로드 시점에 검증한다. `WorkerConfig.lease_seconds` 기본이 60→300 으로 오른
+> 이유이기도 하다 — 토스 tick 실측 73초+ 아래면 자기 claim 이 in-flight 중 만료된다.
+> News Worker 엔트리포인트는 프로덕션 feed 부재로 별도 티켓: ALPHA-707)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
@@ -926,6 +932,18 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # exit: 0=확정 / 1=원장이 스스로와 모순(사람이 봐야 한다) / 2=판정 자체를 못 함(재시도 가능).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run qc-minute-session --session-id <session_id>
+# 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
+# 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
+# 갈리면 다른 session_id 가 유도되거나 Worker 가 처리를 거부한다. SIGTERM 은 tick
+# 경계에서 멈추고 fence lease 를 즉시 반납한다(교체 무대기 인계). `--session-date`
+# 미지정=오늘(KST). `--max-ticks` 는 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window
+# 도 못 본 채 차단만 됐으면(경쟁 fence·universe 불일치) exit 1.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-open-v1 \
+  python -m data_pipeline.run price-worker --session-date 2026-08-04 \
+    --universe /path/universe.json
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
