@@ -276,6 +276,50 @@ def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
             "event_types": types, "fired": fired}
 
 
+def panel_with_probes(lake, tup, instrument_id: str, day: str) -> str:
+    """패널 + 측정 불가 시 자동 프로브. 판정자마다 같은 발견을 재발명하지 않는다."""
+    from dataclasses import replace as _rep
+
+    from .judge import panel_text
+    from .vocab import ExposureSource
+    out = [panel_text(lake, tup, instrument_id, day)]
+    if "n=0" in out[0] or "효과 미계산" in out[0]:
+        for fam, tr in (("거래량", "변화"), ("가격잔차", "누적")):
+            if (tup.exposure.ident, tup.exposure.transform) == (fam, tr):
+                continue
+            probe = _rep(tup, exposure=ExposureSource("속성", fam, tr))
+            out.append(f"\n[자동 프로브 - 측정 가능한 이웃 노출 ({fam}/{tr})]\n"
+                       + panel_text(lake, probe, instrument_id, day))
+    return "\n".join(out)
+
+
+_W = {}
+
+
+def _prep_init(ticker: str, iid: str, day: str) -> None:
+    """워커 초기화 - 프로세스당 레이크 1개 (duckdb 연결은 프로세스 경계를 못 넘는다)."""
+    _W.update(lake=CausalLake(), ticker=ticker, iid=iid, day=day)
+
+
+def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
+    """(eid, env_json, out_dir) → 심사 + 패널 파일. 반려는 사유 문자열로 돌려준다."""
+    import json as _json
+    from pathlib import Path
+
+    from .hypothesize import screen_tuples
+    eid, env_s, out_dir = item
+    env = _json.loads(env_s)
+    valid, rej = screen_tuples(env.get("hypotheses") or [],
+                               event_types=env.get("event_types") or [],
+                               series_families=env.get("series_families") or [])
+    if not valid:
+        return eid, "REJ " + " | ".join(rej)
+    (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
+    txt = panel_with_probes(_W["lake"], valid[0], _W["iid"], _W["day"])
+    (Path(out_dir) / f"panel_{eid}.txt").write_text(txt, encoding="utf-8")
+    return eid, "ok"
+
+
 def _cli() -> None:
     """하네스용 서브커맨드 - 결정론 조각을 낱개로 판다.
 
@@ -283,8 +327,9 @@ def _cli() -> None:
       validate <envelope.json>                 {"event_types":[],"series_families":[],
                                                 "hypotheses":[...]} → 심사 결과
       panel    <ticker> <iid> <day> <env.json> 튜플 1개의 패널 수치 (판정 없음)
-      panels   <ticker> <iid> <day> <dir> [패턴]  env 글롭 → panel_*.txt (웜 레이크 일괄).
-               패턴으로 샤딩해 여러 프로세스를 병렬로 돌린다 (예: "env_A*.json")
+      prep     <ticker> <iid> <day> <dir> <edges.json>  한 방: {"<ID>": envelope} 전체를
+               심사 + env_/panel_ 파일로. 패널은 프로세스 풀(≤4)로 **내장 병렬**
+      panels   <ticker> <iid> <day> <dir> [패턴]  env 글롭 → panel_*.txt (웜 레이크 일괄)
     """
     import json
     import pathlib
@@ -312,16 +357,28 @@ def _cli() -> None:
         for r in rejected:
             print(f"[REJ] {r}")
         return
+    if cmd == "prep":
+        # 한 방: edges.json({"<ID>": envelope}) → 심사 + env 분할 + 패널 병렬.
+        # 셀마다 손으로 하던 validate 루프·env 쪼개기·bash 샤딩이 이 안에 접힌다.
+        from concurrent.futures import ProcessPoolExecutor
+        tkr, iid, day, d = sys.argv[2], sys.argv[3], sys.argv[4], pathlib.Path(sys.argv[5])
+        edges = json.loads(pathlib_read(sys.argv[6]))
+        d.mkdir(parents=True, exist_ok=True)
+        items = [(eid, json.dumps(env, ensure_ascii=False), str(d))
+                 for eid, env in edges.items()]
+        bad = 0
+        with ProcessPoolExecutor(max_workers=min(4, len(items)),
+                                 initializer=_prep_init,
+                                 initargs=(tkr, iid, day)) as ex:
+            for eid, msg in ex.map(_prep_one, items):
+                print(f"{eid}: {msg}")
+                bad += msg.startswith("REJ")
+        raise SystemExit(1 if bad else 0)
     if cmd == "panels":
         # 웜 레이크 하나로 env_*.json 전부의 패널을 일괄 선계산한다.
         # 판정자마다 콜드 레이크 + edge_test 를 돌면 간선당 1~7분이 든다(실측) -
         # 첫 attach·프루닝이 지배 비용이라 한 프로세스로 접으면 간선당 수십 초가 된다.
-        # 판정자는 파일만 읽는 순수 추론이 되고, 빠른 모델(scout)로 내릴 수 있다.
-        from dataclasses import replace as _rep
-
         from .hypothesize import screen_tuples
-        from .judge import panel_text
-        from .vocab import ExposureSource
         lake = CausalLake()
         tkr, iid, day, d = sys.argv[2], sys.argv[3], sys.argv[4], pathlib.Path(sys.argv[5])
         pat = sys.argv[6] if len(sys.argv) > 6 else "env_*.json"
@@ -335,18 +392,8 @@ def _cli() -> None:
                 (d / f"panel_{eid}.txt").write_text("유효 튜플 없음:\n" + "\n".join(rej),
                                                     encoding="utf-8")
                 continue
-            tup = valid[0]
-            out = [panel_text(lake, tup, iid, day)]
-            if "n=0" in out[0] or "효과 미계산" in out[0]:
-                # 측정 불가 노출은 **코드가** 이웃으로 프로브한다 (특징 선택의 결정론 절반).
-                # 판정자마다 같은 발견을 재발명하던 것을 코드로 내린다 (Rule 5).
-                for fam, tr in (("거래량", "변화"), ("가격잔차", "누적")):
-                    if (tup.exposure.ident, tup.exposure.transform) == (fam, tr):
-                        continue
-                    probe = _rep(tup, exposure=ExposureSource("속성", fam, tr))
-                    out.append(f"\n[자동 프로브 - 측정 가능한 이웃 노출 ({fam}/{tr})]\n"
-                               + panel_text(lake, probe, iid, day))
-            (d / f"panel_{eid}.txt").write_text("\n".join(out), encoding="utf-8")
+            (d / f"panel_{eid}.txt").write_text(
+                panel_with_probes(lake, valid[0], iid, day), encoding="utf-8")
             print(f"{eid}: ok")
         return
     if cmd == "panel":
@@ -369,7 +416,7 @@ def pathlib_read(p: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep"):
         _cli()
         return
     if len(sys.argv) != 4:

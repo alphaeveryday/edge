@@ -54,21 +54,16 @@ cd $ENGINE && $ENV $PY -m edge_analysis.statics.causeflow facts <ticker.KS> <ins
 $ENV $PY -m edge_analysis.statics.causeflow validate .tmp/cf/<..>/env_<T>.json
 ```
 
-`[REJ]` 는 고쳐서 재심사. 간선 확정 후 **간선당 env 파일 1개**(env_M1.json …)로 쪼갠다.
-
-## 2.5 패널 선계산 (결정론 · 병렬 샤딩 · ~2.5분)
-
-판정자마다 콜드 레이크로 panel 을 돌리면 간선당 1~7분이 든다(실측 - 이게 최장
-판정자를 만들어 벽시계를 지배했다). 웜 레이크 일괄 + 대상별 샤딩:
+간선 전부를 **edges.json 하나**({"M1": envelope, "M2": …})로 모아 `prep` 한 방:
 
 ```bash
-cd $ENGINE && for P in A B C; do
-  $ENV $PY -m edge_analysis.statics.causeflow panels <ticker.KS> <iid> <day>     .tmp/cf/<..>/ "env_${P}*.json" &
-done; wait     # 3프로세스 × 3간선 ≈ 웜 34초/간선 → 벽시계 ~2분대
+$ENV $PY -m edge_analysis.statics.causeflow prep <ticker.KS> <iid> <day>   .tmp/cf/<..>/ .tmp/cf/<..>/edges.json
 ```
 
-측정 불가 노출(n=0)은 **코드가 자동 프로브**한다(거래량/변화 · 가격잔차/누적) -
-판정자마다 같은 발견을 재발명하지 않는다. 산출: `panel_<ID>.txt`.
+심사([REJ] 면 종료코드 1 - 고쳐서 재실행) + env_<ID>.json 분할 + 패널 계산을
+프로세스 풀(≤4)로 **내장 병렬** 처리한다. 측정 불가 노출(n=0)은 코드가 자동
+프로브(거래량/변화·가격잔차/누적) - 판정자마다 같은 발견을 재발명하지 않는다.
+산출: `env_<ID>.json` + `panel_<ID>.txt`. 실측: 2간선 10.6초(웜), 9간선 ~1분.
 
 ## 3. 검정 (서브에이전트 병렬 · task 1배치 · CLI 없음)
 
@@ -111,5 +106,7 @@ r(종목) = β_m×코스피 + β_s×섹터⊥ + e   ← facts 의 층 숫자 그
   벽시계 ~15분(검정 최장 10.5분). 원격 직렬 파이프라인은 38분에 간선 4/9.
 - 005930 07-30: 가설 9 → 성립 2·기각 7·판정불가 0 · ~12분. 역β 로테이션(-0.41 ×
   테마⊥ -4.77% = +1.96%p) 발견 - "반도체 급락일의 삼성 방어는 구조다".
-- 패널 선계산 도입 후 산식: 사실 2분 + 가설/심사 1분 + panels 샤딩 ~2.5분 +
-  scout 판정 ~1분 + SEM = **~7분**.
+- 000660 07-30(3세대): facts 119초 + panels 샤딩 171초 + scout 판정 24~42초 ≈ 6분.
+  가설 9 → 성립 3·기각 6·판정불가 0. scout 가 거울상 식별 논증을 폈다.
+- prep 도입 후 산식: facts 2분 + edges.json 작성 + prep ~1분 + scout ~40초 + SEM
+  = **~4분대**. 셀당 에이전트 동작 다섯 수: facts → edges.json → prep → 판정 배치 → SEM.
