@@ -19,7 +19,9 @@ import { LoadError } from './_shared/LoadError';
  * 없다"는 뜻이라 문구를 그렇게 쓴다. */
 const OPS: Record<OpsStatus, { label: string; tone: BadgeTone; desc: string }> = {
   READY: { label: '정상', tone: 'active', desc: '운영 결함으로 차단된 대상 없음' },
-  IN_PROGRESS: { label: '진행 중', tone: 'env', desc: '마감 전 — 필수 작업 판정 대기' },
+  /* "마감 전" 을 넣지 않는다 — RUNNING 런은 마감 경과 미귀결이 있어도 IN_PROGRESS 라,
+   * 헤더가 "마감 전"이라 말하며 결함 목록이 "마감 경과"를 보이는 모순이 생긴다 */
+  IN_PROGRESS: { label: '진행 중', tone: 'env', desc: '필수 작업 판정 대기' },
   DEGRADED: { label: '부분 결함', tone: 'warn', desc: '일부 필수 작업에 결함 — 아래 목록' },
   BLOCKED: { label: '차단', tone: 'blocked', desc: '런이 기동하지 못함 — 전 대상 영향' },
   UNKNOWN: { label: '확인 불가', tone: 'neutral', desc: '실행 여부를 신뢰성 있게 알 수 없음' },
@@ -84,7 +86,7 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
         {c.blocked > 0 && <> · 선행 미충족 <b style={{ color: '#b45309' }}>{c.blocked}</b></>}
         {c.pending > 0 && <> · 대기 <b>{c.pending}</b></>}
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          {' '}(계획 작업 전체 {c.due}개{c.skipped > 0 ? ` · 계획 스킵 ${c.skipped}개` : ''})
+          {' '}(실행 대상 {c.due}개{c.skipped > 0 ? ` · 계획 스킵 ${c.skipped}개` : ''})
         </span>
       </p>
 
