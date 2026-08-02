@@ -41,7 +41,14 @@ from datetime import datetime, timedelta
 
 from ..lake.storage import Storage
 from .commit import find_orphan_artifacts
-from .models import content_checksum
+from .models import (
+    EXTENDED_CLOSE,
+    EXTENDED_OPEN,
+    KST,
+    SESSION_CLOSE,
+    SESSION_OPEN,
+    content_checksum,
+)
 from .repository import MinuteLedger
 from .states import (
     WINDOW_CLAIMED,
@@ -58,6 +65,10 @@ logger = logging.getLogger(__name__)
 # orphan 스캔이 성립하는 dataset — `find_orphan_artifacts` 의 prefix 가 이 값에 묶여 있다.
 _PRICE_DATASET = "price_minute"
 _WINDOW_STEP = timedelta(minutes=1)
+# 계획의 양 끝이 될 수 있는 시각 — universe 가 정규장만인지 시간외까지인지에 따라 갈린다
+# (`plan_session_windows`). QC 는 universe 를 모르므로 둘 다 허용하고 그 밖만 걸러낸다.
+_SESSION_OPENS = frozenset({SESSION_OPEN, EXTENDED_OPEN})
+_SESSION_CLOSES = frozenset({SESSION_CLOSE, EXTENDED_CLOSE})
 
 # 하루가 정상적으로 끝났다고 말할 수 있는 window 상태 — 나머지는 사람이 봐야 한다.
 _COMPLETE_STATUSES = frozenset({WINDOW_VALID, WINDOW_VALID_EMPTY})
@@ -99,12 +110,7 @@ class SessionQc:
             session_id=session_id, now=now
         )
         rows = self.ledger.session_window_rows(session_id=session_id)
-        counts = {status: 0 for status in _REPORTED_STATUSES}
-        for _, status, _, _ in rows:
-            # 미지 상태를 조용히 버리면 그 window 가 어느 칸에도 안 세어져 합이 안 맞는다
-            if status not in counts:
-                raise ValueError(f"window 원장에 미지 data_status 가 있다: {status!r}")
-            counts[status] += 1
+        counts = _count_statuses(rows)
 
         orphans, orphan_scanned = self._scan_orphans(session_id, session)
 
@@ -128,19 +134,22 @@ class SessionQc:
             # 위반이 있는데 FINALIZED 로 봉인하면, 그 하루는 "확정됨"으로 보이면서 안이
             # 비어 있다. 되돌릴 수 있는 상태(FAILED)로 두고 사람이 보게 한다.
             logger.error("세션 QC 불변식 위반 session=%s: %s", session_id, violations)
-            if not self.ledger.fail_session_qc(session_id=session_id, now=now):
+            if not self.ledger.fail_session_qc(
+                session_id=session_id, fence_token=session["fence_token"], now=now
+            ):
                 # 내 QC_RUNNING 이 아니다 — 다른 실행이 그새 phase 를 바꿨다. 내 스냅샷은
                 # 낡았으므로 FAILED 라고 보고하면 원장과 정반대인 결과를 내놓게 된다.
                 raise SessionQcRejected(
                     f"위반 기록 실패(다른 실행이 phase 를 바꿨다): {session_id}"
                 )
-            return {**summary, "ok": False, "phase": "FAILED"}
+            return {**summary, "ok": False, "phase": "FAILED", "reused": False}
 
         if not self.ledger.finalize_session(
-            session_id=session_id, final_checksum=summary["final_checksum"],
+            session_id=session_id, fence_token=session["fence_token"],
+            final_checksum=summary["final_checksum"],
             final_generation=summary["final_generation"], now=now,
         ):
-            # 내 QC_RUNNING 이 아니다 — 다른 실행이 그새 확정했거나 phase 가 바뀌었다.
+            # 내 QC 가 아니다 — 다른 실행이 그새 재진입(token 증가)했거나 phase 가 바뀌었다.
             # 그쪽 판정을 덮지 않는다.
             raise SessionQcRejected(f"확정 실패(다른 실행이 phase 를 바꿨다): {session_id}")
 
@@ -160,7 +169,7 @@ class SessionQc:
             session_id, len(rows), summary["complete_count"],
             counts[WINDOW_MISSING], summary["final_checksum"][:12],
         )
-        return {**summary, "ok": True, "phase": "FINALIZED"}
+        return {**summary, "ok": True, "phase": "FINALIZED", "reused": False}
 
     def _already_finalized(self, session_id: str) -> dict:
         """확정된 세션의 판정을 원장에서 되읽어 그대로 돌려준다(재실행 no-op).
@@ -169,20 +178,42 @@ class SessionQc:
         아니라 **다른 사건**이고, 여기서 다시 계산해 내놓으면 확정된 값과 조용히 갈린다.
         확정 시점의 값이 그 세션의 답이다.
         """
-        recorded = self.ledger.session_final_result(session_id=session_id)
-        if recorded is None:
+        session = self.ledger.session_snapshot(session_id=session_id)
+        if session is None:
             raise SessionQcRejected(f"세션이 없다: {session_id}")
-        final_checksum, final_generation = recorded
+        final_checksum = session["final_checksum"]
+        final_generation = session["final_generation"]
         if final_checksum is None:
             # FINALIZED 도 아니고 QC 자격도 없다 = 아직 DRAINED 에 못 갔다(ACTIVE·DRAINING).
             raise SessionQcRejected(
                 f"QC 자격이 없다: {session_id} — DRAINED/QC_RUNNING/FAILED 가 아니다"
             )
+        # 결과 **형상은 정상 경로와 같아야 한다** — 키가 빠지면 소비자가 실패하거나 없는
+        # 키를 0 으로 읽어 "위반 없음"으로 오독한다. 읽기만으로 되는 것(집계·orphan)은
+        # 다시 계산하고, 확정값(checksum·generation)은 **기록된 것**을 쓴다.
+        rows = self.ledger.session_window_rows(session_id=session_id)
+        orphans, orphan_scanned = self._scan_orphans(session_id, session)
+        recomputed = _final_checksum(rows)
         logger.info("이미 확정된 세션 — 기록된 판정을 그대로 보고한다: %s", session_id)
         return {
-            "session_id": session_id, "ok": True, "phase": "FINALIZED",
-            "final_checksum": final_checksum, "final_generation": final_generation,
-            "reused": True,
+            "session_id": session_id,
+            "session_date": session["session_date"].isoformat(),
+            "expected_window_count": session["expected_window_count"],
+            "window_count": len(rows),
+            "missing_confirmed": 0,          # 이 실행은 아무것도 확정하지 않았다
+            "counts": _count_statuses(rows),
+            "complete_count": sum(
+                1 for _, status, _, _ in rows if status in _COMPLETE_STATUSES
+            ),
+            "orphan_artifacts": orphans,
+            "orphan_scanned": orphan_scanned,
+            "violations": [],
+            "final_checksum": final_checksum,
+            "final_generation": final_generation,
+            # 확정 뒤 원장이 바뀌었으면 여기서 갈린다 — 조용히 덮지 않고 드러낸다
+            # (확정값은 기록된 쪽이 정본이다).
+            "checksum_matches_record": recomputed == final_checksum,
+            "ok": True, "phase": "FINALIZED", "reused": True,
         }
 
     def _scan_orphans(self, session_id: str, session: dict) -> tuple[list[str], bool]:
@@ -228,7 +259,7 @@ class SessionQc:
         # 쓰면 planner 가 390분 중 389분만 만들어도 389==389 로 통과해, 빠진 분은 MISSING
         # 행조차 없이 확정된다. 대신 **행들이 스스로 말하는 것**을 본다: 1분 간격으로
         # 빈틈없이 이어지는가(계획은 연속된 분을 만든다 — plan_session_windows).
-        violations.extend(_gap_violations(rows))
+        violations.extend(_plan_violations(rows))
         return violations
 
 
@@ -236,8 +267,12 @@ def qc_session_cli(settings, *, session_id: str | None, source: str, market: str
     """`python -m data_pipeline.run qc-minute-session --session-id <id>` (EOD SFN 이 부른다).
 
     exit code 가 세 갈래인 이유는 처방이 다르기 때문이다 — 0=확정, 1=판정은 됐는데 원장이
-    스스로와 모순(사람이 봐야 한다), 2=판정 자체를 못 함(자격 없음·설정 없음). 하나로
-    뭉치면 SFN 이 "다시 돌려도 되는 실패"와 "고쳐야 하는 실패"를 구분하지 못한다.
+    스스로와 모순(사람이 봐야 한다), 2=판정 자체를 못 함(자격 없음·설정 결손·DB/S3 장애).
+    하나로 뭉치면 SFN 이 "다시 돌려도 되는 실패"와 "고쳐야 하는 실패"를 구분하지 못한다.
+
+    ⚠️ 이 계약은 **이 함수에 도달한 뒤**에만 성립한다. 설정 파일 자체를 못 읽는 경우
+    (`--config` 오타 → `ConfigError`)는 `run.py` 의 공통 진입부에서 나므로 프로세스가 1 을
+    낸다 — 그건 전 스텝 공통 경로라 여기서 바꾸지 않는다(바꾸려면 진입부 전체의 규약이다).
     """
     import json
     from datetime import datetime, timedelta, timezone
@@ -272,13 +307,38 @@ def qc_session_cli(settings, *, session_id: str | None, source: str, market: str
     return 0 if result["ok"] else 1
 
 
-def _gap_violations(rows: list) -> list[str]:
-    """window 목록이 1분 간격으로 이어지는가 — 계획 결손을 행 자체에서 잡는다.
+def _count_statuses(rows: list) -> dict:
+    """상태별 집계 — 0 건인 축도 키가 남는다(조용한 0 금지). 미지 상태는 fail loud."""
+    counts = {status: 0 for status in _REPORTED_STATUSES}
+    for _, status, _, _ in rows:
+        # 미지 상태를 조용히 버리면 그 window 가 어느 칸에도 안 세어져 합이 안 맞는다
+        if status not in counts:
+            raise ValueError(f"window 원장에 미지 data_status 가 있다: {status!r}")
+        counts[status] += 1
+    return counts
+
+
+def _plan_violations(rows: list) -> list[str]:
+    """계획 자체가 온전한가 — 빈 계획·양 끝 누락·중간 구멍.
 
     빠진 분은 원장에 **행이 없어서** 어떤 상태 집계에도 안 잡힌다("없는 것"과 "안 만든 것"이
-    같아 보인다). 간격을 보면 그 구멍이 드러난다.
+    같아 보인다). 그래서 세 가지를 따로 본다 — 간격만 보면 **첫 분이나 마지막 분이 통째로
+    빠진 계획**이 연속으로 보여 그대로 확정된다(1라운드 수정이 남긴 구멍).
+
+    양 끝은 거래시간 상수로 판정한다: 계획은 세션 개장에서 시작해 폐장에서 끝난다
+    (`plan_session_windows`). universe 를 모르므로 정규장·시간외 **둘 다 허용**하고,
+    그 밖의 값만 위반으로 본다.
     """
+    if not rows:
+        # 행이 하나도 없으면 "완전한 하루"가 공허참이 된다(집계도 0, 간격도 없음)
+        return ["window 행이 하나도 없다 — 계획이 실행되지 않았다"]
     violations = []
+    first_open = rows[0][0].astimezone(KST).time()
+    last_close = (rows[-1][0] + _WINDOW_STEP).astimezone(KST).time()
+    if first_open not in _SESSION_OPENS:
+        violations.append(f"계획 첫 window 가 개장 시각이 아니다: {first_open}")
+    if last_close not in _SESSION_CLOSES:
+        violations.append(f"계획 마지막 window 가 폐장 시각이 아니다: {last_close}")
     for previous, current in zip(rows, rows[1:]):
         gap = current[0] - previous[0]
         if gap != _WINDOW_STEP:

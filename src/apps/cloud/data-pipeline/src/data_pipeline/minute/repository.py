@@ -525,15 +525,24 @@ class MinuteLedger:
 
         `FINALIZED` 는 자격이 없다(None) — 확정된 하루를 다시 열지 않는다. 정정이 필요하면
         correction 경로가 새 세대를 만든다(v0.7 10.5).
+
+        ⚠️ **fencing token 을 올리고 돌려준다.** phase 만으로 CAS 하면 ABA 가 통과한다:
+        실행 A 가 스냅샷을 뜬 뒤 멈추고, B 가 FAILED 로 바꾸고, C 가 다시 QC_RUNNING 으로
+        들어와도, A 의 늦은 확정이 "지금 QC_RUNNING 이다"만 보고 성공해 **C 의 판정을
+        덮는다**(단방향 FINALIZED 를 낡은 checksum 으로 만든다). 재진입을 여는 대신
+        소유권을 토큰으로 증명한다. Worker 용 컬럼을 함께 쓰는 건 안전하다 — 이 phase
+        에서는 fence 획득·claim·결과 기록이 모두 막혀 있어 경쟁자가 없다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE minute_ingestion_session
-                SET phase = 'QC_RUNNING', updated_at = now()
+                SET phase = 'QC_RUNNING',
+                    worker_fencing_token = worker_fencing_token + 1,
+                    updated_at = now()
                 WHERE session_id = %s AND phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')
                 RETURNING dataset, source_group, session_date, expected_window_count,
-                          universe_version
+                          universe_version, worker_fencing_token
                 """,
                 (session_id,),
             )
@@ -542,7 +551,7 @@ class MinuteLedger:
             return None
         return dict(zip(
             ("dataset", "source_group", "session_date", "expected_window_count",
-             "universe_version"), row, strict=True,
+             "universe_version", "fence_token"), row, strict=True,
         ))
 
     def confirm_missing_windows(self, *, session_id: str, now: datetime) -> int:
@@ -578,23 +587,31 @@ class MinuteLedger:
             )
             return cur.rowcount
 
-    def session_final_result(self, *, session_id: str) -> tuple[str | None, int | None] | None:
-        """확정된 세션이 기록한 (final_checksum, final_generation). 세션이 없으면 None.
+    def session_snapshot(self, *, session_id: str) -> dict | None:
+        """세션 한 행의 QC 관련 값 — 없으면 None.
 
-        QC 재실행이 **이미 FINALIZED 인 세션**을 만났을 때 쓴다 — 확정 직후 출력 전에 죽은
-        실행을 재시도하면 그 판정을 다시 읽어 돌려줘야 한다. 못 읽으면 정상 확정된 하루가
-        재시도마다 실패로 보인다.
+        QC 재실행이 **이미 FINALIZED 인 세션**을 만났을 때 쓴다: 확정 직후 출력 전에 죽은
+        실행을 재시도하면 그 판정을 다시 읽어 돌려줘야 한다(못 읽으면 정상 확정된 하루가
+        재시도마다 실패로 보인다). 필요한 값을 한 번에 읽는다 — 같은 행을 두 번 조회하면
+        그 사이에 바뀐 값으로 서로 안 맞는 보고가 나온다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT final_checksum, final_generation
+                SELECT dataset, source_group, session_date, expected_window_count,
+                       universe_version, phase, final_checksum, final_generation
                 FROM minute_ingestion_session WHERE session_id = %s
                 """,
                 (session_id,),
             )
             row = cur.fetchone()
-        return None if row is None else (row[0], row[1])
+        if row is None:
+            return None
+        return dict(zip(
+            ("dataset", "source_group", "session_date", "expected_window_count",
+             "universe_version", "phase", "final_checksum", "final_generation"),
+            row, strict=True,
+        ))
 
     def session_window_rows(self, *, session_id: str) -> list[tuple]:
         """QC 판정 입력 — (window_start, data_status, generation, checksum) 결정적 정렬.
@@ -615,10 +632,10 @@ class MinuteLedger:
             return list(cur.fetchall())
 
     def finalize_session(
-        self, *, session_id: str, final_checksum: str, final_generation: int | None,
-        now: datetime,
+        self, *, session_id: str, fence_token: int, final_checksum: str,
+        final_generation: int | None, now: datetime,
     ) -> bool:
-        """`QC_RUNNING` → `FINALIZED` CAS. 내 QC 가 아니면 False.
+        """`QC_RUNNING` → `FINALIZED` CAS. **내 QC** 가 아니면 False(token 대조).
 
         `finalized_through` 는 채우지 않는다 — 스키마 주석대로 correction 대기기간이
         업무상 필요할 때만 쓰는 컬럼이고, 지금은 그 정책이 없다(있는 것처럼 채우면
@@ -631,12 +648,13 @@ class MinuteLedger:
                 SET phase = 'FINALIZED', final_checksum = %s, final_generation = %s,
                     updated_at = now()
                 WHERE session_id = %s AND phase = 'QC_RUNNING'
+                  AND worker_fencing_token = %s
                 """,
-                (final_checksum, final_generation, session_id),
+                (final_checksum, final_generation, session_id, fence_token),
             )
             return cur.rowcount == 1
 
-    def fail_session_qc(self, *, session_id: str, now: datetime) -> bool:
+    def fail_session_qc(self, *, session_id: str, fence_token: int, now: datetime) -> bool:
         """`QC_RUNNING` → `FAILED` CAS — 불변식 위반을 phase 로 드러낸다.
 
         사유 컬럼이 없어 **원장에는 사유가 안 남는다**(로그·CLI 출력이 그 자리다).
@@ -648,8 +666,9 @@ class MinuteLedger:
                 UPDATE minute_ingestion_session
                 SET phase = 'FAILED', updated_at = now()
                 WHERE session_id = %s AND phase = 'QC_RUNNING'
+                  AND worker_fencing_token = %s
                 """,
-                (session_id,),
+                (session_id, fence_token),
             )
             return cur.rowcount == 1
 

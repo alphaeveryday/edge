@@ -102,6 +102,15 @@ class _Cursor:
             self._insert_window(params)
         elif "SET expected_window_count = ( SELECT COUNT(*)" in s:
             self._refresh_window_count(params)
+        elif "SET phase = 'QC_RUNNING'" in s:
+            # EOD QC 진입(ALPHA-693). 재진입 phase 집합이 SQL 에서 빠지면 중간에 죽은 QC 가
+            # 그 세션을 영영 못 끝내게 만든다 — fake 가 합성하기 전에 문면을 못 박는다.
+            assert "phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')" in s, \
+                "begin_qc SQL 에 재진입 phase 집합이 없다"
+            # 토큰을 안 올리면 phase-only CAS 라 ABA 가 통과한다(낡은 실행이 새 판정을 덮는다)
+            assert "worker_fencing_token = worker_fencing_token + 1" in s, \
+                "begin_qc SQL 이 QC 소유권 토큰을 올리지 않는다"
+            self._begin_qc(params)
         elif "worker_fencing_token = worker_fencing_token + 1" in s:
             self._acquire_fence(params)
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at = NULL"):
@@ -132,12 +141,6 @@ class _Cursor:
                 self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
-        elif "SET phase = 'QC_RUNNING'" in s:
-            # EOD QC 진입(ALPHA-693). 재진입 phase 집합이 SQL 에서 빠지면 중간에 죽은 QC 가
-            # 그 세션을 영영 못 끝내게 만든다 — fake 가 합성하기 전에 문면을 못 박는다.
-            assert "phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')" in s, \
-                "begin_qc SQL 에 재진입 phase 집합이 없다"
-            self._begin_qc(params)
         elif s.startswith("UPDATE minute_ingestion_window w") and "'MISSING'" in s:
             # phase 바인딩이 빠지면 살아 있는 세션의 DUE 를 전부 죽인다(그날 데이터 소멸)
             assert "s.phase = 'QC_RUNNING'" in s, "confirm_missing_windows SQL 에 phase 가드가 없다"
@@ -152,19 +155,25 @@ class _Cursor:
                  for w in self.db.windows.values() if w["session_id"] == params[0]),
                 key=lambda row: row[0],
             )
-        elif s.startswith("SELECT final_checksum, final_generation"):
+        elif s.startswith("SELECT dataset, source_group, session_date"):
             row = self.db.sessions.get(params[0])
             if row is not None:
-                self._rows = [(row.get("final_checksum"), row.get("final_generation"))]
+                self._rows = [(
+                    row["dataset"], row["source_group"], row["session_date"],
+                    row["expected_window_count"], row["universe_version"], row["phase"],
+                    row.get("final_checksum"), row.get("final_generation"),
+                )]
         elif "SET phase = 'FINALIZED'" in s:
             # CAS 가 SQL 에서 빠지면 다른 실행이 이미 바꾼 phase 를 덮어쓴다 — fake 가
             # 파이썬으로 재검사해 주면 그 회귀가 계속 초록으로 보인다(Rule 9)
             assert "AND phase = 'QC_RUNNING'" in s, "finalize_session SQL 에 phase CAS 가 없다"
-            self._finish_qc(params[2], "FINALIZED",
+            assert "worker_fencing_token = %s" in s, "finalize_session SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[2], "FINALIZED", fence_token=params[3],
                             final_checksum=params[0], final_generation=params[1])
         elif "SET phase = 'FAILED'" in s:
             assert "AND phase = 'QC_RUNNING'" in s, "fail_session_qc SQL 에 phase CAS 가 없다"
-            self._finish_qc(params[0], "FAILED")
+            assert "worker_fencing_token = %s" in s, "fail_session_qc SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[0], "FAILED", fence_token=params[1])
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
@@ -326,8 +335,10 @@ class _Cursor:
         if row is None or row["phase"] not in ("DRAINED", "QC_RUNNING", "FAILED"):
             return
         row["phase"] = "QC_RUNNING"
+        row["worker_fencing_token"] = row.get("worker_fencing_token", 0) + 1
         self._rows = [(row["dataset"], row["source_group"], row["session_date"],
-                       row["expected_window_count"], row["universe_version"])]
+                       row["expected_window_count"], row["universe_version"],
+                       row["worker_fencing_token"])]
 
     def _confirm_missing(self, p):
         session_id, now = p
@@ -343,9 +354,11 @@ class _Cursor:
                 changed += 1
         self.rowcount = changed
 
-    def _finish_qc(self, session_id, phase, *, final_checksum=None, final_generation=None):
+    def _finish_qc(self, session_id, phase, *, fence_token, final_checksum=None,
+                   final_generation=None):
         row = self.db.sessions.get(session_id)
-        if row is None or row["phase"] != "QC_RUNNING":
+        if (row is None or row["phase"] != "QC_RUNNING"
+                or row.get("worker_fencing_token") != fence_token):
             self.rowcount = 0
             return
         row["phase"] = phase

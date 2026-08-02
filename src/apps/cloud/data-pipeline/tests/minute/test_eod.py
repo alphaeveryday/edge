@@ -27,37 +27,37 @@ from minutefakes import FakeMinuteDB
 from data_pipeline.config import DbConfig
 from data_pipeline.lake.storage import LocalStorage
 from data_pipeline.minute.eod import SessionQc, SessionQcRejected
-from data_pipeline.minute.models import KST
+from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
 
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 7, 31)
 NOW = datetime(2026, 7, 31, 16, 0, tzinfo=KST)
 _OPEN = datetime(2026, 7, 31, 9, 0, tzinfo=KST)
-# plan_session 은 half-open (start, end) 쌍을 받는다 — 원장 계약 그대로 쓴다
-WINDOW_PAIRS = tuple(
-    (_OPEN + timedelta(minutes=n), _OPEN + timedelta(minutes=n + 1)) for n in range(3)
-)
+# ⚠️ **실제 planner 가 만드는 하루**를 쓴다(390 window). 짧은 가짜 세션(3분)으로 두면
+# 계획의 양 끝을 보는 게이트를 만들 수 없고, 그 게이트가 빠진 채로도 테스트가 초록이다 —
+# 즉 "첫 분이 통째로 빠진 계획"의 반례를 영영 못 만든다.
+UNIVERSE = Universe(universe_version="v1", etf_ids=("E1",), constituent_ids=("C1",))
+WINDOW_PAIRS = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
 WINDOWS = tuple(start for start, _ in WINDOW_PAIRS)
 
 
-def make_session(db, *, statuses, phase="DRAINED", expected=None):
-    """window 상태를 지정해 세션 하나를 만든다 — 원장 API 로 만들 수 없는 결손 상태를
-    직접 놓는다(그 상태에 이르는 경로는 Worker·drain 테스트가 이미 고정한다)."""
+def make_session(db, *, statuses=(), phase="DRAINED"):
+    """하루치(390 window) 세션 하나. `statuses` 는 **앞쪽 window 부터** 덮어쓰고 나머지는
+    VALID 다 — 원장 API 로 만들 수 없는 결손 상태를 직접 놓는다(거기 이르는 경로는
+    Worker·drain 테스트가 이미 고정한다)."""
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
-        universe_version="v1", universe_hash="h1",
-        windows=WINDOW_PAIRS[:len(statuses)],
+        universe_version="v1", universe_hash="h1", windows=WINDOW_PAIRS,
     )
-    for index, (window_start, status) in enumerate(zip(WINDOWS, statuses, strict=True)):
+    for index, window_start in enumerate(WINDOWS):
+        status = statuses[index] if index < len(statuses) else "VALID"
         window = db.windows[(session_id, window_start)]
         window["data_status"] = status
         window["generation"] = 0 if status in ("DUE", "CLAIMED") else index + 1
         window["checksum"] = None if status in ("DUE", "CLAIMED") else f"c{index}"
     db.sessions[session_id]["phase"] = phase
-    if expected is not None:
-        db.sessions[session_id]["expected_window_count"] = expected
     return ledger, session_id
 
 
@@ -121,7 +121,7 @@ class TestMissingConfirmation:
         assert set(result["counts"]) == {
             "VALID", "VALID_EMPTY", "INCOMPLETE", "MISSING", "INVALID", "DUE", "CLAIMED",
         }
-        assert result["complete_count"] == 3
+        assert result["complete_count"] == len(WINDOWS)
 
 
 class TestReentry:
@@ -165,6 +165,24 @@ class TestReentry:
         assert (second["ok"], second["phase"], second["reused"]) == (True, "FINALIZED", True)
         assert second["final_checksum"] == first["final_checksum"]
         assert db.sessions[session_id]["phase"] == "FINALIZED"
+
+    def test_stale_run_cannot_overwrite_a_later_verdict(self, tmp_path):
+        # ⚠️ 재진입을 열면 ABA 가 생긴다: A 가 스냅샷을 뜬 뒤 멈추고 → B 가 FAILED 로 →
+        # C 가 다시 들어오면, A 의 늦은 확정이 "지금 QC_RUNNING 이다"만 보고 성공해
+        # **C 의 판정을 낡은 checksum 으로 덮는다**(FINALIZED 는 단방향이다).
+        db = FakeMinuteDB()
+        ledger, session_id = make_session(db, statuses=("VALID", "MISSING", "VALID"))
+        stale = ledger.begin_qc(session_id=session_id, now=NOW)      # 실행 A
+        ledger.begin_qc(session_id=session_id, now=NOW)              # 실행 C 재진입
+
+        assert ledger.finalize_session(
+            session_id=session_id, fence_token=stale["fence_token"],
+            final_checksum="stale", final_generation=1, now=NOW,
+        ) is False
+        assert ledger.fail_session_qc(
+            session_id=session_id, fence_token=stale["fence_token"], now=NOW
+        ) is False
+        assert db.sessions[session_id]["phase"] == "QC_RUNNING"
 
     def test_session_that_never_drained_is_rejected(self, tmp_path):
         db = FakeMinuteDB()
@@ -234,6 +252,37 @@ class TestInvariantViolations:
         result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
         assert result["ok"] is False
         assert any("간격" in v for v in result["violations"])
+
+    def test_missing_first_window_fails_even_though_the_rest_is_contiguous(self, tmp_path):
+        # ⚠️ 간격만 보는 게이트가 놓치는 자리다 — 첫 분이 통째로 빠지면 나머지는 완벽히
+        # 연속이라 구멍이 안 보이고, expected_window_count 도 COUNT(*) 로 따라간다.
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        del db.windows[(session_id, WINDOWS[0])]
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("개장" in v for v in result["violations"])
+
+    def test_missing_last_window_fails(self, tmp_path):
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        del db.windows[(session_id, WINDOWS[-1])]
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("폐장" in v for v in result["violations"])
+
+    def test_empty_plan_is_not_a_complete_day(self, tmp_path):
+        # 행이 없으면 집계도 0, 간격도 없다 — 공허참으로 "완전한 하루"가 된다
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        for window_start in WINDOWS:
+            del db.windows[(session_id, window_start)]
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("행이 하나도 없다" in v for v in result["violations"])
 
     def test_unknown_status_is_not_silently_dropped(self, tmp_path):
         db = FakeMinuteDB()
