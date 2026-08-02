@@ -246,6 +246,35 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
             WHERE p.close_price > 0 AND p.trade_date <= {trade_date}
         ) _a
     ),
+    v_entity AS (
+        -- 엔티티 원장. 상장사만이 아니라 인물·기관·제품까지 - 역할 인자가 가리키는 대상.
+        SELECT e.entity_id, e.entity_type, e.display_name, e.status
+        FROM {prefix}entity e WHERE e.status <> 'MERGED'
+    ),
+    v_thread AS (
+        -- 사건 스레드: 같은 사태의 연속 보도를 하나로 묶은 것. novelty 가 여기 있다
+        -- (신규 보도인가 후속인가) - PIT: 평가 시각이 as_of 이전인 링크만.
+        SELECT tl.source_event_id, tl.thread_id, tl.novelty_status, tl.link_type,
+               t.thread_key, t.event_type_code, t.current_stage, t.opened_at
+        FROM {prefix}event_thread_link tl
+        JOIN {prefix}event_thread t ON t.thread_id = tl.thread_id
+        WHERE tl.evaluated_at <= {as_of}
+    ),
+    v_news AS (
+        -- 뉴스 원장. available_at 이 곧 정보 도달 시각 - 클램프의 본체다.
+        SELECT d.document_id, d.source_code, d.source_document_id, d.title,
+               d.published_at, d.available_at, n.lead_text, n.dedup_cluster_id,
+               n.theme_concept_id, n.representative_document_id
+        FROM {prefix}document d
+        LEFT JOIN {prefix}news_document n ON n.document_id = d.document_id
+        WHERE d.available_at <= {as_of}
+    ),
+    v_event_news AS (
+        -- 사건 ↔ 근거 문서. '무엇을 보고 그 사건이라 했나'의 연결 - 접지의 뿌리.
+        SELECT DISTINCT ev.source_event_id, da.document_id
+        FROM {prefix}event_evidence ev
+        JOIN {prefix}document_assertion da ON da.assertion_id = ev.assertion_id
+    ),
     v_cohort AS (
         SELECT e.instrument_id, e.trade_date, e.source_event_id, e.event_type_code,
                e.predicate_code, e.role_code, e.lifecycle_stage,

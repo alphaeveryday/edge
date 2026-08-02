@@ -389,3 +389,41 @@ def test_panels_never_touch_base_tables_directly():
     shared = views_sql("TIMESTAMP '2026-06-01 00:00:00'", "DATE '2026-06-01'",
                        "rdb.public.")
     assert shared in body
+
+
+def test_state_machine_hides_tools_and_enforces_order():
+    # 18R (사용자 지시): 동적 도구 컨텍스트 상태기계. 두 규율 -
+    # (1) 그 상태에 없는 도구는 이름조차 존재하지 않는다,
+    # (2) 진행은 관측으로만 (가드를 코드가 지킨다, 프롬프트로 부탁하지 않는다).
+    from edge_analysis.statics.fsm import EMIT, GROUND, SCOPE, SCREEN, Machine
+
+    class FakeCat:
+        def __init__(self): self.seen = []
+        def call(self, name, arg=""):
+            self.seen.append(name)
+            return {"cell": "셀 X", "events": "사건 없음: 장중 사건이 하나도 없다",
+                    "screen": "  T × 거래량/변화 n=91 p₂=0.000 방향+"}[name]
+
+    m = Machine(FakeCat())
+    assert m.state == SCOPE and "screen" not in m.menu()      # 미래 도구는 안 보인다
+    out = m.observe("screen")                                  # 상태 밖 호출
+    assert "SCOPE" in out and "없다" in out and not m.catalog.seen   # 실행조차 안 된다
+    assert "→ GROUND" in m.observe("cell")                     # 가드 충족 → 자동 전이
+    assert m.state == GROUND and "events" in m.menu()
+    # 부재도 증거다 - 사건 0인 셀에서 긍정 증거만 요구하면 턴만 태운다(STORM 실측)
+    assert "→ SCREEN" in m.observe("events")
+    assert m.absent == 1 and m.state == SCREEN
+    assert "→ EMIT" in m.observe("screen") and m.done
+    assert m.stats()["calls"] == ["SCOPE:cell()", "GROUND:events()", "SCREEN:screen()"]
+
+
+def test_tool_catalog_separates_absence_from_error():
+    # STORM dyn2 의 실패 양식: 키 오조회를 '사건 없음'으로 믿었다. 둘은 다른 문장이다.
+    from edge_analysis.statics.tools import Catalog
+    c = Catalog(lake=None, ticker="T", instrument_id="i0", day="2026-06-01", types=())
+    assert c.events().startswith("사건 없음")                   # 진짜 부재
+    c2 = Catalog(lake=None, ticker="T", instrument_id="i0", day="2026-06-01",
+                 types=("COMPANY.PRODUCT.LAUNCH",))
+    assert "없다" in c2.events("NO_SUCH") and "있는 것" in c2.events("NO_SUCH")
+    assert "그런 도구 없음" in c2.call("지어낸도구")             # 이름 날조는 즉답
+    assert c2.call("vocab", "채널").startswith("채널 8")

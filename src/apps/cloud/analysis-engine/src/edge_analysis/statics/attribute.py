@@ -22,7 +22,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from ..observability import record as trace   # registry.record 와 이름 충돌 회피
 from .duck import CausalLake
-from .hypothesize import propose
+from .hypothesize import explore, propose
 from .narrate import Edge, narrate
 from .paneltest import EdgeReport, edge_test
 from .render import Row, render
@@ -256,18 +256,20 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if anomalous:
             facts += ("\n오늘 계열 이상 (계열 방아쇠는 이 계열족에서만): "
                       + " · ".join(f"{f} z={zs[f]:+.1f}" for f in anomalous))
-        # 격자를 **가설 앞에** 돌려 어포던스로 준다 (18R). 트레이스 실측: 시스템이
-        # 이미 아는 최강 노출축(EXECUTIVE_CHANGE × 가격잔차/누적)을 두고 에이전트가
-        # 눈 감고 약한 축을 골라 다중검정에 죽었다. 발견 표본(분할 이전)에서만
-        # 재므로 확증 표본과 겹치지 않는다 - 어포던스로 줘도 이중 사용이 아니다.
+        # 격자는 **도구로만** 준다 (screen). 프롬프트에 쏟으면 (a) 도구 호출 기록이
+        # 안 남아 무엇을 봤는지 모르고, (b) 상태기계 가드가 무의미해진다. 여기서는
+        # 블록·레지스트리용으로만 계산한다. 발견 표본이라 확증 표본과 겹치지 않는다.
         screens = grid_screen(lake, day, types) if types else []
-        hits = [s for s in screens if "p2" in s]
-        if hits:
-            facts += ("\n발견 표본 격자 스크린 (탐색 - 확증은 다른 기간에서 한다. "
-                      "노출축 고르는 데 쓰고, 여기 없는 조합도 근거 있으면 내라):\n"
-                      + "\n".join(f"  - {s['type']} × {s['exposure']} "
-                                  f"n={s['n']} p₂={s['p2']:.3f} 방향{s['direction']}"
-                                  for s in hits[:5]))
+        # 동적 도구 상태기계로 먼저 **관측**한다 (18R). 어휘·격자를 프롬프트로 쏟지
+        # 않고 도구로 준다 - 무엇을 물었고 무엇이 없다고 답했는지가 기록에 남는다.
+        from .fsm import Machine
+        from .tools import Catalog
+        cat = Catalog(lake=lake, ticker=ticker, instrument_id=instrument_id,
+                      day=day, types=tuple(types))
+        machine = Machine(cat)
+        seen = explore(ask, machine, facts=facts)
+        if seen:
+            facts += "\n\n[도구 관측 기록]\n" + seen
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES),
                                    series_families=anomalous)

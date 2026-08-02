@@ -53,6 +53,8 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
   제출 수 m 이 늘면 확증 임계가 α/m 으로 좁아져 **좋은 가설까지 같이 죽는다**
 - 부호는 오늘 수익률 부호에 맞추지 마라. 메커니즘이 정하는 것이고, 검정은 양측이라
   부호를 맞춰도 이득이 없다 (틀린 부호는 환원 검사만 오염시킨다)
+- 도구가 보여준 격자 축은 **노출** 슬롯에 넣어라 (그 축이 용량-반응을 만든다).
+  취약성은 다른 계열족에서 - 같은 피처면 동어반복으로 거부된다
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
 - 취약성은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
@@ -68,6 +70,43 @@ def _parse(h: dict) -> HypothesisTuple:
         exposure=ExposureSource(**(h.get("exposure") or {})),
         outcome=str(h.get("outcome", "")), sign=int(h.get("sign", 0)),
         reduction_note=str(h.get("reduction_note", ""))[:200])
+
+
+_EXPLORE = """도구를 불러 이 셀을 조사한다. **여기 없는 도구는 존재하지 않는다.**
+한 턴에 하나만, JSON 으로: {{"tool": "이름", "arg": "인자(없으면 빈 문자열)"}}
+조건을 채우면 다음 단계 메뉴가 자동으로 열린다. 메뉴가 비면 조사가 끝난 것이다.
+
+{menu}
+
+지금까지 본 것:
+{seen}"""
+
+
+def explore(ask: Ask, machine, *, facts: str, max_turns: int = 8) -> str:
+    """상태기계를 돌려 관측을 모은다. 반환: 가설 단계에 실릴 관측 기록.
+
+    도구 이름을 지어내면 그 사실을 응답으로 돌려준다 - 오류도 관측이고, 무엇을
+    부르려다 막혔는지가 표면의 결함 목록이 된다(STORM dyn2 의 실패 양식).
+    """
+    seen: list[str] = []
+    for _ in range(max_turns):
+        if machine.done:
+            break
+        user = _EXPLORE.format(menu=machine.menu(),
+                               seen="\n".join(seen[-6:]) or "  (아직 없음)")
+        try:
+            pick = ask("너는 관측자다. 도구 하나를 골라 JSON 으로만 답한다.",
+                       facts + "\n\n" + user)
+        except Exception as e:                     # noqa: BLE001 - 실패도 관측
+            seen.append(f"[호출 실패] {type(e).__name__}: {e}")
+            break
+        name = str(pick.get("tool", "")).strip()
+        if not name:
+            seen.append("[빈 선택] 도구 이름이 없다")
+            continue
+        out = machine.observe(name, str(pick.get("arg", "")).strip())
+        seen.append(f"[{name}] {out}")
+    return "\n".join(seen)
 
 
 def propose(ask: Ask, *, facts: str, event_types: list[str],
@@ -136,4 +175,4 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     return valid, rejected
 
 
-__all__ = ["Ask", "MAX_ASKS", "propose"]
+__all__ = ["Ask", "MAX_ASKS", "explore", "propose"]

@@ -21,7 +21,9 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
               "etf_nav_daily", "source_event", "event_argument", "instrument",
               "instrument_classification", "supply_contract_fact",
               "price_movement_trigger", "etf_contribution_observation",
-              "etf_contribution_member", "event_thread", "event_thread_link")
+              "etf_contribution_member", "event_thread", "event_thread_link",
+              "entity", "document", "news_document", "event_evidence",
+              "document_assertion", "event_measure")
 
 
 class CausalLake:
