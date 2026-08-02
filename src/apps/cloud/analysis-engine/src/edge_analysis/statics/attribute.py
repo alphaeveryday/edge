@@ -229,7 +229,8 @@ def load_cell(lake: CausalLake, ticker: str, instrument_id: str, day: str):
 
 
 def cell_facts(ticker: str, day: str, shares: list[Share],
-               labels: dict[str, str], after_close: list[str]) -> tuple[str, list[str]]:
+               labels: dict[str, str], after_close: list[str],
+               overnight: list[tuple[str, float]] = ()) -> tuple[str, list[str]]:
     """가설 에이전트에게 주는 사실 문단 + 접지 타입 목록. **결과의 크기는 주되
     사건의 내용은 타입 분포로만** - 결과를 본 특징 오염(§13)은 τ 이후 문서를
     안 주는 것으로 이미 막혀 있고, 여기는 타입·시각 사실만 싣는다."""
@@ -247,6 +248,10 @@ def cell_facts(ticker: str, day: str, shares: list[Share],
             if big.window.kind == "residual" else ""),
          "장중 사건 타입 분포: " + (" · ".join(f"{t} ×{n}" for t, n in
                                               intraday_types.most_common()) or "없음")]
+    if overnight:
+        # 개장 전 이미 확정된 사실 - 갭의 정당한 원인 후보다. 국내 장중 사건보다 앞선다.
+        L.append("밤사이 미국장(개장 전 확정): "
+                 + " · ".join(f"{n} {r * 100:+.2f}%" for n, r in overnight))
     if ac_types:
         L.append("시간 알리바이: 마감 후 보도 "
                  + " · ".join(f"{t} ×{n}" for t, n in ac_types.most_common())
@@ -259,7 +264,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     import os
     from .registry import recall, record
     shares, labels, after_close = load_cell(lake, ticker, instrument_id, day)
-    facts, types = cell_facts(ticker, day, shares, labels, after_close)
+    from .layers import overnight as _overnight
+    facts, types = cell_facts(ticker, day, shares, labels, after_close,
+                              _overnight(lake, day))
     root = os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")
 
     tuples: list[HypothesisTuple] = []

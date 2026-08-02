@@ -22,7 +22,7 @@ KODEX반도체) β_시장 1.4~1.8 · β_섹터 0.81~1.11 - 시장 층에서 β=1
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -50,6 +50,7 @@ class Layer:
     ret: float           # 오늘 그 층의 (직교화된) 수익률
     contribution: float  # beta × ret
     n: int
+    overlap: float = 0.0  # 설명 대상과의 구성 겹침. 낮아야 동어반복이 아니다
 
     def __str__(self) -> str:
         return (f"{self.kind} {self.name}({self.code}) {self.ret * 100:+.2f}% "
@@ -247,11 +248,11 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     #   위: 겹치면 같은 것이다 - "반도체가 왜 빠졌냐"에 "반도체가 빠져서"는 설명이 아니다.
     #   아래: 안 겹치면 근거가 없다 - 60일 표본에서 게임 ETF 가 2차전지를 "설명"하는
     #   일이 실제로 일어났다(β0.71 [0.40,1.02]). 산술은 맞지만 아무도 안 믿는다.
-    twins, alien = set(), set()
+    twins, alien, ovs = set(), set(), {}
     for s_ in xs:
         if s_ == MARKET_CODE:
             continue
-        ov = overlap(lake, etf, s_, day)
+        ovs[s_] = ov = overlap(lake, etf, s_, day)
         (twins if ov >= TAUTOLOGY_CUT else alien if ov < MIN_OVERLAP else set()).add(s_)
     sector_pool = {k: v for k, v in xs.items()
                    if k not in twins and k not in alien and k != MARKET_CODE}
@@ -261,7 +262,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         # β 구간이 0 을 품으면 그 층은 **통계적으로 없다**. 있는 척하지 않는다.
         if pick is None or pick.lo <= 0.0 <= pick.hi:
             break
-        add(pick)
+        add(replace(pick, overlap=ovs.get(pick.code, 0.0)))
 
     idio = y_now - sum(x.contribution for x in layers)
     names, wsum, wtot, rho, used, halted = _names(
@@ -331,6 +332,57 @@ def overlap(lake, a: str, b: str, day: str) -> float:
     return sum(min(wa[t], wb[t]) for t in wa.keys() & wb.keys())
 
 
+def overnight(lake, day: str) -> list[tuple[str, float]]:
+    """한국 개장 전에 **이미 확정된** 미국장 수익률 [(이름, 수익률)].
+
+    한국 09:00 KST 개장 시점에 미국 전 세션은 끝나 있다 - 그래서 갭의 정당한 원인
+    후보이고, 장중 국내 사건보다 시간적으로 앞선다. 미국 날짜가 한국 날짜보다
+    같거나 앞선 마지막 세션만 쓴다(선견 금지).
+    """
+    rows = lake.sql(
+        "SELECT symbol, any_value(name), list(close ORDER BY date), "
+        "       list(CAST(date AS DATE) ORDER BY date) "
+        f"FROM layers_daily WHERE kind = 'us' AND date < DATE '{day}' GROUP BY symbol")
+    out = []
+    for _sym, nm, closes, dates in rows:
+        if len(closes) < 2 or closes[-2] <= 0:
+            continue
+        out.append((nm, float(closes[-1] / closes[-2] - 1.0), dates[-1]))
+    if not out:
+        return []
+    last = max(d for *_x, d in out)
+    return [(nm, r) for nm, r, d in out if d == last]
+
+
+def market_source(lake, day: str, proxy: str = "S&P500") -> tuple[float, float] | None:
+    """오늘 코스피 수익률 중 **밤사이 미국장으로 설명되는 몫** [lo, hi] (%가 아닌 비율).
+
+    투자자가 실제로 묻는 것은 "코스피가 왜 빠졌나" 다. 밤사이 미국 지수를 보여만
+    주고 층에 안 쓰면 그 질문에 답이 없다. 점이 아니라 구간인 이유는 β 추정
+    오차를 숨기지 않기 위해서다 - 이 프로젝트의 갭 공변량과 같은 규율이다.
+    """
+    us = _series(lake, day, ("us",))
+    mkt = _series(lake, day, ("market",))
+    tgt = next((v for k, v in us.items() if v[0] == proxy), None)
+    if tgt is None or MARKET_CODE not in mkt:
+        return None
+    d0 = dt.date.fromisoformat(day)
+    km = mkt[MARKET_CODE][1]
+    um = tgt[1]
+    # 한국 D 일의 개장 전에 확정된 미국 세션 = 미국 날짜 < D 중 마지막.
+    prev = {d: max((u for u in um if u < d), default=None) for d in km if d <= d0}
+    pairs = [(km[d], um[prev[d]]) for d in sorted(km)
+             if d < d0 and prev.get(d) is not None][-BETA_WINDOW:]
+    if len(pairs) < MIN_BETA_N or d0 not in km or prev.get(d0) is None:
+        return None
+    y = np.array([a for a, _b in pairs])
+    x = np.array([b for _a, b in pairs])
+    b, se = _ols(y, x.reshape(-1, 1))
+    u_now = um[prev[d0]]
+    a, c = (b[0] - 1.96 * se[0]) * u_now, (b[0] + 1.96 * se[0]) * u_now
+    return (min(a, c), max(a, c))
+
+
 def residual_rho(resid: list[np.ndarray]) -> float | None:
     """잔차 평균 횡단면 상관. **ρ≈0 이어야 '고유'라 부를 자격이 생긴다** -
     남아 있으면 이름 없는 공통요인이 있다는 직접 증거다."""
@@ -344,4 +396,4 @@ def residual_rho(resid: list[np.ndarray]) -> float | None:
 
 __all__ = ["BETA_WINDOW", "COVER_TARGET", "MARKET_CODE", "MAX_LAYERS", "MIN_BETA_N",
            "MIN_OVERLAP", "TAUTOLOGY_CUT", "TOP_NAMES", "Layer", "Name", "Rollup", "decompose",
-           "holdings", "overlap", "residual_rho"]
+           "holdings", "market_source", "overlap", "overnight", "residual_rho"]
