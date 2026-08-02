@@ -225,6 +225,10 @@ def instrument(
             # 이 시도는 산출을 세지 못했다 — 앞 시도의 카운터를 지운다. 안 지우면 실패 판정 옆에
             # 성공했던 건수가 남아 대시보드가 "실패했지만 2736건 처리"로 읽는다.
             counters={},
+            # 예외 시도도 raw 를 덮어썼을 수 있다 — 카운터와 같은 이유로 앞 시도의 수집 증거를
+            # 리셋한다(관측 없음 = EVIDENCE_MISSING). SIGKILL 처럼 이 코드가 아예 못 도는 경우는
+            # 남는다 — 그 잔재는 Reconciler freshness 전이(후속 티켓) 소관이다.
+            freshness=_freshness_signal(expected, observed=False),
         ))
         raise
 
@@ -270,27 +274,32 @@ def instrument(
         # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
                   "failed_records": _counter(signals.get("failed_records"))},
-        # 계약 연결 작업은 **매 시도** freshness 를 덮는다. 관측 시도만 조건으로 걸면
-        # 미관측 재시도(raw 는 덮어썼는데 로그를 못 남기고 죽음)가 앞 시도의 수집 증거를
-        # 물려받는다 — 미관측은 EVIDENCE_MISSING 으로 리셋하는 쪽이 엄격한 방향이다.
-        freshness=(
-            {
-                "actual_as_of_date": None,
-                "collected": signals.get("artifact_observed") is True,
-                "status": states.FRESHNESS_UNKNOWN,
-                "reason": (
-                    states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
-                    if signals.get("artifact_observed") is True
-                    else states.FRESHNESS_EVIDENCE_MISSING
-                ),
-                "evidence": None,
-            }
-            if expected.get("dataset_contract_key") == ETF_HOLDINGS_KRX_EOD
-            else None
-        ),
+        freshness=_freshness_signal(
+            expected, observed=signals.get("artifact_observed") is True),
         fulfilled=exit_code == 0,
     ))
     return exit_code
+
+
+def _freshness_signal(expected: dict, *, observed: bool) -> dict | None:
+    """계약 연결 작업의 freshness 를 **매 시도** 덮기 위한 신호(예외 경로 포함).
+
+    관측 시도만 조건으로 걸면 미관측 재시도(raw 는 덮어썼는데 로그를 못 남기고 죽음)가 앞
+    시도의 수집 증거를 물려받는다 — 미관측은 EVIDENCE_MISSING 으로 리셋하는 쪽이 엄격한
+    방향이다. KRX 는 응답에 기준일 증거가 없어(ALPHA-653) actual 은 항상 None/UNKNOWN 이다.
+    """
+    if expected.get("dataset_contract_key") != ETF_HOLDINGS_KRX_EOD:
+        return None
+    return {
+        "actual_as_of_date": None,
+        "collected": observed,
+        "status": states.FRESHNESS_UNKNOWN,
+        "reason": (
+            states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED if observed
+            else states.FRESHNESS_EVIDENCE_MISSING
+        ),
+        "evidence": None,
+    }
 
 
 def _safe(fn: Callable):

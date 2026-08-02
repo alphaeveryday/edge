@@ -145,6 +145,32 @@ def test_unobserved_retry_resets_prior_collection_evidence():
     assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
 
 
+def test_exception_attempt_also_resets_prior_collection_evidence():
+    """WHY: 예외로 죽은 재시도도 raw 를 이미 덮어썼을 수 있다 — 정상 종료 경로만 리셋하면
+    같은 함정이 예외 경로에 한 계층 남는다(리뷰 3라운드)."""
+    db = FakeOpsDB()
+    _seed(
+        db, task_key="ETF_HOLDINGS_COLLECTION_KRX",
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
+    )
+    prior = db.etasks_by_id["et1"]
+    prior["collected_at"] = "SET"
+    prior["freshness_reason"] = states.FRESHNESS_ACTUAL_AS_OF_UNVERIFIED
+
+    def boom():
+        raise RuntimeError("mid-write crash")
+
+    with pytest.raises(RuntimeError):
+        wrapper.instrument(
+            boom, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+            ledger=_ledger(db), ecs_task_arn="arn:task/krx",
+        )
+
+    row = db.etasks_by_id["et1"]
+    assert row["collected_at"] is None
+    assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
+
+
 def test_uncontracted_artifact_does_not_gain_freshness():
     """WHY: 계약 미연결 작업의 NULL은 UNKNOWN이 아니라 NOT_APPLICABLE이다."""
     db = FakeOpsDB()
