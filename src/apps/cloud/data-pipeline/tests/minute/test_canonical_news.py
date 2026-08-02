@@ -30,6 +30,7 @@ from data_pipeline.minute.models import KST
 SOURCE = "bigkinds"
 ARTICLE_ID = "art-0001"
 WINDOW_START = datetime(2026, 7, 31, 9, 0, tzinfo=KST)
+OBSERVED = datetime(2026, 7, 31, 9, 0, 30, tzinfo=KST)   # 그 창을 실제로 처리한 시각
 
 
 def vendor_row(**overrides) -> dict:
@@ -48,9 +49,9 @@ def vendor_row(**overrides) -> dict:
     return row
 
 
-def write(db, *records, window_start=WINDOW_START):
+def write(db, *records, window_start=WINDOW_START, observed_at=None):
     with db.connect(None) as conn, conn.cursor() as cur:
-        return PgNewsCanonicalWriter().upsert_tx(
+        return PgNewsCanonicalWriter(clock=lambda: observed_at or OBSERVED).upsert_tx(
             cur, dataset="news_minute", window_start=window_start, records=tuple(records)
         )
 
@@ -93,17 +94,25 @@ class TestCorrection:
             )
         assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == observed
 
-    def test_arrival_time_is_not_moved_by_a_correction(self):
-        # available_at 은 도착 시간 축이고 인덱스가 걸려 있다 — 정정 때 앞으로 밀면
-        # 시간순 소비자에게 **옛 문서가 새 문서로 다시 뜬다**. 정정이 바꾸는 건 내용이다.
+    def test_arrival_time_follows_the_correction(self):
+        # ⚠️ 동결하면 내용은 T2 인데 시각은 T1 이라, 이 값을 PIT 축으로 복사하는 하류에서
+        # 10:00 as-of 조회가 12:00 에야 알려진 내용을 본다. 시간순 피드에 그 문서가 다시
+        # 뜨는 건 정정에서는 바람직한 동작이다(원장이 새 job 을 만드는 것과 같은 이유).
         db = FakeMinuteDB()
         write(db, vendor_row())
-        first_seen = db.documents[(SOURCE, ARTICLE_ID)]["available_at"]
+        corrected_at = OBSERVED + timedelta(hours=3)
 
-        write(db, vendor_row(TITLE="정정된 제목"),
-              window_start=WINDOW_START + timedelta(hours=3))
+        write(db, vendor_row(TITLE="정정된 제목"), observed_at=corrected_at)
 
-        assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == first_seen
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        assert (document["title"], document["available_at"]) == ("정정된 제목", corrected_at)
+
+    def test_stale_observation_cannot_roll_back_the_current_body(self):
+        # 지연·재생된 관측이 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다
+        db = FakeMinuteDB()
+        write(db, vendor_row(TITLE="정정된 제목"), observed_at=OBSERVED + timedelta(hours=3))
+
+        assert write(db, vendor_row(TITLE="옛 제목"), observed_at=OBSERVED) == 0
         assert db.documents[(SOURCE, ARTICLE_ID)]["title"] == "정정된 제목"
 
 
@@ -169,7 +178,10 @@ class TestThroughTheWorker:
             scenario={"scenario": "corr", "initial_count": 1,
                       "late_correction": {"poll_index": 1, "article_index": 0}},
         )
-        worker.canonical_writer = PgNewsCanonicalWriter()   # 기록용 fake 대신 실 writer
+        # ⚠️ Worker 가 tick 에 넘기는 그 시각을 writer 에도 준다 — 안 그러면 이 컬럼만
+        # 실제 벽시계가 찍혀 가상 시계 테스트가 비결정적이 된다(계약: 모듈 docstring).
+        observed = NOW + timedelta(seconds=1)
+        worker.canonical_writer = PgNewsCanonicalWriter(clock=lambda: observed)
 
         worker.tick(NOW)
         (natural_key, document), = db.documents.items()
@@ -185,4 +197,4 @@ class TestThroughTheWorker:
         # ALPHA-689 handler 가 읽는 바로 그 자리에 정정 본문이 들어와야 한다 —
         # 안 오면 새 job(fp2)이 옛 텍스트로 성공한다(봇 P1)
         assert db.news_documents[after["document_id"]]["lead_text"] != before["lead"]
-        assert after["available_at"] == before["available_at"]   # 도착 시각은 그대로
+        assert after["available_at"] == before["available_at"] == observed

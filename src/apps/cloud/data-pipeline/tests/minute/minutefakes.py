@@ -201,9 +201,12 @@ class _Cursor:
                     f"document upsert 가 {column} 을 갱신하지 않는다(정정이 안 반영된다)"
                 assert f"document.{column} IS DISTINCT FROM EXCLUDED.{column}" in where_clause, \
                     f"document upsert 가 {column} 변경을 판정하지 않는다(멱등이 거짓이 된다)"
-            # available_at 을 갱신하면 시간순 소비자에게 옛 문서가 새 문서로 다시 뜬다
-            assert "available_at" not in set_clause, \
-                "document upsert 가 도착 시각(available_at)을 갱신한다"
+            # 정정과 함께 시각도 움직여야 PIT 축이 내용과 어긋나지 않는다(ALPHA-691 2라운드)
+            assert "available_at = EXCLUDED.available_at" in set_clause, \
+                "정정 시 도착 시각이 안 따라가면 as-of 조회가 미래 내용을 본다"
+            # 낡은 관측이 최신 본문을 되돌리지 못하게
+            assert "document.available_at <= EXCLUDED.available_at" in where_clause, \
+                "document upsert 에 신선도 가드가 없다"
             self._upsert_document(params)
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \
@@ -367,6 +370,9 @@ class _Cursor:
             }
             self.rowcount = 1
             return
+        if existing["available_at"] > available_at:
+            self.rowcount = 0   # 신선도 가드 — 낡은 관측은 최신 본문을 못 되돌린다
+            return
         changed = {
             "title": title, "language_code": language_code,
             "published_at": published_at, "source_uri": source_uri,
@@ -375,6 +381,7 @@ class _Cursor:
             self.rowcount = 0   # IS DISTINCT FROM — 값이 같으면 UPDATE 하지 않는다
             return
         existing.update(changed)
+        existing["available_at"] = available_at   # 정정과 함께 시각도 움직인다
         self.rowcount = 1
 
     def _upsert_news_document(self, p):

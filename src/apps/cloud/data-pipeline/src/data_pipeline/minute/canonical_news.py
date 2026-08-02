@@ -23,6 +23,12 @@ t2  J2 실행 → T1 을 읽어 추출 → 결과가 fp2 job 의 성공으로 �
 생산자가 다른 규칙으로** 쓰게 되고(제목 공백 정규화·리드 출처·언어 파생), 그 차이는 조용히
 다운스트림 dedup·프롬프트 입력을 갈라놓는다.
 
+⚠️ **시각 축 계약**: `available_at` 은 **실제 처리 시각**(주입 clock)이고 **정정과 함께
+움직인다**. 창 시각을 쓰면 recovery 가 12:00 에 안 기사를 09:00 으로 소급하고, 정정 때
+동결하면 내용은 T2 인데 시각은 T1 이라 as-of 조회가 미래 내용을 본다 — 둘 다 이 값을 PIT
+축으로 복사하는 하류(`load_assertions`·`assemble_events`)에서 조용히 틀린다. 대신 낡은
+관측이 최신 본문을 되돌리지 못하게 신선도 가드(`available_at <=`)를 건다.
+
 ⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
 
 ① **배치가 나중에 돌면 리드를 되돌릴 수 있다.** `load_documents` 의 `document` INSERT 는
@@ -58,11 +64,17 @@ class PgNewsCanonicalWriter:
     """`(source_code, article_id)` 자연키 upsert. 커서는 호출자(commit)가 준다.
 
     `clock` 은 주입이다(이 패키지 관례) — `available_at` 이 여기서 나온다.
+
+    ⚠️ **Worker 가 `now` 를 만드는 그 시계를 넘겨라.** commit 트랜잭션은 이미 `now` 를
+    받는데(`commit_news_window`) writer 가 자기 벽시계를 쓰면 한 트랜잭션에 시각이 둘이
+    되고, 가상 시계로 도는 테스트에서 이 컬럼만 실제 시각이 찍혀 비결정적이 된다.
+    Protocol 에 `now` 를 더하지 않는 이유는 `commit_price_window` 에는 그 인자가 없어서다 —
+    가격 경로까지 건드리는 대신 주입 지점에서 맞춘다.
     """
 
-    clock: Callable[[], datetime] = field(
-        default=lambda: datetime.now(timezone.utc), repr=False
-    )
+    # 기본값 없음 — 두면 주입을 빠뜨렸을 때 **조용히** 호스트 벽시계가 찍히고, 그건
+    # 가상 시계로 도는 경로에서만 드러난다(그때는 이미 원장에 섞인 뒤다).
+    clock: Callable[[], datetime] = field(repr=False)
 
     def upsert_tx(
         self, cur, *, dataset: str, window_start: datetime, records: tuple[dict, ...]
@@ -107,25 +119,26 @@ class PgNewsCanonicalWriter:
             SET title = EXCLUDED.title,
                 published_at = EXCLUDED.published_at,
                 source_uri = EXCLUDED.source_uri,
-                language_code = EXCLUDED.language_code
-            WHERE document.title IS DISTINCT FROM EXCLUDED.title
-               OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
-               OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
-               OR document.language_code IS DISTINCT FROM EXCLUDED.language_code
+                language_code = EXCLUDED.language_code,
+                available_at = EXCLUDED.available_at
+            WHERE document.available_at <= EXCLUDED.available_at
+              AND (document.title IS DISTINCT FROM EXCLUDED.title
+                   OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
+                   OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
+                   OR document.language_code IS DISTINCT FROM EXCLUDED.language_code)
             """,
             (
                 document_id, source_code, article_id,
                 normalized["title"], normalized["language"], normalized["published_at"],
-                # ⚠️ `available_at` 은 **갱신하지 않는다**(DO UPDATE 목록에 없다). 이 컬럼은
-                # "우리가 이 문서를 쓸 수 있게 된 시각"이고 인덱스가 걸린 도착 시간 축이라,
-                # 정정 때 앞으로 밀면 시간순 소비자에게 **옛 문서가 새 문서로 다시 뜬다**.
-                # 정정이 바꾸는 건 내용이지 도착 사실이 아니다.
-                # ⚠️⚠️ 값은 **실제 처리 시각**이지 `window_start` 가 아니다. 1분 벤더 행에는
+                # ⚠️ 값은 **실제 처리 시각**이지 `window_start` 가 아니다. 1분 벤더 행에는
                 # 배치가 쓰는 `fetched_at` 이 없어(BigKinds raw = TITLE·CONTENT·PROVIDER·DATE)
                 # 창 시각을 쓸까 했지만, recovery 는 09:00 창을 12:00 에 처리한다 — 그러면
-                # 12:00 에 알게 된 기사를 09:00 에 안 것으로 **소급**하게 되고, 이 값을
-                # PIT 시각으로 복사하는 하류(load_assertions·assemble_events)에서 10:00
-                # as-of 조회가 미래 지식을 보게 된다.
+                # 12:00 에 알게 된 기사를 09:00 에 안 것으로 소급하게 된다.
+                # ⚠️⚠️ 그리고 **정정과 함께 갱신한다**. 동결하면 내용은 T2 인데 시각은 T1 이라,
+                # 이 값을 PIT 축으로 복사하는 하류(load_assertions·assemble_events)에서
+                # 10:00 as-of 조회가 12:00 에야 알려진 내용을 본다 — 그게 더 크게 틀린다.
+                # 시간순 피드에 그 문서가 다시 뜨는 건 **정정에서는 바람직한 동작**이다
+                # (원장이 새 job 을 만드는 것과 같은 이유다).
                 observed_at,
                 normalized["url"],
             ),
