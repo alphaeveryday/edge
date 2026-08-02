@@ -6,7 +6,8 @@ migration/repository(PR 2)·commit(PR 3)·실제 vendor adapter(PR 4+)는 후속
 
 경계: production/dev AWS·DB 를 건드리지 않는다. 자동 테스트는 fake collector 와 녹화
 fixture 로만 lifecycle 을 재현한다 — 실 vendor 호출은 토스 adapter(ALPHA-682)가 승인된
-경로에서만 하고, BigKinds·DeepSeek 은 아직 없다.
+경로에서만 하고, BigKinds·DeepSeek 은 아직 없다. 그래서 뉴스 추출 handler(ALPHA-689)의
+LLM 경로도 **fixture 로만 검증됐다**: 실호출은 승인 전까지 하지 않는다.
 """
 
 from __future__ import annotations
