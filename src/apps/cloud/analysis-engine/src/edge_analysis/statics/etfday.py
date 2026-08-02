@@ -90,13 +90,18 @@ def headline(lake, r: Rollup) -> str:
     return "\n".join(L)
 
 
-def instrument_ids(lake, tickers: list[str]) -> dict[str, str]:
-    """ticker → instrument_id. 없는 종목은 빠진다 - 셀을 못 돌린다는 뜻이고 그렇게 보고한다."""
+def instrument_ids(lake, tickers: list[str], day: str) -> dict[str, str]:
+    """ticker → instrument_id. 없는 종목은 빠진다 - 셀을 못 돌린다는 뜻이고 그렇게 보고한다.
+
+    `v_instrument` 는 상시 뷰가 아니라 `_base()` 가 앞에 붙이는 PIT 클램프 CTE 다.
+    """
+    from .paneltest import _base
     if not tickers:
         return {}
     lst = ", ".join(f"'{t}'" for t in tickers)
     return {t: i for t, i in lake.sql(
-        f"SELECT ticker, instrument_id FROM v_instrument WHERE ticker IN ({lst})")}
+        _base(day) + f"SELECT ticker, instrument_id FROM v_instrument "
+                     f"WHERE ticker IN ({lst})")}
 
 
 def run_etf_day(lake: CausalLake, ask, etf: str, day: str, *, names: int = 5) -> str:
@@ -108,7 +113,7 @@ def run_etf_day(lake: CausalLake, ask, etf: str, day: str, *, names: int = 5) ->
         return f"{etf} {day}: 분해 불가 - 일봉 창(60일)이 안 찬다"
     out = [headline(lake, r)]
 
-    ids = instrument_ids(lake, [n.ticker for n in r.names])
+    ids = instrument_ids(lake, [n.ticker for n in r.names], day)
     for n in r.names:
         out.append("\n" + "═" * 78)
         out.append(f"▸ {n.label}({n.ticker}) - 고유 {_pct(n.idio)}% · "
@@ -135,8 +140,12 @@ def main() -> None:
         r = decompose(lake, etf, day)
         print(headline(lake, r) if r else f"{etf} {day}: 분해 불가")
         return
-    from ..adapters.llm import DeepSeekClient
-    print(run_etf_day(lake, DeepSeekClient().complete_json, etf, day, names=n))
+    import os
+    from ..adapters.llm import DeepSeekClient, TracingClient
+    client = TracingClient(DeepSeekClient(
+        os.environ["DEEPSEEK_API_KEY"],
+        os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
+    print(run_etf_day(lake, client.complete_json, etf, day, names=n))
 
 
 if __name__ == "__main__":

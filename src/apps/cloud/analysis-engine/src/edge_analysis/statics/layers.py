@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, replace
+from functools import lru_cache
 
 import numpy as np
 
@@ -131,6 +132,7 @@ def _orth(x: np.ndarray, basis: np.ndarray, x_now: float,
 
 
 # ── 자료 ──────────────────────────────────────────────────────────────────
+@lru_cache(maxsize=64)
 def _series(lake, day: str, kinds: tuple[str, ...]) -> dict[str, tuple]:
     """{symbol: (name, {date: log수익률}, {거래정지 날짜})}. 당일 포함.
 
@@ -310,8 +312,14 @@ def _names(lake, etf: str, day: str, hist: list, basis: list[np.ndarray],
     return tuple(out[:top]), wsum, wtot, residual_rho(resid), len(out), halted
 
 
+@lru_cache(maxsize=8192)
 def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
-    """[(ticker, name, weight)] - **as_of ≤ day** 최신 스냅샷만 (선견 금지)."""
+    """[(ticker, name, weight)] - **as_of ≤ day** 최신 스냅샷만 (선견 금지).
+
+    캐시 필수: `overlap()` 이 후보 ETF 32종마다 두 번 부른다. 셀 하나에 64 질의,
+    배치 736셀이면 47,000 질의가 되어 측정 자체가 불가능해진다(실측 - 취소했다).
+    같은 (ETF, 날짜) 보유는 안 변하므로 캐시가 정답을 안 바꾼다.
+    """
     return [(t, n or t, float(w) / 100.0) for t, n, w in lake.sql(
         f"SELECT constituent_ticker, any_value(constituent_name), any_value(weight_pct) "
         f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
