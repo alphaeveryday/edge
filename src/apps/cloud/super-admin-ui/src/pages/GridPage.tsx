@@ -9,7 +9,9 @@
  *   사선     = plan_status SKIPPED (비거래일 등 — 안 한 게 아니라 할 일이 아니었다)
  *   모서리 점 = failed_records>0 또는 data_status INCOMPLETE·INVALID ("실행 성공 ≠ 데이터 유효")
  *   빈칸 ·   = 그 슬롯의 카탈로그에 없던 작업 (뉴스 6작업이 07-28부터 시장 런에 없는 것이 실례)
- * VALID 뱃지는 그리지 않는다 — completeness 배선이 없어 도달 불가다(ALPHA-182 에서 폐기).
+ *   우하 초록 점 = data_status VALID — 완전성 대조까지 통과한 성공 (ALPHA-611/630 배선 후 ETF
+ *              3작업만 도달 가능. 나머지 작업의 UNKNOWN 은 설계값이라 무표시 — "성공"과
+ *              "증거 있는 성공"을 격자에서 가르는 것이 이 뱃지의 이유다, ALPHA-650)
  *
  * 셀을 누르면 그 슬롯의 드릴다운(/sources?runKey=)으로 간다 — 격자는 이상 지점을 찾는 화면이고,
  * 원인(시도 이력·이슈)은 드릴다운이 답한다(ALPHA-574).
@@ -125,8 +127,9 @@ export function GridPage() {
         <div className="card-head">
           <span className="t-label">파이프라인 실행 이력</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 모서리
-            점=데이터 결손 · ·=카탈로그에 없음 · 셀을 누르면 그 실행의 드릴다운
+            최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 우상 주황
+            점=데이터 결손 · 우하 초록 점=완전성 검증(VALID) · ·=카탈로그에 없음 · 셀을 누르면
+            그 실행의 드릴다운
           </span>
         </div>
 
@@ -208,6 +211,9 @@ export function GridPage() {
                             (cell.failedRecords ?? 0) > 0 ||
                             cell.dataStatus === 'INCOMPLETE' ||
                             cell.dataStatus === 'INVALID';
+                          /* VALID_EMPTY 는 표시하지 않는다 — "검증할 산출이 없었다"이지
+                           * "기대와 대조해 맞았다"가 아니다. 뱃지는 후자만 주장한다. */
+                          const verified = cell.dataStatus === 'VALID';
                           return (
                             <td
                               key={slot.runKey}
@@ -240,6 +246,22 @@ export function GridPage() {
                                       height: 8,
                                       borderRadius: 4,
                                       background: '#f59e0b',
+                                      border: '1px solid #fff',
+                                    }}
+                                  />
+                                )}
+                                {verified && (
+                                  /* 결손 점(우상 주황)과 자리를 가른다 — 셀 배경 초록(FULFILLED)
+                                   * 위에서도 읽히도록 진초록 + 흰 테두리 */
+                                  <span
+                                    style={{
+                                      position: 'absolute',
+                                      bottom: -3,
+                                      right: -3,
+                                      width: 8,
+                                      height: 8,
+                                      borderRadius: 4,
+                                      background: '#15803d',
                                       border: '1px solid #fff',
                                     }}
                                   />
