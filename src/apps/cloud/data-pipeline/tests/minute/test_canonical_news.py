@@ -140,6 +140,26 @@ class TestCorrection:
         assert write(db, vendor_row(CONTENT="이제 붙은 리드"), observed_at=later) == 1
         assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == later
 
+    def test_concurrent_newer_row_is_not_dragged_backwards(self):
+        # ⚠️ 이 함수에서 available_at 을 쓰는 경로는 셋이다(부모 upsert·자식 upsert·리드
+        # 보정 UPDATE). 부모가 가드에 막힌 경우(남이 더 최신 행을 먼저 넣었다) 내 스냅샷
+        # 기준으로는 여전히 "리드가 바뀌었다"라, 보정 UPDATE 에 가드가 없으면 그 경로로
+        # **최신 문서의 시각이 뒤로 끌려간다**.
+        db = FakeMinuteDB()
+        newer = OBSERVED + timedelta(hours=3)
+        # 내 잠금 SELECT 가 아무것도 못 본 뒤 남이 더 최신 행을 먼저 넣은 상황을 만든다
+        db.documents[(SOURCE, ARTICLE_ID)] = {
+            "document_id": stable_domain_id("doc", SOURCE, ARTICLE_ID),
+            "source_code": SOURCE, "source_document_id": ARTICLE_ID,
+            "title": "남이 쓴 최신 제목", "language_code": "ko",
+            "published_at": "2026-07-31T00:00:00+00:00",
+            "available_at": newer, "source_uri": "https://news.example/1",
+        }
+
+        assert write(db, vendor_row(CONTENT="내 옛 리드"), observed_at=OBSERVED) == 0
+        assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == newer
+        assert db.documents[(SOURCE, ARTICLE_ID)]["title"] == "남이 쓴 최신 제목"
+
     def test_new_child_row_alone_does_not_move_the_arrival_time(self):
         # 배치는 리드가 없으면 news_document 를 안 만든다 → document 만 있는 문서가 있다.
         # 같은 내용·NULL 리드로 재관측하면 자식 행이 **생기지만** 내용은 그대로다 —

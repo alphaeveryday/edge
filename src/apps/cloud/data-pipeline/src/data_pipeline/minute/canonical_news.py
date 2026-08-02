@@ -216,11 +216,17 @@ class PgNewsCanonicalWriter:
         if lead_changed and not changed:
             # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
             # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
+            # ⚠️ **여기에도 같은 가드가 필요하다.** 이 함수에서 available_at 을 쓰는 경로는
+            # 셋이고(부모 upsert·자식 upsert·이 보정), 하나라도 빼면 그 경로로 낡은 값이
+            # 들어온다. 특히 부모가 가드에 막힌 경우(남이 더 최신 행을 먼저 넣었다)
+            # `changed=0` 인데 `lead_changed` 는 내 스냅샷 기준으로 참이라, 가드가 없으면
+            # 이 UPDATE 가 **최신 문서의 시각을 뒤로 되돌린다**.
             cur.execute(
                 """
                 UPDATE document SET available_at = %s
                 WHERE source_code = %s AND source_document_id = %s
+                  AND available_at <= %s
                 """,
-                (observed_at, source_code, article_id),
+                (observed_at, source_code, article_id, observed_at),
             )
         return 1 if (changed or lead_changed) else 0

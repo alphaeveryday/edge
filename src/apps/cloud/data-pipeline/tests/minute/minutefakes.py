@@ -198,8 +198,10 @@ class _Cursor:
                     None if child is None else child["lead_text"],
                 )]
         elif s.startswith("UPDATE document SET available_at"):
+            # available_at 을 쓰는 세 경로(부모·자식·이 보정)에 가드가 다 있어야 한다
+            assert "available_at <= %s" in s, "리드 보정 UPDATE 에 신선도 가드가 없다"
             row = self.db.documents.get((params[1], params[2]))
-            if row is not None:
+            if row is not None and row["available_at"] <= params[3]:
                 row["available_at"] = params[0]
                 self.rowcount = 1
         elif s.startswith("INSERT INTO document ("):
