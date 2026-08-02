@@ -141,3 +141,28 @@ def test_collapse_detection_flags_one_value_swallowing_all_mechanisms():
               for i, c in enumerate(["S주식수", "P판가", "C원가", "FX환", "K위험"])]
     warn = [l for l in Survey("T/d", varied).report().splitlines() if "의미 붕괴" in l]
     assert not any("채널" in l for l in warn)      # 갈라진 슬롯은 경고 안 뜬다
+
+
+def test_trigger_in_vocabulary_but_absent_from_cell_is_not_a_vocabulary_gap():
+    # 20R 실측: 표현력 측정이 '증권사 목표주가 하향 (사건타입 목록에 없음)' 이라
+    # 찍었는데 MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE 는 어휘 53종에 31건 있다.
+    # 채점자에게 **셀 접지 목록**만 줘서 "이 셀에 없음"이 "어휘에 없음"이 된 것 -
+    # 미도달을 부재로 보고하는 병이 어휘 축에서 재발했다. 어휘 구멍을 부풀린다.
+    VOCAB = ("COMPANY.PRODUCT.LAUNCH", "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE")
+    CELL = ("COMPANY.PRODUCT.LAUNCH",)          # 이 셀엔 목표주가 사건이 없다
+    seen = {}
+
+    def ask(system, user):
+        seen["sys"] = system + user
+        return {"slots": {**{k: {"grade": "사상", "value": v} for k, v in
+                             (("채널", "S주식수"), ("노출", "거래량/변화"),
+                              ("취약성", "수급/누적"), ("결과", "수익률"), ("부호", "-1"))},
+                          "방아쇠": {"grade": "사상",
+                                   "value": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE"}},
+                "lost": ""}
+
+    r = score(ask, "목표주가 하향으로 하락", event_types=list(CELL), vocab_types=VOCAB)
+    assert "MARKET_INFO.ANALYST" in seen["sys"]          # 채점자가 어휘 전량을 본다
+    assert r.slots["방아쇠"]["grade"] == "사상"            # 어휘에 있으니 사상이다
+    assert r.ungrounded is True                          # 다만 이 셀엔 없다 - 다른 축
+    assert "어휘 구멍이 아니다" in Survey("T/d", [r]).report()

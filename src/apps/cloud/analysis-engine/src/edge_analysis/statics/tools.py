@@ -16,7 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..observability import record as trace
-from .paneltest import FEATURES, Z_ANOM, grid_screen, series_z, split_date
+from .paneltest import (FEATURES, Z_ANOM, flow_z, grid_screen, macro_z,
+                        series_z, split_date)
 from .vocab import CHANNELS, RELATIONS, SERIES_FAMILIES, TRANSFORMS
 
 MAX_ROWS = 40
@@ -29,10 +30,8 @@ TOOL_TABLES: dict[str, tuple[str, ...]] = {
     "peers": ("instrument_classification",),
     "screen": ("price_daily", "source_event"),
     "series": ("price_daily",),
-    "holdings": ("etf_holding_snapshot",),
-    "flows": ("investor_flow_daily",),
-    "novelty": ("thread_discovery_snapshot",),
     "links": ("event_argument", "source_event"),
+    "flows": ("price_daily",),   # 수급은 S3 canonical - RDB 도달성과 무관
 }
 
 
@@ -213,13 +212,47 @@ class Catalog:
                 "취약성은 다른 계열족에서 골라라 - 같으면 동어반복이라 거부된다.")
 
     def series(self) -> str:
-        """오늘 계열 혁신 z - 계열 방아쇠의 접지. |z|≥2 인 계열족만 방아쇠 자격."""
+        """오늘 계열 혁신 z - 계열 방아쇠의 접지. |z|≥2 인 계열족만 방아쇠 자격.
+
+        **무엇이 움직였는지 같이 낸다** (20R): 거시·수급은 계열족 하나에 여러 계열이
+        묶여 있어 z 만 주면 '거시가 튀었다'가 되고, 그건 검정 불가능한 문장이다.
+        """
         zs = series_z(self.lake, self.instrument_id, self.day)
         if not zs:
             return "계열 z 미계측: 가격계열 결손 - 발화 판정 불가 (부재이지 조용함이 아니다)"
         fired = [f for f, z in zs.items() if abs(z) >= Z_ANOM]
-        body = " · ".join(f"{f} z={z:+.2f}" for f, z in sorted(zs.items()))
-        return f"  {body}\n  발화(|z|≥{Z_ANOM}): {fired or '없음 - 계열 방아쇠 자격 없음'}"
+        out = ["  " + " · ".join(f"{f} z={z:+.2f}" for f, z in sorted(zs.items())),
+               f"  발화(|z|≥{Z_ANOM}): {fired or '없음 - 계열 방아쇠 자격 없음'}"]
+        for fam, fn in (("거시", macro_z), ("수급", flow_z)):
+            if fam not in zs:
+                continue
+            note = fn(self.lake, self.day) if fam == "거시" else fn(
+                self.lake, self.instrument_id, self.day)
+            if note[1]:
+                out.append(f"  {fam} 내역: {note[1]}")
+        return "\n".join(out)
+
+    def flows(self) -> str:
+        """이 종목의 **전일** 투자자별 순매수 - 수급 방아쇠·취약성의 접지.
+
+        전일인 이유: 투자자 집계는 장 마감 후 18:00 공표라 오늘 장중의 원인으로
+        인용할 수 없다(동시발생이지 원인이 아니다).
+        """
+        rows = self._q(f"""
+            SELECT iv.trade_date, iv.investor_type, iv.net_value
+            FROM s3_investor_value iv
+            JOIN v_instrument i ON i.ticker = iv.ticker
+            WHERE i.instrument_id = '{self.instrument_id}'
+              AND iv.trade_date < DATE '{self.day}'
+              AND iv.trade_date >= DATE '{self.day}' - INTERVAL 7 DAY
+              AND iv.investor_type IN ('foreign', 'institution_total', 'individual', 'pension')
+            ORDER BY iv.trade_date DESC, abs(iv.net_value) DESC LIMIT 12""")
+        if isinstance(rows, str):
+            return rows
+        if not rows:
+            return "수급 없음: 이 종목의 전일 투자자별 집계가 원장에 없다 (조회 성공)"
+        return "전일까지 투자자별 순매수 (억원):\n" + "\n".join(
+            f"  {r[0]} {r[1]:<18} {r[2] / 1e8:>+12,.0f}" for r in rows)
 
     def peers(self, how: str = "industry") -> str:
         """같은 산업 피어. 관계 노출·위약군의 재료."""
@@ -305,4 +338,4 @@ class Catalog:
     @staticmethod
     def menu_names() -> tuple[str, ...]:
         return ("cell", "coverage", "tables", "peek", "events", "news", "thread",
-                "screen", "series", "peers", "links", "vocab")
+                "screen", "series", "peers", "links", "flows", "vocab")

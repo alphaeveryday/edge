@@ -116,7 +116,7 @@ class CausalLake:
         if "s3_intraday_5m" in self.s3:
             self.con.execute(
                 "CREATE OR REPLACE VIEW bars_5m AS SELECT source_symbol AS symbol, "
-                "ts, trade_date, open, high, low, close, volume "
+                "ticker, ts, trade_date, open, high, low, close, volume "
                 "FROM s3_intraday_5m WHERE market = 'KR'")
             self.exists["bars_5m"] = "S3 canonical (1,271종목)"
             return
@@ -376,12 +376,21 @@ class CausalLake:
         return any(r[0] == "trade_date" for r in self.sql("DESCRIBE bars_5m"))
 
     def prev_close(self, ticker: str, day: str) -> float:
-        row = self.sql(
-            f"SELECT close FROM bars_5m WHERE symbol='{ticker}' "
-            f"AND CAST(ts AS DATE) < DATE '{day}' ORDER BY ts DESC LIMIT 1")
-        if not row:
-            raise RuntimeError(f"{ticker} {day} 이전 봉 없음")
-        return float(row[0][0])
+        """직전 거래일 종가. **최근 10일로 창을 좁힌다** (20R).
+
+        전에는 `CAST(ts AS DATE) < day` 라 하이브 파티션 프루닝이 안 걸려 916일치
+        전 이력을 스캔했다 - 셀 하나에 88초, 배치가 불가능한 비용이었다. 연휴가
+        10일을 넘으면 창을 넓혀 재시도한다(있는 것을 못 찾는 일은 없다).
+        """
+        col = "trade_date" if self._has_trade_date() else "CAST(ts AS DATE)"
+        for back in (10, 40, 400):
+            row = self.sql(
+                f"SELECT close FROM bars_5m WHERE symbol='{ticker}' "
+                f"AND {col} < DATE '{day}' AND {col} >= DATE '{day}' - {back} "
+                f"ORDER BY ts DESC LIMIT 1")
+            if row:
+                return float(row[0][0])
+        raise RuntimeError(f"{ticker} {day} 이전 봉 없음")
 
     def taus(self, instrument_id: str, day: str) -> list[tuple]:
         """그날(KST) 그 종목의 사건 (τ KST naive, source_event_id).

@@ -45,6 +45,7 @@ import json
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,7 +81,8 @@ _SCORE = """너는 **환원 채점자**다. 자유 산문 가설 하나를 아�
 
 슬롯별로 넣을 수 있는 값:
   방아쇠 = 아래 사건타입 코드 하나  또는  계열족 하나
-     사건타입(이 셀 접지분): {event_types}
+     **사건타입 어휘 전량** (이 셀에 그 사건이 있었는지는 별개 - 어휘에 있으면 "사상"):
+     {event_types}
      계열족: {families}
   채널   = {channels} 중 하나
   노출   = "계열족/변환" 형식 하나 (예: "가격잔차/누적")  또는  관계 {relations} 중 하나
@@ -123,6 +125,23 @@ JSON 하나만:
 
 가설:
 {prose}"""
+
+
+@lru_cache(maxsize=2)
+def all_event_types(lake) -> tuple[str, ...]:
+    """**어휘 전체** 사건타입 53종. 셀 접지 목록과 다르다 (20R 실측이 강요한 구분).
+
+    채점자에게 셀 접지 목록만 주면 "이 셀에 없음"을 "어휘에 없음"으로 보고한다 -
+    실측: 표현력 측정이 '증권사 목표주가 하향 (사건타입 목록에 없음)' 이라 찍었는데
+    `MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE` 는 어휘에 31건 있다. 그 셀에 없었을 뿐이다.
+    미도달을 부재로 보고하는 병이 어휘 축에서 재발한 것이고, 어휘 구멍을 부풀린다.
+    """
+    try:
+        return tuple(r[0] for r in lake.sql(
+            "SELECT * FROM postgres_query('rdb', 'SELECT DISTINCT event_type_code "
+            "FROM source_event WHERE event_status = ''ACTIVE'' ORDER BY 1')"))
+    except Exception:                       # noqa: BLE001 - 못 읽으면 셀 목록으로 폴백
+        return ()
 
 
 def in_vocab(slot: str, value: str, event_types) -> bool:
@@ -180,6 +199,11 @@ class Reduction:
         return [s for s in SLOTS if self.slots.get(s, {}).get("grade") == "불가"]
 
     @property
+    def ungrounded(self) -> bool:
+        """방아쇠가 어휘엔 있으나 이 셀엔 없다. **어휘 구멍이 아니다** - 셀 축이다."""
+        return bool(self.slots.get("방아쇠", {}).get("ungrounded"))
+
+    @property
     def bogus(self) -> list[str]:
         """채점자가 어휘 밖 값을 사상이라 우긴 슬롯. **측정기 건강 지표**다."""
         return [s for s in SLOTS if self.slots.get(s, {}).get("bogus")]
@@ -228,6 +252,10 @@ class Survey:
         if blocked:
             out.append("  막힌 슬롯 (어휘 일감):")
             out += [f"    {s} ×{c}  → {OWNER[s]}" for s, c in blocked.most_common()]
+        ung = sum(1 for r in self.items if r.ungrounded)
+        if ung:
+            out.append(f"  방아쇠가 어휘엔 있으나 이 셀 미접지 {ung}건 — **어휘 구멍이 아니다**"
+                       " (셀 선택·데이터 축)")
         unsaid = Counter(s for r in self.items for s in r.unsaid)
         if unsaid:
             out.append("  원문 미명시 (어휘 일감 아님 - 산문이 덜 구체적):")
@@ -284,9 +312,16 @@ def generate(ask, machine, *, facts: str, n: int = 4) -> list[str]:
     return hyps
 
 
-def score(ask, prose: str, *, event_types: list[str]) -> Reduction | None:
-    """산문 → 튜플 사상. 생성자와 **다른 호출**이다 (자기 채점은 낙관 편향)."""
-    sys_p = _SCORE.format(channels=sorted(CHANNELS), event_types=event_types,
+def score(ask, prose: str, *, event_types: list[str],
+          vocab_types: tuple[str, ...] = ()) -> Reduction | None:
+    """산문 → 튜플 사상. 생성자와 **다른 호출**이다 (자기 채점은 낙관 편향).
+
+    `event_types` = 이 셀에 접지된 타입 · `vocab_types` = 어휘 전체 53종.
+    **둘은 다르다**: 어휘엔 있는데 이 셀에 없는 타입은 '어휘 구멍'이 아니라
+    '이 셀 미접지'다 - 전자는 스키마 일감이고 후자는 데이터/셀 선택 문제다.
+    """
+    known = tuple(vocab_types) or tuple(event_types)
+    sys_p = _SCORE.format(channels=sorted(CHANNELS), event_types=known,
                           families=sorted(SERIES_FAMILIES), transforms=sorted(TRANSFORMS),
                           relations=sorted(RELATIONS), outcomes=sorted(OUTCOME_KINDS),
                           measurable=sorted(FEATURES), prose=prose)
@@ -310,10 +345,14 @@ def score(ask, prose: str, *, event_types: list[str]) -> Reduction | None:
             clean[s]["grade"] = "불가"
             clean[s]["want"] = clean[s]["want"] or "대리 사유 미기재 - 뜻 보존 확인 불가"
         # 사상 주장은 **어휘 대조로 검산**한다. 통과 못 하면 사상이 아니다.
-        if clean[s]["grade"] in ("사상", "대리") and not in_vocab(s, clean[s]["value"], event_types):
+        if clean[s]["grade"] in ("사상", "대리") and not in_vocab(s, clean[s]["value"], known):
             clean[s] = {"grade": "불가", "value": clean[s]["value"], "changed": "",
                         "bogus": True,
                         "want": f"채점자 허위사상 - 어휘 밖 값: {clean[s]['value'][:56]!r}"}
+    # 어휘엔 있으나 이 셀에 접지 안 된 방아쇠 - 표현력 구멍이 아니다(다른 축).
+    tv = clean["방아쇠"]
+    if tv["grade"] in ("사상", "대리") and tv["value"] not in set(event_types):
+        tv["ungrounded"] = True
     r = Reduction(prose=prose, slots=clean, lost=str(out.get("lost", ""))[:240])
     trace("expressive.reduction", grade=r.grade, blocked=r.blocked, proxied=r.proxied,
           measurable=r.measurable(), lost=r.lost)
@@ -338,7 +377,7 @@ def survey_cell(lake, ask, ticker: str, instrument_id: str, day: str,
                   types=tuple(types))
     sv = Survey(cell=f"{ticker}/{day}")
     for prose in generate(ask, Machine(cat), facts=facts, n=n):
-        r = score(ask, prose, event_types=types)
+        r = score(ask, prose, event_types=types, vocab_types=all_event_types(lake))
         if r is not None:
             sv.items.append(r)
     return sv
