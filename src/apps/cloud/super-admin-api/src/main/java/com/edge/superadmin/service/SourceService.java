@@ -53,6 +53,11 @@ public class SourceService {
 					+ "normalize-etf → load-etf-holdings (복구 창은 당일 자정까지 — trdDd 는 "
 					+ "오늘 날짜로만 질의된다)";
 
+	/** instrument 행 부재 ETF 는 holdings 3스텝만으론 복구 불가 — 프로필 경로 선행이 필요하다. */
+	private static final String HOLDINGS_RECOVERY_ACTION_WITH_PROFILE =
+			HOLDINGS_RECOVERY_ACTION + " · instrument 미등록 ETF 는 프로필 수집"
+					+ "(ETF_PROFILE_COLLECTION_KIS → normalize → load-instruments) 선행 필요";
+
 	/** holdings 결손 영향(ALPHA-686). runKey 지정 미존재는 404 — 빈 영향으로 위장하지 않는다. */
 	public HoldingsImpactResponse holdingsImpact(String runKey) {
 		HoldingsImpactRepository.Impact impact = holdingsImpact.impact(runKey);
@@ -62,8 +67,17 @@ public class SourceService {
 			}
 			return HoldingsImpactResponse.empty();
 		}
-		return HoldingsImpactResponse.from(impact,
-				impact.missing().isEmpty() ? null : HOLDINGS_RECOVERY_ACTION);
+		// 적재 미귀결(FULFILLED 아님)이면 결손 확정도 복구 권고도 하지 않는다 — 정상 진행 중을
+		// 수동 개입 대상으로 오귀인하는 경로다(리뷰 1라운드).
+		boolean loadDone = "FULFILLED".equals(impact.loadOutcome());
+		String action = null;
+		if (loadDone && !impact.missing().isEmpty()) {
+			boolean anyWithoutInstrument = impact.missing().stream()
+					.anyMatch(m -> m.instrumentId() == null);
+			action = anyWithoutInstrument
+					? HOLDINGS_RECOVERY_ACTION_WITH_PROFILE : HOLDINGS_RECOVERY_ACTION;
+		}
+		return HoldingsImpactResponse.from(impact, action);
 	}
 
 	/**

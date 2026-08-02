@@ -19,13 +19,17 @@ public interface HoldingsImpactRepository {
 	Impact impact(String runKey);
 
 	/**
-	 * @param expectedAsOf   계약이 해석한 기준 거래일(expected_as_of_date) — 분석 조인의 시간 축
-	 * @param expectedCount  기대 ETF 수(snapshot). snapshot 부재면 null
-	 * @param loadedCount    이 런(data_version=run_id)이 적재한 ETF 수
-	 * @param snapshotMissing 기대 목록 자체가 없어 영향 범위 계산 불가(UNKNOWN — 영향 없음 아님)
+	 * @param expectedAsOf   계약이 해석한 기준 거래일(expected_as_of_date) — 적재·분석 조인의 시간 축
+	 * @param expectedCount  기대 ETF 수(snapshot). 계산 불가면 null
+	 * @param loadedCount    기준일 적재분이 존재하는 ETF 수 (run_id 스코프가 아니다 — 적재는
+	 *                       read-merge-overwrite 멱등이라 무변경 행의 data_version 이 안 바뀐다)
+	 * @param snapshotMissing 기대 목록 또는 기준일 부재로 영향 범위 계산 불가(UNKNOWN — 영향 없음 아님)
+	 * @param loadOutcome    LOAD_ETF_HOLDINGS 의 task_outcome. FULFILLED 가 아니면 적재 미귀결 —
+	 *                       결손 판정을 확정하면 정상 진행 중이 오귀인된다(화면이 유보로 표시)
 	 */
 	record Impact(String runKey, LocalDate expectedAsOf, Integer expectedCount,
-			Integer loadedCount, boolean snapshotMissing, List<MissingEtf> missing) {
+			Integer loadedCount, boolean snapshotMissing, String loadOutcome,
+			List<MissingEtf> missing) {
 	}
 
 	/**

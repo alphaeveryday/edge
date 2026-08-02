@@ -51,8 +51,16 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				VALUES ('et-i', ?, 'ETF_HOLDINGS_COLLECTION_KRX', 'raw', 'etf_holdings',
 				        'DUE', 'FULFILLED', 'INCOMPLETE', 'et-i-key', ?::date, 'snap-i')
 				""", RUN_ID, AS_OF);
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, task_outcome, idempotency_key)
+				VALUES ('et-load', ?, 'LOAD_ETF_HOLDINGS', 'feature', 'etf_holdings',
+				        'DUE', 'FULFILLED', 'et-load-key')
+				""", RUN_ID);
 
-		// ETF 2종은 instrument 존재: 999001(적재 성공) · 999002(적재 누락, 당일 분석 있음).
+		// ETF 2종은 instrument 존재: 999001(기준일 적재 있음 — 단, data_version 은 **다른
+		// run_id**: 멱등 적재는 무변경 행의 버전을 안 갈아서 run_id 스코프는 거짓 누락을 만든다,
+		// 리뷰 1라운드 반례) · 999002(기준일 적재 없음 = 진짜 누락, 당일 분석 있음).
 		// 9ZZA00 은 instrument 행 자체가 없음(프로필까지 결손) — 단축코드 경로.
 		// 티커는 합성값 — 실코드(069500 등)는 시드 데이터와 unique 충돌한다.
 		insertEtf("inst-ok", "999001", "KODEX 200");
@@ -62,25 +70,41 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				INSERT INTO etf_holding_snapshot (etf_instrument_id, constituent_instrument_id,
 				       trade_date, weight_ratio, available_at, data_version)
 				VALUES ('inst-ok', 'inst-c', ?::date, 0.5,
-				        '2026-07-31T06:45:00Z'::timestamptz, ?)
-				""", AS_OF, RUN_ID);
-		// 다른 런의 적재는 이 런의 "적재됨"이 아니다 — data_version 스코프를 잠근다.
+				        '2026-07-30T06:45:00Z'::timestamptz, 'run-earlier')
+				""", AS_OF);
+		// 다른 기준일의 적재는 이 기준일의 "적재됨"이 아니다 — 시간 축을 잠근다.
 		jdbc.update("""
 				INSERT INTO etf_holding_snapshot (etf_instrument_id, constituent_instrument_id,
 				       trade_date, weight_ratio, available_at, data_version)
-				VALUES ('inst-miss', 'inst-c', ?::date, 0.5,
+				VALUES ('inst-miss', 'inst-c', '2026-07-30'::date, 0.5,
 				        '2026-07-30T06:45:00Z'::timestamptz, 'run-earlier')
+				""");
+		// 타시장 동명 ticker 는 loaded 로 세지 않는다 — 세면 실제 XKRX 결손이 숨는다.
+		jdbc.update("INSERT INTO entity (entity_id, entity_type, display_name) VALUES ('inst-kos', 'INSTRUMENT', '동명 KOSDAQ ETF')");
+		jdbc.update("""
+				INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type)
+				VALUES ('inst-kos', 'XKOS', '999002', 'ETF')
+				""");
+		jdbc.update("INSERT INTO etf_profile (instrument_id, etf_type) VALUES ('inst-kos', 'SECTOR')");
+		jdbc.update("""
+				INSERT INTO etf_holding_snapshot (etf_instrument_id, constituent_instrument_id,
+				       trade_date, weight_ratio, available_at, data_version)
+				VALUES ('inst-kos', 'inst-c', ?::date, 0.5,
+				        '2026-07-31T06:45:00Z'::timestamptz, 'run-kos')
 				""", AS_OF);
 
 		insertAnalysis("inst-miss");
 	}
 
 	@Test
-	void 기대와_이_런의_적재_차집합이_누락이고_분석과_이름이_붙는다() {
+	void 기대와_기준일_적재의_차집합이_누락이고_분석과_이름이_붙는다() {
 		Impact impact = repository.impact(RUN_KEY);
 
 		assertThat(impact.expectedCount()).isEqualTo(3);
-		assertThat(impact.loadedCount()).isEqualTo(1);   // inst-ok 만 — 다른 런 적재는 안 센다
+		assertThat(impact.loadOutcome()).isEqualTo("FULFILLED");
+		// inst-ok 만 — 다른 run_id 여도 기준일 적재면 센다(멱등 무변경 행 반례),
+		// 타시장 동명 ticker(inst-kos)와 다른 기준일 적재(inst-miss 07-30)는 안 센다.
+		assertThat(impact.loadedCount()).isEqualTo(1);
 		assertThat(impact.snapshotMissing()).isFalse();
 		assertThat(impact.expectedAsOf()).isEqualTo(AS_OF);
 		assertThat(impact.missing()).hasSize(2);

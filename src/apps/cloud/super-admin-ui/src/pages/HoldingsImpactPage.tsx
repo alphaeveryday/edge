@@ -3,7 +3,7 @@
  * 답하는 질문: "이 결손으로 어떤 ETF·분석이 영향을 받나, 어디부터 복구하나". 데이터 장애를
  * 기술 작업에서 끝내지 않고 제품 영향까지 잇는다(멘토 §4.4).
  *
- * 주장의 한계(정직 표기): 누락 = 기대(Planner snapshot) − 이 런의 적재분. 수집/정제/적재 중
+ * 주장의 한계(정직 표기): 누락 = 기대(Planner snapshot) − 기준일 적재분. 수집/정제/적재 중
  * 어디서 탈락했는지는 단정하지 않는다(그 분해는 S3 로그 소관). "분석 없음"도 결손의 결과라고
  * 단정하지 않는다 — 트리거 미발동 정상 무분석과 구분할 수 없다.
  */
@@ -30,6 +30,8 @@ export function HoldingsImpactPage() {
     );
   }
 
+  const loadDone = data.loadOutcome === 'FULFILLED';
+
   return (
     <div className="flex flex-col gap-4">
       <div className="card">
@@ -38,6 +40,9 @@ export function HoldingsImpactPage() {
           {data.snapshotMissing ? (
             /* 계산 불가(UNKNOWN)는 "결손 없음"과 다르다 — 스펙 §6.3 */
             <StatusBadge tone="neutral">영향 범위 계산 불가</StatusBadge>
+          ) : !loadDone ? (
+            /* 적재가 안 끝난 런의 차집합은 전부 "누락"으로 보인다 — 확정하지 않는다 */
+            <StatusBadge tone="env">적재 미귀결 — 판정 유보</StatusBadge>
           ) : data.missing.length === 0 ? (
             <StatusBadge tone="active">결손 없음</StatusBadge>
           ) : (
@@ -48,7 +53,7 @@ export function HoldingsImpactPage() {
           {data.runKey} · 기준 거래일 {data.expectedAsOf ?? '—'}
           {!data.snapshotMissing && (
             <>
-              {' · '}기대 ETF <b>{data.expectedCount}종</b> 중 이 런의 적재{' '}
+              {' · '}기대 ETF <b>{data.expectedCount}종</b> 중 기준일 적재{' '}
               <b>{data.loadedCount}종</b>
             </>
           )}
@@ -64,9 +69,11 @@ export function HoldingsImpactPage() {
       {data.missing.length > 0 && (
         <div className="card">
           <div className="card-head">
-            <span className="t-label">누락 ETF → 기준일 분석</span>
+            <span className="t-label">
+              누락 ETF → 기준일 분석{!loadDone && ' (잠정 — 적재 미귀결)'}
+            </span>
             <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-              누락 = 기대 − 이 런의 적재분 (수집/정제/적재 중 탈락 지점은 여기서 단정하지 않음)
+              누락 = 기대 − 기준일 적재분 (수집/정제/적재 중 탈락 지점은 여기서 단정하지 않음)
             </span>
           </div>
           <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>

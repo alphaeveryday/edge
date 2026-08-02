@@ -615,7 +615,7 @@ class SourceControllerTest {
 		//      화면에서 그 ETF 가 사라지지 않는다.
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 31, false, List.of(
+						LocalDate.of(2026, 7, 31), 33, 31, false, "FULFILLED", List.of(
 						new HoldingsImpactRepository.MissingEtf("091160", "inst-1", "KODEX 반도체",
 								List.of(new HoldingsImpactRepository.AffectedAnalysis(
 										"res-9", "PUBLISHED", "반도체 급등"))),
@@ -640,7 +640,7 @@ class SourceControllerTest {
 		//      목록과 같은 모양으로 내면 미배선 런이 "결손 없음"으로 보인다.
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40", null,
-						null, 31, true, List.of()));
+						null, 0, true, "FULFILLED", List.of()));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
 				.andExpect(jsonPath("$.result.snapshotMissing").value(true))
@@ -651,7 +651,7 @@ class SourceControllerTest {
 	void 영향_runKey_미존재는_404_이고_결손_없으면_권장조치도_없다() throws Exception {
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 33, false, List.of()));
+						LocalDate.of(2026, 7, 31), 33, 33, false, "FULFILLED", List.of()));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings")
 						.param("runKey", "etf-daily:9999-01-01T00:00"))
@@ -665,6 +665,35 @@ class SourceControllerTest {
 				.perform(get("/api/v1/sources/impact/holdings"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.snapshotMissing").value(true));
+	}
+
+	@Test
+	void 적재_미귀결이면_결손을_확정하지_않고_권고도_내지_않는다() throws Exception {
+		// WHY: Planner 는 실행 전에 기대 목록을 먼저 쓴다 — 적재가 끝나기 전의 차집합은 전부
+		//      "누락"으로 보인다. 정상 진행 중을 수동 복구 대상으로 오귀인하면 안 된다(리뷰 1라운드).
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 0, false, "PENDING", List.of(
+						new HoldingsImpactRepository.MissingEtf("999002", "inst-1", "이름",
+								List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.loadOutcome").value("PENDING"))
+				.andExpect(jsonPath("$.result.recommendedAction").value(nullValue()));
+	}
+
+	@Test
+	void instrument_부재_ETF_가_섞이면_프로필_선행이_포함된_권고가_내려간다() throws Exception {
+		// WHY: holdings 3스텝만으론 instrument 미등록 ETF 를 복구할 수 없다 — load 가 unknown_etf
+		//      로 건너뛴다. 같은 권고를 반복 실행해도 영구 누락이 된다(리뷰 1라운드).
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 32, false, "FULFILLED", List.of(
+						new HoldingsImpactRepository.MissingEtf("9ZZA00", null, null, List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.recommendedAction",
+						org.hamcrest.Matchers.containsString("load-instruments")));
 	}
 
 	@Test

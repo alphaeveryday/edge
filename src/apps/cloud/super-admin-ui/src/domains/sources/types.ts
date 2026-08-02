@@ -296,10 +296,13 @@ export interface HoldingsImpact {
   runKey: string | null;
   expectedAsOf: string | null;
   expectedCount: number | null;
+  /** 기준일 적재분이 존재하는 ETF 수 — run_id 스코프가 아니다(멱등 적재는 무변경 행의 버전을 안 간다) */
   loadedCount: number | null;
   snapshotMissing: boolean;
+  /** LOAD_ETF_HOLDINGS 의 task_outcome. FULFILLED 가 아니면 적재 미귀결 — 결손은 잠정 */
+  loadOutcome: string | null;
   missing: MissingEtf[];
-  /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없으면 null */
+  /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없거나 적재 미귀결이면 null */
   recommendedAction: string | null;
 }
 

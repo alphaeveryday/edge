@@ -16,9 +16,12 @@ import java.util.Set;
 /**
  * {@link HoldingsImpactRepository} 의 JdbcTemplate 구현(ALPHA-686).
  *
- * <p>런 스코프 키는 {@code etf_holding_snapshot.data_version} 이다 — 적재 스텝이 파이프라인
- * {@code run_id}(= {@code ops_pipeline_run.pipeline_run_id})를 그대로 넣는다(load_etf_holdings).
- * 이 등식 덕에 RDS 만으로 "이 런이 적재한 ETF 집합"이 성립한다.
+ * <p>적재 축은 <b>기준일({@code trade_date} = 계약이 해석한 expected_as_of)</b>이다.
+ * {@code data_version = run_id} 로 스코프하면 안 된다 — 적재 스텝은 read-merge-overwrite
+ * 멱등이라 <b>비중이 안 바뀐 행의 data_version 을 갱신하지 않는다</b>(load_etf_holdings).
+ * 재실행 런에서 무변경 행이 이전 run_id 로 남아 정상 ETF 가 거짓 누락이 된다(리뷰 1라운드).
+ * 대신 이 판정은 "그 기준일의 적재분이 지금 존재하는가"를 말한다 — 나중 런이 메웠으면
+ * 결손이 아닌 것이 맞다.
  *
  * <p>전 조회가 한 REPEATABLE READ 스냅샷 안이다 — 기대·적재·분석을 따로 읽으면 그 사이
  * 적재가 커밋돼 "기대 33 적재 33 인데 누락 2" 같은 존재한 적 없는 조합이 조립된다.
@@ -46,6 +49,15 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			 WHERE pipeline_run_id = ? AND task_key = '%s'
 			""".formatted(HOLDINGS_TASK);
 
+	/**
+	 * 적재 스텝의 귀결 — 적재가 아직 안 끝난 런에서 결손을 확정하면 정상 진행 중이 전부
+	 * "누락 + 수동 복구 권고"로 오귀인된다(리뷰 1라운드). FULFILLED 전엔 판정을 유보한다.
+	 */
+	private static final String LOAD_TASK_SQL = """
+			SELECT task_outcome FROM ops_expected_task
+			 WHERE pipeline_run_id = ? AND task_key = 'LOAD_ETF_HOLDINGS'
+			""";
+
 	private static final String SNAPSHOT_IDS_SQL = """
 			SELECT jsonb_array_elements_text(entity_ids) AS our_etf_id
 			  FROM ops_expectation_snapshot
@@ -54,14 +66,17 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			""";
 
 	/**
-	 * 이 런이 적재한 ETF 의 <b>단축코드</b> 집합 — 기대 목록과 같은 축으로 돌린다.
+	 * 기준일에 적재분이 존재하는 ETF 의 <b>단축코드</b> 집합 — 기대 목록과 같은 축으로 돌린다.
 	 * instrument.ticker 가 etf_map 의 키(our_etf_id)와 같은 축임은 load_instruments 가 보장한다.
+	 * market/type 조건 필수 — ticker 유일성은 시장 안에서만이라, 타시장 동명 ticker 가
+	 * loaded 에 섞이면 실제 XKRX 결손이 숨는다(리뷰 1라운드).
 	 */
 	private static final String LOADED_SQL = """
 			SELECT DISTINCT i.ticker
 			  FROM etf_holding_snapshot h
 			  JOIN instrument i ON i.instrument_id = h.etf_instrument_id
-			 WHERE h.data_version = ?
+			         AND i.market_code = 'XKRX' AND i.instrument_type = 'ETF'
+			 WHERE h.trade_date = ?
 			""";
 
 	/**
@@ -101,26 +116,34 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 		List<TaskRow> tasks = jdbc.query(TASK_SQL, JdbcHoldingsImpactRepository::mapTask,
 				run.pipelineRunId());
 		TaskRow task = tasks.isEmpty() ? null : tasks.get(0);
+		List<String> loadOutcomes = jdbc.queryForList(LOAD_TASK_SQL, String.class,
+				run.pipelineRunId());
+		String loadOutcome = loadOutcomes.isEmpty() ? null : loadOutcomes.get(0);
 
 		List<String> expected = (task == null || task.snapshotId() == null)
 				? List.of()
 				: jdbc.queryForList(SNAPSHOT_IDS_SQL, String.class, task.snapshotId());
-		boolean snapshotMissing = expected.isEmpty();
+		LocalDate asOf = task == null ? null : task.expectedAsOf();
+		// 기대 목록이 없거나 기준일이 없으면 결손을 계산할 수 없다 — 기준일 없는 채 진행하면
+		// 적재·분석 조인이 조용히 공집합이 돼 "전부 누락·분석 없음"으로 오독된다(리뷰 1라운드).
+		boolean undetermined = expected.isEmpty() || asOf == null;
 
-		Set<String> loaded = new LinkedHashSet<>(
-				jdbc.queryForList(LOADED_SQL, String.class, run.pipelineRunId()));
+		Set<String> loaded = undetermined
+				? Set.of()
+				: new LinkedHashSet<>(jdbc.queryForList(LOADED_SQL, String.class, asOf));
 
 		List<MissingEtf> missing = new ArrayList<>();
-		LocalDate asOf = task == null ? null : task.expectedAsOf();
-		for (String ourEtfId : expected) {
-			if (loaded.contains(ourEtfId)) {
-				continue;
+		if (!undetermined) {
+			for (String ourEtfId : expected) {
+				if (loaded.contains(ourEtfId)) {
+					continue;
+				}
+				missing.add(missingDetail(ourEtfId, asOf));
 			}
-			missing.add(missingDetail(ourEtfId, asOf));
 		}
 		return new Impact(run.runKey(), asOf,
-				snapshotMissing ? null : expected.size(), loaded.size(), snapshotMissing,
-				List.copyOf(missing));
+				undetermined ? null : expected.size(), loaded.size(), undetermined,
+				loadOutcome, List.copyOf(missing));
 	}
 
 	private MissingEtf missingDetail(String ourEtfId, LocalDate asOf) {
