@@ -48,10 +48,12 @@ public class SourceService {
 	 * 권장 재실행 — 실증된 복구 레시피(같은 run_id 로 3스텝)를 정적 문자열로 낸다. 자동 실행
 	 * 없음(스펙 §12: 대시보드는 권장만). 명령 실체는 운영 런북 소관 — 여기선 지점만 가리킨다.
 	 */
-	private static final String HOLDINGS_RECOVERY_ACTION =
+	private static final String HOLDINGS_RECOVERY_STEPS =
 			"같은 run_id 로 ecs run-task 3스텝 재실행: ingest-raw-etf --source krx → "
-					+ "normalize-etf → load-etf-holdings (복구 창은 당일 자정까지 — trdDd 는 "
-					+ "오늘 날짜로만 질의된다)";
+					+ "normalize-etf → load-etf-holdings";
+
+	private static final String HOLDINGS_RECOVERY_ACTION =
+			HOLDINGS_RECOVERY_STEPS + " (수집기는 실행 시점의 최신 KR 거래일을 질의한다)";
 
 	/** instrument 행 부재 ETF 는 holdings 3스텝만으론 복구 불가 — 프로필 경로 선행이 필요하다. */
 	private static final String HOLDINGS_RECOVERY_ACTION_WITH_PROFILE =
@@ -67,7 +69,7 @@ public class SourceService {
 	private static final String HOLDINGS_RECOVERY_WINDOW_CONDITIONAL =
 			"기준일이 오늘이 아님 — KRX 는 실행 시점의 최신 거래일만 질의한다. 지금의 최신 "
 					+ "거래일이 이 기준일과 같을 때만(주말·휴장일인 지금이 그 직후일 때) 재실행이 "
-					+ "유효하다: " + HOLDINGS_RECOVERY_ACTION + " · 다르면 재실행하지 말 것"
+					+ "유효하다: " + HOLDINGS_RECOVERY_STEPS + " · 다르면 재실행하지 말 것"
 					+ "(과거 기준일 백필 불가 — 수동 검토)";
 
 	/** holdings 결손 영향(ALPHA-686). runKey 지정 미존재는 404 — 빈 영향으로 위장하지 않는다. */

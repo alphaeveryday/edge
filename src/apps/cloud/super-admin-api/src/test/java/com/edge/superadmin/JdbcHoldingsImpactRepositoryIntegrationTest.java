@@ -157,9 +157,9 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 		//      선택 런의 귀결만 보면 지금 메워지는 중인 결손에 수동 복구를 권고한다.
 		jdbc.update("""
 				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
-				       execution_name, launch_status, trading_date, created_at)
+				       execution_name, launch_status, orchestration_status, trading_date, created_at)
 				VALUES ('run-b', 'etf-daily:2026-07-31T18:00', 'etf-daily', 'exec-b',
-				        'LAUNCHED', ?::date, '2026-07-31T09:00:00Z'::timestamptz)
+				        'LAUNCHED', 'RUNNING', ?::date, '2026-07-31T09:00:00Z'::timestamptz)
 				""", AS_OF);
 		jdbc.update("""
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
@@ -171,8 +171,10 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
 				       dataset, plan_status, task_outcome, idempotency_key, deadline_at)
 				VALUES ('et-b-l', 'run-b', 'LOAD_ETF_HOLDINGS', 'feature', 'etf_holdings',
-				        'DUE', 'PENDING', 'et-b-l-key', now() + interval '1 hour')
+				        'DUE', 'PENDING', 'et-b-l-key', now() - interval '1 hour')
 				""");
+		// deadline 은 일부러 과거 — 살아 있는 런(RUNNING)의 마감 경과 PENDING 은 여전히
+		// 진행 중이다(선행이 도는 동안 LOAD 짧은 마감이 먼저 지나는 정상 구간, EXEC-04).
 
 		Impact impact = repository.impact(RUN_KEY);   // A 런을 조회해도
 
@@ -194,9 +196,11 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 	}
 
 	@Test
-	void 마감_지난_영구_PENDING_잔재는_유보를_만들지_않는다() {
+	void 죽은_런의_영구_PENDING_잔재는_유보를_만들지_않는다() {
 		// WHY: 기동 실패 런의 LOAD 행은 영원히 PENDING 이다(Reconciler 미귀결) — 그 잔재
 		//      하나가 전역 유보를 영구화하면 실제 결손·복구 안내가 계속 숨는다(검증 라운드).
+		//      판정 축은 런의 생사다 — LAUNCH_FAILED 는 orchestration 이 영영 null 이라
+		//      launch 축으로 걸러진다.
 		jdbc.update("""
 				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
 				       execution_name, launch_status, created_at)

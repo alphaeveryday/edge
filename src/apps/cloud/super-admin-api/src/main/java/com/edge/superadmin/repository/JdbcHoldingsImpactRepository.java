@@ -58,17 +58,24 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 	 * 기준일을 메울 수 있다(리뷰 3라운드). 미귀결(outcome NULL/PENDING)뿐 아니라 <b>도는
 	 * 재시도</b>(귀결 후 RUNNING attempt — outcome 은 완료 시에만 갱신)도 잡는다. 한계: 강제
 	 * 종료로 남은 죽은 RUNNING 잔재는 유보를 과대하게 만들 수 있다 — 보수적 방향이고, 그
-	 * 잔재는 Reconciler 의 STALLED 이슈가 드러낸다(드릴다운 소관). 단 <b>마감 지난 미귀결</b>은
-	 * 진행 중이 아니라 잔재다(기동 실패 런의 PENDING 은 영원히 남는다 — 검증 라운드) —
-	 * deadline 경과 조건으로 걸러 전역 영구 유보를 막는다.
+	 * 잔재는 Reconciler 의 STALLED 이슈가 드러낸다(드릴다운 소관).
+	 *
+	 * <p>PENDING 의 "진행 중" 판정 축은 <b>런의 생사</b>다 — 작업별 deadline 은 안 된다(선행이
+	 * 도는 동안 LOAD 의 짧은 마감이 먼저 지나는 정상 구간을 잔재로 오판 — 집중 검증 라운드).
+	 * 죽은 런(기동 실패·terminal·hard deadline 경과)의 영구 PENDING 은 잔재로 걸러 전역 영구
+	 * 유보를 막고, 살아 있는 런의 PENDING 은 마감이 지났어도 진행 중이다(EXEC-04 BREACHED).
 	 */
 	private static final String LOAD_PENDING_SQL = """
 			SELECT EXISTS (
 			    SELECT 1
 			      FROM ops_expected_task l
+			      JOIN ops_pipeline_run r ON r.pipeline_run_id = l.pipeline_run_id
 			     WHERE l.task_key = 'LOAD_ETF_HOLDINGS'
 			       AND (((l.task_outcome IS NULL OR l.task_outcome = 'PENDING')
-			             AND (l.deadline_at IS NULL OR l.deadline_at > now()))
+			             AND (r.orchestration_status = 'RUNNING'
+			                  OR (r.orchestration_status IS NULL
+			                      AND r.launch_status = 'LAUNCHED'
+			                      AND r.hard_deadline_at > now())))
 			            OR EXISTS (SELECT 1 FROM ops_task_attempt a
 			                        WHERE a.expected_task_id = l.expected_task_id
 			                          AND a.execution_status = 'RUNNING')))
