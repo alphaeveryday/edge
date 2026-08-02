@@ -138,6 +138,11 @@ module "super_admin_api" {
   target_group_arn           = module.super_admin_alb.target_group_arn
   ingress_security_group_ids = [module.super_admin_alb.security_group_id]
 
+  # 부팅 122s(0.25 vCPU) > 기본 120s — grace 만료 시점에 unhealthy 로 태스크가 킬되는
+  # 롤아웃 실패 실증(ALPHA-688, deploy run 30732194158 / failedTasks 5+). 화면이 늘며
+  # 기동이 59s→110s 로 올라와 마진이 끊겼다. tenant_sync_api(ALPHA-604)와 같은 처방.
+  health_check_grace_period_seconds = 300
+
   # 앱이 JPA(JDBC)를 갖게 되면서 dev RDS 배선이 필수다(ALPHA-526) — 미주입 시 localhost
   # 폴백으로 부팅 실패(ddl-auto=validate 가 기동 시 접속). 비밀번호는 RDS 관리형 시크릿 주입.
   environment = {
