@@ -42,7 +42,7 @@ export function LoginPage() {
   // 쿼리스트링·해시까지 보존 — /sources?runKey=… 딥링크 복귀 시 드릴다운 컨텍스트를 잃지 않게.
   const from = state?.from?.pathname
     ? `${state.from.pathname}${state.from.search ?? ''}${state.from.hash ?? ''}`
-    : '/tenants';
+    : '/'; // 첫 화면 = Run Overview (ALPHA-683)
 
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');

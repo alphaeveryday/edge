@@ -136,10 +136,82 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			          CASE t.stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, t.task_key
 			""";
 
+	/**
+	 * 레인(pipeline_type)별 최신 런 하나씩 — Run Overview(ALPHA-683). LEFT JOIN 이유는 격자와
+	 * 같다(작업 없는 런도 레인으로).
+	 *
+	 * <p>"최신"은 드릴다운({@code LATEST_RUN_SQL})과 달리 <b>슬롯 시각(run_key) 기준</b>이다 —
+	 * run_key 가 0패딩 ISO 시각을 담아 사전순 = 슬롯 시간순이다. created_at(계획 삽입 시각)으로
+	 * 고르면 오늘 백필한 <b>과거 슬롯</b>이 오늘 정규 런을 밀어내고 "최신"이 된다(봇 P2 —
+	 * plan-run 의 OPS_SCHEDULED_TIME 은 과거 슬롯을 가리킬 수 있다).
+	 *
+	 * <p>freshness 축(ADR-0043)은 원장 컬럼을 그대로 옮긴다 — writer(ALPHA-654) 배선 전엔
+	 * 전부 NULL 이 정상이고, NULL(계약 미적용)과 UNKNOWN(증거 없음)을 뭉개지 않는다.
+	 */
+	private static final String OVERVIEW_SQL = """
+			SELECT l.pipeline_type, l.run_key, l.launch_status, l.orchestration_status,
+			       l.trading_date, l.created_at,
+			       t.stage, t.task_key, t.plan_status, t.task_outcome, t.data_status,
+			       t.required, t.deadline_at, t.failed_records,
+			       t.freshness_status, t.expected_as_of_date, t.actual_as_of_date
+			  FROM (SELECT DISTINCT ON (pipeline_type) pipeline_run_id, pipeline_type, run_key,
+			               launch_status, orchestration_status, trading_date, created_at
+			          FROM ops_pipeline_run
+			         ORDER BY pipeline_type, run_key DESC, pipeline_run_id DESC) l
+			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = l.pipeline_run_id
+			 ORDER BY l.pipeline_type,
+			          CASE t.stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, t.task_key
+			""";
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcPipelineStatusRepository(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<OverviewLane> overview() {
+		// 단일 SELECT — statement 스냅샷이 일관성을 보장한다(격자와 같은 이유).
+		Map<String, OverviewHeader> headers = new LinkedHashMap<>();
+		Map<String, List<OverviewTask>> tasks = new LinkedHashMap<>();
+		jdbc.query(OVERVIEW_SQL, rs -> {
+			String lane = rs.getString("pipeline_type");
+			if (!headers.containsKey(lane)) {
+				java.sql.Date tradingDate = rs.getDate("trading_date");
+				headers.put(lane, new OverviewHeader(lane, rs.getString("run_key"),
+						rs.getString("launch_status"), rs.getString("orchestration_status"),
+						tradingDate == null ? null : tradingDate.toLocalDate(),
+						rs.getObject("created_at", OffsetDateTime.class)));
+				tasks.put(lane, new ArrayList<>());
+			}
+			if (rs.getString("task_key") != null) {
+				java.sql.Date expectedAsOf = rs.getDate("expected_as_of_date");
+				java.sql.Date actualAsOf = rs.getDate("actual_as_of_date");
+				tasks.get(lane).add(new OverviewTask(
+						rs.getString("stage"),
+						rs.getString("task_key"),
+						rs.getString("plan_status"),
+						rs.getString("task_outcome"),
+						rs.getString("data_status"),
+						rs.getBoolean("required"),
+						rs.getObject("deadline_at", OffsetDateTime.class),
+						nullableLong(rs, "failed_records"),
+						rs.getString("freshness_status"),
+						expectedAsOf == null ? null : expectedAsOf.toLocalDate(),
+						actualAsOf == null ? null : actualAsOf.toLocalDate()));
+			}
+		});
+		return headers.entrySet().stream()
+				.map(e -> new OverviewLane(e.getValue().pipelineType(), e.getValue().runKey(),
+						e.getValue().launchStatus(), e.getValue().orchestrationStatus(),
+						e.getValue().tradingDate(), e.getValue().plannedAt(),
+						List.copyOf(tasks.get(e.getKey()))))
+				.toList();
+	}
+
+	private record OverviewHeader(String pipelineType, String runKey, String launchStatus,
+			String orchestrationStatus, LocalDate tradingDate, OffsetDateTime plannedAt) {
 	}
 
 	@Override

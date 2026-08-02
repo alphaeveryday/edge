@@ -21,3 +21,12 @@ export function useSourceGrid(days?: number) {
     queryFn: () => sourcesRepository.grid(days),
   });
 }
+
+/** Run Overview(ALPHA-683) — 첫 화면. 운영자가 띄워 두는 화면이라 1분마다 갱신한다. */
+export function useSourceOverview() {
+  return useQuery({
+    queryKey: ['sources', 'overview'],
+    queryFn: () => sourcesRepository.overview(),
+    refetchInterval: 60_000,
+  });
+}

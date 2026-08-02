@@ -4,9 +4,15 @@
 
 ```
 Super Admin Console
+├── Run Overview (첫 화면)
 ├── Tenants
 └── Event Pipeline
 ```
+
+**Run Overview** (= 오늘 운영 현황, ALPHA-683)
+
+- 첫 화면. 레인(시장·뉴스)별 최신 런의 운영 상태(판정 스펙 §7: IN_PROGRESS/READY/DEGRADED/BLOCKED/UNKNOWN), 필수 작업 귀결 수(단위 명기), 결함 목록(단계 순 — 같은 단계 안 순서는 실행 순서가 아니며, 정확한 최초 결함 지점은 드릴다운 소관), 드릴다운 링크
+- 발행 분포(자동 제공/검수 대기/차단)는 증권사 관리 환경 콘솔 소관 — 이 화면은 파이프라인 원장 범위까지만 답한다
 
 **Tenants** (= 테넌트 관리)
 
@@ -34,6 +40,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | 화면 | 엔드포인트 |
 |---|---|
 | Tenants 목록/생성 | `GET /api/v1/tenants` · `POST /api/v1/tenants` |
+| Run Overview — 오늘 운영 현황 | `GET /api/v1/sources/overview` |
 | Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
 | Event Pipeline — 파이프라인 실행 이력 | `GET /api/v1/sources/grid` |
 | Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |

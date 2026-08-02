@@ -15,6 +15,11 @@ interface NavEntry {
 
 const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
   {
+    section: '운영 현황',
+    /* 화면명은 답하는 질문이다 — "오늘 정상 발행 가능한가"(ALPHA-683) */
+    items: [{ path: '/', label: '오늘 운영 현황', icon: 'dashboard' }],
+  },
+  {
     section: '테넌트 관리',
     items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
@@ -85,6 +90,8 @@ export function AdminLayout() {
     pageTitle = '파이프라인 실행 이력';
   } else if (path.startsWith('/analyses')) {
     pageTitle = '가격 변동 분석 목록';
+  } else if (path === '/') {
+    pageTitle = '오늘 운영 현황';
   }
   const showBack = Boolean(tenantId || analysisId);
 
@@ -128,7 +135,8 @@ export function AdminLayout() {
             {items.map((item) => (
               <div
                 key={item.path}
-                className={`nav-item${path.startsWith(item.path) ? ' active' : ''}`}
+                /* '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
+                className={`nav-item${(item.path === '/' ? path === '/' : path.startsWith(item.path)) ? ' active' : ''}`}
                 onClick={() => navigate(item.path)}
               >
                 <Icon name={item.icon} className="ic" />

@@ -16,14 +16,21 @@ public class FakePipelineStatusRepository implements PipelineStatusRepository {
 
 	private final PipelineRunStatus run;
 	private final List<GridSlot> gridSlots;
+	private final List<OverviewLane> overviewLanes;
 
 	public FakePipelineStatusRepository(PipelineRunStatus run) {
-		this(run, List.of());
+		this(run, List.of(), List.of());
 	}
 
 	public FakePipelineStatusRepository(PipelineRunStatus run, List<GridSlot> gridSlots) {
+		this(run, gridSlots, List.of());
+	}
+
+	public FakePipelineStatusRepository(PipelineRunStatus run, List<GridSlot> gridSlots,
+			List<OverviewLane> overviewLanes) {
 		this.run = run;
 		this.gridSlots = gridSlots;
+		this.overviewLanes = overviewLanes;
 	}
 
 	@Override
@@ -39,5 +46,10 @@ public class FakePipelineStatusRepository implements PipelineStatusRepository {
 	@Override
 	public List<GridSlot> grid(int days) {
 		return gridSlots;
+	}
+
+	@Override
+	public List<OverviewLane> overview() {
+		return overviewLanes;
 	}
 }

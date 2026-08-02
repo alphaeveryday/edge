@@ -193,3 +193,64 @@ export interface SourceGrid {
   days: number;
   slots: GridSlot[];
 }
+
+/* ---------- Run Overview (ALPHA-683) ---------- */
+
+/**
+ * 판정 스펙 §7 의 Run 집계 어휘 — 원장 4축의 재명명이 아니라 스펙이 별도 정의한 파생 요약이고,
+ * 파생은 서버 한 곳에서 한다(화면 재계산 금지 — running 플래그와 같은 원칙).
+ */
+export type OpsStatus = 'IN_PROGRESS' | 'READY' | 'DEGRADED' | 'BLOCKED' | 'UNKNOWN';
+
+/**
+ * 귀결 수(fulfilled~pending)는 **필수(required) DUE 작업 기준**이다 — "오늘 발행 가능한가"의
+ * 분모는 필수 작업이다. due 만 전체 DUE 수. 화면은 반드시 단위("필수 작업 N개 중")를 붙인다.
+ */
+export interface OverviewCounts {
+  due: number;
+  requiredDue: number;
+  fulfilled: number;
+  failed: number;
+  missed: number;
+  blocked: number;
+  pending: number;
+  skipped: number;
+}
+
+/** 결함 하나 — 축 원문 그대로. overdue(마감 경과 미귀결)만 서버 시계 판정이다. */
+export interface OverviewDefect {
+  stage: string;
+  taskKey: string;
+  outcome: TaskOutcome | null;
+  dataStatus: DataStatus | null;
+  freshnessStatus: 'UNKNOWN' | 'FRESH' | 'STALE' | null;
+  failedRecords: number | null;
+  overdue: boolean;
+}
+
+/**
+ * 레인(pipeline_type)별 최신 런 요약. defects 는 **단계 순**(같은 단계 안은 task_key 사전순 —
+ * 실행 순서가 아니다)이라, 첫 원소는 "최초 결함이 속한 단계"까지만 말한다. 첫 원소를 최초
+ * 결함 지점으로 그리지 마라 — 정확한 지점은 드릴다운 소관.
+ */
+export interface OverviewLane {
+  pipelineType: string;
+  runKey: string;
+  tradingDate: string | null;
+  /** 계획 시각(ISO). "이 판정이 언제 런 기준인가"의 근거 */
+  plannedAt: string | null;
+  /**
+   * 서버 KST 시계 판정 — Planner 가 오늘 안 돌면 조회는 어제 런을 최신으로 재사용한다.
+   * 오늘 화면이 그 사실을 숨기면 지난 판정이 오늘 것처럼 보인다(화면 재계산 금지).
+   */
+  notToday: boolean;
+  launchStatus: LaunchStatus | null;
+  orchestrationStatus: OrchestrationStatus | null;
+  opsStatus: OpsStatus;
+  counts: OverviewCounts;
+  defects: OverviewDefect[];
+}
+
+export interface SourceOverview {
+  lanes: OverviewLane[];
+}
