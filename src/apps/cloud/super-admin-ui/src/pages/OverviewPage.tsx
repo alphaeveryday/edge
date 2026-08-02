@@ -115,9 +115,18 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
               {lane.defects.map((d) => (
                 <tr
                   key={d.taskKey}
-                  onClick={() => openDrilldown(d.taskKey)}
+                  /* holdings 결손은 영향 화면(ALPHA-686)이 답한다 — 나머지는 드릴다운 */
+                  onClick={() =>
+                    d.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX'
+                      ? navigate(`/impact/holdings?runKey=${encodeURIComponent(lane.runKey)}`)
+                      : openDrilldown(d.taskKey)
+                  }
                   style={{ cursor: 'pointer' }}
-                  title="작업 드릴다운으로 이동"
+                  title={
+                    d.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX'
+                      ? '결손 영향 화면으로 이동'
+                      : '작업 드릴다운으로 이동'
+                  }
                 >
                   <td style={{ padding: '2px 10px 2px 0', whiteSpace: 'nowrap' }}>{d.taskKey}</td>
                   <td style={{ padding: '2px 0', color: 'var(--down, #b91c1c)' }}>
