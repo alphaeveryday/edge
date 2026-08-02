@@ -230,7 +230,9 @@ class TestDrainAndStop:
         worker, ledger, session_id = build_worker(db, tmp_path)
         run_until_idle(worker, NOW)
         ledger.request_drain(session_id=session_id, now=NOW)
-        assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINING"  # ack 수행
+        # ack 성공 tick 이 즉시 DRAINED 를 알린다 — 다음 tick 관측에 맡기면 heartbeat
+        # 주기 경계에서 DRAINED 세션이 heartbeat 를 거부해 STOPPED 로 샌다(#484 P2)
+        assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINED"
         assert db.sessions[session_id]["phase"] == "DRAINED"
         assert worker.tick(NOW + timedelta(seconds=31)) == "DRAINED"
 
@@ -285,7 +287,7 @@ class TestCorrection:
         assert early == "DRAINING"
         assert db.sessions[session_id]["phase"] == "DRAINING"  # lease 미만료 — ack 거부
         after_lease = NOW + timedelta(seconds=61)
-        assert worker.tick(after_lease) == "DRAINING"  # 고아 회수·처리 후 ack 성공
+        assert worker.tick(after_lease) == "DRAINED"  # 고아 회수·처리 후 ack 성공
         assert db.sessions[session_id]["phase"] == "DRAINED"
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
 
@@ -303,7 +305,7 @@ class TestCorrection:
         assert worker.tick(NOW) == "WINDOW_FAILED"
         ledger.request_drain(session_id=session_id, now=NOW)
         after_lease = NOW + timedelta(seconds=61)
-        assert worker.tick(after_lease) == "DRAINING"  # 회수→재실패→반납→ack
+        assert worker.tick(after_lease) == "DRAINED"  # 회수→재실패→반납→ack
         assert db.sessions[session_id]["phase"] == "DRAINED"
         assert {w["data_status"] for w in db.windows.values()} == {"DUE"}  # QC 대상
 
@@ -437,7 +439,7 @@ class TestTradingHoursUniverse:
         worker.config.universe = UNIVERSE
         assert worker.tick(start) == "STOPPED"          # ACTIVE + 불일치
         ledger.request_drain(session_id=session_id, now=start)   # 그 **뒤에** drain
-        assert worker.tick(start + timedelta(seconds=1)) == "DRAINING"
+        assert worker.tick(start + timedelta(seconds=1)) == "DRAINED"
         assert db.sessions[session_id]["phase"] == "DRAINED"
 
     def test_universe_mismatch_still_converges_drain(self, tmp_path):
@@ -456,7 +458,7 @@ class TestTradingHoursUniverse:
         assert worker.tick(start) == "WINDOW_FAILED"  # window 를 CLAIMED 로 남긴다
         ledger.request_drain(session_id=session_id, now=start)
         worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
-        assert worker.tick(start + timedelta(seconds=61)) == "DRAINING"
+        assert worker.tick(start + timedelta(seconds=61)) == "DRAINED"
         assert db.sessions[session_id]["phase"] == "DRAINED"
         # 처리하지 않고 반납만 했다 — 잔여 판정은 EOD QC 소관
         assert {w["data_status"] for w in db.windows.values()} == {"DUE"}
@@ -854,5 +856,7 @@ class TestFenceRecovery:
         run_until_idle(worker, NOW)
         ledger.request_drain(session_id=session_id, now=NOW)
         worker.config.universe = UNIVERSE_EXT  # 배포로 설정만 바뀐 상황
-        assert worker.tick(NOW + timedelta(seconds=1)) == "DRAINING"
+        # 자격 없음이어도 ack 는 성공한다(잔존 CLAIMED 없음) — DRAINED 로 수렴하되
+        # 자격 없음 카운터는 남는다
+        assert worker.tick(NOW + timedelta(seconds=1)) == "DRAINED"
         assert getattr(worker, "drain_blocked", 0) >= 1

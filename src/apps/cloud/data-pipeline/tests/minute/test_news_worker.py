@@ -571,5 +571,7 @@ class TestLoopLifecycle:
         worker, ledger, session_id = build_worker(db, tmp_path)
         worker.tick(NOW)
         ledger.request_drain(session_id=session_id, now=NOW)
-        assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINING"
+        # ack 성공 tick 이 즉시 DRAINED 를 알린다(#484 P2 — 다음 tick 관측에 맡기면
+        # heartbeat 주기 경계에서 DRAINED 세션이 heartbeat 를 거부해 STOPPED 로 샌다)
+        assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINED"
         assert db.sessions[session_id]["phase"] == "DRAINED"

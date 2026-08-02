@@ -157,9 +157,14 @@ class MinuteWorkerLoop:
                     )
                 else:
                     self.ledger.advance_watermarks(session_id=self.session_id)
-            self.ledger.ack_drain(
+            if self.ledger.ack_drain(
                 session_id=self.session_id, fence_token=self.fence_token, now=now
-            )
+            ):
+                # ack 성공 = 세션이 방금 DRAINED 가 됐다. 다음 tick 관측에 맡기면
+                # 그 사이 heartbeat 주기가 도래했을 때 DRAINED 세션이 heartbeat 를
+                # 거부해 STOPPED 로 빠지고, 상주 진입점이 재획득 불가 재시도에 영구히
+                # 갇힌다(EOD 정상 종료 불가) — 여기서 바로 알린다.
+                return "DRAINED"
             return "DRAINING"
         if phase not in ("ACTIVE",):
             return "DRAINED" if phase == "DRAINED" else "STOPPED"
