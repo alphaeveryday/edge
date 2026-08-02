@@ -501,6 +501,32 @@ def feature_news_assertions_partition(language: str, published_date: str) -> str
     return f"feature/news/assertions/language={language}/published_date={published_date}"
 
 
+def news_extraction_result_key(
+    job_id: str, redrive_generation: int, attempt: int
+) -> str:
+    """1분 뉴스 추출 job 한 번의 실행 결과 키 (ALPHA-689).
+
+    존은 배치 태깅과 같은 **feature** 다 — 값이 LLM 추론 결과라는 성질이 같다
+    (`feature_news_assertions_partition` 주석의 근거가 그대로 적용된다). 파티션 축만
+    다르다: 배치는 날짜창을 프루닝해 훑지만, Consumer 는 job 하나를 처리하고 그 결과를
+    DB `news_extraction_job.result_checksum` 으로 지목한다 — 즉 **DB 가 색인**이라
+    키에 날짜 축이 필요 없다.
+
+    ⚠️ 축이 (job_id, redrive_generation, attempt) **셋 다**인 이유: LLM 출력은
+    비결정적이라 같은 job 의 재시도가 다른 바이트를 낸다. attempt 를 빼면 "PUT 성공 →
+    DB 기록 전 사망 → 재시도" 가 같은 key 에 다른 바이트를 써서 `put_immutable` 이
+    거부하고, 그 job 은 영구히 못 끝난다. redrive 는 attempt_count 를 0 으로 되돌리므로
+    generation 을 빼면 새 세대의 첫 시도가 같은 함정을 그대로 밟는다.
+
+    실패한 시도의 결과도 남는다(끝난 job 이 지목하지 않는 키) — 그 정리는 orphan 검출·
+    EOD QC 소관이다(PR 8). 지우는 쪽을 여기에 두면 근거가 사라진다.
+    """
+    return (
+        f"feature/news_extraction/job={job_id}"
+        f"/generation={redrive_generation}/attempt={attempt}/result.json"
+    )
+
+
 def canonical_supply_contract_fact_partition(report_date: str) -> str:
     """canonical 공급계약 fact 파티션 프리픽스 (끝 슬래시 없음).
 
