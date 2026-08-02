@@ -299,6 +299,24 @@ class PriceTriggerHandler:
                     continue
                 decisions.append((entity_id, OPEN_STATUS_OPEN, open_price, None))
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            # 확정은 **읽은 세대 그대로일 때만** 한다 — 잠금 없이 읽은 artifact 로
+            # INSERT 하면, 그 사이 첫 window 가 정정(gen+1)됐을 때 **이미 낡은 시가**가
+            # 불변으로 동결되고 정정 세대 판정도 DO NOTHING 에 막힌다(#485 봇 P2).
+            cur.execute(
+                """
+                SELECT generation FROM minute_ingestion_window
+                WHERE session_id = %s AND window_start = %s
+                FOR UPDATE
+                """,
+                (session_id, first_start),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] != first_generation:
+                raise TransientJobError(
+                    f"첫 window 세대가 정정됐다(읽음={first_generation}, "
+                    f"현재={row and row[0]}) — 시가 확정 재시도",
+                    code="OPEN_SOURCE_CORRECTED",
+                )
             for entity_id, status, open_price, reason in decisions:
                 # DO NOTHING — 경쟁 Consumer 가 먼저 확정했으면 그 값이 정본이다
                 cur.execute(

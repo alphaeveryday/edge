@@ -539,3 +539,33 @@ class TestAdversarialInputs:
         assert Decimal(str(row["open_price"])) == 100
         [trigger] = db.triggers.values()  # 110/100 → +10% 발화
         assert trigger["entity_id"] == "500000"
+
+    def test_open_not_frozen_from_superseded_first_window(self, monkeypatch, tmp_path):
+        # 첫 window artifact 를 읽은 뒤 INSERT 전에 그 window 가 정정(gen+1)되면
+        # 낡은 시가를 불변 동결하지 않고 재시도한다(#485 봇 P2)
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        first_start = min(ws for (sid, ws) in db.windows if sid == session_id)
+
+        original = handler._artifact_rows
+
+        def corrupting_read(session_date, window_start, generation):
+            rows = original(session_date, window_start, generation)
+            if window_start == first_start:
+                # artifact 읽기 직후·INSERT 전에 첫 window 가 정정된 상황
+                db.windows[(session_id, first_start)]["generation"] = 2
+            return rows
+
+        monkeypatch.setattr(handler, "_artifact_rows", corrupting_read)
+        with pytest.raises(TransientJobError, match="첫 window 세대"):
+            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                    attempt=1, redrive_generation=0)
+        assert db.session_opens == {}  # 낡은 시가가 동결되지 않았다
