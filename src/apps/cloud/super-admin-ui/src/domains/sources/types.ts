@@ -228,7 +228,11 @@ export interface OverviewDefect {
   overdue: boolean;
 }
 
-/** 레인(pipeline_type)별 최신 런 요약. defects 는 파이프라인 순서라 **첫 원소가 최초 결함**이다. */
+/**
+ * 레인(pipeline_type)별 최신 런 요약. defects 는 **단계 순**(같은 단계 안은 task_key 사전순 —
+ * 실행 순서가 아니다)이라, 첫 원소는 "최초 결함이 속한 단계"까지만 말한다. 첫 원소를 최초
+ * 결함 지점으로 그리지 마라 — 정확한 지점은 드릴다운 소관.
+ */
 export interface OverviewLane {
   pipelineType: string;
   runKey: string;
