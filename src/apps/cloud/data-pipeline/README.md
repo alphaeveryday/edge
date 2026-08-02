@@ -87,7 +87,15 @@
 > lease 조합(lease ≥ (1+budget)×75초, session_lease ≥ heartbeat 주기+최악 tick)은
 > 기동·로드 시점에 검증한다. `WorkerConfig.lease_seconds` 기본이 60→300 으로 오른
 > 이유이기도 하다 — 토스 tick 실측 73초+ 아래면 자기 claim 이 in-flight 중 만료된다.
-> News Worker 엔트리포인트는 프로덕션 feed 부재로 별도 티켓: ALPHA-707)까지다.
+> News Worker 엔트리포인트는 프로덕션 feed 부재로 별도 티켓: ALPHA-707), **가격 트리거
+> 판정 Consumer handler**(ALPHA-708 — kernel 위에 얹는 LLM 0 판정:
+> |현재봉 close/세션 시가−1| ≥ abs_threshold, 대상 universe.etf_ids. 시가=그날 첫 분봉
+> open 을 `minute_session_open` 원장에 **확정 후 불변**으로 남기고(첫 window 미커밋=
+> 재시도, 커밋됐는데 레코드 없음=MISSING+사유), 쿨다운은 `minute_price_trigger` 의
+> UNIQUE(entity, 2h 버킷)+DO NOTHING 이 정본 — 트리거 행과 설명 outbox event 는 한
+> 트랜잭션이다. ⚠️ destination `price-explanation-realtime` 은 Relay 어휘 4번째로
+> **아직 미등록** — 등록 전 relay 를 띄우면 그 event 가 DEAD 로 격리된다(후속 PR).
+> 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정 규칙의 배선이다)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중

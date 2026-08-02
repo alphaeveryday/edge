@@ -14,7 +14,7 @@ CREATE TABLE minute_session_open (
     status       TEXT NOT NULL,
     -- OPEN 이면 필수, MISSING 이면 NULL — CHECK 로 결속한다(한쪽만 있는 행은
     -- "시가가 있는데 없다고" 또는 그 반대로 읽힌다)
-    open_price   NUMERIC(18, 6),
+    open_price   NUMERIC(24, 6),
     reason       TEXT,
     -- 시가를 뽑은(또는 부재를 확정한) 근거 window
     source_window TIMESTAMPTZ NOT NULL,
@@ -45,8 +45,8 @@ CREATE TABLE minute_price_trigger (
     window_start             TIMESTAMPTZ NOT NULL,
     generation               INTEGER NOT NULL,
     detection_policy_version TEXT NOT NULL,
-    open_price               NUMERIC(18, 6) NOT NULL,
-    close_price              NUMERIC(18, 6) NOT NULL,
+    open_price               NUMERIC(24, 6) NOT NULL,
+    close_price              NUMERIC(24, 6) NOT NULL,
     -- |close/open - 1| — 판정 당시 값을 그대로 남긴다(사후 재계산은 정정 세대에서
     -- 다른 값이 나올 수 있어 "왜 발화했나"의 근거가 안 된다)
     change_rate              NUMERIC(12, 8) NOT NULL,

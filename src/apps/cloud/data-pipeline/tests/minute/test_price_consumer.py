@@ -356,3 +356,133 @@ class TestContracts:
     def test_non_positive_threshold_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="양수"):
             build_handler(FakeMinuteDB(), tmp_path, abs_threshold=Decimal("0"))
+
+
+class TestAdversarialInputs:
+    """리뷰 라운드 1이 확인한 반례 고정 (coerce-to-passing·행 격리·전 종목 확정)."""
+
+    def test_opens_decided_for_all_etfs_even_absent_ones(self, tmp_path):
+        # 500001 이 어느 artifact 에도 안 실려도 시가 원장에는 MISSING+사유가 남는다 —
+        # 현재 window 등장 종목으로 좁히면 하루 종일 이유 없는 공백이 된다
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 100)],
+                    "500001": [None, None],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                attempt=1, redrive_generation=0)
+        row = db.session_opens[(session_id, "500001")]
+        assert row["status"] == "MISSING" and row["reason"]
+
+    def test_non_positive_close_does_not_fire(self, tmp_path):
+        # close 0 은 change_rate 1 로 임계를 통과한다 — 계약 위반 가격은 발화가 아니라
+        # 판정 오류다(로그·결과에 남고 트리거는 없다)
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 0)],
+                    "500001": [(200, 200), (200, -5)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                attempt=1, redrive_generation=0)
+        assert db.triggers == {}
+
+    def test_non_positive_first_open_decides_missing(self, tmp_path):
+        # 첫 window open=0 을 OPEN 으로 불변 확정하면 그 ETF 는 하루 종일 판정
+        # 오류로만 돌고 복구 경로가 없다 — MISSING+사유로 확정한다
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(0, 100), (100, 200)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                attempt=1, redrive_generation=0)
+        row = db.session_opens[(session_id, "500000")]
+        assert row["status"] == "MISSING" and "계약 위반" in row["reason"]
+        assert db.triggers == {}
+
+    def test_malformed_record_isolated_to_entity(self, tmp_path):
+        # 한 종목의 close 결손이 job 전체를 죽이면 다른 정상 ETF 판정까지 사라진다 —
+        # 행 단위로 격리하고 정상 종목은 발화한다
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 220)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        # 두 번째 window artifact 의 500001 레코드에서 close 를 제거해 형상 위반을 만든다
+        import json as _json
+        storage = LocalStorage(root=tmp_path)
+        [key] = [k for k in storage.list_keys("")
+                 if k.endswith("bars.ndjson") and "window=0901" in k]
+        rows = [_json.loads(line) for line in
+                storage.get_bytes(key).decode().splitlines()]
+        for row in rows:
+            if row["unit_id"] == "500001":
+                del row["close"]
+        (Path(tmp_path) / key).write_text(
+            "\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        checksum = handler(job_id=second["payload"]["job_id"],
+                           payload=second["payload"], attempt=1, redrive_generation=0)
+        assert len(checksum) == 64  # job 은 산다
+        [trigger] = db.triggers.values()
+        assert trigger["entity_id"] == "500000"  # 정상 종목은 발화했다
+
+    def test_numeric_session_id_rejected(self, tmp_path):
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 100)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        tampered = dict(second["payload"], session_id=123)
+        with pytest.raises(TransientJobError, match="session_id"):
+            handler(job_id=second["payload"]["job_id"], payload=tampered,
+                    attempt=1, redrive_generation=0)
+
+    def test_stale_generation_does_not_persist_trigger(self, tmp_path):
+        # 실행 중 window 가 정정(gen+1)되면 gen-1 발화를 커밋하지 않는다 — 커밋되면
+        # gen-2 판정이 cooldown UNIQUE 에 막혀 정정 전 결과가 정본이 된다
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        # 판정 직전에 window 가 다음 세대로 정정된 상황
+        window_start = datetime.fromisoformat(str(second["payload"]["window_start"]))
+        for (sid, ws), row in db.windows.items():
+            if sid == session_id and ws == window_start:
+                row["generation"] = 2
+        with pytest.raises(TransientJobError, match="정정"):
+            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                    attempt=1, redrive_generation=0)
+        assert db.triggers == {}
+        assert not any(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values())
