@@ -100,10 +100,10 @@
         <mxCell id="l3" value="L3 가설 에이전트 (=환원)&#10;창별 튜플 ≥2 (경쟁 강제)&#10;(취약성*, 방아쇠, 채널, 노출원, 역할, 결과, 부호)&#10;금지: id 생성·수치·자유텍스트·새 어휘" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="40" y="230" width="330" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="l4" value="L4 검정 에이전트 — 엣지 게이트&#10;튜플 → ObjectSet 결정론 전개 → 타입 수준 패널 검정(폴드 A)&#10;3값: 성립 · 불성립 · 판정불가(N 부족은 모른다)&#10;+ 환원 검사: 오늘 횡단면 노출 정렬 ~ 그 타입 과거 패턴&#10;+ 귀속 게이트 A–E (실패 → 구간/배제/거절)&#10;금지: 표본에 관한 모든 선택" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+        <mxCell id="l4" value="L4 검정 에이전트 — 엣지 게이트&#10;튜플 → 결정론 패널 (산업층 이중차감 ar · 날짜 층화 순열)&#10;양측 p₂ · 셀 Bonferroni α=0.05/m (17R 학술 수리)&#10;3값: 성립 · 불성립 · 판정불가(N 부족은 모른다)&#10;+ 환원 검사 · 귀속 게이트 A–E (실패 → 구간/배제/거절)&#10;금지: 표본에 관한 모든 선택" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="430" y="215" width="400" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="l5" value="L5 구조방정식 (폴드 B)&#10;창별 회귀 + 합 제약: u_ik = Στ_c(v_i)·x_i^c·D + α_k + ε&#10;식별집합 = CI(τ̂x) ∩ (0, 창의 몫]&#10;채널 소거(노출 인덱스) · 공선 → 채널별 구간&#10;과대식별 검산: 창 몫 vs 채널 예측" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+        <mxCell id="l5" value="L5 구조방정식 (폴드 B)&#10;창별 회귀 + 합 제약: u_ik = Στ_c(v_i)·x_i^c·D + α_k + ε&#10;크기는 일 단위: 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합] (8R 정정 — 창 클립은 범주 오류)&#10;명명 주의: 채널 상쇄 가능 → Manski 식별이 아니라 보수적 보고 규약&#10;거절 셀(게이트 D)은 크기 인용 전면 보류" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
           <mxGeometry x="890" y="215" width="380" height="130" as="geometry" />
         </mxCell>
         <mxCell id="rend" value="렌더 — 한 표&#10;창 | 시각 | 몫(항등식) | 처치 | 추정기여 | 구간 | 미설명 · 합계 검산&#10;순위 = 구조방정식 산물 + 부트스트랩 구간(겹치면 동순위)&#10;조건 문장 = 반사실 쌍 + positivity(반대 사례 없으면 침묵)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
@@ -127,6 +127,55 @@
         </mxCell>
         <mxCell id="side4" value="에이전트 경계 한 줄: 특징 채우러 탐색은 자유, 표본 찾아 헤매기는 금지 (표본을 고치면 '세는 횟수'가 늘어난다)" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;whiteSpace=wrap;rounded=1;align=left;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="40" y="700" width="1230" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="3 튜플 체계 (취약성·채널) as-built" id="tuple-page">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="tt" value="취약성·채널 튜플 체계 — 구현 그대로 (statics/*, 17R 반영. 라운드 이력: explanation-debug-journal.md)" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="10" width="1100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="vb" value="닫힌 어휘 (vocab.py)&#10;실체 8 · 사건타입 53 · 채널 8 (Q·P·C·FX·R·S·π·K)&#10;계열족 9 · 변환 5 · 결과 2&#10;어휘 확장 = 사람의 스키마 변경만" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="gr" value="접지 2종 (방아쇠의 자격)&#10;점: 셀의 장중 사건 타입 목록에서만&#10;계열: 오늘 |z|≥2 발화 계열족에서만 (series_z · 60d · PIT)&#10;목록 밖 = 날조 → propose 가 거부" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="380" y="60" width="360" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="mem" value="기억 (registry.py)&#10;회상이 기록보다 먼저 (4R)&#10;과거 스크린·판정 = PIT 어포던스&#10;오늘 결과는 마지막에 적층" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="780" y="60" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="hy" value="가설 에이전트 (hypothesize.py) — 환원의 담당자&#10;튜플 = (취약성*, 방아쇠, 채널, 노출원, 역할, 결과, 부호) + 환원 노트&#10;거부 4종: 접지 밖 날조 · 미발화 계열 · 동어반복(취약성=노출 피처) · 채널 중복&#10;되물음 1회 (거부 사유가 추가된 프롬프트 — 같은 요청 반복 금지, 2R)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="190" width="500" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="gs" value="격자 스크린 (grid_screen) — 커버리지 이중화&#10;그날 타입 × 측정가능 노출 전수 · LLM 무관 결정론&#10;탐색 전용 (방향 사후 · p₂) — 확증은 튜플 게이트만&#10;LLM 세션 분산을 메운다 (5차: 미발견 조합 적발)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacing=6;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="190" width="480" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="pt2" value="검정 에이전트 (paneltest.py) — 순수 코드&#10;패널: 산업층 이중차감 ar (17R①) · 당일 제외 PIT · 점=과거 그 타입 사건일 / 계열=|z|≥2 였던 날들&#10;검정: 날짜 층화 순열(SEED=0·PERMS=1000) · 양측 p₂ (17R②) · 셀 Bonferroni α=0.05/m (17R③)&#10;INUS: 충족 클래스 얇으면 조절자 모드 (6R — 엣지는 전체 패널, 취약성은 교호 대비)&#10;3값 게이트: 성립 · 불성립 · 판정불가 (표본을 찾으러 가지 않는다)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="330" width="700" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ap" value="오늘 적용 (applies_today)&#10;성립 ∧ 배정가능 ∧ 취약성 충족(INUS)&#10;∧ 환원 미불일치 ∧ (계열이면) 오늘 발화&#10;검정과 적용의 분리 — 성립해도 오늘 부적용 가능" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="780" y="330" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="sem" value="크기 (sem.py) — 성립 엣지에만&#10;τ̂ = 사건 고정효과 기울기 · 기여 = τ̂ × 오늘 노출편차&#10;일 단위 보고 구간 = CI ∩ (0, 하루 총합] (8R) · 상쇄 가능성 공시 (17R④)&#10;거절 셀(광역 ETF 비중 ≥5%, 게이트 D) → 크기 인용 보류 (13R)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="490" width="560" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="nr" value="서술 계약 (narrate.py) — 자격 없는 문장은 생성 시점에 죽는다&#10;접지 없는 인용 즉사 · 반증 선행(NTSB) · 미설명 선두 + 구간 회계(12R: 총합−Σ구간)&#10;게이트 없는 적용 주장 즉사 · 성립-미적용 사유 필수(기각 위장 금지) · 반복 접기&#10;갭 공변량 부분식별(16R: β CI × 야간 지수 · 부재=사유 필수=백필 좌표)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="640" y="490" width="620" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="q1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="vb" target="hy"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="gr" target="hy"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q3" value="어포던스" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;" edge="1" parent="1" source="mem" target="hy"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="hy" target="pt2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="pt2" target="ap"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="ap" target="sem"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="sem" target="nr"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="q8" value="탐색 발견 → 기억" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;" edge="1" parent="1" source="gs" target="mem"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tn" value="학술 지위 한 줄: 인과 효과 추정이 아니라 '닫힌 가설공간의 엄격 검정 + 반증 우선 + 보수적 크기 상한' — 그 주장으로 타당 (17R 감사).&#10;미해결: 식별집합 명명(④) · 셀 간 패널 재사용(홀드아웃 필요) · 게이트 A·B·C·E 재료 대기. 데이터 좌표: data-backfill-requests.md" style="text;html=1;strokeColor=#b85450;fillColor=#fff2cc;whiteSpace=wrap;rounded=1;align=left;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="630" width="1220" height="70" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
