@@ -53,7 +53,12 @@
 > (long polling→DB 상태 확인→멱등 claim→실행→성공/재시도/격리, visibility+DB lease
 > heartbeat, **DB 가 정한 시각으로 visibility 조정**, ALPHA-672 — handler 는 7B·7C 가
 > 채운다)과 그 복구 경로(DLQ reconciler `run dlq-reconcile` + **DB-first** redrive
-> `run redrive`: DEAD→RETRY_WAIT·세대 증가·새 delivery event 를 한 트랜잭션에)까지다.
+> `run redrive`: DEAD→RETRY_WAIT·세대 증가·새 delivery event 를 한 트랜잭션에), **시간대별
+> 기대 유니버스 분기**(ALPHA-684 — 기대 집합은 window 시각이 정한다: 정규장 09:00~15:30 은
+> 전 종목, 그 밖은 `Universe.extended_hours_ids` 가 선언한 시간외 거래 종목만. 세션 계획도
+> 같은 규칙에서 나온다 — 시간외 종목이 있으면 08:00~20:00 = 720 window, 없으면 390.
+> ⚠️ 상품군 축이 **아니다**: 개별주 001527 도 15:30 이 마지막이라, 클래스는 규칙이 아니라
+> universe 가 선언하고 값은 실측으로 채운다)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 348종 ÷ 초당 5회 ≈ 70초인데 window 는
 > 60초마다 생긴다. 콜 수·유니버스·한도 중 하나를 바꾸기 전까지는 shadow·백필 용도다.
