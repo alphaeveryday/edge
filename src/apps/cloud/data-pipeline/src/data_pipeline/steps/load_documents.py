@@ -17,10 +17,12 @@ canonical 의 (source_vendor, article_id). `ON CONFLICT DO NOTHING` 으로 제�
 `published_at` 으로 대신한다 — "우리가 이 문서를 쓸 수 있게 된 시각"의 가장 보수적인
 근사가 수집 시각이다. 둘 다 없으면 그 행은 적재하지 않고 결손으로 센다.
 
-`news_document.lead_text`(BigKinds 스니펫)도 여기서 채운다 — canonical 이 이미 갖고 있고
-(`normalize_news` 가 `CONTENT`→`lead_text`), 분석엔진 프롬프트가 제목만으로는 사건의
-내용을 못 본다. `assemble_events` 가 같은 행을 `document_id` 만으로 먼저 넣을 수 있어
-**UPSERT** 로 채운다(값이 실제로 달라질 때만 UPDATE — 멱등 집계가 거짓이 되지 않게).
+`news_document.lead_text`(BigKinds 스니펫)와 `publisher`(언론사, ALPHA-695)도 여기서
+채운다 — canonical 이 이미 갖고 있고(`normalize_news` 가 `CONTENT`→`lead_text`, 벤더별
+PROVIDER/site→`publisher`), 분석엔진 프롬프트가 제목만으로는 사건의 내용을 못 보고,
+콘솔 문서 목록의 출처 축은 언론사가 없으면 수집 벤더 하나로 접힌다. `assemble_events` 가
+같은 행을 `document_id` 만으로 먼저 넣을 수 있어 **UPSERT** 로 채운다(값이 실제로
+달라질 때만 UPDATE — 멱등 집계가 거짓이 되지 않게).
 공시(document_type='DISCLOSURE')·`document_entity` 는 범위 밖(별건).
 """
 
@@ -79,7 +81,7 @@ def run(
     """canonical 뉴스 → document 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_no_available_at = 0
-    already = created = lead_written = 0
+    already = created = lead_written = publisher_written = 0
     created_sample: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -117,6 +119,7 @@ def run(
                             "available_at": available_at,
                             "source_uri": row.get("url"),
                             "lead_text": row.get("lead_text"),
+                            "publisher": row.get("publisher"),
                         })
 
         with connect(db) as conn:
@@ -170,6 +173,22 @@ def run(
                             )
                             if lead_cur.rowcount:
                                 lead_written += 1
+                    # 언론사도 같은 규칙으로 채운다(ALPHA-695) — 정규화가 살려 온 값이 여기서
+                    # 버려지던 것을 승격. lead_text 와 가드를 분리한 이유: 게이트가 둘을 따로
+                    # non-blocking 경고로 두므로 한쪽만 있는 문서가 정상적으로 존재한다.
+                    if doc["publisher"]:
+                        with conn.cursor() as pub_cur:
+                            pub_cur.execute(
+                                "INSERT INTO news_document (document_id, publisher)"
+                                " SELECT document_id, %s FROM document"
+                                " WHERE source_code = %s AND source_document_id = %s"
+                                " ON CONFLICT (document_id) DO UPDATE"
+                                " SET publisher = EXCLUDED.publisher"
+                                " WHERE news_document.publisher IS DISTINCT FROM EXCLUDED.publisher",
+                                (doc["publisher"], source_code, article_id),
+                            )
+                            if pub_cur.rowcount:
+                                publisher_written += 1
                     if cur.rowcount == 0:
                         already += 1
                         continue
@@ -185,7 +204,7 @@ def run(
         failures.append({"reasons": ["load_error"], "error": str(exc)})
         # 롤백됐으니 쓰기 카운터는 전부 0 이다 — lead_written 을 남기면 로그가 실제보다
         # 많이 했다고 말한다(계측은 관대한 방향으로 틀리면 안 된다, Rule 12).
-        created, created_sample, lead_written = 0, [], 0
+        created, created_sample, lead_written, publisher_written = 0, [], 0, 0
         exit_code = 1
 
     log = {
@@ -200,6 +219,7 @@ def run(
         # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "바뀐 게 없다"이고, 멱등 재실행·
         # 롤백 런에서도 0 이다. 소스 결손을 보려면 canonical 쪽을 봐야 한다.
         "lead_text_written": lead_written,
+        "publisher_written": publisher_written,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
         # 원장 관측용 공통 봉투(ALPHA-181). 정체성·시각 결측은 그 기사가 문서 마스터에 안

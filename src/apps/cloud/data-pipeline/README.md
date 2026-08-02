@@ -313,7 +313,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # ADR-0027 의 ULID 형식과 달라 시간 정렬은 안 된다(그 축은 available_at). ⚠️ 이 계약은 **소급되지
 # 않는다** — ALPHA-456 이전에 적재된 행(dev 6,674건)은 랜덤 ULID id 를 갖고 있어 계산값과 갈린다.
 # 그래서 이 문서를 참조하는 행은 계산값이 아니라 **자연키로 되읽은 id** 에 붙여야 한다(ALPHA-628).
-# 이 스텝이 함께 채우는 news_document.lead_text(분석엔진 프롬프트의 스니펫 축)가 그 규칙을 쓴다.
+# 이 스텝이 함께 채우는 news_document.lead_text(분석엔진 프롬프트의 스니펫 축)·publisher
+# (언론사, ALPHA-695)가 그 규칙을 쓴다.
 # --from/--to 는 published_date
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
