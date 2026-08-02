@@ -117,11 +117,12 @@ class PriceTriggerHandler:
     storage: Storage
     jobs: JobLedger
     etf_ids: frozenset[str]
-    # etf_ids 를 뽑은 universe 파일의 version — 세션이 고정한 값과 대조한다. 상주
-    # Consumer 가 날을 넘기면(universe 는 holdings 파생이라 매일 바뀐다) 어제 집합으로
-    # 오늘 세션을 판정해, 빠진 ETF 는 사유 없이 조용히 제외된다(worker._session_ready
-    # 와 같은 축 — #485 봇 P2).
+    # etf_ids 를 뽑은 universe 파일의 (version, hash) — 세션이 고정한 값과 **둘 다**
+    # 대조한다(worker._session_ready 와 같은 축). 상주 Consumer 가 날을 넘기면
+    # (universe 는 holdings 파생이라 매일 바뀐다) 어제 집합으로 오늘 세션을 판정해
+    # 빠진 ETF 가 사유 없이 제외되고, version 재사용 배포는 hash 만이 잡는다(#485 봇 P2).
     universe_version: str
+    universe_hash: str
     abs_threshold: Decimal
     detection_policy_version: str
     destination: str
@@ -173,17 +174,18 @@ class PriceTriggerHandler:
         session_id = reference["session_id"]
         window_start = reference["window_start"]
         generation = reference["generation"]
-        session_version = self._session_universe_version(session_id)
-        if session_version is None:
+        session_universe = self._session_universe(session_id)
+        if session_universe is None:
             raise TransientJobError(
                 f"세션 행이 없다: {session_id}", code="SESSION_ROW_NOT_FOUND"
             )
-        if session_version != self.universe_version:
+        if session_universe != (self.universe_version, self.universe_hash):
             # 재시도로 낫지 않지만 terminal 로 확정하지도 않는다 — 해소는 맞는
             # universe 로의 재배포·재기동이고, 그때 이 job 은 정상 처리된다
             raise TransientJobError(
-                f"세션 universe({session_version}) ≠ 설정({self.universe_version}) — "
-                "다른 집합으로 판정하면 빠진 ETF 가 사유 없이 제외된다",
+                f"세션 universe{session_universe} ≠ 설정"
+                f"{(self.universe_version, self.universe_hash)} — 다른 집합으로 "
+                "판정하면 빠진 ETF 가 사유 없이 제외된다",
                 code="UNIVERSE_MISMATCH",
             )
         session_date = window_start.astimezone(KST).strftime("%Y-%m-%d")
@@ -293,17 +295,18 @@ class PriceTriggerHandler:
         return content_checksum(result)
 
     # ── 내부 ─────────────────────────────────────────────────
-    def _session_universe_version(self, session_id: str) -> str | None:
+    def _session_universe(self, session_id: str) -> tuple[str, str] | None:
+        # repository.session_universe 와 같은 문면 — fake 가 이 SQL 로 대조한다
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT universe_version FROM minute_ingestion_session
+                SELECT universe_version, universe_hash FROM minute_ingestion_session
                 WHERE session_id = %s
                 """,
                 (session_id,),
             )
             row = cur.fetchone()
-            return row and row[0]
+            return None if row is None else (row[0], row[1])
 
     def _window_checksum(self, session_id: str, window_start: datetime):
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:

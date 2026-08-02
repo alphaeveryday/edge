@@ -311,10 +311,6 @@ class _Cursor:
             row = self.db.jobs.get(("price", params[0]))
             if row is not None and row["status"] == "CLAIMED":
                 self._rows = [(row["attempt_count"], row["redrive_generation"])]
-        elif s.startswith("SELECT universe_version FROM minute_ingestion_session"):
-            row = self.db.sessions.get(params[0])
-            if row is not None:
-                self._rows = [(row["universe_version"],)]
         elif s.startswith("SELECT generation, checksum FROM minute_ingestion_window"):
             row = self.db.windows.get((params[0], params[1]))
             if row is not None:

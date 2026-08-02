@@ -133,7 +133,8 @@ def build_handler(db, tmp_path, **overrides):
         db=_DB, storage=LocalStorage(root=tmp_path),
         jobs=JobLedger(db=_DB, connect_fn=db.connect),
         etf_ids=frozenset(UNIVERSE.etf_ids),
-        universe_version=UNIVERSE.universe_version, abs_threshold=THRESHOLD,
+        universe_version=UNIVERSE.universe_version,
+        universe_hash=UNIVERSE.universe_hash, abs_threshold=THRESHOLD,
         detection_policy_version=POLICY, destination=DESTINATION,
         connect_fn=db.connect,
     )
@@ -537,7 +538,8 @@ class TestAdversarialInputs:
         )
         worker.tick(NOW)
         handler = build_handler(db, tmp_path,
-                                universe_version=universe_ext.universe_version)
+                                universe_version=universe_ext.universe_version,
+                                universe_hash=universe_ext.universe_hash)
         events = price_job_events(db)
         # 09:01 window 판정 — 시가는 09:00 open(100)이고, 08:00 부재는 무관하다
         target = [e for e in events if "T00:01" in str(e["payload"]["window_start"])][0]
@@ -703,7 +705,8 @@ class TestAdversarialInputs:
         worker.collector = PreOpenCollector({})
         worker.tick(datetime(2026, 7, 31, 8, 5, tzinfo=KST))
         handler = build_handler(db, tmp_path,
-                                universe_version=universe_ext.universe_version)
+                                universe_version=universe_ext.universe_version,
+                                universe_hash=universe_ext.universe_hash)
         [event] = price_job_events(db)
         checksum = claim_then_run(handler, event)
         assert len(checksum) == 64
@@ -784,3 +787,19 @@ class TestAdversarialInputs:
         with pytest.raises(TransientJobError, match="universe"):
             claim_then_run(handler, second)
         assert db.triggers == {} and db.session_opens == {}
+
+    def test_universe_hash_mismatch_is_transient(self, tmp_path):
+        # version 을 재사용한 배포(구성만 다름)는 hash 만이 잡는다 — worker 와 동일 축
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path, universe_hash="0" * 64)
+        second = price_job_events(db)[1]
+        with pytest.raises(TransientJobError, match="universe"):
+            claim_then_run(handler, second)
+        assert db.triggers == {}
