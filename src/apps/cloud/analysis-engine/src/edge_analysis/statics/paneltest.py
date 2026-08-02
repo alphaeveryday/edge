@@ -30,7 +30,8 @@ from functools import lru_cache
 import numpy as np
 
 from .gates import EdgeVerdict, edge_gate
-from .vocab import ALPHA, EXPOSURE_CUT, HypothesisTuple, MIN_N, Vulnerability
+from .vocab import (ALPHA, EXPOSURE_CUT, MIN_N, RELATIONS, HypothesisTuple,
+                    Vulnerability)
 
 PERMS = 1000        # 전역 상수 - 가설별 지정 금지 (§13)
 SEED = 0
@@ -146,17 +147,28 @@ _TODAY_Z = """
 SELECT z_ar, z_tv_chg FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE '{day}'
 """
 
-# 전이 패널 (§16 관계 노출): 사건 종목의 동일산업 피어(관계=1) vs 비피어(위약=0).
+# 전이 패널 (§16 관계 노출): 사건 종목과 **관계 있는** 종목(rel=1) vs 없는 종목(0).
 # 위약이 '같은 날 시장 전체'인 이유: 날짜 층화 순열이 공통충격을 소거하므로,
-# 남는 대비가 정확히 '관계가 있느냐'다. 산업은 v_instrument (PIT 클램프된 분류).
+# 남는 대비가 정확히 '관계가 있느냐'다.
+# 관계식은 주입된다 (19R): SAME_INDUSTRY 는 속성 동일성(v_instrument, PIT 분류),
+# 나머지는 타입 있는 1홉(v_link). 전에는 산업 하나만 재면서 이름은 '경로형'이었다.
+_REL_EXPR = {
+    "SAME_INDUSTRY": "CASE WHEN cp.industry_name = ce.industry_name THEN 1 ELSE 0 END",
+}
+_REL_LINK = """CASE WHEN EXISTS (
+        SELECT 1 FROM v_link l
+        WHERE l.link_type = '{ident}' AND l.link_date <= ev.d
+          AND ((l.src = ev.iid AND l.dst = g.instrument_id)
+            OR (l.dst = ev.iid AND l.src = g.instrument_id))
+    ) THEN 1 ELSE 0 END"""
+
 _RELATION_PANEL = """
 , ev AS (
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
     FROM v_event e
     WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}' {split}
 )
-SELECT g.instrument_id, g.trade_date, g.ar, {cols},
-       CASE WHEN cp.industry_name = ce.industry_name THEN 1 ELSE 0 END AS rel
+SELECT g.instrument_id, g.trade_date, g.ar, {cols}, {rel} AS rel
 FROM ev
 JOIN g   ON g.trade_date = ev.d AND g.instrument_id <> ev.iid
 JOIN v_instrument cp ON cp.instrument_id = g.instrument_id
@@ -457,22 +469,28 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
 
 def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> EdgeReport:
-    """전이 패널 (§16): 사건 종목의 동일산업 피어가 비피어보다 부호 방향으로
-    더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을 소거하므로
-    남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
+    """전이 패널 (§16): 사건 종목과 **관계 있는** 종목이 관계 없는 종목보다 부호
+    방향으로 더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을
+    소거하므로 남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
     오늘 셀에 배정하려면 소스-타깃 창 정렬(누가 먼저 움직였나, 5분봉)이 필요하고
-    그 판은 다음이다. 엣지의 존재 검정까지가 이 함수의 정직한 범위다."""
-    if t.exposure.ident != "SAME_INDUSTRY":
-        return _unmeasurable(f"관계 노출 {t.exposure.ident!r} 는 아직 못 잰다 - "
-                             "재는 것: ['SAME_INDUSTRY']")
+    그 판은 다음이다. 엣지의 존재 검정까지가 이 함수의 정직한 범위다.
+
+    19R: 관계 어휘가 닫혔고(RELATIONS 5종) 타입 있는 1홉(`v_link`)을 잰다. 전에는
+    산업 동일성 하나만 재면서 나머지를 '아직 못 잰다'로 되돌려보냈다 - 속성 동일성은
+    관계가 아니라 대리이므로, 그건 경로형 인과를 한 번도 안 잰 것이었다.
+    """
+    if t.exposure.ident not in RELATIONS:
+        return _unmeasurable(f"관계 노출 {t.exposure.ident!r} 는 어휘 밖 - {sorted(RELATIONS)}")
     if t.trigger.kind != "점":
         return _unmeasurable("계열 방아쇠 × 관계 노출 조합 판은 아직 없다")
 
     vcols = [(f"{v.family}/{v.transform}", FEATURES[(v.family, v.transform)])
              for v in t.vulnerabilities if (v.family, v.transform) in FEATURES]
     col_sql = ", ".join(f"g.{c}" for _, c in vcols) or "1 AS _one"
-    sql = (_base(day) + _RELATION_PANEL).format(etype=t.trigger.ident, day=day, cols=col_sql,
-                                 split=_split_sql(lake, day, "confirm", "e.trade_date"))
+    rel = _REL_EXPR.get(t.exposure.ident) or _REL_LINK.format(ident=t.exposure.ident)
+    sql = (_base(day) + _RELATION_PANEL).format(
+        etype=t.trigger.ident, day=day, cols=col_sql, rel=rel,
+        split=_split_sql(lake, day, "confirm", "e.trade_date"))
     raw = [r for r in lake.sql(sql) if all(v is not None for v in r[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,

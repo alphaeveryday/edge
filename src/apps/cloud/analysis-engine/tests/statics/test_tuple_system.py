@@ -10,7 +10,7 @@ import pytest
 
 from edge_analysis.statics.hypothesize import propose
 from edge_analysis.statics.paneltest import MIN_OPPOSITE, edge_test
-from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple,
+from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
                                          MIN_N, Trigger, Vulnerability)
 
 ETYPES = ["COMPANY.PRODUCT.LAUNCH", "MARKET_STRUCTURE.INDEX.INCLUSION"]
@@ -175,9 +175,31 @@ def test_relation_transmission_edge_tests_but_never_assigns():
     r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
     assert r.assignable is False and not r.applies_today       # 엣지만, 몫 배정 금지
-    t2 = HypothesisTuple(vulnerabilities=(), trigger=Trigger("점", "X"), channel="C원가",
-                         exposure=ExposureSource("관계", "SUPPLIES_TO", hops=1),  outcome="수익률", sign=1)
-    assert "못 잰다" in edge_test(RelLake(), t2, "2026-06-01").reason
+    # 어휘 밖 관계는 **튜플 생성 시점에** 죽는다 (19R) - 검정기까지 가서 '못 잰다'로
+    # 되돌아오면 어휘가 열려 있다는 인상만 주고 실제로는 침묵하는 거부였다.
+    with pytest.raises(VocabError, match="닫힌 관계 어휘"):
+        ExposureSource("관계", "SUPPLIES_TO", hops=1)
+
+
+def test_typed_link_relation_uses_ontology_hop_not_industry_proxy():
+    # 19R: '경로형'인데 재는 관계가 산업 동일성 하나뿐이었다. 산업은 속성이지
+    # 관계가 아니다 - 타입 있는 1홉(v_link)을 실제로 재는지 SQL 로 확인한다.
+    seen = {}
+
+    class LinkLake:
+        def sql(self, q):
+            seen["q"] = q
+            return []
+
+    t = HypothesisTuple(
+        vulnerabilities=(), trigger=Trigger("점", "COMPANY.ALLIANCE.PARTNERSHIP"),
+        channel="C원가", exposure=ExposureSource("관계", "SUPPLY_CHAIN", hops=1),
+        outcome="수익률", sign=1)
+    r = edge_test(LinkLake(), t, "2026-06-01", cell_instrument_id="i0")
+    assert "v_link" in seen["q"] and "SUPPLY_CHAIN" in seen["q"]
+    assert "industry_name = ce.industry_name" not in seen["q"]   # 대리가 아니라 관계
+    assert "l.link_date <= ev.d" in seen["q"]                    # 홉도 시점으로 잘린다
+    assert r.verdict == "판정불가"                                # 스텁이라 표본 0
 
 
 def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
@@ -404,6 +426,7 @@ def test_state_machine_hides_tools_and_enforces_order():
             self.seen.append(name)
             return {"cell": "셀 X", "coverage": "바인딩 35/35", "vocab": "채널 8",
                     "events": "사건 없음: 장중 사건이 하나도 없다",
+                    "news": "미도달: document 은 2026-07-08 부터 적재됐다",
                     "screen": "  T × 거래량/변화 n=91 p₂=0.000 방향+"}[name]
 
     m = Machine(FakeCat())
@@ -416,10 +439,14 @@ def test_state_machine_hides_tools_and_enforces_order():
     m.observe("vocab")                                         # 불러도 전이 안 함
     assert m.state == GROUND
     # 부재도 증거다 - 사건 0인 셀에서 긍정 증거만 요구하면 턴만 태운다(STORM 실측)
-    assert "→ SCREEN" in m.observe("events")
-    assert m.absent == 1 and m.state == SCREEN
+    assert "→ SCREEN" not in m.observe("events")      # 사건 확인만으로는 안 넘어간다
+    assert m.absent == 1 and m.state == GROUND
+    # 근거를 **열어 봤다**는 사실이 두 번째 조건 - 못 연다는 확인도 증거로 친다
+    assert "→ SCREEN" in m.observe("news")
+    assert m.evidence == 1 and m.grounded == 0 and m.state == SCREEN
     assert "→ EMIT" in m.observe("screen") and m.done
-    assert m.stats()["calls"] == ["GROUND:vocab()", "GROUND:events()", "SCREEN:screen()"]
+    assert m.stats()["calls"] == ["GROUND:vocab()", "GROUND:events()",
+                                  "GROUND:news()", "SCREEN:screen()"]
 
 
 def test_unreached_table_is_not_absence():

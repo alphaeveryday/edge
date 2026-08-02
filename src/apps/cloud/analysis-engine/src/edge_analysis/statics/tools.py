@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from ..observability import record as trace
 from .paneltest import FEATURES, Z_ANOM, grid_screen, series_z, split_date
-from .vocab import CHANNELS, SERIES_FAMILIES, TRANSFORMS
+from .vocab import CHANNELS, RELATIONS, SERIES_FAMILIES, TRANSFORMS
 
 MAX_ROWS = 40
 
@@ -32,6 +32,7 @@ TOOL_TABLES: dict[str, tuple[str, ...]] = {
     "holdings": ("etf_holding_snapshot",),
     "flows": ("investor_flow_daily",),
     "novelty": ("thread_discovery_snapshot",),
+    "links": ("event_argument", "source_event"),
 }
 
 
@@ -196,10 +197,32 @@ class Catalog:
         return (f"  산업 {name or '미분류'} 피어 {n}종목"
                 if n else "  산업 분류 없음 - 관계 노출 불가")
 
+    def links(self, kind: str = "") -> str:
+        """이 종목의 **타입 있는 1홉** 상대 - 경로형 가설의 접지 (19R).
+
+        객체 타입 사이의 관계다: 산업 동일성은 속성이지 관계가 아니다. 여기 안
+        보이는 상대는 오늘 이 종목과 안 엮여 있다 - 지어내면 검정에서 죽는다.
+        """
+        where = f"AND l.link_type = '{kind}'" if kind else "AND l.link_type IS NOT NULL"
+        rows = self._q(f"""
+            SELECT l.link_type, i.ticker, max(i.instrument_id), count(*) n
+            FROM v_link l
+            JOIN v_instrument i ON i.instrument_id =
+                 CASE WHEN l.src = '{self.instrument_id}' THEN l.dst ELSE l.src END
+            WHERE ('{self.instrument_id}' IN (l.src, l.dst)) {where}
+            GROUP BY 1,2 ORDER BY 4 DESC LIMIT {MAX_ROWS}""")
+        if isinstance(rows, str):
+            return rows
+        if not rows:
+            return (f"링크 없음: 이 종목은 {kind or '어떤 타입으로도'} 엮인 상대가 "
+                    f"원장에 없다 (조회 성공). 관계 노출 가설은 접지가 없다")
+        return "타입 있는 1홉 상대:\n" + "\n".join(
+            f"  [{r[0]}] {r[1]} ×{r[3]}" for r in rows)
+
     def vocab(self, part: str = "") -> str:
         """닫힌 어휘. 한 번에 다 주지 않는다 - 물어본 부분만."""
         table = {"채널": sorted(CHANNELS), "계열족": sorted(SERIES_FAMILIES),
-                 "변환": sorted(TRANSFORMS)}
+                 "변환": sorted(TRANSFORMS), "관계": sorted(RELATIONS)}
         if part in table:
             return f"{part} {len(table[part])}: {table[part]}"
         return ("어휘 부분을 골라라: " + " · ".join(f"{k}({len(v)})" for k, v in table.items())
@@ -243,4 +266,4 @@ class Catalog:
     @staticmethod
     def menu_names() -> tuple[str, ...]:
         return ("cell", "coverage", "tables", "peek", "events", "news", "thread",
-                "screen", "series", "peers", "vocab")
+                "screen", "series", "peers", "links", "vocab")

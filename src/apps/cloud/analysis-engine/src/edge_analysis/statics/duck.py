@@ -209,10 +209,31 @@ class CausalLake:
                              + ", ".join(f"{t}≥{h}" for t, h in late))
             if void:
                 lines.append("  진짜 0행: " + ", ".join(void))
-        lines.append("로컬/S3            행수")
-        for k in ("bars_5m", "us_market", "fx_usdkrw", "tau_sidecar"):
-            lines.append(f"  {k:<16} {self.exists.get(k, 0)}")
+        lines.append(self.frontier())
         return "\n".join(lines)
+
+    def frontier(self) -> str:
+        """봉과 원장이 **동시에** 닿는 전선. 이게 시스템의 실제 가용 범위다.
+
+        19R 실측이 강요한 보고: 봉은 2026-07-16 에서 끊기는데 원장 4표의 적재
+        지평은 07-20~07-25 다 → 그 표들은 **어떤 셀에서도 봉과 함께 못 쓴다**.
+        표별 미도달만 보면 '이 셀에서 늦었다'로 보이고, 구조적 불가라는 게 안 보인다.
+        """
+        if not self.exists.get("bars_5m"):
+            return "전선: 봉 없음 - 시간 분해 불가"
+        lo, hi = self.sql("SELECT min(CAST(ts AS DATE)), max(CAST(ts AS DATE)) "
+                          "FROM bars_5m")[0]
+        never = sorted(t for t, (_n, h) in self.effective.items()
+                       if h and h[:10] > str(hi))
+        line = f"전선: 봉 {lo}~{hi}"
+        if never:
+            line += (f"\n  봉 종료일 이후에야 적재된 표 {len(never)}개 - 어떤 셀에서도 "
+                     f"시간 분해와 함께 못 쓴다 (봉 백필 연장이 해소): {', '.join(never)}")
+        if self.day:
+            has = self.sql("SELECT count(*) FROM bars_5m WHERE CAST(ts AS DATE) = "
+                           f"DATE '{self.day}'")[0][0]
+            line += f"\n  이 셀({self.day}) 봉 {has}개" + ("" if has else " - 시간 분해 불가")
+        return line
 
     def bars(self, ticker: str, day: str) -> list[tuple]:
         """(ts, close) — tree.decompose 의 입력. 심볼 규약: '005930.KS'."""

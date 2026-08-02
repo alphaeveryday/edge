@@ -32,6 +32,19 @@ OUTCOME_KINDS = frozenset({"수익률", "전이"})
 
 TRIGGER_KINDS = frozenset({"점", "계열"})
 EXPOSURE_SOURCE_KINDS = frozenset({"속성", "관계"})
+
+# 관계 노출의 닫힌 어휘 (19R). 객체 타입 사이의 **타입 있는 1홉**이고, 각자
+# `v_link.link_type` 또는 속성 동일성에 실측으로 대응한다. 자유 문자열을 받던
+# 자리다 - 받아 봐야 검정기가 SAME_INDUSTRY 아니면 전부 거부했으므로, 어휘가
+# 열려 있다는 인상만 주고 실제로는 침묵하는 거부였다.
+#   실측 쌍(2026-07-30 기준): 공급망 102 · 제휴 244 · 공동발행 332 · 지분 24
+RELATIONS = frozenset({
+    "SAME_INDUSTRY",   # 속성 동일성 - 관계가 아니라 대리(교란에 약하다)
+    "SUPPLY_CHAIN",    # CUSTOMER ↔ SUPPLIER
+    "PARTNERSHIP",     # PARTNER ↔ PARTNER_2
+    "OWNERSHIP",       # INVESTOR ↔ TARGET_COMPANY
+    "CO_ISSUER",       # 같은 사건에 공동 발행 - 가장 약한 결합
+})
 COMPARATORS = frozenset({">=", "<="})
 
 # ── 전역 상수 — 가설별 지정 금지. 바꾸면 전 실험 재실행. ─────────────────
@@ -102,8 +115,8 @@ class ExposureSource:
         if self.kind == "속성":
             _need(self.ident, SERIES_FAMILIES, "노출원.계열족")
             _need(self.transform, TRANSFORMS, "노출원.변환")
-        elif not self.ident.strip():
-            raise VocabError("관계 노출원은 온톨로지 경로가 필요하다")
+        elif self.ident not in RELATIONS:
+            raise VocabError(f"관계 노출원은 닫힌 관계 어휘여야 한다: {sorted(RELATIONS)}")
         if self.hops < 1:
             raise VocabError("홉수는 1 이상이다")
 
@@ -152,5 +165,5 @@ __all__ = [
     "ALPHA", "CHANNELS", "COMPARATORS", "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS",
     "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "Feature", "HypothesisTuple",
     "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "SERIES_FAMILIES", "TRANSFORMS",
-    "TRIGGER_KINDS", "Trigger", "ExposureSource", "VocabError", "Vulnerability",
+    "RELATIONS", "TRIGGER_KINDS", "Trigger", "ExposureSource", "VocabError", "Vulnerability",
     "W_MINUTES"]

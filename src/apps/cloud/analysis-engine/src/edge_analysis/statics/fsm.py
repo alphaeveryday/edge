@@ -45,13 +45,14 @@ MENUS: dict[str, tuple[tuple[str, str], ...]] = {
     SCREEN: (
         ("screen", "screen()  발견 표본 격자 (타입×노출 전수). 탐색이지 확증이 아니다"),
         ("series", "series()  오늘 계열 혁신 z - 계열 방아쇠 자격 판정"),
-        ("peers", "peers()  같은 산업 피어 수 - 관계 노출·위약군 재료"),
+        ("peers", "peers()  같은 산업 피어 수 - 속성 동일성(관계 아님)"),
+        ("links", "links(관계타입)  타입 있는 1홉 상대 - 경로형 가설의 접지"),
     ),
     EMIT: (),
 }
 
 GUARDS: dict[str, str] = {
-    GROUND: "사건을 하나 확인하거나 **없다는 것**을 확인해야 넘어간다",
+    GROUND: "사건 확인(또는 부재 확인) + 근거 열람(news/thread 1회) - 둘 다 있어야 넘어간다",
     SCREEN: "역사를 봐야 노출축을 고를 수 있다 (screen 또는 series 1회)",
     EMIT: "",
 }
@@ -65,6 +66,7 @@ class Machine:
     state: str = GROUND
     grounded: int = 0          # 사건 존재를 확인한 횟수
     absent: int = 0            # **없다**는 것을 확인한 횟수 (부재도 증거다)
+    evidence: int = 0          # 근거를 **직접** 열어 본 횟수 (또는 못 연다는 확인)
     screened: int = 0          # 역사 조회 횟수
     calls: list[str] = field(default_factory=list)
 
@@ -102,6 +104,9 @@ class Machine:
             elif not blocked:
                 self.grounded += 1
         elif name in ("news", "thread"):
+            # 근거를 **열어 봤다**는 사실 자체가 증거다 - 못 연다는 확인(미도달)도
+            # 마찬가지다. 안 그러면 못 닿는 셀에서 가드가 영원히 안 열린다.
+            self.evidence += 1
             if not (blocked or body.startswith(("근거 문서 없음", "스레드 없음"))):
                 self.grounded += 1
         elif name in ("screen", "series") and not blocked:
@@ -110,8 +115,13 @@ class Machine:
 
     def _blocked(self) -> str:
         if self.state == GROUND:
-            return ("" if self.grounded or self.absent else
-                    "사건을 확인하지 않았다. events() 로 있는지 없는지 확인해라")
+            if not (self.grounded or self.absent):
+                return "사건을 확인하지 않았다. events() 로 있는지 없는지 확인해라"
+            # 타입 목록만 보고 넘어가던 것이 19R 실측의 결함이다 - 문서가 실제로
+            # 닿는 셀에서도 근거를 한 번도 안 열었다. 가드는 바닥인데 상한으로 쓴다.
+            return ("" if self.evidence else
+                    "사건 타입만 봤다. news() 또는 thread() 로 근거를 열어라 "
+                    "(못 닿으면 그 사실이 답이다 - 한 번 부르면 된다)")
         if self.state == SCREEN:
             return "" if self.screened else "역사를 안 봤다. screen() 또는 series() 를 써라"
         return ""
@@ -129,4 +139,5 @@ class Machine:
 
     def stats(self) -> dict:
         return {"state": self.state, "grounded": self.grounded, "absent": self.absent,
-                "screened": self.screened, "calls": list(self.calls)}
+                "evidence": self.evidence, "screened": self.screened,
+                "calls": list(self.calls)}

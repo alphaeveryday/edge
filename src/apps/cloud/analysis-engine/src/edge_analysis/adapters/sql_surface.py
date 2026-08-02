@@ -275,6 +275,36 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         FROM {prefix}event_evidence ev
         JOIN {prefix}document_assertion da ON da.assertion_id = ev.assertion_id
     ),
+    v_link AS (
+        -- **객체 타입 간 1홉** (19R). ObjectSet DSL 은 data-pipeline 앱에 있고 이
+        -- 워크트리에 없다 - 여기서는 그 *개념*(타입 있는 관계 + 역할 방향 + PIT 홉)을
+        -- 공유 뷰로 구현한다. 같은 사건에 **서로 다른 역할**로 등장한 두 상장사가
+        -- 한 간선이다. 실측 쌍: 공급망 57 · 제휴 117 · 지분 10 · 공동발행 185.
+        -- 산업 동일성(v_instrument)은 속성이지 관계가 아니다 - 그것만 재던 것이
+        -- '경로형'이라는 이름과 실제 사이의 격차였다.
+        SELECT a.entity_id AS src, b.entity_id AS dst,
+               a.role_code AS role_src, b.role_code AS role_dst,
+               CASE
+                 WHEN a.role_code IN ('CUSTOMER','SUPPLIER')
+                  AND b.role_code IN ('CUSTOMER','SUPPLIER')
+                  AND a.role_code <> b.role_code           THEN 'SUPPLY_CHAIN'
+                 WHEN a.role_code LIKE 'PARTNER%' AND b.role_code LIKE 'PARTNER%'
+                                                            THEN 'PARTNERSHIP'
+                 WHEN a.role_code IN ('INVESTOR','TARGET_COMPANY')
+                  AND b.role_code IN ('INVESTOR','TARGET_COMPANY')
+                  AND a.role_code <> b.role_code           THEN 'OWNERSHIP'
+                 WHEN a.role_code = 'ISSUER' AND b.role_code = 'ISSUER'
+                                                            THEN 'CO_ISSUER'
+               END AS link_type,
+               se.source_event_id, se.event_date AS link_date
+        FROM {prefix}source_event se
+        JOIN {prefix}event_argument a ON a.source_event_id = se.source_event_id
+        JOIN {prefix}event_argument b ON b.source_event_id = se.source_event_id
+                                     AND a.entity_id <> b.entity_id
+        JOIN {prefix}instrument ia ON ia.instrument_id = a.entity_id
+        JOIN {prefix}instrument ib ON ib.instrument_id = b.entity_id
+        WHERE se.event_status = 'ACTIVE' AND se.available_at <= {as_of}
+    ),
     v_cohort AS (
         SELECT e.instrument_id, e.trade_date, e.source_event_id, e.event_type_code,
                e.predicate_code, e.role_code, e.lifecycle_stage,
@@ -375,7 +405,7 @@ views_sql = _views
 
 # 손으로 쓴 의미 뷰의 이름. 자동 생성기가 **이 이름은 안 만든다** - 같은 이름이
 # 둘이면 CTE 가 영구 뷰를 가리고, 그게 정확히 "표면이 둘로 갈린다" 사고다.
-HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_hold', 'v_instrument', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
+HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_hold', 'v_instrument', 'v_link', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
 
 # 시점 클램프 후보 열. 우선순위 = **정보가 관측자에게 도달한 시각**에 가까운 순.
 # `*_at` 은 타임스탬프(as_of 로 자름), `*_date` 는 날짜(trade_date 로 자름).
