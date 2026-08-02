@@ -37,6 +37,8 @@ class FakeMinuteDB:
         self.outbox: dict[str, dict] = {}     # event_id -> row
         self.source_items: dict[tuple, dict] = {}  # (source_code, source_item_id) -> row
         self.anchors: dict[tuple, dict] = {}   # (session_id, source_code) -> row
+        self.documents: dict[tuple, dict] = {}      # (source_code, article_id) -> row
+        self.news_documents: dict[str, dict] = {}   # document_id -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -184,6 +186,61 @@ class _Cursor:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("SELECT d.available_at, n.lead_text"):
+            # 신선도 판정은 두 테이블이 **공유**한다 — 따로 걸면 낡은 관측이 한쪽만
+            # 되돌려 제목/리드가 섞인 행이 남는다. 그래서 잠그고 한 번만 본다.
+            assert "FOR UPDATE" in s, "canonical 신선도 검사가 문서 행을 잠그지 않는다"
+            row = self.db.documents.get((params[0], params[1]))
+            if row is not None:
+                child = self.db.news_documents.get(row["document_id"])
+                self._rows = [(
+                    row["available_at"],
+                    None if child is None else child["lead_text"],
+                )]
+        elif s.startswith("UPDATE document SET available_at"):
+            # available_at 을 쓰는 세 경로(부모·자식·이 보정)의 규칙이 같아야 한다
+            assert "GREATEST(available_at, %s)" in s, "리드 보정 UPDATE 의 시각이 단조가 아니다"
+            row = self.db.documents.get((params[1], params[2]))
+            if row is not None:
+                row["available_at"] = max(row["available_at"], params[0])
+                self.rowcount = 1
+        elif s.startswith("INSERT INTO document ("):
+            # 1분 뉴스 canonical writer(ALPHA-691). 정정 반영이 이 문장의 존재 이유라
+            # DO UPDATE 와 변경분 판정이 SQL 에 있어야 한다 — fake 가 합성하면 배치와 같은
+            # DO NOTHING 회귀가 초록으로 통과한다.
+            assert "ON CONFLICT (source_code, source_document_id) DO UPDATE" in s, \
+                "document upsert 가 정정을 반영하지 않는다(DO NOTHING 회귀)"
+            set_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[0]
+            where_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[1]
+            # fake 는 아래에서 이 컬럼들을 **자기 규칙으로** 갱신한다 — SQL 에서 한 컬럼이
+            # 빠져도 그대로 통과하므로, 갱신 대상과 비교 대상을 문면에서 못 박는다(Rule 9)
+            for column in ("title", "published_at", "source_uri", "language_code"):
+                assert f"{column} = EXCLUDED.{column}" in set_clause, \
+                    f"document upsert 가 {column} 을 갱신하지 않는다(정정이 안 반영된다)"
+                assert f"document.{column} IS DISTINCT FROM EXCLUDED.{column}" in where_clause, \
+                    f"document upsert 가 {column} 변경을 판정하지 않는다(멱등이 거짓이 된다)"
+            # 정정과 함께 시각도 움직여야 PIT 축이 내용과 어긋나지 않는다(ALPHA-691 2라운드)
+            # ⚠️ FOR UPDATE 는 **없는 키를 못 잠근다** — 동시 최초 INSERT 가 끼면 잠금
+            # 판정만으로는 낡은 관측이 최신값을 되돌린다. 가드는 여기에도 있어야 한다.
+            # 시각은 단조 증가만 — 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다
+            assert "GREATEST(document.available_at, EXCLUDED.available_at)" in set_clause, \
+                "document upsert 의 도착 시각이 단조가 아니다"
+            # ⚠️ **내용 쓰기를 시각으로 막지 않는다**(ALPHA-691 모델). 이 fake 는 WHERE 를
+            # 해석하지 않으므로, 가드가 다시 들어와도 여기서 막지 않으면 "정정이 건너뛰어진다"
+            # 는 실제 PG 회귀를 테스트가 통과시킨다 — 배치가 미래 published_at 을 실은 행에서
+            # 정확히 그 P1 이 재현된다.
+            assert "available_at <=" not in where_clause, \
+                "내용 쓰기가 시각으로 막혀 있다 — 미래 timestamp 행에서 정정이 유실된다"
+            self._upsert_document(params)
+        elif s.startswith("INSERT INTO news_document"):
+            assert "ON CONFLICT (document_id) DO UPDATE" in s, \
+                "news_document upsert 가 리드 정정을 반영하지 않는다"
+
+            assert "SET lead_text = EXCLUDED.lead_text" in s, \
+                "news_document upsert 가 리드를 갱신하지 않는다"
+            assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
+                "같은 리드에도 UPDATE 하면 멱등 집계가 거짓이 된다"
+            self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
         elif s.startswith(
@@ -324,6 +381,46 @@ class _Cursor:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
     # ── session ──
+    def _upsert_document(self, p):
+        (document_id, source_code, article_id, title, language_code, published_at,
+         available_at, source_uri) = p
+        existing = self.db.documents.get((source_code, article_id))
+        if existing is None:
+            self.db.documents[(source_code, article_id)] = {
+                "document_id": document_id, "source_code": source_code,
+                "source_document_id": article_id, "title": title,
+                "language_code": language_code, "published_at": published_at,
+                # ⚠️ 최초 1회만 — 실제 SQL 도 DO UPDATE 목록에서 뺐다
+                "available_at": available_at, "source_uri": source_uri,
+            }
+            self.rowcount = 1
+            return
+        changed = {
+            "title": title, "language_code": language_code,
+            "published_at": published_at, "source_uri": source_uri,
+        }
+        if all(existing[k] == v for k, v in changed.items()):
+            self.rowcount = 0   # IS DISTINCT FROM — 값이 같으면 UPDATE 하지 않는다
+            return
+        existing.update(changed)
+        # 정정과 함께 움직이되 **앞으로만**(GREATEST)
+        existing["available_at"] = max(existing["available_at"], available_at)
+        self.rowcount = 1
+
+    def _upsert_news_document(self, p):
+        lead_text, source_code, article_id = p
+        document = self.db.documents.get((source_code, article_id))
+        if document is None:
+            self.rowcount = 0   # INSERT … SELECT 가 0행 — 부모가 없으면 아무것도 안 쓴다
+            return
+        key = document["document_id"]
+        existing = self.db.news_documents.get(key)
+        if existing is not None and existing["lead_text"] == lead_text:
+            self.rowcount = 0
+            return
+        self.db.news_documents[key] = {"document_id": key, "lead_text": lead_text}
+        self.rowcount = 1
+
     def _insert_session(self, p):
         session_id, dataset, source_group, session_date, version, uhash, count = p
         if self.db.session_by_identity(dataset, source_group, session_date):

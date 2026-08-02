@@ -68,7 +68,13 @@
 > 불일치 하나뿐이고 나머지는 예산이 판정한다), **EOD 세션 QC**(ALPHA-693 — drain 이 끝난
 > 세션의 `DUE` 잔존을 `MISSING` 으로 확정하고 `FINALIZED` 로 닫는다. `run qc-minute-session`.
 > 확정은 **도래한 window 만**이고 계획의 양 끝·연속성이 어긋나면 확정 대신 `FAILED` 다 —
-> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다)까지다.
+> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다), **뉴스 canonical
+> writer**(ALPHA-691 — 7B 가 **읽던** PG `document`+`news_document` 를 실제로 **쓰는** 쪽.
+> commit 트랜잭션의 커서로 `(source_code, article_id)` upsert 하고, 정규화는 배치 정제
+> `_normalize` 를 재사용한다. ⚠️ 시각 축 규칙이 둘로 갈린다: **내용은 이번 관측 값**으로
+> 쓰고 **`available_at` 은 GREATEST 로 앞으로만** 간다 — 시각으로 내용 쓰기를 막으면 배치가
+> 미래 `published_at` 을 실은 행에서 정정이 유실되고, 시각을 뒤로 밀면 과거 as-of 구간에서
+> 문서가 사라진다)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
