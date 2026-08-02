@@ -29,7 +29,7 @@
 | 14 | 선언≠배선 (재발) | "계열 방아쇠 판은 아직 없다" — 기계는 있는데 게이트가 점 사건 전용 | `series_z` 발화 판정 + propose 계열 접지 + `_BASE` close 유도(log_return NULL 5,803행 근인) | `a70f587` |
 | 16 | 공변량 미배선 | 갭(폭락 셀 최대 몫 −8~−9%p)에 §9 공변량 없음 + 점 β 위험 | `gap_covariate`: β CI × 야간 지수, 부분식별(`_clip` 공용) + 부재=사유 필수 + **백필 대장** 신설 | `f5d9fa8` |
 | 17 | **학술 결함 ①②③** | ar 등가중뿐 · 단측 p 방향 채굴 · 셀 다중검정 무보정 | 산업층 이중차감 · 양측 p₂ · 셀 Bonferroni α/m. **트로피 사망**(p₂=0.030>0.0167) — 격자 1위(p₂=0.014)는 생존 | `ec4c96d` |
-| 18 | 선언≠배선 (3발) | `TracingClient` 도크스트링은 "전부 이 한 지점을 지난다"인데 `attribute.__main__` 은 날 클라이언트 사용 + `collect_trace` 미개방 → **17라운드 LLM 원문 전량 무기록**. 거부 사유도 stdout 3건·60자로 절단 소실 | 래퍼·버퍼 배선 + `traces/{ticker}_{day}_{hhmmss}.jsonl` 덤프 · `tuple.rejected` 에 **원문+사유 전문** · `cell.inputs`/`edge.verdict`/`grid.screen`/`gap.covariate` (record 는 버퍼 밖 no-op) | `2e0a1f4` |
+| 18 | 선언≠배선 (3발) | `TracingClient` 도크스트링은 "전부 이 한 지점을 지난다"인데 `attribute.__main__` 은 날 클라이언트 사용 + `collect_trace` 미개방 → **17라운드 LLM 원문 전량 무기록**. 거부 사유도 stdout 3건·60자로 절단 소실 | 래퍼·버퍼 배선 + `traces/{ticker}_{day}_{hhmmss}.jsonl` 덤프 · `tuple.rejected` 에 **원문+사유 전문** · `cell.inputs`/`edge.verdict`/`grid.screen`/`gap.covariate` (record 는 버퍼 밖 no-op) | `692aa76` |
 
 ## 미수리 (정직 공시 — 설계 변경 사안)
 
