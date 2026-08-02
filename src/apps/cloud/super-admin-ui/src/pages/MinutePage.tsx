@@ -39,10 +39,10 @@ function JobCells({ jobs }: { jobs: MinuteJobCounts }) {
   return (
     <>
       대기 {jobs.waiting} · 처리 중 {jobs.claimed}
-      {/* lease 만료된 claim = Consumer 가 죽고 아무도 재청구 안 한 고착 후보 — "처리 중"에
-       * 뭉개면 영원히 경고가 없다(리뷰 1라운드) */}
+      {/* 유효 lease 없는 claim(만료·NULL) = Consumer 가 죽고 아무도 재청구 안 한 고착 후보 —
+       * "처리 중"에 뭉개면 영원히 경고가 없다(리뷰 1라운드, 집계 정의와 라벨 일치는 검증 라운드) */}
       {jobs.claimedExpired > 0 && (
-        <b style={{ color: 'var(--bad, #dc2626)' }}> (그중 lease 만료 {jobs.claimedExpired})</b>
+        <b style={{ color: 'var(--bad, #dc2626)' }}> (그중 유효 lease 없음 {jobs.claimedExpired})</b>
       )}
       {' '}· 성공 {jobs.succeeded} ·{' '}
       <b style={{ color: jobs.dead > 0 ? 'var(--bad, #dc2626)' : undefined }}>DEAD {jobs.dead}</b>
