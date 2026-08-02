@@ -132,7 +132,8 @@ def build_handler(db, tmp_path, **overrides):
     base = dict(
         db=_DB, storage=LocalStorage(root=tmp_path),
         jobs=JobLedger(db=_DB, connect_fn=db.connect),
-        etf_ids=frozenset(UNIVERSE.etf_ids), abs_threshold=THRESHOLD,
+        etf_ids=frozenset(UNIVERSE.etf_ids),
+        universe_version=UNIVERSE.universe_version, abs_threshold=THRESHOLD,
         detection_policy_version=POLICY, destination=DESTINATION,
         connect_fn=db.connect,
     )
@@ -204,10 +205,10 @@ class TestJudgement:
         claim_then_run(handler, first)
         before = db.connect_calls
         claim_then_run(handler, second)
-        # connect = 트랜잭션이다(fake 계약). claim 1 + identity 1 + window checksum 1
-        # + 시가 select 1 + **쓰기 1** — 트리거 2건과 event 2건이 마지막 connect 하나에
-        # 있다. 쓰기가 쪼개지면 "발화했는데 설명 event 가 없는" 부분 확정이 가능해진다.
-        assert db.connect_calls == before + 5
+        # connect = 트랜잭션이다(fake 계약). claim 1 + identity 1 + universe 대조 1
+        # + window checksum 1 + 시가 select 1 + **쓰기 1** — 트리거 2건과 event 2건이
+        # 마지막 connect 하나에 있다. 쓰기가 쪼개지면 부분 확정이 가능해진다.
+        assert db.connect_calls == before + 6
         assert len(db.triggers) == 2
         assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 2
 
@@ -535,7 +536,8 @@ class TestAdversarialInputs:
             ),
         )
         worker.tick(NOW)
-        handler = build_handler(db, tmp_path)
+        handler = build_handler(db, tmp_path,
+                                universe_version=universe_ext.universe_version)
         events = price_job_events(db)
         # 09:01 window 판정 — 시가는 09:00 open(100)이고, 08:00 부재는 무관하다
         target = [e for e in events if "T00:01" in str(e["payload"]["window_start"])][0]
@@ -700,7 +702,8 @@ class TestAdversarialInputs:
 
         worker.collector = PreOpenCollector({})
         worker.tick(datetime(2026, 7, 31, 8, 5, tzinfo=KST))
-        handler = build_handler(db, tmp_path)
+        handler = build_handler(db, tmp_path,
+                                universe_version=universe_ext.universe_version)
         [event] = price_job_events(db)
         checksum = claim_then_run(handler, event)
         assert len(checksum) == 64
@@ -763,3 +766,21 @@ class TestAdversarialInputs:
         finally:
             monkey.undo()
         assert db.session_opens == {}
+
+
+    def test_universe_version_mismatch_is_transient(self, tmp_path):
+        # 상주 Consumer 가 날을 넘겨 어제 집합으로 오늘 세션을 판정하면 빠진 ETF 가
+        # 사유 없이 제외된다 — 세션이 고정한 universe_version 과 대조한다(#485 봇 P2)
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path, universe_version="univ-yesterday")
+        second = price_job_events(db)[1]
+        with pytest.raises(TransientJobError, match="universe"):
+            claim_then_run(handler, second)
+        assert db.triggers == {} and db.session_opens == {}
