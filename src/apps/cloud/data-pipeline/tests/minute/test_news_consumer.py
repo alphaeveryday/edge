@@ -5,8 +5,8 @@
 여기서 고정하는 건 셋이다.
 
 - **성공은 결과가 실제로 저장됐을 때만**이다 — 반환 checksum 은 저장한 바이트의 sha256 이다.
-- **되돌릴 수 없는 확정을 하지 않는다** — 이 handler 의 실패 경로엔 terminal 이 하나도 없다.
-  실패 근거가 전부 코드·배포·쓰기 순서라 예산(max_attempts)이 판정해야 한다.
+- **되돌릴 수 없는 확정은 근거가 그 메시지 자체의 성질일 때만** — 실패 근거가 코드·배포·
+  쓰기 순서면 예산(max_attempts)이 판정한다. terminal 은 payload↔원장 불일치 하나뿐이다.
 - **재시도가 스스로를 막지 않는다** — LLM 출력이 비결정적이라, 시도마다 key 가 갈리지
   않으면 불변 artifact 계약이 그 job 을 영구히 막는다(ALPHA-684 에서 데인 자기봉쇄 패턴).
 """
@@ -21,10 +21,14 @@ import pytest
 
 from data_pipeline.config import DbConfig
 from data_pipeline.lake.storage import LocalStorage, news_extraction_result_key
-from data_pipeline.minute.consumer import TransientJobError
+from data_pipeline.minute.consumer import PermanentJobError, TransientJobError
 from data_pipeline.minute.jobs import news_job_id
 from data_pipeline.minute.models import content_checksum
-from data_pipeline.minute.news_consumer import NewsExtractionHandler, PgArticleReader
+from data_pipeline.minute.news_consumer import (
+    _ENVELOPE_FIELDS,
+    NewsExtractionHandler,
+    PgArticleReader,
+)
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
 
@@ -267,14 +271,42 @@ class TestFailureClassification:
     def test_stored_result_of_another_job_is_not_reused(self, tmp_path):
         key = news_extraction_result_key(JOB_ID, 0, 1)
         (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / key).write_text(
-            json.dumps({"job_id": "b" * 64, "result": {"status": "ok"}})
-        )
+        (tmp_path / key).write_text(json.dumps(
+            {name: "b" * 64 if name == "job_id" else None for name in _ENVELOPE_FIELDS}
+            | {"result": {"status": "ok"}}
+        ))
 
         handler = make_handler(tmp_path)
         with pytest.raises(TransientJobError) as error:
             handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
         assert error.value.code == "RESULT_ARTIFACT_MISMATCH"
+
+    def test_lineage_less_stored_result_is_not_confirmed(self, tmp_path):
+        # 구버전 writer·수작업이 남긴 바이트에는 판정 근거가 없다. 확정하면 계보를
+        # 복원할 수 없는 결과가 SUCCEEDED 로 굳고, 같은 key 는 불변이라 보완도 못 한다.
+        key = news_extraction_result_key(JOB_ID, 0, 1)
+        (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / key).write_text(json.dumps({"job_id": JOB_ID, "result": {"status": "ok"}}))
+
+        handler = make_handler(tmp_path)
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert error.value.code == "RESULT_ARTIFACT_INCOMPLETE"
+
+    def test_non_string_stored_status_does_not_escape_classification(self, tmp_path):
+        # `in frozenset` 은 unhashable 값에서 TypeError 를 내고, 그건 이 분류를 통째로
+        # 우회해 UNCLASSIFIED 로 접힌다 — 사유가 사라진 채 예산만 탄다.
+        key = news_extraction_result_key(JOB_ID, 0, 1)
+        (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / key).write_text(json.dumps(
+            {name: None for name in _ENVELOPE_FIELDS}
+            | {"job_id": JOB_ID, "result": {"status": []}}
+        ))
+
+        handler = make_handler(tmp_path)
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert error.value.code == "RESULT_ARTIFACT_STATUS"
 
     def test_payload_contract_violation_carries_its_reason(self, tmp_path):
         # 그냥 ValueError 로 올리면 kernel 이 UNCLASSIFIED 로 접어, 예산 소진 뒤 원장엔
@@ -352,7 +384,11 @@ class TestJobIdentityLineage:
         })
         handler = make_handler(tmp_path, llm=llm, reader=reader)
 
-        with pytest.raises(TransientJobError) as error:
+        # ⚠️ 이 모듈에서 **유일한 terminal** 이다: payload 와 job 행은 같은 트랜잭션에서
+        # 같은 값으로 쓰이므로(commit_news_window) 갈렸다는 건 그 메시지 자체의 성질이고
+        # 재시도가 절대 못 푼다. transient 로 두면 예산을 태운 뒤 error_code 가
+        # RETRY_BUDGET_EXHAUSTED 로 덮여 고칠 사람이 원인을 잃는다.
+        with pytest.raises(PermanentJobError) as error:
             handler(job_id=JOB_ID, payload=payload(article_id="news-9999"), attempt=1,
                     redrive_generation=0)
         assert error.value.code == "JOB_IDENTITY_MISMATCH"
@@ -361,7 +397,7 @@ class TestJobIdentityLineage:
 
     def test_fingerprint_swap_is_refused(self, tmp_path):
         handler = make_handler(tmp_path)
-        with pytest.raises(TransientJobError) as error:
+        with pytest.raises(PermanentJobError) as error:
             handler(job_id=JOB_ID, payload=payload(input_fingerprint="0" * 64), attempt=1,
                     redrive_generation=0)
         assert error.value.code == "JOB_IDENTITY_MISMATCH"
@@ -521,6 +557,16 @@ class TestPgArticleReader:
         # 빈 기사로 접으면 "행이 없다"와 "제목이 없다"가 같은 결과가 된다
         result, _ = self._read(None)
         assert result is None
+
+
+class TestEnvelopeContract:
+    def test_envelope_fields_match_the_reuse_gate(self, tmp_path):
+        # 두 곳이 갈리면 한쪽만 고쳐진다 — 필드를 늘렸는데 게이트를 안 늘리면 계보 없는
+        # 바이트가 재사용에서 통과하고, 반대면 정상 결과가 매번 불완전으로 거부된다.
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        stored = json.loads((tmp_path / news_extraction_result_key(JOB_ID, 0, 1)).read_text())
+        assert stored.keys() == _ENVELOPE_FIELDS
 
 
 class TestKernelIntegration:

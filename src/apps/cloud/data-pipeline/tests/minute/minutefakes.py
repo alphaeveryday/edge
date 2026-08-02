@@ -164,6 +164,18 @@ class _Cursor:
             self._insert_job("news", params)
         elif s.startswith("INSERT INTO price_window_job"):
             self._insert_job("price", params)
+        elif s.startswith("SELECT source_code, article_id, input_fingerprint"):
+            # job 선언 정체성 조회(ALPHA-689). 컬럼 **순서**가 handler 의 zip 매핑을
+            # 정하므로 fake 가 의미를 합성하기 전에 문면을 못 박는다 — 순서가 바뀌면
+            # article_id 자리에 지문이 들어가 정상 job 이 전부 불일치로 막힌다.
+            for clause in ("tagger_version, ontology_version",
+                           "FROM news_extraction_job WHERE job_id = %s"):
+                assert clause in s, f"news_job_identity SQL 에 {clause} 가 없다"
+            row = self.db.jobs.get(("news", params[0]))
+            if row is not None:
+                self._rows = [(row["source_code"], row["article_id"],
+                               row["input_fingerprint"], row["tagger_version"],
+                               row["ontology_version"])]
         elif s.startswith("SELECT status, next_attempt_at, redrive_generation"):
             self._fetch_job(_job_kind(s), params)
         elif "SET status = 'CLAIMED'" in s and "redrive_generation = %s" in s:

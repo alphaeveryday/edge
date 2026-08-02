@@ -19,7 +19,9 @@ payload(job_id·source_code·article_id·source_item_id·input_fingerprint·gene
 
 - **물어보기 전에 막힌 것**(기사 행 부재·payload 계약 위반·읽을 수 없는 기존 결과)은
   근거가 코드·배포·쓰기 순서라 **transient** 다 — 예산(max_attempts)이 판정한다.
-  되돌릴 수 없는 DEAD 를 여기서 확정하는 경로는 하나도 없다.
+  ⚠️ 단 하나의 예외가 **payload↔원장 기사 축 불일치**(`_identity_verified`)다: 그 둘은
+  같은 트랜잭션에서 같은 값으로 쓰이므로 재시도가 절대 못 푼다. 예산을 태우면 사유가
+  `RETRY_BUDGET_EXHAUSTED` 로 덮여 고칠 사람이 원인을 잃는다.
 - **물어본 결과**는 그 자체가 판정이라 **기록하고 끝낸다**(job 은 SUCCEEDED). 배치
   태깅(`steps/tag_news.py`)이 정한 정책 그대로다: 재태깅 축은 `tagger_version`·
   `ontology_version`·입력 지문·`llm_error` 넷뿐이고, `llm_unparseable`·`bad_doc_class`
@@ -58,7 +60,7 @@ from ..lake.storage import Storage, news_extraction_result_key
 from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
 from .artifacts import put_immutable, sha256_bytes
-from .consumer import TransientJobError
+from .consumer import PermanentJobError, TransientJobError
 from .jobs import news_job_id
 from .models import canonical_json, content_checksum
 
@@ -81,6 +83,14 @@ _RETRY_STATUSES = {"llm_error": "LLM_ERROR"}
 # 이 job 의 재시도로는 도달할 수 없다. 배치 태깅과 같은 정책이다(Rule 7 — 갈라 두지 않는다).
 _RECORDED_STATUSES = frozenset({"no_title", "llm_unparseable", "bad_doc_class"})
 _SUCCESS_STATUS = "ok"
+
+# 결과 artifact 가 반드시 담는 계보 — `_envelope` 가 만드는 키 집합과 같아야 한다.
+# 재사용 경로가 이걸로 "우리가 쓴 결과인가"를 판정하므로, 필드를 늘리면 여기도 늘린다.
+_ENVELOPE_FIELDS = frozenset({
+    "job_id", "source_code", "article_id", "source_item_id", "job_input_fingerprint",
+    "job_source_generation", "job_identity_verified", "prompt_input_checksum",
+    "article_language", "redrive_generation", "attempt", "result",
+})
 
 
 class ArticleReader(Protocol):
@@ -203,7 +213,14 @@ def _identity_verified(identity: dict, declared: dict, job_id: str) -> bool:
         if identity[name] != declared.get(name)
     ]
     if mismatched:
-        raise TransientJobError(
+        # ⚠️ 여기만 **terminal** 이다. 이 모듈의 다른 실패는 근거가 배포·시간·쓰기 순서라
+        # 재시도가 실제로 풀지만, 이건 아니다: payload 와 job 행은 `commit_news_window` 가
+        # **같은 트랜잭션에서 같은 값으로** 쓰고 redrive 는 그 payload 를 그대로 복사한다 —
+        # 즉 갈렸다는 건 그 메시지 자체의 성질이고, 몇 번을 다시 해도 같은 값이 온다.
+        # transient 로 두면 예산을 다 태운 뒤 error_code 가 RETRY_BUDGET_EXHAUSTED 로
+        # 덮여 **원인이 사라지고**, 그걸 본 운영자의 redrive 는 같은 payload 로 같은 자리에서
+        # 다시 죽는다. 되돌리는 장치(redrive)는 이미 있고, 고칠 사람에게 필요한 건 사유다.
+        raise PermanentJobError(
             f"payload 가 원장이 선언한 기사와 다르다({', '.join(mismatched)}): job={job_id}",
             code="JOB_IDENTITY_MISMATCH",
         )
@@ -332,19 +349,32 @@ class NewsExtractionHandler:
         data = self.storage.get_bytes(key)
         try:
             stored = json.loads(data.decode("utf-8"))
+            missing = _ENVELOPE_FIELDS - stored.keys()
             stored_job_id = stored["job_id"]
             status = stored["result"]["status"]
-        except (ValueError, KeyError, TypeError, UnicodeDecodeError) as error:
+        except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError) as error:
             raise TransientJobError(
                 f"저장된 시도 결과를 읽을 수 없다({key}): {error}",
                 code="RESULT_ARTIFACT_UNREADABLE",
             ) from error
+        if missing:
+            # 계보 필드가 빠진 바이트(구버전 writer·수작업)를 확정하면, 판정의 근거를
+            # 복원할 수 없는 결과가 SUCCEEDED 로 굳는다 — 게다가 같은 key 는 불변이라
+            # 나중에 보완할 수도 없다. 다음 시도(다른 key)가 제대로 다시 쓰게 둔다.
+            raise TransientJobError(
+                f"저장된 시도 결과에 계보가 없다({key}): 누락 {sorted(missing)}",
+                code="RESULT_ARTIFACT_INCOMPLETE",
+            )
         if stored_job_id != job_id:
             raise TransientJobError(
                 f"저장된 시도 결과가 다른 job 의 것이다({key}): {stored_job_id}",
                 code="RESULT_ARTIFACT_MISMATCH",
             )
-        if status != _SUCCESS_STATUS and status not in _RECORDED_STATUSES:
+        # ⚠️ `in` 검사 전에 문자열인지 본다 — status 가 list·dict 면 frozenset membership 이
+        # TypeError 를 내고, 그건 이 분류를 통째로 우회해 UNCLASSIFIED 로 접힌다(사유 소실).
+        if not isinstance(status, str) or (
+            status != _SUCCESS_STATUS and status not in _RECORDED_STATUSES
+        ):
             # 이 경로가 쓰는 status 는 성공·기록형뿐이다(llm_error 는 저장 전에 raise 한다).
             # 그 밖의 값이 저장돼 있으면 우리가 쓴 게 아니거나 어휘가 바뀐 것이라, 성공으로
             # 승격하면 판정 없는 결과가 SUCCEEDED 로 굳는다.

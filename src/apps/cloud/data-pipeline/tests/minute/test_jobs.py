@@ -394,3 +394,31 @@ class TestAtomicEnqueue:
         claim = ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60)
         assert claim is not None and claim["job_id"] == current_id
         assert db.jobs[("price", stale_id)]["status"] == "DEAD"
+
+
+class TestNewsJobIdentity:
+    """job 이 선언한 정체성 읽기 (ALPHA-689) — Consumer 가 이걸로 두 원인을 가른다.
+
+    payload 만 믿으면 "버전 올린 뒤의 정상 backlog"(실행해야 한다)와 "다른 기사를
+    가리키는 결함"(막아야 한다)이 한 값으로 뭉개진다. 그 구분의 근거가 이 행이다.
+    """
+
+    def test_returns_declared_axes_in_column_order(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, _ = ledger.insert_news_job(
+            source_code="bigkinds", article_id="a-1", input_fingerprint="f" * 64,
+            tagger_version="tagging-v1", ontology_version="onto-1",
+        )
+        declared = ledger.news_job_identity(job_id=job_id)
+        # 값이 제자리에 오는지까지 본다 — 컬럼 순서가 어긋나면 지문이 article_id 자리에
+        # 들어가 정상 job 이 전부 "다른 기사"로 막힌다(조용히 틀리는 방향)
+        assert declared == {
+            "source_code": "bigkinds", "article_id": "a-1",
+            "input_fingerprint": "f" * 64,
+            "tagger_version": "tagging-v1", "ontology_version": "onto-1",
+        }
+
+    def test_absent_job_is_none(self):
+        # 없는 것을 빈 dict 로 접으면 Consumer 의 대조가 전부 불일치가 된다
+        assert make_ledger(FakeMinuteDB()).news_job_identity(job_id="0" * 64) is None
