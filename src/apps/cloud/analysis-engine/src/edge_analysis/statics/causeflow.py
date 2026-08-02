@@ -283,8 +283,11 @@ def _cli() -> None:
       validate <envelope.json>                 {"event_types":[],"series_families":[],
                                                 "hypotheses":[...]} → 심사 결과
       panel    <ticker> <iid> <day> <env.json> 튜플 1개의 패널 수치 (판정 없음)
+      panels   <ticker> <iid> <day> <dir> [패턴]  env 글롭 → panel_*.txt (웜 레이크 일괄).
+               패턴으로 샤딩해 여러 프로세스를 병렬로 돌린다 (예: "env_A*.json")
     """
     import json
+    import pathlib
     cmd = sys.argv[1]
     if cmd == "facts":
         g = gather(CausalLake(), *sys.argv[2:5])
@@ -309,6 +312,43 @@ def _cli() -> None:
         for r in rejected:
             print(f"[REJ] {r}")
         return
+    if cmd == "panels":
+        # 웜 레이크 하나로 env_*.json 전부의 패널을 일괄 선계산한다.
+        # 판정자마다 콜드 레이크 + edge_test 를 돌면 간선당 1~7분이 든다(실측) -
+        # 첫 attach·프루닝이 지배 비용이라 한 프로세스로 접으면 간선당 수십 초가 된다.
+        # 판정자는 파일만 읽는 순수 추론이 되고, 빠른 모델(scout)로 내릴 수 있다.
+        from dataclasses import replace as _rep
+
+        from .hypothesize import screen_tuples
+        from .judge import panel_text
+        from .vocab import ExposureSource
+        lake = CausalLake()
+        tkr, iid, day, d = sys.argv[2], sys.argv[3], sys.argv[4], pathlib.Path(sys.argv[5])
+        pat = sys.argv[6] if len(sys.argv) > 6 else "env_*.json"
+        for f in sorted(d.glob(pat)):
+            env = json.loads(f.read_text(encoding="utf-8"))
+            valid, rej = screen_tuples(env.get("hypotheses") or [],
+                                       event_types=env.get("event_types") or [],
+                                       series_families=env.get("series_families") or [])
+            eid = f.stem.removeprefix("env_")
+            if not valid:
+                (d / f"panel_{eid}.txt").write_text("유효 튜플 없음:\n" + "\n".join(rej),
+                                                    encoding="utf-8")
+                continue
+            tup = valid[0]
+            out = [panel_text(lake, tup, iid, day)]
+            if "n=0" in out[0] or "효과 미계산" in out[0]:
+                # 측정 불가 노출은 **코드가** 이웃으로 프로브한다 (특징 선택의 결정론 절반).
+                # 판정자마다 같은 발견을 재발명하던 것을 코드로 내린다 (Rule 5).
+                for fam, tr in (("거래량", "변화"), ("가격잔차", "누적")):
+                    if (tup.exposure.ident, tup.exposure.transform) == (fam, tr):
+                        continue
+                    probe = _rep(tup, exposure=ExposureSource("속성", fam, tr))
+                    out.append(f"\n[자동 프로브 - 측정 가능한 이웃 노출 ({fam}/{tr})]\n"
+                               + panel_text(lake, probe, iid, day))
+            (d / f"panel_{eid}.txt").write_text("\n".join(out), encoding="utf-8")
+            print(f"{eid}: ok")
+        return
     if cmd == "panel":
         from .hypothesize import screen_tuples
         from .judge import panel_text
@@ -329,7 +369,7 @@ def pathlib_read(p: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels"):
         _cli()
         return
     if len(sys.argv) != 4:
