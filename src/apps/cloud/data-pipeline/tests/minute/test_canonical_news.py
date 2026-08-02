@@ -107,21 +107,36 @@ class TestCorrection:
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert (document["title"], document["available_at"]) == ("정정된 제목", corrected_at)
 
-    def test_stale_observation_cannot_roll_back_the_current_body(self):
-        # 지연·재생된 관측이 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다
+    def test_stale_observation_fails_loud_instead_of_skipping(self):
+        # 낡은 관측으로 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다.
+        # 그렇다고 **조용히 건너뛰면 더 나쁘다**: commit 은 이 반환값을 안 보고 job 과
+        # 원장 checksum 을 확정하므로, 원장은 새 지문을 처리했다는데 canonical 은 옛
+        # 본문인 상태가 굳고 재관측도 안 온다 — 이 모듈이 고치려던 P1 의 재현이다.
         db = FakeMinuteDB()
         write(db, vendor_row(TITLE="정정된 제목", CONTENT="정정된 리드"),
               observed_at=OBSERVED + timedelta(hours=3))
 
-        assert write(db, vendor_row(TITLE="옛 제목", CONTENT="옛 리드"),
-                     observed_at=OBSERVED) == 0
+        with pytest.raises(ValueError, match="과거다"):
+            write(db, vendor_row(TITLE="옛 제목", CONTENT="옛 리드"), observed_at=OBSERVED)
 
-        # ⚠️ 제목과 리드는 **다른 테이블**이다. 신선도 가드를 한쪽에만 걸면 낡은 관측이
-        # 리드만 되돌려 "제목 T2 + 리드 T1" 이라는 **존재한 적 없는 본문**이 남는다
-        # (실측으로 재현했다 — 이 트랙에서 가드를 한 곳에만 건 실수의 재현이다).
+        # ⚠️ 제목과 리드는 **다른 테이블**이다. 판정이 갈리면 "제목 T2 + 리드 T1" 이라는
+        # 존재한 적 없는 본문이 남는다(실측으로 재현했던 자리다).
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert document["title"] == "정정된 제목"
         assert db.news_documents[document["document_id"]]["lead_text"] == "정정된 리드"
+
+    def test_new_child_row_alone_does_not_move_the_arrival_time(self):
+        # 배치는 리드가 없으면 news_document 를 안 만든다 → document 만 있는 문서가 있다.
+        # 같은 내용·NULL 리드로 재관측하면 자식 행이 **생기지만** 내용은 그대로다 —
+        # rowcount 만 보면 1 이라 도착 시각을 밀고, 그러면 과거 as-of 구간에서 문서가 사라진다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT=None))
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        del db.news_documents[document["document_id"]]      # 배치가 만든 형상(자식 행 없음)
+        document["available_at"] = OBSERVED
+
+        write(db, vendor_row(CONTENT=None), observed_at=OBSERVED + timedelta(hours=3))
+        assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == OBSERVED
 
     def test_lead_only_correction_moves_the_arrival_time(self):
         # document 의 비교 절은 리드를 못 본다 — 그대로 두면 리드만 바뀐 정정에서 내용은
@@ -166,6 +181,13 @@ class TestIdentity:
         assert db.documents[(SOURCE, promoted)]["document_id"] == stable_domain_id(
             "doc", SOURCE, promoted
         )
+
+    def test_naive_clock_is_rejected(self):
+        # naive 를 TIMESTAMPTZ 에 넣으면 세션 tz 로 해석돼 배포마다 값이 달라지고,
+        # 다음 관측의 비교에서 aware 값과 만나 TypeError 로 window 가 반복 롤백된다.
+        db = FakeMinuteDB()
+        with pytest.raises(ValueError, match="timezone-aware"):
+            write(db, vendor_row(), observed_at=datetime(2026, 7, 31, 9, 0))
 
     def test_missing_natural_key_fails_loud(self):
         # 조용히 건너뛰면 commit 은 job 을 만들었는데 정본이 없는 상태가 된다

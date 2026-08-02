@@ -27,7 +27,12 @@ t2  J2 실행 → T1 을 읽어 추출 → 결과가 fp2 job 의 성공으로 �
 움직인다**. 창 시각을 쓰면 recovery 가 12:00 에 안 기사를 09:00 으로 소급하고, 정정 때
 동결하면 내용은 T2 인데 시각은 T1 이라 as-of 조회가 미래 내용을 본다 — 둘 다 이 값을 PIT
 축으로 복사하는 하류(`load_assertions`·`assemble_events`)에서 조용히 틀린다. 대신 낡은
-관측이 최신 본문을 되돌리지 못하게 신선도 가드(`available_at <=`)를 건다.
+관측이 최신 본문을 되돌리지 못하게 신선도 가드를 **두 겹**으로 건다: 행을 잠그고 한 번
+판정하고(두 테이블이 그 판정을 공유한다 — 따로 걸면 제목/리드가 갈린 행이 남는다),
+`ON CONFLICT` WHERE 에도 `available_at <=` 를 남긴다. ⚠️ `FOR UPDATE` 는 **아직 없는 키를
+잠그지 못하므로**(gap 은 안 잠긴다) 잠금만으로는 동시 최초 INSERT 경합을 못 막는다.
+낡은 관측을 만나면 **조용히 건너뛰지 않고 실패시킨다** — 호출자는 이 반환값을 안 보고
+job·원장을 확정하므로, 건너뛰면 원장만 앞서간 채 굳는다.
 
 ⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
 
@@ -81,6 +86,10 @@ class PgNewsCanonicalWriter:
     ) -> int:
         # ⚠️ `window_start` 는 **관측 시각이 아니다**(아래 available_at 주석 참조).
         observed_at = self.clock()
+        if observed_at.tzinfo is None or observed_at.tzinfo.utcoffset(observed_at) is None:
+            # naive 를 TIMESTAMPTZ 에 넣으면 **세션 tz** 로 해석되고(배포마다 다름), 다음
+            # 관측의 비교에서 aware 값과 만나 TypeError 로 window 가 반복 롤백된다.
+            raise ValueError(f"clock 이 timezone-aware 를 주지 않는다: {observed_at!r}")
         written = 0
         for record in records:
             written += self._upsert_one(cur, record, observed_at=observed_at)
@@ -109,26 +118,39 @@ class PgNewsCanonicalWriter:
         # ⚠️ `_normalize` 의 article_id 가 아니라 **원장이 준 값**을 쓴다(모듈 docstring).
         document_id = stable_domain_id("doc", source_code, article_id)
 
-        # 신선도 판정을 **한 번만** 한다. 두 테이블에 따로 걸면 낡은 관측이 한쪽만 되돌려
+        # 신선도 판정을 **한 번만** 한다(잠금 겹은 여기, 경합 겹은 아래 ON CONFLICT WHERE).
+        # 두 테이블에 따로 걸면 낡은 관측이 한쪽만 되돌려
         # 제목 T2 + 리드 T1 의 **혼합 행**이 남는다 — Consumer 는 존재한 적 없는 본문을 읽고,
         # 그 결과가 어느 지문의 것도 아니게 된다(실측으로 재현했다).
         # ⚠️ 검사와 쓰기 사이를 잠근다 — 이 행에는 배치 loader 도 쓴다(비잠금 = TOCTOU).
         cur.execute(
             """
-            SELECT available_at FROM document
-            WHERE source_code = %s AND source_document_id = %s
-            FOR UPDATE
+            SELECT d.available_at, n.lead_text, n.document_id IS NOT NULL
+            FROM document d
+            LEFT JOIN news_document n ON n.document_id = d.document_id
+            WHERE d.source_code = %s AND d.source_document_id = %s
+            FOR UPDATE OF d
             """,
             (source_code, article_id),
         )
         current = cur.fetchone()
         if current is not None and current[0] > observed_at:
-            # 지연·재생된 관측이다. 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다.
-            logger.info(
-                "낡은 관측이라 canonical 을 건드리지 않는다: (%s, %s) 관측=%s 현재=%s",
-                source_code, article_id, observed_at, current[0],
+            # 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다. 그렇다고 **조용히
+            # 건너뛰면 더 나쁘다**: 호출자(commit)는 이 반환값을 보지 않고 job 과 원장
+            # checksum 을 확정하므로, 원장은 새 지문을 처리했다는데 canonical 은 옛 본문인
+            # 상태가 굳고 재관측도 안 온다 — 이 모듈이 고치려던 P1 이 그대로 재현된다.
+            # 정상 경로에서는 도달하지 않는다(관측 시각은 단조롭다). 도달했다면 주입 시계가
+            # 원장의 now 와 어긋난 것이고, 그건 배포·설정 결함이라 window 를 실패시켜
+            # 드러내는 게 맞다(재시도가 같은 창을 다시 처리한다).
+            raise ValueError(
+                f"관측 시각이 저장된 도착 시각보다 과거다 — 주입 시계가 원장과 어긋났다: "
+                f"({source_code}, {article_id}) 관측={observed_at} 저장={current[0]}"
             )
-            return 0
+        # 리드 **변경** 판정의 기준값. 자식 행이 없던 문서(배치가 리드 없이 넣은 경우)에
+        # NULL 리드를 처음 만드는 건 내용 변경이 아니다 — rowcount 만 보면 1 이라
+        # 안 바뀐 문서의 도착 시각을 앞으로 밀고, 그러면 과거 as-of 구간에서 문서가 사라진다.
+        previous_lead = current[1] if current is not None else None
+        had_lead_row = bool(current[2]) if current is not None else False
 
         cur.execute(
             """
@@ -142,10 +164,11 @@ class PgNewsCanonicalWriter:
                 source_uri = EXCLUDED.source_uri,
                 language_code = EXCLUDED.language_code,
                 available_at = EXCLUDED.available_at
-            WHERE document.title IS DISTINCT FROM EXCLUDED.title
-               OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
-               OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
-               OR document.language_code IS DISTINCT FROM EXCLUDED.language_code
+            WHERE document.available_at <= EXCLUDED.available_at
+              AND (document.title IS DISTINCT FROM EXCLUDED.title
+                   OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
+                   OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
+                   OR document.language_code IS DISTINCT FROM EXCLUDED.language_code)
             """,
             (
                 document_id, source_code, article_id,
@@ -176,7 +199,8 @@ class PgNewsCanonicalWriter:
             """,
             (normalized["lead_text"], source_code, article_id),
         )
-        lead_changed = cur.rowcount
+        # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다(위 previous_lead).
+        lead_changed = had_lead_row and normalized["lead_text"] != previous_lead
         if lead_changed and not changed:
             # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
             # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
@@ -187,4 +211,4 @@ class PgNewsCanonicalWriter:
                 """,
                 (observed_at, source_code, article_id),
             )
-        return 1 if (changed or lead_changed) else 0
+        return 1 if (changed or lead_changed or not had_lead_row) else 0
