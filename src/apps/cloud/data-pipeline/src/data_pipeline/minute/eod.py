@@ -240,23 +240,21 @@ class SessionQc:
     def _scan_orphans(self, session_id: str, session: dict) -> tuple[list[str], bool]:
         """orphan 나열 — (키 목록, 실제로 훑었는가).
 
-        ⚠️ `find_orphan_artifacts` 는 **가격 raw 경로 전용**이다(prefix 에 `dataset=
-        price_minute` 가 박혀 있다). 뉴스 세션에 그대로 부르면 같은 날짜의 무관한 가격
-        객체를 훑거나 아무것도 못 훑고 **"orphan 0건"으로 확정**된다 — 안 본 것을 없는
-        것으로 보고하는 게 여기서 가장 나쁜 실패다. 그래서 훑었는지를 함께 돌려준다.
-
-        source 는 **원장의 `source_group`** 을 쓴다. CLI 인자를 쓰면 오타 하나로 없는
-        prefix 를 훑고 빈 목록을 확정한다(그 역시 조용한 거짓 clean 이다).
+        ⚠️ `find_orphan_artifacts` 는 **가격 분봉 canonical 경로 전용**이다(prefix 가
+        `canonical/market_data/price_minute` 에 박혀 있다, ALPHA-705). 뉴스 세션에
+        그대로 부르면 같은 날짜의 무관한 가격 객체를 훑거나 아무것도 못 훑고
+        **"orphan 0건"으로 확정**된다 — 안 본 것을 없는 것으로 보고하는 게 여기서
+        가장 나쁜 실패다. 그래서 훑었는지를 함께 돌려준다.
         """
         if session["dataset"] != _PRICE_DATASET:
             logger.info(
-                "orphan 스캔 생략 — dataset=%s 는 가격 raw 경로 규약이 아니다(session=%s)",
+                "orphan 스캔 생략 — dataset=%s 는 가격 분봉 경로 규약이 아니다(session=%s)",
                 session["dataset"], session_id,
             )
             return [], False
         return find_orphan_artifacts(
             db=self.ledger.db, connect_fn=self.ledger.connect_fn, storage=self.storage,
-            session_id=session_id, source=session["source_group"], market=_MARKET,
+            session_id=session_id, market=_MARKET,
             session_date=session["session_date"].isoformat(),
         ), True
 

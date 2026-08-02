@@ -6,8 +6,8 @@
 - raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
         가격·재무는 ingest_date(수집일). 각 빌더 주석 참고. **예외: 1분 파이프라인의
         minute artifact 는 run_id 없는 결정적·불변 키다**(v0.7 9절 — 재실행 no-op 전제,
-        raw_price_minute_artifact_key 주석 참고). 스캐너·보존 정책이 run_id= 존재를
-        전제하면 안 된다.
+        canonical_price_minute_artifact_key 주석 참고 — 분봉은 canonical 존이 정본이다,
+        ALPHA-701·705). 스캐너·보존 정책이 run_id= 존재를 전제하면 안 된다.
 - feature: canonical 에서 파생한 모델 산출물(LLM 태깅 등). canonical 과 마찬가지로 run_id 가
         없고 멱등이지만, canonical 이 **벤더 원본의 결정론적 정규화**인 반면 feature 는
         **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번
@@ -589,20 +589,35 @@ def collection_log_key(source: str, dataset: str, started_date: str, run_id: str
     )
 
 
-def raw_price_minute_artifact_key(
-    source: str, market: str, session_date: str, window_start_hhmm: str, generation: int
+def canonical_price_minute_artifact_key(
+    market: str, session_date: str, window_start_hhmm: str, generation: int
 ) -> str:
-    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665).
+    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665·705).
 
-    다른 raw 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
+    이 artifact 가 분봉 canonical 의 **단일 정본**이다(ALPHA-701 — DB 에 넣지 않는다).
+    그래서 존이 raw 가 아니라 canonical 이고, 벤더(source)는 파티션 축이 아니라
+    **레코드 컬럼**이다 — canonical 소비자는 벤더로 갈라 읽지 않는다(레포 키 규약).
+
+    다른 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
     바이트를 다시 PUT 하는 no-op 이어야 "S3 PUT 후 DB commit 전 종료 → artifact
     재사용" 복구가 성립한다. 불변성은 generation 이 진다: correction 은 새 generation
     → 새 key 라 기존 artifact 를 덮지 않는다.
     """
     return (
-        f"raw/source={source}/dataset=price_minute/market={market}"
-        f"/session_date={session_date}/window={window_start_hhmm}"
+        f"{canonical_price_minute_prefix(market, session_date)}window={window_start_hhmm}"
         f"/generation={generation}/bars.ndjson"
+    )
+
+
+def canonical_price_minute_prefix(market: str, session_date: str) -> str:
+    """그 (market, session_date) 분봉 canonical 이 사는 프리픽스 — orphan 스캔 축.
+
+    artifact key 와 같은 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를
+    훑고 빈 목록을 clean 으로 확정한다(경로 규약 SSOT 는 이 모듈이다).
+    """
+    return (
+        f"canonical/market_data/price_minute/market={market}"
+        f"/session_date={session_date}/"
     )
 
 
@@ -649,10 +664,10 @@ def minute_window_manifest_key(
 ) -> str:
     """window unit manifest(received/no_trade/missing/invalid)의 결정적 키.
 
-    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 벤더 원본이
-    아니라 수집 판정 기록이다(collection_logs 와 같은 결). canonical price_bars
-    (`canonical/dataset=price_bars/...`, ALPHA-648 확정 설계)와는 존이 달라 충돌하지
-    않는다.
+    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 canonical
+    데이터가 아니라 수집 판정 기록이다(collection_logs 와 같은 결). source 가 키에
+    남는 이유도 그것이다: 판정 기록은 수집 주체 축으로 갈라 보관한다(ALPHA-705 —
+    canonical artifact 쪽은 source 를 컬럼으로 내렸다).
     """
     return (
         f"operations_archive/minute_manifests/dataset={dataset}/source={source}"

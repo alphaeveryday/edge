@@ -131,6 +131,20 @@ class TestHappyPath:
             worker.storage.get_bytes(artifact_key)
         )
 
+    def test_artifact_lives_in_canonical_zone_with_source_column(self, tmp_path):
+        # 분봉 canonical 은 S3 단일 정본(ALPHA-701)이고 벤더는 키가 아니라 컬럼이다
+        # (ALPHA-705) — 키에 source 가 남으면 소비자가 벤더로 갈라 읽고, 컬럼이 빠지면
+        # 벤더 출처가 유실된다
+        import json
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        run_until_idle(worker, NOW)
+        [artifact_key] = [k for k in worker.storage.list_keys("") if k.endswith("bars.ndjson")]
+        assert artifact_key.startswith("canonical/market_data/price_minute/market=KR/")
+        assert "source=" not in artifact_key
+        rows = worker.storage.get_bytes(artifact_key).decode().splitlines()
+        assert rows and all(json.loads(row)["source"] == "toss" for row in rows)
+
 
 class TestFailureIsolation:
     def test_partial_missing_commits_incomplete_and_continues(self, tmp_path):
@@ -319,11 +333,11 @@ class TestWatermarkWiring:
     def test_artifact_immutability_violation_propagates(self, tmp_path):
         # 같은 세대 key 에 다른 바이트 = 결정성 붕괴 — window 실패로 위장해 영구
         # 재시도하지 않고 크게 죽는다
-        from data_pipeline.lake.storage import raw_price_minute_artifact_key
+        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
         from data_pipeline.minute.artifacts import ArtifactImmutabilityError
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         worker.storage.put_bytes(key, b"corrupted-preexisting")
         with pytest.raises(ArtifactImmutabilityError):
             worker.tick(NOW)
