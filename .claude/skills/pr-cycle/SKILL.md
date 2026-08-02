@@ -101,7 +101,7 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
   ```
   - 실패가 있으면 **머지하지 않는다** — 실패 체크의 run id 를 뽑아 로그를 보고, 고친 뒤 4단계 게이트부터 재진입한다(Flyway 버전 충돌처럼 머지 후엔 dev 전체를 세우는 실패가 여기서 잡힌다). `gh run view` 는 run id 를 주지 않으면 대화형 선택 프롬프트라 비대화 실행에서 쓸 수 없다:
     ```bash
-    gh pr checks <N> --json state,link --jq '.[] | select(.state != "SUCCESS") | .link | capture("runs/(?<id>[0-9]+)") | .id'
+    gh pr checks <N> --json bucket,link --jq '.[] | select(.bucket == "fail") | .link | capture("runs/(?<id>[0-9]+)") | .id'   # 실패한 것만 (--fail-fast 중단 시 나머지는 pending 이다)
     gh run view <위에서 나온 run id> --log-failed
     ```
   - "no checks reported" 로 끝나면 통과가 아니라 **워크플로가 아예 안 돈 것**이다(Actions 한도 소진기 push 는 job 이 시작되지 않고 소급 실행도 없다). 왜 안 돌았는지 확인 전에는 머지하지 않는다.
