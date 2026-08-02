@@ -41,7 +41,10 @@
 > repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664), artifact/manifest
 > 경계(결정적·불변 key·put_immutable, ALPHA-665), fenced commit transaction(canonical·
 > window·job·outbox 원자화 + orphan 검출, ALPHA-666), Price Worker loop(fence·2-lane·
-> 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식, 토스 adapter 는 실측 후),
+> 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식)와 **토스 분봉 adapter**
+> (ALPHA-682 — 2026-08-01 실호출 실측 형상 기반: `1m` 캔들, ts 는 **구간의 끝**이라
+> `window_start = ts − 1분`, 거래 없어도 캔들이 오므로 no_trade 는 "행 있고 거래량 0"·
+> 행 자체가 없어야 missing. 녹화 fixture `tests/fixtures/toss/`),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
@@ -51,7 +54,9 @@
 > heartbeat, **DB 가 정한 시각으로 visibility 조정**, ALPHA-672 — handler 는 7B·7C 가
 > 채운다)과 그 복구 경로(DLQ reconciler `run dlq-reconcile` + **DB-first** redrive
 > `run redrive`: DEAD→RETRY_WAIT·세대 증가·새 delivery event 를 한 트랜잭션에)까지다.
-> 스케줄·vendor 실호출·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9).
+> 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
+> **처리량이 아직 안 맞는다** — 종목당 1콜 × 348종 ÷ 초당 5회 ≈ 70초인데 window 는
+> 60초마다 생긴다. 콜 수·유니버스·한도 중 하나를 바꾸기 전까지는 shadow·백필 용도다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행

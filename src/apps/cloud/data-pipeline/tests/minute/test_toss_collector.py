@@ -1,0 +1,415 @@
+"""토스 분봉 어댑터 테스트 — **녹화 fixture**(실호출 응답)로만 검증한다.
+
+fixture 는 `tests/fixtures/toss/`(2026-08-01 dev VPC 에서 실호출 녹화). 손으로 쓴 형상이
+아니라 실제 응답이라, 이 테스트가 초록이면 그 형상에 대해서는 실제로 도는 것이다.
+
+여기서 고정하는 계약 셋:
+1. **timestamp 는 구간의 끝** — `window_start = ts − 1분`. 뒤집히면 전 구간이 한 칸 밀린
+   채 커밋되는데 캔들 수는 그대로라 어떤 게이트도 안 걸린다.
+2. **거래량 0 은 성공(no_trade)** — 행이 없는 것(missing)과 다르다. 실패로 세면 한산한
+   종목이 매분 재시도를 유발해 window 가 영원히 INCOMPLETE 다.
+3. **한 종목의 실패가 window 를 죽이지 않는다** — 그 종목만 missing 으로 남는다.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from data_pipeline.minute.models import KST, CollectionRequest
+from data_pipeline.minute.states import (
+    WINDOW_INCOMPLETE,
+    WINDOW_INVALID,
+    WINDOW_VALID,
+    WINDOW_VALID_EMPTY,
+)
+from data_pipeline.minute.toss_collector import TossPriceCollector
+from data_pipeline.sources.toss import (
+    MAX_COUNT,
+    SUPPORTED_INTERVALS,
+    TossApiError,
+    TossOpenApiClient,
+    parse_candle,
+)
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "toss"
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+def candle_rows(name: str) -> list[dict]:
+    return fixture(name)["body"]["result"]["candles"]
+
+
+class FakeResponse:
+    """실제 전송처럼 **gzip 바이트 + Content-Encoding 헤더**로 돌려준다 —
+    평문으로 흉내 내면 gzip 해제 코드가 사라져도 테스트가 통과한다(Rule 9)."""
+
+    def __init__(self, payload: dict, headers: dict | None = None, status: int = 200):
+        self._body = gzip.compress(json.dumps(payload).encode())
+        self.headers = {"Content-Encoding": "gzip", **(headers or {})}
+        self.status = status
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def make_client(responses, **overrides):
+    """응답을 순서대로 돌려주는 client — 벽시계 대기 없이 간격 규칙만 관찰한다."""
+    slept: list[float] = []
+    clock = {"now": 0.0}
+    queue = list(responses)
+    calls: list[str] = []
+
+    def opener(request, timeout=None):
+        if not queue:
+            raise AssertionError("예상보다 많은 호출")
+        calls.append(request.full_url)
+        item = queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return FakeResponse(item)
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock["now"] += seconds
+
+    client = TossOpenApiClient(
+        client_id="id", client_secret="secret", opener=opener, sleep=sleep,
+        monotonic=lambda: clock["now"], **overrides,
+    )
+    return client, slept, clock, calls
+
+
+TOKEN = {"access_token": "t-1", "token_type": "Bearer", "expires_in": 86399}
+
+
+class TestCandleParsing:
+    def test_timestamp_is_the_end_of_the_window(self):
+        # ⚠️ 이 한 줄이 뒤집히면 전 구간이 한 칸 밀린 채 조용히 커밋된다
+        row = candle_rows("candles_stock_1m")[0]
+        candle = parse_candle(row, "005930")
+        assert candle.window_end == datetime.fromisoformat("2026-07-31T20:00:00.000+09:00")
+        assert candle.window_start == candle.window_end - timedelta(minutes=1)
+
+    def test_prices_keep_precision(self):
+        # 문자열로 오는 값을 float 로 받으면 정밀도가 깨진다
+        candle = parse_candle(candle_rows("candles_stock_1m")[0], "005930")
+        assert (candle.open, candle.close) == (Decimal("258500"), Decimal("259000"))
+        assert candle.volume == Decimal("290415") and candle.traded
+
+    def test_zero_volume_is_a_valid_candle(self):
+        # 저유동 종목은 하루 390개 중 376개가 이 모양이었다(실측)
+        flat = [r for r in candle_rows("candles_lowliquidity_1m") if r["volume"] == "0"][0]
+        candle = parse_candle(flat, "001527")
+        assert candle.volume == Decimal("0") and candle.traded is False
+        assert candle.open == candle.close  # 직전가로 채운 flat 캔들
+
+    def test_index_candle_has_no_currency(self):
+        # 지수 응답엔 currency 가 없다 — 필수로 다루면 지수 수집이 통째로 깨진다
+        candle = parse_candle(candle_rows("candles_index_1m")[0], "KOSPI")
+        assert candle.currency is None
+
+    @pytest.mark.parametrize("mutation", [
+        {"timestamp": "2026-07-31T20:00:00.000"},        # 오프셋 없음 — 시간대 추측 금지
+        {"timestamp": "not-a-time"},
+        {"volume": "-1"},
+        {"closePrice": None},
+        {"closePrice": "nope"},
+        {"highPrice": "1"},                               # OHLC 정합 위반(low>high)
+    ])
+    def test_broken_rows_raise(self, mutation):
+        row = dict(candle_rows("candles_stock_1m")[0]) | mutation
+        with pytest.raises(ValueError):
+            parse_candle(row, "005930")
+
+
+class TestClient:
+    def test_token_is_reused_until_close_to_expiry(self):
+        client, _, clock, calls = make_client([TOKEN, {"result": {"candles": []}},
+                                        {"result": {"candles": []}}])
+        client.candles("005930")
+        clock["now"] += 100          # 24시간짜리 토큰이라 아직 유효하다
+        client.candles("005930")     # 토큰 재발급 없이 조회만(응답 2개면 충분)
+
+    def test_rate_limit_is_respected_between_calls(self):
+        # 처리량은 RTT 가 아니라 **간격**에 묶인다 — 이 규칙이 빠지면 429 를 맞는다
+        client, slept, _, calls = make_client(
+            [TOKEN] + [{"result": {"candles": []}}] * 3, min_interval=0.2
+        )
+        for _ in range(3):
+            client.candles("005930")
+        assert slept and all(0 < s <= 0.2 for s in slept)
+
+    def test_rate_limited_call_is_retried(self):
+        import urllib.error
+
+        def http_error(status, body):
+            import email.message
+            headers = email.message.Message()
+            headers["Retry-After"] = "1"          # 실측 429 가 주는 헤더
+            headers["Content-Encoding"] = "gzip"
+            return urllib.error.HTTPError(
+                "u", status, "err", headers,
+                __import__("io").BytesIO(gzip.compress(json.dumps(body).encode())),
+            )
+
+        client, slept, _, calls = make_client([
+            TOKEN,
+            http_error(429, fixture("error_rate_limited")["body"]),
+            {"result": {"candles": candle_rows("candles_stock_1m")[:1]}},
+        ], min_interval=0.2)
+        assert len(client.candles("005930")) == 1
+        # ⚠️ 벤더가 `Retry-After: 1` 을 줬으면 그게 권위다 — 우리 backoff(0.2s)로
+        # 먼저 두드리면 아직 제한된 구간에서 예산만 태운다
+        assert max(slept) >= 1.0, f"Retry-After 를 무시했다: {slept}"
+
+    def test_unreadable_error_body_keeps_the_status(self):
+        # 본문이 HTML·손상 gzip 이어도 status 는 유효하다 — 여기서 그냥 터지면
+        # 429·5xx 가 재시도 경로를 통째로 우회한다
+        import io
+        import urllib.error
+
+        broken = urllib.error.HTTPError(
+            "u", 503, "err", {"Content-Encoding": "gzip"}, io.BytesIO(b"<html>oops</html>")
+        )
+        client, slept, _, calls = make_client([
+            TOKEN, broken,
+            {"result": {"candles": candle_rows("candles_stock_1m")[:1]}},
+        ])
+        assert len(client.candles("005930")) == 1, "재시도 경로를 우회했다"
+
+    def test_permanent_errors_are_not_retried(self):
+        # 없는 종목을 다시 물어도 같은 답이다 — 재시도는 한도만 먹고 window 를 늦춘다
+        import io
+        import urllib.error
+
+        error = urllib.error.HTTPError(
+            "u", 404, "err", {},
+            io.BytesIO(json.dumps(fixture("error_stock_not_found")["body"]).encode()),
+        )
+        client, slept, _, calls = make_client([TOKEN, error, error, error])
+        with pytest.raises(TossApiError) as caught:
+            client.candles("999999")
+        assert caught.value.code == "stock-not-found" and not caught.value.retryable
+        # 토큰 1 + 조회 1 — 재시도했다면 3~4가 된다(한도만 먹고 window 가 늦어진다)
+        assert len(calls) == 2
+
+    @pytest.mark.parametrize("kwargs", [
+        {"interval": "5m"}, {"interval": "1h"},           # API 가 알려준 어휘 밖
+        {"count": 0}, {"count": MAX_COUNT + 1},           # 400 constraint 와 같은 범위
+    ])
+    def test_out_of_contract_requests_are_refused_before_calling(self, kwargs):
+        client, _, _, calls = make_client([])                     # 호출이 없어야 통과한다
+        with pytest.raises(ValueError):
+            client.candles("005930", **kwargs)
+
+    def test_supported_intervals_match_what_the_api_advertises(self):
+        # 400 응답의 data.allowedValues 가 근거다(추측 아님)
+        advertised = fixture("error_bad_interval")["body"]["error"]["data"]["allowedValues"]
+        assert list(SUPPORTED_INTERVALS) == advertised
+
+
+WINDOW_END = datetime.fromisoformat("2026-07-31T20:00:00.000+09:00")
+
+
+def make_request(unit_ids):
+    return CollectionRequest(
+        dataset="price_minute", window_start=WINDOW_END - timedelta(minutes=1),
+        window_end=WINDOW_END, run_id="run-1", session_id="msn_x",
+        execution_mode="resident", universe_version="v1", unit_ids=tuple(unit_ids),
+    )
+
+
+class StubClient:
+    retry_count = 0
+
+    def __init__(self, by_symbol):
+        self.by_symbol = by_symbol
+        self.calls = []
+
+    def candles(self, symbol, *, interval="1m", count=1, before=None, kind="stock"):
+        self.calls.append({"symbol": symbol, "before": before, "kind": kind})
+        outcome = self.by_symbol[symbol]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def parsed(name, symbol, index=0):
+    return parse_candle(candle_rows(name)[index], symbol)
+
+
+class TestCollector:
+    def test_classifies_traded_no_trade_and_missing(self):
+        traded = parsed("candles_stock_1m", "005930")
+        flat = [c for c in
+                (parse_candle(r, "001527") for r in candle_rows("candles_lowliquidity_1m"))
+                if not c.traded][0]
+        # 거래 없는 종목의 캔들을 이 window 로 옮겨 같은 분을 보게 한다
+        flat = flat.__class__(**{**flat.__dict__,
+                                 "window_end": WINDOW_END,
+                                 "window_start": WINDOW_END - timedelta(minutes=1)})
+        client = StubClient({
+            "005930": (traded,),
+            "001527": (flat,),
+            "000660": (),                       # 그 분의 캔들이 없다 → missing
+        })
+        collector = TossPriceCollector(client=client)
+
+        result, records, manifest = collector.collect(
+            make_request(["005930", "001527", "000660"]), WINDOW_END
+        )
+
+        assert manifest == {"received": ["005930"], "no_trade": ["001527"],
+                            "missing": ["000660"], "invalid": []}
+        # ⚠️ no_trade 도 **기록은 남는다** — 관측된 flat 봉을 버리면 한산한 종목은
+        # 하루 390분 중 376분이 canonical 에서 사라진다(001527 실측)
+        assert sorted(r["unit_id"] for r in records) == ["001527", "005930"]
+        assert result.status == WINDOW_INCOMPLETE
+        # 거래 없는 분은 **성공**으로 센다 — 실패로 세면 매분 재시도가 붙는다
+        assert (result.succeeded_count, result.failed_count) == (2, 1)
+        assert records[0]["ts"] == WINDOW_END - timedelta(minutes=1)
+
+    def test_all_no_trade_is_valid_empty_not_valid(self):
+        # '데이터가 있다'와 '없는 게 정상이다'가 같은 상태가 되면 EOD QC 가 못 가른다
+        flat = [c for c in
+                (parse_candle(r, "001527") for r in candle_rows("candles_lowliquidity_1m"))
+                if not c.traded][0]
+        flat = flat.__class__(**{**flat.__dict__, "window_end": WINDOW_END,
+                                 "window_start": WINDOW_END - timedelta(minutes=1)})
+        collector = TossPriceCollector(client=StubClient({"001527": (flat,)}))
+        result, records, manifest = collector.collect(make_request(["001527"]), WINDOW_END)
+        # 전 종목 무거래는 VALID_EMPTY 지만 관측한 flat 봉은 그대로 싣는다
+        assert result.status == WINDOW_VALID_EMPTY and len(records) == 1
+
+    def test_other_window_candle_is_not_accepted(self):
+        # 응답 최신 캔들이 우리가 원한 분이 아닐 수 있다 — ts 대조 없이 받으면 한 칸
+        # 밀린 값이 그 window 의 데이터로 커밋된다
+        other = parsed("candles_stock_1m", "005930", index=2)   # 19:58 캔들
+        collector = TossPriceCollector(client=StubClient({"005930": (other,)}))
+        _result, records, manifest = collector.collect(make_request(["005930"]), WINDOW_END)
+        assert manifest["missing"] == ["005930"] and records == ()
+
+    def test_one_symbol_failure_does_not_kill_the_window(self):
+        collector = TossPriceCollector(client=StubClient({
+            "005930": (parsed("candles_stock_1m", "005930"),),
+            "999999": TossApiError(404, "stock-not-found", "종목을 찾을 수 없습니다."),
+        }))
+        result, records, manifest = collector.collect(
+            make_request(["005930", "999999"]), WINDOW_END
+        )
+        assert manifest["received"] == ["005930"] and manifest["missing"] == ["999999"]
+        assert result.status == WINDOW_INCOMPLETE
+
+    def test_request_window_is_pinned_with_before(self):
+        # ⚠️ 최신 캔들을 그냥 받으면, 348종 수집에 70초가 걸리는 사이 최신 봉이 다음
+        # 분으로 넘어가 뒤쪽 종목이 통째로 missing 이 된다(과거 window 재시도도 불가)
+        client = StubClient({"005930": (parsed("candles_stock_1m", "005930"),)})
+        TossPriceCollector(client=client).collect(make_request(["005930"]), WINDOW_END)
+        assert client.calls[0]["before"] == WINDOW_END
+
+    def test_index_symbols_use_the_index_endpoint(self):
+        # 지수는 전용 경로다(실측 fixture) — 주식 경로로 부르면 404 다
+        client = StubClient({"KOSPI": ()})
+        TossPriceCollector(client=client, index_symbols=frozenset({"KOSPI"})).collect(
+            make_request(["KOSPI"]), WINDOW_END)
+        assert client.calls[0]["kind"] == "index"
+
+    def test_shape_violation_is_invalid_not_missing(self):
+        # 재시도로 안 풀리는 것을 missing 으로 접으면 같은 손상 응답을 끝없이 다시 부른다
+        client = StubClient({"005930": ValueError("OHLC 정합 위반")})
+        result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"] and manifest["missing"] == []
+        assert result.status == WINDOW_INVALID
+
+    def test_duplicate_candle_for_one_window_is_invalid(self):
+        # 첫 건을 조용히 채택하면 벤더가 순서를 바꾸는 것만으로 값과 세대가 흔들린다
+        one = parsed("candles_stock_1m", "005930")
+        two = one.__class__(**{**one.__dict__, "close": one.close + 1})
+        client = StubClient({"005930": (one, two)})
+        _result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"]
+
+    def test_zero_volume_with_moving_price_is_invalid(self):
+        # 우리가 아는 형상이 아니다 — no_trade 로 접으면 그 가격이 조용히 버려진다
+        base = parsed("candles_stock_1m", "005930")
+        odd = base.__class__(**{**base.__dict__, "volume": base.volume.__class__(0)})
+        client = StubClient({"005930": (odd,)})
+        _result, records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930"]), WINDOW_END)
+        assert manifest["invalid"] == ["005930"] and records == ()
+
+    def test_retry_pressure_and_elapsed_are_reported(self):
+        # 0 으로 고정하면 429 압력과 70초 지연이 관측에서 사라진다
+        client = StubClient({"005930": (parsed("candles_stock_1m", "005930"),)})
+        client.retry_count = 2
+        ticks = iter([WINDOW_END + timedelta(seconds=70)])
+        collector = TossPriceCollector(client=client, clock=lambda: next(ticks))
+        result, _records, _manifest = collector.collect(make_request(["005930"]), WINDOW_END)
+        assert result.retry_count == 0     # 이 window 안에서 늘어난 만큼만 센다
+        assert result.stage_timestamps["collection_finished_at"] > (
+            result.stage_timestamps["collection_started_at"])
+
+    def test_source_level_failure_stops_collection(self):
+        # ⚠️ 자격증명·IP 차단은 그 window 를 다시 수집해도 안 풀린다. unit missing 으로
+        # 접으면 348종 전부가 missing 인 INCOMPLETE 가 매분 쌓이는데 고칠 건 설정 하나다.
+        blocked = TossApiError(403, "access_denied", "IP address not allowed")
+        assert blocked.source_level
+        client = StubClient({"005930": blocked, "000660": blocked})
+        with pytest.raises(TossApiError):
+            TossPriceCollector(client=client).collect(
+                make_request(["005930", "000660"]), WINDOW_END)
+
+    def test_token_stage_failure_stops_collection(self):
+        # 토큰 단계 실패는 코드 문자열과 무관하게 **소스 전역**이다 — 응답 형상이
+        # 예상 밖(ValueError)이어도 마찬가지다
+        from data_pipeline.sources.toss import TossAuthError
+
+        client = StubClient({"005930": TossAuthError("토큰 발급 실패")})
+        with pytest.raises(TossAuthError):
+            TossPriceCollector(client=client).collect(make_request(["005930"]), WINDOW_END)
+
+    def test_symbol_level_failure_stays_a_unit_miss(self):
+        client = StubClient({
+            "005930": (parsed("candles_stock_1m", "005930"),),
+            "999999": TossApiError(404, "stock-not-found", "종목을 찾을 수 없습니다."),
+        })
+        _result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930", "999999"]), WINDOW_END)
+        assert manifest["missing"] == ["999999"]
+
+    def test_checksum_is_order_independent(self):
+        # 같은 멤버십을 다른 순서로 요청해도 같은 checksum — 아니면 재실행마다 세대가 오른다
+        candles = {"005930": (parsed("candles_stock_1m", "005930"),),
+                   "000660": ()}
+        first, _, _ = TossPriceCollector(client=StubClient(candles)).collect(
+            make_request(["005930", "000660"]), WINDOW_END)
+        second, _, _ = TossPriceCollector(client=StubClient(candles)).collect(
+            make_request(["000660", "005930"]), WINDOW_END)
+        assert first.result_checksum == second.result_checksum
+
+    def test_full_window_is_valid(self):
+        collector = TossPriceCollector(client=StubClient({
+            "005930": (parsed("candles_stock_1m", "005930"),)}))
+        result, records, _ = collector.collect(make_request(["005930"]), WINDOW_END)
+        assert result.status == WINDOW_VALID and len(records) == 1
+        assert result.watermark_after == WINDOW_END

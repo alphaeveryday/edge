@@ -1,0 +1,11 @@
+{
+  "body": {
+    "error": {
+      "code": "rate-limit-exceeded",
+      "message": "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.",
+      "requestId": "2gqD2pDzjpn07an2"
+    }
+  },
+  "request_path": "(429 유발)",
+  "status": 429
+}

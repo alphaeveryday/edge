@@ -1,0 +1,11 @@
+{
+  "body": {
+    "error": {
+      "code": "stock-not-found",
+      "message": "종목을 찾을 수 없습니다.",
+      "requestId": "2BXSyDBYS1F3RmIr"
+    }
+  },
+  "request_path": "/api/v1/candles?symbol=999999&interval=1m&count=1",
+  "status": 404
+}
