@@ -24,17 +24,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import load_universe, plan_session_windows
 from .repository import MinuteLedger, SessionFinalizedError, UniverseConflictError
+from .states import MINUTE_DATASETS, UNIVERSE_DATASETS
 
 logger = logging.getLogger(__name__)
-
-# universe 가 필요한 dataset — 가격은 종목별 거래시간이 window 범위를 정한다(ALPHA-684).
-# 뉴스는 소스 단위라 유니버스 개념이 없다(정규장 390 고정).
-_UNIVERSE_DATASETS = frozenset({"price_minute"})
 
 
 def plan_session_cli(
@@ -48,6 +45,10 @@ def plan_session_cli(
 
     재실행이 0 인 이유: `plan_session` 이 멱등이라 **두 번 부르는 게 정상 운영**이다
     (Premarket SFN 재시도·Worker 재기동). 그걸 실패로 만들면 재시도가 곧 장애가 된다.
+
+    ⚠️ 이 계약은 이 함수에 도달한 뒤에만 성립한다. 설정 파일 자체를 못 읽는 경우
+    (`--config` 오타 → `ConfigError`)는 `run.py` 공통 진입부에서 나 프로세스가 1 을 낸다 —
+    전 스텝 공통 경로라 여기서 바꾸지 않는다(qc-minute-session 과 같은 단서).
     """
     if settings.db is None:
         logger.error("db 설정 없음 — plan-minute-session 은 세션 원장 필수(DATA_PIPELINE_DB__* 주입)")
@@ -60,11 +61,19 @@ def plan_session_cli(
         return 2
 
     try:
-        planned_date = date.fromisoformat(session_date)
+        # ⚠️ `date.fromisoformat` 은 3.11+ 에서 주 날짜(`2026-W01-1`)도 받는다 — 그러면
+        # 다른 연도의 세션이 조용히 생긴다. 문서가 약속한 형식만 받는다.
+        planned_date = datetime.strptime(session_date, "%Y-%m-%d").date()
     except ValueError:
         logger.error("--session-date 가 YYYY-MM-DD 가 아니다: %s", session_date)
         return 2
 
+    if dataset not in MINUTE_DATASETS:
+        # 오타를 조용히 뉴스 세션으로 흘리면(universe 없이 390 window) 그 dataset 을 처리할
+        # Worker 가 없어 하루가 통째로 안 도는데 원장은 정상으로 보인다.
+        logger.error("--dataset 이 1분 원장 어휘 밖이다: %s (아는 값 %s)",
+                     dataset, sorted(MINUTE_DATASETS))
+        return 2
     try:
         universe_model = _load_universe(dataset, universe)
     except (ValueError, OSError) as error:
@@ -102,12 +111,18 @@ def plan_session_cli(
 def drain_session_cli(settings, *, session_id: str | None) -> int:
     """`run drain-minute-session --session-id <id>` (EOD SFN 이 부른다).
 
-    exit: 0=요청됨 / 1=요청할 상태가 아님(이미 DRAINING 이후이거나 없는 세션)
-    / 2=요청 자체를 못 함(설정·인자 결손·DB 장애).
+    exit: 0=drain 상태에 도달함(방금 걸었든 이미 걸려 있었든) / 2=요청 자체를 못 함
+    (설정·인자 결손·**없는 세션**·DB 장애).
 
-    1 과 0 을 가르는 이유: `request_drain` 은 `PLANNED|ACTIVE` 에서만 참이다. 이미 넘어간
-    세션에 또 요청하는 건 **무해하지만 무의미**하고, SFN 이 그걸 "내가 방금 걸었다"로
-    읽으면 뒤따르는 대기·QC 타이밍을 잘못 잡는다.
+    ⚠️ **이미 DRAINING 이후인 것을 실패로 만들지 않는다.** DB 커밋 뒤 출력 전에 죽은 실행을
+    SFN 이 재시도하면 두 번째 호출은 반드시 False 를 받는데, 그걸 exit 1 로 내면 **정상
+    재시도가 EOD 흐름을 세운다**(ALPHA-693 의 FINALIZED 재실행과 같은 축이다). 방금 걸었는지는
+    exit code 가 아니라 출력의 `drain_requested` 가 말한다.
+
+    없는 세션은 다르다 — 그건 지목이 틀린 것이고 재시도로 낫지 않는다.
+
+    ⚠️ 이 계약은 이 함수에 도달한 뒤에만 성립한다. 설정 파일 자체를 못 읽는 경우
+    (`--config` 오타)는 `run.py` 공통 진입부에서 나 프로세스가 1 을 낸다(전 스텝 공통 경로).
     """
     if settings.db is None:
         logger.error("db 설정 없음 — drain-minute-session 은 세션 원장 필수(DATA_PIPELINE_DB__* 주입)")
@@ -118,6 +133,10 @@ def drain_session_cli(settings, *, session_id: str | None) -> int:
 
     ledger = MinuteLedger(db=settings.db)
     try:
+        snapshot = ledger.session_snapshot(session_id=session_id)
+        if snapshot is None:
+            logger.error("없는 세션이다 — 지목이 틀렸다: %s", session_id)
+            return 2
         requested = ledger.request_drain(
             session_id=session_id, now=datetime.now(timezone.utc)
         )
@@ -125,14 +144,14 @@ def drain_session_cli(settings, *, session_id: str | None) -> int:
         logger.exception("drain 요청 실패: %s", session_id)
         return 2
 
-    print(json.dumps({"session_id": session_id, "drain_requested": requested},
-                     ensure_ascii=False, sort_keys=True))
+    print(json.dumps({
+        "session_id": session_id, "drain_requested": requested,
+        "phase_before": snapshot["phase"],
+    }, ensure_ascii=False, sort_keys=True))
     if not requested:
-        logger.warning(
-            "drain 요청이 적용되지 않았다 — 이미 DRAINING 이후이거나 없는 세션이다: %s",
-            session_id,
-        )
-    return 0 if requested else 1
+        logger.info("이미 drain 이후다(%s) — 재시도로 보고 성공 처리한다: %s",
+                    snapshot["phase"], session_id)
+    return 0
 
 
 def _load_universe(dataset: str, universe: str | None):
@@ -143,7 +162,7 @@ def _load_universe(dataset: str, universe: str | None):
     누락된다(ALPHA-684 가 `plan_session_windows(universe=…)` 를 필수 인자로 만든 이유와
     같은 축이다).
     """
-    if dataset not in _UNIVERSE_DATASETS:
+    if dataset not in UNIVERSE_DATASETS:
         if universe:
             raise ValueError(
                 f"dataset {dataset!r} 는 universe 를 쓰지 않는데 --universe 가 주어졌다"

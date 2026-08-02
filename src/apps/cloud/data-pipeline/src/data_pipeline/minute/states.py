@@ -35,6 +35,15 @@ SESSION_PHASES = frozenset(
     }
 )
 
+# ── dataset 어휘 ──
+# 1분 원장이 아는 dataset. 여기 없는 값은 **오타**로 본다 — 세션은 만들어지는데 그 dataset 을
+# 처리하는 Worker 가 없어, 하루가 통째로 안 돌면서도 원장은 정상으로 보인다.
+DATASET_PRICE_MINUTE = "price_minute"
+DATASET_NEWS_MINUTE = "news_minute"
+MINUTE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_NEWS_MINUTE})
+# universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
+UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
+
 # ── minute_ingestion_window.data_status ──
 WINDOW_DUE = "DUE"
 WINDOW_CLAIMED = "CLAIMED"

@@ -7,15 +7,16 @@
   실패로 만들면 재시도가 곧 장애가 된다.
 - **가격 세션에 universe 를 빠뜨리면 거부한다** — 기본값으로 흘리면 정규장 390 만 계획되고
   시간외 구간이 **아무 실패 신호 없이** 누락된다(ALPHA-684 와 같은 축).
-- **"이미 넘어간 drain"은 성공이 아니다** — SFN 이 그걸 "내가 방금 걸었다"로 읽으면
-  뒤따르는 대기·QC 타이밍을 잘못 잡는다.
+- **"이미 넘어간 drain"도 성공이다** — DB 커밋 뒤 출력 전에 죽은 실행의 재시도가 정상
+  운영이라, 그걸 실패로 내면 재시도가 EOD 흐름을 세운다. 방금 걸었는지는 exit code 가
+  아니라 출력(`drain_requested`)이 말한다. 반면 **없는 세션은 거부한다** — 지목이 틀린
+  것이고 재시도로 낫지 않는다.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
-from data_pipeline.config import DbConfig, Settings
+from data_pipeline.config import DbConfig
 from data_pipeline.minute.session_cli import drain_session_cli, plan_session_cli
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -99,6 +100,36 @@ class TestPlan:
         session = next(iter(ledger_db.sessions.values()))
         assert session["universe_version"] == "univ-fixture-v1"
 
+    def test_extended_universe_plans_720_windows(self, ledger_db, capsys):
+        # ⚠️ 이 반례가 없으면 CLI 가 실수로 `plan_session_windows(universe=None)` 을 불러도
+        # 통과한다(선언 없는 fixture 는 어느 쪽이든 390). 실제 시간외 universe 에서는
+        # 720 중 330 window 가 조용히 누락된다.
+        code = plan_session_cli(
+            make_settings(), dataset="price_minute", source_group="toss",
+            session_date="2026-07-31", universe=str(FIXTURES / "universe_extended.json"),
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 720)
+        assert payload["windows"]["first"].endswith("08:00:00+09:00")
+        assert payload["windows"]["last"].endswith("20:00:00+09:00")
+
+    def test_unknown_dataset_is_rejected(self, ledger_db):
+        # 오타를 뉴스로 흘리면 그 dataset 을 처리할 Worker 가 없어 하루가 통째로 안 도는데
+        # 원장은 정상으로 보인다
+        assert plan_session_cli(
+            make_settings(), dataset="price_minut", source_group="toss",
+            session_date="2026-07-31", universe=None,
+        ) == 2
+        assert ledger_db.sessions == {}
+
+    def test_week_date_format_is_rejected(self, ledger_db):
+        # `date.fromisoformat` 은 3.11+ 에서 이걸 2025-12-29 로 읽는다 — 다른 연도의
+        # 세션이 조용히 생긴다
+        assert plan_session_cli(
+            make_settings(), dataset="news_minute", source_group="bigkinds",
+            session_date="2026-W01-1", universe=None,
+        ) == 2
+
     def test_universe_on_a_news_session_is_rejected(self, ledger_db):
         # 조용히 무시하면 운영자는 그 파일이 반영된 줄 안다
         assert plan_session_cli(
@@ -137,18 +168,21 @@ class TestDrain:
         assert json.loads(capsys.readouterr().out)["drain_requested"] is True
         assert ledger_db.sessions[session_id]["phase"] == "DRAINING"
 
-    def test_second_drain_is_not_reported_as_applied(self, ledger_db, capsys):
-        # 무해하지만 무의미하다 — SFN 이 "내가 방금 걸었다"로 읽으면 뒤따르는 대기·QC
-        # 타이밍을 잘못 잡는다.
+    def test_second_drain_is_success_because_retry_is_normal(self, ledger_db, capsys):
+        # ⚠️ DB 커밋 뒤 출력 전에 죽은 실행을 SFN 이 재시도하면 두 번째는 반드시 False 를
+        # 받는다 — 그걸 실패로 내면 **정상 재시도가 EOD 흐름을 세운다**(693 의 FINALIZED
+        # 재실행과 같은 축). 방금 걸었는지는 exit code 가 아니라 출력이 말한다.
         session_id = self._plan(capsys)
         drain_session_cli(make_settings(), session_id=session_id)
         capsys.readouterr()
 
-        assert drain_session_cli(make_settings(), session_id=session_id) == 1
-        assert json.loads(capsys.readouterr().out)["drain_requested"] is False
+        assert drain_session_cli(make_settings(), session_id=session_id) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert (payload["drain_requested"], payload["phase_before"]) == (False, "DRAINING")
 
-    def test_unknown_session_is_not_silently_ok(self, ledger_db, capsys):
-        assert drain_session_cli(make_settings(), session_id="msn_nope") == 1
+    def test_unknown_session_is_rejected(self, ledger_db, capsys):
+        # 재시도로 낫지 않는다 — 지목이 틀린 것이다
+        assert drain_session_cli(make_settings(), session_id="msn_nope") == 2
 
     def test_missing_session_id_is_a_config_failure(self, ledger_db):
         assert drain_session_cli(make_settings(), session_id=None) == 2
