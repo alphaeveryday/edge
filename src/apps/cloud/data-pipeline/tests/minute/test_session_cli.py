@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
+from data_pipeline.minute.repository import SessionFinalizedError, UniverseConflictError
 from data_pipeline.minute.session_cli import drain_session_cli, plan_session_cli
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -164,6 +165,28 @@ class TestPlan:
             make_settings(), dataset=None, source_group="bigkinds",
             session_date="2026-07-31", universe=None,
         ) == 2
+
+    @pytest.mark.parametrize("error", [UniverseConflictError("다른 universe"),
+                                       SessionFinalizedError("이미 확정")])
+    def test_refusal_is_exit_1_not_2(self, monkeypatch, error):
+        # ⚠️ 이 둘은 "계획을 못 하는" 게 아니라 **하면 안 되는** 상태다 — 그 날짜엔 다른
+        # universe 로 고정된 세션이 있거나 이미 drain 경계를 넘었다. 재시도로 풀리지
+        # 않으므로 일시적 DB·설정 실패(2)와 같은 칸에 넣으면, SFN 이 낫지 않을 것을
+        # 재시도하며 그날 계획이 선 줄 안다.
+        import data_pipeline.minute.session_cli as module
+
+        class RefusingLedger:
+            def __init__(self, **kwargs):
+                pass
+
+            def plan_session(self, **kwargs):
+                raise error
+
+        monkeypatch.setattr(module, "MinuteLedger", RefusingLedger)
+        assert plan_session_cli(
+            make_settings(), dataset="news_minute", source_group="bigkinds",
+            session_date="2026-07-31", universe=None,
+        ) == 1
 
     def test_no_db_is_a_config_failure(self):
         assert plan_session_cli(
