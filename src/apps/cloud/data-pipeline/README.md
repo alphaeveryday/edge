@@ -785,7 +785,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   KRX 응답에는 요청한 `trdDd`와 독립적인 actual-as-of evidence가 없으므로 wrapper는 현재 시도의
   raw 산출물과 수집 로그가 실제로 관측됐을 때도 `actual_as_of_date=NULL`,
   `freshness_status=UNKNOWN`, reason=`ACTUAL_AS_OF_UNVERIFIED`를 기록한다. 이때
-  `collected_at`만 채우고 Monitor 평가 시각인 `observed_at`은 NULL로 남긴다. 계약 미연결 작업의
+  `collected_at`만 채우고 Monitor 평가 시각인 `observed_at`은 NULL로 남긴다. 계약 연결 작업은
+  **매 시도**(예외 종료 포함) freshness를 덮는다 — 산출물을 관측하지 못한 재시도는
+  `collected_at=NULL`·reason=`EVIDENCE_MISSING`으로 리셋해, 같은 raw 키를 덮어쓴 재시도에 앞
+  시도의 수집 증거가 남지 않게 한다(카운터와 같은 규칙). 계약 미연결 작업의
   freshness NULL은 `UNKNOWN`이 아니라 `NOT_APPLICABLE`이다.
 - **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
   의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
