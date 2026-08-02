@@ -263,6 +263,14 @@ def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
     if fired:
         base += f"\n오늘 발화 계열(|z|≥{Z_ANOM}): " + " · ".join(
             f"{k} z={zs[k]:+.1f}" for k in fired)
+    base += "\n계열 z 전체(이 종목): " + " · ".join(
+        f"{k} {v:+.1f}" for k, v in sorted(zs.items()) if v is not None)
+    # 시장 대상 판정에 결정적인 사실 - 코스피 중 밤사이 미국이 설명하는 몫 (구간).
+    from .layers import market_source
+    ms = market_source(lake, day)
+    if ms is not None:
+        base += (f"\n코스피 수익 중 밤사이 미국(S&P500)이 설명하는 몫: "
+                 f"[{ms[0] * 100:+.2f}, {ms[1] * 100:+.2f}]%p → 나머지는 국내 요인")
     return {"base": base, "total": total,
             "targets": [(t.kind, t.label, t.pct) for t in targets],
             "event_types": types, "fired": fired}
