@@ -23,6 +23,18 @@ t2  J2 실행 → T1 을 읽어 추출 → 결과가 fp2 job 의 성공으로 �
 생산자가 다른 규칙으로** 쓰게 되고(제목 공백 정규화·리드 출처·언어 파생), 그 차이는 조용히
 다운스트림 dedup·프롬프트 입력을 갈라놓는다.
 
+⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
+
+① **배치가 나중에 돌면 리드를 되돌릴 수 있다.** `load_documents` 의 `document` INSERT 는
+`DO NOTHING` 이라 안전하지만 `news_document` 리드는 조건 없이 덮는다 — 레이크 canonical 이
+아직 옛 본문(T1)이면 그 값으로 회귀하고, 그러면 이 모듈이 고치려던 P1 이 재현된다.
+어느 생산자가 이기는지는 두 파이프라인에 걸친 결정이라 별건이다(ALPHA-696).
+
+② **기사 행은 하나뿐이라 지문별 job 의 입력을 보존하지 못한다.** 같은 article_id 에 지문이
+다른 job 이 둘 이상 살아 있으면(같은 창의 URL 동일·본문 상이, 또는 앞 job 소비 전 정정),
+이 행은 마지막 본문만 남긴다. 구조적 한계이고, 사후 판별은 ALPHA-689 가 결과에 싣는
+`prompt_input_checksum` 이 한다.
+
 ⚠️ **`article_id` 만은 record 의 값이 이긴다.** `_normalize` 도 article_id 를 재계산하지만,
 1분 경로의 정본은 **원장이 승격한 canonical id** 다(fallback id → URL identity 단방향 승격,
 ALPHA-668). `_normalize` 값을 쓰면 원장이 job 을 만든 id 와 canonical 행의 id 가 갈린다.
@@ -31,8 +43,9 @@ ALPHA-668). `_normalize` 값을 쓰면 원장이 job 을 만든 id 와 canonical
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import datetime
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from ..db import stable_domain_id
 from ..steps.normalize_news import _LANGUAGE_BY_VENDOR, _normalize
@@ -42,18 +55,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PgNewsCanonicalWriter:
-    """`(source_code, article_id)` 자연키 upsert. 커서는 호출자(commit)가 준다."""
+    """`(source_code, article_id)` 자연키 upsert. 커서는 호출자(commit)가 준다.
+
+    `clock` 은 주입이다(이 패키지 관례) — `available_at` 이 여기서 나온다.
+    """
+
+    clock: Callable[[], datetime] = field(
+        default=lambda: datetime.now(timezone.utc), repr=False
+    )
 
     def upsert_tx(
         self, cur, *, dataset: str, window_start: datetime, records: tuple[dict, ...]
     ) -> int:
+        # ⚠️ `window_start` 는 **관측 시각이 아니다**(아래 available_at 주석 참조).
+        observed_at = self.clock()
         written = 0
         for record in records:
-            written += self._upsert_one(cur, record, window_start=window_start)
+            written += self._upsert_one(cur, record, observed_at=observed_at)
         return written
 
     @staticmethod
-    def _upsert_one(cur, record: dict, *, window_start: datetime) -> int:
+    def _upsert_one(cur, record: dict, *, observed_at: datetime) -> int:
         source_code = record.get("source_code")
         article_id = record.get("article_id")
         if not isinstance(source_code, str) or not isinstance(article_id, str) \
@@ -98,10 +120,13 @@ class PgNewsCanonicalWriter:
                 # "우리가 이 문서를 쓸 수 있게 된 시각"이고 인덱스가 걸린 도착 시간 축이라,
                 # 정정 때 앞으로 밀면 시간순 소비자에게 **옛 문서가 새 문서로 다시 뜬다**.
                 # 정정이 바꾸는 건 내용이지 도착 사실이 아니다.
-                # 값은 window_start 다 — 1분 경로의 벤더 행에는 batch 가 쓰는 `fetched_at`
-                # 이 없고(BigKinds raw = TITLE·CONTENT·PROVIDER·DATE), 그 window 가 곧
-                # 우리가 관측한 시각이라 가장 정확하다.
-                window_start,
+                # ⚠️⚠️ 값은 **실제 처리 시각**이지 `window_start` 가 아니다. 1분 벤더 행에는
+                # 배치가 쓰는 `fetched_at` 이 없어(BigKinds raw = TITLE·CONTENT·PROVIDER·DATE)
+                # 창 시각을 쓸까 했지만, recovery 는 09:00 창을 12:00 에 처리한다 — 그러면
+                # 12:00 에 알게 된 기사를 09:00 에 안 것으로 **소급**하게 되고, 이 값을
+                # PIT 시각으로 복사하는 하류(load_assertions·assemble_events)에서 10:00
+                # as-of 조회가 미래 지식을 보게 된다.
+                observed_at,
                 normalized["url"],
             ),
         )

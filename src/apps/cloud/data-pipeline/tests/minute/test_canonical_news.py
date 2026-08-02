@@ -80,6 +80,19 @@ class TestCorrection:
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert db.news_documents[document["document_id"]]["lead_text"] is None
 
+    def test_arrival_time_is_when_we_observed_not_when_the_window_was_due(self):
+        # ⚠️ recovery 는 09:00 창을 12:00 에 처리한다. window_start 를 쓰면 12:00 에 알게 된
+        # 기사를 09:00 에 안 것으로 **소급**하고, 이 값을 PIT 시각으로 복사하는 하류
+        # (load_assertions·assemble_events)에서 10:00 as-of 조회가 미래 지식을 보게 된다.
+        db = FakeMinuteDB()
+        observed = datetime(2026, 7, 31, 12, 0, tzinfo=KST)
+        with db.connect(None) as conn, conn.cursor() as cur:
+            PgNewsCanonicalWriter(clock=lambda: observed).upsert_tx(
+                cur, dataset="news_minute", window_start=WINDOW_START,
+                records=(vendor_row(),),
+            )
+        assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == observed
+
     def test_arrival_time_is_not_moved_by_a_correction(self):
         # available_at 은 도착 시간 축이고 인덱스가 걸려 있다 — 정정 때 앞으로 밀면
         # 시간순 소비자에게 **옛 문서가 새 문서로 다시 뜬다**. 정정이 바꾸는 건 내용이다.

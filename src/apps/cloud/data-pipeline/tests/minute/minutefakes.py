@@ -192,8 +192,15 @@ class _Cursor:
             # DO NOTHING 회귀가 초록으로 통과한다.
             assert "ON CONFLICT (source_code, source_document_id) DO UPDATE" in s, \
                 "document upsert 가 정정을 반영하지 않는다(DO NOTHING 회귀)"
-            assert "IS DISTINCT FROM" in s, "값이 같아도 UPDATE 하면 멱등 집계가 거짓이 된다"
             set_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[0]
+            where_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[1]
+            # fake 는 아래에서 이 컬럼들을 **자기 규칙으로** 갱신한다 — SQL 에서 한 컬럼이
+            # 빠져도 그대로 통과하므로, 갱신 대상과 비교 대상을 문면에서 못 박는다(Rule 9)
+            for column in ("title", "published_at", "source_uri", "language_code"):
+                assert f"{column} = EXCLUDED.{column}" in set_clause, \
+                    f"document upsert 가 {column} 을 갱신하지 않는다(정정이 안 반영된다)"
+                assert f"document.{column} IS DISTINCT FROM EXCLUDED.{column}" in where_clause, \
+                    f"document upsert 가 {column} 변경을 판정하지 않는다(멱등이 거짓이 된다)"
             # available_at 을 갱신하면 시간순 소비자에게 옛 문서가 새 문서로 다시 뜬다
             assert "available_at" not in set_clause, \
                 "document upsert 가 도착 시각(available_at)을 갱신한다"
@@ -201,6 +208,10 @@ class _Cursor:
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \
                 "news_document upsert 가 리드 정정을 반영하지 않는다"
+            assert "SET lead_text = EXCLUDED.lead_text" in s, \
+                "news_document upsert 가 리드를 갱신하지 않는다"
+            assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
+                "같은 리드에도 UPDATE 하면 멱등 집계가 거짓이 된다"
             self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
