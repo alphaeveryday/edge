@@ -78,8 +78,8 @@ def plan_session_cli(
         return 2
     allowed_sources = SOURCE_GROUPS_BY_DATASET[dataset]
     if source_group not in allowed_sources:
-        # 원장의 source_group 은 정본이다 — EOD 가 그 값으로 raw prefix 를 스캔하므로,
-        # 오타가 들어가면 실제 artifact 를 못 찾고 "orphan 0건" 이라는 거짓 clean 이 난다.
+        # 원장의 source_group 은 정본이다 — 어휘 밖 값으로 세션이 서면 그 소스를
+        # 처리하는 어댑터·Worker 배선이 없어, dataset 오타와 같은 모양으로 조용히 안 돈다.
         logger.error("--source-group 이 dataset %s 의 어휘 밖이다: %s (아는 값 %s)",
                      dataset, source_group, sorted(allowed_sources))
         return 2

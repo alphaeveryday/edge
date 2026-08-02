@@ -31,8 +31,8 @@ from datetime import datetime
 
 from ..lake.storage import (
     Storage,
+    canonical_price_minute_artifact_key,
     minute_window_manifest_key,
-    raw_price_minute_artifact_key,
 )
 from .artifacts import (
     UNIT_CLASSES,
@@ -274,8 +274,8 @@ class PriceWorker(MinuteWorkerLoop):
         window_hhmm = claim["window_start"].astimezone(KST).strftime("%H%M")
 
         def manifest_for(generation: int) -> tuple[str, bytes, str]:
-            artifact_key = raw_price_minute_artifact_key(
-                cfg.source, cfg.market, cfg.session_date, window_hhmm, generation
+            artifact_key = canonical_price_minute_artifact_key(
+                cfg.market, cfg.session_date, window_hhmm, generation
             )
             manifest = build_window_manifest(
                 dataset=cfg.dataset, session_id=self.session_id,
@@ -334,6 +334,9 @@ class PriceWorker(MinuteWorkerLoop):
             # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
             # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
             # 이 값도 데이터 identity 로 동등하다.
+            # 벤더 축은 canonical 키에서 빠졌다(ALPHA-705) — 소비자가 벤더를 알 수
+            # 있도록 레코드 컬럼으로 싣는다. checksum 은 이 최종 형상에서 나온다.
+            records = tuple(dict(record, source=cfg.source) for record in records)
             artifact_bytes = serialize_records(list(records))
             artifact_checksum = sha256_bytes(artifact_bytes)
             generation, artifact_key, manifest_bytes, manifest_checksum = (

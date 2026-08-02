@@ -27,7 +27,7 @@ from typing import Protocol
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
-from ..lake.storage import Storage, raw_price_minute_artifact_key
+from ..lake.storage import Storage, canonical_price_minute_prefix
 from .jobs import NEWS_EVENT_TYPE, PRICE_EVENT_TYPE, JobLedger, build_event_id
 from .models import KST
 from .news_overlap import (
@@ -369,7 +369,6 @@ def find_orphan_artifacts(
     connect_fn: Callable,
     storage: Storage,
     session_id: str,
-    source: str,
     market: str,
     session_date: str,
 ) -> list[str]:
@@ -393,7 +392,7 @@ def find_orphan_artifacts(
             ws.astimezone(KST).strftime("%H%M"): generation
             for ws, generation in cur.fetchall()
         }
-    prefix = f"raw/source={source}/dataset=price_minute/market={market}/session_date={session_date}/"
+    prefix = canonical_price_minute_prefix(market, session_date)
     orphans = []
     for key in storage.list_keys(prefix):
         if not key.endswith("/bars.ndjson"):

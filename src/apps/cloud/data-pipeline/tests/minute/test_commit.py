@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake.storage import LocalStorage, raw_price_minute_artifact_key
+from data_pipeline.lake.storage import LocalStorage, canonical_price_minute_artifact_key
 from data_pipeline.minute.artifacts import put_immutable, serialize_records
 from data_pipeline.minute.commit import (
     CommitRejectedError,
@@ -168,8 +168,8 @@ class TestOrphanDetection:
         # (commit 은 PUT 뒤에만 호출되고, PUT 실패는 commit 자체가 없다)
         db, ledger, session_id, token, claim = ready_session()
         storage = LocalStorage(root=tmp_path)
-        committed_key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
-        orphan_key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0901", 1)
+        committed_key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
+        orphan_key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0901", 1)
         put_immutable(storage, committed_key, serialize_records(list(RECORDS)))
         put_immutable(storage, orphan_key, serialize_records(list(RECORDS)))
         # 09:00 만 DB commit — 09:01 은 PUT 후 죽은 시나리오
@@ -178,7 +178,7 @@ class TestOrphanDetection:
         )
         orphans = find_orphan_artifacts(
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            source="toss", market="KR", session_date="2026-07-31",
+            market="KR", session_date="2026-07-31",
         )
         assert orphans == [orphan_key]
 
@@ -186,18 +186,18 @@ class TestOrphanDetection:
         # 재claim 실행이 같은 key 를 재사용해 commit 하면 orphan 이 사라진다
         db, ledger, session_id, token, claim = ready_session()
         storage = LocalStorage(root=tmp_path)
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         put_immutable(storage, key, serialize_records(list(RECORDS)))
         assert find_orphan_artifacts(
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            source="toss", market="KR", session_date="2026-07-31",
+            market="KR", session_date="2026-07-31",
         ) == [key]
         MinuteCommitter(db=_DB, connect_fn=db.connect).commit_price_window(
             **commit_kwargs(session_id, claim, token)
         )
         assert find_orphan_artifacts(
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            source="toss", market="KR", session_date="2026-07-31",
+            market="KR", session_date="2026-07-31",
         ) == []
 
 
@@ -238,9 +238,9 @@ class TestOrphanGenerations:
         # correction 후 세대 1 artifact 는 immutable 정상 이력 — orphan 이 아니다
         db, ledger, session_id, token, claim = ready_session()
         storage = LocalStorage(root=tmp_path)
-        gen1 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
-        gen2 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 2)
-        gen3 = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 3)
+        gen1 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
+        gen2 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 2)
+        gen3 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 3)
         for key in (gen1, gen2, gen3):
             put_immutable(storage, key, serialize_records(list(RECORDS)))
         committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
@@ -257,7 +257,7 @@ class TestOrphanGenerations:
         committer.commit_price_window(**kwargs)
         orphans = find_orphan_artifacts(
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            source="toss", market="KR", session_date="2026-07-31",
+            market="KR", session_date="2026-07-31",
         )
         assert orphans == [gen3]  # 커밋 세대(2)보다 높은 것만 orphan
 
@@ -265,12 +265,12 @@ class TestOrphanGenerations:
         # 형식 밖 키 하나가 스캔을 죽이면 다른 orphan 이 안 보인다 — 나열로 일관 처리
         db, ledger, session_id, token, claim = ready_session()
         storage = LocalStorage(root=tmp_path)
-        bad = ("raw/source=toss/dataset=price_minute/market=KR/session_date=2026-07-31"
+        bad = ("canonical/market_data/price_minute/market=KR/session_date=2026-07-31"
                "/window=0900/generation=abc/bars.ndjson")
         storage.put_bytes(bad, b"junk")
         orphans = find_orphan_artifacts(
             db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            source="toss", market="KR", session_date="2026-07-31",
+            market="KR", session_date="2026-07-31",
         )
         assert orphans == [bad]
 
