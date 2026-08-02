@@ -127,9 +127,9 @@ class TestSuccess:
         assert (stored["attempt"], stored["redrive_generation"]) == (3, 2)
         # 무엇을 근거로 만든 판정인지 — 본문 지문 검증이 불가능하므로 이 값들이 사후
         # 판별(정정 기사와 겹친 실행)의 유일한 실마리다
-        assert stored["input_fingerprint"] == FINGERPRINT
+        assert stored["job_input_fingerprint"] == FINGERPRINT
         assert stored["source_item_id"] == "NEWS_ID_1"
-        assert stored["source_generation"] == 1
+        assert stored["job_source_generation"] == 1
         assert stored["result"]["tagger_version"] == TAGGER_VERSION
         assert stored["result"]["ontology_version"] == ontology_version()
         assert stored["result"]["doc_class"] == "EVENT"
@@ -147,9 +147,12 @@ class TestSuccess:
         assert len(checksum) == 64
 
     def test_same_attempt_rerun_reuses_stored_result_without_calling_llm(self, tmp_path):
-        # PUT 후 DB 기록 전에 죽어 같은 attempt 가 다시 도는 경우다. 다시 물으면
-        # temperature 0 이어도 다른 바이트가 나올 수 있고, 그러면 불변 계약이 이 job 을
-        # 영구히 막는다 — 저장된 판정이 곧 이 시도의 결과다(그리고 유료 호출도 0).
+        # ⚠️ 이건 kernel 경유 경로의 회귀가 **아니다** — `claim_job` 이 claim 마다
+        # attempt_count 를 올리므로 PUT 후 사망하면 다음 실행은 attempt=2, 즉 다른
+        # key 다. 여기서 고정하는 건 handler 자체의 멱등성이다: 같은 (job, 세대, 시도)로
+        # 두 번 불리면 두 번째는 **유료 호출 없이** 저장된 판정을 그대로 확정해야 한다.
+        # 다시 물으면 temperature 0 이어도 다른 바이트가 나올 수 있고, 그러면 불변
+        # 계약이 그 시도를 막는다(kernel 밖에서 같은 시도를 재개하는 경로의 안전판).
         llm = RecordingLlm(LLM_EVENT_RESPONSE, LLM_NON_EVENT_RESPONSE)
         handler = make_handler(tmp_path, llm=llm)
         first = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
@@ -209,21 +212,39 @@ class TestFailureClassification:
         # 실패를 결과로 저장하면 그 checksum 이 SUCCEEDED 의 근거처럼 보인다
         assert not (tmp_path / news_extraction_result_key(JOB_ID, 0, 1)).exists()
 
-    def test_job_identity_mismatch_is_transient_without_reading_article(self, tmp_path):
-        # 구버전 job 을 신버전 태거가 집으면 결과의 계보가 job 정체성과 달라진다.
-        # 배포 상태가 근거라 terminal 이 아니지만, 그 결과를 만들어선 안 된다.
-        reader = FakeArticleReader()
-        llm = RecordingLlm(LLM_EVENT_RESPONSE)
-        handler = make_handler(tmp_path, llm=llm, reader=reader)
-        stale_id = news_job_id(
-            source_code=SOURCE_CODE, article_id=ARTICLE_ID, input_fingerprint=FINGERPRINT,
-            tagger_version="tagging-v0", ontology_version=ontology_version(),
-        )
+    def test_unreadable_stored_result_retries_instead_of_confirming(self, tmp_path):
+        # 잘린 바이트의 해시를 그대로 돌려주면 읽을 수 없는 결과가 SUCCEEDED 로
+        # 확정된다(kernel 은 64자리 hex 형상만 본다). 다음 시도는 attempt 가 달라
+        # 다른 key 라, 재시도로 보내면 손상 바이트가 이 job 을 막지도 않는다.
+        key = news_extraction_result_key(JOB_ID, 0, 1)
+        (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / key).write_text('{"job_id": "x", "result": {')
+
+        handler = make_handler(tmp_path)
         with pytest.raises(TransientJobError) as error:
-            handler(job_id=stale_id, payload=payload(job_id=stale_id), attempt=1,
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert error.value.code == "RESULT_ARTIFACT_UNREADABLE"
+
+    def test_stored_result_of_another_job_is_not_reused(self, tmp_path):
+        key = news_extraction_result_key(JOB_ID, 0, 1)
+        (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / key).write_text(
+            json.dumps({"job_id": "b" * 64, "result": {"status": "ok"}})
+        )
+
+        handler = make_handler(tmp_path)
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert error.value.code == "RESULT_ARTIFACT_MISMATCH"
+
+    def test_payload_contract_violation_carries_its_reason(self, tmp_path):
+        # 그냥 ValueError 로 올리면 kernel 이 UNCLASSIFIED 로 접어, 예산 소진 뒤 원장엔
+        # RETRY_BUDGET_EXHAUSTED 만 남고 원인이 사라진다.
+        handler = make_handler(tmp_path)
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(generation=True), attempt=1,
                     redrive_generation=0)
-        assert error.value.code == "JOB_IDENTITY_MISMATCH"
-        assert (reader.calls, llm.calls) == ([], [])
+        assert error.value.code == "PAYLOAD_CONTRACT"
 
     def test_non_korean_article_is_refused_before_paying_for_a_call(self, tmp_path):
         # 프롬프트가 한국 금융 뉴스 전용이라 영어 기사도 호출은 **성공하고** status 는
@@ -237,15 +258,49 @@ class TestFailureClassification:
         assert error.value.code == "UNSUPPORTED_LANGUAGE"
         assert llm.calls == []
 
-    def test_article_id_swap_is_rejected(self, tmp_path):
-        # payload 만 다른 기사를 가리키면, 그 기사 결과가 이 job 의 성공으로 확정된다.
-        # 봉투-payload 대조(kernel)로는 못 잡는다 — job_id 는 그대로이기 때문이다.
-        handler = make_handler(tmp_path)
-        with pytest.raises(TransientJobError) as error:
-            handler(job_id=JOB_ID, payload=payload(article_id="news-9999"), attempt=1,
-                    redrive_generation=0)
-        assert error.value.code == "JOB_IDENTITY_MISMATCH"
+    def test_unknown_language_proceeds_instead_of_halting_the_lane(self, tmp_path):
+        # 1분 경로의 기사 writer 는 아직 실구현이 없어 language_code 가 빌 수 있다.
+        # 미상까지 막으면 그 컬럼 하나가 뉴스 레인 전체를 예산 소진으로 정지시킨다 —
+        # 막는 쪽이 더 크게 틀리는 자리다.
+        reader = FakeArticleReader(
+            {(SOURCE_CODE, ARTICLE_ID): {**ARTICLE, "language_code": None}}
+        )
+        handler = make_handler(tmp_path, reader=reader)
+        checksum = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert len(checksum) == 64
 
+
+
+class TestJobIdentityLineage:
+    """구버전 job 을 신버전 태거가 집는 경우 — 막지 않고 **기록**한다.
+
+    막으면 그 job 은 예산 소진 후 DEAD 인데, 그 기사는 재관측되지 않는 한 새 job 도
+    생기지 않아(원장은 created/content_changed 에서만 job 을 만든다) 영영 태깅되지
+    않는다. 계보 한 줄을 지키려다 기사를 통째로 잃는 쪽이 더 크게 틀린다.
+    """
+
+    def test_stale_version_job_still_runs_and_is_flagged(self, tmp_path):
+        handler = make_handler(tmp_path)
+        stale_id = news_job_id(
+            source_code=SOURCE_CODE, article_id=ARTICLE_ID, input_fingerprint=FINGERPRINT,
+            tagger_version="tagging-v0", ontology_version=ontology_version(),
+        )
+        handler(job_id=stale_id, payload=payload(job_id=stale_id), attempt=1,
+                redrive_generation=0)
+
+        stored = json.loads(
+            (tmp_path / news_extraction_result_key(stale_id, 0, 1)).read_text()
+        )
+        # 실행은 하되 그 사실이 결과에 남는다 — job 이 선언한 버전은 원장 행에 있으므로
+        # 대조는 job_id 조인으로 사후에 가능하다(EOD QC 소관)
+        assert stored["job_identity_verified"] is False
+        assert stored["result"]["tagger_version"] == TAGGER_VERSION
+
+    def test_matching_identity_is_marked_verified(self, tmp_path):
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        stored = json.loads((tmp_path / news_extraction_result_key(JOB_ID, 0, 1)).read_text())
+        assert stored["job_identity_verified"] is True
 
 class TestRecordedOutcomes:
     """모델이 대답은 했으나 쓸 수 없는 경우 — 판정이므로 기록하고 끝낸다(배치와 같은 정책).
@@ -284,11 +339,12 @@ class TestRecordedOutcomes:
 
 
 class TestPayloadContract:
-    """payload 위반은 ValueError — kernel 이 미분류로 받아 재시도한다(배포 skew 자가치유)."""
+    """payload 위반은 **사유를 단 transient** 다 — 롤링 배포 중의 생산자-소비자 어긋남도
+    같은 형상으로 오므로 terminal 로 확정하지 않고, 그렇다고 사유를 잃지도 않는다."""
 
     def test_unknown_field_is_rejected(self, tmp_path):
         handler = make_handler(tmp_path)
-        with pytest.raises(ValueError, match="미지"):
+        with pytest.raises(TransientJobError, match="미지"):
             handler(job_id=JOB_ID, payload=payload(surprise=1), attempt=1,
                     redrive_generation=0)
 
@@ -296,26 +352,26 @@ class TestPayloadContract:
         handler = make_handler(tmp_path)
         broken = payload()
         del broken["input_fingerprint"]
-        with pytest.raises(ValueError, match="누락"):
+        with pytest.raises(TransientJobError, match="누락"):
             handler(job_id=JOB_ID, payload=broken, attempt=1, redrive_generation=0)
 
     def test_payload_job_id_must_match_envelope(self, tmp_path):
         # 봉투는 job A 인데 payload 가 B 면, handler 는 B 를 태깅하고 kernel 은 A 를
         # SUCCEEDED 로 확정한다 — 두 job 이 한 결과를 공유하며 A 는 영영 안 돈다.
         handler = make_handler(tmp_path)
-        with pytest.raises(ValueError, match="job_id"):
+        with pytest.raises(TransientJobError, match="job_id"):
             handler(job_id=JOB_ID, payload=payload(job_id="b" * 64), attempt=1,
                     redrive_generation=0)
 
     def test_blank_identity_is_rejected(self, tmp_path):
         handler = make_handler(tmp_path)
-        with pytest.raises(ValueError, match="article_id"):
+        with pytest.raises(TransientJobError, match="article_id"):
             handler(job_id=JOB_ID, payload=payload(article_id=""), attempt=1,
                     redrive_generation=0)
 
     def test_non_dict_payload_is_rejected(self, tmp_path):
         handler = make_handler(tmp_path)
-        with pytest.raises(ValueError, match="객체가 아니다"):
+        with pytest.raises(TransientJobError, match="객체가 아니다"):
             handler(job_id=JOB_ID, payload=["job_id"], attempt=1, redrive_generation=0)
 
 

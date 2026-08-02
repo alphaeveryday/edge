@@ -17,9 +17,9 @@ payload(job_id·source_code·article_id·source_item_id·input_fingerprint·gene
 
 ⚠️ **분류는 코드 문자열이 아니라 "어디서 실패했나"로 가른다.** 축이 둘이다.
 
-- **물어보기 전에 막힌 것**(기사 행 부재·job 정체성 불일치)은 근거가 코드·배포·쓰기
-  순서라 **transient** 다 — 예산(max_attempts)이 판정한다. 되돌릴 수 없는 DEAD 를
-  여기서 확정하는 경로는 하나도 없다.
+- **물어보기 전에 막힌 것**(기사 행 부재·payload 계약 위반·읽을 수 없는 기존 결과)은
+  근거가 코드·배포·쓰기 순서라 **transient** 다 — 예산(max_attempts)이 판정한다.
+  되돌릴 수 없는 DEAD 를 여기서 확정하는 경로는 하나도 없다.
 - **물어본 결과**는 그 자체가 판정이라 **기록하고 끝낸다**(job 은 SUCCEEDED). 배치
   태깅(`steps/tag_news.py`)이 정한 정책 그대로다: 재태깅 축은 `tagger_version`·
   `ontology_version`·입력 지문·`llm_error` 넷뿐이고, `llm_unparseable`·`bad_doc_class`
@@ -28,17 +28,24 @@ payload(job_id·source_code·article_id·source_item_id·input_fingerprint·gene
   기사가 배치에선 한 번, 여기선 예산만큼 유료 호출된다 — `DEFAULT_TEMPERATURE=0.0`
   이라 그 재시도는 대개 같은 답을 다시 사 온다.
 
-⚠️ **기사 본문의 지문은 재검증하지 않지만, job 정체성은 재계산한다.** 지문 자체는 벤더
-raw 행(TITLE·CONTENT·DATE)에서 나오는데(`news_overlap.content_fingerprint`) 여기서 읽는
-정본은 정규화된 행이라 같은 값을 만들 수 없다 — 억지로 재유도하면 "정정"과 "정규화 차이"가
-구분되지 않아 멀쩡한 기사를 버리는 쪽으로 틀린다. 대신 **`jobs.news_job_id` 유도식을 그대로
-다시 돌려** payload 의 정체성(지문 포함)과 실행 코드의 버전이 그 job_id 를 만드는지 확인한다.
-어긋나면 이 코드가 낼 수 있는 결과는 그 job 의 결과가 아니다(구버전 job 을 신버전 태거가
-성공시키는 계보 위조가 여기서 막힌다).
+⚠️ **계보는 검증이 아니라 기록으로 지킨다.** 두 가지를 확인할 수 없기 때문이다.
+① 본문 지문 — 지문은 벤더 raw 행(TITLE·CONTENT·DATE)에서 나오는데
+(`news_overlap.content_fingerprint`) 여기서 읽는 정본은 정규화된 행이라 같은 값을 만들 수
+없다. 억지로 재유도하면 "정정"과 "정규화 차이"가 구분되지 않아 멀쩡한 기사를 버리는 쪽으로
+틀린다. ② 태거·온톨로지 버전 — `jobs.news_job_id` 유도식을 다시 돌려 대조는 하지만,
+**어긋나도 막지 않는다**: 불일치의 다수는 버전을 올린 배포 직후 큐에 남은 정상 backlog 이고,
+막으면 그 기사는 재관측되지 않는 한 새 job 도 안 생겨(원장은 created/content_changed 에서만
+job 을 만든다) 영영 태깅되지 않는다.
+
+그래서 결과 artifact 에 **판정의 근거를 그대로 싣는다** — job 이 선언한 지문·세대
+(`job_*` 접두), 재계산 일치 여부(`job_identity_verified`), 실행한 태거·온톨로지 버전
+(result 안). job 이 선언한 버전은 원장 행에 있으므로, 둘의 대조는 job_id 조인으로 사후에
+가능하다. 하루 단위 판정은 EOD QC 소관이다(PR 8).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -176,14 +183,24 @@ def _validated_identity(payload: object, job_id: str) -> dict:
         tagger_version=TAGGER_VERSION, ontology_version=ontology_version(),
     )
     if expected_job_id != job_id:
-        # transient 다 — 근거가 job 의 성질이 아니라 **배포 상태**다(롤백·구버전 재배포로
-        # 다시 실행 가능해진다). 예산이 판정한다.
-        raise TransientJobError(
-            f"job identity 가 실행 코드와 다르다: 기대 {expected_job_id[:12]}… 실제 {job_id[:12]}… "
-            f"(tagger={TAGGER_VERSION}, ontology={ontology_version()})",
-            code="JOB_IDENTITY_MISMATCH",
+        # ⚠️ **막지 않는다.** 이 불일치의 압도적 다수는 정상적인 구버전 backlog 다(태거·
+        # 온톨로지를 올린 배포 직후, 그전에 만들어진 job 이 큐에 남아 있다). 막으면 그
+        # job 들은 예산 소진 후 DEAD 인데, 그 기사는 **재관측되지 않는 한 새 job 도 생기지
+        # 않아**(원장은 created/content_changed 에서만 job 을 만든다) 영영 태깅되지 않는다 —
+        # 계보 한 줄을 지키려다 기사를 통째로 잃는다.
+        # 대신 실행 사실을 결과에 남긴다: job 이 선언한 버전은 원장 행에 있고 실행 버전은
+        # 결과에 있으므로, 둘의 대조는 job_id 조인으로 사후에 가능하다(EOD QC 소관).
+        logger.warning(
+            "job identity 가 실행 코드와 다르다 — 실행은 계속한다: job=%s 기대=%s… "
+            "(tagger=%s, ontology=%s)",
+            job_id, expected_job_id[:12], TAGGER_VERSION, ontology_version(),
         )
-    return {**identity, "source_item_id": payload["source_item_id"], "generation": generation}
+    return {
+        **identity,
+        "source_item_id": payload["source_item_id"],
+        "generation": generation,
+        "identity_verified": expected_job_id == job_id,
+    }
 
 
 @dataclass
@@ -201,16 +218,23 @@ class NewsExtractionHandler:
     def __call__(
         self, *, job_id: str, payload: object, attempt: int, redrive_generation: int
     ) -> str:
-        identity = _validated_identity(payload, job_id)
+        try:
+            identity = _validated_identity(payload, job_id)
+        except ValueError as error:
+            # 사유를 error_code 에 남긴다 — 그냥 올리면 kernel 이 UNCLASSIFIED 로 접어
+            # 예산 소진 뒤 원장에 RETRY_BUDGET_EXHAUSTED 만 남고 원인이 사라진다.
+            # 그래도 terminal 로 확정하지는 않는다: 같은 형상 위반이 롤링 배포 중의
+            # 생산자-소비자 어긋남으로도 나고, 그 창은 스스로 닫힌다.
+            raise TransientJobError(str(error), code="PAYLOAD_CONTRACT") from error
         source_code, article_id = identity["source_code"], identity["article_id"]
 
         key = news_extraction_result_key(job_id, redrive_generation, attempt)
         if key in self.storage.list_keys(key):
-            # 이 시도는 이미 판정을 남겼다(PUT 성공 뒤 DB 기록 전에 죽은 경우) — 다시
-            # 물으면 temperature 0 이어도 다른 바이트가 나올 수 있고, 그러면 불변 계약이
-            # 이 job 을 영구히 막는다. 저장된 판정이 곧 이 시도의 결과다.
-            logger.info("이미 저장된 시도 결과 재사용 job=%s attempt=%d", job_id, attempt)
-            return sha256_bytes(self.storage.get_bytes(key))
+            # 이 시도가 이미 판정을 남긴 경우다. 다시 물으면 temperature 0 이어도 다른
+            # 바이트가 나올 수 있고, 그러면 불변 계약이 이 시도를 막는다 — 저장된 판정이
+            # 곧 이 시도의 결과다. (kernel 은 claim 마다 attempt 를 올리므로 정상 경로에선
+            # 잘 안 밟힌다. 계약 방어이자, 같은 시도를 직접 재개하는 경로의 안전판이다.)
+            return self._reuse(key, job_id, attempt)
 
         article = self.article_reader.read(source_code=source_code, article_id=article_id)
         if article is None:
@@ -219,14 +243,24 @@ class NewsExtractionHandler:
             raise TransientJobError(
                 f"기사 정본이 없다: ({source_code}, {article_id})", code="ARTICLE_NOT_FOUND"
             )
-        if article.get("language_code") not in PROMPT_LANGUAGES:
+        language = article.get("language_code")
+        if language is not None and language not in PROMPT_LANGUAGES:
             # 프롬프트가 한국 금융 뉴스 전용이라, 다른 언어 기사는 호출이 **성공하고**
             # status 도 ok 로 나온다 — 품질만 조용히 무너진다. 여기 온 것 자체가 배선
             # 오류(비-ko 소스를 이 레인에 붙였다)라 결과로 기록하지 않고 재시도로 보낸다.
             raise TransientJobError(
-                f"프롬프트 대상 언어가 아니다: {article.get('language_code')!r} "
-                f"(대상 {PROMPT_LANGUAGES})",
+                f"프롬프트 대상 언어가 아니다: {language!r} (대상 {PROMPT_LANGUAGES})",
                 code="UNSUPPORTED_LANGUAGE",
+            )
+        # ⚠️ **미상(None)은 막지 않는다.** 1분 경로의 기사 행을 쓰는 `CanonicalWriter` 는
+        # 아직 실구현이 없고, commit 이 넘기는 레코드(`commit_news_window`)엔 벤더 행 +
+        # article_id·source_code 뿐이라 language_code 를 안 채울 수 있다. 미상까지 막으면
+        # 그 컬럼 하나가 비는 순간 **뉴스 레인 전체**가 예산 소진 후 DEAD 로 정지한다 —
+        # 아는 위반만 막고, 미상은 로그로 드러낸 뒤 진행한다(막는 쪽이 더 크게 틀린다).
+        if language is None:
+            logger.warning(
+                "기사 언어 미상 — 한국어 프롬프트로 진행한다: job=%s article=%s",
+                job_id, article_id,
             )
 
         result = extract_assertions(article, complete_fn=self.complete_fn)
@@ -247,11 +281,43 @@ class NewsExtractionHandler:
             attempt=attempt, redrive_generation=redrive_generation, result=result,
         )).encode("utf-8")
         checksum = put_immutable(self.storage, key, data)
-        logger.info(
+        # 판정으로 기록하고 끝내는 실패(no_title·llm_unparseable·bad_doc_class)는 job 이
+        # SUCCEEDED 라 원장만 보면 정상과 구분되지 않는다 — 로그 등급으로라도 드러낸다.
+        # 하루 단위 집계·판정은 EOD QC 소관이다(PR 8, 이 artifact 의 status 를 읽는다).
+        logger.log(
+            logging.INFO if status == _SUCCESS_STATUS else logging.WARNING,
             "뉴스 추출 기록 job=%s article=%s status=%s assertions=%d key=%s",
             job_id, article_id, status, len(result.get("assertions") or []), key,
         )
         return checksum
+
+    def _reuse(self, key: str, job_id: str, attempt: int) -> str:
+        """저장된 시도 결과를 그대로 확정한다 — 단, **읽을 수 있을 때만**.
+
+        바이트 해시만 돌려주면 잘린 JSON·다른 job 의 내용이 그대로 SUCCEEDED 가 된다
+        (kernel 은 64자리 hex 형상만 본다). 그래서 파싱해 이 job 의 결과인지 확인하고,
+        아니면 재시도로 보낸다 — 다음 시도는 attempt 가 달라 **다른 key** 라서, 손상된
+        바이트가 이 job 을 영구히 막지 않는다.
+        """
+        data = self.storage.get_bytes(key)
+        try:
+            stored = json.loads(data.decode("utf-8"))
+            stored_job_id = stored["job_id"]
+            status = stored["result"]["status"]
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError) as error:
+            raise TransientJobError(
+                f"저장된 시도 결과를 읽을 수 없다({key}): {error}",
+                code="RESULT_ARTIFACT_UNREADABLE",
+            ) from error
+        if stored_job_id != job_id:
+            raise TransientJobError(
+                f"저장된 시도 결과가 다른 job 의 것이다({key}): {stored_job_id}",
+                code="RESULT_ARTIFACT_MISMATCH",
+            )
+        logger.info(
+            "이미 저장된 시도 결과 재사용 job=%s attempt=%d status=%s", job_id, attempt, status
+        )
+        return sha256_bytes(data)
 
     @staticmethod
     def _envelope(
@@ -277,8 +343,14 @@ class NewsExtractionHandler:
             "source_code": identity["source_code"],
             "article_id": identity["article_id"],
             "source_item_id": identity["source_item_id"],
-            "input_fingerprint": identity["input_fingerprint"],
-            "source_generation": identity["generation"],
+            # ⚠️ 이름이 `job_…` 인 건 **job 이 선언한 값**이라는 뜻이다 — 우리가 읽은 본문이
+            # 실제로 그 지문의 것이었는지는 확인하지 못했다(모듈 docstring). 정정이 job 대기
+            # 중에 들어오면 이 값과 본문이 갈릴 수 있고, 그 판별은 이 필드가 있어야 가능하다.
+            "job_input_fingerprint": identity["input_fingerprint"],
+            "job_source_generation": identity["generation"],
+            # 실행 코드로 job_id 를 재계산했을 때 일치했는가. false 면 다른 태거·온톨로지
+            # 버전으로 만들어진 job 을 이 코드가 처리한 것이다(막지 않는 이유는 위 참조).
+            "job_identity_verified": identity["identity_verified"],
             "redrive_generation": redrive_generation,
             "attempt": attempt,
             "result": result,
