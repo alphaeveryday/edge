@@ -131,20 +131,27 @@ class Catalog:
                     f"있는 것: {', '.join(self.types)}")
         return "이 셀의 사건 타입:\n" + "\n".join(f"  {t}" for t in hit)
 
-    def news(self, limit: int = 5) -> str:
-        """사건의 근거 문서 - 제목·도달 시각. 접지의 뿌리(v_event_news→v_news)."""
+    def news(self, kind: str = "") -> str:
+        """사건의 근거 문서 - 제목·도달 시각. 접지의 뿌리(v_event_news→v_news).
+
+        인자는 **사건 타입 일부**다 (19R 실측: 에이전트가 타입을 넘겼는데 시그니처가
+        limit 이라 조용히 버려지고 엉뚱한 기사가 돌아갔다 - 침묵하는 무시는 오답보다
+        나쁘다). 안 주면 이 셀 전체.
+        """
+        flt = f"AND e.event_type_code LIKE '%{kind}%'" if kind else ""
         rows = self._q(f"""
             SELECT n.title, n.published_at, e.event_type_code
             FROM v_event e
             JOIN v_event_news en ON en.source_event_id = e.source_event_id
             JOIN v_news n ON n.document_id = en.document_id
             WHERE e.instrument_id = '{self.instrument_id}'
-              AND e.trade_date = DATE '{self.day}'
-            ORDER BY n.published_at LIMIT {min(limit, MAX_ROWS)}""")
+              AND e.trade_date = DATE '{self.day}' {flt}
+            ORDER BY n.published_at LIMIT 6""")
         if isinstance(rows, str):
             return rows
         if not rows:
-            return "근거 문서 없음: 사건은 있으나 문서 연결이 원장에 없다 (조회 성공)"
+            return (f"근거 문서 없음: {kind!r} 에 걸리는 문서가 이 셀에 없다 (조회 성공)"
+                    if kind else "근거 문서 없음: 사건은 있으나 문서 연결이 원장에 없다")
         return "\n".join(f"  [{r[2][:38]}] {str(r[1])[:16]} {str(r[0])[:60]}" for r in rows)
 
     def thread(self) -> str:
