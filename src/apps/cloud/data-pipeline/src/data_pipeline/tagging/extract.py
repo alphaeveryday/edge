@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
 
 TAGGER_VERSION = "tagging-v1"
 
+# 이 프롬프트를 씌워도 되는 언어. 아래 `_SYSTEM` 이 한국 금융 뉴스 전용이라 ko 만이다 —
+# 다른 언어 기사에 씌우면 호출은 성공하고 status 도 ok 라 **품질만 조용히 무너진다**.
+# 소비자(배치 `steps/tag_news`·1분 Consumer)가 각자 상수를 두면 한쪽만 늘어난다.
+PROMPT_LANGUAGES = ("ko",)
+
 _SYSTEM = """너는 한국 금융 뉴스에서 '문서가 주장하는 사건'을 구조화하는 추출기다.
 
 규칙:
