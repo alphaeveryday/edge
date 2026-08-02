@@ -279,10 +279,12 @@ class TestCollector:
 
         assert manifest == {"received": ["005930"], "no_trade": ["001527"],
                             "missing": ["000660"], "invalid": []}
+        # ⚠️ no_trade 도 **기록은 남는다** — 관측된 flat 봉을 버리면 한산한 종목은
+        # 하루 390분 중 376분이 canonical 에서 사라진다(001527 실측)
+        assert sorted(r["unit_id"] for r in records) == ["001527", "005930"]
         assert result.status == WINDOW_INCOMPLETE
         # 거래 없는 분은 **성공**으로 센다 — 실패로 세면 매분 재시도가 붙는다
         assert (result.succeeded_count, result.failed_count) == (2, 1)
-        assert [r["unit_id"] for r in records] == ["005930"]
         assert records[0]["ts"] == WINDOW_END - timedelta(minutes=1)
 
     def test_all_no_trade_is_valid_empty_not_valid(self):
@@ -294,7 +296,8 @@ class TestCollector:
                                  "window_start": WINDOW_END - timedelta(minutes=1)})
         collector = TossPriceCollector(client=StubClient({"001527": (flat,)}))
         result, records, manifest = collector.collect(make_request(["001527"]), WINDOW_END)
-        assert result.status == WINDOW_VALID_EMPTY and records == ()
+        # 전 종목 무거래는 VALID_EMPTY 지만 관측한 flat 봉은 그대로 싣는다
+        assert result.status == WINDOW_VALID_EMPTY and len(records) == 1
 
     def test_other_window_candle_is_not_accepted(self):
         # 응답 최신 캔들이 우리가 원한 분이 아닐 수 있다 — ts 대조 없이 받으면 한 칸
@@ -375,6 +378,15 @@ class TestCollector:
         with pytest.raises(TossApiError):
             TossPriceCollector(client=client).collect(
                 make_request(["005930", "000660"]), WINDOW_END)
+
+    def test_token_stage_failure_stops_collection(self):
+        # 토큰 단계 실패는 코드 문자열과 무관하게 **소스 전역**이다 — 응답 형상이
+        # 예상 밖(ValueError)이어도 마찬가지다
+        from data_pipeline.sources.toss import TossAuthError
+
+        client = StubClient({"005930": TossAuthError("토큰 발급 실패")})
+        with pytest.raises(TossAuthError):
+            TossPriceCollector(client=client).collect(make_request(["005930"]), WINDOW_END)
 
     def test_symbol_level_failure_stays_a_unit_miss(self):
         client = StubClient({

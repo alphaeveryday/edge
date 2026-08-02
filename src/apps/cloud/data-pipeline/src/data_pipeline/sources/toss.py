@@ -67,6 +67,15 @@ _PRICE_FIELDS = (("open", "openPrice"), ("high", "highPrice"),
                  ("low", "lowPrice"), ("close", "closePrice"))
 
 
+class TossAuthError(RuntimeError):
+    """토큰 단계에서 막혔다 — **무조건 소스 전역** 실패다.
+
+    코드 문자열로 짐작하지 않고 **어디서 실패했는지**로 가른다. 토큰을 못 받으면 그
+    계정의 모든 종목이 못 나가므로, 이걸 종목 단위 실패로 접으면 window 마다 348종
+    실패가 쌓이는데 고칠 것은 자격증명·IP 허용 목록 하나다.
+    """
+
+
 class TossApiError(RuntimeError):
     """토스 API 가 구조화된 오류를 준 경우. `code` 로 재시도 여부를 가른다."""
 
@@ -303,17 +312,22 @@ class TossOpenApiClient:
         """
         if self._token and self.monotonic() < self._token_expires_at:
             return self._token
-        payload, _ = self._call("/oauth2/token", form={
-            "grant_type": "client_credentials",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-        })
-        token = payload.get("access_token")
-        expires_in = payload.get("expires_in")
-        if not isinstance(token, str) or not token:
-            raise ValueError("토스 토큰 응답에 access_token 이 없다")
-        if not isinstance(expires_in, (int, float)) or expires_in <= 0:
-            raise ValueError(f"토스 토큰 만료 시간이 이상하다: {expires_in!r}")
+        try:
+            payload, _ = self._call("/oauth2/token", form={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            })
+            token = payload.get("access_token")
+            expires_in = payload.get("expires_in")
+            if not isinstance(token, str) or not token:
+                raise ValueError("토스 토큰 응답에 access_token 이 없다")
+            if not isinstance(expires_in, (int, float)) or expires_in <= 0:
+                raise ValueError(f"토스 토큰 만료 시간이 이상하다: {expires_in!r}")
+        except Exception as error:
+            # ⚠️ 코드 문자열이 아니라 **단계**로 가른다 — 응답 형상이 예상 밖일 때도
+            # (ValueError) 이건 여전히 소스 전역 실패다. 종목 단위로 접으면 안 된다.
+            raise TossAuthError(f"토스 토큰 발급 실패: {error}") from error
         self._token = token
         self._token_expires_at = (
             self.monotonic() + max(0.0, float(expires_in) - TOKEN_REFRESH_MARGIN_SECONDS)

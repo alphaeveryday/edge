@@ -8,7 +8,7 @@ unit 4분류가 이 파일의 핵심 판단이다 — 실측 근거는 `.dev/tos
 | 응답 | 분류 | 근거 |
 |---|---|---|
 | 그 분의 캔들이 있고 `volume > 0` | **received** | 정상 체결 |
-| 그 분의 캔들이 있고 `volume == 0` | **no_trade** | 거래 없어도 캔들은 온다(직전가 flat) |
+| 그 분의 캔들이 있고 `volume == 0` | **no_trade** (기록은 남긴다) | 거래 없어도 캔들은 온다(직전가 flat) |
 | 그 분의 캔들이 **없다**·404 | **missing** | 재시도로 풀릴 수 있다 |
 | 인증·IP 차단 등 **소스 전역** 실패 | **전파(중단)** | unit 실패로 접으면 고칠 설정 하나가 안 보인다 |
 | 형상 위반·같은 분 중복·volume 0 인데 OHLC 가 안 flat | **invalid** | 재시도로 **안** 풀린다 |
@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from ..sources.toss import Candle, TossApiError, TossOpenApiClient
+from ..sources.toss import Candle, TossApiError, TossAuthError, TossOpenApiClient
 from .models import CollectionRequest, CollectionResult, content_checksum
 from .states import (
     WINDOW_INCOMPLETE,
@@ -89,6 +89,10 @@ class TossPriceCollector:
                 # 거래 없는 분 — **성공**이다(직전가 flat). 실패로 세면 한산한 종목이
                 # 매분 재시도를 유발하고 window 가 영원히 INCOMPLETE 로 남는다.
                 no_trade.append(unit_id)
+                # ⚠️ **기록은 남긴다.** manifest 분류(무슨 일이 있었나)와 artifact(무엇을
+                # 관측했나)는 다른 축이다. 벤더가 준 flat 봉을 버리면 한산한 종목은
+                # 하루 390분 중 376분이 canonical 에서 사라진다(001527 실측).
+                records.append(_record(outcome))
             else:
                 # 거래량 0 인데 가격이 움직였다 = 우리가 아는 형상이 아니다. no_trade 로
                 # 접으면 그 가격 데이터가 조용히 버려진다.
@@ -137,6 +141,10 @@ class TossPriceCollector:
                 unit_id, interval="1m", count=self.lookback,
                 before=request.window_end, kind=self.kind_of(unit_id),
             )
+        except TossAuthError:
+            # 토큰 단계 실패 = 그 계정의 모든 종목이 못 나간다. 전파한다.
+            logger.error("토스 인증 실패 — 수집 중단", exc_info=True)
+            raise
         except TossApiError as error:
             if error.source_level:
                 # ⚠️ **전파한다.** 자격증명·IP 허용 목록 같은 소스 전역 실패를 unit
