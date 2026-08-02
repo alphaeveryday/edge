@@ -95,6 +95,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             after_close: tuple[str, ...] = (),
             edges: tuple[Edge, ...] = (),
             gap_cov: GapCovariate | None = None,
+            idio: tuple[float, float] | None = None,
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -197,6 +198,15 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                       "이것을 줄이는 것은 서사가 아니라 데이터다")
     if abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0):
         out.append(f"[몫] **{unexp_line}**. 상위: " + " · ".join(share_bits))
+    if idio is not None:
+        # 20R: 인과가 청구할 수 있는 대상은 원수익이 아니라 **고유요인**이다.
+        # 둘을 안 나누면 시장이 끌고 간 날에 종목 사건으로 설명하려 들게 된다.
+        i, m = idio
+        out.append(f"[대상] 원수익 {_pct(total)} = 시장 {_pct(m)} + 고유 {_pct(i)}. "
+                   f"**인과 엣지가 청구할 수 있는 것은 고유 {_pct(i)} 뿐이다** — "
+                   f"나머지는 이 종목 사건으로 만들어질 수 없는 몫이다"
+                   + (" (부호가 원수익과 반대다 - 시장 대비로는 초과수익)"
+                      if i * total < 0 else ""))
     else:
         out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 

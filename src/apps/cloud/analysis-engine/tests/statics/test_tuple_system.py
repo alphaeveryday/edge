@@ -481,3 +481,33 @@ def test_tool_catalog_separates_absence_from_error():
     assert "없다" in c2.events("NO_SUCH") and "있는 것" in c2.events("NO_SUCH")
     assert "그런 도구 없음" in c2.call("지어낸도구")             # 이름 날조는 즉답
     assert c2.call("vocab", "채널").startswith("채널 8")
+
+
+def test_s3_registry_binds_empty_datasets_too():
+    # 20R (사용자 지시): "데이터 없는 것도 일단 스키마 붙여라". 빈 축과 없는 축은
+    # 다르다 - 전자는 적재 일감이고 후자만 설계 한계다. 스키마가 그 둘을 가른다.
+    from edge_analysis.statics.duck import S3_SETS
+    from edge_analysis.statics.tools import Catalog
+
+    kinds = {k for _n, k, _p in S3_SETS}
+    assert kinds == {"hive", "glob", "ice", "csv"}          # 네 형식 전부 다룬다
+    assert len(S3_SETS) == len({n for n, _k, _p in S3_SETS})  # 이름 충돌 없음
+    assert all(n.startswith("s3_") for n, _k, _p in S3_SETS)  # RDB 뷰와 안 겹친다
+
+    class Lake:
+        s3 = {"s3_empty": "draft/canonical/estimates/estimate_line"}
+        deferred: dict[str, str] = {}
+        cols: dict[str, list[str]] = {}
+        effective: dict[str, tuple[int, str | None]] = {}
+        def bind_day(self, d): return 0
+        def probe_day(self): return {}
+        def bind_s3(self, n): return ""
+        def sql(self, q):
+            return [("report_id",), ("broker",)] if q.startswith("DESCRIBE") else [(0,)]
+
+    c = Catalog(lake=Lake(), ticker="T", instrument_id="i0", day="2026-07-30")
+    out = c.call("peek", "s3_empty")
+    assert "0행" in out and "report_id" in out          # 비어도 **열이 보인다**
+    assert "스키마만 있다" in out and "적재 일감" in out   # 설계 한계로 위장 금지
+    assert "s3_empty" in c.call("tables")               # 목록에도 뜬다
+    assert "그런 S3 데이터셋 없음" in c.call("peek", "s3_지어낸것")

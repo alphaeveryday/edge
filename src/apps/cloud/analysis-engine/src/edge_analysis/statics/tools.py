@@ -86,14 +86,27 @@ class Catalog:
         """묶인 표 전량 - 이름·그날 행수. 여기 있는 것은 전부 peek 할 수 있다."""
         eff = getattr(self.lake, "effective", None) or {}
         rows = [(t, n) for t, (n, _) in sorted(eff.items()) if not like or like in t]
-        if not rows:
+        s3 = sorted(k for k in (getattr(self.lake, "s3", None) or {})
+                    if not like or like in k)
+        if not rows and not s3:
             return f"묶인 표 없음{f' ({like!r} 에 맞는)' if like else ''}"
-        return f"묶인 표 {len(rows)}개 (그날 행수):\n" + "\n".join(
-            f"  v_{t:<34} {n:>9,}" for t, n in rows)
+        out = [f"RDB 뷰 {len(rows)}개 (그날 행수):"]
+        out += [f"  v_{t:<34} {n:>9,}" for t, n in rows]
+        if s3:
+            out.append(f"S3 데이터셋 {len(s3)}개 (행수는 peek 에서 - 원격이라 셀 때 비용):")
+            out += [f"  {k}" for k in s3]
+        return "\n".join(out)
 
     def peek(self, name: str) -> str:
-        """표 하나의 열과 표본 3행. **탐색의 종점** - 어떤 표든 여기로 볼 수 있다."""
-        t = name.removeprefix("v_").strip()
+        """표 하나의 열과 표본 3행. **탐색의 종점** - 어떤 표든 여기로 볼 수 있다.
+
+        S3 데이터셋(`s3_…`)도 같은 창구로 본다 - 빈 것은 행 0 과 **열 목록**을
+        돌려준다(스키마만 있는 축이라는 사실 자체가 답이다).
+        """
+        n = name.strip()
+        if n.startswith("s3_"):
+            return self._peek_s3(n)
+        t = n.removeprefix("v_")
         cols = (getattr(self.lake, "cols", None) or {}).get(t)
         if not cols:
             return (f"그런 표 없음: {name!r}. tables() 로 목록을 봐라")
@@ -105,6 +118,25 @@ class Catalog:
         if isinstance(rows, str):
             return head + "\n  " + rows
         return head + "\n" + "\n".join(f"  {str(r)[:150]}" for r in rows)
+
+    def _peek_s3(self, name: str) -> str:
+        """S3 뷰 하나. 지연 바인딩이면 여기서 건다 (첫 조회 비용은 한 번만)."""
+        lake = self.lake
+        if name not in (getattr(lake, "s3", None) or {}):
+            return (f"그런 S3 데이터셋 없음: {name!r}. 있는 것: "
+                    + ", ".join(sorted(getattr(lake, "s3", None) or {})))
+        if (why := getattr(lake, "bind_s3", lambda _n: "")(name)):
+            return f"바인딩 실패: {why}"
+        try:
+            cols = [r[0] for r in lake.sql(f"DESCRIBE {name}")]
+            n = lake.sql(f"SELECT count(*) FROM {name}")[0][0]
+        except Exception as e:                     # noqa: BLE001
+            return f"오류: {type(e).__name__}: {str(e)[:160]}"
+        head = f"{name} ({lake.s3[name]}) — {n:,}행 · 열 {len(cols)}: {', '.join(cols[:14])}"
+        if not n:
+            return head + "\n  **스키마만 있다** - 아직 안 채워진 축이다 (적재 일감이지 설계 한계가 아니다)"
+        rows = lake.sql(f"SELECT * FROM {name} LIMIT 2")
+        return head + "\n" + "\n".join(f"  {str(r)[:160]}" for r in rows)
 
     def reach_table(self, t: str) -> str:
         eff = (getattr(self.lake, "effective", None) or {}).get(t, (None, None))

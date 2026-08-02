@@ -25,6 +25,42 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
               "entity", "document", "news_document", "event_evidence",
               "document_assertion", "event_measure")
 
+LAKE = "s3://edge-dev-pipeline-lake/"
+AWS_PROFILE_ENV = "AWS_PROFILE"          # 기본 work — 자격증명은 SSO 체인에서 온다
+
+# S3 데이터셋 전량. **데이터가 없어도 붙인다** - 빈 Iceberg 테이블도 스키마는 있고,
+# 스키마가 보여야 '아직 안 채워진 축'과 '존재하지 않는 축'을 구분할 수 있다.
+#   hive  = Hive 파티션 parquet (market=KR/ · language=ko/ · report_date=…/)
+#   glob  = 종목당 파일 하나인 평평한 parquet 묶음
+#   ice   = Iceberg (metadata/*.avro) - draft/canonical 계열
+#   csv   = gzip CSV (DataGuide 적재본). **지연 바인딩** - 뷰 생성에만 10.9초가
+#           든다(스키마 스니핑). 매 셀마다 44초를 내는 대신 첫 조회 때 건다.
+S3_SETS: tuple[tuple[str, str, str], ...] = (
+    ("s3_price_daily",      "hive", "canonical/market_data/price_daily"),
+    ("s3_investor_flow",    "hive", "canonical/market_data/investor_flow_daily"),
+    ("s3_etf_nav",          "hive", "canonical/market_data/etf_nav"),
+    ("s3_news_articles",    "hive", "canonical/news/news_articles"),
+    ("s3_etf_holdings",     "hive", "canonical/holdings/etf_holdings"),
+    ("s3_etf_profile",      "hive", "canonical/reference/etf_profile"),
+    ("s3_segment_fact",     "hive", "canonical/disclosures/business_segment_fact"),
+    ("s3_supply_fact",      "hive", "canonical/disclosures/supply_contract_fact"),
+    ("s3_assertions",       "hive", "feature/news/assertions"),
+    ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
+    ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
+    ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),
+    ("s3_dg_reference",     "csv",  "draft/curated/source=dataguide/dataset=reference"),
+    ("s3_kr_5min",          "glob", "raw/kr_intraday/fmp_5min"),
+    ("s3_us_5min",          "glob", "raw/fmp_5min_us"),
+    ("s3_statement_line",   "ice",  "draft/canonical/financials/statement_line"),
+    ("s3_estimate_line",    "ice",  "draft/canonical/estimates/estimate_line"),
+    ("s3_shareholder",      "ice",  "draft/canonical/ownership/shareholder_stake"),
+    ("s3_officer_tenure",   "ice",  "draft/canonical/governance/officer_tenure"),
+    ("s3_credit_rating",    "ice",  "draft/canonical/credit/credit_rating"),
+    ("s3_person_master",    "ice",  "draft/canonical/people/person_master"),
+    ("s3_entity_master",    "ice",  "draft/canonical/reference/entity_master"),
+    ("s3_report_warning",   "ice",  "draft/canonical/reports/report_warning"),
+)
+
 
 class CausalLake:
     """한 연결 위의 뷰 집합. exists 딕셔너리가 곧 커버리지 보고서다."""
@@ -44,9 +80,12 @@ class CausalLake:
         self.unbound: dict[str, str] = {}       # 표 → 못 묶은 사유 (침묵 금지)
         self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
         self.effective: dict[str, tuple[int, str | None]] = {}  # 표 → (그날 행수, 도달 지평)
+        self.s3: dict[str, str] = {}            # S3 뷰 이름 → 버킷 경로
+        self.deferred: dict[str, str] = {}      # 첫 조회 때 걸 뷰 (스니핑이 비싼 것)
         self._probed: str = ""
         self._bars(Path(bars_dir) if bars_dir else self._default_bars())
         self._backfill(Path(backfill_dir or os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")))
+        self._s3()
         self._rdb(rdb_dsn or os.environ.get(RDB_DSN_ENV, ""))
 
     @staticmethod
@@ -67,12 +106,67 @@ class CausalLake:
     def _backfill(self, d: Path) -> None:
         """로컬 백필: us_market(전일 미국장) · fx_usdkrw(환율) · tau_sidecar(초 단위 τ)."""
         for name in ("us_market", "fx_usdkrw", "tau_sidecar"):
+
             f = d / f"{name}.parquet"
             if f.is_file():
                 self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")
                 self.exists[name] = self.con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
             else:
                 self.exists[name] = 0
+
+    def _s3(self) -> None:
+        """S3 데이터셋 전량을 뷰로 건다. **데이터 유무와 무관하게 스키마를 붙인다.**
+
+        20R: 백필 대장에 '대기'로 적어 둔 항목 중 셋(#3 재무·#4 수급·#7 ETF 보유)이
+        이미 S3 에 있었다. 없어서 못 한 게 아니라 **안 붙여서 못 하고 있었다**.
+        빈 테이블도 붙이는 이유: 스키마가 보여야 '아직 안 채워진 축'과 '존재하지
+        않는 축'이 구분된다 - 후자만 설계 한계이고 전자는 적재 일감이다.
+
+        뷰는 게으르다(정의만 등록). 1,273종목 5분봉 글롭도 만들 때는 안 읽는다.
+        """
+        try:
+            self.con.execute("INSTALL httpfs; LOAD httpfs; INSTALL iceberg; LOAD iceberg;")
+            # 이 Iceberg 테이블들엔 version-hint 파일이 없다 - 최신 스냅샷을 글롭으로
+            # 찾게 허용한다. 읽기 전용이고 커밋 중인 쓰기가 없으므로 안전하다.
+            self.con.execute("SET unsafe_enable_version_guessing = true")
+            self.con.execute(
+                "CREATE SECRET (TYPE s3, PROVIDER credential_chain, "
+                "CHAIN 'sso;config;env', PROFILE '"
+                + os.environ.get(AWS_PROFILE_ENV, "work")
+                + "', REGION 'ap-northeast-2')")
+        except Exception as e:      # noqa: BLE001 - 자격증명 부재도 커버리지 보고
+            self.exists["s3"] = f"실패: {str(e)[:120]}"
+            return
+        src = {"hive": "read_parquet('{p}/**/*.parquet', hive_partitioning=true)",
+               "glob": "read_parquet('{p}/*.parquet')",
+               "ice": "iceberg_scan('{p}')",
+               "csv": ("read_csv('{p}/**/*.csv.gz', hive_partitioning=true, "
+                       "all_varchar=true, ignore_errors=true)")}
+        for name, kind, path in S3_SETS:
+            ddl = (f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM "
+                   + src[kind].format(p=LAKE + path))
+            if kind == "csv":
+                self.deferred[name] = ddl        # 등록만 - 부를 때 건다
+                self.s3[name] = path
+                continue
+            try:
+                self.con.execute(ddl)
+                self.s3[name] = path
+            except Exception as e:  # noqa: BLE001 - 못 붙인 것은 이름과 사유로 남긴다
+                self.unbound[name] = f"{type(e).__name__}: {str(e)[:80]}"
+        self.exists["s3"] = len(self.s3)
+
+    def bind_s3(self, name: str) -> str:
+        """지연 바인딩 셋을 실제로 건다. 반환: 빈 문자열 = 성공, 아니면 사유."""
+        ddl = self.deferred.pop(name, "")
+        if not ddl:
+            return ""
+        try:
+            self.con.execute(ddl)
+            return ""
+        except Exception as e:      # noqa: BLE001
+            self.unbound[name] = f"{type(e).__name__}: {str(e)[:80]}"
+            return self.unbound[name]
 
     def _rdb(self, dsn: str) -> None:
         """Postgres 를 붙이고 **살아 있는 표 전량**에 클램프 뷰를 생성한다 (19R).
@@ -209,6 +303,12 @@ class CausalLake:
                              + ", ".join(f"{t}≥{h}" for t, h in late))
             if void:
                 lines.append("  진짜 0행: " + ", ".join(void))
+        if self.s3 or self.unbound:
+            lines.append(f"S3 데이터셋 {len(self.s3)}개 (즉시 {len(self.s3) - len(self.deferred)}"
+                         f" · 지연 {len(self.deferred)}) — canonical·draft·feature·raw 전량."
+                         "\n  **빈 것도 붙였다**: 스키마가 보여야 '아직 안 채워진 축'과 "
+                         "'존재하지 않는 축'이 갈린다. peek(이름) 으로 열·행수를 본다."
+                         "\n  " + ", ".join(sorted(self.s3)))
         lines.append(self.frontier())
         return "\n".join(lines)
 

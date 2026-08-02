@@ -44,14 +44,42 @@ def _clip(lo: float, hi: float, cap: float) -> tuple[float, float] | None:
     return (a, b) if a <= b else None
 
 
-def _iset(r: EdgeReport, day_total: float) -> tuple[float, float] | None:
-    """일 단위 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합]. None = CI 없음 또는 모순(§10).
+def _iset(r: EdgeReport, budget: float) -> tuple[float, float] | None:
+    """일 단위 식별집합 = CI(τ̂·Δx) ∩ (0, **고유요인 총합**]. None = CI 없음 또는 모순(§10).
+
+    예산이 원수익이 아니라 고유요인인 이유 (20R): 패널이 추정하는 τ 는 `ar_ind`
+    (시장·산업 이중차감) 단위다. 원수익을 상한으로 쓰면 **단위가 다른 두 수를
+    교차**하는 것이고, 그건 8차에 고친 일/창 범주 오류가 수익률 정의 축에서
+    반복되는 것이다. 실측이 그 위험을 보여줬다 - 2026-07-30 삼성전자는
+    원수익 -0.72% 인데 시장이 -1.10% 라 고유요인은 **+0.38%**, 부호가 뒤집힌다.
+
+    시간 분해(창별 몫)는 원수익 그대로 둔다: 그건 이 종목 가격 경로의 **산술
+    항등식**이고 알리바이(언제 움직였나)의 근거다. 일중 시장 요인 5분봉이 없어
+    창별로 쪼갤 수도 없다 - 없는 것을 있는 척하지 않는다.
 
     블록과 산문이 이 한 곳에서 같은 값을 얻는다 - 표·산문 동일 객체 계약의 채널판.
     """
     if r.ci_lo is None or r.ci_hi is None:
         return None
-    return _clip(r.ci_lo, r.ci_hi, day_total)
+    return _clip(r.ci_lo, r.ci_hi, budget)
+
+
+def idio_budget(lake, instrument_id: str, day: str) -> tuple[float | None, float | None]:
+    """(고유요인 수익률, 시장 수익률) — 인과가 청구할 수 있는 예산과 그 대조군.
+
+    None = 못 쟀다. 못 쟀으면 **예산이 없는 것**이지 원수익으로 대신하지 않는다
+    (그게 단위 혼동의 입구다).
+    """
+    from .paneltest import _base
+    try:
+        rows = lake.sql(_base(day, "23:59:59") + f"""
+            SELECT d.ar_ind, x.mkt_lr FROM v_daily d
+            JOIN (SELECT trade_date, avg(lr) AS mkt_lr FROM v_daily GROUP BY 1) x
+              ON x.trade_date = d.trade_date
+            WHERE d.instrument_id = '{instrument_id}' AND d.trade_date = DATE '{day}'""")
+    except Exception:                      # noqa: BLE001 - 못 재면 부재 보고
+        return None, None
+    return (rows[0][0], rows[0][1]) if rows and rows[0][0] is not None else (None, None)
 
 
 MIN_BETA_N = 40     # 갭 β 추정의 최소 표본 (60d 창 기준 - 이보다 얇으면 부재 선언)
@@ -291,6 +319,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 채널판을 산문에 배선한다 - 표·블록·산문이 같은 값에서 나와야 한다는 계약의
     # 채널 확장. 성립-미적용의 사유는 applies_today 의 부정을 그대로 옮긴다.
     day_total = sum(s.log_ret for s in shares)
+    # 인과 예산은 **고유요인**이다 (20R). 원수익은 시간 항등식(알리바이)의 대상이고,
+    # τ 는 ar_ind 단위라 둘을 교차하면 단위가 다른 두 수를 곱하는 것이 된다.
+    idio, mkt = idio_budget(lake, instrument_id, day)
+    budget = day_total if idio is None else idio
     cell_route = _route_gate(lake, instrument_id, day)
     edges = []
     for t, r in reports:
@@ -299,7 +331,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
                "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
                "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
-        iset = _iset(r, day_total)
+        iset = _iset(r, budget)
         edges.append(Edge(channel=t.channel, event_type=t.trigger.ident,
                           verdict=r.verdict, applied=r.applies_today, why_not=why,
                           iset_lo=iset[0] if iset else None,
@@ -321,7 +353,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                mode=r.mode, moderation=r.moderation, reduction=r.reduction,
                vuln_today=r.vuln_today, trigger_note=r.trigger_note,
                contribution=r.contribution, ci=[r.ci_lo, r.ci_hi],
-               iset=_iset(r, day_total), reason=r.reason)
+               iset=_iset(r, budget), reason=r.reason)
     for s in screens:
         trace("grid.screen", **s)
     if gcov is not None:
@@ -331,7 +363,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
 
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
-                    edges=tuple(edges), gap_cov=gcov)
+                    edges=tuple(edges), gap_cov=gcov,
+                    idio=None if idio is None else (idio, mkt))
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
     if not types and not anomalous:
@@ -362,11 +395,11 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
             block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
         if r.contribution is not None:
             # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
-            iset = _iset(r, day_total)
+            iset = _iset(r, budget)
             say = ("셀 점귀속 거절(요인 오염) - 인용 금지, 요인 재구성 후 재계산"
                    if cell_route == "거절" else
                    f"식별집합 [{iset[0] * 100:+.2f}, {iset[1] * 100:+.2f}]%p" if iset else
-                   f"**과대식별 모순** - 구간이 하루 총합 {day_total * 100:+.2f}%p 와 안 겹친다")
+                   f"**과대식별 모순** - 구간이 고유요인 {budget * 100:+.2f}%p 와 안 겹친다")
             block.append(f"    SEM 기여(일 단위): {r.contribution * 100:+.2f}%p "
                          f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {say}")
         if r.counterfactual:

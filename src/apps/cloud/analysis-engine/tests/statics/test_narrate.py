@@ -169,3 +169,22 @@ def test_beta_ci_is_sane_on_synthetic_slope():
     lo, hi = _beta_ci(x, y)
     assert lo < 1.2 < hi and hi - lo < 0.1          # 참 기울기 포함 + 좁은 구간
     assert _beta_ci([1.0, 1.0, 1.0], [1, 2, 3]) is None   # 분산 없음 → 부재
+
+
+def test_causal_budget_is_idiosyncratic_not_raw():
+    # 20R: τ 는 ar_ind 단위인데 예산을 원수익으로 쓰면 단위가 다른 두 수를 교차한다.
+    # 실측(005930 2026-07-30): 원수익 -0.72% · 시장 -1.10% · 고유 +0.38% — 부호 역전.
+    # 시장이 끌고 간 날에 종목 사건으로 설명하려 드는 것을 이 문단이 막는다.
+    from edge_analysis.statics.attribute import _clip, _iset
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    r = EdgeReport("성립", 206, 0.010, None, None, None, ci_lo=0.0049, ci_hi=0.0142)
+    assert _iset(r, -0.0072) is None            # 원수익 예산이면 방향 모순
+    assert _iset(r, +0.00375) == (0.0049, 0.00375) or _iset(r, +0.00375) is None
+    assert _clip(0.001, 0.002, 0.00375) == (0.001, 0.002)   # 고유 예산 안이면 그대로
+
+    rows = [_row("잔여1", -0.0072)]
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                  idio=(0.00375, -0.01097))
+    assert "[대상]" in txt and "고유" in txt
+    assert "부호가 원수익과 반대" in txt          # 초과수익이었다는 사실을 숨기지 않는다
