@@ -37,6 +37,8 @@ class FakeMinuteDB:
         self.outbox: dict[str, dict] = {}     # event_id -> row
         self.source_items: dict[tuple, dict] = {}  # (source_code, source_item_id) -> row
         self.anchors: dict[tuple, dict] = {}   # (session_id, source_code) -> row
+        self.documents: dict[tuple, dict] = {}      # (source_code, article_id) -> row
+        self.news_documents: dict[str, dict] = {}   # document_id -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -184,6 +186,22 @@ class _Cursor:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("INSERT INTO document ("):
+            # 1분 뉴스 canonical writer(ALPHA-691). 정정 반영이 이 문장의 존재 이유라
+            # DO UPDATE 와 변경분 판정이 SQL 에 있어야 한다 — fake 가 합성하면 배치와 같은
+            # DO NOTHING 회귀가 초록으로 통과한다.
+            assert "ON CONFLICT (source_code, source_document_id) DO UPDATE" in s, \
+                "document upsert 가 정정을 반영하지 않는다(DO NOTHING 회귀)"
+            assert "IS DISTINCT FROM" in s, "값이 같아도 UPDATE 하면 멱등 집계가 거짓이 된다"
+            set_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[0]
+            # available_at 을 갱신하면 시간순 소비자에게 옛 문서가 새 문서로 다시 뜬다
+            assert "available_at" not in set_clause, \
+                "document upsert 가 도착 시각(available_at)을 갱신한다"
+            self._upsert_document(params)
+        elif s.startswith("INSERT INTO news_document"):
+            assert "ON CONFLICT (document_id) DO UPDATE" in s, \
+                "news_document upsert 가 리드 정정을 반영하지 않는다"
+            self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
         elif s.startswith(
@@ -324,6 +342,44 @@ class _Cursor:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
     # ── session ──
+    def _upsert_document(self, p):
+        (document_id, source_code, article_id, title, language_code, published_at,
+         available_at, source_uri) = p
+        existing = self.db.documents.get((source_code, article_id))
+        if existing is None:
+            self.db.documents[(source_code, article_id)] = {
+                "document_id": document_id, "source_code": source_code,
+                "source_document_id": article_id, "title": title,
+                "language_code": language_code, "published_at": published_at,
+                # ⚠️ 최초 1회만 — 실제 SQL 도 DO UPDATE 목록에서 뺐다
+                "available_at": available_at, "source_uri": source_uri,
+            }
+            self.rowcount = 1
+            return
+        changed = {
+            "title": title, "language_code": language_code,
+            "published_at": published_at, "source_uri": source_uri,
+        }
+        if all(existing[k] == v for k, v in changed.items()):
+            self.rowcount = 0   # IS DISTINCT FROM — 값이 같으면 UPDATE 하지 않는다
+            return
+        existing.update(changed)
+        self.rowcount = 1
+
+    def _upsert_news_document(self, p):
+        lead_text, source_code, article_id = p
+        document = self.db.documents.get((source_code, article_id))
+        if document is None:
+            self.rowcount = 0   # INSERT ... SELECT 가 0행 — 부모가 없으면 아무것도 안 쓴다
+            return
+        key = document["document_id"]
+        existing = self.db.news_documents.get(key)
+        if existing is not None and existing["lead_text"] == lead_text:
+            self.rowcount = 0
+            return
+        self.db.news_documents[key] = {"document_id": key, "lead_text": lead_text}
+        self.rowcount = 1
+
     def _insert_session(self, p):
         session_id, dataset, source_group, session_date, version, uhash, count = p
         if self.db.session_by_identity(dataset, source_group, session_date):
