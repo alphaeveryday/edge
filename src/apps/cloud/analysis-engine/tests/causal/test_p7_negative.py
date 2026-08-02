@@ -74,3 +74,17 @@ def test_without_a_type_the_exposure_still_falls_back_to_the_event_id():
     exposure, _ = _predicates(g)
 
     assert "source_event_id" in exposure and "evt_1" in exposure
+
+
+def test_the_cohort_window_default_is_a_year_not_a_quarter():
+    """이 창은 **검정 코호트가 쌓이는 범위**다. 60일 안에는 같은 타입 사건이 몇 건 없어
+    매 런 `G2 n=1 < 30 (scope=type)` 으로 죽었다(2026-08-01 연속 실측).
+
+    브리프도 게이트도 "창을 넓혀라"라고 말하지만 모델은 기본값을 그대로 쓴다 - 그러면
+    기본값이 틀린 것이다. PIT 는 `as_of` 가 잡으므로 과거로 넓히는 것은 안전하다.
+    """
+    import inspect
+
+    from edge_analysis.causal.run import explain
+
+    assert inspect.signature(explain).parameters["window_days"].default >= 365
