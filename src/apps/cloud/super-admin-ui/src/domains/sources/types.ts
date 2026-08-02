@@ -320,3 +320,87 @@ export interface AffectedAnalysis {
   publicationStatus: string | null;
   summary: string | null;
 }
+
+/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
+
+/** minute_ingestion_session.phase — 원장 어휘 그대로 */
+export type MinutePhase =
+  | 'PLANNED'
+  | 'ACTIVE'
+  | 'DRAINING'
+  | 'DRAINED'
+  | 'QC_RUNNING'
+  | 'FINALIZED'
+  | 'FAILED';
+
+/** minute_ingestion_window.data_status — 원장 어휘 그대로 */
+export type MinuteWindowStatus =
+  | 'DUE'
+  | 'CLAIMED'
+  | 'VALID'
+  | 'VALID_EMPTY'
+  | 'INCOMPLETE'
+  | 'MISSING'
+  | 'INVALID';
+
+/**
+ * 창 상태 집계 + 파생 1개. overdueNoEvidence = 기한(window_end)이 지났는데 DUE/CLAIMED 인 창 —
+ * MISSING 판정은 EOD QC 몫이라 장중의 "안 돌았다"는 이 파생으로만 보인다(서버 판정,
+ * 화면 재계산 금지). validEmpty(돌았는데 데이터 없음)와 다른 축이다.
+ */
+export interface MinuteWindowCounts {
+  due: number;
+  claimed: number;
+  valid: number;
+  validEmpty: number;
+  incomplete: number;
+  missing: number;
+  invalid: number;
+  overdueNoEvidence: number;
+}
+
+/** 결손·무증거 창 하나 — 집계의 근거 목록(목록 없는 집계 금지) */
+export interface MinuteGapWindow {
+  windowStart: string;
+  windowEnd: string;
+  dataStatus: MinuteWindowStatus;
+  /** true = 기한 지난 DUE/CLAIMED(증거 없음). false = 증거 있는 결함(INCOMPLETE 등) */
+  noEvidence: boolean;
+}
+
+/** job 상태 집계 — waiting 은 PENDING+RETRY_WAIT */
+export interface MinuteJobCounts {
+  waiting: number;
+  claimed: number;
+  succeeded: number;
+  dead: number;
+}
+
+/**
+ * 하루 세션 하나의 요약. leaseExpired 는 서버 판정 — null 은 lease 부재(기동 증거 자체가
+ * 없음)로, 만료(true = 실행체 증거 끊김)와 다른 사실이다.
+ */
+export interface MinuteSession {
+  sessionId: string;
+  dataset: string;
+  sourceGroup: string;
+  phase: MinutePhase;
+  universeVersion: string;
+  expectedWindowCount: number;
+  processedThrough: string | null;
+  contiguousCompleteThrough: string | null;
+  heartbeatAt: string | null;
+  leaseExpiresAt: string | null;
+  leaseExpired: boolean | null;
+  windows: MinuteWindowCounts;
+  gaps: MinuteGapWindow[];
+  priceJobs: MinuteJobCounts;
+}
+
+/** date = 세션 날짜(KST). 세션 부재는 빈 목록 — "미가동"이라는 사실이지 오류가 아니다 */
+export interface MinuteStatus {
+  date: string;
+  sessions: MinuteSession[];
+  /** 뉴스 job 은 세션 연결 컬럼이 없어 날짜(생성 시각 KST) 축의 별도 집계다 */
+  newsJobs: MinuteJobCounts;
+}

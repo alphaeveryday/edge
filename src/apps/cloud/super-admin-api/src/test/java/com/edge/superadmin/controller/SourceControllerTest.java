@@ -13,7 +13,9 @@ import com.edge.superadmin.repository.HoldingsImpactRepository;
 import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
+import com.edge.superadmin.repository.MinuteStatusRepository;
 import com.edge.superadmin.support.FakeHoldingsImpactRepository;
+import com.edge.superadmin.support.FakeMinuteStatusRepository;
 import com.edge.superadmin.support.FakeNewsLineageRepository;
 import com.edge.superadmin.support.FakePipelineStatusRepository;
 import org.junit.jupiter.api.Test;
@@ -46,7 +48,7 @@ class SourceControllerTest {
 	private MockMvc mvc(PipelineRunStatus run) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
+						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -54,7 +56,7 @@ class SourceControllerTest {
 	private MockMvc gridMvc(List<GridSlot> slots) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
+						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -331,7 +333,7 @@ class SourceControllerTest {
 	private MockMvc overviewMvc(List<OverviewLane> lanes) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
+						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -555,7 +557,7 @@ class SourceControllerTest {
 	private MockMvc lineageMvc(FakeNewsLineageRepository lineage) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(new SourceService(
-						new FakePipelineStatusRepository(null), lineage, new FakeHoldingsImpactRepository())))
+						new FakePipelineStatusRepository(null), lineage, new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -603,7 +605,7 @@ class SourceControllerTest {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(new SourceService(
 						new FakePipelineStatusRepository(null), new FakeNewsLineageRepository(),
-						impact)))
+						impact, new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -722,5 +724,60 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.date").value(nullValue()))
 				.andExpect(jsonPath("$.result.summary.totalDocuments").value(0))
 				.andExpect(jsonPath("$.result.documents.length()").value(0));
+	}
+
+	/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
+
+	private MockMvc minuteMvc(FakeMinuteStatusRepository minute) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), new FakeNewsLineageRepository(),
+						new FakeHoldingsImpactRepository(), minute)))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 일분_요약은_무증거_창_판정과_lease_null_을_뭉개지_않고_내린다() throws Exception {
+		// WHY: overdueNoEvidence(안 돌았다)와 validEmpty(돌았는데 빈 데이터)가 한 숫자로
+		//      합쳐지면 죽은 실행체가 정상으로 보인다 — 이 화면의 존재 이유가 그 구분이다.
+		//      leaseExpired null(기동 증거 자체가 없음)도 false(살아 있음)와 갈라 내린다.
+		LocalDate day = LocalDate.of(2026, 8, 3);
+		MinuteStatusRepository.MinuteStatus status = new MinuteStatusRepository.MinuteStatus(
+				List.of(new MinuteStatusRepository.SessionSummary(
+						"sess-1", "price_minute", "toss", day, "ACTIVE", "uv-1", 390,
+						STARTED, STARTED, STARTED, FINISHED, false,
+						new MinuteStatusRepository.WindowCounts(5, 1, 300, 80, 0, 0, 0, 4),
+						List.of(new MinuteStatusRepository.GapWindow(STARTED, FINISHED,
+								"DUE", true)),
+						new MinuteStatusRepository.JobCounts(2, 1, 290, 3))),
+				new MinuteStatusRepository.JobCounts(0, 0, 40, 1));
+
+		minuteMvc(new FakeMinuteStatusRepository(java.util.Map.of(day, status)))
+				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.sessions[0].phase").value("ACTIVE"))
+				.andExpect(jsonPath("$.result.sessions[0].leaseExpired").value(false))
+				.andExpect(jsonPath("$.result.sessions[0].windows.validEmpty").value(80))
+				.andExpect(jsonPath("$.result.sessions[0].windows.overdueNoEvidence").value(4))
+				.andExpect(jsonPath("$.result.sessions[0].gaps[0].dataStatus").value("DUE"))
+				.andExpect(jsonPath("$.result.sessions[0].gaps[0].noEvidence").value(true))
+				.andExpect(jsonPath("$.result.sessions[0].priceJobs.dead").value(3))
+				.andExpect(jsonPath("$.result.newsJobs.dead").value(1));
+	}
+
+	@Test
+	void 일분_세션_부재는_빈_목록이고_잘못된_날짜는_400_이다() throws Exception {
+		// WHY: 세션 없음은 "미가동"이라는 사실 표시(정상 형상)지만, 오타 친 날짜가 그걸로
+		//      보이면 없는 사실을 읽는다 — 계보의 날짜 검증과 같은 결.
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.sessions.length()").value(0));
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute").param("date", "2026-13-99"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
 	}
 }
