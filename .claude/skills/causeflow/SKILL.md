@@ -23,6 +23,11 @@ ENV='PYTHONPATH=src CAUSAL_BACKFILL_DIR="D:/Github/edge-dyntool/.tmp/causal-back
 
 - RDS 터널 필수: `Catalog "rdb" does not exist` 가 나오면 `hub restart rds-tunnel` 후 12초 대기.
 - 작업 디렉터리: `.tmp/cf/<ticker>_<day>/` 를 만들어 산출물을 모은다.
+- **여러 셀을 연달아 돌릴 때**: `serve` 상주 프로세스(hub start, ready.log="READY")로
+  facts 를 부리면 레이크 부팅을 세션당 1회만 낸다. stdin JSON 한 줄
+  (`{"op":"facts",...}` → `DONE facts <s>`). 단 **prep 은 병렬 CLI 가 더 빠르다**
+  (실측: 서버 직렬 299초 vs 프로세스 풀 161초) - prep 은 CLI 로 돌려라.
+  eval 커널에 레이크를 올리는 방법은 실패했다(초기화가 인터럽트 불능 행 - 2회 재현).
 
 ## 1. 사실 (결정론 · ~3분 · CLI 1회)
 

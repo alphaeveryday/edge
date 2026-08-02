@@ -333,6 +333,8 @@ def _cli() -> None:
     """
     import json
     import pathlib
+
+    from .hypothesize import screen_tuples
     cmd = sys.argv[1]
     if cmd == "facts":
         g = gather(CausalLake(), *sys.argv[2:5])
@@ -356,6 +358,52 @@ def _cli() -> None:
                   f"의도: {t.intent}")
         for r in rejected:
             print(f"[REJ] {r}")
+        return
+    if cmd == "serve":
+        # 웜 레이크 상주 서버 - 레이크 부팅(~1분)을 세션당 1회로 접는다.
+        # stdin 한 줄 = JSON 명령. hub 프로세스로 띄워 hub send 로 부린다.
+        #   {"op":"facts","ticker":..,"iid":..,"day":..,"dir":..}   → <dir>/facts.txt
+        #   {"op":"prep","ticker":..,"iid":..,"day":..,"dir":..}    → <dir>/edges.json 읽어
+        #                                                              env_/panel_ 생성
+        import time as _t
+        lake = CausalLake()
+        print("READY", flush=True)
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            if line in ("quit", "exit"):
+                break
+            t0 = _t.time()
+            try:
+                q = json.loads(line)
+                d = pathlib.Path(q["dir"]); d.mkdir(parents=True, exist_ok=True)
+                if q["op"] == "facts":
+                    g = gather(lake, q["ticker"], q["iid"], q["day"])
+                    txt = [g["base"], "", "=== 대상 (|기여| 순 ≤3) ==="]
+                    txt += [f"  {k}\t{pct * 100:+.3f}%p\t{lb}" for k, lb, pct in g["targets"]]
+                    txt += ["", "=== 접지 ===",
+                            "event_types: " + (" · ".join(g["event_types"]) or "없음"),
+                            "fired: " + (" · ".join(g["fired"]) or "없음")]
+                    (d / "facts.txt").write_text("\n".join(txt), encoding="utf-8")
+                elif q["op"] == "prep":
+                    edges = json.loads((d / "edges.json").read_text(encoding="utf-8"))
+                    for eid, env in edges.items():
+                        valid, rej = screen_tuples(
+                            env.get("hypotheses") or [],
+                            event_types=env.get("event_types") or [],
+                            series_families=env.get("series_families") or [])
+                        if not valid:
+                            print(f"REJ {eid}: {' | '.join(rej)}", flush=True)
+                            continue
+                        (d / f"env_{eid}.json").write_text(
+                            json.dumps(env, ensure_ascii=False), encoding="utf-8")
+                        (d / f"panel_{eid}.txt").write_text(
+                            panel_with_probes(lake, valid[0], q["iid"], q["day"]),
+                            encoding="utf-8")
+                print(f"DONE {q['op']} {_t.time() - t0:.0f}s", flush=True)
+            except Exception as e:                          # noqa: BLE001 - 서버는 안 죽는다
+                print(f"ERR {type(e).__name__}: {str(e)[:200]}", flush=True)
         return
     if cmd == "prep":
         # 한 방: edges.json({"<ID>": envelope}) → 심사 + env 분할 + 패널 병렬.
@@ -416,7 +464,7 @@ def pathlib_read(p: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep", "serve"):
         _cli()
         return
     if len(sys.argv) != 4:
