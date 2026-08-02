@@ -190,6 +190,21 @@ class PriceTriggerHandler:
             if isinstance(r, dict) and r.get("unit_id") in self.etf_ids
         }
 
+        if not etf_rows:
+            # 판정 대상이 없는 window(시간외 구간 등) — 시가 해소를 걸면 09:00 커밋
+            # 전까지 OPEN_NOT_READY 재시도만 돌다 예산이 소진돼, 판정할 게 없던 job
+            # 이 DEAD 로 끝난다(#485 봇 P2). 할 일 없음 = 성공이다.
+            result = {
+                "job_id": job_id, "session_id": session_id,
+                "window_start": window_start, "generation": generation,
+                "detection_policy_version": self.detection_policy_version,
+                "threshold": str(self.abs_threshold),
+                "judged": [], "fired": [], "inserted": [],
+                "skipped_no_open": [], "errors": [],
+            }
+            logger.info("가격 판정 %s: 대상 ETF 0 — 판정 없이 성공", job_id)
+            return content_checksum(result)
+
         # 시가는 **전체 etf_ids** 에 대해 확정한다 — 현재 artifact 에 등장한 종목으로
         # 좁히면 하루 종일 안 실린 ETF 의 MISSING 사유가 영영 기록되지 않는다
         opens = self._ensure_opens(

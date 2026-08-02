@@ -623,3 +623,21 @@ class TestAdversarialInputs:
         with pytest.raises(ValueError, match="시간외 거래 ETF"):
             build_handler(FakeMinuteDB(), tmp_path,
                           extended_hours_ids=frozenset({"500000"}))
+
+    def test_window_without_etfs_succeeds_without_open_resolution(self, tmp_path):
+        # 판정 대상 ETF 가 없는 window(시간외 구간) — 시가 해소를 걸면 09:00 커밋
+        # 전까지 재시도만 돌다 예산 소진으로 DEAD 가 된다(#485 봇 P2). 할 일 없음=성공
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [None, None],
+                    "500001": [None, None],
+                    "100000": [(50, 50), (50, 51)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        checksum = claim_then_run(handler, second)
+        assert len(checksum) == 64
+        assert db.session_opens == {}  # 시가 해소 자체를 걸지 않았다
+        assert db.triggers == {}
