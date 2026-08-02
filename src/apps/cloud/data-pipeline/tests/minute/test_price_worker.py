@@ -401,3 +401,36 @@ class TestTradingHoursUniverse:
         window = next(iter(db.windows.values()))
         assert window["expected_unit_count"] == 3
         assert window["data_status"] == "VALID"
+
+    def test_config_universe_mismatch_stops_and_releases_lease(self, tmp_path):
+        # 원장이 고정한 universe 와 Worker 설정이 갈리면 계속 돌면 안 된다 — 남의 기대
+        # 집합을 내 기준으로 VALID 확정하거나(조용한 누락) 거래시간 밖이 된 window 를
+        # 영원히 재청구한다. lease 는 반납해 올바른 설정의 Worker 가 곧장 들어온다.
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+        worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
+        assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "STOPPED"
+        assert db.sessions[session_id]["lease_expires_at"] is None
+        assert all(w["data_status"] == "DUE" for w in db.windows.values())
+        # 다음 tick 도 멈춘 채다 — 설정 불일치는 재시도로 낫지 않는다
+        assert worker.tick(datetime(2026, 7, 31, 20, 1, tzinfo=KST)) == "STOPPED"
+
+
+class TestManifestVocabulary:
+    def test_unknown_unit_class_fails_loud(self, tmp_path):
+        # 미지 분류를 걸러서 넘기면 manifest 검증이 실행되지 않아, 우리가 이해 못 한
+        # 관측이 증거에서 사라진 채 window 가 성공 커밋된다 (Rule 12)
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        inner = FakePriceCollector({"scenario": "normal"}, seed=42)
+
+        class ExtraClassCollector:
+            def collect(self, request, now):
+                result, records, manifest = inner.collect(request, now)
+                return result, records, {**manifest, "deferred": []}
+
+        worker.collector = ExtraClassCollector()
+        assert worker.tick(NOW) == "WINDOW_FAILED"
+        # 커밋되지 않는다 — lease 만료 후 재청구될 뿐(성공 위장 없음)
+        assert all(w["checksum"] is None for w in db.windows.values())

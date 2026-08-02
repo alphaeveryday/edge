@@ -156,21 +156,29 @@ class CollectionResult(BaseModel):
 
 
 def plan_session_windows(
-    session_date: date, *, universe: Universe | None = None, tz: ZoneInfo = KST
+    session_date: date, *, universe: Universe | None
 ) -> tuple[tuple[datetime, datetime], ...]:
-    """하루의 명시적 1분 half-open window 목록.
+    """하루의 명시적 1분 half-open window 목록 (KST).
 
     범위는 universe 가 정한다 — 시간외 거래 종목이 하나라도 있으면 08:00–20:00(720개),
     없으면 정규장 09:00–15:30(390개)다. 계획 범위와 window 별 기대 유니버스
     (`Universe.units_at`)는 **같은 규칙**에서 나와야 한다: 계획이 더 넓으면 기대가 빈
     window 가 생기고, 좁으면 시간외 분이 아예 관측되지 않는다.
+
+    `universe` 는 기본값 없이 **항상 명시**한다(가격 universe 가 없는 뉴스 세션은
+    `None`). 기본값을 두면 시간외 종목이 있는 세션의 planner 가 인자를 빠뜨렸을 때
+    390개만 계획되고, Worker 는 claim 할 행 자체가 없어 시간외 구간이 **아무 실패
+    신호 없이** 누락된다.
+
+    tz 는 KST 고정이다 — 거래시간 상수가 KST 로 정의됐고, `units_at` 도 KST 로 읽는다.
+    한쪽만 다른 tz 로 부르면 계획과 기대가 통째로 어긋난다.
     """
     extended = bool(universe and universe.extended_hours_ids)
     open_at = datetime.combine(
-        session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=tz
+        session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=KST
     )
     close_at = datetime.combine(
-        session_date, EXTENDED_CLOSE if extended else SESSION_CLOSE, tzinfo=tz
+        session_date, EXTENDED_CLOSE if extended else SESSION_CLOSE, tzinfo=KST
     )
     windows: list[tuple[datetime, datetime]] = []
     cursor = open_at
@@ -217,17 +225,23 @@ class Universe(BaseModel):
     def unit_ids(self) -> tuple[str, ...]:
         return self.etf_ids + self.constituent_ids
 
-    def units_at(self, window_start: datetime, tz: ZoneInfo = KST) -> tuple[str, ...]:
+    def units_at(self, window_start: datetime) -> tuple[str, ...]:
         """그 window 에 캔들이 존재해야 하는 unit — 완전성 판정의 기대 집합이다.
 
         정규장 안이면 전 종목, 그 밖(프리·애프터)이면 시간외 거래 종목만이다. 이걸
         시각과 무관하게 전 종목으로 두면 15:30 이 마지막인 종목이 시간외 window 마다
         missing 으로 잡혀 그 window 가 영원히 INCOMPLETE 로 남는다(2026-08-02 dev 실증).
 
+        경계 판정은 **KST** 로 한다(거래시간 상수와 같은 축). naive datetime 은 거부한다
+        — `astimezone` 이 호스트 로컬로 해석해 같은 입력이 배포 환경마다 다른 기대 집합을
+        내고, 그건 조용한 누락으로 이어진다(원장 계약 전반의 aware-only 규약과 같은 결).
+
         거래시간 밖은 raise 다 — 조용히 빈 집합을 주면 "기대할 게 없는 window" 와
         "계획이 잘못돼 만들어진 window" 가 같은 결과가 된다.
         """
-        local = window_start.astimezone(tz).time()
+        if window_start.tzinfo is None or window_start.tzinfo.utcoffset(window_start) is None:
+            raise ValueError(f"window_start 는 timezone-aware 여야 한다: {window_start!r}")
+        local = window_start.astimezone(KST).time()
         if SESSION_OPEN <= local < SESSION_CLOSE:
             return self.unit_ids
         if EXTENDED_OPEN <= local < EXTENDED_CLOSE and self.extended_hours_ids:

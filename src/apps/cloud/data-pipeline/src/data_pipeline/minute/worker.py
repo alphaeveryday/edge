@@ -35,6 +35,7 @@ from ..lake.storage import (
     raw_price_minute_artifact_key,
 )
 from .artifacts import (
+    UNIT_CLASSES,
     ArtifactImmutabilityError,
     build_window_manifest,
     put_immutable,
@@ -81,6 +82,14 @@ class MinuteWorkerLoop:
 
     def _process(self, claim: dict, now: datetime) -> bool:
         raise NotImplementedError
+
+    def _session_ready(self) -> bool:
+        """fence 를 막 획득한 뒤 1회 — 원장에 고정된 session 속성과 내 설정이 맞는가.
+
+        구현체가 좁힌다(기본은 무조건 통과). 여기서 거짓이면 Worker 는 lease 를 반납하고
+        **영구 정지**한다 — 설정과 원장의 불일치는 재시도로 낫지 않는다.
+        """
+        return True
 
     def request_stop(self) -> None:
         """SIGTERM 핸들러가 부른다 — 진행 중 tick 을 끊지 않고 다음 tick 에 멈춘다."""
@@ -172,6 +181,16 @@ class MinuteWorkerLoop:
             if self.fence_token is None:
                 logger.warning("fence 획득 실패 — 다른 Worker 의 lease 가 살아 있다")
                 return False
+            if not self._session_ready():
+                # 설정이 원장과 갈렸다. 계속 돌면 남의 기대 집합을 내 기준으로 확정하거나
+                # (조용한 누락) 처리 불가 window 를 lease 만료마다 영원히 재청구한다.
+                # lease 는 즉시 반납해 올바른 설정의 Worker 가 곧장 들어올 수 있게 한다.
+                self.ledger.release_worker_fence(
+                    session_id=self.session_id, fence_token=self.fence_token
+                )
+                self.fence_token = None
+                self.stopping = True
+                return False
             self._last_heartbeat = now
             return True
         if (
@@ -213,6 +232,24 @@ class PriceWorker(MinuteWorkerLoop):
     fence_token: int | None = None
     stopping: bool = False  # SIGTERM — 새 claim 중단, 다음 tick 에서 STOPPED
     _last_heartbeat: datetime | None = field(default=None, repr=False)
+
+    def _session_ready(self) -> bool:
+        """원장이 고정한 universe 와 내 설정이 같은가.
+
+        session 의 universe 는 생성 시 고정되고(v0.7 10.1) window 계획 범위도 거기서
+        나왔는데, 기대 집합은 **내 설정**으로 계산한다. 둘이 갈리면 ① 시간외 window 를
+        다른 종목 집합으로 VALID 확정해 원장이 고정한 종목이 조용히 누락되거나
+        ② 거래시간 밖이 된 window 에서 `units_at` 이 매번 터져 영원히 재청구된다.
+        """
+        identity = self.ledger.session_universe(session_id=self.session_id)
+        mine = (self.config.universe.universe_version, self.config.universe.universe_hash)
+        if identity == mine:
+            return True
+        logger.error(
+            "session %s 의 universe %s 와 내 설정 %s 가 다르다 — 정지",
+            self.session_id, identity, mine,
+        )
+        return False
 
     def _predict_generation(self, claim: dict, artifact_checksum: str,
                             units: dict[str, list[str]],
@@ -266,11 +303,12 @@ class PriceWorker(MinuteWorkerLoop):
             )
             result, records, manifest_units = self.collector.collect(request, now)
             # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
-            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다
-            units = {
-                cls: list(manifest_units.get(cls, []))
-                for cls in ("received", "no_trade", "missing", "invalid")
-            }
+            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다. 미지 분류는
+            # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
+            # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
+            if unknown := set(manifest_units) - UNIT_CLASSES:
+                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
+            units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
             # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
             # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
             # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라

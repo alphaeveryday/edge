@@ -94,6 +94,10 @@ class _Cursor:
             self._fence_select(params)
         elif s.startswith("SELECT session_id, universe_version"):
             self._select_session(params)
+        elif s.startswith("SELECT universe_version, universe_hash FROM minute_ingestion_session"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["universe_version"], row["universe_hash"])]
         elif s.startswith("INSERT INTO minute_ingestion_window"):
             self._insert_window(params)
         elif "SET expected_window_count = ( SELECT COUNT(*)" in s:

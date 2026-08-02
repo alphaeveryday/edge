@@ -143,7 +143,7 @@ class TestResultContract:
 
 class TestSessionWindows:
     def test_390_windows_fixed(self):
-        windows = plan_session_windows(SESSION_DATE)
+        windows = plan_session_windows(SESSION_DATE, universe=None)
         assert len(windows) == WINDOWS_PER_SESSION == 390
         # half-open 연속: 이전 end == 다음 start, 장 시작·마감 경계 고정
         assert windows[0][0] == datetime(2026, 7, 31, 9, 0, tzinfo=KST)
@@ -178,6 +178,7 @@ class TestUniverseFixture:
             universe_version=original.universe_version,
             etf_ids=tuple(reversed(original.etf_ids)),
             constituent_ids=tuple(reversed(original.constituent_ids)),
+            extended_hours_ids=tuple(reversed(original.extended_hours_ids)),
         )
         assert original.universe_hash == reordered.universe_hash
 
@@ -206,7 +207,7 @@ class TestTradingHoursClass:
     def test_no_extended_units_keeps_390(self):
         # 클래스가 선언되지 않은 universe 는 지금까지의 정규장 계획 그대로다
         assert len(plan_session_windows(SESSION_DATE, universe=self._universe())) == 390
-        assert len(plan_session_windows(SESSION_DATE)) == WINDOWS_PER_SESSION
+        assert len(plan_session_windows(SESSION_DATE, universe=None)) == WINDOWS_PER_SESSION
 
     def test_units_at_narrows_outside_regular_hours(self):
         universe = self._universe(("C1",))
@@ -221,6 +222,18 @@ class TestTradingHoursClass:
         universe = self._universe(("C1",))
         utc_1000_kst = datetime(2026, 7, 31, 1, 0, tzinfo=timezone.utc)
         assert universe.units_at(utc_1000_kst) == ("E1", "C1", "C2")
+
+    def test_units_at_rejects_naive_datetime(self):
+        # naive 를 astimezone 하면 호스트 로컬로 해석돼 같은 입력의 기대 집합이 배포
+        # 환경마다 달라진다 — 그 차이는 조용한 누락으로 나온다
+        with pytest.raises(ValueError):
+            self._universe(("C1",)).units_at(datetime(2026, 7, 31, 10, 0))
+
+    def test_hours_class_identity_ignores_declaration_order(self):
+        # 클래스를 identity 에 넣되 **멤버십**으로 넣는다 — 선언 순서가 다르다고 세션
+        # universe 불일치(재계획 거부)가 되면 안 된다
+        assert (self._universe(("C1", "C2")).universe_hash
+                == self._universe(("C2", "C1")).universe_hash)
 
     def test_units_at_rejects_window_outside_trading_hours(self):
         # 조용히 빈 집합을 주면 "기대할 게 없는 window" 와 "잘못 계획된 window" 가 같아진다

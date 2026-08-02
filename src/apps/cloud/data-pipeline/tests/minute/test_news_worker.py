@@ -54,7 +54,7 @@ def build_worker(db, tmp_path, *, scenario=None, feed=None, worker_id="w1",
     session_id, _ = ledger.plan_session(
         dataset="news_minute", source_group="bigkinds", session_date=SESSION_DATE,
         universe_version="news-univ-v1", universe_hash="h" * 64,
-        windows=plan_session_windows(SESSION_DATE)[:windows],
+        windows=plan_session_windows(SESSION_DATE, universe=None)[:windows],
     )
     config = NewsWorkerConfig(
         worker_id=worker_id, dataset="news_minute", source_code="bigkinds",
