@@ -5,8 +5,8 @@
 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
-sources 는 운영 원장(`ops_*`)·analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다
-(ALPHA-514·601). analyses 쓰기(정정·제외·복원)는 운영자 작업 원장(`admin_activity_log`) 전이다
+sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 행 복제 아님)·analyses
+읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다(ALPHA-514·601·651). analyses 쓰기(정정·제외·복원)는 운영자 작업 원장(`admin_activity_log`) 전이다
 (ALPHA-602). session 표면은 인증 세션 주체(SessionOperator) 투영으로 실전환됐다(ALPHA-608).
 운영자 인증은 아직 in-memory(474).
 
@@ -55,8 +55,10 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
-  `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514) — 원장의
-  소유는 data-pipeline 이라(ADR-0005 단일 writer) 여기선 **쓰지 않는다**. JPA 엔티티를 두지
+  `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)에 더해
+  **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651 — 세션·창
+  집계·무증거 파생, 행 복제 아님)이다 — 두 원장 모두 소유는 data-pipeline 이라(ADR-0005
+  단일 writer) 여기선 **쓰지 않는다**. JPA 엔티티를 두지
   않는 이유: `ddl-auto=validate` 환경에서 소유하지 않은 5테이블에 이 앱 기동을 묶지 않기
   위함이다. **analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회**
   (`repository/JdbcAnalysisRepository`, ALPHA-601 — 소유는 analysis-engine, 같은 이유로 JPA
