@@ -130,8 +130,14 @@ class CausalLake:
         self.exists["bars_5m"] = self.con.execute("SELECT count(*) FROM bars_5m").fetchone()[0]
 
     def _backfill(self, d: Path) -> None:
-        """로컬 백필: us_market(전일 미국장) · fx_usdkrw(환율) · tau_sidecar(초 단위 τ)."""
-        for name in ("us_market", "fx_usdkrw", "tau_sidecar"):
+        """로컬 백필: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료).
+
+        `layers_daily` = 시장(KODEX200) · 섹터 ETF 32 · 미국 전일 지수 6 의 일봉.
+        KRX 정보데이터시스템이 죽어(2026-08-02 실측) 업종분류 22종을 못 받는 대신
+        **섹터를 ETF 로 잡는다** - 관측 가능한 실제 포트폴리오이고 가중치를 시장이
+        정하며(우리가 안 정한다 = 왜곡 없음) 보유 비중을 알아 leave-one-out 이 정확하다.
+        """
+        for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily"):
 
             f = d / f"{name}.parquet"
             if f.is_file():
