@@ -10,6 +10,7 @@ unit 4분류가 이 파일의 핵심 판단이다 — 실측 근거는 `.dev/tos
 | 그 분의 캔들이 있고 `volume > 0` | **received** | 정상 체결 |
 | 그 분의 캔들이 있고 `volume == 0` | **no_trade** | 거래 없어도 캔들은 온다(직전가 flat) |
 | 그 분의 캔들이 **없다**·404 | **missing** | 재시도로 풀릴 수 있다 |
+| 인증·IP 차단 등 **소스 전역** 실패 | **전파(중단)** | unit 실패로 접으면 고칠 설정 하나가 안 보인다 |
 | 형상 위반·같은 분 중복·volume 0 인데 OHLC 가 안 flat | **invalid** | 재시도로 **안** 풀린다 |
 
 ⚠️ 토스 timestamp 는 **구간의 끝**이라 `캔들 ts == window_end` 로 고른다(sources/toss.py).
@@ -137,6 +138,13 @@ class TossPriceCollector:
                 before=request.window_end, kind=self.kind_of(unit_id),
             )
         except TossApiError as error:
+            if error.source_level:
+                # ⚠️ **전파한다.** 자격증명·IP 허용 목록 같은 소스 전역 실패를 unit
+                # missing 으로 접으면 348종 전부가 missing 인 INCOMPLETE window 가
+                # 매분 쌓이는데, 고칠 것은 설정 하나다. 재시도 대상처럼 보이면 아무도
+                # 그걸 고치러 가지 않는다(Rule 12 — 드러내기).
+                logger.error("토스 소스 전역 실패 — 수집 중단: %s", error)
+                raise
             logger.error("토스 분봉 실패 %s: %s", unit_id, error)
             return _Outcome.MISSING
         except ValueError:

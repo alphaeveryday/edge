@@ -180,6 +180,21 @@ class TestClient:
         # 먼저 두드리면 아직 제한된 구간에서 예산만 태운다
         assert max(slept) >= 1.0, f"Retry-After 를 무시했다: {slept}"
 
+    def test_unreadable_error_body_keeps_the_status(self):
+        # 본문이 HTML·손상 gzip 이어도 status 는 유효하다 — 여기서 그냥 터지면
+        # 429·5xx 가 재시도 경로를 통째로 우회한다
+        import io
+        import urllib.error
+
+        broken = urllib.error.HTTPError(
+            "u", 503, "err", {"Content-Encoding": "gzip"}, io.BytesIO(b"<html>oops</html>")
+        )
+        client, slept, _, calls = make_client([
+            TOKEN, broken,
+            {"result": {"candles": candle_rows("candles_stock_1m")[:1]}},
+        ])
+        assert len(client.candles("005930")) == 1, "재시도 경로를 우회했다"
+
     def test_permanent_errors_are_not_retried(self):
         # 없는 종목을 다시 물어도 같은 답이다 — 재시도는 한도만 먹고 window 를 늦춘다
         import io
@@ -350,6 +365,25 @@ class TestCollector:
         assert result.retry_count == 0     # 이 window 안에서 늘어난 만큼만 센다
         assert result.stage_timestamps["collection_finished_at"] > (
             result.stage_timestamps["collection_started_at"])
+
+    def test_source_level_failure_stops_collection(self):
+        # ⚠️ 자격증명·IP 차단은 그 window 를 다시 수집해도 안 풀린다. unit missing 으로
+        # 접으면 348종 전부가 missing 인 INCOMPLETE 가 매분 쌓이는데 고칠 건 설정 하나다.
+        blocked = TossApiError(403, "access_denied", "IP address not allowed")
+        assert blocked.source_level
+        client = StubClient({"005930": blocked, "000660": blocked})
+        with pytest.raises(TossApiError):
+            TossPriceCollector(client=client).collect(
+                make_request(["005930", "000660"]), WINDOW_END)
+
+    def test_symbol_level_failure_stays_a_unit_miss(self):
+        client = StubClient({
+            "005930": (parsed("candles_stock_1m", "005930"),),
+            "999999": TossApiError(404, "stock-not-found", "종목을 찾을 수 없습니다."),
+        })
+        _result, _records, manifest = TossPriceCollector(client=client).collect(
+            make_request(["005930", "999999"]), WINDOW_END)
+        assert manifest["missing"] == ["999999"]
 
     def test_checksum_is_order_independent(self):
         # 같은 멤버십을 다른 순서로 요청해도 같은 checksum — 아니면 재실행마다 세대가 오른다

@@ -60,6 +60,9 @@ MIN_INTERVAL_SECONDS = 1.0 / RATE_LIMIT_PER_SECOND
 # 토큰 만료 여유 — 만료 직전 발급분으로 요청하다 401 을 맞지 않게.
 TOKEN_REFRESH_MARGIN_SECONDS = 60
 
+# 소스 전체가 막혔다는 신호 — 실측된 IP 차단 응답(`access_denied`)이 대표다
+_SOURCE_LEVEL_CODES = frozenset({"access_denied", "invalid_client", "unauthorized"})
+
 _PRICE_FIELDS = (("open", "openPrice"), ("high", "highPrice"),
                  ("low", "lowPrice"), ("close", "closePrice"))
 
@@ -75,6 +78,17 @@ class TossApiError(RuntimeError):
         self.request_id = request_id
         # 벤더가 "언제 다시 오라"고 말했으면 그게 권위다(실측: 429 에 `Retry-After: 1`)
         self.retry_after = retry_after
+
+    @property
+    def source_level(self) -> bool:
+        """이 소스 전체가 막힌 건가 — 인증·인가·설정 축.
+
+        같은 window 를 다시 수집해도 안 풀린다. 이걸 unit 단위 missing 으로 접으면
+        348종 전부가 missing 인 INCOMPLETE window 가 매분 쌓이는데, 원인은 자격증명·
+        IP 허용 목록 같은 **한 가지 설정**이다. 재시도 대상처럼 보이게 두면 아무도
+        그 한 가지를 고치러 가지 않는다.
+        """
+        return self.status in (401, 403) or self.code in _SOURCE_LEVEL_CODES
 
     @property
     def retryable(self) -> bool:
@@ -234,9 +248,18 @@ class TossOpenApiClient:
             with self._open(request) as response:
                 return _decode(response.read(), response.headers), dict(response.headers)
         except urllib.error.HTTPError as error:
-            payload = _decode(error.read(), error.headers)
-            detail = payload.get("error") if isinstance(payload, dict) else None
             retry_after = _retry_after(error.headers)
+            try:
+                payload = _decode(error.read(), error.headers)
+            except Exception as decode_error:
+                # ⚠️ 본문이 HTML·손상 gzip 이어도 **status 는 유효하다**. 여기서 그냥
+                # 터지면 429·5xx 가 재시도 경로를 통째로 우회해, 재시도로 풀릴 실패가
+                # invalid 로 굳거나 window 를 죽인다.
+                raise TossApiError(
+                    error.code, "unreadable-body", str(decode_error)[:200],
+                    retry_after=retry_after,
+                ) from error
+            detail = payload.get("error") if isinstance(payload, dict) else None
             if isinstance(detail, dict):
                 raise TossApiError(
                     error.code, str(detail.get("code", "")), str(detail.get("message", "")),
