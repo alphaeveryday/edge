@@ -121,12 +121,22 @@ class PriceTriggerHandler:
     detection_policy_version: str
     destination: str
     market: str = "KR"  # 1분 트랙은 KR 전용 — eod._MARKET 과 같은 이유로 고정
+    # universe.extended_hours_ids ∩ etf_ids 검증용 — 시간외 거래 ETF 의 시가는 09:00
+    # 이 아니라 그 종목의 첫 tradable window 라, 지원 없이 받으면 조용히 틀린 축으로
+    # 판정한다. 실측(2026-08-02)상 ETF 는 전부 정규장 전용이라 기능이 아니라 가드다.
+    extended_hours_ids: frozenset[str] = frozenset()
     connect_fn: object = _default_connect
 
     def __post_init__(self) -> None:
         if not self.etf_ids:
             # 빈 집합이면 모든 job 이 "판정 0건 성공"으로 돌아 판정기가 조용히 무력화된다
             raise ValueError("etf_ids 가 비어 있다 — universe.etf_ids 를 주입하라")
+        if overlap := self.etf_ids & self.extended_hours_ids:
+            raise ValueError(
+                f"시간외 거래 ETF 는 미지원이다: {sorted(overlap)[:5]} — 시가 산출이 "
+                "종목별 첫 tradable window 여야 해 설계 선행이 필요하다(정규장 09:00 "
+                "고정 축으로 판정하면 조용히 틀린다)"
+            )
         self.abs_threshold = _decimal(self.abs_threshold, entity="config",
                                       field_name="abs_threshold")
         if self.abs_threshold <= 0:

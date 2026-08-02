@@ -616,3 +616,10 @@ class TestAdversarialInputs:
         with pytest.raises(TransientJobError, match="checksum"):
             claim_then_run(handler, second)
         assert db.triggers == {}
+
+    def test_extended_hours_etf_rejected_at_startup(self, tmp_path):
+        # 시간외 거래 ETF 의 시가는 09:00 축이 아니다 — 지원 없이 받으면 조용히 틀린
+        # 축으로 판정하므로 기동에서 거부한다(#485 봇 P2, 실측상 ETF 는 전부 정규장)
+        with pytest.raises(ValueError, match="시간외 거래 ETF"):
+            build_handler(FakeMinuteDB(), tmp_path,
+                          extended_hours_ids=frozenset({"500000"}))
