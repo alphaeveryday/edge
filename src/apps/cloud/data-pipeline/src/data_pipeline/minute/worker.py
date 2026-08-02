@@ -16,7 +16,8 @@ tick 단위로 도는 상주 루프다. 벽시계를 직접 읽지 않는다 —
   2. phase 관측 — DRAINING 이면 신규 claim 을 멈추고 ack(원장이 CLAIMED 잔존 시 거부
      하므로 in-flight 가 끝날 때까지 ack 는 실패로 남는다), DRAINED/terminal 이면 정지.
   3. claim — realtime lane 우선 1건, 비면 recovery lane 을 tick 당 budget 만큼.
-  4. window 처리 — collect → 세대 예측 → artifact/manifest PUT → fenced commit.
+  4. window 처리 — 기대 유니버스 결정(`Universe.units_at` — 그 window 의 시각에 캔들이
+     있어야 하는 종목만) → collect → 세대 예측 → artifact/manifest PUT → fenced commit.
      한 window 의 예외는 그 window 에 격리된다(lease 만료로 재청구됨) — 다음 window
      진행을 막지 않는다(fail loud 로 기록하되 루프는 산다).
 """
@@ -34,6 +35,7 @@ from ..lake.storage import (
     raw_price_minute_artifact_key,
 )
 from .artifacts import (
+    UNIT_CLASSES,
     ArtifactImmutabilityError,
     build_window_manifest,
     put_immutable,
@@ -81,6 +83,18 @@ class MinuteWorkerLoop:
     def _process(self, claim: dict, now: datetime) -> bool:
         raise NotImplementedError
 
+    def _session_ready(self) -> bool:
+        """원장에 고정된 session 속성과 내 설정이 맞는가 — window 를 처리할 자격.
+
+        구현체가 좁힌다(기본은 무조건 통과). 거짓이면 ACTIVE 에서는 claim 없이 tick 을
+        끝내고(STOPPED) DRAINING 에서는 claim 을 집었다 반납한 뒤 ack 까지 간다 —
+        drain 을 막으면 EOD 가 영원히 시작되지 못한다. 어느 쪽이든 **fence 는 쥔 채이고
+        루프는 산다**: 설정 불일치는 재시도로 낫지 않지만, 정지를 영구화하면 뒤따르는
+        drain 을 관측하지 못하고 fence 를 반납·재획득하면 token thrash 가 된다.
+        해소는 설정을 고친 배포이고, 그 SIGTERM 이 lease 를 반납해 교체가 이뤄진다.
+        """
+        return True
+
     def request_stop(self) -> None:
         """SIGTERM 핸들러가 부른다 — 진행 중 tick 을 끊지 않고 다음 tick 에 멈춘다."""
         self.stopping = True
@@ -103,6 +117,10 @@ class MinuteWorkerLoop:
             return "STOPPED"
 
         phase = self._session_phase()
+        # 설정이 원장과 갈렸으면 window 를 **처리할** 자격이 없다(기대 집합을 내 설정으로
+        # 계산하므로). 단 drain 은 막지 않는다 — ack_drain 을 부를 수 있는 건 Worker 뿐이라,
+        # 여기서 먼저 멈추면 그 세션은 DRAINING 에 영구 고착되고 EOD 가 시작되지 못한다.
+        ready = self._session_ready()
         if phase == "DRAINING":
             # 신규(DUE) claim 은 원장이 금지하지만 **만료된 고아 CLAIMED 회수**는
             # DRAINING 에서도 허용된다(2B-2) — 실패로 남은 window 를 여기서 회수해
@@ -115,9 +133,11 @@ class MinuteWorkerLoop:
                 )
                 if claim is None:
                     break
-                if not self._process(claim, now):
+                if not ready or not self._process(claim, now):
                     # 반복 실패 window 를 CLAIMED 로 두면 ack 가 영구 거부된다 —
-                    # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다
+                    # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다.
+                    # 자격이 없을 때도 **집었다가 반납**한다: 안 집으면 죽은 Worker 가
+                    # 남긴 CLAIMED 가 영원히 남아 ack 가 계속 거부된다
                     self.ledger.release_window_claim(
                         session_id=self.session_id, window_start=claim["window_start"],
                         worker_id=self.config.worker_id, claim_token=claim["claim_token"],
@@ -130,6 +150,15 @@ class MinuteWorkerLoop:
             return "DRAINING"
         if phase not in ("ACTIVE",):
             return "DRAINED" if phase == "DRAINED" else "STOPPED"
+        if not ready:
+            # 계속 돌면 남의 기대 집합을 내 기준으로 VALID 확정한다(조용한 누락).
+            # claim 하지 않고 이 tick 을 끝낸다 — fence 상실 처리와 같은 모양이다.
+            # ⚠️ **stopping 을 세우지 않는다**: 세우면 그 뒤 EOD 가 drain 을 걸어도 tick 이
+            # 최상단에서 STOPPED 로 빠져 ack_drain 에 도달하지 못하고, 그걸 부를 수 있는
+            # 주체가 Worker 뿐이라 세션이 DRAINING 에 영구 고착된다. fence 도 쥔 채 둔다 —
+            # 반납만 하고 멈추면 다음 tick 이 재획득해 token 을 매번 올리는 thrash 가 되고,
+            # 설정을 고친 배포는 어차피 SIGTERM 경로로 lease 를 반납해 교체가 즉시 된다.
+            return "STOPPED"
 
         # realtime(최신) 1건 + recovery(최고령) budget 을 **항상** 이어서 소진한다 —
         # realtime 이 비었을 때만 recovery 를 보면 두 lane 의 due 조건이 같아 recovery
@@ -213,8 +242,31 @@ class PriceWorker(MinuteWorkerLoop):
     stopping: bool = False  # SIGTERM — 새 claim 중단, 다음 tick 에서 STOPPED
     _last_heartbeat: datetime | None = field(default=None, repr=False)
 
+    def _session_ready(self) -> bool:
+        """원장이 고정한 universe 와 내 설정이 같은가.
+
+        session 의 universe 는 생성 시 고정되는데(v0.7 10.1) 기대 집합은 **내 설정**으로
+        계산한다. 둘이 갈리면
+        ① 시간외 window 를 다른 종목 집합으로 VALID 확정해 원장이 고정한 종목이 조용히
+        누락되거나 ② 거래시간 밖이 된 window 에서 `units_at` 이 터진다.
+
+        window 계획 범위가 그 universe 와 맞는지는 보지 않는다 — 계획과 hash 를 같은
+        universe 에서 뽑는 것은 planner 의 불변식이다(그 진입점에서 강제한다).
+        """
+        cfg = self.config
+        ledger_plan = self.ledger.session_universe(session_id=self.session_id)
+        mine = (cfg.universe.universe_version, cfg.universe.universe_hash)
+        if ledger_plan == mine:
+            return True
+        logger.error(
+            "session %s 의 계획 %s 와 내 설정 %s 가 다르다 — 정지",
+            self.session_id, ledger_plan, mine,
+        )
+        return False
+
     def _predict_generation(self, claim: dict, artifact_checksum: str,
-                            units: dict[str, list[str]]) -> tuple[int, str, bytes, str]:
+                            units: dict[str, list[str]],
+                            expected_unit_ids: tuple[str, ...]) -> tuple[int, str, bytes, str]:
         """결정적 세대 예측 → (generation, artifact_key, manifest_bytes, manifest_checksum).
 
         세대 identity 는 records+manifest 두 checksum 이다(ALPHA-666) — manifest 는
@@ -231,7 +283,7 @@ class PriceWorker(MinuteWorkerLoop):
                 dataset=cfg.dataset, session_id=self.session_id,
                 window_start=claim["window_start"], window_end=claim["window_end"],
                 generation=generation,
-                expected_unit_ids=list(cfg.universe.unit_ids), units=units,
+                expected_unit_ids=list(expected_unit_ids), units=units,
                 artifact_key=artifact_key, artifact_checksum=artifact_checksum,
             )
             data = serialize_manifest(manifest)
@@ -251,20 +303,35 @@ class PriceWorker(MinuteWorkerLoop):
     def _process(self, claim: dict, now: datetime) -> bool:
         cfg = self.config
         try:
+            # 기대 유니버스는 **그 window 의 시각**이 정한다 — 전 종목을 매 window 에
+            # 넘기면 15:30 이 마지막인 종목이 시간외 window 마다 missing 으로 잡혀
+            # INCOMPLETE 가 영원히 재시도된다(2026-08-02 dev 실증)
+            expected_unit_ids = cfg.universe.units_at(claim["window_start"])
             request = CollectionRequest(
                 dataset=cfg.dataset, window_start=claim["window_start"],
                 window_end=claim["window_end"], run_id=cfg.run_id,
                 session_id=self.session_id, execution_mode="resident",
                 universe_version=cfg.universe.universe_version,
-                unit_ids=cfg.universe.unit_ids, failure_injection=None,
+                unit_ids=expected_unit_ids, failure_injection=None,
             )
             result, records, manifest_units = self.collector.collect(request, now)
             # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
-            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다
-            units = {
-                cls: list(manifest_units.get(cls, []))
-                for cls in ("received", "no_trade", "missing", "invalid")
-            }
+            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다. 미지 분류는
+            # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
+            # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
+            if unknown := set(manifest_units) - UNIT_CLASSES:
+                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
+            units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
+            # 원장에 실리는 수량(result)과 증거로 남는 분할(manifest)이 같은 관측을
+            # 말하는지 대조한다 — 각자의 validator 는 상대를 모르므로, 어긋나면
+            # "missing_units 는 있는데 VALID·failed=0" 같은 성공 위장이 커밋된다
+            failed = len(units["missing"]) + len(units["invalid"])
+            succeeded = len(units["received"]) + len(units["no_trade"])
+            if (succeeded, failed) != (result.succeeded_count, result.failed_count):
+                raise ValueError(
+                    f"collector 의 result 수량({result.succeeded_count}/{result.failed_count})과 "
+                    f"manifest 분할({succeeded}/{failed})이 다르다"
+                )
             # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
             # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
             # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
@@ -272,7 +339,7 @@ class PriceWorker(MinuteWorkerLoop):
             artifact_bytes = serialize_records(list(records))
             artifact_checksum = sha256_bytes(artifact_bytes)
             generation, artifact_key, manifest_bytes, manifest_checksum = (
-                self._predict_generation(claim, artifact_checksum, units)
+                self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
             )
             put_immutable(self.storage, artifact_key, artifact_bytes)
             manifest_key = minute_window_manifest_key(
@@ -300,6 +367,10 @@ class PriceWorker(MinuteWorkerLoop):
         except (GenerationMismatchError, ArtifactImmutabilityError):
             # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
             # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+            # ⚠️ collector 계약 위반(미지 분류·수량 불일치)은 여기 넣지 않는다: 전파하면
+            # drain 이 release/ack 을 못 거쳐 세션이 DRAINING 에 고착되고, 교체 Worker 가
+            # 같은 window 로 크래시 루프를 돈다. 그건 window 실패로 격리하고 잔여 판정은
+            # drain 반납 → EOD QC 가 한다(지정된 판정 장치에 위임).
             raise
         except CommitRejectedError:
             # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면

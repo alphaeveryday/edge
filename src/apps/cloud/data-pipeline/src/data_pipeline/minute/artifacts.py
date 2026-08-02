@@ -22,7 +22,8 @@ _MANIFEST_FIELDS = frozenset(
     {"dataset", "session_id", "window_start", "window_end",
      "generation", "units", "artifact_key", "artifact_checksum"}
 )
-_UNIT_CLASSES = frozenset({"received", "no_trade", "missing", "invalid"})
+# manifest unit 4분류 어휘 — 이 목록의 정본. 복제하면 한쪽만 고쳐진다.
+UNIT_CLASSES = frozenset({"received", "no_trade", "missing", "invalid"})
 
 
 class ArtifactImmutabilityError(RuntimeError):
@@ -62,7 +63,7 @@ def build_window_manifest(
     상세 unit 목록의 정본은 이 manifest 다(DB 의 missing_units 는 작은 cache —
     v0.7 10.2). 필드·목록 순서는 고정 — checksum 이 순서에 민감하다.
     """
-    unknown = set(units) - _UNIT_CLASSES
+    unknown = set(units) - UNIT_CLASSES
     if unknown:
         raise ValueError(f"manifest unit 분류 미지 키: {sorted(unknown)}")
     for cls, ids in units.items():
@@ -96,7 +97,7 @@ def build_window_manifest(
         "window_start": window_start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "window_end": window_end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "generation": generation,
-        "units": {key: sorted(units.get(key, [])) for key in sorted(_UNIT_CLASSES)},
+        "units": {key: sorted(units.get(key, [])) for key in sorted(UNIT_CLASSES)},
         "artifact_key": artifact_key,
         "artifact_checksum": artifact_checksum,
     }

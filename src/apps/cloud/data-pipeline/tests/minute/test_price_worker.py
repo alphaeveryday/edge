@@ -34,6 +34,13 @@ UNIVERSE = Universe(
     constituent_ids=("100000", "100001"),
 )
 NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 앞쪽 window 들이 전부 due
+# 시간외(NXT)까지 거래되는 종목이 하나 있는 universe — 세션이 720 window 로 계획된다
+UNIVERSE_EXT = Universe(
+    universe_version="univ-test-ext-v1",
+    etf_ids=("500000",),
+    constituent_ids=("100000", "100001"),
+    extended_hours_ids=("100000",),
+)
 
 
 class RecordingCanonicalWriter:
@@ -46,12 +53,14 @@ class RecordingCanonicalWriter:
         return len(records)
 
 
-def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3):
+def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
+                 universe=UNIVERSE, first_window=0):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+    planned = plan_session_windows(SESSION_DATE, universe=universe)
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
-        universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
-        windows=plan_session_windows(SESSION_DATE)[:windows],
+        universe_version=universe.universe_version, universe_hash=universe.universe_hash,
+        windows=planned[first_window:first_window + windows],
     )
     worker = PriceWorker(
         session_id=session_id,
@@ -62,7 +71,7 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3):
         canonical_writer=RecordingCanonicalWriter(),
         config=WorkerConfig(
             worker_id=worker_id, dataset="price_minute", source="toss", market="KR",
-            session_date="2026-07-31", universe=UNIVERSE, run_id="run_t",
+            session_date="2026-07-31", universe=universe, run_id="run_t",
             trigger_schema_version="trig-1", destination="price-analysis-realtime",
         ),
     )
@@ -171,8 +180,8 @@ class TestFailureIsolation:
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
         original = worker._predict_generation
-        worker._predict_generation = lambda claim, checksum, units: (
-            (99,) + original(claim, checksum, units)[1:]
+        worker._predict_generation = lambda claim, checksum, units, expected: (
+            (99,) + original(claim, checksum, units, expected)[1:]
         )
         with pytest.raises(GenerationMismatchError):
             worker.tick(NOW)
@@ -360,3 +369,125 @@ class TestInvalidClassification:
         assert worker.tick(NOW) == "PROCESSED"
         window = next(iter(db.windows.values()))
         assert window["data_status"] == "INVALID"
+
+
+class TestTradingHoursUniverse:
+    """시간대별 기대 유니버스 (ALPHA-684).
+
+    의도: 15:30 이 거래 마지막인 종목(ETF·지수·비NXT 개별주)을 시간외 window 의 기대
+    대상으로 잡으면 그 window 가 영원히 INCOMPLETE 로 남고 매분 재수집된다
+    (2026-08-02 dev 실호출 실증 — 19:58 window 에서 069500·001527 이 missing).
+    """
+
+    def test_after_hours_window_expects_only_extended_units(self, tmp_path):
+        db = FakeMinuteDB()
+        # 19:57~19:59 = 720 계획의 마지막 3 window (정규장 밖)
+        worker, ledger, session_id = build_worker(
+            db, tmp_path, universe=UNIVERSE_EXT, windows=3, first_window=717,
+        )
+        assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "PROCESSED"
+        window = next(w for w in db.windows.values() if w["data_status"] != "DUE")
+        # 기대는 시간외 종목 1개뿐 — 3개로 잡으면 나머지 2개가 missing 이라 INCOMPLETE 다
+        assert window["expected_unit_count"] == 1
+        assert window["data_status"] == "VALID"
+
+    def test_regular_window_expects_whole_universe(self, tmp_path):
+        # 같은 universe 라도 정규장 안에서는 전 종목이 기대 대상이다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(
+            db, tmp_path, universe=UNIVERSE_EXT, windows=1, first_window=60,  # 09:00
+        )
+        assert worker.tick(NOW) == "PROCESSED"
+        window = next(iter(db.windows.values()))
+        assert window["expected_unit_count"] == 3
+        assert window["data_status"] == "VALID"
+
+    def test_config_universe_mismatch_stops_processing(self, tmp_path):
+        # 원장이 고정한 universe 와 Worker 설정이 갈리면 처리하면 안 된다 — 남의 기대
+        # 집합을 내 기준으로 VALID 확정하거나(조용한 누락) 거래시간 밖이 된 window 를
+        # 영원히 재청구한다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+        worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
+        assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "STOPPED"
+        assert all(w["data_status"] == "DUE" for w in db.windows.values())
+        # 다음 tick 도 처리하지 않는다 — 설정 불일치는 재시도로 낫지 않는다
+        token = db.sessions[session_id]["worker_fencing_token"]
+        assert worker.tick(datetime(2026, 7, 31, 20, 1, tzinfo=KST)) == "STOPPED"
+        assert all(w["data_status"] == "DUE" for w in db.windows.values())
+        # fence 를 쥔 채다 — 반납하고 멈추면 다음 tick 이 재획득해 token 이 매 tick 오른다
+        assert db.sessions[session_id]["worker_fencing_token"] == token
+        assert worker.fence_token == token
+
+    def test_mismatch_after_stop_still_observes_later_drain(self, tmp_path):
+        # 정지를 영구화(stopping)하면 그 뒤 EOD 가 drain 을 걸어도 tick 이 최상단에서
+        # 빠져 ack_drain 에 도달하지 못한다 — 그걸 부를 수 있는 건 Worker 뿐이라
+        # 세션이 DRAINING 에 영구 고착된다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+        start = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        worker.config.universe = UNIVERSE
+        assert worker.tick(start) == "STOPPED"          # ACTIVE + 불일치
+        ledger.request_drain(session_id=session_id, now=start)   # 그 **뒤에** drain
+        assert worker.tick(start + timedelta(seconds=1)) == "DRAINING"
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+
+    def test_universe_mismatch_still_converges_drain(self, tmp_path):
+        # 자격이 없어도 drain 은 막지 않는다 — ack_drain 을 부를 수 있는 건 Worker 뿐이라
+        # 여기서 멈추면 그 세션이 DRAINING 에 영구 고착되고 EOD 가 시작되지 못한다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+
+        class AlwaysExploding:
+            def collect(self, request, now):
+                raise RuntimeError("vendor 장기 장애")
+
+        start = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        worker.collector = AlwaysExploding()
+        assert worker.tick(start) == "WINDOW_FAILED"  # window 를 CLAIMED 로 남긴다
+        ledger.request_drain(session_id=session_id, now=start)
+        worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
+        assert worker.tick(start + timedelta(seconds=61)) == "DRAINING"
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+        # 처리하지 않고 반납만 했다 — 잔여 판정은 EOD QC 소관
+        assert {w["data_status"] for w in db.windows.values()} == {"DUE"}
+
+
+class TestManifestVocabulary:
+    def test_unknown_unit_class_fails_loud(self, tmp_path):
+        # 미지 분류를 걸러서 넘기면 manifest 검증이 실행되지 않아, 우리가 이해 못 한
+        # 관측이 증거에서 사라진 채 window 가 성공 커밋된다 (Rule 12)
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        inner = FakePriceCollector({"scenario": "normal"}, seed=42)
+
+        class ExtraClassCollector:
+            def collect(self, request, now):
+                result, records, manifest = inner.collect(request, now)
+                return result, records, {**manifest, "deferred": []}
+
+        worker.collector = ExtraClassCollector()
+        # 그 window 에 격리된다 — 전파하면 drain 이 release/ack 을 못 거쳐 세션이
+        # DRAINING 에 고착되고 교체 Worker 가 같은 window 로 크래시 루프를 돈다
+        assert worker.tick(NOW) == "WINDOW_FAILED"
+        assert all(w["checksum"] is None for w in db.windows.values())
+
+    def test_result_counts_must_match_manifest_partition(self, tmp_path):
+        # 원장 수량(result)과 증거 분할(manifest)이 어긋나면 "missing_units 는 있는데
+        # VALID·failed=0" 같은 성공 위장이 커밋된다 — 각자의 validator 는 상대를 모른다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        inner = FakePriceCollector({"scenario": "normal"}, seed=42)
+
+        class MiscountingCollector:
+            def collect(self, request, now):
+                result, records, manifest = inner.collect(request, now)
+                moved, *rest = manifest["received"]
+                return result, records, {**manifest, "received": rest, "missing": [moved]}
+
+        worker.collector = MiscountingCollector()
+        assert worker.tick(NOW) == "WINDOW_FAILED"
+        assert all(w["checksum"] is None for w in db.windows.values())
