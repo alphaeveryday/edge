@@ -144,6 +144,9 @@ class _Cursor:
         elif s.startswith("UPDATE minute_ingestion_window w") and "'MISSING'" in s:
             # phase 바인딩이 빠지면 살아 있는 세션의 DUE 를 전부 죽인다(그날 데이터 소멸)
             assert "s.phase = 'QC_RUNNING'" in s, "confirm_missing_windows SQL 에 phase 가드가 없다"
+            # 소유권 없이 쓰면 낡은 QC 가 되돌릴 수 없는 MISSING 을 찍는다
+            assert "s.worker_fencing_token = %s" in s, \
+                "confirm_missing_windows SQL 에 QC 소유권 토큰이 없다"
             # 시각 가드가 빠지면 조기 drain 만으로 **아직 오지도 않은 분**까지 MISSING 으로
             # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
             assert "w.scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
@@ -341,9 +344,10 @@ class _Cursor:
                        row["worker_fencing_token"])]
 
     def _confirm_missing(self, p):
-        session_id, now = p
+        session_id, fence_token, now = p
         session = self.db.sessions.get(session_id)
-        if session is None or session["phase"] != "QC_RUNNING":
+        if (session is None or session["phase"] != "QC_RUNNING"
+                or session.get("worker_fencing_token") != fence_token):
             self.rowcount = 0
             return
         changed = 0

@@ -64,7 +64,7 @@ def make_session(db, *, statuses=(), phase="DRAINED"):
 def make_qc(db, tmp_path):
     return SessionQc(
         ledger=MinuteLedger(db=_DB, connect_fn=db.connect),
-        storage=LocalStorage(tmp_path), source="toss", market="KR",
+        storage=LocalStorage(tmp_path),
     )
 
 
@@ -92,7 +92,9 @@ class TestMissingConfirmation:
         with pytest.raises(SessionQcRejected):
             make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
 
-        assert ledger.confirm_missing_windows(session_id=session_id, now=NOW) == 0
+        assert ledger.confirm_missing_windows(
+            session_id=session_id, fence_token=1, now=NOW
+        ) == 0
         assert [w["data_status"] for w in db.windows.values()].count("DUE") == 2
         assert db.sessions[session_id]["phase"] == "ACTIVE"
 
@@ -247,7 +249,6 @@ class TestInvariantViolations:
         db = FakeMinuteDB()
         _, session_id = make_session(db, statuses=("VALID", "VALID", "VALID"))
         del db.windows[(session_id, WINDOWS[1])]          # planner 가 한 분을 빠뜨렸다
-        db.sessions[session_id]["expected_window_count"] = 2   # COUNT(*) 가 그걸 따라간다
 
         result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
         assert result["ok"] is False
@@ -262,7 +263,7 @@ class TestInvariantViolations:
 
         result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
         assert result["ok"] is False
-        assert any("개장" in v for v in result["violations"])
+        assert any("계획 범위" in v for v in result["violations"])
 
     def test_missing_last_window_fails(self, tmp_path):
         db = FakeMinuteDB()
@@ -271,7 +272,30 @@ class TestInvariantViolations:
 
         result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
         assert result["ok"] is False
-        assert any("폐장" in v for v in result["violations"])
+        assert any("계획 범위" in v for v in result["violations"])
+
+    def test_extended_plan_missing_its_first_hour_is_rejected(self, tmp_path):
+        # ⚠️ 양 끝을 **따로** 보면 통과하는 교차 조합이다: 시간외 계획(08:00~20:00)에서
+        # 앞 1시간이 빠지면 09:00~20:00 이 되는데, 09:00 도 20:00 도 각각은 정상 값이다.
+        db = FakeMinuteDB()
+        extended = Universe(
+            universe_version="v1", etf_ids=("E1",), constituent_ids=("C1",),
+            extended_hours_ids=("C1",),
+        )
+        pairs = plan_session_windows(SESSION_DATE, universe=extended)
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        session_id, _ = ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version="v2", universe_hash="h2", windows=pairs[60:],
+        )
+        for start, _end in pairs[60:]:
+            row = db.windows[(session_id, start)]
+            row.update(data_status="VALID", generation=1, checksum="c")
+        db.sessions[session_id]["phase"] = "DRAINED"
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("계획 범위" in v for v in result["violations"])
 
     def test_empty_plan_is_not_a_complete_day(self, tmp_path):
         # 행이 없으면 집계도 0, 간격도 없다 — 공허참으로 "완전한 하루"가 된다

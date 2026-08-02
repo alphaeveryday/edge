@@ -64,11 +64,20 @@ logger = logging.getLogger(__name__)
 
 # orphan 스캔이 성립하는 dataset — `find_orphan_artifacts` 의 prefix 가 이 값에 묶여 있다.
 _PRICE_DATASET = "price_minute"
+# ⚠️ 1분 트랙은 KR 전용이다(유니버스·거래시간·소스가 전부 KR). market 을 CLI 인자로 열어
+# 두면 오타 하나가 **없는 prefix 를 훑고 빈 목록을 clean 으로 확정**한다 — 안 본 것이
+# "0건"이 되는 자리라 표면 자체를 없앴다. 다른 시장이 생기면 세션이 그 값을 갖게 하고
+# (원장 컬럼) 여기서 유도한다 — 호출자에게 받지 않는다.
+_MARKET = "KR"
 _WINDOW_STEP = timedelta(minutes=1)
 # 계획의 양 끝이 될 수 있는 시각 — universe 가 정규장만인지 시간외까지인지에 따라 갈린다
 # (`plan_session_windows`). QC 는 universe 를 모르므로 둘 다 허용하고 그 밖만 걸러낸다.
-_SESSION_OPENS = frozenset({SESSION_OPEN, EXTENDED_OPEN})
-_SESSION_CLOSES = frozenset({SESSION_CLOSE, EXTENDED_CLOSE})
+# `plan_session_windows` 가 만들 수 있는 계획은 둘뿐이다 — (개장, 폐장) → window 수.
+# 쌍으로 두는 이유는 위 `_plan_violations` 주석 참조(따로 보면 교차 조합이 샌다).
+_SESSION_PLANS = {
+    (SESSION_OPEN, SESSION_CLOSE): 390,
+    (EXTENDED_OPEN, EXTENDED_CLOSE): 720,
+}
 
 # 하루가 정상적으로 끝났다고 말할 수 있는 window 상태 — 나머지는 사람이 봐야 한다.
 _COMPLETE_STATUSES = frozenset({WINDOW_VALID, WINDOW_VALID_EMPTY})
@@ -85,12 +94,10 @@ class SessionQcRejected(RuntimeError):
 
 @dataclass
 class SessionQc:
-    """세션 하나의 EOD 판정. `storage`·`source`·`market` 은 orphan 나열에만 쓴다."""
+    """세션 하나의 EOD 판정. `storage` 는 orphan 나열에만 쓴다(source 는 원장에서 온다)."""
 
     ledger: MinuteLedger
     storage: Storage = field(repr=False)
-    source: str
-    market: str
 
     def run(self, *, session_id: str, now: datetime) -> dict:
         """판정 결과 dict. 불변식 위반이면 phase 를 FAILED 로 두고 `ok=False` 로 돌려준다.
@@ -107,7 +114,7 @@ class SessionQc:
             return self._already_finalized(session_id)
 
         missing_confirmed = self.ledger.confirm_missing_windows(
-            session_id=session_id, now=now
+            session_id=session_id, fence_token=session["fence_token"], now=now
         )
         rows = self.ledger.session_window_rows(session_id=session_id)
         counts = _count_statuses(rows)
@@ -128,6 +135,9 @@ class SessionQc:
             "violations": violations,
             "final_checksum": _final_checksum(rows),
             "final_generation": max((generation for _, _, generation, _ in rows), default=None),
+            # 정상 경로는 방금 계산한 값을 그대로 확정하므로 항상 일치한다 — 재실행 경로와
+            # 키 집합을 같게 두려고 명시한다(소비자가 공통 스키마로 읽는다).
+            "checksum_matches_record": True,
         }
 
         if violations:
@@ -207,13 +217,20 @@ class SessionQc:
             ),
             "orphan_artifacts": orphans,
             "orphan_scanned": orphan_scanned,
-            "violations": [],
+            "violations": (
+                [] if recomputed == final_checksum
+                else [f"확정 checksum 과 현재 원장이 다르다: 기록 {final_checksum[:12]}… "
+                      f"현재 {recomputed[:12]}…"]
+            ),
             "final_checksum": final_checksum,
             "final_generation": final_generation,
             # 확정 뒤 원장이 바뀌었으면 여기서 갈린다 — 조용히 덮지 않고 드러낸다
             # (확정값은 기록된 쪽이 정본이다).
             "checksum_matches_record": recomputed == final_checksum,
-            "ok": True, "phase": "FINALIZED", "reused": True,
+            # 확정 뒤 원장이 바뀌었으면 **성공으로 나가지 않는다** — 봉인 무결성이 깨진
+            # 것이라 사람이 봐야 한다(exit 1). phase 는 이미 단방향이라 되돌리지 않는다.
+            "ok": recomputed == final_checksum,
+            "phase": "FINALIZED", "reused": True,
         }
 
     def _scan_orphans(self, session_id: str, session: dict) -> tuple[list[str], bool]:
@@ -235,7 +252,7 @@ class SessionQc:
             return [], False
         return find_orphan_artifacts(
             db=self.ledger.db, connect_fn=self.ledger.connect_fn, storage=self.storage,
-            session_id=session_id, source=session["source_group"], market=self.market,
+            session_id=session_id, source=session["source_group"], market=_MARKET,
             session_date=session["session_date"].isoformat(),
         ), True
 
@@ -263,7 +280,7 @@ class SessionQc:
         return violations
 
 
-def qc_session_cli(settings, *, session_id: str | None, source: str, market: str) -> int:
+def qc_session_cli(settings, *, session_id: str | None) -> int:
     """`python -m data_pipeline.run qc-minute-session --session-id <id>` (EOD SFN 이 부른다).
 
     exit code 가 세 갈래인 이유는 처방이 다르기 때문이다 — 0=확정, 1=판정은 됐는데 원장이
@@ -289,8 +306,7 @@ def qc_session_cli(settings, *, session_id: str | None, source: str, market: str
         return 2
 
     qc = SessionQc(
-        ledger=MinuteLedger(db=settings.db),
-        storage=make_storage(settings.storage), source=source, market=market,
+        ledger=MinuteLedger(db=settings.db), storage=make_storage(settings.storage)
     )
     try:
         result = qc.run(session_id=session_id, now=datetime.now(timezone.utc))
@@ -335,10 +351,18 @@ def _plan_violations(rows: list) -> list[str]:
     violations = []
     first_open = rows[0][0].astimezone(KST).time()
     last_close = (rows[-1][0] + _WINDOW_STEP).astimezone(KST).time()
-    if first_open not in _SESSION_OPENS:
-        violations.append(f"계획 첫 window 가 개장 시각이 아니다: {first_open}")
-    if last_close not in _SESSION_CLOSES:
-        violations.append(f"계획 마지막 window 가 폐장 시각이 아니다: {last_close}")
+    # ⚠️ 양 끝을 **따로** 보면 planner 가 만들 수 없는 교차 조합이 통과한다: 시간외 계획
+    # (08:00~20:00)에서 앞 1시간이 통째로 빠지면 09:00~20:00 이 되는데, 개장·폐장이 각각
+    # 허용 집합에 있어 무사히 확정된다. 계획은 **쌍**이므로 쌍으로 대조한다.
+    plan = _SESSION_PLANS.get((first_open, last_close))
+    if plan is None:
+        violations.append(
+            f"계획 범위가 세션 규약과 다르다: {first_open}~{last_close} "
+            f"(허용 {sorted((o.isoformat(), c.isoformat()) for o, c in _SESSION_PLANS)})"
+        )
+    elif len(rows) != plan:
+        # 범위는 맞는데 개수가 모자라면 중간에 구멍이다 — 아래 간격 검사가 위치까지 짚는다
+        violations.append(f"계획 window 수가 {plan} 이어야 하는데 {len(rows)} 다")
     for previous, current in zip(rows, rows[1:]):
         gap = current[0] - previous[0]
         if gap != _WINDOW_STEP:

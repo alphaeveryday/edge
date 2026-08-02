@@ -184,10 +184,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", default=None,
                         help="qc-minute-session: 판정할 1분 세션(필수). QC 는 하루 하나를 "
                              "지목해서 돈다 — 범위를 열어 두면 살아 있는 세션까지 확정한다")
-    parser.add_argument("--market", default=None, choices=["KR", "US"],
-                        # 오타(`KRR`)를 받으면 없는 prefix 를 훑고 **빈 목록을 clean 으로
-                        # 확정**한다 — 안 본 것이 "0건"이 되는 자리라 파서에서 막는다
-                        help="qc-minute-session: orphan artifact 키의 market 축(미지정=KR)")
     parser.add_argument("--reason", default=None,
                         help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
@@ -239,11 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     # 운영자는 명령이 먹은 줄 안다.
     # ⚠️ `--session-id` 결손은 여기서 막지 **않는다** — SystemExit 은 프로세스 1 로 나가는데,
     # QC 의 1 은 "원장이 스스로와 모순"이라는 뜻이다. 결손은 판정 불가(2)라 CLI 가 처리한다.
-    if args.step != "qc-minute-session" and (
-        args.session_id is not None or args.market is not None
-    ):
+    if args.step != "qc-minute-session" and args.session_id is not None:
         raise SystemExit(
-            "--session-id·--market 은 qc-minute-session 에서만 쓴다 — "
+            "--session-id 는 qc-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -285,10 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "dlq-reconcile":
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "qc-minute-session":
-        return qc_session_cli(
-            settings, session_id=args.session_id,
-            source=args.source or "toss", market=args.market or "KR",
-        )
+        return qc_session_cli(settings, session_id=args.session_id)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

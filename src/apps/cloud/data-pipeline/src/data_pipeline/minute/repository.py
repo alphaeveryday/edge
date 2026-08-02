@@ -554,7 +554,7 @@ class MinuteLedger:
              "universe_version", "fence_token"), row, strict=True,
         ))
 
-    def confirm_missing_windows(self, *, session_id: str, now: datetime) -> int:
+    def confirm_missing_windows(self, *, session_id: str, fence_token: int, now: datetime) -> int:
         """**이미 도래한** `DUE` 를 `MISSING` 으로 확정한다 — 확정된 행 수.
 
         세션이 QC 에 들어왔다는 건 그 window 를 처리할 주체가 더 없다는 뜻이다(Worker 는
@@ -566,6 +566,11 @@ class MinuteLedger:
         ⚠️ **phase** — 안 묶으면 살아 있는(ACTIVE) 세션에 이 명령을 잘못 겨눴을 때 처리
         대기 중인 window 를 전부 MISSING 으로 죽인다(claim 대상에서 빠져 그날 데이터가
         통째로 사라진다).
+
+        ⚠️ **fencing token** — phase 만 보면 소유권을 잃은 낡은 QC 도 쓴다. 두 실행의
+        `now` 가 다르면 낡은 쪽이 새 쪽 기준으로 미도래인 window 까지 MISSING 으로 바꾸고,
+        같아도 새 쪽의 `missing_confirmed` 가 0 으로 왜곡된다(무엇을 확정했는지 보고가
+        틀어진다). 이 쓰기는 되돌릴 수 없으므로 소유권 없이는 못 하게 한다.
 
         ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
         잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
@@ -580,10 +585,10 @@ class MinuteLedger:
                 SET data_status = 'MISSING', updated_at = now()
                 FROM minute_ingestion_session s
                 WHERE w.session_id = s.session_id AND s.session_id = %s
-                  AND s.phase = 'QC_RUNNING' AND w.data_status = 'DUE'
-                  AND w.scheduled_at <= %s
+                  AND s.phase = 'QC_RUNNING' AND s.worker_fencing_token = %s
+                  AND w.data_status = 'DUE' AND w.scheduled_at <= %s
                 """,
-                (session_id, now),
+                (session_id, fence_token, now),
             )
             return cur.rowcount
 
