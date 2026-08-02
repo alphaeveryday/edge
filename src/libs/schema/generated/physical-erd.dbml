@@ -542,6 +542,7 @@ Table "news_document" {
   "representative_document_id" text
   "dedup_cluster_id" text
   "theme_concept_id" text
+  "publisher" text
 }
 
 Table "news_extraction_job" {
