@@ -107,25 +107,29 @@ class TestCorrection:
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert (document["title"], document["available_at"]) == ("정정된 제목", corrected_at)
 
-    def test_stale_observation_is_skipped_not_raised(self, caplog):
-        # 저장된 쪽이 더 **최신**이면 내 관측이 낡은 것이고, Consumer 가 읽을 행은 더 새
-        # 본문이라 이 모듈이 막으려는 P1(옛 텍스트를 읽음)이 아니다 — 건너뛰는 게 맞다.
-        # ⚠️ 예외로 올리면 commit 트랜잭션이 통째로 롤백돼 **그 창의 다른 기사·원장·job
-        # 까지** 날아간다(레코드 하나가 창 전체를 세운다). 게다가 정상 상황에서도 난다:
-        # 배치의 available_at 은 `fetched_at or published_at` 이라 미래 발행일을 싣는다.
+    def test_late_observation_still_writes_content_but_never_rewinds_time(self):
+        # ⚠️ 저장된 **시각**으로 내용 쓰기를 막으면 안 된다. 배치는
+        # `available_at = fetched_at or published_at` 이라 fetched_at 결손 시 **미래
+        # 발행일**을 싣는다 — 그러면 "시각은 미래인데 내용은 옛것"인 행이 생기고, 시각만
+        # 보고 건너뛰면 원장은 fp2 를 확정했는데 Consumer 는 옛 본문을 읽는다(이 모듈이
+        # 막으려던 P1 그대로다). 내용은 이번 관측을 따르고, 시각만 단조로 둔다.
         db = FakeMinuteDB()
+        future_stamp = OBSERVED + timedelta(days=2)     # 배치가 미래 발행일을 실은 형상
+        db.documents[(SOURCE, ARTICLE_ID)] = {
+            "document_id": stable_domain_id("doc", SOURCE, ARTICLE_ID),
+            "source_code": SOURCE, "source_document_id": ARTICLE_ID,
+            "title": "옛 제목", "language_code": "ko",
+            "published_at": "2026-07-31T00:00:00+00:00",
+            "available_at": future_stamp, "source_uri": "https://news.example/1",
+        }
+
         write(db, vendor_row(TITLE="정정된 제목", CONTENT="정정된 리드"),
-              observed_at=OBSERVED + timedelta(hours=3))
+              observed_at=OBSERVED)
 
-        assert write(db, vendor_row(TITLE="옛 제목", CONTENT="옛 리드"),
-                     observed_at=OBSERVED) == 0
-        assert "낡은 관측" in caplog.text          # 조용히 넘기지도 않는다(Rule 12)
-
-        # ⚠️ 제목과 리드는 **다른 테이블**이다. 판정이 갈리면 "제목 T2 + 리드 T1" 이라는
-        # 존재한 적 없는 본문이 남는다(실측으로 재현했던 자리다).
         document = db.documents[(SOURCE, ARTICLE_ID)]
-        assert document["title"] == "정정된 제목"
+        assert document["title"] == "정정된 제목"                       # 내용은 최신 관측
         assert db.news_documents[document["document_id"]]["lead_text"] == "정정된 리드"
+        assert document["available_at"] == future_stamp                 # 시각은 안 밀린다
 
     def test_first_real_lead_moves_the_arrival_time(self):
         # 배치가 리드 없이 넣은 문서에 실제 리드가 처음 붙는 것은 **내용 변경**이다 —
@@ -140,25 +144,18 @@ class TestCorrection:
         assert write(db, vendor_row(CONTENT="이제 붙은 리드"), observed_at=later) == 1
         assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == later
 
-    def test_concurrent_newer_row_is_not_dragged_backwards(self):
-        # ⚠️ 이 함수에서 available_at 을 쓰는 경로는 셋이다(부모 upsert·자식 upsert·리드
-        # 보정 UPDATE). 부모가 가드에 막힌 경우(남이 더 최신 행을 먼저 넣었다) 내 스냅샷
-        # 기준으로는 여전히 "리드가 바뀌었다"라, 보정 UPDATE 에 가드가 없으면 그 경로로
-        # **최신 문서의 시각이 뒤로 끌려간다**.
+    def test_arrival_time_never_moves_backwards(self):
+        # ⚠️ available_at 을 쓰는 경로가 셋이다(부모 upsert·리드 보정 UPDATE·최초 INSERT).
+        # 한 곳만 규칙이 달라도 그 경로로 시각이 뒤로 가고, 그러면 과거 as-of 구간에서
+        # 문서가 사라진다. 리드만 바뀌는 경우가 특히 위험하다 — 부모 upsert 가 no-op 이라
+        # 보정 UPDATE 가 단독으로 시각을 쓴다.
         db = FakeMinuteDB()
         newer = OBSERVED + timedelta(hours=3)
-        # 내 잠금 SELECT 가 아무것도 못 본 뒤 남이 더 최신 행을 먼저 넣은 상황을 만든다
-        db.documents[(SOURCE, ARTICLE_ID)] = {
-            "document_id": stable_domain_id("doc", SOURCE, ARTICLE_ID),
-            "source_code": SOURCE, "source_document_id": ARTICLE_ID,
-            "title": "남이 쓴 최신 제목", "language_code": "ko",
-            "published_at": "2026-07-31T00:00:00+00:00",
-            "available_at": newer, "source_uri": "https://news.example/1",
-        }
+        write(db, vendor_row(CONTENT="최신 리드"), observed_at=newer)
 
-        assert write(db, vendor_row(CONTENT="내 옛 리드"), observed_at=OBSERVED) == 0
+        write(db, vendor_row(CONTENT="뒤늦게 도착한 다른 리드"), observed_at=OBSERVED)
+
         assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == newer
-        assert db.documents[(SOURCE, ARTICLE_ID)]["title"] == "남이 쓴 최신 제목"
 
     def test_new_child_row_alone_does_not_move_the_arrival_time(self):
         # 배치는 리드가 없으면 news_document 를 안 만든다 → document 만 있는 문서가 있다.

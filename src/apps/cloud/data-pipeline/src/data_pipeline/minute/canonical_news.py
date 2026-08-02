@@ -23,19 +23,22 @@ t2  J2 실행 → T1 을 읽어 추출 → 결과가 fp2 job 의 성공으로 �
 생산자가 다른 규칙으로** 쓰게 되고(제목 공백 정규화·리드 출처·언어 파생), 그 차이는 조용히
 다운스트림 dedup·프롬프트 입력을 갈라놓는다.
 
-⚠️ **시각 축 계약**: `available_at` 은 **실제 처리 시각**(주입 clock)이고 **정정과 함께
-움직인다**. 창 시각을 쓰면 recovery 가 12:00 에 안 기사를 09:00 으로 소급하고, 정정 때
-동결하면 내용은 T2 인데 시각은 T1 이라 as-of 조회가 미래 내용을 본다 — 둘 다 이 값을 PIT
-축으로 복사하는 하류(`load_assertions`·`assemble_events`)에서 조용히 틀린다. 대신 낡은
-관측이 최신 본문을 되돌리지 못하게 신선도 가드를 **두 겹**으로 건다: 행을 잠그고 한 번
-판정하고(두 테이블이 그 판정을 공유한다 — 따로 걸면 제목/리드가 갈린 행이 남는다),
-`ON CONFLICT` WHERE 에도 `available_at <=` 를 남긴다. ⚠️ `FOR UPDATE` 는 **아직 없는 키를
-잠그지 못하므로**(gap 은 안 잠긴다) 잠금만으로는 동시 최초 INSERT 경합을 못 막는다.
-낡은 관측(저장된 쪽이 더 최신)은 **그 레코드만 건너뛴다** — 예외로 올리면 commit
-트랜잭션이 통째로 롤백돼 그 창의 다른 기사·원장·job 까지 날아가고, 배치의
-`available_at = fetched_at or published_at` 이 미래 발행일을 싣는 정상 상황에서도 난다.
-건너뛰어도 안전한 이유는 그때 Consumer 가 읽을 행이 **더 최신 본문**이라 이 모듈이 막으려는
-P1(옛 텍스트를 읽음)이 아니기 때문이다. 조용하지 않게 ERROR 로 남긴다.
+⚠️ **시각 축 계약 — 내용은 최신 관측을 따르고, 시각은 단조 증가한다.**
+
+`available_at` 은 **실제 처리 시각**(주입 clock)이다. 창 시각을 쓰면 recovery 가 12:00 에
+안 기사를 09:00 으로 소급한다. 그리고 **정정과 함께 앞으로 움직인다** — 동결하면 내용은 T2
+인데 시각은 T1 이라, 이 값을 PIT 축으로 복사하는 하류(`load_assertions`·`assemble_events`)
+에서 as-of 조회가 미래 내용을 본다.
+
+⚠️⚠️ 저장된 시각으로 **내용 쓰기를 막지 않는다**(한때 그렇게 했다가 되돌렸다). 시각은
+내용 신선도의 대리 지표가 아니기 때문이다 — 배치는 `available_at = fetched_at or
+published_at` 이라 `fetched_at` 결손 시 **미래 발행일**을 싣는다. 그러면 "시각은 미래인데
+내용은 옛것(T1)"인 행이 생기고, 시각만 보고 건너뛰면 원장은 fp2 를 확정했는데 Consumer 는
+T1 을 읽는다 — 이 모듈이 막으려던 P1 그대로다. 그래서 규칙을 둘로 나눈다:
+
+- **내용**(제목·발행시각·URL·언어·리드)은 이번 관측 값으로 쓴다. 1분 경로의 관측은 라이브
+  소스의 현재 상태다.
+- **시각**은 `GREATEST` 로 앞으로만 간다. 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다.
 
 ⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
 
@@ -137,24 +140,7 @@ class PgNewsCanonicalWriter:
             (source_code, article_id),
         )
         current = cur.fetchone()
-        if current is not None and current[0] > observed_at:
-            # 저장된 시각이 내 관측보다 **미래**다 = 내 관측이 낡았다. 이때 건너뛰는 건
-            # 안전하다 — Consumer 가 읽을 행은 더 **최신** 본문이라, 이 모듈이 막으려는
-            # P1(옛 텍스트를 읽는 것)이 아니다.
-            # ⚠️ 예외로 올리지 않는 이유: 이 raise 는 `commit_news_window` 트랜잭션을
-            # 통째로 롤백시켜 **그 window 의 다른 기사·원장·job 까지 날린다**(레코드 하나가
-            # 창 전체를 세운다). 게다가 정상 상황에서도 난다 — 배치의
-            # `available_at = fetched_at or published_at` 은 미래 발행일을 그대로 싣는다.
-            # 조용하지도 않게: ERROR 로 남겨 EOD QC 가 세는 축(원장 상태)과 함께 보이게 한다.
-            logger.error(
-                "낡은 관측이라 canonical 을 건드리지 않는다(저장된 쪽이 더 최신): "
-                "(%s, %s) 관측=%s 저장=%s",
-                source_code, article_id, observed_at, current[0],
-            )
-            return 0
-        # 리드 **변경** 판정의 기준값. 자식 행이 없던 문서(배치가 리드 없이 넣은 경우)에
-        # NULL 리드를 처음 만드는 건 내용 변경이 아니다 — rowcount 만 보면 1 이라
-        # 안 바뀐 문서의 도착 시각을 앞으로 밀고, 그러면 과거 as-of 구간에서 문서가 사라진다.
+        previous_available_at = None if current is None else current[0]
         previous_lead = current[1] if current is not None else None
 
         cur.execute(
@@ -168,12 +154,13 @@ class PgNewsCanonicalWriter:
                 published_at = EXCLUDED.published_at,
                 source_uri = EXCLUDED.source_uri,
                 language_code = EXCLUDED.language_code,
-                available_at = EXCLUDED.available_at
-            WHERE document.available_at <= EXCLUDED.available_at
-              AND (document.title IS DISTINCT FROM EXCLUDED.title
-                   OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
-                   OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
-                   OR document.language_code IS DISTINCT FROM EXCLUDED.language_code)
+                -- 시각은 **단조 증가**만 한다. 뒤로 밀면 과거 as-of 구간에서 문서가
+                -- 사라지고, 앞으로만 가면 정정이 제때 드러난다.
+                available_at = GREATEST(document.available_at, EXCLUDED.available_at)
+            WHERE document.title IS DISTINCT FROM EXCLUDED.title
+               OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
+               OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
+               OR document.language_code IS DISTINCT FROM EXCLUDED.language_code
             """,
             (
                 document_id, source_code, article_id,
@@ -198,15 +185,11 @@ class PgNewsCanonicalWriter:
             INSERT INTO news_document (document_id, lead_text)
             SELECT document_id, %s FROM document
             WHERE source_code = %s AND source_document_id = %s
-              AND available_at <= %s
             ON CONFLICT (document_id) DO UPDATE
             SET lead_text = EXCLUDED.lead_text
             WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text
             """,
-            # ⚠️ 부모와 **같은 가드**다. 동시 최초 INSERT 로 남이 더 최신 문서를 먼저 넣으면
-            # 부모 upsert 는 가드에 막히는데 자식만 덮여, 남의 제목·시각에 내 옛 리드가
-            # 붙은 **혼합 행**이 된다(잠금은 없는 키를 못 잠가 이 경로가 열려 있었다).
-            (normalized["lead_text"], source_code, article_id, observed_at),
+            (normalized["lead_text"], source_code, article_id),
         )
         # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다 — **값**으로 본다.
         # 자식 행이 없던 문서(배치가 리드 없이 넣은 형상)의 previous_lead 는 None 이므로,
@@ -216,17 +199,13 @@ class PgNewsCanonicalWriter:
         if lead_changed and not changed:
             # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
             # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
-            # ⚠️ **여기에도 같은 가드가 필요하다.** 이 함수에서 available_at 을 쓰는 경로는
-            # 셋이고(부모 upsert·자식 upsert·이 보정), 하나라도 빼면 그 경로로 낡은 값이
-            # 들어온다. 특히 부모가 가드에 막힌 경우(남이 더 최신 행을 먼저 넣었다)
-            # `changed=0` 인데 `lead_changed` 는 내 스냅샷 기준으로 참이라, 가드가 없으면
-            # 이 UPDATE 가 **최신 문서의 시각을 뒤로 되돌린다**.
+            # ⚠️ 여기도 **단조**다 — available_at 을 쓰는 경로가 셋이라(부모·자식·이 보정)
+            # 한 곳만 규칙이 달라도 그 경로로 시각이 뒤로 간다.
             cur.execute(
                 """
-                UPDATE document SET available_at = %s
+                UPDATE document SET available_at = GREATEST(available_at, %s)
                 WHERE source_code = %s AND source_document_id = %s
-                  AND available_at <= %s
                 """,
-                (observed_at, source_code, article_id, observed_at),
+                (observed_at, source_code, article_id),
             )
         return 1 if (changed or lead_changed) else 0
