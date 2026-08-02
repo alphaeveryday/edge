@@ -54,6 +54,11 @@ function SessionCard({ s }: { s: MinuteSession }) {
   const live = liveness(s);
   const w = s.windows;
   const evidenced = w.valid + w.validEmpty + w.incomplete + w.invalid;
+  /* 항등식: 기대 창 수 = materialize 된 창 행 수여야 한다. 행 자체가 없는 창은 어떤 집계
+   * (무증거 포함)에도 안 잡히므로, 불일치를 명시하지 않으면 materialize 결손이 "무증거 0"
+   * 으로 보인다(리뷰 2라운드 — 뉴스 계보의 UNACCOUNTED 와 같은 규칙) */
+  const materialized =
+    w.due + w.claimed + w.valid + w.validEmpty + w.incomplete + w.missing + w.invalid;
   return (
     <div className="card">
       <div className="card-head">
@@ -80,6 +85,13 @@ function SessionCard({ s }: { s: MinuteSession }) {
         {/* 기한 전 DUE/CLAIMED — 아직 판정 대상이 아닌 정상 대기 */}
         {' · '}대기 {w.due + w.claimed - w.overdueNoEvidence}개
       </p>
+      {materialized !== s.expectedWindowCount && (
+        <p className="t-xs m-0" style={{ color: 'var(--bad, #dc2626)', marginTop: 4 }}>
+          ⚠️ 원장 불일치 — 기대 창 {s.expectedWindowCount}개 vs 실재 {materialized}개. 행이
+          없는 창은 어떤 집계에도 안 잡힌다(materialize 결손 후보 — 위 숫자들을 그대로 믿지
+          말 것).
+        </p>
+      )}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
         연속 완결 워터마크 {fmtTime(s.contiguousCompleteThrough)} · 마지막 기록{' '}
         {fmtTime(s.processedThrough)} · 가격 job: <JobCells jobs={s.priceJobs} />

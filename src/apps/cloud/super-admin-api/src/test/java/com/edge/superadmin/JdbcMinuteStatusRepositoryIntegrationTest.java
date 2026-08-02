@@ -90,9 +90,12 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertPriceJob("job-c", "sess-t", PAST.plusMinutes(1), "CLAIMED");
 		jdbc.update("UPDATE price_window_job SET lease_expires_at = ? WHERE job_id = 'job-c'",
 				PAST);
-		// 뉴스 job 은 created_at 의 KST 날짜 축 — 8/3 00:10 KST = 8/2 15:10 UTC 경계를 일부러 밟는다.
-		insertNewsJob("nj-in", "2026-08-02T15:10:00Z", "DEAD");
+		// 뉴스 job 은 created_at 의 KST 날짜 축 — 반개구간 경계 자체를 밟는다: 8/3 00:00:00
+		// KST 정각(= 8/2 15:00 UTC)은 포함(>=), 8/4 00:00:00 KST 정각은 배제(<)여야 한다.
+		// 연산자가 >/<= 로 회귀하면 정각 job 이 누락되거나 양쪽 날짜에 중복 집계된다.
+		insertNewsJob("nj-in", "2026-08-02T15:00:00Z", "DEAD");
 		insertNewsJob("nj-out", "2026-08-02T14:50:00Z", "SUCCEEDED"); // = 8/2 23:50 KST
+		insertNewsJob("nj-next", "2026-08-03T15:00:00Z", "DEAD"); // = 8/4 00:00 KST 정각
 
 		MinuteStatus status = repository.status(DAY);
 
