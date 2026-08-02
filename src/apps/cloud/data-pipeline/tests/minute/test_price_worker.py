@@ -62,6 +62,9 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
             worker_id=worker_id, dataset="price_minute", source="toss", market="KR",
             session_date="2026-07-31", universe=universe, run_id="run_t",
             trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            # 만료 시나리오를 61초 점프로 검증하는 픽스처라 명시한다 — 운영 기본값은
+            # 토스 tick 상한(73초+) 위로 올라갔다(ALPHA-706)
+            lease_seconds=60,
         ),
     )
     return worker, ledger, session_id
@@ -494,3 +497,112 @@ class TestManifestVocabulary:
         worker.collector = MiscountingCollector()
         assert worker.tick(NOW) == "WINDOW_FAILED"
         assert all(w["checksum"] is None for w in db.windows.values())
+
+
+class TestPriceWorkerCli:
+    """진입점의 fail-loud + bounded 확인 게이트 (ALPHA-706, relay_cli 동형)."""
+
+    def _options(self, **overrides):
+        from types import SimpleNamespace
+        base = dict(
+            client_id="cid", client_secret="secret", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2,
+            tick_seconds=0.0,
+        )
+        return SimpleNamespace(**{**base, **overrides})
+
+    def _settings(self, *, db=None, options=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(db=db, minute_price_worker=options, storage=None)
+
+    def test_missing_db_fails_loud(self):
+        from data_pipeline.minute.worker import price_worker_cli
+        with pytest.raises(SystemExit, match="db 설정 없음"):
+            price_worker_cli(self._settings(options=self._options()),
+                             session_date=None, universe="u.json")
+
+    def test_missing_worker_config_fails_loud(self):
+        from data_pipeline.minute.worker import price_worker_cli
+        with pytest.raises(SystemExit, match="minute_price_worker 설정 없음"):
+            price_worker_cli(self._settings(db=_DB), session_date=None, universe="u.json")
+
+    def test_missing_credentials_fail_loud(self):
+        # env 주입 누락은 첫 벤더 호출이 아니라 기동에서 죽어야 배포 시점에 드러난다
+        from data_pipeline.minute.worker import price_worker_cli
+        with pytest.raises(SystemExit, match="자격증명 없음"):
+            price_worker_cli(
+                self._settings(db=_DB, options=self._options(client_secret=None)),
+                session_date=None, universe="u.json",
+            )
+
+    def test_missing_universe_fails_loud(self):
+        # universe 없이 뜨면 원장과 다른 기대 집합으로 도는 게 아니라 아예 못 뜬다
+        from data_pipeline.minute.worker import price_worker_cli
+        with pytest.raises(SystemExit, match="--universe 필요"):
+            price_worker_cli(self._settings(db=_DB, options=self._options()),
+                             session_date=None, universe=None)
+
+    def test_bad_session_date_fails_loud(self, tmp_path):
+        from data_pipeline.minute.worker import price_worker_cli
+        with pytest.raises(SystemExit, match="session-date 형식 오류"):
+            price_worker_cli(self._settings(db=_DB, options=self._options()),
+                             session_date="2026-W01-1", universe="u.json")
+
+    def _universe_file(self, tmp_path):
+        import json
+        path = tmp_path / "universe.json"
+        path.write_text(json.dumps({
+            "universe_version": UNIVERSE.universe_version,
+            "etf_ids": list(UNIVERSE.etf_ids),
+            "constituent_ids": list(UNIVERSE.constituent_ids),
+        }), encoding="utf-8")
+        return str(path)
+
+    def test_absent_session_fails_loud(self, tmp_path, monkeypatch):
+        # 세션 없이 뜨면 fence 획득이 조용히 실패해 빈 폴링만 돈다 — 기동 거부가 맞다
+        from data_pipeline.minute.worker import price_worker_cli
+        db = FakeMinuteDB()
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteLedger",
+                            lambda db=None: MinuteLedger(db=_DB, connect_fn=FakeMinuteDB().connect))
+        with pytest.raises(SystemExit, match="세션 없음"):
+            price_worker_cli(
+                self._settings(db=_DB, options=self._options()),
+                session_date="2026-07-31", universe=self._universe_file(tmp_path),
+            )
+
+    def test_bounded_run_processes_windows(self, tmp_path, monkeypatch):
+        # planner 와 같은 universe 파일 → 결정적 session_id 유도 → window 처리까지
+        # 한 번에 확인한다. WINDOW_FAILED 0 이면 exit 0.
+        from data_pipeline.minute.worker import price_worker_cli
+        db = FakeMinuteDB()
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
+            windows=planned[:3],
+        )
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteLedger",
+                            lambda db=None: MinuteLedger(db=_DB, connect_fn=db_.connect))
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteCommitter",
+                            lambda db=None: MinuteCommitter(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage",
+                            lambda config: LocalStorage(root=tmp_path))
+        monkeypatch.setattr("data_pipeline.sources.toss.TossOpenApiClient",
+                            lambda client_id, client_secret: object())
+        monkeypatch.setattr(
+            "data_pipeline.minute.toss_collector.TossPriceCollector",
+            lambda client, lookback: FakePriceCollector({"scenario": "normal"}, seed=42),
+        )
+        code = price_worker_cli(
+            self._settings(db=_DB, options=self._options()),
+            session_date=SESSION_DATE.isoformat(), universe=self._universe_file(tmp_path),
+            max_ticks=2,
+        )
+        assert code == 0
+        assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
+        keys = [k for k in LocalStorage(root=tmp_path).list_keys("") if k.endswith("bars.ndjson")]
+        assert len(keys) == 3  # canonical 존에 artifact 가 실제로 남았다

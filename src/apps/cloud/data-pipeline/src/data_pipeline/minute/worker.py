@@ -65,7 +65,11 @@ class WorkerConfig:
     run_id: str
     trigger_schema_version: str
     destination: str
-    lease_seconds: int = 60
+    # ⚠️ window claim lease 는 **tick 상한보다 길어야** 한다 — 토스 실측 tick 은 73초+
+    # (363종 ÷ 초당 5회)라, 60 으로 두면 자기 claim 이 in-flight 중 만료돼 recovery
+    # lane 이 같은 window 를 재청구하고 원래 attempt 의 commit 이 거부된다(ALPHA-706).
+    # 짧은 lease 로 만료를 검증하는 테스트는 이 값을 명시적으로 넘긴다.
+    lease_seconds: int = 300
     session_lease_seconds: int = 300
     heartbeat_every_seconds: int = 60
     recovery_budget_per_tick: int = 2
@@ -383,3 +387,134 @@ class PriceWorker(MinuteWorkerLoop):
                 "window %s 처리 실패 — lease 만료 후 재시도된다", claim["window_start"]
             )
             return False
+
+
+def price_worker_cli(settings, *, session_date: str | None, universe: str | None,
+                     max_ticks: int | None = None) -> int:
+    """상주 Price Worker 진입점 — `python -m data_pipeline.run price-worker` (ECS Service).
+
+    relay_cli 와 같은 계약이다: SIGTERM/SIGINT 는 진행 중 tick 을 끊지 않고 tick 경계에서
+    멈추며(fence lease 즉시 반납 — 교체 Worker 무대기 인계), DB 오류는 여기서 잡지 않는다 —
+    삼키면 수집이 멈춘 걸 아무도 모른 채 프로세스만 살아 있다. 전파시켜 task 를 죽이면
+    ECS 가 재기동하고, 잡힌 claim 은 lease 만료로 회수된다.
+
+    session identity 는 조회가 아니라 **결정적 유도**다(원장의 stable_domain_id 규칙과
+    동일) — 설정 source 가 원장의 source_group 과 갈리면 유도된 session_id 의 행이 없어
+    기동이 거부된다(시작 시점 오배선 차단. in-flight 대조는 ALPHA-700).
+
+    `--max-ticks` 는 로컬 확인용 상한 — WINDOW_FAILED 가 하나라도 있으면 1 로 끝난다.
+    """
+    import os
+    import signal
+    import socket
+    import time
+    from datetime import timezone
+    from pathlib import Path
+
+    from ..db import stable_domain_id
+    from ..lake.storage import make_storage
+    from ..sources.toss import TossOpenApiClient
+    from .models import load_universe
+    from .states import DATASET_PRICE_MINUTE
+    from .toss_collector import TossPriceCollector
+
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — price-worker 는 1분 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    options = settings.minute_price_worker
+    if options is None:
+        raise SystemExit(
+            "minute_price_worker 설정 없음 — 토스 자격증명 필수"
+            "(DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/__CLIENT_SECRET 주입)"
+        )
+    if not options.client_id or not options.client_secret:
+        raise SystemExit(
+            "토스 자격증명 없음 — DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/"
+            "__CLIENT_SECRET 를 env 로 주입한다(커밋되는 TOML 금지)"
+        )
+    if not universe:
+        raise SystemExit(
+            "--universe 필요 — planner(plan-minute-session)와 **같은 파일**이어야 원장의 "
+            "universe 와 일치한다(갈리면 Worker 가 처리를 거부한다 — _session_ready)"
+        )
+    day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
+    try:
+        # strptime 고정 — date.fromisoformat 은 3.11+ 에서 주 날짜(2026-W01-1)를 다른
+        # 연도로 읽는다(session_cli 와 같은 이유)
+        parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
+    except ValueError:
+        raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
+    universe_model = load_universe(Path(universe))
+    session_id = stable_domain_id(
+        "msn", DATASET_PRICE_MINUTE, options.source, parsed_day.isoformat()
+    )
+    ledger = MinuteLedger(db=settings.db)
+    if ledger.session_snapshot(session_id=session_id) is None:
+        # 세션이 없으면 fence 획득이 조용히 실패해 빈 폴링만 돈다 — 기동을 거부해
+        # ECS 재기동(backoff)이 planner 이후를 재시도하게 한다(fail loud).
+        raise SystemExit(
+            f"세션 없음: {DATASET_PRICE_MINUTE}/{options.source}/{parsed_day} — "
+            "plan-minute-session 이 먼저 돌아야 한다"
+        )
+    worker_id = f"pw-{socket.gethostname()}-{os.getpid()}"
+    worker = PriceWorker(
+        session_id=session_id,
+        ledger=ledger,
+        committer=MinuteCommitter(db=settings.db),
+        storage=make_storage(settings.storage),
+        collector=TossPriceCollector(
+            client=TossOpenApiClient(
+                client_id=options.client_id, client_secret=options.client_secret
+            ),
+            lookback=options.lookback,
+        ),
+        config=WorkerConfig(
+            worker_id=worker_id,
+            dataset=DATASET_PRICE_MINUTE,
+            source=options.source,
+            # 1분 트랙은 KR 전용이다 — 인자로 열면 오타가 다른 prefix 에 쓴다(eod._MARKET
+            # 과 같은 이유). 다른 시장이 생기면 원장 컬럼에서 유도한다.
+            market="KR",
+            session_date=parsed_day.isoformat(),
+            universe=universe_model,
+            run_id=worker_id,
+            trigger_schema_version=options.trigger_schema_version,
+            destination=options.destination,
+            lease_seconds=options.lease_seconds,
+            session_lease_seconds=options.session_lease_seconds,
+            heartbeat_every_seconds=options.heartbeat_every_seconds,
+            recovery_budget_per_tick=options.recovery_budget_per_tick,
+        ),
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        # 진행 중 window 를 끊지 않는다 — 다음 tick 경계에서 fence lease 를 반납하고 정지
+        signal.signal(received, lambda *_: worker.request_stop())
+    logger.info("price-worker 시작: session=%s worker=%s", session_id, worker_id)
+    ticks = 0
+    failed = 0
+    while max_ticks is None or ticks < max_ticks:
+        state = worker.tick(datetime.now(timezone.utc))
+        ticks += 1
+        failed += state == "WINDOW_FAILED"
+        if state == "STOPPED":
+            if worker.stopping:
+                logger.info(
+                    "price-worker 종료(SIGTERM) — %d tick, WINDOW_FAILED %d", ticks, failed
+                )
+                # 상주 모드의 SIGTERM 은 정상 종료다. bounded 모드는 확인 게이트라
+                # 끝까지 돌지 못한 것이므로 성공으로 보고하지 않는다(relay_cli 동형).
+                return 0 if max_ticks is None else 1
+            # fence 미획득(경쟁 lease 잔존) 또는 설정 불일치(_session_ready) — 죽지 않고
+            # 다음 tick 을 기다린다: crash 잔존 lease 는 session_lease 만료로 풀리고,
+            # 불일치 중에도 drain 관측을 유지해야 세션이 DRAINING 에 고착되지 않는다.
+            time.sleep(options.tick_seconds)
+            continue
+        if state == "DRAINED":
+            # 세션이 끝났다 — EOD 로 넘어간 정상 종료. 재기동해도 할 일이 없다.
+            logger.info(
+                "price-worker 종료(DRAINED) — %d tick, WINDOW_FAILED %d", ticks, failed
+            )
+            return 0
+        if state in ("IDLE", "DRAINING"):
+            time.sleep(options.tick_seconds)
+    logger.info("price-worker 종료(max-ticks %d) — WINDOW_FAILED %d", ticks, failed)
+    return 1 if failed else 0

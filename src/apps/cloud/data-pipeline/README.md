@@ -926,6 +926,16 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # exit: 0=확정 / 1=원장이 스스로와 모순(사람이 봐야 한다) / 2=판정 자체를 못 함(재시도 가능).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run qc-minute-session --session-id <session_id>
+# 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
+# 있어야 하고(위 plan-minute-session), `--universe` 는 planner 와 **같은 파일**이어야
+# 원장과 일치한다(갈리면 Worker 가 처리를 거부한다). SIGTERM 은 tick 경계에서 멈추고
+# fence lease 를 즉시 반납한다(교체 무대기 인계). `--session-date` 미지정=오늘(KST).
+# `--max-ticks` 는 로컬 확인용 — WINDOW_FAILED 가 있으면 exit 1.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-open-v1 \
+  python -m data_pipeline.run price-worker --universe /path/universe.json
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
