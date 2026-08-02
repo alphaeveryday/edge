@@ -49,6 +49,7 @@ from .engine import EdgeDesign, EdgeResult, arithmetic_gate, estimate
 N_HYPOTHESES = 3
 # 결과 산포를 잴 대조 표본의 하한. 이보다 적으면 E-value 의 분모가 잡음이다.
 _SD_MIN = 30
+
 # 참조집합에 들어오면 안 되는 컬럼. `cd.universe` 는 종목 속성만 받고 날짜는 코드가
 # 창으로 붙인다 - 모델이 여기 `trade_date` 를 박으면 창이 하루로 접힌다.
 _NOT_UNIVERSE = r"\b(?:" + "|".join(
@@ -58,7 +59,7 @@ _NOT_UNIVERSE = r"\b(?:" + "|".join(
 def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: date,
             as_of: str, observed: float, route_code: str,
             contributors: list[tuple[str, float]], candidates: list[dict],
-            window_days: int = 60, industry: dict | None = None,
+            window_days: int = 365, industry: dict | None = None,
             grounded: set[str] | None = None, sandbox: bool = True,
             docs=None, sql=None, registry_root=None) -> dict[str, Any]:
     """한 셀의 인과 설명. `Explanation.raw` 계약에 맞는 dict 를 돌려준다.
@@ -71,6 +72,11 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     실행 불가가 되므로 주장 상한이 자동으로 내려간다.
     """
     w1 = trade_date
+    # 이 창은 **검정 코호트가 쌓이는 범위**다(지문·P0 는 쓰지 않는다). 60일이 기본이던
+    # 동안 같은 타입 사건이 몇 건 없어 매 런 `G2 n=1 < 30 (scope=type)` 으로 죽었다
+    # (2026-08-01 연속 실측). 브리프도 게이트도 "창을 넓혀라"라고 말하지만 모델은
+    # 기본값을 그대로 쓴다 - 그러면 기본값이 틀린 것이다. PIT 는 `as_of` 가 잡으므로
+    # 과거로 넓히는 것은 안전하다(미래는 뷰가 이미 잘라 놓는다).
     w0 = date.fromordinal(max(trade_date.toordinal() - window_days, 1))
 
     # P0 ─ 반사실을 먼저 정의한다
