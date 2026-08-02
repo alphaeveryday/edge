@@ -11,9 +11,9 @@ from datetime import date, datetime, timedelta, timezone
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_ETF_TICKER = "091160"
-# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 계열은 thinking 기본 ON 이라
+# deepseek-chat 은 2026-07-24 폐기 → v4. v4 계열은 thinking 기본 ON 이라
 # complete_json 이 thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 class PipelineError(RuntimeError):
