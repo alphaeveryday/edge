@@ -37,23 +37,29 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 기한_지난_DUE와_CLAIMED는_MISSING_판정_전이라도_무증거로_센다() {
 		insertSession("sess-p", "price_minute", "toss", DAY, "ACTIVE");
-		// 과거 창 4: 무증거 DUE(죽은 실행체의 흔적) · 무증거 CLAIMED(claim 만 있고 커밋 없음
-		// — DUE 만 세면 이 유형이 사라진다) · 빈 데이터(VALID_EMPTY) · VALID.
+		// 과거 창 5: 무증거 DUE(죽은 실행체의 흔적) · 무증거 CLAIMED(lease NULL — claim 흔적만
+		// 있고 유효 lease 없음, DUE 만 세면 이 유형이 사라진다) · live lease CLAIMED(방금 닫힌
+		// 창을 정상 수집 중 — 무증거로 세면 매분 오탐, 봇 P2) · 빈 데이터(VALID_EMPTY) · VALID.
 		// 미래 창 1: DUE 지만 아직 기한 전 — 무증거로 세면 정상 진행이 상시 결함이 된다.
 		insertWindow("sess-p", PAST, "DUE");
-		insertWindow("sess-p", PAST.plusMinutes(1), "CLAIMED");
-		insertWindow("sess-p", PAST.plusMinutes(2), "VALID_EMPTY");
-		insertWindow("sess-p", PAST.plusMinutes(3), "VALID");
+		insertWindow("sess-p", PAST.plusMinutes(1), "CLAIMED"); // lease NULL
+		insertWindow("sess-p", PAST.plusMinutes(2), "CLAIMED");
+		jdbc.update("""
+				UPDATE minute_ingestion_window SET lease_expires_at = now() + interval '5 minutes'
+				WHERE session_id = 'sess-p' AND window_start = ?
+				""", PAST.plusMinutes(2));
+		insertWindow("sess-p", PAST.plusMinutes(3), "VALID_EMPTY");
+		insertWindow("sess-p", PAST.plusMinutes(4), "VALID");
 		insertWindow("sess-p", OffsetDateTime.now(ZoneOffset.UTC).plusHours(2), "DUE");
 
 		SessionSummary s = repository.status(DAY).sessions().get(0);
 
 		assertThat(s.windows().due()).isEqualTo(2);
-		assertThat(s.windows().claimed()).isEqualTo(1);
+		assertThat(s.windows().claimed()).isEqualTo(2);
 		assertThat(s.windows().overdueNoEvidence()).isEqualTo(2);
 		assertThat(s.windows().validEmpty()).isEqualTo(1);
 		assertThat(s.windows().missing()).isZero();
-		// 근거 목록엔 무증거 창만 있고, 기한 전 DUE·VALID_EMPTY 는 결손이 아니다.
+		// 근거 목록엔 무증거 창만 있다 — 기한 전 DUE·VALID_EMPTY·live claim 은 결손이 아니다.
 		assertThat(s.gaps()).hasSize(2);
 		// JDBC 가 돌려주는 offset(세션 TZ)은 계약이 아니다 — 시각(instant)만 단언한다.
 		assertThat(s.gaps().get(0).windowStart().toInstant()).isEqualTo(PAST.toInstant());

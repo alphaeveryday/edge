@@ -38,9 +38,20 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			""";
 
 	/**
-	 * {@code overdue_no_evidence}: 기한({@code window_end})이 지났는데 아직 DUE/CLAIMED 인 창.
-	 * MISSING 은 EOD QC 가 매기므로 장중의 결손은 이 파생으로만 보인다 — MISSING 만 세면
-	 * 죽은 실행체가 결손 0 으로 보인다(인터페이스 주석의 방향 점검).
+	 * 무증거 술어 — 기한({@code window_end})이 지난 DUE, 또는 <b>유효한 lease 가 없는</b>
+	 * CLAIMED(만료·NULL — writer 의 재청구 조건과 동일 집합). live lease 의 CLAIMED 는
+	 * 방금 닫힌 창을 정상 수집 중인 상태라 무증거로 세면 매분 오탐이 깜빡인다(봇 P2).
+	 * 두 SQL 이 같은 술어를 써야 집계와 근거 목록이 어긋나지 않는다.
+	 */
+	private static final String NO_EVIDENCE_PREDICATE = """
+			((w.data_status = 'DUE'
+			  OR (w.data_status = 'CLAIMED'
+			      AND (w.lease_expires_at IS NULL OR w.lease_expires_at < now())))
+			 AND w.window_end <= now())""";
+
+	/**
+	 * {@code overdue_no_evidence}: MISSING 은 EOD QC 가 매기므로 장중의 결손은 이 파생으로만
+	 * 보인다 — MISSING 만 세면 죽은 실행체가 결손 0 으로 보인다(인터페이스 주석의 방향 점검).
 	 */
 	private static final String WINDOW_COUNTS_SQL = """
 			SELECT w.session_id,
@@ -51,8 +62,9 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			       count(*) FILTER (WHERE w.data_status = 'INCOMPLETE')  AS incomplete,
 			       count(*) FILTER (WHERE w.data_status = 'MISSING')     AS missing,
 			       count(*) FILTER (WHERE w.data_status = 'INVALID')     AS invalid,
-			       count(*) FILTER (WHERE w.data_status IN ('DUE','CLAIMED')
-			                          AND w.window_end <= now())         AS overdue_no_evidence
+			       count(*) FILTER (WHERE
+			""" + NO_EVIDENCE_PREDICATE + """
+			       ) AS overdue_no_evidence
 			  FROM minute_ingestion_window w
 			  JOIN minute_ingestion_session s ON s.session_id = w.session_id
 			 WHERE s.session_date = ?
@@ -66,12 +78,15 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	 */
 	private static final String GAPS_SQL = """
 			SELECT w.session_id, w.window_start, w.window_end, w.data_status,
-			       (w.data_status IN ('DUE','CLAIMED') AND w.window_end <= now()) AS no_evidence
+			""" + NO_EVIDENCE_PREDICATE + """
+			       AS no_evidence
 			  FROM minute_ingestion_window w
 			  JOIN minute_ingestion_session s ON s.session_id = w.session_id
 			 WHERE s.session_date = ?
 			   AND (w.data_status IN ('MISSING','INCOMPLETE','INVALID')
-			        OR (w.data_status IN ('DUE','CLAIMED') AND w.window_end <= now()))
+			        OR
+			""" + NO_EVIDENCE_PREDICATE + """
+			       )
 			 ORDER BY w.session_id, w.window_start
 			""";
 
