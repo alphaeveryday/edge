@@ -50,6 +50,15 @@ class CanonicalWriter(Protocol):
 
     upsert 는 자연키 멱등이어야 하고(재실행 no-op), 주어진 cursor 의 트랜잭션 안에서만
     쓴다(커넥션을 새로 열면 commit 원자성이 깨진다).
+
+    ⚠️ **뉴스 구현체는 정정을 반드시 반영해야 한다**(ALPHA-691). 같은 자연키에 본문이
+    바뀌어 들어오면 제목·발행시각·리드를 **갱신**해야 한다 — 배치 `load_documents` 는
+    `ON CONFLICT DO NOTHING` 이라 제목·발행시각을 영영 안 고치고 리드도 비어 있지 않을
+    때만 덮는다. 그 형태를 그대로 쓰면, 정정으로 생긴 새 job(새 `input_fingerprint`)이
+    **옛 본문을 읽어** 추출하고 SUCCEEDED 로 확정된다: 원장은 새 지문을 처리했다고
+    말하는데 결과는 옛 텍스트의 것이고, 그 기사는 다시 job 이 생기지 않아 정정이 영영
+    태깅되지 않는다(2026-08-02 봇 리뷰 P1). Consumer 는 이걸 탐지할 수 없다 —
+    읽은 본문이 그 지문의 것인지 확인할 방법이 없기 때문이다(`minute/news_consumer.py`).
     """
 
     def upsert_tx(self, cur, *, dataset: str, window_start: datetime,

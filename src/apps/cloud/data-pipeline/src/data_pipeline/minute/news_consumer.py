@@ -117,6 +117,14 @@ class PgArticleReader:
     `document.source_document_id` = canonical `article_id`, `document.source_code` =
     canonical `source_vendor` 다(load_documents 의 INSERT 가 정본). 뉴스만 본다 —
     같은 자연키에 공시 행이 있을 수 있고, 그걸 뉴스 프롬프트에 넣으면 조용히 품질이 무너진다.
+
+    ⚠️ **이 리더는 행이 최신이라고 가정한다 — 그 보증은 쓰는 쪽에 있다**(ALPHA-691).
+    지금 이 테이블을 채우는 배치 `load_documents` 는 `ON CONFLICT DO NOTHING` 이라
+    제목·발행시각을 첫 관측값으로 고정하고 리드도 비어 있지 않을 때만 덮는다. 그 상태로
+    정정 기사가 오면 새 job(새 지문)이 **옛 본문을 읽어** 성공한다. 여기서는 막을 수
+    없다 — 읽은 본문이 그 지문의 것인지 확인할 수단이 없기 때문이다(모듈 docstring).
+    그래서 결과에 `prompt_input_checksum` 을 실어 **사후 판별만** 가능하게 해 두고,
+    예방은 `CanonicalWriter` 뉴스 구현체의 계약으로 넘긴다.
     """
 
     db: DbConfig
