@@ -45,6 +45,12 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_segment_fact",     "hive", "canonical/disclosures/business_segment_fact"),
     ("s3_supply_fact",      "hive", "canonical/disclosures/supply_contract_fact"),
     ("s3_assertions",       "hive", "feature/news/assertions"),
+    # 20R 오픈소스 수집분 - 표현력 측정이 가리킨 비-뉴스 방아쇠를 메운다.
+    ("s3_fx_daily",         "hive", "canonical/market_data/fx_daily"),
+    ("s3_index_daily",      "hive", "canonical/market_data/index_daily"),
+    ("s3_rates_daily",      "hive", "canonical/market_data/rates_daily"),
+    ("s3_analyst_target",   "hive", "canonical/reports/analyst_target"),
+    ("s3_rating_dist",      "hive", "canonical/reports/rating_distribution"),
     ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
     ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
     ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),

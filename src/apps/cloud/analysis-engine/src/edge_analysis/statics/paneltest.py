@@ -223,6 +223,57 @@ def _unmeasurable(reason: str) -> EdgeReport:
     return EdgeReport("판정불가", 0, None, None, None, None, reason=reason)
 
 
+# 거시 계열의 혁신 (20R). 표현력 측정이 '환율 급등'·'전일 미국 반도체 지수 하락'을
+# 방아쇠로 요구했는데 어휘엔 `거시` 가 있고 계산기가 없었다 - 어휘 확장이 아니라
+# 계산기 확장이 답이다(상류 온톨로지 무관).
+#
+# **왜 직전 거래일인가**: 미국 종가의 available_at 은 KST 익일 05:00 이다. 한국 09:00
+# 개장 전에 알려지므로 오늘 셀이 쓸 수 있다 - 그리고 오늘자 미국 종가는 아직 없다.
+# 환율도 같은 창을 쓴다(뉴욕 세션 종료 기준).
+_MACRO_Z = """
+WITH m AS (
+    SELECT trade_date, 'index/' || symbol AS series, change_pct FROM s3_index_daily
+    UNION ALL
+    SELECT trade_date, 'fx/' || symbol, change_pct FROM s3_fx_daily
+    UNION ALL
+    SELECT trade_date, 'rate/10y', year10 - lag(year10) OVER (ORDER BY trade_date)
+    FROM s3_rates_daily
+),
+w AS (
+    SELECT series, trade_date, change_pct,
+           avg(change_pct)          OVER r AS mu,
+           stddev_samp(change_pct)  OVER r AS sd
+    FROM m
+    WINDOW r AS (PARTITION BY series ORDER BY trade_date
+                 ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING)
+)
+SELECT series, trade_date,
+       (change_pct - mu) / NULLIF(sd, 0) AS z
+FROM w
+WHERE trade_date = (SELECT max(trade_date) FROM w WHERE trade_date < DATE '{day}')
+  AND sd IS NOT NULL
+ORDER BY abs((change_pct - mu) / NULLIF(sd, 0)) DESC
+"""
+
+
+def macro_z(lake, day: str) -> tuple[float, str]:
+    """(거시 z, 무엇이 움직였나). 계열족 하나에 여러 계열이 있으므로 **절댓값 최대**를
+    그 족의 혁신으로 삼고 **누가 그랬는지 이름을 같이 낸다** - 이름 없이 z 만 주면
+    '거시가 튀었다'가 검정 불가능한 문장이 된다.
+    """
+    try:
+        rows = [r for r in lake.sql(_MACRO_Z.format(day=day)) if r[2] is not None]
+    except Exception:                       # noqa: BLE001 - 소스 부재는 미계측
+        return 0.0, ""
+    if not rows:
+        return 0.0, ""
+    # 상위 셋을 같이 낸다. 최댓값 하나로 접으면 정보가 죽는다 - 실측에서
+    # `fx/EURUSD z=+2.9` 가 `index/SOXX -5.4%` 를 가렸다. 어느 계열이 움직였는지가
+    # 곧 가설의 내용이므로, 발화 판정은 최댓값으로 하되 후보는 보여준다.
+    top = " · ".join(f"{r[0]} z={float(r[2]):+.1f}" for r in rows[:3])
+    return float(rows[0][2]), f"{rows[0][1]} — {top}"
+
+
 def series_z(lake, instrument_id: str, day: str) -> dict[str, float]:
     """오늘 셀의 계열족별 혁신 z (60d 창, 당일 제외 = PIT).
 
@@ -230,11 +281,14 @@ def series_z(lake, instrument_id: str, day: str) -> dict[str, float]:
     이 한 함수를 쓴다 - 발화 기준이 두 곳에서 갈리면 접지가 무너진다.
     """
     rows = lake.sql((_base(day) + _TODAY_Z).format(iid=instrument_id, day=day))
-    if not rows:
-        return {}
-    # 컬럼 순서는 _TODAY_Z 의 (z_ar, z_tv_chg) - _INNOVATION 의 (가격잔차, 거래량).
-    return {fam: float(z) for fam, z in zip(("가격잔차", "거래량"), rows[0])
-            if z is not None}
+    out: dict[str, float] = {}
+    if rows:
+        # 컬럼 순서는 _TODAY_Z 의 (z_ar, z_tv_chg) - _INNOVATION 의 (가격잔차, 거래량).
+        out = {fam: float(z) for fam, z in zip(("가격잔차", "거래량"), rows[0])
+               if z is not None}
+    if (mz := macro_z(lake, day)[0]):
+        out["거시"] = mz
+    return out
 
 
 def _pctile(v: np.ndarray) -> np.ndarray:

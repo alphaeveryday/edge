@@ -511,3 +511,29 @@ def test_s3_registry_binds_empty_datasets_too():
     assert "스키마만 있다" in out and "적재 일감" in out   # 설계 한계로 위장 금지
     assert "s3_empty" in c.call("tables")               # 목록에도 뜬다
     assert "그런 S3 데이터셋 없음" in c.call("peek", "s3_지어낸것")
+
+
+def test_macro_series_trigger_names_which_series_moved():
+    # 20R: 표현력 측정이 '환율 급등'·'전일 미국 반도체 하락'을 방아쇠로 요구했다.
+    # 어휘엔 `거시` 가 있었고 **계산기가 없었다** - 어휘 확장이 아니라 계산기 확장이
+    # 답이었다(상류 온톨로지 무관). 계열족 하나에 여러 계열이 있으므로 최댓값으로
+    # 발화를 판정하되 **누가 움직였는지 이름을 낸다** - 이름 없는 '거시가 튀었다'는
+    # 검정 불가능한 문장이다.
+    from edge_analysis.statics.paneltest import Z_ANOM, macro_z
+
+    class Lake:
+        def __init__(self, rows): self.rows = rows
+        def sql(self, q):
+            assert "s3_index_daily" in q and "s3_fx_daily" in q   # 오픈소스 표를 본다
+            assert "trade_date < DATE" in q      # 직전 거래일 - 오늘자 미국 종가는 없다
+            return self.rows
+
+    z, note = macro_z(Lake([("index/SOXX", "2026-07-29", -3.4),
+                            ("fx/USDKRW", "2026-07-29", 2.1),
+                            ("rate/10y", "2026-07-29", 0.5)]), "2026-07-30")
+    assert z == -3.4 and abs(z) >= Z_ANOM          # 절댓값 최대가 그 족의 혁신
+    assert "index/SOXX" in note and "fx/USDKRW" in note   # 후보를 가리지 않는다
+
+    class Dead:
+        def sql(self, q): raise RuntimeError("소스 없음")
+    assert macro_z(Dead(), "2026-07-30") == (0.0, "")   # 부재는 0 발화, 조용한 예외 금지
