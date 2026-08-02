@@ -22,12 +22,7 @@ from data_pipeline.lake.storage import LocalStorage
 from data_pipeline.minute.artifacts import sha256_bytes
 from data_pipeline.minute.commit import GenerationMismatchError, MinuteCommitter
 from data_pipeline.minute.fake_collector import FakePriceCollector
-from data_pipeline.minute.models import (
-    KST,
-    MinuteContractError,
-    Universe,
-    plan_session_windows,
-)
+from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
@@ -421,6 +416,27 @@ class TestTradingHoursUniverse:
         # 다음 tick 도 멈춘 채다 — 설정 불일치는 재시도로 낫지 않는다
         assert worker.tick(datetime(2026, 7, 31, 20, 1, tzinfo=KST)) == "STOPPED"
 
+    def test_universe_mismatch_still_converges_drain(self, tmp_path):
+        # 자격이 없어도 drain 은 막지 않는다 — ack_drain 을 부를 수 있는 건 Worker 뿐이라
+        # 여기서 멈추면 그 세션이 DRAINING 에 영구 고착되고 EOD 가 시작되지 못한다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+
+        class AlwaysExploding:
+            def collect(self, request, now):
+                raise RuntimeError("vendor 장기 장애")
+
+        start = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        worker.collector = AlwaysExploding()
+        assert worker.tick(start) == "WINDOW_FAILED"  # window 를 CLAIMED 로 남긴다
+        ledger.request_drain(session_id=session_id, now=start)
+        worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
+        assert worker.tick(start + timedelta(seconds=61)) == "DRAINING"
+        assert db.sessions[session_id]["phase"] == "DRAINED"
+        # 처리하지 않고 반납만 했다 — 잔여 판정은 EOD QC 소관
+        assert {w["data_status"] for w in db.windows.values()} == {"DUE"}
+
 
 class TestManifestVocabulary:
     def test_unknown_unit_class_fails_loud(self, tmp_path):
@@ -436,10 +452,9 @@ class TestManifestVocabulary:
                 return result, records, {**manifest, "deferred": []}
 
         worker.collector = ExtraClassCollector()
-        # window 실패로 접지 않고 전파한다 — 재시도로 안 풀리는 걸 재시도 경로에 넣으면
-        # lease 만료마다 같은 오류를 영원히 반복하고 아무도 고치러 가지 않는다
-        with pytest.raises(MinuteContractError):
-            worker.tick(NOW)
+        # 그 window 에 격리된다 — 전파하면 drain 이 release/ack 을 못 거쳐 세션이
+        # DRAINING 에 고착되고 교체 Worker 가 같은 window 로 크래시 루프를 돈다
+        assert worker.tick(NOW) == "WINDOW_FAILED"
         assert all(w["checksum"] is None for w in db.windows.values())
 
     def test_result_counts_must_match_manifest_partition(self, tmp_path):
@@ -456,6 +471,5 @@ class TestManifestVocabulary:
                 return result, records, {**manifest, "received": rest, "missing": [moved]}
 
         worker.collector = MiscountingCollector()
-        with pytest.raises(MinuteContractError):
-            worker.tick(NOW)
+        assert worker.tick(NOW) == "WINDOW_FAILED"
         assert all(w["checksum"] is None for w in db.windows.values())

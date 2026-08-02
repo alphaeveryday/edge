@@ -49,7 +49,7 @@ from .commit import (
     GenerationMismatchError,
     MinuteCommitter,
 )
-from .models import KST, CollectionRequest, MinuteContractError, Universe
+from .models import KST, CollectionRequest, Universe
 from .repository import MinuteLedger
 
 logger = logging.getLogger(__name__)
@@ -84,10 +84,11 @@ class MinuteWorkerLoop:
         raise NotImplementedError
 
     def _session_ready(self) -> bool:
-        """fence 를 막 획득한 뒤 1회 — 원장에 고정된 session 속성과 내 설정이 맞는가.
+        """원장에 고정된 session 속성과 내 설정이 맞는가 — window 를 처리할 자격.
 
-        구현체가 좁힌다(기본은 무조건 통과). 여기서 거짓이면 Worker 는 lease 를 반납하고
-        **영구 정지**한다 — 설정과 원장의 불일치는 재시도로 낫지 않는다.
+        구현체가 좁힌다(기본은 무조건 통과). 거짓이면 ACTIVE 에서는 lease 를 반납하고
+        정지하지만(설정 불일치는 재시도로 낫지 않는다), DRAINING 에서는 claim 을 집었다
+        반납하고 ack 까지 간다 — drain 을 막으면 EOD 가 영원히 시작되지 못한다.
         """
         return True
 
@@ -113,6 +114,10 @@ class MinuteWorkerLoop:
             return "STOPPED"
 
         phase = self._session_phase()
+        # 설정이 원장과 갈렸으면 window 를 **처리할** 자격이 없다(기대 집합을 내 설정으로
+        # 계산하므로). 단 drain 은 막지 않는다 — ack_drain 을 부를 수 있는 건 Worker 뿐이라,
+        # 여기서 먼저 멈추면 그 세션은 DRAINING 에 영구 고착되고 EOD 가 시작되지 못한다.
+        ready = self._session_ready()
         if phase == "DRAINING":
             # 신규(DUE) claim 은 원장이 금지하지만 **만료된 고아 CLAIMED 회수**는
             # DRAINING 에서도 허용된다(2B-2) — 실패로 남은 window 를 여기서 회수해
@@ -125,9 +130,11 @@ class MinuteWorkerLoop:
                 )
                 if claim is None:
                     break
-                if not self._process(claim, now):
+                if not ready or not self._process(claim, now):
                     # 반복 실패 window 를 CLAIMED 로 두면 ack 가 영구 거부된다 —
-                    # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다
+                    # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다.
+                    # 자격이 없을 때도 **집었다가 반납**한다: 안 집으면 죽은 Worker 가
+                    # 남긴 CLAIMED 가 영원히 남아 ack 가 계속 거부된다
                     self.ledger.release_window_claim(
                         session_id=self.session_id, window_start=claim["window_start"],
                         worker_id=self.config.worker_id, claim_token=claim["claim_token"],
@@ -140,6 +147,16 @@ class MinuteWorkerLoop:
             return "DRAINING"
         if phase not in ("ACTIVE",):
             return "DRAINED" if phase == "DRAINED" else "STOPPED"
+        if not ready:
+            # 계속 돌면 남의 기대 집합을 내 기준으로 VALID 확정한다(조용한 누락).
+            # lease 는 즉시 반납해 올바른 설정의 Worker 가 곧장 들어올 수 있게 하고,
+            # 이 프로세스는 멈춘다 — 설정과 원장의 불일치는 재시도로 낫지 않는다.
+            self.ledger.release_worker_fence(
+                session_id=self.session_id, fence_token=self.fence_token
+            )
+            self.fence_token = None
+            self.stopping = True
+            return "STOPPED"
 
         # realtime(최신) 1건 + recovery(최고령) budget 을 **항상** 이어서 소진한다 —
         # realtime 이 비었을 때만 recovery 를 보면 두 lane 의 due 조건이 같아 recovery
@@ -180,16 +197,6 @@ class MinuteWorkerLoop:
             )
             if self.fence_token is None:
                 logger.warning("fence 획득 실패 — 다른 Worker 의 lease 가 살아 있다")
-                return False
-            if not self._session_ready():
-                # 설정이 원장과 갈렸다. 계속 돌면 남의 기대 집합을 내 기준으로 확정하거나
-                # (조용한 누락) 처리 불가 window 를 lease 만료마다 영원히 재청구한다.
-                # lease 는 즉시 반납해 올바른 설정의 Worker 가 곧장 들어올 수 있게 한다.
-                self.ledger.release_worker_fence(
-                    session_id=self.session_id, fence_token=self.fence_token
-                )
-                self.fence_token = None
-                self.stopping = True
                 return False
             self._last_heartbeat = now
             return True
@@ -311,9 +318,7 @@ class PriceWorker(MinuteWorkerLoop):
             # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
             # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
             if unknown := set(manifest_units) - UNIT_CLASSES:
-                raise MinuteContractError(
-                    f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}"
-                )
+                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
             units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
             # 원장에 실리는 수량(result)과 증거로 남는 분할(manifest)이 같은 관측을
             # 말하는지 대조한다 — 각자의 validator 는 상대를 모르므로, 어긋나면
@@ -321,7 +326,7 @@ class PriceWorker(MinuteWorkerLoop):
             failed = len(units["missing"]) + len(units["invalid"])
             succeeded = len(units["received"]) + len(units["no_trade"])
             if (succeeded, failed) != (result.succeeded_count, result.failed_count):
-                raise MinuteContractError(
+                raise ValueError(
                     f"collector 의 result 수량({result.succeeded_count}/{result.failed_count})과 "
                     f"manifest 분할({succeeded}/{failed})이 다르다"
                 )
@@ -357,10 +362,13 @@ class PriceWorker(MinuteWorkerLoop):
                 destination=cfg.destination, artifact_generation=generation,
             )
             return True
-        except (GenerationMismatchError, ArtifactImmutabilityError, MinuteContractError):
-            # 결정적 불변식·계약 위반 — 재시도해도 같은 충돌이 반복될 뿐이다(회복 불가).
-            # 크게 죽어서 수퍼바이저/운영자가 보게 한다. 재시도 경로에 넣으면 그 window 가
-            # lease 만료마다 같은 오류를 영원히 반복하고 소스 호출도 계속된다.
+        except (GenerationMismatchError, ArtifactImmutabilityError):
+            # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
+            # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+            # ⚠️ collector 계약 위반(미지 분류·수량 불일치)은 여기 넣지 않는다: 전파하면
+            # drain 이 release/ack 을 못 거쳐 세션이 DRAINING 에 고착되고, 교체 Worker 가
+            # 같은 window 로 크래시 루프를 돈다. 그건 window 실패로 격리하고 잔여 판정은
+            # drain 반납 → EOD QC 가 한다(지정된 판정 장치에 위임).
             raise
         except CommitRejectedError:
             # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
