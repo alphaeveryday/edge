@@ -75,7 +75,10 @@ class ScriptedCollector:
         received, missing = [], []
         for unit_id in sorted(request.unit_ids):
             series = self.prices.get(unit_id, [])
-            if index >= len(series) or series[index] is None:
+            # 음수 index(09:00 이전 window)는 시리즈 밖 = missing 이다 — 상한만 보면
+            # 파이썬 음수 인덱싱이 IndexError(2칸 시리즈) 또는 꼬리 읽기(긴 시리즈)로
+            # 새서, 시간외 회귀 테스트가 검증 전에 깨지거나 엉뚱한 값으로 초록이 된다
+            if not 0 <= index < len(series) or series[index] is None:
                 missing.append(unit_id)
                 continue
             open_price, close_price = series[index]
