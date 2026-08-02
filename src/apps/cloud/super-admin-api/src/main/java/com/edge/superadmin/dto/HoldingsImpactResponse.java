@@ -35,12 +35,12 @@ public record HoldingsImpactResponse(String runKey, String expectedAsOf,
 		}
 	}
 
-	public record AnalysisResponse(String explanationResultId, String publicationStatus,
-			String summary) {
+	public record AnalysisResponse(String explanationResultId, String explanationRunId,
+			String publicationStatus, String summary) {
 
 		static AnalysisResponse from(AffectedAnalysis a) {
-			return new AnalysisResponse(a.explanationResultId(), a.publicationStatus(),
-					a.summary());
+			return new AnalysisResponse(a.explanationResultId(), a.explanationRunId(),
+					a.publicationStatus(), a.summary());
 		}
 	}
 

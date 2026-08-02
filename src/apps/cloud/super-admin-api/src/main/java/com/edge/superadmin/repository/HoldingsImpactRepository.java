@@ -44,7 +44,8 @@ public interface HoldingsImpactRepository {
 			List<AffectedAnalysis> analyses) {
 	}
 
-	record AffectedAnalysis(String explanationResultId, String publicationStatus,
-			String summary) {
+	/** {@code explanationRunId} 는 분석 상세 화면({@code /analyses/:id})의 키다 — 1:1(UNIQUE). */
+	record AffectedAnalysis(String explanationResultId, String explanationRunId,
+			String publicationStatus, String summary) {
 	}
 }

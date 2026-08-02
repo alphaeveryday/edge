@@ -7,7 +7,7 @@
  * 어디서 탈락했는지는 단정하지 않는다(그 분해는 S3 로그 소관). "분석 없음"도 결손의 결과라고
  * 단정하지 않는다 — 트리거 미발동 정상 무분석과 구분할 수 없다.
  */
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { LoadError } from './_shared/LoadError';
@@ -95,7 +95,16 @@ export function HoldingsImpactPage() {
                     {m.analyses.length > 0 ? (
                       m.analyses.map((a) => (
                         <div key={a.explanationResultId} className="t-xs">
-                          <b>{a.publicationStatus ?? '—'}</b> · {a.summary ?? a.explanationResultId}
+                          <b>{a.publicationStatus ?? '—'}</b> ·{' '}
+                          {/* 영향 분석 → 상세로 내려가는 고리(ALPHA-692). runId 없으면(이론상
+                           * 없음) 텍스트 폴백 — 링크가 죽는 것보다 낫다 */}
+                          {a.explanationRunId ? (
+                            <Link to={`/analyses/${encodeURIComponent(a.explanationRunId)}`}>
+                              {a.summary ?? a.explanationResultId}
+                            </Link>
+                          ) : (
+                            (a.summary ?? a.explanationResultId)
+                          )}
                         </div>
                       ))
                     ) : (

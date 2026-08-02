@@ -8,11 +8,11 @@
  * 판정(opsStatus·결함·overdue)은 전부 서버가 한다 — 화면은 라벨만 붙인다(GridPage 와 같은
  * 원칙). 멘토 규칙: 숫자에는 단위를 붙이고, 모든 숫자는 근거 화면으로 내려갈 수 있어야 한다.
  */
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import type { OpsStatus, OverviewDefect, OverviewLane } from '../domains/sources';
-import { useSourceOverview } from '../domains/sources/hooks';
+import type { MinuteSession, OpsStatus, OverviewDefect, OverviewLane } from '../domains/sources';
+import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { LoadError } from './_shared/LoadError';
 
 /* 스펙 §7 어휘의 표시 라벨. READY 는 "모두 자동 발행"이 아니라 "운영 결함으로 막힌 것이
@@ -87,6 +87,13 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
           ? `${new Date(lane.plannedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} KST`
           : '—'}
         {' · '}기동 {lane.launchStatus ?? '—'} · 실행 전체 {lane.orchestrationStatus ?? '—'}
+        {/* 뉴스 레인은 문서 계보가 근거 화면이다 — 집계에서 계보로 내려가는 고리(ALPHA-692) */}
+        {lane.pipelineType === 'news' && lane.tradingDate && (
+          <>
+            {' · '}
+            <Link to={`/lineage/news?date=${lane.tradingDate}`}>이 거래일 뉴스 계보</Link>
+          </>
+        )}
       </p>
 
       {/* 단위를 붙인 카운트 — "필수 작업 N개 중"이 분모다(멘토: 단위 없는 숫자 금지) */}
@@ -142,6 +149,56 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
   );
 }
 
+/* 장중 1분 레인 요약 한 줄 — 판정은 서버 파생값(overdueNoEvidence 등)을 그대로 읽고 여기서
+ * 재계산하지 않는다. 상세·근거 목록은 /minute 소관이라 여기선 요약과 손잡이만 둔다. */
+function MinuteSessionLine({ s }: { s: MinuteSession }) {
+  const w = s.windows;
+  const evidenced = w.valid + w.validEmpty + w.incomplete + w.invalid;
+  const defects = w.incomplete + w.invalid + w.missing;
+  return (
+    <p className="t-sm m-0">
+      <b>{s.dataset}/{s.sourceGroup}</b>
+      {' · '}phase {s.phase}
+      {' · '}기대 창 {s.expectedWindowCount}개 중 증거 {evidenced}개
+      {' · '}
+      <b style={{ color: w.overdueNoEvidence > 0 ? 'var(--down, #b91c1c)' : undefined }}>
+        무증거 {w.overdueNoEvidence}개
+      </b>
+      {defects > 0 && <> · 결함 판정 {defects}개</>}
+    </p>
+  );
+}
+
+function MinuteLaneCard() {
+  const { data, isPending, isError } = useMinuteStatus();
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="t-label">장중 1분 레인</span>
+        <Link to="/minute" className="t-xs">
+          상세 (결손 창 목록)
+        </Link>
+      </div>
+      {isError ? (
+        /* 첫 화면 전체를 죽이지 않는다 — 이 카드만 실패를 밝힌다(조회 실패 ≠ 미가동) */
+        <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
+          1분 원장 조회 실패 — 미가동이 아니라 조회 오류입니다.
+        </p>
+      ) : isPending ? (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>불러오는 중…</p>
+      ) : data.sessions.length === 0 ? (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          오늘({data.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
+          미가동)이지 오류가 아닙니다.
+        </p>
+      ) : (
+        data.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
+      )}
+    </div>
+  );
+}
+
 export function OverviewPage() {
   const { data, isPending, isError, error } = useSourceOverview();
 
@@ -160,6 +217,10 @@ export function OverviewPage() {
       ) : (
         data.lanes.map((lane) => <LaneCard key={lane.pipelineType} lane={lane} />)
       )}
+
+      {/* 장중 1분 레인 — EOD 레인만 보이면 장중 절반이 첫 화면의 사각이다(ALPHA-692, 멘토
+       * "왜 전부 하루 주기냐"). ops 런 레인과 실행 모델이 달라 별도 카드로 요약만 얹는다. */}
+      <MinuteLaneCard />
 
       {/* 발행 분포는 이 콘솔의 경계 밖 — 없는 숫자를 지어내지 않고 소재만 밝힌다(계획 §6-1) */}
       <div className="card">

@@ -16,7 +16,7 @@
  * 셀을 누르면 그 슬롯의 드릴다운(/sources?runKey=)으로 간다 — 격자는 이상 지점을 찾는 화면이고,
  * 원인(시도 이력·이슈)은 드릴다운이 답한다(ALPHA-574).
  */
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
 import type { GridCell, GridSlot } from '../domains/sources';
@@ -81,14 +81,29 @@ function cellTip(cell: GridCell, runKey: string) {
     .join('\n');
 }
 
+/* 레인 판별은 run_key 접두가 정본이다(slotLabel 과 같은 근거) — 시장 15:40 과 뉴스 15:30 이
+ * 섞이면 열이 소음이 된다는 운영 피드백(ALPHA-594 잔여 → 692). */
+type LaneFilter = 'all' | 'market' | 'news';
+const LANE_FILTERS: { key: LaneFilter; label: string }[] = [
+  { key: 'all', label: '전체' },
+  { key: 'market', label: '시장' },
+  { key: 'news', label: '뉴스' },
+];
+
 export function GridPage() {
   const navigate = useNavigate();
+  const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
   const { data: grid, isPending, isError, error } = useSourceGrid();
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
-  const slots = grid.slots;
+  const slots = grid.slots.filter((slot) => {
+    if (laneFilter === 'all') return true;
+    return laneFilter === 'news'
+      ? slot.runKey.startsWith('news:')
+      : !slot.runKey.startsWith('news:');
+  });
 
   /* 행 = 창 안 어느 슬롯에든 등장한 작업의 합집합. 한 슬롯만 보면 카탈로그에서 빠진 작업
    * (뉴스 레인 분리 등)이 행째로 사라져 "언제부터 없어졌나"를 못 본다.
@@ -126,6 +141,26 @@ export function GridPage() {
       <div className="card">
         <div className="card-head">
           <span className="t-label">파이프라인 실행 이력</span>
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            {LANE_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                className="t-xs"
+                onClick={() => setLaneFilter(f.key)}
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  border: '1px solid var(--border, #d1d5db)',
+                  cursor: 'pointer',
+                  background: laneFilter === f.key ? 'var(--fg-2, #374151)' : 'transparent',
+                  color: laneFilter === f.key ? '#fff' : 'var(--fg-2, #374151)',
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 우상 주황
             점=데이터 결손 · 우하 초록 점=완전성 검증(VALID) · ·=카탈로그에 없음 · 셀을 누르면
@@ -134,9 +169,14 @@ export function GridPage() {
         </div>
 
         {slots.length === 0 ? (
-          /* 창 안에 런이 없다 — 볼 게 없는 것과 고장 난 것은 다르다(에러 화면을 띄우지 않는다). */
+          /* 창 안에 런이 없다 — 볼 게 없는 것과 고장 난 것은 다르다(에러 화면을 띄우지 않는다).
+           * 필터로 비었을 땐 그 사실을 밝힌다 — "필터 때문"과 "원장이 빔"은 다른 사실이다. */
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.
+            {laneFilter === 'all'
+              ? `최근 ${grid.days}일 안에 기록된 파이프라인 실행이 없습니다.`
+              : `최근 ${grid.days}일 안에 이 레인의 실행이 없습니다 (필터: ${
+                  LANE_FILTERS.find((f) => f.key === laneFilter)?.label
+                }).`}
           </p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
