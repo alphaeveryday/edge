@@ -330,6 +330,29 @@ class TestInvariantViolations:
         assert result["ok"] is False
         assert any("세션 날짜" in v for v in result["violations"])
 
+    def test_stretched_window_end_is_rejected(self, tmp_path):
+        # ⚠️ 시작 시각만 보면 09:00..15:29 로 완벽히 연속인데 **저장된 end** 가 어긋난
+        # 계획이 통과한다. Worker 는 그 end 를 그대로 수집기에 넘기므로(worker.py) 수집
+        # 구간 자체가 겹친 세션이다. DB 제약도 start < end 뿐이라 원장이 안 막아 준다.
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        db.windows[(session_id, WINDOWS[5])]["window_end"] = WINDOWS[5] + timedelta(minutes=5)
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("1분이 아닌" in v for v in result["violations"])
+
+    def test_last_window_end_defines_the_close(self, tmp_path):
+        # 폐장을 `마지막 start + 1분` 으로 지어내면 end 가 밀린 계획이 그대로 확정된다
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        last = db.windows[(session_id, WINDOWS[-1])]
+        last["window_end"] = last["window_end"] + timedelta(minutes=30)
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("계획 범위" in v or "1분이 아닌" in v for v in result["violations"])
+
     def test_empty_plan_is_not_a_complete_day(self, tmp_path):
         # 행이 없으면 집계도 0, 간격도 없다 — 공허참으로 "완전한 하루"가 된다
         db = FakeMinuteDB()

@@ -134,7 +134,9 @@ class SessionQc:
             "orphan_scanned": orphan_scanned,
             "violations": violations,
             "final_checksum": _final_checksum(rows),
-            "final_generation": max((generation for _, _, generation, _ in rows), default=None),
+            "final_generation": max(
+                (generation for _, _, _, generation, _ in rows), default=None
+            ),
             # 확정에 성공하면 방금 계산한 값이 곧 기록값이라 일치한다. 위반으로 FAILED 가
             # 되면 **아무것도 기록되지 않으므로**(fail_session_qc 는 phase 만 바꾼다) 대조할
             # 대상이 없다 — 그때 True 라고 말하면 없는 기록과 일치한다고 주장하는 셈이다.
@@ -214,7 +216,7 @@ class SessionQc:
             "missing_confirmed": 0,          # 이 실행은 아무것도 확정하지 않았다
             "counts": _count_statuses(rows),
             "complete_count": sum(
-                1 for _, status, _, _ in rows if status in _COMPLETE_STATUSES
+                1 for _, _, status, _, _ in rows if status in _COMPLETE_STATUSES
             ),
             "orphan_artifacts": orphans,
             "orphan_scanned": orphan_scanned,
@@ -327,7 +329,7 @@ def qc_session_cli(settings, *, session_id: str | None) -> int:
 def _count_statuses(rows: list) -> dict:
     """상태별 집계 — 0 건인 축도 키가 남는다(조용한 0 금지). 미지 상태는 fail loud."""
     counts = {status: 0 for status in _REPORTED_STATUSES}
-    for _, status, _, _ in rows:
+    for _, _, status, _, _ in rows:
         # 미지 상태를 조용히 버리면 그 window 가 어느 칸에도 안 세어져 합이 안 맞는다
         if status not in counts:
             raise ValueError(f"window 원장에 미지 data_status 가 있다: {status!r}")
@@ -362,8 +364,19 @@ def _plan_violations(rows: list, session_date) -> list[str]:
         violations.append(
             f"세션 날짜({session_date})가 아닌 window 가 있다: {off_date[:3]}"
         )
+    # ⚠️ 폐장은 **저장된 window_end** 로 판정한다. `last start + 1분` 으로 지어내면 end 가
+    # 어긋난 계획(겹치거나 1분이 아닌 구간)이 그대로 통과하는데, Worker 는 저장된 end 를
+    # 그대로 수집기에 넘기므로 그건 **수집 구간 자체가 어긋난** 세션이다. DB 제약도
+    # `window_start < window_end` 뿐이라 원장이 막아 주지 않는다.
+    bad_spans = [
+        window_start.astimezone(KST).isoformat()
+        for window_start, window_end, *_ in rows
+        if window_end - window_start != _WINDOW_STEP
+    ]
+    if bad_spans:
+        violations.append(f"1분이 아닌 window 구간이 있다: {bad_spans[:3]}")
     first_open = rows[0][0].astimezone(KST).time()
-    last_close = (rows[-1][0] + _WINDOW_STEP).astimezone(KST).time()
+    last_close = rows[-1][1].astimezone(KST).time()
     # ⚠️ 양 끝을 **따로** 보면 planner 가 만들 수 없는 교차 조합이 통과한다: 시간외 계획
     # (08:00~20:00)에서 앞 1시간이 통째로 빠지면 09:00~20:00 이 되는데, 개장·폐장이 각각
     # 허용 집합에 있어 무사히 확정된다. 계획은 **쌍**이므로 쌍으로 대조한다.
@@ -399,6 +412,6 @@ def _final_checksum(rows: list) -> str:
     배포 환경마다 다른 checksum 을 낸다.
     """
     return content_checksum([
-        [window_start, status, generation, checksum]
-        for window_start, status, generation, checksum in rows
+        [window_start, window_end, status, generation, checksum]
+        for window_start, window_end, status, generation, checksum in rows
     ])

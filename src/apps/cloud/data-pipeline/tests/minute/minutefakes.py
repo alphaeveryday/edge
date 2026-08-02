@@ -153,10 +153,11 @@ class _Cursor:
             # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
             assert "scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
             self._confirm_missing(params)
-        elif s.startswith("SELECT window_start, data_status, generation, checksum"):
+        elif s.startswith("SELECT window_start, window_end, data_status"):
             assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
             self._rows = sorted(
-                ((w["window_start"], w["data_status"], w["generation"], w.get("checksum"))
+                ((w["window_start"], w["window_end"], w["data_status"], w["generation"],
+                  w.get("checksum"))
                  for w in self.db.windows.values() if w["session_id"] == params[0]),
                 key=lambda row: row[0],
             )

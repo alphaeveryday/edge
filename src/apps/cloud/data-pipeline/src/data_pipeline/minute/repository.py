@@ -630,16 +630,20 @@ class MinuteLedger:
         ))
 
     def session_window_rows(self, *, session_id: str) -> list[tuple]:
-        """QC 판정 입력 — (window_start, data_status, generation, checksum) 결정적 정렬.
+        """QC 판정 입력 — (window_start, window_end, data_status, generation, checksum).
 
         집계만 돌려주지 않는 이유: `final_checksum` 이 이 목록에서 나오고, 집계는 그 목록
         에서 다시 셀 수 있다. 반대로 집계만 받으면 같은 개수의 다른 결과가 같은 checksum 을
         갖는다(예: 두 window 의 상태가 서로 뒤바뀐 경우).
+
+        `window_end` 도 함께 준다 — DB 제약은 `window_start < window_end` 뿐이라 겹치거나
+        1분이 아닌 구간도 저장될 수 있고, Worker 는 **저장된 window_end 를 그대로** 수집기에
+        넘긴다. 즉 end 가 어긋나면 수집 구간 자체가 어긋난 것이라 판정 입력에 있어야 한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT window_start, data_status, generation, checksum
+                SELECT window_start, window_end, data_status, generation, checksum
                 FROM minute_ingestion_window
                 WHERE session_id = %s ORDER BY window_start
                 """,
