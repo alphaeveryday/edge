@@ -132,6 +132,28 @@ class _Cursor:
                 self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
+        elif "SET phase = 'QC_RUNNING'" in s:
+            # EOD QC 진입(ALPHA-693). 재진입 phase 집합이 SQL 에서 빠지면 중간에 죽은 QC 가
+            # 그 세션을 영영 못 끝내게 만든다 — fake 가 합성하기 전에 문면을 못 박는다.
+            assert "phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')" in s, \
+                "begin_qc SQL 에 재진입 phase 집합이 없다"
+            self._begin_qc(params)
+        elif s.startswith("UPDATE minute_ingestion_window w") and "'MISSING'" in s:
+            # phase 바인딩이 빠지면 살아 있는 세션의 DUE 를 전부 죽인다(그날 데이터 소멸)
+            assert "s.phase = 'QC_RUNNING'" in s, "confirm_missing_windows SQL 에 phase 가드가 없다"
+            self._confirm_missing(params)
+        elif s.startswith("SELECT window_start, data_status, generation, checksum"):
+            assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
+            self._rows = sorted(
+                ((w["window_start"], w["data_status"], w["generation"], w.get("checksum"))
+                 for w in self.db.windows.values() if w["session_id"] == params[0]),
+                key=lambda row: row[0],
+            )
+        elif "SET phase = 'FINALIZED'" in s:
+            self._finish_qc(params[2], "FINALIZED",
+                            final_checksum=params[0], final_generation=params[1])
+        elif "SET phase = 'FAILED'" in s:
+            self._finish_qc(params[0], "FAILED")
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
@@ -287,6 +309,37 @@ class _Cursor:
             "worker_fencing_token": 0, "lease_expires_at": None, "heartbeat_at": None,
         }
         self._rows = [(session_id,)]
+
+    def _begin_qc(self, p):
+        row = self.db.sessions.get(p[0])
+        if row is None or row["phase"] not in ("DRAINED", "QC_RUNNING", "FAILED"):
+            return
+        row["phase"] = "QC_RUNNING"
+        self._rows = [(row["dataset"], row["source_group"], row["session_date"],
+                       row["expected_window_count"], row["universe_version"])]
+
+    def _confirm_missing(self, p):
+        session = self.db.sessions.get(p[0])
+        if session is None or session["phase"] != "QC_RUNNING":
+            self.rowcount = 0
+            return
+        changed = 0
+        for window in self.db.windows.values():
+            if window["session_id"] == p[0] and window["data_status"] == "DUE":
+                window["data_status"] = "MISSING"
+                changed += 1
+        self.rowcount = changed
+
+    def _finish_qc(self, session_id, phase, *, final_checksum=None, final_generation=None):
+        row = self.db.sessions.get(session_id)
+        if row is None or row["phase"] != "QC_RUNNING":
+            self.rowcount = 0
+            return
+        row["phase"] = phase
+        if phase == "FINALIZED":
+            row["final_checksum"] = final_checksum
+            row["final_generation"] = final_generation
+        self.rowcount = 1
 
     def _select_session(self, p):
         row = self.db.session_by_identity(*p)
