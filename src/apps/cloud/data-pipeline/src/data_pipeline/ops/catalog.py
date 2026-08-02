@@ -66,6 +66,8 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from . import contracts
+
 
 @dataclass(frozen=True)
 class CatalogEntry:
@@ -109,6 +111,8 @@ class CatalogEntry:
     # 이 작업이 속한 레인(ALPHA-591). Planner 가 `entries(pipeline_type)` 로 자기 레인만
     # 계획한다 — 시장 일일런 기대에 뉴스 작업이 섞이면(또는 그 반대) 매 런 MISSED 다.
     pipeline_type: str = "etf-daily"
+    # 데이터 전달 계약은 별도 typed registry가 소유한다(ADR-0043). Catalog는 stable key만 참조.
+    contract_key: str | None = None
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
@@ -219,6 +223,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         cli_command=("ingest-raw-etf", "--source", "krx"), sfn_state_name="CollectKrxEtf",
         ecs_task_definition="krx", source_vendor="krx",
         stalled_after_seconds=21600,
+        contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
     ),
     CatalogEntry(
         task_key="DISCLOSURE_COLLECTION_DART", stage="raw", dataset="disclosures", required=True,
@@ -463,6 +468,7 @@ def content_hash() -> str:
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,
             "pipeline_type": e.pipeline_type,
+            "contract_key": e.contract_key,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]

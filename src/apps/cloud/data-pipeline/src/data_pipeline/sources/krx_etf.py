@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 
 from ..config import KrxEtfSource as KrxEtfSourceConfig
-from ..ops.trading_calendar import is_trading_day
+from ..ops.trading_calendar import latest_kr_trading_day
 from .http import PoliteClient, StopFetch
 from .krx_auth import USER_AGENT, KrxAuth
 
@@ -38,30 +38,23 @@ REFERER = "https://data.krx.co.kr/contents/MDC/mdiLoader/index.cmd?menuId=MDC020
 
 KST = timezone(timedelta(hours=9))
 
-# 직전 거래일 탐색 상한. 최장 연휴(설·추석 + 앞뒤 주말)보다 넉넉하다 — 넘어가면 달력이 아니라
-# OPS_KR_HOLIDAYS 주입이 잘못된 것이라 fail-loud 한다.
-MAX_LOOKBACK_DAYS = 10
-
-
 def _as_of(today: date) -> date:
     """기준일(as-of) — 오늘이 KR 거래일이면 오늘, 아니면 직전 거래일 (ALPHA-387).
 
     스케줄이 장 마감 후(15:40 KST)라 거래일 런에서는 그날 PDF 가 이미 게시돼 있다(dev 실측:
     07-22·23·24 연속 스냅샷 내용 상이). 문제는 **비거래일 런**이다 — KRX 는 빈 응답이 아니라
     직전 거래일 PDF 를 그대로 돌려주므로(dev 실측: 토 07-18 응답이 금 07-17 과 바이트 동일)
-    오늘로 라벨하면 존재하지 않는 거래일의 스냅샷이 canonical 에 as-of 로 남는다. 라벨을 실제
-    기준일로 되돌리면 그 런은 직전 거래일 스냅샷을 같은 as-of 로 다시 쓴다(멱등).
+    오늘로 라벨하면 존재하지 않는 거래일의 스냅샷이 canonical 에 as-of 로 남는다. 라벨을 직전
+    거래일로 되돌리면 그 런은 직전 거래일 스냅샷을 같은 as-of 로 다시 쓴다(멱등).
+
+    ⚠️ 이 값은 **달력 규칙에서 파생한 요청·기대 기준일**이지 응답이 증언한 실제 기준일이
+    아니다 — KRX 응답에는 기준일 필드가 없다(ALPHA-653). freshness 원장은 이 값을 actual
+    증거로 쓰지 않는다(ALPHA-654, UNKNOWN/ACTUAL_AS_OF_UNVERIFIED 유지).
 
     휴장일 집합은 Planner 와 **같은** `OPS_KR_HOLIDAYS`(env)를 본다 — 달력이 갈리면 Planner 가
     비거래일로 건너뛴 날을 수집은 거래일로 라벨하는 모순이 생긴다.
     """
-    for back in range(MAX_LOOKBACK_DAYS):
-        day = today - timedelta(days=back)
-        if is_trading_day(day):
-            return day
-    raise ValueError(
-        f"{today} 부터 {MAX_LOOKBACK_DAYS}일 안에 거래일이 없다 — OPS_KR_HOLIDAYS 주입 확인"
-    )
+    return latest_kr_trading_day(today)
 
 
 def _short_code(isin: str) -> str:

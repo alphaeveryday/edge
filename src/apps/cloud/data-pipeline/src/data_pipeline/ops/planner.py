@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from ..db import stable_domain_id
-from . import aws, catalog, states
+from . import aws, catalog, contracts, states
 from .ledger import Ledger
 from .trading_calendar import is_trading_day
 
@@ -108,6 +108,11 @@ def plan_run(
     """
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
 
+    # 무결성 검사는 계획 생성 여부와 무관하게 매 호출 실행한다 — created=False(멱등 재호출)
+    # 경로에서만 검사를 건너뛰면, required 가 어긋난 빌드가 이미 계획된 슬롯을 재호출할 때
+    # fail-loud 없이 SFN 시작까지 진행한다(완료조건 ⑥의 우회로).
+    _check_contract_integrity(pipeline_type)
+
     slot = scheduled_time.astimezone(KST)
     day = slot.date()
     trading = is_trading_day(day, holidays)
@@ -136,8 +141,8 @@ def plan_run(
         if created:
             _plan_expected_tasks(
                 conn, run_id, pipeline_type=pipeline_type, trading=trading,
-                expected_at=expected_at, as_of_date=day.isoformat(),
-                universe_provider=universe_provider,
+                expected_at=expected_at, slot_date=day,
+                universe_provider=universe_provider, holidays=holidays,
             )
         # `with conn` 정상 종료 = commit. 여기까지 성공해야 아래 StartExecution 이 돈다.
 
@@ -153,8 +158,20 @@ def plan_run(
     )
 
 
-def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, as_of_date,
-                         universe_provider):
+def _check_contract_integrity(pipeline_type):
+    for entry in catalog.entries(pipeline_type):
+        if not entry.contract_key:
+            continue
+        contract = contracts.require(entry.contract_key)
+        if entry.required != contract.required:
+            raise ValueError(
+                f"{entry.task_key}: Catalog required={entry.required}와 "
+                f"Contract required={contract.required} 불일치"
+            )
+
+
+def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, slot_date,
+                         universe_provider, holidays):
     for entry in catalog.entries(pipeline_type):
         # 비거래일 KR 작업은 SKIPPED(NON_TRADING_DAY) — attempt 안 생기고 MISSED 안 됨(스펙 §3.3).
         # ⚠️ 판정 축은 카탈로그의 명시 필드다. dataset 문자열(`price_daily`)로 가르면 **미국
@@ -163,6 +180,15 @@ def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, a
         # 수집의 결과가 "휴장이라 안 했다"로 기록돼 사라진다(ALPHA-181).
         skip = (not trading) and entry.kr_trading_calendar
         plan_status = states.PLAN_SKIPPED if skip else states.PLAN_DUE
+        # required 불일치는 plan_run 진입부의 _check_contract_integrity 가 이미 걸렀다.
+        contract = contracts.require(entry.contract_key) if entry.contract_key else None
+        expected_as_of = (
+            contracts.resolve_expected_as_of(contract, slot_date, holidays)
+            if contract is not None else slot_date
+        )
+        contract_snapshot = (
+            contracts.snapshot(contract, expected_as_of) if contract is not None else None
+        )
         deadline_at = (
             datetime.fromisoformat(expected_at) + timedelta(seconds=entry.deadline_offset_seconds)
         ).isoformat()
@@ -185,10 +211,23 @@ def _plan_expected_tasks(conn, run_id, *, pipeline_type, trading, expected_at, a
                 )
         Ledger._create_expected_task_tx(
             conn, pipeline_run_id=run_id, task_key=entry.task_key, stage=entry.stage,
-            dataset=entry.dataset, required=entry.required, plan_status=plan_status,
+            dataset=entry.dataset,
+            required=contract.required if contract is not None else entry.required,
+            plan_status=plan_status,
             expected_at=expected_at, deadline_at=deadline_at, eligible_at=eligible_at,
-            expected_as_of_date=as_of_date, expectation_snapshot_id=snapshot_id,
+            expected_as_of_date=expected_as_of.isoformat(), expectation_snapshot_id=snapshot_id,
             skip_reason=states.SKIP_NON_TRADING_DAY if skip else None,
+            dataset_contract_key=contract.contract_key if contract is not None else None,
+            dataset_contract_version=contract.version if contract is not None else None,
+            dataset_contract_snapshot=contract_snapshot,
+            freshness_status=(
+                states.FRESHNESS_UNKNOWN
+                if contract is not None and plan_status == states.PLAN_DUE else None
+            ),
+            freshness_reason=(
+                states.FRESHNESS_EVIDENCE_MISSING
+                if contract is not None and plan_status == states.PLAN_DUE else None
+            ),
         )
 
 

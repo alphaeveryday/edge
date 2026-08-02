@@ -12,6 +12,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
 from . import catalog, planner, reconciler, states, wrapper
+from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
 
 logger = logging.getLogger(__name__)
@@ -116,9 +117,24 @@ def task_key_for(step: str, source: str | None) -> str | None:
 def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
     """등록 작업 하나를 원장 계측으로 감싼다. 원장 없으면 run_fn 만 돈다(투명 통과)."""
     ledger = ledger_from_settings(settings)
-    observe = None if ledger is None else (lambda ec: _observe_from_log(storage, task_key, run_id, ec))
+    attempt_started_at = None
+
+    def run_current_attempt():
+        nonlocal attempt_started_at
+        # wrapper가 원장 attempt를 연 뒤 실제 작업을 시작하는 경계다. 같은 run_id의 이전 ECS
+        # 재시도 로그를 현재 시도의 산출물로 승인하지 않도록 observer에 이 하한을 넘긴다.
+        attempt_started_at = datetime.now(timezone.utc)
+        return run_fn()
+
+    observe = (
+        None if ledger is None
+        else lambda ec: _observe_from_log(
+            storage, task_key, run_id, ec, not_before=attempt_started_at
+        )
+    )
     return wrapper.instrument(
-        run_fn, task_key=task_key, run_id=run_id, ledger=ledger, observe_data_fn=observe
+        run_current_attempt, task_key=task_key, run_id=run_id, ledger=ledger,
+        observe_data_fn=observe
     )
 
 
@@ -130,7 +146,9 @@ def _load_log(storage: Storage, prefix: str, run_id: str) -> dict | None:
     """
     import json
 
-    for key in storage.list_keys(prefix):
+    # 같은 run_id 재시도가 UTC 날짜를 넘기면 started_date별 로그가 둘 이상일 수 있다.
+    # 최신 날짜부터 봐야 현재 시도의 로그를 옛 로그 뒤에서 놓치지 않는다.
+    for key in reversed(storage.list_keys(prefix)):
         if f"/run_id={run_id}/" in key and key.endswith("log.json"):
             try:
                 return json.loads(storage.get_bytes(key).decode("utf-8"))
@@ -153,7 +171,14 @@ def _log_prefix(entry: catalog.CatalogEntry) -> str:
     return quality_log_prefix(dataset)
 
 
-def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: int) -> dict:
+def _observe_from_log(
+    storage: Storage,
+    task_key: str,
+    run_id: str,
+    exit_code: int,
+    *,
+    not_before: datetime | None = None,
+) -> dict:
     """스텝이 남긴 S3 로그에서 data_status 신호를 뽑는다. 로그 없으면 {}(→ UNKNOWN, 스펙 §6).
 
     새 계측을 심지 않고 **이미 나오는 신호**를 읽는다(ALPHA-182 정신). 성공 exit 를 자동으로
@@ -174,7 +199,11 @@ def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: i
     if entry is None:
         return {"exit_code": exit_code}  # 미등록 작업 — 관측 대상이 아니다
     log = _load_log(storage, _log_prefix(entry), run_id)
-    if not log:
+    if log is None:
+        return {"exit_code": exit_code}
+    if not isinstance(log, dict):
+        logger.warning("로그가 JSON 객체가 아님(task=%s run_id=%s) — data_status UNKNOWN",
+                       task_key, run_id)
         return {"exit_code": exit_code}
     ops = log.get("ops")
     # 봉투 없음/불완전 = 신호 미제공. 조용히 낙관값(0건·실패없음)으로 메우지 않는다 — 특히
@@ -201,6 +230,41 @@ def _observe_from_log(storage: Storage, task_key: str, run_id: str, exit_code: i
     # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
     if "received_count" in ops:
         signals["received_count"] = ops["received_count"]
+    if entry.contract_key == ETF_HOLDINGS_KRX_EOD:
+        # collected_at은 "현재 시도가 raw 산출물과 로그를 새로 남겼다"는 증명이 있을 때만 쓴다.
+        # 같은 run_id의 옛 로그, skipped/깨진 로그, 0건 로그는 수집 산출물 증거가 아니다.
+        records_out = ops.get("records_out")
+        artifact_statuses = {"success", "partial", "error", "stopped"}
+        current_log = False
+        try:
+            started_at = datetime.fromisoformat(str(log["started_at"]).replace("Z", "+00:00"))
+            finished_at = datetime.fromisoformat(str(log["finished_at"]).replace("Z", "+00:00"))
+            observed_at = datetime.now(timezone.utc)
+            saved = log["records_saved"]
+            current_log = (
+                log.get("run_id") == run_id
+                and log.get("source_vendor") == entry.source_vendor
+                and isinstance(saved, int)
+                and not isinstance(saved, bool)
+                and saved == records_out
+                and started_at.tzinfo is not None
+                and finished_at.tzinfo is not None
+                and (not_before is None or started_at >= not_before)
+                and started_at <= finished_at <= observed_at
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+        if not current_log:
+            logger.warning("현재 시도의 완전한 collection_log가 아님(task=%s run_id=%s)",
+                           task_key, run_id)
+        if (
+            log.get("status") in artifact_statuses
+            and isinstance(records_out, int)
+            and not isinstance(records_out, bool)
+            and records_out > 0
+            and current_log
+        ):
+            signals["artifact_observed"] = True
     return signals
 
 
