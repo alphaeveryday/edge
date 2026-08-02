@@ -22,7 +22,9 @@ const OPS: Record<OpsStatus, { label: string; tone: BadgeTone; desc: string }> =
   /* "마감 전" 을 넣지 않는다 — RUNNING 런은 마감 경과 미귀결이 있어도 IN_PROGRESS 라,
    * 헤더가 "마감 전"이라 말하며 결함 목록이 "마감 경과"를 보이는 모순이 생긴다 */
   IN_PROGRESS: { label: '진행 중', tone: 'env', desc: '필수 작업 판정 대기' },
-  DEGRADED: { label: '부분 결함', tone: 'warn', desc: '일부 필수 작업에 결함 — 아래 목록' },
+  /* "아래 목록"이라 쓰지 않는다 — 실행 전체(orchestration) terminal 실패는 작업 결함 목록이
+   * 비어도 DEGRADED 라, 목록 없는 카드에서 그 문구가 거짓말이 된다 */
+  DEGRADED: { label: '부분 결함', tone: 'warn', desc: '운영 결함 있음 — 결함 목록·실행 축 확인' },
   BLOCKED: { label: '차단', tone: 'blocked', desc: '런이 기동하지 못함 — 전 대상 영향' },
   /* 서버의 UNKNOWN 사유는 실행 불명만이 아니다(계획 증거 없음·마감 없는 미귀결 포함) —
    * "실행 여부"로 좁혀 쓰면 실행 축이 SUCCEEDED 인 카드와 문구가 모순된다 */
@@ -79,7 +81,12 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
           {lane.runKey}
         </button>
         {' · '}기준 거래일 {lane.tradingDate ?? '—'}
-        {' · '}계획 {lane.plannedAt ? new Date(lane.plannedAt).toLocaleString('ko-KR') : '—'}
+        {/* notToday 가 서버 KST 판정이라 표시도 KST 고정 — 브라우저 시간대로 내면 자정 부근에
+         *  "어제 날짜인데 오늘 런" 으로 보이는 모순이 생긴다 */}
+        {' · '}계획{' '}
+        {lane.plannedAt
+          ? `${new Date(lane.plannedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} KST`
+          : '—'}
         {' · '}기동 {lane.launchStatus ?? '—'} · 실행 전체 {lane.orchestrationStatus ?? '—'}
       </p>
 
