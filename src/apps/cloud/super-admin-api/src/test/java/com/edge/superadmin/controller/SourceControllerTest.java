@@ -522,6 +522,24 @@ class SourceControllerTest {
 	}
 
 	@Test
+	void 기동_기록_전_죽은_런은_마감_후_영구_진행_중이_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: Planner 가 기동 기록 전에 죽으면 launch_status 는 영구 PLANNING 이다(Reconciler 는
+		//      LAUNCH_UNCONFIRMED 이슈만 연다). PLANNING 단독으로 IN_PROGRESS 를 내면 죽은 런이
+		//      영원히 "돌고 있다"로 보인다(봇 P2). 마감 전엔 진행 중, 마감 후엔 UNKNOWN 이다.
+		List<OverviewLane> before = List.of(new OverviewLane("etf-daily", RUN_KEY, "PLANNING",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(before).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> stale = List.of(new OverviewLane("etf-daily", RUN_KEY, "PLANNING",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(stale).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
 	void 원장에_런이_없으면_빈_레인_목록이다() throws Exception {
 		overviewMvc(List.of()).perform(get("/api/v1/sources/overview"))
 				.andExpect(status().isOk())

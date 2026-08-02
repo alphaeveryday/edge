@@ -150,10 +150,14 @@ public class SourceService {
 		boolean runTerminalFailed =
 				ORCHESTRATION_TERMINAL_FAILED.contains(lane.orchestrationStatus() == null
 						? "" : lane.orchestrationStatus());
+		// PLANNING 은 단독으로 IN_PROGRESS 를 만들지 않는다 — Planner 가 기동 기록 전에 죽으면
+		// 런은 영구 PLANNING 이고(Reconciler 는 LAUNCH_UNCONFIRMED 이슈만 연다), 그걸 진행 중으로
+		// 내면 죽은 런이 영원히 "돌고 있다"로 보인다(봇 P2). 마감이 열려 있는 동안만
+		// pendingBeforeDeadline 경유로 진행 중이고, 마감이 지나면 아래 UNKNOWN 으로 떨어진다.
 		boolean pendingBeforeDeadline = requiredDue.stream().anyMatch(
 				t -> pendingOutcome(t) && t.deadlineAt() != null && !t.deadlineAt().isBefore(now));
-		if (!runTerminalFailed && ("PLANNING".equals(lane.launchStatus())
-				|| "RUNNING".equals(lane.orchestrationStatus()) || pendingBeforeDeadline)) {
+		if (!runTerminalFailed && ("RUNNING".equals(lane.orchestrationStatus())
+				|| pendingBeforeDeadline)) {
 			return "IN_PROGRESS";
 		}
 		boolean undecidablePending = requiredDue.stream().anyMatch(
@@ -162,6 +166,7 @@ public class SourceService {
 		// FULFILLED 여도 런 수준 증거 없이 READY 를 내면, 나중에 FAILED 로 reconcile 될 런이
 		// 잠시 정상으로 보인다(봇 P2). reconcile 전의 짧은 UNKNOWN 창이 정직한 표시다.
 		if ("LAUNCH_UNKNOWN".equals(lane.launchStatus())
+				|| "PLANNING".equals(lane.launchStatus())
 				|| lane.orchestrationStatus() == null
 				|| "UNKNOWN".equals(lane.orchestrationStatus())
 				|| lane.tasks().isEmpty() || undecidablePending) {
