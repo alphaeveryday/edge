@@ -20,6 +20,7 @@ import sys
 from collections import Counter
 from datetime import datetime, time, timedelta, timezone
 
+from ..observability import record as trace   # registry.record 와 이름 충돌 회피
 from .duck import CausalLake
 from .hypothesize import propose
 from .narrate import Edge, narrate
@@ -295,6 +296,27 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
 
     gwin = next((s for s in shares if s.window.kind == "gap"), None)
     gcov = gap_covariate(lake, ticker, day, gwin.log_ret) if gwin is not None else None
+    # 셀 판정 전량을 trace 에 남긴다 (18R). collect_trace 밖이면 record 는 no-op -
+    # 라이브러리 경로·테스트는 영향 없고, __main__ 만 파일로 떨군다.
+    trace("cell.inputs", ticker=ticker, day=day, instrument_id=instrument_id,
+           day_total=day_total, types=types, series_z=zs, anomalous=anomalous,
+           route=cell_route, after_close=len(after_close), windows=len(shares))
+    for t, r in reports:
+        trace("edge.verdict", channel=t.channel,
+               trigger=f"{t.trigger.kind}:{t.trigger.ident}",
+               exposure=f"{t.exposure.ident}/{t.exposure.transform}",
+               verdict=r.verdict, n=r.n, p2=r.p, applied=r.applies_today,
+               mode=r.mode, moderation=r.moderation, reduction=r.reduction,
+               vuln_today=r.vuln_today, trigger_note=r.trigger_note,
+               contribution=r.contribution, ci=[r.ci_lo, r.ci_hi],
+               iset=_iset(r, day_total), reason=r.reason)
+    for s in screens:
+        trace("grid.screen", **s)
+    if gcov is not None:
+        trace("gap.covariate", factor_ret=gcov.factor_ret, n=gcov.n,
+               beta=[gcov.beta_lo, gcov.beta_hi], explained=gcov.explained,
+               contradiction=gcov.contradiction, reason=gcov.reason)
+
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
                     edges=tuple(edges), gap_cov=gcov)
@@ -356,10 +378,24 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
 
 
 if __name__ == "__main__":
+    import json
     import os
+    from datetime import datetime as _dt
+    from pathlib import Path
     if len(sys.argv) != 4:
         sys.exit(__doc__)
-    from ..adapters.llm import DeepSeekClient
-    client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"],
-                            os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
-    print(run_cell(CausalLake(), client.complete_json, *sys.argv[1:]))
+    from ..adapters.llm import DeepSeekClient, TracingClient
+    from ..observability import collect_trace
+    client = TracingClient(DeepSeekClient(
+        os.environ["DEEPSEEK_API_KEY"],
+        os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
+    with collect_trace() as tr:
+        out = run_cell(CausalLake(), client.complete_json, *sys.argv[1:])
+    print(out)
+    # 프롬프트·응답 원문은 stdout 금지(observability 계약) - 파일로만 흐른다.
+    d = Path(os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")) / "traces"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{sys.argv[1]}_{sys.argv[3]}_{_dt.now():%H%M%S}.jsonl"
+    f.write_text("\n".join(json.dumps(e, ensure_ascii=False, default=str) for e in tr),
+                 encoding="utf-8")
+    print(f"\n[trace] {len(tr)}건 → {f}")

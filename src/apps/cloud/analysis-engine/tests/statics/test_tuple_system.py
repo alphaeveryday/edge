@@ -309,3 +309,35 @@ def test_gate_is_two_sided_with_cell_bonferroni():
     from edge_analysis.statics.gates import edge_gate
     assert edge_gate(400, 0.04) == "성립"
     assert edge_gate(400, 0.04, alpha=0.05 / 3) == "불성립"
+
+
+def test_agent_decisions_are_traced_with_raw_submissions():
+    # 18R: 거부 사유가 stdout 3건·60자로 잘려 사라지던 것을 trace 로 영속화.
+    # collect_trace 밖이면 record 는 no-op - 라이브러리 경로는 영향 없다.
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics.hypothesize import propose
+    def ask(system, user):
+        return {"hypotheses": [
+            {"vulnerabilities": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
+             "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
+                                              "transform": "누적"},
+             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": 1,
+             "reduction_note": "x"},
+            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+                                  "comparator": ">=", "percentile": 0.9}],
+             "trigger": {"kind": "점", "ident": "REAL.TYPE"},
+             "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
+                                              "transform": "누적"},
+             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": -1,
+             "reduction_note": "y"}]}
+    with collect_trace() as tr:
+        valid, rejected = propose(ask, facts="f", event_types=["REAL.TYPE"],
+                                  measurable=[("가격잔차", "누적")])
+    kills = [e for e in tr if e["event"] == "tuple.rejected"]
+    oks = [e for e in tr if e["event"] == "tuple.accepted"]
+    assert len(valid) == 1 and len(kills) >= 1
+    # 유효<2 라 되물음 1회 - trace 가 두 턴을 다 보여준다 (어느 턴이 뭘 냈는지가 감사다).
+    assert {e["turn"] for e in oks} == {1, 2}
+    assert kills[0]["raw"]["trigger"]["ident"] == "지어낸타입"   # 원문 보존
+    assert "날조" in kills[0]["why"]                             # 사유 전문(무절단)
+    assert oks[0]["reduction_note"] == "y"

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json  # noqa: F401 — 호출자 편의 재노출
 from typing import Callable
 
+from ..observability import record
 from .vocab import (CHANNELS, ExposureSource, HypothesisTuple, SERIES_FAMILIES,
                     TRANSFORMS, Trigger, VocabError, Vulnerability)
 
@@ -84,38 +85,48 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     rejected: list[str] = []
     valid: list[HypothesisTuple] = []
     user = facts
-    for _ in range(MAX_ASKS):
+    for turn in range(MAX_ASKS):
         out = ask(system, user)
         valid, seen_ch = [], set()
         for i, h in enumerate(out.get("hypotheses") or [], 1):
+            def _kill(why: str) -> None:
+                # 거부는 **원문과 함께** 남긴다 - 왜 죽었는지가 정성 디버깅의 본체다
+                # (18R: 지금까지 stdout 에 3건·60자로 잘려 나가고 사라졌다).
+                rejected.append(f"[{i}] {why}")
+                record("tuple.rejected", turn=turn + 1, idx=i, why=why, raw=h)
             try:
                 t = _parse(h)
             except (VocabError, TypeError, ValueError, KeyError) as e:
-                rejected.append(f"[{i}] {type(e).__name__}: {e}")
+                _kill(f"{type(e).__name__}: {e}")
                 continue
             if t.trigger.kind == "점" and t.trigger.ident not in event_types:
-                rejected.append(f"[{i}] 접지 밖 사건타입 날조: {t.trigger.ident!r}")
+                _kill(f"접지 밖 사건타입 날조: {t.trigger.ident!r}")
                 continue
             if t.trigger.kind == "계열" and t.trigger.ident not in series_families:
                 # 점의 접지 = 셀 사건 목록, 계열의 접지 = 오늘 발화(|z|≥2) 목록.
                 # 발화 안 한 계열로 오늘을 설명하는 가설은 방아쇠 날조다.
-                rejected.append(f"[{i}] 미발화 계열 방아쇠 날조: {t.trigger.ident!r} - "
-                                f"오늘 발화: {sorted(series_families) or '없음'}")
+                _kill(f"미발화 계열 방아쇠 날조: {t.trigger.ident!r} - "
+                      f"오늘 발화: {sorted(series_families) or '없음'}")
                 continue
             if t.exposure.kind == "속성" and any(
                     v.family == t.exposure.ident and v.transform == t.exposure.transform
                     for v in t.vulnerabilities):
                 # 6차 라이브 실측: 같은 피처를 취약성과 노출에 쓰면 INUS 내용이 0이고
                 # 조건화가 노출 상위만 남겨 용량-반응 자체를 파괴한다 (n=23·6·6 전멸).
-                rejected.append(f"[{i}] 취약성이 노출과 같은 피처"
-                                f"({t.exposure.ident}/{t.exposure.transform}) - "
-                                "조건이 아니라 동어반복이다. 다른 계열족으로 세워라")
+                _kill(f"취약성이 노출과 같은 피처({t.exposure.ident}/{t.exposure.transform}) - "
+                      "조건이 아니라 동어반복이다. 다른 계열족으로 세워라")
                 continue
             if t.channel in seen_ch:
-                rejected.append(f"[{i}] 채널 중복: {t.channel} - 같은 채널은 같은 가설의 변주다")
+                _kill(f"채널 중복: {t.channel} - 같은 채널은 같은 가설의 변주다")
                 continue
             seen_ch.add(t.channel)
             valid.append(t)
+            record("tuple.accepted", turn=turn + 1, idx=i, channel=t.channel,
+                   trigger=f"{t.trigger.kind}:{t.trigger.ident}",
+                   exposure=f"{t.exposure.ident}/{t.exposure.transform}",
+                   vulnerabilities=[f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"
+                                    for v in t.vulnerabilities],
+                   sign=t.sign, reduction_note=t.reduction_note)
         if len(valid) >= 2:
             break
         user = (facts + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"
