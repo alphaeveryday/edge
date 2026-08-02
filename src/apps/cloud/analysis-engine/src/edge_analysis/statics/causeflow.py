@@ -18,7 +18,13 @@ from __future__ import annotations
 
 import datetime as dt
 import sys
+import time
 from dataclasses import dataclass
+
+
+def _log(msg: str) -> None:
+    """진행을 stderr 로 즉시 흘린다 - 백그라운드 실행을 밖에서 볼 수 있어야 한다."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 import numpy as np
 
@@ -176,8 +182,10 @@ def run(lake, ask, ticker: str, instrument_id: str, day: str,
             if rnd > 1:
                 extra = ("\n\n[1라운드 결과 - 끊긴 간선과 사유]\n" + dag.render()
                          + "\n끊긴 채널·방아쇠를 반복하지 말고 **새 가설구조**를 내라.")
+            _log(f"r{rnd} {dag.target_kind}: 경쟁가설 요청")
             tuples, rejected = propose(ask, facts=base + head + extra, event_types=et,
                                        measurable=list(FEATURES), series_families=sf)
+            _log(f"r{rnd} {dag.target_kind}: 튜플 {len(tuples)} · 반려 {len(rejected)}")
             audit += [f"[{dag.target_kind} r{rnd}] 반려: {r}" for r in rejected]
             audit += [f"[{dag.target_kind} r{rnd}] 병합 반려: {r}"
                       for r in dag.add(tuples, round=rnd)]
@@ -186,6 +194,7 @@ def run(lake, ask, ticker: str, instrument_id: str, day: str,
                 audit.append(f"[검증] {p}")
             ctx = dag.render(verbose=False)
             for e in dag.pending():
+                _log(f"검정 {e.eid} {e.tup.channel}·{e.tup.trigger.ident}")
                 e.finding = judge_edge(lake, ask, ticker=ticker,
                                        instrument_id=instrument_id, day=day,
                                        edge=e, dag_txt=ctx, facts=base,
@@ -194,6 +203,7 @@ def run(lake, ask, ticker: str, instrument_id: str, day: str,
             break
 
     # ── 7. 구조방정식 에이전트 ────────────────────────────────────────────
+    _log("구조방정식 에이전트")
     material = base + "\n\n" + "\n\n".join(d.render() for d in dags)
     sem = ask(_SEM_SYS, material + "\n\n방정식과 설명을 JSON 으로.")
     eqs = sem.get("equations") or []
@@ -232,7 +242,88 @@ JSON:
  "explanation": "직관 설명"}"""
 
 
+def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
+    """결정론 재료 전부. 하네스 오케스트레이터(에이전트)가 가설·판정·SEM 을 맡고
+    코드는 사실만 낸다 - 원격 모델 직렬 왕복이 사라진다."""
+    from .attribute import load_cell
+    from .paneltest import Z_ANOM, series_z
+
+    tk6 = ticker.split(".")[0]
+    total, layers = stock_layers(lake, tk6, day)
+    if total is None or not layers:
+        raise SystemExit(f"{ticker} {day}: 층 분해 불가")
+    targets = pick_targets(layers)
+    shares, labels, _ac = load_cell(lake, ticker, instrument_id, day)
+    types = sorted({labels[e] for sh in shares for e in sh.window.event_ids})
+    zs = series_z(lake, instrument_id, day)
+    fired = sorted(k for k, v in zs.items() if v is not None and abs(v) >= Z_ANOM)
+    base = cell_brief(lake, tk6, day, total, layers)
+    base += "\n시간 분해(항등식): " + " · ".join(
+        f"{sh.window.name} {(np.exp(sh.log_ret) - 1) * 100:+.2f}%p" for sh in shares)
+    if fired:
+        base += f"\n오늘 발화 계열(|z|≥{Z_ANOM}): " + " · ".join(
+            f"{k} z={zs[k]:+.1f}" for k in fired)
+    return {"base": base, "total": total,
+            "targets": [(t.kind, t.label, t.pct) for t in targets],
+            "event_types": types, "fired": fired}
+
+
+def _cli() -> None:
+    """하네스용 서브커맨드 - 결정론 조각을 낱개로 판다.
+
+      facts    <ticker> <iid> <day>            셀 사실 + 대상 + 접지
+      validate <envelope.json>                 {"event_types":[],"series_families":[],
+                                                "hypotheses":[...]} → 심사 결과
+      panel    <ticker> <iid> <day> <env.json> 튜플 1개의 패널 수치 (판정 없음)
+    """
+    import json
+    cmd = sys.argv[1]
+    if cmd == "facts":
+        g = gather(CausalLake(), *sys.argv[2:5])
+        print(g["base"])
+        print("\n=== 대상 (|기여| 순 ≤3) ===")
+        for k, lb, pct in g["targets"]:
+            print(f"  {k}\t{pct * 100:+.3f}%p\t{lb}")
+        print("\n=== 접지 ===")
+        print("event_types:", " · ".join(g["event_types"]) or "없음")
+        print("fired:", " · ".join(g["fired"]) or "없음")
+        return
+    if cmd == "validate":
+        from .hypothesize import screen_tuples
+        env = json.loads(pathlib_read(sys.argv[2]))
+        valid, rejected = screen_tuples(env.get("hypotheses") or [],
+                                        event_types=env.get("event_types") or [],
+                                        series_families=env.get("series_families") or [])
+        for t in valid:
+            print(f"[OK] {t.channel} · {t.trigger.kind}:{t.trigger.ident} · "
+                  f"노출 {t.exposure.ident}/{t.exposure.transform} · 부호{t.sign:+d} · "
+                  f"의도: {t.intent}")
+        for r in rejected:
+            print(f"[REJ] {r}")
+        return
+    if cmd == "panel":
+        from .hypothesize import screen_tuples
+        from .judge import panel_text
+        env = json.loads(pathlib_read(sys.argv[5]))
+        valid, rejected = screen_tuples(env.get("hypotheses") or [],
+                                        event_types=env.get("event_types") or [],
+                                        series_families=env.get("series_families") or [])
+        if not valid:
+            raise SystemExit("유효 튜플 없음:\n" + "\n".join(rejected))
+        print(panel_text(CausalLake(), valid[0], sys.argv[3], sys.argv[4]))
+        return
+    raise SystemExit(__doc__)
+
+
+def pathlib_read(p: str) -> str:
+    from pathlib import Path
+    return Path(p).read_text(encoding="utf-8")
+
+
 def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel"):
+        _cli()
+        return
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
     import os

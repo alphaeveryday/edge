@@ -77,23 +77,28 @@ class JudgeCatalog(Catalog):
     tup: object = None
 
     def panel(self) -> str:
-        """타입 수준 패널의 수치. 판정 문자열은 '코드 참고'로만 - 결론은 검정자가."""
-        from .paneltest import edge_test
-        r = edge_test(self.lake, self.tup, self.day,
-                      cell_instrument_id=self.instrument_id)
-        rows = [f"패널 수치 (판정은 네가 한다 - 아래 verdict 는 코드 참고일 뿐):",
-                f"  n={r.n} · p={r.p if r.p is not None else '미계산'} · "
-                f"상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
-                if r.effect_high is not None else f"  n={r.n} · 효과 미계산",
-                f"  오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
-                if r.today_exposure_pct is not None else "  오늘 노출 미계산",
-                f"  취약성 오늘: {r.vuln_today or '-'} (충족 {r.vuln_satisfied})",
-                f"  환원 검사: {r.reduction or '-'}",
-                f"  반사실: {r.counterfactual or '-'}",
-                f"  코드 참고 의견: {r.verdict}" + (f" - {r.reason}" if getattr(r, 'reason', '') else "")]
-        if getattr(r, "trigger_fired", None) is not None:
-            rows.append(f"  오늘 방아쇠 발화: {r.trigger_fired}")
-        return "\n".join(rows)
+        return panel_text(self.lake, self.tup, self.instrument_id, self.day)
+
+
+def panel_text(lake, tup, instrument_id: str, day: str) -> str:
+    """타입 수준 패널의 수치. 판정 문자열은 '코드 참고'로만 - 결론은 검정자가.
+    하네스 CLI(causeflow panel)와 도구(JudgeCatalog.panel)가 같은 포맷을 쓴다."""
+    from .paneltest import edge_test
+    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id)
+    rows = [f"패널 수치 (판정은 네가 한다 - 아래 verdict 는 코드 참고일 뿐):",
+            f"  n={r.n} · p={r.p if r.p is not None else '미계산'} · "
+            f"상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
+            if r.effect_high is not None else f"  n={r.n} · 효과 미계산",
+            f"  오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
+            if r.today_exposure_pct is not None else "  오늘 노출 미계산",
+            f"  취약성 오늘: {r.vuln_today or '-'} (충족 {r.vuln_satisfied})",
+            f"  환원 검사: {r.reduction or '-'}",
+            f"  반사실: {r.counterfactual or '-'}",
+            f"  코드 참고 의견: {r.verdict}"
+            + (f" - {r.reason}" if getattr(r, 'reason', '') else "")]
+    if getattr(r, "trigger_fired", None) is not None:
+        rows.append(f"  오늘 방아쇠 발화: {r.trigger_fired}")
+    return "\n".join(rows)
 
 
 def judge_edge(lake, ask, *, ticker: str, instrument_id: str, day: str,
@@ -105,7 +110,9 @@ def judge_edge(lake, ask, *, ticker: str, instrument_id: str, day: str,
     m = Machine(catalog=cat, menus=JUDGE_MENUS,
                 screen_tools=("screen", "series", "panel"))
     brief = f"{edge.head()}\n의도: {edge.intent}\n\n{facts}"
-    seen = explore(ask, m, facts=brief)          # explore 는 자체 관측자 프롬프트를 쓴다
+    # 2턴이면 충분하다: 한 턴에 배치 호출이 되므로 (events+news) → (panel+series).
+    # 4턴은 간선 9개 × 왕복 비용으로 한 셀에 한 시간을 태웠다 (라이브 실측).
+    seen = explore(ask, m, facts=brief, max_turns=2)
     out = ask(_SYSTEM, _VERDICT_ASK.format(
         head=edge.head(), intent=edge.intent, dag=dag_txt, facts=facts,
         seen=seen or "(관측 없음)"))
