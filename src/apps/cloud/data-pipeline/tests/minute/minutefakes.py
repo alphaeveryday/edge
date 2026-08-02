@@ -315,13 +315,13 @@ class _Cursor:
             row = self.db.windows.get((params[0], params[1]))
             if row is not None:
                 self._rows = [(row["generation"], row["checksum"])]
-        elif s.startswith("SELECT generation FROM minute_ingestion_window"):
-            # 트리거 persist 의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
+        elif s.startswith("SELECT generation, data_status FROM minute_ingestion_window"):
+            # persist·시가 확정의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
             # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다
             assert "FOR UPDATE" in s
             row = self.db.windows.get((params[0], params[1]))
             if row is not None:
-                self._rows = [(row["generation"],)]
+                self._rows = [(row["generation"], row["data_status"])]
         elif s.startswith("SELECT entity_id, status, open_price FROM minute_session_open"):
             self._rows = [
                 (entity, row["status"], row["open_price"])

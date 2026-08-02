@@ -571,7 +571,7 @@ class TestAdversarialInputs:
             return rows
 
         monkeypatch.setattr(handler, "_artifact_rows", corrupting_read)
-        with pytest.raises(TransientJobError, match="첫 window 세대"):
+        with pytest.raises(TransientJobError, match="첫 window"):
             claim_then_run(handler, second)
         assert db.session_opens == {}  # 낡은 시가가 동결되지 않았다
 
@@ -644,3 +644,60 @@ class TestAdversarialInputs:
         assert len(checksum) == 64
         assert db.session_opens == {}  # 시가 해소 자체를 걸지 않았다
         assert db.triggers == {}
+
+    def test_in_flight_correction_blocks_trigger_persist(self, tmp_path):
+        # 정정 진행 중(재claim)엔 세대가 아직 옛값이다 — 상태 대조 없이는 낡은 발화가
+        # UNIQUE 를 선점해 정정 세대 판정이 막힌다(#485 봇 P2)
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        claim = handler.jobs.claim_job(
+            kind="price", job_id=second["payload"]["job_id"], redrive_generation=0,
+            worker_id="c-test", now=datetime.now(KST), lease_seconds=600,
+        )
+        window_start = datetime.fromisoformat(str(second["payload"]["window_start"]))
+        db.windows[(session_id, window_start)]["data_status"] = "CLAIMED"
+        with pytest.raises(TransientJobError, match="정정"):
+            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                    attempt=claim["attempt_count"], redrive_generation=0)
+        assert db.triggers == {}
+
+    def test_in_flight_first_window_correction_blocks_open(self, tmp_path):
+        # 첫 window 가 정정 진행 중이면 시가를 확정하지 않는다 — 확정하면 낡은 시가가
+        # 불변 동결되고 정정 세대가 DO NOTHING 에 막힌다(#485 봇 P2)
+        db = FakeMinuteDB()
+        worker, _, session_id = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        first_start = min(ws for (sid, ws) in db.windows if sid == session_id)
+
+        original = handler._artifact_rows
+
+        def racing_read(session_date, window_start, generation, **kwargs):
+            rows = original(session_date, window_start, generation, **kwargs)
+            if window_start == first_start:
+                db.windows[(session_id, first_start)]["data_status"] = "CLAIMED"
+            return rows
+
+        import pytest as _pytest
+        monkey = _pytest.MonkeyPatch()
+        monkey.setattr(handler, "_artifact_rows", racing_read)
+        try:
+            with pytest.raises(TransientJobError, match="정정"):
+                claim_then_run(handler, second)
+        finally:
+            monkey.undo()
+        assert db.session_opens == {}

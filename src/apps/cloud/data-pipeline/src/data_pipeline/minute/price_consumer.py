@@ -37,7 +37,7 @@ from .artifacts import sha256_bytes
 from .consumer import PermanentJobError, TransientJobError
 from .jobs import JobLedger
 from .models import KST, SESSION_OPEN, content_checksum
-from .states import WINDOW_MISSING
+from .states import WINDOW_CLAIMED, WINDOW_DUE, WINDOW_MISSING
 
 logger = logging.getLogger(__name__)
 
@@ -364,17 +364,21 @@ class PriceTriggerHandler:
             # 불변으로 동결되고 정정 세대 판정도 DO NOTHING 에 막힌다(#485 봇 P2).
             cur.execute(
                 """
-                SELECT generation FROM minute_ingestion_window
+                SELECT generation, data_status FROM minute_ingestion_window
                 WHERE session_id = %s AND window_start = %s
                 FOR UPDATE
                 """,
                 (session_id, first_start),
             )
             row = cur.fetchone()
-            if row is None or row[0] != first_generation:
+            # 정정이 **진행 중**이면 세대는 아직 옛값이다(재claim 은 상태만 CLAIMED 로
+            # 되돌리고 세대·checksum 은 재commit 때 오른다) — 세대 대조만으론 낡은
+            # artifact 의 시가가 불변 확정된다(#485 봇 P2). 커밋 결과 상태일 때만 쓴다.
+            if (row is None or row[0] != first_generation
+                    or row[1] in (WINDOW_DUE, WINDOW_CLAIMED)):
                 raise TransientJobError(
-                    f"첫 window 세대가 정정됐다(읽음={first_generation}, "
-                    f"현재={row and row[0]}) — 시가 확정 재시도",
+                    f"첫 window 가 정정됐거나 정정 중이다(읽음={first_generation}, "
+                    f"현재={row and (row[0], row[1])}) — 시가 확정 재시도",
                     code="OPEN_SOURCE_CORRECTED",
                 )
             for entity_id, status, open_price, reason in decisions:
@@ -460,18 +464,22 @@ class PriceTriggerHandler:
             # UNIQUE 에 막혀 **정정 전 결과가 정본**이 된다.
             cur.execute(
                 """
-                SELECT generation FROM minute_ingestion_window
+                SELECT generation, data_status FROM minute_ingestion_window
                 WHERE session_id = %s AND window_start = %s
                 FOR UPDATE
                 """,
                 (session_id, window_start),
             )
             row = cur.fetchone()
-            if row is None or row[0] != generation:
+            # 세대 대조 + **커밋 결과 상태** 대조 — 정정 진행 중(재claim)이면 세대가
+            # 아직 옛값이라 세대만 보면 낡은 발화가 UNIQUE 를 선점한다(#485 봇 P2)
+            if (row is None or row[0] != generation
+                    or row[1] in (WINDOW_DUE, WINDOW_CLAIMED)):
                 # 재시도가 kernel claim 에 닿으면 stale 검사가 DEAD('STALE') 로
                 # 정리한다 — 여기서 확정하면 두 곳이 같은 판정을 소유하게 된다
                 raise TransientJobError(
-                    f"window 세대가 정정됐다(job={generation}, 현재={row and row[0]})",
+                    f"window 가 정정됐거나 정정 중이다(job={generation}, "
+                    f"현재={row and (row[0], row[1])})",
                     code="STALE_GENERATION",
                 )
             for fire in fired:
