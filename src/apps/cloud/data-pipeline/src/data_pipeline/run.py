@@ -196,8 +196,9 @@ def main(argv: list[str] | None = None) -> int:
                              "window 범위와 universe_hash 가 여기서 나온다 — 빠뜨리면 "
                              "시간외 구간이 무신호로 누락되므로 거부한다")
     parser.add_argument("--session-id", default=None,
-                        help="qc-minute-session: 판정할 1분 세션(필수). QC 는 하루 하나를 "
-                             "지목해서 돈다 — 범위를 열어 두면 살아 있는 세션까지 확정한다")
+                        help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
+                             "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
+                             "있는 세션까지 확정하거나 drain 을 건다")
     parser.add_argument("--reason", default=None,
                         help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")

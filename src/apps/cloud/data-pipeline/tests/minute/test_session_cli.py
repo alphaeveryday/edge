@@ -122,6 +122,24 @@ class TestPlan:
         ) == 2
         assert ledger_db.sessions == {}
 
+    def test_unknown_source_group_is_rejected(self, ledger_db):
+        # ⚠️ dataset 오타만 막고 여기를 열어 두면 같은 축이 한 칸 옆에 그대로 산다.
+        # 원장의 source_group 은 정본이라 EOD 가 그 값으로 raw prefix 를 스캔한다 —
+        # `tos` 로 세션이 서면 Worker 가 쓴 실제 artifact 를 아무도 못 찾고 orphan 0건,
+        # 즉 **거짓 clean** 이 나온다.
+        assert plan_session_cli(
+            make_settings(), dataset="price_minute", source_group="tos",
+            session_date="2026-07-31", universe=str(FIXTURES / "universe_348.json"),
+        ) == 2
+        assert ledger_db.sessions == {}
+
+    def test_source_group_vocabulary_is_per_dataset(self, ledger_db):
+        # 어휘가 dataset 과 짝이어야 한다 — 존재하는 값이어도 짝이 틀리면 같은 결과가 난다
+        assert plan_session_cli(
+            make_settings(), dataset="news_minute", source_group="toss",
+            session_date="2026-07-31", universe=None,
+        ) == 2
+
     def test_week_date_format_is_rejected(self, ledger_db):
         # `date.fromisoformat` 은 3.11+ 에서 이걸 2025-12-29 로 읽는다 — 다른 연도의
         # 세션이 조용히 생긴다
@@ -186,3 +204,51 @@ class TestDrain:
 
     def test_missing_session_id_is_a_config_failure(self, ledger_db):
         assert drain_session_cli(make_settings(), session_id=None) == 2
+
+
+class TestCliWiring:
+    """`run.py` 배선 — 핸들러만 부르는 테스트는 이 층을 통째로 못 본다.
+
+    argparse choices 에서 step 이 빠지거나, dispatch 가 인자를 잘못 넘기거나, 전용 인자
+    격리(fail-loud)가 사라져도 위 테스트는 전부 통과한다. 운영자가 실제로 치는 것은
+    `run <step> --…` 이므로 그 경로를 한 번은 지나가야 한다.
+    """
+
+    def _no_config(self, monkeypatch):
+        monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+        from data_pipeline import run as run_mod
+        return run_mod
+
+    def test_plan_step_passes_every_argument(self, monkeypatch):
+        run_mod = self._no_config(monkeypatch)
+        seen = {}
+        monkeypatch.setattr(run_mod, "plan_session_cli",
+                            lambda settings, **kwargs: seen.update(kwargs) or 0)
+
+        assert run_mod.main(["plan-minute-session", "--dataset", "price_minute",
+                             "--source-group", "toss", "--session-date", "2026-07-31",
+                             "--universe", "u.json"]) == 0
+        assert seen == {"dataset": "price_minute", "source_group": "toss",
+                        "session_date": "2026-07-31", "universe": "u.json"}
+
+    def test_drain_step_passes_the_session_id(self, monkeypatch):
+        run_mod = self._no_config(monkeypatch)
+        seen = {}
+        monkeypatch.setattr(run_mod, "drain_session_cli",
+                            lambda settings, **kwargs: seen.update(kwargs) or 0)
+
+        assert run_mod.main(["drain-minute-session", "--session-id", "msn_1"]) == 0
+        assert seen == {"session_id": "msn_1"}
+
+    def test_session_args_are_rejected_on_other_steps(self, monkeypatch):
+        # ⚠️ 조용히 무시하면 운영자는 그 인자가 반영된 줄 안다 — plan 전용 인자를 다른
+        # 스텝에 붙여도 그 스텝이 그냥 돌면, 계획했다고 믿은 세션이 없다.
+        run_mod = self._no_config(monkeypatch)
+        # 거부는 run.py 의 기존 규약대로 `SystemExit(메시지)` 다(redrive 전용 인자와 동형)
+        for argv in (["relay", "--dataset", "price_minute"], ["relay", "--session-id", "msn_1"]):
+            with pytest.raises(SystemExit) as exit_info:
+                run_mod.main(argv)
+            assert "relay" in str(exit_info.value)   # 무엇이 왜 거부됐는지 말한다
+        # drain 은 session-id 를 쓰는 쪽이다 — 격리가 이걸 같이 막으면 안 된다
+        monkeypatch.setattr(run_mod, "drain_session_cli", lambda settings, **kwargs: 0)
+        assert run_mod.main(["drain-minute-session", "--session-id", "msn_1"]) == 0

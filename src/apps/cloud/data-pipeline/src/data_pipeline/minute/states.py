@@ -43,6 +43,13 @@ DATASET_NEWS_MINUTE = "news_minute"
 MINUTE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_NEWS_MINUTE})
 # universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
 UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
+# dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이라 EOD 가 그 값으로
+# raw prefix 를 스캔한다 — 오타가 들어가면 실제 artifact 를 못 찾고 "orphan 0건"이라는
+# 거짓 clean 이 나온다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
+SOURCE_GROUPS_BY_DATASET = {
+    DATASET_PRICE_MINUTE: frozenset({"toss"}),
+    DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
+}
 
 # ── minute_ingestion_window.data_status ──
 WINDOW_DUE = "DUE"
