@@ -235,7 +235,7 @@ locals {
     PGDATABASE            = var.db_name
     PGUSER                = var.db_user
     PGSCHEMA              = "public"
-    DEEPSEEK_MODEL        = "deepseek-v4-pro"
+    DEEPSEEK_MODEL        = "deepseek-v4-flash"
     # fallback 기본값 — SFN analyze Map(ALPHA-470)이 이터레이션마다 유니버스 티커로 덮는다.
     # 직접 ecs run-task(특정일 수동 재실행) 때만 이 값이 실제로 쓰인다.
     ALPHAMALE_ETF_TICKER       = "091160"

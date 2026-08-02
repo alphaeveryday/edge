@@ -122,7 +122,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 | `PGHOST`·`PGPORT`·`PGDATABASE`·`PGUSER`·`PGPASSWORD` | edge Postgres(Cloud Event Store) | — |
 | `PGSCHEMA` | 스키마 | `public` |
 | `DEEPSEEK_API_KEY` | 분류·설명 LLM | — (Secrets Manager 주입) |
-| `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-pro` |
+| `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-flash` |
 | `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
 | `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
