@@ -169,9 +169,9 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				""", AS_OF);
 		jdbc.update("""
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
-				       dataset, plan_status, task_outcome, idempotency_key)
+				       dataset, plan_status, task_outcome, idempotency_key, deadline_at)
 				VALUES ('et-b-l', 'run-b', 'LOAD_ETF_HOLDINGS', 'feature', 'etf_holdings',
-				        'DUE', 'PENDING', 'et-b-l-key')
+				        'DUE', 'PENDING', 'et-b-l-key', now() + interval '1 hour')
 				""");
 
 		Impact impact = repository.impact(RUN_KEY);   // A 런을 조회해도
@@ -191,6 +191,26 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				""");
 
 		assertThat(repository.impact(RUN_KEY).loadPending()).isTrue();
+	}
+
+	@Test
+	void 마감_지난_영구_PENDING_잔재는_유보를_만들지_않는다() {
+		// WHY: 기동 실패 런의 LOAD 행은 영원히 PENDING 이다(Reconciler 미귀결) — 그 잔재
+		//      하나가 전역 유보를 영구화하면 실제 결손·복구 안내가 계속 숨는다(검증 라운드).
+		jdbc.update("""
+				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
+				       execution_name, launch_status, created_at)
+				VALUES ('run-dead', 'etf-daily:2026-07-01T15:40', 'etf-daily', 'exec-d',
+				        'LAUNCH_FAILED', '2026-07-01T06:40:00Z'::timestamptz)
+				""");
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, task_outcome, idempotency_key, deadline_at)
+				VALUES ('et-dead-l', 'run-dead', 'LOAD_ETF_HOLDINGS', 'feature', 'etf_holdings',
+				        'DUE', 'PENDING', 'et-dead-key', '2026-07-01T09:00:00Z'::timestamptz)
+				""");
+
+		assertThat(repository.impact(RUN_KEY).loadPending()).isFalse();
 	}
 
 	@Test

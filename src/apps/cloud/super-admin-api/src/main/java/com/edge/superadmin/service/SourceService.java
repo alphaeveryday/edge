@@ -59,12 +59,16 @@ public class SourceService {
 					+ "(ETF_PROFILE_COLLECTION_KIS → normalize → load-instruments) 선행 필요";
 
 	/**
-	 * KRX 는 과거 기준일을 재질의할 수 없다(trdDd 는 실행 시점 당일만) — 창이 지난 결손에
-	 * 재실행을 권고하면 과거는 복구되지 않고 현 스냅샷이 과거 run_id 에 귀속된다(리뷰 3라운드).
+	 * KRX 수집기는 실행 시점의 <b>최신 KR 거래일</b>을 질의한다(비거래일엔 직전 거래일 —
+	 * 그래서 금요일 결손은 주말에도 복구 가능하다). 기준일≠오늘을 창 닫힘으로 단정하면 그
+	 * 마지막 기회를 막는다(검증 라운드). 콘솔엔 거래일 달력이 없어 확정 대신 유효 조건을
+	 * 안내한다 — 조건 판정은 운영자(달력을 아는 쪽) 소관.
 	 */
-	private static final String HOLDINGS_RECOVERY_WINDOW_CLOSED =
-			"복구 창(당일) 경과 — KRX 는 과거 기준일 재질의가 불가하다(trdDd 는 실행 당일만). "
-					+ "재실행하지 말 것 · 과거 기준일 백필은 수동 검토 필요";
+	private static final String HOLDINGS_RECOVERY_WINDOW_CONDITIONAL =
+			"기준일이 오늘이 아님 — KRX 는 실행 시점의 최신 거래일만 질의한다. 지금의 최신 "
+					+ "거래일이 이 기준일과 같을 때만(주말·휴장일인 지금이 그 직후일 때) 재실행이 "
+					+ "유효하다: " + HOLDINGS_RECOVERY_ACTION + " · 다르면 재실행하지 말 것"
+					+ "(과거 기준일 백필 불가 — 수동 검토)";
 
 	/** holdings 결손 영향(ALPHA-686). runKey 지정 미존재는 404 — 빈 영향으로 위장하지 않는다. */
 	public HoldingsImpactResponse holdingsImpact(String runKey) {
@@ -80,7 +84,7 @@ public class SourceService {
 		String action = null;
 		if (!impact.loadPending() && !impact.missing().isEmpty()) {
 			if (!LocalDate.now(KST).equals(impact.expectedAsOf())) {
-				action = HOLDINGS_RECOVERY_WINDOW_CLOSED;
+				action = HOLDINGS_RECOVERY_WINDOW_CONDITIONAL;
 			} else {
 				boolean anyWithoutInstrument = impact.missing().stream()
 						.anyMatch(m -> m.instrumentId() == null);

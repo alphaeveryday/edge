@@ -58,14 +58,17 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 	 * 기준일을 메울 수 있다(리뷰 3라운드). 미귀결(outcome NULL/PENDING)뿐 아니라 <b>도는
 	 * 재시도</b>(귀결 후 RUNNING attempt — outcome 은 완료 시에만 갱신)도 잡는다. 한계: 강제
 	 * 종료로 남은 죽은 RUNNING 잔재는 유보를 과대하게 만들 수 있다 — 보수적 방향이고, 그
-	 * 잔재는 Reconciler 의 STALLED 이슈가 드러낸다(드릴다운 소관).
+	 * 잔재는 Reconciler 의 STALLED 이슈가 드러낸다(드릴다운 소관). 단 <b>마감 지난 미귀결</b>은
+	 * 진행 중이 아니라 잔재다(기동 실패 런의 PENDING 은 영원히 남는다 — 검증 라운드) —
+	 * deadline 경과 조건으로 걸러 전역 영구 유보를 막는다.
 	 */
 	private static final String LOAD_PENDING_SQL = """
 			SELECT EXISTS (
 			    SELECT 1
 			      FROM ops_expected_task l
 			     WHERE l.task_key = 'LOAD_ETF_HOLDINGS'
-			       AND (l.task_outcome IS NULL OR l.task_outcome = 'PENDING'
+			       AND (((l.task_outcome IS NULL OR l.task_outcome = 'PENDING')
+			             AND (l.deadline_at IS NULL OR l.deadline_at > now()))
 			            OR EXISTS (SELECT 1 FROM ops_task_attempt a
 			                        WHERE a.expected_task_id = l.expected_task_id
 			                          AND a.execution_status = 'RUNNING')))

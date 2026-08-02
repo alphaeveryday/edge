@@ -699,9 +699,10 @@ class SourceControllerTest {
 	}
 
 	@Test
-	void 복구_창이_지난_기준일에는_재실행을_권고하지_않는다() throws Exception {
-		// WHY: KRX 는 과거 기준일 재질의 불가(trdDd=실행 당일만) — 창 지난 결손에 재실행을
-		//      권고하면 과거는 안 고쳐지고 현 스냅샷이 과거 run_id 에 귀속된다(리뷰 3라운드).
+	void 기준일이_오늘이_아니면_조건부_안내다() throws Exception {
+		// WHY: KRX 는 실행 시점의 최신 거래일만 질의한다 — 무조건 재실행 권고는 과거를 못
+		//      고치고(3라운드), 무조건 금지는 주말의 금요일 결손 복구 기회를 막는다(검증 라운드).
+		//      콘솔엔 거래일 달력이 없어 확정 대신 유효 조건을 안내한다.
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40",
 						LocalDate.of(2026, 7, 20), 33, 31, false, false, List.of(
@@ -710,7 +711,7 @@ class SourceControllerTest {
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
 				.andExpect(jsonPath("$.result.recommendedAction",
-						org.hamcrest.Matchers.containsString("재실행하지 말 것")));
+						org.hamcrest.Matchers.containsString("최신 거래일이 이 기준일과 같을 때만")));
 	}
 
 	@Test
