@@ -486,3 +486,56 @@ class TestAdversarialInputs:
                     attempt=1, redrive_generation=0)
         assert db.triggers == {}
         assert not any(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values())
+
+    def test_extended_session_open_comes_from_regular_first_window(self, tmp_path):
+        # 시간외 선언 세션은 08:00 부터 window 가 있다 — 세션 첫 window 를 쓰면 정규장
+        # 전용 ETF 전부가 08:00 부재로 MISSING 영구 확정된다(#485 봇 P1). 시가 기준은
+        # **정규장 첫 window(09:00)** 다.
+        universe_ext = Universe(
+            universe_version="univ-ext-v1",
+            etf_ids=("500000", "500001"),
+            constituent_ids=("100000",),
+            extended_hours_ids=("100000",),
+        )
+        db = FakeMinuteDB()
+        # 720 계획의 앞부분: 08:00(시간외, 개별주만) + 09:00·09:01(정규장)
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=universe_ext)
+        chosen = [planned[0]] + [w for w in planned
+                                 if w[0].astimezone(KST).hour == 9][:2]
+        session_id, _ = ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=universe_ext.universe_version,
+            universe_hash=universe_ext.universe_hash, windows=chosen,
+        )
+        worker = PriceWorker(
+            session_id=session_id, ledger=ledger,
+            committer=MinuteCommitter(db=_DB, connect_fn=db.connect),
+            storage=LocalStorage(root=tmp_path),
+            collector=ScriptedCollector({
+                # index 는 09:00 기준 분 — 08:00 window 는 index -60 이라 시리즈 밖
+                # (missing)이고, 시간외 기대는 100000 뿐이라 INCOMPLETE 로 커밋된다
+                "500000": [(100, 100), (100, 110)],
+                "500001": [(200, 200), (200, 200)],
+                "100000": [(50, 50), (50, 50)],
+            }),
+            config=WorkerConfig(
+                worker_id="w1", dataset="price_minute", source="toss", market="KR",
+                session_date="2026-07-31", universe=universe_ext, run_id="run_t",
+                trigger_schema_version="trig-1",
+                destination="price-analysis-realtime", lease_seconds=60,
+                recovery_budget_per_tick=3,
+            ),
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        events = price_job_events(db)
+        # 09:01 window 판정 — 시가는 09:00 open(100)이고, 08:00 부재는 무관하다
+        target = [e for e in events if "T00:01" in str(e["payload"]["window_start"])][0]
+        handler(job_id=target["payload"]["job_id"], payload=target["payload"],
+                attempt=1, redrive_generation=0)
+        row = db.session_opens[(session_id, "500000")]
+        assert row["status"] == "OPEN"
+        assert Decimal(str(row["open_price"])) == 100
+        [trigger] = db.triggers.values()  # 110/100 → +10% 발화
+        assert trigger["entity_id"] == "500000"

@@ -35,7 +35,7 @@ from ..db import connect as _default_connect, stable_domain_id
 from ..lake.storage import Storage, canonical_price_minute_artifact_key
 from .consumer import PermanentJobError, TransientJobError
 from .jobs import JobLedger
-from .models import KST, content_checksum
+from .models import KST, SESSION_OPEN, content_checksum
 from .states import WINDOW_MISSING
 
 logger = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ class PriceTriggerHandler:
         undecided = sorted(needed - opens.keys())
         if not undecided:
             return opens
-        first = self._first_window(session_id)
+        first = self._first_window(session_id, session_date)
         if first is None:
             raise TransientJobError("세션에 window 계획이 없다", code="NO_WINDOWS")
         first_start, first_generation, first_status, first_checksum = first
@@ -325,15 +325,25 @@ class PriceTriggerHandler:
             return {row[0]: {"status": row[1], "open_price": row[2]}
                     for row in cur.fetchall()}
 
-    def _first_window(self, session_id: str):
+    def _first_window(self, session_id: str, session_date: str):
+        """ETF 시가의 기준 window = **정규장 첫 window**(09:00 이후 첫 칸).
+
+        세션 전체 첫 window 를 쓰면 시간외 선언이 있는 세션(08:00 시작)에서 정규장
+        전용 ETF 전부가 08:00 artifact 부재로 MISSING 영구 확정된다 — 실측(2026-08-02)
+        상 ETF 는 전부 정규장 전용이라 판정기가 통째로 무력화되는 지뢰다(#485 봇 P1).
+        """
+        regular_open = datetime.combine(
+            datetime.strptime(session_date, "%Y-%m-%d").date(), SESSION_OPEN, tzinfo=KST
+        )
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT window_start, generation, data_status, checksum
                 FROM minute_ingestion_window
-                WHERE session_id = %s ORDER BY window_start ASC LIMIT 1
+                WHERE session_id = %s AND window_start >= %s
+                ORDER BY window_start ASC LIMIT 1
                 """,
-                (session_id,),
+                (session_id, regular_open),
             )
             return cur.fetchone()
 

@@ -291,11 +291,13 @@ class _Cursor:
                 self._rows = [(row["session_id"], row["window_start"],
                                row["generation"], row["trigger_schema_version"])]
         elif s.startswith("SELECT window_start, generation, data_status, checksum"):
-            # 세션 첫 window(시가 근거) 조회 — ORDER BY 가 빠지면 dict 순서가 정본이
-            # 되는 조용한 회귀라 문면을 못 박는다
+            # 정규장 첫 window(시가 근거) 조회 — ORDER BY·하한(>=)이 빠지면 시간외
+            # 세션에서 08:00 window 가 정본이 되는 조용한 회귀라 문면을 못 박는다
             assert "ORDER BY window_start ASC LIMIT 1" in s
+            assert "window_start >= %s" in s
             rows = sorted(
-                (r for (sid, _), r in self.db.windows.items() if sid == params[0]),
+                (r for (sid, _), r in self.db.windows.items()
+                 if sid == params[0] and r["window_start"] >= params[1]),
                 key=lambda r: r["window_start"],
             )
             if rows:
