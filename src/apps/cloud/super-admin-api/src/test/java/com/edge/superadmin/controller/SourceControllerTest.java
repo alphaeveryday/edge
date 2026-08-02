@@ -620,7 +620,7 @@ class SourceControllerTest {
 						LocalDate.of(2026, 7, 31), 33, 31, false, false, List.of(
 						new HoldingsImpactRepository.MissingEtf("091160", "inst-1", "KODEX 반도체",
 								List.of(new HoldingsImpactRepository.AffectedAnalysis(
-										"res-9", "PUBLISHED", "반도체 급등"))),
+										"res-9", "run-9", "PUBLISHED", "반도체 급등"))),
 						new HoldingsImpactRepository.MissingEtf("0167A0", null, null, List.of()))));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
@@ -632,6 +632,9 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.missing[0].ourEtfId").value("091160"))
 				.andExpect(jsonPath("$.result.missing[0].analyses[0].explanationResultId")
 						.value("res-9"))
+				// 분석 상세 링크의 키(1:1) — 없으면 화면이 영향 분석으로 내려갈 손잡이가 없다
+				.andExpect(jsonPath("$.result.missing[0].analyses[0].explanationRunId")
+						.value("run-9"))
 				.andExpect(jsonPath("$.result.missing[1].instrumentId").value(nullValue()))
 				.andExpect(jsonPath("$.result.recommendedAction").isNotEmpty());
 	}

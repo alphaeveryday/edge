@@ -113,8 +113,11 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				.filter(m -> m.ourEtfId().equals("999002")).findFirst().orElseThrow();
 		assertThat(withAnalysis.instrumentId()).isEqualTo("inst-miss");
 		assertThat(withAnalysis.etfName()).isEqualTo("KODEX 반도체");
-		assertThat(withAnalysis.analyses()).singleElement()
-				.satisfies(a -> assertThat(a.explanationResultId()).isEqualTo("res-i"));
+		assertThat(withAnalysis.analyses()).singleElement().satisfies(a -> {
+			assertThat(a.explanationResultId()).isEqualTo("res-i");
+			// 분석 상세 링크 키 — 실 뷰(explanation_result_latest)가 run id 를 내리는지 잠근다
+			assertThat(a.explanationRunId()).isEqualTo("run-a");
+		});
 
 		// instrument 행 부재 ETF 도 단축코드로 내려간다 — 화면에서 사라지면 안 된다.
 		HoldingsImpactRepository.MissingEtf codeOnly = impact.missing().stream()

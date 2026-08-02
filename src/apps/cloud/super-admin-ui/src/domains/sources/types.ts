@@ -317,6 +317,8 @@ export interface MissingEtf {
 
 export interface AffectedAnalysis {
   explanationResultId: string;
+  /** 분석 상세(/analyses/:id)의 키 — explanation_result 와 1:1 */
+  explanationRunId: string | null;
   publicationStatus: string | null;
   summary: string | null;
 }

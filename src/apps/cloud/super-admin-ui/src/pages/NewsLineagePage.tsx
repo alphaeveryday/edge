@@ -8,6 +8,7 @@
  * 있어 여기서 주장하지 않는다 — "증거 없음"은 그 전부를 합친 한 통이다(승격은 후속 티켓).
  */
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
 import type { NewsLineageDocument } from '../domains/sources';
 import { useNewsLineage } from '../domains/sources/hooks';
@@ -39,8 +40,11 @@ function DocumentRow({ d }: { d: NewsLineageDocument }) {
 }
 
 export function NewsLineagePage() {
-  /* 기본은 전체 누적 — 런 단위 계보는 불가하다(문서 테이블에 run_id 없음), 날짜로 자른다 */
-  const [date, setDate] = useState<string>('');
+  /* 기본은 전체 누적 — 런 단위 계보는 불가하다(문서 테이블에 run_id 없음), 날짜로 자른다.
+   * ?date= 는 다른 화면(Run Overview 뉴스 레인)이 특정 날짜로 내려보내는 손잡이다(ALPHA-692) —
+   * 초기값만 받고 이후 변경은 로컬 상태(기존 동작 유지). */
+  const [params] = useSearchParams();
+  const [date, setDate] = useState<string>(params.get('date') ?? '');
   /* 표본 크기 — 서버 상한 200. 전량 페이지네이션은 후속(표본 검증 경로가 이 화면의 계약) */
   const [limit, setLimit] = useState<number>(50);
   const { data, isPending, isError, error } = useNewsLineage(date || undefined, limit);

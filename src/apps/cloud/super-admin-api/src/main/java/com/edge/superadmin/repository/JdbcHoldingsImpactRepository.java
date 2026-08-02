@@ -109,7 +109,7 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 	 */
 	private static final String MISSING_DETAIL_SQL = """
 			SELECT i.instrument_id, ent.display_name,
-			       r.explanation_result_id, r.publication_status, r.summary
+			       r.explanation_result_id, r.explanation_run_id, r.publication_status, r.summary
 			  FROM (SELECT ?::text AS our_etf_id) m
 			  LEFT JOIN instrument i ON i.ticker = m.our_etf_id
 			         AND i.market_code = 'XKRX' AND i.instrument_type = 'ETF'
@@ -181,6 +181,7 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 				if (rs.getString("explanation_result_id") != null) {
 					analyses.add(new AffectedAnalysis(
 							rs.getString("explanation_result_id"),
+							rs.getString("explanation_run_id"),
 							rs.getString("publication_status"),
 							rs.getString("summary")));
 				}
