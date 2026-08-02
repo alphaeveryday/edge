@@ -62,7 +62,9 @@ def plan_session_cli(
 
     try:
         # ⚠️ `date.fromisoformat` 은 3.11+ 에서 주 날짜(`2026-W01-1`)도 받는다 — 그러면
-        # 다른 연도의 세션이 조용히 생긴다. 문서가 약속한 형식만 받는다.
+        # 다른 연도의 세션이 조용히 생긴다. `strptime` 은 그것과 `20260731` 을 거부한다.
+        # 비패딩(`2026-7-31`)은 **받는다**: 운영자가 흔히 치는 형태이고 가리키는 날짜가
+        # 같아서, 거부하면 잃는 것만 있다. 막아야 할 건 '다른 날짜로 읽히는' 형식이다.
         planned_date = datetime.strptime(session_date, "%Y-%m-%d").date()
     except ValueError:
         logger.error("--session-date 가 YYYY-MM-DD 가 아니다: %s", session_date)

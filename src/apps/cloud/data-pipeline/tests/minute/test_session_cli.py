@@ -206,6 +206,12 @@ class TestDrain:
         assert drain_session_cli(make_settings(), session_id=None) == 2
 
 
+def _keyword_names(func):
+    import inspect
+    return {name for name, p in inspect.signature(func).parameters.items()
+            if p.kind is inspect.Parameter.KEYWORD_ONLY}
+
+
 class TestCliWiring:
     """`run.py` 배선 — 핸들러만 부르는 테스트는 이 층을 통째로 못 본다.
 
@@ -220,10 +226,18 @@ class TestCliWiring:
         return run_mod
 
     def test_plan_step_passes_every_argument(self, monkeypatch):
+        # ⚠️ 더블을 `**kwargs` 로 두면 안 된다 — run.py 가 넘기는 **이름**이 바뀌어도
+        # 다 받아내 통과하고, 실제 CLI 만 TypeError 로 죽는다. 진짜 핸들러와 같은
+        # 키워드만 받게 해서 이름이 갈리면 여기서 깨지게 한다.
         run_mod = self._no_config(monkeypatch)
         seen = {}
-        monkeypatch.setattr(run_mod, "plan_session_cli",
-                            lambda settings, **kwargs: seen.update(kwargs) or 0)
+
+        def fake_plan(settings, *, dataset, source_group, session_date, universe):
+            seen.update(dataset=dataset, source_group=source_group,
+                        session_date=session_date, universe=universe)
+            return 0
+
+        monkeypatch.setattr(run_mod, "plan_session_cli", fake_plan)
 
         assert run_mod.main(["plan-minute-session", "--dataset", "price_minute",
                              "--source-group", "toss", "--session-date", "2026-07-31",
@@ -234,8 +248,12 @@ class TestCliWiring:
     def test_drain_step_passes_the_session_id(self, monkeypatch):
         run_mod = self._no_config(monkeypatch)
         seen = {}
-        monkeypatch.setattr(run_mod, "drain_session_cli",
-                            lambda settings, **kwargs: seen.update(kwargs) or 0)
+
+        def fake_drain(settings, *, session_id):
+            seen.update(session_id=session_id)
+            return 0
+
+        monkeypatch.setattr(run_mod, "drain_session_cli", fake_drain)
 
         assert run_mod.main(["drain-minute-session", "--session-id", "msn_1"]) == 0
         assert seen == {"session_id": "msn_1"}
@@ -250,5 +268,14 @@ class TestCliWiring:
                 run_mod.main(argv)
             assert "relay" in str(exit_info.value)   # 무엇이 왜 거부됐는지 말한다
         # drain 은 session-id 를 쓰는 쪽이다 — 격리가 이걸 같이 막으면 안 된다
-        monkeypatch.setattr(run_mod, "drain_session_cli", lambda settings, **kwargs: 0)
+        monkeypatch.setattr(run_mod, "drain_session_cli", lambda settings, *, session_id: 0)
         assert run_mod.main(["drain-minute-session", "--session-id", "msn_1"]) == 0
+
+
+    def test_doubles_mirror_the_real_handler_signatures(self):
+        # ⚠️ 위 두 테스트는 더블을 세운다 — 더블이 실물과 갈리면 배선 검증이 헛돈다.
+        # 실제 핸들러의 키워드 집합을 여기서 못 박아, 시그니처가 바뀌면 배선 테스트가
+        # "통과하는데 CLI 는 죽는" 상태로 남지 않게 한다.
+        assert _keyword_names(plan_session_cli) == {
+            "dataset", "source_group", "session_date", "universe"}
+        assert _keyword_names(drain_session_cli) == {"session_id"}

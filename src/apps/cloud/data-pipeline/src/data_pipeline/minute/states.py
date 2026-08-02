@@ -40,9 +40,6 @@ SESSION_PHASES = frozenset(
 # 처리하는 Worker 가 없어, 하루가 통째로 안 돌면서도 원장은 정상으로 보인다.
 DATASET_PRICE_MINUTE = "price_minute"
 DATASET_NEWS_MINUTE = "news_minute"
-MINUTE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_NEWS_MINUTE})
-# universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
-UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이라 EOD 가 그 값으로
 # raw prefix 를 스캔한다 — 오타가 들어가면 실제 artifact 를 못 찾고 "orphan 0건"이라는
 # 거짓 clean 이 나온다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
@@ -50,6 +47,12 @@ SOURCE_GROUPS_BY_DATASET = {
     DATASET_PRICE_MINUTE: frozenset({"toss"}),
     DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
 }
+# ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
+# 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
+# 거부된다(목록 누락). 늘어나는 자리는 위 표 하나다.
+MINUTE_DATASETS = frozenset(SOURCE_GROUPS_BY_DATASET)
+# universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
+UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
 
 # ── minute_ingestion_window.data_status ──
 WINDOW_DUE = "DUE"
