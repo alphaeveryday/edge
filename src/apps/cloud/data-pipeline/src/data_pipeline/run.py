@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
+from .minute.eod import qc_session_cli
 from .minute.relay import relay_cli
 from .lake import (
     make_storage,
@@ -142,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 Consumer 운영(ALPHA-672): dlq-reconcile=DLQ 도착과 DB job 상태
                  # 대사(주기 실행), redrive=DEAD job 을 DB 부터 되살려 새 delivery event
                  # 생성. 둘 다 원장 DB 필수, storage/수집창과 무관.
-                 "dlq-reconcile", "redrive"],
+                 "dlq-reconcile", "redrive",
+                 # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
+                 # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
+                 "qc-minute-session"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -177,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="redrive: 새 delivery 를 실을 큐(미지정=직전 event 값 복사). "
                              "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
                              "여기서 바로잡지 않으면 복구 경로가 없다")
+    parser.add_argument("--session-id", default=None,
+                        help="qc-minute-session: 판정할 1분 세션(필수). QC 는 하루 하나를 "
+                             "지목해서 돈다 — 범위를 열어 두면 살아 있는 세션까지 확정한다")
     parser.add_argument("--reason", default=None,
                         help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
@@ -224,6 +231,16 @@ def main(argv: list[str] | None = None) -> int:
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
+    # QC 전용 인자도 같은 규약이다 — 오배선(`relay --session-id …`)이 조용히 무시되면
+    # 운영자는 명령이 먹은 줄 안다.
+    # ⚠️ `--session-id` 결손은 여기서 막지 **않는다** — SystemExit 은 프로세스 1 로 나가는데,
+    # QC 의 1 은 "원장이 스스로와 모순"이라는 뜻이다. 결손은 판정 불가(2)라 CLI 가 처리한다.
+    if args.step != "qc-minute-session" and args.session_id is not None:
+        raise SystemExit(
+            "--session-id 는 qc-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
     if args.window_days is not None:
@@ -261,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
         return relay_cli(settings, max_ticks=args.max_ticks)
     if args.step == "dlq-reconcile":
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "qc-minute-session":
+        return qc_session_cli(settings, session_id=args.session_id)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

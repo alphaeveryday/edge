@@ -65,7 +65,10 @@
 > artifact 이고 반환값이 그 바이트의 sha256 이다. artifact key 축은
 > `(job_id, redrive_generation, attempt)` — LLM 출력이 비결정적이라 시도마다 key 가
 > 갈려야 재시도가 자기 자신을 막지 않는다. 실패 분류의 terminal 은 payload↔원장 기사 축
-> 불일치 하나뿐이고 나머지는 예산이 판정한다)까지다.
+> 불일치 하나뿐이고 나머지는 예산이 판정한다), **EOD 세션 QC**(ALPHA-693 — drain 이 끝난
+> 세션의 `DUE` 잔존을 `MISSING` 으로 확정하고 `FINALIZED` 로 닫는다. `run qc-minute-session`.
+> 확정은 **도래한 window 만**이고 계획의 양 끝·연속성이 어긋나면 확정 대신 `FAILED` 다 —
+> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
@@ -884,6 +887,13 @@ DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs
 # producer 를 고쳐 재실행해도 그 행은 안 바뀐다(미지정=직전 event 값 복사).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run redrive --kind news --job-id <job_id> --reason "큐 URL 오타 수정 후 재시도"
+# EOD 세션 QC(1분 파이프라인, ALPHA-693) — drain 이 끝난(DRAINED) 세션 하나를 판정해
+# 닫는다. DUE 잔존을 MISSING 으로 확정하고 FINALIZED + final_checksum 을 기록한다.
+# ⚠️ 확정 대상은 **이미 도래한** window 뿐이다(scheduled_at ≤ now) — 장중에 drain 이
+# 잘못 걸린 세션을 QC 해도 아직 오지 않은 분을 봉인하지 않는다. 판정 결과는 stdout JSON.
+# exit: 0=확정 / 1=원장이 스스로와 모순(사람이 봐야 한다) / 2=판정 자체를 못 함(재시도 가능).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run qc-minute-session --session-id <session_id>
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯

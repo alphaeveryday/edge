@@ -102,6 +102,15 @@ class _Cursor:
             self._insert_window(params)
         elif "SET expected_window_count = ( SELECT COUNT(*)" in s:
             self._refresh_window_count(params)
+        elif "SET phase = 'QC_RUNNING'" in s:
+            # EOD QC 진입(ALPHA-693). 재진입 phase 집합이 SQL 에서 빠지면 중간에 죽은 QC 가
+            # 그 세션을 영영 못 끝내게 만든다 — fake 가 합성하기 전에 문면을 못 박는다.
+            assert "phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')" in s, \
+                "begin_qc SQL 에 재진입 phase 집합이 없다"
+            # 토큰을 안 올리면 phase-only CAS 라 ABA 가 통과한다(낡은 실행이 새 판정을 덮는다)
+            assert "worker_fencing_token = worker_fencing_token + 1" in s, \
+                "begin_qc SQL 이 QC 소유권 토큰을 올리지 않는다"
+            self._begin_qc(params)
         elif "worker_fencing_token = worker_fencing_token + 1" in s:
             self._acquire_fence(params)
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at = NULL"):
@@ -132,6 +141,45 @@ class _Cursor:
                 self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
+        elif s.startswith("SELECT phase, worker_fencing_token"):
+            # QC 소유권 검사는 **행을 잠그고** 해야 한다 — 비잠금이면 READ COMMITTED
+            # 스냅샷이 옛 토큰을 본 채 되돌릴 수 없는 MISSING 을 찍는다(재발 패턴 #1)
+            assert "FOR UPDATE" in s, "QC 소유권 검사가 세션 행을 잠그지 않는다"
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["phase"], row.get("worker_fencing_token", 0))]
+        elif s.startswith("UPDATE minute_ingestion_window") and "'MISSING'" in s:
+            # 시각 가드가 빠지면 조기 drain 만으로 **아직 오지도 않은 분**까지 MISSING 으로
+            # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
+            assert "scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
+            self._confirm_missing(params)
+        elif s.startswith("SELECT window_start, window_end, data_status"):
+            assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
+            self._rows = sorted(
+                ((w["window_start"], w["window_end"], w["data_status"], w["generation"],
+                  w.get("checksum"))
+                 for w in self.db.windows.values() if w["session_id"] == params[0]),
+                key=lambda row: row[0],
+            )
+        elif s.startswith("SELECT dataset, source_group, session_date"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(
+                    row["dataset"], row["source_group"], row["session_date"],
+                    row["expected_window_count"], row["universe_version"], row["phase"],
+                    row.get("final_checksum"), row.get("final_generation"),
+                )]
+        elif "SET phase = 'FINALIZED'" in s:
+            # CAS 가 SQL 에서 빠지면 다른 실행이 이미 바꾼 phase 를 덮어쓴다 — fake 가
+            # 파이썬으로 재검사해 주면 그 회귀가 계속 초록으로 보인다(Rule 9)
+            assert "AND phase = 'QC_RUNNING'" in s, "finalize_session SQL 에 phase CAS 가 없다"
+            assert "worker_fencing_token = %s" in s, "finalize_session SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[2], "FINALIZED", fence_token=params[3],
+                            final_checksum=params[0], final_generation=params[1])
+        elif "SET phase = 'FAILED'" in s:
+            assert "AND phase = 'QC_RUNNING'" in s, "fail_session_qc SQL 에 phase CAS 가 없다"
+            assert "worker_fencing_token = %s" in s, "fail_session_qc SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[0], "FAILED", fence_token=params[1])
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
@@ -287,6 +335,41 @@ class _Cursor:
             "worker_fencing_token": 0, "lease_expires_at": None, "heartbeat_at": None,
         }
         self._rows = [(session_id,)]
+
+    def _begin_qc(self, p):
+        row = self.db.sessions.get(p[0])
+        if row is None or row["phase"] not in ("DRAINED", "QC_RUNNING", "FAILED"):
+            return
+        row["phase"] = "QC_RUNNING"
+        row["worker_fencing_token"] = row.get("worker_fencing_token", 0) + 1
+        self._rows = [(row["dataset"], row["source_group"], row["session_date"],
+                       row["expected_window_count"], row["universe_version"],
+                       row["worker_fencing_token"])]
+
+    def _confirm_missing(self, p):
+        # 소유권 검사는 앞선 잠금 SELECT 가 한다(실제 코드와 같은 순서) — 여기서 다시
+        # 합성하면 그 SELECT 가 빠져도 테스트가 통과한다
+        session_id, now = p
+        changed = 0
+        for window in self.db.windows.values():
+            if (window["session_id"] == session_id and window["data_status"] == "DUE"
+                    and window["scheduled_at"] <= now):
+                window["data_status"] = "MISSING"
+                changed += 1
+        self.rowcount = changed
+
+    def _finish_qc(self, session_id, phase, *, fence_token, final_checksum=None,
+                   final_generation=None):
+        row = self.db.sessions.get(session_id)
+        if (row is None or row["phase"] != "QC_RUNNING"
+                or row.get("worker_fencing_token") != fence_token):
+            self.rowcount = 0
+            return
+        row["phase"] = phase
+        if phase == "FINALIZED":
+            row["final_checksum"] = final_checksum
+            row["final_generation"] = final_generation
+        self.rowcount = 1
 
     def _select_session(self, p):
         row = self.db.session_by_identity(*p)
