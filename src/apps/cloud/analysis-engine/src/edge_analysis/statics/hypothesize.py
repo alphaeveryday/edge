@@ -73,8 +73,9 @@ def _parse(h: dict) -> HypothesisTuple:
 
 
 _EXPLORE = """도구를 불러 이 셀을 조사한다. **여기 없는 도구는 존재하지 않는다.**
-한 턴에 하나만, JSON 으로: {{"tool": "이름", "arg": "인자(없으면 빈 문자열)"}}
-조건을 채우면 다음 단계 메뉴가 자동으로 열린다. 메뉴가 비면 조사가 끝난 것이다.
+한 턴에 **여러 개**를 부를 수 있다 - 서로 안 기다려도 되는 것은 같이 불러라:
+  {{"tools": [{{"tool": "이름", "arg": "인자(없으면 생략)"}}, ...]}}
+조건을 채우면 다음 단계 메뉴가 그 턴 안에서 열린다. 메뉴가 비면 조사가 끝난 것이다.
 
 {menu}
 
@@ -82,30 +83,37 @@ _EXPLORE = """도구를 불러 이 셀을 조사한다. **여기 없는 도구�
 {seen}"""
 
 
-def explore(ask: Ask, machine, *, facts: str, max_turns: int = 8) -> str:
+def explore(ask: Ask, machine, *, facts: str, max_turns: int = 4) -> str:
     """상태기계를 돌려 관측을 모은다. 반환: 가설 단계에 실릴 관측 기록.
 
+    브리핑(셀 좌표·커버리지)은 묻지 않고 먼저 준다 - 결정론이라 물어볼 값이 없다.
     도구 이름을 지어내면 그 사실을 응답으로 돌려준다 - 오류도 관측이고, 무엇을
     부르려다 막혔는지가 표면의 결함 목록이 된다(STORM dyn2 의 실패 양식).
     """
-    seen: list[str] = []
+    seen: list[str] = [machine.brief()]
     for _ in range(max_turns):
         if machine.done:
             break
         user = _EXPLORE.format(menu=machine.menu(),
-                               seen="\n".join(seen[-6:]) or "  (아직 없음)")
+                               seen="\n".join(seen[-8:]) or "  (아직 없음)")
         try:
-            pick = ask("너는 관측자다. 도구 하나를 골라 JSON 으로만 답한다.",
+            pick = ask("너는 관측자다. 부를 도구를 JSON 으로만 답한다.",
                        facts + "\n\n" + user)
         except Exception as e:                     # noqa: BLE001 - 실패도 관측
             seen.append(f"[호출 실패] {type(e).__name__}: {e}")
             break
-        name = str(pick.get("tool", "")).strip()
-        if not name:
+        # 배치 · 단건 어느 모양으로 와도 받는다 - 형식 실수로 턴을 태우지 않는다.
+        batch = pick.get("tools") or ([pick] if pick.get("tool") else [])
+        if not batch:
             seen.append("[빈 선택] 도구 이름이 없다")
             continue
-        out = machine.observe(name, str(pick.get("arg", "")).strip())
-        seen.append(f"[{name}] {out}")
+        for one in batch[:4]:
+            name = str(one.get("tool", "")).strip()
+            if not name:
+                continue
+            seen.append(f"[{name}] {machine.observe(name, str(one.get('arg', '')).strip())}")
+            if machine.done:
+                break
     return "\n".join(seen)
 
 

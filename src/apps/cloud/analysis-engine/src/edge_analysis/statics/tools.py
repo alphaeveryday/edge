@@ -21,6 +21,19 @@ from .vocab import CHANNELS, SERIES_FAMILIES, TRANSFORMS
 
 MAX_ROWS = 40
 
+# 도구 → 그 도구가 읽는 표. 도달 지평이 셀보다 늦으면 **부르기 전에** 안다 (19R).
+# 실측: 06-01 셀에서 35표 중 15표가 미도달인데 도구는 그걸 '없음'이라 답했다.
+TOOL_TABLES: dict[str, tuple[str, ...]] = {
+    "news": ("document",),
+    "thread": ("event_thread_link",),
+    "peers": ("instrument_classification",),
+    "screen": ("price_daily", "source_event"),
+    "series": ("price_daily",),
+    "holdings": ("etf_holding_snapshot",),
+    "flows": ("investor_flow_daily",),
+    "novelty": ("thread_discovery_snapshot",),
+}
+
 
 @dataclass
 class Catalog:
@@ -33,6 +46,70 @@ class Catalog:
     day: str
     types: tuple[str, ...] = ()
     calls: list[str] = field(default_factory=list)
+    cache: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """뷰를 이 셀 시점으로 걸고 도달성을 잰다 - **한 번만**, 왕복 1회."""
+        bind = getattr(self.lake, "bind_day", None)
+        if bind:
+            bind(self.day)
+            self.lake.probe_day()
+
+    # ── 도달성 ──────────────────────────────────────────────────────────
+    def reach(self, name: str) -> str:
+        """이 도구가 이 셀에서 답할 수 있나. 못 하면 **사유와 지평**을 준다.
+
+        '없음'과 '아직 못 닿음'은 다른 문장이다 - 전자는 세상의 사실이고 후자는
+        우리 적재의 한계다. 섞으면 '뉴스 없는 날' 같은 거짓 사실이 생긴다.
+        """
+        eff = getattr(self.lake, "effective", None) or {}
+        for t in TOOL_TABLES.get(name, ()):
+            n, h = eff.get(t, (None, None))
+            if n == 0 and h and h[:10] > self.day:
+                return f"미도달: {t} 은 {h[:10]} 부터 적재됐다 (이 셀보다 늦다 - 부재가 아니다)"
+            if n == 0:
+                return f"빈 표: {t} 이 이 셀 시점에 0행이다"
+        return ""
+
+    def coverage(self) -> str:
+        """이 셀에서 무엇에 닿을 수 있나 - 바인딩율과 도달 지평."""
+        cov = getattr(self.lake, "coverage", None)
+        if not cov:
+            return "커버리지 미상: 레이크가 보고를 안 한다"
+        body = cov(effective=True)
+        blocked = [f"{k}({self.reach(k).split(':')[0]})" for k in sorted(TOOL_TABLES)
+                   if self.reach(k)]
+        return body + ("\n  이 셀에서 막힌 도구: " + ", ".join(blocked) if blocked else "")
+
+    def tables(self, like: str = "") -> str:
+        """묶인 표 전량 - 이름·그날 행수. 여기 있는 것은 전부 peek 할 수 있다."""
+        eff = getattr(self.lake, "effective", None) or {}
+        rows = [(t, n) for t, (n, _) in sorted(eff.items()) if not like or like in t]
+        if not rows:
+            return f"묶인 표 없음{f' ({like!r} 에 맞는)' if like else ''}"
+        return f"묶인 표 {len(rows)}개 (그날 행수):\n" + "\n".join(
+            f"  v_{t:<34} {n:>9,}" for t, n in rows)
+
+    def peek(self, name: str) -> str:
+        """표 하나의 열과 표본 3행. **탐색의 종점** - 어떤 표든 여기로 볼 수 있다."""
+        t = name.removeprefix("v_").strip()
+        cols = (getattr(self.lake, "cols", None) or {}).get(t)
+        if not cols:
+            return (f"그런 표 없음: {name!r}. tables() 로 목록을 봐라")
+        eff = (getattr(self.lake, "effective", None) or {}).get(t, (None, None))
+        head = f"v_{t} — 열 {len(cols)}: {', '.join(cols[:12])}\n  그날 행수 {eff[0]}"
+        if eff[0] == 0:
+            return head + f"\n  {self.reach_table(t)}"
+        rows = self._q(f"SELECT * FROM v_{t} LIMIT 3")
+        if isinstance(rows, str):
+            return head + "\n  " + rows
+        return head + "\n" + "\n".join(f"  {str(r)[:150]}" for r in rows)
+
+    def reach_table(self, t: str) -> str:
+        eff = (getattr(self.lake, "effective", None) or {}).get(t, (None, None))
+        h = eff[1]
+        return (f"미도달: {h[:10]} 부터 적재됐다 (이 셀보다 늦다)"
+                if h and h[:10] > self.day else "그날 0행 (진짜 부재)")
 
     # ── 관측 ────────────────────────────────────────────────────────────
     def cell(self) -> str:
@@ -138,20 +215,32 @@ class Catalog:
             return f"오류: {type(e).__name__}: {str(e)[:160]}"
 
     def call(self, name: str, arg: str = "") -> str:
-        """이름으로 부른다. 없는 이름은 **없다고 답한다** (조용한 빈 결과 금지)."""
+        """이름으로 부른다. 없는 이름은 **없다고 답한다** (조용한 빈 결과 금지).
+
+        같은 호출을 두 번 하면 캐시로 돌려주고 그 사실을 말한다 - 실측에서 모델이
+        같은 도구를 반복해 턴을 태웠다. 못 닿는 도구는 **질의 전에** 사유로 막는다.
+        """
         fn = getattr(self, name, None)
-        if name.startswith("_") or not callable(fn) or name in ("call", "menu_names"):
+        if name.startswith("_") or not callable(fn) or name in ("call", "menu_names", "reach"):
             return f"그런 도구 없음: {name!r}. 있는 것: {', '.join(self.menu_names())}"
-        try:
-            out = str(fn(arg) if arg else fn())
-        except TypeError:
-            out = str(fn())
-        except Exception as e:                     # noqa: BLE001
-            out = f"오류: {type(e).__name__}: {str(e)[:160]}"
-        self.calls.append(f"{name}({arg})")
+        key = f"{name}({arg})"
+        if key in self.cache:
+            return f"[이미 본 것 - 다른 도구를 써라]\n{self.cache[key]}"
+        if (why := self.reach(name)):
+            out = why
+        else:
+            try:
+                out = str(fn(arg) if arg else fn())
+            except TypeError:
+                out = str(fn())
+            except Exception as e:                 # noqa: BLE001
+                out = f"오류: {type(e).__name__}: {str(e)[:160]}"
+        self.calls.append(key)
+        self.cache[key] = out
         trace("tool.call", name=name, arg=arg, out=out[:600])
         return out
 
     @staticmethod
     def menu_names() -> tuple[str, ...]:
-        return ("cell", "events", "news", "thread", "screen", "series", "peers", "vocab")
+        return ("cell", "coverage", "tables", "peek", "events", "news", "thread",
+                "screen", "series", "peers", "vocab")

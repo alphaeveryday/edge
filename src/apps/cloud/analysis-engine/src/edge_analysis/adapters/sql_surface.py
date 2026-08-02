@@ -373,4 +373,44 @@ def _cell(v: Any) -> str:
 # 공유 표면의 공개 이름 - 인과 패널(statics)이 같은 정의를 쓴다 (18R).
 views_sql = _views
 
-__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface"]
+# 손으로 쓴 의미 뷰의 이름. 자동 생성기가 **이 이름은 안 만든다** - 같은 이름이
+# 둘이면 CTE 가 영구 뷰를 가리고, 그게 정확히 "표면이 둘로 갈린다" 사고다.
+HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_hold', 'v_instrument', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
+
+# 시점 클램프 후보 열. 우선순위 = **정보가 관측자에게 도달한 시각**에 가까운 순.
+# `*_at` 은 타임스탬프(as_of 로 자름), `*_date` 는 날짜(trade_date 로 자름).
+# 도메인이 아닌 배관 표. 분모에서 뺀다 - 못 묶은 게 아니라 **안 묶는다**.
+PLUMBING = ("flyway_", "ops_", "tenant", "admin_", "release_")
+
+CLAMP_COLS = ("available_at", "evaluated_at", "published_at", "opened_at",
+              "as_of_date", "profile_as_of_date", "trade_date", "created_at")
+
+
+def auto_views_sql(cols: dict[str, list[str]], *, as_of: str, trade_date: str,
+                   prefix: str, skip: set[str] = frozenset()) -> list[tuple[str, str | None, str]]:
+    """손으로 안 쓴 표 전량에 시점 클램프 뷰를 **생성**한다 (19R).
+
+    왜 자동인가: 클램프를 표마다 손으로 쓰면 새 표는 기본값이 '안 묶임'이 된다.
+    실측이 그랬다 - 살아 있는 44표 중 20표만 묶여 있었고, 안 묶인 쪽에
+    `thread_discovery_snapshot`(사건별 신규성 축) 같은 1급 재료가 앉아 있었다.
+    생성기가 하나면 커버리지가 **구조적으로** 100% 이고, 클램프 누락이 불가능하다.
+
+    반환: (표 이름, 클램프 열 또는 None, CREATE VIEW 문). 클램프 열이 없는 표는
+    시점 불변 차원으로 취급하되 **None 을 그대로 보고**한다 - 조용히 통과시키면
+    PIT 위반이 어디서 들어오는지 알 수 없다.
+    """
+    out: list[tuple[str, str | None, str]] = []
+    for t in sorted(cols):
+        if t in skip or t.startswith(PLUMBING):
+            continue
+        have = set(cols[t])
+        clamp = next((c for c in CLAMP_COLS if c in have), None)
+        where = ""
+        if clamp:
+            where = f" WHERE {clamp} <= {as_of if clamp.endswith('_at') else trade_date}"
+        out.append((t, clamp,
+                    f"CREATE OR REPLACE VIEW v_{t} AS SELECT * FROM {prefix}{t}{where}"))
+    return out
+
+
+__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface", "HAND_VIEWS", "PLUMBING", "auto_views_sql", "views_sql"]

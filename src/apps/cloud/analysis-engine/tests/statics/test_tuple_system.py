@@ -392,29 +392,56 @@ def test_panels_never_touch_base_tables_directly():
 
 
 def test_state_machine_hides_tools_and_enforces_order():
-    # 18R (사용자 지시): 동적 도구 컨텍스트 상태기계. 두 규율 -
+    # 19R: 동적 도구 상태기계. 세 규율 -
     # (1) 그 상태에 없는 도구는 이름조차 존재하지 않는다,
-    # (2) 진행은 관측으로만 (가드를 코드가 지킨다, 프롬프트로 부탁하지 않는다).
-    from edge_analysis.statics.fsm import EMIT, GROUND, SCOPE, SCREEN, Machine
+    # (2) 진행은 관측으로만 (가드를 코드가 지킨다),
+    # (3) 결정론 브리핑은 상태가 아니다 - 물어볼 값이 없는 질문에 왕복을 안 쓴다.
+    from edge_analysis.statics.fsm import EMIT, GROUND, SCREEN, Machine
 
     class FakeCat:
         def __init__(self): self.seen = []
         def call(self, name, arg=""):
             self.seen.append(name)
-            return {"cell": "셀 X", "events": "사건 없음: 장중 사건이 하나도 없다",
+            return {"cell": "셀 X", "coverage": "바인딩 35/35", "vocab": "채널 8",
+                    "events": "사건 없음: 장중 사건이 하나도 없다",
                     "screen": "  T × 거래량/변화 n=91 p₂=0.000 방향+"}[name]
 
     m = Machine(FakeCat())
-    assert m.state == SCOPE and "screen" not in m.menu()      # 미래 도구는 안 보인다
+    assert m.state == GROUND                                   # SCOPE 는 접혔다
+    assert "셀 X" in m.brief() and "바인딩" in m.brief()        # 브리핑은 묻지 않고 준다
+    assert "screen" not in m.menu()                            # 미래 도구는 안 보인다
     out = m.observe("screen")                                  # 상태 밖 호출
-    assert "SCOPE" in out and "없다" in out and not m.catalog.seen   # 실행조차 안 된다
-    assert "→ GROUND" in m.observe("cell")                     # 가드 충족 → 자동 전이
-    assert m.state == GROUND and "events" in m.menu()
+    assert "GROUND" in out and "없다" in out
+    assert "vocab" in m.menu()                                 # 탐색 도구는 게이트 밖
+    m.observe("vocab")                                         # 불러도 전이 안 함
+    assert m.state == GROUND
     # 부재도 증거다 - 사건 0인 셀에서 긍정 증거만 요구하면 턴만 태운다(STORM 실측)
     assert "→ SCREEN" in m.observe("events")
     assert m.absent == 1 and m.state == SCREEN
     assert "→ EMIT" in m.observe("screen") and m.done
-    assert m.stats()["calls"] == ["SCOPE:cell()", "GROUND:events()", "SCREEN:screen()"]
+    assert m.stats()["calls"] == ["GROUND:vocab()", "GROUND:events()", "SCREEN:screen()"]
+
+
+def test_unreached_table_is_not_absence():
+    # 19R 실측: available_at 이 적재 시각이라 06-01 셀에서 document(293,930행)가 0행.
+    # '뉴스 없는 날'로 보고하면 거짓 사실이 만들어진다 - 미도달은 부재가 아니다.
+    from edge_analysis.statics.fsm import Machine
+    from edge_analysis.statics.tools import Catalog
+
+    class Lake:
+        effective = {"document": (0, "2026-07-08 00:00:00")}
+        cols = {"document": ["document_id", "title"]}
+        def bind_day(self, d): return 0
+        def probe_day(self): return self.effective
+
+    c = Catalog(lake=Lake(), ticker="T", instrument_id="i0", day="2026-06-01",
+                types=("COMPANY.PRODUCT.LAUNCH",))
+    out = c.call("news")
+    assert out.startswith("미도달") and "2026-07-08" in out
+    assert "미도달" in c.call("peek", "document")
+    m = Machine(c)
+    m.observe("news")
+    assert m.grounded == 0          # 미도달로는 접지가 성립하지 않는다
 
 
 def test_tool_catalog_separates_absence_from_error():

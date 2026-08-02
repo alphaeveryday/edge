@@ -22,7 +22,6 @@
     engine   축약 경로(술어 선언 → 고정 추정량). 샌드박스 OFF 일 때만 쓴다
     chain    간선 유형별 증명 양식 · 예산 정합
     stats    placebo(순열 귀무)·permute(층화)·residualize/fit/predict
-    fit      국소 적합(부분상관 CI) + 전역 적합(Shipley C). 발견 루프 전용
     run      P0–P9 오케스트레이션
 
 데이터 접근은 여기 없다. `..adapters.causal_data` 가 코호트·정렬열을,
@@ -32,7 +31,6 @@ from . import (
     chain,
     contracts,
     engine,
-    fit,
     graph,
     p0_question,
     p1_fingerprint,
@@ -50,7 +48,7 @@ from . import (
 )
 
 __all__ = [
-    "chain", "contracts", "engine", "fit", "graph",
+    "chain", "contracts", "engine", "graph",
     "p0_question", "p1_fingerprint", "p2_hypotheses", "p3_graph", "p4_identify",
     "p5_discriminate", "p6_sensitivity", "p7_negative", "p8_findings", "p9_registry",
     "sandbox", "stats", "verify",

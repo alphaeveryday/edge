@@ -38,6 +38,13 @@ class CausalLake:
         # 되게 한다 — 머신 TZ 에 따라 τ 가 조용히 밀리는 사고를 막는다.
         self.con.execute("SET TimeZone='Asia/Seoul'")
         self.exists: dict[str, Any] = {}
+        self.rows: dict[str, int] = {}          # 표 → 행수 추정 (원장 전량)
+        self.cols: dict[str, list[str]] = {}    # 표 → 열 (자동 뷰 생성의 입력)
+        self.bound: dict[str, str | None] = {}  # 표 → 클램프 열 (None = 시점 불변 차원)
+        self.unbound: dict[str, str] = {}       # 표 → 못 묶은 사유 (침묵 금지)
+        self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
+        self.effective: dict[str, tuple[int, str | None]] = {}  # 표 → (그날 행수, 도달 지평)
+        self._probed: str = ""
         self._bars(Path(bars_dir) if bars_dir else self._default_bars())
         self._backfill(Path(backfill_dir or os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")))
         self._rdb(rdb_dsn or os.environ.get(RDB_DSN_ENV, ""))
@@ -68,32 +75,143 @@ class CausalLake:
                 self.exists[name] = 0
 
     def _rdb(self, dsn: str) -> None:
-        """Postgres 를 postgres_scanner 로 붙인다. 터널이 없으면 부재로 보고."""
+        """Postgres 를 붙이고 **살아 있는 표 전량**에 클램프 뷰를 생성한다 (19R).
+
+        표 목록을 손으로 적지 않는다: 적으면 새 표의 기본값이 '안 묶임'이 되고,
+        실측이 정확히 그랬다(44표 중 20표만). 원장이 목록의 원천이다.
+        행수는 `pg_stat_user_tables` 추정치 - 66표에 count(*) 를 돌리면 터널로
+        전량 스캔이 나간다 (실측 0.17s vs 수십 초).
+        """
         if not dsn:
             self.exists["rdb"] = False
             return
         try:
             self.con.execute("INSTALL postgres; LOAD postgres;")
             self.con.execute(f"ATTACH '{dsn}' AS rdb (TYPE postgres, READ_ONLY)")
-            for t in RDB_TABLES:
-                try:
-                    n = self.con.execute(f"SELECT count(*) FROM rdb.public.{t}").fetchone()[0]
-                    self.exists[t] = n
-                except Exception:
-                    self.exists[t] = 0
+            self.rows = {r[0]: r[1] for r in self.con.execute(
+                "SELECT * FROM postgres_query('rdb', 'SELECT relname, n_live_tup "
+                "FROM pg_stat_user_tables WHERE schemaname = ''public''')").fetchall()}
+            cols: dict[str, list[str]] = {}
+            for t, c in self.con.execute(
+                    "SELECT table_name, column_name FROM duckdb_columns() "
+                    "WHERE database_name = 'rdb' AND schema_name = 'public'").fetchall():
+                cols.setdefault(t, []).append(c)
+            self.cols = cols
+            self.bound = {t: c for t, c, _ in self._plan()}
+            self.exists.update({t: self.rows.get(t, 0) for t in RDB_TABLES})
             self.exists["rdb"] = True
         except Exception as e:      # 터널 죽음 = 부재 보고, 침묵 금지
             self.exists["rdb"] = f"실패: {e}"
+
+    def _plan(self) -> list[tuple[str, str | None, str]]:
+        """묶을 표와 각자의 클램프 열. **생성과 분리**한다 - 클램프 기준일은 셀마다
+        다르지만 무엇이 묶이는지는 원장 구조만으로 정해지므로, 보고서는 날짜 없이
+        낼 수 있어야 한다."""
+        from ..adapters.sql_surface import HAND_VIEWS, auto_views_sql
+        return auto_views_sql(self.cols, as_of="TIMESTAMP '{as_of}'",
+                              trade_date="DATE '{day}'", prefix="rdb.public.",
+                              skip={n[2:] for n in HAND_VIEWS})
+
+    def bind_day(self, day: str, clock: str = "23:59:59") -> int:
+        """그날 시점으로 자른 뷰를 **전 표에** 건다. 반환: 생성된 뷰 수.
+
+        뷰는 메타데이터라 재생성이 싸다(실측 <0.1s/40뷰). 셀이 바뀌면 다시 부른다.
+        """
+        if self.day == day or not self.cols:
+            return len(self.bound)
+        for t, _clamp, ddl in self._plan():
+            try:
+                self.con.execute(ddl.format(as_of=f"{day} {clock}", day=day))
+            except Exception as e:      # noqa: BLE001 - 실패도 커버리지 보고 대상
+                self.unbound[t] = f"{type(e).__name__}: {str(e)[:80]}"
+        self.day = day
+        return len(self.bound) - len(self.unbound)
 
     # ── 표면 ────────────────────────────────────────────────────────────
     def sql(self, q: str) -> list[tuple]:
         return self.con.execute(q).fetchall()
 
-    def coverage(self) -> str:
-        """프레임 노드별 데이터 유무 — 침묵하지 않는 보고서."""
-        lines = ["소스               행수/상태"]
-        for k, v in sorted(self.exists.items()):
-            lines.append(f"{k:<18} {v}")
+    def probe_day(self) -> dict[str, tuple[int, str | None]]:
+        """표 → (뷰 기준일의 행수, 도달 지평). 바인딩과 유효 커버리지는 다른 숫자다.
+
+        **도달 지평** = 클램프 열의 최솟값. 그 이전 셀에서 그 표는 '없는' 게 아니라
+        '아직 못 닿는' 것이다. 실측이 이 구분을 강요했다: `available_at` 이 대부분
+        정보 도달이 아니라 **적재 시각**이라, document(293,930행)는 2026-07-08
+        부터만 보인다. 부재로 보고하면 '뉴스가 없는 날'이 되고, 그건 거짓이다.
+        한 번의 왕복으로 센다 - 표마다 왕복하면 35표 × 터널 지연이다.
+        """
+        if self.effective and self._probed == self.day:
+            return self.effective
+        if not self.day or not self.bound:
+            return {}
+        live = [t for t, n in self.rows.items() if n and t in self.bound]
+        parts = " UNION ALL ".join(
+            f"SELECT ''{t}'' AS t, count(*) AS n, "
+            + (f"min({c})::text AS h FROM public.{t} WHERE {c} <= ''{self.day} 23:59:59''"
+               if (c := self.bound[t]) else f"NULL::text AS h FROM public.{t}")
+            for t in live)
+        try:
+            rows = self.sql(f"SELECT * FROM postgres_query('rdb', '{parts}')")
+        except Exception:       # noqa: BLE001 - 못 재면 빈 보고, 거짓말 금지
+            return {}
+        got = {r[0]: (r[1], r[2]) for r in rows}
+        # 0행인 표는 클램프 없이 다시 재야 지평을 안다 (WHERE 가 다 걷어냈으므로).
+        blind = [t for t, (n, _) in got.items() if not n and self.bound.get(t)]
+        if blind:
+            q = " UNION ALL ".join(
+                f"SELECT ''{t}'' AS t, min({self.bound[t]})::text AS h FROM public.{t}"
+                for t in blind)
+            try:
+                for t, h in self.sql(f"SELECT * FROM postgres_query('rdb', '{q}')"):
+                    got[t] = (0, h)
+            except Exception:   # noqa: BLE001
+                pass
+        self.effective, self._probed = got, self.day
+        return got
+
+    def coverage(self, *, effective: bool = False) -> str:
+        """바인딩 원장 — **도메인 표 중 몇 %가 시점 뷰로 도달 가능한가**.
+
+        분모에서 빼는 것 둘, 각각 사유가 다르다: 빈 표(적재 안 됨 - 표면 결함 아님),
+        배관 표(ops/tenant/flyway - 도메인이 아님). 뺀 개수를 같이 말한다.
+        effective=True 면 그날 실제로 행이 남는지까지 잰다(터널 왕복 1회).
+        """
+        from ..adapters.sql_surface import HAND_VIEWS, PLUMBING
+        live = {t: n for t, n in self.rows.items() if n}
+        plumb = {t for t in live if t.startswith(PLUMBING)}
+        dom = {t: n for t, n in live.items() if t not in plumb}
+        hand = {n[2:] for n in HAND_VIEWS} & set(dom)
+        reach = (set(self.bound) & set(dom)) | hand
+        miss = sorted(set(dom) - reach - set(self.unbound), key=lambda t: -dom[t])
+        pct = 100.0 * len(reach) / len(dom) if dom else 0.0
+        lines = [f"바인딩 {len(reach)}/{len(dom)} = {pct:.0f}%  (도메인 표 기준 · "
+                 f"빈 표 {len(self.rows) - len(live)} · 배관 {len(plumb)} 제외 · "
+                 f"뷰 기준일 {self.day or '미고정'})"]
+        if miss:
+            lines.append("  미도달: " + ", ".join(f"{t}({dom[t]:,})" for t in miss))
+        if self.unbound:
+            lines.append("  생성 실패: " + " · ".join(f"{t}: {w}" for t, w in
+                                                  list(self.unbound.items())[:4]))
+        noclamp = sorted(t for t, c in self.bound.items() if c is None and dom.get(t))
+        if noclamp:
+            lines.append(f"  시점 불변 차원 {len(noclamp)}개(클램프 열 없음 - PIT 보장 없이 "
+                         f"쓰는 것이므로 사실이 늦게 바뀌면 선견이다): " + ", ".join(noclamp))
+        if effective:
+            got = self.probe_day()
+            zero = [(t, (got[t][1] or "")[:10]) for t in sorted(reach)
+                    if t in got and not got[t][0]]
+            # **미도달 ≠ 부재.** 지평이 셀 뒤에 있으면 그 표는 그날 존재하지 않았다.
+            late = [(t, h) for t, h in zero if h and h[:10] > self.day]
+            void = [t for t, h in zero if not (h and h[:10] > self.day)]
+            lines.append(f"  그날 유효 {len(reach) - len(zero)}/{len(reach)}")
+            if late:
+                lines.append("  미도달(적재 지평이 셀보다 늦다 - 부재가 아니다): "
+                             + ", ".join(f"{t}≥{h}" for t, h in late))
+            if void:
+                lines.append("  진짜 0행: " + ", ".join(void))
+        lines.append("로컬/S3            행수")
+        for k in ("bars_5m", "us_market", "fx_usdkrw", "tau_sidecar"):
+            lines.append(f"  {k:<16} {self.exists.get(k, 0)}")
         return "\n".join(lines)
 
     def bars(self, ticker: str, day: str) -> list[tuple]:
