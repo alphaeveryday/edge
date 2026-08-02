@@ -65,6 +65,10 @@ class Machine:
 
     catalog: object
     state: str = GROUND
+    # 검정 에이전트가 **같은 기계**를 쓴다 - 메뉴와 SCREEN 판정 도구만 다르다.
+    # 규율(상태 밖 도구는 없다 · 진행은 관측으로만)은 공유가 목적이므로 여기 산다.
+    menus: dict | None = None                       # None → 모듈 MENUS (가설 에이전트)
+    screen_tools: tuple = ("screen", "series")
     grounded: int = 0          # 사건 존재를 확인한 횟수
     absent: int = 0            # **없다**는 것을 확인한 횟수 (부재도 증거다)
     evidence: int = 0          # 근거를 **직접** 열어 본 횟수 (또는 못 연다는 확인)
@@ -76,7 +80,7 @@ class Machine:
         return "\n".join(self.catalog.call(n) for n in ("cell", "coverage"))
 
     def allowed(self) -> tuple[tuple[str, str], ...]:
-        return MENUS[self.state] + (FREE if self.state != EMIT else ())
+        return (self.menus or MENUS)[self.state] + (FREE if self.state != EMIT else ())
 
     def menu(self) -> str:
         rows = self.allowed()
@@ -110,7 +114,7 @@ class Machine:
             self.evidence += 1
             if not (blocked or body.startswith(("근거 문서 없음", "스레드 없음"))):
                 self.grounded += 1
-        elif name in ("screen", "series") and not blocked:
+        elif name in self.screen_tools and not blocked:
             self.screened += 1
         return out if self._blocked() else out + "\n\n" + self._advance()
 

@@ -137,7 +137,8 @@ class CausalLake:
         **섹터를 ETF 로 잡는다** - 관측 가능한 실제 포트폴리오이고 가중치를 시장이
         정하며(우리가 안 정한다 = 왜곡 없음) 보유 비중을 알아 leave-one-out 이 정확하다.
         """
-        for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily"):
+        for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
+                     "etf_holdings_fmp"):
 
             f = d / f"{name}.parquet"
             if f.is_file():

@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from statistics import NormalDist
 
 import numpy as np
 
@@ -35,6 +36,8 @@ TOP_NAMES = 5         # 고유분을 배정할 종목 수
 MARKET_CODE = "069500"
 TAUTOLOGY_CUT = 0.30  # 이만큼 겹치면 같은 것이다 - 섹터 후보에서 뺀다 (동어반복 금지)
 MIN_OVERLAP = 0.05    # 이만큼도 안 겹치면 "왜 이게 설명하냐"에 답이 없다 (우연 적합 금지)
+ALPHA = 0.05          # 층 채택 유의수준. **후보 수로 나눈다** (탐색 보정)
+RHO_MARGIN = 0.01     # 층은 잔차 공통상관을 이만큼은 줄여야 한다 - 아니면 요인이 아니다
 
 
 # ── 자료구조 ──────────────────────────────────────────────────────────────
@@ -94,6 +97,7 @@ class Rollup:
     twins: tuple[str, ...]      # 겹쳐서 뺀 ETF (동어반복) - 조용히 빼지 않는다
     alien: tuple[str, ...]      # 안 겹쳐서 뺀 ETF (근거 없음)
     halted: int                 # 거래정지로 뺀 종목 수 - 수익률 0 을 참으로 쓰면 거짓
+    rho_blocked: tuple[str, ...] = ()   # ρ 를 못 줄여 탈락한 층 - 조용히 빼지 않는다
 
     @property
     def coverage(self) -> float:
@@ -120,6 +124,17 @@ def _ols(y: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     except np.linalg.LinAlgError:
         return b[1:], np.full(d.shape[1] - 1, np.inf)
     return b[1:], np.sqrt(np.maximum(np.diag(cov)[1:], 0.0))
+
+
+def _z(k: int, alpha: float = ALPHA) -> float:
+    """후보 K 개 중 최대를 고를 때 필요한 임계 z. **1.96 을 쓰면 안 된다.**
+
+    실측: 섹터 후보를 32 → 80 으로 늘리자 겹침 12% 짜리가 β1.83 으로 뽑히고
+    잔차 공통상관 ρ 가 0.276 → 0.523 으로 **악화**했다. 층을 늘렸는데 공통요인이
+    늘었다는 건 그 층이 우연을 잡았다는 뜻이다 - 80개 중 하나는 우연히 유의하다.
+    Bonferroni: α/K 양측.
+    """
+    return NormalDist().inv_cdf(1.0 - alpha / (2.0 * max(k, 1)))
 
 
 def _orth(x: np.ndarray, basis: np.ndarray, x_now: float,
@@ -168,7 +183,8 @@ def _on(m: dict, days: list) -> np.ndarray | None:
 # ── 탐욕 선택 ─────────────────────────────────────────────────────────────
 def _pick(y: np.ndarray, xs: dict[str, np.ndarray], nows: dict[str, float],
           meta: dict[str, str], basis: list[np.ndarray], basis_now: list[float],
-          taken: set[str], kind: str, left: float | None) -> Layer | None:
+          taken: set[str], kind: str, left: float | None,
+          z: float = 1.96) -> Layer | None:
     """**남은 몫을 가장 많이 줄이는** 층 하나. 없으면 None.
 
     기여 절댓값 최대로 고르면 안 된다 - 부호가 반대인 큰 기여가 남은 몫을 오히려
@@ -198,6 +214,35 @@ def _pick(y: np.ndarray, xs: dict[str, np.ndarray], nows: dict[str, float],
     return best
 
 
+def _panel(lake, etf: str, day: str, hist: list) -> tuple[np.ndarray, list[float]] | None:
+    """구성종목 × 창 수익률 행렬. ρ 게이트와 종목 귀속이 같은 자료를 쓴다."""
+    hold = holdings(lake, etf, day)
+    if not hold:
+        return None
+    d0 = dt.date.fromisoformat(day)
+    ser = _series(lake, day, ("stock",))
+    rows, nows = [], []
+    for tk, _lab, _w in hold:
+        if tk not in ser:
+            continue
+        _nm, m, halt = ser[tk]
+        v = _on(m, hist)
+        if v is None or d0 not in m or d0 in halt:
+            continue
+        rows.append(v)
+        nows.append(float(m[d0]))
+    return (np.vstack(rows), nows) if len(rows) >= 3 else None
+
+
+def _rho_after(panel: np.ndarray, basis: list[np.ndarray]) -> float | None:
+    """이 기저를 뺐을 때 남는 잔차 공통상관. **층의 존재 이유가 이 값을 줄이는 것**이다."""
+    if not basis:
+        return residual_rho(list(panel))
+    B = np.column_stack(basis)
+    res = [r - B @ _ols(r, B)[0] for r in panel]
+    return residual_rho(res)
+
+
 def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
               cover: float = COVER_TARGET, top: int = TOP_NAMES) -> Rollup | None:
     """ETF 하루를 시장·섹터·고유로 가른다. 층은 최대 `max_layers`, 커버 `cover` 에서 정지.
@@ -224,6 +269,11 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     layers: list[Layer] = []
     basis: list[np.ndarray] = []
     basis_now: list[float] = []
+    # ρ 게이트 재료: 구성종목 패널과 현재 잔차 공통상관. 층은 이 값을 줄여야 산다.
+    panel_pair = _panel(lake, etf, day, hist)
+    panel = None if panel_pair is None else panel_pair[0]
+    rho_now = None if panel is None else residual_rho(list(panel))
+    rho_blocked: list[str] = []
 
     def left() -> float:
         return y_now - sum(x.contribution for x in layers)
@@ -259,8 +309,9 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     sector_pool = {k: v for k, v in xs.items()
                    if k not in twins and k not in alien and k != MARKET_CODE}
     while len(layers) < max_layers and sector_pool and not covered():
+        # 후보 K 개를 훑어 최대를 고르므로 임계를 K 로 보정한다 (탐색 보정).
         pick = _pick(y, sector_pool, nows, meta, basis, basis_now,
-                     {x.code for x in layers}, "섹터", left())
+                     {x.code for x in layers}, "섹터", left(), _z(len(sector_pool)))
         # β 구간이 0 을 품으면 그 층은 **통계적으로 없다**. 있는 척하지 않는다.
         if pick is None or pick.lo <= 0.0 <= pick.hi:
             break
@@ -272,7 +323,8 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     return Rollup(etf, meta.get(etf, etf), day, y_now, tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, rho, used, wtot,
                   tuple(sorted(meta.get(t, t) for t in twins)),
-                  tuple(sorted(meta.get(t, t) for t in alien)), halted)
+                  tuple(sorted(meta.get(t, t) for t in alien)), halted,
+                  tuple(rho_blocked))
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
@@ -316,19 +368,35 @@ def _names(lake, etf: str, day: str, hist: list, basis: list[np.ndarray],
 def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
     """[(ticker, name, weight)] - **as_of ≤ day** 최신 스냅샷만 (선견 금지).
 
-    캐시 필수: `overlap()` 이 후보 ETF 32종마다 두 번 부른다. 셀 하나에 64 질의,
-    배치 736셀이면 47,000 질의가 되어 측정 자체가 불가능해진다(실측 - 취소했다).
+    **KRX 우선 · FMP 폴백.** KRX 는 신선하지만(주 단위) KRX 사이트가 죽어 34종에서
+    멈췄다. FMP 는 53종을 주되 6개월 낡았다 — 겹침 게이트는 ≥0.30/<0.05 의 거친
+    임계라 표류를 견디고, 낡은 것은 **선견이 아니다**(PIT 안전). 비중이 정밀해야
+    하는 종목 귀속은 KRX 가 있으면 그것을 쓴다.
+
+    캐시 필수: `overlap()` 이 후보 ETF 마다 두 번 부른다. 셀 하나에 수십 질의,
+    배치 736셀이면 수만 질의가 되어 측정 자체가 불가능해진다(실측 - 취소했다).
     같은 (ETF, 날짜) 보유는 안 변하므로 캐시가 정답을 안 바꾼다.
     """
-    return [(t, n or t, float(w) / 100.0) for t, n, w in lake.sql(
+    rows = lake.sql(
         f"SELECT constituent_ticker, any_value(constituent_name), any_value(weight_pct) "
         f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
         f"  AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings "
         f"                    WHERE market = 'KR' AND etf_id = '{etf}' "
         f"                      AND as_of_date <= DATE '{day}') "
-        f"GROUP BY 1") if w is not None]
+        f"GROUP BY 1")
+    if not rows:
+        try:
+            rows = lake.sql(
+                f"SELECT constituent_ticker, any_value(constituent_name), "
+                f"       any_value(weight_pct) FROM etf_holdings_fmp "
+                f"WHERE etf_id = '{etf}' AND CAST(as_of AS DATE) <= DATE '{day}' "
+                f"GROUP BY 1")
+        except Exception:                                  # noqa: BLE001 - 뷰 없음
+            return []
+    return [(t, n or t, float(w) / 100.0) for t, n, w in rows if w is not None]
 
 
+@lru_cache(maxsize=32768)
 def overlap(lake, a: str, b: str, day: str) -> float:
     """두 ETF 의 비중 중첩 Σ min(wᵢᵃ, wᵢᵇ). 1 이면 같은 포트폴리오다.
 

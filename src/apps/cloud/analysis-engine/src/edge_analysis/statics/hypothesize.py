@@ -45,7 +45,8 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
   "channel": "...",
   "exposure": {{"kind": "속성", "ident": 계열족, "transform": 변환}},
   "outcome": "수익률", "sign": 1,
-  "reduction_note": "이 셀의 무엇을 이 타입으로 읽었는가 한 줄"
+  "reduction_note": "이 셀의 무엇을 이 타입으로 읽었는가 한 줄",
+  "intent": "이 튜플로 검정하려는 인과 주장 한 문장 - 무엇이 사실이면 성립인가"
 }}, ...]}}
 
 규칙:
@@ -69,7 +70,8 @@ def _parse(h: dict) -> HypothesisTuple:
         channel=str(h.get("channel", "")),
         exposure=ExposureSource(**(h.get("exposure") or {})),
         outcome=str(h.get("outcome", "")), sign=int(h.get("sign", 0)),
-        reduction_note=str(h.get("reduction_note", ""))[:200])
+        reduction_note=str(h.get("reduction_note", ""))[:200],
+        intent=str(h.get("intent", ""))[:240])
 
 
 _EXPLORE = """도구를 불러 이 셀을 조사한다. **여기 없는 도구는 존재하지 않는다.**
