@@ -46,6 +46,17 @@ WINDOWS_PER_EXTENDED_SESSION = 720
 ExecutionMode = Literal["one_shot", "resident"]
 
 
+class MinuteContractError(ValueError):
+    """결정적 계약 위반 — 같은 입력으로 재시도해도 같은 결과다.
+
+    Worker 는 이걸 window 실패로 접지 않고 **전파**한다: 재시도로 안 풀리는 것을
+    재시도 경로에 넣으면 그 window 가 lease 만료마다 같은 요청·같은 오류를 영원히
+    반복하고(소스 호출도 계속된다) 아무도 고치러 가지 않는다. 회복 불가 불변식
+    위반을 크게 죽여 드러내는 기존 처리(GenerationMismatch·ArtifactImmutability)와
+    같은 축이다.
+    """
+
+
 # ── 결정적 직렬화·checksum (v0.7 10.6절) ──
 
 
@@ -240,13 +251,15 @@ class Universe(BaseModel):
         "계획이 잘못돼 만들어진 window" 가 같은 결과가 된다.
         """
         if window_start.tzinfo is None or window_start.tzinfo.utcoffset(window_start) is None:
-            raise ValueError(f"window_start 는 timezone-aware 여야 한다: {window_start!r}")
+            raise MinuteContractError(
+                f"window_start 는 timezone-aware 여야 한다: {window_start!r}"
+            )
         local = window_start.astimezone(KST).time()
         if SESSION_OPEN <= local < SESSION_CLOSE:
             return self.unit_ids
         if EXTENDED_OPEN <= local < EXTENDED_CLOSE and self.extended_hours_ids:
             return self.extended_hours_ids
-        raise ValueError(
+        raise MinuteContractError(
             f"window {window_start.isoformat()} 는 이 universe 의 거래시간 밖이다 "
             f"— 계획되지 않아야 할 window 다"
         )
@@ -258,11 +271,16 @@ class Universe(BaseModel):
         거래시간 클래스도 identity 에 넣는다: 멤버가 같아도 클래스가 다르면 기대
         유니버스와 window 계획이 달라진다 — 빼면 session 의 universe 충돌 가드가
         그 변경을 같은 universe 로 통과시킨다.
+
+        단 **선언이 없으면 축 자체를 넣지 않는다** — identity 는 "이 universe 가 뜻하는
+        기대"이고, 시간외 종목이 없는 universe 의 기대는 이 축이 생기기 전과 같다.
+        빈 목록을 넣으면 구성이 똑같은 기존 session 이 배포만으로 다른 hash 가 돼
+        UniverseConflictError 로 그날 재계획·재기동이 통째로 막힌다.
         """
-        return content_checksum(
-            [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids),
-             sorted(self.extended_hours_ids)]
-        )
+        parts = [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
+        if self.extended_hours_ids:
+            parts.append(sorted(self.extended_hours_ids))
+        return content_checksum(parts)
 
 
 def load_universe(path: Path) -> Universe:

@@ -166,8 +166,9 @@ class TestUniverseFixture:
         universe = load_universe(FIXTURES / "universe_348.json")
         assert (
             universe.universe_hash
-            # 거래시간 클래스(extended_hours_ids)가 identity 에 들어가며 갱신됨(ALPHA-684)
-            == "bd483bff31602a3a08d272b816f782d89bde084653cb65c7757915fc1055c5c9"
+            # 시간외 종목 선언이 없는 universe 는 그 축이 생기기 전과 같은 identity 다
+            # — 배포만으로 hash 가 바뀌면 그날 세션이 통째로 막힌다(ALPHA-684)
+            == "5b33574f724ecb10f7f3db0830c2fc6dfb45b386ee8f3a9c9ae43dab1e03d52e"
         )
 
     def test_hash_is_membership_identity_not_order(self):

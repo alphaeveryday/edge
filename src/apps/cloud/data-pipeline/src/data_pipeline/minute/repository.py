@@ -147,6 +147,9 @@ class MinuteLedger:
         Worker 가 자기 설정과 대조하는 용도다 — 원장은 universe 를 session 생성 시
         고정하는데(v0.7 10.1) Worker 는 자기 설정으로 기대 집합을 계산하므로, 둘이
         갈리면 남의 기대를 내 기준으로 확정하게 된다.
+
+        window 계획 범위가 그 universe 와 맞는지는 여기서 보지 않는다 — 계획과 hash 를
+        같은 universe 에서 뽑는 것은 planner 의 불변식이고, 강제할 자리도 planner 다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(

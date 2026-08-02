@@ -22,7 +22,12 @@ from data_pipeline.lake.storage import LocalStorage
 from data_pipeline.minute.artifacts import sha256_bytes
 from data_pipeline.minute.commit import GenerationMismatchError, MinuteCommitter
 from data_pipeline.minute.fake_collector import FakePriceCollector
-from data_pipeline.minute.models import KST, Universe, plan_session_windows
+from data_pipeline.minute.models import (
+    KST,
+    MinuteContractError,
+    Universe,
+    plan_session_windows,
+)
 from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
@@ -431,6 +436,26 @@ class TestManifestVocabulary:
                 return result, records, {**manifest, "deferred": []}
 
         worker.collector = ExtraClassCollector()
-        assert worker.tick(NOW) == "WINDOW_FAILED"
-        # 커밋되지 않는다 — lease 만료 후 재청구될 뿐(성공 위장 없음)
+        # window 실패로 접지 않고 전파한다 — 재시도로 안 풀리는 걸 재시도 경로에 넣으면
+        # lease 만료마다 같은 오류를 영원히 반복하고 아무도 고치러 가지 않는다
+        with pytest.raises(MinuteContractError):
+            worker.tick(NOW)
+        assert all(w["checksum"] is None for w in db.windows.values())
+
+    def test_result_counts_must_match_manifest_partition(self, tmp_path):
+        # 원장 수량(result)과 증거 분할(manifest)이 어긋나면 "missing_units 는 있는데
+        # VALID·failed=0" 같은 성공 위장이 커밋된다 — 각자의 validator 는 상대를 모른다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        inner = FakePriceCollector({"scenario": "normal"}, seed=42)
+
+        class MiscountingCollector:
+            def collect(self, request, now):
+                result, records, manifest = inner.collect(request, now)
+                moved, *rest = manifest["received"]
+                return result, records, {**manifest, "received": rest, "missing": [moved]}
+
+        worker.collector = MiscountingCollector()
+        with pytest.raises(MinuteContractError):
+            worker.tick(NOW)
         assert all(w["checksum"] is None for w in db.windows.values())

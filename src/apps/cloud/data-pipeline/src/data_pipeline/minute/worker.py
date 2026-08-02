@@ -49,7 +49,7 @@ from .commit import (
     GenerationMismatchError,
     MinuteCommitter,
 )
-from .models import KST, CollectionRequest, Universe
+from .models import KST, CollectionRequest, MinuteContractError, Universe
 from .repository import MinuteLedger
 
 logger = logging.getLogger(__name__)
@@ -236,18 +236,22 @@ class PriceWorker(MinuteWorkerLoop):
     def _session_ready(self) -> bool:
         """원장이 고정한 universe 와 내 설정이 같은가.
 
-        session 의 universe 는 생성 시 고정되고(v0.7 10.1) window 계획 범위도 거기서
-        나왔는데, 기대 집합은 **내 설정**으로 계산한다. 둘이 갈리면 ① 시간외 window 를
-        다른 종목 집합으로 VALID 확정해 원장이 고정한 종목이 조용히 누락되거나
-        ② 거래시간 밖이 된 window 에서 `units_at` 이 매번 터져 영원히 재청구된다.
+        session 의 universe 는 생성 시 고정되는데(v0.7 10.1) 기대 집합은 **내 설정**으로
+        계산한다. 둘이 갈리면
+        ① 시간외 window 를 다른 종목 집합으로 VALID 확정해 원장이 고정한 종목이 조용히
+        누락되거나 ② 거래시간 밖이 된 window 에서 `units_at` 이 터진다.
+
+        window 계획 범위가 그 universe 와 맞는지는 보지 않는다 — 계획과 hash 를 같은
+        universe 에서 뽑는 것은 planner 의 불변식이다(그 진입점에서 강제한다).
         """
-        identity = self.ledger.session_universe(session_id=self.session_id)
-        mine = (self.config.universe.universe_version, self.config.universe.universe_hash)
-        if identity == mine:
+        cfg = self.config
+        ledger_plan = self.ledger.session_universe(session_id=self.session_id)
+        mine = (cfg.universe.universe_version, cfg.universe.universe_hash)
+        if ledger_plan == mine:
             return True
         logger.error(
-            "session %s 의 universe %s 와 내 설정 %s 가 다르다 — 정지",
-            self.session_id, identity, mine,
+            "session %s 의 계획 %s 와 내 설정 %s 가 다르다 — 정지",
+            self.session_id, ledger_plan, mine,
         )
         return False
 
@@ -307,8 +311,20 @@ class PriceWorker(MinuteWorkerLoop):
             # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
             # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
             if unknown := set(manifest_units) - UNIT_CLASSES:
-                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
+                raise MinuteContractError(
+                    f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}"
+                )
             units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
+            # 원장에 실리는 수량(result)과 증거로 남는 분할(manifest)이 같은 관측을
+            # 말하는지 대조한다 — 각자의 validator 는 상대를 모르므로, 어긋나면
+            # "missing_units 는 있는데 VALID·failed=0" 같은 성공 위장이 커밋된다
+            failed = len(units["missing"]) + len(units["invalid"])
+            succeeded = len(units["received"]) + len(units["no_trade"])
+            if (succeeded, failed) != (result.succeeded_count, result.failed_count):
+                raise MinuteContractError(
+                    f"collector 의 result 수량({result.succeeded_count}/{result.failed_count})과 "
+                    f"manifest 분할({succeeded}/{failed})이 다르다"
+                )
             # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
             # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
             # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
@@ -341,9 +357,10 @@ class PriceWorker(MinuteWorkerLoop):
                 destination=cfg.destination, artifact_generation=generation,
             )
             return True
-        except (GenerationMismatchError, ArtifactImmutabilityError):
-            # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
-            # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+        except (GenerationMismatchError, ArtifactImmutabilityError, MinuteContractError):
+            # 결정적 불변식·계약 위반 — 재시도해도 같은 충돌이 반복될 뿐이다(회복 불가).
+            # 크게 죽어서 수퍼바이저/운영자가 보게 한다. 재시도 경로에 넣으면 그 window 가
+            # lease 만료마다 같은 오류를 영원히 반복하고 소스 호출도 계속된다.
             raise
         except CommitRejectedError:
             # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
