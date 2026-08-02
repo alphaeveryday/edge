@@ -452,10 +452,47 @@ class MinutePriceWorkerConfig(BaseModel):
     lease_seconds: int = Field(default=300, ge=90, le=3600)
     session_lease_seconds: int = Field(default=300, ge=60, le=3600)
     heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
-    recovery_budget_per_tick: int = Field(default=2, ge=0, le=50)
+    # 하한 1 — DRAINING 수렴은 recovery lane 만 연다(만료 고아 CLAIMED 회수). 0 이면
+    # 실패 잔존 CLAIMED 를 아무도 회수하지 못해 ack_drain 이 영구 거부되고 세션이
+    # DRAINING 에 고착된다(worker.tick 의 drain 분기).
+    recovery_budget_per_tick: int = Field(default=2, ge=1, le=50)
     # IDLE/DRAINING 일 때 tick 사이 대기(초). window 는 60초마다 생기므로 짧은 폴링이면
     # 충분하다. 상한을 둔다 — inf 는 time.sleep 에서 OverflowError(MinuteRelayConfig 동형).
     tick_seconds: float = Field(default=5.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _leases_cover_worst_tick(self) -> MinutePriceWorkerConfig:
+        """lease 는 **한 tick 의 최악 소요** 위여야 한다.
+
+        한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
+        claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
+        tick 안에서 시계를 다시 읽지 않는다). 토스 window 하나가 실측 73초+ 라, 이
+        여유(75초/window)를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른 attempt 가
+        탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
+        tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
+
+        ⚠️ 75초/window 는 **하한 가드지 상한 증명이 아니다** — 재시도(콜당 최대 3회)·
+        timeout(10초) 폭주가 겹치면 한 window 가 이를 넘을 수 있다. 그 경우에도
+        정확성은 claim/fence CAS 가 지킨다(탈취된 attempt 의 commit 이 거부될 뿐,
+        이중 커밋은 없다) — 이 검증은 명백히 틀린 설정을 배포 전에 거르는 장치다.
+        """
+        worst_tick = (1 + self.recovery_budget_per_tick) * 75
+        if self.lease_seconds < worst_tick:
+            raise ValueError(
+                f"lease_seconds({self.lease_seconds}) < tick 최악 소요({worst_tick}초 = "
+                f"(1+recovery_budget {self.recovery_budget_per_tick}) × 75) — "
+                "in-flight claim 이 만료된다. budget 을 줄이거나 lease 를 늘려라"
+            )
+        # fence 갱신은 tick 경계에서만 된다 — 최악은 "직전 갱신 후 heartbeat 주기
+        # 직전(주기−ε)에 시작한 tick 이 최악 소요만큼 도는" 경우라, lease 는 두 구간의
+        # 합을 덮어야 한다. 절반 규칙(×2)은 tick 소요를 무시해 이 조합을 통과시킨다.
+        if self.heartbeat_every_seconds + worst_tick > self.session_lease_seconds:
+            raise ValueError(
+                f"session_lease_seconds({self.session_lease_seconds}) < heartbeat 주기"
+                f"({self.heartbeat_every_seconds}) + tick 최악 소요({worst_tick}초) — "
+                "fence 가 처리 중 만료돼 정상 수집이 거부된다"
+            )
+        return self
 
 
 class PriceTriggersConfig(BaseModel):

@@ -128,6 +128,10 @@ class MinuteWorkerLoop:
             # 신규(DUE) claim 은 원장이 금지하지만 **만료된 고아 CLAIMED 회수**는
             # DRAINING 에서도 허용된다(2B-2) — 실패로 남은 window 를 여기서 회수해
             # 처리하지 않으면 ack 가 CLAIMED 잔존으로 영구 거부돼 drain 이 안 끝난다.
+            if not ready:
+                # 자격 없음이 반환값(DRAINING)에 안 실린다 — bounded 확인 게이트가
+                # "자격도 없었는데 성공"으로 판정하지 않게 카운터로 남긴다
+                self.drain_blocked = getattr(self, "drain_blocked", 0) + 1
             for _ in range(self.config.recovery_budget_per_tick):
                 claim = self.ledger.claim_due_window(
                     session_id=self.session_id, worker_id=self.config.worker_id,
@@ -141,6 +145,12 @@ class MinuteWorkerLoop:
                     # DUE 로 반납하고 잔여 판정(MISSING 등)은 EOD QC 에 넘긴다.
                     # 자격이 없을 때도 **집었다가 반납**한다: 안 집으면 죽은 Worker 가
                     # 남긴 CLAIMED 가 영원히 남아 ack 가 계속 거부된다
+                    if ready:
+                        # 반환값은 DRAINING 하나라 처리 실패가 여기 아니면 안 보인다 —
+                        # bounded 확인 게이트(price_worker_cli)가 이 카운터를 합산한다
+                        self.drain_window_failures = (
+                            getattr(self, "drain_window_failures", 0) + 1
+                        )
                     self.ledger.release_window_claim(
                         session_id=self.session_id, window_start=claim["window_start"],
                         worker_id=self.config.worker_id, claim_token=claim["claim_token"],
@@ -215,6 +225,11 @@ class MinuteWorkerLoop:
                 now=now, lease_seconds=self.config.session_lease_seconds,
             ):
                 logger.error("heartbeat 거부 — fence 상실, 즉시 정지")
+                # 죽은 token 은 버린다 — 쥔 채 두면 상주 진입점(price_worker_cli)의
+                # 재시도 tick 이 같은 stale token 으로 heartbeat 만 영원히 반복한다.
+                # 비운 뒤에는 다음 tick 이 재획득을 시도한다(경쟁자가 살아 있으면
+                # 실패해 대기, 죽었으면 lease 만료 후 인계).
+                self.fence_token = None
                 return False
             self._last_heartbeat = now
         return True
@@ -426,7 +441,9 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
             "minute_price_worker 설정 없음 — 토스 자격증명 필수"
             "(DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/__CLIENT_SECRET 주입)"
         )
-    if not options.client_id or not options.client_secret:
+    # 공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 벤더 인증이 실패해
+    # window 실패만 쌓인다(fail-loud 기동 검증이 무력해진다)
+    if not (options.client_id or "").strip() or not (options.client_secret or "").strip():
         raise SystemExit(
             "토스 자격증명 없음 — DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/"
             "__CLIENT_SECRET 를 env 로 주입한다(커밋되는 TOML 금지)"
@@ -435,6 +452,16 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
         raise SystemExit(
             "--universe 필요 — planner(plan-minute-session)와 **같은 파일**이어야 원장의 "
             "universe 와 일치한다(갈리면 Worker 가 처리를 거부한다 — _session_ready)"
+        )
+    from .jobs import DESTINATION_JOB_KINDS
+    price_queues = sorted(d for d, k in DESTINATION_JOB_KINDS.items() if k == "price")
+    if options.destination not in price_queues:
+        # 오타 destination 은 커밋까지 통과하고 Relay 가 전건 DEAD 로 격리한다 —
+        # event_id 가 결정적이라 설정을 고쳐 재실행해도 그 행은 안 바뀌고 건별
+        # redrive 만 남는다. 기동에서 어휘로 거부한다.
+        raise SystemExit(
+            f"destination {options.destination!r} 는 가격 큐 어휘가 아니다"
+            f"(가능: {price_queues})"
         )
     day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
     try:
@@ -491,10 +518,13 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     logger.info("price-worker 시작: session=%s worker=%s", session_id, worker_id)
     ticks = 0
     failed = 0
+    processed = 0
+    blocked = 0  # fence 미획득·설정 불일치로 아무것도 못 한 tick
     while max_ticks is None or ticks < max_ticks:
         state = worker.tick(datetime.now(timezone.utc))
         ticks += 1
         failed += state == "WINDOW_FAILED"
+        processed += state in ("PROCESSED", "WINDOW_FAILED")
         if state == "STOPPED":
             if worker.stopping:
                 logger.info(
@@ -506,15 +536,30 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
             # fence 미획득(경쟁 lease 잔존) 또는 설정 불일치(_session_ready) — 죽지 않고
             # 다음 tick 을 기다린다: crash 잔존 lease 는 session_lease 만료로 풀리고,
             # 불일치 중에도 drain 관측을 유지해야 세션이 DRAINING 에 고착되지 않는다.
+            blocked += 1
             time.sleep(options.tick_seconds)
             continue
         if state == "DRAINED":
             # 세션이 끝났다 — EOD 로 넘어간 정상 종료. 재기동해도 할 일이 없다.
+            # 단 확인 게이트 판정은 우회하지 않는다 — 그전 tick 의 실패·차단이
+            # DRAINED 반환으로 지워지면 실패한 확인 실행이 성공으로 보고된다.
+            # DRAINING 중의 처리 실패·자격 없음은 반환값(DRAINING)에 안 실리므로 합산.
+            failed += getattr(worker, "drain_window_failures", 0)
+            blocked += getattr(worker, "drain_blocked", 0)
             logger.info(
-                "price-worker 종료(DRAINED) — %d tick, WINDOW_FAILED %d", ticks, failed
+                "price-worker 종료(DRAINED) — %d tick, 처리 %d, WINDOW_FAILED %d",
+                ticks, processed, failed,
             )
-            return 0
+            return 1 if failed or (blocked and not processed) else 0
         if state in ("IDLE", "DRAINING"):
             time.sleep(options.tick_seconds)
-    logger.info("price-worker 종료(max-ticks %d) — WINDOW_FAILED %d", ticks, failed)
-    return 1 if failed else 0
+    failed += getattr(worker, "drain_window_failures", 0)
+    blocked += getattr(worker, "drain_blocked", 0)
+    logger.info(
+        "price-worker 종료(max-ticks %d) — 처리 %d, WINDOW_FAILED %d, 차단 %d",
+        ticks, processed, failed, blocked,
+    )
+    # 확인 게이트다 — 실패가 있었거나, **한 window 도 못 본 채 차단만 됐으면**(경쟁
+    # fence·universe 불일치) 성공으로 보고하지 않는다. 전부 IDLE(이미 다 처리된 세션)은
+    # 정상이다.
+    return 1 if failed or (blocked and not processed) else 0

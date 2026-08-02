@@ -606,3 +606,253 @@ class TestPriceWorkerCli:
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
         keys = [k for k in LocalStorage(root=tmp_path).list_keys("") if k.endswith("bars.ndjson")]
         assert len(keys) == 3  # canonical 존에 artifact 가 실제로 남았다
+
+
+class TestPriceWorkerConfig:
+    """설정 검증 — lease 가 tick 최악 소요를 못 덮으면 로드 시점에 죽는다(ALPHA-706)."""
+
+    def _config(self, **overrides):
+        from data_pipeline.config.models import MinutePriceWorkerConfig
+        base = dict(client_id="c", client_secret="s", trigger_schema_version="trig-1")
+        return MinutePriceWorkerConfig(**{**base, **overrides})
+
+    def test_lease_must_cover_worst_tick(self):
+        # (1 + budget 3) × 75 = 300 > lease 299 — 뒤쪽 claim 이 처리 중 만료되는 조합.
+        # 배포 후 장중에 탈취·commit 거부로 드러나는 대신 로드에서 거부한다
+        with pytest.raises(ValueError, match="tick 최악 소요"):
+            self._config(lease_seconds=299, recovery_budget_per_tick=3)
+
+    def test_session_lease_must_cover_worst_tick(self):
+        with pytest.raises(ValueError, match="fence 가 처리 중 만료"):
+            self._config(session_lease_seconds=100, recovery_budget_per_tick=2)
+
+    def test_zero_recovery_budget_rejected(self):
+        # budget 0 이면 DRAINING 에서 만료 고아 CLAIMED 를 아무도 회수하지 못해
+        # ack_drain 이 영구 거부된다 — 세션이 DRAINING 에 고착
+        with pytest.raises(ValueError):
+            self._config(recovery_budget_per_tick=0)
+
+    def test_default_is_valid(self):
+        cfg = self._config()
+        assert (1 + cfg.recovery_budget_per_tick) * 75 <= cfg.lease_seconds
+
+    def test_bounded_all_blocked_is_not_success(self, tmp_path, monkeypatch):
+        # 경쟁 fence 에 막혀 한 window 도 못 봤는데 exit 0 이면 확인 게이트가
+        # 오배선을 성공으로 판정한다
+        from data_pipeline.minute.worker import price_worker_cli
+        from types import SimpleNamespace
+        db = FakeMinuteDB()
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        session_id, _ = ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
+            windows=planned[:1],
+        )
+        # 다른 Worker 가 fence 를 쥐고 있다(미래까지 유효)
+        ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="other",
+            now=datetime.now(KST) + timedelta(days=1), lease_seconds=3600,
+        )
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteLedger",
+                            lambda db=None: MinuteLedger(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteCommitter",
+                            lambda db=None: MinuteCommitter(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage",
+                            lambda config: LocalStorage(root=tmp_path))
+        monkeypatch.setattr("data_pipeline.sources.toss.TossOpenApiClient",
+                            lambda client_id, client_secret: object())
+        monkeypatch.setattr(
+            "data_pipeline.minute.toss_collector.TossPriceCollector",
+            lambda client, lookback: FakePriceCollector({"scenario": "normal"}, seed=42),
+        )
+        import json as _json
+        path = tmp_path / "u.json"
+        path.write_text(_json.dumps({
+            "universe_version": UNIVERSE.universe_version,
+            "etf_ids": list(UNIVERSE.etf_ids),
+            "constituent_ids": list(UNIVERSE.constituent_ids),
+        }), encoding="utf-8")
+        options = SimpleNamespace(
+            client_id="cid", client_secret="secret", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
+        )
+        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        code = price_worker_cli(
+            settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
+            max_ticks=2,
+        )
+        assert code == 1  # 차단만 있고 처리 0 — 성공 위장 금지
+
+    def test_session_lease_must_cover_heartbeat_gap_plus_worst_tick(self):
+        # 최악은 "직전 갱신 후 주기 직전에 시작한 tick 이 최악 소요만큼 도는" 경우 —
+        # lease 가 (heartbeat 주기 + 최악 tick) 미만이면 처리 중 fence 가 만료된다.
+        # ×2 절반 규칙은 이 조합(60 + 150 > 200)을 통과시켰다(라운드 3 반례)
+        with pytest.raises(ValueError, match="heartbeat 주기"):
+            self._config(session_lease_seconds=200, heartbeat_every_seconds=60,
+                         recovery_budget_per_tick=1, lease_seconds=150)
+
+    def test_blank_credentials_rejected_at_startup(self):
+        # 공백-only 자격증명은 기동을 통과하면 모든 벤더 인증이 실패한 채 돈다
+        from types import SimpleNamespace
+        from data_pipeline.minute.worker import price_worker_cli
+        options = SimpleNamespace(
+            client_id=" ", client_secret="s", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
+        )
+        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        with pytest.raises(SystemExit, match="자격증명 없음"):
+            price_worker_cli(settings, session_date="2026-07-31", universe="u.json")
+
+    def test_non_price_destination_rejected_at_startup(self):
+        # 오타 destination 은 커밋까지 통과하고 Relay 가 전건 DEAD 로 격리한다 —
+        # event_id 가 결정적이라 재실행으로 안 고쳐지고 건별 redrive 만 남는다
+        from types import SimpleNamespace
+        from data_pipeline.minute.worker import price_worker_cli
+        options = SimpleNamespace(
+            client_id="c", client_secret="s", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtme",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
+        )
+        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        with pytest.raises(SystemExit, match="가격 큐 어휘가 아니다"):
+            price_worker_cli(settings, session_date="2026-07-31", universe="u.json")
+
+    def test_drained_exit_does_not_erase_prior_failure(self, monkeypatch, tmp_path):
+        # DRAINED 조기 반환이 그전 tick 의 WINDOW_FAILED 를 지우면 실패한 확인
+        # 실행이 성공으로 보고된다 — bounded 게이트는 마지막 상태가 아니라 누적으로
+        from types import SimpleNamespace
+        from data_pipeline.minute.worker import PriceWorker, price_worker_cli
+        db = FakeMinuteDB()
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
+            windows=planned[:1],
+        )
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteLedger",
+                            lambda db=None: MinuteLedger(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteCommitter",
+                            lambda db=None: MinuteCommitter(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage",
+                            lambda config: LocalStorage(root=tmp_path))
+        monkeypatch.setattr("data_pipeline.sources.toss.TossOpenApiClient",
+                            lambda client_id, client_secret: object())
+        monkeypatch.setattr(
+            "data_pipeline.minute.toss_collector.TossPriceCollector",
+            lambda client, lookback: FakePriceCollector({"scenario": "normal"}, seed=42),
+        )
+        states = iter(["WINDOW_FAILED", "DRAINED"])
+        monkeypatch.setattr(PriceWorker, "tick", lambda self, now: next(states))
+        import json as _json
+        path = tmp_path / "u.json"
+        path.write_text(_json.dumps({
+            "universe_version": UNIVERSE.universe_version,
+            "etf_ids": list(UNIVERSE.etf_ids),
+            "constituent_ids": list(UNIVERSE.constituent_ids),
+        }), encoding="utf-8")
+        options = SimpleNamespace(
+            client_id="c", client_secret="s", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
+        )
+        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        assert price_worker_cli(
+            settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
+            max_ticks=5,
+        ) == 1
+
+    def test_draining_failure_counts_in_bounded_gate(self, monkeypatch, tmp_path):
+        # DRAINING 중의 처리 실패는 반환값에 안 실린다 — 카운터 합산이 없으면
+        # ack 후 DRAINED 로 끝난 확인 실행이 실패를 지운 채 exit 0 이 된다
+        from types import SimpleNamespace
+        from data_pipeline.minute.worker import PriceWorker, price_worker_cli
+        db = FakeMinuteDB()
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
+            windows=planned[:1],
+        )
+        db_ = db
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteLedger",
+                            lambda db=None: MinuteLedger(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.minute.worker.MinuteCommitter",
+                            lambda db=None: MinuteCommitter(db=_DB, connect_fn=db_.connect))
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage",
+                            lambda config: LocalStorage(root=tmp_path))
+        monkeypatch.setattr("data_pipeline.sources.toss.TossOpenApiClient",
+                            lambda client_id, client_secret: object())
+        monkeypatch.setattr(
+            "data_pipeline.minute.toss_collector.TossPriceCollector",
+            lambda client, lookback: FakePriceCollector({"scenario": "normal"}, seed=42),
+        )
+
+        def draining_then_drained(self, now):
+            self.drain_window_failures = getattr(self, "drain_window_failures", 0) + 1
+            if getattr(self, "_t", 0) == 0:
+                self._t = 1
+                return "DRAINING"
+            return "DRAINED"
+
+        monkeypatch.setattr(PriceWorker, "tick", draining_then_drained)
+        import json as _json
+        path = tmp_path / "u.json"
+        path.write_text(_json.dumps({
+            "universe_version": UNIVERSE.universe_version,
+            "etf_ids": list(UNIVERSE.etf_ids),
+            "constituent_ids": list(UNIVERSE.constituent_ids),
+        }), encoding="utf-8")
+        options = SimpleNamespace(
+            client_id="c", client_secret="s", source="toss",
+            trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            lookback=1, lease_seconds=300, session_lease_seconds=300,
+            heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
+        )
+        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        assert price_worker_cli(
+            settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
+            max_ticks=5,
+        ) == 1
+
+
+class TestFenceRecovery:
+    def test_heartbeat_loss_clears_token_for_reacquisition(self, tmp_path):
+        # 상실한 token 을 쥔 채 두면 상주 재시도가 같은 stale token 으로 heartbeat 만
+        # 반복한다 — 비워야 다음 tick 이 재획득을 시도하고, 경쟁자가 사라지면 인계된다
+        db = FakeMinuteDB()
+        first, ledger, session_id = build_worker(db, tmp_path, windows=5)
+        first.tick(NOW)
+        later = NOW + timedelta(seconds=301)
+        takeover, _, _ = build_worker(db, tmp_path, worker_id="w2", windows=5)
+        takeover.session_id = session_id
+        takeover.tick(later)  # fence 교체(token+1)
+        assert first.tick(later + timedelta(seconds=1)) == "STOPPED"
+        assert first.fence_token is None  # stale token 폐기
+        # 경쟁자가 lease 를 반납하면(교체 배포 SIGTERM) 원래 Worker 가 재획득한다 —
+        # 남은 window 는 takeover 가 이미 처리해 IDLE 이지만, fence 재획득 자체가 증거다
+        takeover.request_stop()
+        takeover.tick(later + timedelta(seconds=2))
+        assert first.tick(later + timedelta(seconds=3)) == "IDLE"
+        assert first.fence_token is not None  # stale 반복이 아니라 재획득했다
+
+    def test_draining_not_ready_counts_as_blocked(self, tmp_path):
+        # DRAINING + universe 불일치 — 자격 없음이 카운터로 남아야 bounded 게이트가
+        # "자격도 없었는데 성공"으로 판정하지 않는다(반환값은 drain 수렴용 DRAINING 그대로)
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
+        run_until_idle(worker, NOW)
+        ledger.request_drain(session_id=session_id, now=NOW)
+        worker.config.universe = UNIVERSE_EXT  # 배포로 설정만 바뀐 상황
+        assert worker.tick(NOW + timedelta(seconds=1)) == "DRAINING"
+        assert getattr(worker, "drain_blocked", 0) >= 1

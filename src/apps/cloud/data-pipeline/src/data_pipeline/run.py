@@ -194,11 +194,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-group", default=None,
                         help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
     parser.add_argument("--session-date", default=None,
-                        help="plan-minute-session: 세션 날짜 YYYY-MM-DD")
+                        help="plan-minute-session·price-worker: 세션 날짜 YYYY-MM-DD"
+                             "(price-worker 미지정=오늘 KST — planner 와 같은 값이어야 "
+                             "같은 session_id 가 유도된다)")
     parser.add_argument("--universe", default=None,
-                        help="plan-minute-session: 가격 세션의 universe JSON 경로(필수). "
-                             "window 범위와 universe_hash 가 여기서 나온다 — 빠뜨리면 "
-                             "시간외 구간이 무신호로 누락되므로 거부한다")
+                        help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
+                             "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
+                             "여기서 나온다 — 갈리면 Worker 가 처리를 거부한다")
     parser.add_argument("--session-id", default=None,
                         help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
