@@ -61,11 +61,12 @@ public class SourceController {
 		return ApiResponse.onSuccess(sourceService.minuteStatus(date));
 	}
 
-	/** 뉴스 계보(ALPHA-685) — 집계와 그 근거 목록. 검증은 서비스가 한다. */
+	/** 뉴스 계보(ALPHA-685·697) — 집계·근거 목록·1분 추출 요약. 검증은 서비스가 한다. */
 	@GetMapping("/api/v1/sources/lineage/news")
 	public ApiResponse<NewsLineageResponse> newsLineage(
 			@RequestParam(required = false) String date,
-			@RequestParam(defaultValue = "50") int limit) {
-		return ApiResponse.onSuccess(sourceService.newsLineage(date, limit));
+			@RequestParam(defaultValue = "50") int limit,
+			@RequestParam(required = false) String stage) {
+		return ApiResponse.onSuccess(sourceService.newsLineage(date, limit, stage));
 	}
 }

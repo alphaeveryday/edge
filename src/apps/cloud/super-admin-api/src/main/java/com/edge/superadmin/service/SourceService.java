@@ -137,25 +137,30 @@ public class SourceService {
 	}
 
 	/**
-	 * 뉴스 계보(ALPHA-685). {@code date} 는 KST 날짜 문자열(없으면 전체 누적) — 형식이 틀리면
-	 * 빈 결과가 아니라 400 이다(오타 친 날짜가 "그날 문서 없음"으로 보이면 없는 사실을 읽는다).
+	 * 뉴스 계보(ALPHA-685·697). {@code date} 는 KST 날짜 문자열(없으면 전체 누적) — 형식이
+	 * 틀리면 빈 결과가 아니라 400 이다(오타 친 날짜가 "그날 문서 없음"으로 보이면 없는 사실을
+	 * 읽는다). {@code stage} 도 같은 결 — 모르는 값이 "그 단계 문서 없음"으로 보이면 안 된다.
+	 * 필터는 문서 목록에만 적용되고 집계는 항상 전 단계다(타일 분모 유지).
 	 */
-	public NewsLineageResponse newsLineage(String date, int limit) {
+	public NewsLineageResponse newsLineage(String date, int limit, String stage) {
 		if (limit < 1 || limit > 200) {
 			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
 		}
-		LocalDate dateKst = null;
-		if (date != null) {
-			try {
-				dateKst = LocalDate.parse(date);
-			} catch (java.time.format.DateTimeParseException e) {
-				throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
-			}
+		LocalDate dateKst = date == null ? null : parseDateParam(date);
+		NewsLineageRepository.Stage stageFilter = null;
+		if (stage != null) {
+			stageFilter = switch (stage) {
+				case "structured" -> NewsLineageRepository.Stage.STRUCTURED;
+				case "unstructured" -> NewsLineageRepository.Stage.UNSTRUCTURED;
+				case "used" -> NewsLineageRepository.Stage.USED;
+				default -> throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+			};
 		}
-		NewsLineageRepository.Lineage lineage = newsLineage.lineage(dateKst, limit);
+		NewsLineageRepository.Lineage lineage =
+				newsLineage.lineage(dateKst, stageFilter, limit);
 		return NewsLineageResponse.from(
-				dateKst == null ? null : dateKst.toString(),
-				lineage.summary(), lineage.documents());
+				dateKst == null ? null : dateKst.toString(), stage,
+				lineage.summary(), lineage.documents(), lineage.extraction());
 	}
 
 	/**
@@ -164,18 +169,28 @@ public class SourceService {
 	 * (뉴스 계보와 같은 이유 — 오타가 "그날 미가동"으로 보이면 없는 사실을 읽는다).
 	 */
 	public MinuteStatusResponse minuteStatus(String date) {
-		LocalDate sessionDate;
-		if (date == null) {
-			sessionDate = LocalDate.now(KST);
-		} else {
-			try {
-				sessionDate = LocalDate.parse(date);
-			} catch (java.time.format.DateTimeParseException e) {
-				throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
-			}
-		}
+		LocalDate sessionDate = date == null ? LocalDate.now(KST) : parseDateParam(date);
 		return MinuteStatusResponse.from(sessionDate.toString(),
 				minuteStatus.status(sessionDate));
+	}
+
+	/**
+	 * KST 날짜 파라미터 공통 파서 — 형식 오류는 물론 <b>확장 연도</b>(예: {@code +999999999-12-31})
+	 * 도 400 이다. ISO 확장 연도는 {@code LocalDate.parse} 를 통과한 뒤 리포지토리의
+	 * {@code plusDays(1)}(KST 반개구간 상한)에서 DateTimeException 으로 터져 500 이 된다 —
+	 * 검증 게이트를 통과한 값이 아래 계층에서 터지면 오타가 서버 오류로 위장된다.
+	 */
+	private static LocalDate parseDateParam(String date) {
+		LocalDate parsed;
+		try {
+			parsed = LocalDate.parse(date);
+		} catch (java.time.format.DateTimeParseException e) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		if (parsed.getYear() < 1 || parsed.getYear() > 9999) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		return parsed;
 	}
 
 	/**

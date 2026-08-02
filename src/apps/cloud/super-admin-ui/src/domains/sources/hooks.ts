@@ -1,6 +1,7 @@
 /* sources 도메인 — 페이지가 사용하는 hook. */
 import { useQuery } from '@tanstack/react-query';
 import { sourcesRepository } from './index';
+import type { NewsLineageStage } from './types';
 
 /**
  * @param runKey 볼 런의 슬롯 키. 없으면 최신 런.
@@ -31,11 +32,11 @@ export function useSourceOverview() {
   });
 }
 
-/** 뉴스 계보(ALPHA-685). 캐시 키에 date — 빼면 날짜를 바꿔도 앞선 날짜 결과가 보인다. */
-export function useNewsLineage(date?: string, limit?: number) {
+/** 뉴스 계보(ALPHA-685·697). 캐시 키에 date·stage — 빼면 필터를 바꿔도 앞선 결과가 보인다. */
+export function useNewsLineage(date?: string, limit?: number, stage?: NewsLineageStage) {
   return useQuery({
-    queryKey: ['sources', 'lineage', 'news', date ?? null, limit ?? null],
-    queryFn: () => sourcesRepository.newsLineage(date, limit),
+    queryKey: ['sources', 'lineage', 'news', date ?? null, limit ?? null, stage ?? null],
+    queryFn: () => sourcesRepository.newsLineage(date, limit, stage),
   });
 }
 

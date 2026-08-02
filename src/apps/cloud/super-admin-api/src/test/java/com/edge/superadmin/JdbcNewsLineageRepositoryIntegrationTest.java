@@ -41,6 +41,16 @@ class JdbcNewsLineageRepositoryIntegrationTest extends CloudPostgresIntegrationT
 		insertAssertion("as-u", "doc-u");
 		insertAssertion("as-a", "doc-a");
 
+		// 언론사(ALPHA-695 승격) — doc-u 만 채워 nullable 경로(doc-a·doc-b)도 함께 잠근다.
+		jdbc.update("INSERT INTO news_document (document_id, publisher) VALUES ('doc-u', '한국경제')");
+
+		// 1분 추출 job(ALPHA-697) — KST 07-31 에 SUCCEEDED 1·DEAD 2(사유 하나는 미기록 NULL),
+		// 다른 날짜에 DEAD 1(날짜 필터가 새는지 잠근다).
+		insertJob("job-s", "SUCCEEDED", null, "2026-07-31T02:00:00Z");
+		insertJob("job-d1", "DEAD", "RETRY_BUDGET_EXHAUSTED", "2026-07-31T03:00:00Z");
+		insertJob("job-d2", "DEAD", null, "2026-07-31T04:00:00Z");
+		insertJob("job-dx", "DEAD", "STALE", "2026-08-01T01:00:00Z");
+
 		// doc-u 만 분석 사용 체인: assertion → event_evidence → explanation_run_event_evidence
 		jdbc.update("""
 				INSERT INTO source_event (source_event_id, source_class, event_type_code, available_at)
@@ -70,26 +80,68 @@ class JdbcNewsLineageRepositoryIntegrationTest extends CloudPostgresIntegrationT
 
 	@Test
 	void 문서_목록은_수집시각_내림차순이고_증거_사용_축이_행마다_실린다() {
-		List<LineageDocument> docs = repository.documents(LocalDate.of(2026, 7, 31), 10);
+		List<LineageDocument> docs = repository.documents(LocalDate.of(2026, 7, 31), null, 10);
 
 		assertThat(docs).extracting(LineageDocument::documentId)
 				.containsExactly("doc-b", "doc-u", "doc-a"); // available_at DESC
 		LineageDocument used = docs.get(1);
 		assertThat(used.assertionCount()).isEqualTo(1);
 		assertThat(used.usedInAnalysis()).isTrue();
+		// 언론사·URL(ALPHA-697) — 승격된 축이 목록 행까지 실린다. 미기록은 null 그대로.
+		assertThat(used.publisher()).isEqualTo("한국경제");
+		assertThat(used.sourceUri()).isEqualTo("https://news.example/doc-u");
+		assertThat(docs.get(0).publisher()).isNull();
 		assertThat(docs.get(0).assertionCount()).isZero();
 		assertThat(docs.get(0).usedInAnalysis()).isFalse();
 
 		// limit 이 실제로 전달되는지 — 화면 표본 크기 계약.
-		assertThat(repository.documents(LocalDate.of(2026, 7, 31), 1)).hasSize(1);
+		assertThat(repository.documents(LocalDate.of(2026, 7, 31), null, 1)).hasSize(1);
+	}
+
+	@Test
+	void 단계_필터는_집계_카운트와_같은_정의로_목록을_좁힌다() {
+		// WHY: 타일 숫자(집계 FILTER)와 클릭 결과(목록 WHERE)가 같은 SQL 조각이어야 한다는
+		//      드릴다운 계약(ALPHA-697) — 정의가 갈리면 "구조화 2건" 클릭이 다른 집합을 보여준다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		assertThat(repository.documents(day, NewsLineageRepository.Stage.STRUCTURED, 10))
+				.extracting(LineageDocument::documentId).containsExactly("doc-u", "doc-a");
+		assertThat(repository.documents(day, NewsLineageRepository.Stage.UNSTRUCTURED, 10))
+				.extracting(LineageDocument::documentId).containsExactly("doc-b");
+		assertThat(repository.documents(day, NewsLineageRepository.Stage.USED, 10))
+				.extracting(LineageDocument::documentId).containsExactly("doc-u");
+	}
+
+	@Test
+	void 추출_요약은_KST_날짜로_잘리고_DEAD_사유별_건수는_미기록_NULL_도_한_행이다() {
+		// WHY: 실패 축의 정직성 — 다른 날짜 job 이 섞이면 "오늘 실패"가 과대 계상되고,
+		//      사유 미기록(NULL)을 떨어뜨리면 미기록 DEAD 가 화면에서 사라진다.
+		NewsLineageRepository.ExtractionSummary day =
+				repository.extraction(LocalDate.of(2026, 7, 31));
+		assertThat(day.succeeded()).isEqualTo(1);
+		assertThat(day.dead()).isEqualTo(2);               // job-dx(08-01)는 빠진다
+		assertThat(day.deadByErrorCode()).extracting(NewsLineageRepository.ErrorCodeCount::errorCode)
+				.containsExactly("RETRY_BUDGET_EXHAUSTED", null); // 건수 동률 → 이름 있는 사유 먼저
+
+		NewsLineageRepository.ExtractionSummary all = repository.extraction(null);
+		assertThat(all.dead()).isEqualTo(3);
 	}
 
 	private void insertDocument(String id, String title, String availableAtUtc) {
 		jdbc.update("""
 				INSERT INTO document (document_id, document_type, source_code, source_document_id,
-				       title, published_at, available_at)
-				VALUES (?, 'NEWS', 'BIGKINDS', ?, ?, ?::timestamptz, ?::timestamptz)
-				""", id, "nid-" + id, title, availableAtUtc, availableAtUtc);
+				       title, published_at, available_at, source_uri)
+				VALUES (?, 'NEWS', 'BIGKINDS', ?, ?, ?::timestamptz, ?::timestamptz, ?)
+				""", id, "nid-" + id, title, availableAtUtc, availableAtUtc,
+				"https://news.example/" + id);
+	}
+
+	private void insertJob(String id, String status, String errorCode, String createdAtUtc) {
+		jdbc.update("""
+				INSERT INTO news_extraction_job (job_id, source_code, article_id,
+				       input_fingerprint, tagger_version, ontology_version, status,
+				       error_code, created_at)
+				VALUES (?, 'bigkinds', ?, ?, 't1', 'o1', ?, ?, ?::timestamptz)
+				""", id, "art-" + id, "fp-" + id, status, errorCode, createdAtUtc);
 	}
 
 	private void insertAssertion(String id, String documentId) {

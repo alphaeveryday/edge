@@ -196,13 +196,27 @@ function MinuteLaneCard() {
         </p>
       ) : isPending ? (
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>불러오는 중…</p>
-      ) : data.sessions.length === 0 ? (
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-          오늘({data.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
-          미가동)이지 오류가 아닙니다.
-        </p>
       ) : (
-        data.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
+        <>
+          {data.sessions.length === 0 ? (
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+              오늘({data.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
+              미가동)이지 오류가 아닙니다.
+            </p>
+          ) : (
+            data.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
+          )}
+          {/* 뉴스 추출 DEAD — 세션(창 원장)과 별개 축이라 세션 유무와 무관하게 신호를 낸다
+            * (ALPHA-697). 사유별 내역은 /lineage/news 의 추출 카드가 답한다. 이 카운트는
+            * 서버가 data.date(오늘 KST)로 집계한 값이라 링크도 같은 날짜를 들고 내려간다 —
+            * 날짜를 버리면 상세가 누적 사유를 보여줘 오늘 장애를 오진한다. */}
+          {data.newsJobs.dead > 0 && (
+            <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
+              뉴스 추출 DEAD {data.newsJobs.dead}건 —{' '}
+              <Link to={`/lineage/news?date=${data.date}`}>사유별 내역</Link>
+            </p>
+          )}
+        </>
       )}
     </div>
   );

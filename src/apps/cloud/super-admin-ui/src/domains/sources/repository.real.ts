@@ -19,10 +19,11 @@ export const realSourcesRepository: SourcesRepository = {
   grid: (days) =>
     apiClient.get<SourceGrid>(days === undefined ? '/sources/grid' : `/sources/grid?days=${days}`),
   overview: () => apiClient.get<SourceOverview>('/sources/overview'),
-  newsLineage: (date, limit) => {
+  newsLineage: (date, limit, stage) => {
     const params = new URLSearchParams();
     if (date) params.set('date', date);
     if (limit !== undefined) params.set('limit', String(limit));
+    if (stage) params.set('stage', stage);
     const qs = params.toString();
     return apiClient.get<NewsLineage>(qs ? `/sources/lineage/news?${qs}` : '/sources/lineage/news');
   },
