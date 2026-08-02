@@ -108,11 +108,16 @@ public class SourceService {
 				countOutcome(requiredDue, "PENDING"), skipped);
 
 		// "오늘 화면"이 지난 런을 오늘 것처럼 보이게 하지 않는다 — Planner 가 오늘 안 돌면 이
-		// 조회는 어제 런을 재사용한다(최신 = 존재하는 것 중 최신). 판정은 서버 시계(KST)로 한다.
+		// 조회는 어제 런을 재사용한다(최신 = 존재하는 것 중 최신 슬롯). 판정 축은 **슬롯 날짜**
+		// (run_key 안의 KST 시각)다 — created_at 은 계획 삽입 시각이라, 오늘 백필한 과거 슬롯이
+		// "오늘 런"으로 통과한다(봇 P2). 슬롯 날짜가 없는 구형 키만 created_at 으로 폴백한다.
 		// 기대 슬롯 카탈로그 기반의 "있어야 할 런 부재" 판정은 후속(ALPHA-651 이후) 소관이다.
-		boolean notToday = lane.plannedAt() != null
-				&& !lane.plannedAt().atZoneSameInstant(KST).toLocalDate()
-						.equals(LocalDate.now(KST));
+		LocalDate slotDate = slotDate(lane.runKey());
+		boolean notToday = slotDate != null
+				? !slotDate.equals(LocalDate.now(KST))
+				: lane.plannedAt() != null
+						&& !lane.plannedAt().atZoneSameInstant(KST).toLocalDate()
+								.equals(LocalDate.now(KST));
 
 		return new LaneResponse(lane.pipelineType(), lane.runKey(),
 				lane.tradingDate() == null ? null : lane.tradingDate().toString(),
@@ -153,13 +158,26 @@ public class SourceService {
 		}
 		boolean undecidablePending = requiredDue.stream().anyMatch(
 				t -> pendingOutcome(t) && t.deadlineAt() == null);
+		// orchestration null = 실행 축 증거 미도착(Reconciler describe 전) — 작업이 전부
+		// FULFILLED 여도 런 수준 증거 없이 READY 를 내면, 나중에 FAILED 로 reconcile 될 런이
+		// 잠시 정상으로 보인다(봇 P2). reconcile 전의 짧은 UNKNOWN 창이 정직한 표시다.
 		if ("LAUNCH_UNKNOWN".equals(lane.launchStatus())
+				|| lane.orchestrationStatus() == null
 				|| "UNKNOWN".equals(lane.orchestrationStatus())
 				|| lane.tasks().isEmpty() || undecidablePending) {
 			return "UNKNOWN";
 		}
 		return (defects.isEmpty() && !runTerminalFailed) ? "READY" : "DEGRADED";
 	}
+
+	/** run_key 의 슬롯 날짜(KST). 예: {@code etf-daily:2026-07-27T15:40} → 2026-07-27. 없으면 null. */
+	private static LocalDate slotDate(String runKey) {
+		java.util.regex.Matcher m = SLOT_DATE.matcher(runKey == null ? "" : runKey);
+		return m.find() ? LocalDate.parse(m.group()) : null;
+	}
+
+	private static final java.util.regex.Pattern SLOT_DATE =
+			java.util.regex.Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
 	/**
 	 * DUE 인데 귀결이 NULL 인 행은 원장 이상이지만 PENDING(아직 모른다)으로 접는다 — 실패에도

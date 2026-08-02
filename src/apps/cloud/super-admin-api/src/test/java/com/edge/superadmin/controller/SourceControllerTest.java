@@ -484,6 +484,31 @@ class SourceControllerTest {
 	}
 
 	@Test
+	void 실행_축_증거가_아직_없으면_전_작업_완료여도_READY_가_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: 정상 기동 경로에서 orchestration 은 Reconciler describe 전까지 null 이다 — 작업이
+		//      전부 FULFILLED 라고 런 수준 증거 없이 READY 를 내면, 나중에 FAILED 로 reconcile 될
+		//      런이 잠시 정상으로 보인다(봇 P2). reconcile 전의 짧은 UNKNOWN 창이 정직하다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void notToday_판정_축은_created_at_이_아니라_슬롯_날짜다() throws Exception {
+		// WHY: 오늘 백필한 과거 슬롯은 plannedAt(계획 삽입 시각)이 오늘이다 — 그 축으로 판정하면
+		//      과거 슬롯 백필이 "오늘 런"으로 통과한다(봇 P2). run_key 의 슬롯 날짜가 정답이다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily",
+				"etf-daily:2026-07-27T15:40", "LAUNCHED", "SUCCEEDED", null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].notToday").value(true));
+	}
+
+	@Test
 	void 오늘_런이_아니면_notToday_로_명시된다() throws Exception {
 		// WHY: Planner 가 오늘 안 돌면 조회는 어제 런을 최신으로 재사용한다 — "오늘 운영 현황"이
 		//      그 사실을 숨기면 지난 READY 가 오늘 정상으로 보인다(리뷰 3라운드). 판정은 서버 시계.

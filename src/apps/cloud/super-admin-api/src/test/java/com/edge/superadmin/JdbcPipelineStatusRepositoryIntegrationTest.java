@@ -534,12 +534,13 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 	}
 
 	@Test
-	void overview_는_레인별_최신_런만_고르고_작업을_파이프라인_순서로_낸다() {
+	void overview_는_레인별_최신_슬롯만_고르고_작업을_단계_순으로_낸다() {
 		// WHY: 손 페이크 테스트는 이미 정렬된 레인을 주입해 OVERVIEW_SQL 의 DISTINCT ON(최신 런
-		//      선택)·stage 정렬을 한 줄도 실행하지 않는다 — 여기서 실 SQL 을 잠근다. 최신이 아닌
-		//      런이 섞이면 첫 화면이 지난 런을 "오늘"로 판정하고, 정렬이 깨지면 "첫 행 = 최초
-		//      결함 지점" 계약이 무너진다.
-		insertRunOfType("m1", "etf-daily", "etf-daily:2026-07-26T15:40", "2026-07-26T06:40:00Z");
+		//      선택)·stage 정렬을 한 줄도 실행하지 않는다 — 여기서 실 SQL 을 잠근다.
+		//      "최신"의 축은 **슬롯 시각(run_key)** 이다: m1 은 과거 슬롯(07-26)을 **나중에**
+		//      백필한 런(created_at 이 가장 최신)이다 — created_at 으로 고르면 백필이 오늘 정규
+		//      런을 밀어내고 레인의 "최신"이 된다(봇 P2).
+		insertRunOfType("m1", "etf-daily", "etf-daily:2026-07-26T15:40", "2026-07-28T06:40:00Z");
 		insertRunOfType("m2", "etf-daily", "etf-daily:2026-07-27T15:40", "2026-07-27T06:40:00Z");
 		insertRunOfType("n1", "news", "news:2026-07-27T15:30", "2026-07-27T06:30:00Z");
 		// 파이프라인 역순으로 삽입 — 정렬이 SQL 에서 안 되면 이 순서 그대로 나온다.
@@ -555,7 +556,8 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		assertThat(lanes).extracting(PipelineStatusRepository.OverviewLane::pipelineType)
 				.containsExactly("etf-daily", "news");
 		PipelineStatusRepository.OverviewLane market = lanes.get(0);
-		assertThat(market.runKey()).isEqualTo("etf-daily:2026-07-27T15:40"); // m1 이 아니라 최신 m2
+		// created_at 최신은 m1(백필)이지만 슬롯 최신은 m2 — 슬롯 축이 이겨야 한다
+		assertThat(market.runKey()).isEqualTo("etf-daily:2026-07-27T15:40");
 		assertThat(market.tasks()).extracting(PipelineStatusRepository.OverviewTask::taskKey)
 				.containsExactly("ETF_HOLDINGS_COLLECTION_KRX", "LOAD_ETF_HOLDINGS"); // raw 먼저
 		assertThat(market.tasks().get(0).required()).isTrue();

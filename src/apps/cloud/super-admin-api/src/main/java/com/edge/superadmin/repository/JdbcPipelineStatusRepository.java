@@ -137,8 +137,13 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			""";
 
 	/**
-	 * 레인(pipeline_type)별 최신 런 하나씩 — Run Overview(ALPHA-683). "최신"의 정의·동률 해소는
-	 * {@code LATEST_RUN_SQL} 과 같다. LEFT JOIN 이유는 격자와 같다(작업 없는 런도 레인으로).
+	 * 레인(pipeline_type)별 최신 런 하나씩 — Run Overview(ALPHA-683). LEFT JOIN 이유는 격자와
+	 * 같다(작업 없는 런도 레인으로).
+	 *
+	 * <p>"최신"은 드릴다운({@code LATEST_RUN_SQL})과 달리 <b>슬롯 시각(run_key) 기준</b>이다 —
+	 * run_key 가 0패딩 ISO 시각을 담아 사전순 = 슬롯 시간순이다. created_at(계획 삽입 시각)으로
+	 * 고르면 오늘 백필한 <b>과거 슬롯</b>이 오늘 정규 런을 밀어내고 "최신"이 된다(봇 P2 —
+	 * plan-run 의 OPS_SCHEDULED_TIME 은 과거 슬롯을 가리킬 수 있다).
 	 *
 	 * <p>freshness 축(ADR-0043)은 원장 컬럼을 그대로 옮긴다 — writer(ALPHA-654) 배선 전엔
 	 * 전부 NULL 이 정상이고, NULL(계약 미적용)과 UNKNOWN(증거 없음)을 뭉개지 않는다.
@@ -152,7 +157,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			  FROM (SELECT DISTINCT ON (pipeline_type) pipeline_run_id, pipeline_type, run_key,
 			               launch_status, orchestration_status, trading_date, created_at
 			          FROM ops_pipeline_run
-			         ORDER BY pipeline_type, created_at DESC, pipeline_run_id DESC) l
+			         ORDER BY pipeline_type, run_key DESC, pipeline_run_id DESC) l
 			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = l.pipeline_run_id
 			 ORDER BY l.pipeline_type,
 			          CASE t.stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, t.task_key
