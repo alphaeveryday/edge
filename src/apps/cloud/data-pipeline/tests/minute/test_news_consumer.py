@@ -23,6 +23,7 @@ from data_pipeline.config import DbConfig
 from data_pipeline.lake.storage import LocalStorage, news_extraction_result_key
 from data_pipeline.minute.consumer import TransientJobError
 from data_pipeline.minute.jobs import news_job_id
+from data_pipeline.minute.models import content_checksum
 from data_pipeline.minute.news_consumer import NewsExtractionHandler, PgArticleReader
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
@@ -83,6 +84,20 @@ class FakeArticleReader:
         return None if row is None else dict(row)
 
 
+class FakeJobIdentities:
+    """job 원장이 선언한 정체성 — payload 가 가리키는 것과 **다를 수 있어야** 한다."""
+
+    def __init__(self, declared: dict | None = None):
+        self.declared = declared if declared is not None else {
+            "source_code": SOURCE_CODE, "article_id": ARTICLE_ID,
+            "input_fingerprint": FINGERPRINT,
+            "tagger_version": TAGGER_VERSION, "ontology_version": ontology_version(),
+        }
+
+    def news_job_identity(self, *, job_id):
+        return self.declared
+
+
 class RecordingLlm:
     """호출 횟수를 세는 complete_fn — '호출조차 하지 않았다'를 단언하기 위한 것."""
 
@@ -98,11 +113,12 @@ class RecordingLlm:
         return response
 
 
-def make_handler(tmp_path, llm=None, reader=None):
+def make_handler(tmp_path, llm=None, reader=None, identities=None):
     return NewsExtractionHandler(
         storage=LocalStorage(tmp_path),
         complete_fn=llm or RecordingLlm(LLM_EVENT_RESPONSE),
         article_reader=reader or FakeArticleReader(),
+        job_identities=identities or FakeJobIdentities(),
     )
 
 
@@ -134,6 +150,29 @@ class TestSuccess:
         assert stored["result"]["ontology_version"] == ontology_version()
         assert stored["result"]["doc_class"] == "EVENT"
         assert len(stored["result"]["assertions"]) == 1
+        # 실제로 모델에 넣은 입력의 지문 — job 지문은 축이 달라(벤더 raw vs 정규화 행)
+        # 비교할 수 없으므로, 같은 기사의 두 실행이 같은 본문을 봤는지는 이것만이 가른다
+        assert stored["prompt_input_checksum"] == content_checksum(
+            [ARTICLE["title"], ARTICLE["lead_text"], ARTICLE["published_at"]]
+        )
+        assert stored["article_language"] == "ko"
+
+    def test_prompt_checksum_changes_when_the_body_changes(self, tmp_path):
+        # 정정 기사와 겹친 실행을 사후에 가려내려면, 같은 job 의 두 실행이 다른 본문을
+        # 봤다는 사실이 결과에 남아야 한다(그 판별의 유일한 근거다)
+        corrected = {**ARTICLE, "lead_text": "공급 규모가 3조원으로 정정됐다."}
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        make_handler(
+            tmp_path, reader=FakeArticleReader({(SOURCE_CODE, ARTICLE_ID): corrected})
+        )(job_id=JOB_ID, payload=payload(), attempt=2, redrive_generation=0)
+
+        first, second = (
+            json.loads((tmp_path / news_extraction_result_key(JOB_ID, 0, n)).read_text())
+            for n in (1, 2)
+        )
+        assert first["job_input_fingerprint"] == second["job_input_fingerprint"]
+        assert first["prompt_input_checksum"] != second["prompt_input_checksum"]
 
     def test_non_event_article_is_success_not_failure(self, tmp_path):
         # 사건 없음은 정상 판정이다 — 실패로 접으면 시황·논평(다수)이 매번 재시도되고
@@ -280,7 +319,13 @@ class TestJobIdentityLineage:
     """
 
     def test_stale_version_job_still_runs_and_is_flagged(self, tmp_path):
-        handler = make_handler(tmp_path)
+        # 원장은 구버전 태거로 만들어졌다고 선언한다 — 기사 축은 그대로다.
+        identities = FakeJobIdentities({
+            "source_code": SOURCE_CODE, "article_id": ARTICLE_ID,
+            "input_fingerprint": FINGERPRINT,
+            "tagger_version": "tagging-v0", "ontology_version": ontology_version(),
+        })
+        handler = make_handler(tmp_path, identities=identities)
         stale_id = news_job_id(
             source_code=SOURCE_CODE, article_id=ARTICLE_ID, input_fingerprint=FINGERPRINT,
             tagger_version="tagging-v0", ontology_version=ontology_version(),
@@ -295,6 +340,38 @@ class TestJobIdentityLineage:
         # 대조는 job_id 조인으로 사후에 가능하다(EOD QC 소관)
         assert stored["job_identity_verified"] is False
         assert stored["result"]["tagger_version"] == TAGGER_VERSION
+
+    def test_article_swap_is_refused_even_though_versions_match(self, tmp_path):
+        # payload 의 기사 축만 바꾸면 봉투(job_id)는 그대로라 kernel 의 대조를 통과한다.
+        # 여기서 안 막으면 **B 기사의 결과가 A job 의 성공으로 확정**되고 메시지까지
+        # 삭제된다 — 버전 불일치를 허용하는 완화가 이 구멍을 되열지 않는지가 요점이다.
+        llm = RecordingLlm(LLM_EVENT_RESPONSE)
+        reader = FakeArticleReader({
+            (SOURCE_CODE, ARTICLE_ID): dict(ARTICLE),
+            (SOURCE_CODE, "news-9999"): dict(ARTICLE, article_id="news-9999"),
+        })
+        handler = make_handler(tmp_path, llm=llm, reader=reader)
+
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(article_id="news-9999"), attempt=1,
+                    redrive_generation=0)
+        assert error.value.code == "JOB_IDENTITY_MISMATCH"
+        assert llm.calls == []
+        assert not (tmp_path / news_extraction_result_key(JOB_ID, 0, 1)).exists()
+
+    def test_fingerprint_swap_is_refused(self, tmp_path):
+        handler = make_handler(tmp_path)
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(input_fingerprint="0" * 64), attempt=1,
+                    redrive_generation=0)
+        assert error.value.code == "JOB_IDENTITY_MISMATCH"
+
+    def test_missing_job_row_is_transient(self, tmp_path):
+        handler = make_handler(tmp_path, identities=FakeJobIdentities(declared={}))
+        handler.job_identities.declared = None
+        with pytest.raises(TransientJobError) as error:
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert error.value.code == "JOB_ROW_NOT_FOUND"
 
     def test_matching_identity_is_marked_verified(self, tmp_path):
         handler = make_handler(tmp_path)

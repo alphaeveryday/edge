@@ -28,19 +28,20 @@ payload(job_id·source_code·article_id·source_item_id·input_fingerprint·gene
   기사가 배치에선 한 번, 여기선 예산만큼 유료 호출된다 — `DEFAULT_TEMPERATURE=0.0`
   이라 그 재시도는 대개 같은 답을 다시 사 온다.
 
-⚠️ **계보는 검증이 아니라 기록으로 지킨다.** 두 가지를 확인할 수 없기 때문이다.
-① 본문 지문 — 지문은 벤더 raw 행(TITLE·CONTENT·DATE)에서 나오는데
-(`news_overlap.content_fingerprint`) 여기서 읽는 정본은 정규화된 행이라 같은 값을 만들 수
-없다. 억지로 재유도하면 "정정"과 "정규화 차이"가 구분되지 않아 멀쩡한 기사를 버리는 쪽으로
-틀린다. ② 태거·온톨로지 버전 — `jobs.news_job_id` 유도식을 다시 돌려 대조는 하지만,
-**어긋나도 막지 않는다**: 불일치의 다수는 버전을 올린 배포 직후 큐에 남은 정상 backlog 이고,
-막으면 그 기사는 재관측되지 않는 한 새 job 도 안 생겨(원장은 created/content_changed 에서만
-job 을 만든다) 영영 태깅되지 않는다.
+⚠️ **정체성은 payload 가 아니라 원장과 대조한다**(`_identity_verified`). 실행 코드로
+job_id 를 재계산해 비교하면 원인 둘이 한 값으로 뭉개지는데, 처방이 정반대라 갈라야 한다 —
+**기사 축이 다른 것**(정상 경로 없음, 막는다)과 **버전 축만 다른 것**(버전 올린 배포 직후의
+정상 backlog, 실행하고 기록한다). 막는 쪽으로 뭉치면 그 기사는 재관측되지 않는 한 새 job 도
+안 생겨(원장은 created/content_changed 에서만 만든다) 영영 태깅되지 않고, 통과시키는 쪽으로
+뭉치면 다른 기사의 결과가 이 job 의 성공으로 확정된다.
 
-그래서 결과 artifact 에 **판정의 근거를 그대로 싣는다** — job 이 선언한 지문·세대
-(`job_*` 접두), 재계산 일치 여부(`job_identity_verified`), 실행한 태거·온톨로지 버전
-(result 안). job 이 선언한 버전은 원장 행에 있으므로, 둘의 대조는 job_id 조인으로 사후에
-가능하다. 하루 단위 판정은 EOD QC 소관이다(PR 8).
+⚠️ **본문 지문은 끝내 검증할 수 없다.** job 지문은 벤더 raw 행(TITLE·CONTENT·DATE)에서
+나오는데(`news_overlap.content_fingerprint`) 여기서 읽는 정본은 정규화된 행이라 같은 값을
+만들 수 없다 — 억지로 재유도하면 "정정"과 "정규화 차이"가 구분되지 않아 멀쩡한 기사를 버리는
+쪽으로 틀린다. 그래서 **판정의 근거를 결과에 싣는다**: job 이 선언한 지문·세대(`job_` 접두),
+원장 대조 결과(`job_identity_verified`), 그리고 **실제로 모델에 넣은 입력의 지문**
+(`prompt_input_checksum`)·기사 언어. 정정 기사와 겹친 실행은 이 값들로만 사후에 가려진다.
+하루 단위 판정은 EOD QC 소관이다(PR 8).
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ from ..tagging.ontology import ontology_version
 from .artifacts import put_immutable, sha256_bytes
 from .consumer import TransientJobError
 from .jobs import news_job_id
-from .models import canonical_json
+from .models import canonical_json, content_checksum
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,12 @@ class ArticleReader(Protocol):
     """
 
     def read(self, *, source_code: str, article_id: str) -> dict | None: ...
+
+
+class JobIdentityReader(Protocol):
+    """job 이 **생성 시점에 고정한** 정체성 읽기 — 실구현은 `JobLedger.news_job_identity`."""
+
+    def news_job_identity(self, *, job_id: str) -> dict | None: ...
 
 
 @dataclass
@@ -172,35 +179,37 @@ def _validated_identity(payload: object, job_id: str) -> dict:
     if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
         raise ValueError(f"payload.generation 이 1 이상 정수가 아니다: {generation!r}")
 
-    # 결정적 job identity 재계산 — payload 의 정체성과 **실행 코드의 버전**이 이 job_id 를
-    # 만드는지 본다. 어긋나는 경우는 둘이고 둘 다 조용히 틀린다: ① 구버전 job 을 신버전
-    # 태거가 집으면(배포·백로그·redrive) 결과의 계보가 job 정체성과 달라진다 — 결과 안의
-    # 버전만 대조하면 실행 코드끼리의 비교라 항상 통과한다. ② payload 의 article_id·지문이
-    # 봉투와 무관하게 바뀌면 다른 기사의 결과가 이 job 의 성공으로 확정된다.
-    expected_job_id = news_job_id(
-        source_code=identity["source_code"], article_id=identity["article_id"],
-        input_fingerprint=identity["input_fingerprint"],
-        tagger_version=TAGGER_VERSION, ontology_version=ontology_version(),
-    )
-    if expected_job_id != job_id:
-        # ⚠️ **막지 않는다.** 이 불일치의 압도적 다수는 정상적인 구버전 backlog 다(태거·
-        # 온톨로지를 올린 배포 직후, 그전에 만들어진 job 이 큐에 남아 있다). 막으면 그
-        # job 들은 예산 소진 후 DEAD 인데, 그 기사는 **재관측되지 않는 한 새 job 도 생기지
-        # 않아**(원장은 created/content_changed 에서만 job 을 만든다) 영영 태깅되지 않는다 —
-        # 계보 한 줄을 지키려다 기사를 통째로 잃는다.
-        # 대신 실행 사실을 결과에 남긴다: job 이 선언한 버전은 원장 행에 있고 실행 버전은
-        # 결과에 있으므로, 둘의 대조는 job_id 조인으로 사후에 가능하다(EOD QC 소관).
-        logger.warning(
-            "job identity 가 실행 코드와 다르다 — 실행은 계속한다: job=%s 기대=%s… "
-            "(tagger=%s, ontology=%s)",
-            job_id, expected_job_id[:12], TAGGER_VERSION, ontology_version(),
+    return {**identity, "source_item_id": payload["source_item_id"],
+            "generation": generation}
+
+
+def _identity_verified(identity: dict, declared: dict, job_id: str) -> bool:
+    """payload 정체성을 **원장이 선언한 값**과 대조한다 → 버전만 다른가(True 계속/False 기록).
+
+    실행 코드로 job_id 를 재계산해 비교하면 불일치의 원인 둘이 한 값으로 뭉개진다.
+    갈라야 하는 이유는 처방이 정반대이기 때문이다.
+
+    - **기사 축이 다르다**(source_code·article_id·input_fingerprint) — 정상 경로가 없다.
+      payload 는 job 과 같은 트랜잭션에서 만들어지므로(commit_news_window) 이건 결함이고,
+      그대로 실행하면 **B 기사의 결과가 A job 의 성공으로 확정**된 뒤 메시지까지 삭제된다.
+      봉투-payload 대조(kernel)는 job_id 만 보므로 여기서 막지 않으면 아무도 못 잡는다.
+    - **버전 축만 다르다**(tagger_version·ontology_version) — 정상 backlog 다. 버전을 올린
+      배포 직후 큐에 남은 job 이고, 막으면 예산 소진 후 DEAD 인데 그 기사는 재관측되지
+      않는 한 새 job 도 안 생겨(원장은 created/content_changed 에서만 만든다) 영영
+      태깅되지 않는다. 실행하고 **결과에 기록**한다(job_identity_verified=false).
+    """
+    mismatched = [
+        name for name in ("source_code", "article_id", "input_fingerprint")
+        if identity[name] != declared.get(name)
+    ]
+    if mismatched:
+        raise TransientJobError(
+            f"payload 가 원장이 선언한 기사와 다르다({', '.join(mismatched)}): job={job_id}",
+            code="JOB_IDENTITY_MISMATCH",
         )
-    return {
-        **identity,
-        "source_item_id": payload["source_item_id"],
-        "generation": generation,
-        "identity_verified": expected_job_id == job_id,
-    }
+    return (declared.get("tagger_version"), declared.get("ontology_version")) == (
+        TAGGER_VERSION, ontology_version()
+    )
 
 
 @dataclass
@@ -214,6 +223,10 @@ class NewsExtractionHandler:
     storage: Storage
     complete_fn: Callable[[str, str], str]
     article_reader: ArticleReader = field(repr=False)
+    # job 이 생성 시점에 고정한 정체성을 읽는다(`JobLedger.news_job_identity`) — payload
+    # 만 믿으면 "정상 backlog"와 "다른 기사를 가리키는 결함"이 구분되지 않는다. 기본값을
+    # 두지 않는 이유: 주입을 빠뜨리면 그 구분이 **조용히** 사라진다.
+    job_identities: JobIdentityReader = field(repr=False)
 
     def __call__(
         self, *, job_id: str, payload: object, attempt: int, redrive_generation: int
@@ -227,6 +240,22 @@ class NewsExtractionHandler:
             # 생산자-소비자 어긋남으로도 나고, 그 창은 스스로 닫힌다.
             raise TransientJobError(str(error), code="PAYLOAD_CONTRACT") from error
         source_code, article_id = identity["source_code"], identity["article_id"]
+
+        declared = self.job_identities.news_job_identity(job_id=job_id)
+        if declared is None:
+            # kernel 이 claim 에 성공했으니 행은 있어야 한다 — 안 보이면 우리가 상황을
+            # 모르는 것이다(복제 지연·트랜잭션 경계). 모르는 것으로 확정하지 않는다.
+            raise TransientJobError(
+                f"job 행이 없다: {job_id}", code="JOB_ROW_NOT_FOUND"
+            )
+        identity_verified = _identity_verified(identity, declared, job_id)
+        if not identity_verified:
+            logger.warning(
+                "job 이 선언한 태거·온톨로지가 실행 코드와 다르다 — 실행은 계속한다: "
+                "job=%s 선언=(%s, %s) 실행=(%s, %s)",
+                job_id, declared.get("tagger_version"), declared.get("ontology_version"),
+                TAGGER_VERSION, ontology_version(),
+            )
 
         key = news_extraction_result_key(job_id, redrive_generation, attempt)
         if key in self.storage.list_keys(key):
@@ -277,7 +306,8 @@ class NewsExtractionHandler:
             raise ValueError(f"extract_assertions 가 미지 status 를 냈다: {status!r}")
 
         data = canonical_json(self._envelope(
-            job_id=job_id, identity=identity,
+            job_id=job_id, identity=identity, article=article,
+            identity_verified=identity_verified,
             attempt=attempt, redrive_generation=redrive_generation, result=result,
         )).encode("utf-8")
         checksum = put_immutable(self.storage, key, data)
@@ -314,6 +344,14 @@ class NewsExtractionHandler:
                 f"저장된 시도 결과가 다른 job 의 것이다({key}): {stored_job_id}",
                 code="RESULT_ARTIFACT_MISMATCH",
             )
+        if status != _SUCCESS_STATUS and status not in _RECORDED_STATUSES:
+            # 이 경로가 쓰는 status 는 성공·기록형뿐이다(llm_error 는 저장 전에 raise 한다).
+            # 그 밖의 값이 저장돼 있으면 우리가 쓴 게 아니거나 어휘가 바뀐 것이라, 성공으로
+            # 승격하면 판정 없는 결과가 SUCCEEDED 로 굳는다.
+            raise TransientJobError(
+                f"저장된 시도 결과의 status 가 확정 대상이 아니다({key}): {status!r}",
+                code="RESULT_ARTIFACT_STATUS",
+            )
         logger.info(
             "이미 저장된 시도 결과 재사용 job=%s attempt=%d status=%s", job_id, attempt, status
         )
@@ -321,19 +359,20 @@ class NewsExtractionHandler:
 
     @staticmethod
     def _envelope(
-        *, job_id: str, identity: dict, attempt: int, redrive_generation: int, result: dict,
+        *, job_id: str, identity: dict, article: dict, identity_verified: bool,
+        attempt: int, redrive_generation: int, result: dict,
     ) -> dict:
         """저장 바이트 — 결과 + 계보. 시각은 싣지 않는다.
 
-        job identity 의 입력(`input_fingerprint`·`source_item_id`·`generation`)을 함께
-        싣는다. 이 handler 는 기사 **본문**이 그 지문의 것이었는지 확인할 수 없으므로
-        (모듈 docstring), 무엇을 근거로 만든 판정인지가 결과 안에 남아야 나중에 EOD QC 가
-        정정 기사와 겹친 실행을 사후에 가려낼 수 있다.
+        **판정의 근거를 전부 싣는다**: job 이 선언한 값(`job_` 접두)과, 우리가 실제로
+        모델에 넣은 입력의 지문(`prompt_input_checksum`)·기사 언어다. 이 handler 는 읽은
+        본문이 job 지문의 것이었는지 확인할 수 없으므로(모듈 docstring), 이 둘이 없으면
+        "정정 기사와 겹친 실행"을 사후에 **복원할 방법이 아예 없다**.
 
-        `tagger_version`·`ontology_version` 은 `extract_assertions` 가 result 에 이미
-        싣는다(그게 실제로 판정한 버전이다) — 여기서 다시 넣지 않는다. 그 값이 job 이
-        고정한 버전과 같은지는 `_validated_identity` 의 job_id 재계산이 **호출 전에**
-        보증한다(결과끼리 비교하면 실행 코드를 자기 자신과 대조하는 셈이라 항상 통과한다).
+        `tagger_version`·`ontology_version` 은 `extract_assertions` 가 result 에 싣는다
+        (그게 실제로 판정한 버전이다). job 이 선언한 버전과 같은지는 `job_identity_verified`
+        가 말한다 — false 면 다른 버전으로 만들어진 job 을 이 코드가 처리한 것이고, 선언값
+        자체는 원장 행에 있으므로 job_id 조인으로 복원된다(막지 않는 이유는 `_identity_verified`).
 
         벽시계를 안 싣는 이유는 결정성이다 — 같은 시도의 재PUT 이 다른 바이트가 되면
         불변 계약이 깨진다. 언제 끝났는지는 원장(`completed_at`)이 갖고 있다.
@@ -343,14 +382,19 @@ class NewsExtractionHandler:
             "source_code": identity["source_code"],
             "article_id": identity["article_id"],
             "source_item_id": identity["source_item_id"],
-            # ⚠️ 이름이 `job_…` 인 건 **job 이 선언한 값**이라는 뜻이다 — 우리가 읽은 본문이
-            # 실제로 그 지문의 것이었는지는 확인하지 못했다(모듈 docstring). 정정이 job 대기
-            # 중에 들어오면 이 값과 본문이 갈릴 수 있고, 그 판별은 이 필드가 있어야 가능하다.
+            # ⚠️ `job_` 접두는 **job 이 선언한 값**이라는 뜻이다 — 읽은 본문이 그 지문의
+            # 것인지는 확인하지 못했다. 아래 prompt_input_checksum 과 함께 봐야 판별된다.
             "job_input_fingerprint": identity["input_fingerprint"],
             "job_source_generation": identity["generation"],
-            # 실행 코드로 job_id 를 재계산했을 때 일치했는가. false 면 다른 태거·온톨로지
-            # 버전으로 만들어진 job 을 이 코드가 처리한 것이다(막지 않는 이유는 위 참조).
-            "job_identity_verified": identity["identity_verified"],
+            "job_identity_verified": identity_verified,
+            # 실제로 모델에 넣은 입력의 지문. job 지문과 축이 달라(정규화된 행) 서로 비교할
+            # 수는 없지만, 같은 기사의 두 실행이 **같은 본문을 봤는지**는 이걸로 갈린다.
+            "prompt_input_checksum": content_checksum(
+                [article.get("title"), article.get("lead_text"), article.get("published_at")]
+            ),
+            # 언어 미상(None)도 그대로 남긴다 — 한국어 프롬프트로 처리한 사실이 결과에
+            # 없으면, 나중에 비-ko 기사가 섞였는지 판별할 근거가 로그 보존기간뿐이다.
+            "article_language": article.get("language_code"),
             "redrive_generation": redrive_generation,
             "attempt": attempt,
             "result": result,
