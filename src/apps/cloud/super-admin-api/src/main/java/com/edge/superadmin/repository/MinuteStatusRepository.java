@@ -26,7 +26,8 @@ public interface MinuteStatusRepository {
 	}
 
 	/**
-	 * 세션 하나의 요약. {@code leaseExpired} 만 서버 시계 판정이고 나머지는 원장 원문이다 —
+	 * 세션 하나의 요약. 서버 시계 판정은 {@code leaseExpired}·{@code windows.overdueNoEvidence}·
+	 * {@code gaps[].noEvidence}·{@code priceJobs.claimedExpired} 네 축이고 나머지는 원장 원문이다.
 	 * lease 는 실행체 스스로 유지하는 생존 계약(fencing)이라 만료가 곧 "실행체 증거 끊김"이다.
 	 * lease 가 아예 없으면(null) 판정 불가라 null — "기동 증거 자체가 없음"과 만료를 뭉개지 않는다.
 	 */
@@ -53,8 +54,9 @@ public interface MinuteStatusRepository {
 
 	/**
 	 * job 상태 집계 — {@code waiting} 은 PENDING+RETRY_WAIT(재시도 대기 포함 미귀결).
-	 * {@code claimedExpired} 는 claimed 중 lease 만료분(서버 시계 판정) — Consumer 가 죽고
-	 * 아무도 재청구하지 않은 고착 후보다. "처리 중"에 뭉개면 영원히 경고가 없다.
+	 * {@code claimedExpired} 는 claimed 중 유효한 lease 가 없는 것(만료 또는 NULL — writer 의
+	 * 회수 조건과 동일, 서버 시계 판정). Consumer 가 죽고 아무도 재청구하지 않은 고착 후보다.
+	 * "처리 중"에 뭉개면 영원히 경고가 없다.
 	 */
 	record JobCounts(long waiting, long claimed, long claimedExpired, long succeeded, long dead) {
 	}

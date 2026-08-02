@@ -85,25 +85,29 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertSession("sess-x", "price_minute", "toss", DAY.plusDays(1), "PLANNED");
 		insertWindow("sess-t", PAST, "VALID");
 		insertPriceJob("job-t", "sess-t", PAST, "DEAD");
-		// lease 만료된 CLAIMED job — "처리 중"에 뭉개지면 Consumer 사망 고착이 안 보인다.
+		// 유효 lease 없는 CLAIMED job 두 형태(만료·NULL) — writer 의 회수 조건(IS NULL OR
+		// < now())과 같은 집합이어야 한다. NULL 을 빼면 그 고착이 "처리 중"으로 숨는다.
 		insertWindow("sess-t", PAST.plusMinutes(1), "VALID");
 		insertPriceJob("job-c", "sess-t", PAST.plusMinutes(1), "CLAIMED");
 		jdbc.update("UPDATE price_window_job SET lease_expires_at = ? WHERE job_id = 'job-c'",
 				PAST);
+		insertWindow("sess-t", PAST.plusMinutes(2), "VALID");
+		insertPriceJob("job-n", "sess-t", PAST.plusMinutes(2), "CLAIMED"); // lease NULL
 		// 뉴스 job 은 created_at 의 KST 날짜 축 — 반개구간 경계 자체를 밟는다: 8/3 00:00:00
 		// KST 정각(= 8/2 15:00 UTC)은 포함(>=), 8/4 00:00:00 KST 정각은 배제(<)여야 한다.
-		// 연산자가 >/<= 로 회귀하면 정각 job 이 누락되거나 양쪽 날짜에 중복 집계된다.
+		// 두 경계의 status 를 다르게 둔다 — 둘 다 DEAD 면 >/<= 쌍 회귀(하한 누락+상한 포함)가
+		// 합계를 보존해 통과한다(리뷰 3라운드).
 		insertNewsJob("nj-in", "2026-08-02T15:00:00Z", "DEAD");
 		insertNewsJob("nj-out", "2026-08-02T14:50:00Z", "SUCCEEDED"); // = 8/2 23:50 KST
-		insertNewsJob("nj-next", "2026-08-03T15:00:00Z", "DEAD"); // = 8/4 00:00 KST 정각
+		insertNewsJob("nj-next", "2026-08-03T15:00:00Z", "SUCCEEDED"); // = 8/4 00:00 KST 정각
 
 		MinuteStatus status = repository.status(DAY);
 
 		assertThat(status.sessions()).extracting(SessionSummary::sessionId)
 				.containsExactly("sess-t");
 		assertThat(status.sessions().get(0).priceJobs().dead()).isEqualTo(1);
-		assertThat(status.sessions().get(0).priceJobs().claimed()).isEqualTo(1);
-		assertThat(status.sessions().get(0).priceJobs().claimedExpired()).isEqualTo(1);
+		assertThat(status.sessions().get(0).priceJobs().claimed()).isEqualTo(2);
+		assertThat(status.sessions().get(0).priceJobs().claimedExpired()).isEqualTo(2);
 		assertThat(status.newsJobs().dead()).isEqualTo(1);
 		assertThat(status.newsJobs().succeeded()).isZero();
 	}

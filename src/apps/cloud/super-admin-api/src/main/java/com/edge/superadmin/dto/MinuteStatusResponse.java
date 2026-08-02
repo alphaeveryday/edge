@@ -13,9 +13,10 @@ import java.util.List;
  * 장중 1분 파이프라인 요약 응답(ALPHA-651) — 단위: windows 는 <b>창(1분)</b>,
  * jobs 는 <b>논리 job</b>. 세션 부재는 빈 목록 — "미가동"이라는 사실이지 오류가 아니다.
  *
- * <p>서버(DB) 시계 파생은 세 필드다 — {@code overdueNoEvidence}·{@code leaseExpired}·
- * {@code claimedExpired}. 조회 시점 판정이라 고정 사실이 아니며, 나머지는 원장 원문이다.
- * 화면은 이 판정들을 재계산하지 않는다(Run Overview 의 overdue 와 같은 원칙).
+ * <p>서버(DB) 시계 파생은 네 필드다 — {@code windows.overdueNoEvidence}·
+ * {@code gaps[].noEvidence}·{@code leaseExpired}·{@code claimedExpired}. 조회 시점 판정이라
+ * 고정 사실이 아니며(캐시·재해석 금지), 나머지는 원장 원문이다. 화면은 이 판정들을
+ * 재계산하지 않는다(Run Overview 의 overdue 와 같은 원칙).
  */
 public record MinuteStatusResponse(String date, List<SessionResponse> sessions,
 		JobCountsResponse newsJobs) {

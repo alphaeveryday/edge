@@ -75,13 +75,16 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			 ORDER BY w.session_id, w.window_start
 			""";
 
-	// claimed 중 lease 만료분을 따로 센다 — Consumer 사망 고착 후보를 "처리 중"에 뭉개지
-	// 않기 위해(인터페이스 주석). 판정 시계는 나머지 파생과 같은 DB now() 다.
+	// claimed 중 유효한 lease 가 없는 것(NULL 포함)을 따로 센다 — Consumer 사망 고착 후보를
+	// "처리 중"에 뭉개지 않기 위해(인터페이스 주석). NULL 을 빼면 안 된다: writer 의 회수
+	// 조건이 `IS NULL OR < now()`(jobs.py) 라, NULL 도 원장이 정의한 고착 형태다.
+	// 판정 시계는 나머지 파생과 같은 DB now() 다.
 	private static final String JOB_COUNT_COLUMNS = """
 			count(*) FILTER (WHERE %1$s.status IN ('PENDING','RETRY_WAIT')) AS waiting,
 			count(*) FILTER (WHERE %1$s.status = 'CLAIMED')   AS claimed,
 			count(*) FILTER (WHERE %1$s.status = 'CLAIMED'
-			                   AND %1$s.lease_expires_at < now()) AS claimed_expired,
+			                   AND (%1$s.lease_expires_at IS NULL
+			                        OR %1$s.lease_expires_at < now())) AS claimed_expired,
 			count(*) FILTER (WHERE %1$s.status = 'SUCCEEDED') AS succeeded,
 			count(*) FILTER (WHERE %1$s.status = 'DEAD')      AS dead
 			""";
