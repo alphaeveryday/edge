@@ -277,7 +277,7 @@ class SessionQc:
         # 쓰면 planner 가 390분 중 389분만 만들어도 389==389 로 통과해, 빠진 분은 MISSING
         # 행조차 없이 확정된다. 대신 **행들이 스스로 말하는 것**을 본다: 1분 간격으로
         # 빈틈없이 이어지는가(계획은 연속된 분을 만든다 — plan_session_windows).
-        violations.extend(_plan_violations(rows))
+        violations.extend(_plan_violations(rows, session["session_date"]))
         return violations
 
 
@@ -335,8 +335,8 @@ def _count_statuses(rows: list) -> dict:
     return counts
 
 
-def _plan_violations(rows: list) -> list[str]:
-    """계획 자체가 온전한가 — 빈 계획·양 끝 누락·중간 구멍.
+def _plan_violations(rows: list, session_date) -> list[str]:
+    """계획 자체가 온전한가 — 빈 계획·다른 날 행·양 끝 누락·중간 구멍.
 
     빠진 분은 원장에 **행이 없어서** 어떤 상태 집계에도 안 잡힌다("없는 것"과 "안 만든 것"이
     같아 보인다). 그래서 세 가지를 따로 본다 — 간격만 보면 **첫 분이나 마지막 분이 통째로
@@ -350,6 +350,18 @@ def _plan_violations(rows: list) -> list[str]:
         # 행이 하나도 없으면 "완전한 하루"가 공허참이 된다(집계도 0, 간격도 없음)
         return ["window 행이 하나도 없다 — 계획이 실행되지 않았다"]
     violations = []
+    # ⚠️ **날짜부터 본다.** 아래 검사는 전부 시각(time-of-day)만 보므로, 다른 거래일의
+    # 행이 섞여도 거래시간·개수만 맞으면 통과한다. `plan_session` 은 session_date 와
+    # windows 를 독립 인자로 받아 그 둘이 맞는지 검증하지 않으므로(원장 계약), 어긋난
+    # planner·백필이 7/31 세션에 7/30 행을 채워도 여기서 걸리지 않으면 그대로 확정된다.
+    off_date = sorted({
+        window_start.astimezone(KST).date().isoformat() for window_start, *_ in rows
+        if window_start.astimezone(KST).date() != session_date
+    })
+    if off_date:
+        violations.append(
+            f"세션 날짜({session_date})가 아닌 window 가 있다: {off_date[:3]}"
+        )
     first_open = rows[0][0].astimezone(KST).time()
     last_close = (rows[-1][0] + _WINDOW_STEP).astimezone(KST).time()
     # ⚠️ 양 끝을 **따로** 보면 planner 가 만들 수 없는 교차 조합이 통과한다: 시간외 계획

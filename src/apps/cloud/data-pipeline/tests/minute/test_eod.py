@@ -311,6 +311,25 @@ class TestInvariantViolations:
         assert result["ok"] is False
         assert any("계획 범위" in v for v in result["violations"])
 
+    def test_windows_from_another_trading_day_are_rejected(self, tmp_path):
+        # ⚠️ 나머지 검사는 전부 **시각만** 본다 — 다른 거래일 행이 섞여도 거래시간·개수가
+        # 같으면 통과한다. plan_session 은 session_date 와 windows 를 독립으로 받아 그
+        # 둘이 맞는지 안 보므로, 어긋난 planner·백필이 채운 행이 그대로 확정된다.
+        db = FakeMinuteDB()
+        _, session_id = make_session(db)
+        shifted = {}
+        for key, row in list(db.windows.items()):
+            if row["session_id"] != session_id:
+                continue
+            row["window_start"] = row["window_start"] - timedelta(days=1)
+            shifted[(key[0], row["window_start"])] = row
+            del db.windows[key]
+        db.windows.update(shifted)
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+        assert result["ok"] is False
+        assert any("세션 날짜" in v for v in result["violations"])
+
     def test_empty_plan_is_not_a_complete_day(self, tmp_path):
         # 행이 없으면 집계도 0, 간격도 없다 — 공허참으로 "완전한 하루"가 된다
         db = FakeMinuteDB()
