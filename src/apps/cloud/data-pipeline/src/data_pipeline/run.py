@@ -38,6 +38,7 @@ from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.eod import qc_session_cli
+from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.relay import relay_cli
 from .lake import (
     make_storage,
@@ -146,7 +147,10 @@ def main(argv: list[str] | None = None) -> int:
                  "dlq-reconcile", "redrive",
                  # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
                  # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
-                 "qc-minute-session"],
+                 "qc-minute-session",
+                 # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
+                 # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
+                 "plan-minute-session", "drain-minute-session"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -181,9 +185,20 @@ def main(argv: list[str] | None = None) -> int:
                         help="redrive: 새 delivery 를 실을 큐(미지정=직전 event 값 복사). "
                              "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
                              "여기서 바로잡지 않으면 복구 경로가 없다")
+    parser.add_argument("--dataset", default=None,
+                        help="plan-minute-session: 세션 dataset(price_minute|news_minute)")
+    parser.add_argument("--source-group", default=None,
+                        help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
+    parser.add_argument("--session-date", default=None,
+                        help="plan-minute-session: 세션 날짜 YYYY-MM-DD")
+    parser.add_argument("--universe", default=None,
+                        help="plan-minute-session: 가격 세션의 universe JSON 경로(필수). "
+                             "window 범위와 universe_hash 가 여기서 나온다 — 빠뜨리면 "
+                             "시간외 구간이 무신호로 누락되므로 거부한다")
     parser.add_argument("--session-id", default=None,
-                        help="qc-minute-session: 판정할 1분 세션(필수). QC 는 하루 하나를 "
-                             "지목해서 돈다 — 범위를 열어 두면 살아 있는 세션까지 확정한다")
+                        help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
+                             "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
+                             "있는 세션까지 확정하거나 drain 을 건다")
     parser.add_argument("--reason", default=None,
                         help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
@@ -235,10 +250,19 @@ def main(argv: list[str] | None = None) -> int:
     # 운영자는 명령이 먹은 줄 안다.
     # ⚠️ `--session-id` 결손은 여기서 막지 **않는다** — SystemExit 은 프로세스 1 로 나가는데,
     # QC 의 1 은 "원장이 스스로와 모순"이라는 뜻이다. 결손은 판정 불가(2)라 CLI 가 처리한다.
-    if args.step != "qc-minute-session" and args.session_id is not None:
+    if args.step not in ("qc-minute-session", "drain-minute-session") \
+            and args.session_id is not None:
         raise SystemExit(
-            "--session-id 는 qc-minute-session 에서만 쓴다 — "
+            "--session-id 는 qc-minute-session·drain-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+    if args.step != "plan-minute-session" and (
+        args.dataset is not None or args.source_group is not None
+        or args.session_date is not None or args.universe is not None
+    ):
+        raise SystemExit(
+            "--dataset·--source-group·--session-date·--universe 는 plan-minute-session "
+            f"에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
@@ -280,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "qc-minute-session":
         return qc_session_cli(settings, session_id=args.session_id)
+    if args.step == "plan-minute-session":
+        return plan_session_cli(
+            settings, dataset=args.dataset, source_group=args.source_group,
+            session_date=args.session_date, universe=args.universe,
+        )
+    if args.step == "drain-minute-session":
+        return drain_session_cli(settings, session_id=args.session_id)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

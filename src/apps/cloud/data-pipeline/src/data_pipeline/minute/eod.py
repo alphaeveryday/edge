@@ -51,6 +51,7 @@ from .models import (
 )
 from .repository import MinuteLedger
 from .states import (
+    DATASET_PRICE_MINUTE,
     WINDOW_CLAIMED,
     WINDOW_DUE,
     WINDOW_INCOMPLETE,
@@ -63,7 +64,7 @@ from .states import (
 logger = logging.getLogger(__name__)
 
 # orphan 스캔이 성립하는 dataset — `find_orphan_artifacts` 의 prefix 가 이 값에 묶여 있다.
-_PRICE_DATASET = "price_minute"
+_PRICE_DATASET = DATASET_PRICE_MINUTE
 # ⚠️ 1분 트랙은 KR 전용이다(유니버스·거래시간·소스가 전부 KR). market 을 CLI 인자로 열어
 # 두면 오타 하나가 **없는 prefix 를 훑고 빈 목록을 clean 으로 확정**한다 — 안 본 것이
 # "0건"이 되는 자리라 표면 자체를 없앴다. 다른 시장이 생기면 세션이 그 값을 갖게 하고
