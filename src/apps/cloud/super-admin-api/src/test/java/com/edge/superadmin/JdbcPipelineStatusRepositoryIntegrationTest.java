@@ -520,4 +520,48 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 
 		assertThat(run).isEmpty();
 	}
+
+	/* ---------- Run Overview (ALPHA-683) ---------- */
+
+	private void insertRunOfType(String id, String pipelineType, String runKey,
+			String createdAt) {
+		jdbc.update("""
+				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
+				       execution_name, launch_status, orchestration_status, trading_date, created_at)
+				VALUES (?,?,?,?,?,?,?::date,?::timestamptz)
+				""", id, runKey, pipelineType, "exec-" + id, "LAUNCHED", "SUCCEEDED",
+				"2026-07-27", createdAt);
+	}
+
+	@Test
+	void overview_는_레인별_최신_런만_고르고_작업을_파이프라인_순서로_낸다() {
+		// WHY: 손 페이크 테스트는 이미 정렬된 레인을 주입해 OVERVIEW_SQL 의 DISTINCT ON(최신 런
+		//      선택)·stage 정렬을 한 줄도 실행하지 않는다 — 여기서 실 SQL 을 잠근다. 최신이 아닌
+		//      런이 섞이면 첫 화면이 지난 런을 "오늘"로 판정하고, 정렬이 깨지면 "첫 행 = 최초
+		//      결함 지점" 계약이 무너진다.
+		insertRunOfType("m1", "etf-daily", "etf-daily:2026-07-26T15:40", "2026-07-26T06:40:00Z");
+		insertRunOfType("m2", "etf-daily", "etf-daily:2026-07-27T15:40", "2026-07-27T06:40:00Z");
+		insertRunOfType("n1", "news", "news:2026-07-27T15:30", "2026-07-27T06:30:00Z");
+		// 파이프라인 역순으로 삽입 — 정렬이 SQL 에서 안 되면 이 순서 그대로 나온다.
+		insertTask("mt2", "m2", "feature", "LOAD_ETF_HOLDINGS", "etf_holdings", "DUE",
+				"FAILED", null, null, null);
+		insertTask("mt1", "m2", "raw", "ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "DUE",
+				"FULFILLED", "INCOMPLETE", 29L, null);
+		insertTask("old", "m1", "raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
+				"FULFILLED", "VALID", 1L, null);
+
+		List<PipelineStatusRepository.OverviewLane> lanes = repository.overview();
+
+		assertThat(lanes).extracting(PipelineStatusRepository.OverviewLane::pipelineType)
+				.containsExactly("etf-daily", "news");
+		PipelineStatusRepository.OverviewLane market = lanes.get(0);
+		assertThat(market.runKey()).isEqualTo("etf-daily:2026-07-27T15:40"); // m1 이 아니라 최신 m2
+		assertThat(market.tasks()).extracting(PipelineStatusRepository.OverviewTask::taskKey)
+				.containsExactly("ETF_HOLDINGS_COLLECTION_KRX", "LOAD_ETF_HOLDINGS"); // raw 먼저
+		assertThat(market.tasks().get(0).required()).isTrue();
+		// freshness 미배선 상태의 NULL 이 그대로 온다(UNKNOWN 으로 승격되지 않는다).
+		assertThat(market.tasks().get(0).freshnessStatus()).isNull();
+		// 작업이 안 적힌 뉴스 런도 레인으로 온다 — 부재가 1급 신호다.
+		assertThat(lanes.get(1).tasks()).isEmpty();
+	}
 }

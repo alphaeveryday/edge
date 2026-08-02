@@ -104,30 +104,46 @@ public class SourceService {
 	}
 
 	/**
-	 * 스펙 §7 의 집계 우선순위. 스펙 순서(IN_PROGRESS→UNKNOWN→BLOCKED→DEGRADED→READY)에서
-	 * <b>기동 실패만 앞으로</b> 뺐다 — LAUNCH_FAILED 런의 작업은 deadline 전 PENDING 이라
-	 * 스펙 순서대로면 "진행 중"이 되는데, 아무것도 돌지 않는 런을 진행 중으로 내면 원장이
-	 * 관대해지는 방향이다(기동 실패 = 이 런의 전 대상이 차단됐다는 사실이 확정돼 있다).
+	 * 스펙 §7 의 집계 우선순위(IN_PROGRESS→UNKNOWN→BLOCKED→DEGRADED→READY)에서 <b>기동의
+	 * 확정 실패(LAUNCH_FAILED·LAUNCH_CONFLICT)만 앞으로</b> 뺐다 — 그 런의 작업은 deadline 전
+	 * PENDING 이라 스펙 순서대로면 "진행 중"이 되는데, 아무것도 돌지 않는 런을 진행 중으로
+	 * 내면 원장이 관대해지는 방향이다(둘 다 이 런이 뜨지 못했다는 사실이 확정돼 있다).
+	 * LAUNCH_UNKNOWN 은 확정이 아니라서 앞당기지 않는다 — 스펙대로 deadline 전엔 진행 중,
+	 * 그 후 UNKNOWN 이다.
 	 *
-	 * <p>정상 SKIPPED·데이터 UNKNOWN(설계상 대다수)·NO_EVENT 는 어떤 경로로도 DEGRADED 를
-	 * 만들지 않는다 — 결함 판정은 {@link #isDefect} 하나가 정의한다.
+	 * <p>UNKNOWN 으로 떨어지는 세 가지: 기동·실행 축의 불명, <b>기대 작업이 하나도 안 적힌
+	 * 런</b>(계획 증거 없음 — 빈 결함 목록으로 READY 를 내면 거짓 정상이다), deadline 없는
+	 * 미귀결(경과 판정 자체가 불가). 정상 SKIPPED·데이터 UNKNOWN(설계상 대다수)·NO_EVENT 는
+	 * 어떤 경로로도 DEGRADED 를 만들지 않는다 — 결함 판정은 {@link #isDefect} 하나가 정의한다.
 	 */
 	private static String opsStatus(OverviewLane lane, List<OverviewTask> requiredDue,
 			List<DefectResponse> defects, OffsetDateTime now) {
-		if ("LAUNCH_FAILED".equals(lane.launchStatus())) {
+		if ("LAUNCH_FAILED".equals(lane.launchStatus())
+				|| "LAUNCH_CONFLICT".equals(lane.launchStatus())) {
 			return "BLOCKED";
 		}
-		if ("LAUNCH_UNKNOWN".equals(lane.launchStatus())
-				|| "UNKNOWN".equals(lane.orchestrationStatus())) {
-			return "UNKNOWN";
-		}
 		boolean pendingBeforeDeadline = requiredDue.stream().anyMatch(
-				t -> "PENDING".equals(t.outcome()) && !overdue(t, now));
+				t -> pendingOutcome(t) && t.deadlineAt() != null && !t.deadlineAt().isBefore(now));
 		if ("PLANNING".equals(lane.launchStatus())
 				|| "RUNNING".equals(lane.orchestrationStatus()) || pendingBeforeDeadline) {
 			return "IN_PROGRESS";
 		}
+		boolean undecidablePending = requiredDue.stream().anyMatch(
+				t -> pendingOutcome(t) && t.deadlineAt() == null);
+		if ("LAUNCH_UNKNOWN".equals(lane.launchStatus())
+				|| "UNKNOWN".equals(lane.orchestrationStatus())
+				|| lane.tasks().isEmpty() || undecidablePending) {
+			return "UNKNOWN";
+		}
 		return defects.isEmpty() ? "READY" : "DEGRADED";
+	}
+
+	/**
+	 * DUE 인데 귀결이 NULL 인 행은 원장 이상이지만 PENDING(아직 모른다)으로 접는다 — 실패에도
+	 * 대기에도 안 세면 거짓 정상 쪽으로 사라진다. deadline 경과 판정이 그대로 적용된다.
+	 */
+	private static boolean pendingOutcome(OverviewTask t) {
+		return t.outcome() == null || "PENDING".equals(t.outcome());
 	}
 
 	/**
@@ -144,13 +160,15 @@ public class SourceService {
 				|| overdue(t, now);
 	}
 
-	/** deadline 없는 작업(선행 대기)은 경과 판정 대상이 아니다 — null 이면 false. */
+	/** deadline 없는 미귀결은 경과 판정이 불가하다(→ opsStatus 의 UNKNOWN 경로) — null 은 false. */
 	private static boolean overdue(OverviewTask t, OffsetDateTime now) {
-		return "PENDING".equals(t.outcome()) && t.deadlineAt() != null
-				&& t.deadlineAt().isBefore(now);
+		return pendingOutcome(t) && t.deadlineAt() != null && t.deadlineAt().isBefore(now);
 	}
 
 	private static int countOutcome(List<OverviewTask> tasks, String outcome) {
+		if ("PENDING".equals(outcome)) {
+			return (int) tasks.stream().filter(SourceService::pendingOutcome).count();
+		}
 		return (int) tasks.stream().filter(t -> outcome.equals(t.outcome())).count();
 	}
 }

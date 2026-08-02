@@ -408,6 +408,62 @@ class SourceControllerTest {
 	}
 
 	@Test
+	void 기동_충돌도_BLOCKED_다() throws Exception {
+		// WHY: LAUNCH_CONFLICT 는 이 런이 뜨지 못했다는 확정 사실인데 어느 분기에도 안 걸리면
+		//      마감 전엔 IN_PROGRESS 로 — 안 도는 런이 "진행 중"으로 — 관대해진다(리뷰 1라운드).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_CONFLICT", null, null,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("BLOCKED"));
+	}
+
+	@Test
+	void 기동_불명은_확정이_아니라서_마감_전엔_진행_중이다() throws Exception {
+		// WHY: 스펙 §7 순서(IN_PROGRESS→UNKNOWN). LAUNCH_UNKNOWN 은 reconciliation 으로 해소될
+		//      수 있는 미확정이라 기동 실패처럼 앞당기지 않는다 — 마감이 지나서야 UNKNOWN 이다.
+		List<OverviewLane> before = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_UNKNOWN", null, null,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(before).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> after = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_UNKNOWN", null, null,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(after).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void 작업이_하나도_안_적힌_런은_READY_가_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: 빈 결함 목록 = 정상이 아니다 — 계획 증거가 없으면 제공 가능 범위를 계산할 수
+		//      없다(스펙 §7 UNKNOWN). READY 로 내면 Planner 가 기대 작업을 못 쓴 날이 정상으로
+		//      보인다(리뷰 1라운드 — 거짓 정상).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, List.of()));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void 마감_없는_미귀결은_영구_진행_중이_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: deadline 이 NULL 이면 경과 판정 자체가 불가하다 — "진행 중"으로 내면 실행이 다
+		//      끝난 런이 영구히 진행 중으로 남는다(리뷰 1라운드). DUE 인데 귀결 NULL 인 원장
+		//      이상도 같은 경로로 접힌다(실패에도 대기에도 안 세면 거짓 정상으로 사라진다).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, List.of(
+				task("PRICE_COLLECTION_KIS", "PENDING", null, true, null),
+				task("NORMALIZE_PRICE", null, null, true, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.pending").value(2));
+	}
+
+	@Test
 	void 원장에_런이_없으면_빈_레인_목록이다() throws Exception {
 		overviewMvc(List.of()).perform(get("/api/v1/sources/overview"))
 				.andExpect(status().isOk())
