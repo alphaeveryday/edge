@@ -95,7 +95,8 @@ class SessionQcRejected(RuntimeError):
 
 @dataclass
 class SessionQc:
-    """세션 하나의 EOD 판정. `storage` 는 orphan 나열에만 쓴다(source 는 원장에서 온다)."""
+    """세션 하나의 EOD 판정. `storage` 는 orphan 나열에만 쓴다 — 스캔 축은 (market,
+    session_date) canonical prefix 라 source 로 갈리지 않는다(ALPHA-705, 벤더는 컬럼)."""
 
     ledger: MinuteLedger
     storage: Storage = field(repr=False)

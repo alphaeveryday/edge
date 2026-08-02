@@ -125,9 +125,8 @@ class TestPlan:
 
     def test_unknown_source_group_is_rejected(self, ledger_db):
         # ⚠️ dataset 오타만 막고 여기를 열어 두면 같은 축이 한 칸 옆에 그대로 산다.
-        # 원장의 source_group 은 정본이라 EOD 가 그 값으로 raw prefix 를 스캔한다 —
-        # `tos` 로 세션이 서면 Worker 가 쓴 실제 artifact 를 아무도 못 찾고 orphan 0건,
-        # 즉 **거짓 clean** 이 나온다.
+        # 원장의 source_group 은 정본이다 — `tos` 로 세션이 서면 그 소스를 처리하는
+        # 어댑터·Worker 배선이 없어 하루가 통째로 안 돌면서도 원장은 정상으로 보인다.
         assert plan_session_cli(
             make_settings(), dataset="price_minute", source_group="tos",
             session_date="2026-07-31", universe=str(FIXTURES / "universe_348.json"),
