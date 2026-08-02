@@ -14,6 +14,7 @@ import { LoadError } from './_shared/LoadError';
 
 export function HoldingsImpactPage() {
   const [params] = useSearchParams();
+  // null(파라미터 부재)만 최신 런 — 빈 문자열은 그대로 보내 서버가 404 로 거절하게 둔다
   const runKey = params.get('runKey') ?? undefined;
   const { data, isPending, isError, error } = useHoldingsImpact(runKey);
 

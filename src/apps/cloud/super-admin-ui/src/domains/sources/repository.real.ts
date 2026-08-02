@@ -19,9 +19,11 @@ export const realSourcesRepository: SourcesRepository = {
     const qs = params.toString();
     return apiClient.get<NewsLineage>(qs ? `/sources/lineage/news?${qs}` : '/sources/lineage/news');
   },
+  /* 빈 문자열을 부재로 접지 않는다 — ?runKey= 를 최신 런으로 위장하면 서버의 "지정 키
+   * 미존재=404" 계약(오타를 빈 데이터로 오독 방지)이 우회된다 */
   holdingsImpact: (runKey) =>
     apiClient.get<HoldingsImpact>(
-      runKey
+      runKey !== undefined
         ? `/sources/impact/holdings?runKey=${encodeURIComponent(runKey)}`
         : '/sources/impact/holdings',
     ),

@@ -52,20 +52,23 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			""".formatted(HOLDINGS_TASK);
 
 	/**
-	 * 이 <b>기준일</b>을 대상으로 한 적재 중 미귀결이 있는가 — loaded/missing 이 기준일 현재
-	 * 상태이므로 진행 판정도 같은 축이어야 한다. 선택한 런의 outcome 만 보면 다른 런이 지금
-	 * 메우는 중인 결손에 복구를 권고하거나(진행 중 오귀인 재발), 이미 메워진 기준일이 옛 런의
-	 * 실패 때문에 영구 유보로 남는다(리뷰 2라운드).
+	 * 진행 중인 holdings 적재가 <b>하나라도</b> 있는가 — loaded/missing 이 기준일 현재 상태
+	 * 이므로 진행 판정도 그 상태를 바꿀 수 있는 실행 전체를 본다. 기준일로 좁히지 않는 이유:
+	 * 적재 스텝은 창 인자 없이 canonical <b>전 파티션을 스캔</b>하므로 어떤 런의 적재든 이
+	 * 기준일을 메울 수 있다(리뷰 3라운드). 미귀결(outcome NULL/PENDING)뿐 아니라 <b>도는
+	 * 재시도</b>(귀결 후 RUNNING attempt — outcome 은 완료 시에만 갱신)도 잡는다. 한계: 강제
+	 * 종료로 남은 죽은 RUNNING 잔재는 유보를 과대하게 만들 수 있다 — 보수적 방향이고, 그
+	 * 잔재는 Reconciler 의 STALLED 이슈가 드러낸다(드릴다운 소관).
 	 */
 	private static final String LOAD_PENDING_SQL = """
 			SELECT EXISTS (
 			    SELECT 1
 			      FROM ops_expected_task l
-			      JOIN ops_expected_task h ON h.pipeline_run_id = l.pipeline_run_id
-			             AND h.task_key = 'ETF_HOLDINGS_COLLECTION_KRX'
 			     WHERE l.task_key = 'LOAD_ETF_HOLDINGS'
-			       AND (l.task_outcome IS NULL OR l.task_outcome = 'PENDING')
-			       AND h.expected_as_of_date = ?)
+			       AND (l.task_outcome IS NULL OR l.task_outcome = 'PENDING'
+			            OR EXISTS (SELECT 1 FROM ops_task_attempt a
+			                        WHERE a.expected_task_id = l.expected_task_id
+			                          AND a.execution_status = 'RUNNING')))
 			""";
 
 	private static final String SNAPSHOT_IDS_SQL = """
@@ -140,7 +143,7 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 		}
 
 		boolean loadPending = Boolean.TRUE.equals(
-				jdbc.queryForObject(LOAD_PENDING_SQL, Boolean.class, asOf));
+				jdbc.queryForObject(LOAD_PENDING_SQL, Boolean.class));
 		Set<String> loaded = new LinkedHashSet<>(
 				jdbc.queryForList(LOADED_SQL, String.class, asOf));
 

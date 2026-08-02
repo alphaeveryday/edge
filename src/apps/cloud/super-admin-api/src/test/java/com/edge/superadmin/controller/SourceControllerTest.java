@@ -686,14 +686,31 @@ class SourceControllerTest {
 	void instrument_부재_ETF_가_섞이면_프로필_선행이_포함된_권고가_내려간다() throws Exception {
 		// WHY: holdings 3스텝만으론 instrument 미등록 ETF 를 복구할 수 없다 — load 가 unknown_etf
 		//      로 건너뛴다. 같은 권고를 반복 실행해도 영구 누락이 된다(리뷰 1라운드).
+		//      기준일 = 오늘(KST)이어야 재실행 권고 분기다 — 창 판정은 아래 테스트가 잠근다.
+		java.time.LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
-				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 32, false, false, List.of(
+				new HoldingsImpactRepository.Impact("etf-daily:" + today + "T15:40",
+						today, 33, 32, false, false, List.of(
 						new HoldingsImpactRepository.MissingEtf("9ZZA00", null, null, List.of()))));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
 				.andExpect(jsonPath("$.result.recommendedAction",
 						org.hamcrest.Matchers.containsString("load-instruments")));
+	}
+
+	@Test
+	void 복구_창이_지난_기준일에는_재실행을_권고하지_않는다() throws Exception {
+		// WHY: KRX 는 과거 기준일 재질의 불가(trdDd=실행 당일만) — 창 지난 결손에 재실행을
+		//      권고하면 과거는 안 고쳐지고 현 스냅샷이 과거 run_id 에 귀속된다(리뷰 3라운드).
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40",
+						LocalDate.of(2026, 7, 20), 33, 31, false, false, List.of(
+						new HoldingsImpactRepository.MissingEtf("999002", "inst-1", "이름",
+								List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.recommendedAction",
+						org.hamcrest.Matchers.containsString("재실행하지 말 것")));
 	}
 
 	@Test

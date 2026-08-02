@@ -151,9 +151,10 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 	}
 
 	@Test
-	void 같은_기준일을_다른_런이_적재_중이면_판정이_유보된다() {
-		// WHY: loaded/missing 은 기준일 현재 상태다 — 선택한 런의 적재 귀결만 보면, 다른 런이
-		//      지금 메우는 중인 결손에 수동 복구를 권고한다(리뷰 2라운드 — 축 혼합 오귀인).
+	void 적재가_돌고_있으면_판정이_유보된다() {
+		// WHY: loaded/missing 은 기준일 현재 상태다 — 적재 스텝은 창 인자 없이 전 파티션을
+		//      스캔하므로 **어떤 런의 적재든** 이 기준일을 메울 수 있다(리뷰 2·3라운드).
+		//      선택 런의 귀결만 보면 지금 메워지는 중인 결손에 수동 복구를 권고한다.
 		jdbc.update("""
 				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
 				       execution_name, launch_status, trading_date, created_at)
@@ -175,7 +176,21 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 
 		Impact impact = repository.impact(RUN_KEY);   // A 런을 조회해도
 
-		assertThat(impact.loadPending()).isTrue();    // 기준일 축으로 유보가 잡힌다
+		assertThat(impact.loadPending()).isTrue();    // 다른 런의 미귀결 적재가 유보를 만든다
+	}
+
+	@Test
+	void 귀결_후_도는_재시도도_유보로_잡힌다() {
+		// WHY: 재시도는 RUNNING attempt 만 추가하고 task_outcome 은 완료 시에만 갱신된다 —
+		//      outcome 만 보면 실제 적재 진행 중에 중복 수동 복구를 권고한다(리뷰 3라운드).
+		jdbc.update("""
+				INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,
+				       execution_status, started_at)
+				VALUES ('att-retry', 'et-load', 'arn:task/retry', 'RUNNING',
+				        '2026-07-31T08:00:00Z'::timestamptz)
+				""");
+
+		assertThat(repository.impact(RUN_KEY).loadPending()).isTrue();
 	}
 
 	@Test

@@ -58,6 +58,14 @@ public class SourceService {
 			HOLDINGS_RECOVERY_ACTION + " · instrument 미등록 ETF 는 프로필 수집"
 					+ "(ETF_PROFILE_COLLECTION_KIS → normalize → load-instruments) 선행 필요";
 
+	/**
+	 * KRX 는 과거 기준일을 재질의할 수 없다(trdDd 는 실행 시점 당일만) — 창이 지난 결손에
+	 * 재실행을 권고하면 과거는 복구되지 않고 현 스냅샷이 과거 run_id 에 귀속된다(리뷰 3라운드).
+	 */
+	private static final String HOLDINGS_RECOVERY_WINDOW_CLOSED =
+			"복구 창(당일) 경과 — KRX 는 과거 기준일 재질의가 불가하다(trdDd 는 실행 당일만). "
+					+ "재실행하지 말 것 · 과거 기준일 백필은 수동 검토 필요";
+
 	/** holdings 결손 영향(ALPHA-686). runKey 지정 미존재는 404 — 빈 영향으로 위장하지 않는다. */
 	public HoldingsImpactResponse holdingsImpact(String runKey) {
 		HoldingsImpactRepository.Impact impact = holdingsImpact.impact(runKey);
@@ -67,14 +75,18 @@ public class SourceService {
 			}
 			return HoldingsImpactResponse.empty();
 		}
-		// 이 기준일 대상 적재가 아직 도는 중이면 결손 확정도 복구 권고도 하지 않는다 — 정상
-		// 진행 중을 수동 개입 대상으로 오귀인하는 경로다(리뷰 1·2라운드, 기준일 축).
+		// holdings 적재가 도는 중이면 결손 확정도 복구 권고도 하지 않는다 — 정상 진행 중을
+		// 수동 개입 대상으로 오귀인하는 경로다(리뷰 1·2라운드).
 		String action = null;
 		if (!impact.loadPending() && !impact.missing().isEmpty()) {
-			boolean anyWithoutInstrument = impact.missing().stream()
-					.anyMatch(m -> m.instrumentId() == null);
-			action = anyWithoutInstrument
-					? HOLDINGS_RECOVERY_ACTION_WITH_PROFILE : HOLDINGS_RECOVERY_ACTION;
+			if (!LocalDate.now(KST).equals(impact.expectedAsOf())) {
+				action = HOLDINGS_RECOVERY_WINDOW_CLOSED;
+			} else {
+				boolean anyWithoutInstrument = impact.missing().stream()
+						.anyMatch(m -> m.instrumentId() == null);
+				action = anyWithoutInstrument
+						? HOLDINGS_RECOVERY_ACTION_WITH_PROFILE : HOLDINGS_RECOVERY_ACTION;
+			}
 		}
 		return HoldingsImpactResponse.from(impact, action);
 	}
