@@ -9,8 +9,10 @@ import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
+import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
+import com.edge.superadmin.support.FakeNewsLineageRepository;
 import com.edge.superadmin.support.FakePipelineStatusRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -42,7 +44,7 @@ class SourceControllerTest {
 	private MockMvc mvc(PipelineRunStatus run) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(run))))
+						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -50,7 +52,7 @@ class SourceControllerTest {
 	private MockMvc gridMvc(List<GridSlot> slots) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, slots))))
+						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -327,7 +329,7 @@ class SourceControllerTest {
 	private MockMvc overviewMvc(List<OverviewLane> lanes) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes))))
+						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -544,5 +546,62 @@ class SourceControllerTest {
 		overviewMvc(List.of()).perform(get("/api/v1/sources/overview"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.lanes.length()").value(0));
+	}
+
+	/* ---------- 뉴스 계보 (ALPHA-685) ---------- */
+
+	private MockMvc lineageMvc(FakeNewsLineageRepository lineage) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), lineage)))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 계보는_날짜_필터가_실제로_적용된_집계와_목록을_낸다() throws Exception {
+		// WHY: 이 화면의 존재 이유는 "집계 숫자를 목록으로 검증"이다 — 집계와 목록이 다른
+		//      날짜에서 오면 숫자와 근거가 어긋난다. date 가 리포지토리까지 전달되는지 잠근다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(day, new NewsLineageRepository.LineageSummary(120, 30, 6)),
+				java.util.Map.of(day, List.of(new NewsLineageRepository.LineageDocument(
+						"doc-1", "삼성전자 신규 수주", "BIGKINDS", STARTED, FINISHED, 2, true))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news").param("date", "2026-07-31"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value("2026-07-31"))
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(120))
+				.andExpect(jsonPath("$.result.summary.documentsWithAssertion").value(30))
+				.andExpect(jsonPath("$.result.summary.documentsUsedInAnalysis").value(6))
+				.andExpect(jsonPath("$.result.documents[0].documentId").value("doc-1"))
+				.andExpect(jsonPath("$.result.documents[0].assertionCount").value(2))
+				.andExpect(jsonPath("$.result.documents[0].usedInAnalysis").value(true));
+	}
+
+	@Test
+	void 계보의_잘못된_날짜와_범위_밖_limit_은_빈_결과가_아니라_400_이다() throws Exception {
+		// WHY: 오타 친 날짜가 "그날 문서 없음"으로 보이면 운영자는 없는 사실을 읽는다 —
+		//      grid 의 days 검증과 같은 결이다.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("date", "2026-13-99"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("limit", "0"))
+				.andExpect(status().isBadRequest());
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("limit", "201"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 계보_날짜_없음은_전체_누적이고_빈_결과는_정상이다() throws Exception {
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value(nullValue()))
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(0))
+				.andExpect(jsonPath("$.result.documents.length()").value(0));
 	}
 }

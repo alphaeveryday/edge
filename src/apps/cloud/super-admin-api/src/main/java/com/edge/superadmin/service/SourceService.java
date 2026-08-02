@@ -6,8 +6,10 @@ import com.edge.superadmin.dto.SourceOverviewResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.CountsResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.DefectResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
+import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
+import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
@@ -30,9 +32,12 @@ import java.util.Set;
 public class SourceService {
 
 	private final PipelineStatusRepository pipelineStatus;
+	private final NewsLineageRepository newsLineage;
 
-	public SourceService(PipelineStatusRepository pipelineStatus) {
+	public SourceService(PipelineStatusRepository pipelineStatus,
+			NewsLineageRepository newsLineage) {
 		this.pipelineStatus = pipelineStatus;
+		this.newsLineage = newsLineage;
 	}
 
 	/**
@@ -75,6 +80,27 @@ public class SourceService {
 	 * 는 판정 스펙 §7 이 <b>별도로 정의한 Run 집계 어휘</b>다 — 축의 재명명이 아니라 스펙
 	 * 어휘의 구현이며, 파생 규칙은 이 메서드 하나에만 둔다(화면 재계산 금지).
 	 */
+	/**
+	 * 뉴스 계보(ALPHA-685). {@code date} 는 KST 날짜 문자열(없으면 전체 누적) — 형식이 틀리면
+	 * 빈 결과가 아니라 400 이다(오타 친 날짜가 "그날 문서 없음"으로 보이면 없는 사실을 읽는다).
+	 */
+	public NewsLineageResponse newsLineage(String date, int limit) {
+		if (limit < 1 || limit > 200) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		LocalDate dateKst = null;
+		if (date != null) {
+			try {
+				dateKst = LocalDate.parse(date);
+			} catch (java.time.format.DateTimeParseException e) {
+				throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+			}
+		}
+		return NewsLineageResponse.from(
+				dateKst == null ? null : dateKst.toString(),
+				newsLineage.summary(dateKst), newsLineage.documents(dateKst, limit));
+	}
+
 	public SourceOverviewResponse overview() {
 		OffsetDateTime now = OffsetDateTime.now();
 		return new SourceOverviewResponse(
