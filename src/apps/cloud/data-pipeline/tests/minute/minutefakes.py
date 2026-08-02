@@ -311,6 +311,10 @@ class _Cursor:
             row = self.db.jobs.get(("price", params[0]))
             if row is not None and row["status"] == "CLAIMED":
                 self._rows = [(row["attempt_count"], row["redrive_generation"])]
+        elif s.startswith("SELECT generation, checksum FROM minute_ingestion_window"):
+            row = self.db.windows.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["generation"], row["checksum"])]
         elif s.startswith("SELECT generation FROM minute_ingestion_window"):
             # 트리거 persist 의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
             # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다

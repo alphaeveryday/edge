@@ -201,10 +201,10 @@ class TestJudgement:
         claim_then_run(handler, first)
         before = db.connect_calls
         claim_then_run(handler, second)
-        # connect = 트랜잭션이다(fake 계약). claim 1 + identity 읽기 1 + 시가 select 1
-        # + **쓰기 1** — 트리거 2건과 event 2건이 마지막 connect 하나에 있다. 쓰기가
-        # 쪼개지면 "발화했는데 설명 event 가 없는" 부분 확정이 가능해진다.
-        assert db.connect_calls == before + 4
+        # connect = 트랜잭션이다(fake 계약). claim 1 + identity 1 + window checksum 1
+        # + 시가 select 1 + **쓰기 1** — 트리거 2건과 event 2건이 마지막 connect 하나에
+        # 있다. 쓰기가 쪼개지면 "발화했는데 설명 event 가 없는" 부분 확정이 가능해진다.
+        assert db.connect_calls == before + 5
         assert len(db.triggers) == 2
         assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 2
 
@@ -425,20 +425,20 @@ class TestAdversarialInputs:
                     "500001": [(200, 200), (200, 220)],
                     "100000": [(50, 50), (50, 50)]},
         )
+        # 500001 레코드에 close 가 없는 채 **정당하게 커밋**된 상황을 만든다 —
+        # 사후 바이트 변조는 checksum 검증이 잡는 다른 결함이다
+        class CloseStripping(ScriptedCollector):
+            def collect(self, request, now):
+                result, records, manifest = super().collect(request, now)
+                stripped = tuple(
+                    {k: v for k, v in r.items() if k != "close"}
+                    if r["unit_id"] == "500001" else r
+                    for r in records
+                )
+                return result, stripped, manifest
+
+        worker.collector = CloseStripping(worker.collector.prices)
         worker.tick(NOW)
-        # 두 번째 window artifact 의 500001 레코드에서 close 를 제거해 형상 위반을 만든다
-        import json as _json
-        storage = LocalStorage(root=tmp_path)
-        [key] = [k for k in storage.list_keys("")
-                 if k.endswith("bars.ndjson") and "window=0901" in k]
-        rows = [_json.loads(line) for line in
-                storage.get_bytes(key).decode().splitlines()]
-        for row in rows:
-            if row["unit_id"] == "500001":
-                del row["close"]
-        (Path(tmp_path) / key).write_text(
-            "\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
         checksum = claim_then_run(handler, second)
@@ -560,8 +560,8 @@ class TestAdversarialInputs:
 
         original = handler._artifact_rows
 
-        def corrupting_read(session_date, window_start, generation):
-            rows = original(session_date, window_start, generation)
+        def corrupting_read(session_date, window_start, generation, **kwargs):
+            rows = original(session_date, window_start, generation, **kwargs)
             if window_start == first_start:
                 # artifact 읽기 직후·INSERT 전에 첫 window 가 정정된 상황
                 db.windows[(session_id, first_start)]["generation"] = 2
@@ -594,4 +594,25 @@ class TestAdversarialInputs:
         with pytest.raises(TransientJobError, match="내 것이 아니다"):
             handler(job_id=second["payload"]["job_id"], payload=second["payload"],
                     attempt=claim["attempt_count"], redrive_generation=0)
+        assert db.triggers == {}
+
+    def test_artifact_checksum_mismatch_is_transient(self, tmp_path):
+        # 원장 checksum 과 다른 바이트로 판정하면 잘못된 canonical(동시 PUT 경합,
+        # ALPHA-704)이 그대로 발화한다 — 재해시 검증이 소비자 계약이다
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        storage = LocalStorage(root=tmp_path)
+        [key] = [k for k in storage.list_keys("")
+                 if k.endswith("bars.ndjson") and "window=0901" in k]
+        (Path(tmp_path) / key).write_bytes(b'{"unit_id": "500000", "close": "999"}\n')
+        with pytest.raises(TransientJobError, match="checksum"):
+            claim_then_run(handler, second)
         assert db.triggers == {}
