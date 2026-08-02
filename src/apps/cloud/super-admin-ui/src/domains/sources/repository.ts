@@ -3,6 +3,7 @@ import type {
   HoldingsImpact,
   MinuteStatus,
   NewsLineage,
+  NewsLineageStage,
   SourceGrid,
   SourceOverview,
   SourceReport,
@@ -15,8 +16,8 @@ export interface SourcesRepository {
   grid(days?: number): Promise<SourceGrid>;
   /** Run Overview — 레인별 최신 런의 운영 요약(ALPHA-683) */
   overview(): Promise<SourceOverview>;
-  /** 뉴스 계보(ALPHA-685). @param date KST 날짜(YYYY-MM-DD), 없으면 전체 누적. @param limit 표본 크기(서버 상한 200) */
-  newsLineage(date?: string, limit?: number): Promise<NewsLineage>;
+  /** 뉴스 계보(ALPHA-685·697). @param date KST 날짜(YYYY-MM-DD), 없으면 전체 누적. @param limit 표본 크기(서버 상한 200). @param stage 목록 단계 필터(집계는 항상 전 단계) */
+  newsLineage(date?: string, limit?: number, stage?: NewsLineageStage): Promise<NewsLineage>;
   /** holdings 결손 영향(ALPHA-686). @param runKey 없으면 최신 etf-daily 런 */
   holdingsImpact(runKey?: string): Promise<HoldingsImpact>;
   /** 장중 1분 파이프라인 요약(ALPHA-651). @param date 세션 날짜(KST), 없으면 오늘 */

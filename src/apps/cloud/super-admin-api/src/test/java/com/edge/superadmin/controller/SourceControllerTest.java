@@ -570,7 +570,8 @@ class SourceControllerTest {
 		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
 				java.util.Map.of(day, new NewsLineageRepository.LineageSummary(120, 30, 6)),
 				java.util.Map.of(day, List.of(new NewsLineageRepository.LineageDocument(
-						"doc-1", "삼성전자 신규 수주", "BIGKINDS", STARTED, FINISHED, 2, true))));
+						"doc-1", "삼성전자 신규 수주", "BIGKINDS", "한국경제",
+						"https://news.example/1", STARTED, FINISHED, 2, true))));
 
 		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news").param("date", "2026-07-31"))
 				.andExpect(status().isOk())
@@ -579,8 +580,77 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.summary.documentsWithAssertion").value(30))
 				.andExpect(jsonPath("$.result.summary.documentsUsedInAnalysis").value(6))
 				.andExpect(jsonPath("$.result.documents[0].documentId").value("doc-1"))
+				// 언론사·URL(ALPHA-697) — 원장에 승격된 축이 응답까지 나와야 화면이 표시한다
+				.andExpect(jsonPath("$.result.documents[0].publisher").value("한국경제"))
+				.andExpect(jsonPath("$.result.documents[0].sourceUri").value("https://news.example/1"))
 				.andExpect(jsonPath("$.result.documents[0].assertionCount").value(2))
 				.andExpect(jsonPath("$.result.documents[0].usedInAnalysis").value(true));
+	}
+
+	@Test
+	void 계보의_단계_필터는_목록만_좁히고_집계는_전_단계를_유지한다() throws Exception {
+		// WHY: 타일 클릭 드릴다운(ALPHA-697)의 계약 — 필터가 집계까지 좁히면 분모가 무너져
+		//      N/M(%) 표기가 거짓이 되고, 목록에 안 먹으면 클릭이 아무것도 검증하지 않는다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(day, new NewsLineageRepository.LineageSummary(2, 1, 0)),
+				java.util.Map.of(day, List.of(
+						new NewsLineageRepository.LineageDocument("doc-s", "증거 있음",
+								"BIGKINDS", null, null, STARTED, FINISHED, 1, false),
+						new NewsLineageRepository.LineageDocument("doc-n", "증거 없음",
+								"BIGKINDS", null, null, STARTED, FINISHED, 0, false))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news")
+						.param("date", "2026-07-31").param("stage", "unstructured"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.stage").value("unstructured"))
+				.andExpect(jsonPath("$.result.documents.length()").value(1))
+				.andExpect(jsonPath("$.result.documents[0].documentId").value("doc-n"))
+				// 집계는 필터와 무관하게 전 단계 그대로다
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(2));
+	}
+
+	@Test
+	void 계보의_확장_연도_날짜는_500_이_아니라_400_이다() throws Exception {
+		// WHY: +999999999-12-31 은 LocalDate.parse 를 통과하지만 리포지토리의 plusDays(1)
+		//      (KST 반개구간 상한)에서 터진다 — 검증 게이트를 통과한 값이 아래 계층에서
+		//      500 을 만들면 오타가 서버 오류로 위장된다. 같은 파서를 쓰는 /minute 도 함께 잠근다.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("date", "+999999999-12-31"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 계보의_모르는_stage_는_빈_결과가_아니라_400_이다() throws Exception {
+		// WHY: 오타 친 단계가 "그 단계 문서 없음"으로 보이면 없는 사실을 읽는다 — date 와 같은 결.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("stage", "structrued"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 계보의_1분_추출_요약은_사유별_DEAD_와_함께_내려간다() throws Exception {
+		// WHY: 진기님 실패 축 요구 — 사유(error_code) 없이 dead 총수만 내리면 "왜"에 답할 수
+		//      없다. 사유 미기록(null)도 한 행으로 내려야 미기록이 화면에서 사라지지 않는다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(), java.util.Map.of(),
+				java.util.Map.of(day, new NewsLineageRepository.ExtractionSummary(940, 3,
+						List.of(new NewsLineageRepository.ErrorCodeCount("RETRY_BUDGET_EXHAUSTED", 2),
+								new NewsLineageRepository.ErrorCodeCount(null, 1)))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news").param("date", "2026-07-31"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.extraction.succeeded").value(940))
+				.andExpect(jsonPath("$.result.extraction.dead").value(3))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[0].errorCode")
+						.value("RETRY_BUDGET_EXHAUSTED"))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[0].count").value(2))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[1].errorCode")
+						.value(nullValue()))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[1].count").value(1));
 	}
 
 	@Test

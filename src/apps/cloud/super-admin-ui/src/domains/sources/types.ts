@@ -272,17 +272,35 @@ export interface NewsLineageDocument {
   documentId: string;
   title: string | null;
   sourceCode: string | null;
+  /** 언론사(ALPHA-695 승격) — 미기록 null. sourceCode(수집 벤더)와 다른 축이다. */
+  publisher: string | null;
+  sourceUri: string | null;
   publishedAt: string | null;
   availableAt: string | null;
   assertionCount: number;
   usedInAnalysis: boolean;
 }
 
-/** date 는 수집 시각(available_at)의 KST 날짜 필터. null = 전체 누적. */
+/** 문서 목록 단계 필터(ALPHA-697) — 정의는 서버 집계 카운트와 동일한 SQL 조각. */
+export type NewsLineageStage = 'structured' | 'unstructured' | 'used';
+
+/**
+ * 장중 1분 추출 요약(ALPHA-697) — news_extraction_job 기준. 날짜 축=job 생성 시각(KST)이라
+ * 문서 축(available_at)과 다른 원장이다. errorCode null = 사유 미기록 DEAD.
+ */
+export interface NewsExtractionSummary {
+  succeeded: number;
+  dead: number;
+  deadByErrorCode: { errorCode: string | null; count: number }[];
+}
+
+/** date 는 수집 시각(available_at)의 KST 날짜 필터. null = 전체 누적. stage 는 목록 필터 에코. */
 export interface NewsLineage {
   date: string | null;
+  stage: NewsLineageStage | null;
   summary: NewsLineageSummary;
   documents: NewsLineageDocument[];
+  extraction: NewsExtractionSummary;
 }
 
 /* ---------- holdings 결손 영향 (ALPHA-686) ---------- */
