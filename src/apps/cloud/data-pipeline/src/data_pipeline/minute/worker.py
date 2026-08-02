@@ -16,7 +16,8 @@ tick 단위로 도는 상주 루프다. 벽시계를 직접 읽지 않는다 —
   2. phase 관측 — DRAINING 이면 신규 claim 을 멈추고 ack(원장이 CLAIMED 잔존 시 거부
      하므로 in-flight 가 끝날 때까지 ack 는 실패로 남는다), DRAINED/terminal 이면 정지.
   3. claim — realtime lane 우선 1건, 비면 recovery lane 을 tick 당 budget 만큼.
-  4. window 처리 — collect → 세대 예측 → artifact/manifest PUT → fenced commit.
+  4. window 처리 — 기대 유니버스 결정(`Universe.units_at` — 그 window 의 시각에 캔들이
+     있어야 하는 종목만) → collect → 세대 예측 → artifact/manifest PUT → fenced commit.
      한 window 의 예외는 그 window 에 격리된다(lease 만료로 재청구됨) — 다음 window
      진행을 막지 않는다(fail loud 로 기록하되 루프는 산다).
 """
@@ -214,7 +215,8 @@ class PriceWorker(MinuteWorkerLoop):
     _last_heartbeat: datetime | None = field(default=None, repr=False)
 
     def _predict_generation(self, claim: dict, artifact_checksum: str,
-                            units: dict[str, list[str]]) -> tuple[int, str, bytes, str]:
+                            units: dict[str, list[str]],
+                            expected_unit_ids: tuple[str, ...]) -> tuple[int, str, bytes, str]:
         """결정적 세대 예측 → (generation, artifact_key, manifest_bytes, manifest_checksum).
 
         세대 identity 는 records+manifest 두 checksum 이다(ALPHA-666) — manifest 는
@@ -231,7 +233,7 @@ class PriceWorker(MinuteWorkerLoop):
                 dataset=cfg.dataset, session_id=self.session_id,
                 window_start=claim["window_start"], window_end=claim["window_end"],
                 generation=generation,
-                expected_unit_ids=list(cfg.universe.unit_ids), units=units,
+                expected_unit_ids=list(expected_unit_ids), units=units,
                 artifact_key=artifact_key, artifact_checksum=artifact_checksum,
             )
             data = serialize_manifest(manifest)
@@ -251,12 +253,16 @@ class PriceWorker(MinuteWorkerLoop):
     def _process(self, claim: dict, now: datetime) -> bool:
         cfg = self.config
         try:
+            # 기대 유니버스는 **그 window 의 시각**이 정한다 — 전 종목을 매 window 에
+            # 넘기면 15:30 이 마지막인 종목이 시간외 window 마다 missing 으로 잡혀
+            # INCOMPLETE 가 영원히 재시도된다(2026-08-02 dev 실증)
+            expected_unit_ids = cfg.universe.units_at(claim["window_start"])
             request = CollectionRequest(
                 dataset=cfg.dataset, window_start=claim["window_start"],
                 window_end=claim["window_end"], run_id=cfg.run_id,
                 session_id=self.session_id, execution_mode="resident",
                 universe_version=cfg.universe.universe_version,
-                unit_ids=cfg.universe.unit_ids, failure_injection=None,
+                unit_ids=expected_unit_ids, failure_injection=None,
             )
             result, records, manifest_units = self.collector.collect(request, now)
             # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
@@ -272,7 +278,7 @@ class PriceWorker(MinuteWorkerLoop):
             artifact_bytes = serialize_records(list(records))
             artifact_checksum = sha256_bytes(artifact_bytes)
             generation, artifact_key, manifest_bytes, manifest_checksum = (
-                self._predict_generation(claim, artifact_checksum, units)
+                self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
             )
             put_immutable(self.storage, artifact_key, artifact_bytes)
             manifest_key = minute_window_manifest_key(

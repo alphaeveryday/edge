@@ -34,6 +34,13 @@ UNIVERSE = Universe(
     constituent_ids=("100000", "100001"),
 )
 NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 앞쪽 window 들이 전부 due
+# 시간외(NXT)까지 거래되는 종목이 하나 있는 universe — 세션이 720 window 로 계획된다
+UNIVERSE_EXT = Universe(
+    universe_version="univ-test-ext-v1",
+    etf_ids=("500000",),
+    constituent_ids=("100000", "100001"),
+    extended_hours_ids=("100000",),
+)
 
 
 class RecordingCanonicalWriter:
@@ -46,12 +53,14 @@ class RecordingCanonicalWriter:
         return len(records)
 
 
-def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3):
+def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
+                 universe=UNIVERSE, first_window=0):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+    planned = plan_session_windows(SESSION_DATE, universe=universe)
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
-        universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
-        windows=plan_session_windows(SESSION_DATE)[:windows],
+        universe_version=universe.universe_version, universe_hash=universe.universe_hash,
+        windows=planned[first_window:first_window + windows],
     )
     worker = PriceWorker(
         session_id=session_id,
@@ -62,7 +71,7 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3):
         canonical_writer=RecordingCanonicalWriter(),
         config=WorkerConfig(
             worker_id=worker_id, dataset="price_minute", source="toss", market="KR",
-            session_date="2026-07-31", universe=UNIVERSE, run_id="run_t",
+            session_date="2026-07-31", universe=universe, run_id="run_t",
             trigger_schema_version="trig-1", destination="price-analysis-realtime",
         ),
     )
@@ -171,8 +180,8 @@ class TestFailureIsolation:
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path, windows=1)
         original = worker._predict_generation
-        worker._predict_generation = lambda claim, checksum, units: (
-            (99,) + original(claim, checksum, units)[1:]
+        worker._predict_generation = lambda claim, checksum, units, expected: (
+            (99,) + original(claim, checksum, units, expected)[1:]
         )
         with pytest.raises(GenerationMismatchError):
             worker.tick(NOW)
@@ -360,3 +369,35 @@ class TestInvalidClassification:
         assert worker.tick(NOW) == "PROCESSED"
         window = next(iter(db.windows.values()))
         assert window["data_status"] == "INVALID"
+
+
+class TestTradingHoursUniverse:
+    """시간대별 기대 유니버스 (ALPHA-684).
+
+    의도: 15:30 이 거래 마지막인 종목(ETF·지수·비NXT 개별주)을 시간외 window 의 기대
+    대상으로 잡으면 그 window 가 영원히 INCOMPLETE 로 남고 매분 재수집된다
+    (2026-08-02 dev 실호출 실증 — 19:58 window 에서 069500·001527 이 missing).
+    """
+
+    def test_after_hours_window_expects_only_extended_units(self, tmp_path):
+        db = FakeMinuteDB()
+        # 19:57~19:59 = 720 계획의 마지막 3 window (정규장 밖)
+        worker, ledger, session_id = build_worker(
+            db, tmp_path, universe=UNIVERSE_EXT, windows=3, first_window=717,
+        )
+        assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "PROCESSED"
+        window = next(w for w in db.windows.values() if w["data_status"] != "DUE")
+        # 기대는 시간외 종목 1개뿐 — 3개로 잡으면 나머지 2개가 missing 이라 INCOMPLETE 다
+        assert window["expected_unit_count"] == 1
+        assert window["data_status"] == "VALID"
+
+    def test_regular_window_expects_whole_universe(self, tmp_path):
+        # 같은 universe 라도 정규장 안에서는 전 종목이 기대 대상이다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(
+            db, tmp_path, universe=UNIVERSE_EXT, windows=1, first_window=60,  # 09:00
+        )
+        assert worker.tick(NOW) == "PROCESSED"
+        window = next(iter(db.windows.values()))
+        assert window["expected_unit_count"] == 3
+        assert window["data_status"] == "VALID"

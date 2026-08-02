@@ -18,6 +18,7 @@ from data_pipeline.minute.clock import VirtualClock
 from data_pipeline.minute.instrumentation import JSONL_FIELDS, JsonlInstrumentationWriter
 from data_pipeline.minute.models import (
     KST,
+    WINDOWS_PER_EXTENDED_SESSION,
     WINDOWS_PER_SESSION,
     CollectionRequest,
     CollectionResult,
@@ -165,7 +166,8 @@ class TestUniverseFixture:
         universe = load_universe(FIXTURES / "universe_348.json")
         assert (
             universe.universe_hash
-            == "5b33574f724ecb10f7f3db0830c2fc6dfb45b386ee8f3a9c9ae43dab1e03d52e"
+            # 거래시간 클래스(extended_hours_ids)가 identity 에 들어가며 갱신됨(ALPHA-684)
+            == "bd483bff31602a3a08d272b816f782d89bde084653cb65c7757915fc1055c5c9"
         )
 
     def test_hash_is_membership_identity_not_order(self):
@@ -178,6 +180,73 @@ class TestUniverseFixture:
             constituent_ids=tuple(reversed(original.constituent_ids)),
         )
         assert original.universe_hash == reordered.universe_hash
+
+
+class TestTradingHoursClass:
+    """시간대별 기대 유니버스 (ALPHA-684 — 실측 근거 `.dev/toss-openapi-실측.md`).
+
+    의도: 개별주는 08:00~20:00(720), ETF·지수·비NXT 종목은 09:00~15:30(390)이다.
+    이 축이 없으면 시간외 window 가 매번 "15:30 이 마지막인 종목"을 missing 으로 잡아
+    영원히 INCOMPLETE 로 남는다.
+    """
+
+    def _universe(self, extended=()):
+        return Universe(
+            universe_version="v1", etf_ids=("E1",),
+            constituent_ids=("C1", "C2"), extended_hours_ids=extended,
+        )
+
+    def test_extended_universe_plans_720_windows(self):
+        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
+        assert len(windows) == WINDOWS_PER_EXTENDED_SESSION == 720
+        assert windows[0][0] == datetime(2026, 7, 31, 8, 0, tzinfo=KST)
+        assert windows[-1][1] == datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        assert all(prev[1] == cur[0] for prev, cur in zip(windows, windows[1:]))
+
+    def test_no_extended_units_keeps_390(self):
+        # 클래스가 선언되지 않은 universe 는 지금까지의 정규장 계획 그대로다
+        assert len(plan_session_windows(SESSION_DATE, universe=self._universe())) == 390
+        assert len(plan_session_windows(SESSION_DATE)) == WINDOWS_PER_SESSION
+
+    def test_units_at_narrows_outside_regular_hours(self):
+        universe = self._universe(("C1",))
+        assert universe.units_at(datetime(2026, 7, 31, 10, 0, tzinfo=KST)) == ("E1", "C1", "C2")
+        assert universe.units_at(datetime(2026, 7, 31, 15, 29, tzinfo=KST)) == ("E1", "C1", "C2")
+        # 15:30 부터는 시간외 종목만 — 여기서 전 종목을 기대하면 INCOMPLETE 가 영구화된다
+        assert universe.units_at(datetime(2026, 7, 31, 15, 30, tzinfo=KST)) == ("C1",)
+        assert universe.units_at(datetime(2026, 7, 31, 8, 0, tzinfo=KST)) == ("C1",)
+
+    def test_units_at_uses_kst_not_host_local(self):
+        # 원장 window 는 UTC 로 돌아온다 — 로컬 시각으로 읽으면 경계가 통째로 밀린다
+        universe = self._universe(("C1",))
+        utc_1000_kst = datetime(2026, 7, 31, 1, 0, tzinfo=timezone.utc)
+        assert universe.units_at(utc_1000_kst) == ("E1", "C1", "C2")
+
+    def test_units_at_rejects_window_outside_trading_hours(self):
+        # 조용히 빈 집합을 주면 "기대할 게 없는 window" 와 "잘못 계획된 window" 가 같아진다
+        with pytest.raises(ValueError):
+            self._universe(("C1",)).units_at(datetime(2026, 7, 31, 7, 59, tzinfo=KST))
+        with pytest.raises(ValueError):
+            self._universe().units_at(datetime(2026, 7, 31, 16, 0, tzinfo=KST))
+
+    def test_every_planned_window_has_expected_units(self):
+        # 계획(plan_session_windows)과 기대(units_at)가 같은 규칙에서 나온다는 성질 —
+        # 갈리면 Worker 가 기대 0 인 window 를 영원히 재시도한다
+        for universe in (self._universe(), self._universe(("C1", "C2"))):
+            for window_start, _ in plan_session_windows(SESSION_DATE, universe=universe):
+                assert universe.units_at(window_start)
+
+    def test_extended_ids_must_be_in_universe(self):
+        # 오타를 통과시키면 그 종목이 시간외에 안 잡히는 이유를 아무도 못 찾는다
+        with pytest.raises(ValidationError):
+            self._universe(("NOPE",))
+        with pytest.raises(ValidationError):
+            self._universe(("C1", "C1"))
+
+    def test_hours_class_is_part_of_universe_identity(self):
+        # 멤버가 같아도 클래스가 다르면 다른 universe 다 — 같은 hash 면 session 충돌
+        # 가드가 기대 유니버스 변경을 조용히 통과시킨다
+        assert self._universe().universe_hash != self._universe(("C1",)).universe_hash
 
 
 class TestCanonicalJson:

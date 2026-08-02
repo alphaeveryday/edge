@@ -35,6 +35,14 @@ SESSION_OPEN = time(9, 0)
 SESSION_CLOSE = time(15, 30)
 WINDOWS_PER_SESSION = 390
 
+# NXT 시간외까지 거래되는 종목은 08:00–20:00 (KST) = 720분이다 (2026-08-01 실측·결정,
+# `.dev/toss-openapi-실측.md`). ⚠️ 이건 **상품군 축이 아니라 종목별 속성**이다 — ETF·지수는
+# 물론 개별주 001527 도 15:30 이 마지막이었다. 그래서 클래스는 규칙이 아니라 universe 가
+# 선언한다(Universe.extended_hours_ids).
+EXTENDED_OPEN = time(8, 0)
+EXTENDED_CLOSE = time(20, 0)
+WINDOWS_PER_EXTENDED_SESSION = 720
+
 ExecutionMode = Literal["one_shot", "resident"]
 
 
@@ -148,11 +156,22 @@ class CollectionResult(BaseModel):
 
 
 def plan_session_windows(
-    session_date: date, tz: ZoneInfo = KST
+    session_date: date, *, universe: Universe | None = None, tz: ZoneInfo = KST
 ) -> tuple[tuple[datetime, datetime], ...]:
-    """정규장 하루의 명시적 1분 half-open window 목록 (KST 390개)."""
-    open_at = datetime.combine(session_date, SESSION_OPEN, tzinfo=tz)
-    close_at = datetime.combine(session_date, SESSION_CLOSE, tzinfo=tz)
+    """하루의 명시적 1분 half-open window 목록.
+
+    범위는 universe 가 정한다 — 시간외 거래 종목이 하나라도 있으면 08:00–20:00(720개),
+    없으면 정규장 09:00–15:30(390개)다. 계획 범위와 window 별 기대 유니버스
+    (`Universe.units_at`)는 **같은 규칙**에서 나와야 한다: 계획이 더 넓으면 기대가 빈
+    window 가 생기고, 좁으면 시간외 분이 아예 관측되지 않는다.
+    """
+    extended = bool(universe and universe.extended_hours_ids)
+    open_at = datetime.combine(
+        session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=tz
+    )
+    close_at = datetime.combine(
+        session_date, EXTENDED_CLOSE if extended else SESSION_CLOSE, tzinfo=tz
+    )
     windows: list[tuple[datetime, datetime]] = []
     cursor = open_at
     while cursor < close_at:
@@ -172,6 +191,11 @@ class Universe(BaseModel):
     universe_version: NonBlankStr
     etf_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
     constituent_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
+    # 08:00–20:00 을 거래하는 unit (NXT 시간외). 나머지는 09:00–15:30 이다. 비어 있으면
+    # 전 종목 정규장 — 지금까지의 390 계획과 같다. 값은 실측으로 채운다(추측 금지):
+    # 잘못 넣으면 그 종목의 시간외 window 가 영구 INCOMPLETE 이고, 빠뜨리면 그 종목의
+    # 시간외 분이 조용히 관측되지 않는다.
+    extended_hours_ids: tuple[NonBlankStr, ...] = ()
 
     @model_validator(mode="after")
     def _validate(self) -> Universe:
@@ -180,17 +204,50 @@ class Universe(BaseModel):
             raise ValueError("universe 내부에 중복 ID 가 있다")
         if etfs & constituents:
             raise ValueError(f"ETF/구성종목 ID 가 겹친다: {sorted(etfs & constituents)[:5]}")
+        extended = set(self.extended_hours_ids)
+        if len(extended) != len(self.extended_hours_ids):
+            raise ValueError("extended_hours_ids 에 중복 ID 가 있다")
+        # universe 밖 ID 는 아무 window 에서도 수집되지 않는다 — 오타를 조용히 넘기면
+        # 그 종목이 시간외에 안 잡히는 이유를 아무도 못 찾는다
+        if unknown := extended - (etfs | constituents):
+            raise ValueError(f"extended_hours_ids 가 universe 밖 ID 를 담았다: {sorted(unknown)[:5]}")
         return self
 
     @property
     def unit_ids(self) -> tuple[str, ...]:
         return self.etf_ids + self.constituent_ids
 
+    def units_at(self, window_start: datetime, tz: ZoneInfo = KST) -> tuple[str, ...]:
+        """그 window 에 캔들이 존재해야 하는 unit — 완전성 판정의 기대 집합이다.
+
+        정규장 안이면 전 종목, 그 밖(프리·애프터)이면 시간외 거래 종목만이다. 이걸
+        시각과 무관하게 전 종목으로 두면 15:30 이 마지막인 종목이 시간외 window 마다
+        missing 으로 잡혀 그 window 가 영원히 INCOMPLETE 로 남는다(2026-08-02 dev 실증).
+
+        거래시간 밖은 raise 다 — 조용히 빈 집합을 주면 "기대할 게 없는 window" 와
+        "계획이 잘못돼 만들어진 window" 가 같은 결과가 된다.
+        """
+        local = window_start.astimezone(tz).time()
+        if SESSION_OPEN <= local < SESSION_CLOSE:
+            return self.unit_ids
+        if EXTENDED_OPEN <= local < EXTENDED_CLOSE and self.extended_hours_ids:
+            return self.extended_hours_ids
+        raise ValueError(
+            f"window {window_start.isoformat()} 는 이 universe 의 거래시간 밖이다 "
+            f"— 계획되지 않아야 할 window 다"
+        )
+
     @property
     def universe_hash(self) -> str:
-        """멤버십 identity — 입력 순서에 불변(같은 구성·다른 순서 = 같은 hash)."""
+        """멤버십 identity — 입력 순서에 불변(같은 구성·다른 순서 = 같은 hash).
+
+        거래시간 클래스도 identity 에 넣는다: 멤버가 같아도 클래스가 다르면 기대
+        유니버스와 window 계획이 달라진다 — 빼면 session 의 universe 충돌 가드가
+        그 변경을 같은 universe 로 통과시킨다.
+        """
         return content_checksum(
-            [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
+            [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids),
+             sorted(self.extended_hours_ids)]
         )
 
 
