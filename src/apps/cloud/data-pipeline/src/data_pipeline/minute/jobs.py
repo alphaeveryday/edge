@@ -449,6 +449,31 @@ class JobLedger:
             return {"job_id": job_id, "attempt_count": row[0],
                     "redrive_generation": redrive_generation}
 
+    def news_job_identity(self, *, job_id: str) -> dict | None:
+        """job 이 **생성 시점에 고정한** 정체성 — 없으면 None (ALPHA-689).
+
+        handler 가 이걸 읽어야 하는 이유: 실행 코드로 job_id 를 재계산해 비교하면
+        불일치의 원인 두 가지가 한 값으로 뭉개진다 — ①태거·온톨로지 버전을 올린 뒤
+        큐에 남은 **정상 backlog**(실행해야 한다)와 ②payload 가 다른 기사를 가리키는
+        **결함**(실행하면 안 된다). 어느 쪽인지는 job 행이 선언한 값과 대조해야만 갈린다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT source_code, article_id, input_fingerprint,
+                       tagger_version, ontology_version
+                FROM news_extraction_job WHERE job_id = %s
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip(
+            ("source_code", "article_id", "input_fingerprint",
+             "tagger_version", "ontology_version"), row, strict=True,
+        ))
+
     def heartbeat_job(
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
         redrive_generation: int, now: datetime, lease_seconds: int,

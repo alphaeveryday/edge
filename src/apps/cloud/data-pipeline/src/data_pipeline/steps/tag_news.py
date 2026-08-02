@@ -44,7 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..lake import Storage, canonical_news_articles_partition, feature_news_assertions_partition, quality_log_key
-from ..tagging.extract import TAGGER_VERSION, extract_assertions
+from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
 
 logger = logging.getLogger(__name__)
@@ -52,8 +52,9 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "tag_news"
 DATASET = "news_assertions"
 
-# 태깅 대상 언어. 프롬프트가 한국어 전용이라 ko 만 — 영어 프롬프트가 생기면 여기 늘린다.
-TAGGED_LANGUAGES = ("ko",)
+# 태깅 대상 언어. 정본은 프롬프트를 가진 모듈이다(`tagging.extract.PROMPT_LANGUAGES`) —
+# 영어 프롬프트가 생기면 거기 한 곳만 늘린다.
+TAGGED_LANGUAGES = PROMPT_LANGUAGES
 
 # LLM 호출 병렬도(ALPHA-519). TagNews 는 기사당 LLM 1콜이 완전 직렬이라 런타임의 큰 몫이다.
 # complete_fn 은 콜마다 독립 urllib 요청(상태없음=스레드안전)이고 블로킹 I/O 라 GIL 이 풀려
