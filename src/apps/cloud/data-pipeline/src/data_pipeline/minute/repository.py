@@ -545,16 +545,24 @@ class MinuteLedger:
              "universe_version"), row, strict=True,
         ))
 
-    def confirm_missing_windows(self, *, session_id: str) -> int:
-        """`DUE` 잔존을 `MISSING` 으로 확정한다 — 확정된 행 수.
+    def confirm_missing_windows(self, *, session_id: str, now: datetime) -> int:
+        """**이미 도래한** `DUE` 를 `MISSING` 으로 확정한다 — 확정된 행 수.
 
         세션이 QC 에 들어왔다는 건 그 window 를 처리할 주체가 더 없다는 뜻이다(Worker 는
         drain 에서 claim 을 반납만 하고 떠난다). 여기서 확정하지 않으면 누락이 원장에
         **DUE 로 영원히 남아**, "아직 안 한 것"과 "끝내 못 한 것"이 구분되지 않는다.
 
-        ⚠️ phase 를 WHERE 에 **반드시** 바인딩한다. 안 묶으면 살아 있는(ACTIVE) 세션에
-        이 명령을 잘못 겨눴을 때 아직 처리 대기 중인 window 를 전부 MISSING 으로 죽인다 —
-        그 window 들은 claim 대상에서 빠져 그날 데이터가 통째로 사라진다.
+        가드가 둘이고 막는 사고가 다르다.
+
+        ⚠️ **phase** — 안 묶으면 살아 있는(ACTIVE) 세션에 이 명령을 잘못 겨눴을 때 처리
+        대기 중인 window 를 전부 MISSING 으로 죽인다(claim 대상에서 빠져 그날 데이터가
+        통째로 사라진다).
+
+        ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
+        잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
+        DRAINED 를 만든다. 그 상태로 QC 를 돌리면 **아직 오지도 않은 분**까지 MISSING 으로
+        확정하고 하루가 봉인된다. 도래하지 않은 window 는 판정 대상이 아니다 — 남은 DUE 는
+        호출자(QC)가 위반으로 드러낸다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
@@ -564,10 +572,29 @@ class MinuteLedger:
                 FROM minute_ingestion_session s
                 WHERE w.session_id = s.session_id AND s.session_id = %s
                   AND s.phase = 'QC_RUNNING' AND w.data_status = 'DUE'
+                  AND w.scheduled_at <= %s
+                """,
+                (session_id, now),
+            )
+            return cur.rowcount
+
+    def session_final_result(self, *, session_id: str) -> tuple[str | None, int | None] | None:
+        """확정된 세션이 기록한 (final_checksum, final_generation). 세션이 없으면 None.
+
+        QC 재실행이 **이미 FINALIZED 인 세션**을 만났을 때 쓴다 — 확정 직후 출력 전에 죽은
+        실행을 재시도하면 그 판정을 다시 읽어 돌려줘야 한다. 못 읽으면 정상 확정된 하루가
+        재시도마다 실패로 보인다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT final_checksum, final_generation
+                FROM minute_ingestion_session WHERE session_id = %s
                 """,
                 (session_id,),
             )
-            return cur.rowcount
+            row = cur.fetchone()
+        return None if row is None else (row[0], row[1])
 
     def session_window_rows(self, *, session_id: str) -> list[tuple]:
         """QC 판정 입력 — (window_start, data_status, generation, checksum) 결정적 정렬.

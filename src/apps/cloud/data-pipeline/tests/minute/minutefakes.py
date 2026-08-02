@@ -141,6 +141,9 @@ class _Cursor:
         elif s.startswith("UPDATE minute_ingestion_window w") and "'MISSING'" in s:
             # phase 바인딩이 빠지면 살아 있는 세션의 DUE 를 전부 죽인다(그날 데이터 소멸)
             assert "s.phase = 'QC_RUNNING'" in s, "confirm_missing_windows SQL 에 phase 가드가 없다"
+            # 시각 가드가 빠지면 조기 drain 만으로 **아직 오지도 않은 분**까지 MISSING 으로
+            # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
+            assert "w.scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
             self._confirm_missing(params)
         elif s.startswith("SELECT window_start, data_status, generation, checksum"):
             assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
@@ -149,10 +152,18 @@ class _Cursor:
                  for w in self.db.windows.values() if w["session_id"] == params[0]),
                 key=lambda row: row[0],
             )
+        elif s.startswith("SELECT final_checksum, final_generation"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row.get("final_checksum"), row.get("final_generation"))]
         elif "SET phase = 'FINALIZED'" in s:
+            # CAS 가 SQL 에서 빠지면 다른 실행이 이미 바꾼 phase 를 덮어쓴다 — fake 가
+            # 파이썬으로 재검사해 주면 그 회귀가 계속 초록으로 보인다(Rule 9)
+            assert "AND phase = 'QC_RUNNING'" in s, "finalize_session SQL 에 phase CAS 가 없다"
             self._finish_qc(params[2], "FINALIZED",
                             final_checksum=params[0], final_generation=params[1])
         elif "SET phase = 'FAILED'" in s:
+            assert "AND phase = 'QC_RUNNING'" in s, "fail_session_qc SQL 에 phase CAS 가 없다"
             self._finish_qc(params[0], "FAILED")
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
@@ -319,13 +330,15 @@ class _Cursor:
                        row["expected_window_count"], row["universe_version"])]
 
     def _confirm_missing(self, p):
-        session = self.db.sessions.get(p[0])
+        session_id, now = p
+        session = self.db.sessions.get(session_id)
         if session is None or session["phase"] != "QC_RUNNING":
             self.rowcount = 0
             return
         changed = 0
         for window in self.db.windows.values():
-            if window["session_id"] == p[0] and window["data_status"] == "DUE":
+            if (window["session_id"] == session_id and window["data_status"] == "DUE"
+                    and window["scheduled_at"] <= now):
                 window["data_status"] = "MISSING"
                 changed += 1
         self.rowcount = changed

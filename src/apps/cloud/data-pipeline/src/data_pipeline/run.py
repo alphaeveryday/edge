@@ -233,6 +233,17 @@ def main(argv: list[str] | None = None) -> int:
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
+    # QC 전용 인자도 같은 규약이다 — 오배선(`relay --session-id …`)이 조용히 무시되면
+    # 운영자는 명령이 먹은 줄 안다.
+    if args.step == "qc-minute-session":
+        if not args.session_id:
+            raise SystemExit("qc-minute-session 은 --session-id 가 필요하다")
+    elif args.session_id is not None or args.market is not None:
+        raise SystemExit(
+            "--session-id·--market 은 qc-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
     if args.window_days is not None:

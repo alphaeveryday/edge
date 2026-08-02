@@ -92,9 +92,26 @@ class TestMissingConfirmation:
         with pytest.raises(SessionQcRejected):
             make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
 
-        assert ledger.confirm_missing_windows(session_id=session_id) == 0
+        assert ledger.confirm_missing_windows(session_id=session_id, now=NOW) == 0
         assert [w["data_status"] for w in db.windows.values()].count("DUE") == 2
         assert db.sessions[session_id]["phase"] == "ACTIVE"
+
+    def test_early_drain_does_not_seal_windows_that_have_not_come_due(self, tmp_path):
+        # ⚠️ phase 가드를 **우회하는** 경로다: 장중에 request_drain 이 잘못 호출되면
+        # Worker 는 새 claim 을 멈추고, CLAIMED 만 없으면 ack_drain 이 DRAINED 를 만든다.
+        # 그 상태로 QC 를 돌리면 아직 오지도 않은 분까지 MISSING 으로 확정하고 하루가
+        # 봉인된다 — 되돌릴 수 없는 봉인이라 여기서 막아야 한다.
+        db = FakeMinuteDB()
+        _, session_id = make_session(db, statuses=("VALID", "DUE", "DUE"))
+        mid_session = _OPEN + timedelta(minutes=1)   # 두 번째 window 가 아직 안 닫힌 시각
+
+        result = make_qc(db, tmp_path).run(session_id=session_id, now=mid_session)
+
+        assert result["ok"] is False                  # 확정하지 않는다
+        assert result["missing_confirmed"] == 0       # 미도래 분을 죽이지 않는다
+        assert any("DUE 잔존" in v for v in result["violations"])
+        assert db.sessions[session_id]["phase"] == "FAILED"
+        assert [w["data_status"] for w in db.windows.values()].count("DUE") == 2
 
     def test_counts_cover_every_status_even_at_zero(self, tmp_path):
         # 0 건인 축이 결과에서 사라지면 "없었다"와 "안 셌다"가 같아진다(Rule 12)
@@ -135,15 +152,54 @@ class TestReentry:
         second = qc.run(session_id=session_id, now=NOW)
         assert (second["ok"], db.sessions[session_id]["phase"]) == (True, "FINALIZED")
 
-    def test_finalized_session_is_not_reopened(self, tmp_path):
-        # 확정된 하루를 다시 여는 경로는 정정(새 세대)이지 재QC 가 아니다
+    def test_finalized_session_reports_the_recorded_verdict_again(self, tmp_path):
+        # 확정 커밋 직후 출력 전에 죽은 실행의 재시도다. 거부하면 정상 확정된 하루가
+        # 재시도마다 실패로 보이고 첫 판정을 복원할 경로도 없다 — 다시 열지 않는 것과
+        # 이미 확정된 사실을 보고하는 것은 다르다.
         db = FakeMinuteDB()
         _, session_id = make_session(db, statuses=("VALID", "VALID", "VALID"))
         qc = make_qc(db, tmp_path)
-        qc.run(session_id=session_id, now=NOW)
-        with pytest.raises(SessionQcRejected, match="FINALIZED"):
-            qc.run(session_id=session_id, now=NOW)
+        first = qc.run(session_id=session_id, now=NOW)
+
+        second = qc.run(session_id=session_id, now=NOW)
+        assert (second["ok"], second["phase"], second["reused"]) == (True, "FINALIZED", True)
+        assert second["final_checksum"] == first["final_checksum"]
         assert db.sessions[session_id]["phase"] == "FINALIZED"
+
+    def test_session_that_never_drained_is_rejected(self, tmp_path):
+        db = FakeMinuteDB()
+        _, session_id = make_session(
+            db, statuses=("VALID", "VALID", "VALID"), phase="ACTIVE"
+        )
+        with pytest.raises(SessionQcRejected, match="자격"):
+            make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+
+
+class TestSnapshotIsFrozen:
+    """QC 는 fence 를 안 잡는다 — 그게 안전한 건 Worker 경로가 phase 로 이미 닫혀서다.
+
+    이 전제가 깨지면(누가 저 phase 집합을 넓히면) QC 는 **움직이는 원장을 스냅샷으로
+    착각**해, 확정한 뒤에 들어온 결과가 영영 반영되지 않는다. 문서로만 두면 조용히 깨진다.
+    """
+
+    def test_worker_cannot_re_enter_a_finalized_session(self, tmp_path):
+        db = FakeMinuteDB()
+        ledger, session_id = make_session(db, statuses=("VALID", "DUE", "VALID"))
+        make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
+
+        # fence 를 못 잡으면 claim·기록 경로가 통째로 닫힌다(전부 fence 검사 뒤에 있다)
+        assert ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=60
+        ) is None
+
+    def test_worker_cannot_re_enter_a_session_under_qc(self, tmp_path):
+        db = FakeMinuteDB()
+        ledger, session_id = make_session(
+            db, statuses=("VALID", "DUE", "VALID"), phase="QC_RUNNING"
+        )
+        assert ledger.acquire_worker_fence(
+            session_id=session_id, worker_id="w1", now=NOW, lease_seconds=60
+        ) is None
 
 
 class TestInvariantViolations:
@@ -166,16 +222,18 @@ class TestInvariantViolations:
         assert any("CLAIMED" in v for v in result["violations"])
         assert db.sessions[session_id]["phase"] == "FAILED"
 
-    def test_window_count_mismatch_fails(self, tmp_path):
-        # 계획보다 행이 적으면 planner 가 덜 만든 것이다 — 그 세션의 "완전함" 판정은
-        # 보이는 행만 근거로 하므로 신뢰할 수 없다
+    def test_planner_gap_fails_even_though_expected_count_matches(self, tmp_path):
+        # ⚠️ `expected_window_count` 는 계획 시점에 COUNT(*) 로 덮어써진다 — 그 값과
+        # 대조하는 게이트는 planner 가 분을 빠뜨려도 **항상 통과**한다(389==389).
+        # 빠진 분은 행 자체가 없어 어떤 상태 집계에도 안 잡히므로, 간격으로만 드러난다.
         db = FakeMinuteDB()
-        _, session_id = make_session(
-            db, statuses=("VALID", "VALID", "VALID"), expected=390
-        )
+        _, session_id = make_session(db, statuses=("VALID", "VALID", "VALID"))
+        del db.windows[(session_id, WINDOWS[1])]          # planner 가 한 분을 빠뜨렸다
+        db.sessions[session_id]["expected_window_count"] = 2   # COUNT(*) 가 그걸 따라간다
+
         result = make_qc(db, tmp_path).run(session_id=session_id, now=NOW)
         assert result["ok"] is False
-        assert any("계획" in v for v in result["violations"])
+        assert any("간격" in v for v in result["violations"])
 
     def test_unknown_status_is_not_silently_dropped(self, tmp_path):
         db = FakeMinuteDB()
