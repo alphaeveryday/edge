@@ -627,9 +627,10 @@ class TestAdversarialInputs:
             build_handler(FakeMinuteDB(), tmp_path,
                           extended_hours_ids=frozenset({"500000"}))
 
-    def test_window_without_etfs_succeeds_without_open_resolution(self, tmp_path):
-        # 판정 대상 ETF 가 없는 window(시간외 구간) — 시가 해소를 걸면 09:00 커밋
-        # 전까지 재시도만 돌다 예산 소진으로 DEAD 가 된다(#485 봇 P2). 할 일 없음=성공
+    def test_regular_window_all_etfs_missing_still_records_reason(self, tmp_path):
+        # 정규장 window 의 전 ETF 부재는 정상이 아니라 결측(장애)이다 — 시각이 아니라
+        # 행 유무로 접으면 하루 장애가 사유 없이 전부 성공으로 끝난다(#485 봇 P2).
+        # 시가 해소를 타서 MISSING 사유가 원장에 남는다
         db = FakeMinuteDB()
         worker, _, session_id = build_pipeline(
             db, tmp_path,
@@ -641,6 +642,67 @@ class TestAdversarialInputs:
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
         checksum = claim_then_run(handler, second)
+        assert len(checksum) == 64
+        for entity in ("500000", "500001"):
+            row = db.session_opens[(session_id, entity)]
+            assert row["status"] == "MISSING" and row["reason"]
+        assert db.triggers == {}
+
+    def test_pre_open_window_succeeds_without_open_resolution(self, tmp_path):
+        # 09:00 이전 window 는 ETF 가 기대되지 않는다 — 시가 해소를 걸면 09:00 커밋
+        # 전까지 재시도만 돌다 예산 소진으로 DEAD 가 된다. 할 일 없음=성공
+        universe_ext = Universe(
+            universe_version="univ-ext-v2",
+            etf_ids=("500000", "500001"),
+            constituent_ids=("100000",),
+            extended_hours_ids=("100000",),
+        )
+        db = FakeMinuteDB()
+        ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+        planned = plan_session_windows(SESSION_DATE, universe=universe_ext)
+        session_id, _ = ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version=universe_ext.universe_version,
+            universe_hash=universe_ext.universe_hash, windows=planned[:1],  # 08:00
+        )
+        worker = PriceWorker(
+            session_id=session_id, ledger=ledger,
+            committer=MinuteCommitter(db=_DB, connect_fn=db.connect),
+            storage=LocalStorage(root=tmp_path),
+            collector=ScriptedCollector({"100000": [(50, 50)]}),
+            config=WorkerConfig(
+                worker_id="w1", dataset="price_minute", source="toss", market="KR",
+                session_date="2026-07-31", universe=universe_ext, run_id="run_t",
+                trigger_schema_version="trig-1",
+                destination="price-analysis-realtime", lease_seconds=60,
+            ),
+        )
+
+        class PreOpenCollector(ScriptedCollector):
+            def collect(self, request, now):
+                # 08:00 window 의 기대 유니버스는 시간외 종목뿐 — 그 봉을 그대로 낸다
+                records = ({"unit_id": "100000", "ts": request.window_start.isoformat(),
+                            "open": "50", "high": "50", "low": "50", "close": "50",
+                            "volume": "10"},)
+                from data_pipeline.minute.models import CollectionResult
+                result = CollectionResult(
+                    status="VALID", expected_count=len(request.unit_ids),
+                    succeeded_count=len(request.unit_ids), failed_count=0,
+                    retry_count=0, artifact_uri="memory://x",
+                    manifest_checksum="a" * 64, result_checksum="b" * 64,
+                    watermark_before=None, watermark_after=request.window_end,
+                    generation=1,
+                    stage_timestamps={"collection_started_at": now},
+                )
+                manifest = {"received": list(request.unit_ids), "no_trade": [],
+                            "missing": [], "invalid": []}
+                return result, records, manifest
+
+        worker.collector = PreOpenCollector({})
+        worker.tick(datetime(2026, 7, 31, 8, 5, tzinfo=KST))
+        handler = build_handler(db, tmp_path)
+        [event] = price_job_events(db)
+        checksum = claim_then_run(handler, event)
         assert len(checksum) == 64
         assert db.session_opens == {}  # 시가 해소 자체를 걸지 않았다
         assert db.triggers == {}

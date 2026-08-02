@@ -36,7 +36,7 @@ from ..lake.storage import Storage, canonical_price_minute_artifact_key
 from .artifacts import sha256_bytes
 from .consumer import PermanentJobError, TransientJobError
 from .jobs import JobLedger
-from .models import KST, SESSION_OPEN, content_checksum
+from .models import KST, SESSION_CLOSE, SESSION_OPEN, content_checksum
 from .states import WINDOW_CLAIMED, WINDOW_DUE, WINDOW_MISSING
 
 logger = logging.getLogger(__name__)
@@ -190,10 +190,16 @@ class PriceTriggerHandler:
             if isinstance(r, dict) and r.get("unit_id") in self.etf_ids
         }
 
-        if not etf_rows:
-            # 판정 대상이 없는 window(시간외 구간 등) — 시가 해소를 걸면 09:00 커밋
-            # 전까지 OPEN_NOT_READY 재시도만 돌다 예산이 소진돼, 판정할 게 없던 job
-            # 이 DEAD 로 끝난다(#485 봇 P2). 할 일 없음 = 성공이다.
+        # ETF 는 전부 정규장 전용이다(__post_init__ 가드) — 정규장 밖 window 는 ETF
+        # 가 **기대되지 않아** 행이 없는 게 정상이고, 정규장 안의 전 ETF 부재는 결측
+        # (장애)이라 시가 해소를 타서 MISSING 사유가 원장에 남아야 한다(#485 봇 P2 —
+        # 시각이 아니라 행 유무로 접으면 하루 장애가 사유 없이 전부 성공으로 끝난다).
+        window_time = window_start.astimezone(KST).time()
+        etfs_expected = SESSION_OPEN <= window_time < SESSION_CLOSE
+        if not etf_rows and not etfs_expected:
+            # 판정 대상이 없는 게 정상인 window(시간외 구간) — 시가 해소를 걸면
+            # 09:00 커밋 전까지 OPEN_NOT_READY 재시도만 돌다 예산이 소진돼, 판정할
+            # 게 없던 job 이 DEAD 로 끝난다. 할 일 없음 = 성공이다.
             result = {
                 "job_id": job_id, "session_id": session_id,
                 "window_start": window_start, "generation": generation,
