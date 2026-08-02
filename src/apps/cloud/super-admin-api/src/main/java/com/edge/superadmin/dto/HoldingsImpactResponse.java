@@ -15,11 +15,11 @@ import java.util.List;
  * 재실행 명령 문자열이다 — 자동 실행 없음(스펙 §12 안전정책: 대시보드는 권장만).
  *
  * <p>누락의 원인(수집/정제/적재 중 어디서 탈락)은 여기서 단정하지 않는다 — 그 분해는 S3
- * 로그 소관이고, 이 응답은 "기대에 있었는데 기준일 적재분에 지금 없다"는 사실까지만 말한다. {@code loadOutcome} 이 FULFILLED 가 아니면 적재 미귀결 — 결손은 잠정이고 권고도 내지 않는다.
+ * 로그 소관이고, 이 응답은 "기대에 있었는데 기준일 적재분에 지금 없다"는 사실까지만 말한다. {@code loadPending}(이 기준일 대상 적재 중 미귀결 존재 — 기준일 축)이면 결손은 잠정이고 권고도 내지 않는다.
  */
 public record HoldingsImpactResponse(String runKey, String expectedAsOf,
 		Integer expectedCount, Integer loadedCount, boolean snapshotMissing,
-		String loadOutcome, List<MissingEtfResponse> missing, String recommendedAction) {
+		boolean loadPending, List<MissingEtfResponse> missing, String recommendedAction) {
 
 	/**
 	 * {@code instrumentId} null = instrument 행 자체가 없음(프로필 수집까지 결손) — 단축코드만
@@ -48,13 +48,13 @@ public record HoldingsImpactResponse(String runKey, String expectedAsOf,
 		return new HoldingsImpactResponse(impact.runKey(),
 				impact.expectedAsOf() == null ? null : impact.expectedAsOf().toString(),
 				impact.expectedCount(), impact.loadedCount(), impact.snapshotMissing(),
-				impact.loadOutcome(),
+				impact.loadPending(),
 				impact.missing().stream().map(MissingEtfResponse::from).toList(),
 				recommendedAction);
 	}
 
 	/** 원장에 etf-daily 런이 하나도 없음 — 초기 환경의 정상 상태(에러 아님). */
 	public static HoldingsImpactResponse empty() {
-		return new HoldingsImpactResponse(null, null, null, 0, true, null, List.of(), null);
+		return new HoldingsImpactResponse(null, null, null, null, true, false, List.of(), null);
 	}
 }

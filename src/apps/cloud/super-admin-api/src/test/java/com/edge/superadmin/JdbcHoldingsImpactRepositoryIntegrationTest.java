@@ -101,7 +101,7 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 		Impact impact = repository.impact(RUN_KEY);
 
 		assertThat(impact.expectedCount()).isEqualTo(3);
-		assertThat(impact.loadOutcome()).isEqualTo("FULFILLED");
+		assertThat(impact.loadPending()).isFalse();
 		// inst-ok 만 — 다른 run_id 여도 기준일 적재면 센다(멱등 무변경 행 반례),
 		// 타시장 동명 ticker(inst-kos)와 다른 기준일 적재(inst-miss 07-30)는 안 센다.
 		assertThat(impact.loadedCount()).isEqualTo(1);
@@ -145,7 +145,51 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 		//      미배선 런이 "결손 없음"으로 읽힌다.
 		assertThat(impact.snapshotMissing()).isTrue();
 		assertThat(impact.expectedCount()).isNull();
+		// 계산 불가의 적재 수는 0 이 아니라 null — "0종 적재"와 "모름"을 섞지 않는다(리뷰 2라운드).
+		assertThat(impact.loadedCount()).isNull();
 		assertThat(impact.missing()).isEmpty();
+	}
+
+	@Test
+	void 같은_기준일을_다른_런이_적재_중이면_판정이_유보된다() {
+		// WHY: loaded/missing 은 기준일 현재 상태다 — 선택한 런의 적재 귀결만 보면, 다른 런이
+		//      지금 메우는 중인 결손에 수동 복구를 권고한다(리뷰 2라운드 — 축 혼합 오귀인).
+		jdbc.update("""
+				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
+				       execution_name, launch_status, trading_date, created_at)
+				VALUES ('run-b', 'etf-daily:2026-07-31T18:00', 'etf-daily', 'exec-b',
+				        'LAUNCHED', ?::date, '2026-07-31T09:00:00Z'::timestamptz)
+				""", AS_OF);
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, task_outcome, idempotency_key, expected_as_of_date)
+				VALUES ('et-b-h', 'run-b', 'ETF_HOLDINGS_COLLECTION_KRX', 'raw', 'etf_holdings',
+				        'DUE', 'FULFILLED', 'et-b-h-key', ?::date)
+				""", AS_OF);
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, task_outcome, idempotency_key)
+				VALUES ('et-b-l', 'run-b', 'LOAD_ETF_HOLDINGS', 'feature', 'etf_holdings',
+				        'DUE', 'PENDING', 'et-b-l-key')
+				""");
+
+		Impact impact = repository.impact(RUN_KEY);   // A 런을 조회해도
+
+		assertThat(impact.loadPending()).isTrue();    // 기준일 축으로 유보가 잡힌다
+	}
+
+	@Test
+	void 다른_레인의_runKey_는_holdings_판정으로_수락되지_않는다() {
+		jdbc.update("""
+				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
+				       execution_name, launch_status, created_at)
+				VALUES ('run-news', 'news:2026-07-31T15:30', 'news', 'exec-n', 'LAUNCHED',
+				        '2026-07-31T06:30:00Z'::timestamptz)
+				""");
+
+		// WHY: 뉴스 런 키가 200/계산불가로 내려가면 "holdings 판정이 없는 런"이 UNKNOWN 으로
+		//      위장된다(리뷰 2라운드) — 레인 밖 키는 런 미존재와 같은 null(→서비스 404)이다.
+		assertThat(repository.impact("news:2026-07-31T15:30")).isNull();
 	}
 
 	private void insertEtf(String instrumentId, String ticker, String name) {

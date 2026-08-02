@@ -615,7 +615,7 @@ class SourceControllerTest {
 		//      화면에서 그 ETF 가 사라지지 않는다.
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 31, false, "FULFILLED", List.of(
+						LocalDate.of(2026, 7, 31), 33, 31, false, false, List.of(
 						new HoldingsImpactRepository.MissingEtf("091160", "inst-1", "KODEX 반도체",
 								List.of(new HoldingsImpactRepository.AffectedAnalysis(
 										"res-9", "PUBLISHED", "반도체 급등"))),
@@ -640,7 +640,7 @@ class SourceControllerTest {
 		//      목록과 같은 모양으로 내면 미배선 런이 "결손 없음"으로 보인다.
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40", null,
-						null, 0, true, "FULFILLED", List.of()));
+						null, null, true, false, List.of()));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
 				.andExpect(jsonPath("$.result.snapshotMissing").value(true))
@@ -651,7 +651,7 @@ class SourceControllerTest {
 	void 영향_runKey_미존재는_404_이고_결손_없으면_권장조치도_없다() throws Exception {
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 33, false, "FULFILLED", List.of()));
+						LocalDate.of(2026, 7, 31), 33, 33, false, false, List.of()));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings")
 						.param("runKey", "etf-daily:9999-01-01T00:00"))
@@ -673,12 +673,12 @@ class SourceControllerTest {
 		//      "누락"으로 보인다. 정상 진행 중을 수동 복구 대상으로 오귀인하면 안 된다(리뷰 1라운드).
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 0, false, "PENDING", List.of(
+						LocalDate.of(2026, 7, 31), 33, 0, false, true, List.of(
 						new HoldingsImpactRepository.MissingEtf("999002", "inst-1", "이름",
 								List.of()))));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
-				.andExpect(jsonPath("$.result.loadOutcome").value("PENDING"))
+				.andExpect(jsonPath("$.result.loadPending").value(true))
 				.andExpect(jsonPath("$.result.recommendedAction").value(nullValue()));
 	}
 
@@ -688,7 +688,7 @@ class SourceControllerTest {
 		//      로 건너뛴다. 같은 권고를 반복 실행해도 영구 누락이 된다(리뷰 1라운드).
 		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
 				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
-						LocalDate.of(2026, 7, 31), 33, 32, false, "FULFILLED", List.of(
+						LocalDate.of(2026, 7, 31), 33, 32, false, false, List.of(
 						new HoldingsImpactRepository.MissingEtf("9ZZA00", null, null, List.of()))));
 
 		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))

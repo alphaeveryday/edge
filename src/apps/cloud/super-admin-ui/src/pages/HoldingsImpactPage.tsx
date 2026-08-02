@@ -30,7 +30,7 @@ export function HoldingsImpactPage() {
     );
   }
 
-  const loadDone = data.loadOutcome === 'FULFILLED';
+  const loadDone = !data.loadPending;
 
   return (
     <div className="flex flex-col gap-4">
@@ -60,7 +60,7 @@ export function HoldingsImpactPage() {
         </p>
         {data.snapshotMissing && (
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
-            이 런에는 기대 목록(expectation snapshot)이 없어 누락을 계산할 수 없습니다 —
+            기대 목록(expectation snapshot) 또는 기준 거래일이 없어 누락을 계산할 수 없습니다 —
             영향 없음이 아니라 <b>모름</b>입니다.
           </p>
         )}

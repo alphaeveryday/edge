@@ -67,11 +67,10 @@ public class SourceService {
 			}
 			return HoldingsImpactResponse.empty();
 		}
-		// 적재 미귀결(FULFILLED 아님)이면 결손 확정도 복구 권고도 하지 않는다 — 정상 진행 중을
-		// 수동 개입 대상으로 오귀인하는 경로다(리뷰 1라운드).
-		boolean loadDone = "FULFILLED".equals(impact.loadOutcome());
+		// 이 기준일 대상 적재가 아직 도는 중이면 결손 확정도 복구 권고도 하지 않는다 — 정상
+		// 진행 중을 수동 개입 대상으로 오귀인하는 경로다(리뷰 1·2라운드, 기준일 축).
 		String action = null;
-		if (loadDone && !impact.missing().isEmpty()) {
+		if (!impact.loadPending() && !impact.missing().isEmpty()) {
 			boolean anyWithoutInstrument = impact.missing().stream()
 					.anyMatch(m -> m.instrumentId() == null);
 			action = anyWithoutInstrument

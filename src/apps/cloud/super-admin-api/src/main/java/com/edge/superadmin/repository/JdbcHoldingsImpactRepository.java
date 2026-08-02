@@ -39,8 +39,10 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			 LIMIT 1
 			""";
 
+	/** 레인 조건 필수 — 뉴스 런 키를 받으면 "holdings 판정이 없는 런"이 계산 불가로 위장된다. */
 	private static final String RUN_BY_KEY_SQL = """
-			SELECT pipeline_run_id, run_key FROM ops_pipeline_run WHERE run_key = ?
+			SELECT pipeline_run_id, run_key FROM ops_pipeline_run
+			 WHERE run_key = ? AND pipeline_type = 'etf-daily'
 			""";
 
 	private static final String TASK_SQL = """
@@ -50,12 +52,20 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			""".formatted(HOLDINGS_TASK);
 
 	/**
-	 * 적재 스텝의 귀결 — 적재가 아직 안 끝난 런에서 결손을 확정하면 정상 진행 중이 전부
-	 * "누락 + 수동 복구 권고"로 오귀인된다(리뷰 1라운드). FULFILLED 전엔 판정을 유보한다.
+	 * 이 <b>기준일</b>을 대상으로 한 적재 중 미귀결이 있는가 — loaded/missing 이 기준일 현재
+	 * 상태이므로 진행 판정도 같은 축이어야 한다. 선택한 런의 outcome 만 보면 다른 런이 지금
+	 * 메우는 중인 결손에 복구를 권고하거나(진행 중 오귀인 재발), 이미 메워진 기준일이 옛 런의
+	 * 실패 때문에 영구 유보로 남는다(리뷰 2라운드).
 	 */
-	private static final String LOAD_TASK_SQL = """
-			SELECT task_outcome FROM ops_expected_task
-			 WHERE pipeline_run_id = ? AND task_key = 'LOAD_ETF_HOLDINGS'
+	private static final String LOAD_PENDING_SQL = """
+			SELECT EXISTS (
+			    SELECT 1
+			      FROM ops_expected_task l
+			      JOIN ops_expected_task h ON h.pipeline_run_id = l.pipeline_run_id
+			             AND h.task_key = 'ETF_HOLDINGS_COLLECTION_KRX'
+			     WHERE l.task_key = 'LOAD_ETF_HOLDINGS'
+			       AND (l.task_outcome IS NULL OR l.task_outcome = 'PENDING')
+			       AND h.expected_as_of_date = ?)
 			""";
 
 	private static final String SNAPSHOT_IDS_SQL = """
@@ -116,9 +126,6 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 		List<TaskRow> tasks = jdbc.query(TASK_SQL, JdbcHoldingsImpactRepository::mapTask,
 				run.pipelineRunId());
 		TaskRow task = tasks.isEmpty() ? null : tasks.get(0);
-		List<String> loadOutcomes = jdbc.queryForList(LOAD_TASK_SQL, String.class,
-				run.pipelineRunId());
-		String loadOutcome = loadOutcomes.isEmpty() ? null : loadOutcomes.get(0);
 
 		List<String> expected = (task == null || task.snapshotId() == null)
 				? List.of()
@@ -127,23 +134,27 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 		// 기대 목록이 없거나 기준일이 없으면 결손을 계산할 수 없다 — 기준일 없는 채 진행하면
 		// 적재·분석 조인이 조용히 공집합이 돼 "전부 누락·분석 없음"으로 오독된다(리뷰 1라운드).
 		boolean undetermined = expected.isEmpty() || asOf == null;
+		if (undetermined) {
+			// 계산 불가 경로의 loadedCount 는 0 이 아니라 null — "0종 적재"와 "모름"을 섞지 않는다.
+			return new Impact(run.runKey(), asOf, null, null, true, false, List.of());
+		}
 
-		Set<String> loaded = undetermined
-				? Set.of()
-				: new LinkedHashSet<>(jdbc.queryForList(LOADED_SQL, String.class, asOf));
+		boolean loadPending = Boolean.TRUE.equals(
+				jdbc.queryForObject(LOAD_PENDING_SQL, Boolean.class, asOf));
+		Set<String> loaded = new LinkedHashSet<>(
+				jdbc.queryForList(LOADED_SQL, String.class, asOf));
 
 		List<MissingEtf> missing = new ArrayList<>();
-		if (!undetermined) {
-			for (String ourEtfId : expected) {
-				if (loaded.contains(ourEtfId)) {
-					continue;
-				}
-				missing.add(missingDetail(ourEtfId, asOf));
+		int loadedExpected = 0;   // 기대 ∩ 적재 — 전체 적재 수를 내면 분모(기대)를 넘을 수 있다
+		for (String ourEtfId : expected) {
+			if (loaded.contains(ourEtfId)) {
+				loadedExpected++;
+				continue;
 			}
+			missing.add(missingDetail(ourEtfId, asOf));
 		}
-		return new Impact(run.runKey(), asOf,
-				undetermined ? null : expected.size(), loaded.size(), undetermined,
-				loadOutcome, List.copyOf(missing));
+		return new Impact(run.runKey(), asOf, expected.size(), loadedExpected, false,
+				loadPending, List.copyOf(missing));
 	}
 
 	private MissingEtf missingDetail(String ourEtfId, LocalDate asOf) {
