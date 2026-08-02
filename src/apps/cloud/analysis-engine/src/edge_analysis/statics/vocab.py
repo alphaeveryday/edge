@@ -120,8 +120,10 @@ class HypothesisTuple:
     trigger: Trigger
     channel: str
     exposure: ExposureSource
-    from_role: str
-    to_role: str
+    # from_role·to_role 은 제거했다 (18R): 닫힌 어휘를 자칭하면서 검증 없는 자유
+    # 텍스트 슬롯 2개를 열어뒀고, 라이브 트레이스에서 에이전트가 계열족 이름을
+    # ("운영"→"운영") 채워 넣는 게 잡혔다. 어디서도 쓰이지 않았다. 관계 노출이
+    # 몫 배정 가능해지면(창 정렬, 백필 #5) 온톨로지 역할 어휘로 닫아서 되살린다.
     outcome: str            # 수익률 | 전이
     sign: int               # +1 | -1
     reduction_note: str = ""  # 환원 근거 (토큰→타입). 자유 텍스트가 아니라 감사 메모.
@@ -131,8 +133,7 @@ class HypothesisTuple:
         _need(self.outcome, OUTCOME_KINDS, "결과종류")
         if self.sign not in (+1, -1):
             raise VocabError(f"부호는 ±1 이다: {self.sign}")
-        if not self.from_role.strip() or not self.to_role.strip():
-            raise VocabError("역할 슬롯이 비었다")
+
 
 
 @dataclass(frozen=True, slots=True)

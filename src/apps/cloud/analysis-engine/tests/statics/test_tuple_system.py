@@ -22,7 +22,6 @@ def _h(channel="Q수량", ident="COMPANY.PRODUCT.LAUNCH", **kw):
             "trigger": {"kind": "점", "ident": ident},
             "channel": channel,
             "exposure": {"kind": "속성", "ident": "가격잔차", "transform": "누적"},
-            "from_role": "ISSUER", "to_role": "ISSUER",
             "outcome": "수익률", "sign": 1, "reduction_note": "n"}
     base.update(kw)
     return base
@@ -66,8 +65,7 @@ def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PROD
     return HypothesisTuple(
         vulnerabilities=(Vulnerability(vuln_family, vuln_tr, ">=", pct),),
         trigger=Trigger(*trigger), channel="Q수량",
-        exposure=ExposureSource("속성", "가격잔차", transform="누적"),
-        from_role="ISSUER", to_role="ISSUER", outcome="수익률", sign=sign)
+        exposure=ExposureSource("속성", "가격잔차", transform="누적"),  outcome="수익률", sign=sign)
 
 
 class _Lake:
@@ -94,7 +92,7 @@ class _Lake:
             return self.today_z                     # 오늘 계열 혁신 z (발화 판정)
         if "trade_date = DATE" in q and "instrument_id = '" in q:
             return self.today_row                    # 오늘 셀 피처
-        if "se.event_date = DATE" in q:
+        if "e.trade_date = DATE" in q:
             return self.today_panel                  # 환원 검사 (오늘 횡단면)
         if "abs(z_" in q:
             return self.panel                        # 계열 방아쇠
@@ -137,8 +135,7 @@ def test_determinism_and_thin_panel():
 
 def test_unmeasurable_declared_not_silent():
     t = HypothesisTuple(vulnerabilities=(), trigger=Trigger("점", "X"), channel="R금리신용",
-                        exposure=ExposureSource("속성", "신용", transform="수준"),
-                        from_role="a", to_role="b", outcome="수익률", sign=-1)
+                        exposure=ExposureSource("속성", "신용", transform="수준"),  outcome="수익률", sign=-1)
     r = edge_test(_Lake(), t, "2026-06-01")
     assert r.verdict == "판정불가" and "못 잰다" in r.reason
     t2 = _tuple(trigger=("계열", "수급"))
@@ -174,14 +171,12 @@ def test_relation_transmission_edge_tests_but_never_assigns():
 
     t = HypothesisTuple(
         vulnerabilities=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
-        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),
-        from_role="SUPPLIER", to_role="ISSUER", outcome="수익률", sign=1)
+        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),  outcome="수익률", sign=1)
     r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
     assert r.assignable is False and not r.applies_today       # 엣지만, 몫 배정 금지
     t2 = HypothesisTuple(vulnerabilities=(), trigger=Trigger("점", "X"), channel="C원가",
-                         exposure=ExposureSource("관계", "SUPPLIES_TO", hops=1),
-                         from_role="a", to_role="b", outcome="수익률", sign=1)
+                         exposure=ExposureSource("관계", "SUPPLIES_TO", hops=1),  outcome="수익률", sign=1)
     assert "못 잰다" in edge_test(RelLake(), t2, "2026-06-01").reason
 
 
@@ -280,14 +275,14 @@ def test_propose_rejects_unfired_series_trigger():
              "trigger": {"kind": "계열", "ident": "수급"},          # 미발화 - 날조
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": 1,
+             "outcome": "수익률", "sign": 1,
              "reduction_note": "x"},
             {"vulnerabilities": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "계열", "ident": "가격잔차"},      # 발화 - 유효
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": -1,
+             "outcome": "수익률", "sign": -1,
              "reduction_note": "y"}]}
     valid, rejected = propose(ask, facts="f", event_types=[],
                               measurable=[("가격잔차", "누적")],
@@ -321,14 +316,14 @@ def test_agent_decisions_are_traced_with_raw_submissions():
             {"vulnerabilities": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": 1,
+             "outcome": "수익률", "sign": 1,
              "reduction_note": "x"},
             {"vulnerabilities": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "점", "ident": "REAL.TYPE"},
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "from_role": "a", "to_role": "b", "outcome": "수익률", "sign": -1,
+             "outcome": "수익률", "sign": -1,
              "reduction_note": "y"}]}
     with collect_trace() as tr:
         valid, rejected = propose(ask, facts="f", event_types=["REAL.TYPE"],
@@ -341,3 +336,56 @@ def test_agent_decisions_are_traced_with_raw_submissions():
     assert kills[0]["raw"]["trigger"]["ident"] == "지어낸타입"   # 원문 보존
     assert "날조" in kills[0]["why"]                             # 사유 전문(무절단)
     assert oks[0]["reduction_note"] == "y"
+
+
+def test_discovery_and_confirmation_samples_do_not_overlap():
+    # 18R: 격자(발견)와 확증 게이트가 같은 역사를 쓰면 유사반복이고, 그 격자를
+    # 에이전트에게 주면 이중 사용이다. 경계는 가용 이력의 절반 - 고정 일수로 잡으면
+    # 이력이 짧을 때 발견 표본이 0이 된다 (라이브 실측).
+    from edge_analysis.statics.paneltest import _split_sql, split_date
+    class HistLake:                       # 이력 2026-04-25 ~ 오늘(06-01)
+        def sql(self, q): return [("2026-04-25",)]
+    lake = HistLake()
+    cut = split_date(lake, "2026-06-01")
+    assert cut == "2026-05-13"                                  # 37일의 절반
+    disc = _split_sql(lake, "2026-06-01", "discovery", "se.event_date")
+    conf = _split_sql(lake, "2026-06-01", "confirm", "se.event_date")
+    assert disc == f"AND se.event_date < DATE '{cut}'"
+    assert conf == f"AND se.event_date >= DATE '{cut}'"         # 서로소
+    assert _split_sql(lake, "2026-06-01", "", "x") == ""        # 오늘 횡단면은 분할 없음
+
+    class NoHist:                          # 이력 범위를 못 재면 분할하지 않는다
+        def sql(self, q): return [(None,)]
+    assert split_date(NoHist(), "2026-06-01") is None
+    assert _split_sql(NoHist(), "2026-06-01", "confirm", "x") == ""
+
+
+def test_thin_confirmation_sample_says_so_instead_of_silently_passing():
+    # 분할 후 확증 표본이 얇으면 판정불가 - 사유가 '기간 확대·백필' 좌표를 가리킨다.
+    from edge_analysis.statics.paneltest import MIN_N
+    class ThinLake:
+        def sql(self, q):
+            if "SELECT z_ar" in q:
+                return [(0.1, 0.1)]
+            return [(f"i{k}", "2026-05-01", 0.01, 1.0, 1.0) for k in range(MIN_N - 1)]
+    r = edge_test(ThinLake(), _tuple(vuln_family="거래량", vuln_tr="수준"), "2026-06-01")
+    assert r.verdict == "판정불가" and "확증 표본" in r.reason and "백필" in r.reason
+
+
+def test_panels_never_touch_base_tables_directly():
+    # 18R (사용자 지시): dyntool 도 STORM 과 같은 시맨틱 레이어를 쓴다. 시점 클램프는
+    # 뷰 정의 안에 있어야 질의가 우회할 수 없다 - adapters/sql_surface._guard 가
+    # 자유 SQL 에 강제하는 규율("기반 테이블 직접 접근 금지")을 패널 SQL 에도 건다.
+    import pathlib
+    import edge_analysis.statics.paneltest as pt
+    src = pathlib.Path(pt.__file__).read_text(encoding="utf-8")
+    for base in ("rdb.public.source_event", "rdb.public.price_daily",
+                 "rdb.public.event_argument", "rdb.public.instrument_classification"):
+        assert base not in src, f"{base} 직접 접근 - 클램프 우회 (v_event·v_daily 를 써라)"
+    # 표면이 실제로 공유 정의에서 온다 (두 벌이면 한쪽만 낡는다)
+    from edge_analysis.adapters.sql_surface import views_sql
+    body = pt._base("2026-06-01")
+    assert "v_event" in body and "v_daily" in body and "ar_ind" in body
+    shared = views_sql("TIMESTAMP '2026-06-01 00:00:00'", "DATE '2026-06-01'",
+                       "rdb.public.")
+    assert shared in body

@@ -113,66 +113,66 @@
     </mxGraphModel>
   </diagram>
   <diagram name="2 귀속 파이프라인" id="pipe-page">
-    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="950" math="0" shadow="0">
+    <mxGraphModel dx="1264" dy="872" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="950" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="pt" value="셀 하나가 지나가는 길 — 크기는 산술, 인과는 게이트, 조건은 계수, 설명은 반사실 (§1, §9–§14)" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
-          <mxGeometry x="40" y="10" width="1000" height="30" as="geometry" />
+        <mxCell id="pt" parent="1" style="text;html=1;fontSize=16;fontStyle=1;align=left;" value="셀 하나가 지나가는 길 — 크기는 산술, 인과는 게이트, 조건은 계수, 설명은 반사실 (§1, §9–§14)" vertex="1">
+          <mxGeometry height="30" width="1000" x="40" y="10" as="geometry" />
         </mxCell>
-        <mxCell id="l0" value="L0 게이트&#xa;price_movement_trigger&#xa;시장 대비 유의? 아니면 셀 없음" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="40" y="70" width="220" height="70" as="geometry" />
+        <mxCell id="l0" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="L0 게이트&#xa;price_movement_trigger&#xa;시장 대비 유의? 아니면 셀 없음" vertex="1">
+          <mxGeometry height="70" width="220" x="100" y="60" as="geometry" />
         </mxCell>
-        <mxCell id="l1" value="L1 정적 제거&#xa;시장 β 만 차감&#xa;부호 갈리는 것(금리·환율·유가)은 채널로" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="320" y="70" width="250" height="70" as="geometry" />
+        <mxCell id="l1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="L1 정적 제거&#xa;시장 β 만 차감&#xa;부호 갈리는 것(금리·환율·유가)은 채널로" vertex="1">
+          <mxGeometry height="70" width="250" x="440" y="60" as="geometry" />
         </mxCell>
-        <mxCell id="l2" value="L2 시간 분해 트리 — 크기 확정&#xa;하루를 τ+전역 w 로 결정론 분할 · 합=1 항등식&#xa;갭은 공변량(전일 미국장·환율)으로 좁힘&#xa;미설명 = 1급 노드 · 추정 없음" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="630" y="55" width="330" height="100" as="geometry" />
+        <mxCell id="l2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" value="L2 시간 분해 트리 — 크기 확정&#xa;하루를 τ+전역 w 로 결정론 분할 · 합=1 항등식&#xa;갭은 공변량(전일 미국장·환율)으로 좁힘&#xa;미설명 = 1급 노드 · 추정 없음" vertex="1">
+          <mxGeometry height="100" width="330" x="840" y="100" as="geometry" />
         </mxCell>
-        <mxCell id="l3" value="L3 가설 에이전트 (=환원)&#xa;창별 튜플 ≥2 (경쟁 강제)&#xa;(취약성*, 방아쇠, 채널, 노출원, 역할, 결과, 부호)&#xa;금지: id 생성·수치·자유텍스트·새 어휘" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="40" y="230" width="330" height="100" as="geometry" />
+        <mxCell id="l3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="L3 가설 에이전트 (=환원)&#xa;창별 튜플 ≥2 (경쟁 강제)&#xa;(취약성*, 방아쇠, 채널, 노출원, 역할, 결과, 부호)&#xa;금지: id 생성·수치·자유텍스트·새 어휘" vertex="1">
+          <mxGeometry height="100" width="330" x="40" y="230" as="geometry" />
         </mxCell>
-        <mxCell id="l4" value="L4 검정 에이전트 — 엣지 게이트&#xa;튜플 → 결정론 패널 (산업층 이중차감 ar · 날짜 층화 순열)&#xa;양측 p₂ · 셀 Bonferroni α=0.05/m (17R 학술 수리)&#xa;3값: 성립 · 불성립 · 판정불가(N 부족은 모른다)&#xa;+ 환원 검사 · 귀속 게이트 A–E (실패 → 구간/배제/거절)&#xa;금지: 표본에 관한 모든 선택" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="430" y="215" width="400" height="130" as="geometry" />
+        <mxCell id="l4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="L4 검정 에이전트 — 엣지 게이트&#xa;튜플 → 결정론 패널 (산업층 이중차감 ar · 날짜 층화 순열)&#xa;양측 p₂ · 셀 Bonferroni α=0.05/m (17R 학술 수리)&#xa;3값: 성립 · 불성립 · 판정불가(N 부족은 모른다)&#xa;+ 환원 검사 · 귀속 게이트 A–E (실패 → 구간/배제/거절)&#xa;금지: 표본에 관한 모든 선택" vertex="1">
+          <mxGeometry height="130" width="400" x="430" y="215" as="geometry" />
         </mxCell>
-        <mxCell id="l5" value="L5 구조방정식 (폴드 B)&#xa;창별 회귀 + 합 제약: u_ik = Στ_c(v_i)·x_i^c·D + α_k + ε&#xa;크기는 일 단위: 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합] (8R 정정 — 창 클립은 범주 오류)&#xa;명명 주의: 채널 상쇄 가능 → Manski 식별이 아니라 보수적 보고 규약&#xa;거절 셀(게이트 D)은 크기 인용 전면 보류" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
-          <mxGeometry x="890" y="215" width="380" height="130" as="geometry" />
+        <mxCell id="l5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="L5 구조방정식 (폴드 B)&#xa;창별 회귀 + 합 제약: u_ik = Στ_c(v_i)·x_i^c·D + α_k + ε&#xa;크기는 일 단위: 식별집합 = CI(τ̂·Δx) ∩ (0, 하루 총합] (8R 정정 — 창 클립은 범주 오류)&#xa;명명 주의: 채널 상쇄 가능 → Manski 식별이 아니라 보수적 보고 규약&#xa;거절 셀(게이트 D)은 크기 인용 전면 보류" vertex="1">
+          <mxGeometry height="130" width="380" x="890" y="215" as="geometry" />
         </mxCell>
-        <mxCell id="rend" value="렌더 — 한 표&#xa;창 | 시각 | 몫(항등식) | 처치 | 추정기여 | 구간 | 미설명 · 합계 검산&#xa;순위 = 구조방정식 산물 + 부트스트랩 구간(겹치면 동순위)&#xa;조건 문장 = 반사실 쌍 + positivity(반대 사례 없으면 침묵)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
-          <mxGeometry x="430" y="420" width="500" height="100" as="geometry" />
+        <mxCell id="rend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="렌더 — 한 표&#xa;창 | 시각 | 몫(항등식) | 처치 | 추정기여 | 구간 | 미설명 · 합계 검산&#xa;순위 = 구조방정식 산물 + 부트스트랩 구간(겹치면 동순위)&#xa;조건 문장 = 반사실 쌍 + positivity(반대 사례 없으면 침묵)" vertex="1">
+          <mxGeometry height="100" width="500" x="430" y="420" as="geometry" />
         </mxCell>
-        <mxCell id="p1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l0" target="l1">
+        <mxCell id="p1" edge="1" parent="1" source="l0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="l1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l1" target="l2">
+        <mxCell id="p2" edge="1" parent="1" source="l1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="l2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l2" target="l3">
+        <mxCell id="p3" edge="1" parent="1" source="l2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="l3">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l3" target="l4">
+        <mxCell id="p4" edge="1" parent="1" source="l3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="l4">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l4" target="l5">
+        <mxCell id="p5" edge="1" parent="1" source="l4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="l5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="l5" target="rend">
+        <mxCell id="p6" edge="1" parent="1" source="l5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" target="rend">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="p7" value="탈락 → 미설명" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;" edge="1" parent="1" source="l4" target="rend">
+        <mxCell id="p7" edge="1" parent="1" source="l4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;" target="rend" value="탈락 → 미설명">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="side1" value="전역 상수 (가설별 지정 금지)&#xa;창 길이 w · 요인모형 · 노출 절단 백분위&#xa;최소표본 k · 유의수준 · 폴드 수&#xa;변경 = 전 실험 재실행" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="40" y="420" width="330" height="100" as="geometry" />
+        <mxCell id="side1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacing=8;" value="전역 상수 (가설별 지정 금지)&#xa;창 길이 w · 요인모형 · 노출 절단 백분위&#xa;최소표본 k · 유의수준 · 폴드 수&#xa;변경 = 전 실험 재실행" vertex="1">
+          <mxGeometry height="100" width="330" x="40" y="420" as="geometry" />
         </mxCell>
-        <mxCell id="side2" value="무편향 장치&#xa;available_at ≤ τ 클램프(역인과 오염) · 사건 고정효과(미관측 교란, g 흡수)&#xa;교차적합 A/B(승자의 저주) · 매개 통제 금지(나쁜 통제)&#xa;부트스트랩 순위 구간 · positivity · 상관 부모 묶기" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="40" y="560" width="560" height="100" as="geometry" />
+        <mxCell id="side2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacing=8;" value="무편향 장치&#xa;available_at ≤ τ 클램프(역인과 오염) · 사건 고정효과(미관측 교란, g 흡수)&#xa;교차적합 A/B(승자의 저주) · 매개 통제 금지(나쁜 통제)&#xa;부트스트랩 순위 구간 · positivity · 상관 부모 묶기" vertex="1">
+          <mxGeometry height="100" width="560" x="40" y="560" as="geometry" />
         </mxCell>
-        <mxCell id="side3" value="포기(정직): 오늘 충격 절대크기 g(이분그래프 89% 단절) · 되먹임 동역학 · 파산 직접 검정(온건 충격 대리) · 대형주 점귀속(게이트 D) · 일반 점식별&#xa;새 사건: 환원으로만 — 추상 수준이 표본↔국소성 손잡이 (키미3 0건 → 저가 대체재 340건)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="640" y="560" width="630" height="100" as="geometry" />
+        <mxCell id="side3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacing=8;" value="포기(정직): 오늘 충격 절대크기 g(이분그래프 89% 단절) · 되먹임 동역학 · 파산 직접 검정(온건 충격 대리) · 대형주 점귀속(게이트 D) · 일반 점식별&#xa;새 사건: 환원으로만 — 추상 수준이 표본↔국소성 손잡이 (키미3 0건 → 저가 대체재 340건)" vertex="1">
+          <mxGeometry height="100" width="630" x="640" y="560" as="geometry" />
         </mxCell>
-        <mxCell id="side4" value="에이전트 경계 한 줄: 특징 채우러 탐색은 자유, 표본 찾아 헤매기는 금지 (표본을 고치면 &#39;세는 횟수&#39;가 늘어난다)" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;whiteSpace=wrap;rounded=1;align=left;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="40" y="700" width="1230" height="50" as="geometry" />
+        <mxCell id="side4" parent="1" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;whiteSpace=wrap;rounded=1;align=left;spacing=8;" value="에이전트 경계 한 줄: 특징 채우러 탐색은 자유, 표본 찾아 헤매기는 금지 (표본을 고치면 &#39;세는 횟수&#39;가 늘어난다)" vertex="1">
+          <mxGeometry height="50" width="1230" x="40" y="700" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

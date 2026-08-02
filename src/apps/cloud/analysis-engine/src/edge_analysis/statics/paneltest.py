@@ -24,6 +24,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from functools import lru_cache
 
 import numpy as np
 
@@ -46,50 +48,62 @@ FEATURES = {
 # 계열 방아쇠의 혁신값 (z 를 재는 대상)
 _INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg"}
 
-# 공통 피처 CTE. 창은 전부 [t-20, t-1]·[t-60, t-1] - **당일 제외 = PIT**.
-_BASE = """
-WITH r0 AS (
-    SELECT instrument_id, trade_date, volume,
-           -- turnover_value 는 전량 NULL(실측 0/176k) - volume(82%)이 거래량 축이다.
-           -- log_return 은 최근일 NULL(5,803/176k, 파생 미실행) - close 로 유도한다.
-           -- 신뢰 순서: 파이프라인 log_return(SSOT) > 수정종가 유도 > 종가 유도.
-           coalesce(log_return,
-                    ln(adjusted_close_price / NULLIF(lag(adjusted_close_price) OVER w, 0)),
-                    ln(close_price / NULLIF(lag(close_price) OVER w, 0))) AS log_return
-    FROM rdb.public.price_daily
-    WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
-),
-cls AS (
-    SELECT instrument_id, industry_name FROM (
-        SELECT instrument_id, industry_name,
-               row_number() OVER (PARTITION BY instrument_id ORDER BY as_of_date DESC) rn
-        FROM rdb.public.instrument_classification
-        WHERE as_of_date <= DATE '{day}' AND industry_name IS NOT NULL) WHERE rn = 1
-),
-r1 AS (
-    SELECT r0.instrument_id, r0.trade_date, r0.log_return, r0.volume,
-           r0.log_return - avg(r0.log_return) OVER (PARTITION BY r0.trade_date) AS ar_mkt,
-           cls.industry_name AS ind
-    FROM r0 LEFT JOIN cls ON cls.instrument_id = r0.instrument_id
-    WHERE r0.log_return IS NOT NULL
-),
-r AS (
-    -- 학술 수리 ① (17차): 등가중 시장 차감만으로는 산업 공행이 잔차에 남아
-    -- 사건연구의 횡단면 독립 가정을 깬다. 시장 차감 뒤 산업층을 한 번 더
-    -- 차감한다 (산업 표본 ≥5 일 때만 - 얇은 산업은 시장 잔차 유지).
-    SELECT instrument_id, trade_date, log_return, volume,
-           CASE WHEN ind IS NOT NULL AND count(*) OVER di >= 5
-                THEN ar_mkt - avg(ar_mkt) OVER di ELSE ar_mkt END AS ar
-    FROM r1
-    WINDOW di AS (PARTITION BY trade_date, ind)
-),
+# 시간 분할 (18R): 발견과 확증은 **다른 표본**이어야 한다. 격자가 같은 역사에서
+# 방향을 캐고 그 역사로 확증하면 유사반복이고, 그 격자를 가설 에이전트에게 주면
+# 이중 사용이다. 경계는 **가용 이력의 절반** - 고정 180일로 잡았더니 사건 이력이
+# 3개월(2026-04-25~)뿐이라 발견 표본이 0이 됐다 (18R 라이브가 즉시 드러냄).
+SPLIT_FRAC = 0.5
+
+
+@lru_cache(maxsize=8)
+def _min_event_date(lake, day: str) -> str | None:
+    try:
+        rows = lake.sql(_base(day) +
+                        f"SELECT min(trade_date) FROM v_event WHERE trade_date < DATE '{day}'")
+        return str(date.fromisoformat(str(rows[0][0])))
+    except Exception:
+        return None    # 이력 범위를 못 재면 분할하지 않는다 (부재≠판정)
+
+
+def split_date(lake, day: str) -> str | None:
+    """발견/확증 경계일 = 가용 이력의 SPLIT_FRAC 지점. 이력 없으면 None(분할 불가).
+
+    백필로 이력이 늘면 경계도 움직인다 - 그래서 산출물에 경계일을 적는다(감사).
+    """
+    lo = _min_event_date(lake, day)
+    if lo is None:
+        return None
+    a, b = date.fromisoformat(lo), date.fromisoformat(day)
+    return str(a + (b - a) * SPLIT_FRAC)
+
+
+def _split_sql(lake, day: str, part: str, col: str) -> str:
+    """발견(discovery) / 확증(confirm) 표본의 날짜 절. part='' 이면 분할 없음."""
+    cut = split_date(lake, day) if part else None
+    if cut is None:
+        return ""
+    return f"AND {col} < DATE '{cut}'" if part == "discovery" else f"AND {col} >= DATE '{cut}'"
+
+# 공통 피처 CTE — **STORM 시맨틱 표면 위에 얹는다** (18R, 사용자 지시).
+# 기반 테이블(source_event·price_daily·…) 직접 접근 금지: 시점 클램프가 뷰 정의
+# 안에 있어야 질의가 우회할 수 없다(adapters/sql_surface 의 _guard 가 자유 SQL 에
+# 대해 강제하는 것과 같은 규율을 패널 SQL 에도 적용). 잔차 ar 은 v_daily.ar_ind
+# (시장→산업 이중차감·로그수익률)을 그대로 받는다 - 정의가 두 곳에 있으면 갈린다.
+# 창은 전부 [t-20, t-1]·[t-60, t-1] - **당일 제외 = PIT**.
+def _base(day: str, clock: str = "00:00:00") -> str:
+    """공유 표면 + 파생 피처. clock 은 as_of 시각 - 역사 패널은 자정(오늘 정보 차단),
+    **환원 검사만** 23:59:59 (오늘 횡단면 반응을 보는 게 목적이라 오늘 사건이 보여야
+    한다). 포팅 때 이 인자를 잃어 환원 검사가 오늘 n=0 으로 죽었다 (18R 라이브)."""
+    from ..adapters.sql_surface import views_sql
+    return "WITH " + views_sql(f"TIMESTAMP '{day} {clock}'", f"DATE '{day}'",
+                            "rdb.public.") + """,
 f AS (
-    SELECT instrument_id, trade_date, ar,
-           sum(ar)                 OVER w20 AS cum20,
-           stddev_samp(log_return) OVER w20 AS vol20,
-           avg(volume)             OVER w20 AS tv20,
+    SELECT instrument_id, trade_date, ar_ind AS ar,
+           sum(ar_ind)      OVER w20 AS cum20,
+           stddev_samp(lr)  OVER w20 AS vol20,
+           avg(volume)      OVER w20 AS tv20,
            volume / NULLIF(avg(volume) OVER w20, 0) - 1 AS tv_chg
-    FROM r
+    FROM v_daily WHERE ar_ind IS NOT NULL
     WINDOW w20 AS (PARTITION BY instrument_id ORDER BY trade_date
                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING)
 ),
@@ -103,53 +117,50 @@ g AS (
 )
 """
 
-_POINT_PANEL = _BASE + """
+
+# 패널들은 전부 뷰(v_event·v_daily·v_instrument) 위에서만 돈다. 시점 클램프는
+# 뷰 안에 있으므로 여기서 available_at 을 다시 쓰지 않는다 - 두 번 쓰면 한쪽이
+# 낡는다. 남는 것은 **표본 선택**(어느 사건일·어느 분할)뿐이다.
+_POINT_PANEL = """
 , ev AS (
-    SELECT DISTINCT ea.entity_id AS iid, se.event_date AS d
-    FROM rdb.public.source_event se
-    JOIN rdb.public.event_argument ea ON ea.source_event_id = se.source_event_id
-    JOIN rdb.public.instrument i ON i.instrument_id = ea.entity_id
-    WHERE se.event_type_code = '{etype}' AND se.event_status = 'ACTIVE'
-      AND se.event_date {cmp} DATE '{day}'
-      AND se.available_at <= TIMESTAMP '{day} {clock}'
+    SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
+    FROM v_event e JOIN v_instrument i ON i.instrument_id = e.instrument_id
+    WHERE e.event_type_code = '{etype}'
+      AND e.trade_date {cmp} DATE '{day}' {split}
 )
 SELECT g.instrument_id, g.trade_date, g.ar, {cols}
 FROM ev JOIN g ON g.instrument_id = ev.iid AND g.trade_date = ev.d
 """
 
-_SERIES_PANEL = _BASE + """
+_SERIES_PANEL = """
 SELECT instrument_id, trade_date, ar, {cols}
-FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}'
+FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}' {split}
 """
 
-_TODAY_ROW = _BASE + """
+_TODAY_ROW = """
 SELECT {cols} FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE '{day}'
 """
 
 # 오늘 셀의 계열 혁신 z (발화 판정 + 가설 어포던스의 단일 원천).
-_TODAY_Z = _BASE + """
+_TODAY_Z = """
 SELECT z_ar, z_tv_chg FROM g WHERE instrument_id = '{iid}' AND trade_date = DATE '{day}'
 """
 
 # 전이 패널 (§16 관계 노출): 사건 종목의 동일산업 피어(관계=1) vs 비피어(위약=0).
 # 위약이 '같은 날 시장 전체'인 이유: 날짜 층화 순열이 공통충격을 소거하므로,
-# 남는 대비가 정확히 '관계가 있느냐'다. 산업 분류는 셀 시점 이전 최신(PIT).
-_RELATION_PANEL = _BASE + """
+# 남는 대비가 정확히 '관계가 있느냐'다. 산업은 v_instrument (PIT 클램프된 분류).
+_RELATION_PANEL = """
 , ev AS (
-    SELECT DISTINCT ea.entity_id AS iid, se.event_date AS d
-    FROM rdb.public.source_event se
-    JOIN rdb.public.event_argument ea ON ea.source_event_id = se.source_event_id
-    JOIN rdb.public.instrument i ON i.instrument_id = ea.entity_id
-    WHERE se.event_type_code = '{etype}' AND se.event_status = 'ACTIVE'
-      AND se.event_date < DATE '{day}'
-      AND se.available_at <= TIMESTAMP '{day} 00:00:00'
+    SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
+    FROM v_event e
+    WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}' {split}
 )
 SELECT g.instrument_id, g.trade_date, g.ar, {cols},
        CASE WHEN cp.industry_name = ce.industry_name THEN 1 ELSE 0 END AS rel
 FROM ev
 JOIN g   ON g.trade_date = ev.d AND g.instrument_id <> ev.iid
-JOIN cls cp ON cp.instrument_id = g.instrument_id
-JOIN cls ce ON ce.instrument_id = ev.iid
+JOIN v_instrument cp ON cp.instrument_id = g.instrument_id
+JOIN v_instrument ce ON ce.instrument_id = ev.iid
 """
 
 
@@ -206,7 +217,7 @@ def series_z(lake, instrument_id: str, day: str) -> dict[str, float]:
     계열 방아쇠의 발화 판정(edge_test)과 가설 에이전트의 어포던스(run_cell)가
     이 한 함수를 쓴다 - 발화 기준이 두 곳에서 갈리면 접지가 무너진다.
     """
-    rows = lake.sql(_TODAY_Z.format(iid=instrument_id, day=day))
+    rows = lake.sql((_base(day) + _TODAY_Z).format(iid=instrument_id, day=day))
     if not rows:
         return {}
     # 컬럼 순서는 _TODAY_Z 의 (z_ar, z_tv_chg) - _INNOVATION 의 (가격잔차, 거래량).
@@ -272,14 +283,15 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     trigger_fired: bool | None = None   # 점 방아쇠는 접지(셀 사건 목록)가 발화다
     trigger_note = ""
     if t.trigger.kind == "점":
-        sql = _POINT_PANEL.format(etype=t.trigger.ident, cmp="<", day=day,
-                                  clock="00:00:00", cols=col_sql)
+        sql = (_base(day) + _POINT_PANEL).format(etype=t.trigger.ident, cmp="<", day=day, cols=col_sql,
+                                  split=_split_sql(lake, day, "confirm", "e.trade_date"))
     else:
         innov = _INNOVATION.get(t.trigger.ident)
         if innov is None:
             return _unmeasurable(f"계열 방아쇠 {t.trigger.ident!r} 의 혁신값은 아직 못 잰다 - "
                                  f"재는 것: {sorted(_INNOVATION)}")
-        sql = _SERIES_PANEL.format(innov=innov, z=Z_ANOM, day=day, cols=col_sql)
+        sql = (_base(day) + _SERIES_PANEL).format(innov=innov, z=Z_ANOM, day=day, cols=col_sql,
+                                   split=_split_sql(lake, day, "confirm", "trade_date"))
         # 오늘 방아쇠 발화 판정 - 패널은 역사(|z|≥2 였던 날들)이고, 오늘 적용은
         # 오늘도 방아쇠가 당겨졌을 때만이다. 점 방아쇠의 접지(셀 사건 목록)와
         # 대칭인 계열의 접지가 바로 이것이다. 미계측 = 부적용 (발화를 지어내지 않는다).
@@ -296,7 +308,9 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     raw = [row for row in lake.sql(sql) if all(v is not None for v in row[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
-                          reason=f"패널 n={len(raw)} < {MIN_N}")
+                          reason=f"확증 표본 n={len(raw)} < {MIN_N} "
+                                 f"(발견/확증 분할 경계 {split_date(lake, day)} 이후 - "
+                                 "이력 기간 확대나 백필이 필요하다)")
 
     ar = np.array([float(r[2]) for r in raw])
     dates = np.array([str(r[1]) for r in raw])
@@ -387,7 +401,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     vuln_bits: list[str] = []
     vuln_sat: bool | None = None
     if cell_instrument_id:
-        row = lake.sql(_TODAY_ROW.format(iid=cell_instrument_id, day=day, cols=col_sql))
+        row = lake.sql((_base(day) + _TODAY_ROW).format(iid=cell_instrument_id, day=day, cols=col_sql))
         if row and row[0][0] is not None:
             x_today = float(row[0][0])
             today_pct = float((x <= x_today).mean())
@@ -416,8 +430,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
     if t.trigger.kind == "점":
-        tsql = _POINT_PANEL.format(etype=t.trigger.ident, cmp="=", day=day,
-                                   clock="23:59:59", cols=col_sql)
+        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, split="")
         trows = [r for r in lake.sql(tsql) if all(v is not None for v in r[2:])]
         if len(trows) < MIN_TODAY:
             reduction = f"표본부족 (오늘 n={len(trows)})"
@@ -458,7 +471,8 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     vcols = [(f"{v.family}/{v.transform}", FEATURES[(v.family, v.transform)])
              for v in t.vulnerabilities if (v.family, v.transform) in FEATURES]
     col_sql = ", ".join(f"g.{c}" for _, c in vcols) or "1 AS _one"
-    sql = _RELATION_PANEL.format(etype=t.trigger.ident, day=day, cols=col_sql)
+    sql = (_base(day) + _RELATION_PANEL).format(etype=t.trigger.ident, day=day, cols=col_sql,
+                                 split=_split_sql(lake, day, "confirm", "e.trade_date"))
     raw = [r for r in lake.sql(sql) if all(v is not None for v in r[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
@@ -503,16 +517,19 @@ def grid_screen(lake, day: str, types: list[str],
     가설 커버리지의 세션 분산(라이브 2차는 EXECUTIVE_CHANGE 성립을 찾았는데
     3차는 그 튜플을 안 골랐다)을 메우는 이중화다. 닫힌 어휘라서 격자가 유한하고,
     유한해서 전수가 가능하다. **탐색이지 확증이 아니다**: 방향을 사후에 고르므로
-    p 는 양측(x2)이고, 결과는 '스크린 발견'으로만 표기한다 - 확증은 취약성·환원
-    검사를 거치는 튜플 게이트의 몫이다.
+    p 는 양측(x2)이고, 결과는 '스크린 발견'으로만 표기한다 - 확증은 튜플 게이트의 몫.
+
+    표본은 **발견 표본**(split_date 이전)만 쓴다 (18R): 확증 게이트는 경계 이후를
+    쓰므로 두 표본이 겹치지 않는다. 그래서 이 스크린 결과를
+    가설 에이전트에게 어포던스로 줘도 이중 사용이 아니다.
     """
     feat_names = list(dict.fromkeys(FEATURES.values()))
     all_cols = ", ".join(f"g.{c}" for c in feat_names)
     out: list[dict] = []
     label_of = {c: k for k, c in FEATURES.items()}
     for etype in types:
-        sql = _POINT_PANEL.format(etype=etype, cmp="<", day=day,
-                                  clock="00:00:00", cols=all_cols)
+        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day, cols=all_cols,
+                                  split=_split_sql(lake, day, "discovery", "e.trade_date"))
         raw = [r for r in lake.sql(sql) if r[2] is not None]
         if len(raw) < MIN_N:
             out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})

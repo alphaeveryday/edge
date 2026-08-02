@@ -44,12 +44,15 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
   "trigger": {{"kind": "점|계열", "ident": "..."}},
   "channel": "...",
   "exposure": {{"kind": "속성", "ident": 계열족, "transform": 변환}},
-  "from_role": "...", "to_role": "...", "outcome": "수익률", "sign": 1,
+  "outcome": "수익률", "sign": 1,
   "reduction_note": "이 셀의 무엇을 이 타입으로 읽었는가 한 줄"
 }}, ...]}}
 
 규칙:
-- 가설 정확히 {n}개, **서로 다른 채널**로 (같은 채널 = 같은 가설의 변주다)
+- 가설 **최대 {n}개**, 서로 다른 채널로. 근거 없는 채널을 채우느니 2개가 낫다 -
+  제출 수 m 이 늘면 확증 임계가 α/m 으로 좁아져 **좋은 가설까지 같이 죽는다**
+- 부호는 오늘 수익률 부호에 맞추지 마라. 메커니즘이 정하는 것이고, 검정은 양측이라
+  부호를 맞춰도 이득이 없다 (틀린 부호는 환원 검사만 오염시킨다)
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
 - 취약성은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
@@ -63,7 +66,6 @@ def _parse(h: dict) -> HypothesisTuple:
         trigger=Trigger(**(h.get("trigger") or {})),
         channel=str(h.get("channel", "")),
         exposure=ExposureSource(**(h.get("exposure") or {})),
-        from_role=str(h.get("from_role", "")), to_role=str(h.get("to_role", "")),
         outcome=str(h.get("outcome", "")), sign=int(h.get("sign", 0)),
         reduction_note=str(h.get("reduction_note", ""))[:200])
 

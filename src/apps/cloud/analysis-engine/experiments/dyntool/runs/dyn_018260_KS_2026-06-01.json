@@ -1,0 +1,60 @@
+{
+ "cell": {
+  "etf": "018260.KS",
+  "date": "2026-06-01",
+  "route": "idiosyncratic",
+  "entity": "ORG_KR_018260",
+  "members": [
+   "ORG_KR_018260"
+  ],
+  "w0": "2026-05-24",
+  "w1": "2026-06-01",
+  "as_of": "2026-06-01T15:30:00",
+  "note": "이 종목의 특이수익률이 +8.98% 다 - 시장·업종으로 설명되지 않는 부분이다. 장중 발현 형태는 OPEN_BURST 이다. **왜 움직였나.** 설명 대상은 이 종목 하나이고, ETF 판독기 층은 없다."
+ },
+ "nodes": {},
+ "shocks": [],
+ "structures": [],
+ "discriminator": "No events to ground; no causal structures proposed.",
+ "trace": [
+  {
+   "call": "issues('018260.KS','2026-06-01')",
+   "out": "오류: TypeError: issues() missing 1 required positional argument: 'w1'\n부를 수 있는 것: facts, issues"
+  },
+  {
+   "call": "issues('018260.KS','2026-06-01','1d')",
+   "out": "범주 이슈 · 구성원 9종 · 2026-06-01~1d\n\n  [1] 범주 밖 원인 - 산업·정책·거시 사건 0건\n    없음\n\n  [2] 범주 안 파급 - 구성원 2종 이상을 동시에 건드린 사건 0건\n    없음\n\n  범주 전체가 움직였는데 [1][2] 가 비어 있으면 사건 저장소 밖의 원인이다 - 수급·해외지수·환율 등. 그건 데이터 요청 큐로 보내라.\n\n→ EVIDENCE\n[EVIDENCE] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  events(entity, w0, w1, as_of, type_like=, role=)  창내 사건 (PIT)\n  args(event_id)  그 사건의 역할인자 전량 - 누가 무슨 역할로\n  ground(ref, quote)  **접지** - 실재하나 + 인용이 진짜인가\n  next()  다음 단계로. 조건: 사건을 하나 접지하거나, **없다는 것을 확인**해야 넘어간다 (ground 성공 1회 또는 events 조회 2회가 모두 '사건 없음')"
+  },
+  {
+   "call": "events('018260.KS','2026-06-01','2026-06-01','2026-06-01')",
+   "out": "018260.KS · 2026-06-01~2026-06-01: 사건 없음"
+  },
+  {
+   "call": "events('018260.KS','2026-05-30','2026-06-02','2026-06-01')",
+   "out": "018260.KS · 2026-05-30~2026-06-02: 사건 없음\n\n→ VOCAB\n[VOCAB] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  families()  사건 가족 7개만\n  family(name)  그 가족 안의 타입 목록\n  types(q)  타입 하나의 상세 (역할·술어·생애주기)\n  prior(type_id)  이 타입이 애초에 가격을 움직이나 (실측)\n  kinds()  실체 종별 8종\n  next()  다음 단계로. 조건: 접지한 사건의 타입을 최소 하나 조회해야 넘어갈 수 있다"
+  },
+  {
+   "call": "next()",
+   "out": "→ STRUCTURE\n[STRUCTURE] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  paths(entity)  엮인 엔티티 - 역할·산업\n  peers(entity, how)  how='industry'|'role' 리스트\n  linked(a, b)  둘이 어떻게 엮이나. 안 엮이면 안 엮인다고 한다\n  observables(entity) / observables(want='...')  뭘 잴 수 있나\n  basket(industry=|sector=)  범주 구성원\n  ground(ref, quote)  접지\n  next()  다음 단계로. 조건: 경쟁 구조를 세울 재료를 봤으면 넘어간다 (도구 2회 이상)"
+  }
+ ],
+ "fsm": {
+  "state": "STRUCTURE",
+  "grounded": 0,
+  "typed": 0,
+  "calls": 5,
+  "per_state": {
+   "SCOPE": 2,
+   "EVIDENCE": 2,
+   "VOCAB": 1
+  },
+  "distinct_tools": 3
+ },
+ "violations": [
+  "경쟁 구조가 2개 미만 - 판가름이 불가능하다",
+  "충격 노드 없음"
+ ],
+ "turns": 6,
+ "chars_sent": 10390,
+ "secs": 132.6
+}

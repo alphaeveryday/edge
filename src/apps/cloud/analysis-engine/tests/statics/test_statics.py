@@ -23,8 +23,7 @@ def _tuple(**kw):
         vulnerabilities=(Vulnerability("수급", "누적", ">=", 0.9),),
         trigger=Trigger("점", "COMPANY.EARNINGS.RESULT"),
         channel="Q수량",
-        exposure=ExposureSource("속성", "재무파생"),
-        from_role="ISSUER", to_role="ISSUER", outcome="수익률", sign=-1)
+        exposure=ExposureSource("속성", "재무파생"),  outcome="수익률", sign=-1)
     base.update(kw)
     return HypothesisTuple(**base)
 

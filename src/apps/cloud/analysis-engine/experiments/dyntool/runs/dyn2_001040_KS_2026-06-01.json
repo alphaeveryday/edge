@@ -1,0 +1,191 @@
+{
+ "cell": {
+  "etf": "001040.KS",
+  "date": "2026-06-01",
+  "route": "idiosyncratic",
+  "entity": "ORG_KR_001040",
+  "members": [
+   "ORG_KR_001040"
+  ],
+  "w0": "2026-05-24",
+  "w1": "2026-06-01",
+  "as_of": "2026-06-01T15:30:00",
+  "note": "이 종목의 특이수익률이 +6.94% 다 - 시장·업종으로 설명되지 않는 부분이다. 장중 발현 형태는 INTRADAY 이다. **왜 움직였나.** 설명 대상은 이 종목 하나이고, ETF 판독기 층은 없다."
+ },
+ "nodes": {
+  "Asset_Return": {
+   "observed": true,
+   "why": "daily return of 001040.KS on 2026-06-01"
+  },
+  "Volume": {
+   "observed": true,
+   "why": "daily trading volume of 001040.KS on 2026-06-01"
+  },
+  "Market_Return": {
+   "observed": true,
+   "why": "daily return of a market index (e.g., KOSPI) on 2026-06-01"
+  }
+ },
+ "shocks": [
+  {
+   "id": "Shock_20260601",
+   "target": "Asset_Return",
+   "say": "Unobserved price anomaly on 2026-06-01 for 001040.KS",
+   "tau": "2026-06-01T09:00:00",
+   "member_events": [],
+   "cluster_reason": "Significant price movement and volume spike detected on that date",
+   "test_ask": "If the price movement were mere noise without a single underlying cause, we would not observe a coherent volume anomaly or persistence beyond the initial window."
+  }
+ ],
+ "structures": [
+  {
+   "id": "Firm_Specific",
+   "say": "The shock is a firm‑specific event (e.g., news, contract, product launch) that directly affects the asset’s return and generates high volume; it does not affect the broad market.",
+   "edges": [
+    {
+     "from": "Shock_20260601",
+     "to": "Asset_Return",
+     "say": "Firm‑specific news directly moves the asset price",
+     "warrants": [
+      {
+       "kind": "abductive",
+       "alternatives": [
+        "market-wide shock"
+       ],
+       "why_best": "Low correlation with market return and a large, idiosyncratic volume spike are typical of firm‑specific events."
+      }
+     ],
+     "breaks_if": "Asset_Return is highly correlated with Market_Return on this day (e.g., Pearson r > 0.7).",
+     "needs": null
+    },
+    {
+     "from": "Shock_20260601",
+     "to": "Volume",
+     "say": "Firm‑specific news triggers unusually high trading volume",
+     "warrants": [
+      {
+       "kind": "abductive",
+       "alternatives": [
+        "market-wide shock"
+       ],
+       "why_best": "A volume spike far above the stock’s average (and above the market volume increase, if any) is a classic signature of firm‑specific information."
+      }
+     ],
+     "breaks_if": "Volume is not abnormally high relative to its historical distribution (e.g., within 1 standard deviation of the mean).",
+     "needs": null
+    }
+   ]
+  },
+  {
+   "id": "Market_Wide",
+   "say": "The shock is a market‑wide event (e.g., macroeconomic news, policy change) that moves the whole market; the asset’s return is a function of its market beta, and volume rises in line with the market.",
+   "edges": [
+    {
+     "from": "Shock_20260601",
+     "to": "Market_Return",
+     "say": "Market‑wide event drives the market index",
+     "warrants": [
+      {
+       "kind": "abductive",
+       "alternatives": [
+        "firm-specific shock"
+       ],
+       "why_best": "A large, statistically significant move in the market index on the same day points to a common shock."
+      }
+     ],
+     "breaks_if": "Market_Return does not exhibit a statistically significant movement (e.g., |z‑score| < 2).",
+     "needs": null
+    },
+    {
+     "from": "Market_Return",
+     "to": "Asset_Return",
+     "say": "Asset return is proportional to the market return via its beta",
+     "warrants": [
+      {
+       "kind": "definitional",
+       "identity": "r_asset = β × r_market + α"
+      }
+     ],
+     "breaks_if": "The asset’s return deviates significantly from the predicted return based on its pre‑event beta (e.g., residual > 3 standard deviations).",
+     "needs": null
+    },
+    {
+     "from": "Shock_20260601",
+     "to": "Volume",
+     "say": "Market‑wide events may also raise volume, but typically proportionally less than firm‑specific shocks",
+     "warrants": [
+      {
+       "kind": "abductive",
+       "alternatives": [
+        "firm-specific shock"
+       ],
+       "why_best": "If the asset’s volume spike is similar to the market’s volume spike (both in magnitude and timing), a common macro driver is more plausible."
+      }
+     ],
+     "breaks_if": "The asset’s volume spike is disproportionately large compared to the market volume spike (e.g., asset volume z‑score > market volume z‑score + 2).",
+     "needs": null
+    }
+   ]
+  }
+ ],
+ "discriminator": "Compute the Pearson correlation between 001040.KS’s return and the market return during the event window on 2026-06-01. If the correlation is high (e.g., > 0.7) and the volume spike is comparable to the market’s, Structure Market_Wide is supported. If the correlation is low (< 0.3) and volume is abnormally high relative to history in an idiosyncratic manner, Structure Firm_Specific is supported. Additionally, a market‑model residual test can be used: regress the asset’s return on the market return using pre‑event data; if the event‑day residual is large, it favors Firm_Specific.",
+ "trace": [
+  {
+   "call": "facts('001040.KS', '2026-06-01')",
+   "out": "001040.KS 2026-06-01: 77봉 · 고유종가 62 · 164,800~184,600\n\n→ EVIDENCE\n[EVIDENCE] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  events(entity, w0, w1, as_of, type_like=, role=)  창내 사건 (PIT)\n  args(event_id)  그 사건의 역할인자 전량 - 누가 무슨 역할로\n  ground(ref, quote)  **접지** - 실재하나 + 인용이 진짜인가\n  next()  다음 단계로. 조건: 사건을 하나 접지하거나, **없다는 것을 확인**해야 넘어간다 (ground 성공 1회 또는 events 조회 2회가 모두 '사건 없음')"
+  },
+  {
+   "call": "events('001040.KS', '2026-06-01', '2026-06-01', '2026-06-02')",
+   "out": "001040.KS · 2026-06-01~2026-06-01: 사건 없음"
+  },
+  {
+   "call": "events('001040.KS','2026-06-01','2026-06-01','2026-06-02')",
+   "out": "001040.KS · 2026-06-01~2026-06-01: 사건 없음\n\n→ VOCAB\n[VOCAB] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  families()  사건 가족 7개만\n  family(name)  그 가족 안의 타입 목록\n  types(q)  타입 하나의 상세 (역할·술어·생애주기)\n  prior(type_id)  이 타입이 애초에 가격을 움직이나 (실측)\n  kinds()  실체 종별 8종\n  next()  다음 단계로. 조건: 접지한 사건의 타입을 최소 하나 조회해야 넘어갈 수 있다"
+  },
+  {
+   "call": "families()",
+   "out": "사건 가족 - family(이름) 으로 그 안을 본다\n  COMPANY            24종\n  EXOGENOUS          6종\n  MACRO              6종\n  INDUSTRY           5종\n  POLICY             5종\n  MARKET_STRUCTURE   4종\n  MARKET_INFO        3종"
+  },
+  {
+   "call": "families()",
+   "out": "사건 가족 - family(이름) 으로 그 안을 본다\n  COMPANY            24종\n  EXOGENOUS          6종\n  MACRO              6종\n  INDUSTRY           5종\n  POLICY             5종\n  MARKET_STRUCTURE   4종\n  MARKET_INFO        3종"
+  },
+  {
+   "call": "next()",
+   "out": "아직 못 넘어간다: 타입을 하나도 안 봤다. families()·family()·types() 를 써라."
+  },
+  {
+   "call": "family('COMPANY')",
+   "out": "[COMPANY] 24종\n  COMPANY.ALLIANCE.PARTNERSHIP\n  COMPANY.CAPITAL.DIVIDEND_DECISION\n  COMPANY.CAPITAL.EQUITY_ISSUANCE\n  COMPANY.CAPITAL.IPO\n  COMPANY.CAPITAL.SHARE_BUYBACK\n  COMPANY.CAPITAL.STOCK_SPLIT\n  COMPANY.COMMERCIAL.MARKET_ENTRY\n  COMPANY.COMMERCIAL.PRICING_ACTION\n  COMPANY.CONTRACT.SIGNING\n  COMPANY.EARNINGS.GUIDANCE_CHANGE\n  COMPANY.EARNINGS.RESULT_RELEASE\n  COMPANY.FINANCING.DEBT_ISSUANCE\n  COMPANY.INVESTMENT.STAKE_ACQUISITION\n  COMPANY.LEGAL.LAWSUIT\n  COMPANY.LEGAL.REGULATORY_ACTION\n  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE\n  COMPANY.M_AND_A.ACQUISITION\n  COMPANY.M_AND_A.MERGER\n  COMPANY.OWNERSHIP.INSIDER_TRANSACTION\n  COMPANY.PRODUCT.CERTIFICATION\n  COMPANY.PRODUCT.LAUNCH\n  COMPANY.PRODUCTION.CAPACITY_CHANGE\n  COMPANY.RESTRUCTURING.SPINOFF\n  COMPANY.WORKFORCE.LAYOFF"
+  },
+  {
+   "call": "types('COMPANY.EARNINGS.RESULT_RELEASE')",
+   "out": "COMPANY.EARNINGS.RESULT_RELEASE\n  roles      required=['ISSUER', 'REPORTING_PERIOD'] optional=['METRIC', 'ACTUAL_VALUE', 'CONSENSUS_VALUE']\n  predicates ['REPORT', 'RECORD', 'RELEASE']\n  lifecycle  DATA_RELEASE_NO_LIFECYCLE = {'stages': [], 'terminal': []}\n  quantities ['ACTUAL_VALUE', 'DOC_REVENUE_ACTUAL', 'DOC_OP_ACTUAL']\n  derived    ['yoy_growth', 'implied_op_margin_q', 'margin_delta_yoy', 'rev_profit_divergence']\n  실측반응   COMPANY.EARNINGS.RESULT_RELEASE\n  사건 1916 · 엔티티 258 · 2026-06-01~2026-07-20\n  당일 초과수익 (수익 매칭 1482건)\n    상승 44%\n    |AR|  중위 3.1%  p75 5.4%  p90 6.6%  최대 39.3%\n\n→ STRUCTURE\n[STRUCTURE] 지금 부를 수 있는 것 — 여기 없는 이름은 존재하지 않는다\n  paths(entity)  엮인 엔티티 - 역할·산업\n  peers(entity, how)  how='industry'|'role' 리스트\n  linked(a, b)  둘이 어떻게 엮이나. 안 엮이면 안 엮인다고 한다\n  observables(entity) / observables(want='...')  뭘 잴 수 있나\n  basket(industry=|sector=)  범주 구성원\n  ground(ref, quote)  접지\n  next()  다음 단계로. 조건: 경쟁 구조를 세울 재료를 봤으면 넘어간다 (도구 2회 이상)"
+  },
+  {
+   "call": "observables('001040.KS')",
+   "out": "  return         grain=5min/daily   위약: 같은 시각창 다른 거래일 (5min) · 같은 요일 (daily)\n                  주의: 상한가 잠김 시 분산 0 - 절단. facts() 로 확인\n  close          grain=5min/daily   위약: -\n  volume         grain=5min/daily   위약: 같은 시각창 다른 거래일\n  market_return  grain=5min/daily   위약: -\n                  주의: 5분 지수봉이 없어 KOSPI200 구성종목으로 만든다\n  etf_weight     grain=daily        위약: -\n                  주의: asof 스냅샷 - PIT 아님\n  market_cap     grain=static       위약: -\n  sector         grain=static       위약: -\n  industry       grain=static       위약: -"
+  },
+  {
+   "call": "paths('001040.KS')",
+   "out": "[역할 경로]  전체 사건 중 ORG 2개 이상 = 6.4% (2,196/34,240) — 희소하다. 없다고 관계가 없는 게 아니다.\n  없음 - 이 엔티티는 다른 종목과 한 사건에 등장한 적이 없다\n\n→ EMIT\n도구 없음. 이제 dag 를 내라."
+  }
+ ],
+ "fsm": {
+  "state": "EMIT",
+  "grounded": 0,
+  "typed": 1,
+  "calls": 10,
+  "per_state": {
+   "SCOPE": 1,
+   "EVIDENCE": 2,
+   "VOCAB": 5,
+   "STRUCTURE": 2
+  },
+  "distinct_tools": 8
+ },
+ "violations": [],
+ "turns": 11,
+ "chars_sent": 20603,
+ "secs": 258.1
+}

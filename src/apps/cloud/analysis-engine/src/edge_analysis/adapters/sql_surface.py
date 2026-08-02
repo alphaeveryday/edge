@@ -125,22 +125,30 @@ def _guard(q: str) -> str:
     return s.replace("%", "%%")
 
 
-def _views() -> str:
-    """시점으로 잘린 뷰 정의. **클램프가 여기 있으므로 질의가 우회할 수 없다.**"""
-    return """
+def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
+           prefix: str = "") -> str:
+    """시점으로 잘린 뷰 정의. **클램프가 여기 있으므로 질의가 우회할 수 없다.**
+
+    방언 파라미터 (18R): 인과 패널(`statics/*`)이 DuckDB 세션에서 **같은 표면**을
+    쓰도록 시점 표현식과 테이블 접두사를 인자로 받는다. 표면이 둘로 갈리면 한쪽만
+    클램프가 빠지고, 그게 정확히 이 파일이 막으려던 사고다.
+      postgres  _views()                                    → %(as_of)s · 접두사 없음
+      duckdb    _views("TIMESTAMP '…'", "DATE '…'", "rdb.public.")
+    """
+    return f"""
     _cls AS (
         SELECT DISTINCT ON (ic.instrument_id)
                ic.instrument_id, ic.sector_name, ic.industry_name,
                ic.market_cap, ic.listing_market
-        FROM instrument_classification ic
-        WHERE ic.as_of_date <= %(trade_date)s
+        FROM {prefix}instrument_classification ic
+        WHERE ic.as_of_date <= {trade_date}
         ORDER BY ic.instrument_id, ic.as_of_date DESC
     ),
     v_instrument AS (
         SELECT i.instrument_id, i.ticker, i.instrument_type, e.display_name,
                c.sector_name, c.industry_name, c.market_cap, c.listing_market
-        FROM instrument i
-        LEFT JOIN entity e ON e.entity_id = i.instrument_id
+        FROM {prefix}instrument i
+        LEFT JOIN {prefix}entity e ON e.entity_id = i.instrument_id
         LEFT JOIN _cls c ON c.instrument_id = i.instrument_id
     ),
     _title AS (
@@ -150,7 +158,7 @@ def _views() -> str:
         -- 와 같다(evidence_id 최소) — 두 경로가 같은 제목을 보여야 한다.
         SELECT DISTINCT ON (ev.source_event_id)
                ev.source_event_id, ev.evidence_text AS title
-        FROM event_evidence ev
+        FROM {prefix}event_evidence ev
         WHERE ev.evidence_type = 'TITLE'
         ORDER BY ev.source_event_id, ev.evidence_id
     ),
@@ -160,13 +168,13 @@ def _views() -> str:
                se.event_type_code, se.predicate_code, se.lifecycle_stage,
                se.event_status, t.title,
                etl.thread_id, etl.novelty_status
-        FROM source_event se
-        JOIN event_argument ea ON ea.source_event_id = se.source_event_id
-        LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id
+        FROM {prefix}source_event se
+        JOIN {prefix}event_argument ea ON ea.source_event_id = se.source_event_id
+        LEFT JOIN {prefix}event_thread_link etl ON etl.source_event_id = se.source_event_id
         LEFT JOIN _title t ON t.source_event_id = se.source_event_id
         WHERE se.event_status = 'ACTIVE'
           AND se.event_date IS NOT NULL
-          AND se.available_at <= %(as_of)s
+          AND se.available_at <= {as_of}
     ),
     v_measure AS (
         -- 컬럼 이름은 `event_measure` 실물이다(V202607242020). `measure_code`·
@@ -175,31 +183,47 @@ def _views() -> str:
         -- 이름은 도메인 모델(`Measure`)과 eventstore 조회에 맞춘다.
         SELECT em.source_event_id, em.role_code, em.value, em.unit, em.basis,
                em.value_source, em.surface
-        FROM event_measure em
-        JOIN source_event se ON se.source_event_id = em.source_event_id
-        WHERE se.available_at <= %(as_of)s
+        FROM {prefix}event_measure em
+        JOIN {prefix}source_event se ON se.source_event_id = em.source_event_id
+        WHERE se.available_at <= {as_of}
     ),
     _ret AS (
+        -- lr: 파이프라인 log_return 이 SSOT, 없으면 수정종가→종가 순으로 유도한다
+        -- (최근 5,803행이 NULL 이라 유도 없이는 최근일 패널이 통째로 빈다).
         SELECT instrument_id, trade_date, close_price, volume,
-               close_price / NULLIF(LAG(close_price) OVER (
-                   PARTITION BY instrument_id ORDER BY trade_date), 0) - 1 AS r
-        FROM price_daily
-        WHERE close_price > 0 AND trade_date <= %(trade_date)s
+               close_price / NULLIF(LAG(close_price) OVER w, 0) - 1 AS r,
+               coalesce(log_return,
+                        ln(adjusted_close_price / NULLIF(LAG(adjusted_close_price) OVER w, 0)),
+                        ln(close_price / NULLIF(LAG(close_price) OVER w, 0))) AS lr
+        FROM {prefix}price_daily
+        WHERE close_price > 0 AND trade_date <= {trade_date}
+        WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
     ),
     _xs AS (
-        SELECT trade_date, avg(r) AS mkt
+        SELECT trade_date, avg(r) AS mkt, avg(lr) AS mkt_lr
         FROM _ret WHERE r IS NOT NULL
         GROUP BY trade_date HAVING count(*) >= 50
     ),
+    _mkt AS (
+        SELECT t.instrument_id, t.trade_date, t.close_price, t.volume, t.r, t.lr,
+               x.mkt, t.r - x.mkt AS ar, t.lr - x.mkt_lr AS ar_lr, c.industry_name
+        FROM _ret t
+        LEFT JOIN _xs x ON x.trade_date = t.trade_date
+        LEFT JOIN _cls c ON c.instrument_id = t.instrument_id
+    ),
     v_daily AS (
-        SELECT t.instrument_id, t.trade_date, t.close_price, t.volume,
-               t.r, x.mkt, t.r - x.mkt AS ar
-        FROM _ret t LEFT JOIN _xs x ON x.trade_date = t.trade_date
+        -- ar_ind: 시장 차감 뒤 **산업층 재차감** (산업 표본 ≥5 일 때만). 등가중 시장
+        -- 차감만으로는 산업 공행이 잔차에 남아 사건연구의 횡단면 독립이 깨진다.
+        SELECT m.*,
+               CASE WHEN m.industry_name IS NOT NULL AND count(*) OVER di >= 5
+                    THEN m.ar_lr - avg(m.ar_lr) OVER di ELSE m.ar_lr END AS ar_ind
+        FROM _mkt m
+        WINDOW di AS (PARTITION BY m.trade_date, m.industry_name)
     ),
     v_hold AS (
         SELECT etf_instrument_id, constituent_instrument_id, trade_date, weight_ratio
-        FROM etf_holding_snapshot
-        WHERE trade_date <= %(trade_date)s
+        FROM {prefix}etf_holding_snapshot
+        WHERE trade_date <= {trade_date}
     ),
     v_flow AS (
         SELECT instrument_id, trade_date,
@@ -207,8 +231,8 @@ def _views() -> str:
                net_val_pension, net_val_investment_trust, net_val_financial_invest,
                net_val_private_fund, net_val_insurance, net_val_bank,
                net_qty_individual, net_qty_foreign, net_qty_institution_total
-        FROM investor_flow_daily
-        WHERE trade_date <= %(trade_date)s AND available_at <= %(as_of)s
+        FROM {prefix}investor_flow_daily
+        WHERE trade_date <= {trade_date} AND available_at <= {as_of}
     ),
     v_liquidity AS (
         SELECT instrument_id, trade_date, turnover_value,
@@ -218,8 +242,8 @@ def _views() -> str:
             SELECT p.instrument_id, p.trade_date, p.turnover_value,
                    p.close_price / NULLIF(LAG(p.close_price) OVER (
                        PARTITION BY p.instrument_id ORDER BY p.trade_date), 0) - 1 AS r
-            FROM price_daily p
-            WHERE p.close_price > 0 AND p.trade_date <= %(trade_date)s
+            FROM {prefix}price_daily p
+            WHERE p.close_price > 0 AND p.trade_date <= {trade_date}
         ) _a
     ),
     v_cohort AS (
@@ -316,5 +340,8 @@ def _cell(v: Any) -> str:
     s = str(v)
     return s if len(s) <= 60 else s[:57] + "..."
 
+
+# 공유 표면의 공개 이름 - 인과 패널(statics)이 같은 정의를 쓴다 (18R).
+views_sql = _views
 
 __all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface"]

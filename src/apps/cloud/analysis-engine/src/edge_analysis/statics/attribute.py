@@ -245,6 +245,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 정확히 그 날들에 절대 발화할 수 없었다 - 선언≠배선).
     zs = series_z(lake, instrument_id, day)
     anomalous = sorted(f for f, z in zs.items() if abs(z) >= Z_ANOM)
+    screens: list[dict] = []
     if types or anomalous:
         # 회상이 기록보다 먼저다 (P9 교훈). 과거 셀들의 스크린·게이트 이력은
         # PIT 안전한 사실이고, 가설 에이전트의 어포던스로 들어간다.
@@ -255,15 +256,24 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if anomalous:
             facts += ("\n오늘 계열 이상 (계열 방아쇠는 이 계열족에서만): "
                       + " · ".join(f"{f} z={zs[f]:+.1f}" for f in anomalous))
+        # 격자를 **가설 앞에** 돌려 어포던스로 준다 (18R). 트레이스 실측: 시스템이
+        # 이미 아는 최강 노출축(EXECUTIVE_CHANGE × 가격잔차/누적)을 두고 에이전트가
+        # 눈 감고 약한 축을 골라 다중검정에 죽었다. 발견 표본(분할 이전)에서만
+        # 재므로 확증 표본과 겹치지 않는다 - 어포던스로 줘도 이중 사용이 아니다.
+        screens = grid_screen(lake, day, types) if types else []
+        hits = [s for s in screens if "p2" in s]
+        if hits:
+            facts += ("\n발견 표본 격자 스크린 (탐색 - 확증은 다른 기간에서 한다. "
+                      "노출축 고르는 데 쓰고, 여기 없는 조합도 근거 있으면 내라):\n"
+                      + "\n".join(f"  - {s['type']} × {s['exposure']} "
+                                  f"n={s['n']} p₂={s['p2']:.3f} 방향{s['direction']}"
+                                  for s in hits[:5]))
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES),
                                    series_families=anomalous)
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
                                  m_tests=len(tuples)))
                    for t in tuples]
-        screens = grid_screen(lake, day, types) if types else []
-    else:
-        screens = []
 
     # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
     # 크기는 창 행에 싣지 않는다 - SEM 기여는 **일 단위** 추정량이라(패널이 일간 ar)
