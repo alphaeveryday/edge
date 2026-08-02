@@ -234,7 +234,11 @@ class TestRetryKeyIsolation:
 
 
 class TestFailureClassification:
-    """이 handler 에 terminal 경로는 없다 — 근거가 전부 코드·배포·쓰기 순서다."""
+    """여기 모인 실패는 전부 transient 다 — 근거가 코드·배포·쓰기 순서라 재시도가 푼다.
+
+    ⚠️ 이 handler 의 terminal 은 payload↔원장 불일치 하나뿐이고, 그건
+    `TestJobIdentityLineage` 가 따로 고정한다(재시도가 절대 못 푸는 유일한 경우).
+    """
 
     def test_missing_article_is_transient(self, tmp_path):
         llm = RecordingLlm(LLM_EVENT_RESPONSE)
