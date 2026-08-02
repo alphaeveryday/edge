@@ -29,6 +29,7 @@ from functools import lru_cache
 
 import numpy as np
 
+from ..observability import record
 from .gates import EdgeVerdict, edge_gate
 from .vocab import (ALPHA, EXPOSURE_CUT, MIN_N, RELATIONS, HypothesisTuple,
                     Vulnerability)
@@ -263,13 +264,57 @@ def macro_z(lake, day: str) -> tuple[float, str]:
     """
     try:
         rows = [r for r in lake.sql(_MACRO_Z.format(day=day)) if r[2] is not None]
-    except Exception:                       # noqa: BLE001 - 소스 부재는 미계측
+    except Exception as e:                  # noqa: BLE001 - 부재는 **사유와 함께**
+        record("series.unmeasured", family="거시", why=f"{type(e).__name__}: {e}"[:160])
         return 0.0, ""
     if not rows:
         return 0.0, ""
     # 상위 셋을 같이 낸다. 최댓값 하나로 접으면 정보가 죽는다 - 실측에서
     # `fx/EURUSD z=+2.9` 가 `index/SOXX -5.4%` 를 가렸다. 어느 계열이 움직였는지가
     # 곧 가설의 내용이므로, 발화 판정은 최댓값으로 하되 후보는 보여준다.
+    top = " · ".join(f"{r[0]} z={float(r[2]):+.1f}" for r in rows[:3])
+    return float(rows[0][2]), f"{rows[0][1]} — {top}"
+
+
+# 수급 계열의 혁신 (20R). **전일** 수급을 쓴다 - 투자자별 집계는 장 마감 후
+# 18:00 KST 에 공표되므로 오늘 장중 움직임의 방아쇠로 인용할 수 없다(그건 동시발생이지
+# 원인이 아니다). 어제 수급은 오늘 개장 전에 알려져 있으니 방아쇠 자격이 있다 -
+# 거시(직전 미국 거래일)와 같은 규율이다.
+_FLOW_Z = """
+, flow_src AS (
+    SELECT iv.trade_date, iv.investor_type, iv.net_value
+    FROM s3_investor_value iv
+    JOIN v_instrument i ON i.ticker = iv.ticker
+    WHERE i.instrument_id = '{iid}'
+      AND iv.investor_type IN ('foreign', 'institution_total', 'individual')
+),
+fw AS (
+    SELECT investor_type, trade_date, net_value,
+           avg(net_value)         OVER r AS mu,
+           stddev_samp(net_value) OVER r AS sd
+    FROM flow_src
+    WINDOW r AS (PARTITION BY investor_type ORDER BY trade_date
+                 ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING)
+)
+SELECT investor_type, trade_date, (net_value - mu) / NULLIF(sd, 0) AS z
+FROM fw
+WHERE trade_date = (SELECT max(trade_date) FROM fw WHERE trade_date < DATE '{day}')
+  AND sd IS NOT NULL
+ORDER BY abs((net_value - mu) / NULLIF(sd, 0)) DESC
+"""
+
+
+def flow_z(lake, instrument_id: str, day: str) -> tuple[float, str]:
+    """(수급 z, 누가 움직였나). 거시와 같은 계약 - 최댓값으로 발화, 이름은 같이."""
+    try:
+        rows = [r for r in lake.sql(_base(day) + _FLOW_Z.format(iid=instrument_id, day=day))
+                if r[2] is not None]
+    except Exception as e:                  # noqa: BLE001 - 부재는 **사유와 함께**
+        # 조용히 0 을 돌려주면 터널 사망이 '수급 이상 없음'으로 위장된다.
+        record("series.unmeasured", family="수급", why=f"{type(e).__name__}: {e}"[:160])
+        return 0.0, ""
+    if not rows:
+        return 0.0, ""
     top = " · ".join(f"{r[0]} z={float(r[2]):+.1f}" for r in rows[:3])
     return float(rows[0][2]), f"{rows[0][1]} — {top}"
 
@@ -288,6 +333,8 @@ def series_z(lake, instrument_id: str, day: str) -> dict[str, float]:
                if z is not None}
     if (mz := macro_z(lake, day)[0]):
         out["거시"] = mz
+    if (fz := flow_z(lake, instrument_id, day)[0]):
+        out["수급"] = fz
     return out
 
 

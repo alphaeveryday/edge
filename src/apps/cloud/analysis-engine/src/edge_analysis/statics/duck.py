@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,9 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_rates_daily",      "hive", "canonical/market_data/rates_daily"),
     ("s3_analyst_target",   "hive", "canonical/reports/analyst_target"),
     ("s3_rating_dist",      "hive", "canonical/reports/rating_distribution"),
+    ("s3_investor_value",   "hive", "canonical/market_data/investor_value_daily"),
+    ("s3_program_trading",  "hive", "canonical/market_data/program_trading_daily"),
+    ("s3_intraday_5m",      "hive", "canonical/market_data/intraday_5m"),
     ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
     ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
     ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),
@@ -89,9 +93,9 @@ class CausalLake:
         self.s3: dict[str, str] = {}            # S3 뷰 이름 → 버킷 경로
         self.deferred: dict[str, str] = {}      # 첫 조회 때 걸 뷰 (스니핑이 비싼 것)
         self._probed: str = ""
+        self._s3()
         self._bars(Path(bars_dir) if bars_dir else self._default_bars())
         self._backfill(Path(backfill_dir or os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")))
-        self._s3()
         self._rdb(rdb_dsn or os.environ.get(RDB_DSN_ENV, ""))
 
     @staticmethod
@@ -99,7 +103,23 @@ class CausalLake:
         return Path(os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")) / "bars"
 
     def _bars(self, d: Path) -> None:
-        """kr 5분봉: 종목당 parquet ({ticker}.KS.parquet, 컬럼 symbol·datetime·OHLCV)."""
+        """5분봉 뷰. **S3 canonical 이 있으면 그것을 쓴다** (20R).
+
+        로컬 `bars/` 는 2종목 사본이었다 - 그래서 셀 배치가 불가능했고 라이브 검증이
+        20라운드 내내 종목 하나짜리 일화에 머물렀다. canonical 정규화분은 KR 1,271종목
+        916거래일이다. 로컬은 S3 가 없을 때의 폴백으로만 남긴다.
+
+        심볼 규약은 기존 계약을 지킨다: `symbol` = `005930.KS` (canonical 의
+        `source_symbol`). `trade_date` 를 노출해 하이브 파티션 프루닝이 걸리게 한다 -
+        `CAST(ts AS DATE)` 로 거르면 1.5억 행을 다 읽는다.
+        """
+        if "s3_intraday_5m" in self.s3:
+            self.con.execute(
+                "CREATE OR REPLACE VIEW bars_5m AS SELECT source_symbol AS symbol, "
+                "ts, trade_date, open, high, low, close, volume "
+                "FROM s3_intraday_5m WHERE market = 'KR'")
+            self.exists["bars_5m"] = "S3 canonical (1,271종목)"
+            return
         files = sorted(d.glob("*.parquet")) if d.is_dir() else []
         if not files:
             self.exists["bars_5m"] = 0
@@ -345,9 +365,15 @@ class CausalLake:
         """(ts, close) — tree.decompose 의 입력. 심볼 규약: '005930.KS'."""
         if not self.exists.get("bars_5m"):
             raise RuntimeError("bars_5m 없음 — 백필 먼저 (coverage 참조)")
+        # trade_date 로 거른다 - 하이브 파티션 프루닝이 걸려야 1.5억 행을 안 읽는다.
+        col = "trade_date" if self._has_trade_date() else "CAST(ts AS DATE)"
         return self.sql(
             f"SELECT ts, close FROM bars_5m WHERE symbol='{ticker}' "
-            f"AND CAST(ts AS DATE) = DATE '{day}' ORDER BY ts")
+            f"AND {col} = DATE '{day}' ORDER BY ts")
+
+    @lru_cache(maxsize=1)
+    def _has_trade_date(self) -> bool:
+        return any(r[0] == "trade_date" for r in self.sql("DESCRIBE bars_5m"))
 
     def prev_close(self, ticker: str, day: str) -> float:
         row = self.sql(

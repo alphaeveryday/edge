@@ -537,3 +537,39 @@ def test_macro_series_trigger_names_which_series_moved():
     class Dead:
         def sql(self, q): raise RuntimeError("소스 없음")
     assert macro_z(Dead(), "2026-07-30") == (0.0, "")   # 부재는 0 발화, 조용한 예외 금지
+
+
+def test_flow_series_uses_previous_day_because_aggregate_is_published_after_close():
+    # 20R: 투자자별 집계는 장 마감 후 18:00 KST 공표다. 오늘 수급으로 오늘 장중
+    # 움직임을 설명하면 그건 원인이 아니라 **동시발생**이고, PIT 위반이다.
+    # 어제 수급은 오늘 개장 전에 알려져 있으니 방아쇠 자격이 있다 - 거시(직전 미국
+    # 거래일)와 같은 규율.
+    from edge_analysis.statics.paneltest import flow_z
+
+    seen = {}
+
+    class Lake:
+        def sql(self, q):
+            seen["q"] = q
+            return [("institution_total", "2026-07-29", 2.4),
+                    ("foreign", "2026-07-29", -1.1)]
+
+    z, note = flow_z(Lake(), "i0", "2026-07-30")
+    assert "trade_date < DATE '2026-07-30'" in seen["q"]      # 전일까지만
+    assert "v_instrument" in seen["q"]                         # ticker 조인은 PIT 뷰로
+    assert z == 2.4 and "institution_total" in note and "foreign" in note
+
+
+def test_unmeasured_series_records_why_instead_of_silent_zero():
+    # 내가 방금 만든 코드에서 같은 병이 재발했다: 터널이 죽었는데 except 가 0.0 을
+    # 돌려줘 '수급 이상 없음'으로 위장됐다. 부재는 **사유와 함께** 남긴다.
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics.paneltest import flow_z
+
+    class Dead:
+        def sql(self, q): raise RuntimeError("Catalog rdb does not exist")
+
+    with collect_trace() as tr:
+        assert flow_z(Dead(), "i0", "2026-07-30") == (0.0, "")
+    assert any(e["event"] == "series.unmeasured" and e["family"] == "수급"
+               and "rdb" in e["why"] for e in tr)

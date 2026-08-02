@@ -80,3 +80,5 @@ test_out.txt
 .tmp/
 *.dtmp
 .$*
+
+.tmp/
