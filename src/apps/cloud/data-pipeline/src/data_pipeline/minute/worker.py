@@ -149,13 +149,12 @@ class MinuteWorkerLoop:
             return "DRAINED" if phase == "DRAINED" else "STOPPED"
         if not ready:
             # 계속 돌면 남의 기대 집합을 내 기준으로 VALID 확정한다(조용한 누락).
-            # lease 는 즉시 반납해 올바른 설정의 Worker 가 곧장 들어올 수 있게 하고,
-            # 이 프로세스는 멈춘다 — 설정과 원장의 불일치는 재시도로 낫지 않는다.
-            self.ledger.release_worker_fence(
-                session_id=self.session_id, fence_token=self.fence_token
-            )
-            self.fence_token = None
-            self.stopping = True
+            # claim 하지 않고 이 tick 을 끝낸다 — fence 상실 처리와 같은 모양이다.
+            # ⚠️ **stopping 을 세우지 않는다**: 세우면 그 뒤 EOD 가 drain 을 걸어도 tick 이
+            # 최상단에서 STOPPED 로 빠져 ack_drain 에 도달하지 못하고, 그걸 부를 수 있는
+            # 주체가 Worker 뿐이라 세션이 DRAINING 에 영구 고착된다. fence 도 쥔 채 둔다 —
+            # 반납만 하고 멈추면 다음 tick 이 재획득해 token 을 매번 올리는 thrash 가 되고,
+            # 설정을 고친 배포는 어차피 SIGTERM 경로로 lease 를 반납해 교체가 즉시 된다.
             return "STOPPED"
 
         # realtime(최신) 1건 + recovery(최고령) budget 을 **항상** 이어서 소진한다 —

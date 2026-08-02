@@ -402,19 +402,33 @@ class TestTradingHoursUniverse:
         assert window["expected_unit_count"] == 3
         assert window["data_status"] == "VALID"
 
-    def test_config_universe_mismatch_stops_and_releases_lease(self, tmp_path):
-        # 원장이 고정한 universe 와 Worker 설정이 갈리면 계속 돌면 안 된다 — 남의 기대
+    def test_config_universe_mismatch_stops_processing(self, tmp_path):
+        # 원장이 고정한 universe 와 Worker 설정이 갈리면 처리하면 안 된다 — 남의 기대
         # 집합을 내 기준으로 VALID 확정하거나(조용한 누락) 거래시간 밖이 된 window 를
-        # 영원히 재청구한다. lease 는 반납해 올바른 설정의 Worker 가 곧장 들어온다.
+        # 영원히 재청구한다
         db = FakeMinuteDB()
         worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
                                                   windows=1, first_window=717)
         worker.config.universe = UNIVERSE  # 배포로 설정만 바뀐 상황
         assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "STOPPED"
-        assert db.sessions[session_id]["lease_expires_at"] is None
         assert all(w["data_status"] == "DUE" for w in db.windows.values())
-        # 다음 tick 도 멈춘 채다 — 설정 불일치는 재시도로 낫지 않는다
+        # 다음 tick 도 처리하지 않는다 — 설정 불일치는 재시도로 낫지 않는다
         assert worker.tick(datetime(2026, 7, 31, 20, 1, tzinfo=KST)) == "STOPPED"
+        assert all(w["data_status"] == "DUE" for w in db.windows.values())
+
+    def test_mismatch_after_stop_still_observes_later_drain(self, tmp_path):
+        # 정지를 영구화(stopping)하면 그 뒤 EOD 가 drain 을 걸어도 tick 이 최상단에서
+        # 빠져 ack_drain 에 도달하지 못한다 — 그걸 부를 수 있는 건 Worker 뿐이라
+        # 세션이 DRAINING 에 영구 고착된다
+        db = FakeMinuteDB()
+        worker, ledger, session_id = build_worker(db, tmp_path, universe=UNIVERSE_EXT,
+                                                  windows=1, first_window=717)
+        start = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        worker.config.universe = UNIVERSE
+        assert worker.tick(start) == "STOPPED"          # ACTIVE + 불일치
+        ledger.request_drain(session_id=session_id, now=start)   # 그 **뒤에** drain
+        assert worker.tick(start + timedelta(seconds=1)) == "DRAINING"
+        assert db.sessions[session_id]["phase"] == "DRAINED"
 
     def test_universe_mismatch_still_converges_drain(self, tmp_path):
         # 자격이 없어도 drain 은 막지 않는다 — ack_drain 을 부를 수 있는 건 Worker 뿐이라
