@@ -204,7 +204,9 @@ class TestOrphanDetection:
 class TestGenerationGuard:
     def test_artifact_generation_mismatch_rejected(self):
         # Worker 가 세대 2 로 PUT 했는데 checksum 이 같아 DB 는 1 을 확정 — 어긋난 채
-        # 진행하면 manifest_uri/job 세대가 갈려 정상 artifact 가 orphan 으로 오인된다
+        # 진행하면 manifest_uri/job 세대가 갈려 정상 artifact 가 orphan 으로 오인된다.
+        # (예외 시 window 갱신의 rollback 은 실DB 트랜잭션 소관 — fake 는 트랜잭션이
+        # 없어 여기선 outbox 미발행만 단언한다. CI ephemeral DB/스테이징 실측 천장)
         db, ledger, session_id, token, claim = ready_session()
         committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
         committer.commit_price_window(
