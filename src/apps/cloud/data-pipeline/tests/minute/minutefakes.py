@@ -186,6 +186,18 @@ class _Cursor:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("SELECT available_at FROM document"):
+            # 신선도 판정은 두 테이블이 **공유**한다 — 따로 걸면 낡은 관측이 한쪽만
+            # 되돌려 제목/리드가 섞인 행이 남는다. 그래서 잠그고 한 번만 본다.
+            assert "FOR UPDATE" in s, "canonical 신선도 검사가 문서 행을 잠그지 않는다"
+            row = self.db.documents.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["available_at"],)]
+        elif s.startswith("UPDATE document SET available_at"):
+            row = self.db.documents.get((params[1], params[2]))
+            if row is not None:
+                row["available_at"] = params[0]
+                self.rowcount = 1
         elif s.startswith("INSERT INTO document ("):
             # 1분 뉴스 canonical writer(ALPHA-691). 정정 반영이 이 문장의 존재 이유라
             # DO UPDATE 와 변경분 판정이 SQL 에 있어야 한다 — fake 가 합성하면 배치와 같은
@@ -204,9 +216,6 @@ class _Cursor:
             # 정정과 함께 시각도 움직여야 PIT 축이 내용과 어긋나지 않는다(ALPHA-691 2라운드)
             assert "available_at = EXCLUDED.available_at" in set_clause, \
                 "정정 시 도착 시각이 안 따라가면 as-of 조회가 미래 내용을 본다"
-            # 낡은 관측이 최신 본문을 되돌리지 못하게
-            assert "document.available_at <= EXCLUDED.available_at" in where_clause, \
-                "document upsert 에 신선도 가드가 없다"
             self._upsert_document(params)
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \
@@ -369,9 +378,6 @@ class _Cursor:
                 "available_at": available_at, "source_uri": source_uri,
             }
             self.rowcount = 1
-            return
-        if existing["available_at"] > available_at:
-            self.rowcount = 0   # 신선도 가드 — 낡은 관측은 최신 본문을 못 되돌린다
             return
         changed = {
             "title": title, "language_code": language_code,

@@ -109,6 +109,27 @@ class PgNewsCanonicalWriter:
         # ⚠️ `_normalize` 의 article_id 가 아니라 **원장이 준 값**을 쓴다(모듈 docstring).
         document_id = stable_domain_id("doc", source_code, article_id)
 
+        # 신선도 판정을 **한 번만** 한다. 두 테이블에 따로 걸면 낡은 관측이 한쪽만 되돌려
+        # 제목 T2 + 리드 T1 의 **혼합 행**이 남는다 — Consumer 는 존재한 적 없는 본문을 읽고,
+        # 그 결과가 어느 지문의 것도 아니게 된다(실측으로 재현했다).
+        # ⚠️ 검사와 쓰기 사이를 잠근다 — 이 행에는 배치 loader 도 쓴다(비잠금 = TOCTOU).
+        cur.execute(
+            """
+            SELECT available_at FROM document
+            WHERE source_code = %s AND source_document_id = %s
+            FOR UPDATE
+            """,
+            (source_code, article_id),
+        )
+        current = cur.fetchone()
+        if current is not None and current[0] > observed_at:
+            # 지연·재생된 관측이다. 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다.
+            logger.info(
+                "낡은 관측이라 canonical 을 건드리지 않는다: (%s, %s) 관측=%s 현재=%s",
+                source_code, article_id, observed_at, current[0],
+            )
+            return 0
+
         cur.execute(
             """
             INSERT INTO document (
@@ -121,24 +142,19 @@ class PgNewsCanonicalWriter:
                 source_uri = EXCLUDED.source_uri,
                 language_code = EXCLUDED.language_code,
                 available_at = EXCLUDED.available_at
-            WHERE document.available_at <= EXCLUDED.available_at
-              AND (document.title IS DISTINCT FROM EXCLUDED.title
-                   OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
-                   OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
-                   OR document.language_code IS DISTINCT FROM EXCLUDED.language_code)
+            WHERE document.title IS DISTINCT FROM EXCLUDED.title
+               OR document.published_at IS DISTINCT FROM EXCLUDED.published_at
+               OR document.source_uri IS DISTINCT FROM EXCLUDED.source_uri
+               OR document.language_code IS DISTINCT FROM EXCLUDED.language_code
             """,
             (
                 document_id, source_code, article_id,
                 normalized["title"], normalized["language"], normalized["published_at"],
-                # ⚠️ 값은 **실제 처리 시각**이지 `window_start` 가 아니다. 1분 벤더 행에는
-                # 배치가 쓰는 `fetched_at` 이 없어(BigKinds raw = TITLE·CONTENT·PROVIDER·DATE)
-                # 창 시각을 쓸까 했지만, recovery 는 09:00 창을 12:00 에 처리한다 — 그러면
-                # 12:00 에 알게 된 기사를 09:00 에 안 것으로 소급하게 된다.
-                # ⚠️⚠️ 그리고 **정정과 함께 갱신한다**. 동결하면 내용은 T2 인데 시각은 T1 이라,
-                # 이 값을 PIT 축으로 복사하는 하류(load_assertions·assemble_events)에서
-                # 10:00 as-of 조회가 12:00 에야 알려진 내용을 본다 — 그게 더 크게 틀린다.
-                # 시간순 피드에 그 문서가 다시 뜨는 건 **정정에서는 바람직한 동작**이다
-                # (원장이 새 job 을 만드는 것과 같은 이유다).
+                # ⚠️ 값은 **실제 처리 시각**이지 `window_start` 가 아니다 — recovery 는 09:00
+                # 창을 12:00 에 처리하므로, 창 시각을 쓰면 12:00 에 안 기사를 09:00 으로
+                # 소급한다. 그리고 **정정과 함께 갱신한다**: 동결하면 내용은 T2 인데 시각은
+                # T1 이라, 이 값을 PIT 축으로 복사하는 하류(load_assertions·assemble_events)
+                # 에서 10:00 as-of 조회가 12:00 에야 알려진 내용을 본다.
                 observed_at,
                 normalized["url"],
             ),
@@ -160,4 +176,15 @@ class PgNewsCanonicalWriter:
             """,
             (normalized["lead_text"], source_code, article_id),
         )
-        return 1 if (changed or cur.rowcount) else 0
+        lead_changed = cur.rowcount
+        if lead_changed and not changed:
+            # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
+            # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
+            cur.execute(
+                """
+                UPDATE document SET available_at = %s
+                WHERE source_code = %s AND source_document_id = %s
+                """,
+                (observed_at, source_code, article_id),
+            )
+        return 1 if (changed or lead_changed) else 0
