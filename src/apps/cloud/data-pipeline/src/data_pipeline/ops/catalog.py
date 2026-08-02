@@ -15,6 +15,12 @@
 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result 소관이라 카탈로그에 넣지 않는다.
 
+**장중 상주 실행체(1분 Price Collector·News Scanner)는 여기 편입하지 않는다**(ALPHA-651).
+분당 1행도 창 단위 expected_task 도 만들지 않는다 — expected/actual 권위는 이미
+minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 안 떠도 결손이 원장에
+드러난다)에 있고, ops 행 복제는 같은 사실을 두 원장에 살게 한다(모니터링 계획 §2-1).
+콘솔 편입은 요약 관측(super-admin-api `/api/v1/sources/minute`)으로 한다.
+
 **레인(pipeline_type) 축**(ALPHA-591): 카탈로그는 시장 레인(`etf-daily`, 21작업)과 뉴스 레인
 (`news`, 6작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 3슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도

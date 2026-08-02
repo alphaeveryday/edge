@@ -2,6 +2,7 @@ package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.dto.HoldingsImpactResponse;
+import com.edge.superadmin.dto.MinuteStatusResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse;
@@ -51,6 +52,13 @@ public class SourceController {
 	public ApiResponse<HoldingsImpactResponse> holdingsImpact(
 			@RequestParam(required = false) String runKey) {
 		return ApiResponse.onSuccess(sourceService.holdingsImpact(runKey));
+	}
+
+	/** 장중 1분 파이프라인 요약(ALPHA-651) — 세션·창 집계·결손 창 목록. 검증은 서비스가 한다. */
+	@GetMapping("/api/v1/sources/minute")
+	public ApiResponse<MinuteStatusResponse> minuteStatus(
+			@RequestParam(required = false) String date) {
+		return ApiResponse.onSuccess(sourceService.minuteStatus(date));
 	}
 
 	/** 뉴스 계보(ALPHA-685) — 집계와 그 근거 목록. 검증은 서비스가 한다. */

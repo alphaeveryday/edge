@@ -46,3 +46,15 @@ export function useHoldingsImpact(runKey?: string) {
     queryFn: () => sourcesRepository.holdingsImpact(runKey),
   });
 }
+
+/**
+ * 장중 1분 파이프라인 요약(ALPHA-651). 장중 관측 화면이라 1분마다 갱신한다(overview 와 같은
+ * 주기). 캐시 키에 date — 날짜를 바꿔도 앞선 날짜 결과가 보이면 안 된다.
+ */
+export function useMinuteStatus(date?: string) {
+  return useQuery({
+    queryKey: ['sources', 'minute', date ?? null],
+    queryFn: () => sourcesRepository.minuteStatus(date),
+    refetchInterval: 60_000,
+  });
+}

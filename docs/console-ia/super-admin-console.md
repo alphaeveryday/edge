@@ -46,6 +46,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
 | Event Pipeline — 파이프라인 실행 이력 | `GET /api/v1/sources/grid` |
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
+| Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
 | Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |

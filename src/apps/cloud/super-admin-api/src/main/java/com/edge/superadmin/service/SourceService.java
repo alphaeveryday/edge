@@ -7,10 +7,12 @@ import com.edge.superadmin.dto.SourceOverviewResponse.CountsResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.DefectResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
 import com.edge.superadmin.dto.HoldingsImpactResponse;
+import com.edge.superadmin.dto.MinuteStatusResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.HoldingsImpactRepository;
+import com.edge.superadmin.repository.MinuteStatusRepository;
 import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
@@ -36,12 +38,15 @@ public class SourceService {
 	private final PipelineStatusRepository pipelineStatus;
 	private final NewsLineageRepository newsLineage;
 	private final HoldingsImpactRepository holdingsImpact;
+	private final MinuteStatusRepository minuteStatus;
 
 	public SourceService(PipelineStatusRepository pipelineStatus,
-			NewsLineageRepository newsLineage, HoldingsImpactRepository holdingsImpact) {
+			NewsLineageRepository newsLineage, HoldingsImpactRepository holdingsImpact,
+			MinuteStatusRepository minuteStatus) {
 		this.pipelineStatus = pipelineStatus;
 		this.newsLineage = newsLineage;
 		this.holdingsImpact = holdingsImpact;
+		this.minuteStatus = minuteStatus;
 	}
 
 	/**
@@ -151,6 +156,26 @@ public class SourceService {
 		return NewsLineageResponse.from(
 				dateKst == null ? null : dateKst.toString(),
 				lineage.summary(), lineage.documents());
+	}
+
+	/**
+	 * 장중 1분 파이프라인 요약(ALPHA-651). {@code date} 는 세션 날짜(KST) — 없으면 오늘이다.
+	 * 세션은 하루 단위 identity 라 "오늘 돌고 있는가"가 기본 질문이고, 형식이 틀리면 400
+	 * (뉴스 계보와 같은 이유 — 오타가 "그날 미가동"으로 보이면 없는 사실을 읽는다).
+	 */
+	public MinuteStatusResponse minuteStatus(String date) {
+		LocalDate sessionDate;
+		if (date == null) {
+			sessionDate = LocalDate.now(KST);
+		} else {
+			try {
+				sessionDate = LocalDate.parse(date);
+			} catch (java.time.format.DateTimeParseException e) {
+				throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+			}
+		}
+		return MinuteStatusResponse.from(sessionDate.toString(),
+				minuteStatus.status(sessionDate));
 	}
 
 	/**
