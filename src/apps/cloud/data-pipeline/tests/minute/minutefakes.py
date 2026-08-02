@@ -196,7 +196,6 @@ class _Cursor:
                 self._rows = [(
                     row["available_at"],
                     None if child is None else child["lead_text"],
-                    child is not None,
                 )]
         elif s.startswith("UPDATE document SET available_at"):
             row = self.db.documents.get((params[1], params[2]))
@@ -229,6 +228,8 @@ class _Cursor:
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \
                 "news_document upsert 가 리드 정정을 반영하지 않는다"
+            # 부모와 같은 가드가 없으면 동시 최초 INSERT 경합에서 자식만 옛 리드로 덮인다
+            assert "available_at <= %s" in s, "news_document upsert 에 신선도 가드가 없다"
             assert "SET lead_text = EXCLUDED.lead_text" in s, \
                 "news_document upsert 가 리드를 갱신하지 않는다"
             assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
@@ -403,10 +404,12 @@ class _Cursor:
         self.rowcount = 1
 
     def _upsert_news_document(self, p):
-        lead_text, source_code, article_id = p
+        lead_text, source_code, article_id, observed_at = p
         document = self.db.documents.get((source_code, article_id))
-        if document is None:
-            self.rowcount = 0   # INSERT ... SELECT 가 0행 — 부모가 없으면 아무것도 안 쓴다
+        if document is None or document["available_at"] > observed_at:
+            # 부모가 없거나(INSERT…SELECT 0행) 남이 더 최신 문서를 먼저 넣었다 —
+            # 자식만 덮으면 제목/리드가 갈린 혼합 행이 된다
+            self.rowcount = 0
             return
         key = document["document_id"]
         existing = self.db.news_documents.get(key)

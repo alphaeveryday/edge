@@ -31,8 +31,11 @@ t2  J2 실행 → T1 을 읽어 추출 → 결과가 fp2 job 의 성공으로 �
 판정하고(두 테이블이 그 판정을 공유한다 — 따로 걸면 제목/리드가 갈린 행이 남는다),
 `ON CONFLICT` WHERE 에도 `available_at <=` 를 남긴다. ⚠️ `FOR UPDATE` 는 **아직 없는 키를
 잠그지 못하므로**(gap 은 안 잠긴다) 잠금만으로는 동시 최초 INSERT 경합을 못 막는다.
-낡은 관측을 만나면 **조용히 건너뛰지 않고 실패시킨다** — 호출자는 이 반환값을 안 보고
-job·원장을 확정하므로, 건너뛰면 원장만 앞서간 채 굳는다.
+낡은 관측(저장된 쪽이 더 최신)은 **그 레코드만 건너뛴다** — 예외로 올리면 commit
+트랜잭션이 통째로 롤백돼 그 창의 다른 기사·원장·job 까지 날아가고, 배치의
+`available_at = fetched_at or published_at` 이 미래 발행일을 싣는 정상 상황에서도 난다.
+건너뛰어도 안전한 이유는 그때 Consumer 가 읽을 행이 **더 최신 본문**이라 이 모듈이 막으려는
+P1(옛 텍스트를 읽음)이 아니기 때문이다. 조용하지 않게 ERROR 로 남긴다.
 
 ⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
 
@@ -125,7 +128,7 @@ class PgNewsCanonicalWriter:
         # ⚠️ 검사와 쓰기 사이를 잠근다 — 이 행에는 배치 loader 도 쓴다(비잠금 = TOCTOU).
         cur.execute(
             """
-            SELECT d.available_at, n.lead_text, n.document_id IS NOT NULL
+            SELECT d.available_at, n.lead_text
             FROM document d
             LEFT JOIN news_document n ON n.document_id = d.document_id
             WHERE d.source_code = %s AND d.source_document_id = %s
@@ -135,22 +138,24 @@ class PgNewsCanonicalWriter:
         )
         current = cur.fetchone()
         if current is not None and current[0] > observed_at:
-            # 최신 본문을 되돌리면 Consumer 가 이미 없는 텍스트를 읽는다. 그렇다고 **조용히
-            # 건너뛰면 더 나쁘다**: 호출자(commit)는 이 반환값을 보지 않고 job 과 원장
-            # checksum 을 확정하므로, 원장은 새 지문을 처리했다는데 canonical 은 옛 본문인
-            # 상태가 굳고 재관측도 안 온다 — 이 모듈이 고치려던 P1 이 그대로 재현된다.
-            # 정상 경로에서는 도달하지 않는다(관측 시각은 단조롭다). 도달했다면 주입 시계가
-            # 원장의 now 와 어긋난 것이고, 그건 배포·설정 결함이라 window 를 실패시켜
-            # 드러내는 게 맞다(재시도가 같은 창을 다시 처리한다).
-            raise ValueError(
-                f"관측 시각이 저장된 도착 시각보다 과거다 — 주입 시계가 원장과 어긋났다: "
-                f"({source_code}, {article_id}) 관측={observed_at} 저장={current[0]}"
+            # 저장된 시각이 내 관측보다 **미래**다 = 내 관측이 낡았다. 이때 건너뛰는 건
+            # 안전하다 — Consumer 가 읽을 행은 더 **최신** 본문이라, 이 모듈이 막으려는
+            # P1(옛 텍스트를 읽는 것)이 아니다.
+            # ⚠️ 예외로 올리지 않는 이유: 이 raise 는 `commit_news_window` 트랜잭션을
+            # 통째로 롤백시켜 **그 window 의 다른 기사·원장·job 까지 날린다**(레코드 하나가
+            # 창 전체를 세운다). 게다가 정상 상황에서도 난다 — 배치의
+            # `available_at = fetched_at or published_at` 은 미래 발행일을 그대로 싣는다.
+            # 조용하지도 않게: ERROR 로 남겨 EOD QC 가 세는 축(원장 상태)과 함께 보이게 한다.
+            logger.error(
+                "낡은 관측이라 canonical 을 건드리지 않는다(저장된 쪽이 더 최신): "
+                "(%s, %s) 관측=%s 저장=%s",
+                source_code, article_id, observed_at, current[0],
             )
+            return 0
         # 리드 **변경** 판정의 기준값. 자식 행이 없던 문서(배치가 리드 없이 넣은 경우)에
         # NULL 리드를 처음 만드는 건 내용 변경이 아니다 — rowcount 만 보면 1 이라
         # 안 바뀐 문서의 도착 시각을 앞으로 밀고, 그러면 과거 as-of 구간에서 문서가 사라진다.
         previous_lead = current[1] if current is not None else None
-        had_lead_row = bool(current[2]) if current is not None else False
 
         cur.execute(
             """
@@ -193,14 +198,21 @@ class PgNewsCanonicalWriter:
             INSERT INTO news_document (document_id, lead_text)
             SELECT document_id, %s FROM document
             WHERE source_code = %s AND source_document_id = %s
+              AND available_at <= %s
             ON CONFLICT (document_id) DO UPDATE
             SET lead_text = EXCLUDED.lead_text
             WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text
             """,
-            (normalized["lead_text"], source_code, article_id),
+            # ⚠️ 부모와 **같은 가드**다. 동시 최초 INSERT 로 남이 더 최신 문서를 먼저 넣으면
+            # 부모 upsert 는 가드에 막히는데 자식만 덮여, 남의 제목·시각에 내 옛 리드가
+            # 붙은 **혼합 행**이 된다(잠금은 없는 키를 못 잠가 이 경로가 열려 있었다).
+            (normalized["lead_text"], source_code, article_id, observed_at),
         )
-        # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다(위 previous_lead).
-        lead_changed = had_lead_row and normalized["lead_text"] != previous_lead
+        # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다 — **값**으로 본다.
+        # 자식 행이 없던 문서(배치가 리드 없이 넣은 형상)의 previous_lead 는 None 이므로,
+        # NULL 리드를 처음 만드는 건 변경이 아니고(도착 시각이 안 움직인다) 실제 리드가
+        # 처음 붙는 건 변경이다(움직인다 — 그 리드는 지금 알게 된 것이다).
+        lead_changed = normalized["lead_text"] != previous_lead
         if lead_changed and not changed:
             # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
             # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
@@ -211,4 +223,4 @@ class PgNewsCanonicalWriter:
                 """,
                 (observed_at, source_code, article_id),
             )
-        return 1 if (changed or lead_changed or not had_lead_row) else 0
+        return 1 if (changed or lead_changed) else 0
