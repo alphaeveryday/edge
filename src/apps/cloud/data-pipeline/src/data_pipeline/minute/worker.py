@@ -44,7 +44,6 @@ from .artifacts import (
     sha256_bytes,
 )
 from .commit import (
-    CanonicalWriter,
     CommitRejectedError,
     GenerationMismatchError,
     MinuteCommitter,
@@ -236,7 +235,6 @@ class PriceWorker(MinuteWorkerLoop):
     committer: MinuteCommitter
     storage: Storage
     collector: object  # CollectionRequest 계약 — collect(request, now) -> (result, records, manifest)
-    canonical_writer: CanonicalWriter
     config: WorkerConfig
     fence_token: int | None = None
     stopping: bool = False  # SIGTERM — 새 claim 중단, 다음 tick 에서 STOPPED
@@ -358,8 +356,6 @@ class PriceWorker(MinuteWorkerLoop):
                 manifest_checksum=manifest_checksum,
                 missing_units=units["missing"] or None,
                 stage_timestamps=result.stage_timestamps,
-                records=records, canonical_writer=self.canonical_writer,
-                dataset=cfg.dataset,
                 trigger_schema_version=cfg.trigger_schema_version,
                 destination=cfg.destination, artifact_generation=generation,
             )
