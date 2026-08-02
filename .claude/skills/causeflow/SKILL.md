@@ -27,7 +27,9 @@ ENV='PYTHONPATH=src CAUSAL_BACKFILL_DIR="D:/Github/edge-dyntool/.tmp/causal-back
   facts 를 부리면 레이크 부팅을 세션당 1회만 낸다. stdin JSON 한 줄
   (`{"op":"facts",...}` → `DONE facts <s>`). 단 **prep 은 병렬 CLI 가 더 빠르다**
   (실측: 서버 직렬 299초 vs 프로세스 풀 161초) - prep 은 CLI 로 돌려라.
-  eval 커널에 레이크를 올리는 방법은 실패했다(초기화가 인터럽트 불능 행 - 2회 재현).
+  eval 커널 상주는 **구조적으로 불가**: 하네스 커널(Python 3.14.2)에서 맨
+  `import numpy` 가 C 확장 DLL 로드에서 인터럽트 불능 행 (faulthandler 스택 +
+  최소 재현으로 확정, 하네스 이슈로 보고됨). 레이크 문제가 아니다 - serve 를 써라.
 
 ## 1. 사실 (결정론 · ~3분 · CLI 1회)
 
