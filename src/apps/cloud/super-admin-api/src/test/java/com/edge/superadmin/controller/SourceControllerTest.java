@@ -750,8 +750,15 @@ class SourceControllerTest {
 						new MinuteStatusRepository.WindowCounts(5, 1, 300, 80, 0, 0, 0, 4),
 						List.of(new MinuteStatusRepository.GapWindow(STARTED, FINISHED,
 								"DUE", true)),
-						new MinuteStatusRepository.JobCounts(2, 1, 290, 3))),
-				new MinuteStatusRepository.JobCounts(0, 0, 40, 1));
+						new MinuteStatusRepository.JobCounts(2, 1, 1, 290, 3)),
+						// lease 부재 세션 — null 이 false 로 접히면 "미기동"이 "가동 중"이 된다
+						new MinuteStatusRepository.SessionSummary(
+								"sess-2", "news_minute", "bigkinds", day, "PLANNED", "uv-1", 390,
+								null, null, null, null, null,
+								new MinuteStatusRepository.WindowCounts(0, 0, 0, 0, 0, 0, 0, 0),
+								List.of(),
+								new MinuteStatusRepository.JobCounts(0, 0, 0, 0, 0))),
+				new MinuteStatusRepository.JobCounts(0, 0, 0, 40, 1));
 
 		minuteMvc(new FakeMinuteStatusRepository(java.util.Map.of(day, status)))
 				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
@@ -764,6 +771,9 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.sessions[0].gaps[0].dataStatus").value("DUE"))
 				.andExpect(jsonPath("$.result.sessions[0].gaps[0].noEvidence").value(true))
 				.andExpect(jsonPath("$.result.sessions[0].priceJobs.dead").value(3))
+				.andExpect(jsonPath("$.result.sessions[0].priceJobs.claimedExpired").value(1))
+				// null 보존 — JSON 에 null 로 실재해야 한다(키 부재나 false 로 접힘 금지)
+				.andExpect(jsonPath("$.result.sessions[1].leaseExpired", nullValue()))
 				.andExpect(jsonPath("$.result.newsJobs.dead").value(1));
 	}
 

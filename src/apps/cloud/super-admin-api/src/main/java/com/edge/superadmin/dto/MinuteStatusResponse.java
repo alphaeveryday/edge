@@ -55,10 +55,12 @@ public record MinuteStatusResponse(String date, List<SessionResponse> sessions,
 		}
 	}
 
-	public record JobCountsResponse(long waiting, long claimed, long succeeded, long dead) {
+	public record JobCountsResponse(long waiting, long claimed, long claimedExpired,
+			long succeeded, long dead) {
 
 		static JobCountsResponse from(JobCounts j) {
-			return new JobCountsResponse(j.waiting(), j.claimed(), j.succeeded(), j.dead());
+			return new JobCountsResponse(j.waiting(), j.claimed(), j.claimedExpired(),
+					j.succeeded(), j.dead());
 		}
 	}
 

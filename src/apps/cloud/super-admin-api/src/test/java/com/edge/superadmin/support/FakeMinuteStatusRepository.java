@@ -14,7 +14,7 @@ import java.util.Map;
  */
 public class FakeMinuteStatusRepository implements MinuteStatusRepository {
 
-	private static final JobCounts NO_JOBS = new JobCounts(0, 0, 0, 0);
+	private static final JobCounts NO_JOBS = new JobCounts(0, 0, 0, 0, 0);
 
 	private final Map<LocalDate, MinuteStatus> byDate;
 

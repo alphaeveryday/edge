@@ -21,6 +21,12 @@ const fmtTime = (iso: string | null) =>
 
 /** 실행체 생존 표시 — leaseExpired 는 서버 판정이고 여기선 라벨만 고른다(재계산 금지) */
 function liveness(s: MinuteSession): { label: string; tone: 'ok' | 'bad' | 'muted' } {
+  /* 종료 국면에선 lease 만료가 정상이다(drain ack 이후 실행체는 떠나는 게 맞음) — phase 를
+   * 무시하면 정상 종료·과거 날짜 세션이 전부 "증거 끊김"으로 보인다(리뷰 1라운드). */
+  if (s.phase === 'FAILED') return { label: '세션 FAILED', tone: 'bad' };
+  if (s.phase === 'DRAINED' || s.phase === 'QC_RUNNING' || s.phase === 'FINALIZED') {
+    return { label: `세션 종료 국면 (${s.phase}) — 생존 판정 대상 아님`, tone: 'muted' };
+  }
   if (s.leaseExpired === true) return { label: '실행체 증거 끊김 (lease 만료)', tone: 'bad' };
   if (s.leaseExpired === false) return { label: `가동 중 · heartbeat ${fmtTime(s.heartbeatAt)}`, tone: 'ok' };
   /* null = lease 부재 — "죽었다"가 아니라 기동 증거 자체가 없다는 사실 */
@@ -32,7 +38,13 @@ const TONE_COLOR = { ok: 'var(--ok, #16a34a)', bad: 'var(--bad, #dc2626)', muted
 function JobCells({ jobs }: { jobs: MinuteJobCounts }) {
   return (
     <>
-      대기 {jobs.waiting} · 처리 중 {jobs.claimed} · 성공 {jobs.succeeded} ·{' '}
+      대기 {jobs.waiting} · 처리 중 {jobs.claimed}
+      {/* lease 만료된 claim = Consumer 가 죽고 아무도 재청구 안 한 고착 후보 — "처리 중"에
+       * 뭉개면 영원히 경고가 없다(리뷰 1라운드) */}
+      {jobs.claimedExpired > 0 && (
+        <b style={{ color: 'var(--bad, #dc2626)' }}> (그중 lease 만료 {jobs.claimedExpired})</b>
+      )}
+      {' '}· 성공 {jobs.succeeded} ·{' '}
       <b style={{ color: jobs.dead > 0 ? 'var(--bad, #dc2626)' : undefined }}>DEAD {jobs.dead}</b>
     </>
   );

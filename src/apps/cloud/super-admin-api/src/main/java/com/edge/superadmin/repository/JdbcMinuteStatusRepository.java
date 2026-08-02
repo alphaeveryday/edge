@@ -9,6 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -74,12 +75,20 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			 ORDER BY w.session_id, w.window_start
 			""";
 
+	// claimed 중 lease 만료분을 따로 센다 — Consumer 사망 고착 후보를 "처리 중"에 뭉개지
+	// 않기 위해(인터페이스 주석). 판정 시계는 나머지 파생과 같은 DB now() 다.
+	private static final String JOB_COUNT_COLUMNS = """
+			count(*) FILTER (WHERE %1$s.status IN ('PENDING','RETRY_WAIT')) AS waiting,
+			count(*) FILTER (WHERE %1$s.status = 'CLAIMED')   AS claimed,
+			count(*) FILTER (WHERE %1$s.status = 'CLAIMED'
+			                   AND %1$s.lease_expires_at < now()) AS claimed_expired,
+			count(*) FILTER (WHERE %1$s.status = 'SUCCEEDED') AS succeeded,
+			count(*) FILTER (WHERE %1$s.status = 'DEAD')      AS dead
+			""";
+
 	private static final String PRICE_JOBS_SQL = """
 			SELECT j.session_id,
-			       count(*) FILTER (WHERE j.status IN ('PENDING','RETRY_WAIT')) AS waiting,
-			       count(*) FILTER (WHERE j.status = 'CLAIMED')   AS claimed,
-			       count(*) FILTER (WHERE j.status = 'SUCCEEDED') AS succeeded,
-			       count(*) FILTER (WHERE j.status = 'DEAD')      AS dead
+			""" + JOB_COUNT_COLUMNS.formatted("j") + """
 			  FROM price_window_job j
 			  JOIN minute_ingestion_session s ON s.session_id = j.session_id
 			 WHERE s.session_date = ?
@@ -88,15 +97,14 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 
 	/**
 	 * 뉴스 job 은 세션과 연결 컬럼이 없다(기사 identity 기반) — 날짜 축은 job 생성 시각의
-	 * KST 날짜다. 표현식 필터의 풀스캔은 뉴스 계보와 같은 감당 범위(콘솔 단발 조회).
+	 * KST 날짜다. 반개구간 범위 조건이라 인덱스가 생기면 그대로 탄다 — 표현식 캐스트 필터는
+	 * 60초 자동 갱신 화면에서 이력 누적분 풀스캔을 반복한다(리뷰 1라운드).
 	 */
 	private static final String NEWS_JOBS_SQL = """
-			SELECT count(*) FILTER (WHERE status IN ('PENDING','RETRY_WAIT')) AS waiting,
-			       count(*) FILTER (WHERE status = 'CLAIMED')   AS claimed,
-			       count(*) FILTER (WHERE status = 'SUCCEEDED') AS succeeded,
-			       count(*) FILTER (WHERE status = 'DEAD')      AS dead
+			SELECT
+			""" + JOB_COUNT_COLUMNS.formatted("news_extraction_job") + """
 			  FROM news_extraction_job
-			 WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date = ?
+			 WHERE created_at >= ? AND created_at < ?
 			""";
 
 	private final JdbcTemplate jdbc;
@@ -149,17 +157,21 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 					// 창 행 0개 = 아직 materialize 전 — 집계 0 은 그 자체로 사실이다
 					counts.getOrDefault(sessionId, new WindowCounts(0, 0, 0, 0, 0, 0, 0, 0)),
 					gaps.getOrDefault(sessionId, List.of()),
-					priceJobs.getOrDefault(sessionId, new JobCounts(0, 0, 0, 0)));
+					priceJobs.getOrDefault(sessionId, new JobCounts(0, 0, 0, 0, 0)));
 		}, sessionDate);
 
+		OffsetDateTime dayStart = sessionDate.atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime dayEnd = sessionDate.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
 		JobCounts newsJobs = jdbc.query(NEWS_JOBS_SQL,
-				(rs, i) -> mapJobs(rs), sessionDate).get(0);
+				(rs, i) -> mapJobs(rs), dayStart, dayEnd).get(0);
 		return new MinuteStatus(sessions, newsJobs);
 	}
 
+	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
 	private static JobCounts mapJobs(ResultSet rs) throws SQLException {
 		return new JobCounts(rs.getLong("waiting"), rs.getLong("claimed"),
-				rs.getLong("succeeded"), rs.getLong("dead"));
+				rs.getLong("claimed_expired"), rs.getLong("succeeded"), rs.getLong("dead"));
 	}
 
 	/** lease 부재(NULL)와 만료를 뭉개지 않는다 — getBoolean 은 NULL 을 false 로 돌려준다. */

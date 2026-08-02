@@ -35,26 +35,29 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 	private JdbcTemplate jdbc;
 
 	@Test
-	void 기한_지난_DUE는_MISSING_판정_전이라도_무증거로_센다() {
+	void 기한_지난_DUE와_CLAIMED는_MISSING_판정_전이라도_무증거로_센다() {
 		insertSession("sess-p", "price_minute", "toss", DAY, "ACTIVE");
-		// 과거 창 3: 무증거 DUE(죽은 실행체의 흔적) · 증거 있는 빈 데이터(VALID_EMPTY) · VALID.
+		// 과거 창 4: 무증거 DUE(죽은 실행체의 흔적) · 무증거 CLAIMED(claim 만 있고 커밋 없음
+		// — DUE 만 세면 이 유형이 사라진다) · 빈 데이터(VALID_EMPTY) · VALID.
 		// 미래 창 1: DUE 지만 아직 기한 전 — 무증거로 세면 정상 진행이 상시 결함이 된다.
 		insertWindow("sess-p", PAST, "DUE");
-		insertWindow("sess-p", PAST.plusMinutes(1), "VALID_EMPTY");
-		insertWindow("sess-p", PAST.plusMinutes(2), "VALID");
+		insertWindow("sess-p", PAST.plusMinutes(1), "CLAIMED");
+		insertWindow("sess-p", PAST.plusMinutes(2), "VALID_EMPTY");
+		insertWindow("sess-p", PAST.plusMinutes(3), "VALID");
 		insertWindow("sess-p", OffsetDateTime.now(ZoneOffset.UTC).plusHours(2), "DUE");
 
 		SessionSummary s = repository.status(DAY).sessions().get(0);
 
 		assertThat(s.windows().due()).isEqualTo(2);
-		assertThat(s.windows().overdueNoEvidence()).isEqualTo(1);
+		assertThat(s.windows().claimed()).isEqualTo(1);
+		assertThat(s.windows().overdueNoEvidence()).isEqualTo(2);
 		assertThat(s.windows().validEmpty()).isEqualTo(1);
 		assertThat(s.windows().missing()).isZero();
 		// 근거 목록엔 무증거 창만 있고, 기한 전 DUE·VALID_EMPTY 는 결손이 아니다.
-		assertThat(s.gaps()).hasSize(1);
+		assertThat(s.gaps()).hasSize(2);
 		// JDBC 가 돌려주는 offset(세션 TZ)은 계약이 아니다 — 시각(instant)만 단언한다.
 		assertThat(s.gaps().get(0).windowStart().toInstant()).isEqualTo(PAST.toInstant());
-		assertThat(s.gaps().get(0).noEvidence()).isTrue();
+		assertThat(s.gaps()).allSatisfy(g -> assertThat(g.noEvidence()).isTrue());
 	}
 
 	@Test
@@ -82,6 +85,11 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertSession("sess-x", "price_minute", "toss", DAY.plusDays(1), "PLANNED");
 		insertWindow("sess-t", PAST, "VALID");
 		insertPriceJob("job-t", "sess-t", PAST, "DEAD");
+		// lease 만료된 CLAIMED job — "처리 중"에 뭉개지면 Consumer 사망 고착이 안 보인다.
+		insertWindow("sess-t", PAST.plusMinutes(1), "VALID");
+		insertPriceJob("job-c", "sess-t", PAST.plusMinutes(1), "CLAIMED");
+		jdbc.update("UPDATE price_window_job SET lease_expires_at = ? WHERE job_id = 'job-c'",
+				PAST);
 		// 뉴스 job 은 created_at 의 KST 날짜 축 — 8/3 00:10 KST = 8/2 15:10 UTC 경계를 일부러 밟는다.
 		insertNewsJob("nj-in", "2026-08-02T15:10:00Z", "DEAD");
 		insertNewsJob("nj-out", "2026-08-02T14:50:00Z", "SUCCEEDED"); // = 8/2 23:50 KST
@@ -91,6 +99,8 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(status.sessions()).extracting(SessionSummary::sessionId)
 				.containsExactly("sess-t");
 		assertThat(status.sessions().get(0).priceJobs().dead()).isEqualTo(1);
+		assertThat(status.sessions().get(0).priceJobs().claimed()).isEqualTo(1);
+		assertThat(status.sessions().get(0).priceJobs().claimedExpired()).isEqualTo(1);
 		assertThat(status.newsJobs().dead()).isEqualTo(1);
 		assertThat(status.newsJobs().succeeded()).isZero();
 	}

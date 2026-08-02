@@ -51,7 +51,11 @@ public interface MinuteStatusRepository {
 			boolean noEvidence) {
 	}
 
-	/** job 상태 집계 — {@code waiting} 은 PENDING+RETRY_WAIT(재시도 대기 포함 미귀결). */
-	record JobCounts(long waiting, long claimed, long succeeded, long dead) {
+	/**
+	 * job 상태 집계 — {@code waiting} 은 PENDING+RETRY_WAIT(재시도 대기 포함 미귀결).
+	 * {@code claimedExpired} 는 claimed 중 lease 만료분(서버 시계 판정) — Consumer 가 죽고
+	 * 아무도 재청구하지 않은 고착 후보다. "처리 중"에 뭉개면 영원히 경고가 없다.
+	 */
+	record JobCounts(long waiting, long claimed, long claimedExpired, long succeeded, long dead) {
 	}
 }

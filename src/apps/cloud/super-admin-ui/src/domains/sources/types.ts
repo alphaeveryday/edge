@@ -372,6 +372,8 @@ export interface MinuteGapWindow {
 export interface MinuteJobCounts {
   waiting: number;
   claimed: number;
+  /** claimed 중 lease 가 만료된 것(서버 판정) — Consumer 사망으로 고착됐을 후보 */
+  claimedExpired: number;
   succeeded: number;
   dead: number;
 }
