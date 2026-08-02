@@ -304,13 +304,19 @@ class CausalData:
                " ON f.instrument_id = k.i AND f.trade_date = k.d")
         return self._aligned(pairs, sql, [ids, ds])
 
-    def ids(self, names: list[str]) -> dict[str, str]:
+    def ids(self, names: list[str] | str) -> dict[str, str]:
         """티커·표시명 -> instrument_id. **조정집합을 짜려면 id 를 알아야 한다.**
 
         검정 에이전트가 "SK하이닉스의 instrument_id 를 알 수 없어 조정집합을 구성할 수
         없다"고 요청했다(fb-20260801-01). 술어로 우회하면 종목명을 `ticker` 에 넣는
         0행 오검사로 빠지므로, 이름에서 id 로 가는 길을 표면에 둔다.
+
+        문자열 하나도 받는다. `ids("091160")` 을 리스트로 감싸지 않으면 글자 단위로
+        조회돼 **있는 종목이 없다고 나온다** - 실제로 그렇게 실패했다(ground-20260801-01:
+        "'KODEX 반도체' 와 티커 '091160' 모두 실패"). 도구 표면이 호출 습관을 흡수한다.
         """
+        if isinstance(names, str):
+            names = [names]
         keys = [str(n).strip() for n in (names or []) if str(n).strip()]
         if not keys:
             return {}

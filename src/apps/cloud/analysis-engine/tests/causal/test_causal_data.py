@@ -263,3 +263,15 @@ def test_ids_maps_both_ticker_and_display_name():
 
     assert cd.ids(["SK하이닉스"]) == {"SK하이닉스": "inst_x"}
     assert cd.ids([]) == {}, "빈 입력에 질의를 던지지 않는다"
+
+
+def test_ids_accepts_a_bare_string():
+    """`ids("091160")` 을 글자 단위로 조회하면 **있는 종목이 없다고 나온다.**
+
+    실측(ground-20260801-01): 검정 에이전트가 "'KODEX 반도체' 와 티커 '091160' 모두
+    실패"로 조정집합을 포기했다. 도구 표면이 호출 습관을 흡수한다.
+    """
+    cd = CausalData(_FakeConn([("091160", "KODEX 반도체", "inst_etf")]))
+
+    assert cd.ids("091160") == {"091160": "inst_etf"}
+    assert cd._conn.executed[-1][1][0] == ["091160"], "글자 단위로 쪼개 조회했다"
