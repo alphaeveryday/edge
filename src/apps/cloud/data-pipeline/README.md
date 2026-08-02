@@ -74,7 +74,13 @@
 > `_normalize` 를 재사용한다. ⚠️ 시각 축 규칙이 둘로 갈린다: **내용은 이번 관측 값**으로
 > 쓰고 **`available_at` 은 GREATEST 로 앞으로만** 간다 — 시각으로 내용 쓰기를 막으면 배치가
 > 미래 `published_at` 을 실은 행에서 정정이 유실되고, 시각을 뒤로 밀면 과거 as-of 구간에서
-> 문서가 사라진다)까지다.
+> 문서가 사라진다), **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
+> `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
+> 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
+> 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
+> exit code 가 아니라 출력(`created`·`drain_requested`)이 말한다. ⚠️ `--dataset`·
+> `--source-group` 은 어휘 밖이면 거부한다: 원장의 `source_group` 이 정본이라 EOD 가 그
+> 값으로 raw prefix 를 스캔해, 오타 하나가 "orphan 0건"이라는 거짓 clean 을 만든다)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
@@ -894,6 +900,24 @@ DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs
 # producer 를 고쳐 재실행해도 그 행은 안 바뀐다(미지정=직전 event 값 복사).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run redrive --kind news --job-id <job_id> --reason "큐 URL 오타 수정 후 재시도"
+# 세션 계획(1분 파이프라인, ALPHA-698) — 하루치 session + window 를 멱등 생성한다
+# (Premarket SFN 이 부를 자리). 재실행은 no-op 이고 exit 0 — 새로 생겼는지는 출력의
+# `created` 가 말한다. ⚠️ 가격 세션은 `--universe` 가 **필수**다: 빠뜨리면 정규장 390 만
+# 계획되고 시간외 구간이 아무 실패 신호 없이 누락된다. window 범위와 universe_hash 가
+# 그 파일에서 나온다(무엇을 정본으로 볼지는 운영자가 정한다 — CLI 는 찾아 나서지 않는다).
+# exit: 0=계획됨 / 1=계획하면 안 되는 상태(다른 universe 로 고정·이미 drain 이후) /
+# 2=계획 자체를 못 함(설정·인자 결손·어휘 밖 dataset·source_group·DB 장애).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run plan-minute-session --dataset price_minute \
+    --source-group toss --session-date 2026-08-04 --universe /path/universe.json
+# 세션 drain(1분 파이프라인, ALPHA-698) — phase 를 DRAINING 으로 옮긴다(EOD SFN 이 부를
+# 자리). Worker 가 ack 하면 DRAINED 가 되고 그다음이 qc-minute-session 이다.
+# ⚠️ **이미 drain 이후인 것도 exit 0** 이다 — DB 커밋 뒤 출력 전에 죽은 실행의 재시도가
+# 정상 운영이라, 그걸 실패로 내면 정상 재시도가 EOD 흐름을 세운다. 방금 걸었는지는
+# 출력의 `drain_requested` 가 말한다. 없는 세션은 exit 2 다(지목이 틀린 것이라 재시도로
+# 낫지 않는다).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run drain-minute-session --session-id <session_id>
 # EOD 세션 QC(1분 파이프라인, ALPHA-693) — drain 이 끝난(DRAINED) 세션 하나를 판정해
 # 닫는다. DUE 잔존을 MISSING 으로 확정하고 FINALIZED + final_checksum 을 기록한다.
 # ⚠️ 확정 대상은 **이미 도래한** window 뿐이다(scheduled_at ≤ now) — 장중에 drain 이
