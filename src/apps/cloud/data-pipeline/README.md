@@ -39,8 +39,9 @@
 > `minute/states.py` 가 SQL CHECK 와 기계 동기화)과 session/window repository
 > (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)과 job/outbox
 > repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664), artifact/manifest
-> 경계(결정적·불변 key·put_immutable, ALPHA-665), fenced commit transaction(canonical·
-> window·job·outbox 원자화 + orphan 검출, ALPHA-666), Price Worker loop(fence·2-lane·
+> 경계(결정적·불변 key·put_immutable, ALPHA-665), fenced commit transaction(window·
+> job·outbox 원자화 + orphan 검출, ALPHA-666 — 가격 분봉 canonical 은 **S3 artifact
+> 정본**이라 트랜잭션 밖이고 DB canonical 은 뉴스만: ALPHA-701), Price Worker loop(fence·2-lane·
 > 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식)와 **토스 분봉 adapter**
 > (ALPHA-682 — 2026-08-01 실호출 실측 형상 기반: `1m` 캔들, ts 는 **구간의 끝**이라
 > `window_start = ts − 1분`, 거래 없어도 캔들이 오므로 no_trade 는 "행 있고 거래량 0"·

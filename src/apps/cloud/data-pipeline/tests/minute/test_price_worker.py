@@ -43,16 +43,6 @@ UNIVERSE_EXT = Universe(
 )
 
 
-class RecordingCanonicalWriter:
-    def __init__(self):
-        self.rows: dict[tuple, dict] = {}
-
-    def upsert_tx(self, cur, *, dataset, window_start, records):
-        for record in records:
-            self.rows[(dataset, window_start, record["unit_id"])] = record
-        return len(records)
-
-
 def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
                  universe=UNIVERSE, first_window=0):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
@@ -68,7 +58,6 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
         committer=MinuteCommitter(db=_DB, connect_fn=db.connect),
         storage=LocalStorage(root=tmp_path),
         collector=FakePriceCollector(scenario or {"scenario": "normal"}, seed=42),
-        canonical_writer=RecordingCanonicalWriter(),
         config=WorkerConfig(
             worker_id=worker_id, dataset="price_minute", source="toss", market="KR",
             session_date="2026-07-31", universe=universe, run_id="run_t",

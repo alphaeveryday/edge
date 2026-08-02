@@ -136,6 +136,27 @@ class TestFirstPollAndJobs:
         window = next(iter(db.windows.values()))
         assert window["manifest_uri"] == key
 
+    def test_canonical_failure_creates_no_job_or_outbox(self, tmp_path):
+        # canonical 실패는 삼켜지지 않는다 — canonical upsert 는 job/outbox 앞이라,
+        # 실패가 성공으로 위장되면 canonical 없는 article_id 의 추출 job 이 생긴다
+        # (ALPHA-701 로 가격 경로의 동형 테스트가 제거돼 뉴스 쪽에서 고정한다)
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(db, tmp_path)
+
+        class ExplodingWriter:
+            called = False
+
+            def upsert_tx(self, cur, *, dataset, window_start, records):
+                self.called = True  # 도달 증명 — 선행 오류로 우연히 통과하는 것 방지
+                raise RuntimeError("canonical 장애")
+
+        worker.canonical_writer = ExplodingWriter()
+        assert worker.tick(NOW) == "WINDOW_FAILED"  # 격리·기록, 성공 위장 없음
+        assert worker.canonical_writer.called  # 실패 원인이 canonical upsert 맞다
+        assert db.jobs == {} and db.outbox == {}
+        # anchor 도 전진하지 않는다 — 전진하면 이 구간이 다음 poll 범위 밖으로 사라진다
+        assert (session_id, "bigkinds") not in db.anchors
+
 
 class TestLedgerIsTheAuthority:
     def test_reobservation_creates_no_job(self, tmp_path):
