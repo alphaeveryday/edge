@@ -145,12 +145,12 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 	 */
 	private static final String OVERVIEW_SQL = """
 			SELECT l.pipeline_type, l.run_key, l.launch_status, l.orchestration_status,
-			       l.trading_date,
+			       l.trading_date, l.created_at,
 			       t.stage, t.task_key, t.plan_status, t.task_outcome, t.data_status,
 			       t.required, t.deadline_at, t.failed_records,
 			       t.freshness_status, t.expected_as_of_date, t.actual_as_of_date
 			  FROM (SELECT DISTINCT ON (pipeline_type) pipeline_run_id, pipeline_type, run_key,
-			               launch_status, orchestration_status, trading_date
+			               launch_status, orchestration_status, trading_date, created_at
 			          FROM ops_pipeline_run
 			         ORDER BY pipeline_type, created_at DESC, pipeline_run_id DESC) l
 			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = l.pipeline_run_id
@@ -176,7 +176,8 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 				java.sql.Date tradingDate = rs.getDate("trading_date");
 				headers.put(lane, new OverviewHeader(lane, rs.getString("run_key"),
 						rs.getString("launch_status"), rs.getString("orchestration_status"),
-						tradingDate == null ? null : tradingDate.toLocalDate()));
+						tradingDate == null ? null : tradingDate.toLocalDate(),
+						rs.getObject("created_at", OffsetDateTime.class)));
 				tasks.put(lane, new ArrayList<>());
 			}
 			if (rs.getString("task_key") != null) {
@@ -199,12 +200,13 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 		return headers.entrySet().stream()
 				.map(e -> new OverviewLane(e.getValue().pipelineType(), e.getValue().runKey(),
 						e.getValue().launchStatus(), e.getValue().orchestrationStatus(),
-						e.getValue().tradingDate(), List.copyOf(tasks.get(e.getKey()))))
+						e.getValue().tradingDate(), e.getValue().plannedAt(),
+						List.copyOf(tasks.get(e.getKey()))))
 				.toList();
 	}
 
 	private record OverviewHeader(String pipelineType, String runKey, String launchStatus,
-			String orchestrationStatus, LocalDate tradingDate) {
+			String orchestrationStatus, LocalDate tradingDate, OffsetDateTime plannedAt) {
 	}
 
 	@Override

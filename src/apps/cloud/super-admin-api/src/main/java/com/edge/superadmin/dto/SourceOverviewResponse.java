@@ -18,7 +18,13 @@ import java.util.List;
  */
 public record SourceOverviewResponse(List<LaneResponse> lanes) {
 
+	/**
+	 * {@code plannedAt}·{@code notToday} — 이 판정이 언제 런 기준인지. Planner 가 오늘 안 돌면
+	 * 조회는 어제 런을 최신으로 재사용하므로, "오늘 화면"이 그 사실을 명시해야 지난 판정이
+	 * 오늘 것처럼 보이지 않는다(notToday 는 서버 KST 시계 판정 — 화면 재계산 금지).
+	 */
 	public record LaneResponse(String pipelineType, String runKey, String tradingDate,
+			String plannedAt, boolean notToday,
 			String launchStatus, String orchestrationStatus, String opsStatus,
 			CountsResponse counts, List<DefectResponse> defects) {
 	}

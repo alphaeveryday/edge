@@ -13,8 +13,11 @@ import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
+import java.util.Set;
 
 /**
  * sources 화면 — 운영 원장(`ops_*`)의 런 하나를 읽어 그대로 낸다(ALPHA-514, 드릴다운 574).
@@ -78,6 +81,12 @@ public class SourceService {
 				pipelineStatus.overview().stream().map(lane -> toLane(lane, now)).toList());
 	}
 
+	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+	/** SFN 실행 전체의 terminal 실패 — 이 뒤로 남은 PENDING 은 저절로 진행되지 않는다. */
+	private static final Set<String> ORCHESTRATION_TERMINAL_FAILED =
+			Set.of("FAILED", "TIMED_OUT", "ABORTED");
+
 	private static LaneResponse toLane(OverviewLane lane, OffsetDateTime now) {
 		List<OverviewTask> due = lane.tasks().stream()
 				.filter(t -> "DUE".equals(t.planStatus())).toList();
@@ -97,8 +106,16 @@ public class SourceService {
 				countOutcome(requiredDue, "MISSED"), countOutcome(requiredDue, "BLOCKED"),
 				countOutcome(requiredDue, "PENDING"), skipped);
 
+		// "오늘 화면"이 지난 런을 오늘 것처럼 보이게 하지 않는다 — Planner 가 오늘 안 돌면 이
+		// 조회는 어제 런을 재사용한다(최신 = 존재하는 것 중 최신). 판정은 서버 시계(KST)로 한다.
+		// 기대 슬롯 카탈로그 기반의 "있어야 할 런 부재" 판정은 후속(ALPHA-651 이후) 소관이다.
+		boolean notToday = lane.plannedAt() != null
+				&& !lane.plannedAt().atZoneSameInstant(KST).toLocalDate()
+						.equals(LocalDate.now(KST));
+
 		return new LaneResponse(lane.pipelineType(), lane.runKey(),
 				lane.tradingDate() == null ? null : lane.tradingDate().toString(),
+				lane.plannedAt() == null ? null : lane.plannedAt().toString(), notToday,
 				lane.launchStatus(), lane.orchestrationStatus(),
 				opsStatus(lane, requiredDue, defects, now), counts, defects);
 	}
@@ -122,10 +139,15 @@ public class SourceService {
 				|| "LAUNCH_CONFLICT".equals(lane.launchStatus())) {
 			return "BLOCKED";
 		}
+		// 실행 전체가 terminal 실패면 남은 PENDING 은 저절로 진행되지 않는다 — 마감 전이라고
+		// IN_PROGRESS 로, 결함 목록이 비었다고 READY 로 내면 실패한 런이 정상으로 보인다.
+		boolean runTerminalFailed =
+				ORCHESTRATION_TERMINAL_FAILED.contains(lane.orchestrationStatus() == null
+						? "" : lane.orchestrationStatus());
 		boolean pendingBeforeDeadline = requiredDue.stream().anyMatch(
 				t -> pendingOutcome(t) && t.deadlineAt() != null && !t.deadlineAt().isBefore(now));
-		if ("PLANNING".equals(lane.launchStatus())
-				|| "RUNNING".equals(lane.orchestrationStatus()) || pendingBeforeDeadline) {
+		if (!runTerminalFailed && ("PLANNING".equals(lane.launchStatus())
+				|| "RUNNING".equals(lane.orchestrationStatus()) || pendingBeforeDeadline)) {
 			return "IN_PROGRESS";
 		}
 		boolean undecidablePending = requiredDue.stream().anyMatch(
@@ -135,7 +157,7 @@ public class SourceService {
 				|| lane.tasks().isEmpty() || undecidablePending) {
 			return "UNKNOWN";
 		}
-		return defects.isEmpty() ? "READY" : "DEGRADED";
+		return (defects.isEmpty() && !runTerminalFailed) ? "READY" : "DEGRADED";
 	}
 
 	/**

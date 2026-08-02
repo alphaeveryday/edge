@@ -233,6 +233,13 @@ export interface OverviewLane {
   pipelineType: string;
   runKey: string;
   tradingDate: string | null;
+  /** 계획 시각(ISO). "이 판정이 언제 런 기준인가"의 근거 */
+  plannedAt: string | null;
+  /**
+   * 서버 KST 시계 판정 — Planner 가 오늘 안 돌면 조회는 어제 런을 최신으로 재사용한다.
+   * 오늘 화면이 그 사실을 숨기면 지난 판정이 오늘 것처럼 보인다(화면 재계산 금지).
+   */
+  notToday: boolean;
   launchStatus: LaunchStatus | null;
   orchestrationStatus: OrchestrationStatus | null;
   opsStatus: OpsStatus;

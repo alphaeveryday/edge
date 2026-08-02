@@ -24,7 +24,9 @@ const OPS: Record<OpsStatus, { label: string; tone: BadgeTone; desc: string }> =
   IN_PROGRESS: { label: '진행 중', tone: 'env', desc: '필수 작업 판정 대기' },
   DEGRADED: { label: '부분 결함', tone: 'warn', desc: '일부 필수 작업에 결함 — 아래 목록' },
   BLOCKED: { label: '차단', tone: 'blocked', desc: '런이 기동하지 못함 — 전 대상 영향' },
-  UNKNOWN: { label: '확인 불가', tone: 'neutral', desc: '실행 여부를 신뢰성 있게 알 수 없음' },
+  /* 서버의 UNKNOWN 사유는 실행 불명만이 아니다(계획 증거 없음·마감 없는 미귀결 포함) —
+   * "실행 여부"로 좁혀 쓰면 실행 축이 SUCCEEDED 인 카드와 문구가 모순된다 */
+  UNKNOWN: { label: '확인 불가', tone: 'neutral', desc: '판정 근거 부족 — 드릴다운 확인 필요' },
 };
 
 const LANE_LABEL: Record<string, string> = { 'etf-daily': '시장(EOD)', news: '뉴스' };
@@ -60,6 +62,8 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
       <div className="card-head">
         <span className="t-label">{LANE_LABEL[lane.pipelineType] ?? lane.pipelineType} 레인</span>
         <StatusBadge tone={ops.tone}>{ops.label}</StatusBadge>
+        {/* 오늘 런이 아니면 판정 전체가 지난 런 기준이라는 사실이 상태보다 먼저 보여야 한다 */}
+        {lane.notToday && <StatusBadge tone="warn">오늘 런 아님</StatusBadge>}
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>{ops.desc}</span>
       </div>
 
@@ -75,6 +79,7 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
           {lane.runKey}
         </button>
         {' · '}기준 거래일 {lane.tradingDate ?? '—'}
+        {' · '}계획 {lane.plannedAt ? new Date(lane.plannedAt).toLocaleString('ko-KR') : '—'}
         {' · '}기동 {lane.launchStatus ?? '—'} · 실행 전체 {lane.orchestrationStatus ?? '—'}
       </p>
 

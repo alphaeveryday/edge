@@ -239,10 +239,13 @@ public interface PipelineStatusRepository {
 
 	/**
 	 * 레인 하나의 최신 런. 격자와 같은 이유로 작업이 안 적힌 런(기동 실패 등)도 낸다 —
-	 * 부재가 1급 신호다.
+	 * 부재가 1급 신호다. {@code plannedAt}(계획 시각)은 "이 판정이 언제 런 기준인가"의 근거다 —
+	 * 오늘 Planner 가 안 돌면 이 조회는 어제 런을 최신으로 재사용하므로, 화면이 그 사실을
+	 * 숨기면 지난 판정이 오늘 것처럼 보인다.
 	 */
 	record OverviewLane(String pipelineType, String runKey, String launchStatus,
-			String orchestrationStatus, LocalDate tradingDate, List<OverviewTask> tasks) {
+			String orchestrationStatus, LocalDate tradingDate, OffsetDateTime plannedAt,
+			List<OverviewTask> tasks) {
 	}
 
 	/**
