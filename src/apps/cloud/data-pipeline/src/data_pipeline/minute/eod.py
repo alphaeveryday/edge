@@ -135,9 +135,10 @@ class SessionQc:
             "violations": violations,
             "final_checksum": _final_checksum(rows),
             "final_generation": max((generation for _, _, generation, _ in rows), default=None),
-            # 정상 경로는 방금 계산한 값을 그대로 확정하므로 항상 일치한다 — 재실행 경로와
-            # 키 집합을 같게 두려고 명시한다(소비자가 공통 스키마로 읽는다).
-            "checksum_matches_record": True,
+            # 확정에 성공하면 방금 계산한 값이 곧 기록값이라 일치한다. 위반으로 FAILED 가
+            # 되면 **아무것도 기록되지 않으므로**(fail_session_qc 는 phase 만 바꾼다) 대조할
+            # 대상이 없다 — 그때 True 라고 말하면 없는 기록과 일치한다고 주장하는 셈이다.
+            "checksum_matches_record": not violations,
         }
 
         if violations:

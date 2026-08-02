@@ -186,6 +186,20 @@ class TestReentry:
         ) is False
         assert db.sessions[session_id]["phase"] == "QC_RUNNING"
 
+    def test_stale_run_cannot_confirm_missing(self, tmp_path):
+        # ⚠️ 되돌릴 수 없는 쓰기는 finalize 가 아니라 **여기**다. 소유권을 잃은 낡은 QC 가
+        # 다른 now 로 미도래 window 를 MISSING 으로 찍으면 새 실행이 그걸 정상으로 보고
+        # 조기 확정한다 — 토큰 검사는 세션 행을 잠근 뒤에 해야 한다(비잠금이면 옛 스냅샷).
+        db = FakeMinuteDB()
+        ledger, session_id = make_session(db, statuses=("VALID", "DUE", "DUE"))
+        stale = ledger.begin_qc(session_id=session_id, now=NOW)   # 실행 A
+        ledger.begin_qc(session_id=session_id, now=NOW)           # 실행 B 가 소유권 인수
+
+        assert ledger.confirm_missing_windows(
+            session_id=session_id, fence_token=stale["fence_token"], now=NOW
+        ) == 0
+        assert [w["data_status"] for w in db.windows.values()].count("DUE") == 2
+
     def test_session_that_never_drained_is_rejected(self, tmp_path):
         db = FakeMinuteDB()
         _, session_id = make_session(

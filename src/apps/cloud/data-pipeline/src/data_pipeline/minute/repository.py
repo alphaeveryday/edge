@@ -567,10 +567,13 @@ class MinuteLedger:
         대기 중인 window 를 전부 MISSING 으로 죽인다(claim 대상에서 빠져 그날 데이터가
         통째로 사라진다).
 
-        ⚠️ **fencing token** — phase 만 보면 소유권을 잃은 낡은 QC 도 쓴다. 두 실행의
-        `now` 가 다르면 낡은 쪽이 새 쪽 기준으로 미도래인 window 까지 MISSING 으로 바꾸고,
-        같아도 새 쪽의 `missing_confirmed` 가 0 으로 왜곡된다(무엇을 확정했는지 보고가
-        틀어진다). 이 쓰기는 되돌릴 수 없으므로 소유권 없이는 못 하게 한다.
+        ⚠️ **fencing token 을 잠그고 검사한다** — phase 만 보면 소유권을 잃은 낡은 QC 도
+        쓴다. 두 실행의 `now` 가 다르면 낡은 쪽이 새 쪽 기준으로 미도래인 window 까지
+        MISSING 으로 바꾸고, 같아도 새 쪽의 `missing_confirmed` 가 0 으로 왜곡된다.
+        ⚠️⚠️ 그런데 토큰을 `UPDATE … FROM session s` 의 조건으로만 두면 **s 를 잠그지
+        않는다** — READ COMMITTED 스냅샷이 옛 토큰을 본 채 진행할 수 있다(이 레포가 반복해
+        데인 비잠금 검사 = TOCTOU). 그래서 같은 트랜잭션에서 세션 행을 `FOR UPDATE` 로
+        먼저 잠그고 대조한 뒤 쓴다. 이 쓰기는 되돌릴 수 없어 값이 비쌀 자격이 있다.
 
         ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
         잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
@@ -581,14 +584,22 @@ class MinuteLedger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE minute_ingestion_window w
-                SET data_status = 'MISSING', updated_at = now()
-                FROM minute_ingestion_session s
-                WHERE w.session_id = s.session_id AND s.session_id = %s
-                  AND s.phase = 'QC_RUNNING' AND s.worker_fencing_token = %s
-                  AND w.data_status = 'DUE' AND w.scheduled_at <= %s
+                SELECT phase, worker_fencing_token FROM minute_ingestion_session
+                WHERE session_id = %s FOR UPDATE
                 """,
-                (session_id, fence_token, now),
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] != "QC_RUNNING" or row[1] != fence_token:
+                # 내 QC 가 아니다 — 되돌릴 수 없는 쓰기를 하지 않는다
+                return 0
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window
+                SET data_status = 'MISSING', updated_at = now()
+                WHERE session_id = %s AND data_status = 'DUE' AND scheduled_at <= %s
+                """,
+                (session_id, now),
             )
             return cur.rowcount
 

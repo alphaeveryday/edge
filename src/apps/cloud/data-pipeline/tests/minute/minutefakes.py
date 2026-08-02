@@ -141,15 +141,17 @@ class _Cursor:
                 self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
-        elif s.startswith("UPDATE minute_ingestion_window w") and "'MISSING'" in s:
-            # phase 바인딩이 빠지면 살아 있는 세션의 DUE 를 전부 죽인다(그날 데이터 소멸)
-            assert "s.phase = 'QC_RUNNING'" in s, "confirm_missing_windows SQL 에 phase 가드가 없다"
-            # 소유권 없이 쓰면 낡은 QC 가 되돌릴 수 없는 MISSING 을 찍는다
-            assert "s.worker_fencing_token = %s" in s, \
-                "confirm_missing_windows SQL 에 QC 소유권 토큰이 없다"
+        elif s.startswith("SELECT phase, worker_fencing_token"):
+            # QC 소유권 검사는 **행을 잠그고** 해야 한다 — 비잠금이면 READ COMMITTED
+            # 스냅샷이 옛 토큰을 본 채 되돌릴 수 없는 MISSING 을 찍는다(재발 패턴 #1)
+            assert "FOR UPDATE" in s, "QC 소유권 검사가 세션 행을 잠그지 않는다"
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["phase"], row.get("worker_fencing_token", 0))]
+        elif s.startswith("UPDATE minute_ingestion_window") and "'MISSING'" in s:
             # 시각 가드가 빠지면 조기 drain 만으로 **아직 오지도 않은 분**까지 MISSING 으로
             # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
-            assert "w.scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
+            assert "scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
             self._confirm_missing(params)
         elif s.startswith("SELECT window_start, data_status, generation, checksum"):
             assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
@@ -344,12 +346,9 @@ class _Cursor:
                        row["worker_fencing_token"])]
 
     def _confirm_missing(self, p):
-        session_id, fence_token, now = p
-        session = self.db.sessions.get(session_id)
-        if (session is None or session["phase"] != "QC_RUNNING"
-                or session.get("worker_fencing_token") != fence_token):
-            self.rowcount = 0
-            return
+        # 소유권 검사는 앞선 잠금 SELECT 가 한다(실제 코드와 같은 순서) — 여기서 다시
+        # 합성하면 그 SELECT 가 빠져도 테스트가 통과한다
+        session_id, now = p
         changed = 0
         for window in self.db.windows.values():
             if (window["session_id"] == session_id and window["data_status"] == "DUE"
