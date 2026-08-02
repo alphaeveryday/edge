@@ -96,9 +96,10 @@ public class SourceService {
 				throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
 			}
 		}
+		NewsLineageRepository.Lineage lineage = newsLineage.lineage(dateKst, limit);
 		return NewsLineageResponse.from(
 				dateKst == null ? null : dateKst.toString(),
-				newsLineage.summary(dateKst), newsLineage.documents(dateKst, limit));
+				lineage.summary(), lineage.documents());
 	}
 
 	public SourceOverviewResponse overview() {

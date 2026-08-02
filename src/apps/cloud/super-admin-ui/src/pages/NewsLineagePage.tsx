@@ -41,7 +41,9 @@ function DocumentRow({ d }: { d: NewsLineageDocument }) {
 export function NewsLineagePage() {
   /* 기본은 전체 누적 — 런 단위 계보는 불가하다(문서 테이블에 run_id 없음), 날짜로 자른다 */
   const [date, setDate] = useState<string>('');
-  const { data, isPending, isError, error } = useNewsLineage(date || undefined);
+  /* 표본 크기 — 서버 상한 200. 전량 페이지네이션은 후속(표본 검증 경로가 이 화면의 계약) */
+  const [limit, setLimit] = useState<number>(50);
+  const { data, isPending, isError, error } = useNewsLineage(date || undefined, limit);
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
@@ -82,6 +84,16 @@ export function NewsLineagePage() {
       <div className="card">
         <div className="card-head">
           <span className="t-label">문서 목록</span>
+          <select
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+            className="t-xs"
+            style={{ border: '1px solid var(--border, #d1d5db)', borderRadius: 4, padding: '2px 4px' }}
+            title="표본 크기 (서버 상한 200)"
+          >
+            <option value={50}>50건</option>
+            <option value={200}>200건</option>
+          </select>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             수집 시각 내림차순 · 최근 {data.documents.length}건 표본 — 위 집계의 검증 경로
           </span>

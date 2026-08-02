@@ -66,6 +66,14 @@ public class JdbcNewsLineageRepository implements NewsLineageRepository {
 	}
 
 	@Override
+	@Transactional(readOnly = true,
+			isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+	public Lineage lineage(LocalDate dateKst, int limit) {
+		// 두 조회가 이 트랜잭션에 참여해 한 스냅샷을 읽는다(인터페이스 주석 참조).
+		return new Lineage(summary(dateKst), documents(dateKst, limit));
+	}
+
+	@Override
 	@Transactional(readOnly = true)
 	public LineageSummary summary(LocalDate dateKst) {
 		String sql = dateKst == null ? SUMMARY_SQL

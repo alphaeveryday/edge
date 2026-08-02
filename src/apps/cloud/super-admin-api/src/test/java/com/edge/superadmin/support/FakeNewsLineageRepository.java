@@ -39,4 +39,9 @@ public class FakeNewsLineageRepository implements NewsLineageRepository {
 		List<LineageDocument> all = documents.getOrDefault(dateKst, List.of());
 		return all.subList(0, Math.min(limit, all.size()));
 	}
+
+	@Override
+	public Lineage lineage(LocalDate dateKst, int limit) {
+		return new Lineage(summary(dateKst), documents(dateKst, limit));
+	}
 }

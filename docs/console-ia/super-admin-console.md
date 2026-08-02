@@ -24,6 +24,7 @@ Super Admin Console
 **Event Pipeline** (= 가격 변동 분석 관리)
 
 - 데이터 소스 수집 상태: 뉴스 / 공시 / 시세 / 수급 / 실적·재무 / ETF 구성 종목 — 각 상태, 마지막 수집·정상 처리 시각, 최근 오류
+- 뉴스 계보(ALPHA-685): 수집 문서 → 구조화 증거 → 분석 사용 집계 + 근거 문서 목록(KST 수집일 필터, 표본 상한 200). 원장이 아는 범위까지만 주장 — 추출 terminal 구분(NO_EVENT/실패)·중복 제거·종목 연결은 미계측 명시
 - 변동(분석) 이벤트 목록: 종목, 시장, 등락률, 방향, 생성 시각, 근거 개수, 상태. 필터: 상태(전체 / 분석 완료 / 분석 대기 / 분석 실패 / 제외됨), 시장, 종목 검색
 - 변동 이벤트 상세: 종목명, 티커, 시장, 등락률, 기준 시각, 관련 뉴스/공시, 시세/수급 변화, AI 공통 설명 후보, 신뢰도, 반대 요인, 분석 정보(변동 기준 시각·분석 완료 시각)
 - 관리 액션: 정정 등록(분석 결과 정정), 무효화 등록(분석 대상 제외). **정정/무효화 시 사유 입력 필수** — 사유는 이벤트 레코드에 보존된다
@@ -43,6 +44,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Run Overview — 오늘 운영 현황 | `GET /api/v1/sources/overview` |
 | Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
 | Event Pipeline — 파이프라인 실행 이력 | `GET /api/v1/sources/grid` |
+| Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
 | Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |

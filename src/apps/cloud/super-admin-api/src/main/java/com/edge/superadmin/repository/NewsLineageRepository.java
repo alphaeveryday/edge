@@ -24,6 +24,16 @@ public interface NewsLineageRepository {
 	List<LineageDocument> documents(LocalDate dateKst, int limit);
 
 	/**
+	 * 집계와 근거 목록을 <b>한 스냅샷</b>에서 — 따로 부르면 두 조회 사이에 writer 가 커밋해
+	 * "집계 0 인데 목록엔 문서" 같은, 어느 시점에도 존재하지 않은 조합이 화면에 조립된다
+	 * (드릴다운 네 조회를 REPEATABLE READ 로 묶는 것과 같은 이유). 화면 경로는 이것만 쓴다.
+	 */
+	Lineage lineage(LocalDate dateKst, int limit);
+
+	record Lineage(LineageSummary summary, List<LineageDocument> documents) {
+	}
+
+	/**
 	 * 단계별 문서 수 — 단위는 전부 <b>문서(기사)</b>다. {@code withAssertion} 은 "추출 성공"이
 	 * 아니라 "구조화 증거가 남은 문서"다(없음 = NO_EVENT·실패·미실행이 한 통 — 구분 미계측).
 	 */
