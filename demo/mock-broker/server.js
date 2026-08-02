@@ -247,10 +247,12 @@ async function getQuotes() {
         quotesInFlight = null;
       });
   }
-  if (quotesCache.body) {
-    return quotesInFlight; // 웜(일봉 캐시됨) — 현재가 배치 2건뿐이라 그대로 기다린다
+  // 웜 판단은 body 존재가 아니라 일봉이 오늘자로 캐시됐는지다 — 날짜가 바뀌면 전날 body 가
+  // 남아 있어도 일봉 재수집(38심볼 × 250ms)이 돌아, body 기준으로 기다리면 응답이 수 초 묶인다.
+  if (quotesCache.body && dailyCandleCache.date === kstDateOf(Date.now())) {
+    return quotesInFlight; // 웜(일봉 오늘자 캐시) — 현재가 배치 2건뿐이라 그대로 기다린다
   }
-  // 콜드 스타트는 일봉 웜업(수 초)에 응답을 묶지 않는다 — 1.5초 내 미완이면 스냅샷 즉답.
+  // 일봉 웜업(수 초)에 응답을 묶지 않는다 — 1.5초 내 미완이면 스냅샷 즉답.
   // 웜업은 뒤에서 계속 진행돼 다음 폴링(7초)이 실데이터로 채운다(화면 즉시 렌더 불변식 유지).
   return Promise.race([
     quotesInFlight,
