@@ -284,3 +284,36 @@ export interface NewsLineage {
   summary: NewsLineageSummary;
   documents: NewsLineageDocument[];
 }
+
+/* ---------- holdings 결손 영향 (ALPHA-686) ---------- */
+
+/**
+ * 단위: 기대·적재·누락은 **ETF 종**, analyses 는 **설명 결과 건**. snapshotMissing 은 기대
+ * 목록 부재 = 영향 범위 계산 불가(UNKNOWN) — 빈 누락 목록(영향 없음)과 **다르다**(스펙 §6.3).
+ * 누락의 원인(수집/정제/적재 중 어디)은 이 응답이 단정하지 않는다.
+ */
+export interface HoldingsImpact {
+  runKey: string | null;
+  expectedAsOf: string | null;
+  expectedCount: number | null;
+  loadedCount: number | null;
+  snapshotMissing: boolean;
+  missing: MissingEtf[];
+  /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없으면 null */
+  recommendedAction: string | null;
+}
+
+export interface MissingEtf {
+  ourEtfId: string;
+  /** null = instrument 행 자체가 없음(프로필 수집까지 결손) — 단축코드만 표시 가능 */
+  instrumentId: string | null;
+  etfName: string | null;
+  /** 빈 목록 = "기준일 분석 없음"이라는 사실 — 결손의 결과라고 단정하지 않는다(오귀인 금지) */
+  analyses: AffectedAnalysis[];
+}
+
+export interface AffectedAnalysis {
+  explanationResultId: string;
+  publicationStatus: string | null;
+  summary: string | null;
+}

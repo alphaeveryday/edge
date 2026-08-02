@@ -1,6 +1,7 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
+import com.edge.superadmin.dto.HoldingsImpactResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse;
@@ -43,6 +44,13 @@ public class SourceController {
 	@GetMapping("/api/v1/sources/overview")
 	public ApiResponse<SourceOverviewResponse> overview() {
 		return ApiResponse.onSuccess(sourceService.overview());
+	}
+
+	/** holdings 결손 영향(ALPHA-686) — 누락 ETF 와 기준일 분석 지목. */
+	@GetMapping("/api/v1/sources/impact/holdings")
+	public ApiResponse<HoldingsImpactResponse> holdingsImpact(
+			@RequestParam(required = false) String runKey) {
+		return ApiResponse.onSuccess(sourceService.holdingsImpact(runKey));
 	}
 
 	/** 뉴스 계보(ALPHA-685) — 집계와 그 근거 목록. 검증은 서비스가 한다. */

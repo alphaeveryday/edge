@@ -38,3 +38,11 @@ export function useNewsLineage(date?: string, limit?: number) {
     queryFn: () => sourcesRepository.newsLineage(date, limit),
   });
 }
+
+/** holdings 결손 영향(ALPHA-686). 캐시 키에 runKey — 런을 바꿔도 앞선 런 결과가 보이면 안 된다. */
+export function useHoldingsImpact(runKey?: string) {
+  return useQuery({
+    queryKey: ['sources', 'impact', 'holdings', runKey ?? null],
+    queryFn: () => sourcesRepository.holdingsImpact(runKey),
+  });
+}

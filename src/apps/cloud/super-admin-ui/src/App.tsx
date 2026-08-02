@@ -16,6 +16,7 @@ import { TenantDetailPage } from './pages/TenantDetailPage';
 import { SourcesPage } from './pages/SourcesPage';
 import { GridPage } from './pages/GridPage';
 import { NewsLineagePage } from './pages/NewsLineagePage';
+import { HoldingsImpactPage } from './pages/HoldingsImpactPage';
 import { AnalysesPage } from './pages/AnalysesPage';
 import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
 
@@ -31,6 +32,7 @@ export function App() {
           <Route path="/sources" element={<SourcesPage />} />
           <Route path="/grid" element={<GridPage />} />
           <Route path="/lineage/news" element={<NewsLineagePage />} />
+          <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>

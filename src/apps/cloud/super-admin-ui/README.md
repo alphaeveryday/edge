@@ -43,6 +43,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/sources` | 데이터 소스 수집 상태 |
 | `/grid` | 파이프라인 실행 이력 (슬롯×작업 30일 격자 — 셀 클릭 시 `/sources?runKey=` 드릴다운) |
 | `/lineage/news` | 뉴스 계보 (수집→증거→분석 사용 집계 + 근거 문서 표본, KST 수집일 필터 — ALPHA-685) |
+| `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
 | `/analyses` | 가격 변동 분석 목록 (검색·상태·시장 필터) |
 | `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 정정 · 제외/복원) |
 

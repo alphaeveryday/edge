@@ -1,5 +1,5 @@
 /* sources 도메인 — repository 인터페이스 (mock·real 공통 계약) */
-import type { NewsLineage, SourceGrid, SourceOverview, SourceReport } from './types';
+import type { HoldingsImpact, NewsLineage, SourceGrid, SourceOverview, SourceReport } from './types';
 
 export interface SourcesRepository {
   /** @param runKey 볼 런의 슬롯 키. 없으면 최신 런 */
@@ -10,4 +10,6 @@ export interface SourcesRepository {
   overview(): Promise<SourceOverview>;
   /** 뉴스 계보(ALPHA-685). @param date KST 날짜(YYYY-MM-DD), 없으면 전체 누적. @param limit 표본 크기(서버 상한 200) */
   newsLineage(date?: string, limit?: number): Promise<NewsLineage>;
+  /** holdings 결손 영향(ALPHA-686). @param runKey 없으면 최신 etf-daily 런 */
+  holdingsImpact(runKey?: string): Promise<HoldingsImpact>;
 }

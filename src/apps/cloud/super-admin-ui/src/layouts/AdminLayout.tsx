@@ -29,6 +29,7 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
       { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
       { path: '/grid', label: '파이프라인 실행 이력', icon: 'dashboard' },
       { path: '/lineage/news', label: '뉴스 계보', icon: 'database' },
+      { path: '/impact/holdings', label: '구성종목 결손 영향', icon: 'trendChart' },
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
     ],
   },
@@ -93,6 +94,8 @@ export function AdminLayout() {
     pageTitle = '가격 변동 분석 목록';
   } else if (path.startsWith('/lineage/news')) {
     pageTitle = '뉴스 계보';
+  } else if (path.startsWith('/impact/holdings')) {
+    pageTitle = '구성종목 결손 영향';
   } else if (path === '/') {
     pageTitle = '오늘 운영 현황';
   }

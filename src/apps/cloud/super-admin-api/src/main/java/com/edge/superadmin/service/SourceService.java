@@ -6,9 +6,11 @@ import com.edge.superadmin.dto.SourceOverviewResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.CountsResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.DefectResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
+import com.edge.superadmin.dto.HoldingsImpactResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
+import com.edge.superadmin.repository.HoldingsImpactRepository;
 import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
@@ -33,11 +35,35 @@ public class SourceService {
 
 	private final PipelineStatusRepository pipelineStatus;
 	private final NewsLineageRepository newsLineage;
+	private final HoldingsImpactRepository holdingsImpact;
 
 	public SourceService(PipelineStatusRepository pipelineStatus,
-			NewsLineageRepository newsLineage) {
+			NewsLineageRepository newsLineage, HoldingsImpactRepository holdingsImpact) {
 		this.pipelineStatus = pipelineStatus;
 		this.newsLineage = newsLineage;
+		this.holdingsImpact = holdingsImpact;
+	}
+
+	/**
+	 * 권장 재실행 — 실증된 복구 레시피(같은 run_id 로 3스텝)를 정적 문자열로 낸다. 자동 실행
+	 * 없음(스펙 §12: 대시보드는 권장만). 명령 실체는 운영 런북 소관 — 여기선 지점만 가리킨다.
+	 */
+	private static final String HOLDINGS_RECOVERY_ACTION =
+			"같은 run_id 로 ecs run-task 3스텝 재실행: ingest-raw-etf --source krx → "
+					+ "normalize-etf → load-etf-holdings (복구 창은 당일 자정까지 — trdDd 는 "
+					+ "오늘 날짜로만 질의된다)";
+
+	/** holdings 결손 영향(ALPHA-686). runKey 지정 미존재는 404 — 빈 영향으로 위장하지 않는다. */
+	public HoldingsImpactResponse holdingsImpact(String runKey) {
+		HoldingsImpactRepository.Impact impact = holdingsImpact.impact(runKey);
+		if (impact == null) {
+			if (runKey != null) {
+				throw new GeneralException(AdminErrorStatus.RUN_NOT_FOUND);
+			}
+			return HoldingsImpactResponse.empty();
+		}
+		return HoldingsImpactResponse.from(impact,
+				impact.missing().isEmpty() ? null : HOLDINGS_RECOVERY_ACTION);
 	}
 
 	/**
@@ -75,12 +101,6 @@ public class SourceService {
 	}
 
 	/**
-	 * Run Overview(ALPHA-683) — 레인별 최신 런의 운영 요약. 이 클래스 상단의 "요약·판정하지
-	 * 않는다"는 원장 4축 어휘를 다섯 번째 어휘로 뭉개지 말라는 뜻이고, 여기의 {@code opsStatus}
-	 * 는 판정 스펙 §7 이 <b>별도로 정의한 Run 집계 어휘</b>다 — 축의 재명명이 아니라 스펙
-	 * 어휘의 구현이며, 파생 규칙은 이 메서드 하나에만 둔다(화면 재계산 금지).
-	 */
-	/**
 	 * 뉴스 계보(ALPHA-685). {@code date} 는 KST 날짜 문자열(없으면 전체 누적) — 형식이 틀리면
 	 * 빈 결과가 아니라 400 이다(오타 친 날짜가 "그날 문서 없음"으로 보이면 없는 사실을 읽는다).
 	 */
@@ -102,6 +122,12 @@ public class SourceService {
 				lineage.summary(), lineage.documents());
 	}
 
+	/**
+	 * Run Overview(ALPHA-683) — 레인별 최신 런의 운영 요약. 이 클래스 상단의 "요약·판정하지
+	 * 않는다"는 원장 4축 어휘를 다섯 번째 어휘로 뭉개지 말라는 뜻이고, 여기의 {@code opsStatus}
+	 * 는 판정 스펙 §7 이 <b>별도로 정의한 Run 집계 어휘</b>다 — 축의 재명명이 아니라 스펙
+	 * 어휘의 구현이며, 파생 규칙은 이 메서드 하나에만 둔다(화면 재계산 금지).
+	 */
 	public SourceOverviewResponse overview() {
 		OffsetDateTime now = OffsetDateTime.now();
 		return new SourceOverviewResponse(

@@ -9,9 +9,11 @@ import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
 import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
+import com.edge.superadmin.repository.HoldingsImpactRepository;
 import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
+import com.edge.superadmin.support.FakeHoldingsImpactRepository;
 import com.edge.superadmin.support.FakeNewsLineageRepository;
 import com.edge.superadmin.support.FakePipelineStatusRepository;
 import org.junit.jupiter.api.Test;
@@ -44,7 +46,7 @@ class SourceControllerTest {
 	private MockMvc mvc(PipelineRunStatus run) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository())))
+						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -52,7 +54,7 @@ class SourceControllerTest {
 	private MockMvc gridMvc(List<GridSlot> slots) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository())))
+						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -329,7 +331,7 @@ class SourceControllerTest {
 	private MockMvc overviewMvc(List<OverviewLane> lanes) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository())))
+						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -553,7 +555,7 @@ class SourceControllerTest {
 	private MockMvc lineageMvc(FakeNewsLineageRepository lineage) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(new SourceService(
-						new FakePipelineStatusRepository(null), lineage)))
+						new FakePipelineStatusRepository(null), lineage, new FakeHoldingsImpactRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -593,6 +595,76 @@ class SourceControllerTest {
 		lineageMvc(new FakeNewsLineageRepository())
 				.perform(get("/api/v1/sources/lineage/news").param("limit", "201"))
 				.andExpect(status().isBadRequest());
+	}
+
+	/* ---------- holdings 결손 영향 (ALPHA-686) ---------- */
+
+	private MockMvc impactMvc(FakeHoldingsImpactRepository impact) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), new FakeNewsLineageRepository(),
+						impact)))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 결손이_있으면_누락_ETF와_기준일_분석과_권장_조치가_내려간다() throws Exception {
+		// WHY: 멘토의 요구 — 장애를 기술 작업에서 끝내지 않고 "어떤 ETF·분석이 막혔나"까지.
+		//      instrumentId null(프로필까지 결손) 경로도 함께 잠근다 — 단축코드만이라도 내려가야
+		//      화면에서 그 ETF 가 사라지지 않는다.
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 31, false, List.of(
+						new HoldingsImpactRepository.MissingEtf("091160", "inst-1", "KODEX 반도체",
+								List.of(new HoldingsImpactRepository.AffectedAnalysis(
+										"res-9", "PUBLISHED", "반도체 급등"))),
+						new HoldingsImpactRepository.MissingEtf("0167A0", null, null, List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.expectedCount").value(33))
+				.andExpect(jsonPath("$.result.loadedCount").value(31))
+				.andExpect(jsonPath("$.result.snapshotMissing").value(false))
+				.andExpect(jsonPath("$.result.missing.length()").value(2))
+				.andExpect(jsonPath("$.result.missing[0].ourEtfId").value("091160"))
+				.andExpect(jsonPath("$.result.missing[0].analyses[0].explanationResultId")
+						.value("res-9"))
+				.andExpect(jsonPath("$.result.missing[1].instrumentId").value(nullValue()))
+				.andExpect(jsonPath("$.result.recommendedAction").isNotEmpty());
+	}
+
+	@Test
+	void 기대_목록이_없으면_영향_없음이_아니라_계산_불가다() throws Exception {
+		// WHY: 스펙 §6.3 — UNKNOWN 을 영향 없음으로 해석하지 않는다. snapshot 부재를 빈 누락
+		//      목록과 같은 모양으로 내면 미배선 런이 "결손 없음"으로 보인다.
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40", null,
+						null, 31, true, List.of()));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.snapshotMissing").value(true))
+				.andExpect(jsonPath("$.result.expectedCount").value(nullValue()));
+	}
+
+	@Test
+	void 영향_runKey_미존재는_404_이고_결손_없으면_권장조치도_없다() throws Exception {
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 33, false, List.of()));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings")
+						.param("runKey", "etf-daily:9999-01-01T00:00"))
+				.andExpect(status().isNotFound());
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.missing.length()").value(0))
+				.andExpect(jsonPath("$.result.recommendedAction").value(nullValue()));
+		// 원장에 런이 없으면 에러가 아니라 빈 응답(초기 환경).
+		impactMvc(new FakeHoldingsImpactRepository())
+				.perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.snapshotMissing").value(true));
 	}
 
 	@Test
