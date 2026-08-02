@@ -225,6 +225,12 @@ class _Cursor:
             # 시각은 단조 증가만 — 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다
             assert "GREATEST(document.available_at, EXCLUDED.available_at)" in set_clause, \
                 "document upsert 의 도착 시각이 단조가 아니다"
+            # ⚠️ **내용 쓰기를 시각으로 막지 않는다**(ALPHA-691 모델). 이 fake 는 WHERE 를
+            # 해석하지 않으므로, 가드가 다시 들어와도 여기서 막지 않으면 "정정이 건너뛰어진다"
+            # 는 실제 PG 회귀를 테스트가 통과시킨다 — 배치가 미래 published_at 을 실은 행에서
+            # 정확히 그 P1 이 재현된다.
+            assert "available_at <=" not in where_clause, \
+                "내용 쓰기가 시각으로 막혀 있다 — 미래 timestamp 행에서 정정이 유실된다"
             self._upsert_document(params)
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \

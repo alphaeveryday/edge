@@ -49,8 +49,11 @@ T1 을 읽는다 — 이 모듈이 막으려던 P1 그대로다. 그래서 규�
 
 ② **기사 행은 하나뿐이라 지문별 job 의 입력을 보존하지 못한다.** 같은 article_id 에 지문이
 다른 job 이 둘 이상 살아 있으면(같은 창의 URL 동일·본문 상이, 또는 앞 job 소비 전 정정),
-이 행은 마지막 본문만 남긴다. 구조적 한계이고, 사후 판별은 ALPHA-689 가 결과에 싣는
-`prompt_input_checksum` 이 한다.
+이 행은 마지막 **쓰기**의 본문만 남긴다. 위 모델에서 내용은 시각으로 안 막히므로, 지연된
+커밋(다른 NEWS_ID 가 같은 article_id 로 수렴한 경우 원장의 stale 판정도 서로를 못 본다)이
+최신 본문을 덮을 수 있다 — 그걸 막으려 시각 가드를 걸었다가 더 흔한 P1(배치의 미래
+timestamp)을 만들어서, **덜 흔한 쪽을 남기는 거래**를 택했다. 사후 판별은 ALPHA-689 가
+결과에 싣는 `prompt_input_checksum` 이 한다.
 
 ⚠️ **`article_id` 만은 record 의 값이 이긴다.** `_normalize` 도 article_id 를 재계산하지만,
 1분 경로의 정본은 **원장이 승격한 canonical id** 다(fallback id → URL identity 단방향 승격,
