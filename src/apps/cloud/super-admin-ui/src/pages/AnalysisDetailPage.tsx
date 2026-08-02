@@ -25,7 +25,10 @@ export function AnalysisDetailPage() {
   if (!a) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>
-        해당 분석 건을 찾을 수 없습니다.
+        {/* 목록 창(최신 200건) 기반 조회라 "없는 ID"와 "창 밖의 과거 분석"을 여기서 가를 수
+         * 없다 — 단정하면 유효한 과거 링크가 오타처럼 읽힌다. 단건 조회 API 는 후속. */}
+        해당 분석 건을 찾을 수 없습니다 — 없는 ID 이거나, 최신 200건 목록 창 밖의 과거
+        분석일 수 있습니다.
       </div>
     );
   }

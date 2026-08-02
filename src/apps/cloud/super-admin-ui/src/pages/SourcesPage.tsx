@@ -241,8 +241,11 @@ function TaskRow({ task, runKey }: { task: TaskStatus; runKey: string | undefine
           >
             {`ETF 대조 · 기대 ${count(task.completeness.expected)} · 수집 ${count(task.completeness.received)} · 누락 ${count(task.completeness.missing)}`}
             {/* 누락이 있으면 근거 목록(어떤 ETF·어떤 분석)으로 내려간다 — 집계만 있고 목록
-             * 없는 숫자를 만들지 않는다(ALPHA-692). 결손 영향 화면이 그 목록의 소유자다. */}
-            {(task.completeness.missing ?? 0) > 0 && runKey && (
+             * 없는 숫자를 만들지 않는다(ALPHA-692). 결손 영향 화면은 holdings 작업의 누락만
+             * 계산하므로 그 작업에만 건다 — NAV·프로필 누락 행에 걸면 다른 목록이 근거처럼
+             * 보인다(리뷰 1라운드, Overview 의 결함 라우팅과 같은 매핑). */}
+            {task.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' &&
+              (task.completeness.missing ?? 0) > 0 && runKey && (
               <>
                 {' · '}
                 <Link to={`/impact/holdings?runKey=${encodeURIComponent(runKey)}`}>

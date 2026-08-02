@@ -155,6 +155,10 @@ function MinuteSessionLine({ s }: { s: MinuteSession }) {
   const w = s.windows;
   const evidenced = w.valid + w.validEmpty + w.incomplete + w.invalid;
   const defects = w.incomplete + w.invalid + w.missing;
+  /* 항등식(MinutePage 와 같은 규칙) — 행이 없는 창은 무증거 집계에도 안 잡히므로, 이 경고를
+   * 빼면 창 생성 실패가 "무증거 0"으로 정상처럼 보인다(리뷰 1라운드). */
+  const materialized =
+    w.due + w.claimed + w.valid + w.validEmpty + w.incomplete + w.missing + w.invalid;
   return (
     <p className="t-sm m-0">
       <b>{s.dataset}/{s.sourceGroup}</b>
@@ -165,6 +169,11 @@ function MinuteSessionLine({ s }: { s: MinuteSession }) {
         무증거 {w.overdueNoEvidence}개
       </b>
       {defects > 0 && <> · 결함 판정 {defects}개</>}
+      {materialized !== s.expectedWindowCount && (
+        <b style={{ color: 'var(--down, #b91c1c)' }}>
+          {' · '}원장 불일치(실재 창 {materialized}개 — 위 숫자를 그대로 믿지 말 것)
+        </b>
+      )}
     </p>
   );
 }
