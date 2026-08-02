@@ -136,6 +136,22 @@ def build_handler(db, tmp_path, **overrides):
     return PriceTriggerHandler(**{**base, **overrides})
 
 
+def claim_then_run(handler, event, *, payload=None):
+    """kernel _prepare 와 같은 순서(claim→handler) — persist 의 attempt fence 전제.
+
+    handler 를 claim 없이 직접 부르면 fence(#485 봇 P1)가 CLAIM_SUPERSEDED 로 막는다 —
+    그게 바로 계약이므로 테스트도 같은 경로를 밟는다.
+    """
+    claim = handler.jobs.claim_job(
+        kind="price", job_id=event["payload"]["job_id"], redrive_generation=0,
+        worker_id="c-test", now=datetime.now(KST), lease_seconds=600,
+    )
+    assert isinstance(claim, dict), f"claim 실패: {claim!r}"
+    return handler(job_id=event["payload"]["job_id"],
+                   payload=payload if payload is not None else event["payload"],
+                   attempt=claim["attempt_count"], redrive_generation=0)
+
+
 def price_job_events(db):
     """Worker 가 만든 price job outbox event — SQS 로 나갈 바로 그 payload."""
     return sorted(
@@ -158,10 +174,7 @@ class TestJudgement:
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
         before = db.connect_calls
-        checksum = handler(
-            job_id=second["payload"]["job_id"], payload=second["payload"],
-            attempt=1, redrive_generation=0,
-        )
+        checksum = claim_then_run(handler, second)
         assert len(checksum) == 64
         [trigger] = db.triggers.values()
         assert trigger["entity_id"] == "500000"
@@ -185,15 +198,13 @@ class TestJudgement:
         second = price_job_events(db)[1]
         # 시가 원장을 먼저 확정해 두면(첫 job 실행) 판정 쓰기 tx 만 남는다
         first = price_job_events(db)[0]
-        handler(job_id=first["payload"]["job_id"], payload=first["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, first)
         before = db.connect_calls
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
-        # connect = 트랜잭션이다(fake 계약). identity 읽기 1 + 시가 select 1 + **쓰기 1**
-        # — 트리거 2건과 event 2건이 마지막 connect 하나에 있다. 쓰기가 쪼개지면
-        # "발화했는데 설명 event 가 없는" 부분 확정이 가능해진다.
-        assert db.connect_calls == before + 3
+        claim_then_run(handler, second)
+        # connect = 트랜잭션이다(fake 계약). claim 1 + identity 읽기 1 + 시가 select 1
+        # + **쓰기 1** — 트리거 2건과 event 2건이 마지막 connect 하나에 있다. 쓰기가
+        # 쪼개지면 "발화했는데 설명 event 가 없는" 부분 확정이 가능해진다.
+        assert db.connect_calls == before + 4
         assert len(db.triggers) == 2
         assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 2
 
@@ -208,8 +219,7 @@ class TestJudgement:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         assert db.triggers == {}
         assert not any(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values())
 
@@ -230,8 +240,7 @@ class TestJudgement:
             str(events[1]["payload"]["window_start"]))) == cooldown_bucket(
             datetime.fromisoformat(str(events[2]["payload"]["window_start"])))
         for event in events[1:]:
-            handler(job_id=event["payload"]["job_id"], payload=event["payload"],
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, event)
         assert len(db.triggers) == 1  # 쿨다운 — 버킷당 1발
         assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 1
 
@@ -247,8 +256,7 @@ class TestJudgement:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         assert len(db.triggers) == 1
 
 
@@ -264,8 +272,7 @@ class TestOpenLedger:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         open_row = db.session_opens[(session_id, "500000")]
         assert open_row["status"] == "OPEN"
         assert Decimal(str(open_row["open_price"])) == 100  # 999(둘째 open)가 아니다
@@ -285,8 +292,7 @@ class TestOpenLedger:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         row = db.session_opens[(session_id, "500001")]
         assert row["status"] == "MISSING" and row["reason"]
         assert db.triggers == {}
@@ -306,8 +312,7 @@ class TestOpenLedger:
         handler = build_handler(db, tmp_path)
         [event] = price_job_events(db)
         with pytest.raises(TransientJobError, match="미커밋"):
-            handler(job_id=event["payload"]["job_id"], payload=event["payload"],
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, event)
         assert db.session_opens == {} and db.triggers == {}
 
 
@@ -329,8 +334,7 @@ class TestContracts:
         second = price_job_events(db)[1]
         tampered = dict(second["payload"], generation=99)
         with pytest.raises(PermanentJobError, match="다른 window"):
-            handler(job_id=second["payload"]["job_id"], payload=tampered,
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, second, payload=tampered)
 
     def test_malformed_payload_is_transient(self, tmp_path):
         db = FakeMinuteDB()
@@ -346,8 +350,7 @@ class TestContracts:
         handler = build_handler(db, tmp_path / "empty")
         second = price_job_events(db)[1]
         with pytest.raises(TransientJobError, match="artifact"):
-            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, second)
 
     def test_empty_etf_set_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="etf_ids"):
@@ -374,8 +377,7 @@ class TestAdversarialInputs:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         row = db.session_opens[(session_id, "500001")]
         assert row["status"] == "MISSING" and row["reason"]
 
@@ -392,8 +394,7 @@ class TestAdversarialInputs:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         assert db.triggers == {}
 
     def test_non_positive_first_open_decides_missing(self, tmp_path):
@@ -409,8 +410,7 @@ class TestAdversarialInputs:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, second)
         row = db.session_opens[(session_id, "500000")]
         assert row["status"] == "MISSING" and "계약 위반" in row["reason"]
         assert db.triggers == {}
@@ -441,8 +441,7 @@ class TestAdversarialInputs:
         )
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        checksum = handler(job_id=second["payload"]["job_id"],
-                           payload=second["payload"], attempt=1, redrive_generation=0)
+        checksum = claim_then_run(handler, second)
         assert len(checksum) == 64  # job 은 산다
         [trigger] = db.triggers.values()
         assert trigger["entity_id"] == "500000"  # 정상 종목은 발화했다
@@ -460,8 +459,7 @@ class TestAdversarialInputs:
         second = price_job_events(db)[1]
         tampered = dict(second["payload"], session_id=123)
         with pytest.raises(TransientJobError, match="session_id"):
-            handler(job_id=second["payload"]["job_id"], payload=tampered,
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, second, payload=tampered)
 
     def test_stale_generation_does_not_persist_trigger(self, tmp_path):
         # 실행 중 window 가 정정(gen+1)되면 gen-1 발화를 커밋하지 않는다 — 커밋되면
@@ -476,14 +474,20 @@ class TestAdversarialInputs:
         worker.tick(NOW)
         handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
-        # 판정 직전에 window 가 다음 세대로 정정된 상황
+        # claim 은 정상(그 시점 세대 일치) — **실행 중** window 가 정정된 상황.
+        # claim 전에 정정되면 kernel 의 stale 검사가 DEAD('STALE') 로 걸러낸다
+        claim = handler.jobs.claim_job(
+            kind="price", job_id=second["payload"]["job_id"], redrive_generation=0,
+            worker_id="c-test", now=datetime.now(KST), lease_seconds=600,
+        )
+        assert isinstance(claim, dict)
         window_start = datetime.fromisoformat(str(second["payload"]["window_start"]))
         for (sid, ws), row in db.windows.items():
             if sid == session_id and ws == window_start:
                 row["generation"] = 2
         with pytest.raises(TransientJobError, match="정정"):
             handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                    attempt=1, redrive_generation=0)
+                    attempt=claim["attempt_count"], redrive_generation=0)
         assert db.triggers == {}
         assert not any(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values())
 
@@ -532,8 +536,7 @@ class TestAdversarialInputs:
         events = price_job_events(db)
         # 09:01 window 판정 — 시가는 09:00 open(100)이고, 08:00 부재는 무관하다
         target = [e for e in events if "T00:01" in str(e["payload"]["window_start"])][0]
-        handler(job_id=target["payload"]["job_id"], payload=target["payload"],
-                attempt=1, redrive_generation=0)
+        claim_then_run(handler, target)
         row = db.session_opens[(session_id, "500000")]
         assert row["status"] == "OPEN"
         assert Decimal(str(row["open_price"])) == 100
@@ -566,6 +569,29 @@ class TestAdversarialInputs:
 
         monkeypatch.setattr(handler, "_artifact_rows", corrupting_read)
         with pytest.raises(TransientJobError, match="첫 window 세대"):
-            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
-                    attempt=1, redrive_generation=0)
+            claim_then_run(handler, second)
         assert db.session_opens == {}  # 낡은 시가가 동결되지 않았다
+
+    def test_superseded_claim_cannot_persist_trigger(self, tmp_path):
+        # lease 상실 뒤 다른 Consumer 가 재claim(attempt+1)한 job — 낡은 attempt 의
+        # 발화가 UNIQUE 를 선점하면 새 attempt(새 설정)의 판정이 영구히 막힌다
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        second = price_job_events(db)[1]
+        claim = handler.jobs.claim_job(
+            kind="price", job_id=second["payload"]["job_id"], redrive_generation=0,
+            worker_id="c-old", now=datetime.now(KST), lease_seconds=600,
+        )
+        # 낡은 attempt 가 아직 도는 사이 재claim 이 attempt 를 올린 상황
+        db.jobs[("price", second["payload"]["job_id"])]["attempt_count"] += 1
+        with pytest.raises(TransientJobError, match="내 것이 아니다"):
+            handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                    attempt=claim["attempt_count"], redrive_generation=0)
+        assert db.triggers == {}

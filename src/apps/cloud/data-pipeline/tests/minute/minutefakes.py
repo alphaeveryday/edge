@@ -304,6 +304,13 @@ class _Cursor:
                 first = rows[0]
                 self._rows = [(first["window_start"], first["generation"],
                                first["data_status"], first["checksum"])]
+        elif s.startswith("SELECT attempt_count, redrive_generation FROM price_window_job"):
+            # 트리거 persist 의 attempt fence(ALPHA-708) — CLAIMED 조건·FOR UPDATE 가
+            # 빠지면 낡은 attempt 의 쓰기가 실DB 에서 통과한다
+            assert "status = 'CLAIMED'" in s and "FOR UPDATE" in s
+            row = self.db.jobs.get(("price", params[0]))
+            if row is not None and row["status"] == "CLAIMED":
+                self._rows = [(row["attempt_count"], row["redrive_generation"])]
         elif s.startswith("SELECT generation FROM minute_ingestion_window"):
             # 트리거 persist 의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
             # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다

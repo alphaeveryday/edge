@@ -207,6 +207,7 @@ class PriceTriggerHandler:
                 })
 
         inserted = self._persist_triggers(
+            job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
             session_id=session_id, window_start=window_start,
             generation=generation, fired=fired,
         )
@@ -365,7 +366,8 @@ class PriceTriggerHandler:
             )
             return cur.fetchone()
 
-    def _persist_triggers(self, *, session_id: str, window_start: datetime,
+    def _persist_triggers(self, *, job_id: str, attempt: int, redrive_generation: int,
+                          session_id: str, window_start: datetime,
                           generation: int, fired: list[dict]) -> list[str]:
         """트리거 행 + outbox 를 **한 트랜잭션**에 — 신규 삽입된 entity 만 돌려준다."""
         if not fired:
@@ -373,6 +375,26 @@ class PriceTriggerHandler:
         bucket = cooldown_bucket(window_start)
         inserted: list[str] = []
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            # 도메인 쓰기도 자기 attempt 에 fence 한다(kernel 의 CAS 는 job 행만 지킨다
+            # — consumer._execute 계약). lease 상실·redrive 뒤에도 돌던 낡은 attempt 가
+            # 여기 도달하면, 구 설정(임계·정책)으로 계산된 발화가 UNIQUE 를 선점해
+            # 새 attempt 의 판정을 영구히 막는다(#485 봇 P1).
+            cur.execute(
+                """
+                SELECT attempt_count, redrive_generation FROM price_window_job
+                WHERE job_id = %s AND status = 'CLAIMED'
+                FOR UPDATE
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] != attempt or row[1] != redrive_generation:
+                raise TransientJobError(
+                    f"job claim 이 더 이상 내 것이 아니다(job={job_id}, "
+                    f"attempt={attempt}/{row and row[0]}, "
+                    f"redrive={redrive_generation}/{row and row[1]})",
+                    code="CLAIM_SUPERSEDED",
+                )
             # stale 거부는 claim 시점(kernel)에도 있지만, **실행 중** 정정이 끼어드는
             # 경합은 여기서만 막을 수 있다 — 같은 트랜잭션에서 window 행을 잠그고
             # 세대를 대조하지 않으면 gen-1 트리거가 커밋된 뒤 gen-2 판정이 cooldown
