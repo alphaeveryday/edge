@@ -51,7 +51,6 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
   const navigate = useNavigate();
   const ops = OPS[lane.opsStatus] ?? OPS.UNKNOWN;
   const c = lane.counts;
-  const first = lane.defects[0];
   const openDrilldown = (taskKey?: string) =>
     navigate(
       `/sources?runKey=${encodeURIComponent(lane.runKey)}${
@@ -104,8 +103,12 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
 
       {lane.defects.length > 0 && (
         <div style={{ marginTop: 10 }}>
+          {/* "첫 행 = 최초 결함 지점"이라 주장하지 않는다 — 원장은 단계(stage)까지만 순서를
+           * 알고, 같은 단계 안의 실행 순서(SFN·카탈로그)는 모른다. 사전순을 실행 순서처럼
+           * 내면 하류 증상이 최초 결함으로 오독된다(봇 리뷰 P2). */}
           <p className="t-xs m-0" style={{ fontWeight: 700, color: 'var(--fg-2)' }}>
-            결함 {lane.defects.length}건 — 목록 순서가 파이프라인 순서라 첫 행이 최초 결함 지점
+            결함 {lane.defects.length}건 — 단계(수집→정제→적재) 순, 같은 단계 안 순서는 실행
+            순서가 아님. 정확한 지점은 드릴다운에서
           </p>
           <table style={{ borderCollapse: 'collapse', fontSize: 12, marginTop: 4 }}>
             <tbody>
@@ -116,10 +119,7 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
                   style={{ cursor: 'pointer' }}
                   title="작업 드릴다운으로 이동"
                 >
-                  <td style={{ padding: '2px 10px 2px 0', whiteSpace: 'nowrap' }}>
-                    {d.taskKey === first?.taskKey ? '▶ ' : ''}
-                    {d.taskKey}
-                  </td>
+                  <td style={{ padding: '2px 10px 2px 0', whiteSpace: 'nowrap' }}>{d.taskKey}</td>
                   <td style={{ padding: '2px 0', color: 'var(--down, #b91c1c)' }}>
                     {defectReasons(d).join(' · ') || '결함'}
                   </td>

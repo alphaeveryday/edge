@@ -93,7 +93,8 @@ public class SourceService {
 		List<OverviewTask> requiredDue = due.stream().filter(OverviewTask::required).toList();
 		int skipped = lane.tasks().size() - due.size();
 
-		// SQL 이 파이프라인 순서(stage→task_key)로 내리므로 첫 원소가 곧 최초 결함 지점이다.
+		// SQL 은 단계 순(stage→task_key 사전순)으로 내린다 — 첫 원소는 "최초 결함이 속한
+		// 단계"까지만 말한다. 같은 단계 안 실행 순서는 원장이 모른다(SFN·카탈로그 소관).
 		List<DefectResponse> defects = requiredDue.stream()
 				.filter(t -> isDefect(t, now))
 				.map(t -> new DefectResponse(t.stage(), t.taskKey(), t.outcome(), t.dataStatus(),

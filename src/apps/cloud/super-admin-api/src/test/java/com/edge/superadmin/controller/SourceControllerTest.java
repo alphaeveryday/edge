@@ -361,9 +361,10 @@ class SourceControllerTest {
 	}
 
 	@Test
-	void 필수_작업의_데이터_결손은_DEGRADED_이고_최초_결함이_목록_앞이다() throws Exception {
+	void 필수_작업의_데이터_결손은_DEGRADED_이고_결함이_단계_순으로_온다() throws Exception {
 		// WHY: "실행 성공 ≠ 데이터 유효" — FULFILLED+INCOMPLETE 조합이 이 화면의 존재 이유다.
-		//      결함 목록은 파이프라인 순서라 첫 원소가 최초 결함 지점이다(멘토: 최초 실패 단계).
+		//      결함 목록은 단계 순 — 앞 단계(raw) 결함이 뒤 단계(feature)보다 먼저다. 같은 단계
+		//      안 순서는 실행 순서가 아니라서 화면도 그 이상을 주장하지 않는다(봇 P2).
 		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
 				"SUCCEEDED", LocalDate.of(2026, 7, 27), PLANNED, List.of(
 				new OverviewTask("raw", "ETF_HOLDINGS_COLLECTION_KRX", "DUE", "FULFILLED",

@@ -13,8 +13,10 @@ import java.util.List;
  * DUE 작업 기준</b>이다 — "오늘 발행 가능한가"의 분모는 필수 작업이다(멘토 지적: 단위 없는
  * 숫자 금지 — UI 는 반드시 "필수 작업 N개 중" 형태로 낸다). {@code due} 만 전체 DUE 수다.
  *
- * <p>{@code defects} 는 파이프라인 순서(stage raw→normalize→feature, task_key)라 <b>첫 원소가
- * 최초 결함 지점</b>이다. 빈 배열이면 결함 없음.
+ * <p>{@code defects} 는 <b>단계 순</b>(stage raw→normalize→feature, 단계 안은 task_key 사전순)
+ * 이다 — 첫 원소는 "최초 결함이 속한 단계"까지만 말한다. 같은 단계 안의 실행 순서는 원장이
+ * 모른다(SFN·카탈로그 소관 — 예: 뉴스 feature 단계는 TAG→LOAD→ASSEMBLE 인데 사전순은 그
+ * 역이다). 행 순서를 실행 순서로 읽으면 하류 증상을 최초 결함으로 오독한다.
  */
 public record SourceOverviewResponse(List<LaneResponse> lanes) {
 
