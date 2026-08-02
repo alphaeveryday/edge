@@ -30,3 +30,11 @@ export function useSourceOverview() {
     refetchInterval: 60_000,
   });
 }
+
+/** 뉴스 계보(ALPHA-685). 캐시 키에 date — 빼면 날짜를 바꿔도 앞선 날짜 결과가 보인다. */
+export function useNewsLineage(date?: string, limit?: number) {
+  return useQuery({
+    queryKey: ['sources', 'lineage', 'news', date ?? null, limit ?? null],
+    queryFn: () => sourcesRepository.newsLineage(date, limit),
+  });
+}

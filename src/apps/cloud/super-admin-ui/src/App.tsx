@@ -15,6 +15,7 @@ import { TenantsPage } from './pages/TenantsPage';
 import { TenantDetailPage } from './pages/TenantDetailPage';
 import { SourcesPage } from './pages/SourcesPage';
 import { GridPage } from './pages/GridPage';
+import { NewsLineagePage } from './pages/NewsLineagePage';
 import { AnalysesPage } from './pages/AnalysesPage';
 import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
 
@@ -29,6 +30,7 @@ export function App() {
           <Route path="/tenants/:id" element={<TenantDetailPage />} />
           <Route path="/sources" element={<SourcesPage />} />
           <Route path="/grid" element={<GridPage />} />
+          <Route path="/lineage/news" element={<NewsLineagePage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>

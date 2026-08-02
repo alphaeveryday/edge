@@ -1,6 +1,7 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
+import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
@@ -42,5 +43,13 @@ public class SourceController {
 	@GetMapping("/api/v1/sources/overview")
 	public ApiResponse<SourceOverviewResponse> overview() {
 		return ApiResponse.onSuccess(sourceService.overview());
+	}
+
+	/** 뉴스 계보(ALPHA-685) — 집계와 그 근거 목록. 검증은 서비스가 한다. */
+	@GetMapping("/api/v1/sources/lineage/news")
+	public ApiResponse<NewsLineageResponse> newsLineage(
+			@RequestParam(required = false) String date,
+			@RequestParam(defaultValue = "50") int limit) {
+		return ApiResponse.onSuccess(sourceService.newsLineage(date, limit));
 	}
 }

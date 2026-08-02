@@ -254,3 +254,33 @@ export interface OverviewLane {
 export interface SourceOverview {
   lanes: OverviewLane[];
 }
+
+/* ---------- 뉴스 계보 — Dataset Explorer (ALPHA-685) ---------- */
+
+/**
+ * 모든 건수의 단위는 **문서(기사)**다. withAssertion 은 "추출 성공"이 아니라 "구조화 증거가
+ * 남은 문서" — 없음은 NO_EVENT·추출 실패·미실행이 **한 통**이다(그 구분은 RDS 에 없다,
+ * S3 quality log 소관 — 문서별 terminal 승격은 후속). 화면은 이 한계를 명시한다.
+ */
+export interface NewsLineageSummary {
+  totalDocuments: number;
+  documentsWithAssertion: number;
+  documentsUsedInAnalysis: number;
+}
+
+export interface NewsLineageDocument {
+  documentId: string;
+  title: string | null;
+  sourceCode: string | null;
+  publishedAt: string | null;
+  availableAt: string | null;
+  assertionCount: number;
+  usedInAnalysis: boolean;
+}
+
+/** date 는 수집 시각(available_at)의 KST 날짜 필터. null = 전체 누적. */
+export interface NewsLineage {
+  date: string | null;
+  summary: NewsLineageSummary;
+  documents: NewsLineageDocument[];
+}
