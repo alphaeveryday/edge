@@ -193,3 +193,53 @@ export interface SourceGrid {
   days: number;
   slots: GridSlot[];
 }
+
+/* ---------- Run Overview (ALPHA-683) ---------- */
+
+/**
+ * 판정 스펙 §7 의 Run 집계 어휘 — 원장 4축의 재명명이 아니라 스펙이 별도 정의한 파생 요약이고,
+ * 파생은 서버 한 곳에서 한다(화면 재계산 금지 — running 플래그와 같은 원칙).
+ */
+export type OpsStatus = 'IN_PROGRESS' | 'READY' | 'DEGRADED' | 'BLOCKED' | 'UNKNOWN';
+
+/**
+ * 귀결 수(fulfilled~pending)는 **필수(required) DUE 작업 기준**이다 — "오늘 발행 가능한가"의
+ * 분모는 필수 작업이다. due 만 전체 DUE 수. 화면은 반드시 단위("필수 작업 N개 중")를 붙인다.
+ */
+export interface OverviewCounts {
+  due: number;
+  requiredDue: number;
+  fulfilled: number;
+  failed: number;
+  missed: number;
+  blocked: number;
+  pending: number;
+  skipped: number;
+}
+
+/** 결함 하나 — 축 원문 그대로. overdue(마감 경과 미귀결)만 서버 시계 판정이다. */
+export interface OverviewDefect {
+  stage: string;
+  taskKey: string;
+  outcome: TaskOutcome | null;
+  dataStatus: DataStatus | null;
+  freshnessStatus: 'UNKNOWN' | 'FRESH' | 'STALE' | null;
+  failedRecords: number | null;
+  overdue: boolean;
+}
+
+/** 레인(pipeline_type)별 최신 런 요약. defects 는 파이프라인 순서라 **첫 원소가 최초 결함**이다. */
+export interface OverviewLane {
+  pipelineType: string;
+  runKey: string;
+  tradingDate: string | null;
+  launchStatus: LaunchStatus | null;
+  orchestrationStatus: OrchestrationStatus | null;
+  opsStatus: OpsStatus;
+  counts: OverviewCounts;
+  defects: OverviewDefect[];
+}
+
+export interface SourceOverview {
+  lanes: OverviewLane[];
+}

@@ -6,6 +6,8 @@ import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatu
 import com.edge.superadmin.repository.PipelineStatusRepository.GridCell;
 import com.edge.superadmin.repository.PipelineStatusRepository.GridSlot;
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
@@ -318,5 +320,97 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.run").doesNotExist())
 				.andExpect(jsonPath("$.result.tasks.length()").value(0))
 				.andExpect(jsonPath("$.result.issues.length()").value(0));
+	}
+
+	/* ---------- Run Overview (ALPHA-683) ---------- */
+
+	private MockMvc overviewMvc(List<OverviewLane> lanes) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(
+						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes))))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	private static final OffsetDateTime PAST = OffsetDateTime.now(ZoneOffset.UTC).minusHours(2);
+	private static final OffsetDateTime FUTURE = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
+
+	private static OverviewTask task(String taskKey, String outcome, String dataStatus,
+			boolean required, OffsetDateTime deadline) {
+		return new OverviewTask("raw", taskKey, "DUE", outcome, dataStatus, required,
+				deadline, null, null, null, null);
+	}
+
+	@Test
+	void 정상_SKIPPED_와_데이터_UNKNOWN_은_READY_를_깨지_않는다() throws Exception {
+		// WHY: 완전성 미배선 작업은 설계상 UNKNOWN 이고 비거래일 SKIPPED 는 "할 일이 아니었다"다 —
+		//      이 둘을 결함으로 세면 첫 화면이 상시 DEGRADED 라, 진짜 결함이 늑대소년이 된다(스펙 §7).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", LocalDate.of(2026, 7, 27), List.of(
+				task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST),
+				new OverviewTask("raw", "NEWS_COLLECTION_BIGKINDS", "SKIPPED", null, null,
+						true, null, null, null, null, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("READY"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.due").value(1))
+				.andExpect(jsonPath("$.result.lanes[0].counts.skipped").value(1))
+				.andExpect(jsonPath("$.result.lanes[0].defects.length()").value(0));
+	}
+
+	@Test
+	void 필수_작업의_데이터_결손은_DEGRADED_이고_최초_결함이_목록_앞이다() throws Exception {
+		// WHY: "실행 성공 ≠ 데이터 유효" — FULFILLED+INCOMPLETE 조합이 이 화면의 존재 이유다.
+		//      결함 목록은 파이프라인 순서라 첫 원소가 최초 결함 지점이다(멘토: 최초 실패 단계).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", LocalDate.of(2026, 7, 27), List.of(
+				new OverviewTask("raw", "ETF_HOLDINGS_COLLECTION_KRX", "DUE", "FULFILLED",
+						"INCOMPLETE", true, PAST, null, null, null, null),
+				new OverviewTask("feature", "LOAD_ETF_HOLDINGS", "DUE", "FAILED", null,
+						true, PAST, null, null, null, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"))
+				.andExpect(jsonPath("$.result.lanes[0].defects.length()").value(2))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].taskKey")
+						.value("ETF_HOLDINGS_COLLECTION_KRX"))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].dataStatus").value("INCOMPLETE"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.failed").value(1));
+	}
+
+	@Test
+	void 마감_전_미귀결은_IN_PROGRESS_마감_경과_미귀결은_DEGRADED_다() throws Exception {
+		// WHY: PENDING 은 "아직 모른다"인데 마감 전이면 기다림이고 마감 후면 지연이다 —
+		//      스펙 §3.3 의 BREACHED 축을 접은 최소 구현. 시계는 서버가 판정한다.
+		List<OverviewLane> waiting = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"RUNNING", null, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(waiting).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> overdue = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(overdue).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].overdue").value(true));
+	}
+
+	@Test
+	void 기동_실패는_마감_전이어도_진행_중이_아니라_BLOCKED_다() throws Exception {
+		// WHY: LAUNCH_FAILED 런의 작업은 deadline 전 PENDING 이라 스펙 순서대로면 IN_PROGRESS 가
+		//      되는데, 아무것도 돌지 않는 런을 "진행 중"으로 내면 원장이 관대해지는 방향이다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCH_FAILED",
+				null, null, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("BLOCKED"));
+	}
+
+	@Test
+	void 원장에_런이_없으면_빈_레인_목록이다() throws Exception {
+		overviewMvc(List.of()).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes.length()").value(0));
 	}
 }

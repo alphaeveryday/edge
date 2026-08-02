@@ -2,10 +2,19 @@ package com.edge.superadmin.service;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.superadmin.dto.SourceGridResponse;
+import com.edge.superadmin.dto.SourceOverviewResponse;
+import com.edge.superadmin.dto.SourceOverviewResponse.CountsResponse;
+import com.edge.superadmin.dto.SourceOverviewResponse.DefectResponse;
+import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import org.springframework.stereotype.Service;
+
+import java.time.OffsetDateTime;
+import java.util.List;
 
 /**
  * sources 화면 — 운영 원장(`ops_*`)의 런 하나를 읽어 그대로 낸다(ALPHA-514, 드릴다운 574).
@@ -55,5 +64,93 @@ public class SourceService {
 		return pipelineStatus.runByKey(runKey)
 				.map(SourceReportResponse::from)
 				.orElseThrow(() -> new GeneralException(AdminErrorStatus.RUN_NOT_FOUND));
+	}
+
+	/**
+	 * Run Overview(ALPHA-683) — 레인별 최신 런의 운영 요약. 이 클래스 상단의 "요약·판정하지
+	 * 않는다"는 원장 4축 어휘를 다섯 번째 어휘로 뭉개지 말라는 뜻이고, 여기의 {@code opsStatus}
+	 * 는 판정 스펙 §7 이 <b>별도로 정의한 Run 집계 어휘</b>다 — 축의 재명명이 아니라 스펙
+	 * 어휘의 구현이며, 파생 규칙은 이 메서드 하나에만 둔다(화면 재계산 금지).
+	 */
+	public SourceOverviewResponse overview() {
+		OffsetDateTime now = OffsetDateTime.now();
+		return new SourceOverviewResponse(
+				pipelineStatus.overview().stream().map(lane -> toLane(lane, now)).toList());
+	}
+
+	private static LaneResponse toLane(OverviewLane lane, OffsetDateTime now) {
+		List<OverviewTask> due = lane.tasks().stream()
+				.filter(t -> "DUE".equals(t.planStatus())).toList();
+		List<OverviewTask> requiredDue = due.stream().filter(OverviewTask::required).toList();
+		int skipped = lane.tasks().size() - due.size();
+
+		// SQL 이 파이프라인 순서(stage→task_key)로 내리므로 첫 원소가 곧 최초 결함 지점이다.
+		List<DefectResponse> defects = requiredDue.stream()
+				.filter(t -> isDefect(t, now))
+				.map(t -> new DefectResponse(t.stage(), t.taskKey(), t.outcome(), t.dataStatus(),
+						t.freshnessStatus(), t.failedRecords(), overdue(t, now)))
+				.toList();
+
+		CountsResponse counts = new CountsResponse(
+				due.size(), requiredDue.size(),
+				countOutcome(requiredDue, "FULFILLED"), countOutcome(requiredDue, "FAILED"),
+				countOutcome(requiredDue, "MISSED"), countOutcome(requiredDue, "BLOCKED"),
+				countOutcome(requiredDue, "PENDING"), skipped);
+
+		return new LaneResponse(lane.pipelineType(), lane.runKey(),
+				lane.tradingDate() == null ? null : lane.tradingDate().toString(),
+				lane.launchStatus(), lane.orchestrationStatus(),
+				opsStatus(lane, requiredDue, defects, now), counts, defects);
+	}
+
+	/**
+	 * 스펙 §7 의 집계 우선순위. 스펙 순서(IN_PROGRESS→UNKNOWN→BLOCKED→DEGRADED→READY)에서
+	 * <b>기동 실패만 앞으로</b> 뺐다 — LAUNCH_FAILED 런의 작업은 deadline 전 PENDING 이라
+	 * 스펙 순서대로면 "진행 중"이 되는데, 아무것도 돌지 않는 런을 진행 중으로 내면 원장이
+	 * 관대해지는 방향이다(기동 실패 = 이 런의 전 대상이 차단됐다는 사실이 확정돼 있다).
+	 *
+	 * <p>정상 SKIPPED·데이터 UNKNOWN(설계상 대다수)·NO_EVENT 는 어떤 경로로도 DEGRADED 를
+	 * 만들지 않는다 — 결함 판정은 {@link #isDefect} 하나가 정의한다.
+	 */
+	private static String opsStatus(OverviewLane lane, List<OverviewTask> requiredDue,
+			List<DefectResponse> defects, OffsetDateTime now) {
+		if ("LAUNCH_FAILED".equals(lane.launchStatus())) {
+			return "BLOCKED";
+		}
+		if ("LAUNCH_UNKNOWN".equals(lane.launchStatus())
+				|| "UNKNOWN".equals(lane.orchestrationStatus())) {
+			return "UNKNOWN";
+		}
+		boolean pendingBeforeDeadline = requiredDue.stream().anyMatch(
+				t -> "PENDING".equals(t.outcome()) && !overdue(t, now));
+		if ("PLANNING".equals(lane.launchStatus())
+				|| "RUNNING".equals(lane.orchestrationStatus()) || pendingBeforeDeadline) {
+			return "IN_PROGRESS";
+		}
+		return defects.isEmpty() ? "READY" : "DEGRADED";
+	}
+
+	/**
+	 * 필수 DUE 작업의 결함 — 귀결 실패(FAILED·MISSED·BLOCKED), 데이터 결손(INCOMPLETE·INVALID,
+	 * 격자의 결손 점과 같은 축), 유실 건수, 신선도 STALE, 마감 경과 미귀결. UNKNOWN 은 결함이
+	 * 아니다 — 완전성 미배선 24작업이 설계상 UNKNOWN 이라, 넣으면 화면 전체가 상시 결함이 된다.
+	 */
+	private static boolean isDefect(OverviewTask t, OffsetDateTime now) {
+		return "FAILED".equals(t.outcome()) || "MISSED".equals(t.outcome())
+				|| "BLOCKED".equals(t.outcome())
+				|| "INCOMPLETE".equals(t.dataStatus()) || "INVALID".equals(t.dataStatus())
+				|| (t.failedRecords() != null && t.failedRecords() > 0)
+				|| "STALE".equals(t.freshnessStatus())
+				|| overdue(t, now);
+	}
+
+	/** deadline 없는 작업(선행 대기)은 경과 판정 대상이 아니다 — null 이면 false. */
+	private static boolean overdue(OverviewTask t, OffsetDateTime now) {
+		return "PENDING".equals(t.outcome()) && t.deadlineAt() != null
+				&& t.deadlineAt().isBefore(now);
+	}
+
+	private static int countOutcome(List<OverviewTask> tasks, String outcome) {
+		return (int) tasks.stream().filter(t -> outcome.equals(t.outcome())).count();
 	}
 }
