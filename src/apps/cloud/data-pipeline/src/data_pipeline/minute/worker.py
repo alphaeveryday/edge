@@ -86,9 +86,12 @@ class MinuteWorkerLoop:
     def _session_ready(self) -> bool:
         """원장에 고정된 session 속성과 내 설정이 맞는가 — window 를 처리할 자격.
 
-        구현체가 좁힌다(기본은 무조건 통과). 거짓이면 ACTIVE 에서는 lease 를 반납하고
-        정지하지만(설정 불일치는 재시도로 낫지 않는다), DRAINING 에서는 claim 을 집었다
-        반납하고 ack 까지 간다 — drain 을 막으면 EOD 가 영원히 시작되지 못한다.
+        구현체가 좁힌다(기본은 무조건 통과). 거짓이면 ACTIVE 에서는 claim 없이 tick 을
+        끝내고(STOPPED) DRAINING 에서는 claim 을 집었다 반납한 뒤 ack 까지 간다 —
+        drain 을 막으면 EOD 가 영원히 시작되지 못한다. 어느 쪽이든 **fence 는 쥔 채이고
+        루프는 산다**: 설정 불일치는 재시도로 낫지 않지만, 정지를 영구화하면 뒤따르는
+        drain 을 관측하지 못하고 fence 를 반납·재획득하면 token thrash 가 된다.
+        해소는 설정을 고친 배포이고, 그 SIGTERM 이 lease 를 반납해 교체가 이뤄진다.
         """
         return True
 

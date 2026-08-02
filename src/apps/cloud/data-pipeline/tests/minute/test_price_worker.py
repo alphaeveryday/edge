@@ -413,8 +413,12 @@ class TestTradingHoursUniverse:
         assert worker.tick(datetime(2026, 7, 31, 20, 0, tzinfo=KST)) == "STOPPED"
         assert all(w["data_status"] == "DUE" for w in db.windows.values())
         # 다음 tick 도 처리하지 않는다 — 설정 불일치는 재시도로 낫지 않는다
+        token = db.sessions[session_id]["worker_fencing_token"]
         assert worker.tick(datetime(2026, 7, 31, 20, 1, tzinfo=KST)) == "STOPPED"
         assert all(w["data_status"] == "DUE" for w in db.windows.values())
+        # fence 를 쥔 채다 — 반납하고 멈추면 다음 tick 이 재획득해 token 이 매 tick 오른다
+        assert db.sessions[session_id]["worker_fencing_token"] == token
+        assert worker.fence_token == token
 
     def test_mismatch_after_stop_still_observes_later_drain(self, tmp_path):
         # 정지를 영구화(stopping)하면 그 뒤 EOD 가 drain 을 걸어도 tick 이 최상단에서
