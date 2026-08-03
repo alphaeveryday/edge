@@ -24,6 +24,24 @@ A(정기공시) 34건 외에 H(자산유동화) 27건에도 걸려, 유형으로
 raw 존에는 list 행 원본에 수집 provenance(our_ticker·market·stock_code·source_url·fetched_at)만
 붙여 그대로 낸다. 정규화·dedup·정정 판정·정체성 병합은 후속 canonical 소관이다.
 
+⚠️ **`rcept_no` 앞 8자리는 날짜가 아니다.** 접수번호 발번일이라 공시일(`rcept_dt`)과 어긋날
+수 있다 — 실측(2026-07-31) 1,069건 중 94건이 `20260730…` 으로 시작한다(효력발생안내처럼 이전
+접수번호에 딸린 후속 공시). 접수번호를 워터마크로 쓰려는 시도는 여기서 막힌다. 애초에 이 API
+에는 증분 커서가 없어(시각 필드도 없다) **매번 날짜창 전체를 다시 읽는 것 외에 방법이 없다**.
+그 재독이 낭비처럼 보이지만 하루 4~11 콜이고, 부작용으로 매 런이 그날에 대한 독립된 완전
+관측이 된다 — 런 사이의 rcept_no 집합 비교가 곧 완전성 근거다(판정은 원장·EOD 소관).
+
+⚠️ **18:00~19:00 제출분은 다음 날 창에 들어간다.** DART 접수시스템은 당일접수 07:30~18:00,
+익일접수 18:00~19:00 이라, 18:38 제출 공시의 `rcept_dt` 는 다음 날이다(실측 2026-08-03).
+"오늘 하루"만 질의하면 매일 마지막 1시간을 놓친다 — 기본 증분 창(어제~오늘)이 이걸 덮는다.
+
+⚠️ **웹 최신공시(dsac001)를 주 소스로 쓰지 않는다.** 그쪽은 접수시각(HH:MM)과 엄격한 시간
+내림차순을 줘서 워터마크가 실제로 동작하지만(틱당 1 콜), **커버리지가 다르다**: 07-31 하루
+기준 웹 701건 vs API 1,069건으로 지분공시 계열(임원·주요주주 소유상황 121, 대량보유 86 등)이
+통째로 빠진다. 축도 다르다 — 웹은 제출·갱신 시각, API 는 접수일자. 현 필터(공급계약·사업
+보고서)에 한해선 2일치 누락 0 이었지만 그건 **지금 필터 기준**이라, 대상이 넓어지는 순간
+조용히 샌다. 접수시각 축이 필요해지면(장중 트리거 정렬·지연 측정) 그때 보조로 다시 본다.
+
 ⚠️ 실측(2026-07-10): list.json 은 source_url 을 안 줘 rcept_no 로 구성한다. report_nm 은 꼬리
 공백 패딩·가운뎃점 ㆍ(U+318D)·[기재정정] 접두가 있어 필터는 strip 후 부분일치로 잡는다.
 문서 본문은 euc-kr HTML(UTF-8 XML 아님) 이라 무변형 ZIP bytes 로만 보존한다.
@@ -84,31 +102,13 @@ STOP_STATUS_CODES = {"010", "011", "012", "020", "800", "901"}
 WINDOW_CHUNK_DAYS = 30
 
 
-def _as_page_number(value: object) -> int | None:
-    """페이지 번호로 읽히면 양의 int, 아니면 None.
-
-    `int(value)` 로 강제하지 않는다 — `True`·`1.9`·`0`·`-3` 이 전부 통과값이 돼, 이 값을 쓰는
-    쪽(페이지 에코 대조·순회 상한)이 malformed 응답을 정상으로 판정한다(각도 H —
-    coerce-to-passing). 숫자 문자열은 받는다: 벤더가 타입을 바꿔도 **의미가 같으면** 가드가
-    살아 있어야 하고, 타입만으로 가드를 끄면 그때부터 조용히 통과한다.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 1 else None
-    if isinstance(value, str) and value.strip().isdigit():
-        number = int(value.strip())
-        return number if number >= 1 else None
-    return None
-
-
 def _window_segments(
     from_date: str | None, to_date: str | None
 ) -> list[tuple[str | None, str | None]]:
     """수집 창을 소스가 받아주는 길이(WINDOW_CHUNK_DAYS)로 자른다.
 
-    한쪽이라도 없으면 자르지 않는다 — 길이를 모르는 창을 임의로 좁히면 소스 기본 동작
-    (당일)을 조용히 바꾸게 된다. 그 경우는 소스가 자기 규칙대로 처리하게 그대로 넘긴다.
+    한쪽이라도 없으면 자르지 않는다 — 길이를 모르는 창을 임의로 좁히면 소스 기본 동작을
+    조용히 바꾸게 된다. 그 경우는 소스가 자기 규칙대로 처리하게 그대로 넘긴다.
     """
     if not from_date or not to_date:
         return [(from_date, to_date)]
@@ -272,40 +272,34 @@ class DartDisclosureSource:
         end_de: str | None,
         fetched_at: str,
     ) -> Iterator[dict]:
-        # 목록이 자라는 동안 페이지 경계가 밀려 **같은 행**이 두 페이지에 걸쳐 나올 수 있다 —
-        # 창 안에서 그 반복만 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고 raw 에도
-        # 같은 행이 두 번 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
-        #
-        # ⚠️ raw 의 "전부 보존·dedup 없음" 계약과의 관계(Rule 7 — 갈리면 하나를 고르고 이유를
-        # 남긴다): 그 계약이 금지하는 건 **서로 다른 관측을 하나로 접는 것**이다(정체성 병합·
-        # 정정 판정은 canonical 소관). 여기서 접는 건 같은 페이지네이션 패스가 페이지 이동
-        # 때문에 **같은 행을 두 번 건네준 것**이라 증거가 늘지 않는다. 페이지 이동 자체가
-        # 관측 대상이면 그건 이 행 복제가 아니라 위 page_no·total_page 가드와
-        # collection_log 의 list_rows_seen 이 기록한다.
-        # ⚠️ 창 하나가 실패 단위다 — 종목별 질의 시절의 corp 단위 예외 격리는 **의도적으로**
-        # 재현하지 않는다. 격리 축이던 corp 루프가 사라졌고, 중간 페이지의 의미 오류(비-list
-        # `list`·status 이상)는 그 창을 못 믿는다는 뜻이지 한 대상의 문제가 아니다. 예외는
-        # 그대로 스텝까지 올라가 status=error·exit 1 로 드러나고, 그 전에 yield 된 행은 raw 에
-        # 남는다(부분 수집분 보존 + 실패 명시 = Rule 12). 여기서 삼키고 계속하면 "몇 페이지가
-        # 통째로 빠진 성공 런"이 된다.
+        """한 세그먼트를 페이지 끝까지 훑어 대상 행을 낸다.
+
+        **완전성을 판정하지 않는다.** 이 루프가 하는 일은 두 가지다: ① 끝까지 읽었는가(못
+        읽었으면 크게 말한다) ② 무엇을 봤는가(기록만 한다). 응답이 자기에 대해 하는 말
+        (`total_page`·`total_count`)로 "다 받았다"를 증명하려 들면 반례가 무한하다 — 그건
+        벤더가 거짓말할 수 있는 방법을 세는 일이지 증거가 아니다. 실제 증거는 **독립된 두
+        번째 관측**이고, 이 소스에선 그게 공짜로 나온다: 매 틱·매 런이 같은 날짜창을 통째로
+        다시 읽으므로(증분 커서가 없어서 그럴 수밖에 없다) 런 사이의 rcept_no 집합 비교가
+        곧 완전성 근거다. 그 판정은 여기가 아니라 원장·EOD 소관이다.
+
+        창 하나가 실패 단위다 — 종목별 질의 시절의 corp 단위 예외 격리는 재현하지 않는다.
+        격리 축이던 corp 루프가 사라졌고, 페이지 응답의 의미 오류는 그 창을 못 믿는다는
+        뜻이지 한 대상의 문제가 아니다. 예외는 스텝까지 올라가 status=error 로 드러나고,
+        그 전에 yield 된 행은 raw 에 남는다(부분 수집분 보존 + 실패 명시 = Rule 12).
+        """
         self._segment_truncated = False
+        # 목록이 자라는 동안 페이지 경계가 밀려 **같은 행**이 두 페이지에 걸쳐 나올 수 있다 —
+        # 창 안에서 그 반복만 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받는다.
+        # 키가 rcept_no 가 아니라 행 내용인 이유: rcept_no 만 보면 같은 문서의 서로 다른
+        # 관측(`rm` 이 ""→"정" 으로 바뀐 정정 표시)까지 접혀 raw 에 닿기 전에 사라진다.
+        # raw 의 "전부 보존" 계약이 금지하는 건 서로 다른 관측을 접는 것이고, 여기서 접는 건
+        # 완전히 같은 행이라 증거가 늘지 않는다.
         seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
             payload = self._list(bgn_de, end_de, page)
             status = str(payload.get("status") or "?")
             if status == "013":
-                # 조회 데이터 없음 = 정상 빈 창(그 기간에 공시 없음) — 뉴스형.
-                #
-                # ⚠️ **1페이지에서만 정상이다.** 2페이지 이후의 013 은 "이 창은 비었다"가 아니다:
-                # 1페이지가 이미 total_page>1 로 여러 페이지의 실재를 말했으므로, 뒤늦은 013 은
-                # 캐시 불일치·목록 변동이라는 뜻이고 남은 페이지는 안 읽힌 것이다. 같이 묶어
-                # 정상 종료로 두면 그 유실이 success 로 남는다(Rule 12).
-                if page > 1:
-                    self._note_truncation(
-                        None, None,
-                        f"page={page} 에서 status=013 — 1페이지는 다중 페이지를 신고했다"
-                        " (목록 변동·캐시 불일치, 뒷페이지 미수집)", page=page,
-                    )
+                # 조회 데이터 없음 = 정상 빈 창(그 기간에 대상 공시 없음) — 뉴스형.
                 return
             if status in STOP_STATUS_CODES:
                 msg = payload.get("message") or STATUS_MESSAGES.get(status, "?")
@@ -321,9 +315,8 @@ class DartDisclosureSource:
             if not isinstance(rows, list):
                 raise ValueError(f"DART status=000 인데 list 이상: {type(rows).__name__}")
             if page == 1:
-                # 세그먼트마다 1페이지가 그 세그먼트의 건수를 준다 — **누적**해야 창 전체 규모가
-                # 된다. 대입하면 마지막 세그먼트 값만 남아, 누적되는 list_rows_seen 과 축이
-                # 어긋난 채 나란히 로그에 실린다.
+                # 세그먼트마다 1페이지가 그 세그먼트 건수를 준다 — **누적**해야 창 전체 규모가
+                # 된다(대입하면 마지막 세그먼트 값만 남아 list_rows_seen 과 축이 어긋난다).
                 raw_count = payload.get("total_count")
                 if isinstance(raw_count, int) and not isinstance(raw_count, bool):
                     self.list_total_count = (self.list_total_count or 0) + raw_count
@@ -337,19 +330,16 @@ class DartDisclosureSource:
                         None, None, f"malformed row: {type(row).__name__}", page=page,
                     )
                     continue
-                # 유니버스 필터가 먼저다 — 시장 전체 목록에는 우리가 수집하지 않는 회사 행이
-                # 하루 수백 건 섞여 있다. 필드 게이트를 앞에 두면 **남의 회사 행의 결함**이
-                # 우리 런의 failed_records 로 올라가 원장이 없는 결측을 세게 된다.
+                # 유니버스 필터가 **먼저다.** 시장 전체 목록에는 우리가 수집하지 않는 회사 행이
+                # 하루 수백 건 섞여 있어, 필드 게이트를 앞에 두면 남의 회사 행의 결함이 우리
+                # 런의 failed_records 로 올라가 원장이 없는 결측을 센다. 종목별 질의 시절엔
+                # 남의 행을 볼 일이 없어 없던 경로다.
                 raw_stock_code = row.get("stock_code")
                 if not isinstance(raw_stock_code, str):
-                    # 문자열이 아니면(숫자·null·키 자체 부재) **누구 것인지 판정할 수 없다** —
-                    # 우리 종목일 수도 있다. 유니버스 밖으로 접어 버리면 그 유실이 영영 안
-                    # 보인다(Rule 12). 판정 불가는 유니버스 밖과 다르므로 따로 드러낸다.
-                    #
-                    # ⚠️ 빈 문자열(`""`·`" "`)과 혼동하지 않는다. 그건 벤더가 **명시적으로**
-                    # "단축코드 없음"이라 답한 것(비상장·펀드 신고자, 하루 수백 건)이고,
-                    # 결측·null 은 응답이 깨졌다는 뜻이다. 둘을 묶으면 후자가 전자의 정상
-                    # 대량 경로에 섞여 영영 안 보인다.
+                    # 문자열이 아니면(숫자·null·키 부재) 누구 것인지 판정할 수 없다 — 우리
+                    # 종목일 수도 있어 유니버스 밖으로 접으면 그 유실이 영영 안 보인다.
+                    # 빈 문자열과는 다르다: 그건 벤더가 명시적으로 "단축코드 없음"이라 답한
+                    # 것이고(비상장·펀드 신고자, 하루 수백 건) 정상이다.
                     self._note_failure(
                         None, None,
                         f"stock_code 가 문자열이 아님: {type(raw_stock_code).__name__}"
@@ -357,14 +347,12 @@ class DartDisclosureSource:
                         page=page,
                     )
                     continue
-                # 빈 문자열은 정상이다 — 비상장·펀드 신고자는 단축코드가 없다(하루 수백 건).
                 stock_code = raw_stock_code.strip()
                 our_ticker = allowed.get(stock_code)
                 if our_ticker is None:
                     continue
-                # 필드 타입도 행 단위로 격리한다 — 비객체 행만 거르고 필드는 안 보면 비문자열
-                # report_nm/rcept_no 가 .strip() 에서 터져 창 전체를 죽인다(각도 H —
-                # crash-before-gate). OpenDART 는 문자열로 주지만 malformed 응답에 방어한다.
+                # 필드 타입도 행 단위로 격리한다 — 비문자열 report_nm/rcept_no 가 .strip()
+                # 에서 터지면 창 전체가 죽는다(각도 H — crash-before-gate).
                 report_nm = row.get("report_nm")
                 if not isinstance(report_nm, str):
                     self._note_failure(
@@ -381,12 +369,6 @@ class DartDisclosureSource:
                         "대상 공시인데 rcept_no 결측/비문자열", page=page,
                     )
                     continue
-                rcept_no = rcept_no.strip()
-                # dedup 키는 rcept_no 가 아니라 **행 내용 전체**다. rcept_no 만 보면 같은 문서의
-                # 서로 다른 관측(예: `rm` 이 ""→"정" 으로 바뀐 정정 표시)까지 접어, 두 번째
-                # 관측이 raw 에 닿기 전에 사라진다 — 그건 페이지 이동 중복이 아니라 실제 변화다.
-                # 내용이 완전히 같을 때만 접으므로 증거는 하나도 잃지 않고, 접히는 건 페이지
-                # 경계 이동이 같은 행을 두 번 건넨 경우뿐이다.
                 fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
                 if fingerprint in seen:
                     continue
@@ -394,101 +376,43 @@ class DartDisclosureSource:
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
-                # ⚠️ `stock_code` 는 **손대지 않는다** — `dict(row)` 가 벤더 원본을 그대로
-                # 담고 있다(bronze 무변형). 매칭용으로 strip 한 값을 되쓰면 raw 에서 벤더 이상
-                # (패딩 등)을 재현할 수 없고, 우리 축은 our_ticker 가 이미 담는다. 여기 폴백을
-                # 두지 않는 것도 같은 이유다: 여기 도달한 행은 위 유니버스 필터를 통과했으므로
-                # 그 키를 반드시 갖고 있어, 폴백은 도달 불가한 채 "결측을 메운다"고 오독된다.
-                record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no)
+                # stock_code 는 손대지 않는다 — dict(row) 가 벤더 원본을 그대로 담고 있다
+                # (bronze 무변형). 우리 축은 our_ticker 가 담는다.
+                record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no.strip())
                 record["fetched_at"] = fetched_at
                 yield record
-            # 응답이 정말 **요청한 페이지**였는지 확인한다. 캐시·벤더 이상으로 page 2~N 요청에
-            # 계속 1페이지가 돌아오면, 위 `seen` dedup 이 반복 행을 조용히 걷어내고 루프는
-            # total_page 까지 정상 완주해 **뒷페이지 전량이 빠진 success 런**이 된다 — dedup 이
-            # 그 증상을 지우기 때문에 이 확인이 없으면 사후에도 복원되지 않는다.
-            # ⚠️ 타입으로도 결측으로도 가드를 끄지 않는다. `isinstance(int)` 일 때만 대조하면
-            # 벤더가 `"1"` 로 주기 시작하는 순간, 결측을 통과시키면 필드가 빠지는 순간 이 가드가
-            # **조용히 죽는다** — 지키려던 유실이 그대로 통과한다. page_no 는 응답 계약에 있는
-            # 필드이므로(실측 2026-08-03), 없다는 건 응답을 못 믿는다는 뜻이다.
-            # 검사는 행 처리 **뒤**다 — 아래 total_page 가드와 같은 자리다. 받은 행은 버리지
-            # 않고(bronze: 받은 건 보존), 응답이 말이 안 되기 시작한 지점에서 멈춰 기록한다.
-            echoed = payload.get("page_no")
-            if _as_page_number(echoed) != page:
-                self._note_truncation(
-                    None, None,
-                    f"응답 page_no={echoed!r} 인데 요청은 page={page} — 목록 절단 가능", page=page,
-                )
-                return
-            # total_page 순회 — 마지막 페이지면 종료. 몇 페이지인지 모르는 채 조용히 1페이지에서
-            # 멈추면 목록 절단이 은폐되므로(Rule 12), 읽히지 않으면 감사 기록 후 종료한다.
+            # 순회를 계속할지 — 여기가 "끝까지 읽었는가"를 판정하는 **유일한 자리**다.
             #
-            # ⚠️ **결측(None)도 통과시키지 않는다.** 종전엔 "없으면 단일 페이지로 본다"였고 그건
-            # 상한이 corp 당이던 시절엔 대체로 맞았다 — 한 회사의 한 창은 실제로 1페이지다.
-            # 창 전체가 한 순회인 지금은 다르다: total_count=1800 인 응답에서 total_page 만
-            # 빠져도 100행만 읽고 **1,700행을 실패 기록 없이 버린다**. 실측상 OpenDART 는 항상
-            # 준다(2026-08-03) — 없다는 건 응답을 못 믿는다는 뜻이지 1페이지라는 뜻이 아니다.
+            # ⚠️ `max(1, int(raw))` 로 강제하지 않는다. 그 조합은 `False`·`0`·`-3`·`1.9` 를
+            # 전부 **1페이지**라는 통과값으로 바꿔, 뒷페이지가 실재해도 실패 기록 없이 끝난다
+            # (각도 H — coerce-to-passing). 창 전체가 한 순회라 1페이지 오판은 100행만 남기고
+            # 나머지를 통째로 버린다. 실측상 OpenDART 는 양의 int 를 준다(2026-08-03).
             raw_total = payload.get("total_page")
-            total_page = _as_page_number(raw_total)
-            if total_page is None:
-                self._note_truncation(
-                    None, None,
-                    f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r} — 목록 절단 가능",
-                    page=page,
+            valid = (
+                isinstance(raw_total, int)
+                and not isinstance(raw_total, bool)
+                and raw_total >= 1
+            )
+            if not valid:
+                self._stop_early(
+                    f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r}", page=page
                 )
                 return
-            # 공유 파서는 "페이지 번호로 읽히는가"만 본다 — 두 필드의 의미까지는 못 지킨다.
-            # page=2 응답이 total_page=1 을 주면 그 값은 파서엔 유효하지만 **모순**이고,
-            # 아래 `page >= total_page` 가 참이 돼 조용한 정상 종료가 된다. 총 페이지 수는
-            # 최소한 지금 읽고 있는 페이지만큼은 돼야 한다.
-            if total_page < page:
-                self._note_truncation(
-                    None, None,
-                    f"total_page={total_page} 가 현재 page={page} 보다 작다 — 목록 변동·응답 모순",
-                    page=page,
-                )
+            if page >= raw_total:
                 return
-            # 빈 페이지는 **위치와 무관하게** 이상이다. 실측(2026-08-03)상
-            # `total_page = ceil(total_count / page_count)` 이므로(page_count 100·50·7 에서
-            # 각각 11·22·153, 마지막 페이지 행수 69·19·5) 마지막 페이지도 항상 1행 이상이고,
-            # total_count=0 은 애초에 status=013 으로 온다. status=000 인데 0행이면 그 페이지가
-            # 통째로 빠진 것이다 — 앞의 가드들은 **응답의 형식**(page_no·total_page)만 보므로
-            # 형식이 온전한 빈 페이지를 전부 통과시킨다.
-            #
-            # ⚠️ 처음엔 "마지막 페이지가 비는 건 정상"이라는 예외를 뒀는데 위 산식이 그걸
-            # 반증했다. 같은 무행 응답이 013 이면 실패로 세면서 000 이면 성공으로 두는 것도
-            # 가드끼리의 모순이었다.
-            if page < total_page and len(rows) != self.page_count:
-                # 비최종 페이지는 **정확히 page_count 행**이다 — total_page 가
-                # ceil(total_count/page_count) 이므로 마지막을 뺀 모든 페이지가 가득 찬다
-                # (실측 2026-08-03: 11페이지 창에서 1·2·5·10 페이지 전부 100행, 11페이지만 69).
-                # 0행만 보면 "100 중 1행"처럼 **일부만 빠진 페이지**가 그대로 통과한다.
-                self._note_truncation(
-                    None, None,
-                    f"page={page}/{total_page} 가 {len(rows)}행 — 비최종 페이지는"
-                    f" {self.page_count}행이어야 한다(페이지 일부 유실)",
-                    page=page,
-                )
-                return
-            if page >= total_page:
-                if not rows:
-                    # 마지막 페이지도 비지 않는다 — total_count=0 인 창은 애초에 013 으로 온다.
-                    self._note_truncation(
-                        None, None,
-                        f"page={page}/{total_page} 가 status=000 인데 0행 — 페이지 유실",
-                        page=page,
-                    )
-                return
-        # ⚠️ 관용 kind 를 붙이지 않는다 — 진짜 실패로 드러낸다(status=partial·exit 1).
-        # ALPHA-351 이 절단을 관용한 근거는 "다음 증분 창이 이어받는다" 였고, 그건 상한이 corp
-        # 당 10 페이지이던 시절 이야기다. 축이 창 전체로 바뀐 지금 500 페이지 도달은 ~5만 행이
-        # 안 읽혔다는 뜻이고, 운영자가 지정한 백필 창(`--from/--to`)은 **이어받을 다음 창이
-        # 없다**. 평상시 증분 창은 ~18 페이지라 이 경로를 밟지 않는다 — 밟았다면 창을 좁히라는
-        # 실행 가능한 실패다.
-        self._note_truncation(
-            None,
-            None,
-            f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단(창을 좁혀 재실행)",
+        self._stop_early(
+            f"MAX_PAGES({self.max_pages}) 도달 — 창을 좁혀 재실행", page=self.max_pages
         )
+
+    def _stop_early(self, reason: str, *, page: int) -> None:
+        """창을 **끝까지 못 읽고** 멈췄다 — 기록하고 뒤 세그먼트도 중단시킨다.
+
+        행 단위 격리(`_note_failure`)와 구분한다: 절단은 "이 창을 다 못 읽었다"라 뒤
+        세그먼트를 돌면 날짜 중간에 구멍 난 raw 가 남지만, 격리는 "그 행만 빠졌다"라 나머지
+        수집을 계속하는 게 맞다. 같은 신호로 묶으면 malformed 행 하나가 창 전체를 멈춘다.
+        """
+        self._note_failure(None, None, f"목록을 끝까지 읽지 못함 — {reason}", page=page)
+        self._segment_truncated = True
 
     def _list(self, bgn_de: str | None, end_de: str | None, page: int) -> dict:
         params = {
