@@ -14,9 +14,11 @@ import pytest
 
 from edge_analysis.config import ReturnsNotReadyError
 from edge_analysis.consumer import (
-    RETURNS_RETRY_SECONDS,
+    KST,
+    RETURNS_RETRY_FALLBACK_SECONDS,
     consume_triggers,
     parse_trigger_message,
+    returns_retry_seconds,
 )
 
 
@@ -79,8 +81,29 @@ def test_returns_not_ready_defers_without_delete():
     rc = consume_triggers("q", max_polls=1, process_fn=boom, sqs_client=sqs)
     assert rc == 0
     assert sqs.deleted == []
-    # 처리 전 연장(900) 뒤 지연 재배달(1800)로 덮인다
-    assert [v for _, v in sqs.visibility] == [900, RETURNS_RETRY_SECONDS]
+    # 처리 전 연장(900) 뒤 지연 재배달 — 값은 배치 착지 기준 계산이라 존재·순서만 고정
+    assert len(sqs.visibility) == 2 and sqs.visibility[0] == ("r0", 900)
+    assert sqs.visibility[1][1] >= 60
+
+
+def test_returns_delay_lands_after_batch():
+    """고정 간격 반복은 08:00 확장 세션의 이른 트리거가 15:40 전에 receive 예산(16)을
+    태워 배치 직전 DLQ 로 간다 — 지연은 배치 착지(15:55 KST) 뒤에 떨어져야 한다."""
+    from datetime import datetime
+    morning = datetime(2026, 8, 4, 8, 5, tzinfo=KST)
+    delay = returns_retry_seconds(morning)
+    lands = morning.timestamp() + delay
+    batch = datetime(2026, 8, 4, 15, 55, tzinfo=KST).timestamp()
+    assert lands >= batch, "배치 전에 깨어나는 지연은 receive 예산만 태운다"
+    assert delay < 43200, "SQS VisibilityTimeout 상한(12h) 안이어야 한다"
+
+
+def test_returns_delay_after_batch_is_bounded_fallback():
+    """배치가 지났는데도 비어 있으면 파티션 결손(진짜 결함) — 고정 지연 반복으로 예산을
+    태워 DLQ(근거 보존)로 가는 것이 맞다."""
+    from datetime import datetime
+    evening = datetime(2026, 8, 4, 16, 30, tzinfo=KST)
+    assert returns_retry_seconds(evening) == RETURNS_RETRY_FALLBACK_SECONDS
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():
