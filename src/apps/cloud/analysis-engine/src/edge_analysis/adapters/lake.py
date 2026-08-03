@@ -194,13 +194,16 @@ class LakeReader:
                 continue
             # isfinite — float("Infinity"/"nan") 은 양수 비교를 통과하거나(inf) 전부
             # False(nan)라, 유한성 없이 접으면 손상 레코드가 수익률 inf 로 위장된다.
-            returns[unit_id] = (
+            # 결과값도 검사한다: 유한 피연산자끼리도 나눗셈이 오버플로할 수 있다
+            # (예: open 1e-300) — 피연산자 게이트만으론 inf 가 분해에 실린다.
+            ret = (
                 (close_price / open_price - 1.0)
                 if open_price is not None and math.isfinite(open_price)
                 and math.isfinite(close_price)
                 and open_price > 0 and close_price > 0
                 else None
             )
+            returns[unit_id] = ret if ret is not None and math.isfinite(ret) else None
         return returns
 
     def load_holdings(

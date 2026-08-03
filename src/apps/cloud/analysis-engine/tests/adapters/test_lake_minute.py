@@ -112,6 +112,21 @@ def test_infinity_and_nan_fold_to_none():
     assert returns == {"A": None, "B": None, "C": None}
 
 
+def test_division_overflow_folds_to_none():
+    """유한 양수 피연산자끼리도 나눗셈이 오버플로한다(open 1e-300) — 결과 유한성
+    검사가 없으면 inf 수익률이 기여 순위·proxy 를 오염시킨다."""
+    reader = _reader({
+        minute_artifact_key("KR", "2026-07-15", "0900", 1): _bars(
+            {"unit_id": "A", "open": "1e-300", "close": "1"},
+        ),
+        minute_artifact_key("KR", "2026-07-15", "1030", 1): _bars(
+            {"unit_id": "A", "open": "1", "close": "9e14"},
+        ),
+    })
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "1030", 1, None)
+    assert returns == {"A": None}
+
+
 def test_checksum_mismatch_is_retry_axis_not_silent_consume():
     """원장 checksum 은 커밋된 바이트의 sha256 이다(price_consumer 와 동형 계약) —
     대조 없이 소비하면 트리거 판정과 다른 바이트(동시 PUT 경합·운영 실수)로 분해가
