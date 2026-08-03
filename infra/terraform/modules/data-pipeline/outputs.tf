@@ -46,8 +46,8 @@ output "dart_secret_arn" {
 }
 
 output "minute_service_arns" {
-  description = "1분 상주 서비스 3종 ARN(ALPHA-711) — CD(deploy-data-pipeline.yml)의 force-new-deployment 대상"
-  value       = [for s in aws_ecs_service.minute : s.id]
+  description = "1분 상주 서비스 전체 ARN(ALPHA-711·719) — 배포 역할의 Describe/Update 대상. analysis-consumer 포함(빠지면 deploy-analysis-engine 롤링이 AccessDenied — 유예 중엔 조용히 스킵돼 옛 이미지가 돈다)"
+  value       = concat([for s in aws_ecs_service.minute : s.id], [aws_ecs_service.analysis_consumer.id])
 }
 
 output "minute_service_names" {

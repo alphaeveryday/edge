@@ -41,6 +41,20 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+def minute_observation_id(trigger_id: str) -> str:
+    """분봉 트리거 계보의 observation id — trigger_id 결정적 파생(멱등 upsert 재료)."""
+    return stable_id("cob", trigger_id)
+
+
+def minute_route_id(trigger_id: str) -> str:
+    """분봉 트리거 계보의 route id — **소비자의 멱등 프리플라이트와 같은 유도식**(ALPHA-719).
+
+    consumer 가 이 함수를 import 해 재배달 판정에 쓴다 — 두 벌로 갈리면 프리플라이트가
+    항상 False 라 재배달마다 새 run 이 생기고 LLM 이 재과금된다(조용한 붕괴).
+    """
+    return stable_id("rte", minute_observation_id(trigger_id))
+
+
 class EventStore:
     """psycopg2 커넥션 위의 얇은 리포지토리."""
 
@@ -68,6 +82,21 @@ class EventStore:
     def close(self) -> None:
         """커넥션을 닫는다."""
         self._conn.close()
+
+    def has_run_for_route(self, route_id: str) -> bool:
+        """이 route 로 이미 설명 run 이 확정됐는가 — 분봉 소비자의 멱등 프리플라이트(ALPHA-719).
+
+        `explanation_run.run_id` 는 벽시계(`explanation_as_of`)가 재료라 재배달마다 새
+        run·result 행이 생기고 LLM 이 재과금된다. route id 는 trigger_id 에서 결정적으로
+        유도되므로(`stable_id`) 이 존재 검사가 재배달을 걸러낸다. run 직전 crash 로
+        관측·route 만 남은 경우는 False 라 재실행된다(L1 은 ON CONFLICT 멱등 — 안전).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM explanation_run WHERE explanation_route_id = %s LIMIT 1",
+                (route_id,),
+            )
+            return cur.fetchone() is not None
 
     # -- 읽기 --------------------------------------------------------------- #
     def causal_data(self):
@@ -361,8 +390,8 @@ class EventStore:
 
         detected_at = utcnow_iso()
         # 계보 id 는 소비한 trigger_id 에서 파생 — DB 에 있는 그 행에 계보가 매달린다.
-        obs_id = stable_id("cob", trigger_id)
-        route_id = stable_id("rte", obs_id)
+        obs_id = minute_observation_id(trigger_id)
+        route_id = minute_route_id(trigger_id)
         contribution_sum = (
             sum(m.contribution for m in decomp.members) if decomp.members else None
         )

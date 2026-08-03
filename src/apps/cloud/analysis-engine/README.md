@@ -115,6 +115,14 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
 # ⚠️ 분해 입력(당일 일봉 파티션 부재)·게시 정책(일 단위 축)은 ALPHA-710 결정 대기.
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
+
+# 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
+# --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
+# explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
+# 장중(당일 price_daily 부재)은 ReturnsNotReady 로 30분 지연 재시도 — 15:40 배치 대기.
+# --max-polls 는 검증용: 계약 위반·처리 실패가 있으면 exit 1.
+EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
+  python -m edge_analysis consume-triggers --max-polls 3
 ```
 
 ## 환경 변수

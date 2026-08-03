@@ -20,6 +20,15 @@ class PipelineError(RuntimeError):
     """치명적 파이프라인 오류 → 비0 종료 → Step Functions 실패."""
 
 
+class ReturnsNotReadyError(PipelineError):
+    """당일 `price_daily` 파티션이 아직 없다(장중) — 재시도로 낫는 유일한 실패 축.
+
+    분봉 트리거 소비자(ALPHA-719)가 이 타입만 **지연 재시도**(가시성 연장 — 15:40 배치
+    뒤에 다시 본다)로 가른다. PipelineError 서브클래스라 단발 CLI 경로의 계약(비0 종료)
+    은 그대로다. 장중 분해 입력을 분봉 canonical 로 바꾸는 축 결정은 ALPHA-710 이다.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class PgConfig:
     """Cloud Event Store(Postgres) 접속 설정."""

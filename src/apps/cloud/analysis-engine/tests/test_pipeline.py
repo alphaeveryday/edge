@@ -192,3 +192,20 @@ def test_missing_minute_trigger_fails_loud():
     with pytest.raises(PipelineError, match="분봉 트리거"):
         run(settings, lake=_FakeLake(), store=_EmptyStore(None, _PREREQS_OK),
             client=_FakeClient(), s3=_FakeS3())
+
+
+def test_empty_returns_fail_loud_before_llm():
+    """당일 price_daily 부재(장중)의 빈 returns 가 LLM 까지 가면 etf_return=NULL·
+    total_priced=0 인 설명이 저장된다(08-03 감사 실측) — 분해 전에 크게 죽어야 하고,
+    소비자(ALPHA-719)는 이 타입만 지연 재시도로 가른다."""
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _EmptyReturnsLake(_FakeLake):
+        def load_returns(self, market, trade_date):
+            return {}
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+    with pytest.raises(ReturnsNotReadyError):
+        run(_SETTINGS, lake=_EmptyReturnsLake(), store=store, client=_FakeClient(), s3=s3)
+    assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
