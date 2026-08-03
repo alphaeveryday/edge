@@ -38,6 +38,7 @@ from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
+from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.session_ops import start_session_cli, stop_session_cli
@@ -168,7 +169,11 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 뉴스 추출 Consumer(ALPHA-713): News Job SQS 소비 상주 루프.
                  # 원장 DB + 큐 설정 + storage(결과 PUT) + LLM_* env(tag-news 관례).
                  # realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
-                 "news-consumer"],
+                 "news-consumer",
+                 # 1분 News Worker(ALPHA-707): BigKinds 매분 폴링 상주 루프(ECS Service).
+                 # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
+                 # universe 없음 — 뉴스 세션은 소스 단위다.
+                 "news-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -246,10 +251,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.max_ticks is not None:
         if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
-                             "news-consumer"):
+                             "news-consumer", "news-worker"):
             raise SystemExit(
                 "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
-                f"news-consumer 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+                f"news-consumer·news-worker 에서만 쓴다 — 이 스텝({args.step})에서는 "
+                "무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -290,13 +296,18 @@ def main(argv: list[str] | None = None) -> int:
             f"--session-date 는 {args.step} 에서 쓰지 않는다 — 대상 세션은 job payload"
             "(price-consumer)·오늘 KST(start-minute-session)가 정한다(무시되므로 거부)"
         )
+    if args.step == "news-worker" and args.universe is not None:
+        raise SystemExit(
+            "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
+            "universe 가 없다(무시되므로 거부)"
+        )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
-                         "start-minute-session") and (
+                         "start-minute-session", "news-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer·start-minute-session 에서만 쓴다 — "
+            f"price-consumer·start-minute-session·news-worker 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -360,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
                                   max_ticks=args.max_ticks)
     if args.step == "news-consumer":
         return news_consumer_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "news-worker":
+        return news_worker_cli(settings, session_date=args.session_date,
+                               max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)
