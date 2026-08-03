@@ -249,6 +249,32 @@ def test_failed_segment_stops_later_segments(tmp_path):
     assert source.fetch_failures
 
 
+def test_row_level_isolation_does_not_stop_later_segments(tmp_path):
+    # WHY: 절단과 격리는 다른 사건이다. 절단은 "이 창을 끝까지 못 읽었다"라 뒤 세그먼트를
+    #      돌면 날짜 중간에 구멍 난 raw 가 남지만, 격리는 "그 행만 빠졌다"라 나머지 수집을
+    #      계속하는 게 맞다. 둘을 "fetch_failures 가 늘었는가" 하나로 묶으면 **malformed 행
+    #      하나가 7개월 백필을 통째로 멈춘다**.
+    class RowDefectFirstSegment(FakeClient):
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            if "/list.json" in url:
+                self.list_urls.append(url)
+                if _param(url, "bgn_de") == "20260101":
+                    return json.dumps(_page([
+                        {"stock_code": "005930", "report_nm": 12345, "rcept_no": "BAD"},
+                    ]), ensure_ascii=False)
+                return json.dumps(_page([_row("공급계약", rcept_no="LATER")]), ensure_ascii=False)
+            return super().request(method, url, headers=headers, data=data, decode=decode)
+
+    client = RowDefectFirstSegment()
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"], from_date="2026-01-01", to_date="2026-07-31"))
+
+    assert len(client.list_urls) == 8              # 격리는 뒤 세그먼트를 막지 않는다
+    assert len(records) == 7                       # 첫 세그먼트만 그 행이 빠진다
+    assert any("report_nm 비문자열" in f["error"] for f in source.fetch_failures)
+
+
 def test_split_window_total_count_accumulates(tmp_path):
     # WHY: 세그먼트마다 1페이지가 그 세그먼트 건수를 준다 — 대입하면 **마지막 세그먼트 값만**
     #      남아, 창 전체를 누적하는 list_rows_seen 과 축이 어긋난 채 나란히 로그에 실린다.

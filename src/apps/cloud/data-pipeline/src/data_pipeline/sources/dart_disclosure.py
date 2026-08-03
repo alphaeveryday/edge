@@ -156,6 +156,10 @@ class DartDisclosureSource:
         # 쪽이든 엄격한 쪽이든 거짓이 된다. 스텝은 이 값을 collection_log 에 기록만 한다.
         self.list_total_count: int | None = None
         self.list_rows_seen: int = 0
+        # 직전 세그먼트가 **끝까지 못 갔는지**. 행 단위 격리(malformed row·비문자열 필드 등)와
+        # 구분하려고 따로 둔다 — "fetch_failures 가 늘었는가"로 보면 행 하나가 이상해도 창
+        # 전체가 멈춘다. 절단은 페이지 순회가 중간에 끊긴 것이고, 격리는 그 행만 빠진 것이다.
+        self._segment_truncated = False
         self._corp_map: dict[str, dict[str, str]] | None = None
 
     @property
@@ -210,6 +214,17 @@ class DartDisclosureSource:
             }
         )
 
+    def _note_truncation(self, *args, **kwargs) -> None:
+        """페이지 순회가 끊긴 실패 — 기록하고 **세그먼트 절단**으로 표시한다.
+
+        행 단위 격리(`_note_failure`)와 구분하는 이유: 절단은 "이 창을 끝까지 못 읽었다"라
+        뒤 세그먼트를 돌면 날짜 중간에 구멍 난 raw 가 남지만, 격리는 "그 행만 빠졌다"라
+        나머지 수집을 계속하는 게 맞다. 둘을 같은 신호로 묶으면 malformed 행 하나가 창
+        전체를 멈춘다.
+        """
+        self._note_failure(*args, **kwargs)
+        self._segment_truncated = True
+
     def fetch(
         self,
         symbols: list[str],
@@ -231,11 +246,10 @@ class DartDisclosureSource:
             allowed.setdefault(stock_code, our_ticker)
         fetched_at = datetime.now(timezone.utc).isoformat()
         for seg_from, seg_to in _window_segments(from_date, to_date):
-            before = len(self.fetch_failures)
             yield from self._scan_window(
                 allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at
             )
-            if len(self.fetch_failures) > before:
+            if self._segment_truncated:
                 # 세그먼트가 절단됐으면 **뒤 세그먼트도 멈춘다.** 계속 돌면 "앞 날짜는 잘렸는데
                 # 뒤 날짜는 온전한" raw 가 남고, partial 런도 후속 정제 대상이라 canonical 이
                 # 날짜 중간에 구멍을 가진 채 완성된 것처럼 보인다. 창을 쪼갠 건 소스 제약
@@ -274,6 +288,7 @@ class DartDisclosureSource:
         # 그대로 스텝까지 올라가 status=error·exit 1 로 드러나고, 그 전에 yield 된 행은 raw 에
         # 남는다(부분 수집분 보존 + 실패 명시 = Rule 12). 여기서 삼키고 계속하면 "몇 페이지가
         # 통째로 빠진 성공 런"이 된다.
+        self._segment_truncated = False
         seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
             payload = self._list(bgn_de, end_de, page)
@@ -286,7 +301,7 @@ class DartDisclosureSource:
                 # 캐시 불일치·목록 변동이라는 뜻이고 남은 페이지는 안 읽힌 것이다. 같이 묶어
                 # 정상 종료로 두면 그 유실이 success 로 남는다(Rule 12).
                 if page > 1:
-                    self._note_failure(
+                    self._note_truncation(
                         None, None,
                         f"page={page} 에서 status=013 — 1페이지는 다중 페이지를 신고했다"
                         " (목록 변동·캐시 불일치, 뒷페이지 미수집)", page=page,
@@ -399,7 +414,7 @@ class DartDisclosureSource:
             # 않고(bronze: 받은 건 보존), 응답이 말이 안 되기 시작한 지점에서 멈춰 기록한다.
             echoed = payload.get("page_no")
             if _as_page_number(echoed) != page:
-                self._note_failure(
+                self._note_truncation(
                     None, None,
                     f"응답 page_no={echoed!r} 인데 요청은 page={page} — 목록 절단 가능", page=page,
                 )
@@ -415,7 +430,7 @@ class DartDisclosureSource:
             raw_total = payload.get("total_page")
             total_page = _as_page_number(raw_total)
             if total_page is None:
-                self._note_failure(
+                self._note_truncation(
                     None, None,
                     f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r} — 목록 절단 가능",
                     page=page,
@@ -426,7 +441,7 @@ class DartDisclosureSource:
             # 아래 `page >= total_page` 가 참이 돼 조용한 정상 종료가 된다. 총 페이지 수는
             # 최소한 지금 읽고 있는 페이지만큼은 돼야 한다.
             if total_page < page:
-                self._note_failure(
+                self._note_truncation(
                     None, None,
                     f"total_page={total_page} 가 현재 page={page} 보다 작다 — 목록 변동·응답 모순",
                     page=page,
@@ -447,7 +462,7 @@ class DartDisclosureSource:
                 # ceil(total_count/page_count) 이므로 마지막을 뺀 모든 페이지가 가득 찬다
                 # (실측 2026-08-03: 11페이지 창에서 1·2·5·10 페이지 전부 100행, 11페이지만 69).
                 # 0행만 보면 "100 중 1행"처럼 **일부만 빠진 페이지**가 그대로 통과한다.
-                self._note_failure(
+                self._note_truncation(
                     None, None,
                     f"page={page}/{total_page} 가 {len(rows)}행 — 비최종 페이지는"
                     f" {self.page_count}행이어야 한다(페이지 일부 유실)",
@@ -457,7 +472,7 @@ class DartDisclosureSource:
             if page >= total_page:
                 if not rows:
                     # 마지막 페이지도 비지 않는다 — total_count=0 인 창은 애초에 013 으로 온다.
-                    self._note_failure(
+                    self._note_truncation(
                         None, None,
                         f"page={page}/{total_page} 가 status=000 인데 0행 — 페이지 유실",
                         page=page,
@@ -469,7 +484,7 @@ class DartDisclosureSource:
         # 안 읽혔다는 뜻이고, 운영자가 지정한 백필 창(`--from/--to`)은 **이어받을 다음 창이
         # 없다**. 평상시 증분 창은 ~18 페이지라 이 경로를 밟지 않는다 — 밟았다면 창을 좁히라는
         # 실행 가능한 실패다.
-        self._note_failure(
+        self._note_truncation(
             None,
             None,
             f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단(창을 좁혀 재실행)",
