@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
+import pathlib
 import sys
 import time
 from dataclasses import dataclass
@@ -354,22 +356,92 @@ def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
     from pathlib import Path
 
     from .hypothesize import screen_tuples
-    from .judge import panel_text
-    from .paneltest import FEATURES
+    from .judge import report_text
+    from .paneltest import FEATURES, edge_test
     eid, env_s, out_dir, m = item
     env = _json.loads(env_s)
+    layer = env.get("layer") or "고유"
     valid, rej = screen_tuples(env.get("hypotheses") or [],
                                event_types=env.get("event_types") or [],
                                series_families=env.get("series_families") or [],
                                measurable=list(FEATURES),
-                               layer=env.get("layer") or "고유")
+                               layer=layer)
     if not valid:
         return eid, "REJ " + " | ".join(rej)
+    t = valid[0]
     (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
-    txt = panel_text(_W["lake"], valid[0], _W["iid"], _W["day"],
-                     layer=env.get("layer") or "고유", m_tests=m)
-    (Path(out_dir) / f"panel_{eid}.txt").write_text(txt, encoding="utf-8")
+    r = edge_test(_W["lake"], t, _W["day"], cell_instrument_id=_W["iid"],
+                  layer=layer, m_tests=m)
+    (Path(out_dir) / f"panel_{eid}.txt").write_text(report_text(r, t, m), encoding="utf-8")
+    # 판정을 JSON 으로도 떨군다: `story` 가 재검정 없이 조립한다. 층별 식별집합
+    # 조립이 임시 스크립트에만 있으면 매번 손으로 짜게 되고 그때마다 드리프트한다.
+    (Path(out_dir) / f"report_{eid}.json").write_text(_json.dumps({
+        "layer": layer, "channel": t.channel, "event_type": t.trigger.ident,
+        "sign": t.sign, "verdict": r.verdict, "applied": bool(r.applies_today),
+        "n": r.n, "p": r.p, "ci_lo": r.ci_lo, "ci_hi": r.ci_hi,
+        "contribution": r.contribution, "reason": r.reason,
+        "has_conditions": bool(t.conditions),
+        "cond_measurable": r.cond_measurable, "cond_satisfied": r.cond_satisfied,
+        "reduction": r.reduction, "trigger_fired": r.trigger_fired,
+        "assignable": r.assignable,
+    }, ensure_ascii=False), encoding="utf-8")
     return eid, "ok"
+
+
+def layer_budgets(lake, tk6: str, day: str) -> dict[str, float]:
+    """층 → 그 층의 오늘 몫 (로그). **식별집합의 상한은 층마다 다르다.**
+
+    시장층 엣지의 τ 는 y=lr 단위, 섹터층은 y=ar, 고유층은 y=ar_ind 다 (LAYER_Y).
+    하나의 고유 예산으로 세 층을 자르면 단위가 다른 두 수를 교차한다 - 8차에
+    고친 일/창 범주 오류가 층 축에서 반복되는 것이다.
+    """
+    _, facts = stock_layers(lake, tk6, day)
+    return {f.kind: f.pct for f in facts}
+
+
+def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -> str:
+    """report_*.json + 층 예산 → 표 + 산문. **재검정 없다** (prep 이 이미 쟀다).
+
+    이 조립이 코드에 없어서 셀마다 임시 스크립트로 짰고, 그 스크립트에만 층별
+    식별집합이 있었다 - 코드는 고유 예산 하나로 세 층을 잘랐다. 집을 준다.
+    """
+    from .attribute import _route_gate, gap_covariate, load_cell
+    from .narrate import Edge, narrate
+    from .render import Row, render
+    d = pathlib.Path(out_dir)
+    shares, _labels, after_close = load_cell(lake, ticker, iid, day)
+    budgets = layer_budgets(lake, ticker.split(".")[0], day)
+    edges = []
+    for f in sorted(d.glob("report_*.json")):
+        j = json.loads(f.read_text(encoding="utf-8"))
+        b, iset = budgets.get(j["layer"]), None
+        if j["ci_lo"] is not None and b is not None:
+            lo, hi = ((max(j["ci_lo"], 0.0), min(j["ci_hi"], b)) if b > 0
+                      else (max(j["ci_lo"], b), min(j["ci_hi"], 0.0)))
+            iset = (lo, hi) if lo <= hi else None
+        why = ("" if j["applied"] else
+               "조건 측정불가 - 판정불가 (부재는 충족이 아니다)" if not j["cond_measurable"] else
+               "조건 미충족 (INUS)" if j["cond_satisfied"] is False else
+               "횡단면 방향 반대 (환원 불일치)" if j["reduction"].startswith("불일치") else
+               "방아쇠 미발화 (오늘 |z| < 임계)" if j["trigger_fired"] is False else
+               "전이 엣지 - 몫 배정 불가" if not j["assignable"] else "")
+        edges.append(Edge(
+            channel=f"{j['layer']}·{j['channel']}", event_type=j["event_type"],
+            verdict=j["verdict"], applied=j["applied"], why_not=why,
+            iset_lo=iset[0] if iset else None, iset_hi=iset[1] if iset else None,
+            contradiction=j["ci_lo"] is not None and iset is None,
+            cond_state=("없음" if not j["has_conditions"] else
+                        "측정불가" if not j["cond_measurable"] else
+                        "충족" if j["cond_satisfied"] else "미충족"),
+            reduction_state=j["reduction"] if j["reduction"] != "—" else "미실행"))
+    rows = [Row(s) for s in shares]
+    gw = next((s for s in shares if s.window.kind == "gap"), None)
+    gc = gap_covariate(lake, ticker, day, gw.log_ret) if gw is not None else None
+    return (render(rows) + "\n\n"
+            + narrate(ticker=ticker, name=name or ticker, day=day,
+                      route=_route_gate(lake, iid, day), rows=rows, grounded={},
+                      after_close=tuple(after_close), edges=tuple(edges), gap_cov=gc,
+                      layers=tuple(budgets.items())))
 
 
 def _cli() -> None:
@@ -480,6 +552,12 @@ def _cli() -> None:
                 print(f"{eid}: {msg}")
                 bad += msg.startswith("REJ")
         raise SystemExit(1 if bad else 0)
+    if cmd == "story":
+        # prep 이 떨군 report_*.json 을 층별 예산으로 조립한다. 재검정 없다.
+        tkr, iid, day, d = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+        nm = sys.argv[6] if len(sys.argv) > 6 else ""
+        print(story(CausalLake(), tkr, iid, day, d, name=nm))
+        return
     if cmd == "panels":
         # 웜 레이크 하나로 env_*.json 전부의 패널을 일괄 선계산한다.
         # 판정자마다 콜드 레이크 + edge_test 를 돌면 간선당 1~7분이 든다(실측) -
@@ -526,7 +604,7 @@ def pathlib_read(p: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep", "serve"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep", "story", "serve"):
         _cli()
         return
     if len(sys.argv) != 4:

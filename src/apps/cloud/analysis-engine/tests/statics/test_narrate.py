@@ -185,8 +185,8 @@ def test_causal_budget_is_idiosyncratic_not_raw():
 
     rows = [_row("잔여1", -0.0072)]
     txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
-                  idio=(0.00375, -0.01097))
-    assert "[대상]" in txt and "고유" in txt
+                  layers=(("시장", -0.01097), ("고유", 0.00375)))
+    assert "[층]" in txt and "고유" in txt
     assert "부호가 원수익과 반대" in txt          # 초과수익이었다는 사실을 숨기지 않는다
 
 
@@ -236,3 +236,57 @@ def test_negative_budget_size_keeps_direction():
                   rows=[Row(Share(w, -0.03))], grounded={}, edges=(e,))
     assert "최대 -0.42%p" in txt, txt
     assert "0 일 수도" in txt
+
+
+def test_layer_identity_is_a_paragraph_not_silence():
+    """층 분해는 두 번째 항등식이다 - 하루의 98%가 시장인 날에 '전부 미설명'은 거짓말이다.
+
+    실측(042700 07-31): 시장 +24.22 · 섹터 -3.47 · 고유 +3.92 = +24.67 (하루 총합).
+    데이터는 알고 있었는데 산문에 축이 없어서 못 말했다.
+    """
+    rows = [_row("잔여1", 0.2467)]
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                  layers=(("시장", 0.2422), ("섹터", -0.0347), ("고유", 0.0392)))
+    assert "[층]" in txt
+    assert "시장 +24.22%p" in txt and "고유 +3.92%p" in txt
+    assert "항등식이지 인과가 아니다" in txt
+    # 지배 층이 고유가 아니면 '종목 이야기' 서사를 반박하는 문장이 따로 선다
+    assert "시장층" in txt and "층 분해가 반박한다" in txt
+
+
+def test_us_factor_is_sector_matched_not_broad():
+    """반도체 종목의 갭을 S&P500 으로 재면 밤사이 반도체 +8.5% 를 +0.77% 로 설명하려 든다.
+
+    facts 는 이미 반도체 지수를 출력하고 있었는데 gap_covariate 만 광의 지수를 봤다.
+    팩터는 적합도가 아니라 **사람이 정한 업종 매핑**으로 고른다.
+    """
+    from edge_analysis.statics.attribute import US_FACTOR, US_FACTOR_DEFAULT, _us_factor
+
+    class L:
+        def __init__(self, code):
+            self.code = code
+
+        def sql(self, q):
+            return [(self.code,)] if self.code else []
+
+    assert _us_factor(L("1012"), "042700", "2026-07-31") == "SOX"   # 기계·장비
+    assert _us_factor(L("1013"), "005930", "2026-07-31") == "SOX"   # 전기전자
+    assert _us_factor(L("1002"), "000000", "2026-07-31") == US_FACTOR_DEFAULT
+    assert _us_factor(L(None), "999999", "2026-07-31") == US_FACTOR_DEFAULT
+    assert set(US_FACTOR.values()) <= {"SOX", "SOXX", "SMH", "GSPC", "IXIC"}
+
+
+def test_unexplained_is_scoped_to_the_causal_budget():
+    """층 회계가 가져간 몫은 '설명 실패' 가 아니다 - 인과 엣지가 청구할 수 없는 것이다.
+
+    실측(042700 07-31): 하루 +24.67 중 층 회계 +20.75, 고유 +3.92. 산문이
+    "미설명 +24.67" 이라 말해 바로 아래 층 문단과 정면으로 어긋났다.
+    """
+    rows = [_row("잔여1", 0.2467)]
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                  layers=(("시장", 0.2422), ("섹터", -0.0347), ("고유", 0.0392)))
+    assert "미설명 +3.92%p" in txt, txt
+    assert "미설명 +24.67%p" not in txt, "층 회계 몫을 설명 실패로 셌다"
+    # 층이 없으면 예전대로 시간 항등식 기준
+    plain = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={})
+    assert "미설명 +24.67%p" in plain

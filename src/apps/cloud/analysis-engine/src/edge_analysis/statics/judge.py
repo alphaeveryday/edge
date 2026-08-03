@@ -92,6 +92,16 @@ def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유",
     from .paneltest import edge_test
     r = edge_test(lake, tup, day, cell_instrument_id=instrument_id, layer=layer,
                   m_tests=m_tests)
+    return report_text(r, tup, m_tests)
+
+
+def report_text(r, tup, m_tests: int = 1) -> str:
+    """EdgeReport → 패널 텍스트. **순수 함수** - 재검정 없이 같은 글을 낸다.
+
+    `panel_text` 에서 갈라냈다: 조립부가 텍스트와 판정 JSON 둘을 원할 때
+    edge_test 를 두 번 돌리면 셀당 16분이 두 배가 되고, 두 번의 결과가 갈릴
+    여지도 생긴다 (정렬 고정 전에는 실제로 갈렸다).
+    """
     rows = [
         f"n={r.n}" + (f" · p={r.p:.3f}" if r.p is not None else " · p 미계산"),
         # 임계는 판정이 아니라 규약이다 - 셀 안 동시검정 m 개를 α 로 나눈 값.

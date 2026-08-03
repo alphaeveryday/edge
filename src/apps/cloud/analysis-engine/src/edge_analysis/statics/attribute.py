@@ -99,16 +99,45 @@ def _beta_ci(xs, ys) -> tuple[float, float] | None:
     return beta - 1.96 * se, beta + 1.96 * se
 
 
+# KRX 업종 → 밤사이 미국 팩터. **사람이 정하는 스키마**다 (적합도로 고르면
+# "설명력 최대" 가 섹터를 대신하는 그 실수의 반복 - 섹터를 KRX 업종지수로
+# 못박은 것과 같은 규율). 없으면 광의 지수로 떨어진다.
+US_FACTOR = {
+    "1013": "SOX",   # 전기전자 → 필라델피아반도체
+    "1012": "SOX",   # 기계·장비 → 반도체 장비가 이 지수의 주력 구성 (한미반도체 등)
+    "2013": "SOX",   # 코스닥 반도체
+}
+US_FACTOR_DEFAULT = "GSPC"
+
+
+def _us_factor(lake, tk6: str, day: str) -> str:
+    """이 종목의 KRX 업종에 맞는 미국 팩터 심볼. 업종 미상이면 광의 지수."""
+    rows = lake.sql(f"""
+        SELECT code FROM sector_member
+        WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'
+        ORDER BY as_of DESC LIMIT 1""")
+    return US_FACTOR.get(str(rows[0][0]) if rows else "", US_FACTOR_DEFAULT)
+
+
 def gap_covariate(lake, ticker: str, day: str, gap_share: float):
     """§9: 갭은 더 잘리지 않으므로 공변량으로만 좁힌다 - 그리고 그 좁힘도
     **부분식별**이다. β 의 CI × 직전 미국 세션 수익률 → 갭 몫의 설명 구간.
     점 β 로 곱하면 크기 층이 다시 점 주장으로 오염된다.
 
+    팩터는 **섹터 매칭**이다: 반도체 종목의 갭을 S&P500 으로 재면 밤사이 미국
+    반도체가 +8.5% 인 날(실측 042700 07-31, SOX)을 S&P +0.77% 로 설명하려 들고,
+    β 가 3 까지 부풀어 '갭의 12% 만 공통충격' 이라는 오답이 나온다. facts 는
+    이미 반도체 지수를 출력하고 있었는데 이 함수만 광의 지수를 봤다 - 바인딩 누락.
+
+    이력도 `us_market`(120일) 대신 `layers_daily`(939일, 2022-11~) 를 쓴다.
+
     재료가 없으면 GapCovariate(reason=...) 부재 선언 - 침묵 금지. 부재의 사유가
     곧 백필 요청이다 (docs/analysis-engine/data-backfill-requests.md).
     """
     from .narrate import GapCovariate
+    tk6 = ticker.split(".")[0]
     try:
+        sym = _us_factor(lake, tk6, day)
         rows = lake.sql(f"""
             WITH d AS (
               SELECT CAST(ts AS DATE) AS dt,
@@ -118,28 +147,38 @@ def gap_covariate(lake, ticker: str, day: str, gap_share: float):
             gap AS (
               SELECT dt, ln(o / NULLIF(lag(c) OVER (ORDER BY dt), 0)) AS g FROM d
             ),
-            us AS (SELECT CAST(date AS DATE) AS ud, change_pct / 100.0 AS r FROM us_market)
+            us AS (
+              SELECT CAST(date AS DATE) AS ud, any_value(name) AS nm,
+                     ln(close / NULLIF(lag(close) OVER (ORDER BY date), 0)) AS r
+              FROM layers_daily WHERE kind = 'us' AND symbol = '{sym}' GROUP BY date, close
+            )
             SELECT g.dt, g.g,
-                   (SELECT u.r FROM us u WHERE u.ud < g.dt ORDER BY u.ud DESC LIMIT 1)
+                   (SELECT u.r FROM us u WHERE u.ud < g.dt AND u.r IS NOT NULL
+                     ORDER BY u.ud DESC LIMIT 1),
+                   (SELECT u.nm FROM us u WHERE u.ud < g.dt AND u.r IS NOT NULL
+                     ORDER BY u.ud DESC LIMIT 1)
             FROM gap g WHERE g.dt <= DATE '{day}' AND g.g IS NOT NULL
-            ORDER BY g.dt DESC LIMIT 121
-        """)
-    except Exception:                       # us_market 뷰 부재 등
-        rows = []
+            ORDER BY g.dt DESC""")
+    except Exception as e:                  # noqa: BLE001 - 부재는 사유와 함께
+        return GapCovariate(reason=f"밤사이 팩터 조회 실패: {type(e).__name__}: {e}"[:120])
     today = next((r for r in rows if str(r[0]) == day), None)
     hist = [(float(r[2]), float(r[1])) for r in rows
             if str(r[0]) != day and r[2] is not None]
+    fname = (today[3] if today and today[3] else sym)
     if today is None or today[2] is None:
-        return GapCovariate(reason="직전 미국 세션 수익률 없음 (us_market 커버리지 밖 - 백필 필요)")
+        return GapCovariate(factor=fname,
+                            reason=f"직전 미국 세션({sym}) 수익률 없음 - 백필 필요")
     if len(hist) < MIN_BETA_N:
-        return GapCovariate(reason=f"β 표본 {len(hist)} < {MIN_BETA_N} (us_market {len(hist)}일 - 백필 필요)")
+        return GapCovariate(factor=fname,
+                            reason=f"β 표본 {len(hist)} < {MIN_BETA_N} ({sym}) - 백필 필요")
     ci = _beta_ci([h[0] for h in hist], [h[1] for h in hist])
     if ci is None:
-        return GapCovariate(reason="β 추정 불가 (공변량 분산 없음)")
+        return GapCovariate(factor=fname, reason="β 추정 불가 (공변량 분산 없음)")
     us_t = float(today[2])
     lo, hi = sorted((ci[0] * us_t, ci[1] * us_t))
     clipped = _clip(lo, hi, gap_share)
-    return GapCovariate(factor_ret=us_t, n=len(hist), beta_lo=ci[0], beta_hi=ci[1],
+    return GapCovariate(factor=fname, factor_ret=us_t, n=len(hist),
+                        beta_lo=ci[0], beta_hi=ci[1],
                         explained=clipped, contradiction=clipped is None)
 
 
@@ -379,7 +418,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
                     edges=tuple(edges), gap_cov=gcov,
-                    idio=None if idio is None else (idio, mkt))
+                    layers=() if idio is None else (("시장", mkt), ("고유", idio)))
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
     if not types and not anomalous:

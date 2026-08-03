@@ -111,7 +111,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             after_close: tuple[str, ...] = (),
             edges: tuple[Edge, ...] = (),
             gap_cov: GapCovariate | None = None,
-            idio: tuple[float, float] | None = None,
+            layers: tuple[tuple[str, float], ...] = (),
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -196,9 +196,17 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     share_bits = [f"{r.share.window.name} {_pp(r.share.log_ret)}" for r in top]
     if rest:
         share_bits.append(f"나머지 {len(rest)}창 합 {_pp(sum(r.share.log_ret for r in rest))}")
-    # 적용 엣지가 있으면 미설명도 구간이 된다: 하루 총합 − Σ식별집합.
-    # 점을 지어내지 않고 크기 층(항등식)과 인과 층(iset)을 화해시키는 유일한 형태.
-    # 모순(iset 없는 적용 엣지)이 하나라도 있거나 셀 점귀속이 거절이면 뺄 수 없다.
+    # **미설명은 인과 예산 안에서 센다.** 층 회계(시장·섹터)가 가져간 몫은 애초에
+    # 인과 엣지가 청구할 수 없는 것이라 '설명 실패' 가 아니다. 실측(042700 07-31):
+    # 하루 +24.67 중 층 회계가 +20.75 를 가져가고 고유는 +3.92 인데, 산문은
+    # "미설명 +24.67" 이라 말해 층 문단과 정면으로 어긋났다.
+    #
+    # 갭 공변량과는 **더하지 않는다**: 층 분해와 시간 분해는 같은 총합의 다른 절단
+    # 이라 겹친다 (밤사이 반도체 충격의 상당 부분이 이미 시장층 안에 있다).
+    # 갭 문단은 '언제 결정됐나' 의 알리바이로만 남고 크기는 이중계상하지 않는다.
+    idio_budget = dict(layers).get("고유")
+    scoped = unexplained if idio_budget is None else idio_budget
+    scope_say = "" if idio_budget is None else " (인과 예산 = 고유층. 층 문단 참조)"
     applied = [e for e in edges if e.applied]
     if applied and route != "거절" and all(e.iset_lo is not None for e in applied):
         # iset 은 ar(산술) 단위, 몫은 로그 - 이 크기(±3%)에서 격차 <1bp 라 선형으로
@@ -206,27 +214,42 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         lin = lambda x: f"{x * 100:+.2f}%p"  # noqa: E731
         exp_lo = sum(e.iset_lo for e in applied)
         exp_hi = sum(e.iset_hi for e in applied)
-        unexp_line = (f"미설명 [{lin(unexplained - exp_hi)}, {lin(unexplained - exp_lo)}] "
+        unexp_line = (f"미설명 [{lin(scoped - exp_hi)}, {lin(scoped - exp_lo)}] "
                       f"— 적용 채널의 식별집합 [{lin(exp_lo)}, {lin(exp_hi)}]을 뺀 구간. "
-                      "점이 아니라 구간이 정직하다")
+                      "점이 아니라 구간이 정직하다" + scope_say)
     else:
-        unexp_line = (f"미설명 {_pp(unexplained)} — 우리가 설명하지 못하는 몫이고, "
-                      "이것을 줄이는 것은 서사가 아니라 데이터다")
+        unexp_line = (f"미설명 {_pp(scoped)} — 우리가 설명하지 못하는 몫이고, "
+                      "이것을 줄이는 것은 서사가 아니라 데이터다" + scope_say)
+    # 층 문단이 **먼저** 온다: 예산을 정하는 문단이 예산을 쓰는 문단 뒤에 있으면
+    # 독자가 '미설명 +3.92' 의 3.92 가 어디서 왔는지 모른다 (실측 순서 오류).
+    if layers:
+        # **두 번째 항등식.** 시간 분해가 '언제'를 무편향으로 주듯, 층 분해가
+        # '어느 층'을 준다 - 둘 다 회계이고 인과 주장이 아니다. 실측(042700
+        # 07-31): 시장 +24.22 · 섹터 -3.47 · 고유 +3.92 = +24.67 (하루 총합과 동일).
+        # 이 문단이 없어서 하루의 77%가 시장인 날에도 산문이 "전부 미설명"이라고
+        # 말했다 - 데이터는 알고 있는데 글이 모른 것이다.
+        tot_abs = sum(abs(v) for _k, v in layers) or 1.0
+        bits = [f"{k} {_pp(v)} ({abs(v) / tot_abs * 100:.0f}%)" for k, v in layers]
+        out.append("[층] " + " · ".join(bits) + " — **항등식이지 인과가 아니다**"
+                   + (f". 인과 엣지가 청구할 수 있는 것은 고유 {_pp(idio_budget)} 뿐 — "
+                      "나머지는 이 종목 사건으로 만들어질 수 없는 몫이다"
+                      if idio_budget is not None else "")
+                   # 실측(005930 07-30): 원수익 -0.72 · 시장 -1.10 · 고유 +0.38 -
+                   # 부호가 뒤집힌다. 이 사실을 숨기면 '내린 날' 로만 읽힌다.
+                   + (" (고유 부호가 원수익과 반대다 - 시장 대비로는 초과수익)"
+                      if idio_budget is not None and idio_budget * total < 0 else ""))
+        big = max(layers, key=lambda kv: abs(kv[1]))
+        if big[0] != "고유" and abs(big[1]) >= abs(total) * 0.7:
+            out.append(f"[층] 하루의 {abs(big[1]) / tot_abs * 100:.0f}% 가 **{big[0]}층**이다 "
+                       f"({_pp(big[1])}) — 이 종목 이야기로 설명하려는 서사는 "
+                       f"층 분해가 반박한다. 종목 고유 몫은 "
+                       + (f"{_pp(idio_budget)} 뿐이다." if idio_budget is not None else "미계산."))
     # 미설명이 최대면 선두 문장이 된다. `else` 가 없어서 두 갈래가 같이 나가
     # `[몫]` 이 어순만 바꿔 두 번 찍혔다 (실측 042700 07-31).
-    unexp_leads = abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0)
+    unexp_leads = abs(scoped) >= max((abs(r.est or 0.0) for r in rows), default=0.0)
     if unexp_leads:
         out.append(f"[몫] **{unexp_line}**. 상위: " + " · ".join(share_bits))
-    if idio is not None:
-        # 20R: 인과가 청구할 수 있는 대상은 원수익이 아니라 **고유요인**이다.
-        # 둘을 안 나누면 시장이 끌고 간 날에 종목 사건으로 설명하려 들게 된다.
-        i, m = idio
-        out.append(f"[대상] 원수익 {_pp(total)} = 시장 {_pp(m)} + 고유 {_pp(i)}. "
-                   f"**인과 엣지가 청구할 수 있는 것은 고유 {_pp(i)} 뿐이다** — "
-                   f"나머지는 이 종목 사건으로 만들어질 수 없는 몫이다"
-                   + (" (부호가 원수익과 반대다 - 시장 대비로는 초과수익)"
-                      if i * total < 0 else ""))
-    elif not unexp_leads:
+    else:
         out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 
     # ── 3¾. 갭 공변량 (§9) — 부분식별. 부재도 문장이다 ──────────────────
@@ -240,15 +263,20 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         elif gap_cov.contradiction:
             out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% 는 "
                        f"갭 {_pp(gshare)} 와 방향이 어긋난다 — 공통충격 설명 0, "
-                       "갭 전체가 종목 고유·기타 후보다.")
+                       "갭 전체가 국내 요인·기타 후보다.")
         else:
             e_lo, e_hi = gap_cov.explained
             r_lo, r_hi = gshare - e_hi, gshare - e_lo
+            # '고유' 를 여기서 쓰면 층 문단의 고유(요인축 잔차)와 같은 말이 되어
+            # 산문이 자기모순이 된다: 실측 042700 07-31 에서 갭 잔차 [14.81,15.68]
+            # 과 층 고유 +3.92 가 같은 이름으로 나란히 섰다. 이 문단은 **시간축**
+            # 잔차이고 층 분해와 겹친다 - 더하지 않는다.
             out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% × "
                        f"β [{gap_cov.beta_lo:.2f}, {gap_cov.beta_hi:.2f}] (n={gap_cov.n}) → "
-                       f"갭 {_pp(gshare)} 중 [{e_lo * 100:+.2f}, {e_hi * 100:+.2f}]%p 는 공통충격 — "
-                       f"종목 고유 후보는 [{r_lo * 100:+.2f}, {r_hi * 100:+.2f}]%p 만. "
-                       "점이 아니라 구간이 정직하다.")
+                       f"갭 {_pp(gshare)} 중 [{e_lo * 100:+.2f}, {e_hi * 100:+.2f}]%p 는 "
+                       f"밤사이 공통충격 — 갭의 나머지 [{r_lo * 100:+.2f}, {r_hi * 100:+.2f}]%p "
+                       "는 국내 개장가 형성 몫이다 (시간축 잔차 · 층 분해와 겹치므로 "
+                       "층 몫에 더하지 말 것). 점이 아니라 구간이 정직하다.")
 
     # ── 4. 채널판 — 오늘 적용된 엣지만. 크기는 일 단위 식별집합 어법으로 ─
     for e in edges:
