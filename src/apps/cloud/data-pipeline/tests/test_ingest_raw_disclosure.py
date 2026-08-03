@@ -55,6 +55,8 @@ class FakeSource:
         self._doc_fail = doc_fail
         self._doc_bytes = doc_bytes
         self._stop = stop
+        # 실제로 본문을 **요청한** rcept_no — 틱 멱등(재다운로드 회피)의 유일한 관측점이다.
+        self.doc_requests: list[str] = []
 
     def fetch(self, symbols, from_date=None, to_date=None):
         if self._stop:
@@ -62,6 +64,7 @@ class FakeSource:
         yield from self._records
 
     def fetch_document(self, rcept_no: str) -> bytes:
+        self.doc_requests.append(rcept_no)
         if rcept_no in self._doc_fail:
             raise ValueError(f"document boom: {rcept_no}")
         return self._doc_bytes
@@ -133,6 +136,81 @@ def test_documents_written_as_fetched_not_buffered(tmp_path):
     assert len([k for k in raw_puts if k.endswith(".zip")]) == 2  # 본문 2건
     assert raw_puts[-1].endswith(".ndjson")  # 메타는 맨 마지막(본문 즉시 저장 후)
     assert all(k.endswith(".zip") for k in raw_puts[:-1])  # 그 앞은 전부 본문
+
+
+def _meta_rows(storage, run_id) -> dict[str, dict]:
+    """그 run 의 메타 ndjson 행 → {rcept_no: row}."""
+    [key] = [k for k in storage.list_keys("raw")
+             if k.endswith(".ndjson") and f"/run_id={run_id}/" in k]
+    rows = [json.loads(x) for x in storage.get_bytes(key).decode().strip().splitlines()]
+    return {r["rcept_no"]: r for r in rows}
+
+
+def test_second_run_reuses_documents_but_keeps_full_meta(tmp_path):
+    # WHY(ALPHA-720): 이 소스엔 증분 커서가 없어 매 실행이 날짜창 전체를 다시 읽는다 — 장중
+    #      레인은 같은 날 10슬롯이 돌므로 장치가 없으면 **같은 document.xml ZIP 을 10번**
+    #      내려받는다. 없애야 할 것은 그 재다운로드 하나뿐이다.
+    #      메타(ndjson)는 반대로 **계속 전건 저장돼야 한다**: 매 런이 자기 run_id 파티션에
+    #      창 전체 관측을 남기는 것이 이 소스의 유일한 완전성 근거이고(런 사이 rcept_no 집합
+    #      비교), 메타까지 접으면 그 근거를 스스로 없앤다. 두 축을 한 테스트에 묶어 고정한다 —
+    #      "재다운로드를 줄인다"는 최적화가 메타 보존을 함께 깎는 것이 가장 그럴듯한 회귀다.
+    storage = LocalStorage(tmp_path / "lake")
+    first = FakeSource(records=[_rec("A1"), _rec("B2", report_nm="사업보고서")])
+    assert _run(tmp_path, first, storage=storage, run_id="r1")[0] == 0
+
+    second = FakeSource(records=[_rec("A1"), _rec("B2", report_nm="사업보고서")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == []  # 본문은 한 건도 다시 요청하지 않았다
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 0 and log2["documents_reused"] == 2
+    assert log2["records_saved"] == 2  # ← 메타는 그대로 2건(창 전체 관측 보존)
+
+    # 2회차 메타는 1회차가 저장한 **기존 키**를 가리킨다 — 정제가 그 ZIP 을 그대로 연다.
+    rows1, rows2 = _meta_rows(storage, "r1"), _meta_rows(storage, "r2")
+    assert {k: v["document_raw_path"] for k, v in rows2.items()} \
+        == {k: v["document_raw_path"] for k, v in rows1.items()}
+    assert all(storage.get_bytes(r["document_raw_path"]) for r in rows2.values())
+    assert all(r["body_format"] for r in rows2.values())
+    # 본문 객체는 늘지 않았다(2회차가 자기 파티션에 사본을 만들지 않는다).
+    assert len([k for k in storage.list_keys("raw") if k.endswith(".zip")]) == 2
+
+
+def test_failed_document_is_retried_by_next_run(tmp_path):
+    # WHY(ALPHA-720): seen-map 의 출처가 **저장된 객체**라서 얻는 성질이다 — 본문 fetch 가
+    #      실패한 건은 객체가 없어 seen-map 에 안 들어가고, 다음 실행이 그것만 다시 받는다.
+    #      별도 재시도 목록을 들고 다니지 않는 이유이자, seen-set 을 DB(`document` 테이블)에서
+    #      뽑지 않은 이유이기도 하다(적재까지 못 간 공시는 DB 에 영영 없어 영구 재다운로드가 된다).
+    storage = LocalStorage(tmp_path / "lake")
+    first = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
+    assert _run(tmp_path, first, storage=storage, run_id="r1")[0] == 1  # partial
+
+    second = FakeSource(records=[_rec("OK1"), _rec("BAD2")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == ["BAD2"]  # 실패했던 것만 재시도
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 1 and log2["documents_reused"] == 1
+
+
+def test_same_rcept_no_twice_in_one_window_downloads_once(tmp_path):
+    # WHY: 목록이 수집 중에도 자라(접수 피크 16시) 같은 rcept_no 의 **서로 다른 관측**
+    #      (rm ""→"정")이 한 창에 둘 다 올 수 있다 — 소스는 내용이 완전히 같은 행만 접으므로
+    #      여기까지 온다. 저장 성공분을 색인에 되먹이지 않으면 같은 본문을 한 런 안에서 두 번
+    #      받는다(같은 키를 두 번 덮어쓰므로 조용히 지나간다).
+    dup = _rec("A1")
+    dup["rm"] = "정"  # 같은 문서의 다른 관측 — 소스의 완전동일 접기를 통과한다
+    source = FakeSource(records=[_rec("A1"), dup])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == ["A1"]
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 2  # 두 관측 다 보존(bronze)
+    assert log["documents_saved"] == 1 and log["documents_reused"] == 1
 
 
 def test_empty_window_is_success_not_error(tmp_path):
