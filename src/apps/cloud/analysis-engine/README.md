@@ -113,7 +113,9 @@ python -m edge_analysis                       # 오늘(Asia/Seoul)
 python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 분봉 트리거 단건(ALPHA-709) — 대상 ETF·trade_date 를 minute_price_trigger 행에서
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
-# ⚠️ 분해 입력(당일 일봉 파티션 부재)·게시 정책(일 단위 축)은 ALPHA-710 결정 대기.
+# 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
+# 같은 route 재실행만 DRAFT 보존이다. ⚠️ 분해 입력(당일 일봉 파티션 부재)은 여전히
+# 분봉 canonical 파생으로 교체 예정(ALPHA-710 잔여).
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 
 # 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
