@@ -480,5 +480,57 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             assert abs(float(minute_ret) - 0.05) < 1e-9, (
                 f"분봉 분해가 일봉 축을 탔다: {minute_ret}"
             )
+
+        # -- 6) 1분 추출 → event 단건 조립(ALPHA-727) -----------------------------
+        # 뉴스 1분 레인의 추출 결과가 배치(assemble)와 **같은 결정적 ID·같은 스레드**로
+        # event 계보에 서야 한다 — 갈리면 같은 기사에 두 계보가 생기고, 설명엔진의
+        # 근거 조회(event_date 축)가 단건 조립분을 못 본다.
+        from data_pipeline.minute.event_assembly import NewsEventAssembler
+
+        assembler = NewsEventAssembler(db=DbConfig(
+            host=pg["host"], port=pg["port"], name=pg["dbname"],
+            user=pg["user"], password=pg["password"], sslmode="disable"))
+        second_article = {
+            "title": "삼성전자, 분기 배당 확대 결정",
+            "published_at": f"{TRADE_DATE}T02:00:00+00:00",
+            "language_code": "ko",
+        }
+        extraction = {
+            "status": "ok",
+            "assertions": [{
+                "event_type_code": EVENT_TYPE,
+                "predicate_code": PREDICATE,
+                "arguments": [
+                    {"role_code": IDENTITY_ROLE, "text": "삼성전자", "entity_id": None},
+                ],
+                "confidence": 0.9,
+                "completeness": "complete",
+                "missing_required_roles": [],
+            }],
+        }
+        outcome = assembler.assemble(source_code="bigkinds", article_id="e2e-a2",
+                                     article=second_article, result=extraction)
+        assert outcome == {"assembled": 1, "unresolved_primary": 0}, (
+            f"단건 조립이 event 를 세우지 못했다: {outcome}"
+        )
+        doc2 = assemble_events._stable_id("doc", "bigkinds", "e2e-a2")
+        asrt2 = assemble_events._stable_id("asrt", doc2, EVENT_TYPE, PREDICATE)
+        evt2 = assemble_events._stable_id("evt", asrt2, SAMSUNG_INSTRUMENT)
+        with seed_conn.cursor() as cur:
+            cur.execute(
+                "SELECT se.event_status, se.event_date, etl.thread_id"
+                " FROM source_event se"
+                " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
+                " WHERE se.source_event_id = %s", (evt2,))
+            [(status2, event_date2, thread2)] = cur.fetchall()
+            assert (status2, event_date2.isoformat()) == ("ACTIVE", TRADE_DATE)
+            # 같은 발행사(ISSUER=삼성)·같은 타입 — 배치가 세운 스레드(thread_id)에
+            # 단건 조립분이 **같은 키로** 엮여야 계보가 한 줄이다.
+            assert thread2 == thread_id, "단건 조립이 배치와 다른 스레드를 세웠다"
+        # 멱등 — 재호출은 document_entity 자국 게이트에서 no-op 이다(재태깅 순서
+        # 흔들림이 event_measure 에 다른 행을 남기는 것도 이 게이트가 막는다).
+        rerun_outcome = assembler.assemble(source_code="bigkinds", article_id="e2e-a2",
+                                           article=second_article, result=extraction)
+        assert rerun_outcome["skipped"] == "already_assembled"
     finally:
         seed_conn.close()

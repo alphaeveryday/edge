@@ -958,6 +958,16 @@ def thread_events(conn, events: list[dict]) -> int:
     """
     if not events:
         return 0
+    # 직렬화 락(ALPHA-727) — 이 함수는 prior_counts·current_stage 를 **읽고 나서** 쓰는
+    # read-modify-write 라 동시 실행이 novelty·단계를 뒤섞는다. writer 가 배치 하나이던
+    # 시절엔 SFN 타임아웃<스케줄 간격 트릭으로 회피했지만, 1분 단건 조립(realtime·
+    # backfill 소비자)이 생겨 writer 가 최대 3 이다. 함수 안에 두는 이유: 모든 호출자
+    # (ALPHA-548 백필 포함)가 자동으로 같은 락을 지난다 — 호출부마다 두면 하나가 빠진다.
+    # xact 락이라 커밋에 풀린다. ponytail: 전역 락 하나 — 배치 런 트랜잭션이 길면 단건
+    # 소비자가 그동안 대기한다(배치는 하루 3슬롯·현재 DISABLED). thread_key 단위 분할은
+    # prior_counts 가 날짜 전체를 읽어 실익이 없다.
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext('edge-event-threading'))")
     threads: dict[str, tuple] = {}
     links: list[tuple] = []
     snapshots: list[tuple] = []

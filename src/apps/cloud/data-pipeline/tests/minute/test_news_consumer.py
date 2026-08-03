@@ -117,12 +117,29 @@ class RecordingLlm:
         return response
 
 
-def make_handler(tmp_path, llm=None, reader=None, identities=None):
+class RecordingAssembler:
+    """event 조립 호출을 기록하는 대역(ALPHA-727) — 어느 경로(fresh·reuse)가 어떤
+    인자로 조립을 불렀는지 단언하기 위한 것. 예외 주입으로 실패 전파도 검증한다."""
+
+    def __init__(self, error: Exception | None = None):
+        self.calls: list[dict] = []
+        self.error = error
+
+    def assemble(self, *, source_code, article_id, article, result):
+        self.calls.append({"source_code": source_code, "article_id": article_id,
+                           "article": article, "result": result})
+        if self.error is not None:
+            raise self.error
+        return {"assembled": 1, "unresolved_primary": 0}
+
+
+def make_handler(tmp_path, llm=None, reader=None, identities=None, assembler=None):
     return NewsExtractionHandler(
         storage=LocalStorage(tmp_path),
         complete_fn=llm or RecordingLlm(LLM_EVENT_RESPONSE),
         article_reader=reader or FakeArticleReader(),
         job_identities=identities or FakeJobIdentities(),
+        event_assembler=assembler if assembler is not None else RecordingAssembler(),
     )
 
 
@@ -202,6 +219,46 @@ class TestSuccess:
         second = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
         assert first == second
         assert len(llm.calls) == 1
+
+
+class TestEventAssemblyWiring:
+    """추출 성공 → event 조립 배선(ALPHA-727). WHY: 이 꼬리가 빠지면 추출은 SUCCEEDED
+    인데 설명 근거(event)가 조용히 영영 없다 — '방금 뉴스가 방금 트리거의 근거로 붙는'
+    마지막 연결이 이 배선이다."""
+
+    def test_success_extraction_assembles_events(self, tmp_path):
+        assembler = RecordingAssembler()
+        handler = make_handler(tmp_path, assembler=assembler)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert len(assembler.calls) == 1
+        call = assembler.calls[0]
+        assert (call["source_code"], call["article_id"]) == (SOURCE_CODE, ARTICLE_ID)
+        assert call["result"]["status"] == "ok"
+        assert call["article"]["title"] == ARTICLE["title"]
+
+    def test_recorded_failure_does_not_assemble(self, tmp_path):
+        # 기록형 실패(no_title 등)는 판정이지 사건이 아니다 — 조립하면 빈 근거가 선다.
+        assembler = RecordingAssembler()
+        reader = FakeArticleReader({(SOURCE_CODE, ARTICLE_ID): {**ARTICLE, "title": None}})
+        make_handler(tmp_path, reader=reader, assembler=assembler)(
+            job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert assembler.calls == []
+
+    def test_reuse_path_also_assembles(self, tmp_path):
+        # fresh 가 PUT 뒤·조립 전에 죽으면 재시도는 _reuse 를 탄다 — 이 경로가 조립을
+        # 건너뛰면 artifact 는 있는데 event 만 영영 없는 구멍이 된다(멱등 게이트가 중복 방어).
+        first = RecordingAssembler(error=RuntimeError("조립 중 사망"))
+        handler = make_handler(tmp_path, assembler=first)
+        with pytest.raises(RuntimeError):
+            handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        second = RecordingAssembler()
+        retry = make_handler(tmp_path, assembler=second)
+        checksum = retry(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        assert len(checksum) == 64
+        assert len(second.calls) == 1  # reuse 경로에서 조립이 다시 불린다
+        assert second.calls[0]["result"]["status"] == "ok"
 
 
 class TestRetryKeyIsolation:
