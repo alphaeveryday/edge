@@ -138,6 +138,11 @@ class NewsEventAssembler:
                 # 재조회하면 UNKNOWN 이 쌓인 날 기사마다 그 전량을 재기록해 제곱형
                 # DB 작업 + 전역 락 점유가 된다. UNKNOWN 재평가·미연결 잔여 회수는
                 # 배치(fetch_unthreaded_events)의 일이다. 직렬화는 thread_events 안의 락.
+                # source_event_id 정렬 — 같은 available_at 의 서로 다른 event(동일
+                # identity·다른 predicate)는 목록 순서가 novelty 를 가른다. 배치
+                # (fetch_unthreaded_events 의 ORDER BY source_event_id)와 같은 축으로
+                # 정렬해야 두 경로의 판정이 갈리지 않는다.
+                new_events.sort(key=lambda e: e["source_event_id"])
                 thread_events(conn, new_events)
         if unresolved_primary:
             # 해소 실패는 유니버스 밖 기사(정상)와 마스터 결손(결함)이 같은 얼굴이다 —
@@ -191,7 +196,11 @@ class NewsEventAssembler:
              for role in (*tv.primary_roles, *tv.required_roles)
              if role in ticker_by_role),
             None,
-        ) or next(iter(ticker_by_role.values()), None)
+        )
+        if primary_ticker is None and ticker_by_role:
+            # 우선 역할이 전부 미해소인 꼬리 — role 코드 사전순으로 결정론화(인자
+            # 순서 의존이면 같은 assertion 이 다른 evt id 로 영구 고정될 수 있다).
+            primary_ticker = ticker_by_role[min(ticker_by_role)]
         if primary_ticker is None:
             return None
         # 수량 역할은 arguments 에 섞여 온다(태깅 허용역할 = required ∪ optional) —
