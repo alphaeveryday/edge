@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import time
 from dataclasses import replace
 from datetime import date
 
@@ -353,12 +352,11 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             "엔진이 소비한 이벤트가 조립 단계의 결정적 ID 와 수렴하지 않는다"
         )
 
-        # -- 4) 같은 날 재실행: 게시 게이트(ALPHA-493) ---------------------------
+        # -- 4) 같은 발화(route) 재실행: 게시 게이트(ALPHA-493·710) ---------------
         # as_of 가 새로워 grain 유니크로는 못 막는 이중 게시·이중 NEW 발번을 앱 게이트가
         # 막아야 한다 — 재실행분은 DRAFT 보존, outbox 는 불변이어야 정정이 아닌 재실행이
-        # 온프렘에 중복 전달되지 않는다. as_of 는 초 해상도라 같은 초의 재실행은 같은
-        # result_id(중복 skip 경로)로 붕괴한다 — 1초 지나 새 grain 으로 게이트를 태운다.
-        time.sleep(1)
+        # 온프렘에 중복 전달되지 않는다. as_of 는 마이크로초 정밀이라 같은 초 재실행도
+        # 새 result grain 으로 게이트를 태운다(sleep 불요).
         rerun = replace(settings, request_id="e2e-req-2")
         store2 = EventStore.connect(rerun)
         try:
@@ -400,7 +398,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 (MINUTE_TRIGGER_ID, ETF_TICKER, f"{TRADE_DATE}T01:30:00+00:00"),
             )
         seed_conn.commit()
-        time.sleep(1)  # as_of 초 해상도 — 이전 런과 다른 result grain 보장
+        # sleep 없이 곧장 실행 — 직전 게시와 같은 초에 게시돼도 as_of 마이크로초
+        # 정밀이라 grain 부분 유니크와 충돌하지 않아야 한다(같은 초 두 발화 게시).
         minute_run = replace(settings, request_id="e2e-req-3",
                              trigger_id=MINUTE_TRIGGER_ID)
         store3 = EventStore.connect(minute_run)

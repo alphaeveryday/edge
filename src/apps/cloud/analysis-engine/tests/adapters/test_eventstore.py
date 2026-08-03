@@ -314,10 +314,10 @@ def test_publication_gate_axis_is_the_route_not_the_day():
     assert "r.explanation_route_id = %s" in result_sql
     assert "p.etf_instrument_id = %s AND p.trade_date = %s" not in result_sql
     assert "rte_1" in params  # EXISTS 파라미터가 이 발화의 route 다
-    # 같은 초 가드 — as_of 초 해상도에서 다른 발화 둘이 같은 초에 게시되면 잔여
-    # 유니크(grain 에 as_of 포함)와 충돌해 INSERT 가 터진다. 가드가 빠지면 두 번째
-    # 발화의 저장·발번이 유니크 위반으로 실패한다.
-    assert "q.explanation_as_of = %s" in result_sql
+    # as_of 는 마이크로초 정밀이어야 한다 — 초 해상도면 같은 초에 끝난 서로 다른
+    # 발화 둘이 게시 grain 부분 유니크(as_of 포함)와 충돌해 두 번째 INSERT 가 터진다.
+    as_of = params[4]
+    assert "." in as_of and "+00:00" in as_of, f"as_of 가 초 해상도다: {as_of}"
 
 
 def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
