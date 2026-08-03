@@ -658,8 +658,12 @@ def recheck_assembled(conn, todo: list[dict], classifications: dict[str, dict]) 
     type/predicate 가 갈린 이중 계보가 선다. 단건 경로와 **정확히 같은 락 문자열**
     (`edge-event-assembly:` || doc_id)의 advisory xact lock 을 잡은 뒤 자국을 재조회한다 —
     락 없이 조회만 하면 조회↔INSERT 사이 틈이 그대로 남는다. 락은 커밋(날짜 트랜잭션 끝)
-    까지 유지돼 이 날짜 적재가 끝날 때까지 단건 경로가 같은 기사에 못 들어온다. 기사 ID
-    정렬 순서로 잡아 배치 런끼리의 교착을 피한다(단건 경로는 락 1개라 교착 없음).
+    까지 유지돼 이 날짜 적재가 끝날 때까지 단건 경로가 같은 기사에 못 들어온다.
+
+    락 키의 doc_id 는 단건 경로(minute/event_assembly)와 **같은 해소 규칙**이다: 실제
+    document 행의 id(자연키 조회), 행이 없으면 산식 id 폴백. 산식 id 로만 잠그면 산식 이전
+    (구 ULID) 행에서 두 경로가 서로 다른 키를 잡아 배타가 깨진다. doc_id 정렬 순서로 잡아
+    배치 런끼리의 교착을 피한다(단건 경로는 락 1개라 교착 없음).
 
     반환 = 그 창에서 이미 조립된(=이번 적재에서 뺄) article_id 집합. 호출부가 카운터·로그로
     드러낸다(Rule 12 — 조용히 세지 않는다).
@@ -667,12 +671,27 @@ def recheck_assembled(conn, todo: list[dict], classifications: dict[str, dict]) 
     if not classifications:
         return set()
     by_id = {r["article_id"]: r for r in todo}
+    ids_by_vendor: dict[str, list[str]] = {}
+    for article_id in classifications:
+        row = by_id.get(article_id)
+        if row is not None:
+            ids_by_vendor.setdefault(row["source_vendor"], []).append(article_id)
+    doc_ids: dict[tuple[str, str], str] = {}
     with conn.cursor() as cur:
-        for article_id in sorted(classifications):
-            row = by_id.get(article_id)
-            if row is None:
-                continue
-            doc_id = _stable_id("doc", row["source_vendor"], row["article_id"])
+        for source_code, ids in sorted(ids_by_vendor.items()):
+            # persist 의 자연키 브리지와 같은 질의 형태(available_at 은 여기선 안 쓴다) —
+            # 로더 선적재 행의 실제 id 를 얻는 유일한 출처다.
+            cur.execute(
+                "SELECT source_document_id, document_id, available_at FROM document"
+                " WHERE source_code = %s AND source_document_id = ANY(%s)",
+                (source_code, ids),
+            )
+            for sdi, did, _avail in cur.fetchall():
+                doc_ids[(source_code, str(sdi))] = str(did)
+        lock_ids = sorted(
+            doc_ids.get((vendor, article_id)) or _stable_id("doc", vendor, article_id)
+            for vendor, ids in ids_by_vendor.items() for article_id in ids)
+        for doc_id in lock_ids:
             cur.execute(
                 "SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
                 (doc_id,))
@@ -1293,7 +1312,10 @@ def run(
         # value_source·dart_rcept_no 두 컬럼만 UPDATE 한다(컬럼 소유 분리, ALPHA-538 규약).
         if targets:
             with connect(db) as conn:
-                dart_matched, dart_ambiguous = match_dart_values(conn, targets[0], targets[-1])
+                matched, ambiguous = match_dart_values(conn, targets[0], targets[-1])
+            # 커밋 성공 뒤에만 반영(날짜 카운터와 같은 규약) — with 안에서 대입하면 커밋
+            # 실패(롤백)에도 값이 남아 로그가 반영 안 된 승격을 성공으로 말한다.
+            dart_matched, dart_ambiguous = matched, ambiguous
     except Exception as exc:
         # 날짜별 커밋(ALPHA-730)이라 실패한 날짜만 롤백된다 — 카운터는 커밋 뒤 합산이라
         # 이미 커밋된 앞 날짜분을 그대로 말하고, 여기서 0 으로 되돌리면 실제 적재를

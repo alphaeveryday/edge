@@ -305,10 +305,12 @@ def test_article_assembled_during_classify_is_skipped_under_doc_lock(tmp_path, m
     적재를 skip 한다(ALPHA-730). WHY: run 은 자국을 분류 **전에** 읽으므로, 재확인 없이
     적재하면 LLM 비결정으로 type/predicate 가 갈린 이중 계보가 선다. 재확인은 단건 경로와
     같은 락 문자열('edge-event-assembly:' || doc_id)의 advisory lock 아래에서 해야 조회↔
-    INSERT 틈이 닫힌다 — 락 SQL 이 안 나가면 즉시 깨진다. skip 은 카운터로 드러난다(Rule 12)."""
+    INSERT 틈이 닫힌다 — 락 SQL 이 안 나가면 즉시 깨진다. 락 키는 **실제 document 행의 id**
+    (단건 경로와 같은 해소 규칙): 산식 id 로만 잠그면 산식 이전(구 ULID) 행에서 두 경로가
+    다른 키를 잡아 배타가 깨진다. skip 은 카운터로 드러난다(Rule 12)."""
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1")])
-    conn = _FakeConn()
+    conn = _FakeConn(doc_overrides={"a1": "01HZX-LOADER-ULID"})
     _setup(monkeypatch, conn)
     inner = _default_llm("a1")
 
@@ -319,10 +321,10 @@ def test_article_assembled_during_classify_is_skipped_under_doc_lock(tmp_path, m
 
     assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
                                from_date="2026-07-15", to_date="2026-07-15") == 0
-    doc_id = _stable_id("doc", "bigkinds", "a1")
     locks = [(sql, params) for sql, params in conn.log if "pg_advisory_xact_lock" in sql]
     assert locks == [
-        ("SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))", (doc_id,))]
+        ("SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
+         ("01HZX-LOADER-ULID",))]
     assert _batch(conn, "source_event") == []  # 이중 계보 없음 — 적재 자체가 skip
     log = _log(storage)
     assert log["assembled_during_classify"] == 1
@@ -450,9 +452,11 @@ def test_fmp_article_documents_keep_their_vendor(tmp_path, monkeypatch):
     [doc] = _batch(conn, "document")
     assert (doc[2], doc[3]) == ("fmp", "a-en")
     assert doc[5] == "en"  # language_code 도 파티션 축을 따른다(ko 하드코딩 금지)
+    # 자연키 해소는 recheck_assembled(락 키, ALPHA-730)와 persist 브리지 두 곳 — 검증
+    # 축은 호출 횟수가 아니라 **전부 fmp 벤더 축**이라는 것이다(bigkinds 하드코딩 금지).
     resolutions = [p for sql, p in conn.log
                    if sql.upper().startswith("SELECT SOURCE_DOCUMENT_ID, DOCUMENT_ID")]
-    assert resolutions == [("fmp", ["a-en"])]
+    assert resolutions and all(p == ("fmp", ["a-en"]) for p in resolutions)
 
 
 def test_thread_timestamps_stay_monotonic_on_conflict(tmp_path, monkeypatch):
