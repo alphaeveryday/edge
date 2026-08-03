@@ -862,3 +862,41 @@ def test_exposures_are_point_in_time_not_same_day():
     assert FEATURES[("거래량", "변화")] == "tv_chg_pit", "노출이 당일 판을 쓴다"
     assert _INNOVATION["거래량"] == "tv_chg", "방아쇠는 당일 판이어야 한다"
     assert "tv_chg" not in set(FEATURES.values()), "당일 판이 노출 목록에 남아 있다"
+
+
+def test_treatment_refinement_uses_ledger_vocabulary():
+    """처치가 거친 이유는 텍스트 추출이 없어서가 아니라 **이미 있는 구조를 안 써서**다.
+
+    사건타입 53 만으로는 `CONTRACT.SIGNING` 하나에 MOU 와 확정계약이 섞이고,
+    `EARNINGS.RESULT_RELEASE` 하나에 신규 보도와 재보도가 섞인다. 그러면 ATT 는
+    서로 다른 두 처치의 평균이라 0 으로 수렴한다 (실측: 6+6 가설 전멸).
+
+    원장 실측(2026-08-03): predicate 75종 · stage 33종 · role 70종 · novelty 5종.
+    """
+    from edge_analysis.statics.paneltest import refine_sql
+    from edge_analysis.statics.vocab import (ARG_ROLES, NOVELTY, PLACEBO_NOVELTY,
+                                             PREDICATES, STAGES, Trigger, VocabError)
+    assert len(PREDICATES) == 75 and len(STAGES) == 33
+    assert len(ARG_ROLES) == 70 and len(NOVELTY) == 5
+    assert PLACEBO_NOVELTY in NOVELTY
+
+    class T:
+        trigger = Trigger("점", "COMPANY.CONTRACT.SIGNING",
+                          stage="MOU_LOI", role="SUPPLIER", novelty="FIRST_IN_THREAD")
+    sql = refine_sql(T())
+    assert "lifecycle_stage = 'MOU_LOI'" in sql
+    assert "role_code = 'SUPPLIER'" in sql
+    assert "novelty_status = 'FIRST_IN_THREAD'" in sql
+    assert "predicate_code" not in sql, "빈 슬롯은 조건을 만들지 않는다"
+
+    class Bare:
+        trigger = Trigger("점", "X")
+    assert refine_sql(Bare()) == "", "구체화 없으면 전체 표본"
+
+    # 계열 방아쇠에는 사건 구체화가 없다 (범주 오류)
+    try:
+        Trigger("계열", "거래량", stage="MOU_LOI")
+    except VocabError:
+        pass
+    else:
+        raise AssertionError("계열+사건구체화를 허용했다")

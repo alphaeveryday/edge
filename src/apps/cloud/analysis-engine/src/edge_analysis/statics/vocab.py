@@ -133,20 +133,99 @@ class Condition:
         return f"{self.ident}/{self.transform}"
 
 
+# ── 처치 구체화 어휘 (원장 실측에서 닫는다) ──────────────────────────────
+# 사건타입 53 만으로는 처치가 거칠다. 이 넷은 **이미 원장에 있었고 튜플만 안 썼다**.
+# 어휘를 늘리는 것이 아니라 **이미 있는 것을 노출**하는 것이라 사람의 스키마 변경이
+# 아니다 - 값 목록이 원장의 DISTINCT 다 (2026-08-03 실측).
+PREDICATES = frozenset({
+    "ACQUIRE", "ADOPT", "APPOINT", "APPROVE", "ASSIGN", "BUY", "CARVE_OUT", "CERTIFY",
+    "CHARGE", "CLEAR", "CONSOLIDATE", "CUT", "DECLARE", "DISMISS", "DISSOLVE", "EASE",
+    "ENFORCE", "ENTER", "ENTER_INTO", "EXCLUDE", "EXIT", "EXPAND", "FALL", "FILE",
+    "FINE", "FORM", "HALT", "IMPOSE", "INCLUDE", "INCREASE", "INITIATE", "INJECT",
+    "INTERVENE", "INTRODUCE", "INVESTIGATE", "ISSUE", "LAUNCH", "LIFT", "LIST",
+    "LOWER", "MAINTAIN", "MERGE", "NOMINATE", "OCCUR", "OVERTURN", "PRICE",
+    "PURCHASE", "RAISE", "REACH", "RECORD", "REDUCE", "REJECT", "RELEASE", "REMOVE",
+    "REPEAL", "REPLACE", "REPORT", "REPURCHASE", "RESIGN", "RESTRUCTURE", "RESUME",
+    "REVISE", "RISE", "RULE", "SELL", "SET", "SETTLE", "SIGN", "SPIN_OFF", "SPLIT",
+    "SUSPEND", "TAKE_OVER", "UNVEIL", "UPHOLD", "WITHDRAW"})
+
+# 단계가 효과를 가른다: MOU_LOI 1088 vs DEFINITIVE_SIGNED 2160 은 같은 처치가 아니다.
+STAGES = frozenset({
+    "ANNOUNCED", "APPOINTED", "CANCELLED", "CHARGED", "CLOSED", "COMPLETED",
+    "CONCEPT", "CUSTOMER_QUAL", "DEFINITIVE_SIGNED", "DISCONTINUED", "DISMISSED",
+    "EFFECTIVE", "EXECUTING", "EXITED", "FILED", "INVESTIGATED", "LIFTED",
+    "MASS_PRODUCTION", "MOU_LOI", "NOMINATED", "OCCURRED", "ONGOING",
+    "PREFERRED_BIDDER", "PRICED", "PROPOSED", "PROTOTYPE_DEMO", "REJECTED",
+    "RESOLVED", "RULED", "RUMORED", "SAMPLING", "SHIPPING", "WITHDRAWN"})
+
+# 인수 역할 70종. 값 역할(CONSENSUS_VALUE·NEW_VALUE·GUIDANCE_RANGE 등)도 있지만
+# 추출 커버리지가 얇다(CONSENSUS_VALUE 3건) - `mention_text` 에 원문이 남아 있어
+# 나중에 파싱할 수 있다. 지금은 **주체 역할**(ISSUER·PARTNER·SUPPLIER…)이 쓸 만하다.
+ARG_ROLES = frozenset({
+    "ACQUIRER", "AMOUNT", "ANALYST_FIRM", "ANNOUNCED_DATE", "AUTHORITY",
+    "CAPACITY_SHARE", "CENTRAL_BANK", "CHANGE_VALUE", "COMMODITY", "CONSENSUS_VALUE",
+    "CONTRACT_OBJECT", "COURT", "CUSTOMER", "DEBT_INSTRUMENT", "DEFENDANT",
+    "DRIVER_HINT", "DURATION", "EFFECTIVE_DATE", "EXCHANGE", "FACILITY", "GEOGRAPHY",
+    "GUIDANCE_RANGE", "HAZARD", "INDEX", "INDICATOR", "INDUSTRY", "INTEREST_RATE",
+    "INVESTOR", "ISSUER", "LEGAL_ISSUE", "LOCATION", "MATURITY_DATE", "MEMBER",
+    "MERGING_ENTITY", "METRIC", "NEW_VALUE", "OLD_VALUE", "OPERATOR", "OUTLOOK",
+    "PARENT", "PARTNER", "PARTNER_2", "PATHOGEN", "PAYMENT_DATE", "PENALTY_VALUE",
+    "PERIOD", "PERSON", "PLAINTIFF", "POSITION", "PRICE", "PRODUCT",
+    "PRODUCT_FAMILY", "PRODUCT_OR_SCOPE", "PROJECT", "QUANTITY", "RATED_ENTITY",
+    "RATING_AGENCY", "RATIONALE", "REASON", "REPORTING_PERIOD", "RULE", "SELLER",
+    "SERVICE", "SPUNOFF_UNIT", "STANDARD", "SUPPLIER", "TARGET", "TARGET_COMPANY",
+    "TARGET_PRICE", "UNDERWRITER"})
+
+# **재보도는 위약 처치다**: 같은 사태의 재방송에는 새 정보가 없으므로 ATT≈0 이어야
+# 한다. 유의하면 설계 실패 - 층 구조에서 공짜로 얻는 위약과 같은 종류의 반증이다.
+NOVELTY = frozenset({
+    "CORRECTION", "DUPLICATE_REBROADCAST", "FIRST_IN_THREAD",
+    "FOLLOW_UP_STAGE", "UNKNOWN"})
+PLACEBO_NOVELTY = "DUPLICATE_REBROADCAST"
+
+
 @dataclass(frozen=True, slots=True)
 class Trigger:
     """빠른 원인 — 왜 지금. 점(사건타입) 또는 계열충격(계열족 × 전역 임계).
     시간 스케일이 슬롯을 정한다: 수개월 걸친 금리 급등은 방아쇠가 아니라
-    조건 생성기다(SVB)."""
+    조건 생성기다(SVB).
+
+    **처치 구체화 슬롯 넷** (전부 선택 · 비우면 그 축은 전체):
+      사건타입만으로는 처치가 너무 거칠다. `CONTRACT.SIGNING` 하나에 MOU 와 확정
+      계약이 섞이고, `EARNINGS.RESULT_RELEASE` 하나에 신규 보도와 재보도가 섞인다.
+      그러면 ATT 는 서로 다른 두 처치의 평균이라 0 으로 수렴한다 - 실측 증상:
+      6+6 가설 전멸, 성립-적용 0개.
+
+      이 어휘는 **이미 원장에 있었고 튜플만 안 썼다** (사용자 지적):
+        predicate 75종 (LAUNCH 4033 · RELEASE 3034 · ENTER_INTO 1438 …)
+        stage     33종 (MOU_LOI 1088 vs DEFINITIVE_SIGNED 2160 - 단계가 효과를 가른다)
+        role      70종 (ISSUER 18578 · PARTNER 2515 - 내가 주체인가 상대인가)
+        novelty    5종 (FIRST_IN_THREAD 1289 vs DUPLICATE_REBROADCAST 7737)
+
+      **재보도는 위약 처치다**: 같은 사태의 재방송에는 새 정보가 없으므로 ATT≈0
+      이어야 한다. 유의하면 설계 실패다 - 공짜로 얻는 반증이다.
+    """
     kind: str               # 점 | 계열
     ident: str              # 점 → 사건타입 id · 계열 → 계열족
+    predicate: str = ""     # 술어 (source_event.predicate_code)
+    stage: str = ""         # 생애단계 (source_event.lifecycle_stage)
+    role: str = ""          # 이 종목의 역할 (event_argument.role_code)
+    novelty: str = ""       # 신규성 (event_thread_link.novelty_status)
 
     def __post_init__(self) -> None:
         _need(self.kind, TRIGGER_KINDS, "방아쇠.종류")
         if self.kind == "계열":
             _need(self.ident, SERIES_FAMILIES, "방아쇠.계열족")
+            if any((self.predicate, self.stage, self.role, self.novelty)):
+                raise VocabError("계열 방아쇠에는 사건 구체화 슬롯이 없다")
         elif not self.ident.strip():
             raise VocabError("점 방아쇠는 사건타입 id 가 필요하다")
+        for v, allowed, nm in ((self.predicate, PREDICATES, "술어"),
+                               (self.stage, STAGES, "생애단계"),
+                               (self.role, ARG_ROLES, "역할"),
+                               (self.novelty, NOVELTY, "신규성")):
+            if v:
+                _need(v, allowed, f"방아쇠.{nm}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,4 +296,5 @@ __all__ = [
     "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS", "ExposureSource",
     "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "Feature", "HypothesisTuple",
     "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "RELATIONS", "SERIES_FAMILIES",
+    "PREDICATES", "STAGES", "ARG_ROLES", "NOVELTY", "PLACEBO_NOVELTY",
     "TRANSFORMS", "TRIGGER_KINDS", "Trigger", "VocabError", "W_MINUTES"]

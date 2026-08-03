@@ -247,20 +247,42 @@ g AS (
 # 패널들은 전부 뷰(v_event·v_daily·v_instrument) 위에서만 돈다. 시점 클램프는
 # 뷰 안에 있으므로 여기서 available_at 을 다시 쓰지 않는다 - 두 번 쓰면 한쪽이
 # 낡는다. 남는 것은 **표본 선택**(어느 사건일·어느 분할)뿐이다.
+# 처치 구체화: 사건타입 뒤에 술어·단계·역할·신규성 필터가 붙는다 (`{refine}`).
+# 비면 그 축은 전체다. 이 넷이 없으면 `CONTRACT.SIGNING` 하나에 MOU 와 확정계약이
+# 섞이고 ATT 는 서로 다른 두 처치의 평균이라 0 으로 수렴한다.
 _POINT_PANEL = """
 , ev AS (
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
     FROM v_event e JOIN v_instrument i ON i.instrument_id = e.instrument_id
     WHERE e.event_type_code = '{etype}'
       AND e.trade_date {cmp} DATE '{day}'
+      {refine}
 )
 SELECT g.instrument_id, g.trade_date, g.{y} AS ar, {cols}
 FROM ev JOIN g ON g.instrument_id = ev.iid AND g.trade_date = ev.d
 """
 
+
+def refine_sql(t) -> str:
+    """튜플의 구체화 슬롯 → v_event 필터. 빈 슬롯은 조건을 안 만든다.
+
+    `v_event` 가 predicate_code·lifecycle_stage·role_code·novelty_status 를 이미
+    싣고 있다 - 튜플이 안 썼을 뿐이다. 노출이 곧 구체화다.
+    """
+    g = t.trigger
+    bits = []
+    for val, col in ((getattr(g, "predicate", ""), "predicate_code"),
+                     (getattr(g, "stage", ""), "lifecycle_stage"),
+                     (getattr(g, "role", ""), "role_code"),
+                     (getattr(g, "novelty", ""), "novelty_status")):
+        if val:
+            bits.append(f"AND e.{col} = '{val}'")
+    return "\n      ".join(bits)
+
+
 _SERIES_PANEL = """
 SELECT instrument_id, trade_date, {y} AS ar, {cols}
-FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}' 
+FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}'
 """
 
 _TODAY_ROW = """
@@ -595,7 +617,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     trigger_note = ""
     if t.trigger.kind == "점":
         sql = (_base(day) + _POINT_PANEL).format(
-            etype=t.trigger.ident, cmp="<", day=day, cols=col_sql, y=y)
+            etype=t.trigger.ident, cmp="<", day=day, cols=col_sql, y=y, refine=refine_sql(t))
     else:
         innov = _INNOVATION.get(t.trigger.ident)
         if innov is None:
@@ -745,7 +767,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
     if t.trigger.kind == "점":
-        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, y=y)
+        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, y=y, refine=refine_sql(t))
         trows = _panel_rows(lake, tsql)
         if len(trows) < MIN_TODAY:
             reduction = f"표본부족 (오늘 n={len(trows)})"
@@ -855,8 +877,10 @@ def grid_screen(lake, day: str, types: list[str],
     out: list[dict] = []
     label_of = {c: k for k, c in FEATURES.items()}
     for etype in types:
+        # 격자는 **구체화 없이** 전수한다 - 술어·단계·역할·신규성까지 곱하면
+        # 조합이 폭발하고, 격자의 목적은 탐색(전 격자 훑기)이지 확증이 아니다.
         sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day,
-                                                 cols=all_cols, y=LAYER_Y["고유"])
+                                                 cols=all_cols, y=LAYER_Y["고유"], refine="")
         raw = _panel_rows(lake, sql, strict=False)
         if len(raw) < MIN_N:
             out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})

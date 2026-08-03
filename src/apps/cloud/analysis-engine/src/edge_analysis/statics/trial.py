@@ -48,7 +48,7 @@ _TRIAL_SQL = """
 , ev AS (
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
     FROM v_event e
-    WHERE e.event_type_code = '{etype}' {role}
+    WHERE e.event_type_code = '{etype}' {role} {refine}
       AND e.trade_date < DATE '{day}'
 )
 , b AS (
@@ -82,7 +82,8 @@ WHERE m.rn <= {k}
 
 
 def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
-              role: str = "", cond_key: str | None = None,
+              role: str = "", stage: str = "", novelty: str = "", predicate: str = "",
+              cond_key: str | None = None,
               cond_pct: float = 0.8, cond_cmp: str = ">=",
               k: int = MATCH_K) -> dict:
     """사건 = 처치, 매칭 대조군 = 위약. ATT 와 (조건이 있으면) CATE 교호항.
@@ -103,6 +104,10 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
     sql = (_base(day) + _TRIAL_SQL).format(
         etype=etype, day=day, y=y, k=k,
         role=f"AND e.role_code = '{role}'" if role else "",
+        refine=" ".join(
+            f"AND e.{c} = '{v}'" for v, c in
+            ((stage, "lifecycle_stage"), (novelty, "novelty_status"),
+             (predicate, "predicate_code")) if v),
         cal_m=CAL_LOGCAP, cal_b=CAL_BETA,
         extra=f", g.{col} AS cval" if col else "",
         sel=", t.cval AS c_t" if col else "")
@@ -115,7 +120,9 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
         return {"verdict": "판정불가",
                 "reason": f"매칭 짝 {len(rows)} < {MIN_PAIRS} - 캘리퍼 안에 대조군이 없다"
                           f" (업종 동일 · |Δln시총|≤{CAL_LOGCAP} · |Δβ|≤{CAL_BETA})"}
-    out = _summarize(rows, layer=layer, k=k, tag=f"직접 {etype.split('.')[-1]}")
+    tag = "직접 " + etype.split(".")[-1] + "".join(
+        f" · {v}" for v in (stage, novelty, predicate, role) if v)
+    out = _summarize(rows, layer=layer, k=k, tag=tag)
     if col:
         # 조절: 짝 차이를 조건 클래스에 회귀. 표본을 쪼개지 않는다 (§14).
         diff = np.array([float(r[3]) - float(r[4]) for r in rows])
