@@ -548,11 +548,14 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     # 경로: 일중 시변 β(칼만) × 시장 사건 분절. 재료가 없으면 빈 튜플 - 침묵이
     # 아니라 문단 자체가 안 나온다(부재 선언은 kbeta 의 verdict 가 한다).
     psegs: list = []
+    irho = None
     try:
-        from .kbeta import intraday_beta, path_summary
-        kb = intraday_beta(ticker, day)
+        from .kbeta import intraday_beta2, path_summary
+        kb = intraday_beta2(lake, ticker, day)
         if kb.get("verdict") == "성립":
             psegs = path_summary(kb, market_event_marks(lake, iid, day))
+            if kb.get("rho_idio") is not None:
+                irho = (kb["rho_idio"], kb["rho_idio_n"], bool(kb["idio_qualified"]))
     except Exception:                               # noqa: BLE001 - 설명 보조다
         psegs = []
     rows = [Row(s) for s in shares]
@@ -568,7 +571,7 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
                       route=_route_gate(lake, iid, day), rows=rows, grounded=labels,
                       after_close=tuple(after_close), edges=tuple(edges), gap_cov=gc,
                       layers=tuple(budgets.items()), market_src=msrc,
-                      peers=peer_context(lake, ticker, day),
+                      peers=peer_context(lake, ticker, day), idio_rho=irho,
                       path_segs=tuple(psegs)))
 
 

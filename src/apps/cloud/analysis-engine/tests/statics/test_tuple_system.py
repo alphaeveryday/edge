@@ -900,3 +900,30 @@ def test_treatment_refinement_uses_ledger_vocabulary():
         pass
     else:
         raise AssertionError("계열+사건구체화를 허용했다")
+
+
+def test_reduction_dictionary_covers_curated_and_fails_loudly():
+    """검정 층이 찾은 것을 **가설 어휘로 되돌려야** 자산이 된다.
+
+    `S41B0D1005 104주로그베타(주간)` 에서 신호를 찾아도 그대로 보고하면 다음 셀에서
+    재현 불가하고 산문도 그 이름을 못 쓴다(닫힌 어휘 계약). 환원 실패는 조용히
+    '기타' 로 밀지 않는다 - 실패가 곧 **어휘 확장 요청**이다.
+    """
+    from edge_analysis.statics.reduce import coverage, reduce_item
+    from edge_analysis.statics.vocab import SERIES_FAMILIES, TRANSFORMS
+
+    assert reduce_item("104주로그베타(주간)", "베타") == ("지수잔차", "민감도")
+    assert reduce_item("20일누적 차입공매도수량(주)", "차입공매도") == ("공매도", "누적")
+    assert reduce_item("PBR(IFRS-연결)", "주가배수") == ("배수", "수준")
+    assert reduce_item("차입금의존도", "") == ("레버리지", "수준")
+    assert reduce_item("매출액증가율", "") == ("성장", "변화")
+    # 실패는 실패다 - None 이어야 사람에게 신호가 간다
+    assert reduce_item("완전히 모르는 것", "없는카테고리") is None
+    # 환원 결과는 반드시 닫힌 어휘 안이다
+    for nm, cat in (("20일평균거래량(주)", "거래량"), ("ROE", "")):
+        f, t = reduce_item(nm, cat)
+        assert f in SERIES_FAMILIES and t in TRANSFORMS
+    c = coverage([("c1", "104주로그베타(주간)", "price", "베타"),
+                  ("c2", "모르는것", "x", "없는것")])
+    assert c["reduced"] == 1 and c["failed"] == 1
+    assert c["fail_sample"], "실패 목록이 비면 확장 요청이 사라진다"
