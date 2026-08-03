@@ -93,33 +93,33 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
-	void supersedeGrain_은_구본을_비노출로_전이해_새_발화_게시를_연다() {
-		// WHY: 하루 다건 발화(분봉 트리거, ALPHA-710)는 발화마다 게시된다 — 교체 규율
-		// (구본 UNPUBLISHED 전이 후 재게시) 없이는 grain 선점이 두 번째 발화를 버려
-		// 고객이 최신 설명을 못 받는다. grain 활성 1건 불변식은 교체 후에도 유지돼야 한다.
+	void supersede_대상은_자동_게시본만이고_같은_item_가드를_지킨다() {
+		// WHY: 하루 다건 발화(분봉 트리거, ALPHA-710)의 교체 규율 — 구본을 비노출로
+		// 전이한 뒤 재게시해야 두 번째 발화가 고객에 닿고, grain 활성 1건 불변식이
+		// 유지된다. 대상은 자동 게시본뿐(검수 승인본을 자동이 끌어내리면 사람 결정이
+		// 기계에 덮인다)이고, 구본 재수신이 신본을 끌어내리면 grain 이 무게시로 남는다.
 		upsertItem("er-5", "069500", "AUTO_PUBLISHED");
 		publications.publish("er-5", "069500", TRADE_DATE);
 
+		// 신규 발화(er-5b): 구본 er-5 가 교체 대상으로 조회되고, 전이 후 게시가 열린다.
 		upsertItem("er-5b", "069500", "AUTO_PUBLISHED");
-		assertThat(publications.supersedeGrain("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
+		assertThat(publications.findSupersedableItem("er-5b", "069500", TRADE_DATE))
+				.isEqualTo("er-5");
+		assertThat(publications.transitionByItem("er-5", "UNPUBLISHED")).isEqualTo(1);
 		assertThat(publications.publish("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
-
-		assertThat(jdbc.queryForObject(
-				"SELECT status FROM publication WHERE analysis_item_id = 'er-5'", String.class))
-				.isEqualTo("UNPUBLISHED");
-		assertThat(jdbc.queryForObject(
-				"SELECT count(*) FROM publication WHERE etf_ticker = '069500'"
-						+ " AND trade_date = ? AND status = 'PUBLISHED'",
-				Long.class, TRADE_DATE)).isEqualTo(1L);
-
-		// 구본(er-5) 재수신이 신본을 끌어내리면 grain 이 무게시로 남는다 — 같은-item
-		// 가드가 전이를 막고, 재게시도 같은 item skip 이라 신본이 그대로 산다.
-		assertThat(publications.supersedeGrain("er-5", "069500", TRADE_DATE)).isEqualTo(0);
-		assertThat(publications.publish("er-5", "069500", TRADE_DATE)).isEqualTo(0);
 		assertThat(jdbc.queryForObject(
 				"SELECT analysis_item_id FROM publication WHERE etf_ticker = '069500'"
 						+ " AND trade_date = ? AND status = 'PUBLISHED'",
 				String.class, TRADE_DATE)).isEqualTo("er-5b");
+
+		// 구본(er-5) 재수신: 이미 게시 이력이 있어 대상 없음 — 신본이 그대로 산다.
+		assertThat(publications.findSupersedableItem("er-5", "069500", TRADE_DATE)).isNull();
+
+		// 검수 승인본이 grain 점유로 바뀌면: 자동 신규 발화는 교체 대상을 못 찾는다.
+		jdbc.update("UPDATE analysis_item SET status = 'APPROVED'"
+				+ " WHERE explanation_result_id = 'er-5b'");
+		upsertItem("er-5c", "069500", "AUTO_PUBLISHED");
+		assertThat(publications.findSupersedableItem("er-5c", "069500", TRADE_DATE)).isNull();
 	}
 
 	@Test

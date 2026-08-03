@@ -150,15 +150,25 @@ public class BundleScreener {
 			return;
 		}
 		// 게시 grain 교체(ALPHA-710) — 하루 다건 발화는 발화마다 게시되므로, 같은
-		// (ticker, trade_date)의 구본 게시분을 비노출로 전이한 뒤 게시한다(스키마
-		// uq_publication_published_grain 주석의 교체 규율). cursor 순 처리라 나중
-		// 게시 = 최신 발화고, 구본 재수신은 supersedeGrain 의 같은-item 가드가 막는다.
-		// screen() 트랜잭션 안이라 전이-게시가 원자적이다 — 중간 실패는 전체 롤백.
-		int superseded = publicationRepository.supersedeGrain(
+		// (ticker, trade_date)를 점유한 구본 **자동 게시분**을 비노출로 전이한 뒤
+		// 게시한다(스키마 uq_publication_published_grain 주석의 교체 규율). cursor 순
+		// 처리라 나중 게시 = 최신 발화다. 검수 승인본(APPROVED) 점유는 교체하지 않고
+		// 선점 유지(publish 0 = skip) — 사람 결정을 기계가 덮지 않는다. 구본 item 도
+		// UNPUBLISHED 로 함께 내린다: 콘솔은 item.status 로 노출을 판단하므로 게시분만
+		// 내리면 '제공 중' 유령이 남고 수동 중단이 409 로 롤백된다. screen() 트랜잭션
+		// 안이라 전이-게시가 원자적이다 — 중간 실패는 전체 롤백.
+		String superseded = publicationRepository.findSupersedableItem(
 				result.explanationResultId(), result.etfTicker(), result.tradeDate());
+		if (superseded != null) {
+			String previousStatus = analysisItemRepository.lockStatus(superseded);
+			publicationRepository.transitionByItem(superseded, "UNPUBLISHED");
+			analysisItemRepository.transition(superseded, "UNPUBLISHED");
+			statusHistoryRepository.save(new AnalysisItemStatusHistory(superseded,
+					previousStatus, "UNPUBLISHED", "같은 grain 신규 발화 게시로 교체(ALPHA-710)"));
+		}
 		boolean published = publicationRepository
 				.publish(result.explanationResultId(), result.etfTicker(), result.tradeDate()) > 0;
-		log.info("NEW screened id={} auto_published={} superseded={} (같은 item 재수신 시 skip)",
+		log.info("NEW screened id={} auto_published={} superseded={} (같은 item 재수신·검수본 선점 시 skip)",
 				result.explanationResultId(), published, superseded);
 	}
 
