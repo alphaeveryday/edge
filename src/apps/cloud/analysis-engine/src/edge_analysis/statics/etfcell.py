@@ -69,7 +69,7 @@ def run(lake, etf: str, day: str) -> str:
 
 def _workflow(lake, roll, r, day: str) -> list[str]:
     """라우팅별 인과 워크플로우. **다른 층의 질문은 세우지 않는다.**"""
-    from .trial import reduce_market, run_trial, say, say_market
+    from .trial import reduce_market, say_market
     out: list[str] = []
 
     if r.kind == "괴리단독":
@@ -90,11 +90,13 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
             out.append(f"[워크플로우] 섹터 공통 처치 — {sec.name} "
                        f"(β {sec.beta:.2f} [{sec.lo:.2f}, {sec.hi:.2f}] · "
                        f"층 수익 {sec.ret * 100:+.2f}%p)")
+            # 검정 층에 넘긴다 - 위약 먼저, 구체화, 유의한 것에만 CATE.
+            from .verifier import say_implications, verify
             for et in ("POLICY.REGULATION.RULE_CHANGE",
                        "COMPANY.COMMERCIAL.PRICING_ACTION"):
-                t = run_trial(lake, day, etype=et, layer="섹터")
-                out.append(f"  {et.split('.')[-1]}: "
-                           + say(t).splitlines()[0].replace("RCT 근사(매칭 위약): ", ""))
+                imps, lg = verify(lake, day, etype=et, layer="섹터")
+                out.append("  " + lg.replace("\n", "\n  "))
+                out.append("  " + say_implications(imps).replace("\n", "\n  "))
 
     if r.kind in ("고유", "혼합") and r.targets:
         out.append(f"[워크플로우] 종목 개별 시행 — 상위 {len(r.targets)}종목")
@@ -103,9 +105,11 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
             head = (f"  {tk}" + (f" ({nm.label})" if nm and nm.label else "")
                     + (f" 기여 {nm.pct * 100:+.2f}%p · 비중 {nm.weight:.1%}" if nm else ""))
             out.append(head)
-            t = run_trial(lake, day, etype="COMPANY.EARNINGS.RESULT_RELEASE",
-                          layer="고유")
-            out.append("    " + say(t).splitlines()[0].replace("RCT 근사(매칭 위약): ", ""))
+            from .verifier import say_implications, verify
+            imps, lg = verify(lake, day, etype="COMPANY.EARNINGS.RESULT_RELEASE",
+                              layer="고유", max_probes=4)
+            out.append("    " + lg.replace("\n", "\n    "))
+            out.append("    " + say_implications(imps).replace("\n", "\n    "))
     elif r.kind == "고유":
         out.append("[워크플로우] 고유가 지배하는데 |기여| 상위 종목이 임계 미달 — "
                    "귀속할 이름이 없다. 이것도 결과다 (분산된 고유)")

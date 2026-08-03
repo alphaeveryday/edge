@@ -57,8 +57,11 @@ def route_etf(roll, premium=None) -> Route:
         return Route("시장", 1.0, getattr(roll, "etf_name", etf_code), (),
                      "이 ETF 가 **시장 프록시 자신**이다 - 섹터로 내려가지 않는다. "
                      "밤사이 해외 팩터·장중 시장 사건·국면으로만 환원한다",
+                     # **자기 잔차는 '고유' 가 아니다** - 그것이 시장이다. 실측
+                     # 069500 07-31: 라우팅 '시장 100%' 인데 회계는 '고유 +20.29%p'
+                     # 라 모순처럼 읽혔다. 시장 프록시의 잔차는 시장 자신의 움직임이다.
                      tuple((x.kind, x.contribution) for x in roll.layers)
-                     + (("고유", roll.idio),))
+                     + (("시장 자신", roll.idio),))
     if premium is not None and not getattr(premium, "basket_moved", True):
         return Route("괴리단독", 1.0, "ETF", (),
                      "바스켓이 안 움직였다 - 구성종목이 아니라 ETF 수급/유동성 이야기다",
@@ -133,6 +136,9 @@ def _selfcheck() -> None:
     # 시장 프록시 자신은 섹터로 안 내려간다
     self_mkt = route_etf(R((L("섹터", "화학", -0.05),), 0.01, etf="069500"))
     assert self_mkt.kind == "시장" and "시장 프록시 자신" in self_mkt.why
+    # 자기 잔차를 '고유' 로 부르면 '시장 100% 인데 고유가 최대' 라는 모순이 읽힌다
+    assert dict(self_mkt.breakdown).get("시장 자신") == 0.01
+    assert "고유" not in dict(self_mkt.breakdown)
 
     class P:
         basket_moved = False
