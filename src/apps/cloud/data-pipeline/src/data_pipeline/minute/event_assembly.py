@@ -28,12 +28,13 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+import json
+
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, resolve
 from ..steps.assemble_events import (
     _validate_extraction,
-    fetch_unthreaded_events,
     load_entity_index,
     persist_normalization,
     thread_events,
@@ -71,6 +72,15 @@ class NewsEventAssembler:
         with connect(self.db) as conn:
             doc_id = stable_domain_id("doc", source_code, article_id)
             with conn.cursor() as cur:
+                # doc 단위 직렬화 — 멱등 게이트(아래 SELECT)와 적재가 한 검사-후-행동
+                # 이라, 락 없이는 realtime·backfill 소비자가 같은 기사를 동시에 통과해
+                # 이중 조립한다. doc 별 락이라 서로 다른 기사는 병렬 그대로다.
+                # ⚠️ 배치(assemble)는 자국 조회 후 LLM 분류까지 긴 창이 있어 이 락으로
+                # 못 막는다 — 배치 강등(후속 티켓)에서 배치 쪽 재확인으로 닫는다.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
+                    (doc_id,),
+                )
                 cur.execute(
                     "SELECT 1 FROM document_entity WHERE document_id = %s LIMIT 1",
                     (doc_id,),
@@ -91,6 +101,7 @@ class NewsEventAssembler:
             }
             assembled = 0
             unresolved_primary = 0
+            new_events: list[dict] = []
             for assertion in assertions:
                 cls = self._to_classification(
                     assertion, article_id=article_id, view=view,
@@ -100,15 +111,16 @@ class NewsEventAssembler:
                 if cls is None:
                     unresolved_primary += 1
                     continue
-                assembled += len(
-                    persist_normalization(conn, [row], {article_id: cls}, event_date)
-                )
-            if assembled:
-                # 배치와 같은 조립기(미연결 delta 만 조회) — 이번 신규분 + 이전에 남은
-                # 미연결·UNKNOWN 재평가분을 함께 엮는다. 직렬화는 thread_events 안의 락.
-                events = fetch_unthreaded_events(conn, event_date)
-                if events:
-                    thread_events(conn, events)
+                created = persist_normalization(conn, [row], {article_id: cls}, event_date)
+                assembled += len(created)
+                for made in created:
+                    new_events.append(_thread_event(made, cls, str(published_at)))
+            if new_events:
+                # **이번 기사 신규분만** 엮는다 — 배치처럼 날짜 전체 미연결·UNKNOWN 을
+                # 재조회하면 UNKNOWN 이 쌓인 날 기사마다 그 전량을 재기록해 제곱형
+                # DB 작업 + 전역 락 점유가 된다. UNKNOWN 재평가·미연결 잔여 회수는
+                # 배치(fetch_unthreaded_events)의 일이다. 직렬화는 thread_events 안의 락.
+                thread_events(conn, new_events)
         if unresolved_primary:
             # 해소 실패는 유니버스 밖 기사(정상)와 마스터 결손(결함)이 같은 얼굴이다 —
             # 조용히 접지 않고 남긴다. 하루 단위 판정은 EOD QC 소관.
@@ -188,6 +200,33 @@ class NewsEventAssembler:
             "measures": measures,
         }
         return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers)
+
+
+def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
+    """persist 산출 1건 → `thread_events` 입력 형상.
+
+    role_values 는 배치 `fetch_unthreaded_events` 와 같은 규약으로 접는다 — **해소된
+    참여자만**(미해소는 값이 아니라 부재 — 접으면 서로 다른 사건이 한 thread_key 로
+    뭉갠다), 한 역할 다값은 정렬 JSON 배열(결정적 순서). 규약이 갈리면 배치와 단건이
+    같은 사건에 다른 thread_key 를 세운다.
+    """
+    role_lists: dict[str, list[str]] = {}
+    for argument in cls["arguments"]:
+        if argument["entity_id"] is None:
+            continue
+        role_lists.setdefault(argument["role_code"], []).append(str(argument["entity_id"]))
+    return {
+        "source_event_id": created["source_event_id"],
+        "event_type_code": cls["event_type_code"],
+        "available_at": created.get("available_at") or published_at,
+        "lifecycle_stage": cls["lifecycle_stage"],
+        "predicate_code": cls["predicate_code"],
+        "role_values": {
+            role: (values[0] if len(values) == 1
+                   else json.dumps(sorted(values), ensure_ascii=False))
+            for role, values in role_lists.items()
+        },
+    }
 
 
 def _process_registry():
