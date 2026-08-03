@@ -31,6 +31,7 @@ from data_pipeline.minute.consumer import (
 )
 from data_pipeline.minute.jobs import NEWS_EVENT_TYPE, PRICE_EVENT_TYPE, JobLedger, build_event_id
 from data_pipeline.minute.models import KST
+from data_pipeline.minute.jobs import DESTINATION_JOB_KINDS
 from data_pipeline.minute.relay import KNOWN_DESTINATIONS, build_message_body
 
 _DB = DbConfig(password="x")
@@ -39,7 +40,8 @@ WINDOW_START = datetime(2026, 7, 31, 9, 0, tzinfo=KST)
 QUEUE = "https://sqs.test/news-extraction-realtime"
 DLQ = "https://sqs.test/news-extraction-realtime-dlq"
 CHECKSUM = "c" * 64
-ALL_DLQ_URLS = {name: f"https://sqs.test/{name}-dlq" for name in KNOWN_DESTINATIONS}
+# DLQ 어휘는 job 큐 3종이다(ALPHA-709) — relay 4종(트리거 설명 큐 포함)이 아니다
+ALL_DLQ_URLS = {name: f"https://sqs.test/{name}-dlq" for name in DESTINATION_JOB_KINDS}
 ALL_DLQ_URLS["news-extraction-realtime"] = DLQ
 ALL_QUEUE_URLS = {name: f"https://sqs.test/{name}" for name in KNOWN_DESTINATIONS}
 
@@ -230,8 +232,14 @@ class TestCliGuards:
 
     @staticmethod
     def _all(prefix):
-        """어휘 3종을 다 채운 매핑 — 부분 매핑은 그 자체가 거부 사유다."""
+        """relay(원 큐) 어휘 4종을 다 채운 매핑 — 부분 매핑은 그 자체가 거부 사유다."""
         return {name: f"{prefix}/{name}" for name in KNOWN_DESTINATIONS}
+
+    @staticmethod
+    def _all_dlq(prefix):
+        """DLQ 어휘 — job 큐 3종. 트리거 설명 큐의 DLQ 는 job 테이블이 없어 이
+        reconciler 의 대사 대상이 아니다(ALPHA-709 — 별도 정책)."""
+        return {name: f"{prefix}/{name}" for name in DESTINATION_JOB_KINDS}
 
     def test_missing_config_is_fail_loud(self):
         with pytest.raises(SystemExit, match="minute_consumer"):
@@ -256,7 +264,7 @@ class TestCliGuards:
 
     def test_dlq_url_overlapping_source_queue_is_rejected(self):
         # 원 큐를 DLQ 로 넣으면 정상 배달 중인 job 이 전부 DEAD 가 된다
-        dlq_urls = self._all("https://sqs.test/dlq")
+        dlq_urls = self._all_dlq("https://sqs.test/dlq")
         queue_urls = self._all("https://sqs.test/main")
         dlq_urls["news-extraction-realtime"] = queue_urls["news-extraction-realtime"]
         settings = self._Settings(self._Consumer(dlq_urls), self._Relay(queue_urls))
@@ -265,7 +273,7 @@ class TestCliGuards:
 
     def test_duplicate_dlq_urls_are_rejected(self):
         # 두 레인이 같은 DLQ 를 가리키면 한쪽은 한 번도 조회되지 않는데 명령은 성공한다
-        dlq_urls = self._all("https://sqs.test/dlq")
+        dlq_urls = self._all_dlq("https://sqs.test/dlq")
         dlq_urls["news-extraction-backfill"] = dlq_urls["news-extraction-realtime"]
         settings = self._Settings(
             self._Consumer(dlq_urls), self._Relay(self._all("https://sqs.test/main"))
@@ -310,7 +318,7 @@ class TestCliGuards:
         # 한 레인의 DLQ 가 빠지면 그 레인의 job 은 아무도 대사하지 않는데, 명령은
         # 나머지만 훑고 성공으로 끝나 부분 커버리지가 초록으로 보인다.
         # 두 매핑이 **함께** 부실하면 교집합·차집합 비교로는 안 잡힌다 — 어휘와 댄다.
-        dlq_urls = self._all("https://sqs.test/dlq")
+        dlq_urls = self._all_dlq("https://sqs.test/dlq")
         del dlq_urls["price-analysis-realtime"]
         settings = self._Settings(
             self._Consumer(dlq_urls), self._Relay(self._all("https://sqs.test/main"))
@@ -349,7 +357,7 @@ class TestCliGuards:
         assert dlq_reconcile_cli(settings, max_ticks=1) == 1
 
     def test_distinct_urls_pass(self):
-        dlq_urls = self._all("https://sqs.test/dlq")
+        dlq_urls = self._all_dlq("https://sqs.test/dlq")
         settings = self._Settings(
             self._Consumer(dlq_urls), self._Relay(self._all("https://sqs.test/main"))
         )

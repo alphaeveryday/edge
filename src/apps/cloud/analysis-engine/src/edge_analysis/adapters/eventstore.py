@@ -284,19 +284,34 @@ class EventStore:
     def explanation_prerequisites(
         self, settings: Settings, etf_instrument_id: str
     ) -> dict[str, Any]:
-        """explanation_result 의 FK 전제: profile 존재·route id·bundle."""
+        """explanation_result 의 FK 전제: profile 존재·route id·bundle.
+
+        route 조회는 **입력 축을 따라간다** — 분봉 실행(settings.trigger_id)의 계보는
+        minute_price_trigger_id 에 매달리므로, 일 단위 (etf, trade_date) 조인으로
+        찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 **다른** 일 단위 트리거 route
+        가 잡혀 남의 계보에 영속된다(ALPHA-709 리뷰 실측).
+        """
         with self._conn.cursor() as cur:
             cur.execute("SELECT 1 FROM etf_profile WHERE instrument_id = %s", (etf_instrument_id,))
             has_profile = cur.fetchone() is not None
-            cur.execute(
-                "SELECT er.explanation_route_id FROM explanation_route er"
-                " JOIN etf_contribution_observation o"
-                " ON o.contribution_observation_id = er.contribution_observation_id"
-                " JOIN price_movement_trigger t"
-                " ON t.price_movement_trigger_id = o.price_movement_trigger_id"
-                " WHERE t.etf_instrument_id = %s AND t.trade_date = %s LIMIT 1",
-                (etf_instrument_id, settings.trade_date.isoformat()),
-            )
+            if getattr(settings, "trigger_id", None):
+                cur.execute(
+                    "SELECT er.explanation_route_id FROM explanation_route er"
+                    " JOIN etf_contribution_observation o"
+                    " ON o.contribution_observation_id = er.contribution_observation_id"
+                    " WHERE o.minute_price_trigger_id = %s LIMIT 1",
+                    (settings.trigger_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT er.explanation_route_id FROM explanation_route er"
+                    " JOIN etf_contribution_observation o"
+                    " ON o.contribution_observation_id = er.contribution_observation_id"
+                    " JOIN price_movement_trigger t"
+                    " ON t.price_movement_trigger_id = o.price_movement_trigger_id"
+                    " WHERE t.etf_instrument_id = %s AND t.trade_date = %s LIMIT 1",
+                    (etf_instrument_id, settings.trade_date.isoformat()),
+                )
             route_row = cur.fetchone()
             bundle = settings.release_bundle_version
             has_bundle = False

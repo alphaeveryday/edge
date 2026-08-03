@@ -395,3 +395,17 @@ def test_fetch_minute_price_trigger_maps_signed_return_and_kst_date():
 
 def test_fetch_minute_price_trigger_missing_row_is_none():
     assert EventStore(_MinuteFakeConn()).fetch_minute_price_trigger("mpt_x") is None
+
+
+def test_explanation_prerequisites_follows_minute_axis_for_trigger_input():
+    """분봉 실행의 route 전제는 minute_price_trigger_id 축으로 찾는다 — 일 단위
+    (etf, trade_date) 조인으로 찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 다른
+    일 단위 트리거 route 가 잡혀 남의 계보에 영속된다(ALPHA-709)."""
+    conn = _MinuteFakeConn()
+    settings = SimpleNamespace(trade_date=date(2026, 7, 16),
+                               release_bundle_version=None, trigger_id="mpt_1")
+    EventStore(conn).explanation_prerequisites(settings, "inst_ETF")
+    route_sqls = [sql for sql, _ in conn.executed
+                  if sql.startswith("SELECT er.explanation_route_id")]
+    assert route_sqls and all("minute_price_trigger_id" in sql for sql in route_sqls)
+    assert all("price_movement_trigger " not in sql for sql in route_sqls)

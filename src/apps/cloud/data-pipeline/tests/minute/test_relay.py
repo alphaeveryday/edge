@@ -755,3 +755,22 @@ class TestTriggerDestination:
         )
         relay.tick(datetime.now(timezone.utc))
         assert db.outbox["t2"]["status"] == "DEAD"
+
+    def test_dlq_vocab_stays_job_only(self):
+        # DLQ 대사 어휘는 job 큐 3종이다 — relay 의 4종을 그대로 쓰면 job 테이블이
+        # 없어 대사 불가한 트리거 DLQ 까지 필수가 된다(ALPHA-709)
+        from types import SimpleNamespace
+        from data_pipeline.minute.consumer import _resolve_queue_urls
+        settings = SimpleNamespace(
+            minute_consumer=SimpleNamespace(dlq_urls={
+                "price-analysis-realtime": "https://sqs/p-dlq",
+                "news-extraction-realtime": "https://sqs/n-dlq",
+                "news-extraction-backfill": "https://sqs/b-dlq",
+            }),
+            minute_relay=SimpleNamespace(queue_urls=dict(QUEUES)),
+        )
+        resolved = _resolve_queue_urls(settings)
+        assert set(resolved) == {
+            "price-analysis-realtime", "news-extraction-realtime",
+            "news-extraction-backfill",
+        }
