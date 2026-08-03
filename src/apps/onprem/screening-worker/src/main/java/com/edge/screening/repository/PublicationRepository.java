@@ -37,6 +37,26 @@ public interface PublicationRepository extends Repository<Publication, Long> {
 	int publish(@Param("analysisItemId") String analysisItemId, @Param("etfTicker") String etfTicker,
 			@Param("tradeDate") LocalDate tradeDate);
 
+	/**
+	 * 게시 grain 교체(ALPHA-710) — 같은 (ticker, trade_date)의 구본 게시분을 비노출로
+	 * 전이한다(uq_publication_published_grain 주석의 교체 규율: 새 결과는 구본을
+	 * UNPUBLISHED 전이 후 재게시). 이 item 이 이미 게시 이력을 가지면 전이하지 않는다 —
+	 * 구본 재수신이 신본 게시분을 끌어내리고 자기는 게시(같은 item skip)도 못 해
+	 * grain 이 무게시로 남는 역전을 막는다. @return 전이 행 수.
+	 */
+	@Modifying
+	@Transactional
+	@Query(value = """
+			UPDATE publication SET status = 'UNPUBLISHED', unpublished_at = now()
+			WHERE etf_ticker = :etfTicker AND trade_date = :tradeDate AND status = 'PUBLISHED'
+			  AND analysis_item_id <> :analysisItemId
+			  AND NOT EXISTS (
+			      SELECT 1 FROM publication WHERE analysis_item_id = :analysisItemId
+			  )
+			""", nativeQuery = true)
+	int supersedeGrain(@Param("analysisItemId") String analysisItemId,
+			@Param("etfTicker") String etfTicker, @Param("tradeDate") LocalDate tradeDate);
+
 	/** 대상 item 의 게시분 상태 전이(INVALIDATED) — 즉시 비노출. @return 전이 행 수. */
 	@Modifying
 	@Transactional

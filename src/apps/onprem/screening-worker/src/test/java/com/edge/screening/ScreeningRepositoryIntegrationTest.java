@@ -93,6 +93,36 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
+	void supersedeGrain_은_구본을_비노출로_전이해_새_발화_게시를_연다() {
+		// WHY: 하루 다건 발화(분봉 트리거, ALPHA-710)는 발화마다 게시된다 — 교체 규율
+		// (구본 UNPUBLISHED 전이 후 재게시) 없이는 grain 선점이 두 번째 발화를 버려
+		// 고객이 최신 설명을 못 받는다. grain 활성 1건 불변식은 교체 후에도 유지돼야 한다.
+		upsertItem("er-5", "069500", "AUTO_PUBLISHED");
+		publications.publish("er-5", "069500", TRADE_DATE);
+
+		upsertItem("er-5b", "069500", "AUTO_PUBLISHED");
+		assertThat(publications.supersedeGrain("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
+		assertThat(publications.publish("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
+
+		assertThat(jdbc.queryForObject(
+				"SELECT status FROM publication WHERE analysis_item_id = 'er-5'", String.class))
+				.isEqualTo("UNPUBLISHED");
+		assertThat(jdbc.queryForObject(
+				"SELECT count(*) FROM publication WHERE etf_ticker = '069500'"
+						+ " AND trade_date = ? AND status = 'PUBLISHED'",
+				Long.class, TRADE_DATE)).isEqualTo(1L);
+
+		// 구본(er-5) 재수신이 신본을 끌어내리면 grain 이 무게시로 남는다 — 같은-item
+		// 가드가 전이를 막고, 재게시도 같은 item skip 이라 신본이 그대로 산다.
+		assertThat(publications.supersedeGrain("er-5", "069500", TRADE_DATE)).isEqualTo(0);
+		assertThat(publications.publish("er-5", "069500", TRADE_DATE)).isEqualTo(0);
+		assertThat(jdbc.queryForObject(
+				"SELECT analysis_item_id FROM publication WHERE etf_ticker = '069500'"
+						+ " AND trade_date = ? AND status = 'PUBLISHED'",
+				String.class, TRADE_DATE)).isEqualTo("er-5b");
+	}
+
+	@Test
 	void transitionByItem_은_PUBLISHED_게시분만_비노출한다() {
 		// WHY: 무효화·제공 중단은 즉시 비노출 — PUBLISHED 만 골라 전이해야 고객 노출이 끊긴다.
 		upsertItem("er-4", "069500", "AUTO_PUBLISHED");

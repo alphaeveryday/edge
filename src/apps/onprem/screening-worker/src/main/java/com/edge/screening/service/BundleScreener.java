@@ -149,10 +149,17 @@ public class BundleScreener {
 					result.explanationResultId());
 			return;
 		}
+		// 게시 grain 교체(ALPHA-710) — 하루 다건 발화는 발화마다 게시되므로, 같은
+		// (ticker, trade_date)의 구본 게시분을 비노출로 전이한 뒤 게시한다(스키마
+		// uq_publication_published_grain 주석의 교체 규율). cursor 순 처리라 나중
+		// 게시 = 최신 발화고, 구본 재수신은 supersedeGrain 의 같은-item 가드가 막는다.
+		// screen() 트랜잭션 안이라 전이-게시가 원자적이다 — 중간 실패는 전체 롤백.
+		int superseded = publicationRepository.supersedeGrain(
+				result.explanationResultId(), result.etfTicker(), result.tradeDate());
 		boolean published = publicationRepository
 				.publish(result.explanationResultId(), result.etfTicker(), result.tradeDate()) > 0;
-		log.info("NEW screened id={} auto_published={} (grain 선점 시 skip)",
-				result.explanationResultId(), published);
+		log.info("NEW screened id={} auto_published={} superseded={} (같은 item 재수신 시 skip)",
+				result.explanationResultId(), published, superseded);
 	}
 
 	private void screenInvalidation(DeliveryEntry entry) {

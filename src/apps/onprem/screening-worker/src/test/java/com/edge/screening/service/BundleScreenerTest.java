@@ -69,12 +69,19 @@ class BundleScreenerTest {
 
 	private static final class RecordingPublications implements PublicationRepository {
 		final List<String> published = new ArrayList<>();
+		final List<String> superseded = new ArrayList<>();
 		final List<String> transitions = new ArrayList<>();
 
 		@Override
 		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
 			published.add(analysisItemId);
 			return 1;
+		}
+
+		@Override
+		public int supersedeGrain(String analysisItemId, String etfTicker, LocalDate tradeDate) {
+			superseded.add(analysisItemId);
+			return 0;
 		}
 
 		@Override
