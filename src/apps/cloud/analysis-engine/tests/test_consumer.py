@@ -14,11 +14,9 @@ import pytest
 
 from edge_analysis.config import ReturnsNotReadyError
 from edge_analysis.consumer import (
-    KST,
-    RETURNS_RETRY_FALLBACK_SECONDS,
+    RETURNS_RETRY_SECONDS,
     consume_triggers,
     parse_trigger_message,
-    returns_retry_seconds,
 )
 
 
@@ -73,37 +71,18 @@ def test_duplicate_is_deleted_without_rerun():
 
 
 def test_returns_not_ready_defers_without_delete():
-    """장중(당일 price_daily 부재)은 시간이 낫게 하는 실패다 — 지우지 않고 길게 미룬다.
-    짧은 재배달 반복은 maxReceiveCount 예산을 태워 15:40 배치 전에 DLQ 로 보낸다."""
+    """분봉 window·시가 원장 미준비는 시간이 낫게 하는 실패다(ALPHA-710) — 지우지 않고
+    짧은 고정 지연으로 미룬다. 진짜 결손이면 반복이 receive 예산(16)을 태워 DLQ(근거
+    보존)로 가는 것이 맞다. 지연이 길어지면(구 배치 착지 산술) 장중 즉시성이 죽는다."""
     def boom(_):
-        raise ReturnsNotReadyError("장중")
+        raise ReturnsNotReadyError("window 미착지")
     sqs = FakeSqs([envelope("t1")])
     rc = consume_triggers("q", max_polls=1, process_fn=boom, sqs_client=sqs)
     assert rc == 0
     assert sqs.deleted == []
-    # 처리 전 연장(900) 뒤 지연 재배달 — 값은 배치 착지 기준 계산이라 존재·순서만 고정
-    assert len(sqs.visibility) == 2 and sqs.visibility[0] == ("r0", 900)
-    assert sqs.visibility[1][1] >= 60
-
-
-def test_returns_delay_lands_after_batch():
-    """고정 간격 반복은 08:00 확장 세션의 이른 트리거가 15:40 전에 receive 예산(16)을
-    태워 배치 직전 DLQ 로 간다 — 지연은 배치 착지(15:55 KST) 뒤에 떨어져야 한다."""
-    from datetime import datetime
-    morning = datetime(2026, 8, 4, 8, 5, tzinfo=KST)
-    delay = returns_retry_seconds(morning)
-    lands = morning.timestamp() + delay
-    batch = datetime(2026, 8, 4, 15, 55, tzinfo=KST).timestamp()
-    assert lands >= batch, "배치 전에 깨어나는 지연은 receive 예산만 태운다"
-    assert delay < 43200, "SQS VisibilityTimeout 상한(12h) 안이어야 한다"
-
-
-def test_returns_delay_after_batch_is_bounded_fallback():
-    """배치가 지났는데도 비어 있으면 파티션 결손(진짜 결함) — 고정 지연 반복으로 예산을
-    태워 DLQ(근거 보존)로 가는 것이 맞다."""
-    from datetime import datetime
-    evening = datetime(2026, 8, 4, 16, 30, tzinfo=KST)
-    assert returns_retry_seconds(evening) == RETURNS_RETRY_FALLBACK_SECONDS
+    # 처리 전 연장(900) 뒤 짧은 지연 재배달 — 분 단위 즉시성의 상한을 고정한다.
+    assert sqs.visibility == [("r0", 900), ("r0", RETURNS_RETRY_SECONDS)]
+    assert RETURNS_RETRY_SECONDS <= 300, "재시도 지연이 분 단위 즉시성을 깨면 안 된다"
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():

@@ -42,6 +42,10 @@ class _FakeLake:
     def load_returns(self, market, trade_date):
         return {"005930": 0.05}
 
+    def load_minute_returns(self, market, session_date, open_window_hhmm,
+                            open_generation, trigger_window_hhmm, trigger_generation):
+        return {"005930": 0.05}
+
 
 class _FakeStore:
     def __init__(self, trigger, prereqs):
@@ -146,11 +150,24 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
 
         def fetch_minute_price_trigger(self, trigger_id):
             assert trigger_id == "mpt_1"
-            return (
-                PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
-                "091160",
-                date(2026, 7, 16),
+            from datetime import datetime, timezone
+
+            from edge_analysis.adapters.eventstore import MinuteTriggerRow
+            return MinuteTriggerRow(
+                gate=PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
+                ticker="091160",
+                trade_date=date(2026, 7, 16),
+                session_id="ses-1",
+                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                generation=1,
             )
+
+        def fetch_minute_open_window(self, session_id, entity_id):
+            # 분해 기준가는 ETF 시가가 확정된 그 window 다 — 다른 좌표로 물으면 분해
+            # 축이 트리거 판정 축과 갈린다(ALPHA-710).
+            assert (session_id, entity_id) == ("ses-1", "091160")
+            from datetime import datetime, timezone
+            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1)
 
         def fetch_price_trigger(self, etf_instrument_id, trade_date):
             self.daily_fetches += 1

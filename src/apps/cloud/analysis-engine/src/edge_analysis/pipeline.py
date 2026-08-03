@@ -19,7 +19,7 @@ from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, TracingClient, analyze
 from .adapters.trace import write_agent_trace
-from .config import PipelineError, ReturnsNotReadyError, Settings
+from .config import KST, PipelineError, ReturnsNotReadyError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
 from .domain.models import EventContext
 from .observability import collect_trace, log, utcnow_iso
@@ -38,14 +38,15 @@ def run(
     """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
     # 분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다. env 기본값
     # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
+    minute_row = None
     minute_gate = None
     if settings.trigger_id:
-        found = store.fetch_minute_price_trigger(settings.trigger_id)
-        if found is None:
+        minute_row = store.fetch_minute_price_trigger(settings.trigger_id)
+        if minute_row is None:
             raise PipelineError(f"분봉 트리거가 없다: {settings.trigger_id}")
-        minute_gate, minute_ticker, minute_trade_date = found
+        minute_gate = minute_row.gate
         settings = replace(
-            settings, etf_ticker=minute_ticker, trade_date=minute_trade_date
+            settings, etf_ticker=minute_row.ticker, trade_date=minute_row.trade_date
         )
     log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id,
         trigger_id=settings.trigger_id)
@@ -70,17 +71,41 @@ def run(
             f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
     # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다(ALPHA-467).
     name_by_ticker = {h.ticker: h.name for h in holdings if h.name}
-    returns = lake.load_returns(_MARKET, settings.trade_date)
-    if not returns:
+    if minute_row is not None:
+        # 분봉 분해 입력(ALPHA-710) — 트리거 판정과 같은 축(세션 시가 대비)으로
+        # 구성종목 장중 수익률을 파생한다. 기준 window 는 ETF 시가가 확정된 바로
+        # 그 window(minute_session_open.source_window)라 두 축이 갈리지 않는다.
+        open_ctx = store.fetch_minute_open_window(minute_row.session_id, settings.etf_ticker)
+        if open_ctx is None:
+            # 트리거가 발화했다면 시가는 확정돼 있어야 한다 — 부재는 원장 지연이거나
+            # 결손이므로 빈 분해를 만들지 않고 재시도 축(소비자 가시성 연장)으로 접는다.
+            raise ReturnsNotReadyError(
+                f"세션 시가 원장이 없다: session={minute_row.session_id}"
+                f" etf={settings.etf_ticker} — minute_session_open 미확정")
+        open_window, open_generation = open_ctx
+        returns = lake.load_minute_returns(
+            _MARKET, settings.trade_date.isoformat(),
+            open_window.astimezone(KST).strftime("%H%M"), open_generation,
+            minute_row.window_start.astimezone(KST).strftime("%H%M"),
+            minute_row.generation,
+        )
+        empty_reason = (
+            f"분봉 canonical 수익률이 비었다: session={minute_row.session_id}"
+            f" window={minute_row.window_start.isoformat()} — window artifact"
+            " 미착지(커밋 지연)거나 결손이다. 빈 분해를 설명으로 만들지 않는다"
+        )
+    else:
+        returns = lake.load_returns(_MARKET, settings.trade_date)
         # 당일 파티션이 없으면 `load_returns` 는 **가드 없이 {}** 를 돌려준다 — 그대로
         # 분해에 넣으면 전 종목 미가격 분해(etf_return=NULL·total_priced=0)가 LLM 까지
         # 가서 입력 결손이 정상 설명으로 위장된다(Rule 12, 08-03 정합성 감사 실측).
-        # 장중 트리거 경로에선 15:40 배치 전의 정상 상태라 소비자가 지연 재시도한다.
-        raise ReturnsNotReadyError(
+        empty_reason = (
             f"canonical price_daily 수익률이 비었다: market={_MARKET}"
-            f" trade_date={settings.trade_date.isoformat()} — 15:40 배치 전(장중)이거나"
+            f" trade_date={settings.trade_date.isoformat()} — 15:40 배치 전이거나"
             " 파티션 결손이다. 빈 분해를 설명으로 만들지 않는다"
         )
+    if not returns:
+        raise ReturnsNotReadyError(empty_reason)
     decomp = compute_decomposition(holdings, returns)
     log(
         "price.decomposed",
