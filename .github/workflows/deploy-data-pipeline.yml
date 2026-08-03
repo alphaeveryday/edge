@@ -53,3 +53,28 @@ jobs:
             src
           docker push "${image_sha}"
           docker push "${image_latest}"
+
+      # 1분 상주 서비스(ALPHA-711) — SFN 단발 task 는 run-task 마다 mutable 태그를 새로
+      # 당기지만, 상주 서비스는 재배포 없이는 옛 이미지를 계속 돈다. 이미지 push 뒤
+      # force-new-deployment 로 같은 task definition 에서 최신 태그를 다시 pull 하게 한다.
+      # 서비스가 아직 없으면(terraform apply 선행 전) **크게 알리고 건너뛴다** — 배선
+      # 순서상 정상이고, 조용히 실패로 접으면 배포 자체가 막힌다.
+      - name: Roll minute resident services
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          cluster="edge-dev-worker"
+          for svc in edge-dev-data-pipeline-price-worker \
+                     edge-dev-data-pipeline-relay \
+                     edge-dev-data-pipeline-price-consumer; do
+            status="$(aws ecs describe-services --cluster "${cluster}" --services "${svc}" \
+              --query 'services[0].status' --output text 2>/dev/null || true)"
+            if [ "${status}" != "ACTIVE" ]; then
+              echo "::warning::${svc} 가 아직 없다(status=${status:-none}) — terraform apply 선행 전이면 정상, 이후에도 계속되면 배선 확인"
+              continue
+            fi
+            aws ecs update-service --cluster "${cluster}" --service "${svc}" \
+              --force-new-deployment >/dev/null
+            echo "${svc} 재배포 시작"
+          done

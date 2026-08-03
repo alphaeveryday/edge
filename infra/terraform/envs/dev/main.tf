@@ -425,10 +425,13 @@ module "gha_deploy_dev" {
     data.aws_ecr_repository.tenant_sync_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
-  app_service_arns = [
+  app_service_arns = concat([
     module.super_admin_api.service_arn,
     module.tenant_sync_api.service_arn,
-  ]
+    # 1분 상주 서비스(ALPHA-711) — deploy-data-pipeline.yml 이 이미지 push 뒤
+    # force-new-deployment 로 mutable 태그를 다시 당기게 한다(없으면 상주 프로세스가
+    # 배포 후에도 옛 이미지를 계속 돈다).
+  ], module.data_pipeline.minute_service_arns)
   app_pass_role_arns = [
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
     module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
