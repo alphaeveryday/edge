@@ -101,6 +101,10 @@ STOP_STATUS_CODES = {"010", "011", "012", "020", "800", "901"}
 # 30일이면 ~18,000건 ≈ 180 페이지로 두 제약 안에 들어온다.
 WINDOW_CHUNK_DAYS = 30
 
+# 창 끝을 못 받았을 때 채울 기준 시각. 파이프라인 전체가 KR 시장 기준이라 KST 다
+# (steps/dart_values·assemble_events 와 같은 관례).
+_KST = timezone(timedelta(hours=9))
+
 
 def _window_segments(
     from_date: str | None, to_date: str | None
@@ -110,7 +114,15 @@ def _window_segments(
     한쪽이라도 없으면 자르지 않는다 — 길이를 모르는 창을 임의로 좁히면 소스 기본 동작을
     조용히 바꾸게 된다. 그 경우는 소스가 자기 규칙대로 처리하게 그대로 넘긴다.
     """
+    if from_date and not to_date:
+        # ⚠️ 시작일만 준 백필(`--from 2026-01-01`)은 CLI 가 허용하는 조합이다. 그대로 넘기면
+        # 자르지 못한 채 소스 기본 끝일(당일)까지의 창이 되어, 3개월을 넘는 순간 status=100
+        # 으로 **통째로 실패**한다 — 종목별 질의 시절엔 되던 백필이다. 끝을 오늘로 확정해
+        # 자른다: 어차피 소스가 쓰던 값과 같고, 여기서 확정해야 분할이 성립한다.
+        to_date = datetime.now(_KST).date().isoformat()
     if not from_date or not to_date:
+        # 끝일만 준 경우는 자르지 않는다 — 소스 기본 시작일은 당일이라 창이 3개월을 넘지
+        # 않는다. 양쪽 다 없으면 소스 기본(당일) 그대로다.
         return [(from_date, to_date)]
     start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
     if start > end:

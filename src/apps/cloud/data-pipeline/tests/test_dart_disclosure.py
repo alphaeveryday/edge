@@ -319,6 +319,34 @@ def test_split_window_total_count_accumulates(tmp_path):
     assert source.list_rows_seen == 8
 
 
+def test_from_only_backfill_is_split_not_left_whole(tmp_path):
+    # WHY: `--from 2026-01-01` (끝일 없음)은 CLI 가 허용하는 조합이고, run.py 는 **둘 다** 없을
+    #      때만 기본 창을 채운다. 그대로 넘기면 자르지 못한 채 소스 기본 끝일(당일)까지의 창이
+    #      되어 3개월을 넘는 순간 status=100 으로 통째로 실패한다 — 종목별 질의 시절엔 되던
+    #      백필이다. 끝을 오늘로 확정해야 분할이 성립한다.
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"], from_date="2026-01-01"))
+
+    assert len(client.list_urls) > 1  # 쪼개졌다
+    windows = [(_param(u, "bgn_de"), _param(u, "end_de")) for u in client.list_urls]
+    assert windows[0] == ("20260101", "20260130")
+    assert all(bgn and end for bgn, end in windows)  # 끝일 없는 세그먼트가 없다
+
+
+def test_to_only_window_is_left_to_the_source(tmp_path):
+    # WHY: 끝일만 준 창은 자르지 않는다 — 소스 기본 시작일이 당일이라 3개월을 넘지 않는다.
+    #      여기서 시작일을 임의로 만들어내면 소스 기본 동작을 조용히 바꾸는 것이다.
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"], to_date="2026-07-31"))
+
+    assert len(client.list_urls) == 1
+    assert "bgn_de=" not in client.list_urls[0]
+
+
 def test_short_window_is_not_split(tmp_path):
     # WHY: 평상시 증분 창(어제~오늘)까지 쪼개면 호출이 배로 든다 — 상한 안이면 한 번에 간다.
     client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
