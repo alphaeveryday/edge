@@ -38,5 +38,22 @@
       });
   }
 
-  window.BrokerApi = { getAiAnalysis: getAiAnalysis, getQuotes: getQuotes };
+  // 차트(일봉 시계열) 조회 — 콜드 최악 경로는 토큰 3초 + 1페이지 3초 + 간격 0.25초 +
+  // 2페이지 429 재시도(429 응답 대기 3초 + 1.1초 + 재호출 3초) ≈ 13.35초라, 타임아웃은 그 상한보다
+  // 길게 둔다(짧으면 정상 재시도 경로가 폴백에 갇힌다). 실패는 폴백 형상으로 수렴해 화면이
+  // 스켈레톤에 갇히지 않고, 폴백 시 탭 재진입이 재시도한다(app.js chartFetched 리셋).
+  // resolve 값: { state: 'OK', data: { candles } } | { state: 'FALLBACK', message }
+  function getChart(ticker) {
+    const query = new URLSearchParams({ ticker: ticker });
+    return fetch('/api/broker/chart?' + query.toString(), { signal: AbortSignal.timeout(14000) })
+      .then(function (res) {
+        return res.json();
+      })
+      .catch(function (err) {
+        console.warn('[broker-api] 차트 호출 실패', err);
+        return { state: 'FALLBACK', message: '차트를 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.' };
+      });
+  }
+
+  window.BrokerApi = { getAiAnalysis: getAiAnalysis, getQuotes: getQuotes, getChart: getChart };
 })();

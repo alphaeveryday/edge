@@ -35,6 +35,7 @@ const CHANNEL = 'MTS';
 const FALLBACK_MESSAGE = 'AI 분석을 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
 const NO_DATA_MESSAGE = '이 종목·일자에 대해 제공되는 AI 분석이 아직 없습니다.';
 const UNKNOWN_ETF_MESSAGE = '지원하지 않는 종목입니다. (국내 상장 ETF 대상)';
+const CHART_FALLBACK_MESSAGE = '차트를 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -86,6 +87,8 @@ let tokenCache = { accessToken: null, expiresAt: 0 };
 let dailyCandleCache = { date: null, bySymbol: null };
 let quotesCache = { at: 0, body: null };
 let quotesInFlight = null;
+let chartCandleCache = { date: null, bySymbol: {} };
+let chartInFlight = {};
 
 function kstDateOf(value) {
   // en-CA 로캘은 YYYY-MM-DD 형식 — KST 기준 날짜 문자열 비교용.
@@ -149,9 +152,25 @@ async function fetchOpenApi(pathname) {
     tokenCache = { accessToken: null, expiresAt: 0 }; // 만료·무효 토큰 — 다음 주기에 재발급
   }
   if (!res.ok) {
-    throw new Error('시세 소스 ' + res.status + ' (' + pathname + ')');
+    const err = new Error('시세 소스 ' + res.status + ' (' + pathname + ')');
+    err.status = res.status;
+    throw err;
   }
   return res.json();
+}
+
+// 차트 조회가 콜드 웜업(일봉 재수집 250ms 간격)과 겹치면 순간적으로 초당 한도(5회)를
+// 넘을 수 있다 — 429 만 1초 뒤 1회 재시도한다(상류 Retry-After: 1 실측).
+async function fetchOpenApiRetry429(pathname) {
+  try {
+    return await fetchOpenApi(pathname);
+  } catch (err) {
+    if (err.status !== 429) {
+      throw err;
+    }
+    await sleep(1100);
+    return fetchOpenApi(pathname);
+  }
 }
 
 // 현재가 응답에는 전일대비가 없다 — 일봉(count=2)으로 전일종가를 KST 날짜당 1회 캐시한다.
@@ -173,6 +192,90 @@ async function getDailyCandles() {
   }
   dailyCandleCache = { date: today, bySymbol: bySymbol };
   return bySymbol;
+}
+
+// ── 차트 프록시 — 종목 상세 차트 탭의 일봉 시계열 (조회된 종목만, KST 날짜당 1회) ──
+
+// 화면 기간 최대치(1년)를 거래일 기준으로 채우는 목표 봉 수. count 상한이 200이라
+// (실측: src/apps/cloud/data-pipeline/src/data_pipeline/sources/toss.py 헤더 주석)
+// nextBefore 로 한 페이지를 더 이어 붙인다.
+const CHART_CANDLE_TARGET = 250;
+
+async function fetchChartCandles(ticker) {
+  const first = (await fetchOpenApiRetry429('/api/v1/candles?symbol=' + ticker + '&interval=1d&count=200')).result;
+  let rows = first.candles; // 응답은 최신순(newest-first)
+  if (first.nextBefore && rows.length > 0) {
+    await sleep(250); // 차트 그룹 rate limit(초당 5회) 간격 — getDailyCandles 와 동일
+    // +1: before 는 inclusive 라 2페이지 첫 봉이 1페이지 마지막과 겹칠 수 있다 — 겹침 제거 후에도 목표를 채우게
+    const second = (await fetchOpenApiRetry429('/api/v1/candles?symbol=' + ticker
+      + '&interval=1d&count=' + (CHART_CANDLE_TARGET - rows.length + 1)
+      + '&before=' + encodeURIComponent(first.nextBefore))).result.candles;
+    // before 는 inclusive(다음 페이지 첫 캔들 = nextBefore 값) — 1페이지와 겹치는 봉을 시각으로 걸러 잇는다.
+    // 깨진 시각은 조용히 걸러지지 않게 던진다 — NaN 비교는 전부 false 라 행이 소리 없이 사라진다(Rule 12).
+    const oldest = new Date(rows[rows.length - 1].timestamp).getTime();
+    if (isNaN(oldest)) {
+      throw new Error('일봉 시각 비정상 (' + ticker + '=' + rows[rows.length - 1].timestamp + ')');
+    }
+    rows = rows.concat(second.filter(function (c) {
+      const at = new Date(c.timestamp).getTime();
+      if (isNaN(at)) {
+        throw new Error('일봉 시각 비정상 (' + ticker + '=' + c.timestamp + ')');
+      }
+      return at < oldest;
+    }));
+  }
+  const candles = rows.slice(0, CHART_CANDLE_TARGET).reverse().map(function (c) { // 화면은 과거→현재 순으로 그린다
+    const date = kstDateOf(c.timestamp);
+    if (date == null) {
+      throw new Error('일봉 시각 비정상 (' + ticker + '=' + c.timestamp + ')');
+    }
+    return {
+      date: date,
+      open: toFiniteNumber(c.openPrice, ticker + '.open'),
+      high: toFiniteNumber(c.highPrice, ticker + '.high'),
+      low: toFiniteNumber(c.lowPrice, ticker + '.low'),
+      close: toFiniteNumber(c.closePrice, ticker + '.close'),
+      volume: toFiniteNumber(c.volume, ticker + '.volume'),
+    };
+  });
+  if (candles.length === 0) {
+    // 빈 성공을 OK 로 캐시하면 그 티커는 하루 종일 빈 화면에 갇힌다 — 폴백으로 수렴시켜 재시도를 살린다(Rule 12)
+    throw new Error('일봉 응답이 비었다 (' + ticker + ')');
+  }
+  return candles;
+}
+
+// resolve 값: { state: 'OK', data: { candles } } | { state: 'FALLBACK', message }
+// 일봉은 하루 안에 사실상 불변(당일 봉만 움직인다)이라 날짜당 1회 캐시로 충분하다.
+async function getChartCandles(ticker) {
+  if (!QUOTES_ENABLED) {
+    return { state: 'FALLBACK', message: CHART_FALLBACK_MESSAGE };
+  }
+  const today = kstDateOf(Date.now());
+  if (chartCandleCache.date !== today) {
+    chartCandleCache = { date: today, bySymbol: {} }; // 날짜 롤오버 — 전날 봉 세트 폐기
+  }
+  if (chartCandleCache.bySymbol[ticker]) {
+    return { state: 'OK', data: { candles: chartCandleCache.bySymbol[ticker] } };
+  }
+  // 동시 요청은 진행 중 조회 하나를 공유한다 — getQuotes 의 스탬피드 방지와 동일
+  if (!chartInFlight[ticker]) {
+    chartInFlight[ticker] = fetchChartCandles(ticker)
+      .then(function (candles) {
+        if (chartCandleCache.date === today) { // 시작 날짜와 캐시 날짜가 같을 때만 — 자정 걸친 응답을 오늘 캐시로 남기지 않는다
+          chartCandleCache.bySymbol[ticker] = candles;
+        }
+        return { state: 'OK', data: { candles: candles } };
+      })
+      .catch(function (err) {
+        console.warn('[mock-broker] 차트 소스 호출 실패 (%s) — %s', ticker, err.message);
+        return { state: 'FALLBACK', message: CHART_FALLBACK_MESSAGE };
+      })
+      .finally(function () {
+        delete chartInFlight[ticker];
+      });
+  }
+  return chartInFlight[ticker];
 }
 
 // 전일종가 = 현재가 시각(거래일)보다 앞선 가장 최근 일봉의 종가.
@@ -299,6 +402,31 @@ const server = http.createServer(function (req, res) {
       .catch(function (err) {
         console.warn('[mock-broker] quotes 처리 실패', err.message);
         return { state: 'FALLBACK', data: QUOTES_FALLBACK };
+      })
+      .then(function (body) {
+        sendJson(res, body);
+      });
+    return;
+  }
+  if (url.pathname === '/api/broker/chart') {
+    if (req.method !== 'GET') {
+      res.writeHead(405);
+      res.end();
+      return;
+    }
+    const chartTicker = url.searchParams.get('ticker');
+    const known = chartTicker && QUOTES_FALLBACK.stocks.some(function (s) {
+      return s.ticker === chartTicker;
+    });
+    if (!known) {
+      // 유니버스 밖 티커는 상류에 흘리지 않는다 — 화면은 폴백 문구로 수렴
+      sendJson(res, { state: 'FALLBACK', message: CHART_FALLBACK_MESSAGE });
+      return;
+    }
+    getChartCandles(chartTicker)
+      .catch(function (err) {
+        console.warn('[mock-broker] chart 처리 실패', err.message);
+        return { state: 'FALLBACK', message: CHART_FALLBACK_MESSAGE };
       })
       .then(function (body) {
         sendJson(res, body);

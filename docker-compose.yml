@@ -26,7 +26,7 @@
 #   curl "localhost:18085/internal/v1/bundles?after=0"   # sync-agent — 무변형 릴레이(항상 200)
 #   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
 #   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # publication-api
-#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세, AI 분석 탭만 실호출)
+#   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세 — AI 분석·시세·차트 실호출, 나머지 탭 목업)
 #   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
 
 services:
