@@ -121,6 +121,9 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
 		seedDisclosureLineage("it-run-1", "it-fact-1", "it-doc-disc", "PROMPT");
+		// 같은 공시 문서가 이벤트 근거 갈래로도 연결된 경우 — DISTINCT 는 갈래를 가로질러
+		// 문서 단위여야 한다(갈래별 dedup 으로 좁아지면 같은 근거가 두 번 실린다).
+		seedEventEvidenceLineage("it-run-1", "it-ev-2", "it-doc-disc", "PROMPT");
 
 		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
 
