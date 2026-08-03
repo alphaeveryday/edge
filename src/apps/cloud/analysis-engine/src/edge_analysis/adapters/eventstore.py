@@ -108,7 +108,11 @@ class EventStore:
             cur.execute(
                 "SELECT i.instrument_id, e.display_name FROM instrument i"
                 " JOIN entity e ON e.entity_id = i.instrument_id"
-                " WHERE i.ticker = %s AND i.instrument_type = 'ETF'",
+                # XKRX 한정 — instrument 유일성이 (market_code, ticker)라 시장 조건
+                # 없는 fetchone 은 타 MIC 동일 ticker 에서 비결정적으로 다른 시장
+                # instrument 에 계보를 붙인다(분석 대상 ETF 는 전부 XKRX, ALPHA-709)
+                " WHERE i.ticker = %s AND i.instrument_type = 'ETF'"
+                " AND i.market_code = 'XKRX'",
                 (ticker,),
             )
             row = cur.fetchone()
