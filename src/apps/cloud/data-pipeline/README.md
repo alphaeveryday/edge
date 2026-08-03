@@ -203,6 +203,9 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # 전체를 훑으면 페이지 수에만 비례한다(5거래일 3,267행 = 33 콜, 실측 2026-08-03). 그래서
 # 수집 경로에는 corpCode.xml 해소가 없다 — 매 런 상수로 걸리며 data_status 를 INCOMPLETE 에
 # 묶던 kind=unmapped 실패도 함께 사라졌다. corpCode.xml 은 enrich-corp-code 스텝만 쓴다.
+# ⚠️ 창은 30일씩 잘라 순회한다 — corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다
+# (4개월 창은 status=100 거절, 실측). --from 만 주면 끝일을 KST 오늘로 확정해 자르고, 실제
+# 수집한 창은 collection_log 의 window_from/window_to 에 남는다(인자가 아니라 실제 값).
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달

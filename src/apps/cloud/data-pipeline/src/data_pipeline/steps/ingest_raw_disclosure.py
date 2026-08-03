@@ -1,4 +1,10 @@
-"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존·dedup 없음).
+"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존).
+
+⚠️ 한 가지 예외가 있다: 소스가 **한 순회 안에서 완전히 같은 행**을 접는다. 목록이 수집 중에도
+자라 페이지 경계가 밀리면 같은 행이 두 페이지에 나오는데, 그걸 그대로 두면 같은 문서를 두 번
+내려받는다. 접히는 건 내용이 전부 같은 행뿐이라 증거는 잃지 않지만, 그래서 `list_rows_seen`
+(벤더가 건넨 행 수)과 raw 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이다.
+정체성 병합·정정 판정 같은 **서로 다른 관측을 접는 일**은 여전히 하지 않는다(canonical 소관).
 
 OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집해(종목별 질의 아님 —
 `sources/dart_disclosure.py`) market 별 ingest_date 파티션(수집일) ndjson 으로 raw 존에 append
@@ -215,6 +221,11 @@ def run(
             "records_fetched": fetched,
             "records_saved": saved,
             "documents_saved": documents_saved,
+            # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
+            # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
+            # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
+            "window_from": getattr(source, "resolved_window", (from_date, to_date))[0],
+            "window_to": getattr(source, "resolved_window", (from_date, to_date))[1],
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),

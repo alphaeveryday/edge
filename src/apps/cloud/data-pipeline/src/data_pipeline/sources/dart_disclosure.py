@@ -108,11 +108,18 @@ _KST = timezone(timedelta(hours=9))
 
 def _window_segments(
     from_date: str | None, to_date: str | None
-) -> list[tuple[str | None, str | None]]:
-    """수집 창을 소스가 받아주는 길이(WINDOW_CHUNK_DAYS)로 자른다.
+) -> tuple[str | None, str | None, list[tuple[str | None, str | None]]]:
+    """수집 창을 소스가 받아주는 길이(WINDOW_CHUNK_DAYS)로 자른다. 실제로 쓴 창을 함께 낸다.
 
-    한쪽이라도 없으면 자르지 않는다 — 길이를 모르는 창을 임의로 좁히면 소스 기본 동작을
-    조용히 바꾸게 된다. 그 경우는 소스가 자기 규칙대로 처리하게 그대로 넘긴다.
+    - 양끝이 다 있으면: 그대로 자른다.
+    - 시작일만 있으면: 끝을 KST 오늘로 **확정하고** 자른다(아래 이유).
+    - 끝일만 있거나 둘 다 없으면: 자르지 않고 그대로 넘긴다 — 소스 기본 시작일이 당일이라
+      상한 안이고, 여기서 시작일을 만들어내면 소스 기본 동작을 조용히 바꾸는 것이다.
+
+    반환: (실제 창 from, 실제 창 to, 세그먼트 목록). 실제 창을 함께 내는 이유는 호출자가
+    그걸 collection_log 에 남겨야 하기 때문이다 — 끝일을 여기서 확정하면 같은 명령도 자정을
+    사이에 두고 다른 창이 되는데, 로그에 원래 인자(None)만 남으면 **어떤 창을 수집했는지
+    복원할 수 없고** 런 사이 rcept_no 집합 비교(이 설계의 완전성 근거)가 성립하지 않는다.
     """
     if from_date and not to_date:
         # ⚠️ 시작일만 준 백필(`--from 2026-01-01`)은 CLI 가 허용하는 조합이다. 그대로 넘기면
@@ -123,18 +130,18 @@ def _window_segments(
     if not from_date or not to_date:
         # 끝일만 준 경우는 자르지 않는다 — 소스 기본 시작일은 당일이라 창이 3개월을 넘지
         # 않는다. 양쪽 다 없으면 소스 기본(당일) 그대로다.
-        return [(from_date, to_date)]
+        return from_date, to_date, [(from_date, to_date)]
     start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
     if start > end:
         # 뒤집힌 창은 여기서 고치지 않는다 — 그대로 넘겨 소스가 거절하게 둔다(조용한 정정 금지).
-        return [(from_date, to_date)]
+        return from_date, to_date, [(from_date, to_date)]
     segments: list[tuple[str | None, str | None]] = []
     cursor = start
     while cursor <= end:
         stop = min(cursor + timedelta(days=WINDOW_CHUNK_DAYS - 1), end)
         segments.append((cursor.isoformat(), stop.isoformat()))
         cursor = stop + timedelta(days=1)
-    return segments
+    return from_date, to_date, segments
 
 
 def _to_dart_date(value: str | None) -> str | None:
@@ -168,6 +175,9 @@ class DartDisclosureSource:
         # 쪽이든 엄격한 쪽이든 거짓이 된다. 스텝은 이 값을 collection_log 에 기록만 한다.
         self.list_total_count: int | None = None
         self.list_rows_seen: int = 0
+        # 실제로 수집한 날짜창 — 인자와 다를 수 있다(시작일만 준 창은 끝을 오늘로 확정한다).
+        # 스텝이 이걸 collection_log 에 남겨야 어떤 창이었는지 사후에 복원된다.
+        self.resolved_window: tuple[str | None, str | None] = (None, None)
         # 직전 세그먼트가 **끝까지 못 갔는지**. 행 단위 격리(malformed row·비문자열 필드 등)와
         # 구분하려고 따로 둔다 — "fetch_failures 가 늘었는가"로 보면 행 하나가 이상해도 창
         # 전체가 멈춘다. 절단은 페이지 순회가 중간에 끊긴 것이고, 격리는 그 행만 빠진 것이다.
@@ -236,6 +246,7 @@ class DartDisclosureSource:
         self.fetch_failures = []
         self.list_total_count = None
         self.list_rows_seen = 0
+        self.resolved_window = (from_date, to_date)
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
         if not plan:
@@ -246,7 +257,9 @@ class DartDisclosureSource:
         for our_ticker, stock_code in plan:
             allowed.setdefault(stock_code, our_ticker)
         fetched_at = datetime.now(timezone.utc).isoformat()
-        for seg_from, seg_to in _window_segments(from_date, to_date):
+        actual_from, actual_to, segments = _window_segments(from_date, to_date)
+        self.resolved_window = (actual_from, actual_to)
+        for seg_from, seg_to in segments:
             yield from self._scan_window(
                 allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at
             )

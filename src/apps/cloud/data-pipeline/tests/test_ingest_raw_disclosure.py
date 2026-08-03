@@ -42,7 +42,7 @@ class FakeSource:
 
     def __init__(self, records=(), *, enabled=True, planned=1,
                  doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
-                 list_total_count=None, list_rows_seen=0):
+                 list_total_count=None, list_rows_seen=0, resolved_window=None):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
@@ -50,6 +50,8 @@ class FakeSource:
         # 창 규모 관측 — 실 소스가 fetch 중에 채운다. 스텝은 이걸 로그로 옮기기만 한다.
         self.list_total_count = list_total_count
         self.list_rows_seen = list_rows_seen
+        # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
+        self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
         self._doc_bytes = doc_bytes
         self._stop = stop
@@ -301,6 +303,21 @@ def test_no_failure_kind_is_tolerated_anymore(tmp_path):
         assert log["status"] == "partial", kind  # 저장분이 있으니 error 가 아니라 partial
         assert log["records_failed_targets"] == 1
         assert log["ops"]["failed_records"] == 1
+
+
+def test_log_records_the_window_actually_collected(tmp_path):
+    # WHY: 소스가 창 끝을 스스로 확정하는 경우가 있다(`--from` 만 준 백필 → 끝은 KST 오늘).
+    #      로그에 호출 인자(None)만 남기면 **어떤 창을 수집했는지 사후에 복원되지 않고**,
+    #      이 설계의 완전성 근거인 "런 사이 rcept_no 집합 비교"가 성립하지 않는다. 같은 명령도
+    #      자정을 사이에 두면 다른 창이 되므로 실제 값이어야 한다.
+    source = FakeSource(records=[_rec("A1")], resolved_window=("2026-01-01", "2026-08-03"))
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["window_from"] == "2026-01-01"
+    assert log["window_to"] == "2026-08-03"  # 호출은 창 없이 했는데 실제 창이 남는다
 
 
 def test_window_scale_observed_in_collection_log(tmp_path):
