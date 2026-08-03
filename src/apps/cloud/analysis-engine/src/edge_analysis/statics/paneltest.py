@@ -189,6 +189,9 @@ f AS (
            CASE WHEN isfinite(regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60)
                 THEN regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60 END AS beta_s,
            sm.code AS sector_code,
+           -- 매칭 공변량: 전일 시총 (RCT 근사의 대조군 선택에 쓴다). 당일 값을 쓰면
+           -- 매칭 자체가 결과를 본다 - 노출과 같은 PIT 규율이다.
+           LAG(q.mktcap, 1) OVER wi AS mcap_pit,
            CASE WHEN isfinite(regr_slope(d.lr, fx.change_pct / 100) OVER w60)
                 THEN regr_slope(d.lr, fx.change_pct / 100) OVER w60 END AS fx_beta,
            -- **어제** 값이다. macro_z() 가 `< day` 로 개장 전 확정 정보(밤사이 미국장·
