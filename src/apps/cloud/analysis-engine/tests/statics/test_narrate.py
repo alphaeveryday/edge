@@ -386,3 +386,24 @@ def test_paragraph_tags_are_unique_per_meaning():
     assert "괴리" in tags, "ETF 괴리 판정 태그가 사라졌다"
     assert tags.count("경로") == 2, "경로 태그는 일중 β 문단 2개뿐이어야 한다"
     assert "층" in tags and "시장" in tags and "동종" in tags and "모순" in tags
+
+
+def test_verifier_gates_implications_on_three_diagnostics():
+    """함의는 위약·사전추세·균형 **셋 다** 통과해야 설명 층으로 간다.
+
+    하나라도 깨지면 침묵이 낫다 - 깨진 진단 위의 ATT 는 처치효과가 아니다.
+    """
+    from edge_analysis.statics.verifier import Implication, say_implications
+
+    ok = Implication("실적이 고유를 +0.32%p", 0.0032, 0.001, 1221,
+                     ("배수", "수준"), True, True, True)
+    assert ok.credible
+    for kw in ({"placebo_ok": False}, {"pretrend_ok": False}, {"balanced": False}):
+        base = {"placebo_ok": True, "pretrend_ok": True, "balanced": True} | kw
+        bad = Implication("x", 0.01, 0.001, 100, None, **base)
+        assert not bad.credible
+        assert "[접음]" in say_implications([bad])
+    # 추정 자체가 없으면 자격 없음
+    assert not Implication("x", None, None, 0, None, True, True, True).credible
+    assert "없음" in say_implications([])
+    assert "[함의]" in say_implications([ok])
