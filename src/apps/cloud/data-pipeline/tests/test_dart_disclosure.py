@@ -374,6 +374,53 @@ def test_malformed_total_page_noted_not_coerced_to_one(tmp_path, bad_total_page)
     assert any("total_page" in f["error"] for f in source.fetch_failures)
 
 
+def test_missing_page_no_noted_not_skipping_the_guard(tmp_path):
+    # WHY(각도 H): 결측을 통과시키면 **필드가 빠지는 순간 가드가 죽는다** — page_no 없이 같은
+    #      1페이지가 반복돼도 dedup 이 중복을 지우고 total_page 까지 완주해 success 로 끝난다.
+    #      page_no 는 응답 계약에 있는 필드다(실측) — 없다는 건 응답을 못 믿는다는 뜻이다.
+    page = {"status": "000", "message": "정상", "total_page": 3,
+            "list": [_row("공급계약", rcept_no="P1")]}  # page_no 키 없음
+    client = FakeClient(list_pages={1: page, 2: page, 3: page})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]
+    assert any("page_no" in f["error"] for f in source.fetch_failures)
+
+
+def test_late_013_is_a_failure_not_an_empty_window(tmp_path):
+    # WHY(Rule 12): 1페이지가 total_page=3 으로 여러 페이지의 실재를 이미 신고했다. 그 뒤의
+    #      013 은 "이 창은 비었다"가 아니라 목록 변동·캐시 불일치이고 남은 페이지는 안 읽힌
+    #      것이다. 1페이지 013(정상 빈 창)과 같이 묶으면 그 유실이 success 로 남는다.
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
+        2: {"status": "013"},
+    })
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]
+    assert any("013" in f["error"] for f in source.fetch_failures)
+
+
+def test_total_page_smaller_than_current_page_noted(tmp_path):
+    # WHY(각도 H): 공유 파서(`_as_page_number`)는 "페이지 번호로 읽히는가"만 본다 — 두 필드의
+    #      의미까지는 못 지킨다. page=2 응답의 total_page=1 은 파서엔 유효하지만 모순이고,
+    #      `page >= total_page` 가 참이 돼 **조용한 정상 종료**가 된다.
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=1, page_no=2),  # 모순
+    })
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1", "P2"]  # 받은 만큼은 보존
+    assert any("total_page=1" in f["error"] for f in source.fetch_failures)
+
+
 def test_non_string_stock_code_noted_not_folded_into_foreign(tmp_path):
     # WHY(각도 H — unchecked-field): stock_code 가 비문자열로 오면 **누구 것인지 판정할 수
     #      없다** — 우리 종목일 수도 있다. 유니버스 밖(정상 스킵)으로 접어 버리면 그 유실이

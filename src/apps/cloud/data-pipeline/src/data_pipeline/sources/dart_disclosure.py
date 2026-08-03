@@ -227,6 +227,17 @@ class DartDisclosureSource:
             status = str(payload.get("status") or "?")
             if status == "013":
                 # 조회 데이터 없음 = 정상 빈 창(그 기간에 공시 없음) — 뉴스형.
+                #
+                # ⚠️ **1페이지에서만 정상이다.** 2페이지 이후의 013 은 "이 창은 비었다"가 아니다:
+                # 1페이지가 이미 total_page>1 로 여러 페이지의 실재를 말했으므로, 뒤늦은 013 은
+                # 캐시 불일치·목록 변동이라는 뜻이고 남은 페이지는 안 읽힌 것이다. 같이 묶어
+                # 정상 종료로 두면 그 유실이 success 로 남는다(Rule 12).
+                if page > 1:
+                    self._note_failure(
+                        None, None,
+                        f"page={page} 에서 status=013 — 1페이지는 다중 페이지를 신고했다"
+                        " (목록 변동·캐시 불일치, 뒷페이지 미수집)", page=page,
+                    )
                 return
             if status in STOP_STATUS_CODES:
                 msg = payload.get("message") or STATUS_MESSAGES.get(status, "?")
@@ -238,20 +249,6 @@ class DartDisclosureSource:
                 raise ValueError(
                     f"DART status={status} ({STATUS_MESSAGES.get(status, '?')}) msg={msg}"
                 )
-            # 응답이 정말 **요청한 페이지**인지 확인한다. 캐시·벤더 이상으로 page 2~N 요청에
-            # 계속 1페이지가 돌아오면, 아래 `seen` dedup 이 반복 행을 조용히 걷어내고 루프는
-            # total_page 까지 정상 완주해 **뒷페이지 전량이 빠진 success 런**이 된다 — dedup 이
-            # 그 증상을 지우기 때문에 이 확인이 없으면 사후에도 복원되지 않는다.
-            # ⚠️ 타입으로 가드를 끄지 않는다. `isinstance(int)` 일 때만 대조하면 벤더가 `"1"`
-            # 처럼 문자열로 주기 시작하는 순간 이 가드가 **조용히 죽는다** — 지키려던 유실이
-            # 그대로 통과한다. 값이 있는데 페이지 번호로 못 읽히는 것도 응답을 못 믿는 신호다.
-            echoed = payload.get("page_no")
-            if echoed is not None and _as_page_number(echoed) != page:
-                self._note_failure(
-                    None, None,
-                    f"응답 page_no={echoed!r} 인데 요청은 page={page} — 목록 절단 가능", page=page,
-                )
-                return
             rows = payload.get("list")
             if not isinstance(rows, list):
                 raise ValueError(f"DART status=000 인데 list 이상: {type(rows).__name__}")
@@ -313,13 +310,31 @@ class DartDisclosureSource:
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
-                # ⚠️ `stock_code` 는 **벤더 원본 그대로** 둔다(bronze 무변형). 매칭용으로 strip
-                # 한 값을 되쓰면 raw 에서 벤더 이상(패딩 등)을 재현할 수 없고, 우리 축은
-                # our_ticker 가 이미 담고 있다. 정규화 형태의 소비자는 현재 0건이다.
-                record.setdefault("stock_code", stock_code)
+                # ⚠️ `stock_code` 는 **손대지 않는다** — `dict(row)` 가 벤더 원본을 그대로
+                # 담고 있다(bronze 무변형). 매칭용으로 strip 한 값을 되쓰면 raw 에서 벤더 이상
+                # (패딩 등)을 재현할 수 없고, 우리 축은 our_ticker 가 이미 담는다. 여기 폴백을
+                # 두지 않는 것도 같은 이유다: 여기 도달한 행은 위 유니버스 필터를 통과했으므로
+                # 그 키를 반드시 갖고 있어, 폴백은 도달 불가한 채 "결측을 메운다"고 오독된다.
                 record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no)
                 record["fetched_at"] = fetched_at
                 yield record
+            # 응답이 정말 **요청한 페이지**였는지 확인한다. 캐시·벤더 이상으로 page 2~N 요청에
+            # 계속 1페이지가 돌아오면, 위 `seen` dedup 이 반복 행을 조용히 걷어내고 루프는
+            # total_page 까지 정상 완주해 **뒷페이지 전량이 빠진 success 런**이 된다 — dedup 이
+            # 그 증상을 지우기 때문에 이 확인이 없으면 사후에도 복원되지 않는다.
+            # ⚠️ 타입으로도 결측으로도 가드를 끄지 않는다. `isinstance(int)` 일 때만 대조하면
+            # 벤더가 `"1"` 로 주기 시작하는 순간, 결측을 통과시키면 필드가 빠지는 순간 이 가드가
+            # **조용히 죽는다** — 지키려던 유실이 그대로 통과한다. page_no 는 응답 계약에 있는
+            # 필드이므로(실측 2026-08-03), 없다는 건 응답을 못 믿는다는 뜻이다.
+            # 검사는 행 처리 **뒤**다 — 아래 total_page 가드와 같은 자리다. 받은 행은 버리지
+            # 않고(bronze: 받은 건 보존), 응답이 말이 안 되기 시작한 지점에서 멈춰 기록한다.
+            echoed = payload.get("page_no")
+            if _as_page_number(echoed) != page:
+                self._note_failure(
+                    None, None,
+                    f"응답 page_no={echoed!r} 인데 요청은 page={page} — 목록 절단 가능", page=page,
+                )
+                return
             # total_page 순회 — 마지막 페이지면 종료. 몇 페이지인지 모르는 채 조용히 1페이지에서
             # 멈추면 목록 절단이 은폐되므로(Rule 12), 읽히지 않으면 감사 기록 후 종료한다.
             #
@@ -334,6 +349,17 @@ class DartDisclosureSource:
                 self._note_failure(
                     None, None,
                     f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r} — 목록 절단 가능",
+                    page=page,
+                )
+                return
+            # 공유 파서는 "페이지 번호로 읽히는가"만 본다 — 두 필드의 의미까지는 못 지킨다.
+            # page=2 응답이 total_page=1 을 주면 그 값은 파서엔 유효하지만 **모순**이고,
+            # 아래 `page >= total_page` 가 참이 돼 조용한 정상 종료가 된다. 총 페이지 수는
+            # 최소한 지금 읽고 있는 페이지만큼은 돼야 한다.
+            if total_page < page:
+                self._note_failure(
+                    None, None,
+                    f"total_page={total_page} 가 현재 page={page} 보다 작다 — 목록 변동·응답 모순",
                     page=page,
                 )
                 return
