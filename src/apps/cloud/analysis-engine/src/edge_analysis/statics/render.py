@@ -43,12 +43,22 @@ def simple_pct(logret: float) -> str:
     return f"{(math.exp(logret) - 1) * 100:+.2f}%"
 
 
-def render(rows: list[Row], *, conditional: str = "") -> str:
-    """셀 하나의 최종 표. 몫 합 = 총수익률 검산이 마지막 행에 있다."""
+def render(rows: list[Row], *, conditional: str = "", top: int = 12) -> str:
+    """셀 하나의 최종 표. 몫 합 = 총수익률 검산이 마지막 행에 있다.
+
+    `top` 개만 |몫| 순으로 펼치고 나머지는 한 행으로 접는다. 실측(000660
+    07-29): 사건이 78건이라 창이 137개가 됐고, 137행 표는 설명이 아니라 로그다.
+    접어도 합계 검산은 그대로 성립한다 (접은 행도 몫·기여·미설명을 합산한다).
+    """
     head = (f"{'창':<14}{'시각':<14}{'몫%p':>8}{'처치':<22}"
             f"{'판정':<10}{'기여%p':>8}{'구간%p':>18}{'미설명%p':>10}")
     lines = [head, "─" * len(head)]
-    for r in rows:
+    # 판정·기여가 붙은 행은 **접지 않는다** (설명의 본체다). 나머지를 |몫| 순으로.
+    keep = [r for r in rows if r.est is not None or r.verdict]
+    plain = [r for r in rows if r not in keep]
+    show = keep + sorted(plain, key=lambda r: -abs(r.share.log_ret))[:max(top - len(keep), 0)]
+    folded = [r for r in rows if r not in show]
+    for r in sorted(show, key=lambda r: r.share.window.start):
         w = r.share.window
         span = f"{w.start:%H:%M}–{w.end:%H:%M}" if w.kind != "gap" else "전일→개장"
         iv = (f"[{_pp(r.lo).strip()},{_pp(r.hi).strip()}]"
@@ -56,6 +66,11 @@ def render(rows: list[Row], *, conditional: str = "") -> str:
         lines.append(f"{w.name:<14}{span:<14}{_pp(r.share.log_ret):>8}"
                      f"{(r.treatment or '—'):<22}{(r.verdict or '—'):<10}"
                      f"{_pp(r.est):>8}{iv:>18}{_pp(r.unexplained):>10}")
+    if folded:
+        lines.append(f"{f'…나머지 {len(folded)}창':<14}{'접음':<14}"
+                     f"{_pp(sum(r.share.log_ret for r in folded)):>8}{'—':<22}{'—':<10}"
+                     f"{_pp(sum(r.est or 0.0 for r in folded)):>8}{'—':>18}"
+                     f"{_pp(sum(r.unexplained for r in folded)):>10}")
     total = sum(r.share.log_ret for r in rows)
     est = sum(r.est or 0.0 for r in rows)
     unexp = sum(r.unexplained for r in rows)

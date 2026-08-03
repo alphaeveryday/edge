@@ -311,3 +311,23 @@ def test_peer_cross_section_contradicting_layers_is_confessed():
                  layers=(("시장", 0.2422), ("섹터", -0.0347), ("고유", 0.0392)),
                  peers=("전기전자(코스피)", 45, 0.2300, 0.6))
     assert "[모순]" not in ok
+
+
+def test_render_folds_but_stays_additive():
+    """사건 78건이면 창이 137개가 된다 - 137행 표는 설명이 아니라 로그다.
+
+    실측(000660 07-29). 접어도 합계 검산은 성립해야 한다 (assert 가 지킨다).
+    판정·기여가 붙은 행은 설명의 본체라 접지 않는다.
+    """
+    from edge_analysis.statics.render import render
+    rows = [_row(f"창{i}", (i - 20) * 0.001) for i in range(40)]
+    txt = render(rows, top=6)
+    assert "…나머지" in txt and "접음" in txt
+    body = [ln for ln in txt.splitlines() if ln and not ln.startswith(("창", "시각", "─", "합계", "단위", "…"))]
+    assert len(txt.splitlines()) < 15, "접기가 안 먹었다"
+    assert "-2.00" in txt and "+1.90" in txt           # |몫| 큰 창은 남는다
+    # 판정이 붙은 행은 접히지 않는다
+    from edge_analysis.statics.render import Row
+    keep = Row(rows[0].share, verdict="성립", est=0.001)
+    txt2 = render([keep, *rows[1:]], top=2)
+    assert "성립" in txt2

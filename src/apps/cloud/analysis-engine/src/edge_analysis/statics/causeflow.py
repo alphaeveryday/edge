@@ -22,6 +22,7 @@ import math
 import pathlib
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 
 
@@ -246,24 +247,49 @@ JSON:
  "explanation": "직관 설명"}"""
 
 
+# 사건 시각은 **사이드카가 복원한 발행시각**이 먼저다. RDB `source_event.available_at`
+# 은 파이프라인 폴백으로 자정에 몰려 있고(실측 000660 07-29: 전량 00:00 UTC),
+# `document.available_at` 은 수집 시각(15:01 KST)이라 발행 시각이 아니다.
+# `duck.taus` 는 이미 사이드카를 쓰는데 접지 본문만 안 봐서, 창 배정과 산문이
+# 서로 다른 시각을 말했다 - 같은 규칙을 쓴다.
 _GROUND_SQL = """
-SELECT e.event_type_code, e.role_code, e.title, e.available_at,
-       th.novelty_status, th.thread_key, th.current_stage
+SELECT e.event_type_code, e.role_code, any_value(e.title) AS title,
+       coalesce(min(sc.published_kst), min(CAST(e.available_at AS TIMESTAMP))) AS t,
+       min(sc.published_kst) IS NOT NULL AS t_exact,
+       any_value(th.novelty_status), any_value(th.thread_key), any_value(th.current_stage)
 FROM v_event e
 LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+{promote}
 WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
-ORDER BY e.available_at
+GROUP BY e.source_event_id, e.event_type_code, e.role_code
+ORDER BY t
+"""
+
+_PROMOTE = """
+LEFT JOIN rdb.public.event_evidence ev ON ev.source_event_id = e.source_event_id
+LEFT JOIN rdb.public.document_assertion da ON da.assertion_id = ev.assertion_id
+LEFT JOIN rdb.public.document doc ON doc.document_id = da.document_id
+LEFT JOIN tau_sidecar sc ON sc.article_id = doc.source_document_id
 """
 
 _NEWS_SQL = """
-SELECT n.title, n.available_at, n.source_code
+SELECT n.title,
+       coalesce(sc.published_kst, CAST(n.available_at AS TIMESTAMP)) AS t,
+       sc.published_kst IS NOT NULL AS t_exact, n.source_code
 FROM v_event e
 JOIN v_event_news en ON en.source_event_id = e.source_event_id
 JOIN v_news n ON n.document_id = en.document_id
+LEFT JOIN tau_sidecar sc ON sc.article_id = n.source_document_id
 WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
-ORDER BY n.available_at
+ORDER BY t
 LIMIT 12
 """
+
+_NEWS_SQL_NOSC = _NEWS_SQL.replace(
+    "coalesce(sc.published_kst, CAST(n.available_at AS TIMESTAMP)) AS t,\n"
+    "       sc.published_kst IS NOT NULL AS t_exact,",
+    "CAST(n.available_at AS TIMESTAMP) AS t, FALSE AS t_exact,").replace(
+    "LEFT JOIN tau_sidecar sc ON sc.article_id = n.source_document_id\n", "")
 
 
 def _grounding(lake, instrument_id: str, day: str) -> str:
@@ -271,30 +297,65 @@ def _grounding(lake, instrument_id: str, day: str) -> str:
     스레드 신규성(신규 보도인가 후속인가)이 가설을 가른다. 8셀 내내 이걸 안 읽고
     타입 이름만 보고 가설을 썼다.
 
+    시각은 **출처를 라벨한다**: 사이드카 복원값은 그대로, 폴백은 `~` 를 붙인다.
+    자정 폴백을 정확한 시각처럼 쓰면 시간 알리바이가 거짓이 된다 (실측 000660
+    07-29: 사건 전량 09:00 으로 보였는데 실제 근거 문서는 15:01 수집).
+
     부재도 문장으로 말한다: '접지 사건 없음' 은 '조회 안 함' 과 다르다."""
     out: list[str] = []
+    has_sc = bool(lake.exists.get("tau_sidecar"))
     try:
-        rows = lake.sql((_base_views(day) + _GROUND_SQL).format(iid=instrument_id, day=day))
+        rows = lake.sql((_base_views(day) + _GROUND_SQL).format(
+            iid=instrument_id, day=day, promote=_PROMOTE if has_sc else ""))
     except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
         return f"=== 접지 본문 ===\n조회 실패: {type(e).__name__}: {str(e)[:100]}"
     if not rows:
         return "=== 접지 본문 ===\n오늘 이 종목에 접지된 사건 없음 (조회했고 0건이다)"
-    out.append("=== 접지 본문 (사건 · 역할 · 도달시각 · 스레드 신규성) ===")
-    for et, role, title, av, nov, tkey, stage in rows[:12]:
-        t = str(title or "")[:80]
-        av_s = str(av)[11:16] if av else "?"
-        nov_s = f" · {nov}" if nov else ""
-        st_s = f" · {stage}" if stage else ""
-        out.append(f"  [{av_s}] {et} ({role}){nov_s}{st_s}\n      {t}")
+    # **구간별로 접는다.** `ORDER BY t` + 앞 12개는 사건 78건 셀에서 개장 전만
+    # 보여주고 장중을 전부 감춘다 (실측 000660 07-29: 표시 20건 전량 개장 전,
+    # 정작 -10%는 장중에 났다). 급락 구간의 사건이 안 보이면 가설을 세울 수 없다.
+    n_exact = sum(1 for r in rows if r[4])
+    out.append(f"=== 접지 본문 {len(rows)}건 · 시각 복원 {n_exact}/{len(rows)} "
+               "(`~` 는 폴백) — 구간별 ===")
+
+    def _phase(t) -> str:
+        hm = str(t)[11:16] if t else "?"
+        return ("개장 전" if hm < "09:00" else
+                "장중" if hm < "15:30" else "마감 후")
+
+    buckets: dict[str, list] = {"개장 전": [], "장중": [], "마감 후": []}
+    for r in rows:
+        buckets.setdefault(_phase(r[3]), []).append(r)
+    for ph in ("개장 전", "장중", "마감 후"):
+        grp = buckets.get(ph) or []
+        if not grp:
+            out.append(f"  [{ph}] 0건")
+            continue
+        kinds = Counter(r[0] for r in grp)
+        out.append(f"  [{ph}] {len(grp)}건 · " + " · ".join(
+            f"{k.split('.')[-1]}×{v}" for k, v in kinds.most_common(4)))
+        # 각 구간에서 **타입별 첫 건**만 제목을 보여준다 - 같은 사태의 중복 보도를
+        # 열 줄 늘어놓는 것은 정보가 아니다.
+        seen_k: set[str] = set()
+        for et, role, title, t, exact, nov, _tk, stage in grp:
+            if et in seen_k:
+                continue
+            seen_k.add(et)
+            out.append(f"    [{'' if exact else '~'}{str(t)[11:16]}] {et} ({role})"
+                       + (f" · {nov}" if nov else "") + (f" · {stage}" if stage else "")
+                       + f"\n        {str(title or '')[:78]}")
     try:
-        news = lake.sql((_base_views(day) + _NEWS_SQL).format(iid=instrument_id, day=day))
+        news = lake.sql((_base_views(day)
+                         + (_NEWS_SQL if has_sc else _NEWS_SQL_NOSC)).format(
+            iid=instrument_id, day=day))
     except Exception:                               # noqa: BLE001
         news = []
     seen: set[str] = set()
     heads = [n for n in news if not (str(n[0]) in seen or seen.add(str(n[0])))]
     if heads:
         out.append("=== 근거 문서 제목 ===")
-        out += [f"  [{str(a)[11:16]}] {str(t)[:90]} ({s})" for t, a, s in heads[:8]]
+        out += [f"  [{'' if ex else '~'}{str(a)[11:16]}] {str(t)[:90]} ({s})"
+                for t, a, ex, s in heads[:8]]
     return "\n".join(out)
 
 
