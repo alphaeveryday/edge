@@ -3,7 +3,8 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# news-worker 는 프로덕션 feed 부재로 제외(ALPHA-707 — BigKinds 승인 선행).
+# news-worker 는 CLI·feed 까지 완성(ALPHA-707)됐고 **서비스 편입만 후속 PR** 이다
+# (세션 오케스트레이션의 news 세션 계획과 함께 — start 가 price 세션만 계획한다).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.

@@ -31,6 +31,60 @@ UA = (
 )
 
 
+def search_page(
+    client, *, base_url: str, category_codes: list[str],
+    start_date: str | None, end_date: str | None, page: int, page_size: int,
+) -> dict:
+    """BigKinds search.do 한 페이지(0-base) — **요청 형상의 단일 정본**.
+
+    배치(`BigKindsNewsSource`)와 1분 feed(`minute/bigkinds_feed.py`)가 같은 엔드포인트를
+    치므로 body·헤더를 여기 한 곳에 둔다 — 두 벌이면 UA·필드 하나가 한쪽만 고쳐져
+    한 경로만 400(축약 UA 함정, 실측)을 맞는다. 4xx/429 는 client 가 StopFetch 로 올린다.
+    """
+    body = json.dumps(
+        {
+            "indexName": "news",
+            # 검색어 없음 — 카테고리가 수집 범위를 정한다(config 가 비카테고리 로드를 거부).
+            "searchKey": "",
+            "searchFilterType": "1",
+            "searchScopeType": "1",
+            "searchSortType": "date",
+            "sortMethod": "date",
+            "startDate": start_date or "",
+            "endDate": end_date or "",
+            "startNo": page + 1,
+            "resultNumber": page_size,
+            "providerCodes": [],
+            # 카테고리 대분류 필터(설정). 언론사(providerCodes)는 안 좁힌다 — 전체 언론사.
+            "categoryCodes": list(category_codes),
+            "incidentCodes": [],
+            "dateCodes": [],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    raw = client.request(
+        "POST",
+        base_url,
+        headers={
+            "Content-Type": "application/json;charset=UTF-8",
+            "User-Agent": UA,
+            "Referer": "https://www.bigkinds.or.kr/v2/news/search.do",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        data=body,
+        decode=True,
+    )
+    if not isinstance(raw, str):
+        raise ValueError("BigKinds 응답이 str 이 아님")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"json: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"BigKinds 응답이 객체가 아님: {type(payload).__name__}")
+    return payload
+
+
 class BigKindsNewsSource:
     source_name = "bigkinds"
     preserve_all_rows = True  # raw 전량 보존: ingest_raw 의 FMP dedup/mention merge 를 끈다.
@@ -121,46 +175,7 @@ class BigKindsNewsSource:
             )
 
     def _search(self, start_date: str | None, end_date: str | None, page: int) -> dict:
-        start_no = page + 1
-        body = json.dumps(
-            {
-                "indexName": "news",
-                # 검색어 없음 — 카테고리가 수집 범위를 정한다(config 가 비카테고리 로드를 거부).
-                "searchKey": "",
-                "searchFilterType": "1",
-                "searchScopeType": "1",
-                "searchSortType": "date",
-                "sortMethod": "date",
-                "startDate": start_date or "",
-                "endDate": end_date or "",
-                "startNo": start_no,
-                "resultNumber": self.page_size,
-                "providerCodes": [],
-                # 카테고리 대분류 필터(설정). 언론사(providerCodes)는 안 좁힌다 — 전체 언론사.
-                "categoryCodes": self.category_codes,
-                "incidentCodes": [],
-                "dateCodes": [],
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
-        raw = self.client.request(
-            "POST",
-            self.base_url,
-            headers={
-                "Content-Type": "application/json;charset=UTF-8",
-                "User-Agent": UA,
-                "Referer": "https://www.bigkinds.or.kr/v2/news/search.do",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            data=body,
-            decode=True,
+        return search_page(
+            self.client, base_url=self.base_url, category_codes=self.category_codes,
+            start_date=start_date, end_date=end_date, page=page, page_size=self.page_size,
         )
-        if not isinstance(raw, str):
-            raise ValueError("BigKinds 응답이 str 이 아님")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"json: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ValueError(f"BigKinds 응답이 객체가 아님: {type(payload).__name__}")
-        return payload

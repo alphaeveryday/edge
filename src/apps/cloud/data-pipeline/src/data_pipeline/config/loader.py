@@ -34,6 +34,7 @@ from .models import (
     KisPriceConfig,
     MinuteConsumerConfig,
     MinuteNewsConsumerConfig,
+    MinuteNewsWorkerConfig,
     MinutePriceConsumerConfig,
     MinutePriceWorkerConfig,
     MinuteRelayConfig,
@@ -118,6 +119,9 @@ class Settings(BaseSettings):
     # 1분 뉴스 추출 Consumer(ALPHA-713)는 `news-consumer` 스텝만 쓴다 — 미설정이면
     # 그 진입점이 fail-loud 한다.
     minute_news_consumer: MinuteNewsConsumerConfig | None = None
+    # 1분 News Worker(ALPHA-707)는 `news-worker` 스텝만 쓴다. 기본값이 전부라 섹션이
+    # 없어도 기동한다 — 엔드포인트 정본은 [bigkinds_news] 라 이 섹션은 수치뿐이다.
+    minute_news_worker: MinuteNewsWorkerConfig = MinuteNewsWorkerConfig()
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

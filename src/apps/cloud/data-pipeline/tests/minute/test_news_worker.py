@@ -575,3 +575,59 @@ class TestLoopLifecycle:
         # heartbeat 주기 경계에서 DRAINED 세션이 heartbeat 를 거부해 STOPPED 로 샌다)
         assert worker.tick(NOW + timedelta(seconds=30)) == "DRAINED"
         assert db.sessions[session_id]["phase"] == "DRAINED"
+
+
+class TestBlockCooldown:
+    """차단(BlockedFeedError)은 lease 재시도로 접으면 만료마다 같은 차단 요청이 반복돼
+    차단을 연장한다 — 쿨다운 동안 poll 자체가 억제돼야 한다(ALPHA-707)."""
+
+    class _BlockingFeed:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_page(self, poll_index, page, page_size):
+            self.calls += 1
+            from data_pipeline.minute.bigkinds_feed import BlockedFeedError
+            raise BlockedFeedError("HTTP 403")
+
+    def test_blocked_poll_sets_cooldown_and_suppresses_next(self, tmp_path):
+        db = FakeMinuteDB()
+        feed = self._BlockingFeed()
+        # 실설정 축(recovery budget 1)으로 돈다 — 0 으로 두면 recovery lane 이 같은
+        # window 를 재claim 하는 경로가 테스트에서 가려진다(봇 지적).
+        worker, _, _ = build_worker(db, tmp_path, feed=feed, windows=3,
+                                    block_cooldown_seconds=300,
+                                    recovery_budget_per_tick=1)
+
+        assert worker.tick(NOW) == "WINDOW_FAILED"
+        assert feed.calls == 1
+        # 쿨다운 안 — 다음 window 를 집어도 벤더를 두드리지 않는다
+        assert worker.tick(NOW + timedelta(seconds=60)) == "WINDOW_FAILED"
+        assert feed.calls == 1, "쿨다운 중 poll 이 나가면 차단이 연장된다"
+        # ⚠️ 쿨다운·차단 window 는 **즉시 DUE 복귀**여야 한다 — CLAIMED 로 쥔 채 억제하면
+        # lease 상한 설정에서 drain ack(CLAIMED 잔존 거부)가 stop 상한을 넘긴다.
+        assert all(w["data_status"] == "DUE" for w in db.windows.values()), \
+            "쿨다운이 claim 을 쥐고 있으면 drain 이 lease 만료를 기다린다"
+        # 쿨다운이 지나면 1회 재확인한다(또 차단이면 다시 쿨다운)
+        assert worker.tick(NOW + timedelta(seconds=301)) == "WINDOW_FAILED"
+        assert feed.calls == 2
+
+    def test_cooldown_flag_clears_after_expiry(self, tmp_path):
+        """만료된 표식이 남으면 CLI 페이싱이 그 뒤의 일반 실패까지 재운다 — 지워져야 한다."""
+        db = FakeMinuteDB()
+        feed = self._BlockingFeed()
+        worker, _, _ = build_worker(db, tmp_path, feed=feed, windows=2,
+                                    block_cooldown_seconds=300,
+                                    recovery_budget_per_tick=1)
+        worker.tick(NOW)
+        assert worker._blocked_until is not None
+        # 만료 후 재확인 poll(또 차단 → 새 쿨다운) — 만료 시점에 표식이 먼저 지워지는지는
+        # 아래 일반 실패 케이스로 본다
+        class PlainFailFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                raise RuntimeError("HTTP 500")
+        worker.feed = PlainFailFeed()
+        worker._blocked_until = NOW  # 이미 만료된 표식
+        assert worker.tick(NOW + timedelta(seconds=1)) == "WINDOW_FAILED"
+        assert worker._blocked_until is None, \
+            "만료 표식이 남으면 일반 실패가 차단으로 오인돼 페이싱된다"

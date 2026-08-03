@@ -496,6 +496,76 @@ class MinutePriceWorkerConfig(BaseModel):
         return self
 
 
+class MinuteNewsWorkerConfig(BaseModel):
+    """1분 News Worker 상주 설정 — `news-worker` 스텝만 쓴다(ALPHA-707).
+
+    엔드포인트·카테고리는 여기 없다 — `[bigkinds_news]`(base_url·category_codes)가
+    정본이고 배치 수집과 공유한다(두 벌이면 카테고리가 한쪽만 바뀌어 배치와 1분 레인이
+    다른 뉴스를 걷는다). 여기는 **1분 루프의 수치**만 둔다.
+
+    pacing(min_interval_sec)·페이지 예산은 ALPHA-645 실측(2026-08-03)이 기본값의 근거다:
+    1분 주기 page1 폴링은 200 연속·RTT p50≈1초대였고, 저녁 신규 유입 0~8건/분이라
+    평시 1page(100건)로 충분하다. 차단 시그니처가 보이면 **이 값을 올리는 게**(간격을
+    벌리는 게) 처방이다 — 재배포 없이 env 로 바꾼다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: NonBlankStr = "bigkinds"
+    destination: NonBlankStr = "news-extraction-realtime"
+    # 페이지 예산 — NewsWorkerConfig(__post_init__)가 조합 검증의 정본이라 여기선
+    # 범위만 건다(recovery ≥ max 는 거기서 걸린다).
+    max_pages: int = Field(default=4, ge=1, le=40)
+    recovery_max_pages: int = Field(default=8, ge=1, le=40)
+    page_size: int = Field(default=100, ge=1, le=100)  # 100 = API 상한(배치와 동일)
+    anchor_size: int = Field(default=10, ge=1, le=100)
+    # 벤더 요청 간격(초) — PoliteClient.min_interval 로 주입되는 pacing 의 정본.
+    min_interval_sec: float = Field(default=1.0, ge=0.2, le=30)
+    # 스파이크에서 단발 read 20초 초과를 실측했다(대부분 1~2.5초) — 기본 10초는 느린
+    # 꼬리를 실패로 접는다. 벤더가 원래 느린 건 KRX(45초)와 같은 성질이다.
+    timeout_sec: float = Field(default=45.0, gt=0, le=120)
+    lease_seconds: int = Field(default=240, ge=30, le=3600)
+    session_lease_seconds: int = Field(default=300, ge=60, le=3600)
+    heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
+    # 가격보다 낮은 기본(1) — backlog window 하나마다 벤더 poll 이 한 번 더 나간다
+    # (차단 위험 축). 밀린 분들의 기사는 anchor 목표 poll 이 어차피 함께 걷는다.
+    recovery_budget_per_tick: int = Field(default=1, ge=1, le=10)
+    tick_seconds: float = Field(default=5.0, gt=0, le=60)
+    # 차단 쿨다운(초) — BlockedFeedError 후 poll 억제 시간(NewsWorkerConfig 로 전달).
+    block_cooldown_seconds: int = Field(default=300, ge=60, le=3600)
+
+    @model_validator(mode="after")
+    def _leases_cover_worst_poll(self) -> MinuteNewsWorkerConfig:
+        """lease 는 한 tick 의 최악 소요 위여야 한다(price 워커의 75초/window 와 같은 축).
+
+        한 tick 은 최대 (1 + recovery_budget) 개 window 를 순차 poll 하고, lagging 이면
+        poll 하나가 recovery_max_pages 페이지를 읽는다. 페이지당 예산은 간격 + RTT 여유
+        5초(스파이크 p50 1.4s·간헐 꼬리는 timeout 이 자른다)로 잡는다 — 정확성은 claim/
+        fence CAS 가 지키므로 이 검증은 명백히 틀린 설정을 배포 전에 거르는 조잡한
+        게이트다(price _leases_cover_worst_tick 과 같은 성질).
+        """
+        page_budget = self.min_interval_sec + 5.0
+        # poll 당 timeout 1회 정체를 허용치에 넣는다(스파이크에서 단발 read 초과 실측).
+        # 페이지 전부가 timeout×재시도로 정체하는 폭주까지는 안 덮는다 — 그 경우의
+        # 정확성은 claim/fence CAS 가 지킨다(price 검증자의 "하한 가드" 단서와 동일).
+        worst_poll = self.recovery_max_pages * page_budget + self.timeout_sec
+        worst_tick = (1 + self.recovery_budget_per_tick) * worst_poll
+        if self.lease_seconds < worst_tick:
+            raise ValueError(
+                f"lease_seconds({self.lease_seconds}) < tick 최악 소요({worst_tick:.0f}초 = "
+                f"(1+budget {self.recovery_budget_per_tick}) × recovery_max_pages "
+                f"{self.recovery_max_pages} × 페이지 예산 {page_budget:.1f}s) — "
+                "in-flight claim 이 만료된다. 페이지 예산을 줄이거나 lease 를 늘려라"
+            )
+        if self.heartbeat_every_seconds + worst_tick > self.session_lease_seconds:
+            raise ValueError(
+                f"session_lease_seconds({self.session_lease_seconds}) < heartbeat 주기"
+                f"({self.heartbeat_every_seconds}) + tick 최악 소요({worst_tick:.0f}초) — "
+                "fence 가 처리 중 만료돼 정상 수집이 거부된다"
+            )
+        return self
+
+
 class MinutePriceConsumerConfig(BaseModel):
     """1분 가격 판정 Consumer 상주 설정 — `price-consumer` 스텝만 쓴다(ALPHA-711).
 

@@ -118,9 +118,12 @@
 > 거부(fail-loud)다. ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
-> 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼다(ALPHA-713 —
-> `run news-consumer`, 아래 실행 절) — 다만 **생산자(news-worker)가 없어**(ALPHA-707,
-> BigKinds 승인 선행) 뉴스 큐 2종은 빈 채로 소비자만 상주한다.
+> 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
+> `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
+> BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). 다만 news-worker 의
+> **ECS 서비스·세션 오케스트레이션 편입은 후속 PR** 이라 그때까지 뉴스 큐 2종은 빈 채로
+> 소비자만 상주한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
+> 쿨다운(기본 300초) 동안 poll 이 억제된다 — 처방은 재시도가 아니라 pacing 상향·중지다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
@@ -991,6 +994,14 @@ DATA_PIPELINE_DB__PASSWORD=... \
 LLM_API_KEY=... \
 DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-realtime \
   python -m data_pipeline.run news-consumer --max-ticks 5
+# 상주 News Worker(1분 파이프라인, ALPHA-707) — BigKinds 를 매분 폴링해 관측 전량을
+# 원장 판정, 신규/정정만 job+outbox 로. 세션이 먼저 계획돼 있어야 한다
+# (plan-minute-session --dataset news_minute --source-group bigkinds — universe 없음).
+# 엔드포인트·카테고리 정본은 [bigkinds_news](배치와 공유), pacing 은 [minute_news_worker]
+# (기본: interval 1s·timeout 45s·max_pages 4 — ALPHA-645 실측 근거). --max-ticks 는
+# 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
 # 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 5종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
