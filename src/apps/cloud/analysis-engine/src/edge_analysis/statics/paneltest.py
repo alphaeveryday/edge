@@ -487,6 +487,51 @@ def _stratified_p(ar: np.ndarray, hi: np.ndarray, dates: np.ndarray,
     return float((null >= obs).mean())
 
 
+def _cate_interaction(ar: np.ndarray, d: np.ndarray, c: np.ndarray,
+                      dates: np.ndarray) -> tuple[float | None, float]:
+    """교호항 d 의 관측값과 사건일 층화 순열 양측 p. **표본을 쪼개지 않는다.**
+
+        ar = a + b·D + c·C + d·(D×C)      CATE(C) = b + d·C
+
+    조건별 층화(표본 분할)는 n 을 죽인다 - 실측에서 조건 조건화 후 n=4·5·6·23 이
+    반복됐고 판정불가가 전멸의 형태로 나왔다(§14). 매개변수화하면 전체 표본을 쓰면서
+    조건부 효과를 얻는다.
+
+    귀무는 **처치 D 를 사건일 안에서 순열**한다: 같은 날의 공통충격은 그대로 두고
+    '누가 처치를 받았나' 만 무작위화한다 - 날짜 층화가 요인 오염을 통제하는 것과
+    같은 규율. SEED 고정으로 재실행 결정론.
+    """
+    df, cf = d.astype(float), c.astype(float)
+
+    def fit(dv: np.ndarray) -> float | None:
+        X = np.column_stack([np.ones(len(ar)), dv, cf, dv * cf])
+        # 상호작용 열이 상수가 되면(한 클래스에 처치가 없음) 식별 불가.
+        if np.ptp(dv) == 0 or np.ptp(cf) == 0 or np.ptp(dv * cf) == 0:
+            return None
+        try:
+            beta, *_ = np.linalg.lstsq(X, ar, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        return float(beta[3])
+
+    obs = fit(df)
+    if obs is None:
+        return None, 1.0
+    rng = np.random.default_rng(SEED)
+    null = np.empty(PERMS)
+    for k in range(PERMS):
+        perm = df.copy()
+        for dd in np.unique(dates):
+            m = dates == dd
+            perm[m] = rng.permutation(perm[m])
+        v = fit(perm)
+        null[k] = 0.0 if v is None else v
+    p1 = float((null >= obs).mean())
+    return obs, _two_sided(p1)
+
+
+
+
 def _cols(t: HypothesisTuple) -> tuple[list[tuple[str, str]], str] | None:
     """튜플이 요구하는 피처 컬럼 목록 (노출 + 조건들). 노출을 못 재면 None."""
     need = [("__x__", FEATURES.get((t.exposure.ident, t.exposure.transform)))]
@@ -578,25 +623,29 @@ def edge_test(lake, t: HypothesisTuple, day: str,
         return EdgeReport("판정불가", len(ar), None, None, None, None,
                           reason="노출 분산 부족 - 상·하위가 갈리지 않는다")
 
-    sign = float(t.sign)
-    p = _two_sided(_stratified_p(ar, hi, dates, sign))
+    # **부호는 검정 대상이 아니다.** 목표는 "이 방향이 맞나" 가 아니라 "이 처치가
+    # 이 조건에서 유의한가" 다 - 부호는 의도(intent)로만 들고 방향은 **산출**이다.
+    #
+    # 왜 바꿨나 (실측 000660 07-29): 하루가 -9.61% 인 걸 보고 6개 가설의 부호를
+    # 전부 -1 로 썼다. 그 결과 "고β·고회전 종목이 **더 올랐다** p=0.000" 이라는
+    # 강한 신호가 '방향 반대 -> 불성립' 으로만 기록됐다. 발견이 실패로 위장된다.
+    # 부호를 게이트에서 빼면 그 신호가 '유의 + 방향 반대(의도와 불일치)' 로 남는다.
+    obs = eff_hi - eff_lo
+    p = _two_sided(_stratified_p(ar, hi, dates, 1.0))
     # 셀 안에서 m 개를 동시에 검정한다 - α 를 나눠야 FWER 이 0.05 에 묶인다.
     # 산문이 Bonferroni 를 주장하면 게이트가 실제로 나눠야 한다 (선언 = 배선).
     verdict = edge_gate(len(ar), p, alpha=ALPHA / max(m_tests, 1))
-    # 부호는 튜플의 **주장**이다. 양측 p 가 작아도 방향이 반대면 그 주장은 기각이다 -
-    # 양측 게이트만 세우면 "효과는 있다(반대쪽으로)" 가 성립으로 찍힌다.
-    # 실측(042700 07-31): 9간선 중 A2·A3·C3 셋이 부호 반대인데 p=0.000 으로 성립이었다.
-    # 방향 채굴 방지(17차)는 부호를 **사후에 고르는** 것을 막는 것이고, 여기 부호는
-    # 검정 전에 튜플에 박혀 있다 - 둘은 충돌하지 않는다.
-    wrong_way = (eff_hi - eff_lo) * sign <= 0
-    if verdict == "성립" and wrong_way:
-        verdict = "불성립"
-        dir_note = (f"방향 반대 - 가설 부호{t.sign:+d} 인데 상위−하위 "
-                    f"{(eff_hi - eff_lo) * 100:+.2f}%p (p={p:.3f} 은 반대쪽 유의)")
-    else:
-        dir_note = ""
+    agree = obs * float(t.sign) > 0
+    dir_note = ("" if agree else
+                f"방향이 의도와 불일치 - 의도 부호{t.sign:+d} 인데 상위−하위 "
+                f"{obs * 100:+.2f}%p (유의성 판정과 무관: 부호는 검정 대상이 아니다)")
 
-    # ── 조건 = 조절자. 표본을 쪼개지 않고 충족·미충족의 효과 차만 보고한다 ──
+    # ── 조건 = 조절자, 추정량은 **CATE 교호항**이다 ────────────────────────
+    # 목표가 "이 처치가 이 조건에서 유의한가" 이므로 처음부터 조건부 효과가
+    # 추정대상이어야 한다. 표본을 쪼개면 n 이 죽으므로(실측 C2 n=6) 쪼개지 않고
+    # 매개변수화한다:
+    #     ar = a + b·D + c·C + d·(D×C),   CATE(C) = b + d·C
+    # 유의성은 교호항 d 의 양측 순열 p (층화는 사건일 - 공통충격 통제).
     mask = np.ones(len(ar), dtype=bool)
     for v in t.conditions:
         if v.key in feats:
@@ -606,18 +655,25 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     moderation = counterfactual = ""
     if t.conditions:
-        s_hi, s_lo, _ = dose(mask)
-        u_hi, u_lo, _ = dose(~mask)
-        if s_hi is not None and u_hi is not None:
-            moderation = (f"조절 대비: 충족(n={int(mask.sum())}) {s_hi - s_lo:+.2%} vs "
-                          f"미충족(n={opposite}) {u_hi - u_lo:+.2%}")
-            counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 {u_hi * 100:+.2f}% "
-                              f"vs 하위 {u_lo * 100:+.2f}% - 충족 부류와 대조하라")
-        elif opposite < MIN_OPPOSITE:
+        d_obs, d_p = _cate_interaction(ar, hi, mask, dates)
+        if d_obs is None:
+            moderation = (f"CATE 교호항 추정 불가 (충족 n={int(mask.sum())} · "
+                          f"미충족 n={opposite}) - 클래스별 노출 분산 부족")
+        else:
+            base = eff_hi - eff_lo
+            moderation = (f"CATE: 미충족 {base * 100:+.2f}%p → 충족 "
+                          f"{(base + d_obs) * 100:+.2f}%p · 교호항 d={d_obs * 100:+.2f}%p "
+                          f"(양측 p={d_p:.3f}, 임계 {ALPHA / max(m_tests, 1):.4f}) — "
+                          + ("**조건이 효과를 바꾼다**" if d_p < ALPHA / max(m_tests, 1)
+                             else "조건 효과 미유의: 이 조건은 처치를 조절하지 않는다"))
+        if opposite < MIN_OPPOSITE:
             counterfactual = (f"반대(미충족) 사례 {opposite}건 < {MIN_OPPOSITE} - "
                               "반사실 침묵 (positivity)")
         else:
-            moderation = f"조절 대비 불가 (충족 n={int(mask.sum())}) - 클래스별 노출 분산 부족"
+            u_hi, u_lo, _ = dose(~mask)
+            if u_hi is not None:
+                counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 "
+                                  f"{u_hi * 100:+.2f}% vs 하위 {u_lo * 100:+.2f}%")
 
     # ── SEM 계수 (§10): 성립 엣지에만 크기를 붙인다. 게이트는 크기를 만들지
     # 않지만(§11), 게이트를 통과한 엣지의 크기는 사건 고정효과 기울기에서 온다.
@@ -682,9 +738,14 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             if t_hi.sum() < 2 or (~t_hi).sum() < 2:
                 reduction = f"표본부족 (오늘 노출 분산 없음, n={len(trows)})"
             else:
-                t_obs = (t_ar[t_hi].mean() - t_ar[~t_hi].mean()) * sign
-                reduction = "일치" if t_obs > 0 else "불일치"
-                reduction += f" (오늘 n={len(trows)}, 방향 {'+' if t_obs > 0 else '-'})"
+                # §8 은 "오늘 횡단면이 **패널과** 같은 방향인가" 다. 이전엔 의도
+                # 부호와 비교했는데 그건 환원이 아니라 의도 확인이다 - 패널이
+                # 추정한 방향(obs)과 맞춰야 토큰→타입 환원이 반증 가능해진다.
+                t_raw = float(t_ar[t_hi].mean() - t_ar[~t_hi].mean())
+                same = t_raw * obs > 0
+                reduction = ("일치" if same else "불일치") + (
+                    f" (오늘 n={len(trows)}, 오늘 {t_raw * 100:+.2f}%p vs "
+                    f"패널 {obs * 100:+.2f}%p)")
 
     if unmeasured_conds:
         cond_bits.append("패널 미조건화: " + "·".join(unmeasured_conds))

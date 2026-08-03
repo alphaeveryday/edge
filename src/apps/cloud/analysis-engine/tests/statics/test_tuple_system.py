@@ -797,3 +797,51 @@ def test_panel_rows_are_order_deterministic():
         return _stratified_p(ar, hi, dates, 1.0)
 
     assert p_of(a) == p_of(b)
+
+
+def test_sign_is_intent_not_a_gate():
+    """부호는 의도다 - 유의성 판정에 들어가면 발견이 실패로 위장된다.
+
+    실측(000660 07-29): 하루가 -9.61% 인 걸 보고 6개 가설 부호를 전부 -1 로 썼다.
+    '고β·고회전 종목이 더 올랐다 p=0.000' 이라는 강한 신호가 '방향 반대 -> 불성립'
+    으로만 기록됐다. 부호를 빼면 '유의 + 방향 의도와 불일치' 로 남는다.
+    """
+    from edge_analysis.statics.gates import edge_gate
+    from edge_analysis.statics.vocab import ALPHA
+    # 게이트는 n 과 p 만 본다 - 부호 인자가 아예 없다
+    assert edge_gate(400, 0.001, alpha=ALPHA / 6) == "성립"
+    assert edge_gate(400, 0.30, alpha=ALPHA / 6) == "불성립"
+    import inspect
+    sig = inspect.signature(edge_gate)
+    assert "sign" not in sig.parameters, "게이트가 부호를 받으면 안 된다"
+    src = inspect.getsource(__import__(
+        "edge_analysis.statics.paneltest", fromlist=["edge_test"]).edge_test)
+    assert "부호는 검정 대상이 아니다" in src
+    assert "wrong_way" not in src, "방향 가드가 남아 있다"
+
+
+def test_cate_interaction_does_not_split_the_sample():
+    """조건부 효과는 교호항으로 얻는다 - 표본을 쪼개면 n 이 죽는다 (실측 C2 n=6).
+
+        ar = a + b·D + c·C + d·(D×C),  CATE(C) = b + d·C
+    """
+    import numpy as np
+
+    from edge_analysis.statics.paneltest import _cate_interaction
+
+    rng = np.random.default_rng(0)
+    n = 600
+    d = rng.random(n) < 0.4
+    c = rng.random(n) < 0.5
+    dates = np.array([f"2026-0{1 + i % 9}-01" for i in range(n)])
+    # 진짜 교호: 조건 충족에서만 처치 효과가 2배
+    ar = 0.01 * d + 0.02 * (d & c) + rng.normal(scale=0.004, size=n)
+    obs, p = _cate_interaction(ar, d, c, dates)
+    assert obs is not None and obs > 0.01, obs      # 교호항을 잡는다
+    assert p < 0.05, p
+    # 교호 없는 자료에서는 유의하지 않아야 한다
+    ar0 = 0.01 * d + rng.normal(scale=0.004, size=n)
+    o0, p0 = _cate_interaction(ar0, d, c, dates)
+    assert p0 > 0.05, (o0, p0)
+    # 전체 표본을 쓴다 - 분할하지 않는다
+    assert len(ar) == n
