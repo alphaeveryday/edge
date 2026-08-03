@@ -112,15 +112,20 @@ public class JdbcAnalysisWriteRepository implements AnalysisWriteRepository {
 				UPDATE explanation_result SET publication_status = 'WITHDRAWN'
 				 WHERE explanation_result_id = ? AND publication_status = 'PUBLISHED'
 				""", resultId);
-		// 전 테넌트 INVALIDATION 발번 — CHECK(ck_tenant_delivery_payload): 본체 참조 NULL,
-		// target·reason 필수. cursor 는 테넌트별 단조증가(_fanout_new 와 같은 형상).
+		// INVALIDATION 발번 — CHECK(ck_tenant_delivery_payload): 본체 참조 NULL, target·reason
+		// 필수. cursor 는 테넌트별 단조증가(_fanout_new 와 같은 형상). 대상은 전 테넌트가
+		// 아니라 **그 결과의 NEW 를 받은 테넌트**다 — 게시 후 생성된 테넌트에 원본 없는
+		// 무효화를 발번하면 "원본 미수신 무효화 = gap 에서만 발생"(sync-protocol.md) 계약이
+		// 깨진다. EXISTS 제한이 테넌트별 NEW cursor < INVALIDATION cursor 를 구조적으로 보장.
 		jdbc.update("""
 				INSERT INTO tenant_delivery
 				       (tenant_id, cursor, delivery_type, target_explanation_result_id, reason)
 				SELECT t.tenant_id, COALESCE(MAX(d.cursor), 0) + 1, 'INVALIDATION', ?, ?
 				  FROM tenant t LEFT JOIN tenant_delivery d ON d.tenant_id = t.tenant_id
+				 WHERE EXISTS (SELECT 1 FROM tenant_delivery n
+				                WHERE n.tenant_id = t.tenant_id AND n.explanation_result_id = ?)
 				 GROUP BY t.tenant_id
-				""", resultId, reason);
+				""", resultId, reason, resultId);
 		record("ANALYSIS_INVALIDATED", runId, reason, null, actor);
 		return InvalidateOutcome.INVALIDATED;
 	}

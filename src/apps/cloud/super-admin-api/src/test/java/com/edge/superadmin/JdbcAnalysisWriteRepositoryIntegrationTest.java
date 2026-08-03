@@ -78,9 +78,12 @@ class JdbcAnalysisWriteRepositoryIntegrationTest extends CloudPostgresIntegratio
 				        '2026-07-29T15:40:00+09:00'::timestamptz, 'EVENT_SUPPORTED', '게시된 설명.',
 				        'PUBLISHED')
 				""");
+		// 증권사C 는 게시 후 온보딩된 테넌트 — res-w3 의 NEW 를 받은 적이 없어 무효화
+		// 발번 대상에서 제외돼야 한다(원본 없는 INVALIDATION = 가짜 gap 신호 방지).
 		jdbc.update("""
 				INSERT INTO tenant (tenant_name, environment, status)
-				VALUES ('증권사A', 'DEV', 'ACTIVE'), ('증권사B', 'DEV', 'ACTIVE')
+				VALUES ('증권사A', 'DEV', 'ACTIVE'), ('증권사B', 'DEV', 'ACTIVE'),
+				       ('증권사C', 'DEV', 'ONBOARDING')
 				""");
 		// 테넌트별 cursor 대열이 서로 다르게 시작하도록 기존 NEW 를 비대칭으로 시드
 		jdbc.update("""
@@ -228,7 +231,9 @@ class JdbcAnalysisWriteRepositoryIntegrationTest extends CloudPostgresIntegratio
 				"SELECT publication_status FROM explanation_result WHERE explanation_result_id = 'res-w3'",
 				String.class)).isEqualTo("WITHDRAWN");
 
-		// 테넌트당 INVALIDATION 1행, cursor = 각자의 기존 MAX+1 (A: 1→2, B: 2→3)
+		// NEW 수신 테넌트에만 INVALIDATION 1행, cursor = 각자의 기존 MAX+1 (A: 1→2, B: 2→3).
+		// NEW 를 받은 적 없는 증권사C 에는 발번되지 않는다 — 원본 없는 무효화는 소비측에서
+		// 가짜 gap 신호가 된다(sync-protocol.md "원본 미수신 무효화 = gap 에서만").
 		List<Map<String, Object>> rows = jdbc.queryForList("""
 				SELECT t.tenant_name, d.cursor, d.explanation_result_id,
 				       d.target_explanation_result_id, d.reason
@@ -236,8 +241,9 @@ class JdbcAnalysisWriteRepositoryIntegrationTest extends CloudPostgresIntegratio
 				 WHERE d.delivery_type = 'INVALIDATION' ORDER BY t.tenant_name
 				""");
 		assertThat(rows).hasSize(2);
-		assertThat(rows.get(0)).containsEntry("tenant_name", "증권사A").containsEntry("cursor", 2L);
-		assertThat(rows.get(1)).containsEntry("tenant_name", "증권사B").containsEntry("cursor", 3L);
+		assertThat(rows).extracting(r -> r.get("tenant_name")).containsExactly("증권사A", "증권사B");
+		assertThat(rows.get(0)).containsEntry("cursor", 2L);
+		assertThat(rows.get(1)).containsEntry("cursor", 3L);
 		for (Map<String, Object> row : rows) {
 			// CHECK(ck_tenant_delivery_payload): 무효화 행은 본체 참조 없이 target·reason 만 싣는다
 			assertThat(row.get("explanation_result_id")).isNull();
