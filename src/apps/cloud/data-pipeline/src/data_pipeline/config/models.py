@@ -278,7 +278,10 @@ class DartDisclosureSource(BaseModel):
     (list.json)과 공시서류 원본(document.xml)을 다룬다. api_key 는 커밋되는 파일이 아니라
     환경변수로 주입한다:
         DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
-    corp_code 는 OpenDART corpCode.xml 로 런타임 매핑한다(재무 소스와 동형).
+
+    ⚠️ 재무 소스와 달리 **corp_code 매핑을 쓰지 않는다** — 날짜창의 시장 전체 목록을 받아
+    stock_code 로 거른다(`sources/dart_disclosure.py`). corpCode.xml 은 enrich-corp-code
+    스텝만 쓴다.
     """
 
     model_config = ConfigDict(extra="forbid")

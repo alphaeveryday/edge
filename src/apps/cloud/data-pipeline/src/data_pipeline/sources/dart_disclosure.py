@@ -197,6 +197,12 @@ class DartDisclosureSource:
         # 목록이 자라는 동안 페이지 경계가 밀려 같은 행이 두 페이지에 걸쳐 나올 수 있다 —
         # 창 안에서 rcept_no 로 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고
         # raw 에도 중복 행이 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
+        # ⚠️ 창 하나가 실패 단위다 — 종목별 질의 시절의 corp 단위 예외 격리는 **의도적으로**
+        # 재현하지 않는다. 격리 축이던 corp 루프가 사라졌고, 중간 페이지의 의미 오류(비-list
+        # `list`·status 이상)는 그 창을 못 믿는다는 뜻이지 한 대상의 문제가 아니다. 예외는
+        # 그대로 스텝까지 올라가 status=error·exit 1 로 드러나고, 그 전에 yield 된 행은 raw 에
+        # 남는다(부분 수집분 보존 + 실패 명시 = Rule 12). 여기서 삼키고 계속하면 "몇 페이지가
+        # 통째로 빠진 성공 런"이 된다.
         seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
             payload = self._list(bgn_de, end_de, page)
@@ -214,6 +220,17 @@ class DartDisclosureSource:
                 raise ValueError(
                     f"DART status={status} ({STATUS_MESSAGES.get(status, '?')}) msg={msg}"
                 )
+            # 응답이 정말 **요청한 페이지**인지 확인한다. 캐시·벤더 이상으로 page 2~N 요청에
+            # 계속 1페이지가 돌아오면, 아래 `seen` dedup 이 반복 행을 조용히 걷어내고 루프는
+            # total_page 까지 정상 완주해 **뒷페이지 전량이 빠진 success 런**이 된다 — dedup 이
+            # 그 증상을 지우기 때문에 이 확인이 없으면 사후에도 복원되지 않는다.
+            echoed = payload.get("page_no")
+            if isinstance(echoed, int) and not isinstance(echoed, bool) and echoed != page:
+                self._note_failure(
+                    None, None,
+                    f"응답 page_no={echoed} 인데 요청은 page={page} — 목록 절단 가능", page=page,
+                )
+                return
             rows = payload.get("list")
             if not isinstance(rows, list):
                 raise ValueError(f"DART status=000 인데 list 이상: {type(rows).__name__}")
@@ -233,8 +250,19 @@ class DartDisclosureSource:
                 # 유니버스 필터가 먼저다 — 시장 전체 목록에는 우리가 수집하지 않는 회사 행이
                 # 하루 수백 건 섞여 있다. 필드 게이트를 앞에 두면 **남의 회사 행의 결함**이
                 # 우리 런의 failed_records 로 올라가 원장이 없는 결측을 세게 된다.
-                stock_code = row.get("stock_code")
-                stock_code = stock_code.strip() if isinstance(stock_code, str) else ""
+                raw_stock_code = row.get("stock_code")
+                if raw_stock_code is not None and not isinstance(raw_stock_code, str):
+                    # 필드가 있는데 문자열이 아니면 **누구 것인지 판정할 수 없다** — 우리
+                    # 종목일 수도 있다. 유니버스 밖으로 접어 버리면 그 유실이 영영 안 보인다
+                    # (Rule 12). 판정 불가는 유니버스 밖과 다르므로 따로 드러낸다.
+                    self._note_failure(
+                        None, None,
+                        f"stock_code 비문자열: {type(raw_stock_code).__name__} — 유니버스 판정 불가",
+                        page=page,
+                    )
+                    continue
+                # 빈 문자열은 정상이다 — 비상장·펀드 신고자는 단축코드가 없다(하루 수백 건).
+                stock_code = (raw_stock_code or "").strip()
                 our_ticker = allowed.get(stock_code)
                 if our_ticker is None:
                     continue
@@ -264,29 +292,46 @@ class DartDisclosureSource:
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
-                record["stock_code"] = stock_code
+                # ⚠️ `stock_code` 는 **벤더 원본 그대로** 둔다(bronze 무변형). 매칭용으로 strip
+                # 한 값을 되쓰면 raw 에서 벤더 이상(패딩 등)을 재현할 수 없고, 우리 축은
+                # our_ticker 가 이미 담고 있다. 정규화 형태의 소비자는 현재 0건이다.
+                record.setdefault("stock_code", stock_code)
                 record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no)
                 record["fetched_at"] = fetched_at
                 yield record
-            # total_page 순회 — 마지막 페이지면 종료. total_page 가 present 인데 파싱 불가면
+            # total_page 순회 — 마지막 페이지면 종료. total_page 가 present 인데 온전치 않으면
             # 몇 페이지인지 몰라 조용히 1페이지에서 멈추면 목록 절단이 은폐된다(Rule 12) —
             # 감사 기록 후 종료한다. 아예 없으면(None) 단일 페이지로 본다.
+            #
+            # ⚠️ `int(raw)` + `max(1, …)` 로 강제하지 않는다. 그 조합은 `False`·`0`·`-3`·`1.9`
+            # 같은 malformed 값을 전부 **1페이지**라는 통과값으로 바꿔, 뒷페이지가 실재해도
+            # 실패 기록 없이 종료한다(각도 H — coerce-to-passing). 창 전체가 한 순회라
+            # 1페이지 오판은 100행만 남기고 나머지를 통째로 버린다. 실측상 OpenDART 는 int 를
+            # 주므로(2026-08-03) 양의 정수만 받고 나머지는 드러낸다 — bool 은 int 의 하위형이라
+            # 명시적으로 뺀다.
             raw_total = payload.get("total_page")
-            try:
-                total_page = max(1, int(raw_total)) if raw_total is not None else 1
-            except (TypeError, ValueError):
+            if raw_total is None:
+                total_page = 1
+            elif isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total >= 1:
+                total_page = raw_total
+            else:
                 self._note_failure(
                     None, None,
-                    f"total_page 파싱 불가: {raw_total!r} — 목록 절단 가능", page=page,
+                    f"total_page 가 양의 정수가 아님: {raw_total!r} — 목록 절단 가능", page=page,
                 )
                 return
             if page >= total_page:
                 return
+        # ⚠️ 관용 kind 를 붙이지 않는다 — 진짜 실패로 드러낸다(status=partial·exit 1).
+        # ALPHA-351 이 절단을 관용한 근거는 "다음 증분 창이 이어받는다" 였고, 그건 상한이 corp
+        # 당 10 페이지이던 시절 이야기다. 축이 창 전체로 바뀐 지금 500 페이지 도달은 ~5만 행이
+        # 안 읽혔다는 뜻이고, 운영자가 지정한 백필 창(`--from/--to`)은 **이어받을 다음 창이
+        # 없다**. 평상시 증분 창은 ~18 페이지라 이 경로를 밟지 않는다 — 밟았다면 창을 좁히라는
+        # 실행 가능한 실패다.
         self._note_failure(
             None,
             None,
-            f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단 가능(창 좁혀 재실행)",
-            kind="truncation",
+            f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단(창을 좁혀 재실행)",
         )
 
     def _list(self, bgn_de: str | None, end_de: str | None, page: int) -> dict:

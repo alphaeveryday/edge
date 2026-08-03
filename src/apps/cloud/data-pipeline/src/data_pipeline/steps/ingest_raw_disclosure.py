@@ -164,13 +164,17 @@ def run(
     # list 실패(source.fetch_failures)와 본문 실패(doc_failures)를 합쳐 판정한다.
     #  - 저장분 있고 일부 실패 → partial(메타는 있으나 온전치 않음: 본문 결측 등)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
-    #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
-    #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
     #
-    # kind=unmapped 는 어휘에서 빠졌다 — 소스가 corp_code 를 해소하지 않게 되면서(시장 전체
-    # 목록 질의, `sources/dart_disclosure.py`) 발생 지점 자체가 없어졌다. 매 런 상수로 걸리며
-    # data_status 를 INCOMPLETE 에 묶어 두던 실패다.
-    _TOLERATED = {"truncation"}
+    # ⚠️ **관용 어휘는 이제 비어 있다** — 목록 질의가 종목별에서 창 전체로 바뀌면서 두 관용의
+    # 근거가 함께 사라졌다(Rule 7 — 충돌은 평균 내지 말고 하나를 고르고 이유를 남긴다):
+    #  - `unmapped`: 소스가 corp_code 를 해소하지 않게 돼 **발생 지점이 없다**. 매 런 상수로
+    #    걸리며 data_status 를 INCOMPLETE 에 묶던 실패다.
+    #  - `truncation`: ALPHA-351 의 근거는 "데이터 유효 + 다음 증분 창이 이어받음"이었고, 그건
+    #    상한이 corp 당 10 페이지이던 시절 이야기다. 창 전체가 한 순회인 지금 상한 도달은 ~5만
+    #    행 미수집이고, 운영자가 지정한 백필 창은 이어받을 다음 창이 없다.
+    # 죽은 어휘를 관용 목록에 남기면 그 이름을 쓰는 새 실패가 조용히 통과한다. 빈 집합이라
+    # 판정은 "failed_targets 가 있으면 partial(저장분 0이면 error)"로 단순해진다.
+    _TOLERATED: set[str] = set()
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
     real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]
     if status == "success" and real_failures:

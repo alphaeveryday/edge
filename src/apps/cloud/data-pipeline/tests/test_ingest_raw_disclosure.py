@@ -41,11 +41,15 @@ class FakeSource:
     source_name = "dart"
 
     def __init__(self, records=(), *, enabled=True, planned=1,
-                 doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False):
+                 doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
+                 list_total_count=None, list_rows_seen=0):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
         self.fetch_failures: list[dict] = []
+        # 창 규모 관측 — 실 소스가 fetch 중에 채운다. 스텝은 이걸 로그로 옮기기만 한다.
+        self.list_total_count = list_total_count
+        self.list_rows_seen = list_rows_seen
         self._doc_fail = doc_fail
         self._doc_bytes = doc_bytes
         self._stop = stop
@@ -157,37 +161,6 @@ def test_document_fetch_failure_marks_partial_meta_preserved(tmp_path):
     assert log["status"] == "partial"
     assert log["records_saved"] == 2 and log["documents_saved"] == 1
     assert log["records_failed_targets"] == 1
-
-
-def test_list_truncation_stays_success_but_logged(tmp_path):
-    # WHY(ALPHA-351): MAX_PAGES 목록 절단은 데이터 유효 + 다음 창에서 이어받으므로 SFN 을
-    #      죽이면 안 된다 — kind=truncation 은 성공(exit 0)으로 남기되, 절단 자체는 로그에
-    #      남겨 fail-loud 를 유지한다. 오케스트레이션이 흔한 절단마다 빨간불이 되던 원인.
-    source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures.append(
-        {"symbol": "005930", "our_ticker": "005930",
-         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
-    )
-    code, storage = _run(tmp_path, source)
-
-    assert code == 0
-    log = _log(storage, "r1")
-    assert log["status"] == "success"
-    assert log["records_failed_targets"] == 1  # 절단도 로그엔 남는다(fail-loud)
-
-
-def test_truncation_plus_real_failure_still_partial(tmp_path):
-    # WHY(ALPHA-351): 절단을 성공 처리해도 같은 런의 진짜 실패(본문 결측)까지 삼키면 안 된다 —
-    #      절단은 제외하되 real failure 가 하나라도 있으면 partial/exit 1 을 유지한다.
-    source = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
-    source.fetch_failures.append(
-        {"symbol": "005930", "our_ticker": "005930",
-         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
-    )
-    code, storage = _run(tmp_path, source)
-
-    assert code == 1
-    assert _log(storage, "r1")["status"] == "partial"
 
 
 def test_stopfetch_marks_stopped(tmp_path):
@@ -307,38 +280,39 @@ def test_universe_derived_from_holdings_excludes_etf_itself(tmp_path):
     assert log["symbols_excluded_etf"] == 1  # 091160 — 뺀 사실이 로그로 드러난다
 
 
-def test_truncation_stays_success_but_counted(tmp_path):
-    # WHY: 목록 절단(kind=truncation)은 데이터가 유효하고 다음 창이 이어받으므로 런을 죽일
-    #      근거가 없다(ALPHA-351) — 진짜 실패와 같이 세면 raw 페이즈가 partial·exit 1 이 되어
-    #      SFN 게이트가 깨진다(ADR-0030). 그렇다고 지우면 조용한 결측이므로, 원장이 보는
-    #      계측에는 그대로 남아야 한다.
-    #
-    # ⚠️ 관용 어휘는 이것 **하나뿐**이다. 종전엔 corpCode 미매핑(kind=unmapped)도 관용됐지만,
-    # 소스가 시장 전체 목록을 질의하게 되면서 발생 지점 자체가 사라졌다 — 관용 목록에 죽은
-    # 어휘를 남겨두면 그 이름을 쓰는 새 실패가 조용히 통과한다.
-    source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures = [{"symbol": None, "our_ticker": None, "page": 500,
-                              "error": "MAX_PAGES(500) 도달 — 목록 절단 가능", "kind": "truncation"}]
+def test_no_failure_kind_is_tolerated_anymore(tmp_path):
+    # WHY(Rule 12): 관용 어휘가 비었다. 종전 두 관용(`unmapped`·`truncation`)은 목록 질의가
+    #      종목별이던 시절의 판단이었다 — `unmapped` 는 발생 지점이 사라졌고, `truncation` 의
+    #      근거("다음 증분 창이 이어받는다")는 축이 창 전체로 바뀌며 무너졌다(상한 도달 = ~5만
+    #      행 미수집, 운영자 지정 백필 창은 이어받을 창이 없다).
+    #      죽은 어휘를 관용 목록에 남기면 **그 이름을 쓰는 새 실패가 조용히 성공으로 통과한다** —
+    #      관용은 "이 실패는 런을 죽일 근거가 없다"는 판단이지 이름에 대한 영구 면제가 아니다.
+    for kind in ("truncation", "unmapped"):
+        source = FakeSource(records=[_rec("A1")])
+        source.fetch_failures = [{"symbol": None, "our_ticker": None, "page": 500,
+                                  "error": f"{kind} 을 자칭하는 실패", "kind": kind}]
+
+        case_dir = tmp_path / kind
+        case_dir.mkdir()
+        code, storage = _run(case_dir, source)
+
+        assert code == 1, kind
+        log = _log(storage, "r1")
+        assert log["status"] == "partial", kind  # 저장분이 있으니 error 가 아니라 partial
+        assert log["records_failed_targets"] == 1
+        assert log["ops"]["failed_records"] == 1
+
+
+def test_window_scale_observed_in_collection_log(tmp_path):
+    # WHY: 창 규모(소스가 신고한 total_count vs 실제로 훑은 행 수)는 페이지 완전성을 사후에
+    #      들여다볼 **유일한 관측값**이다. 판정에 쓰지 않기로 했으므로(목록이 자라는 중엔 절단과
+    #      유입이 구분되지 않는다) 아무 게이트도 이 값을 지켜주지 않는다 — 기록이 끊기거나
+    #      None/0 으로 회귀해도 다른 테스트는 전부 통과한다. 그래서 여기서 계약을 고정한다.
+    source = FakeSource(records=[_rec("A1")], list_total_count=1069, list_rows_seen=1069)
 
     code, storage = _run(tmp_path, source)
 
     assert code == 0
     log = _log(storage, "r1")
-    assert log["status"] == "success"  # 런은 죽지 않는다
-    assert log["records_failed_targets"] == 1  # 그러나 유실은 계속 센다
-    assert log["ops"]["failed_records"] == 1
-    assert log["failed_targets"][0]["kind"] == "truncation"
-
-
-def test_unmapped_kind_is_no_longer_tolerated(tmp_path):
-    # WHY(Rule 12): `unmapped` 는 이제 소스가 만들 수 없는 어휘다. 관용 목록에 남겨두면,
-    #      누군가 그 이름으로 새 실패를 붙였을 때 런이 조용히 성공으로 통과한다 — 관용은
-    #      "이 실패는 죽일 근거가 없다"는 판단이지 이름에 대한 영구 면제가 아니다.
-    source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures = [{"symbol": "999999", "our_ticker": "999999",
-                              "error": "왜인지 unmapped 를 자칭하는 새 실패", "kind": "unmapped"}]
-
-    code, storage = _run(tmp_path, source)
-
-    assert code == 1
-    assert _log(storage, "r1")["status"] == "partial"
+    assert log["list_total_count"] == 1069
+    assert log["list_rows_seen"] == 1069

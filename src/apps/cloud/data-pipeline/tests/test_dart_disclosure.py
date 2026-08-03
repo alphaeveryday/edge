@@ -87,8 +87,11 @@ class FakeClient:
         raise AssertionError(f"unexpected url: {url}")
 
 
-def _page(rows, *, status="000", total_page=1) -> dict:
-    return {"status": status, "message": "정상", "page_no": 1, "page_count": 100,
+def _page(rows, *, status="000", total_page=1, page_no=1) -> dict:
+    # ⚠️ page_no 는 **요청한 페이지를 그대로 에코**한다(실 API 실측 2026-08-03). 픽스처가 모든
+    # 페이지에 1 을 박아두면 어댑터의 에코 검증이 픽스처에서만 오작동해, 그 가드를 지우는
+    # 회귀가 초록으로 통과한다(test-fixture-must-mirror-prod-config).
+    return {"status": status, "message": "정상", "page_no": page_no, "page_count": 100,
             "total_count": len(rows), "total_page": total_page, "list": rows}
 
 
@@ -174,7 +177,7 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
     dup = _row("단일판매ㆍ공급계약체결", rcept_no="DUP")
     client = FakeClient(list_pages={
         1: _page([dup], total_page=2),
-        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2),
+        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2, page_no=2),
     })
     source = _source(tmp_path, client, api_key="k")
 
@@ -294,14 +297,15 @@ def test_unparseable_total_page_noted_not_silent_truncation(tmp_path):
     # WHY(각도 H/Rule 12): total_page 가 present 인데 파싱 불가면 몇 페이지인지 몰라 조용히
     #      1페이지에서 멈추면 목록 절단이 은폐된다 — 감사(fetch_failure)로 드러내야 한다.
     client = FakeClient(list_pages={1: {
-        "status": "000", "message": "정상", "list": [_row("공급계약", rcept_no="P1")],
+        "status": "000", "message": "정상", "page_no": 1,
+        "list": [_row("공급계약", rcept_no="P1")],
         "total_page": "??",  # 이상값
     }})
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
     assert [r["rcept_no"] for r in records] == ["P1"]  # 1페이지분은 보존
-    assert any("total_page 파싱 불가" in f["error"] for f in source.fetch_failures)
+    assert any("total_page" in f["error"] for f in source.fetch_failures)
 
 
 def test_target_with_missing_rcept_no_noted_not_yielded(tmp_path):
@@ -321,12 +325,92 @@ def test_pagination_follows_total_page(tmp_path):
     # WHY: 한 corp·창의 공시가 여러 페이지면 total_page 까지 순회해 누락이 없어야 한다.
     client = FakeClient(list_pages={
         1: _page([_row("공급계약체결", rcept_no="P1")], total_page=2),
-        2: _page([_row("사업보고서", rcept_no="P2")], total_page=2),
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=2, page_no=2),
     })
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
     assert {r["rcept_no"] for r in records} == {"P1", "P2"}
+
+
+def test_repeated_page_echo_noted_not_silent_loss(tmp_path):
+    # WHY(각도 H): 캐시·벤더 이상으로 page 2 요청에 1페이지가 그대로 돌아오면, rcept_no dedup
+    #      이 반복 행을 걷어내고 루프는 total_page 까지 정상 완주해 **뒷페이지 전량이 빠진
+    #      success 런**이 된다. dedup 이 증상을 지우므로 이 확인이 없으면 사후에도 복원되지
+    #      않는다 — 실 API 는 요청 page_no 를 그대로 에코한다(실측 2026-08-03).
+    page1 = _page([_row("공급계약", rcept_no="P1")], total_page=3)
+    client = FakeClient(list_pages={1: page1, 2: page1, 3: page1})  # 2·3 도 page_no=1
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]  # 1페이지분은 보존
+    assert any("page_no" in f["error"] for f in source.fetch_failures)
+
+
+@pytest.mark.parametrize("bad_total_page", [False, 0, -3, 1.9, "2"])
+def test_malformed_total_page_noted_not_coerced_to_one(tmp_path, bad_total_page):
+    # WHY(각도 H — coerce-to-passing): `max(1, int(raw))` 는 False·0·-3·1.9 를 전부 "1페이지"
+    #      라는 통과값으로 바꾼다. 창 전체가 한 순회인 지금 1페이지 오판은 100행만 남기고
+    #      나머지를 통째로 버리면서 실패 기록조차 남기지 않는다. 문자열 "2" 도 받지 않는다 —
+    #      실측상 OpenDART 는 int 를 주므로, 타입이 흔들렸다는 건 응답을 못 믿는다는 뜻이다.
+    client = FakeClient(list_pages={1: {
+        "status": "000", "message": "정상", "page_no": 1,
+        "list": [_row("공급계약", rcept_no="P1")], "total_page": bad_total_page,
+    }})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]  # 받은 1페이지분은 보존
+    assert any("total_page" in f["error"] for f in source.fetch_failures)
+
+
+def test_non_string_stock_code_noted_not_folded_into_foreign(tmp_path):
+    # WHY(각도 H — unchecked-field): stock_code 가 비문자열로 오면 **누구 것인지 판정할 수
+    #      없다** — 우리 종목일 수도 있다. 유니버스 밖(정상 스킵)으로 접어 버리면 그 유실이
+    #      영영 안 보인다. 판정 불가와 유니버스 밖은 다른 사건이다(Rule 12).
+    client = FakeClient(list_pages={1: _page([
+        {"stock_code": 5930, "report_nm": "단일판매ㆍ공급계약체결", "rcept_no": "Z1"},
+        _row("사업보고서", rcept_no="OK"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["OK"]
+    assert any("stock_code 비문자열" in f["error"] for f in source.fetch_failures)
+
+
+def test_blank_stock_code_is_normal_not_a_failure(tmp_path):
+    # WHY: 비상장·펀드 신고자는 단축코드가 없다 — 하루 수백 건이다. 이걸 실패로 세면 원장이
+    #      매 런 없는 결측을 수백 건 보고, INCOMPLETE 가 상시가 되어 신호가 죽는다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="FUND", stock_code=" "),
+        _row("사업보고서", rcept_no="OK"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["OK"]
+    assert source.fetch_failures == []
+
+
+def test_vendor_stock_code_preserved_verbatim_in_raw(tmp_path):
+    # WHY(레이크 규약): raw 는 벤더 원본을 무변형 보존한다(bronze). 매칭용으로 strip 한 값을
+    #      되쓰면 벤더 이상(패딩 등)을 raw 에서 재현·감사할 수 없다. 우리 축은 our_ticker 가
+    #      이미 담고 있고, 정규화된 stock_code 의 소비자는 현재 0건이다.
+    client = FakeClient(list_pages={1: _page([
+        _row("공급계약", rcept_no="PAD", stock_code=" 005930 "),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert len(records) == 1  # 패딩돼도 매칭은 된다
+    assert records[0]["stock_code"] == " 005930 "  # 그러나 원본은 그대로다
+    assert records[0]["our_ticker"] == "005930"
 
 
 def test_fetch_document_returns_zip_bytes(tmp_path):
