@@ -390,6 +390,10 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # FK RESTRICT 회피 위해 skip+계측(커버리지 9→309 는 ALPHA-491). DB CHECK 는 파이썬 선검증해
 # 위반 fact 만 뺀다(한 건이 배치 롤백 안 되게). 멱등: document 자연키·fact_id=결정적 파생
 # ON CONFLICT. --from/--to 는 report_date 창(미지정=전체 스캔).
+# 창 인자가 하나 더 있다(ALPHA-721): --window-days N 은 오늘−N일 창을 앱이 계산해 넘긴다.
+# ASL 이 날짜 산술을 못 해 --from/--to 를 만들 수 없어서다 — 장중 공시 레인처럼 하루 여러 번
+# 도는 호출부가 쓴다(풀스캔이 슬롯마다 곱해지는 걸 막는다). 명시 --from/--to 가 우선하고,
+# 둘 다 없으면 종전대로 풀스캔이다(백로그 회수 경로 보존).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-disclosure
 
@@ -576,7 +580,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   document. 자연키 멱등, LoadAssertions 의 FK 선행
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
-  dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE
+  dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
+  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루 1회만
+  돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   엔티티 해소·해소율은 quality log 로 남는다

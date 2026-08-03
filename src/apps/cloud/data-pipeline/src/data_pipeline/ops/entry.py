@@ -39,18 +39,21 @@ def _sched_hhmm() -> tuple[int, int]:
         return 15, 40
 
 
-def _news_sched_hhmms() -> list[tuple[int, int]]:
-    """뉴스 레인 스케줄 시각(KST) 목록. env(OPS_NEWS_SCHED_HHMM, 쉼표 구분 "15:00,15:30,23:50")
-    — ops_ledger.tf 가 news_schedule_expressions cron 에서 뽑아 주입한다(드리프트 불가 패턴,
-    ALPHA-564 와 같은 이유). **미주입이면 빈 목록** = 뉴스 레인 결측 판정 없음 — 뉴스 스케줄이
+def _lane_sched_hhmms(env_name: str) -> list[tuple[int, int]]:
+    """하루 여러 슬롯을 도는 레인의 스케줄 시각(KST) 목록. env(쉼표 구분 "15:00,15:30,23:50")
+    — ops_ledger.tf 가 그 레인의 schedule cron 에서 뽑아 주입한다(드리프트 불가 패턴,
+    ALPHA-564 와 같은 이유). **미주입이면 빈 목록** = 그 레인 결측 판정 없음 — 스케줄이
     아직 Planner 를 안 타는 배포에서 거짓 PLANNER_MISSING 을 열지 않기 위한 안전 기본값이다.
 
     불량 항목은 제외가 아니라 **fail-loud** 다(edge-review, Rule 12). 한 항목만 조용히 버리면
     그 슬롯의 run_key 가 영영 안 만들어져 PLANNER_MISSING 감시가 **관대한 방향으로** 축소된다
     — Planner 가 안 떠도 아무 이슈가 안 열린다. daily 의 기본값 폴백(_sched_hhmm)과 다른
     선택인 이유: 폴백할 정답값이 없고(슬롯 집합 자체가 값), 정상 경로에선 terraform 이 cron
-    에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다."""
-    raw = os.environ.get("OPS_NEWS_SCHED_HHMM", "")
+    에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다.
+
+    레인마다 복사하지 않고 env 이름만 받는다(ALPHA-721) — 이 함수가 하는 판단은 "조용히
+    빠지는 슬롯을 만들지 않는다" 하나이고, 레인이 늘 때마다 복제하면 그 판단이 갈린다."""
+    raw = os.environ.get(env_name, "")
     if not raw.strip():
         return []
     slots: list[tuple[int, int]] = []
@@ -62,7 +65,7 @@ def _news_sched_hhmms() -> list[tuple[int, int]]:
             slots.append((int(h), int(m)))
         except ValueError:
             raise SystemExit(
-                f"OPS_NEWS_SCHED_HHMM 항목 파싱 실패({part!r}) — 슬롯을 조용히 제외하면 "
+                f"{env_name} 항목 파싱 실패({part!r}) — 슬롯을 조용히 제외하면 "
                 "그 슬롯의 PLANNER_MISSING 탐지가 사라진다. 값 전체를 고쳐라.")
     return sorted(slots)
 
@@ -291,25 +294,35 @@ def _etf_universe_provider(settings):
     return provide
 
 
+# 레인 → 그 레인 상태머신 ARN 을 담은 env 이름(ALPHA-721). 분기문이 아니라 표인 이유: 레인이
+# 늘 때 고쳐야 할 곳이 한 줄이고, **여기 없는 레인은 자동으로 fail-loud** 다 — if/elif 사슬은
+# else 를 잊으면 조용히 시장 레인으로 떨어진다.
+_LANE_STATE_MACHINE_ARN_ENV = {
+    catalog.PIPELINE_TYPE: "OPS_STATE_MACHINE_ARN",
+    catalog.NEWS_PIPELINE_TYPE: "OPS_NEWS_STATE_MACHINE_ARN",
+    catalog.DISCLOSURE_PIPELINE_TYPE: "OPS_DISCLOSURE_STATE_MACHINE_ARN",
+}
+
+
 # ── CLI 핸들러 ────────────────────────────────────────────
 def plan_run_cli(settings) -> int:
     """EventBridge → Planner. 상태머신 ARN·원장 DB 필수(없으면 fail-loud). launch 성공만 exit 0.
 
-    레인은 env(OPS_PIPELINE_TYPE, 기본 etf-daily)가 정한다 — 뉴스 스케줄은 news 를 주입하고,
-    레인에 맞는 상태머신 ARN(OPS_NEWS_STATE_MACHINE_ARN)을 쓴다(ALPHA-591). 모르는 레인은
-    fail-loud — 조용히 시장 레인으로 계획하면 하지도 않을 작업이 기대에 실린다.
+    레인은 env(OPS_PIPELINE_TYPE, 기본 etf-daily)가 정한다 — 각 스케줄이 자기 레인을 주입하고,
+    레인에 맞는 상태머신 ARN 을 아래 표에서 고른다(ALPHA-591·721). 모르는 레인은 fail-loud —
+    조용히 시장 레인으로 계획하면 하지도 않을 작업이 기대에 실린다.
     """
     pipeline_type = os.environ.get("OPS_PIPELINE_TYPE", catalog.PIPELINE_TYPE)
-    if pipeline_type == catalog.PIPELINE_TYPE:
-        arn = os.environ.get("OPS_STATE_MACHINE_ARN")
-        if not arn:
-            raise SystemExit("OPS_STATE_MACHINE_ARN 없음 — plan-run 은 상태머신 ARN 필수")
-    elif pipeline_type == catalog.NEWS_PIPELINE_TYPE:
-        arn = os.environ.get("OPS_NEWS_STATE_MACHINE_ARN")
-        if not arn:
-            raise SystemExit("OPS_NEWS_STATE_MACHINE_ARN 없음 — 뉴스 레인 plan-run 은 뉴스 SFN ARN 필수")
-    else:
-        raise SystemExit(f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — etf-daily·news 만 계획 가능")
+    arn_env = _LANE_STATE_MACHINE_ARN_ENV.get(pipeline_type)
+    if arn_env is None:
+        raise SystemExit(
+            f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — "
+            f"{'·'.join(_LANE_STATE_MACHINE_ARN_ENV)} 만 계획 가능")
+    arn = os.environ.get(arn_env)
+    if not arn:
+        # 다른 레인 ARN 으로 폴백하지 않는다 — 기대는 이 레인 것이고 실행은 남의 SFN 이 되어
+        # 기대와 실행이 어긋난 런이 원장에 남는다. 시작 전에 죽는 편이 낫다(Rule 12).
+        raise SystemExit(f"{arn_env} 없음 — {pipeline_type} 레인 plan-run 은 그 레인 SFN ARN 필수")
     ledger = ledger_from_settings(settings)
     if ledger is None:
         raise SystemExit("db 설정 없음 — plan-run 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
@@ -346,12 +359,13 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
     """
     lanes: list[tuple[str, list[tuple[int, int]]]] = [
         (catalog.PIPELINE_TYPE, [_sched_hhmm()]),
-        (catalog.NEWS_PIPELINE_TYPE, _news_sched_hhmms()),
+        (catalog.NEWS_PIPELINE_TYPE, _lane_sched_hhmms("OPS_NEWS_SCHED_HHMM")),
+        (catalog.DISCLOSURE_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM")),
     ]
     slots: list[tuple[str, bool]] = []
     for lane, hhmms in lanes:
         if not hhmms:
-            continue   # env 미주입 레인 — 결측 판정 대상 아님(_news_sched_hhmms 참조)
+            continue   # env 미주입 레인 — 결측 판정 대상 아님(_lane_sched_hhmms 참조)
         for back in range(7):
             cand = now_kst.date() - timedelta(days=back)
             if cand.weekday() >= 5:
