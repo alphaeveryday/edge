@@ -485,6 +485,27 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
 
+공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
+세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
+LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). 단 `LoadDisclosure` 만
+command 를 상속하지 않고 `--window-days` 를 붙인다 — 공유 정의의 창 미지정(=canonical 전체
+스캔)은 하루 1회 도는 15:40 런의 **백로그 회수 경로**라 그대로 둬야 하고, 하루 10슬롯 레인에선
+그 스캔이 슬롯마다 곱해진다. **아직 스케줄이 DISABLED 라
+아무것도 안 돌고 시장 SFN 도 미변경이다** — 공시는 계속 15:40 런으로 수집된다. 뉴스 레인이
+PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서다.
+
+⚠️ **컷오버가 필요한 이유는 성능이 아니라 원장 정체성이다.** 작업 정체성의 정본은
+`catalog.by_cli(step, source)` 인데 두 레인의 CLI 가 글자 그대로 같아(`ingest-raw-disclosure`
+등), 같은 스텝을 두 레인이 동시에 소유하면 `by_cli` 가 먼저 온 쪽을 돌려줘 장중 런의 attempt
+가 시장 레인 task_key 로 기록된다 — 장중 런은 영구 MISSED, 시장 런은 resolve 경로 없는
+`LEDGER_GAP` 이다. 그래서 컷오버는 선택이 아니라 전제다.
+
+`LoadDisclosure` 의 issuer 해소는 **레인 간 읽기 전용 공유**다 —
+`company_profile.dart_corp_code` 를 채우는 `EnrichCorpCode` 는 시장 SFN 소관이라, 유니버스에
+새로 들어온 회사는 그 슬롯에서 `skipped_unresolved_issuer` 로 계측된 뒤 다음 일일런 이후
+슬롯이 줍는다(조용한 유실이 아니라 계측된 지연). 뉴스 SFN 이 `instrument` 마스터를 빌려 읽는
+것과 같은 형태다.
+
 **raw 수집(12잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
 - `ingest-raw --source fmp`
@@ -924,8 +945,12 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   그 슬롯으로 **흡수**되고 `created=False` 로 드러난다 — 새로 도는 게 없다는 뜻이니 로그를 보라.
 - 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slots` 도 그 함수를 쓴다 —
   두 곳에서 조립하면 어긋나는 순간 없는 슬롯을 찾아 **실제 런이 영영 대조되지 않는다**. 같은
-  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각
-  스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다.
+  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM` 은 별도
+  변수가 아니라 terraform 이 각 스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로
+  `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시 것만 **스케줄이 ENABLED 일 때만
+  주입한다**(ALPHA-722) — 슬롯 기준은 Reconciler 에게 "이 시각엔 런이 있어야 한다"는 주장이라,
+  꺼진 채 넣으면 뜰 리 없는 슬롯을 매시간 결측으로 판정해 **참인** PLANNER_MISSING 을 연다.
+  빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 평일"의 **그날 지난 스케줄 슬롯 전부**를
   대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). ⚠️ 수동 슬롯은
   여전히 `OPS_RUN_KEY` 로 지정해야 대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히

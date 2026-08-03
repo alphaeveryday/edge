@@ -29,6 +29,21 @@ locals {
   news_schedule_hhmm = join(",", sort([
     for hm in local._news_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
+
+  # 공시 레인 슬롯 목록(ALPHA-722) — 뉴스와 같은 이유로 cron 에서 뽑는다.
+  _disclosure_cron_hms = [
+    for k in sort(keys(var.disclosure_schedule_expressions)) :
+    regex("^cron\\(([0-9]+) ([0-9]+) ", var.disclosure_schedule_expressions[k])
+  ]
+  # ⚠️ **스케줄이 ENABLED 일 때만 값을 낸다.** 슬롯 기준은 Reconciler 에게 "이 시각엔 런이
+  # 있어야 한다"는 주장이라, 스케줄이 꺼진 채 이 값만 주입하면 Planner 가 뜰 리 없는 슬롯을
+  # 매시간 결측으로 판정해 **참인 PLANNER_MISSING** 을 10개씩 연다(resolve 되지 않는다 —
+  # 실제로 안 돌았으니까). 뉴스 레인엔 이 조건이 없는데, dev 에서 스케줄과 원장 편입이 같은
+  # 시점에 켜져 꺼진 구간이 존재하지 않았기 때문이다. 공시는 신설→검증→컷오버로 나뉘어
+  # 그 구간이 실재하므로 여기서 묶는다(entry.py `_lane_sched_hhmms` 는 빈 값 = 판정 없음).
+  disclosure_schedule_hhmm = var.disclosure_schedule_state != "ENABLED" ? "" : join(",", sort([
+    for hm in local._disclosure_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
+  ]))
 }
 
 # ── Planner/Reconciler 전용 task 역할 ──
@@ -47,9 +62,13 @@ resource "aws_iam_role_policy" "ops_task" {
       {
         # Planner 가 SFN 을 시작한다(StartExecution 소유는 스케줄러가 아니라 Planner, 스펙 §5).
         # 뉴스 SFN 도 Planner 경유다(ALPHA-591).
-        Effect   = "Allow"
-        Action   = ["states:StartExecution"]
-        Resource = [aws_sfn_state_machine.this.arn, aws_sfn_state_machine.news.arn]
+        Effect = "Allow"
+        Action = ["states:StartExecution"]
+        Resource = [
+          aws_sfn_state_machine.this.arn,
+          aws_sfn_state_machine.news.arn,
+          aws_sfn_state_machine.disclosure.arn,
+        ]
       },
       {
         # Planner(ExecutionAlreadyExists 확인)·Reconciler(실행 동기화·history)가 실행을 읽는다.
@@ -58,6 +77,7 @@ resource "aws_iam_role_policy" "ops_task" {
         Resource = [
           "${replace(aws_sfn_state_machine.this.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.news.arn, ":stateMachine:", ":execution:")}:*",
+          "${replace(aws_sfn_state_machine.disclosure.arn, ":stateMachine:", ":execution:")}:*",
         ]
       },
       {
@@ -109,6 +129,10 @@ resource "aws_ecs_task_definition" "ops" {
       # 뉴스 레인(ALPHA-591): Planner 의 뉴스 SFN ARN + Reconciler 의 뉴스 3슬롯 판정 기준.
       OPS_NEWS_STATE_MACHINE_ARN = aws_sfn_state_machine.news.arn
       OPS_NEWS_SCHED_HHMM        = local.news_schedule_hhmm
+      # 공시 레인(ALPHA-722). ARN 은 상시 주입한다(Planner 가 그 레인으로 뜰 때만 읽으므로
+      # 무해하고, 없으면 fail-loud 다). 슬롯 기준은 스케줄이 켜졌을 때만 — 위 locals 참조.
+      OPS_DISCLOSURE_STATE_MACHINE_ARN = aws_sfn_state_machine.disclosure.arn
+      OPS_DISCLOSURE_SCHED_HHMM        = local.disclosure_schedule_hhmm
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
