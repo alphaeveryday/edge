@@ -223,7 +223,7 @@ class JdbcAnalysisWriteRepositoryIntegrationTest extends CloudPostgresIntegratio
 	}
 
 	/**
-	 * 무효화는 게시본 WITHDRAWN 전이 + 전 테넌트 INVALIDATION 발번 + 감사를 한 트랜잭션으로
+	 * 무효화는 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번 + 감사를 한 트랜잭션으로
 	 * 남긴다. cursor 는 테넌트별 MAX+1 — 단조성이 깨지면 sync 소비자가 이벤트를 건너뛴다
 	 * (유실 방지 계약, sync-protocol.md).
 	 */
