@@ -70,8 +70,20 @@ class NewsEventAssembler:
         )
 
         with connect(self.db) as conn:
-            doc_id = stable_domain_id("doc", source_code, article_id)
             with conn.cursor() as cur:
+                # 게이트·락의 doc id 는 **실제 행의 것**을 쓴다 — persist 는 자연키로
+                # 행을 되찾아 FK 를 걸므로, 결정적 산식 id 로만 자국을 보면 산식 이전
+                # (구 ULID) 행의 기존 조립을 놓쳐 재조립·중복 event_argument(nullable
+                # entity_id 는 유니크가 못 막음)가 생긴다. 행이 없으면(이 레인에선
+                # 비정상 — minute writer 가 같은 트랜잭션에서 쓴다) 산식 id 폴백.
+                cur.execute(
+                    "SELECT document_id FROM document"
+                    " WHERE source_code = %s AND source_document_id = %s",
+                    (source_code, article_id),
+                )
+                found = cur.fetchone()
+                doc_id = (str(found[0]) if found
+                          else stable_domain_id("doc", source_code, article_id))
                 # doc 단위 직렬화 — 멱등 게이트(아래 SELECT)와 적재가 한 검사-후-행동
                 # 이라, 락 없이는 realtime·backfill 소비자가 같은 기사를 동시에 통과해
                 # 이중 조립한다. doc 별 락이라 서로 다른 기사는 병렬 그대로다.
