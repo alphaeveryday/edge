@@ -631,3 +631,50 @@ def test_measurable_state_condition_passes_the_gate():
     h["conditions"] = [{"ident": "거래량", "transform": "수준",
                         "comparator": ">=", "percentile": 0.9}]
     assert screen_tuples([h], event_types=ETYPES, measurable=MEAS)[0]
+
+
+# ── 층별 결과변수 ────────────────────────────────────────────────────────
+# 설명 대상이 층마다 다르므로 y 도 달라야 한다. 하나로 고정하면 시장·섹터 가설이
+# 구조적으로 0 을 받는다 - 시장층이 설명하려는 mkt×β 를 ar_ind 가 이미 뺐으므로.
+def test_layer_selects_its_own_outcome():
+    from edge_analysis.statics.paneltest import LAYER_Y
+    seen = []
+
+    class SpyLake:
+        def sql(self, q):
+            seen.append(q)
+            if "SELECT z_ar" in q:
+                return [(0.1, 0.1)]
+            return [(f"i{k}", "2026-05-01", 0.01, 1.0, 1.0) for k in range(50)]
+
+    for layer, col in LAYER_Y.items():
+        seen.clear()
+        edge_test(SpyLake(), _tuple(vuln_family="거래량", vuln_tr="수준"), "2026-06-01",
+                  layer=layer)
+        panel_sql = next(q for q in seen if " AS ar," in q)
+        assert f"g.{col} AS ar" in panel_sql, f"{layer} 가 {col} 을 안 쓴다"
+        # 다른 층의 결과변수를 결과 자리에 쓰지 않는다
+        for other in set(LAYER_Y.values()) - {col}:
+            assert f"g.{other} AS ar" not in panel_sql
+
+
+def test_unknown_layer_is_rejected_loudly():
+    with pytest.raises(ValueError, match="층은"):
+        edge_test(_Lake(), T, "2026-06-01", layer="전체")
+
+
+def test_layer_gates_which_exposures_may_explain_it():
+    # 시장층 y 는 원수익이고 시장 수익은 전 종목 공통이다 - 종목 고유 피처로는
+    # 종목 간 차이를 만들 수 없다. 어휘가 그걸 막아야 관문이지, 아니면 열 목록이다.
+    from edge_analysis.statics.paneltest import LAYER_EXPOSURES
+    vol = _h(exposure={"kind": "속성", "ident": "거래량", "transform": "변화"})
+    beta = _h(exposure={"kind": "속성", "ident": "거시", "transform": "민감도"})
+
+    v, r = screen_tuples([vol], event_types=ETYPES, measurable=MEAS, layer="시장")
+    assert not v and "시장층을 설명할 수 없는 노출" in r[0]
+    assert screen_tuples([beta], event_types=ETYPES, measurable=MEAS, layer="시장")[0]
+    # 고유층은 제한 없음 - 종목 거래량이 고유 잔차를 설명하는 건 정당하다
+    assert LAYER_EXPOSURES["고유"] is None
+    assert screen_tuples([vol], event_types=ETYPES, measurable=MEAS, layer="고유")[0]
+    with pytest.raises(ValueError, match="층은"):
+        screen_tuples([vol], event_types=ETYPES, layer="전체")

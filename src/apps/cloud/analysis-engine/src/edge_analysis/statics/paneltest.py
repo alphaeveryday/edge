@@ -55,12 +55,35 @@ FEATURES = {
     ("공매도", "수준"): "sr_lvl",     # 차입공매도잔고비율
     ("배수", "수준"): "pbr_lvl",      # PBR(IFRS-별도)
     ("주식수", "변화"): "sh_chg",     # 상장주식수 20일 변화율 - S주식수 채널의 관측변수
+    ("주식수", "수준"): "tr_lvl",     # 자기주식수 / 상장주식수 (자사주 보유 비율)
     ("수급", "누적"): "fl_cum20",     # 20일 누적 외국인 순매수 / 시총
+    # ── 민감도: 공통 계열을 종목 축으로 옮기는 유일한 변환 (60일 롤링 기울기) ──
+    ("지수잔차", "민감도"): "beta_m",  # 시장 로그수익률에 대한 β
+    ("거시", "민감도"): "fx_beta",     # 원/달러 변화율에 대한 β - FX환 채널의 관측변수
 }
 # 계열 방아쇠의 혁신값 (z 를 재는 대상). 수급은 **아직 없다** - flow_z 는 3개 투자자
 # 유형의 최댓값으로 발화를 정하는데 패널 프레임은 외국인 하나만 담는다. 기준이 두
 # 곳에서 갈리면 접지가 무너지므로(series_z 도크스트링), 통합 전까지는 노출·조건으로만 쓴다.
 _INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg"}
+
+# 층 → 결과변수. 설명 대상이 층마다 다르므로 y 도 다르다. 하나로 고정하면 시장·섹터
+# 가설이 구조적으로 0 을 받는다(설명하려는 성분을 y 에서 이미 뺐으므로).
+LAYER_Y = {"고유": "y_고유", "섹터": "y_섹터", "시장": "y_시장"}
+
+# 층 → **그 층을 설명할 자격이 있는 노출**. 층마다 y 가 다르니 노출도 달라야 한다.
+# 배선 없이 두면 "종목 거래량이 시장 전체 수익을 설명한다" 같은 가설이 관문을
+# 통과한다 - 어휘가 아니라 열 목록이 되는 지점이다.
+#
+#   시장 (y=lr, 원수익): 시장 수익은 전 종목 공통이다. 종목 간 차이를 만드는 것은
+#       **공통 충격에 대한 민감도**뿐 - 그것이 채널(FX환·K위험)이 뜻하는 바다.
+#   섹터 (y=ar, 시장 차감): 시장은 빠지고 산업 공행이 남았다. 산업을 가르는 특성만.
+#   고유 (y=ar_ind, 이중차감): 남은 것은 종목 자신 - 전부 허용.
+LAYER_EXPOSURES: dict[str, frozenset[tuple[str, str]] | None] = {
+    "시장": frozenset({("지수잔차", "민감도"), ("거시", "민감도")}),
+    "섹터": frozenset({("지수잔차", "민감도"), ("거시", "민감도"),
+                      ("배수", "수준"), ("주주", "수준")}),
+    "고유": None,   # None = 제한 없음
+}
 
 
 
@@ -83,7 +106,13 @@ f AS (
     -- PIT 상태(v_pit)는 전부 **어제 값**이다. 조건은 느린 상태이고, 오늘 값을 쓰면
     -- 마감 후 회계를 원인 자리에 놓는 것이 된다(판정자들이 8셀 내내 기각한 오류).
     -- 창 규율은 기존과 같다: w20 = [t-20, t-1] · 당일 제외.
-    SELECT d.instrument_id, d.trade_date, d.ar_ind AS ar,
+    -- 결과변수 셋을 나란히 싣는다. **층마다 설명 대상이 다르다**:
+    --   고유 = ar_ind (시장·산업 이중차감) · 섹터 = ar (시장만 차감) · 시장 = lr (원수익)
+    -- 하나로 고정하면 다른 두 층의 가설이 구조적으로 0 을 받는다 - 시장층 가설이
+    -- 설명하려는 mkt×β 를 ar_ind 가 이미 빼버렸기 때문이다.
+    SELECT d.instrument_id, d.trade_date,
+           d.ar_ind AS y_고유, d.ar AS y_섹터, d.lr AS y_시장,
+           d.ar_ind AS ar,
            sum(d.ar_ind)      OVER w20 AS cum20,
            stddev_samp(d.lr)  OVER w20 AS vol20,
            avg(d.volume)      OVER w20 AS tv20,
@@ -97,13 +126,23 @@ f AS (
            LAG(q.shares, 1) OVER wi
              / NULLIF(LAG(q.shares, 21) OVER wi, 0) - 1 AS sh_chg,
            sum(x.fl_val) OVER w20
-             / NULLIF(LAG(q.mktcap, 1) OVER wi * 1e6, 0) AS fl_cum20
+             / NULLIF(LAG(q.mktcap, 1) OVER wi * 1e6, 0) AS fl_cum20,
+           LAG(q.treasury_ratio, 1) OVER wi AS tr_lvl,
+           -- 민감도: 공통 계열은 하루에 값이 하나라 그 자체로는 횡단면을 못 가른다.
+           -- 종목마다 다른 것은 **민감도**다. 60일 롤링 회귀 기울기, 당일 제외.
+           -- mkt_lr 은 v_daily 가 직접 안 주므로 lr - ar_lr 로 복원한다(정의가 하나여야
+           -- 하므로 여기서 새로 계산하지 않는다).
+           regr_slope(d.lr, d.lr - d.ar_lr)      OVER w60 AS beta_m,
+           regr_slope(d.lr, fx.change_pct / 100) OVER w60 AS fx_beta
     FROM v_daily d
     LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
     LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
+    LEFT JOIN fx_usdkrw fx ON CAST(fx.date AS DATE) = d.trade_date
     WHERE d.ar_ind IS NOT NULL
     WINDOW w20 AS (PARTITION BY d.instrument_id ORDER BY d.trade_date
                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING),
+           w60 AS (PARTITION BY d.instrument_id ORDER BY d.trade_date
+                   ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING),
            wi  AS (PARTITION BY d.instrument_id ORDER BY d.trade_date)
 ),
 g AS (
@@ -127,12 +166,12 @@ _POINT_PANEL = """
     WHERE e.event_type_code = '{etype}'
       AND e.trade_date {cmp} DATE '{day}'
 )
-SELECT g.instrument_id, g.trade_date, g.ar, {cols}
+SELECT g.instrument_id, g.trade_date, g.{y} AS ar, {cols}
 FROM ev JOIN g ON g.instrument_id = ev.iid AND g.trade_date = ev.d
 """
 
 _SERIES_PANEL = """
-SELECT instrument_id, trade_date, ar, {cols}
+SELECT instrument_id, trade_date, {y} AS ar, {cols}
 FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}' 
 """
 
@@ -166,7 +205,7 @@ _RELATION_PANEL = """
     FROM v_event e
     WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}' 
 )
-SELECT g.instrument_id, g.trade_date, g.ar, {cols}, {rel} AS rel
+SELECT g.instrument_id, g.trade_date, g.{y} AS ar, {cols}, {rel} AS rel
 FROM ev
 JOIN g   ON g.trade_date = ev.d AND g.instrument_id <> ev.iid
 JOIN v_instrument cp ON cp.instrument_id = g.instrument_id
@@ -372,15 +411,18 @@ def _two_sided(p1: float) -> float:
 
 
 def edge_test(lake, t: HypothesisTuple, day: str,
-              cell_instrument_id: str = "") -> EdgeReport:
+              cell_instrument_id: str = "", layer: str = "고유") -> EdgeReport:
     """튜플 → 패널 수치. 표본이 얇으면 판정불가 — **다른 표본을 찾으러 가지 않는다.**
 
     엣지 존재는 언제나 **전체 패널**로 검정한다. 조건은 표본을 쪼개지 않고
     조절 대비로만 보고되며, 오늘 적용에만 걸린다(INUS). 조건화로 표본을 쪼개면
     검정력이 죽는다 - 라이브 6회의 지배적 실패가 그것이었다(n=23·6·6 판정불가).
     """
+    y = LAYER_Y.get(layer)
+    if y is None:
+        raise ValueError(f"층은 {sorted(LAYER_Y)} 중 하나다: {layer!r}")
     if t.exposure.kind == "관계":
-        return _relation_test(lake, t, day)
+        return _relation_test(lake, t, day, layer=layer)
     got = _cols(t)
     if got is None:
         return _unmeasurable(
@@ -394,14 +436,14 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     trigger_note = ""
     if t.trigger.kind == "점":
         sql = (_base(day) + _POINT_PANEL).format(
-            etype=t.trigger.ident, cmp="<", day=day, cols=col_sql)
+            etype=t.trigger.ident, cmp="<", day=day, cols=col_sql, y=y)
     else:
         innov = _INNOVATION.get(t.trigger.ident)
         if innov is None:
             return _unmeasurable(f"계열 방아쇠 {t.trigger.ident!r} 의 혁신값은 아직 못 잰다 - "
                                  f"재는 것: {sorted(_INNOVATION)}")
         sql = (_base(day) + _SERIES_PANEL).format(
-            innov=innov, z=Z_ANOM, day=day, cols=col_sql)
+            innov=innov, z=Z_ANOM, day=day, cols=col_sql, y=y)
         # 패널은 역사(|z|≥2 였던 날들)이고, 오늘 적용은 오늘도 당겨졌을 때만이다.
         # 점 방아쇠의 접지와 대칭. 미계측 = 부적용 (발화를 지어내지 않는다).
         if cell_instrument_id:
@@ -513,7 +555,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
     if t.trigger.kind == "점":
-        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql)
+        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, y=y)
         trows = [r for r in lake.sql(tsql) if all(v is not None for v in r[2:])]
         if len(trows) < MIN_TODAY:
             reduction = f"표본부족 (오늘 n={len(trows)})"
@@ -539,7 +581,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       trigger_fired=trigger_fired, trigger_note=trigger_note)
 
 
-def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:
+def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") -> EdgeReport:
     """전이 패널 (§16): 사건 종목과 **관계 있는** 종목이 관계 없는 종목보다 부호
     방향으로 더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을
     소거하므로 남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
@@ -560,7 +602,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:
     col_sql = ", ".join(f"g.{c}" for _, c in vcols) or "1 AS _one"
     rel = _REL_EXPR.get(t.exposure.ident) or _REL_LINK.format(ident=t.exposure.ident)
     sql = (_base(day) + _RELATION_PANEL).format(
-        etype=t.trigger.ident, day=day, cols=col_sql, rel=rel)
+        etype=t.trigger.ident, day=day, cols=col_sql, rel=rel, y=LAYER_Y[layer])
     raw = [r for r in lake.sql(sql) if all(v is not None for v in r[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
@@ -616,7 +658,8 @@ def grid_screen(lake, day: str, types: list[str],
     out: list[dict] = []
     label_of = {c: k for k, c in FEATURES.items()}
     for etype in types:
-        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day, cols=all_cols)
+        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day,
+                                                 cols=all_cols, y=LAYER_Y["고유"])
         raw = [r for r in lake.sql(sql) if r[2] is not None]
         if len(raw) < MIN_N:
             out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})

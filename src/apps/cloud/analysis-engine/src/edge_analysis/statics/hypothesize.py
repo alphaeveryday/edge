@@ -131,6 +131,7 @@ def explore(ask: Ask, machine, *, facts: str, max_turns: int = 4) -> str:
 def screen_tuples(hyps: list[dict], *, event_types: list[str],
                   series_families: list[str] = (),
                   measurable: list[tuple[str, str]] | None = None,
+                  layer: str = "고유",
                   ) -> tuple[list[HypothesisTuple], list[str]]:
     """모델 산출 목록 → (유효 튜플, 거부 사유). propose 와 하네스 CLI 가 공유한다 -
     가설을 누가 내든(원격 모델이든 하네스 에이전트든) **심사는 같은 코드**여야 한다.
@@ -138,7 +139,14 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
     measurable 를 주면 **못 재는 슬롯을 여기서 죽인다**. 이전에는 이 목록을 프롬프트로
     알려주기만 하고 강제하지 않았다 - 8셀 71튜플 중 55개(77%)가 쓰는 순간 n=0 확정인
     조합이었고, 그걸 패널이 돌고 나서야 알았다. 어포던스는 말이 아니라 관문이어야 한다.
+
+    layer 는 **그 층을 설명할 자격이 있는 노출**을 강제한다. 시장층 y 는 원수익이고
+    시장 수익은 전 종목 공통이라, 종목 고유 피처로는 종목 간 차이를 만들 수 없다.
     """
+    from .paneltest import LAYER_EXPOSURES
+    if layer not in LAYER_EXPOSURES:
+        raise ValueError(f"층은 {sorted(LAYER_EXPOSURES)} 중 하나다: {layer!r}")
+    allowed = LAYER_EXPOSURES[layer]
     feats = None if measurable is None else {tuple(m) for m in measurable}
     valid: list[HypothesisTuple] = []
     rejected: list[str] = []
@@ -189,6 +197,13 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
                        if v.kind == "상태" and (v.ident, v.transform) not in feats]:
                 _kill(f"못 재는 조건{bad} - 재는 것: {sorted(feats)}")
                 continue
+        # ── 층 자격: 그 층의 y 를 설명할 수 있는 노출인가 ──
+        if allowed is not None and t.exposure.kind == "속성" and (
+                (t.exposure.ident, t.exposure.transform) not in allowed):
+            _kill(f"{layer}층을 설명할 수 없는 노출"
+                  f"({t.exposure.ident}/{t.exposure.transform}) - "
+                  f"{layer}층에 유효한 노출: {sorted(allowed)}")
+            continue
         if t.channel in seen_ch:
             _kill(f"채널 중복: {t.channel}")
             continue

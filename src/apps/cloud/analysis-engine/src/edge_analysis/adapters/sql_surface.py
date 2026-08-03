@@ -241,8 +241,9 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         -- 주주(외국인지분율) · 신용(융자잔고율) · 공매도(잔고비율) · 배수(PBR) ·
         -- 주식수(상장주식수) - 계열족당 하나씩만 싣는다(어휘지 열 목록이 아니다).
         SELECT i.instrument_id, p.trade_date,
-               p.foreign_ratio, p.credit_ratio, p.short_ratio,
-               p.pbr, p.shares, p.mktcap
+               p.foreign_ratio, p.foreign_used, p.credit_ratio, p.short_ratio,
+               p.lend_bal, p.pbr, p.per, p.shares, p.treasury, p.treasury_ratio,
+               p.mktcap, p.turnover, p.for_net, p.ins_net, p.ind_net
         FROM pit_daily p
         JOIN v_instrument i ON i.ticker = p.ticker
         WHERE p.trade_date <= {trade_date}

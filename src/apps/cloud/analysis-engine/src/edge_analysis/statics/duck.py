@@ -32,10 +32,7 @@ LAKE = "s3://edge-dev-pipeline-lake/"
 # 안 돌았어도 v_pit 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이 아니라
 # '안 채워진 축'임을 스키마로 말한다.
 EMPTY_SCHEMA = {
-    "pit_daily": ("SELECT CAST(NULL AS DATE) AS trade_date, CAST(NULL AS VARCHAR) AS ticker, "
-                  "CAST(NULL AS DOUBLE) AS foreign_ratio, CAST(NULL AS DOUBLE) AS credit_ratio, "
-                  "CAST(NULL AS DOUBLE) AS short_ratio, CAST(NULL AS DOUBLE) AS pbr, "
-                  "CAST(NULL AS DOUBLE) AS shares, CAST(NULL AS DOUBLE) AS mktcap WHERE false"),
+    "pit_daily": "SELECT CAST(NULL AS DATE) AS trade_date, CAST(NULL AS VARCHAR) AS ticker, CAST(NULL AS DOUBLE) AS foreign_ratio, CAST(NULL AS DOUBLE) AS foreign_used, CAST(NULL AS DOUBLE) AS credit_ratio, CAST(NULL AS DOUBLE) AS short_ratio, CAST(NULL AS DOUBLE) AS lend_bal, CAST(NULL AS DOUBLE) AS pbr, CAST(NULL AS DOUBLE) AS per, CAST(NULL AS DOUBLE) AS shares, CAST(NULL AS DOUBLE) AS treasury, CAST(NULL AS DOUBLE) AS beta52w, CAST(NULL AS DOUBLE) AS r2_52w, CAST(NULL AS DOUBLE) AS mktcap, CAST(NULL AS DOUBLE) AS turnover, CAST(NULL AS DOUBLE) AS for_buy, CAST(NULL AS DOUBLE) AS for_sell, CAST(NULL AS DOUBLE) AS ins_buy, CAST(NULL AS DOUBLE) AS ins_sell, CAST(NULL AS DOUBLE) AS ind_buy, CAST(NULL AS DOUBLE) AS ind_sell, CAST(NULL AS DOUBLE) AS for_net, CAST(NULL AS DOUBLE) AS ins_net, CAST(NULL AS DOUBLE) AS ind_net, CAST(NULL AS DOUBLE) AS treasury_ratio WHERE false",
 }
 AWS_PROFILE_ENV = "AWS_PROFILE"          # 기본 work — 자격증명은 SSO 체인에서 온다
 

@@ -80,7 +80,7 @@ class JudgeCatalog(Catalog):
         return panel_text(self.lake, self.tup, self.instrument_id, self.day)
 
 
-def panel_text(lake, tup, instrument_id: str, day: str) -> str:
+def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유") -> str:
     """타입 수준 패널의 **수치만**. 판정은 검정자가 한다 - 코드는 의견을 내지 않는다.
 
     이전에는 코드 게이트의 결론('코드 참고 의견: 판정불가 - n=26 < 30')을 같이
@@ -88,7 +88,7 @@ def panel_text(lake, tup, instrument_id: str, day: str) -> str:
     남아 무엇이 판정인지 흐렸다. 수치는 코드가, 판정은 검정자가 - 자리를 나눈다.
     """
     from .paneltest import edge_test
-    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id)
+    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id, layer=layer)
     rows = [
         f"n={r.n}" + (f" · p={r.p:.3f}" if r.p is not None else " · p 미계산"),
         (f"노출 상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"

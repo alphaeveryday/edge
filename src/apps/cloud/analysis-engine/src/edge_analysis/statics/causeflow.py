@@ -297,11 +297,13 @@ def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
     valid, rej = screen_tuples(env.get("hypotheses") or [],
                                event_types=env.get("event_types") or [],
                                series_families=env.get("series_families") or [],
-                               measurable=list(FEATURES))
+                               measurable=list(FEATURES),
+                               layer=env.get("layer") or "고유")
     if not valid:
         return eid, "REJ " + " | ".join(rej)
     (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
-    txt = panel_text(_W["lake"], valid[0], _W["iid"], _W["day"])
+    txt = panel_text(_W["lake"], valid[0], _W["iid"], _W["day"],
+                     layer=env.get("layer") or "고유")
     (Path(out_dir) / f"panel_{eid}.txt").write_text(txt, encoding="utf-8")
     return eid, "ok"
 
@@ -340,7 +342,7 @@ def _cli() -> None:
         valid, rejected = screen_tuples(env.get("hypotheses") or [],
                                         event_types=env.get("event_types") or [],
                                         series_families=env.get("series_families") or [],
-                                        measurable=list(FEATURES))
+                                        measurable=list(FEATURES), layer=env.get("layer") or "고유")
         for t in valid:
             print(f"[OK] {t.channel} · {t.trigger.kind}:{t.trigger.ident} · "
                   f"노출 {t.exposure.ident}/{t.exposure.transform} · 부호{t.sign:+d} · "
@@ -382,14 +384,15 @@ def _cli() -> None:
                             env.get("hypotheses") or [],
                             event_types=env.get("event_types") or [],
                             series_families=env.get("series_families") or [],
-                            measurable=list(FEATURES))
+                            measurable=list(FEATURES), layer=env.get("layer") or "고유")
                         if not valid:
                             print(f"REJ {eid}: {' | '.join(rej)}", flush=True)
                             continue
                         (d / f"env_{eid}.json").write_text(
                             json.dumps(env, ensure_ascii=False), encoding="utf-8")
                         (d / f"panel_{eid}.txt").write_text(
-                            panel_text(lake, valid[0], q["iid"], q["day"]),
+                            panel_text(lake, valid[0], q["iid"], q["day"],
+                                       layer=env.get("layer") or "고유"),
                             encoding="utf-8")
                 print(f"DONE {q['op']} {_t.time() - t0:.0f}s", flush=True)
             except Exception as e:                          # noqa: BLE001 - 서버는 안 죽는다
@@ -425,14 +428,15 @@ def _cli() -> None:
             valid, rej = screen_tuples(env.get("hypotheses") or [],
                                        event_types=env.get("event_types") or [],
                                        series_families=env.get("series_families") or [],
-                                       measurable=list(FEATURES))
+                                       measurable=list(FEATURES), layer=env.get("layer") or "고유")
             eid = f.stem.removeprefix("env_")
             if not valid:
                 (d / f"panel_{eid}.txt").write_text("유효 튜플 없음:\n" + "\n".join(rej),
                                                     encoding="utf-8")
                 continue
             (d / f"panel_{eid}.txt").write_text(
-                panel_text(lake, valid[0], iid, day), encoding="utf-8")
+                panel_text(lake, valid[0], iid, day, layer=env.get("layer") or "고유"),
+                encoding="utf-8")
             print(f"{eid}: ok")
         return
     if cmd == "panel":
@@ -442,10 +446,11 @@ def _cli() -> None:
         valid, rejected = screen_tuples(env.get("hypotheses") or [],
                                         event_types=env.get("event_types") or [],
                                         series_families=env.get("series_families") or [],
-                                        measurable=list(FEATURES))
+                                        measurable=list(FEATURES), layer=env.get("layer") or "고유")
         if not valid:
             raise SystemExit("유효 튜플 없음:\n" + "\n".join(rejected))
-        print(panel_text(CausalLake(), valid[0], sys.argv[3], sys.argv[4]))
+        print(panel_text(CausalLake(), valid[0], sys.argv[3], sys.argv[4],
+                         layer=env.get("layer") or "고유"))
         return
     raise SystemExit(__doc__)
 
