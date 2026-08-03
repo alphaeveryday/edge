@@ -100,8 +100,9 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 5종
-> price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713):
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 6종
+> price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
+> news-worker(ALPHA-717):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
@@ -120,9 +121,12 @@
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
 > 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
-> BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). 다만 news-worker 의
-> **ECS 서비스·세션 오케스트레이션 편입은 후속 PR** 이라 그때까지 뉴스 큐 2종은 빈 채로
-> 소비자만 상주한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
+> BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
+> **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
+> 계획하고(`MINUTE_SESSION_NEWS_SOURCE_GROUP`), news-worker 는 **뉴스 세션이 선 날만**
+> 별도 목록(`MINUTE_SESSION_NEWS_WORKER_SERVICES`)으로 올라간다(계획 실패 날 올리면
+> 세션 부재 기동 거부 루프 — 가격 레인은 그와 무관하게 진행). stop 은 존재하는 세션
+> 전부를 드레인하고 매 폴링 세션 존재를 재확인한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
 > 쿨다운(기본 300초) 동안 poll 이 억제된다 — 처방은 재시도가 아니라 pacing 상향·중지다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
@@ -1009,7 +1013,7 @@ DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-rea
 # 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 5종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717) — 상주 서비스 6종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
@@ -1022,6 +1026,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
+MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group toss --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
@@ -1034,6 +1040,8 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
+MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group toss
@@ -1041,7 +1049,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯
 =plan-run, reconcile, 1분 세션 start·stop) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 5종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다.
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 6종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다.
 daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).

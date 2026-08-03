@@ -3,8 +3,8 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# news-worker 는 CLI·feed 까지 완성(ALPHA-707)됐고 **서비스 편입만 후속 PR** 이다
-# (세션 오케스트레이션의 news 세션 계획과 함께 — start 가 price 세션만 계획한다).
+# news-worker 포함(ALPHA-717) — 세션 오케스트레이션이 news 세션(news_minute/bigkinds)도
+# 계획·드레인한다(MINUTE_SESSION_NEWS_SOURCE_GROUP).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.
@@ -138,6 +138,15 @@ locals {
       secrets = {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
         LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
+      }
+    }
+    # 뉴스 1분 생산자(ALPHA-707/717) — BigKinds 는 키가 없어 시크릿은 DB 뿐이다.
+    # 엔드포인트·카테고리는 코드 기본값([bigkinds_news] sources.toml)이 정본.
+    news-worker = {
+      command     = ["news-worker"]
+      environment = merge(local.env, local.db_env, {})
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
       }
     }
   }
@@ -304,9 +313,17 @@ resource "aws_ecs_task_definition" "minute_session" {
 
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
-      MINUTE_SESSION_SERVICES = join(",", [for service in aws_ecs_service.minute : service.name])
+      # ⚠️ news-worker 는 공용 목록에서 뺀다 — 뉴스 세션 계획이 **성공한 날만** 올린다
+      # (실패 날 올리면 세션 부재 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음).
+      # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
+      MINUTE_SESSION_SERVICES = join(",", [
+        for key, service in aws_ecs_service.minute : service.name if key != "news-worker"
+      ])
+      MINUTE_SESSION_NEWS_WORKER_SERVICES = aws_ecs_service.minute["news-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
+      # 뉴스 세션 편입(ALPHA-717) — start 가 news_minute 세션도 계획, stop 이 함께 드레인.
+      MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

@@ -345,6 +345,12 @@ variable "minute_session_dataset" {
   default     = "price_minute"
 }
 
+variable "minute_session_news_source_group" {
+  description = "news_minute 세션의 source_group(ALPHA-717). 비우면 뉴스 레인 미편입 — start 가 가격 세션만 계획한다"
+  type        = string
+  default     = "bigkinds"
+}
+
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
