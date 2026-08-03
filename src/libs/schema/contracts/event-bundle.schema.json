@@ -129,7 +129,7 @@
 
     "SourceEvents": {
       "type": "array",
-      "description": "설명이 근거로 삼은 소스 이벤트 목록. 현행은 항상 빈 배열(rowMapper 가 List.of() 만 싣는다) — 조립 조인 구현은 ALPHA-363. 컬럼 선별은 ALPHA-395 확정.",
+      "description": "설명이 근거로 삼은 소스 이벤트 목록. 현행은 항상 빈 배열 — 온프렘 소비자가 없어(이벤트 타임라인 UI 이연) 조립하지 않는다. 컬럼 선별은 ALPHA-395 확정.",
       "minItems": 0,
       "items": { "$ref": "#/$defs/SourceEventItem" }
     },
@@ -149,7 +149,7 @@
 
     "Evidences": {
       "type": "array",
-      "description": "설명의 근거가 된 뉴스/공시 문서 목록. 현행은 항상 빈 배열 — 조립 조인 구현은 ALPHA-363. 온프렘 소비자(publication-api ExplanationStore) 형상에 정렬(ALPHA-395).",
+      "description": "설명의 근거가 된 뉴스/공시 문서 목록. lineage 두 갈래(이벤트 근거·공시 정규화 사실) 조립으로 실린다(ALPHA-718) — 근거 없는 런은 빈 배열. 온프렘 소비자(publication-api ExplanationStore) 형상에 정렬(ALPHA-395).",
       "minItems": 0,
       "items": { "$ref": "#/$defs/EvidenceItem" }
     },

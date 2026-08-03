@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -37,4 +38,38 @@ public interface TenantDeliveryRepository extends Repository<TenantDelivery, Ten
 			""")
 	List<DeliveryRow> findAfter(@Param("tenantId") long tenantId,
 			@Param("afterCursor") long afterCursor, Limit limit);
+
+	/**
+	 * 번들 evidences 조립 — 문서 실체가 있는 lineage 두 갈래(이벤트 근거·공시 정규화 사실)를
+	 * 합쳐 런별 근거 문서를 읽는다(ALPHA-718, super-admin EVIDENCE_SQL 과 같은 경로).
+	 * 가격 관찰 lineage(explanation_run_event_price_observation)는 제목·출처 문안이 없는
+	 * 수치 관찰이라 문서처럼 싣지 않는다. DISTINCT — 같은 문서가 여러 주장·여러 단계
+	 * (stage_code)·두 갈래로 한 런에 붙어도 근거는 문서 단위다. 정렬은 published_at ASC
+	 * NULLS LAST + document_id 동률 해소로 결정적이다(와이어 순서 안정).
+	 */
+	@Query(value = """
+			SELECT DISTINCT lineage.explanation_run_id AS "explanationRunId",
+			       lineage.document_id AS "documentId",
+			       lineage.document_type AS "documentType",
+			       lineage.title AS "title",
+			       lineage.source_code AS "sourceCode",
+			       lineage.published_at AS "publishedAt"
+			  FROM (
+			       SELECT ree.explanation_run_id, d.document_id, d.document_type,
+			              d.title, d.source_code, d.published_at
+			         FROM explanation_run_event_evidence ree
+			         JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
+			         JOIN document_assertion da ON da.assertion_id = ev.assertion_id
+			         JOIN document d ON d.document_id = da.document_id
+			       UNION ALL
+			       SELECT rdf.explanation_run_id, d.document_id, d.document_type,
+			              d.title, d.source_code, d.published_at
+			         FROM explanation_run_disclosure_fact rdf
+			         JOIN disclosure_fact df ON df.fact_id = rdf.fact_id
+			         JOIN document d ON d.document_id = df.document_id
+			       ) lineage
+			 WHERE lineage.explanation_run_id IN (:runIds)
+			 ORDER BY "explanationRunId", "publishedAt" ASC NULLS LAST, "documentId"
+			""", nativeQuery = true)
+	List<RunEvidenceRow> findEvidenceRows(@Param("runIds") Collection<String> runIds);
 }
