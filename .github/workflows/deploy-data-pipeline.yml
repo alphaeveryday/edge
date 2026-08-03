@@ -68,10 +68,14 @@ jobs:
           for svc in edge-dev-data-pipeline-price-worker \
                      edge-dev-data-pipeline-relay \
                      edge-dev-data-pipeline-price-consumer; do
+            # 미존재 서비스는 **성공 응답**의 services=[] 로 온다(query 결과 "None") —
+            # 명령 자체의 실패(AccessDenied·만료·스로틀)는 삼키지 않고 전파한다.
+            # 오류를 미생성으로 접으면 ACTIVE 서비스가 옛 이미지로 계속 돌면서
+            # 배포가 성공으로 위장된다.
             status="$(aws ecs describe-services --cluster "${cluster}" --services "${svc}" \
-              --query 'services[0].status' --output text 2>/dev/null || true)"
+              --query 'services[0].status' --output text)"
             if [ "${status}" != "ACTIVE" ]; then
-              echo "::warning::${svc} 가 아직 없다(status=${status:-none}) — terraform apply 선행 전이면 정상, 이후에도 계속되면 배선 확인"
+              echo "::warning::${svc} 가 아직 없다(status=${status}) — terraform apply 선행 전이면 정상, 이후에도 계속되면 배선 확인"
               continue
             fi
             aws ecs update-service --cluster "${cluster}" --service "${svc}" \
