@@ -148,10 +148,13 @@ resource "aws_ecs_service" "minute" {
   }
 
   lifecycle {
-    # desired_count: SFN 오케스트레이션이 런타임에 바꾼다 — 없으면 무관한 apply 가
-    #   장중에 워커를 내린다(ALPHA-711 의 존재 이유).
-    # task_definition: 이미지 CD 가 새 revision 을 등록한다(ecs-service 모듈 동형).
-    ignore_changes = [desired_count, task_definition]
+    # desired_count 만 무시한다 — 세션 오케스트레이션이 런타임에 바꾸는 값이라, 없으면
+    # 무관한 apply 가 장중에 워커를 내린다(ALPHA-711 의 존재 이유).
+    # ⚠️ task_definition 은 무시하지 **않는다** — ecs-service 모듈과 달리 이 서비스들의
+    # CD(deploy-data-pipeline.yml)는 revision 을 등록하지 않고 mutable 태그를
+    # force-new-deployment 로 재당길 뿐이라, terraform 이 task-def 의 유일한 author 다.
+    # 무시하면 명령·env·시크릿 변경이 apply 돼도 서비스에 영영 반영되지 않는다.
+    ignore_changes = [desired_count]
   }
 }
 
