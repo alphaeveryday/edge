@@ -58,13 +58,15 @@ class EventBundleContractTest {
 		ExplanationRun run = new ExplanationRun("run1", "v1");
 		// source_events·evidences 는 실 조립 형상(SourceEventItem·EvidenceItem)으로 싣는다
 		// (ALPHA-718) — event_date·title·published_at 이 null 이어도 키 자체는 required 라
-		// 직렬화에서 생략되면 계약 위반으로 여기서 잡힌다.
+		// 직렬화에서 생략되면 계약 위반으로 여기서 잡힌다. lineage 없는 NEW(빈 배열)도 함께
+		// 직렬화한다 — include 정책이 NON_EMPTY 로 바뀌어 빈 배열 키가 생략되는 회귀를 잡는다.
 		EventBundle bundle = EventBundle.of(1L, List.of(
 				BundleEntry.newResult(101, result, run, List.of(
 						new SourceEventItem("se1", "NEWS", "EARNINGS", "2026-07-14"),
 						new SourceEventItem("se2", "DISCLOSURE", "SUPPLY_CONTRACT", null)), List.of(
 						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
 						new EvidenceItem("DISCLOSURE", null, "DART", null))),
+				BundleEntry.newResult(102, result, run, List.of(), List.of()),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 
 		// @JsonNaming 가드레일: BundleSerializer 제거(ADR-0040) 후엔 DTO의 @JsonNaming 이 유일한 snake_case
