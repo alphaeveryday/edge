@@ -21,7 +21,7 @@ locals {
   daily_schedule_hhmm = format("%02d:%02d", tonumber(local._daily_cron_hm[1]), tonumber(local._daily_cron_hm[0]))
 
   # 뉴스 레인 슬롯 목록(ALPHA-591) — daily 와 같은 이유로 news_schedule_expressions cron 에서
-  # 뽑는다(`_news_sched_hhmms` 가 파싱). sort 로 키 순서 무관 결정적 값을 만든다.
+  # 뽑는다(`_lane_sched_hhmms` 가 파싱). sort 로 키 순서 무관 결정적 값을 만든다.
   _news_cron_hms = [
     for k in sort(keys(var.news_schedule_expressions)) :
     regex("^cron\\(([0-9]+) ([0-9]+) ", var.news_schedule_expressions[k])

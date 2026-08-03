@@ -192,8 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None,
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
-                        help="tag-news·assemble-events: 대상 파티션을 오늘−N일 창으로 제한"
-                             "(미지정: tag-news=풀스캔, assemble-events=오늘 하루). --from/--to 가 우선")
+                        help="tag-news·assemble-events·load-disclosure: 대상 파티션을 오늘−N일 창으로"
+                             " 제한(미지정: tag-news·load-disclosure=풀스캔, assemble-events=오늘"
+                             " 하루). --from/--to 가 우선")
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
@@ -314,9 +315,9 @@ def main(argv: list[str] | None = None) -> int:
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
     if args.window_days is not None:
-        if args.step not in ("tag-news", "assemble-events"):
+        if args.step not in ("tag-news", "assemble-events", "load-disclosure"):
             raise SystemExit(
-                "--window-days 는 tag-news·assemble-events 에서만 쓴다 — "
+                "--window-days 는 tag-news·assemble-events·load-disclosure 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         # 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외한다 — 0건 처리를 exit 0
@@ -448,10 +449,19 @@ def _dispatch(args, settings, storage, run_id) -> int:
 
     # 공시 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
     # (canonical report_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    #
+    # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
+    # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다
+    # (news-load-fullscan-problem 과 같은 축). ASL 은 날짜 연산을 못 해 `--from/--to` 를
+    # 만들 수 없으므로 창 **폭**을 받아 여기서 날짜로 편다 — tag-news·assemble-events 와 같은
+    # 패턴이고, 명시 `--from/--to` 가 주어지면 그쪽이 이긴다(백필 경로 보존).
     if args.step == "load-disclosure":
+        load_from, load_to = args.from_date, args.to_date
+        if load_from is None and load_to is None and args.window_days is not None:
+            load_from, load_to = default_window(datetime.now(timezone.utc), args.window_days)
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
-            from_date=args.from_date, to_date=args.to_date,
+            from_date=load_from, to_date=load_to,
         )
 
     # 가격 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다

@@ -387,6 +387,13 @@ CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
+# 장중 공시 레인(ALPHA-721). **아직 등록 작업이 0개다** — 배선(Planner 분기·Reconciler 슬롯)만
+# 먼저 착지시키고 카탈로그 엔트리 이동은 컷오버 PR 이 한다. 순서가 이런 이유: 이미지 CD 와
+# terraform-apply 가 독립 워크플로라 어느 쪽이 먼저 떠도 안전해야 하는데, 레인을 아는 코드가
+# 먼저 떠 있으면 스케줄이 켜졌을 때 Planner 가 죽지 않고(모르는 레인 = SystemExit) 기대 0건으로
+# 계획할 뿐이다. 반대 순서(엔트리를 먼저 옮김)는 시장 런이 자기 기대 밖 attempt 를 받아
+# **resolve 경로 없는 LEDGER_GAP** 이 된다.
+DISCLOSURE_PIPELINE_TYPE = "disclosure"
 
 # `--source` 미지정 시 run.py 가 쓰는 기본 벤더(`args.source or "fmp"`). 벤더 인자가 없는
 # 카탈로그 엔트리는 이 벤더를 뜻한다 — 두 표현(`ingest-raw` 와 `ingest-raw --source fmp`)이
