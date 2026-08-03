@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..config import KST, Settings
 from ..domain.models import (
@@ -39,6 +39,17 @@ def _iso(value: Any) -> str:
         dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         return dt.isoformat()
     return str(value)
+
+
+class MinuteTriggerRow(NamedTuple):
+    """분봉 트리거 소비 결과 — 게이트 + 분해 입력이 필요로 하는 window 좌표."""
+
+    gate: PriceTrigger
+    ticker: str
+    trade_date: date
+    session_id: str
+    window_start: datetime
+    generation: int
 
 
 def minute_observation_id(trigger_id: str) -> str:
@@ -183,16 +194,18 @@ class EventStore:
         )
 
     def fetch_minute_price_trigger(self, trigger_id: str):
-        """분봉 트리거 한 행 소비(ALPHA-709) — (PriceTrigger, ticker, trade_date) | None.
+        """분봉 트리거 한 행 소비(ALPHA-709) — ``MinuteTriggerRow`` | None.
 
         entity_id 가 곧 단축코드(ticker)다 — 판정기(ALPHA-708)의 unit 축과 동일.
         trade_date 는 window_start 의 KST 날짜. observed_return 은 부호 있는
         close/open−1 로 재구성한다 — 행의 change_rate 는 절대값이라 방향이 없다.
+        session_id·generation 은 분봉 분해 입력(ALPHA-710)이 그 window artifact 를
+        정확히 집게 하는 좌표다.
         """
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT trigger_id, entity_id, window_start, open_price, close_price,"
-                " change_rate, threshold, detection_policy_version"
+                " change_rate, threshold, detection_policy_version, session_id, generation"
                 " FROM minute_price_trigger WHERE trigger_id = %s",
                 (trigger_id,),
             )
@@ -202,8 +215,8 @@ class EventStore:
         open_price = float(row[3])
         observed = (float(row[4]) / open_price - 1) if open_price else None
         window_start = row[2]
-        return (
-            PriceTrigger(
+        return MinuteTriggerRow(
+            gate=PriceTrigger(
                 trigger_id=str(row[0]),
                 observed_return=observed,
                 reason=(
@@ -213,9 +226,59 @@ class EventStore:
                 abs_gate=True,
                 rel_gate=False,
             ),
-            str(row[1]),
-            window_start.astimezone(KST).date(),
+            ticker=str(row[1]),
+            trade_date=window_start.astimezone(KST).date(),
+            session_id=str(row[8]),
+            window_start=window_start,
+            generation=int(row[9]),
         )
+
+    def fetch_minute_open_window(self, session_id: str, entity_id: str):
+        """트리거 대상 ETF 의 세션 시가가 확정된 window 좌표 — (window_start, generation) | None.
+
+        분봉 분해(ALPHA-710)의 기준가 축이다: ETF 트리거 판정이 쓴 것과 **같은**
+        시가 window 의 artifact 에서 구성종목 시가를 읽어야 두 축이 갈리지 않는다
+        (minute_session_open 은 ETF 만 담으므로 구성종목 시가는 artifact 에서 파생).
+        generation 은 원장(minute_ingestion_window)이 정본이다 — artifact 는 불변이라
+        정정 진행 중이어도 커밋된 세대는 안전하게 읽힌다.
+
+        ponytail: 시가 확정 **당시** 세대는 원장에 없어 현재 세대를 쓴다 — 확정 후
+        정정(드묾)이 끼면 ETF 시가(불변, 구세대)와 구성종목 시가(신세대)의 세대가
+        갈릴 수 있다. 해소는 minute_session_open 에 확정 세대 기록(파이프라인 후속).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT o.source_window, w.generation, w.checksum"
+                " FROM minute_session_open o"
+                " JOIN minute_ingestion_window w"
+                "   ON w.session_id = o.session_id AND w.window_start = o.source_window"
+                " WHERE o.session_id = %s AND o.entity_id = %s AND o.status = 'OPEN'"
+                "   AND w.generation >= 1"
+                "   AND w.data_status NOT IN ('DUE', 'CLAIMED')",
+                (session_id, entity_id),
+            )
+            row = cur.fetchone()
+        return (row[0], int(row[1]), row[2]) if row else None
+
+    def fetch_minute_window_meta(self, session_id: str, window_start):
+        """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
+
+        트리거 행의 generation 대신 이걸 쓰는 이유: 발화 후 정정이 끼면 최신 커밋
+        세대가 더 정확한 가격이고, ledger 의 checksum 은 그 세대의 바이트에 대한
+        것이라 쌍이 갈리지 않는다. **정정 진행 중(DUE·CLAIMED)은 None** — 재claim 은
+        generation·checksum 을 옛 커밋 쌍으로 남겨두지만(#485 단서), 정정이 걸렸다는
+        것은 그 가격이 틀렸을 개연성이라 price_consumer 와 같은 처방(지연 재시도)으로
+        커밋 뒤에 소비한다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT generation, checksum FROM minute_ingestion_window"
+                " WHERE session_id = %s AND window_start = %s AND generation >= 1"
+                " AND data_status NOT IN ('DUE', 'CLAIMED')",
+                (session_id, window_start),
+            )
+            row = cur.fetchone()
+        return (int(row[0]), row[1]) if row else None
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
         """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.

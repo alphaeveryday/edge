@@ -12,8 +12,9 @@ data-pipeline 의 `MinuteConsumer` 커널을 **쓰지 않는다** — 이 큐는
 
 실패 분류는 셋이고 처방이 다르다:
 
-- `ReturnsNotReadyError` — 장중이라 당일 `price_daily` 가 아직 없다. 코드 결함이 아니라
-  **시간이 낫게 하는** 실패다 → 가시성을 길게 연장해(기본 30분) 15:40 배치 뒤에 다시 본다.
+- `ReturnsNotReadyError` — 분봉 window artifact·시가 원장이 아직 없다(ALPHA-710, 초
+  단위 커밋 지연). 코드 결함이 아니라 **시간이 낫게 하는** 실패다 → 120초 고정 지연으로
+  재확인하고, 진짜 결손이면 반복이 receive 예산(16)을 태워 ≈32분 안에 DLQ 로 간다.
 - 봉투 계약 위반(파싱 불가·미지 event_type·trigger_id 결손) — 재시도로 낫지 않는다.
   **지우지도 않는다**(지우면 근거가 사라진다) → 짧은 재배달을 반복하다 DLQ 로 간다.
 - 그 외 예외(DB·LLM·일시 장애) — 기본 가시성으로 재배달. 예산 판정은 SQS 상한 몫이다.
@@ -39,13 +40,12 @@ logger = logging.getLogger(__name__)
 
 TRIGGER_EVENT_TYPE = "PriceTriggerFired"  # data-pipeline jobs.py 와 같은 문자열(와이어 계약)
 WAIT_SECONDS = 20            # long polling — 빈 응답 폭주 방지
-# ReturnsNotReady 지연의 목표 시각 — 15:40 배치가 price_daily 를 만들고 몇 분 뒤.
-# 고정 30분 지연은 08:00 확장 세션의 이른 트리거가 15:40 전에 maxReceiveCount(16)를
-# 소진해 배치 직전에 DLQ 로 가는 산술을 남긴다(봇 P2) — 지연을 배치 착지 뒤로 계산하면
-# receive 는 배치 전 1회 + 후 1회로 끝나 예산 산술이 사라진다.
-BATCH_LANDING_HOUR_KST = 15
-BATCH_LANDING_MINUTE_KST = 55  # 15:40 시작 + 적재 여유
-RETURNS_RETRY_FALLBACK_SECONDS = 1800  # 배치가 이미 지났는데도 비어 있다 = 파티션 결손(진짜 결함)
+# ReturnsNotReady 지연 — 분해 입력이 분봉 canonical 이 되면서(ALPHA-710) 이 실패는
+# "15:40 배치 대기"가 아니라 window artifact 커밋·시가 원장 확정의 **초 단위 지연**이다.
+# 짧은 고정 지연으로 재확인하고, 진짜 결손이면 반복이 maxReceiveCount(16) 예산을 태워
+# DLQ 로 간다 — 시간이 낫게 하지 않는 실패는 근거 보존 경로가 정답이다. 16회 × 120초
+# ≈ 32분이라 일시 지연은 넉넉히 덮고 결손은 당일 안에 드러난다.
+RETURNS_RETRY_SECONDS = 120
 # 처리 시작 전 이 값으로 가시성을 한 번 연장한다 — 큐 기본(300초)은 LLM 다회 호출
 # (호출당 재시도 포함 수분)을 못 덮어, 처리 중 재배달된 메시지가 프리플라이트(아직
 # run 없음)를 통과해 **같은 트리거에 LLM 을 이중 과금**한다. 주기 heartbeat 스레드는
@@ -56,22 +56,6 @@ PROCESSING_VISIBILITY_SECONDS = 900
 KST = ZoneInfo("Asia/Seoul")
 
 
-def returns_retry_seconds(now: datetime) -> int:
-    """다음 재시도까지의 지연(초) — 오늘 배치 착지 시각(15:55 KST) 뒤에 떨어지게.
-
-    배치 전이면 그 시각까지(+SQS 상한 12시간 아래), 배치 뒤인데도 비어 있으면 파티션
-    결손이라 고정 지연으로 재확인을 반복한다 — 그 반복이 예산을 태워 DLQ 로 가는 것이
-    맞다(시간이 낫게 하는 실패가 아니게 된 것이므로 근거 보존 경로가 정답이다).
-    """
-    landing = now.astimezone(KST).replace(
-        hour=BATCH_LANDING_HOUR_KST, minute=BATCH_LANDING_MINUTE_KST,
-        second=0, microsecond=0,
-    )
-    remaining = (landing - now.astimezone(KST)).total_seconds()
-    if remaining <= 0:
-        return RETURNS_RETRY_FALLBACK_SECONDS
-    # SQS VisibilityTimeout 상한(12h) 안이고, 약간의 지터 겸 여유 60초
-    return min(int(remaining) + 60, 43199)
 
 
 def parse_trigger_message(body: str) -> str:
@@ -197,12 +181,11 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
         try:
             outcome = process_fn(trigger_id)
         except ReturnsNotReadyError:
-            # 시간이 낫게 하는 실패 — **배치 착지 뒤로** 미룬다. 고정 간격 반복은 이른
-            # 트리거의 receive 예산(maxReceiveCount 16)을 배치 전에 태운다(봇 P2).
-            delay = returns_retry_seconds(datetime.now(KST))
-            logger.info("returns 미준비(장중) — %d초 뒤(배치 착지 후) 재시도: %s",
-                        delay, trigger_id)
-            _set_visibility(sqs, queue_url, receipt, delay)
+            # 시간이 낫게 하는 실패 — 분봉 artifact 커밋·시가 원장 확정의 짧은 지연이라
+            # 고정 짧은 간격으로 재확인한다(ALPHA-710 — 배치 착지 대기 산술은 폐기).
+            logger.info("returns 미준비(분봉 window·시가 원장) — %d초 뒤 재시도: %s",
+                        RETURNS_RETRY_SECONDS, trigger_id)
+            _set_visibility(sqs, queue_url, receipt, RETURNS_RETRY_SECONDS)
             _count("deferred")
             continue
         except Exception:

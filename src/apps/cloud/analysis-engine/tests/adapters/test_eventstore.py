@@ -404,16 +404,20 @@ def test_fetch_minute_price_trigger_maps_signed_return_and_kst_date():
     window = datetime(2026, 7, 15, 23, 59, tzinfo=timezone.utc)  # KST 07-16 08:59
     conn = _MinuteFakeConn(minute_trigger_row=(
         "mpt_1", "091160", window, D("100"), D("94"),
-        D("0.06"), D("0.05"), "intraday-open-v1",
+        D("0.06"), D("0.05"), "intraday-open-v1", "ses-1", 2,
     ))
     result = EventStore(conn).fetch_minute_price_trigger("mpt_1")
     assert result is not None
-    trigger, ticker, trade_date = result
-    assert ticker == "091160"
-    assert trade_date == date(2026, 7, 16)  # KST 축
+    assert result.ticker == "091160"
+    assert result.trade_date == date(2026, 7, 16)  # KST 축
+    trigger = result.gate
     assert trigger.abs_gate and not trigger.rel_gate
     assert abs(trigger.observed_return - (-0.06)) < 1e-9  # 하락 방향이 산다
     assert "intraday-open-v1" in trigger.reason
+    # 분봉 분해(ALPHA-710)가 window artifact 를 정확히 집는 좌표 — 빠지면 분해가
+    # 세대·세션을 추측해야 하고, 정정 세대와 어긋난 artifact 를 읽는다.
+    assert (result.session_id, result.generation) == ("ses-1", 2)
+    assert result.window_start is window
 
 
 def test_fetch_minute_price_trigger_missing_row_is_none():

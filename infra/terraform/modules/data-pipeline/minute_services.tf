@@ -29,9 +29,11 @@ locals {
     for name in local.minute_all_destinations : name => aws_sqs_queue.minute[name].url
   }
 
-  # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 소비자가 없는 큐(price-explanation-
-  # realtime, ALPHA-710 대기)를 넣으면 게이트가 영영 안 비고, backfill 큐를 넣으면 밤
-  # backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다(스케일 단위가 서비스 전체).
+  # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 설명 큐(price-explanation-realtime,
+  # 소비자=analysis-consumer ALPHA-719)를 넣지 않는 이유는 아래 MINUTE_SESSION_SERVICES
+  # 주석 — 지연 재배달의 비가시 메시지가 게이트 깊이에 잡혀 스케일다운을 막는다.
+  # backfill 큐를 넣으면 밤 backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다
+  # (스케일 단위가 서비스 전체).
   # backfill 은 미루는 것이 정의상 무해하다 — 다음 세션이 집는다.
   # ⚠️ 게이트 env 와 세션 역할 IAM 이 **여기 한 곳**에서 파생된다 — 갈리면 stop 이
   # AccessDenied 를 pending 으로 읽어 영영 안 내려가거나, 게이트 없는 큐 권한이 남는다.
@@ -322,7 +324,7 @@ resource "aws_ecs_task_definition" "minute_session" {
       # (실패 날 올리면 세션 부재 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음).
       # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
       # analysis-consumer(ALPHA-719)도 세션 결속이다 — 트리거는 장중에만 발생하고,
-      # ReturnsNotReady 지연 재시도는 15:40 배치 뒤(세션 안)에 풀린다. ⚠️설명 큐는
+      # ReturnsNotReady 는 분봉 입력의 120초 재시도(ALPHA-710)라 세션 안에 풀린다. ⚠️설명 큐는
       # stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트 깊이에 잡혀
       # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
       # 세션이 집는다.

@@ -381,12 +381,53 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # 같은 날 두 번째로 발화하면 새 PUBLISHED 가 나가고 outbox 도 발번돼야 한다.
         # 같은 날 다건 PUBLISHED 는 서빙층(publication-api)이 최근 게시 시각 우선으로
         # 흡수한다. 이 단언이 깨지면 장중 설명이 생성만 되고 MTS 에 안 뜬다.
+        open_window = f"{TRADE_DATE}T00:00:00+00:00"     # 09:00 KST — 세션 시가 window
+        trigger_window = f"{TRADE_DATE}T01:30:00+00:00"  # 10:30 KST
+        # 분봉 canonical artifact — **data-pipeline 의 키 빌더로 쓴다**: 엔진 리더의
+        # 미러 전사(lake.minute_artifact_key)와의 수렴을 이 읽기가 고정한다(PIPELINE_ID
+        # 수렴과 같은 축). 삼성 장중 수익률 73500/70000−1 = 5% — 일봉 시드(≈2.94%)와
+        # 다른 값이라, 아래 분해 단언이 분봉 축을 실제로 탔음을 구분해 증명한다.
+        # 원장 checksum = 커밋된 바이트의 sha256 — 엔진이 대조하므로 실물과 같이 시드.
+        import hashlib
+
+        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
+
+        def _bars(*rows: dict) -> bytes:
+            return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
+
+        open_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
+        )
+        trigger_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
+        )
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = open_bars
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = trigger_bars
         with seed_conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
                 " session_date, universe_version, universe_hash, expected_window_count)"
-                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 1)",
+                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
                 (TRADE_DATE, "0" * 64),
+            )
+            # 분봉 분해 입력(ALPHA-710)의 원장 전제 — 시가·트리거 window 의 세대·checksum
+            # 은 minute_ingestion_window 가 정본이고, ETF 세션 시가는 minute_session_open.
+            for window_start, bars_bytes in ((open_window, open_bars),
+                                             (trigger_window, trigger_bars)):
+                cur.execute(
+                    "INSERT INTO minute_ingestion_window (session_id, window_start,"
+                    " window_end, scheduled_at, data_status, generation, checksum)"
+                    " VALUES ('ses-e2e', %s, %s::timestamptz + interval '1 minute',"
+                    " %s, 'VALID', 1, %s)",
+                    (window_start, window_start, window_start,
+                     hashlib.sha256(bars_bytes).hexdigest()),
+                )
+            cur.execute(
+                "INSERT INTO minute_session_open (session_id, entity_id, status,"
+                " open_price, source_window) VALUES ('ses-e2e', %s, 'OPEN', 10000, %s)",
+                (ETF_TICKER, open_window),
             )
             # window_start 01:30Z = 10:30 KST — 엔진이 trade_date 를 여기서 파생한다.
             cur.execute(
@@ -395,7 +436,7 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 " close_price, change_rate, threshold, cooldown_bucket)"
                 " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-abs-v1',"
                 " 10000, 10300, 0.03, 0.02, 1)",
-                (MINUTE_TRIGGER_ID, ETF_TICKER, f"{TRADE_DATE}T01:30:00+00:00"),
+                (MINUTE_TRIGGER_ID, ETF_TICKER, trigger_window),
             )
         seed_conn.commit()
         # sleep 없이 곧장 실행 — 직전 게시와 같은 초에 게시돼도 as_of 마이크로초
@@ -424,6 +465,20 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             )
             assert cur.fetchall() == [("e2e-tenant-a", 2, 2), ("e2e-tenant-b", 2, 2)], (
                 "두 번째 발화의 게시가 전 테넌트 outbox 로 발번되지 않았다"
+            )
+            # 분해 입력이 분봉 축(ALPHA-710)임을 값으로 증명 — 삼성 장중 수익률은
+            # 트리거 window close/세션 시가 = 73500/70000−1 = 5%. 일봉 축이면
+            # 70000/68000−1 ≈ 2.94% 가 나와 이 단언이 깨진다.
+            cur.execute(
+                "SELECT m.constituent_return FROM etf_contribution_observation o"
+                " JOIN etf_contribution_member m"
+                " ON m.contribution_observation_id = o.contribution_observation_id"
+                " WHERE o.minute_price_trigger_id = %s",
+                (MINUTE_TRIGGER_ID,),
+            )
+            [(minute_ret,)] = cur.fetchall()
+            assert abs(float(minute_ret) - 0.05) < 1e-9, (
+                f"분봉 분해가 일봉 축을 탔다: {minute_ret}"
             )
     finally:
         seed_conn.close()
