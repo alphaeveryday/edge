@@ -91,3 +91,22 @@ def test_contract_violations_fold_to_none_per_unit():
     })
     returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 1)
     assert returns == {"A": None, "B": None, "C": None, "D": None}
+
+
+def test_infinity_and_nan_fold_to_none():
+    """float("Infinity") 는 양수 비교를 통과하고 float("nan") 은 전부 False 다 —
+    유한성 게이트가 없으면 손상 레코드가 수익률 inf 로 위장돼 기여 순위를 오염시킨다."""
+    reader = _reader({
+        minute_artifact_key("KR", "2026-07-15", "0900", 1): _bars(
+            {"unit_id": "A", "open": "100", "close": "100"},
+            {"unit_id": "B", "open": "Infinity", "close": "100"},
+            {"unit_id": "C", "open": "100", "close": "100"},
+        ),
+        minute_artifact_key("KR", "2026-07-15", "1030", 1): _bars(
+            {"unit_id": "A", "open": "100", "close": "Infinity"},
+            {"unit_id": "B", "open": "100", "close": "110"},
+            {"unit_id": "C", "open": "100", "close": "nan"},
+        ),
+    })
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 1)
+    assert returns == {"A": None, "B": None, "C": None}

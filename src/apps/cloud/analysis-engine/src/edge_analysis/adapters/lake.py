@@ -156,6 +156,8 @@ class LakeReader:
         가격 계약 위반(0·음수·비수치)은 그 unit 만 None 으로 접는다 — 분해는 None 을
         미가격으로 제외한다(daily `load_returns` 와 같은 계약).
         """
+        import math
+
         opens = self._read_minute_bars(market, session_date, open_window_hhmm, open_generation)
         closes = (
             opens
@@ -175,9 +177,13 @@ class LakeReader:
             except (KeyError, TypeError, ValueError):
                 returns[unit_id] = None
                 continue
+            # isfinite — float("Infinity"/"nan") 은 양수 비교를 통과하거나(inf) 전부
+            # False(nan)라, 유한성 없이 접으면 손상 레코드가 수익률 inf 로 위장된다.
             returns[unit_id] = (
                 (close_price / open_price - 1.0)
-                if open_price and open_price > 0 and close_price > 0
+                if open_price is not None and math.isfinite(open_price)
+                and math.isfinite(close_price)
+                and open_price > 0 and close_price > 0
                 else None
             )
         return returns

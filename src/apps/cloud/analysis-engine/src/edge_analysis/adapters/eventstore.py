@@ -241,6 +241,10 @@ class EventStore:
         (minute_session_open 은 ETF 만 담으므로 구성종목 시가는 artifact 에서 파생).
         generation 은 원장(minute_ingestion_window)이 정본이다 — artifact 는 불변이라
         정정 진행 중이어도 커밋된 세대는 안전하게 읽힌다.
+
+        ponytail: 시가 확정 **당시** 세대는 원장에 없어 현재 세대를 쓴다 — 확정 후
+        정정(드묾)이 끼면 ETF 시가(불변, 구세대)와 구성종목 시가(신세대)의 세대가
+        갈릴 수 있다. 해소는 minute_session_open 에 확정 세대 기록(파이프라인 후속).
         """
         with self._conn.cursor() as cur:
             cur.execute(
