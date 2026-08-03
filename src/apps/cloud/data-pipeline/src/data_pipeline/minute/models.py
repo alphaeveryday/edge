@@ -280,7 +280,7 @@ def load_universe_uri(uri: str) -> Universe:
     ECS 컨테이너에는 로컬 파일 배포 축이 없다 — planner·worker·consumer 가 **같은
     S3 객체**를 가리키면 세 표면의 universe 가 한 정본에서 나온다.
     """
-    if uri.startswith("s3://"):
+    if uri.lower().startswith("s3://"):  # scheme 은 대소문자 무관(RFC 3986)
         import boto3  # 지연 import — 로컬 경로만 쓰는 테스트에 AWS 의존을 안 끼운다
 
         bucket, _, key = uri[len("s3://"):].partition("/")

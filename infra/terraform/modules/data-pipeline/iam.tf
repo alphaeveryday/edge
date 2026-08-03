@@ -33,6 +33,9 @@ resource "aws_iam_role_policy" "execution_secrets" {
         aws_secretsmanager_secret.fmp.arn,
         aws_secretsmanager_secret.kis.arn,
         aws_secretsmanager_secret.dart.arn,
+        # 1분 price-worker 의 토스 자격증명(ALPHA-711) — 여기 없으면 시크릿 주입 뒤에도
+        # ResourceInitializationError 로 태스크가 시작되지 않는다
+        aws_secretsmanager_secret.toss.arn,
         aws_secretsmanager_secret.krx.arn,
         var.deepseek_secret_arn,
         var.db_password_secret_arn,

@@ -49,7 +49,10 @@ resource "aws_sqs_queue" "minute" {
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.minute_dlq[each.key].arn
-    maxReceiveCount     = 8
+    # ⚠️ receive 가 곧 실행이 아니다 — lease(600) > visibility(300) 라 교대 receive 가
+    # contended 로 소비돼 실행 attempt 는 receive 의 절반꼴이다. 8 이면 DB 예산(5)이
+    # 권위가 되기 전에 transport 가 먼저 포기한다(v0.7 12.4 위반).
+    maxReceiveCount = 16
   })
 }
 
@@ -113,9 +116,12 @@ resource "aws_ecs_task_definition" "minute" {
   }
 
   container_definitions = jsonencode([{
-    name        = local.container_name
-    image       = var.image
-    essential   = true
+    name      = local.container_name
+    image     = var.image
+    essential = true
+    # SIGTERM 후 in-flight(LLM 없는 판정이라도 S3·DB 왕복)를 끝낼 시간 — 기본 30초는
+    # close() 계약(끝까지 기다린다)을 강제 종료로 자를 수 있다. Fargate 상한 120.
+    stopTimeout = 120
     command     = each.value.command
     environment = [for k, v in each.value.environment : { name = k, value = v }]
     secrets     = [for k, v in each.value.secrets : { name = k, valueFrom = v }]

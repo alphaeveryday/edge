@@ -25,9 +25,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
-from .models import load_universe, plan_session_windows
+from .models import load_universe_uri, plan_session_windows
 from .repository import MinuteLedger, SessionFinalizedError, UniverseConflictError
 from .states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET, UNIVERSE_DATASETS
 
@@ -179,4 +178,5 @@ def _load_universe(dataset: str, universe: str | None):
         return None
     if not universe:
         raise ValueError(f"dataset {dataset!r} 는 --universe 가 필요하다")
-    return load_universe(Path(universe))
+    # URI 판 — planner·worker·consumer 가 같은 s3 객체를 정본으로 본다(ALPHA-711)
+    return load_universe_uri(universe)

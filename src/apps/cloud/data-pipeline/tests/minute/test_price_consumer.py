@@ -878,3 +878,14 @@ class TestPriceConsumerCli:
             universe=self._universe_file(tmp_path), max_ticks=2,
         )
         assert code == 0
+
+    def test_bad_destination_rejected_at_startup(self):
+        # 오타 destination 은 판정·job 성공까지 커밋된 뒤 Relay 가 event 를 DEAD 로
+        # 격리한다(결정적 event_id 라 건별 redrive 뿐) — 기동에서 어휘로 거부한다
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="트리거 사건 어휘"):
+            price_consumer_cli(
+                self._settings(db=_DB,
+                               options=self._options(destination="price-explanation-realtme")),
+                universe="u",
+            )

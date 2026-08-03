@@ -35,7 +35,7 @@ from ..db import connect as _default_connect, stable_domain_id
 from ..lake.storage import Storage, canonical_price_minute_artifact_key
 from .artifacts import sha256_bytes
 from .consumer import PermanentJobError, TransientJobError
-from .jobs import TRIGGER_EVENT_TYPE, JobLedger
+from .jobs import TRIGGER_EVENT_TYPE, JobLedger, destination_accepts
 from .models import KST, SESSION_CLOSE, SESSION_OPEN, content_checksum
 from .states import WINDOW_CLAIMED, WINDOW_DUE, WINDOW_MISSING
 
@@ -600,6 +600,13 @@ def price_consumer_cli(settings, *, universe: str | None,
         raise SystemExit(
             "--universe 필요 — 판정 대상(etf_ids)·universe 대조의 정본이다"
             "(planner·worker 와 같은 파일/객체)"
+        )
+    if not destination_accepts(options.destination, TRIGGER_EVENT_TYPE):
+        # 오타 destination 은 판정·job 성공까지 커밋된 뒤 Relay 가 event 를 DEAD 로
+        # 격리한다 — event_id 가 결정적이라 설정을 고쳐도 그 행은 건별 redrive 뿐이다.
+        # 입력(큐) 검증과 대칭으로 출력 배선도 기동에서 거부한다.
+        raise SystemExit(
+            f"destination {options.destination!r} 는 트리거 사건 어휘가 아니다"
         )
     universe_model = load_universe_uri(universe)
     handler = PriceTriggerHandler(
