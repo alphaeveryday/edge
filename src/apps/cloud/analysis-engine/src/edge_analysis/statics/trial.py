@@ -42,7 +42,7 @@ CAL_BETA = 0.40        # |Δβ_m| 상한
 MATCH_K = 3            # 처치 1건당 대조 최대 수
 MIN_PAIRS = 20         # 짝이 이보다 적으면 판정불가
 SMD_MAX = 0.10         # 매칭 후 표준화 평균차 상한 (RCT 관례). 넘으면 균형 실패
-PLACEBO_LAYER = "시장"  # 위약 결과 - 종목 사건이 만들 수 없는 층
+LEADS = (1, 2)         # 사전추세 위약: 처치 t−1·t−2 의 ATT 는 0 이어야 한다
 
 _TRIAL_SQL = """
 , ev AS (
@@ -53,7 +53,9 @@ _TRIAL_SQL = """
 )
 , b AS (
     SELECT g.instrument_id AS iid, g.trade_date AS d, g.{y} AS y,
-           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm{extra}
+           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm,
+           LAG(g.{y}, 1) OVER (PARTITION BY g.instrument_id ORDER BY g.trade_date) AS y_l1,
+           LAG(g.{y}, 2) OVER (PARTITION BY g.instrument_id ORDER BY g.trade_date) AS y_l2{extra}
     FROM g
     WHERE g.sector_code IS NOT NULL AND g.mcap_pit > 0 AND g.beta_m IS NOT NULL
       AND g.{y} IS NOT NULL AND g.trade_date < DATE '{day}'
@@ -71,7 +73,8 @@ _TRIAL_SQL = """
 )
 SELECT m.tid, CAST(m.d AS VARCHAR) AS d, m.cid,
        t.y AS y_t, c.y AS y_c,
-       ln(t.mcap) AS lc_t, ln(c.mcap) AS lc_c, t.bm AS bm_t, c.bm AS bm_c{sel}
+       ln(t.mcap) AS lc_t, ln(c.mcap) AS lc_c, t.bm AS bm_t, c.bm AS bm_c,
+       t.y_l1 AS l1_t, c.y_l1 AS l1_c, t.y_l2 AS l2_t, c.y_l2 AS l2_c{sel}
 FROM m JOIN t ON t.iid = m.tid AND t.d = m.d
        JOIN c ON c.iid = m.cid AND c.d = m.d
 WHERE m.rn <= {k}
@@ -144,14 +147,31 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
            "y_t": float(yt.mean()), "y_c": float(yc.mean()),
            "caliper": (CAL_LOGCAP, CAL_BETA), "k": k, "layer": layer,
            "smd": smd, "balanced": balanced}
-    # 위약 결과: 같은 처치·같은 짝으로 **시장층**을 재본다. 종목 사건은 시장 요인
-    # 수익을 만들 수 없으니 0 이어야 한다. 유의하면 매칭이 실패한 것이다.
-    if layer != PLACEBO_LAYER:
-        pl = run_trial(lake, day, etype=etype, layer=PLACEBO_LAYER, role=role, k=k)
-        if pl.get("verdict") == "계산됨":
-            out["placebo"] = (pl["att"], pl["p"])
+    # **사전추세 위약 (정당한 위약).** 처치는 미래에서 오지 않으므로 t−1·t−2 의
+    # ATT 는 0 이어야 한다. 유의하면 매칭이 실패했거나 선견이 있다.
+    #
+    # 이전에 쓰던 '시장층 ATT ≈ 0' 위약은 **전제가 거짓**이었다: beta_m 은 w60
+    # (60~1 PRECEDING) 이라 이미 처치 이전 확정값이고, 처치(뉴스)는 그 종목의
+    # **당일 시장 민감도를 바꿀 수 있다** - 칼만이 증거다(하이닉스 β 1.16~1.55
+    # 하루 안 이동). 그러니 시장층 ATT 는 매칭 실패가 아니라 β 변화 효과일 수 있다.
+    lead = {}
+    for j, (a, b) in ((1, (9, 10)), (2, (11, 12))):
+        if j not in LEADS:
+            continue
+        pr = [(float(r[a]), float(r[b]), str(r[1])) for r in rows
+              if r[a] is not None and r[b] is not None]
+        if len(pr) < MIN_PAIRS:
+            lead[j] = None
+            continue
+        dl = np.array([x[0] - x[1] for x in pr])
+        rg = np.random.default_rng(SEED)
+        nl = np.array([float((dl * rg.choice([-1.0, 1.0], size=len(dl))).mean())
+                       for _ in range(PERMS)])
+        lead[j] = (float(dl.mean()), _two_sided(float((nl >= dl.mean()).mean())), len(dl))
+    out["lead"] = lead
+    out["pretrend_ok"] = all(v is None or v[1] >= ALPHA for v in lead.values())
     if col:
-        cv = np.array([float(r[9]) for r in rows])
+        cv = np.array([float(r[13]) for r in rows])
         hi = _pctile(cv) >= cond_pct if cond_cmp == ">=" else _pctile(cv) <= cond_pct
         # 처치효과의 조절: 짝 차이를 조건 클래스에 회귀 (표본 분할 없음)
         d_obs, d_p = _cate_interaction(diff, np.ones(len(diff), dtype=bool), hi, dates)
@@ -174,11 +194,14 @@ def say(r: dict) -> str:
     sm = " · ".join(f"{k} SMD {v:+.3f}" for k, v in r["smd"].items())
     s += (f"\n  균형: {sm} (상한 {SMD_MAX}) — "
           + ("통과" if r["balanced"] else "**실패: 이 ATT 는 처치효과가 아니라 매칭 잔차다**"))
-    if r.get("placebo") is not None:
-        pa, pp = r["placebo"]
-        s += (f"\n  위약({PLACEBO_LAYER}층): ATT {pa * 100:+.3f}%p (p={pp:.3f}) — "
-              + ("0 과 구분 안 됨 = 통과" if pp >= ALPHA else
-                 "**유의: 종목 사건이 시장 요인을 만들 수 없으므로 매칭 실패다**"))
+    if r.get("lead"):
+        bits = []
+        for j, v in sorted(r["lead"].items()):
+            bits.append(f"t−{j} 표본부족" if v is None else
+                        f"t−{j} ATT {v[0] * 100:+.3f}%p (p={v[1]:.3f}, n={v[2]})")
+        s += ("\n  사전추세 위약: " + " · ".join(bits) + " — "
+              + ("0 과 구분 안 됨 = 통과" if r.get("pretrend_ok") else
+                 "**유의: 처치 전에 이미 갈렸다 = 매칭 실패 또는 선견**"))
     if r.get("cond"):
         s += (f"\n  조절({r['cond']}): 충족 n={r['cond_n']} ATT "
               + (f"{r['att_cond'] * 100:+.3f}%p" if r.get("att_cond") is not None else "미계산")
@@ -194,7 +217,7 @@ def _selfcheck() -> None:
     # 못 표현하는 것 (샌드박스가 필요해지는 경계):
     unsupported = ("IV(도구변수)", "RDD(회귀단절)", "합성통제", "리드-래그 이벤트스터디",
                    "성향점수(로짓) 매칭", "다중 처치 동시 투입")
-    assert len(unsupported) == 6
+    assert len(unsupported) == 5   # 리드(사전추세)는 구현했다
     print("ok · 미지원:", " · ".join(unsupported))
 
 
