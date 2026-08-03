@@ -496,6 +496,32 @@ class MinutePriceWorkerConfig(BaseModel):
         return self
 
 
+class MinutePriceConsumerConfig(BaseModel):
+    """1분 가격 판정 Consumer 상주 설정 — `price-consumer` 스텝만 쓴다(ALPHA-711).
+
+    kernel 수치(batch·visibility·heartbeat·lease·재시도)는 여기서 **검증하지 않는다**
+    — `minute.consumer.ConsumerConfig.__post_init__` 가 조합 검증의 정본이다(두 벌이면
+    한쪽만 고쳐진다). 임계(abs_threshold)는 `price_triggers` 섹션을 재사용한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_url: NonBlankStr
+    # 판정 규칙의 identity 축 — 일 단위(prev_close 대비)와 축이 달라 기본값을 두지
+    # 않는다(배포마다 조용히 같은 값이면 규칙 변경이 identity 에 안 드러난다)
+    detection_policy_version: NonBlankStr
+    destination: NonBlankStr = "price-explanation-realtime"
+    batch_size: int = 10
+    wait_seconds: int = 20
+    visibility_seconds: int = 300
+    heartbeat_seconds: int = 60
+    max_concurrency: int = 1
+    lease_seconds: int = 600
+    retry_base_seconds: int = 5
+    retry_max_seconds: int = 900
+    max_attempts: int = 5
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 

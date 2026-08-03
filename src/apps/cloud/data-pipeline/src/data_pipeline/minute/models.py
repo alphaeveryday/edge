@@ -272,3 +272,20 @@ class Universe(BaseModel):
 
 def load_universe(path: Path) -> Universe:
     return Universe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def load_universe_uri(uri: str) -> Universe:
+    """`load_universe` 의 URI 판 — `s3://bucket/key` 를 지원한다(ALPHA-711).
+
+    ECS 컨테이너에는 로컬 파일 배포 축이 없다 — planner·worker·consumer 가 **같은
+    S3 객체**를 가리키면 세 표면의 universe 가 한 정본에서 나온다.
+    """
+    if uri.startswith("s3://"):
+        import boto3  # 지연 import — 로컬 경로만 쓰는 테스트에 AWS 의존을 안 끼운다
+
+        bucket, _, key = uri[len("s3://"):].partition("/")
+        if not bucket or not key:
+            raise ValueError(f"s3 universe URI 형식 오류: {uri!r}")
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+        return Universe.model_validate(json.loads(body.decode("utf-8")))
+    return load_universe(Path(uri))

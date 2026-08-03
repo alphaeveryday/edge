@@ -33,6 +33,7 @@ from .models import (
     KisNavConfig,
     KisPriceConfig,
     MinuteConsumerConfig,
+    MinutePriceConsumerConfig,
     MinutePriceWorkerConfig,
     MinuteRelayConfig,
     KrxEtfConfig,
@@ -110,6 +111,9 @@ class Settings(BaseSettings):
     # 1분 Price Worker(ALPHA-706)는 `price-worker` 스텝만 쓴다 — 미설정이면 그
     # 진입점이 fail-loud 한다(토스 자격증명은 env 로만).
     minute_price_worker: MinutePriceWorkerConfig | None = None
+    # 1분 가격 판정 Consumer(ALPHA-711)는 `price-consumer` 스텝만 쓴다 — 미설정이면
+    # 그 진입점이 fail-loud 한다.
+    minute_price_consumer: MinutePriceConsumerConfig | None = None
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

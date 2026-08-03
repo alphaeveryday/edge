@@ -298,3 +298,21 @@ variable "us_fmp_enabled" {
   type        = bool
   default     = false
 }
+
+variable "minute_universe_uri" {
+  description = "1분 파이프라인 universe 정본 객체 URI(ALPHA-711). 비우면 레이크 버킷의 config/minute/universe.json — planner·worker·consumer 가 같은 객체를 봐야 한다"
+  type        = string
+  default     = ""
+}
+
+variable "minute_trigger_schema_version" {
+  description = "price window job identity 축(ALPHA-706) — 판정 규칙 변경 시 올린다"
+  type        = string
+  default     = "intraday-open-v1"
+}
+
+variable "minute_detection_policy_version" {
+  description = "분봉 판정 정책 identity(ALPHA-708) — 일 단위 트리거와 축이 달라 별도 값"
+  type        = string
+  default     = "intraday-open-v1"
+}

@@ -40,6 +40,7 @@ from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.eod import qc_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.relay import relay_cli
+from .minute.price_consumer import price_consumer_cli
 from .minute.worker import price_worker_cli
 from .lake import (
     make_storage,
@@ -154,7 +155,10 @@ def main(argv: list[str] | None = None) -> int:
                  "plan-minute-session", "drain-minute-session",
                  # 1분 Price Worker(ALPHA-706): 상주 수집 루프(ECS Service). 원장 DB +
                  # 토스 자격증명 + storage(artifact PUT) + --universe(planner 와 동일 파일).
-                 "price-worker"],
+                 "price-worker",
+                 # 1분 가격 판정 Consumer(ALPHA-711): Price Job SQS 소비 상주 루프.
+                 # 원장 DB + 큐 설정 + storage(artifact GET) + --universe(판정 대상).
+                 "price-consumer"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -231,10 +235,10 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.max_ticks is not None:
-        if args.step not in ("relay", "dlq-reconcile", "price-worker"):
+        if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer"):
             raise SystemExit(
-                "--max-ticks 는 relay·dlq-reconcile·price-worker 에서만 쓴다 — "
-                f"이 스텝({args.step})에서는 무시되므로 거부한다"
+                "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer 에서만 "
+                f"쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -269,12 +273,17 @@ def main(argv: list[str] | None = None) -> int:
             "--dataset·--source-group 은 plan-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
-    if args.step not in ("plan-minute-session", "price-worker") and (
+    if args.step == "price-consumer" and args.session_date is not None:
+        raise SystemExit(
+            "--session-date 는 price-consumer 에서 쓰지 않는다 — 대상 세션은 job "
+            "payload 가 정한다(무시되므로 거부)"
+        )
+    if args.step not in ("plan-minute-session", "price-worker", "price-consumer") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
-            "--session-date·--universe 는 plan-minute-session·price-worker 에서만 쓴다 — "
-            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            "--session-date·--universe 는 plan-minute-session·price-worker·"
+            f"price-consumer 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
@@ -326,6 +335,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "price-worker":
         return price_worker_cli(settings, session_date=args.session_date,
                                 universe=args.universe, max_ticks=args.max_ticks)
+    if args.step == "price-consumer":
+        return price_consumer_cli(settings, universe=args.universe,
+                                  max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

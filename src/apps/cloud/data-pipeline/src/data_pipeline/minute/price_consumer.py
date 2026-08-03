@@ -561,3 +561,105 @@ class PriceTriggerHandler:
                 )
                 inserted.append(fire["entity_id"])
         return inserted
+
+
+def price_consumer_cli(settings, *, universe: str | None,
+                       max_ticks: int | None = None) -> int:
+    """상주 가격 판정 Consumer 진입점 — `python -m data_pipeline.run price-consumer`.
+
+    relay_cli 와 같은 계약: SIGTERM/SIGINT 는 진행 중 배치를 끝내고 멈추며(kernel 이
+    long polling 중 수신분을 visibility 0 으로 반납한다), DB 오류는 잡지 않는다 —
+    전파해 task 를 죽이면 ECS 가 재기동하고 claim 은 lease 만료로 회수된다.
+
+    임계는 `price_triggers.abs_threshold` 를 **재사용**한다(2026-08-02 확정) —
+    `detection_policy_version` 만 분봉 축으로 새 값이다. `--max-ticks` 는 로컬
+    확인용이고 배선 오류 신호(poison·misrouted·orphan·ahead)가 있으면 1 로 끝난다.
+    """
+    import os
+    import signal
+    import socket
+    import time as _time
+    from datetime import timezone
+
+    from .consumer import ConsumerConfig, MinuteConsumer, SqsQueue
+    from .models import load_universe_uri
+
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — price-consumer 는 job 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    options = settings.minute_price_consumer
+    if options is None:
+        raise SystemExit(
+            "minute_price_consumer 설정 없음 — 큐 URL·판정 정책 필수"
+            "(DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL 등 주입)"
+        )
+    if settings.price_triggers is None:
+        # 임계의 정본은 price_triggers 섹션이다(재사용 확정) — 여기서 따로 받으면
+        # 일 단위 트리거와 임계가 조용히 갈린다
+        raise SystemExit("price_triggers 설정 없음 — abs_threshold 재사용이 확정 규칙이다")
+    if not universe:
+        raise SystemExit(
+            "--universe 필요 — 판정 대상(etf_ids)·universe 대조의 정본이다"
+            "(planner·worker 와 같은 파일/객체)"
+        )
+    universe_model = load_universe_uri(universe)
+    handler = PriceTriggerHandler(
+        db=settings.db,
+        storage=_make_storage(settings),
+        jobs=JobLedger(db=settings.db),
+        etf_ids=frozenset(universe_model.etf_ids),
+        universe_version=universe_model.universe_version,
+        universe_hash=universe_model.universe_hash,
+        abs_threshold=Decimal(str(settings.price_triggers.abs_threshold)),
+        detection_policy_version=options.detection_policy_version,
+        destination=options.destination,
+        extended_hours_ids=frozenset(universe_model.extended_hours_ids),
+    )
+    consumer = MinuteConsumer(
+        jobs=JobLedger(db=settings.db),
+        queue=SqsQueue(wait_seconds=options.wait_seconds),
+        handler=handler,
+        config=ConsumerConfig(
+            consumer_id=f"pc-{socket.gethostname()}-{os.getpid()}",
+            kind="price",
+            queue_url=options.queue_url,
+            batch_size=options.batch_size,
+            wait_seconds=options.wait_seconds,
+            visibility_seconds=options.visibility_seconds,
+            heartbeat_seconds=options.heartbeat_seconds,
+            max_concurrency=options.max_concurrency,
+            lease_seconds=options.lease_seconds,
+            retry_base_seconds=options.retry_base_seconds,
+            retry_max_seconds=options.retry_max_seconds,
+            max_attempts=options.max_attempts,
+        ),
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(received, lambda *_: consumer.request_stop())
+    logger.info("price-consumer 시작: queue=%s policy=%s",
+                options.queue_url, options.detection_policy_version)
+    ticks = 0
+    totals: dict[str, int] = {}
+    try:
+        while max_ticks is None or ticks < max_ticks:
+            counter = consumer.tick(datetime.now(timezone.utc))
+            ticks += 1
+            for key, value in counter.items():
+                totals[key] = totals.get(key, 0) + value
+            if counter.get("stopped"):
+                logger.info("price-consumer 종료(SIGTERM) — %d tick, %s", ticks, totals)
+                # 상주 모드의 SIGTERM 은 정상 종료다. bounded 는 확인을 못 끝낸 것.
+                return 0 if max_ticks is None else 1
+    finally:
+        consumer.close()  # in-flight 를 끝까지 — 실행은 했는데 기록이 없는 상태 방지
+    # 배선 오류 신호는 성공으로 접지 않는다 — poison(파싱 불가)·misrouted(kind 불일치)·
+    # orphan(job 행 없음)·ahead(세대 역전)는 재시도로 낫지 않는 생산자/배선 결함이다
+    wiring_errors = sum(totals.get(key, 0)
+                       for key in ("poison", "misrouted", "orphan", "ahead"))
+    logger.info("price-consumer 종료(max-ticks %d) — %s", ticks, totals)
+    return 1 if wiring_errors else 0
+
+
+def _make_storage(settings):
+    from ..lake.storage import make_storage
+
+    return make_storage(settings.storage)
