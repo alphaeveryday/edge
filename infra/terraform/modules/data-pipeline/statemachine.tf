@@ -305,10 +305,13 @@ locals {
   # analyze 페이즈는 예외 — 단일 태스크·다른 이미지라 빌더를 안 거치고 아래에 직접 정의한다.
   # news_* 페이즈(ALPHA-553)는 news_pipeline.tf 가 정의한 잡 부분집합이다 — 같은 빌더를 재사용해
   # 뉴스 SFN 브랜치를 만든다(빌더 중복 방지). 기존 raw/normalize/feature 출력은 불변(순수 additive).
+  # disclosure_* 페이즈(ALPHA-722)도 같다 — disclosure_pipeline.tf 가 고른 부분집합이다.
   branches_by_phase = {
     for phase, jobs in {
-      raw      = local.market_raw_jobs, normalize = local.market_normalize_jobs, feature = local.market_feature_jobs,
-      news_raw = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs
+      raw                = local.market_raw_jobs, normalize = local.market_normalize_jobs, feature = local.market_feature_jobs,
+      news_raw           = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs,
+      disclosure_raw     = local.disclosure_raw_jobs, disclosure_normalize = local.disclosure_normalize_jobs,
+      disclosure_feature = local.disclosure_feature_jobs
     } :
     phase => [
       for job in jobs : {
