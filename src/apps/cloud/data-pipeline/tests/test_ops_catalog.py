@@ -13,11 +13,16 @@ _TASKS_TF = _TF_MODULE / "tasks.tf"
 # 뉴스 SFN(ALPHA-553)의 직렬 2개(NewsLoadAssertions·NewsAssembleEvents)는 여기에만 있다 —
 # 병렬 브랜치 4개는 statemachine.tf 잡 정의를 부분집합 필터로 재사용한다.
 _NEWS_PIPELINE_TF = _TF_MODULE / "news_pipeline.tf"
+# 공시 SFN(ALPHA-722)은 직렬 state 가 없어 지금은 여기서 잡히는 state 가 0개다. 그래도 함께
+# 읽는다 — 나중에 직렬 꼬리가 붙으면 그때 **자동으로** 역방향 검사 대상이 되게(이 테스트의
+# 존재 이유가 "새 SFN 잡이 아무도 모르게 미계측로 남는 것"을 막는 것이다).
+_DISCLOSURE_PIPELINE_TF = _TF_MODULE / "disclosure_pipeline.tf"
 
 
 def _combined_tf() -> str:
     return (_STATEMACHINE_TF.read_text(encoding="utf-8")
-            + _NEWS_PIPELINE_TF.read_text(encoding="utf-8"))
+            + _NEWS_PIPELINE_TF.read_text(encoding="utf-8")
+            + _DISCLOSURE_PIPELINE_TF.read_text(encoding="utf-8"))
 
 
 def test_content_hash_is_deterministic():
@@ -50,19 +55,97 @@ _NOT_INSTRUMENTED = {
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
     "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
-    # ⚠️ 아래 4개는 **영구 제외가 아니라 이관 중**이다(ALPHA-724). 컷오버가 소유 레인을
-    # etf-daily → disclosure 로 옮기는데 두 변경(SFN 배선 / 카탈로그)이 독립 워크플로라
-    # 순서 보장이 없어, 중간 상태를 미등록으로 둔다. 재등록 PR 이 여기서 지운다 —
-    # 안 지우면 공시가 영영 원장 밖에서 도는데 화면엔 아무 흔적도 없다(Rule 12).
-    "CollectDartDisclosure": "ALPHA-724 공시 레인 이관 중 — 재등록 PR 이 pipeline_type=disclosure 로 되돌린다",
-    "NormalizeDisclosure": "ALPHA-724 공시 레인 이관 중",
-    "NormalizeDisclosureSegment": "ALPHA-724 공시 레인 이관 중",
-    "LoadDisclosure": "ALPHA-724 공시 레인 이관 중",
 }
 
 
 def _asl_task_states(tf: str) -> set[str]:
     return set(_ASL_JOB_STATE.findall(tf)) | set(_ASL_INLINE_STATE.findall(tf))
+
+
+def _strip_hcl_comments(tf: str) -> str:
+    """줄 주석·블록 주석을 걷는다.
+
+    ⚠️ 이걸 안 하면 **주석 처리된 항목을 살아 있는 배선으로 센다.** 배선을 뗄 때 가장 흔한
+    형태가 삭제가 아니라 주석 처리이고, 그때가 정확히 가드가 잡아야 할 순간이다(edge-review).
+    `_taskdefs_with_db_env` 가 같은 이유로 같은 처리를 한다 — 여기서도 같은 규율을 쓴다.
+    줄 **선두**만 보는 이유도 같다: 값 안의 `//`(`"s3://…"`)를 자르면 반대 방향 오탐이 난다.
+    """
+    lines = [ln for ln in tf.splitlines() if not ln.lstrip().startswith(("#", "//"))]
+    return re.sub(r"/\*.*?\*/", "", "\n".join(lines), flags=re.S)
+
+
+def _hcl_list(tf: str, name: str) -> list[str]:
+    """`name = [ "a", "b" ]` 의 문자열 항목. 한 줄·여러 줄 모두 받는다(주석 제외)."""
+    body = re.search(rf"^\s*{name}\s*=\s*\[(.*?)\]", _strip_hcl_comments(tf), re.M | re.S)
+    assert body, f"{name} 를 statemachine.tf 에서 못 찾았다 — 파서가 낡았다"
+    return re.findall(r'"(\w+)"', body.group(1))
+
+
+def _hcl_number(tf: str, name: str) -> int:
+    """`variable "name" { … default = N }` 의 기본값."""
+    block = re.search(rf'variable\s+"{name}"\s*\{{(.*?)^\}}', _strip_hcl_comments(tf), re.M | re.S)
+    assert block, f"variable {name} 을 못 찾았다 — 파서가 낡았다"
+    value = re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M)
+    assert value, f"variable {name} 에 숫자 default 가 없다"
+    return int(value.group(1))
+
+
+def disclosure_slot_interval_seconds() -> int:
+    """공시 cron 맵에서 **실제 최소 슬롯 간격**을 계산한다(분 단위 cron 을 KST 시각으로).
+
+    테스트가 3600 을 하드코딩하면 cron 에 30분 슬롯을 하나 더해도 통과한다 — 그때 deadline·
+    STALLED 임계는 다음 슬롯 뒤로 밀려 판정이 무의미해지는데 아무도 모른다(edge-review).
+    """
+    tf = _strip_hcl_comments((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"disclosure_schedule_expressions"\s*\{(.*?)^\}', tf,
+                      re.M | re.S)
+    assert block, "disclosure_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    minutes = sorted(int(h) * 60 + int(m)
+                     for m, h in re.findall(r'"cron\((\d+) (\d+) ', block.group(1)))
+    assert len(minutes) >= 2, f"슬롯이 {len(minutes)}개 — 간격을 잴 수 없다"
+    return min(b - a for a, b in zip(minutes, minutes[1:])) * 60
+
+
+def disclosure_sfn_timeout_seconds() -> int:
+    return _hcl_number((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"),
+                       "disclosure_state_machine_timeout_seconds")
+
+
+def reconcile_period_seconds() -> int:
+    """Reconciler 주기(초). **판정 지연의 하한**이라 deadline 계약에 반드시 들어간다.
+
+    deadline 은 "언제부터 결측인가"를 정하지만 그 판정을 실제로 찍는 건 주기 Reconciler 다 —
+    deadline 직후가 아니라 최대 이 주기만큼 뒤에 찍힌다. 간격만 보고 `deadline < 간격` 으로
+    두면 "다음 슬롯 예정 전에 판정된다"는 계약이 실제로는 안 지켜진다(edge-review).
+    """
+    tf = _strip_hcl_comments((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"reconcile_schedule_expression"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "reconcile_schedule_expression 을 못 찾았다 — 파서가 낡았다"
+    rate = re.search(r'default\s*=\s*"rate\((\d+)\s+minutes?\)"', block.group(1))
+    assert rate, "Reconciler 주기가 rate(N minutes) 형태가 아니다 — 계약을 다시 계산하라"
+    return int(rate.group(1)) * 60
+
+
+def _market_normalize_task_keys() -> set[str]:
+    """시장 SFN 이 실제로 도는 정제 state → 카탈로그 task_key.
+
+    `normalize_jobs`(전체) − `market_excluded_states` 가 곧 ASL `NormalizeCheckResults` 의
+    멤버다. 원장의 `LOAD_INSTRUMENTS.depends_on` 은 그 게이트를 그린 것이라 **같아야 한다** —
+    어긋나면 게이트가 닫힌 런에서 원인이 오귀속되거나(BLOCKED↔MISSED), 안 도는 작업을 기다려
+    영영 미충족이 된다. 두 사실이 코드와 terraform 에 나뉘어 있으므로 여기서 잇는다.
+    """
+    tf = _STATEMACHINE_TF.read_text(encoding="utf-8")
+    block = re.search(r"^\s*normalize_jobs\s*=\s*\[(.*?)^\s{2}\]", tf, re.M | re.S)
+    assert block, "normalize_jobs 블록을 못 찾았다 — 파서가 낡았다"
+    states = set(_ASL_JOB_STATE.findall(block.group(1))) - set(
+        _hcl_list(tf, "market_excluded_states"))
+    assert states, "시장 정제 잡이 0개로 나왔다 — 파서가 깨졌다"
+    keys = set()
+    for state in states:
+        entry = catalog.by_sfn_state(state)
+        assert entry is not None, f"시장 SFN 이 도는 정제 state 인데 미등록: {state}"
+        keys.add(entry.task_key)
+    return keys
 
 
 def test_catalog_and_asl_task_states_match_both_ways():
@@ -82,13 +165,13 @@ def test_catalog_and_asl_task_states_match_both_ways():
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
     assert registered.isdisjoint(_NOT_INSTRUMENTED), "제외 목록과 등록이 겹친다"
-    # 21 → 27(ALPHA-591) → 23(ALPHA-724 공시 레인 이관 중): 커버리지를 숫자로 고정해 조용한
-    # 축소를 막는 절이다(Rule 12). 레인별 몫도 함께 고정한다 — 재등록 PR 이 23→27,
-    # etf-daily 17 유지, disclosure 0→4 로 이 세 줄을 함께 되돌린다.
-    assert len(registered) == 23
+    # 21 → 27(ALPHA-591). ALPHA-724 는 공시 4작업의 **소유 레인만** 옮겨 총계가 그대로다 —
+    # 커버리지를 숫자로 고정해 조용한 축소를 막는 절이다(Rule 12). 레인별 몫을 함께 고정하는
+    # 이유가 여기 있다: 총계만 보면 레인 이동과 "한 레인이 통째로 사라짐"이 구분되지 않는다.
+    assert len(registered) == 27
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
-    assert len(catalog.entries("disclosure")) == 0
+    assert len(catalog.entries("disclosure")) == 4
     # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
@@ -261,8 +344,9 @@ def test_by_cli_resolves_vendor_split_steps():
     # 재무는 양쪽 다 미등록(FMP=토글 off, DART=하류 소비자 0) — 계측 없이 지나간다.
     assert catalog.by_cli("ingest-raw-financial", "dart") is None
     assert catalog.by_cli("ingest-raw-financial", None) is None
-    # 공시는 ALPHA-724 이관 중이라 미등록 — 계측 없이 지나간다(재등록 PR 이 되돌린다).
-    assert catalog.by_cli("ingest-raw-disclosure") is None
+    # 공시는 벤더 축이 없다(DART 단일) — --source 없이 해소된다. 레인이 바뀌어도(ALPHA-724)
+    # `by_cli` 는 전 레인 검색이라 그대로다: 컨테이너는 자기 레인을 모르고 CLI 가 정체성이다.
+    assert catalog.by_cli("ingest-raw-disclosure").task_key == "DISCLOSURE_COLLECTION_DART"
     # 벤더 축이 없는 스텝은 --source 없이 해소된다.
     assert catalog.by_cli("normalize-price").task_key == "NORMALIZE_PRICE"
     assert catalog.by_cli("load-price-daily").task_key == "LOAD_PRICE_DAILY"
@@ -289,11 +373,9 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 → ALPHA-610 이 직접 계측으로 승격.
     # 이제 attempt 결측은 정상이 아니라 LEDGER_GAP 이다(Reconciler backfill 은 백스톱).
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
-    # KRX 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
+    # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
-    # 공시는 ALPHA-724 이관 중 미등록 = 통과. 이게 컷오버 중간 상태가 안전한 이유다 —
-    # 두 레인이 같은 CLI 를 갖는데 어느 쪽으로도 해소되지 않으니 오귀속이 불가능하다.
-    assert ops_entry.task_key_for("ingest-raw-disclosure", None) is None
+    assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
@@ -347,17 +429,23 @@ def test_dependencies_encode_the_asl_gates():
         if e.stage == "normalize":
             assert e.depends_on == () or e.task_key == "NORMALIZE_PRICE", \
                 f"{e.task_key}: 정제에 raw 의존을 걸면 수집 실패 런에서 실제로 성공한 정제가 BLOCKED 다"
-    # feature 로더 6개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만 다르면 안 된다.
-    # LOAD_DISCLOSURE 는 ALPHA-724 이관 중이라 이 게이트에 없다(재등록 시 disclosure 레인의
-    # 자체 게이트로 다시 그려진다 — 시장 EnrichCorpCode 의존은 레인 간이라 복사하면 안 된다).
+    # 시장 feature 로더 5개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만
+    # 다르면 안 된다. LOAD_DISCLOSURE 는 ALPHA-724 로 공시 레인이라 여기 없다(그 레인의
+    # 자체 게이트를 따른다 — 시장 EnrichCorpCode 의존은 레인 밖이라 복사할 수 없다).
     gate = {"LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
             "LOAD_ETF_FLOW"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
-    # 정제 전량 성공 게이트 — 8→5(공시 정제 2개가 시장 SFN 을 떠났고, NORMALIZE_NEWS 는
-    # 원래 뉴스 레인). 남겨두면 시장 런에서 영영 충족 안 되는 의존이 돼 BLOCKED 로 굳는다.
-    assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 5
+    # 정제 전량 성공 게이트(ASL `NormalizeCheckResults`) — **개수가 아니라 정확한 집합**을
+    # terraform 에서 도출해 대조한다(edge-review). 길이만 보면 게이트 멤버가 **바뀌어도**
+    # 통과한다: 예컨대 `market_excluded_states` 에서 공시 정제 대신 투자자 정제를 빼면 시장
+    # SFN 은 투자자를 안 돌리는데 원장은 여전히 NORMALIZE_INVESTOR 를 기다려, 그 런이 영영
+    # 미충족으로 BLOCKED 다. 그 어긋남이 이 테스트가 막으려는 바로 그 종류의 결함이다.
+    assert set(catalog.get("LOAD_INSTRUMENTS").depends_on) == _market_normalize_task_keys()
+    # 공시 레인 게이트(ASL `DisclosureNormalizeCheckResults`) — 같은 축을 자기 레인으로 그린다.
+    assert catalog.get("LOAD_DISCLOSURE").depends_on == (
+        "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT")
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS
     # ← feature 7개, LOAD_DOCUMENTS ← ENRICH_CORP_CODE)을 복사하면 뉴스 런에 존재하지 않는
     # 작업을 기다려 영영 eligible 이 안 되고, hard deadline 뒤 전부 BLOCKED 로 오귀속된다.

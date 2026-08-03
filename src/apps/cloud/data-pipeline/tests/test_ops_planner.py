@@ -23,6 +23,7 @@ from data_pipeline.ops.catalog import PIPELINE_TYPE
 from data_pipeline.ops.ledger import Ledger
 from data_pipeline.ops.planner import plan_run
 
+import test_ops_catalog          # terraform 실제 값 파서 재사용(중복 파서 금지)
 from opsfakes import FakeOpsDB, FakeSfn
 
 _DB = DbConfig(password="x")
@@ -45,7 +46,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — 카탈로그는 전 레인
-    # 23이지만 시장 일일런 기대는 17 이다. 공시 4는 ALPHA-724 컷오버로 일시 미등록).
+    # 27이지만 시장 일일런 기대는 17 이다. 뉴스 6·공시 4는 자기 레인 런이 계획한다).
     assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 17
 
 
@@ -438,23 +439,38 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_disclosure_tasks_are_unregistered_during_the_cutover(monkeypatch):
-    # WHY(ALPHA-724): 컷오버는 두 변경(시장 SFN 에서 공시 스텝 제거 / 카탈로그 레인 이동)이
-    #      **이미지 CD 와 terraform-apply 라 순서 보장이 없는** 상태로 만난다. 등록을 유지한 채
-    #      어느 쪽이 먼저 뜨면 기대와 실행이 어긋난 런이 원장에 남으므로, 중간 상태를
-    #      **미등록**으로 둔다 — `by_cli` 가 None 이면 wrapper 가 투명 통과해 attempt 도
-    #      expected_task 도 안 생기고, 그래서 어느 순서든 조용히 안전하다.
-    #      ⚠️ 이 단언은 **일시적이다.** 재등록 PR 이 이걸 뒤집으며 그 사실이 diff 로 드러나야
-    #      한다 — 안 뒤집으면 공시가 영영 원장 밖에서 도는데 아무도 모른다(ALPHA-553 PR2 가
-    #      뉴스 6작업을 빼고 ALPHA-591 이 되돌리기까지 실제로 그 상태였다).
+def test_disclosure_lane_owns_the_four_disclosure_tasks(monkeypatch):
+    # WHY(ALPHA-724): 컷오버의 본체는 **소유 레인 이동**이다. 두 레인의 CLI 가 글자 그대로 같아
+    #      (`ingest-raw-disclosure`…) 같은 스텝을 둘이 동시에 소유하면 `by_cli` 가 먼저 온
+    #      엔트리를 돌려줘 장중 런의 attempt 가 시장 레인 task_key 로 기록된다 — 장중 런은
+    #      영구 MISSED 다. 그래서 "레인 하나"는 성능이 아니라 정체성 요구다.
+    #      **중간 미등록 상태를 두지 않은 이유도 여기서 잠근다**: 미등록은 잊히면 조용히
+    #      영구화되지만(공시가 원장 밖에서 도는데 화면에 흔적 0), 레인을 바로 옮기면 최악이
+    #      배포 순서에 따른 MISSED 몇 건이고 그건 자가 해소된다(Rule 12 — 관대한 쪽 대신
+    #      시끄러운 쪽). 레인이 비면 그 조용한 상태로 되돌아간 것이므로 여기서 실패해야 한다.
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
-    assert catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE) == ()
-    for key in ("DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
-                "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE"):
-        assert catalog.get(key) is None, f"{key}: 재등록됐다면 이 테스트를 갱신하라"
-    # CLI·state 어느 축으로도 안 잡힌다 = 계측이 붙지 않는다(투명 통과의 실증).
-    assert catalog.by_cli("ingest-raw-disclosure") is None
-    assert catalog.by_sfn_state("LoadDisclosure") is None
+    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
+        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
+        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE"}
+    # 시장 레인에는 하나도 남지 않았다 — 한쪽만 옮기면 `by_cli` 오귀속이 그대로 살아난다.
+    assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
+                if "DISCLOSURE" in e.task_key]
+    # 판정 임계는 **terraform 의 실제 값**에서 뽑아 대조한다 — 상수를 하드코딩하면 cron 에
+    # 30분 슬롯을 더하거나 SFN 타임아웃을 낮춰도 통과한다(edge-review). 두 계약:
+    #   ① deadline + Reconciler 주기 < 슬롯 간격. 주기를 빼먹으면 안 된다 — 판정을 찍는 건
+    #      15분마다 도는 Reconciler 라 deadline 직후가 아니라 최대 그만큼 뒤다. 이 항이 없으면
+    #      "한 슬롯의 결측이 다음 슬롯 예정 전에 드러난다"가 산술적으로 거짓인데 통과한다.
+    #   ② stalled **<** SFN 타임아웃(같으면 안 된다). 판정이 `> threshold` 인데 SFN 이 정확히
+    #      타임아웃에 실행을 죽이므로, 같게 두면 경과가 임계를 넘는 순간이 오지 않아
+    #      **영원히 발화하지 않는다**(있으나 마나 한 신호를 계약으로 못박는 셈).
+    slot_interval = test_ops_catalog.disclosure_slot_interval_seconds()
+    sfn_timeout = test_ops_catalog.disclosure_sfn_timeout_seconds()
+    reconcile_period = test_ops_catalog.reconcile_period_seconds()
+    for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE):
+        assert e.deadline_offset_seconds + reconcile_period < slot_interval, e.task_key
+        assert e.stalled_after_seconds < sfn_timeout, e.task_key
+        # 크론이 MON-FRI 라 평일 공휴일에도 돈다 — True 면 그 실행 결과가 SKIPPED 뒤로 사라진다.
+        assert e.kr_trading_calendar is False, e.task_key
 
 
 def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
