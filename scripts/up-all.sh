@@ -8,8 +8,8 @@
 # 동작하지 않으며, dev 모드 컨테이너는 볼륨 파일 감시 폴링으로 HMR 이 느려진다.
 #
 # 사용:
-#   .dev/up-all.sh             # 전체 기동 — Ctrl-C 로 UI 종료 (백엔드 컨테이너는 유지)
-#   .dev/up-all.sh down [-v]   # compose 백엔드 정리 (-v 는 DB 볼륨까지)
+#   scripts/up-all.sh             # 전체 기동 — Ctrl-C 로 UI 종료 (백엔드 컨테이너는 유지)
+#   scripts/up-all.sh down [-v]   # compose 백엔드 정리 (-v 는 DB 볼륨까지)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,7 +30,7 @@ if [[ "${1:-}" == "down" ]]; then
   exec "${COMPOSE[@]}" down "$@"
 fi
 if [[ $# -gt 0 ]]; then
-  echo "사용법: .dev/up-all.sh [down [-v]]" >&2
+  echo "사용법: scripts/up-all.sh [down [-v]]" >&2
   exit 2
 fi
 
@@ -123,7 +123,7 @@ cleanup() {
     kill_tree "$pid"
   done
   echo
-  echo "◼ UI 종료. 백엔드는 유지 중 — 정리는 .dev/up-all.sh down"
+  echo "◼ UI 종료. 백엔드는 유지 중 — 정리는 scripts/up-all.sh down"
 }
 # INT/TERM 은 정리 후 즉시 종료해야 한다 — cleanup 만 걸면 트랩 반환 후 원래
 # 흐름(리슨 대기·폴링)이 이어져 신호를 삼키고, 이후 EXIT 트랩이 cleanup 을
@@ -164,7 +164,7 @@ cat << 'EOF'
   tenant-console-api  http://localhost:18081/actuator/health
   super-admin-api     http://127.0.0.1:18082/actuator/health
 
-종료: Ctrl-C (UI) → .dev/up-all.sh down [-v] (백엔드[·DB 볼륨])
+종료: Ctrl-C (UI) → scripts/up-all.sh down [-v] (백엔드[·DB 볼륨])
 EOF
 
 # 편측 사망 감시 — 인자 없는 wait 는 한쪽이 먼저 죽어도 0 으로 끝나 실패를

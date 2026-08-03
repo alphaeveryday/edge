@@ -17,7 +17,7 @@
 #   docker compose up --build             # 전체 기동(첫 실행은 gradle 빌드로 느림)
 #   docker compose up --build <service>   # 특정 서비스만
 #   docker compose down [-v]              # 정리(-v 는 DB 볼륨까지)
-#   .dev/up-all.sh                        # 백엔드(이 파일) + 콘솔 UI 2종까지 한 줄 기동 (ALPHA-516)
+#   scripts/up-all.sh                     # 백엔드(이 파일) + 콘솔 UI 2종까지 한 줄 기동 (ALPHA-516)
 #
 # 테스트(각 백엔드 host 포트 직접):
 #   curl localhost:18081/actuator/health   # tenant-console-api
