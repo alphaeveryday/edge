@@ -1,4 +1,4 @@
-# 1분 파이프라인 상주 실행체 (ALPHA-711) — 큐 4종 + 상주 서비스 3종.
+# 1분 파이프라인 상주 실행체 (ALPHA-711) — 큐 4종 + 상주 서비스(가격 3종 + 뉴스 소비자 2종, ALPHA-713).
 #
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
@@ -27,6 +27,14 @@ locals {
   minute_queue_urls = {
     for name in local.minute_all_destinations : name => aws_sqs_queue.minute[name].url
   }
+
+  # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 소비자가 없는 큐(price-explanation-
+  # realtime, ALPHA-710 대기)를 넣으면 게이트가 영영 안 비고, backfill 큐를 넣으면 밤
+  # backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다(스케일 단위가 서비스 전체).
+  # backfill 은 미루는 것이 정의상 무해하다 — 다음 세션이 집는다.
+  # ⚠️ 게이트 env 와 세션 역할 IAM 이 **여기 한 곳**에서 파생된다 — 갈리면 stop 이
+  # AccessDenied 를 pending 으로 읽어 영영 안 내려가거나, 게이트 없는 큐 권한이 남는다.
+  minute_gate_queue_names = ["price-analysis-realtime", "news-extraction-realtime"]
 }
 
 # ── SQS — 원 큐 4종 + DLQ ──────────────────────────────────────────────
@@ -46,7 +54,15 @@ resource "aws_sqs_queue" "minute" {
 
   name                       = "${var.name}-${each.key}"
   visibility_timeout_seconds = 300 # Consumer visibility 기본과 일치(ConsumerConfig)
-  message_retention_seconds  = 345600
+  # 7일. 4일이었으나 소비자가 세션 결속으로 스케일되면서(ALPHA-713) 장기 연휴(추석 등 —
+  # 마지막 세션 후 5일+)를 넘기는 backfill 메시지가 **조용히 만료**되는 창이 생겼다 —
+  # retention 만료는 DLQ 로 가지 않아 job 은 DEAD 도 아니고 relay 는 이미 PUBLISHED 라
+  # wake-up 을 다시 만들 주체가 없다(영구 고착). KR 달력의 어떤 휴장 간격보다 길게 둔다.
+  # ⚠️ 14일(상한)로 두지 않는 이유: SQS 는 DLQ 이동 후에도 **최초 enqueue 시각**을
+  # 보존해, DLQ 검토 창 = DLQ retention(14일) − 원큐 체류시간이다. 원큐를 상한까지 쓰면
+  # 오래 머문 메시지가 DLQ 도착 직후 만료돼 대사(dlq-reconcile)·사람의 근거가 사라진다.
+  # 7일이면 최악에도 검토 창이 7일 남는다.
+  message_retention_seconds = 604800
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.minute_dlq[each.key].arn
@@ -62,7 +78,7 @@ resource "aws_secretsmanager_secret" "toss" {
   name = "${var.name}-toss"
 }
 
-# ── 상주 서비스 3종 ────────────────────────────────────────────────────
+# ── 상주 서비스 ────────────────────────────────────────────────────
 locals {
   minute_services = {
     price-worker = {
@@ -95,6 +111,32 @@ locals {
       })
       secrets = {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+      }
+    }
+    # 뉴스 추출 Consumer 2종(ALPHA-713) — 핸들러·스텝이 같고 큐 URL 만 다르다(커널이
+    # queue_url 하나만 받으므로 다중 큐 개조 대신 서비스를 분리한다 — 커널 무수정).
+    # LLM 설정은 tag-news 관례(LLM_* env, base_url·model 은 코드 기본값=DeepSeek).
+    # 이 맵에 든 것만으로 세션 오케스트레이션의 스케일 대상이 된다(MINUTE_SESSION_SERVICES
+    # 가 이 맵에서 파생) — 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도 같은
+    # 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
+    news-consumer-realtime = {
+      command = ["news-consumer"]
+      environment = merge(local.env, local.db_env, {
+        DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-realtime"].url
+      })
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+        LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
+      }
+    }
+    news-consumer-backfill = {
+      command = ["news-consumer"]
+      environment = merge(local.env, local.db_env, {
+        DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-backfill"].url
+      })
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+        LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
       }
     }
   }
@@ -174,12 +216,13 @@ resource "aws_iam_role_policy" "minute_queues" {
         Resource = [for q in aws_sqs_queue.minute : q.arn]
       },
       {
-        # Consumer 소비(가격 job 큐) + DLQ 대사(job DLQ 3종 — 조회만, 삭제는 배선
-        # 오류 정리 케이스뿐이지만 같은 API 라 함께 허용)
+        # Consumer 소비(job 큐 3종 — 가격 1 + 뉴스 2, ALPHA-713) + DLQ 대사(job DLQ
+        # 3종 — 조회만, 삭제는 배선 오류 정리 케이스뿐이지만 같은 API 라 함께 허용).
+        # 트리거 설명 큐는 제외 — 그 소비자는 이 역할로 돌지 않는다(분석엔진 소관).
         Effect = "Allow"
         Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
         Resource = concat(
-          [aws_sqs_queue.minute["price-analysis-realtime"].arn],
+          [for name in local.minute_job_destinations : aws_sqs_queue.minute[name].arn],
           [for name in local.minute_job_destinations : aws_sqs_queue.minute_dlq[name].arn],
         )
       },
@@ -194,7 +237,7 @@ resource "aws_iam_role_policy" "minute_queues" {
 
 # 전용 역할이다 — 공용 `aws_iam_role.task` 에 붙이면 **모든 수집·정제 배치 task-def**
 # (`aws_ecs_task_definition.this`)가 상주 서비스를 내릴 권한을 함께 갖는다. 권한 자체는
-# 3종 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다(analysis_task 선례).
+# 상주 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다(analysis_task 선례).
 resource "aws_iam_role" "minute_session" {
   name               = "${var.name}-minute-session"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -220,10 +263,10 @@ resource "aws_iam_role_policy" "minute_session" {
         Resource = [for service in aws_ecs_service.minute : service.id]
       },
       {
-        # 내리기 전 큐 깊이 확인 — 소비자를 함께 내리는 큐 하나뿐이다.
+        # 내리기 전 큐 깊이 확인 — 게이트 env 와 같은 파생(minute_gate_queue_names).
         Effect   = "Allow"
         Action   = ["sqs:GetQueueAttributes"]
-        Resource = [aws_sqs_queue.minute["price-analysis-realtime"].arn]
+        Resource = [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].arn]
       },
     ]
   })
@@ -261,9 +304,8 @@ resource "aws_ecs_task_definition" "minute_session" {
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
       MINUTE_SESSION_SERVICES = join(",", [for service in aws_ecs_service.minute : service.name])
-      # 내리기 전에 비어야 하는 큐. 소비자를 함께 내리는 큐만 센다 — 소비자가 없는
-      # 큐(price-explanation-realtime, ALPHA-710 대기)를 넣으면 게이트가 영영 안 빈다.
-      MINUTE_SESSION_GATE_QUEUES = aws_sqs_queue.minute["price-analysis-realtime"].url
+      # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
+      MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

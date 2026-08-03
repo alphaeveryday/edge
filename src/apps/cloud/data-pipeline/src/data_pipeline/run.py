@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
+from .minute.news_consumer import news_consumer_cli
 from .minute.eod import qc_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.session_ops import start_session_cli, stop_session_cli
@@ -163,7 +164,11 @@ def main(argv: list[str] | None = None) -> int:
                  "price-worker",
                  # 1분 가격 판정 Consumer(ALPHA-711): Price Job SQS 소비 상주 루프.
                  # 원장 DB + 큐 설정 + storage(artifact GET) + --universe(판정 대상).
-                 "price-consumer"],
+                 "price-consumer",
+                 # 1분 뉴스 추출 Consumer(ALPHA-713): News Job SQS 소비 상주 루프.
+                 # 원장 DB + 큐 설정 + storage(결과 PUT) + LLM_* env(tag-news 관례).
+                 # realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
+                 "news-consumer"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -240,10 +245,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.max_ticks is not None:
-        if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer"):
+        if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
+                             "news-consumer"):
             raise SystemExit(
-                "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer 에서만 "
-                f"쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+                "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
+                f"news-consumer 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -352,6 +358,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "price-consumer":
         return price_consumer_cli(settings, universe=args.universe,
                                   max_ticks=args.max_ticks)
+    if args.step == "news-consumer":
+        return news_consumer_cli(settings, max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

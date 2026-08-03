@@ -100,8 +100,9 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 3종
-> price-worker·relay·price-consumer: `infra/terraform/modules/data-pipeline/minute_services.tf`,
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 5종
+> price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713):
+> `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
@@ -117,8 +118,9 @@
 > 거부(fail-loud)다. ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
-> 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 도 아직 **부르는 프로세스가
-> 없다** — 운영 진입점은 7D·PR 9 몫이고, DeepSeek 실호출은 미승인이라 fixture 검증뿐이다.
+> 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼다(ALPHA-713 —
+> `run news-consumer`, 아래 실행 절) — 다만 **생산자(news-worker)가 없어**(ALPHA-707,
+> BigKinds 승인 선행) 뉴스 큐 2종은 빈 채로 소비자만 상주한다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
 ## 실행
@@ -980,7 +982,16 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 3종의 desired_count
+# 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
+# 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
+# LLM 설정은 tag-news 와 같은 LLM_* env 관례(기본 base_url·model=DeepSeek).
+# realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
+# --max-ticks 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)면 exit 1.
+DATA_PIPELINE_DB__PASSWORD=... \
+LLM_API_KEY=... \
+DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-realtime \
+  python -m data_pipeline.run news-consumer --max-ticks 5
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 5종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
@@ -992,7 +1003,7 @@ DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
 DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group toss --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
@@ -1004,15 +1015,15 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 # **내리지 않았다**(사람이 원장을 본다) / 2=요청 자체를 못 함(설정·DB).
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer \
-MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group toss
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯
 =plan-run, reconcile, 1분 세션 start·stop) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 서비스 3종 `ecs:UpdateService` + 게이트 큐 조회)을 띄운다.
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 5종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다.
 daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).
