@@ -300,6 +300,71 @@ def test_already_assembled_articles_skip_llm(tmp_path, monkeypatch):
     assert _batch(conn, "source_event") == []
 
 
+def test_article_assembled_during_classify_is_skipped_under_doc_lock(tmp_path, monkeypatch):
+    """분류(LLM, 수 분) 창에서 1분 단건 조립(ALPHA-727)이 같은 기사를 먼저 조립하면 배치는
+    적재를 skip 한다(ALPHA-730). WHY: run 은 자국을 분류 **전에** 읽으므로, 재확인 없이
+    적재하면 LLM 비결정으로 type/predicate 가 갈린 이중 계보가 선다. 재확인은 단건 경로와
+    같은 락 문자열('edge-event-assembly:' || doc_id)의 advisory lock 아래에서 해야 조회↔
+    INSERT 틈이 닫힌다 — 락 SQL 이 안 나가면 즉시 깨진다. skip 은 카운터로 드러난다(Rule 12)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn()
+    _setup(monkeypatch, conn)
+    inner = _default_llm("a1")
+
+    def complete_fn(system, user):
+        # LLM 창에서 단건 경로가 a1 을 조립하는 레이스 모사 — 자국이 이 시점에 생긴다.
+        conn.assembled_articles.add("a1")
+        return inner(system, user)
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    doc_id = _stable_id("doc", "bigkinds", "a1")
+    locks = [(sql, params) for sql, params in conn.log if "pg_advisory_xact_lock" in sql]
+    assert locks == [
+        ("SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))", (doc_id,))]
+    assert _batch(conn, "source_event") == []  # 이중 계보 없음 — 적재 자체가 skip
+    log = _log(storage)
+    assert log["assembled_during_classify"] == 1
+    assert log["events_created"] == 0 and log["exit_code"] == 0
+
+
+def test_each_date_commits_separately_so_failure_keeps_earlier_dates(tmp_path, monkeypatch):
+    """트랜잭션은 날짜별이다(ALPHA-730). WHY: 런 전체 한 트랜잭션이면 threading advisory
+    lock(ALPHA-727 의 edge-event-threading)을 런 커밋까지 점유해 1분 소비자가 전부 대기하고,
+    뒤 날짜 실패가 앞 날짜의 적재까지 되돌린다. 날짜별 커밋이면 앞 날짜분은 남고(모든
+    INSERT 가 결정적 ID + ON CONFLICT 라 재실행 안전) 카운터도 커밋분을 정직하게 말한다 —
+    구 단일 트랜잭션 구현(카운터 전체 0 리셋)이면 events_created=1 단언이 즉시 깨진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-14", [_article("a1")])
+    _write_news(storage, "ko", "2026-07-15", [_article("a2")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    connects = []
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _c(config):
+        connects.append(1)
+        yield conn
+
+    monkeypatch.setattr(assemble_events, "connect", _c)
+    inner = _default_llm("a1")
+
+    def complete_fn(system, user):
+        if "a2" in user:
+            raise RuntimeError("LLM down on second date")
+        return inner(system, user)
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-14", to_date="2026-07-15") == 1
+    # entity_index 1회 + 날짜별 1회씩(둘째 날짜는 실패로 롤백) — 런 전체 공유 커넥션이 아니다.
+    assert len(connects) == 3
+    log = _log(storage)
+    assert log["exit_code"] == 1
+    assert log["failures"][0]["reasons"] == ["assemble_error"]
+    assert log["events_created"] == 1 and log["threaded"] == 1  # 07-14 커밋분 유지
+
+
 def test_non_event_doc_class_skips_extraction_and_assembly(tmp_path, monkeypatch):
     """게이트가 비이벤트(doc_class≠EVENT)로 판정하면 추출 콜 자체가 나가지 않고 조립도
     없다 — 2콜 체인의 게이트가 비용 관문이다(이식원 v3: 비이벤트는 명시 클래스, item 없음)."""

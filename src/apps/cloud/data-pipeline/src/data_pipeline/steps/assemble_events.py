@@ -20,6 +20,13 @@
 조립을 하는 동안)의 멱등 수렴이 깨진다. 엔진 축소(PR D) 후에도 기존 행과의 수렴을
 위해 유지한다.
 
+**역할(ALPHA-730): 배치는 catch-up 이다.** 1분 단건 조립(ALPHA-727)이 event 의 실시간
+정본 writer 이고, 이 배치는 미조립 잔여 소진 + UNKNOWN 재평가·미연결 회수만 맡는다.
+그래서 (a) 적재 직전 doc 단위 advisory lock 아래 document_entity 자국을 재확인해 분류
+(LLM, 수 분) 창에서 단건 경로가 먼저 조립한 기사를 skip 하고, (b) 트랜잭션은 날짜별로
+끊어 threading advisory lock(`edge-event-threading`) 점유가 1분 소비자를 오래 막지
+않는다. 자체 분류기 폐기는 단건 경로의 커버리지 실증 후 후속이다.
+
 tag-news 와의 관계: tag-news 는 다중 assertion·역할 추출로 feature 존을 만들고(문서/
 assertion 사슬), 이 스텝은 v4 추출 체인(기사당 1건, 제목만)으로 **event 계보**를 만든다.
 두 분류기의 단일화는 로직 소유자 결정 사안(후속) — 그동안 양쪽 다 자연키/결정적 ID
@@ -643,6 +650,39 @@ def assembled_source_ids(conn, source_ids: list[str]) -> set[str]:
         return {str(r[0]) for r in cur.fetchall()}
 
 
+def recheck_assembled(conn, todo: list[dict], classifications: dict[str, dict]) -> set[str]:
+    """적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창의 레이스를 닫는다.
+
+    run() 은 assembled_source_ids 를 분류 **전에** 읽는데, 분류가 도는 수 분 사이 1분 단건
+    조립(ALPHA-727)이 같은 기사를 먼저 조립할 수 있다 — 그대로 적재하면 LLM 이 비결정이라
+    type/predicate 가 갈린 이중 계보가 선다. 단건 경로와 **정확히 같은 락 문자열**
+    (`edge-event-assembly:` || doc_id)의 advisory xact lock 을 잡은 뒤 자국을 재조회한다 —
+    락 없이 조회만 하면 조회↔INSERT 사이 틈이 그대로 남는다. 락은 커밋(날짜 트랜잭션 끝)
+    까지 유지돼 이 날짜 적재가 끝날 때까지 단건 경로가 같은 기사에 못 들어온다. 기사 ID
+    정렬 순서로 잡아 배치 런끼리의 교착을 피한다(단건 경로는 락 1개라 교착 없음).
+
+    반환 = 그 창에서 이미 조립된(=이번 적재에서 뺄) article_id 집합. 호출부가 카운터·로그로
+    드러낸다(Rule 12 — 조용히 세지 않는다).
+    """
+    if not classifications:
+        return set()
+    by_id = {r["article_id"]: r for r in todo}
+    with conn.cursor() as cur:
+        for article_id in sorted(classifications):
+            row = by_id.get(article_id)
+            if row is None:
+                continue
+            doc_id = _stable_id("doc", row["source_vendor"], row["article_id"])
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
+                (doc_id,))
+    raced = assembled_source_ids(conn, sorted(classifications))
+    if raced:
+        logger.warning("분류 중 1분 단건 경로가 먼저 조립한 기사 %d건 — 적재 skip: %s",
+                       len(raced), sorted(raced)[:10])
+    return raced
+
+
 # ── 계보 조립 (엔진 persist_normalization 이식 — 양방향 자연키 브리지 포함) ──
 def persist_normalization(conn, rows: list[dict], classifications: dict[str, dict],
                           event_date: str) -> list[dict]:
@@ -792,8 +832,8 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
         # 중복은 (role, 접지 또는 표면형)으로 접는다 — 같은 역할·같은 대상을 두 번 주장해도
         # 참여자는 하나다. 자연키 ON CONFLICT 는 접지된 행만 막아 주므로(UNIQUE 안의 NULL 은
         # 서로 구분된다) 미해소의 재실행 중복은 이 접기 + **기사 단위 멱등**이 막는다:
-        # 자국(document_entity)과 이 행들은 run 전체를 감싼 한 트랜잭션에서 함께 커밋되고,
-        # 자국이 있는 기사는 assembled_source_ids 가 애초에 걸러 여기 오지 않는다.
+        # 자국(document_entity)과 이 행들은 그 날짜 트랜잭션에서 함께 커밋되고(ALPHA-730),
+        # 자국이 있는 기사는 assembled_source_ids + recheck_assembled 가 걸러 여기 오지 않는다.
         seen_args: set[tuple[str, str]] = set()
         primary_present = False
         for part in cls["arguments"]:
@@ -1153,6 +1193,10 @@ def run(
 ) -> int:
     """canonical 뉴스 → v4 2콜 추출 → event 계보 조립 → threading. 성공 0, 장애 시 비0.
 
+    **catch-up 배치다(ALPHA-730)** — 실시간 정본은 1분 단건 조립(ALPHA-727). 이 런은
+    미조립 잔여 + UNKNOWN 재평가·미연결 회수를 맡고, 적재 직전 recheck_assembled 로
+    단건 경로가 분류 창에서 먼저 조립한 기사를 skip 한다.
+
     창(from/to) 미지정이면 **오늘(Asia/Seoul) 하루**다 — 엔진의 일일 시맨틱을 따른다
     (tag-news 류의 전체 스캔 기본과 다름: 분류 LLM 비용이 기사 수에 비례한다). 과거
     구간은 창으로 백필한다. 이미 정규화된 기사(document 존재)는 건너뛰므로 멱등이다.
@@ -1163,7 +1207,7 @@ def run(
     조립되지 않는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
     """
     started_at = datetime.now(timezone.utc)
-    news_read = in_universe_count = already_normalized = 0
+    news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
     stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
     dart_matched = dart_ambiguous = 0
@@ -1184,38 +1228,27 @@ def run(
 
         with connect(db) as conn:
             entity_index = load_entity_index(conn)
-            for date in targets:
+        for date in targets:
+            # 커밋 경계는 **날짜**다(ALPHA-730) — 런 전체 한 트랜잭션이면 thread_events 의
+            # advisory lock(edge-event-threading, ALPHA-727)과 recheck_assembled 의 doc 락을
+            # 런 커밋까지 점유해 1분 소비자가 전부 대기한다. 부분 적재 정합: 모든 INSERT 가
+            # 결정적 ID + ON CONFLICT DO NOTHING(threading 은 결정적 자연키 upsert)이라
+            # 커밋된 날짜 뒤에서 실패해도 날짜 단위 재실행이 no-op 수렴한다.
+            with connect(db) as conn:
                 news = read_daily_news(storage, date)
-                news_read += len(news)
                 in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
-                in_universe_count += len(in_universe)
                 already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
-                already_normalized += len(in_universe) - len(todo)
                 classifications = (classify_titles(complete_fn, todo, view, entity_index,
                                                    concurrency=concurrency)
                                    if todo else {})
-                classified += len(classifications)
-                # 품질 카운터(Rule 12) — stage 오염 차단·엔티티 해소 실패를 로그로 드러낸다.
-                stage_rejected += sum(
-                    1 for c in classifications.values() if c.get("stage_rejected"))
-                arguments_unresolved += sum(
-                    1 for c in classifications.values()
-                    for p in c.get("arguments", ()) if p["entity_id"] is None)
-                # 새로 세운 개념 수 — 열린 집합이라 무한정 늘 수 있고, 멘션 품질이 나쁘면
-                # 잡음 개념이 스레드를 갈라놓는다. 정규화 규칙을 조정할 근거가 이 수치다.
-                concepts_minted += sum(
-                    len(c.get("concepts") or {}) for c in classifications.values())
-                # **접지** 참여자 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지
-                # 않아(다중 primary) 폴백을 조작하지 않은 건. 행 자체는 남지만(ALPHA-563
-                # 미해소 보존) 접지가 없어 thread identity 와 엔진 선별(EXISTS JOIN
-                # instrument)에서 빠지므로 카운터로 드러낸다(Rule 12).
-                anchorless_events += sum(
-                    1 for c in classifications.values()
-                    if not c.get("anchor_role")
-                    and not any(p["entity_id"] is not None for p in c.get("arguments", ())))
+                # 적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창에서 1분 단건
+                # 조립이 먼저 조립한 기사는 뺀다. doc 락은 이 날짜 커밋까지 유지된다.
+                raced = recheck_assembled(conn, todo, classifications)
+                if raced:
+                    classifications = {a: c for a, c in classifications.items()
+                                       if a not in raced}
                 created = persist_normalization(conn, todo, classifications, date)
-                events_created += len(created)
                 # 유니버스(entity_index=holdings 파생 마스터) 전 구성종목 이벤트를 threading 한다
                 # (ALPHA-468). 과거 KODEX 9종 한정은 엔진이 KODEX 반도체만 설명하던 잔재였고,
                 # 다중 ETF 설명(ALPHA-465·467)은 계보·신규성이 유니버스 전체에 필요하다.
@@ -1223,24 +1256,50 @@ def run(
                 # created 가 아니라 그 날짜의 미연결 전체 — 재실행이 과거 미연결분을 self-heal.
                 to_thread = fetch_unthreaded_events(conn, date)
                 unknown = thread_events(conn, to_thread)
-                # threaded = 실제로 스레드가 선 것, unknown_thread = identity 결측으로 UNKNOWN
-                # (thread_id NULL). 둘을 갈라 로그에 남긴다 — UNKNOWN 을 threaded 로 뭉치면
-                # 계약상 스레드가 안 선 사실이 묻힌다(ALPHA-457, Rule 12).
-                threaded += len(to_thread) - unknown
-                unknown_thread += unknown
+            # 카운터는 날짜 커밋 **뒤에만** 합산한다(Rule 12) — 날짜가 롤백되면 그 날짜
+            # 수치는 로그에 잡히지 않아, 봉투가 실제 커밋된 범위만 말한다.
+            news_read += len(news)
+            in_universe_count += len(in_universe)
+            already_normalized += len(in_universe) - len(todo)
+            classified += len(classifications)
+            assembled_during_classify += len(raced)
+            # 품질 카운터(Rule 12) — stage 오염 차단·엔티티 해소 실패를 로그로 드러낸다.
+            stage_rejected += sum(
+                1 for c in classifications.values() if c.get("stage_rejected"))
+            arguments_unresolved += sum(
+                1 for c in classifications.values()
+                for p in c.get("arguments", ()) if p["entity_id"] is None)
+            # 새로 세운 개념 수 — 열린 집합이라 무한정 늘 수 있고, 멘션 품질이 나쁘면
+            # 잡음 개념이 스레드를 갈라놓는다. 정규화 규칙을 조정할 근거가 이 수치다.
+            concepts_minted += sum(
+                len(c.get("concepts") or {}) for c in classifications.values())
+            # **접지** 참여자 0건 이벤트 — 해소된 참여자도 없고 anchor 역할도 유일하지
+            # 않아(다중 primary) 폴백을 조작하지 않은 건. 행 자체는 남지만(ALPHA-563
+            # 미해소 보존) 접지가 없어 thread identity 와 엔진 선별(EXISTS JOIN
+            # instrument)에서 빠지므로 카운터로 드러낸다(Rule 12).
+            anchorless_events += sum(
+                1 for c in classifications.values()
+                if not c.get("anchor_role")
+                and not any(p["entity_id"] is not None for p in c.get("arguments", ())))
+            events_created += len(created)
+            # threaded = 실제로 스레드가 선 것, unknown_thread = identity 결측으로 UNKNOWN
+            # (thread_id NULL). 둘을 갈라 로그에 남긴다 — UNKNOWN 을 threaded 로 뭉치면
+            # 계약상 스레드가 안 선 사실이 묻힌다(ALPHA-457, Rule 12).
+            threaded += len(to_thread) - unknown
+            unknown_thread += unknown
 
-            # DART 값 승격(ALPHA-547) — 같은 런·같은 트랜잭션에서 PARSED 금액을 공시 사실과
-            # 대조해 승격한다. event_measure 의 INSERT writer 는 조립뿐이고, 이 호출은
-            # value_source·dart_rcept_no 두 컬럼만 UPDATE 한다(컬럼 소유 분리, ALPHA-538 규약).
-            if targets:
+        # DART 값 승격(ALPHA-547) — 같은 런의 자체 트랜잭션에서 PARSED 금액을 공시 사실과
+        # 대조해 승격한다. event_measure 의 INSERT writer 는 조립뿐이고, 이 호출은
+        # value_source·dart_rcept_no 두 컬럼만 UPDATE 한다(컬럼 소유 분리, ALPHA-538 규약).
+        if targets:
+            with connect(db) as conn:
                 dart_matched, dart_ambiguous = match_dart_values(conn, targets[0], targets[-1])
     except Exception as exc:
-        # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
-        logger.exception("이벤트 조립 실패(롤백)")
+        # 날짜별 커밋(ALPHA-730)이라 실패한 날짜만 롤백된다 — 카운터는 커밋 뒤 합산이라
+        # 이미 커밋된 앞 날짜분을 그대로 말하고, 여기서 0 으로 되돌리면 실제 적재를
+        # 숨기는 거짓이 된다(Rule 12).
+        logger.exception("이벤트 조립 실패(실패 날짜만 롤백 — 커밋된 앞 날짜분은 유지)")
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
-        events_created = threaded = unknown_thread = 0
-        stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
-        dart_matched = dart_ambiguous = 0
         exit_code = 1
 
     log = {
@@ -1250,6 +1309,9 @@ def run(
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,
         "already_normalized": already_normalized, "classified": classified,
+        # 분류 창에서 1분 단건 경로가 먼저 조립해 skip 한 건(ALPHA-730) — 유실 아님
+        # (그 기사의 event 는 단건 경로가 이미 적재했다). already_normalized 와 같은 성격.
+        "assembled_during_classify": assembled_during_classify,
         "events_created": events_created, "threaded": threaded,
         "unknown_thread": unknown_thread,
         "stage_rejected": stage_rejected,
@@ -1279,11 +1341,12 @@ def run(
         exit_code = 1
 
     logger.info(
-        "assemble_events: read=%d in_universe=%d already=%d classified=%d created=%d"
+        "assemble_events: read=%d in_universe=%d already=%d raced=%d classified=%d created=%d"
         " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
         " concepts=%d"
         " dart_matched=%d dart_ambiguous=%d failures=%d",
-        news_read, in_universe_count, already_normalized, classified, events_created,
+        news_read, in_universe_count, already_normalized, assembled_during_classify,
+        classified, events_created,
         threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
         concepts_minted,
         dart_matched, dart_ambiguous, len(failures),
