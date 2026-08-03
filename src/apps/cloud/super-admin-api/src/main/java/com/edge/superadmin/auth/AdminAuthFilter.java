@@ -55,6 +55,7 @@ public class AdminAuthFilter extends OncePerRequestFilter {
 			new Rule("PATCH", Pattern.compile("/api/v1/analyses/[^/]+/result")),
 			new Rule("POST", Pattern.compile("/api/v1/analyses/[^/]+/exclude")),
 			new Rule("POST", Pattern.compile("/api/v1/analyses/[^/]+/restore")),
+			new Rule("POST", Pattern.compile("/api/v1/analyses/[^/]+/invalidate")),
 			new Rule("GET", Pattern.compile("/api/v1/session")),
 			new Rule("PATCH", Pattern.compile("/api/v1/session/profile")));
 
