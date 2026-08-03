@@ -31,7 +31,23 @@ locals {
   # `load_disclosure.py` 안의 `INSERT … 'DISCLOSURE'` 다 — 즉 LoadDisclosure 하나면 닫힌다.
   disclosure_raw_jobs       = [for j in local.raw_ingest_jobs : j if j.state == "CollectDartDisclosure"]
   disclosure_normalize_jobs = [for j in local.normalize_jobs : j if contains(["NormalizeDisclosure", "NormalizeDisclosureSegment"], j.state)]
-  disclosure_feature_jobs   = [for j in local.feature_jobs : j if j.state == "LoadDisclosure"]
+
+  # ⚠️ **LoadDisclosure 만 command 를 상속하지 않는다** — 창 인자가 레인마다 갈려야 하기 때문이다.
+  # 공유 정의(statemachine.tf)는 창 미지정 = canonical `report_date` **전체 스캔**이고, 그건 하루
+  # 1회 도는 15:40 런엔 맞다: 밀린 canonical 을 다음 런이 함께 줍는 **백로그 회수 경로**다.
+  # 하지만 이 레인은 하루 10슬롯이라 그 스캔이 슬롯마다 곱해진다(news-load-fullscan-problem 과
+  # 같은 축). 반대로 공유 정의에 창을 붙이면 15:40 런의 회수 경로가 조용히 좁아진다 — 컷오버로
+  # 그 런이 공시를 안 돌게 될 때까지는 **두 레인의 창이 갈려 있어야 한다**.
+  #
+  # `state`·`taskdef_key` 는 공유 정의에서 가져와 드리프트를 막는다(다른 건 command 하나뿐).
+  # `one()` 이라 그 state 가 사라지거나 둘이 되면 plan 단계에서 죽는다 — 조용히 빈 레인이 되면
+  # 이 SFN 이 feature 페이즈 없이 성공으로 끝난다(적재 0건이 초록으로 보이는 경로).
+  _shared_load_disclosure = one([for j in local.feature_jobs : j if j.state == "LoadDisclosure"])
+  disclosure_feature_jobs = [{
+    state        = local._shared_load_disclosure.state
+    taskdef_key  = local._shared_load_disclosure.taskdef_key
+    command_expr = "States.Array('load-disclosure', '--run-id', $.run_id, '--window-days', '${var.disclosure_load_window_days}')"
+  }]
 
   disclosure_raw_branches       = local.branches_by_phase["disclosure_raw"]
   disclosure_normalize_branches = local.branches_by_phase["disclosure_normalize"]

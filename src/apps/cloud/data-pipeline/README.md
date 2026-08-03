@@ -487,7 +487,10 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 
 공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
 세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
-LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). **아직 스케줄이 DISABLED 라
+LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). 단 `LoadDisclosure` 만
+command 를 상속하지 않고 `--window-days` 를 붙인다 — 공유 정의의 창 미지정(=canonical 전체
+스캔)은 하루 1회 도는 15:40 런의 **백로그 회수 경로**라 그대로 둬야 하고, 하루 10슬롯 레인에선
+그 스캔이 슬롯마다 곱해진다. **아직 스케줄이 DISABLED 라
 아무것도 안 돌고 시장 SFN 도 미변경이다** — 공시는 계속 15:40 런으로 수집된다. 뉴스 레인이
 PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서다.
 
