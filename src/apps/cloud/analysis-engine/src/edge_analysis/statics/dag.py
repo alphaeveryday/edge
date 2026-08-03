@@ -57,11 +57,11 @@ class CEdge:
 
     def head(self) -> str:
         t = self.tup
-        vul = " ".join(f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"
-                       for v in t.vulnerabilities) or "-"
+        vul = " ".join(f"{v.ident}/{v.transform}{v.comparator}p{v.percentile:.0%}"
+                       for v in t.conditions) or "-"
         return (f"[{self.eid}] {t.channel} · {t.trigger.kind}:{t.trigger.ident} "
                 f"→ {t.outcome} (부호{t.sign:+d}) · 노출 {t.exposure.ident}/"
-                f"{t.exposure.transform} · 취약성 {vul}")
+                f"{t.exposure.transform} · 조건 {vul}")
 
 
 @dataclass

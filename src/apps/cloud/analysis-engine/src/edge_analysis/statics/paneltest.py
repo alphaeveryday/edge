@@ -6,10 +6,10 @@
 이 판이 구현하는 명시 항목 전부:
   점 방아쇠 (§6)      과거 그 타입 사건일 패널
   계열 방아쇠 (§6)    그 계열족 혁신의 |z|≥2 이상일 패널 (z 창 60d, 전역 상수)
-  취약성 = INUS (§6)  술어로 패널을 **조건화**한다 - 취약성 미충족 표본에서의
+  조건 = INUS (§6)  술어로 패널을 **조건화**한다 - 조건 미충족 표본에서의
                       용량-반응은 이 가설의 검정이 아니다. 오늘 셀의 충족 여부가
                       적용(applies_today)을 정한다: 성립해도 오늘 미충족이면 부적용
-  반사실 쌍 (§14)     취약성 미충족 부류의 효과를 함께 낸다. 반대 사례 < 5 면
+  반사실 쌍 (§14)     조건 미충족 부류의 효과를 함께 낸다. 반대 사례 < 5 면
                       침묵(positivity) - 외삽 금지
   환원 검사 (§8)      오늘 같은 타입 사건의 횡단면이 패널과 같은 방향인가
   용량-반응 (§4)      노출 상위(≥컷) vs 하위, 층=사건일 순열 귀무
@@ -32,7 +32,7 @@ import numpy as np
 from ..observability import record
 from .gates import EdgeVerdict, edge_gate
 from .vocab import (ALPHA, EXPOSURE_CUT, MIN_N, RELATIONS, HypothesisTuple,
-                    Vulnerability)
+                    Condition)
 
 PERMS = 1000        # 전역 상수 - 가설별 지정 금지 (§13)
 SEED = 0
@@ -183,11 +183,11 @@ class EdgeReport:
     verdict: EdgeVerdict
     n: int
     p: float | None
-    effect_high: float | None        # 취약성 조건화된 패널에서 노출 상위 평균 ar
+    effect_high: float | None        # 조건 조건화된 패널에서 노출 상위 평균 ar
     effect_low: float | None
     today_exposure_pct: float | None
-    vuln_today: str = ""             # 오늘 셀의 취약성 술어별 충족 (예: "수급/누적 p98 충족")
-    vuln_satisfied: bool | None = None   # None = 취약성 없음 또는 못 잼
+    cond_today: str = ""             # 오늘 셀의 조건 술어별 충족 (예: "수급/누적 p98 충족")
+    cond_satisfied: bool | None = None   # None = 조건 없음 또는 못 잼
     counterfactual: str = ""         # 반사실 쌍 (positivity 통과 시에만 채워진다)
     reduction: str = "—"             # 환원 검사: 일치 · 불일치 · 표본부족 · —(미실행)
     assignable: bool = True          # False = 엣지 검정만 유효, 몫 배정 불가 (전이 등)
@@ -202,10 +202,10 @@ class EdgeReport:
 
     @property
     def applies_today(self) -> bool:
-        """오늘 셀에 몫을 배정할 자격. 성립 + 배정가능 + 취약성 미위반 +
+        """오늘 셀에 몫을 배정할 자격. 성립 + 배정가능 + 조건 미위반 +
         환원 미불일치 + (계열이면) 오늘 방아쇠 발화."""
         return (self.verdict == "성립" and self.assignable
-                and self.vuln_satisfied is not False
+                and self.cond_satisfied is not False
                 and not self.reduction.startswith("불일치")
                 and self.trigger_fired is not False)
 
@@ -358,10 +358,10 @@ def _stratified_p(ar: np.ndarray, hi: np.ndarray, dates: np.ndarray,
 
 
 def _cols(t: HypothesisTuple) -> tuple[list[tuple[str, str]], str] | None:
-    """튜플이 요구하는 피처 컬럼 목록 (노출 + 취약성들). 노출을 못 재면 None."""
+    """튜플이 요구하는 피처 컬럼 목록 (노출 + 조건들). 노출을 못 재면 None."""
     need = [("__x__", FEATURES.get((t.exposure.ident, t.exposure.transform)))]
-    for v in t.vulnerabilities:
-        need.append((f"{v.family}/{v.transform}", FEATURES.get((v.family, v.transform))))
+    for v in t.conditions:
+        need.append((v.key, FEATURES.get((v.ident, v.transform))))
     if need[0][1] is None:
         return None
     return ([(k, c) for k, c in need if c is not None],
@@ -390,8 +390,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             f"노출 ({t.exposure.ident},{t.exposure.transform}) 는 아직 못 잰다 - "
             f"재는 것: {sorted(FEATURES)}")
     cols, col_sql = got
-    unmeasured_vulns = [f"{v.family}/{v.transform}" for v in t.vulnerabilities
-                        if (v.family, v.transform) not in FEATURES]
+    unmeasured_conds = [v.key for v in t.conditions
+                        if (v.ident, v.transform) not in FEATURES]
 
     trigger_fired: bool | None = None   # 점 방아쇠는 접지(셀 사건 목록)가 발화다
     trigger_note = ""
@@ -433,10 +433,10 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     pctile = _pctile
 
-    # ── 취약성 = INUS 조건화. 미충족 표본의 용량-반응은 이 가설의 검정이 아니다 ──
+    # ── 조건 = INUS 조건화. 미충족 표본의 용량-반응은 이 가설의 검정이 아니다 ──
     mask = np.ones(len(ar), dtype=bool)
-    for v in t.vulnerabilities:
-        key = f"{v.family}/{v.transform}"
+    for v in t.conditions:
+        key = v.key
         if key not in feats:
             continue                                   # 못 재는 술어는 부재 선언으로만
         pv = pctile(feats[key])
@@ -445,13 +445,13 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     # ── §14 정합: 상태로 표본을 쪼개면 검정력이 죽는다 - 조건화 대신 매개변수화.
     # 충족 클래스가 얇으면 **조절자 모드**: 엣지 존재는 전체 패널의 용량-반응으로
-    # 검정하고(검정력은 전체 n), 취약성은 교호 대비로 보고한다. 오늘 적용은
+    # 검정하고(검정력은 전체 n), 조건은 교호 대비로 보고한다. 오늘 적용은
     # 여전히 충족을 요구한다(INUS 유지) - 검정과 적용의 분리다.
     # (6개 라이브의 지배적 실패가 조건화 전멸(n=23·6·6)이었다 - 설계가 경고한
     # 바로 그 함정을 구현이 밟고 있었다.)
     mode = "조건화"
     test_mask = mask
-    if t.vulnerabilities and mask.sum() < MIN_N <= len(ar):
+    if t.conditions and mask.sum() < MIN_N <= len(ar):
         mode = "조절자"
         test_mask = np.ones(len(ar), dtype=bool)
     if test_mask.sum() < MIN_N:
@@ -485,16 +485,16 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                           f"미충족(n={opposite}) {u_hi - u_lo:+.2%}")
         else:
             moderation = (f"조절 검정력 부족 (충족 n={int(mask.sum())}) - "
-                          "엣지는 무조건부, 취약성은 오늘 적용에만 걸린다")
+                          "엣지는 무조건부, 조건은 오늘 적용에만 걸린다")
 
-    # ── 반사실 쌍 (§14): 취약성 미충족 부류의 효과. positivity 없으면 침묵 ──
+    # ── 반사실 쌍 (§14): 조건 미충족 부류의 효과. positivity 없으면 침묵 ──
     counterfactual = ""
-    if t.vulnerabilities and opposite >= MIN_OPPOSITE:
+    if t.conditions and opposite >= MIN_OPPOSITE:
         c_hi, c_lo, c_mask = dose(~mask)
         if c_hi is not None:
-            counterfactual = (f"취약성 미충족 부류(n={opposite})에서는 상위 {c_hi * 100:+.2f}% "
+            counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 {c_hi * 100:+.2f}% "
                               f"vs 하위 {c_lo * 100:+.2f}% - 충족 부류와 대조하라")
-    elif t.vulnerabilities:
+    elif t.conditions:
         counterfactual = f"반대(미충족) 사례 {opposite}건 < {MIN_OPPOSITE} - 반사실 침묵 (positivity)"
 
     # ── SEM 계수 (§10): 성립 엣지에만 크기를 붙인다. 게이트는 크기를 만들지
@@ -509,10 +509,10 @@ def edge_test(lake, t: HypothesisTuple, day: str,
         except ValueError:
             tau = se = None
 
-    # ── 오늘 셀: 노출 백분위 + 취약성 충족 (INUS 의 적용 판정) ──────────
+    # ── 오늘 셀: 노출 백분위 + 조건 충족 (INUS 의 적용 판정) ──────────
     today_pct = None
-    vuln_bits: list[str] = []
-    vuln_sat: bool | None = None
+    cond_bits: list[str] = []
+    cond_sat: bool | None = None
     if cell_instrument_id:
         row = lake.sql((_base(day) + _TODAY_ROW).format(iid=cell_instrument_id, day=day, cols=col_sql))
         if row and row[0][0] is not None:
@@ -523,22 +523,22 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                 contrib = tau * dx
                 ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
             sat = True
-            for v in t.vulnerabilities:
-                key = f"{v.family}/{v.transform}"
+            for v in t.conditions:
+                key = v.key
                 if key not in feats:
-                    vuln_bits.append(f"{key} 못잼")
+                    cond_bits.append(f"{key} 못잼")
                     continue
                 # cols 의 이름 순서 = _TODAY_ROW 반환 컬럼 순서. 이름으로 찾는다.
                 idx = [k for k, _ in cols].index(key)
                 tv = row[0][idx]
                 if tv is None:
-                    vuln_bits.append(f"{key} 오늘 결측")
+                    cond_bits.append(f"{key} 오늘 결측")
                     continue
                 pv = float((feats[key] <= float(tv)).mean())
                 ok = (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
                 sat &= bool(ok)
-                vuln_bits.append(f"{key} p{pv * 100:.0f} {'충족' if ok else '미충족'}")
-            vuln_sat = sat if t.vulnerabilities else None
+                cond_bits.append(f"{key} p{pv * 100:.0f} {'충족' if ok else '미충족'}")
+            cond_sat = sat if t.conditions else None
 
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
@@ -558,11 +558,11 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                 reduction = "일치" if t_obs > 0 else "불일치"
                 reduction += f" (오늘 n={len(trows)}, 방향 {'+' if t_obs > 0 else '-'})"
 
-    if unmeasured_vulns:
-        vuln_bits.append("패널 미조건화: " + "·".join(unmeasured_vulns))
+    if unmeasured_conds:
+        cond_bits.append("패널 미조건화: " + "·".join(unmeasured_conds))
 
     return EdgeReport(verdict, int(test_mask.sum()), p, eff_hi, eff_lo, today_pct,
-                      vuln_today=" · ".join(vuln_bits), vuln_satisfied=vuln_sat,
+                      cond_today=" · ".join(cond_bits), cond_satisfied=cond_sat,
                       counterfactual=counterfactual, reduction=reduction,
                       contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
                       mode=mode, moderation=moderation,
@@ -585,8 +585,8 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     if t.trigger.kind != "점":
         return _unmeasurable("계열 방아쇠 × 관계 노출 조합 판은 아직 없다")
 
-    vcols = [(f"{v.family}/{v.transform}", FEATURES[(v.family, v.transform)])
-             for v in t.vulnerabilities if (v.family, v.transform) in FEATURES]
+    vcols = [(v.key, FEATURES[(v.ident, v.transform)])
+             for v in t.conditions if (v.ident, v.transform) in FEATURES]
     col_sql = ", ".join(f"g.{c}" for _, c in vcols) or "1 AS _one"
     rel = _REL_EXPR.get(t.exposure.ident) or _REL_LINK.format(ident=t.exposure.ident)
     sql = (_base(day) + _RELATION_PANEL).format(
@@ -603,16 +603,16 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     feats = {vcols[j][0]: np.array([float(r[3 + j]) for r in raw])
              for j in range(len(vcols))}
 
-    mask = np.ones(len(ar), dtype=bool)               # INUS: 피어 측 취약성 조건화
-    for v in t.vulnerabilities:
-        key = f"{v.family}/{v.transform}"
+    mask = np.ones(len(ar), dtype=bool)               # INUS: 피어 측 조건 조건화
+    for v in t.conditions:
+        key = v.key
         if key not in feats:
             continue
         pv = _pctile(feats[key])
         mask &= (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
     if mask.sum() < MIN_N:
         return EdgeReport("판정불가", int(mask.sum()), None, None, None, None,
-                          reason=f"취약성 조건화 후 n={int(mask.sum())} < {MIN_N}")
+                          reason=f"조건 조건화 후 n={int(mask.sum())} < {MIN_N}")
     hi = rel[mask]
     if hi.sum() < 3 or (~hi).sum() < 3:
         return EdgeReport("판정불가", int(mask.sum()), None, None, None, None,
@@ -624,7 +624,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     return EdgeReport(edge_gate(int(mask.sum()), p, alpha=ALPHA / max(m_tests, 1)),
                       int(mask.sum()), p,
                       float(sub[hi].mean()), float(sub[~hi].mean()), None,
-                      vuln_today="전이: 취약성은 피어 측 - 오늘 셀 평가 없음",
+                      cond_today="전이: 조건은 피어 측 - 오늘 셀 평가 없음",
                       assignable=False,
                       reason="몫 배정 비지원 - 소스-타깃 창 정렬(5분봉)이 다음 판이다")
 

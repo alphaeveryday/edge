@@ -14,13 +14,13 @@ from .render import Row, render
 from .sem import EdgeEstimate, clip_to_share, exposure_slope, rank_with_ties
 from .tree import Share, decompose
 from .vocab import (CHANNELS, ExposureSource, Feature, HypothesisTuple,
-                    SERIES_FAMILIES, TRANSFORMS, Trigger, VocabError, Vulnerability)
+                    SERIES_FAMILIES, TRANSFORMS, Trigger, VocabError, Condition)
 from .windows import Window, build_windows
 
 __all__ = [
     "BaseRate", "CHANNELS", "Conditional", "EdgeEstimate", "EdgeVerdict",
     "ExposureSource", "Feature", "GateInputs", "HypothesisTuple", "NarrationError",
     "PathVerdict", "Row", "SERIES_FAMILIES", "Share", "TRANSFORMS", "Trigger",
-    "VocabError", "Vulnerability", "Window", "build_windows", "clip_to_share",
+    "VocabError", "Condition", "Window", "build_windows", "clip_to_share",
     "decompose", "edge_gate", "exposure_slope", "narrate", "rank_with_ties",
     "render", "route", "validate_edge"]

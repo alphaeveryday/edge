@@ -1,4 +1,4 @@
-"""셀 러너 — 취약성·채널 튜플 체계의 전 루프: 분해 → 가설 → 패널 게이트 → 서술.
+"""셀 러너 — 조건·채널 튜플 체계의 전 루프: 분해 → 가설 → 패널 게이트 → 서술.
 
 한 셀에서 도는 것 (설계 §1 세 분리 그대로):
   크기   시간 항등식 (tree)                          — 오늘 · 산술
@@ -312,7 +312,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                                  m_tests=len(tuples)))
                    for t in tuples]
 
-    # 몫 배정: 성립 + 오늘 취약성 충족 + 환원 미불일치 (INUS 의 적용 판정).
+    # 몫 배정: 성립 + 오늘 조건 충족 + 환원 미불일치 (INUS 의 적용 판정).
     # 크기는 창 행에 싣지 않는다 - SEM 기여는 **일 단위** 추정량이라(패널이 일간 ar)
     # 15분 창의 몫으로 클립하는 것은 범주 오류다 (8차 정정). 창 행은 존재 판정만,
     # 크기의 식별집합은 튜플 블록에서 일 단위 상한(하루 총합)과 교차한다.
@@ -334,7 +334,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     edges = []
     for t, r in reports:
         why = ("" if r.applies_today else
-               "취약성 미충족 (INUS)" if r.vuln_satisfied is False else
+               "조건 미충족 (INUS)" if r.cond_satisfied is False else
                "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
                "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
                "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
@@ -358,7 +358,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                exposure=f"{t.exposure.ident}/{t.exposure.transform}",
                verdict=r.verdict, n=r.n, p2=r.p, applied=r.applies_today,
                mode=r.mode, moderation=r.moderation, reduction=r.reduction,
-               vuln_today=r.vuln_today, trigger_note=r.trigger_note,
+               cond_today=r.cond_today, trigger_note=r.trigger_note,
                contribution=r.contribution, ci=[r.ci_lo, r.ci_hi],
                iset=_iset(r, budget), reason=r.reason)
     for s in screens:
@@ -383,18 +383,18 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         block.append(f"검정 규약: 산업층 이중차감 ar · 양측 p₂ · 셀 Bonferroni "
                      f"α=0.05/{len(reports)} (학술 수리 ①②③)")
     for t, r in reports:
-        vuln = " ∧ ".join(f"{v.family}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
-                          for v in t.vulnerabilities) or "—"
+        cond = " ∧ ".join(f"{v.ident}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
+                          for v in t.conditions) or "—"
         apply_say = ("오늘 적용" if r.applies_today else
-                     "오늘 부적용 - " + ("취약성 미충족" if r.vuln_satisfied is False else
+                     "오늘 부적용 - " + ("조건 미충족" if r.cond_satisfied is False else
                                         "환원 불일치" if r.reduction.startswith("불일치") else
                                         "방아쇠 미발화" if r.trigger_fired is False else
                                         "패널 미성립"))
         block += [f"[{t.channel}] {t.trigger.kind}:{t.trigger.ident[:44]} 부호{t.sign:+d}",
-                  f"    취약성 {vuln} · 노출 {t.exposure.ident}/{t.exposure.transform}",
+                  f"    조건 {cond} · 노출 {t.exposure.ident}/{t.exposure.transform}",
                   f"    환원(가설): {t.reduction_note[:90]}",
                   f"    패널: {r.line}",
-                  f"    오늘: {r.vuln_today or ('미평가 - 패널이 먼저 서야 한다' if t.vulnerabilities else '취약성 없음')} → **{apply_say}**",
+                  f"    오늘: {r.cond_today or ('미평가 - 패널이 먼저 서야 한다' if t.conditions else '조건 없음')} → **{apply_say}**",
                   f"    환원 검사: {r.reduction}"]
         if r.trigger_note:
             block.append(f"    {r.trigger_note}")

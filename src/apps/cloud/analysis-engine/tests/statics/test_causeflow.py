@@ -6,12 +6,12 @@ from edge_analysis.statics.dag import TargetDAG
 from edge_analysis.statics.fsm import GROUND, MENUS, SCREEN, Machine
 from edge_analysis.statics.judge import JUDGE_MENUS, to_finding
 from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, Trigger,
-                                         Vulnerability)
+                                         Condition)
 
 
 def _tup(channel="Q수량", intent="거래량 급증이 매도 압력이면 고유 하락이 성립한다"):
     return HypothesisTuple(
-        vulnerabilities=(Vulnerability("수급", "누적", ">=", 0.9),),
+        conditions=(Condition("수급", "누적", ">=", 0.9),),
         trigger=Trigger("계열", "거래량"), channel=channel,
         exposure=ExposureSource("속성", "거래량", "변화"),
         outcome="수익률", sign=-1, intent=intent)

@@ -307,11 +307,13 @@ def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
     from pathlib import Path
 
     from .hypothesize import screen_tuples
+    from .paneltest import FEATURES
     eid, env_s, out_dir = item
     env = _json.loads(env_s)
     valid, rej = screen_tuples(env.get("hypotheses") or [],
                                event_types=env.get("event_types") or [],
-                               series_families=env.get("series_families") or [])
+                               series_families=env.get("series_families") or [],
+                               measurable=list(FEATURES))
     if not valid:
         return eid, "REJ " + " | ".join(rej)
     (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
@@ -335,6 +337,7 @@ def _cli() -> None:
     import pathlib
 
     from .hypothesize import screen_tuples
+    from .paneltest import FEATURES
     cmd = sys.argv[1]
     if cmd == "facts":
         g = gather(CausalLake(), *sys.argv[2:5])
@@ -351,7 +354,8 @@ def _cli() -> None:
         env = json.loads(pathlib_read(sys.argv[2]))
         valid, rejected = screen_tuples(env.get("hypotheses") or [],
                                         event_types=env.get("event_types") or [],
-                                        series_families=env.get("series_families") or [])
+                                        series_families=env.get("series_families") or [],
+                                        measurable=list(FEATURES))
         for t in valid:
             print(f"[OK] {t.channel} · {t.trigger.kind}:{t.trigger.ident} · "
                   f"노출 {t.exposure.ident}/{t.exposure.transform} · 부호{t.sign:+d} · "
@@ -392,7 +396,8 @@ def _cli() -> None:
                         valid, rej = screen_tuples(
                             env.get("hypotheses") or [],
                             event_types=env.get("event_types") or [],
-                            series_families=env.get("series_families") or [])
+                            series_families=env.get("series_families") or [],
+                            measurable=list(FEATURES))
                         if not valid:
                             print(f"REJ {eid}: {' | '.join(rej)}", flush=True)
                             continue
@@ -434,7 +439,8 @@ def _cli() -> None:
             env = json.loads(f.read_text(encoding="utf-8"))
             valid, rej = screen_tuples(env.get("hypotheses") or [],
                                        event_types=env.get("event_types") or [],
-                                       series_families=env.get("series_families") or [])
+                                       series_families=env.get("series_families") or [],
+                                       measurable=list(FEATURES))
             eid = f.stem.removeprefix("env_")
             if not valid:
                 (d / f"panel_{eid}.txt").write_text("유효 튜플 없음:\n" + "\n".join(rej),
@@ -450,7 +456,8 @@ def _cli() -> None:
         env = json.loads(pathlib_read(sys.argv[5]))
         valid, rejected = screen_tuples(env.get("hypotheses") or [],
                                         event_types=env.get("event_types") or [],
-                                        series_families=env.get("series_families") or [])
+                                        series_families=env.get("series_families") or [],
+                                        measurable=list(FEATURES))
         if not valid:
             raise SystemExit("유효 튜플 없음:\n" + "\n".join(rejected))
         print(panel_text(CausalLake(), valid[0], sys.argv[3], sys.argv[4]))

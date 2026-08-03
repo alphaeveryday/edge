@@ -33,7 +33,7 @@ def test_proxy_without_stated_change_is_demoted_to_blocked():
     def ask(system, user):
         calls["n"] = calls.get("n", 0) + 1
         good = {"방아쇠": "COMPANY.PRODUCT.LAUNCH", "채널": "S주식수", "노출": "거래량/변화",
-                "취약성": "수급/누적", "결과": "수익률", "부호": "+1"}
+                "조건": "수급/누적", "결과": "수익률", "부호": "+1"}
         return {"slots": {**{k: {"grade": "사상", "value": v} for k, v in good.items()},
                           "채널": {"grade": "대리", "value": "S주식수", "changed": ""}},
                 "lost": ""}
@@ -86,9 +86,9 @@ def test_unsaid_slot_is_not_a_vocabulary_failure():
     # 20R 첫 실측: 자유 산문이 방향을 안 밝히자 채점자가 부호를 '불가'로 찍었다.
     # 그건 산문이 덜 구체적인 것이지 어휘가 못 담은 게 아니다 - 어휘 탓으로 세면
     # 표현력이 부당하게 낮아진다. 표현력은 어휘의 속성이지 산문의 속성이 아니다.
-    r = Reduction("p", _slots(부호={"grade": "미명시"}, 취약성={"grade": "미명시"}))
+    r = Reduction("p", _slots(부호={"grade": "미명시"}, 조건={"grade": "미명시"}))
     assert r.grade == "완전"                 # 말한 슬롯은 전부 사상됐다
-    assert r.blocked == [] and r.unsaid == ["취약성", "부호"]
+    assert r.blocked == [] and r.unsaid == ["조건", "부호"]
     txt = Survey("T/d", [r]).report()
     assert "원문 미명시" in txt and "어휘 일감 아님" in txt
     assert "막힌 슬롯" not in txt              # 어휘 일감 목록에 안 올라간다
@@ -114,9 +114,9 @@ def test_claimed_mapping_is_verified_against_the_closed_vocabulary():
     assert in_vocab("방아쇠", "COMPANY.PRODUCT.LAUNCH", ["COMPANY.PRODUCT.LAUNCH"])
     assert not in_vocab("방아쇠", "S주식수", [])          # 채널을 방아쇠 슬롯에
     assert not in_vocab("노출", "삼성전자(005930.KS)", [])  # 티커를 노출 슬롯에
-    assert not in_vocab("취약성", "수급", [])              # 계열족만, 변환 없음
-    assert in_vocab("취약성", "수급/누적", [])
-    assert in_vocab("노출", "SUPPLY_CHAIN", []) and not in_vocab("취약성", "SUPPLY_CHAIN", [])
+    assert not in_vocab("조건", "수급", [])              # 계열족만, 변환 없음
+    assert in_vocab("조건", "수급/누적", [])
+    assert in_vocab("노출", "SUPPLY_CHAIN", []) and not in_vocab("조건", "SUPPLY_CHAIN", [])
 
     r = score(lambda s, u: {"slots": {**{k: {"grade": "사상", "value": "수익률"} for k in SLOTS},
                                       "방아쇠": {"grade": "사상", "value": "AI 데이터센터 투자 확대"}},
@@ -156,7 +156,7 @@ def test_trigger_in_vocabulary_but_absent_from_cell_is_not_a_vocabulary_gap():
         seen["sys"] = system + user
         return {"slots": {**{k: {"grade": "사상", "value": v} for k, v in
                              (("채널", "S주식수"), ("노출", "거래량/변화"),
-                              ("취약성", "수급/누적"), ("결과", "수익률"), ("부호", "-1"))},
+                              ("조건", "수급/누적"), ("결과", "수익률"), ("부호", "-1"))},
                           "방아쇠": {"grade": "사상",
                                    "value": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE"}},
                 "lost": ""}

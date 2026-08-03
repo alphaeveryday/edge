@@ -16,11 +16,15 @@ from dataclasses import dataclass, field
 CHANNELS = frozenset({
     "Q수량", "P판가", "C원가", "FX환", "R금리신용", "S주식수", "π확률", "K위험"})
 
-# 계열충격 방아쇠·취약성·노출이 딛는 계열의 족.
+# 계열충격 방아쇠·조건·노출이 딛는 계열의 족.
+#   주주·주식수·공매도 는 PIT 스냅샷(draft/raw/…/pit_snapshot, 69 거래일 · 전종목)이
+#   열어준 축이다. 주식수는 S주식수 채널의 **관측변수** - 그 전까지 이 채널은
+#   라벨로만 존재했다(자사주 매입을 접지·시간항등식으로만 논증했다).
 SERIES_FAMILIES = frozenset({
-    "가격잔차", "수급", "거래량", "거시", "지수잔차", "배수", "재무파생", "운영", "신용"})
+    "가격잔차", "수급", "거래량", "거시", "지수잔차", "배수", "재무파생", "운영", "신용",
+    "주주", "주식수", "공매도"})
 
-# 같은 계열도 변환에 따라 역할이 다르다: 수급 누적=취약성, 수급 당일 변화=방아쇠.
+# 같은 계열도 변환에 따라 역할이 다르다: 수급 누적=조건, 수급 당일 변화=방아쇠.
 TRANSFORMS = frozenset({"수준", "변화", "누적", "변동성", "갭"})
 
 MODERATOR_STATES = frozenset({"포지셔닝", "기대수준", "밸류", "국면", "서사단계"})
@@ -32,6 +36,14 @@ OUTCOME_KINDS = frozenset({"수익률", "전이"})
 
 TRIGGER_KINDS = frozenset({"점", "계열"})
 EXPOSURE_SOURCE_KINDS = frozenset({"속성", "관계"})
+
+# 조건 술어의 종류. 처치변수 = 방아쇠(주 술어) ∧ 조건들 - 코드에서 이미 연언이다
+# (edge_test 가 방아쇠로 행을 고르고 조건 mask 로 한 번 더 거른다). 종류를 나눈 것은
+# **무엇을 재야 하는가**가 다르기 때문이다:
+#   상태 → 계열족 시계열의 백분위 (느린 원인, 기존 취약성)
+#   사건 → 최근 N 거래일 내 그 사건타입 발생 여부 (사건이 만든 느린 상태)
+#   관계 → 타입 있는 1홉 위의 집중도 백분위 (구조가 만든 느린 상태)
+CONDITION_KINDS = frozenset({"상태", "사건", "관계"})
 
 # 관계 노출의 닫힌 어휘 (19R). 객체 타입 사이의 **타입 있는 1홉**이고, 각자
 # `v_link.link_type` 또는 속성 동일성에 실측으로 대응한다. 자유 문자열을 받던
@@ -68,27 +80,56 @@ def _need(value: str, vocab: frozenset[str], slot: str) -> str:
 
 # ── 튜플 부품 ───────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
-class Vulnerability:
-    """느린 원인 — 왜 이 회사·얼마나. 수준은 단독 원인이 될 수 없다
-    ("어제도 나빴는데 어제는 안 빠졌다") — 방아쇠와 결합해서만 쓴다(INUS)."""
-    family: str
-    transform: str
-    comparator: str
-    percentile: float       # 임계 백분위 (0,1)
+class Condition:
+    """처치의 **조건 술어** — 왜 이 회사·얼마나. 수준은 단독 원인이 될 수 없다
+    ("어제도 나빴는데 어제는 안 빠졌다") — 방아쇠와 결합해서만 쓴다(INUS).
+
+    처치변수 = 방아쇠(주 술어) ∧ 조건들. 방아쇠는 완화 불가(없으면 처치 자체가
+    없다)이고 조건은 완화 가능하다(§14 조절자 모드 - 충족 클래스가 얇으면 엣지
+    존재는 전체 패널로 검정하고 조건은 교호 대비로 보고한다).
+
+    종류가 셋인 이유는 **재는 방법**이 다르기 때문이다. 셋 다 "느린 상태"라는
+    점은 같다 - 빠른 것은 방아쇠 슬롯으로 간다.
+      상태: ident=계열족   → 그 계열 시계열의 백분위 (기존 취약성)
+      사건: ident=사건타입 → 최근 lookback 거래일 내 발생 여부 (0/1)
+      관계: ident=관계     → 타입 있는 1홉 위 집중도의 백분위
+    """
+    ident: str              # 상태 → 계열족 · 사건 → 사건타입 id · 관계 → 관계
+    transform: str = "수준"  # 상태·관계
+    comparator: str = ">="   # 상태·관계
+    percentile: float = 0.5  # 상태·관계 임계 백분위 (0,1)
+    kind: str = "상태"
+    lookback: int = 60      # 사건: 최근 N 거래일 (0 이하 금지)
 
     def __post_init__(self) -> None:
-        _need(self.family, SERIES_FAMILIES, "취약성.계열족")
-        _need(self.transform, TRANSFORMS, "취약성.변환")
-        _need(self.comparator, COMPARATORS, "취약성.비교")
-        if not 0.0 < self.percentile < 1.0:
-            raise VocabError(f"임계 백분위 {self.percentile} 는 (0,1) 밖이다")
+        _need(self.kind, CONDITION_KINDS, "조건.종류")
+        if self.kind == "상태":
+            _need(self.ident, SERIES_FAMILIES, "조건.계열족")
+            _need(self.transform, TRANSFORMS, "조건.변환")
+        elif self.kind == "관계":
+            _need(self.ident, RELATIONS, "조건.관계")
+        elif not self.ident.strip():
+            raise VocabError("사건 조건은 사건타입 id 가 필요하다")
+        if self.kind in ("상태", "관계"):
+            _need(self.comparator, COMPARATORS, "조건.비교")
+            if not 0.0 < self.percentile < 1.0:
+                raise VocabError(f"임계 백분위 {self.percentile} 는 (0,1) 밖이다")
+        elif self.lookback < 1:
+            raise VocabError(f"사건 조건의 회고 창은 1 이상이다: {self.lookback}")
+
+    @property
+    def key(self) -> str:
+        """패널 피처 키 · 서술용 한 조각. 종류마다 읽히는 모양이 다르다."""
+        if self.kind == "사건":
+            return f"사건:{self.ident}/최근{self.lookback}일"
+        return f"{self.ident}/{self.transform}"
 
 
 @dataclass(frozen=True, slots=True)
 class Trigger:
     """빠른 원인 — 왜 지금. 점(사건타입) 또는 계열충격(계열족 × 전역 임계).
     시간 스케일이 슬롯을 정한다: 수개월 걸친 금리 급등은 방아쇠가 아니라
-    취약성 생성기다(SVB)."""
+    조건 생성기다(SVB)."""
     kind: str               # 점 | 계열
     ident: str              # 점 → 사건타입 id · 계열 → 계열족
 
@@ -129,7 +170,7 @@ class HypothesisTuple:
     검사 실패는 폐기+재시도이지 자동 보정이 아니다(보정이 곧 대필이다).
     동시 다중 원인은 튜플 여러 개 — 몫 배분은 시간 분해 트리가 한다.
     """
-    vulnerabilities: tuple[Vulnerability, ...]
+    conditions: tuple[Condition, ...]
     trigger: Trigger
     channel: str
     exposure: ExposureSource
@@ -164,8 +205,8 @@ class Feature:
 
 
 __all__ = [
-    "ALPHA", "CHANNELS", "COMPARATORS", "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS",
+    "ALPHA", "CHANNELS", "COMPARATORS", "CONDITION_KINDS", "Condition",
+    "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS", "ExposureSource",
     "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "Feature", "HypothesisTuple",
-    "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "SERIES_FAMILIES", "TRANSFORMS",
-    "RELATIONS", "TRIGGER_KINDS", "Trigger", "ExposureSource", "VocabError", "Vulnerability",
-    "W_MINUTES"]
+    "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "RELATIONS", "SERIES_FAMILIES",
+    "TRANSFORMS", "TRIGGER_KINDS", "Trigger", "VocabError", "W_MINUTES"]

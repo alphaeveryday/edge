@@ -249,7 +249,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                     "상한 밖 주장은 금지")
         else:
             size = "크기 미상 (τ̂ 추정 불가) — 존재 판정만 말한다"
-        out.append(f"[채널] {e.channel}·{e.event_type}: 패널 성립 · 오늘 취약성 충족 · "
+        out.append(f"[채널] {e.channel}·{e.event_type}: 패널 성립 · 오늘 조건 충족 · "
                    f"환원 일치 → **오늘 적용**. {size}.")
     # ── 4½. 성립한 창 — 접지 id 와 구간을 달고서만 ──────────────────────
     positives: list[str] = []

@@ -2,7 +2,7 @@
 
 가설 에이전트와 **같은 도구 상태기계**를 쓴다(fsm.Machine). 다른 것은 둘뿐:
   · SCREEN 메뉴에 `panel` 이 추가된다 - 맡은 튜플의 타입 수준 패널 수치.
-    인자가 없다 - 검정자는 표본을 고르지 못한다(§17). 특징 선택(어떤 노출·취약성·
+    인자가 없다 - 검정자는 표본을 고르지 못한다(§17). 특징 선택(어떤 노출·조건·
     교란 뷰를 볼지)은 튜플과 DAG 가 주고, 어떤 도구를 볼지는 검정자의 권한이다.
   · EMIT 에서 튜플이 아니라 **판정**을 낸다.
 
@@ -91,7 +91,7 @@ def panel_text(lake, tup, instrument_id: str, day: str) -> str:
             if r.effect_high is not None else f"  n={r.n} · 효과 미계산",
             f"  오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
             if r.today_exposure_pct is not None else "  오늘 노출 미계산",
-            f"  취약성 오늘: {r.vuln_today or '-'} (충족 {r.vuln_satisfied})",
+            f"  조건 오늘: {r.cond_today or '-'} (충족 {r.cond_satisfied})",
             f"  환원 검사: {r.reduction or '-'}",
             f"  반사실: {r.counterfactual or '-'}",
             f"  코드 참고 의견: {r.verdict}"

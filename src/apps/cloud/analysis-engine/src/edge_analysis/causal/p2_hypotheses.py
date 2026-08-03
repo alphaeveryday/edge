@@ -439,7 +439,7 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
 # 해 놓고 영어 enum 을 요구하면 형식 시비가 생성을 잡아먹는다.
 _ROLE_ALIAS = {
     "배경": "background", "배경조건": "background", "전제": "background",
-    "취약성": "background", "condition": "background", "precondition": "background",
+    "조건": "background", "condition": "background", "precondition": "background",
     "촉발": "trigger", "촉발원": "trigger", "방아쇠": "trigger", "발단": "trigger",
     "cause": "trigger", "initiator": "trigger", "shock": "trigger",
     "전달": "transmission", "전달경로": "transmission", "전파": "transmission",

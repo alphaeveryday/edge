@@ -11,7 +11,7 @@ import pytest
 
 from edge_analysis.statics import (
     CHANNELS, EdgeEstimate, GateInputs, HypothesisTuple, Row, Share, Trigger,
-    ExposureSource, VocabError, Vulnerability, build_windows, clip_to_share,
+    ExposureSource, VocabError, Condition, build_windows, clip_to_share,
     decompose, edge_gate, exposure_slope, rank_with_ties, render, route)
 from edge_analysis.statics.frame import validate_edge
 
@@ -20,7 +20,7 @@ O, C = datetime(2026, 7, 15, 9, 0), datetime(2026, 7, 15, 15, 30)
 
 def _tuple(**kw):
     base = dict(
-        vulnerabilities=(Vulnerability("수급", "누적", ">=", 0.9),),
+        conditions=(Condition("수급", "누적", ">=", 0.9),),
         trigger=Trigger("점", "COMPANY.EARNINGS.RESULT"),
         channel="Q수량",
         exposure=ExposureSource("속성", "재무파생"),  outcome="수익률", sign=-1)
@@ -33,7 +33,7 @@ def test_vocab_is_closed_new_words_die_at_creation():
     with pytest.raises(VocabError):
         _tuple(channel="새채널")
     with pytest.raises(VocabError):
-        Vulnerability("붐빔", "누적", ">=", 0.9)
+        Condition("붐빔", "누적", ">=", 0.9)
     with pytest.raises(VocabError):
         Trigger("계열", "없는계열")
     with pytest.raises(VocabError):

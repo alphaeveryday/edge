@@ -21,7 +21,7 @@ from typing import Callable
 
 from ..observability import record
 from .vocab import (CHANNELS, ExposureSource, HypothesisTuple, SERIES_FAMILIES,
-                    TRANSFORMS, Trigger, VocabError, Vulnerability)
+                    TRANSFORMS, Trigger, VocabError, Condition)
 
 Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
@@ -40,7 +40,7 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 
 가설 = 튜플. JSON 하나만:
 {{"hypotheses": [{{
-  "vulnerabilities": [{{"family": 계열족, "transform": 변환, "comparator": ">=", "percentile": 0.9}}],
+  "conditions": [{{"family": 계열족, "transform": 변환, "comparator": ">=", "percentile": 0.9}}],
   "trigger": {{"kind": "점|계열", "ident": "..."}},
   "channel": "...",
   "exposure": {{"kind": "속성", "ident": 계열족, "transform": 변환}},
@@ -55,17 +55,26 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 - 부호는 오늘 수익률 부호에 맞추지 마라. 메커니즘이 정하는 것이고, 검정은 양측이라
   부호를 맞춰도 이득이 없다 (틀린 부호는 환원 검사만 오염시킨다)
 - 도구가 보여준 격자 축은 **노출** 슬롯에 넣어라 (그 축이 용량-반응을 만든다).
-  취약성은 다른 계열족에서 - 같은 피처면 동어반복으로 거부된다
+  조건은 다른 계열족에서 - 같은 피처면 동어반복으로 거부된다
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
-- 취약성은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
-- 취약성 피처는 노출 피처와 **달라야 한다** - 같으면 조건이 아니라 동어반복이고 표본만 죽는다"""
+- 조건은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
+- 조건 피처는 노출 피처와 **달라야 한다** - 같으면 조건이 아니라 동어반복이고 표본만 죽는다"""
+
+
+def _cond(v: dict) -> Condition:
+    """조건 dict → Condition. `family` 는 구 키(상태 전용)라 `ident` 로 받아준다 -
+    어휘가 넓어져 슬롯이 계열족만 담지 않게 됐다."""
+    v = dict(v)
+    if "family" in v:
+        v["ident"] = v.pop("family")
+    return Condition(**v)
 
 
 def _parse(h: dict) -> HypothesisTuple:
     """모델 산출 → 튜플. 실패는 예외 - 사유가 그대로 되물음 문장이 된다."""
     return HypothesisTuple(
-        vulnerabilities=tuple(Vulnerability(**v) for v in h.get("vulnerabilities") or ()),
+        conditions=tuple(_cond(v) for v in h.get("conditions") or ()),
         trigger=Trigger(**(h.get("trigger") or {})),
         channel=str(h.get("channel", "")),
         exposure=ExposureSource(**(h.get("exposure") or {})),
@@ -120,9 +129,17 @@ def explore(ask: Ask, machine, *, facts: str, max_turns: int = 4) -> str:
 
 
 def screen_tuples(hyps: list[dict], *, event_types: list[str],
-                  series_families: list[str] = ()) -> tuple[list[HypothesisTuple], list[str]]:
+                  series_families: list[str] = (),
+                  measurable: list[tuple[str, str]] | None = None,
+                  ) -> tuple[list[HypothesisTuple], list[str]]:
     """모델 산출 목록 → (유효 튜플, 거부 사유). propose 와 하네스 CLI 가 공유한다 -
-    가설을 누가 내든(원격 모델이든 하네스 에이전트든) **심사는 같은 코드**여야 한다."""
+    가설을 누가 내든(원격 모델이든 하네스 에이전트든) **심사는 같은 코드**여야 한다.
+
+    measurable 를 주면 **못 재는 슬롯을 여기서 죽인다**. 이전에는 이 목록을 프롬프트로
+    알려주기만 하고 강제하지 않았다 - 8셀 71튜플 중 55개(77%)가 쓰는 순간 n=0 확정인
+    조합이었고, 그걸 패널이 돌고 나서야 알았다. 어포던스는 말이 아니라 관문이어야 한다.
+    """
+    feats = None if measurable is None else {tuple(m) for m in measurable}
     valid: list[HypothesisTuple] = []
     rejected: list[str] = []
     seen_ch: set[str] = set()
@@ -142,12 +159,36 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
             _kill(f"미발화 계열 방아쇠 날조: {t.trigger.ident!r} - "
                   f"오늘 발화: {sorted(series_families) or '없음'}")
             continue
+        # ── 동어반복: 조건이 처치의 다른 슬롯을 되풀이하면 조건이 아니다 ──
         if t.exposure.kind == "속성" and any(
-                v.family == t.exposure.ident and v.transform == t.exposure.transform
-                for v in t.vulnerabilities):
-            _kill(f"취약성이 노출과 같은 피처({t.exposure.ident}/{t.exposure.transform}) - "
+                v.kind == "상태" and v.ident == t.exposure.ident
+                and v.transform == t.exposure.transform for v in t.conditions):
+            _kill(f"조건이 노출과 같은 피처({t.exposure.ident}/{t.exposure.transform}) - "
                   "조건이 아니라 동어반복이다")
             continue
+        if any(v.kind == "사건" and v.ident == t.trigger.ident for v in t.conditions):
+            _kill(f"조건이 방아쇠와 같은 사건타입({t.trigger.ident}) - "
+                  "'오늘 났고 최근에도 났다'는 조건이 아니다")
+            continue
+        if t.exposure.kind == "관계" and any(
+                v.kind == "관계" and v.ident == t.exposure.ident for v in t.conditions):
+            _kill(f"조건이 노출과 같은 관계({t.exposure.ident}) - 동어반복이다")
+            continue
+        # ── 접지: 사건 조건도 점 방아쇠와 같은 접지 규율을 받는다 ──
+        if bad := [v.ident for v in t.conditions
+                   if v.kind == "사건" and v.ident not in event_types]:
+            _kill(f"접지 밖 사건 조건 날조: {bad}")
+            continue
+        # ── 측정 가능성: 못 재는 조합은 가설이 아니라 소원이다 ──
+        if feats is not None:
+            if t.exposure.kind == "속성" and (t.exposure.ident, t.exposure.transform) not in feats:
+                _kill(f"못 재는 노출({t.exposure.ident}/{t.exposure.transform}) - "
+                      f"재는 것: {sorted(feats)}")
+                continue
+            if bad := [v.key for v in t.conditions
+                       if v.kind == "상태" and (v.ident, v.transform) not in feats]:
+                _kill(f"못 재는 조건{bad} - 재는 것: {sorted(feats)}")
+                continue
         if t.channel in seen_ch:
             _kill(f"채널 중복: {t.channel}")
             continue

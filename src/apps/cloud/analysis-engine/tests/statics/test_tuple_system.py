@@ -1,8 +1,8 @@
 """튜플 체계(가설·검정 에이전트)의 계약 — 감사 5라운드의 교훈이 전부 단언이다.
 
 가설: 어휘 밖·접지 밖·채널 중복은 생성 시점에 죽고, 되물음은 사유를 싣는다.
-검정: 표본은 튜플에서 유도되고(취약성 = INUS 조건화), 부재는 판정불가+사유이며,
-같은 입력은 같은 판정(결정론). 성립해도 오늘 취약성 미충족이면 부적용.
+검정: 표본은 튜플에서 유도되고(조건 = INUS 조건화), 부재는 판정불가+사유이며,
+같은 입력은 같은 판정(결정론). 성립해도 오늘 조건 미충족이면 부적용.
 반사실은 positivity 를 갖출 때만 채워진다.
 """
 import numpy as np
@@ -11,13 +11,13 @@ import pytest
 from edge_analysis.statics.hypothesize import propose
 from edge_analysis.statics.paneltest import MIN_OPPOSITE, edge_test
 from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
-                                         MIN_N, Trigger, Vulnerability)
+                                         MIN_N, Trigger, Condition)
 
 ETYPES = ["COMPANY.PRODUCT.LAUNCH", "MARKET_STRUCTURE.INDEX.INCLUSION"]
 
 
 def _h(channel="Q수량", ident="COMPANY.PRODUCT.LAUNCH", **kw):
-    base = {"vulnerabilities": [{"family": "수급", "transform": "누적",
+    base = {"conditions": [{"family": "수급", "transform": "누적",
                                  "comparator": ">=", "percentile": 0.9}],
             "trigger": {"kind": "점", "ident": ident},
             "channel": channel,
@@ -63,19 +63,19 @@ def test_propose_surfaces_measurable_affordance():
 def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PRODUCT.LAUNCH"),
            sign=1, pct=0.5):
     return HypothesisTuple(
-        vulnerabilities=(Vulnerability(vuln_family, vuln_tr, ">=", pct),),
+        conditions=(Condition(vuln_family, vuln_tr, ">=", pct),),
         trigger=Trigger(*trigger), channel="Q수량",
         exposure=ExposureSource("속성", "가격잔차", transform="누적"),  outcome="수익률", sign=sign)
 
 
 class _Lake:
-    """가짜 패널. 취약성(거래량/수준) 충족 반쪽에서만 용량-반응이 실재한다."""
+    """가짜 패널. 조건(거래량/수준) 충족 반쪽에서만 용량-반응이 실재한다."""
 
     def __init__(self, n=400, effect=0.02, seed=1, today=(1.0, 1.0), today_n=0,
                  today_z=(3.0, 0.5)):
         rng = np.random.default_rng(seed)
         x = rng.normal(size=n)                       # 노출
-        v = rng.normal(size=n)                       # 취약성 피처
+        v = rng.normal(size=n)                       # 조건 피처
         sat = v >= np.quantile(v, 0.5)
         hi = x >= np.quantile(x, 0.8)
         ar = effect * (hi & sat) + rng.normal(scale=0.004, size=n)
@@ -99,16 +99,16 @@ class _Lake:
         return self.panel                            # 점 방아쇠 과거 패널
 
 
-T = _tuple(vuln_family="거래량", vuln_tr="수준")     # 측정 가능한 취약성
+T = _tuple(vuln_family="거래량", vuln_tr="수준")     # 측정 가능한 조건
 
 
 def test_inus_conditioning_and_apply_today():
     r = edge_test(_Lake(), T, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
-    assert r.n == 200                                # 취약성 조건화로 패널이 절반
-    assert r.vuln_satisfied is True and r.applies_today   # 오늘 p높음 → 적용
+    assert r.n == 200                                # 조건 조건화로 패널이 절반
+    assert r.cond_satisfied is True and r.applies_today   # 오늘 p높음 → 적용
     r2 = edge_test(_Lake(today=(1.0, -9.9)), T, "2026-06-01", cell_instrument_id="i0")
-    assert r2.verdict == "성립" and r2.vuln_satisfied is False
+    assert r2.verdict == "성립" and r2.cond_satisfied is False
     assert not r2.applies_today                      # 성립해도 오늘 미충족 = 부적용 (INUS)
 
 
@@ -134,7 +134,7 @@ def test_determinism_and_thin_panel():
 
 
 def test_unmeasurable_declared_not_silent():
-    t = HypothesisTuple(vulnerabilities=(), trigger=Trigger("점", "X"), channel="R금리신용",
+    t = HypothesisTuple(conditions=(), trigger=Trigger("점", "X"), channel="R금리신용",
                         exposure=ExposureSource("속성", "신용", transform="수준"),  outcome="수익률", sign=-1)
     r = edge_test(_Lake(), t, "2026-06-01")
     assert r.verdict == "판정불가" and "못 잰다" in r.reason
@@ -170,7 +170,7 @@ def test_relation_transmission_edge_tests_but_never_assigns():
             return self.rows
 
     t = HypothesisTuple(
-        vulnerabilities=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
+        conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
         channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),  outcome="수익률", sign=1)
     r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
@@ -192,7 +192,7 @@ def test_typed_link_relation_uses_ontology_hop_not_industry_proxy():
             return []
 
     t = HypothesisTuple(
-        vulnerabilities=(), trigger=Trigger("점", "COMPANY.ALLIANCE.PARTNERSHIP"),
+        conditions=(), trigger=Trigger("점", "COMPANY.ALLIANCE.PARTNERSHIP"),
         channel="C원가", exposure=ExposureSource("관계", "SUPPLY_CHAIN", hops=1),
         outcome="수익률", sign=1)
     r = edge_test(LinkLake(), t, "2026-06-01", cell_instrument_id="i0")
@@ -247,21 +247,21 @@ def test_registry_recall_before_record_and_pit(tmp_path):
 
 
 def test_propose_rejects_tautological_vulnerability():
-    # 6차 라이브 실측: 취약성=노출 같은 피처 → INUS 내용 0 + 표본 파괴.
+    # 6차 라이브 실측: 조건=노출 같은 피처 → INUS 내용 0 + 표본 파괴.
     taut = _h()
-    taut["vulnerabilities"] = [{"family": "가격잔차", "transform": "누적",
+    taut["conditions"] = [{"family": "가격잔차", "transform": "누적",
                                 "comparator": ">=", "percentile": 0.9}]  # 노출과 동일
     ok = _h(channel="FX환", ident="MARKET_STRUCTURE.INDEX.INCLUSION")
     ask = lambda s, u: {"hypotheses": [taut, ok, _h(channel="K위험")]}   # noqa: E731
     valid, rejected = propose(ask, facts="f", event_types=ETYPES)
     assert any("동어반복" in r for r in rejected)
-    assert all(not (t.exposure.ident == v.family and t.exposure.transform == v.transform)
-               for t in valid for v in t.vulnerabilities)
+    assert all(not (t.exposure.ident == v.ident and t.exposure.transform == v.transform)
+               for t in valid for v in t.conditions)
 
 
 def test_thin_inus_falls_back_to_moderator_mode_not_undetermined():
     # §14: 충족 클래스가 얇으면 조건화(표본 분할) 대신 매개변수화 - 엣지는 전체
-    # 패널로 검정하고 취약성은 조절 대비로, 오늘 적용은 여전히 충족을 요구한다.
+    # 패널로 검정하고 조건은 조절 대비로, 오늘 적용은 여전히 충족을 요구한다.
     thin = _tuple(vuln_family="거래량", vuln_tr="수준", pct=0.97)   # 충족 ~3%
     r = edge_test(_Lake(n=400), thin, "2026-06-01", cell_instrument_id="i0")
     assert r.mode == "조절자" and r.verdict in ("성립", "불성립")   # 판정불가 전멸 탈출
@@ -270,7 +270,7 @@ def test_thin_inus_falls_back_to_moderator_mode_not_undetermined():
     # 오늘 적용은 INUS 그대로: p0.97 임계를 오늘 못 넘으면 부적용.
     low_today = edge_test(_Lake(n=400, today=(1.0, -9.9)), thin, "2026-06-01",
                           cell_instrument_id="i0")
-    assert low_today.vuln_satisfied is False and not low_today.applies_today
+    assert low_today.cond_satisfied is False and not low_today.applies_today
 
 
 def test_series_trigger_requires_today_firing_for_application():
@@ -292,14 +292,14 @@ def test_propose_rejects_unfired_series_trigger():
     def ask(system, user):
         assert "오늘 |z|≥2 로 발화한 계열족" in system
         return {"hypotheses": [
-            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+            {"conditions": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "계열", "ident": "수급"},          # 미발화 - 날조
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
              "outcome": "수익률", "sign": 1,
              "reduction_note": "x"},
-            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+            {"conditions": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "계열", "ident": "가격잔차"},      # 발화 - 유효
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
@@ -335,12 +335,12 @@ def test_agent_decisions_are_traced_with_raw_submissions():
     from edge_analysis.statics.hypothesize import propose
     def ask(system, user):
         return {"hypotheses": [
-            {"vulnerabilities": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
+            {"conditions": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
              "outcome": "수익률", "sign": 1,
              "reduction_note": "x"},
-            {"vulnerabilities": [{"family": "거래량", "transform": "수준",
+            {"conditions": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "점", "ident": "REAL.TYPE"},
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
@@ -573,3 +573,83 @@ def test_unmeasured_series_records_why_instead_of_silent_zero():
         assert flow_z(Dead(), "i0", "2026-07-30") == (0.0, "")
     assert any(e["event"] == "series.unmeasured" and e["family"] == "수급"
                and "rdb" in e["why"] for e in tr)
+
+
+# ── 처치변수 어휘 확장 (PIT 스냅샷이 연 축) ──────────────────────────────
+# 처치변수 = 방아쇠(주 술어) ∧ 조건들. 조건 어휘를 상태·사건·관계로 넓히면서
+# **가드를 같이 넓히지 않으면** 어휘가 거짓 어포던스를 준다 - 8셀 71튜플 중 55개가
+# 쓰는 순간 n=0 확정이었던 병이 그것이다. 아래는 그 병에 대한 계약이다.
+from edge_analysis.statics.hypothesize import screen_tuples
+from edge_analysis.statics.paneltest import FEATURES
+from edge_analysis.statics.vocab import CONDITION_KINDS, SERIES_FAMILIES
+
+MEAS = list(FEATURES)
+
+
+def test_pit_families_are_in_vocabulary():
+    # PIT 스냅샷이 연 축 - 주식수는 S주식수 채널의 첫 관측변수다.
+    assert {"주주", "주식수", "공매도"} <= SERIES_FAMILIES
+
+
+def test_condition_kinds_read_differently_per_kind():
+    # key 는 패널 피처 키이자 서술 조각 - 종류가 다르면 다르게 읽혀야 한다.
+    assert Condition("신용", "수준", ">=", 0.9).key == "신용/수준"
+    assert Condition("COMPANY.CAPITAL.SHARE_BUYBACK", kind="사건",
+                     lookback=30).key == "사건:COMPANY.CAPITAL.SHARE_BUYBACK/최근30일"
+
+
+def test_condition_vocabulary_is_closed_per_kind():
+    with pytest.raises(VocabError):
+        Condition("없는계열족", "수준", ">=", 0.9)          # 상태 → 계열족이어야
+    with pytest.raises(VocabError):
+        Condition("NOT_A_RELATION", kind="관계")            # 관계 → 닫힌 관계 어휘
+    with pytest.raises(VocabError):
+        Condition("", kind="사건")                          # 사건 → id 필수
+    with pytest.raises(VocabError):
+        Condition("SUPPLY_CHAIN", kind="관계", percentile=1.5)   # 백분위 범위
+
+
+def test_event_condition_equal_to_trigger_is_tautology():
+    # "오늘 났고 최근에도 났다"는 조건이 아니다 - 방아쇠를 되풀이할 뿐.
+    h = _h()
+    h["conditions"] = [{"ident": "COMPANY.PRODUCT.LAUNCH", "kind": "사건"}]
+    valid, rej = screen_tuples([h], event_types=ETYPES)
+    assert not valid and "방아쇠와 같은 사건타입" in rej[0]
+
+
+def test_relation_condition_equal_to_exposure_is_tautology():
+    h = _h(exposure={"kind": "관계", "ident": "SUPPLY_CHAIN"})
+    h["conditions"] = [{"ident": "SUPPLY_CHAIN", "kind": "관계"}]
+    valid, rej = screen_tuples([h], event_types=ETYPES)
+    assert not valid and "같은 관계" in rej[0]
+
+
+def test_event_condition_obeys_grounding():
+    # 사건 조건도 점 방아쇠와 같은 접지 규율 - 셀에 없는 사건타입은 날조다.
+    h = _h()
+    h["conditions"] = [{"ident": "COMPANY.EARNINGS.RESULT_RELEASE", "kind": "사건"}]
+    valid, rej = screen_tuples([h], event_types=ETYPES)
+    assert not valid and "접지 밖 사건 조건" in rej[0]
+
+
+def test_measurability_is_a_gate_not_a_hint():
+    # 핵심 회귀 방지: 못 재는 노출은 패널이 n=0 을 내기 전에 여기서 죽어야 한다.
+    h = _h(exposure={"kind": "속성", "ident": "거시", "transform": "변화"})
+    assert not screen_tuples([h], event_types=ETYPES, measurable=MEAS)[0]
+    assert "못 재는 노출" in screen_tuples([h], event_types=ETYPES, measurable=MEAS)[1][0]
+    # 관문을 안 켜면 통과한다 - 기존 호출자의 동작은 보존된다.
+    assert screen_tuples([h], event_types=ETYPES)[0]
+
+
+def test_measurability_gate_covers_state_conditions():
+    h = _h()   # 조건 = 수급/누적 → FEATURES 밖
+    valid, rej = screen_tuples([h], event_types=ETYPES, measurable=MEAS)
+    assert not valid and "못 재는 조건" in rej[0]
+
+
+def test_measurable_state_condition_passes_the_gate():
+    # 관문이 다 죽이면 관문이 아니라 벽이다 - 재는 조합은 통과해야 한다.
+    h = _h()
+    h["conditions"] = [{"ident": "거래량", "transform": "수준",
+                        "comparator": ">=", "percentile": 0.9}]
+    assert screen_tuples([h], event_types=ETYPES, measurable=MEAS)[0]

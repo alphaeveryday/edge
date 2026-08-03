@@ -47,7 +47,7 @@ MENUS: dict[str, tuple[tuple[str, str], ...]] = {
         ("series", "series()  오늘 계열 혁신 z - 계열 방아쇠 자격 판정"),
         ("peers", "peers()  같은 산업 피어 수 - 속성 동일성(관계 아님)"),
         ("links", "links(관계타입)  타입 있는 1홉 상대 - 경로형 가설의 접지"),
-        ("flows", "flows()  전일 투자자별 순매수 - 수급 방아쇠·취약성의 접지"),
+        ("flows", "flows()  전일 투자자별 순매수 - 수급 방아쇠·조건의 접지"),
     ),
     EMIT: (),
 }
