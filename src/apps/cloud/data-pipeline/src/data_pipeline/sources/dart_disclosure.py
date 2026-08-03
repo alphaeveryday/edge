@@ -40,7 +40,7 @@ import logging
 import urllib.parse
 import zipfile
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from xml.etree import ElementTree as ET
 
 from ..config import DartDisclosureSource as DartDisclosureSourceConfig
@@ -74,6 +74,15 @@ STATUS_MESSAGES = {
 # 키·IP·쿼터·점검은 특정 종목 문제가 아니라 소스 전체 문제라 즉시 중단한다.
 STOP_STATUS_CODES = {"010", "011", "012", "020", "800", "901"}
 
+# corp_code 없는 질의의 창 상한 — 실측(2026-08-03): 4개월 창은
+# `status=100 "corp_code가 없는 경우 검색기간은 3개월만 가능합니다."` 로 거절된다. 종목별
+# 질의엔 없던 제약이라, 분할하지 않으면 3개월 초과 백필(`--from/--to`)이 통째로 실패한다.
+#
+# 30일로 자르는 건 상한 3개월보다 **훨씬 짧다** — 페이지 상한도 같이 지켜야 하기 때문이다:
+# 3개월 창은 실측 54,716건 = page_count 100 기준 548 페이지로 max_pages(500)를 넘는다.
+# 30일이면 ~18,000건 ≈ 180 페이지로 두 제약 안에 들어온다.
+WINDOW_CHUNK_DAYS = 30
+
 
 def _as_page_number(value: object) -> int | None:
     """페이지 번호로 읽히면 양의 int, 아니면 None.
@@ -91,6 +100,29 @@ def _as_page_number(value: object) -> int | None:
         number = int(value.strip())
         return number if number >= 1 else None
     return None
+
+
+def _window_segments(
+    from_date: str | None, to_date: str | None
+) -> list[tuple[str | None, str | None]]:
+    """수집 창을 소스가 받아주는 길이(WINDOW_CHUNK_DAYS)로 자른다.
+
+    한쪽이라도 없으면 자르지 않는다 — 길이를 모르는 창을 임의로 좁히면 소스 기본 동작
+    (당일)을 조용히 바꾸게 된다. 그 경우는 소스가 자기 규칙대로 처리하게 그대로 넘긴다.
+    """
+    if not from_date or not to_date:
+        return [(from_date, to_date)]
+    start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
+    if start > end:
+        # 뒤집힌 창은 여기서 고치지 않는다 — 그대로 넘겨 소스가 거절하게 둔다(조용한 정정 금지).
+        return [(from_date, to_date)]
+    segments: list[tuple[str | None, str | None]] = []
+    cursor = start
+    while cursor <= end:
+        stop = min(cursor + timedelta(days=WINDOW_CHUNK_DAYS - 1), end)
+        segments.append((cursor.isoformat(), stop.isoformat()))
+        cursor = stop + timedelta(days=1)
+    return segments
 
 
 def _to_dart_date(value: str | None) -> str | None:
@@ -198,8 +230,10 @@ class DartDisclosureSource:
         for our_ticker, stock_code in plan:
             allowed.setdefault(stock_code, our_ticker)
         fetched_at = datetime.now(timezone.utc).isoformat()
-        bgn_de, end_de = _to_dart_date(from_date), _to_dart_date(to_date)
-        yield from self._scan_window(allowed, bgn_de, end_de, fetched_at)
+        for seg_from, seg_to in _window_segments(from_date, to_date):
+            yield from self._scan_window(
+                allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at
+            )
 
     def _is_target(self, report_nm: str) -> bool:
         """report_nm(문자열)이 대상 유형인지 — strip 후 부분일치(ㆍ·패딩·[기재정정] 접두 안전)."""
@@ -392,14 +426,26 @@ class DartDisclosureSource:
             # ⚠️ 처음엔 "마지막 페이지가 비는 건 정상"이라는 예외를 뒀는데 위 산식이 그걸
             # 반증했다. 같은 무행 응답이 013 이면 실패로 세면서 000 이면 성공으로 두는 것도
             # 가드끼리의 모순이었다.
-            if not rows:
+            if page < total_page and len(rows) != self.page_count:
+                # 비최종 페이지는 **정확히 page_count 행**이다 — total_page 가
+                # ceil(total_count/page_count) 이므로 마지막을 뺀 모든 페이지가 가득 찬다
+                # (실측 2026-08-03: 11페이지 창에서 1·2·5·10 페이지 전부 100행, 11페이지만 69).
+                # 0행만 보면 "100 중 1행"처럼 **일부만 빠진 페이지**가 그대로 통과한다.
                 self._note_failure(
                     None, None,
-                    f"page={page}/{total_page} 가 status=000 인데 0행 — 페이지 유실",
+                    f"page={page}/{total_page} 가 {len(rows)}행 — 비최종 페이지는"
+                    f" {self.page_count}행이어야 한다(페이지 일부 유실)",
                     page=page,
                 )
                 return
             if page >= total_page:
+                if not rows:
+                    # 마지막 페이지도 비지 않는다 — total_count=0 인 창은 애초에 013 으로 온다.
+                    self._note_failure(
+                        None, None,
+                        f"page={page}/{total_page} 가 status=000 인데 0행 — 페이지 유실",
+                        page=page,
+                    )
                 return
         # ⚠️ 관용 kind 를 붙이지 않는다 — 진짜 실패로 드러낸다(status=partial·exit 1).
         # ALPHA-351 이 절단을 관용한 근거는 "다음 증분 창이 이어받는다" 였고, 그건 상한이 corp

@@ -8,6 +8,7 @@
 import io
 import json
 import zipfile
+from datetime import datetime
 
 import pytest
 
@@ -87,12 +88,21 @@ class FakeClient:
         raise AssertionError(f"unexpected url: {url}")
 
 
-def _page(rows, *, status="000", total_page=1, page_no=1) -> dict:
-    # ⚠️ page_no 는 **요청한 페이지를 그대로 에코**한다(실 API 실측 2026-08-03). 픽스처가 모든
-    # 페이지에 1 을 박아두면 어댑터의 에코 검증이 픽스처에서만 오작동해, 그 가드를 지우는
-    # 회귀가 초록으로 통과한다(test-fixture-must-mirror-prod-config).
-    return {"status": status, "message": "정상", "page_no": page_no, "page_count": 100,
+def _page(rows, *, status="000", total_page=1, page_no=1, page_count=100) -> dict:
+    # ⚠️ 픽스처는 실 응답 형상을 따라야 한다(test-fixture-must-mirror-prod-config).
+    #  - page_no 는 **요청한 페이지를 그대로 에코**한다(실측 2026-08-03). 모든 페이지에 1 을
+    #    박아두면 에코 검증이 픽스처에서만 오작동해, 그 가드를 지우는 회귀가 초록으로 통과한다.
+    #  - 비최종 페이지는 **정확히 page_count 행**이다(실측: 11페이지 창의 1·2·5·10 페이지가
+    #    전부 100행). 그래서 다중 페이지 테스트는 page_count 를 행 수에 맞춰 준다 — 100행짜리
+    #    픽스처를 쓰는 대신 소스 설정도 함께 좁히면(`_source(..., page_count=1)`) 같은 형상을
+    #    작은 픽스처로 재현할 수 있다.
+    return {"status": status, "message": "정상", "page_no": page_no, "page_count": page_count,
             "total_count": len(rows), "total_page": total_page, "list": rows}
+
+
+def _multipage(tmp_path, client):
+    """비최종 페이지가 1행인 다중 페이지 픽스처용 소스(page_count=1)."""
+    return _source(tmp_path, client, api_key="k", page_count=1)
 
 
 def _row(report_nm, rcept_no="20260710800910", **over) -> dict:
@@ -176,14 +186,63 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
     #      raw 에도 중복 행이 앉는다. 후속 canonical dedup 은 이미 쓴 대역폭을 돌려주지 않는다.
     dup = _row("단일판매ㆍ공급계약체결", rcept_no="DUP")
     client = FakeClient(list_pages={
-        1: _page([dup], total_page=2),
-        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2, page_no=2),
+        1: _page([dup], total_page=2, page_count=1),
+        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2, page_no=2, page_count=1),
     })
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
     assert [r["rcept_no"] for r in records] == ["DUP", "NEW"]
+
+
+def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):
+    # WHY: corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다 — 실측(2026-08-03)에서 4개월
+    #      창은 `status=100 "corp_code가 없는 경우 검색기간은 3개월만 가능합니다."` 로 거절된다.
+    #      종목별 질의엔 없던 제약이라, 분할하지 않으면 이 교체가 **장기 백필 기능을 없앤다**.
+    #      (30일로 자르는 건 페이지 상한 때문이다 — 3개월 창은 실측 54,716건 = 548 페이지로
+    #      max_pages 500 을 넘는다. 두 제약을 동시에 지키는 값이다.)
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"], from_date="2026-01-01", to_date="2026-07-31"))
+
+    windows = [(_param(u, "bgn_de"), _param(u, "end_de")) for u in client.list_urls]
+    assert len(windows) == 8  # 212일 / 30일
+    assert windows[0] == ("20260101", "20260130")
+    assert windows[-1][1] == "20260731"  # 끝은 요청한 창의 끝
+    # 세그먼트는 빈틈도 겹침도 없어야 한다 — 빈틈은 조용한 결측, 겹침은 중복 수집이다.
+    for (_, prev_end), (next_bgn, _) in zip(windows, windows[1:]):
+        prev = datetime.strptime(prev_end, "%Y%m%d").date()
+        nxt = datetime.strptime(next_bgn, "%Y%m%d").date()
+        assert (nxt - prev).days == 1
+
+
+def test_short_window_is_not_split(tmp_path):
+    # WHY: 평상시 증분 창(어제~오늘)까지 쪼개면 호출이 배로 든다 — 상한 안이면 한 번에 간다.
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"], from_date="2026-07-30", to_date="2026-07-31"))
+
+    assert len(client.list_urls) == 1
+
+
+def test_partially_filled_non_final_page_noted(tmp_path):
+    # WHY(각도 H): 0행만 보면 "100 중 1행"처럼 **일부만 빠진 페이지**가 그대로 통과한다.
+    #      비최종 페이지는 정확히 page_count 행이다 — total_page 가
+    #      ceil(total_count/page_count) 라 마지막을 뺀 모든 페이지가 가득 찬다(실측: 11페이지
+    #      창의 1·2·5·10 페이지 전부 100행, 11페이지만 69).
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3, page_count=2),  # 2 중 1행
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=3, page_no=2, page_count=2),
+    })
+    source = _source(tmp_path, client, api_key="k", page_count=2)
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]  # 받은 만큼은 보존하고 멈춘다
+    assert any("비최종 페이지는" in f["error"] for f in source.fetch_failures)
 
 
 def test_window_scanned_once_regardless_of_universe_size(tmp_path):
@@ -324,10 +383,10 @@ def test_target_with_missing_rcept_no_noted_not_yielded(tmp_path):
 def test_pagination_follows_total_page(tmp_path):
     # WHY: 한 corp·창의 공시가 여러 페이지면 total_page 까지 순회해 누락이 없어야 한다.
     client = FakeClient(list_pages={
-        1: _page([_row("공급계약체결", rcept_no="P1")], total_page=2),
-        2: _page([_row("사업보고서", rcept_no="P2")], total_page=2, page_no=2),
+        1: _page([_row("공급계약체결", rcept_no="P1")], total_page=2, page_count=1),
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=2, page_no=2, page_count=1),
     })
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
     assert {r["rcept_no"] for r in records} == {"P1", "P2"}
@@ -341,9 +400,9 @@ def test_repeated_page_echo_noted_not_silent_loss(tmp_path, echoed):
     #      않는다 — 실 API 는 요청 page_no 를 그대로 에코한다(실측 2026-08-03).
     #      ⚠️ 문자열 에코("1")도 함께 고정한다 — 타입으로 가드를 끄면(`isinstance(int)` 일 때만
     #      대조) 벤더가 문자열로 바꾸는 순간 가드가 조용히 죽는다.
-    page1 = _page([_row("공급계약", rcept_no="P1")], total_page=3, page_no=echoed)
+    page1 = _page([_row("공급계약", rcept_no="P1")], total_page=3, page_no=echoed, page_count=1)
     client = FakeClient(list_pages={1: page1, 2: page1, 3: page1})  # 2·3 도 page_no=1
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
@@ -378,10 +437,10 @@ def test_missing_page_no_noted_not_skipping_the_guard(tmp_path):
     # WHY(각도 H): 결측을 통과시키면 **필드가 빠지는 순간 가드가 죽는다** — page_no 없이 같은
     #      1페이지가 반복돼도 dedup 이 중복을 지우고 total_page 까지 완주해 success 로 끝난다.
     #      page_no 는 응답 계약에 있는 필드다(실측) — 없다는 건 응답을 못 믿는다는 뜻이다.
-    page = {"status": "000", "message": "정상", "total_page": 3,
+    page = {"status": "000", "message": "정상", "total_page": 3, "page_count": 1,
             "list": [_row("공급계약", rcept_no="P1")]}  # page_no 키 없음
     client = FakeClient(list_pages={1: page, 2: page, 3: page})
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
@@ -394,10 +453,10 @@ def test_late_013_is_a_failure_not_an_empty_window(tmp_path):
     #      013 은 "이 창은 비었다"가 아니라 목록 변동·캐시 불일치이고 남은 페이지는 안 읽힌
     #      것이다. 1페이지 013(정상 빈 창)과 같이 묶으면 그 유실이 success 로 남는다.
     client = FakeClient(list_pages={
-        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3, page_count=1),
         2: {"status": "013"},
     })
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
@@ -415,18 +474,18 @@ def test_empty_page_noted_wherever_it_appears(tmp_path, empty_page, total_page):
     #      status=013 으로 온다. 그래서 status=000 인데 0행이면 위치와 무관하게 페이지 유실이다.
     #      (처음엔 "마지막 페이지가 비는 건 정상"이라는 예외를 뒀는데 이 산식이 반증했다 —
     #      같은 무행 응답을 013 이면 실패로, 000 이면 성공으로 두는 모순이기도 했다.)
-    pages = {1: _page([_row("공급계약", rcept_no="P1")], total_page=total_page)}
-    pages[empty_page] = _page([], total_page=total_page, page_no=empty_page)
+    pages = {1: _page([_row("공급계약", rcept_no="P1")], total_page=total_page, page_count=1)}
+    pages[empty_page] = _page([], total_page=total_page, page_no=empty_page, page_count=1)
     if total_page > empty_page:
         pages[total_page] = _page([_row("사업보고서", rcept_no="P3")],
-                                  total_page=total_page, page_no=total_page)
+                                  total_page=total_page, page_no=total_page, page_count=1)
     client = FakeClient(list_pages=pages)
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
     assert [r["rcept_no"] for r in records] == ["P1"]  # 빈 페이지에서 멈춘다
-    assert any("페이지 유실" in f["error"] for f in source.fetch_failures)
+    assert any("유실" in f["error"] for f in source.fetch_failures)
 
 
 def test_same_rcept_no_with_changed_content_is_kept(tmp_path):
@@ -435,10 +494,10 @@ def test_same_rcept_no_with_changed_content_is_kept(tmp_path):
     #      접으면 두 번째가 raw 에 닿기도 전에 사라지고 list_rows_seen 은 개수만 남겨 무엇이
     #      달랐는지 복원되지 않는다. 접어야 할 건 페이지 이동이 만든 **완전히 같은 행**뿐이다.
     client = FakeClient(list_pages={
-        1: _page([_row("공급계약", rcept_no="R1", rm="")], total_page=2),
-        2: _page([_row("공급계약", rcept_no="R1", rm="정")], total_page=2, page_no=2),
+        1: _page([_row("공급계약", rcept_no="R1", rm="")], total_page=2, page_count=1),
+        2: _page([_row("공급계약", rcept_no="R1", rm="정")], total_page=2, page_no=2, page_count=1),
     })
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
@@ -451,10 +510,10 @@ def test_total_page_smaller_than_current_page_noted(tmp_path):
     #      의미까지는 못 지킨다. page=2 응답의 total_page=1 은 파서엔 유효하지만 모순이고,
     #      `page >= total_page` 가 참이 돼 **조용한 정상 종료**가 된다.
     client = FakeClient(list_pages={
-        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
-        2: _page([_row("사업보고서", rcept_no="P2")], total_page=1, page_no=2),  # 모순
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3, page_count=1),
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=1, page_no=2, page_count=1),  # 모순
     })
-    source = _source(tmp_path, client, api_key="k")
+    source = _multipage(tmp_path, client)
 
     records = list(source.fetch(["005930"]))
 
