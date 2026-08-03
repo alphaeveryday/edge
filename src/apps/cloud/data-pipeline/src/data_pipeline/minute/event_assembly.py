@@ -81,6 +81,11 @@ class NewsEventAssembler:
                     "SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
                     (doc_id,),
                 )
+                # ponytail: 조립 커밋 직후·checksum 반환 직전에 프로세스가 죽으면 다음
+                # claim(attempt+1)이 LLM 을 다시 불러 **다른 결과 artifact** 를 남기고,
+                # 이 게이트는 조립을 건너뛴다 — job.result_checksum 과 event 계보가
+                # 서로 다른(둘 다 유효한) 추출을 가리킬 수 있다. 좁은 crash 창 한정이고
+                # 계보-artifact 대조는 EOD QC 축 — 내용 기반 재조립이 필요해지면 그때.
                 cur.execute(
                     "SELECT 1 FROM document_entity WHERE document_id = %s LIMIT 1",
                     (doc_id,),
@@ -101,7 +106,11 @@ class NewsEventAssembler:
             }
             assembled = 0
             unresolved_primary = 0
-            new_events: list[dict] = []
+            # evt id 로 dedup — 같은 (type, predicate, primary) 중복 assertion 은 같은
+            # 결정적 source_event_id 를 낸다. 목록에 두 번 실으면 thread_events 가
+            # 두 번째 항목에서 자기 자신을 prior 로 세어 첫 사건이
+            # DUPLICATE_REBROADCAST 로 오염된다.
+            new_events: dict[str, dict] = {}
             for assertion in assertions:
                 cls = self._to_classification(
                     assertion, article_id=article_id, view=view,
@@ -114,13 +123,16 @@ class NewsEventAssembler:
                 created = persist_normalization(conn, [row], {article_id: cls}, event_date)
                 assembled += len(created)
                 for made in created:
-                    new_events.append(_thread_event(made, cls, str(published_at)))
+                    new_events.setdefault(
+                        made["source_event_id"],
+                        _thread_event(made, cls, str(published_at)),
+                    )
             if new_events:
                 # **이번 기사 신규분만** 엮는다 — 배치처럼 날짜 전체 미연결·UNKNOWN 을
                 # 재조회하면 UNKNOWN 이 쌓인 날 기사마다 그 전량을 재기록해 제곱형
                 # DB 작업 + 전역 락 점유가 된다. UNKNOWN 재평가·미연결 잔여 회수는
                 # 배치(fetch_unthreaded_events)의 일이다. 직렬화는 thread_events 안의 락.
-                thread_events(conn, new_events)
+                thread_events(conn, list(new_events.values()))
         if unresolved_primary:
             # 해소 실패는 유니버스 밖 기사(정상)와 마스터 결손(결함)이 같은 얼굴이다 —
             # 조용히 접지 않고 남긴다. 하루 단위 판정은 EOD QC 소관.
@@ -215,6 +227,14 @@ def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
         if argument["entity_id"] is None:
             continue
         role_lists.setdefault(argument["role_code"], []).append(str(argument["entity_id"]))
+    # anchor 폴백 미러 — persist_normalization 은 primary 가 참여자에 없으면
+    # anchor_role 로 event_argument 행을 하나 세운다. 여기서 같은 조건으로 넣지
+    # 않으면 배치(fetch_unthreaded_events — DB 의 그 행을 읽음)와 단건의 role_values
+    # 가 갈려 같은 이벤트가 서로 다른 thread_key(또는 UNKNOWN)를 얻는다.
+    primary_entity = created["entity_id"]
+    if cls["anchor_role"] and not any(
+            a["entity_id"] == primary_entity for a in cls["arguments"]):
+        role_lists.setdefault(cls["anchor_role"], []).append(str(primary_entity))
     return {
         "source_event_id": created["source_event_id"],
         "event_type_code": cls["event_type_code"],
