@@ -196,16 +196,21 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial --source dart
 
 # 국내 공시(disclosure) 원본저장(Step1) — OpenDART 공시목록(list.json) + 공시서류 원본
-# (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. corp_code×날짜창으로
-# 공시목록을 수집해 대상 유형(공급계약·사업보고서, report_nm 부분일치)만 추리고, 매칭 공시의
-# 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다. 날짜창은 뉴스와 동형(미지정=증분
-# 어제~오늘, 백필은 --from/--to). corp_code 는 corpCode.xml 로 런타임 매핑. 인증키는 env 주입.
+# (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. **날짜창의 시장 전체**
+# 공시목록을 페이지네이션해 유니버스(stock_code)∩대상 유형(공급계약·사업보고서, report_nm
+# 부분일치)만 추리고, 매칭 공시의 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다.
+# 날짜창은 뉴스와 동형(미지정=증분 어제~오늘, 백필은 --from/--to). 인증키는 env 주입.
 # 수집 대상은 canonical KR holdings ETF 별 최신 파티션 합집합의 **구성종목** ∪ targets
-# (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 corpCode 의 stock_code 와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가
-# 아니라 corpCode 에 없어, 남기면 매 런 미매핑으로 잡혀 원장이 영구 INCOMPLETE 가 된다.
-# corpCode 에 없는 종목은 kind=unmapped 로 런을 죽이지 않되(재시도로 낫지 않음) 계측에는
-# 남는다 — 커버리지 구멍은 data_status=INCOMPLETE 로 사실대로 드러난다.
+# (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 list 행의 stock_code 와 항등이라 심볼맵 없이 수집되고,
+# symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가 아니다.
+# ⚠️ 유니버스는 **질의 축이 아니라 필터**다. corp_code 는 list.json 의 선택 파라미터이고,
+# 종목별로 질의하면 콜 수가 유니버스에 비례해(311 종 ⇒ ~311초) 잦은 실행이 불가능하다. 창
+# 전체를 훑으면 페이지 수에만 비례한다(5거래일 3,267행 = 33 콜, 실측 2026-08-03). 그래서
+# 수집 경로에는 corpCode.xml 해소가 없다 — 매 런 상수로 걸리며 data_status 를 INCOMPLETE 에
+# 묶던 kind=unmapped 실패도 함께 사라졌다. corpCode.xml 은 enrich-corp-code 스텝만 쓴다.
+# ⚠️ 창은 30일씩 잘라 순회한다 — corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다
+# (4개월 창은 status=100 거절, 실측). --from 만 주면 끝일을 KST 오늘로 확정해 자르고, 실제
+# 수집한 창은 collection_log 의 window_from/window_to 에 남는다(인자가 아니라 실제 값).
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달
@@ -659,7 +664,8 @@ settings.targets.keywords            # ["금리", ...]
   수집 provenance 만 부착한다.
 - **raw(공시)** — `raw/source=dart/dataset=disclosures/market=KR/ingest_date=…/run_id=…/` 에
   run_id 별 append. **가격·재무와 동형(bronze 통일)** — 공시목록(list.json) 행을 수집일 기준으로
-  **전부 보존**한다(중복 판정 안 함). 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
+  **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
   **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
   에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
@@ -667,7 +673,8 @@ settings.targets.keywords            # ["금리", ...]
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
 - **raw(ETF 구성종목)** — `raw/source={fmp|krx}/dataset=etf_holdings/market={US|KR}/ingest_date=…/run_id=…/`
   에 run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
-  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(중복 판정 안 함). 수집 대상은
+  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 수집 대상은
   종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`·`krx_etf.source.etf_map`)이라 **1 ETF → N
   구성종목**으로 펼쳐지고, 각 행에 벤더 기준일(FMP `updatedAt`·KRX `trd_dd`)·`our_etf_id`·`market`·
   `fetched_at` 를 부착한다. 같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver)

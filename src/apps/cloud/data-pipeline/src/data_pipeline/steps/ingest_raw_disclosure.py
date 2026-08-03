@@ -1,10 +1,27 @@
-"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존·dedup 없음).
+"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존).
 
-OpenDART 공시목록(list.json)을 corp_code × 날짜창으로 수집해 market 별 ingest_date 파티션
-(수집일) ndjson 으로 raw 존에 append 하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML
-ZIP)을 rcept_no 별 객체로 무변형 저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
+⚠️ 한 가지 예외가 있다: 소스가 **한 순회 안에서 완전히 같은 행**을 접는다. 목록이 수집 중에도
+자라 페이지 경계가 밀리면 같은 행이 두 페이지에 나오는데, 그걸 그대로 두면 같은 문서를 두 번
+내려받는다. 접히는 건 내용이 전부 같은 행뿐이라 증거는 잃지 않지만, 그래서 `list_rows_seen`
+(벤더가 건넨 행 수)과 raw 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이다.
+정체성 병합·정정 판정 같은 **서로 다른 관측을 접는 일**은 여전히 하지 않는다(canonical 소관).
 
-⚠️ 뉴스형 판정: 특정 corp 의 날짜창에 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
+OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집해(종목별 질의 아님 —
+`sources/dart_disclosure.py`) market 별 ingest_date 파티션(수집일) ndjson 으로 raw 존에 append
+하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML ZIP)을 rcept_no 별 객체로 무변형
+저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
+
+⚠️ **이 스텝은 완전성을 판정하지 않는다.** 소스가 남기는 `list_total_count`·`list_rows_seen`
+은 창 규모의 **관측**이지 판정이 아니다 — 목록은 수집 중에도 자라(접수 피크 16시) 페이지
+경계가 밀리므로, 둘의 차이가 절단인지 유입인지 구분되지 않는다. 실제 완전성 근거는 같은
+날짜창을 다시 읽는 **다음 런과의 rcept_no 집합 비교**이고, 그 판정 주체는 원장·EOD 다.
+
+⚠️ 장중 잦은 실행(미니배치)을 붙이면 그 레인은 **원장 밖**이라 침묵을 아무도 못 본다 —
+슬롯도 expected_task 도 없어 "1시간째 0건"을 판정할 주체가 없다. 백스톱은 15:40 일일 런이다:
+같은 날짜창을 다시 훑으므로 데이터 구멍은 그날 안에 메워지고 그 런은 원장 안에 있다. 즉
+**구멍은 안 생기고 지연만 EOD 까지 늘어난다.** 장중 침묵을 장중에 알아야 하면 별도 장치다.
+
+⚠️ 뉴스형 판정: 날짜창에 대상 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
 재무제표(ingest_raw_financial)의 "매핑 대상 있는데 0행=error" 가드는 두지 않는다(Rule 7 — 스텝별
 판정). 메타 행은 전부 보존하고, 본문 수집이 실패해도 메타는 남긴다(bronze — 정체성 병합·정정
 판정·corp_code↔ticker bridge 는 후속 canonical 소관).
@@ -94,9 +111,11 @@ def run(
         # try 안 — "결과는 항상 collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
         #
         # ETF 자기 티커는 **출처와 무관하게** 뺀다: holdings 파생분만 걸러선 부족하고, 정적
-        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라
-        # corpCode.xml 에 없어, 남겨두면 매 런 미매핑으로 잡혀 ops.failed_records>0 →
-        # 원장이 영구 INCOMPLETE 가 된다(`ops/wrapper.py`). 결측이 아닌 것을 결측으로 세는 셈.
+        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라 공시가
+        # 나올 수 없다 — 남겨두면 유니버스(planned_symbols)만 부풀려 "수집 대상"과 "수집될 수
+        # 있는 것"이 갈린다. (종전엔 여기에 더해 corpCode.xml 미매핑으로 매 런 잡혀
+        # ops.failed_records>0 → 원장 영구 INCOMPLETE 였다. 그 경로는 소스가 종목별 질의를
+        # 걷어내며 사라졌지만, 유니버스를 사실대로 세는 이유는 그대로 남는다.)
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = log["symbols_excluded_etf"] = 0
         if getattr(source, "universe_from_holdings", False):
@@ -164,15 +183,19 @@ def run(
     # list 실패(source.fetch_failures)와 본문 실패(doc_failures)를 합쳐 판정한다.
     #  - 저장분 있고 일부 실패 → partial(메타는 있으나 온전치 않음: 본문 결측 등)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
-    #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
-    #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
-    #  - corpCode 미매핑(kind=unmapped)도 exit code 상으로는 성공으로 본다(ALPHA-477):
-    #    재시도로 낫지 않는 미매핑이라 런을 죽이면 다음 런도 같은 이유로 죽는다. 다만
-    #    failed_targets·ops.failed_records 에는 그대로 남아 원장이 유실을 계속 본다
-    #    (data_status=INCOMPLETE). 커버리지 구멍은 사실대로 드러낸다 — 조용한 결측 금지.
-    _TOLERATED = {"truncation", "unmapped"}
+    #
+    # ⚠️ **관용 어휘가 없다** — 종전 두 관용(`unmapped`·`truncation`)은 목록 질의가 종목별에서
+    # 창 전체로 바뀌면서 근거가 함께 사라졌다(Rule 7 — 충돌은 평균 내지 말고 하나를 고르고
+    # 이유를 남긴다): `unmapped` 는 소스가 corp_code 를 해소하지 않게 돼 **발생 지점이 없고**,
+    # `truncation` 의 근거("다음 증분 창이 이어받음", ALPHA-351)는 상한이 corp 당 10 페이지이던
+    # 시절 것이라 창 전체가 한 순회인 지금은 성립하지 않는다(상한 도달 = 대량 미수집이고,
+    # 운영자 지정 백필 창은 이어받을 창이 없다).
+    #
+    # 그래서 **관용 필터를 두지 않는다.** 빈 집합으로 남겨두면 아무 일도 안 하면서 유효한
+    # 확장점처럼 보여, 거기 이름을 하나 넣는 것만으로 "특정 실패를 성공 처리"하는 경로가 다시
+    # 조용히 생긴다. `kind` 는 로그의 분류 라벨로만 남는다 — 판정에는 쓰지 않는다.
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
-    real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]
+    real_failures = failed_targets
     if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
@@ -198,9 +221,20 @@ def run(
             "records_fetched": fetched,
             "records_saved": saved,
             "documents_saved": documents_saved,
+            # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
+            # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
+            # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
+            "window_from": source.resolved_window[0],
+            "window_to": source.resolved_window[1],
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),
+            # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
+            # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
+            # 둘의 차이는 절단일 수도 유입일 수도 있다. 어느 쪽인지 모르는 값으로 완전성을
+            # 단언하지 않고 기록만 남긴다 — 나중에 사람이 볼 수 있게(Rule 12).
+            "list_total_count": getattr(source, "list_total_count", None),
+            "list_rows_seen": getattr(source, "list_rows_seen", 0),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
             # records_out 은 메타 건수(saved)로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
