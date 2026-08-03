@@ -47,7 +47,8 @@ FEATURES = {
     ("가격잔차", "누적"): "cum20",
     ("가격잔차", "변동성"): "vol20",
     ("거래량", "수준"): "tv20",
-    ("거래량", "변화"): "tv_chg",
+    # 노출은 PIT 판(전일까지). 당일 판 tv_chg 는 **방아쇠 전용** - 섞으면 동시성이다.
+    ("거래량", "변화"): "tv_chg_pit",
     # ── PIT 스냅샷(v_pit)이 연 축. 전부 **어제 값** = 느린 상태 ──
     ("주주", "수준"): "fr_lvl",       # 외국인지분율
     ("주주", "변화"): "fr_chg",       # 외국인지분율 20일 변화(%p)
@@ -149,7 +150,15 @@ f AS (
            sum(d.ar_ind)      OVER w20 AS cum20,
            stddev_samp(d.lr)  OVER w20 AS vol20,
            avg(d.volume)      OVER w20 AS tv20,
+           -- **당일** 거래량 비 - 방아쇠 전용이다 (오늘 튀었나는 오늘 값으로 판정).
            d.volume / NULLIF(avg(d.volume) OVER w20, 0) - 1 AS tv_chg,
+           -- **노출 전용 PIT 판**: 전일까지의 거래량 비. 당일 거래량을 노출로 쓰면
+           -- 처치가 결과와 **동시 결정**이라 역인과를 유의로 읽는다 - 실측
+           -- (000660 07-29 C3): '실적일 회전 급증 종목이 더 올랐다 p=0.000 +1.77%p'
+           -- 는 '많이 오른 종목이 거래량도 많았다' 였다. 코드 게이트는 p 만 보므로
+           -- 이 종류의 결함을 구조적으로 못 잡는다.
+           LAG(d.volume, 1) OVER wi
+             / NULLIF(avg(d.volume) OVER w20, 0) - 1 AS tv_chg_pit,
            LAG(q.foreign_ratio, 1) OVER wi AS fr_lvl,
            LAG(q.foreign_ratio, 1) OVER wi
              - LAG(q.foreign_ratio, 21) OVER wi AS fr_chg,

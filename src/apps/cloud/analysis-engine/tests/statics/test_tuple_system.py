@@ -845,3 +845,18 @@ def test_cate_interaction_does_not_split_the_sample():
     assert p0 > 0.05, (o0, p0)
     # 전체 표본을 쓴다 - 분할하지 않는다
     assert len(ar) == n
+
+
+def test_exposures_are_point_in_time_not_same_day():
+    """노출(처치)이 당일 정보를 쓰면 처치가 결과와 **동시 결정**이다.
+
+    실측(000660 07-29 C3): `거래량/변화` 가 당일 거래량을 써서 '실적일 회전 급증
+    종목이 더 올랐다 p=0.000 +1.77%p' 가 나왔는데, 그건 '많이 오른 종목이 거래량도
+    많았다' 는 역인과다. 코드 게이트는 p 만 보므로 이 결함을 구조적으로 못 잡는다.
+
+    방아쇠는 당일이어야 한다(오늘 튀었나) - 그래서 두 컬럼을 나눈다.
+    """
+    from edge_analysis.statics.paneltest import FEATURES, _INNOVATION
+    assert FEATURES[("거래량", "변화")] == "tv_chg_pit", "노출이 당일 판을 쓴다"
+    assert _INNOVATION["거래량"] == "tv_chg", "방아쇠는 당일 판이어야 한다"
+    assert "tv_chg" not in set(FEATURES.values()), "당일 판이 노출 목록에 남아 있다"

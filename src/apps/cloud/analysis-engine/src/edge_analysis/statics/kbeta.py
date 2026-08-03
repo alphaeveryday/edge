@@ -197,6 +197,7 @@ def path_summary(res: dict, marks: list[str]) -> list[tuple]:
 
 SECTOR_TOPN = 12        # 섹터 프록시 구성원 수 (전역 상수)
 PROXY_RHO_MIN = 0.70    # 일봉 KRX 업종지수와 이만큼도 안 맞으면 프록시 자격 없음
+RHO_IDIO_MAX = 0.20    # 잔차 공통상관이 이보다 크면 '고유'라 부를 자격이 없다
 
 
 def sector_proxy(lake, tk6: str, day: str, topn: int = SECTOR_TOPN) -> dict:
@@ -247,7 +248,7 @@ def sector_proxy(lake, tk6: str, day: str, topn: int = SECTOR_TOPN) -> dict:
                 "reason": f"프록시-업종지수 상관 ρ={rho:.2f} < {PROXY_RHO_MIN} "
                           f"(검산 n={len(both)}) — 섹터 프록시 자격 없음"}
     return {"verdict": "성립", "code": code, "rho": rho, "n_members": len(frames),
-            "n_check": len(both), "lr": proxy}
+            "n_check": len(both), "lr": proxy, "lr_members": lr}
 
 
 def kalman2(y: np.ndarray, X: np.ndarray, b0: np.ndarray, P0: np.ndarray,
@@ -314,10 +315,39 @@ def intraday_beta2(lake, symbol: str, day: str, *, market: str = "KOSPI") -> dic
         return {"verdict": "판정불가",
                 "reason": f"2요인 β_m CI 중위 폭 {wide:.2f} > {CI_MAX} — 일중 상관 붕괴",
                 "one_factor": one}
+    # **'고유' 라 부를 자격 검사** (layers.py L20 이 선언하고 배선은 없던 것).
+    # 시장·섹터를 뺀 잔차가 구성원 사이에서 여전히 동조하면 이름 없는 공통요인이
+    # 남아 있다는 직접 증거다 - 그걸 '고유' 라 부르면 종목 사건으로 설명하려 든다.
+    rho_idio, rho_n = _resid_rho(sp.get("lr_members"), idx, ok, rm, rso)
     return {"verdict": "성립", "ts": ts, "beta_m": B[:, 0], "beta_s": B[:, 1],
             "ci_m": ci[:, 0], "ci_s": ci[:, 1], "y": y, "rm": rm, "rs_orth": rso,
             "gamma": g, "rho_proxy": sp["rho"], "sector_code": sp["code"],
-            "n_members": sp["n_members"], "b0": one["b0"], "q": one["q"], "n": len(y)}
+            "n_members": sp["n_members"], "b0": one["b0"], "q": one["q"], "n": len(y),
+            "rho_idio": rho_idio, "rho_idio_n": rho_n,
+            "idio_qualified": None if rho_idio is None else rho_idio <= RHO_IDIO_MAX}
+
+
+def _resid_rho(members, idx, ok: np.ndarray, rm: np.ndarray,
+               rso: np.ndarray) -> tuple[float | None, int]:
+    """구성원 잔차의 평균 횡단면 상관. ρ≈0 이어야 '고유' 라 부를 자격이 생긴다.
+
+    각 구성원을 같은 두 요인(시장·섹터⊥)에 회귀하고 남은 잔차끼리의 상관을 잰다.
+    남아 있으면 층이 하나 부족한 것이고, 그 몫이 조용히 '고유' 로 흘러든다.
+    """
+    if members is None or getattr(members, "empty", True):
+        return None, 0
+    X = np.column_stack([np.ones(len(rm)), rm, rso])
+    res = []
+    for col in members.columns:
+        v = members[col].reindex(idx).to_numpy(dtype=float)[ok]
+        if not np.isfinite(v).all() or np.ptp(v) == 0:
+            continue
+        beta, *_ = np.linalg.lstsq(X, v, rcond=None)
+        res.append(v - X @ beta)
+    if len(res) < 3:
+        return None, len(res)
+    from .layers import residual_rho
+    return residual_rho(res), len(res)
 
 
 def path_layers3(res: dict) -> list[tuple[str, float, float, float, float, float]]:
