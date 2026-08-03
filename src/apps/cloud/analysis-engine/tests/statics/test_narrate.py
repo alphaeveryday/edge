@@ -290,3 +290,24 @@ def test_unexplained_is_scoped_to_the_causal_budget():
     # 층이 없으면 예전대로 시간 항등식 기준
     plain = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={})
     assert "미설명 +24.67%p" in plain
+
+
+def test_peer_cross_section_contradicting_layers_is_confessed():
+    """β≈1 인 동종이 시장에서만 +21%를 받았다면 총수익이 +7.6%p 일 수 없다.
+
+    실측(042700 07-31): 층 분해 시장 +24.22 · 섹터 -3.47 인데 동종 12종목 중위
+    총수익은 +7.59%p. 시총가중 지수(반도체 30%)가 섹터 충격을 시장 팩터로 흡수하고,
+    시장직교 섹터층은 남은 게 없어 음수로 나온다. 숨기면 시장 몫이 과대배정된다.
+    """
+    rows = [_row("잔여1", 0.2467)]
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                  layers=(("시장", 0.2422), ("섹터", -0.0347), ("고유", 0.0392)),
+                  peers=("기계·장비(코스피)", 12, 0.0759, 1.0))
+    assert "[동종]" in txt and "중위 +7.59%p" in txt
+    assert "[모순]" in txt, "층 분해와 횡단면의 불일치를 침묵했다"
+    assert "시장 몫은 상한으로 읽어라" in txt
+    # 동종 중위가 층 분해와 정합하면 모순 문장은 안 나온다
+    ok = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                 layers=(("시장", 0.2422), ("섹터", -0.0347), ("고유", 0.0392)),
+                 peers=("전기전자(코스피)", 45, 0.2300, 0.6))
+    assert "[모순]" not in ok

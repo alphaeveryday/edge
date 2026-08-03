@@ -405,7 +405,7 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     이 조립이 코드에 없어서 셀마다 임시 스크립트로 짰고, 그 스크립트에만 층별
     식별집합이 있었다 - 코드는 고유 예산 하나로 세 층을 잘랐다. 집을 준다.
     """
-    from .attribute import _route_gate, gap_covariate, load_cell
+    from .attribute import _route_gate, gap_covariate, load_cell, peer_context
     from .narrate import Edge, narrate
     from .render import Row, render
     d = pathlib.Path(out_dir)
@@ -437,11 +437,17 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     rows = [Row(s) for s in shares]
     gw = next((s for s in shares if s.window.kind == "gap"), None)
     gc = gap_covariate(lake, ticker, day, gw.log_ret) if gw is not None else None
+    # 시장층의 '왜' 는 갭과 같은 팩터로 묻는다 - 코스피는 반도체 비중이 크고,
+    # 두 문단이 다른 팩터를 쓰면 독자가 두 개의 밤사이 이야기를 읽게 된다.
+    from .layers import market_source
+    ms = market_source(lake, day, proxy=gc.factor) if gc is not None else None
+    msrc = (gc.factor, ms[0], ms[1]) if ms is not None and gc is not None else None
     return (render(rows) + "\n\n"
             + narrate(ticker=ticker, name=name or ticker, day=day,
                       route=_route_gate(lake, iid, day), rows=rows, grounded={},
                       after_close=tuple(after_close), edges=tuple(edges), gap_cov=gc,
-                      layers=tuple(budgets.items())))
+                      layers=tuple(budgets.items()), market_src=msrc,
+                      peers=peer_context(lake, ticker, day)))
 
 
 def _cli() -> None:

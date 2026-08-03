@@ -112,6 +112,8 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             edges: tuple[Edge, ...] = (),
             gap_cov: GapCovariate | None = None,
             layers: tuple[tuple[str, float], ...] = (),
+            market_src: tuple[str, float, float] | None = None,
+            peers: tuple[str, int, float, float] | None = None,
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -244,6 +246,36 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                        f"({_pp(big[1])}) — 이 종목 이야기로 설명하려는 서사는 "
                        f"층 분해가 반박한다. 종목 고유 몫은 "
                        + (f"{_pp(idio_budget)} 뿐이다." if idio_budget is not None else "미계산."))
+        # **시장층이 왜 움직였나.** 층 분해는 '얼마'를 주지만 '왜'를 안 준다 -
+        # 투자자가 실제로 묻는 것은 '코스피가 왜 올랐나'다. market_source 가
+        # 이 구간을 이미 계산하는데 산문에 축이 없어 facts 에만 실렸다.
+        if market_src is not None:
+            nm, ms_lo, ms_hi = market_src
+            out.append(f"[시장] 그 시장층이 왜 움직였나 — 코스피 수익 중 밤사이 {nm}로 "
+                       f"설명되는 몫 [{ms_lo * 100:+.2f}, {ms_hi * 100:+.2f}]%p "
+                       "(β 구간 × 확정된 전 세션). 나머지는 국내 요인이다.")
+    # 층 분해가 계산으로 말한 것을 횡단면이 **눈으로** 말한다. '시장층 77%' 는
+    # 맞지만 추상적이고, '같은 업종 45종목 중위 +19%' 는 즉시 납득된다.
+    if peers is not None:
+        pname, pn, pmed, ppct = peers
+        out.append(f"[동종] {pname} {pn}종목 중위 {_pp(pmed)} · 이 종목 백분위 "
+                   f"{ppct * 100:.0f}% — "
+                   + ("업종 전체가 같이 움직였다. 종목 개별 서사로는 중위까지 설명되지 않는다."
+                      if abs(pmed) >= abs(total) * 0.5 else
+                      "업종 중위와 갈린다 - 이 종목에 고유한 무엇이 있었다."))
+        # **층 분해와 횡단면이 어긋나면 자백한다.** β≈1 인 동종이 시장에서만
+        # +21% 를 받았다면 총수익이 +7.6%p 일 수 없다 - 시총가중 지수(반도체 30%)가
+        # 섹터 충격을 '시장' 으로 흡수하고, 시장직교 섹터층은 남은 게 없어 음수로
+        # 나온다 (실측 042700 07-31: 시장 +24.22 · 섹터 -3.47 · 동종 중위 +7.59).
+        # 요인모형의 한계이지 데이터 부족이 아니다 - 숨기면 시장 몫이 과대배정된다.
+        mkt_share = dict(layers).get("시장") if layers else None
+        if (mkt_share is not None and abs(mkt_share) > abs(pmed) * 1.5
+                and mkt_share * total > 0):
+            out.append(f"[모순] 층 분해는 시장층이 이 종목에 {_pp(mkt_share)} 를 줬다고 "
+                       f"하는데, 동종 중위의 **총수익**은 {_pp(pmed)} 뿐이다 — 시총가중 "
+                       "지수가 섹터 충격을 시장 팩터로 흡수하고 있다 (시장직교 섹터층이 "
+                       "음수로 나오는 것이 그 증거). **시장 몫은 상한으로 읽어라** — "
+                       "요인모형의 한계이지 데이터 부족이 아니다.")
     # 미설명이 최대면 선두 문장이 된다. `else` 가 없어서 두 갈래가 같이 나가
     # `[몫]` 이 어순만 바꿔 두 번 찍혔다 (실측 042700 07-31).
     unexp_leads = abs(scoped) >= max((abs(r.est or 0.0) for r in rows), default=0.0)

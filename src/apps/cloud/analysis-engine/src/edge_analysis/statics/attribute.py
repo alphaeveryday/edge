@@ -182,6 +182,58 @@ def gap_covariate(lake, ticker: str, day: str, gap_share: float):
                         explained=clipped, contradiction=clipped is None)
 
 
+def peer_context(lake, ticker: str, day: str) -> tuple[str, int, float, float] | None:
+    """(업종명, n, 동종 중위 수익, 이 종목의 백분위). 층 분해를 눈으로 확인시킨다.
+
+    '시장층이 77%' 는 맞지만 추상적이다. **같은 업종 45종목의 중위가 +19% 인데
+    이 종목이 +28%** 는 같은 사실을 즉시 납득시킨다 - 층 분해가 계산으로 말한
+    것을 횡단면이 눈으로 말한다. 둘이 어긋나면 그것도 알아야 한다.
+
+    수익은 로그다 (층·창과 같은 단위). 업종은 KRX 업종지수 구성원 (statics.krxsector).
+    """
+    tk6 = ticker.split(".")[0]
+    try:
+        rows = lake.sql(f"""
+            WITH me AS (
+              SELECT code FROM sector_member
+              WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'
+              ORDER BY as_of DESC LIMIT 1
+            ),
+            mem AS (
+              SELECT DISTINCT sm.ticker FROM sector_member sm, me
+              WHERE sm.code = me.code AND sm.as_of <= DATE '{day}'
+            ),
+            px AS (
+              SELECT p.ticker, p.trade_date, p.close,
+                     lag(p.close) OVER (PARTITION BY p.ticker ORDER BY p.trade_date) pc
+              FROM s3_price_daily p
+              WHERE p.trade_date <= DATE '{day}'
+                AND substr(p.ticker, 1, 6) IN (SELECT ticker FROM mem)
+            )
+            SELECT substr(ticker, 1, 6), ln(close / pc) FROM px
+            WHERE trade_date = DATE '{day}' AND pc > 0 AND close > 0""")
+    except Exception:                       # noqa: BLE001 - 부재는 침묵이 아니라 None
+        return None
+    vals = {t: float(r) for t, r in rows}
+    if len(vals) < 5 or tk6 not in vals:
+        return None
+    name = sector_name_of(lake, tk6, day)
+    xs = sorted(vals.values())
+    med = xs[len(xs) // 2]
+    pct = sum(1 for v in xs if v <= vals[tk6]) / len(xs)
+    return (name, len(xs), med, pct)
+
+
+def sector_name_of(lake, tk6: str, day: str) -> str:
+    """이 종목의 KRX 업종명. 코드만 보여주면 사람이 못 읽는다."""
+    from .krxsector import sector_name
+    rows = lake.sql(f"""
+        SELECT code FROM sector_member
+        WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'
+        ORDER BY as_of DESC LIMIT 1""")
+    return sector_name(str(rows[0][0])) if rows else "업종 미상"
+
+
 def _assign_rows(shares, labels: dict[str, str], passing: dict, refuted: set[str]) -> list[Row]:
     """창 행의 3값 배정. 산문의 자기모순을 여기서 막는다 (10차 정정).
 
