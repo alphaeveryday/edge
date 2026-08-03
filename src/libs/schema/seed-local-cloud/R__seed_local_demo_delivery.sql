@@ -7,8 +7,8 @@
 -- 목적: 동기화 경로(intake → sync-agent → tenant-sync-api → cloud DB)를
 -- 시연할 전달 레코드(NEW·INVALIDATION — 온프렘 수신 두 경로 전부 자극.
 -- CORRECTION 은 폐지 — ADR-0044). NEW 자동 발번은 analysis-engine 이 수행하지만
--- (ALPHA-493) 엔진은 로컬 compose 에 없고 INVALIDATION 발번은 후속(ALPHA-440)이라
--- 이 시드를 유지한다.
+-- (ALPHA-493) 엔진은 로컬 compose 에 없어 이 시드를 유지한다. INVALIDATION 은
+-- super-admin-api 무효화 액션이 발번한다(ALPHA-440) — 시드는 수신 경로 시연용.
 -- 설명 체인은 FK 를 정직하게 충족하는 최소 실데이터다(KODEX 200, 온프렘 데모
 -- 시드와 같은 종목·거래일). cursor 1–4 점유는 엔진 발번(MAX+1)과 충돌하지 않는다.
 -- 주의: 구 3형상 시드(cursor 1–5)를 적용한 기존 볼륨은 멱등 insert 특성상 구 행
