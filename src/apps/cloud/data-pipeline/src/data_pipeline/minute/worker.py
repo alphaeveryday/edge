@@ -429,12 +429,11 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     import socket
     import time
     from datetime import timezone
-    from pathlib import Path
 
     from ..db import stable_domain_id
     from ..lake.storage import make_storage
     from ..sources.toss import TossOpenApiClient
-    from .models import load_universe
+    from .models import load_universe_uri
     from .states import DATASET_PRICE_MINUTE
     from .toss_collector import TossPriceCollector
 
@@ -475,7 +474,7 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
         parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
     except ValueError:
         raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
-    universe_model = load_universe(Path(universe))
+    universe_model = load_universe_uri(universe)
     session_id = stable_domain_id(
         "msn", DATASET_PRICE_MINUTE, options.source, parsed_day.isoformat()
     )

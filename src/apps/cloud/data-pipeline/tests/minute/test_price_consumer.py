@@ -803,3 +803,89 @@ class TestAdversarialInputs:
         with pytest.raises(TransientJobError, match="universe"):
             claim_then_run(handler, second)
         assert db.triggers == {}
+
+
+class TestPriceConsumerCli:
+    """진입점 fail-loud + bounded 게이트 (ALPHA-711, relay_cli 동형)."""
+
+    def _options(self, **overrides):
+        from types import SimpleNamespace
+        base = dict(queue_url="https://sqs/price", detection_policy_version=POLICY,
+                    destination=DESTINATION, batch_size=1, wait_seconds=0,
+                    visibility_seconds=300, heartbeat_seconds=60, max_concurrency=1,
+                    lease_seconds=600, retry_base_seconds=5, retry_max_seconds=900,
+                    max_attempts=5)
+        return SimpleNamespace(**{**base, **overrides})
+
+    def _settings(self, *, db=None, options=None, triggers=True):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            db=db, minute_price_consumer=options,
+            price_triggers=SimpleNamespace(abs_threshold=0.05) if triggers else None,
+            storage=None,
+        )
+
+    def _universe_file(self, tmp_path):
+        import json as _json
+        path = tmp_path / "u.json"
+        path.write_text(_json.dumps({
+            "universe_version": UNIVERSE.universe_version,
+            "etf_ids": list(UNIVERSE.etf_ids),
+            "constituent_ids": list(UNIVERSE.constituent_ids),
+        }), encoding="utf-8")
+        return str(path)
+
+    def test_missing_db_fails_loud(self):
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="db 설정 없음"):
+            price_consumer_cli(self._settings(options=self._options()), universe="u")
+
+    def test_missing_config_fails_loud(self):
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="minute_price_consumer"):
+            price_consumer_cli(self._settings(db=_DB), universe="u")
+
+    def test_missing_price_triggers_fails_loud(self):
+        # 임계의 정본은 price_triggers 재사용이다 — 따로 받으면 일 단위와 조용히 갈린다
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="price_triggers"):
+            price_consumer_cli(
+                self._settings(db=_DB, options=self._options(), triggers=False),
+                universe="u",
+            )
+
+    def test_missing_universe_fails_loud(self):
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="--universe"):
+            price_consumer_cli(self._settings(db=_DB, options=self._options()),
+                               universe=None)
+
+    def test_bounded_idle_run_exits_clean(self, tmp_path, monkeypatch):
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+
+        class EmptyQueue:
+            def __init__(self, *, wait_seconds):
+                self.wait_seconds = wait_seconds
+
+            def receive(self, **kwargs):
+                return []
+
+        monkeypatch.setattr("data_pipeline.minute.consumer.SqsQueue", EmptyQueue)
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage",
+                            lambda config: LocalStorage(root=tmp_path))
+        code = price_consumer_cli(
+            self._settings(db=_DB, options=self._options()),
+            universe=self._universe_file(tmp_path), max_ticks=2,
+        )
+        assert code == 0
+
+    def test_bad_destination_rejected_at_startup(self):
+        # 오타 destination 은 판정·job 성공까지 커밋된 뒤 Relay 가 event 를 DEAD 로
+        # 격리한다(결정적 event_id 라 건별 redrive 뿐) — 기동에서 어휘로 거부한다
+        from data_pipeline.minute.price_consumer import price_consumer_cli
+        with pytest.raises(SystemExit, match="트리거 사건 어휘"):
+            price_consumer_cli(
+                self._settings(db=_DB,
+                               options=self._options(destination="price-explanation-realtme")),
+                universe="u",
+            )

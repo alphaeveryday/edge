@@ -44,3 +44,13 @@ output "kis_secret_arn" {
 output "dart_secret_arn" {
   value = aws_secretsmanager_secret.dart.arn
 }
+
+output "minute_service_arns" {
+  description = "1분 상주 서비스 3종 ARN(ALPHA-711) — CD(deploy-data-pipeline.yml)의 force-new-deployment 대상"
+  value       = [for s in aws_ecs_service.minute : s.id]
+}
+
+output "minute_service_names" {
+  description = "1분 상주 서비스 이름 — CD 가 존재 확인 후 롤링 재배포에 쓴다"
+  value       = [for s in aws_ecs_service.minute : s.name]
+}

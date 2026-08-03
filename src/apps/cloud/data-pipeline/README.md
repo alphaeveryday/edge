@@ -100,7 +100,15 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 3종
+> price-worker·relay·price-consumer: `infra/terraform/modules/data-pipeline/minute_services.tf`,
+> desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
+> apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
+> `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
+> 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
+> 막힌다. apply 후 그 변수를 켠다: ALPHA-712). ⚠️ universe 정본 객체(config/minute/universe.json)의
+> **생산 파이프라인은 아직 없다** — 객체 없이 스케일업하면 worker·consumer 는 기동
+> 거부(fail-loud)다. ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
 > 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 도 아직 **부르는 프로세스가
@@ -958,6 +966,14 @@ DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-open-v1 \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
+# 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
+# canonical 로 판정한다(LLM 0). 임계는 price_triggers.abs_threshold 재사용(섹션 필수),
+# --universe 는 planner·worker 와 같은 파일/객체(s3://… 지원). --max-ticks 는 로컬
+# 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가 있으면 exit 1.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
+DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
+  python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
