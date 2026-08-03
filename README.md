@@ -36,7 +36,7 @@ src/
 └── pyproject.toml            # Python 루트
 ```
 
-위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `.dev/`(로컬 개발 도구·스크립트) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
+위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
 
 ## 런타임별 워크스페이스
 
