@@ -87,7 +87,7 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_dg_market",        "csv",  "draft/curated/source=dataguide/dataset=market_daily"),
     # 항목 사전 (item_code · name_kr · unit · domain · category). `reference` 셋은
     # `.csv` **비압축**이라 csv 글롭(`*.csv.gz`)에 안 걸린다 - 파일을 직접 짚는다.
-    ("dg_items", "csvfile",
+    ("s3_dg_items", "csvfile",
      "draft/curated/source=dataguide/dataset=reference/market=KR/"
      "as_of_date=2026-08-02/items_resolved.csv"),
     ("s3_program_trading",  "hive", "canonical/market_data/program_trading_daily"),
