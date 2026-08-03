@@ -114,6 +114,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             layers: tuple[tuple[str, float], ...] = (),
             market_src: tuple[str, float, float] | None = None,
             peers: tuple[str, int, float, float] | None = None,
+            path_segs: tuple[tuple[str, float, float, float], ...] = (),
             conditional: Conditional | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
@@ -276,6 +277,20 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                        "지수가 섹터 충격을 시장 팩터로 흡수하고 있다 (시장직교 섹터층이 "
                        "음수로 나오는 것이 그 증거). **시장 몫은 상한으로 읽어라** — "
                        "요인모형의 한계이지 데이터 부족이 아니다.")
+    # **경로.** 층 분해는 하루 하나의 숫자라 "왜 오르다 떨어졌나" 에 답이 없다.
+    # 일중 시변 β(칼만)로 창별 층 분해를 하고 **시장 사건 시각으로 분절**한다.
+    # 실측 000660 07-29: 10:17 코스피 서킷브레이커로 자르면 붕괴 -13.0%p 중
+    # 시장이 -12.5%p, 고유는 **+0.5%p** - 종목 이야기가 아니라는 것이 수치로 나온다.
+    if path_segs:
+        out.append("[경로] 일중 시변 β(칼만) × 시장 사건 시각 분절 — " + " | ".join(
+            f"{lab} 시장 {m * 100:+.2f}%p · 고유 {i * 100:+.2f}%p (β {b:.2f})"
+            for lab, m, i, b in path_segs))
+        worst = min(path_segs, key=lambda s: s[1] + s[2])
+        if abs(worst[1]) > abs(worst[2]) * 2:
+            out.append(f"[경로] 최악 구간 {worst[0]} 의 {_pp(worst[1] + worst[2])} 중 "
+                       f"시장이 {_pp(worst[1])}, 고유는 {_pp(worst[2])} — "
+                       "**이 구간은 종목 이야기가 아니다**. 종목 고유 원인을 찾을 곳은 "
+                       "다른 구간이다.")
     # 미설명이 최대면 선두 문장이 된다. `else` 가 없어서 두 갈래가 같이 나가
     # `[몫]` 이 어순만 바꿔 두 번 찍혔다 (실측 042700 07-31).
     unexp_leads = abs(scoped) >= max((abs(r.est or 0.0) for r in rows), default=0.0)

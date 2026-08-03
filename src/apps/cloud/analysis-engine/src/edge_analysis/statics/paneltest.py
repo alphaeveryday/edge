@@ -189,8 +189,16 @@ f AS (
            -- 가장 최근 회계연도' 를 정확히 집는다 - 손으로 쓰면 어긋난다.
            fn.borrow_dep AS lev_lvl, fn.borrow_dep_chg AS lev_chg,
            fn.roe        AS prof_lvl, fn.roe_chg      AS prof_chg,
-           fn.rev_growth AS grow_lvl, fn.int_cover    AS icov_lvl
+           fn.rev_growth AS grow_lvl, fn.int_cover    AS icov_lvl,
+           -- **되돌림** = ln(종가/일중고가). '왜 오르다 떨어졌나' 를 일 단위
+           -- 스칼라로 환원한다 - 경로 질문을 창 단위로 쪼개면 SEM 이 다시 범주
+           -- 오류에 빠진다(8차). RDB `price_daily` 는 종가만이고(sql_surface L86
+           -- 이 자백한다) 레이크 `s3_price_daily` 에 OHLC 가 있는데 안 묶여 있었다.
+           CASE WHEN px.high > 0 AND d.close_price > 0
+                THEN ln(d.close_price / px.high) END AS rev
     FROM v_daily d
+    LEFT JOIN v_instrument vi ON vi.instrument_id = d.instrument_id
+    LEFT JOIN s3_price_daily px ON px.ticker = vi.ticker AND px.trade_date = d.trade_date
     LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
     LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
     LEFT JOIN fx_usdkrw fx ON CAST(fx.date AS DATE) = d.trade_date

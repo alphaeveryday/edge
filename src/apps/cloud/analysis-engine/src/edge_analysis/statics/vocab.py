@@ -37,7 +37,10 @@ MODERATOR_STATES = frozenset({"포지셔닝", "기대수준", "밸류", "국면"
 # DML 역할 태그. 매개를 통제 목록에 넣으면 효과가 흐르는 길을 막는다(나쁜 통제).
 FEATURE_ROLES = frozenset({"처치강도", "조절자", "교란", "매개"})
 
-OUTCOME_KINDS = frozenset({"수익률", "전이"})
+OUTCOME_KINDS = frozenset({"수익률", "전이", "되돌림"})
+# 되돌림 = ln(종가/일중고가). "왜 오르다 떨어졌나" 를 **일 단위 스칼라**로 환원한다.
+# 경로 질문을 창 단위로 쪼개면 SEM 이 8차에 고친 범주 오류로 되돌아간다.
+# 하루 총합의 일부가 아니므로 **몫 배정 금지**(assignable=False) - 전이와 같은 규율.
 
 TRIGGER_KINDS = frozenset({"점", "계열"})
 EXPOSURE_SOURCE_KINDS = frozenset({"속성", "관계"})

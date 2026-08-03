@@ -252,18 +252,29 @@ JSON:
 # `document.available_at` 은 수집 시각(15:01 KST)이라 발행 시각이 아니다.
 # `duck.taus` 는 이미 사이드카를 쓰는데 접지 본문만 안 봐서, 창 배정과 산문이
 # 서로 다른 시각을 말했다 - 같은 규칙을 쓴다.
+# 조회 창은 **직전 거래일 이후 ~ 당일**이다. `trade_date = day` 만 보면 휴장 중
+# 뉴스가 사라진다 - 실측: 2026-07-26(일) event_date 194건이 월요일 셀에서 조회되지
+# 않았다. 휴장 중 사건은 갭의 정당한 원인이고 시간적으로 개장보다 앞선다.
 _GROUND_SQL = """
 SELECT e.event_type_code, e.role_code, any_value(e.title) AS title,
        coalesce(min(sc.published_kst), min(CAST(e.available_at AS TIMESTAMP))) AS t,
        min(sc.published_kst) IS NOT NULL AS t_exact,
-       any_value(th.novelty_status), any_value(th.thread_key), any_value(th.current_stage)
+       any_value(th.novelty_status), any_value(th.thread_key), any_value(th.current_stage),
+       min(e.trade_date) AS td
 FROM v_event e
 LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
 {promote}
-WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
+WHERE e.instrument_id = '{iid}'
+  AND e.trade_date > DATE '{since}' AND e.trade_date <= DATE '{day}'
 GROUP BY e.source_event_id, e.event_type_code, e.role_code
 ORDER BY t
 """
+
+# 시장 전체 사건 = 종목 원인이 아니다. 서킷브레이커·거시지표·정책은 **시장층의
+# 왜**이고, 고유층 가설의 후보가 되면 시장 충격을 종목 사건으로 위장한다.
+# 실측(000660 07-29): 10:17 코스피 서킷브레이커(낙폭 8%)가 종목에 role=MEMBER 로
+# 붙어 있는데 산문이 종목 사건과 한 줄에 섞어 놓았다.
+_MARKET_WIDE = ("MARKET_STRUCTURE.", "MACRO.", "POLICY.")
 
 _PROMOTE = """
 LEFT JOIN rdb.public.event_evidence ev ON ev.source_event_id = e.source_event_id
@@ -280,7 +291,8 @@ FROM v_event e
 JOIN v_event_news en ON en.source_event_id = e.source_event_id
 JOIN v_news n ON n.document_id = en.document_id
 LEFT JOIN tau_sidecar sc ON sc.article_id = n.source_document_id
-WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
+WHERE e.instrument_id = '{iid}'
+  AND e.trade_date > DATE '{since}' AND e.trade_date <= DATE '{day}'
 ORDER BY t
 LIMIT 12
 """
@@ -292,62 +304,82 @@ _NEWS_SQL_NOSC = _NEWS_SQL.replace(
     "LEFT JOIN tau_sidecar sc ON sc.article_id = n.source_document_id\n", "")
 
 
+def _prev_trading_day(lake, day: str) -> str:
+    """직전 거래일. 그 다음부터 오늘까지가 갭의 정당한 원인 구간이다."""
+    rows = lake.sql(f"""SELECT max(CAST(ts AS DATE)) FROM bars_5m
+                        WHERE CAST(ts AS DATE) < DATE '{day}'""")
+    return str(rows[0][0]) if rows and rows[0][0] else day
+
+
 def _grounding(lake, instrument_id: str, day: str) -> str:
     """접지의 **본문**. 사건 타입 목록만으로는 '왜 오늘' 을 세울 수 없다 - 제목과
     스레드 신규성(신규 보도인가 후속인가)이 가설을 가른다. 8셀 내내 이걸 안 읽고
     타입 이름만 보고 가설을 썼다.
 
-    시각은 **출처를 라벨한다**: 사이드카 복원값은 그대로, 폴백은 `~` 를 붙인다.
-    자정 폴백을 정확한 시각처럼 쓰면 시간 알리바이가 거짓이 된다 (실측 000660
-    07-29: 사건 전량 09:00 으로 보였는데 실제 근거 문서는 15:01 수집).
+    셋을 나눈다:
+      - **시장 사건**(MARKET_STRUCTURE·MACRO·POLICY) 은 종목 원인이 아니다.
+        시장층의 '왜' 이고, 고유층 가설 후보가 되면 시장 충격을 종목 사건으로
+        위장한다 (실측 000660 07-29: 10:17 서킷브레이커가 role=MEMBER 로 붙어
+        종목 사건과 한 줄에 섞였다).
+      - **휴장 중**(직전 거래일 이후·당일 아님) 은 갭 원인이다. `trade_date = day`
+        만 보면 주말 뉴스가 사라진다 (실측 07-26 일요일 194건).
+      - 시각은 출처를 라벨한다: 폴백은 `~`. 자정 폴백을 정확한 시각처럼 쓰면
+        시간 알리바이가 거짓이 된다.
 
     부재도 문장으로 말한다: '접지 사건 없음' 은 '조회 안 함' 과 다르다."""
     out: list[str] = []
     has_sc = bool(lake.exists.get("tau_sidecar"))
+    since = _prev_trading_day(lake, day)
     try:
         rows = lake.sql((_base_views(day) + _GROUND_SQL).format(
-            iid=instrument_id, day=day, promote=_PROMOTE if has_sc else ""))
+            iid=instrument_id, day=day, since=since,
+            promote=_PROMOTE if has_sc else ""))
     except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
         return f"=== 접지 본문 ===\n조회 실패: {type(e).__name__}: {str(e)[:100]}"
     if not rows:
-        return "=== 접지 본문 ===\n오늘 이 종목에 접지된 사건 없음 (조회했고 0건이다)"
-    # **구간별로 접는다.** `ORDER BY t` + 앞 12개는 사건 78건 셀에서 개장 전만
-    # 보여주고 장중을 전부 감춘다 (실측 000660 07-29: 표시 20건 전량 개장 전,
-    # 정작 -10%는 장중에 났다). 급락 구간의 사건이 안 보이면 가설을 세울 수 없다.
+        return (f"=== 접지 본문 ===\n{since} 이후 이 종목에 접지된 사건 없음 "
+                "(조회했고 0건이다)")
+
+    def _phase(r) -> str:
+        if str(r[8]) != day:
+            return "휴장 중"                        # 직전 거래일 이후 · 당일 아님
+        hm = str(r[3])[11:16] if r[3] else "?"
+        return ("개장 전" if hm < "09:00" else "장중" if hm < "15:30" else "마감 후")
+
+    mkt = [r for r in rows if r[0].startswith(_MARKET_WIDE)]
+    own = [r for r in rows if not r[0].startswith(_MARKET_WIDE)]
     n_exact = sum(1 for r in rows if r[4])
-    out.append(f"=== 접지 본문 {len(rows)}건 · 시각 복원 {n_exact}/{len(rows)} "
-               "(`~` 는 폴백) — 구간별 ===")
+    out.append(f"=== 접지 본문 {len(rows)}건 ({since} 이후) · 시각 복원 "
+               f"{n_exact}/{len(rows)} (`~` 는 폴백) ===")
 
-    def _phase(t) -> str:
-        hm = str(t)[11:16] if t else "?"
-        return ("개장 전" if hm < "09:00" else
-                "장중" if hm < "15:30" else "마감 후")
-
-    buckets: dict[str, list] = {"개장 전": [], "장중": [], "마감 후": []}
-    for r in rows:
-        buckets.setdefault(_phase(r[3]), []).append(r)
-    for ph in ("개장 전", "장중", "마감 후"):
-        grp = buckets.get(ph) or []
+    def _dump(label: str, grp: list, note: str = "") -> None:
+        out.append(f"-- {label} {len(grp)}건{note} " + "-" * 24)
         if not grp:
-            out.append(f"  [{ph}] 0건")
-            continue
-        kinds = Counter(r[0] for r in grp)
-        out.append(f"  [{ph}] {len(grp)}건 · " + " · ".join(
-            f"{k.split('.')[-1]}×{v}" for k, v in kinds.most_common(4)))
-        # 각 구간에서 **타입별 첫 건**만 제목을 보여준다 - 같은 사태의 중복 보도를
-        # 열 줄 늘어놓는 것은 정보가 아니다.
-        seen_k: set[str] = set()
-        for et, role, title, t, exact, nov, _tk, stage in grp:
-            if et in seen_k:
+            out.append("  없음 (조회했고 0건이다)")
+            return
+        for ph in ("휴장 중", "개장 전", "장중", "마감 후"):
+            g = [r for r in grp if _phase(r) == ph]
+            if not g:
                 continue
-            seen_k.add(et)
-            out.append(f"    [{'' if exact else '~'}{str(t)[11:16]}] {et} ({role})"
-                       + (f" · {nov}" if nov else "") + (f" · {stage}" if stage else "")
-                       + f"\n        {str(title or '')[:78]}")
+            kinds = Counter(r[0] for r in g)
+            out.append(f"  [{ph}] {len(g)}건 · " + " · ".join(
+                f"{k.split('.')[-1]}×{v}" for k, v in kinds.most_common(4)))
+            # 타입별 첫 건만 - 같은 사태의 중복 보도를 열 줄 늘어놓는 건 정보가 아니다.
+            seen_k: set[str] = set()
+            for et, role, title, t, exact, nov, _tk, stage, _td in g:
+                if et in seen_k:
+                    continue
+                seen_k.add(et)
+                out.append(f"    [{'' if exact else '~'}{str(t)[11:16]}] {et} ({role})"
+                           + (f" · {nov}" if nov else "") + (f" · {stage}" if stage else "")
+                           + f"\n        {str(title or '')[:78]}")
+
+    _dump("시장 사건", mkt, " — **시장층의 왜**. 종목 고유 가설의 후보가 아니다")
+    _dump("종목 사건", own)
     try:
         news = lake.sql((_base_views(day)
                          + (_NEWS_SQL if has_sc else _NEWS_SQL_NOSC)).format(
-            iid=instrument_id, day=day))
+            iid=instrument_id, day=day, since=since))
     except Exception:                               # noqa: BLE001
         news = []
     seen: set[str] = set()
@@ -449,6 +481,24 @@ def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
     return eid, "ok"
 
 
+def market_event_marks(lake, instrument_id: str, day: str) -> list[str]:
+    """시장 사건(서킷브레이커·거시·정책)의 당일 시각 = 경로 분절점.
+
+    임의 등분하면 '왜 이 구간에서' 에 답이 없고, 종목 사건으로 자르면 시장 충격을
+    종목 이야기로 위장한다. 분절은 **시장 사건**이 한다.
+    """
+    since = _prev_trading_day(lake, day)
+    try:
+        rows = lake.sql((_base_views(day) + _GROUND_SQL).format(
+            iid=instrument_id, day=day, since=since,
+            promote=_PROMOTE if lake.exists.get("tau_sidecar") else ""))
+    except Exception:                               # noqa: BLE001
+        return []
+    out = {str(r[3])[11:16] for r in rows
+           if r[0].startswith(_MARKET_WIDE) and str(r[8]) == day and r[4]}
+    return sorted(m for m in out if "09:00" < m < "15:30")
+
+
 def layer_budgets(lake, tk6: str, day: str) -> dict[str, float]:
     """층 → 그 층의 오늘 몫 (로그). **식별집합의 상한은 층마다 다르다.**
 
@@ -470,7 +520,7 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     from .narrate import Edge, narrate
     from .render import Row, render
     d = pathlib.Path(out_dir)
-    shares, _labels, after_close = load_cell(lake, ticker, iid, day)
+    shares, labels, after_close = load_cell(lake, ticker, iid, day)
     budgets = layer_budgets(lake, ticker.split(".")[0], day)
     edges = []
     for f in sorted(d.glob("report_*.json")):
@@ -495,6 +545,16 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
                         "측정불가" if not j["cond_measurable"] else
                         "충족" if j["cond_satisfied"] else "미충족"),
             reduction_state=j["reduction"] if j["reduction"] != "—" else "미실행"))
+    # 경로: 일중 시변 β(칼만) × 시장 사건 분절. 재료가 없으면 빈 튜플 - 침묵이
+    # 아니라 문단 자체가 안 나온다(부재 선언은 kbeta 의 verdict 가 한다).
+    psegs: list = []
+    try:
+        from .kbeta import intraday_beta, path_summary
+        kb = intraday_beta(ticker, day)
+        if kb.get("verdict") == "성립":
+            psegs = path_summary(kb, market_event_marks(lake, iid, day))
+    except Exception:                               # noqa: BLE001 - 설명 보조다
+        psegs = []
     rows = [Row(s) for s in shares]
     gw = next((s for s in shares if s.window.kind == "gap"), None)
     gc = gap_covariate(lake, ticker, day, gw.log_ret) if gw is not None else None
@@ -505,10 +565,11 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     msrc = (gc.factor, ms[0], ms[1]) if ms is not None and gc is not None else None
     return (render(rows) + "\n\n"
             + narrate(ticker=ticker, name=name or ticker, day=day,
-                      route=_route_gate(lake, iid, day), rows=rows, grounded={},
+                      route=_route_gate(lake, iid, day), rows=rows, grounded=labels,
                       after_close=tuple(after_close), edges=tuple(edges), gap_cov=gc,
                       layers=tuple(budgets.items()), market_src=msrc,
-                      peers=peer_context(lake, ticker, day)))
+                      peers=peer_context(lake, ticker, day),
+                      path_segs=tuple(psegs)))
 
 
 def _cli() -> None:

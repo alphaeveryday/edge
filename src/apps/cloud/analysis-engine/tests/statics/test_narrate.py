@@ -331,3 +331,41 @@ def test_render_folds_but_stays_additive():
     keep = Row(rows[0].share, verdict="성립", est=0.001)
     txt2 = render([keep, *rows[1:]], top=2)
     assert "성립" in txt2
+
+
+def test_kalman_beta_tracks_regime_jump_and_guards_absence():
+    """Q=0 이면 초기값에 갇힌다 - Q 규칙이 결과를 지배하니 전역 고정이어야 한다.
+
+    그리고 β CI 가 안 좁혀지면 판정불가여야 한다 (Epps·비동시거래). 부재를 0 으로
+    쓰면 일중 층 분해가 조용히 거짓이 된다.
+    """
+    import numpy as np
+
+    from edge_analysis.statics.kbeta import CI_MAX, kalman
+
+    rng = np.random.default_rng(0)
+    n = 200
+    x = rng.normal(scale=0.004, size=n)
+    true = np.concatenate([np.full(n // 2, 1.0), np.full(n - n // 2, 2.0)])
+    y = true * x + rng.normal(scale=0.0005, size=n)
+    b, p = kalman(y, x, 1.0, 0.04, 1e-4, 0.0005 ** 2)
+    assert abs(b[-1] - 2.0) < 0.35, "점프를 못 따라간다"
+    b0, _ = kalman(y, x, 1.0, 0.04, 0.0, 0.0005 ** 2)
+    assert abs(b0[-1] - 2.0) > abs(b[-1] - 2.0), "Q=0 이 초기값에 갇히지 않았다"
+    assert (p > 0).all()
+    assert CI_MAX > 0
+
+
+def test_path_paragraph_names_the_market_segment():
+    """붕괴 구간이 시장이면 산문이 '종목 이야기가 아니다' 를 말해야 한다.
+
+    실측 000660 07-29: 10:17 서킷브레이커 구간 -12.0%p 중 시장 -12.5, 고유 +0.5.
+    """
+    rows = [_row("잔여1", -0.101)]
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
+                  path_segs=(("09:05–10:15", -0.0494, -0.0299, 1.45),
+                             ("10:20–13:10", -0.1247, 0.0048, 1.29),
+                             ("13:15–14:55", 0.0512, 0.0174, 1.41)))
+    assert "[경로]" in txt and "β 1.29" in txt
+    assert "종목 이야기가 아니다" in txt
+    assert "10:20–13:10" in txt
