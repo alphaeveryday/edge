@@ -325,6 +325,13 @@ def test_article_assembled_during_classify_is_skipped_under_doc_lock(tmp_path, m
     assert locks == [
         ("SELECT pg_advisory_xact_lock(hashtext('edge-event-assembly:' || %s))",
          ("01HZX-LOADER-ULID",))]
+    # 순서도 계약이다: 락을 잡은 **뒤** 자국을 재조회해야 한다 — 조회가 먼저면 조회↔적재
+    # 사이에 단건 writer 가 끼어들어 stale 판정으로 그대로 적재한다(락이 무의미해진다).
+    sqls = [sql for sql, _p in conn.log]
+    lock_idx = next(i for i, s in enumerate(sqls) if "pg_advisory_xact_lock" in s)
+    recheck_idx = max(i for i, s in enumerate(sqls)
+                      if s.startswith("SELECT d.source_document_id FROM document d"))
+    assert lock_idx < recheck_idx
     assert _batch(conn, "source_event") == []  # 이중 계보 없음 — 적재 자체가 skip
     log = _log(storage)
     assert log["assembled_during_classify"] == 1
@@ -1250,6 +1257,47 @@ def test_assemble_promotes_parsed_measure_to_dart_in_same_run(tmp_path, monkeypa
     assert updates == [[("20260714000123", evt_id, 0)]]
     log = _log(storage)
     assert (log["dart_matched"], log["dart_ambiguous"]) == (1, 0)
+
+
+def test_dart_counters_only_reflect_committed_promotion(tmp_path, monkeypatch):
+    """DART 승격 카운터는 커밋 성공 **뒤에만** 반영된다(ALPHA-730). WHY: with 안에서 대입하면
+    커밋 실패(롤백)에도 값이 남아, 로그가 DB 에 반영 안 된 승격을 성공 건수로 말한다 —
+    원장이 관대해지는 방향의 거짓말. 대입이 connect 컨텍스트 안으로 돌아가면 즉시 깨진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", title="삼성전자 1,883억 공급계약")])
+    doc_id = _stable_id("doc", "bigkinds", "a1")
+    asrt_id = _stable_id("asrt", doc_id, _CONTRACT, _CONTRACT_PRED)
+    evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
+    conn = _FakeConn(
+        assertion_rows=_assertion_rows_for("a1", _CONTRACT, _CONTRACT_PRED),
+        dart_measures=[(evt_id, 0, 188_300_000_000.0, "actor_SAMSUNG",
+                        datetime.fromisoformat("2026-07-15T09:00:00+09:00"))],
+        dart_facts=[("actor_SAMSUNG", 190_000_000_000, "20260714000123",
+                     datetime.fromisoformat("2026-07-14T16:00:00+09:00"))],
+    )
+    from contextlib import contextmanager
+    calls = []
+
+    @contextmanager
+    def _c(config):
+        calls.append(1)
+        yield conn
+        if len(calls) == 3:  # entity_index → 날짜 → DART: DART 트랜잭션의 커밋이 실패
+            raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(assemble_events, "connect", _c)
+    complete_fn = _llm_fn(
+        [_gate_item("a1", etype=_CONTRACT)],
+        [_extract_item("a1", predicate=_CONTRACT_PRED,
+                       measures=[{"role": "CONTRACT_VALUE", "surface": "1,883억원",
+                                  "basis": "TOTAL", "group": 0}])])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 1
+    log = _log(storage)
+    assert (log["dart_matched"], log["dart_ambiguous"]) == (0, 0)  # 롤백된 승격은 안 센다
+    assert log["events_created"] == 1  # 앞서 커밋된 날짜분은 유지(날짜별 트랜잭션)
+    assert log["exit_code"] == 1
 
 
 def test_window_days_covers_yesterday_after_midnight_crossing(tmp_path, monkeypatch):
