@@ -81,4 +81,22 @@ jobs:
             aws ecs update-service --cluster "${cluster}" --service "${svc}" \
               --force-new-deployment >/dev/null
             echo "${svc} 재배포 시작"
+
+            # 롤아웃 확인(deploy-app.yml 선례) — update-service 는 접수만으로 성공이라,
+            # 새 태스크가 시크릿·기동 오류로 반복 죽어도 여기서 안 기다리면 CD 가
+            # 성공으로 위장된다. desired 0 이면 즉시 COMPLETED 라 무해하다.
+            deadline=$(( SECONDS + 600 ))
+            while :; do
+              state="$(aws ecs describe-services --cluster "${cluster}" --services "${svc}" \
+                --query 'services[0].deployments[?status==`PRIMARY`] | [0].rolloutState' --output text)"
+              echo "${svc} 롤아웃 상태: ${state}"
+              if [ "${state}" = "COMPLETED" ]; then break; fi
+              if [ "${state}" = "FAILED" ]; then
+                echo "::error::${svc} 롤아웃 실패"; exit 1
+              fi
+              if [ ${SECONDS} -ge ${deadline} ]; then
+                echo "::error::${svc} 롤아웃이 10분 안에 안정화되지 않았다"; exit 1
+              fi
+              sleep 15
+            done
           done
