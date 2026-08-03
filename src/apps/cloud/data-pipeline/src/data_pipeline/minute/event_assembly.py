@@ -106,11 +106,14 @@ class NewsEventAssembler:
             }
             assembled = 0
             unresolved_primary = 0
-            # evt id 로 dedup — 같은 (type, predicate, primary) 중복 assertion 은 같은
-            # 결정적 source_event_id 를 낸다. 목록에 두 번 실으면 thread_events 가
-            # 두 번째 항목에서 자기 자신을 prior 로 세어 첫 사건이
-            # DUPLICATE_REBROADCAST 로 오염된다.
-            new_events: dict[str, dict] = {}
+            # evt id 를 **persist 전에** 선계산해 dedup 한다 — 같은 (type, predicate,
+            # primary) 중복 assertion 은 같은 결정적 source_event_id 를 낸다. 첫 건만
+            # 적재·threading 에 싣는다(first-wins): 두 번째를 persist 에 넘기면 인자만
+            # 한 이벤트에 합쳐지고 thread role_values 는 첫 cls 뿐이라 DB 와 계보가
+            # 영구히 갈리고, threading 목록에 두 번 실으면 자기 자신을 prior 로 세어
+            # 첫 사건이 DUPLICATE_REBROADCAST 로 오염된다.
+            seen_events: set[str] = set()
+            new_events: list[dict] = []
             for assertion in assertions:
                 cls = self._to_classification(
                     assertion, article_id=article_id, view=view,
@@ -120,19 +123,22 @@ class NewsEventAssembler:
                 if cls is None:
                     unresolved_primary += 1
                     continue
+                assertion_id = stable_domain_id(
+                    "asrt", doc_id, cls["event_type_code"], cls["predicate_code"])
+                event_id = stable_domain_id("evt", assertion_id, cls["entity_id"])
+                if event_id in seen_events:
+                    continue
+                seen_events.add(event_id)
                 created = persist_normalization(conn, [row], {article_id: cls}, event_date)
                 assembled += len(created)
                 for made in created:
-                    new_events.setdefault(
-                        made["source_event_id"],
-                        _thread_event(made, cls, str(published_at)),
-                    )
+                    new_events.append(_thread_event(made, cls, str(published_at)))
             if new_events:
                 # **이번 기사 신규분만** 엮는다 — 배치처럼 날짜 전체 미연결·UNKNOWN 을
                 # 재조회하면 UNKNOWN 이 쌓인 날 기사마다 그 전량을 재기록해 제곱형
                 # DB 작업 + 전역 락 점유가 된다. UNKNOWN 재평가·미연결 잔여 회수는
                 # 배치(fetch_unthreaded_events)의 일이다. 직렬화는 thread_events 안의 락.
-                thread_events(conn, list(new_events.values()))
+                thread_events(conn, new_events)
         if unresolved_primary:
             # 해소 실패는 유니버스 밖 기사(정상)와 마스터 결손(결함)이 같은 얼굴이다 —
             # 조용히 접지 않고 남긴다. 하루 단위 판정은 EOD QC 소관.
@@ -157,7 +163,7 @@ class NewsEventAssembler:
         raw_arguments = assertion.get("arguments")
         arguments = []
         resolved_tickers: set[str] = set()
-        primary_ticker: str | None = None
+        ticker_by_role: dict[str, str] = {}
         for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
             if not isinstance(raw, dict):
                 continue
@@ -166,16 +172,26 @@ class NewsEventAssembler:
                 continue
             entity_id, _reason = resolve(res_index, mention)
             ticker = ticker_by_entity.get(entity_id) if entity_id else None
+            role = str(raw.get("role_code") or "")
             if ticker:
                 resolved_tickers.add(ticker)
-                if primary_ticker is None:
-                    primary_ticker = ticker
+                ticker_by_role.setdefault(role, ticker)
             arguments.append({
-                "role": raw.get("role_code"),
+                "role": role,
                 "mention": mention,
                 "ticker": ticker or "",
                 "group": None,
             })
+        # primary 는 **역할 우선순위**로 정한다 — LLM 인자 순서는 보장이 없어 '첫 해소
+        # instrument' 규칙이면 INVESTOR 가 ISSUER 를 제치고 사건 주체로 영구 고정될 수
+        # 있다(멱등 게이트가 재조립을 막는다). primary_roles → required_roles → 남은
+        # 해소분 순 — 배치 게이트의 primary(모델 분류)가 없는 단건 경로의 결정적 대체다.
+        primary_ticker = next(
+            (ticker_by_role[role]
+             for role in (*tv.primary_roles, *tv.required_roles)
+             if role in ticker_by_role),
+            None,
+        ) or next(iter(ticker_by_role.values()), None)
         if primary_ticker is None:
             return None
         # 수량 역할은 arguments 에 섞여 온다(태깅 허용역할 = required ∪ optional) —

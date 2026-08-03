@@ -495,23 +495,27 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             "published_at": f"{TRADE_DATE}T02:00:00+00:00",
             "language_code": "ko",
         }
+        dividend_assertion = {
+            "event_type_code": EVENT_TYPE,
+            "predicate_code": PREDICATE,
+            "arguments": [
+                {"role_code": IDENTITY_ROLE, "text": "삼성전자", "entity_id": None},
+            ],
+            "confidence": 0.9,
+            "completeness": "complete",
+            "missing_required_roles": [],
+        }
         extraction = {
             "status": "ok",
-            "assertions": [{
-                "event_type_code": EVENT_TYPE,
-                "predicate_code": PREDICATE,
-                "arguments": [
-                    {"role_code": IDENTITY_ROLE, "text": "삼성전자", "entity_id": None},
-                ],
-                "confidence": 0.9,
-                "completeness": "complete",
-                "missing_required_roles": [],
-            }],
+            # 같은 (type, predicate, primary) 중복 assertion(LLM 말더듬) — 같은 결정적
+            # evt id 라 첫 건만 적재돼야 한다. 두 번 실리면 threading 이 자기 자신을
+            # prior 로 세거나 DB 인자와 thread 계보가 갈린다.
+            "assertions": [dividend_assertion, dict(dividend_assertion)],
         }
         outcome = assembler.assemble(source_code="bigkinds", article_id="e2e-a2",
                                      article=second_article, result=extraction)
         assert outcome == {"assembled": 1, "unresolved_primary": 0}, (
-            f"단건 조립이 event 를 세우지 못했다: {outcome}"
+            f"단건 조립이 중복 assertion 을 접지 못했다: {outcome}"
         )
         doc2 = assemble_events._stable_id("doc", "bigkinds", "e2e-a2")
         asrt2 = assemble_events._stable_id("asrt", doc2, EVENT_TYPE, PREDICATE)

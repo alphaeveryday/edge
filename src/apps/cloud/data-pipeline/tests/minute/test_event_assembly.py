@@ -68,6 +68,23 @@ def test_participants_resolve_and_measures_split(monkeypatch):
     assert cls["lifecycle_stage"] is None             # 태깅은 stage 를 묻지 않는다
 
 
+def test_primary_follows_role_priority_not_argument_order(monkeypatch):
+    """LLM 인자 순서는 보장이 없다 — '첫 해소 instrument' 규칙이면 CUSTOMER 가
+    SUPPLIER(primary 역할 1순위)를 제치고 사건 주체로 영구 고정된다(멱등 게이트가
+    재조립을 막는다). primary_roles → required_roles 순의 결정적 선정을 고정한다."""
+    cls = _cls(monkeypatch, {
+        "event_type_code": _CONTRACT,
+        "predicate_code": "SIGN",
+        "confidence": 0.9,
+        "arguments": [
+            {"role_code": "CUSTOMER", "text": "한화솔루션", "entity_id": None},
+            {"role_code": "SUPPLIER", "text": "삼성전자", "entity_id": None},
+        ],
+    })
+    assert cls is not None
+    assert cls["primary_ticker"] == "005930"  # SUPPLIER — 인자 순서(한화 먼저)와 무관
+
+
 def test_unresolved_primary_drops_the_assertion(monkeypatch):
     """참여자 전원이 마스터 밖(유니버스 무관 기사)이면 조립하지 않는다 —
     document_entity.entity_id 가 NOT NULL 이라 지어낸 primary 는 계보 오염이다."""
