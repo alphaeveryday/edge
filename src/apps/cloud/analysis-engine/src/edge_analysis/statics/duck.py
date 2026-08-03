@@ -42,6 +42,7 @@ _EMPTY_COLS = {
                    *(f"{c} DOUBLE" for c in
                      "debt_ratio borrow_dep netdebt_dep int_cover cf_assets roe roa "
                      "op_margin net_margin rev_growth op_growth payout".split())),
+    "flow_daily": ("trade_date DATE", "ticker VARCHAR", "for_net DOUBLE"),
 }
 EMPTY_SCHEMA = {
     name: "SELECT " + ", ".join(
@@ -166,7 +167,7 @@ class CausalLake:
         curated 를 셀마다 읽으면 2분 12초라 넓은 형식으로 한 번 접어 둔다.
         """
         for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
-                     "etf_holdings_fmp", "pit_daily", "fin_annual"):
+                     "etf_holdings_fmp", "pit_daily", "fin_annual", "flow_daily"):
             f = d / f"{name}.parquet"
             if f.is_file():
                 self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")

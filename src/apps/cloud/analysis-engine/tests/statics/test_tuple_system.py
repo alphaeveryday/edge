@@ -699,3 +699,15 @@ def test_financials_are_clamped_by_filing_lag_not_collection_date():
     assert "f.available_from <= DATE '2026-06-01'" in fin
     code = "\n".join(l for l in fin.splitlines() if not l.strip().startswith("--"))
     assert "as_of" not in code          # 수집일로 자르면 선견이 샌다
+
+
+def test_rolling_betas_are_nan_guarded():
+    # regr_slope 는 x 분산이 0 이면 NULL 이 아니라 **NaN** 을 낸다(산업 표본 <5 ·
+    # fx 결측). NaN 은 pctile 을 조용히 오염시켜 상·하위 분할을 어긋나게 만든다 -
+    # 부재는 NULL 로 말해야 판정자가 '못 잰다'로 읽는다. 실측: beta_s 364 → 129.
+    from edge_analysis.statics.paneltest import _base
+    sql = _base("2026-06-01")
+    for col in ("beta_m", "beta_s", "fx_beta"):
+        blk = sql[:sql.index(f"AS {col}")]
+        assert blk.rstrip().endswith("END"), f"{col} 이 isfinite 가드 밖에 있다"
+    assert sql.count("isfinite(regr_slope") == 3

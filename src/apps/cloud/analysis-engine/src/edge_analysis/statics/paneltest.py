@@ -60,6 +60,7 @@ FEATURES = {
     # ── 민감도: 공통 계열을 종목 축으로 옮기는 유일한 변환 (60일 롤링 기울기) ──
     ("지수잔차", "민감도"): "beta_m",  # 시장 로그수익률에 대한 β
     ("거시", "민감도"): "fx_beta",     # 원/달러 변화율에 대한 β - FX환 채널의 관측변수
+    ("섹터", "민감도"): "beta_s",      # 산업 평균 초과수익에 대한 β - 섹터층의 노출
     # ── 재무제표(v_fin, ASOF). 회계연도 값이라 가장 느린 상태 = 조건 자리 ──
     ("레버리지", "수준"): "lev_lvl",   # 차입금의존도
     ("레버리지", "변화"): "lev_chg",   # 차입금의존도 YoY 변화(%p)
@@ -87,8 +88,9 @@ LAYER_Y = {"고유": "y_고유", "섹터": "y_섹터", "시장": "y_시장"}
 #   고유 (y=ar_ind, 이중차감): 남은 것은 종목 자신 - 전부 허용.
 LAYER_EXPOSURES: dict[str, frozenset[tuple[str, str]] | None] = {
     "시장": frozenset({("지수잔차", "민감도"), ("거시", "민감도")}),
-    "섹터": frozenset({("지수잔차", "민감도"), ("거시", "민감도"),
-                      ("배수", "수준"), ("주주", "수준")}),
+    "섹터": frozenset({("섹터", "민감도"), ("지수잔차", "민감도"), ("거시", "민감도"),
+                      ("배수", "수준"), ("주주", "수준"),
+                      ("레버리지", "수준"), ("수익성", "수준"), ("성장", "수준")}),
     "고유": None,   # None = 제한 없음
 }
 
@@ -102,12 +104,14 @@ def _base(day: str, clock: str = "00:00:00") -> str:
     return "WITH " + views_sql(f"TIMESTAMP '{day} {clock}'", f"DATE '{day}'",
                             "rdb.public.") + """,
 _fl AS (
-    -- 수급 원천은 flow_z 와 **같은 표**를 쓴다(s3_investor_value) - 발화 기준과
-    -- 노출 기준이 다른 표에서 오면 접지가 갈린다. v_flow(RDB)는 12일치뿐이다.
-    SELECT i.instrument_id, iv.trade_date, iv.net_value AS fl_val
-    FROM s3_investor_value iv
-    JOIN v_instrument i ON i.ticker = iv.ticker
-    WHERE iv.investor_type = 'foreign'
+    -- 수급 노출 원천 = curated 투자자별 매매(statics.flowhist → flow_daily).
+    -- 2022-01~ · 4,336종목. s3_investor_value 는 14개월(2025-06~)뿐이라 20일 창을
+    -- 쌓고 나면 패널이 얇았다. v_flow(RDB)는 12일치.
+    -- 단위는 **원** (curated 가 만원이라 적재 때 1e4 를 곱했다) - 시총(백만원)과
+    -- 나눌 때 1e6 을 곱하는 쪽과 자릿수가 맞는다.
+    SELECT i.instrument_id, fl.trade_date, fl.for_net AS fl_val
+    FROM flow_daily fl
+    JOIN v_instrument i ON i.ticker = fl.ticker
 ),
 f AS (
     -- PIT 상태(v_pit)는 전부 **어제 값**이다. 조건은 느린 상태이고, 오늘 값을 쓰면
@@ -132,15 +136,27 @@ f AS (
            LAG(q.pbr, 1)           OVER wi AS pbr_lvl,
            LAG(q.shares, 1) OVER wi
              / NULLIF(LAG(q.shares, 21) OVER wi, 0) - 1 AS sh_chg,
+           -- 20일 누적 외국인 순매수 / 20일 평균 일거래대금 = "며칠치 거래대금만큼
+           -- 순매수했나". 시총으로 나누면 PIT(2025-07~)에 묶여 이력이 잘린다 -
+           -- 거래대금은 v_daily 라 2022-11 까지 깊다. 척도 없는 양인 건 같다.
            sum(x.fl_val) OVER w20
-             / NULLIF(LAG(q.mktcap, 1) OVER wi * 1e6, 0) AS fl_cum20,
+             / NULLIF(avg(d.close_price * d.volume) OVER w20, 0) AS fl_cum20,
            LAG(q.treasury_ratio, 1) OVER wi AS tr_lvl,
            -- 민감도: 공통 계열은 하루에 값이 하나라 그 자체로는 횡단면을 못 가른다.
            -- 종목마다 다른 것은 **민감도**다. 60일 롤링 회귀 기울기, 당일 제외.
-           -- mkt_lr 은 v_daily 가 직접 안 주므로 lr - ar_lr 로 복원한다(정의가 하나여야
-           -- 하므로 여기서 새로 계산하지 않는다).
-           regr_slope(d.lr, d.lr - d.ar_lr)      OVER w60 AS beta_m,
-           regr_slope(d.lr, fx.change_pct / 100) OVER w60 AS fx_beta,
+           -- mkt_lr·산업평균은 v_daily 가 직접 안 주므로 잔차에서 복원한다
+           -- (정의가 두 곳에 있으면 갈리므로 여기서 새로 계산하지 않는다):
+           --   mkt_lr   = lr - ar_lr        · 산업평균 = ar_lr - ar_ind
+           -- 산업 표본 <5 면 ar_ind = ar_lr 이라 x=0 → beta_s NULL. 부재가 정직하다.
+           -- isfinite 로 감싼다: regr_slope 는 x 분산이 0 이면 NULL 이 아니라 **NaN**
+           -- 을 낸다(산업 표본 <5 · fx 결측 구간). NaN 은 pctile 을 조용히 오염시켜
+           -- 상·하위 분할을 어긋나게 만든다 - 부재는 NULL 로 말해야 한다.
+           CASE WHEN isfinite(regr_slope(d.lr, d.lr - d.ar_lr) OVER w60)
+                THEN regr_slope(d.lr, d.lr - d.ar_lr) OVER w60 END AS beta_m,
+           CASE WHEN isfinite(regr_slope(d.ar_lr, d.ar_lr - d.ar_ind) OVER w60)
+                THEN regr_slope(d.ar_lr, d.ar_lr - d.ar_ind) OVER w60 END AS beta_s,
+           CASE WHEN isfinite(regr_slope(d.lr, fx.change_pct / 100) OVER w60)
+                THEN regr_slope(d.lr, fx.change_pct / 100) OVER w60 END AS fx_beta,
            -- 재무는 회계연도 값이라 as-of 조인이 필요하다. ASOF 가 '그 시점에 가용한
            -- 가장 최근 회계연도' 를 정확히 집는다 - 손으로 쓰면 어긋난다.
            fn.borrow_dep AS lev_lvl, fn.borrow_dep_chg AS lev_chg,
