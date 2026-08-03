@@ -91,9 +91,19 @@ class EventStore:
         return SqlSurface(self._conn, as_of=as_of, trade_date=trade_date)
 
     def load_entity_index(self) -> dict[str, str]:
-        """ticker -> instrument entity_id (시드된 전 종목)."""
+        """ticker -> instrument entity_id (KR 시드 전 종목).
+
+        KR MIC(XKRX·XKOS·XKON)로 좁힌다 — instrument 유일성이 (market_code, ticker)라
+        전 시장을 dict 로 접으면 타 MIC 동일 ticker 에서 어느 행이 남는지 조회 순서에
+        달리고, 구성종목 계보(constituent_instrument_id)가 무관한 시장 종목으로 조용히
+        영속된다. 구성종목은 코스닥 포함이라 XKRX 단독이 아니고, KR 안에서 6자리
+        단축코드는 전국 유일이다(ALPHA-709).
+        """
         with self._conn.cursor() as cur:
-            cur.execute("SELECT ticker, instrument_id FROM instrument")
+            cur.execute(
+                "SELECT ticker, instrument_id FROM instrument"
+                " WHERE market_code IN ('XKRX', 'XKOS', 'XKON')"
+            )
             return {str(ticker): str(iid) for ticker, iid in cur.fetchall()}
 
     def resolve_etf_instrument(self, ticker: str) -> tuple[str, str] | None:
