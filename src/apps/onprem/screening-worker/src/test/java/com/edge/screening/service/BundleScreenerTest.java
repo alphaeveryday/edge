@@ -90,8 +90,10 @@ class BundleScreenerTest {
 		public int transitionByItem(String analysisItemId, String status) {
 			transitions.add(analysisItemId + ":" + status);
 			ops.add("supersede:" + analysisItemId);
-			return 1;
+			return transitionByItemResult;
 		}
+
+		int transitionByItemResult = 1;  // 0 = 조회~전이 사이 콘솔이 먼저 중단한 경합
 	}
 
 	private static final class RecordingPending implements PendingBundleRepository {
@@ -193,6 +195,21 @@ class BundleScreenerTest {
 		assertThat(items.transitions).containsExactly("er-0:UNPUBLISHED");
 		assertThat(history.rows).anyMatch(row ->
 				row.startsWith("er-0:AUTO_PUBLISHED->UNPUBLISHED"));
+	}
+
+	@Test
+	void 교체_경합에서_게시분_전이_0행이면_구본_item_전이와_이력을_남기지_않는다() {
+		// WHY(Rule 9): 조회~전이 사이 콘솔이 먼저 제공 중단하면 게시분 전이는 0행이다 —
+		// 그때 item 전이·SYSTEM 이력을 쓰면 사용자가 중단한 항목에 거짓 '교체' 이력이
+		// 남는다. 반환값 게이트가 제거되거나 반전되면 이 단언이 깨진다.
+		publications.supersedable = "er-0";
+		publications.transitionByItemResult = 0;
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.transitions).isEmpty();
+		assertThat(history.rows).noneMatch(row -> row.contains("교체"));
+		assertThat(publications.published).containsExactly("er-1");  // 신규 게시는 그대로 진행
 	}
 
 	@Test
