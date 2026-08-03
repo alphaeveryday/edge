@@ -488,11 +488,14 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
 세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
 LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). 단 `LoadDisclosure` 만
-command 를 상속하지 않고 `--window-days` 를 붙인다 — 공유 정의의 창 미지정(=canonical 전체
-스캔)은 하루 1회 도는 15:40 런의 **백로그 회수 경로**라 그대로 둬야 하고, 하루 10슬롯 레인에선
-그 스캔이 슬롯마다 곱해진다. **아직 스케줄이 DISABLED 라
-아무것도 안 돌고 시장 SFN 도 미변경이다** — 공시는 계속 15:40 런으로 수집된다. 뉴스 레인이
-PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서다.
+**컷오버 완료**(ALPHA-724): 시장 SFN 에서 공시 4스텝이 빠졌고 이 스케줄이 ENABLED 다 —
+공시는 이제 **이 레인에서만** 수집·정제·적재된다(15:40 런은 공시를 돌리지 않는다). 뉴스 레인이
+PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 밟았다.
+
+⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
+붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
+돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
+issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
 
 ⚠️ **컷오버가 필요한 이유는 성능이 아니라 원장 정체성이다.** 작업 정체성의 정본은
 `catalog.by_cli(step, source)` 인데 두 레인의 CLI 가 글자 그대로 같아(`ingest-raw-disclosure`
@@ -852,7 +855,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업 =
-  시장 레인(`etf-daily`) 21 + 뉴스 레인(`news`) 6**(ECS Task state 33개 중 — 시장 SFN 31 +
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4**(ALPHA-724 가
+  공시 4작업의 소유 레인을 옮겼다 — 총계는 그대로)(ECS Task state 33개 중 — 시장 SFN 31 +
   뉴스 SFN 직렬 2. ALPHA-181 → 578 → 553 PR2 → 591). 레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
