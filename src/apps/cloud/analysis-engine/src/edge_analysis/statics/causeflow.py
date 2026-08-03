@@ -276,23 +276,6 @@ def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
             "event_types": types, "fired": fired}
 
 
-def panel_with_probes(lake, tup, instrument_id: str, day: str) -> str:
-    """패널 + 측정 불가 시 자동 프로브. 판정자마다 같은 발견을 재발명하지 않는다."""
-    from dataclasses import replace as _rep
-
-    from .judge import panel_text
-    from .vocab import ExposureSource
-    out = [panel_text(lake, tup, instrument_id, day)]
-    if "n=0" in out[0] or "효과 미계산" in out[0]:
-        for fam, tr in (("거래량", "변화"), ("가격잔차", "누적")):
-            if (tup.exposure.ident, tup.exposure.transform) == (fam, tr):
-                continue
-            probe = _rep(tup, exposure=ExposureSource("속성", fam, tr))
-            out.append(f"\n[자동 프로브 - 측정 가능한 이웃 노출 ({fam}/{tr})]\n"
-                       + panel_text(lake, probe, instrument_id, day))
-    return "\n".join(out)
-
-
 _W = {}
 
 
@@ -307,6 +290,7 @@ def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
     from pathlib import Path
 
     from .hypothesize import screen_tuples
+    from .judge import panel_text
     from .paneltest import FEATURES
     eid, env_s, out_dir = item
     env = _json.loads(env_s)
@@ -317,7 +301,7 @@ def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
     if not valid:
         return eid, "REJ " + " | ".join(rej)
     (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
-    txt = panel_with_probes(_W["lake"], valid[0], _W["iid"], _W["day"])
+    txt = panel_text(_W["lake"], valid[0], _W["iid"], _W["day"])
     (Path(out_dir) / f"panel_{eid}.txt").write_text(txt, encoding="utf-8")
     return eid, "ok"
 
@@ -337,6 +321,7 @@ def _cli() -> None:
     import pathlib
 
     from .hypothesize import screen_tuples
+    from .judge import panel_text
     from .paneltest import FEATURES
     cmd = sys.argv[1]
     if cmd == "facts":
@@ -404,7 +389,7 @@ def _cli() -> None:
                         (d / f"env_{eid}.json").write_text(
                             json.dumps(env, ensure_ascii=False), encoding="utf-8")
                         (d / f"panel_{eid}.txt").write_text(
-                            panel_with_probes(lake, valid[0], q["iid"], q["day"]),
+                            panel_text(lake, valid[0], q["iid"], q["day"]),
                             encoding="utf-8")
                 print(f"DONE {q['op']} {_t.time() - t0:.0f}s", flush=True)
             except Exception as e:                          # noqa: BLE001 - 서버는 안 죽는다
@@ -447,7 +432,7 @@ def _cli() -> None:
                                                     encoding="utf-8")
                 continue
             (d / f"panel_{eid}.txt").write_text(
-                panel_with_probes(lake, valid[0], iid, day), encoding="utf-8")
+                panel_text(lake, valid[0], iid, day), encoding="utf-8")
             print(f"{eid}: ok")
         return
     if cmd == "panel":

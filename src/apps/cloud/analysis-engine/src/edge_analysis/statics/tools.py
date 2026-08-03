@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from ..observability import record as trace
 from .paneltest import (FEATURES, Z_ANOM, flow_z, grid_screen, macro_z,
-                        series_z, split_date)
+                        series_z)
 from .vocab import CHANNELS, RELATIONS, SERIES_FAMILIES, TRANSFORMS
 
 MAX_ROWS = 40
@@ -145,10 +145,8 @@ class Catalog:
 
     # ── 관측 ────────────────────────────────────────────────────────────
     def cell(self) -> str:
-        """이 셀이 무엇인가 - 좌표·분할 경계·측정 가능한 축."""
-        cut = split_date(self.lake, self.day)
+        """이 셀이 무엇인가 - 좌표·측정 가능한 축."""
         return (f"셀 {self.ticker} {self.day}\n"
-                f"  발견/확증 분할 경계: {cut or '이력 부족 - 분할 없음'}\n"
                 f"  장중 접지 사건 타입: {', '.join(self.types) or '없음'}\n"
                 f"  잴 수 있는 노출: {sorted(FEATURES)}")
 

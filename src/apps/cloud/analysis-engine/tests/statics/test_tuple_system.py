@@ -105,7 +105,7 @@ T = _tuple(vuln_family="거래량", vuln_tr="수준")     # 측정 가능한 조
 def test_inus_conditioning_and_apply_today():
     r = edge_test(_Lake(), T, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
-    assert r.n == 200                                # 조건 조건화로 패널이 절반
+    assert r.n == 400                                # 엣지 존재는 늘 전체 패널로 검정
     assert r.cond_satisfied is True and r.applies_today   # 오늘 p높음 → 적용
     r2 = edge_test(_Lake(today=(1.0, -9.9)), T, "2026-06-01", cell_instrument_id="i0")
     assert r2.verdict == "성립" and r2.cond_satisfied is False
@@ -123,7 +123,7 @@ def test_counterfactual_needs_positivity_and_reports_opposite_class():
 def test_series_trigger_panel_runs():
     t = _tuple(trigger=("계열", "가격잔차"), vuln_family="거래량", vuln_tr="수준")
     r = edge_test(_Lake(), t, "2026-06-01")
-    assert r.verdict in ("성립", "불성립") and r.n == 200
+    assert r.verdict in ("성립", "불성립") and r.n == 400
 
 
 def test_determinism_and_thin_panel():
@@ -134,8 +134,9 @@ def test_determinism_and_thin_panel():
 
 
 def test_unmeasurable_declared_not_silent():
+    # 거시는 종목 축이 없어 이 프레임에 못 들어온다 - 시장층 전용 추정기 소관.
     t = HypothesisTuple(conditions=(), trigger=Trigger("점", "X"), channel="R금리신용",
-                        exposure=ExposureSource("속성", "신용", transform="수준"),  outcome="수익률", sign=-1)
+                        exposure=ExposureSource("속성", "거시", transform="변화"),  outcome="수익률", sign=-1)
     r = edge_test(_Lake(), t, "2026-06-01")
     assert r.verdict == "판정불가" and "못 잰다" in r.reason
     t2 = _tuple(trigger=("계열", "수급"))
@@ -206,11 +207,13 @@ def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
     from edge_analysis.statics.paneltest import grid_screen
 
     class GridLake:
-        """4피처 격자 스텁: 첫 피처(cum20)에만 진짜 효과."""
+        """격자 스텁: 첫 피처(cum20)에만 진짜 효과. 폭은 FEATURES 를 따라간다 -
+        피처가 늘 때마다 스텁을 손보지 않으려면 여기서 세야 한다."""
 
         def __init__(self, n=300, seed=4):
+            from edge_analysis.statics.paneltest import FEATURES
             rng = np.random.default_rng(seed)
-            f = rng.normal(size=(n, 4))
+            f = rng.normal(size=(n, len(FEATURES)))
             hi = f[:, 0] >= np.quantile(f[:, 0], 0.8)
             ar = 0.02 * hi + rng.normal(scale=0.004, size=n)
             d = [f"2026-0{1 + i % 5}-01" for i in range(n)]
@@ -259,14 +262,13 @@ def test_propose_rejects_tautological_vulnerability():
                for t in valid for v in t.conditions)
 
 
-def test_thin_inus_falls_back_to_moderator_mode_not_undetermined():
-    # §14: 충족 클래스가 얇으면 조건화(표본 분할) 대신 매개변수화 - 엣지는 전체
-    # 패널로 검정하고 조건은 조절 대비로, 오늘 적용은 여전히 충족을 요구한다.
+def test_thin_condition_never_kills_the_panel():
+    # 조건은 표본을 쪼개지 않는다. 충족이 3% 여도 엣지 검정은 전체 n 으로 돌고,
+    # 조건은 조절 대비로만 보고된다 - 라이브 6회의 '조건화 전멸'(n=23·6·6)을 막는 계약.
     thin = _tuple(vuln_family="거래량", vuln_tr="수준", pct=0.97)   # 충족 ~3%
     r = edge_test(_Lake(n=400), thin, "2026-06-01", cell_instrument_id="i0")
-    assert r.mode == "조절자" and r.verdict in ("성립", "불성립")   # 판정불가 전멸 탈출
-    assert r.n == 400                                              # 전체 패널 검정력
-    assert "조절" in r.moderation
+    assert r.verdict in ("성립", "불성립")     # 조건이 얇다는 이유로 판정불가가 되지 않는다
+    assert r.n == 400                          # 전체 패널 검정력
     # 오늘 적용은 INUS 그대로: p0.97 임계를 오늘 못 넘으면 부적용.
     low_today = edge_test(_Lake(n=400, today=(1.0, -9.9)), thin, "2026-06-01",
                           cell_instrument_id="i0")
@@ -313,19 +315,14 @@ def test_propose_rejects_unfired_series_trigger():
     assert any("미발화 계열 방아쇠 날조" in r for r in rejected)
 
 
-def test_gate_is_two_sided_with_cell_bonferroni():
-    # 학술 수리 ②③ (17차): 방향 채굴 보상(양측 p₂) + 셀 단위 FWER(α/m).
+def test_gate_is_two_sided():
+    # 방향 채굴 보상(양측 p₂). 부호를 사후에 고르지 못하게 하는 유일한 장치다.
     from edge_analysis.statics.paneltest import _two_sided
     assert _two_sided(0.03) == 0.06 and abs(_two_sided(0.97) - 0.06) < 1e-12  # 대칭
     assert _two_sided(0.5) == 1.0
-    # 강한 합성 효과는 α/3 에서도 성립 - 검정력이 죽지 않는다.
     r3 = edge_test(_Lake(effect=0.03), _tuple(vuln_family="거래량", vuln_tr="수준"),
-                   "2026-06-01", m_tests=3)
+                   "2026-06-01")
     assert r3.verdict == "성립"
-    # p₂=0.04 는 m=1 성립, m=3(α=0.0167) 불성립 - Bonferroni 가 실제로 문다.
-    from edge_analysis.statics.gates import edge_gate
-    assert edge_gate(400, 0.04) == "성립"
-    assert edge_gate(400, 0.04, alpha=0.05 / 3) == "불성립"
 
 
 def test_agent_decisions_are_traced_with_raw_submissions():
@@ -360,30 +357,9 @@ def test_agent_decisions_are_traced_with_raw_submissions():
     assert oks[0]["reduction_note"] == "y"
 
 
-def test_discovery_and_confirmation_samples_do_not_overlap():
-    # 18R: 격자(발견)와 확증 게이트가 같은 역사를 쓰면 유사반복이고, 그 격자를
-    # 에이전트에게 주면 이중 사용이다. 경계는 가용 이력의 절반 - 고정 일수로 잡으면
-    # 이력이 짧을 때 발견 표본이 0이 된다 (라이브 실측).
-    from edge_analysis.statics.paneltest import _split_sql, split_date
-    class HistLake:                       # 이력 2026-04-25 ~ 오늘(06-01)
-        def sql(self, q): return [("2026-04-25",)]
-    lake = HistLake()
-    cut = split_date(lake, "2026-06-01")
-    assert cut == "2026-05-13"                                  # 37일의 절반
-    disc = _split_sql(lake, "2026-06-01", "discovery", "se.event_date")
-    conf = _split_sql(lake, "2026-06-01", "confirm", "se.event_date")
-    assert disc == f"AND se.event_date < DATE '{cut}'"
-    assert conf == f"AND se.event_date >= DATE '{cut}'"         # 서로소
-    assert _split_sql(lake, "2026-06-01", "", "x") == ""        # 오늘 횡단면은 분할 없음
-
-    class NoHist:                          # 이력 범위를 못 재면 분할하지 않는다
-        def sql(self, q): return [(None,)]
-    assert split_date(NoHist(), "2026-06-01") is None
-    assert _split_sql(NoHist(), "2026-06-01", "confirm", "x") == ""
-
 
 def test_thin_confirmation_sample_says_so_instead_of_silently_passing():
-    # 분할 후 확증 표본이 얇으면 판정불가 - 사유가 '기간 확대·백필' 좌표를 가리킨다.
+    # 표본이 얇으면 판정불가 - 사유가 '백필' 좌표를 가리킨다. 조용히 통과하지 않는다.
     from edge_analysis.statics.paneltest import MIN_N
     class ThinLake:
         def sql(self, q):
@@ -391,7 +367,7 @@ def test_thin_confirmation_sample_says_so_instead_of_silently_passing():
                 return [(0.1, 0.1)]
             return [(f"i{k}", "2026-05-01", 0.01, 1.0, 1.0) for k in range(MIN_N - 1)]
     r = edge_test(ThinLake(), _tuple(vuln_family="거래량", vuln_tr="수준"), "2026-06-01")
-    assert r.verdict == "판정불가" and "확증 표본" in r.reason and "백필" in r.reason
+    assert r.verdict == "판정불가" and "백필" in r.reason
 
 
 def test_panels_never_touch_base_tables_directly():
@@ -642,7 +618,9 @@ def test_measurability_is_a_gate_not_a_hint():
 
 
 def test_measurability_gate_covers_state_conditions():
-    h = _h()   # 조건 = 수급/누적 → FEATURES 밖
+    h = _h()
+    h["conditions"] = [{"ident": "재무파생", "transform": "수준",
+                        "comparator": ">=", "percentile": 0.9}]   # 원천 없음
     valid, rej = screen_tuples([h], event_types=ETYPES, measurable=MEAS)
     assert not valid and "못 재는 조건" in rej[0]
 

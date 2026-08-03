@@ -41,57 +41,29 @@ MIN_OPPOSITE = 5    # positivity: 반대(미충족) 사례가 이보다 적으�
 MIN_TODAY = 5       # 환원 검사의 오늘 횡단면 최소 표본
 
 # (계열족, 변환) → 피처 컬럼. **여기 없는 조합은 아직 못 잰다** (부재 선언).
+# screen_tuples(measurable=…) 가 이 목록으로 생성 시점에 관문을 친다 - 못 재는
+# 조합은 패널이 n=0 을 내기 전에 죽는다.
 FEATURES = {
     ("가격잔차", "누적"): "cum20",
     ("가격잔차", "변동성"): "vol20",
     ("거래량", "수준"): "tv20",
     ("거래량", "변화"): "tv_chg",
+    # ── PIT 스냅샷(v_pit)이 연 축. 전부 **어제 값** = 느린 상태 ──
+    ("주주", "수준"): "fr_lvl",       # 외국인지분율
+    ("주주", "변화"): "fr_chg",       # 외국인지분율 20일 변화(%p)
+    ("신용", "수준"): "cr_lvl",       # 신용융자잔고율
+    ("공매도", "수준"): "sr_lvl",     # 차입공매도잔고비율
+    ("배수", "수준"): "pbr_lvl",      # PBR(IFRS-별도)
+    ("주식수", "변화"): "sh_chg",     # 상장주식수 20일 변화율 - S주식수 채널의 관측변수
+    ("수급", "누적"): "fl_cum20",     # 20일 누적 외국인 순매수 / 시총
 }
-# 계열 방아쇠의 혁신값 (z 를 재는 대상)
+# 계열 방아쇠의 혁신값 (z 를 재는 대상). 수급은 **아직 없다** - flow_z 는 3개 투자자
+# 유형의 최댓값으로 발화를 정하는데 패널 프레임은 외국인 하나만 담는다. 기준이 두
+# 곳에서 갈리면 접지가 무너지므로(series_z 도크스트링), 통합 전까지는 노출·조건으로만 쓴다.
 _INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg"}
 
-# 시간 분할 (18R): 발견과 확증은 **다른 표본**이어야 한다. 격자가 같은 역사에서
-# 방향을 캐고 그 역사로 확증하면 유사반복이고, 그 격자를 가설 에이전트에게 주면
-# 이중 사용이다. 경계는 **가용 이력의 절반** - 고정 180일로 잡았더니 사건 이력이
-# 3개월(2026-04-25~)뿐이라 발견 표본이 0이 됐다 (18R 라이브가 즉시 드러냄).
-SPLIT_FRAC = 0.5
 
 
-@lru_cache(maxsize=8)
-def _min_event_date(lake, day: str) -> str | None:
-    try:
-        rows = lake.sql(_base(day) +
-                        f"SELECT min(trade_date) FROM v_event WHERE trade_date < DATE '{day}'")
-        return str(date.fromisoformat(str(rows[0][0])))
-    except Exception:
-        return None    # 이력 범위를 못 재면 분할하지 않는다 (부재≠판정)
-
-
-def split_date(lake, day: str) -> str | None:
-    """발견/확증 경계일 = 가용 이력의 SPLIT_FRAC 지점. 이력 없으면 None(분할 불가).
-
-    백필로 이력이 늘면 경계도 움직인다 - 그래서 산출물에 경계일을 적는다(감사).
-    """
-    lo = _min_event_date(lake, day)
-    if lo is None:
-        return None
-    a, b = date.fromisoformat(lo), date.fromisoformat(day)
-    return str(a + (b - a) * SPLIT_FRAC)
-
-
-def _split_sql(lake, day: str, part: str, col: str) -> str:
-    """발견(discovery) / 확증(confirm) 표본의 날짜 절. part='' 이면 분할 없음."""
-    cut = split_date(lake, day) if part else None
-    if cut is None:
-        return ""
-    return f"AND {col} < DATE '{cut}'" if part == "discovery" else f"AND {col} >= DATE '{cut}'"
-
-# 공통 피처 CTE — **STORM 시맨틱 표면 위에 얹는다** (18R, 사용자 지시).
-# 기반 테이블(source_event·price_daily·…) 직접 접근 금지: 시점 클램프가 뷰 정의
-# 안에 있어야 질의가 우회할 수 없다(adapters/sql_surface 의 _guard 가 자유 SQL 에
-# 대해 강제하는 것과 같은 규율을 패널 SQL 에도 적용). 잔차 ar 은 v_daily.ar_ind
-# (시장→산업 이중차감·로그수익률)을 그대로 받는다 - 정의가 두 곳에 있으면 갈린다.
-# 창은 전부 [t-20, t-1]·[t-60, t-1] - **당일 제외 = PIT**.
 def _base(day: str, clock: str = "00:00:00") -> str:
     """공유 표면 + 파생 피처. clock 은 as_of 시각 - 역사 패널은 자정(오늘 정보 차단),
     **환원 검사만** 23:59:59 (오늘 횡단면 반응을 보는 게 목적이라 오늘 사건이 보여야
@@ -99,15 +71,40 @@ def _base(day: str, clock: str = "00:00:00") -> str:
     from ..adapters.sql_surface import views_sql
     return "WITH " + views_sql(f"TIMESTAMP '{day} {clock}'", f"DATE '{day}'",
                             "rdb.public.") + """,
+_fl AS (
+    -- 수급 원천은 flow_z 와 **같은 표**를 쓴다(s3_investor_value) - 발화 기준과
+    -- 노출 기준이 다른 표에서 오면 접지가 갈린다. v_flow(RDB)는 12일치뿐이다.
+    SELECT i.instrument_id, iv.trade_date, iv.net_value AS fl_val
+    FROM s3_investor_value iv
+    JOIN v_instrument i ON i.ticker = iv.ticker
+    WHERE iv.investor_type = 'foreign'
+),
 f AS (
-    SELECT instrument_id, trade_date, ar_ind AS ar,
-           sum(ar_ind)      OVER w20 AS cum20,
-           stddev_samp(lr)  OVER w20 AS vol20,
-           avg(volume)      OVER w20 AS tv20,
-           volume / NULLIF(avg(volume) OVER w20, 0) - 1 AS tv_chg
-    FROM v_daily WHERE ar_ind IS NOT NULL
-    WINDOW w20 AS (PARTITION BY instrument_id ORDER BY trade_date
-                   ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING)
+    -- PIT 상태(v_pit)는 전부 **어제 값**이다. 조건은 느린 상태이고, 오늘 값을 쓰면
+    -- 마감 후 회계를 원인 자리에 놓는 것이 된다(판정자들이 8셀 내내 기각한 오류).
+    -- 창 규율은 기존과 같다: w20 = [t-20, t-1] · 당일 제외.
+    SELECT d.instrument_id, d.trade_date, d.ar_ind AS ar,
+           sum(d.ar_ind)      OVER w20 AS cum20,
+           stddev_samp(d.lr)  OVER w20 AS vol20,
+           avg(d.volume)      OVER w20 AS tv20,
+           d.volume / NULLIF(avg(d.volume) OVER w20, 0) - 1 AS tv_chg,
+           LAG(q.foreign_ratio, 1) OVER wi AS fr_lvl,
+           LAG(q.foreign_ratio, 1) OVER wi
+             - LAG(q.foreign_ratio, 21) OVER wi AS fr_chg,
+           LAG(q.credit_ratio, 1)  OVER wi AS cr_lvl,
+           LAG(q.short_ratio, 1)   OVER wi AS sr_lvl,
+           LAG(q.pbr, 1)           OVER wi AS pbr_lvl,
+           LAG(q.shares, 1) OVER wi
+             / NULLIF(LAG(q.shares, 21) OVER wi, 0) - 1 AS sh_chg,
+           sum(x.fl_val) OVER w20
+             / NULLIF(LAG(q.mktcap, 1) OVER wi * 1e6, 0) AS fl_cum20
+    FROM v_daily d
+    LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
+    LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
+    WHERE d.ar_ind IS NOT NULL
+    WINDOW w20 AS (PARTITION BY d.instrument_id ORDER BY d.trade_date
+                   ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING),
+           wi  AS (PARTITION BY d.instrument_id ORDER BY d.trade_date)
 ),
 g AS (
     SELECT *,
@@ -128,7 +125,7 @@ _POINT_PANEL = """
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
     FROM v_event e JOIN v_instrument i ON i.instrument_id = e.instrument_id
     WHERE e.event_type_code = '{etype}'
-      AND e.trade_date {cmp} DATE '{day}' {split}
+      AND e.trade_date {cmp} DATE '{day}'
 )
 SELECT g.instrument_id, g.trade_date, g.ar, {cols}
 FROM ev JOIN g ON g.instrument_id = ev.iid AND g.trade_date = ev.d
@@ -136,7 +133,7 @@ FROM ev JOIN g ON g.instrument_id = ev.iid AND g.trade_date = ev.d
 
 _SERIES_PANEL = """
 SELECT instrument_id, trade_date, ar, {cols}
-FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}' {split}
+FROM g WHERE abs(z_{innov}) >= {z} AND trade_date < DATE '{day}' 
 """
 
 _TODAY_ROW = """
@@ -167,7 +164,7 @@ _RELATION_PANEL = """
 , ev AS (
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
     FROM v_event e
-    WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}' {split}
+    WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}' 
 )
 SELECT g.instrument_id, g.trade_date, g.ar, {cols}, {rel} AS rel
 FROM ev
@@ -194,8 +191,7 @@ class EdgeReport:
     contribution: float | None = None    # SEM: τ̂ × (오늘 노출 − 패널 평균) [ar 단위]
     ci_lo: float | None = None
     ci_hi: float | None = None
-    mode: str = "조건화"             # 조건화 | 조절자 (§14: 얇은 충족 클래스의 매개변수화)
-    moderation: str = ""             # 조절 대비 (조절자 모드에서만)
+    moderation: str = ""             # 조절 대비 (조건이 있을 때 - 교호항의 최소형)
     trigger_fired: bool | None = None   # 계열 방아쇠의 오늘 발화 (None = 점 또는 미계측 처리 전)
     trigger_note: str = ""           # 오늘 방아쇠 어법 (계열에서만)
     reason: str = ""
@@ -376,14 +372,15 @@ def _two_sided(p1: float) -> float:
 
 
 def edge_test(lake, t: HypothesisTuple, day: str,
-              cell_instrument_id: str = "", m_tests: int = 1) -> EdgeReport:
-    """튜플 → 패널 검정 → 오늘 적용 판정. 표본이 얇으면 판정불가 —
-    **다른 표본을 찾으러 가지 않는다.**
+              cell_instrument_id: str = "") -> EdgeReport:
+    """튜플 → 패널 수치. 표본이 얇으면 판정불가 — **다른 표본을 찾으러 가지 않는다.**
 
-    m_tests: 이 셀에서 함께 검정되는 튜플 수. 학술 수리 ③ (17차): 셀 단위
-    Bonferroni - 게이트 α = ALPHA / m. 셀당 3튜플이면 명목 FWER 5% 유지."""
+    엣지 존재는 언제나 **전체 패널**로 검정한다. 조건은 표본을 쪼개지 않고
+    조절 대비로만 보고되며, 오늘 적용에만 걸린다(INUS). 조건화로 표본을 쪼개면
+    검정력이 죽는다 - 라이브 6회의 지배적 실패가 그것이었다(n=23·6·6 판정불가).
+    """
     if t.exposure.kind == "관계":
-        return _relation_test(lake, t, day, m_tests=m_tests)
+        return _relation_test(lake, t, day)
     got = _cols(t)
     if got is None:
         return _unmeasurable(
@@ -396,18 +393,17 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     trigger_fired: bool | None = None   # 점 방아쇠는 접지(셀 사건 목록)가 발화다
     trigger_note = ""
     if t.trigger.kind == "점":
-        sql = (_base(day) + _POINT_PANEL).format(etype=t.trigger.ident, cmp="<", day=day, cols=col_sql,
-                                  split=_split_sql(lake, day, "confirm", "e.trade_date"))
+        sql = (_base(day) + _POINT_PANEL).format(
+            etype=t.trigger.ident, cmp="<", day=day, cols=col_sql)
     else:
         innov = _INNOVATION.get(t.trigger.ident)
         if innov is None:
             return _unmeasurable(f"계열 방아쇠 {t.trigger.ident!r} 의 혁신값은 아직 못 잰다 - "
                                  f"재는 것: {sorted(_INNOVATION)}")
-        sql = (_base(day) + _SERIES_PANEL).format(innov=innov, z=Z_ANOM, day=day, cols=col_sql,
-                                   split=_split_sql(lake, day, "confirm", "trade_date"))
-        # 오늘 방아쇠 발화 판정 - 패널은 역사(|z|≥2 였던 날들)이고, 오늘 적용은
-        # 오늘도 방아쇠가 당겨졌을 때만이다. 점 방아쇠의 접지(셀 사건 목록)와
-        # 대칭인 계열의 접지가 바로 이것이다. 미계측 = 부적용 (발화를 지어내지 않는다).
+        sql = (_base(day) + _SERIES_PANEL).format(
+            innov=innov, z=Z_ANOM, day=day, cols=col_sql)
+        # 패널은 역사(|z|≥2 였던 날들)이고, 오늘 적용은 오늘도 당겨졌을 때만이다.
+        # 점 방아쇠의 접지와 대칭. 미계측 = 부적용 (발화를 지어내지 않는다).
         if cell_instrument_id:
             z = series_z(lake, cell_instrument_id, day).get(t.trigger.ident)
             if z is None:
@@ -421,81 +417,55 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     raw = [row for row in lake.sql(sql) if all(v is not None for v in row[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
-                          reason=f"확증 표본 n={len(raw)} < {MIN_N} "
-                                 f"(발견/확증 분할 경계 {split_date(lake, day)} 이후 - "
-                                 "이력 기간 확대나 백필이 필요하다)")
+                          reason=f"패널 표본 n={len(raw)} < {MIN_N} - 백필이 필요하다")
 
     ar = np.array([float(r[2]) for r in raw])
     dates = np.array([str(r[1]) for r in raw])
     feats = {cols[j][0]: np.array([float(r[3 + j]) for r in raw])
              for j in range(len(cols))}
     x = feats["__x__"]
-
     pctile = _pctile
 
-    # ── 조건 = INUS 조건화. 미충족 표본의 용량-반응은 이 가설의 검정이 아니다 ──
-    mask = np.ones(len(ar), dtype=bool)
-    for v in t.conditions:
-        key = v.key
-        if key not in feats:
-            continue                                   # 못 재는 술어는 부재 선언으로만
-        pv = pctile(feats[key])
-        mask &= (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
-    opposite = int((~mask).sum())
-
-    # ── §14 정합: 상태로 표본을 쪼개면 검정력이 죽는다 - 조건화 대신 매개변수화.
-    # 충족 클래스가 얇으면 **조절자 모드**: 엣지 존재는 전체 패널의 용량-반응으로
-    # 검정하고(검정력은 전체 n), 조건은 교호 대비로 보고한다. 오늘 적용은
-    # 여전히 충족을 요구한다(INUS 유지) - 검정과 적용의 분리다.
-    # (6개 라이브의 지배적 실패가 조건화 전멸(n=23·6·6)이었다 - 설계가 경고한
-    # 바로 그 함정을 구현이 밟고 있었다.)
-    mode = "조건화"
-    test_mask = mask
-    if t.conditions and mask.sum() < MIN_N <= len(ar):
-        mode = "조절자"
-        test_mask = np.ones(len(ar), dtype=bool)
-    if test_mask.sum() < MIN_N:
-        return EdgeReport("판정불가", int(test_mask.sum()), None, None, None, None,
-                          reason=f"패널 n={int(test_mask.sum())} < {MIN_N}")
-
     def dose(sub: np.ndarray) -> tuple[float | None, float | None, np.ndarray | None]:
+        """부분표본의 용량-반응: 노출 상위 vs 하위의 AR 평균."""
         xs, ars = x[sub], ar[sub]
         hi = pctile(xs) >= EXPOSURE_CUT
         if hi.sum() < 3 or (~hi).sum() < 3:
             return None, None, None
         return float(ars[hi].mean()), float(ars[~hi].mean()), hi
 
-    eff_hi, eff_lo, hi = dose(test_mask)
+    full = np.ones(len(ar), dtype=bool)
+    eff_hi, eff_lo, hi = dose(full)
     if hi is None:
-        return EdgeReport("판정불가", int(test_mask.sum()), None, None, None, None,
-                          reason="노출 분산 부족 - 상·하위가 갈리지 않는다 (게이트 A)")
+        return EdgeReport("판정불가", len(ar), None, None, None, None,
+                          reason="노출 분산 부족 - 상·하위가 갈리지 않는다")
 
     sign = float(t.sign)
-    p = _two_sided(_stratified_p(ar[test_mask], hi, dates[test_mask], sign))
-    verdict = edge_gate(int(test_mask.sum()), p, alpha=ALPHA / max(m_tests, 1))
+    p = _two_sided(_stratified_p(ar, hi, dates, sign))
+    verdict = edge_gate(len(ar), p)
 
-    # 조절 대비: 충족·미충족 클래스의 효과 차 (교호항의 최소형). 클래스별 dose 가
-    # 정의될 때만 - 아니면 '조절 검정력 부족'으로 남는다.
-    moderation = ""
-    if mode == "조절자":
-        s_hi, s_lo, _ = dose(mask) if mask.sum() >= 6 else (None, None, None)
-        u_hi, u_lo, _ = dose(~mask) if opposite >= 6 else (None, None, None)
+    # ── 조건 = 조절자. 표본을 쪼개지 않고 충족·미충족의 효과 차만 보고한다 ──
+    mask = np.ones(len(ar), dtype=bool)
+    for v in t.conditions:
+        if v.key in feats:
+            pv = pctile(feats[v.key])
+            mask &= (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
+    opposite = int((~mask).sum())
+
+    moderation = counterfactual = ""
+    if t.conditions:
+        s_hi, s_lo, _ = dose(mask)
+        u_hi, u_lo, _ = dose(~mask)
         if s_hi is not None and u_hi is not None:
             moderation = (f"조절 대비: 충족(n={int(mask.sum())}) {s_hi - s_lo:+.2%} vs "
                           f"미충족(n={opposite}) {u_hi - u_lo:+.2%}")
+            counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 {u_hi * 100:+.2f}% "
+                              f"vs 하위 {u_lo * 100:+.2f}% - 충족 부류와 대조하라")
+        elif opposite < MIN_OPPOSITE:
+            counterfactual = (f"반대(미충족) 사례 {opposite}건 < {MIN_OPPOSITE} - "
+                              "반사실 침묵 (positivity)")
         else:
-            moderation = (f"조절 검정력 부족 (충족 n={int(mask.sum())}) - "
-                          "엣지는 무조건부, 조건은 오늘 적용에만 걸린다")
-
-    # ── 반사실 쌍 (§14): 조건 미충족 부류의 효과. positivity 없으면 침묵 ──
-    counterfactual = ""
-    if t.conditions and opposite >= MIN_OPPOSITE:
-        c_hi, c_lo, c_mask = dose(~mask)
-        if c_hi is not None:
-            counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 {c_hi * 100:+.2f}% "
-                              f"vs 하위 {c_lo * 100:+.2f}% - 충족 부류와 대조하라")
-    elif t.conditions:
-        counterfactual = f"반대(미충족) 사례 {opposite}건 < {MIN_OPPOSITE} - 반사실 침묵 (positivity)"
+            moderation = f"조절 대비 불가 (충족 n={int(mask.sum())}) - 클래스별 노출 분산 부족"
 
     # ── SEM 계수 (§10): 성립 엣지에만 크기를 붙인다. 게이트는 크기를 만들지
     # 않지만(§11), 게이트를 통과한 엣지의 크기는 사건 고정효과 기울기에서 온다.
@@ -505,7 +475,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     if verdict == "성립":
         from .sem import exposure_slope
         try:
-            tau, se = exposure_slope(ar[test_mask], x[test_mask], dates[test_mask])
+            tau, se = exposure_slope(ar, x, dates)
         except ValueError:
             tau = se = None
 
@@ -519,7 +489,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
             x_today = float(row[0][0])
             today_pct = float((x <= x_today).mean())
             if tau is not None:
-                dx = x_today - float(x[test_mask].mean())
+                dx = x_today - float(x.mean())
                 contrib = tau * dx
                 ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
             sat = True
@@ -543,7 +513,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
     if t.trigger.kind == "점":
-        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, split="")
+        tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql)
         trows = [r for r in lake.sql(tsql) if all(v is not None for v in r[2:])]
         if len(trows) < MIN_TODAY:
             reduction = f"표본부족 (오늘 n={len(trows)})"
@@ -561,15 +531,15 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     if unmeasured_conds:
         cond_bits.append("패널 미조건화: " + "·".join(unmeasured_conds))
 
-    return EdgeReport(verdict, int(test_mask.sum()), p, eff_hi, eff_lo, today_pct,
+    return EdgeReport(verdict, len(ar), p, eff_hi, eff_lo, today_pct,
                       cond_today=" · ".join(cond_bits), cond_satisfied=cond_sat,
                       counterfactual=counterfactual, reduction=reduction,
                       contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
-                      mode=mode, moderation=moderation,
+                      moderation=moderation,
                       trigger_fired=trigger_fired, trigger_note=trigger_note)
 
 
-def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> EdgeReport:
+def _relation_test(lake, t: HypothesisTuple, day: str) -> EdgeReport:
     """전이 패널 (§16): 사건 종목과 **관계 있는** 종목이 관계 없는 종목보다 부호
     방향으로 더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을
     소거하므로 남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
@@ -590,8 +560,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     col_sql = ", ".join(f"g.{c}" for _, c in vcols) or "1 AS _one"
     rel = _REL_EXPR.get(t.exposure.ident) or _REL_LINK.format(ident=t.exposure.ident)
     sql = (_base(day) + _RELATION_PANEL).format(
-        etype=t.trigger.ident, day=day, cols=col_sql, rel=rel,
-        split=_split_sql(lake, day, "confirm", "e.trade_date"))
+        etype=t.trigger.ident, day=day, cols=col_sql, rel=rel)
     raw = [r for r in lake.sql(sql) if all(v is not None for v in r[2:])]
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
@@ -621,7 +590,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str, m_tests: int = 1) -> Edge
     sign = float(t.sign)
     sub = ar[mask]
     p = _two_sided(_stratified_p(sub, hi, dates[mask], sign))
-    return EdgeReport(edge_gate(int(mask.sum()), p, alpha=ALPHA / max(m_tests, 1)),
+    return EdgeReport(edge_gate(int(mask.sum()), p),
                       int(mask.sum()), p,
                       float(sub[hi].mean()), float(sub[~hi].mean()), None,
                       cond_today="전이: 조건은 피어 측 - 오늘 셀 평가 없음",
@@ -647,8 +616,7 @@ def grid_screen(lake, day: str, types: list[str],
     out: list[dict] = []
     label_of = {c: k for k, c in FEATURES.items()}
     for etype in types:
-        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day, cols=all_cols,
-                                  split=_split_sql(lake, day, "discovery", "e.trade_date"))
+        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day, cols=all_cols)
         raw = [r for r in lake.sql(sql) if r[2] is not None]
         if len(raw) < MIN_N:
             out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})

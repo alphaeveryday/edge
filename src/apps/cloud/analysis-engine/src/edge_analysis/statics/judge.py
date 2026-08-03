@@ -81,24 +81,34 @@ class JudgeCatalog(Catalog):
 
 
 def panel_text(lake, tup, instrument_id: str, day: str) -> str:
-    """타입 수준 패널의 수치. 판정 문자열은 '코드 참고'로만 - 결론은 검정자가.
-    하네스 CLI(causeflow panel)와 도구(JudgeCatalog.panel)가 같은 포맷을 쓴다."""
+    """타입 수준 패널의 **수치만**. 판정은 검정자가 한다 - 코드는 의견을 내지 않는다.
+
+    이전에는 코드 게이트의 결론('코드 참고 의견: 판정불가 - n=26 < 30')을 같이
+    실었다. 판정자가 그걸 뒤집는 일이 반복됐고(8셀 실측), 뒤집힌 의견이 산출물에
+    남아 무엇이 판정인지 흐렸다. 수치는 코드가, 판정은 검정자가 - 자리를 나눈다.
+    """
     from .paneltest import edge_test
     r = edge_test(lake, tup, day, cell_instrument_id=instrument_id)
-    rows = [f"패널 수치 (판정은 네가 한다 - 아래 verdict 는 코드 참고일 뿐):",
-            f"  n={r.n} · p={r.p if r.p is not None else '미계산'} · "
-            f"상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
-            if r.effect_high is not None else f"  n={r.n} · 효과 미계산",
-            f"  오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
-            if r.today_exposure_pct is not None else "  오늘 노출 미계산",
-            f"  조건 오늘: {r.cond_today or '-'} (충족 {r.cond_satisfied})",
-            f"  환원 검사: {r.reduction or '-'}",
-            f"  반사실: {r.counterfactual or '-'}",
-            f"  코드 참고 의견: {r.verdict}"
-            + (f" - {r.reason}" if getattr(r, 'reason', '') else "")]
-    if getattr(r, "trigger_fired", None) is not None:
-        rows.append(f"  오늘 방아쇠 발화: {r.trigger_fired}")
-    return "\n".join(rows)
+    rows = [
+        f"n={r.n}" + (f" · p={r.p:.3f}" if r.p is not None else " · p 미계산"),
+        (f"노출 상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
+         if r.effect_high is not None else "효과 미계산"),
+        (f"오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
+         if r.today_exposure_pct is not None else "오늘 노출 미계산"),
+    ]
+    if r.cond_today:
+        rows.append(f"조건 오늘: {r.cond_today} (충족 {r.cond_satisfied})")
+    if r.moderation:
+        rows.append(r.moderation)
+    if r.counterfactual:
+        rows.append(r.counterfactual)
+    if r.reduction and r.reduction != "—":
+        rows.append(f"환원 검사: {r.reduction}")
+    if r.trigger_note:
+        rows.append(r.trigger_note)
+    if r.reason:
+        rows.append(f"측정 불가: {r.reason}")
+    return "\n".join("  " + x for x in rows)
 
 
 def judge_edge(lake, ask, *, ticker: str, instrument_id: str, day: str,

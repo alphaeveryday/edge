@@ -234,6 +234,19 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         FROM {prefix}investor_flow_daily
         WHERE trade_date <= {trade_date} AND available_at <= {as_of}
     ),
+    v_pit AS (
+        -- curated DataGuide 특정시점 스냅샷(statics.pit → pit_daily 백필).
+        -- **available_at 클램프가 없다** - 원본이 trade_date 별 PIT 스냅샷이라
+        -- 파티션 키가 곧 클램프다. 그날 관측 가능했던 값만 그 행에 들어 있다.
+        -- 주주(외국인지분율) · 신용(융자잔고율) · 공매도(잔고비율) · 배수(PBR) ·
+        -- 주식수(상장주식수) - 계열족당 하나씩만 싣는다(어휘지 열 목록이 아니다).
+        SELECT i.instrument_id, p.trade_date,
+               p.foreign_ratio, p.credit_ratio, p.short_ratio,
+               p.pbr, p.shares, p.mktcap
+        FROM pit_daily p
+        JOIN v_instrument i ON i.ticker = p.ticker
+        WHERE p.trade_date <= {trade_date}
+    ),
     v_liquidity AS (
         SELECT instrument_id, trade_date, turnover_value,
                CASE WHEN turnover_value > 0 AND r IS NOT NULL

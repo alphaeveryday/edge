@@ -27,6 +27,16 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
               "document_assertion", "event_measure")
 
 LAKE = "s3://edge-dev-pipeline-lake/"
+
+# 하류 SQL 이 이름으로 참조하는 로컬 백필의 빈 스키마. statics.pit 이 아직
+# 안 돌았어도 v_pit 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이 아니라
+# '안 채워진 축'임을 스키마로 말한다.
+EMPTY_SCHEMA = {
+    "pit_daily": ("SELECT CAST(NULL AS DATE) AS trade_date, CAST(NULL AS VARCHAR) AS ticker, "
+                  "CAST(NULL AS DOUBLE) AS foreign_ratio, CAST(NULL AS DOUBLE) AS credit_ratio, "
+                  "CAST(NULL AS DOUBLE) AS short_ratio, CAST(NULL AS DOUBLE) AS pbr, "
+                  "CAST(NULL AS DOUBLE) AS shares, CAST(NULL AS DOUBLE) AS mktcap WHERE false"),
+}
 AWS_PROFILE_ENV = "AWS_PROFILE"          # 기본 work — 자격증명은 SSO 체인에서 온다
 
 # S3 데이터셋 전량. **데이터가 없어도 붙인다** - 빈 Iceberg 테이블도 스키마는 있고,
@@ -59,8 +69,11 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
     ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),
     ("s3_dg_reference",     "csv",  "draft/curated/source=dataguide/dataset=reference"),
-    ("s3_kr_5min",          "glob", "raw/kr_intraday/fmp_5min"),
-    ("s3_us_5min",          "glob", "raw/fmp_5min_us"),
+    # glob 은 **파일 패턴까지** 적는다. `*.parquet` 로 뭉뚱그렸더니 같은 폴더의
+    # kospi200_proxy.parquet(symbol·name·market_cap·sector)이 딸려 들어와 스키마
+    # 충돌로 뷰 전체가 조회 불가였다 - 아무도 안 써서 안 걸렸다.
+    ("s3_kr_5min",          "glob", "raw/kr_intraday/fmp_5min/*.KS.parquet"),
+    ("s3_us_5min",          "glob", "raw/fmp_5min_us/*.parquet"),
     ("s3_statement_line",   "ice",  "draft/canonical/financials/statement_line"),
     ("s3_estimate_line",    "ice",  "draft/canonical/estimates/estimate_line"),
     ("s3_shareholder",      "ice",  "draft/canonical/ownership/shareholder_stake"),
@@ -130,22 +143,30 @@ class CausalLake:
         self.exists["bars_5m"] = self.con.execute("SELECT count(*) FROM bars_5m").fetchone()[0]
 
     def _backfill(self, d: Path) -> None:
-        """로컬 백필: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료).
+        """로컬 백필: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료)
+        · etf_holdings_fmp · pit_daily(curated DataGuide 일간 패널 - statics.pit).
 
         `layers_daily` = 시장(KODEX200) · 섹터 ETF 32 · 미국 전일 지수 6 의 일봉.
         KRX 정보데이터시스템이 죽어(2026-08-02 실측) 업종분류 22종을 못 받는 대신
         **섹터를 ETF 로 잡는다** - 관측 가능한 실제 포트폴리오이고 가중치를 시장이
         정하며(우리가 안 정한다 = 왜곡 없음) 보유 비중을 알아 leave-one-out 이 정확하다.
+
+        `pit_daily` = 주주·신용·공매도·배수·주식수 (248일 × 4,054종목). 긴 형식
+        curated 를 셀마다 읽으면 2분 12초라 넓은 형식으로 한 번 접어 둔다.
         """
         for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
-                     "etf_holdings_fmp"):
-
+                     "etf_holdings_fmp", "pit_daily"):
             f = d / f"{name}.parquet"
             if f.is_file():
                 self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")
                 self.exists[name] = self.con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-            else:
-                self.exists[name] = 0
+                continue
+            self.exists[name] = 0
+            # 하류 SQL 이 이름을 직접 참조하는 백필은 파일이 없어도 **빈 스키마**로 건다
+            # (S3 셋과 같은 규율: 스키마가 보여야 '안 채워진 축'과 '없는 축'이 갈린다).
+            # 안 그러면 v_pit 을 쓰는 패널 SQL 전체가 파스 단계에서 죽는다.
+            if name in EMPTY_SCHEMA:
+                self.con.execute(f"CREATE VIEW {name} AS {EMPTY_SCHEMA[name]}")
 
     def _s3(self) -> None:
         """S3 데이터셋 전량을 뷰로 건다. **데이터 유무와 무관하게 스키마를 붙인다.**
@@ -171,7 +192,7 @@ class CausalLake:
             self.exists["s3"] = f"실패: {str(e)[:120]}"
             return
         src = {"hive": "read_parquet('{p}/**/*.parquet', hive_partitioning=true)",
-               "glob": "read_parquet('{p}/*.parquet')",
+               "glob": "read_parquet('{p}')",
                "ice": "iceberg_scan('{p}')",
                "csv": ("read_csv('{p}/**/*.csv.gz', hive_partitioning=true, "
                        "all_varchar=true, ignore_errors=true)")}

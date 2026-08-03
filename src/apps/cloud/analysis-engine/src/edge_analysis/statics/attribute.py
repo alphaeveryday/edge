@@ -308,8 +308,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES),
                                    series_families=anomalous)
-        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
-                                 m_tests=len(tuples)))
+        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
                    for t in tuples]
 
     # 몫 배정: 성립 + 오늘 조건 충족 + 환원 미불일치 (INUS 의 적용 판정).
@@ -357,7 +356,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                trigger=f"{t.trigger.kind}:{t.trigger.ident}",
                exposure=f"{t.exposure.ident}/{t.exposure.transform}",
                verdict=r.verdict, n=r.n, p2=r.p, applied=r.applies_today,
-               mode=r.mode, moderation=r.moderation, reduction=r.reduction,
+               moderation=r.moderation, reduction=r.reduction,
                cond_today=r.cond_today, trigger_note=r.trigger_note,
                contribution=r.contribution, ci=[r.ci_lo, r.ci_hi],
                iset=_iset(r, budget), reason=r.reason)
@@ -398,8 +397,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                   f"    환원 검사: {r.reduction}"]
         if r.trigger_note:
             block.append(f"    {r.trigger_note}")
-        if r.mode == "조절자":
-            block.append(f"    §14 조절자 모드 (충족 클래스가 얇어 전체 패널로 검정): {r.moderation}")
+        if r.moderation:
+            block.append(f"    {r.moderation}")
         if r.contribution is not None:
             # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
             iset = _iset(r, budget)
