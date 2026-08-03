@@ -2,16 +2,15 @@
 #
 # 배포 워크플로(push)의 Dockerfile 은 bootJar 만 실행해 테스트가 CI 에서 전혀 돌지
 # 않았다 — 엔티티↔DDL validate·요청 검증 회귀가 PR 체크 없이 dev 에 병합될 수 있는
-# 구멍을 이 게이트가 닫는다. 전 모듈 일괄이 아니라 변경 감지 기반이다(러너 2대뿐이라
-# 빌드 시간·큐 통제 — 감지 로직이 곧 이 워크플로의 핵심).
+# 구멍을 이 게이트가 닫는다. 전 모듈 일괄이 아니라 변경 감지 기반이다(호스티드 무료
+# 분량·빌드 시간 통제 — 감지 로직이 곧 이 워크플로의 핵심).
 #
 # 이중 구조: `on.paths` 는 무관 PR(문서·infra·python·UI)에서 러너 점유 자체를 막고,
 # job 안의 감지 step 이 변경 파일 → Gradle 모듈 매핑을 정한다. paths 만으로는 "어느
 # 모듈만 돌릴지"를 표현할 수 없다.
 #
-# Testcontainers IT 는 러너 Docker(DinD)로 실행된다 — test-python.yml 이 같은 방식으로
-# docker run + localhost 매핑 포트를 쓰는 선례. 러너는 컨테이너 안이지만 데몬을 공유해
-# localhost 포트 매핑이 동작한다.
+# Testcontainers IT 는 러너 Docker 로 실행된다 — test-python.yml 이 같은 방식으로
+# docker run + localhost 매핑 포트를 쓰는 선례.
 #
 # 이 레포(private, free 플랜)는 branch protection 을 쓸 수 없어 이 체크가 required 가
 # 아니므로 paths 필터가 안전하다. 훗날 required 로 지정하려면 paths 필터를 걷어내야
@@ -46,14 +45,14 @@ on:
 permissions:
   contents: read
 
-# 같은 PR 의 이전 실행은 취소한다 — 러너 2대의 큐를 오래된 실행이 점유하지 않게.
+# 같은 PR 의 이전 실행은 취소한다 — 무료 분량을 오래된 실행이 소모하지 않게.
 concurrency:
   group: jvm-test-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   changed-modules-build:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # 전체 모듈(빌드 설정·libs 변경) 실행의 상한. 단일 모듈 PR 은 훨씬 짧게 끝난다.
     timeout-minutes: 40
 

@@ -47,7 +47,7 @@ data "aws_iam_policy_document" "deploy_permissions" {
   }
   # 데모 이미지 push 전용 — 워크플로는 build+push 만 한다(pull 은 박스 인스턴스 역할 소관).
   # BatchGetImage 는 push 경로에도 필요하다(ALPHA-595): 레이어가 전부 "already exists"인
-  # 웜 캐시 러너(self-hosted)에서 docker 가 기존 manifest 존재를 HEAD(=BatchGetImage)로
+  # 웜 캐시 상태의 러너에서 docker 가 기존 manifest 존재를 HEAD(=BatchGetImage)로
   # 확인한다. GetDownloadUrlForLayer(레이어 pull)는 계속 부여하지 않는다(최소 권한).
   statement {
     sid = "EcrPush"
