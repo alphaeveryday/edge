@@ -129,14 +129,14 @@
 
     "SourceEvents": {
       "type": "array",
-      "description": "설명이 근거로 삼은 소스 이벤트 목록. 현행은 항상 빈 배열 — 온프렘 소비자가 없어(이벤트 타임라인 UI 이연) 조립하지 않는다. 컬럼 선별은 ALPHA-395 확정.",
+      "description": "설명이 근거로 삼은 소스 이벤트 목록. 근거(event_evidence)의 source_event_id 로 조립돼 실린다(ALPHA-718) — lineage 없는 런은 빈 배열. 컬럼 선별은 ALPHA-395 확정.",
       "minItems": 0,
       "items": { "$ref": "#/$defs/SourceEventItem" }
     },
 
     "SourceEventItem": {
       "type": "object",
-      "description": "소스 이벤트 하나 (source_event 경계면 — ALPHA-395). 온프렘 소비는 이벤트 타임라인 UI 도입 시 예정.",
+      "description": "소스 이벤트 하나 (source_event 경계면 — ALPHA-395). 온프렘 소비자는 screening-worker 출처 수 정책 게이트(SINGLE_SOURCE·min_source_count — 고유 source_event_id 수), 이벤트 타임라인 UI 는 추가 소비 예정.",
       "additionalProperties": false,
       "required": ["source_event_id", "source_class", "event_type_code", "event_date"],
       "properties": {

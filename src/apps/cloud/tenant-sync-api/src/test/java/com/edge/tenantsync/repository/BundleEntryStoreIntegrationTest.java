@@ -4,6 +4,7 @@ import com.edge.tenantsync.CloudPostgresIntegrationTest;
 import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.DeliveryType;
 import com.edge.tenantsync.dto.EvidenceItem;
+import com.edge.tenantsync.dto.SourceEventItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -100,8 +101,7 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		assertThat(entry.explanationResult().primaryThreadId()).isEqualTo("it-thread-1");
 		assertThat(entry.explanationRun().explanationRunId()).isEqualTo("it-run-1");
 		assertThat(entry.explanationRun().releaseBundleVersion()).isEqualTo(BUNDLE_VERSION);
-		// source_events 는 소비자 없음(타임라인 UI 이연) — 빈 배열. evidences 는 lineage
-		// 미시드라 빈 배열이어야 한다(근거 없는 런이 남의 근거를 얻으면 안 된다).
+		// lineage 미시드 — 근거 없는 런은 두 배열 다 비어야 한다(남의 근거·출처를 얻으면 안 된다).
 		assertThat(entry.sourceEvents()).isEmpty();
 		assertThat(entry.evidences()).isEmpty();
 	}
@@ -132,6 +132,33 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		assertThat(entries.getFirst().evidences()).containsExactly(
 				new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
 				new EvidenceItem("DISCLOSURE", null, "DART", null));
+	}
+
+	@Test
+	void NEW_전달은_근거의_소스_이벤트를_이벤트_단위로_싣는다() {
+		// WHY: 출처 수 정책 게이트(screening-worker SINGLE_SOURCE·min_source_count)는 고유
+		// source_event_id 수를 센다 — 빈 배열이면 전건 출처 0 판정이고, 같은 이벤트가 근거
+		// 2건(stage_code 팬아웃 포함)으로 붙었다고 2건이 되면 단일 출처가 다출처로 부풀어
+		// 자동 게시 임계가 우회된다(DISTINCT). event_date 는 NULL 허용 계약이다.
+		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
+		seedRun("it-run-1", asOf);
+		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
+		seedDelivery(tenantId, 1, "NEW", "it-res-1", null, null);
+		seedDocument("it-doc-news", "NEWS", "YONHAP", "실적 발표 기사",
+				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"));
+		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null);
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
+		seedEventEvidenceLineage("it-run-1", "it-ev-2", "it-doc-disc", "PROMPT");
+		jdbc.update("UPDATE source_event SET event_date = ? WHERE source_event_id = ?",
+				LocalDate.of(2026, 7, 14), "it-ev-1-se");
+
+		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
+
+		// 순서 계약: event_date ASC NULLS LAST + source_event_id 동률 해소.
+		assertThat(entries.getFirst().sourceEvents()).containsExactly(
+				new SourceEventItem("it-ev-1-se", "NEWS", "it-event", "2026-07-14"),
+				new SourceEventItem("it-ev-2-se", "NEWS", "it-event", null));
 	}
 
 	@Test

@@ -72,4 +72,25 @@ public interface TenantDeliveryRepository extends Repository<TenantDelivery, Ten
 			 ORDER BY "explanationRunId", "publishedAt" ASC NULLS LAST, "documentId"
 			""", nativeQuery = true)
 	List<RunEvidenceRow> findEvidenceRows(@Param("runIds") Collection<String> runIds);
+
+	/**
+	 * 번들 source_events 조립 — 근거(event_evidence)의 source_event_id 로 도달한다
+	 * (event-bundle-schema.md lineage 절). 소비자는 screening-worker 출처 수 정책 게이트
+	 * (SINGLE_SOURCE·min_source_count). DISTINCT — 한 소스 이벤트가 여러 근거·여러 단계로
+	 * 한 런에 붙어도 출처는 이벤트 단위다(중복이 단일 출처를 다출처로 부풀리면 자동 게시
+	 * 임계가 우회된다 — 소비 측 dedup 과 같은 방향의 방어).
+	 */
+	@Query(value = """
+			SELECT DISTINCT ree.explanation_run_id AS "explanationRunId",
+			       se.source_event_id AS "sourceEventId",
+			       se.source_class AS "sourceClass",
+			       se.event_type_code AS "eventTypeCode",
+			       se.event_date AS "eventDate"
+			  FROM explanation_run_event_evidence ree
+			  JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
+			  JOIN source_event se ON se.source_event_id = ev.source_event_id
+			 WHERE ree.explanation_run_id IN (:runIds)
+			 ORDER BY "explanationRunId", "eventDate" ASC NULLS LAST, "sourceEventId"
+			""", nativeQuery = true)
+	List<RunSourceEventRow> findSourceEventRows(@Param("runIds") Collection<String> runIds);
 }
