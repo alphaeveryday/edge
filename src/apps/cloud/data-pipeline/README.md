@@ -103,7 +103,10 @@
 > AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 3종
 > price-worker·relay·price-consumer: `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
-> apply 가 장중 워커를 내리지 않게 한다). ⚠️ universe 정본 객체(config/minute/universe.json)의
+> apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
+> `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
+> 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
+> 막힌다. apply 후 그 변수를 켠다: ALPHA-712). ⚠️ universe 정본 객체(config/minute/universe.json)의
 > **생산 파이프라인은 아직 없다** — 객체 없이 스케일업하면 worker·consumer 는 기동
 > 거부(fail-loud)다. ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라

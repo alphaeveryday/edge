@@ -58,9 +58,17 @@ jobs:
       # 1분 상주 서비스(ALPHA-711) — SFN 단발 task 는 run-task 마다 mutable 태그를 새로
       # 당기지만, 상주 서비스는 재배포 없이는 옛 이미지를 계속 돈다. 이미지 push 뒤
       # force-new-deployment 로 같은 task definition 에서 최신 태그를 다시 pull 하게 한다.
-      # 서비스가 아직 없으면(terraform apply 선행 전) **크게 알리고 건너뛴다** — 배선
-      # 순서상 정상이고, 조용히 실패로 접으면 배포 자체가 막힌다.
+      #
+      # ⚠️ **명시적 opt-in 게이트**(vars.MINUTE_SERVICES_DEPLOYED): 이미지 CD 와
+      # terraform apply 는 서로 독립이라 순서 보장이 없다. 이 워크플로가 dev 에 먼저
+      # 착지하면 배포 역할에 새 서비스 ARN 권한이 아직 없어 describe 가 AccessDenied
+      # 로 떨어지고 — 그건 "서비스 미생성"과 응답이 다르므로 skip 으로 접을 수도 없다 —
+      # **멀쩡한 이미지 배포가 통째로 막힌다**. 그래서 존재 추론 대신 운영자가 선언한
+      # 상태를 본다: apply 로 서비스·권한이 선 뒤 그 변수를 켜면 이 블록이 활성화된다.
+      # 변수가 꺼져 있는 동안은 상주 서비스가 desired 0 이라(ALPHA-711) 옛 이미지를
+      # 도는 문제 자체가 없다.
       - name: Roll minute resident services
+        if: vars.MINUTE_SERVICES_DEPLOYED == 'true'
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
@@ -69,15 +77,15 @@ jobs:
           for svc in edge-dev-data-pipeline-price-worker \
                      edge-dev-data-pipeline-relay \
                      edge-dev-data-pipeline-price-consumer; do
-            # 미존재 서비스는 **성공 응답**의 services=[] 로 온다(query 결과 "None") —
-            # 명령 자체의 실패(AccessDenied·만료·스로틀)는 삼키지 않고 전파한다.
-            # 오류를 미생성으로 접으면 ACTIVE 서비스가 옛 이미지로 계속 돌면서
-            # 배포가 성공으로 위장된다.
+            # 이 블록은 opt-in 게이트 뒤라 서비스·권한이 이미 서 있다는 선언 위에서
+            # 돈다 — 명령 실패(AccessDenied·만료·스로틀)도, ACTIVE 가 아닌 상태도
+            # 전부 배선 결함이므로 삼키지 않는다(그 둘을 skip 으로 접으면 옛 이미지를
+            # 도는 서비스가 초록으로 지나간다).
             status="$(aws ecs describe-services --cluster "${cluster}" --services "${svc}" \
               --query 'services[0].status' --output text)"
             if [ "${status}" != "ACTIVE" ]; then
-              echo "::warning::${svc} 가 아직 없다(status=${status}) — terraform apply 선행 전이면 정상, 이후에도 계속되면 배선 확인"
-              continue
+              echo "::error::${svc} 가 ACTIVE 가 아니다(status=${status}) — MINUTE_SERVICES_DEPLOYED 가 켜져 있는데 서비스가 없다면 배선이 어긋난 것이다"
+              exit 1
             fi
             aws ecs update-service --cluster "${cluster}" --service "${svc}" \
               --force-new-deployment >/dev/null
