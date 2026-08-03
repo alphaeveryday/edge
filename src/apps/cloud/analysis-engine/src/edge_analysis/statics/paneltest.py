@@ -60,6 +60,13 @@ FEATURES = {
     # ── 민감도: 공통 계열을 종목 축으로 옮기는 유일한 변환 (60일 롤링 기울기) ──
     ("지수잔차", "민감도"): "beta_m",  # 시장 로그수익률에 대한 β
     ("거시", "민감도"): "fx_beta",     # 원/달러 변화율에 대한 β - FX환 채널의 관측변수
+    # ── 재무제표(v_fin, ASOF). 회계연도 값이라 가장 느린 상태 = 조건 자리 ──
+    ("레버리지", "수준"): "lev_lvl",   # 차입금의존도
+    ("레버리지", "변화"): "lev_chg",   # 차입금의존도 YoY 변화(%p)
+    ("수익성", "수준"): "prof_lvl",    # ROE
+    ("수익성", "변화"): "prof_chg",    # ROE YoY 변화(%p)
+    ("성장", "수준"): "grow_lvl",      # 매출액증가율 YoY
+    ("재무파생", "수준"): "icov_lvl",  # 이자보상배율 - 금리 충격 내성
 }
 # 계열 방아쇠의 혁신값 (z 를 재는 대상). 수급은 **아직 없다** - flow_z 는 3개 투자자
 # 유형의 최댓값으로 발화를 정하는데 패널 프레임은 외국인 하나만 담는다. 기준이 두
@@ -133,11 +140,18 @@ f AS (
            -- mkt_lr 은 v_daily 가 직접 안 주므로 lr - ar_lr 로 복원한다(정의가 하나여야
            -- 하므로 여기서 새로 계산하지 않는다).
            regr_slope(d.lr, d.lr - d.ar_lr)      OVER w60 AS beta_m,
-           regr_slope(d.lr, fx.change_pct / 100) OVER w60 AS fx_beta
+           regr_slope(d.lr, fx.change_pct / 100) OVER w60 AS fx_beta,
+           -- 재무는 회계연도 값이라 as-of 조인이 필요하다. ASOF 가 '그 시점에 가용한
+           -- 가장 최근 회계연도' 를 정확히 집는다 - 손으로 쓰면 어긋난다.
+           fn.borrow_dep AS lev_lvl, fn.borrow_dep_chg AS lev_chg,
+           fn.roe        AS prof_lvl, fn.roe_chg      AS prof_chg,
+           fn.rev_growth AS grow_lvl, fn.int_cover    AS icov_lvl
     FROM v_daily d
     LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
     LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
     LEFT JOIN fx_usdkrw fx ON CAST(fx.date AS DATE) = d.trade_date
+    ASOF LEFT JOIN v_fin fn ON fn.instrument_id = d.instrument_id
+                           AND d.trade_date >= fn.available_from
     WHERE d.ar_ind IS NOT NULL
     WINDOW w20 AS (PARTITION BY d.instrument_id ORDER BY d.trade_date
                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING),

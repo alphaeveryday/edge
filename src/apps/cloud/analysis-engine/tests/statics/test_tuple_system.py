@@ -619,7 +619,7 @@ def test_measurability_is_a_gate_not_a_hint():
 
 def test_measurability_gate_covers_state_conditions():
     h = _h()
-    h["conditions"] = [{"ident": "재무파생", "transform": "수준",
+    h["conditions"] = [{"ident": "운영", "transform": "수준",
                         "comparator": ">=", "percentile": 0.9}]   # 원천 없음
     valid, rej = screen_tuples([h], event_types=ETYPES, measurable=MEAS)
     assert not valid and "못 재는 조건" in rej[0]
@@ -678,3 +678,24 @@ def test_layer_gates_which_exposures_may_explain_it():
     assert screen_tuples([vol], event_types=ETYPES, measurable=MEAS, layer="고유")[0]
     with pytest.raises(ValueError, match="층은"):
         screen_tuples([vol], event_types=ETYPES, layer="전체")
+
+
+# ── 재무 선견 차단 ───────────────────────────────────────────────────────
+def test_financials_are_clamped_by_filing_lag_not_collection_date():
+    # 파티션 as_of_date 는 **수집일**이지 공시일이 아니다. FY Y 재무를 Y년 중에 쓰면
+    # 선견이다. 결산 후 법정 90일 → FY+1년 4월 1일 가용을 행에 박고 뷰가 자른다.
+    from edge_analysis.adapters.sql_surface import views_sql
+    from edge_analysis.statics.fin import REPORT_LAG_MONTH, build_sql
+
+    sql = build_sql({"M000102009": "k"}, __import__("pathlib").Path("/tmp/x.parquet"))
+    assert f"make_date(fy + 1, {REPORT_LAG_MONTH}, 1) AS available_from" in sql
+    assert REPORT_LAG_MONTH >= 4          # 12월 결산 + 90일 이후여야 한다
+
+    v = views_sql("TIMESTAMP '2026-06-01 00:00:00'", "DATE '2026-06-01'", "")
+    assert "v_fin AS" in v
+    # 클램프는 수집일이 아니라 available_from 이다 - as_of 로 자르면 선견이 샌다
+    fin = v[v.index("v_fin AS"):]
+    fin = fin[:fin.index("v_liquidity")]
+    assert "f.available_from <= DATE '2026-06-01'" in fin
+    code = "\n".join(l for l in fin.splitlines() if not l.strip().startswith("--"))
+    assert "as_of" not in code          # 수집일로 자르면 선견이 샌다

@@ -248,6 +248,21 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         JOIN v_instrument i ON i.ticker = p.ticker
         WHERE p.trade_date <= {trade_date}
     ),
+    v_fin AS (
+        -- 재무 연간 패널(statics.fin → fin_annual). **available_from 이 클램프다** -
+        -- 파티션 as_of_date 는 수집일이지 공시일이 아니라서, 결산 후 법정 90일을
+        -- 반영한 'FY+1년 4월 1일 가용' 을 행에 박아 두고 여기서 자른다.
+        -- 변화(YoY)는 회계연도 창이라 여기서 만든다 - 일봉 창으로는 만들 수 없다.
+        SELECT i.instrument_id, f.fiscal_year, f.available_from,
+               f.debt_ratio, f.borrow_dep, f.netdebt_dep, f.int_cover, f.cf_assets,
+               f.roe, f.roa, f.op_margin, f.net_margin, f.rev_growth, f.op_growth, f.payout,
+               f.borrow_dep - LAG(f.borrow_dep) OVER wf AS borrow_dep_chg,
+               f.roe        - LAG(f.roe)        OVER wf AS roe_chg
+        FROM fin_annual f
+        JOIN v_instrument i ON i.ticker = f.ticker
+        WHERE f.available_from <= {trade_date}
+        WINDOW wf AS (PARTITION BY f.ticker ORDER BY f.fiscal_year)
+    ),
     v_liquidity AS (
         SELECT instrument_id, trade_date, turnover_value,
                CASE WHEN turnover_value > 0 AND r IS NOT NULL

@@ -28,11 +28,25 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
 
 LAKE = "s3://edge-dev-pipeline-lake/"
 
-# 하류 SQL 이 이름으로 참조하는 로컬 백필의 빈 스키마. statics.pit 이 아직
-# 안 돌았어도 v_pit 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이 아니라
-# '안 채워진 축'임을 스키마로 말한다.
+# 하류 SQL 이 이름으로 참조하는 로컬 백필의 빈 스키마. statics.pit / statics.fin 이
+# 아직 안 돌았어도 v_pit·v_fin 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이
+# 아니라 '안 채워진 축'임을 스키마로 말한다.
+_EMPTY_COLS = {
+    "pit_daily": ("trade_date DATE", "ticker VARCHAR",
+                  *(f"{c} DOUBLE" for c in
+                    "foreign_ratio foreign_used credit_ratio short_ratio lend_bal pbr per "
+                    "shares treasury beta52w r2_52w mktcap turnover for_buy for_sell "
+                    "ins_buy ins_sell ind_buy ind_sell for_net ins_net ind_net "
+                    "treasury_ratio".split())),
+    "fin_annual": ("fiscal_year INTEGER", "ticker VARCHAR", "available_from DATE",
+                   *(f"{c} DOUBLE" for c in
+                     "debt_ratio borrow_dep netdebt_dep int_cover cf_assets roe roa "
+                     "op_margin net_margin rev_growth op_growth payout".split())),
+}
 EMPTY_SCHEMA = {
-    "pit_daily": "SELECT CAST(NULL AS DATE) AS trade_date, CAST(NULL AS VARCHAR) AS ticker, CAST(NULL AS DOUBLE) AS foreign_ratio, CAST(NULL AS DOUBLE) AS foreign_used, CAST(NULL AS DOUBLE) AS credit_ratio, CAST(NULL AS DOUBLE) AS short_ratio, CAST(NULL AS DOUBLE) AS lend_bal, CAST(NULL AS DOUBLE) AS pbr, CAST(NULL AS DOUBLE) AS per, CAST(NULL AS DOUBLE) AS shares, CAST(NULL AS DOUBLE) AS treasury, CAST(NULL AS DOUBLE) AS beta52w, CAST(NULL AS DOUBLE) AS r2_52w, CAST(NULL AS DOUBLE) AS mktcap, CAST(NULL AS DOUBLE) AS turnover, CAST(NULL AS DOUBLE) AS for_buy, CAST(NULL AS DOUBLE) AS for_sell, CAST(NULL AS DOUBLE) AS ins_buy, CAST(NULL AS DOUBLE) AS ins_sell, CAST(NULL AS DOUBLE) AS ind_buy, CAST(NULL AS DOUBLE) AS ind_sell, CAST(NULL AS DOUBLE) AS for_net, CAST(NULL AS DOUBLE) AS ins_net, CAST(NULL AS DOUBLE) AS ind_net, CAST(NULL AS DOUBLE) AS treasury_ratio WHERE false",
+    name: "SELECT " + ", ".join(
+        f"CAST(NULL AS {t}) AS {c}" for c, t in (s.split() for s in cols)) + " WHERE false"
+    for name, cols in _EMPTY_COLS.items()
 }
 AWS_PROFILE_ENV = "AWS_PROFILE"          # 기본 work — 자격증명은 SSO 체인에서 온다
 
@@ -152,7 +166,7 @@ class CausalLake:
         curated 를 셀마다 읽으면 2분 12초라 넓은 형식으로 한 번 접어 둔다.
         """
         for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
-                     "etf_holdings_fmp", "pit_daily"):
+                     "etf_holdings_fmp", "pit_daily", "fin_annual"):
             f = d / f"{name}.parquet"
             if f.is_file():
                 self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")
