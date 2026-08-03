@@ -231,9 +231,21 @@ class DartDisclosureSource:
             allowed.setdefault(stock_code, our_ticker)
         fetched_at = datetime.now(timezone.utc).isoformat()
         for seg_from, seg_to in _window_segments(from_date, to_date):
+            before = len(self.fetch_failures)
             yield from self._scan_window(
                 allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at
             )
+            if len(self.fetch_failures) > before:
+                # 세그먼트가 절단됐으면 **뒤 세그먼트도 멈춘다.** 계속 돌면 "앞 날짜는 잘렸는데
+                # 뒤 날짜는 온전한" raw 가 남고, partial 런도 후속 정제 대상이라 canonical 이
+                # 날짜 중간에 구멍을 가진 채 완성된 것처럼 보인다. 창을 쪼갠 건 소스 제약
+                # 때문이지 세그먼트가 서로 독립적인 실패 단위여서가 아니다 — 실패 단위는
+                # 여전히 요청받은 창 하나다.
+                logger.error(
+                    "공시 창 %s~%s 에서 절단 — 이후 세그먼트 중단(창 전체가 온전치 않다)",
+                    seg_from, seg_to,
+                )
+                return
 
     def _is_target(self, report_nm: str) -> bool:
         """report_nm(문자열)이 대상 유형인지 — strip 후 부분일치(ㆍ·패딩·[기재정정] 접두 안전)."""
@@ -294,8 +306,12 @@ class DartDisclosureSource:
             if not isinstance(rows, list):
                 raise ValueError(f"DART status=000 인데 list 이상: {type(rows).__name__}")
             if page == 1:
+                # 세그먼트마다 1페이지가 그 세그먼트의 건수를 준다 — **누적**해야 창 전체 규모가
+                # 된다. 대입하면 마지막 세그먼트 값만 남아, 누적되는 list_rows_seen 과 축이
+                # 어긋난 채 나란히 로그에 실린다.
                 raw_count = payload.get("total_count")
-                self.list_total_count = raw_count if isinstance(raw_count, int) else None
+                if isinstance(raw_count, int) and not isinstance(raw_count, bool):
+                    self.list_total_count = (self.list_total_count or 0) + raw_count
             for row in rows:
                 self.list_rows_seen += 1
                 if not isinstance(row, dict):

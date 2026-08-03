@@ -88,7 +88,8 @@ class FakeClient:
         raise AssertionError(f"unexpected url: {url}")
 
 
-def _page(rows, *, status="000", total_page=1, page_no=1, page_count=100) -> dict:
+def _page(rows, *, status="000", total_page=1, page_no=1, page_count=100,
+          total_count=None) -> dict:
     # ⚠️ 픽스처는 실 응답 형상을 따라야 한다(test-fixture-must-mirror-prod-config).
     #  - page_no 는 **요청한 페이지를 그대로 에코**한다(실측 2026-08-03). 모든 페이지에 1 을
     #    박아두면 에코 검증이 픽스처에서만 오작동해, 그 가드를 지우는 회귀가 초록으로 통과한다.
@@ -96,8 +97,12 @@ def _page(rows, *, status="000", total_page=1, page_no=1, page_count=100) -> dic
     #    전부 100행). 그래서 다중 페이지 테스트는 page_count 를 행 수에 맞춰 준다 — 100행짜리
     #    픽스처를 쓰는 대신 소스 설정도 함께 좁히면(`_source(..., page_count=1)`) 같은 형상을
     #    작은 픽스처로 재현할 수 있다.
+    #  - total_count 는 **창 전체 건수**지 이 페이지의 행 수가 아니다. 미지정이면 total_page 와
+    #    page_count 로부터 형상이 맞는 값을 만든다(마지막 페이지가 이 페이지면 실제 행 수 반영).
+    if total_count is None:
+        total_count = (total_page - 1) * page_count + (len(rows) if page_no == total_page else page_count)
     return {"status": status, "message": "정상", "page_no": page_no, "page_count": page_count,
-            "total_count": len(rows), "total_page": total_page, "list": rows}
+            "total_count": total_count, "total_page": total_page, "list": rows}
 
 
 def _multipage(tmp_path, client):
@@ -186,10 +191,10 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
     #      raw 에도 중복 행이 앉는다. 후속 canonical dedup 은 이미 쓴 대역폭을 돌려주지 않는다.
     dup = _row("단일판매ㆍ공급계약체결", rcept_no="DUP")
     client = FakeClient(list_pages={
-        1: _page([dup], total_page=2, page_count=1),
-        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2, page_no=2, page_count=1),
+        1: _page([dup, _row("주주총회소집결의", rcept_no="X")], total_page=2, page_count=2),
+        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2, page_no=2, page_count=2),
     })
-    source = _multipage(tmp_path, client)
+    source = _source(tmp_path, client, api_key="k", page_count=2)
 
     records = list(source.fetch(["005930"]))
 
@@ -216,6 +221,46 @@ def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):
         prev = datetime.strptime(prev_end, "%Y%m%d").date()
         nxt = datetime.strptime(next_bgn, "%Y%m%d").date()
         assert (nxt - prev).days == 1
+
+
+def test_failed_segment_stops_later_segments(tmp_path):
+    # WHY: 창을 쪼갠 건 소스 제약(3개월) 때문이지 세그먼트가 서로 독립적인 실패 단위여서가
+    #      아니다 — 실패 단위는 여전히 요청받은 창 하나다. 앞 세그먼트가 절단됐는데 뒤를 계속
+    #      수집하면 "앞 날짜는 잘렸는데 뒤 날짜는 온전한" raw 가 남고, partial 런도 후속 정제
+    #      대상이라 canonical 이 날짜 중간에 구멍을 가진 채 완성된 것처럼 보인다.
+    class SegmentSpy(FakeClient):
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            if "/list.json" in url:
+                # 첫 세그먼트만 절단 신호(비최종 페이지가 덜 참), 나머지는 정상
+                if _param(url, "bgn_de") == "20260101":
+                    return json.dumps(_page([_row("공급계약", rcept_no="SEG1")],
+                                            total_page=3, page_count=2), ensure_ascii=False)
+                self.list_urls.append(url)
+                return json.dumps(_page([_row("공급계약", rcept_no="LATER")]), ensure_ascii=False)
+            return super().request(method, url, headers=headers, data=data, decode=decode)
+
+    client = SegmentSpy()
+    source = _source(tmp_path, client, api_key="k", page_count=2)
+
+    records = list(source.fetch(["005930"], from_date="2026-01-01", to_date="2026-07-31"))
+
+    assert [r["rcept_no"] for r in records] == ["SEG1"]  # 받은 만큼만
+    assert client.list_urls == []  # 뒤 세그먼트는 아예 안 부른다
+    assert source.fetch_failures
+
+
+def test_split_window_total_count_accumulates(tmp_path):
+    # WHY: 세그먼트마다 1페이지가 그 세그먼트 건수를 준다 — 대입하면 **마지막 세그먼트 값만**
+    #      남아, 창 전체를 누적하는 list_rows_seen 과 축이 어긋난 채 나란히 로그에 실린다.
+    #      완전성 조사가 그 둘을 비교하므로 잘못된 비교값이 된다.
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")], total_count=7)})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"], from_date="2026-01-01", to_date="2026-07-31"))
+
+    assert len(client.list_urls) == 8           # 8 세그먼트
+    assert source.list_total_count == 7 * 8     # 마지막 값(7)이 아니라 합
+    assert source.list_rows_seen == 8
 
 
 def test_short_window_is_not_split(tmp_path):
