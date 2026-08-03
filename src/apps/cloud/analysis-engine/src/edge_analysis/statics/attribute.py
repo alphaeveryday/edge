@@ -340,11 +340,18 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
                "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
         iset = _iset(r, budget)
+        # 산문이 '조건 충족 · 환원 일치' 를 하드코딩하지 않게, 실제로 무엇을
+        # 검사했는지 그대로 싣는다. 부재는 부재라고 말해야 한다.
+        cond_state = ("없음" if not t.conditions else
+                      "측정불가" if not r.cond_measurable else
+                      "충족" if r.cond_satisfied else "미충족")
         edges.append(Edge(channel=t.channel, event_type=t.trigger.ident,
                           verdict=r.verdict, applied=r.applies_today, why_not=why,
                           iset_lo=iset[0] if iset else None,
                           iset_hi=iset[1] if iset else None,
-                          contradiction=r.ci_lo is not None and iset is None))
+                          contradiction=r.ci_lo is not None and iset is None,
+                          cond_state=cond_state,
+                          reduction_state=r.reduction if r.reduction != "—" else "미실행"))
 
     gwin = next((s for s in shares if s.window.kind == "gap"), None)
     gcov = gap_covariate(lake, ticker, day, gwin.log_ret) if gwin is not None else None

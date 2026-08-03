@@ -27,8 +27,20 @@ class Row:
         return self.share.log_ret - (self.est or 0.0)
 
 
-def _pct(x: float | None) -> str:
-    return "     —" if x is None else f"{(math.exp(x) - 1) * 100:+6.2f}"
+def _pp(x: float | None) -> str:
+    """로그수익률을 %p 로. **가법 단위** - 표의 합계 검산이 성립하는 유일한 표기다.
+
+    단순수익(exp−1)으로 칸을 채우면 부분의 합이 합계와 안 맞는다: 실측
+    (042700 07-31) 갭 +22.91 · 잔여 +4.13 = 27.04 인데 합계 칸은 +27.98 이었다.
+    assert 는 로그에서 검산하고 표시는 단순수익이던 것 - 표가 자기가 보여주지
+    않는 것을 검산했다.
+    """
+    return "     —" if x is None else f"{x * 100:+6.2f}"
+
+
+def simple_pct(logret: float) -> str:
+    """로그 → 단순수익. 하루 총수익처럼 **가법이 필요 없는 한 개 값**에만 쓴다."""
+    return f"{(math.exp(logret) - 1) * 100:+.2f}%"
 
 
 def render(rows: list[Row], *, conditional: str = "") -> str:
@@ -39,17 +51,18 @@ def render(rows: list[Row], *, conditional: str = "") -> str:
     for r in rows:
         w = r.share.window
         span = f"{w.start:%H:%M}–{w.end:%H:%M}" if w.kind != "gap" else "전일→개장"
-        iv = (f"[{_pct(r.lo).strip()},{_pct(r.hi).strip()}]"
+        iv = (f"[{_pp(r.lo).strip()},{_pp(r.hi).strip()}]"
               if r.lo is not None and r.hi is not None else "—")
-        lines.append(f"{w.name:<14}{span:<14}{_pct(r.share.log_ret):>8}"
+        lines.append(f"{w.name:<14}{span:<14}{_pp(r.share.log_ret):>8}"
                      f"{(r.treatment or '—'):<22}{(r.verdict or '—'):<10}"
-                     f"{_pct(r.est):>8}{iv:>18}{_pct(r.unexplained):>10}")
+                     f"{_pp(r.est):>8}{iv:>18}{_pp(r.unexplained):>10}")
     total = sum(r.share.log_ret for r in rows)
     est = sum(r.est or 0.0 for r in rows)
     unexp = sum(r.unexplained for r in rows)
     lines.append("─" * len(head))
-    lines.append(f"{'합계':<14}{'':<14}{_pct(total):>8}{'':<22}{'':<10}"
-                 f"{_pct(est):>8}{'':>18}{_pct(unexp):>10}")
+    lines.append(f"{'합계':<14}{'':<14}{_pp(total):>8}{'':<22}{'':<10}"
+                 f"{_pp(est):>8}{'':>18}{_pp(unexp):>10}")
+    lines.append(f"단위: 로그수익률 %p (가법) · 하루 단순수익 {simple_pct(total)}")
     if conditional:
         lines.append(f"조건: {conditional}")
     out = "\n".join(lines)

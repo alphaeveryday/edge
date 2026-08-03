@@ -59,6 +59,11 @@ class Edge:
     iset_lo: float | None = None     # 일 단위 식별집합 (CI ∩ (0, 하루 총합])
     iset_hi: float | None = None
     contradiction: bool = False      # 과대식별 모순 — 크기 주장 금지
+    # **무엇을 실제로 검사했는가.** 하드코딩된 '조건 충족 · 환원 일치' 는 검사하지
+    # 않은 것을 통과로 위장한다 (실측 042700 07-31 A1: conditions=[] 이고 계열
+    # 방아쇠라 환원 미실행인데 산문이 둘 다 통과라고 썼다).
+    cond_state: str = "없음"         # 없음 | 충족 | 미충족 | 측정불가
+    reduction_state: str = "미실행"  # 미실행 | 일치 | 불일치 | 표본부족
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +92,18 @@ class BaseRate:
 
 
 def _pct(logret: float) -> str:
-    return f"{(math.exp(logret) - 1) * 100:+.2f}%p"
+    """로그 → 단순수익. **하루 총수익처럼 가법이 필요 없는 한 개 값**에만 쓴다."""
+    return f"{(math.exp(logret) - 1) * 100:+.2f}%"
+
+
+def _pp(logret: float) -> str:
+    """로그수익률 → %p. **가법 단위** - 몫·기여·구간은 전부 이것으로 말한다.
+
+    단순수익(exp−1)으로 부분을 말하면 합이 총합과 안 맞는다: 실측(042700 07-31)
+    갭 +22.91 · 잔여 +4.13 = 27.04 인데 총합은 +27.98 이었다. 하루 총수익 한 개
+    값만 `_pct` (단순) 로 말한다.
+    """
+    return f"{logret * 100:+.2f}%p"
 
 
 def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list[Row],
@@ -150,13 +166,13 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     if gap is not None and abs(gap.share.log_ret) > sum(
             abs(r.share.log_ret) for r in intraday_events) and not gap.share.window.event_ids:
         negatives.append(
-            f"하루의 최대 몫이 갭({_pct(gap.share.log_ret)})인데 장전 사건이 없다 — "
+            f"하루의 최대 몫이 갭({_pp(gap.share.log_ret)})인데 장전 사건이 없다 — "
             "장중 국내 사건 전체가 주범 후보에서 밀려난다 (시간 알리바이)")
     biggest = max(rows, key=lambda r: abs(r.share.log_ret), default=None)
     if (biggest is not None and biggest.share.window.kind == "residual"
             and abs(biggest.share.log_ret) > abs(total) * 0.5):
         negatives.append(
-            f"최대 몫 {_pct(biggest.share.log_ret)} 이 사건 없는 구간"
+            f"최대 몫 {_pp(biggest.share.log_ret)} 이 사건 없는 구간"
             f"({biggest.share.window.name})에서 나왔다 — 보도된 사건으로 하루를 "
             "설명하려는 서사는 데이터가 반박한다")
     for e in edges:
@@ -177,9 +193,9 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     # ── 3. 몫 — 미설명이 최대면 선두. 서술은 목록이 아니라 요약이다 ─────
     top = sorted(rows, key=lambda r: -abs(r.share.log_ret))[:4]
     rest = [r for r in rows if r not in top]
-    share_bits = [f"{r.share.window.name} {_pct(r.share.log_ret)}" for r in top]
+    share_bits = [f"{r.share.window.name} {_pp(r.share.log_ret)}" for r in top]
     if rest:
-        share_bits.append(f"나머지 {len(rest)}창 합 {_pct(sum(r.share.log_ret for r in rest))}")
+        share_bits.append(f"나머지 {len(rest)}창 합 {_pp(sum(r.share.log_ret for r in rest))}")
     # 적용 엣지가 있으면 미설명도 구간이 된다: 하루 총합 − Σ식별집합.
     # 점을 지어내지 않고 크기 층(항등식)과 인과 층(iset)을 화해시키는 유일한 형태.
     # 모순(iset 없는 적용 엣지)이 하나라도 있거나 셀 점귀속이 거절이면 뺄 수 없다.
@@ -194,20 +210,23 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                       f"— 적용 채널의 식별집합 [{lin(exp_lo)}, {lin(exp_hi)}]을 뺀 구간. "
                       "점이 아니라 구간이 정직하다")
     else:
-        unexp_line = (f"미설명 {_pct(unexplained)} — 우리가 설명하지 못하는 몫이고, "
+        unexp_line = (f"미설명 {_pp(unexplained)} — 우리가 설명하지 못하는 몫이고, "
                       "이것을 줄이는 것은 서사가 아니라 데이터다")
-    if abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0):
+    # 미설명이 최대면 선두 문장이 된다. `else` 가 없어서 두 갈래가 같이 나가
+    # `[몫]` 이 어순만 바꿔 두 번 찍혔다 (실측 042700 07-31).
+    unexp_leads = abs(unexplained) >= max((abs(r.est or 0.0) for r in rows), default=0.0)
+    if unexp_leads:
         out.append(f"[몫] **{unexp_line}**. 상위: " + " · ".join(share_bits))
     if idio is not None:
         # 20R: 인과가 청구할 수 있는 대상은 원수익이 아니라 **고유요인**이다.
         # 둘을 안 나누면 시장이 끌고 간 날에 종목 사건으로 설명하려 들게 된다.
         i, m = idio
-        out.append(f"[대상] 원수익 {_pct(total)} = 시장 {_pct(m)} + 고유 {_pct(i)}. "
-                   f"**인과 엣지가 청구할 수 있는 것은 고유 {_pct(i)} 뿐이다** — "
+        out.append(f"[대상] 원수익 {_pp(total)} = 시장 {_pp(m)} + 고유 {_pp(i)}. "
+                   f"**인과 엣지가 청구할 수 있는 것은 고유 {_pp(i)} 뿐이다** — "
                    f"나머지는 이 종목 사건으로 만들어질 수 없는 몫이다"
                    + (" (부호가 원수익과 반대다 - 시장 대비로는 초과수익)"
                       if i * total < 0 else ""))
-    else:
+    elif not unexp_leads:
         out.append("[몫] 상위: " + " · ".join(share_bits) + f". {unexp_line}")
 
     # ── 3¾. 갭 공변량 (§9) — 부분식별. 부재도 문장이다 ──────────────────
@@ -217,17 +236,17 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             if not gap_cov.reason:
                 raise NarrationError("갭 공변량 부재에 사유가 없다 - 침묵은 백필 좌표를 지운다")
             out.append(f"[갭] 공변량 미계측 — {gap_cov.reason}. "
-                       f"갭 {_pct(gshare)} 는 통째로 미설명에 남는다.")
+                       f"갭 {_pp(gshare)} 는 통째로 미설명에 남는다.")
         elif gap_cov.contradiction:
             out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% 는 "
-                       f"갭 {_pct(gshare)} 와 방향이 어긋난다 — 공통충격 설명 0, "
+                       f"갭 {_pp(gshare)} 와 방향이 어긋난다 — 공통충격 설명 0, "
                        "갭 전체가 종목 고유·기타 후보다.")
         else:
             e_lo, e_hi = gap_cov.explained
             r_lo, r_hi = gshare - e_hi, gshare - e_lo
             out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% × "
                        f"β [{gap_cov.beta_lo:.2f}, {gap_cov.beta_hi:.2f}] (n={gap_cov.n}) → "
-                       f"갭 {_pct(gshare)} 중 [{e_lo * 100:+.2f}, {e_hi * 100:+.2f}]%p 는 공통충격 — "
+                       f"갭 {_pp(gshare)} 중 [{e_lo * 100:+.2f}, {e_hi * 100:+.2f}]%p 는 공통충격 — "
                        f"종목 고유 후보는 [{r_lo * 100:+.2f}, {r_hi * 100:+.2f}]%p 만. "
                        "점이 아니라 구간이 정직하다.")
 
@@ -244,22 +263,31 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         elif e.contradiction:
             size = "크기는 **보류** — SEM 구간이 하루 총합과 모순 (과대식별 검산 실패)"
         elif e.iset_lo is not None and e.iset_hi is not None:
-            size = (f"기여는 많아야 {e.iset_hi * 100:+.2f}%p "
-                    f"(식별집합 [{e.iset_lo * 100:+.2f}, {e.iset_hi * 100:+.2f}]%p) — "
-                    "상한 밖 주장은 금지")
+            # 예산이 음수인 층(섹터가 내렸다)에서 iset_hi 는 **0 에 가까운 끝**이다.
+            # "많아야 +0.00%p" 는 방향을 잃은 어법 - 절댓값이 먼 끝으로 크기를 말한다.
+            lo, hi = e.iset_lo * 100, e.iset_hi * 100
+            far = lo if abs(lo) > abs(hi) else hi
+            zero_in = e.iset_lo <= 0.0 <= e.iset_hi
+            size = (f"기여는 최대 {far:+.2f}%p 만큼 "
+                    f"(식별집합 [{lo:+.2f}, {hi:+.2f}]%p"
+                    + (" — 0 을 포함하니 '0 일 수도' 를 지우면 안 된다" if zero_in else "")
+                    + ") — 집합 밖 주장은 금지")
         else:
             size = "크기 미상 (τ̂ 추정 불가) — 존재 판정만 말한다"
-        out.append(f"[채널] {e.channel}·{e.event_type}: 패널 성립 · 오늘 조건 충족 · "
-                   f"환원 일치 → **오늘 적용**. {size}.")
+        # 검사한 것만 말한다. 하드코딩된 '조건 충족 · 환원 일치' 는 조건이 없고
+        # 환원이 미실행인 엣지에도 찍혔다 - 부재를 통과로 위장하는 것이다.
+        checks = [f"조건 {e.cond_state}", f"환원 {e.reduction_state}"]
+        out.append(f"[채널] {e.channel}·{e.event_type}: 패널 성립 · "
+                   + " · ".join(checks) + f" → **오늘 적용**. {size}.")
     # ── 4½. 성립한 창 — 접지 id 와 구간을 달고서만 ──────────────────────
     positives: list[str] = []
     for r in rows:
         if r.verdict == "성립" and r.est is not None:
             evs = " · ".join(f"{grounded[e]}({e})" for e in r.share.window.event_ids)
-            iv = (f" 구간 [{_pct(r.lo)}, {_pct(r.hi)}]"
+            iv = (f" 구간 [{_pp(r.lo)}, {_pp(r.hi)}]"
                   if r.lo is not None and r.hi is not None else "")
-            positives.append(f"{r.share.window.name}: {evs} → 기여 {_pct(r.est)}{iv} "
-                             f"(창의 몫 {_pct(r.share.log_ret)} 이 상한)")
+            positives.append(f"{r.share.window.name}: {evs} → 기여 {_pp(r.est)}{iv} "
+                             f"(창의 몫 {_pp(r.share.log_ret)} 이 상한)")
     if positives:
         out.append("[성립] " + "; ".join(positives))
 

@@ -27,7 +27,7 @@ def test_edge_channel_sentences_follow_the_contract():
                    verdict="성립", applied=False, why_not="횡단면 방향 반대 (환원 불일치)")
     s = narrate(ticker="T", name="N", day="2026-06-01", route=None, rows=rows,
                 grounded={}, edges=(applied, refuted))
-    assert "[채널] P판가" in s and "많아야 +0.04%p" in s and "상한 밖 주장은 금지" in s
+    assert "[채널] P판가" in s and "최대 +0.04%p" in s and "집합 밖 주장은 금지" in s
     assert "K위험" in s.split("[몫]")[0]          # 반증은 [아닌 것 먼저] (몫 앞)
     assert s.index("[아닌 것 먼저]") < s.index("[채널]")
 
@@ -188,3 +188,51 @@ def test_causal_budget_is_idiosyncratic_not_raw():
                   idio=(0.00375, -0.01097))
     assert "[대상]" in txt and "고유" in txt
     assert "부호가 원수익과 반대" in txt          # 초과수익이었다는 사실을 숨기지 않는다
+
+
+def test_narration_units_are_additive():
+    """몫·기여는 로그 %p(가법)로 말한다 - 단순수익으로 부분을 말하면 합이 안 맞는다.
+
+    실측(042700 07-31): 갭 +22.91 · 잔여 +4.13 = 27.04 인데 합계 칸은 +27.98.
+    표의 assert 는 로그에서 검산하고 표시는 단순수익이었다.
+    """
+    from edge_analysis.statics.narrate import _pct, _pp
+    assert _pp(0.2062) == "+20.62%p"          # 로그 그대로
+    assert _pct(0.2467) == "+27.98%"          # 하루 총수익만 단순
+    # 가법성: 부분의 표시값 합 == 총합의 표시값
+    a, b = 0.2062, 0.0405
+    assert abs(float(_pp(a)[:-2]) + float(_pp(b)[:-2]) - float(_pp(a + b)[:-2])) < 0.02
+
+
+def test_channel_sentence_states_only_what_was_checked():
+    """조건이 없고 환원이 미실행인 엣지에 '조건 충족 · 환원 일치'를 찍으면 부재를
+    통과로 위장하는 것이다 (실측 042700 07-31 A1)."""
+    from edge_analysis.statics.narrate import Edge, narrate
+    from edge_analysis.statics.render import Row
+    from edge_analysis.statics.tree import Share
+    from edge_analysis.statics.windows import Window
+    from datetime import datetime
+    w = Window("잔여1", datetime(2026, 7, 31, 9), datetime(2026, 7, 31, 15, 35), "residual", ())
+    rows = [Row(Share(w, 0.04))]
+    e = Edge(channel="FX환", event_type="거시", verdict="성립", applied=True,
+             iset_lo=0.0, iset_hi=0.0004)
+    txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows,
+                  grounded={}, edges=(e,))
+    assert "조건 없음" in txt and "환원 미실행" in txt
+    assert "조건 충족" not in txt, "검사하지 않은 것을 통과로 말했다"
+
+
+def test_negative_budget_size_keeps_direction():
+    """예산이 음수인 층에서 '많아야 +0.00%p' 는 방향을 잃은 어법이다."""
+    from edge_analysis.statics.narrate import Edge, narrate
+    from edge_analysis.statics.render import Row
+    from edge_analysis.statics.tree import Share
+    from edge_analysis.statics.windows import Window
+    from datetime import datetime
+    w = Window("잔여1", datetime(2026, 7, 31, 9), datetime(2026, 7, 31, 15, 35), "residual", ())
+    e = Edge(channel="P판가", event_type="거시", verdict="성립", applied=True,
+             iset_lo=-0.00416, iset_hi=0.0)
+    txt = narrate(ticker="T", name="N", day="d", route=None,
+                  rows=[Row(Share(w, -0.03))], grounded={}, edges=(e,))
+    assert "최대 -0.42%p" in txt, txt
+    assert "0 일 수도" in txt
