@@ -29,7 +29,7 @@ concurrency:
 jobs:
   images:
     name: build ${{ matrix.svc }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -70,7 +70,7 @@ jobs:
   compose:
     name: deploy compose (SSM)
     needs: images
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
