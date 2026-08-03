@@ -612,11 +612,16 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   엔티티 해소·해소율은 quality log 로 남는다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
   분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
-  계보 조립 → event_thread threading. 결정적 ID 산식·프롬프트는 엔진과 동일(정본), 창 미지정 =
-  오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘] 겹침(ALPHA-592, 자정 crossing·
-  overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028). 제목 분류 LLM 콜은
-  배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은 `LLM_CONCURRENCY` env) — 단 threading 은
-  novelty 가 available_at 순서·prior 카운트에 의존해 **직렬** 유지다
+  계보 조립 → event_thread threading. **배치=catch-up 이다(ALPHA-730)** — event 의 실시간 정본은
+  1분 단건 조립(ALPHA-727)이고, 배치는 미조립 잔여 소진 + UNKNOWN 재평가·미연결 회수만 맡는다.
+  적재 직전 doc 단위 advisory lock 아래 자국을 재확인해 단건 경로가 분류 창에서 먼저 조립한
+  기사를 skip 하고, 트랜잭션은 날짜별 커밋이라 threading 락 점유가 1분 소비자를 오래 막지
+  않는다. 자체 분류기 폐기는 단건 경로 커버리지 실증 후 후속. 결정적 ID 산식·프롬프트는
+  엔진과 동일(정본), 창 미지정 = 오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘]
+  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다
+  (ADR-0028). 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
+  `LLM_CONCURRENCY` env) — 단 threading 은 novelty 가 available_at 순서·prior 카운트에 의존해
+  **직렬** 유지다
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
