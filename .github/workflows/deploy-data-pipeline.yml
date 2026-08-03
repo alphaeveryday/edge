@@ -23,7 +23,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 20
+    # 빌드(~5분) + 상주 서비스 3종 롤아웃 대기(각 10분 상한, 순차 최악 30분) 수용
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
