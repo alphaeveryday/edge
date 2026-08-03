@@ -405,15 +405,22 @@ def test_late_013_is_a_failure_not_an_empty_window(tmp_path):
     assert any("013" in f["error"] for f in source.fetch_failures)
 
 
-def test_empty_non_final_page_noted(tmp_path):
+@pytest.mark.parametrize("empty_page,total_page", [(2, 3), (2, 2)])
+def test_empty_page_noted_wherever_it_appears(tmp_path, empty_page, total_page):
     # WHY(각도 H): 앞의 가드들은 **응답의 형식**(page_no·total_page)만 본다 — 형식이 온전한
-    #      빈 페이지는 전부 통과하고 루프는 다음 페이지로 넘어가 실패 기록 없이 완주한다.
-    #      가드를 5개 세워두고도 가장 단순한 유실(중간 페이지가 통째로 빔)이 빠져나갔다.
-    client = FakeClient(list_pages={
-        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
-        2: _page([], total_page=3, page_no=2),  # 마지막이 아닌데 0행
-        3: _page([_row("사업보고서", rcept_no="P3")], total_page=3, page_no=3),
-    })
+    #      빈 페이지는 전부 통과하고 루프는 실패 기록 없이 완주한다.
+    #      위치로 예외를 두지 않는 근거는 산식이다: 실측상
+    #      `total_page = ceil(total_count / page_count)` 라(page_count 100·50·7 → 11·22·153,
+    #      마지막 페이지 행수 69·19·5) **마지막 페이지도 항상 1행 이상**이고, 0건 창은 애초에
+    #      status=013 으로 온다. 그래서 status=000 인데 0행이면 위치와 무관하게 페이지 유실이다.
+    #      (처음엔 "마지막 페이지가 비는 건 정상"이라는 예외를 뒀는데 이 산식이 반증했다 —
+    #      같은 무행 응답을 013 이면 실패로, 000 이면 성공으로 두는 모순이기도 했다.)
+    pages = {1: _page([_row("공급계약", rcept_no="P1")], total_page=total_page)}
+    pages[empty_page] = _page([], total_page=total_page, page_no=empty_page)
+    if total_page > empty_page:
+        pages[total_page] = _page([_row("사업보고서", rcept_no="P3")],
+                                  total_page=total_page, page_no=total_page)
+    client = FakeClient(list_pages=pages)
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
@@ -422,18 +429,20 @@ def test_empty_non_final_page_noted(tmp_path):
     assert any("페이지 유실" in f["error"] for f in source.fetch_failures)
 
 
-def test_empty_final_page_is_normal(tmp_path):
-    # WHY: 위 가드가 **마지막 페이지**까지 잡으면 정상 응답이 매 런 실패가 된다 — 창 전체
-    #      건수가 page_count 의 배수면 마지막 페이지가 비는 건 자연스럽다.
+def test_same_rcept_no_with_changed_content_is_kept(tmp_path):
+    # WHY: dedup 키가 rcept_no 면 같은 문서의 **서로 다른 관측**까지 접는다. OpenDART 의 `rm`
+    #      은 후속 정정·철회로 바뀌므로, 1페이지의 rm="" 와 2페이지의 rm="정" 은 다른 사실이다 —
+    #      접으면 두 번째가 raw 에 닿기도 전에 사라지고 list_rows_seen 은 개수만 남겨 무엇이
+    #      달랐는지 복원되지 않는다. 접어야 할 건 페이지 이동이 만든 **완전히 같은 행**뿐이다.
     client = FakeClient(list_pages={
-        1: _page([_row("공급계약", rcept_no="P1")], total_page=2),
-        2: _page([], total_page=2, page_no=2),  # 마지막 페이지가 빔 = 정상
+        1: _page([_row("공급계약", rcept_no="R1", rm="")], total_page=2),
+        2: _page([_row("공급계약", rcept_no="R1", rm="정")], total_page=2, page_no=2),
     })
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["rcept_no"] for r in records] == ["P1"]
+    assert [r["rm"] for r in records] == ["", "정"]  # 둘 다 보존
     assert source.fetch_failures == []
 
 
@@ -466,7 +475,7 @@ def test_non_string_stock_code_noted_not_folded_into_foreign(tmp_path):
     records = list(source.fetch(["005930"]))
 
     assert [r["rcept_no"] for r in records] == ["OK"]
-    assert any("stock_code 비문자열" in f["error"] for f in source.fetch_failures)
+    assert any("stock_code 가 문자열이 아님" in f["error"] for f in source.fetch_failures)
 
 
 def test_blank_stock_code_is_normal_not_a_failure(tmp_path):

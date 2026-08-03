@@ -212,9 +212,9 @@ class DartDisclosureSource:
         end_de: str | None,
         fetched_at: str,
     ) -> Iterator[dict]:
-        # 목록이 자라는 동안 페이지 경계가 밀려 같은 행이 두 페이지에 걸쳐 나올 수 있다 —
-        # 창 안에서 rcept_no 로 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고
-        # raw 에도 중복 행이 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
+        # 목록이 자라는 동안 페이지 경계가 밀려 **같은 행**이 두 페이지에 걸쳐 나올 수 있다 —
+        # 창 안에서 그 반복만 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고 raw 에도
+        # 같은 행이 두 번 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
         #
         # ⚠️ raw 의 "전부 보존·dedup 없음" 계약과의 관계(Rule 7 — 갈리면 하나를 고르고 이유를
         # 남긴다): 그 계약이 금지하는 건 **서로 다른 관측을 하나로 접는 것**이다(정체성 병합·
@@ -276,18 +276,24 @@ class DartDisclosureSource:
                 # 하루 수백 건 섞여 있다. 필드 게이트를 앞에 두면 **남의 회사 행의 결함**이
                 # 우리 런의 failed_records 로 올라가 원장이 없는 결측을 세게 된다.
                 raw_stock_code = row.get("stock_code")
-                if raw_stock_code is not None and not isinstance(raw_stock_code, str):
-                    # 필드가 있는데 문자열이 아니면 **누구 것인지 판정할 수 없다** — 우리
-                    # 종목일 수도 있다. 유니버스 밖으로 접어 버리면 그 유실이 영영 안 보인다
-                    # (Rule 12). 판정 불가는 유니버스 밖과 다르므로 따로 드러낸다.
+                if not isinstance(raw_stock_code, str):
+                    # 문자열이 아니면(숫자·null·키 자체 부재) **누구 것인지 판정할 수 없다** —
+                    # 우리 종목일 수도 있다. 유니버스 밖으로 접어 버리면 그 유실이 영영 안
+                    # 보인다(Rule 12). 판정 불가는 유니버스 밖과 다르므로 따로 드러낸다.
+                    #
+                    # ⚠️ 빈 문자열(`""`·`" "`)과 혼동하지 않는다. 그건 벤더가 **명시적으로**
+                    # "단축코드 없음"이라 답한 것(비상장·펀드 신고자, 하루 수백 건)이고,
+                    # 결측·null 은 응답이 깨졌다는 뜻이다. 둘을 묶으면 후자가 전자의 정상
+                    # 대량 경로에 섞여 영영 안 보인다.
                     self._note_failure(
                         None, None,
-                        f"stock_code 비문자열: {type(raw_stock_code).__name__} — 유니버스 판정 불가",
+                        f"stock_code 가 문자열이 아님: {type(raw_stock_code).__name__}"
+                        " — 유니버스 판정 불가",
                         page=page,
                     )
                     continue
                 # 빈 문자열은 정상이다 — 비상장·펀드 신고자는 단축코드가 없다(하루 수백 건).
-                stock_code = (raw_stock_code or "").strip()
+                stock_code = raw_stock_code.strip()
                 our_ticker = allowed.get(stock_code)
                 if our_ticker is None:
                     continue
@@ -311,9 +317,15 @@ class DartDisclosureSource:
                     )
                     continue
                 rcept_no = rcept_no.strip()
-                if rcept_no in seen:
+                # dedup 키는 rcept_no 가 아니라 **행 내용 전체**다. rcept_no 만 보면 같은 문서의
+                # 서로 다른 관측(예: `rm` 이 ""→"정" 으로 바뀐 정정 표시)까지 접어, 두 번째
+                # 관측이 raw 에 닿기 전에 사라진다 — 그건 페이지 이동 중복이 아니라 실제 변화다.
+                # 내용이 완전히 같을 때만 접으므로 증거는 하나도 잃지 않고, 접히는 건 페이지
+                # 경계 이동이 같은 행을 두 번 건넨 경우뿐이다.
+                fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+                if fingerprint in seen:
                     continue
-                seen.add(rcept_no)
+                seen.add(fingerprint)
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
@@ -370,18 +382,24 @@ class DartDisclosureSource:
                     page=page,
                 )
                 return
-            if page >= total_page:
-                return
-            # 마지막이 아닌 페이지가 비어 있으면 그 페이지가 통째로 빠진 것이다. 앞의 가드들은
-            # **응답의 형식**(page_no·total_page)만 보므로 형식이 온전한 빈 페이지는 전부
-            # 통과시키고, 루프는 다음 페이지로 넘어가 실패 기록 없이 완주한다 — 5개 가드를
-            # 세워두고도 가장 단순한 유실이 빠져나가던 구멍이다(검증 라운드 실증).
+            # 빈 페이지는 **위치와 무관하게** 이상이다. 실측(2026-08-03)상
+            # `total_page = ceil(total_count / page_count)` 이므로(page_count 100·50·7 에서
+            # 각각 11·22·153, 마지막 페이지 행수 69·19·5) 마지막 페이지도 항상 1행 이상이고,
+            # total_count=0 은 애초에 status=013 으로 온다. status=000 인데 0행이면 그 페이지가
+            # 통째로 빠진 것이다 — 앞의 가드들은 **응답의 형식**(page_no·total_page)만 보므로
+            # 형식이 온전한 빈 페이지를 전부 통과시킨다.
+            #
+            # ⚠️ 처음엔 "마지막 페이지가 비는 건 정상"이라는 예외를 뒀는데 위 산식이 그걸
+            # 반증했다. 같은 무행 응답이 013 이면 실패로 세면서 000 이면 성공으로 두는 것도
+            # 가드끼리의 모순이었다.
             if not rows:
                 self._note_failure(
                     None, None,
-                    f"page={page}/{total_page} 가 비었다 — 마지막 페이지가 아닌데 0행(페이지 유실)",
+                    f"page={page}/{total_page} 가 status=000 인데 0행 — 페이지 유실",
                     page=page,
                 )
+                return
+            if page >= total_page:
                 return
         # ⚠️ 관용 kind 를 붙이지 않는다 — 진짜 실패로 드러낸다(status=partial·exit 1).
         # ALPHA-351 이 절단을 관용한 근거는 "다음 증분 창이 이어받는다" 였고, 그건 상한이 corp
