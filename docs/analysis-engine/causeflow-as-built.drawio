@@ -1,0 +1,362 @@
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="1. 두 경로 · 무엇이 LLM인가" id="p1">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t1" value="causeflow as-built — 경로가 둘이고, 라이브 8셀은 한쪽만 썼다" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1080" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="t1b" value="src/edge_analysis/statics/causeflow.py — run() L144 vs _cli() L323" style="text;html=1;fontSize=13;align=left;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1000" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lg1" value="결정론 코드 (LLM 없음)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="20" width="230" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="lg2" value="LLM (모델 추론)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="20" width="190" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="lg3" value="구현됐으나 미사용" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="20" width="200" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="lg4" value="파일 / 데이터" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="60" width="200" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="hA" value="하네스 경로 — _cli()   ✔ 라이브 8셀 · 72간선" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="110" width="880" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="hB" value="코드 워크플로우 — run()   ✗ 라이브 0셀" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=17;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="980" y="110" width="880" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a1" value="① serve · facts&#10;stock_layers → 층 3분해 · load_cell → 시간 항등식&#10;series_z → 발화 계열 · market_source → 미국 몫 구간&#10;출력: facts.txt" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="180" width="840" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" value="② edges.json — 경쟁가설 9&#10;메인 세션이 손으로 쓴다. 코드가 만들지 않는다.&#10;간선당 {trigger·channel·exposure·sign·intent} — 앞 4개는 닫힌 어휘" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="296" width="840" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" value="③ serve/prep · 심사 + 패널&#10;screen_tuples: 접지 밖 날조 · 미발화 계열 날조 · 동어반복 취약성 · 채널 중복 → 반려&#10;edge_test: 타입 수준 패널 SQL → n · p · 효과 · 오늘 노출 · 반사실&#10;panel_with_probes: 원 노출 못 재면 이웃 2개 자동 대체 시도&#10;출력: env_A1..C3.json (계약)  ·  panel_A1..C3.txt (측정)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="406" width="840" height="112" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" value="④ scout × 9 병렬 — 판정&#10;각자 read 3회: facts.txt + env_X.json + panel_X.txt.  도구 호출 0 · DB 접근 0&#10;출력: {edge, causal, confidence, conclusion, se, cut_reason}&#10;강제: causal=true → se 필수 · false → cut_reason 필수" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="548" width="840" height="98" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" value="⑤ 메인 세션 — 구조방정식 + 서술&#10;판정문 9개를 시간 항등식에 되꽂아 SEM 식을 세우고, 아닌 것부터 말한다" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="676" width="840" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="a6" value="result.md" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="60" y="772" width="840" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="a1" target="a2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="a2" target="a3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e34" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="a3" target="a4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e45" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="a4" target="a5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e56" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="a5" target="a6"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="b1" value="run(lake, ask, ...) — 진입" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="180" width="840" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="가설 에이전트 (LLM ask) — 튜플 제안 → screen_tuples 심사" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="256" width="840" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="dag.TargetDAG — merge() 공통요인 검출 · validate() 채널 중복 반려&#10;CEdge · Finding 객체 생성" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="332" width="840" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" value="judge_edge() × 간선 — 여기에만 도구 상태기계가 있다&#10;Machine(catalog=JudgeCatalog, menus=JUDGE_MENUS, screen_tools=(screen,series,panel))&#10;explore(ask, m, max_turns=2)  →  판정 ask  →  to_finding()" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;align=left;spacingLeft=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="422" width="840" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" value="_SEM_SYS (LLM ask) — 구조방정식 + explanation" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="538" width="840" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" value="서술 문자열 (stdout)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#808080;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="614" width="840" height="46" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f12" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="b1" target="b2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f23" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="b2" target="b3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f34" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="b3" target="b4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f45" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="b4" target="b5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f56" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="b5" target="b6"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="why" value="왜 죽었나 — 실측 사유&#10;· 간선 9 × 원격 모델 직렬 왕복 = 한 셀에 1시간 (라이브 실측, judge.py L114 주석)&#10;· 판정자마다 콜드 레이크 부팅 + edge_test = 간선당 1~7분 (causeflow.py L427 주석)&#10;→ 병렬은 하네스가, 레이크는 상주 서버가, 판정은 파일 read 로 대체" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="690" width="840" height="96" as="geometry" />
+        </mxCell>
+
+        <mxCell id="key" value="핵심 — 코드는 ①③만 한다.  ②④⑤ 는 코드 밖 하네스(이 세션)가 호출한다.&#10;그래서 &quot;코드를 실행한다&quot;로는 이 워크플로우가 재현되지 않는다. 재현 단위는 스킬(.claude/skills/causeflow/SKILL.md) + 세션이다." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=16;fontSize=15;fontStyle=1;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="860" width="1820" height="74" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tim" value="3세대 성능 (같은 산출, 벽시계)&#10;1세대 셀당 ~15분  →  2세대 패널 선계산 ~9분  →  3세대 웜 서버 5분 20초 (최속)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=16;fontSize=14;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="954" width="1820" height="64" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="2. 데이터 접근 표면 · 도구 상태" id="p2">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1250" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t2" value="데이터 접근 표면 — DB 를 만지는 것은 한 프로세스뿐" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1400" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c1" value="접근 주체" style="text;html=1;fontSize=17;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="300" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="바인딩 층" style="text;html=1;fontSize=17;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="620" y="90" width="300" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="원천" style="text;html=1;fontSize=17;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="90" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s1" value="causeflow serve&#10;hub 프로세스 · 상주&#10;stdin JSON 한 줄 = 명령&#10;레이크 부팅 ~1분 → 세션당 1회" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="130" width="480" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="prep 워커 풀 (≤4)&#10;ProcessPoolExecutor&#10;프로세스당 레이크 1개&#10;(duckdb 연결은 프로세스 경계를 못 넘는다)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="240" width="480" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="scout 판정자 × 9&#10;DB 접근 0 · 도구 호출 0&#10;read(facts.txt) · read(env_X.json) · read(panel_X.txt)&#10;→ 판정자는 표본을 고르지 못한다 (설계 §11)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="350" width="480" height="94" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lake" value="CausalLake&#10;DuckDB in-process&#10;&#10;· ATTACH postgres READ_ONLY&#10;· read_parquet (hive · glob · ice · csv)&#10;· csv 는 지연 바인딩 (뷰 생성 10.9초 → 첫 조회 때)&#10;&#10;커버리지 실측 35/35 = 100%" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=14;verticalAlign=top;spacingTop=10;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="620" y="130" width="480" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rdb" value="RDB — Postgres (SSM 터널 :15432) · 20표&#10;price_daily · investor_flow_daily · etf_holding_snapshot · etf_nav_daily&#10;source_event · event_argument · event_evidence · event_measure&#10;event_thread · event_thread_link · document · news_document&#10;document_assertion · entity · instrument · instrument_classification&#10;supply_contract_fact · price_movement_trigger&#10;etf_contribution_observation · etf_contribution_member" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="130" width="620" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="s3d" value="S3 레이크 — s3://edge-dev-pipeline-lake/ · 25 데이터셋&#10;canonical/market_data: price_daily · investor_flow · etf_nav · fx_daily&#10;  index_daily · rates_daily · investor_value · program_trading · intraday_5m&#10;canonical/news: news_articles  |  feature/news: assertions&#10;canonical/holdings·reference: etf_holdings · etf_profile&#10;canonical/disclosures: business_segment_fact · supply_contract_fact&#10;canonical/reports: analyst_target · rating_distribution&#10;draft/curated (DataGuide csv): financials · flow · price · reference&#10;raw: kr_intraday/fmp_5min · fmp_5min_us" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="290" width="620" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ea" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="s1" target="lake"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eb" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="s2" target="lake"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ec" value="접근 없음" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;endArrow=cross;fontColor=#b85450;fontSize=12;" edge="1" parent="1" source="s3" target="lake"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ed" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="lake" target="rdb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="lake" target="s3d"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="sqlh" value="간선 검정 SQL(edge_test)이 실제로 여는 표 — 그 외에는 안 연다" style="text;html=1;fontSize=17;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="sql" value="v_instrument (종목 마스터)  ·  price_daily (수익·거래량 → ar 이중차감)  ·  source_event (점 방아쇠 접지)&#10;s3_fx_daily · s3_index_daily · s3_rates_daily · s3_investor_value (계열 방아쇠 혁신값)&#10;&#10;→ 그래서 '거시'·'지수잔차' 계열의 혁신값을 못 재는 간선이 나온다. 못 재면 panel 에 &quot;아직 못 잰다 + 재는 것 목록&quot; 을 쓴다." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="536" width="1820" height="104" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fsmh" value="도구 상태기계 — 구현돼 있으나 하네스 경로에서 미사용" style="text;html=1;fontSize=17;fontStyle=1;align=left;fontColor=#808080;" vertex="1" parent="1">
+          <mxGeometry x="40" y="680" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="g1" value="GROUND&#10;events · news · thread" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="60" y="720" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="g2" value="SCREEN&#10;screen · series · peers · links · flows" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="380" y="720" width="280" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="g3" value="EMIT&#10;판정 JSON" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1;fontColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="740" y="720" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="gx1" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="g1" target="g2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="gx2" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b3b3b3;" edge="1" parent="1" source="g2" target="g3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="gnote" value="GUARDS: 사건 왔나(또는 부재 확인) → 근거 없이 화면 못 봄 · 화면 하나는 봐야 EMIT&#10;JudgeCatalog 도구 6종: screen · series · peers · links · flows · panel&#10;&#10;하네스 경로는 이 상태기계 대신 &quot;파일 3개를 미리 다 깔아준다&quot;로 대체했다.&#10;· 얻은 것: 왕복 0 · 판정자 간 동일 입력 보장 · 병렬 9&#10;· 잃은 것: 판정자가 의심스러운 곳을 더 파고들 수 없다 (되물음 불가)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="980" y="700" width="880" height="140" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="3. 컨텍스트에 정확히 무엇이 있나" id="p3">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1150" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t3" value="컨텍스트 — 누가 무엇을 보는가 (한미반도체 07-30 실측)" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1080" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="m1" value="메인 세션 (연속 컨텍스트 — 8셀 누적)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="880" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m2" value="가진 것&#10;· facts.txt 전문 (층 3분해 · 시간 항등식 · 계열 z 전체 · 미국 몫 구간 · 접지 타입 · 수급)&#10;· edges.json — 자기가 세운 경쟁가설 9 (intent 포함)&#10;· 판정문 9개 전문 (conclusion + se + cut_reason)&#10;· 이전 7셀의 판정 결과와 서사 — 재현·반증을 여기서 판단한다&#10;· 도구: bash · read · write · hub · task&#10;&#10;하는 일&#10;· 가설 설계 (어휘 안에서) · 판정문 접기 · SEM 조립 · 서술&#10;· 셀 간 비교 — &quot;07-29·30 성립, 07-31 기각은 모순이 아니라 경계&quot;는 여기서만 나온다" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="140" width="880" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n1" value="scout 판정자 1개 (백지에서 시작)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="980" y="90" width="880" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="가진 것 — 정확히 이것뿐&#10;① 배치 context (9개 공유): Goal · Constraints · Contract(DAG 구조 · 공유 노드 · 핵심 사실 요약 · 참조 판정)&#10;② task 한 줄: &quot;간선 C1 — 표제 가설. 파일 3개 읽기 → JSON&quot;&#10;③ outputSchema: {edge, causal, confidence, conclusion, se, cut_reason}&#10;④ 자기가 read 한 3파일: facts.txt · env_C1.json · panel_C1.txt&#10;&#10;못 보는 것&#10;✗ 이 대화 이력 전부 (백지에서 시작한다)&#10;✗ 다른 8간선의 env/panel/판정 — 자기 것만 읽는다&#10;✗ DB · 도구 · 인터넷&#10;✗ 이전 7셀의 판정 (context 에 한 줄로 요약해 준 것만)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="980" y="140" width="880" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ctxh" value="scout 컨텍스트 실물 — 세 파일의 역할 분담" style="text;html=1;fontSize=17;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="440" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f1" value="facts.txt — 사실 (셀 전체 공유)&#10;&#10;하루 +0.00%&#10;층: 시장 -2.26%p (KODEX200 -2.02% × β1.12)&#10;     섹터 -7.85%p (K반도체TOP2+⊥ -3.83% × β2.05)&#10;     고유 +10.11%p&#10;밤사이: VIX +13.45% · iShares -5.38% · SOX -5.33%&#10;수급(마감 후 회계): 외국인 +239억&#10;시간 항등식: 갭 -2.39 · 창@09:00 +4.71 · 잔여2 -2.16%p&#10;발화(|z|≥2.0): 거시 z=+2.9&#10;계열 z 전체: 가격잔차 +1.0 · 거래량 +0.6 · 수급 +0.7&#10;미국 몫: [-4.89, -0.34]%p&#10;접지: SHARE_BUYBACK · INSIDER_TRANSACTION" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="40" y="480" width="580" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f2" value="env_C1.json — 계약 (간선 전용, 판정 전 고정)&#10;&#10;trigger : {kind: 점, ident: SHARE_BUYBACK}&#10;channel : S주식수&#10;exposure: {거래량, 변화}&#10;outcome : 수익률&#10;sign    : +1&#10;&#10;intent:&#10;&quot;자사주 매입 발표가 물량을 받아 테마 폭락일에&#10; 보합을 방어했다 — 사건 창@09:00 이 +4.71%p 로&#10; 하루 최대 양(+)의 몫이고, 자사주매입 타입의&#10; 과거 패널 방향이 양이면 성립.&quot;&#10;&#10;앞 5필드는 닫힌 어휘 — 벗어나면 VocabError" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="660" y="480" width="580" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f3" value="panel_C1.txt — 측정 (결정론 SQL)&#10;&#10;패널 수치 (판정은 네가 한다 —&#10;         아래 verdict 는 코드 참고일 뿐):&#10;  n=26 · 효과 미계산&#10;  오늘 노출 미계산&#10;  취약성 오늘: - (충족 None)&#10;  환원 검사: —&#10;  반사실: -&#10;  코드 참고 의견: 판정불가 —&#10;    확증 표본 n=26 &lt; 30&#10;&#10;[자동 프로브 — 이웃 노출 (가격잔차/누적)]&#10;  ... 동일하게 n=26 · 판정불가" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="480" width="580" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pw" value="권한 분리 — 판정자가 못 하는 것&#10;✗ 가설을 만들 수 없다 (env 는 이미 고정 · 사후 골대 이동 차단)      ✗ 수치를 만들 수 없다 (facts·panel 은 코드 산출)&#10;✗ 표본을 고를 수 없다 (SQL 접근 없음)                                    ✓ 할 수 있는 것: 셋을 대조해 판정하고 사유를 쓴다&#10;&#10;그리고 실제로 코드 의견을 뒤집었다 — panel 은 &quot;판정불가(n=26&lt;30)&quot;, 판정자는 &quot;성립(중) — 패널로는 확증 못 하지만 접지·시간항등식·부호 3중 정합&quot;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=16;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="780" width="1820" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="gap" value="영속화 구멍 (현재)&#10;디스크에 남는 것: facts.txt · edges.json · env_*.json · panel_*.txt · result.md(내가 손으로 접은 요약)&#10;남지 않는 것: 판정문 원문 9개 — history://&lt;id&gt; 세션 메모리에만 있고 종료 시 소멸. causeflow.py 에 observability.record 호출 0건 (이전 세대에는 있었다: traces/*.jsonl 에 llm.request/response)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=16;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="920" width="1820" height="100" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="4. 실제 만들어진 그래프" id="p4">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t4" value="실제 만들어진 그래프 — 한미반도체 07-30 · 경쟁가설 9 → 성립 3 · 기각 6 · 판정불가 0" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1700" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="t4b" value="구조는 의도적으로 얕다 — 모든 간선이 방아쇠 → 대상(결과)으로만 향한다. 사이클은 구조상 불가능. 검증은 사이클 검사가 아니라 의도·채널 중복·접지를 본다." style="text;html=1;fontSize=13;align=left;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1500" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="hh1" value="방아쇠 노드 (공유 = 공통요인 후보)" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="60" y="100" width="500" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="hh2" value="채널 (닫힌 어휘 8종 중)" style="text;html=1;fontSize=16;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="700" y="100" width="500" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="hh3" value="대상 = 층 (설명 예산 · 합이 하루)" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="100" width="440" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_ma" value="계열 : 거시&#10;z = +2.9  ✦발화&#10;공유 → A1 · B2 · C3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="60" y="140" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="n_ix" value="계열 : 지수잔차&#10;미발화 (혁신값 미측정)&#10;공유 → A2 · B1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="60" y="330" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="n_fl" value="계열 : 수급&#10;z = +0.7  ✗미발화&#10;공유 → A3 · B3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="60" y="520" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="n_bb" value="점 : SHARE_BUYBACK&#10;접지 ✓ · 창@09:00 공유&#10;→ C1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="60" y="710" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="n_in" value="점 : INSIDER_TRANSACTION&#10;접지 ✓ · 창@09:00 공유&#10;→ C2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="60" y="900" width="300" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tg_m" value="시장  -2.26%p&#10;KODEX200 -2.02% × β1.12" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=15;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1420" y="180" width="420" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="tg_s" value="섹터  -7.85%p&#10;K반도체TOP2+(시장직교) -3.83% × β2.05" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=15;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1420" y="470" width="420" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="tg_i" value="고유  +10.11%p&#10;층을 뺀 잔여" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=15;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1420" y="790" width="420" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="eA1" value="A1  FX환   ✓성립 (중상)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#82b366;fontSize=12;fontColor=#3f6f2f;verticalAlign=bottom;" edge="1" parent="1" source="n_ma" target="tg_m"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eA2" value="A2  π확률   ✗기각 (대조군)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_ix" target="tg_m"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eA3" value="A3  K위험   ✗기각" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_fl" target="tg_m"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="eB1" value="B1  π확률   ◐구조 성립 / 크기 기각" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#d6b656;fontSize=12;fontColor=#9a7d1a;verticalAlign=bottom;" edge="1" parent="1" source="n_ix" target="tg_s"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eB2" value="B2  Q수량   ✗기각 (중복청구)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_ma" target="tg_s"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eB3" value="B3  S주식수   ✗기각" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_fl" target="tg_s"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="eC1" value="C1  S주식수   ✓성립 (표제)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=4;strokeColor=#82b366;fontSize=13;fontStyle=1;fontColor=#3f6f2f;verticalAlign=bottom;" edge="1" parent="1" source="n_bb" target="tg_i"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eC2" value="C2  π확률   ✗기각" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_in" target="tg_i"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eC3" value="C3  K위험   ✗기각 (부호 반증)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;dashed=1;fontSize=12;fontColor=#b85450;verticalAlign=bottom;" edge="1" parent="1" source="n_ma" target="tg_i"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="ctl" value="통제됨 (패널이 이미 뺀 것)&#10;· 시장 — 시장차감 ar&#10;· 산업 — 이중차감 ar_ind" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=12;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1010" width="400" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="warn" value="그래프의 실체 — 정직하게&#10;하네스 경로에서 이 DAG 는 객체가 아니다. edges.json 의 키(A1..C3)와 env_/panel_ 파일 접두사로만 존재한다.&#10;dag.py 의 TargetDAG.merge()(공통요인 자동 검출)·validate()(채널 중복 반려)는 호출되지 않는다 — 위 &quot;공유 → A1·B2·C3&quot; 는 내가 배치 context 문자열에 손으로 적어 넣은 것이다." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=16;fontSize=13;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1120" width="1820" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sem" value="SEM — 판정을 시간 항등식에 되꽂아 β 인공물을 소거한 최종 식&#10;+0.00%  ≈  갭 -2.39%p (밤사이 위험회피 · 시장층 -2.26 이 거의 전부 소진)  +  창@09:00 +4.71%p (자사주 매입)  +  잔여2 -2.16%p (미명명)&#10;층이 인쇄한 섹터 -7.85 / 고유 +10.11 은 β2.05 외삽 회계 쌍 — B1 이 갭 항등식으로 해체했다.   반사실: 그 창이 없었으면 -4.71%" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=16;fontSize=14;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1240" width="1820" height="110" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="5. 의도한 문장 → 증명된 문장" id="p5">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1250" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t5" value="가설이 의도한 문장  →  실제로 증명된 문장 (한미 07-30 · 원문 대조)" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1600" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ch1" value="env.intent — 판정 전에 못 박은 것" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="560" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ch2" value="panel — 코드가 잰 것" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="660" y="80" width="440" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ch3" value="판정문 — 실제로 증명된 문장 (범위 축소 포함)" style="text;html=1;fontSize=16;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="80" width="700" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r1i" value="C1 · 자사주 매입&#10;&#10;&quot;자사주 매입 발표가 물량을 받아&#10; 테마 폭락일에 보합을 방어했다.&#10; 창@09:00 이 +4.71%p 로 하루 최대&#10; 양(+)의 몫이고, 자사주매입 타입의&#10; 과거 패널 방향이 양이면 성립.&quot;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="560" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="r1p" value="n=26 · 효과 미계산&#10;오늘 노출 미계산&#10;코드 의견: 판정불가&#10;   (확증 표본 n=26 &lt; 30)&#10;&#10;자동 프로브도 동일" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="660" y="120" width="440" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="r1v" value="✓ 성립 (중) — 코드 의견을 뒤집음&#10;&#10;증명된 것: 접지 실재 + 창@09:00 이 하루 유일한 양(+) 구간(갭·잔여2 는 둘 다 음) + 가설 부호와 실현 부호 일치, 3중 정합.&#10;반사실: 창 제거 시 -4.71%&#10;&#10;증명 안 된 것 (판정문이 스스로 적음):&#10;· &quot;과거 패널 방향이 양&quot; — intent 의 두 번째 조건은 n=26&lt;30 으로 미검증&#10;· 창 +4.71%p 전부를 C1 에 못 준다 — C2 와 공유, 단독 귀속은 상한&#10;· 고유 +10.11%p 중 46.6% 만 설명 — 나머지 +5.40%p 는 미설명 몫" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="120" width="700" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r2i" value="B1 · 미 반도체 → 테마 직격&#10;&#10;&quot;미 반도체 급락이 K반도체 테마를&#10; 직격해 섹터 몫 -7.85%p 를 만들었다.&#10; 방향·시간 정합이면 성립.&#10; 단 β2.05 는 외삽 의심 — 인공물인지&#10; 정상 변동인지 갈라서 판정하라.&quot;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="560" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="r2p" value="n=0 · 효과 미계산&#10;코드 의견: 판정불가 —&#10;  노출 (지수잔차,변화) 는&#10;  아직 못 잰다&#10;  재는 것: [(가격잔차,누적)&#10;   (가격잔차,변동성)&#10;   (거래량,변화) (거래량,수준)]&#10;&#10;프로브 2개도 n=0" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="660" y="320" width="440" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="r2v" value="◐ 갈라 판정 — 이 체계가 처음 만든 판정 형태&#10;&#10;성립(구조): 미 반도체 -5.3% → 테마⊥ -3.83%, 부호·시간(개장 전 확정 → 갭 반영) 정합. 07-31 경계 판정의 &quot;정상장 유효&quot; 구간.&#10;&#10;기각(크기): 개장 전 확정 정보면 갭에 실려야 하는데 갭 -2.39%p 는 시장층 -2.26%p 로 거의 소진 → 섹터 증분 갭 ≈ -0.13%p.&#10;배정된 -7.85%p 는 β2.05 외삽 인공물이고 고유 +10.11 과 대칭 상쇄되는 회계 쌍. 순 전이 ≈ 0.&#10;&#10;※ 코드의 EdgeVerdict 는 3값 리터럴 — 이 판정을 표현할 수 없다" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="320" width="700" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r3i" value="A1 · 위험회피&#10;&#10;&quot;밤사이 위험회피(VIX +13.45%)가&#10; 코스피 -2.02% 를 눌렀다 —&#10; 미국 몫 [-4.89,-0.34]%p 가 하락을&#10; 포함하고 거시 발화면 성립.&quot;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="530" width="560" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="r3p" value="n=0 · 효과 미계산&#10;코드 의견: 판정불가 —&#10;  계열 '거시' 의 혁신값을&#10;  아직 못 잰다&#10;&#10;프로브 2개도 n=0" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="660" y="530" width="440" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="r3v" value="✓ 성립 (중상) — 단, 근거가 패널이 아니다&#10;&#10;증명된 것: 구간 포함 [-4.89,-0.34] ∋ -2.02% + 거시가 오늘 유일 발화(z=+2.9) + 시간 정합(갭 -2.39 ≈ 시장층 -2.26, 차 -0.13%p) + 같은 날 삼성 셀 독립 재현.&#10;&#10;증명 안 된 것: 효과 점추정 없음 — 패널 n=0. 판정문이 명시: &quot;이 성립은 패널 효과추정이 아니라 층분해·구간포함·발화 z 에 근거한다.&quot;&#10;범위: &quot;왜 시장이 올랐/내렸나&quot; 에만 성립. &quot;왜 이 종목이 시장보다 더/덜 갔나&quot; 에는 무력." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=12;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="530" width="700" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pat" value="세 사례가 같은 모양을 보인다 — 의도는 넓게, 증명은 좁게&#10;&#10;패널이 성립을 만든 간선은 9개 중 0개다. 세 성립 모두 근거가 패널 밖(접지·시간 항등식·구간 포함·부호·재현)에 있다.&#10;이건 강점이자 약점이다. 강점: 패널이 죽어도 결론이 난다 — 판정불가 0/72. 약점: 통계적 확증이 아니라 논증이라 재실행 재현성이 보장되지 않는다.&#10;&#10;그래서 판정문이 스스로 범위를 좁힌다: &quot;확증은 아니다&quot; · &quot;단독 귀속 상한&quot; · &quot;46.6% 만 설명, 나머지는 미설명&quot; · &quot;패널 효과추정이 아니다&quot; · &quot;이 질문에는 무력&quot;.&#10;이 축소 문장들이 result.md 로 접히면서 상당수 사라진다 — 미설명 몫을 숨기지 않는 것이 서술 계약인데, 접는 과정에서 계약이 깨진다." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;spacingLeft=16;fontSize=13;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="720" width="1820" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cnt" value="8셀 72간선 누적 — 성립 19 · 기각 53 · 판정불가 0&#10;코드 워크플로우 대조 (traces/*.jsonl 실측): 27판정 · 성립 3 · 불성립 20 · 판정불가 4(15%) · 기각 사유 전부 빈칸" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=16;fontSize=14;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="920" width="1820" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
