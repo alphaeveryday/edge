@@ -297,6 +297,25 @@ def test_persist_publishes_first_result_and_fans_out_atomically():
     assert (ids["publication_status"], ids["fanout_tenants"]) == ("PUBLISHED", 1)
 
 
+def test_publication_gate_axis_is_the_route_not_the_day():
+    """게이트 EXISTS 는 발화(route) 축이어야 한다(ALPHA-710 게시 정책) — 일 축이면
+    같은 날 두 번째 발화(분봉 트리거)가 전부 DRAFT 로 강등돼 장중 설명이 생성만 되고
+    MTS 에 안 뜬다. 같은 날 다건 PUBLISHED 는 서빙층이 최근 게시 시각 우선으로 흡수한다."""
+    conn = _FakeConn()
+
+    EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)],
+    )
+
+    result_sql, params = next((s, p) for s, p in conn.executed
+                              if s.startswith("INSERT INTO explanation_result"))
+    assert "r.explanation_route_id = %s" in result_sql
+    assert "p.etf_instrument_id = %s AND p.trade_date = %s" not in result_sql
+    assert "rte_1" in params  # EXISTS 파라미터가 이 발화의 route 다
+
+
 def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
     """같은 날 재실행은 DRAFT 보존 + 발번 없음 — as_of 가 런마다 새로워 grain 유니크만으로는
     이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(무효화 후 재발번
