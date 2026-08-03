@@ -1043,6 +1043,8 @@ DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
+# 추출 성공은 event 계보(source_event 7종 + threading)로 **즉시 단건 조립**된다
+# (ALPHA-727, minute/event_assembly.py — assemble-events 와 같은 결정적 ID·스레드).
 # LLM 설정은 tag-news 와 같은 LLM_* env 관례(기본 base_url·model=DeepSeek).
 # realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
 # --max-ticks 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)면 exit 1.
