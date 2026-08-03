@@ -466,7 +466,9 @@ def test_s3_registry_binds_empty_datasets_too():
     from edge_analysis.statics.tools import Catalog
 
     kinds = {k for _n, k, _p in S3_SETS}
-    assert kinds == {"hive", "glob", "ice", "csv"}          # 네 형식 전부 다룬다
+    # 다섯 형식: hive(parquet 파티션) · glob(parquet 패턴) · ice(Iceberg) ·
+    # csv(gz 글롭) · csvfile(단일 비압축 - 항목 사전처럼 .csv 인 것)
+    assert kinds == {"hive", "glob", "ice", "csv", "csvfile"}
     assert len(S3_SETS) == len({n for n, _k, _p in S3_SETS})  # 이름 충돌 없음
     assert all(n.startswith("s3_") for n, _k, _p in S3_SETS)  # RDB 뷰와 안 겹친다
 
