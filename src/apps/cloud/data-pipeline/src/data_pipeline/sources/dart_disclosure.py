@@ -1,7 +1,7 @@
 """OpenDART 국내 공시(disclosure filing) 소스 어댑터 (disclosures raw).
 
 엔드포인트(재무 fnlttSinglAcnt 와 **다른 API**):
-    {base_url}/corpCode.xml?crtfc_key=...                     # 종목코드→corp_code 매핑
+    {base_url}/corpCode.xml?crtfc_key=...                     # 종목코드→corp_code (enrich 전용)
     {base_url}/list.json?crtfc_key=&bgn_de=&end_de=&page_no=&page_count=  # 공시목록
     {base_url}/document.xml?crtfc_key=&rcept_no=              # 공시서류 원본(ZIP)
 
@@ -73,6 +73,24 @@ STATUS_MESSAGES = {
 
 # 키·IP·쿼터·점검은 특정 종목 문제가 아니라 소스 전체 문제라 즉시 중단한다.
 STOP_STATUS_CODES = {"010", "011", "012", "020", "800", "901"}
+
+
+def _as_page_number(value: object) -> int | None:
+    """페이지 번호로 읽히면 양의 int, 아니면 None.
+
+    `int(value)` 로 강제하지 않는다 — `True`·`1.9`·`0`·`-3` 이 전부 통과값이 돼, 이 값을 쓰는
+    쪽(페이지 에코 대조·순회 상한)이 malformed 응답을 정상으로 판정한다(각도 H —
+    coerce-to-passing). 숫자 문자열은 받는다: 벤더가 타입을 바꿔도 **의미가 같으면** 가드가
+    살아 있어야 하고, 타입만으로 가드를 끄면 그때부터 조용히 통과한다.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+        return number if number >= 1 else None
+    return None
 
 
 def _to_dart_date(value: str | None) -> str | None:
@@ -224,11 +242,14 @@ class DartDisclosureSource:
             # 계속 1페이지가 돌아오면, 아래 `seen` dedup 이 반복 행을 조용히 걷어내고 루프는
             # total_page 까지 정상 완주해 **뒷페이지 전량이 빠진 success 런**이 된다 — dedup 이
             # 그 증상을 지우기 때문에 이 확인이 없으면 사후에도 복원되지 않는다.
+            # ⚠️ 타입으로 가드를 끄지 않는다. `isinstance(int)` 일 때만 대조하면 벤더가 `"1"`
+            # 처럼 문자열로 주기 시작하는 순간 이 가드가 **조용히 죽는다** — 지키려던 유실이
+            # 그대로 통과한다. 값이 있는데 페이지 번호로 못 읽히는 것도 응답을 못 믿는 신호다.
             echoed = payload.get("page_no")
-            if isinstance(echoed, int) and not isinstance(echoed, bool) and echoed != page:
+            if echoed is not None and _as_page_number(echoed) != page:
                 self._note_failure(
                     None, None,
-                    f"응답 page_no={echoed} 인데 요청은 page={page} — 목록 절단 가능", page=page,
+                    f"응답 page_no={echoed!r} 인데 요청은 page={page} — 목록 절단 가능", page=page,
                 )
                 return
             rows = payload.get("list")
@@ -299,25 +320,21 @@ class DartDisclosureSource:
                 record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no)
                 record["fetched_at"] = fetched_at
                 yield record
-            # total_page 순회 — 마지막 페이지면 종료. total_page 가 present 인데 온전치 않으면
-            # 몇 페이지인지 몰라 조용히 1페이지에서 멈추면 목록 절단이 은폐된다(Rule 12) —
-            # 감사 기록 후 종료한다. 아예 없으면(None) 단일 페이지로 본다.
+            # total_page 순회 — 마지막 페이지면 종료. 몇 페이지인지 모르는 채 조용히 1페이지에서
+            # 멈추면 목록 절단이 은폐되므로(Rule 12), 읽히지 않으면 감사 기록 후 종료한다.
             #
-            # ⚠️ `int(raw)` + `max(1, …)` 로 강제하지 않는다. 그 조합은 `False`·`0`·`-3`·`1.9`
-            # 같은 malformed 값을 전부 **1페이지**라는 통과값으로 바꿔, 뒷페이지가 실재해도
-            # 실패 기록 없이 종료한다(각도 H — coerce-to-passing). 창 전체가 한 순회라
-            # 1페이지 오판은 100행만 남기고 나머지를 통째로 버린다. 실측상 OpenDART 는 int 를
-            # 주므로(2026-08-03) 양의 정수만 받고 나머지는 드러낸다 — bool 은 int 의 하위형이라
-            # 명시적으로 뺀다.
+            # ⚠️ **결측(None)도 통과시키지 않는다.** 종전엔 "없으면 단일 페이지로 본다"였고 그건
+            # 상한이 corp 당이던 시절엔 대체로 맞았다 — 한 회사의 한 창은 실제로 1페이지다.
+            # 창 전체가 한 순회인 지금은 다르다: total_count=1800 인 응답에서 total_page 만
+            # 빠져도 100행만 읽고 **1,700행을 실패 기록 없이 버린다**. 실측상 OpenDART 는 항상
+            # 준다(2026-08-03) — 없다는 건 응답을 못 믿는다는 뜻이지 1페이지라는 뜻이 아니다.
             raw_total = payload.get("total_page")
-            if raw_total is None:
-                total_page = 1
-            elif isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total >= 1:
-                total_page = raw_total
-            else:
+            total_page = _as_page_number(raw_total)
+            if total_page is None:
                 self._note_failure(
                     None, None,
-                    f"total_page 가 양의 정수가 아님: {raw_total!r} — 목록 절단 가능", page=page,
+                    f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r} — 목록 절단 가능",
+                    page=page,
                 )
                 return
             if page >= total_page:
@@ -395,8 +412,9 @@ class DartDisclosureSource:
     def load_corp_map(self) -> dict[str, dict[str, str]]:
         """corpCode.xml ZIP → {stock_code: {corp_code, corp_name}}. 런 내 메모리 캐시.
 
-        공시 수집(fetch)의 ticker→corp_code 해소에 쓰지만, corp_code enrichment 스텝
-        (ALPHA-491)도 같은 인덱스를 재사용한다 — 그래서 public 이다."""
+        ⚠️ **수집(fetch)은 더 이상 이걸 부르지 않는다** — 시장 전체 목록이 stock_code 를 직접
+        주므로 종목→corp_code 해소가 필요 없다(모듈 docstring). 남아 있는 유일한 소비자는
+        corp_code enrichment 스텝(ALPHA-491)이고, 그래서 여전히 public 이다."""
         if self._corp_map is not None:
             return self._corp_map
         query = urllib.parse.urlencode({"crtfc_key": self.api_key or ""})

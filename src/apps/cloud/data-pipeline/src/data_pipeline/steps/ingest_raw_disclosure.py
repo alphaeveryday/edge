@@ -1,10 +1,11 @@
 """공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존·dedup 없음).
 
-OpenDART 공시목록(list.json)을 corp_code × 날짜창으로 수집해 market 별 ingest_date 파티션
-(수집일) ndjson 으로 raw 존에 append 하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML
-ZIP)을 rcept_no 별 객체로 무변형 저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
+OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집해(종목별 질의 아님 —
+`sources/dart_disclosure.py`) market 별 ingest_date 파티션(수집일) ndjson 으로 raw 존에 append
+하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML ZIP)을 rcept_no 별 객체로 무변형
+저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
 
-⚠️ 뉴스형 판정: 특정 corp 의 날짜창에 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
+⚠️ 뉴스형 판정: 날짜창에 대상 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
 재무제표(ingest_raw_financial)의 "매핑 대상 있는데 0행=error" 가드는 두지 않는다(Rule 7 — 스텝별
 판정). 메타 행은 전부 보존하고, 본문 수집이 실패해도 메타는 남긴다(bronze — 정체성 병합·정정
 판정·corp_code↔ticker bridge 는 후속 canonical 소관).
@@ -94,9 +95,11 @@ def run(
         # try 안 — "결과는 항상 collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
         #
         # ETF 자기 티커는 **출처와 무관하게** 뺀다: holdings 파생분만 걸러선 부족하고, 정적
-        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라
-        # corpCode.xml 에 없어, 남겨두면 매 런 미매핑으로 잡혀 ops.failed_records>0 →
-        # 원장이 영구 INCOMPLETE 가 된다(`ops/wrapper.py`). 결측이 아닌 것을 결측으로 세는 셈.
+        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라 공시가
+        # 나올 수 없다 — 남겨두면 유니버스(planned_symbols)만 부풀려 "수집 대상"과 "수집될 수
+        # 있는 것"이 갈린다. (종전엔 여기에 더해 corpCode.xml 미매핑으로 매 런 잡혀
+        # ops.failed_records>0 → 원장 영구 INCOMPLETE 였다. 그 경로는 소스가 종목별 질의를
+        # 걷어내며 사라졌지만, 유니버스를 사실대로 세는 이유는 그대로 남는다.)
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = log["symbols_excluded_etf"] = 0
         if getattr(source, "universe_from_holdings", False):

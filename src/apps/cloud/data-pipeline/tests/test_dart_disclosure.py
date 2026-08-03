@@ -333,12 +333,15 @@ def test_pagination_follows_total_page(tmp_path):
     assert {r["rcept_no"] for r in records} == {"P1", "P2"}
 
 
-def test_repeated_page_echo_noted_not_silent_loss(tmp_path):
+@pytest.mark.parametrize("echoed", [1, "1"])
+def test_repeated_page_echo_noted_not_silent_loss(tmp_path, echoed):
     # WHY(각도 H): 캐시·벤더 이상으로 page 2 요청에 1페이지가 그대로 돌아오면, rcept_no dedup
     #      이 반복 행을 걷어내고 루프는 total_page 까지 정상 완주해 **뒷페이지 전량이 빠진
     #      success 런**이 된다. dedup 이 증상을 지우므로 이 확인이 없으면 사후에도 복원되지
     #      않는다 — 실 API 는 요청 page_no 를 그대로 에코한다(실측 2026-08-03).
-    page1 = _page([_row("공급계약", rcept_no="P1")], total_page=3)
+    #      ⚠️ 문자열 에코("1")도 함께 고정한다 — 타입으로 가드를 끄면(`isinstance(int)` 일 때만
+    #      대조) 벤더가 문자열로 바꾸는 순간 가드가 조용히 죽는다.
+    page1 = _page([_row("공급계약", rcept_no="P1")], total_page=3, page_no=echoed)
     client = FakeClient(list_pages={1: page1, 2: page1, 3: page1})  # 2·3 도 page_no=1
     source = _source(tmp_path, client, api_key="k")
 
@@ -348,16 +351,21 @@ def test_repeated_page_echo_noted_not_silent_loss(tmp_path):
     assert any("page_no" in f["error"] for f in source.fetch_failures)
 
 
-@pytest.mark.parametrize("bad_total_page", [False, 0, -3, 1.9, "2"])
+@pytest.mark.parametrize("bad_total_page", [False, 0, -3, 1.9, "많음", None, "MISSING"])
 def test_malformed_total_page_noted_not_coerced_to_one(tmp_path, bad_total_page):
     # WHY(각도 H — coerce-to-passing): `max(1, int(raw))` 는 False·0·-3·1.9 를 전부 "1페이지"
     #      라는 통과값으로 바꾼다. 창 전체가 한 순회인 지금 1페이지 오판은 100행만 남기고
-    #      나머지를 통째로 버리면서 실패 기록조차 남기지 않는다. 문자열 "2" 도 받지 않는다 —
-    #      실측상 OpenDART 는 int 를 주므로, 타입이 흔들렸다는 건 응답을 못 믿는다는 뜻이다.
-    client = FakeClient(list_pages={1: {
+    #      나머지를 통째로 버리면서 실패 기록조차 남기지 않는다.
+    #      **결측(None·키 부재)도 통과시키지 않는다**: 종전 "없으면 단일 페이지로 본다"는 상한이
+    #      corp 당이던 시절엔 대체로 맞았지만(한 회사의 한 창은 실제로 1페이지), 지금은
+    #      total_count=1800 인 응답에서 이 필드만 빠져도 1,700행을 조용히 버린다.
+    payload = {
         "status": "000", "message": "정상", "page_no": 1,
-        "list": [_row("공급계약", rcept_no="P1")], "total_page": bad_total_page,
-    }})
+        "list": [_row("공급계약", rcept_no="P1")],
+    }
+    if bad_total_page != "MISSING":  # "MISSING" = 키 자체가 없는 경우
+        payload["total_page"] = bad_total_page
+    client = FakeClient(list_pages={1: payload})
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
