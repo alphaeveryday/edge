@@ -285,7 +285,8 @@ class EdgeReport:
     effect_low: float | None
     today_exposure_pct: float | None
     cond_today: str = ""             # 오늘 셀의 조건 술어별 충족 (예: "수급/누적 p98 충족")
-    cond_satisfied: bool | None = None   # None = 조건 없음 또는 못 잼
+    cond_satisfied: bool | None = None   # None = 조건 없음 (조건이 있는데 못 잰 것은 아래)
+    cond_measurable: bool = True     # False = 조건이 있으나 오늘 못 잼/결측 → 판정불가
     counterfactual: str = ""         # 반사실 쌍 (positivity 통과 시에만 채워진다)
     reduction: str = "—"             # 환원 검사: 일치 · 불일치 · 표본부족 · —(미실행)
     assignable: bool = True          # False = 엣지 검정만 유효, 몫 배정 불가 (전이 등)
@@ -300,8 +301,13 @@ class EdgeReport:
     @property
     def applies_today(self) -> bool:
         """오늘 셀에 몫을 배정할 자격. 성립 + 배정가능 + 조건 미위반 +
-        환원 미불일치 + (계열이면) 오늘 방아쇠 발화."""
+        환원 미불일치 + (계열이면) 오늘 방아쇠 발화.
+
+        **조건을 못 재면 적용이 아니다** (§11): 결측을 충족으로 세면 부재가 성립을
+        위장한다. 실측(042700 07-31 C1): '공매도/수준 오늘 결측' 이 `충족 True` 로
+        찍혀 INUS 조건이 있는 엣지가 조건 검사 없이 몫을 받았다."""
         return (self.verdict == "성립" and self.assignable
+                and self.cond_measurable
                 and self.cond_satisfied is not False
                 and not self.reduction.startswith("불일치")
                 and self.trigger_fired is not False)
@@ -314,7 +320,9 @@ class EdgeReport:
         lo = f"{self.effect_low * 100:+.2f}%" if self.effect_low is not None else "?"
         te = (f" · 오늘 노출 p{self.today_exposure_pct * 100:.0f}"
               if self.today_exposure_pct is not None else "")
-        return f"{self.verdict} (n={self.n}, p={self.p:.3f}, 상위 {hi} vs 하위 {lo}{te})"
+        why = f" — {self.reason}" if self.reason else ""
+        return (f"{self.verdict} (n={self.n}, p={self.p:.3f}, "
+                f"상위 {hi} vs 하위 {lo}{te}){why}")
 
 
 def _unmeasurable(reason: str) -> EdgeReport:
@@ -439,6 +447,23 @@ def _pctile(v: np.ndarray) -> np.ndarray:
     return np.argsort(np.argsort(v)) / max(len(v) - 1, 1)
 
 
+def _panel_rows(lake, sql: str, *, strict: bool = True) -> list:
+    """패널 행을 **결정론 순서로** 가져온다. 순열 검정의 전제다.
+
+    층 안에서 rng.permutation 이 어느 위치에 True 를 놓느냐가 곧 어느 ar 이
+    처리군이 되느냐다. SQL 에 ORDER BY 가 없어 DuckDB 가 순서를 바꾸면 SEED 를
+    고정해도 p 가 흔들린다 - 실측 재실행에서 C2 가 p=0.008 → 0.004 로 임계
+    0.0056 을 넘나들었다 (§13 재실행 결정론 위반). 정렬은 (날짜, 종목) 이다.
+
+    strict=False 는 격자용: 결과변수만 요구하고 피처 결측은 열별로 뒤에서 가린다
+    (한 열이 NULL 이라고 다른 노출의 표본까지 죽일 이유가 없다).
+    """
+    rows = lake.sql(sql)
+    keep = ((lambda r: all(v is not None for v in r[2:])) if strict
+            else (lambda r: r[2] is not None))
+    return sorted((r for r in rows if keep(r)), key=lambda r: (str(r[1]), str(r[0])))
+
+
 def _stratified_p(ar: np.ndarray, hi: np.ndarray, dates: np.ndarray,
                   sign: float) -> float:
     """사건일 층화 순열 귀무의 단측 p. SEED 고정 - 재실행 결정론."""
@@ -473,7 +498,8 @@ def _two_sided(p1: float) -> float:
 
 
 def edge_test(lake, t: HypothesisTuple, day: str,
-              cell_instrument_id: str = "", layer: str = "고유") -> EdgeReport:
+              cell_instrument_id: str = "", layer: str = "고유",
+              m_tests: int = 1) -> EdgeReport:
     """튜플 → 패널 수치. 표본이 얇으면 판정불가 — **다른 표본을 찾으러 가지 않는다.**
 
     엣지 존재는 언제나 **전체 패널**로 검정한다. 조건은 표본을 쪼개지 않고
@@ -518,7 +544,7 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                 trigger_note = (f"오늘 방아쇠: {t.trigger.ident} z={z:+.1f} → "
                                 + ("발화" if trigger_fired else f"미발화 (|z| < {Z_ANOM})"))
 
-    raw = [row for row in lake.sql(sql) if all(v is not None for v in row[2:])]
+    raw = _panel_rows(lake, sql)
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
                           reason=f"패널 표본 n={len(raw)} < {MIN_N} - 백필이 필요하다")
@@ -546,7 +572,21 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     sign = float(t.sign)
     p = _two_sided(_stratified_p(ar, hi, dates, sign))
-    verdict = edge_gate(len(ar), p)
+    # 셀 안에서 m 개를 동시에 검정한다 - α 를 나눠야 FWER 이 0.05 에 묶인다.
+    # 산문이 Bonferroni 를 주장하면 게이트가 실제로 나눠야 한다 (선언 = 배선).
+    verdict = edge_gate(len(ar), p, alpha=ALPHA / max(m_tests, 1))
+    # 부호는 튜플의 **주장**이다. 양측 p 가 작아도 방향이 반대면 그 주장은 기각이다 -
+    # 양측 게이트만 세우면 "효과는 있다(반대쪽으로)" 가 성립으로 찍힌다.
+    # 실측(042700 07-31): 9간선 중 A2·A3·C3 셋이 부호 반대인데 p=0.000 으로 성립이었다.
+    # 방향 채굴 방지(17차)는 부호를 **사후에 고르는** 것을 막는 것이고, 여기 부호는
+    # 검정 전에 튜플에 박혀 있다 - 둘은 충돌하지 않는다.
+    wrong_way = (eff_hi - eff_lo) * sign <= 0
+    if verdict == "성립" and wrong_way:
+        verdict = "불성립"
+        dir_note = (f"방향 반대 - 가설 부호{t.sign:+d} 인데 상위−하위 "
+                    f"{(eff_hi - eff_lo) * 100:+.2f}%p (p={p:.3f} 은 반대쪽 유의)")
+    else:
+        dir_note = ""
 
     # ── 조건 = 조절자. 표본을 쪼개지 않고 충족·미충족의 효과 차만 보고한다 ──
     mask = np.ones(len(ar), dtype=bool)
@@ -587,6 +627,9 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     today_pct = None
     cond_bits: list[str] = []
     cond_sat: bool | None = None
+    # 조건이 있는데 오늘 셀에서 못 재면 판정불가다 (§11) - 결측을 충족으로 세지 않는다.
+    # 초기값은 '조건 없음' 만 True: 오늘 행이 아예 없으면 조건은 검사된 적이 없다.
+    cond_meas = not t.conditions
     if cell_instrument_id:
         row = lake.sql((_base(day) + _TODAY_ROW).format(iid=cell_instrument_id, day=day, cols=col_sql))
         if row and row[0][0] is not None:
@@ -596,29 +639,32 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                 dx = x_today - float(x.mean())
                 contrib = tau * dx
                 ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
-            sat = True
+            sat, measurable = True, True
             for v in t.conditions:
                 key = v.key
                 if key not in feats:
                     cond_bits.append(f"{key} 못잼")
+                    measurable = False
                     continue
                 # cols 의 이름 순서 = _TODAY_ROW 반환 컬럼 순서. 이름으로 찾는다.
                 idx = [k for k, _ in cols].index(key)
                 tv = row[0][idx]
                 if tv is None:
                     cond_bits.append(f"{key} 오늘 결측")
+                    measurable = False
                     continue
                 pv = float((feats[key] <= float(tv)).mean())
                 ok = (pv >= v.percentile) if v.comparator == ">=" else (pv <= v.percentile)
                 sat &= bool(ok)
                 cond_bits.append(f"{key} p{pv * 100:.0f} {'충족' if ok else '미충족'}")
             cond_sat = sat if t.conditions else None
+            cond_meas = measurable
 
     # ── 환원 검사 (§8): 오늘 같은 타입의 횡단면이 패널과 같은 방향인가 ──
     reduction = "—"
     if t.trigger.kind == "점":
         tsql = (_base(day, "23:59:59") + _POINT_PANEL).format(etype=t.trigger.ident, cmp="=", day=day, cols=col_sql, y=y)
-        trows = [r for r in lake.sql(tsql) if all(v is not None for v in r[2:])]
+        trows = _panel_rows(lake, tsql)
         if len(trows) < MIN_TODAY:
             reduction = f"표본부족 (오늘 n={len(trows)})"
         else:
@@ -637,10 +683,12 @@ def edge_test(lake, t: HypothesisTuple, day: str,
 
     return EdgeReport(verdict, len(ar), p, eff_hi, eff_lo, today_pct,
                       cond_today=" · ".join(cond_bits), cond_satisfied=cond_sat,
+                      cond_measurable=cond_meas,
                       counterfactual=counterfactual, reduction=reduction,
                       contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
                       moderation=moderation,
-                      trigger_fired=trigger_fired, trigger_note=trigger_note)
+                      trigger_fired=trigger_fired, trigger_note=trigger_note,
+                      reason=dir_note)
 
 
 def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") -> EdgeReport:
@@ -665,7 +713,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") ->
     rel = _REL_EXPR.get(t.exposure.ident) or _REL_LINK.format(ident=t.exposure.ident)
     sql = (_base(day) + _RELATION_PANEL).format(
         etype=t.trigger.ident, day=day, cols=col_sql, rel=rel, y=LAYER_Y[layer])
-    raw = [r for r in lake.sql(sql) if all(v is not None for v in r[2:])]
+    raw = _panel_rows(lake, sql)
     if len(raw) < MIN_N:
         return EdgeReport("판정불가", len(raw), None, None, None, None,
                           reason=f"전이 패널 n={len(raw)} < {MIN_N}")
@@ -722,7 +770,7 @@ def grid_screen(lake, day: str, types: list[str],
     for etype in types:
         sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day,
                                                  cols=all_cols, y=LAYER_Y["고유"])
-        raw = [r for r in lake.sql(sql) if r[2] is not None]
+        raw = _panel_rows(lake, sql, strict=False)
         if len(raw) < MIN_N:
             out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})
             continue

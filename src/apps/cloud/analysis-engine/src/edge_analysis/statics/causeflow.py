@@ -345,15 +345,18 @@ def _prep_init(ticker: str, iid: str, day: str) -> None:
     _W.update(lake=CausalLake(), ticker=ticker, iid=iid, day=day)
 
 
-def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
-    """(eid, env_json, out_dir) → 심사 + 패널 파일. 반려는 사유 문자열로 돌려준다."""
+def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
+    """(eid, env_json, out_dir, m) → 심사 + 패널 파일. 반려는 사유 문자열로 돌려준다.
+
+    m = 이 셀에서 동시에 검정하는 간선 수. Bonferroni 임계가 패널 텍스트에 실린다.
+    """
     import json as _json
     from pathlib import Path
 
     from .hypothesize import screen_tuples
     from .judge import panel_text
     from .paneltest import FEATURES
-    eid, env_s, out_dir = item
+    eid, env_s, out_dir, m = item
     env = _json.loads(env_s)
     valid, rej = screen_tuples(env.get("hypotheses") or [],
                                event_types=env.get("event_types") or [],
@@ -364,7 +367,7 @@ def _prep_one(item: tuple[str, str, str]) -> tuple[str, str]:
         return eid, "REJ " + " | ".join(rej)
     (Path(out_dir) / f"env_{eid}.json").write_text(env_s, encoding="utf-8")
     txt = panel_text(_W["lake"], valid[0], _W["iid"], _W["day"],
-                     layer=env.get("layer") or "고유")
+                     layer=env.get("layer") or "고유", m_tests=m)
     (Path(out_dir) / f"panel_{eid}.txt").write_text(txt, encoding="utf-8")
     return eid, "ok"
 
@@ -453,7 +456,8 @@ def _cli() -> None:
                             json.dumps(env, ensure_ascii=False), encoding="utf-8")
                         (d / f"panel_{eid}.txt").write_text(
                             panel_text(lake, valid[0], q["iid"], q["day"],
-                                       layer=env.get("layer") or "고유"),
+                                       layer=env.get("layer") or "고유",
+                                       m_tests=len(edges)),
                             encoding="utf-8")
                 print(f"DONE {q['op']} {_t.time() - t0:.0f}s", flush=True)
             except Exception as e:                          # noqa: BLE001 - 서버는 안 죽는다
@@ -466,7 +470,7 @@ def _cli() -> None:
         tkr, iid, day, d = sys.argv[2], sys.argv[3], sys.argv[4], pathlib.Path(sys.argv[5])
         edges = json.loads(pathlib_read(sys.argv[6]))
         d.mkdir(parents=True, exist_ok=True)
-        items = [(eid, json.dumps(env, ensure_ascii=False), str(d))
+        items = [(eid, json.dumps(env, ensure_ascii=False), str(d), len(edges))
                  for eid, env in edges.items()]
         bad = 0
         with ProcessPoolExecutor(max_workers=min(4, len(items)),

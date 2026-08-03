@@ -308,7 +308,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=list(FEATURES),
                                    series_families=anomalous)
-        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id))
+        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
+                                 m_tests=len(tuples)))
                    for t in tuples]
 
     # 몫 배정: 성립 + 오늘 조건 충족 + 환원 미불일치 (INUS 의 적용 판정).
@@ -333,6 +334,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     edges = []
     for t, r in reports:
         why = ("" if r.applies_today else
+               "조건 측정불가 - 판정불가 (부재는 충족이 아니다)" if not r.cond_measurable else
                "조건 미충족 (INUS)" if r.cond_satisfied is False else
                "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
                "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
@@ -385,7 +387,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         cond = " ∧ ".join(f"{v.ident}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.conditions) or "—"
         apply_say = ("오늘 적용" if r.applies_today else
-                     "오늘 부적용 - " + ("조건 미충족" if r.cond_satisfied is False else
+                     "오늘 부적용 - " + ("조건 측정불가 (판정불가)" if not r.cond_measurable else
+                                        "조건 미충족" if r.cond_satisfied is False else
                                         "환원 불일치" if r.reduction.startswith("불일치") else
                                         "방아쇠 미발화" if r.trigger_fired is False else
                                         "패널 미성립"))

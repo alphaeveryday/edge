@@ -711,3 +711,89 @@ def test_rolling_betas_are_nan_guarded():
         blk = sql[:sql.index(f"AS {col}")]
         assert blk.rstrip().endswith("END"), f"{col} 이 isfinite 가드 밖에 있다"
     assert sql.count("isfinite(regr_slope") == 3
+
+
+def test_missing_condition_is_not_satisfaction():
+    """결측을 충족으로 세면 부재가 성립을 위장한다 (§11).
+
+    실측(042700 07-31): '공매도/수준 오늘 결측' 이 `충족 True` 로 찍혀 INUS 조건이
+    붙은 엣지가 조건 검사 없이 몫을 받았다. 조건이 있는데 못 재면 부적용이다.
+    """
+    from edge_analysis.statics.paneltest import EdgeReport
+    ok = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9, cond_satisfied=True)
+    assert ok.applies_today
+    blind = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9,
+                       cond_today="공매도/수준 오늘 결측", cond_measurable=False)
+    assert not blind.applies_today, "조건 측정불가인데 몫을 받았다"
+    none_cond = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9)
+    assert none_cond.applies_today, "조건 없는 엣지는 조건 때문에 죽지 않는다"
+
+
+def test_bonferroni_threshold_is_stated_not_just_claimed():
+    """산문이 Bonferroni 를 주장하면 게이트가 실제로 α 를 나눠야 한다 (선언 = 배선).
+
+    실측: 단순화 커밋에서 m_tests 를 지우고 산문의 '셀 Bonferroni α=0.05/9' 주장만
+    남겼다. 검정자는 임계를 모르니 0.05 로 재고, 보정은 허구가 된다.
+    """
+    from edge_analysis.statics.gates import edge_gate
+    from edge_analysis.statics.vocab import ALPHA
+    assert edge_gate(400, 0.02) == "성립"                          # m=1
+    assert edge_gate(400, 0.02, alpha=ALPHA / 9) == "불성립"       # m=9 → 0.0056
+    assert edge_gate(400, 0.004, alpha=ALPHA / 9) == "성립"
+
+
+def test_opposite_direction_is_rejection_not_confirmation():
+    """양측 p 가 작아도 방향이 반대면 그 가설은 기각이다.
+
+    부호는 튜플의 **주장**이고 검정 전에 박혀 있다. 양측 게이트만 세우면
+    "효과는 있다(반대쪽으로)" 가 성립으로 찍힌다 - 실측(042700 07-31)에서
+    9간선 중 셋(A2·A3·C3)이 p=0.000 인데 부호가 반대였다.
+
+    17차의 방향 채굴 방지는 부호를 **사후에 고르는** 것을 막는 것이므로 충돌하지 않는다.
+    """
+    import numpy as np
+
+    from edge_analysis.statics.paneltest import _two_sided
+
+    # 반대쪽으로 강하게 유의한 관측: 단측 p1 이 1 에 가깝고 양측은 작다
+    assert _two_sided(0.999) < 0.01, "반대쪽 유의가 양측에서 작은 p 로 나온다"
+    assert _two_sided(0.001) < 0.01, "같은쪽 유의도 작은 p"
+    # 그래서 p 만으로는 두 경우를 구분할 수 없다 - 방향을 따로 봐야 한다
+    hi, lo, sign = -0.0068, -0.0026, 1
+    assert (hi - lo) * sign <= 0, "이 관측은 부호+1 주장과 어긋난다"
+    assert not np.isclose(hi, lo)
+
+
+def test_panel_rows_are_order_deterministic():
+    """순열 검정은 행 순서에 의존한다 - SQL 순서가 흔들리면 SEED 를 고정해도 p 가 흔들린다.
+
+    실측: 같은 CLI 재실행에서 C2 가 p=0.008 → 0.004 로 임계 0.0056 을 넘나들었다.
+    같은 표본에서 판정이 뒤집히면 그건 검정이 아니다 (§13).
+    """
+    import numpy as np
+
+    from edge_analysis.statics.paneltest import _panel_rows, _stratified_p
+
+    base = [("i2", "2026-01-02", 0.01, 1.0), ("i1", "2026-01-01", -0.02, 2.0),
+            ("i1", "2026-01-02", 0.03, 3.0), ("i2", "2026-01-01", 0.00, 4.0)]
+
+    class L:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def sql(self, q):
+            return list(self.rows)
+
+    a = _panel_rows(L(base), "x")
+    b = _panel_rows(L(list(reversed(base))), "x")
+    assert a == b, "행 순서가 다르면 다른 패널이 된다"
+    assert [r[1] for r in a] == sorted(r[1] for r in base)
+
+    # 같은 표본, 뒤섞인 입력 순서 → 같은 p
+    def p_of(rows):
+        ar = np.array([r[2] for r in rows])
+        dates = np.array([r[1] for r in rows])
+        hi = np.array([r[3] for r in rows]) >= 3.0
+        return _stratified_p(ar, hi, dates, 1.0)
+
+    assert p_of(a) == p_of(b)

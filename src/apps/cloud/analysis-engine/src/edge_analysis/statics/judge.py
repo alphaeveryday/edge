@@ -23,6 +23,7 @@ from .dag import CEdge, Finding
 from .fsm import EMIT, GROUND, MENUS, SCREEN, Machine
 from .hypothesize import explore
 from .tools import Catalog
+from .vocab import ALPHA
 
 JUDGE_MENUS = {
     GROUND: MENUS[GROUND],
@@ -80,7 +81,8 @@ class JudgeCatalog(Catalog):
         return panel_text(self.lake, self.tup, self.instrument_id, self.day)
 
 
-def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유") -> str:
+def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유",
+               m_tests: int = 1) -> str:
     """타입 수준 패널의 **수치만**. 판정은 검정자가 한다 - 코드는 의견을 내지 않는다.
 
     이전에는 코드 게이트의 결론('코드 참고 의견: 판정불가 - n=26 < 30')을 같이
@@ -88,16 +90,28 @@ def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유") -
     남아 무엇이 판정인지 흐렸다. 수치는 코드가, 판정은 검정자가 - 자리를 나눈다.
     """
     from .paneltest import edge_test
-    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id, layer=layer)
+    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id, layer=layer,
+                  m_tests=m_tests)
     rows = [
         f"n={r.n}" + (f" · p={r.p:.3f}" if r.p is not None else " · p 미계산"),
+        # 임계는 판정이 아니라 규약이다 - 셀 안 동시검정 m 개를 α 로 나눈 값.
+        # 이걸 안 실으면 검정자가 0.05 로 재고, 산문이 주장하는 Bonferroni 는 허구가 된다.
+        f"양측 p 임계 {ALPHA / max(m_tests, 1):.4f} (α=0.05 / 셀 동시검정 m={m_tests})",
         (f"노출 상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
          if r.effect_high is not None else "효과 미계산"),
         (f"오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
          if r.today_exposure_pct is not None else "오늘 노출 미계산"),
     ]
+    # 방향 일치는 판정이 아니라 결정론적 사실이다 - 부호는 튜플에 이미 박혀 있다.
+    # 이걸 안 실으면 검정자가 양측 p 만 보고 "반대쪽으로 유의" 를 성립으로 읽는다.
+    if r.effect_high is not None:
+        gap = (r.effect_high - r.effect_low) * tup.sign
+        rows.append(f"방향: 가설 부호{tup.sign:+d} · 상위−하위×부호 {gap * 100:+.2f}%p "
+                    + ("→ 일치" if gap > 0 else "→ **반대** (주장과 어긋난다)"))
     if r.cond_today:
-        rows.append(f"조건 오늘: {r.cond_today} (충족 {r.cond_satisfied})")
+        rows.append(f"조건 오늘: {r.cond_today} "
+                    + ("(측정불가 → 판정불가. 결측은 충족이 아니다)"
+                       if not r.cond_measurable else f"(충족 {r.cond_satisfied})"))
     if r.moderation:
         rows.append(r.moderation)
     if r.counterfactual:
@@ -107,7 +121,7 @@ def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유") -
     if r.trigger_note:
         rows.append(r.trigger_note)
     if r.reason:
-        rows.append(f"측정 불가: {r.reason}")
+        rows.append(f"사유: {r.reason}")
     return "\n".join("  " + x for x in rows)
 
 
