@@ -80,10 +80,16 @@ class JdbcAnalysisWriteRepositoryIntegrationTest extends CloudPostgresIntegratio
 				""");
 		// 증권사C 는 게시 후 온보딩된 테넌트 — res-w3 의 NEW 를 받은 적이 없어 무효화
 		// 발번 대상에서 제외돼야 한다(원본 없는 INVALIDATION = 가짜 gap 신호 방지).
+		// 단 C 에도 **다른 결과**(res-w1)의 NEW 는 시드한다 — 발번 제한이 "아무 NEW"가
+		// 아니라 "그 결과의 NEW" 상관 조건임을 테스트가 실제로 거부할 수 있게(Rule 9).
 		jdbc.update("""
 				INSERT INTO tenant (tenant_name, environment, status)
 				VALUES ('증권사A', 'DEV', 'ACTIVE'), ('증권사B', 'DEV', 'ACTIVE'),
 				       ('증권사C', 'DEV', 'ONBOARDING')
+				""");
+		jdbc.update("""
+				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, explanation_result_id)
+				SELECT tenant_id, 1, 'NEW', 'res-w1' FROM tenant WHERE tenant_name = '증권사C'
 				""");
 		// 테넌트별 cursor 대열이 서로 다르게 시작하도록 기존 NEW 를 비대칭으로 시드
 		jdbc.update("""

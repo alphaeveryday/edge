@@ -30,8 +30,8 @@ public interface AnalysisWriteRepository {
 	boolean restore(String runId, String reason, SessionOperator actor);
 
 	/**
-	 * 무효화(ALPHA-440) — 게시된 결과를 PUBLISHED→WITHDRAWN 전이하고, 전 테넌트에
-	 * INVALIDATION 전달 레코드를 발번하며, 감사에 append 한다(한 트랜잭션). 이 메서드만은
+	 * 무효화(ALPHA-440) — 게시된 결과를 PUBLISHED→WITHDRAWN 전이하고, 그 결과의 NEW 를
+	 * 받은 테넌트에 INVALIDATION 전달 레코드를 발번하며, 감사에 append 한다(한 트랜잭션). 이 메서드만은
 	 * explanation_result·tenant_delivery 를 직접 쓴다 — 소유자 합의는
 	 * event-bundle-schema.md "fan-out 발번기" 절이 근거다(오버레이 3종과 달리 테넌트로
 	 * 전파되는 실 전이라 오버레이로 표현할 수 없다).
