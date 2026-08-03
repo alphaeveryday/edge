@@ -340,7 +340,7 @@ variable "minute_session_stop_expression" {
 }
 
 variable "minute_session_dataset" {
-  description = "스케일 오케스트레이션이 계획·드레인할 세션 dataset. 상주 서비스 3종이 가격 레인이라 price_minute 고정"
+  description = "스케일 오케스트레이션이 계획·드레인할 세션 dataset. 상주 서비스의 세션 축이 가격 레인이라 price_minute 고정(뉴스 소비자도 이 세션 수명에 결속)"
   type        = string
   default     = "price_minute"
 }

@@ -23,8 +23,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
-    # 빌드(~5분) + 상주 서비스 3종 롤아웃 대기(각 10분 상한, 순차 최악 30분) 수용
-    timeout-minutes: 45
+    # 빌드(~5분) + 상주 서비스 5종 롤아웃 대기(각 10분 상한, 순차 최악 50분) 수용
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
 
@@ -76,14 +76,57 @@ jobs:
           cluster="edge-dev-worker"
           for svc in edge-dev-data-pipeline-price-worker \
                      edge-dev-data-pipeline-relay \
-                     edge-dev-data-pipeline-price-consumer; do
+                     edge-dev-data-pipeline-price-consumer \
+                     edge-dev-data-pipeline-news-consumer-realtime \
+                     edge-dev-data-pipeline-news-consumer-backfill; do
             # 이 블록은 opt-in 게이트 뒤라 서비스·권한이 이미 서 있다는 선언 위에서
             # 돈다 — 명령 실패(AccessDenied·만료·스로틀)도, ACTIVE 가 아닌 상태도
-            # 전부 배선 결함이므로 삼키지 않는다(그 둘을 skip 으로 접으면 옛 이미지를
+            # 배선 결함이므로 삼키지 않는다(그 둘을 skip 으로 접으면 옛 이미지를
             # 도는 서비스가 초록으로 지나간다).
-            read -r status desired <<<"$(aws ecs describe-services \
+            # 예외 하나: **아직 안 만들어진 서비스**(describe 결과 없음)는 경고-스킵한다.
+            # 게이트는 불리언 하나라 "기존 서비스 배포됨"과 "새로 추가된 서비스까지 apply
+            # 됨"을 구분하지 못하는데, 이미지 CD 와 terraform-apply 는 순서 보장이 없어
+            # 서비스 목록이 늘어나는 PR 마다 CD 가 apply 를 앞지르는 창이 생긴다
+            # (deploy-order-splits-the-pr). 생성 전 스킵은 무해하다 — desired 0 스킵과
+            # 같은 이유로, 첫 스케일업(force-new-deployment)이 최신 이미지를 당긴다.
+            # ⚠️ describe 자체의 실패 중 **AccessDenied 만** 같은 창이다 — 배포 역할의
+            # DescribeServices 는 terraform output(state 의 서비스 ARN)으로 스코프돼,
+            # apply 선착 전의 새 서비스는 MISSING 이 아니라 AccessDenied 로 온다.
+            # set -e 아래서 그대로 죽이면 MISSING 분기가 영영 안 밟히고 배포 전체가
+            # 실패한다. 그 외 실패(스로틀·자격 만료·서버 오류)는 스킵하면 안 된다 —
+            # 기존 서비스가 옛 이미지를 도는 채 워크플로가 초록으로 끝난다(봇 P2).
+            # 스킵 자격은 **이번에 새로 정의된 서비스 × 유예 기한 내**로만 한정한다(봇 P2
+            # 2건). 기존 3종의 MISSING·AccessDenied 는 apply 경합이 아니라 삭제·오명명·
+            # IAM 회귀라 스킵하면 옛 이미지를 도는 채 초록으로 끝난다. 유예는 만료 단언으로
+            # 회수한다(deploy-order-splits-the-pr 관례) — 기한 뒤에는 신규 서비스도 apply
+            # 가 이미 착지했어야 하므로 전 서비스 동일하게 에러다.
+            grace_new_svcs=" edge-dev-data-pipeline-news-consumer-realtime edge-dev-data-pipeline-news-consumer-backfill "
+            grace_until="2026-08-10" # ALPHA-713 apply 착지 유예 — 만료 후 이 분기 제거 대상
+            can_skip=false
+            if [[ "${grace_new_svcs}" == *" ${svc} "* ]] && [[ "$(date -u +%F)" < "${grace_until}" ]]; then
+              can_skip=true
+            fi
+            describe_err="$(mktemp)"
+            if ! described="$(aws ecs describe-services \
               --cluster "${cluster}" --services "${svc}" \
-              --query 'services[0].[status,desiredCount]' --output text)"
+              --query 'services[0].[status,desiredCount]' --output text 2>"${describe_err}")"; then
+              if grep -q "AccessDenied" "${describe_err}" && [ "${can_skip}" = "true" ]; then
+                echo "::warning::${svc} 조회가 AccessDenied — terraform-apply 선착 전(새 서비스가 배포 역할 정책에 아직 없음)이라 유예 스킵한다. 생성 후 첫 스케일업이 최신 이미지를 당긴다"
+                continue
+              fi
+              cat "${describe_err}" >&2
+              echo "::error::${svc} describe 실패 — 유예 대상(신규 서비스 × ${grace_until} 전)이 아니므로 배선·자격 결함이다"
+              exit 1
+            fi
+            read -r status desired <<<"${described}"
+            if [ "${status}" = "None" ] || [ -z "${status}" ]; then
+              if [ "${can_skip}" = "true" ]; then
+                echo "::warning::${svc} 가 아직 없다 — terraform-apply 선착 전이라 유예 스킵한다(생성 후 첫 스케일업이 최신 이미지를 당긴다)"
+                continue
+              fi
+              echo "::error::${svc} 가 없다 — 기존 서비스의 MISSING 은 삭제·오명명이다(유예 만료 후의 신규 서비스면 apply 가 착지하지 않은 것)"
+              exit 1
+            fi
             if [ "${status}" != "ACTIVE" ]; then
               echo "::error::${svc} 가 ACTIVE 가 아니다(status=${status}) — MINUTE_SERVICES_DEPLOYED 가 켜져 있는데 서비스가 없다면 배선이 어긋난 것이다"
               exit 1

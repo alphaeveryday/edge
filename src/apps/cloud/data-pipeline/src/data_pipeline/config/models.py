@@ -522,6 +522,31 @@ class MinutePriceConsumerConfig(BaseModel):
     max_attempts: int = 5
 
 
+class MinuteNewsConsumerConfig(BaseModel):
+    """1분 뉴스 추출 Consumer 상주 설정 — `news-consumer` 스텝만 쓴다(ALPHA-713).
+
+    kernel 수치는 여기서 검증하지 않는다 — `minute.consumer.ConsumerConfig.__post_init__`
+    가 조합 검증의 정본이다(MinutePriceConsumerConfig 와 같은 단서). LLM 자격증명은
+    이 섹션이 아니라 env(`LLM_API_KEY` 등, tag-news 관례)다 — 커밋되는 TOML 금지.
+
+    queue_url 이 **하나**인 이유: realtime·backfill 은 핸들러가 같고 큐만 달라,
+    같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다(커널 무수정 — ConsumerConfig 동형).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_url: NonBlankStr
+    batch_size: int = 10
+    wait_seconds: int = 20
+    visibility_seconds: int = 300
+    heartbeat_seconds: int = 60
+    max_concurrency: int = 1
+    lease_seconds: int = 600
+    retry_base_seconds: int = 5
+    retry_max_seconds: int = 900
+    max_attempts: int = 5
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 

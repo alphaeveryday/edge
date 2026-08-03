@@ -437,3 +437,94 @@ class NewsExtractionHandler:
             "attempt": attempt,
             "result": result,
         }
+
+
+def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
+    """상주 뉴스 추출 Consumer 진입점 — `python -m data_pipeline.run news-consumer` (ALPHA-713).
+
+    price_consumer_cli 와 같은 계약: SIGTERM/SIGINT 는 진행 중 배치를 끝내고 멈추며,
+    DB 오류는 잡지 않는다 — 전파해 task 를 죽이면 ECS 가 재기동하고 claim 은 lease
+    만료로 회수된다. realtime·backfill 은 핸들러가 같고 큐만 달라, 같은 스텝을
+    `DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL` 만 바꿔 서비스 2개로 띄운다.
+
+    LLM 자격증명은 env(`LLM_API_KEY` 등, tag-news 관례)다 — llm.py 는 env 를 모르고,
+    DATA_PIPELINE_* 는 수집 설정 네임스페이스라 LLM 이 거기 안 든다(run.py tag-news 단서).
+    `--max-ticks` 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가
+    있으면 1 로 끝난다.
+    """
+    import os
+    import signal
+    import socket
+    from datetime import datetime, timezone
+
+    from ..lake.storage import make_storage
+    from ..tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
+    from .consumer import ConsumerConfig, MinuteConsumer, SqsQueue
+    from .jobs import JobLedger
+
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — news-consumer 는 job 원장·기사 정본 필수(DATA_PIPELINE_DB__* 주입)")
+    options = settings.minute_news_consumer
+    if options is None:
+        raise SystemExit(
+            "minute_news_consumer 설정 없음 — 큐 URL 필수"
+            "(DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL 주입)"
+        )
+    # 공백-only 도 결손이다 — 통과시키면 기동은 되고 job 마다 잘못된 인증으로 llm_error
+    # 재시도가 예산을 태워 DEAD 를 쌓는다(price-worker 토스 자격증명 가드와 같은 축).
+    api_key = os.environ.get("LLM_API_KEY", "").strip()
+    if not api_key:
+        raise SystemExit("LLM_API_KEY 가 없다 — news-consumer 는 추출 LLM 호출이 필수다")
+    complete_fn = openai_compatible_complete_fn(
+        api_key=api_key,
+        base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+        model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+    )
+    handler = NewsExtractionHandler(
+        storage=make_storage(settings.storage),
+        complete_fn=complete_fn,
+        article_reader=PgArticleReader(db=settings.db),
+        job_identities=JobLedger(db=settings.db),
+    )
+    consumer = MinuteConsumer(
+        jobs=JobLedger(db=settings.db),
+        queue=SqsQueue(wait_seconds=options.wait_seconds),
+        handler=handler,
+        config=ConsumerConfig(
+            consumer_id=f"nc-{socket.gethostname()}-{os.getpid()}",
+            kind="news",
+            queue_url=options.queue_url,
+            batch_size=options.batch_size,
+            wait_seconds=options.wait_seconds,
+            visibility_seconds=options.visibility_seconds,
+            heartbeat_seconds=options.heartbeat_seconds,
+            max_concurrency=options.max_concurrency,
+            lease_seconds=options.lease_seconds,
+            retry_base_seconds=options.retry_base_seconds,
+            retry_max_seconds=options.retry_max_seconds,
+            max_attempts=options.max_attempts,
+        ),
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(received, lambda *_: consumer.request_stop())
+    logger.info("news-consumer 시작: queue=%s tagger=%s ontology=%s",
+                options.queue_url, TAGGER_VERSION, ontology_version())
+    ticks = 0
+    totals: dict[str, int] = {}
+    try:
+        while max_ticks is None or ticks < max_ticks:
+            counter = consumer.tick(datetime.now(timezone.utc))
+            ticks += 1
+            for key, value in counter.items():
+                totals[key] = totals.get(key, 0) + value
+            if counter.get("stopped"):
+                logger.info("news-consumer 종료(SIGTERM) — %d tick, %s", ticks, totals)
+                # 상주 모드의 SIGTERM 은 정상 종료다. bounded 는 확인을 못 끝낸 것.
+                return 0 if max_ticks is None else 1
+    finally:
+        consumer.close()  # in-flight 를 끝까지 — 실행은 했는데 기록이 없는 상태 방지
+    # 배선 오류 신호는 성공으로 접지 않는다(price_consumer_cli 와 같은 판정)
+    wiring_errors = sum(totals.get(key, 0)
+                       for key in ("poison", "misrouted", "orphan", "ahead"))
+    logger.info("news-consumer 종료(max-ticks %d) — %s", ticks, totals)
+    return 1 if wiring_errors else 0

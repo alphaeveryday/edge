@@ -1,6 +1,6 @@
 """1분 세션 스케일 오케스트레이션 (ALPHA-712).
 
-상주 서비스 3종(price-worker·relay·price-consumer)은 `desired_count = 0` +
+상주 서비스(price-worker·relay·price-consumer·news-consumer 2종)는 `desired_count = 0` +
 `lifecycle ignore_changes` 로 terraform 이 의도적으로 손을 뗀 자리다 — 그 값을 세션
 수명에 맞춰 바꾸는 주체가 여기다. 이게 없으면 apply·CD 가 다 끝나도 1분 파이프라인은
 아침에 스스로 뜨지 않는다.
@@ -25,7 +25,7 @@ stop-minute-session  (EOD)       : drain 요청 → 원장 게이트 대기 → 
   확정할 몫이다 — Worker 가 이미 recovery 예산을 다 쓴 뒤다).
 - 미발행 outbox `NEW` 0 — Relay 가 아직 못 실어보낸 사건이 남아 있으면 그 트리거는
   큐에 나간 적이 없다.
-- 게이트 큐 깊이 0 — Consumer 를 먼저 내리면 남은 메시지는 4일 retention 안에서
+- 게이트 큐 깊이 0 — Consumer 를 먼저 내리면 남은 메시지는 7일 retention 안에서
   아무도 안 집다가 **다음 세션의 Consumer** 가 어제 window 를 처리한다.
 """
 
@@ -110,7 +110,7 @@ def _drain_timeout_sec() -> float:
 
 
 def _scale(*, desired: int, force: bool) -> None:
-    """서비스 3종의 desired_count 를 바꾼다. 실패는 전파한다(부분 적용을 숨기지 않는다).
+    """상주 서비스 전체의 desired_count 를 바꾼다. 실패는 전파한다(부분 적용을 숨기지 않는다).
 
     ⚠️ 스케일업은 `forceNewDeployment` 를 동반해야 한다 — 이미지 태그가 mutable 이고
     ECS 는 **태스크를 띄울 때** 다이제스트를 확정한다. desired 0 인 동안 CD 가 돌린
