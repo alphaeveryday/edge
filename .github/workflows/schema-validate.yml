@@ -48,7 +48,7 @@ concurrency:
 
 jobs:
   migrate-and-validate:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     # build.gradle의 Flyway 블록이 읽는 접속값. 포트는 자리표시자이며 "Start ephemeral Postgres"
@@ -175,7 +175,7 @@ jobs:
       - name: Start ephemeral Postgres
         run: |
           set -euo pipefail
-          # self-hosted 러너는 영속이라 이전 실행의 컨테이너가 남아 이름 충돌이 난다. 먼저 청소한다.
+          # 영속 러너(self-hosted 시절) 잔존 컨테이너 이름 충돌 대비 — 1회용 VM 에선 no-op 인 방어적 청소.
           docker rm -f edge-ci-pg >/dev/null 2>&1 || true
           # 호스트 5432 를 고정 점유하면 박스의 다른 Postgres·CI 컨테이너와 충돌한다.
           # 러너가 동적 할당한 호스트 포트를 읽어 Flyway URL(env)에 넘긴다.
@@ -236,7 +236,7 @@ jobs:
           ./gradlew :libs:schema:flywayValidate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
 
-      # 영속 러너에 컨테이너·5432 포트를 남기지 않는다(다른 워크플로의 Postgres와 충돌 방지).
+      # 1회용 VM 에선 no-op 인 방어적 teardown(영속 러너 시절 도입 — 컨테이너·포트 잔존 방지).
       - name: Tear down ephemeral Postgres
         if: always()
         run: docker rm -f edge-ci-pg >/dev/null 2>&1 || true
