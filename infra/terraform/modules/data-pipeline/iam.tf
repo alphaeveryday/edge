@@ -186,14 +186,16 @@ resource "aws_iam_role_policy" "scheduler" {
       {
         # 운영 원장(ALPHA-530): daily·reconcile 스케줄이 Planner/Reconciler ECS 태스크를 띄운다.
         # StartExecution 은 이제 스케줄러가 아니라 Planner(ops_task 역할)가 소유한다(스펙 §5).
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask"]
-        Resource = [aws_ecs_task_definition.ops.arn]
+        Effect = "Allow"
+        Action = ["ecs:RunTask"]
+        # 1분 세션 스케일 오케스트레이션(ALPHA-712)도 같은 스케줄러 역할로 뜬다 —
+        # 실행체 형태가 daily·reconcile 과 같은 ECS RunTask 라 역할을 새로 만들 이유가 없다.
+        Resource = [aws_ecs_task_definition.ops.arn, aws_ecs_task_definition.minute_session.arn]
       },
       {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [aws_iam_role.execution.arn, aws_iam_role.ops_task.arn]
+        Resource = [aws_iam_role.execution.arn, aws_iam_role.ops_task.arn, aws_iam_role.minute_session.arn]
       },
       {
         # 전달 실패 이벤트를 DLQ 로 흘린다(스펙 §5).

@@ -316,3 +316,37 @@ variable "minute_detection_policy_version" {
   type        = string
   default     = "intraday-open-v1"
 }
+
+# ── 세션 스케일 오케스트레이션(ALPHA-712) ─────────────────────────────
+variable "minute_session_schedule_state" {
+  description = "1분 세션 start/stop 스케줄 상태. 다른 스케줄과 같은 규약 — 검증 동안 DISABLED, 컷오버 시 ENABLED"
+  type        = string
+  default     = "DISABLED"
+}
+
+# ⚠️ 두 cron 은 **universe 가 정하는 세션 범위 밖**이어야 한다. 시간외 거래 종목이 하나라도
+# 있으면 계획 범위가 08:00–20:00 이고(`plan_session_windows`), 없으면 09:00–15:30 이다.
+# 기본값은 넓은 쪽(시간외 포함) 기준이다 — 좁혀 두면 개장 뒤에 뜨거나 마감 전에 내려간다.
+variable "minute_session_start_expression" {
+  description = "Premarket 스케일업 cron(Asia/Seoul). 세션 첫 window(시간외 08:00) 전이어야 한다"
+  type        = string
+  default     = "cron(45 7 ? * MON-FRI *)"
+}
+
+variable "minute_session_stop_expression" {
+  description = "EOD drain+스케일다운 cron(Asia/Seoul). 세션 마지막 window(시간외 20:00) 후여야 한다"
+  type        = string
+  default     = "cron(5 20 ? * MON-FRI *)"
+}
+
+variable "minute_session_dataset" {
+  description = "스케일 오케스트레이션이 계획·드레인할 세션 dataset. 상주 서비스 3종이 가격 레인이라 price_minute 고정"
+  type        = string
+  default     = "price_minute"
+}
+
+variable "minute_session_source_group" {
+  description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
+  type        = string
+  default     = "toss"
+}
