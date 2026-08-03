@@ -47,7 +47,10 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	 * ({@code minute_price_trigger}). 관측 한 행은 정확히 한 축만 갖는다(one-of CHECK)라
 	 * 두 축을 LEFT 로 걸고 COALESCE 한다 — 일 단위만 INNER 로 걸면 분봉 계보의 런이
 	 * 목록에서 통째로 사라진다. 분봉의 observed_return 은 부호 있는 close/open−1 재구성
-	 * (행의 change_rate 는 절대값), instrument 는 entity_id(단축코드)→ticker 로 잇는다.
+	 * (행의 change_rate 는 절대값), instrument 는 entity_id(단축코드)→ticker 로 잇되
+	 * KR MIC(XKRX·XKOS·XKON)로 좁힌다 — instrument 유일성이 (market_code, ticker)라
+	 * 타 시장 동일 ticker 가 있으면 한 런이 두 행으로 불어난다(1분 트랙은 KR 전용이고
+	 * 6자리 단축코드는 KR 안에서 전국 유일이다).
 	 *
 	 * <p>동률 해소를 명시한다({@code explanation_run_id}) — {@code explanation_as_of} 에 유일성
 	 * 제약이 없어 동률이면 페이지 경계 행이 조회마다 달라진다.
@@ -71,7 +74,8 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			         ON (tr.etf_instrument_id IS NOT NULL
 			                 AND i.instrument_id = tr.etf_instrument_id)
 			             OR (mt.trigger_id IS NOT NULL
-			                 AND i.ticker = mt.entity_id AND i.instrument_type = 'ETF')
+			                 AND i.ticker = mt.entity_id AND i.instrument_type = 'ETF'
+			                 AND i.market_code IN ('XKRX', 'XKOS', 'XKON'))
 			  JOIN entity e ON e.entity_id = i.instrument_id
 			  LEFT JOIN explanation_result res ON res.explanation_run_id = er.explanation_run_id
 			 ORDER BY er.explanation_as_of DESC, er.explanation_run_id DESC
