@@ -159,27 +159,176 @@ def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
             "ci_width_med": wide, "n": len(y)}
 
 
-def path_summary(res: dict, marks: list[str]) -> list[tuple[str, float, float, float]]:
-    """시장 사건 시각으로 분절한 (구간, 시장 몫, 고유 몫, β 평균).
+def path_summary(res: dict, marks: list[str]) -> list[tuple]:
+    """시장 사건 시각으로 분절한 구간 요약.
+
+    3층(2요인 칼만): (구간, 시장, 섹터, 고유, β_m 평균, β_s 평균)
+    2층(1요인):      (구간, 시장, 고유, β 평균)
 
     분절점을 **시장 사건 시각**으로 잡는 것이 핵심이다: 임의 등분하면 "왜 이 구간
     에서" 에 답이 없고, 종목 사건으로 잡으면 시장 충격을 종목 이야기로 위장한다.
-    실측 000660 07-29: 10:17 코스피 서킷브레이커로 분절하면 붕괴 -13.00%p 중
-    시장이 -13.37%p, 고유는 +0.37%p 라는 것이 드러난다 - 종목 이야기가 아니다.
+    실측 000660 07-29 (3층): 10:17 서킷브레이커로 자르면 붕괴 -11.99%p 중 시장이
+    -12.29%p, 섹터 +0.04, 고유 **+0.26** - 종목 이야기가 아니다. 그리고 β_s 가
+    0.97 -> 0.51 -> 0.27 로 급감한다 (공포에는 섹터가 없다).
     """
-    rows = path_layers(res)
+    rows3 = path_layers3(res)
+    rows = rows3 or path_layers(res)
     if not rows:
         return []
+    three = bool(rows3)
     cuts = sorted({m for m in marks if rows[0][0] <= m <= rows[-1][0]})
     edges = ["00:00", *cuts, "99:99"]
-    out: list[tuple[str, float, float, float]] = []
+    out: list[tuple] = []
     for a, z in zip(edges, edges[1:]):
         g = [r for r in rows if a <= r[0] < z]
         if not g:
             continue
-        out.append((f"{g[0][0]}–{g[-1][0]}",
-                    sum(r[1] for r in g), sum(r[2] for r in g),
-                    float(np.mean([r[3] for r in g]))))
+        lab = f"{g[0][0]}–{g[-1][0]}"
+        if three:
+            out.append((lab, sum(r[1] for r in g), sum(r[2] for r in g),
+                        sum(r[3] for r in g),
+                        float(np.mean([r[4] for r in g])),
+                        float(np.mean([r[5] for r in g]))))
+        else:
+            out.append((lab, sum(r[1] for r in g), sum(r[2] for r in g),
+                        float(np.mean([r[3] for r in g]))))
+    return out
+
+
+SECTOR_TOPN = 12        # 섹터 프록시 구성원 수 (전역 상수)
+PROXY_RHO_MIN = 0.70    # 일봉 KRX 업종지수와 이만큼도 안 맞으면 프록시 자격 없음
+
+
+def sector_proxy(lake, tk6: str, day: str, topn: int = SECTOR_TOPN) -> dict:
+    """업종 구성원 시총상위 등가중 5분 수익 = 일중 섹터 프록시. **자기 제외.**
+
+    KRX 업종지수는 일봉만이라 일중 섹터를 프록시로 만들어야 한다. 두 함정:
+      - **자기 제외**: 시총상위에 자기가 들어간다(실측 000660 은 업종 2위). 자기를
+        섹터로 쓰면 "반도체가 왜 빠졌냐"에 "반도체가 빠져서" 라고 답하는 꼴이다.
+      - **검산 필수**: 프록시가 일봉 KRX 업종지수와 얼마나 맞는지 상관을 재고,
+        ρ < PROXY_RHO_MIN 이면 자격 없음으로 선언한다. 검산 없이 쓰면 또
+        '가장 잘 맞는 무엇' 이 섹터를 대신한다.
+    """
+    import pandas as pd
+    rows = lake.sql(f"""
+        WITH me AS (SELECT code FROM sector_member WHERE ticker = '{tk6}'
+                    AND as_of <= DATE '{day}' ORDER BY as_of DESC LIMIT 1),
+        mem AS (SELECT DISTINCT sm.ticker FROM sector_member sm, me
+                WHERE sm.code = me.code AND sm.as_of <= DATE '{day}')
+        SELECT p.ticker, max(p.mktcap) mc, any_value((SELECT code FROM me)) AS code
+        FROM pit_daily p JOIN mem ON mem.ticker = p.ticker
+        WHERE p.trade_date BETWEEN DATE '{day}' - 10 AND DATE '{day}'
+          AND p.mktcap IS NOT NULL AND p.ticker <> '{tk6}'
+        GROUP BY 1 ORDER BY 2 DESC LIMIT {topn}""")
+    if len(rows) < 3:
+        return {"verdict": "판정불가", "reason": f"업종 구성원 {len(rows)} < 3 (자기 제외)"}
+    code = str(rows[0][2])
+    members = [f"{r[0]}.KS" for r in rows]
+    frames = {}
+    for sym in members:
+        d5 = fetch(sym, interval="5m", period="60d")
+        if d5 is not None and not d5.empty:
+            frames[sym] = d5["Close"]
+    if len(frames) < 3:
+        return {"verdict": "판정불가", "reason": f"구성원 5분봉 {len(frames)} < 3"}
+    px = pd.concat(frames, axis=1).dropna(how="all")
+    lr = np.log(px).diff()
+    proxy = lr.mean(axis=1, skipna=True)          # 등가중 (시총가중은 자기 흡수 위험)
+    # 검산: 일별 합(≈일간 수익) vs KRX 업종지수 일간 수익의 상관.
+    daily = proxy.groupby([d.date() for d in proxy.index]).sum()
+    krx = lake.sql(f"""SELECT trade_date, close FROM sector_index
+                       WHERE code = '{code}' ORDER BY 1""")
+    kser = pd.Series({r[0]: float(r[1]) for r in krx}).sort_index()
+    klr = np.log(kser).diff()
+    both = pd.concat([daily.rename("p"), klr.rename("k")], axis=1).dropna()
+    rho = float(both["p"].corr(both["k"])) if len(both) >= 10 else float("nan")
+    if not np.isfinite(rho) or rho < PROXY_RHO_MIN:
+        return {"verdict": "판정불가", "code": code, "rho": rho,
+                "reason": f"프록시-업종지수 상관 ρ={rho:.2f} < {PROXY_RHO_MIN} "
+                          f"(검산 n={len(both)}) — 섹터 프록시 자격 없음"}
+    return {"verdict": "성립", "code": code, "rho": rho, "n_members": len(frames),
+            "n_check": len(both), "lr": proxy}
+
+
+def kalman2(y: np.ndarray, X: np.ndarray, b0: np.ndarray, P0: np.ndarray,
+            Q: np.ndarray, r: float) -> tuple[np.ndarray, np.ndarray]:
+    """2상태 칼만 (β_m, β_s). 반환 (β[t,2], Var 대각[t,2])."""
+    n = len(y)
+    B = np.empty((n, 2))
+    V = np.empty((n, 2))
+    b, P = b0.astype(float).copy(), P0.astype(float).copy()
+    for t in range(n):
+        P = P + Q
+        h = X[t]
+        s = float(h @ P @ h) + r
+        k = (P @ h) / s if s > 0 else np.zeros(2)
+        b = b + k * (y[t] - float(h @ b))
+        P = (np.eye(2) - np.outer(k, h)) @ P
+        B[t], V[t] = b, np.diag(P)
+    return B, V
+
+
+
+def intraday_beta2(lake, symbol: str, day: str, *, market: str = "KOSPI") -> dict:
+    """2요인 일중 β (시장 · 섹터⊥시장). 층 분해와 같은 구조를 일중으로 옮긴 것.
+
+    섹터는 **시장에 직교화**한다 (일간 층 분해와 동일 규약) - 안 하면 시장과
+    섹터가 같은 것을 두 번 세고 β 가 서로 상쇄되며 흔들린다.
+
+    재료가 없으면 사유와 함께 판정불가. 섹터 프록시가 자격 미달이면 1요인으로
+    **떨어지지 않는다** - 다른 모형을 조용히 쓰는 것이 더 나쁘다.
+    """
+    import pandas as pd
+    one = intraday_beta(symbol, day, market=market)
+    if one.get("verdict") != "성립":
+        return one
+    sp = sector_proxy(lake, symbol.split(".")[0], day)
+    if sp.get("verdict") != "성립":
+        return {"verdict": "판정불가", "reason": "섹터: " + sp.get("reason", "?"),
+                "one_factor": one}
+    # 섹터 프록시를 당일 시각에 정렬 (5분봉 인덱스 공유)
+    ser = sp["lr"]
+    idx = pd.DatetimeIndex(one["ts"])
+    rs = ser.reindex(idx).to_numpy(dtype=float)
+    y, rm = one["y"], one["x"]
+    ok = np.isfinite(rs)
+    if ok.sum() < MIN_BARS:
+        return {"verdict": "판정불가",
+                "reason": f"섹터 프록시 정렬 후 {int(ok.sum())} < {MIN_BARS} 봉",
+                "one_factor": one}
+    y, rm, rs = y[ok], rm[ok], rs[ok]
+    ts = [t for t, f in zip(one["ts"], ok) if f]
+    # 시장 직교화: rs⊥ = rs − (rs·rm/rm·rm)·rm
+    g = float(rs @ rm / (rm @ rm)) if float(rm @ rm) > 0 else 0.0
+    rso = rs - g * rm
+    X = np.column_stack([rm, rso])
+    # 초기값: 당일 제외 직전 20 거래일 5분봉 2요인 OLS (일봉 2요인은 프록시가 없다)
+    b0 = np.array([one["b0"], 1.0])
+    P0 = np.diag([one["se0"] ** 2, max(one["se0"] ** 2, 0.04)])
+    # Q: 시장은 1요인 규칙 그대로, 섹터는 같은 크기를 쓴다 (전역 규칙 - 셀별 튜닝 금지)
+    Q = np.diag([one["q"], one["q"]])
+    B, V = kalman2(y, X, b0, P0, Q, one["r"])
+    ci = 1.96 * np.sqrt(V)
+    wide = float(np.median(2 * ci[:, 0]))
+    if wide > CI_MAX:
+        return {"verdict": "판정불가",
+                "reason": f"2요인 β_m CI 중위 폭 {wide:.2f} > {CI_MAX} — 일중 상관 붕괴",
+                "one_factor": one}
+    return {"verdict": "성립", "ts": ts, "beta_m": B[:, 0], "beta_s": B[:, 1],
+            "ci_m": ci[:, 0], "ci_s": ci[:, 1], "y": y, "rm": rm, "rs_orth": rso,
+            "gamma": g, "rho_proxy": sp["rho"], "sector_code": sp["code"],
+            "n_members": sp["n_members"], "b0": one["b0"], "q": one["q"], "n": len(y)}
+
+
+def path_layers3(res: dict) -> list[tuple[str, float, float, float, float, float]]:
+    """시점별 (시각, 시장, 섹터, 고유, β_m, β_s) — 3층 경로 분해."""
+    if res.get("verdict") != "성립" or "beta_s" not in res:
+        return []
+    out = []
+    for t, bm, bs, rm, rso, y in zip(res["ts"], res["beta_m"], res["beta_s"],
+                                     res["rm"], res["rs_orth"], res["y"]):
+        m, s = float(bm * rm), float(bs * rso)
+        out.append((f"{t:%H:%M}", m, s, float(y - m - s), float(bm), float(bs)))
     return out
 
 

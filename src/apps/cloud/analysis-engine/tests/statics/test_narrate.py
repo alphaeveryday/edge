@@ -369,3 +369,20 @@ def test_path_paragraph_names_the_market_segment():
     assert "[경로]" in txt and "β 1.29" in txt
     assert "종목 이야기가 아니다" in txt
     assert "10:20–13:10" in txt
+
+
+def test_paragraph_tags_are_unique_per_meaning():
+    """같은 `[태그]` 가 다른 것을 가리키면 독자가 구분할 수 없다.
+
+    실측: 칼만 경로 문단을 `[경로]` 로 붙였는데 ETF 괴리 판정이 이미 쓰고 있었다.
+    ETF 셀에서 둘이 같이 나오면 '경로' 가 두 뜻이 된다.
+    """
+    import re
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[2] / "src/edge_analysis/statics/narrate.py"
+    body = src.read_text(encoding="utf-8").split("def narrate(")[1]
+    tags = re.findall(r'out\.append\(\s*f?"\[([^\]]+)\]', body)
+    # 태그별로 어떤 조건 분기에서 나오는지는 다를 수 있지만, 의미는 하나여야 한다.
+    assert "괴리" in tags, "ETF 괴리 판정 태그가 사라졌다"
+    assert tags.count("경로") == 2, "경로 태그는 일중 β 문단 2개뿐이어야 한다"
+    assert "층" in tags and "시장" in tags and "동종" in tags and "모순" in tags

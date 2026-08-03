@@ -125,11 +125,11 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     # ── 0. 괴리 판정 (ETF 셀) — 프레임의 심장 분기가 첫 문장이다 ─────────
     if premium is not None:
         if premium.basket_moved:
-            out.append(f"[경로] 바스켓이 움직였다 (NAV {_pct(premium.nav_return)}, "
+            out.append(f"[괴리] 바스켓이 움직였다 (NAV {_pct(premium.nav_return)}, "
                        f"괴리 {_pct(premium.premium_return)}) — ETF 이야기가 아니라 "
                        "종목 이야기다. 귀속은 구성종목으로 내려간다.")
         else:
-            out.append(f"[경로] **수급 단독** (괴리 {_pct(premium.premium_return)} > "
+            out.append(f"[괴리] **수급 단독** (괴리 {_pct(premium.premium_return)} > "
                        f"NAV {_pct(premium.nav_return)}) — 펀더멘털 무관, 되돌림 후보. "
                        "유일하게 ETF 고유의 발견이다.")
 
