@@ -241,4 +241,49 @@ class AnalysisControllerTest {
 		assertThat(writes.calls()).singleElement()
 				.satisfies(call -> assertThat(call.reason()).isNull());
 	}
+
+	@Test
+	void 무효화는_작업자_사유를_저장계층까지_흘린다() throws Exception {
+		mvc.perform(authed(post("/api/v1/analyses/run-1/invalidate"))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"reason\":\"전제 데이터 정정\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true));
+
+		assertThat(writes.calls()).singleElement().satisfies(call -> {
+			assertThat(call.action()).isEqualTo("INVALIDATE");
+			assertThat(call.runId()).isEqualTo("run-1");
+			assertThat(call.reason()).isEqualTo("전제 데이터 정정");
+			assertThat(call.actor()).isEqualTo(OPERATOR);
+		});
+	}
+
+	@Test
+	void 사유_없는_무효화는_400이다() throws Exception {
+		mvc.perform(authed(post("/api/v1/analyses/run-1/invalidate")))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+		assertThat(writes.calls()).isEmpty();
+	}
+
+	@Test
+	void 없는_런의_무효화는_404다() throws Exception {
+		mvc.perform(authed(post("/api/v1/analyses/unknown/invalidate"))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"reason\":\"y\"}"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("ADMN4041"));
+	}
+
+	/** 게시 상태가 아닌 런(DRAFT·이미 무효화)의 무효화는 409 — 대상 부재(404)와 다른 사실이다. */
+	@Test
+	void 미게시_런의_무효화는_409다() throws Exception {
+		writes.markUnpublished("run-4");
+		mvc.perform(authed(post("/api/v1/analyses/run-4/invalidate"))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"reason\":\"y\"}"))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("ADMN4090"));
+		assertThat(writes.calls()).isEmpty();
+	}
 }

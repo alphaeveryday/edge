@@ -16,7 +16,10 @@ public enum AdminErrorStatus implements BaseErrorCode {
 	// (필터는 advice 를 타지 않음) — 코드 공간만 여기 예약해 둔다.
 	ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4040", "분석 건을 찾을 수 없습니다."),
 	// 빈 리포트로 대신하지 않는 이유: 지목한 런이 없는 것과 원장이 비어 있는 것은 다른 사실이다.
-	RUN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4041", "해당 파이프라인 실행을 찾을 수 없습니다.");
+	RUN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMN4041", "해당 파이프라인 실행을 찾을 수 없습니다."),
+	// 404 와 구분하는 이유: 런은 있는데 게시 상태가 아닌 것(DRAFT·이미 무효화)은 대상 부재가
+	// 아니라 상태 충돌이다 — 재호출 멱등 신호(이미 내려감)로도 쓰인다.
+	ANALYSIS_NOT_PUBLISHED(HttpStatus.CONFLICT, "ADMN4090", "게시 상태가 아니라 무효화할 수 없습니다.");
 
 	private final HttpStatus httpStatus;
 	private final String code;
