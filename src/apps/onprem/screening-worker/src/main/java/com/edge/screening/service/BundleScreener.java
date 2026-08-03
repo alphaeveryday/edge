@@ -161,10 +161,14 @@ public class BundleScreener {
 				result.explanationResultId(), result.etfTicker(), result.tradeDate());
 		if (superseded != null) {
 			String previousStatus = analysisItemRepository.lockStatus(superseded);
-			publicationRepository.transitionByItem(superseded, "UNPUBLISHED");
-			analysisItemRepository.transition(superseded, "UNPUBLISHED");
-			statusHistoryRepository.save(new AnalysisItemStatusHistory(superseded,
-					previousStatus, "UNPUBLISHED", "같은 grain 신규 발화 게시로 교체(ALPHA-710)"));
+			// 게시분 전이(원자적 UPDATE)가 교체의 정본 판정이다 — 조회~전이 사이 콘솔이
+			// 먼저 제공 중단하면 0행이고, 그때 item 전이·이력을 쓰면 사용자가 중단한
+			// 항목에 거짓 '교체' 이력이 남는다.
+			if (publicationRepository.transitionByItem(superseded, "UNPUBLISHED") > 0) {
+				analysisItemRepository.transition(superseded, "UNPUBLISHED");
+				statusHistoryRepository.save(new AnalysisItemStatusHistory(superseded,
+						previousStatus, "UNPUBLISHED", "같은 grain 신규 발화 게시로 교체(ALPHA-710)"));
+			}
 		}
 		boolean published = publicationRepository
 				.publish(result.explanationResultId(), result.etfTicker(), result.tradeDate()) > 0;
