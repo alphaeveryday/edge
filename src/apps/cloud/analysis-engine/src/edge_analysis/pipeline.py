@@ -82,13 +82,30 @@ def run(
             raise ReturnsNotReadyError(
                 f"세션 시가 원장이 없다: session={minute_row.session_id}"
                 f" etf={settings.etf_ticker} — minute_session_open 미확정")
-        open_window, open_generation = open_ctx
+        open_window, open_generation, open_checksum = open_ctx
+        # 트리거 window 의 세대·checksum 은 원장의 마지막 커밋 쌍이 정본이다 — 발화 후
+        # 정정이 끼면 최신 커밋이 더 정확한 가격이고, checksum 은 그 세대의 바이트다.
+        trigger_meta = store.fetch_minute_window_meta(
+            minute_row.session_id, minute_row.window_start)
+        if trigger_meta is None:
+            raise ReturnsNotReadyError(
+                f"트리거 window 원장이 없다: session={minute_row.session_id}"
+                f" window={minute_row.window_start.isoformat()} — 커밋 미착지")
+        trigger_generation, trigger_checksum = trigger_meta
         returns = lake.load_minute_returns(
             _MARKET, settings.trade_date.isoformat(),
-            open_window.astimezone(KST).strftime("%H%M"), open_generation,
+            open_window.astimezone(KST).strftime("%H%M"), open_generation, open_checksum,
             minute_row.window_start.astimezone(KST).strftime("%H%M"),
-            minute_row.generation,
+            trigger_generation, trigger_checksum,
         )
+        # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
+        # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상
+        # 설명으로 영속된다(원결함의 부활 코너). 정정 세대가 낫게 하는 실패라 재시도.
+        if returns and not any(returns.get(h.ticker) is not None for h in holdings):
+            raise ReturnsNotReadyError(
+                f"구성종목 가격이 0건이다: session={minute_row.session_id}"
+                f" window={minute_row.window_start.isoformat()} — INCOMPLETE window"
+                " 이거나 구성종목 미수집. 빈 분해를 설명으로 만들지 않는다")
         empty_reason = (
             f"분봉 canonical 수익률이 비었다: session={minute_row.session_id}"
             f" window={minute_row.window_start.isoformat()} — window artifact"

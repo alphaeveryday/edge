@@ -248,7 +248,7 @@ class EventStore:
         """
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT o.source_window, w.generation"
+                "SELECT o.source_window, w.generation, w.checksum"
                 " FROM minute_session_open o"
                 " JOIN minute_ingestion_window w"
                 "   ON w.session_id = o.session_id AND w.window_start = o.source_window"
@@ -257,7 +257,25 @@ class EventStore:
                 (session_id, entity_id),
             )
             row = cur.fetchone()
-        return (row[0], int(row[1])) if row else None
+        return (row[0], int(row[1]), row[2]) if row else None
+
+    def fetch_minute_window_meta(self, session_id: str, window_start):
+        """window 의 마지막 커밋 (generation, checksum) | None — artifact 읽기 좌표.
+
+        정정 재claim 중에도 generation·checksum 은 재commit 까지 옛 커밋 쌍 그대로라
+        (price_consumer #485 단서) 이 쌍으로 읽으면 항상 존재하는 불변 artifact 를
+        checksum 대조까지 해서 소비할 수 있다. 트리거 행의 generation 대신 이걸 쓰는
+        이유: 발화 후 정정이 끼면 최신 커밋 세대가 더 정확한 가격이고, ledger 의
+        checksum 은 그 세대의 바이트에 대한 것이라 쌍이 갈리지 않는다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT generation, checksum FROM minute_ingestion_window"
+                " WHERE session_id = %s AND window_start = %s AND generation >= 1",
+                (session_id, window_start),
+            )
+            row = cur.fetchone()
+        return (int(row[0]), row[1]) if row else None
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
         """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.

@@ -48,7 +48,7 @@ def test_minute_returns_are_open_vs_trigger_close():
             {"unit_id": "000660", "open": "190000.0", "close": "190000.0"},
         ),
     })
-    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 2)
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "1030", 2, None)
     assert abs(returns["005930"] - 0.05) < 1e-9      # 73500/70000-1
     assert abs(returns["000660"] - (-0.05)) < 1e-9   # 190000/200000-1 — 하락 방향 보존
 
@@ -60,7 +60,7 @@ def test_trigger_at_open_window_reads_single_artifact():
             {"unit_id": "005930", "open": "70000.0", "close": "70700.0"},
         ),
     })
-    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "0900", 1)
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "0900", 1, None)
     assert abs(returns["005930"] - 0.01) < 1e-9
 
 
@@ -69,8 +69,8 @@ def test_missing_artifact_is_empty_not_partial():
     위장된다. 빈 dict 는 호출부가 ReturnsNotReady 로 접어 재시도한다."""
     seeded = minute_artifact_key("KR", "2026-07-15", "0900", 1)
     reader = _reader({seeded: _bars({"unit_id": "005930", "open": "1", "close": "1"})})
-    assert reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 1) == {}
-    assert reader.load_minute_returns("KR", "2026-07-15", "1000", 1, "1030", 1) == {}
+    assert reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "1030", 1, None) == {}
+    assert reader.load_minute_returns("KR", "2026-07-15", "1000", 1, None, "1030", 1, None) == {}
 
 
 def test_contract_violations_fold_to_none_per_unit():
@@ -89,7 +89,7 @@ def test_contract_violations_fold_to_none_per_unit():
             {"unit_id": "D", "open": "108", "close": "-1"},      # 음수 close
         ),
     })
-    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 1)
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "1030", 1, None)
     assert returns == {"A": None, "B": None, "C": None, "D": None}
 
 
@@ -108,5 +108,26 @@ def test_infinity_and_nan_fold_to_none():
             {"unit_id": "C", "open": "100", "close": "nan"},
         ),
     })
-    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, "1030", 1)
+    returns = reader.load_minute_returns("KR", "2026-07-15", "0900", 1, None, "1030", 1, None)
     assert returns == {"A": None, "B": None, "C": None}
+
+
+def test_checksum_mismatch_is_retry_axis_not_silent_consume():
+    """원장 checksum 은 커밋된 바이트의 sha256 이다(price_consumer 와 동형 계약) —
+    대조 없이 소비하면 트리거 판정과 다른 바이트(동시 PUT 경합·운영 실수)로 분해가
+    영속된다. 일치하면 정상 소비, 불일치는 ReturnsNotReady(재시도 축)로 드러난다."""
+    import hashlib
+
+    import pytest
+
+    from edge_analysis.config import ReturnsNotReadyError
+
+    bars = _bars({"unit_id": "005930", "open": "70000.0", "close": "70700.0"})
+    reader = _reader({minute_artifact_key("KR", "2026-07-15", "0900", 1): bars})
+    good = hashlib.sha256(bars).hexdigest()
+    returns = reader.load_minute_returns(
+        "KR", "2026-07-15", "0900", 1, good, "0900", 1, good)
+    assert abs(returns["005930"] - 0.01) < 1e-9
+    with pytest.raises(ReturnsNotReadyError, match="checksum"):
+        reader.load_minute_returns(
+            "KR", "2026-07-15", "0900", 1, "0" * 64, "0900", 1, "0" * 64)

@@ -383,6 +383,28 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # 흡수한다. 이 단언이 깨지면 장중 설명이 생성만 되고 MTS 에 안 뜬다.
         open_window = f"{TRADE_DATE}T00:00:00+00:00"     # 09:00 KST — 세션 시가 window
         trigger_window = f"{TRADE_DATE}T01:30:00+00:00"  # 10:30 KST
+        # 분봉 canonical artifact — **data-pipeline 의 키 빌더로 쓴다**: 엔진 리더의
+        # 미러 전사(lake.minute_artifact_key)와의 수렴을 이 읽기가 고정한다(PIPELINE_ID
+        # 수렴과 같은 축). 삼성 장중 수익률 73500/70000−1 = 5% — 일봉 시드(≈2.94%)와
+        # 다른 값이라, 아래 분해 단언이 분봉 축을 실제로 탔음을 구분해 증명한다.
+        # 원장 checksum = 커밋된 바이트의 sha256 — 엔진이 대조하므로 실물과 같이 시드.
+        import hashlib
+
+        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
+
+        def _bars(*rows: dict) -> bytes:
+            return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
+
+        open_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
+        )
+        trigger_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
+        )
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = open_bars
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = trigger_bars
         with seed_conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
@@ -390,15 +412,17 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
                 (TRADE_DATE, "0" * 64),
             )
-            # 분봉 분해 입력(ALPHA-710)의 원장 전제 — 시가·트리거 window 의 세대는
-            # minute_ingestion_window 가 정본이고, ETF 세션 시가는 minute_session_open.
-            for window_start in (open_window, trigger_window):
+            # 분봉 분해 입력(ALPHA-710)의 원장 전제 — 시가·트리거 window 의 세대·checksum
+            # 은 minute_ingestion_window 가 정본이고, ETF 세션 시가는 minute_session_open.
+            for window_start, bars_bytes in ((open_window, open_bars),
+                                             (trigger_window, trigger_bars)):
                 cur.execute(
                     "INSERT INTO minute_ingestion_window (session_id, window_start,"
-                    " window_end, scheduled_at, data_status, generation)"
+                    " window_end, scheduled_at, data_status, generation, checksum)"
                     " VALUES ('ses-e2e', %s, %s::timestamptz + interval '1 minute',"
-                    " %s, 'VALID', 1)",
-                    (window_start, window_start, window_start),
+                    " %s, 'VALID', 1, %s)",
+                    (window_start, window_start, window_start,
+                     hashlib.sha256(bars_bytes).hexdigest()),
                 )
             cur.execute(
                 "INSERT INTO minute_session_open (session_id, entity_id, status,"
@@ -415,23 +439,6 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 (MINUTE_TRIGGER_ID, ETF_TICKER, trigger_window),
             )
         seed_conn.commit()
-        # 분봉 canonical artifact — **data-pipeline 의 키 빌더로 쓴다**: 엔진 리더의
-        # 미러 전사(lake.minute_artifact_key)와의 수렴을 이 읽기가 고정한다(PIPELINE_ID
-        # 수렴과 같은 축). 삼성 장중 수익률 73500/70000−1 = 5% — 일봉 시드(≈2.94%)와
-        # 다른 값이라, 아래 분해 단언이 분봉 축을 실제로 탔음을 구분해 증명한다.
-        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
-
-        def _bars(*rows: dict) -> bytes:
-            return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
-
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = _bars(
-            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
-        )
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = _bars(
-            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
-        )
         # sleep 없이 곧장 실행 — 직전 게시와 같은 초에 게시돼도 as_of 마이크로초
         # 정밀이라 grain 부분 유니크와 충돌하지 않아야 한다(같은 초 두 발화 게시).
         minute_run = replace(settings, request_id="e2e-req-3",

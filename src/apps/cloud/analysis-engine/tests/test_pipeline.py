@@ -43,7 +43,8 @@ class _FakeLake:
         return {"005930": 0.05}
 
     def load_minute_returns(self, market, session_date, open_window_hhmm,
-                            open_generation, trigger_window_hhmm, trigger_generation):
+                            open_generation, open_checksum,
+                            trigger_window_hhmm, trigger_generation, trigger_checksum):
         return {"005930": 0.05}
 
 
@@ -167,7 +168,11 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
             # 축이 트리거 판정 축과 갈린다(ALPHA-710).
             assert (session_id, entity_id) == ("ses-1", "091160")
             from datetime import datetime, timezone
-            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1)
+            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1, "c" * 64)
+
+        def fetch_minute_window_meta(self, session_id, window_start):
+            assert session_id == "ses-1"
+            return (1, "d" * 64)
 
         def fetch_price_trigger(self, etf_instrument_id, trade_date):
             self.daily_fetches += 1
@@ -209,6 +214,43 @@ def test_missing_minute_trigger_fails_loud():
     with pytest.raises(PipelineError, match="분봉 트리거"):
         run(settings, lake=_FakeLake(), store=_EmptyStore(None, _PREREQS_OK),
             client=_FakeClient(), s3=_FakeS3())
+
+
+def test_minute_returns_without_constituent_prices_fail_loud():
+    """INCOMPLETE 트리거 window 는 발화 ETF 행만 담을 수 있다 — returns dict 가
+    truthy 라 빈 검사를 통과하면 total_priced=0 분해가 정상 설명로 영속된다(원결함의
+    부활 코너). 구성종목 가격 0건은 분해 전에 ReturnsNotReady 로 죽어야 한다."""
+    from datetime import datetime, timezone
+
+    from edge_analysis.adapters.eventstore import MinuteTriggerRow
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _EtfOnlyLake(_FakeLake):
+        def load_minute_returns(self, *args, **kwargs):
+            return {"091160": 0.03}  # ETF 자신뿐 — holdings(005930)와 무교집합
+
+    class _MinuteOnlyStore(_FakeStore):
+        def fetch_minute_price_trigger(self, trigger_id):
+            return MinuteTriggerRow(
+                gate=PriceTrigger("mpt_1", 0.03, "intraday", abs_gate=True, rel_gate=False),
+                ticker="091160", trade_date=date(2026, 7, 16), session_id="ses-1",
+                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                generation=1,
+            )
+
+        def fetch_minute_open_window(self, session_id, entity_id):
+            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1, None)
+
+        def fetch_minute_window_meta(self, session_id, window_start):
+            return (1, None)
+
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+    store = _MinuteOnlyStore(trigger=None, prereqs=_PREREQS_OK)
+    with pytest.raises(ReturnsNotReadyError, match="구성종목"):
+        run(settings, lake=_EtfOnlyLake(), store=store, client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
 
 
 def test_empty_returns_fail_loud_before_llm():
