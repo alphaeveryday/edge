@@ -30,6 +30,8 @@ B안의 주장: RCT 근사에 필요한 자유도는 **6개 슬롯**으로 닫�
 """
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 from .paneltest import (ALPHA, MIN_N, PERMS, SEED, _base, _cate_interaction,
@@ -323,10 +325,6 @@ def say_multi(r: dict) -> str:
     return "\n".join(out)
 
 
-if __name__ == "__main__":
-    _selfcheck()
-
-
 _SPILL_SQL = """
 , ev AS (
     SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
@@ -591,3 +589,25 @@ def say_market(r: dict, iid: str = "", lake=None) -> str:
     out.append("  ③ 국면: 계열족 `국면/수준` (시장 20일 변동성) 을 조절자로 넣어 검정한다")
     out.append("  → 남는 것이 국내 미설명이다. 여기까지가 환원이고, 그 밖은 접는다.")
     return "\n".join(out)
+
+
+def main() -> None:
+    """다중처치·전이 시행은 셀 러너가 아니라 여기서 부른다 - 셀 하나가 아니라
+    **타입 사이**를 묻는 질의이기 때문이다(동시 투입의 흡수, 관계 전이).
+
+    사용:  python -m edge_analysis.statics.trial multi  <YYYY-MM-DD> <타입,타입,...>
+           python -m edge_analysis.statics.trial spill  <YYYY-MM-DD> <타입> <관계>
+    """
+    if len(sys.argv) < 2 or sys.argv[1] not in ("multi", "spill"):
+        _selfcheck()
+        return
+    from .duck import CausalLake
+    lake, day = CausalLake(), sys.argv[2]
+    if sys.argv[1] == "multi":
+        print(say_multi(run_multi(lake, day, sys.argv[3].split(","))))
+    else:
+        print(say(run_spillover(lake, day, etype=sys.argv[3], rel=sys.argv[4])))
+
+
+if __name__ == "__main__":
+    main()

@@ -279,22 +279,10 @@ class HypothesisTuple:
 
 
 
-@dataclass(frozen=True, slots=True)
-class Feature:
-    """조건계수(CATE)의 특징 하나. 역할 태그가 없으면 DML 이 조용히 틀린다:
-    처치강도를 공변량으로 빼면 효과가 소거되고, 매개를 통제하면 경로가 막힌다."""
-    name: str
-    value: float
-    role: str
-
-    def __post_init__(self) -> None:
-        _need(self.role, FEATURE_ROLES, "특징.역할")
-
-
 __all__ = [
     "ALPHA", "CHANNELS", "COMPARATORS", "CONDITION_KINDS", "Condition",
     "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS", "ExposureSource",
-    "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "Feature", "HypothesisTuple",
+    "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "HypothesisTuple",
     "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "RELATIONS", "SERIES_FAMILIES",
     "PREDICATES", "STAGES", "ARG_ROLES", "NOVELTY", "PLACEBO_NOVELTY",
     "TRANSFORMS", "TRIGGER_KINDS", "Trigger", "VocabError", "W_MINUTES"]

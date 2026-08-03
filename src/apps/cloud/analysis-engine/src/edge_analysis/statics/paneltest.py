@@ -910,3 +910,58 @@ def grid_screen(lake, day: str, types: list[str],
 
 __all__ = ["EdgeReport", "FEATURES", "MIN_OPPOSITE", "PERMS", "SEED", "Z_ANOM",
            "edge_test", "grid_screen"]
+
+
+# ── 패널 → 읽을 글 (판정은 위의 게이트가 이미 냈다) ──────────────────────
+def panel_text(lake, tup, instrument_id: str, day: str, layer: str = "고유",
+               m_tests: int = 1) -> str:
+    """타입 수준 패널을 재고 **읽을 글로** 만든다.
+
+    판정은 코드가 한다(`edge_gate`) - 모델은 시행을 설계하고 함의를 조립한다.
+    한때 모델이 판정자였고, 그것이 코드 결론을 뒤집어 산출물에서 무엇이 판정인지
+    흐렸다(8셀 실측). 자리를 나눴다: **설계는 모델, 판정은 코드**.
+    """
+    from .paneltest import edge_test
+    r = edge_test(lake, tup, day, cell_instrument_id=instrument_id, layer=layer,
+                  m_tests=m_tests)
+    return report_text(r, tup, m_tests)
+
+
+def report_text(r, tup, m_tests: int = 1) -> str:
+    """EdgeReport → 패널 텍스트. **순수 함수** - 재검정 없이 같은 글을 낸다.
+
+    `panel_text` 에서 갈라냈다: 조립부가 텍스트와 판정 JSON 둘을 원할 때
+    edge_test 를 두 번 돌리면 셀당 16분이 두 배가 되고, 두 번의 결과가 갈릴
+    여지도 생긴다 (정렬 고정 전에는 실제로 갈렸다).
+    """
+    rows = [
+        f"n={r.n}" + (f" · p={r.p:.3f}" if r.p is not None else " · p 미계산"),
+        # 임계는 판정이 아니라 규약이다 - 셀 안 동시검정 m 개를 α 로 나눈 값.
+        # 이걸 안 실으면 검정자가 0.05 로 재고, 산문이 주장하는 Bonferroni 는 허구가 된다.
+        f"양측 p 임계 {ALPHA / max(m_tests, 1):.4f} (α=0.05 / 셀 동시검정 m={m_tests})",
+        (f"노출 상위 {r.effect_high * 100:+.2f}% vs 하위 {r.effect_low * 100:+.2f}%"
+         if r.effect_high is not None else "효과 미계산"),
+        (f"오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
+         if r.today_exposure_pct is not None else "오늘 노출 미계산"),
+    ]
+    # 방향 일치는 판정이 아니라 결정론적 사실이다 - 부호는 튜플에 이미 박혀 있다.
+    # 이걸 안 실으면 검정자가 양측 p 만 보고 "반대쪽으로 유의" 를 성립으로 읽는다.
+    if r.effect_high is not None:
+        gap = (r.effect_high - r.effect_low) * tup.sign
+        rows.append(f"방향: 가설 부호{tup.sign:+d} · 상위−하위×부호 {gap * 100:+.2f}%p "
+                    + ("→ 일치" if gap > 0 else "→ **반대** (주장과 어긋난다)"))
+    if r.cond_today:
+        rows.append(f"조건 오늘: {r.cond_today} "
+                    + ("(측정불가 → 판정불가. 결측은 충족이 아니다)"
+                       if not r.cond_measurable else f"(충족 {r.cond_satisfied})"))
+    if r.moderation:
+        rows.append(r.moderation)
+    if r.counterfactual:
+        rows.append(r.counterfactual)
+    if r.reduction and r.reduction != "—":
+        rows.append(f"환원 검사: {r.reduction}")
+    if r.trigger_note:
+        rows.append(r.trigger_note)
+    if r.reason:
+        rows.append(f"사유: {r.reason}")
+    return "\n".join("  " + x for x in rows)

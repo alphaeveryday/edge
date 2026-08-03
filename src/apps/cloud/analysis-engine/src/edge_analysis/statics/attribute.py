@@ -504,6 +504,21 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     if reports:
         block.append(f"검정 규약: 산업층 이중차감 ar · 양측 p₂ · 셀 Bonferroni "
                      f"α=0.05/{len(reports)} (학술 수리 ①②③)")
+        # ── 검정 층: 거친 타입을 **구체화**해 다시 묻는다 ──────────────────────
+        # 가설 층의 판정은 (타입 × 노출) 수준이라 거칠다. 검정 에이전트가 관측된
+        # 슬롯(술어·단계·역할·신규성)으로 쪼개 시행을 설계하고, 위약·사전추세·균형
+        # 진단을 통과한 것만 함의로 넘긴다. `probe_brief` 가 다리다 - 가설 층이
+        # 이미 본 것을 첫 입력으로 줘서 같은 것을 두 번 탐색하지 않게 한다.
+        # 실측(CONTRACT.SIGNING 07-29): 에이전트가 PREFERRED_BIDDER(우선협상대상자)
+        # 를 골라 ATT +1.13%p p=0.000 을 냈다 - 코드에 박아둔 단계 목록에는 없던 값이다.
+        from .trial import probe_brief
+        from .verifier import say_implications, verify
+        brief = probe_brief(tuples, reports, screens, memory)
+        for et in sorted({t.trigger.ident for t, r in reports
+                          if t.trigger.kind == "점" and r.verdict == "성립"}):
+            imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)
+            block.append(vlog)
+            block.append(say_implications(imps))
     for t, r in reports:
         cond = " ∧ ".join(f"{v.ident}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.conditions) or "—"

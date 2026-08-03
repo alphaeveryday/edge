@@ -117,13 +117,6 @@ def report(surveys: list[Survey]) -> str:
         out.append("  반복된 '필요했던 개념' (셀을 넘어 반복될수록 어휘 확장 1순위):")
         out += [f"    ×{c}  {w}" for w, c in want.most_common(10)]
     return "\n".join(out)
-
-
-def load_ledger(root: str = ".tmp/causal-backfill") -> list[dict]:
-    p = Path(root) / "expressive.jsonl"
-    return [json.loads(l) for l in p.open(encoding="utf-8")] if p.is_file() else []
-
-
 if __name__ == "__main__":       # pragma: no cover
     import os
 

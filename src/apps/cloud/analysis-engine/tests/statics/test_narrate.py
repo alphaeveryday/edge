@@ -388,22 +388,28 @@ def test_paragraph_tags_are_unique_per_meaning():
     assert "층" in tags and "시장" in tags and "동종" in tags and "모순" in tags
 
 
-def test_verifier_gates_implications_on_three_diagnostics():
-    """함의는 위약·사전추세·균형 **셋 다** 통과해야 설명 층으로 간다.
+def test_verifier_folds_broken_diagnostics_but_not_unmeasured_placebo():
+    """사전추세·균형이 깨진 ATT 는 처치효과가 아니다 - 접는다.
 
-    하나라도 깨지면 침묵이 낫다 - 깨진 진단 위의 ATT 는 처치효과가 아니다.
+    그러나 **위약 미계측은 실패가 아니다**. 접으면 재보도 대조군이 없는 타입 전부가
+    영구 침묵한다 - 실측 CONTRACT.SIGNING 에서 짝 0 으로 함의 전량이 접혔고, 그 중
+    PREFERRED_BIDDER p=0.000 이 있었다. 미계측은 넘기되 산문에 박는다.
     """
     from edge_analysis.statics.verifier import Implication, say_implications
 
     ok = Implication("실적이 고유를 +0.32%p", 0.0032, 0.001, 1221,
-                     ("배수", "수준"), True, True, True)
-    assert ok.credible
-    for kw in ({"placebo_ok": False}, {"pretrend_ok": False}, {"balanced": False}):
-        base = {"placebo_ok": True, "pretrend_ok": True, "balanced": True} | kw
-        bad = Implication("x", 0.01, 0.001, 100, None, **base)
+                     ("배수", "수준"), "통과", True, True)
+    assert ok.credible and "위약 미계측" not in say_implications([ok])
+
+    un = Implication("x", 0.01, 0.001, 100, None, "미계측", True, True)
+    assert un.credible, "위약 미계측을 접으면 그 타입은 영구 침묵한다"
+    assert "위약 미계측" in say_implications([un])
+
+    for kw in ({"pretrend_ok": False}, {"balanced": False}):
+        base = {"pretrend_ok": True, "balanced": True} | kw
+        bad = Implication("x", 0.01, 0.001, 100, None, "통과", **base)
         assert not bad.credible
         assert "[접음]" in say_implications([bad])
     # 추정 자체가 없으면 자격 없음
-    assert not Implication("x", None, None, 0, None, True, True, True).credible
+    assert not Implication("x", None, None, 0, None, "통과", True, True).credible
     assert "없음" in say_implications([])
-    assert "[함의]" in say_implications([ok])

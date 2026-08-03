@@ -32,14 +32,11 @@ def _log(msg: str) -> None:
 
 import numpy as np
 
-from .dag import TargetDAG
 from .duck import CausalLake
 from .hypothesize import propose
-from .judge import judge_edge
 from .layers import BETA_WINDOW, MARKET_CODE, MIN_BETA_N, _ols, _on, _orth, _series, overnight
 
 MAX_TARGETS = 3
-MAX_ROUNDS = 2
 
 
 # ── 1. 정적분석기: 종목 하루를 시장·섹터·고유로 ──────────────────────────
@@ -145,106 +142,6 @@ def cell_brief(lake, tk6: str, day: str, total: float, layers: list[LayerFact]) 
     return "\n".join(L)
 
 
-# ── 3~6. 가설 → DAG → 검정 → 갱신 ────────────────────────────────────────
-def run(lake, ask, ticker: str, instrument_id: str, day: str,
-        *, rounds: int = MAX_ROUNDS) -> str:
-    from .attribute import load_cell
-    from .paneltest import FEATURES, Z_ANOM, series_z
-
-    tk6 = ticker.split(".")[0]
-    total, layers = stock_layers(lake, tk6, day)
-    if total is None or not layers:
-        return f"{ticker} {day}: 층 분해 불가 - 일봉 창(60일)이 안 찬다"
-    targets = pick_targets(layers)
-
-    # 접지 재료: 사건 타입(고유 대상), 오늘 발화 계열(전 대상)
-    shares, labels, _ac = load_cell(lake, ticker, instrument_id, day)
-    types = sorted({labels[e] for s in shares for e in s.window.event_ids})
-    zs = series_z(lake, instrument_id, day)
-    fired = sorted(k for k, v in zs.items() if v is not None and abs(v) >= Z_ANOM)
-    base = cell_brief(lake, tk6, day, total, layers)
-    base += "\n시간 분해(항등식): " + " · ".join(
-        f"{s.window.name} {(np.exp(s.log_ret) - 1) * 100:+.2f}%p" for s in shares)
-    if fired:
-        base += f"\n오늘 발화 계열(|z|≥{Z_ANOM}): " + " · ".join(
-            f"{k} z={zs[k]:+.1f}" for k in fired)
-
-    dags = [TargetDAG(t.kind, f"{t.kind} {t.pct * 100:+.2f}%p ({t.label})", t.pct)
-            for t in targets]
-    audit: list[str] = []
-
-    for rnd in range(1, rounds + 1):
-        for dag, tgt in zip(dags, targets):
-            if rnd > 1 and dag.connected():
-                continue                      # 성립이 있으면 그래프 갱신이 불필요하다
-            # 시장·섹터 대상은 사건이 아니라 거시·수급·지수 계열이 접지다 -
-            # 표에 근거가 실려 있다(미국장·시장 수급). 고유 대상만 사건 접지.
-            et = types if tgt.kind == "고유" else []
-            sf = fired if tgt.kind == "고유" else sorted(set(fired) | {"거시", "수급", "지수잔차"})
-            head = (f"\n\n[네 대상] {dag.target_label} - 이 몫의 인과를 경쟁가설 3개로 내라."
-                    f" 각 가설의 intent 에 '무엇이 사실이면 성립인가'를 적어라.")
-            extra = ""
-            if rnd > 1:
-                extra = ("\n\n[1라운드 결과 - 끊긴 간선과 사유]\n" + dag.render()
-                         + "\n끊긴 채널·방아쇠를 반복하지 말고 **새 가설구조**를 내라.")
-            _log(f"r{rnd} {dag.target_kind}: 경쟁가설 요청")
-            tuples, rejected = propose(ask, facts=base + head + extra, event_types=et,
-                                       measurable=list(FEATURES), series_families=sf)
-            _log(f"r{rnd} {dag.target_kind}: 튜플 {len(tuples)} · 반려 {len(rejected)}")
-            audit += [f"[{dag.target_kind} r{rnd}] 반려: {r}" for r in rejected]
-            audit += [f"[{dag.target_kind} r{rnd}] 병합 반려: {r}"
-                      for r in dag.add(tuples, round=rnd)]
-        for dag in dags:
-            for p in dag.validate():
-                audit.append(f"[검증] {p}")
-            ctx = dag.render(verbose=False)
-            for e in dag.pending():
-                _log(f"검정 {e.eid} {e.tup.channel}·{e.tup.trigger.ident}")
-                e.finding = judge_edge(lake, ask, ticker=ticker,
-                                       instrument_id=instrument_id, day=day,
-                                       edge=e, dag_txt=ctx, facts=base,
-                                       types=tuple(types))
-        if all(dag.connected() for dag in dags):
-            break
-
-    # ── 7. 구조방정식 에이전트 ────────────────────────────────────────────
-    _log("구조방정식 에이전트")
-    material = base + "\n\n" + "\n\n".join(d.render() for d in dags)
-    sem = ask(_SEM_SYS, material + "\n\n방정식과 설명을 JSON 으로.")
-    eqs = sem.get("equations") or []
-    expl = str(sem.get("explanation", ""))
-
-    out = [f"■ {ticker} {day}  하루 {total * 100:+.2f}%", "", base, ""]
-    out += [d.render() for d in dags]
-    out.append("\n── 구조방정식 (연결된 간선만 항이 된다) " + "─" * 30)
-    for q in eqs:
-        out.append(f"  {q.get('target', '')}: {q.get('formula', '')}")
-        for t in q.get("terms") or []:
-            out.append(f"     {t.get('name', '')} = {t.get('value', '')}  · {t.get('meaning', '')}")
-    out.append("\n── 직관 설명 " + "─" * 50)
-    out.append(expl)
-    if audit:
-        out.append("\n── 감사 (반려·검증) " + "─" * 40)
-        out += [f"  {a}" for a in audit[:12]]
-    return "\n".join(out)
-
-
-_SEM_SYS = """너는 구조방정식 에이전트다. 검정이 끝난 DAG 를 받는다.
-
-할 일:
-1. **성립(✓) 간선만** 항으로 하여 대상별 구조방정식을 세워라. 각 항은 검정
-   에이전트가 남긴 재료(형·이름·오늘 값·의미)를 쓴다. 잔여(ε)를 숨기지 마라.
-2. 설명분: 각 항이 대상 몫의 얼마를 설명하는지 - 재료의 수치로만. 지어내지 마라.
-3. 직관 설명: 4~8문장. 선두는 하루의 본체(가장 큰 몫). **일반 투자자가 떠올리기
-   힘든 비자명한 연결**(예: 거시→섹터→종목의 사슬, 수급 주체 교대)이 성립 간선에
-   있으면 그것을 명시적으로 한 문장 강조하라. 기각된 통념(끊긴 간선)이 있으면
-   "~가 아니다"로 먼저 치워라. 숫자는 준 재료에 있는 것만 인용하라.
-
-JSON:
-{"equations": [{"target": "시장|섹터|고유",
-                "formula": "대상(-x.xx%p) = 항1 + 항2 + ε(잔여)",
-                "terms": [{"name": "변수명", "value": "오늘 값", "meaning": "이 항의 뜻"}]}],
- "explanation": "직관 설명"}"""
 
 
 # 사건 시각은 **사이드카가 복원한 발행시각**이 먼저다. RDB `source_event.available_at`
@@ -449,7 +346,7 @@ def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
     from pathlib import Path
 
     from .hypothesize import screen_tuples
-    from .judge import report_text
+    from .paneltest import report_text
     from .paneltest import FEATURES, edge_test
     eid, env_s, out_dir, m = item
     env = _json.loads(env_s)
@@ -590,7 +487,7 @@ def _cli() -> None:
     import pathlib
 
     from .hypothesize import screen_tuples
-    from .judge import panel_text
+    from .paneltest import panel_text
     from .paneltest import FEATURES
     cmd = sys.argv[1]
     if cmd == "facts":
@@ -715,7 +612,7 @@ def _cli() -> None:
         return
     if cmd == "panel":
         from .hypothesize import screen_tuples
-        from .judge import panel_text
+        from .paneltest import panel_text
         env = json.loads(pathlib_read(sys.argv[5]))
         valid, rejected = screen_tuples(env.get("hypotheses") or [],
                                         event_types=env.get("event_types") or [],
@@ -735,18 +632,7 @@ def pathlib_read(p: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] in ("facts", "validate", "panel", "panels", "prep", "story", "serve"):
-        _cli()
-        return
-    if len(sys.argv) != 4:
-        raise SystemExit(__doc__)
-    import os
-
-    from ..adapters.llm import DeepSeekClient, TracingClient
-    client = TracingClient(DeepSeekClient(
-        os.environ["DEEPSEEK_API_KEY"],
-        os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
-    print(run(CausalLake(), client.complete_json, *sys.argv[1:]))
+    _cli()
 
 
 if __name__ == "__main__":

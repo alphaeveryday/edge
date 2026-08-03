@@ -80,7 +80,9 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     # **947 항목 long 표** (trade_date, ticker, item_code, value) - 하루 75만 행.
     # 피벗해서 넓히려다 OOM 이 났다: 947열 × 366일 × 3,800종목. 그리고 947열 표는
     # 어차피 못 쓴다 - long 으로 두고 item_code 로 골라 쓰는 게 맞다.
-    # 항목 사전은 `s3_dg_reference` 의 items_resolved.csv 다 (name_kr·domain·category).
+    # 항목 사전은 `s3_dg_items` 다 (name_kr·domain·category). 데이터셋 전체를
+    # `csv` 로 등록했던 것은 지웠다 - 그 패턴은 `*.csv.gz` 인데 reference 는 평문
+    # `.csv` 라 영구히 0파일이었다(실측 IOException). 거짓 등록은 부재보다 나쁘다.
     # 실측 분류: 투자자별매매-수량 329 · 대금 329 · 가격수익률 97 · 주식수시총 59 ·
     # 베타 45 · 거래량 23 · 주가배수 20 · 신용거래 20 · 대차거래 13 · 차입공매도 12.
     # **컨센서스/추정 항목은 없다** (전수 검색 0건) - 서프라이즈는 다른 소스가 필요하다.
@@ -95,7 +97,6 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
     ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
     ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),
-    ("s3_dg_reference",     "csv",  "draft/curated/source=dataguide/dataset=reference"),
     # glob 은 **파일 패턴까지** 적는다. `*.parquet` 로 뭉뚱그렸더니 같은 폴더의
     # kospi200_proxy.parquet(symbol·name·market_cap·sector)이 딸려 들어와 스키마
     # 충돌로 뷰 전체가 조회 불가였다 - 아무도 안 써서 안 걸렸다.
@@ -307,7 +308,22 @@ class CausalLake:
 
     # ── 표면 ────────────────────────────────────────────────────────────
     def sql(self, q: str) -> list[tuple]:
-        return self.con.execute(q).fetchall()
+        """질의. **지연 등록된 뷰는 여기서 걸린다** - 등록만 해두고 부를 때 건다.
+
+        `bind_s3` 를 아무도 부르지 않아 지연 5셋(`s3_dg_*`)이 영구 미바인딩이었다:
+        `SELECT 1 FROM s3_dg_market` 이 'Table does not exist' 였다(실측). 등록과
+        실현 사이에 다리가 없으면 등록은 거짓말이다. 스니핑이 비싼 셋만 지연이므로
+        첫 조회 때 한 번 물면 된다 - 카탈로그 실패에서만 시도해 정상 경로는 안 느려진다.
+        """
+        try:
+            return self.con.execute(q).fetchall()
+        except Exception:
+            hit = [n for n in self.deferred if n in q]
+            if not hit:
+                raise
+            for n in hit:
+                self.bind_s3(n)
+            return self.con.execute(q).fetchall()
 
     def probe_day(self) -> dict[str, tuple[int, str | None]]:
         """표 → (뷰 기준일의 행수, 도달 지평). 바인딩과 유효 커버리지는 다른 숫자다.
