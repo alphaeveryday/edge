@@ -44,9 +44,9 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.created is True and r2.created is False
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
-    # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — ALPHA-591 이후
-    # 카탈로그는 전 레인 27이지만 시장 일일런 기대는 여전히 21 이다).
-    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 21
+    # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — 카탈로그는 전 레인
+    # 23이지만 시장 일일런 기대는 17 이다. 공시 4는 ALPHA-724 컷오버로 일시 미등록).
+    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 17
 
 
 def test_same_day_different_slots_are_separate_runs():
@@ -438,17 +438,23 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_disclosure_lane_is_registered_but_still_empty(monkeypatch):
-    # WHY(ALPHA-721): 이 PR 은 **배선만** 넣는다 — 레인은 알려졌지만 작업은 0개다. 그 조합이
-    #      "어느 배포 순서로도 안전"의 근거다: 스케줄이 먼저 켜져도 Planner 가 죽지 않고 기대
-    #      0건으로 계획할 뿐이고, 시장 런은 여전히 자기 21작업을 기대한다. 엔트리를 먼저
-    #      옮기면 시장 런이 기대 밖 attempt 를 받아 resolve 경로 없는 LEDGER_GAP 이 된다.
-    #      컷오버 PR 이 이 단언을 뒤집을 때 그 사실이 diff 로 드러나야 한다.
+def test_disclosure_tasks_are_unregistered_during_the_cutover(monkeypatch):
+    # WHY(ALPHA-724): 컷오버는 두 변경(시장 SFN 에서 공시 스텝 제거 / 카탈로그 레인 이동)이
+    #      **이미지 CD 와 terraform-apply 라 순서 보장이 없는** 상태로 만난다. 등록을 유지한 채
+    #      어느 쪽이 먼저 뜨면 기대와 실행이 어긋난 런이 원장에 남으므로, 중간 상태를
+    #      **미등록**으로 둔다 — `by_cli` 가 None 이면 wrapper 가 투명 통과해 attempt 도
+    #      expected_task 도 안 생기고, 그래서 어느 순서든 조용히 안전하다.
+    #      ⚠️ 이 단언은 **일시적이다.** 재등록 PR 이 이걸 뒤집으며 그 사실이 diff 로 드러나야
+    #      한다 — 안 뒤집으면 공시가 영영 원장 밖에서 도는데 아무도 모른다(ALPHA-553 PR2 가
+    #      뉴스 6작업을 빼고 ALPHA-591 이 되돌리기까지 실제로 그 상태였다).
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
     assert catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE) == ()
-    # 공시 4작업은 아직 시장 레인 소속이다(이동은 컷오버 PR).
-    assert catalog.get("DISCLOSURE_COLLECTION_DART").pipeline_type == catalog.PIPELINE_TYPE
-    assert catalog.get("LOAD_DISCLOSURE").pipeline_type == catalog.PIPELINE_TYPE
+    for key in ("DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
+                "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE"):
+        assert catalog.get(key) is None, f"{key}: 재등록됐다면 이 테스트를 갱신하라"
+    # CLI·state 어느 축으로도 안 잡힌다 = 계측이 붙지 않는다(투명 통과의 실증).
+    assert catalog.by_cli("ingest-raw-disclosure") is None
+    assert catalog.by_sfn_state("LoadDisclosure") is None
 
 
 def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):

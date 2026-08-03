@@ -247,10 +247,18 @@ locals {
   # news_* 부분집합 필터가 같은 리스트를 읽어 command_expr·taskdef_key 드리프트를 막는다(DRY).
   # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다 — analyze 는
   # 뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다.
-  market_excluded_states = ["CollectFmpNews", "CollectBigKindsNews", "NormalizeNews", "TagNews", "LoadDocuments"]
-  market_raw_jobs        = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
-  market_normalize_jobs  = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
-  market_feature_jobs    = [for j in local.feature_jobs : j if !contains(local.market_excluded_states, j.state)]
+  # 공시 4스텝도 같은 이유로 빠진다(ALPHA-724 컷오버) — 공시 SFN(disclosure_pipeline.tf)이
+  # 하루 10슬롯으로 돌린다. **성능이 아니라 원장 정체성 때문이다**: 작업 정체성의 정본인
+  # `catalog.by_cli` 가 CLI 로 해소하는데 두 레인의 CLI 가 같아, 한 스텝을 두 레인이 동시에
+  # 소유하면 장중 런의 attempt 가 시장 레인 task_key 로 기록된다(장중 영구 MISSED + 시장
+  # LEDGER_GAP). 잡 **정의**는 위 원본 리스트에 남아 공시 SFN 이 부분집합 필터로 재사용한다.
+  market_excluded_states = [
+    "CollectFmpNews", "CollectBigKindsNews", "NormalizeNews", "TagNews", "LoadDocuments",
+    "CollectDartDisclosure", "NormalizeDisclosure", "NormalizeDisclosureSegment", "LoadDisclosure",
+  ]
+  market_raw_jobs       = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_normalize_jobs = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
+  market_feature_jobs   = [for j in local.feature_jobs : j if !contains(local.market_excluded_states, j.state)]
 
   raw_ingest_success_checks = [
     for index, _ in local.market_raw_jobs : {

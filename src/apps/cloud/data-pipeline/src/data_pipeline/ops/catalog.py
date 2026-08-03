@@ -8,8 +8,9 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 33개 중 27개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
-뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27). state 수 33 = 시장 SFN
+**등록 범위: ECS Task state 33개 중 23개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
+컷오버로 27→23**). state 수 33 = 시장 SFN
 31 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는 statemachine.tf
 잡 정의를 재사용해 이름이 겹치지 않는다). 미등록 state 는 카탈로그에 없어 expected_task 가 안
 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
@@ -21,7 +22,21 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 드러난다)에 있고, ops 행 복제는 같은 사실을 두 원장에 살게 한다(모니터링 계획 §2-1).
 콘솔 편입은 요약 관측(super-admin-api `/api/v1/sources/minute`)으로 한다.
 
-**레인(pipeline_type) 축**(ALPHA-591): 카탈로그는 시장 레인(`etf-daily`, 21작업)과 뉴스 레인
+**공시 4작업은 지금 일시 미등록이다**(ALPHA-724). 컷오버가 시장 SFN 에서 공시 스텝을 빼고
+공시 SFN 스케줄을 켜는 순간, 그 4작업의 소유 레인이 `etf-daily` 에서 `disclosure` 로 바뀐다.
+두 변경은 이미지 CD 와 terraform-apply 라 **순서 보장이 없어**, 등록을 유지한 채 어느 쪽이
+먼저 뜨면 기대와 실행이 어긋난 런이 원장에 남는다. 미등록은 그 중간 상태의 안전한 형태다 —
+`by_cli` 가 None 을 돌려주고 wrapper 가 투명 통과하므로 attempt 도 expected_task 도 안 생긴다.
+**재등록(pipeline_type="disclosure")은 배선이 착지한 뒤 후속 PR 이 한다** — ALPHA-553 PR2 가
+뉴스 6작업을 빼고 ALPHA-591 이 되돌린 것과 같은 경로다.
+
+⚠️ 컷오버가 **선택이 아니라 전제인 이유**: 작업 정체성의 정본은 `by_cli(step, source)` 인데
+두 레인의 CLI 가 글자 그대로 같다(`ingest-raw-disclosure`·`normalize-disclosure`…). 같은
+스텝을 두 레인이 동시에 소유하면 `by_cli` 가 먼저 온 엔트리를 돌려줘 장중 런의 attempt 가
+시장 레인 task_key 로 기록된다 — 장중 런은 영구 MISSED, 시장 런은 resolve 경로가 없는
+LEDGER_GAP 이다. 그래서 "둘 다 등록"이라는 선택지가 애초에 없다.
+
+**레인(pipeline_type) 축**(ALPHA-591): 카탈로그는 시장 레인(`etf-daily`, 17작업)과 뉴스 레인
 (`news`, 6작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 3슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
@@ -35,7 +50,7 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**등록 27작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
+**등록 23작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
 ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
@@ -60,8 +75,8 @@ revision 위에서 돌고, Reconciler 가 resolve 불가한 LEDGER_GAP 을 연�
 원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
 않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
 
-⚠️ 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다(FMP 4개는 토글 off,
-DART 재무는 소비자 0). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
+⚠️ 수집 커버리지는 시장 레인 10개 중 5개 + 뉴스 레인 1개(BigKinds)다(FMP 4개는 토글 off,
+DART 재무는 소비자 0, 공시는 ALPHA-724 로 일시 미등록). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578) 커버리지의
 **모양**이 숫자보다 중요하다.
 """
 
@@ -125,7 +140,7 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 27작업(시장 21 + 뉴스 6). sfn_state_name·cli_command·ecs_task_definition 은
+# 등록 23작업(시장 17 + 뉴스 6). sfn_state_name·cli_command·ecs_task_definition 은
 # statemachine.tf·news_pipeline.tf 의 실제 state·command_expr·taskdef_key 와 일치해야 한다
 # (test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
@@ -203,7 +218,8 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
         ecs_task_definition="kis", source_vendor="kis",
     ),
-    # ── KRX·DART 수집 2 ───────────────────────────────────────────────────────────
+    # ── KRX 수집 1 ────────────────────────────────────────────────────────────────
+    # (공시 수집은 ALPHA-724 컷오버로 **일시 미등록**이다 — 아래 이관 절 참조.)
     # 등록하지 않으면 수집 실패가 원장에 **자리조차 없다**. 2026-07-27 KRX 수집을 손으로
     # 죽였는데(exit 137) 화면에 아무것도 안 뜬 것이 그 실증이다(ALPHA-578).
     # ALPHA-596 에서 `tasks.tf` 가 두 task-def 에 DB env 를 주면서 **직접 계측**으로 올렸다 —
@@ -231,27 +247,10 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         stalled_after_seconds=21600,
         contract_key=contracts.ETF_HOLDINGS_KRX_EOD,
     ),
-    CatalogEntry(
-        task_key="DISCLOSURE_COLLECTION_DART", stage="raw", dataset="disclosures", required=True,
-        cli_command=("ingest-raw-disclosure",), sfn_state_name="CollectDartDisclosure",
-        ecs_task_definition="dart", source_vendor="dart",
-        stalled_after_seconds=21600,
-    ),
-    # ── 정제 8 (bigkinds task-def 재사용 — 레이크만 읽어 벤더 키 불요) ─────────────
+    # ── 정제 6 (bigkinds task-def 재사용 — 레이크만 읽어 벤더 키 불요) ─────────────
     # 정제의 depends_on 은 **비운다**: raw 부분실패는 뒤를 막지 않고(ADR-0030) 정제는 빈 입력을
     # 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집 실패 런에서 **실제로 돌아 성공한 정제**가
     # BLOCKED 로 오귀속된다. 반면 정제→feature 는 진짜 게이트라 아래에서 의존으로 그린다.
-    CatalogEntry(
-        task_key="NORMALIZE_DISCLOSURE", stage="normalize", dataset="supply_contract_fact",
-        required=True, cli_command=("normalize-disclosure",), sfn_state_name="NormalizeDisclosure",
-        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
-    ),
-    CatalogEntry(
-        task_key="NORMALIZE_DISCLOSURE_SEGMENT", stage="normalize",
-        dataset="business_segment_fact", required=True,
-        cli_command=("normalize-disclosure-segment",), sfn_state_name="NormalizeDisclosureSegment",
-        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
-    ),
     CatalogEntry(
         task_key="NORMALIZE_ETF", stage="normalize", dataset="etf_holdings", required=True,
         cli_command=("normalize-etf",), sfn_state_name="NormalizeEtf",
@@ -281,9 +280,11 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 미진입인데, 의존을 비워 두면 그게 MISSED("시작조차 안 됐다")로 찍힌다 — 진실은
         # BLOCKED(게이트가 닫혔다)다. ADR-0030 과 충돌하지 않는다: 그건 raw→정제 얘기고
         # (그래서 정제 엔트리는 의존이 비어 있다) 여긴 정제→feature 게이트다.
+        # ⚠️ 공시 정제 2개가 빠졌다(ALPHA-724) — 그 스텝이 시장 SFN 의 `NormalizeCheckResults`
+        # 게이트 멤버가 아니게 됐기 때문이다. 남겨두면 시장 런에서 **영영 충족되지 않는 의존**이
+        # 되어 이 작업이 BLOCKED 로 굳는다(그 정제는 다른 SFN 에서 돌므로 이 런엔 자리가 없다).
         depends_on=(
-            "NORMALIZE_PRICE", "NORMALIZE_DISCLOSURE",
-            "NORMALIZE_DISCLOSURE_SEGMENT", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
+            "NORMALIZE_PRICE", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
             "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
         ),
     ),
@@ -305,11 +306,6 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="LOAD_ETF_FLOW", stage="feature", dataset="investor_flow_load", required=True,
         cli_command=("load-etf-flow",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfFlow",
-        ecs_task_definition="rds", deadline_offset_seconds=7200,
-    ),
-    CatalogEntry(
-        task_key="LOAD_DISCLOSURE", stage="feature", dataset="disclosure_document", required=True,
-        cli_command=("load-disclosure",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadDisclosure",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
     ),
     # ── corp_code enrichment (rds_dart) ───────────────────────────────────────────

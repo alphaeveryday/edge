@@ -50,6 +50,14 @@ _NOT_INSTRUMENTED = {
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
     "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
+    # ⚠️ 아래 4개는 **영구 제외가 아니라 이관 중**이다(ALPHA-724). 컷오버가 소유 레인을
+    # etf-daily → disclosure 로 옮기는데 두 변경(SFN 배선 / 카탈로그)이 독립 워크플로라
+    # 순서 보장이 없어, 중간 상태를 미등록으로 둔다. 재등록 PR 이 여기서 지운다 —
+    # 안 지우면 공시가 영영 원장 밖에서 도는데 화면엔 아무 흔적도 없다(Rule 12).
+    "CollectDartDisclosure": "ALPHA-724 공시 레인 이관 중 — 재등록 PR 이 pipeline_type=disclosure 로 되돌린다",
+    "NormalizeDisclosure": "ALPHA-724 공시 레인 이관 중",
+    "NormalizeDisclosureSegment": "ALPHA-724 공시 레인 이관 중",
+    "LoadDisclosure": "ALPHA-724 공시 레인 이관 중",
 }
 
 
@@ -74,11 +82,13 @@ def test_catalog_and_asl_task_states_match_both_ways():
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
     assert registered.isdisjoint(_NOT_INSTRUMENTED), "제외 목록과 등록이 겹친다"
-    # 21 → 27(ALPHA-591): 뉴스 레인 6작업이 자체 pipeline_type 으로 복귀 — 커버리지를 숫자로
-    # 고정해 조용한 축소를 막는 절이다(Rule 12). 레인별 몫도 함께 고정한다.
-    assert len(registered) == 27
-    assert len(catalog.entries("etf-daily")) == 21
+    # 21 → 27(ALPHA-591) → 23(ALPHA-724 공시 레인 이관 중): 커버리지를 숫자로 고정해 조용한
+    # 축소를 막는 절이다(Rule 12). 레인별 몫도 함께 고정한다 — 재등록 PR 이 23→27,
+    # etf-daily 17 유지, disclosure 0→4 로 이 세 줄을 함께 되돌린다.
+    assert len(registered) == 23
+    assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
+    assert len(catalog.entries("disclosure")) == 0
     # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
@@ -251,8 +261,8 @@ def test_by_cli_resolves_vendor_split_steps():
     # 재무는 양쪽 다 미등록(FMP=토글 off, DART=하류 소비자 0) — 계측 없이 지나간다.
     assert catalog.by_cli("ingest-raw-financial", "dart") is None
     assert catalog.by_cli("ingest-raw-financial", None) is None
-    # 공시는 벤더 축이 없다(DART 단일) — --source 없이 해소된다.
-    assert catalog.by_cli("ingest-raw-disclosure").task_key == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 ALPHA-724 이관 중이라 미등록 — 계측 없이 지나간다(재등록 PR 이 되돌린다).
+    assert catalog.by_cli("ingest-raw-disclosure") is None
     # 벤더 축이 없는 스텝은 --source 없이 해소된다.
     assert catalog.by_cli("normalize-price").task_key == "NORMALIZE_PRICE"
     assert catalog.by_cli("load-price-daily").task_key == "LOAD_PRICE_DAILY"
@@ -279,9 +289,11 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 → ALPHA-610 이 직접 계측으로 승격.
     # 이제 attempt 결측은 정상이 아니라 LEDGER_GAP 이다(Reconciler backfill 은 백스톱).
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
-    # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
+    # KRX 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
-    assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 ALPHA-724 이관 중 미등록 = 통과. 이게 컷오버 중간 상태가 안전한 이유다 —
+    # 두 레인이 같은 CLI 를 갖는데 어느 쪽으로도 해소되지 않으니 오귀속이 불가능하다.
+    assert ops_entry.task_key_for("ingest-raw-disclosure", None) is None
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
@@ -336,12 +348,16 @@ def test_dependencies_encode_the_asl_gates():
             assert e.depends_on == () or e.task_key == "NORMALIZE_PRICE", \
                 f"{e.task_key}: 정제에 raw 의존을 걸면 수집 실패 런에서 실제로 성공한 정제가 BLOCKED 다"
     # feature 로더 6개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만 다르면 안 된다.
+    # LOAD_DISCLOSURE 는 ALPHA-724 이관 중이라 이 게이트에 없다(재등록 시 disclosure 레인의
+    # 자체 게이트로 다시 그려진다 — 시장 EnrichCorpCode 의존은 레인 간이라 복사하면 안 된다).
     gate = {"LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
-            "LOAD_ETF_FLOW", "LOAD_DISCLOSURE"}
+            "LOAD_ETF_FLOW"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
-    assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 7   # 정제 전량 성공 게이트
+    # 정제 전량 성공 게이트 — 8→5(공시 정제 2개가 시장 SFN 을 떠났고, NORMALIZE_NEWS 는
+    # 원래 뉴스 레인). 남겨두면 시장 런에서 영영 충족 안 되는 의존이 돼 BLOCKED 로 굳는다.
+    assert len(catalog.get("LOAD_INSTRUMENTS").depends_on) == 5
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS
     # ← feature 7개, LOAD_DOCUMENTS ← ENRICH_CORP_CODE)을 복사하면 뉴스 런에 존재하지 않는
     # 작업을 기다려 영영 eligible 이 안 되고, hard deadline 뒤 전부 BLOCKED 로 오귀속된다.
