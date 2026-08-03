@@ -307,14 +307,18 @@ def test_universe_derived_from_holdings_excludes_etf_itself(tmp_path):
     assert log["symbols_excluded_etf"] == 1  # 091160 — 뺀 사실이 로그로 드러난다
 
 
-def test_unmapped_targets_stay_success_but_counted(tmp_path):
-    # WHY: holdings 유니버스에는 corpCode.xml 에 없는 종목(비상장 편입 등)이 상수로 섞인다.
-    #      진짜 실패와 같이 세면 raw 페이즈가 **매 런** partial·exit 1 이 되어 SFN 게이트가
-    #      매일 깨진다 — 재시도로 낫지 않는 구조적 결측이라 런을 죽일 근거가 없다(ADR-0030).
-    #      그렇다고 지우면 조용한 결측이므로, 원장이 보는 계측에는 그대로 남아야 한다.
+def test_truncation_stays_success_but_counted(tmp_path):
+    # WHY: 목록 절단(kind=truncation)은 데이터가 유효하고 다음 창이 이어받으므로 런을 죽일
+    #      근거가 없다(ALPHA-351) — 진짜 실패와 같이 세면 raw 페이즈가 partial·exit 1 이 되어
+    #      SFN 게이트가 깨진다(ADR-0030). 그렇다고 지우면 조용한 결측이므로, 원장이 보는
+    #      계측에는 그대로 남아야 한다.
+    #
+    # ⚠️ 관용 어휘는 이것 **하나뿐**이다. 종전엔 corpCode 미매핑(kind=unmapped)도 관용됐지만,
+    # 소스가 시장 전체 목록을 질의하게 되면서 발생 지점 자체가 사라졌다 — 관용 목록에 죽은
+    # 어휘를 남겨두면 그 이름을 쓰는 새 실패가 조용히 통과한다.
     source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures = [{"symbol": "999999", "our_ticker": "999999",
-                              "error": "corpCode.xml 에 corp_code 없음", "kind": "unmapped"}]
+    source.fetch_failures = [{"symbol": None, "our_ticker": None, "page": 500,
+                              "error": "MAX_PAGES(500) 도달 — 목록 절단 가능", "kind": "truncation"}]
 
     code, storage = _run(tmp_path, source)
 
@@ -323,4 +327,18 @@ def test_unmapped_targets_stay_success_but_counted(tmp_path):
     assert log["status"] == "success"  # 런은 죽지 않는다
     assert log["records_failed_targets"] == 1  # 그러나 유실은 계속 센다
     assert log["ops"]["failed_records"] == 1
-    assert log["failed_targets"][0]["kind"] == "unmapped"
+    assert log["failed_targets"][0]["kind"] == "truncation"
+
+
+def test_unmapped_kind_is_no_longer_tolerated(tmp_path):
+    # WHY(Rule 12): `unmapped` 는 이제 소스가 만들 수 없는 어휘다. 관용 목록에 남겨두면,
+    #      누군가 그 이름으로 새 실패를 붙였을 때 런이 조용히 성공으로 통과한다 — 관용은
+    #      "이 실패는 죽일 근거가 없다"는 판단이지 이름에 대한 영구 면제가 아니다.
+    source = FakeSource(records=[_rec("A1")])
+    source.fetch_failures = [{"symbol": "999999", "our_ticker": "999999",
+                              "error": "왜인지 unmapped 를 자칭하는 새 실패", "kind": "unmapped"}]
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 1
+    assert _log(storage, "r1")["status"] == "partial"

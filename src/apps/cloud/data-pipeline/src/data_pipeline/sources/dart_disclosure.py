@@ -2,13 +2,24 @@
 
 엔드포인트(재무 fnlttSinglAcnt 와 **다른 API**):
     {base_url}/corpCode.xml?crtfc_key=...                     # 종목코드→corp_code 매핑
-    {base_url}/list.json?crtfc_key=&corp_code=&bgn_de=&end_de=&page_no=&page_count=  # 공시목록
+    {base_url}/list.json?crtfc_key=&bgn_de=&end_de=&page_no=&page_count=  # 공시목록
     {base_url}/document.xml?crtfc_key=&rcept_no=              # 공시서류 원본(ZIP)
 
-corpCode.xml 로 corp_code 를 확보한 뒤, corp_code × 날짜창으로 공시목록을 페이지네이션하며
-report_nm 부분일치로 대상 유형(공급계약·사업보고서 등)만 낸다(공시목록은 전 유형을 준다).
-공시서류 원본 본문(document.xml)은 step 이 rcept_no 별로 fetch_document 로 받아 별도 객체에
-무변형 저장한다 — 이 어댑터의 fetch() 는 메타 행만 낸다.
+**날짜창의 시장 전체 공시목록**을 페이지네이션하며 유니버스(stock_code)와 report_nm 부분일치로
+대상만 낸다(공시목록은 전 종목·전 유형을 준다). 공시서류 원본 본문(document.xml)은 step 이
+rcept_no 별로 fetch_document 로 받아 별도 객체에 무변형 저장한다 — 이 어댑터의 fetch() 는 메타
+행만 낸다.
+
+⚠️ `corp_code` 는 **선택 파라미터**다(실측 2026-08-03). 종목별로 질의하면 호출 수가 유니버스
+크기에 비례해(311 종 = 311 콜, PoliteClient 1.0s ⇒ ~311초) 어떤 잦은 실행도 불가능한데, 생략하면
+창 전체가 페이지 수에만 비례한다(하루 ~700~1,070건 = 7~11 콜). 그래서 유니버스는 **질의 축이
+아니라 필터**다. 부수 효과로 수집 경로에서 corpCode.xml 해소가 사라진다 — list 행이 stock_code 를
+직접 주므로, 매 런 상수로 걸리던 미매핑 실패(kind=unmapped)가 구조적으로 없어진다(ALPHA-477 의
+`data_status=INCOMPLETE` 고착 요인). `load_corp_map()` 은 enrich-corp-code 스텝이 계속 쓴다.
+
+⚠️ 유형 파라미터(`pblntf_ty`)로 좁히지 않는다. 실측(2026-07-28~08-01)상 "사업보고서" 부분일치는
+A(정기공시) 34건 외에 H(자산유동화) 27건에도 걸려, 유형으로 먼저 자르면 필터 대상이 **조용히**
+줄어든다. 전 유형을 받아 report_nm 으로 거르는 편이 호출 몇 개 더 쓰고 가정을 하나 없앤다.
 
 raw 존에는 list 행 원본에 수집 provenance(our_ticker·market·stock_code·source_url·fetched_at)만
 붙여 그대로 낸다. 정규화·dedup·정정 판정·정체성 병합은 후속 canonical 소관이다.
@@ -89,6 +100,12 @@ class DartDisclosureSource:
         self.universe_from_holdings = True
         self.fetch_failures: list[dict] = []
         self.planned_symbols: int | None = None
+        # 소스가 스스로 신고한 창 전체 건수(1페이지 total_count)와 실제로 훑은 행 수. **판정이
+        # 아니라 관측**이다 — 목록은 수집 중에도 자란다(접수 피크 16시). 페이지 경계가 밀려
+        # 둘이 어긋나는 것과 진짜 누락은 구분되지 않으므로, 여기서 완전성을 단언하면 관대한
+        # 쪽이든 엄격한 쪽이든 거짓이 된다. 스텝은 이 값을 collection_log 에 기록만 한다.
+        self.list_total_count: int | None = None
+        self.list_rows_seen: int = 0
         self._corp_map: dict[str, dict[str, str]] | None = None
 
     @property
@@ -97,9 +114,12 @@ class DartDisclosureSource:
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
         """수집 대상 → [(our_ticker, stock_code)]. KR 단축코드는 **항등 매핑**이 기본이고
-        (KRX 코드가 곧 corpCode.xml 의 stock_code), symbol_map 은 항등이 아닌 예외의 오버라이드
+        (KRX 코드가 곧 list.json 의 stock_code), symbol_map 은 항등이 아닌 예외의 오버라이드
         축으로만 남는다(투자자 수급 plan 과 동형, ALPHA-477). KRX 코드 형태가 아닌 미매핑 심볼
         (US 등)은 제외 — OpenDART 는 국내 전용이다.
+
+        질의 축이 아니라 **필터 집합**이다(모듈 docstring) — fetch() 가 이 목록을
+        stock_code→our_ticker 로 뒤집어 시장 전체 목록에서 우리 것만 고른다.
 
         형태 판정은 `parse.krx_short_code` 가 한다(ALPHA-463) — 문자 섞인 신형 단축코드
         (0093A0 등)도 corpCode.xml 이 그대로 주므로 항등 대상이고, `ABCDEF` 같은 6자 US 심볼은
@@ -117,8 +137,8 @@ class DartDisclosureSource:
 
     def _note_failure(
         self,
-        stock_code: str,
-        our_ticker: str,
+        stock_code: str | None,
+        our_ticker: str | None,
         reason: str,
         *,
         rcept_no: str | None = None,
@@ -146,59 +166,43 @@ class DartDisclosureSource:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> Iterator[dict]:
-        """corp_code × 날짜창으로 공시목록을 페이지네이션해 대상 유형 메타 행을 낸다."""
+        """날짜창의 시장 전체 공시목록을 페이지네이션해 유니버스∩대상 유형 메타 행을 낸다."""
         self.fetch_failures = []
+        self.list_total_count = None
+        self.list_rows_seen = 0
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
         if not plan:
             return
-        corp_map = self.load_corp_map()
+        # stock_code → our_ticker 역인덱스. 항등 매핑이 기본이라 실질 충돌은 symbol_map
+        # 오버라이드가 같은 단축코드로 겹칠 때뿐이고, 그때는 먼저 온 쪽을 남긴다.
+        allowed: dict[str, str] = {}
+        for our_ticker, stock_code in plan:
+            allowed.setdefault(stock_code, our_ticker)
         fetched_at = datetime.now(timezone.utc).isoformat()
         bgn_de, end_de = _to_dart_date(from_date), _to_dart_date(to_date)
-        for our_ticker, stock_code in plan:
-            corp = corp_map.get(stock_code)
-            if not corp:
-                # corpCode.xml 에 없는 종목(비상장 편입·해외 등)은 재시도로 낫지 않는 미매핑이라
-                # 진짜 실패(네트워크·쿼터)와 **exit code 상으로만** 가른다 — 이걸로 raw 페이즈를
-                # 막으면 다음 런도 같은 이유로 막힌다(ADR-0030 과 같은 축, ALPHA-477).
-                #
-                # ⚠️ 원장에서까지 빼지는 않는다: 해소 못 한 회사의 공시는 실제로 수집이 빠진
-                # 것이라 failed_targets·ops.failed_records 에 남고, 그 결과 data_status 는
-                # INCOMPLETE 가 된다(`ops/wrapper.py`). 그게 사실이다 — 커버리지 구멍을 VALID 로
-                # 위장하지 않는다(Rule 12). 이 수가 상시 0 이 아니면 줄일 곳은 여기가 아니라
-                # corp_code enrichment(ALPHA-491) 쪽이다.
-                self._note_failure(stock_code, our_ticker, "corpCode.xml 에 corp_code 없음",
-                                   kind="unmapped")
-                continue
-            corp_code = corp["corp_code"]
-            try:
-                yield from self._paginate(
-                    our_ticker, stock_code, corp_code, bgn_de, end_de, fetched_at
-                )
-            except StopFetch:
-                raise
-            except Exception as exc:
-                self._note_failure(stock_code, our_ticker, str(exc))
-                continue
+        yield from self._scan_window(allowed, bgn_de, end_de, fetched_at)
 
     def _is_target(self, report_nm: str) -> bool:
         """report_nm(문자열)이 대상 유형인지 — strip 후 부분일치(ㆍ·패딩·[기재정정] 접두 안전)."""
         return any(f in report_nm.strip() for f in self.report_name_filters)
 
-    def _paginate(
+    def _scan_window(
         self,
-        our_ticker: str,
-        stock_code: str,
-        corp_code: str,
+        allowed: dict[str, str],
         bgn_de: str | None,
         end_de: str | None,
         fetched_at: str,
     ) -> Iterator[dict]:
+        # 목록이 자라는 동안 페이지 경계가 밀려 같은 행이 두 페이지에 걸쳐 나올 수 있다 —
+        # 창 안에서 rcept_no 로 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고
+        # raw 에도 중복 행이 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
+        seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
-            payload = self._list(corp_code, bgn_de, end_de, page)
+            payload = self._list(bgn_de, end_de, page)
             status = str(payload.get("status") or "?")
             if status == "013":
-                # 조회 데이터 없음 = 정상 빈 창(그 corp·기간에 공시 없음) — 뉴스형.
+                # 조회 데이터 없음 = 정상 빈 창(그 기간에 공시 없음) — 뉴스형.
                 return
             if status in STOP_STATUS_CODES:
                 msg = payload.get("message") or STATUS_MESSAGES.get(status, "?")
@@ -213,15 +217,29 @@ class DartDisclosureSource:
             rows = payload.get("list")
             if not isinstance(rows, list):
                 raise ValueError(f"DART status=000 인데 list 이상: {type(rows).__name__}")
+            if page == 1:
+                raw_count = payload.get("total_count")
+                self.list_total_count = raw_count if isinstance(raw_count, int) else None
             for row in rows:
+                self.list_rows_seen += 1
                 if not isinstance(row, dict):
+                    # 행 형상이 깨졌으면 누구 것인지도 모른다 — 유니버스 필터 앞에 둘 수밖에
+                    # 없고, 그래서 우리 종목이 아닌 행도 여기 잡힌다. 시장 전체를 훑는 이상
+                    # 감수하는 오탐이다(조용히 버리는 쪽이 더 나쁘다).
                     self._note_failure(
-                        stock_code, our_ticker,
-                        f"malformed row: {type(row).__name__}", page=page,
+                        None, None, f"malformed row: {type(row).__name__}", page=page,
                     )
                     continue
+                # 유니버스 필터가 먼저다 — 시장 전체 목록에는 우리가 수집하지 않는 회사 행이
+                # 하루 수백 건 섞여 있다. 필드 게이트를 앞에 두면 **남의 회사 행의 결함**이
+                # 우리 런의 failed_records 로 올라가 원장이 없는 결측을 세게 된다.
+                stock_code = row.get("stock_code")
+                stock_code = stock_code.strip() if isinstance(stock_code, str) else ""
+                our_ticker = allowed.get(stock_code)
+                if our_ticker is None:
+                    continue
                 # 필드 타입도 행 단위로 격리한다 — 비객체 행만 거르고 필드는 안 보면 비문자열
-                # report_nm/rcept_no 가 .strip() 에서 터져 이 corp 전체를 죽인다(각도 H —
+                # report_nm/rcept_no 가 .strip() 에서 터져 창 전체를 죽인다(각도 H —
                 # crash-before-gate). OpenDART 는 문자열로 주지만 malformed 응답에 방어한다.
                 report_nm = row.get("report_nm")
                 if not isinstance(report_nm, str):
@@ -240,10 +258,13 @@ class DartDisclosureSource:
                     )
                     continue
                 rcept_no = rcept_no.strip()
+                if rcept_no in seen:
+                    continue
+                seen.add(rcept_no)
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
-                record.setdefault("stock_code", stock_code)
+                record["stock_code"] = stock_code
                 record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no)
                 record["fetched_at"] = fetched_at
                 yield record
@@ -255,25 +276,22 @@ class DartDisclosureSource:
                 total_page = max(1, int(raw_total)) if raw_total is not None else 1
             except (TypeError, ValueError):
                 self._note_failure(
-                    stock_code, our_ticker,
+                    None, None,
                     f"total_page 파싱 불가: {raw_total!r} — 목록 절단 가능", page=page,
                 )
                 return
             if page >= total_page:
                 return
         self._note_failure(
-            stock_code,
-            our_ticker,
+            None,
+            None,
             f"MAX_PAGES({self.max_pages}) 도달 — 목록 절단 가능(창 좁혀 재실행)",
             kind="truncation",
         )
 
-    def _list(
-        self, corp_code: str, bgn_de: str | None, end_de: str | None, page: int
-    ) -> dict:
+    def _list(self, bgn_de: str | None, end_de: str | None, page: int) -> dict:
         params = {
             "crtfc_key": self.api_key or "",
-            "corp_code": corp_code,
             "page_no": page,
             "page_count": self.page_count,
         }

@@ -166,11 +166,11 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
     #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
-    #  - corpCode 미매핑(kind=unmapped)도 exit code 상으로는 성공으로 본다(ALPHA-477):
-    #    재시도로 낫지 않는 미매핑이라 런을 죽이면 다음 런도 같은 이유로 죽는다. 다만
-    #    failed_targets·ops.failed_records 에는 그대로 남아 원장이 유실을 계속 본다
-    #    (data_status=INCOMPLETE). 커버리지 구멍은 사실대로 드러낸다 — 조용한 결측 금지.
-    _TOLERATED = {"truncation", "unmapped"}
+    #
+    # kind=unmapped 는 어휘에서 빠졌다 — 소스가 corp_code 를 해소하지 않게 되면서(시장 전체
+    # 목록 질의, `sources/dart_disclosure.py`) 발생 지점 자체가 없어졌다. 매 런 상수로 걸리며
+    # data_status 를 INCOMPLETE 에 묶어 두던 실패다.
+    _TOLERATED = {"truncation"}
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
     real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]
     if status == "success" and real_failures:
@@ -201,6 +201,12 @@ def run(
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),
+            # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
+            # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
+            # 둘의 차이는 절단일 수도 유입일 수도 있다. 어느 쪽인지 모르는 값으로 완전성을
+            # 단언하지 않고 기록만 남긴다 — 나중에 사람이 볼 수 있게(Rule 12).
+            "list_total_count": getattr(source, "list_total_count", None),
+            "list_rows_seen": getattr(source, "list_rows_seen", 0),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
             # records_out 은 메타 건수(saved)로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.

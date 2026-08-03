@@ -58,20 +58,28 @@ def _param(url: str, key: str) -> str:
 
 
 class FakeClient:
-    """list_pages: {(corp_code, page_no): payload_dict}. corp_rows: corpCode.xml 매핑."""
+    """list_pages: {page_no: payload_dict}. corp_rows: corpCode.xml 매핑(enrich 경로 전용).
+
+    ⚠️ list.json 은 **corp_code 없이** 불린다 — 종목별 질의를 걷어냈다. 그래서 이 fake 는
+    페이지 번호만 키로 쓰고, corp_code 파라미터가 되살아나면 아래 단언이 그걸 잡는다.
+    """
 
     def __init__(self, list_pages=None, corp_rows=None, documents=None):
         self.list_pages = list_pages or {}
         self.corp_rows = corp_rows if corp_rows is not None else [("005930", "00126380", "삼성전자")]
         self.documents = documents or {}
+        self.list_urls: list[str] = []
+        self.corpcode_calls = 0
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         if "/corpCode.xml" in url:
+            self.corpcode_calls += 1
             return _corpcode_zip(self.corp_rows)
         if "/list.json" in url:
-            corp_code = _param(url, "corp_code")
+            assert "corp_code=" not in url, f"공시목록에 corp_code 가 실렸다: {url}"
+            self.list_urls.append(url)
             page = int(_param(url, "page_no"))
-            payload = self.list_pages.get((corp_code, page), {"status": "013"})
+            payload = self.list_pages.get(page, {"status": "013"})
             return json.dumps(payload, ensure_ascii=False)
         if "/document.xml" in url:
             rcept_no = _param(url, "rcept_no")
@@ -107,7 +115,7 @@ def test_filters_by_report_name_and_attaches_provenance(tmp_path):
     # WHY: 공시목록은 전 유형을 준다 — 대상 유형(공급계약·사업보고서)만 내고, 무관 유형은
     #      버려야 후속이 본문을 무의미하게 재수집하지 않는다. 그리고 list.json 이 안 주는
     #      source_url 은 rcept_no 로 구성해 붙여야(파생 provenance) 다운스트림이 원문을 연다.
-    client = FakeClient(list_pages={("00126380", 1): _page([
+    client = FakeClient(list_pages={1: _page([
         _row("단일판매ㆍ공급계약체결              ", rcept_no="A1"),  # 대상(공급계약) + 꼬리공백·ㆍ
         _row("주주총회소집결의", rcept_no="B2"),                     # 비대상
         _row("[기재정정]사업보고서", rcept_no="C3"),                 # 대상(사업보고서, 정정본)
@@ -125,22 +133,65 @@ def test_filters_by_report_name_and_attaches_provenance(tmp_path):
     assert source.fetch_failures == []
 
 
-def test_unmapped_corp_code_noted_not_crash(tmp_path):
-    # WHY: corpCode.xml 에 종목이 없으면(상장폐지·매핑 공백) 그 대상만 격리해 기록하고 나머지는
-    #      계속한다 — 한 종목 결측이 런을 죽이면 안 된다(fail loud, 격리≠은폐).
-    # corpCode.xml 자체는 정상이지만(다른 회사 존재) 우리 종목(005930)이 없다 — 그 대상만 격리.
-    client = FakeClient(corp_rows=[("000660", "00164779", "SK하이닉스")])
+def test_foreign_rows_filtered_without_touching_corpcode(tmp_path):
+    # WHY: 시장 전체 목록에는 우리가 수집하지 않는 회사의 행이 하루 수백 건 섞여 온다 —
+    #      유니버스 밖은 **정상적으로 버리는 것**이지 실패가 아니다. 그리고 종목→corp_code
+    #      해소가 수집 경로에서 사라졌다는 것도 여기서 고정한다: corpCode.xml 을 부르면
+    #      유니버스 크기만큼 미매핑 실패가 되살아나 원장이 매 런 INCOMPLETE 로 묶인다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="MINE"),
+        _row("단일판매ㆍ공급계약체결", rcept_no="THEIRS", stock_code="000660"),  # 유니버스 밖
+    ])})
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
 
-    assert records == []
-    assert len(source.fetch_failures) == 1
-    assert "corp_code 없음" in source.fetch_failures[0]["error"]
-    # kind=unmapped — holdings 유니버스에는 DART 신고자가 아닌 종목이 상수로 섞여 매 런 같은
-    # 수가 걸린다. 재시도로 낫지 않는 구조적 결측이라 스텝이 런을 죽이지 않게 구분한다
-    # (ALPHA-477). 계측에서는 빠지지 않는다 — 아래 스텝 테스트가 그걸 고정한다.
-    assert source.fetch_failures[0]["kind"] == "unmapped"
+    assert [r["rcept_no"] for r in records] == ["MINE"]
+    assert source.fetch_failures == []  # 남의 회사 행은 결측이 아니다
+    assert client.corpcode_calls == 0
+
+
+def test_foreign_row_defect_is_not_our_failed_record(tmp_path):
+    # WHY: 필드 게이트를 유니버스 필터보다 **앞에** 두면, 우리가 수집하지도 않는 회사의
+    #      malformed 행이 우리 런의 failed_records 로 올라가 원장이 없는 결측을 센다.
+    #      종목별 질의 시절엔 남의 행을 볼 일이 없어 없던 경로다.
+    client = FakeClient(list_pages={1: _page([
+        {"stock_code": "000660", "report_nm": 12345, "rcept_no": "X"},  # 유니버스 밖 + 깨진 필드
+        _row("사업보고서", rcept_no="OK"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["OK"]
+    assert source.fetch_failures == []
+
+
+def test_row_repeated_across_shifted_pages_collapses(tmp_path):
+    # WHY: 목록은 수집 중에도 자란다(접수 피크 16시) — 새 공시가 끼어들면 페이지 경계가 밀려
+    #      같은 행이 두 페이지에 걸쳐 나온다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고
+    #      raw 에도 중복 행이 앉는다. 후속 canonical dedup 은 이미 쓴 대역폭을 돌려주지 않는다.
+    dup = _row("단일판매ㆍ공급계약체결", rcept_no="DUP")
+    client = FakeClient(list_pages={
+        1: _page([dup], total_page=2),
+        2: _page([dup, _row("사업보고서", rcept_no="NEW")], total_page=2),
+    })
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["DUP", "NEW"]
+
+
+def test_window_scanned_once_regardless_of_universe_size(tmp_path):
+    # WHY: 이 PR 의 존재 이유다 — 호출 수가 유니버스 크기에 비례하면(311 종 = 311 콜, 간격
+    #      1.0s ⇒ ~311초) 잦은 실행이 불가능하다. 창당 페이지 수에만 비례해야 한다.
+    client = FakeClient(list_pages={1: _page([_row("공급계약", rcept_no="A1")])})
+    source = _source(tmp_path, client, api_key="k", symbol_map={})
+
+    list(source.fetch([f"{i:06d}" for i in range(1, 51)]))  # 50 종
+
+    assert len(client.list_urls) == 1
 
 
 def test_kr_short_code_plans_by_identity_without_symbol_map(tmp_path):
@@ -187,7 +238,7 @@ def test_status_013_is_empty_window_no_failure(tmp_path):
 def test_stop_status_raises_stopfetch(tmp_path):
     # WHY: 쿼터 초과(020)·키 오류 등은 특정 종목 문제가 아니라 소스 전체 문제라 즉시 중단해야
     #      한다 — 재시도로 두드리거나 조용히 넘기면 안 된다.
-    client = FakeClient(list_pages={("00126380", 1): _page([], status="020")})
+    client = FakeClient(list_pages={1: _page([], status="020")})
     source = _source(tmp_path, client, api_key="k")
 
     with pytest.raises(StopFetch):
@@ -197,7 +248,7 @@ def test_stop_status_raises_stopfetch(tmp_path):
 def test_malformed_row_isolated_others_yielded(tmp_path):
     # WHY(각도 H): list[] 에 비객체 행이 섞여도 그 행만 격리하고 정상 대상 행은 계속 내야 한다 —
     #      malformed 입력이 게이트를 뚫거나 런을 죽이면 안 된다.
-    client = FakeClient(list_pages={("00126380", 1): _page([
+    client = FakeClient(list_pages={1: _page([
         "not-a-dict",
         _row("단일판매ㆍ공급계약체결", rcept_no="A1"),
     ])})
@@ -214,7 +265,7 @@ def test_non_string_report_nm_isolated_not_crash(tmp_path):
     # WHY(각도 H — crash-before-gate): 행 타입만 보고 필드 타입을 안 보면, 비문자열 report_nm
     #      (malformed 응답의 숫자 등)이 .strip() 에서 터져 그 corp 전체를 죽이고 뒷페이지를
     #      버린다 — 행 단위로 격리해 정상 행은 계속 나와야 한다.
-    client = FakeClient(list_pages={("00126380", 1): _page([
+    client = FakeClient(list_pages={1: _page([
         _row("공급계약체결", rcept_no="A1"),  # report_nm 을 숫자로 덮어씀 ↓
         {"report_nm": 12345, "rcept_no": "N2", "stock_code": "005930"},
     ])})
@@ -228,7 +279,7 @@ def test_non_string_report_nm_isolated_not_crash(tmp_path):
 def test_non_string_rcept_no_isolated_not_crash(tmp_path):
     # WHY(각도 H — crash-before-gate/unchecked-field): rcept_no 가 문서키인데 비문자열(숫자)로
     #      오면 .strip() 에서 터진다 — 격리 기록하고 정상 행은 계속. 빈 문서키로 통과시키지도 않는다.
-    client = FakeClient(list_pages={("00126380", 1): _page([
+    client = FakeClient(list_pages={1: _page([
         {"report_nm": "단일판매ㆍ공급계약체결", "rcept_no": 20260710800910, "stock_code": "005930"},
         _row("사업보고서", rcept_no="OK9"),
     ])})
@@ -242,7 +293,7 @@ def test_non_string_rcept_no_isolated_not_crash(tmp_path):
 def test_unparseable_total_page_noted_not_silent_truncation(tmp_path):
     # WHY(각도 H/Rule 12): total_page 가 present 인데 파싱 불가면 몇 페이지인지 몰라 조용히
     #      1페이지에서 멈추면 목록 절단이 은폐된다 — 감사(fetch_failure)로 드러내야 한다.
-    client = FakeClient(list_pages={("00126380", 1): {
+    client = FakeClient(list_pages={1: {
         "status": "000", "message": "정상", "list": [_row("공급계약", rcept_no="P1")],
         "total_page": "??",  # 이상값
     }})
@@ -256,7 +307,7 @@ def test_unparseable_total_page_noted_not_silent_truncation(tmp_path):
 def test_target_with_missing_rcept_no_noted_not_yielded(tmp_path):
     # WHY(각도 H): 대상 유형인데 rcept_no 가 비면(문서키 결측) 본문을 못 받고 정체성도 못 잡는다 —
     #      빈 문서키로 통과시키지 말고 격리 기록한다(coerce-to-passing 방지).
-    client = FakeClient(list_pages={("00126380", 1): _page([
+    client = FakeClient(list_pages={1: _page([
         _row("단일판매ㆍ공급계약체결", rcept_no=""),
     ])})
     source = _source(tmp_path, client, api_key="k")
@@ -269,8 +320,8 @@ def test_target_with_missing_rcept_no_noted_not_yielded(tmp_path):
 def test_pagination_follows_total_page(tmp_path):
     # WHY: 한 corp·창의 공시가 여러 페이지면 total_page 까지 순회해 누락이 없어야 한다.
     client = FakeClient(list_pages={
-        ("00126380", 1): _page([_row("공급계약체결", rcept_no="P1")], total_page=2),
-        ("00126380", 2): _page([_row("사업보고서", rcept_no="P2")], total_page=2),
+        1: _page([_row("공급계약체결", rcept_no="P1")], total_page=2),
+        2: _page([_row("사업보고서", rcept_no="P2")], total_page=2),
     })
     source = _source(tmp_path, client, api_key="k")
 
