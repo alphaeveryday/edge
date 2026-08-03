@@ -59,7 +59,12 @@ FEATURES = {
     ("주식수", "수준"): "tr_lvl",     # 자기주식수 / 상장주식수 (자사주 보유 비율)
     ("수급", "누적"): "fl_cum20",     # 20일 누적 외국인 순매수 / 시총
     # ── 민감도: 공통 계열을 종목 축으로 옮기는 유일한 변환 (60일 롤링 기울기) ──
-    ("지수잔차", "민감도"): "beta_m",  # 시장 로그수익률에 대한 β
+    ("지수잔차", "민감도"): "beta_m",
+    # **국면** = 시장 수익의 20일 변동성. "왜 **지금**" 의 최대 답이 축에 없었다:
+    # 2026 sd 5.46% vs 2022-25 1.3~2.1% (KRX 독립 소스 확인). 패널의 84%가 다른
+    # 국면인데 하나의 τ 를 추정해 오늘에 적용했다. 조절자로 넣으면 국면별 CATE 가
+    # 나온다 - 하루에 값이 하나라 횡단면은 못 가르지만 **날짜 사이**를 가른다.
+    ("국면", "수준"): "regime_lvl",  # 시장 로그수익률에 대한 β
     ("거시", "민감도"): "fx_beta",     # 원/달러 변화율에 대한 β - FX환 채널의 관측변수
     ("섹터", "민감도"): "beta_s",      # 산업 평균 초과수익에 대한 β - 섹터층의 노출
     # ── 재무제표(v_fin, ASOF). 회계연도 값이라 가장 느린 상태 = 조건 자리 ──
@@ -188,6 +193,7 @@ f AS (
                 THEN regr_slope(d.lr, d.lr - d.ar_lr) OVER w60 END AS beta_m,
            CASE WHEN isfinite(regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60)
                 THEN regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60 END AS beta_s,
+           stddev_samp(d.lr - d.ar_lr) OVER w20 AS regime_lvl,
            sm.code AS sector_code,
            -- 매칭 공변량: 전일 시총 (RCT 근사의 대조군 선택에 쓴다). 당일 값을 쓰면
            -- 매칭 자체가 결과를 본다 - 노출과 같은 PIT 규율이다.

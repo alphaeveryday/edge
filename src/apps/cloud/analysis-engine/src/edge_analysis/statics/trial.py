@@ -115,71 +115,53 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
         return {"verdict": "판정불가",
                 "reason": f"매칭 짝 {len(rows)} < {MIN_PAIRS} - 캘리퍼 안에 대조군이 없다"
                           f" (업종 동일 · |Δln시총|≤{CAL_LOGCAP} · |Δβ|≤{CAL_BETA})"}
-    dates = np.array([str(r[1]) for r in rows])
-    yt = np.array([float(r[3]) for r in rows])
-    yc = np.array([float(r[4]) for r in rows])
-    diff = yt - yc
-    att = float(diff.mean())
-    # 귀무: 짝 안에서 처치/대조 라벨을 뒤집는다 (부호 순열). 날짜 층화는 자동 -
-    # 짝이 같은 날 안에서만 만들어졌기 때문이다.
-    rng = np.random.default_rng(SEED)
-    null = np.empty(PERMS)
-    for i in range(PERMS):
-        null[i] = float((diff * rng.choice([-1.0, 1.0], size=len(diff))).mean())
-    p = _two_sided(float((null >= att).mean()))
-    n_t = len({(r[0], r[1]) for r in rows})
-    # **균형 검정 (RCT 의 필수 절차).** 매칭했다고 균형이 잡힌 게 아니다 - 캘리퍼
-    # 안이면 통과시키므로 잔차가 남는다. 실측(실적·07-29): β 캘리퍼 0.40 이 느슨해서
-    # **시장층 ATT +0.410%p (p=0.016)** 이 나왔다 - 실적 발표는 시장 요인 수익을
-    # 만들 수 없으므로 그건 처치효과가 아니라 β 매칭 잔차다. 짝을 같은 날 안에서
-    # 만들었으니 시장 수익은 동일하고, 차이는 전부 Δβ × 시장수익에서 온다.
-    lc_t = np.array([float(r[5]) for r in rows])
-    lc_c = np.array([float(r[6]) for r in rows])
-    bm_t = np.array([float(r[7]) for r in rows])
-    bm_c = np.array([float(r[8]) for r in rows])
-    smd = {}
-    for nm, a, b in (("ln시총", lc_t, lc_c), ("β_m", bm_t, bm_c)):
-        sd = float(np.sqrt((np.var(a, ddof=1) + np.var(b, ddof=1)) / 2))
-        smd[nm] = float((a.mean() - b.mean()) / sd) if sd > 0 else 0.0
-    balanced = all(abs(v) <= SMD_MAX for v in smd.values())
-    out = {"verdict": "계산됨", "att": att, "p": p, "pairs": len(rows),
-           "treated": n_t, "dates": len(set(dates)),
-           "y_t": float(yt.mean()), "y_c": float(yc.mean()),
-           "caliper": (CAL_LOGCAP, CAL_BETA), "k": k, "layer": layer,
-           "smd": smd, "balanced": balanced}
-    # **사전추세 위약 (정당한 위약).** 처치는 미래에서 오지 않으므로 t−1·t−2 의
-    # ATT 는 0 이어야 한다. 유의하면 매칭이 실패했거나 선견이 있다.
-    #
-    # 이전에 쓰던 '시장층 ATT ≈ 0' 위약은 **전제가 거짓**이었다: beta_m 은 w60
-    # (60~1 PRECEDING) 이라 이미 처치 이전 확정값이고, 처치(뉴스)는 그 종목의
-    # **당일 시장 민감도를 바꿀 수 있다** - 칼만이 증거다(하이닉스 β 1.16~1.55
-    # 하루 안 이동). 그러니 시장층 ATT 는 매칭 실패가 아니라 β 변화 효과일 수 있다.
-    lead = {}
-    for j, (a, b) in ((1, (9, 10)), (2, (11, 12))):
-        if j not in LEADS:
-            continue
-        pr = [(float(r[a]), float(r[b]), str(r[1])) for r in rows
-              if r[a] is not None and r[b] is not None]
-        if len(pr) < MIN_PAIRS:
-            lead[j] = None
-            continue
-        dl = np.array([x[0] - x[1] for x in pr])
-        rg = np.random.default_rng(SEED)
-        nl = np.array([float((dl * rg.choice([-1.0, 1.0], size=len(dl))).mean())
-                       for _ in range(PERMS)])
-        lead[j] = (float(dl.mean()), _two_sided(float((nl >= dl.mean()).mean())), len(dl))
-    out["lead"] = lead
-    out["pretrend_ok"] = all(v is None or v[1] >= ALPHA for v in lead.values())
+    out = _summarize(rows, layer=layer, k=k, tag=f"직접 {etype.split('.')[-1]}")
     if col:
+        # 조절: 짝 차이를 조건 클래스에 회귀. 표본을 쪼개지 않는다 (§14).
+        diff = np.array([float(r[3]) - float(r[4]) for r in rows])
+        dates = np.array([str(r[1]) for r in rows])
         cv = np.array([float(r[13]) for r in rows])
         hi = _pctile(cv) >= cond_pct if cond_cmp == ">=" else _pctile(cv) <= cond_pct
-        # 처치효과의 조절: 짝 차이를 조건 클래스에 회귀 (표본 분할 없음)
-        d_obs, d_p = _cate_interaction(diff, np.ones(len(diff), dtype=bool), hi, dates)
+        d_obs, d_p = _moderate_diff(diff, hi, dates)
         sub = diff[hi]
         out.update(cond=cond_key, cond_n=int(hi.sum()),
                    att_cond=float(sub.mean()) if len(sub) >= 3 else None,
                    inter=d_obs, inter_p=d_p)
     return out
+
+
+def _moderate_diff(diff: np.ndarray, c: np.ndarray,
+                   dates: np.ndarray) -> tuple[float | None, float]:
+    """짝 차이에서의 조절: diff = a + d·C.  CATE(C=1)=a+d, CATE(C=0)=a.
+
+    `_cate_interaction` 을 그대로 쓰면 안 된다 - 짝 차이 프레임에서 D 는 **전부 1**
+    이라 D×C 열이 D 와 같아져 식별이 퇴화한다(실측: '교호항 추정 불가' 가 항상 나왔다).
+    처치 대비는 이미 차분에 들어 있으므로 조절항은 C 계수 하나다.
+
+    귀무는 조건 라벨을 **날짜 층 안에서 순열**한다 - 날짜 효과를 고정하고 '누가
+    조건을 충족했나' 만 무작위화한다.
+    """
+    cf = c.astype(float)
+    if np.ptp(cf) == 0:
+        return None, 1.0
+    X = np.column_stack([np.ones(len(diff)), cf])
+
+    def fit(cv: np.ndarray) -> float:
+        beta, *_ = np.linalg.lstsq(np.column_stack([np.ones(len(diff)), cv]),
+                                   diff, rcond=None)
+        return float(beta[1])
+
+    obs = fit(cf)
+    rng = np.random.default_rng(SEED)
+    null = np.empty(PERMS)
+    for k in range(PERMS):
+        perm = cf.copy()
+        for dd in np.unique(dates):
+            m = dates == dd
+            perm[m] = rng.permutation(perm[m])
+        null[k] = fit(perm)
+    _ = X
+    return obs, _two_sided(float((null >= obs).mean()))
 
 
 def say(r: dict) -> str:
@@ -191,6 +173,9 @@ def say(r: dict) -> str:
          f"처치 {r['y_t'] * 100:+.2f}% vs 대조 {r['y_c'] * 100:+.2f}% "
          f"[{r['layer']}층 · 업종 동일 · |Δln시총|≤{r['caliper'][0]} · "
          f"|Δβ|≤{r['caliper'][1]} · k≤{r['k']}]")
+    if r.get("att_adj") is not None:
+        s += (f"\n  편향보정 ATT {r['att_adj'] * 100:+.3f}%p (p={r['p_adj']:.3f}) "
+              "— Δ공변량 0 에서의 절편 (캘리퍼 잔차 제거)")
     sm = " · ".join(f"{k} SMD {v:+.3f}" for k, v in r["smd"].items())
     s += (f"\n  균형: {sm} (상한 {SMD_MAX}) — "
           + ("통과" if r["balanced"] else "**실패: 이 ATT 는 처치효과가 아니라 매칭 잔차다**"))
@@ -211,15 +196,270 @@ def say(r: dict) -> str:
 
 
 def _selfcheck() -> None:
-    """대수가 표현할 수 있는 것과 없는 것을 명시적으로 남긴다."""
+    """대수가 표현할 수 있는 것과 없는 것을 명시적으로 남긴다.
+
+    이 목록이 곧 '샌드박스가 필요해지는 경계' 다. 넷 다 프로젝트 규약상 **사람의
+    스키마 변경** 사안이지 에이전트가 즉석에서 만들 것이 아니다.
+    """
     assert CAL_LOGCAP > 0 and CAL_BETA > 0 and MATCH_K >= 1
     assert MIN_PAIRS >= MIN_N // 2
-    # 못 표현하는 것 (샌드박스가 필요해지는 경계):
-    unsupported = ("IV(도구변수)", "RDD(회귀단절)", "합성통제", "리드-래그 이벤트스터디",
-                   "성향점수(로짓) 매칭", "다중 처치 동시 투입")
-    assert len(unsupported) == 5   # 리드(사전추세)는 구현했다
-    print("ok · 미지원:", " · ".join(unsupported))
+    assert LEADS == (1, 2)
+    unsupported = ("IV(도구변수)", "RDD(회귀단절)", "합성통제", "성향점수(로짓) 매칭")
+    # 구현한 것: 사전추세 위약(리드) · 다중 처치 동시 투입 · 균형(SMD) · CATE 교호항
+    assert len(unsupported) == 4
+    print("ok · 미지원(샌드박스 경계):", " · ".join(unsupported))
+
+_MULTI_SQL = """
+, ev AS (
+    SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d, e.event_type_code AS et
+    FROM v_event e
+    WHERE e.event_type_code IN ({types}) AND e.trade_date < DATE '{day}'
+)
+, ind AS (
+    SELECT iid, d{flags} FROM ev GROUP BY iid, d
+)
+, b AS (
+    SELECT g.instrument_id AS iid, g.trade_date AS d, g.{y} AS y,
+           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm
+    FROM g
+    WHERE g.sector_code IS NOT NULL AND g.mcap_pit > 0 AND g.beta_m IS NOT NULL
+      AND g.{y} IS NOT NULL AND g.trade_date < DATE '{day}'
+)
+, t AS (SELECT b.*{icols} FROM b JOIN ind ON ind.iid = b.iid AND ind.d = b.d)
+, c AS (SELECT b.* FROM b LEFT JOIN ind ON ind.iid = b.iid AND ind.d = b.d
+        WHERE ind.iid IS NULL)
+, m AS (
+    SELECT t.iid AS tid, t.d AS d, c.iid AS cid,
+           row_number() OVER (PARTITION BY t.iid, t.d
+               ORDER BY abs(ln(t.mcap) - ln(c.mcap)) / {cal_m}
+                      + abs(t.bm - c.bm) / {cal_b}) AS rn
+    FROM t JOIN c ON c.d = t.d AND c.sec = t.sec
+    WHERE abs(ln(t.mcap) - ln(c.mcap)) <= {cal_m} AND abs(t.bm - c.bm) <= {cal_b}
+)
+SELECT m.tid, CAST(m.d AS VARCHAR) AS d, m.cid, t.y - c.y AS diff{tcols}
+FROM m JOIN t ON t.iid = m.tid AND t.d = m.d
+       JOIN c ON c.iid = m.cid AND c.d = m.d
+WHERE m.rn <= {k}
+"""
+
+
+def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
+              k: int = MATCH_K) -> dict:
+    """**다중 처치 동시 투입.** 같은 날 여러 사건이 있으면 하나씩 재면 서로 흡수한다.
+
+        diff_i = Σ_k b_k · D_ik + ε          (짝 차이에 처치 지시자들을 회귀)
+
+    실측 000660 07-29 에 실적·목표주가·서킷브레이커가 다 있었다. 하나씩 재면 각
+    ATT 가 나머지 둘의 효과를 흡수한다 - 그러면 '왜 **이** 이벤트' 에 답할 수 없다.
+    대조군은 **어느 처치도 안 받은** 종목이다.
+
+    귀무는 짝 부호 순열 (날짜 층화 자동 - 짝이 같은 날 안에서만 만들어졌다).
+    """
+    y = LAYER_Y.get(layer)
+    if y is None:
+        return {"verdict": "판정불가", "reason": f"층은 {sorted(LAYER_Y)} 중 하나다"}
+    if not 2 <= len(etypes) <= 6:
+        return {"verdict": "판정불가", "reason": "다중 처치는 2~6개다"}
+    flags = "".join(
+        f", max(CASE WHEN et = '{e}' THEN 1 ELSE 0 END) AS d{i}"
+        for i, e in enumerate(etypes))
+    sql = (_base(day) + _MULTI_SQL).format(
+        types=", ".join(f"'{e}'" for e in etypes), day=day, y=y, k=k,
+        cal_m=CAL_LOGCAP, cal_b=CAL_BETA, flags=flags,
+        icols="".join(f", ind.d{i}" for i in range(len(etypes))),
+        tcols="".join(f", t.d{i}" for i in range(len(etypes))))
+    try:
+        rows = _panel_rows(lake, sql, strict=False)
+    except Exception as e:                          # noqa: BLE001
+        return {"verdict": "판정불가", "reason": f"{type(e).__name__}: {str(e)[:120]}"}
+    rows = [r for r in rows if r[3] is not None]
+    if len(rows) < MIN_PAIRS:
+        return {"verdict": "판정불가", "reason": f"매칭 짝 {len(rows)} < {MIN_PAIRS}"}
+    diff = np.array([float(r[3]) for r in rows])
+    D = np.array([[float(r[4 + i]) for i in range(len(etypes))] for r in rows])
+    if (D.sum(axis=0) < 3).any():
+        thin = [etypes[i] for i in range(len(etypes)) if D[:, i].sum() < 3]
+        return {"verdict": "판정불가", "reason": f"처치 표본 3건 미만: {thin}"}
+
+    def fit(v: np.ndarray) -> np.ndarray:
+        beta, *_ = np.linalg.lstsq(D, v, rcond=None)
+        return beta
+
+    obs = fit(diff)
+    rng = np.random.default_rng(SEED)
+    null = np.empty((PERMS, len(etypes)))
+    for i in range(PERMS):
+        null[i] = fit(diff * rng.choice([-1.0, 1.0], size=len(diff)))
+    ps = [_two_sided(float((null[:, i] >= obs[i]).mean())) for i in range(len(etypes))]
+    # 단독 투입과 비교하면 흡수량이 보인다.
+    solo = {}
+    for e in etypes:
+        r1 = run_trial(lake, day, etype=e, layer=layer, k=k)
+        solo[e] = (r1["att"], r1["p"]) if r1.get("verdict") == "계산됨" else None
+    return {"verdict": "계산됨", "layer": layer, "pairs": len(rows),
+            "etypes": etypes, "att": [float(v) for v in obs], "p": ps,
+            "n_treat": [int(v) for v in D.sum(axis=0)], "solo": solo}
+
+
+def say_multi(r: dict) -> str:
+    if r.get("verdict") != "계산됨":
+        return f"다중 처치 판정불가 — {r.get('reason', '?')}"
+    out = [f"다중 처치 동시 투입 ({r['layer']}층 · 짝 {r['pairs']}개) — 대조군은 "
+           "어느 처치도 안 받은 종목"]
+    for e, a, p, n in zip(r["etypes"], r["att"], r["p"], r["n_treat"]):
+        s = r["solo"].get(e)
+        solo = (f" · 단독 {s[0] * 100:+.3f}%p (p={s[1]:.3f})" if s else " · 단독 판정불가")
+        absorb = ("" if not s else
+                  f" · 흡수 {abs(s[0] - a) * 100:+.3f}%p" if abs(s[0] - a) > 1e-9 else "")
+        out.append(f"  {e.split('.')[-1]:<22} n={n:<5} ATT {a * 100:+.3f}%p "
+                   f"(p={p:.3f}){solo}{absorb}")
+    return "\n".join(out)
 
 
 if __name__ == "__main__":
     _selfcheck()
+
+
+_SPILL_SQL = """
+, ev AS (
+    SELECT DISTINCT e.instrument_id AS iid, e.trade_date AS d
+    FROM v_event e
+    WHERE e.event_type_code = '{etype}' AND e.trade_date < DATE '{day}'
+)
+, sp AS (
+    -- **관계 처치**: 상대에게 사건이 났고 나에게는 안 났다. 그게 전이의 정의다.
+    SELECT DISTINCT l.dst AS iid, ev.d AS d
+    FROM v_link l JOIN ev ON ev.iid = l.src AND l.link_date <= ev.d
+    WHERE l.link_type = '{rel}'
+    UNION
+    SELECT DISTINCT l.src AS iid, ev.d AS d
+    FROM v_link l JOIN ev ON ev.iid = l.dst AND l.link_date <= ev.d
+    WHERE l.link_type = '{rel}'
+)
+, b AS (
+    SELECT g.instrument_id AS iid, g.trade_date AS d, g.{y} AS y,
+           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm,
+           LAG(g.{y}, 1) OVER (PARTITION BY g.instrument_id ORDER BY g.trade_date) AS y_l1,
+           LAG(g.{y}, 2) OVER (PARTITION BY g.instrument_id ORDER BY g.trade_date) AS y_l2
+    FROM g
+    WHERE g.sector_code IS NOT NULL AND g.mcap_pit > 0 AND g.beta_m IS NOT NULL
+      AND g.{y} IS NOT NULL AND g.trade_date < DATE '{day}'
+)
+, t AS (
+    SELECT b.* FROM b JOIN sp ON sp.iid = b.iid AND sp.d = b.d
+    LEFT JOIN ev ON ev.iid = b.iid AND ev.d = b.d
+    WHERE ev.iid IS NULL          -- 자기에게 사건이 났으면 전이가 아니라 직접이다
+)
+, c AS (
+    SELECT b.* FROM b
+    LEFT JOIN sp ON sp.iid = b.iid AND sp.d = b.d
+    LEFT JOIN ev ON ev.iid = b.iid AND ev.d = b.d
+    WHERE sp.iid IS NULL AND ev.iid IS NULL
+)
+, m AS (
+    SELECT t.iid AS tid, t.d AS d, c.iid AS cid,
+           row_number() OVER (PARTITION BY t.iid, t.d
+               ORDER BY abs(ln(t.mcap) - ln(c.mcap)) / {cal_m}
+                      + abs(t.bm - c.bm) / {cal_b}) AS rn
+    FROM t JOIN c ON c.d = t.d AND c.sec = t.sec
+    WHERE abs(ln(t.mcap) - ln(c.mcap)) <= {cal_m} AND abs(t.bm - c.bm) <= {cal_b}
+)
+SELECT m.tid, CAST(m.d AS VARCHAR) AS d, m.cid, t.y AS y_t, c.y AS y_c,
+       ln(t.mcap) AS lc_t, ln(c.mcap) AS lc_c, t.bm AS bm_t, c.bm AS bm_c,
+       t.y_l1 AS l1_t, c.y_l1 AS l1_c, t.y_l2 AS l2_t, c.y_l2 AS l2_c
+FROM m JOIN t ON t.iid = m.tid AND t.d = m.d
+       JOIN c ON c.iid = m.cid AND c.d = m.d
+WHERE m.rn <= {k}
+"""
+
+
+def run_spillover(lake, day: str, *, etype: str, rel: str,
+                  layer: str = "고유", k: int = MATCH_K) -> dict:
+    """**관계 처치(전이)**: 상대에게 사건이 났고 나에겐 안 났다.
+
+    '왜 **이** 종목인가' 에 답하는 유일한 경로다. 층 분해도 매칭도 종목 개별성을
+    지우는 것이 목적이라 그 질문에 답할 수 없다 - 개별성은 (a) 조절자, (b) 관계
+    두 곳에서만 온다.
+
+    이전 `_relation_test` 는 `assignable=False` 였다 (소스-타깃 5분봉 창 정렬 부재).
+    시행 대수는 **일 단위 ATT** 라 창 정렬이 필요 없다 - 하루의 몫을 쪼개는 것이
+    아니라 '전이가 있었나' 를 묻기 때문이다. 그래서 배정 제약이 풀린다.
+
+    처치군에서 **자기 사건은 제외**한다. 자기에게 났으면 전이가 아니라 직접이다.
+    """
+    from .vocab import RELATIONS
+    if rel not in RELATIONS:
+        return {"verdict": "판정불가", "reason": f"관계는 {sorted(RELATIONS)} 중 하나다"}
+    y = LAYER_Y.get(layer)
+    if y is None:
+        return {"verdict": "판정불가", "reason": f"층은 {sorted(LAYER_Y)} 중 하나다"}
+    sql = (_base(day) + _SPILL_SQL).format(
+        etype=etype, rel=rel, day=day, y=y, k=k, cal_m=CAL_LOGCAP, cal_b=CAL_BETA)
+    try:
+        rows = _panel_rows(lake, sql, strict=False)
+    except Exception as e:                          # noqa: BLE001
+        return {"verdict": "판정불가", "reason": f"{type(e).__name__}: {str(e)[:120]}"}
+    rows = [r for r in rows if r[3] is not None and r[4] is not None]
+    if len(rows) < MIN_PAIRS:
+        return {"verdict": "판정불가",
+                "reason": f"전이 짝 {len(rows)} < {MIN_PAIRS} — {rel} 링크가 얇다"}
+    return _summarize(rows, layer=layer, k=k, tag=f"전이 {rel}")
+
+
+def _summarize(rows: list, *, layer: str, k: int, tag: str = "") -> dict:
+    """짝 목록 → ATT · 균형(SMD) · 사전추세 위약. `run_trial`/`run_spillover` 공용.
+
+    컬럼 규약: (tid, d, cid, y_t, y_c, lc_t, lc_c, bm_t, bm_c, l1_t, l1_c, l2_t, l2_c[, cval])
+    한 곳에서만 조립한다 - 두 곳이면 진단이 갈린다.
+    """
+    dates = np.array([str(r[1]) for r in rows])
+    yt = np.array([float(r[3]) for r in rows])
+    yc = np.array([float(r[4]) for r in rows])
+    diff = yt - yc
+    att = float(diff.mean())
+    rng = np.random.default_rng(SEED)
+    null = np.array([float((diff * rng.choice([-1.0, 1.0], size=len(diff))).mean())
+                     for _ in range(PERMS)])
+    p = _two_sided(float((null >= att).mean()))
+    smd = {}
+    for nm, a, b in (("ln시총", 5, 6), ("β_m", 7, 8)):
+        av = np.array([float(r[a]) for r in rows])
+        bv = np.array([float(r[b]) for r in rows])
+        sd = float(np.sqrt((np.var(av, ddof=1) + np.var(bv, ddof=1)) / 2))
+        smd[nm] = float((av.mean() - bv.mean()) / sd) if sd > 0 else 0.0
+    # **편향 보정 (Abadie-Imbens).** 캘리퍼 안이면 통과시키므로 공변량 잔차가 남고,
+    # 균형 실패(SMD>상한)가 실측에서 반복됐다(전이 셋 다 β_m SMD 0.125~0.151).
+    # 캘리퍼를 셀별로 좁히는 것은 **대조군을 고르는 것**이라 금지 - 대신 짝 차이를
+    # 공변량 차이에 회귀해 잔차 편향을 뺀다. ATT_adj = Δ공변량 0 에서의 절편.
+    dlc = np.array([float(r[5]) - float(r[6]) for r in rows])
+    dbm = np.array([float(r[7]) - float(r[8]) for r in rows])
+    Xa = np.column_stack([np.ones(len(rows)), dlc, dbm])
+
+    def _adj(v: np.ndarray) -> float:
+        beta, *_ = np.linalg.lstsq(Xa, v, rcond=None)
+        return float(beta[0])
+
+    att_adj = _adj(diff)
+    rg2 = np.random.default_rng(SEED)
+    nadj = np.array([_adj(diff * rg2.choice([-1.0, 1.0], size=len(diff)))
+                     for _ in range(PERMS)])
+    p_adj = _two_sided(float((nadj >= att_adj).mean()))
+    lead = {}
+    for j, (a, b) in ((1, (9, 10)), (2, (11, 12))):
+        pr = [(float(r[a]), float(r[b])) for r in rows
+              if r[a] is not None and r[b] is not None]
+        if len(pr) < MIN_PAIRS:
+            lead[j] = None
+            continue
+        dl = np.array([x[0] - x[1] for x in pr])
+        rg = np.random.default_rng(SEED)
+        nl = np.array([float((dl * rg.choice([-1.0, 1.0], size=len(dl))).mean())
+                       for _ in range(PERMS)])
+        lead[j] = (float(dl.mean()), _two_sided(float((nl >= dl.mean()).mean())), len(dl))
+    return {"verdict": "계산됨", "att": att, "p": p, "pairs": len(rows),
+            "treated": len({(r[0], r[1]) for r in rows}), "dates": len(set(dates)),
+            "y_t": float(yt.mean()), "y_c": float(yc.mean()),
+            "caliper": (CAL_LOGCAP, CAL_BETA), "k": k, "layer": layer, "tag": tag,
+            "smd": smd, "balanced": all(abs(v) <= SMD_MAX for v in smd.values()),
+            "att_adj": att_adj, "p_adj": p_adj, "lead": lead,
+            "pretrend_ok": all(v is None or v[1] >= ALPHA for v in lead.values())}
