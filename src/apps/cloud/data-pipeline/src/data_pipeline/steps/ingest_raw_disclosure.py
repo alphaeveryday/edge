@@ -93,8 +93,16 @@ def _existing_documents(
             vendor, market, (day - timedelta(days=offset)).isoformat()
         )
         for key in storage.list_keys(prefix):
-            if key.endswith(".zip"):
-                found[key.rsplit("/", 1)[1].removesuffix(".zip")] = key
+            # **읽는 쪽의 수용 집합 = 쓰는 쪽(raw_disclosure_document_key)의 출력 집합.**
+            # "이 프리픽스 아래 아무 .zip" 으로 잡으면 나중에 이 파티션에 다른 객체를 두는
+            # 순간(격리본·아카이브 등) 그게 조용히 본문으로 인정돼, 정제가 엉뚱한 ZIP 을 연다.
+            # 빈 이름(`documents/.zip`)도 여기서 걸러 seen-map 에 빈 키가 생기지 않게 한다.
+            _, sep, name = key.rpartition("/documents/")
+            if not sep or "/" in name or not name.endswith(".zip"):
+                continue
+            rcept_no = name.removesuffix(".zip")
+            if rcept_no:
+                found[rcept_no] = key
     return found
 
 

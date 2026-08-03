@@ -8,7 +8,7 @@ ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 �
 import json
 
 from data_pipeline.config import load_settings
-from data_pipeline.lake import LocalStorage
+from data_pipeline.lake import LocalStorage, raw_disclosure_document_key
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.steps import ingest_raw_disclosure
 
@@ -175,6 +175,55 @@ def test_second_run_reuses_documents_but_keeps_full_meta(tmp_path):
     assert all(r["body_format"] for r in rows2.values())
     # 본문 객체는 늘지 않았다(2회차가 자기 파티션에 사본을 만들지 않는다).
     assert len([k for k in storage.list_keys("raw") if k.endswith(".zip")]) == 2
+
+
+def test_seen_map_spans_two_ingest_dates_and_newest_key_wins(tmp_path):
+    # WHY(edge-review · Rule 9): 2일 lookback 은 편의가 아니라 **설계의 근거**다. `ingest_date`
+    #      가 UTC 날짜라 KST 09:00 = UTC 00:00 에서 갈리고, 한 KR 영업일의 슬롯들이 두 UTC
+    #      날짜에 흩어진다 — 하루만 보면 오전 슬롯이 받아 둔 본문을 오후 슬롯이 못 찾아
+    #      매일 한 번씩 창 전체를 재다운로드한다. 실행 시각이 곧 `started_date` 라 런 두 번으로는
+    #      이 경계를 밟을 수 없어(같은 UTC 날짜) `_existing_documents` 를 직접 부른다.
+    #      `_DOC_LOOKBACK_DAYS` 가 1 로 줄거나 순회가 뒤집히면 여기서 깨진다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    def _put(ingest_date, run_id, rcept_no) -> str:
+        key = raw_disclosure_document_key("dart", "KR", ingest_date, run_id, rcept_no)
+        storage.put_bytes(key, b"PK\x03\x04body")
+        return key
+
+    _put("2026-08-02", "r0", "OLD")            # 창 밖(2일 초과)
+    yday = _put("2026-08-03", "r1", "YDAY")    # 어제 = KST 오전 슬롯이 받아 둔 본문
+    _put("2026-08-03", "r1", "BOTH")
+    both_today = _put("2026-08-04", "r2", "BOTH")
+
+    found = ingest_raw_disclosure._existing_documents(storage, "dart", "KR", "2026-08-04")
+
+    assert "OLD" not in found          # 상한이 실제로 상한이다
+    assert found["YDAY"] == yday       # UTC 날짜 경계를 넘어 찾는다
+    assert found["BOTH"] == both_today  # 같은 문서가 양일에 있으면 최신 키가 남는다
+
+
+def test_seen_map_only_accepts_keys_the_document_builder_produces(tmp_path):
+    # WHY(edge-review): seen-map 은 **읽는 쪽**이고 `raw_disclosure_document_key` 는 쓰는 쪽이다.
+    #      둘의 집합이 어긋나면 히트가 곧 "본문이 있다"는 거짓 주장이 된다 — 히트한 순간
+    #      document API 호출을 건너뛰고 그 키를 document_raw_path 로 박으므로, 정제가 본문이
+    #      아닌 ZIP 을 열게 되고 로그는 success·failed_records=0 으로 남는다(조용한 오염).
+    #      "이 프리픽스 아래 아무 .zip" 으로 잡으면 이 파티션에 다른 객체를 두는 변경 하나로
+    #      그 경로가 열린다 — 수용 집합을 빌더 출력 형태로 못박는다.
+    storage = LocalStorage(tmp_path / "lake")
+    assert _run(tmp_path, FakeSource(records=[_rec("A1")]), storage=storage, run_id="r1")[0] == 0
+
+    day_prefix = next(k for k in storage.list_keys("raw") if k.endswith(".zip")).split("/documents/")[0]
+    storage.put_bytes(f"{day_prefix}/quarantine/B2.zip", b"PK\x03\x04nope")  # 본문 아님
+    storage.put_bytes(f"{day_prefix}/documents/.zip", b"PK\x03\x04empty")    # 빈 rcept_no
+
+    second = FakeSource(records=[_rec("A1"), _rec("B2")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == ["B2"]  # A1 만 재사용, B2 는 격리본을 본문으로 오인하지 않는다
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 1 and log2["documents_reused"] == 1
 
 
 def test_failed_document_is_retried_by_next_run(tmp_path):
