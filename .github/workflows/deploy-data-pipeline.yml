@@ -89,15 +89,23 @@ jobs:
             # 서비스 목록이 늘어나는 PR 마다 CD 가 apply 를 앞지르는 창이 생긴다
             # (deploy-order-splits-the-pr). 생성 전 스킵은 무해하다 — desired 0 스킵과
             # 같은 이유로, 첫 스케일업(force-new-deployment)이 최신 이미지를 당긴다.
-            # ⚠️ describe 자체의 실패도 같은 창이다 — 배포 역할의 DescribeServices 는
-            # terraform output(state 의 서비스 ARN)으로 스코프돼, apply 선착 전의 새
-            # 서비스는 MISSING 이 아니라 **AccessDenied** 로 온다. set -e 아래서 그대로
-            # 죽이면 아래 MISSING 분기가 영영 안 밟히고 이미지 배포 전체가 실패한다.
+            # ⚠️ describe 자체의 실패 중 **AccessDenied 만** 같은 창이다 — 배포 역할의
+            # DescribeServices 는 terraform output(state 의 서비스 ARN)으로 스코프돼,
+            # apply 선착 전의 새 서비스는 MISSING 이 아니라 AccessDenied 로 온다.
+            # set -e 아래서 그대로 죽이면 MISSING 분기가 영영 안 밟히고 배포 전체가
+            # 실패한다. 그 외 실패(스로틀·자격 만료·서버 오류)는 스킵하면 안 된다 —
+            # 기존 서비스가 옛 이미지를 도는 채 워크플로가 초록으로 끝난다(봇 P2).
+            describe_err="$(mktemp)"
             if ! described="$(aws ecs describe-services \
               --cluster "${cluster}" --services "${svc}" \
-              --query 'services[0].[status,desiredCount]' --output text)"; then
-              echo "::warning::${svc} 조회 실패 — terraform-apply 선착 전(새 서비스가 배포 역할 정책에 아직 없음)이면 정상이고, 생성 후 첫 스케일업이 최신 이미지를 당긴다. apply 가 끝났는데도 반복되면 배선이 어긋난 것이다"
-              continue
+              --query 'services[0].[status,desiredCount]' --output text 2>"${describe_err}")"; then
+              if grep -q "AccessDenied" "${describe_err}"; then
+                echo "::warning::${svc} 조회가 AccessDenied — terraform-apply 선착 전(새 서비스가 배포 역할 정책에 아직 없음)이면 정상이고, 생성 후 첫 스케일업이 최신 이미지를 당긴다. apply 가 끝났는데도 반복되면 배선이 어긋난 것이다"
+                continue
+              fi
+              cat "${describe_err}" >&2
+              echo "::error::${svc} describe 실패 — AccessDenied(apply 선착 창)가 아니므로 배선·자격 결함이다"
+              exit 1
             fi
             read -r status desired <<<"${described}"
             if [ "${status}" = "None" ] || [ -z "${status}" ]; then
