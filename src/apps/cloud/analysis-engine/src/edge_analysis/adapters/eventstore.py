@@ -459,7 +459,12 @@ class EventStore:
 
         from psycopg2.extras import execute_values
 
-        explanation_as_of = utcnow_iso()
+        # 마이크로초 정밀(utcnow_iso 의 초 해상도 대신) — as_of 는 게시 grain 부분
+        # 유니크(uq_explanation_result_published_grain)의 축이라, 초 해상도면 같은 초에
+        # 끝난 서로 다른 발화 둘이 모두 PUBLISHED 를 타며 충돌해 두 번째 INSERT 가
+        # 터진다(ON CONFLICT 는 PK 만 커버). route 축 정책(ALPHA-710)에선 둘 다 게시가
+        # 맞다 — 정밀도로 충돌을 없앤다(정확 일치는 유니크가 fail-loud 백스톱).
+        explanation_as_of = datetime.now(timezone.utc).isoformat()
         event_count = len(events)
         run_id = stable_id(
             "run", etf_instrument_id, settings.trade_date.isoformat(),
@@ -483,10 +488,14 @@ class EventStore:
             cur.execute(
                 "SELECT pg_advisory_xact_lock(hashtext('tenant-delivery-fanout')::bigint)"
             )
-            # 그날 첫 결과만 PUBLISHED — explanation_as_of 가 런마다 새로워 grain 부분
-            # 유니크(as_of 포함)는 같은 날 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만
-            # 보는 이유: 무효화(WITHDRAWN, super-admin-api 무효화 액션 — ALPHA-440)로
-            # 게시본이 사라진 grain 은 재실행 시 새로 게시된다(ADR-0045 발번 정책).
+            # 발화(route)당 첫 결과만 PUBLISHED — 게이트 축은 트리거다(ALPHA-710 게시
+            # 정책). 분봉 트리거는 하루 여러 번 발화할 수 있고 발화마다 게시된다 —
+            # 같은 날 다건 PUBLISHED 는 서빙층이 최근 게시 시각 우선으로 흡수한다
+            # (publication-api findPublishedOn/findLatestPublished). 같은 route 재실행은
+            # DRAFT 보존이다 — explanation_as_of 가 런마다 새로워 grain 부분 유니크만으론
+            # 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만 보는 이유: 무효화(WITHDRAWN,
+            # super-admin-api 무효화 액션 — ALPHA-440)로 게시본이 사라진 발화는 재실행 시
+            # 새로 게시된다(ADR-0045 발번 정책).
             cur.execute(
                 "INSERT INTO explanation_result (explanation_result_id, explanation_run_id,"
                 " etf_instrument_id, trade_date, explanation_as_of, primary_thread_id,"
@@ -494,7 +503,8 @@ class EventStore:
                 " publication_status, headline)"
                 " SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
                 " CASE WHEN EXISTS (SELECT 1 FROM explanation_result p"
-                "   WHERE p.etf_instrument_id = %s AND p.trade_date = %s"
+                "   JOIN explanation_run r ON r.explanation_run_id = p.explanation_run_id"
+                "   WHERE r.explanation_route_id = %s"
                 "     AND p.publication_status = 'PUBLISHED')"
                 " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
                 " ON CONFLICT (explanation_result_id) DO NOTHING"
@@ -503,7 +513,7 @@ class EventStore:
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
-                    etf_instrument_id, settings.trade_date.isoformat(),
+                    route_id,
                     explanation.headline,
                 ),
             )
@@ -562,10 +572,10 @@ class EventStore:
             fanout_tenants=fanout_tenants,
         )
         if publication_status == "DRAFT":
-            # 같은 날 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
+            # 같은 발화(route) 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
             log(
                 "explanation_result.publish_skipped",
-                reason="grain_already_published",
+                reason="route_already_published",
                 etf_instrument_id=etf_instrument_id,
                 trade_date=settings.trade_date.isoformat(),
                 explanation_result_id=result_id,

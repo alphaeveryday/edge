@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import time
 from dataclasses import replace
 from datetime import date
 
@@ -36,6 +35,7 @@ ETF_INSTRUMENT = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 SAMSUNG_TICKER = "005930"
 SAMSUNG_INSTRUMENT = "inst_01KXJB6W2EFQRP1D5TBRF0EBEK"
 TRIGGER_ID = "trg_e2e_0001"
+MINUTE_TRIGGER_ID = "mtrg_e2e_0001"
 BUNDLE_VERSION = "e2e-bundle-1"
 REQUEST_ID = "e2e-req-1"
 ARTICLE_ID = "e2e-a1"
@@ -177,6 +177,7 @@ def _seed_event_store(conn) -> None:
         # 재실행 격리 — 시드 마스터(instrument 등)는 남기고 런 산출물만 비운다.
         cur.execute(
             "TRUNCATE document, source_event, event_thread, price_movement_trigger,"
+            " minute_ingestion_session,"
             " explanation_run, release_bundle, tenant_delivery, tenant CASCADE"
         )
         # fan-out(ALPHA-493) 대상 테넌트 — 없으면 게시만 되고 발번 0건이 된다.
@@ -351,12 +352,11 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             "엔진이 소비한 이벤트가 조립 단계의 결정적 ID 와 수렴하지 않는다"
         )
 
-        # -- 4) 같은 날 재실행: 게시 게이트(ALPHA-493) ---------------------------
+        # -- 4) 같은 발화(route) 재실행: 게시 게이트(ALPHA-493·710) ---------------
         # as_of 가 새로워 grain 유니크로는 못 막는 이중 게시·이중 NEW 발번을 앱 게이트가
         # 막아야 한다 — 재실행분은 DRAFT 보존, outbox 는 불변이어야 정정이 아닌 재실행이
-        # 온프렘에 중복 전달되지 않는다. as_of 는 초 해상도라 같은 초의 재실행은 같은
-        # result_id(중복 skip 경로)로 붕괴한다 — 1초 지나 새 grain 으로 게이트를 태운다.
-        time.sleep(1)
+        # 온프렘에 중복 전달되지 않는다. as_of 는 마이크로초 정밀이라 같은 초 재실행도
+        # 새 result grain 으로 게이트를 태운다(sleep 불요).
         rerun = replace(settings, request_id="e2e-req-2")
         store2 = EventStore.connect(rerun)
         try:
@@ -375,5 +375,55 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             )
             cur.execute("SELECT count(*) FROM tenant_delivery")
             assert cur.fetchone() == (2,), "재실행이 outbox 에 중복 NEW 를 발번했다"
+
+        # -- 5) 같은 날 **다른 발화**(분봉 트리거): 발화 축 재게시(ALPHA-710) ------
+        # 게시 게이트 축은 (etf, trade_date)가 아니라 발화(route)다 — 분봉 트리거가
+        # 같은 날 두 번째로 발화하면 새 PUBLISHED 가 나가고 outbox 도 발번돼야 한다.
+        # 같은 날 다건 PUBLISHED 는 서빙층(publication-api)이 최근 게시 시각 우선으로
+        # 흡수한다. 이 단언이 깨지면 장중 설명이 생성만 되고 MTS 에 안 뜬다.
+        with seed_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
+                " session_date, universe_version, universe_hash, expected_window_count)"
+                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 1)",
+                (TRADE_DATE, "0" * 64),
+            )
+            # window_start 01:30Z = 10:30 KST — 엔진이 trade_date 를 여기서 파생한다.
+            cur.execute(
+                "INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id,"
+                " window_start, generation, detection_policy_version, open_price,"
+                " close_price, change_rate, threshold, cooldown_bucket)"
+                " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-abs-v1',"
+                " 10000, 10300, 0.03, 0.02, 1)",
+                (MINUTE_TRIGGER_ID, ETF_TICKER, f"{TRADE_DATE}T01:30:00+00:00"),
+            )
+        seed_conn.commit()
+        # sleep 없이 곧장 실행 — 직전 게시와 같은 초에 게시돼도 as_of 마이크로초
+        # 정밀이라 grain 부분 유니크와 충돌하지 않아야 한다(같은 초 두 발화 게시).
+        minute_run = replace(settings, request_id="e2e-req-3",
+                             trigger_id=MINUTE_TRIGGER_ID)
+        store3 = EventStore.connect(minute_run)
+        try:
+            assert run(minute_run, lake=LakeReader(s3, minute_run.lake_bucket),
+                       store=store3, client=FakeAnalysisClient(), s3=s3) == 0
+        finally:
+            store3.close()
+        with seed_conn.cursor() as cur:
+            cur.execute(
+                "SELECT publication_status, count(*) FROM explanation_result"
+                " WHERE etf_instrument_id = %s GROUP BY publication_status",
+                (ETF_INSTRUMENT,),
+            )
+            assert dict(cur.fetchall()) == {"PUBLISHED": 2, "DRAFT": 1}, (
+                "같은 날 다른 발화가 재게시되지 않았다 — 게이트가 여전히 일 축이다"
+            )
+            cur.execute(
+                "SELECT t.tenant_name, max(d.cursor), count(*) FROM tenant_delivery d"
+                " JOIN tenant t ON t.tenant_id = d.tenant_id GROUP BY t.tenant_name"
+                " ORDER BY t.tenant_name"
+            )
+            assert cur.fetchall() == [("e2e-tenant-a", 2, 2), ("e2e-tenant-b", 2, 2)], (
+                "두 번째 발화의 게시가 전 테넌트 outbox 로 발번되지 않았다"
+            )
     finally:
         seed_conn.close()

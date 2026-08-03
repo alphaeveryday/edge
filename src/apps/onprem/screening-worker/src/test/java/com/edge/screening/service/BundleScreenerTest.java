@@ -70,18 +70,30 @@ class BundleScreenerTest {
 	private static final class RecordingPublications implements PublicationRepository {
 		final List<String> published = new ArrayList<>();
 		final List<String> transitions = new ArrayList<>();
+		final List<String> ops = new ArrayList<>();  // 교체·게시 순서 검증용 공통 시퀀스
+		String supersedable;  // null = grain 비점유(기본)
 
 		@Override
 		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate) {
 			published.add(analysisItemId);
+			ops.add("publish:" + analysisItemId);
 			return 1;
+		}
+
+		@Override
+		public String findSupersedableItem(String analysisItemId, String etfTicker,
+				LocalDate tradeDate) {
+			return supersedable;
 		}
 
 		@Override
 		public int transitionByItem(String analysisItemId, String status) {
 			transitions.add(analysisItemId + ":" + status);
-			return 1;
+			ops.add("supersede:" + analysisItemId);
+			return transitionByItemResult;
 		}
+
+		int transitionByItemResult = 1;  // 0 = 조회~전이 사이 콘솔이 먼저 중단한 경합
 	}
 
 	private static final class RecordingPending implements PendingBundleRepository {
@@ -167,6 +179,37 @@ class BundleScreenerTest {
 		assertThat(items.upserts).containsExactly(new RecordingItems.Upserted("er-1", "AUTO_PUBLISHED"));
 		assertThat(publications.published).containsExactly("er-1");
 		assertThat(pending.screened).containsExactly(1L);
+	}
+
+	@Test
+	void 같은_grain_자동_게시본은_교체_후_게시된다() {
+		// WHY(ALPHA-710, Rule 9): 하루 다건 발화는 발화마다 게시된다 — 교체(구본 비노출
+		// 전이)가 게시보다 먼저여야 grain 활성 1건 불변식이 유지되고, 구본 item 도 함께
+		// 내려야 콘솔에 '제공 중' 유령이 안 남는다(수동 중단 409 불일치). supersede 호출
+		// 제거·게시 뒤로 순서 역전 회귀를 이 단언이 거부한다.
+		publications.supersedable = "er-0";
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(publications.ops).containsExactly("supersede:er-0", "publish:er-1");
+		assertThat(items.transitions).containsExactly("er-0:UNPUBLISHED");
+		assertThat(history.rows).anyMatch(row ->
+				row.startsWith("er-0:AUTO_PUBLISHED->UNPUBLISHED"));
+	}
+
+	@Test
+	void 교체_경합에서_게시분_전이_0행이면_구본_item_전이와_이력을_남기지_않는다() {
+		// WHY(Rule 9): 조회~전이 사이 콘솔이 먼저 제공 중단하면 게시분 전이는 0행이다 —
+		// 그때 item 전이·SYSTEM 이력을 쓰면 사용자가 중단한 항목에 거짓 '교체' 이력이
+		// 남는다. 반환값 게이트가 제거되거나 반전되면 이 단언이 깨진다.
+		publications.supersedable = "er-0";
+		publications.transitionByItemResult = 0;
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.transitions).isEmpty();
+		assertThat(history.rows).noneMatch(row -> row.contains("교체"));
+		assertThat(publications.published).containsExactly("er-1");  // 신규 게시는 그대로 진행
 	}
 
 	@Test
