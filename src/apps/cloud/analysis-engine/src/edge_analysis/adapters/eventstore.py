@@ -501,6 +501,15 @@ class EventStore:
                 "   JOIN explanation_run r ON r.explanation_run_id = p.explanation_run_id"
                 "   WHERE r.explanation_route_id = %s"
                 "     AND p.publication_status = 'PUBLISHED')"
+                # 같은 초 다른 발화 가드 — as_of 가 초 해상도라 두 발화가 같은 초에
+                # 게시되면 잔여 유니크(uq_explanation_result_published_grain, as_of 포함)
+                # 와 충돌해 INSERT 가 터진다(ON CONFLICT 는 PK 만 커버). 위 advisory
+                # lock 이 persist 를 직렬화하므로 이 EXISTS 는 결정적이고, 두 번째는
+                # DRAFT 보존된다 — 같은 초 안에서 승자 하나면 충분하다.
+                " OR EXISTS (SELECT 1 FROM explanation_result q"
+                "   WHERE q.etf_instrument_id = %s AND q.trade_date = %s"
+                "     AND q.explanation_as_of = %s"
+                "     AND q.publication_status = 'PUBLISHED')"
                 " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
                 " ON CONFLICT (explanation_result_id) DO NOTHING"
                 " RETURNING publication_status",
@@ -509,6 +518,7 @@ class EventStore:
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
                     route_id,
+                    etf_instrument_id, settings.trade_date.isoformat(), explanation_as_of,
                     explanation.headline,
                 ),
             )
