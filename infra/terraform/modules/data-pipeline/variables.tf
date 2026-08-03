@@ -224,18 +224,6 @@ variable "disclosure_schedule_state" {
   default     = "DISABLED"
 }
 
-variable "disclosure_load_window_days" {
-  # `load-disclosure` 가 훑을 canonical `report_date` 창(오늘−N일). ASL 은 날짜 산술을 못 해
-  # `--from/--to` 를 만들 수 없어 폭만 넘기고 앱이 날짜로 편다(tag-news·assemble-events 와 같은 패턴).
-  #
-  # 3 = 수집 창 2일(어제~오늘) + 슬랙 1일. 슬랙을 두는 이유는 수집일과 `report_date` 가 같은
-  # 축이 아니어서다 — 18시 이후 제출분의 `rcept_dt` 는 다음 영업일이고, 정정본은 나중 수집에
-  # 앞선 보고일로 들어온다. 좁히면 그런 건이 canonical 에만 남고 DB 에 영영 안 들어간다.
-  description = "공시 적재가 훑을 canonical report_date 창(일). 수집 창 2일 + 슬랙 1일."
-  type        = number
-  default     = 3
-}
-
 variable "disclosure_state_machine_timeout_seconds" {
   # 슬롯 간격(3600s)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 — 겹치면 두 실행이
   # 같은 rcept_no 본문을 동시에 보고 seen-map(ALPHA-720)의 TOCTOU 로 같은 ZIP 을 두 번 받고,
