@@ -659,7 +659,8 @@ settings.targets.keywords            # ["금리", ...]
   수집 provenance 만 부착한다.
 - **raw(공시)** — `raw/source=dart/dataset=disclosures/market=KR/ingest_date=…/run_id=…/` 에
   run_id 별 append. **가격·재무와 동형(bronze 통일)** — 공시목록(list.json) 행을 수집일 기준으로
-  **전부 보존**한다(중복 판정 안 함). 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
+  **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
   **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
   에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
@@ -667,7 +668,8 @@ settings.targets.keywords            # ["금리", ...]
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
 - **raw(ETF 구성종목)** — `raw/source={fmp|krx}/dataset=etf_holdings/market={US|KR}/ingest_date=…/run_id=…/`
   에 run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
-  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(중복 판정 안 함). 수집 대상은
+  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 수집 대상은
   종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`·`krx_etf.source.etf_map`)이라 **1 ETF → N
   구성종목**으로 펼쳐지고, 각 행에 벤더 기준일(FMP `updatedAt`·KRX `trd_dd`)·`our_etf_id`·`market`·
   `fetched_at` 를 부착한다. 같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver)

@@ -224,8 +224,8 @@ def run(
             # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
             # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
             # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
-            "window_from": getattr(source, "resolved_window", (from_date, to_date))[0],
-            "window_to": getattr(source, "resolved_window", (from_date, to_date))[1],
+            "window_from": source.resolved_window[0],
+            "window_to": source.resolved_window[1],
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),
