@@ -215,6 +215,13 @@ class DartDisclosureSource:
         # 목록이 자라는 동안 페이지 경계가 밀려 같은 행이 두 페이지에 걸쳐 나올 수 있다 —
         # 창 안에서 rcept_no 로 접는다. 접지 않으면 한 런이 같은 문서를 두 번 내려받고
         # raw 에도 중복 행이 앉는다(canonical dedup 이 있어도 대역폭은 이미 쓴 뒤다).
+        #
+        # ⚠️ raw 의 "전부 보존·dedup 없음" 계약과의 관계(Rule 7 — 갈리면 하나를 고르고 이유를
+        # 남긴다): 그 계약이 금지하는 건 **서로 다른 관측을 하나로 접는 것**이다(정체성 병합·
+        # 정정 판정은 canonical 소관). 여기서 접는 건 같은 페이지네이션 패스가 페이지 이동
+        # 때문에 **같은 행을 두 번 건네준 것**이라 증거가 늘지 않는다. 페이지 이동 자체가
+        # 관측 대상이면 그건 이 행 복제가 아니라 위 page_no·total_page 가드와
+        # collection_log 의 list_rows_seen 이 기록한다.
         # ⚠️ 창 하나가 실패 단위다 — 종목별 질의 시절의 corp 단위 예외 격리는 **의도적으로**
         # 재현하지 않는다. 격리 축이던 corp 루프가 사라졌고, 중간 페이지의 의미 오류(비-list
         # `list`·status 이상)는 그 창을 못 믿는다는 뜻이지 한 대상의 문제가 아니다. 예외는
@@ -364,6 +371,17 @@ class DartDisclosureSource:
                 )
                 return
             if page >= total_page:
+                return
+            # 마지막이 아닌 페이지가 비어 있으면 그 페이지가 통째로 빠진 것이다. 앞의 가드들은
+            # **응답의 형식**(page_no·total_page)만 보므로 형식이 온전한 빈 페이지는 전부
+            # 통과시키고, 루프는 다음 페이지로 넘어가 실패 기록 없이 완주한다 — 5개 가드를
+            # 세워두고도 가장 단순한 유실이 빠져나가던 구멍이다(검증 라운드 실증).
+            if not rows:
+                self._note_failure(
+                    None, None,
+                    f"page={page}/{total_page} 가 비었다 — 마지막 페이지가 아닌데 0행(페이지 유실)",
+                    page=page,
+                )
                 return
         # ⚠️ 관용 kind 를 붙이지 않는다 — 진짜 실패로 드러낸다(status=partial·exit 1).
         # ALPHA-351 이 절단을 관용한 근거는 "다음 증분 창이 이어받는다" 였고, 그건 상한이 corp

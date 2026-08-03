@@ -405,6 +405,38 @@ def test_late_013_is_a_failure_not_an_empty_window(tmp_path):
     assert any("013" in f["error"] for f in source.fetch_failures)
 
 
+def test_empty_non_final_page_noted(tmp_path):
+    # WHY(각도 H): 앞의 가드들은 **응답의 형식**(page_no·total_page)만 본다 — 형식이 온전한
+    #      빈 페이지는 전부 통과하고 루프는 다음 페이지로 넘어가 실패 기록 없이 완주한다.
+    #      가드를 5개 세워두고도 가장 단순한 유실(중간 페이지가 통째로 빔)이 빠져나갔다.
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=3),
+        2: _page([], total_page=3, page_no=2),  # 마지막이 아닌데 0행
+        3: _page([_row("사업보고서", rcept_no="P3")], total_page=3, page_no=3),
+    })
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]  # 빈 페이지에서 멈춘다
+    assert any("페이지 유실" in f["error"] for f in source.fetch_failures)
+
+
+def test_empty_final_page_is_normal(tmp_path):
+    # WHY: 위 가드가 **마지막 페이지**까지 잡으면 정상 응답이 매 런 실패가 된다 — 창 전체
+    #      건수가 page_count 의 배수면 마지막 페이지가 비는 건 자연스럽다.
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="P1")], total_page=2),
+        2: _page([], total_page=2, page_no=2),  # 마지막 페이지가 빔 = 정상
+    })
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["P1"]
+    assert source.fetch_failures == []
+
+
 def test_total_page_smaller_than_current_page_noted(tmp_path):
     # WHY(각도 H): 공유 파서(`_as_page_number`)는 "페이지 번호로 읽히는가"만 본다 — 두 필드의
     #      의미까지는 못 지킨다. page=2 응답의 total_page=1 은 파서엔 유효하지만 모순이고,
