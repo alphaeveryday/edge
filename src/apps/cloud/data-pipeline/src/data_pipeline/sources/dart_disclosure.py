@@ -214,17 +214,6 @@ class DartDisclosureSource:
             }
         )
 
-    def _note_truncation(self, *args, **kwargs) -> None:
-        """페이지 순회가 끊긴 실패 — 기록하고 **세그먼트 절단**으로 표시한다.
-
-        행 단위 격리(`_note_failure`)와 구분하는 이유: 절단은 "이 창을 끝까지 못 읽었다"라
-        뒤 세그먼트를 돌면 날짜 중간에 구멍 난 raw 가 남지만, 격리는 "그 행만 빠졌다"라
-        나머지 수집을 계속하는 게 맞다. 둘을 같은 신호로 묶으면 malformed 행 하나가 창
-        전체를 멈춘다.
-        """
-        self._note_failure(*args, **kwargs)
-        self._segment_truncated = True
-
     def fetch(
         self,
         symbols: list[str],

@@ -228,6 +228,8 @@ def test_failed_segment_stops_later_segments(tmp_path):
     #      아니다 — 실패 단위는 여전히 요청받은 창 하나다. 앞 세그먼트가 절단됐는데 뒤를 계속
     #      수집하면 "앞 날짜는 잘렸는데 뒤 날짜는 온전한" raw 가 남고, partial 런도 후속 정제
     #      대상이라 canonical 이 날짜 중간에 구멍을 가진 채 완성된 것처럼 보인다.
+    #      절단 신호는 total_page 를 못 읽는 경우로 재현한다(순회를 멈추는 두 자리 중 하나 —
+    #      나머지 MAX_PAGES 는 아래 테스트가 맡는다).
     class SegmentSpy(FakeClient):
         def request(self, method, url, *, headers=None, data=None, decode=True):
             if "/list.json" in url:
@@ -275,6 +277,32 @@ def test_row_level_isolation_does_not_stop_later_segments(tmp_path):
     assert len(client.list_urls) == 8              # 격리는 뒤 세그먼트를 막지 않는다
     assert len(records) == 7                       # 첫 세그먼트만 그 행이 빠진다
     assert any("report_nm 비문자열" in f["error"] for f in source.fetch_failures)
+
+
+def test_max_pages_stops_and_blocks_later_segments(tmp_path):
+    # WHY: 순회를 멈추는 자리는 의도적으로 둘뿐이다 — total_page 를 못 읽음, MAX_PAGES 도달.
+    #      둘 다 "이 창을 끝까지 못 읽었다"는 같은 사건이라 같은 계약을 져야 한다: 기록을
+    #      남기고(관용 kind 없음 = partial·exit 1) 뒤 세그먼트도 멈춘다. 한쪽만 테스트하면
+    #      다른 쪽이 조용히 통과로 회귀해도 아무도 모른다(Rule 9).
+    class AlwaysMorePages(FakeClient):
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            if "/list.json" in url:
+                self.list_urls.append(url)
+                # total_page 가 상한보다 늘 크다 → MAX_PAGES 에서 끊긴다
+                return json.dumps(_page([_row("공급계약", rcept_no=f"P{len(self.list_urls)}")],
+                                        total_page=999), ensure_ascii=False)
+            return super().request(method, url, headers=headers, data=data, decode=decode)
+
+    client = AlwaysMorePages()
+    source = _source(tmp_path, client, api_key="k", max_pages=3)
+
+    records = list(source.fetch(["005930"], from_date="2026-01-01", to_date="2026-07-31"))
+
+    assert len(client.list_urls) == 3          # 첫 세그먼트의 상한까지만 — 뒤 세그먼트 없음
+    assert len(records) == 3                   # 읽은 만큼은 보존
+    assert any("MAX_PAGES" in f["error"] for f in source.fetch_failures)
+    # 관용 kind 가 아니다 — 스텝이 partial·exit 1 로 드러낸다
+    assert all(f["kind"] == "failure" for f in source.fetch_failures)
 
 
 def test_split_window_total_count_accumulates(tmp_path):
