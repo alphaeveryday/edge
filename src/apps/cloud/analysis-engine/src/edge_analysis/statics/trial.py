@@ -463,3 +463,105 @@ def _summarize(rows: list, *, layer: str, k: int, tag: str = "") -> dict:
             "smd": smd, "balanced": all(abs(v) <= SMD_MAX for v in smd.values()),
             "att_adj": att_adj, "p_adj": p_adj, "lead": lead,
             "pretrend_ok": all(v is None or v[1] >= ALPHA for v in lead.values())}
+
+
+# ── 가설 → 검정 컨텍스트 전달 ────────────────────────────────────────────
+# 가설 에이전트가 이미 본 것을 검정 에이전트가 다시 찾으면 왕복이 두 배가 되고,
+# 더 나쁘게는 **다른 결론**이 나와 산출물이 흐려진다(8셀 실측의 그 병). 가설 층이
+# 무엇을 봤고 무엇을 배제했는지를 그대로 넘긴다.
+#
+# 역할 분담 (사용자 설계):
+#   가설 에이전트  거칠게 낸다        - 닫힌 슬롯, 방향은 의도
+#   검정 에이전트  구체화한다          - CATE 로 '어느 조건에서' 를 찾고, 시장요인도 환원
+#   설명 에이전트  함의만 받는다        - 조립만. 원자료를 다시 안 본다
+
+
+def probe_brief(tuples: list, reports: list, screens: list | None = None,
+                memory: list | None = None) -> str:
+    """가설 층이 **이미 본 것**. 검정 에이전트의 첫 입력에 붙는다.
+
+    셋을 넘긴다:
+      - 세운 가설과 그 판정 (다시 세우지 말라는 뜻)
+      - 격자 스크린에서 이미 훑은 (타입 × 노출) 조합 (다시 훑지 말라는 뜻)
+      - 회상된 과거 판정 (이미 아는 것)
+    """
+    out = ["=== 가설 층이 이미 본 것 (중복 탐색 금지) ==="]
+    for t, r in zip(tuples, reports):
+        ex = f"{t.exposure.ident}/{t.exposure.transform}"
+        cd = " ∧ ".join(f"{v.ident}/{v.transform}" for v in t.conditions) or "—"
+        out.append(f"  [{t.channel}] {t.trigger.kind}:{t.trigger.ident} × {ex} "
+                   f"· 조건 {cd} → {r.verdict}"
+                   + (f" (n={r.n}, p={r.p:.3f})" if r.p is not None else "")
+                   + (f" · {r.reason[:60]}" if r.reason else ""))
+    if screens:
+        seen = sorted({f"{s.get('type', '?').split('.')[-1]}×{s.get('exposure', '?')}"
+                       for s in screens if "p2" in s})
+        out.append(f"  격자에서 이미 훑은 조합 {len(seen)}개: "
+                   + ", ".join(seen[:14]) + (" …" if len(seen) > 14 else ""))
+    if memory:
+        out.append("  과거 판정 회상: " + " · ".join(str(m)[:70] for m in memory[:3]))
+    out.append("=== 검정 층이 할 일 ===")
+    out.append("  1) 위 판정을 재현하지 말고 **구체화**한다: CATE 로 '어느 조건에서' 를 찾는다")
+    out.append("  2) 시장요인으로 끝내지 말고 **왜 시장요인인가**를 환원한다 "
+               "(밤사이 팩터 · 시장 사건 τ · 국면)")
+    out.append("  3) 설명 층에는 **함의만** 넘긴다 - 원자료를 다시 열지 않게")
+    return "\n".join(out)
+
+
+def reduce_market(lake, day: str, *, symbol: str = "") -> dict:
+    """**시장요인의 환원.** '시장이 79%' 로 끝내면 그건 분해이지 원인이 아니다.
+
+    시장요인을 셋으로 쪼갠다 - 전부 이미 있는 재료다:
+      ① 밤사이 해외 팩터   섹터 매칭 미국 지수 × β 구간 (gap_covariate·market_source)
+      ② 장중 시장 사건     서킷브레이커·거시·정책의 τ (market_event_marks)
+      ③ 국면              시장 수익 20일 변동성의 백분위 (regime_lvl)
+
+    이 셋이 곧 '왜 시장요인인가' 의 답이고, 남는 것은 국내 미설명이다.
+    검정 결과가 아니라 **환원 결과**라 판정을 붙이지 않는다 - 회계와 사실이다.
+    """
+    from .attribute import gap_covariate
+    from .causeflow import _prev_trading_day
+    from .layers import market_source, overnight
+    out: dict = {"day": day, "since": _prev_trading_day(lake, day)}
+    try:
+        out["overnight"] = sorted(overnight(lake, day), key=lambda x: -abs(x[1]))[:4]
+    except Exception as e:                          # noqa: BLE001
+        out["overnight_err"] = str(e)[:90]
+    if symbol:
+        gc = gap_covariate(lake, symbol, day, 0.0)
+        out["gap_factor"] = getattr(gc, "factor", None)
+        out["gap_factor_ret"] = getattr(gc, "factor_ret", None)
+        out["gap_beta"] = (getattr(gc, "beta_lo", None), getattr(gc, "beta_hi", None))
+        out["gap_reason"] = getattr(gc, "reason", "")
+        try:
+            ms = market_source(lake, day, proxy=getattr(gc, "factor", "S&P500"))
+            out["mkt_explained"] = ms
+        except Exception:                           # noqa: BLE001
+            out["mkt_explained"] = None
+    return out
+
+
+def say_market(r: dict, iid: str = "", lake=None) -> str:
+    """환원 결과를 문장으로. 설명 층에 넘길 **함의**만 담는다."""
+    out = ["=== 시장요인 환원 (왜 시장인가) ==="]
+    if r.get("overnight"):
+        out.append("  ① 밤사이 해외: " + " · ".join(
+            f"{nm} {v * 100:+.2f}%" for nm, v in r["overnight"]))
+    if r.get("gap_factor"):
+        fr = r.get("gap_factor_ret")
+        bl, bh = r.get("gap_beta", (None, None))
+        out.append(f"     섹터 매칭 팩터 {r['gap_factor']}"
+                   + (f" {fr * 100:+.2f}%" if fr is not None else " (미계측)")
+                   + (f" × β [{bl:.2f}, {bh:.2f}]" if bl is not None else "")
+                   + (f" — {r['gap_reason']}" if r.get("gap_reason") else ""))
+    ms = r.get("mkt_explained")
+    if ms:
+        out.append(f"     코스피 중 그 팩터로 설명되는 몫 "
+                   f"[{ms[0] * 100:+.2f}, {ms[1] * 100:+.2f}]%p")
+    if lake is not None and iid:
+        from .causeflow import market_event_marks
+        marks = market_event_marks(lake, iid, r["day"])
+        out.append("  ② 장중 시장 사건 τ: " + (" · ".join(marks) if marks else "없음"))
+    out.append("  ③ 국면: 계열족 `국면/수준` (시장 20일 변동성) 을 조절자로 넣어 검정한다")
+    out.append("  → 남는 것이 국내 미설명이다. 여기까지가 환원이고, 그 밖은 접는다.")
+    return "\n".join(out)

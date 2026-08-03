@@ -77,6 +77,19 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_analyst_target",   "hive", "canonical/reports/analyst_target"),
     ("s3_rating_dist",      "hive", "canonical/reports/rating_distribution"),
     ("s3_investor_value",   "hive", "canonical/market_data/investor_value_daily"),
+    # **947 항목 long 표** (trade_date, ticker, item_code, value) - 하루 75만 행.
+    # 피벗해서 넓히려다 OOM 이 났다: 947열 × 366일 × 3,800종목. 그리고 947열 표는
+    # 어차피 못 쓴다 - long 으로 두고 item_code 로 골라 쓰는 게 맞다.
+    # 항목 사전은 `s3_dg_reference` 의 items_resolved.csv 다 (name_kr·domain·category).
+    # 실측 분류: 투자자별매매-수량 329 · 대금 329 · 가격수익률 97 · 주식수시총 59 ·
+    # 베타 45 · 거래량 23 · 주가배수 20 · 신용거래 20 · 대차거래 13 · 차입공매도 12.
+    # **컨센서스/추정 항목은 없다** (전수 검색 0건) - 서프라이즈는 다른 소스가 필요하다.
+    ("s3_dg_market",        "csv",  "draft/curated/source=dataguide/dataset=market_daily"),
+    # 항목 사전 (item_code · name_kr · unit · domain · category). `reference` 셋은
+    # `.csv` **비압축**이라 csv 글롭(`*.csv.gz`)에 안 걸린다 - 파일을 직접 짚는다.
+    ("dg_items", "csvfile",
+     "draft/curated/source=dataguide/dataset=reference/market=KR/"
+     "as_of_date=2026-08-02/items_resolved.csv"),
     ("s3_program_trading",  "hive", "canonical/market_data/program_trading_daily"),
     ("s3_intraday_5m",      "hive", "canonical/market_data/intraday_5m"),
     ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
@@ -210,7 +223,9 @@ class CausalLake:
                "glob": "read_parquet('{p}')",
                "ice": "iceberg_scan('{p}')",
                "csv": ("read_csv('{p}/**/*.csv.gz', hive_partitioning=true, "
-                       "all_varchar=true, ignore_errors=true)")}
+                       "all_varchar=true, ignore_errors=true)"),
+               # 단일 비압축 csv (항목 사전 등). 글롭이 아니라 파일을 짚는다.
+               "csvfile": "read_csv('{p}', all_varchar=true)"}
         for name, kind, path in S3_SETS:
             ddl = (f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM "
                    + src[kind].format(p=LAKE + path))
