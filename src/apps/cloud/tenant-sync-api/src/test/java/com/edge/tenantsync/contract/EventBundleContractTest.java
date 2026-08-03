@@ -110,7 +110,7 @@ class EventBundleContractTest {
 
 	@Test
 	void populated_flat_형상도_통과한다() {
-		// ALPHA-363 조립 조인 구현 후 채워질 source_events·evidences(flat) 형상도 계약이 수용해야 한다.
+		// 조립 조인(ALPHA-718)이 채우는 source_events·evidences(flat) 형상을 계약이 수용해야 한다.
 		String populated = """
 				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
 				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
@@ -121,7 +121,7 @@ class EventBundleContractTest {
 				   "evidences":[{"kind":"DISCLOSURE","title":"삼성전자 공급계약 공시","source":"DART","published_at":"2026-07-14T09:00:00Z"}]}]}""";
 
 		assertThat(schema.validate(populated, InputFormat.JSON))
-				.as("363 후 populated flat 형상도 통과해야 한다").isEmpty();
+				.as("populated flat 형상도 통과해야 한다(ALPHA-718)").isEmpty();
 	}
 
 	@Test
