@@ -243,6 +243,48 @@ def _rho_after(panel: np.ndarray, basis: list[np.ndarray]) -> float | None:
     return residual_rho(res)
 
 
+
+KRX_PREFIX = "KRX:"        # 주입된 KRX 업종지수 후보의 코드 접두 (겹침 게이트 면제 표식)
+
+
+def _krx_sector_candidate(lake, etf: str, day: str, hist: list, d0):
+    """ETF 구성종목의 **최빈 KRX 업종**지수를 섹터 후보로. (코드, 이름, 계열, 당일값).
+
+    업종을 우리가 고르지 않는다: 구성종목 다수가 속한 업종이 그 ETF 의 업종이다.
+    지수 자체도 KRX 가 산출한다 - 설명력으로 고르면 섹터가 아니라 '가장 잘 맞는
+    무엇' 이 된다(042700 07-31 에서 삼성전자가 섹터로 뽑힌 그 실수).
+    """
+    import math
+    # 보유는 `holdings()` 를 쓴다 - KRX 우선·FMP 폴백이 이미 그 안에 있고 캐시된다.
+    hold = holdings(lake, etf, day)
+    tks = {t.split(".")[0][-6:] for t, _n, _w in hold}
+    if not tks:
+        return None
+    try:
+        rows = lake.sql(f"""
+            WITH m AS (SELECT code, count(*) n FROM sector_member
+                       WHERE as_of <= DATE '{day}'
+                         AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
+                       GROUP BY 1 ORDER BY 2 DESC LIMIT 1)
+            SELECT si.trade_date, si.close, (SELECT code FROM m) AS code
+            FROM sector_index si WHERE si.code = (SELECT code FROM m)
+              AND si.trade_date <= DATE '{day}' ORDER BY 1""")
+    except Exception:                               # noqa: BLE001 - 부재는 후보 없음
+        return None
+    if not rows or rows[0][2] is None:
+        return None
+    code = str(rows[0][2])
+    lv = {r[0]: float(r[1]) for r in rows if r[1]}
+    ds = sorted(lv)
+    lr = {ds[i]: math.log(lv[ds[i]] / lv[ds[i - 1]])
+          for i in range(1, len(ds)) if lv[ds[i - 1]] > 0}
+    v = _on(lr, hist)
+    if v is None or d0 not in lr:
+        return None
+    from .krxsector import sector_name
+    return (KRX_PREFIX + code, f"{sector_name(code)}(KRX 업종)", v, float(lr[d0]))
+
+
 def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
               cover: float = COVER_TARGET, top: int = TOP_NAMES) -> Rollup | None:
     """ETF 하루를 시장·섹터·고유로 가른다. 층은 최대 `max_layers`, 커버 `cover` 에서 정지.
@@ -265,6 +307,20 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         v = _on(m, hist)
         if sym != etf and v is not None and d0 in m:
             xs[sym], nows[sym] = v, float(m[d0])
+
+    # **KRX 업종지수를 섹터 후보로 주입한다.** ETF 후보만 쓰면 반도체 ETF 는 반도체
+    # ETF 전부가 동어반복(overlap ≥ 컷)으로 빠지고 **섹터 층이 사라진다** - 실측
+    # 395160 KODEX AI반도체TOP2플러스 07-31: 동어반복 제외 35개, 섹터 층 0개, 시장
+    # 100%. 종목 경로는 이미 KRX 업종지수로 고쳤는데(설명력으로 고르면 섹터가
+    # 아니다) ETF 경로만 안 고쳤다.
+    #
+    # 지수는 **우리가 고르지 않는다**(KRX 가 산출) 그리고 ETF 가 아니라 구성 겹침을
+    # 계산할 수 없다 - 그래서 겹침 게이트를 면제한다. 대신 어느 업종인지는 구성종목의
+    # **최빈 업종**이 정한다: 그것도 우리가 고르는 게 아니다.
+    krx = _krx_sector_candidate(lake, etf, day, hist, d0)
+    if krx is not None:
+        code, nm, v, now = krx
+        xs[code], nows[code], meta[code] = v, now, nm
 
     layers: list[Layer] = []
     basis: list[np.ndarray] = []
@@ -304,10 +360,22 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     for s_ in xs:
         if s_ == MARKET_CODE:
             continue
+        if s_.startswith(KRX_PREFIX):
+            # KRX 업종지수는 ETF 가 아니라 구성 겹침을 계산할 수 없다. 그리고 지수를
+            # 우리가 고르지 않으므로 동어반복 위험이 없다 - 게이트를 면제한다.
+            ovs[s_] = 0.0
+            continue
         ovs[s_] = ov = overlap(lake, etf, s_, day)
         (twins if ov >= TAUTOLOGY_CUT else alien if ov < MIN_OVERLAP else set()).add(s_)
     sector_pool = {k: v for k, v in xs.items()
                    if k not in twins and k not in alien and k != MARKET_CODE}
+    # **KRX 업종지수가 후보에 있으면 그것만 쓴다.** 섹터를 우리가 고르면 섹터가 아니라
+    # '가장 잘 맞는 무엇' 이 된다 - 실측 305720 07-31 에서 삼성전자 ETF 가 섹터로
+    # 뽑혔다(β 로 −6.90%p). 종목 경로는 이미 KRX 업종으로 못박았는데(042700 07-31 의
+    # 그 수술) ETF 경로만 안 했다. 지수는 KRX 가 산출하므로 우리 선택이 아니다.
+    krx_only = {k: v for k, v in sector_pool.items() if k.startswith(KRX_PREFIX)}
+    if krx_only:
+        sector_pool = krx_only
     while len(layers) < max_layers and sector_pool and not covered():
         # 후보 K 개를 훑어 최대를 고르므로 임계를 K 로 보정한다 (탐색 보정).
         pick = _pick(y, sector_pool, nows, meta, basis, basis_now,

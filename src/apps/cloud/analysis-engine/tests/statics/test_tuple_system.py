@@ -927,3 +927,43 @@ def test_reduction_dictionary_covers_curated_and_fails_loudly():
                   ("c2", "모르는것", "x", "없는것")])
     assert c["reduced"] == 1 and c["failed"] == 1
     assert c["fail_sample"], "실패 목록이 비면 확장 요청이 사라진다"
+
+
+def test_etf_routing_sends_questions_to_the_dominant_layer():
+    """어느 층이 끌었는지 보지 않고 종목 가설부터 세우면 **틀린 질문을 잘 검정**한다.
+
+    실측(042700 07-31): 하루의 77% 가 시장인데 9간선 전부 종목 가설이었고 전부 죽었다.
+    """
+    from edge_analysis.statics.route import DOMINANT, route_etf
+
+    class L:
+        def __init__(self, k, n, c):
+            self.kind, self.name, self.contribution = k, n, c
+
+    class N:
+        def __init__(self, t, p):
+            self.ticker, self.pct, self.label, self.weight = t, p, "", 0.1
+
+    class R:
+        def __init__(self, layers, idio, names=(), etf="TEST"):
+            self.layers, self.idio, self.names = layers, idio, names
+            self.etf, self.etf_name = etf, "T"
+
+    mkt = route_etf(R((L("시장", "KODEX200", 0.26), L("섹터", "반도체", -0.01)), 0.001))
+    assert mkt.kind == "시장" and "종목 가설을 세우지 않는다" in mkt.why
+
+    idio = route_etf(R((L("시장", "K", 0.001),), 0.05,
+                       (N("000660", 0.03), N("005930", 0.02), N("x", 0.0001))))
+    assert idio.kind == "고유" and idio.targets == ("000660", "005930")
+
+    mix = route_etf(R((L("시장", "K", 0.03), L("섹터", "S", 0.03)), 0.03))
+    assert mix.kind == "혼합" and "하나를 고르면" in mix.why
+    assert mix.share < DOMINANT
+
+    # 시장 프록시 자신을 섹터로 설명하면 범주 오류다 (실측 069500 07-29)
+    me = route_etf(R((L("섹터", "화학", -0.05),), 0.01, etf="069500"))
+    assert me.kind == "시장" and "시장 프록시 자신" in me.why
+
+    class P:
+        basket_moved = False
+    assert route_etf(R((L("시장", "K", 0.9),), 0.0), premium=P()).kind == "괴리단독"

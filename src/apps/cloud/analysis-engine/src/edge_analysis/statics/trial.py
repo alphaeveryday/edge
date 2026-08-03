@@ -535,16 +535,31 @@ def reduce_market(lake, day: str, *, symbol: str = "") -> dict:
     except Exception as e:                          # noqa: BLE001
         out["overnight_err"] = str(e)[:90]
     if symbol:
+        # 팩터는 갭 계산 성공과 무관하게 **먼저** 정해진다. ETF 는 5분봉이 없어
+        # 자기 갭을 못 만들지만, 코스피 환원(market_source)은 팩터만 있으면 된다 -
+        # 하나가 없다고 둘 다 침묵하면 직관적 요인을 놓친다.
+        from .attribute import US_FACTOR_DEFAULT, _us_factor
+        sym6 = symbol.split(".")[0]
+        fsym = _us_factor(lake, sym6, day)
+        out["factor_sym"] = fsym
+        fname = None
+        try:
+            fr = lake.sql(f"SELECT any_value(name) FROM layers_daily "
+                          f"WHERE kind='us' AND symbol='{fsym}'")
+            fname = fr[0][0] if fr and fr[0][0] else fsym
+        except Exception:                           # noqa: BLE001
+            fname = fsym
+        out["factor_name"] = fname
+        try:
+            ms0 = market_source(lake, day, proxy=fname)
+            out["mkt_explained"] = ms0
+        except Exception:                           # noqa: BLE001
+            out["mkt_explained"] = None
         gc = gap_covariate(lake, symbol, day, 0.0)
         out["gap_factor"] = getattr(gc, "factor", None)
         out["gap_factor_ret"] = getattr(gc, "factor_ret", None)
         out["gap_beta"] = (getattr(gc, "beta_lo", None), getattr(gc, "beta_hi", None))
         out["gap_reason"] = getattr(gc, "reason", "")
-        try:
-            ms = market_source(lake, day, proxy=getattr(gc, "factor", "S&P500"))
-            out["mkt_explained"] = ms
-        except Exception:                           # noqa: BLE001
-            out["mkt_explained"] = None
     return out
 
 
@@ -554,7 +569,11 @@ def say_market(r: dict, iid: str = "", lake=None) -> str:
     if r.get("overnight"):
         out.append("  ① 밤사이 해외: " + " · ".join(
             f"{nm} {v * 100:+.2f}%" for nm, v in r["overnight"]))
-    if r.get("gap_factor"):
+    if r.get("factor_name"):
+        out.append(f"     섹터 매칭 팩터: {r['factor_name']} ({r.get('factor_sym')})"
+                   + (f" — 자기 갭 미계측: {r['gap_reason'][:64]}"
+                      if r.get("gap_reason") else ""))
+    if r.get("gap_factor") and r.get("gap_factor_ret") is not None:
         fr = r.get("gap_factor_ret")
         bl, bh = r.get("gap_beta", (None, None))
         out.append(f"     섹터 매칭 팩터 {r['gap_factor']}"

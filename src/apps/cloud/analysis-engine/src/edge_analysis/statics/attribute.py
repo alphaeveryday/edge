@@ -111,12 +111,32 @@ US_FACTOR_DEFAULT = "GSPC"
 
 
 def _us_factor(lake, tk6: str, day: str) -> str:
-    """이 종목의 KRX 업종에 맞는 미국 팩터 심볼. 업종 미상이면 광의 지수."""
+    """이 종목·ETF 의 KRX 업종에 맞는 미국 팩터 심볼. 업종 미상이면 광의 지수.
+
+    **ETF 도 처리한다**: ETF 는 `sector_member` 에 없으므로 종목 조회가 빈다. 그러면
+    구성종목의 **최빈 업종**으로 떨어진다 - 실측 395160(KODEX AI반도체TOP2플러스)이
+    GSPC 로 떨어져 '밤사이 미국 세션 수익률 없음' 이 됐고, 정작 밤사이 필라델피아
+    반도체가 +8.19% 였다. 팩터를 못 고르면 환원이 통째로 침묵한다.
+    """
     rows = lake.sql(f"""
         SELECT code FROM sector_member
         WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'
         ORDER BY as_of DESC LIMIT 1""")
-    return US_FACTOR.get(str(rows[0][0]) if rows else "", US_FACTOR_DEFAULT)
+    if rows:
+        return US_FACTOR.get(str(rows[0][0]), US_FACTOR_DEFAULT)
+    try:
+        from .layers import holdings
+        tks = {t.split(".")[0][-6:] for t, _n, _w in holdings(lake, tk6, day)}
+        if tks:
+            r2 = lake.sql(f"""
+                SELECT code FROM sector_member WHERE as_of <= DATE '{day}'
+                  AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
+                GROUP BY 1 ORDER BY count(*) DESC LIMIT 1""")
+            if r2:
+                return US_FACTOR.get(str(r2[0][0]), US_FACTOR_DEFAULT)
+    except Exception:                               # noqa: BLE001 - 부재는 기본값
+        pass
+    return US_FACTOR_DEFAULT
 
 
 def gap_covariate(lake, ticker: str, day: str, gap_share: float):
@@ -161,6 +181,9 @@ def gap_covariate(lake, ticker: str, day: str, gap_share: float):
             ORDER BY g.dt DESC""")
     except Exception as e:                  # noqa: BLE001 - 부재는 사유와 함께
         return GapCovariate(reason=f"밤사이 팩터 조회 실패: {type(e).__name__}: {e}"[:120])
+    if not rows:
+        return GapCovariate(reason=f"{ticker} 5분봉이 없다 - 갭 계열을 만들 수 없다 "
+                                  "(ETF·비상장 등). 미국 팩터 부재와 다른 사유다")
     today = next((r for r in rows if str(r[0]) == day), None)
     hist = [(float(r[2]), float(r[1])) for r in rows
             if str(r[0]) != day and r[2] is not None]
