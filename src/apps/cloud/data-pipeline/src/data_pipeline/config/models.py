@@ -375,9 +375,10 @@ class MinuteRelayConfig(BaseModel):
     nested 형태(`…__QUEUE_URLS__<destination>`)는 쓰지 않는다 — destination 이름에
     하이픈이 있어 셸이 변수 할당으로 파싱하지 못한다(실증: `command not found`).
     destination 은 outbox 행이
-    들고 있는 값이고(계획 §11 큐 3종: price-analysis-realtime·news-extraction-realtime·
-    news-extraction-backfill), 매핑에 없는 destination 의 event 는 Relay 가 DEAD 로
-    격리한다 — 프로세스를 죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
+    들고 있는 값이고(큐 4종: price-analysis-realtime·news-extraction-realtime·
+    news-extraction-backfill + 트리거 설명 price-explanation-realtime — ALPHA-709),
+    매핑에 없는 destination 의 event 는 Relay 가 DEAD 로 격리한다 — 프로세스를
+    죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
     """
 
     model_config = ConfigDict(extra="forbid")

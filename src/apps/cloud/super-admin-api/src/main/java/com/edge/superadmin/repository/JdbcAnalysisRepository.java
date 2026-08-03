@@ -43,21 +43,38 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	 * 트리거→기여관찰→경로→런이 전부 1:1 체인이라(각 FK 에 UNIQUE) 행이 불어나지 않는다.
 	 * {@code explanation_result} 만 LEFT — 결과가 아직 없는 런도 목록에 남아야 한다.
 	 *
+	 * <p>트리거 축은 둘이다(ALPHA-709) — 일 단위({@code price_movement_trigger})와 분봉
+	 * ({@code minute_price_trigger}). 관측 한 행은 정확히 한 축만 갖는다(one-of CHECK)라
+	 * 두 축을 LEFT 로 걸고 COALESCE 한다 — 일 단위만 INNER 로 걸면 분봉 계보의 런이
+	 * 목록에서 통째로 사라진다. 분봉의 observed_return 은 부호 있는 close/open−1 재구성
+	 * (행의 change_rate 는 절대값), instrument 는 entity_id(단축코드)→ticker 로 잇되
+	 * XKRX 로 좁힌다 — instrument 유일성이 (market_code, ticker)라 같은 ticker 가 두
+	 * MIC 에 있으면 한 런이 두 행으로 불어난다(분봉 ETF 는 전부 XKRX 적재 계약).
+	 *
 	 * <p>동률 해소를 명시한다({@code explanation_run_id}) — {@code explanation_as_of} 에 유일성
 	 * 제약이 없어 동률이면 페이지 경계 행이 조회마다 달라진다.
 	 */
 	private static final String LIST_SQL = """
 			SELECT er.explanation_run_id, er.run_status, er.finished_at,
-			       tr.observed_return, tr.detected_at,
+			       COALESCE(tr.observed_return, mt.close_price / mt.open_price - 1)
+			           AS observed_return,
+			       COALESCE(tr.detected_at, mt.created_at) AS detected_at,
 			       e.display_name, i.ticker, i.market_code,
 			       res.summary, res.confidence_level
 			  FROM explanation_run er
 			  JOIN explanation_route rt ON rt.explanation_route_id = er.explanation_route_id
 			  JOIN etf_contribution_observation co
 			         ON co.contribution_observation_id = rt.contribution_observation_id
-			  JOIN price_movement_trigger tr
+			  LEFT JOIN price_movement_trigger tr
 			         ON tr.price_movement_trigger_id = co.price_movement_trigger_id
-			  JOIN instrument i ON i.instrument_id = tr.etf_instrument_id
+			  LEFT JOIN minute_price_trigger mt
+			         ON mt.trigger_id = co.minute_price_trigger_id
+			  JOIN instrument i
+			         ON (tr.etf_instrument_id IS NOT NULL
+			                 AND i.instrument_id = tr.etf_instrument_id)
+			             OR (mt.trigger_id IS NOT NULL
+			                 AND i.ticker = mt.entity_id AND i.instrument_type = 'ETF'
+			                 AND i.market_code = 'XKRX')
 			  JOIN entity e ON e.entity_id = i.instrument_id
 			  LEFT JOIN explanation_result res ON res.explanation_run_id = er.explanation_run_id
 			 ORDER BY er.explanation_as_of DESC, er.explanation_run_id DESC

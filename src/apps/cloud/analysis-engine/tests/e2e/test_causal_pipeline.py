@@ -1468,6 +1468,7 @@ _EVENT = EventContext(source_event_id=EVENT_ID, event_type_code=EVENT_TYPE,
 
 def _settings(*, causal: bool, sandbox: bool = True, registry: str = "") -> SimpleNamespace:
     return SimpleNamespace(
+        trigger_id=None,
         trade_date=TRADE_DATE, request_id="req-causal-1", etf_ticker=ETF_TICKER,
         lake_bucket="test-lake",
         result_s3_prefix="s3://test-lake/operations_archive/etf_explanations/",
@@ -1504,7 +1505,7 @@ class _FakeStore:
         return _TRIGGER
 
     def persist_observation_route(self, trigger_id, decomp, route_code, event_search,
-                                  entity_index):
+                                  entity_index, *, minute=False):
         return {"trigger_id": trigger_id, "obs_id": "cob_1", "route_id": "rte_1"}
 
     def fetch_event_contexts(self, trade_date, tickers):

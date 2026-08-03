@@ -276,13 +276,16 @@ def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path)
         "DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS",
         '{"price-analysis-realtime":"https://sqs/p",'
         '"news-extraction-realtime":"https://sqs/n",'
-        '"news-extraction-backfill":"https://sqs/b"}',
+        '"news-extraction-backfill":"https://sqs/b",'
+        '"price-explanation-realtime":"https://sqs/e"}',
     )
     settings = load_settings(_write(tmp_path, VALID))
     assert dict(settings.minute_relay.queue_urls) == {
         "price-analysis-realtime": "https://sqs/p",
         "news-extraction-realtime": "https://sqs/n",
         "news-extraction-backfill": "https://sqs/b",
+        # 4번째 — 트리거 설명 큐(ALPHA-709). 빠뜨리면 RelayConfig 가 기동을 거부한다
+        "price-explanation-realtime": "https://sqs/e",
     }
     # 이 매핑이 그대로 Relay 설정으로 성립해야 한다(어휘·중복 검증 통과)
     from data_pipeline.minute.relay import RelayConfig

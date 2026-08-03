@@ -93,9 +93,13 @@
 > open 을 `minute_session_open` 원장에 **확정 후 불변**으로 남기고(첫 window 미커밋=
 > 재시도, 커밋됐는데 레코드 없음=MISSING+사유), 쿨다운은 `minute_price_trigger` 의
 > UNIQUE(entity, 2h 버킷)+DO NOTHING 이 정본 — 트리거 행과 설명 outbox event 는 한
-> 트랜잭션이다. ⚠️ destination `price-explanation-realtime` 은 Relay 어휘 4번째로
-> **아직 미등록** — 등록 전 relay 를 띄우면 그 event 가 DEAD 로 격리된다(후속 PR).
-> 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정 규칙의 배선이다)까지다.
+> 트랜잭션이다. 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정 규칙의
+> 배선이다), **설명 큐 4번째 destination**(ALPHA-709 — `price-explanation-realtime`
+> 이 Relay 어휘에 등록돼 **4종이 전부 필수**다: 빠진 큐는 그 레인 event 전멸이라
+> 기동 거부. 트리거 사건의 발행 가부는 `destination_accepts` 가 정본이고, DLQ 대사
+> 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
+> 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
+> trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
 > 스케줄·AWS 리소스는 아직 없다(큐는 설정으로 주입, staging 은 PR 9). ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
@@ -896,15 +900,17 @@ python -m data_pipeline.run reconcile
 # 큐 매핑은 **JSON 한 변수**로 준다 — destination 이름에 하이픈이 있어 nested 형태
 # (…__QUEUE_URLS__price-analysis-realtime=)는 셸이 변수 할당으로 파싱하지 못한다.
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill","price-explanation-realtime":"https://sqs…/explain"}' \
   python -m data_pipeline.run relay --max-ticks 5
 # DLQ 대사(1분 파이프라인, ALPHA-672) — DLQ 에 도착했는데 DB job 이 non-terminal 이면
 # SQS_MAX_RECEIVE 사유로 DEAD 에 CAS 한다. **주기 실행**이고 메시지는 지우지 않는다
 # (근거 보존). 원 큐 매핑도 함께 요구한다 — DLQ 자리에 원 큐가 들어가면 정상 배달
-# 중인 job 이 전부 DEAD 가 되므로 겹치면 기동을 거부한다. 두 매핑 모두 큐 3종을 다
-# 채워야 한다(빠진 레인은 아무도 대사하지 않는다). 끊긴 대사는 exit 1 이다.
+# 중인 job 이 전부 DEAD 가 되므로 겹치면 기동을 거부한다. 원 큐 매핑은 relay 어휘
+# **4종**(트리거 설명 큐 포함), DLQ 매핑은 **job 큐 3종**을 다 채워야 한다(빠진
+# 레인은 아무도 대사하지 않는다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이
+# 아니다, ALPHA-709). 끊긴 대사는 exit 1 이다.
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill","price-explanation-realtime":"https://sqs…/explain"}' \
 DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs…/price-dlq","news-extraction-realtime":"https://sqs…/news-dlq","news-extraction-backfill":"https://sqs…/backfill-dlq"}' \
   python -m data_pipeline.run dlq-reconcile --max-ticks 5
 # redrive(1분 파이프라인, ALPHA-672) — **막힌 것**만 되살린다(DEAD job 또는 Relay 가

@@ -37,6 +37,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD (Asia/Seoul); default today")
     parser.add_argument("--request-id", default=None, help="caller correlation id")
+    parser.add_argument("--trigger-id", default=None,
+                        help="분봉 트리거 단건 입력(ALPHA-709) — 대상 ETF·trade_date 를 "
+                             "트리거 행에서 유도한다(--trade-date 무시)")
     # 서브커맨드를 주지 않으면 종전처럼 설명 파이프라인이 돈다 - Step Functions 의 기동
     # 커맨드를 바꾸지 않기 위해서다.
     sub = parser.add_subparsers(dest="command")
@@ -243,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
             return load_price_daily_command(args)
         if args.command == "query":
             return query_command(args)
-        settings = load_settings(trade_date=args.trade_date, request_id=args.request_id)
+        settings = load_settings(trade_date=args.trade_date, request_id=args.request_id,
+                                 trigger_id=args.trigger_id)
         s3 = make_s3_client(settings)
         lake = LakeReader(s3, settings.lake_bucket)
         client = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_model)

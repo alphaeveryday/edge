@@ -900,15 +900,19 @@ def _resolve_queue_urls(settings) -> Mapping[str, str]:
             "(DLQ 자리에 원 큐가 들어갔는지 대조해야 살아 있는 job 몰살을 막는다)"
         )
     dlq_urls = dict(settings.minute_consumer.dlq_urls)
-    # 두 매핑 모두 **어휘 전체**를 덮어야 한다. relay 설정이 부실하면 `missing` 비교가
-    # 통과해 버려(둘 다 한 레인만 있으면 교집합이 빈다) 나머지 레인은 아무도 대사하지
-    # 않는다 — relay CLI 의 기동 검증은 이 경로에서 돌지 않는다.
-    for name, mapping in (
-        ("minute_relay.queue_urls", settings.minute_relay.queue_urls),
-        ("minute_consumer.dlq_urls", dlq_urls),
+    # 두 매핑 모두 **자기 어휘 전체**를 덮어야 한다. relay 설정이 부실하면 `missing`
+    # 비교가 통과해 버려(둘 다 한 레인만 있으면 교집합이 빈다) 나머지 레인은 아무도
+    # 대사하지 않는다 — relay CLI 의 기동 검증은 이 경로에서 돌지 않는다.
+    # ⚠️ DLQ 대사의 어휘는 **job 큐 3종**(DESTINATION_JOB_KINDS)이다 — relay 의
+    # KNOWN_DESTINATIONS(트리거 설명 큐 포함 4종)를 그대로 쓰면 job 테이블이 없어
+    # 대사할 수 없는 트리거 DLQ 까지 필수가 된다(ALPHA-709 — 트리거 DLQ 정책은 별도).
+    for name, mapping, vocabulary in (
+        ("minute_relay.queue_urls", settings.minute_relay.queue_urls,
+         KNOWN_DESTINATIONS),
+        ("minute_consumer.dlq_urls", dlq_urls, frozenset(DESTINATION_JOB_KINDS)),
     ):
-        unknown = sorted(set(mapping) - KNOWN_DESTINATIONS)
-        absent = sorted(KNOWN_DESTINATIONS - set(mapping))
+        unknown = sorted(set(mapping) - vocabulary)
+        absent = sorted(vocabulary - set(mapping))
         if unknown or absent:
             raise SystemExit(
                 f"{name} 이 큐 어휘와 다르다 — 미지: {unknown}, 누락: {absent}"

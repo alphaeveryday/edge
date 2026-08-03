@@ -111,6 +111,10 @@ psycopg3·lxml 이 딸려와 드라이버가 이중이 되고, 재구현하면 �
 ```
 python -m edge_analysis                       # 오늘(Asia/Seoul)
 python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
+# 분봉 트리거 단건(ALPHA-709) — 대상 ETF·trade_date 를 minute_price_trigger 행에서
+# 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
+# ⚠️ 분해 입력(당일 일봉 파티션 부재)·게시 정책(일 단위 축)은 ALPHA-710 결정 대기.
+python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 ```
 
 ## 환경 변수
