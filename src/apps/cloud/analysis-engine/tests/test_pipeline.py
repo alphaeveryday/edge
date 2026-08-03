@@ -7,12 +7,16 @@
 
 import json
 from datetime import date
+
+import pytest
 from types import SimpleNamespace
 
 from edge_analysis.domain.models import Holding, PriceTrigger
+from edge_analysis.config import PipelineError
 from edge_analysis.pipeline import run
 
 _SETTINGS = SimpleNamespace(
+    trigger_id=None,
     trade_date=date(2026, 7, 16),
     request_id="req-1",
     etf_ticker="091160",
@@ -54,7 +58,7 @@ class _FakeStore:
     def fetch_price_trigger(self, etf_instrument_id, trade_date):
         return self._trigger
 
-    def persist_observation_route(self, trigger_id, decomp, route_code, event_search, entity_index):
+    def persist_observation_route(self, trigger_id, decomp, route_code, event_search, entity_index, *, minute=False):
         self.calls.append("obs_route")
         return {"trigger_id": trigger_id, "obs_id": "cob_1", "route_id": "rte_1"}
 
@@ -124,3 +128,67 @@ def test_missing_prerequisites_fall_back_to_s3():
     keys = [p["Key"] for p in s3.puts]
     assert any("/runs/" not in k for k in keys)  # 설명 S3 폴백
     assert any("/runs/" in k for k in keys)      # 런 아카이브
+
+
+def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
+    """분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다.
+
+    env 기본값(ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염되고,
+    계보가 일 단위 축(price_movement_trigger_id)에 매달리면 FK 위반이다.
+    """
+    from dataclasses import replace as _replace
+
+    class _MinuteStore(_FakeStore):
+        def __init__(self, prereqs):
+            super().__init__(trigger=None, prereqs=prereqs)  # 일 단위 조회는 비어 있다
+            self.persist_kwargs = None
+            self.daily_fetches = 0
+
+        def fetch_minute_price_trigger(self, trigger_id):
+            assert trigger_id == "mpt_1"
+            return (
+                PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
+                "091160",
+                date(2026, 7, 16),
+            )
+
+        def fetch_price_trigger(self, etf_instrument_id, trade_date):
+            self.daily_fetches += 1
+            return None
+
+        def persist_observation_route(self, trigger_id, decomp, route_code,
+                                      event_search, entity_index, *, minute=False):
+            self.persist_kwargs = {"trigger_id": trigger_id, "minute": minute}
+            self.calls.append("obs_route")
+            return {"trigger_id": trigger_id, "obs_id": "cob_1", "route_id": "rte_1"}
+
+    store = _MinuteStore(_PREREQS_OK)
+    s3 = _FakeS3()
+    # 실행 계약은 dataclass Settings 다(run 이 dataclasses.replace 로 대상을 교체한다)
+    # — SimpleNamespace 로 두면 그 교체 경로가 테스트에서 안 밟힌다
+    from dataclasses import make_dataclass
+    fields = list(_SETTINGS.__dict__)
+    _DcSettings = make_dataclass("_DcSettings", fields)
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1",
+                              # 트리거 행이 정본이다 — env 가 다른 대상을 가리켜도
+                              "etf_ticker": "999999",
+                              "trade_date": date(2020, 1, 1)})
+    code = run(settings, lake=_FakeLake(), store=store,
+               client=_FakeClient(), s3=s3)
+    assert code == 0
+    # 일 단위 게이트 조회를 타지 않는다 — 그 테이블엔 이 트리거가 없다
+    assert store.daily_fetches == 0
+    assert store.persist_kwargs == {"trigger_id": "mpt_1", "minute": True}
+
+
+def test_missing_minute_trigger_fails_loud():
+    class _EmptyStore(_FakeStore):
+        def fetch_minute_price_trigger(self, trigger_id):
+            return None
+
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_x"})
+    with pytest.raises(PipelineError, match="분봉 트리거"):
+        run(settings, lake=_FakeLake(), store=_EmptyStore(None, _PREREQS_OK),
+            client=_FakeClient(), s3=_FakeS3())

@@ -137,6 +137,7 @@ def test_run_fails_loud_when_holdings_empty():
     (Rule 12). holdings=[] 이면 proxy None·구성종목 0·뉴스 0 packet 이 LLM 까지 가 입력
     결손을 정상 분석으로 위장한다 — 그 전에 비0 종료해야 한다."""
     settings = SimpleNamespace(
+        trigger_id=None,
         trade_date=date(2026, 7, 20), request_id="r", etf_ticker="305720",
         lake_bucket="b", release_bundle_version=None, result_s3_prefix=None)
 
@@ -153,6 +154,7 @@ def test_run_fails_loud_when_etf_missing_from_master():
             return None
 
     settings = SimpleNamespace(
+        trigger_id=None,
         trade_date=date(2026, 7, 20), request_id="r", etf_ticker="999999",
         lake_bucket="b", release_bundle_version=None, result_s3_prefix=None)
 

@@ -40,20 +40,26 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .jobs import DESTINATION_JOB_KINDS, EVENT_TYPE_JOB_KINDS, JobLedger
+from .jobs import (
+    DESTINATION_JOB_KINDS,
+    TRIGGER_EVENT_DESTINATIONS,
+    JobLedger,
+    destination_accepts,
+)
 from .models import canonical_json
 
 logger = logging.getLogger(__name__)
 
-# 계획 §11·v0.7 12.1 이 고정한 큐 3종. 이 어휘를 두는 이유는 **기동 시 검증**이다:
-# 매핑에 빠진 destination 이 있으면 그 큐로 갈 event 가 전부 DEAD 로 몰살되는데,
-# DEAD 는 스스로 풀리지 않는다(redrive 는 사람이 친다). 설정 오타 하나가 배달을 통째로
-# 파괴하는 경로라, 런타임 격리에 맡기지 않고 기동을 거부해 배포 실패로 드러낸다.
-KNOWN_DESTINATIONS = frozenset({
-    "price-analysis-realtime",
-    "news-extraction-realtime",
-    "news-extraction-backfill",
-})
+# 계획 §11·v0.7 12.1 이 고정한 큐 3종 + 트리거 설명 큐(ALPHA-709 — 4번째). 이 어휘를
+# 두는 이유는 **기동 시 검증**이다: 매핑에 빠진 destination 이 있으면 그 큐로 갈 event
+# 가 전부 DEAD 로 몰살되는데, DEAD 는 스스로 풀리지 않는다(redrive 는 사람이 친다).
+# 설정 오타 하나가 배달을 통째로 파괴하는 경로라, 런타임 격리에 맡기지 않고 기동을
+# 거부해 배포 실패로 드러낸다. job 큐 3종은 DESTINATION_JOB_KINDS, 트리거 큐는
+# TRIGGER_EVENT_DESTINATIONS 가 정본이다(jobs.py — 발행 가드 destination_accepts 와
+# 같은 어휘에서 파생해 두 벌이 어긋나지 않는다).
+KNOWN_DESTINATIONS = frozenset(DESTINATION_JOB_KINDS) | frozenset(
+    TRIGGER_EVENT_DESTINATIONS.values()
+)
 
 
 # SQS 상한 (docs: SQS Developer Guide "Amazon SQS message quotas", 2026-08 확인) —
@@ -363,8 +369,7 @@ class OutboxRelay:
             # (이 모듈의 terminal 기준 그대로: 재시도해도 결과가 같다).
             mismatched = [
                 event for event in events
-                if DESTINATION_JOB_KINDS.get(destination)
-                != EVENT_TYPE_JOB_KINDS.get(event["event_type"])
+                if not destination_accepts(destination, event["event_type"])
             ]
             if mismatched:
                 logger.error(

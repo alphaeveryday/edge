@@ -351,3 +351,47 @@ def test_fetch_without_matching_events_skips_detail_queries():
 
     assert len(conn.executed) == 1  # 사건이 없으면 참여자·측정 쿼리를 던지지 않는다
     assert conn.executed[0][1] == ("TITLE", "2026-07-16", ["005930"])  # holdings 접지 필터
+
+
+class _MinuteFakeCursor(_FakeCursor):
+    def execute(self, sql, params=None):
+        flat = " ".join(sql.split())
+        self._conn.executed.append((flat, params))
+        if flat.startswith("SELECT trigger_id, entity_id, window_start"):
+            self._row = self._conn.minute_trigger_row
+
+
+class _MinuteFakeConn(_FakeConn):
+    def __init__(self, minute_trigger_row=None):
+        super().__init__()
+        self.minute_trigger_row = minute_trigger_row
+
+    def cursor(self):
+        return _MinuteFakeCursor(self)
+
+
+def test_fetch_minute_price_trigger_maps_signed_return_and_kst_date():
+    """분봉 트리거 소비(ALPHA-709) — change_rate(절대값)가 아니라 **부호 있는**
+    close/open−1 을 observed_return 으로 재구성하고, trade_date 는 KST 날짜다
+    (UTC 날짜로 접으면 자정 경계에서 하루가 밀린다)."""
+    from datetime import datetime, timezone
+    from decimal import Decimal as D
+    # 2026-07-16 09:05 KST == 00:05 UTC — UTC 날짜와 KST 날짜가 같은 날이지만,
+    # 15:10 KST 이전의 UTC 표현으로 저장돼 오면 date() 를 그냥 부르면 어긋난다
+    window = datetime(2026, 7, 15, 23, 59, tzinfo=timezone.utc)  # KST 07-16 08:59
+    conn = _MinuteFakeConn(minute_trigger_row=(
+        "mpt_1", "091160", window, D("100"), D("94"),
+        D("0.06"), D("0.05"), "intraday-open-v1",
+    ))
+    result = EventStore(conn).fetch_minute_price_trigger("mpt_1")
+    assert result is not None
+    trigger, ticker, trade_date = result
+    assert ticker == "091160"
+    assert trade_date == date(2026, 7, 16)  # KST 축
+    assert trigger.abs_gate and not trigger.rel_gate
+    assert abs(trigger.observed_return - (-0.06)) < 1e-9  # 하락 방향이 산다
+    assert "intraday-open-v1" in trigger.reason
+
+
+def test_fetch_minute_price_trigger_missing_row_is_none():
+    assert EventStore(_MinuteFakeConn()).fetch_minute_price_trigger("mpt_x") is None

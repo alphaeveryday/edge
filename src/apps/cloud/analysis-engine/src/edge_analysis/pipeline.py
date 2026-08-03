@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from .adapters.archive import (
@@ -36,7 +36,19 @@ def run(
     s3,
 ) -> int:
     """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
-    log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id)
+    # 분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다. env 기본값
+    # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
+    minute_gate = None
+    if settings.trigger_id:
+        found = store.fetch_minute_price_trigger(settings.trigger_id)
+        if found is None:
+            raise PipelineError(f"분봉 트리거가 없다: {settings.trigger_id}")
+        minute_gate, minute_ticker, minute_trade_date = found
+        settings = replace(
+            settings, etf_ticker=minute_ticker, trade_date=minute_trade_date
+        )
+    log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id,
+        trigger_id=settings.trigger_id)
 
     entity_index = store.load_entity_index()
     resolved = store.resolve_etf_instrument(settings.etf_ticker)
@@ -70,7 +82,9 @@ def run(
     )
 
     # L0 게이트는 계산이 아니라 소비다(ALPHA-411) — 행이 없으면 평온한 날.
-    gate = store.fetch_price_trigger(etf_instrument_id, settings.trade_date)
+    # 분봉 입력이면 게이트가 이미 손에 있다(발화했기에 호출됐다) — 일 단위 조회는
+    # 그 트리거를 못 보므로(테이블이 다르다) 여기서 갈아끼운다.
+    gate = minute_gate or store.fetch_price_trigger(etf_instrument_id, settings.trade_date)
     if gate is None:
         write_run_archive(s3, settings, {
             "outcome": "normal_variation",
@@ -83,7 +97,8 @@ def run(
 
     route_code, event_search = decide_route(decomp)
     ids = store.persist_observation_route(
-        gate.trigger_id, decomp, route_code, event_search, entity_index
+        gate.trigger_id, decomp, route_code, event_search, entity_index,
+        minute=minute_gate is not None,
     )
     log("trigger.consumed", route=route_code, event_search=event_search, **ids)
 

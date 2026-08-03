@@ -54,6 +54,28 @@ DESTINATION_JOB_KINDS = {
     "news-extraction-backfill": "news",
 }
 
+# job 이 **아닌** 사건(트리거)의 destination 어휘 (ALPHA-709 — 4번째 큐).
+# DESTINATION_JOB_KINDS 에 넣지 않는 이유: 저 맵은 DLQ 대사·redrive 가 job 테이블을
+# 찾는 축이라, job 없는 사건을 넣으면 대사가 유령 job 을 조회한다. 트리거 사건의
+# 발행 가능 여부는 destination_accepts 가 이 맵으로 판정한다.
+TRIGGER_EVENT_TYPE = "PriceTriggerFired"
+TRIGGER_EVENT_DESTINATIONS = {TRIGGER_EVENT_TYPE: "price-explanation-realtime"}
+
+
+def destination_accepts(destination: str, event_type: str) -> bool:
+    """이 destination 에 이 사건을 실어도 되는가 — Relay 발행 가드의 정본.
+
+    job 사건은 destination↔event 의 job kind 일치, 트리거 사건은 전용 destination
+    일치다. **둘 다 미등록이면 거부한다** — 이전 가드는 `None == None` 으로 통과해,
+    오타 destination 에 오타 사건이 실린 조합이 그대로 발행됐다(ALPHA-709).
+    """
+    if event_type in EVENT_TYPE_JOB_KINDS or destination in DESTINATION_JOB_KINDS:
+        return (
+            event_type in EVENT_TYPE_JOB_KINDS
+            and EVENT_TYPE_JOB_KINDS[event_type] == DESTINATION_JOB_KINDS.get(destination)
+        )
+    return TRIGGER_EVENT_DESTINATIONS.get(event_type) == destination
+
 # 논리 job 이 non-terminal 인데 메시지가 DLQ 에 도착했을 때의 사유(v0.7 12.4).
 # transport 예산(maxReceiveCount)이 먼저 소진된 것이라 job 자체의 결함과 구분한다.
 DLQ_ERROR_CODE = "SQS_MAX_RECEIVE"

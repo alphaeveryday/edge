@@ -35,17 +35,13 @@ from ..db import connect as _default_connect, stable_domain_id
 from ..lake.storage import Storage, canonical_price_minute_artifact_key
 from .artifacts import sha256_bytes
 from .consumer import PermanentJobError, TransientJobError
-from .jobs import JobLedger
+from .jobs import TRIGGER_EVENT_TYPE, JobLedger
 from .models import KST, SESSION_CLOSE, SESSION_OPEN, content_checksum
 from .states import WINDOW_CLAIMED, WINDOW_DUE, WINDOW_MISSING
 
 logger = logging.getLogger(__name__)
 
 COOLDOWN_SECONDS = 7200  # 2시간 버킷 — 재무장 상태머신 없이 UNIQUE 가 정본
-# 트리거 event 는 job 이 아니라 **트리거 행**을 가리킨다 — jobs.build_event_id 의
-# job event 어휘(NEWS/PRICE)와 분리해 여기 둔다. redrive 세대 축이 없어 :0 고정이다
-# (트리거는 결정적 id 라 재발화 자체가 UNIQUE 로 막힌다).
-TRIGGER_EVENT_TYPE = "PriceTriggerFired"
 
 OPEN_STATUS_OPEN = "OPEN"
 OPEN_STATUS_MISSING = "MISSING"

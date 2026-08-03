@@ -896,7 +896,7 @@ python -m data_pipeline.run reconcile
 # 큐 매핑은 **JSON 한 변수**로 준다 — destination 이름에 하이픈이 있어 nested 형태
 # (…__QUEUE_URLS__price-analysis-realtime=)는 셸이 변수 할당으로 파싱하지 못한다.
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill","price-explanation-realtime":"https://sqs…/explain"}' \
   python -m data_pipeline.run relay --max-ticks 5
 # DLQ 대사(1분 파이프라인, ALPHA-672) — DLQ 에 도착했는데 DB job 이 non-terminal 이면
 # SQS_MAX_RECEIVE 사유로 DEAD 에 CAS 한다. **주기 실행**이고 메시지는 지우지 않는다
@@ -904,7 +904,7 @@ DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs�
 # 중인 job 이 전부 DEAD 가 되므로 겹치면 기동을 거부한다. 두 매핑 모두 큐 3종을 다
 # 채워야 한다(빠진 레인은 아무도 대사하지 않는다). 끊긴 대사는 exit 1 이다.
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill"}' \
+DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"price-analysis-realtime":"https://sqs…/price","news-extraction-realtime":"https://sqs…/news","news-extraction-backfill":"https://sqs…/backfill","price-explanation-realtime":"https://sqs…/explain"}' \
 DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs…/price-dlq","news-extraction-realtime":"https://sqs…/news-dlq","news-extraction-backfill":"https://sqs…/backfill-dlq"}' \
   python -m data_pipeline.run dlq-reconcile --max-ticks 5
 # redrive(1분 파이프라인, ALPHA-672) — **막힌 것**만 되살린다(DEAD job 또는 Relay 가

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
-from ..config import Settings
+from ..config import KST, Settings
 from ..domain.models import (
     POLICY_VERSION,
     Decomposition,
@@ -137,6 +137,41 @@ class EventStore:
             reason=row[2],
             abs_gate=bool(row[3]),
             rel_gate=bool(row[4]),
+        )
+
+    def fetch_minute_price_trigger(self, trigger_id: str):
+        """분봉 트리거 한 행 소비(ALPHA-709) — (PriceTrigger, ticker, trade_date) | None.
+
+        entity_id 가 곧 단축코드(ticker)다 — 판정기(ALPHA-708)의 unit 축과 동일.
+        trade_date 는 window_start 의 KST 날짜. observed_return 은 부호 있는
+        close/open−1 로 재구성한다 — 행의 change_rate 는 절대값이라 방향이 없다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT trigger_id, entity_id, window_start, open_price, close_price,"
+                " change_rate, threshold, detection_policy_version"
+                " FROM minute_price_trigger WHERE trigger_id = %s",
+                (trigger_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        open_price = float(row[3])
+        observed = (float(row[4]) / open_price - 1) if open_price else None
+        window_start = row[2]
+        return (
+            PriceTrigger(
+                trigger_id=str(row[0]),
+                observed_return=observed,
+                reason=(
+                    f"intraday |close/open-1|={row[5]} >= {row[6]}"
+                    f" ({row[7]}, window={window_start.isoformat()})"
+                ),
+                abs_gate=True,
+                rel_gate=False,
+            ),
+            str(row[1]),
+            window_start.astimezone(KST).date(),
         )
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
@@ -285,8 +320,14 @@ class EventStore:
         route_code: str,
         event_search: bool,
         entity_index: dict[str, str],
+        *,
+        minute: bool = False,
     ) -> dict[str, str]:
-        """소비한 트리거에서 파생한 L1/route 계보를 적재한다(트리거 insert 없음)."""
+        """소비한 트리거에서 파생한 L1/route 계보를 적재한다(트리거 insert 없음).
+
+        ``minute`` 이면 계보가 분봉 축(minute_price_trigger_id)에 매달린다 — 두 축은
+        정확히 하나만 값을 갖는다(ck_etf_contribution_one_trigger, ALPHA-709).
+        """
         from psycopg2.extras import execute_values
 
         detected_at = utcnow_iso()
@@ -297,9 +338,12 @@ class EventStore:
             sum(m.contribution for m in decomp.members) if decomp.members else None
         )
         with self._conn.cursor() as cur:
+            trigger_column = (
+                "minute_price_trigger_id" if minute else "price_movement_trigger_id"
+            )
             cur.execute(
                 "INSERT INTO etf_contribution_observation (contribution_observation_id,"
-                " price_movement_trigger_id, etf_return, nav_return,"
+                f" {trigger_column}, etf_return, nav_return,"
                 " constituent_contribution_return, fx_contribution_return,"
                 " premium_discount_contribution_return, reconciliation_error,"
                 " advancing_constituent_count, total_constituent_count,"

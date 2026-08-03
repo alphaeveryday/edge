@@ -26,8 +26,8 @@ from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.jobs import JOB_EVENT_TYPES, JobLedger
+from data_pipeline.minute.jobs import DESTINATION_JOB_KINDS
 from data_pipeline.minute.relay import (
-    DESTINATION_JOB_KINDS,
     OutboxMessage,
     OutboxRelay,
     relay_cli,
@@ -43,6 +43,9 @@ QUEUES = {
     "price-analysis-realtime": "https://sqs/price",
     "news-extraction-realtime": "https://sqs/news",
     "news-extraction-backfill": "https://sqs/backfill",
+    # 4번째 — 트리거 설명 큐(ALPHA-709). KNOWN_DESTINATIONS 가 필수로 요구한다:
+    # 빠진 채 기동하면 그 레인 event 가 전부 되돌릴 수 없는 DEAD 다.
+    "price-explanation-realtime": "https://sqs/explain",
 }
 
 
@@ -130,7 +133,11 @@ class TestPublishing:
         # Consumer 가 깨어나고 행은 PUBLISHED 로 확정돼 설정을 고쳐도 안 되살아난다
         db = FakeMinuteDB()
         for index, destination in enumerate(sorted(QUEUES)):
-            enqueue(db, f"e{index}", destination=destination)
+            # 트리거 큐에는 트리거 사건이 실린다 — job 사건을 실으면 배선 검사가
+            # DEAD 로 격리하는 게 맞고, 그 경로는 별도 테스트가 고정한다
+            enqueue(db, f"e{index}", destination=destination,
+                    event_type="PriceTriggerFired"
+                    if destination == "price-explanation-realtime" else None)
         relay = build_relay(db)
         assert relay.tick(NOW) == "PUBLISHED"
         routed = {
@@ -697,3 +704,54 @@ class TestCliGuards:
         # 조용히 기동시키지 않는다
         with pytest.raises(SystemExit, match="minute_relay 설정 없음"):
             relay_cli(self._settings(db=_DB))
+
+
+class TestTriggerDestination:
+    """트리거 사건의 4번째 destination (ALPHA-709) — job 어휘와 분리된 발행 가드."""
+
+    def test_destination_accepts_vocabulary(self):
+        from data_pipeline.minute.jobs import destination_accepts
+        # 트리거 사건은 전용 큐에만 실린다
+        assert destination_accepts("price-explanation-realtime", "PriceTriggerFired")
+        assert not destination_accepts("price-analysis-realtime", "PriceTriggerFired")
+        # job 사건은 종전 kind 일치 그대로
+        assert destination_accepts("price-analysis-realtime", "PriceWindowCommitted")
+        assert not destination_accepts("price-explanation-realtime", "PriceWindowCommitted")
+        assert not destination_accepts("news-extraction-realtime", "PriceWindowCommitted")
+        # ⚠️ 둘 다 미등록이면 거부 — 이전 가드는 None == None 으로 통과해 오타
+        # destination 에 오타 사건이 실린 조합이 그대로 발행됐다
+        assert not destination_accepts("typo-queue", "TypoEvent")
+
+    def test_trigger_event_publishes_to_explanation_queue(self):
+        db = FakeMinuteDB()
+        enqueue(db, "t1", destination="price-explanation-realtime",
+                event_type="PriceTriggerFired")
+        relay = OutboxRelay(
+            jobs=JobLedger(db=_DB, connect_fn=db.connect),
+            publisher=FakePublisher(),
+            config=RelayConfig(
+                relay_id="r1",
+                queue_urls=QUEUES,
+                batch_limit=10, lease_seconds=150,
+                retry_base_seconds=2, retry_max_seconds=300,
+            ),
+        )
+        relay.tick(datetime.now(timezone.utc))
+        assert db.outbox["t1"]["status"] == "PUBLISHED"
+
+    def test_trigger_event_on_job_queue_is_terminal(self):
+        # 배선 오류 — 판정기가 job 큐에 트리거를 실으면 발행하지 않고 DEAD 로 격리한다
+        db = FakeMinuteDB()
+        enqueue(db, "t2", destination="price-analysis-realtime",
+                event_type="PriceTriggerFired")
+        relay = OutboxRelay(
+            jobs=JobLedger(db=_DB, connect_fn=db.connect),
+            publisher=FakePublisher(),
+            config=RelayConfig(
+                relay_id="r1", queue_urls=QUEUES,
+                batch_limit=10, lease_seconds=150,
+                retry_base_seconds=2, retry_max_seconds=300,
+            ),
+        )
+        relay.tick(datetime.now(timezone.utc))
+        assert db.outbox["t2"]["status"] == "DEAD"
