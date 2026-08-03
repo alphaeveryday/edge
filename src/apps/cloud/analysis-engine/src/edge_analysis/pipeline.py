@@ -19,7 +19,7 @@ from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, TracingClient, analyze
 from .adapters.trace import write_agent_trace
-from .config import PipelineError, Settings
+from .config import PipelineError, ReturnsNotReadyError, Settings
 from .domain.decomposition import compute_decomposition, decide_route
 from .domain.models import EventContext
 from .observability import collect_trace, log, utcnow_iso
@@ -71,6 +71,16 @@ def run(
     # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다(ALPHA-467).
     name_by_ticker = {h.ticker: h.name for h in holdings if h.name}
     returns = lake.load_returns(_MARKET, settings.trade_date)
+    if not returns:
+        # 당일 파티션이 없으면 `load_returns` 는 **가드 없이 {}** 를 돌려준다 — 그대로
+        # 분해에 넣으면 전 종목 미가격 분해(etf_return=NULL·total_priced=0)가 LLM 까지
+        # 가서 입력 결손이 정상 설명으로 위장된다(Rule 12, 08-03 정합성 감사 실측).
+        # 장중 트리거 경로에선 15:40 배치 전의 정상 상태라 소비자가 지연 재시도한다.
+        raise ReturnsNotReadyError(
+            f"canonical price_daily 수익률이 비었다: market={_MARKET}"
+            f" trade_date={settings.trade_date.isoformat()} — 15:40 배치 전(장중)이거나"
+            " 파티션 결손이다. 빈 분해를 설명으로 만들지 않는다"
+        )
     decomp = compute_decomposition(holdings, returns)
     log(
         "price.decomposed",

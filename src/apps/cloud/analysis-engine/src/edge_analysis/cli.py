@@ -43,6 +43,15 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     # 서브커맨드를 주지 않으면 종전처럼 설명 파이프라인이 돈다 - Step Functions 의 기동
     # 커맨드를 바꾸지 않기 위해서다.
     sub = parser.add_subparsers(dest="command")
+    consume = sub.add_parser(
+        "consume-triggers",
+        help="분봉 트리거 큐(price-explanation-realtime) 상주 소비(ALPHA-719).",
+    )
+    consume.add_argument("--queue-url", default=None,
+                         help="SQS 큐 URL(미지정=EDGE_EXPLANATION_QUEUE_URL env)")
+    consume.add_argument("--max-polls", type=int, default=None,
+                         help="receive 횟수 상한(미지정=상주). 로컬·검증용 — 봉투 계약 "
+                              "위반이 있었으면 exit 1")
     loader = sub.add_parser(
         "load-classification",
         help="Load the FMP industry map into instrument_classification.",
@@ -238,6 +247,17 @@ def main(argv: list[str] | None = None) -> int:
     """설정 로드·어댑터 조립·실행. 실패(PipelineError)는 로그 + 비0 종료."""
     args = parse_args(argv)
     try:
+        if args.command == "consume-triggers":
+            import os
+
+            from .consumer import consume_triggers
+            queue_url = args.queue_url or os.environ.get("EDGE_EXPLANATION_QUEUE_URL", "").strip()
+            if not queue_url:
+                # 조용히 기본 큐를 추측하면 오배선이 빈 폴링으로 위장된다(fail loud)
+                raise PipelineError(
+                    "큐 URL 이 없다 — --queue-url 또는 EDGE_EXPLANATION_QUEUE_URL 주입"
+                )
+            return consume_triggers(queue_url, max_polls=args.max_polls)
         if args.command == "load-classification":
             return load_classification_command(args)
         if args.command == "load-universe":
