@@ -2,18 +2,29 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>가상 MTS — AI 분석 탭 (데모)</title>
+<!-- PWA standalone(홈 화면 추가) — 실기기·시뮬레이터에서 앱처럼 전체 화면 실행 (ALPHA-716) -->
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="KB증권">
+<meta name="theme-color" content="#ffffff">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="css/colors_and_type.css">
 <link rel="stylesheet" href="css/edge-components.css">
 <style>
   /* 수령 디자인(KODEX 반도체 AI 분석.dc.html, ALPHA-485) 이식 — 정적 html+js 번역 */
+  /* --top-inset: CSS 베젤의 가짜 상태바 몫 상단 여백. standalone 에선 실 safe-area 로 대체된다. */
+  :root{--top-inset:47px;--bottom-inset:6px}
   body{margin:0;background:#fff;font-family:"Pretendard",-apple-system,sans-serif}
   a{color:#2e5aac;text-decoration:none}a:hover{color:#24488c;text-decoration:underline}
   input::placeholder{color:#a1a1aa}
   @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .fade-up{animation:fadeUp .25s ease both}
-  /* 디자인의 iOS 프레임(393x852 + 다크 베젤) 정적 재현 */
+  /* 디자인의 iOS 프레임(393x852 + 다크 베젤) 정적 재현 — 데스크톱 브라우저 프리뷰용 */
+  .stage{min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px}
   .bezel{background:#1c1c1e;border-radius:54px;padding:6px;box-shadow:0 0 0 1px #3a3a3c,0 0 0 2px #0a0a0a;flex-shrink:0}
   .device{width:393px;height:852px;background:#fff;border-radius:48px;overflow:hidden;position:relative;
           font-family:Pretendard,-apple-system,sans-serif;color:#18181b}
@@ -26,10 +37,23 @@
   .iconbtn{border:none;background:none;padding:0;cursor:pointer;color:inherit;display:flex}
   .toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:rgba(24,24,27,.88);
          color:#fff;font-size:12px;padding:9px 16px;border-radius:999px;white-space:nowrap;z-index:50}
+  /* 홈 화면 추가(standalone) 실행 — CSS 베젤·가짜 상태바 연출을 걷어내고
+     실기기 전체 화면 + 실제 iOS 상태바(safe-area)를 쓴다. 데스크톱 프리뷰는 위 기본값 그대로. */
+  @media (display-mode: standalone){
+    :root{--top-inset:env(safe-area-inset-top);--bottom-inset:calc(6px + env(safe-area-inset-bottom))}
+    /* 가로는 뷰포트 단위(100vw) 대신 % — 스크롤바·최소 창폭에 따른 오버플로를 피한다.
+       세로는 vh — standalone 은 브라우저 크롬(주소창 수축)이 없어 vh==실화면 높이라 dvh 가
+       불필요하고, iOS 일부 계열은 standalone+viewport-fit=cover 에서 dvh 를 safe-area 제외로
+       잘못 계산하는 문제가 보고돼 있어 쓰지 않는다. */
+    .stage{display:block;min-height:100vh;padding:0}
+    .bezel{padding:0;border-radius:0;box-shadow:none}
+    .device{width:100%;height:100vh;border-radius:0}
+    .island,.statusbar{display:none}
+  }
 </style>
 </head>
 <body>
-<div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px">
+<div class="stage">
 <div class="bezel">
 <div class="device">
   <div class="island"></div>
@@ -46,7 +70,7 @@
 
   <!-- ═══ 홈 화면 ═══ -->
   <section id="screen-home" class="screen active">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:62px 16px 10px;flex-shrink:0">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:calc(var(--top-inset) + 15px) 16px 10px;flex-shrink:0">
       <div style="display:flex;align-items:center;gap:8px">
         <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:#FFBC00;border-radius:4px;font-size:10px;font-weight:800;color:#60584C">KB</span>
         <span style="font-size:15px;font-weight:700;color:#3f3a33">KB증권</span>
@@ -72,7 +96,7 @@
         <div id="home-watchlist"></div>
       </div>
     </div>
-    <div style="display:flex;border-top:1px solid #e4e4e7;padding:8px 8px 6px;flex-shrink:0">
+    <div style="display:flex;border-top:1px solid #e4e4e7;padding:8px 8px var(--bottom-inset);flex-shrink:0">
       <button class="iconbtn" style="flex:1;flex-direction:column;align-items:center;gap:3px;padding:4px 0;font-family:inherit;color:#3f3a33">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
         <span style="font-size:10px;font-weight:600">홈</span>
@@ -98,7 +122,7 @@
 
   <!-- ═══ 검색 화면 ═══ -->
   <section id="screen-search" class="screen">
-    <div style="display:flex;align-items:center;gap:8px;padding:58px 16px 10px;border-bottom:1px solid #e4e4e7;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:8px;padding:calc(var(--top-inset) + 11px) 16px 10px;border-bottom:1px solid #e4e4e7;flex-shrink:0">
       <button id="search-back-btn" class="iconbtn" style="padding:4px;color:#52525b">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
@@ -117,7 +141,7 @@
   <!-- ═══ 종목 상세 화면 ═══ -->
   <section id="screen-stock" class="screen">
     <!-- 앱 바 -->
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:62px 16px 8px;flex-shrink:0">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:calc(var(--top-inset) + 15px) 16px 8px;flex-shrink:0">
       <div style="display:flex;align-items:center;gap:8px">
         <button id="stock-back-btn" class="iconbtn" style="color:#52525b">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>

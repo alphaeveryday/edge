@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 홈 화면 아이콘 원본 — full-bleed 사각(iOS 가 자체 라운딩 마스크를 적용한다). PNG 은 이 파일에서 생성. -->
+  <rect width="512" height="512" fill="#FFBC00"/>
+  <text x="256" y="268" text-anchor="middle" dominant-baseline="central" font-family="Pretendard,-apple-system,Helvetica,Arial,sans-serif" font-size="230" font-weight="800" fill="#60584C">KB</text>
+</svg>
