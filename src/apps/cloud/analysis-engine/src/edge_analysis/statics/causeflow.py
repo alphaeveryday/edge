@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import sys
 import time
 from dataclasses import dataclass
@@ -47,9 +48,12 @@ class LayerFact:
 
 
 def stock_layers(lake, tk6: str, day: str) -> tuple[float | None, list[LayerFact]]:
-    """종목 하루 = β_m·시장 + β_s·섹터(시장직교) + 고유. **종목이 분해 대상**이다 -
-    ETF 를 ETF 로 회귀하던 동어반복은 여기 없다(종목 ⊂ 섹터는 정상 포함관계).
-    섹터 후보는 **이 종목을 실제로 담은 ETF** 뿐이다 - 겹침 게이트가 필요 없다."""
+    """종목 하루 = β_m·시장 + β_s·섹터(시장직교) + 고유. **종목이 분해 대상**이다.
+
+    섹터는 **KRX 업종지수**다 - 우리가 고르지 않는다(statics.krxsector, 분기 PIT).
+    그전에는 '이 종목을 담은 ETF 중 설명력 최대' 로 골랐고, 그 결과 삼성전자를
+    섹터라고 부르는 일이 났다(실측: 042700 07-31). 설명력으로 고르면 섹터가 아니라
+    '가장 잘 맞는 무엇' 이 되고, 그건 섹터의 정의가 아니다."""
     ser = _series(lake, day, ("stock",))
     if tk6 not in ser:
         return None, []
@@ -73,34 +77,32 @@ def stock_layers(lake, tk6: str, day: str) -> tuple[float | None, list[LayerFact
     out = [LayerFact("시장", f"KODEX200 {m_now * 100:+.2f}% × β{bm[0]:.2f}",
                      float(bm[0]) * m_now)]
 
-    holders = {r[0] for r in lake.sql(
-        f"SELECT DISTINCT etf_id FROM s3_etf_holdings "
-        f"WHERE market = 'KR' AND constituent_ticker = '{tk6}'")}
-    try:
-        holders |= {r[0] for r in lake.sql(
-            f"SELECT DISTINCT etf_id FROM etf_holdings_fmp "
-            f"WHERE constituent_ticker = '{tk6}'")}
-    except Exception:                                  # noqa: BLE001 - FMP 뷰 없음
-        pass
+    # 섹터 = 이 종목의 KRX 업종지수. 분기 스냅샷 중 as-of 최신 것을 쓴다.
     resid = y - xm * float(bm[0])
-    best = None
-    for sid in holders & set(lay):
-        if sid == MARKET_CODE:
-            continue
-        snm, sm, _sh = lay[sid]
+    rows = lake.sql(
+        f"SELECT si.trade_date, si.close, sm.code FROM sector_member sm "
+        f"JOIN sector_index si ON si.code = sm.code "
+        f"WHERE sm.ticker = '{tk6}' AND sm.as_of = ("
+        f"  SELECT max(as_of) FROM sector_member "
+        f"  WHERE ticker = '{tk6}' AND as_of <= DATE '{day}') "
+        f"ORDER BY si.trade_date")
+    if rows:
+        from .krxsector import sector_name
+        code = str(rows[0][2])
+        lv = {r[0] if isinstance(r[0], dt.date) else dt.date.fromisoformat(str(r[0])):
+              float(r[1]) for r in rows if r[1]}
+        ds = sorted(lv)
+        sm = {ds[i]: math.log(lv[ds[i]] / lv[ds[i - 1]])
+              for i in range(1, len(ds)) if lv[ds[i - 1]] > 0}
         xs = _on(sm, hist)
-        if xs is None or d0 not in sm:
-            continue
-        xo, xo_now = _orth(xs, xm.reshape(-1, 1), float(sm[d0]), np.array([m_now]))
-        if float(xo @ xo) < 1e-12:
-            continue
-        bs, _ses = _ols(resid, xo.reshape(-1, 1))
-        c = float(bs[0]) * xo_now
-        if best is None or abs(c) > abs(best[2]):
-            best = (sid, snm, c, float(bs[0]), xo_now)
-    if best is not None:
-        out.append(LayerFact("섹터", f"{best[1]}(시장직교) {best[4] * 100:+.2f}% × β{best[3]:.2f}",
-                             best[2]))
+        if xs is not None and d0 in sm:
+            xo, xo_now = _orth(xs, xm.reshape(-1, 1), float(sm[d0]), np.array([m_now]))
+            if float(xo @ xo) >= 1e-12:
+                bs, _ses = _ols(resid, xo.reshape(-1, 1))
+                out.append(LayerFact(
+                    "섹터",
+                    f"{sector_name(code)}(시장직교) {xo_now * 100:+.2f}% × β{bs[0]:.2f}",
+                    float(bs[0]) * xo_now))
     out.append(LayerFact("고유", "층을 뺀 잔여", y_now - sum(f.pct for f in out)))
     return y_now, out
 
@@ -242,6 +244,64 @@ JSON:
  "explanation": "직관 설명"}"""
 
 
+_GROUND_SQL = """
+SELECT e.event_type_code, e.role_code, e.title, e.available_at,
+       th.novelty_status, th.thread_key, th.current_stage
+FROM v_event e
+LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
+ORDER BY e.available_at
+"""
+
+_NEWS_SQL = """
+SELECT n.title, n.available_at, n.source_code
+FROM v_event e
+JOIN v_event_news en ON en.source_event_id = e.source_event_id
+JOIN v_news n ON n.document_id = en.document_id
+WHERE e.instrument_id = '{iid}' AND e.trade_date = DATE '{day}'
+ORDER BY n.available_at
+LIMIT 12
+"""
+
+
+def _grounding(lake, instrument_id: str, day: str) -> str:
+    """접지의 **본문**. 사건 타입 목록만으로는 '왜 오늘' 을 세울 수 없다 - 제목과
+    스레드 신규성(신규 보도인가 후속인가)이 가설을 가른다. 8셀 내내 이걸 안 읽고
+    타입 이름만 보고 가설을 썼다.
+
+    부재도 문장으로 말한다: '접지 사건 없음' 은 '조회 안 함' 과 다르다."""
+    out: list[str] = []
+    try:
+        rows = lake.sql((_base_views(day) + _GROUND_SQL).format(iid=instrument_id, day=day))
+    except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
+        return f"=== 접지 본문 ===\n조회 실패: {type(e).__name__}: {str(e)[:100]}"
+    if not rows:
+        return "=== 접지 본문 ===\n오늘 이 종목에 접지된 사건 없음 (조회했고 0건이다)"
+    out.append("=== 접지 본문 (사건 · 역할 · 도달시각 · 스레드 신규성) ===")
+    for et, role, title, av, nov, tkey, stage in rows[:12]:
+        t = str(title or "")[:80]
+        av_s = str(av)[11:16] if av else "?"
+        nov_s = f" · {nov}" if nov else ""
+        st_s = f" · {stage}" if stage else ""
+        out.append(f"  [{av_s}] {et} ({role}){nov_s}{st_s}\n      {t}")
+    try:
+        news = lake.sql((_base_views(day) + _NEWS_SQL).format(iid=instrument_id, day=day))
+    except Exception:                               # noqa: BLE001
+        news = []
+    seen: set[str] = set()
+    heads = [n for n in news if not (str(n[0]) in seen or seen.add(str(n[0])))]
+    if heads:
+        out.append("=== 근거 문서 제목 ===")
+        out += [f"  [{str(a)[11:16]}] {str(t)[:90]} ({s})" for t, a, s in heads[:8]]
+    return "\n".join(out)
+
+
+def _base_views(day: str) -> str:
+    """뷰 표면만 (피처 CTE 없이). 접지 조회는 파생 피처가 필요 없다."""
+    from ..adapters.sql_surface import views_sql
+    return "WITH " + views_sql(f"TIMESTAMP '{day} 23:59:59'", f"DATE '{day}'", "rdb.public.")
+
+
 def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
     """결정론 재료 전부. 하네스 오케스트레이터(에이전트)가 가설·판정·SEM 을 맡고
     코드는 사실만 낸다 - 원격 모델 직렬 왕복이 사라진다."""
@@ -271,6 +331,7 @@ def gather(lake, ticker: str, instrument_id: str, day: str) -> dict:
     if ms is not None:
         base += (f"\n코스피 수익 중 밤사이 미국(S&P500)이 설명하는 몫: "
                  f"[{ms[0] * 100:+.2f}, {ms[1] * 100:+.2f}]%p → 나머지는 국내 요인")
+    base += "\n" + _grounding(lake, instrument_id, day)
     return {"base": base, "total": total,
             "targets": [(t.kind, t.label, t.pct) for t in targets],
             "event_types": types, "fired": fired}

@@ -248,6 +248,24 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         JOIN v_instrument i ON i.ticker = p.ticker
         WHERE p.trade_date <= {trade_date}
     ),
+    v_sector AS (
+        -- 종목 → **KRX 업종지수** (statics.krxsector). 분기 스냅샷이라 as-of 조인용.
+        -- 그전에는 섹터층이 decompose 가 설명력으로 고른 계열이었고, 그러다 단일
+        -- 종목("삼성전자(시장직교)")을 섹터라고 부르는 일이 났다. 업종은 KRX 가
+        -- 산출하는 것을 받아 쓴다 - 우리가 고르지 않는다.
+        SELECT i.instrument_id, m.as_of, m.code
+        FROM sector_member m
+        JOIN v_instrument i ON i.ticker = m.ticker
+        WHERE m.as_of <= {trade_date}
+    ),
+    v_sector_ret AS (
+        -- 업종지수 로그수익. 시장 차감은 쓰는 쪽에서 한다(정의를 한 곳에 둔다).
+        SELECT trade_date, code,
+               ln(close / NULLIF(lag(close) OVER (PARTITION BY code
+                                                  ORDER BY trade_date), 0)) AS sec_lr
+        FROM sector_index
+        WHERE trade_date <= {trade_date} AND close > 0
+    ),
     v_fin AS (
         -- 재무 연간 패널(statics.fin → fin_annual). **available_from 이 클램프다** -
         -- 파티션 as_of_date 는 수집일이지 공시일이 아니라서, 결산 후 법정 90일을

@@ -72,7 +72,7 @@ FEATURES = {
 # 계열 방아쇠의 혁신값 (z 를 재는 대상). 수급은 **아직 없다** - flow_z 는 3개 투자자
 # 유형의 최댓값으로 발화를 정하는데 패널 프레임은 외국인 하나만 담는다. 기준이 두
 # 곳에서 갈리면 접지가 무너지므로(series_z 도크스트링), 통합 전까지는 노출·조건으로만 쓴다.
-_INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg"}
+_INNOVATION = {"가격잔차": "ar", "거래량": "tv_chg", "거시": "macro"}
 
 # 층 → 결과변수. 설명 대상이 층마다 다르므로 y 도 다르다. 하나로 고정하면 시장·섹터
 # 가설이 구조적으로 0 을 받는다(설명하려는 성분을 y 에서 이미 뺐으므로).
@@ -103,6 +103,28 @@ def _base(day: str, clock: str = "00:00:00") -> str:
     from ..adapters.sql_surface import views_sql
     return "WITH " + views_sql(f"TIMESTAMP '{day} {clock}'", f"DATE '{day}'",
                             "rdb.public.") + """,
+_mz AS (
+    -- **날짜 수준** 거시 발화 z. macro_z() 와 같은 정의(index·fx·rate 합집합의
+    -- 60일 창 z, 최대 |z|)를 쓴다 - 발화 기준이 두 곳에서 갈리면 접지가 무너진다.
+    -- 종목 축이 없으므로 날짜로 조인해 전 종목에 같은 값을 싣는다. 이 계열은
+    -- **방아쇠로만** 쓴다(노출은 민감도가 담당) - 공통값은 횡단면을 못 가른다.
+    SELECT trade_date, max(abs(z)) AS z_macro
+    FROM (
+        SELECT trade_date, (change_pct - avg(change_pct) OVER r)
+                           / NULLIF(stddev_samp(change_pct) OVER r, 0) AS z
+        FROM (
+            SELECT trade_date, 'index/' || symbol AS series, change_pct FROM s3_index_daily
+            UNION ALL SELECT trade_date, 'fx/' || symbol, change_pct FROM s3_fx_daily
+            UNION ALL SELECT trade_date, 'rate/10y',
+                             year10 - lag(year10) OVER (ORDER BY trade_date)
+                      FROM s3_rates_daily
+        ) _m
+        WINDOW r AS (PARTITION BY series ORDER BY trade_date
+                     ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING)
+    ) _w
+    WHERE z IS NOT NULL
+    GROUP BY trade_date
+),
 _fl AS (
     -- 수급 노출 원천 = curated 투자자별 매매(statics.flowhist → flow_daily).
     -- 2022-01~ · 4,336종목. s3_investor_value 는 14개월(2025-06~)뿐이라 20일 창을
@@ -147,16 +169,22 @@ f AS (
            -- mkt_lr·산업평균은 v_daily 가 직접 안 주므로 잔차에서 복원한다
            -- (정의가 두 곳에 있으면 갈리므로 여기서 새로 계산하지 않는다):
            --   mkt_lr   = lr - ar_lr        · 산업평균 = ar_lr - ar_ind
-           -- 산업 표본 <5 면 ar_ind = ar_lr 이라 x=0 → beta_s NULL. 부재가 정직하다.
+           -- beta_s 는 **KRX 업종지수**(v_sector·v_sector_ret)에 대한 β 다. 산업 평균
+           -- 대신 KRX 가 산출하는 지수를 쓴다 - 섹터를 우리가 정의하지 않는다.
+           -- x = 업종지수 수익 - 시장 수익 (시장직교) · y = 시장 차감 종목 수익.
            -- isfinite 로 감싼다: regr_slope 는 x 분산이 0 이면 NULL 이 아니라 **NaN**
            -- 을 낸다(산업 표본 <5 · fx 결측 구간). NaN 은 pctile 을 조용히 오염시켜
            -- 상·하위 분할을 어긋나게 만든다 - 부재는 NULL 로 말해야 한다.
            CASE WHEN isfinite(regr_slope(d.lr, d.lr - d.ar_lr) OVER w60)
                 THEN regr_slope(d.lr, d.lr - d.ar_lr) OVER w60 END AS beta_m,
-           CASE WHEN isfinite(regr_slope(d.ar_lr, d.ar_lr - d.ar_ind) OVER w60)
-                THEN regr_slope(d.ar_lr, d.ar_lr - d.ar_ind) OVER w60 END AS beta_s,
+           CASE WHEN isfinite(regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60)
+                THEN regr_slope(d.ar_lr, sr.sec_lr - (d.lr - d.ar_lr)) OVER w60 END AS beta_s,
+           sm.code AS sector_code,
            CASE WHEN isfinite(regr_slope(d.lr, fx.change_pct / 100) OVER w60)
                 THEN regr_slope(d.lr, fx.change_pct / 100) OVER w60 END AS fx_beta,
+           -- **어제** 값이다. macro_z() 가 `< day` 로 개장 전 확정 정보(밤사이 미국장·
+           -- 환율)를 쓰므로 패널도 같이 지연시킨다 - 발화 기준이 갈리면 접지가 무너진다.
+           LAG(mz.z_macro, 1) OVER wi AS z_macro,
            -- 재무는 회계연도 값이라 as-of 조인이 필요하다. ASOF 가 '그 시점에 가용한
            -- 가장 최근 회계연도' 를 정확히 집는다 - 손으로 쓰면 어긋난다.
            fn.borrow_dep AS lev_lvl, fn.borrow_dep_chg AS lev_chg,
@@ -166,8 +194,12 @@ f AS (
     LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
     LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
     LEFT JOIN fx_usdkrw fx ON CAST(fx.date AS DATE) = d.trade_date
+    LEFT JOIN _mz mz ON mz.trade_date = d.trade_date
     ASOF LEFT JOIN v_fin fn ON fn.instrument_id = d.instrument_id
                            AND d.trade_date >= fn.available_from
+    ASOF LEFT JOIN v_sector sm ON sm.instrument_id = d.instrument_id
+                              AND d.trade_date >= sm.as_of
+    LEFT JOIN v_sector_ret sr ON sr.code = sm.code AND sr.trade_date = d.trade_date
     WHERE d.ar_ind IS NOT NULL
     WINDOW w20 AS (PARTITION BY d.instrument_id ORDER BY d.trade_date
                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING),
