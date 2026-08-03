@@ -215,6 +215,10 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # ⚠️ 창은 30일씩 잘라 순회한다 — corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다
 # (4개월 창은 status=100 거절, 실측). --from 만 주면 끝일을 KST 오늘로 확정해 자르고, 실제
 # 수집한 창은 collection_log 의 window_from/window_to 에 남는다(인자가 아니라 실제 값).
+# ⚠️ 본문(ZIP)은 **틱 멱등**이다(ALPHA-720) — 같은 수집일(UTC ±1일)에 이미 받아 둔 rcept_no 는
+# 다시 내려받지 않고 기존 객체를 가리킨다(`documents_reused` 로 계상). 같은 날 두 번 돌리면
+# 2회차는 `documents_saved=0` 이고 메타(`records_saved`)는 1회차와 같다 — 메타는 매 실행이
+# 창 전체 관측을 남기는 것이 완전성 근거라 접지 않는다. 2일 밖 창의 백필은 재다운로드한다.
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달
@@ -673,7 +677,13 @@ settings.targets.keywords            # ["금리", ...]
   **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
   에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
-  가 그 객체를 가리킨다(메타↔본문 링크). list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
+  가 그 객체를 가리킨다(메타↔본문 링크). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
+  (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
+  가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
+  도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
+  완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다). 재사용 건수는
+  collection_log 의 `documents_reused` 로 드러나고, 본문 fetch 가 실패한 건은 객체가 없어
+  다음 실행이 자동 재시도한다. list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
 - **raw(ETF 구성종목)** — `raw/source={fmp|krx}/dataset=etf_holdings/market={US|KR}/ingest_date=…/run_id=…/`
   에 run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
