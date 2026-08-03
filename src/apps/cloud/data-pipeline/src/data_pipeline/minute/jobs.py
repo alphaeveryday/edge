@@ -474,6 +474,29 @@ class JobLedger:
              "tagger_version", "ontology_version"), row, strict=True,
         ))
 
+    def price_job_identity(self, *, job_id: str) -> dict | None:
+        """price job 이 생성 시점에 고정한 정체성 — 없으면 None (ALPHA-708).
+
+        news_job_identity 와 같은 이유: payload 만 믿으면 정상 경로와 "다른 window 를
+        가리키는 결함"이 구분되지 않는다. payload 와 job 행은 commit_price_window 가
+        같은 트랜잭션에서 같은 값으로 쓰므로, 어긋남은 재시도로 낫지 않는다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id, window_start, generation, trigger_schema_version
+                FROM price_window_job WHERE job_id = %s
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip(
+            ("session_id", "window_start", "generation", "trigger_schema_version"),
+            row, strict=True,
+        ))
+
     def heartbeat_job(
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
         redrive_generation: int, now: datetime, lease_seconds: int,

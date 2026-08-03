@@ -39,6 +39,8 @@ class FakeMinuteDB:
         self.anchors: dict[tuple, dict] = {}   # (session_id, source_code) -> row
         self.documents: dict[tuple, dict] = {}      # (source_code, article_id) -> row
         self.news_documents: dict[str, dict] = {}   # document_id -> row
+        self.session_opens: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
+        self.triggers: dict[str, dict] = {}         # trigger_id -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -281,6 +283,75 @@ class _Cursor:
                 self._rows = [(row["source_code"], row["article_id"],
                                row["input_fingerprint"], row["tagger_version"],
                                row["ontology_version"])]
+        elif s.startswith("SELECT session_id, window_start, generation, trigger_schema_version"):
+            # price job 선언 정체성 조회(ALPHA-708) — news 와 같은 이유로 문면을 못 박는다
+            assert "FROM price_window_job WHERE job_id = %s" in s
+            row = self.db.jobs.get(("price", params[0]))
+            if row is not None:
+                self._rows = [(row["session_id"], row["window_start"],
+                               row["generation"], row["trigger_schema_version"])]
+        elif s.startswith("SELECT window_start, generation, data_status, checksum"):
+            # 정규장 첫 window(시가 근거) 조회 — ORDER BY·하한(>=)이 빠지면 시간외
+            # 세션에서 08:00 window 가 정본이 되는 조용한 회귀라 문면을 못 박는다
+            assert "ORDER BY window_start ASC LIMIT 1" in s
+            assert "window_start >= %s" in s
+            rows = sorted(
+                (r for (sid, _), r in self.db.windows.items()
+                 if sid == params[0] and r["window_start"] >= params[1]),
+                key=lambda r: r["window_start"],
+            )
+            if rows:
+                first = rows[0]
+                self._rows = [(first["window_start"], first["generation"],
+                               first["data_status"], first["checksum"])]
+        elif s.startswith("SELECT attempt_count, redrive_generation FROM price_window_job"):
+            # 트리거 persist 의 attempt fence(ALPHA-708) — CLAIMED 조건·FOR UPDATE 가
+            # 빠지면 낡은 attempt 의 쓰기가 실DB 에서 통과한다
+            assert "status = 'CLAIMED'" in s and "FOR UPDATE" in s
+            row = self.db.jobs.get(("price", params[0]))
+            if row is not None and row["status"] == "CLAIMED":
+                self._rows = [(row["attempt_count"], row["redrive_generation"])]
+        elif s.startswith("SELECT generation, checksum FROM minute_ingestion_window"):
+            row = self.db.windows.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["generation"], row["checksum"])]
+        elif s.startswith("SELECT generation, data_status FROM minute_ingestion_window"):
+            # persist·시가 확정의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
+            # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다
+            assert "FOR UPDATE" in s
+            row = self.db.windows.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["generation"], row["data_status"])]
+        elif s.startswith("SELECT entity_id, status, open_price FROM minute_session_open"):
+            self._rows = [
+                (entity, row["status"], row["open_price"])
+                for (sid, entity), row in self.db.session_opens.items()
+                if sid == params[0]
+            ]
+        elif s.startswith("INSERT INTO minute_session_open"):
+            assert "ON CONFLICT (session_id, entity_id) DO NOTHING" in s
+            key = (params[0], params[1])
+            if key not in self.db.session_opens:  # 확정 후 불변
+                self.db.session_opens[key] = {
+                    "status": params[2], "open_price": params[3],
+                    "reason": params[4], "source_window": params[5],
+                }
+        elif s.startswith("INSERT INTO minute_price_trigger"):
+            # 쿨다운 정본은 UNIQUE(entity_id, cooldown_bucket) — DO NOTHING 이 빠지면
+            # 실DB 에선 두 번째 발화가 예외로 죽으므로 문면을 못 박는다
+            assert "ON CONFLICT (entity_id, cooldown_bucket) DO NOTHING" in s
+            entity, bucket = params[1], params[10]
+            if not any(r["entity_id"] == entity and r["cooldown_bucket"] == bucket
+                       for r in self.db.triggers.values()):
+                self.db.triggers[params[0]] = {
+                    "trigger_id": params[0], "entity_id": entity,
+                    "session_id": params[2], "window_start": params[3],
+                    "generation": params[4], "detection_policy_version": params[5],
+                    "open_price": params[6], "close_price": params[7],
+                    "change_rate": params[8], "threshold": params[9],
+                    "cooldown_bucket": bucket, "seq": self.db.next_seq(),
+                }
+                self._rows = [(params[0],)]
         elif s.startswith("SELECT status, next_attempt_at, redrive_generation"):
             self._fetch_job(_job_kind(s), params)
         elif "SET status = 'CLAIMED'" in s and "redrive_generation = %s" in s:

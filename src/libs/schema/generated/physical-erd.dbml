@@ -535,6 +535,35 @@ Table "minute_ingestion_window" {
   }
 }
 
+Table "minute_price_trigger" {
+  "trigger_id" text [pk]
+  "entity_id" text [not null]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "generation" int [not null]
+  "detection_policy_version" text [not null]
+  "open_price" numeric(24,6) [not null]
+  "close_price" numeric(24,6) [not null]
+  "change_rate" numeric(12,8) [not null]
+  "threshold" numeric(12,8) [not null]
+  "cooldown_bucket" bigint [not null]
+  "created_at" timestamptz [not null]
+}
+
+Table "minute_session_open" {
+  "session_id" text [not null]
+  "entity_id" text [not null]
+  "status" text [not null]
+  "open_price" numeric(24,6)
+  "reason" text
+  "source_window" timestamptz [not null]
+  "decided_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "entity_id") [pk]
+  }
+}
+
 Table "news_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -960,6 +989,8 @@ Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "ent
 Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
