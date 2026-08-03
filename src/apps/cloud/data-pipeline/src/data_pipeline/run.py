@@ -39,6 +39,7 @@ from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.eod import qc_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
 from .minute.worker import price_worker_cli
@@ -153,6 +154,10 @@ def main(argv: list[str] | None = None) -> int:
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
                  "plan-minute-session", "drain-minute-session",
+                 # 세션 스케일 오케스트레이션(ALPHA-712): start=거래일 판정+계획+desired 1,
+                 # stop=drain+원장 게이트 대기+desired 0. 상주 서비스 3종을 올리고 내리는
+                 # 유일한 주체다(terraform 은 desired_count 를 ignore_changes 로 뒀다).
+                 "start-minute-session", "stop-minute-session",
                  # 1분 Price Worker(ALPHA-706): 상주 수집 루프(ECS Service). 원장 DB +
                  # 토스 자격증명 + storage(artifact PUT) + --universe(planner 와 동일 파일).
                  "price-worker",
@@ -266,24 +271,27 @@ def main(argv: list[str] | None = None) -> int:
             "--session-id 는 qc-minute-session·drain-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
-    if args.step != "plan-minute-session" and (
+    if args.step not in ("plan-minute-session", "start-minute-session",
+                         "stop-minute-session") and (
         args.dataset is not None or args.source_group is not None
     ):
         raise SystemExit(
-            "--dataset·--source-group 은 plan-minute-session 에서만 쓴다 — "
-            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            "--dataset·--source-group 은 plan-minute-session·start-minute-session·"
+            f"stop-minute-session 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
         )
-    if args.step == "price-consumer" and args.session_date is not None:
+    if args.step in ("price-consumer", "start-minute-session") and args.session_date is not None:
         raise SystemExit(
-            "--session-date 는 price-consumer 에서 쓰지 않는다 — 대상 세션은 job "
-            "payload 가 정한다(무시되므로 거부)"
+            f"--session-date 는 {args.step} 에서 쓰지 않는다 — 대상 세션은 job payload"
+            "(price-consumer)·오늘 KST(start-minute-session)가 정한다(무시되므로 거부)"
         )
-    if args.step not in ("plan-minute-session", "price-worker", "price-consumer") and (
+    if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
+                         "start-minute-session") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+            f"price-consumer·start-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
@@ -332,6 +340,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step == "drain-minute-session":
         return drain_session_cli(settings, session_id=args.session_id)
+    if args.step == "start-minute-session":
+        return start_session_cli(settings, dataset=args.dataset,
+                                 source_group=args.source_group, universe=args.universe)
+    if args.step == "stop-minute-session":
+        return stop_session_cli(settings, dataset=args.dataset,
+                                source_group=args.source_group)
     if args.step == "price-worker":
         return price_worker_cli(settings, session_date=args.session_date,
                                 universe=args.universe, max_ticks=args.max_ticks)

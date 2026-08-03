@@ -505,6 +505,13 @@ module "data_pipeline" {
   # 런도 대조되지 않으므로 순증).
   reconcile_schedule_state = "ENABLED"
 
+  # 컷오버(ALPHA-712): 1분 상주 서비스 3종의 세션 결속 스케일 업/다운. 08-03 장중에 같은
+  # 순서를 손으로 돌려(plan → desired 1 --force-new-deployment → 백로그 소진 → 실시간 도달)
+  # 레인 자체는 실증했다 — 이 스케줄은 그 수동 절차를 자동화한 것이다.
+  # ⚠️ 첫 발화는 다음 거래일 07:45 KST 다. 그때까지 이미지 CD 가 끝나 있어야 `start-minute-session`
+  # 스텝이 존재한다(이미지 CD 와 apply 는 순서 보장이 없다 — deploy-order-splits-the-pr).
+  minute_session_schedule_state = "ENABLED"
+
   # KR 평일 휴장일 2026 (ALPHA-387). 비면 Planner 는 휴장일에도 런을 계획하고, KRX 수집은 그날
   # 오는 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다 — 주말만 코드가 알기 때문이다.
   # ⚠️ **해마다 갱신해야 한다**(거래소 캘린더 연동 전까지의 수동 주입 지점, trading_calendar.py).

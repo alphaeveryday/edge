@@ -106,7 +106,13 @@
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
-> 막힌다. apply 후 그 변수를 켠다: ALPHA-712). ⚠️ universe 정본 객체(config/minute/universe.json)의
+> 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
+> — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 2개가
+> 부른다(Premarket 07:45 / EOD 20:05 KST, `aws_scheduler_schedule.minute_session`).
+> 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
+> 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
+> 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
+> ⚠️ universe 정본 객체(config/minute/universe.json)의
 > **생산 파이프라인은 아직 없다** — 객체 없이 스케일업하면 worker·consumer 는 기동
 > 거부(fail-loud)다. ⚠️ 토스 adapter 는
 > **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
@@ -974,10 +980,40 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 3종의 desired_count
+# 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
+# EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
+#
+# start: 거래일 판정(OPS_KR_HOLIDAYS) → plan-minute-session(오늘 KST 고정) → desired 0→1.
+# ⚠️ 비거래일이면 아무것도 하지 않고 exit 0. 계획이 실패하면 **올리지 않고** 그 exit 를
+# 그대로 낸다 — 세션 없이 뜬 Worker 는 기동을 거부해 하루 종일 재기동 루프를 돈다.
+# ⚠️ 스케일업은 항상 force-new-deployment 다(desired 0 동안 CD 재배포가 no-op 라, 빼면
+# 직전 세션의 낡은 다이제스트로 뜬다).
+DATA_PIPELINE_DB__PASSWORD=... \
+OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
+MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer \
+  python -m data_pipeline.run start-minute-session --dataset price_minute \
+    --source-group toss --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
+# stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
+# 순서대로 비어야 한다 — session.phase 가 DRAINED 이후(= in-flight window 0) → 게이트 큐
+# 깊이 0 → 미발행 outbox NEW 0. 큐 깊이는 approximate 라 **연속 5회(≈60초)** 확인한다.
+# ⚠️ 시각으로 내리지 않는 이유가 이것이다 — 15:30 이 지났다고 내리면 recovery 레인이
+# 집고 있던 window 가 조용히 결손된다.
+# exit: 0=내렸음(또는 오늘 세션이 없어 스케일 미변경) / 1=상한까지 게이트가 안 비어
+# **내리지 않았다**(사람이 원장을 본다) / 2=요청 자체를 못 함(설정·DB).
+DATA_PIPELINE_DB__PASSWORD=... \
+MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer \
+MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime \
+MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
+  python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group toss
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 5개(daily·뉴스 3슬롯
-=plan-run, reconcile) + DLQ. daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯
+=plan-run, reconcile, 1분 세션 start·stop) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
+(전용 IAM 역할 — 레이크 읽기 + 서비스 3종 `ecs:UpdateService` + 게이트 큐 조회)을 띄운다.
+daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).
 
