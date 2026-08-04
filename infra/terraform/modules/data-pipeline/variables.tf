@@ -377,6 +377,8 @@ variable "analysis_minute_limit" {
     condition     = var.analysis_minute_limit >= 1 && var.analysis_minute_limit <= 50
     error_message = "analysis_minute_limit 는 1~50 이어야 한다."
   }
+}
+
 variable "minute_universe_uri" {
   description = "1분 파이프라인 universe 정본 객체 URI(ALPHA-711). 비우면 레이크 버킷의 config/minute/universe.json — planner·worker·consumer 가 같은 객체를 봐야 한다"
   type        = string
