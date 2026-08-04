@@ -198,6 +198,37 @@ class TestRateLimit:
         with pytest.raises(KisUnitError, match="EGW00201"):
             client.candles("005930", window_end=WINDOW_END)
 
+    def test_sustained_exhaustion_escalates_to_source_level(self):
+        # 연속 유량 소진은 종목이 아니라 앱키 전역의 상태다 — 종목별 missing 으로만
+        # 접으면 백오프 합(~7초)이 400종에 곱해져 60초 창·claim lease 를 다 태운다
+        # (window 폭주). RATE_STREAK_LIMIT 번째 종목에서 소스 전역으로 승격해야 한다.
+        from data_pipeline.sources.kis_minute import RATE_STREAK_LIMIT
+
+        client, _ = make_client([TOKEN] + [err("EGW00201")] * (5 * RATE_STREAK_LIMIT))
+        for _n in range(RATE_STREAK_LIMIT - 1):
+            with pytest.raises(KisUnitError):
+                client.candles("005930", window_end=WINDOW_END)
+        with pytest.raises(KisSourceError, match="연속"):
+            client.candles("005930", window_end=WINDOW_END)
+
+    def test_success_resets_the_exhaustion_streak(self):
+        # 유량이 회복되면(성공 1콜) 승격 판정은 리셋 — 산발적 소진이 누적돼 오후에
+        # 엉뚱하게 소스 전역으로 승격되면 정상 window 가 통째로 죽는다.
+        from data_pipeline.sources.kis_minute import RATE_STREAK_LIMIT
+
+        responses = [TOKEN]
+        for _n in range(RATE_STREAK_LIMIT - 1):
+            responses += [err("EGW00201")] * 5
+        responses += [ok([row()])]
+        responses += [err("EGW00201")] * 5
+        client, _ = make_client(responses)
+        for _n in range(RATE_STREAK_LIMIT - 1):
+            with pytest.raises(KisUnitError):
+                client.candles("005930", window_end=WINDOW_END)
+        assert len(client.candles("005930", window_end=WINDOW_END)) == 1  # 회복
+        with pytest.raises(KisUnitError):  # 리셋됐으니 다시 unit 축부터
+            client.candles("005930", window_end=WINDOW_END)
+
 
 class TestAuthAxis:
     def test_source_level_4xx_propagates(self):

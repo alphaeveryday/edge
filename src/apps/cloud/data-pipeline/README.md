@@ -1023,7 +1023,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 축이라, 확인 후 사람이 반영한다(그날 계획이 바뀐다). `--out` 없으면 stdout.
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
-  uv run python scripts/build_minute_universe.py --out /tmp/universe.json
+  uv run python apps/cloud/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
 aws s3 cp /tmp/universe.json s3://edge-dev-pipeline-lake/config/minute/universe.json
 # 세션 drain(1분 파이프라인, ALPHA-698) — phase 를 DRAINING 으로 옮긴다(EOD SFN 이 부를
 # 자리). Worker 가 ack 하면 DRAINED 가 되고 그다음이 qc-minute-session 이다.

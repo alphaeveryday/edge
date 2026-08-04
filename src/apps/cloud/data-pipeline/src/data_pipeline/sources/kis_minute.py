@@ -42,6 +42,11 @@ PATH_MINUTE = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
 MARKET_DIV = "J"  # J: KRX 주식(일봉 kis_price 와 같은 축)
 RATE_MSG_CD = "EGW00201"  # "초당 거래건수 초과" — HTTP 429 아님(200 본문)
 MAX_RATE_RETRY = 5
+# 유량 소진이 **연속 몇 종목**이면 소스 전역으로 승격하나 — 종목별 재시도(백오프 합
+# ~7초)만으로는 지속 유량제한 시 400종 × 7초 ≈ 47분이 60초 창·claim lease 를 다
+# 태운다(window 폭주). 연속 소진은 그 종목의 문제가 아니라 앱키 전역의 상태다 —
+# 소스 전역 실패로 window 를 통째로 격리해 kernel 재시도(백오프)에 맡긴다.
+RATE_STREAK_LIMIT = 5
 # 토큰 만료 오류 코드. KIS 는 만료를 4xx 본문(EGW00123 "기간이 만료된 token")이나 rt_cd!=0
 # 응답으로 알린다 — 두 경로 다 같은 처방(캐시 폐기 후 1회 재발급)이라 코드로만 가른다.
 # ⚠️ 만료 응답 형상은 **실측 대상이 아니었다**(24시간 상주 실증 전) — 코드가 안 맞으면
@@ -108,6 +113,8 @@ class KisMinuteClient:
         # 실제 재시도 수 — collector 가 window 결과의 retry_count 로 싣는다(0 고정이면
         # 유량 압력이 관측에서 통째로 사라진다)
         self.retry_count = 0
+        # 유량 소진(예산까지 EGW00201)이 연속된 종목 수 — RATE_STREAK_LIMIT 승격 판정용.
+        self._rate_streak = 0
 
     def candles(self, symbol: str, *, window_end: datetime) -> tuple[Candle, ...]:
         """`window_end` 로 끝나는 30분치 봉(최신→과거).
@@ -153,6 +160,7 @@ class KisMinuteClient:
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상이라 형상 위반으로 올린다.
                 if not isinstance(output2, list):
                     raise ValueError(f"KIS rt_cd=0 인데 output2 이상: {type(output2).__name__}")
+                self._rate_streak = 0  # 성공 = 유량 회복 — 승격 판정을 리셋한다
                 return output2
             detail = f"rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
             if _token_expired(f"{data.get('msg_cd')} {data.get('msg1')}") and not reissued:
@@ -160,11 +168,20 @@ class KisMinuteClient:
                 self.auth.invalidate()
                 reissued = True
                 continue
-            if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
-                self.retry_count += 1
-                self.client._sleep(0.7 * (attempt + 1))
-                continue
-            # 종목 단위 오류(없는 종목·일시 거절)와 유량 소진은 재시도로 풀릴 수 있다 —
+            if data.get("msg_cd") == RATE_MSG_CD:
+                if attempt < MAX_RATE_RETRY - 1:
+                    self.retry_count += 1
+                    self.client._sleep(0.7 * (attempt + 1))
+                    continue
+                # 재시도 예산까지 유량 소진 — 연속되면 종목이 아니라 앱키 전역의 상태다.
+                # 종목별 missing 으로만 접으면 백오프 합(~7초)이 전 종목에 곱해져 window
+                # 폭주가 된다(RATE_STREAK_LIMIT 주석의 산술).
+                self._rate_streak += 1
+                if self._rate_streak >= RATE_STREAK_LIMIT:
+                    raise KisSourceError(
+                        f"KIS 유량 소진 연속 {self._rate_streak}종목 — 소스 전역 승격: {detail}")
+                raise KisUnitError(f"KIS 분봉 {symbol} 유량 소진: {detail}")
+            # 종목 단위 오류(없는 종목·일시 거절)는 재시도로 풀릴 수 있다 —
             # 원장이 그 window 를 다시 claim 하는 것으로 재시도된다.
             raise KisUnitError(f"KIS 분봉 {symbol}: {detail}")
         # 마지막 attempt 의 실패는 위에서 raise 되므로 여기 오는 길은 하나다 —

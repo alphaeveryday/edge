@@ -88,20 +88,26 @@ resource "aws_secretsmanager_secret" "toss" {
 locals {
   minute_services = {
     # 가격 1분 생산자 — 벤더는 KIS 다(ALPHA-735). 토스는 초당 5회라 종목당 1콜 × 400종이
-    # 60초 창을 넘었다(KIS 실측 14.8 req/s). source 는 코드 기본값(kis)이 정본이고
-    # `var.minute_session_source_group` 과 **같아야** 같은 session_id 가 유도된다.
+    # 60초 창을 넘었다(KIS 실측 14.8 req/s).
     price-worker = {
       command = ["price-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION = var.minute_trigger_schema_version
+        # source 는 세션 source_group 과 **같은 변수에서 파생**한다 — 갈리면 워커가 다른
+        # session_id 를 유도해 기동 거부로 레인이 통째로 선다. 롤백(kis↔toss)은 이 변수
+        # 하나로 끝난다 — 자격증명을 두 벤더 쌍 다 주입해 두는 이유다(config 는 선택된
+        # source 의 쌍만 검증한다).
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE = var.minute_session_source_group
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
-        KIS_TOKEN_CACHE_PARAM                                     = local.kis_token_param_name
+        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
       })
       secrets = {
-        DATA_PIPELINE_DB__PASSWORD                    = "${var.db_password_secret_arn}:password::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+        DATA_PIPELINE_DB__PASSWORD                       = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY       = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET    = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
       }
     }
     relay = {
