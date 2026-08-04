@@ -66,13 +66,15 @@ export function Select({
   const openList = () => {
     if (disabled) return;
     const cur = options.findIndex((o) => o.value === value);
-    setActive(cur >= 0 ? cur : 0);
+    setActive(options.length === 0 ? -1 : cur >= 0 ? cur : 0);
     setOpen(true);
   };
 
   const commit = (opt: SelectOption) => {
     if (opt.disabled) return;
-    onChange(opt.value);
+    // 같은 값 재선택은 no-op — 네이티브 select 처럼 변경 없을 땐 onChange 를 안 쏜다
+    // (소비측의 무변경 발행·토스트 방지). 목록은 닫는다.
+    if (opt.value !== value) onChange(opt.value);
     setOpen(false);
   };
 
@@ -106,9 +108,11 @@ export function Select({
       move(-1);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      if (active >= 0) commit(options[active]);
+      if (active >= 0 && active < options.length) commit(options[active]);
     }
   };
+
+  const optionId = (i: number) => `${listId}-opt-${i}`;
 
   return (
     <div
@@ -122,6 +126,7 @@ export function Select({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && active >= 0 ? optionId(active) : undefined}
         aria-label={ariaLabel}
         aria-disabled={disabled}
         disabled={disabled}
@@ -146,6 +151,9 @@ export function Select({
         }}
         onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={onTriggerKey}
+        // Tab 등으로 포커스가 떠나면 닫는다. 옵션 클릭은 onMouseDown preventDefault 로
+        // 트리거 포커스를 유지하므로 여기서 조기 닫힘이 발생하지 않는다.
+        onBlur={() => setOpen(false)}
       >
         <span
           style={{
@@ -176,6 +184,7 @@ export function Select({
           {options.map((opt, i) => (
             <div
               key={opt.value}
+              id={optionId(i)}
               role="option"
               aria-selected={opt.value === value}
               aria-disabled={opt.disabled}
