@@ -490,9 +490,18 @@ def test_claims_carry_basis_and_evidence_bundle_ids():
         _assemble([{"text": "오후에 올랐어요", "basis": "narrative",
                     "refs": ["s1", "n1"]}], ctx, br, news, "c", "d", "")
 
-    # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다
+    # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다.
+    # 지금은 경로 자체가 꺼져 있고, **끈 것을 사유로 말해야** 한다 - 조용히 빠지면
+    # '뉴스가 없어서' 와 '경로를 껐어서' 를 구분할 수 없다.
+    import edge_analysis.statics.evidence as ev
     assert not narrative_allowed(credible=0, applied_edges=1)[0]
-    assert narrative_allowed(credible=0, applied_edges=0)[0]
+    off, why = narrative_allowed(credible=0, applied_edges=0)
+    assert not off and "비활성" in why
+    ev.NARRATIVE_ENABLED = True
+    try:
+        assert narrative_allowed(credible=0, applied_edges=0)[0]
+    finally:
+        ev.NARRATIVE_ENABLED = False
 
 
 def test_plain_prose_cannot_overstate_weak_statistics():

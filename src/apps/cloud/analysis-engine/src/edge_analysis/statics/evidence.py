@@ -170,11 +170,19 @@ LEFT JOIN tau_sidecar sc ON sc.article_id = doc.source_document_id
 """
 
 
+# 서사 경로 스위치. **끈 것을 산출물이 말한다** - 조용히 빠지면 '뉴스가 없어서'
+# 와 '경로를 껐어서' 를 구분할 수 없다. 되돌리려면 이 한 줄을 True 로.
+NARRATIVE_ENABLED = False
+
+
 def narrative_allowed(*, credible: int, applied_edges: int) -> tuple[bool, str]:
     """서사 경로 허가. **통계가 전멸했을 때만** 허가한다 - 판단은 코드가 한다.
 
     반환 (허가, 사유). 사유는 산출물에 그대로 실려 왜 서사를 썼는지/안 썼는지 남긴다.
     """
+    if not NARRATIVE_ENABLED:
+        return False, ("서사 경로 **비활성**(NARRATIVE_ENABLED=False) - 통계 근거만 "
+                       "쓴다. 뉴스가 없어서가 아니다")
     if credible > 0:
         return False, (f"검정을 통과한 함의 {credible}건이 있다 - 서사가 필요 없다. "
                        "검정된 것을 말한다")
@@ -299,8 +307,16 @@ def _selfcheck() -> None:
     # 서사 경로는 통계가 전멸했을 때만
     assert not narrative_allowed(credible=1, applied_edges=0)[0]
     assert not narrative_allowed(credible=0, applied_edges=2)[0]
-    ok, why = narrative_allowed(credible=0, applied_edges=0)
-    assert ok and "전부 기각" in why
+    off, why = narrative_allowed(credible=0, applied_edges=0)
+    assert not off and "비활성" in why, "끈 것을 사유로 말해야 한다"
+    # `python -m` 으로 돌면 이 모듈은 __main__ 이라 `statics.evidence` 를 패치해도
+    # 안 먹는다(별 인스턴스). 자기 globals 를 건드린다.
+    globals()["NARRATIVE_ENABLED"] = True
+    try:
+        ok, why2 = narrative_allowed(credible=0, applied_edges=0)
+        assert ok and "전부 기각" in why2
+    finally:
+        globals()["NARRATIVE_ENABLED"] = False
 
     s = say_bundles([nb, sb])
     assert "NEWS_A" in s and "p=0.004" in s
