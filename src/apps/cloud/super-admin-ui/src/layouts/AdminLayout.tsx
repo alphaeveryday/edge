@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import type { CSSProperties } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
@@ -78,6 +79,19 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+/* 메뉴 항목은 실제 링크(a)다 — 주소가 드러나고 새 탭 열기·가운데 클릭이 그대로 동작한다.
+ * 전역 `a:hover { text-decoration: underline }` 만 눌러 두고 색·배경은 .nav-item 이 준다. */
+const NAV_LINK: CSSProperties = { textDecoration: 'none' };
+/* 그룹 헤더는 button — 폰트만 상속받고 크기·자간·색은 .nav-section 이 그대로 준다 */
+const GROUP_BTN: CSSProperties = {
+  background: 'none',
+  border: 0,
+  fontFamily: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+  userSelect: 'none',
+};
+
 /** '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
 const matchPath = (path: string, target: string) =>
   target === '/' ? path === '/' : path.startsWith(target);
@@ -108,9 +122,9 @@ export function AdminLayout() {
   const logout = useLogout();
 
   const [menuOpen, setMenuOpen] = useState(false);
-  /* 사용자가 접은 그룹만 기억한다 — 펼침 여부는 매 렌더 경로에서 파생되므로
-   * 새로고침·딥링크로 들어와도 현재 화면이 속한 그룹이 저절로 열린다(별도 복원 불필요). */
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  /* 기본 펼침은 "현재 경로가 속한 그룹 하나"다. 여기 담기는 것은 사용자가 그 위에 덧연
+   * 비활성 그룹뿐이고, 세션 메모리에만 남는다 — 새로고침하면 다시 경로 기준으로 복원된다. */
+  const [userOpenedGroups, setUserOpenedGroups] = useState<Record<string, boolean>>({});
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState('');
   const [profileError, setProfileError] = useState(false);
@@ -204,28 +218,23 @@ export function AdminLayout() {
 
         {NAV_GROUPS.map((g) => {
           const groupActive = g.areas.some((a) => inArea(path, a));
-          /* 현재 화면이 속한 그룹은 항상 펼쳐 둔다 — 접힌 채로 활성 메뉴가 숨는 상태를 만들지 않는다 */
-          const expanded = !g.collapsible || groupActive || !collapsedGroups[g.group];
+          /* 현재 화면이 속한 그룹은 항상 펼쳐 둔다(접힌 채로 활성 메뉴가 숨지 않게).
+           * 나머지는 기본 접힘이고, 사용자가 눌러 연 동안만 함께 펼쳐진다. */
+          const expanded = !g.collapsible || groupActive || !!userOpenedGroups[g.group];
           return (
             <div key={g.group}>
               {g.collapsible ? (
-                <div
-                  className="nav-section flex items-center gap-1.5"
-                  style={{ cursor: 'pointer', userSelect: 'none' }}
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
+                  className="nav-section flex w-full items-center gap-1.5"
+                  /* 활성 그룹은 헤더도 밝게 — 어느 영역 안에 있는지 접힘/펼침과 별개로 보인다 */
+                  style={{ ...GROUP_BTN, color: groupActive ? 'var(--gray-300)' : undefined }}
                   aria-expanded={expanded}
-                  onClick={() => setCollapsedGroups((s) => ({ ...s, [g.group]: expanded }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setCollapsedGroups((s) => ({ ...s, [g.group]: expanded }));
-                    }
-                  }}
+                  onClick={() => setUserOpenedGroups((s) => ({ ...s, [g.group]: !expanded }))}
                 >
                   <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} className="flex-none" />
                   <span>{g.group}</span>
-                </div>
+                </button>
               ) : (
                 <div className="nav-section">{g.group}</div>
               )}
@@ -237,25 +246,33 @@ export function AdminLayout() {
                   return (
                     <div key={area.path}>
                       {/* 영역 자체가 현재 화면이면 활성, 하위 화면에 들어와 있으면 "이 영역 안"만 표시 */}
-                      <div
+                      <Link
+                        to={area.path}
                         className={`nav-item${onOwnScreen ? ' active' : ''}`}
-                        style={inside && !onOwnScreen ? { color: 'var(--gray-200)' } : undefined}
-                        onClick={() => navigate(area.path)}
+                        style={{
+                          ...NAV_LINK,
+                          ...(inside && !onOwnScreen ? { color: 'var(--gray-200)' } : null),
+                        }}
+                        aria-current={onOwnScreen ? 'page' : undefined}
                       >
                         <Icon name={area.icon} className="ic" />
                         <span>{area.label}</span>
-                      </div>
+                      </Link>
                       {inside &&
-                        area.subs?.map((sub) => (
-                          <div
-                            key={sub.path}
-                            className={`nav-item nav-sub${matchPath(path, sub.path) ? ' active' : ''}`}
-                            style={{ paddingLeft: 32 }}
-                            onClick={() => navigate(sub.path)}
-                          >
-                            <span>{sub.label}</span>
-                          </div>
-                        ))}
+                        area.subs?.map((sub) => {
+                          const current = matchPath(path, sub.path);
+                          return (
+                            <Link
+                              key={sub.path}
+                              to={sub.path}
+                              className={`nav-item nav-sub${current ? ' active' : ''}`}
+                              style={{ ...NAV_LINK, paddingLeft: 32 }}
+                              aria-current={current ? 'page' : undefined}
+                            >
+                              <span>{sub.label}</span>
+                            </Link>
+                          );
+                        })}
                     </div>
                   );
                 })}
