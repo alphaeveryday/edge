@@ -81,7 +81,36 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     source = querier.add_mutually_exclusive_group(required=True)
     source.add_argument("--sql", help="a single SELECT/WITH statement")
     source.add_argument("--file", help="path to a file holding one statement")
+    # 실시간 축. **같은 이미지·같은 진입점**에 얹는다 - 분석 로직이 두 곳으로 갈리면
+    # 장중 판정과 일간 판정이 달라진다. 배포는 이 task-def 에 Command 만 덮는다
+    # (db-query 선례와 같은 계약).
+    minute = sub.add_parser(
+        "analyze-minute",
+        help="Consume unanalyzed minute_price_trigger rows and record the lineage.")
+    minute.add_argument("--limit", type=int, default=10,
+                        help="max triggers per run (ECS task wall-clock guard)")
+    minute.add_argument("--no-llm", action="store_true",
+                        help="skip the plain (Toss-style) narration")
     return parser.parse_args(list(argv) if argv is not None else None)
+
+
+def analyze_minute_command(args: argparse.Namespace) -> int:
+    """분봉 트리거 소비. 미분석 = 계보 미부착이므로 실패한 것은 다음 런이 다시 집는다.
+
+    `load_settings` 를 거치지 않는다 - 실시간 축은 레이크·S3 아카이브를 쓰지 않고
+    RDB 계보와 DuckDB 표면만 쓴다. 설정을 요구하면 없는 의존을 강제한다.
+    """
+    import os
+
+    from .statics.live import run as live_run
+    ask = None
+    if not args.no_llm and (key := os.environ.get("DEEPSEEK_API_KEY")):
+        from .adapters.llm import DeepSeekClient, TracingClient
+        ask = TracingClient(DeepSeekClient(
+            key, os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))).complete_json
+    n = live_run(limit=args.limit, ask=ask)
+    log("analyze_minute.done", processed=n)
+    return 0
 
 
 def load_classification_command(args: argparse.Namespace) -> int:
@@ -243,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
             return load_price_daily_command(args)
         if args.command == "query":
             return query_command(args)
+        if args.command == "analyze-minute":
+            return analyze_minute_command(args)
         settings = load_settings(trade_date=args.trade_date, request_id=args.request_id)
         s3 = make_s3_client(settings)
         lake = LakeReader(s3, settings.lake_bucket)

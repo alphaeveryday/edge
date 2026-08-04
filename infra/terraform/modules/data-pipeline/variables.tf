@@ -298,3 +298,32 @@ variable "us_fmp_enabled" {
   type        = bool
   default     = false
 }
+
+# ── 실시간 축 (ALPHA-671) ────────────────────────────────────────────────────
+variable "analysis_minute_schedule_state" {
+  description = "분봉 트리거 소비 스케줄 상태 (ENABLED|DISABLED)"
+  type        = string
+  default     = "DISABLED"
+
+  validation {
+    condition     = contains(["ENABLED", "DISABLED"], var.analysis_minute_schedule_state)
+    error_message = "analysis_minute_schedule_state 는 ENABLED 또는 DISABLED 여야 한다."
+  }
+}
+
+variable "analysis_minute_schedule_expression" {
+  description = "분봉 트리거 소비 주기. 장중만 돌릴 이유가 없다 - 트리거가 없으면 즉시 종료한다"
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "analysis_minute_limit" {
+  description = "한 런에서 소비할 트리거 상한 (ECS task 벽시계 보호). 남은 것은 다음 런이 집는다"
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.analysis_minute_limit >= 1 && var.analysis_minute_limit <= 50
+    error_message = "analysis_minute_limit 는 1~50 이어야 한다."
+  }
+}

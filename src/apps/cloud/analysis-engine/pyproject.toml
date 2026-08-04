@@ -9,6 +9,12 @@ dependencies = [
     "pandas>=2.2",          # 경량 데이터 정리
     "psycopg2-binary>=2.9", # edge Postgres(Cloud Event Store) 적재
     "PyYAML>=6",
+    # ── statics(통계 인과) 경로 (ALPHA-671) ───────────────────────────────
+    # 이것들이 없으면 **컨테이너에서 import 즉사**한다. 로컬 venv 에 이미 깔려 있어
+    # 테스트가 다 통과하므로 선언 누락이 안 보인다 - 배포에서만 터지는 종류다.
+    "duckdb>=1.1",          # S3(canonical)+RDB 크로스 스토어 조인 표면
+    "numpy>=1.26",          # 패널 회귀·순열 검정
+    "psycopg[binary]>=3.1", # 계보 적재·근거 묶음 (psycopg2 와 별 API - 둘 다 쓴다)
 ]
 
 [build-system]

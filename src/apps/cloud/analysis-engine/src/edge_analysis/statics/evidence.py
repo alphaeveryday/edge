@@ -211,7 +211,10 @@ def news_bundle(cell: str, day: str, claim: str, objs: list[dict], refs: list[st
 
 
 def ensure_schema(dsn: str = "") -> str:
-    """표를 만든다(멱등). 반환: 빈 문자열 = 성공, 아니면 사유.
+    """**로컬 전용** 표 생성(멱등). 반환: 빈 문자열 = 성공, 아니면 사유.
+
+    배포에서는 Flyway 가 이 표를 만든다 - 이 함수는 마이그레이션을 못 돌리는
+    로컬 실험용이고, `save()` 는 이것을 부르지 않는다.
 
     레이크의 `rdb` 는 READ_ONLY 로 붙어 있어 쓸 수 없다 - 쓰기는 별 연결이다.
     """
@@ -238,7 +241,10 @@ def save(bundles: list[Bundle], dsn: str = "") -> tuple[int, str]:
     try:
         import psycopg
         with psycopg.connect(dsn, connect_timeout=20) as con:
-            con.execute(_DDL)
+            # **DDL 을 여기서 실행하지 않는다.** 표는 Flyway 가 소유한다
+            # (V202608041100__add_analysis_evidence_bundle.sql). 코드가 매 저장마다
+            # CREATE TABLE IF NOT EXISTS 를 돌리면 스키마 소유권이 두 곳이 되고,
+            # 원장 마이그레이션이 컬럼을 바꿔도 코드의 낡은 DDL 이 조용히 이긴다.
             with con.cursor() as cur:
                 cur.executemany(
                     f"INSERT INTO public.{TABLE} "
