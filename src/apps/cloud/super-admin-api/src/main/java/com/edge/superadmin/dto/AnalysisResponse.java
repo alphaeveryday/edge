@@ -13,15 +13,15 @@ import java.util.List;
  * 원장(explanation_*)의 판정을 UI 어휘로 <b>번역만</b> 한다: {@code run_status}→status,
  * {@code confidence_level}→confidence. 새 판정을 만들지 않는다(SourceService 원칙).
  *
- * <p>{@code corrected}·EXCLUDED·정정 본문은 운영자 작업 원장(admin_activity_log)에서 유도한
- * 오버레이다(ALPHA-602). 제외는 상태 배지만 EXCLUDED 로 바꾸고 완료시각은 원래 run_status 기준을
- * 유지한다(복원이 원상태 복구). 정정본이 있으면 원장 원본(파이프라인 소유·불변) 대신 정정 문구를
- * 낸다 — 원본은 덮이지 않는다.
+ * <p>{@code publicationStatus} 는 게시 수명주기(DRAFT/PUBLISHED/WITHDRAWN) — 실행 상태
+ * (status)와 별개 축이다. 무효화 액션의 활성 조건(게시본만)이라 원장 어휘 그대로 낸다.
+ * 결과 없는 런은 null. (구 정정/제외/복원 오버레이는 ALPHA-737 로 은퇴 — 콘솔 통제는
+ * 무효화 단독이다.)
  */
 public record AnalysisResponse(String id, String name, String code, String market, int direction,
 		double changePct, String status, String basisTime, String basisTimeAbs, String doneTime,
-		String confidence, boolean corrected, String result, List<EvidenceResponse> evidence,
-		int evidenceTotal) {
+		String confidence, String publicationStatus, String result,
+		List<EvidenceResponse> evidence, int evidenceTotal) {
 
 	/** 표시는 KST 로 통일한다 — 원장 시각은 TIMESTAMPTZ 라 시장별 현지시각은 보존돼 있지 않다. */
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -48,10 +48,7 @@ public record AnalysisResponse(String id, String name, String code, String marke
 	}
 
 	public static AnalysisResponse from(AnalysisRow row) {
-		String underlyingStatus = uiStatus(row.runStatus());
-		// 제외 오버레이는 상태 배지만 EXCLUDED 로 바꾼다 — 완료시각·본문은 원래 run_status
-		// 기준을 쓴다(제외된 완료 런도 분석 완료 시각·설명 본문을 잃지 않게).
-		String status = row.excluded() ? "EXCLUDED" : underlyingStatus;
+		String status = uiStatus(row.runStatus());
 		return new AnalysisResponse(
 				row.runId(),
 				row.etfName(),
@@ -62,13 +59,10 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				status,
 				format(SHORT_TIME, row.detectedAt()),
 				format(ABS_TIME, row.detectedAt()),
-				doneTime(underlyingStatus, row.finishedAt()),
+				doneTime(status, row.finishedAt()),
 				row.confidenceLevel(),
-				row.corrected(),
-				// 정정본이 있으면 그 문구를, 없으면 원장 원본을 상태 문구 규칙에 태운다.
-				row.correctedSummary() != null
-						? row.correctedSummary()
-						: result(row.runStatus(), row.summary()),
+				row.publicationStatus(),
+				result(row.runStatus(), row.summary()),
 				row.evidence().stream().map(EvidenceResponse::from).toList(),
 				// 표시 상한에 잘린 만큼을 화면이 알아야 "N건"이 총 건수를 말할 수 있다.
 				row.evidenceTotal());

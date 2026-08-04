@@ -8,8 +8,10 @@ export type AnalysisConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 export type AnalysisStatus =
   | 'COMPLETED' // 분석 완료
   | 'PENDING' // 분석 대기 (근거 데이터 수집 중)
-  | 'FAILED' // 분석 실패 (재시도 큐 등록)
-  | 'EXCLUDED'; // 제외됨 (운영자 수동 — 테넌트 비노출)
+  | 'FAILED'; // 분석 실패 (재시도 큐 등록)
+
+/** 게시 수명주기 — 실행 상태와 별개 축. 무효화 버튼은 PUBLISHED 에서만 활성(ALPHA-737). */
+export type AnalysisPublicationStatus = 'DRAFT' | 'PUBLISHED' | 'WITHDRAWN';
 
 export interface AnalysisEvidence {
   type: string;
@@ -34,8 +36,8 @@ export interface Analysis {
   doneTime: string;
   /** 분석 신뢰도 — 결과가 아직 없으면 null */
   confidence: AnalysisConfidence | null;
-  /** 운영자 정정 여부 */
-  corrected: boolean;
+  /** 게시 상태 — 결과가 아직 없는 런이면 null */
+  publicationStatus: AnalysisPublicationStatus | null;
   result: string;
   evidence: AnalysisEvidence[];
   /**
