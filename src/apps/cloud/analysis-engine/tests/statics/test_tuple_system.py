@@ -1030,3 +1030,27 @@ def test_route_stub_fields_match_the_real_layer_dataclasses():
                            ret=0.001, contribution=0.001, n=60, overlap=0.0),),
                     0.05, (big, small)))
     assert r.kind == "고유" and r.targets == ("000660",), "작은 기여는 대상이 아니다"
+
+
+def test_no_module_reads_pct_off_a_layers_name():
+    """`layers.Name` 에 `pct` 는 없다 - 그 이름을 읽는 코드가 있으면 라이브에서 죽는다.
+
+    필드 대조 테스트는 **정의**를 지키지만 **사용**을 못 잡는다. 실측으로 두 곳이
+    남아 있었고(route.py·etfcell.py) 30일 배치가 각각 3일·2일을 날렸다. 그래서
+    사용 자리를 소스로 직접 막는다 - `Name` 을 다루는 모듈에서 `.pct` 를 금지한다.
+    (`causeflow.LayerFact` 는 자기 `pct` 를 가지므로 그 모듈은 대상이 아니다.)
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "edge_analysis" / "statics"
+    offenders = []
+    for f in sorted(root.glob("*.py")):
+        src = f.read_text(encoding="utf-8")
+        if "LayerFact" in src:      # 자기 pct 를 가진 데이터클래스를 쓰는 모듈
+            continue
+        for m in re.finditer(r"\b(nm|n|name|nameobj)\.pct\b", src):
+            line = src[:m.start()].count("\n") + 1
+            offenders.append(f"{f.name}:{line} {m.group()}")
+    assert not offenders, (
+        "layers.Name 에 없는 `pct` 를 읽는다 - contribution 을 쓰라: " + ", ".join(offenders))

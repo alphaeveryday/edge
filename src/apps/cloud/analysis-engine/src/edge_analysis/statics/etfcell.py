@@ -209,7 +209,8 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
         for tk in r.targets:
             nm = next((n for n in roll.names if n.ticker == tk), None)
             head = (f"  {tk}" + (f" ({nm.label})" if nm and nm.label else "")
-                    + (f" 기여 {nm.pct * 100:+.2f}%p · 비중 {nm.weight:.1%}" if nm else ""))
+                    + (f" 기여 {nm.contribution * 100:+.2f}%p · 비중 {nm.weight:.1%}"
+                       if nm else ""))
             out.append(head)
             from .verifier import say_implications, verify
             imps, lg = verify(lake, day, etype="COMPANY.EARNINGS.RESULT_RELEASE",
