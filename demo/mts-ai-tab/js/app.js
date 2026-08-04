@@ -231,6 +231,7 @@
     state.aiFetched = false;
     state.aiRequestSeq++; // 이전 종목의 in-flight 응답 무효화
     state.chartByInterval = {}; // 차트도 탭이 열릴 때만 조회 — 딥링크로 AI 탭 직행 시 불필요한 호출을 막는다
+    state.period = 0; // 종목 진입은 항상 기본 '1일'(당일 분봉)부터 — 이전 종목의 기간 선택을 승계하지 않는다
     state.chartRequestSeq++;
     selectTab(tab || '차트');
     showScreen('stock');
