@@ -8,12 +8,14 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
 /**
  * publication writer — writer 분담(스키마 COMMENT): 이 모듈은 검수 승인 재발행과
  * 사후 운영(최종 문구 정정·수동 제공 중단)만 쓴다(자동 게시·무효화는 screening-worker).
- * 게시 grain((ticker,trade_date) PUBLISHED 1건) 경합은 부분 유니크 인덱스를 arbiter 로
- * 한 native ON CONFLICT 가 원자적으로 한쪽만 통과시킨다 — JPA persist 로는 표현 불가.
+ * 게시 grain 은 (ticker, trade_date, explanation_as_of) — 다스냅샷 공존(ADR-0045 결정 3,
+ * ALPHA-743)이라 같은 스냅샷의 이중 게시만 부분 유니크 인덱스 arbiter 의 native
+ * ON CONFLICT 가 원자적으로 막는다 — JPA persist 로는 표현 불가.
  */
 public interface PublicationRepository extends Repository<PublicationEntity, Long> {
 
@@ -21,17 +23,20 @@ public interface PublicationRepository extends Repository<PublicationEntity, Lon
 	 * 게시 시점 노출 문구를 published_summary 로 스냅샷한다(ALPHA-437) — 수정 승인은
 	 * 편집 문구, 일반 승인은 원문(analysis_item.summary)이 실린다(DDL 주석의 필수화).
 	 *
-	 * @return 삽입된 행 수(1 = 게시, 0 = grain 선점).
+	 * @return 삽입된 행 수(1 = 게시, 0 = 같은 스냅샷 이중 게시).
 	 */
 	@Transactional
 	@Modifying
 	@Query(value = """
-			INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, published_summary)
-			VALUES (:analysisItemId, :etfTicker, :tradeDate, :publishedSummary)
-			ON CONFLICT (etf_ticker, trade_date) WHERE status = 'PUBLISHED' DO NOTHING
+			INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, explanation_as_of,
+			                         published_summary)
+			VALUES (:analysisItemId, :etfTicker, :tradeDate, :explanationAsOf, :publishedSummary)
+			ON CONFLICT (etf_ticker, trade_date, explanation_as_of) WHERE status = 'PUBLISHED'
+			DO NOTHING
 			""", nativeQuery = true)
 	int publish(@Param("analysisItemId") String analysisItemId, @Param("etfTicker") String etfTicker,
 			@Param("tradeDate") LocalDate tradeDate,
+			@Param("explanationAsOf") OffsetDateTime explanationAsOf,
 			@Param("publishedSummary") String publishedSummary);
 
 	/**

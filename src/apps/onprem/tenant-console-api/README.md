@@ -26,7 +26,7 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
   범위만 쓴다(CANCELLED·SYSTEM 은 screening-worker).
 - **검수 결정 = 전이+재발행+기록+감사 단일 트랜잭션** — 승인됐는데 게시가 안
   되거나, 결정이 기록(review_task·status_history·console_action_log) 없이 남는
-  어중간한 상태를 만들지 않는다. grain 선점·ticker 결측은 409/전이 롤백으로 수렴.
+  어중간한 상태를 만들지 않는다. ticker 결측·같은 스냅샷 이중 게시(grain=ticker,trade_date,as_of — ALPHA-743 공존 모델)는 409/전이 롤백으로 수렴.
   수정 승인(approve-edited)의 편집 문구는 `publication.published_summary` 스냅샷
   으로 게시된다(원문은 analysis_item 에 보존).
 

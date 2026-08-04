@@ -39,13 +39,14 @@ public class ScreeningService {
 
 	private static final Set<String> RISKS = Set.of("LOW", "MEDIUM", "HIGH");
 	private static final Set<String> ACTIONS = Set.of("REVIEW", "BLOCK");
-	// 자동 제공 허용 위험 상한에 HIGH 는 없다 — HIGH 는 항상 검수·차단 경로다(UI 계약).
-	private static final Set<String> MAX_RISKS = Set.of("LOW", "MEDIUM");
+	// 자동 제공 최소 확신도에 LOW 는 없다 — 보류(LOW)까지 허용은 미설정과 실질 동일이라
+	// 기준이 될 수 없다(ALPHA-634, max_risk 가 HIGH 를 뺐던 것과 같은 원리).
+	private static final Set<String> MIN_CONFIDENCES = Set.of("MEDIUM", "HIGH");
 
 	// 온보딩 기반값 — 첫 발행 전 GET 투영과 첫 발행의 기반이 같아야 화면과 발행 결과가
 	// 어긋나지 않는다. 자동 제공 ON 이 기본(걸린 것만 검수), 문구는 UI 시안 기본 문구.
 	private static final int DEFAULT_MIN_SOURCES = 2;
-	private static final String DEFAULT_MAX_RISK = "MEDIUM";
+	private static final String DEFAULT_MIN_CONFIDENCE = "MEDIUM";
 	private static final String DEFAULT_DISCLAIMER =
 			"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
 					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
@@ -69,7 +70,7 @@ public class ScreeningService {
 	 * 대상 — 첫 발행은 null), sourceRuleId 는 토글 대상 식별용(신규 룰은 null).
 	 */
 	private record Draft(Long baseVersionId, boolean autoPublishEnabled, Integer minSources,
-			String maxRisk, String disclaimer, List<DraftRule> rules) {
+			String minConfidence, String disclaimer, List<DraftRule> rules) {
 	}
 
 	private record DraftRule(Long sourceRuleId, String ruleType, String params, String action,
@@ -110,7 +111,7 @@ public class ScreeningService {
 				objectMapper.writeValueAsString(Map.of("text", text, "risk", risk)),
 				action, true, Instant.now()));
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
-						base.maxRisk(), base.disclaimer(), newRules),
+						base.minConfidence(), base.disclaimer(), newRules),
 				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "risk", risk, "action", action));
 	}
 
@@ -135,7 +136,7 @@ public class ScreeningService {
 			throw new GeneralException(ConsoleErrorStatus.BANNED_WORD_NOT_FOUND);
 		}
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
-						base.maxRisk(), base.disclaimer(), newRules),
+						base.minConfidence(), base.disclaimer(), newRules),
 				actor, clientIp, "POLICY_WORD_TOGGLED",
 				Map.of("ruleId", id, "enabled", target.enabled()));
 	}
@@ -143,18 +144,18 @@ public class ScreeningService {
 	public AutoPublishCriteria getCriteria() {
 		Draft base = loadBase();
 		return new AutoPublishCriteria(
-				base.minSources() == null ? DEFAULT_MIN_SOURCES : base.minSources(), base.maxRisk());
+				base.minSources() == null ? DEFAULT_MIN_SOURCES : base.minSources(), base.minConfidence());
 	}
 
 	@Transactional
-	public void updateCriteria(Integer minSources, String maxRisk, SessionMember actor, String clientIp) {
+	public void updateCriteria(Integer minSources, String minConfidence, SessionMember actor, String clientIp) {
 		if (minSources != null && (minSources < 1 || minSources > 3)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		if (maxRisk != null && !MAX_RISKS.contains(maxRisk)) {
+		if (minConfidence != null && !MIN_CONFIDENCES.contains(minConfidence)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		if (minSources == null && maxRisk == null) {
+		if (minSources == null && minConfidence == null) {
 			// 빈 PATCH 가 동일 내용의 새 버전을 발행하면 이력이 허위 변경으로 오염된다.
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
@@ -162,11 +163,11 @@ public class ScreeningService {
 		// 부분 갱신(PATCH) — null 필드는 활성 버전 값 유지.
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(),
 						minSources == null ? base.minSources() : minSources,
-						maxRisk == null ? base.maxRisk() : maxRisk,
+						minConfidence == null ? base.minConfidence() : minConfidence,
 						base.disclaimer(), base.rules()),
 				actor, clientIp, "POLICY_CRITERIA_CHANGED",
 				Map.of("minSources", minSources == null ? "unchanged" : minSources,
-						"maxRisk", maxRisk == null ? "unchanged" : maxRisk));
+						"minConfidence", minConfidence == null ? "unchanged" : minConfidence));
 	}
 
 	public String getDisclaimer() {
@@ -180,7 +181,7 @@ public class ScreeningService {
 		}
 		Draft base = loadBase();
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
-						base.maxRisk(), text, base.rules()),
+						base.minConfidence(), text, base.rules()),
 				actor, clientIp, "POLICY_DISCLAIMER_CHANGED", Map.of());
 	}
 
@@ -195,14 +196,14 @@ public class ScreeningService {
 				.map(v -> new PolicyVersionSummary(v.getVersionNo(), v.getActivatedAt(),
 						v.getCreatedBy() == null ? null : namesById.get(v.getCreatedBy()),
 						v.getActivatedAt() != null && v.getDeactivatedAt() == null,
-						v.isAutoPublishEnabled(), v.getMinSourceCount(), v.getMaxRisk()))
+						v.isAutoPublishEnabled(), v.getMinSourceCount(), v.getMinConfidence()))
 				.toList();
 	}
 
 	private Draft loadBase() {
 		Optional<PolicyVersionEntity> active = versions.findActive();
 		if (active.isEmpty()) {
-			return new Draft(null, true, DEFAULT_MIN_SOURCES, DEFAULT_MAX_RISK, DEFAULT_DISCLAIMER,
+			return new Draft(null, true, DEFAULT_MIN_SOURCES, DEFAULT_MIN_CONFIDENCE, DEFAULT_DISCLAIMER,
 					List.of());
 		}
 		PolicyVersionEntity version = active.get();
@@ -213,7 +214,7 @@ public class ScreeningService {
 						r.getAction(), r.isEnabled(), r.getCreatedAt()))
 				.toList();
 		return new Draft(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
-				version.getMinSourceCount(), version.getMaxRisk(), version.getDisclaimerText(), copied);
+				version.getMinSourceCount(), version.getMinConfidence(), version.getDisclaimerText(), copied);
 	}
 
 	/**
@@ -230,7 +231,7 @@ public class ScreeningService {
 			}
 			PolicyVersionEntity saved = versions.save(new PolicyVersionEntity(
 					versions.maxVersionNo() + 1, draft.disclaimer(), draft.autoPublishEnabled(),
-					draft.minSources(), draft.maxRisk(), actor.memberId()));
+					draft.minSources(), draft.minConfidence(), actor.memberId()));
 			for (DraftRule rule : draft.rules()) {
 				rules.save(new ScreeningRuleEntity(saved.getPolicyVersionId(), rule.ruleType(),
 						rule.params(), rule.action(), rule.enabled(), rule.createdAt()));

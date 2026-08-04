@@ -79,6 +79,14 @@ class Settings:
     # **Cube 를 쓰지 않는 이유**: Cube 는 `*_latest` 라 시점 창이 없다 - 과거를 설명하면서
     # 나중에 정정된 값을 보게 되고, 에러 없이 조용히 미래를 본다.
 
+    # ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api. 엔진이 DB 를 직접
+    # UPDATE 하지 않는 이유: INVALIDATION 발화자를 super-admin 하나로 유지해야 WITHDRAWN
+    # 전이·tenant_delivery 발번·감사 로그가 한 트랜잭션으로 남는다(ALPHA-440). 비면
+    # 회수 경로가 fail-loud 한다 — 기본값에 비밀을 두지 않는다.
+    super_admin_url: str = ""
+    super_admin_email: str = ""
+    super_admin_password: str = ""
+
 
 def _flag(name: str, *, default: bool) -> bool:
     """불리언 환경변수. 오타는 fail-loud - 조용히 default 로 떨어지면 안 된다."""
@@ -146,4 +154,7 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         result_s3_prefix=_env("ALPHAMALE_RESULT_S3_PREFIX"),
         aws_profile=_env("AWS_PROFILE"),
         trigger_id=(trigger_id or None),
+        super_admin_url=os.environ.get("SUPER_ADMIN_API_URL", "").strip(),
+        super_admin_email=os.environ.get("SUPER_ADMIN_EMAIL", "").strip(),
+        super_admin_password=os.environ.get("SUPER_ADMIN_PASSWORD", "").strip(),
     )

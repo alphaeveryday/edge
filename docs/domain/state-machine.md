@@ -19,7 +19,7 @@
 
 | 분기 | analysis_items.status | 후속 처리 |
 | --- | --- | --- |
-| 저위험/정책 통과 | AUTO_PUBLISHED | Published Store 저장 → Publication Cache 반영 → MTS/HTS 조회 가능 |
+| 정책 통과(청정 + 자동 제공 기준 충족 — 확신도 게이트 포함, ADR-0046) | AUTO_PUBLISHED | Published Store 저장 → Publication Cache 반영 → MTS/HTS 조회 가능 |
 | 검수 필요 | REVIEW_REQUIRED | Review Queue 표시, 고객 화면 비노출 |
 | 차단 | BLOCKED | 고객 화면 비노출 |
 | 검수 승인 | APPROVED | Published Store 저장 → Publication Cache 반영 → 조회 가능 |

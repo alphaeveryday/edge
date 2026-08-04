@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
-  PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
+  CONFIDENCE_LABEL, CONFIDENCE_TONE, PUBLISHED_STATUSES, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { useSession } from '../domains/session/hooks';
@@ -59,16 +59,28 @@ export function ExplanationDetailPage() {
         <div className="flex items-center gap-8">
           <div>
             <div className="t-label">제공 상태</div>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex items-center gap-1.5">
               <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status]}</StatusBadge>
+              {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
+              {it.serving && (
+                <StatusBadge tone="exposed" dot={false}>
+                  노출 중
+                </StatusBadge>
+              )}
             </div>
           </div>
           <div>
-            <div className="t-label">위험 등급</div>
+            <div className="t-label">기준시각</div>
+            <div className="num mt-1.5" style={{ fontSize: 12 }}>
+              {it.explanationAsOf}
+            </div>
+          </div>
+          <div>
+            <div className="t-label">확신도</div>
             <div className="mt-1.5">
-              {it.risk ? (
-                <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-                  {RISK_LABEL[it.risk]}
+              {it.confidence ? (
+                <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
+                  {CONFIDENCE_LABEL[it.confidence]}
                 </StatusBadge>
               ) : (
                 <span style={{ color: 'var(--fg-4)' }}>—</span>

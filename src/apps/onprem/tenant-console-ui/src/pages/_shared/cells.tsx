@@ -10,7 +10,7 @@ export function LoadError() {
   );
 }
 import type { Explanation } from '../../domains/explanations';
-import { RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
+import { CONFIDENCE_LABEL, CONFIDENCE_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
 
 export function StockCell({ name, code }: { name: string; code: string }) {
   return (
@@ -23,21 +23,29 @@ export function StockCell({ name, code }: { name: string; code: string }) {
   );
 }
 
-export function StatusCell({ it }: { it: Explanation }) {
+export function StatusCell({ it, showServing = false }: { it: Explanation; showServing?: boolean }) {
   return (
     <td>
-      {/* 서버가 UI 가 모르는 상태값을 보내도 빈 배지 대신 원문 코드를 보인다 */}
-      <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status] ?? it.status}</StatusBadge>
+      <span className="inline-flex items-center gap-1.5">
+        {/* 서버가 UI 가 모르는 상태값을 보내도 빈 배지 대신 원문 코드를 보인다 */}
+        <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status] ?? it.status}</StatusBadge>
+        {/* 노출 head(ALPHA-744) — 상태(제공 자격)와 별개로 "지금 고객 화면의 그 판"을 가리킨다 */}
+        {showServing && it.serving && (
+          <StatusBadge tone="exposed" dot={false}>
+            노출 중
+          </StatusBadge>
+        )}
+      </span>
     </td>
   );
 }
 
-export function RiskCell({ it }: { it: Explanation }) {
+export function ConfidenceCell({ it }: { it: Explanation }) {
   return (
     <td>
-      {it.risk ? (
-        <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-          {RISK_LABEL[it.risk]}
+      {it.confidence ? (
+        <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
+          {CONFIDENCE_LABEL[it.confidence]}
         </StatusBadge>
       ) : (
         <span style={{ color: 'var(--fg-4)' }}>—</span>

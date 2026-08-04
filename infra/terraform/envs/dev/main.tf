@@ -481,6 +481,13 @@ module "data_pipeline" {
   db_password_secret_arn = module.rds.master_user_secret_arn
   deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
 
+  # ExposureReverted 회수 집행(ALPHA-746) — analysis-consumer 가 super-admin 무효화 API 를
+  # 부른다. 내부 경로(Service Connect)가 아닌 공개 엣지인 이유: 소비자는 worker_cluster,
+  # super-admin-api 는 service_cluster 네임스페이스라 디스커버리가 닿지 않는다 — NAT egress
+  # 로 ALB(admin_api_domain, WAF 부착)를 탄다. 자격은 SSM SecureString 수동 주입
+  # (modules/data-pipeline/minute_services.tf 의 파라미터 이름 계약 참조).
+  super_admin_api_url = "https://${var.admin_api_domain}"
+
   # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
   # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
   # 정식 버저닝은 릴리스 규약 합의 후.

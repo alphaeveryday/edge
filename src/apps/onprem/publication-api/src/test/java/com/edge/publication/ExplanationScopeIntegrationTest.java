@@ -123,8 +123,9 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 				VALUES (?, ?, ?, ?, ?, now(), 'PRICE_ONLY', ?, 'MEDIUM', 'AUTO_PUBLISHED', NULL)
 				""", "a-scope", "instr-a-scope", TICKER, "KODEX 200", TRADE_DATE, "요약 a-scope");
 		jdbc.update("""
-				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, status)
-				VALUES (?, ?, ?, 'PUBLISHED')
-				""", "a-scope", TICKER, TRADE_DATE);
+				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date,
+				                         explanation_as_of, status)
+				VALUES (?, ?, ?, ?::date + time '16:00' at time zone 'Asia/Seoul', 'PUBLISHED')
+				""", "a-scope", TICKER, TRADE_DATE, TRADE_DATE);
 	}
 }

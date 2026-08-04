@@ -21,7 +21,9 @@ public record ExplanationResponse(
 		String confidenceLevel,
 		List<EvidenceItem> evidences,
 		String disclaimer,
-		OffsetDateTime publishedAt
+		OffsetDateTime publishedAt,
+		/** 스냅샷 기준시각 — 재노출(fallback)분의 기준 시점을 화면이 알 수 있게(ADR-0045 결정 3). */
+		OffsetDateTime explanationAsOf
 ) {
 
 	public record EtfInfo(String ticker, String name) {

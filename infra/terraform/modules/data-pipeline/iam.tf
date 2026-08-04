@@ -26,21 +26,30 @@ resource "aws_iam_role_policy" "execution_secrets" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["secretsmanager:GetSecretValue"]
-      Resource = [
-        aws_secretsmanager_secret.fmp.arn,
-        aws_secretsmanager_secret.kis.arn,
-        aws_secretsmanager_secret.dart.arn,
-        # 1분 price-worker 의 토스 자격증명(ALPHA-711) — 여기 없으면 시크릿 주입 뒤에도
-        # ResourceInitializationError 로 태스크가 시작되지 않는다
-        aws_secretsmanager_secret.toss.arn,
-        aws_secretsmanager_secret.krx.arn,
-        var.deepseek_secret_arn,
-        var.db_password_secret_arn,
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          aws_secretsmanager_secret.fmp.arn,
+          aws_secretsmanager_secret.kis.arn,
+          aws_secretsmanager_secret.dart.arn,
+          # 1분 price-worker 의 토스 자격증명(ALPHA-711) — 여기 없으면 시크릿 주입 뒤에도
+          # ResourceInitializationError 로 태스크가 시작되지 않는다
+          aws_secretsmanager_secret.toss.arn,
+          aws_secretsmanager_secret.krx.arn,
+          var.deepseek_secret_arn,
+          var.db_password_secret_arn,
+        ]
+      },
+      {
+        # ExposureReverted 회수 자격(ALPHA-746) — analysis-consumer 주입용 SSM SecureString.
+        # AWS 관리 키(alias/aws/ssm)라 별도 kms 문장 불요(kis 토큰 캐시와 같은 근거).
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameters"]
+        Resource = [local.super_admin_email_param_arn, local.super_admin_password_param_arn]
+      },
+    ]
   })
 }
 

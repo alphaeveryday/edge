@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, PageSkeleton } from 'ui-kit';
-import type { RiskLevel, ServeStatus } from '../domains/explanations';
-import { RISK_LABEL, STATUS_LABEL } from '../domains/explanations';
+import type { ConfidenceLevel, ServeStatus } from '../domains/explanations';
+import { CONFIDENCE_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
-import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
+import { ConfidenceCell, LoadError, StatusCell, StockCell } from './_shared/cells';
 
 export function ExplanationsPage() {
   const navigate = useNavigate();
@@ -12,7 +12,7 @@ export function ExplanationsPage() {
 
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<ServeStatus | 'ALL'>('ALL');
-  const [fRisk, setFRisk] = useState<RiskLevel | 'ALL'>('ALL');
+  const [fConfidence, setFConfidence] = useState<ConfidenceLevel | 'ALL'>('ALL');
 
   if (isError) return <LoadError />;
   // 로딩 중 빈 목록이 "…없습니다" empty-state 로 오표시되지 않게 게이트한다.
@@ -23,7 +23,7 @@ export function ExplanationsPage() {
     (it) =>
       (!keyword || it.name.toLowerCase().includes(keyword) || it.code.toLowerCase().includes(keyword)) &&
       (fStatus === 'ALL' || it.status === fStatus) &&
-      (fRisk === 'ALL' || it.risk === fRisk),
+      (fConfidence === 'ALL' || it.confidence === fConfidence),
   );
 
   return (
@@ -51,13 +51,13 @@ export function ExplanationsPage() {
         </select>
         <select
           className="select"
-          value={fRisk}
-          onChange={(e) => setFRisk(e.target.value as RiskLevel | 'ALL')}
+          value={fConfidence}
+          onChange={(e) => setFConfidence(e.target.value as ConfidenceLevel | 'ALL')}
         >
-          <option value="ALL">전체 위험 등급</option>
-          {(Object.keys(RISK_LABEL) as RiskLevel[]).map((r) => (
-            <option key={r} value={r}>
-              {RISK_LABEL[r]}
+          <option value="ALL">전체 확신도</option>
+          {(Object.keys(CONFIDENCE_LABEL) as ConfidenceLevel[]).map((c) => (
+            <option key={c} value={c}>
+              {CONFIDENCE_LABEL[c]}
             </option>
           ))}
         </select>
@@ -73,7 +73,8 @@ export function ExplanationsPage() {
             <tr>
               <th>종목</th>
               <th>제공 상태</th>
-              <th>위험 등급</th>
+              <th>확신도</th>
+              <th className="col-muted">기준시각</th>
               <th className="col-muted">반입</th>
               <th></th>
             </tr>
@@ -82,8 +83,9 @@ export function ExplanationsPage() {
             {filtered.map((it) => (
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                 <StockCell name={it.name} code={it.code} />
-                <StatusCell it={it} />
-                <RiskCell it={it} />
+                <StatusCell it={it} showServing />
+                <ConfidenceCell it={it} />
+                <td className="col-muted num">{it.explanationAsOf}</td>
                 <td className="col-muted num">{it.receivedRelative}</td>
                 <td className="text-right" style={{ color: 'var(--fg-4)' }}>
                   <Icon name="chevronRight" size={14} />

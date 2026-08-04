@@ -75,7 +75,7 @@ Table "policy_version" {
   "created_at" timestamptz [not null]
   "activated_at" timestamptz
   "deactivated_at" timestamptz
-  "max_risk" varchar(10)
+  "min_confidence" varchar(10)
 }
 
 Table "publication" {
@@ -89,6 +89,7 @@ Table "publication" {
   "published_summary" text
   "unpublish_reason" text
   "unpublished_by" bigint
+  "explanation_as_of" timestamptz [not null]
 }
 
 Table "received_bundle" {

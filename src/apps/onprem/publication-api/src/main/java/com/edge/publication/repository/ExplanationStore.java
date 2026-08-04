@@ -39,7 +39,9 @@ public class ExplanationStore {
 			String summary,
 			String confidenceLevel,
 			List<Evidence> evidences,
-			OffsetDateTime publishedAt
+			OffsetDateTime publishedAt,
+			/** 스냅샷 기준시각 — 표시 규칙 "유효 최신 승리"의 축, 응답 노출(ALPHA-743). */
+			OffsetDateTime explanationAsOf
 	) {
 		public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt) {
 		}
@@ -117,7 +119,8 @@ public class ExplanationStore {
 				summary,
 				a.getConfidenceLevel(),
 				parseEvidences(a.getEvidences()),
-				p.getPublishedAt());
+				p.getPublishedAt(),
+				p.getExplanationAsOf());
 	}
 
 	/**

@@ -46,6 +46,10 @@ public class AnalysisItemEntity {
 	@Column(name = "received_at")
 	private OffsetDateTime receivedAt;
 
+	/** 스냅샷 기준시각 — 게시 시 publication 으로 복사되는 grain 축(ADR-0045, ALPHA-743). */
+	@Column(name = "explanation_as_of")
+	private OffsetDateTime explanationAsOf;
+
 	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at,source_uri}]) — 상세 화면 원천(ALPHA-436·739). */
 	@JdbcTypeCode(SqlTypes.JSON)
 	private String evidences;
@@ -66,6 +70,9 @@ public class AnalysisItemEntity {
 		this.confidenceLevel = confidenceLevel;
 		this.status = status;
 		this.receivedAt = receivedAt;
+		// 픽스처 기본값 — 게시 경로 테스트는 아래 setter 격 오버로드 없이 receivedAt 을
+		// 기준시각으로 재사용한다(엔티티 실조회에선 컬럼값이 실린다).
+		this.explanationAsOf = receivedAt;
 	}
 
 	/** 상세 픽스처용 — evidences 까지 채우는 오버로드. */
@@ -107,6 +114,10 @@ public class AnalysisItemEntity {
 
 	public String getStatus() {
 		return status;
+	}
+
+	public OffsetDateTime getExplanationAsOf() {
+		return explanationAsOf;
 	}
 
 	public OffsetDateTime getReceivedAt() {

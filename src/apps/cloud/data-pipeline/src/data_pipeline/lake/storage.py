@@ -635,6 +635,35 @@ def canonical_price_minute_prefix(market: str, session_date: str) -> str:
     )
 
 
+def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
+    """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
+
+    분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
+    (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 1분 롤업 writer 는
+    trade_date>=2026-08-04 파티션만 쓰므로 기존 파티션과 겹치지 않는다.
+
+    스키마(dev S3 2026-07-31 part-0.parquet 실측 — 이 컬럼·타입 그대로, 여분 컬럼
+    없음: 소비자 스키마 검증과의 충돌을 피하는 게 우선이라 bars_count 류는 넣지
+    않고 결손은 로그로 남긴다):
+    - ticker: string (bare 6자리, 예 "004990")
+    - source_symbol: string (벤더 심볼 — fmp 는 "004990.KS", 1분 롤업은 bare 그대로)
+    - ts: timestamp[us] **naive KST** — **구간 시작** 라벨(09:00 행 = 09:00~09:04)
+    - open/high/low/close: double
+    - volume: int64
+    - source_vendor: string (fmp 원본과 파생을 가르는 필터 축)
+    - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
+
+    거래일당 1파일(전 종목 행). generation 축 없음 — 파생물이라 원장이 확정한 1분
+    세대에서 언제든 같은 규칙으로 재유도되고, 5분 버킷이 닫힐 때마다 그날 전체를
+    재집계해 통째로 덮어쓴다(결정적·멱등 — 불변 계약을 걸면 장중 갱신·정정 반영이
+    영구 차단된다).
+    """
+    return (
+        f"canonical/market_data/intraday_5m/market={market}"
+        f"/trade_date={trade_date}/part-0.parquet"
+    )
+
+
 def raw_news_minute_page_key(
     source: str, market: str, session_date: str, window_start_hhmm: str,
     attempt: int, page: int,

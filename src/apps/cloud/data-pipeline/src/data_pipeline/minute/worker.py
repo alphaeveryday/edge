@@ -50,6 +50,7 @@ from .commit import (
 )
 from .models import KST, CollectionRequest, Universe
 from .repository import MinuteLedger
+from .rollup import maybe_rollup
 
 logger = logging.getLogger(__name__)
 
@@ -386,6 +387,20 @@ class PriceWorker(MinuteWorkerLoop):
                 trigger_schema_version=cfg.trigger_schema_version,
                 destination=cfg.destination, artifact_generation=generation,
             )
+            # 5분봉 롤업 파생(ALPHA-750) — 1분 커밋(정본)은 이미 끝났다. 롤업 실패를
+            # window 실패로 접으면 lease 만료 후 정상 수집이 재시도되므로, 여기서
+            # 격리하고 크게 기록만 한다(조용한 skip 금지 — Rule 12).
+            try:
+                maybe_rollup(
+                    self.storage, self.ledger, session_id=self.session_id,
+                    market=cfg.market, session_date=cfg.session_date,
+                    universe=cfg.universe, window_start=claim["window_start"],
+                )
+            except Exception:
+                logger.exception(
+                    "5분 롤업 실패 — window %s (1분 레인은 계속, 재유도는 그 버킷의 "
+                    "다음 커밋 또는 재실행 소관)", claim["window_start"],
+                )
             return True
         except (GenerationMismatchError, ArtifactImmutabilityError):
             # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될

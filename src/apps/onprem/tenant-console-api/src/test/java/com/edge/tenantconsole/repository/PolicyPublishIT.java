@@ -52,12 +52,12 @@ class PolicyPublishIT extends AbstractPostgresIntegrationTest {
 
 		// 활성 1건 — worker 의 활성 판정과 동일한 술어로 조회된다.
 		List<Map<String, Object>> active = jdbc.queryForList(
-				"SELECT policy_version_id, auto_publish_enabled, min_source_count, max_risk "
+				"SELECT policy_version_id, auto_publish_enabled, min_source_count, min_confidence "
 						+ "FROM policy_version WHERE activated_at IS NOT NULL AND deactivated_at IS NULL");
 		assertThat(active).hasSize(1);
 		assertThat(active.get(0).get("auto_publish_enabled")).isEqualTo(true);   // 온보딩 기본 ON
 		assertThat(active.get(0).get("min_source_count")).isEqualTo(1);
-		assertThat(active.get(0).get("max_risk")).isEqualTo("MEDIUM");
+		assertThat(active.get(0).get("min_confidence")).isEqualTo("MEDIUM");
 		long activeId = (long) active.get(0).get("policy_version_id");
 
 		// worker 소비 계약 — enabled 룰의 params.text 가 문자열로 읽힌다(BundleScreener.toRule).

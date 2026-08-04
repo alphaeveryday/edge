@@ -50,7 +50,8 @@ class ExplanationWriteIT extends AbstractPostgresIntegrationTest {
 
 	private void seedPublication(String itemId, String ticker, String publishedSummary) {
 		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
-				+ "published_summary) VALUES (?, ?, '2026-07-15', ?)", itemId, ticker, publishedSummary);
+				+ "explanation_as_of, published_summary) VALUES (?, ?, '2026-07-15', "
+				+ "'2026-07-15T16:00:00+09:00', ?)", itemId, ticker, publishedSummary);
 	}
 
 	private SessionMember actor(long memberId) {
@@ -224,8 +225,9 @@ class ExplanationWriteIT extends AbstractPostgresIntegrationTest {
 		long member = seedMember();
 		seedItem("it613-nullsnap", "613NUL", "AUTO_PUBLISHED", "노출됐던 모델 원문");
 		// 자동 게시본은 published_summary 가 NULL — 고객에게는 analysis_item.summary 가 노출된다.
-		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date) "
-				+ "VALUES ('it613-nullsnap', '613NUL', '2026-07-15')");
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it613-nullsnap', '613NUL', '2026-07-15', "
+				+ "'2026-07-15T16:00:00+09:00')");
 
 		explanations.updateFinal("it613-nullsnap", "검수자 정정 문구", actor(member), "10.0.0.4");
 
