@@ -95,8 +95,7 @@ locals {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION = var.minute_trigger_schema_version
         # source 는 세션 source_group 과 **같은 변수에서 파생**한다 — 갈리면 워커가 다른
         # session_id 를 유도해 기동 거부로 레인이 통째로 선다. 롤백(kis↔toss)은 이 변수
-        # 하나로 끝난다 — 자격증명을 두 벤더 쌍 다 주입해 두는 이유다(config 는 선택된
-        # source 의 쌍만 검증한다).
+        # 하나로 끝난다(apply 가 아래 시크릿 쌍도 함께 전환한다).
         # ⚠️ 전환은 **세션 사이에만**(다음 세션부터). 장중에 바꾸면 ①기존 세션이 ACTIVE
         # 로 고립되고(EOD stop 은 새 source 세션만 지목) ②두 세션이 source 무관 canonical
         # key 를 다퉈 ArtifactImmutabilityError 다(states.py 키 설계 경고). 장중 불가피하면
@@ -106,13 +105,19 @@ locals {
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
       })
-      secrets = {
-        DATA_PIPELINE_DB__PASSWORD                       = "${var.db_password_secret_arn}:password::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY       = "${aws_secretsmanager_secret.kis.arn}:app_key::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET    = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
-      }
+      # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
+      # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
+      # 그릇만 있는 toss)에서 ResourceInitializationError 로 워커가 아예 못 뜬다.
+      secrets = merge(
+        { DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::" },
+        var.minute_session_source_group == "toss" ? {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
+          } : {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+        }
+      )
     }
     relay = {
       command = ["relay"]
