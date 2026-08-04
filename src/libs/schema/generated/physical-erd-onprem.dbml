@@ -89,6 +89,7 @@ Table "publication" {
   "published_summary" text
   "unpublish_reason" text
   "unpublished_by" bigint
+  "explanation_as_of" timestamptz [not null]
 }
 
 Table "received_bundle" {

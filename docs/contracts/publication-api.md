@@ -42,7 +42,8 @@ X-Channel: MTS | HTS | INTERNAL
     { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
   ],
   "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
-  "published_at": "2026-07-15T16:40:00+09:00"
+  "published_at": "2026-07-15T16:40:00+09:00",
+  "explanation_as_of": "2026-07-15T16:00:00+09:00"
 }
 ```
 
