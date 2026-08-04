@@ -116,8 +116,9 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		seedItem("it607-unpub", "607UNP", "카카오", "UNPUBLISHED", "LOW", "모델 원본", "[]",
 				OffsetDateTime.now());
 		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
-				+ "published_summary, status, unpublished_at) VALUES ('it607-unpub', '607UNP', "
-				+ "'2026-07-15', '중단 전 게시 문구', 'UNPUBLISHED', now())");
+				+ "explanation_as_of, published_summary, status, unpublished_at) "
+				+ "VALUES ('it607-unpub', '607UNP', '2026-07-15', "
+				+ "'2026-07-15T16:00:00+09:00', '중단 전 게시 문구', 'UNPUBLISHED', now())");
 
 		// WHY: 제공 중단돼 publication.status 가 PUBLISHED 가 아니어도 마지막 노출 문구를
 		// final 로 보존해야 한다 — PUBLISHED 로만 좁히면 잃는다(기존 mock stop 도 finalText 유지).
@@ -130,10 +131,12 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 				OffsetDateTime.now());
 		// 재게시 이력: 구본(작은 publication_id, UNPUBLISHED) → 신본(큰 id, PUBLISHED).
 		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
-				+ "published_summary, status, unpublished_at) VALUES ('it607-relast', '607RLP', "
-				+ "'2026-07-15', '구 게시 문구', 'UNPUBLISHED', now())");
+				+ "explanation_as_of, published_summary, status, unpublished_at) "
+				+ "VALUES ('it607-relast', '607RLP', '2026-07-15', "
+				+ "'2026-07-15T14:00:00+09:00', '구 게시 문구', 'UNPUBLISHED', now())");
 		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
-				+ "published_summary) VALUES ('it607-relast', '607RLP', '2026-07-15', '신 게시 문구')");
+				+ "explanation_as_of, published_summary) VALUES ('it607-relast', '607RLP', "
+				+ "'2026-07-15', '2026-07-15T16:00:00+09:00', '신 게시 문구')");
 
 		// WHY: 항목당 최신 게시본(publication_id 최대)이어야 한다 — 아니면 구본이 노출된다.
 		assertThat(find("it607-relast").finalText()).isEqualTo("신 게시 문구");
@@ -204,7 +207,8 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		seedItem("it607-pub", "607PUB", "삼성전자", "APPROVED", "LOW", "모델 원본 문구", "[]",
 				OffsetDateTime.now());
 		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
-				+ "published_summary) VALUES ('it607-pub', '607PUB', '2026-07-15', '검수 편집 문구')");
+				+ "explanation_as_of, published_summary) VALUES ('it607-pub', '607PUB', "
+				+ "'2026-07-15', '2026-07-15T16:00:00+09:00', '검수 편집 문구')");
 
 		Explanation it = find("it607-pub");
 		assertThat(it.original()).isEqualTo("모델 원본 문구");    // original 은 summary 그대로

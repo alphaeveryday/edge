@@ -14,6 +14,8 @@ import org.springframework.data.domain.Limit;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 
@@ -122,9 +124,12 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 		// 게시·기존 행)은 analysis_item 원문 폴백이라 구행 호환이 유지된다.
 		seedAnalysisItem("a-edit", "069500", "KODEX 200", LocalDate.of(2026, 7, 15), "APPROVED", null);
 		jdbc.update("""
-				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, published_summary)
-				VALUES (?, ?, ?, ?)
-				""", "a-edit", "069500", LocalDate.of(2026, 7, 15), "수정된 노출 문구");
+				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, explanation_as_of,
+				                         published_summary)
+				VALUES (?, ?, ?, ?, ?)
+				""", "a-edit", "069500", LocalDate.of(2026, 7, 15),
+				LocalDate.of(2026, 7, 15).atTime(16, 0).atOffset(ZoneOffset.ofHours(9)),
+				"수정된 노출 문구");
 		assertThat(explanationStore.findPublished("069500", LocalDate.of(2026, 7, 15)))
 				.hasValueSatisfying(e -> assertThat(e.summary()).isEqualTo("수정된 노출 문구"));
 
@@ -172,6 +177,68 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 		assertThat(row.get("occurred_at")).isNotNull();  // DB DEFAULT now()
 	}
 
+	/**
+	 * 다스냅샷 공존(ADR-0045 결정 3, ALPHA-743) — 같은 거래일의 유효 스냅샷이 여럿이면
+	 * explanation_as_of 최신이 서빙된다("유효 최신 승리"). 정렬이 published_at 으로
+	 * 회귀하면(게시 순서 ≠ 기준시각 순서 시드) 이 단언이 깨진다.
+	 */
+	@Test
+	void 같은_거래일_다스냅샷은_as_of_최신이_서빙된다() {
+		LocalDate d = LocalDate.of(2026, 7, 15);
+		OffsetDateTime early = d.atTime(10, 30).atOffset(ZoneOffset.ofHours(9));
+		OffsetDateTime late = d.atTime(14, 0).atOffset(ZoneOffset.ofHours(9));
+		// ticker 는 store 캐시(TTL 3s) 키 충돌을 피해 이 테스트 전용으로 쓴다.
+		seedAnalysisItem("a-s1", "069510", "KODEX 200", d, "AUTO_PUBLISHED", null);
+		seedAnalysisItem("a-s2", "069510", "KODEX 200", d, "AUTO_PUBLISHED", null);
+		// 기준시각이 늦은 스냅샷(a-s2)을 먼저 게시 — published_at 순서와 as_of 순서를 어긋내
+		// 정렬 축이 실제로 as_of 인지 판별한다.
+		long pubLate = seedPublication("a-s2", "069510", d, "PUBLISHED", late);
+		seedPublication("a-s1", "069510", d, "PUBLISHED", early);
+
+		Optional<Publication> found = publications.findLatestPublished("069510", Limit.of(1));
+
+		assertThat(found).isPresent();
+		assertThat(found.get().getPublicationId()).isEqualTo(pubLate);
+		assertThat(found.get().getExplanationAsOf()).isEqualTo(late);
+	}
+
+	/**
+	 * 최신 스냅샷 무효화 시 직전 같은날 스냅샷이 자동 재노출된다 — 별도 fallback 로직
+	 * 없이 "유효 최신 승리" 정렬(WHERE 게이트 + ORDER BY)만으로 성립한다(ADR-0045 결정 3).
+	 */
+	@Test
+	void 최신_스냅샷_무효화_시_직전_스냅샷으로_fallback_한다() {
+		LocalDate d = LocalDate.of(2026, 7, 15);
+		OffsetDateTime early = d.atTime(10, 30).atOffset(ZoneOffset.ofHours(9));
+		OffsetDateTime late = d.atTime(14, 0).atOffset(ZoneOffset.ofHours(9));
+		seedAnalysisItem("a-f1", "069520", "KODEX 200", d, "AUTO_PUBLISHED", null);
+		seedAnalysisItem("a-f2", "069520", "KODEX 200", d, "AUTO_PUBLISHED", null);
+		long pubEarly = seedPublication("a-f1", "069520", d, "PUBLISHED", early);
+		long pubLate = seedPublication("a-f2", "069520", d, "PUBLISHED", late);
+
+		jdbc.update("UPDATE publication SET status = 'INVALIDATED', unpublished_at = now()"
+				+ " WHERE publication_id = ?", pubLate);
+
+		Optional<Publication> found = publications.findLatestPublished("069520", Limit.of(1));
+		assertThat(found).isPresent();
+		assertThat(found.get().getPublicationId()).isEqualTo(pubEarly);
+		assertThat(found.get().getExplanationAsOf()).isEqualTo(early);
+	}
+
+	/** 응답에 스냅샷 기준시각이 실린다 — 재노출분의 기준 시점을 화면이 알아야 한다(후속 ② 노출). */
+	@Test
+	void ExplanationStore_는_explanation_as_of_를_응답에_싣는다() {
+		LocalDate d = LocalDate.of(2026, 7, 15);
+		OffsetDateTime asOf = d.atTime(16, 0).atOffset(ZoneOffset.ofHours(9));
+		seedAnalysisItem("a-as", "069530", "KODEX 200", d, "AUTO_PUBLISHED", null);
+		seedPublication("a-as", "069530", d, "PUBLISHED", asOf);
+
+		var explanation = explanationStore.findPublished("069530", null);
+
+		assertThat(explanation).isPresent();
+		assertThat(explanation.get().explanationAsOf()).isEqualTo(asOf);
+	}
+
 	private void seedAnalysisItem(String id, String ticker, String name, LocalDate tradeDate,
 			String status, String evidencesJson) {
 		jdbc.update("""
@@ -182,11 +249,19 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 	}
 
 	private long seedPublication(String analysisItemId, String ticker, LocalDate tradeDate, String status) {
+		// as_of 기본값 = 거래일 16:00 KST — grain 축(NOT NULL)이라 항상 채운다(ALPHA-743).
+		return seedPublication(analysisItemId, ticker, tradeDate, status,
+				tradeDate.atTime(16, 0).atOffset(ZoneOffset.ofHours(9)));
+	}
+
+	private long seedPublication(String analysisItemId, String ticker, LocalDate tradeDate,
+			String status, OffsetDateTime asOf) {
 		// UNPUBLISHED 는 unpublished_at 이 있어야 한다(ck_publication_unpublished_at_presence).
 		return jdbc.queryForObject("""
-				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, status, unpublished_at)
-				VALUES (?, ?, ?, ?, CASE WHEN ? = 'UNPUBLISHED' THEN now() ELSE NULL END)
+				INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, explanation_as_of,
+				                         status, unpublished_at)
+				VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 'UNPUBLISHED' THEN now() ELSE NULL END)
 				RETURNING publication_id
-				""", Long.class, analysisItemId, ticker, tradeDate, status, status);
+				""", Long.class, analysisItemId, ticker, tradeDate, asOf, status, status);
 	}
 }

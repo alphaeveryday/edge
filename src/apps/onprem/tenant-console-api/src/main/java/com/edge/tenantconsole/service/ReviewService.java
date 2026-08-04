@@ -210,8 +210,9 @@ public class ReviewService {
 		// 게시 문구 스냅샷 — 수정 승인은 편집 요약, 일반 승인은 원문(published_summary 규약).
 		String publishedSummary = editedSummary != null ? editedSummary : item.summary();
 		if (publicationRepository.publish(explanationResultId, item.etfTicker(), item.tradeDate(),
-				publishedSummary) == 0) {
-			// grain 선점 — 전이도 함께 롤백된다(같은 트랜잭션). 검수자는 기존 게시를 내린 뒤 재시도.
+				item.explanationAsOf(), publishedSummary) == 0) {
+			// 같은 스냅샷 이중 게시 — 전이도 함께 롤백된다(같은 트랜잭션). 다스냅샷 공존
+			// (ALPHA-743)이라 다른 발화의 게시가 승인을 막지 않는다.
 			throw new GeneralException(ConsoleErrorStatus.GRAIN_OCCUPIED);
 		}
 		// edited_headline 은 받지 않는다(서빙 노출 경로 없음 — ReviewEditedApproveRequest 주석).

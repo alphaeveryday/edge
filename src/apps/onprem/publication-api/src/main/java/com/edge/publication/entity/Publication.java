@@ -36,6 +36,9 @@ public class Publication {
 
 	private OffsetDateTime publishedAt;
 
+	// 스냅샷 기준시각 — 표시 규칙 "유효 최신 승리"의 정렬 축(ADR-0045 결정 3, ALPHA-743).
+	private OffsetDateTime explanationAsOf;
+
 	// FK analysis_item_id → analysis_item.explanation_result_id(대상 PK 라 referencedColumnName 생략).
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "analysis_item_id")
@@ -66,6 +69,10 @@ public class Publication {
 
 	public OffsetDateTime getPublishedAt() {
 		return publishedAt;
+	}
+
+	public OffsetDateTime getExplanationAsOf() {
+		return explanationAsOf;
 	}
 
 	public AnalysisItem getAnalysisItem() {

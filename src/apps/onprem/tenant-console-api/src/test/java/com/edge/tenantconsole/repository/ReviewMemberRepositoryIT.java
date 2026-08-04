@@ -8,6 +8,7 @@ import org.springframework.data.domain.Limit;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,13 +50,22 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 				.satisfies(e -> assertThat(e.getStatus()).isEqualTo("APPROVED"));
 	}
 
+	/**
+	 * 다스냅샷 공존(ADR-0045 결정 3, ALPHA-743) — 같은 스냅샷(동일 as_of)의 이중 게시만
+	 * ON CONFLICT 가 막고, 다른 스냅샷은 나란히 게시된다(승인이 grain 에 막히지 않는다).
+	 */
 	@Test
-	void publish_는_grain_경합에서_한_번만_성공한다() {
+	void publish_는_같은_스냅샷만_경합하고_다른_스냅샷은_공존한다() {
 		seedItem("er-pub", "005930", "APPROVED");
+		seedItem("er-pub2", "005930", "APPROVED");
 		LocalDate tradeDate = LocalDate.of(2026, 7, 15);
-		assertThat(publications.publish("er-pub", "005930", tradeDate, "게시 문구")).isEqualTo(1);
-		// 같은 (ticker, trade_date) PUBLISHED grain 선점 — ON CONFLICT DO NOTHING → 0행.
-		assertThat(publications.publish("er-pub", "005930", tradeDate, "게시 문구")).isZero();
+		OffsetDateTime asOf1 = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		OffsetDateTime asOf2 = OffsetDateTime.parse("2026-07-15T18:00:00+09:00");
+		assertThat(publications.publish("er-pub", "005930", tradeDate, asOf1, "게시 문구")).isEqualTo(1);
+		// 같은 (ticker, trade_date, as_of) — ON CONFLICT DO NOTHING → 0행(이중 게시 방지).
+		assertThat(publications.publish("er-pub", "005930", tradeDate, asOf1, "게시 문구")).isZero();
+		// 다른 as_of 스냅샷 — 공존 게시.
+		assertThat(publications.publish("er-pub2", "005930", tradeDate, asOf2, "게시 문구")).isEqualTo(1);
 	}
 
 	@Test

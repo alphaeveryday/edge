@@ -34,6 +34,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +84,7 @@ class ConsoleAuthFilterTest {
 	private static final class StubPublications implements PublicationRepository {
 		@Override
 		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate,
-				String publishedSummary) {
+				OffsetDateTime explanationAsOf, String publishedSummary) {
 			return 1;
 		}
 
