@@ -405,6 +405,7 @@
       renderChart();
       return;
     }
+    renderChart(); // 기간 버튼의 활성 표시를 즉시 갱신 — 데이터 도착 전에도 방금 누른 선택이 보이게
     fetchChart(interval);
   }
 
