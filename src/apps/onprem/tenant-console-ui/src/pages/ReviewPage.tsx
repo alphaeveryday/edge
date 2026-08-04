@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon, PageSkeleton, StatusBadge } from 'ui-kit';
+import { Icon, PageSkeleton, Select, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
 import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
 import type { ConfidenceLevel } from '../domains/explanations';
@@ -44,19 +44,16 @@ export function ReviewPage() {
             onChange={(e) => setQ(e.target.value)}
           />
         </label>
-        <select
-          className="select"
+        <Select
+          aria-label="검수 사유 필터"
           value={fReason}
-          onChange={(e) => setFReason(e.target.value)}
-        >
-          <option value="ALL">전체 사유</option>
-          {(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => (
-            <option key={r} value={r}>
-              {REASON_LABEL[r]}
-            </option>
-          ))}
-          <option value={AUTO_PUBLISH_CRITERIA}>{reasonLabel(AUTO_PUBLISH_CRITERIA)}</option>
-        </select>
+          onChange={setFReason}
+          options={[
+            { value: 'ALL', label: '전체 사유' },
+            ...(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => ({ value: r, label: REASON_LABEL[r] })),
+            { value: AUTO_PUBLISH_CRITERIA, label: reasonLabel(AUTO_PUBLISH_CRITERIA) },
+          ]}
+        />
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
           대기 {filtered.length}건

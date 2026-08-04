@@ -1,11 +1,15 @@
 import { useState } from 'react';
-import { Icon, Modal, PageSkeleton, StatusBadge, toast } from 'ui-kit';
+import { Icon, Modal, PageSkeleton, Select, StatusBadge, toast } from 'ui-kit';
 import { apiMessage } from '../api/client';
 import { useSession } from '../domains/session/hooks';
 import type { Member, MemberRole } from '../domains/users';
 import { ROLE_LABEL } from '../domains/users';
 import { useChangeRole, useDeactivateMember, useMembers, useRegisterMember } from '../domains/users/hooks';
 import { LoadError } from './_shared/cells';
+
+// 역할 셀렉트 옵션 — 표시 순서 고정(권한 높은 순), 라벨은 ROLE_LABEL SSOT.
+const ROLE_OPTIONS: MemberRole[] = ['TENANT_ADMIN', 'COMPLIANCE_REVIEWER', 'OPERATOR', 'READ_ONLY'];
+const roleOptions = ROLE_OPTIONS.map((r) => ({ value: r, label: ROLE_LABEL[r] }));
 
 export function UsersPage() {
   const { data: session } = useSession();
@@ -207,12 +211,13 @@ export function UsersPage() {
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>역할</span>
-            <select className="select w-full" value={role} onChange={(e) => setRole(e.target.value as MemberRole)}>
-              <option value="TENANT_ADMIN">관리자</option>
-              <option value="COMPLIANCE_REVIEWER">검수자</option>
-              <option value="OPERATOR">운영자</option>
-              <option value="READ_ONLY">읽기 전용</option>
-            </select>
+            <Select
+              aria-label="역할"
+              block
+              value={role}
+              onChange={(v) => setRole(v as MemberRole)}
+              options={roleOptions}
+            />
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>초기 비밀번호 (선택)</span>
@@ -255,16 +260,13 @@ export function UsersPage() {
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>새 역할</span>
-            <select
-              className="select w-full"
+            <Select
+              aria-label="새 역할"
+              block
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as MemberRole)}
-            >
-              <option value="TENANT_ADMIN">관리자</option>
-              <option value="COMPLIANCE_REVIEWER">검수자</option>
-              <option value="OPERATOR">운영자</option>
-              <option value="READ_ONLY">읽기 전용</option>
-            </select>
+              onChange={(v) => setNewRole(v as MemberRole)}
+              options={roleOptions}
+            />
           </div>
           <div style={{ fontSize: 11, color: 'var(--fg-4)', lineHeight: 1.6 }}>
             역할 변경은 전건 감사 로그에 기록되며, 대상 사용자에게는 다음 요청부터 즉시 적용됩니다.
