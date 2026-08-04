@@ -291,6 +291,53 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
+	void 노출_head_는_as_of_보다_거래일이_우선한다() {
+		seedItem("it607-day-old", "607DAY", "효성", "AUTO_PUBLISHED", "LOW", "전일 늦은 스냅샷",
+				"[]", OffsetDateTime.now(), OffsetDateTime.parse("2026-07-14T16:00:00+09:00"));
+		seedItem("it607-day-new", "607DAY", "효성", "AUTO_PUBLISHED", "LOW", "당일 이른 스냅샷",
+				"[]", OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T10:00:00+09:00"));
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-day-old', '607DAY', '2026-07-14', "
+				+ "'2026-07-14T16:00:00+09:00')");
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-day-new', '607DAY', '2026-07-15', "
+				+ "'2026-07-15T10:00:00+09:00')");
+
+		// WHY: 서빙 정렬(SSOT)은 trade_date → as_of 순이다 — as_of 우선으로 전사가 어긋나면
+		// 전일의 늦은 스냅샷(16:00)이 당일 판(10:00)을 제치고 head 로 표시된다.
+		assertThat(find("it607-day-new").serving()).isTrue();
+		assertThat(find("it607-day-old").serving()).isFalse();
+	}
+
+	@Test
+	void head_판정은_게시본_상태와_항목_상태_게이트를_각각_요구한다() {
+		OffsetDateTime head = OffsetDateTime.parse("2026-07-15T12:00:00+09:00");
+		seedItem("it607-gate-head", "607GAT", "한전", "AUTO_PUBLISHED", "LOW", "정상 head", "[]",
+				OffsetDateTime.now(), head);
+		seedItem("it607-gate-pub", "607GAT", "한전", "AUTO_PUBLISHED", "LOW", "내려간 게시본", "[]",
+				OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T16:00:00+09:00"));
+		seedItem("it607-gate-item", "607GAT", "한전", "REJECTED", "LOW", "비노출 항목 상태", "[]",
+				OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T14:00:00+09:00"));
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-gate-head', '607GAT', '2026-07-15', ?)", head);
+		// p.status 게이트 반례 — 게시본이 내려갔으면(UNPUBLISHED) as_of 최신이어도 head 가 아니다.
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of, status, unpublished_at) VALUES ('it607-gate-pub', '607GAT', "
+				+ "'2026-07-15', '2026-07-15T16:00:00+09:00', 'UNPUBLISHED', now())");
+		// a.status 게이트 반례 — 게시본이 PUBLISHED 여도 항목이 노출 상태가 아니면 head 가 아니다.
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-gate-item', '607GAT', '2026-07-15', "
+				+ "'2026-07-15T14:00:00+09:00')");
+
+		// WHY: 서빙 술어(SSOT)는 p.status='PUBLISHED' × a.status IN(노출 상태) 두 게이트다.
+		// 무효화 실플로우 픽스처는 둘을 함께 바꿔 상관되므로, 한 게이트가 빠진 오전사를 여기서
+		// 각각 독립으로 잡는다(도달 희귀 상태여도 전사 충실성이 계약이다).
+		assertThat(find("it607-gate-head").serving()).isTrue();
+		assertThat(find("it607-gate-pub").serving()).isFalse();
+		assertThat(find("it607-gate-item").serving()).isFalse();
+	}
+
+	@Test
 	void 반입_상태는_오늘_반입_수와_최근_시각을_집계한다() {
 		seedItem("it607-feed", "607FED", "현대차", "AUTO_PUBLISHED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
