@@ -10,7 +10,7 @@ export function LoadError() {
   );
 }
 import type { Explanation } from '../../domains/explanations';
-import { RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
+import { CONFIDENCE_LABEL, CONFIDENCE_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
 
 export function StockCell({ name, code }: { name: string; code: string }) {
   return (
@@ -32,12 +32,12 @@ export function StatusCell({ it }: { it: Explanation }) {
   );
 }
 
-export function RiskCell({ it }: { it: Explanation }) {
+export function ConfidenceCell({ it }: { it: Explanation }) {
   return (
     <td>
-      {it.risk ? (
-        <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-          {RISK_LABEL[it.risk]}
+      {it.confidence ? (
+        <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
+          {CONFIDENCE_LABEL[it.confidence]}
         </StatusBadge>
       ) : (
         <span style={{ color: 'var(--fg-4)' }}>—</span>

@@ -38,7 +38,7 @@ class ExplanationResponseTest {
 		assertThat(json.get("name").asString()).isEqualTo("삼성전자");
 		assertThat(json.get("code").asString()).isEqualTo("005930");
 		assertThat(json.get("status").asString()).isEqualTo("REVIEW_REQUIRED");
-		assertThat(json.get("risk").asString()).isEqualTo("HIGH");
+		assertThat(json.get("confidence").asString()).isEqualTo("HIGH");
 		assertThat(json.get("reviewReason").asString()).isEqualTo("ASSERTIVE");
 		// `final` 은 예약어 우회(finalText)로 새면 안 된다
 		assertThat(json.get("final").asString()).isEqualTo("최종 문구");

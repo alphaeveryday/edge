@@ -22,7 +22,7 @@ public record ExplanationResponse(
 		String name,
 		String code,
 		String status,
-		String risk,
+		String confidence,
 		String reviewReason,
 		String receivedRelative,
 		String receivedAt,
@@ -52,7 +52,7 @@ public record ExplanationResponse(
 	}
 
 	public static ExplanationResponse from(Explanation it) {
-		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.risk(),
+		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.confidence(),
 				it.reviewReason(), TimeText.relative(it.receivedAt()), TimeText.absolute(it.receivedAt()),
 				it.evidence().stream().map(EvidenceResponse::from).toList(),
 				it.original(), it.finalText());
