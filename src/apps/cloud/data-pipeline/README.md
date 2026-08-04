@@ -1057,7 +1057,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
-DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-open-v1 \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2 \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
