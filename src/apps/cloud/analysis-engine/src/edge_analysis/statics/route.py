@@ -82,7 +82,12 @@ def route_etf(roll, premium=None) -> Route:
                      tuple(parts))
     if kind == "고유":
         floor = MIN_NAME_SHARE * abs(roll.idio)
-        names = tuple(n.ticker for n in roll.names if abs(n.pct) >= floor)[:TOP_NAMES]
+        # `Name.contribution` 이 이미 그 종목의 ETF 기여다(비중 × 수익). `pct` 는
+        # 없는 이름이었는데 셀프체크·테스트 스텁이 둘 다 그것을 갖고 있어 통과했고,
+        # 라이브에서만 죽었다(30일 배치 3일 AttributeError - 그 날들이 바로 고유
+        # 라우팅이 발동한 날이다). **스텁이 실물과 갈리면 검사가 아니다.**
+        names = tuple(n.ticker for n in roll.names
+                      if abs(n.contribution) >= floor)[:TOP_NAMES]
         return Route("고유", share, "고유", names,
                      f"고유가 {share:.0%} - 종목 이야기다. |기여| 상위 "
                      f"{len(names)}종목에 개별 시행을 돌린다",
@@ -114,7 +119,11 @@ def _selfcheck() -> None:
 
     class N:
         def __init__(self, t, p):
-            self.ticker, self.pct = t, p
+            # **실물과 같은 필드**여야 검사다
+            # (layers.Name: ticker·label·weight·ret·idio·contribution)
+            self.ticker, self.label = t, ""
+            self.weight, self.ret = 1.0, p
+            self.idio, self.contribution = p, p
 
     class R:
         def __init__(self, layers, idio, names=(), etf="TEST", etf_name="T"):

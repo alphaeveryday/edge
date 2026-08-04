@@ -940,9 +940,10 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
         def __init__(self, k, n, c):
             self.kind, self.name, self.contribution = k, n, c
 
-    class N:
+    class N:   # layers.Name 과 같은 필드 - 스텁 표류가 라이브를 죽였다
         def __init__(self, t, p):
-            self.ticker, self.pct, self.label, self.weight = t, p, "", 0.1
+            self.ticker, self.label, self.weight = t, "", 0.1
+            self.ret, self.idio, self.contribution = p, p, p
 
     class R:
         def __init__(self, layers, idio, names=(), etf="TEST"):
@@ -993,3 +994,39 @@ def test_market_trial_refuses_when_treated_days_are_too_few():
     assert "-2.190%p" in line
     assert "겹침" in line, "다른 시장 사건 겹침은 처치 배타성 위반이라 숨기면 안 된다"
     assert "**유의**" in say_screen([ok])
+
+
+def test_route_stub_fields_match_the_real_layer_dataclasses():
+    """스텁이 실물과 갈리면 **검사가 아니다.**
+
+    `route.py` 셀프체크의 종목 스텁이 `pct` 를 갖고 있었는데 `layers.Name` 에는 없다
+    (ticker·label·weight·ret). 그래서 테스트는 통과하고 라이브만 죽었다 - 30일 배치의
+    3일이 `AttributeError: 'Name' object has no attribute 'pct'` 로 날아갔고, 그 날들이
+    바로 고유 라우팅이 발동한(=통계 근거가 나올 수 있던) 날이다.
+    """
+    import dataclasses
+
+    from edge_analysis.statics.layers import Layer, Name
+
+    assert {f.name for f in dataclasses.fields(Name)} == {
+        "ticker", "label", "weight", "ret", "idio", "contribution"}, \
+        "Name 필드가 바뀌면 route 스텁도 함께 바꿔야 한다"
+    assert {"kind", "name", "contribution"} <= {
+        f.name for f in dataclasses.fields(Layer)}
+
+    # 라우팅이 실물 Name 으로 돌아야 한다 - 기여는 비중 × 수익
+    from edge_analysis.statics.route import route_etf
+
+    class R:
+        def __init__(self, layers, idio, names):
+            self.layers, self.idio, self.names = layers, idio, names
+            self.etf, self.etf_name = "TEST", "T"
+
+    big = Name(ticker="000660", label="하이닉스", weight=0.30, ret=0.10,
+               idio=0.03, contribution=0.03)
+    small = Name(ticker="005930", label="삼성전자", weight=0.01, ret=0.001,
+                 idio=0.00001, contribution=0.00001)
+    r = route_etf(R((Layer(code="K", name="시장", kind="시장", beta=1.0, lo=0.9, hi=1.1,
+                           ret=0.001, contribution=0.001, n=60, overlap=0.0),),
+                    0.05, (big, small)))
+    assert r.kind == "고유" and r.targets == ("000660",), "작은 기여는 대상이 아니다"
