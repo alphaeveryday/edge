@@ -43,7 +43,8 @@ export interface TaskFact {
   dataset?: string | null;
   required: boolean;
   plan_status?: string;
-  task_outcome: string;
+  /** SKIPPED 작업은 null — plan 축(plan_status)과 outcome 축은 다른 축이라 합치지 않는다 */
+  task_outcome: string | null;
   data_status?: string | null;
   records_out?: number | null;
   failed_records?: number | null;
@@ -56,6 +57,10 @@ export interface TaskFact {
   /** 재시도 정책 상한 — null 이면 정책 미선언(계측 없음) */
   max_retries?: number | null;
   retry_mock?: boolean;
+  /* 시도 축(ops_task_attempt) — 이 스냅샷은 담지 않았다. 필드 부재는 "계측 없음"이지 0 이 아니다. */
+  started_at?: string | null;
+  finished_at?: string | null;
+  exit_code?: number | null;
   last_ok?: string | null;
   ok_rate?: string | null;
   [extra: string]: unknown;

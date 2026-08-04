@@ -165,3 +165,35 @@
 .ops-etf-published {
   border-color: rgba(47, 125, 91, 0.3);
 }
+
+/* 마스터–상세: 선택된 런 행. 색만으로 말하지 않는다(행 안의 ▶ 표식·"선택됨" 칩과 함께) */
+.ops-run-selected > td {
+  background: var(--accent-tint);
+}
+.ops-run-selected > td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* 표 안의 선택·펼침 트리거 — 링크처럼 보이되 진짜 button 이라 Tab·Enter·Space 가 동작한다 */
+.ops-run-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--fg-1);
+  cursor: pointer;
+  text-align: left;
+}
+.ops-run-btn:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

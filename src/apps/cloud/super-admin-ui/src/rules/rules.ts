@@ -140,11 +140,13 @@ export const RULES: Rule[] = [
     source: 'DB_LEDGER',
     run: (f) =>
       f.tasks
-        .filter((t) => t.required && t.task_outcome !== 'FULFILLED')
+        /* plan 축을 빼면 계획에서 제외된(SKIPPED) 작업이 '미귀결'로 둔갑한다 —
+         * 안 한 것이 아니라 할 일이 아니었다. 원장이 관대해지는 게 아니라 엄해지는 쪽 오류다. */
+        .filter((t) => t.required && t.plan_status !== 'SKIPPED' && t.task_outcome !== 'FULFILLED')
         .map((t) => ({
           target: t.task_key,
           title: t.task_key,
-          metric: t.task_outcome,
+          metric: t.task_outcome ?? '판정 없음',
           unit: `${t.stage} · ${t.pipeline_type}`,
           why: t.task_outcome === 'FAILED' ? '실행됐으나 실패' : '상류 실패로 미실행(PENDING)',
           cause: t.task_outcome !== 'FAILED',

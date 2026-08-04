@@ -107,6 +107,17 @@ test('R05 필수 작업 미귀결 — required 미귀결만, 비필수·FULFILLE
   assert.equal(v[1].cause, true);
 });
 
+test('R05 경계 — 계획에서 제외된(SKIPPED) 필수 작업은 미귀결이 아니다', () => {
+  const f = emptyFacts();
+  /* plan 축과 outcome 축은 다른 축이다. SKIPPED 는 outcome 이 null 이라 "FULFILLED 가 아니다"에
+   * 걸리지만, 안 한 게 아니라 할 일이 아니었다 — 규칙 명세의 "∧ DUE" 가 그 뜻이다. */
+  f.tasks = [
+    task({ task_key: 'skipped', plan_status: 'SKIPPED', task_outcome: null }),
+    task({ task_key: 'due-pending', plan_status: 'DUE', task_outcome: 'PENDING' }),
+  ];
+  assert.deepEqual(hits(f, 'R05').map((v) => v.target), ['due-pending']);
+});
+
 test('R06 데이터 부분 유실 — INCOMPLETE+failed_records>0 만, 유실 0이면 아님', () => {
   const f = emptyFacts();
   f.tasks = [
