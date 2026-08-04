@@ -362,6 +362,13 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     """
     d0 = dt.date.fromisoformat(day)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
+    # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다. `kinds` 에 'stock' 을 넣으면
+    # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
+    # '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다 - 후보 풀은 건드리지 않는다.
+    if etf not in ser:
+        tgt = _series(lake, day, ("stock",), clock=clock)
+        if etf in tgt:
+            ser = {**ser, etf: tgt[etf]}
     if etf not in ser or d0 not in ser[etf][1]:
         return None
     tmap = ser[etf][1]

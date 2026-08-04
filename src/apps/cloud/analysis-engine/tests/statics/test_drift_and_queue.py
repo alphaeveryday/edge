@@ -323,3 +323,56 @@ def test_multi_signed_material_does_not_constrain_the_claim_sign():
         [{"text": "오후에 크게 올랐어요", "basis": "statistical", "refs": ["s1"],
           "sign": 1}], ctx, {"s1": mat}, [], "c", "d", "")
     assert "올랐어요" in txt, "하루가 올랐으면 +1 이 맞다 - 창 하나의 부호로 막지 않는다"
+
+
+def test_interval_clamps_instead_of_rejecting_overnight():
+    """장 밖 요구는 **거부가 아니라 절단**이다 - 밤사이는 `갭` 창이 항상 답한다.
+
+    처음 구현은 08:00~10:00 을 예외로 되돌려보냈다. 그건 거짓이었다: 전일 종가→시가는
+    5분봉 첫 봉 시가와 전 거래일 마지막 봉 종가로 **관측 가능**하고, 갭 창은 언제나
+    따로 나온다. 질문을 되돌려보내는 대신 자르고 사유를 적는다.
+    """
+    from edge_analysis.statics.interval import IntervalError, clamp
+
+    a, b, why = clamp("08:00", "16:00")
+    assert (a, b) == ("09:00:00", "15:30:00")
+    assert len(why) == 2 and "갭" in why[0]
+
+    a2, b2, why2 = clamp("10:30", "13:00")
+    assert (a2, b2) == ("10:30:00", "13:00:00") and not why2
+
+    for bad in ("13:00", "9시"), ("10:00", "10:00"):
+        try:
+            clamp(*bad)
+        except IntervalError:
+            pass
+        else:
+            raise AssertionError(f"{bad} 를 통과시켰다")
+
+
+def test_partial_coverage_is_never_called_a_whole_day():
+    """미계측 창이 하나라도 있으면 **합은 하루가 아니다**.
+
+    실측: 갭을 일봉에서 읽다가 날짜 커버리지가 달라 통째로 미계측이 났는데, 헤더는
+    '몫의 합이 하루와 같다(회계)' 를 무조건 찍었다 - 코드가 스스로 거짓을 말한 지점이다.
+    """
+    import datetime as dt
+
+    from edge_analysis.statics import interval as iv
+
+    class _Lake:
+        exists = {"rdb": True}
+
+        def taus(self, iid, day):
+            return [(dt.datetime(2026, 7, 27, 10, 3), "e1")]
+
+        def sql(self, q):
+            if "ORDER BY 1 DESC LIMIT 2" in q:      # _gap - 전 거래일이 없다
+                return [("2026-07-27", 100.0, 101.0)]
+            if "SELECT ts, open, close" in q:       # _bars
+                return [(dt.datetime(2026, 7, 27, 10, 0), 100.0, 102.0)]
+            return []
+
+    txt = iv.explain(_Lake(), "T", "i", "2026-07-27", "10:00", "10:30")
+    assert "합(부분)" in txt and "이 합은 하루가 아니다" in txt
+    assert "몫의 합이 하루와 같다" not in txt
