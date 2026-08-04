@@ -184,6 +184,30 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
               "refs": ["s1"]}}]}}"""
 
 
+# 방향 낱말. **반대 방향을 말하면 그 산문은 거짓이다** - 실측(091160 07-27): 하루가
+# +3.03%p 인데 산문이 '국내 반도체 ETF도 따라 내렸어요' 라고 썼다. 밤사이 해외가
+# 내린 것은 사실이라 하락 어휘 자체는 정당하고, 틀린 것은 **주체**다. 그래서 첫 주장이
+# 하루의 방향을 반드시 말하게 강제한다(프롬프트도 그것을 요구하고 있었다).
+UP, DOWN = ("올랐", "상승", "뛰었", "올라"), ("내렸", "하락", "빠졌", "떨어")
+
+
+def _dir_guard(first: str, ctx: dict) -> None:
+    """첫 주장은 **하루의 방향**을 말해야 한다. 밤사이 이야기로 시작하면 주체가 바뀐다."""
+    want = ctx.get("방향") or ""
+    if not want:
+        return
+    if "거의" in want:                       # 무변동은 방향 낱말이 없다
+        return
+    words = UP if "올랐" in want else DOWN
+    if not any(w in first for w in words):
+        opp = DOWN if words is UP else UP
+        hit = [w for w in opp if w in first]
+        raise PlainError(
+            f"첫 주장이 하루 방향({want})을 말하지 않았다"
+            + (f" - 오히려 반대 낱말 {hit} 을 썼다" if hit else "")
+            + f": {first[:44]!r}. 첫 문장은 '오늘 무엇이 어떻게 됐는지' 다")
+
+
 def guard(text: str, ctx: dict) -> str:
     """계약 검사. 위반은 **즉사** - 고쳐 보내지 않는다(고치면 무엇이 계약인지 흐려진다)."""
     if not text or not text.strip():
@@ -283,6 +307,7 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
     bundles: list = []
     whole = " ".join(str(c.get("text", "")) for c in claims if isinstance(c, dict))
     guard(whole, ctx)                       # 숫자·용어·접지·최근시점은 전체에서 본다
+    _dir_guard(str(claims[0].get("text", "")) if isinstance(claims[0], dict) else "", ctx)
     for i, c in enumerate(claims, 1):
         if not isinstance(c, dict) or not str(c.get("text", "")).strip():
             raise PlainError(f"#{i} 주장이 비었다")

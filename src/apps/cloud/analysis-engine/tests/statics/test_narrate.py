@@ -555,3 +555,37 @@ def test_recent_window_never_returns_empty_when_windows_exist():
     thin.insert(0, S(W("gap", "2026-07-27 09:00:00"), 0.05))
     assert recent_window(thin)["when"] == "밤사이"
     assert recent_window([]) == {}, "창이 아예 없으면 빈손이 정직하다"
+
+
+def test_first_claim_must_state_the_day_direction():
+    """**반대 방향을 말하면 그 산문은 거짓이다.**
+
+    실측(091160 · 2026-07-27): 하루가 **+3.03%p 상승**인데 산문이 '국내 반도체 ETF도
+    따라 내렸어요' 라고 썼다. 밤사이 해외가 내린 것은 사실이라 하락 어휘 자체는
+    정당하고 - 틀린 것은 **주체**다. 숫자·용어·접지 가드는 전부 통과했다: 방향을
+    아무도 안 봤다. 첫 주장이 하루 방향을 말하게 강제하면 이 종류가 죽는다.
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import PlainError, _dir_guard, context
+
+    up = context(ticker_name="KODEX 반도체", day_log=0.0303, idio_log=0.013,
+                 route_kind="혼합", market_name="M", recent={"when": "밤사이"},
+                 established=["x"], overnight=["y"], unexplained_top=False)
+    assert up["방향"] == "올랐어요"
+    with pytest.raises(PlainError, match="반대 낱말"):
+        _dir_guard("밤사이 해외 반도체 ETF들이 내렸어요", up)
+    _dir_guard("오늘 뚜렷하게 올랐어요", up)
+
+    down = context(ticker_name="K", day_log=-0.05, idio_log=-0.04, route_kind="시장",
+                   market_name="M", recent={"when": "오후"}, established=[],
+                   overnight=[], unexplained_top=True)
+    with pytest.raises(PlainError):
+        _dir_guard("오후에 크게 올랐어요", down)
+    _dir_guard("오후에 크게 빠졌어요", down)
+
+    # 무변동은 방향 낱말을 요구하지 않는다 - 없는 방향을 말하라고 할 수 없다
+    flat = context(ticker_name="K", day_log=0.0, idio_log=0.0, route_kind="시장",
+                   market_name="M", recent={"when": "오후"}, established=[],
+                   overnight=[], unexplained_top=True)
+    _dir_guard("오후에 거의 움직이지 않았어요", flat)
