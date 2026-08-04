@@ -95,7 +95,7 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 | 클래스 (현재 상태) | 재작성 시점 | 재작성 내용 |
 |---|---|---|
-| (도메인별 mock 스토어 — 전환 완료) | — | tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601)·analyses 쓰기=운영자 작업 원장(ALPHA-602)·session=세션 주체 투영(ALPHA-608). `*MockStore` 전부 제거됨 |
+| (도메인별 mock 스토어 — 전환 완료) | — | tenants=JPA(ALPHA-526)·sources=원장 조회(ALPHA-514)·analyses 읽기=설명 원장 조회(ALPHA-601)·analyses 쓰기=무효화 단독(ALPHA-440·737)·session=세션 주체 투영(ALPHA-608). `*MockStore` 전부 제거됨 |
 | config 부트스트랩 운영자 | ALPHA-474 | Spring Security + 운영자 IdP 연동 |
 
 ## 실행·확인

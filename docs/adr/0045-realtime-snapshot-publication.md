@@ -1,6 +1,6 @@
 # ADR-0045: 실시간 스냅샷 게시 전환 — day-grain 게이트 폐지, 승계와 3축 무효화
 
-- 상태: 제안됨
+- 상태: 승인됨 (2026-08-04 — 제안 2026-08-01)
 - 날짜: 2026-08-01
 - 관련: [ADR-0044](0044-correction-abolition.md)가 발번 정책 소관으로 이연한 결정을 채운다.
   [ADR-0043](0043-dataset-contract-freshness.md)이 후속 계약으로 미룬 장중 timestamp grain과 연결된다.
