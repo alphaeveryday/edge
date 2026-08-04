@@ -114,13 +114,15 @@ def test_all_features_go_in_as_moderators_and_the_real_one_is_found():
     r = run_trial(lake, DAY, etype=ETYPE, moderators=MODS_ALL)
 
     assert r["verdict"] == "계산됨"
-    # SQL 이 실제로 22열을 실었다 - 이게 패널 확장의 증거다
-    assert lake.n_mod(lake.seen[0]) == len(MODS_ALL) == 22
-    assert lake.seen[0].count(", t.m") == 22
+    # SQL 이 **어휘 전량**을 실었다 - 이게 패널 확장의 증거다. 개수를 손으로 박으면
+    # 계열족을 늘릴 때마다 이 테스트가 거짓 경보를 낸다(금리 족 추가에서 실제로 그랬다).
+    from edge_analysis.statics.paneltest import FEATURES
+    assert lake.n_mod(lake.seen[0]) == len(MODS_ALL) == len(FEATURES)
+    assert lake.seen[0].count(", t.m") == len(FEATURES)
 
     m = r["moderation"]
     assert m["verdict"] == "계산됨", m
-    assert m["n"] == 120 and m["j"] == 22
+    assert m["n"] == 120 and m["j"] == len(FEATURES)
     assert m["null_kind"] == "label", "조절 귀무는 라벨 순열이다 - ATT 와 다르다"
     assert TRUE_MOD in m["selected"], m["selected"]
     assert m["p_max"] < 0.05, m["p_max"]

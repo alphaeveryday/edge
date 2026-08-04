@@ -716,12 +716,22 @@ def test_rolling_betas_are_nan_guarded():
     # regr_slope 는 x 분산이 0 이면 NULL 이 아니라 **NaN** 을 낸다(산업 표본 <5 ·
     # fx 결측). NaN 은 pctile 을 조용히 오염시켜 상·하위 분할을 어긋나게 만든다 -
     # 부재는 NULL 로 말해야 판정자가 '못 잰다'로 읽는다. 실측: beta_s 364 → 129.
+    import re
+
     from edge_analysis.statics.paneltest import _base
     sql = _base("2026-06-01")
-    for col in ("beta_m", "beta_s", "fx_beta"):
+    # 열 목록을 **손으로 적으면 새 β 가 조용히 빠진다** - 실측: 금리 민감도를 넣었을 때
+    # 이 테스트는 개수만 틀리고 '가드 없는 β' 자체는 못 잡았다. SQL 에서 뽑는다.
+    cols = re.findall(r"END AS (\w*beta\w*)", sql)
+    assert len(cols) >= 4, f"β 열을 못 찾았다: {cols}"
+    for col in cols:
         blk = sql[:sql.index(f"AS {col}")]
         assert blk.rstrip().endswith("END"), f"{col} 이 isfinite 가드 밖에 있다"
-    assert sql.count("isfinite(regr_slope") == 3
+    # 가드 하나가 regr_slope 를 두 번 쓴다(CASE WHEN isfinite(..) THEN .. END).
+    # 이 항등식이 깨지면 어딘가에 **맨 regr_slope** 가 있다는 뜻이다.
+    # 주석은 뺀다 - 도크주석이 함수 이름을 언급하면 개수가 어긋난다(실제로 그랬다).
+    code = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+    assert code.count("isfinite(regr_slope") * 2 == code.count("regr_slope")
 
 
 def test_missing_condition_is_not_satisfaction():
@@ -1092,3 +1102,53 @@ def test_duckdb_rendering_of_shared_views_has_no_psycopg_params():
 
     pg = _views()
     assert "%(as_of)s" in pg, "Postgres 기본값은 psycopg 스타일이다 (설계)"
+
+
+def test_each_family_transform_owns_a_distinct_column():
+    """계열족×변환 하나가 **열 하나**를 정한다 - 두 족이 한 열을 공유하면 계수가 거짓이다.
+
+    실측 동기: 금리와 환율을 둘 다 `("거시","민감도")` 에 담을 수 없어서 `금리` 족을
+    새로 뗐다. 둘은 뜻이 다르다 - 환율은 이익 경로(수출), 금리는 할인율 경로. 같은
+    슬롯에 두면 "환율 민감도" 라 쓰고 금리를 재는 일이 조용히 일어난다.
+    """
+    from edge_analysis.statics.paneltest import FEATURES
+
+    cols = list(FEATURES.values())
+    dup = {c for c in cols if cols.count(c) > 1}
+    assert not dup, f"두 계열족이 같은 열을 쓴다: {dup}"
+
+
+def test_every_layer_exposure_is_actually_measurable():
+    """층별 허용 노출은 **전부 `FEATURES` 에 있어야** 한다.
+
+    어휘에만 있고 열이 없으면 가설 에이전트가 그 노출을 고르고 검정기가 '못 잰다' 로
+    죽인다 - 어휘와 측정면이 갈리는 그 실패다. 반대도 막는다: 층 목록에 없는 노출을
+    시장 층에 쓰면 "종목 거래량이 시장 전체 수익을 설명한다" 가 관문을 통과한다.
+    """
+    from edge_analysis.statics.paneltest import FEATURES, LAYER_EXPOSURES
+
+    for layer, allowed in LAYER_EXPOSURES.items():
+        if allowed is None:
+            continue
+        missing = [k for k in allowed if k not in FEATURES]
+        assert not missing, f"{layer} 층 노출이 측정면에 없다: {missing}"
+
+
+def test_rate_sensitivity_can_explain_the_market_layer():
+    """금리 민감도는 **시장 층 노출**이어야 한다 - 없으면 할인율 설명이 구조적으로 불가.
+
+    공통 충격(금리)은 하루에 값이 하나라 횡단면 분산이 0 이다. 종목 간 차이를 만드는
+    것은 **민감도**뿐이므로, 그것이 시장 층 노출 목록에 없으면 "금리가 올라서 성장주가
+    빠졌다" 를 어떤 검정으로도 세울 수 없다. 금융 설명 기준이 요구하는 '가격 밖 정박'
+    이 이 자리다: 지수는 가격이라 "시장이 내려서 내렸다" 를 못 넘는다.
+
+    실측(2026-07-27, PBR 5분위 × 금리β 중앙값): -0.0142 · -0.0275 · -0.0595 · -0.1251
+    - 고PBR(성장주)일수록 음수가 커진다. 할인율 경로의 반증 가능한 예측이 성립했다.
+    """
+    from edge_analysis.statics.paneltest import FEATURES, LAYER_EXPOSURES
+    from edge_analysis.statics.vocab import SERIES_FAMILIES, TRANSFORMS
+
+    assert "금리" in SERIES_FAMILIES and "민감도" in TRANSFORMS
+    assert ("금리", "민감도") in FEATURES
+    assert ("금리", "민감도") in LAYER_EXPOSURES["시장"]
+    assert ("금리", "민감도") in LAYER_EXPOSURES["섹터"]

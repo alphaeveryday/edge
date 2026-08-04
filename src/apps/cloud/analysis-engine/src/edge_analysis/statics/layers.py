@@ -163,14 +163,54 @@ def etf_label(lake, etf: str, fallback: str) -> str:
     return str(rows[0][0]) if rows and rows[0][0] else fallback
 
 
-def _series(lake, day: str, kinds: tuple[str, ...]) -> dict[str, tuple]:
+# 장 시각 경계 - 이 밖은 5분봉이 없다. 밤사이는 갭 하나로 뭉쳐지므로 구간이 아니다.
+SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
+
+_CLOCK_SQL = r"""
+WITH k AS (
+    SELECT symbol, any_value(name) AS name FROM layers_daily
+    WHERE kind IN {kinds} GROUP BY symbol
+), b AS (
+    SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, CAST(ts AS DATE) AS d,
+           ln(last(close ORDER BY ts) / first(open ORDER BY ts)) AS lr,
+           sum(volume) AS vol
+    FROM bars_5m
+    WHERE CAST(ts AS DATE) <= DATE '{day}' AND open > 0 AND close > 0
+      AND CAST(ts AS TIME) >= TIME '{t0}' AND CAST(ts AS TIME) < TIME '{t1}'
+    GROUP BY 1, 2
+)
+SELECT b.sym, any_value(k.name), list(b.lr ORDER BY b.d),
+       list(b.d ORDER BY b.d), list(b.vol ORDER BY b.d)
+FROM b JOIN k ON k.symbol = b.sym WHERE b.lr IS NOT NULL GROUP BY b.sym
+"""
+
+
+def _series(lake, day: str, kinds: tuple[str, ...],
+            *, clock: tuple[str, str] | None = None) -> dict[str, tuple]:
     """{symbol: (name, {date: log수익률}, {거래정지 날짜})}. 당일 포함.
+
+    `clock=(t0, t1)` 이면 **하루 대신 매일의 같은 시각 구간**을 계열로 만든다
+    (5분봉 시가->종가). 이게 지평 맞춘 β 의 전부다: 10:30~13:00 을 설명하려면
+    과거 60일의 같은 10:30~13:00 에 β 를 추정한다. 새 회귀 코드가 없다 - 계열의
+    뜻만 바뀌고 β·게이트·ρ 는 그대로다.
+
+    일간 β 를 구간에 쓰면 Epps 효과(고빈도에서 상관 붕괴)로 시장 몫이 부풀 수 있다.
+    실측 091160×069500: 5분 β 1.064 [1.050, 1.078] vs 일간 β 1.052 - 격차 1% 로
+    구간 안이었다. 무시할 만했지만 **지평을 맞추는 쪽이 공짜라서** 맞춘다.
 
     거래량 0 인 날은 **정지**다 - 그날 종가는 직전 값이고 수익률 0 은 거짓이다.
     종가가 전일과 같은 날은 흔하지만(2026년 776일) 대부분 진짜 보합이고
     거래량 0 은 55일(7%)뿐이다 - 그 7% 만 막는다. 진짜 보합의 고유수익은 정보다:
     시장·섹터가 −7% 미는데 안 빠졌으면 그게 그 종목의 힘이다.
     """
+    if clock is not None:
+        out = {}
+        for sym, nm, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
+                kinds=kinds, day=day, t0=clock[0], t1=clock[1])):
+            # 이미 **구간 수익**이다 - 차분하지 않는다(하니까 첫 날이 사라진다).
+            halt = {d for d, v in zip(dates, vols) if v is not None and v <= 0}
+            out[sym] = (nm, dict(zip(dates, [float(x) for x in lrs])), halt)
+        return out
     rows = lake.sql(
         "SELECT symbol, any_value(name), list(close ORDER BY date), "
         "       list(CAST(date AS DATE) ORDER BY date), list(volume ORDER BY date) "
@@ -232,13 +272,14 @@ def _pick(y: np.ndarray, xs: dict[str, np.ndarray], nows: dict[str, float],
     return best
 
 
-def _panel(lake, etf: str, day: str, hist: list) -> tuple[np.ndarray, list[float]] | None:
+def _panel(lake, etf: str, day: str, hist: list,
+           *, clock: tuple[str, str] | None = None) -> tuple[np.ndarray, list[float]] | None:
     """구성종목 × 창 수익률 행렬. ρ 게이트와 종목 귀속이 같은 자료를 쓴다."""
     hold = holdings(lake, etf, day)
     if not hold:
         return None
     d0 = dt.date.fromisoformat(day)
-    ser = _series(lake, day, ("stock",))
+    ser = _series(lake, day, ("stock",), clock=clock)
     rows, nows = [], []
     for tk, _lab, _w in hold:
         if tk not in ser:
@@ -304,14 +345,23 @@ def _krx_sector_candidate(lake, etf: str, day: str, hist: list, d0):
 
 
 def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
-              cover: float = COVER_TARGET, top: int = TOP_NAMES) -> Rollup | None:
+              cover: float = COVER_TARGET, top: int = TOP_NAMES,
+              clock: tuple[str, str] | None = None) -> Rollup | None:
     """ETF 하루를 시장·섹터·고유로 가른다. 층은 최대 `max_layers`, 커버 `cover` 에서 정지.
 
     설명 대상은 **ETF 자신의 수익률**이다 (관측 가능). 구성종목 가중합과의 차이는
     `rollup_gap` 으로 따로 보고한다 - 추적오차와 비중 노후를 숨기지 않는다.
+
+    `clock=(t0, t1)` 이면 설명 대상이 **그 구간의 수익률**이 된다. 바뀌는 것은 계열의
+    뜻뿐이고 β 추정·층 게이트·ρ 게이트·종목 귀속은 글자 하나 안 바뀐다.
+
+    구간 모드에서 **섹터 층은 미계측**이다: KRX 업종지수 5분봉이 0건이라 후보가 없다
+    (실측). ETF 를 섹터 대리로 쓰면 '섹터를 우리가 고르는' 그 실수로 돌아간다
+    (042700 07-31 에서 삼성전자가 섹터로 뽑힌 일) - 그래서 없는 채로 둔다.
+    호출자가 사유를 적어야 한다: 층이 조용히 사라지면 시장 몫이 그걸 삼킨다.
     """
     d0 = dt.date.fromisoformat(day)
-    ser = _series(lake, day, ("market", "sector"))
+    ser = _series(lake, day, ("market", "sector"), clock=clock)
     if etf not in ser or d0 not in ser[etf][1]:
         return None
     tmap = ser[etf][1]
@@ -335,7 +385,8 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     # 지수는 **우리가 고르지 않는다**(KRX 가 산출) 그리고 ETF 가 아니라 구성 겹침을
     # 계산할 수 없다 - 그래서 겹침 게이트를 면제한다. 대신 어느 업종인지는 구성종목의
     # **최빈 업종**이 정한다: 그것도 우리가 고르는 게 아니다.
-    krx = _krx_sector_candidate(lake, etf, day, hist, d0)
+    # 구간 모드: KRX 업종지수는 5분봉이 없다(실측 0건) - 후보를 만들지 않는다.
+    krx = None if clock is not None else _krx_sector_candidate(lake, etf, day, hist, d0)
     if krx is not None:
         code, nm, v, now = krx
         xs[code], nows[code], meta[code] = v, now, nm
@@ -344,7 +395,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     basis: list[np.ndarray] = []
     basis_now: list[float] = []
     # ρ 게이트 재료: 구성종목 패널과 현재 잔차 공통상관. 층은 이 값을 줄여야 산다.
-    panel_pair = _panel(lake, etf, day, hist)
+    panel_pair = _panel(lake, etf, day, hist, clock=clock)
     panel = None if panel_pair is None else panel_pair[0]
     rho_now = None if panel is None else residual_rho(list(panel))
     rho_blocked: list[str] = []

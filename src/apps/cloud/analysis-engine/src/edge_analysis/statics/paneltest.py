@@ -66,6 +66,7 @@ FEATURES = {
     # 나온다 - 하루에 값이 하나라 횡단면은 못 가르지만 **날짜 사이**를 가른다.
     ("국면", "수준"): "regime_lvl",  # 시장 로그수익률에 대한 β
     ("거시", "민감도"): "fx_beta",     # 원/달러 변화율에 대한 β - FX환 채널의 관측변수
+    ("금리", "민감도"): "rate_beta",   # 국고 10년 일변화(%p)에 대한 β - 할인율 채널
     ("섹터", "민감도"): "beta_s",      # 산업 평균 초과수익에 대한 β - 섹터층의 노출
     # ── 재무제표(v_fin, ASOF). 회계연도 값이라 가장 느린 상태 = 조건 자리 ──
     ("레버리지", "수준"): "lev_lvl",   # 차입금의존도
@@ -93,8 +94,9 @@ LAYER_Y = {"고유": "y_고유", "섹터": "y_섹터", "시장": "y_시장"}
 #   섹터 (y=ar, 시장 차감): 시장은 빠지고 산업 공행이 남았다. 산업을 가르는 특성만.
 #   고유 (y=ar_ind, 이중차감): 남은 것은 종목 자신 - 전부 허용.
 LAYER_EXPOSURES: dict[str, frozenset[tuple[str, str]] | None] = {
-    "시장": frozenset({("지수잔차", "민감도"), ("거시", "민감도")}),
+    "시장": frozenset({("지수잔차", "민감도"), ("거시", "민감도"), ("금리", "민감도")}),
     "섹터": frozenset({("섹터", "민감도"), ("지수잔차", "민감도"), ("거시", "민감도"),
+                      ("금리", "민감도"),
                       ("배수", "수준"), ("주주", "수준"),
                       ("레버리지", "수준"), ("수익성", "수준"), ("성장", "수준")}),
     "고유": None,   # None = 제한 없음
@@ -130,6 +132,14 @@ _mz AS (
     ) _w
     WHERE z IS NOT NULL
     GROUP BY trade_date
+),
+_rt AS (
+    -- 금리 노출의 원천. **수준이 아니라 변화**를 쓴다: 오늘 움직임을 설명하는 것은
+    -- 금리 수준이 아니라 그 변화다(수준은 이미 가격에 있다). 곡선 12만기 중 10년을
+    -- 쓰는 이유는 밸류에이션 할인율의 관례 대리이고, 단기/기울기는 정책·경기 기대라
+    -- 뜻이 다르다 - 하나의 족에 섞으면 계수 해석이 무너지므로 10년만 둔다.
+    SELECT trade_date, year10 - lag(year10) OVER (ORDER BY trade_date) AS d10
+    FROM s3_rates_daily
 ),
 _fl AS (
     -- 수급 노출 원천 = curated 투자자별 매매(statics.flowhist → flow_daily).
@@ -200,6 +210,12 @@ f AS (
            LAG(q.mktcap, 1) OVER wi AS mcap_pit,
            CASE WHEN isfinite(regr_slope(d.lr, fx.change_pct / 100) OVER w60)
                 THEN regr_slope(d.lr, fx.change_pct / 100) OVER w60 END AS fx_beta,
+           -- 금리 민감도(듀레이션 대리). x 단위가 %p 이므로 계수는 "금리 1%p 상승 시
+           -- 로그수익 몇" 이다 - 성장주는 음수여야 한다(할인율 경로). 이것이 없으면
+           -- "금리가 올라서 성장주가 빠졌다" 를 **구조적으로 말할 수 없다**: 공통
+           -- 충격은 노출 이질성을 통해서만 설명이 되기 때문이다(vocab 도크스트링).
+           CASE WHEN isfinite(regr_slope(d.lr, rt.d10) OVER w60)
+                THEN regr_slope(d.lr, rt.d10) OVER w60 END AS rate_beta,
            -- **어제** 값이다. macro_z() 가 `< day` 로 개장 전 확정 정보(밤사이 미국장·
            -- 환율)를 쓰므로 패널도 같이 지연시킨다 - 발화 기준이 갈리면 접지가 무너진다.
            LAG(mz.z_macro, 1) OVER wi AS z_macro,
@@ -220,6 +236,7 @@ f AS (
     LEFT JOIN v_pit q ON q.instrument_id = d.instrument_id AND q.trade_date = d.trade_date
     LEFT JOIN _fl  x ON x.instrument_id = d.instrument_id AND x.trade_date = d.trade_date
     LEFT JOIN fx_usdkrw fx ON CAST(fx.date AS DATE) = d.trade_date
+    LEFT JOIN _rt rt ON rt.trade_date = d.trade_date
     LEFT JOIN _mz mz ON mz.trade_date = d.trade_date
     ASOF LEFT JOIN v_fin fn ON fn.instrument_id = d.instrument_id
                            AND d.trade_date >= fn.available_from
