@@ -6,7 +6,7 @@
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
 sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 행 복제 아님)·analyses
-읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다(ALPHA-514·601·651). analyses 쓰기(정정·제외·복원)는 운영자 작업 원장(`admin_activity_log`) 전이다
+읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다(ALPHA-514·601·651). analyses 쓰기는 무효화 단독(ALPHA-440·737 — 게시본 WITHDRAWN 전이 + INVALIDATION 발번 + `admin_activity_log` 감사)이다
 (ALPHA-602). session 표면은 인증 세션 주체(SessionOperator) 투영으로 실전환됐다(ALPHA-608).
 운영자 인증은 아직 in-memory(474).
 
@@ -51,7 +51,7 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 
 super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 4종 —
 tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파이프라인 실행 이력) · analyses(가격 변동
-분석 목록·정정·제외/복원) · session(운영자 컨텍스트·프로필).
+분석 목록·무효화) · session(운영자 컨텍스트·프로필).
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
@@ -62,11 +62,11 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   않는 이유: `ddl-auto=validate` 환경에서 소유하지 않은 5테이블에 이 앱 기동을 묶지 않기
   위함이다. **analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회**
   (`repository/JdbcAnalysisRepository`, ALPHA-601 — 소유는 analysis-engine, 같은 이유로 JPA
-  없이 Jdbc). **analyses 쓰기(정정·제외·복원)는 운영자 작업 원장 전이**
-  (`repository/JdbcAnalysisWriteRepository`, ALPHA-602) — explanation_result(analysis-engine
-  소유)를 덮지 않고 super-admin-api **소유** 원장 `admin_activity_log` 에 작업자·사유·전후와 함께
-  append 하며, 정정 본문·제외 여부는 읽기가 그 원장에서 오버레이한다(원본 불변, 단일 writer 규약
-  유지). **session 은 인증 세션 주체(`SessionOperator`)를 투영해 반환한다**(ALPHA-608 — 별도
+  없이 Jdbc). **analyses 쓰기는 무효화 단독**
+  (`repository/JdbcAnalysisWriteRepository`, ALPHA-440·737) — 게시본 PUBLISHED→WITHDRAWN
+  전이 + NEW 수신 테넌트 INVALIDATION 발번(소유자 합의는 event-bundle-schema.md "fan-out
+  발번기" 절, 엔진과 advisory lock 공유) + `admin_activity_log` 감사가 한 트랜잭션이다. 구
+  정정/제외/복원 오버레이는 은퇴했고 그 기록은 감사 원장에 이력으로 보존된다. **session 은 인증 세션 주체(`SessionOperator`)를 투영해 반환한다**(ALPHA-608 — 별도
   저장소·테이블 없이 config 부트스트랩 계정이 로그인 시 세션에 실린 값). DB 연동은 이렇게 도메인
   단위로 service 의 스토어 의존을 repository·세션 주체로 교체하며 진행한다.
 
@@ -87,9 +87,9 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   성공까지 봉투로 감싸는 건 콘솔 계열 API 규약이다 — super-admin-api·tenant-console-api
   가 채택했다(ALPHA-521·522). 실계약 조회 표면(tenant-sync-api·publication-api)은 raw
   DTO 성공을 유지하는 의도적 분기다(AGENTS Rule 7·11).
-- **정정/무효화 사유 필수·감사 레코드**(콘솔 IA)는 쓰기 실전환(ALPHA-602)과 함께 계약에
-  편입됐다 — 정정/제외는 사유 필수(빈 값 400), UI 가 사유를 받는다. 복원 사유는 선택.
-  작업자·사유·변경 전후는 `admin_activity_log` 원장에 보존된다(열람 API 없음 — DB 보존).
+- **무효화 사유 필수·감사 레코드**(콘솔 IA) — 사유 필수(빈 값 400), UI 가 사유를 받는다.
+  작업자·사유는 `admin_activity_log` 원장에 보존된다(열람 API 없음 — DB 보존). 미게시본
+  무효화는 409.
 
 ## 스텁 → 실구현 교체 지점
 
