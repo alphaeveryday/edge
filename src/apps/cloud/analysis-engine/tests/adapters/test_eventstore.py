@@ -465,19 +465,24 @@ class _RevertQueryConn:
 
 
 def test_find_published_minute_run_ids_scopes_to_minute_published_session():
-    """회수 대상 질의(ALPHA-746)의 세 축을 고정한다: ①minute_price_trigger INNER JOIN —
+    """회수 대상 질의(ALPHA-746)의 네 축을 고정한다: ①minute_price_trigger INNER JOIN —
     관측의 트리거 축은 정확히 하나라(ck_etf_contribution_one_trigger) EOD 계보
     (price_movement_trigger_id 축)가 구조적으로 안 걸린다(run_reason 은 두 경로 모두
     'DAILY' 라 분기 축이 못 된다) ②PUBLISHED 만 — DRAFT·WITHDRAWN 을 다시 내리면 409
     소음과 남의 상태 전이 ③당일 한정은 session_id — 날짜 재계산 없이 트리거·회수
-    사건이 나르는 같은 좌표를 쓴다."""
-    conn = _RevertQueryConn(rows=[("run_1",), ("run_2",)])
+    사건이 나르는 같은 좌표를 쓴다 ④상한은 회수 window_start — 지연·재배달된 회수가
+    복귀 이후 재발화(앵커 리셋) 설명까지 내리면 안 된다."""
+    from datetime import datetime, timezone
 
-    ids = EventStore(conn).find_published_minute_run_ids("091160", "ses-1")
+    conn = _RevertQueryConn(rows=[("run_1",), ("run_2",)])
+    until = datetime(2026, 8, 4, 2, 31, tzinfo=timezone.utc)
+
+    ids = EventStore(conn).find_published_minute_run_ids("091160", "ses-1", until)
 
     assert ids == ["run_1", "run_2"]
     [(sql, params)] = conn.executed
     assert "JOIN minute_price_trigger" in sql          # EOD 제외 축
     assert "publication_status = 'PUBLISHED'" in sql   # 노출 중인 것만
+    assert "trg.window_start <= %s" in sql             # 복귀 이후 재발화 보호
     assert "price_movement_trigger" not in sql.replace("minute_price_trigger", "")
-    assert params == ("091160", "ses-1")               # 종목·세션 좌표
+    assert params == ("091160", "ses-1", until)        # 종목·세션·상한 좌표

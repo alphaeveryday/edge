@@ -109,7 +109,9 @@ class EventStore:
             )
             return cur.fetchone() is not None
 
-    def find_published_minute_run_ids(self, entity_id: str, session_id: str) -> list[str]:
+    def find_published_minute_run_ids(
+        self, entity_id: str, session_id: str, until_window_start: datetime,
+    ) -> list[str]:
         """그 종목·세션의 **분봉 트리거 기원** 설명 중 PUBLISHED 인 run id 목록(ALPHA-746).
 
         ExposureReverted 회수 대상 결정. 무효화 API 의 지목 축이 run 이라
@@ -122,6 +124,10 @@ class EventStore:
           'DAILY' 라 분기 축이 못 된다).
         - **당일 한정 = session_id**: 트리거와 회수 사건이 같은 세션 좌표를 나른다
           (와이어 계약) — 날짜 재계산(KST 변환)보다 정확하고 자정 crossing 에 안전하다.
+        - **상한 = 회수 사건의 window_start**: 회수는 그 시점 이전 발화만 덮는다.
+          지연·재배달된 회수가 세션 전체를 잡으면, 복귀 **이후** 재발화(앵커 리셋,
+          ALPHA-745)한 새 설명까지 무효화한다 — 정당하게 노출 중인 설명이 지연 하나로
+          내려간다. 트리거의 window_start 는 항상 복귀 window 보다 앞이므로 <= 다.
         """
         with self._conn.cursor() as cur:
             cur.execute(
@@ -136,9 +142,10 @@ class EventStore:
                 " JOIN minute_price_trigger trg"
                 "   ON trg.trigger_id = obs.minute_price_trigger_id"
                 " WHERE trg.entity_id = %s AND trg.session_id = %s"
+                " AND trg.window_start <= %s"
                 " AND res.publication_status = 'PUBLISHED'"
                 " ORDER BY run.explanation_run_id",
-                (entity_id, session_id),
+                (entity_id, session_id, until_window_start),
             )
             return [str(row[0]) for row in cur.fetchall()]
 

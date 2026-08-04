@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 from .adapters.eventstore import EventStore, minute_route_id
 from .adapters.lake import LakeReader, make_s3_client
 from .adapters.llm import DeepSeekClient
-from .adapters.superadmin import SuperAdminClient
+from .adapters.superadmin import SuperAdminClient, SuperAdminUnavailableError
 from .config import PipelineError, ReturnsNotReadyError, load_settings
 from .observability import log
 from .pipeline import run
@@ -100,10 +100,15 @@ def parse_message(body: str) -> tuple[str, dict]:
     if event_type == TRIGGER_EVENT_TYPE:
         _require_str(payload, "trigger_id")
     else:
-        # 회수의 대상 좌표 — 종목(entity_id=단축코드)·세션(당일). 나머지 payload 필드
-        # (prev_close·close_price 등)는 판정 근거라 로그로만 쓴다.
+        # 회수의 대상 좌표 — 종목(entity_id=단축코드)·세션(당일)·상한(window_start:
+        # 복귀 window 이전 발화만 회수한다 — 지연·재배달된 회수가 이후 재발화 설명을
+        # 잡으면 안 된다). 나머지 payload 필드(prev_close 등)는 판정 근거라 로그로만.
         _require_str(payload, "entity_id")
         _require_str(payload, "session_id")
+        try:
+            datetime.fromisoformat(_require_str(payload, "window_start"))
+        except ValueError as error:
+            raise ValueError(f"payload.window_start 가 ISO 시각이 아니다: {error}") from error
     return event_type, payload
 
 
@@ -147,7 +152,8 @@ def revert_explanations(payload: dict, *, store, client) -> str:
     """
     entity_id = payload["entity_id"]
     session_id = payload["session_id"]
-    run_ids = store.find_published_minute_run_ids(entity_id, session_id)
+    window_start = datetime.fromisoformat(payload["window_start"])
+    run_ids = store.find_published_minute_run_ids(entity_id, session_id, window_start)
     if not run_ids:
         log("revert.noop", entity_id=entity_id, session_id=session_id,
             window_start=payload.get("window_start"))
@@ -161,6 +167,13 @@ def revert_explanations(payload: dict, *, store, client) -> str:
             # 질의로 찾은 run 이 API 에선 없다 — 질의·API 의 원장이 갈렸다는 신호라
             # 조용히 넘기지 않는다(단 회수 자체는 남은 대상으로 계속한다).
             logger.warning("무효화 대상 run 이 super-admin 에 없다: %s", run_id)
+    if outcomes["not_found"] == len(run_ids):
+        # 전건 404 = API 가 다른 원장(오배선 URL)을 보고 있다는 시그니처 — 한 건도
+        # 회수되지 않았는데 성공으로 접으면 설명이 노출된 채 조용히 남는다(Rule 12).
+        # 재배달로 올려 반복되면 DLQ 가 드러낸다. 격리된 404 는 위 경고로 남긴다.
+        raise SuperAdminUnavailableError(
+            f"무효화 대상 {len(run_ids)}건 전부 super-admin 에 없다 — 원장 불일치"
+        )
     log("revert.done", entity_id=entity_id, session_id=session_id,
         targets=len(run_ids), **outcomes)
     return "reverted"

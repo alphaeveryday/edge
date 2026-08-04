@@ -161,10 +161,18 @@ def test_malformed_is_left_and_flagged():
     (json.dumps({"event_type": "PriceTriggerFired", "payload": {}}), "trigger_id 결손"),
     (json.dumps({"event_type": "PriceTriggerFired", "payload": {"trigger_id": "  "}}), "공백"),
     (json.dumps({"event_type": "PriceTriggerFired", "payload": "x"}), "payload 비객체"),
-    (json.dumps({"event_type": "ExposureReverted", "payload": {"entity_id": "e1"}}),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"entity_id": "e1", "window_start": "2026-08-04T02:31:00+00:00"}}),
      "session_id 결손 — 세션 없이 회수하면 남의 날짜 설명까지 내린다"),
-    (json.dumps({"event_type": "ExposureReverted", "payload": {"session_id": "s1"}}),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"session_id": "s1", "window_start": "2026-08-04T02:31:00+00:00"}}),
      "entity_id 결손"),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"entity_id": "e1", "session_id": "s1"}}),
+     "window_start 결손 — 상한 없이 회수하면 이후 재발화 설명까지 내린다"),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"entity_id": "e1", "session_id": "s1", "window_start": "어제쯤"}}),
+     "window_start 비ISO"),
 ])
 def test_parse_rejects_contract_violations(body, reason):
     with pytest.raises(ValueError):
@@ -180,14 +188,14 @@ def test_parse_extracts_trigger_id():
 
 
 class FakeStore:
-    """find_published_minute_run_ids 만 흉내 — 질의 축(entity·session)을 기록한다."""
+    """find_published_minute_run_ids 만 흉내 — 질의 축(entity·session·상한)을 기록한다."""
 
     def __init__(self, run_ids):
         self._run_ids = list(run_ids)
         self.queries = []
 
-    def find_published_minute_run_ids(self, entity_id, session_id):
-        self.queries.append((entity_id, session_id))
+    def find_published_minute_run_ids(self, entity_id, session_id, until_window_start):
+        self.queries.append((entity_id, session_id, until_window_start))
         return list(self._run_ids)
 
 
@@ -210,19 +218,26 @@ class FakeAdminClient:
         return self._outcomes.get(run_id, "invalidated")
 
 
+REVERT_PAYLOAD = {"entity_id": "091160", "session_id": "s1",
+                  "window_start": "2026-08-04T02:31:00+00:00"}
+
+
 def test_revert_invalidates_only_store_selected_published_minute_runs():
-    """회수 대상은 store 질의(그 종목·세션의 분봉 기원 PUBLISHED)가 결정하고, 소비자는
-    그 목록 전부를 사유와 함께 무효화 API 로 보낸다. EOD 제외는 질의의 minute_price_trigger
-    INNER JOIN 이 맡는다 — 관측의 트리거 축은 정확히 하나라(ck_etf_contribution_one_trigger)
-    EOD 계보는 구조적으로 안 걸린다. 소비자가 목록을 더 거르기 시작하면 그 계약이 두 벌이 된다."""
+    """회수 대상은 store 질의(그 종목·세션·복귀 window 이전의 분봉 기원 PUBLISHED)가
+    결정하고, 소비자는 그 목록 전부를 사유와 함께 무효화 API 로 보낸다. EOD 제외는 질의의
+    minute_price_trigger INNER JOIN 이 맡는다 — 관측의 트리거 축은 정확히 하나라
+    (ck_etf_contribution_one_trigger) EOD 계보는 구조적으로 안 걸린다. window_start 상한이
+    질의에 전달돼야 지연된 회수가 이후 재발화 설명을 잡지 않는다(앵커 리셋, ALPHA-745)."""
+    from datetime import datetime
+
     store = FakeStore(["run_a", "run_b"])
     client = FakeAdminClient()
 
-    outcome = revert_explanations(
-        {"entity_id": "091160", "session_id": "s1"}, store=store, client=client)
+    outcome = revert_explanations(dict(REVERT_PAYLOAD), store=store, client=client)
 
     assert outcome == "reverted"
-    assert store.queries == [("091160", "s1")]
+    assert store.queries == [
+        ("091160", "s1", datetime.fromisoformat("2026-08-04T02:31:00+00:00"))]
     assert client.invalidations == [("run_a", REVERT_REASON), ("run_b", REVERT_REASON)]
     assert "ALPHA-746" in REVERT_REASON, "감사 로그에 회수 주체 티켓이 남아야 한다"
 
@@ -233,10 +248,25 @@ def test_revert_with_no_published_targets_is_quiet_noop():
     client = FakeAdminClient()
 
     outcome = revert_explanations(
-        {"entity_id": "091160", "session_id": "s1"}, store=FakeStore([]), client=client)
+        dict(REVERT_PAYLOAD), store=FakeStore([]), client=client)
 
     assert outcome == "reverted_noop"
     assert client.logins == 0 and client.invalidations == []
+
+
+def test_revert_all_targets_missing_in_api_is_transient_not_success():
+    """전건 404 = 무효화 API 가 다른 원장(오배선 URL)을 본다는 시그니처 — 한 건도 안
+    내려갔는데 성공으로 접으면 설명이 노출된 채 조용히 남는다(Rule 12). 재배달로 올려
+    반복되면 DLQ 가 드러낸다. 격리된 404(일부만)는 경고로 남기고 성공이다."""
+    client = FakeAdminClient(outcomes={"run_a": "not_found", "run_b": "not_found"})
+    with pytest.raises(SuperAdminUnavailableError):
+        revert_explanations(dict(REVERT_PAYLOAD),
+                            store=FakeStore(["run_a", "run_b"]), client=client)
+
+    partial = FakeAdminClient(outcomes={"run_a": "not_found"})
+    assert revert_explanations(dict(REVERT_PAYLOAD),
+                               store=FakeStore(["run_a", "run_b"]),
+                               client=partial) == "reverted"
 
 
 @pytest.mark.parametrize("fail", ["login", "invalidate"])
@@ -260,12 +290,12 @@ def test_revert_redelivery_is_idempotent():
     걸려도 409(이미 무효)는 멱등 정상으로 접는다 — 재배달이 실패를 재생산하면 DLQ 만 쌓인다."""
     # 1차 집행 후 재배달 — 질의가 빈 목록을 돌려 no-op.
     assert revert_explanations(
-        {"entity_id": "e", "session_id": "s"}, store=FakeStore([]),
+        dict(REVERT_PAYLOAD), store=FakeStore([]),
         client=FakeAdminClient()) == "reverted_noop"
     # 질의·무효화 사이 경합 — 409 로 돌아와도 성공이다.
     client = FakeAdminClient(outcomes={"run_a": "already_withdrawn"})
     assert revert_explanations(
-        {"entity_id": "e", "session_id": "s"}, store=FakeStore(["run_a"]),
+        dict(REVERT_PAYLOAD), store=FakeStore(["run_a"]),
         client=client) == "reverted"
     assert client.invalidations == [("run_a", REVERT_REASON)]
 
