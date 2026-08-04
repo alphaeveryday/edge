@@ -101,7 +101,7 @@ public class BundleScreener {
 					.findByPolicyVersionIdAndEnabledTrueOrderByScreeningRuleId(version.getPolicyVersionId())
 					.stream().map(this::toRule).toList();
 			return new ActivePolicy(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
-					version.getMinSourceCount(), rules);
+					version.getMinSourceCount(), version.getMinConfidence(), rules);
 		}).orElseThrow(() -> new IllegalStateException(
 				"활성 점검 정책이 없다 — NEW 판정 불가(정책 부재 = 진행 중단), 콘솔 온보딩 발행 후 재시도된다"));
 	}

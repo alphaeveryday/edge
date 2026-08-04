@@ -232,7 +232,7 @@ class ScreeningControllerTest {
 	@Test
 	void 첫_변경은_온보딩_기반값_위에_새_버전을_발행한다() throws Exception {
 		// WHY: 사용자 결정(2026-07-27) — 온보딩 기본은 자동 제공 ON(걸린 것만 검수).
-		// 첫 발행 기반값이 이 결정의 실체다: auto=true·최소 출처 2·상한 MEDIUM·기본 문구.
+		// 첫 발행 기반값이 이 결정의 실체다: auto=true·최소 출처 2·최소 확신도 MEDIUM·기본 문구.
 		addWord("급등 확실", "HIGH", "BLOCK");
 
 		assertThat(versions.stored).hasSize(1);
@@ -240,7 +240,7 @@ class ScreeningControllerTest {
 		assertThat(v1.getVersionNo()).isEqualTo(1);
 		assertThat(v1.isAutoPublishEnabled()).isTrue();
 		assertThat(v1.getMinSourceCount()).isEqualTo(2);
-		assertThat(v1.getMaxRisk()).isEqualTo("MEDIUM");
+		assertThat(v1.getMinConfidence()).isEqualTo("MEDIUM");
 		assertThat(v1.getDisclaimerText()).contains("공개 데이터");
 		assertThat(v1.getCreatedBy()).isEqualTo(2L);
 		assertThat(v1.getActivatedAt()).isNotNull();
@@ -303,7 +303,7 @@ class ScreeningControllerTest {
 		mvc.perform(get("/api/v1/screening/criteria"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.minSources").value(2))
-				.andExpect(jsonPath("$.result.maxRisk").value("MEDIUM"));
+				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.text").isNotEmpty());
@@ -317,15 +317,20 @@ class ScreeningControllerTest {
 
 		PolicyVersionEntity active = versions.findActive().orElseThrow();
 		assertThat(active.getMinSourceCount()).isEqualTo(3);
-		assertThat(active.getMaxRisk()).isEqualTo("MEDIUM");   // 미지정 필드는 유지(PATCH)
+		assertThat(active.getMinConfidence()).isEqualTo("MEDIUM");   // 미지정 필드는 유지(PATCH)
 
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":0}"))
 				.andExpect(status().isBadRequest());
-		// HIGH 는 상한 불가 — 항상 검수·차단 경로(UI 계약 MAX_RISKS)
+		// LOW 는 기준 불가 — 보류까지 허용은 미설정과 실질 동일(UI 계약 MIN_CONFIDENCES)
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
-						.contentType(MediaType.APPLICATION_JSON).content("{\"maxRisk\":\"HIGH\"}"))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minConfidence\":\"LOW\"}"))
 				.andExpect(status().isBadRequest());
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minConfidence\":\"HIGH\"}"))
+				.andExpect(status().isOk());
+		// 200 만으로는 저장을 증명 못 한다 — 발행된 활성 버전에 HIGH 가 실려야 한다(Rule 9).
+		assertThat(versions.findActive().orElseThrow().getMinConfidence()).isEqualTo("HIGH");
 	}
 
 	@Test

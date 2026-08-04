@@ -46,7 +46,7 @@ import java.util.Set;
  * status_history + console_action_log)이며, 행위자=SessionMember·clientIp 로 감사한다.
  *
  * <p>매핑(축소 계약, 사용자 결정 2026-07-29): name←etf_name, code←etf_ticker, status,
- * risk←confidence_level, reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
+ * confidence←confidence_level(원값, ALPHA-634 확신도 배지), reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
  * receivedAt←received_at, evidence←evidences JSONB, original←summary,
  * final←publication.published_summary(널이면 summary). market·direction·changePct 는
  * 온프렘 원장에 없어(ALPHA-497 이연) 제거됐다.

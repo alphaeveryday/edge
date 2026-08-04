@@ -3,13 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { Icon, PageSkeleton, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
 import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
+import type { ConfidenceLevel } from '../domains/explanations';
+import { CONFIDENCE_LABEL } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
 import { LoadError, StockCell } from './_shared/cells';
 
 /**
  * Review Queue 목록(ALPHA-436) — status=REVIEW_REQUIRED 논리 작업함의 실계약 조회.
- * 등락률·위험 등급 컬럼은 실데이터 도착 전이라 두지 않는다(등락률=번들 확장 ALPHA-497,
- * 위험 등급=산정 구현 후속) — 없는 값을 mock 으로 보여주지 않는다.
+ * 등락률 컬럼은 실데이터 도착 전이라 두지 않는다(번들 확장 ALPHA-497) — 없는 값을
+ * mock 으로 보여주지 않는다. 확신도는 원장 confidence_level 원값의 라벨 표시다(ALPHA-634).
  */
 export function ReviewPage() {
   const navigate = useNavigate();
@@ -68,7 +70,7 @@ export function ReviewPage() {
               <th>종목</th>
               <th>변동 요인 요약</th>
               <th>검수 사유</th>
-              <th className="col-muted">신뢰도</th>
+              <th className="col-muted">확신도</th>
               <th className="col-muted">수신</th>
               <th></th>
             </tr>
@@ -91,7 +93,7 @@ export function ReviewPage() {
                     ))}
                   </div>
                 </td>
-                <td className="col-muted">{it.confidenceLevel ?? '—'}</td>
+                <td className="col-muted">{it.confidenceLevel ? (CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel] ?? it.confidenceLevel) : '—'}</td>
                 <td className="col-muted num">
                   {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
                 </td>

@@ -140,7 +140,7 @@ class BundleScreenerTest {
 		checks = new RecordingChecks();
 		history = new RecordingHistory();
 		// 기본 대역 = 관대한 활성 정책(자동 제공 ON·룰 없음) — 기존 NEW 자동 게시 케이스 유지.
-		activePolicy = Optional.of(new PolicyVersion(10L, true, null));
+		activePolicy = Optional.of(new PolicyVersion(10L, true, null, null));
 		rules = List.of();
 		PolicyRepository policies = () -> activePolicy;
 		ScreeningRuleRepository ruleRepo = versionId -> rules;
@@ -254,10 +254,39 @@ class BundleScreenerTest {
 	}
 
 	@Test
+	void UNCERTAIN_설명_NEW는_정책_기준_없이도_검수_대기다() {
+		// WHY: 원인 미확인 설명의 자동 노출 차단은 정책 노브가 아니라 상시 게이트다
+		// (ALPHA-634) — 근거는 룰 무관(rule_id NULL) REVIEW 행으로 남는다.
+		String uncertain = RESULT.replace(
+				"\"explanation_type\":\"EVENT_SUPPORTED\"", "\"explanation_type\":\"UNCERTAIN\"");
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + uncertain + "}"));
+
+		assertThat(items.upserts)
+				.containsExactly(new RecordingItems.Upserted("er-1", "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).containsExactly("er-1:REVIEW:null:explanation_type=UNCERTAIN");
+	}
+
+	@Test
+	void 확신도_기준_미달_NEW는_검수_대기로_적재된다() {
+		// WHY: min_confidence 는 자동 제공 AND 게이트다 — 미달이 게시로 새면 콘솔
+		// 기준 설정이 장식이 된다. RESULT 의 confidence 는 MEDIUM 이다.
+		activePolicy = Optional.of(new PolicyVersion(10L, true, null, "HIGH"));
+
+		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
+
+		assertThat(items.upserts)
+				.containsExactly(new RecordingItems.Upserted("er-1", "REVIEW_REQUIRED"));
+		assertThat(publications.published).isEmpty();
+		assertThat(checks.appended).containsExactly("er-1:REVIEW:null:confidence=MEDIUM<min=HIGH");
+	}
+
+	@Test
 	void 자동_제공_스위치_OFF_정책은_NEW를_검수_대기로_보낸다() {
 		// WHY: 온보딩 기본값 = AUTO_PUBLISHED 0%(전건 검수, 티켓 확정). 스위치 OFF 근거는
 		// 룰 무관(rule_id NULL) REVIEW 행으로 남는다.
-		activePolicy = Optional.of(new PolicyVersion(10L, false, null));
+		activePolicy = Optional.of(new PolicyVersion(10L, false, null, null));
 
 		screener.screen(1, bundle("{\"cursor\":1,\"delivery_type\":\"NEW\",\"explanation_result\":" + RESULT + "}"));
 
@@ -394,7 +423,7 @@ class BundleScreenerTest {
 	void 중복_source_event_id는_출처_1건으로_센다() {
 		// WHY: 출처 수는 자동 게시 임계의 입력이다 — 같은 출처가 두 번 실려 2건으로
 		// 세지면 단일 출처 콘텐츠가 검수 없이 자동 게시된다(와이어 스키마는 uniqueItems 미보장).
-		activePolicy = Optional.of(new PolicyVersion(10L, true, 2));
+		activePolicy = Optional.of(new PolicyVersion(10L, true, 2, null));
 
 		screener.screen(17, bundle("{\"cursor\":17,\"delivery_type\":\"NEW\"," +
 				"\"source_events\":[{\"source_event_id\":\"se-1\"},{\"source_event_id\":\"se-1\"}]," +

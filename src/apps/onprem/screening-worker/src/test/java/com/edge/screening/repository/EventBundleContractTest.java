@@ -58,7 +58,7 @@ class EventBundleContractTest {
 		ScreeningCheckRepository checks = mock(ScreeningCheckRepository.class);
 		AnalysisItemStatusHistoryRepository history = mock(AnalysisItemStatusHistoryRepository.class);
 		// NEW 판정은 활성 정책이 전제 — 관대한 정책(자동 제공 ON·룰 없음)으로 통과시킨다.
-		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null)));
+		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null, null)));
 		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
 		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
 				any(), anyLong(), any())).thenReturn(1);

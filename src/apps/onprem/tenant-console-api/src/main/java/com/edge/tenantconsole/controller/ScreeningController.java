@@ -69,7 +69,7 @@ public class ScreeningController {
 			HttpServletRequest httpRequest) {
 		screeningService.updateCriteria(
 				request == null ? null : request.minSources(),
-				request == null ? null : request.maxRisk(),
+				request == null ? null : request.minConfidence(),
 				actor(httpRequest), httpRequest.getRemoteAddr());
 		return ApiResponse.onSuccess(null);
 	}

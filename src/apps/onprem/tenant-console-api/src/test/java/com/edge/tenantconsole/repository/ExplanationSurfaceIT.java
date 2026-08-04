@@ -82,7 +82,7 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		assertThat(it.name()).isEqualTo("에코프로비엠");
 		assertThat(it.code()).isEqualTo("607REV");
 		assertThat(it.status()).isEqualTo("REVIEW_REQUIRED");
-		assertThat(it.risk()).isEqualTo("HIGH");                // confidence_level → risk
+		assertThat(it.confidence()).isEqualTo("HIGH");          // confidence_level 원값 투영
 		assertThat(it.reviewReason()).isEqualTo("ASSERTIVE");   // ASSERTIVE_EXPRESSION → UI 어휘
 		assertThat(it.original()).isEqualTo("원본 요약");
 		assertThat(it.finalText()).isEqualTo("원본 요약");        // 게시 스냅샷 없으면 summary
