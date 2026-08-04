@@ -19,15 +19,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PolicyEvaluatorTest {
 
 	private static DeliveryEntry entry(String headline, String summary, int sourceCount) {
+		return entry(headline, summary, sourceCount, "EVENT_SUPPORTED", "MEDIUM");
+	}
+
+	private static DeliveryEntry entry(String headline, String summary, int sourceCount,
+			String explanationType, String confidenceLevel) {
 		return new DeliveryEntry(1L, "NEW",
 				new DeliveryEntry.ExplanationResult("er-1", "i-1", "069500", "KODEX 200",
 						LocalDate.of(2026, 7, 15), OffsetDateTime.parse("2026-07-15T16:00:00+09:00"),
-						"EVENT_SUPPORTED", summary, headline, "MEDIUM", null),
+						explanationType, summary, headline, confidenceLevel, null),
 				null, null, "[]", sourceCount);
 	}
 
 	private static ActivePolicy policy(boolean autoPublish, Integer minSources, PolicyRule... rules) {
-		return new ActivePolicy(10L, autoPublish, minSources, List.of(rules));
+		return policy(autoPublish, minSources, null, rules);
+	}
+
+	private static ActivePolicy policy(boolean autoPublish, Integer minSources, String minConfidence,
+			PolicyRule... rules) {
+		return new ActivePolicy(10L, autoPublish, minSources, minConfidence, List.of(rules));
 	}
 
 	@Test
@@ -112,6 +122,56 @@ class PolicyEvaluatorTest {
 		assertThat(decision.status()).isEqualTo("AUTO_PUBLISHED");
 		assertThat(decision.checks())
 				.containsExactly(new ScreeningDecision.Check(null, "PASS", null));
+	}
+
+	@Test
+	void UNCERTAIN_설명은_정책_설정과_무관하게_항상_검수다() {
+		// WHY: 엔진 스스로 원인 미확인 판정한 설명의 자동 노출은 "고위험은 항상 검수·차단
+		// 경로" 결정 위반이다 — 스위치 ON·기준 미설정이어도 검수로 남아야 한다(ALPHA-634).
+		ScreeningDecision decision = PolicyEvaluator.decide(
+				entry("h", "s", 3, "UNCERTAIN", "HIGH"), policy(true, null));
+
+		assertThat(decision.status()).isEqualTo("REVIEW_REQUIRED");
+		assertThat(decision.checks())
+				.containsExactly(new ScreeningDecision.Check(null, "REVIEW", "explanation_type=UNCERTAIN"));
+	}
+
+	@Test
+	void 최소_확신도_미설정이면_보류_확신도_설명도_자동_제공된다() {
+		// WHY: NULL=미설정은 게이트 꺼짐(min_source_count 와 동일 시맨틱) — 미설정이
+		// 몰래 기본 기준으로 동작하면 테넌트가 끄지 못하는 숨은 정책이 된다.
+		ScreeningDecision decision = PolicyEvaluator.decide(
+				entry("h", "s", 3, "EVENT_SUPPORTED", "LOW"), policy(true, null));
+
+		assertThat(decision.status()).isEqualTo("AUTO_PUBLISHED");
+	}
+
+	@Test
+	void 확신도가_기준_미달이면_검수로_강등되고_근거가_남는다() {
+		ScreeningDecision low = PolicyEvaluator.decide(
+				entry("h", "s", 3, "EVENT_SUPPORTED", "LOW"), policy(true, null, "MEDIUM"));
+		ScreeningDecision medium = PolicyEvaluator.decide(
+				entry("h", "s", 3, "EVENT_SUPPORTED", "MEDIUM"), policy(true, null, "HIGH"));
+		ScreeningDecision pass = PolicyEvaluator.decide(
+				entry("h", "s", 3, "EVENT_SUPPORTED", "MEDIUM"), policy(true, null, "MEDIUM"));
+
+		assertThat(low.status()).isEqualTo("REVIEW_REQUIRED");
+		assertThat(low.checks())
+				.containsExactly(new ScreeningDecision.Check(null, "REVIEW", "confidence=LOW<min=MEDIUM"));
+		assertThat(medium.status()).isEqualTo("REVIEW_REQUIRED");
+		assertThat(pass.status()).isEqualTo("AUTO_PUBLISHED");
+	}
+
+	@Test
+	void 확신도_결측은_기준이_설정돼_있으면_미달이다() {
+		// WHY: 정보가 없는 설명을 기준 통과로 소화하면 확신도 게이트가 결측 하나로
+		// 우회된다 — 모호성은 검수 쪽(fail-safe)이 이 모듈의 방향이다.
+		ScreeningDecision decision = PolicyEvaluator.decide(
+				entry("h", "s", 3, "EVENT_SUPPORTED", null), policy(true, null, "MEDIUM"));
+
+		assertThat(decision.status()).isEqualTo("REVIEW_REQUIRED");
+		assertThat(decision.checks())
+				.containsExactly(new ScreeningDecision.Check(null, "REVIEW", "confidence=null<min=MEDIUM"));
 	}
 
 	@Test
