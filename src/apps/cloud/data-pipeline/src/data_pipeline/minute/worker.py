@@ -409,6 +409,63 @@ class PriceWorker(MinuteWorkerLoop):
             return False
 
 
+def _require_credentials(pair: tuple[str | None, str | None], env_names: str) -> None:
+    """자격증명 결손을 **기동에서** 거부한다.
+
+    공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 벤더 인증이 실패해 window 실패만
+    쌓인다(fail-loud 기동 검증이 무력해진다).
+    """
+    if not all((value or "").strip() for value in pair):
+        raise SystemExit(
+            f"벤더 자격증명 없음 — {env_names} 를 env 로 주입한다(커밋되는 TOML 금지)"
+        )
+
+
+def make_price_collector(options):
+    """설정 `source` → collector. **미지 소스는 기동 거부**(ALPHA-735).
+
+    조용한 폴백을 두지 않는다: 오타 source 로 토스가 끼워지면 원장 source_group 과 갈린
+    세션에 다른 벤더의 봉이 실린다. 세션 identity 는 source 로 유도되므로 여기서 막는
+    게 유일하게 싼 지점이다.
+    """
+    from ..sources.http import PoliteClient
+    from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
+
+    if options.source == "kis":
+        from ..sources.kis_minute import KisMinuteClient
+        from .kis_collector import KisPriceCollector
+
+        _require_credentials(
+            (options.app_key, options.app_secret),
+            "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
+        )
+        return KisPriceCollector(
+            client=KisMinuteClient(
+                options.app_key, options.app_secret,
+                # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
+                PoliteClient(min_interval=options.min_interval_sec),
+            )
+        )
+    if options.source == "toss":
+        from ..sources.toss import TossOpenApiClient
+        from .toss_collector import TossPriceCollector
+
+        _require_credentials(
+            (options.client_id, options.client_secret),
+            "DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/__CLIENT_SECRET",
+        )
+        return TossPriceCollector(
+            client=TossOpenApiClient(
+                client_id=options.client_id, client_secret=options.client_secret
+            ),
+            lookback=options.lookback,
+        )
+    raise SystemExit(
+        f"알 수 없는 source {options.source!r} — 이 벤더의 어댑터가 없다"
+        f"(가능: {sorted(SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE])})"
+    )
+
+
 def price_worker_cli(settings, *, session_date: str | None, universe: str | None,
                      max_ticks: int | None = None) -> int:
     """상주 Price Worker 진입점 — `python -m data_pipeline.run price-worker` (ECS Service).
@@ -432,26 +489,18 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
 
     from ..db import stable_domain_id
     from ..lake.storage import make_storage
-    from ..sources.toss import TossOpenApiClient
     from .models import load_universe_uri
     from .states import DATASET_PRICE_MINUTE
-    from .toss_collector import TossPriceCollector
 
     if settings.db is None:
         raise SystemExit("db 설정 없음 — price-worker 는 1분 원장 필수(DATA_PIPELINE_DB__* 주입)")
     options = settings.minute_price_worker
     if options is None:
         raise SystemExit(
-            "minute_price_worker 설정 없음 — 토스 자격증명 필수"
-            "(DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/__CLIENT_SECRET 주입)"
+            "minute_price_worker 설정 없음 — 벤더 자격증명 필수"
+            "(DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET 주입)"
         )
-    # 공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 벤더 인증이 실패해
-    # window 실패만 쌓인다(fail-loud 기동 검증이 무력해진다)
-    if not (options.client_id or "").strip() or not (options.client_secret or "").strip():
-        raise SystemExit(
-            "토스 자격증명 없음 — DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID/"
-            "__CLIENT_SECRET 를 env 로 주입한다(커밋되는 TOML 금지)"
-        )
+    collector = make_price_collector(options)
     if not universe:
         raise SystemExit(
             "--universe 필요 — planner(plan-minute-session)와 **같은 파일**이어야 원장의 "
@@ -492,12 +541,7 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
         ledger=ledger,
         committer=MinuteCommitter(db=settings.db),
         storage=make_storage(settings.storage),
-        collector=TossPriceCollector(
-            client=TossOpenApiClient(
-                client_id=options.client_id, client_secret=options.client_secret
-            ),
-            lookback=options.lookback,
-        ),
+        collector=collector,
         config=WorkerConfig(
             worker_id=worker_id,
             dataset=DATASET_PRICE_MINUTE,
