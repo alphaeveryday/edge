@@ -4,6 +4,7 @@ import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
 import com.edge.tenantconsole.service.ExplanationService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,6 +30,14 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	private JdbcTemplate jdbc;
 
 	private long cursor = 60700;
+
+	@BeforeEach
+	void resetServingScope() {
+		// head 판정(serving)은 serving_scope 게이트를 포함한다 — ScopeIT 등 다른 클래스가
+		// 공유 컨테이너에 남긴 토글(MARKET XKRX OFF 는 전역 차단)이 실행 순서에 따라 head
+		// 단언을 무너뜨리지 않게 클래스 진입마다 비운다(ScopeIT 의 격리 패턴과 동일).
+		jdbc.update("DELETE FROM serving_scope");
+	}
 
 	private long seedActiveRule(String ruleType, String action) {
 		jdbc.update("UPDATE policy_version SET deactivated_at = now() "
