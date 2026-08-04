@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from edge_analysis.adapters.llm import TracingClient, _first_object, analyze
+from edge_analysis.adapters.llm import TracingClient, _first_object
 from edge_analysis.config import PipelineError
 from edge_analysis.domain.models import Decomposition, PriceTrigger
 from edge_analysis.observability import collect_trace
@@ -33,17 +33,6 @@ def _analyze(response):
     return analyze(_FakeClient(response), etf_ticker="091160", etf_name="테스트 ETF",
                    name_by_ticker={}, trade_date=date(2026, 7, 16),
                    decomp=_DECOMP, gate=_GATE, route_code="COMMON_FACTOR", events=[])
-
-
-def test_analyze_wraps_a_valid_response():
-    explanation = _analyze({"verdict": "시장·섹터 주도", "explain": "…"})
-
-    assert explanation.explanation_type == "MIXED"
-
-
-def test_analyze_rejects_a_response_missing_required_fields():
-    with pytest.raises(PipelineError):
-        _analyze({"headline": "no verdict, no body"})
 
 
 class _BoomClient:

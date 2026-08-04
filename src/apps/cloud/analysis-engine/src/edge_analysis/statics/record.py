@@ -106,149 +106,6 @@ class Verdicts:
         return "LOW" if self.undecided else "MEDIUM"
 
 
-@dataclass(frozen=True, slots=True)
-class Cell:
-    """기록 대상 한 셀. 트리거는 둘 중 하나만 - 어느 축에서 왔는지가 계보다."""
-
-    etf_instrument_id: str
-    trade_date: str
-    honest: str
-    headline: str
-    verdicts: Verdicts
-    price_trigger_id: str = ""
-    minute_trigger_id: str = ""
-    etf_return: float | None = None
-    nav_return: float | None = None
-    constituent_return: float | None = None
-    premium_return: float | None = None
-    reconciliation_error: float | None = None
-    advancing: int | None = None
-    constituents: int | None = None
-    top3_ratio: float | None = None
-    route_code: str = ""
-    route_reason: str = ""
-    event_search: bool = False
-    stage: dict = field(default_factory=dict)
-
-    @property
-    def trigger_id(self) -> str:
-        """계보의 뿌리. **둘 다 없으면 기록하지 않는다** - 트리거 없는 분석은 계보가 없다."""
-        return self.price_trigger_id or self.minute_trigger_id
-
-
-def record(cell: Cell, dsn: str = "") -> tuple[dict[str, str], str]:
-    """계보를 적재한다. 반환 (id 들, 사유). 사유가 비면 성공.
-
-    **트리거가 없으면 거부한다.** 트리거 없이 적재하면 남의 계보에 붙거나 고아 행이
-    생긴다 - 파이프라인이 이미 같은 규율을 쓴다(트리거 행이 없으면 '평온한 날').
-    """
-    if not cell.trigger_id:
-        return {}, "트리거 id 가 없다 - 계보 없는 분석은 적재하지 않는다"
-    dsn = dsn or os.environ.get(DSN_ENV, "")
-    if not dsn:
-        return {}, f"{DSN_ENV} 없음 - 적재 생략"
-    obs_id = stable_id("cob", cell.trigger_id)
-    route_id = stable_id("rte", obs_id)
-    code, search = route_code_of(cell.route_code)
-    v = cell.verdicts
-    stage = dict(cell.stage) | {
-        # 우리 어휘를 jsonb 에 그대로 남긴다 - 원장 코드로 접힌 정보(시장 vs 섹터)를
-        # 되찾을 자리가 필요하다. 코드는 서빙용, jsonb 는 감사용.
-        "route": cell.route_code, "route_code": code, "verdicts": {
-            "applied_edges": v.applied_edges, "credible": v.credible,
-            "significant_market": v.significant_market, "undecided": v.undecided,
-            "idio_qualified": v.idio_qualified},
-        "evidence_bundles": list(v.bundles)}
-    try:
-        import psycopg
-        with psycopg.connect(dsn, connect_timeout=25) as con, con.cursor() as cur:
-            # `bundle_version` 은 `release_bundle` 로 가는 FK 다. 지어낸 기본값을 쓰면
-            # 적재가 통째로 실패한다(실측 'statics-1' -> ForeignKeyViolation).
-            # 배포는 env 로 준다(Terraform `analysis_release_bundle_version`);
-            # 없으면 **원장이 답을 안다** - PUBLISHED 최신을 고른다.
-            bundle_version = os.environ.get(BUNDLE_VERSION_ENV) or ""
-            if not bundle_version:
-                got = cur.execute(
-                    "SELECT bundle_version FROM release_bundle"
-                    " WHERE status = 'PUBLISHED' ORDER BY bundle_version DESC"
-                    " LIMIT 1").fetchone()
-                if not got:
-                    return {}, "release_bundle 에 PUBLISHED 번들이 없다 - 적재 불가"
-                bundle_version = got[0]
-            cur.execute(
-                "INSERT INTO etf_contribution_observation ("
-                " contribution_observation_id, price_movement_trigger_id,"
-                " minute_price_trigger_id, etf_return, nav_return,"
-                " constituent_contribution_return, premium_discount_contribution_return,"
-                " reconciliation_error, advancing_constituent_count,"
-                " total_constituent_count, top3_contribution_ratio,"
-                " available_at, data_version)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s)"
-                " ON CONFLICT (contribution_observation_id) DO NOTHING",
-                (obs_id, cell.price_trigger_id or None, cell.minute_trigger_id or None,
-                 cell.etf_return, cell.nav_return, cell.constituent_return,
-                 cell.premium_return, cell.reconciliation_error, cell.advancing,
-                 cell.constituents, cell.top3_ratio, bundle_version))
-            cur.execute(
-                "INSERT INTO explanation_route (explanation_route_id,"
-                " contribution_observation_id, route_code, event_search_required,"
-                " decision_reason, evaluated_at)"
-                " VALUES (%s,%s,%s,%s,%s,now())"
-                " ON CONFLICT (explanation_route_id) DO NOTHING",
-                (route_id, obs_id, code, search, cell.route_reason[:2000]))
-            run_id = stable_id("run", cell.etf_instrument_id, cell.trade_date, route_id)
-            cur.execute(
-                "INSERT INTO explanation_run (explanation_run_id, explanation_route_id,"
-                " bundle_version, explanation_as_of, run_reason, run_status,"
-                " started_at, finished_at)"
-                " VALUES (%s,%s,%s,now(),%s,'SUCCEEDED',now(),now())"
-                " ON CONFLICT (explanation_run_id) DO NOTHING",
-                (run_id, route_id, bundle_version,
-                 "MINUTE" if cell.minute_trigger_id else "DAILY"))
-            res_id = stable_id("res", run_id)
-            cur.execute(
-                "INSERT INTO explanation_result (explanation_result_id,"
-                " explanation_run_id, etf_instrument_id, trade_date,"
-                " explanation_as_of, explanation_type, summary, confidence_level,"
-                " stage_results, publication_status, generated_at, headline)"
-                " VALUES (%s,%s,%s,%s,now(),%s,%s,%s,%s::jsonb,'DRAFT',now(),%s)"
-                " ON CONFLICT (explanation_result_id) DO NOTHING",
-                (res_id, run_id, cell.etf_instrument_id, cell.trade_date,
-                 v.explanation_type, cell.honest, v.confidence_level,
-                 json.dumps(stage, ensure_ascii=False, default=str),
-                 cell.headline or None))
-            con.commit()
-        return {"observation": obs_id, "route": route_id, "run": run_id,
-                "result": res_id}, ""
-    except Exception as e:                  # noqa: BLE001 - 실패를 삼키지 않는다
-        return {}, f"{type(e).__name__}: {str(e)[:120]}"
-
-
-def open_minute_triggers(lake_dsn: str = "", *, limit: int = 20) -> list[dict]:
-    """**아직 분석되지 않은** 분봉 트리거. 실시간 축의 작업 목록이다.
-
-    '분석됐다' 의 정의는 계보다: `etf_contribution_observation.minute_price_trigger_id`
-    에 그 트리거가 붙어 있으면 끝난 것이다. 별 상태 컬럼을 두지 않는다 - 상태를
-    두면 그것과 계보가 갈라진다(원장이 답을 알아야 한다).
-    """
-    dsn = lake_dsn or os.environ.get(DSN_ENV, "")
-    if not dsn:
-        return []
-    import psycopg
-    with psycopg.connect(dsn, connect_timeout=25) as con:
-        rows = con.execute(
-            "SELECT t.trigger_id, t.entity_id, t.window_start, t.change_rate,"
-            "       t.threshold, t.detection_policy_version"
-            " FROM minute_price_trigger t"
-            " LEFT JOIN etf_contribution_observation o"
-            "        ON o.minute_price_trigger_id = t.trigger_id"
-            " WHERE o.contribution_observation_id IS NULL"
-            " ORDER BY t.window_start DESC LIMIT %s", (limit,)).fetchall()
-    return [{"trigger_id": r[0], "entity_id": r[1], "window_start": r[2],
-             "change_rate": float(r[3]), "threshold": float(r[4]),
-             "policy": r[5]} for r in rows]
-
-
 def _selfcheck() -> None:
     assert stable_id("cob", "pmt_X").startswith("cob_")
     assert len(stable_id("cob", "pmt_X")) == 30
@@ -280,13 +137,48 @@ def _selfcheck() -> None:
         c, sch = route_code_of(k)
         assert c == want, (k, c)
         assert sch == (c in EVENT_SEARCH)
-
-    # 트리거 없는 분석은 적재 거부
-    ids, why = record(Cell(etf_instrument_id="i", trade_date="2026-07-31",
-                           honest="h", headline="p", verdicts=Verdicts()))
-    assert not ids and "트리거" in why
     print("ok")
 
 
 if __name__ == "__main__":
     _selfcheck()
+
+# ── 배포 경로 접합 (ALPHA-671) ────────────────────────────────────────────────
+# 기존 writer(`eventstore.persist_explanation`)는 **테넌트 팬아웃과 게시 게이트**를
+# 갖고 있다(advisory lock · 그날 첫 결과만 PUBLISHED · tenant_delivery 채번). 그것을
+# 우회하면 산출은 남는데 **아무에게도 배달되지 않는다**. 그래서 계보 적재를 새로
+# 만들지 않고, statics 산출을 그 writer 가 먹는 모양(`Explanation`)으로 바꾼다.
+#
+# `Explanation` 은 dict 뷰다: verdict/confidence 를 한글 어휘로 주면 기존 매핑이
+# 원장 enum 으로 옮긴다. **어휘를 늘리지 않는다** - 그 매핑이 이미 정본이다.
+VERDICT_WORDS = {"EVENT_SUPPORTED": "공식 이벤트 선행", "MIXED": "시장·섹터 주도",
+                 "PRICE_ONLY": "수급·흐름 추정", "UNCERTAIN": "원인 미확인"}
+CONFIDENCE_WORDS = {"HIGH": "높음", "MEDIUM": "중간", "LOW": "보류"}
+
+
+def as_explanation(honest: str, headline: str, v: Verdicts, stage: dict):
+    """statics 산출 → `domain.models.Explanation`. 기존 영속 경로가 그대로 받는다."""
+    from ..domain.models import Explanation
+    return Explanation(raw={
+        # `explain` 이 summary 가 된다(정직한 설명 전문).
+        "explain": honest,
+        # `headline` 은 MTS 카드용 한 줄 - 쉬운 설명(토스식)이 그 자리다.
+        "headline": headline,
+        "verdict": VERDICT_WORDS.get(v.explanation_type, "원인 미확인"),
+        "confidence": CONFIDENCE_WORDS.get(v.confidence_level, "보류"),
+        # 원장이 버리는 것을 런 아카이브가 남긴다 - 층 회계·판정·근거 묶음 id.
+        "stage_results": stage,
+        "evidence_bundles": list(v.bundles),
+    })
+
+
+def verdicts_from(text: str, *, route_kind: str, idio_qualified: bool,
+                  bundles: tuple[str, ...] = ()) -> Verdicts:
+    """산출 산문 → 판정 요약. **게이트가 낸 어휘만 센다** - '유의' 를 그냥 세면
+    '무유의' 줄에도 걸린다."""
+    return Verdicts(
+        applied_edges=text.count("→ **오늘 적용**"),
+        credible=text.count("[함의]") - text.count("[함의] 없음"),
+        significant_market=text.count("**유의**"),
+        undecided=text.count("판정불가"),
+        route_kind=route_kind, idio_qualified=idio_qualified, bundles=bundles)

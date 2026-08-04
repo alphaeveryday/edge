@@ -110,26 +110,6 @@ class EventStore:
             return cur.fetchone() is not None
 
     # -- 읽기 --------------------------------------------------------------- #
-    def causal_data(self):
-        """인과 설계용 조회 표면. **같은 커넥션**을 공유한다 - PIT 기준이 갈리면 안 된다.
-
-        `_conn` 을 밖으로 내보내지 않는다. 인과 엔진이 필요한 것은 코호트·정렬열·비중이고
-        그건 `CausalData` 의 계약이다.
-        """
-        from .causal_data import CausalData
-        return CausalData(self._conn)
-
-    def sql_surface(self, *, as_of: str, trade_date):
-        """P2·P3·P5 의 자유 질의 표면. **같은 커넥션**을 공유한다.
-
-        고정 함수 표면(`causal_data`)과 나란히 두는 이유: 검정은 무엇을 잴지 정해진
-        뒤의 일이라 고정 함수가 맞지만, 가설을 세우는 단계는 무엇을 물어야 할지 모르는
-        상태다 - 물음의 모양을 미리 정해 주면 모델이 그 모양으로 표현 가능한 답만 찾는다.
-        시점 클램프는 뷰 안에 있으므로 두 표면의 PIT 기준이 갈리지 않는다.
-        """
-        from .sql_surface import SqlSurface
-        return SqlSurface(self._conn, as_of=as_of, trade_date=trade_date)
-
     def load_entity_index(self) -> dict[str, str]:
         """ticker -> instrument entity_id (KR 시드 전 종목).
 
