@@ -27,7 +27,7 @@
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
 | `explanation_run_event_evidence` | 번들 `evidences` 이벤트 근거 갈래의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 잇는 경로(공시 갈래는 아래 행). "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
 | `explanation_run_disclosure_fact` (+ `disclosure_fact`) | 번들 `evidences` 공시 갈래 lineage — 공시 정규화 사실이 어느 run 에 속하는지 + `disclosure_fact.document_id` 로 문서 도달. 조립 편입(ALPHA-718)으로 경계면이다 — "내부 구현·자유 변경" 아님, 양자 합의 대상 | `(explanation_run_id, fact_id, stage_code)` · `fact_id` |
-| `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
+| `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at, source_uri}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395, source_uri 는 ALPHA-739 확장). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
 | `event_thread` | 동일 실제 사건의 계보(후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
 | `instrument` · `entity` | 번들의 `etf_ticker`·`etf_name` 공급(조인) — 온프렘 서빙 키가 ticker 라서 경계면에 포함 (확정 2026-07-21) | `instrument_id` = `entity_id` |
@@ -73,7 +73,7 @@
         "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
       "source_events": [ { "source_event_id": "...", "source_class": "NEWS", "event_type_code": "EARNINGS", "event_date": "2026-07-14" } ],
-      "evidences": [ { "kind": "NEWS", "title": "실적 발표 기사", "source": "YONHAP", "published_at": "2026-07-14T00:00:00Z" } ]
+      "evidences": [ { "kind": "NEWS", "title": "실적 발표 기사", "source": "YONHAP", "published_at": "2026-07-14T00:00:00Z", "source_uri": "https://news.example.com/a1" } ]
     },
     {
       "cursor": 103,

@@ -232,7 +232,7 @@ public class ExplanationService {
 		return byItem;
 	}
 
-	// ── evidences JSONB([{kind,title,source,published_at}]) → 도메인 근거 목록 ──
+	// ── evidences JSONB([{kind,title,source,published_at,source_uri}]) → 도메인 근거 목록 ──
 
 	private List<Explanation.Evidence> parseEvidence(String evidencesJson) {
 		if (evidencesJson == null || evidencesJson.isBlank()) {
