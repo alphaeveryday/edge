@@ -298,9 +298,14 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
     raise PlainError(f"{why} | 마지막 답: {last[:90]!r}")
 
 
-# 재료 하나가 **부호 있는 크기 하나**로 요약되는 종류. 여러 개를 실은 재료(예: 5분 괴리
-# 분해는 바스켓몫·괴리변화몫 둘)는 어느 것을 말하는지 알 수 없으므로 구속하지 않는다.
-_SIGNED_KEY = ("att", "factor_ret", "그_창_괴리몫", "조절계수")
+# 재료 하나가 **부호 있는 크기 하나**로 요약되는 종류. 여러 개를 실은 재료는 어느 것을
+# 말하는지 알 수 없으므로 구속하지 않는다.
+#
+# `그_창_괴리몫` 을 여기 넣었다가 30일 배치에서 **5일을 죽였다**(8건 실패 중 5건).
+# 5분 괴리 분해 재료는 하루·바스켓몫·괴리변화몫·그_창_괴리몫 넷을 싣는데, 주장이
+# 말하는 것은 보통 **하루 방향**이고 최대 괴리 창의 부호는 그와 반대일 수 있다
+# (실측: 하루 +9.24%p 인데 그_창_괴리몫 -0.00483). 규칙을 내가 세우고 내가 깼다.
+_SIGNED_KEY = ("att", "factor_ret", "조절계수")
 
 
 def _sign_guard(i: int, sign: int, srcs: list[dict]) -> None:
@@ -462,6 +467,33 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
         bundles.append(b)
         lines.append(f"{txt} {b.tag}")
     return " ".join(lines), bundles
+
+
+CARD_MAX = 45           # MTS 목록 카드 한 줄 상한(자). 넘으면 잘리고 뜻이 바뀐다
+
+
+def card(plain: str, *, limit: int = CARD_MAX) -> str:
+    """쉬운 설명 → **목록 카드 한 줄**. 첫 문장이 카드다.
+
+    세 길이를 쓴다: 카드 한 줄(목록에서 스캔) · 쉬운 설명 3~5문장(카드를 열었을 때) ·
+    정직한 전문(근거 보기). 지금까지 원장의 `headline` 에 **쉬운 설명 전문**이 들어가
+    카드가 네 문장이었다 - 목록에서 잘리면 뜻이 바뀐다.
+
+    카드를 따로 쓰지 않고 **첫 문장을 그대로 쓴다**: 가드가 이미 첫 문장에 '오늘 무엇이
+    어떻게 됐는지' 를 강제하므로 카드에 필요한 것이 거기 있다. 따로 생성하면 (a) 새 LLM
+    호출과 새 실패 지점이 생기고 (b) 카드와 본문이 어긋날 수 있다.
+    """
+    body = plain.strip().lstrip("=").strip()
+    first = re.split(r"(?<=[.!?요])\s", body, maxsplit=1)[0] if body else ""
+    first = re.sub(r"\s*\{[^}]*\}\s*", " ", first).strip()   # 꼬리표는 카드에 안 싣는다
+    if not first:
+        return ""
+    if len(first) <= limit:
+        return first
+    # 낱말 경계에서 자른다 - 글자 중간에서 끊으면 뜻이 바뀐다
+    cut = first[:limit]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp >= limit // 2 else cut).rstrip(" ,·") + "…"
 
 
 def dual(honest: str, plain: str, bundles: list | None = None) -> str:

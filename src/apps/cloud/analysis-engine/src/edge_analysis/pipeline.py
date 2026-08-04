@@ -219,12 +219,18 @@ def run(
     write_agent_trace(s3, settings, trace)
 
     honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
-    headline = plain.strip().lstrip("=").strip()
+    # **세 길이를 구분한다.** 카드(목록 한 줄) · 쉬운 설명(3~5문장) · 정직한 전문.
+    # 이전에는 `headline` 에 쉬운 설명 전문이 들어가 카드가 네 문장이었다.
+    from .statics.plain import card as _card
+    headline = _card(plain)
     # 층·라우팅은 위에서 이미 냈다 - 다시 분해하지 않는다(같은 셀에 두 답 금지)
     stage = {"route": (rt.kind if rt else ""), "layers": [
         {"kind": x.kind, "name": x.name, "contribution": x.contribution}
         for x in (roll.layers if roll else ())],
-        "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None)}
+        "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
+        # 중간 길이(쉬운 설명 3~5문장)는 최종사용자용 본문이다. 전용 컬럼이 생기기
+        # 전까지 jsonb 로 남긴다 - 버리면 카드와 전문 사이가 빈다.
+        "plain": plain.strip().lstrip("=").strip()}
     verdicts = verdicts_from(
         text, route_kind=(rt.kind if rt else ""),
         idio_qualified=bool(roll is None or roll.rho is None or abs(roll.rho) < 0.20),

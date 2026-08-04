@@ -261,17 +261,22 @@ def member_news(lake, roll, day: str, top: int = 4, per: int = 4) -> list[dict]:
     `판정: 관측 - 방향 미검정` 을 달아 보낸다(`plain._sign_guard` 가 방향 주장을 막는다).
     """
     from .evidence import news_objectset
+    from .paneltest import _base
     names = sorted((n for n in roll.names if n.contribution is not None),
                    key=lambda n: -abs(n.contribution))[:top]
     if not names:
         return []
     want = {n.ticker.split(".")[0]: n for n in names}
     try:
-        rows = lake.sql(
-            "SELECT ticker, instrument_id FROM v_instrument WHERE ticker IN ("
-            + ",".join(repr(t) for t in want) + ")")
-    except Exception:                               # noqa: BLE001 - 부재는 빈 목록
-        return []
+        # `v_instrument` 는 **독립 뷰가 아니라 `_base(day)` 가 만드는 CTE** 다.
+        # 이걸 빼먹어 질의가 `CatalogException` 으로 죽고 `except: return []` 가
+        # 조용히 삼켰다 - 30일 배치에서 뉴스 인용이 0/30 이었던 이유다. 부재를 빈
+        # 목록으로 돌려주는 except 절이 원인을 통째로 감췄다.
+        rows = lake.sql(_base(day) + "SELECT ticker, instrument_id FROM v_instrument "
+                        "WHERE ticker IN (" + ",".join(repr(t) for t in want) + ")")
+    except Exception as exc:                        # noqa: BLE001 - 사유를 남긴다
+        return [{"ref": "!뉴스오류", "title": f"{type(exc).__name__}: {str(exc)[:80]}",
+                 "종목": "", "판정": "조회 실패 - 부재가 아니다"}]
     out: list[dict] = []
     for tk, iid in rows:
         nm = want.get(str(tk))

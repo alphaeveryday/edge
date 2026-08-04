@@ -257,3 +257,69 @@ def test_callable_tool_list_is_derived_from_the_menu():
         for n, _ in menu:
             assert n in names, f"{stage} 가 광고하는 {n} 이 호출 목록에 없다"
     assert len(names) == len(set(names)), "중복 없음"
+
+
+def test_member_news_needs_the_base_ctes_and_never_swallows_the_reason():
+    """`v_instrument` 는 **`_base(day)` 가 만드는 CTE** 다 - 독립 뷰가 아니다.
+
+    실측: 그걸 빼먹어 질의가 `CatalogException` 으로 죽고 `except: return []` 가 조용히
+    삼켰다 → 30일 배치에서 뉴스 인용이 **0/30** 이었다. 배선은 했는데 산출이 0 이면
+    '뉴스가 없다' 와 '질의가 죽었다' 가 같아 보인다 - 이 저장소가 가장 싫어하는 실패다.
+    """
+    from edge_analysis.statics.etfcell import member_news
+
+    class _Name:
+        def __init__(self, tk, c):
+            self.ticker, self.label, self.contribution = tk, tk, c
+
+    class _Roll:
+        names = (_Name("005930", 0.01), _Name("000660", -0.02))
+
+    class _Lake:
+        """질의에 `_base` 의 CTE 가 들어왔는지 본다 - 안 들어오면 실제로 죽는다."""
+
+        def __init__(self, boom=False):
+            self.boom, self.seen = boom, []
+            self.exists = {"rdb": True, "tau_sidecar": 0}
+
+        def sql(self, q):
+            self.seen.append(q)
+            if self.boom:
+                raise RuntimeError("Catalog Error: v_instrument does not exist")
+            # `_base` 는 v_instrument 를 정의하기만 한다 - 조회하는 질의만 골라낸다
+            if "SELECT ticker, instrument_id FROM v_instrument" in q:
+                assert "WITH" in q.upper(), "_base 의 CTE 없이 v_instrument 를 조회했다"
+                return [("005930", "i_sam")]
+            return []                       # 뉴스 질의는 빈 결과 (부재는 부재다)
+
+    lk = _Lake()
+    assert member_news(lk, _Roll(), "2026-07-27") == [], "뉴스 부재는 빈 목록이다"
+    assert any("SELECT ticker, instrument_id FROM v_instrument" in q for q in lk.seen)
+
+    # 조회 실패는 **빈 목록이 아니다** - 사유를 실어 보낸다
+    out = member_news(_Lake(boom=True), _Roll(), "2026-07-27")
+    assert out and out[0]["ref"].startswith("!")
+    assert "부재가 아니다" in out[0]["판정"]
+
+
+def test_multi_signed_material_does_not_constrain_the_claim_sign():
+    """여러 부호를 실은 재료는 방향을 구속하지 않는다 - **내가 세운 규칙을 내가 깼다.**
+
+    `그_창_괴리몫` 을 `_SIGNED_KEY` 에 넣었다가 30일 배치에서 5일을 죽였다(실패 8건 중
+    5건). 5분 괴리 분해 재료는 하루·바스켓몫·괴리변화몫·그_창_괴리몫 넷을 싣는데 주장이
+    말하는 것은 보통 하루 방향이고, 최대 괴리 창의 부호는 그와 반대일 수 있다
+    (실측: 하루 +9.24%p 인데 그_창_괴리몫 -0.00483).
+    """
+    from edge_analysis.statics.plain import _SIGNED_KEY, _assemble, context
+
+    assert "그_창_괴리몫" not in _SIGNED_KEY
+    ctx = context(ticker_name="K", day_log=0.09, idio_log=0.08, route_kind="고유",
+                  market_name="M", recent={"when": "오후"}, established=["x"],
+                  overnight=[], unexplained_top=False)
+    mat = {"ref": "s1", "kind": "5분 괴리 분해", "하루": 0.0924,
+           "바스켓몫": 0.08, "괴리변화몫": 0.0124, "그_창_괴리몫": -0.00483,
+           "창수": 77, "판정": "바스켓이 끌었다"}
+    txt, _ = _assemble(
+        [{"text": "오후에 크게 올랐어요", "basis": "statistical", "refs": ["s1"],
+          "sign": 1}], ctx, {"s1": mat}, [], "c", "d", "")
+    assert "올랐어요" in txt, "하루가 올랐으면 +1 이 맞다 - 창 하나의 부호로 막지 않는다"

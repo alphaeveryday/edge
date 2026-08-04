@@ -799,3 +799,35 @@ def test_the_first_claim_may_state_the_day_without_evidence():
     with pytest.raises(PlainError):
         _assemble([{"text": "장 열린 직후에 무슨 일이 있었어요", "basis": "none",
                     "refs": [], "sign": 1}], blind, {}, [], "c", "d", "")
+
+
+def test_card_is_one_sentence_not_the_whole_plain_text():
+    """카드는 **한 줄**이다 - 원장 `headline` 에 전문이 들어가면 목록에서 잘린다.
+
+    세 길이를 쓴다: 카드(목록 스캔) · 쉬운 설명 3~5문장(카드를 열었을 때) · 정직한
+    전문(근거 보기). 실측: `headline = plain.strip()` 이라 카드가 네 문장이었다.
+
+    카드를 따로 **생성하지 않는다**. 첫 문장이 카드다 - 가드가 이미 첫 문장에 '오늘
+    무엇이 어떻게 됐는지' 를 강제하므로 필요한 것이 거기 있고, 따로 만들면 카드와
+    본문이 어긋날 수 있다.
+    """
+    from edge_analysis.statics.plain import CARD_MAX, card
+
+    body = ("밤사이 해외 반도체가 내려 오늘 크게 내렸어요. {statistical, ev_a, -1} "
+            "국내 소식은 확인되지 않았어요. {none, -, +0}")
+    c = card(body)
+    assert c == "밤사이 해외 반도체가 내려 오늘 크게 내렸어요."
+    assert "{" not in c and "ev_" not in c, "꼬리표는 카드에 안 싣는다"
+    assert "국내 소식" not in c, "둘째 문장은 카드가 아니다"
+    assert len(c) <= CARD_MAX
+
+    # 상한 초과는 낱말 경계에서 자르고 말줄임을 남긴다 - 글자 중간에서 끊으면 뜻이 바뀐다
+    long = "밤사이 미국 반도체 지수가 크게 내리면서 오늘 국내 반도체 ETF 도 " \
+           "장 시작부터 뚜렷하게 내렸어요."
+    lc = card(long)
+    assert len(lc) <= CARD_MAX + 1 and lc.endswith("…")
+    assert not lc.rstrip("…").endswith(" ")
+
+    # 머리 구분선·빈 본문
+    assert card("\n====\n오늘 올랐어요. {statistical, ev_a, +1}") == "오늘 올랐어요."
+    assert card("") == "" and card("   \n=== ") == ""
