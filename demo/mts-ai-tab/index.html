@@ -203,7 +203,8 @@
           <span class="skel" style="width:64%"></span>
         </div>
         <!-- 200: 리포트 본문 (첫 블록=헤드라인, 이후 문단) — 중앙 정렬 + 좌우 여백 (ALPHA-733 피드백) -->
-        <div id="ai-body" style="display:none;text-align:center">
+        <!-- 본문만 패널 여백에서 5px 더 안쪽 — 헤더·디스클레이머보다 살짝 좁게 (사용자 확정값) -->
+        <div id="ai-body" style="display:none;text-align:center;padding:0 5px">
           <h2 id="ai-headline" style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.45;margin:16px 0 14px;text-wrap:pretty"></h2>
           <div id="ai-paragraphs"></div>
         </div>
