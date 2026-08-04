@@ -262,19 +262,17 @@ def test_revert_with_no_published_targets_is_quiet_noop():
     assert client.logins == 0 and client.invalidations == []
 
 
-def test_revert_all_targets_missing_in_api_is_transient_not_success():
-    """전건 404 = 무효화 API 가 다른 원장(오배선 URL)을 본다는 시그니처 — 한 건도 안
-    내려갔는데 성공으로 접으면 설명이 노출된 채 조용히 남는다(Rule 12). 재배달로 올려
-    반복되면 DLQ 가 드러낸다. 격리된 404(일부만)는 경고로 남기고 성공이다."""
-    client = FakeAdminClient(outcomes={"run_a": "not_found", "run_b": "not_found"})
+def test_revert_any_target_missing_in_api_is_transient_not_success():
+    """404 는 방금 읽은 run 이 API 원장에 없다는 뜻(오배선 URL·원장 불일치) — 그 설명은
+    PUBLISHED 로 남았는데 성공으로 접으면(부분 404 포함) 재시도 기회가 사라진다(Rule 12).
+    전 대상 시도 후 transient 로 올린다 — 재배달 재질의는 이미 내려간 건(WITHDRAWN)을
+    다시 안 잡으므로 남은 건만 재시도되고, 반복되면 DLQ 가 드러낸다."""
+    partial = FakeAdminClient(outcomes={"run_a": "not_found"})
     with pytest.raises(SuperAdminUnavailableError):
         revert_explanations(dict(REVERT_PAYLOAD),
-                            store=FakeStore(["run_a", "run_b"]), client=client)
-
-    partial = FakeAdminClient(outcomes={"run_a": "not_found"})
-    assert revert_explanations(dict(REVERT_PAYLOAD),
-                               store=FakeStore(["run_a", "run_b"]),
-                               client=partial) == "reverted"
+                            store=FakeStore(["run_a", "run_b"]), client=partial)
+    # 남은 대상(run_b)은 raise 전에 이미 시도됐다 — 부분 진행을 버리지 않는다.
+    assert ("run_b", REVERT_REASON) in partial.invalidations
 
 
 @pytest.mark.parametrize("fail", ["login", "invalidate"])

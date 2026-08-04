@@ -175,12 +175,15 @@ def revert_explanations(payload: dict, *, store, client) -> str:
             # 질의로 찾은 run 이 API 에선 없다 — 질의·API 의 원장이 갈렸다는 신호라
             # 조용히 넘기지 않는다(단 회수 자체는 남은 대상으로 계속한다).
             logger.warning("무효화 대상 run 이 super-admin 에 없다: %s", run_id)
-    if outcomes["not_found"] == len(run_ids):
-        # 전건 404 = API 가 다른 원장(오배선 URL)을 보고 있다는 시그니처 — 한 건도
-        # 회수되지 않았는데 성공으로 접으면 설명이 노출된 채 조용히 남는다(Rule 12).
-        # 재배달로 올려 반복되면 DLQ 가 드러낸다. 격리된 404 는 위 경고로 남긴다.
+    if outcomes["not_found"]:
+        # 404 = 방금 읽은 run 이 API 원장에 없다(오배선 URL·원장 불일치) — 그 설명은
+        # PUBLISHED 로 남았는데 성공으로 접으면 재시도 기회가 사라진다(Rule 12,
+        # 반쯤 회수하고 성공 처리 금지). 전 대상 시도 후 재배달로 올린다 — 재질의는
+        # 이미 내려간 건을 다시 안 잡으므로(WITHDRAWN) 남은 건만 재시도되고,
+        # 반복되면 DLQ 가 드러낸다.
         raise SuperAdminUnavailableError(
-            f"무효화 대상 {len(run_ids)}건 전부 super-admin 에 없다 — 원장 불일치"
+            f"무효화 대상 {outcomes['not_found']}/{len(run_ids)}건이 super-admin 에"
+            " 없다 — 원장 불일치"
         )
     log("revert.done", entity_id=entity_id, session_id=session_id,
         targets=len(run_ids), **outcomes)
