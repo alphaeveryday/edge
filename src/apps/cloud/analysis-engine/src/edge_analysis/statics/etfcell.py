@@ -37,6 +37,7 @@ def run(lake, etf: str, day: str, ask=None) -> str:
     """
     from .layers import decompose
     from .premium import screen
+    from .premium5 import premium_5m
     out: list[str] = []
 
     roll = decompose(lake, etf, day)
@@ -53,6 +54,17 @@ def run(lake, etf: str, day: str, ask=None) -> str:
                        "바스켓/수급 분기 없이 층 라우팅만 한다")
     except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
         out.append(f"[괴리] 판정 불가 — {type(e).__name__}: {str(e)[:70]}")
+    # 5분 괴리 분해는 **선제적**이다 - NAV 가 있으면 하루를 바스켓 몫과 괴리변화 몫으로
+    # 쪼갠다(로그 항등식). 재료가 없으면 사유 한 줄만 남기고 넘어간다 - 이것 때문에
+    # 셀 설명이 멈추면 안 된다. 실측(2026-08): NAV 33종목 중 5분봉이 겹치는 것 1종목.
+    split, why5 = premium_5m(lake, etf, day)
+    out.append(f"[괴리·5분] {why5}")
+    if split is not None:
+        # 괴리 몫이 **어느 창에서** 났는지 짚는다 - 하루 합만 주면 '방금 왜' 에 답이 없다
+        for w in sorted(split.wins, key=lambda x: -abs(x.d_prem))[:3]:
+            out.append(f"  {str(w.ts)[11:16]} 괴리 {w.premium * 100:+.2f}% · "
+                       f"ETF {w.r_etf * 100:+.2f}%p = 바스켓 {w.r_bk * 100:+.2f}%p "
+                       f"+ 괴리 {w.d_prem * 100:+.2f}%p")
 
     out.append(f"[ETF] {etf} {roll.etf_name} · {day} · 하루 "
                f"{roll.total * 100:+.2f}%p (로그)")
@@ -145,6 +157,19 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
             "beta_ci": list(mr.get("gap_beta") or ()),
             "explained": mr.get("mkt_explained"),
             "note": mr.get("gap_reason", "")[:60]}))
+    # 5분 괴리 분해가 있으면 **하루의 두 몫**을 재료로 준다. 이것이 '바스켓이 올라서'
+    # 와 'ETF 값만 따로 올라서(수급)' 를 낱말이 아니라 수치로 갈라 준다.
+    if split is not None:
+        top = max(split.wins, key=lambda w: abs(w.d_prem))
+        stats.append(_plain_num({
+            "ref": f"s{len(stats) + 1}", "kind": "5분 괴리 분해",
+            "하루": round(split.total, 5), "바스켓몫": round(split.basket, 5),
+            "괴리변화몫": round(split.premium_move, 5),
+            "괴리_시작": round(split.prem_open, 5), "괴리_끝": round(split.prem_last, 5),
+            "괴리_최대창": str(top.ts)[11:16], "그_창_괴리몫": round(top.d_prem, 5),
+            "창수": len(split.wins),
+            "판정": ("바스켓이 끌었다" if abs(split.basket) >= abs(split.premium_move)
+                   else "ETF 값만 따로 움직였다(수급)")}))
     # **판정 등급을 코드가 실어 준다.** 수치만 주면 모델이 p 를 제 맘대로 읽는다 -
     # 실측: p=0.232 · ATT -2.5%p 를 '큰 영향을 주지 않았어요' 로 단정했다.
     stats += [_plain_num({

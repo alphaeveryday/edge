@@ -21,10 +21,16 @@ CREATE TABLE IF NOT EXISTS analysis_evidence_bundle (
     claim       TEXT        NOT NULL,
     news_ids    TEXT[]      NOT NULL DEFAULT '{}',
     stats       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    -- 트리거 시점의 방향: +1 올림 · 0 무관 · -1 내림. 산문은 낱말로 말하고 이 칸은
+    -- 기계가 읽는다 - 같은 하루에 역풍(-1)과 순풍(+1)이 섞이는 것이 정상이고, 낱말로만
+    -- 두면 집계도 검산도 못 한다.
+    sign        SMALLINT    NOT NULL DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT ck_analysis_evidence_bundle_basis
         CHECK (basis IN ('statistical', 'narrative')),
     -- 근거 없는 묶음은 근거가 아니다. 서사는 뉴스 id 가, 통계는 검정 수치가 있어야 한다.
+    CONSTRAINT ck_analysis_evidence_bundle_sign
+        CHECK (sign IN (-1, 0, 1)),
     CONSTRAINT ck_analysis_evidence_bundle_grounded
         CHECK ((basis = 'narrative'   AND cardinality(news_ids) > 0)
             OR (basis = 'statistical' AND stats <> '{}'::jsonb))
@@ -41,5 +47,7 @@ COMMENT ON COLUMN analysis_evidence_bundle.cell IS
     '분석 셀 식별자 - ETF 코드 또는 종목 티커';
 COMMENT ON COLUMN analysis_evidence_bundle.stats IS
     'basis=statistical 일 때 그 가설의 검정 결과 (etype·slots·n·att·p·verdict·iset)';
+COMMENT ON COLUMN analysis_evidence_bundle.sign IS
+    '트리거 시점 방향 (+1 올림 · 0 무관 · -1 내림) - 쉬운 설명의 {basis, bundle_id, sign} 꼬리표가 이 값이다';
 COMMENT ON COLUMN analysis_evidence_bundle.news_ids IS
     'basis=narrative 일 때 근거가 된 뉴스 문서 id 목록 (재보도 제외·스레드 첫 보도)';

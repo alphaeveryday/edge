@@ -154,10 +154,17 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 ## 반드시
 - 주장 세 개에서 다섯 개. 각 주장은 한 문장. 존댓말. 짧게.
 - **첫 주장은 '방금/오늘 무엇이 어떻게 됐는지'**, 다음부터 '왜'.
-- **최근 시점의 움직임을 반드시 언급**한다 - 하루 요약으로 도망가지 마라.
+- **재료의 `최근_시점` 낱말을 그 글자 그대로 문장에 넣어라** (예: 재료가 '밤사이' 면
+  문장에 '밤사이' 가 들어가야 한다). 하루 요약으로 도망가면 '방금 왜' 에 답이 없다.
+  첫 주장에 넣는 것이 가장 자연스럽다: "밤사이부터 오늘 크게 올랐어요".
 - 시장을 따라간 것인지, 이 종목만 다르게 간 것인지 **분명히** 말한다.
 - 주장마다 **근거를 고른다**: 참조키 목록. 통계 재료(s로 시작)면 basis=statistical,
   뉴스(n으로 시작)면 basis=narrative. 근거 없는 주장은 내지 마라.
+- 주장마다 **방향(sign)** 을 적는다 - 값이 튄 그 시점에 이 이유가 가격을 어느 쪽으로
+  밀었나: `1` 올림 · `-1` 내림 · `0` 방향 없음(배경·부재·모른다).
+  같은 하루에 +1 과 -1 이 섞이는 것이 정상이다(순풍과 역풍). 억지로 맞추지 마라.
+  **첫 주장의 방향은 오늘 하루의 방향과 같아야 한다** - 첫 문장은 오늘 무엇이 어떻게
+  됐는지이므로.
 - 근거가 아무것도 없으면 "아직 뚜렷한 이유는 안 보여요" 처럼 **모른다고** 말하고
   refs 를 비워라. 지어내면 안 된다.
 
@@ -181,7 +188,7 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 
 ## 답 (JSON 만)
 {{"claims": [{{"text": "한 문장", "basis": "statistical|narrative|none",
-              "refs": ["s1"]}}]}}"""
+              "refs": ["s1"], "sign": 1}}]}}"""
 
 
 # 방향 낱말. **반대 방향을 말하면 그 산문은 거짓이다** - 실측(091160 07-27): 하루가
@@ -270,6 +277,41 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
     raise PlainError(f"{why} | 마지막 답: {last[:90]!r}")
 
 
+# 재료 하나가 **부호 있는 크기 하나**로 요약되는 종류. 여러 개를 실은 재료(예: 5분 괴리
+# 분해는 바스켓몫·괴리변화몫 둘)는 어느 것을 말하는지 알 수 없으므로 구속하지 않는다.
+_SIGNED_KEY = ("att", "factor_ret", "그_창_괴리몫")
+
+
+def _sign_guard(i: int, sign: int, srcs: list[dict]) -> None:
+    """주장의 방향이 **인용한 근거와 같은지** 코드가 판정한다.
+
+    `sign` 이 꼬리표와 DB 에만 들어가면 그건 장식이다 - 읽는 자리가 여기다. 두 가지를
+    막는다:
+
+      1. **못 가름 근거로 방향을 주장**하는 것. 무유의는 '영향 없음'이 아니지만 방향을
+         주장할 근거도 아니다 (실측: p=0.232 · ATT -2.5%p 를 단정으로 읽었다).
+      2. **근거와 반대 방향**을 주장하는 것. ATT 가 음수인데 '올렸다(+1)' 면 그 주장은
+         자기 근거가 반증한다.
+    """
+    for st in srcs:
+        if "못 가름" in str(st.get("판정", "")):
+            if sign != 0:
+                raise PlainError(
+                    f"#{i} 못 가름 근거로 방향({sign:+d})을 주장했다 - 무유의는 "
+                    "'영향 없음'도 아니지만 방향의 근거도 아니다 (0 이어야 한다)")
+            continue
+        for k in _SIGNED_KEY:
+            v = st.get(k)
+            if v is None:
+                continue
+            want = 1 if float(v) > 0 else -1 if float(v) < 0 else 0
+            if sign != want:
+                raise PlainError(
+                    f"#{i} 방향({sign:+d})이 인용한 근거 {k}={v} 의 부호"
+                    f"({want:+d})와 다르다 - 주장이 자기 근거에 반증된다")
+            break
+
+
 def _stat_guard(i: int, txt: str, srcs: list[dict]) -> None:
     """통계 근거의 **강도를 넘는 단정**을 막는다. 등급은 코드가 읽는다."""
     from .vocab import ALPHA
@@ -305,6 +347,9 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
         raise PlainError("주장이 없다")
     lines: list[str] = []
     bundles: list = []
+    # 하루 방향의 부호. 무변동 셀은 첫 주장 방향을 강제하지 않는다.
+    d = str(ctx.get("방향") or "")
+    want_sign = 1 if "올랐" in d else -1 if "내렸" in d else None
     whole = " ".join(str(c.get("text", "")) for c in claims if isinstance(c, dict))
     guard(whole, ctx)                       # 숫자·용어·접지·최근시점은 전체에서 본다
     _dir_guard(str(claims[0].get("text", "")) if isinstance(claims[0], dict) else "", ctx)
@@ -314,13 +359,29 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
         txt = str(c["text"]).strip()
         basis = str(c.get("basis") or "none")
         refs = [str(r) for r in (c.get("refs") or [])]
+        # 방향은 **셋 중 하나**다. 빠뜨리거나 다른 값을 주면 즉사 - 기계가 읽는 칸에
+        # 모델의 자유서술이 들어오면 집계가 조용히 틀린다.
+        raw_sign = c.get("sign", None)
+        try:
+            sign = int(raw_sign)
+        except (TypeError, ValueError):
+            raise PlainError(f"#{i} 방향(sign)이 없거나 수가 아니다: {raw_sign!r} "
+                             "- 1(올림)·0(무관)·-1(내림) 중 하나를 적어라") from None
+        if sign not in (-1, 0, 1):
+            raise PlainError(f"#{i} 방향은 1·0·-1 중 하나다: {sign}")
+        if i == 1 and want_sign is not None and sign != want_sign:
+            raise PlainError(
+                f"#1 첫 주장의 방향({sign:+d})이 하루 방향({want_sign:+d})과 다르다 "
+                "- 첫 문장은 '오늘 무엇이 어떻게 됐는지' 다")
         if basis == "none" or not refs:
             # 근거 없는 주장은 **모른다는 말일 때만** 허용한다
             if not any(w in txt for w in ("안 보여", "알 수 없", "뚜렷하지", "찾지 못",
                                           "확인되지", "모르", "아직")):
                 raise PlainError(f"#{i} 근거 없는 주장인데 모른다고 말하지 않았다: "
                                  f"{txt[:40]!r}")
-            lines.append(txt)
+            # 근거가 없으면 묶음도 없다 - 그런데 방향 칸은 비워두지 않는다. 꼬리표를
+            # 아예 안 붙이면 '부호가 0 이다' 와 '부호를 못 매겼다' 가 같아 보인다.
+            lines.append(f"{txt} {{none, -, {sign:+d}}}")
             continue
         if bad := [r for r in refs if r not in byref]:
             raise PlainError(f"#{i} 없는 참조 {bad} - 재료에 없다 (날조 폐기)")
@@ -333,13 +394,14 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
             raise PlainError(f"#{i} basis={basis} 인데 참조는 {kind} 다")
         if kind == "statistical":
             _stat_guard(i, txt, [byref[r] for r in refs])
+            _sign_guard(i, sign, [byref[r] for r in refs])
         if kind == "narrative":
-            b = news_bundle(cell, day, txt, news, refs, layer=layer)
+            b = news_bundle(cell, day, txt, news, refs, layer=layer, sign=sign)
         else:
             st = {}
             for r in refs:
                 st.update({k: v for k, v in byref[r].items() if k != "ref"})
-            b = stat_bundle(cell, day, txt, layer=layer, **st)
+            b = stat_bundle(cell, day, txt, layer=layer, sign=sign, **st)
         bundles.append(b)
         lines.append(f"{txt} {b.tag}")
     return " ".join(lines), bundles

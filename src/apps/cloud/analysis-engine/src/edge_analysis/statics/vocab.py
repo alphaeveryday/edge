@@ -266,7 +266,10 @@ class HypothesisTuple:
     # ("운영"→"운영") 채워 넣는 게 잡혔다. 어디서도 쓰이지 않았다. 관계 노출이
     # 몫 배정 가능해지면(창 정렬, 백필 #5) 온톨로지 역할 어휘로 닫아서 되살린다.
     outcome: str            # 수익률 | 전이
-    sign: int               # +1 | -1
+    # sign 은 제거했다 (21R): 우리가 찾는 것은 **유효한 CATE** 이고 방향은 그 추정량의
+    # 산물이다(상위−하위). 모델이 방향을 미리 선언하게 하면 (a) 게이트는 이미 양측이라
+    # 아무 일도 하지 않고(17R), (b) 산문이 '방향 반대' 를 불성립으로 읽을 여지만 남고,
+    # (c) 오늘 하루를 본 뒤 고르는 방향은 사전등록이 아니라 방향 채굴이다.
     reduction_note: str = ""  # 환원 근거 (토큰→타입). 자유 텍스트가 아니라 감사 메모.
     intent: str = ""          # **이 튜플로 검정하려는 인과 주장** 한 문장 - 간선에 실려
                               # 검정 에이전트에게 전달된다. 무엇이 사실이면 성립인가.
@@ -274,8 +277,6 @@ class HypothesisTuple:
     def __post_init__(self) -> None:
         _need(self.channel, CHANNELS, "채널")
         _need(self.outcome, OUTCOME_KINDS, "결과종류")
-        if self.sign not in (+1, -1):
-            raise VocabError(f"부호는 ±1 이다: {self.sign}")
 
 
 

@@ -138,7 +138,11 @@ def run_market_trial(lake, day: str, *, etype: str, symbol: str = "069500",
               for i, pk in matched if i - lag >= 0 and min(pk) - lag >= 0]
         pre[f"t-{lag}"] = float(np.mean(pa)) if pa else None
     overlap = sum(1 for i, _pk in matched if dates[i] in others)
-    return {"verdict": "계산됨", "att": att, "p": p, "n_days": len(diffs),
+    # 무엇을 섞었는지가 무엇을 검정했는지다(21R): 짝 차의 **부호**를 섞었으므로 귀무는
+    # "처치-대조 대비가 0" 이다. 날짜를 섞는 귀무("이 날이 특별한가")가 아니다 - 셀이
+    # 큰 이상수익으로 선정된 뒤 그걸 물으면 순환이다.
+    return {"verdict": "계산됨", "null_kind": "pair", "att": att, "p": p,
+            "n_days": len(diffs),
             "pairs": pairs, "treated_all": len(ti), "pool": len(pool),
             "pretrend": pre, "overlap": overlap, "etype": etype, "day": day,
             "clean": clean_controls}

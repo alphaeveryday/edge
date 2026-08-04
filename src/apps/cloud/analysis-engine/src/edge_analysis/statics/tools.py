@@ -31,6 +31,7 @@ TOOL_TABLES: dict[str, tuple[str, ...]] = {
     "screen": ("price_daily", "source_event"),
     "series": ("price_daily",),
     "links": ("event_argument", "source_event"),
+    "args": ("event_argument", "source_event"),
     "flows": ("price_daily",),   # 수급은 S3 canonical - RDB 도달성과 무관
 }
 
@@ -288,6 +289,36 @@ class Catalog:
                     f"원장에 없다 (조회 성공). 관계 노출 가설은 접지가 없다")
         return "타입 있는 1홉 상대:\n" + "\n".join(
             f"  [{r[0]}] {r[1]} ×{r[3]}" for r in rows)
+
+    def args(self, type_like: str = "") -> str:
+        """사건의 **아규먼트** - 이 종목이 어떤 역할·서술어·단계·신규성으로 등장했나.
+
+        타입만 보면 거의 아무것도 안 말해준다 - 정보는 안에 있다. 그런데 방아쇠 문법은
+        이미 역할·서술어·단계·신규성으로 처치를 좁힐 수 있게 열려 있었고(`refine_sql`),
+        **그 값이 실제로 뭐가 있는지 볼 창구만 없었다**(21R). 어휘는 열려 있고 관측이
+        막혀 있으면 모델은 추측으로 좁히고, 좁힌 결과는 표본 0 이다.
+
+        분포는 **이력 전체**(PIT 절단 안)이고 `오늘` 열이 이 셀의 건수다 - 오늘 0 이면
+        그 값으로 방아쇠를 좁혀도 이 셀에는 처치가 없다.
+        """
+        flt = f"AND e.event_type_code LIKE '%{type_like}%'" if type_like else ""
+        rows = self._q(f"""
+            SELECT e.event_type_code, e.role_code, e.predicate_code,
+                   e.lifecycle_stage, e.novelty_status, count(*) n,
+                   sum(CASE WHEN e.trade_date = DATE '{self.day}' THEN 1 ELSE 0 END) today_n
+            FROM v_event e
+            WHERE e.instrument_id = '{self.instrument_id}' {flt}
+            GROUP BY 1,2,3,4,5 ORDER BY 6 DESC LIMIT {MAX_ROWS}""")
+        if isinstance(rows, str):
+            return rows
+        if not rows:
+            return (f"아규먼트 없음: 이 종목은 {type_like or '어떤 타입으로도'} 사건의 "
+                    f"인자로 원장에 없다 (조회 성공)")
+        return "역할·서술어·단계·신규성 분포 (이력 / 오늘):\n" + "\n".join(
+            f"  [{r[1] or '역할없음'}] {r[0]} · {r[2] or '서술어없음'} · "
+            f"{r[3] or '단계없음'} · {r[4] or '신규성없음'}  ×{r[5]}"
+            + (f"  **오늘 {r[6]}**" if r[6] else "  오늘 0")
+            for r in rows)
 
     def vocab(self, part: str = "") -> str:
         """닫힌 어휘. 한 번에 다 주지 않는다 - 물어본 부분만."""

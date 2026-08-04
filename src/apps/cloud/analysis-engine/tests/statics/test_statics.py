@@ -23,7 +23,7 @@ def _tuple(**kw):
         conditions=(Condition("수급", "누적", ">=", 0.9),),
         trigger=Trigger("점", "COMPANY.EARNINGS.RESULT"),
         channel="Q수량",
-        exposure=ExposureSource("속성", "재무파생"),  outcome="수익률", sign=-1)
+        exposure=ExposureSource("속성", "재무파생"),  outcome="수익률")
     base.update(kw)
     return HypothesisTuple(**base)
 

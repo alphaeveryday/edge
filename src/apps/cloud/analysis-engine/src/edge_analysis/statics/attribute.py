@@ -578,7 +578,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                                         "환원 불일치" if r.reduction.startswith("불일치") else
                                         "방아쇠 미발화" if r.trigger_fired is False else
                                         "패널 미성립"))
-        block += [f"[{t.channel}] {t.trigger.kind}:{t.trigger.ident[:44]} 부호{t.sign:+d}",
+        block += [f"[{t.channel}] {t.trigger.kind}:{t.trigger.ident[:44]}",
                   f"    조건 {cond} · 노출 {t.exposure.ident}/{t.exposure.transform}",
                   f"    환원(가설): {t.reduction_note[:90]}",
                   f"    패널: {r.line}",

@@ -367,7 +367,7 @@ def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
     # 조립이 임시 스크립트에만 있으면 매번 손으로 짜게 되고 그때마다 드리프트한다.
     (Path(out_dir) / f"report_{eid}.json").write_text(_json.dumps({
         "layer": layer, "channel": t.channel, "event_type": t.trigger.ident,
-        "sign": t.sign, "verdict": r.verdict, "applied": bool(r.applies_today),
+        "verdict": r.verdict, "applied": bool(r.applies_today),
         "n": r.n, "p": r.p, "ci_lo": r.ci_lo, "ci_hi": r.ci_hi,
         "contribution": r.contribution, "reason": r.reason,
         "has_conditions": bool(t.conditions),
@@ -509,7 +509,7 @@ def _cli() -> None:
                                         measurable=list(FEATURES), layer=env.get("layer") or "고유")
         for t in valid:
             print(f"[OK] {t.channel} · {t.trigger.kind}:{t.trigger.ident} · "
-                  f"노출 {t.exposure.ident}/{t.exposure.transform} · 부호{t.sign:+d} · "
+                  f"노출 {t.exposure.ident}/{t.exposure.transform} · "
                   f"의도: {t.intent}")
         for r in rejected:
             print(f"[REJ] {r}")

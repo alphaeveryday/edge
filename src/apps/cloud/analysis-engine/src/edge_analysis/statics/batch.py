@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 from .expressive import SLOTS, Survey, append_ledger, survey_cell
+from .registry import roadmap
 
 
 def cells(lake, etf_id: str, d0: str, d1: str, top: int = 8) -> list[tuple[str, str, str]]:
@@ -81,7 +82,7 @@ def run(lake, ask, etf_id: str, d0: str, d1: str, top: int = 8, n: int = 3,
     return out
 
 
-def report(surveys: list[Survey]) -> str:
+def report(surveys: list[Survey], root: str = "") -> str:
     """분포 보고. **평균 하나로 접지 않는다** - 흔들리면 흔들린다고 말해야 한다."""
     items = [r for s in surveys for r in s.items]
     if not items:
@@ -116,7 +117,20 @@ def report(surveys: list[Survey]) -> str:
     if want:
         out.append("  반복된 '필요했던 개념' (셀을 넘어 반복될수록 어휘 확장 1순위):")
         out += [f"    ×{c}  {w}" for w, c in want.most_common(10)]
+    # **판정불가 사유 = 데이터 수집 우선순위**(21R). 표현력 조사의 `blocked` 는 슬롯이
+    # 비었는지를 세고, 이건 검정 본선이 실제로 무엇에 막혔는지를 센다 - 후자가 로드맵이다.
+    if root:
+        rm = roadmap(root)
+        if rm:
+            out.append("  데이터 요청 큐 (채우면 열리는 가설 수 / 걸린 셀 수):")
+            out += [f"    +{r['unlocks']:>3} 가설 · 셀 {r['cells']:>2}  {r['need']}"
+                    for r in rm]
+        else:
+            out.append("  데이터 요청 큐: 비어 있음 (막힌 판정이 기록되지 않았다)")
     return "\n".join(out)
+
+
+
 if __name__ == "__main__":       # pragma: no cover
     import os
 
@@ -131,4 +145,4 @@ if __name__ == "__main__":       # pragma: no cover
     svs = run(CausalLake(), client.complete_json, sys.argv[1], sys.argv[2], sys.argv[3],
               top=int(sys.argv[4]) if len(sys.argv) > 4 else 8,
               n=int(sys.argv[5]) if len(sys.argv) > 5 else 3, root=root)
-    print(report(svs))
+    print(report(svs, root=root))

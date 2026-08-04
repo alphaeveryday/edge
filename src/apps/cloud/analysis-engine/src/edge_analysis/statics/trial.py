@@ -305,7 +305,7 @@ def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
     for e in etypes:
         r1 = run_trial(lake, day, etype=e, layer=layer, k=k)
         solo[e] = (r1["att"], r1["p"]) if r1.get("verdict") == "계산됨" else None
-    return {"verdict": "계산됨", "layer": layer, "pairs": len(rows),
+    return {"verdict": "계산됨", "null_kind": "pair", "layer": layer, "pairs": len(rows),
             "etypes": etypes, "att": [float(v) for v in obs], "p": ps,
             "n_treat": [int(v) for v in D.sum(axis=0)], "solo": solo}
 

@@ -22,7 +22,7 @@ def _h(channel="Q수량", ident="COMPANY.PRODUCT.LAUNCH", **kw):
             "trigger": {"kind": "점", "ident": ident},
             "channel": channel,
             "exposure": {"kind": "속성", "ident": "가격잔차", "transform": "누적"},
-            "outcome": "수익률", "sign": 1, "reduction_note": "n"}
+            "outcome": "수익률", "reduction_note": "n"}
     base.update(kw)
     return base
 
@@ -60,12 +60,11 @@ def test_propose_surfaces_measurable_affordance():
 
 
 # ── 검정 에이전트 ────────────────────────────────────────────────────────
-def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PRODUCT.LAUNCH"),
-           sign=1, pct=0.5):
+def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PRODUCT.LAUNCH"), pct=0.5):
     return HypothesisTuple(
         conditions=(Condition(vuln_family, vuln_tr, ">=", pct),),
         trigger=Trigger(*trigger), channel="Q수량",
-        exposure=ExposureSource("속성", "가격잔차", transform="누적"),  outcome="수익률", sign=sign)
+        exposure=ExposureSource("속성", "가격잔차", transform="누적"), outcome="수익률")
 
 
 class _Lake:
@@ -136,7 +135,7 @@ def test_determinism_and_thin_panel():
 def test_unmeasurable_declared_not_silent():
     # 거시는 종목 축이 없어 이 프레임에 못 들어온다 - 시장층 전용 추정기 소관.
     t = HypothesisTuple(conditions=(), trigger=Trigger("점", "X"), channel="R금리신용",
-                        exposure=ExposureSource("속성", "거시", transform="변화"),  outcome="수익률", sign=-1)
+                        exposure=ExposureSource("속성", "거시", transform="변화"),  outcome="수익률")
     r = edge_test(_Lake(), t, "2026-06-01")
     assert r.verdict == "판정불가" and "못 잰다" in r.reason
     t2 = _tuple(trigger=("계열", "수급"))
@@ -172,7 +171,7 @@ def test_relation_transmission_edge_tests_but_never_assigns():
 
     t = HypothesisTuple(
         conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
-        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),  outcome="수익률", sign=1)
+        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),  outcome="수익률")
     r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
     assert r.assignable is False and not r.applies_today       # 엣지만, 몫 배정 금지
@@ -195,7 +194,7 @@ def test_typed_link_relation_uses_ontology_hop_not_industry_proxy():
     t = HypothesisTuple(
         conditions=(), trigger=Trigger("점", "COMPANY.ALLIANCE.PARTNERSHIP"),
         channel="C원가", exposure=ExposureSource("관계", "SUPPLY_CHAIN", hops=1),
-        outcome="수익률", sign=1)
+        outcome="수익률")
     r = edge_test(LinkLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert "v_link" in seen["q"] and "SUPPLY_CHAIN" in seen["q"]
     assert "industry_name = ce.industry_name" not in seen["q"]   # 대리가 아니라 관계
@@ -299,14 +298,14 @@ def test_propose_rejects_unfired_series_trigger():
              "trigger": {"kind": "계열", "ident": "수급"},          # 미발화 - 날조
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "outcome": "수익률", "sign": 1,
+             "outcome": "수익률",
              "reduction_note": "x"},
             {"conditions": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "계열", "ident": "가격잔차"},      # 발화 - 유효
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "outcome": "수익률", "sign": -1,
+             "outcome": "수익률",
              "reduction_note": "y"}]}
     valid, rejected = propose(ask, facts="f", event_types=[],
                               measurable=[("가격잔차", "누적")],
@@ -335,14 +334,14 @@ def test_agent_decisions_are_traced_with_raw_submissions():
             {"conditions": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
              "channel": "Q수량", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "outcome": "수익률", "sign": 1,
+             "outcome": "수익률",
              "reduction_note": "x"},
             {"conditions": [{"family": "거래량", "transform": "수준",
                                   "comparator": ">=", "percentile": 0.9}],
              "trigger": {"kind": "점", "ident": "REAL.TYPE"},
              "channel": "K위험", "exposure": {"kind": "속성", "ident": "가격잔차",
                                               "transform": "누적"},
-             "outcome": "수익률", "sign": -1,
+             "outcome": "수익률",
              "reduction_note": "y"}]}
     with collect_trace() as tr:
         valid, rejected = propose(ask, facts="f", event_types=["REAL.TYPE"],
@@ -761,8 +760,9 @@ def test_opposite_direction_is_rejection_not_confirmation():
     assert _two_sided(0.999) < 0.01, "반대쪽 유의가 양측에서 작은 p 로 나온다"
     assert _two_sided(0.001) < 0.01, "같은쪽 유의도 작은 p"
     # 그래서 p 만으로는 두 경우를 구분할 수 없다 - 방향을 따로 봐야 한다
-    hi, lo, sign = -0.0068, -0.0026, 1
-    assert (hi - lo) * sign <= 0, "이 관측은 부호+1 주장과 어긋난다"
+    # 그래서 p 는 '유의한가' 만 답한다 - **방향은 추정량이 따로 말한다**(상위−하위)
+    hi, lo = -0.0068, -0.0026
+    assert hi - lo < 0, "상위가 하위보다 낮다 - 방향은 이 차이가 정한다"
     assert not np.isclose(hi, lo)
 
 
@@ -796,30 +796,36 @@ def test_panel_rows_are_order_deterministic():
         ar = np.array([r[2] for r in rows])
         dates = np.array([r[1] for r in rows])
         hi = np.array([r[3] for r in rows]) >= 3.0
-        return _stratified_p(ar, hi, dates, 1.0)
+        return _stratified_p(ar, hi, dates)
 
     assert p_of(a) == p_of(b)
 
 
-def test_sign_is_intent_not_a_gate():
-    """부호는 의도다 - 유의성 판정에 들어가면 발견이 실패로 위장된다.
+def test_direction_is_an_estimate_never_a_declaration():
+    """방향은 **추정량의 산물**이다 - 가설이 선언하면 발견이 실패로 위장된다.
 
     실측(000660 07-29): 하루가 -9.61% 인 걸 보고 6개 가설 부호를 전부 -1 로 썼다.
     '고β·고회전 종목이 더 올랐다 p=0.000' 이라는 강한 신호가 '방향 반대 -> 불성립'
-    으로만 기록됐다. 부호를 빼면 '유의 + 방향 의도와 불일치' 로 남는다.
+    으로만 기록됐다. 우리가 찾는 것은 유효한 CATE 이고 그 부호는 결과다 - 그래서
+    어휘에서 선언 슬롯을 없앴다(21R). 슬롯이 남아 있으면 언젠가 다시 게이트로 샌다.
     """
+    import dataclasses
+    import inspect
+
     from edge_analysis.statics.gates import edge_gate
-    from edge_analysis.statics.vocab import ALPHA
-    # 게이트는 n 과 p 만 본다 - 부호 인자가 아예 없다
+    from edge_analysis.statics.paneltest import _stratified_p, edge_test
+    from edge_analysis.statics.vocab import ALPHA, HypothesisTuple
+
+    # 어휘에 선언 슬롯이 없다
+    assert "sign" not in {f.name for f in dataclasses.fields(HypothesisTuple)}
+    # 게이트는 n 과 p 만 본다
     assert edge_gate(400, 0.001, alpha=ALPHA / 6) == "성립"
     assert edge_gate(400, 0.30, alpha=ALPHA / 6) == "불성립"
-    import inspect
-    sig = inspect.signature(edge_gate)
-    assert "sign" not in sig.parameters, "게이트가 부호를 받으면 안 된다"
-    src = inspect.getsource(__import__(
-        "edge_analysis.statics.paneltest", fromlist=["edge_test"]).edge_test)
-    assert "부호는 검정 대상이 아니다" in src
-    assert "wrong_way" not in src, "방향 가드가 남아 있다"
+    assert "sign" not in inspect.signature(edge_gate).parameters
+    # 순열 검정도 방향 인자를 받지 않는다 - 받으면 꼬리를 밖에서 고를 수 있다
+    assert "sign" not in inspect.signature(_stratified_p).parameters
+    src = inspect.getsource(edge_test)
+    assert "추정 방향" in src and "t.sign" not in src
 
 
 def test_cate_interaction_does_not_split_the_sample():

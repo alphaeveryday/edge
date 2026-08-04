@@ -345,6 +345,13 @@ class EdgeReport:
     trigger_fired: bool | None = None   # 계열 방아쇠의 오늘 발화 (None = 점 또는 미계측 처리 전)
     trigger_note: str = ""           # 오늘 방아쇠 어법 (계열에서만)
     reason: str = ""
+    # **재표집이 곧 주장이다**(21R). 무엇을 섞었는지가 무엇을 검정했는지를 정한다:
+    #   "label"  노출 라벨을 날짜 층 안에서 섞는다 → "이 경로가 맞나" (귀속 근거 O)
+    #   "pair"   짝 부호를 섞는다 (날짜 층화 내장)  → 처치-대조 대비  (귀속 근거 O)
+    #   "date"   날짜를 섞는다 → "이 날이 특별한가" → **순환**: 셀은 큰 이상수익으로
+    #            선정됐으므로 이미 특별하다. 그래서 귀속 자격을 박탈한다(아래 게이트).
+    # 이름표로만 두면 다음 검정기가 조용히 date 귀무를 들고 온다 - 그래서 읽는다.
+    null_kind: str = "label"
 
     @property
     def applies_today(self) -> bool:
@@ -355,6 +362,7 @@ class EdgeReport:
         위장한다. 실측(042700 07-31 C1): '공매도/수준 오늘 결측' 이 `충족 True` 로
         찍혀 INUS 조건이 있는 엣지가 조건 검사 없이 몫을 받았다."""
         return (self.verdict == "성립" and self.assignable
+                and self.null_kind != "date"      # 날짜 귀무는 순환 - 몫 배정 금지
                 and self.cond_measurable
                 and self.cond_satisfied is not False
                 and not self.reduction.startswith("불일치")
@@ -513,9 +521,9 @@ def _panel_rows(lake, sql: str, *, strict: bool = True) -> list:
 
 
 def _stratified_p(ar: np.ndarray, hi: np.ndarray, dates: np.ndarray,
-                  sign: float) -> float:
+                  ) -> float:
     """사건일 층화 순열 귀무의 단측 p. SEED 고정 - 재실행 결정론."""
-    obs = (ar[hi].mean() - ar[~hi].mean()) * sign
+    obs = ar[hi].mean() - ar[~hi].mean()
     rng = np.random.default_rng(SEED)
     null = np.empty(PERMS)
     for k in range(PERMS):
@@ -523,7 +531,7 @@ def _stratified_p(ar: np.ndarray, hi: np.ndarray, dates: np.ndarray,
         for d in np.unique(dates):
             m = dates == d
             perm[m] = rng.permutation(perm[m])
-        null[k] = (ar[perm].mean() - ar[~perm].mean()) * sign
+        null[k] = ar[perm].mean() - ar[~perm].mean()
     return float((null >= obs).mean())
 
 
@@ -671,14 +679,13 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     # 강한 신호가 '방향 반대 -> 불성립' 으로만 기록됐다. 발견이 실패로 위장된다.
     # 부호를 게이트에서 빼면 그 신호가 '유의 + 방향 반대(의도와 불일치)' 로 남는다.
     obs = eff_hi - eff_lo
-    p = _two_sided(_stratified_p(ar, hi, dates, 1.0))
+    p = _two_sided(_stratified_p(ar, hi, dates))
     # 셀 안에서 m 개를 동시에 검정한다 - α 를 나눠야 FWER 이 0.05 에 묶인다.
     # 산문이 Bonferroni 를 주장하면 게이트가 실제로 나눠야 한다 (선언 = 배선).
     verdict = edge_gate(len(ar), p, alpha=ALPHA / max(m_tests, 1))
-    agree = obs * float(t.sign) > 0
-    dir_note = ("" if agree else
-                f"방향이 의도와 불일치 - 의도 부호{t.sign:+d} 인데 상위−하위 "
-                f"{obs * 100:+.2f}%p (유의성 판정과 무관: 부호는 검정 대상이 아니다)")
+    # 방향은 **추정량의 산물**이다 - 선언받지 않는다(21R). 가설이 방향을 미리 쓰면
+    # 게이트(양측)는 그것을 무시하고 산문만 '반대 → 불성립' 으로 오독할 수 있다.
+    dir_note = f"추정 방향: 상위−하위 {obs * 100:+.2f}%p"
 
     # ── 조건 = 조절자, 추정량은 **CATE 교호항**이다 ────────────────────────
     # 목표가 "이 처치가 이 조건에서 유의한가" 이므로 처음부터 조건부 효과가
@@ -848,9 +855,8 @@ def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") ->
         return EdgeReport("판정불가", int(mask.sum()), None, None, None, None,
                           reason="관계·비관계가 갈리지 않는다 (게이트 A)")
 
-    sign = float(t.sign)
     sub = ar[mask]
-    p = _two_sided(_stratified_p(sub, hi, dates[mask], sign))
+    p = _two_sided(_stratified_p(sub, hi, dates[mask]))
     return EdgeReport(edge_gate(int(mask.sum()), p),
                       int(mask.sum()), p,
                       float(sub[hi].mean()), float(sub[~hi].mean()), None,
@@ -896,7 +902,7 @@ def grid_screen(lake, day: str, types: list[str],
             hi = _pctile(xv[ok]) >= EXPOSURE_CUT
             if hi.sum() < 3 or (~hi).sum() < 3:
                 continue
-            p_pos = _stratified_p(ar[ok], hi, dates[ok], +1.0)
+            p_pos = _stratified_p(ar[ok], hi, dates[ok])
             p2 = min(min(p_pos, 1.0 - p_pos) * 2, 1.0)
             fam, tr = label_of[colname]
             out.append({"type": etype, "exposure": f"{fam}/{tr}",
@@ -944,12 +950,11 @@ def report_text(r, tup, m_tests: int = 1) -> str:
         (f"오늘 노출 백분위 {r.today_exposure_pct * 100:.0f}%"
          if r.today_exposure_pct is not None else "오늘 노출 미계산"),
     ]
-    # 방향 일치는 판정이 아니라 결정론적 사실이다 - 부호는 튜플에 이미 박혀 있다.
-    # 이걸 안 실으면 검정자가 양측 p 만 보고 "반대쪽으로 유의" 를 성립으로 읽는다.
+    # 방향은 **추정량이 말한다**(21R). 우리가 찾는 것은 유효한 CATE 이고, 그 부호는
+    # 결과다 - 가설이 미리 선언하면 게이트는 무시하고 산문만 오독한다.
     if r.effect_high is not None:
-        gap = (r.effect_high - r.effect_low) * tup.sign
-        rows.append(f"방향: 가설 부호{tup.sign:+d} · 상위−하위×부호 {gap * 100:+.2f}%p "
-                    + ("→ 일치" if gap > 0 else "→ **반대** (주장과 어긋난다)"))
+        rows.append(f"방향(추정): 상위−하위 "
+                    f"{(r.effect_high - r.effect_low) * 100:+.2f}%p")
     if r.cond_today:
         rows.append(f"조건 오늘: {r.cond_today} "
                     + ("(측정불가 → 판정불가. 결측은 충족이 아니다)"

@@ -13,9 +13,48 @@ P9 감사(4R)의 병이 교훈이다: 읽기가 배선되지 않은 소환 기�
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 _FILE = "tuple_registry.jsonl"
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+_NUM = re.compile(r"\d+(?:\.\d+)?")
+
+
+def need_key(reason: str) -> str:
+    """판정불가 사유 → **수집 단위 키**. 특정 이름·숫자를 지워 같은 결핍이 한 줄로 모인다.
+
+    손으로 유지하는 부재 사전은 낡는다(실측: `duck.py` 주석에 "컨센서스 항목 없다"가
+    적혀 있고 도구는 그걸 모른다). 사전을 **측정에서 뽑는다** - 매일 나오는 사유를
+    정규화해 세면 "무엇을 채우면 몇 개가 열리나"가 추측 없이 나온다.
+    """
+    s = _NUM.sub("N", _QUOTED.sub("<이름>", reason))
+    return s.split(" - ")[0].split("(")[0].strip()[:80]
+
+
+def roadmap(root: str | Path, *, top: int = 12) -> list[dict]:
+    """막힌 사유별 집계 = 데이터 수집 우선순위. `unlocks` = 그것이 열어줄 가설 수.
+
+    행이 없으면 빈 목록이다 - 없는 로드맵을 만들지 않는다.
+    """
+    p = Path(root) / _FILE
+    if not p.exists():
+        return []
+    hit: Counter[str] = Counter()
+    cells: dict[str, set[str]] = {}
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(ln)
+        except (ValueError, TypeError):
+            continue
+        if r.get("kind") != "blocked":
+            continue
+        k = str(r.get("need") or "")
+        hit[k] += 1
+        cells.setdefault(k, set()).add(f"{r.get('cell')}|{r.get('day')}")
+    return [{"need": k, "unlocks": n, "cells": len(cells[k])}
+            for k, n in hit.most_common(top)]
 
 
 def record(root: str | Path, *, day: str, cell: str,
@@ -28,10 +67,18 @@ def record(root: str | Path, *, day: str, cell: str,
     for t, r in reports or ():
         rows.append({"kind": "tuple", "day": day, "cell": cell,
                      "type": t.trigger.ident, "trigger": t.trigger.kind,
-                     "channel": t.channel,
+                     "channel": t.channel, "outcome": t.outcome,
                      "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
                      "verdict": r.verdict, "n": r.n, "p": r.p,
+                     "null_kind": getattr(r, "null_kind", ""),
                      "applied": bool(r.applies_today)})
+        # **판정불가는 버리지 않고 쌓는다** - 그것이 데이터 수집 우선순위다(21R).
+        # 매일 "노출 (x,y)는 아직 못 잰다" 를 뱉고 흘려보내면 로드맵을 추측으로 정한다.
+        if r.verdict == "판정불가" and getattr(r, "reason", ""):
+            rows.append({"kind": "blocked", "day": day, "cell": cell,
+                         "type": t.trigger.ident, "channel": t.channel,
+                         "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
+                         "need": need_key(r.reason), "reason": r.reason[:200]})
     for s in screens or ():
         if "p2" in s:
             rows.append({"kind": "screen", "day": day, "cell": cell,
@@ -76,4 +123,4 @@ def recall(root: str | Path, *, day: str, types: list[str],
     return out
 
 
-__all__ = ["recall", "record"]
+__all__ = ["need_key", "recall", "record", "roadmap"]

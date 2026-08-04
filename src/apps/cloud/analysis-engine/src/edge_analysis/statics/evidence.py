@@ -80,6 +80,10 @@ class Bundle:
     layer: str = ""
     news_ids: tuple[str, ...] = ()
     stats: dict = field(default_factory=dict)
+    # **트리거 시점의 방향**: +1 올림 · 0 무관 · -1 내림. 산문은 낱말로 말하고 이 칸은
+    # 기계가 읽는다 - 같은 하루에 역풍(-1)과 순풍(+1)이 섞이는 것이 정상이고, 그것을
+    # 낱말로만 두면 집계도 검산도 못 한다.
+    sign: int = 0
 
     def __post_init__(self) -> None:
         if self.basis not in BASES:
@@ -88,6 +92,8 @@ class Bundle:
             raise ValueError("서사 근거인데 뉴스 id 가 없다 - 그건 근거가 아니다")
         if self.basis == "statistical" and not self.stats:
             raise ValueError("통계 근거인데 검정 수치가 없다 - 그건 근거가 아니다")
+        if self.sign not in (-1, 0, 1):
+            raise ValueError(f"방향은 -1·0·+1 중 하나다: {self.sign!r}")
 
     @property
     def bundle_id(self) -> str:
@@ -95,13 +101,15 @@ class Bundle:
         body = json.dumps({"b": self.basis, "c": self.cell, "d": self.trade_date,
                            "l": self.layer, "m": self.claim,
                            "n": sorted(self.news_ids),
-                           "s": self.stats}, sort_keys=True, ensure_ascii=False)
+                           "s": self.stats, "g": self.sign},
+                          sort_keys=True, ensure_ascii=False)
         return "ev_" + hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
 
     @property
     def tag(self) -> str:
         """주장 뒤에 붙는 꼬리표."""
-        return f"{{{self.basis}, {self.bundle_id}}}"
+        # 부호는 **명시적으로** 적는다(+1/0/-1) - '1' 과 '+1' 이 섞이면 파싱이 갈린다.
+        return f"{{{self.basis}, {self.bundle_id}, {self.sign:+d}}}"
 
 
 def news_window(lake, day: str) -> str:
@@ -193,21 +201,22 @@ def narrative_allowed(*, credible: int, applied_edges: int) -> tuple[bool, str]:
                   "**모든 주장에 narrative 꼬리표를 붙인다**")
 
 
-def stat_bundle(cell: str, day: str, claim: str, *, layer: str = "",
+def stat_bundle(cell: str, day: str, claim: str, *, layer: str = "", sign: int = 0,
                 **stats) -> Bundle:
     """통계 근거 묶음. `stats` 에 이 주장에 쓴 **가설의 검정 결과**가 들어간다."""
-    return Bundle("statistical", cell, day, claim, layer, (), _plain_num(dict(stats)))
+    return Bundle("statistical", cell, day, claim, layer, (),
+                  _plain_num(dict(stats)), sign)
 
 
 def news_bundle(cell: str, day: str, claim: str, objs: list[dict], refs: list[str],
-                *, layer: str = "") -> Bundle:
+                *, layer: str = "", sign: int = 0) -> Bundle:
     """서사 근거 묶음. 참조키 → 뉴스 id 목록. **모델이 고른 것만** 담는다."""
     byref = {o["ref"]: o for o in objs}
     ids = tuple(byref[r]["news_id"] for r in refs
                 if r in byref and byref[r]["news_id"])
     if not ids:
         raise ValueError(f"참조 {refs} 가 뉴스 id 로 풀리지 않는다 - 날조 또는 결손")
-    return Bundle("narrative", cell, day, claim, layer, ids, {})
+    return Bundle("narrative", cell, day, claim, layer, ids, {}, sign)
 
 
 def ensure_schema(dsn: str = "") -> str:
@@ -248,12 +257,13 @@ def save(bundles: list[Bundle], dsn: str = "") -> tuple[int, str]:
             with con.cursor() as cur:
                 cur.executemany(
                     f"INSERT INTO public.{TABLE} "
-                    "(bundle_id, basis, cell, trade_date, layer, claim, news_ids, stats)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
+                    "(bundle_id, basis, cell, trade_date, layer, claim, news_ids,"
+                    " stats, sign)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s) "
                     "ON CONFLICT (bundle_id) DO NOTHING",
                     [(b.bundle_id, b.basis, b.cell, b.trade_date, b.layer, b.claim,
                       list(b.news_ids),
-                      json.dumps(b.stats, ensure_ascii=False, default=str))
+                      json.dumps(b.stats, ensure_ascii=False, default=str), b.sign)
                      for b in bundles])
             con.commit()
         return len(bundles), ""
@@ -268,11 +278,11 @@ def say_bundles(bundles: list[Bundle]) -> str:
     out = ["── 근거 묶음 " + "─" * 46]
     for b in bundles:
         if b.basis == "narrative":
-            out.append(f"  {b.bundle_id}  narrative   뉴스 {len(b.news_ids)}건: "
+            out.append(f"  {b.bundle_id}  narrative  {b.sign:+d}  뉴스 {len(b.news_ids)}건: "
                        + ", ".join(b.news_ids[:4])
                        + (" …" if len(b.news_ids) > 4 else ""))
         else:
-            out.append(f"  {b.bundle_id}  statistical "
+            out.append(f"  {b.bundle_id}  statistical {b.sign:+d}  "
                        + " · ".join(f"{k}={v}" for k, v in b.stats.items()))
     return "\n".join(out)
 

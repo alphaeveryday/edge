@@ -20,18 +20,18 @@ import json  # noqa: F401 — 호출자 편의 재노출
 from typing import Callable
 
 from ..observability import record
-from .vocab import (CHANNELS, ExposureSource, HypothesisTuple, SERIES_FAMILIES,
-                    TRANSFORMS, Trigger, VocabError, Condition)
+from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
+                    OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS, Trigger, VocabError)
 
 Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
-채널 8: {channels}
-계열족 9: {families}
-변환 5: {transforms}
-비교: [">=", "<="] · 결과종류: ["수익률", "전이"] · 부호: 1 | -1
+채널 {n_ch}: {channels}
+계열족 {n_fam}: {families}
+변환 {n_tr}: {transforms}
+비교: {comparators} · 결과종류: {outcomes}
 방아쇠: {{"kind": "점", "ident": <아래 접지 목록의 사건타입>}} 또는 {{"kind": "계열", "ident": <오늘 발화 계열족>}}
 이 셀에 접지된 사건 타입 (점 방아쇠는 이 목록에서만): {event_types}
 오늘 |z|≥2 로 발화한 계열족 (계열 방아쇠는 이 목록에서만): {series_families}
@@ -44,7 +44,7 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
   "trigger": {{"kind": "점|계열", "ident": "..."}},
   "channel": "...",
   "exposure": {{"kind": "속성", "ident": 계열족, "transform": 변환}},
-  "outcome": "수익률", "sign": 1,
+  "outcome": "수익률",
   "reduction_note": "이 셀의 무엇을 이 타입으로 읽었는가 한 줄",
   "intent": "이 튜플로 검정하려는 인과 주장 한 문장 - 무엇이 사실이면 성립인가"
 }}, ...]}}
@@ -52,8 +52,9 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 규칙:
 - 가설 **최대 {n}개**, 서로 다른 채널로. 근거 없는 채널을 채우느니 2개가 낫다 -
   제출 수 m 이 늘면 확증 임계가 α/m 으로 좁아져 **좋은 가설까지 같이 죽는다**
-- 부호는 오늘 수익률 부호에 맞추지 마라. 메커니즘이 정하는 것이고, 검정은 양측이라
-  부호를 맞춰도 이득이 없다 (틀린 부호는 환원 검사만 오염시킨다)
+- **방향을 선언하지 마라.** 우리가 찾는 것은 유효한 CATE 이고 방향은 그 추정량이
+  낸다(상위−하위). 검정은 양측이므로 방향을 맞춰도 이득이 없고, 틀리면 환원 검사만
+  오염시킨다
 - 도구가 보여준 격자 축은 **노출** 슬롯에 넣어라 (그 축이 용량-반응을 만든다).
   조건은 다른 계열족에서 - 같은 피처면 동어반복으로 거부된다
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
@@ -78,7 +79,7 @@ def _parse(h: dict) -> HypothesisTuple:
         trigger=Trigger(**(h.get("trigger") or {})),
         channel=str(h.get("channel", "")),
         exposure=ExposureSource(**(h.get("exposure") or {})),
-        outcome=str(h.get("outcome", "")), sign=int(h.get("sign", 0)),
+        outcome=str(h.get("outcome", "")),
         reduction_note=str(h.get("reduction_note", ""))[:200],
         intent=str(h.get("intent", ""))[:240])
 
@@ -222,8 +223,14 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     같은 프롬프트의 반복이 아니라 **거부 사유가 추가된** 프롬프트다(요청을 바꿔
     재시도, 감사 2R 교훈).
     """
+    # 개수·목록 리터럴은 **어휘에서 파생**된다 (21R). 손으로 적은 리터럴은 낡는다 -
+    # 실측: 프롬프트가 '계열족 9 · 변환 5' 라고 말하는 동안 어휘는 17·6 이었고,
+    # 결과종류는 하드코딩 2종이라 '되돌림' 축을 모델이 고를 수조차 없었다.
     system = _SYSTEM.format(channels=sorted(CHANNELS), families=sorted(SERIES_FAMILIES),
-                            transforms=sorted(TRANSFORMS), event_types=event_types,
+                            transforms=sorted(TRANSFORMS),
+                            n_ch=len(CHANNELS), n_fam=len(SERIES_FAMILIES),
+                            n_tr=len(TRANSFORMS), comparators=sorted(COMPARATORS),
+                            outcomes=sorted(OUTCOME_KINDS), event_types=event_types,
                             series_families=sorted(series_families),
                             measurable=sorted(measurable), n=n)
     rejected: list[str] = []
@@ -239,7 +246,7 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
             record("tuple.accepted", turn=turn + 1, channel=t.channel,
                    trigger=f"{t.trigger.kind}:{t.trigger.ident}",
                    exposure=f"{t.exposure.ident}/{t.exposure.transform}",
-                   sign=t.sign, reduction_note=t.reduction_note, intent=t.intent)
+                   reduction_note=t.reduction_note, intent=t.intent)
         if len(valid) >= 2:
             break
         user = (facts + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"

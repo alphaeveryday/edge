@@ -12,7 +12,7 @@ def _tup(channel="Q수량", intent="거래량 급증이 매도 압력이면 고�
         conditions=(Condition("수급", "누적", ">=", 0.9),),
         trigger=Trigger("계열", "거래량"), channel=channel,
         exposure=ExposureSource("속성", "거래량", "변화"),
-        outcome="수익률", sign=-1, intent=intent)
+        outcome="수익률", intent=intent)
 
 
 # ── 대상 선택 ─────────────────────────────────────────────────────────────
