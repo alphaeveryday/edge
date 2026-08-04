@@ -176,7 +176,7 @@ WITH k AS (
            sum(volume) AS vol
     FROM bars_5m
     WHERE CAST(ts AS DATE) <= DATE '{day}' AND open > 0 AND close > 0
-      AND CAST(ts AS TIME) >= TIME '{t0}' AND CAST(ts AS TIME) < TIME '{t1}'
+      AND CAST(ts AS TIME) >= TIME '{t0}' AND CAST(ts AS TIME) < TIME '{t1}'{pick}
     GROUP BY 1, 2
 )
 SELECT b.sym, any_value(k.name), list(b.lr ORDER BY b.d),
@@ -186,7 +186,8 @@ FROM b JOIN k ON k.symbol = b.sym WHERE b.lr IS NOT NULL GROUP BY b.sym
 
 
 def _series(lake, day: str, kinds: tuple[str, ...],
-            *, clock: tuple[str, str] | None = None) -> dict[str, tuple]:
+            *, clock: tuple[str, str] | None = None,
+            only: str | None = None) -> dict[str, tuple]:
     """{symbol: (name, {date: log수익률}, {거래정지 날짜})}. 당일 포함.
 
     `clock=(t0, t1)` 이면 **하루 대신 매일의 같은 시각 구간**을 계열로 만든다
@@ -203,10 +204,13 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     거래량 0 은 55일(7%)뿐이다 - 그 7% 만 막는다. 진짜 보합의 고유수익은 정보다:
     시장·섹터가 −7% 미는데 안 빠졌으면 그게 그 종목의 힘이다.
     """
+    # `only` = 심볼 하나만. 대상이 개별 종목일 때 856종목 전체 이력을 읽으면
+    # 질의가 분 단위로 늘어난다 - 실측: 이 필터가 없어 파이프라인 테스트가 멈췄다.
+    pick = f" AND symbol = '{only}'" if only else ""
     if clock is not None:
         out = {}
         for sym, nm, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
-                kinds=kinds, day=day, t0=clock[0], t1=clock[1])):
+                kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick)):
             # 이미 **구간 수익**이다 - 차분하지 않는다(하니까 첫 날이 사라진다).
             halt = {d for d, v in zip(dates, vols) if v is not None and v <= 0}
             out[sym] = (nm, dict(zip(dates, [float(x) for x in lrs])), halt)
@@ -214,7 +218,7 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     rows = lake.sql(
         "SELECT symbol, any_value(name), list(close ORDER BY date), "
         "       list(CAST(date AS DATE) ORDER BY date), list(volume ORDER BY date) "
-        f"FROM layers_daily WHERE kind IN {kinds} AND date <= DATE '{day}' "
+        f"FROM layers_daily WHERE kind IN {kinds} AND date <= DATE '{day}'{pick} "
         "GROUP BY symbol")
     out = {}
     for sym, nm, closes, dates, vols in rows:
@@ -366,7 +370,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
     # '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다 - 후보 풀은 건드리지 않는다.
     if etf not in ser:
-        tgt = _series(lake, day, ("stock",), clock=clock)
+        tgt = _series(lake, day, ("stock",), clock=clock, only=etf)
         if etf in tgt:
             ser = {**ser, etf: tgt[etf]}
     if etf not in ser or d0 not in ser[etf][1]:
