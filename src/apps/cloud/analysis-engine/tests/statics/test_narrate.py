@@ -413,3 +413,83 @@ def test_verifier_folds_broken_diagnostics_but_not_unmeasured_placebo():
     # 추정 자체가 없으면 자격 없음
     assert not Implication("x", None, None, 0, None, "통과", True, True).credible
     assert "없음" in say_implications([])
+
+
+def test_plain_narration_forbids_numbers_and_jargon_by_code():
+    """토스식은 **수치·전문용어 금지**를 코드가 강제한다 - 프롬프트 부탁이 아니다.
+
+    사람이 이 화면을 여는 순간은 가격 급변과 시장 대비 이탈이다. 'p=0.004' 는 답이
+    아니고, 프롬프트로 '숫자 쓰지 마라' 만 적으면 모델은 늘 흘린다(실측).
+    그리고 이유를 모를 때 그럴듯한 문장을 내는 것은 거짓이므로 모른다고 말해야 한다.
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import (SIZE_TOP, PlainError, context, dual,
+                                             guard, relation_word, size_word)
+
+    ctx = context(ticker_name="KODEX 반도체", day_log=0.25, idio_log=0.006,
+                  route_kind="시장", market_name="코스피 대형주",
+                  recent={"when": "밤사이", "events": ["미국 반도체 강세"]},
+                  established=["미국 반도체 강세"], overnight=["미국 반도체"],
+                  unexplained_top=False)
+    assert ctx["크기"] == SIZE_TOP and ctx["시장관계"] == "시장 따라"
+    ok = ("밤사이 미국 반도체가 강해서 오늘 KODEX 반도체가 아주 크게 올랐어요. "
+          "시장 전체가 함께 올라 이 상품만의 일은 아니에요.")
+    assert guard(ok, ctx) == ok
+
+    for bad in ("밤사이 미국 반도체가 8% 올랐어요.",            # 숫자
+                "밤사이 유의하게 올랐어요.",                    # 전문용어
+                "밤사이 '엔비디아' 때문이에요.",                # 접지 없는 이름
+                "오늘 크게 올랐어요. 시장 따라 갔어요."):       # 최근 시점 누락
+        with pytest.raises(PlainError):
+            guard(bad, ctx)
+
+    # 크기·시장관계는 코드가 매긴다 - 모델이 '급등' 을 고르면 강도가 날마다 흔들린다
+    assert size_word(0.005) == "조금" and size_word(0.5) == SIZE_TOP
+    assert relation_word(-0.05, 0.04) == "시장과 반대로"
+    # 정직한 설명이 먼저다 - 순서를 뒤집으면 근거 없이 읽고 덮는다
+    d = dual("통계 산문", "쉬운 산문")
+    assert d.index("통계 산문") < d.index("쉬운 산문")
+
+
+def test_claims_carry_basis_and_evidence_bundle_ids():
+    """주장마다 {statistical|narrative, 묶음id} 가 붙어야 한다.
+
+    쉬운 설명에는 수치가 없다 - 수치가 없으면 그 문장이 검정에서 나왔는지 기사
+    서사에서 나왔는지 나중에 구분할 수 없고, 구분 못 하면 **서사를 검정 결과처럼
+    읽는다**. 묶음 id 는 코드가 만든 내용 해시다(모델이 지어내면 접지가 무너진다).
+    """
+    import pytest
+
+    from edge_analysis.statics.evidence import narrative_allowed, news_bundle
+    from edge_analysis.statics.plain import PlainError, _assemble, context
+
+    ctx = context(ticker_name="A", day_log=0.05, idio_log=0.04, route_kind="고유",
+                  market_name="M", recent={"when": "오후"}, established=["x"],
+                  overnight=[], unexplained_top=False)
+    news = [{"ref": "n1", "news_id": "NEWS_A", "title": "수주", "type": "SIGNING",
+             "thread": "t1", "t": "13:10"}]
+    stt = [{"ref": "s1", "etype": "CONTRACT.SIGNING", "p": 0.004, "n": 138}]
+    br = {o["ref"]: o for o in news} | {o["ref"]: o for o in stt}
+
+    txt, bs = _assemble(
+        [{"text": "오후에 크게 올랐어요", "basis": "statistical", "refs": ["s1"]},
+         {"text": "새로 계약을 따냈다는 소식이 있었어요", "basis": "narrative",
+          "refs": ["n1"]}], ctx, br, news, "000660.KS", "2026-07-31", "고유")
+    assert "{statistical, ev_" in txt and "{narrative, ev_" in txt
+    assert [b.basis for b in bs] == ["statistical", "narrative"]
+    assert bs[1].news_ids == ("NEWS_A",), "서사 묶음은 뉴스 id 목록을 담는다"
+    assert bs[0].stats["p"] == 0.004, "통계 묶음은 그 가설의 검정 수치를 담는다"
+    # 같은 내용이면 같은 id - 재실행 비교가 가능해야 한다
+    assert bs[1].bundle_id == news_bundle(
+        "000660.KS", "2026-07-31", "새로 계약을 따냈다는 소식이 있었어요",
+        news, ["n1"], layer="고유").bundle_id
+
+    # 한 주장에 통계와 서사를 섞으면 무엇이 근거인지 흐려진다
+    with pytest.raises(PlainError):
+        _assemble([{"text": "오후에 올랐어요", "basis": "narrative",
+                    "refs": ["s1", "n1"]}], ctx, br, news, "c", "d", "")
+
+    # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다
+    assert not narrative_allowed(credible=0, applied_edges=1)[0]
+    assert narrative_allowed(credible=0, applied_edges=0)[0]

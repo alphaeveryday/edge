@@ -24,13 +24,17 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 
 from .route import route_etf, say_route
 
 
-def run(lake, etf: str, day: str) -> str:
-    """ETF 하루 → 층 분해 → 라우팅 → 층별 시행 → 한 편의 설명."""
+def run(lake, etf: str, day: str, ask=None) -> str:
+    """ETF 하루 → 층 분해 → 라우팅 → 층별 시행 → 한 편의 설명.
+
+    `ask` 를 주면 **쉬운 설명(토스식)** 을 덧붙인다 - 정직한 설명이 먼저다.
+    """
     from .layers import decompose
     from .premium import screen
     out: list[str] = []
@@ -64,7 +68,77 @@ def run(lake, etf: str, day: str) -> str:
     out.append(say_route(r))
     out.append("")
     out.extend(_workflow(lake, roll, r, day))
-    return "\n".join(out)
+    honest = "\n".join(out)
+    if ask is None:
+        return honest
+    return _dual(lake, roll, r, day, honest, ask)
+
+
+def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
+    """정직한 설명 + 토스식. ETF 는 5분봉이 없어 창이 없다 - **그 사실을 정직하게**
+    다루고, '최근 시점' 대신 시장 사건의 시각(있으면)이나 밤사이를 쓴다."""
+    from .mkttrial import event_days
+    from .evidence import save
+    from .plain import PlainError, context, dual, narrate_plain
+    from .trial import reduce_market
+    # 이름만 넘기면 모델이 방향을 지어낸다 - 실측에서 VIX 가 -17% 인데 'VIX 강세'
+    # 라고 썼다. **부호를 지우면 서사가 거짓이 된다.** 수치는 못 주므로 방향을 말로
+    # 준다. VIX 는 오르면 불안이라 강세/약세로 부르면 뜻이 뒤집힌다 - 따로 옮긴다.
+    over: list[str] = []
+    try:
+        mr = reduce_market(lake, day, symbol=f"{roll.etf}.KS")
+        for nm, v in (mr.get("overnight") or ()):
+            f = float(v)
+            if abs(f) <= 0.01:
+                continue
+            name = str(nm)
+            if "VIX" in name.upper() or "변동성" in name:
+                over.append("미국 시장의 불안이 " + ("커졌어요" if f > 0 else "줄었어요"))
+            else:
+                over.append(f"{name}가 " + ("올랐어요" if f > 0 else "내렸어요"))
+            if len(over) >= 3:
+                break
+    except Exception:                       # noqa: BLE001 - 부재는 빈 목록
+        over = []
+    # 시장 사건 검정의 **무유의도 사실이다**: '특별한 뉴스 때문이 아니다' 는
+    # 사람이 가장 궁금해하는 답 중 하나다(급변인데 뉴스가 없을 때).
+    from .mkttrial import say_screen, screen_market
+    facts: list[str] = []
+    scr: list = []
+    try:
+        scr = screen_market(lake, day)
+        if scr and "유의한 시장 사건 없음" in say_screen(scr):
+            facts.append("특별한 국내 소식 때문은 아님")
+        elif any(d == day for d in event_days(lake, day)):
+            facts.append("시장 전체에 영향을 준 소식")
+    except Exception:                       # noqa: BLE001 - 부재는 빈 목록
+        pass
+    # **밤사이 환원이 곧 이유다.** 이것을 `established` 에 안 넣으면 산문이
+    # '밤사이 올랐어요' 라 말한 뒤 '이유는 안 보여요' 라고 자기모순을 낸다(실측).
+    if over:
+        facts.insert(0, "밤사이 해외에서 " + over[0])
+    ctx = context(
+        ticker_name=roll.etf_name, day_log=roll.total,
+        idio_log=roll.idio, route_kind=r.kind,
+        market_name=r.layer_name or "코스피 대형주",
+        # ETF 는 창이 없다(5분봉 부재) - 밤사이가 하루의 시작이므로 그것을 시점으로.
+        recent={"when": "밤사이", "events": facts[:1]},
+        established=facts, overnight=over,
+        unexplained_top=False, idio_qualified=roll.rho is None or abs(roll.rho) < 0.20)
+    # 통계 재료: 시장 사건 시행의 결과. **수치는 재료에만** 있고 산문에는 못 들어간다.
+    stats = [{"ref": f"s{i}", "kind": "시장사건 시행", "etype": x["etype"],
+              "att": round(x["att"], 5), "p": round(x["p"], 4),
+              "n_days": x["n_days"], "unit": "거래일"}
+             for i, x in enumerate((s for s in (scr or []) if s.get("verdict") == "계산됨"), 1)]
+    try:
+        plain, bundles = narrate_plain(ask, ctx, stats=stats, cell=roll.etf,
+                                      day=day, layer=r.kind)
+        n, why = save(bundles)
+        if why:
+            plain += f"\n(근거 묶음 저장 실패: {why})"
+        return dual(honest, plain, bundles)
+    except PlainError as e:
+        return dual(honest, f"(쉬운 설명 생성 실패 - 계약 위반: {e})")
 
 
 def _workflow(lake, roll, r, day: str) -> list[str]:
@@ -81,6 +155,14 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
         out.append("[워크플로우] 시장 환원 — 종목 가설을 세우지 않는다")
         mr = reduce_market(lake, day, symbol=f"{roll.etf}.KS")
         out.append(say_market(mr))
+        # ② 는 선언만 되고 배선이 없었다: `say_market` 의 시장 사건 줄은 `iid` 가
+        # 있을 때만 나오고 ETF 경로는 그것을 안 넘긴다(ETF 에 instrument_id 가 없다).
+        # 그래서 라우팅은 '밤사이 해외 · **장중 시장 사건** · 국면' 셋을 약속하는데
+        # 산문에는 ①③ 만 있었다. 그리고 τ 마크는 **표시**일 뿐 검정이 아니다.
+        # 시장 사건은 그 날 전 종목이 처치라 횡단면 대조군이 없다(SUTVA) - 단위를
+        # 거래일로 바꿔야 검정된다. `mkttrial` 이 그것이다.
+        from .mkttrial import say_screen, screen_market
+        out.append(say_screen(screen_market(lake, day)))
 
     if r.kind in ("섹터", "혼합"):
         sec = next((x for x in roll.layers if x.kind == "섹터"), None)
@@ -120,7 +202,15 @@ def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
     from .duck import CausalLake
-    print(run(CausalLake(), sys.argv[1], sys.argv[2]))
+    # 키가 있으면 쉬운 설명까지, 없으면 정직한 설명만 - **조용히 빠지지 않는다**.
+    ask = None
+    if key := os.environ.get("DEEPSEEK_API_KEY"):
+        from ..adapters.llm import DeepSeekClient, TracingClient
+        ask = TracingClient(DeepSeekClient(
+            key, os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))).complete_json
+    else:
+        print("[알림] DEEPSEEK_API_KEY 없음 - 쉬운 설명(토스식)은 생략한다")
+    print(run(CausalLake(), sys.argv[1], sys.argv[2], ask))
 
 
 if __name__ == "__main__":

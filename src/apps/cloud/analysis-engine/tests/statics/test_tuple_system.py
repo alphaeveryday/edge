@@ -967,3 +967,29 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
     class P:
         basket_moved = False
     assert route_etf(R((L("시장", "K", 0.9),), 0.0), premium=P()).kind == "괴리단독"
+
+
+def test_market_trial_refuses_when_treated_days_are_too_few():
+    """시장 사건은 **하루가 한 표본**이다 - 종목 수로 늘 수 없다.
+
+    종목 패널은 같은 날 사건 없는 종목을 대조로 쓰지만, 시장 광역 사건은 그 날 전
+    종목이 처치다(SUTVA). 단위를 거래일로 바꾸면 표본은 처치일 수가 상한이고
+    실측 상한은 40일(RULE_CHANGE)이다. 미달은 **판정불가**여야 한다 - 기각이 아니다.
+    """
+    from edge_analysis.statics.mkttrial import (MIN_DAYS, say_market_trial,
+                                                say_screen)
+
+    thin = {"verdict": "판정불가", "n_days": 3,
+            "reason": f"처치일 3 < {MIN_DAYS} - 시장 사건은 하루가 한 표본이다",
+            "etype": "MACRO.X.Y"}
+    assert "판정불가" in say_market_trial(thin)
+    # 유의가 없으면 그 사실을 말한다 - 침묵하면 '설명했다' 로 읽힌다
+    assert "사건으로 설명되지 않는다" in say_screen([thin])
+
+    ok = {"verdict": "계산됨", "att": -0.0219, "p": 0.0009, "n_days": 14, "pairs": 42,
+          "treated_all": 21, "pool": 831, "pretrend": {"t-1": 0.0002, "t-2": None},
+          "overlap": 5, "etype": "POLICY.TRADE.TARIFF_CHANGE"}
+    line = say_market_trial(ok)
+    assert "-2.190%p" in line
+    assert "겹침" in line, "다른 시장 사건 겹침은 처치 배타성 위반이라 숨기면 안 된다"
+    assert "**유의**" in say_screen([ok])

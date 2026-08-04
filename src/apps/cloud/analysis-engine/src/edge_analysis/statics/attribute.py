@@ -111,6 +111,21 @@ US_FACTOR_DEFAULT = "GSPC"
 SECTOR_DOMINANCE = 0.50   # 비중 최빈 업종이 이 미만이면 섹터 펀드가 아니다
 
 
+def labels_name(lake, ticker: str) -> str:
+    """사람이 부르는 이름. ETF 는 프로필, 종목은 계열 이름 - 없으면 티커 그대로."""
+    tk6 = ticker.split(".")[0]
+    from .layers import etf_label
+    nm = etf_label(lake, tk6, "")
+    if nm:
+        return nm
+    try:
+        rows = lake.sql("SELECT any_value(name) FROM layers_daily "
+                        f"WHERE symbol = '{tk6}'")
+    except Exception:                       # noqa: BLE001
+        return ticker
+    return str(rows[0][0]) if rows and rows[0][0] else ticker
+
+
 def _us_factor(lake, tk6: str, day: str) -> str:
     """이 종목·ETF 의 KRX 업종에 맞는 미국 팩터 심볼. 업종 미상이면 광의 지수.
 
@@ -596,7 +611,44 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                              f"상위 {s['hi'] * 100:+.2f}% vs 하위 {s['lo'] * 100:+.2f}%")
             else:
                 block.append(f"  {s['type'][:40]:<40} {s['status']}")
-    return render(rows) + "\n\n" + story + "\n" + "\n".join(block)
+    honest = render(rows) + "\n\n" + story + "\n" + "\n".join(block)
+    if ask is None:
+        return honest
+    # ── 쉬운 설명 (토스식) ─────────────────────────────────────────────────
+    # 사람이 이 화면을 여는 순간은 **가격이 급변했을 때**와 **시장과 다르게 움직일
+    # 때**다. 그때 필요한 답은 'p=0.004' 가 아니다. 두 산문은 **같은 사실**에서
+    # 나온다 - 토스식은 위에서 확정된 것만 옮기고 새로 주장하지 않는다.
+    from .evidence import narrative_allowed, news_objectset, save
+    from .plain import PlainError, context, dual, narrate_plain, recent_window
+    applied = [(t, r) for t, r in reports if r.applies_today]
+    # 서사 경로 허가는 **코드가** 낸다 - 모델이 고르면 편한 쪽(서사)으로 도망간다.
+    allow, why_narr = narrative_allowed(credible=0, applied_edges=len(applied))
+    objs = news_objectset(lake, instrument_id, day) if allow else []
+    stats = [{"ref": f"s{i}", "kind": "튜플 패널", "channel": t.channel,
+              "etype": t.trigger.ident, "verdict": r.verdict, "n": r.n,
+              "p": None if r.p is None else round(r.p, 4)}
+             for i, (t, r) in enumerate(applied, 1)]
+    ctx = context(
+        ticker_name=labels_name(lake, ticker) or ticker,
+        day_log=day_total, idio_log=(day_total if idio is None else idio),
+        route_kind="고유" if idio is not None and abs(idio) >= abs(day_total) * 0.35
+        else "시장", market_name="코스피 대형주",
+        recent=recent_window(shares, labels),
+        established=[f"{t.channel} - {t.trigger.ident.split('.')[-1]}"
+                     for t, _r in applied],
+        overnight=[], unexplained_top=not rows or max(
+            rows, key=lambda r: abs(r.share.log_ret)).share.window.kind == "residual",
+        idio_qualified=idio is not None)
+    try:
+        plain, bundles = narrate_plain(ask, ctx, news=objs, stats=stats,
+                                      cell=ticker, day=day, layer="고유")
+        _n, err = save(bundles)
+        note = f"\n[서사 경로] {why_narr}"
+        if err:
+            note += f"\n(근거 묶음 저장 실패: {err})"
+        return dual(honest, plain + note, bundles)
+    except PlainError as e:
+        return dual(honest, f"(쉬운 설명 생성 실패 - 계약 위반: {e})")
 
 
 if __name__ == "__main__":
