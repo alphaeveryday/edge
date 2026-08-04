@@ -442,6 +442,19 @@ resource "aws_scheduler_schedule" "minute_session" {
 # `analyze --trigger-id` 경로를 태운다. data-pipeline 서비스 맵(minute_services)에 넣지
 # 않는 이유: 이미지·컨테이너명·env 네임스페이스(PG*·DEEPSEEK_*)가 전부 다르다(tasks.tf
 # analysis 단서와 동일). 세션 스케일에는 아래 env 파생으로 함께 편입된다.
+
+# ExposureReverted 회수 자격(ALPHA-746) — 소비자가 super-admin 무효화 API 를 부를 때 쓰는
+# 운영자 계정. 그릇(SSM SecureString)은 TF 밖 운영자 CLI 주입이다 — 시크릿 그릇 규약("TF 는
+# 그릇만, 값은 수동")에서 한 칸 더: 여기서는 **이름만 계약**한다(kis 토큰 캐시와 같은 결).
+# 미주입이면 태스크가 ResourceInitializationError 로 시작하지 않는다 — 조용한 자격 공백 대신
+# fail-loud. 주입(1회):
+#   aws ssm put-parameter --name /<var.name>/super-admin/operator-email --type SecureString --value '<email>'
+#   aws ssm put-parameter --name /<var.name>/super-admin/operator-password --type SecureString --value '<password>'
+locals {
+  super_admin_email_param_arn    = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-email"
+  super_admin_password_param_arn = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-password"
+}
+
 resource "aws_ecs_task_definition" "analysis_consumer" {
   family                   = "${var.name}-analysis-consumer"
   requires_compatibilities = ["FARGATE"]
@@ -466,8 +479,13 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
     command = ["consume-triggers"]
     environment = [for k, v in merge(local.analysis_env, {
       EDGE_EXPLANATION_QUEUE_URL = aws_sqs_queue.minute["price-explanation-realtime"].url
+      SUPER_ADMIN_API_URL        = var.super_admin_api_url
     }) : { name = k, value = v }]
-    secrets = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
+    # 회수 자격은 이 소비자에게만 주입한다 — 배치 analyze(tasks.tf)는 무효화를 부르지 않는다.
+    secrets = [for k, v in merge(local.analysis_secrets, {
+      SUPER_ADMIN_EMAIL    = local.super_admin_email_param_arn
+      SUPER_ADMIN_PASSWORD = local.super_admin_password_param_arn
+    }) : { name = k, valueFrom = v }]
     logConfiguration = {
       logDriver = "awslogs"
       options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis-consumer" })
