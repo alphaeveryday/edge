@@ -325,7 +325,13 @@ JOIN v_instrument ce ON ce.instrument_id = ev.iid
 
 @dataclass(frozen=True, slots=True)
 class EdgeReport:
-    """엣지 하나의 패널 판정 + 오늘 적용 판정. 수치는 전부 이 모듈이 계산했다."""
+    """엣지 하나의 패널 판정 + 오늘 적용 판정. 수치는 전부 이 모듈이 계산했다.
+
+    **크기는 없다.** SEM 기여(`contribution`·`ci_lo`·`ci_hi`)를 지웠다 - 사건
+    고정효과 기울기 τ̂ 는 기울기인데 산문이 수준으로 읽었고, 구간이 하루 총합과
+    안 겹치는 날이 나왔다(자기모순). 게이트는 존재를 판정하고(§11), 크기는 ATT
+    경로가 주장하며 예산 검산은 `narrate.AdditiveBudget` 의 가법 제약이 한다.
+    """
     verdict: EdgeVerdict
     n: int
     p: float | None
@@ -338,9 +344,6 @@ class EdgeReport:
     counterfactual: str = ""         # 반사실 쌍 (positivity 통과 시에만 채워진다)
     reduction: str = "—"             # 환원 검사: 일치 · 불일치 · 표본부족 · —(미실행)
     assignable: bool = True          # False = 엣지 검정만 유효, 몫 배정 불가 (전이 등)
-    contribution: float | None = None    # SEM: τ̂ × (오늘 노출 − 패널 평균) [ar 단위]
-    ci_lo: float | None = None
-    ci_hi: float | None = None
     moderation: str = ""             # 조절 대비 (조건이 있을 때 - 교호항의 최소형)
     trigger_fired: bool | None = None   # 계열 방아쇠의 오늘 발화 (None = 점 또는 미계측 처리 전)
     trigger_note: str = ""           # 오늘 방아쇠 어법 (계열에서만)
@@ -722,18 +725,6 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                 counterfactual = (f"조건 미충족 부류(n={opposite})에서는 상위 "
                                   f"{u_hi * 100:+.2f}% vs 하위 {u_lo * 100:+.2f}%")
 
-    # ── SEM 계수 (§10): 성립 엣지에만 크기를 붙인다. 게이트는 크기를 만들지
-    # 않지만(§11), 게이트를 통과한 엣지의 크기는 사건 고정효과 기울기에서 온다.
-    # 오늘 기여 = τ̂ × (오늘 노출 − 패널 평균 노출) - FE 가 수준을 흡수하므로
-    # 기울기 × 편차만이 정직한 추정대상이다.
-    tau = se = contrib = ci_lo = ci_hi = None
-    if verdict == "성립":
-        from .sem import exposure_slope
-        try:
-            tau, se = exposure_slope(ar, x, dates)
-        except ValueError:
-            tau = se = None
-
     # ── 오늘 셀: 노출 백분위 + 조건 충족 (INUS 의 적용 판정) ──────────
     today_pct = None
     cond_bits: list[str] = []
@@ -746,10 +737,9 @@ def edge_test(lake, t: HypothesisTuple, day: str,
         if row and row[0][0] is not None:
             x_today = float(row[0][0])
             today_pct = float((x <= x_today).mean())
-            if tau is not None:
-                dx = x_today - float(x.mean())
-                contrib = tau * dx
-                ci_lo, ci_hi = sorted(((tau - 1.96 * se) * dx, (tau + 1.96 * se) * dx))
+            # 크기는 여기서 만들지 않는다(§11). SEM 기여를 붙였던 자리인데, τ̂·Δx
+            # 는 '노출이 평균보다 높으면 이만큼 더' 라는 비교정태이고 '오늘 이
+            # 사건이 만든 %p' 가 아니다. 크기는 ATT 경로가 주장한다.
             sat, measurable = True, True
             for v in t.conditions:
                 key = v.key
@@ -801,7 +791,6 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       cond_today=" · ".join(cond_bits), cond_satisfied=cond_sat,
                       cond_measurable=cond_meas,
                       counterfactual=counterfactual, reduction=reduction,
-                      contribution=contrib, ci_lo=ci_lo, ci_hi=ci_hi,
                       moderation=moderation,
                       trigger_fired=trigger_fired, trigger_note=trigger_note,
                       reason=dir_note)

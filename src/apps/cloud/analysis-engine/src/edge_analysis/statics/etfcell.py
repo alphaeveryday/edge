@@ -50,7 +50,12 @@ def run(lake, etf: str, day: str, ask=None) -> str:
         pv = next((c.verdict for c in screen(lake, day, day)
                    if c.etf_id.startswith(etf) or etf in c.etf_id), None)
         if pv is None:
-            out.append("[괴리] 이 ETF·이 날의 괴리 셀 없음 (NAV 커버리지 밖) — "
+            # **사유를 틀리게 쓰지 않는다.** `screen` 은 트리거가 울린 셀만 돌려주므로
+            # 부재의 원인은 NAV 가 아니라 **트리거 미발화**일 수 있다. 실측(091160
+            # 07-27): 여기서 'NAV 커버리지 밖' 이라 말하는 같은 산출물의 다음 줄이
+            # NAV 로 5분 괴리를 분해했다 - 진단이 자기모순이면 백필 우선순위가 틀어진다.
+            out.append("[괴리] 이 ETF·이 날의 괴리 셀 없음 — 트리거 미발화 또는 NAV·종가 "
+                       "부재 (둘 중 무엇인지는 아래 5분 분해 줄이 가른다). "
                        "바스켓/수급 분기 없이 층 라우팅만 한다")
     except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
         out.append(f"[괴리] 판정 불가 — {type(e).__name__}: {str(e)[:70]}")

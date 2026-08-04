@@ -238,6 +238,12 @@ def ensure_schema(dsn: str = "") -> str:
         import psycopg
         with psycopg.connect(dsn, connect_timeout=20) as con:
             con.execute(_DDL)
+            # **이미 있는 표에는 CREATE 가 아무 일도 하지 않는다.** 실측: `sign` 을 넣은
+            # 뒤 로컬 표가 구 DDL 로 만들어져 있어 적재 전량이 `UndefinedColumn` 으로
+            # 죽었다(라이브 산출에 사유가 찍혔다). 마이그레이션과 같은 열을 여기서도
+            # 더해 준다 - 배포는 Flyway 가 하고, 이건 그걸 못 돌리는 로컬용이다.
+            con.execute("ALTER TABLE analysis_evidence_bundle "
+                        "ADD COLUMN IF NOT EXISTS sign SMALLINT NOT NULL DEFAULT 0")
             con.commit()
         return ""
     except Exception as e:                  # noqa: BLE001

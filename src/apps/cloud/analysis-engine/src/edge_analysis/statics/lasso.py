@@ -31,9 +31,15 @@ MISS_MAX = 0.20      # 결측률이 이보다 높은 후보는 제외(대체 금
 COLLIN_CUT = 0.95    # |상관| 이 이보다 크면 준중복 - 적합 전에 하나만 남긴다
 
 
-def lasso(y: np.ndarray, X: np.ndarray, lam: float, *, max_iter: int = 200,
+def lasso(y: np.ndarray, X: np.ndarray, lam: float, *,
+          free: np.ndarray | None = None, max_iter: int = 200,
           tol: float = 1e-8, warm: np.ndarray | None = None) -> tuple[float, np.ndarray]:
     """절편 비벌점 좌표하강. `(a, d)` 반환.
+
+    `free` 는 **벌점 밖 열 마스크**다(길이 p). 다중 처치의 지시자 D 를 여기 넣는다:
+    처치 효과가 0 으로 수축되면 절편과 같은 이유로 게이트가 무너진다. 그러면 한 번에
+    `δₚ = Σₖ bₖ·D_{p,k} + Σⱼ dⱼ·c_{p,j} + uₚ` 를 푼다 - 다중 처치와 조절자 선택이
+    같은 적합 안에서 해결된다.
 
     `X` 는 [0,1] 백분위이므로 표준화하지 않는다 - 스케일이 이미 공평하다. 표준화를
     끼우면 계수의 단위가 '표준편차당' 으로 바뀌어 산문이 %p 로 못 읽는다.
@@ -42,6 +48,7 @@ def lasso(y: np.ndarray, X: np.ndarray, lam: float, *, max_iter: int = 200,
     반복이 몇 번에 끝난다.
     """
     n, p = X.shape
+    fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
     d = np.zeros(p) if warm is None else np.asarray(warm, dtype=float).copy()
     xx = (X * X).sum(axis=0)                      # 열별 제곱합 - 루프 밖에서 한 번
     a = float((y - X @ d).mean())
@@ -52,7 +59,9 @@ def lasso(y: np.ndarray, X: np.ndarray, lam: float, *, max_iter: int = 200,
             if xx[j] <= 0.0:                      # 상수열: 기울기를 정의할 수 없다
                 continue
             rho = float(X[:, j] @ (r + X[:, j] * d[j]))
-            new = np.sign(rho) * max(abs(rho) - lam * n, 0.0) / xx[j]
+            # 자유 열은 연화하지 않는다 - 절편과 같은 취급이다
+            new = (rho / xx[j] if fr[j]
+                   else np.sign(rho) * max(abs(rho) - lam * n, 0.0) / xx[j])
             r += X[:, j] * (d[j] - new)
             d[j] = new
         a = float((y - X @ d).mean())              # 절편은 연화하지 않는다
@@ -79,22 +88,32 @@ def post_ols(y: np.ndarray, X: np.ndarray,
     return float(beta[0]), d
 
 
-def _perm_labels(C: np.ndarray, dates: np.ndarray, rng) -> np.ndarray:
+def _perm_labels(C: np.ndarray, dates: np.ndarray, rng,
+                 free: np.ndarray | None = None) -> np.ndarray:
     """날짜 층 안에서 조건 라벨을 섞는다. 귀무는 '조건이 효과를 안 바꾼다'.
+
+    **자유 열(처치 지시자)은 섞지 않는다** - 섞으면 다중 처치 대비 자체가 무너져서
+    귀무가 '조건이 효과를 안 바꾼다' 가 아니라 '처치가 없다' 로 바뀐다.
 
     날짜를 섞으면 '이 날이 특별한가' 가 되고 그건 순환이다(셀이 큰 이상수익으로 선정
     됐으므로). 층화가 공통충격을 통제한다.
     """
     out = C.copy()
+    p = C.shape[1]
+    fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
+    pen = np.flatnonzero(~fr)
+    if pen.size == 0:
+        return out
     for d in np.unique(dates):
         m = dates == d
         idx = rng.permutation(np.flatnonzero(m))
-        out[m] = C[idx]
+        out[np.ix_(np.flatnonzero(m), pen)] = C[np.ix_(idx, pen)]
     return out
 
 
-def prune_collinear(X: np.ndarray, names: list[str],
-                    cut: float = COLLIN_CUT) -> tuple[np.ndarray, dict[str, str]]:
+def prune_collinear(X: np.ndarray, names: list[str], cut: float = COLLIN_CUT,
+                    free: np.ndarray | None = None
+                    ) -> tuple[np.ndarray, dict[str, str]]:
     """준중복 열을 **적합 전에** 걷는다. `(살릴 열 마스크, {버린 이름: 남긴 이름})`.
 
     안정성 선택이 이걸 처리해 줄 것이라 기대했는데 **실측이 반증했다**: 두 열이 거의
@@ -106,6 +125,7 @@ def prune_collinear(X: np.ndarray, names: list[str],
     남기는 쪽은 **먼저 온 열**이다 - 사후에 고르면 그게 선택 편향이다.
     """
     p = X.shape[1]
+    fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
     keep = np.ones(p, dtype=bool)
     dropped: dict[str, str] = {}
     sd = X.std(axis=0)
@@ -113,7 +133,9 @@ def prune_collinear(X: np.ndarray, names: list[str],
         if not keep[i] or sd[i] <= 0:
             continue
         for j in range(i + 1, p):
-            if not keep[j] or sd[j] <= 0:
+            # **자유 열은 걷지 않는다.** 처치 지시자는 설계이고 후보가 아니다 - 상관이
+            # 높다고 처치 하나를 빼면 다중 처치 대비 자체가 달라진다.
+            if not keep[j] or sd[j] <= 0 or fr[j]:
                 continue
             c = float(np.corrcoef(X[:, i], X[:, j])[0, 1])
             if abs(c) >= cut:
@@ -123,7 +145,7 @@ def prune_collinear(X: np.ndarray, names: list[str],
 
 
 def stability(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float,
-              *, seed: int = 0, b: int = B_SUB,
+              *, free: np.ndarray | None = None, seed: int = 0, b: int = B_SUB,
               frac: float = SUB_FRAC) -> np.ndarray:
     """열별 선택 빈도 Π (Meinshausen-Bühlmann). 부표본마다 라쏘를 다시 적합한다.
 
@@ -135,7 +157,9 @@ def stability(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float,
     된다 - 그건 `prune_collinear` 가 적합 전에 처리한다(실측으로 확인했다).
     """
     rng = np.random.default_rng(seed)
-    hit = np.zeros(X.shape[1])
+    p = X.shape[1]
+    fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
+    hit = np.zeros(p)
     n = len(y)
     take = max(int(round(n * frac)), 4)
     warm = None
@@ -149,14 +173,17 @@ def stability(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float,
         if len(idx) < 4:
             continue
         sub = np.asarray(sorted(idx))
-        _, dd = lasso(y[sub], X[sub], lam, warm=warm)
+        _, dd = lasso(y[sub], X[sub], lam, free=fr, warm=warm)
         warm = dd
         hit += (dd != 0.0)
-    return hit / max(b, 1)
+    out = hit / max(b, 1)
+    out[fr] = np.nan                # 자유 열의 Π 는 의미 없다 - 0.7 로 읽히면 안 된다
+    return out
 
 
 def moderate(y: np.ndarray, X: np.ndarray, dates: np.ndarray, names: list[str],
-             *, lam_grid: tuple[float, ...] = LAM_GRID, perms: int = 1000,
+             *, free: np.ndarray | None = None,
+             lam_grid: tuple[float, ...] = LAM_GRID, perms: int = 1000,
              seed: int = 0, alpha: float = 0.05) -> dict:
     """조절자 검정 전 과정. **선택이 순열 안에 있다** - 그것이 p 를 유효하게 만든다.
 
@@ -170,63 +197,78 @@ def moderate(y: np.ndarray, X: np.ndarray, dates: np.ndarray, names: list[str],
     λ 는 격자 전량을 보고한다 - 격자마다 선택 집합이 갈리면 그 사실이 곧 스펙 민감이다.
     """
     n, p = X.shape
-    if n < 4 or p == 0:
-        return {"verdict": "판정불가", "reason": f"조절자 검정 표본 n={n} · 후보 {p}"}
+    fr0 = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
+    if n < 4 or p == 0 or not (~fr0).any():
+        return {"verdict": "판정불가",
+                "reason": f"조절자 검정 표본 n={n} · 벌점 후보 {int((~fr0).sum())}"}
 
-    # 준중복 후보를 먼저 걷는다 - 남기면 계수가 쪼개져 둘 다 과소보고된다
-    live0, dropped = prune_collinear(X, names)
+    # 준중복 후보를 먼저 걷는다 - 남기면 계수가 쪼개져 둘 다 과소보고된다.
+    # 자유 열(처치 지시자)은 설계이므로 걷지 않는다.
+    live0, dropped = prune_collinear(X, names, free=fr0)
     X, names = X[:, live0], [names[i] for i in range(p) if live0[i]]
+    fr = fr0[live0]
     p = X.shape[1]
+    pen = ~fr                                     # 벌점 열 = 조절자 후보
 
     lam = lam_grid[len(lam_grid) // 2]            # 중앙값을 본 λ 로 삼는다
-    a_hat, d_hat = lasso(y, X, lam)
-    pi = stability(y, X, dates, lam, seed=seed)
+    a_hat, d_hat = lasso(y, X, lam, free=fr)
+    pi = stability(y, X, dates, lam, free=fr, seed=seed)
 
     # ── maxT 순열: 선택을 루프 안에 둔다 ──────────────────────────────────
+    # 통계량은 **벌점 열의 최대**다. 자유 열을 넣으면 처치 효과의 크기가 통계량을
+    # 지배해 '조절자가 있나' 대신 '처치가 있나' 를 묻게 된다(귀무가 바뀐다).
     rng = np.random.default_rng(seed)
     null = np.empty(perms)
     warm = None
     for k in range(perms):
-        _, dk = lasso(y, _perm_labels(X, dates, rng), lam, warm=warm)
+        _, dk = lasso(y, _perm_labels(X, dates, rng, fr), lam, free=fr, warm=warm)
         warm = dk
-        null[k] = np.abs(dk).max()
-    t_obs = float(np.abs(d_hat).max())
+        null[k] = np.abs(dk[pen]).max()
+    t_obs = float(np.abs(d_hat[pen]).max())
     p_max = float((1 + (null >= t_obs).sum()) / (1 + perms))
 
     # ── 단계적 하강: 유의한 최대를 빼고 다시 잰다 ─────────────────────────
+    # 자유 열은 매 적합에 **항상 남는다** - 빼면 설계가 달라진다.
     p_step: dict[str, float] = {}
-    live = np.ones(p, dtype=bool)
+    live = pen.copy()
     while live.any():
-        sub = np.flatnonzero(live)
-        _, ds = lasso(y, X[:, sub], lam)
-        j = int(np.argmax(np.abs(ds)))
-        t = float(abs(ds[j]))
+        sub = np.flatnonzero(live | fr)
+        sfr = fr[sub]
+        spen = ~sfr
+        _, ds = lasso(y, X[:, sub], lam, free=sfr)
+        loc = np.flatnonzero(spen)[int(np.argmax(np.abs(ds[spen])))]
+        t = float(abs(ds[loc]))
         rng2 = np.random.default_rng(seed)
         nl = np.empty(perms)
         w = None
         for k in range(perms):
-            _, dk = lasso(y, _perm_labels(X[:, sub], dates, rng2), lam, warm=w)
+            _, dk = lasso(y, _perm_labels(X[:, sub], dates, rng2, sfr), lam,
+                          free=sfr, warm=w)
             w = dk
-            nl[k] = np.abs(dk).max()
+            nl[k] = np.abs(dk[spen]).max()
         pj = float((1 + (nl >= t).sum()) / (1 + perms))
-        p_step[names[sub[j]]] = pj
+        p_step[names[sub[loc]]] = pj
         if pj >= alpha:
             break                                  # 여기서 멈춘다 - 아래는 판정 안 한다
-        live[sub[j]] = False
+        live[sub[loc]] = False
 
-    keep = np.array([pi[i] >= PI_MIN
-                     and p_step.get(names[i], 1.0) < alpha for i in range(p)])
+    # 자유 열은 **항상** post-OLS 설계에 들어간다 (선택 대상이 아니다)
+    keep = np.array([bool(fr[i]) or (pi[i] >= PI_MIN
+                                     and p_step.get(names[i], 1.0) < alpha)
+                     for i in range(p)])
     a_ols, d_ols = post_ols(y, X, keep)
 
-    # λ 민감도: 격자마다 어떤 열이 살아남나
+    # λ 민감도: 격자마다 어떤 **벌점** 열이 살아남나
     lam_sens = {f"{lm:g}": sorted(names[i] for i in range(p)
-                                  if lasso(y, X, lm)[1][i] != 0.0)
+                                  if pen[i] and lasso(y, X, lm, free=fr)[1][i] != 0.0)
                 for lm in lam_grid}
     return {"verdict": "계산됨", "null_kind": "label",
             "att_base": a_ols, "p_max": p_max, "p_step": p_step,
-            "pi": {names[i]: round(float(pi[i]), 3) for i in range(p)},
-            "selected": {names[i]: float(d_ols[i]) for i in range(p) if keep[i]},
-            "lam": lam, "lam_sensitivity": lam_sens, "n": n, "j": p,
+            "pi": {names[i]: round(float(pi[i]), 3) for i in range(p) if pen[i]},
+            "selected": {names[i]: float(d_ols[i])
+                         for i in range(p) if keep[i] and pen[i]},
+            "free_coef": {names[i]: float(d_ols[i]) for i in range(p) if fr[i]},
+            "lam": lam, "lam_sensitivity": lam_sens, "n": n, "j": int(pen.sum()),
             "dropped_collinear": dropped}
 
 
@@ -259,6 +301,20 @@ def _selfcheck() -> None:
     y0 = 0.01 + rng.normal(0, 0.002, n)
     r0 = moderate(y0, X, dates, ["a", "b", "c", "d"], perms=60)
     assert not r0["selected"], r0["selected"]
+
+    # ── 자유 열(다중 처치) ────────────────────────────────────────────────
+    D = (rng.random((n, 2)) > 0.5).astype(float)     # 처치 지시자 2개
+    Xf = np.column_stack([D, X])
+    free = np.array([True, True, False, False, False, False])
+    yf = 0.01 + 0.03 * D[:, 0] + 0.05 * X[:, 0] + rng.normal(0, 0.002, n)
+    # 처치 효과는 λ 를 키워도 0 으로 안 간다 - 벌점 밖이다
+    _, df = lasso(yf, Xf, 1.0, free=free)
+    assert abs(df[0]) > 0.01 and (df[2:] == 0).all(), df
+    rf = moderate(yf, Xf, dates, ["D1", "D2", "진짜", "n1", "n2", "n3"],
+                  free=free, perms=60)
+    assert set(rf["selected"]) == {"진짜"}, rf["selected"]
+    assert abs(rf["free_coef"]["D1"] - 0.03) < 0.01, rf["free_coef"]
+    assert "D1" not in rf["pi"] and "D1" not in rf["p_step"], "자유 열은 판정 대상 아님"
 
 
 if __name__ == "__main__":                          # pragma: no cover
