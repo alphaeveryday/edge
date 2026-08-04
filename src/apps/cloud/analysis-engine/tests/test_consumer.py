@@ -173,6 +173,14 @@ def test_malformed_is_left_and_flagged():
     (json.dumps({"event_type": "ExposureReverted",
                  "payload": {"entity_id": "e1", "session_id": "s1", "window_start": "어제쯤"}}),
      "window_start 비ISO"),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"entity_id": "e1", "session_id": "s1",
+                             "window_start": "2026-08-04T02:31:00"}}),
+     "window_start naive — TIMESTAMPTZ 비교가 DB 세션 시간대로 재해석돼 상한이 어긋난다"),
+    (json.dumps({"event_type": "ExposureReverted",
+                 "payload": {"entity_id": "091160 ", "session_id": "s1",
+                             "window_start": "2026-08-04T02:31:00+00:00"}}),
+     "entity_id 공백 — 정확 일치 질의 0건이 no-op 성공으로 위장된다"),
 ])
 def test_parse_rejects_contract_violations(body, reason):
     with pytest.raises(ValueError):

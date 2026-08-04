@@ -75,6 +75,10 @@ def _require_str(payload: dict, key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"payload.{key} 가 없다")
+    if value != value.strip():
+        # 둘러싼 공백은 정확 일치 DB 질의에서 0건이 돼 no-op 성공으로 위장된다 —
+        # 조용히 정규화하지 않고 계약 위반으로 드러낸다(생산자 결함, Rule 12).
+        raise ValueError(f"payload.{key} 에 둘러싼 공백이 있다: {value!r}")
     return value
 
 
@@ -106,9 +110,13 @@ def parse_message(body: str) -> tuple[str, dict]:
         _require_str(payload, "entity_id")
         _require_str(payload, "session_id")
         try:
-            datetime.fromisoformat(_require_str(payload, "window_start"))
+            window_start = datetime.fromisoformat(_require_str(payload, "window_start"))
         except ValueError as error:
             raise ValueError(f"payload.window_start 가 ISO 시각이 아니다: {error}") from error
+        if window_start.tzinfo is None:
+            # naive 시각은 TIMESTAMPTZ 비교에서 DB 세션 시간대로 재해석돼 상한이
+            # 조용히 어긋난다(대상 누락=노출 방치 / 과포함=재발화 오회수).
+            raise ValueError("payload.window_start 에 시간대(offset)가 없다")
     return event_type, payload
 
 
