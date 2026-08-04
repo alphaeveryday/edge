@@ -1,5 +1,6 @@
 export { StatusBadge, type BadgeTone, type StatusBadgeProps } from './StatusBadge';
 export { Toggle, type ToggleProps } from './Toggle';
+export { Select, type SelectProps, type SelectOption } from './Select';
 export { Modal, type ModalProps } from './Modal';
 export { Toaster, toast } from './Toast';
 export { Icon, type IconName, type IconProps } from './Icon';

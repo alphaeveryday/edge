@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PageSkeleton, StatusBadge, Toggle, toast } from 'ui-kit';
+import { PageSkeleton, Select, StatusBadge, Toggle, toast } from 'ui-kit';
 import type { RiskLevel } from '../domains/explanations';
 import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
@@ -86,20 +86,21 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>위험 등급</span>
-            <select className="select" value={risk} onChange={(e) => setRisk(e.target.value as RiskLevel)}>
-              {(Object.keys(RISK_LABEL) as RiskLevel[]).map((r) => (
-                <option key={r} value={r}>
-                  {RISK_LABEL[r]}
-                </option>
-              ))}
-            </select>
+            <Select
+              aria-label="위험 등급"
+              value={risk}
+              onChange={(v) => setRisk(v as RiskLevel)}
+              options={(Object.keys(RISK_LABEL) as RiskLevel[]).map((r) => ({ value: r, label: RISK_LABEL[r] }))}
+            />
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>처리 방식</span>
-            <select className="select" value={action} onChange={(e) => setAction(e.target.value as WordAction)}>
-              <option value="REVIEW">검수 필요</option>
-              <option value="BLOCK">점검 차단</option>
-            </select>
+            <Select
+              aria-label="처리 방식"
+              value={action}
+              onChange={(v) => setAction(v as WordAction)}
+              options={(Object.keys(ACTION_LABEL) as WordAction[]).map((a) => ({ value: a, label: ACTION_LABEL[a] }))}
+            />
           </div>
           <button className="btn btn-primary" onClick={submit}>
             등록
@@ -175,36 +176,40 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
         <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
           <div className="flex items-center justify-between gap-2">
             <span style={{ color: 'var(--fg-2)' }}>최소 출처 수</span>
-            <select
-              className="select"
+            <Select
+              aria-label="최소 출처 수"
+              width={140}
               disabled={!canEdit}
-              value={criteria?.minSources ?? 2}
-              onChange={(e) =>
-                updateCriteria.mutate({ minSources: Number(e.target.value) as 1 | 2 | 3 }, { onSuccess: changed })
+              value={String(criteria?.minSources ?? 2)}
+              onChange={(v) =>
+                updateCriteria.mutate({ minSources: Number(v) as 1 | 2 | 3 }, { onSuccess: changed })
               }
-            >
-              <option value={1}>1개 이상</option>
-              <option value={2}>2개 이상</option>
-              <option value={3}>3개 이상</option>
-            </select>
+              options={[
+                { value: '1', label: '1개 이상' },
+                { value: '2', label: '2개 이상' },
+                { value: '3', label: '3개 이상' },
+              ]}
+            />
           </div>
           <div className="flex items-center justify-between gap-2">
             <span style={{ color: 'var(--fg-2)' }}>최소 확신도</span>
-            <select
-              className="select"
+            {/* 미설정(NULL)=게이트 꺼짐은 placeholder 로만 보이고 선택 불가다 — 화면이 켜진
+                것처럼 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
+                (해제 어휘 없음 — 발행 모델 YAGNI 결정). 트리거 폭은 최소 출처 수와 맞춘다. */}
+            <Select
+              aria-label="최소 확신도"
+              width={140}
               disabled={!canEdit}
-              /* null(미설정=게이트 꺼짐)을 기본값으로 꾸미지 않는다 — 화면이 켜진 것처럼
-                 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
-                 (해제 어휘 없음 — 발행 모델 YAGNI 결정)이라 미설정 옵션은 선택 불가다. */
+              placeholder="미설정 (게이트 꺼짐)"
               value={criteria?.minConfidence ?? ''}
-              onChange={(e) =>
-                updateCriteria.mutate({ minConfidence: e.target.value as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
+              onChange={(v) =>
+                updateCriteria.mutate({ minConfidence: v as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
               }
-            >
-              <option value="" disabled>미설정 (게이트 꺼짐)</option>
-              <option value="MEDIUM">중간 이상</option>
-              <option value="HIGH">높음만</option>
-            </select>
+              options={[
+                { value: 'MEDIUM', label: '중간 이상' },
+                { value: 'HIGH', label: '높음만' },
+              ]}
+            />
           </div>
           <div className="flex items-center justify-between">
             <span style={{ color: 'var(--fg-2)' }}>활성 금칙어 미포함</span>
