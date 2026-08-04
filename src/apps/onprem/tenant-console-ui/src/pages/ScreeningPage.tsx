@@ -195,11 +195,15 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
               className="select"
               style={{ height: 26, fontSize: 11 }}
               disabled={!canEdit}
-              value={criteria?.minConfidence ?? 'MEDIUM'}
+              /* null(미설정=게이트 꺼짐)을 기본값으로 꾸미지 않는다 — 화면이 켜진 것처럼
+                 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
+                 (해제 어휘 없음 — 발행 모델 YAGNI 결정)이라 미설정 옵션은 선택 불가다. */
+              value={criteria?.minConfidence ?? ''}
               onChange={(e) =>
                 updateCriteria.mutate({ minConfidence: e.target.value as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
               }
             >
+              <option value="" disabled>미설정 (게이트 꺼짐)</option>
               <option value="MEDIUM">중간 이상</option>
               <option value="HIGH">높음만</option>
             </select>
