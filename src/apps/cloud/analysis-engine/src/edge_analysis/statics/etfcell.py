@@ -200,7 +200,11 @@ def _dual(lake, roll, r, day: str, honest: str, ask, split=None,
         for i, x in enumerate(
             (z for z in (scr or []) if z.get("verdict") == "계산됨"), 1)]
     try:
-        plain, bundles = narrate_plain(ask, ctx, stats=stats, cell=roll.etf,
+        # **구성종목 뉴스는 항상 재료로 준다.** `narrative_allowed` 는 '서사로 하루를
+        # 설명해도 되나' 를 묻는 게이트이고, '어떤 소식이 있었나' 는 관측이다 - 둘을
+        # 같은 스위치로 묶으면 통계가 서는 날에는 뉴스를 영원히 못 말한다.
+        news = member_news(lake, roll, day)
+        plain, bundles = narrate_plain(ask, ctx, news=news, stats=stats, cell=roll.etf,
                                       day=day, layer=r.kind)
         # 묶음은 **만든 그 자리에서** 적재한다. 꼬리표 id 만 산출물로 나가고 본문이
         # 아무 데도 없으면, 나중에 그 문장이 무엇에 근거했는지 되짚을 방법이 없다.
@@ -243,6 +247,41 @@ def _sector_types(lake, day: str, top: int = 3) -> list[str]:
     except Exception:                               # noqa: BLE001
         return []
     return [str(r[0]) for r in rows if r and r[0]]
+
+
+def member_news(lake, roll, day: str, top: int = 4, per: int = 4) -> list[dict]:
+    """**구성종목**의 뉴스. ETF 자신에는 사건이 안 붙는다 - 트리거가 없다.
+
+    이것이 없어서 ETF 산문이 '어떤 뉴스 때문인지' 를 영원히 말할 수 없었다:
+    `news_objectset(lake, <ETF id>, day)` 는 항상 `[]` 다(사건은 종목의 것이다).
+    기여 절댓값 상위 종목의 뉴스를 모아 **그 종목 이름과 함께** 준다 - 어느 종목의
+    소식인지 말하지 않으면 ETF 설명에서 뜻이 없다.
+
+    **뉴스는 관측이다.** 여기 있다는 것이 원인이라는 뜻이 아니다 - 그래서 각 항목에
+    `판정: 관측 - 방향 미검정` 을 달아 보낸다(`plain._sign_guard` 가 방향 주장을 막는다).
+    """
+    from .evidence import news_objectset
+    names = sorted((n for n in roll.names if n.contribution is not None),
+                   key=lambda n: -abs(n.contribution))[:top]
+    if not names:
+        return []
+    want = {n.ticker.split(".")[0]: n for n in names}
+    try:
+        rows = lake.sql(
+            "SELECT ticker, instrument_id FROM v_instrument WHERE ticker IN ("
+            + ",".join(repr(t) for t in want) + ")")
+    except Exception:                               # noqa: BLE001 - 부재는 빈 목록
+        return []
+    out: list[dict] = []
+    for tk, iid in rows:
+        nm = want.get(str(tk))
+        for o in news_objectset(lake, str(iid), day, limit=per):
+            if str(o.get("ref", "")).startswith("!"):
+                continue                            # 조회 오류 항목은 재료가 아니다
+            out.append({**o, "ref": f"n{len(out) + 1}",
+                        "종목": (nm.label or str(tk)) if nm else str(tk),
+                        "판정": "관측 - 방향 미검정"})
+    return out
 
 
 def _workflow(lake, roll, r, day: str,

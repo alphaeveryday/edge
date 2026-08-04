@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import pathlib
 import os
 from dataclasses import replace
 from datetime import date
@@ -212,7 +213,58 @@ def _seed_event_store(conn) -> None:
 # --------------------------------------------------------------------------- #
 # 골든패스
 # --------------------------------------------------------------------------- #
-def test_news_assembly_to_persisted_explanation(tmp_path):
+def _seed_layers_backfill(root: pathlib.Path) -> None:
+    """`layers_daily` 백필을 심는다 — **없으면 골든패스가 아무것도 검증하지 않는다.**
+
+    실측(CI): 백필이 없으면 `statics.layers.failed` 로 층 분해가 죽고 라우팅이
+    `PRICE_ONLY`, 판정이 `UNCERTAIN` 으로 떨어진다. 그 상태의 골든패스는 '데이터가
+    없을 때 정직하게 모른다고 한다' 만 확인한다 - 새 배포 경로(층 분해 -> 라우팅 ->
+    시행)는 한 줄도 안 지난다.
+
+    `BETA_WINDOW=60` 이므로 그보다 긴 이력이 필요하다. 시장(069500)·ETF(091160)·
+    구성종목(005930)을 같은 요인으로 만들어 층이 실제로 서게 한다.
+    """
+    import datetime as dt
+    import math
+
+    from edge_analysis.statics.layers import MARKET_CODE
+
+    d0 = dt.date.fromisoformat(TRADE_DATE)
+    days = [d0 - dt.timedelta(days=k) for k in range(80, -1, -1)]
+    rows: dict[str, list] = {c: [] for c in
+                             ("symbol", "name", "date", "close", "volume", "kind")}
+
+    def add(sym: str, nm: str, kind: str, f):
+        for i, d in enumerate(days):
+            rows["symbol"].append(sym)
+            rows["name"].append(nm)
+            rows["date"].append(d)
+            rows["close"].append(float(f(i)))
+            rows["volume"].append(1_000_000.0)
+            rows["kind"].append(kind)
+
+    # 시장은 완만한 사인, ETF·구성종목은 그 위에 β 를 얹는다 - 층이 서려면 공통요인이
+    # 실제로 있어야 한다(합성이라도 구조는 진짜여야 검증이 뜻을 가진다).
+    mkt = [100.0 * (1.0 + 0.01 * math.sin(i / 5.0)) for i in range(len(days))]
+    add(MARKET_CODE, "KODEX 200", "market", lambda i: mkt[i])
+    add(ETF_TICKER, "KODEX 반도체", "sector",
+        lambda i: 50.0 * (1.0 + 1.2 * (mkt[i] / 100.0 - 1.0)))
+    add(SAMSUNG_TICKER, "삼성전자", "stock",
+        lambda i: 70.0 * (1.0 + 1.1 * (mkt[i] / 100.0 - 1.0)))
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "layers_daily.parquet").write_bytes(_parquet(rows))
+    # holdings 도 심는다. S3 자격증명이 없는 CI 에서는 `s3_etf_holdings` 가 미등록이고
+    # `holdings()` 는 이 백필로 폴백한다 - 이게 없으면 구성종목 귀속이 서지 않는다.
+    (root / "etf_holdings_fmp.parquet").write_bytes(_parquet({
+        "etf_id": [ETF_TICKER],
+        "constituent_ticker": [SAMSUNG_TICKER],
+        "constituent_name": ["삼성전자"],
+        "weight_pct": [100.0],
+        "as_of": [d0]}))
+
+
+def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
     """뉴스 1건이 조립→소비→설명→영속까지 한 계보로 이어져야 한다.
 
     실패가 의미하는 것: 두 앱의 결정적 ID 산식이 갈라졌거나(수렴 파괴), 어느 한쪽 SQL 이
@@ -258,6 +310,9 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # -- 2) 하류: 엔진이 트리거·이벤트를 소비해 설명을 영속(RDS 경로) ----------
         s3 = FakeS3()
         _seed_engine_lake(s3)
+        # 백필을 심고 물린다 - 이게 없으면 아래 단언이 '데이터 없음' 을 고정한다
+        _seed_layers_backfill(tmp_path / "backfill")
+        monkeypatch.setenv("CAUSAL_BACKFILL_DIR", str(tmp_path / "backfill"))
         settings = Settings(
             trade_date=date.fromisoformat(TRADE_DATE),
             request_id=REQUEST_ID,
@@ -295,7 +350,24 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             rows = cur.fetchall()
             assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다(S3 폴백 아님)"
             result_id, etype, confidence, status, primary_thread, tdate, bundle = rows[0]
-            assert (etype, confidence, status) == ("EVENT_SUPPORTED", "HIGH", "PUBLISHED")
+            # **판정 라벨은 데이터가 정한다 - 골든패스가 정하지 않는다.**
+            # 옛 계약(`EVENT_SUPPORTED`/`HIGH`)은 fake LLM 이 classic JSON 으로 그렇게
+            # 선언했기 때문에 성립했다. 지금은 `record.Verdicts` 가 게이트 산출에서
+            # 라벨을 낸다: `EVENT_SUPPORTED` 는 적용된 엣지·성립 함의·유의한 시장사건이
+            # **하나라도 있어야** 나온다. 합성 픽스처(구성종목 1·뉴스 1·패널 이력 없음)
+            # 로는 어느 검정도 설 수 없으므로 도달 불가다 - 그걸 단언하면 통계가 아니라
+            # 픽스처의 빈약함을 고정하는 것이다.
+            #
+            # 그래서 이 골든패스가 지키는 것은 **계보와 정직성**이다: 층 회계가 서고
+            # (시장 100%) 라우팅이 그것을 반영해 `PRICE_ONLY` 로 기록되는가.
+            # 백필이 없으면 층 분해가 죽어 `UNCERTAIN` 이 되므로 이 단언이 그 회귀를
+            # 잡는다(실측: CI 에서 정확히 그렇게 실패했다).
+            assert status == "PUBLISHED"
+            assert etype == "PRICE_ONLY", (
+                f"층 회계가 서면 PRICE_ONLY 다 - {etype} 는 층 분해가 죽었다는 뜻이다"
+                " (백필 부재 -> statics.layers.failed -> UNCERTAIN)")
+            assert confidence in ("LOW", "MEDIUM"), (
+                f"사건 근거가 없으면 HIGH 가 될 수 없다: {confidence}")
             assert primary_thread == thread_id, "엔진이 소비한 thread 가 조립 산출물과 다르다"
             assert (tdate.isoformat(), bundle) == (TRADE_DATE, BUNDLE_VERSION)
 

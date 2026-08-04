@@ -482,13 +482,22 @@ def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
     배치 736셀이면 수만 질의가 되어 측정 자체가 불가능해진다(실측 - 취소했다).
     같은 (ETF, 날짜) 보유는 안 변하므로 캐시가 정답을 안 바꾼다.
     """
-    rows = lake.sql(
-        f"SELECT constituent_ticker, any_value(constituent_name), any_value(weight_pct) "
-        f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
-        f"  AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings "
-        f"                    WHERE market = 'KR' AND etf_id = '{etf}' "
-        f"                      AND as_of_date <= DATE '{day}') "
-        f"GROUP BY 1")
+    # **첫 질의가 예외로 죽으면 폴백에 못 간다.** 실측(CI e2e): S3 자격증명이 없는
+    # 환경에서 `s3_etf_holdings` 뷰가 미등록이라 `CatalogException` 이 났고, 바로 아래
+    # 백필 폴백(`etf_holdings_fmp`)은 한 번도 실행되지 않았다 - 폴백을 써 놓고 도달
+    # 불가로 둔 것이다. 표 부재는 사유이지 예외가 아니다.
+    rows: list = []
+    try:
+        rows = lake.sql(
+            f"SELECT constituent_ticker, any_value(constituent_name), "
+            f"       any_value(weight_pct) "
+            f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
+            f"  AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings "
+            f"                    WHERE market = 'KR' AND etf_id = '{etf}' "
+            f"                      AND as_of_date <= DATE '{day}') "
+            f"GROUP BY 1")
+    except Exception:                                      # noqa: BLE001 - 뷰 없음
+        rows = []
     if not rows:
         try:
             rows = lake.sql(

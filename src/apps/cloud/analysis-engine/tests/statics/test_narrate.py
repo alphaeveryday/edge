@@ -759,3 +759,43 @@ def test_fabricated_quotes_die_and_real_ones_pass():
     # 재료에 있는 낱말들로 조립했지만 **그 제목에는 없는** 인용 - 제목 대조만이 잡는다
     with pytest.raises(PlainError, match="지어낸 인용"):
         run("\u300cHBM 계약 체결 미국\u300d 이라고 했어요")
+
+
+def test_the_first_claim_may_state_the_day_without_evidence():
+    """첫 주장은 **설명 대상**(하루 방향)을 말한다 - 근거를 요구하지 않는다.
+
+    실측(000660 06-01): 통계가 전멸한 셀에서 모델이 방향과 '아직 이유는 안 보여요' 를
+    두 문장으로 정확히 나눴는데 #1 에서 죽었다 - 첫 주장은 방향을 말해야 하고(방향 가드)
+    동시에 모른다고 말해야 했다(접지 가드). **두 가드가 서로 모순했다.**
+
+    하루 수익률은 이 셀이 존재하는 이유이고 가격 계열에 접지돼 있다. 이유 주장(i≥2)은
+    여전히 근거나 '모른다' 를 요구한다 - 그게 완화되면 날조가 통과한다.
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import PlainError, _assemble, context
+
+    blind = context(ticker_name="K", day_log=0.013, idio_log=0.012, route_kind="고유",
+                    market_name="M", recent={"when": "장 열린 직후"}, established=[],
+                    overnight=[], unexplained_top=True)
+
+    txt, bs = _assemble(
+        [{"text": "장 열린 직후부터 오늘 뚜렷하게 올랐어요", "basis": "none",
+          "refs": [], "sign": 1},
+         {"text": "아직 뚜렷한 이유는 안 보여요", "basis": "none", "refs": [],
+          "sign": 0}], blind, {}, [], "c", "d", "")
+    assert "올랐어요" in txt and not bs, "묶음은 없다 - 근거가 없으므로"
+    assert "{none, -, +1}" in txt, "방향 칸은 남는다"
+
+    # 이유 주장은 여전히 근거나 '모른다' 를 요구한다 - 완화되면 날조가 통과한다.
+    # (두 가드가 겹쳐 덮는다: 주장별 접지 가드와 산문 전체의 '모른다' 가드)
+    with pytest.raises(PlainError, match="근거 없는 주장|모른다고 말하지 않았다"):
+        _assemble([{"text": "장 열린 직후부터 올랐어요", "basis": "none", "refs": [],
+                    "sign": 1},
+                   {"text": "외국인이 크게 사들였어요", "basis": "none", "refs": [],
+                    "sign": 1}], blind, {}, [], "c", "d", "")
+
+    # 첫 주장이 방향을 말하지 않으면 면제되지 않는다
+    with pytest.raises(PlainError):
+        _assemble([{"text": "장 열린 직후에 무슨 일이 있었어요", "basis": "none",
+                    "refs": [], "sign": 1}], blind, {}, [], "c", "d", "")
