@@ -72,7 +72,8 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		long assertive = seedActiveRule("ASSERTIVE_EXPRESSION", "REVIEW");
 		seedItem("it607-review", "607REV", "에코프로비엠", "REVIEW_REQUIRED", "HIGH", "원본 요약",
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"공급 계약\",\"source\":\"DART\","
-						+ "\"published_at\":\"2026-07-14T09:00:00Z\"}]",
+						+ "\"published_at\":\"2026-07-14T09:00:00Z\","
+						+ "\"source_uri\":\"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001\"}]",
 				OffsetDateTime.now());
 		seedCheck("it607-review", assertive, "REVIEW");
 
@@ -89,6 +90,10 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 			assertThat(e.kind()).isEqualTo("DISCLOSURE");       // dto 가 공시로 번역
 			assertThat(e.source()).isEqualTo("DART");
 			assertThat(e.publishedAt()).isNotNull();
+			// JSONB source_uri → 파서(parseEvidence) 실경로 검증(ALPHA-739) — dto 테스트는
+			// 모델을 직접 만들어 파서를 우회하므로 키 오타 회귀는 여기서만 잡힌다.
+			assertThat(e.sourceUri())
+					.isEqualTo("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001");
 		});
 	}
 

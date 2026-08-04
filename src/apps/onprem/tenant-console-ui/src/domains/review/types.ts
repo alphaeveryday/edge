@@ -25,6 +25,8 @@ export interface ReviewEvidence {
   title: string;
   source: string;
   publishedAt: string | null;
+  /** 원문 링크(ALPHA-739) — 계약상 optional, 결측이면 null(일반 텍스트 폴백). */
+  sourceUri: string | null;
 }
 
 export interface ReviewCheck {

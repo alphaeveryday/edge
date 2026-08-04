@@ -110,14 +110,14 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 	void NEW_전달은_lineage_두_갈래의_근거_문서를_문서_단위로_싣는다() {
 		// WHY: 콘솔 근거 표시는 이 조립(ALPHA-718)이 유일한 공급로다 — 이벤트 근거·공시 사실
 		// 두 갈래가 모두 실려야 하고, 같은 문서가 여러 단계(stage_code)로 붙어도 근거는 문서
-		// 단위 1건이어야 한다(DISTINCT). title·published_at 은 NULL 허용 계약이다.
+		// 단위 1건이어야 한다(DISTINCT). title·published_at·source_uri 는 NULL 허용 계약이다.
 		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
 		seedRun("it-run-1", asOf);
 		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
 		seedDelivery(tenantId, 1, "NEW", "it-res-1", null, null);
 		seedDocument("it-doc-news", "NEWS", "YONHAP", "실적 발표 기사",
-				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"));
-		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null);
+				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"), "https://news.example.com/a1");
+		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null, null);
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
 		seedDisclosureLineage("it-run-1", "it-fact-1", "it-doc-disc", "PROMPT");
@@ -129,9 +129,11 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 
 		// 순서 계약: published_at ASC NULLS LAST — 시각 있는 뉴스가 앞, NULL 공시가 뒤.
 		// published_at 은 UTC Instant 문자열(+09:00 적재분도 같은 순간의 Z 표기).
+		// source_uri 는 원문 링크(ALPHA-739) — 결측(EOD 구멍, ALPHA-740)이면 null 로 실린다.
 		assertThat(entries.getFirst().evidences()).containsExactly(
-				new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
-				new EvidenceItem("DISCLOSURE", null, "DART", null));
+				new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z",
+						"https://news.example.com/a1"),
+				new EvidenceItem("DISCLOSURE", null, "DART", null, null));
 	}
 
 	@Test
@@ -145,8 +147,8 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
 		seedDelivery(tenantId, 1, "NEW", "it-res-1", null, null);
 		seedDocument("it-doc-news", "NEWS", "YONHAP", "실적 발표 기사",
-				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"));
-		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null);
+				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"), null);
+		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null, null);
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
 		seedEventEvidenceLineage("it-run-1", "it-ev-2", "it-doc-disc", "PROMPT");
@@ -172,13 +174,13 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 			seedDelivery(tenantId, i, "NEW", "it-res-" + i, null, null);
 		}
 		seedDocument("it-doc-news", "NEWS", "YONHAP", "run1 근거",
-				OffsetDateTime.parse("2026-07-14T00:00:00Z"));
+				OffsetDateTime.parse("2026-07-14T00:00:00Z"), null);
 		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
 
 		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
 
 		assertThat(entries.get(0).evidences())
-				.containsExactly(new EvidenceItem("NEWS", "run1 근거", "YONHAP", "2026-07-14T00:00:00Z"));
+				.containsExactly(new EvidenceItem("NEWS", "run1 근거", "YONHAP", "2026-07-14T00:00:00Z", null));
 		assertThat(entries.get(1).evidences()).isEmpty();
 	}
 
@@ -346,13 +348,14 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 	// ── evidences lineage 시드 (ALPHA-718) ──
 
 	private void seedDocument(String documentId, String documentType, String sourceCode,
-			String title, OffsetDateTime publishedAt) {
+			String title, OffsetDateTime publishedAt, String sourceUri) {
 		jdbc.update("""
 				INSERT INTO document (document_id, document_type, source_code, source_document_id,
-				    title, published_at, available_at)
-				VALUES (?, ?, ?, ?, ?, ?, now())
+				    title, published_at, available_at, source_uri)
+				VALUES (?, ?, ?, ?, ?, ?, now(), ?)
 				""", documentId, documentType, sourceCode, documentId + "-src", title,
-				publishedAt == null ? null : java.sql.Timestamp.from(publishedAt.toInstant()));
+				publishedAt == null ? null : java.sql.Timestamp.from(publishedAt.toInstant()),
+				sourceUri);
 	}
 
 	/**

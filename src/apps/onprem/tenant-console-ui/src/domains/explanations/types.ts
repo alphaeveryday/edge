@@ -21,6 +21,8 @@ export interface Evidence {
   title: string;
   source: string;
   time: string;
+  /** 원문 링크(ALPHA-739) — 결측(EOD 뉴스 구멍 등)이면 생략, UI 는 일반 텍스트 폴백. */
+  sourceUri?: string;
 }
 
 export interface Explanation {

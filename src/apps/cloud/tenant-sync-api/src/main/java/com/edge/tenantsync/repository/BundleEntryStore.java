@@ -86,7 +86,8 @@ public class BundleEntryStore {
 	// 계약 format(date-time, 초 필수)을 깨는 변수를 조립 시점에 제거한다(EvidenceItem 주석).
 	private static EvidenceItem toEvidence(RunEvidenceRow row) {
 		return new EvidenceItem(row.getDocumentType(), row.getTitle(), row.getSourceCode(),
-				row.getPublishedAt() == null ? null : row.getPublishedAt().toString());
+				row.getPublishedAt() == null ? null : row.getPublishedAt().toString(),
+				row.getSourceUri());
 	}
 
 	static BundleEntry toEntry(DeliveryRow row, List<SourceEventItem> sourceEvents,

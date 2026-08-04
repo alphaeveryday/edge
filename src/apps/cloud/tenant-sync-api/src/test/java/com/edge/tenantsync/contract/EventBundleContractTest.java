@@ -64,8 +64,9 @@ class EventBundleContractTest {
 				BundleEntry.newResult(101, result, run, List.of(
 						new SourceEventItem("se1", "NEWS", "EARNINGS", "2026-07-14"),
 						new SourceEventItem("se2", "DISCLOSURE", "SUPPLY_CONTRACT", null)), List.of(
-						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
-						new EvidenceItem("DISCLOSURE", null, "DART", null))),
+						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z",
+								"https://news.example.com/a1"),
+						new EvidenceItem("DISCLOSURE", null, "DART", null, null))),
 				BundleEntry.newResult(102, result, run, List.of(), List.of()),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 
@@ -122,6 +123,23 @@ class EventBundleContractTest {
 
 		assertThat(schema.validate(populated, InputFormat.JSON))
 				.as("populated flat 형상도 통과해야 한다(ALPHA-718)").isEmpty();
+	}
+
+	@Test
+	void 근거의_미지_키는_거부된다() {
+		// EvidenceItem 은 additionalProperties: false 다 — source_url 같은 오타 키가 조용히
+		// 수용되면 소비자(콘솔 파서)는 결측으로 읽어 링크가 소리 없이 사라진다(ALPHA-739).
+		String unknownKey = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
+				 "entries":[{"cursor":101,"delivery_type":"NEW",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],
+				   "evidences":[{"kind":"DISCLOSURE","title":"공시","source":"DART","published_at":null,"source_url":"https://dart.fss.or.kr/x"}]}]}""";
+
+		assertThat(schema.validate(unknownKey, InputFormat.JSON))
+				.as("EvidenceItem 의 미지 키는 거부되어야 한다(additionalProperties: false)").isNotEmpty();
 	}
 
 	@Test

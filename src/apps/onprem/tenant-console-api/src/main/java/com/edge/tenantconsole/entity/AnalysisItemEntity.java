@@ -46,7 +46,7 @@ public class AnalysisItemEntity {
 	@Column(name = "received_at")
 	private OffsetDateTime receivedAt;
 
-	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at}]) — 상세 화면 원천(ALPHA-436). */
+	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at,source_uri}]) — 상세 화면 원천(ALPHA-436·739). */
 	@JdbcTypeCode(SqlTypes.JSON)
 	private String evidences;
 
