@@ -385,7 +385,17 @@ function serveStatic(res, urlPath) {
       res.end('Not Found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPES[path.extname(filePath)] || 'application/octet-stream' });
+    const ext = path.extname(filePath);
+    // 캐시 정책을 명시한다 — 무헤더 응답은 iOS standalone 웹뷰가 자체 캐시로 물고 재검증하지
+    // 않아 배포가 실기기에 전파되지 않는다(ALPHA-736 실증). 배포마다 바뀌는 텍스트 자산은
+    // no-cache(재검증 강제 — 데모 트래픽에서 재전송 비용은 무시 가능), 아이콘류 바이너리만 1시간.
+    const cacheControl = ext === '.png' || ext === '.ico' || ext === '.woff2'
+      ? 'max-age=3600'
+      : 'no-cache';
+    res.writeHead(200, {
+      'Content-Type': CONTENT_TYPES[ext] || 'application/octet-stream',
+      'Cache-Control': cacheControl,
+    });
     res.end(data);
   });
 }
