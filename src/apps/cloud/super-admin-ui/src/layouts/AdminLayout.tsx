@@ -7,43 +7,83 @@ import { useAnalyses } from '../domains/analyses/hooks';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 import { useTenants } from '../domains/tenants/hooks';
 
-interface NavEntry {
+/* 좌측 정보 구조 — 그룹(파이프라인·분석 결과) ▸ 영역 ▸ 하위 화면 3단.
+ *
+ * 영역은 그 질문의 기본 화면을 열고, 하위 화면은 그 영역에 들어와 있을 때만 펼쳐진다.
+ * 라우트는 하나도 바꾸지 않는다 — 기존 URL·딥링크가 그대로 살아 있어야 한다(메뉴만 재배치).
+ */
+interface NavSub {
+  path: string;
+  label: string;
+}
+interface NavArea {
   path: string;
   label: string;
   icon: IconName;
+  subs?: NavSub[];
+}
+interface NavGroup {
+  group: string;
+  /** 클릭으로 펼치고 접는 그룹인가. 테넌트 영역은 기존 구조를 그대로 둔다(고정 노출) */
+  collapsible: boolean;
+  areas: NavArea[];
 }
 
-const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
+const NAV_GROUPS: NavGroup[] = [
   {
-    section: '운영 현황',
-    /* 화면명은 답하는 질문이다. 홈은 규칙이 오늘 잡은 사건이고(ALPHA-738), 축 화면들은
-     * 그 사건의 근거를 여는 형제 화면이다 — 화면 안에 또 탭을 만들지 않는다. */
-    items: [
-      { path: '/', label: '오늘 사건', icon: 'alertTriangle' },
-      { path: '/ops/runs', label: '런·작업 귀결', icon: 'clipboardCheck' },
-      { path: '/ops/chain', label: '설명 생산 체인', icon: 'trendChart' },
-      { path: '/ops/datasets', label: '데이터셋 신선도', icon: 'database' },
-      { path: '/ops/trend', label: '산출 추이', icon: 'trendChart' },
-      { path: '/ops/delivery', label: '전달 경계', icon: 'shield' },
-      { path: '/overview', label: '레인 원장 요약', icon: 'dashboard' },
+    group: '파이프라인',
+    collapsible: true,
+    areas: [
+      { path: '/', label: '오늘', icon: 'alertTriangle' },
+      {
+        path: '/ops/runs',
+        label: '실행',
+        icon: 'clipboardCheck',
+        subs: [
+          { path: '/grid', label: '실행 이력' },
+          { path: '/minute', label: '장중 세션' },
+          { path: '/overview', label: '원장' },
+        ],
+      },
+      {
+        path: '/ops/datasets',
+        label: '데이터',
+        icon: 'database',
+        subs: [
+          { path: '/sources', label: '수집 상태' },
+          { path: '/impact/holdings', label: '결손 영향' },
+        ],
+      },
+      {
+        path: '/ops/chain',
+        label: '산출 흐름',
+        icon: 'trendChart',
+        subs: [{ path: '/ops/delivery', label: '게시·발번 경계' }],
+      },
+      { path: '/ops/trend', label: '추이', icon: 'trendChart' },
     ],
   },
   {
-    section: '테넌트 관리',
-    items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
-  },
-  {
-    section: '가격 변동 분석 관리',
-    items: [
-      { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
-      { path: '/grid', label: '파이프라인 실행 이력', icon: 'dashboard' },
-      { path: '/minute', label: '장중 1분 수집', icon: 'database' },
-      { path: '/lineage/news', label: '뉴스 계보', icon: 'database' },
-      { path: '/impact/holdings', label: '구성종목 결손 영향', icon: 'trendChart' },
+    group: '분석 결과',
+    collapsible: true,
+    areas: [
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
+      { path: '/lineage/news', label: '근거·계보', icon: 'database' },
     ],
+  },
+  {
+    group: '테넌트 관리',
+    collapsible: false,
+    areas: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
 ];
+
+/** '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
+const matchPath = (path: string, target: string) =>
+  target === '/' ? path === '/' : path.startsWith(target);
+/** 이 영역 안에 있는가 — 기본 화면이든 하위 화면이든 */
+const inArea = (path: string, a: NavArea) =>
+  matchPath(path, a.path) || (a.subs ?? []).some((s) => matchPath(path, s.path));
 
 /** EDGE 마크 (시안 로고 — 상승 바 3개) */
 function EdgeMark() {
@@ -68,6 +108,9 @@ export function AdminLayout() {
   const logout = useLogout();
 
   const [menuOpen, setMenuOpen] = useState(false);
+  /* 사용자가 접은 그룹만 기억한다 — 펼침 여부는 매 렌더 경로에서 파생되므로
+   * 새로고침·딥링크로 들어와도 현재 화면이 속한 그룹이 저절로 열린다(별도 복원 불필요). */
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState('');
   const [profileError, setProfileError] = useState(false);
@@ -159,22 +202,66 @@ export function AdminLayout() {
           </div>
         </div>
 
-        {NAV_SECTIONS.map(({ section, items }) => (
-          <div key={section}>
-            <div className="nav-section">{section}</div>
-            {items.map((item) => (
-              <div
-                key={item.path}
-                /* '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
-                className={`nav-item${(item.path === '/' ? path === '/' : path.startsWith(item.path)) ? ' active' : ''}`}
-                onClick={() => navigate(item.path)}
-              >
-                <Icon name={item.icon} className="ic" />
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ))}
+        {NAV_GROUPS.map((g) => {
+          const groupActive = g.areas.some((a) => inArea(path, a));
+          /* 현재 화면이 속한 그룹은 항상 펼쳐 둔다 — 접힌 채로 활성 메뉴가 숨는 상태를 만들지 않는다 */
+          const expanded = !g.collapsible || groupActive || !collapsedGroups[g.group];
+          return (
+            <div key={g.group}>
+              {g.collapsible ? (
+                <div
+                  className="nav-section flex items-center gap-1.5"
+                  style={{ cursor: 'pointer', userSelect: 'none' }}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expanded}
+                  onClick={() => setCollapsedGroups((s) => ({ ...s, [g.group]: expanded }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setCollapsedGroups((s) => ({ ...s, [g.group]: expanded }));
+                    }
+                  }}
+                >
+                  <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} className="flex-none" />
+                  <span>{g.group}</span>
+                </div>
+              ) : (
+                <div className="nav-section">{g.group}</div>
+              )}
+
+              {expanded &&
+                g.areas.map((area) => {
+                  const onOwnScreen = matchPath(path, area.path);
+                  const inside = inArea(path, area);
+                  return (
+                    <div key={area.path}>
+                      {/* 영역 자체가 현재 화면이면 활성, 하위 화면에 들어와 있으면 "이 영역 안"만 표시 */}
+                      <div
+                        className={`nav-item${onOwnScreen ? ' active' : ''}`}
+                        style={inside && !onOwnScreen ? { color: 'var(--gray-200)' } : undefined}
+                        onClick={() => navigate(area.path)}
+                      >
+                        <Icon name={area.icon} className="ic" />
+                        <span>{area.label}</span>
+                      </div>
+                      {inside &&
+                        area.subs?.map((sub) => (
+                          <div
+                            key={sub.path}
+                            className={`nav-item nav-sub${matchPath(path, sub.path) ? ' active' : ''}`}
+                            style={{ paddingLeft: 32 }}
+                            onClick={() => navigate(sub.path)}
+                          >
+                            <span>{sub.label}</span>
+                          </div>
+                        ))}
+                    </div>
+                  );
+                })}
+            </div>
+          );
+        })}
 
         <div className="flex-1" />
 
