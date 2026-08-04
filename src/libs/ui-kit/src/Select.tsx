@@ -203,6 +203,8 @@ export function Select({
               }}
               onMouseEnter={() => !opt.disabled && setActive(i)}
               onMouseDown={(e) => {
+                // 주 버튼(좌클릭)만 커밋 — 우클릭·가운데클릭은 선택 의도가 아니다.
+                if (e.button !== 0) return;
                 // mousedown 으로 커밋한다 — 트리거 blur 로 목록이 먼저 닫혀 click 이 유실되는 걸 막는다.
                 e.preventDefault();
                 commit(opt);
