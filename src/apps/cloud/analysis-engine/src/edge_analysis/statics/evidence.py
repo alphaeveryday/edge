@@ -181,8 +181,13 @@ LEFT JOIN tau_sidecar sc ON sc.article_id = doc.source_document_id
 
 
 # 서사 경로 스위치. **끈 것을 산출물이 말한다** - 조용히 빠지면 '뉴스가 없어서'
-# 와 '경로를 껐어서' 를 구분할 수 없다. 되돌리려면 이 한 줄을 True 로.
-NARRATIVE_ENABLED = False
+# 와 '경로를 껐어서' 를 구분할 수 없다.
+#
+# 껐던 이유는 뉴스가 못 미더워서가 아니라 **인용 진위 검사가 없어서**였다: 참조 존재만
+# 검사하면 모델이 실재하는 id 를 가리키면서 없는 문장을 지어낼 수 있고, STORM 의 base
+# 가 정확히 그 실패로 죽었다. 이제 `plain._quote_guard` 가 인용부호 구간을 기사 제목과
+# 대조한다 - 검사와 스위치가 같은 커밋에 들어왔으므로 켠다.
+NARRATIVE_ENABLED = True
 
 
 def narrative_allowed(*, credible: int, applied_edges: int) -> tuple[bool, str]:

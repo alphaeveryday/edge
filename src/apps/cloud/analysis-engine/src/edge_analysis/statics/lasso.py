@@ -156,10 +156,26 @@ def stability(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float,
     못 잡는 것: **준중복**(|corr|≈1). 그때 라쏘는 고르는 대신 쪼개 나눠서 둘 다 Π=1 이
     된다 - 그건 `prune_collinear` 가 적합 전에 처리한다(실측으로 확인했다).
     """
+    d = subfits(y, X, dates, lam, free=free, seed=seed, b=b, frac=frac)
+    p = X.shape[1]
+    fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
+    out = (d != 0.0).mean(axis=0) if len(d) else np.zeros(p)
+    out[fr] = np.nan                # 자유 열의 Π 는 의미 없다 - 0.7 로 읽히면 안 된다
+    return out
+
+
+def subfits(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float, *,
+            free: np.ndarray | None = None, seed: int = 0, b: int = B_SUB,
+            frac: float = SUB_FRAC) -> np.ndarray:
+    """부표본 계수 표본 `(b, p)`. Π 와 **동순위 판정**이 같은 적합을 쓴다.
+
+    순위를 점추정으로만 매기면 겹치는 두 조절자에 1위·2위를 붙인다 - 그건 날조다
+    (`sem.rank_with_ties` 가 이 재료를 요구한다). 여기서 한 번 돌려 둘 다 쓴다.
+    """
     rng = np.random.default_rng(seed)
     p = X.shape[1]
     fr = np.zeros(p, dtype=bool) if free is None else np.asarray(free, dtype=bool)
-    hit = np.zeros(p)
+    draws: list[np.ndarray] = []
     n = len(y)
     take = max(int(round(n * frac)), 4)
     warm = None
@@ -175,10 +191,8 @@ def stability(y: np.ndarray, X: np.ndarray, dates: np.ndarray, lam: float,
         sub = np.asarray(sorted(idx))
         _, dd = lasso(y[sub], X[sub], lam, free=fr, warm=warm)
         warm = dd
-        hit += (dd != 0.0)
-    out = hit / max(b, 1)
-    out[fr] = np.nan                # 자유 열의 Π 는 의미 없다 - 0.7 로 읽히면 안 된다
-    return out
+        draws.append(dd.copy())
+    return np.asarray(draws) if draws else np.empty((0, p))
 
 
 def moderate(y: np.ndarray, X: np.ndarray, dates: np.ndarray, names: list[str],
@@ -212,7 +226,10 @@ def moderate(y: np.ndarray, X: np.ndarray, dates: np.ndarray, names: list[str],
 
     lam = lam_grid[len(lam_grid) // 2]            # 중앙값을 본 λ 로 삼는다
     a_hat, d_hat = lasso(y, X, lam, free=fr)
-    pi = stability(y, X, dates, lam, free=fr, seed=seed)
+    # 부표본 적합을 **한 번** 돌려 Π 와 동순위 판정에 함께 쓴다
+    draws = subfits(y, X, dates, lam, free=fr, seed=seed)
+    pi = ((draws != 0.0).mean(axis=0) if len(draws) else np.zeros(p))
+    pi[fr] = np.nan
 
     # ── maxT 순열: 선택을 루프 안에 둔다 ──────────────────────────────────
     # 통계량은 **벌점 열의 최대**다. 자유 열을 넣으면 처치 효과의 크기가 통계량을
@@ -262,12 +279,25 @@ def moderate(y: np.ndarray, X: np.ndarray, dates: np.ndarray, names: list[str],
     lam_sens = {f"{lm:g}": sorted(names[i] for i in range(p)
                                   if pen[i] and lasso(y, X, lm, free=fr)[1][i] != 0.0)
                 for lm in lam_grid}
-    return {"verdict": "계산됨", "null_kind": "label",
+    # **동순위 순위**: 부표본 구간이 겹치면 같은 순위다. 점추정으로만 1위·2위를 붙이면
+    # 그건 날조다(`rank_with_ties` 가 부트스트랩 표본을 요구하는 이유). 선택된 조절자만.
+    from .sem import rank_with_ties
+    sel_idx = [i for i in range(p) if keep[i] and pen[i]]
+    rank = (rank_with_ties({names[i]: np.abs(draws[:, i]) for i in sel_idx})
+            if sel_idx and len(draws) else [])
+
+    return {"verdict": "계산됨", "null_kind": "label", "rank": rank,
             "att_base": a_ols, "p_max": p_max, "p_step": p_step,
             "pi": {names[i]: round(float(pi[i]), 3) for i in range(p) if pen[i]},
             "selected": {names[i]: float(d_ols[i])
                          for i in range(p) if keep[i] and pen[i]},
+            # ⚠ `free_coef` 의 **낱값은 인용하지 마라.** 처치 짝만 담긴 설계에서는
+            # D 블록이 절편과 준중복이라 공통 몫을 절편이 가져간다 - 실측(TrialLasso):
+            # 같은 자료에서 ATT +2.424%p 인데 free_coef 는 -0.052%p 였다. 절편이 소거되는
+            # **처치 간 대비**만 두 설계에서 같은 것을 뜻한다.
             "free_coef": {names[i]: float(d_ols[i]) for i in range(p) if fr[i]},
+            "free_coef_caveat": ("낱값 비식별 - 처치 짝만 있는 설계에서 절편과 준중복이다. "
+                                 "처치 간 대비만 인용해라"),
             "lam": lam, "lam_sensitivity": lam_sens, "n": n, "j": int(pen.sum()),
             "dropped_collinear": dropped}
 

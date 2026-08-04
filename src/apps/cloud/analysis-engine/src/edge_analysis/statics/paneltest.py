@@ -209,7 +209,7 @@ f AS (
            fn.roe        AS prof_lvl, fn.roe_chg      AS prof_chg,
            fn.rev_growth AS grow_lvl, fn.int_cover    AS icov_lvl,
            -- **되돌림** = ln(종가/일중고가). '왜 오르다 떨어졌나' 를 일 단위
-           -- 스칼라로 환원한다 - 경로 질문을 창 단위로 쪼개면 SEM 이 다시 범주
+           -- 스칼라로 환원한다 - 경로 질문을 창 단위로 쪼개면 일 단위 추정량이 다시 범주
            -- 오류에 빠진다(8차). RDB `price_daily` 는 종가만이고(sql_surface L86
            -- 이 자백한다) 레이크 `s3_price_daily` 에 OHLC 가 있는데 안 묶여 있었다.
            CASE WHEN px.high > 0 AND d.close_price > 0

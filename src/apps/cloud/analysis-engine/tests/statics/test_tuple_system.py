@@ -227,12 +227,22 @@ def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
     assert all(h["p2"] <= 1.0 for h in hits if "p2" in h)       # 양측 보정 상한
 
 
-def test_sem_magnitude_attached_only_when_passing():
+def test_gate_never_produces_magnitude():
+    # §11: 게이트는 존재를 판정하고 **크기를 만들지 않는다**. SEM 기여
+    # (`contribution`·`ci_lo`·`ci_hi`)를 붙였던 자리다 - τ̂·Δx 는 기울기 × 노출
+    # 편차라 '오늘 이 사건이 만든 %p' 가 아니었는데 산문이 수준으로 읽어 하루
+    # 총합과 안 겹치는 구간을 인용했다(자기모순). 크기는 ATT 경로가 주장하고
+    # 예산 검산은 가법 제약이 한다.
+    import dataclasses
+
+    from edge_analysis.statics.paneltest import EdgeReport
     r = edge_test(_Lake(), T, "2026-06-01", cell_instrument_id="i0")
-    assert r.verdict == "성립" and r.contribution is not None
-    assert r.ci_lo <= r.contribution <= r.ci_hi        # 점추정이 구간 안
-    r2 = edge_test(_Lake(effect=0.0), T, "2026-06-01", cell_instrument_id="i0")
-    assert r2.verdict == "불성립" and r2.contribution is None   # 게이트 탈락 = 크기 없음
+    assert r.verdict == "성립"
+    assert edge_test(_Lake(effect=0.0), T, "2026-06-01",
+                     cell_instrument_id="i0").verdict == "불성립"
+    banned = {"contribution", "ci_lo", "ci_hi"}
+    assert not banned & {f.name for f in dataclasses.fields(EdgeReport)}, \
+        "게이트가 다시 크기를 만든다 - 크기 주장은 ATT 경로 소관이다"
 
 
 def test_registry_recall_before_record_and_pit(tmp_path):

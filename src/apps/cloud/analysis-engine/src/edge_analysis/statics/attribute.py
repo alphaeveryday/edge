@@ -7,7 +7,9 @@
 
 몫 배정 규칙: 사건 창의 타입이 성립 튜플의 점 방아쇠와 일치하면 그 창의
 처치가 그 채널이 된다. 계수(est)는 붙이지 않는다 - 게이트는 크기를 만들지
-않는다(§11). 크기 주장은 SEM(폴드 B)이 생겨야 하고, 그 전에 숫자를 적으면
+않는다(§11). 크기 주장은 ATT 경로(trial→verifier)가 하고, 그 합이 층 예산을
+넘는지는 가법 제약(narrate.AdditiveBudget)이 검산한다 - SEM 은 폐기했다
+(기울기를 수준으로 읽히게 하는 구조적 오독원이었다). 검산 전에 숫자를 적으면
 그게 바로 우리가 STORM 에서 잰 날조다.
 
 사용:  python -m edge_analysis.statics.attribute <ticker> <instrument_id> <YYYY-MM-DD>
@@ -23,7 +25,7 @@ from datetime import datetime, time, timedelta, timezone
 from ..observability import record as trace   # registry.record 와 이름 충돌 회피
 from .duck import CausalLake
 from .hypothesize import explore, propose
-from .narrate import Edge, narrate
+from .narrate import AdditiveBudget, Edge, additive_say, narrate
 from .paneltest import EdgeReport, edge_test
 from .render import Row, render
 from .tree import Share, decompose
@@ -35,33 +37,6 @@ KST = timezone(timedelta(hours=9))
 
 def _kst(ts) -> datetime:
     return ts.astimezone(KST).replace(tzinfo=None) if ts.tzinfo else ts
-
-
-def _clip(lo: float, hi: float, cap: float) -> tuple[float, float] | None:
-    """부분식별의 공용 교차: [lo,hi] ∩ (0 방향 cap]. None = 모순 (방향이 어긋난다)."""
-    a = max(lo, 0.0) if cap >= 0 else max(lo, cap)
-    b = min(hi, cap) if cap >= 0 else min(hi, 0.0)
-    return (a, b) if a <= b else None
-
-
-def _iset(r: EdgeReport, budget: float) -> tuple[float, float] | None:
-    """일 단위 식별집합 = CI(τ̂·Δx) ∩ (0, **고유요인 총합**]. None = CI 없음 또는 모순(§10).
-
-    예산이 원수익이 아니라 고유요인인 이유 (20R): 패널이 추정하는 τ 는 `ar_ind`
-    (시장·산업 이중차감) 단위다. 원수익을 상한으로 쓰면 **단위가 다른 두 수를
-    교차**하는 것이고, 그건 8차에 고친 일/창 범주 오류가 수익률 정의 축에서
-    반복되는 것이다. 실측이 그 위험을 보여줬다 - 2026-07-30 삼성전자는
-    원수익 -0.72% 인데 시장이 -1.10% 라 고유요인은 **+0.38%**, 부호가 뒤집힌다.
-
-    시간 분해(창별 몫)는 원수익 그대로 둔다: 그건 이 종목 가격 경로의 **산술
-    항등식**이고 알리바이(언제 움직였나)의 근거다. 일중 시장 요인 5분봉이 없어
-    창별로 쪼갤 수도 없다 - 없는 것을 있는 척하지 않는다.
-
-    블록과 산문이 이 한 곳에서 같은 값을 얻는다 - 표·산문 동일 객체 계약의 채널판.
-    """
-    if r.ci_lo is None or r.ci_hi is None:
-        return None
-    return _clip(r.ci_lo, r.ci_hi, budget)
 
 
 def idio_budget(lake, instrument_id: str, day: str) -> tuple[float | None, float | None]:
@@ -80,6 +55,43 @@ def idio_budget(lake, instrument_id: str, day: str) -> tuple[float | None, float
     except Exception:                      # noqa: BLE001 - 못 재면 부재 보고
         return None, None
     return (rows[0][0], rows[0][1]) if rows and rows[0][0] is not None else (None, None)
+
+
+SIGMA_N = 60        # σ̂_ε 창(일). paneltest w20 과 같은 규율 - **당일 제외**
+SIGMA_MIN_N = 40    # 이보다 얇으면 표준편차 자체가 표본잡음이라 판정불가
+
+
+def resid_sigma(lake, instrument_id: str, day: str) -> tuple[float | None, str]:
+    """(σ̂_ε, 미계측 사유) — 그 종목 `ar_ind` 의 60일 표준편차.
+
+    가법 제약 상한 |B| + 1.96·σ̂_ε 의 잡음 항이다. 예산 B 는 **실현된** 하루
+    몫이라 자기도 흔들린다 - 참 효과의 합이 정확히 B 여도 실현치가 조금 낮게
+    나오면 Σ|ATT| > B 가 되어 옳은 주장이 모순으로 기각된다. σ̂_ε 는 '하루가
+    그만큼은 흔들린다' 는 관측된 크기고, `vol20`(paneltest L156 stddev_samp)이
+    lr 로 이미 계산하는 것을 결과변수 축(ar_ind)에서 60일 창으로 잰 것이다.
+
+    창은 **당일 제외** [t-60, t-1] 이다. 오늘을 넣으면 오늘의 큰 충격이 σ̂ 를
+    부풀려 상한이 저절로 넓어진다 - 검산이 검산 대상에게 매수당한다.
+
+    None 이면 **못 쟀다**. 그러면 가법 제약은 판정불가이고 거저 통과가 아니다.
+    """
+    from .paneltest import _base
+    try:
+        rows = lake.sql(_base(day, "23:59:59") + f"""
+            SELECT stddev_samp(w.ar_ind), count(w.ar_ind) FROM (
+              SELECT d.ar_ind FROM v_daily d
+              WHERE d.instrument_id = '{instrument_id}'
+                AND d.trade_date < DATE '{day}' AND d.ar_ind IS NOT NULL
+              ORDER BY d.trade_date DESC LIMIT {SIGMA_N}) w""")
+    except Exception as e:              # noqa: BLE001 - 부재는 사유와 함께
+        return None, f"σ̂_ε 조회 실패: {type(e).__name__}: {e}"[:110]
+    if not rows or rows[0][0] is None:
+        return None, (f"{instrument_id} ar_ind {SIGMA_N}일 창이 비었다 - "
+                      "σ̂_ε 미계측 (백필 필요)")
+    n = int(rows[0][1])
+    if n < SIGMA_MIN_N:
+        return None, f"ar_ind 표본 {n} < {SIGMA_MIN_N} - σ̂_ε 가 표본잡음이다"
+    return float(rows[0][0]), ""
 
 
 MIN_BETA_N = 40     # 갭 β 추정의 최소 표본 (60d 창 기준 - 이보다 얇으면 부재 선언)
@@ -240,10 +252,16 @@ def gap_covariate(lake, ticker: str, day: str, gap_share: float):
         return GapCovariate(factor=fname, reason="β 추정 불가 (공변량 분산 없음)")
     us_t = float(today[2])
     lo, hi = sorted((ci[0] * us_t, ci[1] * us_t))
-    clipped = _clip(lo, hi, gap_share)
+    # 갭 몫과의 교차: [lo,hi] ∩ (0 방향 gap_share]. 항등식이 상한이다. 공집합이면
+    # β 구간과 갭의 방향이 어긋난 것이고 그때 공통충격 설명은 0 - 구간을 억지로
+    # 만들지 않는다. (공용 `_clip` 이었는데 SEM 식별집합과 유일하게 공유했고 그쪽이
+    # 사라져 호출자가 하나다 - 한 줄 헬퍼를 남기는 것보다 여기 있는 게 읽기 쉽다.)
+    a = max(lo, 0.0) if gap_share >= 0 else max(lo, gap_share)
+    b = min(hi, gap_share) if gap_share >= 0 else min(hi, 0.0)
+    ok = a <= b
     return GapCovariate(factor=fname, factor_ret=us_t, n=len(hist),
                         beta_lo=ci[0], beta_hi=ci[1],
-                        explained=clipped, contradiction=clipped is None)
+                        explained=(a, b) if ok else None, opposed=not ok)
 
 
 def peer_context(lake, ticker: str, day: str) -> tuple[str, int, float, float] | None:
@@ -488,9 +506,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 채널 확장. 성립-미적용의 사유는 applies_today 의 부정을 그대로 옮긴다.
     day_total = sum(s.log_ret for s in shares)
     # 인과 예산은 **고유요인**이다 (20R). 원수익은 시간 항등식(알리바이)의 대상이고,
-    # τ 는 ar_ind 단위라 둘을 교차하면 단위가 다른 두 수를 곱하는 것이 된다.
+    # ATT 는 ar_ind 단위라 원수익을 상한으로 쓰면 단위가 다른 두 수를 비교한다.
     idio, mkt = idio_budget(lake, instrument_id, day)
-    budget = day_total if idio is None else idio
     cell_route = _route_gate(lake, instrument_id, day)
     edges = []
     for t, r in reports:
@@ -500,7 +517,6 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                "횡단면 방향 반대 (환원 불일치)" if r.reduction.startswith("불일치") else
                "방아쇠 미발화 (오늘 |z| < 임계)" if r.trigger_fired is False else
                "전이 엣지 - 몫 배정 불가" if not r.assignable else "")
-        iset = _iset(r, budget)
         # 산문이 '조건 충족 · 환원 일치' 를 하드코딩하지 않게, 실제로 무엇을
         # 검사했는지 그대로 싣는다. 부재는 부재라고 말해야 한다.
         cond_state = ("없음" if not t.conditions else
@@ -508,9 +524,6 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                       "충족" if r.cond_satisfied else "미충족")
         edges.append(Edge(channel=t.channel, event_type=t.trigger.ident,
                           verdict=r.verdict, applied=r.applies_today, why_not=why,
-                          iset_lo=iset[0] if iset else None,
-                          iset_hi=iset[1] if iset else None,
-                          contradiction=r.ci_lo is not None and iset is None,
                           cond_state=cond_state,
                           reduction_state=r.reduction if r.reduction != "—" else "미실행"))
 
@@ -528,18 +541,59 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                verdict=r.verdict, n=r.n, p2=r.p, applied=r.applies_today,
                moderation=r.moderation, reduction=r.reduction,
                cond_today=r.cond_today, trigger_note=r.trigger_note,
-               contribution=r.contribution, ci=[r.ci_lo, r.ci_hi],
-               iset=_iset(r, budget), reason=r.reason)
+               reason=r.reason)
     for s in screens:
         trace("grid.screen", **s)
     if gcov is not None:
         trace("gap.covariate", factor_ret=gcov.factor_ret, n=gcov.n,
                beta=[gcov.beta_lo, gcov.beta_hi], explained=gcov.explained,
-               contradiction=gcov.contradiction, reason=gcov.reason)
+               opposed=gcov.opposed, reason=gcov.reason)
+
+    # ── 검정 층을 **산문보다 먼저** 돌린다: 크기 주장(ATT)이 산문의 입력이다 ──
+    # 가법 제약은 Σ|ATT| 를 층 예산과 맞추는 **셀 단위** 검산이라 개별 시행이 다
+    # 끝나야 판정된다. 예전 순서(narrate → 검정 층)로는 산문이 크기를 인용할
+    # 자격을 모르는 상태에서 문단을 썼다 - SEM 시절 '기여 먼저, 모순 나중' 이
+    # 만든 오독이 순서 축에서 반복되는 것이다.
+    #
+    # 가설 층의 판정은 (타입 × 노출) 수준이라 거칠다. 검정 에이전트가 관측된
+    # 슬롯(술어·단계·역할·신규성)으로 쪼개 시행을 설계하고, 위약·사전추세·균형
+    # 진단을 통과한 것만 함의로 넘긴다. `probe_brief` 가 다리다 - 가설 층이
+    # 이미 본 것을 첫 입력으로 줘서 같은 것을 두 번 탐색하지 않게 한다.
+    # 실측(CONTRACT.SIGNING 07-29): 에이전트가 PREFERRED_BIDDER(우선협상대상자)
+    # 를 골라 ATT +1.13%p p=0.000 을 냈다 - 코드에 박아둔 단계 목록에는 없던 값이다.
+    verif: list[str] = []
+    claims: list[tuple[str, float]] = []
+    if reports:
+        from .trial import probe_brief
+        from .verifier import say_implications, verify
+        # `reports` 는 (튜플, 보고서) 쌍 목록이다 - `probe_brief` 는 두 평행
+        # 목록을 받아 zip 한다. 쌍을 그대로 넘기면 r 이 튜플이 된다(실측 즉사).
+        brief = probe_brief([t for t, _ in reports], [r for _, r in reports],
+                            screens, memory)
+        for et in sorted({t.trigger.ident for t, r in reports
+                          if t.trigger.kind == "점" and r.verdict == "성립"}):
+            imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)
+            verif += [vlog, say_implications(imps)]
+            # 예산을 쓰는 것은 **설명 층으로 넘어가는** 함의뿐이다. 접힌 함의
+            # (사전추세·균형 실패)는 인용되지 않으므로 예산도 쓰지 않는다.
+            # 이름은 함의 문장의 머리(타입(시행))다 - 형식이 바뀌어도 잘린 문장이
+            # 이름이 될 뿐 깨지지 않는다.
+            claims += [(i.claim.split(" 가 ", 1)[0][:40], i.att)
+                       for i in imps if i.credible and i.att is not None]
+
+    # ── 가법 제약 (SEM 과대식별 검산의 대체). 판정은 코드가 한다 ──────────
+    sigma, sigma_why = resid_sigma(lake, instrument_id, day)
+    additive = None
+    if claims:
+        additive = AdditiveBudget(
+            claims=tuple(claims), budget=idio, sigma=sigma,
+            reason=("" if idio is not None and sigma is not None else
+                    "고유 예산 미계측 (ar_ind 없음) - 청구할 예산 자체가 없다"
+                    if idio is None else sigma_why))
 
     story = narrate(ticker=ticker, name=instrument_id[:20], day=day, route=cell_route,
                     rows=rows, grounded=labels, after_close=tuple(after_close),
-                    edges=tuple(edges), gap_cov=gcov,
+                    edges=tuple(edges), gap_cov=gcov, additive=additive,
                     layers=() if idio is None else (("시장", mkt), ("고유", idio)))
 
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
@@ -551,24 +605,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     if reports:
         block.append(f"검정 규약: 산업층 이중차감 ar · 양측 p₂ · 셀 Bonferroni "
                      f"α=0.05/{len(reports)} (학술 수리 ①②③)")
-        # ── 검정 층: 거친 타입을 **구체화**해 다시 묻는다 ──────────────────────
-        # 가설 층의 판정은 (타입 × 노출) 수준이라 거칠다. 검정 에이전트가 관측된
-        # 슬롯(술어·단계·역할·신규성)으로 쪼개 시행을 설계하고, 위약·사전추세·균형
-        # 진단을 통과한 것만 함의로 넘긴다. `probe_brief` 가 다리다 - 가설 층이
-        # 이미 본 것을 첫 입력으로 줘서 같은 것을 두 번 탐색하지 않게 한다.
-        # 실측(CONTRACT.SIGNING 07-29): 에이전트가 PREFERRED_BIDDER(우선협상대상자)
-        # 를 골라 ATT +1.13%p p=0.000 을 냈다 - 코드에 박아둔 단계 목록에는 없던 값이다.
-        from .trial import probe_brief
-        from .verifier import say_implications, verify
-        # `reports` 는 (튜플, 보고서) 쌍 목록이다 - `probe_brief` 는 두 평행
-        # 목록을 받아 zip 한다. 쌍을 그대로 넘기면 r 이 튜플이 된다(실측 즉사).
-        brief = probe_brief([t for t, _ in reports], [r for _, r in reports],
-                            screens, memory)
-        for et in sorted({t.trigger.ident for t, r in reports
-                          if t.trigger.kind == "점" and r.verdict == "성립"}):
-            imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)
-            block.append(vlog)
-            block.append(say_implications(imps))
+        block += verif
+        # 예산 검산을 블록에도 싣는다 - 산문과 블록이 같은 객체에서 나와야 한다.
+        if additive is not None:
+            block.append("[가법 제약] " + additive_say(additive))
     for t, r in reports:
         cond = " ∧ ".join(f"{v.ident}/{v.transform}{v.comparator}p{v.percentile:.0%}"[:28]
                           for v in t.conditions) or "—"
@@ -588,15 +628,6 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
             block.append(f"    {r.trigger_note}")
         if r.moderation:
             block.append(f"    {r.moderation}")
-        if r.contribution is not None:
-            # 식별집합 = SEM 구간 ∩ (0, 하루 총합] - 일 단위끼리의 교차 (§10).
-            iset = _iset(r, budget)
-            say = ("셀 점귀속 거절(요인 오염) - 인용 금지, 요인 재구성 후 재계산"
-                   if cell_route == "거절" else
-                   f"식별집합 [{iset[0] * 100:+.2f}, {iset[1] * 100:+.2f}]%p" if iset else
-                   f"**과대식별 모순** - 구간이 고유요인 {budget * 100:+.2f}%p 와 안 겹친다")
-            block.append(f"    SEM 기여(일 단위): {r.contribution * 100:+.2f}%p "
-                         f"[{r.ci_lo * 100:+.2f}, {r.ci_hi * 100:+.2f}] · {say}")
         if r.counterfactual:
             block.append(f"    반사실: {r.counterfactual}")
     if memory:

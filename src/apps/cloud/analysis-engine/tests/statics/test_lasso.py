@@ -125,3 +125,42 @@ def test_thin_sample_is_undecided_not_zero():
     r = moderate(np.array([0.1, 0.2]), np.zeros((2, 3)),
                  np.array(["d", "d"]), ["a", "b", "c"], perms=10)
     assert r["verdict"] == "판정불가" and "n=2" in r["reason"]
+
+
+def test_ranking_ties_when_subsample_intervals_overlap():
+    """겹치는 두 조절자에 1위·2위를 붙이면 **날조**다 - 동순위로 접는다.
+
+    `sem.rank_with_ties` 는 이 규율의 구현인데 라이브 호출자가 0이었다(선언≠배선).
+    부표본 적합을 Π 와 함께 재사용해 배선했다 - 같은 200회를 두 번 돌리지 않는다.
+    """
+    rng = np.random.default_rng(0)
+    n = 400
+    X = rng.random((n, 4))
+    dates = np.array([f"2026-01-{1 + i % 10:02d}" for i in range(n)])
+
+    # 크기가 거의 같다 → 같은 순위
+    y = 0.01 + 0.05 * X[:, 0] + 0.049 * X[:, 1] + rng.normal(0, 0.002, n)
+    r = moderate(y, X, dates, ["A", "B", "n1", "n2"], perms=60)
+    assert set(r["selected"]) == {"A", "B"}
+    assert [x[1] for x in r["rank"]] == [1, 1], r["rank"]
+
+    # 격차가 크면 순위가 갈린다 (여기선 작은 쪽이 아예 탈락한다 - 그것도 정직하다)
+    y2 = 0.01 + 0.09 * X[:, 0] + 0.01 * X[:, 1] + rng.normal(0, 0.002, n)
+    r2 = moderate(y2, X, dates, ["A", "B", "n1", "n2"], perms=60)
+    assert r2["rank"][0] == ("A", 1)
+    assert len({x[1] for x in r2["rank"]}) == len(r2["rank"]), "동순위가 아니다"
+
+    # 조절자가 없으면 순위도 없다 - 빈 순위를 만들지 않는다
+    y3 = 0.01 + rng.normal(0, 0.002, n)
+    assert moderate(y3, X, dates, ["a", "b", "c", "d"], perms=60)["rank"] == []
+
+
+def test_subfits_are_shared_between_pi_and_ranking():
+    """Π 와 순위가 **같은 부표본**을 쓴다 - 따로 돌리면 두 배 비용에 다른 표본이다."""
+    from edge_analysis.statics.lasso import stability, subfits
+
+    y, X, dates = _panel()
+    d = subfits(y, X, dates, 0.001, b=30)
+    assert d.shape == (30, X.shape[1])
+    pi = stability(y, X, dates, 0.001, b=30)
+    assert np.allclose(pi, (d != 0.0).mean(axis=0)), "Π 는 그 표본의 파생이다"

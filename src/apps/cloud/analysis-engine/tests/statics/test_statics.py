@@ -1,8 +1,8 @@
 """정적 층의 계약 검증 — 각 검사는 설계 문서의 규율 하나를 지킨다.
 
 깨지면 통계가 조용히 거짓말을 시작하는 지점들만 검사한다: 어휘 폐쇄(분기
-자유도), 창 결정론(p-hacking), 합=1(항등식), 3값(부재≠기각), 상한 교집합
-(부분식별), 동순위(순위 날조), FE 소거(교란).
+자유도), 창 결정론(p-hacking), 합=1(항등식), 3값(부재≠기각), 예산 상한
+(가법 제약), 동순위(순위 날조).
 """
 from datetime import datetime
 
@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 
 from edge_analysis.statics import (
-    CHANNELS, EdgeEstimate, GateInputs, HypothesisTuple, Row, Share, Trigger,
-    ExposureSource, VocabError, Condition, build_windows, clip_to_share,
-    decompose, edge_gate, exposure_slope, rank_with_ties, render, route)
+    CHANNELS, GateInputs, HypothesisTuple, Row, Share, Trigger,
+    ExposureSource, VocabError, Condition, build_windows,
+    decompose, edge_gate, rank_with_ties, render, route)
 from edge_analysis.statics.frame import validate_edge
 
 O, C = datetime(2026, 7, 15, 9, 0), datetime(2026, 7, 15, 15, 30)
@@ -84,12 +84,10 @@ def test_attribution_route_rejects_large_caps():
     assert route(GateInputs(20, 0.4, True, True, 0.01, True)) == "배제만"
 
 
-def test_identification_set_is_capped_by_share():
-    est = EdgeEstimate("FX환", tau=0.3, se=0.05, today_exposure=1.0)
-    lo, hi = clip_to_share(est, share_logret=0.35)
-    assert hi <= 0.35                               # 항등식 상한이 문다
-    # 추정이 몫을 넘으면 식별집합이 빈다 — 과대식별 검산의 실패 신호.
-    assert clip_to_share(EdgeEstimate("FX환", 0.9, 0.01, 1.0), 0.2) is None
+# 크기 상한 검사는 `test_additive_budget.py` 로 옮겼다. SEM(`EdgeEstimate` ·
+# `clip_to_share` · `exposure_slope`)은 폐기됐다 - 기울기 τ̂ 를 하루 수준처럼
+# 읽히게 하는 구조적 오독원이었고, 같은 반증(과대식별)은 ATT 의 가법 제약이
+# **합산**으로 대신한다. 엣지별 교차보다 엄격하다.
 
 
 def test_rank_overlapping_intervals_tie():
@@ -98,15 +96,6 @@ def test_rank_overlapping_intervals_tie():
                              "b": rng.normal(0.99, 0.02, 400),
                              "c": rng.normal(0.1, 0.02, 400)}))
     assert r["a"] == r["b"] == 1 and r["c"] == 3    # 겹침 = 동순위, 아니면 날조
-
-
-def test_fixed_effects_remove_event_confounder():
-    rng = np.random.default_rng(2)
-    ev = np.repeat(np.arange(30), 6)
-    x = rng.normal(size=ev.size)
-    u = 0.5 * x + rng.normal(size=30)[ev] * 5.0     # 사건 공통 교란이 지배적
-    tau, se = exposure_slope(u, x, ev)
-    assert abs(tau - 0.5) < 0.15                    # FE 가 소거한다
 
 
 def test_render_table_self_audits():

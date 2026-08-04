@@ -174,6 +174,10 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 - 시장을 따라간 것인지, 이 종목만 다르게 간 것인지 **분명히** 말한다.
 - 주장마다 **근거를 고른다**: 참조키 목록. 통계 재료(s로 시작)면 basis=statistical,
   뉴스(n으로 시작)면 basis=narrative. 근거 없는 주장은 내지 마라.
+- 재료에 `조절 조건` 이 있으면 **어떤 종목에서 더 크게 났는지**를 한 문장으로 말해라.
+  `조건` 은 계열족/변환 이름이니 사람 말로 풀어라(예: `주주/수준` -> "외국인 지분이
+  많은 종목", `배수/수준` -> "주가가 이미 비싸던 종목"). `방향말` 을 그대로 써라.
+  **"원인" 이라고 쓰지 마라** - 이건 조절이다(어떤 종목에서 더 크게 나타났나).
 - 주장마다 **방향(sign)** 을 적는다 - 값이 튄 그 시점에 이 이유가 가격을 어느 쪽으로
   밀었나: `1` 올림 · `-1` 내림 · `0` 방향 없음(배경·부재·모른다).
   같은 하루에 +1 과 -1 이 섞이는 것이 정상이다(순풍과 역풍). 억지로 맞추지 마라.
@@ -293,7 +297,7 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
 
 # 재료 하나가 **부호 있는 크기 하나**로 요약되는 종류. 여러 개를 실은 재료(예: 5분 괴리
 # 분해는 바스켓몫·괴리변화몫 둘)는 어느 것을 말하는지 알 수 없으므로 구속하지 않는다.
-_SIGNED_KEY = ("att", "factor_ret", "그_창_괴리몫")
+_SIGNED_KEY = ("att", "factor_ret", "그_창_괴리몫", "조절계수")
 
 
 def _sign_guard(i: int, sign: int, srcs: list[dict]) -> None:
@@ -324,6 +328,33 @@ def _sign_guard(i: int, sign: int, srcs: list[dict]) -> None:
                     f"#{i} 방향({sign:+d})이 인용한 근거 {k}={v} 의 부호"
                     f"({want:+d})와 다르다 - 주장이 자기 근거에 반증된다")
             break
+
+
+# 인용부호 3종. 모델이 원문을 옮겨 적었다고 **주장하는** 구간을 찾는다.
+_QUOTE = re.compile(r"[\"“‘「『']([^\"”’」』']{4,})[\"”’」』']")
+
+
+def _norm(t: str) -> str:
+    """공백·문장부호를 지운 비교용 문자열. 띄어쓰기 차이로 진짜 인용이 죽으면 안 된다."""
+    return re.sub(r"[\s\u00b7,./·]+", "", t)
+
+
+def _quote_guard(i: int, txt: str, srcs: list[dict]) -> None:
+    """**인용문이 원문에 실제로 있는지** 검사한다 (C10).
+
+    참조 존재만 검사하면 모델이 실재하는 id 를 가리키면서 없는 문장을 지어낼 수 있다 -
+    STORM 의 base 가 정확히 그 실패로 죽었다(`EVT_KR_20260601_001` 전량 허구). 그래서
+    서사 경로를 켜는 조건이 이 검사였다: 플래그와 같은 커밋에 들어와야 한다.
+
+    검사 대상은 **인용부호로 감싼 구간**뿐이다. 요약·의역은 막지 않는다(막을 방법이
+    없고, 막으면 서사가 제목 복사로 퇴화한다). 인용했다고 표시한 것만 책임을 묻는다.
+    """
+    titles = [_norm(str(s.get("title", ""))) for s in srcs]
+    for q in _QUOTE.findall(txt):
+        if not any(_norm(q) in t for t in titles):
+            raise PlainError(
+                f"#{i} **지어낸 인용**: {q[:40]!r} 가 인용한 기사 제목에 없다 - "
+                f"제목: {[str(s.get('title', ''))[:30] for s in srcs]}")
 
 
 def _stat_guard(i: int, txt: str, srcs: list[dict]) -> None:
@@ -410,6 +441,7 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
             _stat_guard(i, txt, [byref[r] for r in refs])
             _sign_guard(i, sign, [byref[r] for r in refs])
         if kind == "narrative":
+            _quote_guard(i, txt, [byref[r] for r in refs])
             b = news_bundle(cell, day, txt, news, refs, layer=layer, sign=sign)
         else:
             st = {}

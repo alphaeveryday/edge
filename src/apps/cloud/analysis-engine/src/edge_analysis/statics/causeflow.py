@@ -368,8 +368,7 @@ def _prep_one(item: tuple[str, str, str, int]) -> tuple[str, str]:
     (Path(out_dir) / f"report_{eid}.json").write_text(_json.dumps({
         "layer": layer, "channel": t.channel, "event_type": t.trigger.ident,
         "verdict": r.verdict, "applied": bool(r.applies_today),
-        "n": r.n, "p": r.p, "ci_lo": r.ci_lo, "ci_hi": r.ci_hi,
-        "contribution": r.contribution, "reason": r.reason,
+        "n": r.n, "p": r.p, "reason": r.reason,
         "has_conditions": bool(t.conditions),
         "cond_measurable": r.cond_measurable, "cond_satisfied": r.cond_satisfied,
         "reduction": r.reduction, "trigger_fired": r.trigger_fired,
@@ -397,11 +396,11 @@ def market_event_marks(lake, instrument_id: str, day: str) -> list[str]:
 
 
 def layer_budgets(lake, tk6: str, day: str) -> dict[str, float]:
-    """층 → 그 층의 오늘 몫 (로그). **식별집합의 상한은 층마다 다르다.**
+    """층 → 그 층의 오늘 몫 (로그). **가법 제약의 상한은 층마다 다르다.**
 
-    시장층 엣지의 τ 는 y=lr 단위, 섹터층은 y=ar, 고유층은 y=ar_ind 다 (LAYER_Y).
-    하나의 고유 예산으로 세 층을 자르면 단위가 다른 두 수를 교차한다 - 8차에
-    고친 일/창 범주 오류가 층 축에서 반복되는 것이다.
+    층 엣지의 결과변수가 층마다 다르다 - 고유 = ar_ind · 섹터 = ar · 시장 = lr
+    (LAYER_Y). 하나의 고유 예산으로 세 층을 재면 단위가 다른 두 수를 비교한다 -
+    8차에 고친 일/창 범주 오류가 층 축에서 반복되는 것이다.
     """
     _, facts = stock_layers(lake, tk6, day)
     return {f.kind: f.pct for f in facts}
@@ -411,22 +410,24 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
     """report_*.json + 층 예산 → 표 + 산문. **재검정 없다** (prep 이 이미 쟀다).
 
     이 조립이 코드에 없어서 셀마다 임시 스크립트로 짰고, 그 스크립트에만 층별
-    식별집합이 있었다 - 코드는 고유 예산 하나로 세 층을 잘랐다. 집을 준다.
+    상한이 있었다 - 코드는 고유 예산 하나로 세 층을 잘랐다. 집을 준다.
+
+    크기(식별집합)는 여기서 안 만든다: SEM 기여를 지웠으니 `report_*.json` 에
+    구간이 없다. 이 경로는 **존재 판정 전달**만 하고, 크기 주장과 그 예산 검산은
+    ATT 경로(attribute.run_cell → 가법 제약)에 있다. 없는 구간을 만들어 내는
+    것보다 없다고 말하는 것이 정직하다.
     """
     from .attribute import _route_gate, gap_covariate, load_cell, peer_context
     from .narrate import Edge, narrate
     from .render import Row, render
     d = pathlib.Path(out_dir)
     shares, labels, after_close = load_cell(lake, ticker, iid, day)
+    # 층 예산은 산문의 층 문단이 '이 층이 얼마를 줬나' 로 쓴다. 엣지별 구간은
+    # 없다 - 크기 주장은 ATT 경로 소관이고 이 경로는 존재 판정만 옮긴다.
     budgets = layer_budgets(lake, ticker.split(".")[0], day)
     edges = []
     for f in sorted(d.glob("report_*.json")):
         j = json.loads(f.read_text(encoding="utf-8"))
-        b, iset = budgets.get(j["layer"]), None
-        if j["ci_lo"] is not None and b is not None:
-            lo, hi = ((max(j["ci_lo"], 0.0), min(j["ci_hi"], b)) if b > 0
-                      else (max(j["ci_lo"], b), min(j["ci_hi"], 0.0)))
-            iset = (lo, hi) if lo <= hi else None
         why = ("" if j["applied"] else
                "조건 측정불가 - 판정불가 (부재는 충족이 아니다)" if not j["cond_measurable"] else
                "조건 미충족 (INUS)" if j["cond_satisfied"] is False else
@@ -436,8 +437,6 @@ def story(lake, ticker: str, iid: str, day: str, out_dir: str, name: str = "") -
         edges.append(Edge(
             channel=f"{j['layer']}·{j['channel']}", event_type=j["event_type"],
             verdict=j["verdict"], applied=j["applied"], why_not=why,
-            iset_lo=iset[0] if iset else None, iset_hi=iset[1] if iset else None,
-            contradiction=j["ci_lo"] is not None and iset is None,
             cond_state=("없음" if not j["has_conditions"] else
                         "측정불가" if not j["cond_measurable"] else
                         "충족" if j["cond_satisfied"] else "미충족"),

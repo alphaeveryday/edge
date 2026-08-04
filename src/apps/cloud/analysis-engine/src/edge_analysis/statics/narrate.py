@@ -13,6 +13,8 @@ STORM 실측이 보여준 정성 실패 두 양식이 설계 근거다:
   4. 판정불가는 "모른다"로 말한다 — 기각으로 위장 금지
   5. 조건 문장 = 반사실 쌍 + positivity(반대 사례 수) + 교호항 유의 셋 다 갖출 때만
   6. 수치는 표(render.Row)와 같은 객체에서 나온다 — 산문과 표가 어긋날 수 없다
+  7. 크기 주장의 합은 그 층의 예산을 못 넘는다 (AdditiveBudget) — 넘으면 **전부**
+     인용 금지고, 예산·σ̂ 를 못 재면 통과가 아니라 미계산이다
 
 설계: causal-attribution-design.md §12(거절이 기능) · §14(반사실 쌍) · §2(괴리 문장).
 """
@@ -49,16 +51,18 @@ class Edge:
     가드 (자격 없는 문장은 생성 시점에 죽는다):
       - applied 인데 verdict != 성립 → 게이트 없는 적용 주장 (NarrationError)
       - 성립인데 미적용이면 why_not 필수 — 반증을 침묵으로 삼키면 기각 위장이다
-      - 과대식별 모순이면 크기(구간) 인용 금지 — '크기 보류' 어법만 허용
+
+    과대식별 모순 표기(`contradiction`)는 지웠다. 그것은 SEM 구간이 하루 총합과
+    안 겹치는지를 **엣지마다 따로** 본 것이고, SEM 폐기와 함께 재료가 없어졌다.
+    같은 반증은 `AdditiveBudget` 이 **합산**으로 대신한다 (더 엄격하다).
     """
     channel: str                     # 닫힌 어휘의 채널
     event_type: str                  # 사건 타입 (점) 또는 계열 ident
     verdict: str                     # 성립 | 불성립 | 판정불가
     applied: bool                    # 오늘 적용 (INUS 충족 + 환원 미불일치)
     why_not: str = ""                # 성립-미적용의 사유 (필수)
-    iset_lo: float | None = None     # 일 단위 식별집합 (CI ∩ (0, 하루 총합])
+    iset_lo: float | None = None     # 일 단위 식별집합 (크기 주장 있을 때만)
     iset_hi: float | None = None
-    contradiction: bool = False      # 과대식별 모순 — 크기 주장 금지
     # **무엇을 실제로 검사했는가.** 하드코딩된 '조건 충족 · 환원 일치' 는 검사하지
     # 않은 것을 통과로 위장한다 (실측 042700 07-31 A1: conditions=[] 이고 계열
     # 방아쇠라 환원 미실행인데 산문이 둘 다 통과라고 썼다).
@@ -79,8 +83,94 @@ class GapCovariate:
     beta_lo: float | None = None
     beta_hi: float | None = None
     explained: tuple[float, float] | None = None   # 갭 몫과 교차된 설명 구간
-    contradiction: bool = False          # 방향 모순 - 공통충격 설명 0
+    # 이름이 `contradiction` 이었는데 SEM 과대식별 모순과 **같은 단어로 다른 것**을
+    # 가리켰다. 이건 방향 어긋남(밤사이 팩터와 갭의 부호가 반대)이고 과대식별과
+    # 무관하다. 한 단어가 두 판정을 가리키면 독자가 둘을 섞는다.
+    opposed: bool = False                # 방향 어긋남 - 공통충격 설명 0
     reason: str = ""                     # 부재 선언 (factor_ret 이 None 이면 필수)
+
+
+ADDITIVE_Z = 1.96   # 예산 상한의 잡음 허용폭 — σ̂_ε 의 양측 95%
+
+
+@dataclass(frozen=True, slots=True)
+class AdditiveBudget:
+    """가법 제약 — 폐기된 SEM 과대식별 검산의 **대체**.
+
+        모순 ⟺ Σₖ |ATTₖ| > |B| + 1.96·σ̂_ε
+
+    왜 이것이 SEM 검산을 대신할 수 있나. ATT 는 τ̂ 와 달리 **수준 효과**이고
+    예산과 단위가 같다 (둘 다 `ar_ind`). 그래서 두 수를 직접 비교할 수 있고,
+    비교 대상이 개별 엣지가 아니라 **합**이 된다. SEM 은 엣지마다 따로
+    [구간] ∩ (0, B] 를 봤기 때문에 엣지 m 개가 각각 0.8B 를 주장해도 전부
+    통과했다 - 합이 0.8mB 로 예산의 m 배에 가까워도 아무도 반대하지 않았다.
+    합산 검사는 그 구멍을 정확히 막는다.
+
+    왜 상한에 1.96·σ̂_ε 를 얹나. B 는 그 층의 **실현된** 하루 몫이라 자기도
+    잡음을 안고 있다. 참 효과의 합이 정확히 B 여도 실현치가 조금 낮게 나오면
+    Σ|ATT| > B 가 되어 옳은 주장을 모순으로 기각한다. σ̂_ε 는 그 종목 `ar_ind`
+    의 60일 표준편차 - 하루가 그만큼은 흔들린다는 관측된 크기다.
+
+    σ̂_ε (또는 예산)을 못 재면 판정은 **미계산**이다. 제약을 거저로 통과시키면
+    반증 장치가 있는 척하는 것이고, 그건 SEM 을 지운 이유와 같은 종류의 거짓이다.
+    """
+    claims: tuple[tuple[str, float], ...] = ()   # (주장 이름, ATT) - ar_ind 단위
+    budget: float | None = None          # 그 층의 예산 B (없으면 미계산)
+    sigma: float | None = None           # σ̂_ε (없으면 미계산)
+    reason: str = ""                     # 미계산 사유 (부재 ≠ 통과 - 필수)
+
+    @property
+    def claimed(self) -> float:
+        """Σ|ATT|. 절댓값 합이라 부호 상쇄로 예산을 피할 수 없다 - 같은 하루를
+        +2%p 로 밀었다는 주장과 −2%p 로 당겼다는 주장은 둘 다 예산을 쓴다."""
+        return sum(abs(a) for _n, a in self.claims)
+
+    @property
+    def ceiling(self) -> float | None:
+        """|B| + 1.96·σ̂_ε. None = 재료 부족 → 판정불가."""
+        if self.budget is None or self.sigma is None:
+            return None
+        return abs(self.budget) + ADDITIVE_Z * abs(self.sigma)
+
+    @property
+    def verdict(self) -> str:
+        c = self.ceiling
+        if c is None:
+            return "미계산"
+        return "모순" if self.claimed > c else "통과"
+
+    @property
+    def excess_pct(self) -> float | None:
+        """상한을 몇 % 넘었나. 모순이 아니거나 상한이 0 이면 None (비율이 없다)."""
+        c = self.ceiling
+        if c is None or c <= 0.0 or self.claimed <= c:
+            return None
+        return (self.claimed / c - 1.0) * 100.0
+
+
+def additive_say(a: AdditiveBudget) -> str:
+    """가법 제약 한 문단. **판정은 코드가 하고 문장은 그것을 옮긴다.**"""
+    claims = " · ".join(f"{n} {v * 100:+.2f}%p" for n, v in a.claims) or "없음"
+    used = f"Σ|ATT| = {a.claimed * 100:.2f}%p"
+    if a.verdict == "미계산":
+        if not a.reason:
+            raise NarrationError("가법 제약 미계산에 사유가 없다 - 부재를 통과로 "
+                                 "위장하면 SEM 을 지운 이유가 무의미해진다")
+        return (f"가법 제약 **미계산** — {a.reason}. {used} (주장: {claims}) 는 예산과 "
+                "맞춰본 적이 없다. **부재는 통과가 아니다** - 이 크기들은 검산 없이 "
+                "인용된 값이라는 표기를 달고 나간다.")
+    ceil, sig = a.ceiling, abs(a.sigma)
+    spec = (f"예산 상한 {ceil * 100:.2f}%p (|B| {abs(a.budget) * 100:.2f}%p + "
+            f"{ADDITIVE_Z}·σ̂_ε, σ̂_ε={sig * 100:.2f}%p)")
+    if a.verdict == "모순":
+        over = (f"{a.excess_pct:.1f}% 초과" if a.excess_pct is not None
+                else "상한이 0%p 인데 주장이 있다")
+        return (f"{used} 가 {spec} 를 {over} — **과대식별 모순. 이 셀의 처치 크기 "
+                f"전부 인용 금지** (개별 주장이 각각 예산 안이어도 합이 상한을 넘으면 "
+                f"적어도 하나는 거짓이다. 어느 것인지는 이 검산이 못 가른다 - 그래서 "
+                f"전부다). 주장 {len(a.claims)}건: {claims}")
+    return (f"{used} ≤ {spec} — 가법 제약 통과 (여유 {(ceil - a.claimed) * 100:.2f}%p). "
+            f"통과는 '크기가 맞다' 가 아니라 '예산과 모순은 아니다' 다. 주장: {claims}")
 
 @dataclass(frozen=True, slots=True)
 class BaseRate:
@@ -117,6 +207,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             path_segs: tuple = (),
             idio_rho: tuple[float, int, bool] | None = None,
             conditional: Conditional | None = None,
+            additive: AdditiveBudget | None = None,
             baserate: BaseRate | None = None) -> str:
     """셀 하나의 최종 서술. 표(render)와 같은 Row 에서 조립된다."""
     total = sum(r.share.log_ret for r in rows)
@@ -212,7 +303,12 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
     scoped = unexplained if idio_budget is None else idio_budget
     scope_say = "" if idio_budget is None else " (인과 예산 = 고유층. 층 문단 참조)"
     applied = [e for e in edges if e.applied]
-    if applied and route != "거절" and all(e.iset_lo is not None for e in applied):
+    # 가법 제약이 모순이면 크기를 **어디서도** 인용하지 않는다. [채널]만 막고
+    # 여기서 식별집합을 빼면 같은 산문이 한 문단 위에서 금지한 숫자를 두 문단
+    # 아래에서 쓴다 - SEM 시절 '기여 먼저, 모순 나중' 이 만든 오독의 재발이다.
+    quotable = not (additive is not None and additive.verdict == "모순")
+    if applied and route != "거절" and quotable and all(
+            e.iset_lo is not None for e in applied):
         # iset 은 ar(산술) 단위, 몫은 로그 - 이 크기(±3%)에서 격차 <1bp 라 선형으로
         # 통일한다 ([채널] 문장과 같은 렌더). ponytail: 큰 수익률 셀이 오면 로그 정합.
         lin = lambda x: f"{x * 100:+.2f}%p"  # noqa: E731
@@ -318,7 +414,7 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                 raise NarrationError("갭 공변량 부재에 사유가 없다 - 침묵은 백필 좌표를 지운다")
             out.append(f"[갭] 공변량 미계측 — {gap_cov.reason}. "
                        f"갭 {_pp(gshare)} 는 통째로 미설명에 남는다.")
-        elif gap_cov.contradiction:
+        elif gap_cov.opposed:
             out.append(f"[갭] 밤새 {gap_cov.factor} {gap_cov.factor_ret * 100:+.2f}% 는 "
                        f"갭 {_pp(gshare)} 와 방향이 어긋난다 — 공통충격 설명 0, "
                        "갭 전체가 국내 요인·기타 후보다.")
@@ -336,6 +432,12 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                        "는 국내 개장가 형성 몫이다 (시간축 잔차 · 층 분해와 겹치므로 "
                        "층 몫에 더하지 말 것). 점이 아니라 구간이 정직하다.")
 
+    # ── 3⅞. 가법 제약 — 크기 주장 전체의 예산 검산 (SEM 과대식별의 대체) ──
+    # 채널판보다 **먼저** 온다: 크기를 인용할 자격을 정하는 문단이 크기를 인용하는
+    # 문단 뒤에 있으면 독자가 이미 숫자를 읽은 뒤에 금지를 만난다.
+    if additive is not None:
+        out.append("[가법] " + additive_say(additive))
+
     # ── 4. 채널판 — 오늘 적용된 엣지만. 크기는 일 단위 식별집합 어법으로 ─
     for e in edges:
         if not e.applied:
@@ -346,8 +448,11 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             size = ("크기는 **보류** — 셀 점귀속 거절(요인 오염). 타입 엣지의 존재는 "
                     "패널(타 종목) 소관이라 살아남지만, 오늘 이 종목의 크기는 "
                     "요인 재구성 전에 인용 금지")
-        elif e.contradiction:
-            size = "크기는 **보류** — SEM 구간이 하루 총합과 모순 (과대식별 검산 실패)"
+        elif additive is not None and additive.verdict == "모순":
+            # 합이 예산을 넘었다. 어느 주장이 거짓인지 이 검산은 못 가르므로
+            # 개별 크기를 인용할 자격이 전부 사라진다 (위 [가법] 문단 참조).
+            size = ("크기는 **보류** — 가법 제약 위반 (주장 합이 예산 상한 초과, "
+                    "과대식별)")
         elif e.iset_lo is not None and e.iset_hi is not None:
             # 예산이 음수인 층(섹터가 내렸다)에서 iset_hi 는 **0 에 가까운 끝**이다.
             # "많아야 +0.00%p" 는 방향을 잃은 어법 - 절댓값이 먼 끝으로 크기를 말한다.
@@ -359,7 +464,8 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
                     + (" — 0 을 포함하니 '0 일 수도' 를 지우면 안 된다" if zero_in else "")
                     + ") — 집합 밖 주장은 금지")
         else:
-            size = "크기 미상 (τ̂ 추정 불가) — 존재 판정만 말한다"
+            size = ("크기 미상 — 이 경로는 존재만 판정한다 (게이트는 크기를 만들지 "
+                    "않는다). 크기는 ATT 경로가 주장하고 가법 제약이 검산한다")
         # 검사한 것만 말한다. 하드코딩된 '조건 충족 · 환원 일치' 는 조건이 없고
         # 환원이 미실행인 엣지에도 찍혔다 - 부재를 통과로 위장하는 것이다.
         checks = [f"조건 {e.cond_state}", f"환원 {e.reduction_state}"]

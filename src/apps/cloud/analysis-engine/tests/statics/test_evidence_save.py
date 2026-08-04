@@ -140,11 +140,14 @@ def test_unknown_rowcount_does_not_claim_zero_duplicates():
     assert evidence.save(_bundles(), "dsn=fake", connect=lambda *a, **kw: Con()) == (2, 0, "")
 
 
-def test_bundles_exist_even_with_the_narrative_path_off():
-    """`NARRATIVE_ENABLED=False` 여도 통계 묶음은 만들어진다 - 이 배선은 잠복이 아니라
-    지금 당장 효력이 있다. (서사 경로 스위치는 뉴스 조회만 막는다.)"""
+def test_bundles_exist_even_with_the_narrative_path_off(monkeypatch):
+    """서사 경로를 **꺼도** 통계 묶음은 만들어진다 - 스위치는 뉴스 조회만 막는다.
+
+    전역 상수를 단언하면 스위치를 켜는 날 이 테스트가 깨진다 - 그건 계약이 아니라
+    현재 설정을 굳히는 것이다. 스위치를 끈 **상태를 만들어** 검사한다.
+    """
     from edge_analysis.statics.plain import _assemble, context
-    assert evidence.NARRATIVE_ENABLED is False
+    monkeypatch.setattr(evidence, "NARRATIVE_ENABLED", False)
     ctx = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="코스피", recent={}, established=["시장사건"],
                   overnight=[], unexplained_top=False)

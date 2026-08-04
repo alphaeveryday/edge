@@ -34,8 +34,9 @@ import sys
 
 import numpy as np
 
-from .paneltest import (ALPHA, MIN_N, PERMS, SEED, _base, _cate_interaction,
-                        _panel_rows, _pctile, _two_sided)
+from .lasso import MISS_MAX, moderate
+from .paneltest import (ALPHA, MIN_N, PERMS, SEED, _base, _panel_rows,
+                        _pctile, _two_sided)
 from .paneltest import FEATURES, LAYER_Y
 
 # 매칭 캘리퍼 — 전역 상수. 셀별 조정 금지 (조정하면 대조군을 고르는 셈이다).
@@ -45,6 +46,14 @@ MATCH_K = 3            # 처치 1건당 대조 최대 수
 MIN_PAIRS = 20         # 짝이 이보다 적으면 판정불가
 SMD_MAX = 0.10         # 매칭 후 표준화 평균차 상한 (RCT 관례). 넘으면 균형 실패
 LEADS = (1, 2)         # 사전추세 위약: 처치 t−1·t−2 의 ATT 는 0 이어야 한다
+
+# 짝 행의 고정 앞머리 폭. 조절자 열은 그 뒤에 붙는다 - `_summarize` 는 앞머리만
+# 읽고 `_mod_panel` 은 뒤꼬리만 읽는다. 두 곳이 같은 상수를 봐야 어긋나지 않는다.
+_MOD0 = 13         # run_trial:  tid d cid y_t y_c lc_t lc_c bm_t bm_c l1_t l1_c l2_t l2_c
+_MULTI_D0 = 4      # run_multi:  tid d cid diff | D0..D_{K-1} | 조절자
+# 귀무를 **이름으로** 말한다. ATT 와 조절은 다른 귀무를 쓰는데 산문이 둘 다
+# "p=0.003" 으로만 쓰면 읽는 쪽이 같은 검정으로 오해한다.
+_NULL_SAY = {"pair": "짝 부호 순열", "label": "날짜 층화 조건 라벨 순열"}
 
 _TRIAL_SQL = """
 , ev AS (
@@ -85,24 +94,41 @@ WHERE m.rn <= {k}
 
 def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
               role: str = "", stage: str = "", novelty: str = "", predicate: str = "",
-              cond_key: str | None = None,
-              cond_pct: float = 0.8, cond_cmp: str = ">=",
+              moderators: list[str] | None = None,
               k: int = MATCH_K) -> dict:
-    """사건 = 처치, 매칭 대조군 = 위약. ATT 와 (조건이 있으면) CATE 교호항.
+    """사건 = 처치, 매칭 대조군 = 위약. ATT 와 (조절자를 넘기면) 라쏘 조절자 검정.
 
     반환 슬롯은 판정을 담지 않는다 - 게이트는 호출자가 `edge_gate` 로 세운다.
     (판정 자리를 여기 두면 '수치는 코드가, 판정은 코드가' 가 두 곳이 된다.)
+
+    ## 두 검정은 귀무가 다르다 - 그래서 분리한다
+
+        ATT   짝 부호 순열                "그 처치는 효과가 없다"
+        조절  날짜 층화 조건 라벨 순열     "조건이 효과를 안 바꾼다"
+
+    ATT 는 `_summarize` 가 지금까지와 **한 글자도 다르지 않게** 낸다. 조절자를 넘겨도
+    ATT 의 행 집합·난수열·계산이 그대로다 - 조절이 ATT 를 움직이면 그건 개편이 아니라
+    회귀다. 조절은 `lasso.moderate()` 가 따로 푼다.
+
+    ## 왜 절단(백분위 임계 + 비교자)을 폐기했나
+
+    이전 계약은 `cond_key`·`cond_pct`·`cond_cmp` 로 조건을 이진화해 하나만 봤다. 셋 다
+    틀렸다. (1) 이진화는 정보를 죽인다 - 79번째 백분위와 21번째가 같은 '미충족' 이
+    된다. (2) 임계 0.8 은 임의다 - 어디서 왔는지 아무도 못 댄다. (3) 조건 하나씩 재면
+    J 번 재는 셈인데 다중비교가 안 잡혔다. 지금은 백분위를 [0,1] 실수 그대로 싣고
+    J 개를 **한 번에** 넣는다 - maxT 순열이 다중비교를 귀무 분포에 흡수한다.
+
+    `moderators` 원소는 `"계열족/변환"` (=`FEATURES` 키). 못 재는 조합을 조용히 버리면
+    산문이 없는 조건을 말하게 되므로, 하나라도 모르면 전체를 판정불가로 되돌린다.
     """
     y = LAYER_Y.get(layer)
     if y is None:
         return {"verdict": "판정불가", "reason": f"층은 {sorted(LAYER_Y)} 중 하나다"}
-    col = None
-    if cond_key is not None:
-        col = FEATURES.get(tuple(cond_key.split("/")))
-        if col is None:
-            return {"verdict": "판정불가",
-                    "reason": f"조건 {cond_key!r} 은 못 잰다 - 재는 것: "
-                              f"{sorted('/'.join(k) for k in FEATURES)}"}
+    mods = list(moderators or [])
+    bad = _unknown_moderators(mods)
+    if bad:
+        return {"verdict": "판정불가", "reason": bad}
+    cols = [FEATURES[tuple(m.split("/"))] for m in mods]
     sql = (_base(day) + _TRIAL_SQL).format(
         etype=etype, day=day, y=y, k=k,
         role=f"AND e.role_code = '{role}'" if role else "",
@@ -111,8 +137,8 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
             ((stage, "lifecycle_stage"), (novelty, "novelty_status"),
              (predicate, "predicate_code")) if v),
         cal_m=CAL_LOGCAP, cal_b=CAL_BETA,
-        extra=f", g.{col} AS cval" if col else "",
-        sel=", t.cval AS c_t" if col else "")
+        extra="".join(f", g.{c} AS m{i}" for i, c in enumerate(cols)),
+        sel="".join(f", t.m{i}" for i in range(len(cols))))
     try:
         rows = _panel_rows(lake, sql, strict=False)
     except Exception as e:                          # noqa: BLE001 - 부재는 사유와 함께
@@ -125,52 +151,77 @@ def run_trial(lake, day: str, *, etype: str, layer: str = "고유",
     tag = "직접 " + etype.split(".")[-1] + "".join(
         f" · {v}" for v in (stage, novelty, predicate, role) if v)
     out = _summarize(rows, layer=layer, k=k, tag=tag)
-    if col:
-        # 조절: 짝 차이를 조건 클래스에 회귀. 표본을 쪼개지 않는다 (§14).
-        diff = np.array([float(r[3]) - float(r[4]) for r in rows])
-        dates = np.array([str(r[1]) for r in rows])
-        cv = np.array([float(r[13]) for r in rows])
-        hi = _pctile(cv) >= cond_pct if cond_cmp == ">=" else _pctile(cv) <= cond_pct
-        d_obs, d_p = _moderate_diff(diff, hi, dates)
-        sub = diff[hi]
-        out.update(cond=cond_key, cond_n=int(hi.sum()),
-                   att_cond=float(sub.mean()) if len(sub) >= 3 else None,
-                   inter=d_obs, inter_p=d_p)
+    out["etype"], out["day"] = etype, day
+    if not mods:
+        return out
+    panel, out["mod_dropped_missing"], reason = _mod_panel(rows, mods, base=_MOD0)
+    if panel is None:
+        out["moderation"], out["mod_reason"] = None, reason
+        return out
+    idx, C, names = panel
+    diff = np.array([float(r[3]) - float(r[4]) for r in rows])
+    dates = np.array([str(r[1]) for r in rows])
+    out["moderation"] = moderate(diff[idx], C, dates[idx], names)
     return out
 
 
-def _moderate_diff(diff: np.ndarray, c: np.ndarray,
-                   dates: np.ndarray) -> tuple[float | None, float]:
-    """짝 차이에서의 조절: diff = a + d·C.  CATE(C=1)=a+d, CATE(C=0)=a.
+def _unknown_moderators(mods: list[str]) -> str:
+    """모르는 조절자 이름이면 사유 문자열, 전부 알면 빈 문자열.
 
-    `_cate_interaction` 을 그대로 쓰면 안 된다 - 짝 차이 프레임에서 D 는 **전부 1**
-    이라 D×C 열이 D 와 같아져 식별이 퇴화한다(실측: '교호항 추정 불가' 가 항상 나왔다).
-    처치 대비는 이미 차분에 들어 있으므로 조절항은 C 계수 하나다.
-
-    귀무는 조건 라벨을 **날짜 층 안에서 순열**한다 - 날짜 효과를 고정하고 '누가
-    조건을 충족했나' 만 무작위화한다.
+    조용히 버리지 않는 것이 요점이다. 오타 하나로 조절자가 사라지면 산출물은
+    '그 조건은 효과를 안 바꿨다' 로 읽히는데 실제로는 **재지도 않았다**.
     """
-    cf = c.astype(float)
-    if np.ptp(cf) == 0:
-        return None, 1.0
-    X = np.column_stack([np.ones(len(diff)), cf])
+    bad = [m for m in mods if tuple(m.split("/")) not in FEATURES]
+    return (f"조절자 {bad} 은 못 잰다 - 재는 것: "
+            f"{sorted('/'.join(f) for f in FEATURES)}") if bad else ""
 
-    def fit(cv: np.ndarray) -> float:
-        beta, *_ = np.linalg.lstsq(np.column_stack([np.ones(len(diff)), cv]),
-                                   diff, rcond=None)
-        return float(beta[1])
 
-    obs = fit(cf)
-    rng = np.random.default_rng(SEED)
-    null = np.empty(PERMS)
-    for k in range(PERMS):
-        perm = cf.copy()
-        for dd in np.unique(dates):
-            m = dates == dd
-            perm[m] = rng.permutation(perm[m])
-        null[k] = fit(perm)
-    _ = X
-    return obs, _two_sided(float((null >= obs).mean()))
+def _mod_panel(rows: list, mods: list[str], *, base: int
+               ) -> tuple[tuple | None, dict[str, str], str]:
+    """짝 행 → 조절자 설계행렬. `((행 인덱스, X, 이름) | None, 결측제외, 사유)`.
+
+    ## 결측을 어떻게 결정하는가 (**대입 금지**)
+
+    재무 6종(`lev_*`·`prof_*`·`grow_lvl`·`icov_lvl`)은 v_fin ASOF 조인이라 결측이 흔하다.
+    22열 **전수 관측** 행만 쓰면 열별 관측 확률이 곱해져 n 이 급감한다 - 열 하나가 30%
+    비면 나머지 21열이 완벽해도 표본의 30% 가 날아간다. 그렇다고 채워 넣으면(평균·
+    중앙값·전기값) 이 저장소의 '부재는 부재로 말한다' 와 정면으로 어긋난다: 채운 값에
+    붙은 계수는 자료가 아니라 대입 규칙의 그림자다.
+
+    그래서 두 관문으로 나눈다.
+      ① **열 관문**: 결측률 > `MISS_MAX` 인 열은 후보에서 뺀다 + 사유를 남긴다.
+         버렸다는 사실이 곧 산출물의 일부다 - 침묵하면 '안 뽑혔다' 로 오독된다.
+      ② **행 관문**: 살아남은 열들의 전수 관측 행만 쓴다. 남은 열은 각각 결측이
+         `MISS_MAX` 이하이므로 교집합 손실에 상한이 있다.
+    ①을 건너뛰고 ②만 하면 결측 심한 열 하나가 표본 전체를 끌어내린다. ②를 건너뛰고
+    열마다 다른 행을 쓰면 계수들이 서로 다른 모집단의 것이라 한 식에 못 들어간다.
+
+    처치 효과는 이 관문 **밖**에서 전량 표본으로 이미 산출됐다. 조절자가 그 표본을
+    깎으면 그건 개편이 아니라 손실이다.
+    """
+    n = len(rows)
+    dropped: dict[str, str] = {}
+    live: list[tuple[int, str]] = []
+    for j, name in enumerate(mods):
+        miss = sum(1 for r in rows if r[base + j] is None) / n
+        if miss > MISS_MAX:
+            dropped[name] = f"결측률 {miss * 100:.0f}% > {MISS_MAX * 100:.0f}%"
+        else:
+            live.append((base + j, name))
+    if not live:
+        return None, dropped, (f"조절자 후보 {len(mods)}개가 전부 결측률 "
+                               f"{MISS_MAX * 100:.0f}% 초과 - 대입은 하지 않는다")
+    idx = np.array([i for i, r in enumerate(rows)
+                    if all(r[c] is not None for c, _ in live)], dtype=int)
+    if len(idx) < MIN_PAIRS:
+        return None, dropped, (
+            f"결측 행을 드러낸 뒤 짝 {len(idx)} < {MIN_PAIRS} (전체 {n}) - 조절자 "
+            f"{len(live)}열 전수 관측 행이 얇다. 처치 효과는 {n}짝 전량으로 냈다")
+    # 백분위는 **이 표본 안에서** 매긴다. 원 단위를 섞으면(ROE %p 와 PBR 배수) 공통
+    # λ 가 단위 큰 열만 살려 선택이 스케일의 함수가 된다.
+    X = np.column_stack([_pctile(np.array([float(rows[i][c]) for i in idx]))
+                         for c, _ in live])
+    return (idx, X, [nm for _, nm in live]), dropped, ""
 
 
 def say(r: dict) -> str:
@@ -178,7 +229,8 @@ def say(r: dict) -> str:
     if r.get("verdict") != "계산됨":
         return f"RCT 근사 판정불가 — {r.get('reason', '?')}"
     s = (f"RCT 근사(매칭 위약): 처치 {r['treated']}건 · 짝 {r['pairs']}개 · "
-         f"{r['dates']}일 · ATT {r['att'] * 100:+.3f}%p (양측 p={r['p']:.3f}) · "
+         f"{r['dates']}일 · ATT {r['att'] * 100:+.3f}%p "
+         f"(양측 p={r['p']:.3f} · 귀무 {_NULL_SAY[r.get('null_kind', 'pair')]}) · "
          f"처치 {r['y_t'] * 100:+.2f}% vs 대조 {r['y_c'] * 100:+.2f}% "
          f"[{r['layer']}층 · 업종 동일 · |Δln시총|≤{r['caliper'][0]} · "
          f"|Δβ|≤{r['caliper'][1]} · k≤{r['k']}]")
@@ -196,12 +248,48 @@ def say(r: dict) -> str:
         s += ("\n  사전추세 위약: " + " · ".join(bits) + " — "
               + ("0 과 구분 안 됨 = 통과" if r.get("pretrend_ok") else
                  "**유의: 처치 전에 이미 갈렸다 = 매칭 실패 또는 선견**"))
-    if r.get("cond"):
-        s += (f"\n  조절({r['cond']}): 충족 n={r['cond_n']} ATT "
-              + (f"{r['att_cond'] * 100:+.3f}%p" if r.get("att_cond") is not None else "미계산")
-              + (f" · 교호항 {r['inter'] * 100:+.3f}%p (p={r['inter_p']:.3f})"
-                 if r.get("inter") is not None else " · 교호항 추정 불가"))
+    s += _say_moderation(r)
     return s
+
+
+def _say_moderation(r: dict) -> str:
+    """조절 결과 문장. **'원인' 이라고 쓰지 않는다.**
+
+    라쏘가 뽑은 것은 δ 를 예측하는 데 유용한 열이지 인과 조절자가 아니다. 조건은
+    무작위 배정되지 않았고(준무작위인 것은 처치뿐이다), 뽑히지 않은 교란과 상관될 수
+    있다. 산문이 '원인' 으로 승격시키면 게이트가 못 잡는다 - 코드가 그 단어를 쓰지
+    않는 것이 유일한 방벽이다.
+
+    `run_trial`·`run_multi` 가 같은 조각을 쓴다. 두 곳에서 쓰면 어휘가 갈린다.
+    """
+    out = ""
+    if r.get("mod_dropped_missing"):
+        out += ("\n  조절자 후보 제외(결측 · 대입 안 함): " + " · ".join(
+            f"{nm} {why}" for nm, why in sorted(r["mod_dropped_missing"].items())))
+    if "moderation" not in r:
+        return out
+    m = r["moderation"]
+    if m is None:
+        return out + f"\n  조절 판정불가 — {r.get('mod_reason', '?')}"
+    if m.get("verdict") != "계산됨":
+        return out + f"\n  조절 판정불가 — {m.get('reason', '?')}"
+    sel = " · ".join(
+        f"{nm} {v * 100:+.3f}%p (Π={m['pi'][nm]:.2f}, p={m['p_step'].get(nm, 1.0):.3f})"
+        for nm, v in sorted(m["selected"].items(), key=lambda kv: -abs(kv[1])))
+    # `n/짝` 로 쓴다. 살아남은 수만 쓰면 행 관문이 표본을 얼마나 깎았는지 안 보인다 -
+    # 실측: 22열이 각각 결측률 상한(20%)에 걸치면 전수 관측 행은 400짝 중 76개다.
+    # 열 관문은 **열별** 상한이라 교집합 손실을 못 막는다. 그 사실을 숫자로 남긴다.
+    out += (f"\n  조절(라쏘 · 후보 {m['j']}열 · n={m['n']}/{r['pairs']}짝 · "
+            f"λ={m['lam']:g}): "
+            + (sel or "뽑힌 열 없음 — 조건이 효과를 바꾼다는 증거가 없다")
+            + f" · maxT p={m['p_max']:.3f} (귀무 {_NULL_SAY[m['null_kind']]})")
+    out += ("\n    크기는 post-LASSO 계수, 유의는 순열 p — 두 출처를 섞지 않는다. "
+            "뽑힌 열은 δ 를 **조절**하는 것이지 만드는 것이 아니다 "
+            "(조건은 무작위 배정이 아니다).")
+    if m.get("dropped_collinear"):
+        out += ("\n    준중복 제외: " + " · ".join(
+            f"{a} ← {b}" for a, b in sorted(m["dropped_collinear"].items())))
+    return out
 
 
 def _selfcheck() -> None:
@@ -214,7 +302,7 @@ def _selfcheck() -> None:
     assert MIN_PAIRS >= MIN_N // 2
     assert LEADS == (1, 2)
     unsupported = ("IV(도구변수)", "RDD(회귀단절)", "합성통제", "성향점수(로짓) 매칭")
-    # 구현한 것: 사전추세 위약(리드) · 다중 처치 동시 투입 · 균형(SMD) · CATE 교호항
+    # 구현한 것: 사전추세 위약(리드) · 다중 처치 동시 투입 · 균형(SMD) · 라쏘 조절자
     assert len(unsupported) == 4
     print("ok · 미지원(샌드박스 경계):", " · ".join(unsupported))
 
@@ -229,7 +317,7 @@ _MULTI_SQL = """
 )
 , b AS (
     SELECT g.instrument_id AS iid, g.trade_date AS d, g.{y} AS y,
-           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm
+           g.sector_code AS sec, g.mcap_pit AS mcap, g.beta_m AS bm{extra}
     FROM g
     WHERE g.sector_code IS NOT NULL AND g.mcap_pit > 0 AND g.beta_m IS NOT NULL
       AND g.{y} IS NOT NULL AND g.trade_date < DATE '{day}'
@@ -245,7 +333,7 @@ _MULTI_SQL = """
     FROM t JOIN c ON c.d = t.d AND c.sec = t.sec
     WHERE abs(ln(t.mcap) - ln(c.mcap)) <= {cal_m} AND abs(t.bm - c.bm) <= {cal_b}
 )
-SELECT m.tid, CAST(m.d AS VARCHAR) AS d, m.cid, t.y - c.y AS diff{tcols}
+SELECT m.tid, CAST(m.d AS VARCHAR) AS d, m.cid, t.y - c.y AS diff{tcols}{sel}
 FROM m JOIN t ON t.iid = m.tid AND t.d = m.d
        JOIN c ON c.iid = m.cid AND c.d = m.d
 WHERE m.rn <= {k}
@@ -253,22 +341,36 @@ WHERE m.rn <= {k}
 
 
 def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
-              k: int = MATCH_K) -> dict:
+              moderators: list[str] | None = None, k: int = MATCH_K) -> dict:
     """**다중 처치 동시 투입.** 같은 날 여러 사건이 있으면 하나씩 재면 서로 흡수한다.
 
-        diff_i = Σ_k b_k · D_ik + ε          (짝 차이에 처치 지시자들을 회귀)
+        δₚ = Σₖ bₖ·D_{p,k} + Σⱼ dⱼ·c_{p,j} + uₚ        (b 벌점 없음 · d 벌점)
 
     실측 000660 07-29 에 실적·목표주가·서킷브레이커가 다 있었다. 하나씩 재면 각
     ATT 가 나머지 둘의 효과를 흡수한다 - 그러면 '왜 **이** 이벤트' 에 답할 수 없다.
     대조군은 **어느 처치도 안 받은** 종목이다.
 
-    귀무는 짝 부호 순열 (날짜 층화 자동 - 짝이 같은 날 안에서만 만들어졌다).
+    처치 지시자 D 는 라쏘의 **벌점 밖 열**(`free`)로 들어간다. 벌점을 물리면 처치
+    효과가 0 으로 수축돼 게이트가 무너진다 - 절편을 벌점 밖에 둔 것과 같은 이유다.
+    그래서 다중 처치 대비와 조절자 선택이 **한 적합** 안에서 풀린다. 둘을 따로 재면
+    각 처치의 대비는 조절자 없이, 조절자 계수는 처치 혼합 없이 추정돼 두 수치가 서로
+    다른 식의 것이 된다 - 산문이 그걸 나란히 놓으면 없는 일관성을 주장하는 셈이다.
+
+    귀무는 둘이고 섞지 않는다:
+      ATT   짝 부호 순열 (날짜 층화 자동 - 짝이 같은 날 안에서만 만들어졌다)
+      조절  날짜 층화 조건 라벨 순열. 처치 지시자는 **안 섞는다** - 섞으면 귀무가
+            '조건이 효과를 안 바꾼다' 가 아니라 '처치가 없다' 로 바뀐다.
     """
     y = LAYER_Y.get(layer)
     if y is None:
         return {"verdict": "판정불가", "reason": f"층은 {sorted(LAYER_Y)} 중 하나다"}
     if not 2 <= len(etypes) <= 6:
         return {"verdict": "판정불가", "reason": "다중 처치는 2~6개다"}
+    mods = list(moderators or [])
+    bad = _unknown_moderators(mods)
+    if bad:
+        return {"verdict": "판정불가", "reason": bad}
+    cols = [FEATURES[tuple(m.split("/"))] for m in mods]
     flags = "".join(
         f", max(CASE WHEN et = '{e}' THEN 1 ELSE 0 END) AS d{i}"
         for i, e in enumerate(etypes))
@@ -276,7 +378,9 @@ def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
         types=", ".join(f"'{e}'" for e in etypes), day=day, y=y, k=k,
         cal_m=CAL_LOGCAP, cal_b=CAL_BETA, flags=flags,
         icols="".join(f", ind.d{i}" for i in range(len(etypes))),
-        tcols="".join(f", t.d{i}" for i in range(len(etypes))))
+        tcols="".join(f", t.d{i}" for i in range(len(etypes))),
+        extra="".join(f", g.{c} AS m{i}" for i, c in enumerate(cols)),
+        sel="".join(f", t.m{i}" for i in range(len(cols))))
     try:
         rows = _panel_rows(lake, sql, strict=False)
     except Exception as e:                          # noqa: BLE001
@@ -285,7 +389,8 @@ def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
     if len(rows) < MIN_PAIRS:
         return {"verdict": "판정불가", "reason": f"매칭 짝 {len(rows)} < {MIN_PAIRS}"}
     diff = np.array([float(r[3]) for r in rows])
-    D = np.array([[float(r[4 + i]) for i in range(len(etypes))] for r in rows])
+    dates = np.array([str(r[1]) for r in rows])
+    D = np.array([[float(r[_MULTI_D0 + i]) for i in range(len(etypes))] for r in rows])
     if (D.sum(axis=0) < 3).any():
         thin = [etypes[i] for i in range(len(etypes)) if D[:, i].sum() < 3]
         return {"verdict": "판정불가", "reason": f"처치 표본 3건 미만: {thin}"}
@@ -305,16 +410,28 @@ def run_multi(lake, day: str, etypes: list[str], *, layer: str = "고유",
     for e in etypes:
         r1 = run_trial(lake, day, etype=e, layer=layer, k=k)
         solo[e] = (r1["att"], r1["p"]) if r1.get("verdict") == "계산됨" else None
-    return {"verdict": "계산됨", "null_kind": "pair", "layer": layer, "pairs": len(rows),
-            "etypes": etypes, "att": [float(v) for v in obs], "p": ps,
-            "n_treat": [int(v) for v in D.sum(axis=0)], "solo": solo}
+    out = {"verdict": "계산됨", "null_kind": "pair", "layer": layer, "pairs": len(rows),
+           "etypes": etypes, "att": [float(v) for v in obs], "p": ps,
+           "n_treat": [int(v) for v in D.sum(axis=0)], "solo": solo, "day": day}
+    if not mods:
+        return out
+    panel, out["mod_dropped_missing"], reason = _mod_panel(
+        rows, mods, base=_MULTI_D0 + len(etypes))
+    if panel is None:
+        out["moderation"], out["mod_reason"] = None, reason
+        return out
+    idx, C, names = panel
+    out["moderation"] = moderate(
+        diff[idx], np.column_stack([D[idx], C]), dates[idx], list(etypes) + names,
+        free=np.array([True] * len(etypes) + [False] * C.shape[1]))
+    return out
 
 
 def say_multi(r: dict) -> str:
     if r.get("verdict") != "계산됨":
         return f"다중 처치 판정불가 — {r.get('reason', '?')}"
-    out = [f"다중 처치 동시 투입 ({r['layer']}층 · 짝 {r['pairs']}개) — 대조군은 "
-           "어느 처치도 안 받은 종목"]
+    out = [f"다중 처치 동시 투입 ({r['layer']}층 · 짝 {r['pairs']}개 · 귀무 "
+           f"{_NULL_SAY[r['null_kind']]}) — 대조군은 어느 처치도 안 받은 종목"]
     for e, a, p, n in zip(r["etypes"], r["att"], r["p"], r["n_treat"]):
         s = r["solo"].get(e)
         solo = (f" · 단독 {s[0] * 100:+.3f}%p (p={s[1]:.3f})" if s else " · 단독 판정불가")
@@ -322,7 +439,23 @@ def say_multi(r: dict) -> str:
                   f" · 흡수 {abs(s[0] - a) * 100:+.3f}%p" if abs(s[0] - a) > 1e-9 else "")
         out.append(f"  {e.split('.')[-1]:<22} n={n:<5} ATT {a * 100:+.3f}%p "
                    f"(p={p:.3f}){solo}{absorb}")
-    return "\n".join(out)
+    m = r.get("moderation")
+    if m is not None and m.get("verdict") == "계산됨":
+        # **차이만** 쓴다. 자유 열 계수의 낱값은 절편과 함께만 식별된다 - 모든 짝이
+        # 처치를 하나 이상 받으므로 D 블록과 절편이 준중복이고, 둘 사이의 배분은
+        # 좌표하강의 기하가 정한다. 낱값을 위의 ATT 옆에 놓으면 서로 다른 설계의
+        # 수치를 같은 것으로 읽게 만든다(실측: 같은 자료에서 LAUNCH ATT +2.42%p 인데
+        # 자유 열 계수는 -0.05%p 였다 - 절편이 공통 몫을 가져갔을 뿐이다).
+        # 처치 **간** 대비는 절편이 소거돼 두 설계에서 같은 것을 뜻한다. 그것이
+        # '왜 **이** 이벤트인가' 의 답이고, 이 모듈이 존재하는 이유다.
+        b0, a0 = m["free_coef"][r["etypes"][0]], r["att"][0]
+        out.append(f"  처치 간 대비 (기준 {r['etypes'][0].split('.')[-1]} · 조절자 "
+                   "동시 적합 · 처치는 벌점 밖이라 수축되지 않는다): " + " · ".join(
+                       f"{e.split('.')[-1]} {(m['free_coef'][e] - b0) * 100:+.3f}%p"
+                       f" (조절자 없이 {(a - a0) * 100:+.3f}%p)"
+                       for e, a in zip(r["etypes"][1:], r["att"][1:])))
+    out.append(_say_moderation(r).lstrip("\n"))
+    return "\n".join(x for x in out if x)
 
 
 _SPILL_SQL = """
@@ -414,7 +547,9 @@ def run_spillover(lake, day: str, *, etype: str, rel: str,
 def _summarize(rows: list, *, layer: str, k: int, tag: str = "") -> dict:
     """짝 목록 → ATT · 균형(SMD) · 사전추세 위약. `run_trial`/`run_spillover` 공용.
 
-    컬럼 규약: (tid, d, cid, y_t, y_c, lc_t, lc_c, bm_t, bm_c, l1_t, l1_c, l2_t, l2_c[, cval])
+    컬럼 규약: (tid, d, cid, y_t, y_c, lc_t, lc_c, bm_t, bm_c, l1_t, l1_c, l2_t, l2_c)
+    이 13열이 앞머리(`_MOD0`)이고 조절자 열은 뒤에 붙는다 - 여기서는 **안 읽는다**.
+    조절이 ATT 표본을 못 건드린다는 것이 그 분리의 요점이다.
     한 곳에서만 조립한다 - 두 곳이면 진단이 갈린다.
     """
     dates = np.array([str(r[1]) for r in rows])
@@ -461,7 +596,8 @@ def _summarize(rows: list, *, layer: str, k: int, tag: str = "") -> dict:
         nl = np.array([float((dl * rg.choice([-1.0, 1.0], size=len(dl))).mean())
                        for _ in range(PERMS)])
         lead[j] = (float(dl.mean()), _two_sided(float((nl >= dl.mean()).mean())), len(dl))
-    return {"verdict": "계산됨", "att": att, "p": p, "pairs": len(rows),
+    return {"verdict": "계산됨", "null_kind": "pair", "att": att, "p": p,
+            "pairs": len(rows),
             "treated": len({(r[0], r[1]) for r in rows}), "dates": len(set(dates)),
             "y_t": float(yt.mean()), "y_c": float(yc.mean()),
             "caliper": (CAL_LOGCAP, CAL_BETA), "k": k, "layer": layer, "tag": tag,
@@ -604,7 +740,9 @@ def main() -> None:
     from .duck import CausalLake
     lake, day = CausalLake(), sys.argv[2]
     if sys.argv[1] == "multi":
-        print(say_multi(run_multi(lake, day, sys.argv[3].split(","))))
+        # 조절자는 **전량**을 넣는다 - 고르면 그게 선택이고, 결측 관문은 코드가 친다.
+        print(say_multi(run_multi(lake, day, sys.argv[3].split(","),
+                                  moderators=sorted("/".join(f) for f in FEATURES))))
     else:
         print(say(run_spillover(lake, day, etype=sys.argv[3], rel=sys.argv[4])))
 

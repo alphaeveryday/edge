@@ -44,13 +44,8 @@ def test_edge_guards_kill_unqualified_sentences():
                 edges=(Edge(channel="C", event_type="E", verdict="성립", applied=False),))
 
 
-def test_edge_contradiction_forbids_magnitude():
-    # 과대식별 모순이면 구간 인용 금지 - '크기 보류' 어법만.
-    rows = [_row("잔여1", 0.02)]
-    s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
-                edges=(Edge(channel="C", event_type="E", verdict="성립", applied=True,
-                            contradiction=True),))
-    assert "크기는 **보류**" in s and "식별집합 [" not in s
+# 과대식별 모순의 크기 인용 금지는 `test_additive_budget.py` 로 옮겼다 -
+# 판정 주체가 엣지별 SEM 구간에서 셀 단위 가법 제약으로 바뀌었다.
 
 
 def test_refuted_windows_leave_the_unknown_paragraph():
@@ -103,9 +98,9 @@ def test_unexplained_becomes_interval_when_edges_apply():
     s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                 edges=(e,))
     assert "미설명 [+0.01%p, +1.26%p]" in s and "점이 아니라 구간이 정직하다" in s
-    # 모순 엣지(iset 없음)가 섞이면 뺄 수 없다 - 점 어법으로 후퇴.
-    bad = Edge(channel="C", event_type="T.Y", verdict="성립", applied=True,
-               contradiction=True)
+    # 크기 없는 엣지(iset 부재)가 섞이면 뺄 수 없다 - 점 어법으로 후퇴. SEM 폐기
+    # 후 이것이 기본값이다: 게이트 경로는 존재만 판정하고 크기를 만들지 않는다.
+    bad = Edge(channel="C", event_type="T.Y", verdict="성립", applied=True)
     s2 = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                  edges=(e, bad))
     assert "미설명 [" not in s2 and "서사가 아니라 데이터다" in s2
@@ -141,9 +136,10 @@ def test_gap_covariate_is_partial_identified_never_a_point():
     assert "[갭]" in s and "β [1.00, 1.50]" in s and "공통충격" in s
     assert "[-4.50, -3.00]%p" in s and "[-3.00, -1.50]%p" in s   # 설명·잔여 둘 다 구간
     assert "구간이 정직하다" in s
-    # 방향 모순 → 공통충격 설명 0 어법.
+    # 방향 어긋남 → 공통충격 설명 0 어법. (`contradiction` 에서 이름을 바꿨다 -
+    # SEM 과대식별 모순과 같은 단어로 다른 것을 가리켰다.)
     c = GapCovariate(factor_ret=+0.02, n=120, beta_lo=1.0, beta_hi=1.5,
-                     explained=None, contradiction=True)
+                     explained=None, opposed=True)
     s2 = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                  gap_cov=c)
     assert "방향이 어긋난다" in s2 and "공통충격 설명 0" in s2
@@ -172,17 +168,11 @@ def test_beta_ci_is_sane_on_synthetic_slope():
 
 
 def test_causal_budget_is_idiosyncratic_not_raw():
-    # 20R: τ 는 ar_ind 단위인데 예산을 원수익으로 쓰면 단위가 다른 두 수를 교차한다.
-    # 실측(005930 2026-07-30): 원수익 -0.72% · 시장 -1.10% · 고유 +0.38% — 부호 역전.
-    # 시장이 끌고 간 날에 종목 사건으로 설명하려 드는 것을 이 문단이 막는다.
-    from edge_analysis.statics.attribute import _clip, _iset
-    from edge_analysis.statics.paneltest import EdgeReport
-
-    r = EdgeReport("성립", 206, 0.010, None, None, None, ci_lo=0.0049, ci_hi=0.0142)
-    assert _iset(r, -0.0072) is None            # 원수익 예산이면 방향 모순
-    assert _iset(r, +0.00375) == (0.0049, 0.00375) or _iset(r, +0.00375) is None
-    assert _clip(0.001, 0.002, 0.00375) == (0.001, 0.002)   # 고유 예산 안이면 그대로
-
+    # 20R: 크기 추정량은 ar_ind 단위인데 예산을 원수익으로 쓰면 단위가 다른 두 수를
+    # 비교한다. 실측(005930 2026-07-30): 원수익 -0.72% · 시장 -1.10% · 고유 +0.38%
+    # — 부호 역전. 시장이 끌고 간 날에 종목 사건으로 설명하려 드는 것을 이 문단이
+    # 막는다. (예산과 크기의 교차 자체는 이제 가법 제약이 한다 -
+    # test_additive_budget.py.)
     rows = [_row("잔여1", -0.0072)]
     txt = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                   layers=(("시장", -0.01097), ("고유", 0.00375)))
@@ -496,13 +486,14 @@ def test_claims_carry_basis_and_evidence_bundle_ids():
     # '뉴스가 없어서' 와 '경로를 껐어서' 를 구분할 수 없다.
     import edge_analysis.statics.evidence as ev
     assert not narrative_allowed(credible=0, applied_edges=1)[0]
-    off, why = narrative_allowed(credible=0, applied_edges=0)
-    assert not off and "비활성" in why
-    ev.NARRATIVE_ENABLED = True
+    # 스위치를 끄면 사유가 '비활성' 이다 - '뉴스가 없어서' 와 구분된다
+    ev.NARRATIVE_ENABLED = False
     try:
-        assert narrative_allowed(credible=0, applied_edges=0)[0]
+        off, why = narrative_allowed(credible=0, applied_edges=0)
+        assert not off and "비활성" in why
     finally:
-        ev.NARRATIVE_ENABLED = False
+        ev.NARRATIVE_ENABLED = True
+    assert narrative_allowed(credible=0, applied_edges=0)[0]
 
 
 def test_plain_prose_cannot_overstate_weak_statistics():
@@ -674,3 +665,97 @@ def test_recent_window_reads_labels_as_an_event_id_map():
     assert recent_window(ss)["events"] == ["ev_b", "ev_c"]
     # 사건 없는 창은 빈 목록
     assert recent_window([ss[0]], labels)["events"] == []
+
+
+def test_moderation_reaches_the_plain_explanation_and_is_not_called_a_cause():
+    """조절 조건이 **쉬운 설명 재료로 넘어간다** - 안 넘기면 두 산출물이 다른 말을 한다.
+
+    이전에는 `_workflow` 가 산문 문자열만 남기고 `Implication` 객체를 버렸다. 그래서
+    정직한 설명에는 `조절: 주주/수준 높을수록 +0.31%p` 가 찍히는데 쉬운 설명은 그
+    존재를 몰라 평균 효과만 말했다. 같은 셀에서 두 설명이 다른 것을 말하면 하나는 거짓이다.
+
+    그리고 **"원인" 이라 쓰지 못한다**: 라쏘가 뽑은 것은 예측에 유용한 조절자이고 인과
+    조절자가 아니다. 부호는 조절계수와 교차검사된다(`_sign_guard`).
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import PlainError, _assemble, context
+
+    ctx = context(ticker_name="K", day_log=0.03, idio_log=0.02, route_kind="고유",
+                  market_name="M", recent={"when": "오후"}, established=["x"],
+                  overnight=[], unexplained_top=False)
+    mod = {"ref": "s1", "kind": "조절 조건", "사건": "RESULT_RELEASE",
+           "조건": "주주/수준", "방향말": "높을수록 더 크게", "조절계수": 0.0031,
+           "안정성": 0.86, "p": 0.003, "판정": "조절 성립 (원인 아님 - 조절이다)"}
+    br = {"s1": mod}
+
+    txt, bs = _assemble(
+        [{"text": "오후에 올랐어요", "basis": "statistical", "refs": ["s1"], "sign": 1},
+         {"text": "외국인 지분이 많은 종목에서 더 크게 나타났어요", "basis": "statistical",
+          "refs": ["s1"], "sign": 1}], ctx, br, [], "c", "d", "고유")
+    assert "외국인" in txt and "원인" not in txt
+    assert all(b.stats.get("조절계수") == 0.0031 for b in bs)
+
+    # 조절계수가 양수인데 방향을 -1 로 주장하면 즉사 - 근거가 반증한다.
+    # (첫 주장은 하루 방향 가드가 먼저 잡으므로 둘째 주장에서 검사한다)
+    with pytest.raises(PlainError, match="조절계수"):
+        _assemble([{"text": "오후에 올랐어요", "basis": "statistical",
+                    "refs": ["s1"], "sign": 1},
+                   {"text": "외국인 지분이 많은 종목에서 덜 났어요",
+                    "basis": "statistical", "refs": ["s1"], "sign": -1}],
+                  ctx, br, [], "c", "d", "")
+
+    # 프롬프트가 '원인 금지' 를 실제로 말한다 (선언 = 배선)
+    from edge_analysis.statics.plain import _SYSTEM
+    assert "조절 조건" in _SYSTEM and '"원인" 이라고 쓰지 마라' in _SYSTEM
+
+
+def test_fabricated_quotes_die_and_real_ones_pass():
+    """**인용문이 원문에 있는지** 검사한다 (C10) - 참조 존재만으로는 부족하다.
+
+    실재하는 id 를 가리키면서 없는 문장을 지어낼 수 있다. STORM 의 base 가 정확히 그
+    실패로 죽었다(`EVT_KR_20260601_001` 전량 허구 인용). 이 검사가 없어서 서사 경로를
+    껐던 것이고, 검사가 들어왔으므로 켰다 - 스위치와 검사는 같은 커밋이다.
+
+    막는 것은 **인용부호로 감싼 구간**뿐이다. 요약·의역은 막지 않는다(막을 방법이 없고,
+    막으면 서사가 제목 복사로 퇴화한다). 인용했다고 표시한 것만 책임을 묻는다.
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import PlainError, _assemble, context
+
+    ctx = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
+                  market_name="M", recent={"when": "오후"}, established=["계약 체결"],
+                  overnight=[], unexplained_top=False)
+    news = [{"ref": "n1", "news_id": "NEWS_A", "type": "COMPANY.CONTRACT.SIGNING",
+             "title": "SK하이닉스, 미국 고객사와 HBM 공급 계약 체결", "when": "13:20"}]
+    br = {"n1": news[0]}
+
+    def run(second: str):
+        """첫 주장은 다른 가드(하루 방향·최근 시점)를 만족시키는 고정문이다."""
+        return _assemble(
+            [{"text": "오후에 크게 올랐어요", "basis": "narrative", "refs": ["n1"],
+              "sign": 1},
+             {"text": second, "basis": "narrative", "refs": ["n1"], "sign": 1}],
+            ctx, br, news, "c", "d", "고유")
+
+    # 원문에 있는 구간 인용 → 통과 (띄어쓰기 차이는 허용한다)
+    txt, bs = run("\u300cHBM 공급 계약 체결\u300d 소식이 있었어요")
+    assert "HBM" in txt and len(bs) == 2
+
+    # 요약·의역은 인용부호가 없으면 막지 않는다
+    run("미국 고객과 계약을 따냈다는 소식이 있었어요")
+
+    # 지어낸 인용 → 즉사. 인용부호 종류를 바꿔도 잡힌다.
+    # 두 가드가 겹쳐 덮는다: `_quote_guard`(인용한 기사 제목에 없다) 와 선행하는
+    # 접지 가드(재료 어디에도 없는 이름). 둘 중 무엇이 먼저 걸리든 통과는 없다 -
+    # 다만 **제목 대조로 죽는 경로가 실제로 있다**는 것을 따로 단언한다.
+    for bad in ("\u300c삼성전자와 합병한다\u300d 고 밝혔어요",
+                '"없는 문장이다" 라고 했어요',
+                "'없는 문장이다' 라고 했어요",
+                "\u201c없는 문장이다\u201d 라고 했어요"):
+        with pytest.raises(PlainError, match="지어낸 인용|접지 없는 이름"):
+            run(bad)
+    # 재료에 있는 낱말들로 조립했지만 **그 제목에는 없는** 인용 - 제목 대조만이 잡는다
+    with pytest.raises(PlainError, match="지어낸 인용"):
+        run("\u300cHBM 계약 체결 미국\u300d 이라고 했어요")

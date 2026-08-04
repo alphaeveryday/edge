@@ -84,14 +84,16 @@ def run(lake, etf: str, day: str, ask=None) -> str:
     r = route_etf(roll, pv)
     out.append(say_route(r))
     out.append("")
-    out.extend(_workflow(lake, roll, r, day))
+    imps: list = []
+    out.extend(_workflow(lake, roll, r, day, imps))
     honest = "\n".join(out)
     if ask is None:
         return honest
-    return _dual(lake, roll, r, day, honest, ask, split)
+    return _dual(lake, roll, r, day, honest, ask, split, imps)
 
 
-def _dual(lake, roll, r, day: str, honest: str, ask, split=None) -> str:
+def _dual(lake, roll, r, day: str, honest: str, ask, split=None,
+          imps: list | None = None) -> str:
     """정직한 설명 + 토스식. ETF 는 5분봉이 없어 창이 없다 - **그 사실을 정직하게**
     다루고, '최근 시점' 대신 시장 사건의 시각(있으면)이나 밤사이를 쓴다."""
     from .mkttrial import event_days
@@ -175,6 +177,19 @@ def _dual(lake, roll, r, day: str, honest: str, ask, split=None) -> str:
             "창수": len(split.wins),
             "판정": ("바스켓이 끌었다" if abs(split.basket) >= abs(split.premium_move)
                    else "ETF 값만 따로 움직였다(수급)")}))
+    # 성립한 함의의 **조절 조건**을 재료로 준다. 이것이 '이 사건이 이런 종목에서 더
+    # 크게 나타났어요' 를 가능하게 한다 - 없으면 쉬운 설명은 평균 효과만 말하고,
+    # 정직한 설명에만 조절이 찍혀 두 산출물이 다른 것을 말한다.
+    for x in (imps or []):
+        for nm, coef, pi_, pj in getattr(x, "mods", ()):
+            stats.append(_plain_num({
+                "ref": f"s{len(stats) + 1}", "kind": "조절 조건",
+                "사건": x.claim.split()[0] if x.claim else "",
+                "조건": nm, "방향말": "높을수록 더 크게" if coef > 0 else "높을수록 덜",
+                "조절계수": round(float(coef), 5),
+                "안정성": round(float(pi_), 3), "p": round(float(pj), 4),
+                "판정": "조절 성립 (원인 아님 - 조절이다)"}))
+
     # **판정 등급을 코드가 실어 준다.** 수치만 주면 모델이 p 를 제 맘대로 읽는다 -
     # 실측: p=0.232 · ATT -2.5%p 를 '큰 영향을 주지 않았어요' 로 단정했다.
     stats += [_plain_num({
@@ -230,8 +245,14 @@ def _sector_types(lake, day: str, top: int = 3) -> list[str]:
     return [str(r[0]) for r in rows if r and r[0]]
 
 
-def _workflow(lake, roll, r, day: str) -> list[str]:
-    """라우팅별 인과 워크플로우. **다른 층의 질문은 세우지 않는다.**"""
+def _workflow(lake, roll, r, day: str,
+              sink: list | None = None) -> list[str]:
+    """라우팅별 인과 워크플로우. **다른 층의 질문은 세우지 않는다.**
+
+    `sink` 를 주면 성립한 함의를 거기 모은다 - 쉬운 설명이 조절 조건을 말하려면 그게
+    재료로 넘어가야 한다. 이전에는 산문 문자열만 남기고 객체를 버려서, 정직한 설명에만
+    조절이 찍히고 쉬운 설명은 그 존재를 몰랐다.
+    """
     from .trial import reduce_market, say_market
     out: list[str] = []
 
@@ -270,6 +291,8 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
                            "세울 수 없다 (그것도 결과다)")
             for et in ets:
                 imps, lg = verify(lake, day, etype=et, layer="섹터")
+                if sink is not None:
+                    sink += [x for x in imps if getattr(x, "credible", True)]
                 out.append("  " + lg.replace("\n", "\n  "))
                 out.append("  " + say_implications(imps).replace("\n", "\n  "))
 
@@ -296,6 +319,8 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
         for et, tks in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
             out.append(f"  [검정] {et} — 이 셀에서 {' · '.join(tks)} 가 해당")
             imps, lg = verify(lake, day, etype=et, layer="고유", max_probes=4)
+            if sink is not None:
+                sink += [x for x in imps if getattr(x, "credible", True)]
             out.append("    " + lg.replace("\n", "\n    "))
             out.append("    " + say_implications(imps).replace("\n", "\n    "))
     elif r.kind == "고유":
