@@ -723,7 +723,7 @@ class TestAdversarialInputs:
 
     def test_stale_generation_does_not_persist_trigger(self, tmp_path):
         # 실행 중 window 가 정정(gen+1)되면 gen-1 발화를 커밋하지 않는다 — 커밋되면
-        # gen-2 판정이 cooldown UNIQUE 에 막혀 정정 전 결과가 정본이 된다
+        # gen-2 판정이 window UNIQUE 에 막혀 정정 전 결과가 정본이 된다
         db = FakeMinuteDB()
         worker, _, session_id = build_pipeline(
             db, tmp_path,

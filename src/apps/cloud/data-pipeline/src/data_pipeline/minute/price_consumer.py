@@ -664,7 +664,7 @@ class PriceTriggerHandler:
                 )
             # stale 거부는 claim 시점(kernel)에도 있지만, **실행 중** 정정이 끼어드는
             # 경합은 여기서만 막을 수 있다 — 같은 트랜잭션에서 window 행을 잠그고
-            # 세대를 대조하지 않으면 gen-1 트리거가 커밋된 뒤 gen-2 판정이 cooldown
+            # 세대를 대조하지 않으면 gen-1 트리거가 커밋된 뒤 gen-2 판정이 window
             # UNIQUE 에 막혀 **정정 전 결과가 정본**이 된다.
             cur.execute(
                 """
