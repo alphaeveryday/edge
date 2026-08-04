@@ -39,6 +39,16 @@ BANNED = ("p값", "p-value", "유의", "신뢰구간", "구간", "표본", "베�
           "분위", "편차", "가중", "로그", "수익률", "변동성", "지수적")
 _DIGIT = re.compile(r"[0-9０-９]")
 
+# **무유의 ≠ 영향 없음.** 표본이 얇아 못 가른 것을 '영향 없음' 으로 바꾸는 것은
+# 부재를 기각으로 위장하는 짓이다(설계 §11). 실측: EXPORT_CONTROL 이 ATT -2.5%p ·
+# p=0.232 · 처치일 10 인데 산문이 '큰 영향을 주지 않았어요' 라고 단정했다.
+NEG_ASSERT = ("영향을 주지 않았", "영향이 없", "영향은 없", "때문이 아니",
+              "관계가 없", "상관없", "무관")
+# 근거 자체가 결손이면(β 미계측 등) 단정 어휘를 쓸 수 없다 - 구간은 살아 있어도
+# 점 인과를 말할 수는 없다.
+STRONG_ASSERT = ("때문이에요", "때문입니다", "영향을 받았어요", "덕분", "탓")
+WEAK_MARK = ("미계측", "백필 필요", "판정불가", "부족")
+
 
 class PlainError(ValueError):
     """토스식 계약 위반. 고치기 전에 절대 내보내지 않는다."""
@@ -215,7 +225,7 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
         ctx=json.dumps(ctx, ensure_ascii=False, indent=1),
         stats=json.dumps(stats, ensure_ascii=False, indent=1) or "(없음)",
         news=json.dumps(news, ensure_ascii=False, indent=1) or "(없음)")
-    user, last = "", ""
+    user, last, why = "", "", ""
     for _ in range(retries + 1):
         out = ask(sysmsg, user or "위 재료로 써라.")
         claims = (out or {}).get("claims") or []
@@ -223,8 +233,37 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
         try:
             return _assemble(claims, ctx, byref, news, cell, day, layer)
         except PlainError as e:
+            why = str(e)
             user = f"직전 답이 계약을 위반했다: {e}\n고쳐서 다시 써라."
-    raise PlainError(f"재시도 소진 - 마지막 답: {last[:80]!r}")
+    # **마지막 위반 사유를 반드시 싣는다.** 답만 보여주면 무엇이 계약을 깼는지 알 수
+    # 없어 진단이 추측이 된다 - 라이브 5회를 그렇게 낭비했다.
+    raise PlainError(f"{why} | 마지막 답: {last[:90]!r}")
+
+
+def _stat_guard(i: int, txt: str, srcs: list[dict]) -> None:
+    """통계 근거의 **강도를 넘는 단정**을 막는다. 등급은 코드가 읽는다."""
+    from .vocab import ALPHA
+    ps = [float(s["p"]) for s in srcs if s.get("p") is not None]
+    insig = bool(ps) and all(p >= ALPHA for p in ps)
+    if insig and (hit := [w for w in NEG_ASSERT if w in txt]):
+        raise PlainError(
+            f"#{i} 무유의(p≥{ALPHA})를 {hit} 로 단정했다 - 못 가른 것과 영향 없는 "
+            f"것은 다르다. '뚜렷하지 않아요' 처럼 써라")
+    # 결손 표시가 있어도 **0 을 배제하는 구간**이 있으면 단정할 자격이 있다 -
+    # 실측 s1 은 ETF 자기 갭 β 가 미계측이지만 코스피 환원 구간 [+1.08, +5.68]%p 가
+    # 살아 있다. 식별집합이 0 을 넘지 않는 것이 인과 주장의 면허다.
+    def _usable(sc: dict) -> bool:
+        iv = sc.get("explained") or sc.get("iset")
+        if iv and len(iv) == 2 and all(v is not None for v in iv):
+            lo, hi = sorted(float(v) for v in iv)
+            if lo > 0 or hi < 0:
+                return True
+        return sc.get("p") is not None and float(sc["p"]) < ALPHA
+    weak = [w for sc in srcs if not _usable(sc)
+            for w in WEAK_MARK if w in str(sc.get("note", ""))]
+    if weak and (hit := [w for w in STRONG_ASSERT if w in txt]):
+        raise PlainError(f"#{i} 근거가 결손({weak})인데 {hit} 로 단정했다 - "
+                         f"'~한 영향으로 보여요' 처럼 낮춰라")
 
 
 def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
@@ -261,6 +300,8 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
         kind = kinds.pop()
         if basis != kind:
             raise PlainError(f"#{i} basis={basis} 인데 참조는 {kind} 다")
+        if kind == "statistical":
+            _stat_guard(i, txt, [byref[r] for r in refs])
         if kind == "narrative":
             b = news_bundle(cell, day, txt, news, refs, layer=layer)
         else:

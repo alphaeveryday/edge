@@ -129,18 +129,25 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
     # 통계 재료. **수치는 재료에만** 있고 산문에는 못 들어간다(코드가 막는다).
     # 밤사이 환원도 통계다(β 구간 × 팩터 수익) - 이것을 참조 가능한 근거로 안 주면
     # '밤사이 미국 반도체가 올라서' 라는 주장이 접지 실패로 즉사한다(실측 2회).
+    from .evidence import _plain_num
+    from .gates import ALPHA
     stats: list[dict] = []
     if mr and mr.get("factor_name"):
-        stats.append({"ref": "s1", "kind": "밤사이 환원", "factor": mr["factor_name"],
-                      "factor_ret": mr.get("gap_factor_ret"),
-                      "beta_ci": list(mr.get("gap_beta") or ()),
-                      "explained": mr.get("mkt_explained"),
-                      "note": mr.get("gap_reason", "")[:60]})
-    stats += [{"ref": f"s{len(stats) + i}", "kind": "시장사건 시행", "etype": x["etype"],
-               "att": round(x["att"], 5), "p": round(x["p"], 4),
-               "n_days": x["n_days"], "unit": "거래일"}
-              for i, x in enumerate(
-                  (z for z in (scr or []) if z.get("verdict") == "계산됨"), 1)]
+        stats.append(_plain_num({
+            "ref": "s1", "kind": "밤사이 환원", "factor": mr["factor_name"],
+            "factor_ret": mr.get("gap_factor_ret"),
+            "beta_ci": list(mr.get("gap_beta") or ()),
+            "explained": mr.get("mkt_explained"),
+            "note": mr.get("gap_reason", "")[:60]}))
+    # **판정 등급을 코드가 실어 준다.** 수치만 주면 모델이 p 를 제 맘대로 읽는다 -
+    # 실측: p=0.232 · ATT -2.5%p 를 '큰 영향을 주지 않았어요' 로 단정했다.
+    stats += [_plain_num({
+        "ref": f"s{len(stats) + i}", "kind": "시장사건 시행", "etype": x["etype"],
+        "att": round(float(x["att"]), 5), "p": round(float(x["p"]), 4),
+        "n_days": x["n_days"], "unit": "거래일",
+        "판정": "유의" if x["p"] < ALPHA else "못 가름(무유의 - 영향 없음이 아니다)"})
+        for i, x in enumerate(
+            (z for z in (scr or []) if z.get("verdict") == "계산됨"), 1)]
     try:
         plain, bundles = narrate_plain(ask, ctx, stats=stats, cell=roll.etf,
                                       day=day, layer=r.kind)

@@ -493,3 +493,31 @@ def test_claims_carry_basis_and_evidence_bundle_ids():
     # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다
     assert not narrative_allowed(credible=0, applied_edges=1)[0]
     assert narrative_allowed(credible=0, applied_edges=0)[0]
+
+
+def test_plain_prose_cannot_overstate_weak_statistics():
+    """**무유의 ≠ 영향 없음**, 결손 근거 ≠ 인과 단정. 코드가 등급을 읽는다.
+
+    실측(091160 07-31): EXPORT_CONTROL 이 ATT -2.5%p · p=0.232 · 처치일 10 인데
+    산문이 '큰 영향을 주지 않았어요' 라고 단정했다. 표본이 얇아 못 가른 것을
+    '영향 없음' 으로 바꾸면 부재를 기각으로 위장한다(설계 §11).
+    그리고 β 미계측 근거로 '~때문이에요' 라고 하면 결손을 감춘 것이다.
+    """
+    import pytest
+
+    from edge_analysis.statics.plain import PlainError, _stat_guard
+
+    insig = [{"p": 0.232, "att": -0.025}]
+    with pytest.raises(PlainError, match="못 가른"):
+        _stat_guard(1, "무역 정책은 영향을 주지 않았어요", insig)
+    with pytest.raises(PlainError, match="못 가른"):
+        _stat_guard(1, "관세 때문이 아니에요", insig)
+    _stat_guard(1, "무역 정책 영향은 뚜렷하지 않아요", insig)   # 이건 정직하다
+
+    weak = [{"p": None, "note": "β 표본 37 < 40 (SOX) - 백필 필요"}]
+    with pytest.raises(PlainError, match="결손"):
+        _stat_guard(2, "밤사이 미국 반도체 때문이에요", weak)
+    _stat_guard(2, "밤사이 미국 반도체가 오른 영향으로 보여요", weak)
+
+    sig = [{"p": 0.004, "att": 0.011}]
+    _stat_guard(3, "이 소식이 영향을 받았어요", sig)             # 유의하면 단정 허용

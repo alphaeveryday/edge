@@ -34,6 +34,21 @@ import os
 from dataclasses import dataclass, field
 
 BASES = ("statistical", "narrative")
+
+
+def _plain_num(v):
+    """numpy 스칼라·배열을 순수 파이썬으로. **jsonb 에 `np.float64(...)` 문자열이
+    들어가면 근거를 다시 읽을 수 없다**(실측: explained 가 그렇게 저장됐다)."""
+    if hasattr(v, "item") and not isinstance(v, (str, bytes)):
+        try:
+            return v.item()
+        except Exception:                   # noqa: BLE001
+            pass
+    if isinstance(v, (list, tuple)):
+        return [_plain_num(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _plain_num(x) for k, x in v.items()}
+    return v
 DSN_ENV = "EDGE_RDB_DSN"
 TABLE = "analysis_evidence_bundle"
 
@@ -173,7 +188,7 @@ def narrative_allowed(*, credible: int, applied_edges: int) -> tuple[bool, str]:
 def stat_bundle(cell: str, day: str, claim: str, *, layer: str = "",
                 **stats) -> Bundle:
     """통계 근거 묶음. `stats` 에 이 주장에 쓴 **가설의 검정 결과**가 들어간다."""
-    return Bundle("statistical", cell, day, claim, layer, (), dict(stats))
+    return Bundle("statistical", cell, day, claim, layer, (), _plain_num(dict(stats)))
 
 
 def news_bundle(cell: str, day: str, claim: str, objs: list[dict], refs: list[str],
