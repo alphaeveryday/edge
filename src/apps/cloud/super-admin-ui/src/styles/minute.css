@@ -1,0 +1,158 @@
+/* 장중 1분 수집 화면 (ALPHA-738). ui-kit 토큰만 쓴다 — 자체 팔레트·차트 라이브러리 없음. */
+
+.mn-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.mn-head {
+  flex-wrap: wrap;
+}
+.mn-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+/* 실행 축과 데이터 축 사이의 경계 — 두 축이 하나의 종합 상태가 아님을 눈으로 보인다 */
+.mn-axis-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border-strong);
+  flex: none;
+}
+.mn-meta {
+  margin-left: auto;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
+.mn-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--sp-5);
+}
+
+.mn-section {
+  margin-top: var(--sp-7);
+}
+.mn-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-4);
+}
+
+/* ── 창 구성 막대 ──
+   색은 상태 신호이되 색만으로 갈리지 않게 무늬 축을 따로 둔다(흑백 출력·색각 이상 대비). */
+.mn-bar {
+  display: flex;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.mn-seg {
+  display: block;
+  min-width: 2px;
+  border-right: 1px solid var(--bg-surface);
+}
+.mn-seg:last-child {
+  border-right: 0;
+}
+.mn-seg-solid {
+  background: var(--seg);
+}
+/* 정상 · 빈 데이터 — 정상이되 "데이터가 없었다"는 사실이 무늬로 구분된다 */
+.mn-seg-dot {
+  background-color: color-mix(in srgb, var(--seg) 22%, transparent);
+  background-image: radial-gradient(var(--seg) 1.1px, transparent 1.2px);
+  background-size: 6px 6px;
+}
+/* 무증거 — 증거가 비어 있다는 것을 사선으로 */
+.mn-seg-hatch {
+  background-color: color-mix(in srgb, var(--seg) 14%, transparent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--seg) 0 2px,
+    transparent 2px 6px
+  );
+}
+/* 미도래·행 없음 — 아직 아무 사실도 없다 */
+.mn-seg-open {
+  background-color: var(--bg-sunken);
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--seg) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+.mn-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-6);
+  margin-top: var(--sp-4);
+  font-size: var(--xs-size);
+  color: var(--fg-2);
+}
+.mn-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+.mn-swatch {
+  width: 14px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  flex: none;
+}
+
+/* ── job 축 ── */
+.mn-jobs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-7);
+  font-size: var(--sm-size);
+  color: var(--fg-2);
+}
+.mn-jobs b {
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 접이식 상세 ── */
+.mn-disclosure,
+.mn-summary {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--sm-size);
+  color: var(--fg-2);
+  cursor: pointer;
+  text-align: left;
+}
+.mn-disclosure:hover,
+.mn-summary:hover {
+  color: var(--fg-1);
+}
+.mn-summary {
+  padding: var(--sp-4) var(--sp-6);
+  list-style: none;
+}
+.mn-summary::-webkit-details-marker {
+  display: none;
+}
+.mn-summary::before {
+  content: '▸ ';
+  color: var(--fg-3);
+}
+details[open] > .mn-summary::before {
+  content: '▾ ';
+}

@@ -20,6 +20,7 @@ import type {
   SourceOverview,
 } from '../domains/sources';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
+import { issues, liveness } from '../domains/sources/minuteView';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -162,30 +163,25 @@ function LaneCard({ lane, mock = false }: { lane: OverviewLane; mock?: boolean }
   );
 }
 
-/* 장중 1분 레인 요약 한 줄 — 판정은 서버 파생값(overdueNoEvidence 등)을 그대로 읽고 여기서
- * 재계산하지 않는다. 상세·근거 목록은 /minute 소관이라 여기선 요약과 손잡이만 둔다. */
+/* 장중 1분 레인 요약 한 줄 — 판정은 서버 파생값(overdueNoEvidence 등)과 minuteView 파생을
+ * 그대로 읽고 여기서 재계산하지 않는다. 수치·근거·구간은 /minute 소관이라 여기선 실행 축과
+ * "확인할 항목이 몇 건인가"까지만 말하고 손잡이를 건넨다(첫 화면은 사각을 없애는 게 목적). */
 function MinuteSessionLine({ s }: { s: MinuteSession }) {
-  const w = s.windows;
-  const evidenced = w.valid + w.validEmpty + w.incomplete + w.invalid;
-  const defects = w.incomplete + w.invalid + w.missing;
-  /* 항등식(MinutePage 와 같은 규칙) — 행이 없는 창은 무증거 집계에도 안 잡히므로, 이 경고를
-   * 빼면 창 생성 실패가 "무증거 0"으로 정상처럼 보인다(리뷰 1라운드). */
-  const materialized =
-    w.due + w.claimed + w.valid + w.validEmpty + w.incomplete + w.missing + w.invalid;
+  const live = liveness(s);
+  const list = issues(s, s.priceJobs);
   return (
     <p className="t-sm m-0">
-      <b>{s.dataset}/{s.sourceGroup}</b>
-      {' · '}phase {s.phase}
-      {' · '}기대 창 {s.expectedWindowCount}개 중 증거 {evidenced}개
-      {' · '}
-      <b style={{ color: w.overdueNoEvidence > 0 ? 'var(--down, #b91c1c)' : undefined }}>
-        무증거 {w.overdueNoEvidence}개
-      </b>
-      {defects > 0 && <> · 결함 판정 {defects}개</>}
-      {materialized !== s.expectedWindowCount && (
-        <b style={{ color: 'var(--down, #b91c1c)' }}>
-          {' · '}원장 불일치(실재 창 {materialized}개 — 위 숫자를 그대로 믿지 말 것)
-        </b>
+      <b>
+        {s.dataset}/{s.sourceGroup}
+      </b>{' '}
+      <StatusBadge tone={live.tone}>{live.label}</StatusBadge>{' '}
+      {list.length === 0 ? (
+        <span style={{ color: 'var(--fg-3)' }}>확인할 항목 없음</span>
+      ) : (
+        /* 무엇이 걸렸는지 이름까지만 — 건수·시각·근거는 드릴다운이 답한다 */
+        <span style={{ color: 'var(--down)' }}>
+          확인할 항목 {list.length}건 ({list.map((i) => i.short).join(' · ')})
+        </span>
       )}
     </p>
   );
@@ -201,7 +197,7 @@ function MinuteLaneCard({ mockData }: { mockData?: MinuteStatus }) {
       <div className="card-head">
         <span className="t-label">장중 1분 레인 {mockData && <MockChip />}</span>
         <Link to="/minute" className="t-xs">
-          상세 (결손 창 목록)
+          장중 1분 수집 상세 →
         </Link>
       </div>
       {!mockData && isError ? (
