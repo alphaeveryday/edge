@@ -183,9 +183,11 @@
     <div style="flex:1;overflow-y:auto;min-height:0">
 
       <!-- AI 분석 -->
-      <div id="panel-ai" style="display:none;padding:16px">
-        <!-- 헤더·본문 콘텐츠 폭 통일 — 패널 16px + 4px = 양쪽 20px (ALPHA-733 피드백: 둘의 평균 폭) -->
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px 12px;border-bottom:1px solid #e4e4e7">
+      <!-- 콘텐츠 폭은 패널의 유동 여백 하나에서 파생된다(기기 폭의 5%, 16~28px) — 헤더·본문·디스클레이머가
+           개별 px 조정 없이 구조적으로 같은 폭. % 는 컨테이닝 블록(.device) 기준이라 데스크톱 베젤
+           프리뷰(393px 고정)에서도 브라우저 창이 아닌 기기 프레임에 비례한다 (ALPHA-733) -->
+      <div id="panel-ai" style="display:none;padding:16px clamp(16px, 5%, 28px)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid #e4e4e7">
           <div style="display:flex;align-items:center;gap:8px">
             <span id="ai-date" class="num" style="font-size:12px;color:#71717a"></span>
             <span id="ai-date-dot" style="font-size:12px;color:#d4d4d8;display:none">·</span>
@@ -201,7 +203,7 @@
           <span class="skel" style="width:64%"></span>
         </div>
         <!-- 200: 리포트 본문 (첫 블록=헤드라인, 이후 문단) — 중앙 정렬 + 좌우 여백 (ALPHA-733 피드백) -->
-        <div id="ai-body" style="display:none;text-align:center;padding:0 4px">
+        <div id="ai-body" style="display:none;text-align:center">
           <h2 id="ai-headline" style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.45;margin:16px 0 14px;text-wrap:pretty"></h2>
           <div id="ai-paragraphs"></div>
         </div>
