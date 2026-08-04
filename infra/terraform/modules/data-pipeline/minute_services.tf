@@ -97,6 +97,10 @@ locals {
         # session_id 를 유도해 기동 거부로 레인이 통째로 선다. 롤백(kis↔toss)은 이 변수
         # 하나로 끝난다 — 자격증명을 두 벤더 쌍 다 주입해 두는 이유다(config 는 선택된
         # source 의 쌍만 검증한다).
+        # ⚠️ 전환은 **세션 사이에만**(다음 세션부터). 장중에 바꾸면 ①기존 세션이 ACTIVE
+        # 로 고립되고(EOD stop 은 새 source 세션만 지목) ②두 세션이 source 무관 canonical
+        # key 를 다퉈 ArtifactImmutabilityError 다(states.py 키 설계 경고). 장중 불가피하면
+        # 기존 세션 drain·finalize 후 start 재실행이 선행이다.
         DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE = var.minute_session_source_group
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
