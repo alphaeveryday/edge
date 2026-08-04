@@ -496,17 +496,47 @@
       return x.toFixed(1) + ',' + y.toFixed(1);
     });
     var line = el('chart-line');
-    var dot = el('chart-dot');
     line.setAttribute('points', pts.join(' '));
-    var last = pts[pts.length - 1].split(',');
-    dot.setAttribute('cx', last[0]);
-    dot.setAttribute('cy', last[1]);
     // 선 색은 기간 등락에서 파생 (시세 표기 관례와 동일: 상승=빨강·하락=파랑)
     var first = closes[0];
     var latest = closes[closes.length - 1];
     var lineColor = latest > first ? UP : latest < first ? DOWN : FLAT;
     line.setAttribute('stroke', lineColor);
-    dot.setAttribute('fill', lineColor);
+
+    // 가격 축 — 그리드라인·우측 라벨·현재가 태그를 종가 범위(min~max)에서 파생한다.
+    // yOf 는 viewBox y(0~180), topPct 는 오버레이용 % (SVG 가 고정 높이를 채운다).
+    function yOf(v) {
+      return PAD + (1 - (v - min) / span) * (H - PAD * 2);
+    }
+    function topPct(v) {
+      return (yOf(v) / H) * 100;
+    }
+    // 그리드라인 — 고·중·저 3레벨 (종가 기준)
+    var levels = [max, (max + min) / 2, min];
+    el('chart-grid').innerHTML = levels.map(function (v) {
+      var y = yOf(v).toFixed(1);
+      return '<line x1="0" y1="' + y + '" x2="360" y2="' + y + '" stroke="#f0f0f1" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+    }).join('');
+    // 우측 거터: 가격 라벨(현재가 태그와 겹치면 생략) + 현재가 색 태그
+    var yaxis = el('chart-yaxis');
+    yaxis.textContent = '';
+    var dotPct = topPct(latest);
+    levels.forEach(function (v) {
+      var pct = topPct(v);
+      if (Math.abs(pct - dotPct) < 9) {
+        return; // 현재가 태그 근처 라벨은 억제 — 겹쳐 읽기 어려워지지 않게
+      }
+      var lab = document.createElement('div');
+      lab.style.cssText = 'position:absolute;right:0;top:' + pct.toFixed(1) + '%;transform:translateY(-50%);' +
+        'width:50px;text-align:right;font-size:10px;color:#a1a1aa;background:#fff;line-height:1';
+      lab.textContent = fmtNum(v, 0);
+      yaxis.appendChild(lab);
+    });
+    var tag = document.createElement('div');
+    tag.style.cssText = 'position:absolute;right:0;top:' + dotPct.toFixed(1) + '%;transform:translateY(-50%);' +
+      'font-size:10px;font-weight:700;color:#fff;background:' + lineColor + ';border-radius:3px;padding:1px 5px;line-height:1.5;white-space:nowrap';
+    tag.textContent = fmtNum(latest, 0);
+    yaxis.appendChild(tag);
     // x축 라벨 — 슬라이스 구간에서 균등 5개
     var dates = el('chart-dates');
     dates.textContent = '';
