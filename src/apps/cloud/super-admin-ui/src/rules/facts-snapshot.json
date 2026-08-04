@@ -1,0 +1,2954 @@
+{
+ "runs": [
+  {
+   "id": "etf-daily:2026-08-03T15:40",
+   "lane": "etf-daily",
+   "kind": "scheduled",
+   "trading_date": "2026-08-03",
+   "ledger_status": "RUNNING",
+   "aws_status": "FAILED",
+   "aws_stop": "2026-08-03T16:12:27+09:00",
+   "ledger_updated": "2026-08-03T16:10:36+09:00",
+   "deadline": "2026-08-03T21:40:00+09:00",
+   "planned": true
+  },
+  {
+   "id": "news:2026-08-03T15:30",
+   "lane": "news",
+   "kind": "scheduled",
+   "trading_date": "2026-08-03",
+   "ledger_status": "TIMED_OUT",
+   "aws_status": "TIMED_OUT",
+   "aws_stop": "2026-08-03T15:55:52+09:00",
+   "ledger_updated": "2026-08-03T16:10:38+09:00",
+   "deadline": "2026-08-03T21:30:00+09:00",
+   "planned": true
+  },
+  {
+   "id": "news:2026-08-03T15:00",
+   "lane": "news",
+   "kind": "scheduled",
+   "trading_date": "2026-08-03",
+   "ledger_status": "SUCCEEDED",
+   "aws_status": "SUCCEEDED",
+   "aws_stop": "2026-08-03T15:15:17+09:00",
+   "ledger_updated": "2026-08-03T15:15:20+09:00",
+   "deadline": "2026-08-03T21:00:00+09:00",
+   "planned": true
+  },
+  {
+   "id": "news:2026-08-02T21:10",
+   "lane": "news",
+   "kind": "backfill",
+   "trading_date": "2026-07-28",
+   "ledger_status": "SUCCEEDED",
+   "aws_status": "SUCCEEDED",
+   "aws_stop": "2026-08-02T21:41:00+09:00",
+   "ledger_updated": "2026-08-02T21:41:10+09:00",
+   "deadline": null,
+   "planned": false,
+   "note": "07-28 뉴스 이벤트 백필 — 타임아웃으로 미조립된 구간 재처리",
+   "mock": true,
+   "why": "백필 런 축이 화면에 없어 실행 방식 구분을 못 보여줌"
+  },
+  {
+   "id": "etf-daily:2026-08-02T11:03",
+   "lane": "etf-daily",
+   "kind": "manual",
+   "trading_date": "2026-08-02",
+   "ledger_status": null,
+   "aws_status": "FAILED",
+   "aws_stop": "2026-08-02T11:17:41+09:00",
+   "ledger_updated": "2026-08-02T11:03:51+09:00",
+   "deadline": "2026-08-02T17:03:00+09:00",
+   "planned": false
+  },
+  {
+   "id": "etf-daily:2026-07-28T15:40",
+   "lane": "etf-daily",
+   "kind": "scheduled",
+   "trading_date": "2026-07-28",
+   "ledger_status": null,
+   "aws_status": null,
+   "aws_stop": null,
+   "ledger_updated": null,
+   "deadline": "2026-07-28T21:40:00+09:00",
+   "planned": true,
+   "no_run_row": true
+  }
+ ],
+ "tasks": [
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "DISCLOSURE_COLLECTION_DART",
+   "dataset": "disclosures",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 2,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:46:59.082381+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:09:58.422477+00:00",
+   "ok_rate": "6/7",
+   "attempts": 1,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "ETF_HOLDINGS_COLLECTION_KRX",
+   "dataset": "etf_holdings",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "VALID",
+   "records_out": 906,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:41:58.341112+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": 33,
+   "completeness_received": 33,
+   "completeness_missing": 0,
+   "dataset_contract_key": "ETF_HOLDINGS_KRX_EOD",
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": "UNKNOWN",
+   "freshness_reason": "ACTUAL_AS_OF_UNVERIFIED",
+   "collected_at": "2026-08-03T15:41:58.341112+09:00",
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:04:50.742765+00:00",
+   "ok_rate": "6/7",
+   "attempts": 1,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "ETF_PROFILE_COLLECTION_KIS",
+   "dataset": "etf_profile",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "VALID",
+   "records_out": 33,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:41:42.300093+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": 33,
+   "completeness_received": 33,
+   "completeness_missing": 0,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:04:35.135172+00:00",
+   "ok_rate": "11/11",
+   "attempts": 2,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "INVESTOR_COLLECTION_KIS",
+   "dataset": "investor_flow_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 1452,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:44:31.874795+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": 363,
+   "completeness_received": 361,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T06:44:48.873315+00:00",
+   "ok_rate": "8/11",
+   "attempts": 2,
+   "max_retries": 2,
+   "retry_mock": true,
+   "cmpl_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "NAV_COLLECTION_KIS",
+   "dataset": "etf_nav",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "VALID",
+   "records_out": 33,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:41:46.801141+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": 33,
+   "completeness_received": 33,
+   "completeness_missing": 0,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:04:35.527118+00:00",
+   "ok_rate": "11/11",
+   "attempts": 2,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "PRICE_COLLECTION_KIS",
+   "dataset": "price_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 1452,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T16:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:44:27.382782+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": 363,
+   "completeness_received": 363,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T06:47:35.189907+00:00",
+   "ok_rate": "8/11",
+   "attempts": 1,
+   "max_retries": 2,
+   "retry_mock": true,
+   "cmpl_mock": true,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_DISCLOSURE",
+   "dataset": "supply_contract_fact",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 1,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:56.411627+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:55.417999+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_DISCLOSURE_SEGMENT",
+   "dataset": "business_segment_fact",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 0,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:51.665642+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:53.359730+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_ETF",
+   "dataset": "etf_holdings",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 906,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:57.994310+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:55.385490+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_ETF_NAV",
+   "dataset": "etf_nav",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 33,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:52.841989+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:53.865219+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_ETF_PROFILE",
+   "dataset": "etf_profile",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 33,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:48:00.723877+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:51.249912+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_INVESTOR",
+   "dataset": "investor_flow_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 1452,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:53.855161+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:10:53.814151+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_PRICE",
+   "dataset": "price_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 1452,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:10:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:47:54.856121+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T06:48:34.186899+00:00",
+   "ok_rate": "8/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "ENRICH_CORP_CODE",
+   "dataset": "company_profile",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 0,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:49:48.924344+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:12:37.185580+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_DISCLOSURE",
+   "dataset": "disclosure_document",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 88,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:45.136930+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:13:36.697724+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_ETF_FLOW",
+   "dataset": "investor_flow_load",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 3896,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:54.065772+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:13:37.968500+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_ETF_HOLDINGS",
+   "dataset": "etf_holding_snapshot",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "INCOMPLETE",
+   "records_out": 10289,
+   "failed_records": 2415,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:52.182987+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:13:34.554601+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_ETF_NAV",
+   "dataset": "etf_nav_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 475,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:51.430624+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:13:36.847467+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_INSTRUMENTS",
+   "dataset": "instrument_master",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "INCOMPLETE",
+   "records_out": 362,
+   "failed_records": 36,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:48:55.600317+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:11:47.252918+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_PRICE_DAILY",
+   "dataset": "price_daily",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "INCOMPLETE",
+   "records_out": 5954,
+   "failed_records": 8,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:48.680509+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T06:51:26.690460+00:00",
+   "ok_rate": "8/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "etf-daily",
+   "run_key": "etf-daily:2026-08-03T15:40",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_PRICE_TRIGGERS",
+   "dataset": "price_movement_trigger",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 20,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:40:00+09:00",
+   "deadline_at": "2026-08-03T17:40:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:50:51.606423+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-08-02T02:13:32.371620+00:00",
+   "ok_rate": "11/11",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "etf-daily:2026-08-03T15:40"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "raw",
+   "task_key": "NEWS_COLLECTION_BIGKINDS",
+   "dataset": "stock_news",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "INCOMPLETE",
+   "records_out": 4000,
+   "failed_records": 1,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T16:30:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:35:24.735367+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T14:51:58.397624+00:00",
+   "ok_rate": "15/17",
+   "attempts": 2,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "news:2026-08-03T15:30"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "normalize",
+   "task_key": "NORMALIZE_NEWS",
+   "dataset": "news_articles",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 4000,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T17:00:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:36:25.451322+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T14:53:02.763500+00:00",
+   "ok_rate": "17/17",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "news:2026-08-03T15:30"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "ASSEMBLE_EVENTS",
+   "dataset": "source_event",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "PENDING",
+   "data_status": "UNKNOWN",
+   "records_out": null,
+   "failed_records": null,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T18:30:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": null,
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T15:02:25.019840+00:00",
+   "ok_rate": "13/17",
+   "attempts": 2,
+   "max_retries": 2,
+   "retry_mock": true,
+   "run_id": "news:2026-08-03T15:30"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_ASSERTIONS",
+   "dataset": "document_assertion",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "PENDING",
+   "data_status": "UNKNOWN",
+   "records_out": null,
+   "failed_records": null,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T17:30:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": null,
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T14:59:28.708850+00:00",
+   "ok_rate": "15/17",
+   "attempts": 1,
+   "max_retries": 1,
+   "retry_mock": true,
+   "run_id": "news:2026-08-03T15:30"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "LOAD_DOCUMENTS",
+   "dataset": "document",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FAILED",
+   "data_status": "UNKNOWN",
+   "records_out": null,
+   "failed_records": null,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T17:30:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": null,
+   "skip_reason": null,
+   "outcome_reason": "attempt_failed",
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T14:57:46.637971+00:00",
+   "ok_rate": "15/17",
+   "attempts": 1,
+   "max_retries": 1,
+   "retry_mock": true,
+   "run_id": "news:2026-08-03T15:30"
+  },
+  {
+   "pipeline_type": "news",
+   "run_key": "news:2026-08-03T15:30",
+   "trading_date": "2026-08-03",
+   "stage": "feature",
+   "task_key": "TAG_NEWS",
+   "dataset": "news_assertions",
+   "required": true,
+   "plan_status": "DUE",
+   "task_outcome": "FULFILLED",
+   "data_status": "UNKNOWN",
+   "records_out": 64,
+   "failed_records": 0,
+   "expected_at": "2026-08-03T15:30:00+09:00",
+   "deadline_at": "2026-08-03T17:30:00+09:00",
+   "missed_at": null,
+   "fulfilled_at": "2026-08-03T15:37:33.759982+09:00",
+   "skip_reason": null,
+   "outcome_reason": null,
+   "completeness_expected": null,
+   "completeness_received": null,
+   "completeness_missing": null,
+   "dataset_contract_key": null,
+   "expected_as_of_date": "2026-08-03",
+   "actual_as_of_date": null,
+   "freshness_status": null,
+   "freshness_reason": null,
+   "collected_at": null,
+   "observed_at": null,
+   "last_ok": "2026-07-31T14:54:49.960325+00:00",
+   "ok_rate": "15/17",
+   "attempts": 1,
+   "max_retries": 0,
+   "retry_mock": false,
+   "run_id": "news:2026-08-03T15:30"
+  }
+ ],
+ "datasets": [
+  {
+   "id": "price_daily",
+   "lane": "batch",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": "2026-08-03",
+   "collected_at": "2026-08-03T15:44:00+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T15:40",
+   "contract": true,
+   "mock": true,
+   "why": "계약 미등록 — actual_as_of writer가 없어 실제로는 판정 불가"
+  },
+  {
+   "id": "etf_nav",
+   "lane": "batch",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": "2026-08-03",
+   "collected_at": "2026-08-03T15:41:00+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T15:40",
+   "contract": true,
+   "mock": true,
+   "why": "계약 미등록"
+  },
+  {
+   "id": "investor_flow",
+   "lane": "batch",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": "2026-08-01",
+   "collected_at": "2026-08-03T15:44:00+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T15:40",
+   "contract": true,
+   "mock": true,
+   "why": "계약 미등록 — STALE 규칙 시연을 위해 2일 지연으로 설정"
+  },
+  {
+   "id": "disclosures",
+   "lane": "batch",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": "2026-08-03",
+   "collected_at": "2026-08-03T15:46:00+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T15:40",
+   "contract": true,
+   "mock": true,
+   "why": "계약 미등록"
+  },
+  {
+   "id": "etf_holdings",
+   "lane": "batch",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": null,
+   "collected_at": "2026-08-03T15:41:00+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T15:40",
+   "contract": true,
+   "unverifiable": "KRX 응답에 기준일 필드가 없다 — 영구 검증 불가(설계 결정)"
+  },
+  {
+   "id": "etf_profile",
+   "lane": "batch",
+   "expected_as_of": null,
+   "actual_as_of": null,
+   "collected_at": "2026-08-03T15:41:00+09:00",
+   "lag_days": null,
+   "next_run": "2026-08-04T15:40",
+   "contract": false,
+   "unverifiable": "스냅샷이라 as-of 계약 부적합 — 변경 감지가 맞는 축"
+  },
+  {
+   "id": "stock_news",
+   "lane": "batch",
+   "expected_as_of": "슬롯 창 08-02→08-03",
+   "actual_as_of": "08-02→08-03",
+   "collected_at": "2026-08-03T15:35:00+09:00",
+   "lag_days": null,
+   "next_run": "2026-08-03T23:50",
+   "contract": true,
+   "window_contract": true,
+   "mock": true,
+   "why": "창 커버리지 계약 — enum에 SLOT_WINDOW 추가가 선행"
+  },
+  {
+   "id": "price_minute",
+   "lane": "intraday",
+   "expected_as_of": "2026-08-03",
+   "actual_as_of": "2026-08-03",
+   "collected_at": "2026-08-03T15:30:09+09:00",
+   "lag_days": 0,
+   "next_run": "2026-08-04T09:00",
+   "contract": true,
+   "mock": true,
+   "why": "계약 미등록"
+  }
+ ],
+ "chain": {
+  "feeds": [
+   {
+    "id": "feed.batch",
+    "label": "배치 트리거",
+    "v": 20,
+    "unit": "ETF",
+    "src": "price_movement_trigger",
+    "note": "일배치 3% 게이트"
+   },
+   {
+    "id": "feed.intraday",
+    "label": "장중 트리거",
+    "v": 65,
+    "unit": "건",
+    "src": "minute_price_trigger",
+    "note": "1분 3% 게이트 · ETF 25종"
+   }
+  ],
+  "stages": [
+   {
+    "id": "c.obs",
+    "label": "관측",
+    "batch": 20,
+    "intraday": 0,
+    "src": "etf_contribution_observation",
+    "note": "두 트리거 FK를 다 갖는 같은 테이블 — 여기서 합류한다"
+   },
+   {
+    "id": "c.route",
+    "label": "라우트",
+    "batch": 20,
+    "intraday": 0,
+    "src": "explanation_route"
+   },
+   {
+    "id": "c.run",
+    "label": "런",
+    "batch": 16,
+    "intraday": 0,
+    "src": "explanation_run"
+   },
+   {
+    "id": "c.res",
+    "label": "결과",
+    "batch": 16,
+    "intraday": 0,
+    "src": "explanation_result"
+   },
+   {
+    "id": "c.pub",
+    "label": "게시",
+    "batch": 16,
+    "intraday": 0,
+    "src": "publication_status=PUBLISHED"
+   },
+   {
+    "id": "c.dlv",
+    "label": "전달",
+    "batch": 16,
+    "intraday": 0,
+    "src": "tenant_delivery NEW"
+   },
+   {
+    "id": "c.onprem",
+    "label": "소비자 수신",
+    "batch": null,
+    "intraday": null,
+    "src": "—",
+    "blind": true
+   }
+  ]
+ },
+ "etf_ledger": {
+  "rows": [
+   {
+    "etf": "etf_24221908",
+    "name": "KODEX 반도체",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_b4bbabb9",
+    "name": "TIGER 반도체",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_e4e7df6c",
+    "name": "KODEX 200",
+    "triggered": true,
+    "outcome": "FAILED",
+    "error": "ValueError: non-finite interval [nan, nan]",
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_a8d3e0ff",
+    "name": "TIGER 2차전지",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_e3c51969",
+    "name": "KODEX 자동차",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_2093e0fe",
+    "name": "TIGER 헬스케어",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_02a79209",
+    "name": "KODEX 은행",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_c57032d3",
+    "name": "TIGER 미디어",
+    "triggered": true,
+    "outcome": "FAILED",
+    "error": "ValueError: non-finite interval [nan, nan]",
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_acd57f74",
+    "name": "KODEX 철강",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_15f3ae41",
+    "name": "TIGER 화학",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_29a9beb8",
+    "name": "KODEX 건설",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_5fe27771",
+    "name": "TIGER 조선",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_7aca910a",
+    "name": "KODEX 증권",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_8f8515ac",
+    "name": "TIGER 소프트웨어",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_8aa5f531",
+    "name": "KODEX 에너지",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_ce0599f5",
+    "name": "TIGER 필수소비재",
+    "triggered": true,
+    "outcome": "FAILED",
+    "error": "ValueError: non-finite interval [nan, nan]",
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_d8cb241a",
+    "name": "KODEX 운송",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_29c85ac1",
+    "name": "TIGER 기계",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_c32d3aca",
+    "name": "KODEX 보험",
+    "triggered": true,
+    "outcome": "FAILED",
+    "error": "ValueError: non-finite interval [nan, nan]",
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_648dc99e",
+    "name": "TIGER 유통",
+    "triggered": true,
+    "outcome": "FULFILLED",
+    "error": null,
+    "published": true,
+    "delivered": true
+   },
+   {
+    "etf": "etf_81fa8647",
+    "name": "KODEX 통신",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_aa777c03",
+    "name": "TIGER 게임",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_e47c9315",
+    "name": "KODEX 바이오",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_1886ec62",
+    "name": "TIGER 인터넷",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_d41e76f0",
+    "name": "KODEX 배당",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_d373e6f3",
+    "name": "TIGER 로우볼",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_bda981d9",
+    "name": "KODEX 모멘텀",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_41b62cba",
+    "name": "TIGER 코스닥150",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_a8eafa8d",
+    "name": "KODEX 코스피",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_84bd7dae",
+    "name": "TIGER 배당성장",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_ae4cf32d",
+    "name": "KODEX 성장",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_2c101615",
+    "name": "TIGER 가치",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   },
+   {
+    "etf": "etf_50b2b9c5",
+    "name": "KODEX 중소형",
+    "triggered": false,
+    "outcome": "NO_TRIGGER",
+    "error": null,
+    "published": false,
+    "delivered": false
+   }
+  ],
+  "mock": true,
+  "why": "AnalyzeOne per-ETF ops 원장 부재 — '미생성 4종이 어느 ETF인지' 를 못 답하던 항목. 백로그: ETF·거래일·attempt grain 전용 outcome ledger"
+ },
+ "queues": [
+  {
+   "name": "news-extraction-backfill",
+   "visible": 0,
+   "in_flight": 0,
+   "dlq": 0,
+   "subscribers": [],
+   "sub_mock": true,
+   "purpose": "장중 뉴스 백필"
+  },
+  {
+   "name": "news-extraction-realtime",
+   "visible": 0,
+   "in_flight": 0,
+   "dlq": 0,
+   "subscribers": [],
+   "sub_mock": true,
+   "purpose": "장중 뉴스 추출"
+  },
+  {
+   "name": "price-analysis-realtime",
+   "visible": 0,
+   "in_flight": 0,
+   "dlq": 0,
+   "subscribers": [
+    "price-consumer"
+   ],
+   "sub_mock": true,
+   "purpose": "1분 커밋 → 가격 소비자"
+  },
+  {
+   "name": "price-explanation-realtime",
+   "visible": 65,
+   "in_flight": 0,
+   "dlq": 0,
+   "subscribers": [],
+   "sub_mock": true,
+   "purpose": "장중 트리거 → 설명 생성"
+  }
+ ],
+ "queue_sub_note": {
+  "mock": true,
+  "why": "큐→구독 서비스 매핑이 어디에도 선언돼 있지 않아 '소비자 미배포'를 사람이 판단해야 했음"
+ },
+ "outputs": [
+  {
+   "id": "o.pub",
+   "label": "게시 ETF",
+   "today": 16,
+   "base": 32,
+   "unit": "종"
+  },
+  {
+   "id": "o.trig",
+   "label": "배치 트리거",
+   "today": 20,
+   "base": 31.5,
+   "unit": "종"
+  },
+  {
+   "id": "o.doc",
+   "label": "뉴스 문서",
+   "today": 3961,
+   "base": 6122,
+   "unit": "건"
+  },
+  {
+   "id": "o.asr",
+   "label": "assertion",
+   "today": 711,
+   "base": 1382,
+   "unit": "건"
+  },
+  {
+   "id": "o.evt",
+   "label": "source event",
+   "today": 539,
+   "base": 1032,
+   "unit": "건"
+  }
+ ],
+ "boundary": {
+  "published_without_delivery": 0,
+  "delivery_now_nonpublished": 1,
+  "sync_cursor_rows": 0,
+  "seed_note": "비게시 전달 1건은 로컬 시드(WITHDRAWN)"
+ },
+ "runbook": {
+  "R05.LOAD_DOCUMENTS": {
+   "cmd": "load-documents 재실행",
+   "note": "후속 PENDING 2건 자동 해소"
+  },
+  "R05.ASSEMBLE_EVENTS": {
+   "cmd": "assemble-events --input-run-id <run>",
+   "note": "LLM 크레딧 확인"
+  },
+  "R11.price-explanation-realtime": {
+   "cmd": "설명 consumer 서비스 terraform 배선 후 배포",
+   "note": "큐 자동 소진 여부 확인 · DLQ 0이라 유실 없음"
+  },
+  "R15": {
+   "cmd": "NaN 가드 코드 선행 → aws ecs run-task --trade-date 2026-08-03",
+   "note": "실패 ETF만 재실행"
+  },
+  "R08.investor_flow": {
+   "cmd": "ingest-raw-investor --from <d> --to <d>",
+   "note": "KIS 토큰 상태 확인"
+  },
+  "R07.INVESTOR_COLLECTION_KIS": {
+   "cmd": "failed_symbols 확인 후 해당 종목 재수집",
+   "note": ""
+  },
+  "R01": {
+   "cmd": "aws stepfunctions start-execution --input '{\"run_id\":\"manual-...\"}'",
+   "note": "Planner 미기동 슬롯 수동 기동"
+  },
+  "R16.ASSEMBLE_EVENTS": {
+   "cmd": "재시도 소진 — 수동 개입 필요",
+   "note": "원인 제거 후 재실행"
+  },
+  "_mock": true,
+  "_why": "DatasetContract.runbook_uri 전부 None — 조치 칸이 비어 있던 항목"
+ },
+ "meta": {
+  "db": "2026-08-03T16:20:34.112043+09:00",
+  "aws": "2026-08-03T07:21:16.954493+00:00",
+  "today": "2026-08-03"
+ },
+ "news_funnel": [
+  {
+   "stage": "원천 수집(3런 합)",
+   "value": 12000,
+   "unit": "기사",
+   "note": "창 겹침·중복 포함. 런당 4,000은 MAX_PAGES(40)×100 상한 절단값 — 기대가 아니라 천장"
+  },
+  {
+   "stage": "중복 제거 후 canonical",
+   "value": 5360,
+   "unit": "기사",
+   "note": "URL 해시 dedup. mentions는 구조상 100%(카테고리 수집)라 퍼널 단계가 아니다"
+  },
+  {
+   "stage": "RDS 문서(document)",
+   "value": 5327,
+   "unit": "문서",
+   "note": "축 차이(published_date → available_at KST) — 5,360과 어긋나는 게 정상"
+  },
+  {
+   "stage": "유니버스 매칭(in_universe)",
+   "value": 2233,
+   "unit": "기사",
+   "note": "★ 실질 탈락 단계는 여기다 — assemble의 유니버스 필터"
+  },
+  {
+   "stage": "assertion 있음",
+   "value": 1125,
+   "unit": "문서",
+   "note": "부재 사유 미기록: NO_EVENT vs 추출실패 vs 미실행이 한 통(계측 백로그)"
+  },
+  {
+   "stage": "분석 사용",
+   "value": 628,
+   "unit": "문서",
+   "note": "근거 채택 기준 통과분"
+  },
+  {
+   "stage": "source_event 생성",
+   "value": 1024,
+   "unit": "event"
+  }
+ ],
+ "news_perrun": [
+  {
+   "run_key": "news:2026-07-31T15:00",
+   "collect": {
+    "window": "2026-07-30→2026-07-31",
+    "fetched": 4000,
+    "saved": 4000,
+    "truncated": true
+   },
+   "normalize": {
+    "read": 4000,
+    "passed": 4000,
+    "failed": 0,
+    "warned": 233,
+    "duplicate_signals": 95,
+    "canonical_rows_written": 10256
+   },
+   "tag": {
+    "read_cumulative": 22865,
+    "tagged": 1555,
+    "skipped_already_tagged": 7150,
+    "skipped_no_mention": 14160
+   },
+   "load_documents": {
+    "read_cumulative": 293500,
+    "created": 3799,
+    "already_present": 288308
+   },
+   "load_assertions": {
+    "created": 473,
+    "already_present": 28956,
+    "skipped_no_resolved_argument": 35433
+   },
+   "assemble": null
+  },
+  {
+   "run_key": "news:2026-07-31T15:30",
+   "collect": {
+    "window": "2026-07-30→2026-07-31",
+    "fetched": 4000,
+    "saved": 4000,
+    "truncated": true
+   },
+   "normalize": {
+    "read": 4000,
+    "passed": 4000,
+    "failed": 0,
+    "warned": 255,
+    "duplicate_signals": 31,
+    "canonical_rows_written": 4049
+   },
+   "tag": {
+    "read_cumulative": 23084,
+    "tagged": 128,
+    "skipped_already_tagged": 8697,
+    "skipped_no_mention": 14259
+   },
+   "load_documents": {
+    "read_cumulative": 293719,
+    "created": 219,
+    "already_present": 292107
+   },
+   "load_assertions": {
+    "created": 48,
+    "already_present": 29428,
+    "skipped_no_resolved_argument": 35462
+   },
+   "assemble": {
+    "window": "2026-07-30→2026-07-31",
+    "news_read": 10475,
+    "in_universe": 4409,
+    "events_created": 697
+   }
+  },
+  {
+   "run_key": "news:2026-07-31T23:50",
+   "collect": {
+    "window": "2026-07-30→2026-07-31",
+    "fetched": 4000,
+    "saved": 4000,
+    "truncated": true
+   },
+   "normalize": {
+    "read": 4000,
+    "passed": 4000,
+    "failed": 0,
+    "warned": 276,
+    "duplicate_signals": 52,
+    "canonical_rows_written": 5360
+   },
+   "tag": {
+    "read_cumulative": 22923,
+    "tagged": 578,
+    "skipped_already_tagged": 6379,
+    "skipped_no_mention": 15966
+   },
+   "load_documents": {
+    "read_cumulative": 293558,
+    "created": 1546,
+    "already_present": 290564
+   },
+   "load_assertions": {
+    "created": 241,
+    "already_present": 29476,
+    "skipped_no_resolved_argument": 35662
+   },
+   "assemble": {
+    "window": "2026-07-31→2026-08-01",
+    "news_read": 5360,
+    "in_universe": 2233,
+    "events_created": 394
+   }
+  }
+ ],
+ "news_samples": {
+  "collect_truncation": [
+   {
+    "symbol": "category:002000000",
+    "page": null,
+    "error": "MAX_PAGES(40) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+    "kind": "truncation"
+   }
+  ],
+  "dedup_examples": [
+   {
+    "title30": "SKT, 피지컬 AI 스타트업과 로보틱스 생태계 키운다",
+    "basis": "normalized_title",
+    "n_ids": 2
+   },
+   {
+    "title30": "홈플러스 노사, 임금·상여 지급 조정 합의...\"영업 ",
+    "basis": "normalized_title",
+    "n_ids": 2
+   },
+   {
+    "title30": "증시 폭등에 사이드카…삼전닉스 레버리지 규제 강화",
+    "basis": "normalized_title",
+    "n_ids": 2
+   }
+  ],
+  "normalize_warned_passed": [
+   {
+    "reasons": [
+     "missing_url"
+    ],
+    "article_id8": "03bb1e83"
+   },
+   {
+    "reasons": [
+     "missing_url"
+    ],
+    "article_id8": "b8b93f57"
+   },
+   {
+    "reasons": [
+     "missing_url"
+    ],
+    "article_id8": "a9f0fac3"
+   }
+  ],
+  "no_assertion": [
+   {
+    "title30": "20조원 국부펀드 뜬다...전략산업에 ‘장기 실탄’장전",
+    "source_code": "bigkinds"
+   },
+   {
+    "title30": "[1% 초고수의 선택] '두산' 사고 'SK텔레콤' 팔",
+    "source_code": "bigkinds"
+   },
+   {
+    "title30": "금감원, 은행 ETF 신탁 검사…'수수료 설명의무 위반",
+    "source_code": "bigkinds"
+   }
+  ],
+  "assertion_not_used": [
+   {
+    "title30": "현대차·HD현대중공업 여름휴가…8만여 명 대상"
+   },
+   {
+    "title30": "최윤범 고려아연 회장, 한·칠레 경제협력 강조…\"핵심광"
+   },
+   {
+    "title30": "한온시스템, 2분기 영업익 1000억원…체질 개선으로 "
+   }
+  ]
+ },
+ "analysis": {
+  "_설명": "슈퍼 어드민의 '분석 결과 조회' 화면이 다룰 대상. 현재 스냅샷에는 메타데이터만 있고 본문(headline/summary)은 추출되지 않았다.",
+  "consistency": {
+   "succeeded_runs": 477,
+   "succeeded_without_result": 0,
+   "result_without_succeeded_run": 0,
+   "published_results": 112
+  },
+  "table_counts": {
+   "document": 297892,
+   "document_assertion": 52675,
+   "etf_contribution_member": 6992,
+   "etf_contribution_observation": 262,
+   "event_evidence": 31396,
+   "event_thread": 1289,
+   "explanation_result": 477,
+   "explanation_route": 262,
+   "explanation_run": 477,
+   "explanation_run_event_evidence": 25816,
+   "minute_price_trigger": 65,
+   "price_movement_trigger": 411,
+   "release_bundle": 2,
+   "source_event": 31396
+  },
+  "publication_totals_0803": {
+   "succeeded_runs": 477,
+   "published_results": 112
+  },
+  "publication_by_status_0800": [
+   {
+    "publication_status": "DRAFT",
+    "n": 363,
+    "min_td": "2026-07-09",
+    "max_td": "2026-07-31",
+    "first_gen": "2026-07-16T09:18:25.543959+00:00",
+    "last_gen": "2026-08-02T03:36:44.737932+00:00"
+   },
+   {
+    "publication_status": "PUBLISHED",
+    "n": 96,
+    "min_td": "2026-07-15",
+    "max_td": "2026-07-31",
+    "first_gen": "2026-07-24T07:13:00.322697+00:00",
+    "last_gen": "2026-07-31T06:55:56.315919+00:00"
+   },
+   {
+    "publication_status": "WITHDRAWN",
+    "n": 2,
+    "min_td": "2026-07-15",
+    "max_td": "2026-07-15",
+    "first_gen": "2026-07-24T07:13:00.322697+00:00",
+    "last_gen": "2026-07-24T07:13:00.322697+00:00"
+   }
+  ],
+  "publication_daily_30d_0800": [
+   {
+    "trade_date": "2026-07-09",
+    "publication_status": "DRAFT",
+    "n": 1,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-10",
+    "publication_status": "DRAFT",
+    "n": 1,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-13",
+    "publication_status": "DRAFT",
+    "n": 1,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-15",
+    "publication_status": "DRAFT",
+    "n": 5,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-15",
+    "publication_status": "PUBLISHED",
+    "n": 1,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-15",
+    "publication_status": "WITHDRAWN",
+    "n": 2,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-16",
+    "publication_status": "DRAFT",
+    "n": 7,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-16",
+    "publication_status": "PUBLISHED",
+    "n": 1,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-20",
+    "publication_status": "DRAFT",
+    "n": 35,
+    "etfs": 31
+   },
+   {
+    "trade_date": "2026-07-21",
+    "publication_status": "DRAFT",
+    "n": 17,
+    "etfs": 17
+   },
+   {
+    "trade_date": "2026-07-22",
+    "publication_status": "DRAFT",
+    "n": 3,
+    "etfs": 3
+   },
+   {
+    "trade_date": "2026-07-23",
+    "publication_status": "DRAFT",
+    "n": 46,
+    "etfs": 23
+   },
+   {
+    "trade_date": "2026-07-24",
+    "publication_status": "DRAFT",
+    "n": 124,
+    "etfs": 31
+   },
+   {
+    "trade_date": "2026-07-27",
+    "publication_status": "DRAFT",
+    "n": 8,
+    "etfs": 4
+   },
+   {
+    "trade_date": "2026-07-28",
+    "publication_status": "DRAFT",
+    "n": 62,
+    "etfs": 31
+   },
+   {
+    "trade_date": "2026-07-29",
+    "publication_status": "DRAFT",
+    "n": 41,
+    "etfs": 30
+   },
+   {
+    "trade_date": "2026-07-29",
+    "publication_status": "PUBLISHED",
+    "n": 32,
+    "etfs": 32
+   },
+   {
+    "trade_date": "2026-07-30",
+    "publication_status": "DRAFT",
+    "n": 10,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-30",
+    "publication_status": "PUBLISHED",
+    "n": 30,
+    "etfs": 30
+   },
+   {
+    "trade_date": "2026-07-31",
+    "publication_status": "DRAFT",
+    "n": 2,
+    "etfs": 1
+   },
+   {
+    "trade_date": "2026-07-31",
+    "publication_status": "PUBLISHED",
+    "n": 32,
+    "etfs": 32
+   }
+  ],
+  "evidence_coverage": {
+   "note": "결과 477건 중 265건은 event evidence 0 — PRICE_ONLY 설명일 수 있어 실패로 단정 불가",
+   "explanation_run_event_evidence_rows": 25816
+  },
+  "supersession": {
+   "group_size_distribution": [
+    {
+     "rows": 1,
+     "groups": 113
+    },
+    {
+     "rows": 2,
+     "groups": 87
+    },
+    {
+     "rows": 3,
+     "groups": 5
+    },
+    {
+     "rows": 4,
+     "groups": 31
+    },
+    {
+     "rows": 5,
+     "groups": 1
+    },
+    {
+     "rows": 8,
+     "groups": 1
+    },
+    {
+     "rows": 11,
+     "groups": 2
+    }
+   ],
+   "largest_groups": [
+    {
+     "etf": "etf_01a937dd",
+     "trade_date": "2026-07-30",
+     "rows": 11,
+     "distinct_as_of": 11,
+     "statuses": [
+      "PUBLISHED",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_01a937dd",
+     "trade_date": "2026-07-29",
+     "rows": 11,
+     "distinct_as_of": 11,
+     "statuses": [
+      "PUBLISHED",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_01a937dd",
+     "trade_date": "2026-07-16",
+     "rows": 8,
+     "distinct_as_of": 8,
+     "statuses": [
+      "PUBLISHED",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_01a937dd",
+     "trade_date": "2026-07-15",
+     "rows": 5,
+     "distinct_as_of": 5,
+     "statuses": [
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_c199c624",
+     "trade_date": "2026-07-24",
+     "rows": 4,
+     "distinct_as_of": 4,
+     "statuses": [
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_65fb9cbc",
+     "trade_date": "2026-07-24",
+     "rows": 4,
+     "distinct_as_of": 4,
+     "statuses": [
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_6187ad95",
+     "trade_date": "2026-07-24",
+     "rows": 4,
+     "distinct_as_of": 4,
+     "statuses": [
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    },
+    {
+     "etf": "etf_e84db950",
+     "trade_date": "2026-07-24",
+     "rows": 4,
+     "distinct_as_of": 4,
+     "statuses": [
+      "DRAFT",
+      "DRAFT",
+      "DRAFT",
+      "DRAFT"
+     ]
+    }
+   ],
+   "case_0731": {
+    "etf": "etf_01a937dd",
+    "rows": [
+     {
+      "explanation_result": "res_b98a9c73",
+      "explanation_as_of": "2026-07-31T06:53:12+00:00",
+      "publication_status": "PUBLISHED",
+      "generated_at": "2026-07-31T06:52:21.972065+00:00",
+      "delivered": true
+     },
+     {
+      "explanation_result": "res_5e63a69a",
+      "explanation_as_of": "2026-08-01T00:51:18+00:00",
+      "publication_status": "DRAFT",
+      "generated_at": "2026-08-01T00:50:59.901664+00:00",
+      "delivered": false
+     },
+     {
+      "explanation_result": "res_5eac5058",
+      "explanation_as_of": "2026-08-02T03:37:07+00:00",
+      "publication_status": "DRAFT",
+      "generated_at": "2026-08-02T03:36:44.737932+00:00",
+      "delivered": false
+     }
+    ],
+    "finding": "재실행이 새 explanation_as_of 행을 만들고 **DRAFT 로 남는다**. latest 뷰는 최신 as_of(DRAFT)를 정본으로 고르지만, 테넌트에 실제 전달된 것은 옛 PUBLISHED 행(cursor 72)이다 — 화면이 말하는 정본과 테넌트가 보는 것이 갈린다."
+   },
+   "latest_view_0731": [
+    {
+     "publication_status": "DRAFT",
+     "n": 1,
+     "etfs": 1
+    },
+    {
+     "publication_status": "PUBLISHED",
+     "n": 31,
+     "etfs": 31
+    }
+   ],
+   "delivered_rows_0731": 32
+  },
+  "denominators_0731": {
+   "date": "2026-07-31",
+   "denominator": 33,
+   "trigger_etfs": 32,
+   "explained_etfs": 32,
+   "explained_rows": 34,
+   "latest": {
+    "DRAFT": 1,
+    "PUBLISHED": 31
+   }
+  },
+  "schema_fields": {
+   "explanation_result": [
+    "explanation_result_id",
+    "explanation_run_id",
+    "etf_instrument_id",
+    "trade_date",
+    "explanation_as_of",
+    "publication_status(DRAFT|PUBLISHED|WITHDRAWN)",
+    "headline",
+    "summary",
+    "stage_results(JSONB)",
+    "generated_at"
+   ],
+   "explanation_result_latest": "VIEW — (etf,trade_date)별 최신 as_of 1건. ⚠ publication_status로 거르지 않는다.",
+   "게시_유니크": "UNIQUE(etf_instrument_id, trade_date, explanation_as_of) WHERE publication_status='PUBLISHED'",
+   "근거체인": "explanation_run → explanation_run_event_evidence → event_evidence → source_event → document_assertion → document"
+  },
+  "상태_의미": {
+   "PUBLISHED": "그날 (ETF,거래일) 첫 결과. INSERT 시 1회 결정.",
+   "DRAFT": "⚠ 검수 대기가 아니다. 같은 날 이미 PUBLISHED가 있는 상태에서의 재실행분.",
+   "WITHDRAWN": "writer가 없다(코드 주석: '도달 불가 경로'). dev의 2건은 로컬 시드.",
+   "전이": "클라우드 전체에 publication_status를 UPDATE하는 코드가 0건. 노출 제어 조작은 현재 존재하지 않는다."
+  },
+  "미확보": [
+   "headline·summary 본문",
+   "stage_results 내용",
+   "ETF별 결과 목록(마스킹된 etf id 단위)",
+   "근거 문서 제목"
+  ]
+ },
+ "delivery": {
+  "coverage_0803": {
+   "published_results": 112,
+   "published_without_new_delivery": 0,
+   "new_deliveries": 113,
+   "new_delivery_now_nonpublished": 1,
+   "tenants_with_delivery": 1,
+   "min_cursor": 1,
+   "max_cursor": 115
+  },
+  "integrity_0803": {
+   "delivery_rows": 114,
+   "tenant_count": 1,
+   "new_missing_result": 0,
+   "earliest_created_at": "2026-07-24T16:13:00.322697+09:00",
+   "latest_created_at": "2026-08-03T16:04:40.786940+09:00"
+  },
+  "sync_cursor_0803": {
+   "cursor_rows": 0,
+   "min_last_cursor": null,
+   "max_last_cursor": null,
+   "earliest_last_synced_at": null,
+   "latest_last_synced_at": null
+  },
+  "detail_0800": {
+   "tenants": {
+    "count": 1,
+    "rows": [
+     {
+      "tenant_id": 1,
+      "tenant_label": "SEED_FIXTURE:local-demo",
+      "environment": "DEV",
+      "status": "ACTIVE",
+      "created_at": "2026-07-24T07:13:00.322697+00:00",
+      "has_initial_admin_email": false,
+      "has_memo": false
+     }
+    ],
+    "status_vocabulary": [
+     "ONBOARDING",
+     "ACTIVE",
+     "SYNC_DELAYED"
+    ],
+    "environment_vocabulary": [
+     "POC",
+     "PROD",
+     "DEV"
+    ],
+    "note": "이 1건은 로컬 compose 시드(R__seed_local_demo_delivery.sql)의 tenant_id=1 'local-demo' 와 값이 일치한다 — 운영 테넌트가 아니다."
+   },
+   "delivery": {
+    "grain": "(tenant_id, cursor) — 테넌트×ETF 도 테넌트×설명도 아닌 **테넌트별 단조증가 전달 큐(outbox)**. 한 explanation_result 가 여러 cursor 로 재등장 가능(NEW 후 INVALIDATION).",
+    "by_tenant_type": [
+     {
+      "tenant_id": 1,
+      "delivery_type": "INVALIDATION",
+      "n": 1,
+      "min_cursor": 3,
+      "max_cursor": 3,
+      "first_at": "2026-07-24T07:13:00.322697+00:00",
+      "last_at": "2026-07-24T07:13:00.322697+00:00"
+     },
+     {
+      "tenant_id": 1,
+      "delivery_type": "NEW",
+      "n": 97,
+      "min_cursor": 1,
+      "max_cursor": 99,
+      "first_at": "2026-07-24T07:13:00.322697+00:00",
+      "last_at": "2026-07-31T06:55:56.315919+00:00"
+     }
+    ],
+    "distinct_results": [
+     {
+      "tenant_id": 1,
+      "distinct_results": 97,
+      "rows": 98
+     }
+    ],
+    "joined_publication_status": [
+     {
+      "delivery_type": "INVALIDATION",
+      "publication_status": null,
+      "n": 1,
+      "etfs": 0,
+      "min_td": null,
+      "max_td": null
+     },
+     {
+      "delivery_type": "NEW",
+      "publication_status": "PUBLISHED",
+      "n": 96,
+      "etfs": 33,
+      "min_td": "2026-07-15",
+      "max_td": "2026-07-31"
+     },
+     {
+      "delivery_type": "NEW",
+      "publication_status": "WITHDRAWN",
+      "n": 1,
+      "etfs": 1,
+      "min_td": "2026-07-15",
+      "max_td": "2026-07-15"
+     }
+    ],
+    "delivered_but_not_published": [
+     {
+      "tenant_id": 1,
+      "cursor": 1,
+      "delivery_type": "NEW",
+      "trade_date": "2026-07-15",
+      "publication_status": "WITHDRAWN",
+      "etf": "etf_15ce4619",
+      "created_at": "2026-07-24T07:13:00.322697+00:00"
+     }
+    ],
+    "published_not_delivered_count": 0,
+    "invariant_observed": "PUBLISHED 96건 ↔ delivery NEW 96건이 1:1(published_not_delivered=0). 원인은 analysis-engine 이 같은 트랜잭션에서 publication_status='PUBLISHED' 일 때만 _fanout_new 를 부르기 때문 (eventstore.py:429-431). 즉 dev 에서 PUBLISHED 는 '전달 큐에 실렸다'와 같은 뜻이다.",
+    "fanout_target": "tenant 테이블 **전 행**(테넌트 필터 없음, eventstore.py:488-495) — 테넌트별 배정 개념이 아직 없다."
+   },
+   "sync": {
+    "cursor_rows": [],
+    "per_tenant": [
+     {
+      "tenant_id": 1,
+      "tenant_status": "ACTIVE",
+      "last_cursor": null,
+      "last_synced_at": null,
+      "never_pulled": true,
+      "lag_days": null,
+      "max_delivery_cursor": 99,
+      "pending_items": 98
+     }
+    ],
+    "note": "⚠️ tenant_sync_cursor 0행은 '한 번도 pull 안 했다'가 **아니다** — 이 테이블에 쓰는 클라우드 코드가 0건이다(writer 부재, grep 확인). 권위 커서는 온프렘 `sync_state`(intake SyncStateRepository)에 있다. 따라서 클라우드만으로는 sync lag 를 계산할 수 없고, never_pulled 컬럼은 '기록이 없다'는 뜻일 뿐이다. tenant.status=ACTIVE 도 실제 동기화를 반영하지 않는다(변경 API 없음).",
+    "lag_computable_from_cloud": false
+   },
+   "withdrawn": {
+    "rows": [
+     {
+      "explanation_result": "SEED_FIXTURE:001",
+      "explanation_run": "SEED_FIXTURE:001",
+      "etf": "etf_15ce4619",
+      "trade_date": "2026-07-15",
+      "explanation_as_of": "2026-07-15T07:00:00+00:00",
+      "generated_at": "2026-07-24T07:13:00.322697+00:00",
+      "transition_traceable": false
+     },
+     {
+      "explanation_result": "SEED_FIXTURE:002",
+      "explanation_run": "SEED_FIXTURE:002",
+      "etf": "etf_15ce4619",
+      "trade_date": "2026-07-15",
+      "explanation_as_of": "2026-07-15T08:00:00+00:00",
+      "generated_at": "2026-07-24T07:13:00.322697+00:00",
+      "transition_traceable": false
+     }
+    ],
+    "siblings_same_etf_date": [
+     {
+      "explanation_result": "SEED_FIXTURE:001",
+      "explanation_as_of": "2026-07-15T07:00:00+00:00",
+      "publication_status": "WITHDRAWN"
+     },
+     {
+      "explanation_result": "SEED_FIXTURE:002",
+      "explanation_as_of": "2026-07-15T08:00:00+00:00",
+      "publication_status": "WITHDRAWN"
+     },
+     {
+      "explanation_result": "SEED_FIXTURE:003",
+      "explanation_as_of": "2026-07-15T09:00:00+00:00",
+      "publication_status": "PUBLISHED"
+     }
+    ],
+    "verdict": "WITHDRAWN 2건은 운영 사건이 아니라 **로컬 데모 시드 픽스처**다 — id 가 expr_LOCAL0000…0001/0002 이고 같은 파일이 만든 INVALIDATION 전달행의 reason 이 '오탐지 이벤트'다. 전이 이력은 추적 불가(§B4)."
+   },
+   "audit": {
+    "admin_activity_log_rows": 0,
+    "recent": null,
+    "allowed_actions": [
+     "ANALYSIS_RESULT_CORRECTED",
+     "ANALYSIS_EXCLUDED",
+     "ANALYSIS_RESTORED"
+    ],
+    "target_type_constraint": "CHECK (target_type = 'ANALYSIS_RUN')",
+    "note": "테이블·CHECK 는 존재하나 **행이 0**이다. 노출 상태(publication_status) 변경은 애초에 이 테이블의 action 어휘에 없다."
+   }
+  },
+  "핵심": [
+   "delivery grain = (tenant_id, cursor) 단조증가 outbox. 테넌트×ETF 배정이 아니다.",
+   "fan-out이 tenant 전 행에 무차별 발번 — 테넌트별 배정 개념 없음.",
+   "TenantResolver가 return 1L 하드코딩 — mTLS 미구현.",
+   "tenant_sync_cursor writer 0건 → sync lag를 클라우드에서 계산 불가. 0행은 '한 번도 pull 안 함'이 아니라 '기록하지 않음'.",
+   "번들의 sourceEvents·evidences는 항상 빈 배열. headline은 와이어 DTO에 없어 온프렘이 null 저장."
+  ]
+ },
+ "ledger_sig": {
+  "due_tasks": 349,
+  "records_out_unknown": 61,
+  "completeness_present": 9,
+  "freshness_contract_present": 2,
+  "freshness_unknown": 2,
+  "freshness_fresh": 0,
+  "freshness_stale": 0
+ },
+ "issues": [
+  {
+   "issue_type": "LEDGER_GAP",
+   "scope": "task",
+   "issue_count": 1,
+   "occurrence_count": 1,
+   "earliest_first_seen": "2026-07-31T15:10:43.004247+09:00",
+   "latest_seen": "2026-07-31T15:10:43.004247+09:00"
+  },
+  {
+   "issue_type": "PLANNER_MISSING",
+   "scope": "slot",
+   "issue_count": 4,
+   "occurrence_count": 265,
+   "earliest_first_seen": "2026-07-24T17:15:39.758128+09:00",
+   "latest_seen": "2026-07-29T15:25:37.276119+09:00"
+  }
+ ],
+ "gaps": {
+  "관측_경계_밖": [
+   {
+    "name": "온프렘 수신",
+    "reason": "Cloud acknowledgement와 접근 가능한 runtime data 없음"
+   },
+   {
+    "name": "심사·게시",
+    "reason": "screening/review/publication 상태는 onprem DB 경계"
+   },
+   {
+    "name": "broker/MTS 조회",
+    "reason": "최종 소비자 노출 로그를 Cloud가 수집하지 않음"
+   },
+   {
+    "name": "BigKinds 전체 분모",
+    "reason": "MAX_PAGES cap은 보이지만 가능한 전체 기사 수는 계측하지 않음"
+   },
+   {
+    "name": "KRX actual-as-of",
+    "reason": "expected date는 있으나 source snapshot date 검증 증거 없음"
+   },
+   {
+    "name": "AnalyzeOne per-ETF 원장",
+    "reason": "개별 ops task 없음; SFN·stdout·DB 결과로 간접 관측"
+   }
+  ],
+  "미운영_구현중": [
+   {
+    "name": "DART financial_statements",
+    "state": "raw-only",
+    "why": "오늘 1,430행 수집, downstream consumer 없음"
+   },
+   {
+    "name": "FMP",
+    "state": "disabled",
+    "why": "설정 존재, active workflow 비활성"
+   },
+   {
+    "name": "Yahoo / iNAV",
+    "state": "local/manual only",
+    "why": "dev cloud active writer 없음"
+   },
+   {
+    "name": "Naver / Hankyung",
+    "state": "config-only",
+    "why": "active task·신규 provenance 없음"
+   },
+   {
+    "name": "minute news",
+    "state": "infra only",
+    "why": "source item/job 0, worker service 없음"
+   },
+   {
+    "name": "dormant DB tables",
+    "state": "0 rows",
+    "why": "market_series·event price·decomposition 계열"
+   }
+  ],
+  "계측_백로그": [
+   "온프렘 발행 상태 관측 채널(자동/검수/차단) — 없으면 이 축은 영구 공백",
+   "catalog_version이 전 런 'unknown' — 배포 마커 불가",
+   "뉴스 퍼널 일별 집계 잡(EOD 후 S3 로그 조합 → RDS 1행/일)",
+   "BigKinds 절단 sentinel(fetched == cap 이면 경보)",
+   "explanation_result.stage_results에 입력 커버리지 기록 → 실패의 영향 ETF 역추적",
+   "재시도 정책 분모(현재 SFN Retry 0개, 시도 수만 존재)",
+   "assertion 부재 사유 분리(NO_EVENT vs 추출실패 vs 미실행)",
+   "freshness 계약 확장(KIS 3종·DART) + expected_as_of_rule enum 추가",
+   "task_key별 runbook(DatasetContract.runbook_uri 자리는 있고 전부 None)",
+   "적재 dedup 접힘 카운터(load_documents 1,448행·load_instruments 540행이 무카운터)",
+   "장중 트리거→설명 원장(발화 시점에 기대 행 생성 → 생성·게시가 귀결)",
+   "수집 로그 분모 3필드(universe_total·universe_scanned·window_days) + distinct_trade_dates",
+   "completeness 배선 확장 — ⚠ 엔티티 축만. |universe|×거래일 곱은 휴장일마다 거짓 INCOMPLETE",
+   "노출 상태 전이 API + 감사 어휘 확장(현재 admin_activity_log는 ANALYSIS_RUN 3종 고정·0행)"
+  ]
+ },
+ "h30": {
+  "batch": [
+   {
+    "trade_date": "2026-07-09",
+    "triggers": 18,
+    "observations": 1,
+    "routes": 1,
+    "explanation_runs": 1,
+    "explanation_results": 1,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-10",
+    "triggers": 31,
+    "observations": 1,
+    "routes": 1,
+    "explanation_runs": 1,
+    "explanation_results": 1,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-13",
+    "triggers": 28,
+    "observations": 1,
+    "routes": 1,
+    "explanation_runs": 1,
+    "explanation_results": 1,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-14",
+    "triggers": 9,
+    "observations": 0,
+    "routes": 0,
+    "explanation_runs": 0,
+    "explanation_results": 0,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-15",
+    "triggers": 33,
+    "observations": 2,
+    "routes": 2,
+    "explanation_runs": 8,
+    "explanation_results": 8,
+    "published_results": 1,
+    "new_deliveries": 2
+   },
+   {
+    "trade_date": "2026-07-16",
+    "triggers": 32,
+    "observations": 2,
+    "routes": 2,
+    "explanation_runs": 8,
+    "explanation_results": 8,
+    "published_results": 1,
+    "new_deliveries": 1
+   },
+   {
+    "trade_date": "2026-07-20",
+    "triggers": 33,
+    "observations": 31,
+    "routes": 31,
+    "explanation_runs": 35,
+    "explanation_results": 35,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-21",
+    "triggers": 17,
+    "observations": 17,
+    "routes": 17,
+    "explanation_runs": 17,
+    "explanation_results": 17,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-22",
+    "triggers": 3,
+    "observations": 3,
+    "routes": 3,
+    "explanation_runs": 3,
+    "explanation_results": 3,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-23",
+    "triggers": 24,
+    "observations": 23,
+    "routes": 23,
+    "explanation_runs": 46,
+    "explanation_results": 46,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-24",
+    "triggers": 32,
+    "observations": 31,
+    "routes": 31,
+    "explanation_runs": 124,
+    "explanation_results": 124,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-27",
+    "triggers": 4,
+    "observations": 4,
+    "routes": 4,
+    "explanation_runs": 8,
+    "explanation_results": 8,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-28",
+    "triggers": 32,
+    "observations": 31,
+    "routes": 31,
+    "explanation_runs": 62,
+    "explanation_results": 62,
+    "published_results": 0,
+    "new_deliveries": 0
+   },
+   {
+    "trade_date": "2026-07-29",
+    "triggers": 32,
+    "observations": 32,
+    "routes": 32,
+    "explanation_runs": 73,
+    "explanation_results": 73,
+    "published_results": 32,
+    "new_deliveries": 32
+   },
+   {
+    "trade_date": "2026-07-30",
+    "triggers": 31,
+    "observations": 31,
+    "routes": 31,
+    "explanation_runs": 40,
+    "explanation_results": 40,
+    "published_results": 30,
+    "new_deliveries": 30
+   },
+   {
+    "trade_date": "2026-07-31",
+    "triggers": 32,
+    "observations": 32,
+    "routes": 32,
+    "explanation_runs": 34,
+    "explanation_results": 34,
+    "published_results": 32,
+    "new_deliveries": 32
+   },
+   {
+    "trade_date": "2026-08-03",
+    "triggers": 20,
+    "observations": 20,
+    "routes": 20,
+    "explanation_runs": 16,
+    "explanation_results": 16,
+    "published_results": 16,
+    "new_deliveries": 16
+   }
+  ],
+  "news": [
+   {
+    "data_date": "2026-07-08",
+    "documents": 6,
+    "assertions": 0,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-12",
+    "documents": 1,
+    "assertions": 1,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-13",
+    "documents": 59,
+    "assertions": 20,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-14",
+    "documents": 398,
+    "assertions": 77,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-15",
+    "documents": 10,
+    "assertions": 6,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-16",
+    "documents": 4917,
+    "assertions": 829,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-17",
+    "documents": 318,
+    "assertions": 10,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-18",
+    "documents": 1745,
+    "assertions": 80,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-20",
+    "documents": 4070,
+    "assertions": 269,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-21",
+    "documents": 4096,
+    "assertions": 317,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-22",
+    "documents": 4172,
+    "assertions": 378,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-23",
+    "documents": 5008,
+    "assertions": 592,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-24",
+    "documents": 6122,
+    "assertions": 727,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-25",
+    "documents": 231056,
+    "assertions": 39839,
+    "source_events": 0
+   },
+   {
+    "data_date": "2026-07-26",
+    "documents": 2250,
+    "assertions": 398,
+    "source_events": 194
+   },
+   {
+    "data_date": "2026-07-27",
+    "documents": 5143,
+    "assertions": 1622,
+    "source_events": 1189
+   },
+   {
+    "data_date": "2026-07-28",
+    "documents": 6159,
+    "assertions": 1382,
+    "source_events": 1032
+   },
+   {
+    "data_date": "2026-07-29",
+    "documents": 6619,
+    "assertions": 2019,
+    "source_events": 1387
+   },
+   {
+    "data_date": "2026-07-30",
+    "documents": 6396,
+    "assertions": 2064,
+    "source_events": 1598
+   },
+   {
+    "data_date": "2026-07-31",
+    "documents": 5327,
+    "assertions": 1334,
+    "source_events": 1024
+   },
+   {
+    "data_date": "2026-08-02",
+    "documents": 0,
+    "assertions": 0,
+    "source_events": 72
+   },
+   {
+    "data_date": "2026-08-03",
+    "documents": 3961,
+    "assertions": 711,
+    "source_events": 539
+   }
+  ]
+ },
+ "freshness_rules": [
+  {
+   "dataset": "price_daily",
+   "expected_as_of": "직전 KR 거래일",
+   "lag_허용": "0",
+   "비고": "15:40 런은 당일 종가"
+  },
+  {
+   "dataset": "etf_nav",
+   "expected_as_of": "직전 KR 거래일",
+   "lag_허용": "0",
+   "비고": ""
+  },
+  {
+   "dataset": "investor_flow",
+   "expected_as_of": "직전 KR 거래일",
+   "lag_허용": "0~1",
+   "비고": "장 마감 직후 잠정치 가능성 확인 필요"
+  },
+  {
+   "dataset": "etf_holdings",
+   "expected_as_of": "직전 KR 거래일",
+   "lag_허용": "0",
+   "비고": "actual 검증 불가 — expected만 계약, status는 UNKNOWN 유지"
+  },
+  {
+   "dataset": "disclosures",
+   "expected_as_of": "당일 (rcept_dt = 슬롯 날짜)",
+   "lag_허용": "0",
+   "비고": "주말 접수분은 다음 거래일에 몰림"
+  },
+  {
+   "dataset": "etf_profile",
+   "expected_as_of": "스냅샷 — as-of 계약 부적합",
+   "lag_허용": "—",
+   "비고": "변경 감지(diff)가 맞는 축"
+  },
+  {
+   "dataset": "stock_news",
+   "expected_as_of": "슬롯 창 (window_from→window_to)",
+   "lag_허용": "—",
+   "비고": "as-of가 아니라 창 커버리지 계약"
+  }
+ ]
+}

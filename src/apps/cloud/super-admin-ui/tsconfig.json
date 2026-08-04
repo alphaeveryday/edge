@@ -7,6 +7,8 @@
     "skipLibCheck": true,
 
     "moduleResolution": "bundler",
+    /* rules/ 모듈은 Node 가 직접 실행(cli·test)하므로 모듈 내부 import 에 .ts 확장자를 쓴다 */
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",

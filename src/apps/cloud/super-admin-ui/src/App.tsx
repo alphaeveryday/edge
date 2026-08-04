@@ -10,6 +10,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AdminLayout } from './layouts/AdminLayout';
 import { RequireSession } from './layouts/RequireSession';
 import { LoginPage } from './pages/LoginPage';
+import { ConsolePage } from './pages/ConsolePage';
 import { OverviewPage } from './pages/OverviewPage';
 import { TenantsPage } from './pages/TenantsPage';
 import { TenantDetailPage } from './pages/TenantDetailPage';
@@ -27,7 +28,9 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireSession />}>
         <Route element={<AdminLayout />}>
-          <Route path="/" element={<OverviewPage />} />
+          {/* 홈 = 규칙 엔진 콘솔(ALPHA-738). 이전 홈은 디자인 검수 비교용으로 /overview 에 잔존 */}
+          <Route path="/" element={<ConsolePage />} />
+          <Route path="/overview" element={<OverviewPage />} />
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/tenants/:id" element={<TenantDetailPage />} />
           <Route path="/sources" element={<SourcesPage />} />
