@@ -74,6 +74,7 @@ export function ExplanationsPage() {
               <th>종목</th>
               <th>제공 상태</th>
               <th>위험 등급</th>
+              <th className="col-muted">기준시각</th>
               <th className="col-muted">반입</th>
               <th></th>
             </tr>
@@ -82,8 +83,9 @@ export function ExplanationsPage() {
             {filtered.map((it) => (
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                 <StockCell name={it.name} code={it.code} />
-                <StatusCell it={it} />
+                <StatusCell it={it} showServing />
                 <RiskCell it={it} />
+                <td className="col-muted num">{it.explanationAsOf}</td>
                 <td className="col-muted num">{it.receivedRelative}</td>
                 <td className="text-right" style={{ color: 'var(--fg-4)' }}>
                   <Icon name="chevronRight" size={14} />

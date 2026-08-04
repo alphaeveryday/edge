@@ -45,13 +45,21 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 	private void seedItem(String id, String ticker, String name, String status, String confidence,
 			String summary, String evidencesJson, OffsetDateTime receivedAt) {
+		seedItem(id, ticker, name, status, confidence, summary, evidencesJson, receivedAt,
+				OffsetDateTime.now());
+	}
+
+	/** as_of 지정 오버로드 — 다스냅샷 공존(head 판정) 테스트가 스냅샷 축을 고정한다(ALPHA-744). */
+	private void seedItem(String id, String ticker, String name, String status, String confidence,
+			String summary, String evidencesJson, OffsetDateTime receivedAt, OffsetDateTime asOf) {
 		jdbc.update("""
 				INSERT INTO analysis_item (explanation_result_id, etf_instrument_id, etf_ticker,
 				    etf_name, trade_date, explanation_as_of, explanation_type, summary,
 				    confidence_level, status, source_cursor, evidences, received_at)
-				VALUES (?, 'i-607', ?, ?, '2026-07-15', now(), 'EVENT_SUPPORTED', ?, ?, ?, ?,
+				VALUES (?, 'i-607', ?, ?, '2026-07-15', ?, 'EVENT_SUPPORTED', ?, ?, ?, ?,
 				    CAST(? AS jsonb), ?)
-				""", id, ticker, name, summary, confidence, status, cursor++, evidencesJson, receivedAt);
+				""", id, ticker, name, asOf, summary, confidence, status, cursor++, evidencesJson,
+				receivedAt);
 	}
 
 	private void seedCheck(String itemId, long ruleId, String result) {
@@ -224,6 +232,44 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 		List<String> ids = explanations.list().stream().map(Explanation::id).toList();
 		assertThat(ids).doesNotContain("it607-received", "it607-invalidated");
+	}
+
+	@Test
+	void 노출_head_는_같은_티커_다스냅샷_중_유효_최신이다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-head-old", "607HDA", "포스코", "AUTO_PUBLISHED", "LOW", "구 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-head-new", "607HDA", "포스코", "AUTO_PUBLISHED", "LOW", "신 스냅샷", "[]",
+				OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-head-old', '607HDA', '2026-07-15', ?)", older);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-head-new', '607HDA', '2026-07-15', ?)", newer);
+
+		// WHY: 공존(ALPHA-743) 후 배지는 서빙 진실(유효 최신 승리)과 일치해야 한다 — head 아닌
+		// 항목의 중단을 "노출을 끊었다"로 오인하는 게 이 티켓(ALPHA-744)이 막는 사고다.
+		assertThat(find("it607-head-new").serving()).isTrue();
+		assertThat(find("it607-head-old").serving()).isFalse();
+	}
+
+	@Test
+	void head_무효화_시_직전_스냅샷이_노출_head_다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-fb-old", "607FBK", "한화", "AUTO_PUBLISHED", "LOW", "직전 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-fb-new", "607FBK", "한화", "INVALIDATED", "LOW", "무효화 스냅샷", "[]",
+				OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-fb-old', '607FBK', '2026-07-15', ?)", older);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of, status) VALUES ('it607-fb-new', '607FBK', '2026-07-15', ?, "
+				+ "'INVALIDATED')", newer);
+
+		// WHY: head 는 as_of 파생이 아니라 유효(PUBLISHED) 최신이어야 한다 — as_of 만 보면
+		// 무효화 fallback(직전 스냅샷 재노출, ADR-0045 결정 3)에서 죽은 판을 head 로 가리킨다.
+		assertThat(find("it607-fb-old").serving()).isTrue();
 	}
 
 	@Test

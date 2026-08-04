@@ -1,6 +1,7 @@
 package com.edge.tenantconsole.repository;
 
 import com.edge.tenantconsole.entity.PublicationEntity;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 
 import java.util.Collection;
@@ -28,4 +29,20 @@ public interface PublishedSummaryRepository extends Repository<PublicationEntity
 	 */
 	Optional<PublicationEntity> findFirstByAnalysisItemIdAndStatusOrderByPublicationIdDesc(
 			String analysisItemId, String status);
+
+	/**
+	 * 티커별 현재 노출 head 의 analysis_item_id(ALPHA-744) — publication-api 서빙 술어
+	 * (PublicationRepository SERVE_JPQL + findLatestPublished 정렬)의 전사이며 그쪽이 SSOT 다:
+	 * 게시본 PUBLISHED × 항목 AUTO_PUBLISHED|APPROVED 중 trade_date → explanation_as_of →
+	 * published_at 최신 1건. as_of 만으로 파생하면 무효화 fallback(직전 스냅샷 재노출)을
+	 * 놓친다 — 서빙 정렬·상태 필터가 바뀌면 여기도 함께 고친다.
+	 */
+	@Query(value = """
+			SELECT DISTINCT ON (p.etf_ticker) p.analysis_item_id
+			  FROM publication p
+			  JOIN analysis_item a ON a.explanation_result_id = p.analysis_item_id
+			 WHERE p.status = 'PUBLISHED' AND a.status IN ('AUTO_PUBLISHED', 'APPROVED')
+			 ORDER BY p.etf_ticker, p.trade_date DESC, p.explanation_as_of DESC, p.published_at DESC
+			""", nativeQuery = true)
+	List<String> findServingHeadItemIds();
 }
