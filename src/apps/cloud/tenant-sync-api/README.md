@@ -12,7 +12,7 @@
 ## 구조 (layered)
 
 `controller`(HTTP 검증·공통 응답 포맷) → `service`(SyncBundleService 오케스트레이션) → `repository`(TenantDeliveryRepository — `tenant_delivery` ⋈ 경계면 테이블 JPQL 프로젝션 + BundleEntryStore — 와이어 매핑·delivery_type 분기) / `entity`(`@Immutable` 부분 매핑 — `ddl-auto=validate`, 스키마는 Flyway SSOT, ADR-0038) / `dto`(계약 와이어 포맷 레코드 — DB 엔티티 아님) / `tenant`(보안 횡단 — TenantResolver). **번들 조립은 이 모듈이 경계면 테이블을 직접 조회해 수행한다(ADR-0026) — 외부에서 만들어진 번들을 받지 않는다.** 이 모듈의 DB 접근은 **읽기 전용**이다(outbox writer 는 둘 — NEW 는 analysis-engine write-time fan-out(ALPHA-493), INVALIDATION 은 super-admin-api 무효화 액션(ALPHA-440), 같은 advisory lock 으로 cursor 채번 직렬화) — 리포지토리는 `Repository` 마커 상속으로 쓰기 표면을 봉인한다.
-`source_events`·`evidences` 는 경계면 컬럼 선별은 확정됐으나(ALPHA-395 — event-bundle-schema.md "경계면 컬럼") 조립 lineage 조인이 미구현(ALPHA-363)이라 빈 배열로 실린다 — 조인 도입 시 컬럼을 채운다.
+`source_events`·`evidences` 는 배치 조회(`TenantDeliveryRepository.findSourceEventRows`·`findEvidenceRows`)로 조립돼 실린다(ALPHA-718 — 경계면 컬럼 선별은 ALPHA-395). evidences 는 lineage 두 갈래(이벤트 근거·공시 정규화 사실) UNION, source_events 는 근거의 `source_event_id` 로 도달하며 소비자는 screening-worker 출처 수 정책 게이트다.
 
 ## 스텁 → 실구현 교체 지점
 
@@ -32,4 +32,4 @@ curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 200 (신규 없음 — 
 
 로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드다 — NEW 자동 발번은 analysis-engine 소관이지만(ALPHA-493) 엔진이 로컬 compose 에 없어 시드를 유지한다. INVALIDATION 은 super-admin-api 무효화 액션(ALPHA-440)으로 발번된다(CORRECTION 은 폐지 — ADR-0044).
 
-테스트 21건 — 공통 응답 포맷·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·신규 없음 result 생략·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리를 고정한다(ALPHA-572).
+테스트 24건 — 공통 응답 포맷·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·신규 없음 result 생략·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리·evidences/source_events 조립(두 갈래 DISTINCT·런 경계·NULL 필드)을 고정한다(ALPHA-572·718).

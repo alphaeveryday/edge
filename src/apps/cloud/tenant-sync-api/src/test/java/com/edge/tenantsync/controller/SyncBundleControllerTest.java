@@ -3,6 +3,8 @@ package com.edge.tenantsync.controller;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.tenantsync.repository.BundleEntryStore;
 import com.edge.tenantsync.repository.DeliveryRow;
+import com.edge.tenantsync.repository.RunEvidenceRow;
+import com.edge.tenantsync.repository.RunSourceEventRow;
 import com.edge.tenantsync.repository.TenantDeliveryRepository;
 import com.edge.tenantsync.service.SyncBundleService;
 import com.edge.tenantsync.tenant.TenantResolver;
@@ -50,6 +52,17 @@ class SyncBundleControllerTest {
 		@Override
 		public List<DeliveryRow> findAfter(long tenantId, long afterCursor, org.springframework.data.domain.Limit limit) {
 			return seed.stream().filter(r -> r.cursor() > afterCursor).limit(limit.max()).toList();
+		}
+
+		@Override
+		public List<RunEvidenceRow> findEvidenceRows(java.util.Collection<String> runIds) {
+			// 근거 없는 런 — 실 조인 경로는 BundleEntryStoreIntegrationTest 가 고정한다.
+			return List.of();
+		}
+
+		@Override
+		public List<RunSourceEventRow> findSourceEventRows(java.util.Collection<String> runIds) {
+			return List.of();
 		}
 	}
 

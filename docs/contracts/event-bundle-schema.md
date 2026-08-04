@@ -25,7 +25,8 @@
 | `explanation_run` | 어느 실행이 그 결과를 냈는지 + 사용한 릴리스 번들 버전 | `explanation_run_id` |
 | `source_event` | 설명이 근거로 삼은 소스 이벤트 | `source_event_id` |
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
-| `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
+| `explanation_run_event_evidence` | 번들 `evidences` 이벤트 근거 갈래의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 잇는 경로(공시 갈래는 아래 행). "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
+| `explanation_run_disclosure_fact` (+ `disclosure_fact`) | 번들 `evidences` 공시 갈래 lineage — 공시 정규화 사실이 어느 run 에 속하는지 + `disclosure_fact.document_id` 로 문서 도달. 조립 편입(ALPHA-718)으로 경계면이다 — "내부 구현·자유 변경" 아님, 양자 합의 대상 | `(explanation_run_id, fact_id, stage_code)` · `fact_id` |
 | `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
 | `event_thread` | 동일 실제 사건의 계보(후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
@@ -71,8 +72,8 @@
         "trade_date": "2026-07-15", "explanation_as_of": "...", "explanation_type": "EVENT_SUPPORTED",
         "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
-      "source_events": [],
-      "evidences": []
+      "source_events": [ { "source_event_id": "...", "source_class": "NEWS", "event_type_code": "EARNINGS", "event_date": "2026-07-14" } ],
+      "evidences": [ { "kind": "NEWS", "title": "실적 발표 기사", "source": "YONHAP", "published_at": "2026-07-14T00:00:00Z" } ]
     },
     {
       "cursor": 103,
@@ -91,13 +92,13 @@
 
 reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·근거 데이터·이벤트 타임라인 — [../console-ia/tenant-console.md](../console-ia/tenant-console.md))를 최소로 충족하는 컬럼만 싣는다(reader 자유·Rule 2).
 
-- **`source_events[]`** ← `source_event` 4컬럼: `source_event_id`(식별) · `source_class`(NEWS/DISCLOSURE 분기) · `event_type_code`(변동 요인·타임라인 라벨) · `event_date`(타임라인 축). 제외: `available_at`·`lifecycle_stage`·`event_status`(내부 시각·상수 성격, UI 미요구). 이 4컬럼은 확정이다. **주의**: 현재 온프렘 소비 경로는 `evidences` 뿐 — `source_events`는 이벤트 타임라인 UI 도입 시 소비 예정이며, 도입 시 형상 변경이 필요하면 확장-수축으로 처리한다(재협의 아님).
-- **`evidences[]`** = 설명의 근거가 된 **뉴스/공시 문서 목록**. **실제 JSON 소비자인 `publication-api` `ExplanationStore`가 파싱하는 flat 형상**에 정렬한다(사용자 결정 2026-07-24 — Codex 지적으로 재정의): `kind`(NEWS/DISCLOSURE ← `document.document_type`) · `title`(헤드라인 ← `document.title`) · `source`(출처 ← `document.source_code`) · `published_at`(← `document.published_at`). `event_evidence`의 내부 필드(`evidence_id`·`evidence_type`·`evidence_text`·`link_confidence`)는 소비자가 읽지 않아 싣지 않는다(Rule 2). **참고**: `tenant-console` 검수는 현재 mock(`{type,title,source,time}` — 필드명이 다르고 아직 DB `evidences` 미매핑)이라 실데이터 전환 시 이 계약 형상으로 정렬해야 한다(정렬은 tenant-console 실데이터 티켓 몫). 검수 심화용 필드가 필요해지면 확장-수축으로 추가.
-- **lineage**: `evidences`(문서)는 `explanation_run → explanation_run_event_evidence → event_evidence.assertion_id → document_assertion.document_id → document`(distinct document)로 도달한다. `source_events`는 그 evidence의 `source_event_id`로 도달한다. 조립 조인 구현은 **ALPHA-363**, 기계가독 JSON Schema·양단 계약 테스트는 **ALPHA-497**. **구현 전까지 두 배열은 빈 배열로 실린다**(현행 `rowMapper`).
-- **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)`.
+- **`source_events[]`** ← `source_event` 4컬럼: `source_event_id`(식별) · `source_class`(NEWS/DISCLOSURE 분기) · `event_type_code`(변동 요인·타임라인 라벨) · `event_date`(타임라인 축). 제외: `available_at`·`lifecycle_stage`·`event_status`(내부 시각·상수 성격, UI 미요구). 이 4컬럼은 확정이다. **온프렘 소비자**: screening-worker 출처 수 정책 게이트(`SINGLE_SOURCE`·`min_source_count` — 고유 `source_event_id` 수를 센다)가 현재 소비자이고, 이벤트 타임라인 UI 는 추가 소비 예정이다(도입 시 형상 변경이 필요하면 확장-수축으로 처리 — 재협의 아님).
+- **`evidences[]`** = 설명의 근거가 된 **뉴스/공시 문서 목록**. **실제 JSON 소비자인 `publication-api` `ExplanationStore`가 파싱하는 flat 형상**에 정렬한다(사용자 결정 2026-07-24 — Codex 지적으로 재정의): `kind`(NEWS/DISCLOSURE ← `document.document_type`) · `title`(헤드라인 ← `document.title`) · `source`(출처 ← `document.source_code`) · `published_at`(← `document.published_at`). `event_evidence`의 내부 필드(`evidence_id`·`evidence_type`·`evidence_text`·`link_confidence`)는 소비자가 읽지 않아 싣지 않는다(Rule 2). **참고**: `tenant-console` 검수도 실전환됐다(ALPHA-607) — `analysis_item.evidences`(이 계약 형상 그대로 저장된 JSONB)를 파싱한다. 검수 심화용 필드가 필요해지면 확장-수축으로 추가.
+- **lineage**: `evidences`(문서)는 두 갈래를 합쳐(distinct document) 도달한다 — ① `explanation_run → explanation_run_event_evidence → event_evidence.assertion_id → document_assertion.document_id → document`, ② `explanation_run → explanation_run_disclosure_fact → disclosure_fact.document_id → document`(공시 정규화 사실 — super-admin 콘솔 근거 표시와 같은 경로). `source_events`는 그 evidence의 `source_event_id`로 도달한다(distinct source_event). 조립 조인은 tenant-sync-api `TenantDeliveryRepository.findEvidenceRows`·`findSourceEventRows` 로 구현됐다(**ALPHA-718** — ALPHA-363 은 경계면 문서 편입으로 종결, 구현은 이 티켓). 기계가독 JSON Schema·양단 계약 테스트는 **ALPHA-497**. **두 배열 모두 조립돼 실린다 — lineage 없는 런은 빈 배열이다.**
+- **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)` · 공시 갈래 `explanation_run_disclosure_fact(explanation_run_id, fact_id)` · `disclosure_fact(fact_id, document_id)`.
 - **채움 보증 확인(진기, CODEOWNERS 리뷰)**: nullable 선별 컬럼은 `source_event.event_date`·`document.title`·`document.published_at`이다(`document.document_type`·`source_code`는 NOT NULL). `document.title`·`document.published_at`("관련 뉴스/공시" 제목·날짜)·`source_event.event_date`(타임라인 축)는 결정적 채움 보증 확인 대상. 계약·구현(497)은 nullable 필드를 nullable로 모델링한다.
 
-**확정 후 형상** (ALPHA-363 조립 조인 구현 시 채워짐 — **현행 번들은 두 배열 모두 `[]`**. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
+**형상** (두 배열 모두 조립 구현됨(ALPHA-718) — lineage 없는 런은 `[]`. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
 
 ```json
 "source_events": [ { "source_event_id": "...", "source_class": "DISCLOSURE", "event_type_code": "...", "event_date": "2026-07-14" } ],

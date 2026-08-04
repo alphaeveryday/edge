@@ -3,6 +3,8 @@ package com.edge.tenantsync.repository;
 import com.edge.tenantsync.CloudPostgresIntegrationTest;
 import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.DeliveryType;
+import com.edge.tenantsync.dto.EvidenceItem;
+import com.edge.tenantsync.dto.SourceEventItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +44,14 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 
 	@BeforeEach
 	void seedBase() {
+		// evidences lineage — 접점(junction)부터 지워야 explanation_run·event_evidence 삭제가 FK 에 안 막힌다.
+		jdbc.update("DELETE FROM explanation_run_event_evidence WHERE explanation_run_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM explanation_run_disclosure_fact WHERE explanation_run_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM event_evidence WHERE evidence_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM disclosure_fact WHERE fact_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM document_assertion WHERE assertion_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM source_event WHERE source_event_id LIKE 'it-%'");
+		jdbc.update("DELETE FROM document WHERE document_id LIKE 'it-%'");
 		jdbc.update("DELETE FROM tenant_delivery");
 		jdbc.update("DELETE FROM explanation_result");
 		jdbc.update("DELETE FROM explanation_run");
@@ -91,9 +101,85 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		assertThat(entry.explanationResult().primaryThreadId()).isEqualTo("it-thread-1");
 		assertThat(entry.explanationRun().explanationRunId()).isEqualTo("it-run-1");
 		assertThat(entry.explanationRun().releaseBundleVersion()).isEqualTo(BUNDLE_VERSION);
-		// 조립 lineage 조인 미구현(ALPHA-363) — 빈 배열 고정.
+		// lineage 미시드 — 근거 없는 런은 두 배열 다 비어야 한다(남의 근거·출처를 얻으면 안 된다).
 		assertThat(entry.sourceEvents()).isEmpty();
 		assertThat(entry.evidences()).isEmpty();
+	}
+
+	@Test
+	void NEW_전달은_lineage_두_갈래의_근거_문서를_문서_단위로_싣는다() {
+		// WHY: 콘솔 근거 표시는 이 조립(ALPHA-718)이 유일한 공급로다 — 이벤트 근거·공시 사실
+		// 두 갈래가 모두 실려야 하고, 같은 문서가 여러 단계(stage_code)로 붙어도 근거는 문서
+		// 단위 1건이어야 한다(DISTINCT). title·published_at 은 NULL 허용 계약이다.
+		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
+		seedRun("it-run-1", asOf);
+		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
+		seedDelivery(tenantId, 1, "NEW", "it-res-1", null, null);
+		seedDocument("it-doc-news", "NEWS", "YONHAP", "실적 발표 기사",
+				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"));
+		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null);
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
+		seedDisclosureLineage("it-run-1", "it-fact-1", "it-doc-disc", "PROMPT");
+		// 같은 공시 문서가 이벤트 근거 갈래로도 연결된 경우 — DISTINCT 는 갈래를 가로질러
+		// 문서 단위여야 한다(갈래별 dedup 으로 좁아지면 같은 근거가 두 번 실린다).
+		seedEventEvidenceLineage("it-run-1", "it-ev-2", "it-doc-disc", "PROMPT");
+
+		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
+
+		// 순서 계약: published_at ASC NULLS LAST — 시각 있는 뉴스가 앞, NULL 공시가 뒤.
+		// published_at 은 UTC Instant 문자열(+09:00 적재분도 같은 순간의 Z 표기).
+		assertThat(entries.getFirst().evidences()).containsExactly(
+				new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
+				new EvidenceItem("DISCLOSURE", null, "DART", null));
+	}
+
+	@Test
+	void NEW_전달은_근거의_소스_이벤트를_이벤트_단위로_싣는다() {
+		// WHY: 출처 수 정책 게이트(screening-worker SINGLE_SOURCE·min_source_count)는 고유
+		// source_event_id 수를 센다 — 빈 배열이면 전건 출처 0 판정이고, 같은 이벤트가 근거
+		// 2건(stage_code 팬아웃 포함)으로 붙었다고 2건이 되면 단일 출처가 다출처로 부풀어
+		// 자동 게시 임계가 우회된다(DISTINCT). event_date 는 NULL 허용 계약이다.
+		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
+		seedRun("it-run-1", asOf);
+		seedResult("it-res-1", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
+		seedDelivery(tenantId, 1, "NEW", "it-res-1", null, null);
+		seedDocument("it-doc-news", "NEWS", "YONHAP", "실적 발표 기사",
+				OffsetDateTime.parse("2026-07-14T09:00:00+09:00"));
+		seedDocument("it-doc-disc", "DISCLOSURE", "DART", null, null);
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "RANK");
+		seedEventEvidenceLineage("it-run-1", "it-ev-2", "it-doc-disc", "PROMPT");
+		jdbc.update("UPDATE source_event SET event_date = ? WHERE source_event_id = ?",
+				LocalDate.of(2026, 7, 14), "it-ev-1-se");
+
+		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
+
+		// 순서 계약: event_date ASC NULLS LAST + source_event_id 동률 해소.
+		assertThat(entries.getFirst().sourceEvents()).containsExactly(
+				new SourceEventItem("it-ev-1-se", "NEWS", "it-event", "2026-07-14"),
+				new SourceEventItem("it-ev-2-se", "NEWS", "it-event", null));
+	}
+
+	@Test
+	void 근거는_자기_런의_것만_싣는다() {
+		// WHY: 배치 조회(IN runIds)가 런 경계를 잃으면 남의 근거가 섞인다 — 근거 오귀속은
+		// 고객 노출 문면의 출처 조작과 같다.
+		Instant asOf = Instant.parse("2026-07-15T00:30:00Z");
+		for (int i = 1; i <= 2; i++) {
+			seedRun("it-run-" + i, asOf);
+			seedResult("it-res-" + i, "it-run-" + i, LocalDate.of(2026, 7, 15), asOf, null);
+			seedDelivery(tenantId, i, "NEW", "it-res-" + i, null, null);
+		}
+		seedDocument("it-doc-news", "NEWS", "YONHAP", "run1 근거",
+				OffsetDateTime.parse("2026-07-14T00:00:00Z"));
+		seedEventEvidenceLineage("it-run-1", "it-ev-1", "it-doc-news", "PROMPT");
+
+		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
+
+		assertThat(entries.get(0).evidences())
+				.containsExactly(new EvidenceItem("NEWS", "run1 근거", "YONHAP", "2026-07-14T00:00:00Z"));
+		assertThat(entries.get(1).evidences()).isEmpty();
 	}
 
 	@Test
@@ -255,5 +341,74 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 				    target_explanation_result_id, reason)
 				VALUES (?, ?, ?, ?, ?, ?)
 				""", tenant, cursor, deliveryType, resultId, targetResultId, reason);
+	}
+
+	// ── evidences lineage 시드 (ALPHA-718) ──
+
+	private void seedDocument(String documentId, String documentType, String sourceCode,
+			String title, OffsetDateTime publishedAt) {
+		jdbc.update("""
+				INSERT INTO document (document_id, document_type, source_code, source_document_id,
+				    title, published_at, available_at)
+				VALUES (?, ?, ?, ?, ?, ?, now())
+				""", documentId, documentType, sourceCode, documentId + "-src", title,
+				publishedAt == null ? null : java.sql.Timestamp.from(publishedAt.toInstant()));
+	}
+
+	/**
+	 * 이벤트 근거 갈래: document→assertion→event_evidence→run 을 한 번에 잇는다. 같은
+	 * evidence 를 다른 stage_code 로 재호출하면 접점 행만 추가된다(DISTINCT 검증용).
+	 */
+	private void seedEventEvidenceLineage(String runId, String evidenceId, String documentId, String stageCode) {
+		String assertionId = evidenceId + "-as";
+		String sourceEventId = evidenceId + "-se";
+		jdbc.update("""
+				INSERT INTO document_assertion (assertion_id, document_id, event_type_code,
+				    predicate_code, modality_code, available_at)
+				VALUES (?, ?, 'it-event', 'it-pred', 'STATED', now())
+				ON CONFLICT (assertion_id) DO NOTHING
+				""", assertionId, documentId);
+		jdbc.update("""
+				INSERT INTO source_event (source_event_id, source_class, event_type_code, available_at)
+				VALUES (?, 'NEWS', 'it-event', now())
+				ON CONFLICT (source_event_id) DO NOTHING
+				""", sourceEventId);
+		jdbc.update("""
+				INSERT INTO event_evidence (evidence_id, source_event_id, assertion_id, evidence_type)
+				VALUES (?, ?, ?, 'TITLE')
+				ON CONFLICT (evidence_id) DO NOTHING
+				""", evidenceId, sourceEventId, assertionId);
+		jdbc.update("""
+				INSERT INTO explanation_run_event_evidence (explanation_run_id, evidence_id, stage_code)
+				VALUES (?, ?, ?)
+				""", runId, evidenceId, stageCode);
+	}
+
+	/**
+	 * 공시 정규화 사실 갈래: document→disclosure_document→disclosure_fact→run.
+	 * disclosure_fact 의 FK 는 typed child(disclosure_document)를 참조하므로 발행사 체인
+	 * (entity→actor→company_profile)까지 실 제약 그대로 통과시킨다.
+	 */
+	private void seedDisclosureLineage(String runId, String factId, String documentId, String stageCode) {
+		jdbc.update("INSERT INTO entity (entity_id, entity_type, display_name) VALUES (?, 'ACTOR', '발행사') "
+				+ "ON CONFLICT (entity_id) DO NOTHING", "it-issuer-1");
+		jdbc.update("INSERT INTO actor (actor_id, actor_type) VALUES (?, 'COMPANY') "
+				+ "ON CONFLICT (actor_id) DO NOTHING", "it-issuer-1");
+		jdbc.update("INSERT INTO company_profile (actor_id) VALUES (?) "
+				+ "ON CONFLICT (actor_id) DO NOTHING", "it-issuer-1");
+		jdbc.update("""
+				INSERT INTO disclosure_document (document_id, issuer_actor_id, disclosure_type, parser_version)
+				VALUES (?, ?, 'it-disc-type', 'it-parser-1')
+				ON CONFLICT (document_id) DO NOTHING
+				""", documentId, "it-issuer-1");
+		jdbc.update("""
+				INSERT INTO disclosure_fact (fact_id, document_id, fact_type, available_at)
+				VALUES (?, ?, 'SUPPLY_CONTRACT', now())
+				ON CONFLICT (fact_id) DO NOTHING
+				""", factId, documentId);
+		jdbc.update("""
+				INSERT INTO explanation_run_disclosure_fact (explanation_run_id, fact_id, stage_code)
+				VALUES (?, ?, ?)
+				""", runId, factId, stageCode);
 	}
 }
