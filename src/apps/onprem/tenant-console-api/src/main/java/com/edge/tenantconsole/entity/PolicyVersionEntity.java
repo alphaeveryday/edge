@@ -29,7 +29,7 @@ public class PolicyVersionEntity {
 
 	private Integer minSourceCount;
 
-	private String maxRisk;
+	private String minConfidence;
 
 	private Long createdBy;
 
@@ -44,12 +44,12 @@ public class PolicyVersionEntity {
 
 	/** 발행 생성자 — 발행 즉시 활성(activated_at=now). 비활성 전이는 repository UPDATE. */
 	public PolicyVersionEntity(int versionNo, String disclaimerText, boolean autoPublishEnabled,
-			Integer minSourceCount, String maxRisk, Long createdBy) {
+			Integer minSourceCount, String minConfidence, Long createdBy) {
 		this.versionNo = versionNo;
 		this.disclaimerText = disclaimerText;
 		this.autoPublishEnabled = autoPublishEnabled;
 		this.minSourceCount = minSourceCount;
-		this.maxRisk = maxRisk;
+		this.minConfidence = minConfidence;
 		this.createdBy = createdBy;
 		this.createdAt = Instant.now();
 		this.activatedAt = this.createdAt;
@@ -75,8 +75,8 @@ public class PolicyVersionEntity {
 		return minSourceCount;
 	}
 
-	public String getMaxRisk() {
-		return maxRisk;
+	public String getMinConfidence() {
+		return minConfidence;
 	}
 
 	public Long getCreatedBy() {

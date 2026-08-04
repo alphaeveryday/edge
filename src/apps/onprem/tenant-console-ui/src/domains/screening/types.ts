@@ -15,8 +15,9 @@ export interface BannedWord {
 export interface AutoPublishCriteria {
   /** 자동 제공 최소 출처 수 */
   minSources: 1 | 2 | 3;
-  /** 자동 제공 허용 위험 등급 상한 */
-  maxRisk: 'LOW' | 'MEDIUM';
+  /** 자동 제공 최소 확신도 — null=미설정(게이트 꺼짐). LOW(보류) 허용은 미설정과
+   * 실질 동일이라 설정 어휘에 없다(ALPHA-634). */
+  minConfidence: 'MEDIUM' | 'HIGH' | null;
 }
 
 export interface NewBannedWord {
@@ -33,5 +34,5 @@ export interface PolicyVersionSummary {
   active: boolean;
   autoPublishEnabled: boolean;
   minSources: number | null;
-  maxRisk: string | null;
+  minConfidence: string | null;
 }

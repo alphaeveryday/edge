@@ -59,7 +59,14 @@ DESTINATION_JOB_KINDS = {
 # 찾는 축이라, job 없는 사건을 넣으면 대사가 유령 job 을 조회한다. 트리거 사건의
 # 발행 가능 여부는 destination_accepts 가 이 맵으로 판정한다.
 TRIGGER_EVENT_TYPE = "PriceTriggerFired"
-TRIGGER_EVENT_DESTINATIONS = {TRIGGER_EVENT_TYPE: "price-explanation-realtime"}
+# 노출 회수(ALPHA-745) — 판정식 v2 의 반대 방향 사건이다. 발화가 "이 종목을 설명
+# 대상으로 올린다"면 이건 "기준선(전일 종가) ±1% 로 돌아왔으니 내린다"이고, 소비자가
+# 같아서 destination 도 같다. 미지 event_type 은 DLQ 로 가므로 소비자 배포가 선행한다.
+EXPOSURE_EVENT_TYPE = "ExposureReverted"
+TRIGGER_EVENT_DESTINATIONS = {
+    TRIGGER_EVENT_TYPE: "price-explanation-realtime",
+    EXPOSURE_EVENT_TYPE: "price-explanation-realtime",
+}
 
 
 def destination_accepts(destination: str, event_type: str) -> bool:

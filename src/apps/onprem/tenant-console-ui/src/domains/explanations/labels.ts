@@ -1,6 +1,6 @@
 /* explanations 도메인 — 상태 코드 → 한글 라벨·배지 톤 매핑 (뷰 관심사). */
 import type { BadgeTone } from 'ui-kit';
-import type { FeedState, ReviewReason, RiskLevel, ServeStatus } from './types';
+import type { ConfidenceLevel, FeedState, ReviewReason, RiskLevel, ServeStatus } from './types';
 
 export const STATUS_LABEL: Record<ServeStatus, string> = {
   AUTO_PUBLISHED: '자동 제공',
@@ -33,6 +33,19 @@ export const RISK_TONE: Record<RiskLevel, BadgeTone> = {
   LOW: 'neutral',
   MEDIUM: 'warn',
   HIGH: 'blocked',
+};
+
+/* 확신도 배지 — 톤은 위험과 반대 방향이다: 보류(확신 낮음)가 주의 대상. */
+export const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = {
+  HIGH: '높음',
+  MEDIUM: '중간',
+  LOW: '보류',
+};
+
+export const CONFIDENCE_TONE: Record<ConfidenceLevel, BadgeTone> = {
+  HIGH: 'exposed',
+  MEDIUM: 'neutral',
+  LOW: 'warn',
 };
 
 export const REASON_LABEL: Record<ReviewReason, string> = {

@@ -650,6 +650,10 @@ class PriceTriggersConfig(BaseModel):
     # (dev 검증·백필용). 미지정(기본 None)이면 유니버스 전체(ALPHA-465).
     etf_ticker: NonBlankStr | None = None
     abs_threshold: float = Field(gt=0, lt=1)  # 일수익률 절대값 게이트(예: 0.005 = 0.5%)
+    # 1분 판정식 v2 의 노출 회수 축(ALPHA-745) — 기준선(전일 종가) ±이 폭 안으로
+    # 돌아오면 발화 금지 구간이고, 노출 중이었으면 회수 사건이 나간다. 일 단위
+    # 트리거(load-price-triggers)는 이 값을 쓰지 않는다.
+    revert_threshold: float = Field(default=0.01, gt=0, lt=1)
     policy_version: NonBlankStr
 
 

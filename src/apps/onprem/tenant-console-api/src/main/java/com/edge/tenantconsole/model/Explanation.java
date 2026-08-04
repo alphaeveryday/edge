@@ -21,7 +21,7 @@ public record Explanation(
 		String name,
 		String code,
 		String status,
-		String risk,
+		String confidence,
 		String reviewReason,
 		OffsetDateTime receivedAt,
 		OffsetDateTime explanationAsOf,

@@ -22,7 +22,7 @@ public record ExplanationResponse(
 		String name,
 		String code,
 		String status,
-		String risk,
+		String confidence,
 		String reviewReason,
 		String receivedRelative,
 		String receivedAt,
@@ -54,7 +54,7 @@ public record ExplanationResponse(
 	}
 
 	public static ExplanationResponse from(Explanation it) {
-		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.risk(),
+		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.confidence(),
 				it.reviewReason(), TimeText.relative(it.receivedAt()), TimeText.absolute(it.receivedAt()),
 				// 기준시각(ALPHA-744) — 원장 explanation_as_of 는 NOT NULL 이라 폴백 불요
 				TimeText.absolute(it.explanationAsOf()), it.serving(),

@@ -7,8 +7,9 @@ import java.util.List;
 
 /**
  * 순수 결정 코어(ADR-0039 §2 policy/) — (entry, 활성 정책) → 판정. I/O 를 모른다.
- * 집계: BLOCK > REVIEW > PASS. PASS 는 자동 제공 스위치·최소 출처 수를 통과해야
- * AUTO_PUBLISHED 가 된다(모호성은 전부 검수·차단 쪽 — 보수적 온보딩).
+ * 집계: BLOCK > REVIEW > PASS. PASS 는 자동 제공 AND 게이트(UNCERTAIN 아님·스위치·
+ * 최소 출처 수·최소 확신도)를 전부 통과해야 AUTO_PUBLISHED 가 된다(모호성은 전부
+ * 검수·차단 쪽 — 보수적 온보딩, ALPHA-634 확신도 게이트 설계).
  * SINGLE_SOURCE 판정 기준(출처 2건 미만)은 콘솔 검수 사유 분류(단일 출처)와 대응한다.
  */
 public final class PolicyEvaluator {
@@ -42,6 +43,13 @@ public final class PolicyEvaluator {
 		if (review) {
 			return new ScreeningDecision("REVIEW_REQUIRED", checks);
 		}
+		DeliveryEntry.ExplanationResult result = entry.explanationResult();
+		if ("UNCERTAIN".equals(result.explanationType())) {
+			// 엔진 스스로 원인 미확인 판정한 설명은 정책 설정과 무관하게 항상 검수 —
+			// "고위험은 항상 검수·차단 경로"(max_risk DDL 결정)의 확신도 게이트 등가물.
+			checks.add(new ScreeningDecision.Check(null, "REVIEW", "explanation_type=UNCERTAIN"));
+			return new ScreeningDecision("REVIEW_REQUIRED", checks);
+		}
 		if (!policy.autoPublishEnabled()) {
 			// 룰 무관 전건 검수(스위치 OFF) — rule_id NULL 행이 근거(DDL 주석의 NULL 시맨틱).
 			checks.add(new ScreeningDecision.Check(null, "REVIEW", null));
@@ -52,8 +60,41 @@ public final class PolicyEvaluator {
 					"source_events=" + entry.sourceEventCount()));
 			return new ScreeningDecision("REVIEW_REQUIRED", checks);
 		}
+		if (policy.minConfidence() != null
+				&& confidenceRank(result.confidenceLevel()) < requiredRank(policy.minConfidence())) {
+			checks.add(new ScreeningDecision.Check(null, "REVIEW",
+					"confidence=" + result.confidenceLevel() + "<min=" + policy.minConfidence()));
+			return new ScreeningDecision("REVIEW_REQUIRED", checks);
+		}
 		checks.add(new ScreeningDecision.Check(null, "PASS", null));
 		return new ScreeningDecision("AUTO_PUBLISHED", checks);
+	}
+
+	/**
+	 * 확신도 순위(보류 LOW < 중간 MEDIUM < 높음 HIGH). 결측·어휘 밖 값은 최저 미만(-1)
+	 * — 게이트 켜짐 상태에서 정보가 없으면 미달(검수 쪽, fail-safe)이다. 어휘 밖 값의
+	 * fail-loud 는 analysis_item CHECK 가 같은 트랜잭션의 적재에서 담당한다(중복 방어 안 함).
+	 */
+	private static int confidenceRank(String confidenceLevel) {
+		return switch (confidenceLevel) {
+			case "LOW" -> 0;
+			case "MEDIUM" -> 1;
+			case "HIGH" -> 2;
+			case null, default -> -1;
+		};
+	}
+
+	/**
+	 * 정책 기준 쪽 순위 — entry 값과 달리 어휘 밖은 미달 강등이 아니라 실패다. 기준이
+	 * -1 로 평가되면 게이트가 전건 통과(fail-open)로 뒤집히는데, 잘못 구성된 정책은
+	 * 판정 전에 드러나야 한다(미지 rule action 과 동일한 방향, Rule 12).
+	 */
+	private static int requiredRank(String minConfidence) {
+		int rank = confidenceRank(minConfidence);
+		if (rank < 0) {
+			throw new IllegalStateException("미지의 min_confidence=" + minConfidence + " — 계약 위반");
+		}
+		return rank;
 	}
 
 	private static String match(PolicyRule rule, DeliveryEntry entry) {

@@ -190,18 +190,22 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
             </select>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span style={{ color: 'var(--fg-2)' }}>허용 위험 등급</span>
+            <span style={{ color: 'var(--fg-2)' }}>최소 확신도</span>
             <select
               className="select"
               style={{ height: 26, fontSize: 11 }}
               disabled={!canEdit}
-              value={criteria?.maxRisk ?? 'MEDIUM'}
+              /* null(미설정=게이트 꺼짐)을 기본값으로 꾸미지 않는다 — 화면이 켜진 것처럼
+                 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
+                 (해제 어휘 없음 — 발행 모델 YAGNI 결정)이라 미설정 옵션은 선택 불가다. */
+              value={criteria?.minConfidence ?? ''}
               onChange={(e) =>
-                updateCriteria.mutate({ maxRisk: e.target.value as 'LOW' | 'MEDIUM' }, { onSuccess: changed })
+                updateCriteria.mutate({ minConfidence: e.target.value as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
               }
             >
-              <option value="LOW">저위험만</option>
-              <option value="MEDIUM">중위험까지</option>
+              <option value="" disabled>미설정 (게이트 꺼짐)</option>
+              <option value="MEDIUM">중간 이상</option>
+              <option value="HIGH">높음만</option>
             </select>
           </div>
           <div className="flex items-center justify-between">
@@ -220,7 +224,7 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
           하나라도 해당하면 검수 대기열로 이동합니다.
         </div>
         <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
-          {['단일 출처 기반 설명', '단정 표현 감지', '고위험 등급 판정'].map((label) => (
+          {['단일 출처 기반 설명', '단정 표현 감지', '원인 미확인(UNCERTAIN) 판정', '확신도 기준 미달'].map((label) => (
             <div key={label} className="flex items-center justify-between">
               <span style={{ color: 'var(--fg-2)' }}>{label}</span>
               <span className="chip chip-warn">검수</span>
@@ -319,7 +323,7 @@ function HistoryTab() {
             <th>발행자</th>
             <th>자동 제공</th>
             <th>최소 출처</th>
-            <th>허용 위험</th>
+            <th>최소 확신도</th>
             <th>상태</th>
           </tr>
         </thead>
@@ -331,7 +335,7 @@ function HistoryTab() {
               <td>{v.publishedBy ?? '—'}</td>
               <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
               <td className="num">{v.minSources ?? '—'}</td>
-              <td>{v.maxRisk ?? '—'}</td>
+              <td>{v.minConfidence ?? '—'}</td>
               <td>{v.active ? <span className="chip">활성</span> : <span className="col-muted">종결</span>}</td>
             </tr>
           ))}
