@@ -9,6 +9,7 @@ import {
 } from '../domains/review';
 import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
+import { isHttpUrl } from './_shared/links';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
 
@@ -151,8 +152,8 @@ export function ReviewDetailPage() {
               <tr key={i}>
                 <td>{EVIDENCE_KIND_LABEL[e.kind] ?? e.kind}</td>
                 <td>
-                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)은 일반 텍스트 폴백 */}
-                  {e.sourceUri ? (
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
+                  {e.sourceUri && isHttpUrl(e.sourceUri) ? (
                     <a href={e.sourceUri} target="_blank" rel="noopener noreferrer">
                       {e.title}
                     </a>

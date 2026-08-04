@@ -6,6 +6,7 @@ import {
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { useSession } from '../domains/session/hooks';
+import { isHttpUrl } from './_shared/links';
 import { LoadError } from './_shared/cells';
 
 export function ExplanationDetailPage() {
@@ -180,8 +181,8 @@ export function ExplanationDetailPage() {
                   <span className="chip">{ev.type}</span>
                 </td>
                 <td>
-                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)은 일반 텍스트 폴백 */}
-                  {ev.sourceUri ? (
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
+                  {ev.sourceUri && isHttpUrl(ev.sourceUri) ? (
                     <a href={ev.sourceUri} target="_blank" rel="noopener noreferrer">
                       {ev.title}
                     </a>
