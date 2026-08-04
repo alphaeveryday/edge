@@ -112,7 +112,13 @@ def recent_window(shares: list, labels: list[str] | None = None,
                 else when_word(str(w.start)[11:16]))
         evs = [e for e in ((labels or [])[i:i + 1] if labels else []) if e]
         return {"when": when, "events": evs, "kind": w.kind}
-    return {}
+    # **빈손으로 돌아가면 시점 강제가 조용히 꺼진다** - 가드가 빈 문자열을 건너뛰기
+    # 때문이다(실측 000660 07-27: 창이 많아 전부 floor 미달 -> 최근_시점 ""). 창이
+    # 있으면 반드시 하나를 고른다: 몫이 가장 큰 창. 그게 '방금 왜' 의 답이다.
+    big = max(shares, key=lambda x: abs(x.log_ret))
+    w = big.window
+    return {"when": "밤사이" if w.kind == "gap" else when_word(str(w.start)[11:16]),
+            "events": [], "kind": w.kind}
 
 
 def context(*, ticker_name: str, day_log: float, idio_log: float, route_kind: str,

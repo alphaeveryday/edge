@@ -132,9 +132,15 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
     from .evidence import _plain_num
     from .gates import ALPHA
     stats: list[dict] = []
+    # 밤사이 해외 지수 움직임은 **관측치**다 - 추론이 아니므로 구간도 p 도 없다.
+    # 그런데 ref 를 안 주면 '밤사이 불안이 줄었어요' 라는 사실 서술이 '근거 없이
+    # 단언' 으로 즉사한다(실측 2회). 관측도 근거다 - ref 를 준다.
+    for nm in over:
+        stats.append({"ref": f"s{len(stats) + 1}", "kind": "밤사이 해외 실측",
+                      "무엇": nm, "note": ""})
     if mr and mr.get("factor_name"):
         stats.append(_plain_num({
-            "ref": "s1", "kind": "밤사이 환원", "factor": mr["factor_name"],
+            "ref": f"s{len(stats) + 1}", "kind": "밤사이 환원", "factor": mr["factor_name"],
             "factor_ret": mr.get("gap_factor_ret"),
             "beta_ci": list(mr.get("gap_beta") or ()),
             "explained": mr.get("mkt_explained"),

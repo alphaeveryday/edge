@@ -521,3 +521,28 @@ def test_plain_prose_cannot_overstate_weak_statistics():
 
     sig = [{"p": 0.004, "att": 0.011}]
     _stat_guard(3, "이 소식이 영향을 받았어요", sig)             # 유의하면 단정 허용
+
+
+def test_recent_window_never_returns_empty_when_windows_exist():
+    """시점이 비면 **가드가 조용히 꺼진다** - 빈 문자열은 검사를 건너뛰기 때문이다.
+
+    실측(000660 07-27): 창이 많아 어떤 창도 총합의 20%를 못 넘겨 전부 탈락하고
+    `최근_시점`이 "" 이 됐다. 그러면 '최근 창을 반드시 말한다' 계약이 무력화되고
+    산문은 하루 요약으로 도망갈 수 있다. 창이 있으면 반드시 하나를 고른다.
+    """
+    from edge_analysis.statics.plain import recent_window
+
+    class W:
+        def __init__(self, kind, start):
+            self.kind, self.start = kind, start
+
+    class S:
+        def __init__(self, w, r):
+            self.window, self.log_ret = w, r
+
+    thin = [S(W("event", f"2026-07-27 1{i}:00:00"), 0.001) for i in range(10)]
+    assert recent_window(thin).get("when"), "floor 미달이어도 시점은 있어야 한다"
+    # 가장 큰 몫이 갭이면 '밤사이' 로 부른다
+    thin.insert(0, S(W("gap", "2026-07-27 09:00:00"), 0.05))
+    assert recent_window(thin)["when"] == "밤사이"
+    assert recent_window([]) == {}, "창이 아예 없으면 빈손이 정직하다"
