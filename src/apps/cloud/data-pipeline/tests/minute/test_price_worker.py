@@ -860,3 +860,82 @@ class TestFenceRecovery:
         # 자격 없음 카운터는 남는다
         assert worker.tick(NOW + timedelta(seconds=1)) == "DRAINED"
         assert getattr(worker, "drain_blocked", 0) >= 1
+
+
+class TestCollectorSelection:
+    """설정 `source` → collector 배선 (ALPHA-735).
+
+    session_id 가 source 로 유도되므로, 여기서 다른 벤더가 끼워지면 **원장이 toss 세션이라
+    적힌 자리에 kis 봉이 실린다**. 조용한 폴백 없이 기동에서 죽는지를 고정한다.
+    """
+
+    def _config(self, **overrides):
+        from data_pipeline.config.models import MinutePriceWorkerConfig
+        base = dict(trigger_schema_version="trig-1")
+        return MinutePriceWorkerConfig(**{**base, **overrides})
+
+    def test_default_source_is_kis(self):
+        # 토스는 초당 5회라 400종/분을 못 맞춘다 — 기본 벤더가 교체된 게 이 티켓이다
+        assert self._config().source == "kis"
+
+    def test_kis_source_builds_kis_collector(self):
+        from data_pipeline.minute.kis_collector import KisPriceCollector
+        from data_pipeline.minute.worker import make_price_collector
+
+        collector = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s")
+        )
+        assert isinstance(collector, KisPriceCollector)
+        # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
+        assert collector.client.client.min_interval == pytest.approx(0.08)
+
+    def test_toss_source_still_builds_toss_collector(self):
+        from data_pipeline.minute.toss_collector import TossPriceCollector
+        from data_pipeline.minute.worker import make_price_collector
+
+        collector = make_price_collector(
+            self._config(source="toss", client_id="c", client_secret="s")
+        )
+        assert isinstance(collector, TossPriceCollector)
+
+    def test_kis_without_app_key_fails_loud(self):
+        # 토스 자격증명만 주입된 채 source 만 바뀐 배포 — 첫 벤더 호출이 아니라 기동에서 죽는다
+        from data_pipeline.minute.worker import make_price_collector
+
+        with pytest.raises(SystemExit, match="APP_KEY"):
+            make_price_collector(self._config(source="kis", client_id="c", client_secret="s"))
+
+    def test_blank_credentials_fail_loud(self):
+        # 공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 인증이 실패해 window 실패만 쌓인다
+        from data_pipeline.minute.worker import make_price_collector
+
+        with pytest.raises(SystemExit, match="자격증명 없음"):
+            make_price_collector(self._config(source="kis", app_key="k", app_secret="  "))
+
+    def test_unknown_source_fails_loud(self):
+        from data_pipeline.minute.worker import make_price_collector
+
+        with pytest.raises(SystemExit, match="알 수 없는 source"):
+            make_price_collector(self._config(source="fmp", app_key="k", app_secret="s"))
+
+    def test_source_default_matches_terraform_session_group(self):
+        """config `source` 와 terraform `minute_session_source_group` 기본값은 같아야 한다.
+
+        session_id = f(dataset, source, date) 라 둘이 갈리면 Worker 가 **존재하지 않는
+        세션**을 유도해 기동을 거부한다(그날 수집이 통째로 안 돈다). 배포 전에 잡을 곳은
+        여기뿐이라 계약으로 고정한다(test_kis_auth 의 statemachine 검사와 같은 축).
+        """
+        import re
+        root = next(
+            (p for p in Path(__file__).resolve().parents
+             if (p / "infra/terraform/modules/data-pipeline/variables.tf").exists()),
+            None,
+        )
+        if root is None:
+            pytest.skip("variables.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+        text = (root / "infra/terraform/modules/data-pipeline/variables.tf").read_text()
+        block = re.search(
+            r'variable\s+"minute_session_source_group"\s*\{[^}]*default\s*=\s*"([^"]+)"', text
+        )
+        assert block, "minute_session_source_group 기본값을 못 찾았다"
+        assert block.group(1) == self._config().source

@@ -48,7 +48,10 @@ DATASET_NEWS_MINUTE = "news_minute"
 # window) 를 두 소스 세션이 처리하면 같은 불변 키를 두 바이트가 다투고
 # ArtifactImmutabilityError 로 즉시 죽는다(조용한 오염은 아니지만 하루가 선다).
 SOURCE_GROUPS_BY_DATASET = {
-    DATASET_PRICE_MINUTE: frozenset({"toss"}),
+    # kis 가 기본이다(ALPHA-735 — 토스는 초당 5회라 400종/분을 못 맞춘다). 토스는 어댑터가
+    # 남아 있어 세션 source_group 을 바꾸면 그대로 돈다. **둘을 동시에 돌리는 건 위 경고
+    # 대상이다** — 교체 운용이라 지금은 같은 window 를 두 세션이 다투지 않는다.
+    DATASET_PRICE_MINUTE: frozenset({"toss", "kis"}),
     DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
 }
 # ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을

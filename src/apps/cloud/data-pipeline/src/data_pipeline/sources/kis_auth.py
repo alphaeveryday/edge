@@ -241,6 +241,16 @@ class KisAuth:
             self._token = self._resolve()
         return self._token
 
+    def invalidate(self) -> None:
+        """메모리 캐시를 버린다 — 다음 `token()` 이 공유 캐시부터 다시 본다.
+
+        배치(런 하나가 10분 안쪽)에는 필요 없던 문이다. **상주 워커는 토큰(24h)보다 오래
+        살아** 만료를 반드시 만나는데, 이 캐시는 만료를 스스로 못 본다(발급 시각을 안 들고
+        있다). 만료 신호를 본 어댑터가 여기로 버린다 — SSM 캐시 쪽은 남은 유효시간을
+        검사하므로 만료된 값은 미스가 되고, 결국 새로 발급된다(ALPHA-735).
+        """
+        self._token = None
+
     def _cached(self, fingerprint: str) -> str | None:
         return self.cache.get(fingerprint) if self.cache else None
 

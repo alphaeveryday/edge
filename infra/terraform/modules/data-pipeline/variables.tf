@@ -405,5 +405,7 @@ variable "minute_session_news_source_group" {
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
-  default     = "toss"
+  # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
+  # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
+  default     = "kis"
 }

@@ -77,6 +77,9 @@ resource "aws_sqs_queue" "minute" {
 }
 
 # ── 토스 자격증명 그릇 — 값은 운영자가 CLI 로 주입한다(state 에 평문 금지) ──
+# ⚠️ 1분 레인이 KIS 로 바뀌면서(ALPHA-735) 이 그릇은 지금 아무 태스크도 주입받지 않는다.
+# **이번 배포에서 지우지 않는다** — 롤백 경로(source=toss 로 되돌리기)가 이 그릇에 기대고,
+# 시크릿 삭제는 복구창(7~30일)이 붙어 되살리기가 비싸다. KIS 실증이 끝난 뒤 별도로 정리한다.
 resource "aws_secretsmanager_secret" "toss" {
   name = "${var.name}-toss"
 }
@@ -84,15 +87,21 @@ resource "aws_secretsmanager_secret" "toss" {
 # ── 상주 서비스 ────────────────────────────────────────────────────
 locals {
   minute_services = {
+    # 가격 1분 생산자 — 벤더는 KIS 다(ALPHA-735). 토스는 초당 5회라 종목당 1콜 × 400종이
+    # 60초 창을 넘었다(KIS 실측 14.8 req/s). source 는 코드 기본값(kis)이 정본이고
+    # `var.minute_session_source_group` 과 **같아야** 같은 session_id 가 유도된다.
     price-worker = {
       command = ["price-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION = var.minute_trigger_schema_version
+        # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
+        # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
+        KIS_TOKEN_CACHE_PARAM                                     = local.kis_token_param_name
       })
       secrets = {
-        DATA_PIPELINE_DB__PASSWORD                       = "${var.db_password_secret_arn}:password::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
+        DATA_PIPELINE_DB__PASSWORD                    = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
       }
     }
     relay = {
