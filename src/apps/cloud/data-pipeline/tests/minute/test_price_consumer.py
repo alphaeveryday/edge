@@ -339,6 +339,12 @@ class TestAnchorV2:
         )
         assert len(db.triggers) == 1  # 발화는 window 1 한 번
         [revert] = revert_events(db)
+        # 와이어 계약(ALPHA-746 소비자가 이 이름들로 읽는다) — 키 하나 바뀌면 남의
+        # 서비스가 조용히 깨진다
+        assert revert["event_type"] == "ExposureReverted"
+        assert set(revert["payload"]) == {
+            "entity_id", "session_id", "window_start", "prev_close",
+            "close_price", "open_change", "detection_policy_version"}
         assert revert["destination"] == DESTINATION
         assert revert["payload"]["entity_id"] == "500000"
         assert Decimal(revert["payload"]["prev_close"]) == 100
