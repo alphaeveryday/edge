@@ -203,12 +203,13 @@ export function Select({
               }}
               onMouseEnter={() => !opt.disabled && setActive(i)}
               onMouseDown={(e) => {
-                // 주 버튼(좌클릭)만 커밋 — 우클릭·가운데클릭은 선택 의도가 아니다.
-                if (e.button !== 0) return;
-                // mousedown 으로 커밋한다 — 트리거 blur 로 목록이 먼저 닫혀 click 이 유실되는 걸 막는다.
-                e.preventDefault();
-                commit(opt);
+                // 좌클릭에서만 포커스 이탈을 막는다(우클릭·가운데클릭은 그대로 둔다) —
+                // 트리거 blur 로 목록이 click 전에 닫혀 선택이 유실되는 걸 방지한다.
+                if (e.button === 0) e.preventDefault();
               }}
+              // 커밋은 click 에 둔다 — 보조기술의 합성 click 도 동작하고, 우클릭·가운데클릭은
+              // click 을 발화하지 않아 오변경이 없다(마우스는 위 mousedown 이 포커스를 지킨다).
+              onClick={() => commit(opt)}
             >
               {opt.label}
             </div>
