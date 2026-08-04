@@ -183,6 +183,57 @@ variable "news_state_machine_timeout_seconds" {
   default     = 1500
 }
 
+# 공시 SFN 스케줄(ALPHA-722). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
+#
+# **평일 09:00–18:00 매시 정각 10슬롯.** 근거는 셋이 함께 만족돼야 하는 제약이다:
+#   ① 슬롯 = cron 엔트리 — `ops_ledger.tf` 가 cron 의 HH:MM 을 regex 로 파싱해 슬롯 키를 만든다.
+#      `rate()` 는 슬롯 키가 안 나와 **쓸 수 없고**, 슬롯 수는 곧 맵 엔트리 수다.
+#   ② 비중첩 — 체인이 ECS 3연속 기동(raw → normalize 병렬 → feature)이고 기동 실측이 122초까지
+#      오른 적 있다(ALPHA-688). 타임아웃 2400s 가 정상(≈12분)의 3배 여유이면서 간격 3600s 아래다.
+#   ③ 접수 분포 — DART 접수 운영시간은 07:30~19:00 이다(장 시간이 아니다).
+#
+# 양끝에 슬롯을 두지 않는 이유(둘 다 데이터가 아니라 지연만 잃는다):
+#   * 07:30~09:00 = 하루의 1.4%. 증분 창이 어제~오늘이라 09:00 슬롯이 창 전체를 다시 읽어 잡는다.
+#   * 18:00~19:00 제출분은 `rcept_dt` 가 **다음 영업일**이라(실측) 오늘 창에 애초에 없다 —
+#     다음 날 09:00 이 잡고, 금요일 저녁분은 월요일 09:00 이 잡는다.
+#
+# 피크(16시 = 하루의 27%)에 30분 슬롯을 얹지 않았다: 얻는 것이 그 1시간대의 지연 60→30분
+# 하나인데 **읽을 소비자가 아직 0개**(장중 트리거 ALPHA-649 미착수)고, 최소 간격이 30분으로
+# 줄면 ②의 타임아웃 여유가 함께 깎인다. 조밀화가 필요해지면 이 맵에 항목을 더하면 되고 원장
+# 슬롯 기준(OPS_DISCLOSURE_SCHED_HHMM)은 이 cron 에서 파생되므로 자동으로 따라온다.
+variable "disclosure_schedule_expressions" {
+  description = "공시 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 평일 09~18시 정각."
+  type        = map(string)
+  default = {
+    "h09" = "cron(0 9 ? * MON-FRI *)"
+    "h10" = "cron(0 10 ? * MON-FRI *)"
+    "h11" = "cron(0 11 ? * MON-FRI *)"
+    "h12" = "cron(0 12 ? * MON-FRI *)"
+    "h13" = "cron(0 13 ? * MON-FRI *)"
+    "h14" = "cron(0 14 ? * MON-FRI *)"
+    "h15" = "cron(0 15 ? * MON-FRI *)"
+    "h16" = "cron(0 16 ? * MON-FRI *)"
+    "h17" = "cron(0 17 ? * MON-FRI *)"
+    "h18" = "cron(0 18 ? * MON-FRI *)"
+  }
+}
+
+variable "disclosure_schedule_state" {
+  description = "공시 SFN 스케줄 상태. 신설 검증 동안 DISABLED, 컷오버(시장 SFN 에서 공시 스텝 제거)와 같은 apply 로 ENABLED."
+  type        = string
+  default     = "DISABLED"
+}
+
+variable "disclosure_state_machine_timeout_seconds" {
+  # 슬롯 간격(3600s)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 — 겹치면 두 실행이
+  # 같은 rcept_no 본문을 동시에 보고 seen-map(ALPHA-720)의 TOCTOU 로 같은 ZIP 을 두 번 받고,
+  # 같은 canonical 파티션을 동시에 병합한다. 40분 = 정상(≈12분)의 3배 여유 + 간격 아래.
+  # 초과분은 fail-loud 타임아웃이다(무한 대기보다 낫고, 타임아웃 알람이 잡는다).
+  description = "공시 SFN 실행 타임아웃. 슬롯 간격(60분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  type        = number
+  default     = 2400
+}
+
 # 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
 variable "reconcile_schedule_state" {
   description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
@@ -343,6 +394,12 @@ variable "minute_session_dataset" {
   description = "스케일 오케스트레이션이 계획·드레인할 세션 dataset. 상주 서비스의 세션 축이 가격 레인이라 price_minute 고정(뉴스 소비자도 이 세션 수명에 결속)"
   type        = string
   default     = "price_minute"
+}
+
+variable "minute_session_news_source_group" {
+  description = "news_minute 세션의 source_group(ALPHA-717). 비우면 뉴스 레인 미편입 — start 가 가격 세션만 계획한다"
+  type        = string
+  default     = "bigkinds"
 }
 
 variable "minute_session_source_group" {

@@ -22,8 +22,8 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux, X64]
-    # 빌드(~5분) + 상주 서비스 5종 롤아웃 대기(각 10분 상한, 순차 최악 50분) 수용
+    runs-on: ubuntu-latest
+    # 빌드(~5분) + 상주 서비스 6종 롤아웃 대기(각 10분 상한, 순차 최악 60분) 수용
     timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,8 @@ jobs:
                      edge-dev-data-pipeline-relay \
                      edge-dev-data-pipeline-price-consumer \
                      edge-dev-data-pipeline-news-consumer-realtime \
-                     edge-dev-data-pipeline-news-consumer-backfill; do
+                     edge-dev-data-pipeline-news-consumer-backfill \
+                     edge-dev-data-pipeline-news-worker; do
             # 이 블록은 opt-in 게이트 뒤라 서비스·권한이 이미 서 있다는 선언 위에서
             # 돈다 — 명령 실패(AccessDenied·만료·스로틀)도, ACTIVE 가 아닌 상태도
             # 배선 결함이므로 삼키지 않는다(그 둘을 skip 으로 접으면 옛 이미지를
@@ -100,7 +101,7 @@ jobs:
             # IAM 회귀라 스킵하면 옛 이미지를 도는 채 초록으로 끝난다. 유예는 만료 단언으로
             # 회수한다(deploy-order-splits-the-pr 관례) — 기한 뒤에는 신규 서비스도 apply
             # 가 이미 착지했어야 하므로 전 서비스 동일하게 에러다.
-            grace_new_svcs=" edge-dev-data-pipeline-news-consumer-realtime edge-dev-data-pipeline-news-consumer-backfill "
+            grace_new_svcs=" edge-dev-data-pipeline-news-consumer-realtime edge-dev-data-pipeline-news-consumer-backfill edge-dev-data-pipeline-news-worker "
             grace_until="2026-08-10" # ALPHA-713 apply 착지 유예 — 만료 후 이 분기 제거 대상
             can_skip=false
             if [[ "${grace_new_svcs}" == *" ${svc} "* ]] && [[ "$(date -u +%F)" < "${grace_until}" ]]; then

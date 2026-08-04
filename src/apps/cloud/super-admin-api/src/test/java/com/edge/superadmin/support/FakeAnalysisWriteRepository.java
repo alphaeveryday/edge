@@ -41,6 +41,25 @@ public class FakeAnalysisWriteRepository implements AnalysisWriteRepository {
 		return recordIfKnown(new Call("RESTORE", runId, null, reason, actor));
 	}
 
+	@Override
+	public InvalidateOutcome invalidate(String runId, String reason, SessionOperator actor) {
+		if (!knownRunIds.contains(runId)) {
+			return InvalidateOutcome.RUN_NOT_FOUND;
+		}
+		if (unpublishedRunIds.contains(runId)) {
+			return InvalidateOutcome.NOT_PUBLISHED;
+		}
+		calls.add(new Call("INVALIDATE", runId, null, reason, actor));
+		return InvalidateOutcome.INVALIDATED;
+	}
+
+	/** 아는 런이지만 게시 상태가 아닌 것으로 취급할 ID — 409 경로 검증용. */
+	public void markUnpublished(String runId) {
+		unpublishedRunIds.add(runId);
+	}
+
+	private final Set<String> unpublishedRunIds = new java.util.HashSet<>();
+
 	private boolean recordIfKnown(Call call) {
 		if (!knownRunIds.contains(call.runId())) {
 			return false;

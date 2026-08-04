@@ -8,7 +8,7 @@ ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 �
 import json
 
 from data_pipeline.config import load_settings
-from data_pipeline.lake import LocalStorage
+from data_pipeline.lake import LocalStorage, raw_disclosure_document_key
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.steps import ingest_raw_disclosure
 
@@ -41,14 +41,22 @@ class FakeSource:
     source_name = "dart"
 
     def __init__(self, records=(), *, enabled=True, planned=1,
-                 doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False):
+                 doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
+                 list_total_count=None, list_rows_seen=0, resolved_window=None):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
         self.fetch_failures: list[dict] = []
+        # 창 규모 관측 — 실 소스가 fetch 중에 채운다. 스텝은 이걸 로그로 옮기기만 한다.
+        self.list_total_count = list_total_count
+        self.list_rows_seen = list_rows_seen
+        # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
+        self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
         self._doc_bytes = doc_bytes
         self._stop = stop
+        # 실제로 본문을 **요청한** rcept_no — 틱 멱등(재다운로드 회피)의 유일한 관측점이다.
+        self.doc_requests: list[str] = []
 
     def fetch(self, symbols, from_date=None, to_date=None):
         if self._stop:
@@ -56,6 +64,7 @@ class FakeSource:
         yield from self._records
 
     def fetch_document(self, rcept_no: str) -> bytes:
+        self.doc_requests.append(rcept_no)
         if rcept_no in self._doc_fail:
             raise ValueError(f"document boom: {rcept_no}")
         return self._doc_bytes
@@ -129,6 +138,130 @@ def test_documents_written_as_fetched_not_buffered(tmp_path):
     assert all(k.endswith(".zip") for k in raw_puts[:-1])  # 그 앞은 전부 본문
 
 
+def _meta_rows(storage, run_id) -> dict[str, dict]:
+    """그 run 의 메타 ndjson 행 → {rcept_no: row}."""
+    [key] = [k for k in storage.list_keys("raw")
+             if k.endswith(".ndjson") and f"/run_id={run_id}/" in k]
+    rows = [json.loads(x) for x in storage.get_bytes(key).decode().strip().splitlines()]
+    return {r["rcept_no"]: r for r in rows}
+
+
+def test_second_run_reuses_documents_but_keeps_full_meta(tmp_path):
+    # WHY(ALPHA-720): 이 소스엔 증분 커서가 없어 매 실행이 날짜창 전체를 다시 읽는다 — 장중
+    #      레인은 같은 날 10슬롯이 돌므로 장치가 없으면 **같은 document.xml ZIP 을 10번**
+    #      내려받는다. 없애야 할 것은 그 재다운로드 하나뿐이다.
+    #      메타(ndjson)는 반대로 **계속 전건 저장돼야 한다**: 매 런이 자기 run_id 파티션에
+    #      창 전체 관측을 남기는 것이 이 소스의 유일한 완전성 근거이고(런 사이 rcept_no 집합
+    #      비교), 메타까지 접으면 그 근거를 스스로 없앤다. 두 축을 한 테스트에 묶어 고정한다 —
+    #      "재다운로드를 줄인다"는 최적화가 메타 보존을 함께 깎는 것이 가장 그럴듯한 회귀다.
+    storage = LocalStorage(tmp_path / "lake")
+    first = FakeSource(records=[_rec("A1"), _rec("B2", report_nm="사업보고서")])
+    assert _run(tmp_path, first, storage=storage, run_id="r1")[0] == 0
+
+    second = FakeSource(records=[_rec("A1"), _rec("B2", report_nm="사업보고서")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == []  # 본문은 한 건도 다시 요청하지 않았다
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 0 and log2["documents_reused"] == 2
+    assert log2["records_saved"] == 2  # ← 메타는 그대로 2건(창 전체 관측 보존)
+
+    # 2회차 메타는 1회차가 저장한 **기존 키**를 가리킨다 — 정제가 그 ZIP 을 그대로 연다.
+    rows1, rows2 = _meta_rows(storage, "r1"), _meta_rows(storage, "r2")
+    assert {k: v["document_raw_path"] for k, v in rows2.items()} \
+        == {k: v["document_raw_path"] for k, v in rows1.items()}
+    assert all(storage.get_bytes(r["document_raw_path"]) for r in rows2.values())
+    assert all(r["body_format"] for r in rows2.values())
+    # 본문 객체는 늘지 않았다(2회차가 자기 파티션에 사본을 만들지 않는다).
+    assert len([k for k in storage.list_keys("raw") if k.endswith(".zip")]) == 2
+
+
+def test_seen_map_spans_two_ingest_dates_and_newest_key_wins(tmp_path):
+    # WHY(edge-review · Rule 9): 2일 lookback 은 편의가 아니라 **설계의 근거**다. `ingest_date`
+    #      가 UTC 날짜라 KST 09:00 = UTC 00:00 에서 갈리고, 한 KR 영업일의 슬롯들이 두 UTC
+    #      날짜에 흩어진다 — 하루만 보면 오전 슬롯이 받아 둔 본문을 오후 슬롯이 못 찾아
+    #      매일 한 번씩 창 전체를 재다운로드한다. 실행 시각이 곧 `started_date` 라 런 두 번으로는
+    #      이 경계를 밟을 수 없어(같은 UTC 날짜) `_existing_documents` 를 직접 부른다.
+    #      `_DOC_LOOKBACK_DAYS` 가 1 로 줄거나 순회가 뒤집히면 여기서 깨진다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    def _put(ingest_date, run_id, rcept_no) -> str:
+        key = raw_disclosure_document_key("dart", "KR", ingest_date, run_id, rcept_no)
+        storage.put_bytes(key, b"PK\x03\x04body")
+        return key
+
+    _put("2026-08-02", "r0", "OLD")            # 창 밖(2일 초과)
+    yday = _put("2026-08-03", "r1", "YDAY")    # 어제 = KST 오전 슬롯이 받아 둔 본문
+    _put("2026-08-03", "r1", "BOTH")
+    both_today = _put("2026-08-04", "r2", "BOTH")
+
+    found = ingest_raw_disclosure._existing_documents(storage, "dart", "KR", "2026-08-04")
+
+    assert "OLD" not in found          # 상한이 실제로 상한이다
+    assert found["YDAY"] == yday       # UTC 날짜 경계를 넘어 찾는다
+    assert found["BOTH"] == both_today  # 같은 문서가 양일에 있으면 최신 키가 남는다
+
+
+def test_seen_map_only_accepts_keys_the_document_builder_produces(tmp_path):
+    # WHY(edge-review): seen-map 은 **읽는 쪽**이고 `raw_disclosure_document_key` 는 쓰는 쪽이다.
+    #      둘의 집합이 어긋나면 히트가 곧 "본문이 있다"는 거짓 주장이 된다 — 히트한 순간
+    #      document API 호출을 건너뛰고 그 키를 document_raw_path 로 박으므로, 정제가 본문이
+    #      아닌 ZIP 을 열게 되고 로그는 success·failed_records=0 으로 남는다(조용한 오염).
+    #      "이 프리픽스 아래 아무 .zip" 으로 잡으면 이 파티션에 다른 객체를 두는 변경 하나로
+    #      그 경로가 열린다 — 수용 집합을 빌더 출력 형태로 못박는다.
+    storage = LocalStorage(tmp_path / "lake")
+    assert _run(tmp_path, FakeSource(records=[_rec("A1")]), storage=storage, run_id="r1")[0] == 0
+
+    day_prefix = next(k for k in storage.list_keys("raw") if k.endswith(".zip")).split("/documents/")[0]
+    storage.put_bytes(f"{day_prefix}/quarantine/B2.zip", b"PK\x03\x04nope")  # 본문 아님
+    storage.put_bytes(f"{day_prefix}/documents/.zip", b"PK\x03\x04empty")    # 빈 rcept_no
+
+    second = FakeSource(records=[_rec("A1"), _rec("B2")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == ["B2"]  # A1 만 재사용, B2 는 격리본을 본문으로 오인하지 않는다
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 1 and log2["documents_reused"] == 1
+
+
+def test_failed_document_is_retried_by_next_run(tmp_path):
+    # WHY(ALPHA-720): seen-map 의 출처가 **저장된 객체**라서 얻는 성질이다 — 본문 fetch 가
+    #      실패한 건은 객체가 없어 seen-map 에 안 들어가고, 다음 실행이 그것만 다시 받는다.
+    #      별도 재시도 목록을 들고 다니지 않는 이유이자, seen-set 을 DB(`document` 테이블)에서
+    #      뽑지 않은 이유이기도 하다(적재까지 못 간 공시는 DB 에 영영 없어 영구 재다운로드가 된다).
+    storage = LocalStorage(tmp_path / "lake")
+    first = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
+    assert _run(tmp_path, first, storage=storage, run_id="r1")[0] == 1  # partial
+
+    second = FakeSource(records=[_rec("OK1"), _rec("BAD2")])
+    code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
+
+    assert code == 0
+    assert second.doc_requests == ["BAD2"]  # 실패했던 것만 재시도
+    log2 = _log(storage, "r2")
+    assert log2["documents_saved"] == 1 and log2["documents_reused"] == 1
+
+
+def test_same_rcept_no_twice_in_one_window_downloads_once(tmp_path):
+    # WHY: 목록이 수집 중에도 자라(접수 피크 16시) 같은 rcept_no 의 **서로 다른 관측**
+    #      (rm ""→"정")이 한 창에 둘 다 올 수 있다 — 소스는 내용이 완전히 같은 행만 접으므로
+    #      여기까지 온다. 저장 성공분을 색인에 되먹이지 않으면 같은 본문을 한 런 안에서 두 번
+    #      받는다(같은 키를 두 번 덮어쓰므로 조용히 지나간다).
+    dup = _rec("A1")
+    dup["rm"] = "정"  # 같은 문서의 다른 관측 — 소스의 완전동일 접기를 통과한다
+    source = FakeSource(records=[_rec("A1"), dup])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == ["A1"]
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 2  # 두 관측 다 보존(bronze)
+    assert log["documents_saved"] == 1 and log["documents_reused"] == 1
+
+
 def test_empty_window_is_success_not_error(tmp_path):
     # WHY(Rule 7 — 스텝별 판정): 매핑 대상이 있는데 공시가 0건인 건 정상 빈 창이다(그날 대상
     #      유형 공시 없음) — 재무제표의 '0행=error' 가드를 복사하면 정상 상태를 오탐한다.
@@ -157,37 +290,6 @@ def test_document_fetch_failure_marks_partial_meta_preserved(tmp_path):
     assert log["status"] == "partial"
     assert log["records_saved"] == 2 and log["documents_saved"] == 1
     assert log["records_failed_targets"] == 1
-
-
-def test_list_truncation_stays_success_but_logged(tmp_path):
-    # WHY(ALPHA-351): MAX_PAGES 목록 절단은 데이터 유효 + 다음 창에서 이어받으므로 SFN 을
-    #      죽이면 안 된다 — kind=truncation 은 성공(exit 0)으로 남기되, 절단 자체는 로그에
-    #      남겨 fail-loud 를 유지한다. 오케스트레이션이 흔한 절단마다 빨간불이 되던 원인.
-    source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures.append(
-        {"symbol": "005930", "our_ticker": "005930",
-         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
-    )
-    code, storage = _run(tmp_path, source)
-
-    assert code == 0
-    log = _log(storage, "r1")
-    assert log["status"] == "success"
-    assert log["records_failed_targets"] == 1  # 절단도 로그엔 남는다(fail-loud)
-
-
-def test_truncation_plus_real_failure_still_partial(tmp_path):
-    # WHY(ALPHA-351): 절단을 성공 처리해도 같은 런의 진짜 실패(본문 결측)까지 삼키면 안 된다 —
-    #      절단은 제외하되 real failure 가 하나라도 있으면 partial/exit 1 을 유지한다.
-    source = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
-    source.fetch_failures.append(
-        {"symbol": "005930", "our_ticker": "005930",
-         "error": "MAX_PAGES(10) 도달 — 목록 절단 가능", "kind": "truncation"}
-    )
-    code, storage = _run(tmp_path, source)
-
-    assert code == 1
-    assert _log(storage, "r1")["status"] == "partial"
 
 
 def test_stopfetch_marks_stopped(tmp_path):
@@ -307,20 +409,54 @@ def test_universe_derived_from_holdings_excludes_etf_itself(tmp_path):
     assert log["symbols_excluded_etf"] == 1  # 091160 — 뺀 사실이 로그로 드러난다
 
 
-def test_unmapped_targets_stay_success_but_counted(tmp_path):
-    # WHY: holdings 유니버스에는 corpCode.xml 에 없는 종목(비상장 편입 등)이 상수로 섞인다.
-    #      진짜 실패와 같이 세면 raw 페이즈가 **매 런** partial·exit 1 이 되어 SFN 게이트가
-    #      매일 깨진다 — 재시도로 낫지 않는 구조적 결측이라 런을 죽일 근거가 없다(ADR-0030).
-    #      그렇다고 지우면 조용한 결측이므로, 원장이 보는 계측에는 그대로 남아야 한다.
-    source = FakeSource(records=[_rec("A1")])
-    source.fetch_failures = [{"symbol": "999999", "our_ticker": "999999",
-                              "error": "corpCode.xml 에 corp_code 없음", "kind": "unmapped"}]
+def test_no_failure_kind_is_tolerated_anymore(tmp_path):
+    # WHY(Rule 12): 관용 어휘가 비었다. 종전 두 관용(`unmapped`·`truncation`)은 목록 질의가
+    #      종목별이던 시절의 판단이었다 — `unmapped` 는 발생 지점이 사라졌고, `truncation` 의
+    #      근거("다음 증분 창이 이어받는다")는 축이 창 전체로 바뀌며 무너졌다(상한 도달 = ~5만
+    #      행 미수집, 운영자 지정 백필 창은 이어받을 창이 없다).
+    #      죽은 어휘를 관용 목록에 남기면 **그 이름을 쓰는 새 실패가 조용히 성공으로 통과한다** —
+    #      관용은 "이 실패는 런을 죽일 근거가 없다"는 판단이지 이름에 대한 영구 면제가 아니다.
+    for kind in ("truncation", "unmapped"):
+        source = FakeSource(records=[_rec("A1")])
+        source.fetch_failures = [{"symbol": None, "our_ticker": None, "page": 500,
+                                  "error": f"{kind} 을 자칭하는 실패", "kind": kind}]
+
+        case_dir = tmp_path / kind
+        case_dir.mkdir()
+        code, storage = _run(case_dir, source)
+
+        assert code == 1, kind
+        log = _log(storage, "r1")
+        assert log["status"] == "partial", kind  # 저장분이 있으니 error 가 아니라 partial
+        assert log["records_failed_targets"] == 1
+        assert log["ops"]["failed_records"] == 1
+
+
+def test_log_records_the_window_actually_collected(tmp_path):
+    # WHY: 소스가 창 끝을 스스로 확정하는 경우가 있다(`--from` 만 준 백필 → 끝은 KST 오늘).
+    #      로그에 호출 인자(None)만 남기면 **어떤 창을 수집했는지 사후에 복원되지 않고**,
+    #      이 설계의 완전성 근거인 "런 사이 rcept_no 집합 비교"가 성립하지 않는다. 같은 명령도
+    #      자정을 사이에 두면 다른 창이 되므로 실제 값이어야 한다.
+    source = FakeSource(records=[_rec("A1")], resolved_window=("2026-01-01", "2026-08-03"))
 
     code, storage = _run(tmp_path, source)
 
     assert code == 0
     log = _log(storage, "r1")
-    assert log["status"] == "success"  # 런은 죽지 않는다
-    assert log["records_failed_targets"] == 1  # 그러나 유실은 계속 센다
-    assert log["ops"]["failed_records"] == 1
-    assert log["failed_targets"][0]["kind"] == "unmapped"
+    assert log["window_from"] == "2026-01-01"
+    assert log["window_to"] == "2026-08-03"  # 호출은 창 없이 했는데 실제 창이 남는다
+
+
+def test_window_scale_observed_in_collection_log(tmp_path):
+    # WHY: 창 규모(소스가 신고한 total_count vs 실제로 훑은 행 수)는 페이지 완전성을 사후에
+    #      들여다볼 **유일한 관측값**이다. 판정에 쓰지 않기로 했으므로(목록이 자라는 중엔 절단과
+    #      유입이 구분되지 않는다) 아무 게이트도 이 값을 지켜주지 않는다 — 기록이 끊기거나
+    #      None/0 으로 회귀해도 다른 테스트는 전부 통과한다. 그래서 여기서 계약을 고정한다.
+    source = FakeSource(records=[_rec("A1")], list_total_count=1069, list_rows_seen=1069)
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["list_total_count"] == 1069
+    assert log["list_rows_seen"] == 1069

@@ -3,8 +3,8 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# news-worker 는 CLI·feed 까지 완성(ALPHA-707)됐고 **서비스 편입만 후속 PR** 이다
-# (세션 오케스트레이션의 news 세션 계획과 함께 — start 가 price 세션만 계획한다).
+# news-worker 포함(ALPHA-717) — 세션 오케스트레이션이 news 세션(news_minute/bigkinds)도
+# 계획·드레인한다(MINUTE_SESSION_NEWS_SOURCE_GROUP).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.
@@ -29,9 +29,11 @@ locals {
     for name in local.minute_all_destinations : name => aws_sqs_queue.minute[name].url
   }
 
-  # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 소비자가 없는 큐(price-explanation-
-  # realtime, ALPHA-710 대기)를 넣으면 게이트가 영영 안 비고, backfill 큐를 넣으면 밤
-  # backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다(스케일 단위가 서비스 전체).
+  # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 설명 큐(price-explanation-realtime,
+  # 소비자=analysis-consumer ALPHA-719)를 넣지 않는 이유는 아래 MINUTE_SESSION_SERVICES
+  # 주석 — 지연 재배달의 비가시 메시지가 게이트 깊이에 잡혀 스케일다운을 막는다.
+  # backfill 큐를 넣으면 밤 backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다
+  # (스케일 단위가 서비스 전체).
   # backfill 은 미루는 것이 정의상 무해하다 — 다음 세션이 집는다.
   # ⚠️ 게이트 env 와 세션 역할 IAM 이 **여기 한 곳**에서 파생된다 — 갈리면 stop 이
   # AccessDenied 를 pending 으로 읽어 영영 안 내려가거나, 게이트 없는 큐 권한이 남는다.
@@ -138,6 +140,15 @@ locals {
       secrets = {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
         LLM_API_KEY                = "${var.deepseek_secret_arn}:api_key::"
+      }
+    }
+    # 뉴스 1분 생산자(ALPHA-707/717) — BigKinds 는 키가 없어 시크릿은 DB 뿐이다.
+    # 엔드포인트·카테고리는 코드 기본값([bigkinds_news] sources.toml)이 정본.
+    news-worker = {
+      command     = ["news-worker"]
+      environment = merge(local.env, local.db_env, {})
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
       }
     }
   }
@@ -259,9 +270,14 @@ resource "aws_iam_role_policy" "minute_session" {
         Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
       },
       {
-        Effect   = "Allow"
-        Action   = ["ecs:UpdateService"]
-        Resource = [for service in aws_ecs_service.minute : service.id]
+        Effect = "Allow"
+        Action = ["ecs:UpdateService"]
+        # ⚠️ analysis_consumer 포함 — MINUTE_SESSION_SERVICES 에 있는데 여기 빠지면
+        # 아침 스케일업이 AccessDenied 로 죽어 레인 전체가 안 뜬다(목록과 같은 축).
+        Resource = concat(
+          [for service in aws_ecs_service.minute : service.id],
+          [aws_ecs_service.analysis_consumer.id],
+        )
       },
       {
         # 내리기 전 큐 깊이 확인 — 게이트 env 와 같은 파생(minute_gate_queue_names).
@@ -304,9 +320,23 @@ resource "aws_ecs_task_definition" "minute_session" {
 
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
-      MINUTE_SESSION_SERVICES = join(",", [for service in aws_ecs_service.minute : service.name])
+      # ⚠️ news-worker 는 공용 목록에서 뺀다 — 뉴스 세션 계획이 **성공한 날만** 올린다
+      # (실패 날 올리면 세션 부재 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음).
+      # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
+      # analysis-consumer(ALPHA-719)도 세션 결속이다 — 트리거는 장중에만 발생하고,
+      # ReturnsNotReady 는 분봉 입력의 120초 재시도(ALPHA-710)라 세션 안에 풀린다. ⚠️설명 큐는
+      # stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트 깊이에 잡혀
+      # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
+      # 세션이 집는다.
+      MINUTE_SESSION_SERVICES = join(",", concat(
+        [for key, service in aws_ecs_service.minute : service.name if key != "news-worker"],
+        [aws_ecs_service.analysis_consumer.name],
+      ))
+      MINUTE_SESSION_NEWS_WORKER_SERVICES = aws_ecs_service.minute["news-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
+      # 뉴스 세션 편입(ALPHA-717) — start 가 news_minute 세션도 계획, stop 이 함께 드레인.
+      MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
@@ -381,4 +411,76 @@ resource "aws_scheduler_schedule" "minute_session" {
     }
     dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
+}
+
+# ── 분봉 트리거 설명 소비자 (ALPHA-719) ────────────────────────────────
+# analysis-engine 이미지의 상주 소비자 — price-explanation-realtime 을 폴링해
+# `analyze --trigger-id` 경로를 태운다. data-pipeline 서비스 맵(minute_services)에 넣지
+# 않는 이유: 이미지·컨테이너명·env 네임스페이스(PG*·DEEPSEEK_*)가 전부 다르다(tasks.tf
+# analysis 단서와 동일). 세션 스케일에는 아래 env 파생으로 함께 편입된다.
+resource "aws_ecs_task_definition" "analysis_consumer" {
+  family                   = "${var.name}-analysis-consumer"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.analysis_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = var.cpu_architecture
+  }
+
+  container_definitions = jsonencode([{
+    name      = local.analysis_container_name
+    image     = var.analysis_image
+    essential = true
+    # 진행 중 메시지(LLM 호출 포함)를 끝낼 시간 — 상주 3종과 같은 근거. Fargate 상한 120.
+    stopTimeout = 120
+    # 이미지 ENTRYPOINT 가 `python -m edge_analysis` 라 command 는 서브커맨드 인자다.
+    command = ["consume-triggers"]
+    environment = [for k, v in merge(local.analysis_env, {
+      EDGE_EXPLANATION_QUEUE_URL = aws_sqs_queue.minute["price-explanation-realtime"].url
+    }) : { name = k, value = v }]
+    secrets = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis-consumer" })
+    }
+  }])
+}
+
+resource "aws_ecs_service" "analysis_consumer" {
+  name            = "${var.name}-analysis-consumer"
+  cluster         = var.cluster_arn
+  task_definition = aws_ecs_task_definition.analysis_consumer.arn
+  desired_count   = 0
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.subnet_ids
+    security_groups  = [aws_security_group.task.id]
+    assign_public_ip = false
+  }
+
+  lifecycle {
+    # 상주 3종과 같은 계약 — 스케일은 세션 오케스트레이션 소관, task-def 는 terraform 소유.
+    ignore_changes = [desired_count]
+  }
+}
+
+resource "aws_iam_role_policy" "analysis_consumer_queue" {
+  name = "analysis-consumer-queue"
+  role = aws_iam_role.analysis_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      # 소비 + ReturnsNotReady 지연(ChangeMessageVisibility). 설명 큐 하나뿐이다.
+      Effect   = "Allow"
+      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
+      Resource = [aws_sqs_queue.minute["price-explanation-realtime"].arn]
+    }]
+  })
 }

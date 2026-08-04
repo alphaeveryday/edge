@@ -110,6 +110,15 @@ class JobIdentityReader(Protocol):
     def news_job_identity(self, *, job_id: str) -> dict | None: ...
 
 
+class EventAssembler(Protocol):
+    """추출 성공 → event 계보 단건 조립 경계(ALPHA-727) — 실구현은
+    `minute.event_assembly.NewsEventAssembler`. 멱등(document_entity 자국 게이트)이라
+    fresh·reuse 어느 경로에서 불러도 안전하고, 예외는 전파돼 job 재시도가 된다."""
+
+    def assemble(self, *, source_code: str, article_id: str,
+                 article: dict, result: dict) -> dict: ...
+
+
 @dataclass
 class PgArticleReader:
     """PG `document` + `news_document` 읽기 (배치 `load_documents` 가 쓰는 그 자연키).
@@ -252,6 +261,9 @@ class NewsExtractionHandler:
     # 만 믿으면 "정상 backlog"와 "다른 기사를 가리키는 결함"이 구분되지 않는다. 기본값을
     # 두지 않는 이유: 주입을 빠뜨리면 그 구분이 **조용히** 사라진다.
     job_identities: JobIdentityReader = field(repr=False)
+    # 추출 성공을 event 계보로 단건 조립한다(ALPHA-727) — 기본값 없음: 빠뜨리면 추출은
+    # 되는데 설명 근거(event)가 조용히 영영 없다.
+    event_assembler: EventAssembler = field(repr=False)
 
     def __call__(
         self, *, job_id: str, payload: object, attempt: int, redrive_generation: int
@@ -344,6 +356,15 @@ class NewsExtractionHandler:
             "뉴스 추출 기록 job=%s article=%s status=%s assertions=%d key=%s",
             job_id, article_id, status, len(result.get("assertions") or []), key,
         )
+        if status == _SUCCESS_STATUS:
+            # 추출 성공을 event 계보로 즉시 조립한다(ALPHA-727) — 실패는 전파해 job
+            # 재시도로 보낸다: artifact 는 이미 불변으로 남았으므로 재시도는 _reuse 를
+            # 타고 조립만 다시 한다(멱등 게이트). 삼키면 SUCCEEDED 인데 event 가 없다.
+            assembled = self.event_assembler.assemble(
+                source_code=source_code, article_id=article_id,
+                article=article, result=result,
+            )
+            logger.info("event 조립 job=%s article=%s %s", job_id, article_id, assembled)
         return checksum
 
     def _reuse(self, key: str, job_id: str, attempt: int) -> str:
@@ -393,6 +414,21 @@ class NewsExtractionHandler:
         logger.info(
             "이미 저장된 시도 결과 재사용 job=%s attempt=%d status=%s", job_id, attempt, status
         )
+        if status == _SUCCESS_STATUS:
+            # fresh 경로가 PUT 뒤·조립 전에 죽은 경우의 복구 지점 — 조립은 멱등
+            # (document_entity 자국 게이트)이라 이미 된 기사는 no-op 이다.
+            article = self.article_reader.read(
+                source_code=stored["source_code"], article_id=stored["article_id"])
+            if article is None:
+                raise TransientJobError(
+                    f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
+                    code="ARTICLE_NOT_FOUND",
+                )
+            assembled = self.event_assembler.assemble(
+                source_code=stored["source_code"], article_id=stored["article_id"],
+                article=article, result=stored["result"],
+            )
+            logger.info("event 조립(reuse) job=%s %s", job_id, assembled)
         return sha256_bytes(data)
 
     @staticmethod
@@ -480,11 +516,14 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
         base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
         model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
     )
+    from .event_assembly import NewsEventAssembler
+
     handler = NewsExtractionHandler(
         storage=make_storage(settings.storage),
         complete_fn=complete_fn,
         article_reader=PgArticleReader(db=settings.db),
         job_identities=JobLedger(db=settings.db),
+        event_assembler=NewsEventAssembler(db=settings.db),
     )
     consumer = MinuteConsumer(
         jobs=JobLedger(db=settings.db),

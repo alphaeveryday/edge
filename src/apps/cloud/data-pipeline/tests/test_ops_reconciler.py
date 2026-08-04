@@ -125,13 +125,13 @@ def test_downstream_state_output_does_not_overwrite_the_tasks_own_arn():
     #      (ALPHA-566). ARN 이 어긋나면 wrapper 가 남긴 진짜 attempt 를 못 찾아 "원장에 기록이
     #      없다"로 오판하고 남의 실패를 backfill 한다. 자기 ECS 생애주기 이벤트만 믿어야 한다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_ETF_NAV", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
                         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
                         "started_at": _OLD})
     summary = _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
-        "LoadDisclosure", own_arn="arn:own", own_exit=0,
+        "LoadEtfNav", own_arn="arn:own", own_exit=0,
         leaked_arn="arn:other-failed", leaked_exit=1))
 
     assert summary["ledger_gap"] == []                       # 남의 ARN 으로 gap 을 열지 않는다
@@ -144,13 +144,13 @@ def test_leaked_success_does_not_turn_a_real_failure_green():
     #      타고 흘러오면 실패가 FULFILLED 로 뒤집힌다 — 거짓 초록은 테스트가 초록이라 스스로
     #      못 잡으므로(이 프로젝트 계측 결함의 일관된 실패 방향) 양방향을 함께 잠근다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_ETF_NAV", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     db.attempts.append({"attempt_id": "a1", "etid": "e1", "arn": "arn:own", "number": 1,
                         "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
                         "started_at": _OLD})
     _reconcile(db, status="SUCCEEDED", history=_entered_then_downstream(
-        "LoadDisclosure", own_arn="arn:own", own_exit=1,
+        "LoadEtfNav", own_arn="arn:own", own_exit=1,
         leaked_arn="arn:other-ok", leaked_exit=0))
 
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
@@ -172,10 +172,10 @@ def test_every_whitelisted_event_type_still_yields_execution_evidence(etype, det
     cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 7}]})
     events = [
         {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
-         "stateEnteredEventDetails": {"name": "LoadDisclosure"}},
+         "stateEnteredEventDetails": {"name": "LoadEtfNav"}},
         {"id": 2, "previousEventId": 1, "type": etype, detail_key: {"cause": cause}},
     ]
-    occ = execution_evidence(events)["LoadDisclosure"][0]
+    occ = execution_evidence(events)["LoadEtfNav"][0]
 
     assert occ["ecs_task_arn"] == "arn:own"
     assert occ["exit_code"] == 7
@@ -187,12 +187,12 @@ def test_task_failed_with_arn_is_terminal_failure_not_failed_to_start():
     #      TaskFailed 가 화이트리스트에서 빠지면 ARN 을 못 읽어 **실제로 실행된 작업이 시작조차
     #      못 한 것으로 오분류**된다 — 복구 절차가 달라지는 실질 차이다.
     db = FakeOpsDB()
-    _seed(db, [{"task_key": "LOAD_DISCLOSURE", "expected_task_id": "e1", "stage": "feature",
+    _seed(db, [{"task_key": "LOAD_ETF_NAV", "expected_task_id": "e1", "stage": "feature",
                 "eligible_at": _OLD, "deadline_at": _PAST}])
     cause = json.dumps({"TaskArn": "arn:own", "Containers": [{"ExitCode": 1}]})
     summary = _reconcile(db, status="FAILED", history=[
         {"id": 1, "previousEventId": 0, "type": "TaskStateEntered",
-         "stateEnteredEventDetails": {"name": "LoadDisclosure"}},
+         "stateEnteredEventDetails": {"name": "LoadEtfNav"}},
         {"id": 2, "previousEventId": 1, "type": "TaskFailed",
          "taskFailedEventDetails": {"error": "States.TaskFailed", "cause": cause}},
     ])

@@ -43,7 +43,7 @@ from .jobs import JobLedger
 from .models import KST
 from .repository import MinuteLedger
 from .session_cli import plan_session_cli
-from .states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
+from .states import DATASET_NEWS_MINUTE, MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,14 @@ ENV_CLUSTER = "MINUTE_SESSION_CLUSTER"
 ENV_SERVICES = "MINUTE_SESSION_SERVICES"
 ENV_GATE_QUEUES = "MINUTE_SESSION_GATE_QUEUES"
 ENV_DRAIN_TIMEOUT = "MINUTE_SESSION_DRAIN_TIMEOUT_SEC"
+# 뉴스 세션 편입 토글(ALPHA-717) — source_group 을 주면 start 가 news_minute 세션도
+# 계획하고 stop 이 함께 드레인한다. 비우면 가격 레인만(뉴스 미편입 환경).
+ENV_NEWS_SOURCE_GROUP = "MINUTE_SESSION_NEWS_SOURCE_GROUP"
+# 뉴스 생산자(news-worker) 서비스명 — 공용 목록(ENV_SERVICES)과 분리한다. 뉴스 세션
+# 계획이 실패한 날 news-worker 까지 올리면 세션 부재 기동 거부로 하루 종일 재기동
+# 루프(비용·알람 소음)를 돌기 때문에, 이 목록은 **뉴스 세션이 선 날만** 올린다.
+# 소비자 2종은 공용 목록에 남는다 — 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
+ENV_NEWS_WORKER_SERVICES = "MINUTE_SESSION_NEWS_WORKER_SERVICES"
 
 DEFAULT_DRAIN_TIMEOUT_SEC = 1800.0
 POLL_INTERVAL_SEC = 15.0
@@ -73,6 +81,19 @@ def _services() -> list[str]:
         # 빈 값으로 통과시키면 "스케일링 성공(0건)" 이 되어 아침에 아무것도 안 뜬 채
         # 스케줄은 초록으로 보인다 — 배선 결손은 여기서 죽는다.
         raise SystemExit(f"{ENV_SERVICES} 가 비었다 — 스케일할 ECS 서비스명을 쉼표로 주입한다")
+    return names
+
+
+def _news_worker_services() -> list[str]:
+    """뉴스 생산자 서비스 목록 — 비어 있을 수 있다(뉴스 미편입 환경). 결손 검증은
+    `_news_source_group` 과 짝으로 본다: 토글이 켜졌는데 목록이 비면 배선 결손이다."""
+    raw = os.environ.get(ENV_NEWS_WORKER_SERVICES, "")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if _news_source_group() is not None and not names:
+        raise SystemExit(
+            f"{ENV_NEWS_SOURCE_GROUP} 이 켜졌는데 {ENV_NEWS_WORKER_SERVICES} 가 비었다 — "
+            "뉴스 세션은 계획되는데 그걸 처리할 서비스가 스케일 목록에 없다"
+        )
     return names
 
 
@@ -109,8 +130,9 @@ def _drain_timeout_sec() -> float:
     return value
 
 
-def _scale(*, desired: int, force: bool) -> None:
-    """상주 서비스 전체의 desired_count 를 바꾼다. 실패는 전파한다(부분 적용을 숨기지 않는다).
+def _scale(*, desired: int, force: bool, services: list[str] | None = None) -> None:
+    """상주 서비스의 desired_count 를 바꾼다. 실패는 전파한다(부분 적용을 숨기지 않는다).
+    `services` 미지정 = 공용 목록(ENV_SERVICES).
 
     ⚠️ 스케일업은 `forceNewDeployment` 를 동반해야 한다 — 이미지 태그가 mutable 이고
     ECS 는 **태스크를 띄울 때** 다이제스트를 확정한다. desired 0 인 동안 CD 가 돌린
@@ -124,12 +146,26 @@ def _scale(*, desired: int, force: bool) -> None:
     # NoRegionError 로 죽는다(s3 와 달리 폴백이 없다 — ops/aws.py 모듈 주석).
     ecs = ecs_client()
     cluster = _cluster()
-    for service in _services():
+    for service in (_services() if services is None else services):
         ecs.update_service(
             cluster=cluster, service=service,
             desiredCount=desired, forceNewDeployment=force,
         )
         logger.info("desired_count=%d (force_new_deployment=%s): %s", desired, force, service)
+
+
+def _news_source_group() -> str | None:
+    value = os.environ.get(ENV_NEWS_SOURCE_GROUP, "").strip()
+    if not value:
+        return None
+    allowed = SOURCE_GROUPS_BY_DATASET[DATASET_NEWS_MINUTE]
+    if value not in allowed:
+        # 오타를 통과시키면 없는 세션 id 가 유도돼 news-worker 가 기동 거부 루프를 돈다 —
+        # 배선 결손은 오케스트레이터 기동에서 죽는다(_services 와 같은 축).
+        raise SystemExit(
+            f"{ENV_NEWS_SOURCE_GROUP} 이 news_minute 어휘 밖이다: {value} (아는 값 {sorted(allowed)})"
+        )
+    return value
 
 
 def _resolve(dataset: str | None, source_group: str | None) -> tuple[str, str]:
@@ -158,6 +194,7 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     (fail-loud), 올려 두면 하루 종일 재기동 루프만 돈다.
     """
     dataset, source_group = _resolve(dataset, source_group)
+    news_group = _news_source_group()  # 배선 오타는 계획 전에 죽는다(_services 와 같은 축)
     today = datetime.now(KST).date()
     if not is_trading_day(today):
         # ⚠️ 공휴일 집합은 `OPS_KR_HOLIDAYS` 수동 주입이다(비면 평일 휴장일이 거래일로
@@ -173,8 +210,25 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
         logger.error("세션 계획이 실패했다(exit %d) — 스케일업하지 않는다", exit_code)
         return exit_code
 
+    # 뉴스 세션(ALPHA-717) — 가격 계획 성공 뒤에 계획한다. ⚠️ 뉴스 계획이 실패해도
+    # **스케일업은 한다**: 가격 레인까지 세우면 뉴스 결손이 하루치 가격 결손으로
+    # 번진다. news-worker 는 세션 부재로 기동 거부 루프를 돌아 실패가 드러나고,
+    # exit 는 뉴스 실패를 그대로 실어 스케줄 기록에 남긴다.
+    news_exit = 0
+    if news_group is not None:
+        news_exit = plan_session_cli(
+            settings, dataset=DATASET_NEWS_MINUTE, source_group=news_group,
+            session_date=today.isoformat(), universe=None,
+        )
+        if news_exit != 0:
+            logger.error("news 세션 계획 실패(exit %d) — 가격 레인은 진행하고 "
+                         "news-worker 는 올리지 않는다(세션 부재 재기동 루프 방지)", news_exit)
+
     _scale(desired=1, force=True)
-    return 0
+    if news_group is not None and news_exit == 0:
+        # 뉴스 생산자는 세션이 섰을 때만 — 계획 실패 날 올리면 기동 거부 루프만 돈다
+        _scale(desired=1, force=True, services=_news_worker_services())
+    return news_exit
 
 
 def stop_session_cli(settings, *, dataset: str | None, source_group: str | None) -> int:
@@ -197,17 +251,25 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         return 2
     dataset, source_group = _resolve(dataset, source_group)
     day = datetime.now(KST).date()
-    session_id = stable_domain_id("msn", dataset, source_group, day.isoformat())
+    lanes = [(dataset, source_group)]
+    news_group = _news_source_group()
+    if news_group is not None:
+        lanes.append((DATASET_NEWS_MINUTE, news_group))
+    ids = {lane: stable_domain_id("msn", lane[0], lane[1], day.isoformat()) for lane in lanes}
 
     ledger = MinuteLedger(db=settings.db)
     jobs = JobLedger(db=settings.db)
     try:
-        snapshot = ledger.session_snapshot(session_id=session_id)
+        snapshots = {lane: ledger.session_snapshot(session_id=ids[lane]) for lane in lanes}
     except Exception:
-        logger.exception("세션 조회 실패: %s", session_id)
+        logger.exception("세션 조회 실패: %s", sorted(ids.values()))
         return 2
+    # 존재하는 세션만 드레인·게이트 대상이다 — 뉴스 계획이 실패한 날의 뉴스 부재가
+    # 가격 레인 종료까지 막으면 안 된다(그날 뉴스 결손은 start 의 exit 가 이미 말했다).
+    live = [lane for lane in lanes if snapshots[lane] is not None]
+    session_ids = [ids[lane] for lane in live]
 
-    if snapshot is None:
+    if not live:
         # 비거래일이거나 Premarket 이 안 돈 날이다. **내리지 않는다** — 오늘 세션이 없다는
         # 것은 서비스가 뭘 하고 있는지 모른다는 뜻이지 노는 중이라는 뜻이 아니다. 전 거래일
         # stop 이 상한 초과로 서비스를 살려 둔 채 끝났다면(exit 1), 그 다음 휴장일의 이
@@ -220,20 +282,31 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         )
         return 0
 
-    try:
-        requested = ledger.request_drain(session_id=session_id, now=datetime.now(timezone.utc))
-    except Exception:
-        logger.exception("drain 요청 실패: %s", session_id)
+    # 전 레인을 시도한 뒤 실패를 판정한다 — 첫 실패에서 끊으면 부분 드레인 상태로
+    # 끝나고(가격만 DRAINING), 스케줄러는 exit 를 재시도하지 않아 나머지 레인이
+    # ACTIVE 로 고립된다. drain 은 멱등이라 재실행이 안전하다.
+    drain_failures = []
+    for lane in live:
+        try:
+            requested = ledger.request_drain(
+                session_id=ids[lane], now=datetime.now(timezone.utc)
+            )
+            logger.info("drain 요청: session=%s(%s/%s) phase_before=%s newly_requested=%s",
+                        ids[lane], lane[0], lane[1], snapshots[lane]["phase"], requested)
+        except Exception:
+            logger.exception("drain 요청 실패: %s(%s/%s)", ids[lane], lane[0], lane[1])
+            drain_failures.append(ids[lane])
+    if drain_failures:
+        logger.error("drain 부분 실패 — 내리지 않는다. 재실행이 안전하다(멱등): %s",
+                     drain_failures)
         return 2
-    logger.info("drain 요청: session=%s phase_before=%s newly_requested=%s",
-                session_id, snapshot["phase"], requested)
 
     timeout_sec = _drain_timeout_sec()
     queues = _gate_queues()
     deadline = time.monotonic() + timeout_sec
     clear_streak = 0
     while True:
-        pending = _gate_pending(ledger, jobs, session_id=session_id, queues=queues)
+        pending = _gate_pending(ledger, jobs, session_ids=list(ids.values()), queues=queues)
         if not pending:
             clear_streak += 1
             if clear_streak >= CLEAR_CONFIRMATIONS:
@@ -250,19 +323,22 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
                 "drain 대기 상한(%.0fs) 초과 — 남은 것: %s. 미발행 outbox: %s. "
                 "**서비스를 내리지 않는다**(내리면 처리 중인 window 가 결손된다). "
                 "원장을 보고 사람이 판단한다: %s",
-                timeout_sec, "; ".join(pending), jobs.count_unpublished(), session_id,
+                timeout_sec, "; ".join(pending), jobs.count_unpublished(), session_ids,
             )
             return 1
         logger.info("대기 중 — %s", "; ".join(pending))
         time.sleep(POLL_INTERVAL_SEC)
 
     _scale(desired=0, force=False)
-    logger.info("세션 종료: session=%s — 게이트 전건 비었음", session_id)
+    news_workers = _news_worker_services()
+    if news_workers:
+        _scale(desired=0, force=False, services=news_workers)
+    logger.info("세션 종료: sessions=%s — 게이트 전건 비었음", session_ids)
     return 0
 
 
 def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,
-                  session_id: str, queues: list[str]) -> list[str]:
+                  session_ids: list[str], queues: list[str]) -> list[str]:
     """아직 안 끝난 것들의 사람이 읽는 목록. 비면 내려도 된다.
 
     앞 단계가 안 끝났으면 뒤를 보지 않는다 — Worker 가 아직 window 를 커밋하는 중이면
@@ -274,9 +350,19 @@ def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,
     0 이라 "다 끝났음" 으로 인증된다. 순서를 뒤집으면 그 행이 다음 관측이 아니라 **이번**
     관측에 잡힌다(남는 창은 두 조회 사이뿐이고, 연속 확인이 그것도 덮는다).
     """
-    phase = (ledger.session_snapshot(session_id=session_id) or {}).get("phase")
-    if phase not in DRAINED_PHASES:
-        return [f"session phase={phase}"]
+    phase_pending = []
+    for session_id in session_ids:
+        snapshot = ledger.session_snapshot(session_id=session_id)
+        if snapshot is None:
+            # 그 시점에 없는 세션은 게이트 대상이 아니다(뉴스 계획 실패 날). 매 폴링
+            # 재확인하므로 **늦게 생긴 세션**(stop 중 start 재실행)은 다음 관측부터
+            # 게이트에 들어온다 — 드레인은 안 걸렸으니 상한까지 pending 으로 남아
+            # exit 1(안 내림)로 끝난다. 조용히 내리는 것보다 시끄럽게 남는 쪽이다.
+            continue
+        if snapshot.get("phase") not in DRAINED_PHASES:
+            phase_pending.append(f"session {session_id[:12]}… phase={snapshot.get('phase')}")
+    if phase_pending:
+        return phase_pending
 
     # depth < 0 은 조회 실패다(모름) — `if depth` 가 0 만 통과시키므로 실패도 pending 이다
     queue_pending = [f"queue depth={'unknown' if depth < 0 else depth} {url}"

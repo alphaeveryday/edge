@@ -1,6 +1,6 @@
 // 가상 MTS 화면 — 홈·검색·종목상세 3화면 (수령 디자인 KODEX 반도체 AI 분석.dc.html 번역, ALPHA-485).
-// AI 분석 탭과 시세(지수·관심종목·상세 헤더 가격)는 BrokerApi(증권사 자체 API)를 호출하고,
-// 호가·차트·뉴스 등 나머지는 증권사 자체 데이터라는 전제로 화면 고정값(목업)을 쓴다.
+// AI 분석 탭·시세(지수·관심종목·상세 헤더 가격)·차트(일봉)는 BrokerApi(증권사 자체 API)를 호출하고,
+// 호가·뉴스 등 나머지는 증권사 자체 데이터라는 전제로 화면 고정값(목업)을 쓴다.
 (function () {
   'use strict';
 
@@ -65,15 +65,15 @@
     { price: '131,930', qty: '20,644', bar: '72%' },
     { price: '131,830', qty: '15,467', bar: '54%' },
   ];
-  var PERIODS = ['1일', '1주', '1개월', '3개월', '1년'];
-  var CHART_STATS = [
-    { label: '시가', value: '141,500' },
-    { label: '고가', value: '142,340' },
-    { label: '저가', value: '131,610' },
-    { label: '거래량', value: '8,214,502' },
-    { label: '거래대금', value: '1조 1,204억' },
-    { label: '52주 최고', value: '146,100' },
+  // 차트 기간 = 일봉 슬라이스 봉 수(거래일). '1일'은 분봉이 필요해 두지 않는다 —
+  // 버튼이 하나 적은 것보다 눌리는 버튼이 전부 실데이터인 것이 시연 정합성에 우선한다.
+  var PERIODS = [
+    { label: '1주', days: 5 },
+    { label: '1개월', days: 22 },
+    { label: '3개월', days: 66 },
+    { label: '1년', days: 250 },
   ];
+  var CHART_FALLBACK_MESSAGE = '차트를 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
   var NEWS = [
     { title: '[공시] KODEX 반도체, 분배금 지급 기준일 안내', source: 'KIND', time: '7월 16일 17:20' },
     { title: '반도체 ETF 일제히 급락…"쏠림 구조가 낙폭 키웠다"', source: '연합인포맥스', time: '7월 16일 16:05' },
@@ -113,10 +113,13 @@
     activeTab: '차트',
     fav: false,
     alertOn: false,
-    period: 2,
+    period: 1,          // 기본 '1개월'
     liked: {},
     aiRequestSeq: 0,    // 종목 전환 중 도착한 낡은 응답 무시용
     aiFetched: false,   // 현재 종목에서 AI 탭이 실제로 열렸는지 — 열기 전엔 호출하지 않는다
+    chart: null,        // BrokerApi.getChart 응답 candles — 과거→현재 순, 기간 슬라이스는 렌더에서
+    chartRequestSeq: 0, // 종목 전환 중 도착한 낡은 차트 응답 무시용
+    chartFetched: false, // 현재 종목에서 차트 탭이 실제로 열렸는지 — 열기 전엔 호출하지 않는다
   };
 
   function el(id) {
@@ -227,6 +230,9 @@
     // exposure_log(고객 노출 이력)로 기록하므로, 보지 않은 화면을 노출로 남기지 않는다.
     state.aiFetched = false;
     state.aiRequestSeq++; // 이전 종목의 in-flight 응답 무효화
+    state.chart = null;
+    state.chartFetched = false; // 차트도 탭이 열릴 때만 — 딥링크로 AI 탭 직행 시 불필요한 호출을 막는다
+    state.chartRequestSeq++;
     selectTab(tab || '차트');
     showScreen('stock');
   }
@@ -254,6 +260,10 @@
     if (name === AI_TAB && !state.aiFetched) {
       state.aiFetched = true;
       fetchAiAnalysis();
+    }
+    if (name === '차트' && !state.chartFetched) {
+      state.chartFetched = true;
+      fetchChart();
     }
   }
 
@@ -327,7 +337,7 @@
     }
   }
 
-  // ── 종목 상세 목업 패널 (증권사 자체 데이터 전제 — 고정값) ─────
+  // ── 종목 상세 목업 패널 — 호가 (증권사 자체 데이터 전제, 고정값) ──
 
   function renderBook() {
     var wrap = el('book-rows');
@@ -367,12 +377,51 @@
     return div;
   }
 
+  // ── 차트 탭 — BrokerApi 경유 실데이터 경로 (일봉, 기간 슬라이스·통계는 여기서 파생) ──
+
+  function fetchChart() {
+    var seq = ++state.chartRequestSeq;
+    el('chart-loading').style.display = 'flex';
+    el('chart-body').style.display = 'none';
+    el('chart-empty').style.display = 'none';
+    window.BrokerApi.getChart(state.stock.ticker)
+      .then(function (result) {
+        if (seq !== state.chartRequestSeq) {
+          return;
+        }
+        el('chart-loading').style.display = 'none';
+        if (result.state === 'OK' && result.data && result.data.candles && result.data.candles.length) {
+          state.chart = result.data.candles;
+          renderChart();
+        } else {
+          state.chartFetched = false; // 폴백에 갇히지 않게 — 탭을 떠났다 돌아오면 재시도한다
+          el('chart-empty-text').textContent = result.message || CHART_FALLBACK_MESSAGE;
+          el('chart-empty').style.display = 'block';
+        }
+      })
+      .catch(function (err) {
+        // 렌더링 예외까지 스켈레톤 잔류 없이 안내 문구로 수렴시킨다 (AI 탭과 동일)
+        console.warn('[app] 차트 렌더링 실패', err);
+        if (seq === state.chartRequestSeq) {
+          state.chartFetched = false;
+          el('chart-loading').style.display = 'none';
+          el('chart-empty-text').textContent = CHART_FALLBACK_MESSAGE;
+          el('chart-empty').style.display = 'block';
+        }
+      });
+  }
+
+  function fmtDateLabel(isoDate) {
+    var parts = isoDate.split('-');
+    return Number(parts[1]) + '/' + Number(parts[2]);
+  }
+
   function renderChart() {
     var wrap = el('chart-periods');
     wrap.textContent = '';
-    PERIODS.forEach(function (label, i) {
+    PERIODS.forEach(function (p, i) {
       var btn = document.createElement('button');
-      btn.textContent = label;
+      btn.textContent = p.label;
       var active = i === state.period;
       btn.style.cssText = 'font-size:12px;font-weight:' + (active ? '700' : '500') + ';padding:5px 10px;border-radius:999px;' +
         'border:none;font-family:inherit;cursor:pointer;background:' + (active ? '#3f3a33' : '#f4f4f5') + ';color:' + (active ? '#fff' : '#71717a');
@@ -382,9 +431,61 @@
       });
       wrap.appendChild(btn);
     });
+    if (!state.chart) {
+      return; // 데이터 도착 전(스켈레톤·폴백 표시 중)엔 기간 버튼만 그린다
+    }
+    var slice = state.chart.slice(-PERIODS[state.period].days);
+    // 종가 폴리라인 — viewBox(360×180) 안에 min/max 정규화
+    var W = 360;
+    var H = 180;
+    var PAD = 8;
+    var closes = slice.map(function (c) { return c.close; });
+    var min = Math.min.apply(null, closes);
+    var max = Math.max.apply(null, closes);
+    var span = max - min || 1;
+    var pts = closes.map(function (v, i) {
+      var x = closes.length > 1 ? (i / (closes.length - 1)) * W : W;
+      var y = PAD + (1 - (v - min) / span) * (H - PAD * 2);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    var line = el('chart-line');
+    var dot = el('chart-dot');
+    line.setAttribute('points', pts.join(' '));
+    var last = pts[pts.length - 1].split(',');
+    dot.setAttribute('cx', last[0]);
+    dot.setAttribute('cy', last[1]);
+    // 선 색은 기간 등락에서 파생 (시세 표기 관례와 동일: 상승=빨강·하락=파랑)
+    var first = closes[0];
+    var latest = closes[closes.length - 1];
+    var lineColor = latest > first ? UP : latest < first ? DOWN : FLAT;
+    line.setAttribute('stroke', lineColor);
+    dot.setAttribute('fill', lineColor);
+    // x축 라벨 — 슬라이스 구간에서 균등 5개
+    var dates = el('chart-dates');
+    dates.textContent = '';
+    var labelCount = Math.min(5, slice.length);
+    for (var li = 0; li < labelCount; li++) {
+      var idx = labelCount > 1 ? Math.round((li * (slice.length - 1)) / (labelCount - 1)) : slice.length - 1;
+      var label = document.createElement('span');
+      label.textContent = fmtDateLabel(slice[idx].date);
+      dates.appendChild(label);
+    }
+    // 통계 카드 — 전부 캔들 파생. 거래대금은 상류 필드가 없어 두지 않는다(지어내지 않는다).
+    // '52주'는 목표 250봉 기준이며 상장 1년 미만 종목은 상장 이후 범위다(실 MTS 표기 관행과 동일).
+    var latestCandle = state.chart[state.chart.length - 1];
+    var high52 = Math.max.apply(null, state.chart.map(function (c) { return c.high; }));
+    var low52 = Math.min.apply(null, state.chart.map(function (c) { return c.low; }));
+    var statRows = [
+      { label: '시가', value: fmtNum(latestCandle.open, 0) },
+      { label: '고가', value: fmtNum(latestCandle.high, 0) },
+      { label: '저가', value: fmtNum(latestCandle.low, 0) },
+      { label: '거래량', value: fmtNum(latestCandle.volume, 0) },
+      { label: '52주 최고', value: fmtNum(high52, 0) },
+      { label: '52주 최저', value: fmtNum(low52, 0) },
+    ];
     var stats = el('chart-stats');
     stats.textContent = '';
-    CHART_STATS.forEach(function (cs) {
+    statRows.forEach(function (cs) {
       var card = document.createElement('div');
       card.style.cssText = 'border:1px solid #e4e4e7;border-radius:5px;padding:10px';
       card.innerHTML = '<div style="font-size:10px;color:#a1a1aa;letter-spacing:.04em"></div>' +
@@ -393,7 +494,10 @@
       card.children[1].textContent = cs.value;
       stats.appendChild(card);
     });
+    el('chart-body').style.display = 'block';
   }
+
+  // ── 종목 상세 목업 패널 — 뉴스·구성종목·커뮤니티·재무 (증권사 자체 데이터 전제, 고정값) ──
 
   function renderNews() {
     var wrap = el('panel-news');

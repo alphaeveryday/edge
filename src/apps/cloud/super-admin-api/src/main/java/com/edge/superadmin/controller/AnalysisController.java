@@ -59,4 +59,12 @@ public class AnalysisController {
 		analysisService.restore(id, request == null ? null : request.reason(), operator);
 		return ApiResponse.onSuccess(null);
 	}
+
+	@PostMapping("/api/v1/analyses/{id}/invalidate")
+	public ApiResponse<Void> invalidate(@PathVariable String id,
+			@RequestBody(required = false) ReasonRequest request,
+			@SessionAttribute(SessionOperator.SESSION_KEY) SessionOperator operator) {
+		analysisService.invalidate(id, request == null ? null : request.reason(), operator);
+		return ApiResponse.onSuccess(null);
+	}
 }

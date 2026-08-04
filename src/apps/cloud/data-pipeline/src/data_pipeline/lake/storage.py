@@ -196,22 +196,36 @@ def raw_etf_profile_partition(
     )
 
 
+def raw_disclosure_day_prefix(source: str, market: str, ingest_date: str) -> str:
+    """raw 공시 **수집일 전체**(run_id 무관) 프리픽스 (끝 슬래시 포함).
+
+    한 수집일에는 run_id 파티션이 여럿 있다 — 장중 레인은 같은 날 여러 슬롯이 돈다. 그
+    날 이미 받아 둔 본문(document.xml ZIP)을 찾으려면 run_id 아래가 아니라 **수집일 전체**를
+    훑어야 한다(ALPHA-720). run_id 까지 붙은 프리픽스가 필요하면 raw_disclosure_partition 이다.
+
+    끝 슬래시를 포함하는 이유: 프리픽스는 문자열 매칭이라(list_keys 규약) 슬래시가 없으면
+    `ingest_date=2026-08-0` 가 `…-03`·`…-04` 를 함께 잡는다.
+    """
+    return f"raw/source={source}/dataset=disclosures/market={market}/ingest_date={ingest_date}/"
+
+
 def raw_disclosure_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
     """raw 공시(disclosures) 메타 파티션 프리픽스 (끝 슬래시 없음).
 
     가격·재무와 동형(bronze 통일) — 공시목록(list.json) 행을 수집일(ingest_date) 기준으로
-    run_id 별 append 한다(전부 보존, dedup 없음). 정체성 병합·corp_code↔ticker bridge·정정
-    판정은 후속 canonical 소관이다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
+    run_id 별 append 한다(전부 보존). 정체성 병합·corp_code↔ticker bridge·정정 판정은 후속
+    canonical 소관이다 — **서로 다른 관측을 접는 일은 여기서 하지 않는다.** 단 소스가 한
+    순회 안에서 **내용이 완전히 같은 행**은 접는다(페이지 경계 이동 중복 — 접지 않으면 같은
+    문서를 두 번 내려받는다). 그래서 collection_log 의 `list_rows_seen`(벤더가 건넨 행 수)과
+    이 파티션의 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이라, 그 차이를
+    유실로 대사하면 안 된다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
     document_raw_path 가 그대로 보존돼 canonical/파싱이 쓴다. 공시서류 원본 본문은 ndjson 에
     못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션 아래 별도 객체로 둔다
     (raw_disclosure_document_key 참고).
     """
-    return (
-        f"raw/source={source}/dataset=disclosures/market={market}"
-        f"/ingest_date={ingest_date}/run_id={run_id}"
-    )
+    return f"{raw_disclosure_day_prefix(source, market, ingest_date)}run_id={run_id}"
 
 
 def raw_disclosure_document_key(

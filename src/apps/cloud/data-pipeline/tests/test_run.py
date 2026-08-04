@@ -343,6 +343,52 @@ def test_tag_news_negative_window_days_fails_loud(monkeypatch):
     assert "window" not in captured
 
 
+def _spy_load_disclosure(monkeypatch):
+    """load-disclosure 분기가 넘긴 (from_date, to_date) 를 캡처한다. DB 는 안 뜬다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    def fake_run(storage, run_id, *, db, from_date, to_date):
+        captured["window"] = (from_date, to_date)
+        return 0
+
+    monkeypatch.setattr(run_mod.load_disclosure, "run", fake_run)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda db: db)
+    return run_mod, captured
+
+
+def test_load_disclosure_window_days_prunes_report_date_partitions(monkeypatch):
+    # WHY(ALPHA-721): 장중 공시 레인은 하루 10슬롯이고 이 로더는 창 미지정이면 canonical
+    #      report_date **전체 스캔**이라, 배선이 없으면 그 풀스캔이 슬롯마다 곱해진다
+    #      (news-load-fullscan-problem 과 같은 축). ASL 은 날짜 산술을 못 해 --window-days 만
+    #      넘기므로 run 이 창으로 번역해야 한다 — 끊겨도 컴파일은 되고 매 슬롯이 전량 스캔하니
+    #      값으로 고정한다.
+    run_mod, captured = _spy_load_disclosure(monkeypatch)
+    monkeypatch.setattr(run_mod, "default_window", lambda now, days: (f"from-{days}", f"to-{days}"))
+    assert main(["load-disclosure", "--run-id", "R1", "--window-days", "3"]) == 0
+    assert captured["window"] == ("from-3", "to-3")
+
+
+def test_load_disclosure_explicit_window_overrides_and_default_is_full_scan(monkeypatch):
+    # WHY(ALPHA-721): 두 기존 경로를 보존한다 — ① 명시 --from/--to 백필이 조용히 최근 N일로
+    #      좁혀지면 그 구간이 영영 적재되지 않는다 ② --window-days 미주입은 풀스캔이어야
+    #      밀린 canonical 을 다음 런이 주워오는 백로그 회수가 살아 있다(형제 로더들의 모델).
+    run_mod, captured = _spy_load_disclosure(monkeypatch)
+
+    def _boom(*a, **k):
+        raise AssertionError("명시 창·창 미주입 경로에서 default_window 를 부르면 안 된다")
+
+    monkeypatch.setattr(run_mod, "default_window", _boom)
+    assert main(["load-disclosure", "--run-id", "R", "--window-days", "3",
+                 "--from", "2026-01-01", "--to", "2026-01-05"]) == 0
+    assert captured["window"] == ("2026-01-01", "2026-01-05")
+
+    assert main(["load-disclosure", "--run-id", "R"]) == 0
+    assert captured["window"] == (None, None)
+
+
 def test_deadline_rejected_where_it_is_ignored(monkeypatch):
     # WHY: `--deadline-sec` 는 KRX ETF 만 소비한다. 다른 스텝에서 조용히 무시되면 운영자가
     #      상한이 걸렸다고 오인하고(있다고 믿는데 안 걸린다), SFN 이 엉뚱한 브랜치에 상한을

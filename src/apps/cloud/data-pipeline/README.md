@@ -100,8 +100,9 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 5종
-> price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713):
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 7종
+> price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
+> news-worker(ALPHA-717) + analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
@@ -120,9 +121,12 @@
 > 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
 > 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
-> BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). 다만 news-worker 의
-> **ECS 서비스·세션 오케스트레이션 편입은 후속 PR** 이라 그때까지 뉴스 큐 2종은 빈 채로
-> 소비자만 상주한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
+> BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
+> **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
+> 계획하고(`MINUTE_SESSION_NEWS_SOURCE_GROUP`), news-worker 는 **뉴스 세션이 선 날만**
+> 별도 목록(`MINUTE_SESSION_NEWS_WORKER_SERVICES`)으로 올라간다(계획 실패 날 올리면
+> 세션 부재 기동 거부 루프 — 가격 레인은 그와 무관하게 진행). stop 은 존재하는 세션
+> 전부를 드레인하고 매 폴링 세션 존재를 재확인한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
 > 쿨다운(기본 300초) 동안 poll 이 억제된다 — 처방은 재시도가 아니라 pacing 상향·중지다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
@@ -196,16 +200,25 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial --source dart
 
 # 국내 공시(disclosure) 원본저장(Step1) — OpenDART 공시목록(list.json) + 공시서류 원본
-# (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. corp_code×날짜창으로
-# 공시목록을 수집해 대상 유형(공급계약·사업보고서, report_nm 부분일치)만 추리고, 매칭 공시의
-# 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다. 날짜창은 뉴스와 동형(미지정=증분
-# 어제~오늘, 백필은 --from/--to). corp_code 는 corpCode.xml 로 런타임 매핑. 인증키는 env 주입.
+# (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. **날짜창의 시장 전체**
+# 공시목록을 페이지네이션해 유니버스(stock_code)∩대상 유형(공급계약·사업보고서, report_nm
+# 부분일치)만 추리고, 매칭 공시의 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다.
+# 날짜창은 뉴스와 동형(미지정=증분 어제~오늘, 백필은 --from/--to). 인증키는 env 주입.
 # 수집 대상은 canonical KR holdings ETF 별 최신 파티션 합집합의 **구성종목** ∪ targets
-# (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 corpCode 의 stock_code 와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가
-# 아니라 corpCode 에 없어, 남기면 매 런 미매핑으로 잡혀 원장이 영구 INCOMPLETE 가 된다.
-# corpCode 에 없는 종목은 kind=unmapped 로 런을 죽이지 않되(재시도로 낫지 않음) 계측에는
-# 남는다 — 커버리지 구멍은 data_status=INCOMPLETE 로 사실대로 드러난다.
+# (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 list 행의 stock_code 와 항등이라 심볼맵 없이 수집되고,
+# symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가 아니다.
+# ⚠️ 유니버스는 **질의 축이 아니라 필터**다. corp_code 는 list.json 의 선택 파라미터이고,
+# 종목별로 질의하면 콜 수가 유니버스에 비례해(311 종 ⇒ ~311초) 잦은 실행이 불가능하다. 창
+# 전체를 훑으면 페이지 수에만 비례한다(5거래일 3,267행 = 33 콜, 실측 2026-08-03). 그래서
+# 수집 경로에는 corpCode.xml 해소가 없다 — 매 런 상수로 걸리며 data_status 를 INCOMPLETE 에
+# 묶던 kind=unmapped 실패도 함께 사라졌다. corpCode.xml 은 enrich-corp-code 스텝만 쓴다.
+# ⚠️ 창은 30일씩 잘라 순회한다 — corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다
+# (4개월 창은 status=100 거절, 실측). --from 만 주면 끝일을 KST 오늘로 확정해 자르고, 실제
+# 수집한 창은 collection_log 의 window_from/window_to 에 남는다(인자가 아니라 실제 값).
+# ⚠️ 본문(ZIP)은 **틱 멱등**이다(ALPHA-720) — 같은 수집일(UTC ±1일)에 이미 받아 둔 rcept_no 는
+# 다시 내려받지 않고 기존 객체를 가리킨다(`documents_reused` 로 계상). 같은 날 두 번 돌리면
+# 2회차는 `documents_saved=0` 이고 메타(`records_saved`)는 1회차와 같다 — 메타는 매 실행이
+# 창 전체 관측을 남기는 것이 완전성 근거라 접지 않는다. 2일 밖 창의 백필은 재다운로드한다.
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-disclosure
 # 백필 예: 2026-06 한 달
@@ -377,6 +390,10 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # FK RESTRICT 회피 위해 skip+계측(커버리지 9→309 는 ALPHA-491). DB CHECK 는 파이썬 선검증해
 # 위반 fact 만 뺀다(한 건이 배치 롤백 안 되게). 멱등: document 자연키·fact_id=결정적 파생
 # ON CONFLICT. --from/--to 는 report_date 창(미지정=전체 스캔).
+# 창 인자가 하나 더 있다(ALPHA-721): --window-days N 은 오늘−N일 창을 앱이 계산해 넘긴다.
+# ASL 이 날짜 산술을 못 해 --from/--to 를 만들 수 없어서다 — 장중 공시 레인처럼 하루 여러 번
+# 도는 호출부가 쓴다(풀스캔이 슬롯마다 곱해지는 걸 막는다). 명시 --from/--to 가 우선하고,
+# 둘 다 없으면 종전대로 풀스캔이다(백로그 회수 경로 보존).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-disclosure
 
@@ -467,6 +484,30 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 운영 원장에 **자체 `pipeline_type`(`news`)·하루 3슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
+
+공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
+세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
+LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). 단 `LoadDisclosure` 만
+**컷오버 완료**(ALPHA-724): 시장 SFN 에서 공시 4스텝이 빠졌고 이 스케줄이 ENABLED 다 —
+공시는 이제 **이 레인에서만** 수집·정제·적재된다(15:40 런은 공시를 돌리지 않는다). 뉴스 레인이
+PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 밟았다.
+
+⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
+붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
+돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
+issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
+
+⚠️ **컷오버가 필요한 이유는 성능이 아니라 원장 정체성이다.** 작업 정체성의 정본은
+`catalog.by_cli(step, source)` 인데 두 레인의 CLI 가 글자 그대로 같아(`ingest-raw-disclosure`
+등), 같은 스텝을 두 레인이 동시에 소유하면 `by_cli` 가 먼저 온 쪽을 돌려줘 장중 런의 attempt
+가 시장 레인 task_key 로 기록된다 — 장중 런은 영구 MISSED, 시장 런은 resolve 경로 없는
+`LEDGER_GAP` 이다. 그래서 컷오버는 선택이 아니라 전제다.
+
+`LoadDisclosure` 의 issuer 해소는 **레인 간 읽기 전용 공유**다 —
+`company_profile.dart_corp_code` 를 채우는 `EnrichCorpCode` 는 시장 SFN 소관이라, 유니버스에
+새로 들어온 회사는 그 슬롯에서 `skipped_unresolved_issuer` 로 계측된 뒤 다음 일일런 이후
+슬롯이 줍는다(조용한 유실이 아니라 계측된 지연). 뉴스 SFN 이 `instrument` 마스터를 빌려 읽는
+것과 같은 형태다.
 
 **raw 수집(12잡)** — 벤더 API 키가 필요해 각자의 시크릿 세트를 쓴다.
 
@@ -563,17 +604,24 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   document. 자연키 멱등, LoadAssertions 의 FK 선행
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
-  dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE
+  dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
+  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루 1회만
+  돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   엔티티 해소·해소율은 quality log 로 남는다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
   분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
-  계보 조립 → event_thread threading. 결정적 ID 산식·프롬프트는 엔진과 동일(정본), 창 미지정 =
-  오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘] 겹침(ALPHA-592, 자정 crossing·
-  overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다(ADR-0028). 제목 분류 LLM 콜은
-  배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은 `LLM_CONCURRENCY` env) — 단 threading 은
-  novelty 가 available_at 순서·prior 카운트에 의존해 **직렬** 유지다
+  계보 조립 → event_thread threading. **배치=catch-up 이다(ALPHA-730)** — event 의 실시간 정본은
+  1분 단건 조립(ALPHA-727)이고, 배치는 미조립 잔여 소진 + UNKNOWN 재평가·미연결 회수만 맡는다.
+  적재 직전 doc 단위 advisory lock 아래 자국을 재확인해 단건 경로가 분류 창에서 먼저 조립한
+  기사를 skip 하고, 트랜잭션은 날짜별 커밋이라 threading 락 점유가 1분 소비자를 오래 막지
+  않는다. 자체 분류기 폐기는 단건 경로 커버리지 실증 후 후속. 결정적 ID 산식·프롬프트는
+  엔진과 동일(정본), 창 미지정 = 오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘]
+  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다
+  (ADR-0028). 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
+  `LLM_CONCURRENCY` env) — 단 threading 은 novelty 가 available_at 순서·prior 카운트에 의존해
+  **직렬** 유지다
 
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
@@ -659,15 +707,23 @@ settings.targets.keywords            # ["금리", ...]
   수집 provenance 만 부착한다.
 - **raw(공시)** — `raw/source=dart/dataset=disclosures/market=KR/ingest_date=…/run_id=…/` 에
   run_id 별 append. **가격·재무와 동형(bronze 통일)** — 공시목록(list.json) 행을 수집일 기준으로
-  **전부 보존**한다(중복 판정 안 함). 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
+  **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 재무제표(`fnlttSinglAcnt`, `dataset=financial_statements`)와
   **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
   에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
-  가 그 객체를 가리킨다(메타↔본문 링크). list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
+  가 그 객체를 가리킨다(메타↔본문 링크). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
+  (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
+  가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
+  도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
+  완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다). 재사용 건수는
+  collection_log 의 `documents_reused` 로 드러나고, 본문 fetch 가 실패한 건은 객체가 없어
+  다음 실행이 자동 재시도한다. list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
 - **raw(ETF 구성종목)** — `raw/source={fmp|krx}/dataset=etf_holdings/market={US|KR}/ingest_date=…/run_id=…/`
   에 run_id 별 append. **가격·재무와 동형(bronze 통일)** — ETF holdings 는 스냅샷이라 매 실행이 현재
-  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(중복 판정 안 함). 수집 대상은
+  구성종목 전량을 주고, 받은 행을 수집일 기준으로 **전부 보존**한다(정정·정체성 판정 안 함). 단 한 순회 안의 **완전히 같은 행**은 소스가 접는다
+  (페이지 이동 중복) — `list_rows_seen` 과 raw 행 수가 다를 수 있고 그 차이는 유실이 아니다. 수집 대상은
   종목 유니버스가 아니라 ETF 목록(`etf.source.etf_map`·`krx_etf.source.etf_map`)이라 **1 ETF → N
   구성종목**으로 펼쳐지고, 각 행에 벤더 기준일(FMP `updatedAt`·KRX `trd_dd`)·`our_etf_id`·`market`·
   `fetched_at` 를 부착한다. 같은 스냅샷 중복 제거·기준일 SCD·point-in-time 판정은 후속 canonical(silver)
@@ -804,7 +860,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업 =
-  시장 레인(`etf-daily`) 21 + 뉴스 레인(`news`) 6**(ECS Task state 33개 중 — 시장 SFN 31 +
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4**(ALPHA-724 가
+  공시 4작업의 소유 레인을 옮겼다 — 총계는 그대로)(ECS Task state 33개 중 — 시장 SFN 31 +
   뉴스 SFN 직렬 2. ALPHA-181 → 578 → 553 PR2 → 591). 레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
@@ -897,8 +954,12 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   그 슬롯으로 **흡수**되고 `created=False` 로 드러난다 — 새로 도는 게 없다는 뜻이니 로그를 보라.
 - 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slots` 도 그 함수를 쓴다 —
   두 곳에서 조립하면 어긋나는 순간 없는 슬롯을 찾아 **실제 런이 영영 대조되지 않는다**. 같은
-  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각
-  스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다.
+  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM` 은 별도
+  변수가 아니라 terraform 이 각 스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로
+  `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시 것만 **스케줄이 ENABLED 일 때만
+  주입한다**(ALPHA-722) — 슬롯 기준은 Reconciler 에게 "이 시각엔 런이 있어야 한다"는 주장이라,
+  꺼진 채 넣으면 뜰 리 없는 슬롯을 매시간 결측으로 판정해 **참인** PLANNER_MISSING 을 연다.
+  빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 평일"의 **그날 지난 스케줄 슬롯 전부**를
   대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). ⚠️ 수동 슬롯은
   여전히 `OPS_RUN_KEY` 로 지정해야 대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히
@@ -987,6 +1048,8 @@ DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
+# 추출 성공은 event 계보(source_event 7종 + threading)로 **즉시 단건 조립**된다
+# (ALPHA-727, minute/event_assembly.py — assemble-events 와 같은 결정적 ID·스레드).
 # LLM 설정은 tag-news 와 같은 LLM_* env 관례(기본 base_url·model=DeepSeek).
 # realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
 # --max-ticks 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)면 exit 1.
@@ -1002,7 +1065,7 @@ DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-rea
 # 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712) — 상주 서비스 5종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719) — 상주 서비스 7종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
@@ -1015,6 +1078,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
+MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group toss --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
@@ -1027,6 +1092,8 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
+MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group toss
@@ -1034,7 +1101,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯
 =plan-run, reconcile, 1분 세션 start·stop) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 5종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다.
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 7종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).

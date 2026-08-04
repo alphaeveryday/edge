@@ -48,7 +48,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
 | Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
-| Event Pipeline — 분석 목록/정정/제외/복원 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` |
+| Event Pipeline — 분석 목록/정정/제외/복원/무효화 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. UI 버튼은 후속) |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |
 
@@ -56,4 +56,4 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 > 새 결과·사유가, 제외는 사유가 필수다(빈 값 400). UI 가 사유 입력을 받는다. 복원 사유는 선택.
 > 작업자·사유·변경 전후는 감사 원장(`admin_activity_log`)에 보존된다.
 
-> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 현재 분석 정정/제외/복원이 append 되고 테넌트 생성 감사는 후속): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.
+> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 현재 분석 정정/제외/복원/무효화(ALPHA-440)가 append 되고 테넌트 생성 감사는 후속): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.

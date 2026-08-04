@@ -495,6 +495,16 @@ module "data_pipeline" {
   # manual-553-verify-20260727T132646Z)을 선행했다.
   news_schedule_state = "ENABLED"
 
+  # 컷오버(ALPHA-724): 공시 레인 스케줄(평일 09~18시 정각 10슬롯). 시장 SFN 에서 공시 4스텝을
+  # 빼는 것과 **같은 apply** 로 켠다 — 한쪽만 먼저 가면 공시가 아무 데서도 안 돌거나(스텝만 제거)
+  # 같은 스텝을 두 SFN 이 동시에 소유한다(스케줄만 켬). 후자는 원장 정체성이 깨지는 쪽이다:
+  # `catalog.by_cli` 가 CLI 로 작업을 해소하는데 두 레인의 CLI 가 같아, 장중 런의 attempt 가
+  # 시장 레인 task_key 로 기록돼 장중은 영구 MISSED·시장은 LEDGER_GAP 이 된다.
+  # 병행 신설(ALPHA-722)은 DISABLED 로 세워 plan 으로 검증했다(뉴스 레인 553 PR1→PR2 와 같은 순서).
+  # ⚠️ 이 스케줄이 켜지면 `OPS_DISCLOSURE_SCHED_HHMM` 도 함께 주입된다(ops_ledger.tf 조건부) —
+  # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
+  disclosure_schedule_state = "ENABLED"
+
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
   # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이

@@ -23,6 +23,7 @@ from data_pipeline.ops.catalog import PIPELINE_TYPE
 from data_pipeline.ops.ledger import Ledger
 from data_pipeline.ops.planner import plan_run
 
+import test_ops_catalog          # terraform 실제 값 파서 재사용(중복 파서 금지)
 from opsfakes import FakeOpsDB, FakeSfn
 
 _DB = DbConfig(password="x")
@@ -44,9 +45,9 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.created is True and r2.created is False
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
-    # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — ALPHA-591 이후
-    # 카탈로그는 전 레인 27이지만 시장 일일런 기대는 여전히 21 이다).
-    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 21
+    # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — 카탈로그는 전 레인
+    # 27이지만 시장 일일런 기대는 17 이다. 뉴스 6·공시 4는 자기 레인 런이 계획한다).
+    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 17
 
 
 def test_same_day_different_slots_are_separate_runs():
@@ -390,14 +391,14 @@ def test_malformed_news_sched_env_fails_loud(monkeypatch):
     #      부분 손상("15-30")이 나머지 슬롯만으로 성공 종료하면 안 된다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15-30,23:50")
     with pytest.raises(SystemExit, match="15-30"):
-        entry._news_sched_hhmms()
+        entry._lane_sched_hhmms("OPS_NEWS_SCHED_HHMM")
     # 빈 **항목**도 손상이다("15:00, ,23:50" 의 가운데 슬롯이 소리 없이 사라진다) — 값 전체가
     # 빈 것(미주입·컷오버 전)과 다르다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00, ,23:50")
     with pytest.raises(SystemExit):
-        entry._news_sched_hhmms()
+        entry._lane_sched_hhmms("OPS_NEWS_SCHED_HHMM")
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "  ")
-    assert entry._news_sched_hhmms() == []
+    assert entry._lane_sched_hhmms("OPS_NEWS_SCHED_HHMM") == []
 
 
 def test_due_slots_without_news_env_has_no_news_slots(monkeypatch):
@@ -424,6 +425,84 @@ def test_plan_run_cli_news_lane_requires_news_arn(monkeypatch):
     monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)   # 시장 ARN 이 있어도 폴백하면 안 된다
     with pytest.raises(SystemExit, match="OPS_NEWS_STATE_MACHINE_ARN"):
         entry.plan_run_cli(object())
+
+
+def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
+    # WHY(ALPHA-721): 뉴스 레인과 같은 이유다 — 다른 레인 ARN 으로 폴백하면 공시 기대를 걸고
+    #      **남의 SFN 을 기동**해 기대와 실행이 어긋난 런이 원장에 남는다. 레인이 셋이 되면서
+    #      분기가 표로 바뀌었으므로, 표에 있으나 env 가 빈 경로를 여기서 고정한다.
+    monkeypatch.setenv("OPS_PIPELINE_TYPE", "disclosure")
+    monkeypatch.delenv("OPS_DISCLOSURE_STATE_MACHINE_ARN", raising=False)
+    monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)      # 있어도 폴백하면 안 된다
+    monkeypatch.setenv("OPS_NEWS_STATE_MACHINE_ARN", _ARN)
+    with pytest.raises(SystemExit, match="OPS_DISCLOSURE_STATE_MACHINE_ARN"):
+        entry.plan_run_cli(object())
+
+
+def test_disclosure_lane_owns_the_four_disclosure_tasks(monkeypatch):
+    # WHY(ALPHA-724): 컷오버의 본체는 **소유 레인 이동**이다. 두 레인의 CLI 가 글자 그대로 같아
+    #      (`ingest-raw-disclosure`…) 같은 스텝을 둘이 동시에 소유하면 `by_cli` 가 먼저 온
+    #      엔트리를 돌려줘 장중 런의 attempt 가 시장 레인 task_key 로 기록된다 — 장중 런은
+    #      영구 MISSED 다. 그래서 "레인 하나"는 성능이 아니라 정체성 요구다.
+    #      **중간 미등록 상태를 두지 않은 이유도 여기서 잠근다**: 미등록은 잊히면 조용히
+    #      영구화되지만(공시가 원장 밖에서 도는데 화면에 흔적 0), 레인을 바로 옮기면 최악이
+    #      배포 순서에 따른 MISSED 몇 건이고 그건 자가 해소된다(Rule 12 — 관대한 쪽 대신
+    #      시끄러운 쪽). 레인이 비면 그 조용한 상태로 되돌아간 것이므로 여기서 실패해야 한다.
+    assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
+    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
+        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
+        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE"}
+    # 시장 레인에는 하나도 남지 않았다 — 한쪽만 옮기면 `by_cli` 오귀속이 그대로 살아난다.
+    assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
+                if "DISCLOSURE" in e.task_key]
+    # 판정 임계는 **terraform 의 실제 값**에서 뽑아 대조한다 — 상수를 하드코딩하면 cron 에
+    # 30분 슬롯을 더하거나 SFN 타임아웃을 낮춰도 통과한다(edge-review). 두 계약:
+    #   ① deadline + Reconciler 주기 < 슬롯 간격. 주기를 빼먹으면 안 된다 — 판정을 찍는 건
+    #      15분마다 도는 Reconciler 라 deadline 직후가 아니라 최대 그만큼 뒤다. 이 항이 없으면
+    #      "한 슬롯의 결측이 다음 슬롯 예정 전에 드러난다"가 산술적으로 거짓인데 통과한다.
+    #   ② stalled **<** SFN 타임아웃(같으면 안 된다). 판정이 `> threshold` 인데 SFN 이 정확히
+    #      타임아웃에 실행을 죽이므로, 같게 두면 경과가 임계를 넘는 순간이 오지 않아
+    #      **영원히 발화하지 않는다**(있으나 마나 한 신호를 계약으로 못박는 셈).
+    slot_interval = test_ops_catalog.disclosure_slot_interval_seconds()
+    sfn_timeout = test_ops_catalog.disclosure_sfn_timeout_seconds()
+    reconcile_period = test_ops_catalog.reconcile_period_seconds()
+    for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE):
+        assert e.deadline_offset_seconds + reconcile_period < slot_interval, e.task_key
+        assert e.stalled_after_seconds < sfn_timeout, e.task_key
+        # 크론이 MON-FRI 라 평일 공휴일에도 돈다 — True 면 그 실행 결과가 SKIPPED 뒤로 사라진다.
+        assert e.kr_trading_calendar is False, e.task_key
+
+
+def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
+    # WHY(ALPHA-721): 레인마다 슬롯 집합이 다르므로 env 도 레인마다여야 한다. 뉴스 env 를
+    #      공유하면 공시 슬롯이 뉴스 시각(15:00·15:30·23:50)으로 잡혀 **존재하지 않는 런**을
+    #      매 주기 PLANNER_MISSING 으로 연다. 미주입 레인은 슬롯 0개여야 한다 — 스케줄이 아직
+    #      Planner 를 안 타는 배포(이 PR 시점)에서 거짓 결측을 만들지 않는 안전 기본값이다.
+    monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
+    monkeypatch.delenv("OPS_DISCLOSURE_SCHED_HHMM", raising=False)
+    due = entry._due_slots(datetime(2026, 7, 24, 16, 30, tzinfo=planner_mod.KST))
+    assert all(not key.startswith("disclosure:") for key, _ in due)
+
+    monkeypatch.setenv("OPS_DISCLOSURE_SCHED_HHMM", "09:00,10:00,16:00,17:00")
+    due = entry._due_slots(datetime(2026, 7, 24, 16, 20, tzinfo=planner_mod.KST))
+    assert [key for key, _ in due if key.startswith("disclosure:")] == [
+        "disclosure:2026-07-24T09:00", "disclosure:2026-07-24T10:00",
+        "disclosure:2026-07-24T16:00",   # 17:00 은 아직 예정 전이라 빠진다
+    ]
+    # grace(30분)는 슬롯별이다 — 16:20 기준 16:00 은 아직 유예 중이고 09:00·10:00 은 한참 지났다.
+    # 시간당 슬롯이라 유예가 간격보다 짧다: 한 슬롯의 결측 판정이 다음 슬롯 예정 전에 열린다.
+    grace = {key: g for key, g in due if key.startswith("disclosure:")}
+    assert grace["disclosure:2026-07-24T09:00"] is True
+    assert grace["disclosure:2026-07-24T16:00"] is False
+
+
+def test_malformed_disclosure_sched_env_fails_loud(monkeypatch):
+    # WHY(ALPHA-721): 새 env 도 뉴스와 같은 fail-loud 여야 한다. 레인마다 복사하지 않고
+    #      `_lane_sched_hhmms(env_name)` 하나를 쓰는 이유가 이것이다 — 복제하면 한쪽만
+    #      관대해지는 순간 그 레인의 PLANNER_MISSING 탐지가 조용히 사라진다.
+    monkeypatch.setenv("OPS_DISCLOSURE_SCHED_HHMM", "09:00,10-00")
+    with pytest.raises(SystemExit, match="OPS_DISCLOSURE_SCHED_HHMM"):
+        entry._lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM")
 
 
 def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):

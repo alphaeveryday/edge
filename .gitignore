@@ -61,8 +61,10 @@ venv/
 .env.*
 !.env.example
 
-# Local planning scratch files. Durable project docs belong under docs/ or tracked .dev scripts.
-.dev/*-plan.md
+# Local scratch. 저장소는 .dev/ 안의 어떤 파일도 추적하지 않는다 — 공유할 문서는 docs/,
+# 공유할 스크립트는 scripts/ 로 간다. 추적 파일이 없어야 워크트리마다 .dev 를 통째로
+# 심링크로 붙일 수 있다(디렉터리를 심링크로 바꾸면 git 이 추적 파일을 typechange 로 본다).
+/.dev
 
 # 세션 임시 산출물. 에이전트·수동 작업이 저장소 루트에 흘리는 것들 - 커밋 대상이 아니고
 # 지우지 않으면 다음 세션의 `git status` 를 덮어 실제 변경을 가린다.
