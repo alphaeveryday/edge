@@ -338,6 +338,24 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
+	void 제공_범위에서_제외된_종목은_노출_head_가_아니다() {
+		OffsetDateTime asOf = OffsetDateTime.parse("2026-07-15T12:00:00+09:00");
+		seedItem("it607-scope-off", "607SCP", "롯데", "AUTO_PUBLISHED", "LOW", "제외 종목", "[]",
+				OffsetDateTime.now(), asOf);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-scope-off', '607SCP', '2026-07-15', ?)", asOf);
+		jdbc.update("INSERT INTO serving_scope (scope_type, scope_key, enabled) "
+				+ "VALUES ('INSTRUMENT', '607SCP', false)");
+
+		// WHY: publication-api 는 제공 범위 차단이면 게시분 조회 전에 204 로 수렴한다
+		// (isServingBlocked) — 게시·항목 상태만 보면 고객이 못 보는 종목에 "노출 중" 배지가
+		// 뜬다. MARKET(XKRX) 전역 토글은 같은 NOT EXISTS 분기이나 공유 컨테이너의 다른
+		// 테스트를 전역 차단하므로 여기선 INSTRUMENT 로만 고정한다(전역 실효화는
+		// publication-api ExplanationScopeIntegrationTest 소관).
+		assertThat(find("it607-scope-off").serving()).isFalse();
+	}
+
+	@Test
 	void 반입_상태는_오늘_반입_수와_최근_시각을_집계한다() {
 		seedItem("it607-feed", "607FED", "현대차", "AUTO_PUBLISHED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
