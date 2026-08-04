@@ -55,10 +55,10 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 		jdbc.update("""
 				INSERT INTO explanation_result (explanation_result_id, explanation_run_id,
 				       etf_instrument_id, trade_date, explanation_as_of, explanation_type,
-				       summary, confidence_level)
+				       summary, confidence_level, publication_status)
 				VALUES ('res-1', 'run-1', 'etf-t601', '2026-07-27',
 				        '2026-07-27T15:40:00+09:00'::timestamptz, 'EVENT_SUPPORTED',
-				        '반도체 업황 회복 기대가 확산되며 상승.', 'HIGH')
+				        '반도체 업황 회복 기대가 확산되며 상승.', 'HIGH', 'PUBLISHED')
 				""");
 		insertDocumentEvidence("1", "반도체 수출 반등", "2026-07-27T09:10:00+09:00");
 		insertDocumentEvidence("2", "발행시각 없는 기사", null);
@@ -235,50 +235,16 @@ class JdbcAnalysisRepositoryIntegrationTest extends CloudPostgresIntegrationTest
 		assertThat(pending.evidence()).isEmpty();
 	}
 
-	/** 운영자 작업 원장이 비면 오버레이는 전부 false — 제외도 정정도 아니다(ALPHA-602). */
-	@Test
-	void 오버레이_기본값은_제외도_정정도_아니다() {
-		assertThat(repository.list()).allSatisfy(row -> {
-			assertThat(row.excluded()).isFalse();
-			assertThat(row.corrected()).isFalse();
-		});
-	}
-
 	/**
-	 * 오버레이는 admin_activity_log 의 런별 최신 액션에서 유도한다 — 제외/복원은 최신이 이기고
-	 * (run-2: 제외 후 복원 → 제외 아님), 정정은 제외와 독립이며 최신 정정본이 오버레이된다
-	 * (run-1: 1차→2차 정정 후 제외 → excluded·corrected 둘 다 true, correctedSummary=2차).
+	 * 게시 상태는 원장 어휘 그대로 노출된다 — 결과가 있는 런은 publication_status 값,
+	 * 결과가 아직 없는 런은 null. 무효화 버튼의 활성 조건이 이 축이라(ALPHA-737) 화면이
+	 * 실행 상태와 혼동하면 미게시 런에 무효화를 시도하게 된다.
 	 */
 	@Test
-	void 오버레이는_런별_최신_액션에서_제외_정정_정정본을_유도한다() {
-		insertCorrection("run-1", "1차 정정본");
-		insertCorrection("run-1", "2차 정정본");
-		insertActivity("run-1", "ANALYSIS_EXCLUDED");
-		insertActivity("run-2", "ANALYSIS_EXCLUDED");
-		insertActivity("run-2", "ANALYSIS_RESTORED");
-
+	void 게시_상태는_원장_어휘_그대로_노출된다() {
 		Map<String, AnalysisRow> byRun = repository.list().stream()
 				.collect(Collectors.toMap(AnalysisRow::runId, Function.identity()));
-		assertThat(byRun.get("run-1").corrected()).isTrue();
-		assertThat(byRun.get("run-1").excluded()).isTrue();
-		assertThat(byRun.get("run-1").correctedSummary()).isEqualTo("2차 정정본");
-		assertThat(byRun.get("run-2").corrected()).isFalse();
-		assertThat(byRun.get("run-2").excluded()).isFalse();
-		assertThat(byRun.get("run-2").correctedSummary()).isNull();
-	}
-
-	private void insertActivity(String runId, String action) {
-		jdbc.update("""
-				INSERT INTO admin_activity_log (actor_email, action, target_type, target_id, reason)
-				VALUES ('ops@edge.io', ?, 'ANALYSIS_RUN', ?, 'test')
-				""", action, runId);
-	}
-
-	private void insertCorrection(String runId, String after) {
-		// details 는 before/after 키 필수(ck_admin_activity_correction_details) — before 는 null 허용.
-		jdbc.update("""
-				INSERT INTO admin_activity_log (actor_email, action, target_type, target_id, reason, details)
-				VALUES ('ops@edge.io', 'ANALYSIS_RESULT_CORRECTED', 'ANALYSIS_RUN', ?, 'test', ?::jsonb)
-				""", runId, "{\"before\": null, \"after\": \"" + after + "\"}");
+		assertThat(byRun.get("run-1").publicationStatus()).isEqualTo("PUBLISHED");
+		assertThat(byRun.get("run-2").publicationStatus()).isNull();
 	}
 }
