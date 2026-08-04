@@ -61,7 +61,7 @@ public final class PolicyEvaluator {
 			return new ScreeningDecision("REVIEW_REQUIRED", checks);
 		}
 		if (policy.minConfidence() != null
-				&& confidenceRank(result.confidenceLevel()) < confidenceRank(policy.minConfidence())) {
+				&& confidenceRank(result.confidenceLevel()) < requiredRank(policy.minConfidence())) {
 			checks.add(new ScreeningDecision.Check(null, "REVIEW",
 					"confidence=" + result.confidenceLevel() + "<min=" + policy.minConfidence()));
 			return new ScreeningDecision("REVIEW_REQUIRED", checks);
@@ -82,6 +82,19 @@ public final class PolicyEvaluator {
 			case "HIGH" -> 2;
 			case null, default -> -1;
 		};
+	}
+
+	/**
+	 * 정책 기준 쪽 순위 — entry 값과 달리 어휘 밖은 미달 강등이 아니라 실패다. 기준이
+	 * -1 로 평가되면 게이트가 전건 통과(fail-open)로 뒤집히는데, 잘못 구성된 정책은
+	 * 판정 전에 드러나야 한다(미지 rule action 과 동일한 방향, Rule 12).
+	 */
+	private static int requiredRank(String minConfidence) {
+		int rank = confidenceRank(minConfidence);
+		if (rank < 0) {
+			throw new IllegalStateException("미지의 min_confidence=" + minConfidence + " — 계약 위반");
+		}
+		return rank;
 	}
 
 	private static String match(PolicyRule rule, DeliveryEntry entry) {

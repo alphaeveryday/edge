@@ -175,6 +175,15 @@ class PolicyEvaluatorTest {
 	}
 
 	@Test
+	void 어휘_밖_min_confidence_기준은_실패한다() {
+		// WHY: 기준이 미달값(-1)으로 평가되면 게이트가 전건 통과(fail-open)로 뒤집힌다 —
+		// 잘못 구성된 정책은 조용히 무력화되는 대신 판정 전에 드러나야 한다(Rule 12).
+		assertThatThrownBy(() -> PolicyEvaluator.decide(
+				entry("h", "s", 3), policy(true, null, "medium")))
+				.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
 	void headline도_매칭_대상이다() {
 		// WHY: 노출 후보 문면은 headline+summary 전부다 — 한쪽만 검사하면 우회 경로가 생긴다.
 		ScreeningDecision decision = PolicyEvaluator.decide(

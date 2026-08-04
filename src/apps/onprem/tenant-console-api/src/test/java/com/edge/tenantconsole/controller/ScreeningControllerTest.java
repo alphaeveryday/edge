@@ -329,6 +329,8 @@ class ScreeningControllerTest {
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minConfidence\":\"HIGH\"}"))
 				.andExpect(status().isOk());
+		// 200 만으로는 저장을 증명 못 한다 — 발행된 활성 버전에 HIGH 가 실려야 한다(Rule 9).
+		assertThat(versions.findActive().orElseThrow().getMinConfidence()).isEqualTo("HIGH");
 	}
 
 	@Test
