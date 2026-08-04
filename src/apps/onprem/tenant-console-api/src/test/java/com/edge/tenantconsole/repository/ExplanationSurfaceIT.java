@@ -273,6 +273,24 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
+	void 게시본_없는_항목은_as_of_최신이어도_노출_head_가_아니다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-ghost-pub", "607GHO", "두산", "AUTO_PUBLISHED", "LOW", "게시된 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-ghost-new", "607GHO", "두산", "AUTO_PUBLISHED", "LOW", "게시본 없는 스냅샷",
+				"[]", OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-ghost-pub', '607GHO', '2026-07-15', ?)", older);
+
+		// WHY: 항목 상태·as_of 만으로 head 를 파생하면 게시본 없는 유령 항목(ALPHA-724 계열)이
+		// head 로 표시된다 — 고객 화면의 진실은 publication 이므로 배지는 게시본 실재에 근거해야
+		// 한다. 무효화 fallback IT 는 INVALIDATED 항목이 목록에서 빠져 이 반례를 못 잡는다.
+		assertThat(find("it607-ghost-pub").serving()).isTrue();
+		assertThat(find("it607-ghost-new").serving()).isFalse();
+	}
+
+	@Test
 	void 반입_상태는_오늘_반입_수와_최근_시각을_집계한다() {
 		seedItem("it607-feed", "607FED", "현대차", "AUTO_PUBLISHED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
