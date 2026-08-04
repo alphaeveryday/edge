@@ -20,6 +20,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -185,6 +186,25 @@ class AnalysisControllerTest {
 						.content("{\"reason\":\"y\"}"))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("ADMN4041"));
+	}
+
+	/**
+	 * 은퇴한 3종 표면(정정·제외·복원)은 라우트 자체가 없다 — 재도입되면 이 테스트가 깨진다
+	 * (ALPHA-737 은퇴 결정의 부정 단언, Rule 9).
+	 */
+	@Test
+	void 은퇴한_정정_제외_복원_표면은_라우트가_없다() throws Exception {
+		mvc.perform(authed(patch("/api/v1/analyses/run-1/result"))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"result\":\"x\",\"reason\":\"y\"}"))
+				.andExpect(status().isNotFound());
+		mvc.perform(authed(post("/api/v1/analyses/run-1/exclude"))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"reason\":\"y\"}"))
+				.andExpect(status().isNotFound());
+		mvc.perform(authed(post("/api/v1/analyses/run-1/restore")))
+				.andExpect(status().isNotFound());
+		assertThat(writes.calls()).isEmpty();
 	}
 
 	/** 게시 상태가 아닌 런(DRAFT·이미 무효화)의 무효화는 409 — 대상 부재(404)와 다른 사실이다. */

@@ -14,10 +14,11 @@
 2026-08-01). 이 목표 아래에서 설명 하나의 정체는 "그날의 결론"이 아니라 **`explanation_as_of`
 시점의 스냅샷**이고, 장중에 새 스냅샷이 이전 스냅샷 위에 연속으로 쌓인다.
 
-현행 구현은 이와 충돌한다. analysis-engine 발번 게이트는 같은 (종목, 거래일)에 PUBLISHED가
-이미 있으면 새 결과를 DRAFT로 보류한다(day-grain 게이트 — `eventstore.py`의 `EXISTS
-PUBLISHED` CASE 분기). 그날 첫 결과만 나가고 재실행분은 묶이는 이 구조는 하루-1회 전제의
-산물이다. [ADR-0044](0044-correction-abolition.md)는 CORRECTION을 폐지하면서 "무효화 이후
+현행 구현은 이와 부분 충돌한다. cloud 발번 게이트는 분봉 트리거 도입과 함께 (종목,
+거래일) day-grain 에서 **발화(route)별 첫 게시**로 이행했다(`eventstore.py`의 `EXISTS
+PUBLISHED` CASE — route 기준). 새 발화는 각각 게시되지만 **같은 발화의 재실행은 여전히
+DRAFT 로 보류**된다 — cloud 쪽 폐지 대상은 이 재실행 보류다. (종목, 거래일) 봉인은
+온프렘(결과 절)에 남아 있다. [ADR-0044](0044-correction-abolition.md)는 CORRECTION을 폐지하면서 "무효화 이후
 같은 종목에 새 설명(NEW)을 발번할 수 있는지는 발번 정책 소관"으로 명시적으로 이연했다 —
 이 ADR이 그 발번 정책을 결정한다.
 
@@ -33,8 +34,9 @@ day-grain 전제가 남아 있어(결과 절) cloud 게이트와 함께 걷어�
 승계가 끊긴 낡음은 만료 무효화(결정 2-(c))가 상한하며, 오류는 무효화(INVALIDATION)가
 해소한다.**
 
-1. **day-grain 게이트(DRAFT 보류)를 폐지한다.** 엔진 산출물은 보류 없이 즉시 PUBLISHED로
-   게시하고 NEW를 발번한다. 같은 (종목, 거래일)의 게시 횟수 제한은 없다 — 스냅샷은
+1. **DRAFT 보류 게이트를 폐지한다.** 엔진 산출물은 보류 없이 즉시 PUBLISHED로 게시하고
+   NEW를 발번한다 — cloud 는 route 재실행 보류를, 온프렘은 (종목, 거래일) day-grain
+   봉인을 걷어낸다. 같은 (종목, 거래일)의 게시 횟수 제한은 없다 — 스냅샷은
    `explanation_as_of`로 구분되는 별개 게시다.
 2. **무효화 트리거는 세 축이다.** (a) **as_of 시점 오류** — 그 스냅샷의 기준 시점에서도
    틀렸던 것: ① 전제 데이터 소급 정정(가격·수익률 정정, 인용 뉴스 정정·철회) ② as_of 시점
@@ -85,7 +87,7 @@ day-grain 전제가 남아 있어(결과 절) cloud 게이트와 함께 걷어�
 
 ## 결과
 
-- **ADR-0044와의 관계**: 대체가 아니라 확장이다 — 0044가 이연한 발번 정책을 채운다.
+- **ADR-0044와의 관계**: 발번 정책 축은 확장(0044가 이연한 결정을 채움), 결정 3의 "정정 오버레이 유지"만 부분 대체다(헤더 대체 표기·ALPHA-737).
   0044의 "소멸성 콘텐츠라 재게시 무익" 전제는 부분 재해석된다: 정정 재게시는 여전히
   무익하므로 CORRECTION 폐지는 유지되고, 장중 스냅샷 승계는 정정이 아니라 새 게시이므로
   유익하다.
@@ -108,8 +110,8 @@ day-grain 전제가 남아 있어(결과 절) cloud 게이트와 함께 걷어�
 - **후속 작업**: ① INVALIDATION 발번(ALPHA-440 — 선행 조건) ② 온프렘 다스냅샷 수용
   (`uq_publication_published_grain` 확장·두 publish() 정리 — screening-worker `NOT
   EXISTS` 가드 제거와 tenant-console-api `ON CONFLICT` arbiter 갱신·표시 정렬 as_of
-  전환·`explanation_as_of` 응답 노출 — cloud 게이트 폐지에 선행) ③ `eventstore.py` day-grain
-  게이트 제거와 `run_reason "DAILY"` 재검토 — 결정 5의 선행 3요소(①·②·⑦의 v1) 완료
+  전환·`explanation_as_of` 응답 노출 — cloud 게이트 폐지에 선행) ③ `eventstore.py` route 재실행
+  DRAFT 보류 게이트 제거와 `run_reason "DAILY"` 재검토 — 결정 5의 선행 3요소(①·②·⑦의 v1) 완료
   후에만 ④
   [event-bundle-schema.md](../contracts/event-bundle-schema.md)·
   [state-machine.md](../domain/state-machine.md)의 day-grain 서술 갱신과
