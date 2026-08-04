@@ -35,6 +35,20 @@ from .windows import build_windows
 KST = timezone(timedelta(hours=9))
 
 
+def _measurable(lake) -> list[tuple[str, str]]:
+    """가설 에이전트가 제안할 수 있는 노출 축 = **가용 도구가 실제로 재는 것**.
+
+    `FEATURES` 전량을 그대로 주면 안 되는 이유: 도구가 데이터 부재로 사라져도 가설
+    에이전트는 그 축을 계속 제안하고, 검정기는 매번 판정불가를 낸다. 그러면 산출이
+    '판정불가' 로 뒤덮여 진짜 부재와 배선 부재를 구분할 수 없다. 세 에이전트가 같은
+    표면을 본다는 것의 실질이 이 한 줄이다 - **제안 가능 = 측정 가능**.
+    """
+    from .paneltest import FEATURES
+    from .surface import available
+    fams = {v for t in available(lake) for v in t.vocab}
+    return [k for k in FEATURES if k[0] in fams]
+
+
 def _kst(ts) -> datetime:
     return ts.astimezone(KST).replace(tzinfo=None) if ts.tzinfo else ts
 
@@ -485,7 +499,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if seen:
             facts += "\n\n[도구 관측 기록]\n" + seen
         tuples, rejected = propose(ask, facts=facts, event_types=types,
-                                   measurable=list(FEATURES),
+                                   measurable=_measurable(lake),
                                    series_families=anomalous)
         reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
                                  m_tests=len(tuples)))
@@ -596,6 +610,34 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                     edges=tuple(edges), gap_cov=gcov, additive=additive,
                     layers=() if idio is None else (("시장", mkt), ("고유", idio)))
 
+    # 신뢰성 검사 — **성립 엣지의 주장을 도구 표면으로 되짚는다**(§납품 등급).
+    #
+    # 왜 여기인가: 게이트가 '성립' 을 낸 것은 그 튜플의 패널이 유의했다는 뜻일 뿐이고,
+    # "그래서 오늘 이 종목이 그것 때문에 움직였다" 는 별개 주장이다. 실측으로 그 간극이
+    # 드러났다 - 000660 06-01 은 게이트를 통과한 엣지가 있는데도 기저율로 보면 과거
+    # 861일 중 60.5% 가 같은 폭 이상 움직인 평범한 날이고, 동종 대비로는 업종 중앙값과
+    # **반대** 방향이었다. 두 사실 중 어느 것도 게이트가 보지 않는다.
+    trust_block: list[str] = []
+    if edges:
+        from .trust import Claim, check, report as trust_report
+        # 방향은 **식별집합**에서만 온다. 구간이 0 을 품으면 방향을 주장하지 않는다
+        # (sign=0) - 그러면 신뢰성 검사도 부호 있는 근거를 요구하지 않는다.
+        def _sign(e) -> int:
+            if e.iset_lo is not None and e.iset_lo > 0:
+                return 1
+            if e.iset_hi is not None and e.iset_hi < 0:
+                return -1
+            return 0
+
+        cs = [Claim(text=f"{e.channel}·{e.event_type} 가 오늘을 움직였다",
+                    kind="사건", refs=(), sign=_sign(e), etype=e.event_type)
+              for e in edges if e.applied]
+        if cs:
+            trust_block = ["", "── 신뢰성 검사 (주장 -> 도구) " + "─" * 26,
+                           trust_report(check(lake, cs, day=day,
+                                              instrument_id=instrument_id,
+                                              grounded=labels))]
+
     block = ["", "── 튜플 · 패널 게이트 " + "─" * 40]
     if not types and not anomalous:
         # 부재≠판정: z 를 못 잰 것(가격계열 결손)과 조용한 것(|z|<2 관측)은 다르다.
@@ -645,7 +687,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                              f"상위 {s['hi'] * 100:+.2f}% vs 하위 {s['lo'] * 100:+.2f}%")
             else:
                 block.append(f"  {s['type'][:40]:<40} {s['status']}")
-    honest = render(rows) + "\n\n" + story + "\n" + "\n".join(block)
+    # 신뢰성 검사는 **게이트 블록 뒤**에 붙는다: 게이트가 무엇을 성립시켰는지 먼저
+    # 보이고, 그 성립이 오늘 셀의 주장을 실제로 지지하는지 그 다음에 보여야 한다.
+    honest = (render(rows) + "\n\n" + story + "\n" + "\n".join(block)
+              + "\n".join(trust_block))
     if ask is None:
         return honest
     # ── 쉬운 설명 (토스식) ─────────────────────────────────────────────────

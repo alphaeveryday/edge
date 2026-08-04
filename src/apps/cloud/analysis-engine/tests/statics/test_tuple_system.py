@@ -1152,3 +1152,38 @@ def test_rate_sensitivity_can_explain_the_market_layer():
     assert ("금리", "민감도") in FEATURES
     assert ("금리", "민감도") in LAYER_EXPOSURES["시장"]
     assert ("금리", "민감도") in LAYER_EXPOSURES["섹터"]
+
+
+def test_applied_edge_direction_comes_only_from_the_identified_set():
+    """적용 엣지의 **방향**은 식별집합에서만 온다 - 구간이 0 을 품으면 방향 주장 없음.
+
+    신뢰성 검사(`trust`)는 방향 주장에 부호 있는 근거를 요구한다. 그런데 게이트가
+    '성립' 을 냈다는 것만으로 부호를 +1 로 넘기면, 구간이 [-0.4, +0.1] 인 엣지도
+    '올랐다' 는 주장으로 검사에 들어가고 검사는 그 방향을 지지할 근거를 찾다가
+    엉뚱한 도구를 부른다. 방향은 크기가 정하고, 크기가 0 을 품으면 방향이 없다.
+    """
+    from edge_analysis.statics.attribute import _measurable
+    from edge_analysis.statics.narrate import Edge
+
+    lo_pos = Edge(channel="C", event_type="E", verdict="성립", applied=True,
+                  iset_lo=0.001, iset_hi=0.004)
+    hi_neg = Edge(channel="C", event_type="E", verdict="성립", applied=True,
+                  iset_lo=-0.004, iset_hi=-0.001)
+    straddle = Edge(channel="C", event_type="E", verdict="성립", applied=True,
+                    iset_lo=-0.004, iset_hi=0.001)
+
+    def sign(e):
+        if e.iset_lo is not None and e.iset_lo > 0:
+            return 1
+        if e.iset_hi is not None and e.iset_hi < 0:
+            return -1
+        return 0
+
+    assert (sign(lo_pos), sign(hi_neg), sign(straddle)) == (1, -1, 0)
+
+    # 제안 가능 = 측정 가능: 도구가 사라지면 그 축은 가설 어포던스에서도 빠진다.
+    class _Lake:
+        def sql(self, q):
+            return [(0,)]                   # 모든 표가 0 행 -> 모든 도구 부재
+
+    assert _measurable(_Lake()) == [], "도구가 없는데 노출 축을 제안하고 있다"
