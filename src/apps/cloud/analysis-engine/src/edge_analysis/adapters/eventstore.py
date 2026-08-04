@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
-from ..config import Settings
+from ..config import KST, Settings
 from ..domain.models import (
     POLICY_VERSION,
     Decomposition,
@@ -41,6 +41,31 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+class MinuteTriggerRow(NamedTuple):
+    """분봉 트리거 소비 결과 — 게이트 + 분해 입력이 필요로 하는 window 좌표."""
+
+    gate: PriceTrigger
+    ticker: str
+    trade_date: date
+    session_id: str
+    window_start: datetime
+    generation: int
+
+
+def minute_observation_id(trigger_id: str) -> str:
+    """분봉 트리거 계보의 observation id — trigger_id 결정적 파생(멱등 upsert 재료)."""
+    return stable_id("cob", trigger_id)
+
+
+def minute_route_id(trigger_id: str) -> str:
+    """분봉 트리거 계보의 route id — **소비자의 멱등 프리플라이트와 같은 유도식**(ALPHA-719).
+
+    consumer 가 이 함수를 import 해 재배달 판정에 쓴다 — 두 벌로 갈리면 프리플라이트가
+    항상 False 라 재배달마다 새 run 이 생기고 LLM 이 재과금된다(조용한 붕괴).
+    """
+    return stable_id("rte", minute_observation_id(trigger_id))
+
+
 class EventStore:
     """psycopg2 커넥션 위의 얇은 리포지토리."""
 
@@ -69,6 +94,21 @@ class EventStore:
         """커넥션을 닫는다."""
         self._conn.close()
 
+    def has_run_for_route(self, route_id: str) -> bool:
+        """이 route 로 이미 설명 run 이 확정됐는가 — 분봉 소비자의 멱등 프리플라이트(ALPHA-719).
+
+        `explanation_run.run_id` 는 벽시계(`explanation_as_of`)가 재료라 재배달마다 새
+        run·result 행이 생기고 LLM 이 재과금된다. route id 는 trigger_id 에서 결정적으로
+        유도되므로(`stable_id`) 이 존재 검사가 재배달을 걸러낸다. run 직전 crash 로
+        관측·route 만 남은 경우는 False 라 재실행된다(L1 은 ON CONFLICT 멱등 — 안전).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM explanation_run WHERE explanation_route_id = %s LIMIT 1",
+                (route_id,),
+            )
+            return cur.fetchone() is not None
+
     # -- 읽기 --------------------------------------------------------------- #
     def causal_data(self):
         """인과 설계용 조회 표면. **같은 커넥션**을 공유한다 - PIT 기준이 갈리면 안 된다.
@@ -91,9 +131,19 @@ class EventStore:
         return SqlSurface(self._conn, as_of=as_of, trade_date=trade_date)
 
     def load_entity_index(self) -> dict[str, str]:
-        """ticker -> instrument entity_id (시드된 전 종목)."""
+        """ticker -> instrument entity_id (KR 시드 전 종목).
+
+        KR MIC(XKRX·XKOS·XKON)로 좁힌다 — instrument 유일성이 (market_code, ticker)라
+        전 시장을 dict 로 접으면 타 MIC 동일 ticker 에서 어느 행이 남는지 조회 순서에
+        달리고, 구성종목 계보(constituent_instrument_id)가 무관한 시장 종목으로 조용히
+        영속된다. 구성종목은 코스닥 포함이라 XKRX 단독이 아니고, KR 안에서 6자리
+        단축코드는 전국 유일이다(ALPHA-709).
+        """
         with self._conn.cursor() as cur:
-            cur.execute("SELECT ticker, instrument_id FROM instrument")
+            cur.execute(
+                "SELECT ticker, instrument_id FROM instrument"
+                " WHERE market_code IN ('XKRX', 'XKOS', 'XKON')"
+            )
             return {str(ticker): str(iid) for ticker, iid in cur.fetchall()}
 
     def resolve_etf_instrument(self, ticker: str) -> tuple[str, str] | None:
@@ -108,7 +158,11 @@ class EventStore:
             cur.execute(
                 "SELECT i.instrument_id, e.display_name FROM instrument i"
                 " JOIN entity e ON e.entity_id = i.instrument_id"
-                " WHERE i.ticker = %s AND i.instrument_type = 'ETF'",
+                # XKRX 한정 — instrument 유일성이 (market_code, ticker)라 시장 조건
+                # 없는 fetchone 은 타 MIC 동일 ticker 에서 비결정적으로 다른 시장
+                # instrument 에 계보를 붙인다(분석 대상 ETF 는 전부 XKRX, ALPHA-709)
+                " WHERE i.ticker = %s AND i.instrument_type = 'ETF'"
+                " AND i.market_code = 'XKRX'",
                 (ticker,),
             )
             row = cur.fetchone()
@@ -138,6 +192,93 @@ class EventStore:
             abs_gate=bool(row[3]),
             rel_gate=bool(row[4]),
         )
+
+    def fetch_minute_price_trigger(self, trigger_id: str):
+        """분봉 트리거 한 행 소비(ALPHA-709) — ``MinuteTriggerRow`` | None.
+
+        entity_id 가 곧 단축코드(ticker)다 — 판정기(ALPHA-708)의 unit 축과 동일.
+        trade_date 는 window_start 의 KST 날짜. observed_return 은 부호 있는
+        close/open−1 로 재구성한다 — 행의 change_rate 는 절대값이라 방향이 없다.
+        session_id·generation 은 분봉 분해 입력(ALPHA-710)이 그 window artifact 를
+        정확히 집게 하는 좌표다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT trigger_id, entity_id, window_start, open_price, close_price,"
+                " change_rate, threshold, detection_policy_version, session_id, generation"
+                " FROM minute_price_trigger WHERE trigger_id = %s",
+                (trigger_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        open_price = float(row[3])
+        observed = (float(row[4]) / open_price - 1) if open_price else None
+        window_start = row[2]
+        return MinuteTriggerRow(
+            gate=PriceTrigger(
+                trigger_id=str(row[0]),
+                observed_return=observed,
+                reason=(
+                    f"intraday |close/open-1|={row[5]} >= {row[6]}"
+                    f" ({row[7]}, window={window_start.isoformat()})"
+                ),
+                abs_gate=True,
+                rel_gate=False,
+            ),
+            ticker=str(row[1]),
+            trade_date=window_start.astimezone(KST).date(),
+            session_id=str(row[8]),
+            window_start=window_start,
+            generation=int(row[9]),
+        )
+
+    def fetch_minute_open_window(self, session_id: str, entity_id: str):
+        """트리거 대상 ETF 의 세션 시가가 확정된 window 좌표 — (window_start, generation) | None.
+
+        분봉 분해(ALPHA-710)의 기준가 축이다: ETF 트리거 판정이 쓴 것과 **같은**
+        시가 window 의 artifact 에서 구성종목 시가를 읽어야 두 축이 갈리지 않는다
+        (minute_session_open 은 ETF 만 담으므로 구성종목 시가는 artifact 에서 파생).
+        generation 은 원장(minute_ingestion_window)이 정본이다 — artifact 는 불변이라
+        정정 진행 중이어도 커밋된 세대는 안전하게 읽힌다.
+
+        ponytail: 시가 확정 **당시** 세대는 원장에 없어 현재 세대를 쓴다 — 확정 후
+        정정(드묾)이 끼면 ETF 시가(불변, 구세대)와 구성종목 시가(신세대)의 세대가
+        갈릴 수 있다. 해소는 minute_session_open 에 확정 세대 기록(파이프라인 후속).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT o.source_window, w.generation, w.checksum"
+                " FROM minute_session_open o"
+                " JOIN minute_ingestion_window w"
+                "   ON w.session_id = o.session_id AND w.window_start = o.source_window"
+                " WHERE o.session_id = %s AND o.entity_id = %s AND o.status = 'OPEN'"
+                "   AND w.generation >= 1"
+                "   AND w.data_status NOT IN ('DUE', 'CLAIMED')",
+                (session_id, entity_id),
+            )
+            row = cur.fetchone()
+        return (row[0], int(row[1]), row[2]) if row else None
+
+    def fetch_minute_window_meta(self, session_id: str, window_start):
+        """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
+
+        트리거 행의 generation 대신 이걸 쓰는 이유: 발화 후 정정이 끼면 최신 커밋
+        세대가 더 정확한 가격이고, ledger 의 checksum 은 그 세대의 바이트에 대한
+        것이라 쌍이 갈리지 않는다. **정정 진행 중(DUE·CLAIMED)은 None** — 재claim 은
+        generation·checksum 을 옛 커밋 쌍으로 남겨두지만(#485 단서), 정정이 걸렸다는
+        것은 그 가격이 틀렸을 개연성이라 price_consumer 와 같은 처방(지연 재시도)으로
+        커밋 뒤에 소비한다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT generation, checksum FROM minute_ingestion_window"
+                " WHERE session_id = %s AND window_start = %s AND generation >= 1"
+                " AND data_status NOT IN ('DUE', 'CLAIMED')",
+                (session_id, window_start),
+            )
+            row = cur.fetchone()
+        return (int(row[0]), row[1]) if row else None
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
         """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.
@@ -249,19 +390,34 @@ class EventStore:
     def explanation_prerequisites(
         self, settings: Settings, etf_instrument_id: str
     ) -> dict[str, Any]:
-        """explanation_result 의 FK 전제: profile 존재·route id·bundle."""
+        """explanation_result 의 FK 전제: profile 존재·route id·bundle.
+
+        route 조회는 **입력 축을 따라간다** — 분봉 실행(settings.trigger_id)의 계보는
+        minute_price_trigger_id 에 매달리므로, 일 단위 (etf, trade_date) 조인으로
+        찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 **다른** 일 단위 트리거 route
+        가 잡혀 남의 계보에 영속된다(ALPHA-709 리뷰 실측).
+        """
         with self._conn.cursor() as cur:
             cur.execute("SELECT 1 FROM etf_profile WHERE instrument_id = %s", (etf_instrument_id,))
             has_profile = cur.fetchone() is not None
-            cur.execute(
-                "SELECT er.explanation_route_id FROM explanation_route er"
-                " JOIN etf_contribution_observation o"
-                " ON o.contribution_observation_id = er.contribution_observation_id"
-                " JOIN price_movement_trigger t"
-                " ON t.price_movement_trigger_id = o.price_movement_trigger_id"
-                " WHERE t.etf_instrument_id = %s AND t.trade_date = %s LIMIT 1",
-                (etf_instrument_id, settings.trade_date.isoformat()),
-            )
+            if getattr(settings, "trigger_id", None):
+                cur.execute(
+                    "SELECT er.explanation_route_id FROM explanation_route er"
+                    " JOIN etf_contribution_observation o"
+                    " ON o.contribution_observation_id = er.contribution_observation_id"
+                    " WHERE o.minute_price_trigger_id = %s LIMIT 1",
+                    (settings.trigger_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT er.explanation_route_id FROM explanation_route er"
+                    " JOIN etf_contribution_observation o"
+                    " ON o.contribution_observation_id = er.contribution_observation_id"
+                    " JOIN price_movement_trigger t"
+                    " ON t.price_movement_trigger_id = o.price_movement_trigger_id"
+                    " WHERE t.etf_instrument_id = %s AND t.trade_date = %s LIMIT 1",
+                    (etf_instrument_id, settings.trade_date.isoformat()),
+                )
             route_row = cur.fetchone()
             bundle = settings.release_bundle_version
             has_bundle = False
@@ -285,21 +441,30 @@ class EventStore:
         route_code: str,
         event_search: bool,
         entity_index: dict[str, str],
+        *,
+        minute: bool = False,
     ) -> dict[str, str]:
-        """소비한 트리거에서 파생한 L1/route 계보를 적재한다(트리거 insert 없음)."""
+        """소비한 트리거에서 파생한 L1/route 계보를 적재한다(트리거 insert 없음).
+
+        ``minute`` 이면 계보가 분봉 축(minute_price_trigger_id)에 매달린다 — 두 축은
+        정확히 하나만 값을 갖는다(ck_etf_contribution_one_trigger, ALPHA-709).
+        """
         from psycopg2.extras import execute_values
 
         detected_at = utcnow_iso()
         # 계보 id 는 소비한 trigger_id 에서 파생 — DB 에 있는 그 행에 계보가 매달린다.
-        obs_id = stable_id("cob", trigger_id)
-        route_id = stable_id("rte", obs_id)
+        obs_id = minute_observation_id(trigger_id)
+        route_id = minute_route_id(trigger_id)
         contribution_sum = (
             sum(m.contribution for m in decomp.members) if decomp.members else None
         )
         with self._conn.cursor() as cur:
+            trigger_column = (
+                "minute_price_trigger_id" if minute else "price_movement_trigger_id"
+            )
             cur.execute(
                 "INSERT INTO etf_contribution_observation (contribution_observation_id,"
-                " price_movement_trigger_id, etf_return, nav_return,"
+                f" {trigger_column}, etf_return, nav_return,"
                 " constituent_contribution_return, fx_contribution_return,"
                 " premium_discount_contribution_return, reconciliation_error,"
                 " advancing_constituent_count, total_constituent_count,"
@@ -357,7 +522,12 @@ class EventStore:
 
         from psycopg2.extras import execute_values
 
-        explanation_as_of = utcnow_iso()
+        # 마이크로초 정밀(utcnow_iso 의 초 해상도 대신) — as_of 는 게시 grain 부분
+        # 유니크(uq_explanation_result_published_grain)의 축이라, 초 해상도면 같은 초에
+        # 끝난 서로 다른 발화 둘이 모두 PUBLISHED 를 타며 충돌해 두 번째 INSERT 가
+        # 터진다(ON CONFLICT 는 PK 만 커버). route 축 정책(ALPHA-710)에선 둘 다 게시가
+        # 맞다 — 정밀도로 충돌을 없앤다(정확 일치는 유니크가 fail-loud 백스톱).
+        explanation_as_of = datetime.now(timezone.utc).isoformat()
         event_count = len(events)
         run_id = stable_id(
             "run", etf_instrument_id, settings.trade_date.isoformat(),
@@ -381,10 +551,14 @@ class EventStore:
             cur.execute(
                 "SELECT pg_advisory_xact_lock(hashtext('tenant-delivery-fanout')::bigint)"
             )
-            # 그날 첫 결과만 PUBLISHED — explanation_as_of 가 런마다 새로워 grain 부분
-            # 유니크(as_of 포함)는 같은 날 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만
-            # 보는 이유: WITHDRAWN 뒤 재산출은 재게시(CORRECTION) 시나리오라 후속 티켓
-            # 몫이고, 현재 cloud 에 WITHDRAWN writer 가 없어 도달 불가 경로다.
+            # 발화(route)당 첫 결과만 PUBLISHED — 게이트 축은 트리거다(ALPHA-710 게시
+            # 정책). 분봉 트리거는 하루 여러 번 발화할 수 있고 발화마다 게시된다 —
+            # 같은 날 다건 PUBLISHED 는 서빙층이 최근 게시 시각 우선으로 흡수한다
+            # (publication-api findPublishedOn/findLatestPublished). 같은 route 재실행은
+            # DRAFT 보존이다 — explanation_as_of 가 런마다 새로워 grain 부분 유니크만으론
+            # 이중 게시를 못 막는다. EXISTS 가 PUBLISHED 만 보는 이유: 무효화(WITHDRAWN,
+            # super-admin-api 무효화 액션 — ALPHA-440)로 게시본이 사라진 발화는 재실행 시
+            # 새로 게시된다(ADR-0045 발번 정책).
             cur.execute(
                 "INSERT INTO explanation_result (explanation_result_id, explanation_run_id,"
                 " etf_instrument_id, trade_date, explanation_as_of, primary_thread_id,"
@@ -392,7 +566,8 @@ class EventStore:
                 " publication_status, headline)"
                 " SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
                 " CASE WHEN EXISTS (SELECT 1 FROM explanation_result p"
-                "   WHERE p.etf_instrument_id = %s AND p.trade_date = %s"
+                "   JOIN explanation_run r ON r.explanation_run_id = p.explanation_run_id"
+                "   WHERE r.explanation_route_id = %s"
                 "     AND p.publication_status = 'PUBLISHED')"
                 " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
                 " ON CONFLICT (explanation_result_id) DO NOTHING"
@@ -401,7 +576,7 @@ class EventStore:
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
-                    etf_instrument_id, settings.trade_date.isoformat(),
+                    route_id,
                     explanation.headline,
                 ),
             )
@@ -425,7 +600,9 @@ class EventStore:
                     evidence_rows,
                 )
             # write-time fan-out(ALPHA-493) — 게시와 같은 트랜잭션이라 커밋된 행만
-            # 커서에 노출된다(sync-protocol). NEW 만 발번, CORRECTION·INVALIDATION 은 후속.
+            # 커서에 노출된다(sync-protocol). 여기는 NEW 만 발번 — INVALIDATION 은
+            # super-admin-api 무효화 액션이 같은 advisory lock 을 잡고 발번한다(ALPHA-440).
+            # CORRECTION 은 폐지(ADR-0044).
             fanout_tenants = 0
             if publication_status == "PUBLISHED":
                 fanout_tenants = self._fanout_new(cur, result_id)
@@ -458,10 +635,10 @@ class EventStore:
             fanout_tenants=fanout_tenants,
         )
         if publication_status == "DRAFT":
-            # 같은 날 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
+            # 같은 발화(route) 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
             log(
                 "explanation_result.publish_skipped",
-                reason="grain_already_published",
+                reason="route_already_published",
                 etf_instrument_id=etf_instrument_id,
                 trade_date=settings.trade_date.isoformat(),
                 explanation_result_id=result_id,

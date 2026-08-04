@@ -153,6 +153,11 @@ class Ledger:
         required: bool, plan_status: str, expected_at: str | None, deadline_at: str | None,
         eligible_at: str | None, expected_as_of_date: str | None,
         expectation_snapshot_id: str | None, skip_reason: str | None,
+        dataset_contract_key: str | None = None,
+        dataset_contract_version: str | None = None,
+        dataset_contract_snapshot: dict | None = None,
+        freshness_status: str | None = None,
+        freshness_reason: str | None = None,
     ) -> tuple[str, bool]:
         """(run, task_key) 멱등 생성. SKIPPED 이면 outcome/data_status 는 NULL(축 분리, 스펙 §3.2)."""
         new_id = domain_id("etask")
@@ -164,13 +169,19 @@ class Ledger:
                 "INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key,"
                 " stage, dataset, plan_status, task_outcome, data_status, required, expected_at,"
                 " deadline_at, eligible_at, expected_as_of_date, expectation_snapshot_id,"
-                " skip_reason, idempotency_key)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " skip_reason, idempotency_key, dataset_contract_key,"
+                " dataset_contract_version, dataset_contract_snapshot, freshness_status,"
+                " freshness_reason)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                " %s::jsonb,%s,%s)"
                 " ON CONFLICT (pipeline_run_id, task_key) DO NOTHING"
                 " RETURNING expected_task_id",
                 (new_id, pipeline_run_id, task_key, stage, dataset, plan_status, outcome,
                  data_status, required, expected_at, deadline_at, eligible_at,
-                 expected_as_of_date, expectation_snapshot_id, skip_reason, idem),
+                 expected_as_of_date, expectation_snapshot_id, skip_reason, idem,
+                 dataset_contract_key, dataset_contract_version,
+                 _jsonb(dataset_contract_snapshot) if dataset_contract_snapshot is not None else None,
+                 freshness_status, freshness_reason),
             )
             row = cur.fetchone()
             if row is not None:
@@ -187,7 +198,7 @@ class Ledger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT et.expected_task_id, et.plan_status, et.task_outcome, et.data_status,"
-                " et.required, snap.expected_entity_count"
+                " et.required, snap.expected_entity_count, et.dataset_contract_key"
                 " FROM ops_expected_task et"
                 " LEFT JOIN ops_expectation_snapshot snap"
                 " ON snap.expectation_snapshot_id=et.expectation_snapshot_id"
@@ -199,13 +210,13 @@ class Ledger:
                 return None
             return {"expected_task_id": str(row[0]), "plan_status": row[1],
                     "task_outcome": row[2], "data_status": row[3], "required": row[4],
-                    "expected_count": row[5]}
+                    "expected_count": row[5], "dataset_contract_key": row[6]}
 
     def update_task_outcome(
         self, expected_task_id: str, *, task_outcome: str | None = None,
         data_status: str | None = None, outcome_reason: str | None = None,
         current_attempt_id: str | None = None, completeness: dict | None = None,
-        counters: dict | None = None,
+        counters: dict | None = None, freshness: dict | None = None,
         fulfilled: bool = False, missed: bool = False, blocked: bool = False,
     ) -> None:
         """expected_task 의 결과 축을 갱신. 시각 컬럼은 해당 전이일 때만 찍는다(비래치 규칙 보존).
@@ -239,6 +250,20 @@ class Ledger:
         if counters is not None:
             sets.append("records_out=%s"); params.append(counters.get("records_out"))
             sets.append("failed_records=%s"); params.append(counters.get("failed_records"))
+        if freshness is not None:
+            sets.append("actual_as_of_date=%s"); params.append(freshness.get("actual_as_of_date"))
+            # 수집 시각은 산출물을 **관측한** 시도만 주장한다(collected 플래그). counters 와 같은
+            # 이유로 dict 를 받으면 전 컬럼을 항상 덮는다 — 미관측 재시도에 "None 이면 안 건드림"
+            # 을 적용하면, 같은 raw 키를 덮어쓴 재시도가 로그를 못 남기고 죽었을 때 **앞 시도의
+            # collected_at 이 바뀐 raw 객체에 그대로 붙어** 남는다(edge-review 2라운드).
+            sets.append("collected_at=now()" if freshness.get("collected") else "collected_at=NULL")
+            # 새 immutable 산출물은 Monitor의 과거 평가를 무효화한다. writer는 평가 시각을 만들지 않는다.
+            sets.append("observed_at=NULL")
+            sets.append("freshness_status=%s"); params.append(freshness["status"])
+            sets.append("freshness_reason=%s"); params.append(freshness["reason"])
+            sets.append("freshness_evidence=%s::jsonb")
+            evidence = freshness.get("evidence")
+            params.append(_jsonb(evidence) if evidence is not None else None)
         if fulfilled:
             sets.append("fulfilled_at=COALESCE(fulfilled_at, now())")
         if missed:

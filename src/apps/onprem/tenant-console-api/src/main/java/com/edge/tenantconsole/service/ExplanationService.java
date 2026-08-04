@@ -58,7 +58,7 @@ public class ExplanationService {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
-	/** 화면 노출 상태(labels.ts ServeStatus 6종) — 수신 전(RECEIVED)·정정 리비전(CORRECTED·INVALIDATED)은 제외. */
+	/** 화면 노출 상태(labels.ts ServeStatus 6종) — 수신 전(RECEIVED)·무효화(INVALIDATED)는 제외. */
 	private static final List<String> VISIBLE_STATUSES = List.of(
 			"AUTO_PUBLISHED", "APPROVED", "REVIEW_REQUIRED", "BLOCKED", "REJECTED", "UNPUBLISHED");
 
@@ -232,7 +232,7 @@ public class ExplanationService {
 		return byItem;
 	}
 
-	// ── evidences JSONB([{kind,title,source,published_at}]) → 도메인 근거 목록 ──
+	// ── evidences JSONB([{kind,title,source,published_at,source_uri}]) → 도메인 근거 목록 ──
 
 	private List<Explanation.Evidence> parseEvidence(String evidencesJson) {
 		if (evidencesJson == null || evidencesJson.isBlank()) {
@@ -265,7 +265,8 @@ public class ExplanationService {
 				continue;
 			}
 			out.add(new Explanation.Evidence(
-					kind, text(node, "title"), text(node, "source"), parseTime(node)));
+					kind, text(node, "title"), text(node, "source"), parseTime(node),
+					text(node, "source_uri")));
 		}
 		return out;
 	}

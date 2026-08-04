@@ -15,6 +15,20 @@ import json
 from contextlib import contextmanager
 
 
+def _expired(lease_expires_at, now) -> bool:
+    """NULL lease 는 **만료로 본다** — 실제 SQL(`IS NULL OR < now`)과 같은 의미다.
+
+    fake 가 `None < now` 로 계산하면 TypeError 로 죽어, 이 고착 복구 가드를 아예
+    테스트할 수 없다(그러면 SQL 에서 빠져도 아무도 모른다).
+    """
+    return lease_expires_at is None or lease_expires_at < now
+
+
+def _job_kind(sql: str) -> str:
+    """SQL 이 어느 job 테이블을 보는지 — 두 테이블이 lifecycle 을 공유해서 필요하다."""
+    return "price" if "price_window_job" in sql else "news"
+
+
 class FakeMinuteDB:
     def __init__(self):
         self.sessions: dict[str, dict] = {}   # session_id -> row
@@ -23,6 +37,10 @@ class FakeMinuteDB:
         self.outbox: dict[str, dict] = {}     # event_id -> row
         self.source_items: dict[tuple, dict] = {}  # (source_code, source_item_id) -> row
         self.anchors: dict[tuple, dict] = {}   # (session_id, source_code) -> row
+        self.documents: dict[tuple, dict] = {}      # (source_code, article_id) -> row
+        self.news_documents: dict[str, dict] = {}   # document_id -> row
+        self.session_opens: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
+        self.triggers: dict[str, dict] = {}         # trigger_id -> row
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -80,10 +98,23 @@ class _Cursor:
             self._fence_select(params)
         elif s.startswith("SELECT session_id, universe_version"):
             self._select_session(params)
+        elif s.startswith("SELECT universe_version, universe_hash FROM minute_ingestion_session"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["universe_version"], row["universe_hash"])]
         elif s.startswith("INSERT INTO minute_ingestion_window"):
             self._insert_window(params)
         elif "SET expected_window_count = ( SELECT COUNT(*)" in s:
             self._refresh_window_count(params)
+        elif "SET phase = 'QC_RUNNING'" in s:
+            # EOD QC 진입(ALPHA-693). 재진입 phase 집합이 SQL 에서 빠지면 중간에 죽은 QC 가
+            # 그 세션을 영영 못 끝내게 만든다 — fake 가 합성하기 전에 문면을 못 박는다.
+            assert "phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')" in s, \
+                "begin_qc SQL 에 재진입 phase 집합이 없다"
+            # 토큰을 안 올리면 phase-only CAS 라 ABA 가 통과한다(낡은 실행이 새 판정을 덮는다)
+            assert "worker_fencing_token = worker_fencing_token + 1" in s, \
+                "begin_qc SQL 이 QC 소유권 토큰을 올리지 않는다"
+            self._begin_qc(params)
         elif "worker_fencing_token = worker_fencing_token + 1" in s:
             self._acquire_fence(params)
         elif s.startswith("UPDATE minute_ingestion_session SET lease_expires_at = NULL"):
@@ -114,10 +145,104 @@ class _Cursor:
                 self._rows = [(1,)]
         elif s.startswith("UPDATE minute_ingestion_session SET processed_through"):
             self._watermark_advance(params)
+        elif s.startswith("SELECT phase, worker_fencing_token"):
+            # QC 소유권 검사는 **행을 잠그고** 해야 한다 — 비잠금이면 READ COMMITTED
+            # 스냅샷이 옛 토큰을 본 채 되돌릴 수 없는 MISSING 을 찍는다(재발 패턴 #1)
+            assert "FOR UPDATE" in s, "QC 소유권 검사가 세션 행을 잠그지 않는다"
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(row["phase"], row.get("worker_fencing_token", 0))]
+        elif s.startswith("UPDATE minute_ingestion_window") and "'MISSING'" in s:
+            # 시각 가드가 빠지면 조기 drain 만으로 **아직 오지도 않은 분**까지 MISSING 으로
+            # 확정하고 하루가 봉인된다(장중 오작동의 유일한 잠금장치다)
+            assert "scheduled_at <= %s" in s, "confirm_missing_windows SQL 에 시각 가드가 없다"
+            self._confirm_missing(params)
+        elif s.startswith("SELECT window_start, window_end, data_status"):
+            assert "ORDER BY window_start" in s, "QC 입력은 결정적으로 정렬돼야 한다"
+            self._rows = sorted(
+                ((w["window_start"], w["window_end"], w["data_status"], w["generation"],
+                  w.get("checksum"))
+                 for w in self.db.windows.values() if w["session_id"] == params[0]),
+                key=lambda row: row[0],
+            )
+        elif s.startswith("SELECT dataset, source_group, session_date"):
+            row = self.db.sessions.get(params[0])
+            if row is not None:
+                self._rows = [(
+                    row["dataset"], row["source_group"], row["session_date"],
+                    row["expected_window_count"], row["universe_version"], row["phase"],
+                    row.get("final_checksum"), row.get("final_generation"),
+                )]
+        elif "SET phase = 'FINALIZED'" in s:
+            # CAS 가 SQL 에서 빠지면 다른 실행이 이미 바꾼 phase 를 덮어쓴다 — fake 가
+            # 파이썬으로 재검사해 주면 그 회귀가 계속 초록으로 보인다(Rule 9)
+            assert "AND phase = 'QC_RUNNING'" in s, "finalize_session SQL 에 phase CAS 가 없다"
+            assert "worker_fencing_token = %s" in s, "finalize_session SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[2], "FINALIZED", fence_token=params[3],
+                            final_checksum=params[0], final_generation=params[1])
+        elif "SET phase = 'FAILED'" in s:
+            assert "AND phase = 'QC_RUNNING'" in s, "fail_session_qc SQL 에 phase CAS 가 없다"
+            assert "worker_fencing_token = %s" in s, "fail_session_qc SQL 에 토큰 대조가 없다"
+            self._finish_qc(params[0], "FAILED", fence_token=params[1])
         elif "SET phase = 'DRAINING'" in s:
             self._request_drain(params)
         elif "SET phase = 'DRAINED'" in s:
             self._ack_drain(params)
+        elif s.startswith("SELECT d.available_at, n.lead_text"):
+            # 신선도 판정은 두 테이블이 **공유**한다 — 따로 걸면 낡은 관측이 한쪽만
+            # 되돌려 제목/리드가 섞인 행이 남는다. 그래서 잠그고 한 번만 본다.
+            assert "FOR UPDATE" in s, "canonical 신선도 검사가 문서 행을 잠그지 않는다"
+            row = self.db.documents.get((params[0], params[1]))
+            if row is not None:
+                child = self.db.news_documents.get(row["document_id"])
+                self._rows = [(
+                    row["available_at"],
+                    None if child is None else child["lead_text"],
+                )]
+        elif s.startswith("UPDATE document SET available_at"):
+            # available_at 을 쓰는 세 경로(부모·자식·이 보정)의 규칙이 같아야 한다
+            assert "GREATEST(available_at, %s)" in s, "리드 보정 UPDATE 의 시각이 단조가 아니다"
+            row = self.db.documents.get((params[1], params[2]))
+            if row is not None:
+                row["available_at"] = max(row["available_at"], params[0])
+                self.rowcount = 1
+        elif s.startswith("INSERT INTO document ("):
+            # 1분 뉴스 canonical writer(ALPHA-691). 정정 반영이 이 문장의 존재 이유라
+            # DO UPDATE 와 변경분 판정이 SQL 에 있어야 한다 — fake 가 합성하면 배치와 같은
+            # DO NOTHING 회귀가 초록으로 통과한다.
+            assert "ON CONFLICT (source_code, source_document_id) DO UPDATE" in s, \
+                "document upsert 가 정정을 반영하지 않는다(DO NOTHING 회귀)"
+            set_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[0]
+            where_clause = s.split("DO UPDATE", 1)[1].split("WHERE", 1)[1]
+            # fake 는 아래에서 이 컬럼들을 **자기 규칙으로** 갱신한다 — SQL 에서 한 컬럼이
+            # 빠져도 그대로 통과하므로, 갱신 대상과 비교 대상을 문면에서 못 박는다(Rule 9)
+            for column in ("title", "published_at", "source_uri", "language_code"):
+                assert f"{column} = EXCLUDED.{column}" in set_clause, \
+                    f"document upsert 가 {column} 을 갱신하지 않는다(정정이 안 반영된다)"
+                assert f"document.{column} IS DISTINCT FROM EXCLUDED.{column}" in where_clause, \
+                    f"document upsert 가 {column} 변경을 판정하지 않는다(멱등이 거짓이 된다)"
+            # 정정과 함께 시각도 움직여야 PIT 축이 내용과 어긋나지 않는다(ALPHA-691 2라운드)
+            # ⚠️ FOR UPDATE 는 **없는 키를 못 잠근다** — 동시 최초 INSERT 가 끼면 잠금
+            # 판정만으로는 낡은 관측이 최신값을 되돌린다. 가드는 여기에도 있어야 한다.
+            # 시각은 단조 증가만 — 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다
+            assert "GREATEST(document.available_at, EXCLUDED.available_at)" in set_clause, \
+                "document upsert 의 도착 시각이 단조가 아니다"
+            # ⚠️ **내용 쓰기를 시각으로 막지 않는다**(ALPHA-691 모델). 이 fake 는 WHERE 를
+            # 해석하지 않으므로, 가드가 다시 들어와도 여기서 막지 않으면 "정정이 건너뛰어진다"
+            # 는 실제 PG 회귀를 테스트가 통과시킨다 — 배치가 미래 published_at 을 실은 행에서
+            # 정확히 그 P1 이 재현된다.
+            assert "available_at <=" not in where_clause, \
+                "내용 쓰기가 시각으로 막혀 있다 — 미래 timestamp 행에서 정정이 유실된다"
+            self._upsert_document(params)
+        elif s.startswith("INSERT INTO news_document"):
+            assert "ON CONFLICT (document_id) DO UPDATE" in s, \
+                "news_document upsert 가 리드 정정을 반영하지 않는다"
+
+            assert "SET lead_text = EXCLUDED.lead_text" in s, \
+                "news_document upsert 가 리드를 갱신하지 않는다"
+            assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
+                "같은 리드에도 UPDATE 하면 멱등 집계가 거짓이 된다"
+            self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
         elif s.startswith(
@@ -146,8 +271,133 @@ class _Cursor:
             self._insert_job("news", params)
         elif s.startswith("INSERT INTO price_window_job"):
             self._insert_job("price", params)
+        elif s.startswith("SELECT source_code, article_id, input_fingerprint"):
+            # job 선언 정체성 조회(ALPHA-689). 컬럼 **순서**가 handler 의 zip 매핑을
+            # 정하므로 fake 가 의미를 합성하기 전에 문면을 못 박는다 — 순서가 바뀌면
+            # article_id 자리에 지문이 들어가 정상 job 이 전부 불일치로 막힌다.
+            for clause in ("tagger_version, ontology_version",
+                           "FROM news_extraction_job WHERE job_id = %s"):
+                assert clause in s, f"news_job_identity SQL 에 {clause} 가 없다"
+            row = self.db.jobs.get(("news", params[0]))
+            if row is not None:
+                self._rows = [(row["source_code"], row["article_id"],
+                               row["input_fingerprint"], row["tagger_version"],
+                               row["ontology_version"])]
+        elif s.startswith("SELECT session_id, window_start, generation, trigger_schema_version"):
+            # price job 선언 정체성 조회(ALPHA-708) — news 와 같은 이유로 문면을 못 박는다
+            assert "FROM price_window_job WHERE job_id = %s" in s
+            row = self.db.jobs.get(("price", params[0]))
+            if row is not None:
+                self._rows = [(row["session_id"], row["window_start"],
+                               row["generation"], row["trigger_schema_version"])]
+        elif s.startswith("SELECT window_start, generation, data_status, checksum"):
+            # 정규장 첫 window(시가 근거) 조회 — ORDER BY·하한(>=)이 빠지면 시간외
+            # 세션에서 08:00 window 가 정본이 되는 조용한 회귀라 문면을 못 박는다
+            assert "ORDER BY window_start ASC LIMIT 1" in s
+            assert "window_start >= %s" in s
+            rows = sorted(
+                (r for (sid, _), r in self.db.windows.items()
+                 if sid == params[0] and r["window_start"] >= params[1]),
+                key=lambda r: r["window_start"],
+            )
+            if rows:
+                first = rows[0]
+                self._rows = [(first["window_start"], first["generation"],
+                               first["data_status"], first["checksum"])]
+        elif s.startswith("SELECT attempt_count, redrive_generation FROM price_window_job"):
+            # 트리거 persist 의 attempt fence(ALPHA-708) — CLAIMED 조건·FOR UPDATE 가
+            # 빠지면 낡은 attempt 의 쓰기가 실DB 에서 통과한다
+            assert "status = 'CLAIMED'" in s and "FOR UPDATE" in s
+            row = self.db.jobs.get(("price", params[0]))
+            if row is not None and row["status"] == "CLAIMED":
+                self._rows = [(row["attempt_count"], row["redrive_generation"])]
+        elif s.startswith("SELECT generation, checksum FROM minute_ingestion_window"):
+            row = self.db.windows.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["generation"], row["checksum"])]
+        elif s.startswith("SELECT generation, data_status FROM minute_ingestion_window"):
+            # persist·시가 확정의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
+            # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다
+            assert "FOR UPDATE" in s
+            row = self.db.windows.get((params[0], params[1]))
+            if row is not None:
+                self._rows = [(row["generation"], row["data_status"])]
+        elif s.startswith("SELECT entity_id, status, open_price FROM minute_session_open"):
+            self._rows = [
+                (entity, row["status"], row["open_price"])
+                for (sid, entity), row in self.db.session_opens.items()
+                if sid == params[0]
+            ]
+        elif s.startswith("INSERT INTO minute_session_open"):
+            assert "ON CONFLICT (session_id, entity_id) DO NOTHING" in s
+            key = (params[0], params[1])
+            if key not in self.db.session_opens:  # 확정 후 불변
+                self.db.session_opens[key] = {
+                    "status": params[2], "open_price": params[3],
+                    "reason": params[4], "source_window": params[5],
+                }
+        elif s.startswith("INSERT INTO minute_price_trigger"):
+            # 쿨다운 정본은 UNIQUE(entity_id, cooldown_bucket) — DO NOTHING 이 빠지면
+            # 실DB 에선 두 번째 발화가 예외로 죽으므로 문면을 못 박는다
+            assert "ON CONFLICT (entity_id, cooldown_bucket) DO NOTHING" in s
+            entity, bucket = params[1], params[10]
+            if not any(r["entity_id"] == entity and r["cooldown_bucket"] == bucket
+                       for r in self.db.triggers.values()):
+                self.db.triggers[params[0]] = {
+                    "trigger_id": params[0], "entity_id": entity,
+                    "session_id": params[2], "window_start": params[3],
+                    "generation": params[4], "detection_policy_version": params[5],
+                    "open_price": params[6], "close_price": params[7],
+                    "change_rate": params[8], "threshold": params[9],
+                    "cooldown_bucket": bucket, "seq": self.db.next_seq(),
+                }
+                self._rows = [(params[0],)]
+        elif s.startswith("SELECT status, next_attempt_at, redrive_generation"):
+            self._fetch_job(_job_kind(s), params)
+        elif "SET status = 'CLAIMED'" in s and "redrive_generation = %s" in s:
+            # 메시지 기반 claim(ALPHA-672) — 일반 폴링 claim 보다 **먼저** 걸러야 한다
+            # (접두가 겹친다). 세대 가드가 SQL 에서 빠지면 redrive 가 무효가 되므로
+            # fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
+            for clause in (
+                "WHERE job_id = %s AND redrive_generation = %s",
+                "status = 'PENDING'",
+                "status = 'RETRY_WAIT' AND next_attempt_at <= %s",
+                "status = 'CLAIMED' AND (lease_expires_at IS NULL",
+            ):
+                assert clause in s, f"claim_job SQL 에 {clause} 가 없다"
+            self._claim_job_by_id(_job_kind(s), params)
         elif "SET status = 'CLAIMED'" in s:
             self._claim_job("price" if "price_window_job" in s else "news", params)
+        elif "SET lease_expires_at = %s, updated_at" in s:
+            # heartbeat — attempt fence 가 빠지면 옛 attempt 가 새 claim 의 lease 를
+            # 연장해 두 실행이 동시에 살아 있게 된다
+            for clause in ("claimed_by = %s", "status = 'CLAIMED'", "attempt_count = %s"):
+                assert clause in s, f"heartbeat_job SQL 에 {clause} 가 없다"
+            self._heartbeat_job(_job_kind(s), params)
+        elif "SET status = 'DEAD', error_code = %s" in s and "redrive_generation = %s" in s:
+            for clause in (
+                "status IN ('PENDING', 'RETRY_WAIT', 'CLAIMED')",
+                "status <> 'CLAIMED' OR lease_expires_at IS NULL OR lease_expires_at < %s",
+            ):
+                assert clause in s, f"dead_on_dlq SQL 에 {clause} 가 없다"
+            self._dead_on_dlq(_job_kind(s), params)
+        elif s.startswith("SELECT status, redrive_generation, lease_expires_at, error_code FROM"):
+            assert "FOR UPDATE" in s, "redrive 는 job 행을 잠그고 상태를 봐야 한다"
+            row = self.db.jobs.get((_job_kind(s), params[0]))
+            if row is not None:
+                self._rows = [(row["status"], row["redrive_generation"],
+                               row["lease_expires_at"], row["error_code"])]
+        elif s.startswith("SELECT destination, generation, payload"):
+            row = self.db.outbox.get(params[0])
+            if row is not None:
+                self._rows = [(row["destination"], row["generation"], row["payload"],
+                               row["status"])]
+        elif "SET status = 'RETRY_WAIT', redrive_generation = redrive_generation + 1" in s:
+            # 관측한 상태·세대를 CAS 에 그대로 되건다 — 빠지면 그새 바뀐 job 을
+            # 덮어써 진행 중인 실행이나 방금 끝난 결과를 잃는다
+            for clause in ("status = %s", "redrive_generation = %s"):
+                assert clause in s, f"redrive SQL 에 {clause} 가 없다"
+            self._redrive_job(_job_kind(s), params)
         elif s.startswith("SELECT j.generation, w.generation"):
             # 직전 TOCTOU 수정의 핵심 — 잠금 구문이 사라지는 회귀를 fake 가 잡는다
             assert "FOR UPDATE OF w" in s, "stale 검사는 window 행을 잠가야 한다"
@@ -155,19 +405,93 @@ class _Cursor:
         elif "SET status = 'DEAD', error_code = 'STALE'" in s:
             self._stale_dead(params)
         elif "WHERE job_id = %s AND claimed_by = %s AND status = 'CLAIMED'" in s:
+            # 세대 fence 가 빠지면 옛 실행의 늦은 보고가 redrive 로 만든 새 세대를
+            # 마감한다 — fake 가 합성하기 전에 절의 존재를 못 박는다(Rule 9)
+            assert "redrive_generation = %s" in s, "전이 SQL 에 세대 fence 가 없다"
             self._job_transition("price" if "price_window_job" in s else "news", params)
+        elif s.startswith("UPDATE dataset_commit_outbox SET last_error = concat_ws"):
+            # 덧붙이기다 — 덮어쓰면 Relay 가 왜 포기했는지(redrive 판단의 근거)가 사라진다
+            row = self.db.outbox.get(params[1])
+            if row is not None:
+                row["last_error"] = " | ".join(
+                    part for part in (row["last_error"], params[0]) if part
+                )
+                self.rowcount = 1
         elif s.startswith("INSERT INTO dataset_commit_outbox"):
             self._insert_outbox(params)
+        elif s.startswith("SELECT o.status, COUNT(*) FROM dataset_commit_outbox"):
+            # DEAD 도 미발행이다 — SQL 이 NEW 만 세도록 바뀌면 배출 게이트가 격리분을
+            # 남긴 채 성공으로 끝난다(fake 가 하드코딩하면 그 회귀가 숨는다)
+            assert "o.status = 'DEAD'" in s, "미발행 집계는 NEW·DEAD 를 함께 세야 한다"
+            # redrive 가 만든 더 새 delivery 가 있으면 그 DEAD 는 대체된 것이다
+            assert "NOT EXISTS" in s, "대체된 DEAD 제외 절이 없다"
+            counts: dict[str, int] = {}
+            for row in self.db.outbox.values():
+                if row["status"] == "DEAD" and any(
+                    other["aggregate_id"] == row["aggregate_id"]
+                    and other["seq"] > row["seq"]
+                    for other in self.db.outbox.values()
+                ):
+                    continue   # 더 새 delivery 가 대신한다
+                if row["status"] in ("NEW", "DEAD"):
+                    counts[row["status"]] = counts.get(row["status"], 0) + 1
+            self._rows = sorted(counts.items())
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
-            self._claim_outbox(params)
+            self._claim_outbox(params, s)
         elif "SET status = 'PUBLISHED'" in s:
+            # CAS 가드를 fake 가 Python 으로 재현하므로, SQL 에서 빠지면 여기서 못 잡는다
+            # — 절의 존재를 못 박는다(옛 Relay 가 새 claim 을 마감하는 회귀, Rule 9)
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"mark_published SQL 에 {clause} 가 없다"
             self._mark_published(params)
         elif s.startswith("UPDATE dataset_commit_outbox SET status = %s, attempt_count"):
+            for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
+                assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
     # ── session ──
+    def _upsert_document(self, p):
+        (document_id, source_code, article_id, title, language_code, published_at,
+         available_at, source_uri) = p
+        existing = self.db.documents.get((source_code, article_id))
+        if existing is None:
+            self.db.documents[(source_code, article_id)] = {
+                "document_id": document_id, "source_code": source_code,
+                "source_document_id": article_id, "title": title,
+                "language_code": language_code, "published_at": published_at,
+                # ⚠️ 최초 1회만 — 실제 SQL 도 DO UPDATE 목록에서 뺐다
+                "available_at": available_at, "source_uri": source_uri,
+            }
+            self.rowcount = 1
+            return
+        changed = {
+            "title": title, "language_code": language_code,
+            "published_at": published_at, "source_uri": source_uri,
+        }
+        if all(existing[k] == v for k, v in changed.items()):
+            self.rowcount = 0   # IS DISTINCT FROM — 값이 같으면 UPDATE 하지 않는다
+            return
+        existing.update(changed)
+        # 정정과 함께 움직이되 **앞으로만**(GREATEST)
+        existing["available_at"] = max(existing["available_at"], available_at)
+        self.rowcount = 1
+
+    def _upsert_news_document(self, p):
+        lead_text, source_code, article_id = p
+        document = self.db.documents.get((source_code, article_id))
+        if document is None:
+            self.rowcount = 0   # INSERT … SELECT 가 0행 — 부모가 없으면 아무것도 안 쓴다
+            return
+        key = document["document_id"]
+        existing = self.db.news_documents.get(key)
+        if existing is not None and existing["lead_text"] == lead_text:
+            self.rowcount = 0
+            return
+        self.db.news_documents[key] = {"document_id": key, "lead_text": lead_text}
+        self.rowcount = 1
+
     def _insert_session(self, p):
         session_id, dataset, source_group, session_date, version, uhash, count = p
         if self.db.session_by_identity(dataset, source_group, session_date):
@@ -179,6 +503,41 @@ class _Cursor:
             "worker_fencing_token": 0, "lease_expires_at": None, "heartbeat_at": None,
         }
         self._rows = [(session_id,)]
+
+    def _begin_qc(self, p):
+        row = self.db.sessions.get(p[0])
+        if row is None or row["phase"] not in ("DRAINED", "QC_RUNNING", "FAILED"):
+            return
+        row["phase"] = "QC_RUNNING"
+        row["worker_fencing_token"] = row.get("worker_fencing_token", 0) + 1
+        self._rows = [(row["dataset"], row["source_group"], row["session_date"],
+                       row["expected_window_count"], row["universe_version"],
+                       row["worker_fencing_token"])]
+
+    def _confirm_missing(self, p):
+        # 소유권 검사는 앞선 잠금 SELECT 가 한다(실제 코드와 같은 순서) — 여기서 다시
+        # 합성하면 그 SELECT 가 빠져도 테스트가 통과한다
+        session_id, now = p
+        changed = 0
+        for window in self.db.windows.values():
+            if (window["session_id"] == session_id and window["data_status"] == "DUE"
+                    and window["scheduled_at"] <= now):
+                window["data_status"] = "MISSING"
+                changed += 1
+        self.rowcount = changed
+
+    def _finish_qc(self, session_id, phase, *, fence_token, final_checksum=None,
+                   final_generation=None):
+        row = self.db.sessions.get(session_id)
+        if (row is None or row["phase"] != "QC_RUNNING"
+                or row.get("worker_fencing_token") != fence_token):
+            self.rowcount = 0
+            return
+        row["phase"] = phase
+        if phase == "FINALIZED":
+            row["final_checksum"] = final_checksum
+            row["final_generation"] = final_generation
+        self.rowcount = 1
 
     def _select_session(self, p):
         row = self.db.session_by_identity(*p)
@@ -384,14 +743,72 @@ class _Cursor:
             r for (k, _), r in self.db.jobs.items() if k == kind
             and (r["status"] == "PENDING"
                  or (r["status"] == "RETRY_WAIT" and r["next_attempt_at"] <= now)
-                 or (r["status"] == "CLAIMED" and r["lease_expires_at"] < now))
+                 or (r["status"] == "CLAIMED" and _expired(r["lease_expires_at"], now)))
         ]
         if not candidates:
             return
         row = min(candidates, key=lambda r: r["seq"])
         row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
                    attempt_count=row["attempt_count"] + 1)
-        self._rows = [(row["job_id"], row["attempt_count"])]
+        self._rows = [(row["job_id"], row["attempt_count"], row["redrive_generation"])]
+
+    # ── 메시지 기반 job 경로 (ALPHA-672) ──
+    def _fetch_job(self, kind, p):
+        row = self.db.jobs.get((kind, p[0]))
+        if row is not None:
+            self._rows = [(row["status"], row["next_attempt_at"],
+                           row["redrive_generation"], row["attempt_count"])]
+
+    def _claim_job_by_id(self, kind, p):
+        worker_id, lease_until, job_id, generation, now, now2 = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["redrive_generation"] != generation:
+            return
+        eligible = (
+            row["status"] == "PENDING"
+            or (row["status"] == "RETRY_WAIT" and row["next_attempt_at"] is not None
+                and row["next_attempt_at"] <= now)
+            or (row["status"] == "CLAIMED" and _expired(row["lease_expires_at"], now2))
+        )
+        if not eligible:
+            return
+        row.update(status="CLAIMED", claimed_by=worker_id, lease_expires_at=lease_until,
+                   attempt_count=row["attempt_count"] + 1)
+        self.rowcount = 1
+        self._rows = [(row["attempt_count"],)]
+
+    def _heartbeat_job(self, kind, p):
+        lease_until, job_id, worker_id, attempt, generation = p
+        row = self.db.jobs.get((kind, job_id))
+        if (row is None or row["claimed_by"] != worker_id
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
+            return
+        row["lease_expires_at"] = lease_until
+        self.rowcount = 1
+
+    def _dead_on_dlq(self, kind, p):
+        error_code, now, job_id, generation, now2 = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["redrive_generation"] != generation:
+            return
+        if row["status"] not in ("PENDING", "RETRY_WAIT", "CLAIMED"):
+            return
+        if row["status"] == "CLAIMED" and not _expired(row["lease_expires_at"], now2):
+            return  # 살아 있는 lease — 실행 중이다
+        row.update(status="DEAD", error_code=error_code, completed_at=now,
+                   claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
+
+    def _redrive_job(self, kind, p):
+        now, job_id, status, generation = p
+        row = self.db.jobs.get((kind, job_id))
+        if row is None or row["status"] != status or row["redrive_generation"] != generation:
+            return
+        row.update(status="RETRY_WAIT", redrive_generation=generation + 1,
+                   next_attempt_at=now, attempt_count=0, completed_at=None,
+                   claimed_by=None, lease_expires_at=None)
+        self.rowcount = 1
 
     def _job_window_generation(self, p):
         row = self.db.jobs[("price", p[0])]
@@ -409,10 +826,11 @@ class _Cursor:
 
     def _job_transition(self, kind, p):
         (to_status, next_attempt_at, result_checksum, error_code, completed,
-         job_id, worker_id, attempt) = p
+         job_id, worker_id, attempt, generation) = p
         row = self.db.jobs.get((kind, job_id))
         if (row is None or row["claimed_by"] != worker_id
-                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt):
+                or row["status"] != "CLAIMED" or row["attempt_count"] != attempt
+                or row["redrive_generation"] != generation):
             return
         row.update(status=to_status, next_attempt_at=next_attempt_at,
                    result_checksum=result_checksum, error_code=error_code,
@@ -432,11 +850,34 @@ class _Cursor:
         }
         self._rows = [(event_id,)]
 
-    def _claim_outbox(self, p):
-        relay_id, claim_until, now, now2, limit = p
+    def _claim_outbox(self, p, sql=""):
+        # 실제 RETURNING 에 attempt_count 가 없으면 Relay 의 backoff 가 IndexError 로
+        # 죽는다 — fake 가 합성해 주면 그 회귀가 여기서 숨는다(Rule 9)
+        assert "o.attempt_count" in sql, "outbox claim 은 attempt_count 를 반환해야 한다"
+        # 아래 의미는 fake 가 **합성**한다 — SQL 에서 가드가 빠져도 fake 만 보면 통과하므로
+        # (실DB 에선 조기 재claim·claim 탈취·중복 발행) 절의 존재를 여기서 못 박는다(Rule 9)
+        for clause in (
+            "c.status = 'NEW'",
+            "c.next_attempt_at IS NULL OR c.next_attempt_at <= %s",
+            "c.claimed_by IS NULL OR c.claim_expires_at < %s",
+            "FOR UPDATE SKIP LOCKED",
+            "ORDER BY c.created_at",
+        ):
+            assert clause in sql, f"outbox claim SQL 에 {clause} 가 없다"
+        # destination 필터가 있는 변형은 파라미터가 6개다(SQL 과 파라미터 수를 함께 본다)
+        excluded = ()
+        destination = None
+        if "c.destination = %s" in sql:
+            relay_id, claim_until, now, now2, destination, limit = p
+        elif "NOT (c.destination = ANY(%s))" in sql:
+            relay_id, claim_until, now, now2, excluded, limit = p
+        else:
+            relay_id, claim_until, now, now2, limit = p
         eligible = sorted(
             (r for r in self.db.outbox.values()
              if r["status"] == "NEW"
+             and (destination is None or r["destination"] == destination)
+             and r["destination"] not in set(excluded)
              and (r["next_attempt_at"] is None or r["next_attempt_at"] <= now)
              and (r["claimed_by"] is None or r["claim_expires_at"] < now)),
             key=lambda r: r["seq"],
@@ -445,7 +886,7 @@ class _Cursor:
             row.update(claimed_by=relay_id, claim_expires_at=claim_until)
         self._rows = [
             (r["event_id"], r["event_type"], r["destination"], r["payload"],
-             r["claim_expires_at"]) for r in eligible
+             r["claim_expires_at"], r["attempt_count"]) for r in eligible
         ]
 
     def _mark_published(self, p):

@@ -32,6 +32,12 @@ from .models import (
     KisInvestorConfig,
     KisNavConfig,
     KisPriceConfig,
+    MinuteConsumerConfig,
+    MinuteNewsConsumerConfig,
+    MinuteNewsWorkerConfig,
+    MinutePriceConsumerConfig,
+    MinutePriceWorkerConfig,
+    MinuteRelayConfig,
     KrxEtfConfig,
     NewsConfig,
     PriceConfig,
@@ -98,6 +104,24 @@ class Settings(BaseSettings):
     # ETF 가격변동 트리거(ALPHA-406)는 load-price-triggers 만 쓴다 — 미설정이면 그 진입점이
     # fail-loud 한다(트리거를 안 돌리는 환경은 생략 가능).
     price_triggers: PriceTriggersConfig | None = None
+    # 1분 Outbox Relay(ALPHA-670)는 `relay` 스텝만 쓴다 — 미설정이면 그 진입점이
+    # fail-loud 한다(Relay 를 안 돌리는 환경은 생략 가능).
+    minute_relay: MinuteRelayConfig | None = None
+    # 1분 Consumer 운영 설정(ALPHA-672)은 `dlq-reconcile` 만 쓴다 — 미설정이면 그
+    # 진입점이 fail-loud 한다.
+    minute_consumer: MinuteConsumerConfig | None = None
+    # 1분 Price Worker(ALPHA-706)는 `price-worker` 스텝만 쓴다 — 미설정이면 그
+    # 진입점이 fail-loud 한다(토스 자격증명은 env 로만).
+    minute_price_worker: MinutePriceWorkerConfig | None = None
+    # 1분 가격 판정 Consumer(ALPHA-711)는 `price-consumer` 스텝만 쓴다 — 미설정이면
+    # 그 진입점이 fail-loud 한다.
+    minute_price_consumer: MinutePriceConsumerConfig | None = None
+    # 1분 뉴스 추출 Consumer(ALPHA-713)는 `news-consumer` 스텝만 쓴다 — 미설정이면
+    # 그 진입점이 fail-loud 한다.
+    minute_news_consumer: MinuteNewsConsumerConfig | None = None
+    # 1분 News Worker(ALPHA-707)는 `news-worker` 스텝만 쓴다. 기본값이 전부라 섹션이
+    # 없어도 기동한다 — 엔드포인트 정본은 [bigkinds_news] 라 이 섹션은 수치뿐이다.
+    minute_news_worker: MinuteNewsWorkerConfig = MinuteNewsWorkerConfig()
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 

@@ -7,7 +7,7 @@
 > **상태: 합의 진행 (v4, 2026-07-24)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했고, 전달 레코드(outbox)를 `tenant_delivery`로 확정했다(ALPHA-396). `source_events`·`evidences` 경계면 컬럼까지 확정했다(ALPHA-395, 아래 "경계면 컬럼" 절). 영서 단독 결정은 모두 확정됐고, 열린 항목은 진기 확인 대상(스키마 `tenant`·`tenant_credential` 정의, 선별 nullable 컬럼 채움 보증)뿐이다.
 
 - 오너십 경계: **김진기** — Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** / **조영서** — DB를 소비하는 이후 전부: **Event Bundle 생성(tenant-sync-api의 DB 조회·조립)**, 전달 레코드, Sync Agent, 온프렘 ([../adr/0026](../adr/0026-ownership-boundary-db.md)).
-- 전송 단위: Event Bundle (신규 + 정정 + 무효화). 무결성은 번들 단위 SHA-256 체크섬. 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
+- 전송 단위: Event Bundle (신규 + 무효화 — 정정(CORRECTION)은 폐지, [ADR-0044](../adr/0044-correction-abolition.md)). 프로토콜(엔드포인트·cursor·에러)은 [sync-protocol.md](sync-protocol.md).
 
 ## Cloud Event Store 스키마
 
@@ -25,9 +25,10 @@
 | `explanation_run` | 어느 실행이 그 결과를 냈는지 + 사용한 릴리스 번들 버전 | `explanation_run_id` |
 | `source_event` | 설명이 근거로 삼은 소스 이벤트 | `source_event_id` |
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
-| `explanation_run_event_evidence` | 번들 `evidences`의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 아는 유일 경로. "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
-| `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
-| `event_thread` | 동일 실제 사건의 계보(정정·후속 판정의 기준) | `thread_id` |
+| `explanation_run_event_evidence` | 번들 `evidences` 이벤트 근거 갈래의 lineage — 어느 evidence 가 어느 `explanation_run` 에 속하는지 잇는 경로(공시 갈래는 아래 행). "내부 구현·자유 변경" 아님, 양자 합의 대상 (ALPHA-363). writer=analysis-engine, `stage_code` 는 현재 `PROMPT` 한 값뿐이다 — 설명 생성 프롬프트에 실은 사건의 근거라는 뜻이고, 엔진에 후보 재심사 단계가 없어 단계 축이 아직 한 겹이다 (ALPHA-603) | `(explanation_run_id, evidence_id, stage_code)` |
+| `explanation_run_disclosure_fact` (+ `disclosure_fact`) | 번들 `evidences` 공시 갈래 lineage — 공시 정규화 사실이 어느 run 에 속하는지 + `disclosure_fact.document_id` 로 문서 도달. 조립 편입(ALPHA-718)으로 경계면이다 — "내부 구현·자유 변경" 아님, 양자 합의 대상 | `(explanation_run_id, fact_id, stage_code)` · `fact_id` |
+| `document` (+ lineage `document_assertion`) | 번들 `evidences` = 근거 뉴스/공시 문서 목록 `{kind, title, source, published_at, source_uri}` — 온프렘 소비자(publication-api) 형상에 정렬 (ALPHA-395, source_uri 는 ALPHA-739 확장). document 로의 lineage: `run → …_event_evidence → event_evidence.assertion_id → document_assertion → document`, 양자 합의 | `document_id` |
+| `event_thread` | 동일 실제 사건의 계보(후속 판정의 기준) | `thread_id` |
 | `release_bundle` | 고객사가 승인·적용하는 제품 버전 manifest | `bundle_version` |
 | `instrument` · `entity` | 번들의 `etf_ticker`·`etf_name` 공급(조인) — 온프렘 서빙 키가 ticker 라서 경계면에 포함 (확정 2026-07-21) | `instrument_id` = `entity_id` |
 
@@ -37,17 +38,17 @@
 
 - 도메인 ID(`explanation_result_id` 등)는 **Cloud 발번 TEXT** — 물리 스키마 기준. On-Prem 멱등 upsert 키 = 이 도메인 ID.
 - `tenant_id`는 BIGINT(identity). 전달 단위의 멱등 처리 기준은 테넌트별 단조증가 cursor(ADR-0015 확정)이며, 저장 구조 차원의 키 설계는 전달 레코드 설계(미확정 — 아래)와 함께 확정한다.
-- 정정·무효화는 대상을 `target_explanation_result_id`로 참조한다. 정정으로 생기는 재게시본은 **새 `explanation_result_id`** — On-Prem 리비전 분리 모델의 소스([../domain/state-machine.md](../domain/state-machine.md)).
+- 무효화는 대상을 `target_explanation_result_id`로 참조한다 — 무효화의 단위는 특정 설명(리비전)이다([../domain/state-machine.md](../domain/state-machine.md), ADR-0044).
 
 ## 전달 레코드 (확정 — 2026-07-21, ALPHA-396)
 
 번들은 테넌트별 전달 레코드를 cursor 순으로 묶어 생성한다 — cursor 발번 시점은 테넌트별 fan-out(ADR-0021 확정). 설계는 영서 단독 결정으로 다음과 같이 확정한다:
 
-- **저장 구조**: `tenant_delivery` — 물리 정의는 `migrations-cloud/V202607211740__add_tenant_delivery.sql`(SQL이 계약). 컬럼: `(tenant_id, cursor)` PK · `delivery_type` · `explanation_result_id` · `target_explanation_result_id` · `reason` · `created_at`. 유형별 페이로드 형상(NEW=결과만 / CORRECTION=결과+대상+사유 / INVALIDATION=대상+사유)은 CHECK 로 강제 — 와이어 JSON 봉투와 1:1.
+- **저장 구조**: `tenant_delivery` — 물리 정의는 `migrations-cloud/V202607211740__add_tenant_delivery.sql`(SQL이 계약). 컬럼: `(tenant_id, cursor)` PK · `delivery_type` · `explanation_result_id` · `target_explanation_result_id` · `reason` · `created_at`. 유형별 페이로드 형상(NEW=결과만 / INVALIDATION=대상+사유)은 CHECK 로 강제(2형상 축소는 `V202608011200`, ADR-0044) — 와이어 JSON 봉투와 1:1.
 - **멱등 키**: 전달 단위는 `(tenant_id, cursor)` PK. On-Prem 소비 멱등은 별도 축 — 번들 단위는 `received_bundle.cursor_from`, 항목 단위는 도메인 ID(`explanation_result_id`) upsert.
-- **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 그 변경 자체는 다음 cursor(CORRECTION·INVALIDATION)로 다시 전달되므로 수렴한다.
-- **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 재게시(기존 `WITHDRAWN` + 새 행 `PUBLISHED`) → 새 행을 `CORRECTION`(대상=구 게시분, 사유 필수)으로 발번 / 재게시 없는 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다.
-- **fan-out 발번기**: `NEW` 발번은 analysis-engine 이 `explanation_result` 게시와 **같은 트랜잭션**에서 수행한다(write-time fan-out, ALPHA-493 — 커밋된 행만 cursor 에 노출). 발번 로직이 원자성 때문에 analysis-engine 커밋 경로에 상주할 뿐, 전달 레코드의 **소유는 ADR-0026 그대로 조영서**다 — fan-out 규칙·`tenant_delivery` 형상 변경은 이 계약 문서를 거친다. 같은 날 재게시분은 DRAFT 보존·발번 생략(그날 첫 게시만 NEW). `CORRECTION`·`INVALIDATION` 발번은 후속(운영자 정정 모델 접합) — 그 전까지 두 유형의 수신 경로는 로컬 시드로 시연한다. **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
+- **페이로드는 저장하지 않는다**: 번들 조립 시점에 도메인 테이블(`explanation_result` 등)을 조인해 싣는다. 스냅샷 중복 저장을 피하는 walking skeleton 트레이드오프 — 전달 레코드 발번과 조립 사이에 결과가 바뀌면 조립 시점 상태가 실리며, 게시 철회는 다음 cursor(INVALIDATION)로 다시 전달되므로 수렴한다.
+- **게시 상태 ↔ 전달 유형 매핑(fan-out 규칙)**: `explanation_result`가 `PUBLISHED`로 전이 → 대상 테넌트마다 `NEW` 1행 발번 / 게시 철회(`WITHDRAWN`) → `INVALIDATION`(사유 필수). cursor 는 테넌트별 단조증가로 발번기가 부여한다. (구 재게시→`CORRECTION` 매핑은 폐지 — ADR-0044.)
+- **fan-out 발번기**: `NEW` 발번은 analysis-engine 이 `explanation_result` 게시와 **같은 트랜잭션**에서 수행한다(write-time fan-out, ALPHA-493 — 커밋된 행만 cursor 에 노출). `INVALIDATION` 발번은 super-admin-api 무효화 액션(`POST /api/v1/analyses/{id}/invalidate`, ALPHA-440)이 수행한다 — 게시본 `PUBLISHED→WITHDRAWN` 전이 + 발번 + 감사(admin_activity_log)가 **한 트랜잭션**이다. 발번 대상은 전 테넌트가 아니라 **그 결과의 NEW 를 받은 테넌트**다 — 원본 미수신 테넌트에 무효화를 발번하면 "원본 미수신 무효화 = gap 에서만 발생"(sync-protocol.md) 계약이 깨진다. 두 발번기는 같은 advisory lock(`hashtext('tenant-delivery-fanout')`)으로 cursor 채번을 직렬화한다 — 이 잠금 문자열은 두 모듈이 공유하는 계약이다. 발번 로직이 두 모듈에 상주할 뿐, 전달 레코드의 **소유는 ADR-0026 그대로 조영서**다 — fan-out 규칙·`tenant_delivery` 형상 변경은 이 계약 문서를 거친다. 같은 발화(explanation_route) 재실행분은 DRAFT 보존·발번 생략(발화당 첫 게시만 NEW — 무효화로 게시본이 사라진 발화는 재실행 시 새로 게시된다). 하루 다건 발화(분봉 트리거)는 발화마다 게시·발번되며(ALPHA-710 게시 정책), 온프렘은 같은 (ticker, trade_date)의 구본 자동 게시분을 UNPUBLISHED 로 전이한 뒤 재게시한다(screening-worker 교체 규율 — 검수 승인본 점유는 교체하지 않는다). **retention**: 미정(현재 무제한 보존) — 정리 정책은 운영 표준과 함께 후속.
 
 `tenant_sync_cursor.last_cursor`(BIGINT)는 cursor 소비 추적이다 — 타입 정정은 `V202607150002`(근거: ADR-0015).
 
@@ -71,18 +72,8 @@
         "trade_date": "2026-07-15", "explanation_as_of": "...", "explanation_type": "EVENT_SUPPORTED",
         "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
-      "source_events": [],
-      "evidences": []
-    },
-    {
-      "cursor": 102,
-      "delivery_type": "CORRECTION",
-      "target_explanation_result_id": "...",
-      "reason": "근거 공시 정정",
-      "explanation_result": { "...": "정정분 전체 — 신규와 동일 형상, 새 ID" },
-      "explanation_run": { "...": "..." },
-      "source_events": [],
-      "evidences": []
+      "source_events": [ { "source_event_id": "...", "source_class": "NEWS", "event_type_code": "EARNINGS", "event_date": "2026-07-14" } ],
+      "evidences": [ { "kind": "NEWS", "title": "실적 발표 기사", "source": "YONHAP", "published_at": "2026-07-14T00:00:00Z", "source_uri": "https://news.example.com/a1" } ]
     },
     {
       "cursor": 103,
@@ -94,20 +85,20 @@
 }
 ```
 
-- **NEW·CORRECTION은 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
-- CORRECTION 수신 시 On-Prem 동작(기존 발행분 UNPUBLISHED → 새 리비전은 신규와 동일한 정책 재점검, ADR-0041)은 [../domain/state-machine.md](../domain/state-machine.md) 소관 — 이 계약은 "정정분이 전체 형상 + 사유 + 대상 참조로 도착한다"까지만 정의한다.
+- **NEW는 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
+- INVALIDATION 수신 시 On-Prem 동작(item·게시분 즉시 비노출)은 [../domain/state-machine.md](../domain/state-machine.md) 소관. 정정(CORRECTION) 형상은 계약에서 폐지됐다 — 소비자는 미지 유형과 동일하게 거부한다([ADR-0044](../adr/0044-correction-abolition.md)).
 
 ### `source_events`·`evidences` 경계면 컬럼 (확정 — 2026-07-24, ALPHA-395)
 
 reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·근거 데이터·이벤트 타임라인 — [../console-ia/tenant-console.md](../console-ia/tenant-console.md))를 최소로 충족하는 컬럼만 싣는다(reader 자유·Rule 2).
 
-- **`source_events[]`** ← `source_event` 4컬럼: `source_event_id`(식별) · `source_class`(NEWS/DISCLOSURE 분기) · `event_type_code`(변동 요인·타임라인 라벨) · `event_date`(타임라인 축). 제외: `available_at`·`lifecycle_stage`·`event_status`(내부 시각·상수 성격, UI 미요구). 이 4컬럼은 확정이다. **주의**: 현재 온프렘 소비 경로는 `evidences` 뿐 — `source_events`는 이벤트 타임라인 UI 도입 시 소비 예정이며, 도입 시 형상 변경이 필요하면 확장-수축으로 처리한다(재협의 아님).
-- **`evidences[]`** = 설명의 근거가 된 **뉴스/공시 문서 목록**. **실제 JSON 소비자인 `publication-api` `ExplanationStore`가 파싱하는 flat 형상**에 정렬한다(사용자 결정 2026-07-24 — Codex 지적으로 재정의): `kind`(NEWS/DISCLOSURE ← `document.document_type`) · `title`(헤드라인 ← `document.title`) · `source`(출처 ← `document.source_code`) · `published_at`(← `document.published_at`). `event_evidence`의 내부 필드(`evidence_id`·`evidence_type`·`evidence_text`·`link_confidence`)는 소비자가 읽지 않아 싣지 않는다(Rule 2). **참고**: `tenant-console` 검수는 현재 mock(`{type,title,source,time}` — 필드명이 다르고 아직 DB `evidences` 미매핑)이라 실데이터 전환 시 이 계약 형상으로 정렬해야 한다(정렬은 tenant-console 실데이터 티켓 몫). 검수 심화용 필드가 필요해지면 확장-수축으로 추가.
-- **lineage**: `evidences`(문서)는 `explanation_run → explanation_run_event_evidence → event_evidence.assertion_id → document_assertion.document_id → document`(distinct document)로 도달한다. `source_events`는 그 evidence의 `source_event_id`로 도달한다. 조립 조인 구현은 **ALPHA-363**, 기계가독 JSON Schema·양단 계약 테스트는 **ALPHA-497**. **구현 전까지 두 배열은 빈 배열로 실린다**(현행 `rowMapper`).
-- **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)`.
-- **채움 보증 확인(진기, CODEOWNERS 리뷰)**: nullable 선별 컬럼은 `source_event.event_date`·`document.title`·`document.published_at`이다(`document.document_type`·`source_code`는 NOT NULL). `document.title`·`document.published_at`("관련 뉴스/공시" 제목·날짜)·`source_event.event_date`(타임라인 축)는 결정적 채움 보증 확인 대상. 계약·구현(497)은 nullable 필드를 nullable로 모델링한다.
+- **`source_events[]`** ← `source_event` 4컬럼: `source_event_id`(식별) · `source_class`(NEWS/DISCLOSURE 분기) · `event_type_code`(변동 요인·타임라인 라벨) · `event_date`(타임라인 축). 제외: `available_at`·`lifecycle_stage`·`event_status`(내부 시각·상수 성격, UI 미요구). 이 4컬럼은 확정이다. **온프렘 소비자**: screening-worker 출처 수 정책 게이트(`SINGLE_SOURCE`·`min_source_count` — 고유 `source_event_id` 수를 센다)가 현재 소비자이고, 이벤트 타임라인 UI 는 추가 소비 예정이다(도입 시 형상 변경이 필요하면 확장-수축으로 처리 — 재협의 아님).
+- **`evidences[]`** = 설명의 근거가 된 **뉴스/공시 문서 목록**. **실제 JSON 소비자인 `publication-api` `ExplanationStore`가 파싱하는 flat 형상**에 정렬한다(사용자 결정 2026-07-24 — Codex 지적으로 재정의): `kind`(NEWS/DISCLOSURE ← `document.document_type`) · `title`(헤드라인 ← `document.title`) · `source`(출처 ← `document.source_code`) · `published_at`(← `document.published_at`) · `source_uri`(원문 링크 ← `document.source_uri`, **optional** — ALPHA-739 확장, 콘솔 근거 제목 링크용. 구형 4키 저장분과 공존해야 하고 EOD 뉴스 채움 구멍(ALPHA-740)이 남아 required 승격은 구멍 해소 후). `event_evidence`의 내부 필드(`evidence_id`·`evidence_type`·`evidence_text`·`link_confidence`)는 소비자가 읽지 않아 싣지 않는다(Rule 2). **참고**: `tenant-console` 검수도 실전환됐다(ALPHA-607) — `analysis_item.evidences`(이 계약 형상 그대로 저장된 JSONB)를 파싱한다. 검수 심화용 필드가 필요해지면 확장-수축으로 추가.
+- **lineage**: `evidences`(문서)는 두 갈래를 합쳐(distinct document) 도달한다 — ① `explanation_run → explanation_run_event_evidence → event_evidence.assertion_id → document_assertion.document_id → document`, ② `explanation_run → explanation_run_disclosure_fact → disclosure_fact.document_id → document`(공시 정규화 사실 — super-admin 콘솔 근거 표시와 같은 경로). `source_events`는 그 evidence의 `source_event_id`로 도달한다(distinct source_event). 조립 조인은 tenant-sync-api `TenantDeliveryRepository.findEvidenceRows`·`findSourceEventRows` 로 구현됐다(**ALPHA-718** — ALPHA-363 은 경계면 문서 편입으로 종결, 구현은 이 티켓). 기계가독 JSON Schema·양단 계약 테스트는 **ALPHA-497**. **두 배열 모두 조립돼 실린다 — lineage 없는 런은 빈 배열이다.**
+- **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at, source_uri)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)` · 공시 갈래 `explanation_run_disclosure_fact(explanation_run_id, fact_id)` · `disclosure_fact(fact_id, document_id)`.
+- **채움 보증 확인(진기, CODEOWNERS 리뷰)**: nullable 선별 컬럼은 `source_event.event_date`·`document.title`·`document.published_at`·`document.source_uri`다(`document.document_type`·`source_code`는 NOT NULL). `document.title`·`document.published_at`("관련 뉴스/공시" 제목·날짜)·`source_event.event_date`(타임라인 축)는 결정적 채움 보증 확인 대상. `document.source_uri` 는 실측 완료(2026-08-04, ALPHA-739): 공시=항상(DART 뷰어 URL 을 rcpNo 로 조립)·1분 뉴스=원천 URL 있으면 채움(canonical_news DO UPDATE — bigkinds `PROVIDER_LINK_PAGE` 결측 기사는 NULL)·**EOD 뉴스=조건부 결측**(assemble_events 선적재 시 NULL — 해소는 ALPHA-740). 어느 레인이든 NULL 이 가능하므로 계약은 nullable·optional 이다. 계약·구현(497)은 nullable 필드를 nullable로 모델링한다.
 
-**확정 후 형상** (ALPHA-363 조립 조인 구현 시 채워짐 — **현행 번들은 두 배열 모두 `[]`**. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
+**형상** (두 배열 모두 조립 구현됨(ALPHA-718) — lineage 없는 런은 `[]`. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
 
 ```json
 "source_events": [ { "source_event_id": "...", "source_class": "DISCLOSURE", "event_type_code": "...", "event_date": "2026-07-14" } ],

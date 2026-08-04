@@ -5,8 +5,5 @@ import type { Analysis } from './types';
 
 export const realAnalysesRepository: AnalysesRepository = {
   list: () => apiClient.get<Analysis[]>('/analyses'),
-  correct: (id, result, reason) =>
-    apiClient.patch<void>(`/analyses/${id}/result`, { result, reason }),
-  exclude: (id, reason) => apiClient.post<void>(`/analyses/${id}/exclude`, { reason }),
-  restore: (id) => apiClient.post<void>(`/analyses/${id}/restore`),
+  invalidate: (id, reason) => apiClient.post<void>(`/analyses/${id}/invalidate`, { reason }),
 };

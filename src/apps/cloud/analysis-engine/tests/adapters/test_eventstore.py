@@ -293,14 +293,37 @@ def test_persist_publishes_first_result_and_fans_out_atomically():
     assert lock_idx < result_idx < fanout_idx < sqls.index("COMMIT")
     assert sqls.count("COMMIT") == 1  # 중간 커밋이 생기면 원자성이 깨진다
     assert conn.executed[fanout_idx][1] == (ids["explanation_result_id"],)
-    assert "'NEW'" in sqls[fanout_idx]  # CORRECTION·INVALIDATION 발번은 후속 티켓
+    assert "'NEW'" in sqls[fanout_idx]  # INVALIDATION 발번은 후속(ALPHA-440), CORRECTION 은 폐지(ADR-0044)
     assert (ids["publication_status"], ids["fanout_tenants"]) == ("PUBLISHED", 1)
+
+
+def test_publication_gate_axis_is_the_route_not_the_day():
+    """게이트 EXISTS 는 발화(route) 축이어야 한다(ALPHA-710 게시 정책) — 일 축이면
+    같은 날 두 번째 발화(분봉 트리거)가 전부 DRAFT 로 강등돼 장중 설명이 생성만 되고
+    MTS 에 안 뜬다. 같은 날 다건 PUBLISHED 는 서빙층이 최근 게시 시각 우선으로 흡수한다."""
+    conn = _FakeConn()
+
+    EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)],
+    )
+
+    result_sql, params = next((s, p) for s, p in conn.executed
+                              if s.startswith("INSERT INTO explanation_result"))
+    assert "r.explanation_route_id = %s" in result_sql
+    assert "p.etf_instrument_id = %s AND p.trade_date = %s" not in result_sql
+    assert "rte_1" in params  # EXISTS 파라미터가 이 발화의 route 다
+    # as_of 는 마이크로초 정밀이어야 한다 — 초 해상도면 같은 초에 끝난 서로 다른
+    # 발화 둘이 게시 grain 부분 유니크(as_of 포함)와 충돌해 두 번째 INSERT 가 터진다.
+    as_of = params[4]
+    assert "." in as_of and "+00:00" in as_of, f"as_of 가 초 해상도다: {as_of}"
 
 
 def test_rerun_on_published_grain_stays_draft_and_skips_fanout():
     """같은 날 재실행은 DRAFT 보존 + 발번 없음 — as_of 가 런마다 새로워 grain 유니크만으로는
-    이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(WITHDRAWN 재게시
-    = CORRECTION 은 후속 티켓 몫)."""
+    이중 NEW 발번을 못 막는다. 게이트가 PUBLISHED 만 보는 것도 계약이다(무효화 후 재발번
+    허용 여부는 발번 정책 소관 — ADR-0044)."""
     conn = _FakeConn(result_insert_row=("DRAFT",))
 
     ids = EventStore(conn).persist_explanation(
@@ -351,3 +374,65 @@ def test_fetch_without_matching_events_skips_detail_queries():
 
     assert len(conn.executed) == 1  # 사건이 없으면 참여자·측정 쿼리를 던지지 않는다
     assert conn.executed[0][1] == ("TITLE", "2026-07-16", ["005930"])  # holdings 접지 필터
+
+
+class _MinuteFakeCursor(_FakeCursor):
+    def execute(self, sql, params=None):
+        flat = " ".join(sql.split())
+        self._conn.executed.append((flat, params))
+        if flat.startswith("SELECT trigger_id, entity_id, window_start"):
+            self._row = self._conn.minute_trigger_row
+
+
+class _MinuteFakeConn(_FakeConn):
+    def __init__(self, minute_trigger_row=None):
+        super().__init__()
+        self.minute_trigger_row = minute_trigger_row
+
+    def cursor(self):
+        return _MinuteFakeCursor(self)
+
+
+def test_fetch_minute_price_trigger_maps_signed_return_and_kst_date():
+    """분봉 트리거 소비(ALPHA-709) — change_rate(절대값)가 아니라 **부호 있는**
+    close/open−1 을 observed_return 으로 재구성하고, trade_date 는 KST 날짜다
+    (UTC 날짜로 접으면 자정 경계에서 하루가 밀린다)."""
+    from datetime import datetime, timezone
+    from decimal import Decimal as D
+    # 2026-07-16 09:05 KST == 00:05 UTC — UTC 날짜와 KST 날짜가 같은 날이지만,
+    # 15:10 KST 이전의 UTC 표현으로 저장돼 오면 date() 를 그냥 부르면 어긋난다
+    window = datetime(2026, 7, 15, 23, 59, tzinfo=timezone.utc)  # KST 07-16 08:59
+    conn = _MinuteFakeConn(minute_trigger_row=(
+        "mpt_1", "091160", window, D("100"), D("94"),
+        D("0.06"), D("0.05"), "intraday-open-v1", "ses-1", 2,
+    ))
+    result = EventStore(conn).fetch_minute_price_trigger("mpt_1")
+    assert result is not None
+    assert result.ticker == "091160"
+    assert result.trade_date == date(2026, 7, 16)  # KST 축
+    trigger = result.gate
+    assert trigger.abs_gate and not trigger.rel_gate
+    assert abs(trigger.observed_return - (-0.06)) < 1e-9  # 하락 방향이 산다
+    assert "intraday-open-v1" in trigger.reason
+    # 분봉 분해(ALPHA-710)가 window artifact 를 정확히 집는 좌표 — 빠지면 분해가
+    # 세대·세션을 추측해야 하고, 정정 세대와 어긋난 artifact 를 읽는다.
+    assert (result.session_id, result.generation) == ("ses-1", 2)
+    assert result.window_start is window
+
+
+def test_fetch_minute_price_trigger_missing_row_is_none():
+    assert EventStore(_MinuteFakeConn()).fetch_minute_price_trigger("mpt_x") is None
+
+
+def test_explanation_prerequisites_follows_minute_axis_for_trigger_input():
+    """분봉 실행의 route 전제는 minute_price_trigger_id 축으로 찾는다 — 일 단위
+    (etf, trade_date) 조인으로 찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 다른
+    일 단위 트리거 route 가 잡혀 남의 계보에 영속된다(ALPHA-709)."""
+    conn = _MinuteFakeConn()
+    settings = SimpleNamespace(trade_date=date(2026, 7, 16),
+                               release_bundle_version=None, trigger_id="mpt_1")
+    EventStore(conn).explanation_prerequisites(settings, "inst_ETF")
+    route_sqls = [sql for sql, _ in conn.executed
+                  if sql.startswith("SELECT er.explanation_route_id")]
+    assert route_sqls and all("minute_price_trigger_id" in sql for sql in route_sqls)
+    assert all("price_movement_trigger " not in sql for sql in route_sqls)

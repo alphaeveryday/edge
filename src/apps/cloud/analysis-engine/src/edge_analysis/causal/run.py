@@ -23,11 +23,13 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
 import numpy as np
 
+from ..adapters.causal_data import COHORT_COLUMNS, UNIVERSE_COLUMNS
 from ..observability import log
 from . import chain
 from . import p0_question as p0
@@ -48,11 +50,16 @@ N_HYPOTHESES = 3
 # 결과 산포를 잴 대조 표본의 하한. 이보다 적으면 E-value 의 분모가 잡음이다.
 _SD_MIN = 30
 
+# 참조집합에 들어오면 안 되는 컬럼. `cd.universe` 는 종목 속성만 받고 날짜는 코드가
+# 창으로 붙인다 - 모델이 여기 `trade_date` 를 박으면 창이 하루로 접힌다.
+_NOT_UNIVERSE = r"\b(?:" + "|".join(
+    c for c in COHORT_COLUMNS if c not in UNIVERSE_COLUMNS) + r")\b"
+
 
 def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: date,
             as_of: str, observed: float, route_code: str,
             contributors: list[tuple[str, float]], candidates: list[dict],
-            window_days: int = 60, industry: dict | None = None,
+            window_days: int = 365, industry: dict | None = None,
             grounded: set[str] | None = None, sandbox: bool = True,
             docs=None, sql=None, registry_root=None,
             intraday: dict | None = None) -> dict[str, Any]:
@@ -66,6 +73,11 @@ def explain(cd, client, *, etf_name: str, etf_instrument_id: str, trade_date: da
     실행 불가가 되므로 주장 상한이 자동으로 내려간다.
     """
     w1 = trade_date
+    # 이 창은 **검정 코호트가 쌓이는 범위**다(지문·P0 는 쓰지 않는다). 60일이 기본이던
+    # 동안 같은 타입 사건이 몇 건 없어 매 런 `G2 n=1 < 30 (scope=type)` 으로 죽었다
+    # (2026-08-01 연속 실측). 브리프도 게이트도 "창을 넓혀라"라고 말하지만 모델은
+    # 기본값을 그대로 쓴다 - 그러면 기본값이 틀린 것이다. PIT 는 `as_of` 가 잡으므로
+    # 과거로 넓히는 것은 안전하다(미래는 뷰가 이미 잘라 놓는다).
     w0 = date.fromordinal(max(trade_date.toordinal() - window_days, 1))
 
     # 접지 기본값: 후보가 이미 접지된 event_id 를 들고 있으면 그것이 곧 접지 집합이다.
@@ -182,6 +194,11 @@ def _designs(g: WorldGraph) -> list[EdgeDesign]:
 
     `cause_label` 은 그 간선을 그린 가설의 뿌리 이름이다 - 통계 간선의 부모는 대개 중간
     매개(기대·심리)라 그걸 원인이라 쓰면 "주주환원 기대가 원인입니다" 가 고객에게 나간다.
+
+    `control`(참조집합)은 **종목 속성 술어만** 쓸 수 있다 - 날짜는 코드가 창으로 붙인다.
+    사건 컬럼이나 `trade_date` 가 섞이면 `cd.universe` 가 거부하고, 그러면 E-value 분모가
+    통째로 미산출된다(2026-08-01 nanfix-20260801-01: 6/6 sd_failed). 여기서 걸러 빈
+    문자열로 내려보내면 뒤가 산업 동종군 폴백으로 비교군을 만든다.
     """
     out: list[EdgeDesign] = []
     for e in g.edges:
@@ -191,9 +208,20 @@ def _designs(g: WorldGraph) -> list[EdgeDesign]:
         owner = next((h for h in g.hypotheses
                       if any(x.get("from") == src and x.get("to") == dst
                              for x in h.edges)), None)
+        control = str(e.get("reference") or "")
+        if control and re.search(_NOT_UNIVERSE, control):
+            log("causal.reference_rejected", edge=f"{src}->{dst}", predicate=control[:120])
+            control = ""
+        # 처치 술어가 비면 **접지된 원인 노드의 타입 코드**로 만든다. 검정 에이전트가
+        # 사람 말 노드에서 코호트를 짜려다 0행이 되고 n=1 로 G2 에서 죽던 자리다
+        # (2026-08-01 tools-20260801-01: 4/4 "이벤트 코드를 알 수 없다").
+        treated = str(e.get("exposure") or "")
+        if not treated:
+            code = str((g.nodes.get(src) or {}).get("event_type_code") or "")
+            treated = f"event_type_code = '{code}'" if code else ""
         out.append(EdgeDesign(
             src=src, dst=dst,
-            treated=e.get("exposure") or "", control=e.get("reference") or "",
+            treated=treated, control=control,
             strata="date", scope="type", claims="L4",
             say=e.get("says") or "", because=e.get("because") or "",
             false_if=e.get("false_if") or "", needs=e.get("needs") or "",
@@ -222,19 +250,30 @@ def _estimate(cd, client, g: WorldGraph, idents: list, *, as_of: str, w0: date, 
     by_pair = {(i.src, i.dst): i for i in idents}
     proofs: list[V.EdgeProof] = []
     for d in _designs(g):
-        p = V.plan(g.nodes, edges, d, prior=_prior_for(d, g, screened),
-                   ident=by_pair.get((d.src, d.dst)))
-        if sandbox:
-            proofs.append(V.verify(cd, client, d, p, as_of=as_of, w0=w0, w1=w1,
-                                   trade_date=trade_date,
-                                   etf_instrument_id=etf_instrument_id, docs=docs))
-        elif p["strategy"] == "none":
+        # 간선 하나의 검정 세션이 죽어도 **나머지는 돈다.** 안 그러면 모델의 형식 습관
+        # 하나가 유니버스 런 전체를 넘어뜨린다(ALPHA-633 과 같은 비대칭 - 2026-08-01
+        # ref-20260801-01 에서 검정 한 턴의 파싱 실패로 런이 exit 1 했다). 실패는 침묵이
+        # 아니라 `gate_fail` 을 단 증명으로 남아 P8 이 미결로 처분한다.
+        try:
+            p = V.plan(g.nodes, edges, d, prior=_prior_for(d, g, screened),
+                       ident=by_pair.get((d.src, d.dst)))
+            if sandbox:
+                proofs.append(V.verify(cd, client, d, p, as_of=as_of, w0=w0, w1=w1,
+                                       trade_date=trade_date,
+                                       etf_instrument_id=etf_instrument_id, docs=docs))
+            elif p["strategy"] == "none":
+                proofs.append(_as_proof(EdgeResult(
+                    design=d, gate_fail=["식별 전략 없음 (조정 불가·도구 없음)"]), p))
+            else:
+                proofs.append(_as_proof(
+                    estimate(cd, d, as_of=as_of, w0=w0, w1=w1, adjust=p["adjust"],
+                             industry=industry), p))
+        except Exception as exc:  # noqa: BLE001 - 한 간선의 실패가 런을 죽이지 않는다
+            log("causal.estimate_failed", edge=f"{d.src}->{d.dst}",
+                error=f"{type(exc).__name__}: {exc}"[:300])
             proofs.append(_as_proof(EdgeResult(
-                design=d, gate_fail=["식별 전략 없음 (조정 불가·도구 없음)"]), p))
-        else:
-            proofs.append(_as_proof(
-                estimate(cd, d, as_of=as_of, w0=w0, w1=w1, adjust=p["adjust"],
-                         industry=industry), p))
+                design=d,
+                gate_fail=[f"검정 실패: {type(exc).__name__}: {exc}"[:300]]), {}))
     log("causal.verified", edges=len(proofs),
         passed=sum(1 for r in proofs if r.passed),
         significant=sum(1 for r in proofs if r.significant),
@@ -252,10 +291,15 @@ def _prior_for(d: EdgeDesign, g: WorldGraph, screened: list[dict]) -> dict:
 
 
 def _as_proof(r: EdgeResult, p: dict) -> V.EdgeProof:
-    """축약 경로 결과를 검정 결과 모양으로. **두 경로가 같은 산출 계약을 쓴다.**"""
+    """축약 경로 결과를 검정 결과 모양으로. **두 경로가 같은 산출 계약을 쓴다.**
+
+    설계 자체가 실패한 간선은 `p` 가 비어 온다 - 그 자리에서 KeyError 를 내면 격리해
+    살려 둔 런이 다시 죽는다(실측 2026-08-01 parse-20260801-01). 없는 설계는 빈 값이다.
+    """
     return V.EdgeProof(
         design=r.design, status="통과" if r.passed else "미통과",
-        strategy=p["strategy"], adjust=list(p["adjust"]), iv=list(p["iv"]),
+        strategy=p.get("strategy") or "none", adjust=list(p.get("adjust") or ()),
+        iv=list(p.get("iv") or ()),
         n=r.n, effect=r.effect, p=r.p, null_sd=r.null_sd, null_kind=r.null_kind,
         unit="stock", strata_declared=r.design.strata != "none", strata_reason="",
         units=list(r.treated_ids), gate_fail=list(r.gate_fail),

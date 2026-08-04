@@ -165,7 +165,7 @@ Table "etf_contribution_member" {
 
 Table "etf_contribution_observation" {
   "contribution_observation_id" text [pk]
-  "price_movement_trigger_id" text [not null]
+  "price_movement_trigger_id" text
   "etf_return" float8
   "nav_return" float8
   "constituent_contribution_return" float8
@@ -177,6 +177,7 @@ Table "etf_contribution_observation" {
   "top3_contribution_ratio" float8
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
+  "minute_price_trigger_id" text
 }
 
 Table "etf_holding_snapshot" {
@@ -535,6 +536,35 @@ Table "minute_ingestion_window" {
   }
 }
 
+Table "minute_price_trigger" {
+  "trigger_id" text [pk]
+  "entity_id" text [not null]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "generation" int [not null]
+  "detection_policy_version" text [not null]
+  "open_price" numeric(24,6) [not null]
+  "close_price" numeric(24,6) [not null]
+  "change_rate" numeric(12,8) [not null]
+  "threshold" numeric(12,8) [not null]
+  "cooldown_bucket" bigint [not null]
+  "created_at" timestamptz [not null]
+}
+
+Table "minute_session_open" {
+  "session_id" text [not null]
+  "entity_id" text [not null]
+  "status" text [not null]
+  "open_price" numeric(24,6)
+  "reason" text
+  "source_window" timestamptz [not null]
+  "decided_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "entity_id") [pk]
+  }
+}
+
 Table "news_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -542,6 +572,7 @@ Table "news_document" {
   "representative_document_id" text
   "dedup_cluster_id" text
   "theme_concept_id" text
+  "publisher" text
 }
 
 Table "news_extraction_job" {
@@ -918,6 +949,7 @@ Ref: "equity_profile".("instrument_id", "instrument_type") > "instrument".("inst
 Ref: "equity_profile"."issuer_actor_id" > "company_profile"."actor_id"
 Ref: "etf_contribution_member"."constituent_instrument_id" > "instrument"."instrument_id"
 Ref: "etf_contribution_member"."contribution_observation_id" > "etf_contribution_observation"."contribution_observation_id"
+Ref: "etf_contribution_observation"."minute_price_trigger_id" > "minute_price_trigger"."trigger_id"
 Ref: "etf_contribution_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
 Ref: "etf_holding_snapshot"."constituent_instrument_id" > "instrument"."instrument_id"
 Ref: "etf_holding_snapshot"."etf_instrument_id" > "etf_profile"."instrument_id"
@@ -959,6 +991,8 @@ Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "ent
 Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")

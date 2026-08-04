@@ -89,7 +89,7 @@ JSON 하나만. 조회거나 그래프거나 둘 중 하나다.
              "false_if": "무엇이 관측되면 이 간선이 죽나",
              "simultaneous": false, "simultaneous_why": "",
              "exposure": "이 경로에 노출된 집합 - v_cohort 컬럼 위의 SQL 불리언 식",
-             "reference": "비교할 참조집합 - 같은 형식"}],
+             "reference": "비교할 참조집합 - **종목 속성 컬럼만**"}],
   "latents": [{"uid": "U_<이름>", "between": ["<노드 a>", "<노드 b>"],
                "says": "이 미관측 공통원인이 무엇인가",
                "blocked_by": ["이걸로 조건화하면 막힌다고 보는 관측 노드 id"]}],
@@ -112,17 +112,25 @@ U 를 자동으로 심는다 - 네가 안 적어도 들어가고 지울 수 없�
 `identity` 를 `statistical` 로 적으면 계산을 검정하게 되고, 반대로 적으면 추정치가 정의처럼
 보고된다. 애매하면 `statistical` 이다 - 재 보고 아닌 것이 낫다.
 
-## exposure · reference 는 문장이 아니라 술어다
+## exposure · reference 는 문장이 아니라 술어다 - 그리고 **서로 다른 표면이다**
 이 둘은 **그대로 SQL 의 WHERE 에 들어간다.** "삼성전자 실적 발표를 접한 투자자" 같은
-산문을 쓰면 실행되지 않고, 그러면 그 간선의 음성대조가 통째로 사라진다. 쓸 수 있는
-컬럼은 `v_cohort` 의 것뿐이다 - `instrument_id` · `trade_date` · `source_event_id` ·
-`event_type_code` · `predicate_code` · `role_code` · `lifecycle_stage` · `sector_name` ·
-`industry_name` · `market_cap` · `listing_market` · `ticker`.
+산문을 쓰면 실행되지 않고, 그러면 그 간선의 음성대조가 통째로 사라진다.
+
+  exposure   `v_cohort` 의 컬럼 - `instrument_id` · `trade_date` · `source_event_id` ·
+             `event_type_code` · `predicate_code` · `role_code` · `lifecycle_stage` ·
+             `sector_name` · `industry_name` · `market_cap` · `listing_market` · `ticker`
+  reference  **종목 속성만** - `instrument_id` · `sector_name` · `industry_name` ·
+             `market_cap` · `listing_market` · `ticker`
+
+참조집합에 `trade_date` 나 사건 컬럼을 쓰면 거부된다. 비교군은 "어떤 종목들인가"이고
+**날짜는 코드가 창으로 붙인다** - 네가 날짜를 박으면 그 창이 하루로 접혀 산포를 잴
+표본이 사라진다. 실제로 그 술어로 E-value 분모가 여섯 간선 모두 미산출로 나갔다
+(2026-08-01 nanfix-20260801-01).
 
 `ticker` 는 **종목 코드**다(`'005930'`). 거기에 종목명을 넣으면 문법은 맞고 결과는 0행이라
 "검사했는데 아무것도 없었다"로 조용히 기록된다 - 가장 나쁜 실패다. 이름으로 걸러야 하면
 `instrument_id` 를 써라. 어느 컬럼으로도 못 적겠으면 **빈 문자열로 두어라** - 그러면
-코드가 접지된 `source_event_id` 로 처치를 정의한다."""
+코드가 접지된 `source_event_id` 로 처치를, 처치 종목의 산업 동종군으로 참조집합을 만든다."""
 
 
 def _pair(a: str, b: str) -> tuple[str, str]:
@@ -436,6 +444,14 @@ def _parse(out: dict[str, Any], hypotheses: list[Hypothesis],
             carried += 1
     if carried:
         log("causal.p3.carried_over", nodes=carried)
+    # 접지 타입도 합집합의 일부다. 모델이 노드를 다시 타이핑하면 이 값이 떨어져 나가고,
+    # 그러면 검정이 다시 사람 말에서 코호트를 짜려다 0행이 된다.
+    for h in hypotheses:
+        for nid, spec in (h.nodes or {}).items():
+            code = isinstance(spec, dict) and spec.get("event_type_code")
+            if code and isinstance(clean.get(nid), dict) \
+                    and not clean[nid].get("event_type_code"):
+                clean[nid] = {**clean[nid], "event_type_code": code}
 
     if sql is None:
         # 조회 없이 한 완비 선언이라는 사실은 선언 자체에 붙어야 한다 - 나중에 이 문장만

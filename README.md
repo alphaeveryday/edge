@@ -36,7 +36,7 @@ src/
 └── pyproject.toml            # Python 루트
 ```
 
-위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `.dev/`(로컬 개발 도구·스크립트) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
+위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
 
 ## 런타임별 워크스페이스
 
@@ -60,9 +60,9 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](docs/contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
 | `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull + 번들 체크섬 검증, 내부망 무변형 전달. DB 접근 없음 ([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md)) |
 | `intake` | JVM | **edge-onprem** | 내부망 — 검증된 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
-| `screening-worker` | JVM | **edge-onprem** | 점검 실행 — 미점검 번들 파싱·정책 평가(NEW=활성 정책 룰·임계값으로 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 분기, 근거는 screening_check — ALPHA-429, 정정=리비전 분리 후 신규와 동일 재점검(ADR-0041), 무효화=즉시 비노출) |
+| `screening-worker` | JVM | **edge-onprem** | 점검 실행 — 미점검 번들 파싱·정책 평가(NEW=활성 정책 룰·임계값으로 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 분기, 근거는 screening_check — ALPHA-429, 무효화=즉시 비노출, 정정(CORRECTION)은 폐지 유형으로 fail-loud — ADR-0044) |
 | `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
-| `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 운영자 작업 원장 `admin_activity_log` 전이** — ALPHA-602, session 은 인증 세션 주체 투영 — ALPHA-608) |
+| `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 무효화 단독**(게시본 WITHDRAWN 전이 + `tenant_delivery` INVALIDATION 발번 + `admin_activity_log` 감사) — ALPHA-440·737, session 은 인증 세션 주체 투영 — ALPHA-608) |
 | `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
 | `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
@@ -232,7 +232,7 @@ Refs: ALPHA-121
 4. **개발** — 위 [커밋·PR 제목](#커밋pr-제목) 형식(Conventional Commits)을 따르고, 논리 단위로 나눠 커밋합니다.
 5. **`dev` 대상 PR** — PR 을 올리기 전에 로컬 검수 게이트를 통과시킵니다: 코드 리뷰를 **수용한 지적이 없어질 때까지** 반복(반복 상한 있음)한 뒤 문서 정합성 점검 — 종료 조건·상한 등 상세 절차는 `.claude/skills/pr-cycle` §4(edge-review 수렴 루프·docs-sync). PR 설명 맨 아래에 `Refs: <이슈키>`(PR 템플릿이 자동 삽입). 브랜치에 키가 있으면 Jira가 PR을 해당 이슈에 자동 연결합니다.
 6. **Codex 리뷰 대응** — 자동 리뷰 결과를 확인하고, 수용한 지적은 반영 후 재리뷰를 요청합니다. 통과(👍) 또는 잔여 지적 전건 비수용이면 머지로 넘어갑니다.
-7. **`dev`로 Squash 머지** — PR 하나 = 커밋 하나로 `dev`에 합칩니다.
+7. **`dev`로 Squash 머지** — 머지 전에 **GitHub 체크가 전건 통과했는지 확인합니다**(`gh pr checks <PR번호> --watch`). Codex 통과는 리뷰어 판정일 뿐 CI 통과가 아니며, 체크가 하나도 보고되지 않은 것은 통과가 아니라 워크플로 미실행입니다. 통과했으면 PR 하나 = 커밋 하나로 `dev`에 합칩니다.
 8. **브랜치 삭제** — 머지 후 브랜치를 지우고, 다음 작업은 갱신된 `dev`에서 새로 분기합니다.
 
 > **왜 분기 직후 바로 push하나.** Jira의 "브랜치 생성 → 진행 중" 자동화는 **GitHub for Jira 연동(원격 이벤트)** 으로만 동작합니다. 로컬 전용 브랜치는 Jira가 알 수 없어 트리거되지 않습니다. 키가 들어간 브랜치를 **원격에 올리는 순간** 보드가 움직입니다. 그러니 브랜치는 **만들면 바로 push**하는 것을 습관으로 둡니다.

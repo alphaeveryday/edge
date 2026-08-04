@@ -30,7 +30,11 @@ public record ExplanationResponse(
 		String original,
 		@JsonProperty("final") String finalText
 ) {
-	public record EvidenceResponse(String type, String title, String source, String time) {
+	// NON_NULL 은 중첩 record 에 상속되지 않는다 — sourceUri 결측(EOD 구멍)을 키 생략으로
+	// 내보내려면(UI optional 계약) 여기 명시해야 한다.
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public record EvidenceResponse(String type, String title, String source, String time,
+			String sourceUri) {
 
 		public static EvidenceResponse from(Explanation.Evidence e) {
 			// kind CHECK 는 NEWS|DISCLOSURE 뿐 — 새 값이 생기면 라벨 없이 코드가 그대로 노출된다.
@@ -40,8 +44,10 @@ public record ExplanationResponse(
 				default -> e.kind();
 			};
 			// title·source 는 NULL 허용 — UI 계약(title·source: string)을 깨지 않게 폴백한다.
+			// sourceUri 는 링크라 폴백 없이 null 통과(NON_NULL 생략) — UI 가 링크 미표시로 처리.
 			return new EvidenceResponse(type, e.title() == null ? "(제목 없음)" : e.title(),
-					e.source() == null ? "(출처 없음)" : e.source(), TimeText.doc(e.publishedAt()));
+					e.source() == null ? "(출처 없음)" : e.source(), TimeText.doc(e.publishedAt()),
+					e.sourceUri());
 		}
 	}
 

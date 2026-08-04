@@ -6,9 +6,17 @@ import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatu
 import com.edge.superadmin.repository.PipelineStatusRepository.GridCell;
 import com.edge.superadmin.repository.PipelineStatusRepository.GridSlot;
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewLane;
+import com.edge.superadmin.repository.PipelineStatusRepository.OverviewTask;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
+import com.edge.superadmin.repository.HoldingsImpactRepository;
+import com.edge.superadmin.repository.NewsLineageRepository;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
 import com.edge.superadmin.service.SourceService;
+import com.edge.superadmin.repository.MinuteStatusRepository;
+import com.edge.superadmin.support.FakeHoldingsImpactRepository;
+import com.edge.superadmin.support.FakeMinuteStatusRepository;
+import com.edge.superadmin.support.FakeNewsLineageRepository;
 import com.edge.superadmin.support.FakePipelineStatusRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -40,7 +48,7 @@ class SourceControllerTest {
 	private MockMvc mvc(PipelineRunStatus run) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(run))))
+						new SourceService(new FakePipelineStatusRepository(run), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -48,7 +56,7 @@ class SourceControllerTest {
 	private MockMvc gridMvc(List<GridSlot> slots) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(
-						new SourceService(new FakePipelineStatusRepository(null, slots))))
+						new SourceService(new FakePipelineStatusRepository(null, slots), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -318,5 +326,541 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.run").doesNotExist())
 				.andExpect(jsonPath("$.result.tasks.length()").value(0))
 				.andExpect(jsonPath("$.result.issues.length()").value(0));
+	}
+
+	/* ---------- Run Overview (ALPHA-683) ---------- */
+
+	private MockMvc overviewMvc(List<OverviewLane> lanes) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(
+						new SourceService(new FakePipelineStatusRepository(null, List.of(), lanes), new FakeNewsLineageRepository(), new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	private static final OffsetDateTime PAST = OffsetDateTime.now(ZoneOffset.UTC).minusHours(2);
+	private static final OffsetDateTime PLANNED = OffsetDateTime.now(ZoneOffset.UTC);
+	private static final OffsetDateTime FUTURE = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
+
+	private static OverviewTask task(String taskKey, String outcome, String dataStatus,
+			boolean required, OffsetDateTime deadline) {
+		return new OverviewTask("raw", taskKey, "DUE", outcome, dataStatus, required,
+				deadline, null, null, null, null);
+	}
+
+	@Test
+	void 정상_SKIPPED_와_데이터_UNKNOWN_은_READY_를_깨지_않는다() throws Exception {
+		// WHY: 완전성 미배선 작업은 설계상 UNKNOWN 이고 비거래일 SKIPPED 는 "할 일이 아니었다"다 —
+		//      이 둘을 결함으로 세면 첫 화면이 상시 DEGRADED 라, 진짜 결함이 늑대소년이 된다(스펙 §7).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", LocalDate.of(2026, 7, 27), PLANNED, List.of(
+				task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST),
+				new OverviewTask("raw", "NEWS_COLLECTION_BIGKINDS", "SKIPPED", null, null,
+						true, null, null, null, null, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("READY"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.due").value(1))
+				.andExpect(jsonPath("$.result.lanes[0].counts.skipped").value(1))
+				.andExpect(jsonPath("$.result.lanes[0].defects.length()").value(0));
+	}
+
+	@Test
+	void 필수_작업의_데이터_결손은_DEGRADED_이고_결함이_단계_순으로_온다() throws Exception {
+		// WHY: "실행 성공 ≠ 데이터 유효" — FULFILLED+INCOMPLETE 조합이 이 화면의 존재 이유다.
+		//      결함 목록은 단계 순 — 앞 단계(raw) 결함이 뒤 단계(feature)보다 먼저다. 같은 단계
+		//      안 순서는 실행 순서가 아니라서 화면도 그 이상을 주장하지 않는다(봇 P2).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", LocalDate.of(2026, 7, 27), PLANNED, List.of(
+				new OverviewTask("raw", "ETF_HOLDINGS_COLLECTION_KRX", "DUE", "FULFILLED",
+						"INCOMPLETE", true, PAST, null, null, null, null),
+				new OverviewTask("feature", "LOAD_ETF_HOLDINGS", "DUE", "FAILED", null,
+						true, PAST, null, null, null, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"))
+				.andExpect(jsonPath("$.result.lanes[0].defects.length()").value(2))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].taskKey")
+						.value("ETF_HOLDINGS_COLLECTION_KRX"))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].dataStatus").value("INCOMPLETE"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.failed").value(1));
+	}
+
+	@Test
+	void 마감_전_미귀결은_IN_PROGRESS_마감_경과_미귀결은_DEGRADED_다() throws Exception {
+		// WHY: PENDING 은 "아직 모른다"인데 마감 전이면 기다림이고 마감 후면 지연이다 —
+		//      스펙 §3.3 의 BREACHED 축을 접은 최소 구현. 시계는 서버가 판정한다.
+		List<OverviewLane> waiting = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"RUNNING", null, PLANNED, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(waiting).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> overdue = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, PLANNED, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(overdue).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"))
+				.andExpect(jsonPath("$.result.lanes[0].defects[0].overdue").value(true));
+	}
+
+	@Test
+	void 기동_실패는_마감_전이어도_진행_중이_아니라_BLOCKED_다() throws Exception {
+		// WHY: LAUNCH_FAILED 런의 작업은 deadline 전 PENDING 이라 스펙 순서대로면 IN_PROGRESS 가
+		//      되는데, 아무것도 돌지 않는 런을 "진행 중"으로 내면 원장이 관대해지는 방향이다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCH_FAILED",
+				null, null, PLANNED, List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("BLOCKED"));
+	}
+
+	@Test
+	void 기동_충돌도_BLOCKED_다() throws Exception {
+		// WHY: LAUNCH_CONFLICT 는 이 런이 뜨지 못했다는 확정 사실인데 어느 분기에도 안 걸리면
+		//      마감 전엔 IN_PROGRESS 로 — 안 도는 런이 "진행 중"으로 — 관대해진다(리뷰 1라운드).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_CONFLICT", null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("BLOCKED"));
+	}
+
+	@Test
+	void 기동_불명은_확정이_아니라서_마감_전엔_진행_중이다() throws Exception {
+		// WHY: 스펙 §7 순서(IN_PROGRESS→UNKNOWN). LAUNCH_UNKNOWN 은 reconciliation 으로 해소될
+		//      수 있는 미확정이라 기동 실패처럼 앞당기지 않는다 — 마감이 지나서야 UNKNOWN 이다.
+		List<OverviewLane> before = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_UNKNOWN", null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(before).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> after = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCH_UNKNOWN", null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(after).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void 작업이_하나도_안_적힌_런은_READY_가_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: 빈 결함 목록 = 정상이 아니다 — 계획 증거가 없으면 제공 가능 범위를 계산할 수
+		//      없다(스펙 §7 UNKNOWN). READY 로 내면 Planner 가 기대 작업을 못 쓴 날이 정상으로
+		//      보인다(리뷰 1라운드 — 거짓 정상).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, PLANNED, List.of()));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void 마감_없는_미귀결은_영구_진행_중이_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: deadline 이 NULL 이면 경과 판정 자체가 불가하다 — "진행 중"으로 내면 실행이 다
+		//      끝난 런이 영구히 진행 중으로 남는다(리뷰 1라운드). DUE 인데 귀결 NULL 인 원장
+		//      이상도 같은 경로로 접힌다(실패에도 대기에도 안 세면 거짓 정상으로 사라진다).
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				"SUCCEEDED", null, PLANNED, List.of(
+				task("PRICE_COLLECTION_KIS", "PENDING", null, true, null),
+				task("NORMALIZE_PRICE", null, null, true, null))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"))
+				.andExpect(jsonPath("$.result.lanes[0].counts.pending").value(2));
+	}
+
+	@Test
+	void 실행_전체가_실패한_런은_마감_전이어도_진행_중이나_READY_가_아니다() throws Exception {
+		// WHY: SFN 이 terminal 실패하면 남은 PENDING 은 저절로 진행되지 않는다 — 마감 전이라
+		//      IN_PROGRESS, 결함 목록이 비었다고 READY 로 내면 실패 런이 정상으로 보인다
+		//      (리뷰 3라운드 — 헤더의 "실행 전체 FAILED" 옆에 "정상"이 뜨는 모순).
+		List<OverviewLane> pendingLeft = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCHED", "FAILED", null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(pendingLeft).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"));
+
+		List<OverviewLane> noDefects = List.of(new OverviewLane("etf-daily", RUN_KEY,
+				"LAUNCHED", "TIMED_OUT", null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST))));
+		overviewMvc(noDefects).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("DEGRADED"));
+	}
+
+	@Test
+	void 실행_축_증거가_아직_없으면_전_작업_완료여도_READY_가_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: 정상 기동 경로에서 orchestration 은 Reconciler describe 전까지 null 이다 — 작업이
+		//      전부 FULFILLED 라고 런 수준 증거 없이 READY 를 내면, 나중에 FAILED 로 reconcile 될
+		//      런이 잠시 정상으로 보인다(봇 P2). reconcile 전의 짧은 UNKNOWN 창이 정직하다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily", RUN_KEY, "LAUNCHED",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void notToday_판정_축은_created_at_이_아니라_슬롯_날짜다() throws Exception {
+		// WHY: 오늘 백필한 과거 슬롯은 plannedAt(계획 삽입 시각)이 오늘이다 — 그 축으로 판정하면
+		//      과거 슬롯 백필이 "오늘 런"으로 통과한다(봇 P2). run_key 의 슬롯 날짜가 정답이다.
+		List<OverviewLane> lanes = List.of(new OverviewLane("etf-daily",
+				"etf-daily:2026-07-27T15:40", "LAUNCHED", "SUCCEEDED", null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "FULFILLED", "UNKNOWN", true, PAST))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].notToday").value(true));
+	}
+
+	@Test
+	void 오늘_런이_아니면_notToday_로_명시된다() throws Exception {
+		// WHY: Planner 가 오늘 안 돌면 조회는 어제 런을 최신으로 재사용한다 — "오늘 운영 현황"이
+		//      그 사실을 숨기면 지난 READY 가 오늘 정상으로 보인다(리뷰 3라운드). 판정은 서버 시계.
+		List<OverviewLane> lanes = List.of(new OverviewLane("news", "news:old", "LAUNCHED",
+				"SUCCEEDED", null, PLANNED.minusDays(2),
+				List.of(task("NEWS_COLLECTION_BIGKINDS", "FULFILLED", "UNKNOWN", true, PAST))));
+
+		overviewMvc(lanes).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].notToday").value(true))
+				.andExpect(jsonPath("$.result.lanes[0].plannedAt").isNotEmpty());
+	}
+
+	@Test
+	void 기동_기록_전_죽은_런은_마감_후_영구_진행_중이_아니라_UNKNOWN_이다() throws Exception {
+		// WHY: Planner 가 기동 기록 전에 죽으면 launch_status 는 영구 PLANNING 이다(Reconciler 는
+		//      LAUNCH_UNCONFIRMED 이슈만 연다). PLANNING 단독으로 IN_PROGRESS 를 내면 죽은 런이
+		//      영원히 "돌고 있다"로 보인다(봇 P2). 마감 전엔 진행 중, 마감 후엔 UNKNOWN 이다.
+		List<OverviewLane> before = List.of(new OverviewLane("etf-daily", RUN_KEY, "PLANNING",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, FUTURE))));
+		overviewMvc(before).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("IN_PROGRESS"));
+
+		List<OverviewLane> stale = List.of(new OverviewLane("etf-daily", RUN_KEY, "PLANNING",
+				null, null, PLANNED,
+				List.of(task("PRICE_COLLECTION_KIS", "PENDING", null, true, PAST))));
+		overviewMvc(stale).perform(get("/api/v1/sources/overview"))
+				.andExpect(jsonPath("$.result.lanes[0].opsStatus").value("UNKNOWN"));
+	}
+
+	@Test
+	void 원장에_런이_없으면_빈_레인_목록이다() throws Exception {
+		overviewMvc(List.of()).perform(get("/api/v1/sources/overview"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.lanes.length()").value(0));
+	}
+
+	/* ---------- 뉴스 계보 (ALPHA-685) ---------- */
+
+	private MockMvc lineageMvc(FakeNewsLineageRepository lineage) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), lineage, new FakeHoldingsImpactRepository(), new FakeMinuteStatusRepository())))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 계보는_날짜_필터가_실제로_적용된_집계와_목록을_낸다() throws Exception {
+		// WHY: 이 화면의 존재 이유는 "집계 숫자를 목록으로 검증"이다 — 집계와 목록이 다른
+		//      날짜에서 오면 숫자와 근거가 어긋난다. date 가 리포지토리까지 전달되는지 잠근다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(day, new NewsLineageRepository.LineageSummary(120, 30, 6)),
+				java.util.Map.of(day, List.of(new NewsLineageRepository.LineageDocument(
+						"doc-1", "삼성전자 신규 수주", "BIGKINDS", "한국경제",
+						"https://news.example/1", STARTED, FINISHED, 2, true))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news").param("date", "2026-07-31"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value("2026-07-31"))
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(120))
+				.andExpect(jsonPath("$.result.summary.documentsWithAssertion").value(30))
+				.andExpect(jsonPath("$.result.summary.documentsUsedInAnalysis").value(6))
+				.andExpect(jsonPath("$.result.documents[0].documentId").value("doc-1"))
+				// 언론사·URL(ALPHA-697) — 원장에 승격된 축이 응답까지 나와야 화면이 표시한다
+				.andExpect(jsonPath("$.result.documents[0].publisher").value("한국경제"))
+				.andExpect(jsonPath("$.result.documents[0].sourceUri").value("https://news.example/1"))
+				.andExpect(jsonPath("$.result.documents[0].assertionCount").value(2))
+				.andExpect(jsonPath("$.result.documents[0].usedInAnalysis").value(true));
+	}
+
+	@Test
+	void 계보의_단계_필터는_목록만_좁히고_집계는_전_단계를_유지한다() throws Exception {
+		// WHY: 타일 클릭 드릴다운(ALPHA-697)의 계약 — 필터가 집계까지 좁히면 분모가 무너져
+		//      N/M(%) 표기가 거짓이 되고, 목록에 안 먹으면 클릭이 아무것도 검증하지 않는다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(day, new NewsLineageRepository.LineageSummary(2, 1, 0)),
+				java.util.Map.of(day, List.of(
+						new NewsLineageRepository.LineageDocument("doc-s", "증거 있음",
+								"BIGKINDS", null, null, STARTED, FINISHED, 1, false),
+						new NewsLineageRepository.LineageDocument("doc-n", "증거 없음",
+								"BIGKINDS", null, null, STARTED, FINISHED, 0, false))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news")
+						.param("date", "2026-07-31").param("stage", "unstructured"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.stage").value("unstructured"))
+				.andExpect(jsonPath("$.result.documents.length()").value(1))
+				.andExpect(jsonPath("$.result.documents[0].documentId").value("doc-n"))
+				// 집계는 필터와 무관하게 전 단계 그대로다
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(2));
+	}
+
+	@Test
+	void 계보의_확장_연도_날짜는_500_이_아니라_400_이다() throws Exception {
+		// WHY: +999999999-12-31 은 LocalDate.parse 를 통과하지만 리포지토리의 plusDays(1)
+		//      (KST 반개구간 상한)에서 터진다 — 검증 게이트를 통과한 값이 아래 계층에서
+		//      500 을 만들면 오타가 서버 오류로 위장된다. 같은 파서를 쓰는 /minute 도 함께 잠근다.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("date", "+999999999-12-31"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 계보의_모르는_stage_는_빈_결과가_아니라_400_이다() throws Exception {
+		// WHY: 오타 친 단계가 "그 단계 문서 없음"으로 보이면 없는 사실을 읽는다 — date 와 같은 결.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("stage", "structrued"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 계보의_1분_추출_요약은_사유별_DEAD_와_함께_내려간다() throws Exception {
+		// WHY: 진기님 실패 축 요구 — 사유(error_code) 없이 dead 총수만 내리면 "왜"에 답할 수
+		//      없다. 사유 미기록(null)도 한 행으로 내려야 미기록이 화면에서 사라지지 않는다.
+		LocalDate day = LocalDate.of(2026, 7, 31);
+		FakeNewsLineageRepository lineage = new FakeNewsLineageRepository(
+				java.util.Map.of(), java.util.Map.of(),
+				java.util.Map.of(day, new NewsLineageRepository.ExtractionSummary(940, 3,
+						List.of(new NewsLineageRepository.ErrorCodeCount("RETRY_BUDGET_EXHAUSTED", 2),
+								new NewsLineageRepository.ErrorCodeCount(null, 1)))));
+
+		lineageMvc(lineage).perform(get("/api/v1/sources/lineage/news").param("date", "2026-07-31"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.extraction.succeeded").value(940))
+				.andExpect(jsonPath("$.result.extraction.dead").value(3))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[0].errorCode")
+						.value("RETRY_BUDGET_EXHAUSTED"))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[0].count").value(2))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[1].errorCode")
+						.value(nullValue()))
+				.andExpect(jsonPath("$.result.extraction.deadByErrorCode[1].count").value(1));
+	}
+
+	@Test
+	void 계보의_잘못된_날짜와_범위_밖_limit_은_빈_결과가_아니라_400_이다() throws Exception {
+		// WHY: 오타 친 날짜가 "그날 문서 없음"으로 보이면 운영자는 없는 사실을 읽는다 —
+		//      grid 의 days 검증과 같은 결이다.
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("date", "2026-13-99"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("limit", "0"))
+				.andExpect(status().isBadRequest());
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news").param("limit", "201"))
+				.andExpect(status().isBadRequest());
+	}
+
+	/* ---------- holdings 결손 영향 (ALPHA-686) ---------- */
+
+	private MockMvc impactMvc(FakeHoldingsImpactRepository impact) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), new FakeNewsLineageRepository(),
+						impact, new FakeMinuteStatusRepository())))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 결손이_있으면_누락_ETF와_기준일_분석과_권장_조치가_내려간다() throws Exception {
+		// WHY: 멘토의 요구 — 장애를 기술 작업에서 끝내지 않고 "어떤 ETF·분석이 막혔나"까지.
+		//      instrumentId null(프로필까지 결손) 경로도 함께 잠근다 — 단축코드만이라도 내려가야
+		//      화면에서 그 ETF 가 사라지지 않는다.
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 31, false, false, List.of(
+						new HoldingsImpactRepository.MissingEtf("091160", "inst-1", "KODEX 반도체",
+								List.of(new HoldingsImpactRepository.AffectedAnalysis(
+										"res-9", "run-9", "PUBLISHED", "반도체 급등"))),
+						new HoldingsImpactRepository.MissingEtf("0167A0", null, null, List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.expectedCount").value(33))
+				.andExpect(jsonPath("$.result.loadedCount").value(31))
+				.andExpect(jsonPath("$.result.snapshotMissing").value(false))
+				.andExpect(jsonPath("$.result.missing.length()").value(2))
+				.andExpect(jsonPath("$.result.missing[0].ourEtfId").value("091160"))
+				.andExpect(jsonPath("$.result.missing[0].analyses[0].explanationResultId")
+						.value("res-9"))
+				// 분석 상세 링크의 키(1:1) — 없으면 화면이 영향 분석으로 내려갈 손잡이가 없다
+				.andExpect(jsonPath("$.result.missing[0].analyses[0].explanationRunId")
+						.value("run-9"))
+				.andExpect(jsonPath("$.result.missing[1].instrumentId").value(nullValue()))
+				.andExpect(jsonPath("$.result.recommendedAction").isNotEmpty());
+	}
+
+	@Test
+	void 기대_목록이_없으면_영향_없음이_아니라_계산_불가다() throws Exception {
+		// WHY: 스펙 §6.3 — UNKNOWN 을 영향 없음으로 해석하지 않는다. snapshot 부재를 빈 누락
+		//      목록과 같은 모양으로 내면 미배선 런이 "결손 없음"으로 보인다.
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40", null,
+						null, null, true, false, List.of()));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.snapshotMissing").value(true))
+				.andExpect(jsonPath("$.result.expectedCount").value(nullValue()));
+	}
+
+	@Test
+	void 영향_runKey_미존재는_404_이고_결손_없으면_권장조치도_없다() throws Exception {
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 33, false, false, List.of()));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings")
+						.param("runKey", "etf-daily:9999-01-01T00:00"))
+				.andExpect(status().isNotFound());
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.missing.length()").value(0))
+				.andExpect(jsonPath("$.result.recommendedAction").value(nullValue()));
+		// 원장에 런이 없으면 에러가 아니라 빈 응답(초기 환경).
+		impactMvc(new FakeHoldingsImpactRepository())
+				.perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.snapshotMissing").value(true));
+	}
+
+	@Test
+	void 적재_미귀결이면_결손을_확정하지_않고_권고도_내지_않는다() throws Exception {
+		// WHY: Planner 는 실행 전에 기대 목록을 먼저 쓴다 — 적재가 끝나기 전의 차집합은 전부
+		//      "누락"으로 보인다. 정상 진행 중을 수동 복구 대상으로 오귀인하면 안 된다(리뷰 1라운드).
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-31T15:40",
+						LocalDate.of(2026, 7, 31), 33, 0, false, true, List.of(
+						new HoldingsImpactRepository.MissingEtf("999002", "inst-1", "이름",
+								List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.loadPending").value(true))
+				.andExpect(jsonPath("$.result.recommendedAction").value(nullValue()));
+	}
+
+	@Test
+	void instrument_부재_ETF_가_섞이면_프로필_선행이_포함된_권고가_내려간다() throws Exception {
+		// WHY: holdings 3스텝만으론 instrument 미등록 ETF 를 복구할 수 없다 — load 가 unknown_etf
+		//      로 건너뛴다. 같은 권고를 반복 실행해도 영구 누락이 된다(리뷰 1라운드).
+		//      기준일 = 오늘(KST)이어야 재실행 권고 분기다 — 창 판정은 아래 테스트가 잠근다.
+		java.time.LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:" + today + "T15:40",
+						today, 33, 32, false, false, List.of(
+						new HoldingsImpactRepository.MissingEtf("9ZZA00", null, null, List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.recommendedAction",
+						org.hamcrest.Matchers.containsString("load-instruments")));
+	}
+
+	@Test
+	void 기준일이_오늘이_아니면_조건부_안내다() throws Exception {
+		// WHY: KRX 는 실행 시점의 최신 거래일만 질의한다 — 무조건 재실행 권고는 과거를 못
+		//      고치고(3라운드), 무조건 금지는 주말의 금요일 결손 복구 기회를 막는다(검증 라운드).
+		//      콘솔엔 거래일 달력이 없어 확정 대신 유효 조건을 안내한다.
+		FakeHoldingsImpactRepository impact = new FakeHoldingsImpactRepository(
+				new HoldingsImpactRepository.Impact("etf-daily:2026-07-20T15:40",
+						LocalDate.of(2026, 7, 20), 33, 31, false, false, List.of(
+						new HoldingsImpactRepository.MissingEtf("999002", "inst-1", "이름",
+								List.of()))));
+
+		impactMvc(impact).perform(get("/api/v1/sources/impact/holdings"))
+				.andExpect(jsonPath("$.result.recommendedAction",
+						org.hamcrest.Matchers.containsString("최신 거래일이 이 기준일과 같을 때만")));
+	}
+
+	@Test
+	void 계보_날짜_없음은_전체_누적이고_빈_결과는_정상이다() throws Exception {
+		lineageMvc(new FakeNewsLineageRepository())
+				.perform(get("/api/v1/sources/lineage/news"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value(nullValue()))
+				.andExpect(jsonPath("$.result.summary.totalDocuments").value(0))
+				.andExpect(jsonPath("$.result.documents.length()").value(0));
+	}
+
+	/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
+
+	private MockMvc minuteMvc(FakeMinuteStatusRepository minute) {
+		return MockMvcBuilders
+				.standaloneSetup(new SourceController(new SourceService(
+						new FakePipelineStatusRepository(null), new FakeNewsLineageRepository(),
+						new FakeHoldingsImpactRepository(), minute)))
+				.setControllerAdvice(new ExceptionAdvice())
+				.build();
+	}
+
+	@Test
+	void 일분_요약은_무증거_창_판정과_lease_null_을_뭉개지_않고_내린다() throws Exception {
+		// WHY: overdueNoEvidence(안 돌았다)와 validEmpty(돌았는데 빈 데이터)가 한 숫자로
+		//      합쳐지면 죽은 실행체가 정상으로 보인다 — 이 화면의 존재 이유가 그 구분이다.
+		//      leaseExpired null(기동 증거 자체가 없음)도 false(살아 있음)와 갈라 내린다.
+		LocalDate day = LocalDate.of(2026, 8, 3);
+		MinuteStatusRepository.MinuteStatus status = new MinuteStatusRepository.MinuteStatus(
+				List.of(new MinuteStatusRepository.SessionSummary(
+						"sess-1", "price_minute", "toss", day, "ACTIVE", "uv-1", 390,
+						STARTED, STARTED, STARTED, FINISHED, false,
+						new MinuteStatusRepository.WindowCounts(5, 1, 300, 80, 0, 0, 0, 4),
+						List.of(new MinuteStatusRepository.GapWindow(STARTED, FINISHED,
+								"DUE", true)),
+						new MinuteStatusRepository.JobCounts(2, 1, 1, 290, 3)),
+						// lease 부재 세션 — null 이 false 로 접히면 "미기동"이 "가동 중"이 된다
+						new MinuteStatusRepository.SessionSummary(
+								"sess-2", "news_minute", "bigkinds", day, "PLANNED", "uv-1", 390,
+								null, null, null, null, null,
+								new MinuteStatusRepository.WindowCounts(0, 0, 0, 0, 0, 0, 0, 0),
+								List.of(),
+								new MinuteStatusRepository.JobCounts(0, 0, 0, 0, 0))),
+				new MinuteStatusRepository.JobCounts(0, 0, 0, 40, 1));
+
+		minuteMvc(new FakeMinuteStatusRepository(java.util.Map.of(day, status)))
+				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.date").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.sessions[0].phase").value("ACTIVE"))
+				.andExpect(jsonPath("$.result.sessions[0].leaseExpired").value(false))
+				.andExpect(jsonPath("$.result.sessions[0].windows.validEmpty").value(80))
+				.andExpect(jsonPath("$.result.sessions[0].windows.overdueNoEvidence").value(4))
+				.andExpect(jsonPath("$.result.sessions[0].gaps[0].dataStatus").value("DUE"))
+				.andExpect(jsonPath("$.result.sessions[0].gaps[0].noEvidence").value(true))
+				.andExpect(jsonPath("$.result.sessions[0].priceJobs.dead").value(3))
+				.andExpect(jsonPath("$.result.sessions[0].priceJobs.claimedExpired").value(1))
+				// null 보존 — JSON 에 null 로 실재해야 한다(키 부재나 false 로 접힘 금지)
+				.andExpect(jsonPath("$.result.sessions[1].leaseExpired", nullValue()))
+				.andExpect(jsonPath("$.result.newsJobs.dead").value(1));
+	}
+
+	@Test
+	void 일분_세션_부재는_빈_목록이고_잘못된_날짜는_400_이다() throws Exception {
+		// WHY: 세션 없음은 "미가동"이라는 사실 표시(정상 형상)지만, 오타 친 날짜가 그걸로
+		//      보이면 없는 사실을 읽는다 — 계보의 날짜 검증과 같은 결.
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.sessions.length()").value(0));
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute").param("date", "2026-13-99"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
 	}
 }

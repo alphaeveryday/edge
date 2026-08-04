@@ -141,6 +141,27 @@ class MinuteLedger:
             )
         return session_id, created
 
+    def session_universe(self, *, session_id: str) -> tuple[str, str] | None:
+        """session 에 고정된 (universe_version, universe_hash). 없는 session 이면 None.
+
+        Worker 가 자기 설정과 대조하는 용도다 — 원장은 universe 를 session 생성 시
+        고정하는데(v0.7 10.1) Worker 는 자기 설정으로 기대 집합을 계산하므로, 둘이
+        갈리면 남의 기대를 내 기준으로 확정하게 된다.
+
+        window 계획 범위가 그 universe 와 맞는지는 여기서 보지 않는다 — 계획과 hash 를
+        같은 universe 에서 뽑는 것은 planner 의 불변식이고, 강제할 자리도 planner 다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT universe_version, universe_hash FROM minute_ingestion_session
+                WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+            return None if row is None else (row[0], row[1])
+
     # ── worker fence ──────────────────────────────────────────
     def acquire_worker_fence(
         self, *, session_id: str, worker_id: str, now: datetime, lease_seconds: int
@@ -487,6 +508,187 @@ class MinuteLedger:
                 WHERE session_id = %s AND phase IN ('PLANNED', 'ACTIVE')
                 """,
                 (now, session_id),
+            )
+            return cur.rowcount == 1
+
+    # ── EOD QC (ALPHA-693) ────────────────────────────────────
+
+    def begin_qc(self, *, session_id: str, now: datetime) -> dict | None:
+        """QC 진입 — `DRAINED`(또는 재실행) → `QC_RUNNING` CAS. 자격이 없으면 None.
+
+        재진입을 허용하는 phase 가 셋인 이유는 각각 다르다:
+        - `DRAINED` — 정상 진입.
+        - `QC_RUNNING` — 앞선 QC 가 중간에 죽은 자리다. 막으면 그 세션은 **누구도 끝낼 수
+          없다**(QC 에는 lease 가 없다). QC 는 판정만 하고 쓰기가 전부 멱등이라 재실행이
+          안전하다 — 되돌릴 수 없는 상태를 만들지 않는 대신 재진입을 연다.
+        - `FAILED` — 불변식 위반으로 멈춘 자리다. 원인을 고친 뒤 다시 판정할 수 있어야 한다.
+
+        `FINALIZED` 는 자격이 없다(None) — 확정된 하루를 다시 열지 않는다. 정정이 필요하면
+        correction 경로가 새 세대를 만든다(v0.7 10.5).
+
+        ⚠️ **fencing token 을 올리고 돌려준다.** phase 만으로 CAS 하면 ABA 가 통과한다:
+        실행 A 가 스냅샷을 뜬 뒤 멈추고, B 가 FAILED 로 바꾸고, C 가 다시 QC_RUNNING 으로
+        들어와도, A 의 늦은 확정이 "지금 QC_RUNNING 이다"만 보고 성공해 **C 의 판정을
+        덮는다**(단방향 FINALIZED 를 낡은 checksum 으로 만든다). 재진입을 여는 대신
+        소유권을 토큰으로 증명한다. Worker 용 컬럼을 함께 쓰는 건 안전하다 — 이 phase
+        에서는 fence 획득·claim·결과 기록이 모두 막혀 있어 경쟁자가 없다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'QC_RUNNING',
+                    worker_fencing_token = worker_fencing_token + 1,
+                    updated_at = now()
+                WHERE session_id = %s AND phase IN ('DRAINED', 'QC_RUNNING', 'FAILED')
+                RETURNING dataset, source_group, session_date, expected_window_count,
+                          universe_version, worker_fencing_token
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip(
+            ("dataset", "source_group", "session_date", "expected_window_count",
+             "universe_version", "fence_token"), row, strict=True,
+        ))
+
+    def confirm_missing_windows(self, *, session_id: str, fence_token: int, now: datetime) -> int:
+        """**이미 도래한** `DUE` 를 `MISSING` 으로 확정한다 — 확정된 행 수.
+
+        세션이 QC 에 들어왔다는 건 그 window 를 처리할 주체가 더 없다는 뜻이다(Worker 는
+        drain 에서 claim 을 반납만 하고 떠난다). 여기서 확정하지 않으면 누락이 원장에
+        **DUE 로 영원히 남아**, "아직 안 한 것"과 "끝내 못 한 것"이 구분되지 않는다.
+
+        가드가 둘이고 막는 사고가 다르다.
+
+        ⚠️ **phase** — 안 묶으면 살아 있는(ACTIVE) 세션에 이 명령을 잘못 겨눴을 때 처리
+        대기 중인 window 를 전부 MISSING 으로 죽인다(claim 대상에서 빠져 그날 데이터가
+        통째로 사라진다).
+
+        ⚠️ **fencing token 을 잠그고 검사한다** — phase 만 보면 소유권을 잃은 낡은 QC 도
+        쓴다. 두 실행의 `now` 가 다르면 낡은 쪽이 새 쪽 기준으로 미도래인 window 까지
+        MISSING 으로 바꾸고, 같아도 새 쪽의 `missing_confirmed` 가 0 으로 왜곡된다.
+        ⚠️⚠️ 그런데 토큰을 `UPDATE … FROM session s` 의 조건으로만 두면 **s 를 잠그지
+        않는다** — READ COMMITTED 스냅샷이 옛 토큰을 본 채 진행할 수 있다(이 레포가 반복해
+        데인 비잠금 검사 = TOCTOU). 그래서 같은 트랜잭션에서 세션 행을 `FOR UPDATE` 로
+        먼저 잠그고 대조한 뒤 쓴다. 이 쓰기는 되돌릴 수 없어 값이 비쌀 자격이 있다.
+
+        ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
+        잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
+        DRAINED 를 만든다. 그 상태로 QC 를 돌리면 **아직 오지도 않은 분**까지 MISSING 으로
+        확정하고 하루가 봉인된다. 도래하지 않은 window 는 판정 대상이 아니다 — 남은 DUE 는
+        호출자(QC)가 위반으로 드러낸다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT phase, worker_fencing_token FROM minute_ingestion_session
+                WHERE session_id = %s FOR UPDATE
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] != "QC_RUNNING" or row[1] != fence_token:
+                # 내 QC 가 아니다 — 되돌릴 수 없는 쓰기를 하지 않는다
+                return 0
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window
+                SET data_status = 'MISSING', updated_at = now()
+                WHERE session_id = %s AND data_status = 'DUE' AND scheduled_at <= %s
+                """,
+                (session_id, now),
+            )
+            return cur.rowcount
+
+    def session_snapshot(self, *, session_id: str) -> dict | None:
+        """세션 한 행의 QC 관련 값 — 없으면 None.
+
+        QC 재실행이 **이미 FINALIZED 인 세션**을 만났을 때 쓴다: 확정 직후 출력 전에 죽은
+        실행을 재시도하면 그 판정을 다시 읽어 돌려줘야 한다(못 읽으면 정상 확정된 하루가
+        재시도마다 실패로 보인다). 필요한 값을 한 번에 읽는다 — 같은 행을 두 번 조회하면
+        그 사이에 바뀐 값으로 서로 안 맞는 보고가 나온다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dataset, source_group, session_date, expected_window_count,
+                       universe_version, phase, final_checksum, final_generation
+                FROM minute_ingestion_session WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip(
+            ("dataset", "source_group", "session_date", "expected_window_count",
+             "universe_version", "phase", "final_checksum", "final_generation"),
+            row, strict=True,
+        ))
+
+    def session_window_rows(self, *, session_id: str) -> list[tuple]:
+        """QC 판정 입력 — (window_start, window_end, data_status, generation, checksum).
+
+        집계만 돌려주지 않는 이유: `final_checksum` 이 이 목록에서 나오고, 집계는 그 목록
+        에서 다시 셀 수 있다. 반대로 집계만 받으면 같은 개수의 다른 결과가 같은 checksum 을
+        갖는다(예: 두 window 의 상태가 서로 뒤바뀐 경우).
+
+        `window_end` 도 함께 준다 — DB 제약은 `window_start < window_end` 뿐이라 겹치거나
+        1분이 아닌 구간도 저장될 수 있고, Worker 는 **저장된 window_end 를 그대로** 수집기에
+        넘긴다. 즉 end 가 어긋나면 수집 구간 자체가 어긋난 것이라 판정 입력에 있어야 한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT window_start, window_end, data_status, generation, checksum
+                FROM minute_ingestion_window
+                WHERE session_id = %s ORDER BY window_start
+                """,
+                (session_id,),
+            )
+            return list(cur.fetchall())
+
+    def finalize_session(
+        self, *, session_id: str, fence_token: int, final_checksum: str,
+        final_generation: int | None, now: datetime,
+    ) -> bool:
+        """`QC_RUNNING` → `FINALIZED` CAS. **내 QC** 가 아니면 False(token 대조).
+
+        `finalized_through` 는 채우지 않는다 — 스키마 주석대로 correction 대기기간이
+        업무상 필요할 때만 쓰는 컬럼이고, 지금은 그 정책이 없다(있는 것처럼 채우면
+        소비자가 그 값을 경계로 읽는다).
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'FINALIZED', final_checksum = %s, final_generation = %s,
+                    updated_at = now()
+                WHERE session_id = %s AND phase = 'QC_RUNNING'
+                  AND worker_fencing_token = %s
+                """,
+                (final_checksum, final_generation, session_id, fence_token),
+            )
+            return cur.rowcount == 1
+
+    def fail_session_qc(self, *, session_id: str, fence_token: int, now: datetime) -> bool:
+        """`QC_RUNNING` → `FAILED` CAS — 불변식 위반을 phase 로 드러낸다.
+
+        사유 컬럼이 없어 **원장에는 사유가 안 남는다**(로그·CLI 출력이 그 자리다).
+        `begin_qc` 가 FAILED 재진입을 허용하므로 원인을 고친 뒤 다시 판정할 수 있다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'FAILED', updated_at = now()
+                WHERE session_id = %s AND phase = 'QC_RUNNING'
+                  AND worker_fencing_token = %s
+                """,
+                (session_id, fence_token),
             )
             return cur.rowcount == 1
 

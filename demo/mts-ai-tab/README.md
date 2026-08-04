@@ -29,10 +29,10 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
   → broker-api.js   /api/broker/* fetch — 얇은 래퍼(브라우저 mock 없음)
     → mock-broker (demo/mock-broker/server.js)   증권사 자체 제작 API — 고객 해시·채널 부착, 상태 매핑, 폴백 처리
       → publication-api (src/apps/onprem/publication-api)   On-Premise Publication API      (/api/broker/ai-analysis)
-      → 토스증권 공식 Open API (openapi.tossinvest.com)   실시간 시세 소스 — 7초 캐시      (/api/broker/quotes)
+      → 토스증권 공식 Open API (openapi.tossinvest.com)   실시간 시세·일봉 소스 — 시세 7초 캐시   (/api/broker/quotes · /api/broker/chart)
 ```
 
-- **실데이터는 두 경로다.** AI 분석 탭(publication-api 프록시)과 시세(지수·관심종목·상세 헤더 가격 — 토스증권 Open API 프록시, 장중 실시간가·마감 후 당일 종가). 호가·차트·뉴스·커뮤니티 등 나머지는 증권사 자체 데이터라는 전제의 화면 고정값(목업)이다.
+- **실데이터는 세 경로다.** AI 분석 탭(publication-api 프록시), 시세(지수·관심종목·상세 헤더 가격 — 토스증권 Open API 프록시, 장중 실시간가·마감 후 당일 종가), 차트 탭(일봉 — 같은 소스, 조회 종목만 티커당 KST 날짜 1회 캐시. count 상한 200이라 nextBefore 로 한 페이지 더 이어 약 250봉을 채우고, 기간(1주·1개월·3개월·1년) 슬라이스·통계 카드는 화면이 파생한다). 호가·뉴스·커뮤니티 등 나머지는 증권사 자체 데이터라는 전제의 화면 고정값(목업)이다.
 - 종목 유니버스(검색 노출 36종·이름·ETF 여부 — 홈 관심종목은 앞 4종)는 [demo/mock-broker/quotes-fallback.json](../mock-broker/quotes-fallback.json)이 SSOT다. 분석 유니버스 ETF 32종(게임산업 300950 은 ALPHA-624 확장분 — 분석 도착 전 NO_DATA)이 검색으로 이어진다. 키 미설정·외부 API 실패 시 이 스냅샷으로 폴백해 화면이 깨지지 않는다. 화살표·색·등락률 표기는 숫자에서 화면이 파생한다.
 - 현재가 API에는 전일대비가 없어 mock-broker 가 일봉(count=2)으로 전일종가를 KST 날짜당 1회 캐시해 등락을 계산한다.
 - 고객 해시는 mock-broker 서버가 부착한다 — 실제 생성 규칙·salt는 증권사 서버 관리 영역(ADR-0013), 브라우저에 두지 않는다.
@@ -47,6 +47,21 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 3. 키 주입 (커밋 금지 — `.env` 는 gitignore 되어 있다):
    - 로컬: 리포 루트 `.env` 에 `TOSS_CLIENT_ID=…`/`TOSS_CLIENT_SECRET=…` → `docker compose up`.
    - 데모 박스: `/opt/edge-onprem/.env` 에 동일 내용 1회 수동 배치. 배포 번들 tar 는 덮어쓰기만 하므로 재배포에도 유지되지만, 박스 재프로비저닝 시엔 재배치해야 한다.
+
+## 실기기·시뮬레이터 시연 (홈 화면 추가)
+
+화면은 PWA standalone 을 지원한다 — iOS 홈 화면에 추가해 실행하면 CSS 아이폰 베젤·가짜 상태바(15:30 고정) 연출이
+걷히고 전체 화면 + 실제 iOS 상태바(실시계)로 뜬다. 데스크톱 브라우저는 기존 베젤 프리뷰 그대로다.
+
+1. **홈 화면 추가**: 아이폰 Safari 로 데모 URL(CloudFront 또는 로컬 서버)을 열고 공유 → **홈 화면에 추가** → 생성된
+   KB 아이콘으로 실행. 무대에선 아이콘 탭으로 앱을 켜는 장면부터 시작할 수 있다.
+2. **무대 미러링**: 아이폰을 맥에 케이블로 연결 → QuickTime Player → 새 동영상 녹화 → 카메라 소스를 iPhone 으로.
+   무선이 필요하면 AirPlay(발표장 네트워크 품질에 좌우되므로 유선 우선).
+3. **시뮬레이터 대안**(실폰이 없거나 영상 촬영용): Xcode Simulator 의 Safari 로 열어 동일하게 홈 화면 추가 후 실행.
+4. **발표장 네트워크 체크리스트**: 토스 Open API 는 허용 IP 등록제다 — 발표장 회선(또는 백업 핫스팟)의 공인 IP 를
+   사전 등록하지 않으면 시세·차트가 폴백 스냅샷으로 동작한다(화면은 깨지지 않지만 "실시간" 멘트를 쓸 수 없다).
+   데모 박스 경유(CloudFront URL)라면 상류 호출 IP 는 박스 EIP 이므로 발표장 회선과 무관하다 — 이 경우 확인할 것은
+   발표장에서 데모 URL 접속 가능 여부뿐이다.
 
 ## 데모 조작
 

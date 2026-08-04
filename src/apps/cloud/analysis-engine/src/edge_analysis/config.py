@@ -11,13 +11,23 @@ from datetime import date, datetime, timedelta, timezone
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_ETF_TICKER = "091160"
-# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 계열은 thinking 기본 ON 이라
+# deepseek-chat 은 2026-07-24 폐기 → v4. v4 계열은 thinking 기본 ON 이라
 # complete_json 이 thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 class PipelineError(RuntimeError):
     """치명적 파이프라인 오류 → 비0 종료 → Step Functions 실패."""
+
+
+class ReturnsNotReadyError(PipelineError):
+    """분해 입력이 아직 없다 — 재시도로 낫는 유일한 실패 축.
+
+    분봉 경로(ALPHA-710)에선 window artifact 커밋·시가 원장 확정의 초 단위 지연,
+    EOD 경로에선 당일 `price_daily` 파티션 부재다. 분봉 트리거 소비자(ALPHA-719)가
+    이 타입만 **짧은 지연 재시도**(가시성 연장)로 가른다. PipelineError 서브클래스라
+    단발 CLI 경로의 계약(비0 종료)은 그대로다.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +66,10 @@ class Settings:
     # 잴지는 데이터를 보고 정해야 하고, 그건 코드를 쓰는 일이다. OFF 면 축약 경로(고정
     # 추정량)로 떨어진다: LLM 이 쓴 코드를 실행하는 위험을 끄고도 파이프라인이 돌아야 한다.
     causal_sandbox_enabled: bool = True
+
+    # 분봉 트리거 단건 입력(ALPHA-709). 값이 있으면 대상 ETF·trade_date 를 그 트리거
+    # 행에서 유도한다 — env 기본값으로 다른 대상을 분석하면 계보가 조용히 오염된다.
+    trigger_id: str | None = None
 
     # 도메인 문서 저장소(S3). 비어 있으면 조회 도구를 붙이지 않는다 - 도메인 지식이
     # 없다고 설명을 멈추지 않는다. 접두사 배치는 인제스트가 만든다:
@@ -117,7 +131,8 @@ def _load_pg() -> PgConfig:
     )
 
 
-def load_settings(*, trade_date: str | None = None, request_id: str | None = None) -> Settings:
+def load_settings(*, trade_date: str | None = None, request_id: str | None = None,
+                  trigger_id: str | None = None) -> Settings:
     """환경변수와 CLI 인자로 검증된 ``Settings`` 를 만든다.
 
     Raises:
@@ -140,6 +155,7 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         aws_profile=_env("AWS_PROFILE"),
         causal_enabled=_flag("CAUSAL_ENABLED", default=True),
         causal_sandbox_enabled=_flag("CAUSAL_SANDBOX_ENABLED", default=True),
+        trigger_id=(trigger_id or None),
         domain_docs_bucket=os.environ.get("EDGE_DOMAIN_BUCKET", "").strip(),
         domain_docs_profile=os.environ.get("EDGE_AWS_PROFILE", "").strip(),
         causal_registry_root=os.environ.get("CAUSAL_REGISTRY_ROOT", "").strip(),

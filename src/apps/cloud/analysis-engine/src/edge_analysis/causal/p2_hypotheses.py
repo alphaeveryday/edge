@@ -191,11 +191,14 @@ def propose(client, sql, *, question: Question, fingerprint: Fingerprint,
     """
     if n < 1:
         raise PipelineError(f"가설 세션 수는 1 이상이어야 한다: n={n}")
-    events_ok = {str(c["event_id"]) for c in candidates if c.get("event_id")}
+    # event_id -> event_type_code. 접지 검사와 **노드 타입 주입**을 같은 표로 한다 -
+    # 모델이 타입을 타이핑하면 원장에 없는 코드를 발명한다(실측: 'EARNINGS_MISS').
+    type_of = {str(c["event_id"]): str(c.get("event_type_code") or "")
+               for c in candidates if c.get("event_id")}
     out: list[Hypothesis] = []
     for idx in range(1, n + 1):
         h = _session(client, sql, question=question, fingerprint=fingerprint,
-                     candidates=candidates, idx=idx, events_ok=events_ok, prior=out)
+                     candidates=candidates, idx=idx, type_of=type_of, prior=out)
         if h is not None:
             out.append(h)
     log("causal.p2.done", asked=n, got=len(out),
@@ -204,7 +207,7 @@ def propose(client, sql, *, question: Question, fingerprint: Fingerprint,
 
 
 def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
-             candidates: list[dict], idx: int, events_ok: set[str],
+             candidates: list[dict], idx: int, type_of: dict[str, str],
              prior: list[Hypothesis]) -> Hypothesis | None:
     """세션 하나. 가설 하나를 받거나 빈손으로 끝난다.
 
@@ -254,7 +257,7 @@ def _session(client, sql, *, question: Question, fingerprint: Fingerprint,
         try:
             h = _hypothesis(out["hypothesis"], hid=f"h{idx}", author=f"session{idx}",
                             queries=list(queries), fingerprint=fingerprint,
-                            events_ok=events_ok, prior=prior,
+                            type_of=type_of, prior=prior,
                             outcome_spec=outcome_node(question))
         except PipelineError as exc:
             log("causal.p2.reject", session=idx, tries=tries, why=str(exc)[:120])
@@ -326,7 +329,7 @@ def _candidates(cs: list[dict]) -> str:
 
 
 def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
-                fingerprint: Fingerprint, events_ok: set[str],
+                fingerprint: Fingerprint, type_of: dict[str, str],
                 prior: list[Hypothesis], outcome_spec: dict[str, str]) -> Hypothesis:
     """모델 산출 -> `Hypothesis`. **여기서 거부한 사유가 그대로 되먹임 문장이 된다.**
 
@@ -395,10 +398,27 @@ def _hypothesis(raw: Any, *, hid: str, author: str, queries: list[str],
         "옮겨라", need=1 if prior else 0)
 
     events = [str(e).strip() for e in _lines(raw.get("events"), "events", "", need=0)]
-    bad = [e for e in events if e not in events_ok]
+    bad = [e for e in events if e not in type_of]
     if bad:
         raise PipelineError(f"events 에 원장에 없는 id 가 있다: {bad[:3]}. 후보 목록의 "
                             "event_id 를 그대로 쓰거나 빈 목록을 내라")
+
+    # 접지된 노드에 **원장 타입 코드를 코드가 붙인다.** 이게 없으면 검정 에이전트가
+    # `삼성전자_실적_발표@t0` 같은 사람 말에서 처치 코호트를 만들지 못해 매번 0행이
+    # 되고, scope=type 으로 넓힐 모집단도 못 잡아 n=1 로 게이트에서 죽는다
+    # (2026-08-01 tools-20260801-01: 4/4 가 "이벤트 코드를 알 수 없다"로 검정 불가).
+    # 모델에게 타이핑시키지 않는 이유는 발명하기 때문이다 - 실측 `EARNINGS_MISS`.
+    nodes = dict(nodes)
+    for nid, spec in list(nodes.items()):
+        codes = [t for e in (spec.get("events") or []) if (t := type_of.get(str(e)))]
+        if codes:
+            nodes[nid] = {**spec, "event_type_code": codes[0]}
+    # 노드에 events 를 안 적었어도 가설이 접지했으면 **처치 노드**가 그 사건이다 -
+    # 처치의 타입을 모르면 처치군을 못 만들고, 그게 검정 불가의 첫 번째 사유였다.
+    if events and not nodes[treatment].get("event_type_code"):
+        first = next((t for e in events if (t := type_of.get(e))), "")
+        if first:
+            nodes[treatment] = {**nodes[treatment], "event_type_code": first}
 
     anchor = _anchor(raw.get("anchor"))
     source = str(raw.get("anchor_source") or "").strip()

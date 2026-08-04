@@ -14,7 +14,7 @@ import pytest
 from data_pipeline.lake.storage import (
     LocalStorage,
     minute_window_manifest_key,
-    raw_price_minute_artifact_key,
+    canonical_price_minute_artifact_key,
 )
 from data_pipeline.minute.artifacts import (
     ArtifactImmutabilityError,
@@ -55,16 +55,17 @@ def make_manifest(**overrides):
 class TestKeys:
     def test_deterministic_and_immutable_shape(self):
         # run_id 없는 결정적 key — correction 만 generation 으로 갈린다
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         assert key == (
-            "raw/source=toss/dataset=price_minute/market=KR"
+            "canonical/market_data/price_minute/market=KR"
             "/session_date=2026-07-31/window=0900/generation=1/bars.ndjson"
         )
-        corrected = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 2)
+        corrected = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 2)
         assert corrected != key  # 새 세대 = 새 key — 기존 artifact 를 덮지 않는다
 
     def test_manifest_key_zone_disjoint_from_canonical(self):
-        # canonical price_bars(ALPHA-648 확정 설계)와 존이 달라야 충돌이 없다
+        # manifest 는 수집 판정 기록이라 canonical 존(분봉 artifact 정본, ALPHA-705)과
+        # 존이 달라야 orphan 스캔 프리픽스에 판정 기록이 섞이지 않는다
         key = minute_window_manifest_key("price_minute", "toss", "KR", "2026-07-31", "0900", 1)
         assert key.startswith("operations_archive/minute_manifests/")
         assert "canonical/" not in key
@@ -128,7 +129,7 @@ class TestSerialization:
 class TestPutImmutable:
     def test_put_then_rerun_is_noop(self, tmp_path):
         storage = LocalStorage(root=tmp_path)
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         data = serialize_records(RECORDS)
         first = put_immutable(storage, key, data)
         second = put_immutable(storage, key, data)  # 재실행 — no-op 재사용
@@ -138,7 +139,7 @@ class TestPutImmutable:
     def test_different_bytes_same_key_fails_loud(self, tmp_path):
         # 같은 key 다른 내용 = 결정성 위반 — 덮으면 checksum 재사용 판정이 오염된다
         storage = LocalStorage(root=tmp_path)
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         put_immutable(storage, key, serialize_records(RECORDS))
         with pytest.raises(ArtifactImmutabilityError):
             put_immutable(storage, key, serialize_records(RECORDS[:1]))
@@ -148,7 +149,7 @@ class TestPutImmutable:
         # v0.7 9절 복구 표: S3 PUT 후 DB commit 전 종료 → 재claim 실행이 같은
         # key/checksum 을 재사용한다 (orphan quarantine 은 3-2 reconciler 소관)
         storage = LocalStorage(root=tmp_path)
-        key = raw_price_minute_artifact_key("toss", "KR", "2026-07-31", "0900", 1)
+        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
         data = serialize_records(RECORDS)
         checksum_before_crash = put_immutable(storage, key, data)
         checksum_after_restart = put_immutable(storage, key, data)

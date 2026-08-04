@@ -111,6 +111,21 @@ psycopg3·lxml 이 딸려와 드라이버가 이중이 되고, 재구현하면 �
 ```
 python -m edge_analysis                       # 오늘(Asia/Seoul)
 python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
+# 분봉 트리거 단건(ALPHA-709) — 대상 ETF·trade_date 를 minute_price_trigger 행에서
+# 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
+# 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
+# 같은 route 재실행만 DRAFT 보존이다. 분해 입력도 분봉 축이다: 트리거 window artifact
+# 의 close 를 세션 시가 window(minute_session_open.source_window)의 open 과 합성해
+# 구성종목 장중 수익률을 파생한다 — 판정과 같은 축(시가 대비).
+python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
+
+# 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
+# --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
+# explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
+# 분봉 window·시가 원장 미준비는 ReturnsNotReady 로 120초 지연 재시도(짧은 커밋 지연).
+# --max-polls 는 검증용: 계약 위반·처리 실패가 있으면 exit 1.
+EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
+  python -m edge_analysis consume-triggers --max-polls 3
 ```
 
 ## 환경 변수
@@ -122,7 +137,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 | `PGHOST`·`PGPORT`·`PGDATABASE`·`PGUSER`·`PGPASSWORD` | edge Postgres(Cloud Event Store) | — |
 | `PGSCHEMA` | 스키마 | `public` |
 | `DEEPSEEK_API_KEY` | 분류·설명 LLM | — (Secrets Manager 주입) |
-| `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-pro` |
+| `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-flash` |
 | `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
 | `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |

@@ -25,10 +25,10 @@ import urllib.error
 import urllib.request
 
 # OpenAI 호환 기본값 — DeepSeek. 벤더 교체는 인자로 한다(코드 수정 불필요).
-# deepseek-chat 은 2026-07-24 폐기 → v4-pro. v4 는 thinking 기본 ON 이라 complete 가
+# deepseek-chat 은 2026-07-24 폐기 → v4. v4 는 thinking 기본 ON 이라 complete 가
 # thinking:disabled 를 명시해 순수 JSON 응답을 받는다(ALPHA-469).
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-v4-flash"
 # 추출은 창작이 아니다 — 같은 기사에 같은 라벨이 나와야 재현·집계가 된다.
 DEFAULT_TEMPERATURE = 0.0
 

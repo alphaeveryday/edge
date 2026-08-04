@@ -36,6 +36,15 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
+from .minute.consumer import dlq_reconcile_cli, redrive_cli
+from .minute.news_consumer import news_consumer_cli
+from .minute.news_worker import news_worker_cli
+from .minute.eod import qc_session_cli
+from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.session_ops import start_session_cli, stop_session_cli
+from .minute.relay import relay_cli
+from .minute.price_consumer import price_consumer_cli
+from .minute.worker import price_worker_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
@@ -133,7 +142,38 @@ def main(argv: list[str] | None = None) -> int:
                  "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
-                 "plan-run", "reconcile"],
+                 "plan-run", "reconcile",
+                 # 1분 파이프라인(ALPHA-670): relay=outbox→SQS 발행 상주 루프. 원장 DB +
+                 # minute_relay 큐 매핑 필수, storage/수집창과 무관.
+                 "relay",
+                 # 1분 Consumer 운영(ALPHA-672): dlq-reconcile=DLQ 도착과 DB job 상태
+                 # 대사(주기 실행), redrive=DEAD job 을 DB 부터 되살려 새 delivery event
+                 # 생성. 둘 다 원장 DB 필수, storage/수집창과 무관.
+                 "dlq-reconcile", "redrive",
+                 # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
+                 # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
+                 "qc-minute-session",
+                 # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
+                 # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
+                 "plan-minute-session", "drain-minute-session",
+                 # 세션 스케일 오케스트레이션(ALPHA-712): start=거래일 판정+계획+desired 1,
+                 # stop=drain+원장 게이트 대기+desired 0. 상주 서비스 3종을 올리고 내리는
+                 # 유일한 주체다(terraform 은 desired_count 를 ignore_changes 로 뒀다).
+                 "start-minute-session", "stop-minute-session",
+                 # 1분 Price Worker(ALPHA-706): 상주 수집 루프(ECS Service). 원장 DB +
+                 # 토스 자격증명 + storage(artifact PUT) + --universe(planner 와 동일 파일).
+                 "price-worker",
+                 # 1분 가격 판정 Consumer(ALPHA-711): Price Job SQS 소비 상주 루프.
+                 # 원장 DB + 큐 설정 + storage(artifact GET) + --universe(판정 대상).
+                 "price-consumer",
+                 # 1분 뉴스 추출 Consumer(ALPHA-713): News Job SQS 소비 상주 루프.
+                 # 원장 DB + 큐 설정 + storage(결과 PUT) + LLM_* env(tag-news 관례).
+                 # realtime·backfill 은 같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다.
+                 "news-consumer",
+                 # 1분 News Worker(ALPHA-707): BigKinds 매분 폴링 상주 루프(ECS Service).
+                 # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
+                 # universe 없음 — 뉴스 세션은 소스 단위다.
+                 "news-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -152,13 +192,46 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None,
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
-                        help="tag-news·assemble-events: 대상 파티션을 오늘−N일 창으로 제한"
-                             "(미지정: tag-news=풀스캔, assemble-events=오늘 하루). --from/--to 가 우선")
+                        help="tag-news·assemble-events·load-disclosure: 대상 파티션을 오늘−N일 창으로"
+                             " 제한(미지정: tag-news·load-disclosure=풀스캔, assemble-events=오늘"
+                             " 하루). --from/--to 가 우선")
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
     parser.add_argument("--interval-sec", type=int, default=None,
                         help=f"ingest-raw-inav: 표본 간격 초(미지정={DEFAULT_INTERVAL_SEC}). 조회 창 = 간격 × 30")
+    parser.add_argument("--max-ticks", type=int, default=None,
+                        help="relay·price-worker: 이 횟수만큼만 돌고 종료(미지정=상주). 로컬 확인·일회성 배출용. "
+                             "dlq-reconcile: 대사 회차 상한(미지정=보이는 메시지를 다 훑을 때까지)")
+    parser.add_argument("--kind", default=None, choices=["news", "price"],
+                        help="redrive: 되살릴 job 의 종류(news=news_extraction_job, price=price_window_job)")
+    parser.add_argument("--destination", default=None,
+                        help="redrive: 새 delivery 를 실을 큐(미지정=직전 event 값 복사). "
+                             "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
+                             "여기서 바로잡지 않으면 복구 경로가 없다")
+    parser.add_argument("--dataset", default=None,
+                        help="plan-minute-session: 세션 dataset(price_minute|news_minute)")
+    parser.add_argument("--source-group", default=None,
+                        help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
+    parser.add_argument("--session-date", default=None,
+                        help="plan-minute-session·price-worker: 세션 날짜 YYYY-MM-DD"
+                             "(price-worker 미지정=오늘 KST — planner 와 같은 값이어야 "
+                             "같은 session_id 가 유도된다)")
+    parser.add_argument("--universe", default=None,
+                        help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
+                             "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
+                             "여기서 나온다 — 갈리면 Worker 가 처리를 거부한다")
+    parser.add_argument("--session-id", default=None,
+                        help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
+                             "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
+                             "있는 세션까지 확정하거나 drain 을 건다")
+    parser.add_argument("--reason", default=None,
+                        help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
+                             "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
+    parser.add_argument("--job-id", default=None,
+                        help="redrive: 되살릴 job_id(결정적 ID). 대상은 **막힌 것**이다 — "
+                             "DEAD job 이거나 Relay 가 발행 불가로 격리한 DEAD delivery event. "
+                             "정상 진행 중이거나 SUCCEEDED 인 job 은 거부된다")
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
@@ -177,12 +250,74 @@ def main(argv: list[str] | None = None) -> int:
                 f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
             )
 
+    if args.max_ticks is not None:
+        if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
+                             "news-consumer", "news-worker"):
+            raise SystemExit(
+                "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
+                f"news-consumer·news-worker 에서만 쓴다 — 이 스텝({args.step})에서는 "
+                "무시되므로 거부한다"
+            )
+        if args.max_ticks < 1:
+            raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
+
+    # redrive 는 되돌리기 어려운 상태 전이(DEAD→RETRY_WAIT + 새 delivery event)라
+    # 대상을 추측하지 않는다. 다른 스텝에서 주어지면 조용히 무시하지 말고 거부한다
+    # (--deadline-sec·--window-days 와 같은 이유 — 배선 오류가 안 드러난다).
+    if args.step == "redrive":
+        if not args.kind or not args.job_id or not (args.reason or "").strip():
+            raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
+    elif (args.kind is not None or args.job_id is not None
+          or args.reason is not None or args.destination is not None):
+        raise SystemExit(
+            "--kind·--job-id·--reason·--destination 은 redrive 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+
+    # QC 전용 인자도 같은 규약이다 — 오배선(`relay --session-id …`)이 조용히 무시되면
+    # 운영자는 명령이 먹은 줄 안다.
+    # ⚠️ `--session-id` 결손은 여기서 막지 **않는다** — SystemExit 은 프로세스 1 로 나가는데,
+    # QC 의 1 은 "원장이 스스로와 모순"이라는 뜻이다. 결손은 판정 불가(2)라 CLI 가 처리한다.
+    if args.step not in ("qc-minute-session", "drain-minute-session") \
+            and args.session_id is not None:
+        raise SystemExit(
+            "--session-id 는 qc-minute-session·drain-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+    if args.step not in ("plan-minute-session", "start-minute-session",
+                         "stop-minute-session") and (
+        args.dataset is not None or args.source_group is not None
+    ):
+        raise SystemExit(
+            "--dataset·--source-group 은 plan-minute-session·start-minute-session·"
+            f"stop-minute-session 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+    if args.step in ("price-consumer", "start-minute-session") and args.session_date is not None:
+        raise SystemExit(
+            f"--session-date 는 {args.step} 에서 쓰지 않는다 — 대상 세션은 job payload"
+            "(price-consumer)·오늘 KST(start-minute-session)가 정한다(무시되므로 거부)"
+        )
+    if args.step == "news-worker" and args.universe is not None:
+        raise SystemExit(
+            "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
+            "universe 가 없다(무시되므로 거부)"
+        )
+    if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
+                         "start-minute-session", "news-worker") and (
+        args.session_date is not None or args.universe is not None
+    ):
+        raise SystemExit(
+            "--session-date·--universe 는 plan-minute-session·price-worker·"
+            f"price-consumer·start-minute-session·news-worker 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+        )
+
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
     if args.window_days is not None:
-        if args.step not in ("tag-news", "assemble-events"):
+        if args.step not in ("tag-news", "assemble-events", "load-disclosure"):
             raise SystemExit(
-                "--window-days 는 tag-news·assemble-events 에서만 쓴다 — "
+                "--window-days 는 tag-news·assemble-events·load-disclosure 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         # 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외한다 — 0건 처리를 exit 0
@@ -210,6 +345,39 @@ def main(argv: list[str] | None = None) -> int:
         return ops_entry.plan_run_cli(settings)
     if args.step == "reconcile":
         return ops_entry.reconcile_cli(settings)
+    if args.step == "relay":
+        return relay_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "dlq-reconcile":
+        return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "qc-minute-session":
+        return qc_session_cli(settings, session_id=args.session_id)
+    if args.step == "plan-minute-session":
+        return plan_session_cli(
+            settings, dataset=args.dataset, source_group=args.source_group,
+            session_date=args.session_date, universe=args.universe,
+        )
+    if args.step == "drain-minute-session":
+        return drain_session_cli(settings, session_id=args.session_id)
+    if args.step == "start-minute-session":
+        return start_session_cli(settings, dataset=args.dataset,
+                                 source_group=args.source_group, universe=args.universe)
+    if args.step == "stop-minute-session":
+        return stop_session_cli(settings, dataset=args.dataset,
+                                source_group=args.source_group)
+    if args.step == "price-worker":
+        return price_worker_cli(settings, session_date=args.session_date,
+                                universe=args.universe, max_ticks=args.max_ticks)
+    if args.step == "price-consumer":
+        return price_consumer_cli(settings, universe=args.universe,
+                                  max_ticks=args.max_ticks)
+    if args.step == "news-consumer":
+        return news_consumer_cli(settings, max_ticks=args.max_ticks)
+    if args.step == "news-worker":
+        return news_worker_cli(settings, session_date=args.session_date,
+                               max_ticks=args.max_ticks)
+    if args.step == "redrive":
+        return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
+                           reason=args.reason, destination=args.destination)
 
     # 원장 계측은 **dispatch 를 한 번** 감싼다(ALPHA-181). 스텝마다 흩뿌리면 배선 지점이
     # 33개가 되고, 그중 4곳은 `--source` 로 벤더가 갈려 오라벨 지점이 그만큼 늘어난다
@@ -281,10 +449,19 @@ def _dispatch(args, settings, storage, run_id) -> int:
 
     # 공시 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
     # (canonical report_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    #
+    # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
+    # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다
+    # (news-load-fullscan-problem 과 같은 축). ASL 은 날짜 연산을 못 해 `--from/--to` 를
+    # 만들 수 없으므로 창 **폭**을 받아 여기서 날짜로 편다 — tag-news·assemble-events 와 같은
+    # 패턴이고, 명시 `--from/--to` 가 주어지면 그쪽이 이긴다(백필 경로 보존).
     if args.step == "load-disclosure":
+        load_from, load_to = args.from_date, args.to_date
+        if load_from is None and load_to is None and args.window_days is not None:
+            load_from, load_to = default_window(datetime.now(timezone.utc), args.window_days)
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
-            from_date=args.from_date, to_date=args.to_date,
+            from_date=load_from, to_date=load_to,
         )
 
     # 가격 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다

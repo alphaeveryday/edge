@@ -6,8 +6,8 @@
 - raw:  run_id 별 append (재현성). 파티션 키는 소스별로 다르다 — 뉴스는 published_date,
         가격·재무는 ingest_date(수집일). 각 빌더 주석 참고. **예외: 1분 파이프라인의
         minute artifact 는 run_id 없는 결정적·불변 키다**(v0.7 9절 — 재실행 no-op 전제,
-        raw_price_minute_artifact_key 주석 참고). 스캐너·보존 정책이 run_id= 존재를
-        전제하면 안 된다.
+        canonical_price_minute_artifact_key 주석 참고 — 분봉은 canonical 존이 정본이다,
+        ALPHA-701·705). 스캐너·보존 정책이 run_id= 존재를 전제하면 안 된다.
 - feature: canonical 에서 파생한 모델 산출물(LLM 태깅 등). canonical 과 마찬가지로 run_id 가
         없고 멱등이지만, canonical 이 **벤더 원본의 결정론적 정규화**인 반면 feature 는
         **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번
@@ -196,22 +196,36 @@ def raw_etf_profile_partition(
     )
 
 
+def raw_disclosure_day_prefix(source: str, market: str, ingest_date: str) -> str:
+    """raw 공시 **수집일 전체**(run_id 무관) 프리픽스 (끝 슬래시 포함).
+
+    한 수집일에는 run_id 파티션이 여럿 있다 — 장중 레인은 같은 날 여러 슬롯이 돈다. 그
+    날 이미 받아 둔 본문(document.xml ZIP)을 찾으려면 run_id 아래가 아니라 **수집일 전체**를
+    훑어야 한다(ALPHA-720). run_id 까지 붙은 프리픽스가 필요하면 raw_disclosure_partition 이다.
+
+    끝 슬래시를 포함하는 이유: 프리픽스는 문자열 매칭이라(list_keys 규약) 슬래시가 없으면
+    `ingest_date=2026-08-0` 가 `…-03`·`…-04` 를 함께 잡는다.
+    """
+    return f"raw/source={source}/dataset=disclosures/market={market}/ingest_date={ingest_date}/"
+
+
 def raw_disclosure_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
     """raw 공시(disclosures) 메타 파티션 프리픽스 (끝 슬래시 없음).
 
     가격·재무와 동형(bronze 통일) — 공시목록(list.json) 행을 수집일(ingest_date) 기준으로
-    run_id 별 append 한다(전부 보존, dedup 없음). 정체성 병합·corp_code↔ticker bridge·정정
-    판정은 후속 canonical 소관이다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
+    run_id 별 append 한다(전부 보존). 정체성 병합·corp_code↔ticker bridge·정정 판정은 후속
+    canonical 소관이다 — **서로 다른 관측을 접는 일은 여기서 하지 않는다.** 단 소스가 한
+    순회 안에서 **내용이 완전히 같은 행**은 접는다(페이지 경계 이동 중복 — 접지 않으면 같은
+    문서를 두 번 내려받는다). 그래서 collection_log 의 `list_rows_seen`(벤더가 건넨 행 수)과
+    이 파티션의 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이라, 그 차이를
+    유실로 대사하면 안 된다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
     document_raw_path 가 그대로 보존돼 canonical/파싱이 쓴다. 공시서류 원본 본문은 ndjson 에
     못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션 아래 별도 객체로 둔다
     (raw_disclosure_document_key 참고).
     """
-    return (
-        f"raw/source={source}/dataset=disclosures/market={market}"
-        f"/ingest_date={ingest_date}/run_id={run_id}"
-    )
+    return f"{raw_disclosure_day_prefix(source, market, ingest_date)}run_id={run_id}"
 
 
 def raw_disclosure_document_key(
@@ -501,6 +515,32 @@ def feature_news_assertions_partition(language: str, published_date: str) -> str
     return f"feature/news/assertions/language={language}/published_date={published_date}"
 
 
+def news_extraction_result_key(
+    job_id: str, redrive_generation: int, attempt: int
+) -> str:
+    """1분 뉴스 추출 job 한 번의 실행 결과 키 (ALPHA-689).
+
+    존은 배치 태깅과 같은 **feature** 다 — 값이 LLM 추론 결과라는 성질이 같다
+    (`feature_news_assertions_partition` 주석의 근거가 그대로 적용된다). 파티션 축만
+    다르다: 배치는 날짜창을 프루닝해 훑지만, Consumer 는 job 하나를 처리하고 그 결과를
+    DB `news_extraction_job.result_checksum` 으로 지목한다 — 즉 **DB 가 색인**이라
+    키에 날짜 축이 필요 없다.
+
+    ⚠️ 축이 (job_id, redrive_generation, attempt) **셋 다**인 이유: LLM 출력은
+    비결정적이라 같은 job 의 재시도가 다른 바이트를 낸다. attempt 를 빼면 "PUT 성공 →
+    DB 기록 전 사망 → 재시도" 가 같은 key 에 다른 바이트를 써서 `put_immutable` 이
+    거부하고, 그 job 은 영구히 못 끝난다. redrive 는 attempt_count 를 0 으로 되돌리므로
+    generation 을 빼면 새 세대의 첫 시도가 같은 함정을 그대로 밟는다.
+
+    실패한 시도의 결과도 남는다(끝난 job 이 지목하지 않는 키) — 그 정리는 orphan 검출·
+    EOD QC 소관이다(PR 8). 지우는 쪽을 여기에 두면 근거가 사라진다.
+    """
+    return (
+        f"feature/news_extraction/job={job_id}"
+        f"/generation={redrive_generation}/attempt={attempt}/result.json"
+    )
+
+
 def canonical_supply_contract_fact_partition(report_date: str) -> str:
     """canonical 공급계약 fact 파티션 프리픽스 (끝 슬래시 없음).
 
@@ -563,20 +603,35 @@ def collection_log_key(source: str, dataset: str, started_date: str, run_id: str
     )
 
 
-def raw_price_minute_artifact_key(
-    source: str, market: str, session_date: str, window_start_hhmm: str, generation: int
+def canonical_price_minute_artifact_key(
+    market: str, session_date: str, window_start_hhmm: str, generation: int
 ) -> str:
-    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665).
+    """1분 가격 window artifact 의 **결정적·불변** 키 (v0.7 9절, ALPHA-665·705).
 
-    다른 raw 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
+    이 artifact 가 분봉 canonical 의 **단일 정본**이다(ALPHA-701 — DB 에 넣지 않는다).
+    그래서 존이 raw 가 아니라 canonical 이고, 벤더(source)는 파티션 축이 아니라
+    **레코드 컬럼**이다 — canonical 소비자는 벤더로 갈라 읽지 않는다(레포 키 규약).
+
+    다른 파티션과 달리 run_id 가 없다 — 같은 window 재실행은 같은 key 에 같은
     바이트를 다시 PUT 하는 no-op 이어야 "S3 PUT 후 DB commit 전 종료 → artifact
     재사용" 복구가 성립한다. 불변성은 generation 이 진다: correction 은 새 generation
     → 새 key 라 기존 artifact 를 덮지 않는다.
     """
     return (
-        f"raw/source={source}/dataset=price_minute/market={market}"
-        f"/session_date={session_date}/window={window_start_hhmm}"
+        f"{canonical_price_minute_prefix(market, session_date)}window={window_start_hhmm}"
         f"/generation={generation}/bars.ndjson"
+    )
+
+
+def canonical_price_minute_prefix(market: str, session_date: str) -> str:
+    """그 (market, session_date) 분봉 canonical 이 사는 프리픽스 — orphan 스캔 축.
+
+    artifact key 와 같은 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를
+    훑고 빈 목록을 clean 으로 확정한다(경로 규약 SSOT 는 이 모듈이다).
+    """
+    return (
+        f"canonical/market_data/price_minute/market={market}"
+        f"/session_date={session_date}/"
     )
 
 
@@ -623,10 +678,10 @@ def minute_window_manifest_key(
 ) -> str:
     """window unit manifest(received/no_trade/missing/invalid)의 결정적 키.
 
-    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 벤더 원본이
-    아니라 수집 판정 기록이다(collection_logs 와 같은 결). canonical price_bars
-    (`canonical/dataset=price_bars/...`, ALPHA-648 확정 설계)와는 존이 달라 충돌하지
-    않는다.
+    artifact 와 같은 파티션 축이되 존은 operations_archive — manifest 는 canonical
+    데이터가 아니라 수집 판정 기록이다(collection_logs 와 같은 결). source 가 키에
+    남는 이유도 그것이다: 판정 기록은 수집 주체 축으로 갈라 보관한다(ALPHA-705 —
+    canonical artifact 쪽은 source 를 컬럼으로 내렸다).
     """
     return (
         f"operations_archive/minute_manifests/dataset={dataset}/source={source}"

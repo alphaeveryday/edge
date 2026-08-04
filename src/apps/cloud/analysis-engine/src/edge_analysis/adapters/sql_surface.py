@@ -76,6 +76,11 @@ SCHEMA = """단일 SQL 표면 (PostgreSQL). **SELECT 하나만.** 조회 키는 
   v_liquidity     instrument_id · trade_date · turnover_value · illiq
                   illiq = |r| / 거래대금 × 1e12 (Amihud 2002 비유동성). 수준이 아니라
                   **기준창 대비 차이**로 읽어라 - 절대값은 종목마다 자릿수가 다르다
+  v_nav           etf_instrument_id · trade_date · nav · close_price · premium · nav_r
+                  **ETF 전용.** premium = 종가/NAV - 1 (괴리율). 양수면 시장가가 NAV 보다
+                  비싸다 - 차익거래 미해소·LP 호가 이탈의 관측 가능한 흔적이다.
+                  nav_r 은 NAV 자체의 일간 변화(구성종목 가치). 시장가 수익률(v_daily.r)
+                  에서 nav_r 을 빼면 **괴리 변화분**이 남는다 - ETF 고유 미시구조 몫이다
   v_cohort        v_event × v_instrument 를 미리 조인한 표면.
                   instrument_id · trade_date · source_event_id · event_type_code
                   predicate_code · role_code · lifecycle_stage · sector_name
@@ -85,6 +90,7 @@ SCHEMA = """단일 SQL 표면 (PostgreSQL). **SELECT 하나만.** 조회 키는 
   · 분봉·틱 (장중 타이밍 검정 불가 - 사건 시각 대비 반응 시각을 못 가른다)
   · 고가·저가 (`price_daily` 는 종가만. 따라서 high-low 스프레드 추정량·정적 VI 판정 불가)
   · 호가·스프레드·깊이 (거래량은 있으나 **잔여 유동성은 없다** - 둘은 다른 변수다)
+  · 장중 iNAV (수집 코드는 있으나 스케줄 미편입 + 소급 백필 불가 - 원장에 0건)
   · 공매도·대차·신용 잔고 (단 공매도 *규제 구간*은 제도 사실이라 알려져 있다)
   · 합성 캘린더 (만기·리밸런스 효력일·락업 해제)
   · 교차자산 (금리·환율·변동성지수)
@@ -351,6 +357,20 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
         JOIN {prefix}instrument ia ON ia.instrument_id = a.entity_id
         JOIN {prefix}instrument ib ON ib.instrument_id = b.entity_id
         WHERE se.event_status = 'ACTIVE' AND se.available_at <= {as_of}
+    ),
+    v_nav AS (
+        -- ETF 공식 NAV(etf_nav_daily) × 시장 종가(price_daily). **괴리율이 여기서 난다.**
+        -- 두 값 다 원장에 있었는데 뷰가 없어 검정이 미시구조를 통째로 `unavailable` 로
+        -- 처분했다 - 호가·깊이가 없는 것은 사실이나 괴리는 잴 수 있다.
+        -- premium > 0 이면 시장가가 NAV 보다 비싸다(차익거래 미해소·LP 호가 이탈).
+        SELECT n.etf_instrument_id, n.trade_date, n.nav, p.close_price,
+               p.close_price / NULLIF(n.nav, 0) - 1 AS premium,
+               n.nav / NULLIF(LAG(n.nav) OVER (
+                   PARTITION BY n.etf_instrument_id ORDER BY n.trade_date), 0) - 1 AS nav_r
+        FROM etf_nav_daily n
+        LEFT JOIN price_daily p ON p.instrument_id = n.etf_instrument_id
+                               AND p.trade_date = n.trade_date
+        WHERE n.trade_date <= %(trade_date)s AND n.available_at <= %(as_of)s
     ),
     v_cohort AS (
         SELECT e.instrument_id, e.trade_date, e.source_event_id, e.event_type_code,

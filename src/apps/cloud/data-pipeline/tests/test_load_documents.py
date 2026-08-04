@@ -70,27 +70,53 @@ class _FakeCursor:
             self.rowcount = 0 if key in self._conn.documents else 1
             self._conn.documents.setdefault(key, params[0])   # DO NOTHING = 기존 id 가 남는다
         elif head.startswith("INSERT INTO NEWS_DOCUMENT"):
+            # lead_text 와 publisher(ALPHA-695)는 같은 UPSERT 패턴의 **별도 문**이다 —
+            # 컬럼명으로 갈라 각자의 저장소에 쌓는다. 한 저장소에 섞으면 한쪽 회귀가
+            # 다른 쪽 단언을 초록으로 가린다.
+            column = "publisher" if "PUBLISHER)" in head else "lead_text"
+            if "DO UPDATE" in head:
+                # UPSERT 의 SET 컬럼이 INSERT 컬럼과 갈리면(복붙 오류) 실제 PG 는 충돌
+                # 행에서 엉뚱한 컬럼을 덮는데, 컬럼별 저장소만 보는 픽스처는 그걸 초록으로
+                # 가린다 — 여기서 터뜨려 이유를 말한다.
+                assert f"SET {column.upper()} = EXCLUDED.{column.upper()}" in head, (
+                    f"UPSERT SET 컬럼이 INSERT 컬럼({column})과 다르다: {flat}")
             # 계산값을 그대로 넣는 옛 형태(VALUES)도 해석한다 — 그쪽으로 되돌아가면 픽스처가
             # 터지는 대신 **갈린 id 가 값으로 드러나** 회귀 테스트가 실패 이유를 말해 준다.
             if " VALUES " in head:
-                document_id, lead_text = params
+                document_id, value = params
             else:
-                lead_text, source_code, source_document_id = params
+                value, source_code, source_document_id = params
                 document_id = self._conn.documents.get((source_code, source_document_id))
             if not document_id:
                 self.rowcount = 0            # 서브쿼리가 0행 — 넣을 대상 자체가 없다
                 return
-            # `ON CONFLICT (document_id) DO UPDATE ... WHERE lead_text IS DISTINCT FROM`:
+            # 행 존재를 모델링한다 — 일반 기사는 lead_text 문이 행을 먼저 만들어 publisher
+            # 문이 **항상 충돌 경로**로 실행된다. DO UPDATE 가 DO NOTHING 으로 회귀하면
+            # 실제 PG 는 충돌 행을 손대지 않는다 — 픽스처도 같은 결과를 내야 그 회귀가
+            # 초록으로 숨지 않는다.
+            if (document_id in self._conn.news_document_ids
+                    and "DO UPDATE" not in head):
+                self.rowcount = 0
+                return
+            store = (self._conn.publishers if column == "publisher"
+                     else self._conn.lead_texts)
+            rows = (self._conn.news_document_publishers if column == "publisher"
+                    else self._conn.news_documents)
+            # `ON CONFLICT (document_id) DO UPDATE ... WHERE <컬럼> IS DISTINCT FROM`:
             # 이미 같은 값이면 Postgres 는 **0행**을 돌려준다. 픽스처가 늘 1을 주면
-            # lead_text_written 이 멱등 재실행에서 부풀어도 초록으로 통과한다. 그 WHERE 가
-            # 실제로 SQL 에 있는지까지 본다 — 절을 지우면 같은 값도 UPDATE 돼 1행이 된다.
-            if (self._conn.lead_texts.get(document_id, _ABSENT) == lead_text
-                    and "IS DISTINCT FROM" in head):
+            # *_written 이 멱등 재실행에서 부풀어도 초록으로 통과한다. 그 WHERE 가
+            # **자기 컬럼을 대상으로** 실제로 SQL 에 있는지까지 본다 — 절을 지우거나
+            # 다른 컬럼으로 복붙하면 같은 값도 UPDATE 돼 1행이 되고, unchanged 카운터
+            # 테스트가 부풂으로 잡는다.
+            guard = (f"WHERE NEWS_DOCUMENT.{column.upper()}"
+                     f" IS DISTINCT FROM EXCLUDED.{column.upper()}")
+            if store.get(document_id, _ABSENT) == value and guard in head:
                 self.rowcount = 0
                 return
             self.rowcount = 1
-            self._conn.lead_texts[document_id] = lead_text
-            self._conn.news_documents.append((document_id, lead_text))
+            store[document_id] = value
+            rows.append((document_id, value))
+            self._conn.news_document_ids.add(document_id)
 
     def __enter__(self):
         return self
@@ -114,6 +140,12 @@ class _FakeConn:
         # document_id → 기존 news_document.lead_text. `assemble_events` 가 id 만 먼저 넣어둔
         # 행은 None 으로 심는다 — 그게 UPSERT 가 존재하는 이유다.
         self.lead_texts: dict[str, str | None] = dict(lead_texts or {})
+        # publisher 는 lead_text 와 같은 UPSERT 규칙의 별도 축(ALPHA-695).
+        self.publishers: dict[str, str | None] = {}
+        self.news_document_publishers: list[tuple[str, str]] = []
+        # news_document 행의 존재 집합 — 충돌(ON CONFLICT) 경로 모델링의 근거.
+        # lead_texts 로 미리 심은 행도 존재하는 행이다.
+        self.news_document_ids: set[str] = set(self.lead_texts)
 
     def cursor(self):
         return _FakeCursor(self)
@@ -353,6 +385,52 @@ def test_lead_text_is_loaded_into_news_document(tmp_path, monkeypatch):
     assert document_id == _inserts(conn)[0][0]  # document 와 같은 결정적 id 로 붙는다
 
 
+def test_publisher_is_loaded_into_news_document(tmp_path, monkeypatch):
+    """canonical `publisher`(언론사)가 news_document.publisher 로 실려야 한다 (ALPHA-695).
+
+    WHY: 정규화가 벤더별 필드를 표준행 `publisher` 로 살려 오는데 적재가 안 담으면
+    원장의 출처 축이 수집 벤더(bigkinds) 하나로 접힌다 — 콘솔 문서 목록·언론사별
+    유실 진단이 전부 불가능해진다. lead_text 없이 publisher 만 있어도 실려야 한다
+    (품질 게이트가 둘을 각각 non-blocking 경고로 두는 것과 같은 독립성).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text=None, publisher="한국경제")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.news_documents == []            # lead_text 문은 나가지 않았다
+    [(document_id, publisher)] = conn.news_document_publishers
+    assert publisher == "한국경제"
+    assert document_id == _inserts(conn)[0][0]  # document 와 같은 결정적 id 로 붙는다
+
+
+def test_publisher_upsert_survives_the_row_lead_text_created_first(tmp_path, monkeypatch):
+    """lead_text 문이 먼저 만든 news_document 행과 충돌해도 publisher 가 실린다 (ALPHA-695).
+
+    WHY: 일반 기사는 둘 다 있어 publisher 문은 **항상 충돌 경로(DO UPDATE)** 로
+    실행된다 — 이게 이 문의 주경로다. `ON CONFLICT DO NOTHING` 으로 회귀하면 실제
+    PG 는 충돌 행을 손대지 않아 publisher 가 영영 안 채워진다. 픽스처가 행 존재를
+    모델링하므로 그 회귀는 여기서 빨갛게 드러난다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="리드문", publisher="한국경제")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    [(doc_id, lead_text)] = conn.news_documents
+    [(pub_doc_id, publisher)] = conn.news_document_publishers
+    assert (lead_text, publisher) == ("리드문", "한국경제")
+    assert doc_id == pub_doc_id                  # 같은 행에 붙는다
+
+
 def test_lead_text_is_filled_even_when_document_already_exists(tmp_path, monkeypatch):
     """document 가 이미 있어도(rowcount 0) 스니펫은 채운다.
 
@@ -412,6 +490,30 @@ def test_unchanged_lead_text_is_not_counted_as_written(tmp_path, monkeypatch):
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["lead_text_written"] == 0
     assert _news_doc_inserts(conn) == []
+
+
+def test_unchanged_publisher_is_not_counted_as_written(tmp_path, monkeypatch):
+    """publisher 도 같은 값이면 0행 — lead_text 와 같은 unchanged 규칙 (ALPHA-695).
+
+    WHY: `publisher_written` 이 멱등 재실행마다 전건으로 부풀면 "이번 런이 실제로
+    채운 건수"라는 로그 계약이 거짓이 된다. 픽스처의 IS DISTINCT FROM guard 가
+    **자기 컬럼**을 볼 때만 0행을 주므로, WHERE 절이 다른 컬럼으로 복붙되는 회귀도
+    이 테스트의 부풂(1≠0)으로 드러난다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text=None, publisher="한국경제")])
+    conn = _FakeConn(existing=[("bigkinds", "a1")])
+    conn.publishers["doc_pre0"] = "한국경제"
+    conn.news_document_ids.add("doc_pre0")
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db()) == 0
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["publisher_written"] == 0
+    assert conn.news_document_publishers == []
 
 
 def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch):

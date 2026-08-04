@@ -2,8 +2,10 @@ package com.edge.tenantsync.contract;
 
 import com.edge.tenantsync.dto.BundleEntry;
 import com.edge.tenantsync.dto.EventBundle;
+import com.edge.tenantsync.dto.EvidenceItem;
 import com.edge.tenantsync.dto.ExplanationResult;
 import com.edge.tenantsync.dto.ExplanationRun;
+import com.edge.tenantsync.dto.SourceEventItem;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
@@ -54,9 +56,18 @@ class EventBundleContractTest {
 				LocalDate.parse("2026-07-15"), Instant.parse("2026-07-15T09:00:00Z"),
 				"EVENT_SUPPORTED", "요약", "MEDIUM", "t1");
 		ExplanationRun run = new ExplanationRun("run1", "v1");
+		// source_events·evidences 는 실 조립 형상(SourceEventItem·EvidenceItem)으로 싣는다
+		// (ALPHA-718) — event_date·title·published_at 이 null 이어도 키 자체는 required 라
+		// 직렬화에서 생략되면 계약 위반으로 여기서 잡힌다. lineage 없는 NEW(빈 배열)도 함께
+		// 직렬화한다 — include 정책이 NON_EMPTY 로 바뀌어 빈 배열 키가 생략되는 회귀를 잡는다.
 		EventBundle bundle = EventBundle.of(1L, List.of(
-				BundleEntry.newResult(101, result, run, List.of(), List.of()),
-				BundleEntry.correction(102, "r0", "근거 공시 정정", result, run),
+				BundleEntry.newResult(101, result, run, List.of(
+						new SourceEventItem("se1", "NEWS", "EARNINGS", "2026-07-14"),
+						new SourceEventItem("se2", "DISCLOSURE", "SUPPLY_CONTRACT", null)), List.of(
+						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z",
+								"https://news.example.com/a1"),
+						new EvidenceItem("DISCLOSURE", null, "DART", null, null))),
+				BundleEntry.newResult(102, result, run, List.of(), List.of()),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 
 		// @JsonNaming 가드레일: BundleSerializer 제거(ADR-0040) 후엔 DTO의 @JsonNaming 이 유일한 snake_case
@@ -82,8 +93,25 @@ class EventBundleContractTest {
 	}
 
 	@Test
+	void 폐지된_CORRECTION_형상은_계약에서_거부된다() {
+		// ADR-0044 — 전달 유형은 NEW·INVALIDATION 2형상뿐이다. 구 CORRECTION 형상(대상·사유
+		// + 재게시 본체)이 계약을 통과하면 폐지가 와이어에서 강제되지 않는다.
+		String correction = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":102,"cursor_to":102,
+				 "entries":[{"cursor":102,"delivery_type":"CORRECTION","target_explanation_result_id":"r0",
+				   "reason":"근거 공시 정정",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],"evidences":[]}]}""";
+
+		assertThat(schema.validate(correction, InputFormat.JSON))
+				.as("폐지된 CORRECTION 형상은 거부되어야 한다(ADR-0044)").isNotEmpty();
+	}
+
+	@Test
 	void populated_flat_형상도_통과한다() {
-		// ALPHA-363 조립 조인 구현 후 채워질 source_events·evidences(flat) 형상도 계약이 수용해야 한다.
+		// 조립 조인(ALPHA-718)이 채우는 source_events·evidences(flat) 형상을 계약이 수용해야 한다.
 		String populated = """
 				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
 				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
@@ -94,7 +122,24 @@ class EventBundleContractTest {
 				   "evidences":[{"kind":"DISCLOSURE","title":"삼성전자 공급계약 공시","source":"DART","published_at":"2026-07-14T09:00:00Z"}]}]}""";
 
 		assertThat(schema.validate(populated, InputFormat.JSON))
-				.as("363 후 populated flat 형상도 통과해야 한다").isEmpty();
+				.as("populated flat 형상도 통과해야 한다(ALPHA-718)").isEmpty();
+	}
+
+	@Test
+	void 근거의_미지_키는_거부된다() {
+		// EvidenceItem 은 additionalProperties: false 다 — source_url 같은 오타 키가 조용히
+		// 수용되면 소비자(콘솔 파서)는 결측으로 읽어 링크가 소리 없이 사라진다(ALPHA-739).
+		String unknownKey = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
+				 "entries":[{"cursor":101,"delivery_type":"NEW",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],
+				   "evidences":[{"kind":"DISCLOSURE","title":"공시","source":"DART","published_at":null,"source_url":"https://dart.fss.or.kr/x"}]}]}""";
+
+		assertThat(schema.validate(unknownKey, InputFormat.JSON))
+				.as("EvidenceItem 의 미지 키는 거부되어야 한다(additionalProperties: false)").isNotEmpty();
 	}
 
 	@Test

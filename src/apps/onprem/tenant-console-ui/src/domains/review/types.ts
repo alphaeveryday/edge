@@ -14,9 +14,6 @@ export interface ReviewItem {
   headline: string | null;
   confidenceLevel: string | null;
   status: string;
-  /** 정정 리비전이면 원본 항목 id·정정 사유(검수 맥락) */
-  supersedesItemId: string | null;
-  correctionReason: string | null;
   receivedAt: string | null;
   /** screening_check(result=REVIEW)의 rule_type 파생 */
   reviewReasons: string[];
@@ -28,6 +25,8 @@ export interface ReviewEvidence {
   title: string;
   source: string;
   publishedAt: string | null;
+  /** 원문 링크(ALPHA-739) — 계약상 optional, 결측이면 null(일반 텍스트 폴백). */
+  sourceUri: string | null;
 }
 
 export interface ReviewCheck {

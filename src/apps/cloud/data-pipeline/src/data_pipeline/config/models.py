@@ -278,7 +278,10 @@ class DartDisclosureSource(BaseModel):
     (list.json)과 공시서류 원본(document.xml)을 다룬다. api_key 는 커밋되는 파일이 아니라
     환경변수로 주입한다:
         DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
-    corp_code 는 OpenDART corpCode.xml 로 런타임 매핑한다(재무 소스와 동형).
+
+    ⚠️ 재무 소스와 달리 **corp_code 매핑을 쓰지 않는다** — 날짜창의 시장 전체 목록을 받아
+    stock_code 로 거른다(`sources/dart_disclosure.py`). corpCode.xml 은 enrich-corp-code
+    스텝만 쓴다.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -295,7 +298,11 @@ class DartDisclosureSource(BaseModel):
         default_factory=lambda: ["공급계약", "사업보고서"]
     )
     page_count: int = Field(default=100, ge=1, le=100)  # list.json 페이지당 건수(최대 100)
-    max_pages: int = Field(default=10, ge=1, le=100)  # corp·창당 페이지 상한(절단 방지 감사)
+    # 창 전체 페이지 상한 — **폭주 가드**지 절단 정책이 아니다(순회 종료는 total_page 가 정한다).
+    # 종목별 질의를 걷어내면서 축이 corp 당에서 창 전체로 바뀌었다: 시장 전체 공시는 하루
+    # 700~1,070건(실측)이라 기본 증분 창(어제~오늘)만도 ~18 페이지다. 옛 상한 10 을 그대로 두면
+    # **평소 런이 매번 절단**된다. 백필 창(수십 일)도 이 안에 들어오게 넉넉히 잡는다.
+    max_pages: int = Field(default=500, ge=1, le=5000)
 
 
 class NewsConfig(BaseModel):
@@ -363,6 +370,268 @@ class DartDisclosureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: DartDisclosureSource
+
+
+class MinuteRelayConfig(BaseModel):
+    """1분 Outbox Relay 설정 — `relay` 스텝만 쓴다(ALPHA-670).
+
+    큐 URL 은 환경(dev·staging)마다 다르므로 동봉 sources.toml 이 아니라 env 로 온다 —
+    **JSON 한 변수**다(JSON 전체를 홑따옴표로 감싼다 — 안 감싸면 셸이 안쪽 따옴표를
+    먹어 로더가 파싱에 실패한다):
+    `DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{"<destination>":"<url>",…}'`.
+    nested 형태(`…__QUEUE_URLS__<destination>`)는 쓰지 않는다 — destination 이름에
+    하이픈이 있어 셸이 변수 할당으로 파싱하지 못한다(실증: `command not found`).
+    destination 은 outbox 행이
+    들고 있는 값이고(큐 4종: price-analysis-realtime·news-extraction-realtime·
+    news-extraction-backfill + 트리거 설명 price-explanation-realtime — ALPHA-709),
+    매핑에 없는 destination 의 event 는 Relay 가 DEAD 로 격리한다 — 프로세스를
+    죽이면 멀쩡한 다른 큐까지 멈추기 때문이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_urls: dict[NonBlankStr, NonBlankStr]
+    batch_limit: int = Field(default=10, ge=1, le=10)  # SQS SendMessageBatch 상한
+    # 상한을 둔다 — 큰 값(10^15)은 pydantic 을 통과한 뒤 timedelta 범위를 넘겨 claim
+    # 전에 매번 crash 하고, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
+    # 기본 150초 = batch_limit(10) × SQS 호출 예산(15초). 발행이 lease 보다 오래 걸리면
+    # 경쟁 Relay 가 같은 행을 탈취한다(minute/relay.py __post_init__ 이 조합을 검증한다).
+    lease_seconds: int = Field(default=150, ge=15, le=3600)
+    retry_base_seconds: int = Field(default=2, ge=1, le=3600)
+    retry_max_seconds: int = Field(default=300, ge=1, le=86_400)
+    # tick 사이 대기(초). ECS 상주 서비스라 짧게 돈다 — 발행 지연 목표는 수초(v0.7 11.1).
+    # 상한을 둔다: `1e309` 는 inf 로 파싱돼 gt=0 을 통과하고 time.sleep(inf) 가
+    # OverflowError 를 내며, 설정이 그대로면 재기동해도 같은 자리에서 죽는다.
+    tick_seconds: float = Field(default=1.0, gt=0, le=60)
+
+
+class MinuteConsumerConfig(BaseModel):
+    """1분 Consumer 운영 설정 — 현재는 `dlq-reconcile` 만 쓴다(ALPHA-672).
+
+    큐 URL 은 환경마다 다르므로 env 로 온다 — `MINUTE_RELAY__QUEUE_URLS` 와 같은 이유로
+    **JSON 한 변수**다(destination 이름에 하이픈이 있어 nested 형태를 셸이 못 파싱한다).
+    JSON 전체를 홑따옴표로 감싸야 셸이 안쪽 따옴표를 먹지 않는다. 큐 어휘 3종을
+    **전부** 채워야 한다(하나라도 빠지면 그 레인은 아무도 대사하지 않으므로 기동 거부):
+    `DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"<url>",
+    "news-extraction-realtime":"<url>","news-extraction-backfill":"<url>"}'`.
+
+    ⚠️ 여기 **원 큐 URL 을 넣으면 안 된다** — reconciler 가 정상 배달을 전부 "DLQ 도착"
+    으로 읽어 살아 있는 job 을 DEAD 로 만든다. 그래서 `dlq-reconcile` 은 relay 큐 매핑을
+    함께 요구하고 겹치면 기동을 거부한다(minute/consumer.py).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 빈 매핑은 거부한다 — 검증을 통과한 뒤 reconciler 가 큐를 하나도 안 보고 성공으로
+    # 끝나, 실제 DLQ 의 non-terminal job 이 남아도 운영 게이트가 초록이 된다(Rule 12).
+    dlq_urls: dict[NonBlankStr, NonBlankStr] = Field(min_length=1)
+    batch_size: int = Field(default=10, ge=1, le=10)  # SQS ReceiveMessage 상한
+    wait_seconds: int = Field(default=20, ge=0, le=20)  # long polling 상한
+    # 대사 중 그 메시지를 다른 실행이 다시 집지 않을 만큼만. 지우지 않으므로 이 시간이
+    # 지나면 다시 보인다(판정은 멱등이라 무해하다).
+    visibility_seconds: int = Field(default=60, ge=1, le=43_200)
+
+
+class MinutePriceWorkerConfig(BaseModel):
+    """1분 Price Worker 상주 설정 — `price-worker` 스텝만 쓴다(ALPHA-706).
+
+    자격증명은 커밋되는 파일이 아니라 환경변수로 주입한다. **소스마다 쌍이 다르다** —
+    한 쌍으로 겸용하면 어느 벤더의 키가 들었는지 이름이 말해주지 않는다:
+        source=kis  → DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY / __APP_SECRET
+        source=toss → DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID / __CLIENT_SECRET
+    universe 파일 경로는 설정이 아니라 CLI 인자(`--universe`)다 — planner
+    (`plan-minute-session`)와 같은 파일을 받아야 원장 universe 와 일치한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str | None = None  # 비밀값(토스): env 오버라이드 전용
+    client_secret: str | None = None  # 비밀값(토스): env 오버라이드 전용
+    app_key: str | None = None  # 비밀값(KIS): env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값(KIS): env 오버라이드 전용
+    # 기본은 kis 다(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다.
+    # ⚠️ terraform `minute_session_source_group` 과 **같은 값**이어야 한다(session_id 유도 축).
+    source: NonBlankStr = "kis"
+    # KIS 호출 간격(초). 실측 상한은 14.8 req/s(≈0.068초)지만 그 유량은 **앱키 단위 전역**
+    # 이라 15:40 배치의 kis 스텝과 나눠 쓴다 — 기본은 12 req/s 로 마진을 두고, 경합이
+    # 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지 않는다(어댑터가 자기 상수).
+    min_interval_sec: float = Field(default=0.08, gt=0, le=5)
+    # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
+    # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
+    # 안 드러난다.
+    trigger_schema_version: NonBlankStr
+    destination: NonBlankStr = "price-analysis-realtime"
+    # 한 콜로 몇 분까지 거슬러 받을지(TossPriceCollector.lookback, count 상한 200)
+    lookback: int = Field(default=1, ge=1, le=200)
+    # window claim lease — tick 최악 소요 **위**여야 한다(아래 검증의 75초/window 축).
+    # 짧으면 자기 claim 이 in-flight 중 만료돼 recovery lane 이 같은 window 를 재청구하고
+    # 원래 attempt 의 commit 이 통째로 거부된다(ALPHA-706 — 하한 90 이 그 가드다).
+    lease_seconds: int = Field(default=300, ge=90, le=3600)
+    session_lease_seconds: int = Field(default=300, ge=60, le=3600)
+    heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
+    # 하한 1 — DRAINING 수렴은 recovery lane 만 연다(만료 고아 CLAIMED 회수). 0 이면
+    # 실패 잔존 CLAIMED 를 아무도 회수하지 못해 ack_drain 이 영구 거부되고 세션이
+    # DRAINING 에 고착된다(worker.tick 의 drain 분기).
+    recovery_budget_per_tick: int = Field(default=2, ge=1, le=50)
+    # IDLE/DRAINING 일 때 tick 사이 대기(초). window 는 60초마다 생기므로 짧은 폴링이면
+    # 충분하다. 상한을 둔다 — inf 는 time.sleep 에서 OverflowError(MinuteRelayConfig 동형).
+    tick_seconds: float = Field(default=5.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _leases_cover_worst_tick(self) -> MinutePriceWorkerConfig:
+        """lease 는 **한 tick 의 최악 소요** 위여야 한다.
+
+        한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
+        claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
+        tick 안에서 시계를 다시 읽지 않는다). window 하나의 여유를 75초로 잡는다(토스
+        실측 73초+ 가 근거였고, KIS 는 400종 ÷ 12 req/s ≈ 33초라 같은 상수 아래로
+        들어온다 — ALPHA-735). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
+        attempt 가 탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
+        tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
+
+        ⚠️ 75초/window 는 **하한 가드지 상한 증명이 아니다** — 재시도(콜당 최대 3회)·
+        timeout(10초) 폭주가 겹치면 한 window 가 이를 넘을 수 있다. 그 경우에도
+        정확성은 claim/fence CAS 가 지킨다(탈취된 attempt 의 commit 이 거부될 뿐,
+        이중 커밋은 없다) — 이 검증은 명백히 틀린 설정을 배포 전에 거르는 장치다.
+        """
+        worst_tick = (1 + self.recovery_budget_per_tick) * 75
+        if self.lease_seconds < worst_tick:
+            raise ValueError(
+                f"lease_seconds({self.lease_seconds}) < tick 최악 소요({worst_tick}초 = "
+                f"(1+recovery_budget {self.recovery_budget_per_tick}) × 75) — "
+                "in-flight claim 이 만료된다. budget 을 줄이거나 lease 를 늘려라"
+            )
+        # fence 갱신은 tick 경계에서만 된다 — 최악은 "직전 갱신 후 heartbeat 주기
+        # 직전(주기−ε)에 시작한 tick 이 최악 소요만큼 도는" 경우라, lease 는 두 구간의
+        # 합을 덮어야 한다. 절반 규칙(×2)은 tick 소요를 무시해 이 조합을 통과시킨다.
+        if self.heartbeat_every_seconds + worst_tick > self.session_lease_seconds:
+            raise ValueError(
+                f"session_lease_seconds({self.session_lease_seconds}) < heartbeat 주기"
+                f"({self.heartbeat_every_seconds}) + tick 최악 소요({worst_tick}초) — "
+                "fence 가 처리 중 만료돼 정상 수집이 거부된다"
+            )
+        return self
+
+
+class MinuteNewsWorkerConfig(BaseModel):
+    """1분 News Worker 상주 설정 — `news-worker` 스텝만 쓴다(ALPHA-707).
+
+    엔드포인트·카테고리는 여기 없다 — `[bigkinds_news]`(base_url·category_codes)가
+    정본이고 배치 수집과 공유한다(두 벌이면 카테고리가 한쪽만 바뀌어 배치와 1분 레인이
+    다른 뉴스를 걷는다). 여기는 **1분 루프의 수치**만 둔다.
+
+    pacing(min_interval_sec)·페이지 예산은 ALPHA-645 실측(2026-08-03)이 기본값의 근거다:
+    1분 주기 page1 폴링은 200 연속·RTT p50≈1초대였고, 저녁 신규 유입 0~8건/분이라
+    평시 1page(100건)로 충분하다. 차단 시그니처가 보이면 **이 값을 올리는 게**(간격을
+    벌리는 게) 처방이다 — 재배포 없이 env 로 바꾼다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: NonBlankStr = "bigkinds"
+    destination: NonBlankStr = "news-extraction-realtime"
+    # 페이지 예산 — NewsWorkerConfig(__post_init__)가 조합 검증의 정본이라 여기선
+    # 범위만 건다(recovery ≥ max 는 거기서 걸린다).
+    max_pages: int = Field(default=4, ge=1, le=40)
+    recovery_max_pages: int = Field(default=8, ge=1, le=40)
+    page_size: int = Field(default=100, ge=1, le=100)  # 100 = API 상한(배치와 동일)
+    anchor_size: int = Field(default=10, ge=1, le=100)
+    # 벤더 요청 간격(초) — PoliteClient.min_interval 로 주입되는 pacing 의 정본.
+    min_interval_sec: float = Field(default=1.0, ge=0.2, le=30)
+    # 스파이크에서 단발 read 20초 초과를 실측했다(대부분 1~2.5초) — 기본 10초는 느린
+    # 꼬리를 실패로 접는다. 벤더가 원래 느린 건 KRX(45초)와 같은 성질이다.
+    timeout_sec: float = Field(default=45.0, gt=0, le=120)
+    lease_seconds: int = Field(default=240, ge=30, le=3600)
+    session_lease_seconds: int = Field(default=300, ge=60, le=3600)
+    heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
+    # 가격보다 낮은 기본(1) — backlog window 하나마다 벤더 poll 이 한 번 더 나간다
+    # (차단 위험 축). 밀린 분들의 기사는 anchor 목표 poll 이 어차피 함께 걷는다.
+    recovery_budget_per_tick: int = Field(default=1, ge=1, le=10)
+    tick_seconds: float = Field(default=5.0, gt=0, le=60)
+    # 차단 쿨다운(초) — BlockedFeedError 후 poll 억제 시간(NewsWorkerConfig 로 전달).
+    block_cooldown_seconds: int = Field(default=300, ge=60, le=3600)
+
+    @model_validator(mode="after")
+    def _leases_cover_worst_poll(self) -> MinuteNewsWorkerConfig:
+        """lease 는 한 tick 의 최악 소요 위여야 한다(price 워커의 75초/window 와 같은 축).
+
+        한 tick 은 최대 (1 + recovery_budget) 개 window 를 순차 poll 하고, lagging 이면
+        poll 하나가 recovery_max_pages 페이지를 읽는다. 페이지당 예산은 간격 + RTT 여유
+        5초(스파이크 p50 1.4s·간헐 꼬리는 timeout 이 자른다)로 잡는다 — 정확성은 claim/
+        fence CAS 가 지키므로 이 검증은 명백히 틀린 설정을 배포 전에 거르는 조잡한
+        게이트다(price _leases_cover_worst_tick 과 같은 성질).
+        """
+        page_budget = self.min_interval_sec + 5.0
+        # poll 당 timeout 1회 정체를 허용치에 넣는다(스파이크에서 단발 read 초과 실측).
+        # 페이지 전부가 timeout×재시도로 정체하는 폭주까지는 안 덮는다 — 그 경우의
+        # 정확성은 claim/fence CAS 가 지킨다(price 검증자의 "하한 가드" 단서와 동일).
+        worst_poll = self.recovery_max_pages * page_budget + self.timeout_sec
+        worst_tick = (1 + self.recovery_budget_per_tick) * worst_poll
+        if self.lease_seconds < worst_tick:
+            raise ValueError(
+                f"lease_seconds({self.lease_seconds}) < tick 최악 소요({worst_tick:.0f}초 = "
+                f"(1+budget {self.recovery_budget_per_tick}) × recovery_max_pages "
+                f"{self.recovery_max_pages} × 페이지 예산 {page_budget:.1f}s) — "
+                "in-flight claim 이 만료된다. 페이지 예산을 줄이거나 lease 를 늘려라"
+            )
+        if self.heartbeat_every_seconds + worst_tick > self.session_lease_seconds:
+            raise ValueError(
+                f"session_lease_seconds({self.session_lease_seconds}) < heartbeat 주기"
+                f"({self.heartbeat_every_seconds}) + tick 최악 소요({worst_tick:.0f}초) — "
+                "fence 가 처리 중 만료돼 정상 수집이 거부된다"
+            )
+        return self
+
+
+class MinutePriceConsumerConfig(BaseModel):
+    """1분 가격 판정 Consumer 상주 설정 — `price-consumer` 스텝만 쓴다(ALPHA-711).
+
+    kernel 수치(batch·visibility·heartbeat·lease·재시도)는 여기서 **검증하지 않는다**
+    — `minute.consumer.ConsumerConfig.__post_init__` 가 조합 검증의 정본이다(두 벌이면
+    한쪽만 고쳐진다). 임계(abs_threshold)는 `price_triggers` 섹션을 재사용한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_url: NonBlankStr
+    # 판정 규칙의 identity 축 — 일 단위(prev_close 대비)와 축이 달라 기본값을 두지
+    # 않는다(배포마다 조용히 같은 값이면 규칙 변경이 identity 에 안 드러난다)
+    detection_policy_version: NonBlankStr
+    destination: NonBlankStr = "price-explanation-realtime"
+    batch_size: int = 10
+    wait_seconds: int = 20
+    visibility_seconds: int = 300
+    heartbeat_seconds: int = 60
+    max_concurrency: int = 1
+    lease_seconds: int = 600
+    retry_base_seconds: int = 5
+    retry_max_seconds: int = 900
+    max_attempts: int = 5
+
+
+class MinuteNewsConsumerConfig(BaseModel):
+    """1분 뉴스 추출 Consumer 상주 설정 — `news-consumer` 스텝만 쓴다(ALPHA-713).
+
+    kernel 수치는 여기서 검증하지 않는다 — `minute.consumer.ConsumerConfig.__post_init__`
+    가 조합 검증의 정본이다(MinutePriceConsumerConfig 와 같은 단서). LLM 자격증명은
+    이 섹션이 아니라 env(`LLM_API_KEY` 등, tag-news 관례)다 — 커밋되는 TOML 금지.
+
+    queue_url 이 **하나**인 이유: realtime·backfill 은 핸들러가 같고 큐만 달라,
+    같은 스텝을 큐 URL 만 바꿔 서비스 2개로 띄운다(커널 무수정 — ConsumerConfig 동형).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_url: NonBlankStr
+    batch_size: int = 10
+    wait_seconds: int = 20
+    visibility_seconds: int = 300
+    heartbeat_seconds: int = 60
+    max_concurrency: int = 1
+    lease_seconds: int = 600
+    retry_base_seconds: int = 5
+    retry_max_seconds: int = 900
+    max_attempts: int = 5
 
 
 class PriceTriggersConfig(BaseModel):

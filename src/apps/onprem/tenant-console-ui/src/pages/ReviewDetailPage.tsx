@@ -9,6 +9,7 @@ import {
 } from '../domains/review';
 import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
+import { isHttpUrl } from './_shared/links';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
 
@@ -99,20 +100,6 @@ export function ReviewDetailPage() {
         </span>
       </div>
 
-      {it.supersedesItemId && (
-        <div
-          className="rounded-[5px] p-3"
-          style={{ border: '1px solid var(--border-strong)', background: 'var(--bg-sunken)' }}
-        >
-          <div className="t-label mb-1.5">정정 리비전</div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.6 }}>
-            원본 <span className="num">{it.supersedesItemId}</span> 의 정정본입니다
-            {it.correctionReason ? ` — 사유: ${it.correctionReason}` : ''}.
-            {inReview ? ' 승인 전까지 자동 노출되지 않습니다.' : ''}
-          </div>
-        </div>
-      )}
-
       {(it.reviewReasons.length > 0 || reviewChecks.length > 0) && (
         <div
           className="rounded-[5px] p-3"
@@ -164,7 +151,16 @@ export function ReviewDetailPage() {
             {it.evidences.map((e, i) => (
               <tr key={i}>
                 <td>{EVIDENCE_KIND_LABEL[e.kind] ?? e.kind}</td>
-                <td>{e.title}</td>
+                <td>
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
+                  {e.sourceUri && isHttpUrl(e.sourceUri) ? (
+                    <a href={e.sourceUri} target="_blank" rel="noopener noreferrer">
+                      {e.title}
+                    </a>
+                  ) : (
+                    e.title
+                  )}
+                </td>
                 <td className="col-muted">{e.source}</td>
                 <td className="col-muted num">
                   {e.publishedAt ? new Date(e.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}

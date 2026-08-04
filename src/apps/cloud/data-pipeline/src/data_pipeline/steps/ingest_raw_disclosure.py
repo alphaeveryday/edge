@@ -1,10 +1,37 @@
-"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존·dedup 없음).
+"""공시(disclosure) Step1 — 원본저장 (raw 존 append, 전부 보존).
 
-OpenDART 공시목록(list.json)을 corp_code × 날짜창으로 수집해 market 별 ingest_date 파티션
-(수집일) ndjson 으로 raw 존에 append 하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML
-ZIP)을 rcept_no 별 객체로 무변형 저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
+⚠️ 한 가지 예외가 있다: 소스가 **한 순회 안에서 완전히 같은 행**을 접는다. 목록이 수집 중에도
+자라 페이지 경계가 밀리면 같은 행이 두 페이지에 나오는데, 그걸 그대로 두면 같은 문서를 두 번
+내려받는다. 접히는 건 내용이 전부 같은 행뿐이라 증거는 잃지 않지만, 그래서 `list_rows_seen`
+(벤더가 건넨 행 수)과 raw 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이다.
+정체성 병합·정정 판정 같은 **서로 다른 관측을 접는 일**은 여전히 하지 않는다(canonical 소관).
 
-⚠️ 뉴스형 판정: 특정 corp 의 날짜창에 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
+OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집해(종목별 질의 아님 —
+`sources/dart_disclosure.py`) market 별 ingest_date 파티션(수집일) ndjson 으로 raw 존에 append
+하고, 각 대상 공시의 서류 원본(document.xml, euc-kr HTML ZIP)을 rcept_no 별 객체로 무변형
+저장한다 — 뉴스(ingest_raw)와 동형인 **bronze 통일 규약**이다.
+
+⚠️ **이 스텝은 완전성을 판정하지 않는다.** 소스가 남기는 `list_total_count`·`list_rows_seen`
+은 창 규모의 **관측**이지 판정이 아니다 — 목록은 수집 중에도 자라(접수 피크 16시) 페이지
+경계가 밀리므로, 둘의 차이가 절단인지 유입인지 구분되지 않는다. 실제 완전성 근거는 같은
+날짜창을 다시 읽는 **다음 런과의 rcept_no 집합 비교**이고, 그 판정 주체는 원장·EOD 다.
+
+⚠️ **틱 멱등은 본문에만 건다**(ALPHA-720). 증분 커서가 없어 매 실행이 날짜창 전체를 다시
+읽으므로, 장중 레인처럼 같은 날 여러 번 돌면 **같은 `document.xml` ZIP 을 슬롯 수만큼
+내려받는다**. 그래서 수집일 전후(UTC 오늘·어제)에 이미 저장된 본문 객체를 seen-map 으로
+읽어 두고, 히트한 `rcept_no` 는 받지 않고 메타 행의 `document_raw_path` 를 **기존 키**로
+채운다(정제가 그 ZIP 을 그대로 연다).
+
+메타(ndjson)는 **접지 않는다** — 매 실행이 자기 run_id 파티션에 창 전체 관측을 남기는 것이
+이 소스의 유일한 완전성 근거이고(위 문단), 메타까지 접으면 런 사이 rcept_no 집합 비교 대상이
+사라져 근거를 스스로 없앤다. 본문 재다운로드만 없어지고 증거는 그대로다.
+
+⚠️ 장중 잦은 실행(미니배치)을 붙이면 그 레인은 **원장 밖**이라 침묵을 아무도 못 본다 —
+슬롯도 expected_task 도 없어 "1시간째 0건"을 판정할 주체가 없다. 백스톱은 15:40 일일 런이다:
+같은 날짜창을 다시 훑으므로 데이터 구멍은 그날 안에 메워지고 그 런은 원장 안에 있다. 즉
+**구멍은 안 생기고 지연만 EOD 까지 늘어난다.** 장중 침묵을 장중에 알아야 하면 별도 장치다.
+
+⚠️ 뉴스형 판정: 날짜창에 대상 공시가 0건인 건 정상이다(그날 대상 유형 공시 없음).
 재무제표(ingest_raw_financial)의 "매핑 대상 있는데 0행=error" 가드는 두지 않는다(Rule 7 — 스텝별
 판정). 메타 행은 전부 보존하고, 본문 수집이 실패해도 메타는 남긴다(bronze — 정체성 병합·정정
 판정·corp_code↔ticker bridge 는 후속 canonical 소관).
@@ -15,12 +42,13 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ..config import Settings
 from ..lake import (
     Storage,
     collection_log_key,
+    raw_disclosure_day_prefix,
     raw_disclosure_document_key,
     raw_disclosure_partition,
 )
@@ -33,6 +61,49 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "ingest_raw_disclosure"
 DATASET = "disclosures"  # collection_log·raw 파티션의 dataset= 키
 DisclosureSourceAdapter = DartDisclosureSource
+
+# seen-map 을 만들 때 훑는 수집일 수(오늘 포함, 과거로). 2 인 이유는 파티션 축이 UTC 이기
+# 때문이다: `ingest_date` 는 `datetime.now(timezone.utc)` 의 날짜라 KST 09:00 = UTC 00:00 에서
+# 갈린다 — 한 KR 영업일의 슬롯들이 두 UTC 날짜에 흩어지므로 하루만 보면 오전 슬롯이 받아 둔
+# 본문을 오후 슬롯이 못 찾는다.
+_DOC_LOOKBACK_DAYS = 2
+
+
+def _existing_documents(
+    storage: Storage, vendor: str, market: str, started_date: str
+) -> dict[str, str]:
+    """이미 받아 둔 본문 객체 → `{rcept_no: key}` (ALPHA-720).
+
+    같은 수집일의 **모든 run_id** 를 훑는다 — 슬롯마다 run_id 가 다르므로 자기 파티션만 보면
+    아무것도 못 찾는다. 히트한 문서는 다시 받지 않고 메타가 이 키를 가리킨다.
+
+    **본문 fetch 가 실패해 객체가 없는 건은 여기 안 들어와 다음 실행이 자동 재시도한다** —
+    별도 재시도 장치를 두지 않는 이유다(실패 목록을 따로 들고 다니면 그게 또 하나의 상태다).
+
+    ponytail: 조회 범위가 수집일 2일 고정이라 그보다 오래된 창의 백필(`--from 2026-01-01`)은
+    여전히 재다운로드한다. 창 폭에 비례하는 LIST 를 피하려는 의도적 상한이고 기존 동작과
+    같다 — 넓은 창의 재다운로드가 실제로 문제가 되면 창에서 수집일 후보를 뽑는 쪽으로 넓혀라.
+    """
+    day = date.fromisoformat(started_date)
+    found: dict[str, str] = {}
+    # 과거 → 오늘 순. 같은 rcept_no 가 여러 날에 있으면 최신 키가 남는다(어느 쪽이든 같은
+    # 바이트지만, 오래된 파티션이 먼저 지워지는 보존정책에서 최신이 더 오래 산다).
+    for offset in range(_DOC_LOOKBACK_DAYS - 1, -1, -1):
+        prefix = raw_disclosure_day_prefix(
+            vendor, market, (day - timedelta(days=offset)).isoformat()
+        )
+        for key in storage.list_keys(prefix):
+            # **읽는 쪽의 수용 집합 = 쓰는 쪽(raw_disclosure_document_key)의 출력 집합.**
+            # "이 프리픽스 아래 아무 .zip" 으로 잡으면 나중에 이 파티션에 다른 객체를 두는
+            # 순간(격리본·아카이브 등) 그게 조용히 본문으로 인정돼, 정제가 엉뚱한 ZIP 을 연다.
+            # 빈 이름(`documents/.zip`)도 여기서 걸러 seen-map 에 빈 키가 생기지 않게 한다.
+            _, sep, name = key.rpartition("/documents/")
+            if not sep or "/" in name or not name.endswith(".zip"):
+                continue
+            rcept_no = name.removesuffix(".zip")
+            if rcept_no:
+                found[rcept_no] = key
+    return found
 
 
 def run(
@@ -81,7 +152,11 @@ def run(
     # 버퍼링했다가 저장 단계에서 한 번에 쓴다 — put 실패를 한 곳에서 계약대로 처리하려는 것.
     partitions: dict[str, list[dict]] = defaultdict(list)
     doc_failures: list[dict] = []
-    fetched = documents_saved = 0
+    # market → 이미 받아 둔 본문 색인. 시장이 실제로 나올 때 처음 만든다(안 나온 시장의
+    # 프리픽스를 LIST 하지 않게). 저장 성공분을 여기 되먹여, 한 창 안에서 같은 rcept_no 의
+    # 서로 다른 관측(rm ""→"정")이 두 번 와도 본문은 한 번만 받는다.
+    doc_index: dict[str, dict[str, str]] = {}
+    fetched = documents_saved = documents_reused = 0
     status, error, reason = "success", None, None
     exit_code = 0
 
@@ -94,9 +169,11 @@ def run(
         # try 안 — "결과는 항상 collection_log" 계약을 지킨다. 얼마나 더해졌는지는 로그로.
         #
         # ETF 자기 티커는 **출처와 무관하게** 뺀다: holdings 파생분만 걸러선 부족하고, 정적
-        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라
-        # corpCode.xml 에 없어, 남겨두면 매 런 미매핑으로 잡혀 ops.failed_records>0 →
-        # 원장이 영구 INCOMPLETE 가 된다(`ops/wrapper.py`). 결측이 아닌 것을 결측으로 세는 셈.
+        # targets 에도 091160(KODEX 반도체)이 등재돼 있다. ETF 는 DART 신고자가 아니라 공시가
+        # 나올 수 없다 — 남겨두면 유니버스(planned_symbols)만 부풀려 "수집 대상"과 "수집될 수
+        # 있는 것"이 갈린다. (종전엔 여기에 더해 corpCode.xml 미매핑으로 매 런 잡혀
+        # ops.failed_records>0 → 원장 영구 INCOMPLETE 였다. 그 경로는 소스가 종목별 질의를
+        # 걷어내며 사라졌지만, 유니버스를 사실대로 세는 이유는 그대로 남는다.)
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = log["symbols_excluded_etf"] = 0
         if getattr(source, "universe_from_holdings", False):
@@ -115,6 +192,17 @@ def run(
             fetched += 1
             market = record["market"]
             rcept_no = (record.get("rcept_no") or "").strip()
+            if market not in doc_index:
+                doc_index[market] = _existing_documents(storage, vendor, market, started_date)
+            existing_key = doc_index[market].get(rcept_no)
+            if existing_key:
+                # 이미 받아 둔 본문 — 다시 받지 않고 **기존 키를 가리킨다**(ALPHA-720).
+                # 메타 행은 그대로 저장한다(창 전체 관측 보존).
+                record["document_raw_path"] = existing_key
+                record["body_format"] = BODY_FORMAT
+                documents_reused += 1
+                partitions[market].append(record)
+                continue
             # 본문 수집(대상 격리) — 실패해도 메타는 보존한다(bronze). 4xx/429/쿼터는
             # StopFetch 로 전체 중단(부분 수집분은 저장하고 상태로 드러냄).
             try:
@@ -139,6 +227,7 @@ def run(
                 record["document_raw_path"] = doc_key
                 record["body_format"] = BODY_FORMAT
                 documents_saved += 1
+                doc_index[market][rcept_no] = doc_key
             partitions[market].append(record)
     except StopFetch as exc:
         logger.error("공시 수집 중단(4xx/429): %s", exc)
@@ -164,15 +253,19 @@ def run(
     # list 실패(source.fetch_failures)와 본문 실패(doc_failures)를 합쳐 판정한다.
     #  - 저장분 있고 일부 실패 → partial(메타는 있으나 온전치 않음: 본문 결측 등)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
-    #  - MAX_PAGES 목록 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로
-    #    본다(ALPHA-351). 본문 실패(doc_failures)는 kind 없음 = 진짜 실패라 그대로 partial.
-    #  - corpCode 미매핑(kind=unmapped)도 exit code 상으로는 성공으로 본다(ALPHA-477):
-    #    재시도로 낫지 않는 미매핑이라 런을 죽이면 다음 런도 같은 이유로 죽는다. 다만
-    #    failed_targets·ops.failed_records 에는 그대로 남아 원장이 유실을 계속 본다
-    #    (data_status=INCOMPLETE). 커버리지 구멍은 사실대로 드러낸다 — 조용한 결측 금지.
-    _TOLERATED = {"truncation", "unmapped"}
+    #
+    # ⚠️ **관용 어휘가 없다** — 종전 두 관용(`unmapped`·`truncation`)은 목록 질의가 종목별에서
+    # 창 전체로 바뀌면서 근거가 함께 사라졌다(Rule 7 — 충돌은 평균 내지 말고 하나를 고르고
+    # 이유를 남긴다): `unmapped` 는 소스가 corp_code 를 해소하지 않게 돼 **발생 지점이 없고**,
+    # `truncation` 의 근거("다음 증분 창이 이어받음", ALPHA-351)는 상한이 corp 당 10 페이지이던
+    # 시절 것이라 창 전체가 한 순회인 지금은 성립하지 않는다(상한 도달 = 대량 미수집이고,
+    # 운영자 지정 백필 창은 이어받을 창이 없다).
+    #
+    # 그래서 **관용 필터를 두지 않는다.** 빈 집합으로 남겨두면 아무 일도 안 하면서 유효한
+    # 확장점처럼 보여, 거기 이름을 하나 넣는 것만으로 "특정 실패를 성공 처리"하는 경로가 다시
+    # 조용히 생긴다. `kind` 는 로그의 분류 라벨로만 남는다 — 판정에는 쓰지 않는다.
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
-    real_failures = [f for f in failed_targets if f.get("kind") not in _TOLERATED]
+    real_failures = failed_targets
     if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
@@ -198,9 +291,23 @@ def run(
             "records_fetched": fetched,
             "records_saved": saved,
             "documents_saved": documents_saved,
+            # 이미 있어서 **안 받은** 본문 수(ALPHA-720). 안 세면 "본문이 0건"과 "재다운로드를
+            # 0건으로 줄였다"가 documents_saved=0 하나로 접혀 구분되지 않는다.
+            "documents_reused": documents_reused,
+            # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
+            # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
+            # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
+            "window_from": source.resolved_window[0],
+            "window_to": source.resolved_window[1],
             "records_failed_targets": len(failed_targets),
             "failed_targets": failed_targets,
             "partitions": len(partitions),
+            # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
+            # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
+            # 둘의 차이는 절단일 수도 유입일 수도 있다. 어느 쪽인지 모르는 값으로 완전성을
+            # 단언하지 않고 기록만 남긴다 — 나중에 사람이 볼 수 있게(Rule 12).
+            "list_total_count": getattr(source, "list_total_count", None),
+            "list_rows_seen": getattr(source, "list_rows_seen", 0),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
             # records_out 은 메타 건수(saved)로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
@@ -210,8 +317,10 @@ def run(
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
     logger.info(
-        "ingest_raw_disclosure 완료: status=%s fetched=%d saved=%d docs=%d failed=%d partitions=%d",
-        status, fetched, saved, documents_saved, len(failed_targets), len(partitions),
+        "ingest_raw_disclosure 완료: status=%s fetched=%d saved=%d docs=%d reused=%d"
+        " failed=%d partitions=%d",
+        status, fetched, saved, documents_saved, documents_reused,
+        len(failed_targets), len(partitions),
     )
     return exit_code
 

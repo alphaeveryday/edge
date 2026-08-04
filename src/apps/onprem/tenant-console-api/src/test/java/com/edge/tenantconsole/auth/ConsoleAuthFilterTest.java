@@ -71,8 +71,7 @@ class ConsoleAuthFilterTest {
 		@Override
 		public Optional<AnalysisItemEntity> findById(String id) {
 			return Optional.of(new AnalysisItemEntity(id, "069500", "KODEX 200",
-					LocalDate.of(2026, 7, 22), "요약", null, "LOW", "REVIEW_REQUIRED",
-					null, null, null));
+					LocalDate.of(2026, 7, 22), "요약", null, "LOW", "REVIEW_REQUIRED", null));
 		}
 
 		@Override

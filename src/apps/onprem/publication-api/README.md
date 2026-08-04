@@ -29,7 +29,7 @@
 | `ExplanationService.DISCLAIMER` (상수) | 컴플라이언스 정책 테이블 도입 후 | 테넌트 정책의 기본 안내 문구 조회 |
 | known-tickers allowlist (설정) | 종목 마스터 동기화 도입 후 | DB 기반 상장 판별 |
 | 제공 범위 MARKET 전역 스위치 (`ExplanationService`) | 다중 시장 도입 시 | 시장 식별 컬럼 공급과 함께 종목별 시장 매핑 판정으로 교체 (현행은 KRX 단일 유니버스 전제 [ADR-0024](../../../../docs/adr/0024-scope-domestic-etf.md) 로 XKRX OFF = 전체 차단) |
-| 조회 캐시 TTL-only 무효화 (`ExplanationStore`) | 상태 전이(차단·정정) 무효화 훅 도입 시 | state-machine.md 의 "Publication Cache 제거 + 즉시 비노출" 목표 충족 — 현행은 TTL(3s)이 반영 지연 상한 |
+| 조회 캐시 TTL-only 무효화 (`ExplanationStore`) | 상태 전이(차단·무효화) 무효화 훅 도입 시 | state-machine.md 의 "Publication Cache 제거 + 즉시 비노출" 목표 충족 — 현행은 TTL(3s)이 반영 지연 상한 |
 
 ## 실행·확인
 

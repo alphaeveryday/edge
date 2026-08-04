@@ -24,8 +24,9 @@ class ExplanationResponseTest {
 		return new Explanation("expr_LOCAL01", "삼성전자", "005930", "REVIEW_REQUIRED", "HIGH",
 				reviewReason, OffsetDateTime.parse("2026-07-11T10:42:00+09:00"),
 				List.of(new Explanation.Evidence("DISCLOSURE", "3분기 잠정 실적 공시", "KIND",
-								OffsetDateTime.parse("2026-07-11T10:31:00+09:00")),
-						new Explanation.Evidence("NEWS", null, "연합인포맥스", null)),
+								OffsetDateTime.parse("2026-07-11T10:31:00+09:00"),
+								"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260711000001"),
+						new Explanation.Evidence("NEWS", null, "연합인포맥스", null, null)),
 				"원본 문구", "최종 문구");
 	}
 
@@ -65,10 +66,14 @@ class ExplanationResponseTest {
 
 		assertThat(evidence.get(0).get("type").asString()).isEqualTo("공시");
 		assertThat(evidence.get(0).get("time").asString()).isEqualTo("2026-07-11 10:31");
+		// 원문 링크(ALPHA-739) — 있으면 그대로, 없으면 키 생략(NON_NULL — UI 는 링크 미표시)
+		assertThat(evidence.get(0).get("sourceUri").asString())
+				.isEqualTo("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260711000001");
 		assertThat(evidence.get(1).get("type").asString()).isEqualTo("뉴스");
 		// 제목·발행시각 없는 근거 — UI 계약(string)을 깨지 않게 폴백한다
 		assertThat(evidence.get(1).get("title").asString()).isEqualTo("(제목 없음)");
 		assertThat(evidence.get(1).get("time").asString()).isEqualTo("—");
+		assertThat(evidence.get(1).has("sourceUri")).isFalse();
 	}
 
 	@Test

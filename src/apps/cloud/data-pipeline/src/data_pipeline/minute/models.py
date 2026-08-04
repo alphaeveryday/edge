@@ -35,6 +35,14 @@ SESSION_OPEN = time(9, 0)
 SESSION_CLOSE = time(15, 30)
 WINDOWS_PER_SESSION = 390
 
+# NXT 시간외까지 거래되는 종목은 08:00–20:00 (KST) = 720분이다 (2026-08-01 실측·결정,
+# `.dev/toss-openapi-실측.md`). ⚠️ 이건 **상품군 축이 아니라 종목별 속성**이다 — ETF·지수는
+# 물론 개별주 001527 도 15:30 이 마지막이었다. 그래서 클래스는 규칙이 아니라 universe 가
+# 선언한다(Universe.extended_hours_ids).
+EXTENDED_OPEN = time(8, 0)
+EXTENDED_CLOSE = time(20, 0)
+WINDOWS_PER_EXTENDED_SESSION = 720
+
 ExecutionMode = Literal["one_shot", "resident"]
 
 
@@ -148,11 +156,30 @@ class CollectionResult(BaseModel):
 
 
 def plan_session_windows(
-    session_date: date, tz: ZoneInfo = KST
+    session_date: date, *, universe: Universe | None
 ) -> tuple[tuple[datetime, datetime], ...]:
-    """정규장 하루의 명시적 1분 half-open window 목록 (KST 390개)."""
-    open_at = datetime.combine(session_date, SESSION_OPEN, tzinfo=tz)
-    close_at = datetime.combine(session_date, SESSION_CLOSE, tzinfo=tz)
+    """하루의 명시적 1분 half-open window 목록 (KST).
+
+    범위는 universe 가 정한다 — 시간외 거래 종목이 하나라도 있으면 08:00–20:00(720개),
+    없으면 정규장 09:00–15:30(390개)다. 계획 범위와 window 별 기대 유니버스
+    (`Universe.units_at`)는 **같은 규칙**에서 나와야 한다: 계획이 더 넓으면 기대가 빈
+    window 가 생기고, 좁으면 시간외 분이 아예 관측되지 않는다.
+
+    `universe` 는 기본값 없이 **항상 명시**한다(가격 universe 가 없는 뉴스 세션은
+    `None`). 기본값을 두면 시간외 종목이 있는 세션의 planner 가 인자를 빠뜨렸을 때
+    390개만 계획되고, Worker 는 claim 할 행 자체가 없어 시간외 구간이 **아무 실패
+    신호 없이** 누락된다.
+
+    tz 는 KST 고정이다 — 거래시간 상수가 KST 로 정의됐고, `units_at` 도 KST 로 읽는다.
+    한쪽만 다른 tz 로 부르면 계획과 기대가 통째로 어긋난다.
+    """
+    extended = bool(universe and universe.extended_hours_ids)
+    open_at = datetime.combine(
+        session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=KST
+    )
+    close_at = datetime.combine(
+        session_date, EXTENDED_CLOSE if extended else SESSION_CLOSE, tzinfo=KST
+    )
     windows: list[tuple[datetime, datetime]] = []
     cursor = open_at
     while cursor < close_at:
@@ -172,6 +199,11 @@ class Universe(BaseModel):
     universe_version: NonBlankStr
     etf_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
     constituent_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
+    # 08:00–20:00 을 거래하는 unit (NXT 시간외). 나머지는 09:00–15:30 이다. 비어 있으면
+    # 전 종목 정규장 — 지금까지의 390 계획과 같다. 값은 실측으로 채운다(추측 금지):
+    # 잘못 넣으면 그 종목의 시간외 window 가 영구 INCOMPLETE 이고, 빠뜨리면 그 종목의
+    # 시간외 분이 조용히 관측되지 않는다.
+    extended_hours_ids: tuple[NonBlankStr, ...] = ()
 
     @model_validator(mode="after")
     def _validate(self) -> Universe:
@@ -180,19 +212,80 @@ class Universe(BaseModel):
             raise ValueError("universe 내부에 중복 ID 가 있다")
         if etfs & constituents:
             raise ValueError(f"ETF/구성종목 ID 가 겹친다: {sorted(etfs & constituents)[:5]}")
+        extended = set(self.extended_hours_ids)
+        if len(extended) != len(self.extended_hours_ids):
+            raise ValueError("extended_hours_ids 에 중복 ID 가 있다")
+        # universe 밖 ID 는 아무 window 에서도 수집되지 않는다 — 오타를 조용히 넘기면
+        # 그 종목이 시간외에 안 잡히는 이유를 아무도 못 찾는다
+        if unknown := extended - (etfs | constituents):
+            raise ValueError(f"extended_hours_ids 가 universe 밖 ID 를 담았다: {sorted(unknown)[:5]}")
         return self
 
     @property
     def unit_ids(self) -> tuple[str, ...]:
         return self.etf_ids + self.constituent_ids
 
+    def units_at(self, window_start: datetime) -> tuple[str, ...]:
+        """그 window 에 캔들이 존재해야 하는 unit — 완전성 판정의 기대 집합이다.
+
+        정규장 안이면 전 종목, 그 밖(프리·애프터)이면 시간외 거래 종목만이다. 이걸
+        시각과 무관하게 전 종목으로 두면 15:30 이 마지막인 종목이 시간외 window 마다
+        missing 으로 잡혀 그 window 가 영원히 INCOMPLETE 로 남는다(2026-08-02 dev 실증).
+
+        경계 판정은 **KST** 로 한다(거래시간 상수와 같은 축). naive datetime 은 거부한다
+        — `astimezone` 이 호스트 로컬로 해석해 같은 입력이 배포 환경마다 다른 기대 집합을
+        내고, 그건 조용한 누락으로 이어진다(원장 계약 전반의 aware-only 규약과 같은 결).
+
+        거래시간 밖은 raise 다 — 조용히 빈 집합을 주면 "기대할 게 없는 window" 와
+        "계획이 잘못돼 만들어진 window" 가 같은 결과가 된다.
+        """
+        if window_start.tzinfo is None or window_start.tzinfo.utcoffset(window_start) is None:
+            raise ValueError(f"window_start 는 timezone-aware 여야 한다: {window_start!r}")
+        local = window_start.astimezone(KST).time()
+        if SESSION_OPEN <= local < SESSION_CLOSE:
+            return self.unit_ids
+        if EXTENDED_OPEN <= local < EXTENDED_CLOSE and self.extended_hours_ids:
+            return self.extended_hours_ids
+        raise ValueError(
+            f"window {window_start.isoformat()} 는 이 universe 의 거래시간 밖이다 "
+            f"— 계획되지 않아야 할 window 다"
+        )
+
     @property
     def universe_hash(self) -> str:
-        """멤버십 identity — 입력 순서에 불변(같은 구성·다른 순서 = 같은 hash)."""
-        return content_checksum(
-            [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
-        )
+        """멤버십 identity — 입력 순서에 불변(같은 구성·다른 순서 = 같은 hash).
+
+        거래시간 클래스도 identity 에 넣는다: 멤버가 같아도 클래스가 다르면 기대
+        유니버스와 window 계획이 달라진다 — 빼면 session 의 universe 충돌 가드가
+        그 변경을 같은 universe 로 통과시킨다.
+
+        단 **선언이 없으면 축 자체를 넣지 않는다** — identity 는 "이 universe 가 뜻하는
+        기대"이고, 시간외 종목이 없는 universe 의 기대는 이 축이 생기기 전과 같다.
+        빈 목록을 넣으면 구성이 똑같은 기존 session 이 배포만으로 다른 hash 가 돼
+        UniverseConflictError 로 그날 재계획·재기동이 통째로 막힌다.
+        """
+        parts = [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
+        if self.extended_hours_ids:
+            parts.append(sorted(self.extended_hours_ids))
+        return content_checksum(parts)
 
 
 def load_universe(path: Path) -> Universe:
     return Universe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def load_universe_uri(uri: str) -> Universe:
+    """`load_universe` 의 URI 판 — `s3://bucket/key` 를 지원한다(ALPHA-711).
+
+    ECS 컨테이너에는 로컬 파일 배포 축이 없다 — planner·worker·consumer 가 **같은
+    S3 객체**를 가리키면 세 표면의 universe 가 한 정본에서 나온다.
+    """
+    if uri.lower().startswith("s3://"):  # scheme 은 대소문자 무관(RFC 3986)
+        import boto3  # 지연 import — 로컬 경로만 쓰는 테스트에 AWS 의존을 안 끼운다
+
+        bucket, _, key = uri[len("s3://"):].partition("/")
+        if not bucket or not key:
+            raise ValueError(f"s3 universe URI 형식 오류: {uri!r}")
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+        return Universe.model_validate(json.loads(body.decode("utf-8")))
+    return load_universe(Path(uri))

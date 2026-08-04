@@ -190,7 +190,7 @@ function TaskDetailRow({ task }: { task: TaskStatus }) {
   );
 }
 
-function TaskRow({ task }: { task: TaskStatus }) {
+function TaskRow({ task, runKey }: { task: TaskStatus; runKey: string | undefined }) {
   /* SKIPPED 는 outcome 이 없다 — "완료"로 칠하면 휴장이라 안 한 것과 해서 된 것이 같은 초록이 된다. */
   /* 원장 어휘가 늘어나면(소유는 data-pipeline) 여기 맵에 없는 값이 내려온다. undefined 를
    * 그대로 역참조하면 대시보드가 통째로 흰 화면이 된다 — 모르는 상태는 원문 그대로 보여주고
@@ -240,6 +240,19 @@ function TaskRow({ task }: { task: TaskStatus }) {
             style={{ display: 'block', color: 'var(--fg-3)', marginTop: 4 }}
           >
             {`ETF 대조 · 기대 ${count(task.completeness.expected)} · 수집 ${count(task.completeness.received)} · 누락 ${count(task.completeness.missing)}`}
+            {/* 누락이 있으면 근거 목록(어떤 ETF·어떤 분석)으로 내려간다 — 집계만 있고 목록
+             * 없는 숫자를 만들지 않는다(ALPHA-692). 결손 영향 화면은 holdings 작업의 누락만
+             * 계산하므로 그 작업에만 건다 — NAV·프로필 누락 행에 걸면 다른 목록이 근거처럼
+             * 보인다(리뷰 1라운드, Overview 의 결함 라우팅과 같은 매핑). */}
+            {task.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' &&
+              (task.completeness.missing ?? 0) > 0 && runKey && (
+              <>
+                {' · '}
+                <Link to={`/impact/holdings?runKey=${encodeURIComponent(runKey)}`}>
+                  누락 영향 보기
+                </Link>
+              </>
+            )}
           </span>
         )}
       </td>
@@ -432,7 +445,7 @@ export function SourcesPage() {
               <tbody>
                 {visibleTasks.map((t) => (
                   <Fragment key={t.taskKey}>
-                    <TaskRow task={t} />
+                    <TaskRow task={t} runKey={run?.runKey} />
                     {/* 지목된 작업은 사유가 없어도 펼친다 — 셀을 누른 목적이 그 작업의
                         상세(시각·시도)이기 때문이다 */}
                     {(hasDetail(t) || focusedExists) && <TaskDetailRow task={t} />}

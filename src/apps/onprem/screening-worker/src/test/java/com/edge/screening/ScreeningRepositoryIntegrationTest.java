@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * screening 상태 원장 쓰기 계약을 실 Postgres 로 검증한다(state-machine.md 확정 결정):
  * ① analysis_item upsert 는 도메인 ID 멱등(재수신이 원본을 덮지 않는다)
- * ② 상태 전이는 terminal(CORRECTED·INVALIDATED)을 덮지 않는다
+ * ② 상태 전이는 terminal(INVALIDATED)을 덮지 않는다
  * ③ publication 자동 게시는 (ticker,trade_date) grain 을 1건으로 선점한다
  * ④ 게시분 전이는 PUBLISHED 만 즉시 비노출한다
  * ⑤ 미점검 번들은 cursor 순·LIMIT 로 주어지고 markScreened 로 빠진다.
@@ -54,7 +54,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	private int upsertItem(String id, String ticker, String status) {
 		return items.upsert(id, "instr-" + id, ticker, "KODEX 200", TRADE_DATE,
 				OffsetDateTime.parse("2026-07-15T16:00:00+09:00"), "EVENT_SUPPORTED", "요약 " + id, null,
-				"MEDIUM", null, "[]", null, null, 1L, status);
+				"MEDIUM", null, "[]", 1L, status);
 	}
 
 	@Test
@@ -69,10 +69,10 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 
 	@Test
 	void transition_은_terminal_상태를_덮지_않고_미수신은_0을_준다() {
-		// WHY: CORRECTED·INVALIDATED 는 리비전 종결 — 이후 전이가 덮으면 종결 이력이 오염된다.
+		// WHY: INVALIDATED 는 종결(terminal) — 이후 전이가 덮으면 종결 이력이 오염된다.
 		upsertItem("er-2", "069500", "AUTO_PUBLISHED");
-		assertThat(items.transition("er-2", "CORRECTED")).isEqualTo(1);
-		assertThat(items.transition("er-2", "INVALIDATED")).isEqualTo(0); // terminal 가드
+		assertThat(items.transition("er-2", "INVALIDATED")).isEqualTo(1);
+		assertThat(items.transition("er-2", "INVALIDATED")).isEqualTo(0); // terminal 가드(멱등 재수신)
 		assertThat(items.transition("missing", "INVALIDATED")).isEqualTo(0); // 대상 미수신
 	}
 
@@ -93,8 +93,38 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
+	void supersede_대상은_자동_게시본만이고_같은_item_가드를_지킨다() {
+		// WHY: 하루 다건 발화(분봉 트리거, ALPHA-710)의 교체 규율 — 구본을 비노출로
+		// 전이한 뒤 재게시해야 두 번째 발화가 고객에 닿고, grain 활성 1건 불변식이
+		// 유지된다. 대상은 자동 게시본뿐(검수 승인본을 자동이 끌어내리면 사람 결정이
+		// 기계에 덮인다)이고, 구본 재수신이 신본을 끌어내리면 grain 이 무게시로 남는다.
+		upsertItem("er-5", "069500", "AUTO_PUBLISHED");
+		publications.publish("er-5", "069500", TRADE_DATE);
+
+		// 신규 발화(er-5b): 구본 er-5 가 교체 대상으로 조회되고, 전이 후 게시가 열린다.
+		upsertItem("er-5b", "069500", "AUTO_PUBLISHED");
+		assertThat(publications.findSupersedableItem("er-5b", "069500", TRADE_DATE))
+				.isEqualTo("er-5");
+		assertThat(publications.transitionByItem("er-5", "UNPUBLISHED")).isEqualTo(1);
+		assertThat(publications.publish("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
+		assertThat(jdbc.queryForObject(
+				"SELECT analysis_item_id FROM publication WHERE etf_ticker = '069500'"
+						+ " AND trade_date = ? AND status = 'PUBLISHED'",
+				String.class, TRADE_DATE)).isEqualTo("er-5b");
+
+		// 구본(er-5) 재수신: 이미 게시 이력이 있어 대상 없음 — 신본이 그대로 산다.
+		assertThat(publications.findSupersedableItem("er-5", "069500", TRADE_DATE)).isNull();
+
+		// 검수 승인본이 grain 점유로 바뀌면: 자동 신규 발화는 교체 대상을 못 찾는다.
+		jdbc.update("UPDATE analysis_item SET status = 'APPROVED'"
+				+ " WHERE explanation_result_id = 'er-5b'");
+		upsertItem("er-5c", "069500", "AUTO_PUBLISHED");
+		assertThat(publications.findSupersedableItem("er-5c", "069500", TRADE_DATE)).isNull();
+	}
+
+	@Test
 	void transitionByItem_은_PUBLISHED_게시분만_비노출한다() {
-		// WHY: 정정·무효화는 즉시 비노출 — PUBLISHED 만 골라 전이해야 고객 노출이 끊긴다.
+		// WHY: 무효화·제공 중단은 즉시 비노출 — PUBLISHED 만 골라 전이해야 고객 노출이 끊긴다.
 		upsertItem("er-4", "069500", "AUTO_PUBLISHED");
 		publications.publish("er-4", "069500", TRADE_DATE);
 

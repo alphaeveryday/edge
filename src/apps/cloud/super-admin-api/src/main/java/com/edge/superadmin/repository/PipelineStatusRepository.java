@@ -230,4 +230,33 @@ public interface PipelineStatusRepository {
 			int occurrenceCount, OffsetDateTime firstSeenAt, OffsetDateTime lastSeenAt,
 			String resolutionReason) {
 	}
+
+	/**
+	 * 레인(pipeline_type)별 <b>최신 런</b>과 그 런의 기대 작업 — Run Overview 첫 화면의
+	 * 데이터원(ALPHA-683). 격자·드릴다운과 달리 "지금"만 본다.
+	 */
+	List<OverviewLane> overview();
+
+	/**
+	 * 레인 하나의 최신 런. 격자와 같은 이유로 작업이 안 적힌 런(기동 실패 등)도 낸다 —
+	 * 부재가 1급 신호다. {@code plannedAt}(계획 시각)은 "이 판정이 언제 런 기준인가"의 근거다 —
+	 * 오늘 Planner 가 안 돌면 이 조회는 어제 런을 최신으로 재사용하므로, 화면이 그 사실을
+	 * 숨기면 지난 판정이 오늘 것처럼 보인다.
+	 */
+	record OverviewLane(String pipelineType, String runKey, String launchStatus,
+			String orchestrationStatus, LocalDate tradingDate, OffsetDateTime plannedAt,
+			List<OverviewTask> tasks) {
+	}
+
+	/**
+	 * Overview 가 판정에 쓰는 작업 축만 실은 행. {@link TaskStatus} 를 재사용하지 않는 이유는
+	 * 격자 셀과 같다 — 시도 전량·시각 4축이 필요 없다. 대신 여기만 {@code required} 와
+	 * freshness 축을 싣는다: 필수 여부는 "오늘 발행 가능한가" 판정의 분모이고(ALPHA-683),
+	 * freshness 는 원장 컬럼(ADR-0043)을 재계산 없이 옮긴다 — writer(ALPHA-654) 배선 전엔
+	 * 전부 null 이 정상이다.
+	 */
+	record OverviewTask(String stage, String taskKey, String planStatus, String outcome,
+			String dataStatus, boolean required, OffsetDateTime deadlineAt, Long failedRecords,
+			String freshnessStatus, LocalDate expectedAsOfDate, LocalDate actualAsOfDate) {
+	}
 }

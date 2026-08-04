@@ -99,7 +99,8 @@ class TestJobClaim:
         ledger = make_ledger(db)
         job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
         claim = ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
-        assert claim == {"job_id": job_id, "attempt_count": 1}
+        # redrive_generation 도 돌려준다 — 전이 CAS 가 이 값을 fence 로 쓴다(ALPHA-672)
+        assert claim == {"job_id": job_id, "attempt_count": 1, "redrive_generation": 0}
         assert ledger.claim_due_job(kind="news", worker_id="c2", now=NOW, lease_seconds=60) is None
 
     def test_retry_wait_gates_on_next_attempt_at(self):
@@ -110,7 +111,8 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         retry_at = NOW + timedelta(minutes=5)
         assert ledger.retry_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=NOW,
             next_attempt_at=retry_at, error_code="LLM_TIMEOUT",
         ) is True
         early = NOW + timedelta(minutes=1)
@@ -125,7 +127,8 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         with pytest.raises(ValueError):
             ledger.retry_job(
-                kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
+                kind="news", job_id=job_id, worker_id="c1", attempt=1,
+                redrive_generation=0, now=NOW,
                 next_attempt_at=NOW, error_code="X",
             )
 
@@ -147,12 +150,12 @@ class TestJobClaim:
         ledger.claim_due_job(kind="news", worker_id="c2", now=later, lease_seconds=60)
         # c1 의 늦은 성공 보고는 거부 — claim 은 이미 c2 것이다 (attempt fence)
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is False
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c2", attempt=2, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c2", attempt=2,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "SUCCEEDED"
 
@@ -162,8 +165,8 @@ class TestJobClaim:
         job_id, _ = ledger.insert_news_job(**NEWS_IDENTITY)
         ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60)
         assert ledger.dead_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=NOW,
-            error_code="BUDGET",
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=NOW, error_code="BUDGET",
         ) is True
         assert db.jobs[("news", job_id)]["status"] == "DEAD"
         assert ledger.claim_due_job(kind="news", worker_id="c1", now=NOW, lease_seconds=60) is None
@@ -290,8 +293,8 @@ class TestClaimAttemptFence:
         second = ledger.claim_due_job(kind="news", worker_id="c1", now=later, lease_seconds=60)
         assert second["attempt_count"] == 2
         assert ledger.succeed_job(
-            kind="news", job_id=job_id, worker_id="c1", attempt=1, now=later,
-            result_checksum="e" * 64,
+            kind="news", job_id=job_id, worker_id="c1", attempt=1,
+            redrive_generation=0, now=later, result_checksum="e" * 64,
         ) is False
         assert db.jobs[("news", job_id)]["status"] == "CLAIMED"  # 새 attempt 는 무사
 
@@ -391,3 +394,31 @@ class TestAtomicEnqueue:
         claim = ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60)
         assert claim is not None and claim["job_id"] == current_id
         assert db.jobs[("price", stale_id)]["status"] == "DEAD"
+
+
+class TestNewsJobIdentity:
+    """job 이 선언한 정체성 읽기 (ALPHA-689) — Consumer 가 이걸로 두 원인을 가른다.
+
+    payload 만 믿으면 "버전 올린 뒤의 정상 backlog"(실행해야 한다)와 "다른 기사를
+    가리키는 결함"(막아야 한다)이 한 값으로 뭉개진다. 그 구분의 근거가 이 행이다.
+    """
+
+    def test_returns_declared_axes_in_column_order(self):
+        db = FakeMinuteDB()
+        ledger = make_ledger(db)
+        job_id, _ = ledger.insert_news_job(
+            source_code="bigkinds", article_id="a-1", input_fingerprint="f" * 64,
+            tagger_version="tagging-v1", ontology_version="onto-1",
+        )
+        declared = ledger.news_job_identity(job_id=job_id)
+        # 값이 제자리에 오는지까지 본다 — 컬럼 순서가 어긋나면 지문이 article_id 자리에
+        # 들어가 정상 job 이 전부 "다른 기사"로 막힌다(조용히 틀리는 방향)
+        assert declared == {
+            "source_code": "bigkinds", "article_id": "a-1",
+            "input_fingerprint": "f" * 64,
+            "tagger_version": "tagging-v1", "ontology_version": "onto-1",
+        }
+
+    def test_absent_job_is_none(self):
+        # 없는 것을 빈 dict 로 접으면 Consumer 의 대조가 전부 불일치가 된다
+        assert make_ledger(FakeMinuteDB()).news_job_identity(job_id="0" * 64) is None

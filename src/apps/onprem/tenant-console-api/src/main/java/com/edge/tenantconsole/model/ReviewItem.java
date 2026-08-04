@@ -19,13 +19,11 @@ public record ReviewItem(
 		String headline,
 		String confidenceLevel,
 		String status,
-		String supersedesItemId,
-		String correctionReason,
 		OffsetDateTime receivedAt
 ) {
 	public static ReviewItem from(AnalysisItemEntity e) {
 		return new ReviewItem(e.getExplanationResultId(), e.getEtfTicker(), e.getEtfName(),
 				e.getTradeDate(), e.getSummary(), e.getHeadline(), e.getConfidenceLevel(),
-				e.getStatus(), e.getSupersedesItemId(), e.getCorrectionReason(), e.getReceivedAt());
+				e.getStatus(), e.getReceivedAt());
 	}
 }

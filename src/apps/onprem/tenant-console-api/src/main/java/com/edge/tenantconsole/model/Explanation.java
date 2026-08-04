@@ -25,7 +25,12 @@ public record Explanation(
 		String original,
 		String finalText
 ) {
-	/** 근거 문서 원값 — kind·published_at 은 dto 가 UI 어휘(공시/뉴스)·표시 시각으로 번역한다. */
-	public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt) {
+	/**
+	 * 근거 문서 원값 — kind·published_at 은 dto 가 UI 어휘(공시/뉴스)·표시 시각으로 번역한다.
+	 * sourceUri 는 원문 링크(ALPHA-739) — 계약상 optional 이라 결측이면 null(EOD 뉴스 구멍,
+	 * ALPHA-740).
+	 */
+	public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt,
+			String sourceUri) {
 	}
 }

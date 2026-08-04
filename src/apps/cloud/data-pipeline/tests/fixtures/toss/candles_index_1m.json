@@ -1,0 +1,35 @@
+{
+  "body": {
+    "result": {
+      "candles": [
+        {
+          "closePrice": "6595.45",
+          "highPrice": "6615.6",
+          "lowPrice": "6595.44",
+          "openPrice": "6615.6",
+          "timestamp": "2026-07-31T15:30:00.000+09:00",
+          "volume": "24211000"
+        },
+        {
+          "closePrice": "6615.6",
+          "highPrice": "6615.6",
+          "lowPrice": "6615.6",
+          "openPrice": "6615.6",
+          "timestamp": "2026-07-31T15:29:00.000+09:00",
+          "volume": "0"
+        },
+        {
+          "closePrice": "6615.6",
+          "highPrice": "6615.6",
+          "lowPrice": "6615.6",
+          "openPrice": "6615.6",
+          "timestamp": "2026-07-31T15:28:00.000+09:00",
+          "volume": "0"
+        }
+      ],
+      "nextBefore": "2026-07-31T15:27:00.000+09:00"
+    }
+  },
+  "request_path": "/api/v1/market-indicators/KOSPI/candles?interval=1m&count=3",
+  "status": 200
+}

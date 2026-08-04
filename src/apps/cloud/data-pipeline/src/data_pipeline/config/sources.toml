@@ -253,7 +253,8 @@ enabled = true
 # 국내 공시(disclosure) 소스 — OpenDART 공시목록(list.json) + 공시서류 원본(document.xml, raw).
 # 재무제표([dart_financial.source], fnlttSinglAcnt)와 **다른 API**다. 인증키는 env 로 주입:
 #   DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=...
-# ingest-raw-disclosure 로 실행. corp_code 는 corpCode.xml 로 런타임 매핑.
+# ingest-raw-disclosure 로 실행. 날짜창의 시장 전체 목록을 받아 stock_code 로 거른다 —
+# 종목별 corp_code 질의가 아니다(corpCode.xml 은 enrich-corp-code 전용).
 [dart_disclosure.source]
 base_url = "https://opendart.fss.or.kr/api"
 enabled = true

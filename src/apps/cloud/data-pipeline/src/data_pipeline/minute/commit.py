@@ -5,7 +5,7 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
 
     fence/phase 확인(session 행 잠금)
     → claim 검증(window 행 잠금)
-    → canonical upsert (CanonicalWriter 경계 뒤)
+    → canonical upsert (뉴스만 — CanonicalWriter 경계 뒤)
     → window checksum/generation 확정 (_record_window_outcome_tx)
     → price job + PriceWindowCommitted outbox (_insert_*_tx)
     → commit
@@ -13,8 +13,9 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
 트랜잭션이 통째로 성공하거나 통째로 없던 일이 된다 — S3 성공/DB 실패의 잔재(orphan)는
 `find_orphan_artifacts` 가 검출하고, 처리 정책(재사용/quarantine)은 EOD QC(PR 8) 소관.
 
-canonical 분봉의 실제 스키마·경로는 ALPHA-648(price_bars) 확정 설계가 정본이다 —
-여기서는 CanonicalWriter 프로토콜 뒤로 격리하고 재도출하지 않는다.
+분봉 canonical 은 **S3 다**(2026-08-02 확정, ALPHA-701) — 호출자가 PUT 한 artifact
+자체가 정본이고, 이 트랜잭션은 가격에서 DB canonical 을 쓰지 않는다. DB writer 를
+여기 다시 붙이면 정본이 둘이 된다(ALPHA-648 은 보류 유지). 뉴스 canonical 만 PG 다.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import Protocol
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
-from ..lake.storage import Storage, raw_price_minute_artifact_key
+from ..lake.storage import Storage, canonical_price_minute_prefix
 from .jobs import NEWS_EVENT_TYPE, PRICE_EVENT_TYPE, JobLedger, build_event_id
 from .models import KST
 from .news_overlap import (
@@ -45,11 +46,21 @@ from .states import (
 
 
 class CanonicalWriter(Protocol):
-    """canonical 적재 경계 — 가격은 ALPHA-648 price_bars, 뉴스는 기존
-    `(source_code, article_id)` article upsert 와 조율한다(records 가 각각 분봉·기사 행).
+    """canonical 적재 경계 — **뉴스 전용**. 기존 `(source_code, article_id)` article
+    upsert 와 조율한다(records 가 기사 행). 가격 분봉의 canonical 은 S3 artifact 라
+    이 경계를 지나지 않는다(ALPHA-701).
 
     upsert 는 자연키 멱등이어야 하고(재실행 no-op), 주어진 cursor 의 트랜잭션 안에서만
     쓴다(커넥션을 새로 열면 commit 원자성이 깨진다).
+
+    ⚠️ **뉴스 구현체는 정정을 반드시 반영해야 한다**(ALPHA-691). 같은 자연키에 본문이
+    바뀌어 들어오면 제목·발행시각·리드를 **갱신**해야 한다 — 배치 `load_documents` 는
+    `ON CONFLICT DO NOTHING` 이라 제목·발행시각을 영영 안 고치고 리드도 비어 있지 않을
+    때만 덮는다. 그 형태를 그대로 쓰면, 정정으로 생긴 새 job(새 `input_fingerprint`)이
+    **옛 본문을 읽어** 추출하고 SUCCEEDED 로 확정된다: 원장은 새 지문을 처리했다고
+    말하는데 결과는 옛 텍스트의 것이고, 그 기사는 다시 job 이 생기지 않아 정정이 영영
+    태깅되지 않는다(2026-08-02 봇 리뷰 P1). Consumer 는 이걸 탐지할 수 없다 —
+    읽은 본문이 그 지문의 것인지 확인할 방법이 없기 때문이다(`minute/news_consumer.py`).
     """
 
     def upsert_tx(self, cur, *, dataset: str, window_start: datetime,
@@ -101,14 +112,14 @@ class MinuteCommitter:
         manifest_checksum: str,
         missing_units: list[str] | None,
         stage_timestamps: dict[str, datetime | str],
-        records: tuple[dict, ...],
-        canonical_writer: CanonicalWriter,
-        dataset: str,
         trigger_schema_version: str,
         destination: str,
         artifact_generation: int,
     ) -> int:
-        """한 트랜잭션에 canonical/window/job/outbox 를 확정하고 generation 을 돌려준다.
+        """한 트랜잭션에 window/job/outbox 를 확정하고 generation 을 돌려준다.
+
+        가격의 canonical 은 호출자가 이미 PUT 한 S3 artifact 다 — 여기서는 DB 에
+        canonical 을 쓰지 않는다(ALPHA-701).
 
         멱등성은 아래에서 나온다 — 재실행 같은 checksum 이면 generation 불변 →
         같은 job_id/event_id → ON CONFLICT no-op(outbox 재발행 없음). correction 은
@@ -125,9 +136,9 @@ class MinuteCommitter:
                 raise CommitRejectedError(
                     f"fence 무효(phase={phase}) — session {session_id} commit 거부"
                 )
-            # claim 을 **쓰기 전에** 검증한다: _record_window_outcome_tx 의 거부는
-            # canonical upsert 뒤라서, 먼저 확인해야 rollback 없이도 fake/실DB 상태가
-            # 갈리지 않는다 (실DB 는 예외 시 rollback, fake 는 트랜잭션이 없다)
+            # claim 을 **쓰기 전에** 검증한다 — stale claim 을 여기서 명시적으로
+            # 거부해야 "다른 attempt 소유" 사유가 뭉개지지 않는다(아래 outcome 갱신
+            # 실패는 불변식 위반으로만 남는다)
             cur.execute(
                 """
                 SELECT claimed_by, claim_token FROM minute_ingestion_window
@@ -141,9 +152,6 @@ class MinuteCommitter:
                 raise CommitRejectedError(
                     f"claim 무효(window {window_start}) — 다른 attempt 의 소유다"
                 )
-            canonical_writer.upsert_tx(
-                cur, dataset=dataset, window_start=window_start, records=records,
-            )
             generation = MinuteLedger._record_window_outcome_tx(
                 cur, session_id=session_id, window_start=window_start,
                 worker_id=worker_id, claim_token=claim_token, data_status=data_status,
@@ -361,7 +369,6 @@ def find_orphan_artifacts(
     connect_fn: Callable,
     storage: Storage,
     session_id: str,
-    source: str,
     market: str,
     session_date: str,
 ) -> list[str]:
@@ -385,7 +392,7 @@ def find_orphan_artifacts(
             ws.astimezone(KST).strftime("%H%M"): generation
             for ws, generation in cur.fetchall()
         }
-    prefix = f"raw/source={source}/dataset=price_minute/market={market}/session_date={session_date}/"
+    prefix = canonical_price_minute_prefix(market, session_date)
     orphans = []
     for key in storage.list_keys(prefix):
         if not key.endswith("/bars.ndjson"):

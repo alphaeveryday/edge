@@ -5,11 +5,14 @@
 -- repeatable(R__) + 전 구문 멱등 — 버전 순서를 오염시키지 않는다.
 --
 -- 목적: 동기화 경로(intake → sync-agent → tenant-sync-api → cloud DB)를
--- 시연할 전달 레코드(NEW·CORRECTION·INVALIDATION — 온프렘 수신 세 경로 전부
--- 자극). NEW 자동 발번은 analysis-engine 이 수행하지만(ALPHA-493) 엔진은 로컬
--- compose 에 없고 CORRECTION·INVALIDATION 발번은 후속이라 이 시드를 유지한다.
+-- 시연할 전달 레코드(NEW·INVALIDATION — 온프렘 수신 두 경로 전부 자극.
+-- CORRECTION 은 폐지 — ADR-0044). NEW 자동 발번은 analysis-engine 이 수행하지만
+-- (ALPHA-493) 엔진은 로컬 compose 에 없어 이 시드를 유지한다. INVALIDATION 은
+-- super-admin-api 무효화 액션이 발번한다(ALPHA-440) — 시드는 수신 경로 시연용.
 -- 설명 체인은 FK 를 정직하게 충족하는 최소 실데이터다(KODEX 200, 온프렘 데모
--- 시드와 같은 종목·거래일). cursor 1–5 점유는 엔진 발번(MAX+1)과 충돌하지 않는다.
+-- 시드와 같은 종목·거래일). cursor 1–4 점유는 엔진 발번(MAX+1)과 충돌하지 않는다.
+-- 주의: 구 3형상 시드(cursor 1–5)를 적용한 기존 볼륨은 멱등 insert 특성상 구 행
+-- (cursor 3–5)이 잔존한다 — 서사 수렴은 볼륨 재생성으로 한다(로컬 한정, 무해).
 -- ============================================================================
 
 -- 종목 마스터: KODEX 200 (V202607150004 시드에 없는 ETF — 로컬 전용 추가)
@@ -66,9 +69,6 @@ INSERT INTO explanation_run (explanation_run_id, explanation_route_id, bundle_ve
     ('exrun_LOCAL000000000000000001', 'exr_LOCAL0000000000000000001', 'local-demo.0',
      TIMESTAMPTZ '2026-07-15 16:00:00+09', 'SUCCEEDED',
      TIMESTAMPTZ '2026-07-15 16:00:00+09', TIMESTAMPTZ '2026-07-15 16:01:00+09'),
-    ('exrun_LOCAL000000000000000002', 'exr_LOCAL0000000000000000001', 'local-demo.0',
-     TIMESTAMPTZ '2026-07-15 17:00:00+09', 'SUCCEEDED',
-     TIMESTAMPTZ '2026-07-15 17:00:00+09', TIMESTAMPTZ '2026-07-15 17:01:00+09'),
     ('exrun_LOCAL000000000000000003', 'exr_LOCAL0000000000000000001', 'local-demo.0',
      TIMESTAMPTZ '2026-07-15 18:00:00+09', 'SUCCEEDED',
      TIMESTAMPTZ '2026-07-15 18:00:00+09', TIMESTAMPTZ '2026-07-15 18:01:00+09'),
@@ -77,8 +77,9 @@ INSERT INTO explanation_run (explanation_run_id, explanation_route_id, bundle_ve
      TIMESTAMPTZ '2026-07-16 16:00:00+09', TIMESTAMPTZ '2026-07-16 16:01:00+09')
 ON CONFLICT (explanation_run_id) DO NOTHING;
 
--- 정정 서사: 0001(원본, 정정으로 WITHDRAWN) → 0002(정정분, 무효화로 WITHDRAWN)
--- → 0003(재산출 최종본, PUBLISHED — 관통 후 Demo UI 가 노출하는 상태).
+-- 무효화 서사: 0001(원본, 무효화로 WITHDRAWN) → 0003(재산출 최종본, PUBLISHED —
+-- 관통 후 Demo UI 가 노출하는 상태. 무효화는 설명 단위라 같은 종목·거래일의 새
+-- 발번을 막지 않는다 — ADR-0044).
 INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_instrument_id,
     trade_date, explanation_as_of, primary_thread_id, explanation_type, summary,
     confidence_level, publication_status) VALUES
@@ -86,10 +87,6 @@ INSERT INTO explanation_result (explanation_result_id, explanation_run_id, etf_i
      DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 16:00:00+09', NULL, 'EVENT_SUPPORTED',
      '반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.',
      'MEDIUM', 'WITHDRAWN'),
-    ('expr_LOCAL000000000000000002', 'exrun_LOCAL000000000000000002', 'inst_LOCAL00000000000069500KR',
-     DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 17:00:00+09', NULL, 'EVENT_SUPPORTED',
-     '정정된 공시 기준으로 재산출한 공개 정보 기반 변동 요인 후보입니다.',
-     'LOW', 'WITHDRAWN'),
     ('expr_LOCAL000000000000000003', 'exrun_LOCAL000000000000000003', 'inst_LOCAL00000000000069500KR',
      DATE '2026-07-15', TIMESTAMPTZ '2026-07-15 18:00:00+09', NULL, 'EVENT_SUPPORTED',
      '반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다. (재산출 확정본)',
@@ -119,18 +116,17 @@ ON CONFLICT (tenant_id) DO NOTHING;
 SELECT setval(pg_get_serial_sequence('tenant', 'tenant_id'),
               (SELECT max(tenant_id) FROM tenant), true);
 
--- 전달 레코드 5건 — NEW → CORRECTION → INVALIDATION → NEW(069500 최종) → NEW(091160 수령 디자인).
--- 온프렘 관통 후 최종 상태: 0001=CORRECTED, 0002=INVALIDATED, 0003=AUTO_PUBLISHED(노출).
+-- 전달 레코드 4건 — NEW → INVALIDATION(0001 무효화) → NEW(069500 재산출 최종) → NEW(091160 수령 디자인).
+-- 온프렘 관통 후 최종 상태: 0001=INVALIDATED, 0003=AUTO_PUBLISHED(노출), 0004=AUTO_PUBLISHED.
 INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, explanation_result_id,
     target_explanation_result_id, reason)
 SELECT t.tenant_id, v.cursor, v.delivery_type, v.result_id, v.target_id, v.reason
 FROM tenant t,
      (VALUES
          (1::bigint, 'NEW', 'expr_LOCAL000000000000000001', NULL, NULL),
-         (2::bigint, 'CORRECTION', 'expr_LOCAL000000000000000002', 'expr_LOCAL000000000000000001', '근거 공시 정정'),
-         (3::bigint, 'INVALIDATION', NULL, 'expr_LOCAL000000000000000002', '오탐지 이벤트'),
-         (4::bigint, 'NEW', 'expr_LOCAL000000000000000003', NULL, NULL),
-         (5::bigint, 'NEW', 'expr_LOCAL000000000000000004', NULL, NULL)
+         (2::bigint, 'INVALIDATION', NULL, 'expr_LOCAL000000000000000001', '오탐지 이벤트'),
+         (3::bigint, 'NEW', 'expr_LOCAL000000000000000003', NULL, NULL),
+         (4::bigint, 'NEW', 'expr_LOCAL000000000000000004', NULL, NULL)
      ) AS v(cursor, delivery_type, result_id, target_id, reason)
 WHERE t.tenant_name = 'local-demo'
 ON CONFLICT (tenant_id, cursor) DO NOTHING;

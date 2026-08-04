@@ -35,6 +35,32 @@ SESSION_PHASES = frozenset(
     }
 )
 
+# ── dataset 어휘 ──
+# 1분 원장이 아는 dataset. 여기 없는 값은 **오타**로 본다 — 세션은 만들어지는데 그 dataset 을
+# 처리하는 Worker 가 없어, 하루가 통째로 안 돌면서도 원장은 정상으로 보인다.
+DATASET_PRICE_MINUTE = "price_minute"
+DATASET_NEWS_MINUTE = "news_minute"
+# dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
+# 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로
+# 하루가 조용히 안 돈다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
+# ⚠️ price_minute 에 **두 번째 소스를 넣으려면 키 설계가 선행**돼야 한다 — canonical
+# artifact 키는 source 무관(ALPHA-705, 벤더=컬럼)이라 같은 (market, session_date,
+# window) 를 두 소스 세션이 처리하면 같은 불변 키를 두 바이트가 다투고
+# ArtifactImmutabilityError 로 즉시 죽는다(조용한 오염은 아니지만 하루가 선다).
+SOURCE_GROUPS_BY_DATASET = {
+    # kis 가 기본이다(ALPHA-735 — 토스는 초당 5회라 400종/분을 못 맞춘다). 토스는 어댑터가
+    # 남아 있어 세션 source_group 을 바꾸면 그대로 돈다. **둘을 동시에 돌리는 건 위 경고
+    # 대상이다** — 교체 운용이라 지금은 같은 window 를 두 세션이 다투지 않는다.
+    DATASET_PRICE_MINUTE: frozenset({"toss", "kis"}),
+    DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
+}
+# ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
+# 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
+# 거부된다(목록 누락). 늘어나는 자리는 위 표 하나다.
+MINUTE_DATASETS = frozenset(SOURCE_GROUPS_BY_DATASET)
+# universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
+UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
+
 # ── minute_ingestion_window.data_status ──
 WINDOW_DUE = "DUE"
 WINDOW_CLAIMED = "CLAIMED"

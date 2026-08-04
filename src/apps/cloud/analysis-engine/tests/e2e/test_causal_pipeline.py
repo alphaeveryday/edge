@@ -164,6 +164,16 @@ class FakeCausalData:
         self.calls.append("vol")
         return self._col(pairs, self._vol)
 
+    def flow(self, pairs, *, kind: str = "institution_total") -> np.ndarray:
+        # 수급 결과 열. 값은 쓰지 않고 **표면이 있다는 사실**만 고정한다 - 없으면
+        # sandbox.tools 가 AttributeError 로 죽어 검정이 통째로 사라진다.
+        self.calls.append(f"flow:{kind}")
+        return self._col(pairs, self._vol) * -1e9
+
+    def ids(self, names) -> dict:
+        self.calls.append("ids")
+        return {str(n): f"inst_{n}" for n in (names or [])}
+
     # ── 크기 정합 ───────────────────────────────────────────────────────
     def weight(self, etf_instrument_id: str, trade_date: date, units=None) -> dict:
         self.calls.append("weight")
@@ -1467,6 +1477,7 @@ _EVENT = EventContext(source_event_id=EVENT_ID, event_type_code=EVENT_TYPE,
 
 def _settings(*, causal: bool, sandbox: bool = True, registry: str = "") -> SimpleNamespace:
     return SimpleNamespace(
+        trigger_id=None,
         trade_date=TRADE_DATE, request_id="req-causal-1", etf_ticker=ETF_TICKER,
         lake_bucket="test-lake",
         result_s3_prefix="s3://test-lake/operations_archive/etf_explanations/",
@@ -1503,7 +1514,7 @@ class _FakeStore:
         return _TRIGGER
 
     def persist_observation_route(self, trigger_id, decomp, route_code, event_search,
-                                  entity_index):
+                                  entity_index, *, minute=False):
         return {"trigger_id": trigger_id, "obs_id": "cob_1", "route_id": "rte_1"}
 
     def fetch_event_contexts(self, trade_date, tickers):

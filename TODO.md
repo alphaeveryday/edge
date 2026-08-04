@@ -29,10 +29,9 @@
 - [ ] 코드베이스 재편 마무리 — 아티팩트 2종 **빌드·compose 분리**(widget 삭제·onprem 매핑 선언은 완료. shared-tenancy(RLS)는 애초 미구현으로 확인 — 삭제 대상 없음. 데모 토폴로지·로컬 compose 항목과 연동)
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
-- [ ] Screening Worker — 위험등급 산정 구현 잔여 (평가기 429·정정 동일 평가 430(ADR-0041)·SYSTEM 상태 이력 431 구현 완료 — **산정 주체 결정 2026-07-26: 온프렘 Screening Worker**, Cloud AI 는 가드레일 제공만. 등급 컬럼·번들 확장·maxRisk 소비가 산정 티켓 몫)
+- [ ] Screening Worker — 위험등급 산정 구현 잔여 (평가기 429·SYSTEM 상태 이력 431 구현 완료 — 정정 동일 평가 430 은 CORRECTION 폐지(ADR-0044)로 소멸 — **산정 주체 결정 2026-07-26: 온프렘 Screening Worker**, Cloud AI 는 가드레일 제공만. 등급 컬럼·번들 확장·maxRisk 소비가 산정 티켓 몫)
 - [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
-- [ ] **CORRECTION·INVALIDATION 발번** — NEW write-time fan-out 은 완료(ALPHA-493, analysis-engine 게시와 같은 트랜잭션). 정정·무효화 발번은 운영자 정정 모델(admin_activity_log 오버레이 — `JdbcAnalysisWriteRepository` "테넌트 전파는 후속" 주석)과의 접합 설계가 선행 입력
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 
 ## 5. 문서·하네스 후속

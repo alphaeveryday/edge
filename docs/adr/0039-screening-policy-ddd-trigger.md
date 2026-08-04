@@ -9,7 +9,7 @@
 - **스키마 SSOT 는 Flyway 다(ADR-0005·0038).** 앱은 `ddl-auto=validate` 로 스키마를 읽기 전용으로 따르고, 상태 전이·게시 grain 선점은 native SQL 로 쓴다. 애그리거트가 자기 영속성을 소유하는 클래식 DDD 는 이 경계와 정면충돌한다.
 - **얇은 레이어드가 관례다.** 온프렘 모듈은 controller/service/repository 를 형식만 유지한 최소 두께이며, 오버엔지니어링을 명시적으로 배제해 왔다.
 
-동시에 screening 은 이 레포에서 **도메인 규칙이 실제로 쌓일 유일한 모듈**이다. 현재는 walking skeleton 국면이라 판정 로직이 delivery_type 3분기(NEW/CORRECTION/INVALIDATION — ADR-0014·0015) **뿐**이고, 이는 도메인 규칙이 아니라 전달 프로토콜 분기다. `BundleScreener` 는 이 분기 + JSON 계약 파싱 + repository 호출이 한 클래스에 섞여 있지만, 로직 총량이 얇아(≈150줄) 지금은 트랜잭션 스크립트가 정직하다.
+동시에 screening 은 이 레포에서 **도메인 규칙이 실제로 쌓일 유일한 모듈**이다. 현재는 walking skeleton 국면이라 판정 로직이 delivery_type 분기(기록 당시 NEW/CORRECTION/INVALIDATION 3분기 — CORRECTION 은 이후 [ADR-0044](0044-correction-abolition.md)로 폐지돼 현행은 2분기) **뿐**이고, 이는 도메인 규칙이 아니라 전달 프로토콜 분기다. `BundleScreener` 는 이 분기 + JSON 계약 파싱 + repository 호출이 한 클래스에 섞여 있지만, 로직 총량이 얇아(≈150줄) 지금은 트랜잭션 스크립트가 정직하다.
 
 문제는 "언제 이 정직함이 깨지는가"를 취향이 아니라 관측 가능한 기준으로 고정하는 것이다. 미리 지으면(선제적 DDD) 정작 규칙이 도착했을 때 예측한 경계가 틀려 두 번 일하고, 너무 늦으면 규칙이 `if` 로 흩어져 추적 불능이 된다.
 
@@ -24,7 +24,7 @@
    - **공유 `ledger` 커널** *(원안 — 채택 시 유예로 대체됨, 아래 "발동 기록" 참조)* — `AnalysisItemStatus`·`PublicationStatus` 와 전이 규칙은 screening·`tenant-console-api` 두 컨텍스트가 공유하므로 `libs/jvm-common`(또는 공유 커널)으로 올린다. screening 안에만 두면 review 쪽과 드리프트한다.
    - `BundleScreener` 는 parse → decide → apply 오케스트레이터로 얇아진다.
 
-3. **불변식은 SQL 에 남긴다(전환해도 옮기지 않는다).** terminal 가드(`status NOT IN ('CORRECTED','INVALIDATED')`)와 게시 grain 유일성(`NOT EXISTS ... status='PUBLISHED'`)은 동시 writer(screening + tenant-console) 환경에서 DB 가 원자적으로 강제해야 정확하다. 도메인 코드는 *의도·결정*을 표현하고, SQL 은 *불변식*을 강제한다 — 같은 가드를 도메인에 복제하면 진실의 원천이 둘이 되어 스키마 SSOT 와 싸운다.
+3. **불변식은 SQL 에 남긴다(전환해도 옮기지 않는다).** terminal 가드(기록 당시 `status NOT IN ('CORRECTED','INVALIDATED')` — CORRECTED 폐지(ADR-0044) 후 현행은 `status <> 'INVALIDATED'`)와 게시 grain 유일성(`NOT EXISTS ... status='PUBLISHED'`)은 동시 writer(screening + tenant-console) 환경에서 DB 가 원자적으로 강제해야 정확하다. 도메인 코드는 *의도·결정*을 표현하고, SQL 은 *불변식*을 강제한다 — 같은 가드를 도메인에 복제하면 진실의 원천이 둘이 되어 스키마 SSOT 와 싸운다.
 
 4. **방아쇠 전에는 위생만 유지한다.** 새 delivery_type 분기나 `if` 하나가 붙어도 `BundleScreener` 안에 둔다. 단 새 로직을 넣을 때 "무엇을 할지 정하는 줄(결정)"과 "실제로 쓰는 줄(I/O)"이 뒤엉키지 않게만 한다 — 이는 DDD 가 아니라 위생이며, 방아쇠가 왔을 때 `policy` 추출을 리라이트가 아닌 이동으로 만든다.
 

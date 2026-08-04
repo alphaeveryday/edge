@@ -1,7 +1,11 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
+import com.edge.superadmin.dto.HoldingsImpactResponse;
+import com.edge.superadmin.dto.MinuteStatusResponse;
+import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceGridResponse;
+import com.edge.superadmin.dto.SourceOverviewResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.service.SourceService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,5 +39,34 @@ public class SourceController {
 	@GetMapping("/api/v1/sources/grid")
 	public ApiResponse<SourceGridResponse> grid(@RequestParam(defaultValue = "30") int days) {
 		return ApiResponse.onSuccess(sourceService.grid(days));
+	}
+
+	/** Run Overview — 레인별 최신 런의 운영 요약(ALPHA-683). 판정은 서비스 한 곳에서 한다. */
+	@GetMapping("/api/v1/sources/overview")
+	public ApiResponse<SourceOverviewResponse> overview() {
+		return ApiResponse.onSuccess(sourceService.overview());
+	}
+
+	/** holdings 결손 영향(ALPHA-686) — 누락 ETF 와 기준일 분석 지목. */
+	@GetMapping("/api/v1/sources/impact/holdings")
+	public ApiResponse<HoldingsImpactResponse> holdingsImpact(
+			@RequestParam(required = false) String runKey) {
+		return ApiResponse.onSuccess(sourceService.holdingsImpact(runKey));
+	}
+
+	/** 장중 1분 파이프라인 요약(ALPHA-651) — 세션·창 집계·결손 창 목록. 검증은 서비스가 한다. */
+	@GetMapping("/api/v1/sources/minute")
+	public ApiResponse<MinuteStatusResponse> minuteStatus(
+			@RequestParam(required = false) String date) {
+		return ApiResponse.onSuccess(sourceService.minuteStatus(date));
+	}
+
+	/** 뉴스 계보(ALPHA-685·697) — 집계·근거 목록·1분 추출 요약. 검증은 서비스가 한다. */
+	@GetMapping("/api/v1/sources/lineage/news")
+	public ApiResponse<NewsLineageResponse> newsLineage(
+			@RequestParam(required = false) String date,
+			@RequestParam(defaultValue = "50") int limit,
+			@RequestParam(required = false) String stage) {
+		return ApiResponse.onSuccess(sourceService.newsLineage(date, limit, stage));
 	}
 }

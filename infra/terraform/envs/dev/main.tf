@@ -138,6 +138,11 @@ module "super_admin_api" {
   target_group_arn           = module.super_admin_alb.target_group_arn
   ingress_security_group_ids = [module.super_admin_alb.security_group_id]
 
+  # 부팅 122s(0.25 vCPU) > 기본 120s — grace 만료 시점에 unhealthy 로 태스크가 킬되는
+  # 롤아웃 실패 실증(ALPHA-688, deploy run 30732194158 / failedTasks 5+). 화면이 늘며
+  # 기동이 59s→110s 로 올라와 마진이 끊겼다. tenant_sync_api(ALPHA-604)와 같은 처방.
+  health_check_grace_period_seconds = 300
+
   # 앱이 JPA(JDBC)를 갖게 되면서 dev RDS 배선이 필수다(ALPHA-526) — 미주입 시 localhost
   # 폴백으로 부팅 실패(ddl-auto=validate 가 기동 시 접속). 비밀번호는 RDS 관리형 시크릿 주입.
   environment = {
@@ -420,10 +425,13 @@ module "gha_deploy_dev" {
     data.aws_ecr_repository.tenant_sync_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
-  app_service_arns = [
+  app_service_arns = concat([
     module.super_admin_api.service_arn,
     module.tenant_sync_api.service_arn,
-  ]
+    # 1분 상주 서비스(ALPHA-711) — deploy-data-pipeline.yml 이 이미지 push 뒤
+    # force-new-deployment 로 mutable 태그를 다시 당기게 한다(없으면 상주 프로세스가
+    # 배포 후에도 옛 이미지를 계속 돈다).
+  ], module.data_pipeline.minute_service_arns)
   app_pass_role_arns = [
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
     module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
@@ -491,6 +499,16 @@ module "data_pipeline" {
   # manual-553-verify-20260727T132646Z)을 선행했다.
   news_schedule_state = "ENABLED"
 
+  # 컷오버(ALPHA-724): 공시 레인 스케줄(평일 09~18시 정각 10슬롯). 시장 SFN 에서 공시 4스텝을
+  # 빼는 것과 **같은 apply** 로 켠다 — 한쪽만 먼저 가면 공시가 아무 데서도 안 돌거나(스텝만 제거)
+  # 같은 스텝을 두 SFN 이 동시에 소유한다(스케줄만 켬). 후자는 원장 정체성이 깨지는 쪽이다:
+  # `catalog.by_cli` 가 CLI 로 작업을 해소하는데 두 레인의 CLI 가 같아, 장중 런의 attempt 가
+  # 시장 레인 task_key 로 기록돼 장중은 영구 MISSED·시장은 LEDGER_GAP 이 된다.
+  # 병행 신설(ALPHA-722)은 DISABLED 로 세워 plan 으로 검증했다(뉴스 레인 553 PR1→PR2 와 같은 순서).
+  # ⚠️ 이 스케줄이 켜지면 `OPS_DISCLOSURE_SCHED_HHMM` 도 함께 주입된다(ops_ledger.tf 조건부) —
+  # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
+  disclosure_schedule_state = "ENABLED"
+
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
   # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이
@@ -500,6 +518,13 @@ module "data_pipeline" {
   # 슬롯은 OPS_RUN_KEY 를 명시해야 대조된다. 켜는 것이 그 사각을 만드는 건 아니다(지금은 아무
   # 런도 대조되지 않으므로 순증).
   reconcile_schedule_state = "ENABLED"
+
+  # 컷오버(ALPHA-712): 1분 상주 서비스 3종의 세션 결속 스케일 업/다운. 08-03 장중에 같은
+  # 순서를 손으로 돌려(plan → desired 1 --force-new-deployment → 백로그 소진 → 실시간 도달)
+  # 레인 자체는 실증했다 — 이 스케줄은 그 수동 절차를 자동화한 것이다.
+  # ⚠️ 첫 발화는 다음 거래일 07:45 KST 다. 그때까지 이미지 CD 가 끝나 있어야 `start-minute-session`
+  # 스텝이 존재한다(이미지 CD 와 apply 는 순서 보장이 없다 — deploy-order-splits-the-pr).
+  minute_session_schedule_state = "ENABLED"
 
   # KR 평일 휴장일 2026 (ALPHA-387). 비면 Planner 는 휴장일에도 런을 계획하고, KRX 수집은 그날
   # 오는 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다 — 주말만 코드가 알기 때문이다.

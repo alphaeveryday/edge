@@ -43,21 +43,38 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	 * 트리거→기여관찰→경로→런이 전부 1:1 체인이라(각 FK 에 UNIQUE) 행이 불어나지 않는다.
 	 * {@code explanation_result} 만 LEFT — 결과가 아직 없는 런도 목록에 남아야 한다.
 	 *
+	 * <p>트리거 축은 둘이다(ALPHA-709) — 일 단위({@code price_movement_trigger})와 분봉
+	 * ({@code minute_price_trigger}). 관측 한 행은 정확히 한 축만 갖는다(one-of CHECK)라
+	 * 두 축을 LEFT 로 걸고 COALESCE 한다 — 일 단위만 INNER 로 걸면 분봉 계보의 런이
+	 * 목록에서 통째로 사라진다. 분봉의 observed_return 은 부호 있는 close/open−1 재구성
+	 * (행의 change_rate 는 절대값), instrument 는 entity_id(단축코드)→ticker 로 잇되
+	 * XKRX 로 좁힌다 — instrument 유일성이 (market_code, ticker)라 같은 ticker 가 두
+	 * MIC 에 있으면 한 런이 두 행으로 불어난다(분봉 ETF 는 전부 XKRX 적재 계약).
+	 *
 	 * <p>동률 해소를 명시한다({@code explanation_run_id}) — {@code explanation_as_of} 에 유일성
 	 * 제약이 없어 동률이면 페이지 경계 행이 조회마다 달라진다.
 	 */
 	private static final String LIST_SQL = """
 			SELECT er.explanation_run_id, er.run_status, er.finished_at,
-			       tr.observed_return, tr.detected_at,
+			       COALESCE(tr.observed_return, mt.close_price / mt.open_price - 1)
+			           AS observed_return,
+			       COALESCE(tr.detected_at, mt.created_at) AS detected_at,
 			       e.display_name, i.ticker, i.market_code,
-			       res.summary, res.confidence_level
+			       res.summary, res.confidence_level, res.publication_status
 			  FROM explanation_run er
 			  JOIN explanation_route rt ON rt.explanation_route_id = er.explanation_route_id
 			  JOIN etf_contribution_observation co
 			         ON co.contribution_observation_id = rt.contribution_observation_id
-			  JOIN price_movement_trigger tr
+			  LEFT JOIN price_movement_trigger tr
 			         ON tr.price_movement_trigger_id = co.price_movement_trigger_id
-			  JOIN instrument i ON i.instrument_id = tr.etf_instrument_id
+			  LEFT JOIN minute_price_trigger mt
+			         ON mt.trigger_id = co.minute_price_trigger_id
+			  JOIN instrument i
+			         ON (tr.etf_instrument_id IS NOT NULL
+			                 AND i.instrument_id = tr.etf_instrument_id)
+			             OR (mt.trigger_id IS NOT NULL
+			                 AND i.ticker = mt.entity_id AND i.instrument_type = 'ETF'
+			                 AND i.market_code = 'XKRX')
 			  JOIN entity e ON e.entity_id = i.instrument_id
 			  LEFT JOIN explanation_result res ON res.explanation_run_id = er.explanation_run_id
 			 ORDER BY er.explanation_as_of DESC, er.explanation_run_id DESC
@@ -116,43 +133,10 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			 ORDER BY explanation_run_id, document_rank
 			""".formatted(LIST_LIMIT, EVIDENCE_LIMIT_PER_RUN);
 
-	/**
-	 * 운영자 작업 오버레이 — 창 안의 런별 최신 액션을 admin_activity_log 에서 유도한다(ALPHA-602).
-	 * explanation_result(파이프라인 소유)를 덮지 않는다: 정정 본문·제외 여부를 이 원장에서 읽어
-	 * 표시 층이 덧입힌다. 복원은 EXCLUDE 를 취소해 원상태(run_status)를 그대로 되살린다.
-	 *
-	 * <p>{@code excluded} = EXCLUDE/RESTORE 중 최신이 EXCLUDE. {@code corrected} = 정정 이력 존재.
-	 * {@code corrected_summary} = 최신 정정본(details.after). FILTER 로 액션별 집계를 분리한다 —
-	 * 해당 액션이 없으면 array 가 비어 [1] 이 NULL(제외 아님 / 정정본 없음).
-	 *
-	 * <p>창(LIMIT)은 LIST_SQL 과 같은 정렬의 explanation_run 상위 200 이다 — LIST_SQL 조인은 전부
-	 * 필수 1:1 체인(route→기여관찰→트리거→instrument→entity, 전부 NOT NULL)이라 런을 떨구지 않아
-	 * 두 창의 런 집합이 일치한다(EVIDENCE_SQL 과 같은 불변식).
-	 */
-	private static final String OVERLAY_SQL = """
-			SELECT target_id,
-			       bool_or(action = 'ANALYSIS_RESULT_CORRECTED') AS corrected,
-			       (array_agg(action ORDER BY activity_id DESC)
-			          FILTER (WHERE action IN ('ANALYSIS_EXCLUDED', 'ANALYSIS_RESTORED')))[1]
-			          = 'ANALYSIS_EXCLUDED' AS excluded,
-			       (array_agg(details ->> 'after' ORDER BY activity_id DESC)
-			          FILTER (WHERE action = 'ANALYSIS_RESULT_CORRECTED'))[1] AS corrected_summary
-			  FROM admin_activity_log
-			 WHERE target_type = 'ANALYSIS_RUN'
-			   AND target_id IN (
-			       SELECT explanation_run_id FROM explanation_run
-			        ORDER BY explanation_as_of DESC, explanation_run_id DESC
-			        LIMIT %d)
-			 GROUP BY target_id
-			""".formatted(LIST_LIMIT);
-
 	private final JdbcTemplate jdbc;
 
 	public JdbcAnalysisRepository(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
-	}
-
-	private record Overlay(boolean excluded, boolean corrected, String correctedSummary) {
 	}
 
 	@Override
@@ -170,15 +154,8 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 							rs.getObject("published_at", OffsetDateTime.class)));
 			totalByRun.put(runId, rs.getInt("evidence_total"));
 		});
-		Map<String, Overlay> overlayByRun = new HashMap<>();
-		jdbc.query(OVERLAY_SQL, rs -> {
-			overlayByRun.put(rs.getString("target_id"), new Overlay(
-					rs.getBoolean("excluded"), rs.getBoolean("corrected"),
-					rs.getString("corrected_summary")));
-		});
 		return jdbc.query(LIST_SQL, (rs, i) -> {
 			String runId = rs.getString("explanation_run_id");
-			Overlay overlay = overlayByRun.getOrDefault(runId, NO_OVERLAY);
 			return new AnalysisRow(
 					runId,
 					rs.getString("display_name"),
@@ -190,14 +167,10 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 					rs.getObject("finished_at", OffsetDateTime.class),
 					rs.getString("summary"),
 					rs.getString("confidence_level"),
-					overlay.excluded(),
-					overlay.corrected(),
-					overlay.correctedSummary(),
+					rs.getString("publication_status"),
 					List.copyOf(evidenceByRun.getOrDefault(runId, List.of())),
 					totalByRun.getOrDefault(runId, 0));
 		});
 
 	}
-
-	private static final Overlay NO_OVERLAY = new Overlay(false, false, null);
 }

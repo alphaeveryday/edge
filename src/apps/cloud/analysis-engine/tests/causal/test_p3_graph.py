@@ -18,6 +18,7 @@ from typing import Any
 
 from edge_analysis.causal.contracts import Hypothesis, Question, WorldGraph
 from edge_analysis.causal.p3_graph import MAX_TRIES, build, compile_latents, validate
+from edge_analysis.causal.run import _designs
 
 TREAT, OUT = "BUYBACK@t-1", "AR@t+0"
 NODES = {
@@ -189,3 +190,42 @@ def test_a_hypothesis_node_dropped_by_the_merge_is_carried_back_in():
     assert "UNWIND@t-1" in g.nodes, "빠진 가설 노드가 복구되지 않았다"
     assert g.nodes["UNWIND@t-1"]["carried_over"] == "H9", "복구 사실이 원장에 안 남았다"
     assert not [v for v in g.violations if "UNWIND@t-1" in v], g.violations
+
+
+def test_a_reference_predicate_with_a_date_column_is_dropped_before_the_universe_query():
+    """참조집합은 **종목 속성만**이다 - 날짜는 코드가 창으로 붙인다.
+
+    실측(2026-08-01 nanfix-20260801-01): 모델이 `trade_date = '2026-07-30'` 을 참조집합에
+    박아 `cd.universe` 가 여섯 간선 모두 거부했고, E-value 분모가 통째로 미산출됐다.
+    거부해서 죽이는 대신 빈 문자열로 내려보내야 산업 동종군 폴백이 비교군을 만든다.
+    """
+    g = WorldGraph(
+        nodes=NODES,
+        edges=[{"from": TREAT, "to": OUT, "kind": "statistical",
+                "exposure": "event_type_code = 'DIV'",
+                "reference": "industry_name = '반도체' AND trade_date = '2026-07-30'"}],
+        hypotheses=[H])
+
+    designs = _designs(g)
+
+    assert len(designs) == 1
+    assert designs[0].control == "", "날짜가 섞인 참조집합이 그대로 내려갔다"
+    assert designs[0].treated == "event_type_code = 'DIV'", "처치 술어까지 지우면 안 된다"
+
+
+def test_one_failing_edge_session_does_not_kill_the_run():
+    """한 간선의 검정이 죽어도 **나머지는 돈다.** ALPHA-633 과 같은 비대칭이다.
+
+    실측 두 번: (1) ref-20260801-01 — 응답 파싱 실패가 런을 exit 1 시켰다.
+    (2) parse-20260801-01 — 격리는 됐는데 그 폴백이 빈 설계에서 KeyError 를 내
+    다시 죽었다. 실패는 침묵이 아니라 gate_fail 을 단 증명으로 남아야 한다.
+    """
+    from edge_analysis.causal.engine import EdgeDesign, EdgeResult
+    from edge_analysis.causal.run import _as_proof
+
+    proof = _as_proof(EdgeResult(design=EdgeDesign(src=TREAT, dst=OUT),
+                                 gate_fail=["검정 실패: PipelineError: 응답 파싱 실패"]), {})
+
+    assert proof.strategy == "none"
+    assert proof.adjust == [] and proof.iv == []
+    assert "검정 실패" in proof.gate_fail[0]

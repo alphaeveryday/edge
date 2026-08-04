@@ -193,3 +193,236 @@ export interface SourceGrid {
   days: number;
   slots: GridSlot[];
 }
+
+/* ---------- Run Overview (ALPHA-683) ---------- */
+
+/**
+ * 판정 스펙 §7 의 Run 집계 어휘 — 원장 4축의 재명명이 아니라 스펙이 별도 정의한 파생 요약이고,
+ * 파생은 서버 한 곳에서 한다(화면 재계산 금지 — running 플래그와 같은 원칙).
+ */
+export type OpsStatus = 'IN_PROGRESS' | 'READY' | 'DEGRADED' | 'BLOCKED' | 'UNKNOWN';
+
+/**
+ * 귀결 수(fulfilled~pending)는 **필수(required) DUE 작업 기준**이다 — "오늘 발행 가능한가"의
+ * 분모는 필수 작업이다. due 만 전체 DUE 수. 화면은 반드시 단위("필수 작업 N개 중")를 붙인다.
+ */
+export interface OverviewCounts {
+  due: number;
+  requiredDue: number;
+  fulfilled: number;
+  failed: number;
+  missed: number;
+  blocked: number;
+  pending: number;
+  skipped: number;
+}
+
+/** 결함 하나 — 축 원문 그대로. overdue(마감 경과 미귀결)만 서버 시계 판정이다. */
+export interface OverviewDefect {
+  stage: string;
+  taskKey: string;
+  outcome: TaskOutcome | null;
+  dataStatus: DataStatus | null;
+  freshnessStatus: 'UNKNOWN' | 'FRESH' | 'STALE' | null;
+  failedRecords: number | null;
+  overdue: boolean;
+}
+
+/**
+ * 레인(pipeline_type)별 최신 런 요약. defects 는 **단계 순**(같은 단계 안은 task_key 사전순 —
+ * 실행 순서가 아니다)이라, 첫 원소는 "최초 결함이 속한 단계"까지만 말한다. 첫 원소를 최초
+ * 결함 지점으로 그리지 마라 — 정확한 지점은 드릴다운 소관.
+ */
+export interface OverviewLane {
+  pipelineType: string;
+  runKey: string;
+  tradingDate: string | null;
+  /** 계획 시각(ISO). "이 판정이 언제 런 기준인가"의 근거 */
+  plannedAt: string | null;
+  /**
+   * 서버 KST 시계 판정 — Planner 가 오늘 안 돌면 조회는 어제 런을 최신으로 재사용한다.
+   * 오늘 화면이 그 사실을 숨기면 지난 판정이 오늘 것처럼 보인다(화면 재계산 금지).
+   */
+  notToday: boolean;
+  launchStatus: LaunchStatus | null;
+  orchestrationStatus: OrchestrationStatus | null;
+  opsStatus: OpsStatus;
+  counts: OverviewCounts;
+  defects: OverviewDefect[];
+}
+
+export interface SourceOverview {
+  lanes: OverviewLane[];
+}
+
+/* ---------- 뉴스 계보 — Dataset Explorer (ALPHA-685) ---------- */
+
+/**
+ * 모든 건수의 단위는 **문서(기사)**다. withAssertion 은 "추출 성공"이 아니라 "구조화 증거가
+ * 남은 문서" — 없음은 NO_EVENT·추출 실패·미실행이 **한 통**이다(그 구분은 RDS 에 없다,
+ * S3 quality log 소관 — 문서별 terminal 승격은 후속). 화면은 이 한계를 명시한다.
+ */
+export interface NewsLineageSummary {
+  totalDocuments: number;
+  documentsWithAssertion: number;
+  documentsUsedInAnalysis: number;
+}
+
+export interface NewsLineageDocument {
+  documentId: string;
+  title: string | null;
+  sourceCode: string | null;
+  /** 언론사(ALPHA-695 승격) — 미기록 null. sourceCode(수집 벤더)와 다른 축이다. */
+  publisher: string | null;
+  sourceUri: string | null;
+  publishedAt: string | null;
+  availableAt: string | null;
+  assertionCount: number;
+  usedInAnalysis: boolean;
+}
+
+/** 문서 목록 단계 필터(ALPHA-697) — 정의는 서버 집계 카운트와 동일한 SQL 조각. */
+export type NewsLineageStage = 'structured' | 'unstructured' | 'used';
+
+/**
+ * 장중 1분 추출 요약(ALPHA-697) — news_extraction_job 기준. 날짜 축=job 생성 시각(KST)이라
+ * 문서 축(available_at)과 다른 원장이다. errorCode null = 사유 미기록 DEAD.
+ */
+export interface NewsExtractionSummary {
+  succeeded: number;
+  dead: number;
+  deadByErrorCode: { errorCode: string | null; count: number }[];
+}
+
+/** date 는 수집 시각(available_at)의 KST 날짜 필터. null = 전체 누적. stage 는 목록 필터 에코. */
+export interface NewsLineage {
+  date: string | null;
+  stage: NewsLineageStage | null;
+  summary: NewsLineageSummary;
+  documents: NewsLineageDocument[];
+  extraction: NewsExtractionSummary;
+}
+
+/* ---------- holdings 결손 영향 (ALPHA-686) ---------- */
+
+/**
+ * 단위: 기대·적재·누락은 **ETF 종**, analyses 는 **설명 결과 건**. snapshotMissing 은 기대
+ * 목록 부재 = 영향 범위 계산 불가(UNKNOWN) — 빈 누락 목록(영향 없음)과 **다르다**(스펙 §6.3).
+ * 누락의 원인(수집/정제/적재 중 어디)은 이 응답이 단정하지 않는다.
+ */
+export interface HoldingsImpact {
+  runKey: string | null;
+  expectedAsOf: string | null;
+  expectedCount: number | null;
+  /** 기대 ∩ 기준일 적재 — expected = loaded + missing 산술 성립. 계산 불가면 null */
+  loadedCount: number | null;
+  snapshotMissing: boolean;
+  /** 이 기준일 대상 적재 중 미귀결 존재(기준일 축 — 선택 런의 outcome 아님). true 면 결손은 잠정 */
+  loadPending: boolean;
+  missing: MissingEtf[];
+  /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없거나 적재 미귀결이면 null */
+  recommendedAction: string | null;
+}
+
+export interface MissingEtf {
+  ourEtfId: string;
+  /** null = instrument 행 자체가 없음(프로필 수집까지 결손) — 단축코드만 표시 가능 */
+  instrumentId: string | null;
+  etfName: string | null;
+  /** 빈 목록 = "기준일 분석 없음"이라는 사실 — 결손의 결과라고 단정하지 않는다(오귀인 금지) */
+  analyses: AffectedAnalysis[];
+}
+
+export interface AffectedAnalysis {
+  explanationResultId: string;
+  /** 분석 상세(/analyses/:id)의 키 — explanation_result 와 1:1 */
+  explanationRunId: string | null;
+  publicationStatus: string | null;
+  summary: string | null;
+}
+
+/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
+
+/** minute_ingestion_session.phase — 원장 어휘 그대로 */
+export type MinutePhase =
+  | 'PLANNED'
+  | 'ACTIVE'
+  | 'DRAINING'
+  | 'DRAINED'
+  | 'QC_RUNNING'
+  | 'FINALIZED'
+  | 'FAILED';
+
+/** minute_ingestion_window.data_status — 원장 어휘 그대로 */
+export type MinuteWindowStatus =
+  | 'DUE'
+  | 'CLAIMED'
+  | 'VALID'
+  | 'VALID_EMPTY'
+  | 'INCOMPLETE'
+  | 'MISSING'
+  | 'INVALID';
+
+/**
+ * 창 상태 집계 + 파생 1개. overdueNoEvidence = 기한(window_end)이 지났는데 DUE/CLAIMED 인 창 —
+ * MISSING 판정은 EOD QC 몫이라 장중의 "안 돌았다"는 이 파생으로만 보인다(서버 판정,
+ * 화면 재계산 금지). validEmpty(돌았는데 데이터 없음)와 다른 축이다.
+ */
+export interface MinuteWindowCounts {
+  due: number;
+  claimed: number;
+  valid: number;
+  validEmpty: number;
+  incomplete: number;
+  missing: number;
+  invalid: number;
+  overdueNoEvidence: number;
+}
+
+/** 결손·무증거 창 하나 — 집계의 근거 목록(목록 없는 집계 금지) */
+export interface MinuteGapWindow {
+  windowStart: string;
+  windowEnd: string;
+  dataStatus: MinuteWindowStatus;
+  /** true = 기한 지난 DUE/CLAIMED(증거 없음). false = 증거 있는 결함(INCOMPLETE 등) */
+  noEvidence: boolean;
+}
+
+/** job 상태 집계 — waiting 은 PENDING+RETRY_WAIT */
+export interface MinuteJobCounts {
+  waiting: number;
+  claimed: number;
+  /** claimed 중 유효한 lease 가 없는 것(만료 또는 NULL, 서버 판정) — Consumer 사망 고착 후보 */
+  claimedExpired: number;
+  succeeded: number;
+  dead: number;
+}
+
+/**
+ * 하루 세션 하나의 요약. leaseExpired 는 서버 판정 — null 은 lease 부재(기동 증거 자체가
+ * 없음)로, 만료(true = 실행체 증거 끊김)와 다른 사실이다.
+ */
+export interface MinuteSession {
+  sessionId: string;
+  dataset: string;
+  sourceGroup: string;
+  phase: MinutePhase;
+  universeVersion: string;
+  expectedWindowCount: number;
+  processedThrough: string | null;
+  contiguousCompleteThrough: string | null;
+  heartbeatAt: string | null;
+  leaseExpiresAt: string | null;
+  leaseExpired: boolean | null;
+  windows: MinuteWindowCounts;
+  gaps: MinuteGapWindow[];
+  priceJobs: MinuteJobCounts;
+}
+
+/** date = 세션 날짜(KST). 세션 부재는 빈 목록 — "미가동"이라는 사실이지 오류가 아니다 */
+export interface MinuteStatus {
+  date: string;
+  sessions: MinuteSession[];
+  /** 뉴스 job 은 세션 연결 컬럼이 없어 날짜(생성 시각 KST) 축의 별도 집계다 */
+  newsJobs: MinuteJobCounts;
+}

@@ -231,3 +231,47 @@ def test_predicate_rejects_a_subquery():
     with pytest.raises(PipelineError, match="쓸 수 없는 토큰"):
         CausalData(_FakeConn()).cohort(
             "ticker IN (SELECT ticker FROM etf_constituents)", as_of=AS_OF)
+
+
+def test_flow_keeps_input_order_and_marks_missing_pairs_as_nan():
+    """수급을 결과로 쓰는 간선은 이것 없이는 못 잰다.
+
+    실측(fb-20260801-01): 검정 에이전트가 `net_flow(pairs)` 를 원장에 요청했다 -
+    "제공된 함수는 수익률 관련(ar·mom·vol)뿐". 데이터는 investor_flow_daily 에 이미
+    있었다. 정렬이 어긋나면 x·y 가 다른 단위를 가리켜도 길이만 맞아 통과한다.
+    """
+    pairs = [("i1", date(2026, 7, 30)), ("i2", date(2026, 7, 30))]
+    cd = CausalData(_FakeConn([("i1", date(2026, 7, 30), -8200000000.0)]))
+
+    got = cd.flow(pairs, kind="institution_total")
+
+    assert got[0] == -8200000000.0, "순매도(음수)가 정상이다"
+    assert np.isnan(got[1]), "없는 쌍은 nan 이어야 정렬이 유지된다"
+    assert "net_val_institution_total" in cd._conn.executed[-1][0]
+
+
+def test_flow_refuses_an_unknown_investor_kind():
+    # 컬럼명이 문자열 결합으로 들어가므로 어휘 밖 값은 여기서 죽어야 한다.
+    with pytest.raises(PipelineError):
+        CausalData(_FakeConn()).flow([("i1", date(2026, 7, 30))], kind="net_val_x; DROP")
+
+
+def test_ids_maps_both_ticker_and_display_name():
+    """조정집합에 종목을 넣으려면 id 가 필요하다 - 술어의 ticker 에 이름을 넣는
+    0행 오검사가 그 우회였다(fb-20260801-01)."""
+    cd = CausalData(_FakeConn([("000660", "SK하이닉스", "inst_x")]))
+
+    assert cd.ids(["SK하이닉스"]) == {"SK하이닉스": "inst_x"}
+    assert cd.ids([]) == {}, "빈 입력에 질의를 던지지 않는다"
+
+
+def test_ids_accepts_a_bare_string():
+    """`ids("091160")` 을 글자 단위로 조회하면 **있는 종목이 없다고 나온다.**
+
+    실측(ground-20260801-01): 검정 에이전트가 "'KODEX 반도체' 와 티커 '091160' 모두
+    실패"로 조정집합을 포기했다. 도구 표면이 호출 습관을 흡수한다.
+    """
+    cd = CausalData(_FakeConn([("091160", "KODEX 반도체", "inst_etf")]))
+
+    assert cd.ids("091160") == {"091160": "inst_etf"}
+    assert cd._conn.executed[-1][1][0] == ["091160"], "글자 단위로 쪼개 조회했다"

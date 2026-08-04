@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom';
 import { Delta, Icon, PageSkeleton, StatusBadge, formatDelta, toast } from 'ui-kit';
 import {
   ANALYSIS_CONFIDENCE_LABEL,
+  ANALYSIS_PUBLICATION_LABEL,
+  ANALYSIS_PUBLICATION_TONE,
   ANALYSIS_STATUS_LABEL,
   ANALYSIS_STATUS_TONE,
 } from '../domains/analyses';
@@ -12,20 +14,20 @@ import { LoadError } from './_shared/LoadError';
 export function AnalysisDetailPage() {
   const { id } = useParams();
   const { analysis: a, isPending, isError, error } = useAnalysis(id);
-  const { correct, exclude, restore } = useAnalysisActions();
+  const { invalidateAnalysis } = useAnalysisActions();
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [correctReason, setCorrectReason] = useState('');
-  const [confirmingExclude, setConfirmingExclude] = useState(false);
-  const [excludeReason, setExcludeReason] = useState('');
+  const [confirmingInvalidate, setConfirmingInvalidate] = useState(false);
+  const [invalidateReason, setInvalidateReason] = useState('');
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={5} />;
   if (!a) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>
-        해당 분석 건을 찾을 수 없습니다.
+        {/* 목록 창(최신 200건) 기반 조회라 "없는 ID"와 "창 밖의 과거 분석"을 여기서 가를 수
+         * 없다 — 단정하면 유효한 과거 링크가 오타처럼 읽힌다. 단건 조회 API 는 후속. */}
+        해당 분석 건을 찾을 수 없습니다 — 없는 ID 이거나, 최신 200건 목록 창 밖의 과거
+        분석일 수 있습니다.
       </div>
     );
   }
@@ -38,7 +40,11 @@ export function AnalysisDetailPage() {
         <span className="tag">{a.market}</span>
         <Delta direction={a.direction} pct={a.changePct} style={{ fontSize: 16 }} />
         <StatusBadge tone={ANALYSIS_STATUS_TONE[a.status]}>{ANALYSIS_STATUS_LABEL[a.status]}</StatusBadge>
-        {a.corrected && <span className="chip chip-accent">정정됨</span>}
+        {a.publicationStatus && (
+          <StatusBadge tone={ANALYSIS_PUBLICATION_TONE[a.publicationStatus]}>
+            {ANALYSIS_PUBLICATION_LABEL[a.publicationStatus]}
+          </StatusBadge>
+        )}
       </div>
 
       <div className="grid items-start gap-4" style={{ gridTemplateColumns: '1fr 340px' }}>
@@ -84,67 +90,14 @@ export function AnalysisDetailPage() {
                 </span>
               )}
             </div>
-            {editing ? (
-              <div className="flex flex-col gap-2.5 p-4">
-                <textarea
-                  className="textarea"
-                  style={{ borderColor: 'var(--accent)', lineHeight: 1.6 }}
-                  rows={6}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <div className="flex flex-col gap-1">
-                  <span className="t-label">
-                    정정 사유 <span style={{ color: 'var(--down)' }}>*</span>
-                  </span>
-                  <label className="field w-full box-border">
-                    <input
-                      placeholder="정정 사유 — 감사 기록에 보존됩니다"
-                      value={correctReason}
-                      onChange={(e) => setCorrectReason(e.target.value)}
-                    />
-                  </label>
-                </div>
-                <div className="flex justify-end gap-2">
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      setEditing(false);
-                      setCorrectReason('');
-                    }}
-                  >
-                    취소
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    disabled={!draft.trim() || !correctReason.trim() || correct.isPending}
-                    onClick={() =>
-                      correct.mutate(
-                        { id: a.id, result: draft, reason: correctReason },
-                        {
-                          onSuccess: () => {
-                            setEditing(false);
-                            setCorrectReason('');
-                            toast('분석 결과가 정정되었습니다.');
-                          },
-                        },
-                      )
-                    }
-                  >
-                    정정 내용 저장
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="p-4">
-                <p
-                  className="t-body m-0 whitespace-pre-line"
-                  style={{ color: 'var(--fg-2)', lineHeight: 1.6 }}
-                >
-                  {a.result}
-                </p>
-              </div>
-            )}
+            <div className="p-4">
+              <p
+                className="t-body m-0 whitespace-pre-line"
+                style={{ color: 'var(--fg-2)', lineHeight: 1.6 }}
+              >
+                {a.result}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -202,38 +155,32 @@ export function AnalysisDetailPage() {
               <span className="t-label">관리 액션</span>
             </div>
             <div className="flex flex-col gap-2 p-4">
-              <button
-                className="btn justify-center"
-                onClick={() => {
-                  setEditing(true);
-                  setDraft(a.result);
-                }}
-              >
-                <Icon name="pencil" className="ic" />
-                분석 결과 정정
-              </button>
-              {a.status !== 'EXCLUDED' &&
-                (confirmingExclude ? (
+              {/* 무효화(ALPHA-440) — 게시본을 내리고 전 수신 테넌트에 INVALIDATION 이
+               * 전파된다. 되돌리기 없음(설계). 게시본(PUBLISHED)에서만 활성 — 구
+               * 정정/제외/복원 오버레이는 ALPHA-737 로 은퇴했다. */}
+              {a.publicationStatus === 'PUBLISHED' ? (
+                confirmingInvalidate ? (
                   <div
                     className="flex flex-col gap-2 rounded-[5px] p-2.5"
                     style={{ background: 'var(--down-tint)', border: '1px solid var(--border)' }}
                   >
                     <span className="t-xs" style={{ color: 'var(--down)', fontWeight: 600 }}>
-                      이 종목을 분석 대상에서 제외하시겠습니까? 제외 후에는 테넌트에 분석 결과가 노출되지 않습니다.
+                      이 분석을 무효화하시겠습니까? 게시가 내려가고 전 테넌트 화면에서
+                      제거됩니다. 되돌릴 수 없습니다.
                     </span>
                     <label className="field w-full box-border">
                       <input
-                        placeholder="제외 사유 (필수) — 감사 기록에 보존됩니다"
-                        value={excludeReason}
-                        onChange={(e) => setExcludeReason(e.target.value)}
+                        placeholder="무효화 사유 (필수) — 감사 기록·테넌트 전파에 보존됩니다"
+                        value={invalidateReason}
+                        onChange={(e) => setInvalidateReason(e.target.value)}
                       />
                     </label>
                     <div className="flex gap-1.5">
                       <button
                         className="btn btn-sm flex-1 justify-center"
                         onClick={() => {
-                          setConfirmingExclude(false);
-                          setExcludeReason('');
+                          setConfirmingInvalidate(false);
+                          setInvalidateReason('');
                         }}
                       >
                         취소
@@ -241,21 +188,21 @@ export function AnalysisDetailPage() {
                       <button
                         className="btn btn-sm flex-1 justify-center"
                         style={{ color: '#fff', background: 'var(--down)', borderColor: 'var(--down)' }}
-                        disabled={!excludeReason.trim() || exclude.isPending}
+                        disabled={!invalidateReason.trim() || invalidateAnalysis.isPending}
                         onClick={() =>
-                          exclude.mutate(
-                            { id: a.id, reason: excludeReason },
+                          invalidateAnalysis.mutate(
+                            { id: a.id, reason: invalidateReason },
                             {
                               onSuccess: () => {
-                                setConfirmingExclude(false);
-                                setExcludeReason('');
-                                toast('분석 대상에서 제외되었습니다.');
+                                setConfirmingInvalidate(false);
+                                setInvalidateReason('');
+                                toast('분석이 무효화되었습니다 — 테넌트 화면에서 제거됩니다.');
                               },
                             },
                           )
                         }
                       >
-                        제외
+                        무효화
                       </button>
                     </div>
                   </div>
@@ -263,22 +210,18 @@ export function AnalysisDetailPage() {
                   <button
                     className="btn justify-center"
                     style={{ color: 'var(--down)' }}
-                    onClick={() => setConfirmingExclude(true)}
+                    onClick={() => setConfirmingInvalidate(true)}
                   >
                     <Icon name="ban" className="ic" />
-                    분석 대상 제외
+                    분석 무효화
                   </button>
-                ))}
-              {a.status === 'EXCLUDED' && (
-                <button
-                  className="btn justify-center"
-                  disabled={restore.isPending}
-                  onClick={() =>
-                    restore.mutate(a.id, { onSuccess: () => toast('분석 대상으로 복원되었습니다.') })
-                  }
-                >
-                  분석 대상 복원
-                </button>
+                )
+              ) : (
+                <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                  {a.publicationStatus === 'WITHDRAWN'
+                    ? '이미 무효화된 분석입니다.'
+                    : '게시된 분석만 무효화할 수 있습니다.'}
+                </span>
               )}
             </div>
           </div>

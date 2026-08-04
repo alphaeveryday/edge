@@ -46,10 +46,9 @@
     },
 
     "BundleEntry": {
-      "description": "전달 레코드 하나. delivery_type 으로 형상이 갈린다(oneOf). 서버 팩토리(BundleEntry.newResult·correction·invalidation)가 내는 3형상과만 일치.",
+      "description": "전달 레코드 하나. delivery_type 으로 형상이 갈린다(oneOf). 서버 팩토리(BundleEntry.newResult·invalidation)가 내는 2형상과만 일치(CORRECTION 은 폐지 — ADR-0044).",
       "oneOf": [
         { "$ref": "#/$defs/NewEntry" },
-        { "$ref": "#/$defs/CorrectionEntry" },
         { "$ref": "#/$defs/InvalidationEntry" }
       ]
     },
@@ -62,23 +61,6 @@
       "properties": {
         "cursor": { "$ref": "#/$defs/EntryCursor" },
         "delivery_type": { "const": "NEW" },
-        "explanation_result": { "$ref": "#/$defs/ExplanationResult" },
-        "explanation_run": { "$ref": "#/$defs/ExplanationRun" },
-        "source_events": { "$ref": "#/$defs/SourceEvents" },
-        "evidences": { "$ref": "#/$defs/Evidences" }
-      }
-    },
-
-    "CorrectionEntry": {
-      "type": "object",
-      "description": "정정(CORRECTION) — 대상·사유 + 재게시 본체·실행 + 배열.",
-      "additionalProperties": false,
-      "required": ["cursor", "delivery_type", "target_explanation_result_id", "reason", "explanation_result", "explanation_run", "source_events", "evidences"],
-      "properties": {
-        "cursor": { "$ref": "#/$defs/EntryCursor" },
-        "delivery_type": { "const": "CORRECTION" },
-        "target_explanation_result_id": { "type": "string", "description": "정정 대상 원본 explanation_result_id." },
-        "reason": { "type": "string", "description": "정정 사유." },
         "explanation_result": { "$ref": "#/$defs/ExplanationResult" },
         "explanation_run": { "$ref": "#/$defs/ExplanationRun" },
         "source_events": { "$ref": "#/$defs/SourceEvents" },
@@ -147,14 +129,14 @@
 
     "SourceEvents": {
       "type": "array",
-      "description": "설명이 근거로 삼은 소스 이벤트 목록. 현행은 항상 빈 배열(rowMapper 가 List.of() 만 싣는다) — 조립 조인 구현은 ALPHA-363. 컬럼 선별은 ALPHA-395 확정.",
+      "description": "설명이 근거로 삼은 소스 이벤트 목록. 근거(event_evidence)의 source_event_id 로 조립돼 실린다(ALPHA-718) — lineage 없는 런은 빈 배열. 컬럼 선별은 ALPHA-395 확정.",
       "minItems": 0,
       "items": { "$ref": "#/$defs/SourceEventItem" }
     },
 
     "SourceEventItem": {
       "type": "object",
-      "description": "소스 이벤트 하나 (source_event 경계면 — ALPHA-395). 온프렘 소비는 이벤트 타임라인 UI 도입 시 예정.",
+      "description": "소스 이벤트 하나 (source_event 경계면 — ALPHA-395). 온프렘 소비자는 screening-worker 출처 수 정책 게이트(SINGLE_SOURCE·min_source_count — 고유 source_event_id 수), 이벤트 타임라인 UI 는 추가 소비 예정.",
       "additionalProperties": false,
       "required": ["source_event_id", "source_class", "event_type_code", "event_date"],
       "properties": {
@@ -167,21 +149,22 @@
 
     "Evidences": {
       "type": "array",
-      "description": "설명의 근거가 된 뉴스/공시 문서 목록. 현행은 항상 빈 배열 — 조립 조인 구현은 ALPHA-363. 온프렘 소비자(publication-api ExplanationStore) 형상에 정렬(ALPHA-395).",
+      "description": "설명의 근거가 된 뉴스/공시 문서 목록. lineage 두 갈래(이벤트 근거·공시 정규화 사실) 조립으로 실린다(ALPHA-718) — 근거 없는 런은 빈 배열. 온프렘 소비자(publication-api ExplanationStore) 형상에 정렬(ALPHA-395).",
       "minItems": 0,
       "items": { "$ref": "#/$defs/EvidenceItem" }
     },
 
     "EvidenceItem": {
       "type": "object",
-      "description": "근거 문서 하나 (document 경계면을 flat 화 — ALPHA-395). publication-api 가 파싱하는 {kind,title,source,published_at} 형상.",
+      "description": "근거 문서 하나 (document 경계면을 flat 화 — ALPHA-395). publication-api 가 파싱하는 {kind,title,source,published_at} 형상 + 콘솔 원문 링크 source_uri(ALPHA-739).",
       "additionalProperties": false,
       "required": ["kind", "title", "source", "published_at"],
       "properties": {
         "kind": { "type": "string", "enum": ["NEWS", "DISCLOSURE"], "description": "document.document_type." },
         "title": { "type": ["string", "null"], "description": "헤드라인 ← document.title (nullable)." },
         "source": { "type": "string", "description": "출처 ← document.source_code." },
-        "published_at": { "type": ["string", "null"], "format": "date-time", "description": "← document.published_at (nullable)." }
+        "published_at": { "type": ["string", "null"], "format": "date-time", "description": "← document.published_at (nullable)." },
+        "source_uri": { "type": ["string", "null"], "description": "원문 링크 ← document.source_uri (ALPHA-739). optional — 구형(4키) 저장분·EOD 뉴스 결측(assemble 선적재 구멍, ALPHA-740)·원천 URL 결측 기사와 공존해야 해 required 승격은 채움 구멍 해소 후. 공시=DART 뷰어 URL 항상, 뉴스=원천 URL 있을 때." }
       }
     }
   }

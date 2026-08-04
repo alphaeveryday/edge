@@ -40,7 +40,6 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
 | | 최종 문구 수정 | – | ✓ | – | – |
 | | 검수로 이관 | – | ✓ | ✓ | – |
 | | 제공 중단 | – | ✓ | ✓ | – |
-| | 정정 등록 | – | ✓ | – | – |
 | Review Queue | 대기 목록·상세 조회 | ✓ | ✓ | ✓ | ✓ |
 | | 검수 액션(임시 저장·승인·수정 후 승인·반려·차단) | – | ✓ | – | – |
 | Compliance Policy | 정책 조회(금칙어·처리 기준·면책 문구·버전 이력) | ✓ | ✓ | ✓ | ✓ |
@@ -57,7 +56,7 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
   컴플라이언스 통제(CR, [../adr/0023](../adr/0023-customer-validation.md))다.
   경계는 `serving_scope.scope_type` 과 1:1 이다(MARKET·CHANNEL = TA,
   INSTRUMENT·SECTOR = CR) — TA 가 CR 의 이해상충 제외를 되돌릴 수 없다.
-- 최종 문구 수정·정정 등록이 CR 전용인 이유: 노출 문구에 관한 판단은 검수
+- 최종 문구 수정이 CR 전용인 이유: 노출 문구에 관한 판단은 검수
   경로이며(state-machine.md), Operator 의 쓰기는 노출 축소 방향으로 한정된다.
   Cloud Sync 관리(인증서 교체·재연결)는 노출 축소가 아닌 시스템 관리라 TA 전용이다.
 - 역할 부여의 직무 분리 보강: TA 가 스스로에게 CR 을 부여해 검수·정책 권한을

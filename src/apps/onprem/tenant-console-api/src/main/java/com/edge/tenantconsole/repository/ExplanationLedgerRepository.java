@@ -23,7 +23,7 @@ import java.util.Optional;
  */
 public interface ExplanationLedgerRepository extends Repository<AnalysisItemEntity, String> {
 
-	/** 화면 노출 상태(6종)의 설명을 최근 반입 순으로 — RECEIVED·CORRECTED·INVALIDATED 는 제외. */
+	/** 화면 노출 상태(6종)의 설명을 최근 반입 순으로 — RECEIVED·INVALIDATED 는 제외. */
 	List<AnalysisItemEntity> findByStatusInOrderByReceivedAtDesc(Collection<String> statuses);
 
 	/** 사후 운영 전이의 not-found(404) 분기용 — 현재 상태를 읽어 가드 값으로 쓴다. */

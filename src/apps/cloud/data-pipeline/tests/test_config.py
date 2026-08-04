@@ -261,3 +261,33 @@ def test_krx_etf_isins_match_their_short_codes():
             total += d - 9 if d > 9 else d
             double = not double
         assert str((10 - total % 10) % 10) == expected, f"{short_code}: 체크디짓 불일치 ({isin})"
+
+
+def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path):
+    """README·docstring 이 안내하는 env 형태가 **실제로 파싱되는지** 고정한다.
+
+    처음 문서에 적었던 nested 형태(`…__QUEUE_URLS__price-analysis-realtime=`)는 셸이
+    변수 할당으로 파싱하지 못해(destination 이름에 하이픈) 그 명령 자체가 실행되지
+    않았다 — 새 실행 표면의 첫 문서 경로가 죽어 있었다(봇 리뷰 P2). 문서가 안내하는
+    형태와 코드가 받는 형태는 테스트로 묶어 둔다.
+    """
+    monkeypatch.setenv("DATA_PIPELINE_DB__PASSWORD", "x")
+    monkeypatch.setenv(
+        "DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS",
+        '{"price-analysis-realtime":"https://sqs/p",'
+        '"news-extraction-realtime":"https://sqs/n",'
+        '"news-extraction-backfill":"https://sqs/b",'
+        '"price-explanation-realtime":"https://sqs/e"}',
+    )
+    settings = load_settings(_write(tmp_path, VALID))
+    assert dict(settings.minute_relay.queue_urls) == {
+        "price-analysis-realtime": "https://sqs/p",
+        "news-extraction-realtime": "https://sqs/n",
+        "news-extraction-backfill": "https://sqs/b",
+        # 4번째 — 트리거 설명 큐(ALPHA-709). 빠뜨리면 RelayConfig 가 기동을 거부한다
+        "price-explanation-realtime": "https://sqs/e",
+    }
+    # 이 매핑이 그대로 Relay 설정으로 성립해야 한다(어휘·중복 검증 통과)
+    from data_pipeline.minute.relay import RelayConfig
+
+    RelayConfig(relay_id="r", queue_urls=dict(settings.minute_relay.queue_urls))

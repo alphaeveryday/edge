@@ -20,8 +20,6 @@ public record ReviewItemResponse(
 		String headline,
 		String confidenceLevel,
 		String status,
-		String supersedesItemId,
-		String correctionReason,
 		String receivedAt,
 		java.util.List<String> reviewReasons
 ) {
@@ -31,7 +29,6 @@ public record ReviewItemResponse(
 				i.explanationResultId(), i.etfTicker(), i.etfName(),
 				i.tradeDate() == null ? null : i.tradeDate().toString(),
 				i.summary(), i.headline(), i.confidenceLevel(), i.status(),
-				i.supersedesItemId(), i.correctionReason(),
 				i.receivedAt() == null ? null : i.receivedAt().toString(),
 				entry.reviewReasons());
 	}

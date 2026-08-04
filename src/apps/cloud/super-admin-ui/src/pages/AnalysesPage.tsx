@@ -2,7 +2,12 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Delta, Icon, PageSkeleton, StatusBadge } from 'ui-kit';
 import type { AnalysisMarket, AnalysisStatus } from '../domains/analyses';
-import { ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
+import {
+  ANALYSIS_PUBLICATION_LABEL,
+  ANALYSIS_PUBLICATION_TONE,
+  ANALYSIS_STATUS_LABEL,
+  ANALYSIS_STATUS_TONE,
+} from '../domains/analyses';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { LoadError } from './_shared/LoadError';
 
@@ -66,6 +71,7 @@ export function AnalysesPage() {
               <th className="col-num">등락률</th>
               <th>변동 기준 시각</th>
               <th>상태</th>
+              <th>게시</th>
             </tr>
           </thead>
           <tbody>
@@ -86,6 +92,16 @@ export function AnalysesPage() {
                 <td className="col-muted num whitespace-nowrap">{a.basisTime}</td>
                 <td>
                   <StatusBadge tone={ANALYSIS_STATUS_TONE[a.status]}>{ANALYSIS_STATUS_LABEL[a.status]}</StatusBadge>
+                </td>
+                <td>
+                  {/* 게시 수명주기 — 실행 상태와 별개 축. 결과 없는 런은 배지 없음(—). */}
+                  {a.publicationStatus ? (
+                    <StatusBadge tone={ANALYSIS_PUBLICATION_TONE[a.publicationStatus]}>
+                      {ANALYSIS_PUBLICATION_LABEL[a.publicationStatus]}
+                    </StatusBadge>
+                  ) : (
+                    <span className="t-xs" style={{ color: 'var(--fg-3)' }}>—</span>
+                  )}
                 </td>
               </tr>
             ))}

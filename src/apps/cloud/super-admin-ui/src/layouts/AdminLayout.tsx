@@ -15,6 +15,11 @@ interface NavEntry {
 
 const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
   {
+    section: '운영 현황',
+    /* 화면명은 답하는 질문이다 — "오늘 정상 발행 가능한가"(ALPHA-683) */
+    items: [{ path: '/', label: '오늘 운영 현황', icon: 'dashboard' }],
+  },
+  {
     section: '테넌트 관리',
     items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
@@ -23,6 +28,9 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     items: [
       { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
       { path: '/grid', label: '파이프라인 실행 이력', icon: 'dashboard' },
+      { path: '/minute', label: '장중 1분 수집', icon: 'database' },
+      { path: '/lineage/news', label: '뉴스 계보', icon: 'database' },
+      { path: '/impact/holdings', label: '구성종목 결손 영향', icon: 'trendChart' },
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
     ],
   },
@@ -83,8 +91,16 @@ export function AdminLayout() {
     pageTitle = '데이터 소스 수집 상태';
   } else if (path.startsWith('/grid')) {
     pageTitle = '파이프라인 실행 이력';
+  } else if (path.startsWith('/minute')) {
+    pageTitle = '장중 1분 수집';
   } else if (path.startsWith('/analyses')) {
     pageTitle = '가격 변동 분석 목록';
+  } else if (path.startsWith('/lineage/news')) {
+    pageTitle = '뉴스 계보';
+  } else if (path.startsWith('/impact/holdings')) {
+    pageTitle = '구성종목 결손 영향';
+  } else if (path === '/') {
+    pageTitle = '오늘 운영 현황';
   }
   const showBack = Boolean(tenantId || analysisId);
 
@@ -128,7 +144,8 @@ export function AdminLayout() {
             {items.map((item) => (
               <div
                 key={item.path}
-                className={`nav-item${path.startsWith(item.path) ? ' active' : ''}`}
+                /* '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
+                className={`nav-item${(item.path === '/' ? path === '/' : path.startsWith(item.path)) ? ' active' : ''}`}
                 onClick={() => navigate(item.path)}
               >
                 <Icon name={item.icon} className="ic" />

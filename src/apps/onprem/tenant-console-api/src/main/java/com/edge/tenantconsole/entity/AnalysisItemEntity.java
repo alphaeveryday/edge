@@ -43,16 +43,10 @@ public class AnalysisItemEntity {
 
 	private String status;
 
-	@Column(name = "supersedes_item_id")
-	private String supersedesItemId;
-
-	@Column(name = "correction_reason")
-	private String correctionReason;
-
 	@Column(name = "received_at")
 	private OffsetDateTime receivedAt;
 
-	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at}]) — 상세 화면 원천(ALPHA-436). */
+	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at,source_uri}]) — 상세 화면 원천(ALPHA-436·739). */
 	@JdbcTypeCode(SqlTypes.JSON)
 	private String evidences;
 
@@ -62,8 +56,7 @@ public class AnalysisItemEntity {
 	/** 테스트 픽스처용 — 실제 인스턴스는 Hibernate 가 조회로 생성한다. */
 	public AnalysisItemEntity(String explanationResultId, String etfTicker, String etfName,
 			LocalDate tradeDate, String summary, String headline, String confidenceLevel,
-			String status, String supersedesItemId, String correctionReason,
-			OffsetDateTime receivedAt) {
+			String status, OffsetDateTime receivedAt) {
 		this.explanationResultId = explanationResultId;
 		this.etfTicker = etfTicker;
 		this.etfName = etfName;
@@ -72,18 +65,15 @@ public class AnalysisItemEntity {
 		this.headline = headline;
 		this.confidenceLevel = confidenceLevel;
 		this.status = status;
-		this.supersedesItemId = supersedesItemId;
-		this.correctionReason = correctionReason;
 		this.receivedAt = receivedAt;
 	}
 
 	/** 상세 픽스처용 — evidences 까지 채우는 오버로드. */
 	public AnalysisItemEntity(String explanationResultId, String etfTicker, String etfName,
 			LocalDate tradeDate, String summary, String headline, String confidenceLevel,
-			String status, String supersedesItemId, String correctionReason,
-			OffsetDateTime receivedAt, String evidences) {
+			String status, OffsetDateTime receivedAt, String evidences) {
 		this(explanationResultId, etfTicker, etfName, tradeDate, summary, headline,
-				confidenceLevel, status, supersedesItemId, correctionReason, receivedAt);
+				confidenceLevel, status, receivedAt);
 		this.evidences = evidences;
 	}
 
@@ -117,14 +107,6 @@ public class AnalysisItemEntity {
 
 	public String getStatus() {
 		return status;
-	}
-
-	public String getSupersedesItemId() {
-		return supersedesItemId;
-	}
-
-	public String getCorrectionReason() {
-		return correctionReason;
 	}
 
 	public OffsetDateTime getReceivedAt() {

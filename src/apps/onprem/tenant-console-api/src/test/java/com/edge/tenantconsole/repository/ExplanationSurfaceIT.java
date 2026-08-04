@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * explanations 읽기 표면(ALPHA-607)의 DB 계약을 실 Postgres 로 검증한다 — 손 대역이 우회하는
  * 실제 의미가 WHY(Rule 9): evidences JSONB 파싱, 검수 사유 파생(screening_check REVIEW·BLOCK
  * → rule_type→UI 어휘), 최종 문구의 publication.published_summary 스냅샷, 상태 필터
- * (RECEIVED·CORRECTED 제외), 반입 집계. 쓰기 표면(사후 운영 전이·감사)의 DB 계약은
+ * (RECEIVED·INVALIDATED 제외), 반입 집계. 쓰기 표면(사후 운영 전이·감사)의 DB 계약은
  * ExplanationWriteIT 가 담당한다(ALPHA-613). 시드는 테스트 한정 JdbcTemplate, id 는
  * it607- 접두로 격리하고, 목록은 공유 컨테이너 오염을 피해 내 id 로만 단언한다.
  */
@@ -72,7 +72,8 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		long assertive = seedActiveRule("ASSERTIVE_EXPRESSION", "REVIEW");
 		seedItem("it607-review", "607REV", "에코프로비엠", "REVIEW_REQUIRED", "HIGH", "원본 요약",
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"공급 계약\",\"source\":\"DART\","
-						+ "\"published_at\":\"2026-07-14T09:00:00Z\"}]",
+						+ "\"published_at\":\"2026-07-14T09:00:00Z\","
+						+ "\"source_uri\":\"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001\"}]",
 				OffsetDateTime.now());
 		seedCheck("it607-review", assertive, "REVIEW");
 
@@ -89,6 +90,10 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 			assertThat(e.kind()).isEqualTo("DISCLOSURE");       // dto 가 공시로 번역
 			assertThat(e.source()).isEqualTo("DART");
 			assertThat(e.publishedAt()).isNotNull();
+			// JSONB source_uri → 파서(parseEvidence) 실경로 검증(ALPHA-739) — dto 테스트는
+			// 모델을 직접 만들어 파서를 우회하므로 키 오타 회귀는 여기서만 잡힌다.
+			assertThat(e.sourceUri())
+					.isEqualTo("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001");
 		});
 	}
 
@@ -207,14 +212,14 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
-	void 수신전_정정_리비전은_목록에서_빠진다() {
+	void 수신전_무효화_항목은_목록에서_빠진다() {
 		seedItem("it607-received", "607RCV", "카카오", "RECEIVED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
-		seedItem("it607-corrected", "607COR", "네이버", "CORRECTED", "LOW", "요약", "[]",
+		seedItem("it607-invalidated", "607INV", "네이버", "INVALIDATED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
 
 		List<String> ids = explanations.list().stream().map(Explanation::id).toList();
-		assertThat(ids).doesNotContain("it607-received", "it607-corrected");
+		assertThat(ids).doesNotContain("it607-received", "it607-invalidated");
 	}
 
 	@Test
