@@ -357,15 +357,21 @@ variable "minute_universe_uri" {
 }
 
 variable "minute_trigger_schema_version" {
+  # v2(ALPHA-745)로 함께 올린다 — 이 축을 v1 에 두면 규칙이 바뀐 뒤에도 job 원장이
+  # 어느 판정 규칙의 window 였는지 구분하지 못한다(변수 설명 그대로의 사유).
+  # 판정 자체는 소비자의 detection_policy_version 이 정하므로 이 값은 식별용이고,
+  # 소비자는 job 행의 이 값을 기대 상수와 대조하지 않아 롤링 배포에도 안전하다.
   description = "price window job identity 축(ALPHA-706) — 판정 규칙 변경 시 올린다"
   type        = string
-  default     = "intraday-open-v1"
+  default     = "intraday-anchor-v2"
 }
 
 variable "minute_detection_policy_version" {
+  # v2(ALPHA-745): 기준선=전일 종가·가변 앵커 재발화·2h 쿨다운 폐지. trigger_id 가 이
+  # 값을 포함해 v1 행과 섞이지 않는다.
   description = "분봉 판정 정책 identity(ALPHA-708) — 일 단위 트리거와 축이 달라 별도 값"
   type        = string
-  default     = "intraday-open-v1"
+  default     = "intraday-anchor-v2"
 }
 
 # ── 세션 스케일 오케스트레이션(ALPHA-712) ─────────────────────────────
