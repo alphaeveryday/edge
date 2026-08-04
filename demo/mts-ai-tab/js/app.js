@@ -537,6 +537,12 @@
       'font-size:10px;font-weight:700;color:#fff;background:' + lineColor + ';border-radius:3px;padding:1px 5px;line-height:1.5;white-space:nowrap';
     tag.textContent = fmtNum(latest, 0);
     yaxis.appendChild(tag);
+    // 마지막 점 마커 — 플롯 우측 끝(x=W)에 항상 찍는다. 캔들이 1개면 polyline 이 선을
+    // 못 그리므로(점 하나는 stroke 없음) 이 마커가 유일한 데이터 표시가 된다(봇 P2).
+    var mark = document.createElement('div');
+    mark.style.cssText = 'position:absolute;right:52px;top:' + dotPct.toFixed(1) + '%;transform:translate(50%,-50%);' +
+      'width:6px;height:6px;border-radius:50%;background:' + lineColor;
+    yaxis.appendChild(mark);
     // x축 라벨 — 슬라이스 구간에서 균등 5개
     var dates = el('chart-dates');
     dates.textContent = '';
