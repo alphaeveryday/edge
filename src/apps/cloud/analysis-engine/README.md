@@ -132,7 +132,7 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 
 | 변수 | 용도 | 기본값 |
 |---|---|---|
-| `AWS_REGION` | S3/Secrets 리전 | `ap-northeast-2` |
+| `AWS_REGION` | S3/Secrets/DuckDB 리전. 하드코딩이 아니라 env 다 — 비면 다른 리전 배포에서 S3 뷰가 전량 NoSuchBucket 으로 빠진다 | `ap-northeast-2` |
 | `ALPHAMALE_LAKE_BUCKET` | canonical 뉴스 S3 버킷 | `edge-dev-pipeline-lake` |
 | `PGHOST`·`PGPORT`·`PGDATABASE`·`PGUSER`·`PGPASSWORD` | edge Postgres(Cloud Event Store) | — |
 | `PGSCHEMA` | 스키마 | `public` |
@@ -144,6 +144,13 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 | `CAUSAL_ENABLED` | P0–P9 인과귀속 사용(끄면 단일 프롬프트 경로) | `true` |
 | `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |
 | `CAUSAL_REGISTRY_ROOT` | P9 메커니즘 레지스트리 경로. 비면 소환 기록을 남기지 않는다 — 단일 사례 귀속은 반복으로만 검정력을 얻으므로 이 경로가 비면 그 축적이 통째로 없다 | (없음) |
+| `EDGE_RDB_DSN` | Postgres DSN(`host=… port=… dbname=…`). **비면 위 `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` 로 조립한다** — 조립도 불가면 `coverage()["rdb"]=False` + 사유. 그 상태에선 사건 축 없이 갭+잔여만 남아 전 셀이 `PRICE_ONLY` 로 기운다 | (PG* 에서 조립) |
+| `CAUSAL_BACKFILL_S3` | 백필 parquet(`pit_daily`·`fin_annual`·`flow_daily`·`sector_*`)의 S3 1순위 경로(후행 슬래시 없음). **비면 `v_pit`/`v_fin` 이 빈 스키마로 등록되고 판정이 사유 없이 0행** — "데이터가 없다"와 "통계가 안 섰다"가 같은 문장으로 나온다 | `s3://<bucket>/analysis/backfill` |
+| `CAUSAL_BACKFILL_DIR` | 위 백필의 로컬 경로 겸 trace·ledger 쓰기 위치. 컨테이너에서 기본값(CWD 상대 `.tmp/causal-backfill`)은 쓰기 불가라 프롬프트 원문·원장이 조용히 유실된다 | `/tmp/causal-backfill` (로컬 기본 `.tmp/causal-backfill`) |
+| `DUCKDB_S3_CHAIN` | DuckDB `CREDENTIAL_CHAIN` 순서. Fargate 는 컨테이너 자격증명 엔드포인트(`instance`)로만 붙는다 — `sso;config;env` 만 두면 `~/.aws` 가 없는 컨테이너에서 **S3 뷰 전량이 조용히 미등록**된다 | `env;instance;config;sso` |
+| `DUCKDB_MEMORY_LIMIT` | DuckDB 메모리 상한. task 메모리보다 낮아야 `DUCKDB_TEMP_DIR` 로 spill 하며 버틴다 — 비면 컨테이너 한도를 먼저 쳐서 **OOMKilled(exit 137, 어느 질의였는지 로그에 안 남는다)** | `1.5GB` |
+| `DUCKDB_TEMP_DIR` | spill 위치. 컨테이너에서 쓰기 가능한 곳은 `/tmp` 뿐 — 비면 spill 이 실패해 위 OOM 과 같은 결말 | `/tmp` |
+| `AWS_PROFILE` | ⚠️ **컨테이너에는 넘기지 않는다.** 있으면 코드가 `PROFILE '…'` 절을 붙이고 프로필 파일이 없는 컨테이너에서 S3 접속이 죽는다. 로컬 개발에서만 쓴다 | (컨테이너 미주입) |
 | `EDGE_DOMAIN_BUCKET` | 도메인 문서(「사업의 내용」) RAG 저장소. 비면 조회 도구 미부착 | (없음) |
 | `EDGE_AWS_PROFILE` | 도메인 문서 버킷 접근 프로파일 (교차 계정일 때) | (기본 자격증명) |
 | `CANONICAL_MANIFEST` | 생성 매니페스트(`infra/canonical/pit-manifest.yml`) 경로. 비면 재무·컨센서스·지배구조 어휘가 표면에 안 실린다 | (없음) |

@@ -201,3 +201,59 @@ def test_args_reports_the_slots_the_trigger_grammar_can_narrow():
     empty = Catalog(lake=L([]), ticker="000660.KS", instrument_id="i1",
                     day="2026-06-01", types=())
     assert "아규먼트 없음" in empty.args() and "조회 성공" in empty.args()
+
+
+def test_mislookup_is_told_apart_from_absence():
+    """**오타와 진짜 부재를 가른다** - 같은 문장으로 답하면 키 오조회를 '없음'으로 믿는다.
+
+    STORM 실험의 dyn2 가 정확히 이 실패로 죽었다: 키를 잘못 조회하고 돌아온 "없음"을
+    '사건 없음'으로 믿었다. 필터가 0 을 만들었으면 필터를 빼고 **무엇이 있는지** 되돌려
+    준다 - 그게 오조회 구제다.
+    """
+    from edge_analysis.statics.tools import Catalog
+
+    class L:
+        """필터 걸린 질의는 0행, 필터 없는 질의는 실제 값을 준다."""
+
+        def __init__(self):
+            self.exists = {"rdb": True}
+
+        def sql(self, q):
+            if "DISTINCT l.link_type" in q:
+                return [("SUPPLY_CHAIN",), ("PARTNERSHIP",)]
+            if "DISTINCT e.event_type_code" in q:
+                return [("COMPANY.CONTRACT.SIGNING",)]
+            return []                      # 필터 걸린 본 질의
+
+    c = Catalog(lake=L(), ticker="000660.KS", instrument_id="i1", day="2026-06-01",
+                types=("COMPANY.CONTRACT.SIGNING",))
+
+    out = c.links("OTPA")
+    assert "SUPPLY_CHAIN" in out and "PARTNERSHIP" in out, "있는 타입을 되돌려준다"
+    assert "OTPA" in out, "무엇을 물었는지 되짚는다"
+
+    out2 = c.args("OTPA")
+    assert "COMPANY.CONTRACT.SIGNING" in out2 and "OTPA" in out2
+
+    out3 = c.news("OTPA")
+    assert "COMPANY.CONTRACT.SIGNING" in out3, "이 셀의 타입을 되돌려준다"
+
+    # 필터가 없으면 그건 진짜 부재다 - 목록을 되돌려주지 않는다
+    assert "있는 타입" not in c.args() and "조회 성공" in c.args()
+
+
+def test_callable_tool_list_is_derived_from_the_menu():
+    """호출 가능 목록이 하드코딩이면 새 도구가 빠진다 - **있는 도구를 없다고 말한다**.
+
+    실측: `args` 를 MENUS 에 광고했는데 `menu_names()` 가 하드코딩 튜플이라 빠졌다.
+    그러면 도구 이름 오타 시 "있는 것" 안내에서 `args` 가 사라진다 - 오조회 구제가
+    스스로 오조회를 만든다.
+    """
+    from edge_analysis.statics.fsm import MENUS
+    from edge_analysis.statics.tools import Catalog
+
+    names = Catalog.menu_names()
+    for stage, menu in MENUS.items():
+        for n, _ in menu:
+            assert n in names, f"{stage} 가 광고하는 {n} 이 호출 목록에 없다"
+    assert len(names) == len(set(names)), "중복 없음"

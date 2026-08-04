@@ -83,14 +83,14 @@ def run(lake, etf: str, day: str, ask=None) -> str:
     honest = "\n".join(out)
     if ask is None:
         return honest
-    return _dual(lake, roll, r, day, honest, ask)
+    return _dual(lake, roll, r, day, honest, ask, split)
 
 
-def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
+def _dual(lake, roll, r, day: str, honest: str, ask, split=None) -> str:
     """정직한 설명 + 토스식. ETF 는 5분봉이 없어 창이 없다 - **그 사실을 정직하게**
     다루고, '최근 시점' 대신 시장 사건의 시각(있으면)이나 밤사이를 쓴다."""
     from .mkttrial import event_days
-    from .evidence import save
+    from .evidence import say_save
     from .plain import PlainError, context, dual, narrate_plain
     from .trial import reduce_market
     # 이름만 넘기면 모델이 방향을 지어낸다 - 실측에서 VIX 가 -17% 인데 'VIX 강세'
@@ -182,12 +182,47 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
     try:
         plain, bundles = narrate_plain(ask, ctx, stats=stats, cell=roll.etf,
                                       day=day, layer=r.kind)
-        n, why = save(bundles)
-        if why:
-            plain += f"\n(근거 묶음 저장 실패: {why})"
+        # 묶음은 **만든 그 자리에서** 적재한다. 꼬리표 id 만 산출물로 나가고 본문이
+        # 아무 데도 없으면, 나중에 그 문장이 무엇에 근거했는지 되짚을 방법이 없다.
+        if line := say_save(bundles):
+            plain += f"\n{line}"
         return dual(honest, plain, bundles)
     except PlainError as e:
         return dual(honest, f"(쉬운 설명 생성 실패 - 계약 위반: {e})")
+
+
+def _observed_types(lake, ticker: str, day: str) -> list[str]:
+    """그날 그 종목에 **접지된** 사건 타입. 부재는 빈 목록이다 - 지어내지 않는다.
+
+    하드코딩된 타입으로 검정을 세우면 그 타입이 없는 날에도 "처치일 부족" 만 반복하고,
+    실제로 난 사건은 아무도 안 본다(실측: 종목 경로가 `RESULT_RELEASE` 만 물었다).
+    """
+    try:
+        rows = lake.sql(
+            f"SELECT DISTINCT e.event_type_code FROM v_event e "
+            f"JOIN v_instrument i ON i.instrument_id = e.instrument_id "
+            f"WHERE i.ticker = '{ticker.split('.')[0]}' "
+            f"  AND e.trade_date = DATE '{day}' ORDER BY 1")
+    except Exception:                               # noqa: BLE001 - 부재는 빈 목록
+        return []
+    return [str(r[0]) for r in rows if r and r[0]]
+
+
+def _sector_types(lake, day: str, top: int = 3) -> list[str]:
+    """그날 시장 전체에서 관측된 **광역 타입** 상위 - 섹터 공통 처치 후보.
+
+    섹터 처치는 특정 종목의 사건이 아니라 여러 종목에 동시에 닿은 타입이다. 그래서
+    '몇 종목에 닿았나' 로 고른다 - 하드코딩 2종은 그날 무엇이 났는지와 무관했다.
+    """
+    try:
+        rows = lake.sql(
+            f"SELECT e.event_type_code, count(DISTINCT e.instrument_id) n "
+            f"FROM v_event e WHERE e.trade_date = DATE '{day}' "
+            f"GROUP BY 1 HAVING count(DISTINCT e.instrument_id) >= 2 "
+            f"ORDER BY 2 DESC, 1 LIMIT {top}")
+    except Exception:                               # noqa: BLE001
+        return []
+    return [str(r[0]) for r in rows if r and r[0]]
 
 
 def _workflow(lake, roll, r, day: str) -> list[str]:
@@ -223,23 +258,39 @@ def _workflow(lake, roll, r, day: str) -> list[str]:
                        f"층 수익 {sec.ret * 100:+.2f}%p)")
             # 검정 층에 넘긴다 - 위약 먼저, 구체화, 유의한 것에만 CATE.
             from .verifier import say_implications, verify
-            for et in ("POLICY.REGULATION.RULE_CHANGE",
-                       "COMPANY.COMMERCIAL.PRICING_ACTION"):
+            # 섹터 공통 처치도 **그날 관측된 광역 타입**으로 고른다 (하드코딩 폐기).
+            ets = _sector_types(lake, day)
+            if not ets:
+                out.append("  그날 2종목 이상에 닿은 타입이 없다 - 섹터 공통 처치를 "
+                           "세울 수 없다 (그것도 결과다)")
+            for et in ets:
                 imps, lg = verify(lake, day, etype=et, layer="섹터")
                 out.append("  " + lg.replace("\n", "\n  "))
                 out.append("  " + say_implications(imps).replace("\n", "\n  "))
 
     if r.kind in ("고유", "혼합") and r.targets:
         out.append(f"[워크플로우] 종목 개별 시행 — 상위 {len(r.targets)}종목")
+        from .verifier import say_implications, verify
+        # **그날 관측된 타입으로 돈다.** 하드코딩된 `RESULT_RELEASE` 는 그 타입이 없는
+        # 날에도 검정을 세워 "처치일 부족" 만 반복했고, 실제로 난 사건은 아무도 안 봤다.
+        # 검정 자체는 **타입 수준 패널**이라 종목별로 쪼갤 수 없다 - 그래서 종목은
+        # 무엇이 났는지 보고하는 자리이고, 검정은 타입마다 한 번이다.
+        by_type: dict[str, list[str]] = {}
         for tk in r.targets:
             nm = next((n for n in roll.names if n.ticker == tk), None)
-            head = (f"  {tk}" + (f" ({nm.label})" if nm and nm.label else "")
-                    + (f" 기여 {nm.contribution * 100:+.2f}%p · 비중 {nm.weight:.1%}"
-                       if nm else ""))
-            out.append(head)
-            from .verifier import say_implications, verify
-            imps, lg = verify(lake, day, etype="COMPANY.EARNINGS.RESULT_RELEASE",
-                              layer="고유", max_probes=4)
+            ets = _observed_types(lake, tk, day)
+            out.append(f"  {tk}" + (f" ({nm.label})" if nm and nm.label else "")
+                       + (f" 기여 {nm.contribution * 100:+.2f}%p · 비중 {nm.weight:.1%}"
+                          if nm else "")
+                       + ("  사건: " + " · ".join(ets) if ets else "  사건 없음"))
+            for et in ets:
+                by_type.setdefault(et, []).append(tk)
+        if not by_type:
+            out.append("  상위 종목에 그날 접지 사건이 없다 - 종목 시행을 세울 수 없다 "
+                       "(그것도 결과다: 사건 없이 움직인 고유)")
+        for et, tks in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+            out.append(f"  [검정] {et} — 이 셀에서 {' · '.join(tks)} 가 해당")
+            imps, lg = verify(lake, day, etype=et, layer="고유", max_probes=4)
             out.append("    " + lg.replace("\n", "\n    "))
             out.append("    " + say_implications(imps).replace("\n", "\n    "))
     elif r.kind == "고유":

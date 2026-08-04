@@ -55,9 +55,14 @@ def _lake(*, sector_beta: float = 0.0, alien_beta: float = 0.0):
         "ALIEN": {"y": 0.6, "z": 0.4},
         MARKET_CODE: {"a": 0.1, "q": 0.9},
     }
+    # 구성종목도 섹터 요인에 노출된다 - **ETF 가 섹터 β 를 갖는데 구성종목이 안 갖는
+    # 것은 현실에 없다.** 이전 픽스처는 그렇게 만들어져 있어서 ρ 게이트(층은 잔차
+    # 공통상관을 줄여야 한다)가 배선되자마자 섹터를 전부 막았다 - 게이트가 아니라
+    # 픽스처가 틀렸다. T 의 구성종목(a·b·c)만 섹터에 실린다.
     for tk in "abcxyzq":
         S[tk] = {"name": f"종목{tk}", "kind": "stock",
-                 "ret": 1.0 * mkt + rng.normal(0, 0.01, n)}
+                 "ret": 1.0 * mkt + (sector_beta * sec if tk in "abc" else 0.0)
+                        + rng.normal(0, 0.01, n)}
     return FakeLake(S, H)
 
 

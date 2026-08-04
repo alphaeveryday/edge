@@ -621,7 +621,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 사람이 이 화면을 여는 순간은 **가격이 급변했을 때**와 **시장과 다르게 움직일
     # 때**다. 그때 필요한 답은 'p=0.004' 가 아니다. 두 산문은 **같은 사실**에서
     # 나온다 - 토스식은 위에서 확정된 것만 옮기고 새로 주장하지 않는다.
-    from .evidence import narrative_allowed, news_objectset, save
+    from .evidence import narrative_allowed, news_objectset, say_save
     from .plain import PlainError, context, dual, narrate_plain, recent_window
     applied = [(t, r) for t, r in reports if r.applies_today]
     # 서사 경로 허가는 **코드가** 낸다 - 모델이 고르면 편한 쪽(서사)으로 도망간다.
@@ -645,10 +645,11 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     try:
         plain, bundles = narrate_plain(ask, ctx, news=objs, stats=stats,
                                       cell=ticker, day=day, layer="고유")
-        _n, err = save(bundles)
+        # 묶음은 **만든 그 자리에서** 적재한다. 꼬리표 id 만 산출물로 나가고 본문이
+        # 아무 데도 없으면, 나중에 그 문장이 무엇에 근거했는지 되짚을 방법이 없다.
         note = f"\n[서사 경로] {why_narr}"
-        if err:
-            note += f"\n(근거 묶음 저장 실패: {err})"
+        if line := say_save(bundles):
+            note += f"\n{line}"
         return dual(honest, plain + note, bundles)
     except PlainError as e:
         return dual(honest, f"(쉬운 설명 생성 실패 - 계약 위반: {e})")

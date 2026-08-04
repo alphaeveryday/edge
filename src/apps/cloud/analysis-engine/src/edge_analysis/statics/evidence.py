@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 
 BASES = ("statistical", "narrative")
@@ -49,7 +48,10 @@ def _plain_num(v):
     if isinstance(v, dict):
         return {k: _plain_num(x) for k, x in v.items()}
     return v
-DSN_ENV = "EDGE_RDB_DSN"
+
+# DSN 은 `duck.rdb_dsn_from_env()` **하나로** 해소한다 - 여기서 env 를 따로 읽으면
+# 레이크와 근거 적재가 서로 다른 DB 를 볼 수 있고, 컨테이너엔 EDGE_RDB_DSN 대신
+# PG* 여섯 개만 오므로 os.environ 만 보는 코드는 배포에서 조용히 0건이 된다.
 TABLE = "analysis_evidence_bundle"
 
 _DDL = f"""
@@ -227,9 +229,11 @@ def ensure_schema(dsn: str = "") -> str:
 
     레이크의 `rdb` 는 READ_ONLY 로 붙어 있어 쓸 수 없다 - 쓰기는 별 연결이다.
     """
-    dsn = dsn or os.environ.get(DSN_ENV, "")
     if not dsn:
-        return f"{DSN_ENV} 없음 - 근거 묶음을 저장할 수 없다"
+        from .duck import rdb_dsn_from_env
+        dsn = rdb_dsn_from_env()
+    if not dsn:
+        return "EDGE_RDB_DSN 도 PG* 도 없다 - 근거 묶음을 저장할 수 없다"
     try:
         import psycopg
         with psycopg.connect(dsn, connect_timeout=20) as con:
@@ -240,16 +244,28 @@ def ensure_schema(dsn: str = "") -> str:
         return f"{type(e).__name__}: {str(e)[:90]}"
 
 
-def save(bundles: list[Bundle], dsn: str = "") -> tuple[int, str]:
-    """묶음 적재(멱등 - id 가 내용 해시라 같은 주장은 한 행). 반환 (건수, 사유)."""
+def save(bundles: list[Bundle], dsn: str = "", *, connect=None) -> tuple[int, int, str]:
+    """묶음 적재(멱등 - id 가 내용 해시라 같은 주장은 한 행). 반환 **(적재, 중복, 사유)**.
+
+    **적재와 중복을 가른다.** `ON CONFLICT DO NOTHING` 은 조용해서, 재실행이 0행을
+    써도 요청 건수를 그대로 보고하면 '오늘 근거를 남겼다' 와 '이미 다 들어 있어서
+    아무것도 안 썼다' 가 산출물에서 똑같이 보인다. 실제로 들어간 행은 rowcount 가 안다.
+
+    `connect` 는 커넥션 주입구다(기본 `psycopg.connect`). 실 DB 없이 적재·중복·실패
+    세 경로를 재현할 수 없으면 이 경로는 영영 미검증으로 남는다 - 실제로 그랬다.
+    """
     if not bundles:
-        return 0, ""
-    dsn = dsn or os.environ.get(DSN_ENV, "")
+        return 0, 0, ""
     if not dsn:
-        return 0, f"{DSN_ENV} 없음 - 저장 생략 (꼬리표는 산출물에 남는다)"
+        from .duck import rdb_dsn_from_env
+        dsn = rdb_dsn_from_env()
+    if not dsn:
+        return 0, 0, "EDGE_RDB_DSN 도 PG* 도 없다 - 저장 생략 (꼬리표는 산출물에 남는다)"
     try:
-        import psycopg
-        with psycopg.connect(dsn, connect_timeout=20) as con:
+        if connect is None:
+            import psycopg
+            connect = psycopg.connect
+        with connect(dsn, connect_timeout=20) as con:
             # **DDL 을 여기서 실행하지 않는다.** 표는 Flyway 가 소유한다
             # (V202608041100__add_analysis_evidence_bundle.sql). 코드가 매 저장마다
             # CREATE TABLE IF NOT EXISTS 를 돌리면 스키마 소유권이 두 곳이 되고,
@@ -265,10 +281,34 @@ def save(bundles: list[Bundle], dsn: str = "") -> tuple[int, str]:
                       list(b.news_ids),
                       json.dumps(b.stats, ensure_ascii=False, default=str), b.sign)
                      for b in bundles])
+                # 드라이버가 '모르겠다'(-1) 고 할 때만 요청 건수로 되돌린다 - 그때는
+                # 중복을 셀 근거가 없으므로 0건 중복이라고 **주장하지 않는다**.
+                got = cur.rowcount
             con.commit()
-        return len(bundles), ""
+        saved = got if isinstance(got, int) and got >= 0 else len(bundles)
+        return saved, len(bundles) - saved, ""
     except Exception as e:                  # noqa: BLE001 - 실패를 삼키지 않는다
-        return 0, f"{type(e).__name__}: {str(e)[:90]}"
+        return 0, 0, f"{type(e).__name__}: {str(e)[:90]}"
+
+
+def say_save(bundles: list[Bundle], dsn: str = "", *, connect=None) -> str:
+    """적재하고 **산문에 붙일 한 줄**을 돌려준다. 쉬운 설명이 만들어진 직후에 부른다.
+
+    근거 적재는 부가 산물이다 - 실패해도 셀 설명을 죽이면 안 된다(설명이 주된 산출물이고
+    묶음은 그 설명을 되짚기 위한 것이다). 그렇다고 조용히 넘어가지도 않는다: 사유가
+    산문에 없으면 '근거를 남긴 날' 과 '적재가 죽은 날' 이 산출물에서 똑같이 보이고,
+    구분할 수 없는 부재가 이 저장소가 오래 싸워온 병이다.
+    """
+    if not bundles:
+        return ""
+    try:
+        saved, skipped, why = save(bundles, dsn, connect=connect)
+    except Exception as e:                  # noqa: BLE001 - 적재가 설명을 죽이지 않는다
+        return f"(근거 묶음 미적재 - {type(e).__name__}: {str(e)[:90]})"
+    if why:
+        return f"(근거 묶음 미적재 - {why})"
+    return (f"(근거 묶음 {saved}건 적재"
+            + (f" · {skipped}건 중복으로 건너뜀" if skipped else "") + ")")
 
 
 def say_bundles(bundles: list[Bundle]) -> str:
@@ -285,6 +325,47 @@ def say_bundles(bundles: list[Bundle]) -> str:
             out.append(f"  {b.bundle_id}  statistical {b.sign:+d}  "
                        + " · ".join(f"{k}={v}" for k, v in b.stats.items()))
     return "\n".join(out)
+
+
+def _fake_con(seen: set, *, fail: str = ""):
+    """실 DB 없이 `save` 를 검사하는 커넥션 팩토리. **주입구의 참조 구현**이다 -
+    자체검사와 pytest 가 같은 것을 쓴다(두 벌을 두면 한 벌만 늙는다).
+
+    `seen` 이 표 역할을 한다: 이미 있는 bundle_id 는 세지 않아 `ON CONFLICT DO NOTHING`
+    의 rowcount 를 흉내낸다. `fail` 을 주면 접속에서 죽는다(적재 실패 경로).
+    """
+    class _Cur:
+        rowcount = -1
+
+        def executemany(self, _sql, rows):
+            rows = list(rows)
+            self.rowcount = sum(1 for r in rows if r[0] not in seen)
+            seen.update(r[0] for r in rows)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    class _Con:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def connect(_dsn, **_kw):
+        if fail:
+            raise RuntimeError(fail)
+        return _Con()
+    return connect
 
 
 def _selfcheck() -> None:
@@ -336,6 +417,15 @@ def _selfcheck() -> None:
 
     s = say_bundles([nb, sb])
     assert "NEWS_A" in s and "p=0.004" in s
+    # 적재 배선. **실 DB 없이 세 경로를 재현한다** - 이 검사가 없으면 '2건 적재했다'
+    # 는 문장이 표가 비어 있어도 나온다(ON CONFLICT DO NOTHING 은 조용하다).
+    seen: set = set()
+    line = say_save([nb, sb], "dsn=fake", connect=_fake_con(seen))
+    assert line == "(근거 묶음 2건 적재)", line
+    line = say_save([nb, sb], "dsn=fake", connect=_fake_con(seen))
+    assert "0건 적재" in line and "2건 중복" in line, line
+    line = say_save([nb], "dsn=fake", connect=_fake_con(set(), fail="접속 거부"))
+    assert line.startswith("(근거 묶음 미적재 - RuntimeError"), line
     print("ok")
 
 

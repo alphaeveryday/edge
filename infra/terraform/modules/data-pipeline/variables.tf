@@ -105,14 +105,48 @@ variable "analysis_etf_universe" {
   ]
 }
 
+# ── analyze 의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
+# 이 셋이 비면 컨테이너에서 S3 뷰가 통째로 안 붙거나 OOM 으로 죽는데, 둘 다 **사유 없는
+# 침묵**으로 나타난다(빈 조인 = 0행 = 판정불가). 그래서 코드 기본값에 맡기지 않고 주입한다.
+variable "analysis_duckdb_s3_chain" {
+  description = "DUCKDB_S3_CHAIN — DuckDB CREDENTIAL_CHAIN 순서. Fargate 는 컨테이너 자격증명 엔드포인트(instance)로만 붙으므로 그 항목이 반드시 있어야 한다(sso;config;env 만으로는 S3 뷰 전량 실패)."
+  type        = string
+  default     = "env;instance;config;sso"
+}
+
+variable "analysis_duckdb_memory_limit" {
+  description = "DUCKDB_MEMORY_LIMIT — task_memory 보다 낮아야 DuckDB 가 DUCKDB_TEMP_DIR 로 spill 하며 버틴다. 같거나 크면 컨테이너 한도를 먼저 쳐서 OOMKilled(사유 없는 exit 137)로 끝난다."
+  type        = string
+  default     = "1.5GB"
+}
+
+variable "analysis_duckdb_temp_dir" {
+  description = "DUCKDB_TEMP_DIR — spill 위치. 컨테이너 파일시스템에서 쓰기 가능한 곳은 /tmp(Fargate 임시 스토리지)뿐이다."
+  type        = string
+  default     = "/tmp"
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024
 }
 
 variable "task_memory" {
-  type    = number
-  default = 2048
+  description = "수집·정제·ops·1분 상주 task-def 의 Fargate 메모리(MiB)."
+  type        = number
+  default     = 2048
+}
+
+# analyze 만 4096 (ALPHA-671). DuckDB 조인층이 `pit_daily`(101MB) 위에 윈도우 함수와 CTE
+# 전개를 얹는데 피크가 실측되지 않았고 OOMKilled 전력이 있다. OOM 은 exit 137 만 남기고 어느
+# 질의였는지 말하지 않아 원인 추적이 런 재현에 달린다 — 그 침묵을 메모리로 산다.
+# **공유 `task_memory` 를 올리지 않은 이유**: 1분 상주 서비스 2개가 24시간 켜져 있어서
+# 전량 인상은 analyze 한 번 실행값이 아니라 상주 요금이 된다(월 $1 이 아니다).
+# 1024 CPU 의 Fargate 유효 조합(2048~8192, 1GB 단위) 안이다.
+variable "analysis_task_memory" {
+  description = "analyze task-def 전용 Fargate 메모리(MiB). DuckDB 피크가 상한을 정한다."
+  type        = number
+  default     = 4096
 }
 
 variable "cpu_architecture" {

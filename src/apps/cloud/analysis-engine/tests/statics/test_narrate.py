@@ -642,3 +642,35 @@ def test_each_claim_carries_a_machine_readable_direction():
                          "basis": "none", "refs": [], "sign": 1}],
                        blind, {}, [], "c", "d", "")
     assert "{none, -, +1}" in t2 and not b2
+
+
+def test_recent_window_reads_labels_as_an_event_id_map():
+    """`labels` 는 {사건id: 사건타입} **맵**이다 - 위치로 맞추면 안 된다.
+
+    실측(000660 06-01): `labels[i:i+1]` 로 잘라 `KeyError: slice(1,2,None)` 이 나며
+    셀 전체가 죽었다. 위치 대응 자체가 틀렸다 - 창 i 의 사건이 맵의 i 번째일 이유가
+    없다. 창은 자기 `event_ids` 로 이름을 찾아야 한다.
+    """
+    from edge_analysis.statics.plain import recent_window
+
+    class W:
+        def __init__(self, kind, start, ids):
+            self.kind, self.start, self.event_ids = kind, start, ids
+
+    class S:
+        def __init__(self, w, r):
+            self.window, self.log_ret = w, r
+
+    ss = [S(W("gap", "2026-06-01 09:00:00", ()), 0.001),
+          S(W("intraday", "2026-06-01 14:00:00", ("ev_b", "ev_c")), 0.02)]
+    labels = {"ev_a": "A.TYPE", "ev_b": "B.TYPE", "ev_c": "C.TYPE"}
+
+    got = recent_window(ss, labels)
+    assert got["when"] == "오후" and got["kind"] == "intraday"
+    assert got["events"] == ["B.TYPE", "C.TYPE"], "창의 id 로 찾는다 - 위치가 아니다"
+    # 맵에 없는 id 는 조용히 사라지지 않는다 (없는 창과 못 찾은 창은 다르다)
+    assert recent_window(ss, {})["events"] == ["ev_b", "ev_c"]
+    # labels 를 안 줘도 죽지 않는다
+    assert recent_window(ss)["events"] == ["ev_b", "ev_c"]
+    # 사건 없는 창은 빈 목록
+    assert recent_window([ss[0]], labels)["events"] == []

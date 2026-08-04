@@ -180,8 +180,13 @@ class Catalog:
         if isinstance(rows, str):
             return rows
         if not rows:
-            return (f"근거 문서 없음: {kind!r} 에 걸리는 문서가 이 셀에 없다 (조회 성공)"
-                    if kind else "근거 문서 없음: 사건은 있으나 문서 연결이 원장에 없다")
+            if not kind:
+                return "근거 문서 없음: 사건은 있으나 문서 연결이 원장에 없다 (조회 성공)"
+            # **오타와 진짜 부재를 가른다**(21R). 같은 문장으로 답하면 키를 잘못 쓴 것을
+            # '사건 없음' 으로 믿는다 - dyn2 가 정확히 이 실패로 죽었다.
+            return (f"근거 문서 없음: {kind!r} 에 걸리는 문서가 이 셀에 없다. "
+                    + (f"이 셀에 있는 타입: {', '.join(self.types)}" if self.types
+                       else "이 셀엔 접지 사건 자체가 없다"))
         return "\n".join(f"  [{r[2][:38]}] {str(r[1])[:16]} {str(r[0])[:60]}" for r in rows)
 
     def thread(self) -> str:
@@ -285,8 +290,19 @@ class Catalog:
         if isinstance(rows, str):
             return rows
         if not rows:
-            return (f"링크 없음: 이 종목은 {kind or '어떤 타입으로도'} 엮인 상대가 "
-                    f"원장에 없다 (조회 성공). 관계 노출 가설은 접지가 없다")
+            if not kind:
+                return ("링크 없음: 이 종목은 어떤 타입으로도 엮인 상대가 원장에 없다 "
+                        "(조회 성공). 관계 노출 가설은 접지가 없다")
+            # **오타와 진짜 부재를 가른다**(21R). 필터를 빼고 무엇이 있는지 되돌려준다 -
+            # 같은 문장으로 답하면 키 오조회를 '상대 없음' 으로 믿는다.
+            have = self._q(f"""
+                SELECT DISTINCT l.link_type FROM v_link l
+                WHERE ('{self.instrument_id}' IN (l.src, l.dst))
+                  AND l.link_type IS NOT NULL LIMIT {MAX_ROWS}""")
+            got = ", ".join(str(r[0]) for r in have) if not isinstance(have, str) else ""
+            return (f"링크 없음: {kind!r} 로 엮인 상대가 없다. "
+                    + (f"이 종목에 있는 타입: {got}" if got
+                       else "이 종목은 어떤 타입으로도 안 엮여 있다"))
         return "타입 있는 1홉 상대:\n" + "\n".join(
             f"  [{r[0]}] {r[1]} ×{r[3]}" for r in rows)
 
@@ -312,8 +328,16 @@ class Catalog:
         if isinstance(rows, str):
             return rows
         if not rows:
-            return (f"아규먼트 없음: 이 종목은 {type_like or '어떤 타입으로도'} 사건의 "
-                    f"인자로 원장에 없다 (조회 성공)")
+            if not type_like:
+                return "아규먼트 없음: 이 종목이 사건 인자로 원장에 없다 (조회 성공)"
+            # 필터가 0 을 만들었으면 필터를 빼고 무엇이 있는지 되돌려준다 - 오타를
+            # '부재' 로 답하면 모델이 없는 것을 없다고 믿는 대신 있는 것을 못 본다.
+            have = self._q(f"""
+                SELECT DISTINCT e.event_type_code FROM v_event e
+                WHERE e.instrument_id = '{self.instrument_id}' LIMIT {MAX_ROWS}""")
+            got = ", ".join(str(r[0]) for r in have) if not isinstance(have, str) else ""
+            return (f"아규먼트 없음: {type_like!r} 에 맞는 타입이 이 종목 이력에 없다. "
+                    + (f"있는 타입: {got}" if got else "이 종목은 사건 인자로 없다"))
         return "역할·서술어·단계·신규성 분포 (이력 / 오늘):\n" + "\n".join(
             f"  [{r[1] or '역할없음'}] {r[0]} · {r[2] or '서술어없음'} · "
             f"{r[3] or '단계없음'} · {r[4] or '신규성없음'}  ×{r[5]}"
@@ -366,5 +390,13 @@ class Catalog:
 
     @staticmethod
     def menu_names() -> tuple[str, ...]:
-        return ("cell", "coverage", "tables", "peek", "events", "news", "thread",
-                "screen", "series", "peers", "links", "flows", "vocab")
+        """호출 가능한 도구 이름. **메뉴에서 파생한다** - 하드코딩이면 낡는다.
+
+        실측: `args` 를 추가하고 MENUS 에 광고했는데 이 목록이 하드코딩이라 빠졌다.
+        그러면 모델이 도구 이름을 틀렸을 때 "있는 것" 목록에서 `args` 가 안 보여
+        **있는 도구를 없다고 말한다** - 오조회 구제가 오조회를 만든다.
+        """
+        from .fsm import MENUS
+        always = ("cell", "coverage", "tables", "peek", "vocab")
+        adv = tuple(dict.fromkeys(n for m in MENUS.values() for n, _ in m))
+        return always + tuple(n for n in adv if n not in always)

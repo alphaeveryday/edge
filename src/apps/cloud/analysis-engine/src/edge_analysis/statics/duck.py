@@ -4,8 +4,9 @@
 그 부재를 **보고**한다 — 조용히 빈 조인을 만드는 것이 최악이므로(P1 규율),
 없는 소스를 참조하는 질의는 즉시 죽는다.
 
-소스 우선순위: 로컬 백필 디렉터리(.tmp/causal-backfill) → RDB 터널 → S3.
-경로·DSN 은 env 로 받는다. 전역 상수는 vocab 에 있다.
+소스 우선순위: S3(canonical·백필 parquet) → 로컬 백필 디렉터리 → RDB 터널.
+경로·DSN·자격증명·메모리 한도는 전부 env 다 — 노트북과 Fargate 가 같은 코드로
+돌아야 하므로 프로파일·리전·체인 어느 것도 하드코딩하지 않는다(하단 *_ENV 상수).
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from typing import Any
 
 RDB_DSN_ENV = "EDGE_RDB_DSN"         # 예: host=127.0.0.1 port=15432 dbname=edge user=edge password=...
 BACKFILL_ENV = "CAUSAL_BACKFILL_DIR"  # 기본 .tmp/causal-backfill
+BACKFILL_S3_ENV = "CAUSAL_BACKFILL_S3"  # 예: s3://edge-dev-pipeline-lake/analysis/backfill
 
 # RDB 에서 끌어와 쓰는 표 — 설계 §16 간선 카탈로그의 원천.
 RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
@@ -51,7 +53,20 @@ EMPTY_SCHEMA = {
         f"CAST(NULL AS {t}) AS {c}" for c, t in (s.split() for s in cols)) + " WHERE false"
     for name, cols in _EMPTY_COLS.items()
 }
-AWS_PROFILE_ENV = "AWS_PROFILE"          # 기본 work — 자격증명은 SSO 체인에서 온다
+# 로컬/S3 백필 세트 전량. 하류 SQL 이 이름으로 직접 참조하므로 목록이 곧 계약이다.
+BACKFILL_SETS = ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
+                 "etf_holdings_fmp", "pit_daily", "fin_annual", "flow_daily",
+                 "sector_index", "sector_member")
+
+AWS_PROFILE_ENV = "AWS_PROFILE"          # **설정됐을 때만** 쓴다 - 컨테이너엔 ~/.aws/config 가 없다
+AWS_REGION_ENV = "AWS_REGION"
+S3_CHAIN_ENV = "DUCKDB_S3_CHAIN"
+MEMORY_LIMIT_ENV = "DUCKDB_MEMORY_LIMIT"
+TEMP_DIR_ENV = "DUCKDB_TEMP_DIR"
+# 기본 체인에 instance 가 앞쪽에 있어야 Fargate 가 붙는다: task role 은 컨테이너
+# 자격증명 엔드포인트로 오는데 컨테이너엔 SSO 캐시도 config 파일도 없다.
+DEFAULTS = {S3_CHAIN_ENV: "env;instance;config;sso", AWS_REGION_ENV: "ap-northeast-2",
+            MEMORY_LIMIT_ENV: "1.5GB", TEMP_DIR_ENV: "/tmp"}
 
 # S3 데이터셋 전량. **데이터가 없어도 붙인다** - 빈 Iceberg 테이블도 스키마는 있고,
 # 스키마가 보여야 '아직 안 채워진 축'과 '존재하지 않는 축'을 구분할 수 있다.
@@ -113,6 +128,84 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _env(key: str) -> str:
+    """env 값 또는 확정 기본값. 빈 문자열도 미설정으로 본다 - 컨테이너 정의는
+    변수를 '있지만 빈 값'으로 주는 일이 잦고, 그게 기본값을 덮으면 안 된다."""
+    return os.environ.get(key, "").strip() or DEFAULTS[key]
+
+
+def rdb_dsn_from_env() -> str:
+    """RDB DSN 해소: EDGE_RDB_DSN → PG* 조립 → "" (부재).
+
+    Fargate task 는 EDGE_RDB_DSN 을 안 준다 - PGHOST/PGPORT/PGDATABASE/PGUSER 와
+    시크릿 PGPASSWORD 로 온다. EDGE_RDB_DSN 만 보면 배포판에서 rdb 가 통째로
+    부재가 되고 손뷰 13개가 미생성이라 _base() 가 파스 단계에서 죽는다.
+
+    PGHOST 와 PGDATABASE 가 **둘 다** 있을 때만 조립한다: 반쪽 DSN 은 붙었다 실패해
+    '자격증명이 틀렸다'와 '설정이 안 왔다'를 같은 문장으로 만든다.
+    비밀번호가 없으면 password 절을 뺀다 - IAM 인증이면 그게 정상이다.
+    """
+    if dsn := os.environ.get(RDB_DSN_ENV, "").strip():
+        return dsn
+    host = os.environ.get("PGHOST", "").strip()
+    db = os.environ.get("PGDATABASE", "").strip()
+    if not (host and db):
+        return ""
+    parts = [f"host={host}", f"port={os.environ.get('PGPORT', '').strip() or '5432'}",
+             f"dbname={db}"]
+    for key, env in (("user", "PGUSER"), ("password", "PGPASSWORD")):
+        if val := os.environ.get(env, "").strip():
+            parts.append(f"{key}={val}")
+    return " ".join(parts)
+
+
+def s3_secret_sql() -> str:
+    """S3 자격증명 시크릿 DDL. PROFILE 절은 AWS_PROFILE 이 실제 설정됐을 때만 넣는다.
+
+    'sso;config;env' + PROFILE 하드코딩은 개발 노트북 전용 문장이었다: Fargate 엔
+    SSO 캐시도 ~/.aws/config 도 없어 PROFILE 절 자체가 시크릿 생성을 깨고, 그러면
+    S3 뷰 33개가 통째로 미등록되며 bars_5m 이 빈 로컬 폴백으로 조용히 내려간다.
+    """
+    clauses = [f"CHAIN '{_env(S3_CHAIN_ENV)}'"]
+    if profile := os.environ.get(AWS_PROFILE_ENV, "").strip():
+        clauses.append(f"PROFILE '{profile}'")
+    clauses.append(f"REGION '{_env(AWS_REGION_ENV)}'")
+    return "CREATE SECRET (TYPE s3, PROVIDER credential_chain, " + ", ".join(clauses) + ")"
+
+
+def session_pragmas() -> tuple[str, ...]:
+    """연결 직후 못 박는 세션 설정.
+
+    TimeZone: RDB 는 UTC timestamptz, 봉은 KST naive 문자열이다. 세션 TZ 를 서울로
+    못 박아 CAST(timestamptz AS TIMESTAMP) 가 KST naive 가 되게 한다 - 머신 TZ 에
+    따라 τ 가 조용히 밀리는 사고를 막는다.
+
+    memory_limit·temp_directory: in-memory 연결이라 한도를 안 주면 호스트 메모리
+    전체를 기본 한도로 잡는다. task_memory 2048MB 안에서 pit_daily(101MB) + v_daily
+    윈도우(60일/20일 PARTITION BY instrument_id) + _base() CTE 전개가 도는데,
+    한도가 없으면 컨테이너가 OOM 으로 통째로 죽는다(정규화 때 실제로 죽었다).
+    스필 경로가 열려 있어야 죽는 대신 느려진다.
+    """
+    return ("SET TimeZone='Asia/Seoul'",
+            f"SET memory_limit='{_env(MEMORY_LIMIT_ENV)}'",
+            f"SET temp_directory='{_env(TEMP_DIR_ENV)}'")
+
+
+def backfill_sources(name: str, local: Path) -> tuple[tuple[str, str], ...]:
+    """백필 한 세트의 읽기 후보 — (표기, 경로) 를 우선순위 순으로. 없는 후보는 뺀다.
+
+    S3 가 먼저다: 로컬 .tmp/causal-backfill 은 140MB 라 Docker 빌드 컨텍스트(src/)
+    밖이고 컨테이너엔 아예 없다. 그러면 빈 스키마 뷰가 걸려 **파스도 질의도 성공한 뒤
+    0행**이 돌아온다 - layers_daily 0행이면 층 분해가 None, v_pit·flow_daily 0행이면
+    전 튜플이 판정불가인데 아무도 실패를 못 본다. 가장 위험한 실패 양식이라
+    표기를 반환값에 실어 exists 에 남긴다.
+    """
+    prefix = os.environ.get(BACKFILL_S3_ENV, "").strip().rstrip("/")
+    return tuple((label, src) for label, src in (
+        ("S3", f"{prefix}/{name}.parquet" if prefix else ""),
+        ("로컬", local.as_posix() if local.is_file() else "")) if src)
+
+
 class CausalLake:
     """한 연결 위의 뷰 집합. exists 딕셔너리가 곧 커버리지 보고서다."""
 
@@ -120,15 +213,14 @@ class CausalLake:
                  rdb_dsn: str | None = None, bars_dir: str | Path | None = None):
         import duckdb
         self.con = duckdb.connect()
-        # 좌표계 고정: RDB 는 UTC timestamptz, 봉은 KST naive 문자열이다.
-        # 세션 TZ 를 서울로 못 박아 CAST(timestamptz AS TIMESTAMP) 가 KST naive 가
-        # 되게 한다 — 머신 TZ 에 따라 τ 가 조용히 밀리는 사고를 막는다.
-        self.con.execute("SET TimeZone='Asia/Seoul'")
+        for pragma in session_pragmas():
+            self.con.execute(pragma)
         self.exists: dict[str, Any] = {}
         self.rows: dict[str, int] = {}          # 표 → 행수 추정 (원장 전량)
         self.cols: dict[str, list[str]] = {}    # 표 → 열 (자동 뷰 생성의 입력)
         self.bound: dict[str, str | None] = {}  # 표 → 클램프 열 (None = 시점 불변 차원)
         self.unbound: dict[str, str] = {}       # 표 → 못 묶은 사유 (침묵 금지)
+        self.backfill_notes: dict[str, str] = {}  # 백필 세트 → 못 읽은/0행인 사유
         self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
         self.effective: dict[str, tuple[int, str | None]] = {}  # 표 → (그날 행수, 도달 지평)
         self.s3: dict[str, str] = {}            # S3 뷰 이름 → 버킷 경로
@@ -137,7 +229,7 @@ class CausalLake:
         self._s3()
         self._bars(Path(bars_dir) if bars_dir else self._default_bars())
         self._backfill(Path(backfill_dir or os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")))
-        self._rdb(rdb_dsn or os.environ.get(RDB_DSN_ENV, ""))
+        self._rdb(rdb_dsn or rdb_dsn_from_env())
 
     @staticmethod
     def _default_bars() -> Path:
@@ -171,8 +263,14 @@ class CausalLake:
         self.exists["bars_5m"] = self.con.execute("SELECT count(*) FROM bars_5m").fetchone()[0]
 
     def _backfill(self, d: Path) -> None:
-        """로컬 백필: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료)
+        """백필 세트: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료)
         · etf_holdings_fmp · pit_daily(curated DataGuide 일간 패널 - statics.pit).
+
+        **S3 우선 · 로컬 폴백** — `_bars()` 와 같은 규율이다(CAUSAL_BACKFILL_S3).
+        어느 경로로 읽었는지 exists 에 남긴다: "S3 (1,004,392행)" / "로컬 (1,004,392행)".
+        0행은 문자열로 승격하지 않는다 - 하류가 `exists.get(name)` 의 참/거짓으로
+        분기하므로(causeflow·evidence 의 tau_sidecar) 0행이 '있음'으로 보이면 안 된다.
+        대신 사유를 backfill_notes 에 남기고 coverage() 가 그것을 읽는다.
 
         `layers_daily` = 시장(KODEX200) · 섹터 ETF 32 · 미국 전일 지수 6 의 일봉.
         KRX 정보데이터시스템이 죽어(2026-08-02 실측) 업종분류 22종을 못 받는 대신
@@ -182,20 +280,30 @@ class CausalLake:
         `pit_daily` = 주주·신용·공매도·배수·주식수 (248일 × 4,054종목). 긴 형식
         curated 를 셀마다 읽으면 2분 12초라 넓은 형식으로 한 번 접어 둔다.
         """
-        for name in ("us_market", "fx_usdkrw", "tau_sidecar", "layers_daily",
-                     "etf_holdings_fmp", "pit_daily", "fin_annual", "flow_daily",
-                     "sector_index", "sector_member"):
-            f = d / f"{name}.parquet"
-            if f.is_file():
-                self.con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f.as_posix()}')")
-                self.exists[name] = self.con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-                continue
+        for name in BACKFILL_SETS:
             self.exists[name] = 0
-            # 하류 SQL 이 이름을 직접 참조하는 백필은 파일이 없어도 **빈 스키마**로 건다
+            bound = False
+            for label, src in backfill_sources(name, d / f"{name}.parquet"):
+                try:
+                    self.con.execute(f"CREATE OR REPLACE VIEW {name} AS "
+                                     f"SELECT * FROM read_parquet('{src}')")
+                    n = self.con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+                except Exception as e:  # noqa: BLE001 - S3 부재·무권한은 로컬로 내려간다
+                    self.backfill_notes[name] = f"{label} 실패: {type(e).__name__}: {str(e)[:80]}"
+                    continue
+                bound = True
+                if n:
+                    self.exists[name] = f"{label} ({n:,}행)"
+                    break
+                self.backfill_notes[name] = f"{label} 0행"
+            if bound:
+                continue
+            self.backfill_notes.setdefault(name, "S3 미설정 · 로컬 파일 없음")
+            # 하류 SQL 이 이름을 직접 참조하는 백필은 원천이 없어도 **빈 스키마**로 건다
             # (S3 셋과 같은 규율: 스키마가 보여야 '안 채워진 축'과 '없는 축'이 갈린다).
             # 안 그러면 v_pit 을 쓰는 패널 SQL 전체가 파스 단계에서 죽는다.
             if name in EMPTY_SCHEMA:
-                self.con.execute(f"CREATE VIEW {name} AS {EMPTY_SCHEMA[name]}")
+                self.con.execute(f"CREATE OR REPLACE VIEW {name} AS {EMPTY_SCHEMA[name]}")
 
     def _s3(self) -> None:
         """S3 데이터셋 전량을 뷰로 건다. **데이터 유무와 무관하게 스키마를 붙인다.**
@@ -212,13 +320,15 @@ class CausalLake:
             # 이 Iceberg 테이블들엔 version-hint 파일이 없다 - 최신 스냅샷을 글롭으로
             # 찾게 허용한다. 읽기 전용이고 커밋 중인 쓰기가 없으므로 안전하다.
             self.con.execute("SET unsafe_enable_version_guessing = true")
-            self.con.execute(
-                "CREATE SECRET (TYPE s3, PROVIDER credential_chain, "
-                "CHAIN 'sso;config;env', PROFILE '"
-                + os.environ.get(AWS_PROFILE_ENV, "work")
-                + "', REGION 'ap-northeast-2')")
+            self.con.execute(s3_secret_sql())
         except Exception as e:      # noqa: BLE001 - 자격증명 부재도 커버리지 보고
-            self.exists["s3"] = f"실패: {str(e)[:120]}"
+            # **처방을 사유에 넣는다.** 자격증명 실패는 S3 뷰 33개를 통째로 없애고,
+            # 그러면 `s3_etf_holdings` 같은 표가 "그런 표 없음" 으로 보인다 - 원인이
+            # 인증인데 증상이 스키마로 나타난다. 로컬은 이름 있는 프로파일을 쓰므로
+            # `AWS_PROFILE` 이 없으면 기본 프로파일을 찾다 실패한다(컨테이너는 그 반대).
+            hint = ("" if os.environ.get("AWS_PROFILE")
+                    else " · 로컬이면 AWS_PROFILE 을 설정해라 (컨테이너는 task role 이라 불필요)")
+            self.exists["s3"] = f"실패: {str(e)[:120]}{hint}"
             return
         src = {"hive": "read_parquet('{p}/**/*.parquet', hive_partitioning=true)",
                "glob": "read_parquet('{p}')",
@@ -403,6 +513,18 @@ class CausalLake:
                              + ", ".join(f"{t}≥{h}" for t, h in late))
             if void:
                 lines.append("  진짜 0행: " + ", ".join(void))
+        # 백필은 **어디서 읽었는지까지** 말한다. S3 도 로컬도 못 읽으면 빈 스키마 뷰가
+        # 걸려 파스도 질의도 성공하고 0행이 나온다 - 그 침묵이 층 분해 None 과 전 튜플
+        # 판정불가의 원인이었다. 0행은 '있음'에 세지 않고 사유와 함께 따로 적는다.
+        read = [f"{n} {self.exists[n]}" for n in BACKFILL_SETS if self.exists.get(n)]
+        gone = [n for n in BACKFILL_SETS if not self.exists.get(n)]
+        lines.append(f"백필 {len(read)}/{len(BACKFILL_SETS)}"
+                     + (" — " + " · ".join(read) if read else ""))
+        if gone:
+            # 사유는 한 줄에 열 개가 붙으므로 짧게 자른다. 전문은 backfill_notes 에 있다.
+            lines.append("  0행/부재(질의는 성공한다 - 결과가 없을 뿐이라 더 위험하다):\n    "
+                         + "\n    ".join(f"{n}: {self.backfill_notes.get(n, '사유 미기록')[:60]}"
+                                         for n in gone))
         if self.s3 or self.unbound:
             lines.append(f"S3 데이터셋 {len(self.s3)}개 (즉시 {len(self.s3) - len(self.deferred)}"
                          f" · 지연 {len(self.deferred)}) — canonical·draft·feature·raw 전량."
@@ -496,4 +618,5 @@ class CausalLake:
             "GROUP BY e.source_event_id ORDER BY 1")
 
 
-__all__ = ["CausalLake", "RDB_TABLES"]
+__all__ = ["BACKFILL_SETS", "CausalLake", "RDB_TABLES", "backfill_sources",
+           "rdb_dsn_from_env", "s3_secret_sql", "session_pragmas"]

@@ -222,9 +222,12 @@ def _pick(y: np.ndarray, xs: dict[str, np.ndarray], nows: dict[str, float],
         c = float(b[0]) * xo_now
         score = -abs(c) if left is None else abs(left - c)
         if score < best_score:
-            best, best_left = Layer(
+            # `best_score` 를 갱신하지 않으면 argmin 이 아니라 **초기 임계를 넘긴 마지막
+            # 후보**가 남는다(실측: `best_left` 라는 쓰이지 않는 이름에 점수를 넣고 있었다).
+            # 층 선택이 순회 순서에 좌우되면 "덜 남기는 층" 이라는 도크스트링이 거짓이다.
+            best, best_score = Layer(
                 sym, meta.get(sym, sym), kind, float(b[0]),
-                float(b[0] - 1.96 * se[0]), float(b[0] + 1.96 * se[0]),
+                float(b[0] - z * se[0]), float(b[0] + z * se[0]),
                 xo_now, c, len(y)), score
     return best
 
@@ -398,6 +401,24 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         # β 구간이 0 을 품으면 그 층은 **통계적으로 없다**. 있는 척하지 않는다.
         if pick is None or pick.lo <= 0.0 <= pick.hi:
             break
+        # **ρ 게이트**: 층의 존재 이유는 잔차 공통상관을 줄이는 것이다(RHO_MARGIN).
+        # 못 줄이면 공통요인이 아니라 우연히 맞는 계열이다. 상수·헬퍼·보고 필드가 다
+        # 있는데 호출이 0 이던 자리다 - 선언만 있고 배선이 없으면 그건 게이트가 아니다.
+        if panel_pair is not None:
+            B0 = np.column_stack(basis) if basis else np.empty((len(y), 0))
+            xo = _orth(xs[pick.code], B0, nows[pick.code], np.asarray(basis_now))[0]
+            before = _rho_after(panel_pair[0], basis)
+            after = _rho_after(panel_pair[0], [*basis, xo])
+            # **줄일 것이 있을 때만 잰다.** 잔차 공통상관이 이미 ≈0 이면 어느 층도
+            # 그걸 더 줄일 수 없다 - 그때 막으면 '잔차가 이미 독립이다' 와 '이 층은
+            # 요인이 아니다' 가 같은 결과로 나온다(부재 ≠ 기각).
+            if (before is not None and after is not None
+                    and abs(before) > RHO_MARGIN
+                    and abs(before) - abs(after) < RHO_MARGIN):
+                rho_blocked.append(f"{meta.get(pick.code, pick.code)}"
+                                   f" (ρ {before:+.3f}→{after:+.3f})")
+                sector_pool.pop(pick.code, None)
+                continue
         add(replace(pick, overlap=ovs.get(pick.code, 0.0)))
 
     idio = y_now - sum(x.contribution for x in layers)

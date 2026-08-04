@@ -93,7 +93,18 @@ def when_word(hhmm: str) -> str:
     return WHEN_STEPS[-1][2]
 
 
-def recent_window(shares: list, labels: list[str] | None = None,
+def _win_events(window, labels: dict[str, str] | None) -> list[str]:
+    """창에 붙은 사건 id → 사건타입 이름. 맵에 없는 id 는 **버리지 않고 id 로 남긴다**
+    (조용히 사라지면 '사건 없는 창' 과 '이름을 못 찾은 창' 이 같아 보인다)."""
+    out: list[str] = []
+    for eid in getattr(window, "event_ids", ()) or ():
+        nm = (labels or {}).get(eid) or str(eid)[:16]
+        if nm and nm not in out:
+            out.append(nm)
+    return out
+
+
+def recent_window(shares: list, labels: dict[str, str] | None = None,
                   floor: float = 0.20) -> dict:
     """마지막 **유의미한** 창. 하루 요약으로 도망가지 않게 재료를 고정한다.
 
@@ -110,15 +121,18 @@ def recent_window(shares: list, labels: list[str] | None = None,
         w = s.window
         when = ("밤사이" if w.kind == "gap"
                 else when_word(str(w.start)[11:16]))
-        evs = [e for e in ((labels or [])[i:i + 1] if labels else []) if e]
-        return {"when": when, "events": evs, "kind": w.kind}
+        # `labels` 는 {사건id: 사건타입} 맵이다 - **창의 사건 id 로 조회**한다.
+        # 이전 코드는 이걸 리스트로 보고 `labels[i:i+1]` 로 잘랐다: dict 슬라이스는
+        # KeyError 라 셀 전체가 죽었다(실측 000660 06-01). 위치로 맞추는 것 자체가
+        # 틀렸다 - 창 i 의 사건이 labels 의 i 번째일 이유가 없다.
+        return {"when": when, "events": _win_events(w, labels), "kind": w.kind}
     # **빈손으로 돌아가면 시점 강제가 조용히 꺼진다** - 가드가 빈 문자열을 건너뛰기
     # 때문이다(실측 000660 07-27: 창이 많아 전부 floor 미달 -> 최근_시점 ""). 창이
     # 있으면 반드시 하나를 고른다: 몫이 가장 큰 창. 그게 '방금 왜' 의 답이다.
     big = max(shares, key=lambda x: abs(x.log_ret))
     w = big.window
     return {"when": "밤사이" if w.kind == "gap" else when_word(str(w.start)[11:16]),
-            "events": [], "kind": w.kind}
+            "events": _win_events(w, labels), "kind": w.kind}
 
 
 def context(*, ticker_name: str, day_log: float, idio_log: float, route_kind: str,
