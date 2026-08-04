@@ -9,7 +9,10 @@
  */
 import { Link, useSearchParams } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
+import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
+import { MOCK_HOLDINGS } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 export function HoldingsImpactPage() {
@@ -21,23 +24,31 @@ export function HoldingsImpactPage() {
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={5} />;
 
+  /* 런이 없으면 결손·영향의 관계 자체를 볼 수 없다 — 사실을 먼저 밝히고 검수용 목을 붙인다 */
   if (!data.runKey) {
     return (
-      <div className="card">
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-          원장에 기록된 시장(etf-daily) 런이 아직 없습니다.
-        </p>
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>원장에 기록된 시장(etf-daily) 런이 아직 없습니다.</EmptyRealNotice>
+        <MockPreview>
+          <HoldingsImpactBody data={MOCK_HOLDINGS} mock />
+        </MockPreview>
       </div>
     );
   }
 
+  return <HoldingsImpactBody data={data} />;
+}
+
+function HoldingsImpactBody({ data, mock = false }: { data: HoldingsImpact; mock?: boolean }) {
   const loadDone = !data.loadPending;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">KRX 구성종목(holdings) 결손 영향</span>
+          <span className="t-label">
+            KRX 구성종목(holdings) 결손 영향 {mock && <MockChip />}
+          </span>
           {data.snapshotMissing ? (
             /* 계산 불가(UNKNOWN)는 "결손 없음"과 다르다 — 스펙 §6.3 */
             <StatusBadge tone="neutral">영향 범위 계산 불가</StatusBadge>
@@ -98,7 +109,7 @@ export function HoldingsImpactPage() {
                           <b>{a.publicationStatus ?? '—'}</b> ·{' '}
                           {/* 영향 분석 → 상세로 내려가는 고리(ALPHA-692). runId 없으면(이론상
                            * 없음) 텍스트 폴백 — 링크가 죽는 것보다 낫다 */}
-                          {a.explanationRunId ? (
+                          {a.explanationRunId && !mock ? (
                             <Link to={`/analyses/${encodeURIComponent(a.explanationRunId)}`}>
                               {a.summary ?? a.explanationResultId}
                             </Link>

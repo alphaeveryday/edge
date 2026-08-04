@@ -10,8 +10,10 @@
  */
 import { useState } from 'react';
 import { PageSkeleton } from 'ui-kit';
-import type { MinuteJobCounts, MinuteSession } from '../domains/sources';
+import type { MinuteJobCounts, MinuteSession, MinuteStatus } from '../domains/sources';
 import { useMinuteStatus } from '../domains/sources/hooks';
+import { MOCK_MINUTE } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 const fmtTime = (iso: string | null) =>
@@ -50,7 +52,7 @@ function JobCells({ jobs }: { jobs: MinuteJobCounts }) {
   );
 }
 
-function SessionCard({ s }: { s: MinuteSession }) {
+function SessionCard({ s, mock = false }: { s: MinuteSession; mock?: boolean }) {
   const live = liveness(s);
   const w = s.windows;
   const evidenced = w.valid + w.validEmpty + w.incomplete + w.invalid;
@@ -63,7 +65,7 @@ function SessionCard({ s }: { s: MinuteSession }) {
     <div className="card">
       <div className="card-head">
         <span className="t-label">
-          {s.dataset} / {s.sourceGroup}
+          {s.dataset} / {s.sourceGroup} {mock && <MockChip />}
         </span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
           phase {s.phase} · universe {s.universeVersion}
@@ -140,11 +142,45 @@ export function MinutePage() {
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
+  const j = data.newsJobs;
+  /* 세션도 job 도 전무해야 "볼 것이 없는 화면"이다 — job 만 있어도 실데이터가 있는 것이다 */
+  const empty =
+    data.sessions.length === 0 &&
+    j.waiting + j.claimed + j.claimedExpired + j.succeeded + j.dead === 0;
+
+  if (empty) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>
+          이 날짜({data.date})의 세션이 없습니다 — 1분 파이프라인이 계획되지 않았다는 사실이다(비거래일
+          또는 미가동). 오류가 아니라 관측 결과다. 뉴스 추출 job 도 0건이다.
+        </EmptyRealNotice>
+        <MockPreview>
+          <MinuteBody data={MOCK_MINUTE} date={date} setDate={setDate} mock />
+        </MockPreview>
+      </div>
+    );
+  }
+
+  return <MinuteBody data={data} date={date} setDate={setDate} />;
+}
+
+function MinuteBody({
+  data,
+  date,
+  setDate,
+  mock = false,
+}: {
+  data: MinuteStatus;
+  date: string;
+  setDate: (v: string) => void;
+  mock?: boolean;
+}) {
   return (
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">장중 1분 수집</span>
+          <span className="t-label">장중 1분 수집 {mock && <MockChip />}</span>
           <input
             type="date"
             value={date}
@@ -162,13 +198,13 @@ export function MinutePage() {
             또는 미가동). 오류가 아니라 관측 결과다.
           </p>
         ) : (
-          data.sessions.map((s) => <SessionCard key={s.sessionId} s={s} />)
+          data.sessions.map((s) => <SessionCard key={s.sessionId} s={s} mock={mock} />)
         )}
       </div>
 
       <div className="card">
         <div className="card-head">
-          <span className="t-label">뉴스 추출 job</span>
+          <span className="t-label">뉴스 추출 job {mock && <MockChip />}</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             기사 단위 논리 job · 날짜 축=job 생성 시각(KST) — 세션 연결 컬럼이 없어 별도 집계다
           </span>

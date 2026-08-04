@@ -12,8 +12,11 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
-import type { NewsLineageDocument, NewsLineageStage } from '../domains/sources';
+import type { NewsLineage, NewsLineageDocument, NewsLineageStage } from '../domains/sources';
 import { useNewsLineage } from '../domains/sources/hooks';
+import { mockLineage } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
+import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
 
 const fmt = (iso: string | null) =>
@@ -57,28 +60,32 @@ function StageTile({ label, value, info, active, onClick }: {
   active: boolean;
   onClick: () => void;
 }) {
+  /* 산출 정의 (i) 는 타일 버튼 **밖**에 둔다 — 버튼 안에 버튼을 넣을 수 없고,
+   * 넣으면 (i) 클릭이 단계 필터까지 같이 토글한다. */
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <span
       className="t-sm"
       style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
         border: `1px solid ${active ? 'var(--fg-1, #111)' : 'var(--border, #d1d5db)'}`,
         borderRadius: 6,
         padding: '6px 10px',
-        background: 'none',
-        cursor: 'pointer',
-        textAlign: 'left',
       }}
     >
-      <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-        {label}{' '}
-        {/* 네이티브 title 툴팁 — 산출 정의(진기님 (i) 요구). 라이브러리 불요 */}
-        <span title={info} style={{ cursor: 'help' }}>ⓘ</span>
-      </span>
-      <br />
-      <b>{value}</b>
-    </button>
+      <button
+        type="button"
+        onClick={onClick}
+        className="t-sm"
+        style={{ border: 0, background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+      >
+        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>{label}</span>
+        <br />
+        <b>{value}</b>
+      </button>
+      <InfoPopover text={info} label={label} title={`${label} 산출 정의`} />
+    </span>
   );
 }
 
@@ -103,6 +110,69 @@ export function NewsLineagePage() {
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
+  const ext = data.extraction;
+  /* 문서도 추출 job 도 전무해야 "볼 것이 없는 화면"이다 */
+  const empty =
+    data.summary.totalDocuments === 0 &&
+    data.documents.length === 0 &&
+    ext.succeeded + ext.dead === 0;
+
+  if (empty) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>
+          {date
+            ? `이 날짜(${date})에 수집된 문서가 없습니다.`
+            : '수집된 문서가 없습니다 — 원장(document)에 뉴스가 아직 적재되지 않았습니다.'}
+        </EmptyRealNotice>
+        <MockPreview>
+          <LineageBody
+            data={mockLineage(stage, limit)}
+            date={date}
+            setDate={setDate}
+            limit={limit}
+            setLimit={setLimit}
+            stage={stage}
+            setStage={setStage}
+            mock
+          />
+        </MockPreview>
+      </div>
+    );
+  }
+
+  return (
+    <LineageBody
+      data={data}
+      date={date}
+      setDate={setDate}
+      limit={limit}
+      setLimit={setLimit}
+      stage={stage}
+      setStage={setStage}
+    />
+  );
+}
+
+function LineageBody({
+  data,
+  date,
+  setDate,
+  limit,
+  setLimit,
+  stage,
+  setStage,
+  mock = false,
+}: {
+  data: NewsLineage;
+  date: string;
+  setDate: (v: string) => void;
+  limit: number;
+  setLimit: (v: number) => void;
+  stage: NewsLineageStage | undefined;
+  setStage: (v: NewsLineageStage | undefined) => void;
+  mock?: boolean;
+}) {
   const s = data.summary;
   const m = s.totalDocuments;
   const unstructured = m - s.documentsWithAssertion;
@@ -115,7 +185,7 @@ export function NewsLineagePage() {
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">뉴스 계보</span>
+          <span className="t-label">뉴스 계보 {mock && <MockChip />}</span>
           {/* 네이티브 date input — 라이브러리 불요 */}
           <input
             type="date"
@@ -170,10 +240,11 @@ export function NewsLineagePage() {
         <div className="card-head">
           <span className="t-label">장중 1분 추출 job</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            <span
-              title={`news_extraction_job 기준 · 날짜 축=job 생성 시각(KST, ${dateScope}) — 위 문서 표(수집 시각 축)와 다른 원장이라 분모가 다를 수 있다. EOD 레인 실패는 작업 단위로 파이프라인 실행 이력(/sources) 소관.`}
-              style={{ cursor: 'help' }}
-            >ⓘ 산출 기준</span>
+            산출 기준
+            <InfoPopover
+              label="산출 기준"
+              text={`news_extraction_job 기준 · 날짜 축=job 생성 시각(KST, ${dateScope}) — 위 문서 표(수집 시각 축)와 다른 원장이라 분모가 다를 수 있다. EOD 레인 실패는 작업 단위로 파이프라인 실행 이력(/sources) 소관.`}
+            />
           </span>
         </div>
         {exTotal === 0 ? (
@@ -208,7 +279,7 @@ export function NewsLineagePage() {
 
       <div className="card">
         <div className="card-head">
-          <span className="t-label">문서 목록</span>
+          <span className="t-label">문서 목록 {mock && <MockChip />}</span>
           <select
             value={limit}
             onChange={(e) => setLimit(Number(e.target.value))}

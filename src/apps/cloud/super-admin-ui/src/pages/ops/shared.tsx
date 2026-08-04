@@ -8,6 +8,7 @@ import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
 import { evaluate } from '../../rules/evaluate';
+import { InfoPopover } from '../_shared/InfoPopover';
 import type { Facts, Incident, RunbookEntry, Severity, Violation } from '../../rules/types';
 import factsJson from '../../rules/facts-snapshot.json';
 
@@ -141,13 +142,9 @@ export function Absent({ kind }: { kind: 'none' | 'blind' | 'uninstrumented' }) 
   );
 }
 
-/** ⓘ — L2 정보 공개 손잡이 */
-export function Info({ tip }: { tip: string }) {
-  return (
-    <span className="ops-i" title={tip} aria-label="설명">
-      i
-    </span>
-  );
+/** ⓘ — L2 정보 공개 손잡이. 클릭으로 열리는 팝오버다(hover 전용 title 은 키보드·터치에서 없는 것과 같다) */
+export function Info({ tip, label }: { tip: string; label: string }) {
+  return <InfoPopover text={tip} label={label} />;
 }
 
 /** 화면 상단 한 줄 — 이 화면이 답하는 질문 + 스냅샷 기준 시각 */

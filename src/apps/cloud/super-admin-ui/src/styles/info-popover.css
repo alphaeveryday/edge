@@ -1,0 +1,77 @@
+/* InfoPopover — 설명 (i) 버튼과 팝오버 패널. ui-kit 토큰만 쓴다(자체 팔레트 없음). */
+
+/* 아이콘은 작아도 클릭 영역은 28px 확보한다. 음수 마진으로 줄 높이는 밀지 않는다. */
+.info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -7px 0 -7px 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  vertical-align: middle;
+  flex: none;
+}
+.info-btn > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1;
+  color: var(--fg-3);
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+.info-btn:hover > span {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.info-btn[aria-expanded='true'] > span {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+/* 포커스 표시는 지우지 않는다 — 키보드 사용자가 위치를 잃는다 */
+.info-btn:focus-visible > span {
+  box-shadow: var(--focus-ring);
+}
+
+/* 패널은 portal + position:fixed 라 표의 overflow 에 잘리지 않는다 */
+.info-panel {
+  position: fixed;
+  z-index: 300;
+  max-width: 400px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--sm-size);
+  line-height: 1.65;
+  color: var(--fg-2);
+  /* 원문의 줄바꿈·목록 구조를 그대로 보존한다 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.info-panel-title {
+  display: block;
+  margin-bottom: 4px;
+  font-size: var(--xs-size);
+  font-weight: 600;
+  letter-spacing: var(--label-track);
+  text-transform: uppercase;
+  color: var(--fg-3);
+  white-space: nowrap;
+}

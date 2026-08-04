@@ -30,7 +30,7 @@ export function DeliveryPage() {
             관측 불가
           </div>
           <div className="kpi-sub">
-            접근 채널 없음 <Info tip="온프렘이 무엇을 읽었는지 확인할 채널이 클라우드에 없다 — 0이 아니다." />
+            접근 채널 없음 <Info tip="온프렘이 무엇을 읽었는지 확인할 채널이 클라우드에 없다 — 0이 아니다." label="소비자 수신" />
           </div>
         </div>
         <div className="kpi">

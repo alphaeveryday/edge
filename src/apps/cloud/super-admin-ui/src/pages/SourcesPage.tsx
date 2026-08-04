@@ -10,10 +10,13 @@ import type {
   LaunchStatus,
   OrchestrationStatus,
   ReconciliationIssue,
+  SourceReport,
   TaskOutcome,
   TaskStatus,
 } from '../domains/sources';
 import { useSourceReport } from '../domains/sources/hooks';
+import { MOCK_REPORT } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 /* 원장 어휘를 그대로 라벨링한다 — 화면에서 새 상태 이름을 만들지 않는다(ALPHA-181 이 새 상태
@@ -361,6 +364,33 @@ export function SourcesPage() {
   }
   if (isPending) return <PageSkeleton rows={6} />;
 
+  /* 런이 없으면 표의 열(상태·산출·유실·완전성·시도)이 무엇을 말하는지 볼 수 없다 —
+   * 사실을 먼저 밝히고 검수용 목을 분리해 붙인다 */
+  if (report.run === null) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>아직 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
+        <MockPreview>
+          <SourcesBody report={MOCK_REPORT} mock />
+        </MockPreview>
+      </div>
+    );
+  }
+
+  return <SourcesBody report={report} runKey={runKey} focusTask={focusTask} />;
+}
+
+function SourcesBody({
+  report,
+  runKey,
+  focusTask,
+  mock = false,
+}: {
+  report: SourceReport;
+  runKey?: string;
+  focusTask?: string;
+  mock?: boolean;
+}) {
   const run = report.run;
   const focusedExists = focusTask !== undefined && report.tasks.some((t) => t.taskKey === focusTask);
   const visibleTasks = focusedExists
@@ -383,7 +413,7 @@ export function SourcesPage() {
       <div className="card">
         <div className="card-head">
           <span className="t-label">
-            데이터 소스 수집 상태
+            데이터 소스 수집 상태 {mock && <MockChip />}
             {/* 지목해서 보는 중이면 그 사실을 밝힌다 — 옛 런을 최신 상태로 오독하면 안 된다 */}
             {runKey && <span className="t-xs">{' · 지정한 실행'}</span>}
           </span>

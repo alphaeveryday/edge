@@ -19,7 +19,7 @@ export function TrendPage() {
           <span className="t-label">산출 델타</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             직전 10영업일 중앙값 대비 ±25% 이상이면 분포 밖 (R13)
-            <Info tip={'기준선은 평균이 아니라 중앙값이다 — 하루짜리 장애가 기준선을 끌고 가지 않게.'} />
+            <Info tip={'기준선은 평균이 아니라 중앙값이다 — 하루짜리 장애가 기준선을 끌고 가지 않게.'} label="기준선" />
           </span>
         </div>
         <table className="table">

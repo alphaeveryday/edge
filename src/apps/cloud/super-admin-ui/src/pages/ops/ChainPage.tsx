@@ -29,6 +29,7 @@ export function ChainPage() {
                 '체인은 하나다.\n배치 트리거와 장중 트리거는 별개 흐름이 아니라 같은 체인에 들어오는 두 갈래 입력이다 — ' +
                 'etf_contribution_observation 이 두 트리거 FK 를 모두 갖는다.'
               }
+              label="체인 구조"
             />
           </span>
         </div>
@@ -55,6 +56,7 @@ export function ChainPage() {
                 `\n\n이 원장이 있으면 "설명 미생성 ${failed.length}종이 어느 ETF인지"에 답할 수 있고, R15 가 대상을 지목한다. ` +
                 '지금은 AnalyzeOne 이 ETF 단위 귀결·오류를 남기지 않아 목값이다.'
               }
+              label="ETF별 분석 귀결"
             />
           </span>
         </div>

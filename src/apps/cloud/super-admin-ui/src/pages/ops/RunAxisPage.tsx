@@ -126,14 +126,14 @@ export function RunAxisPage() {
                 <th>귀결</th>
                 <th className="num">산출 행</th>
                 <th className="num">
-                  유실 <Info tip={FAILED_TIP} />
+                  유실 <Info tip={FAILED_TIP} label="유실" />
                 </th>
                 <th>데이터 판정</th>
                 <th>
-                  완전성 <Info tip={COMPLETENESS_TIP} />
+                  완전성 <Info tip={COMPLETENESS_TIP} label="완전성" />
                 </th>
                 <th className="num">
-                  시도 <Info tip={ATTEMPT_TIP} />
+                  시도 <Info tip={ATTEMPT_TIP} label="시도·상한" />
                 </th>
               </tr>
             </thead>

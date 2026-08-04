@@ -11,8 +11,17 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import type { MinuteSession, OpsStatus, OverviewDefect, OverviewLane } from '../domains/sources';
+import type {
+  MinuteSession,
+  MinuteStatus,
+  OpsStatus,
+  OverviewDefect,
+  OverviewLane,
+  SourceOverview,
+} from '../domains/sources';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
+import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 /* 스펙 §7 어휘의 표시 라벨. READY 는 "모두 자동 발행"이 아니라 "운영 결함으로 막힌 것이
@@ -47,12 +56,14 @@ function defectReasons(d: OverviewDefect): string[] {
   return reasons;
 }
 
-function LaneCard({ lane }: { lane: OverviewLane }) {
+function LaneCard({ lane, mock = false }: { lane: OverviewLane; mock?: boolean }) {
   const navigate = useNavigate();
   const ops = OPS[lane.opsStatus] ?? OPS.UNKNOWN;
   const c = lane.counts;
   const openDrilldown = (taskKey?: string) =>
-    navigate(
+    mock
+      ? undefined
+      : navigate(
       `/sources?runKey=${encodeURIComponent(lane.runKey)}${
         taskKey ? `&task=${encodeURIComponent(taskKey)}` : ''
       }`,
@@ -61,7 +72,9 @@ function LaneCard({ lane }: { lane: OverviewLane }) {
   return (
     <div className="card">
       <div className="card-head">
-        <span className="t-label">{LANE_LABEL[lane.pipelineType] ?? lane.pipelineType} 레인</span>
+        <span className="t-label">
+          {LANE_LABEL[lane.pipelineType] ?? lane.pipelineType} 레인 {mock && <MockChip />}
+        </span>
         <StatusBadge tone={ops.tone}>{ops.label}</StatusBadge>
         {/* 오늘 런이 아니면 판정 전체가 지난 런 기준이라는 사실이 상태보다 먼저 보여야 한다 */}
         {lane.notToday && <StatusBadge tone="warn">오늘 런 아님</StatusBadge>}
@@ -178,42 +191,44 @@ function MinuteSessionLine({ s }: { s: MinuteSession }) {
   );
 }
 
-function MinuteLaneCard() {
-  const { data, isPending, isError } = useMinuteStatus();
+function MinuteLaneCard({ mockData }: { mockData?: MinuteStatus }) {
+  const query = useMinuteStatus();
+  const { isPending, isError } = query;
+  const data = mockData ?? query.data;
 
   return (
     <div className="card">
       <div className="card-head">
-        <span className="t-label">장중 1분 레인</span>
+        <span className="t-label">장중 1분 레인 {mockData && <MockChip />}</span>
         <Link to="/minute" className="t-xs">
           상세 (결손 창 목록)
         </Link>
       </div>
-      {isError ? (
+      {!mockData && isError ? (
         /* 첫 화면 전체를 죽이지 않는다 — 이 카드만 실패를 밝힌다(조회 실패 ≠ 미가동) */
         <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
           1분 원장 조회 실패 — 미가동이 아니라 조회 오류입니다.
         </p>
-      ) : isPending ? (
+      ) : !mockData && isPending ? (
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>불러오는 중…</p>
       ) : (
         <>
-          {data.sessions.length === 0 ? (
+          {data!.sessions.length === 0 ? (
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              오늘({data.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
+              오늘({data!.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
               미가동)이지 오류가 아닙니다.
             </p>
           ) : (
-            data.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
+            data!.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
           )}
           {/* 뉴스 추출 DEAD — 세션(창 원장)과 별개 축이라 세션 유무와 무관하게 신호를 낸다
             * (ALPHA-697). 사유별 내역은 /lineage/news 의 추출 카드가 답한다. 이 카운트는
             * 서버가 data.date(오늘 KST)로 집계한 값이라 링크도 같은 날짜를 들고 내려간다 —
             * 날짜를 버리면 상세가 누적 사유를 보여줘 오늘 장애를 오진한다. */}
-          {data.newsJobs.dead > 0 && (
+          {data!.newsJobs.dead > 0 && (
             <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
-              뉴스 추출 DEAD {data.newsJobs.dead}건 —{' '}
-              <Link to={`/lineage/news?date=${data.date}`}>사유별 내역</Link>
+              뉴스 추출 DEAD {data!.newsJobs.dead}건 —{' '}
+              <Link to={`/lineage/news?date=${data!.date}`}>사유별 내역</Link>
             </p>
           )}
         </>
@@ -228,22 +243,32 @@ export function OverviewPage() {
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
+  /* 레인이 없으면 원장의 구조(레인 → 필수 작업 → 결함)를 볼 수 없다 — 사실을 먼저 밝힌다 */
+  if (data.lanes.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        {/* 빈 원장은 정상 상태다(초기 환경) — 에러 화면이 아니다 */}
+        <EmptyRealNotice>원장에 기록된 파이프라인 실행이 아직 없습니다.</EmptyRealNotice>
+        <MockPreview>
+          <OverviewBody data={MOCK_OVERVIEW} mock />
+        </MockPreview>
+      </div>
+    );
+  }
+
+  return <OverviewBody data={data} />;
+}
+
+function OverviewBody({ data, mock = false }: { data: SourceOverview; mock?: boolean }) {
   return (
     <div className="flex flex-col gap-4">
-      {data.lanes.length === 0 ? (
-        /* 빈 원장은 정상 상태다(초기 환경) — 에러 화면이 아니다 */
-        <div className="card">
-          <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            원장에 기록된 파이프라인 실행이 아직 없습니다.
-          </p>
-        </div>
-      ) : (
-        data.lanes.map((lane) => <LaneCard key={lane.pipelineType} lane={lane} />)
-      )}
+      {data.lanes.map((lane) => (
+        <LaneCard key={lane.pipelineType} lane={lane} mock={mock} />
+      ))}
 
       {/* 장중 1분 레인 — EOD 레인만 보이면 장중 절반이 첫 화면의 사각이다(ALPHA-692, 멘토
        * "왜 전부 하루 주기냐"). ops 런 레인과 실행 모델이 달라 별도 카드로 요약만 얹는다. */}
-      <MinuteLaneCard />
+      <MinuteLaneCard mockData={mock ? MOCK_MINUTE : undefined} />
 
       {/* 발행 분포는 이 콘솔의 경계 밖 — 없는 숫자를 지어내지 않고 소재만 밝힌다(계획 §6-1) */}
       <div className="card">

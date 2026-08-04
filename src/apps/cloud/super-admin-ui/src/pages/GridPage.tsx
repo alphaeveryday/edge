@@ -19,8 +19,10 @@
 import { Fragment, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
-import type { GridCell, GridSlot } from '../domains/sources';
+import type { GridCell, GridSlot, SourceGrid } from '../domains/sources';
 import { useSourceGrid } from '../domains/sources/hooks';
+import { MOCK_GRID } from '../mock/preview';
+import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 /* 원장 어휘를 그대로 색에 대응시킨다 — 화면에서 새 상태 이름을 만들지 않는다(SourcesPage 와
@@ -91,12 +93,31 @@ const LANE_FILTERS: { key: LaneFilter; label: string }[] = [
 ];
 
 export function GridPage() {
-  const navigate = useNavigate();
-  const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
   const { data: grid, isPending, isError, error } = useSourceGrid();
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
+
+  /* 격자가 비면 셀 의미론(색·테두리·점)을 전혀 볼 수 없다 — 사실을 먼저 밝히고 검수용 목을 붙인다 */
+  if (grid.slots.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>
+          최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.
+        </EmptyRealNotice>
+        <MockPreview>
+          <GridBody grid={MOCK_GRID} mock />
+        </MockPreview>
+      </div>
+    );
+  }
+
+  return <GridBody grid={grid} />;
+}
+
+function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) {
+  const navigate = useNavigate();
+  const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
 
   const slots = grid.slots.filter((slot) => {
     if (laneFilter === 'all') return true;
@@ -130,7 +151,9 @@ export function GridPage() {
   /* 셀 클릭은 그 작업을 지목해 드릴다운의 해당 행으로 바로 떨어진다 — 런 전체만 열면
    * 방금 누른 작업을 목록에서 다시 찾아야 한다. 헤더 클릭은 런 전체. */
   const openDrilldown = (runKey: string, taskKey?: string) =>
-    navigate(
+    mock
+      ? undefined
+      : navigate(
       `/sources?runKey=${encodeURIComponent(runKey)}${
         taskKey ? `&task=${encodeURIComponent(taskKey)}` : ''
       }`,
@@ -140,7 +163,7 @@ export function GridPage() {
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">파이프라인 실행 이력</span>
+          <span className="t-label">파이프라인 실행 이력 {mock && <MockChip />}</span>
           <span style={{ display: 'inline-flex', gap: 4 }}>
             {LANE_FILTERS.map((f) => (
               <button
@@ -195,7 +218,7 @@ export function GridPage() {
                         padding: '2px 3px',
                         whiteSpace: 'pre',
                         fontWeight: 500,
-                        cursor: 'pointer',
+                        cursor: mock ? 'default' : 'pointer',
                         /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
                          * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
                         color: slotHeaderColor(slot),
@@ -259,7 +282,7 @@ export function GridPage() {
                               key={slot.runKey}
                               title={cellTip(cell, slot.runKey)}
                               onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
-                              style={{ padding: 2, cursor: 'pointer' }}
+                              style={{ padding: 2, cursor: mock ? 'default' : 'pointer' }}
                             >
                               <div
                                 style={{

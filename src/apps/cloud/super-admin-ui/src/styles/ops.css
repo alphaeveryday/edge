@@ -60,28 +60,6 @@
   color: var(--accent);
 }
 
-/* ⓘ 손잡이 */
-.ops-i {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex: none;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  font-size: 9px;
-  font-weight: 700;
-  font-style: normal;
-  color: var(--fg-3);
-  cursor: help;
-  vertical-align: middle;
-}
-.ops-i:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* 드릴다운 착지 강조 */
 .ops-flash {
   animation: ops-flash 1.8s ease-out;

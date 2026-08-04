@@ -57,7 +57,7 @@ function IncidentCard({ I }: { I: Incident }) {
         <span className="mono t-xs" style={{ color: 'var(--fg-3)' }}>
           {v.rule}
         </span>
-        <Info tip={violationTip(v, I)} />
+        <Info tip={violationTip(v, I)} label={`${v.ruleName} 사건`} />
         <span className="chip">{v.kls}</span>
         {I.members.length > 0 && (
           <span className="chip chip-warn" title="인과로 이어진 위반이 이 카드 하나로 접혔다 — 조치는 하나다">
@@ -105,13 +105,13 @@ export function IncidentsPage() {
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
           카드는 손으로 고른 게 아니라 규칙 위반 → 인과 병합 → 심각도·연쇄 크기순으로 생성됩니다. 내일 뉴스가 아니라
           공시가 깨지면 카드도 그쪽으로 바뀝니다.
-          <Info tip={GEN_TIP} />
+          <Info tip={GEN_TIP} label="화면 생성 순서" />
           {'  '}기준 DB {kst(F.meta.db)} · AWS/S3 {kst(F.meta.aws)} · 거래일 {F.meta.today}
         </p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
           <span className="chip">MOCK</span> 계측이 없어 목데이터로 돌고 있는 규칙 {mockRules}개 — 이 수가 곧 남은 계측
           부채입니다.
-          <Info tip={ABSENCE_TIP} />
+          <Info tip={ABSENCE_TIP} label="부재 4구분·출처" />
         </p>
       </div>
 

@@ -44,6 +44,7 @@ export function DatasetPage() {
                 'expected_as_of = 계약이 기대하는 기준일, actual_as_of = 데이터가 실제로 담고 있는 기준일.\n' +
                 '수집 시각(collected_at)과는 다른 축이다 — 오늘 수집해도 담긴 기준일은 어제일 수 있다.'
               }
+              label="기준일 축"
             />
           </span>
         </div>
