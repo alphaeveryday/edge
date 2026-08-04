@@ -25,13 +25,47 @@ MIN_ROWS = 1
 
 
 @dataclass(frozen=True, slots=True)
+class Need:
+    """도구가 요구하는 **커버리지**. 표 이름만으로는 부족하다.
+
+    실측이 그 부족을 보였다: `flow_detail` 이 `s3_investor_flow` 로 20일 누적을
+    요구했는데 그 표는 **11거래일뿐**이었다. '표가 있다' 는 검사를 통과하고, 도구는
+    매번 창 미충족으로 판정불가를 냈다 - 감사가 "이 20일 누적은 며칠짜리 표로 계산
+    했나" 를 물으면 답이 없었다. 요구를 숫자로 적으면 그 질문에 코드가 답한다.
+
+    `days` 는 그 표의 **서로 다른 날짜 수**다. 열 이름이 표마다 다르므로
+    `date_col` 로 받는다 - 없으면 행 수만 본다.
+    """
+
+    table: str
+    rows: int = MIN_ROWS
+    days: int = 0
+    date_col: str = "trade_date"
+
+    def unmet(self, cov: dict[str, tuple[int, int]]) -> str:
+        """충족하지 못한 사유. 빈 문자열이면 충족."""
+        r, d = cov.get(self.table, (0, 0))
+        if r < self.rows:
+            return f"{self.table} {r}행 < 요구 {self.rows}행"
+        if self.days and d < self.days:
+            return f"{self.table} {d}일 < 요구 {self.days}일 (행은 {r}개 있다)"
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
 class Tool:
     """도구 하나. `what` 은 프롬프트에 **그대로** 들어가므로 한 문장으로 쓴다."""
 
     name: str
     what: str
-    needs: tuple[str, ...]          # 이 표들이 비면 도구가 사라진다
+    # `str` 은 "행 1개 이상" 의 줄임이다. 일수 요구가 있으면 `Need` 를 쓴다.
+    needs: tuple[str | Need, ...]
     vocab: tuple[str, ...]          # 이 도구가 닫는 어휘 슬롯 (감사용)
+
+    @property
+    def wants(self) -> tuple[Need, ...]:
+        """`needs` 를 전부 `Need` 로 정규화. 호출자가 두 형태를 신경 쓰지 않게."""
+        return tuple(Need(n) if isinstance(n, str) else n for n in self.needs)
     fn: Callable[..., dict] = field(compare=False, repr=False)
 
 
@@ -54,37 +88,53 @@ def register(name: str, what: str, *, needs: tuple[str, ...] = (),
     return deco
 
 
-def _rows(lake, table: str) -> int:
-    """그 표의 행 수. 없거나 못 읽으면 0 — **예외를 삼키지 않고 0 으로 말한다**."""
+def _probe(lake, need: Need) -> tuple[int, int]:
+    """(행 수, 서로 다른 날짜 수). 못 읽으면 (0, 0) — **예외를 삼키지 않고 0 으로 말한다**.
+
+    날짜 열이 없는 표(예: 마스터)는 일수 0 이고, 그런 표에 일수를 요구하면 안 된다.
+    """
     try:
-        return int(lake.sql(f"SELECT count(*) FROM {table}")[0][0])
+        n = int(lake.sql(f"SELECT count(*) FROM {need.table}")[0][0])
     except Exception:                            # noqa: BLE001 - 부재는 0 행이다
-        return 0
+        return 0, 0
+    if not need.days:
+        return n, 0
+    try:
+        d = int(lake.sql(f"SELECT count(DISTINCT {need.date_col}) "
+                         f"FROM {need.table}")[0][0])
+    except Exception:                            # noqa: BLE001 - 열 부재도 0 일이다
+        return n, 0
+    return n, d
 
 
-def coverage(lake) -> dict[str, int]:
-    """등록된 도구들이 요구하는 표의 행 수. 한 번 재서 돌려쓴다(표당 1회 질의)."""
-    want = {t for tool in TOOLS.values() for t in tool.needs}
-    return {t: _rows(lake, t) for t in sorted(want)}
+def coverage(lake) -> dict[str, tuple[int, int]]:
+    """요구된 표마다 (행, 일). 표당 최대 2질의 - 한 번 재서 돌려쓴다."""
+    want: dict[str, Need] = {}
+    for tool in TOOLS.values():
+        for n in tool.wants:
+            # 같은 표를 여러 도구가 요구하면 **가장 센 요구**로 잰다(일수 최대).
+            cur = want.get(n.table)
+            if cur is None or n.days > cur.days:
+                want[n.table] = n
+    return {t: _probe(lake, n) for t, n in sorted(want.items())}
 
 
-def available(lake, cov: dict[str, int] | None = None) -> list[Tool]:
-    """지금 **실제로 부를 수 있는** 도구만. 데이터가 없으면 목록에서 빠진다."""
+def available(lake, cov: dict[str, tuple[int, int]] | None = None) -> list[Tool]:
+    """지금 **실제로 부를 수 있는** 도구만. 커버리지가 요구에 못 미치면 빠진다."""
     c = cov if cov is not None else coverage(lake)
-    return [t for t in TOOLS.values()
-            if all(c.get(x, 0) >= MIN_ROWS for x in t.needs)]
+    return [t for t in TOOLS.values() if not any(n.unmet(c) for n in t.wants)]
 
 
-def blocked(lake, cov: dict[str, int] | None = None) -> list[tuple[Tool, str]]:
+def blocked(lake, cov: dict[str, tuple[int, int]] | None = None
+            ) -> list[tuple[Tool, str]]:
     """못 부르는 도구와 **사유**. 이 목록이 비어 보이면 감사가 통과한 게 아니라
-    감사를 안 한 것이다 — 부재는 이름과 함께 드러나야 한다."""
+    감사를 안 한 것이다 — 부재는 이름과 요구 미달의 크기까지 드러나야 한다."""
     c = cov if cov is not None else coverage(lake)
     out = []
     for t in TOOLS.values():
-        miss = [x for x in t.needs if c.get(x, 0) < MIN_ROWS]
+        miss = [m for n in t.wants if (m := n.unmet(c))]
         if miss:
-            out.append((t, "데이터 부재: " + " · ".join(f"{x}({c.get(x, 0)}행)"
-                                                     for x in miss)))
+            out.append((t, "커버리지 미달: " + " · ".join(miss)))
     return out
 
 
@@ -119,9 +169,9 @@ def call(lake, name: str, **kw) -> dict:
             f"{sorted(t.name for t in available(lake))}")
     t = TOOLS[name]
     cov = coverage(lake)
-    miss = [x for x in t.needs if cov.get(x, 0) < MIN_ROWS]
+    miss = [m for n in t.wants if (m := n.unmet(cov))]
     if miss:
-        raise SurfaceError(f"{name}: 데이터 부재로 호출 불가 — {miss}")
+        raise SurfaceError(f"{name}: 커버리지 미달로 호출 불가 — {miss}")
     # 호출자는 셀 문맥(day·instrument_id·etype…)을 통째로 넘긴다. 도구마다 필요한
     # 것만 골라 넘긴다 - `**kw` 를 모든 도구에 달게 하면 오타 인자가 조용히 먹히고
     # "왜 그 값이 안 먹었나" 를 사후에 못 가린다. 서명이 계약이다.
@@ -222,5 +272,5 @@ from . import (            # noqa: E402,F401 - 등록 부작용이 목적이다
     tool_stability,
 )
 
-__all__ = ["MIN_ROWS", "SurfaceError", "TOOLS", "Tool", "audit_vocab",
+__all__ = ["MIN_ROWS", "Need", "SurfaceError", "TOOLS", "Tool", "audit_vocab",
            "available", "blocked", "call", "catalog", "coverage", "register"]

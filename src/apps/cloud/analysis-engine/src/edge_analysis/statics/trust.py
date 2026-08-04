@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .surface import SurfaceError, available, call
@@ -61,13 +62,35 @@ class Claim:
 
 @dataclass(slots=True)
 class Finding:
-    """주장 하나에 대한 판정. `supported` 는 **셋 다 통과**했을 때만 True."""
+    """주장 하나에 대한 판정. `tier` 가 **근거의 등급**이다."""
 
     claim: Claim
-    supported: bool
+    tier: str                        # 확증 | 정합 | 회계 | 반증 | 부재
     why: str
     used: dict[str, dict] = field(default_factory=dict)
     missing: tuple[str, ...] = ()
+
+    @property
+    def supported(self) -> bool:
+        """설명으로 내보낼 수 있는가. **정합도 설명이다** - 확증만 설명이면 아무 말도
+        못 한다(실측: 30일 배치에서 유의 사건 0건). 반증·부재만 내보내지 않는다."""
+        return self.tier in ("확증", "정합", "회계")
+
+
+# 근거 등급 — 금융권 실무의 층과 같다. **모든 주장이 ATT 일 수는 없다.**
+#
+# 왜 등급이 필요한가: 확증(대조군 ATT + 유의 + 안정)을 유일한 통과 기준으로 두면
+# 실측에서 30일 내내 유의 사건이 0 건이라 산출이 전부 '미뒷받침' 이 된다. 그건 정직한
+# 게 아니라 **쓸 수 없는 것**이다. 감사가 요구하는 것은 '모든 문장이 인과 확증' 이
+# 아니라 '각 문장의 근거 등급이 명시되고 과장되지 않음' 이다.
+#
+#   확증  대조군 ATT 가 유의하고 방향이 맞고 기간을 갈라도 재현된다
+#   정합  관측이 주장과 **방향이 맞고** 반증하는 도구가 없다 (동종·기저율·수급·거시)
+#   회계  시간·횡단면 항등식 - 합이 맞는다. 검정 대상이 아니다
+#   반증  도구가 주장을 **부정**했다. 이건 다시 쓰라는 신호다
+#   부재  못 쟀다. '효과 없음' 이 아니다
+TIERS = ("확증", "정합", "회계", "반증", "부재")
+ALPHA = 0.05
 
 
 def _direction_ok(claim: Claim, used: dict[str, dict]) -> tuple[bool, str]:
@@ -122,14 +145,14 @@ def check(lake, claims: list[Claim], *, day: str, instrument_id: str,
 
     for c in claims:
         if c.kind not in NEED:
-            out.append(Finding(c, False, f"주장 유형 '{c.kind}' 이 어휘에 없다 - "
-                                         f"쓸 수 있는 것은 {sorted(NEED)}"))
+            out.append(Finding(c, "부재", f"주장 유형 '{c.kind}' 이 어휘에 없다 - "
+                                          f"쓸 수 있는 것은 {sorted(NEED)}"))
             continue
 
         # ① 접지: 인용한 id 가 실제로 있는가
         bad = [r for r in c.refs if grounded is not None and r not in grounded]
         if bad:
-            out.append(Finding(c, False, f"접지 밖 근거를 인용했다: {bad}"))
+            out.append(Finding(c, "반증", f"접지 밖 근거를 인용했다: {bad}"))
             continue
 
         # ② 요구 도구를 모은다. 없으면 부른다 - 이게 피드백 루프다.
@@ -153,48 +176,70 @@ def check(lake, claims: list[Claim], *, day: str, instrument_id: str,
                 # 인자가 안 맞으면 그건 배선 결함이다 - 사유를 남기고 넘어간다.
                 miss.append(f"{name}({type(exc).__name__})")
 
+        refuted = [f"{n}: {str(r.get('note') or r.get('reason') or '')[:80]}"
+                   for n, r in used.items() if r.get("supports") is False]
+        unmeasured = [f"{n}({str(r.get('reason') or '')[:46]})"
+                      for n, r in used.items()
+                      if str(r.get("verdict", "")) not in ("성립", "계산됨")]
+        ok_dir, dir_msg = _direction_ok(c, used)
         why: list[str] = []
-        # ③ **판정불가 도구는 미충족이다.** 이걸 빼먹어 실측에서 최악의 통과가 났다:
-        # `base_rate` 가 "사건일 분포에서 오늘은 상위 90% 로 무조건 분포보다 극단이
-        # 아니다 - 사건 귀속의 근거가 되지 못한다" 고 반증했고 `stability` 는 판정불가
-        # 인데, `run_trial` 의 ATT 부호 하나만 보고 "실적 발표가 상승을 이끌었어요" 를
-        # **뒷받침**으로 찍었다. 도구를 부르고도 그 답을 안 읽은 것이다.
-        for name, res in used.items():
-            v = str(res.get("verdict", ""))
-            if v not in ("성립", "계산됨"):
-                why.append(f"{name}: {v or '판정 없음'} — "
-                           f"{str(res.get('reason') or '사유 없음')[:80]}")
-            # 도구가 스스로 **반증**을 신고할 수 있다(`supports=False`). 도구별 특수
-            # 규칙을 여기 박으면 결합이 생기므로, 판단은 도구가 하고 집계만 한다.
-            elif res.get("supports") is False:
-                why.append(f"{name}: 이 도구는 주장을 **지지하지 않는다** — "
-                           f"{str(res.get('note') or res.get('reason') or '')[:90]}")
 
-        # ④ 강도: 방향 주장은 부호 있는 근거가 필요하다
-        ok, msg = _direction_ok(c, used)
-        if not ok:
-            why.append(msg)
+        # 등급 판정 — 순서가 뜻이다. 반증이 있으면 다른 무엇도 그것을 덮지 못한다.
+        if refuted:
+            tier, why = "반증", ["도구가 주장을 부정한다: " + " / ".join(refuted)]
+        elif c.kind == "크기":
+            tier = "회계"
+        elif not used or len(unmeasured) == len(used):
+            tier = "부재"
+            why = ["재본 도구가 전부 판정불가: " + " / ".join(unmeasured or miss)
+                   + " — 이 축은 **검토되지 않았다**(효과 없음이 아니다)"]
+        elif not ok_dir:
+            tier, why = "부재", [dir_msg]
+        else:
+            # 확증 승격: ATT 가 유의하고 안정성이 '재현' 이어야 한다. 둘 중 하나라도
+            # 없으면 **정합** 이고, 무엇이 없어서 정합인지 적는다 - 등급만 주면
+            # 읽는 사람이 확증과 구별하지 않는다.
+            att, stab = used.get("run_trial", {}), used.get("stability", {})
+            pv = att.get("p")
+            if (str(att.get("verdict", "")) == "계산됨" and pv is not None
+                    and float(pv) < ALPHA and str(stab.get("stable", "")) == "재현"):
+                tier = "확증"
+            else:
+                tier = "정합"
+                gap = []
+                if str(att.get("verdict", "")) != "계산됨" or pv is None:
+                    gap.append("대조군 ATT 미계측")
+                elif float(pv) >= ALPHA:
+                    gap.append(f"ATT 무유의(p={float(pv):.3f})")
+                if str(stab.get("stable", "")) != "재현":
+                    gap.append(f"안정성 {stab.get('stable') or '미계측'}")
+                if gap:
+                    why = ["확증까지 남은 것: " + " · ".join(gap)]
+        if unmeasured and tier not in ("반증", "부재"):
+            why.append("일부 판정불가: " + " / ".join(unmeasured))
+        if miss and tier != "반증":
+            why.append("재보지 못한 도구: " + " · ".join(miss))
 
-        if miss:
-            why.append("재보지 못한 도구: " + " · ".join(miss)
-                       + " — 이 축은 **검토되지 않았다**(효과 없음이 아니다)")
-        out.append(Finding(c, not why, " / ".join(why) or "요구 도구가 모두 지지한다",
+        out.append(Finding(c, tier, " / ".join(why) or "요구 도구가 모두 지지한다",
                            used, tuple(miss)))
     return out
 
 
 def report(findings: list[Finding]) -> str:
-    """감사가 읽을 표. **미뒷받침을 먼저** 쓴다 - 통과한 것부터 쓰면 아래를 안 읽는다."""
-    bad = [f for f in findings if not f.supported]
-    good = [f for f in findings if f.supported]
-    out = [f"-- 신뢰성 검사: 주장 {len(findings)}건 · 미뒷받침 {len(bad)}건 --"]
-    for f in bad:
-        out.append(f"  [미뒷받침] {f.claim.text[:60]}")
-        out.append(f"            {f.why}")
-    for f in good:
-        out.append(f"  [뒷받침] {f.claim.text[:60]}"
-                   f" · 근거 도구 {sorted(f.used) or '없음(크기 주장)'}")
+    """감사가 읽을 표. **반증·부재를 먼저** 쓴다 - 통과한 것부터 쓰면 아래를 안 읽는다."""
+    order = {"반증": 0, "부재": 1, "정합": 2, "확증": 3, "회계": 4}
+    rows = sorted(findings, key=lambda f: order.get(f.tier, 9))
+    cnt = Counter(f.tier for f in findings)
+    head = " · ".join(f"{k} {cnt[k]}" for k in TIERS if cnt[k])
+    out = [f"-- 신뢰성 검사: 주장 {len(findings)}건 · {head} --"]
+    for f in rows:
+        out.append(f"  [{f.tier}] {f.claim.text[:58]}")
+        if f.why and f.why != "요구 도구가 모두 지지한다":
+            out.append(f"        {f.why}")
+        if f.used:
+            out.append(f"        근거 도구: {' · '.join(sorted(f.used))}")
     return "\n".join(out)
 
 
-__all__ = ["Claim", "Finding", "MAX_ROUNDS", "NEED", "check", "report"]
+__all__ = ["ALPHA", "Claim", "Finding", "MAX_ROUNDS", "NEED", "TIERS",
+           "check", "report"]

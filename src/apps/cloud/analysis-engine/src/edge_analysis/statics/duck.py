@@ -101,7 +101,6 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     # 실측 분류: 투자자별매매-수량 329 · 대금 329 · 가격수익률 97 · 주식수시총 59 ·
     # 베타 45 · 거래량 23 · 주가배수 20 · 신용거래 20 · 대차거래 13 · 차입공매도 12.
     # **컨센서스/추정 항목은 없다** (전수 검색 0건) - 서프라이즈는 다른 소스가 필요하다.
-    ("s3_dg_market",        "csv",  "draft/curated/source=dataguide/dataset=market_daily"),
     # 항목 사전 (item_code · name_kr · unit · domain · category). `reference` 셋은
     # `.csv` **비압축**이라 csv 글롭(`*.csv.gz`)에 안 걸린다 - 파일을 직접 짚는다.
     ("s3_dg_items", "csvfile",
@@ -112,6 +111,17 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     ("s3_dg_financials",    "csv",  "draft/curated/source=dataguide/dataset=financial_statements"),
     ("s3_dg_flow",          "csv",  "draft/curated/source=dataguide/dataset=investor_flow_daily"),
     ("s3_dg_price",         "csv",  "draft/curated/source=dataguide/dataset=price_daily"),
+    # **컨센서스**. 뷰가 없어서 통째로 안 보였다 - `s3_estimate_line`(아이스버그)에는
+    # 메타데이터만 있고 데이터 파일이 0 개인데, 실제 적재는 curated dataguide 쪽으로
+    # 갔다(222객체 · 141MB · 주간 as_of_date × fiscal_year 파티션). 그래서 '컨센서스
+    # 3행' 이라는 오진이 문서·설계 포기 목록까지 올라갔다. 뷰 부재를 데이터 부재로
+    # 읽은 것이다 - 커버리지 지식이 코드와 따로 살면 정확히 이런 일이 난다.
+    ("s3_dg_consensus",     "csv",  "draft/curated/source=dataguide/dataset=consensus"),
+    # **947 항목의 실체.** 롱 포맷 (trade_date, ticker, item_code, value) 이고 일자
+    # 파티션이라 항목 하나 조회는 파티션 프루닝 + WHERE 한 줄이다 - 947 열로 피벗해
+    # 물질화할 이유가 없다(`dgwide.build_mkt` 이 그걸 하려다 한 번도 안 돌았다).
+    # 이 뷰가 없어서 '노출 어휘가 23개' 였다: 데이터가 아니라 **뷰가 병목이었다**.
+    ("s3_dg_market",        "csv",  "draft/curated/source=dataguide/dataset=market_daily"),
     # glob 은 **파일 패턴까지** 적는다. `*.parquet` 로 뭉뚱그렸더니 같은 폴더의
     # kospi200_proxy.parquet(symbol·name·market_cap·sector)이 딸려 들어와 스키마
     # 충돌로 뷰 전체가 조회 불가였다 - 아무도 안 써서 안 걸렸다.

@@ -29,7 +29,7 @@
 """
 from __future__ import annotations
 
-from .surface import register
+from .surface import Need, register
 from .vocab import MIN_N
 
 # KRX 가 `institution_total` 을 쪼개는 방식 그대로의 7 주체. 여기 없는
@@ -139,7 +139,7 @@ def _blank(reason: str, n_days: int = 0, note: str = "") -> dict:
           "기관을 연금·투신·보험·은행·사모·금융투자·종금으로 쪼개 주체별 20일 누적 "
           "순매수(거래대금 정규화)와 그 종목 자신의 60일 대비 z 를 낸다. "
           "'기관이 샀다' 를 누가 왜 샀는지로 바꾸는 자리 — **전일까지**만 쓴다.",
-          needs=("s3_investor_flow", "s3_investor_value"), vocab=("수급",))
+          needs=(Need("s3_investor_value", days=Z_WINDOW),), vocab=("수급",))
 def _flow_detail(lake, *, day: str, instrument_id: str, window: int = 20,
                  **kw) -> dict:
     """주체별 (누적 정규화 수준, 자기 과거 대비 z).
