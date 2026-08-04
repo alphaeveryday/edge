@@ -32,7 +32,7 @@
 
 - **무효화(INVALIDATED)**: 노출 "제거"는 점검·검수 불요. 온프렘이 무효화 이벤트 수신 즉시 Publication Cache에서 제거하고 상태 전이. (제거는 보수적 방향이므로 자동 허용. Publication Cache는 내부망 자원이므로 처리 주체는 Intake·온프렘 내부 흐름이지 DMZ의 Sync Agent가 아니다.)
 - **무효화의 단위는 특정 설명(리비전)이다** — (종목, 거래일) 슬롯을 봉인하지 않는다. 무효화 이후 같은 종목에 새 설명(NEW)을 발번할 수 있는지는 발번 정책 소관(현행 게이트는 발화(route) 축 — ALPHA-710, 무효화로 게시본이 사라진 발화는 재실행 시 재게시)이다 ([ADR-0044](../adr/0044-correction-abolition.md)).
-- **정정(CORRECTION) 전달은 폐지됐다** (2026-08-01, [ADR-0044](../adr/0044-correction-abolition.md) — 구 리비전 분리 모델·정정 재점검(ADR-0041)·`supersedes_item_id` 체인 일괄 제거). 설명은 당일 소멸성 콘텐츠라 정정 재게시의 실익이 없고, 오류 발견 시 비노출이 더 보수적이다. Cloud 운영자 정정 오버레이(admin_activity_log)는 cloud 콘솔 내부 표시로 유지되며 테넌트로 전파되지 않는다.
+- **정정(CORRECTION) 전달은 폐지됐다** (2026-08-01, [ADR-0044](../adr/0044-correction-abolition.md) — 구 리비전 분리 모델·정정 재점검(ADR-0041)·`supersedes_item_id` 체인 일괄 제거). 설명은 당일 소멸성 콘텐츠라 정정 재게시의 실익이 없고, 오류 발견 시 비노출이 더 보수적이다. Cloud 콘솔 통제는 무효화 단독이다(ALPHA-737 — 구 정정/제외/복원 오버레이는 은퇴, 기록은 admin_activity_log 에 이력으로 보존).
 
 ## ERD 방향 및 상태값
 

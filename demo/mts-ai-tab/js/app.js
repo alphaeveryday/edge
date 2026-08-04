@@ -322,7 +322,10 @@
       body.textContent = '';
       blocks.forEach(function (text) {
         var p = document.createElement('p');
-        p.style.cssText = 'font-size:14px;line-height:1.75;margin:0 0 14px;text-wrap:pretty';
+        // 본문 단락은 양끝 정렬 — 장문에서 중앙 정렬은 모든 줄의 시작·끝이 제각각이라
+        // '정렬이 안 맞아' 보인다(ALPHA-733 실기기 실증). 한국어는 음절 줄바꿈이라 justify 가 깔끔하고,
+        // 양 가장자리가 직선이 돼 헤더·디스클레이머와 자로 잰 듯 맞는다. 헤드라인은 중앙 유지(컨테이너 상속).
+        p.style.cssText = 'font-size:14px;line-height:1.75;margin:0 0 14px;text-align:justify';
         p.textContent = text;
         body.appendChild(p);
       });

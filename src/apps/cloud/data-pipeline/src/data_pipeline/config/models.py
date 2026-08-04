@@ -435,18 +435,27 @@ class MinuteConsumerConfig(BaseModel):
 class MinutePriceWorkerConfig(BaseModel):
     """1분 Price Worker 상주 설정 — `price-worker` 스텝만 쓴다(ALPHA-706).
 
-    토스 자격증명은 커밋되는 파일이 아니라 환경변수로 주입한다:
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID=...
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET=...
+    자격증명은 커밋되는 파일이 아니라 환경변수로 주입한다. **소스마다 쌍이 다르다** —
+    한 쌍으로 겸용하면 어느 벤더의 키가 들었는지 이름이 말해주지 않는다:
+        source=kis  → DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY / __APP_SECRET
+        source=toss → DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID / __CLIENT_SECRET
     universe 파일 경로는 설정이 아니라 CLI 인자(`--universe`)다 — planner
     (`plan-minute-session`)와 같은 파일을 받아야 원장 universe 와 일치한다.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    client_id: str | None = None  # 비밀값: env 오버라이드 전용
-    client_secret: str | None = None  # 비밀값: env 오버라이드 전용
-    source: NonBlankStr = "toss"
+    client_id: str | None = None  # 비밀값(토스): env 오버라이드 전용
+    client_secret: str | None = None  # 비밀값(토스): env 오버라이드 전용
+    app_key: str | None = None  # 비밀값(KIS): env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값(KIS): env 오버라이드 전용
+    # 기본은 kis 다(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다.
+    # ⚠️ terraform `minute_session_source_group` 과 **같은 값**이어야 한다(session_id 유도 축).
+    source: NonBlankStr = "kis"
+    # KIS 호출 간격(초). 실측 상한은 14.8 req/s(≈0.068초)지만 그 유량은 **앱키 단위 전역**
+    # 이라 15:40 배치의 kis 스텝과 나눠 쓴다 — 기본은 12 req/s 로 마진을 두고, 경합이
+    # 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지 않는다(어댑터가 자기 상수).
+    min_interval_sec: float = Field(default=0.08, gt=0, le=5)
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
     # 안 드러난다.
@@ -454,7 +463,7 @@ class MinutePriceWorkerConfig(BaseModel):
     destination: NonBlankStr = "price-analysis-realtime"
     # 한 콜로 몇 분까지 거슬러 받을지(TossPriceCollector.lookback, count 상한 200)
     lookback: int = Field(default=1, ge=1, le=200)
-    # window claim lease — 토스 tick 실측 상한(363종 ÷ 초당 5회 ≈ 73초+) **위**여야 한다.
+    # window claim lease — tick 최악 소요 **위**여야 한다(아래 검증의 75초/window 축).
     # 짧으면 자기 claim 이 in-flight 중 만료돼 recovery lane 이 같은 window 를 재청구하고
     # 원래 attempt 의 commit 이 통째로 거부된다(ALPHA-706 — 하한 90 이 그 가드다).
     lease_seconds: int = Field(default=300, ge=90, le=3600)
@@ -474,9 +483,10 @@ class MinutePriceWorkerConfig(BaseModel):
 
         한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
         claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
-        tick 안에서 시계를 다시 읽지 않는다). 토스 window 하나가 실측 73초+ 라, 이
-        여유(75초/window)를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른 attempt 가
-        탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
+        tick 안에서 시계를 다시 읽지 않는다). window 하나의 여유를 75초로 잡는다(토스
+        실측 73초+ 가 근거였고, KIS 는 400종 ÷ 12 req/s ≈ 33초라 같은 상수 아래로
+        들어온다 — ALPHA-735). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
+        attempt 가 탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
         tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
 
         ⚠️ 75초/window 는 **하한 가드지 상한 증명이 아니다** — 재시도(콜당 최대 3회)·

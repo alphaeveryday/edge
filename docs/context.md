@@ -113,7 +113,7 @@ flowchart TB
 
 | 기존 | 처리 | 신규 위치/내용 |
 | --- | --- | --- |
-| super-admin-api | **유지** | Vendor Cloud. 테넌트 생성, 파이프라인 조회, 정정/무효화, Admin Activity Log |
+| super-admin-api | **유지** | Vendor Cloud. 테넌트 생성, 파이프라인 조회, 무효화(ALPHA-440 — 구 정정/제외/복원은 ALPHA-737 은퇴), Admin Activity Log |
 | tenant-console-api | **이동** | 증권사 On-Premise. 설명 조회, 검수, 컴플라이언스 정책, 감사 로그, 설정 |
 | gateway | **제거** | 앱 레벨 프록시 폐지(ADR-0032). 공개 엣지는 super-admin 공개화 시 ALB 직결. On-Prem은 증권사 내부 API GW |
 | widget-api | **제거** | 벤더 서빙 위젯 서버 제거 유지. 단 EDGE 위젯 UI는 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅) — [ADR-0035](adr/0035-widget-ui-build-artifact.md) |
