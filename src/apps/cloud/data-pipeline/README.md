@@ -93,13 +93,18 @@
 > 이유이기도 하다 — 토스 tick 실측 73초+ 아래면 자기 claim 이 in-flight 중 만료된다.
 > collector 는 설정 `source` 가 고른다(ALPHA-735 — kis|toss, 미지 소스는 기동 거부).
 > News Worker 엔트리포인트는 프로덕션 feed 부재로 별도 티켓: ALPHA-707), **가격 트리거
-> 판정 Consumer handler**(ALPHA-708 — kernel 위에 얹는 LLM 0 판정:
-> |현재봉 close/세션 시가−1| ≥ abs_threshold, 대상 universe.etf_ids. 시가=그날 첫 분봉
-> open 을 `minute_session_open` 원장에 **확정 후 불변**으로 남기고(첫 window 미커밋=
-> 재시도, 커밋됐는데 레코드 없음=MISSING+사유), 쿨다운은 `minute_price_trigger` 의
-> UNIQUE(entity, 2h 버킷)+DO NOTHING 이 정본 — 트리거 행과 설명 outbox event 는 한
-> 트랜잭션이다. 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정 규칙의
-> 배선이다), **설명 큐 4번째 destination**(ALPHA-709 — `price-explanation-realtime`
+> 판정 Consumer handler**(ALPHA-708 → **판정식 v2 = ALPHA-745** — kernel 위에 얹는
+> LLM 0 판정. 기준선은 **전일 종가**(`price_daily` 세션당 1회 조회·캐시)고, 기준선
+> ±`revert_threshold`(1%) 안이면 발화 금지 구간이라 노출 중이던 종목은 회수
+> (`ExposureReverted`)하고 앵커를 기준선으로 되돌린다. 밖이면 |close/anchor−1| ≥
+> `abs_threshold`(3%) 에서 발화하고 앵커(`minute_trigger_anchor`) ← 발화가 —
+> **2h 쿨다운은 폐지**됐고(재발화 축이 시간이 아니라 가격) 멱등 축은
+> UNIQUE(entity, session, window)+DO NOTHING 이다. 트리거 행은 `open_price` 에
+> 기준선, `anchor_price` 에 판정 기준가를 남긴다. 전일 종가가 없는 종목만 세션 시가로
+> 폴백한다 — 그때만 `minute_session_open` 원장이 **확정 후 불변**으로 걸린다(첫 window
+> 미커밋=재시도, 커밋됐는데 레코드 없음=MISSING+사유). 트리거 행·앵커·설명 outbox
+> event 는 한 트랜잭션이다. 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정
+> 규칙의 배선이다), **설명 큐 4번째 destination**(ALPHA-709 — `price-explanation-realtime`
 > 이 Relay 어휘에 등록돼 **4종이 전부 필수**다: 빠진 큐는 그 레인 event 전멸이라
 > 기동 거부. 트리거 사건의 발행 가부는 `destination_accepts` 가 정본이고, DLQ 대사
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
@@ -1057,12 +1062,13 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
-# canonical 로 판정한다(LLM 0). 임계는 price_triggers.abs_threshold 재사용(섹션 필수),
-# --universe 는 planner·worker 와 같은 파일/객체(s3://… 지원). --max-ticks 는 로컬
-# 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가 있으면 exit 1.
+# canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
+# revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은
+# 파일/객체(s3://… 지원). --max-ticks 는 로컬 확인용 — 배선 오류 신호
+# (poison·misrouted·orphan·ahead)가 있으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
-DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
+DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.

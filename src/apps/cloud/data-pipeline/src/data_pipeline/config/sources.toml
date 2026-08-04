@@ -299,4 +299,6 @@ keywords = ["금리", "실적", "환율"]
 # 단일 ETF 로 좁혀 돌리려면 etf_ticker 를 옵션으로 넣는다(dev 검증·백필용).
 [price_triggers]
 abs_threshold = 0.03   # 엔진 ABS_GATE_THRESHOLD 와 동일
+# 1분 판정식 v2 전용(ALPHA-745) — 기준선(전일 종가) ±1% 복귀 = 발화 금지·노출 회수
+revert_threshold = 0.01
 policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정책 이름

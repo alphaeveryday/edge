@@ -363,9 +363,11 @@ variable "minute_trigger_schema_version" {
 }
 
 variable "minute_detection_policy_version" {
+  # v2(ALPHA-745): 기준선=전일 종가·가변 앵커 재발화·2h 쿨다운 폐지. trigger_id 가 이
+  # 값을 포함해 v1 행과 섞이지 않는다.
   description = "분봉 판정 정책 identity(ALPHA-708) — 일 단위 트리거와 축이 달라 별도 값"
   type        = string
-  default     = "intraday-open-v1"
+  default     = "intraday-anchor-v2"
 }
 
 # ── 세션 스케일 오케스트레이션(ALPHA-712) ─────────────────────────────

@@ -1,13 +1,18 @@
-"""가격 트리거 판정 handler 테스트 (ALPHA-708, 2026-08-02 설계 확정).
+"""가격 트리거 판정 handler 테스트 (ALPHA-708 / v2 = ALPHA-745, 2026-08-04 확정).
 
 의도: 판정기는 LLM 0 이고 출력이 곧 분석 파이프라인의 입력이다 — 여기서 고정하는 계약:
 
-- 판정식: |현재봉 close / 세션 시가 − 1| ≥ abs_threshold, 대상 = etf_ids 만
-- 시가 = 그날 첫 분봉 open, **확정 후 불변**(minute_session_open 원장). 첫 window 가
-  미커밋이면 transient(시간이 풀어 준다), 커밋됐는데 레코드가 없으면 **사유와 함께
-  MISSING 확정**(조용한 건너뛰기 금지)
-- 쿨다운 = UNIQUE(entity, 2h 버킷) + DO NOTHING — 두 번째 발화는 행도 event 도 없다
-- 트리거 행 + outbox 는 **한 트랜잭션** — 한쪽만 남으면 유령 트리거/무설명 발화다
+- 기준선 = **전일 종가**. 결손 종목만 세션 시가 폴백(minute_session_open, v1 기계 그대로)
+- 판정식 v2: 기준선 ±revert_threshold 안이면 발화 금지 + 노출 회수, 밖이면
+  |close / anchor − 1| ≥ abs_threshold 에서 발화하고 앵커 ← 발화가
+- 쿨다운은 **없다** — 재발화 축이 시간이 아니라 가격(앵커)이고, 시간 축으로 되돌리면
+  "내려왔다 다시 오르는" 구간이 통째로 먹힌다
+- 회수는 구간당 1회 — 앵커 상태가 마커라 복귀가 몇 window 이어져도 사건은 하나다
+- 멱등 = UNIQUE(entity, session, window) + DO NOTHING — 같은 window 재판정은 무해
+- 트리거 행 + 앵커 + outbox 는 **한 트랜잭션** — 한쪽만 남으면 유령 트리거/무설명
+  발화이거나, 앵커만 움직여 재발화가 영영 막힌다
+- 시가 폴백의 해소 규칙(v1 유지): 첫 window 가 미커밋이면 transient(시간이 풀어 준다),
+  커밋됐는데 레코드가 없으면 **사유와 함께 MISSING 확정**(조용한 건너뛰기 금지)
 
 픽스처는 실제 Worker 파이프라인(수집→artifact PUT→fenced commit→job/outbox)을 그대로
 돌려 만든다 — payload 형상·artifact 경로를 손으로 합성하면 생산자와 어긋나도 초록이다.
@@ -37,9 +42,9 @@ from data_pipeline.minute.models import (
     plan_session_windows,
 )
 from data_pipeline.minute.price_consumer import (
+    EXPOSURE_EVENT_TYPE,
     TRIGGER_EVENT_TYPE,
     PriceTriggerHandler,
-    cooldown_bucket,
 )
 from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
@@ -53,7 +58,8 @@ UNIVERSE = Universe(
     constituent_ids=("100000",),
 )
 THRESHOLD = Decimal("0.05")
-POLICY = "intraday-open-v1"
+REVERT = Decimal("0.01")
+POLICY = "intraday-anchor-v2"
 DESTINATION = "price-explanation-realtime"
 
 
@@ -135,10 +141,19 @@ def build_handler(db, tmp_path, **overrides):
         etf_ids=frozenset(UNIVERSE.etf_ids),
         universe_version=UNIVERSE.universe_version,
         universe_hash=UNIVERSE.universe_hash, abs_threshold=THRESHOLD,
+        revert_threshold=REVERT,
         detection_policy_version=POLICY, destination=DESTINATION,
         connect_fn=db.connect,
     )
     return PriceTriggerHandler(**{**base, **overrides})
+
+
+def trigger_events(db):
+    return [e for e in db.outbox.values() if e["event_type"] == TRIGGER_EVENT_TYPE]
+
+
+def revert_events(db):
+    return [e for e in db.outbox.values() if e["event_type"] == EXPOSURE_EVENT_TYPE]
 
 
 def claim_then_run(handler, event, *, payload=None):
@@ -207,9 +222,10 @@ class TestJudgement:
         before = db.connect_calls
         claim_then_run(handler, second)
         # connect = 트랜잭션이다(fake 계약). claim 1 + identity 1 + universe 대조 1
-        # + window checksum 1 + 시가 select 1 + **쓰기 1** — 트리거 2건과 event 2건이
-        # 마지막 connect 하나에 있다. 쓰기가 쪼개지면 부분 확정이 가능해진다.
-        assert db.connect_calls == before + 6
+        # + window checksum 1 + 시가 select 1(전일 종가는 세션 캐시라 0) + 앵커 select 1
+        # + **쓰기 1** — 트리거 2건·앵커 2건·event 2건이 마지막 connect 하나에 있다.
+        # 쓰기가 쪼개지면 부분 확정이 가능해진다.
+        assert db.connect_calls == before + 7
         assert len(db.triggers) == 2
         assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 2
 
@@ -228,27 +244,6 @@ class TestJudgement:
         assert db.triggers == {}
         assert not any(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values())
 
-    def test_cooldown_bucket_blocks_second_fire(self, tmp_path):
-        # 두 window 는 같은 2h 버킷이다 — 두 번째 발화는 행도 event 도 없다
-        db = FakeMinuteDB()
-        worker, _, _ = build_pipeline(
-            db, tmp_path,
-            prices={"500000": [(100, 100), (100, 110), (100, 120)],
-                    "500001": [(200, 200), (200, 200), (200, 200)],
-                    "100000": [(50, 50), (50, 50), (50, 50)]},
-            windows=3,
-        )
-        worker.tick(NOW)
-        handler = build_handler(db, tmp_path)
-        events = price_job_events(db)
-        assert cooldown_bucket(events[1]["payload"] and datetime.fromisoformat(
-            str(events[1]["payload"]["window_start"]))) == cooldown_bucket(
-            datetime.fromisoformat(str(events[2]["payload"]["window_start"])))
-        for event in events[1:]:
-            claim_then_run(handler, event)
-        assert len(db.triggers) == 1  # 쿨다운 — 버킷당 1발
-        assert sum(e["event_type"] == TRIGGER_EVENT_TYPE for e in db.outbox.values()) == 1
-
     def test_negative_move_also_fires(self, tmp_path):
         # 절대값 판정 — 하락도 발화한다
         db = FakeMinuteDB()
@@ -263,6 +258,221 @@ class TestJudgement:
         second = price_job_events(db)[1]
         claim_then_run(handler, second)
         assert len(db.triggers) == 1
+
+
+class TestAnchorV2:
+    """판정식 v2 계약 (ALPHA-745) — 기준선=전일 종가, 재발화=가변 앵커, 회수 사건.
+
+    v1 대비 뒤집힌 것만 여기 모은다: 갭 개장이 첫 window 에 발화한다 / 재발화가 시간이
+    아니라 가격에 걸린다 / 복귀가 사건이 된다 / 멱등 축이 window 다.
+    """
+
+    def _run(self, db, tmp_path, prices, *, prev_closes, windows=2, upto=None):
+        db.prev_closes.update(prev_closes)
+        # recovery 예산은 계획 window 수에 맞춘다 — 부족하면 마지막 window 가 아예
+        # 커밋되지 않아, 시나리오의 마지막 판정이 **실행되지 않은 채** 초록이 된다
+        worker, _, session_id = build_pipeline(db, tmp_path, prices=prices,
+                                               windows=windows,
+                                               recovery_budget=windows - 1)
+        assert worker.tick(NOW) == "PROCESSED"
+        handler = build_handler(db, tmp_path)
+        events = price_job_events(db)
+        assert len(events) == windows, f"계획 {windows} window 중 {len(events)} 만 커밋됐다"
+        for event in events[:upto]:
+            claim_then_run(handler, event)
+        return handler, session_id, events
+
+    def test_gap_open_fires_on_first_window(self, tmp_path):
+        # v1 은 세션 시가가 기준선이라 **갭 개장이 통째로 안 보였다** — 전일 100 이
+        # 106 에 열리면 그 자체가 설명 대상인데 시가 대비 0% 라 영영 발화하지 않았다.
+        # v2 는 첫 window 에서 바로 발화한다.
+        db = FakeMinuteDB()
+        _, session_id, _ = self._run(
+            db, tmp_path,
+            prices={"500000": [(106, 106), (106, 106)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            upto=1,
+        )
+        [trigger] = db.triggers.values()
+        assert trigger["entity_id"] == "500000"
+        # 기준선이 트리거 행의 open_price 다 — 엔진 관측치가 전일 대비 축이 되는 배선
+        assert Decimal(str(trigger["open_price"])) == 100
+        assert Decimal(str(trigger["anchor_price"])) == 100  # 첫 발화의 앵커=기준선
+        # 전일 종가가 있으면 시가 원장을 아예 타지 않는다(폴백 전용)
+        assert db.session_opens == {}
+        assert Decimal(str(db.trigger_anchors[(session_id, "500000")]["anchor_price"])) == 106
+
+    def test_refire_is_anchor_relative_not_time_gated(self, tmp_path):
+        # 같은 2h 안이라 v1 쿨다운이면 두 번째가 죽는다 — v2 는 **직전 발화가 대비**
+        # 다시 5% 움직였으므로 발화해야 한다(추세가 이어지는데 침묵하지 않는다)
+        db = FakeMinuteDB()
+        _, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 116)],
+                    "500001": [(200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=3,
+        )
+        # 세 window 는 전부 같은 2h 버킷이다 — 시간 축이면 1발이 정답이 된다
+        starts = [datetime.fromisoformat(str(e["payload"]["window_start"]))
+                  for e in events]
+        assert (max(starts) - min(starts)) < timedelta(hours=2)
+        assert len(db.triggers) == 2 and len(trigger_events(db)) == 2
+        second = max(db.triggers.values(), key=lambda r: r["seq"])
+        assert Decimal(str(second["anchor_price"])) == 110  # 직전 발화가 기준
+        assert Decimal(str(db.trigger_anchors[(session_id, "500000")]["anchor_price"])) == 116
+
+    def test_revert_emits_once_and_resets_anchor(self, tmp_path):
+        # 노출 회수는 상태 전이지 반복 신호가 아니다 — 복귀 구간이 몇 window 이어져도
+        # 사건은 1건이어야 소비자가 "내렸다"를 중복 처리하지 않는다
+        db = FakeMinuteDB()
+        _, session_id, _ = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 100.5), (100, 100.2)],
+                    "500001": [(200, 200), (200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=4,
+        )
+        assert len(db.triggers) == 1  # 발화는 window 1 한 번
+        [revert] = revert_events(db)
+        assert revert["destination"] == DESTINATION
+        assert revert["payload"]["entity_id"] == "500000"
+        assert Decimal(revert["payload"]["prev_close"]) == 100
+        assert Decimal(revert["payload"]["open_change"]) <= REVERT
+        # 앵커가 기준선으로 돌아왔다 — 이 상태가 곧 "회수됨" 마커다
+        assert Decimal(str(db.trigger_anchors[(session_id, "500000")]["anchor_price"])) == 100
+
+    def test_no_exposure_means_no_revert_event(self, tmp_path):
+        # 발화한 적 없는 종목이 기준선 근처에 있는 건 **정상**이다 — 매분 회수 사건이
+        # 나가면 설명 큐가 무의미한 상태 전이로 덮인다
+        db = FakeMinuteDB()
+        self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 100.3)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+        )
+        assert db.triggers == {} and revert_events(db) == []
+        assert db.trigger_anchors == {}
+
+    def test_reset_then_refire(self, tmp_path):
+        # v1 의 진짜 공백: 발화 → 복귀 → **재상승**이 앵커가 발화가에 얼어 있어 다시
+        # 발화하지 못했다. 회수 리셋이 기준선을 되돌려 새 국면이 다시 발화한다
+        db = FakeMinuteDB()
+        self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 100.5), (100, 106)],
+                    "500001": [(200, 200), (200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=4,
+        )
+        assert len(db.triggers) == 2 and len(revert_events(db)) == 1
+        last = max(db.triggers.values(), key=lambda r: r["seq"])
+        assert Decimal(str(last["close_price"])) == Decimal("106")
+        # 리셋된 앵커(=기준선 100) 대비 판정이었다
+        assert Decimal(str(last["anchor_price"])) == 100
+
+    def test_same_window_rejudge_does_not_double_fire(self, tmp_path):
+        # SQS 는 at-least-once 다. 뒤 window 가 앵커를 올린 뒤 앞 window 가 재배달되면
+        # 앵커 대비로는 다시 임계를 넘는다 — window 유니크가 없으면 같은 분에 대해
+        # 설명이 두 번 나간다
+        db = FakeMinuteDB()
+        handler, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 121)],
+                    "500001": [(200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=3,
+        )
+        assert len(db.triggers) == 2
+        anchor_before = db.trigger_anchors[(session_id, "500000")]["anchor_price"]
+        # 재배달 = 같은 claim(attempt 그대로)의 두 번째 실행 — attempt fence 는 통과하고
+        # window 유니크만이 막는다
+        redelivered = events[1]["payload"]
+        handler(job_id=redelivered["job_id"], payload=redelivered,
+                attempt=db.jobs[("price", redelivered["job_id"])]["attempt_count"],
+                redrive_generation=0)
+        assert len(db.triggers) == 2 and len(trigger_events(db)) == 2
+        # 앵커도 되돌아가지 않는다 — 트리거 INSERT 가 막히면 앵커 이동도 없다
+        assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
+
+    def test_missing_prev_close_falls_back_to_session_open(self, tmp_path):
+        # 신규 상장 등 전일 종가가 없는 종목만 v1 기계(세션 시가)로 판정한다 —
+        # 전 종목을 폴백으로 돌리면 v2 가 조용히 무효가 된다
+        db = FakeMinuteDB()
+        _, session_id, _ = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500001": Decimal("200")},  # 500000 만 결손
+        )
+        [trigger] = db.triggers.values()
+        assert trigger["entity_id"] == "500000"
+        assert Decimal(str(trigger["open_price"])) == 100  # 세션 시가가 기준선
+        # 시가 해소는 **결손분에만** 걸렸다
+        assert set(db.session_opens) == {(session_id, "500000")}
+
+    def test_prev_close_unblocks_uncommitted_first_window(self, tmp_path):
+        # v1 은 시가가 기준선이라 첫 window 미커밋이 판정을 막았다(transient). v2 는
+        # 기준선이 전일 종가라 realtime lane 이 backlog 착지를 기다릴 이유가 없다
+        db = FakeMinuteDB()
+        db.prev_closes.update({"500000": Decimal("100"), "500001": Decimal("200")})
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 110), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            recovery_budget=0,  # 최신 window 만 처리 — 첫 window 미커밋
+        )
+        worker.tick(NOW)
+        handler = build_handler(db, tmp_path)
+        [event] = price_job_events(db)
+        assert len(claim_then_run(handler, event)) == 64
+        assert len(db.triggers) == 1
+        assert db.session_opens == {}  # 시가 원장을 탈 이유가 없다
+
+    def test_prev_close_read_once_per_session(self, tmp_path):
+        # 세션 중 price_daily 는 안 바뀐다 — window 마다 363종을 다시 읽으면 매분
+        # 판정에 쓸데없는 왕복이 붙는다
+        db = FakeMinuteDB()
+        handler, _, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            upto=1,
+        )
+        cached = dict(handler._prev_close_cache)
+        claim_then_run(handler, events[1])
+        assert handler._prev_close_cache == cached and len(cached) == 1
+
+    def test_non_positive_prev_close_falls_back(self, tmp_path):
+        # 계약 위반 기준선(0)으로 판정하면 change_rate 가 무한이 돼 전 종목이 발화한다
+        db = FakeMinuteDB()
+        _, session_id, _ = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("0"), "500001": Decimal("200")},
+        )
+        assert set(db.session_opens) == {(session_id, "500000")}
+        [trigger] = db.triggers.values()
+        assert Decimal(str(trigger["open_price"])) == 100  # 시가 폴백
+
+    def test_non_positive_revert_threshold_rejected(self, tmp_path):
+        # 0 이면 "정확히 기준선"일 때만 회수가 돼 노출이 사실상 영구 유지된다
+        with pytest.raises(ValueError, match="revert_threshold"):
+            build_handler(FakeMinuteDB(), tmp_path, revert_threshold=Decimal("0"))
 
 
 class TestOpenLedger:
@@ -821,7 +1031,8 @@ class TestPriceConsumerCli:
         from types import SimpleNamespace
         return SimpleNamespace(
             db=db, minute_price_consumer=options,
-            price_triggers=SimpleNamespace(abs_threshold=0.05) if triggers else None,
+            price_triggers=(SimpleNamespace(abs_threshold=0.05, revert_threshold=0.01)
+                            if triggers else None),
             storage=None,
         )
 

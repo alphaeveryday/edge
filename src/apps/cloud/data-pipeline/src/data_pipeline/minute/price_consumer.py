@@ -5,17 +5,32 @@ job 참조(`{job_id, session_id, window_start, generation}`)고, 판정 입력�
 canonical(S3 artifact) **window 단위 GET 1회**다 — DB 에 canonical 이 없는 이유
 (ALPHA-701)가 이 접근 패턴이다.
 
-판정 규칙 — **정본은 분석엔진(로직 소유) 소관**이고 여기는 확정 전달된 규칙의 배선이다:
+판정 규칙 v2 (ALPHA-745, 2026-08-04 확정) — **정본은 분석엔진(로직 소유) 소관**이고
+여기는 확정 전달된 규칙의 배선이다. 기준선 = **전일 종가**, 재발화 축 = 가변 앵커:
 
-    |현재봉 close / 세션 시가 − 1| ≥ abs_threshold,  대상 = universe.etf_ids
-    시가 = 그날 첫 분봉 open  (minute_session_open 원장 — **확정 후 불변**)
-    쿨다운 = UNIQUE(entity_id, floor(epoch/7200)) + ON CONFLICT DO NOTHING
-    출력 = 트리거 행 + outbox **한 트랜잭션** (SQS 직접 쓰기 금지 — Relay 경유)
+    1) |close / prev_close − 1| ≤ revert_threshold(1%) → 발화 금지 구간.
+       앵커가 기준선이 아니면 노출 회수(ExposureReverted) 발행 + 앵커 ← 기준선.
+    2) 그 외 → |close / anchor − 1| ≥ abs_threshold(3%) 면 발화 + 앵커 ← 발화가.
+    앵커 초기값 = 기준선(minute_trigger_anchor 행 부재가 곧 그 뜻)
+    멱등 = UNIQUE(entity_id, session_id, window_start) + ON CONFLICT DO NOTHING
+    출력 = 트리거 행 + 앵커 + outbox **한 트랜잭션** (SQS 직접 쓰기 금지 — Relay 경유)
 
-기존 일 단위 `price_movement_trigger`(prev_close 대비 가중 proxy, ALPHA-406)와 축이
-다르다 — `detection_policy_version` 이 그 구분을 identity 에 새긴다.
+v1 의 2시간 쿨다운은 폐지됐다 — 재발화 조건이 시간이 아니라 가격(앵커 대비)이고,
+"내려왔다 다시 오르는" 구간이 쿨다운에 먹히던 공백을 앵커 리셋이 메운다. 앵커 상태가
+곧 회수 마커라 회수 사건은 구간당 한 번만 나간다(중복 발행 자연 차단).
 
-시가 해소 규칙(첫 window 를 기준으로, 사유 없는 침묵 금지):
+기준선이 전일 종가이므로 트리거 행의 `open_price` 컬럼에도 **기준선**을 쓴다 — 엔진의
+관측치(close/open−1)가 자동으로 전일 대비 축이 된다. 판정 기준가(앵커)는 별도
+`anchor_price` 컬럼이다.
+
+전일 종가가 없는 종목(신규 상장 등)만 **세션 시가**로 폴백한다 — 그 기계(아래 시가
+해소 규칙·minute_session_open 원장)는 v1 그대로다. 둘 다 없으면 그 종목은 판정을
+건너뛰고 사유가 원장·로그에 남는다.
+
+기존 일 단위 `price_movement_trigger`(prev_close 대비 가중 proxy, ALPHA-406)와 기준선은
+같아졌지만 창(일 vs 분)이 다르다 — `detection_policy_version` 이 그 구분을 새긴다.
+
+시가 해소 규칙(폴백 대상에만 적용. 첫 window 를 기준으로, 사유 없는 침묵 금지):
   - 첫 window 미커밋(DUE/CLAIMED) → `TransientJobError` — 커밋되면 풀린다
   - 첫 window 가 `MISSING` 확정(EOD) → 그 세션 전 종목 시가 MISSING 확정
   - 첫 window 커밋됨 → artifact 에 그 종목 레코드가 있으면 OPEN, 없으면 MISSING
@@ -26,7 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -35,26 +50,40 @@ from ..db import connect as _default_connect, stable_domain_id
 from ..lake.storage import Storage, canonical_price_minute_artifact_key
 from .artifacts import sha256_bytes
 from .consumer import PermanentJobError, TransientJobError
-from .jobs import TRIGGER_EVENT_TYPE, JobLedger, destination_accepts
+from .jobs import (
+    EXPOSURE_EVENT_TYPE,
+    TRIGGER_EVENT_TYPE,
+    JobLedger,
+    destination_accepts,
+)
 from .models import KST, SESSION_CLOSE, SESSION_OPEN, content_checksum
 from .states import WINDOW_CLAIMED, WINDOW_DUE, WINDOW_MISSING
 
 logger = logging.getLogger(__name__)
 
-COOLDOWN_SECONDS = 7200  # 2시간 버킷 — 재무장 상태머신 없이 UNIQUE 가 정본
-
 OPEN_STATUS_OPEN = "OPEN"
 OPEN_STATUS_MISSING = "MISSING"
 
-
-def cooldown_bucket(window_start: datetime) -> int:
-    """floor(epoch/2h) — tz 표현과 무관한 절대 시각 축(테스트·DB 가 같은 값을 본다)."""
-    return int(window_start.timestamp()) // COOLDOWN_SECONDS
+# 전일 종가 조회 대상 시장 — canonical 지역 KR 의 MIC 3종
+KR_MARKET_CODES = ("XKRX", "XKOS", "XKON")
 
 
-def trigger_id_for(entity_id: str, bucket: int, policy_version: str) -> str:
-    """결정적 trigger id — 같은 (entity, bucket, policy) 재판정은 같은 id 다."""
-    return stable_domain_id("mpt", entity_id, str(bucket), policy_version)
+def trigger_id_for(entity_id: str, session_id: str, window_start: datetime,
+                   policy_version: str) -> str:
+    """결정적 trigger id — 같은 (entity, session, window, policy) 재판정은 같은 id 다.
+
+    v1 은 쿨다운 버킷이 축이었다(2h 당 1발). v2 는 멱등 축이 window 로 옮겨져
+    같은 window 재판정만 같은 id 이고, 재발화는 별개 행이다(ALPHA-745).
+    """
+    return stable_domain_id("mpt", entity_id, session_id,
+                            window_start.isoformat(), policy_version)
+
+
+def revert_id_for(entity_id: str, session_id: str, window_start: datetime,
+                  policy_version: str) -> str:
+    """노출 회수 사건의 결정적 id — 회수를 확정한 window 가 identity 다."""
+    return stable_domain_id("mrv", entity_id, session_id,
+                            window_start.isoformat(), policy_version)
 
 
 def _decimal(value: object, *, entity: str, field_name: str) -> Decimal:
@@ -105,8 +134,9 @@ class PriceTriggerHandler:
 
     쓰기는 두 종류고 성질이 다르다:
       - 시가 원장: 멱등 INSERT(DO NOTHING) — 확정 후 불변이라 트랜잭션 축이 없다
-      - 트리거+outbox: **한 트랜잭션** — 한쪽만 커밋되면 "발화했는데 설명이 안 가거나"
-        "설명 event 만 있는 유령 트리거"가 된다
+      - 트리거+앵커+outbox: **한 트랜잭션** — 한쪽만 커밋되면 "발화했는데 설명이 안
+        가거나" "설명 event 만 있는 유령 트리거", 또는 앵커만 움직여 재발화가 영영
+        막히는 상태가 된다
     """
 
     db: DbConfig
@@ -120,6 +150,8 @@ class PriceTriggerHandler:
     universe_version: str
     universe_hash: str
     abs_threshold: Decimal
+    # 기준선 ±revert_threshold 는 발화 금지 구간이자 노출 회수 축이다(ALPHA-745)
+    revert_threshold: Decimal
     detection_policy_version: str
     destination: str
     market: str = "KR"  # 1분 트랙은 KR 전용 — eod._MARKET 과 같은 이유로 고정
@@ -128,6 +160,9 @@ class PriceTriggerHandler:
     # 판정한다. 실측(2026-08-02)상 ETF 는 전부 정규장 전용이라 기능이 아니라 가드다.
     extended_hours_ids: frozenset[str] = frozenset()
     connect_fn: object = _default_connect
+    # session_id → {entity: 전일 종가}. 세션 중 불변이라 세션당 1회만 조회한다.
+    # 동시 실행이 같은 세션을 두 번 조회할 수는 있으나 값이 같아 무해하다.
+    _prev_close_cache: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if not self.etf_ids:
@@ -143,6 +178,11 @@ class PriceTriggerHandler:
                                       field_name="abs_threshold")
         if self.abs_threshold <= 0:
             raise ValueError(f"abs_threshold 는 양수다: {self.abs_threshold}")
+        self.revert_threshold = _decimal(self.revert_threshold, entity="config",
+                                         field_name="revert_threshold")
+        if self.revert_threshold <= 0:
+            # 0 이면 "정확히 기준선"일 때만 회수가 돼 노출이 사실상 영구 유지된다
+            raise ValueError(f"revert_threshold 는 양수다: {self.revert_threshold}")
 
     # ── handler 계약 ─────────────────────────────────────────
     def __call__(self, *, job_id: str, payload: object, attempt: int,
@@ -221,71 +261,102 @@ class PriceTriggerHandler:
                 "window_start": window_start, "generation": generation,
                 "detection_policy_version": self.detection_policy_version,
                 "threshold": str(self.abs_threshold),
-                "judged": [], "fired": [], "inserted": [],
+                "revert_threshold": str(self.revert_threshold),
+                "judged": [], "fired": [], "inserted": [], "reverted": [],
                 "skipped_no_open": [], "errors": [],
             }
             logger.info("가격 판정 %s: 대상 ETF 0 — 판정 없이 성공", job_id)
             return content_checksum(result)
 
-        # 시가는 **전체 etf_ids** 에 대해 확정한다 — 현재 artifact 에 등장한 종목으로
+        # 기준선 = 전일 종가(v2 축). **결손 종목에만** 세션 시가 폴백을 태운다 —
+        # 전 종목이 전일 종가를 가진 정상 세션에서는 첫 window 미커밋이 판정을 막지
+        # 않는다(realtime lane 이 backlog 착지를 기다릴 이유가 없어졌다).
+        prev_closes = self._prev_closes(session_id, session_date)
+        # 폴백 시가는 **전체 결손분**에 대해 확정한다 — 현재 artifact 에 등장한 종목으로
         # 좁히면 하루 종일 안 실린 ETF 의 MISSING 사유가 영영 기록되지 않는다
+        needs_open = frozenset(self.etf_ids - prev_closes.keys())
         opens = self._ensure_opens(
             session_id=session_id, session_date=session_date,
-            needed=self.etf_ids, window_start=window_start,
-        )
+            needed=needs_open, window_start=window_start,
+        ) if needs_open else {}
+        # 천장: 앵커를 판정 트랜잭션 **밖**에서 읽는다 — 실시간 순차 처리(window 하나씩)
+        # 에서는 정확하고, 백로그 재판정으로 같은 종목의 여러 window 가 동시에 판정되면
+        # 앵커가 근사가 된다(둘 다 같은 앵커를 보고 발화할 수 있다). 정확히 하려면 판정
+        # 자체를 쓰기 tx 안으로 옮겨야 하는데, 그 값이 지금은 없다.
+        anchors = self._anchors(session_id)
 
         fired: list[dict] = []
+        reverted: list[dict] = []
         skipped_no_open: list[str] = []
         errors: list[str] = []
         for entity_id in sorted(etf_rows):
-            open_state = opens.get(entity_id)
-            if open_state is None or open_state["status"] != OPEN_STATUS_OPEN:
-                # 시가 부재는 이미 원장(minute_session_open)에 사유와 함께 확정돼 있다
-                skipped_no_open.append(entity_id)
-                continue
+            baseline = prev_closes.get(entity_id)
+            if baseline is None:
+                open_state = opens.get(entity_id)
+                if open_state is None or open_state["status"] != OPEN_STATUS_OPEN:
+                    # 기준선 부재 — 폴백 시가도 없다. 사유는 이미 원장
+                    # (minute_session_open)에 확정돼 있다(조용한 건너뛰기 아님)
+                    skipped_no_open.append(entity_id)
+                    continue
+                baseline = open_state["open_price"]
             try:
-                open_price = _decimal(open_state["open_price"], entity=entity_id,
-                                      field_name="open")
+                baseline = _decimal(baseline, entity=entity_id, field_name="기준선")
                 close_price = _decimal(etf_rows[entity_id].get("close"),
                                        entity=entity_id, field_name="close")
-                if open_price <= 0:
-                    raise ValueError(f"{entity_id} 의 시가가 양수가 아니다: {open_price}")
+                if baseline <= 0:
+                    raise ValueError(f"{entity_id} 의 기준선이 양수가 아니다: {baseline}")
                 if close_price <= 0:
                     # 0·음수 close 를 통과시키면 change_rate 가 1 이상으로 계산돼
                     # 계약 위반 가격이 그대로 발화한다(coerce-to-passing)
                     raise ValueError(f"{entity_id} 의 close 가 양수가 아니다: {close_price}")
+                anchor = _decimal(anchors.get(entity_id, baseline), entity=entity_id,
+                                  field_name="anchor")
+                if anchor <= 0:
+                    raise ValueError(f"{entity_id} 의 앵커가 양수가 아니다: {anchor}")
             except ValueError as error:
                 # 한 종목의 형상 오류로 window 전체 판정을 죽이지 않는다 — 단 조용히
                 # 세지 않고 결과·로그에 남긴다(성공 위장 금지)
                 logger.error("판정 불가 — %s", error)
                 errors.append(str(error))
                 continue
-            change_rate = abs(close_price / open_price - 1)
+            open_change = abs(close_price / baseline - 1)
+            if open_change <= self.revert_threshold:
+                # 규칙 1 — 기준선 복귀 구간. 발화 금지고, 앵커가 아직 기준선이 아니면
+                # 노출을 회수한다(앵커 리셋은 persist tx 안에서 조건부로).
+                reverted.append({
+                    "entity_id": entity_id, "prev_close": baseline,
+                    "close_price": close_price, "open_change": open_change,
+                })
+                continue
+            change_rate = abs(close_price / anchor - 1)
             if change_rate >= self.abs_threshold:
                 fired.append({
-                    "entity_id": entity_id, "open_price": open_price,
-                    "close_price": close_price, "change_rate": change_rate,
+                    "entity_id": entity_id, "open_price": baseline,
+                    "anchor_price": anchor, "close_price": close_price,
+                    "change_rate": change_rate,
                 })
 
-        inserted = self._persist_triggers(
+        inserted, reverted_ids = self._persist_triggers(
             job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
             session_id=session_id, window_start=window_start,
-            generation=generation, fired=fired,
+            generation=generation, fired=fired, reverted=reverted,
         )
         result = {
             "job_id": job_id, "session_id": session_id,
             "window_start": window_start, "generation": generation,
             "detection_policy_version": self.detection_policy_version,
             "threshold": str(self.abs_threshold),
+            "revert_threshold": str(self.revert_threshold),
             "judged": sorted(etf_rows),
             "fired": [f["entity_id"] for f in fired],
             "inserted": inserted,
+            "reverted": reverted_ids,
             "skipped_no_open": skipped_no_open,
             "errors": errors,
         }
         logger.info(
-            "가격 판정 %s: 대상 %d, 발화 %d(신규 %d), 시가없음 %d, 오류 %d",
-            job_id, len(etf_rows), len(fired), len(inserted),
+            "가격 판정 %s: 대상 %d, 발화 %d(신규 %d), 회수 %d, 기준선없음 %d, 오류 %d",
+            job_id, len(etf_rows), len(fired), len(inserted), len(reverted_ids),
             len(skipped_no_open), len(errors),
         )
         return content_checksum(result)
@@ -303,6 +374,52 @@ class PriceTriggerHandler:
             )
             row = cur.fetchone()
             return None if row is None else (row[0], row[1])
+
+    def _prev_closes(self, session_id: str, session_date: str) -> dict[str, Decimal]:
+        """세션 기준선 = **전일 종가**(ALPHA-745) — 세션당 1회 조회 후 캐시.
+
+        일 단위 `price_daily` 는 세션 중에 바뀌지 않는다(당일 행은 EOD 이후에 들어온다)
+        — 매 window 마다 363종을 다시 읽을 이유가 없다. 기준일은 `trade_date <
+        session_date` 의 최댓값이라 휴장·연휴가 저절로 건너뛰어진다.
+        """
+        cached = self._prev_close_cache.get(session_id)
+        if cached is not None:
+            return cached
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.ticker, p.close_price
+                FROM price_daily p
+                JOIN instrument i ON i.instrument_id = p.instrument_id
+                WHERE i.ticker = ANY(%s) AND i.market_code = ANY(%s)
+                  AND p.trade_date = (
+                      SELECT max(trade_date) FROM price_daily WHERE trade_date < %s
+                  )
+                """,
+                (sorted(self.etf_ids), list(KR_MARKET_CODES), session_date),
+            )
+            rows = cur.fetchall()
+        # 계약 위반 값(0·음수·NULL)은 기준선으로 쓰지 않는다 — 폴백(세션 시가)이 받는다
+        prev_closes = {row[0]: row[1] for row in rows
+                       if row[1] is not None and Decimal(str(row[1])) > 0}
+        self._prev_close_cache[session_id] = prev_closes
+        missing = len(self.etf_ids) - len(prev_closes)
+        if missing:
+            logger.info("세션 %s 전일 종가 %d/%d — 결손 %d 종은 세션 시가 폴백",
+                        session_id, len(prev_closes), len(self.etf_ids), missing)
+        return prev_closes
+
+    def _anchors(self, session_id: str) -> dict[str, Decimal]:
+        """세션×종목의 현재 앵커 — 행 부재 = 앵커가 기준선이라는 뜻(첫 발화 전)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT entity_id, anchor_price FROM minute_trigger_anchor
+                WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
 
     def _window_checksum(self, session_id: str, window_start: datetime):
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
@@ -466,12 +583,18 @@ class PriceTriggerHandler:
 
     def _persist_triggers(self, *, job_id: str, attempt: int, redrive_generation: int,
                           session_id: str, window_start: datetime,
-                          generation: int, fired: list[dict]) -> list[str]:
-        """트리거 행 + outbox 를 **한 트랜잭션**에 — 신규 삽입된 entity 만 돌려준다."""
-        if not fired:
-            return []
-        bucket = cooldown_bucket(window_start)
+                          generation: int, fired: list[dict],
+                          reverted: list[dict]) -> tuple[list[str], list[str]]:
+        """트리거·앵커·outbox 를 **한 트랜잭션**에 — 실제로 쓴 entity 만 돌려준다.
+
+        회수(reverted)는 "앵커가 기준선이 아닌" 종목만 사건이 된다 — 판정 시점에는
+        앵커를 tx 밖에서 읽었으므로, 조건부 UPDATE 의 RETURNING 이 유일한 판정자다
+        (복귀 구간이 여러 window 이어져도 사건은 한 번뿐인 이유).
+        """
+        if not fired and not reverted:
+            return [], []
         inserted: list[str] = []
+        reverted_ids: list[str] = []
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             # 도메인 쓰기도 자기 attempt 에 fence 한다(kernel 의 CAS 는 job 행만 지킨다
             # — consumer._execute 계약). lease 상실·redrive 뒤에도 돌던 낡은 attempt 가
@@ -507,7 +630,7 @@ class PriceTriggerHandler:
             )
             row = cur.fetchone()
             # 세대 대조 + **커밋 결과 상태** 대조 — 정정 진행 중(재claim)이면 세대가
-            # 아직 옛값이라 세대만 보면 낡은 발화가 UNIQUE 를 선점한다(#485 봇 P2)
+            # 아직 옛값이라 세대만 보면 낡은 판정이 앵커를 움직인다(#485 봇 P2)
             if (row is None or row[0] != generation
                     or row[1] in (WINDOW_DUE, WINDOW_CLAIMED)):
                 # 재시도가 kernel claim 에 닿으면 stale 검사가 DEAD('STALE') 로
@@ -517,28 +640,76 @@ class PriceTriggerHandler:
                     f"현재={row and (row[0], row[1])})",
                     code="STALE_GENERATION",
                 )
+            for revert in reverted:
+                entity_id = revert["entity_id"]
+                # 조건부 UPDATE 가 곧 중복 차단이다 — 행이 없거나(첫 발화 전) 이미
+                # 기준선이면(회수 완료) 0 행이라 사건이 나가지 않는다. 재판정도 같다.
+                cur.execute(
+                    """
+                    UPDATE minute_trigger_anchor
+                    SET anchor_price = %s, updated_at = now()
+                    WHERE session_id = %s AND entity_id = %s AND anchor_price <> %s
+                    RETURNING entity_id
+                    """,
+                    (revert["prev_close"], session_id, entity_id,
+                     revert["prev_close"]),
+                )
+                if cur.fetchone() is None:
+                    continue
+                revert_id = revert_id_for(entity_id, session_id, window_start,
+                                          self.detection_policy_version)
+                JobLedger._insert_outbox_tx(
+                    cur,
+                    event_id=f"{EXPOSURE_EVENT_TYPE}:{revert_id}:0",
+                    event_type=EXPOSURE_EVENT_TYPE,
+                    destination=self.destination,
+                    aggregate_id=revert_id,
+                    generation=generation,
+                    payload={
+                        "entity_id": entity_id,
+                        "session_id": session_id,
+                        "window_start": window_start,
+                        "prev_close": str(revert["prev_close"]),
+                        "close_price": str(revert["close_price"]),
+                        "open_change": str(revert["open_change"]),
+                        "detection_policy_version": self.detection_policy_version,
+                    },
+                )
+                reverted_ids.append(entity_id)
             for fire in fired:
                 trigger_id = trigger_id_for(
-                    fire["entity_id"], bucket, self.detection_policy_version
+                    fire["entity_id"], session_id, window_start,
+                    self.detection_policy_version,
                 )
                 cur.execute(
                     """
                     INSERT INTO minute_price_trigger (
                         trigger_id, entity_id, session_id, window_start, generation,
                         detection_policy_version, open_price, close_price,
-                        change_rate, threshold, cooldown_bucket
+                        change_rate, threshold, anchor_price
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (entity_id, cooldown_bucket) DO NOTHING
+                    ON CONFLICT (entity_id, session_id, window_start) DO NOTHING
                     RETURNING trigger_id
                     """,
                     (trigger_id, fire["entity_id"], session_id, window_start,
                      generation, self.detection_policy_version, fire["open_price"],
                      fire["close_price"], fire["change_rate"], self.abs_threshold,
-                     bucket),
+                     fire["anchor_price"]),
                 )
                 if cur.fetchone() is None:
-                    # 쿨다운 버킷 충돌 — 행도 event 도 만들지 않는다(재무장 없음)
+                    # 같은 window 재판정 — 행도 event 도 앵커 이동도 없다(멱등)
                     continue
+                # 앵커 ← 발화가. 트리거와 같은 tx 라 "발화했는데 앵커가 그대로"(다음
+                # window 가 같은 자리에서 또 발화)가 생기지 않는다.
+                cur.execute(
+                    """
+                    INSERT INTO minute_trigger_anchor (session_id, entity_id, anchor_price)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (session_id, entity_id) DO UPDATE
+                    SET anchor_price = EXCLUDED.anchor_price, updated_at = now()
+                    """,
+                    (session_id, fire["entity_id"], fire["close_price"]),
+                )
                 JobLedger._insert_outbox_tx(
                     cur,
                     event_id=f"{TRIGGER_EVENT_TYPE}:{trigger_id}:0",
@@ -557,10 +728,11 @@ class PriceTriggerHandler:
                         "close_price": str(fire["close_price"]),
                         "change_rate": str(fire["change_rate"]),
                         "threshold": str(self.abs_threshold),
+                        "anchor_price": str(fire["anchor_price"]),
                     },
                 )
                 inserted.append(fire["entity_id"])
-        return inserted
+        return inserted, reverted_ids
 
 
 def price_consumer_cli(settings, *, universe: str | None,
@@ -571,9 +743,10 @@ def price_consumer_cli(settings, *, universe: str | None,
     long polling 중 수신분을 visibility 0 으로 반납한다), DB 오류는 잡지 않는다 —
     전파해 task 를 죽이면 ECS 가 재기동하고 claim 은 lease 만료로 회수된다.
 
-    임계는 `price_triggers.abs_threshold` 를 **재사용**한다(2026-08-02 확정) —
-    `detection_policy_version` 만 분봉 축으로 새 값이다. `--max-ticks` 는 로컬
-    확인용이고 배선 오류 신호(poison·misrouted·orphan·ahead)가 있으면 1 로 끝난다.
+    임계는 `price_triggers` 의 `abs_threshold`(발화)·`revert_threshold`(회수)를
+    **재사용**한다(2026-08-02·08-04 확정) — `detection_policy_version` 만 분봉 축으로
+    새 값이다. `--max-ticks` 는 로컬 확인용이고 배선 오류 신호(poison·misrouted·
+    orphan·ahead)가 있으면 1 로 끝난다.
     """
     import os
     import signal
@@ -601,7 +774,11 @@ def price_consumer_cli(settings, *, universe: str | None,
             "--universe 필요 — 판정 대상(etf_ids)·universe 대조의 정본이다"
             "(planner·worker 와 같은 파일/객체)"
         )
-    if not destination_accepts(options.destination, TRIGGER_EVENT_TYPE):
+    # 발화·회수 **둘 다** 이 destination 으로 나간다 — 한쪽만 보면 회수 사건이
+    # 판정·job 성공까지 커밋된 뒤 Relay 에서 DEAD 로 격리된다(event_id 가 결정적이라
+    # 설정을 고쳐도 건별 redrive 뿐이다)
+    if not all(destination_accepts(options.destination, event_type)
+               for event_type in (TRIGGER_EVENT_TYPE, EXPOSURE_EVENT_TYPE)):
         # 오타 destination 은 판정·job 성공까지 커밋된 뒤 Relay 가 event 를 DEAD 로
         # 격리한다 — event_id 가 결정적이라 설정을 고쳐도 그 행은 건별 redrive 뿐이다.
         # 입력(큐) 검증과 대칭으로 출력 배선도 기동에서 거부한다.
@@ -617,6 +794,7 @@ def price_consumer_cli(settings, *, universe: str | None,
         universe_version=universe_model.universe_version,
         universe_hash=universe_model.universe_hash,
         abs_threshold=Decimal(str(settings.price_triggers.abs_threshold)),
+        revert_threshold=Decimal(str(settings.price_triggers.revert_threshold)),
         detection_policy_version=options.detection_policy_version,
         destination=options.destination,
         extended_hours_ids=frozenset(universe_model.extended_hours_ids),

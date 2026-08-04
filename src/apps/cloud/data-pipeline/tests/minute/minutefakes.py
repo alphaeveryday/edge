@@ -41,6 +41,10 @@ class FakeMinuteDB:
         self.news_documents: dict[str, dict] = {}   # document_id -> row
         self.session_opens: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
         self.triggers: dict[str, dict] = {}         # trigger_id -> row
+        self.trigger_anchors: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
+        # price_daily×instrument 조인의 결과만 모델링한다: {ticker: 전일 종가}.
+        # 비우면 전일 종가 결손 = 세션 시가 폴백 경로다(ALPHA-745).
+        self.prev_closes: dict[str, object] = {}
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -336,20 +340,51 @@ class _Cursor:
                     "status": params[2], "open_price": params[3],
                     "reason": params[4], "source_window": params[5],
                 }
+        elif s.startswith("SELECT i.ticker, p.close_price"):
+            # 기준선(전일 종가) 조회(ALPHA-745). 기준일 하한(trade_date < 세션일)·시장
+            # 필터가 빠지면 당일 종가나 동명 해외 티커가 기준선이 되므로 문면을 못 박는다
+            assert "p.trade_date = ( SELECT max(trade_date) FROM price_daily" in s
+            assert "WHERE trade_date < %s )" in s
+            assert "i.market_code = ANY(%s)" in s
+            self._rows = [(ticker, close) for ticker, close
+                          in sorted(self.db.prev_closes.items())
+                          if ticker in params[0]]
+        elif s.startswith("SELECT entity_id, anchor_price FROM minute_trigger_anchor"):
+            self._rows = [(entity, row["anchor_price"])
+                          for (sid, entity), row in self.db.trigger_anchors.items()
+                          if sid == params[0]]
+        elif s.startswith("UPDATE minute_trigger_anchor"):
+            # 회수는 **조건부 UPDATE 의 RETURNING** 이 중복 차단이다(ALPHA-745) —
+            # `anchor_price <> %s` 가 빠지면 복귀 구간 매 window 마다 회수 사건이 나간다
+            assert "anchor_price <> %s" in s and "RETURNING entity_id" in s
+            key = (params[1], params[2])
+            row = self.db.trigger_anchors.get(key)
+            if row is not None and row["anchor_price"] != params[0]:
+                row["anchor_price"] = params[0]
+                self.rowcount = 1
+                self._rows = [(params[2],)]
+        elif s.startswith("INSERT INTO minute_trigger_anchor"):
+            # 발화 앵커 이동 — upsert 가 아니면 두 번째 발화가 예외로 죽는다
+            assert "ON CONFLICT (session_id, entity_id) DO UPDATE" in s
+            self.db.trigger_anchors[(params[0], params[1])] = {
+                "anchor_price": params[2]}
         elif s.startswith("INSERT INTO minute_price_trigger"):
-            # 쿨다운 정본은 UNIQUE(entity_id, cooldown_bucket) — DO NOTHING 이 빠지면
-            # 실DB 에선 두 번째 발화가 예외로 죽으므로 문면을 못 박는다
-            assert "ON CONFLICT (entity_id, cooldown_bucket) DO NOTHING" in s
-            entity, bucket = params[1], params[10]
-            if not any(r["entity_id"] == entity and r["cooldown_bucket"] == bucket
+            # v2 멱등 축은 UNIQUE(entity_id, session_id, window_start)(ALPHA-745) —
+            # DO NOTHING 이 빠지면 실DB 에선 같은 window 재판정이 예외로 죽는다.
+            # 쿨다운 축으로 되돌아가면 앵커 재발화가 통째로 막히므로 문면을 못 박는다.
+            assert "ON CONFLICT (entity_id, session_id, window_start) DO NOTHING" in s
+            assert "cooldown_bucket" not in s
+            entity, session_id, window_start = params[1], params[2], params[3]
+            if not any((r["entity_id"], r["session_id"], r["window_start"])
+                       == (entity, session_id, window_start)
                        for r in self.db.triggers.values()):
                 self.db.triggers[params[0]] = {
                     "trigger_id": params[0], "entity_id": entity,
-                    "session_id": params[2], "window_start": params[3],
+                    "session_id": session_id, "window_start": window_start,
                     "generation": params[4], "detection_policy_version": params[5],
                     "open_price": params[6], "close_price": params[7],
                     "change_rate": params[8], "threshold": params[9],
-                    "cooldown_bucket": bucket, "seq": self.db.next_seq(),
+                    "anchor_price": params[10], "seq": self.db.next_seq(),
                 }
                 self._rows = [(params[0],)]
         elif s.startswith("SELECT status, next_attempt_at, redrive_generation"):
