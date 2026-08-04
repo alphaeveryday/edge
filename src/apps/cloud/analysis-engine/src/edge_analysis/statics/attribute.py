@@ -560,7 +560,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         # 를 골라 ATT +1.13%p p=0.000 을 냈다 - 코드에 박아둔 단계 목록에는 없던 값이다.
         from .trial import probe_brief
         from .verifier import say_implications, verify
-        brief = probe_brief(tuples, reports, screens, memory)
+        # `reports` 는 (튜플, 보고서) 쌍 목록이다 - `probe_brief` 는 두 평행
+        # 목록을 받아 zip 한다. 쌍을 그대로 넘기면 r 이 튜플이 된다(실측 즉사).
+        brief = probe_brief([t for t, _ in reports], [r for _, r in reports],
+                            screens, memory)
         for et in sorted({t.trigger.ident for t, r in reports
                           if t.trigger.kind == "점" and r.verdict == "성립"}):
             imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)

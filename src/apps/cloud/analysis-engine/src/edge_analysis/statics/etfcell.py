@@ -85,6 +85,7 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
     # 라고 썼다. **부호를 지우면 서사가 거짓이 된다.** 수치는 못 주므로 방향을 말로
     # 준다. VIX 는 오르면 불안이라 강세/약세로 부르면 뜻이 뒤집힌다 - 따로 옮긴다.
     over: list[str] = []
+    mr: dict = {}
     try:
         mr = reduce_market(lake, day, symbol=f"{roll.etf}.KS")
         for nm, v in (mr.get("overnight") or ()):
@@ -125,11 +126,21 @@ def _dual(lake, roll, r, day: str, honest: str, ask) -> str:
         recent={"when": "밤사이", "events": facts[:1]},
         established=facts, overnight=over,
         unexplained_top=False, idio_qualified=roll.rho is None or abs(roll.rho) < 0.20)
-    # 통계 재료: 시장 사건 시행의 결과. **수치는 재료에만** 있고 산문에는 못 들어간다.
-    stats = [{"ref": f"s{i}", "kind": "시장사건 시행", "etype": x["etype"],
-              "att": round(x["att"], 5), "p": round(x["p"], 4),
-              "n_days": x["n_days"], "unit": "거래일"}
-             for i, x in enumerate((s for s in (scr or []) if s.get("verdict") == "계산됨"), 1)]
+    # 통계 재료. **수치는 재료에만** 있고 산문에는 못 들어간다(코드가 막는다).
+    # 밤사이 환원도 통계다(β 구간 × 팩터 수익) - 이것을 참조 가능한 근거로 안 주면
+    # '밤사이 미국 반도체가 올라서' 라는 주장이 접지 실패로 즉사한다(실측 2회).
+    stats: list[dict] = []
+    if mr and mr.get("factor_name"):
+        stats.append({"ref": "s1", "kind": "밤사이 환원", "factor": mr["factor_name"],
+                      "factor_ret": mr.get("gap_factor_ret"),
+                      "beta_ci": list(mr.get("gap_beta") or ()),
+                      "explained": mr.get("mkt_explained"),
+                      "note": mr.get("gap_reason", "")[:60]})
+    stats += [{"ref": f"s{len(stats) + i}", "kind": "시장사건 시행", "etype": x["etype"],
+               "att": round(x["att"], 5), "p": round(x["p"], 4),
+               "n_days": x["n_days"], "unit": "거래일"}
+              for i, x in enumerate(
+                  (z for z in (scr or []) if z.get("verdict") == "계산됨"), 1)]
     try:
         plain, bundles = narrate_plain(ask, ctx, stats=stats, cell=roll.etf,
                                       day=day, layer=r.kind)
