@@ -150,7 +150,16 @@ export function ReviewDetailPage() {
             {it.evidences.map((e, i) => (
               <tr key={i}>
                 <td>{EVIDENCE_KIND_LABEL[e.kind] ?? e.kind}</td>
-                <td>{e.title}</td>
+                <td>
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)은 일반 텍스트 폴백 */}
+                  {e.sourceUri ? (
+                    <a href={e.sourceUri} target="_blank" rel="noopener noreferrer">
+                      {e.title}
+                    </a>
+                  ) : (
+                    e.title
+                  )}
+                </td>
                 <td className="col-muted">{e.source}</td>
                 <td className="col-muted num">
                   {e.publishedAt ? new Date(e.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}

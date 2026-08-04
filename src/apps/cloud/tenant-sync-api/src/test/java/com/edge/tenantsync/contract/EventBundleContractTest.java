@@ -64,8 +64,9 @@ class EventBundleContractTest {
 				BundleEntry.newResult(101, result, run, List.of(
 						new SourceEventItem("se1", "NEWS", "EARNINGS", "2026-07-14"),
 						new SourceEventItem("se2", "DISCLOSURE", "SUPPLY_CONTRACT", null)), List.of(
-						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z"),
-						new EvidenceItem("DISCLOSURE", null, "DART", null))),
+						new EvidenceItem("NEWS", "실적 발표 기사", "YONHAP", "2026-07-14T00:00:00Z",
+								"https://news.example.com/a1"),
+						new EvidenceItem("DISCLOSURE", null, "DART", null, null))),
 				BundleEntry.newResult(102, result, run, List.of(), List.of()),
 				BundleEntry.invalidation(103, "r0", "오탐지 이벤트")));
 

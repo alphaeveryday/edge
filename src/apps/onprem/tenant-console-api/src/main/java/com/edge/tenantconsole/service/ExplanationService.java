@@ -265,7 +265,8 @@ public class ExplanationService {
 				continue;
 			}
 			out.add(new Explanation.Evidence(
-					kind, text(node, "title"), text(node, "source"), parseTime(node)));
+					kind, text(node, "title"), text(node, "source"), parseTime(node),
+					text(node, "source_uri")));
 		}
 		return out;
 	}

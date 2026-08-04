@@ -58,8 +58,9 @@ class BundleEntryStoreTest {
 				new SourceEventItem("se-1", "NEWS", "EARNINGS", "2026-07-14"),
 				new SourceEventItem("se-2", "DISCLOSURE", "SUPPLY_CONTRACT", null));
 		List<EvidenceItem> evidences = List.of(
-				new EvidenceItem("NEWS", "뉴스 제목", "YONHAP", "2026-07-14T00:00:00Z"),
-				new EvidenceItem("DISCLOSURE", null, "DART", null));
+				new EvidenceItem("NEWS", "뉴스 제목", "YONHAP", "2026-07-14T00:00:00Z",
+						"https://news.example.com/a1"),
+				new EvidenceItem("DISCLOSURE", null, "DART", null, null));
 
 		BundleEntry entry = BundleEntryStore.toEntry(row("NEW", "expr-1"), sourceEvents, evidences);
 

@@ -19,7 +19,7 @@ interface WireItem {
 }
 
 interface WireDetail extends WireItem {
-  evidences: { kind: string; title: string; source: string; published_at?: string }[];
+  evidences: { kind: string; title: string; source: string; published_at?: string; source_uri?: string }[];
   checks: { result: 'PASS' | 'REVIEW' | 'BLOCK'; rule_type?: string; matched_text?: string; checked_at?: string }[];
   history: {
     from_status?: string;
@@ -54,6 +54,7 @@ function toDetail(w: WireDetail): ReviewItemDetail {
       title: e.title,
       source: e.source,
       publishedAt: e.published_at ?? null,
+      sourceUri: e.source_uri ?? null,
     })),
     checks: (w.checks ?? []).map((c) => ({
       result: c.result,

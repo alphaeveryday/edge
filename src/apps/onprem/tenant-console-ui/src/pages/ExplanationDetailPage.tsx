@@ -179,7 +179,16 @@ export function ExplanationDetailPage() {
                 <td>
                   <span className="chip">{ev.type}</span>
                 </td>
-                <td>{ev.title}</td>
+                <td>
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)은 일반 텍스트 폴백 */}
+                  {ev.sourceUri ? (
+                    <a href={ev.sourceUri} target="_blank" rel="noopener noreferrer">
+                      {ev.title}
+                    </a>
+                  ) : (
+                    ev.title
+                  )}
+                </td>
                 <td className="col-muted">{ev.source}</td>
                 <td className="col-muted num">{ev.time}</td>
               </tr>
