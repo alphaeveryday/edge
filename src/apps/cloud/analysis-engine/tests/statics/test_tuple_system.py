@@ -1054,3 +1054,25 @@ def test_no_module_reads_pct_off_a_layers_name():
             offenders.append(f"{f.name}:{line} {m.group()}")
     assert not offenders, (
         "layers.Name 에 없는 `pct` 를 읽는다 - contribution 을 쓰라: " + ", ".join(offenders))
+
+
+def test_duckdb_rendering_of_shared_views_has_no_psycopg_params():
+    """`sql_surface` CTE 집합은 **Postgres 와 DuckDB 양쪽**에서 쓰인다.
+
+    파라미터 자리는 `_views(as_of=, trade_date=)` 로 주입되는 설계다(Postgres 기본값이
+    psycopg 스타일). 그런데 CTE 본문에 `%(as_of)s` 를 **하드코딩**하면 DuckDB 렌더가
+    그것을 그대로 안고 나가 표면이 통째로 파싱 실패한다 - 실측: 30일 배치의 섹터·고유
+    검정 전량이 `ParserException: syntax error at or near "%"` 로 죽었다(dev 병합 회귀).
+    그래서 **렌더 결과**를 검사한다 - 소스 grep 은 설계된 기본값과 하드코딩을 못 가른다.
+    """
+    from edge_analysis.adapters.sql_surface import _views
+
+    duck = _views(as_of="TIMESTAMP '2026-07-31 23:59:59'",
+                  trade_date="DATE '2026-07-31'", prefix="rdb.public.")
+    assert "%(" not in duck, "DuckDB 렌더에 psycopg 파라미터가 남았다"
+    # 원장 표는 접두가 붙어야 한다 - v_nav 가 접두 없이 들어와 rdb 경로에서 못 찾았다
+    for t in ("etf_nav_daily", "price_daily", "source_event"):
+        assert f"rdb.public.{t}" in duck, f"{t} 에 접두가 없다"
+
+    pg = _views()
+    assert "%(as_of)s" in pg, "Postgres 기본값은 psycopg 스타일이다 (설계)"

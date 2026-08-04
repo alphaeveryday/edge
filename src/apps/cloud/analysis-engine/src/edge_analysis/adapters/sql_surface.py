@@ -367,10 +367,15 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
                p.close_price / NULLIF(n.nav, 0) - 1 AS premium,
                n.nav / NULLIF(LAG(n.nav) OVER (
                    PARTITION BY n.etf_instrument_id ORDER BY n.trade_date), 0) - 1 AS nav_r
-        FROM etf_nav_daily n
-        LEFT JOIN price_daily p ON p.instrument_id = n.etf_instrument_id
-                               AND p.trade_date = n.trade_date
-        WHERE n.trade_date <= %(trade_date)s AND n.available_at <= %(as_of)s
+        -- 파라미터는 이 파일의 규약(`{as_of}`·`{trade_date}` 포맷)을 쓴다. psycopg
+        -- 스타일(psycopg 명명 파라미터)을 남기면 **DuckDB 표면이 통째로 파싱 실패**한다 -
+        -- 실측: 30일 배치의 섹터·고유 검정 전량이 `ParserException: syntax error at
+        -- or near "%"` 로 죽었다. 이 CTE 집합은 Postgres 와 DuckDB 양쪽에서 쓰인다.
+        -- 표 접두도 `{prefix}` 를 붙인다 - 안 붙이면 rdb 부착 경로에서 못 찾는다.
+        FROM {prefix}etf_nav_daily n
+        LEFT JOIN {prefix}price_daily p ON p.instrument_id = n.etf_instrument_id
+                                      AND p.trade_date = n.trade_date
+        WHERE n.trade_date <= {trade_date} AND n.available_at <= {as_of}
     ),
     v_cohort AS (
         SELECT e.instrument_id, e.trade_date, e.source_event_id, e.event_type_code,
