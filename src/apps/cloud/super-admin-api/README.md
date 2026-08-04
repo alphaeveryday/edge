@@ -73,7 +73,7 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
   (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
-  service 가 변환, analyses 쓰기=mock record, session=세션 주체(`SessionOperator`) 투영을
+  service 가 변환, analyses 쓰기=무효화 실전이(응답 본문 없음), session=세션 주체(`SessionOperator`) 투영을
   `AdminSessionService` 가 구성). 원천 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다
   (admin·email·memo 는 원장 값(ALPHA-121 온보딩 기록), Sync 관측 필드(domain·
