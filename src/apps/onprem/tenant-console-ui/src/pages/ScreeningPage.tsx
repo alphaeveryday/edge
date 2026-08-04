@@ -177,7 +177,6 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
             <span style={{ color: 'var(--fg-2)' }}>최소 출처 수</span>
             <select
               className="select"
-              style={{ height: 26, fontSize: 11 }}
               disabled={!canEdit}
               value={criteria?.minSources ?? 2}
               onChange={(e) =>
@@ -193,7 +192,6 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
             <span style={{ color: 'var(--fg-2)' }}>최소 확신도</span>
             <select
               className="select"
-              style={{ height: 26, fontSize: 11 }}
               disabled={!canEdit}
               /* null(미설정=게이트 꺼짐)을 기본값으로 꾸미지 않는다 — 화면이 켜진 것처럼
                  보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
