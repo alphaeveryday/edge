@@ -24,6 +24,20 @@ def _expired(lease_expires_at, now) -> bool:
     return lease_expires_at is None or lease_expires_at < now
 
 
+def _decimal_of(value):
+    from decimal import Decimal
+
+    return Decimal(str(value))
+
+
+def _numeric6(value):
+    """NUMERIC(24,6) 저장을 흉내 낸다 — 스케일 절단이 fake 에 없으면, 8자리 전일 종가를
+    앵커에 넣고 다시 같다고 비교하는 회귀(회수 사건 반복 발행)를 못 잡는다."""
+    from decimal import Decimal
+
+    return _decimal_of(value).quantize(Decimal("0.000001"))
+
+
 def _job_kind(sql: str) -> str:
     """SQL 이 어느 job 테이블을 보는지 — 두 테이블이 lifecycle 을 공유해서 필요하다."""
     return "price" if "price_window_job" in sql else "news"
@@ -355,19 +369,34 @@ class _Cursor:
                           if sid == params[0]]
         elif s.startswith("UPDATE minute_trigger_anchor"):
             # 회수는 **조건부 UPDATE 의 RETURNING** 이 중복 차단이다(ALPHA-745) —
-            # `anchor_price <> %s` 가 빠지면 복귀 구간 매 window 마다 회수 사건이 나간다
+            # `anchor_price <> %s` 가 빠지면 복귀 구간 매 window 마다 회수 사건이 나간다.
+            # `anchor_window < %s` 가 빠지면 낡은 window 의 재배달이 최신 발화를 회수로
+            # 덮으면서 사건은 event_id 충돌로 못 내보낸다(하류가 노출 상태로 고착).
             assert "anchor_price <> %s" in s and "RETURNING entity_id" in s
-            key = (params[1], params[2])
-            row = self.db.trigger_anchors.get(key)
-            if row is not None and row["anchor_price"] != params[0]:
-                row["anchor_price"] = params[0]
+            assert "anchor_window < %s" in s
+            price, window, session_id, entity, guard_price, guard_window = params
+            row = self.db.trigger_anchors.get((session_id, entity))
+            # 비교 대상은 **저장된 6자리 값 vs 파라미터 원본**이다 — Postgres 는 넘어온
+            # 파라미터를 컬럼 스케일로 반올림하지 않는다. 여기서 양자화하면 정밀도
+            # 회귀가 fake 안에서 자기 자신에 의해 가려진다
+            if (row is not None
+                    and row["anchor_price"] != _decimal_of(guard_price)
+                    and row["anchor_window"] < guard_window):
+                row.update(anchor_price=_numeric6(price), anchor_window=window)
                 self.rowcount = 1
-                self._rows = [(params[2],)]
+                self._rows = [(entity,)]
         elif s.startswith("INSERT INTO minute_trigger_anchor"):
-            # 발화 앵커 이동 — upsert 가 아니면 두 번째 발화가 예외로 죽는다
+            # 발화 앵커 이동 — upsert 가 아니면 두 번째 발화가 예외로 죽고, window
+            # 전진 조건이 빠지면 낡은 발화가 최신 앵커를 되돌린다
             assert "ON CONFLICT (session_id, entity_id) DO UPDATE" in s
-            self.db.trigger_anchors[(params[0], params[1])] = {
-                "anchor_price": params[2]}
+            assert "WHERE minute_trigger_anchor.anchor_window < EXCLUDED.anchor_window" in s
+            session_id, entity, price, window = params
+            row = self.db.trigger_anchors.get((session_id, entity))
+            if row is None:
+                self.db.trigger_anchors[(session_id, entity)] = {
+                    "anchor_price": _numeric6(price), "anchor_window": window}
+            elif row["anchor_window"] < window:
+                row.update(anchor_price=_numeric6(price), anchor_window=window)
         elif s.startswith("INSERT INTO minute_price_trigger"):
             # v2 멱등 축은 UNIQUE(entity_id, session_id, window_start)(ALPHA-745) —
             # DO NOTHING 이 빠지면 실DB 에선 같은 window 재판정이 예외로 죽는다.

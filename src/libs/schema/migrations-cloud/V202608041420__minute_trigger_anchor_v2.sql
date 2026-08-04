@@ -7,11 +7,19 @@
 -- 앵커 상태가 곧 "노출 회수 여부" 마커다 — 앵커=기준선이면 이미 회수됐거나 발화 전이라
 -- 회수 사건이 중복 발행되지 않는다.
 -- 전일 종가가 없는 종목(신규 상장 등)만 세션 시가로 폴백한다(minute_session_open).
+--
+-- 기준선은 판정기가 anchor_price 의 스케일(6)로 맞춰 넣는다 — price_daily.close_price
+-- 는 NUMERIC(24,8) 이라 그대로 쓰면 저장 시 반올림돼 `anchor_price <> 기준선` 이 항상
+-- 참이 되고, 복귀 구간 매 window 마다 회수 사건이 재발행된다.
 
 CREATE TABLE minute_trigger_anchor (
     session_id   TEXT NOT NULL,
     entity_id    TEXT NOT NULL,
     anchor_price NUMERIC(24, 6) NOT NULL,
+    -- 이 앵커를 쓴 window. SQS 는 순서를 보장하지 않아 09:02 판정이 09:01 보다 먼저
+    -- 올 수 있고, 재배달까지 겹치면 **낡은 window 가 최신 앵커를 되돌린다**(발화를
+    -- 회수로 덮거나 그 반대). 앵커 쓰기를 이 값이 전진할 때로 한정해 막는다.
+    anchor_window TIMESTAMPTZ NOT NULL,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (session_id, entity_id),

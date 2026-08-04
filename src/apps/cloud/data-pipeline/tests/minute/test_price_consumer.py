@@ -403,6 +403,49 @@ class TestAnchorV2:
         # 앵커도 되돌아가지 않는다 — 트리거 INSERT 가 막히면 앵커 이동도 없다
         assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
 
+    def test_stale_revert_does_not_undo_newer_fire(self, tmp_path):
+        # SQS 는 순서를 보장하지 않는다. 회수했던 window 가 **더 뒤 window 의 발화 뒤에**
+        # 재배달되면, 조건부 UPDATE 만으로는 앵커가 기준선으로 되돌아간다 — 그런데 그
+        # 회수의 event_id 는 그 window 로 결정적이라 이미 나간 사건과 충돌해 outbox 는
+        # DO NOTHING 이다. 결과는 "앵커는 회수됐는데 하류는 노출 그대로"다.
+        db = FakeMinuteDB()
+        handler, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 100.5), (100, 106)],
+                    "500001": [(200, 200), (200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=4,
+        )
+        assert len(db.triggers) == 2 and len(revert_events(db)) == 1
+        anchor_before = db.trigger_anchors[(session_id, "500000")]["anchor_price"]
+        assert Decimal(str(anchor_before)) == 106  # 마지막 발화가
+        stale = events[2]["payload"]  # 회수했던 window 의 재배달
+        handler(job_id=stale["job_id"], payload=stale,
+                attempt=db.jobs[("price", stale["job_id"])]["attempt_count"],
+                redrive_generation=0)
+        assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
+        assert len(revert_events(db)) == 1
+
+    def test_high_precision_prev_close_reverts_once(self, tmp_path):
+        # price_daily.close_price 는 NUMERIC(24,8), 앵커는 NUMERIC(24,6) 이다. 기준선을
+        # 저장 스케일로 맞추지 않으면 `anchor_price <> 기준선` 이 영구히 참이 돼
+        # 복귀 구간 매 window 마다 회수 사건이 재발행된다(구간당 1회 계약 위반)
+        db = FakeMinuteDB()
+        base = Decimal("100.12345678")
+        db.prev_closes["500001"] = Decimal("200")
+        _, session_id, _ = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 100.5), (100, 100.2)],
+                    "500001": [(200, 200), (200, 200), (200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": base},
+            windows=4,
+        )
+        assert len(revert_events(db)) == 1
+        anchor = db.trigger_anchors[(session_id, "500000")]["anchor_price"]
+        assert anchor == base.quantize(Decimal("0.000001"))
+
     def test_missing_prev_close_falls_back_to_session_open(self, tmp_path):
         # 신규 상장 등 전일 종가가 없는 종목만 v1 기계(세션 시가)로 판정한다 —
         # 전 종목을 폴백으로 돌리면 v2 가 조용히 무효가 된다

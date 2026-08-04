@@ -67,6 +67,12 @@ OPEN_STATUS_MISSING = "MISSING"
 # 전일 종가 조회 대상 시장 — canonical 지역 KR 의 MIC 3종
 KR_MARKET_CODES = ("XKRX", "XKOS", "XKON")
 
+# minute_trigger_anchor.anchor_price 의 스케일. 기준선을 **저장될 값 그대로** 비교하기
+# 위해 여기 맞춰 양자화한다 — price_daily.close_price 는 NUMERIC(24,8) 이라 그냥 넣으면
+# 저장 시 반올림돼 `anchor_price <> 기준선` 이 영구히 참이 되고, 복귀 구간 매 window 마다
+# 회수 사건이 재발행된다(회수는 구간당 1회라는 계약이 깨진다).
+ANCHOR_SCALE = Decimal("0.000001")
+
 
 def trigger_id_for(entity_id: str, session_id: str, window_start: datetime,
                    policy_version: str) -> str:
@@ -279,10 +285,17 @@ class PriceTriggerHandler:
             session_id=session_id, session_date=session_date,
             needed=needs_open, window_start=window_start,
         ) if needs_open else {}
-        # 천장: 앵커를 판정 트랜잭션 **밖**에서 읽는다 — 실시간 순차 처리(window 하나씩)
-        # 에서는 정확하고, 백로그 재판정으로 같은 종목의 여러 window 가 동시에 판정되면
-        # 앵커가 근사가 된다(둘 다 같은 앵커를 보고 발화할 수 있다). 정확히 하려면 판정
-        # 자체를 쓰기 tx 안으로 옮겨야 하는데, 그 값이 지금은 없다.
+        # 천장 1: 앵커를 판정 트랜잭션 **밖**에서 읽는다 — 실시간 순차 처리(window
+        # 하나씩)에서는 정확하고, 배달 순서가 섞이거나 max_concurrency 를 올리면 같은
+        # 종목의 두 window 가 같은 앵커를 보고 둘 다 발화할 수 있다(값의 근사). 상태가
+        # **뒤로 가는** 것은 앵커 쓰기의 anchor_window 전진 조건이 막는다 — 남은 것은
+        # 발화 한 건이 더 나갈 수 있다는 것뿐이다. 정확히 하려면 판정 자체를 쓰기 tx
+        # 안으로 옮겨야 하는데(종목별 앵커 행 잠금), 지금 물량에 그 값이 없다.
+        #
+        # 천장 2: 이미 발화한 window 가 **정정**(generation+1)되면 트리거 행이 window
+        # 유니크에 막혀 DO NOTHING 이고 앵커도 그대로다 — 정정 전 종가가 앵커로 남는다
+        # (v1 도 같은 구멍이었다: 쿨다운 유니크가 같은 자리를 막았다). 정정이 실제로
+        # 도는 걸 확인하면 트리거 행을 세대로 갱신하는 쪽이 처방이다.
         anchors = self._anchors(session_id)
 
         fired: list[dict] = []
@@ -300,7 +313,8 @@ class PriceTriggerHandler:
                     continue
                 baseline = open_state["open_price"]
             try:
-                baseline = _decimal(baseline, entity=entity_id, field_name="기준선")
+                baseline = _decimal(baseline, entity=entity_id,
+                                    field_name="기준선").quantize(ANCHOR_SCALE)
                 close_price = _decimal(etf_rows[entity_id].get("close"),
                                        entity=entity_id, field_name="close")
                 if baseline <= 0:
@@ -313,9 +327,11 @@ class PriceTriggerHandler:
                                   field_name="anchor")
                 if anchor <= 0:
                     raise ValueError(f"{entity_id} 의 앵커가 양수가 아니다: {anchor}")
-            except ValueError as error:
+            except (ValueError, InvalidOperation) as error:
                 # 한 종목의 형상 오류로 window 전체 판정을 죽이지 않는다 — 단 조용히
-                # 세지 않고 결과·로그에 남긴다(성공 위장 금지)
+                # 세지 않고 결과·로그에 남긴다(성공 위장 금지). InvalidOperation 은
+                # 양자화가 자릿수를 넘길 때다 — 잡지 않으면 job 전체가 죽는다
+
                 logger.error("판정 불가 — %s", error)
                 errors.append(str(error))
                 continue
@@ -323,10 +339,14 @@ class PriceTriggerHandler:
             if open_change <= self.revert_threshold:
                 # 규칙 1 — 기준선 복귀 구간. 발화 금지고, 앵커가 아직 기준선이 아니면
                 # 노출을 회수한다(앵커 리셋은 persist tx 안에서 조건부로).
-                reverted.append({
-                    "entity_id": entity_id, "prev_close": baseline,
-                    "close_price": close_price, "open_change": open_change,
-                })
+                # 앵커가 이미 기준선이면(=행 부재 또는 회수 완료) 회수할 노출 자체가
+                # 없다 — 복귀 구간이 평시 상태라, 거르지 않으면 매분 전 종목에 대해
+                # 0행 UPDATE 를 쏜다. tx 사이의 경합은 조건부 UPDATE 가 여전히 막는다.
+                if anchor != baseline:
+                    reverted.append({
+                        "entity_id": entity_id, "prev_close": baseline,
+                        "close_price": close_price, "open_change": open_change,
+                    })
                 continue
             change_rate = abs(close_price / anchor - 1)
             if change_rate >= self.abs_threshold:
@@ -381,6 +401,11 @@ class PriceTriggerHandler:
         일 단위 `price_daily` 는 세션 중에 바뀌지 않는다(당일 행은 EOD 이후에 들어온다)
         — 매 window 마다 363종을 다시 읽을 이유가 없다. 기준일은 `trade_date <
         session_date` 의 최댓값이라 휴장·연휴가 저절로 건너뛰어진다.
+
+        천장: 캐시는 프로세스 안에만 있다. 전일 적재가 **장중에 늦게** 들어오는
+        복구 상황에서는, 그 전에 시가로 폴백한 종목이 재기동 뒤 전일 종가 축으로
+        바뀐다(축이 섞이며 회수 사건 1건이 더 나갈 수 있고, 그 뒤로는 일관된다).
+        세션×종목의 기준선 축 자체를 원장에 고정하는 게 처방이다.
         """
         cached = self._prev_close_cache.get(session_id)
         if cached is not None:
@@ -644,15 +669,20 @@ class PriceTriggerHandler:
                 entity_id = revert["entity_id"]
                 # 조건부 UPDATE 가 곧 중복 차단이다 — 행이 없거나(첫 발화 전) 이미
                 # 기준선이면(회수 완료) 0 행이라 사건이 나가지 않는다. 재판정도 같다.
+                # anchor_window 전진 조건이 순서를 지킨다: SQS 는 순서를 보장하지 않아
+                # 낡은 window 의 재배달이 **더 최신 발화를 회수로 덮을** 수 있고, 그
+                # 회수는 event_id 가 그 window 로 결정적이라 사건도 못 내보낸 채
+                # 앵커만 되돌려 하류를 노출 상태로 남긴다.
                 cur.execute(
                     """
                     UPDATE minute_trigger_anchor
-                    SET anchor_price = %s, updated_at = now()
+                    SET anchor_price = %s, anchor_window = %s, updated_at = now()
                     WHERE session_id = %s AND entity_id = %s AND anchor_price <> %s
+                      AND anchor_window < %s
                     RETURNING entity_id
                     """,
-                    (revert["prev_close"], session_id, entity_id,
-                     revert["prev_close"]),
+                    (revert["prev_close"], window_start, session_id, entity_id,
+                     revert["prev_close"], window_start),
                 )
                 if cur.fetchone() is None:
                     continue
@@ -700,15 +730,21 @@ class PriceTriggerHandler:
                     # 같은 window 재판정 — 행도 event 도 앵커 이동도 없다(멱등)
                     continue
                 # 앵커 ← 발화가. 트리거와 같은 tx 라 "발화했는데 앵커가 그대로"(다음
-                # window 가 같은 자리에서 또 발화)가 생기지 않는다.
+                # window 가 같은 자리에서 또 발화)가 생기지 않는다. 갱신은 window 가
+                # 전진할 때만 — 순서 없는 배달에서 낡은 발화가 최신 앵커를 되돌리면
+                # 그 뒤 판정이 전부 틀린 기준가로 돌아간다.
                 cur.execute(
                     """
-                    INSERT INTO minute_trigger_anchor (session_id, entity_id, anchor_price)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO minute_trigger_anchor (
+                        session_id, entity_id, anchor_price, anchor_window
+                    ) VALUES (%s, %s, %s, %s)
                     ON CONFLICT (session_id, entity_id) DO UPDATE
-                    SET anchor_price = EXCLUDED.anchor_price, updated_at = now()
+                    SET anchor_price = EXCLUDED.anchor_price,
+                        anchor_window = EXCLUDED.anchor_window, updated_at = now()
+                    WHERE minute_trigger_anchor.anchor_window < EXCLUDED.anchor_window
                     """,
-                    (session_id, fire["entity_id"], fire["close_price"]),
+                    (session_id, fire["entity_id"], fire["close_price"],
+                     window_start),
                 )
                 JobLedger._insert_outbox_tx(
                     cur,
