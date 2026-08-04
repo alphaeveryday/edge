@@ -302,6 +302,16 @@ test('R16 경계 — 정책 필드가 전무하면 evaluated:false (분모 없�
   assert.equal(rr.evaluated, false);
 });
 
+test('R16 경계 — max_retries=0 은 상한 0회가 아니라 정책 미선언이다 (분모 0 을 만들지 않는다)', () => {
+  const f = emptyFacts();
+  /* 원장은 정책 없음을 0 으로 적는다. 0 을 상한으로 읽으면 attempts>=0 이 항상 참이라
+   * 모든 미귀결 작업이 "재시도 소진"으로 둔갑하고, 규칙은 못 도는데 돌았다고 주장한다. */
+  f.tasks = [task({ task_key: 'no-policy', task_outcome: 'FAILED', attempts: 1, max_retries: 0 })];
+  assert.equal(hits(f, 'R16').length, 0);
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R16')!;
+  assert.equal(rr.evaluated, false);
+});
+
 /* ── 인과 병합 ── */
 
 test('사건 병합 — 같은 런의 R05·R16 이 R04 카드 하나로 접히고, 흡수된 위반은 남는다', () => {

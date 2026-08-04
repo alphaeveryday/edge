@@ -1,0 +1,189 @@
+/* 규칙 엔진 화면 보조 클래스 (ALPHA-738).
+ * 자체 팔레트를 두지 않는다 — 전부 ui-kit 토큰 참조. 레이아웃과 강조만 담당한다. */
+
+.ops-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: var(--sp-5);
+}
+
+/* 사건 카드 — .card 위에 버튼 어포던스만 얹는다 */
+.ops-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.ops-card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-surface);
+}
+.ops-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-6);
+  border-bottom: 1px solid var(--border-faint);
+}
+.ops-card-body {
+  padding: var(--sp-5) var(--sp-6) var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+/* 대표 수치 — ui-kit 의 kpi 타일과 같은 위계지만 .kpi 컨테이너 밖이라 별도 클래스다 */
+.ops-metric {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--sp-3);
+}
+.ops-metric-text {
+  font-size: 16px;
+  line-height: 24px;
+}
+.ops-metric-unit {
+  font-size: var(--xs-size);
+  color: var(--fg-3);
+  margin-top: var(--sp-2);
+}
+.ops-card-go {
+  margin-top: auto;
+  padding-top: var(--sp-4);
+  font-size: var(--xs-size);
+  color: var(--accent);
+}
+
+/* ⓘ 손잡이 */
+.ops-i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  color: var(--fg-3);
+  cursor: help;
+  vertical-align: middle;
+}
+.ops-i:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 드릴다운 착지 강조 */
+.ops-flash {
+  animation: ops-flash 1.8s ease-out;
+}
+@keyframes ops-flash {
+  0%,
+  45% {
+    background: var(--accent-tint);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* 체인 스트립 — 단계 값과 단계 간 감소분을 한 줄에 */
+.ops-chain {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  padding: var(--sp-5) var(--sp-6) var(--sp-6);
+}
+.ops-feeds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-right: var(--sp-5);
+  margin-right: var(--sp-5);
+  border-right: 1px dashed var(--border);
+  flex: none;
+}
+.ops-feed {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--sp-3) var(--sp-4);
+  min-width: 108px;
+  cursor: help;
+}
+.ops-feed-batch {
+  border-left-color: var(--accent);
+}
+.ops-feed-intraday {
+  border-left-color: var(--warn);
+}
+.ops-stage {
+  flex: 1 1 0;
+  min-width: 74px;
+  text-align: center;
+  cursor: help;
+}
+.ops-stage-n {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.ops-stage-n .sub {
+  font-size: var(--sm-size);
+  font-weight: 600;
+  color: var(--warn);
+}
+.ops-gap {
+  flex: none;
+  width: 30px;
+  padding-top: var(--sp-3);
+  text-align: center;
+  font-size: var(--xs-size);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--down);
+}
+.ops-gap-none {
+  color: var(--border);
+}
+
+/* 규칙 실행 결과 바 */
+.ops-rulebar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.ops-rulebar .chip {
+  cursor: help;
+}
+
+/* ETF 격자 */
+.ops-grid-etf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: var(--sp-3);
+}
+.ops-etf {
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius);
+  padding: var(--sp-3) var(--sp-4);
+  cursor: help;
+}
+.ops-etf-failed {
+  border-color: rgba(180, 69, 59, 0.35);
+  background: var(--down-tint);
+}
+.ops-etf-published {
+  border-color: rgba(47, 125, 91, 0.3);
+}

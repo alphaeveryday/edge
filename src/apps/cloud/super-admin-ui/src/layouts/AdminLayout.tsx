@@ -16,8 +16,17 @@ interface NavEntry {
 const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
   {
     section: '운영 현황',
-    /* 화면명은 답하는 질문이다 — "오늘 정상 발행 가능한가"(ALPHA-683) */
-    items: [{ path: '/', label: '오늘 운영 현황', icon: 'dashboard' }],
+    /* 화면명은 답하는 질문이다. 홈은 규칙이 오늘 잡은 사건이고(ALPHA-738), 축 화면들은
+     * 그 사건의 근거를 여는 형제 화면이다 — 화면 안에 또 탭을 만들지 않는다. */
+    items: [
+      { path: '/', label: '오늘 사건', icon: 'alertTriangle' },
+      { path: '/ops/runs', label: '런·작업 귀결', icon: 'clipboardCheck' },
+      { path: '/ops/chain', label: '설명 생산 체인', icon: 'trendChart' },
+      { path: '/ops/datasets', label: '데이터셋 신선도', icon: 'database' },
+      { path: '/ops/trend', label: '산출 추이', icon: 'trendChart' },
+      { path: '/ops/delivery', label: '전달 경계', icon: 'shield' },
+      { path: '/overview', label: '레인 원장 요약', icon: 'dashboard' },
+    ],
   },
   {
     section: '테넌트 관리',
@@ -99,8 +108,20 @@ export function AdminLayout() {
     pageTitle = '뉴스 계보';
   } else if (path.startsWith('/impact/holdings')) {
     pageTitle = '구성종목 결손 영향';
+  } else if (path.startsWith('/ops/runs')) {
+    pageTitle = '런·작업 귀결';
+  } else if (path.startsWith('/ops/chain')) {
+    pageTitle = '설명 생산 체인';
+  } else if (path.startsWith('/ops/datasets')) {
+    pageTitle = '데이터셋 신선도';
+  } else if (path.startsWith('/ops/trend')) {
+    pageTitle = '산출 추이';
+  } else if (path.startsWith('/ops/delivery')) {
+    pageTitle = '전달 경계';
+  } else if (path.startsWith('/overview')) {
+    pageTitle = '레인 원장 요약';
   } else if (path === '/') {
-    pageTitle = '오늘 운영 현황';
+    pageTitle = '오늘 사건';
   }
   const showBack = Boolean(tenantId || analysisId);
 

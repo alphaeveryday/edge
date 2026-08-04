@@ -5,7 +5,16 @@
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
-import type { Edge, Rule } from './types.ts';
+import type { Edge, Rule, TaskFact } from './types.ts';
+
+/** 재시도 정책 상한 — 없으면 null.
+ *
+ * 원장은 정책 미선언을 `0` 으로 적는다(SFN Retry 블록이 0개라 상한이라는 개념 자체가 없다).
+ * 이 `0` 을 상한 0회로 읽으면 두 가지가 동시에 틀린다 — 화면이 `1/0` 이라는 없는 분모를 그리고,
+ * R16 이 "평가됨"이라 주장한다. 정책 없음과 상한 0회는 다르므로 여기서 한 번만 정규화한다. */
+export function retryCap(t: TaskFact): number | null {
+  return t.max_retries != null && t.max_retries > 0 ? t.max_retries : null;
+}
 
 const kst = (iso?: string | null): string =>
   iso
@@ -457,20 +466,18 @@ export const RULES: Rule[] = [
     desc: '시도 수가 정책 상한에 도달했는데 아직 귀결되지 않았다',
     dep: 'CatalogEntry 재시도 정책 필드',
     source: 'DB_LEDGER',
-    canRun: (f) => f.tasks.some((t) => t.max_retries != null),
-    mockBacked: (f) => f.tasks.some((t) => t.max_retries != null && t.retry_mock),
+    canRun: (f) => f.tasks.some((t) => retryCap(t) != null),
+    mockBacked: (f) => f.tasks.some((t) => retryCap(t) != null && t.retry_mock),
     run: (f) =>
       f.tasks
-        .filter(
-          (t) =>
-            t.max_retries != null &&
-            (t.attempts ?? 0) >= t.max_retries &&
-            t.task_outcome !== 'FULFILLED',
-        )
+        .filter((t) => {
+          const cap = retryCap(t);
+          return cap != null && (t.attempts ?? 0) >= cap && t.task_outcome !== 'FULFILLED';
+        })
         .map((t) => ({
           target: t.task_key,
           title: t.task_key + ' 재시도 소진',
-          metric: `${t.attempts}/${t.max_retries}`,
+          metric: `${t.attempts}/${retryCap(t)}`,
           unit: '시도 / 상한',
           why: '자동 회복 여지 없음 — 수동 개입 필요',
           mock: !!t.retry_mock,
