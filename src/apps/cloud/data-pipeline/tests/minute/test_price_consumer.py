@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pytest
@@ -427,12 +427,14 @@ class TestAnchorV2:
         assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
         assert len(revert_events(db)) == 1
 
-    def test_high_precision_prev_close_reverts_once(self, tmp_path):
+    # 두 번째 값은 6자리 경계에서 **정확히 절반**이다 — Postgres 는 0 에서 먼 쪽으로
+    # 올리고 파이썬 기본은 짝수로 내리므로, 반올림 방식까지 맞춰야 같은 회귀가 안 산다
+    @pytest.mark.parametrize("base", [Decimal("100.12345678"), Decimal("100.1234565")])
+    def test_high_precision_prev_close_reverts_once(self, tmp_path, base):
         # price_daily.close_price 는 NUMERIC(24,8), 앵커는 NUMERIC(24,6) 이다. 기준선을
         # 저장 스케일로 맞추지 않으면 `anchor_price <> 기준선` 이 영구히 참이 돼
         # 복귀 구간 매 window 마다 회수 사건이 재발행된다(구간당 1회 계약 위반)
         db = FakeMinuteDB()
-        base = Decimal("100.12345678")
         db.prev_closes["500001"] = Decimal("200")
         _, session_id, _ = self._run(
             db, tmp_path,
@@ -444,7 +446,7 @@ class TestAnchorV2:
         )
         assert len(revert_events(db)) == 1
         anchor = db.trigger_anchors[(session_id, "500000")]["anchor_price"]
-        assert anchor == base.quantize(Decimal("0.000001"))
+        assert anchor == base.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
     def test_missing_prev_close_falls_back_to_session_open(self, tmp_path):
         # 신규 상장 등 전일 종가가 없는 종목만 v1 기계(세션 시가)로 판정한다 —

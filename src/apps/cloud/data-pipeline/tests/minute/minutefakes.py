@@ -31,11 +31,11 @@ def _decimal_of(value):
 
 
 def _numeric6(value):
-    """NUMERIC(24,6) 저장을 흉내 낸다 — 스케일 절단이 fake 에 없으면, 8자리 전일 종가를
+    """NUMERIC(24,6) 저장을 흉내 낸다(Postgres 는 절반을 0 에서 먼 쪽으로 올린다) — 스케일 절단이 fake 에 없으면, 8자리 전일 종가를
     앵커에 넣고 다시 같다고 비교하는 회귀(회수 사건 반복 발행)를 못 잡는다."""
-    from decimal import Decimal
+    from decimal import ROUND_HALF_UP, Decimal
 
-    return _decimal_of(value).quantize(Decimal("0.000001"))
+    return _decimal_of(value).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
 def _job_kind(sql: str) -> str:
@@ -357,9 +357,14 @@ class _Cursor:
         elif s.startswith("SELECT i.ticker, p.close_price"):
             # 기준선(전일 종가) 조회(ALPHA-745). 기준일 하한(trade_date < 세션일)·시장
             # 필터가 빠지면 당일 종가나 동명 해외 티커가 기준선이 되므로 문면을 못 박는다
-            assert "p.trade_date = ( SELECT max(trade_date) FROM price_daily" in s
-            assert "WHERE trade_date < %s )" in s
+            assert "p.trade_date = ( SELECT max(p2.trade_date)" in s
+            assert "p2.trade_date < %s" in s
             assert "i.market_code = ANY(%s)" in s
+            # 기준일 서브쿼리가 바깥과 같은 종목·시장으로 좁혀지지 않으면, KR 휴장일에
+            # 거래한 다른 시장의 행이 기준일을 잡아 **전 종목이 결손으로 오인**되고
+            # 세션이 통째로 시가 폴백(v1)으로 되돌아간다. fake 는 날짜를 모델링하지
+            # 않으니 이 결함은 문면으로만 잡을 수 있다
+            assert "i2.ticker = ANY(%s)" in s and "i2.market_code = ANY(%s)" in s
             self._rows = [(ticker, close) for ticker, close
                           in sorted(self.db.prev_closes.items())
                           if ticker in params[0]]

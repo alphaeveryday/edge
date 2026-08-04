@@ -43,7 +43,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from ..config import DbConfig
 from ..db import connect as _default_connect, stable_domain_id
@@ -72,6 +72,9 @@ KR_MARKET_CODES = ("XKRX", "XKOS", "XKON")
 # 저장 시 반올림돼 `anchor_price <> 기준선` 이 영구히 참이 되고, 복귀 구간 매 window 마다
 # 회수 사건이 재발행된다(회수는 구간당 1회라는 계약이 깨진다).
 ANCHOR_SCALE = Decimal("0.000001")
+# Postgres NUMERIC 은 절반을 0 에서 **먼 쪽**으로 올린다. 파이썬 기본(ROUND_HALF_EVEN)
+# 으로 맞추면 정확히 절반인 값에서만 저장값과 비교값이 갈려 같은 회귀가 되살아난다.
+ANCHOR_ROUNDING = ROUND_HALF_UP
 
 
 def trigger_id_for(entity_id: str, session_id: str, window_start: datetime,
@@ -292,6 +295,13 @@ class PriceTriggerHandler:
         # 발화 한 건이 더 나갈 수 있다는 것뿐이다. 정확히 하려면 판정 자체를 쓰기 tx
         # 안으로 옮겨야 하는데(종목별 앵커 행 잠금), 지금 물량에 그 값이 없다.
         #
+        # 천장 1-b: anchor_window 조건은 **행이 있을 때**만 건다. 앵커 행이 아직 없는데
+        # 복귀 window 가 먼저 처리되면(회수할 노출이 없어 아무것도 안 남긴다) 뒤이어
+        # 도착한 **더 이른** 발화 window 가 그냥 INSERT 된다 — 시간순으로는 회수로
+        # 끝나야 할 종목이 노출로 남는다. 다음 복귀 구간 window 가 회수를 내보내며
+        # 스스로 풀리므로(1분), 상태 없는 window 까지 watermark 를 쓰는 비용
+        # (매분 전 종목 INSERT)을 지불하지 않는다.
+        #
         # 천장 2: 이미 발화한 window 가 **정정**(generation+1)되면 트리거 행이 window
         # 유니크에 막혀 DO NOTHING 이고 앵커도 그대로다 — 정정 전 종가가 앵커로 남는다
         # (v1 도 같은 구멍이었다: 쿨다운 유니크가 같은 자리를 막았다). 정정이 실제로
@@ -314,7 +324,8 @@ class PriceTriggerHandler:
                 baseline = open_state["open_price"]
             try:
                 baseline = _decimal(baseline, entity=entity_id,
-                                    field_name="기준선").quantize(ANCHOR_SCALE)
+                                    field_name="기준선").quantize(
+                    ANCHOR_SCALE, rounding=ANCHOR_ROUNDING)
                 close_price = _decimal(etf_rows[entity_id].get("close"),
                                        entity=entity_id, field_name="close")
                 if baseline <= 0:
@@ -402,6 +413,11 @@ class PriceTriggerHandler:
         — 매 window 마다 363종을 다시 읽을 이유가 없다. 기준일은 `trade_date <
         session_date` 의 최댓값이라 휴장·연휴가 저절로 건너뛰어진다.
 
+        기준일 서브쿼리는 **바깥과 같은 종목·시장으로 좁힌다**. 전체 price_daily 의
+        최댓값을 쓰면 KR 휴장일에 거래한 다른 시장(US 등)의 행이 그 날짜를 잡고,
+        바깥 조인에는 일치 행이 0 이라 **전 종목이 결손으로 오인**돼 세션이 통째로
+        시가 폴백(=v1)으로 조용히 되돌아간다.
+
         천장: 캐시는 프로세스 안에만 있다. 전일 적재가 **장중에 늦게** 들어오는
         복구 상황에서는, 그 전에 시가로 폴백한 종목이 재기동 뒤 전일 종가 축으로
         바뀐다(축이 섞이며 회수 사건 1건이 더 나갈 수 있고, 그 뒤로는 일관된다).
@@ -418,10 +434,15 @@ class PriceTriggerHandler:
                 JOIN instrument i ON i.instrument_id = p.instrument_id
                 WHERE i.ticker = ANY(%s) AND i.market_code = ANY(%s)
                   AND p.trade_date = (
-                      SELECT max(trade_date) FROM price_daily WHERE trade_date < %s
+                      SELECT max(p2.trade_date)
+                      FROM price_daily p2
+                      JOIN instrument i2 ON i2.instrument_id = p2.instrument_id
+                      WHERE i2.ticker = ANY(%s) AND i2.market_code = ANY(%s)
+                        AND p2.trade_date < %s
                   )
                 """,
-                (sorted(self.etf_ids), list(KR_MARKET_CODES), session_date),
+                (sorted(self.etf_ids), list(KR_MARKET_CODES),
+                 sorted(self.etf_ids), list(KR_MARKET_CODES), session_date),
             )
             rows = cur.fetchall()
         # 계약 위반 값(0·음수·NULL)은 기준선으로 쓰지 않는다 — 폴백(세션 시가)이 받는다
