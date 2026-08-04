@@ -86,7 +86,7 @@ class ReviewControllerTest {
 
 		@Override
 		public int publish(String analysisItemId, String etfTicker, LocalDate tradeDate,
-				String publishedSummary) {
+				OffsetDateTime explanationAsOf, String publishedSummary) {
 			published.add(analysisItemId);
 			this.capturedSummary = publishedSummary;
 			return publishResult ? 1 : 0;
