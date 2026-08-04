@@ -19,7 +19,7 @@ interface WireItem {
 }
 
 interface WireDetail extends WireItem {
-  evidences: { kind: string; title: string; source: string; published_at?: string; source_uri?: string }[];
+  evidences: { kind: string; title: string | null; source: string; published_at?: string; source_uri?: string }[];
   checks: { result: 'PASS' | 'REVIEW' | 'BLOCK'; rule_type?: string; matched_text?: string; checked_at?: string }[];
   history: {
     from_status?: string;
@@ -51,7 +51,8 @@ function toDetail(w: WireDetail): ReviewItemDetail {
     ...toItem(w),
     evidences: (w.evidences ?? []).map((e) => ({
       kind: e.kind,
-      title: e.title,
+      // title 은 계약상 nullable — null 이면 링크 앵커가 빈 셀이 되므로 설명 상세와 같은 폴백.
+      title: e.title ?? '(제목 없음)',
       source: e.source,
       publishedAt: e.published_at ?? null,
       sourceUri: e.source_uri ?? null,

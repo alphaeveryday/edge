@@ -126,6 +126,23 @@ class EventBundleContractTest {
 	}
 
 	@Test
+	void 근거의_미지_키는_거부된다() {
+		// EvidenceItem 은 additionalProperties: false 다 — source_url 같은 오타 키가 조용히
+		// 수용되면 소비자(콘솔 파서)는 결측으로 읽어 링크가 소리 없이 사라진다(ALPHA-739).
+		String unknownKey = """
+				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
+				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
+				 "entries":[{"cursor":101,"delivery_type":"NEW",
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":null,"etf_name":null,"trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"MIXED","summary":"s","confidence_level":null,"primary_thread_id":null},
+				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
+				   "source_events":[],
+				   "evidences":[{"kind":"DISCLOSURE","title":"공시","source":"DART","published_at":null,"source_url":"https://dart.fss.or.kr/x"}]}]}""";
+
+		assertThat(schema.validate(unknownKey, InputFormat.JSON))
+				.as("EvidenceItem 의 미지 키는 거부되어야 한다(additionalProperties: false)").isNotEmpty();
+	}
+
+	@Test
 	void 잘못된_date_time_포맷은_거부된다() {
 		// evidences[].published_at 이 date-time 이 아니면 계약에서 거부되어야 한다 — 통과시키면
 		// 소비자(publication-api ExplanationStore) 의 OffsetDateTime.parse 가 크래시한다.
