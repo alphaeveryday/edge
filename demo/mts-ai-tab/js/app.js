@@ -307,20 +307,14 @@
       var data = result.data;
       el('ai-date').textContent = data.trade_date;
       el('ai-date-dot').style.display = 'inline';
-      // 게시 시각은 뷰어 타임존과 무관하게 거래소 시간(KST)으로 표기한다
+      // 게시 시각은 뷰어 타임존과 무관하게 거래소 시간(KST)으로 표기한다.
+      // 기준시각(explanation_as_of)은 응답엔 있으나 화면엔 싣지 않는다 — 데모 시드에선
+      // 게시시각과 같은 분이라 중복 노이즈이고 실 증권 앱은 게시시각만 노출한다(ALPHA-753,
+      // owner 판단). API 계약은 불변(응답은 계속 반환).
       var published = new Date(data.published_at).toLocaleTimeString('ko-KR', {
         timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
       });
-      // 스냅샷 기준시각(ADR-0045) — fallback 재노출분도 기준 시점이 드러나야 한다.
-      // 구 응답(필드 부재) 폴백: 게시 시각만 표기.
-      if (data.explanation_as_of) {
-        var asOf = new Date(data.explanation_as_of).toLocaleTimeString('ko-KR', {
-          timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
-        });
-        el('ai-published').textContent = asOf + ' 기준 · ' + published + ' 게시';
-      } else {
-        el('ai-published').textContent = published + ' 게시';
-      }
+      el('ai-published').textContent = published + ' 게시';
       // summary 는 빈 줄 구분 문단 텍스트 — 블록이 여럿이면 첫 블록을 헤드라인으로 올린다(시드 규칙)
       var blocks = data.summary.split(/\n{2,}/);
       var headline = blocks.length > 1 ? blocks.shift() : null;
