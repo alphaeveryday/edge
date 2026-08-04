@@ -148,6 +148,21 @@ def _orth(x: np.ndarray, basis: np.ndarray, x_now: float,
 
 # ── 자료 ──────────────────────────────────────────────────────────────────
 @lru_cache(maxsize=64)
+def etf_label(lake, etf: str, fallback: str) -> str:
+    """ETF 이름은 **`s3_etf_profile` 이 정본**이다 - `layers_daily` 는 못 믿는다.
+
+    실측: `layers_daily` 의 `symbol='091160'` 이름이 'SK hynix Inc.' 다(백필 소스의
+    yfinance 오매핑). 엔진이 그걸 사실로 인쇄해 KODEX 반도체를 하이닉스로 불렀다.
+    프로필은 발행사 등록명(`display_name`)을 싣는다 - 부재면 폴백을 그대로 쓴다.
+    """
+    try:
+        rows = lake.sql("SELECT any_value(display_name) FROM s3_etf_profile "
+                        f"WHERE market = 'KR' AND etf_id = '{etf}'")
+    except Exception:                       # noqa: BLE001 - 프로필 부재는 폴백
+        return fallback
+    return str(rows[0][0]) if rows and rows[0][0] else fallback
+
+
 def _series(lake, day: str, kinds: tuple[str, ...]) -> dict[str, tuple]:
     """{symbol: (name, {date: log수익률}, {거래정지 날짜})}. 당일 포함.
 
@@ -388,7 +403,8 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     idio = y_now - sum(x.contribution for x in layers)
     names, wsum, wtot, rho, used, halted = _names(
         lake, etf, day, hist, basis, basis_now, top)
-    return Rollup(etf, meta.get(etf, etf), day, y_now, tuple(layers), idio, names,
+    return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
+                  tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, rho, used, wtot,
                   tuple(sorted(meta.get(t, t) for t in twins)),
                   tuple(sorted(meta.get(t, t) for t in alien)), halted,

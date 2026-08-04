@@ -108,6 +108,7 @@ US_FACTOR = {
     "2013": "SOX",   # 코스닥 반도체
 }
 US_FACTOR_DEFAULT = "GSPC"
+SECTOR_DOMINANCE = 0.50   # 비중 최빈 업종이 이 미만이면 섹터 펀드가 아니다
 
 
 def _us_factor(lake, tk6: str, day: str) -> str:
@@ -118,6 +119,12 @@ def _us_factor(lake, tk6: str, day: str) -> str:
     GSPC 로 떨어져 '밤사이 미국 세션 수익률 없음' 이 됐고, 정작 밤사이 필라델피아
     반도체가 +8.19% 였다. 팩터를 못 고르면 환원이 통째로 침묵한다.
     """
+    # **시장 프록시 자신의 팩터는 광의 지수다** (범주). KODEX 200 은 비중으로 보면
+    # 전기전자 68% 라 섹터 게이트를 통과해 SOX 로 갔다 - 그러면 '시장' 층이 섹터
+    # 지수로 정의되고 분해가 순환한다. 시장은 시장으로만 환원한다.
+    from .layers import MARKET_CODE
+    if tk6 == MARKET_CODE:
+        return US_FACTOR_DEFAULT
     rows = lake.sql(f"""
         SELECT code FROM sector_member
         WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'
@@ -128,10 +135,29 @@ def _us_factor(lake, tk6: str, day: str) -> str:
         from .layers import holdings
         tks = {t.split(".")[0][-6:] for t, _n, _w in holdings(lake, tk6, day)}
         if tks:
+            # **비중 가중** 최빈이다. 개수로 세면 코스닥 소형주 다수가 삼성전자·
+            # 하이닉스를 이긴다 - 실측 091160(KODEX 반도체): 개수 최빈이 2072(149종)
+            # 이라 US_FACTOR 미등록 → GSPC 로 떨어졌고, 정작 밤사이 필라델피아
+            # 반도체가 +8.19% 였다. 팩터는 **돈이 있는 곳**에 맞춰야 한다.
+            w = {t.split(".")[0][-6:]: wt for t, _n, wt in holdings(lake, tk6, day)}
+            vals = ", ".join(f"('{k}', {v})" for k, v in sorted(w.items()) if v)
+            # `sector_member` 는 티커당 as_of 가 여럿이다 - 그대로 조인하면 비중이
+            # 행 수만큼 부풀어 최빈이 뒤집힌다(실측: 전부 GSPC 로 붕괴).
             r2 = lake.sql(f"""
-                SELECT code FROM sector_member WHERE as_of <= DATE '{day}'
-                  AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
-                GROUP BY 1 ORDER BY count(*) DESC LIMIT 1""")
+                WITH hw(ticker, wt) AS (VALUES {vals}),
+                     one AS (SELECT ticker, code FROM (
+                       SELECT ticker, code, row_number() OVER (
+                                PARTITION BY ticker ORDER BY as_of DESC) AS rn
+                       FROM sector_member WHERE as_of <= DATE '{day}') WHERE rn = 1)
+                SELECT one.code, sum(hw.wt) / sum(sum(hw.wt)) OVER () AS share
+                FROM one JOIN hw ON hw.ticker = one.ticker
+                GROUP BY 1 ORDER BY 2 DESC LIMIT 1""") if vals else []
+            # **지배해야 섹터다.** 광의 ETF 도 비중 최빈 업종은 있다 - 실측 069500
+            # (KODEX 200): 삼성전자·하이닉스 때문에 전기전자가 1위라 SOX 로 갔다.
+            # 코스피200 의 밤사이 팩터는 반도체가 아니라 광의 지수다. 한 업종이
+            # 절반을 넘지 못하면 그것은 섹터 펀드가 아니다.
+            if r2 and float(r2[0][1]) < SECTOR_DOMINANCE:
+                return US_FACTOR_DEFAULT
             if r2:
                 return US_FACTOR.get(str(r2[0][0]), US_FACTOR_DEFAULT)
     except Exception:                               # noqa: BLE001 - 부재는 기본값
@@ -250,6 +276,12 @@ def peer_context(lake, ticker: str, day: str) -> tuple[str, int, float, float] |
 def sector_name_of(lake, tk6: str, day: str) -> str:
     """이 종목의 KRX 업종명. 코드만 보여주면 사람이 못 읽는다."""
     from .krxsector import sector_name
+    # **시장 프록시 자신의 팩터는 광의 지수다** (범주). KODEX 200 은 비중으로 보면
+    # 전기전자 68% 라 섹터 게이트를 통과해 SOX 로 갔다 - 그러면 '시장' 층이 섹터
+    # 지수로 정의되고 분해가 순환한다. 시장은 시장으로만 환원한다.
+    from .layers import MARKET_CODE
+    if tk6 == MARKET_CODE:
+        return US_FACTOR_DEFAULT
     rows = lake.sql(f"""
         SELECT code FROM sector_member
         WHERE ticker = '{tk6}' AND as_of <= DATE '{day}'

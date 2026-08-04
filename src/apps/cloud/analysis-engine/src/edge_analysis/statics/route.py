@@ -68,8 +68,7 @@ def route_etf(roll, premium=None) -> Route:
                      ())
     # 층 이름을 같이 싣는다 - "섹터 -2.34 · 섹터 -5.74" 는 둘이 뭔지 못 알려준다.
     parts: list[tuple[str, float]] = [
-        (f"{x.kind}({x.name})" if x.kind == "섹터" else x.kind, x.contribution)
-        for x in roll.layers]
+        (f"{x.kind}({x.name})", x.contribution) for x in roll.layers]
     parts.append(("고유", roll.idio))
     tot = sum(abs(v) for _k, v in parts) or 1.0
     lab, val = max(parts, key=lambda kv: abs(kv[1]))
