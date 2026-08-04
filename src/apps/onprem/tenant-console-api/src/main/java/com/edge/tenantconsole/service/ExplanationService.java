@@ -108,6 +108,10 @@ public class ExplanationService {
 		List<String> ids = items.stream().map(AnalysisItemEntity::getExplanationResultId).toList();
 		Map<String, String> reasons = reviewReasonsFor(items);
 		Map<String, String> finals = publishedSummariesFor(ids);
+		// 노출 head(ALPHA-744) — 다스냅샷 공존에서 "지금 고객 화면의 그 판"은 서빙 술어
+		// 전사 쿼리가 판정한다. publishedSummariesFor 의 publication_id 최대 선택은 final
+		// 문구용이라 술어가 다르다(head 판정에 쓰면 서빙 진실과 어긋난다).
+		Set<String> heads = Set.copyOf(publishedSummaryRepository.findServingHeadItemIds());
 		return items.stream().map(it -> new Explanation(
 				it.getExplanationResultId(),
 				displayName(it),
@@ -116,6 +120,8 @@ public class ExplanationService {
 				it.getConfidenceLevel(),
 				reasons.get(it.getExplanationResultId()),
 				it.getReceivedAt(),
+				it.getExplanationAsOf(),
+				heads.contains(it.getExplanationResultId()),
 				parseEvidence(it.getEvidences()),
 				it.getSummary(),
 				finals.getOrDefault(it.getExplanationResultId(), it.getSummary()))

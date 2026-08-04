@@ -43,6 +43,10 @@ export interface Explanation {
   receivedRelative: string;
   /** 반입 절대 시각 ("2026-07-11 10:42 KST") */
   receivedAt: string;
+  /** 스냅샷 기준시각 ("2026-07-11 16:00 KST") — 다스냅샷 공존 판별 축(ALPHA-744) */
+  explanationAsOf: string;
+  /** 현재 노출 head 여부 — 서버가 서빙 술어("유효 최신 승리")로 판정, UI 파생 금지(ALPHA-744) */
+  serving: boolean;
   evidence: Evidence[];
   /** 모델이 생성한 원본 설명 문구 */
   original: string;

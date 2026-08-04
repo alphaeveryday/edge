@@ -4,6 +4,7 @@ import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
 import com.edge.tenantconsole.service.ExplanationService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,6 +31,14 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 	private long cursor = 60700;
 
+	@BeforeEach
+	void resetServingScope() {
+		// head 판정(serving)은 serving_scope 게이트를 포함한다 — ScopeIT 등 다른 클래스가
+		// 공유 컨테이너에 남긴 토글(MARKET XKRX OFF 는 전역 차단)이 실행 순서에 따라 head
+		// 단언을 무너뜨리지 않게 클래스 진입마다 비운다(ScopeIT 의 격리 패턴과 동일).
+		jdbc.update("DELETE FROM serving_scope");
+	}
+
 	private long seedActiveRule(String ruleType, String action) {
 		jdbc.update("UPDATE policy_version SET deactivated_at = now() "
 				+ "WHERE activated_at IS NOT NULL AND deactivated_at IS NULL");
@@ -45,13 +54,21 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 	private void seedItem(String id, String ticker, String name, String status, String confidence,
 			String summary, String evidencesJson, OffsetDateTime receivedAt) {
+		seedItem(id, ticker, name, status, confidence, summary, evidencesJson, receivedAt,
+				OffsetDateTime.now());
+	}
+
+	/** as_of 지정 오버로드 — 다스냅샷 공존(head 판정) 테스트가 스냅샷 축을 고정한다(ALPHA-744). */
+	private void seedItem(String id, String ticker, String name, String status, String confidence,
+			String summary, String evidencesJson, OffsetDateTime receivedAt, OffsetDateTime asOf) {
 		jdbc.update("""
 				INSERT INTO analysis_item (explanation_result_id, etf_instrument_id, etf_ticker,
 				    etf_name, trade_date, explanation_as_of, explanation_type, summary,
 				    confidence_level, status, source_cursor, evidences, received_at)
-				VALUES (?, 'i-607', ?, ?, '2026-07-15', now(), 'EVENT_SUPPORTED', ?, ?, ?, ?,
+				VALUES (?, 'i-607', ?, ?, '2026-07-15', ?, 'EVENT_SUPPORTED', ?, ?, ?, ?,
 				    CAST(? AS jsonb), ?)
-				""", id, ticker, name, summary, confidence, status, cursor++, evidencesJson, receivedAt);
+				""", id, ticker, name, asOf, summary, confidence, status, cursor++, evidencesJson,
+				receivedAt);
 	}
 
 	private void seedCheck(String itemId, long ruleId, String result) {
@@ -224,6 +241,127 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 		List<String> ids = explanations.list().stream().map(Explanation::id).toList();
 		assertThat(ids).doesNotContain("it607-received", "it607-invalidated");
+	}
+
+	@Test
+	void 노출_head_는_같은_티커_다스냅샷_중_유효_최신이다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-head-old", "607HDA", "포스코", "AUTO_PUBLISHED", "LOW", "구 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-head-new", "607HDA", "포스코", "AUTO_PUBLISHED", "LOW", "신 스냅샷", "[]",
+				OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-head-old', '607HDA', '2026-07-15', ?)", older);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-head-new', '607HDA', '2026-07-15', ?)", newer);
+
+		// WHY: 공존(ALPHA-743) 후 배지는 서빙 진실(유효 최신 승리)과 일치해야 한다 — head 아닌
+		// 항목의 중단을 "노출을 끊었다"로 오인하는 게 이 티켓(ALPHA-744)이 막는 사고다.
+		assertThat(find("it607-head-new").serving()).isTrue();
+		assertThat(find("it607-head-old").serving()).isFalse();
+	}
+
+	@Test
+	void head_무효화_시_직전_스냅샷이_노출_head_다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-fb-old", "607FBK", "한화", "AUTO_PUBLISHED", "LOW", "직전 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-fb-new", "607FBK", "한화", "INVALIDATED", "LOW", "무효화 스냅샷", "[]",
+				OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-fb-old', '607FBK', '2026-07-15', ?)", older);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of, status) VALUES ('it607-fb-new', '607FBK', '2026-07-15', ?, "
+				+ "'INVALIDATED')", newer);
+
+		// WHY: head 는 as_of 파생이 아니라 유효(PUBLISHED) 최신이어야 한다 — as_of 만 보면
+		// 무효화 fallback(직전 스냅샷 재노출, ADR-0045 결정 3)에서 죽은 판을 head 로 가리킨다.
+		assertThat(find("it607-fb-old").serving()).isTrue();
+	}
+
+	@Test
+	void 게시본_없는_항목은_as_of_최신이어도_노출_head_가_아니다() {
+		OffsetDateTime older = OffsetDateTime.parse("2026-07-15T14:00:00+09:00");
+		OffsetDateTime newer = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+		seedItem("it607-ghost-pub", "607GHO", "두산", "AUTO_PUBLISHED", "LOW", "게시된 스냅샷", "[]",
+				OffsetDateTime.now(), older);
+		seedItem("it607-ghost-new", "607GHO", "두산", "AUTO_PUBLISHED", "LOW", "게시본 없는 스냅샷",
+				"[]", OffsetDateTime.now(), newer);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-ghost-pub', '607GHO', '2026-07-15', ?)", older);
+
+		// WHY: 항목 상태·as_of 만으로 head 를 파생하면 게시본 없는 유령 항목(ALPHA-724 계열)이
+		// head 로 표시된다 — 고객 화면의 진실은 publication 이므로 배지는 게시본 실재에 근거해야
+		// 한다. 무효화 fallback IT 는 INVALIDATED 항목이 목록에서 빠져 이 반례를 못 잡는다.
+		assertThat(find("it607-ghost-pub").serving()).isTrue();
+		assertThat(find("it607-ghost-new").serving()).isFalse();
+	}
+
+	@Test
+	void 노출_head_는_as_of_보다_거래일이_우선한다() {
+		seedItem("it607-day-old", "607DAY", "효성", "AUTO_PUBLISHED", "LOW", "전일 늦은 스냅샷",
+				"[]", OffsetDateTime.now(), OffsetDateTime.parse("2026-07-14T16:00:00+09:00"));
+		seedItem("it607-day-new", "607DAY", "효성", "AUTO_PUBLISHED", "LOW", "당일 이른 스냅샷",
+				"[]", OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T10:00:00+09:00"));
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-day-old', '607DAY', '2026-07-14', "
+				+ "'2026-07-14T16:00:00+09:00')");
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-day-new', '607DAY', '2026-07-15', "
+				+ "'2026-07-15T10:00:00+09:00')");
+
+		// WHY: 서빙 정렬(SSOT)은 trade_date → as_of 순이다 — as_of 우선으로 전사가 어긋나면
+		// 전일의 늦은 스냅샷(16:00)이 당일 판(10:00)을 제치고 head 로 표시된다.
+		assertThat(find("it607-day-new").serving()).isTrue();
+		assertThat(find("it607-day-old").serving()).isFalse();
+	}
+
+	@Test
+	void head_판정은_게시본_상태와_항목_상태_게이트를_각각_요구한다() {
+		OffsetDateTime head = OffsetDateTime.parse("2026-07-15T12:00:00+09:00");
+		seedItem("it607-gate-head", "607GAT", "한전", "AUTO_PUBLISHED", "LOW", "정상 head", "[]",
+				OffsetDateTime.now(), head);
+		seedItem("it607-gate-pub", "607GAT", "한전", "AUTO_PUBLISHED", "LOW", "내려간 게시본", "[]",
+				OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T16:00:00+09:00"));
+		seedItem("it607-gate-item", "607GAT", "한전", "REJECTED", "LOW", "비노출 항목 상태", "[]",
+				OffsetDateTime.now(), OffsetDateTime.parse("2026-07-15T14:00:00+09:00"));
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-gate-head', '607GAT', '2026-07-15', ?)", head);
+		// p.status 게이트 반례 — 게시본이 내려갔으면(UNPUBLISHED) as_of 최신이어도 head 가 아니다.
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of, status, unpublished_at) VALUES ('it607-gate-pub', '607GAT', "
+				+ "'2026-07-15', '2026-07-15T16:00:00+09:00', 'UNPUBLISHED', now())");
+		// a.status 게이트 반례 — 게시본이 PUBLISHED 여도 항목이 노출 상태가 아니면 head 가 아니다.
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-gate-item', '607GAT', '2026-07-15', "
+				+ "'2026-07-15T14:00:00+09:00')");
+
+		// WHY: 서빙 술어(SSOT)는 p.status='PUBLISHED' × a.status IN(노출 상태) 두 게이트다.
+		// 무효화 실플로우 픽스처는 둘을 함께 바꿔 상관되므로, 한 게이트가 빠진 오전사를 여기서
+		// 각각 독립으로 잡는다(도달 희귀 상태여도 전사 충실성이 계약이다).
+		assertThat(find("it607-gate-head").serving()).isTrue();
+		assertThat(find("it607-gate-pub").serving()).isFalse();
+		assertThat(find("it607-gate-item").serving()).isFalse();
+	}
+
+	@Test
+	void 제공_범위에서_제외된_종목은_노출_head_가_아니다() {
+		OffsetDateTime asOf = OffsetDateTime.parse("2026-07-15T12:00:00+09:00");
+		seedItem("it607-scope-off", "607SCP", "롯데", "AUTO_PUBLISHED", "LOW", "제외 종목", "[]",
+				OffsetDateTime.now(), asOf);
+		jdbc.update("INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, "
+				+ "explanation_as_of) VALUES ('it607-scope-off', '607SCP', '2026-07-15', ?)", asOf);
+		jdbc.update("INSERT INTO serving_scope (scope_type, scope_key, enabled) "
+				+ "VALUES ('INSTRUMENT', '607SCP', false)");
+
+		// WHY: publication-api 는 제공 범위 차단이면 게시분 조회 전에 204 로 수렴한다
+		// (isServingBlocked) — 게시·항목 상태만 보면 고객이 못 보는 종목에 "노출 중" 배지가
+		// 뜬다. MARKET(XKRX) 전역 토글은 같은 NOT EXISTS 분기이나 공유 컨테이너의 다른
+		// 테스트를 전역 차단하므로 여기선 INSTRUMENT 로만 고정한다(전역 실효화는
+		// publication-api ExplanationScopeIntegrationTest 소관).
+		assertThat(find("it607-scope-off").serving()).isFalse();
 	}
 
 	@Test

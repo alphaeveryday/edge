@@ -23,6 +23,7 @@ class ExplanationResponseTest {
 	private static Explanation sample(String reviewReason) {
 		return new Explanation("expr_LOCAL01", "삼성전자", "005930", "REVIEW_REQUIRED", "HIGH",
 				reviewReason, OffsetDateTime.parse("2026-07-11T10:42:00+09:00"),
+				OffsetDateTime.parse("2026-07-11T16:00:00+09:00"), true,
 				List.of(new Explanation.Evidence("DISCLOSURE", "3분기 잠정 실적 공시", "KIND",
 								OffsetDateTime.parse("2026-07-11T10:31:00+09:00"),
 								"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260711000001"),
@@ -46,6 +47,9 @@ class ExplanationResponseTest {
 		assertThat(json.get("original").asString()).isEqualTo("원본 문구");
 		assertThat(json.get("receivedAt").asString()).isEqualTo("2026-07-11 10:42 KST");
 		assertThat(json.get("receivedRelative").asString()).endsWith("전");
+		// 기준시각·노출 head(ALPHA-744) — UI 는 이 두 필드로 다스냅샷 공존을 판별한다
+		assertThat(json.get("explanationAsOf").asString()).isEqualTo("2026-07-11 16:00 KST");
+		assertThat(json.get("serving").asBoolean()).isTrue();
 	}
 
 	@Test

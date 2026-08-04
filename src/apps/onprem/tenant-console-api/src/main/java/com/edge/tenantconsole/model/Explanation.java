@@ -12,6 +12,9 @@ import java.util.List;
  * <p>UI 계약 필드 중 market·direction·changePct 는 온프렘 원장에 없어(경계면 확장
  * ALPHA-497 이연 — event-bundle-schema.md) 이 표현에도 없다. 축소 계약(사용자 결정
  * 2026-07-29)에 따라 화면에서도 제거됐고, ALPHA-497 materialization 후 복원한다.
+ *
+ * <p>explanationAsOf(스냅샷 기준시각)·serving(노출 head 여부)은 다스냅샷 공존(ALPHA-743)
+ * 판별 축(ALPHA-744) — serving 은 서버가 서빙 술어로 판정한 값이다(UI 파생 금지).
  */
 public record Explanation(
 		String id,
@@ -21,6 +24,8 @@ public record Explanation(
 		String confidence,
 		String reviewReason,
 		OffsetDateTime receivedAt,
+		OffsetDateTime explanationAsOf,
+		boolean serving,
 		List<Evidence> evidence,
 		String original,
 		String finalText
