@@ -409,3 +409,8 @@ variable "minute_session_source_group" {
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
   default     = "kis"
 }
+
+variable "super_admin_api_url" {
+  description = "ExposureReverted 회수 집행 대상(ALPHA-746) — analysis-consumer 가 부르는 super-admin-api base URL. 무효화(WITHDRAWN 전이·INVALIDATION 발번·감사)의 발화자를 super-admin 하나로 유지한다"
+  type        = string
+}

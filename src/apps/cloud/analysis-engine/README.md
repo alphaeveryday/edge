@@ -123,6 +123,9 @@ python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 # --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
 # explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
 # 분봉 window·시가 원장 미준비는 ReturnsNotReady 로 120초 지연 재시도(짧은 커밋 지연).
+# 같은 큐의 ExposureReverted(가격이 전일 종가 1% 이내로 복귀, ALPHA-746)는 그 종목·세션의
+# 분봉 기원 PUBLISHED 설명을 super-admin 무효화 API(로그인 세션 → /analyses/{run}/invalidate)
+# 로 회수한다 — 엔진이 DB 를 직접 쓰지 않는다(INVALIDATION 발화자 단일화, ALPHA-440).
 # --max-polls 는 검증용: 계약 위반·처리 실패가 있으면 exit 1.
 EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
   python -m edge_analysis consume-triggers --max-polls 3
@@ -149,6 +152,8 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 | `CANONICAL_MANIFEST` | 생성 매니페스트(`infra/canonical/pit-manifest.yml`) 경로. 비면 재무·컨센서스·지배구조 어휘가 표면에 안 실린다 | (없음) |
 | `CANONICAL_DATABASE` | canonical PIT 질의가 도는 Glue 데이터베이스 | (없음) — 예: `edge_lake_draft` |
 | `CANONICAL_ATHENA_OUTPUT` | Athena 결과 저장 `s3://` 경로 | (없음) |
+| `SUPER_ADMIN_API_URL` | ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api base URL. 소비자 전용 | (없음 — 비면 회수 경로 fail-loud) |
+| `SUPER_ADMIN_EMAIL`·`SUPER_ADMIN_PASSWORD` | 회수용 운영자 자격 (SSM SecureString 주입 — `/edge-dev-data-pipeline/super-admin/operator-email`·`operator-password`) | — |
 
 ## 배포
 
