@@ -47,6 +47,7 @@ class _FakeStore:
         self._trigger = trigger
         self._prereqs = prereqs
         self.calls: list[str] = []
+        self.explanation = None
 
     def load_entity_index(self):
         return {"005930": "ent_1"}
@@ -68,6 +69,7 @@ class _FakeStore:
         return self._prereqs
 
     def persist_explanation(self, settings, etf_instrument_id, explanation, **kwargs):
+        self.explanation = explanation
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
@@ -118,6 +120,14 @@ def test_triggered_day_persists_the_explanation():
     assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
 
 
+def test_statics_failure_is_persisted_as_low_confidence():
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    assert _run(store, _FakeS3()) == 0
+    assert store.explanation.confidence_level == "LOW"
+    assert "판정불가" in store.explanation.summary
+
+
 def test_missing_prerequisites_fall_back_to_s3():
     store = _FakeStore(trigger=_TRIGGER, prereqs={"profile": False, "route": None, "bundle": None})
     s3 = _FakeS3()
@@ -135,7 +145,6 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
     env 기본값(ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염되고,
     계보가 일 단위 축(price_movement_trigger_id)에 매달리면 FK 위반이다.
     """
-    from dataclasses import replace as _replace
 
     class _MinuteStore(_FakeStore):
         def __init__(self, prereqs):

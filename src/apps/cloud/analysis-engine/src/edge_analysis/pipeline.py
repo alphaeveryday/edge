@@ -71,8 +71,6 @@ def run(
         raise PipelineError(
             f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
             f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
-    # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다(ALPHA-467).
-    name_by_ticker = {h.ticker: h.name for h in holdings if h.name}
     if minute_row is not None:
         # 분봉 분해 입력(ALPHA-710) — 트리거 판정과 같은 축(세션 시가 대비)으로
         # 구성종목 장중 수익률을 파생한다. 기준 window 는 ETF 시가가 확정된 바로
@@ -213,7 +211,7 @@ def run(
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
-            text = (f"[ETF] {settings.etf_ticker} {day_iso} 통계 표면 부재 — "
+            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
                     f"{type(exc).__name__}: {str(exc)[:160]}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
     write_agent_trace(s3, settings, trace)
