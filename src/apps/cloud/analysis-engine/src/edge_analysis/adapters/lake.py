@@ -35,15 +35,19 @@ def minute_artifact_key(
 
 
 def _as_date(value: str) -> date | None:
-    """파티션 값을 `date` 로 — 날짜가 아니면 None.
+    """파티션 값을 `date` 로 — canonical 규약(`YYYY-MM-DD`)이 아니면 None.
 
-    `fromisoformat` 은 `2026-07-1x` 같은 비날짜를 거부한다. 길이·사전순 검사로 대신하면
-    같은 길이의 오염 값이 정상 파티션보다 뒤에 정렬돼 '직전 거래일'로 뽑힌다.
+    두 단계다. ① `fromisoformat` 이 `2026-07-1x` 같은 비날짜를 거부한다 — 길이·사전순
+    검사로 대신하면 같은 길이의 오염 값이 정상 파티션보다 뒤에 정렬돼 '직전 거래일'로
+    뽑힌다. ② **왕복 대조**로 기본형(`20260718`)·주차형을 거부한다 — 파이썬 3.11+ 의
+    `fromisoformat` 은 그것들도 받아, 레이크 경로 빌더가 쓰지 않는 형식의 디렉터리가
+    유효한 파티션으로 인정된다(경로 규약 SSOT 는 `lake/storage.py` 다).
     """
     try:
-        return date.fromisoformat(value)
+        parsed = date.fromisoformat(value)
     except ValueError:
         return None
+    return parsed if parsed.isoformat() == value else None
 
 
 def _price(value: Any) -> float | None:

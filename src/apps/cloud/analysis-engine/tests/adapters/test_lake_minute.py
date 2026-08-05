@@ -173,16 +173,20 @@ def test_boolean_prev_close_is_not_coerced_to_one():
     assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {}
 
 
-def test_prev_closes_sorts_by_parsed_date_not_string():
-    """정렬은 **파싱한 날짜**로 한다.
+def test_prev_closes_rejects_non_canonical_date_forms():
+    """canonical 경로 규약은 `YYYY-MM-DD` 하나다(`lake/storage.py` 가 SSOT).
 
-    `date.fromisoformat` 은 기본형(`20260718`)도 받는다(파이썬 3.11+). 파싱만 하고
-    문자열로 정렬하면 `'20260718' > '2026-07-19'`(ASCII `'0'` > `'-'`)라 더 **오래된**
-    날이 '직전 거래일'로 뽑혀 분모가 조용히 틀린다.
+    `date.fromisoformat` 은 파이썬 3.11+ 에서 기본형(`20260718`)·주차형도 받으므로
+    파싱 성공만으로 인정하면 규약 밖 디렉터리가 파티션이 된다.
+
+    규약 밖 값이 정상 파티션보다 **더 최신**이어야 이 가드가 물린다 — 더 오래된 값이면
+    날짜 정렬이 이미 정상 파티션을 고르므로 왕복 대조를 지워도 테스트가 통과한다
+    (실측: 그렇게 쓴 첫 판이 변이를 못 잡았다).
     """
     reader = _reader({
-        f"{PRICE_DAILY}trade_date=2026-07-19/p.parquet": _parquet(["005930"], [70000.0]),
-        f"{PRICE_DAILY}trade_date=20260718/p.parquet": _parquet(["005930"], [1.0]),
+        f"{PRICE_DAILY}trade_date=2026-07-17/p.parquet": _parquet(["005930"], [70000.0]),
+        f"{PRICE_DAILY}trade_date=20260719/p.parquet": _parquet(["005930"], [1.0]),
+        f"{PRICE_DAILY}trade_date=2026-W30-1/p.parquet": _parquet(["005930"], [2.0]),
     })
     assert reader.load_prev_closes("KR", date(2026, 7, 20)) == {"005930": 70000.0}
 
