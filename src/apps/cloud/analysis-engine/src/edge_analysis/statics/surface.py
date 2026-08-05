@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import inspect
+from functools import lru_cache
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -107,8 +108,22 @@ def _probe(lake, need: Need) -> tuple[int, int]:
     return n, d
 
 
+@lru_cache(maxsize=8)
+def _coverage_cached(lake, sig: tuple) -> dict[str, tuple[int, int]]:
+    """레이크·요구 조합당 한 번만 잰다.
+
+    캐시가 없으면 도구 호출마다 커버리지를 다시 센다. 실측: `s3_dg_market` 은 2.68억
+    행이라 `count(*)` + `count(DISTINCT trade_date)` 가 **48초**다. 주장 다섯 개를
+    검사하면 4분이 커버리지 확인에만 간다 - 도구가 아니라 게이트가 병목이 된다.
+
+    `sig` 는 요구 서명이다. 도구가 새로 등록되면 서명이 바뀌어 다시 잰다 - 등록 후에도
+    옛 커버리지를 쓰면 새 도구가 '데이터 부재' 로 조용히 사라진다.
+    """
+    return {t: _probe(lake, n) for t, n in sig}
+
+
 def coverage(lake) -> dict[str, tuple[int, int]]:
-    """요구된 표마다 (행, 일). 표당 최대 2질의 - 한 번 재서 돌려쓴다."""
+    """요구된 표마다 (행, 일). 표당 최대 2질의 - **레이크당 한 번만** 잰다."""
     want: dict[str, Need] = {}
     for tool in TOOLS.values():
         for n in tool.wants:
@@ -116,7 +131,7 @@ def coverage(lake) -> dict[str, tuple[int, int]]:
             cur = want.get(n.table)
             if cur is None or n.days > cur.days:
                 want[n.table] = n
-    return {t: _probe(lake, n) for t, n in sorted(want.items())}
+    return _coverage_cached(lake, tuple(sorted(want.items())))
 
 
 def available(lake, cov: dict[str, tuple[int, int]] | None = None) -> list[Tool]:
@@ -266,6 +281,9 @@ def _series_z(lake, *, instrument_id: str, day: str) -> dict:
 # 부르므로, 위쪽 정의가 모두 끝난 뒤여야 순환 import 가 성립한다.
 from . import (            # noqa: E402,F401 - 등록 부작용이 목적이다
     tool_baserate,
+    tool_consensus,
+    tool_dg,
+    tool_fin,
     tool_business,
     tool_flow,
     tool_peer,
