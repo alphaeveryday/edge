@@ -43,7 +43,6 @@ def run(
     # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
     minute_row = None
     minute_gate = None
-    open_window = None
     if settings.trigger_id:
         minute_row = store.fetch_minute_price_trigger(settings.trigger_id)
         if minute_row is None:
@@ -159,7 +158,7 @@ def run(
     # `event_search` 를 호출자가 정하게 두지 않는다 - 원장 CHECK 가 route_code 와
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.duck import CausalLake
-    from .statics.layers import decompose as layer_decompose
+    from .statics.layers import SESSION_OPEN, decompose as layer_decompose
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
@@ -215,7 +214,7 @@ def run(
             if minute_row is not None:
                 window = {
                     "instrument_id": etf_instrument_id,
-                    "window_start": open_window.astimezone(KST).strftime("%H:%M"),
+                    "window_start": SESSION_OPEN[:5],
                     "window_end": (
                         minute_row.window_start + timedelta(minutes=5)
                     ).astimezone(KST).strftime("%H:%M"),
