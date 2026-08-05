@@ -3,7 +3,11 @@
 # 최종 물리 스키마를 결정적 DBML(ERD)로 추출한다(scripts/gen-erd.sql).
 #
 # Flyway 가 DB 스키마 SSOT 이며 이 산출물(generated/*.dbml)은 파생물이다 — 사람이 편집하지 않는다.
-# schema-validate CI 가 마이그레이션 PR 마다 재생성해 커밋본과 대조하고, 어긋나면 fail-loud 로 막는다.
+# ⚠️ 재생성을 강제하는 CI 게이트는 없다. `.githooks/pre-commit` 이 마이그레이션 커밋에서 이 스크립트를
+# 돌리지만 pg18 이 없으면 경고만 하고 통과시키므로(훅 자체도 core.hooksPath 설정이 있어야 돈다),
+# 낡은 dbml 이 조용히 머지될 수 있다 — 마이그레이션을 추가했으면 이 스크립트를 직접 돌려 확인하라
+# (pg18 이 없으면 docker: `docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
+#  bash src/libs/schema/scripts/generate-erd.sh`).
 #
 # 의존: initdb · pg_ctl · createdb · psql (PostgreSQL 18 클라이언트+서버). 외부/npm 도구 없음.
 # 결정성: 임시 클러스터를 --no-locale(C 로케일)로 만들고 gen-erd.sql 의 ORDER BY 를 COLLATE "C"
