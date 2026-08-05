@@ -22,7 +22,8 @@ data-pipeline 의 `MinuteConsumer` 커널을 **쓰지 않는다** — 이 큐는
   코드 결함이 아니라 **시간이 낫게 하는** 실패다 → 120초 고정 지연으로 재확인하고,
   진짜 결손이면 반복이 receive 예산(16)을 태워 ≈32분 안에 DLQ 로 간다.
 - `RouteLockedError` — 같은 route 를 다른 소비자가 쥐고 있다(ALPHA-779). 실패가 아니라
-  양보다 → **지우지 않고** 60초로 되돌린다. 그 사이 이긴 쪽이 끝나면 프리플라이트가 흡수.
+  양보다 → **지우지 않고** 이긴 쪽의 처리 예산(900초)만큼 되돌린다. 그때면 run 이 있거나
+  (프리플라이트가 흡수) 락이 풀려 있다 — 짧게 되돌리면 재배달이 receive 예산을 태운다.
 - 봉투 계약 위반(파싱 불가·미지 event_type·trigger_id 결손) — 재시도로 낫지 않는다.
   **지우지도 않는다**(지우면 근거가 사라진다) → 짧은 재배달을 반복하다 DLQ 로 간다.
 - 그 외 예외(DB·LLM·일시 장애) — 기본 가시성으로 재배달. 예산 판정은 SQS 상한 몫이다.
@@ -321,9 +322,14 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             # 같은 메시지가 두 번 배달됐고 이 쪽이 졌다 — 실패가 아니라 양보다(ALPHA-779).
             # ⚠️ **지우지 않는다**: 지우면 receipt 가 달라도 메시지 자체가 사라져,
             # 이긴 쪽이 죽었을 때 재배달될 것이 없어진다(이긴 쪽의 안전망까지 없앤다).
-            # 짧게 되돌려 두면 그 사이 이긴 쪽이 끝나 프리플라이트가 흡수한다.
-            logger.info("route 선점당함 — 60초 뒤 재확인: %s", error)
-            _set_visibility(sqs, queue_url, receipt, 60)
+            # ⚠️ 되돌림 폭은 **이긴 쪽의 처리 예산**이다 — 60초 같은 짧은 값을 쓰면
+            # 900초짜리 처리 하나가 도는 동안 재배달이 15회 쌓여 receive 예산(16)을
+            # 태우고, 이긴 쪽이 저장 직전에 죽으면 원 큐엔 재시도할 메시지가 없다
+            # (DLQ 로 이미 빠져 나갔다). 예산이 만료될 때 깨어나면 그 시점엔 run 이
+            # 있거나(프리플라이트가 흡수) 락이 풀려 있다(이 쪽이 이어받는다).
+            logger.info("route 선점당함 — %d초 뒤 재확인: %s",
+                        PROCESSING_VISIBILITY_SECONDS, error)
+            _set_visibility(sqs, queue_url, receipt, PROCESSING_VISIBILITY_SECONDS)
             _count("locked")
             continue
         except Exception:

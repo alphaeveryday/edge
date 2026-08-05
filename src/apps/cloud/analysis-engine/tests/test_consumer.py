@@ -16,6 +16,7 @@ import pytest
 from edge_analysis.adapters.superadmin import SuperAdminUnavailableError
 from edge_analysis.config import ReturnsNotReadyError, RouteLockedError
 from edge_analysis.consumer import (
+    PROCESSING_VISIBILITY_SECONDS,
     RETURNS_RETRY_SECONDS,
     REVERT_REASON,
     consume_triggers,
@@ -139,9 +140,10 @@ def test_route_locked_leaves_message_and_is_not_a_failure():
     rc = consume_triggers("q", max_polls=1, process_fn=locked, sqs_client=sqs)
     assert rc == 0, "경합은 실패가 아니다"
     assert sqs.deleted == []
-    # 처리 전 연장(900) → 짧게 되돌림(60). 900 을 남겨두면 이긴 쪽이 끝난 뒤에도
-    # 15분간 재확인이 없어 그 트리거의 설명 여부를 아무도 안 본다.
-    assert [v for _, v in sqs.visibility] == [900, 60]
+    # 되돌림 폭 = 이긴 쪽의 처리 예산. 짧게(60초) 되돌리면 900초짜리 처리 하나가 도는
+    # 동안 재배달이 15회 쌓여 receive 예산(16)을 태우고, 이긴 쪽이 저장 직전에 죽으면
+    # 원 큐엔 재시도할 메시지가 없다 — 경합 방어가 유실 경로를 새로 만들면 안 된다.
+    assert [v for _, v in sqs.visibility] == [900, PROCESSING_VISIBILITY_SECONDS]
 
 
 def test_lock_precedes_duplicate_preflight():

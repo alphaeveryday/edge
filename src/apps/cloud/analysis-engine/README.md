@@ -118,11 +118,18 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 의 close 를 canonical price_daily **직전 거래일** 종가로 나눠 구성종목 장중 수익률을
 # 파생한다 — 판정(intraday-anchor-v2)과 같은 축(전일 종가 대비, ALPHA-747). 갭이
 # 기여에 포함된다. 시가 원장(minute_session_open)은 분해가 쓰지 않는다.
+# ⚠️ 소비자가 같은 트리거를 처리 중이면 이 수동 실행은 **exit 1 로 양보한다**(route
+# advisory lock, ALPHA-779) — 겹쳐 돌면 같은 트리거에 LLM 이 이중 과금된다. 재실행
+# 자체를 막지는 않는다: 경합이 없으면 그대로 돈다.
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 
 # 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
 # --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
 # explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
+# 프리플라이트는 **처리가 끝나야** 참이라 처리 중 재배달은 못 거른다 — 그 창은 route
+# advisory lock 이 닫는다(ALPHA-779, 락이 프리플라이트보다 먼저). 진 쪽은 메시지를
+# 지우지 않고 처리 예산(900초)만큼 되돌린다: 지우면 이긴 쪽의 재배달 안전망이 사라지고,
+# 짧게 되돌리면 재배달이 receive 예산(16)을 태운다.
 # 분봉 window 원장·직전 거래일 파티션 미준비는 ReturnsNotReady 로 120초 지연 재시도.
 # 그 사유는 `logger.info` 라 CLI 가 basicConfig(INFO) 를 건다 — 없으면 루트 기본
 # WARNING 에 삼켜져 실패가 로그에 `start` 만 남긴다(08-05 실측 709건).
