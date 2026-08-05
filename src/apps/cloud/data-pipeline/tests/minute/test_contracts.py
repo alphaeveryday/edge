@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from data_pipeline.minute.clock import VirtualClock
 from data_pipeline.minute.instrumentation import JSONL_FIELDS, JsonlInstrumentationWriter
 from data_pipeline.minute.models import (
+    FINAL_WINDOW_SETTLE_SEC,
     KST,
     WINDOWS_PER_EXTENDED_SESSION,
     WINDOWS_PER_SESSION,
@@ -27,6 +28,7 @@ from data_pipeline.minute.models import (
     content_checksum,
     load_universe,
     plan_session_windows,
+    scheduled_at_for,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -197,6 +199,35 @@ class TestTradingHoursClass:
             universe_version="v1", etf_ids=("E1",),
             constituent_ids=("C1", "C2"), extended_hours_ids=extended,
         )
+
+    def test_close_window_waits_for_the_auction_print(self):
+        """마감(15:30)으로 끝나는 window 만 늦게 집는다 — 종가 단일가 확정 대기.
+
+        `window_end` 즉시 집으면 단일가가 아직 캔들에 안 실려 미완성 봉(vol 0·직전가)이
+        커밋된다(08-03 실측: 0005G0 수집 43,710 V=0 vs 소급 43,305 V=140, 일봉 43,305).
+        지연이 0 이면 그 회귀가 그대로 돌아온다.
+        """
+        windows = plan_session_windows(SESSION_DATE, universe=None)
+        close_end = windows[-1][1]
+        assert close_end == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
+        assert scheduled_at_for(close_end) == close_end + timedelta(
+            seconds=FINAL_WINDOW_SETTLE_SEC)
+        assert FINAL_WINDOW_SETTLE_SEC > 0, "지연이 0 이면 미완성 봉이 다시 커밋된다"
+
+    def test_non_close_windows_are_scheduled_at_window_end(self):
+        """마감 아닌 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
+        windows = plan_session_windows(SESSION_DATE, universe=None)
+        assert all(scheduled_at_for(we) == we for _, we in windows[:-1])
+
+    def test_extended_session_also_defers_its_1530_window(self):
+        """시간외 세션(720)에도 15:30 로 끝나는 window 가 있고 거기에도 걸린다 —
+        단일가 체결 시각은 세션 길이와 무관하다. 마지막(20:00) window 는 대상이 아니다."""
+        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
+        by_end = {we: scheduled_at_for(we) for _, we in windows}
+        close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
+        assert by_end[close] == close + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+        last = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
+        assert by_end[last] == last
 
     def test_extended_universe_plans_720_windows(self):
         windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
