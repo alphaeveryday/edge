@@ -75,7 +75,8 @@ class MinuteLedger:
 
         재계획(같은 identity)은 no-op 이고, universe 가 다르면 UniverseConflictError.
         window 의 scheduled_at 은 `scheduled_at_for` 가 정한다 — 보통 window_end(구간이
-        닫혀야 봉이 있다)고, 마감 window 만 종가 단일가 확정을 기다려 늦춘다.
+        닫혀야 봉이 있다)고, 종가 단일가 접수 구간(15:20~15:30) window 만 마감 확정을
+        기다려 늦춘다.
 
         ⚠️ window INSERT 는 `DO NOTHING` 이라 **재계획이 기존 행의 scheduled_at 을 안
         고친다**. 이미 계획된 세션에 이 규칙을 소급 적용하려면 그 행을 직접 UPDATE 해야

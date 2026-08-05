@@ -119,10 +119,12 @@ class TestPlanSession:
         rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
         close_row = rows[-1]
         assert close_row["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
-        assert close_row["scheduled_at"] == close_row["window_end"] + timedelta(
-            seconds=FINAL_WINDOW_SETTLE_SEC)
-        # 나머지 389개는 그대로 window_end — 장중에 지연을 만들면 안 된다
-        assert all(w["scheduled_at"] == w["window_end"] for w in rows[:-1])
+        settled = close_row["window_end"] + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+        # 단일가 접수 구간(15:20~15:30)에 걸친 10개가 전부 마감 뒤로 — 마감 하나만 밀면
+        # 나머지 아홉이 벤더 복제 봉을 그대로 실어 5분봉 거래량을 부풀린다
+        assert all(w["scheduled_at"] == settled for w in rows[-10:])
+        # 나머지 380개는 그대로 window_end — 장중에 지연을 만들면 안 된다
+        assert all(w["scheduled_at"] == w["window_end"] for w in rows[:-10])
 
     def test_news_session_close_window_is_not_delayed(self):
         """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,
