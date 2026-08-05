@@ -17,8 +17,10 @@ from pydantic import ValidationError
 from data_pipeline.minute.clock import VirtualClock
 from data_pipeline.minute.instrumentation import JSONL_FIELDS, JsonlInstrumentationWriter
 from data_pipeline.minute.models import (
+    CLOSING_AUCTION_OPEN,
     FINAL_WINDOW_SETTLE_SEC,
     KST,
+    SESSION_CLOSE,
     WINDOWS_PER_EXTENDED_SESSION,
     WINDOWS_PER_SESSION,
     CollectionRequest,
@@ -201,7 +203,7 @@ class TestTradingHoursClass:
         )
 
     def test_close_window_waits_for_the_auction_print(self):
-        """마감(15:30)으로 끝나는 window 만 늦게 집는다 — 종가 단일가 확정 대기.
+        """마감(15:30)으로 끝나는 window 를 늦게 집는다 — 종가 단일가 확정 대기.
 
         `window_end` 즉시 집으면 단일가가 아직 캔들에 안 실려 미완성 봉(vol 0·직전가)이
         커밋된다(08-03 실측: 0005G0 수집 43,710 V=0 vs 소급 43,305 V=140, 일봉 43,305).
@@ -232,10 +234,45 @@ class TestTradingHoursClass:
         with pytest.raises(ValueError, match="naive"):
             scheduled_at_for(datetime(2026, 7, 31, 15, 30), dataset="price_minute")
 
+    def test_closing_auction_windows_all_wait_for_the_print(self):
+        """단일가 접수 구간(15:20~15:30) window 는 **전부** 마감 확정 뒤로 민다.
+
+        그 구간은 주문만 받고 체결이 없는데 벤더는 직전 체결 봉을 **거래량째 복제**해서
+        준다(08-05 실측 362/362 종목). 복제 봉은 `volume != 0` 이라 `received`(정상)로
+        접히고, 5분봉 롤업이 거래량을 합산해 마지막 버킷이 부푼다(중앙 1.37배·최대 60배).
+        마감 창 하나만 미루면 나머지 아홉 창이 그 회귀를 그대로 들고 있는다.
+        """
+        settled = datetime(2026, 7, 31, 15, 30, tzinfo=KST) + timedelta(
+            seconds=FINAL_WINDOW_SETTLE_SEC)
+        auction = [we for _, we in plan_session_windows(SESSION_DATE, universe=None)
+                   if CLOSING_AUCTION_OPEN < we.astimezone(KST).time() <= SESSION_CLOSE]
+        assert len(auction) == 10, "15:21~15:30 으로 끝나는 창 10개"
+        # 기준은 각 window_end 가 아니라 **마감 시각**이다 — 구간 전체가 같은 한 번의
+        # 체결을 기다리므로 15:21 창을 15:22 에 물어도 답은 여전히 복제 봉이다.
+        assert all(scheduled_at_for(we, dataset="price_minute") == settled for we in auction)
+
+    def test_the_rule_is_judged_on_the_kst_clock_not_the_input_tz(self):
+        """판정 축은 **KST 벽시계**다 — 입력 tz 로 비교하면 규칙이 통째로 빗나간다.
+
+        naive 거부(아래)는 tzinfo 유무만 본다. aware UTC 는 그 가드를 통과하므로,
+        `astimezone(KST)` 가 빠져도 KST 입력 테스트만으로는 전부 초록이다. 06:21Z 는
+        KST 15:21(접수 구간)인데 UTC 시각으로 보면 어느 경계에도 안 걸려 지연 없이
+        claim 되고, 그 창은 다시 벤더 복제 봉을 싣는다.
+        """
+        utc_end = datetime(2026, 7, 31, 6, 21, tzinfo=timezone.utc)  # = KST 15:21
+        assert scheduled_at_for(utc_end, dataset="price_minute") == datetime(
+            2026, 7, 31, 15, 30, tzinfo=KST) + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+
+    def test_last_trading_minute_is_not_delayed(self):
+        """반열림이라 `window_end == 15:20` 은 접수 **직전**의 마지막 실거래 분이다 —
+        여기까지 미루면 살아 있는 체결 정보를 이유 없이 10분 늦게 본다."""
+        last_traded = datetime(2026, 7, 31, 15, 20, tzinfo=KST)
+        assert scheduled_at_for(last_traded, dataset="price_minute") == last_traded
+
     def test_non_close_windows_are_scheduled_at_window_end(self):
-        """마감 아닌 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
+        """접수 구간 밖 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
         windows = plan_session_windows(SESSION_DATE, universe=None)
-        assert all(scheduled_at_for(we, dataset="price_minute") == we for _, we in windows[:-1])
+        assert all(scheduled_at_for(we, dataset="price_minute") == we for _, we in windows[:-10])
 
     def test_extended_session_also_defers_its_1530_window(self):
         """시간외 세션(720)에도 15:30 로 끝나는 window 가 있고 거기에도 걸린다 —
@@ -244,8 +281,12 @@ class TestTradingHoursClass:
         by_end = {we: scheduled_at_for(we, dataset="price_minute") for _, we in windows}
         close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert by_end[close] == close + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
-        last = datetime(2026, 7, 31, 20, 0, tzinfo=KST)
-        assert by_end[last] == last
+        # 상한을 20:00 하나로만 보면 조건을 EXTENDED_CLOSE 까지 넓히는 실수가 통과한다.
+        # 그러면 시간외 window 가 자기 window_end 보다 **먼저** due 가 돼 아직 닫히지도
+        # 않은 봉을 수집한다 — 접수 구간 밖은 전부 그대로여야 한다.
+        after_close = [we for we in by_end if we.astimezone(KST).time() > SESSION_CLOSE]
+        assert len(after_close) == 270, "15:31~20:00"
+        assert all(by_end[we] == we for we in after_close)
 
     def test_extended_universe_plans_720_windows(self):
         windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))

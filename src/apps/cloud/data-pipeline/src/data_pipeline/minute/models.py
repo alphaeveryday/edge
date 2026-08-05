@@ -43,8 +43,11 @@ EXTENDED_OPEN = time(8, 0)
 EXTENDED_CLOSE = time(20, 0)
 WINDOWS_PER_EXTENDED_SESSION = 720
 
-# 마감 window 를 집기 전에 기다리는 시간. KRX 종가 단일가는 15:20~15:30 접수 후
-# **15:30:00 에 한 번** 체결되는데, 벤더 캔들에 실리기까지 시차가 있다.
+# 종가 단일가 접수 개시. 이 시각부터 마감까지는 **주문만 받고 체결이 없다** — 그 구간
+# window 는 마감이 확정된 뒤에 집는다(`scheduled_at_for`).
+CLOSING_AUCTION_OPEN = time(15, 20)
+# 마감 확정을 기다리는 시간. KRX 종가 단일가는 15:20~15:30 접수 후 **15:30:00 에 한 번**
+# 체결되는데, 벤더 캔들에 실리기까지 시차가 있다.
 FINAL_WINDOW_SETTLE_SEC = 60
 # 그 지연이 걸리는 dataset. **가격 캔들 얘기**라 뉴스 세션(news_minute)에는 안 건다 —
 # 같은 `plan_session` 을 쓰지만 15:30 에 기다릴 이유가 없고, 1분 지연은 뉴스 realtime
@@ -55,24 +58,32 @@ PRICE_MINUTE_DATASET = "price_minute"
 def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
     """window 가 claim 가능해지는 시각 — 보통 `window_end`(구간이 닫혀야 봉이 있다).
 
-    ⚠️ **정규장 마감 경계(15:30)로 끝나는 window 만 예외**다. 그 window 를 `window_end`
-    즉시 집으면 종가 단일가가 아직 캔들에 안 실려 **미완성 봉(vol 0·직전가)** 이 커밋된다
-    — 2026-08-03 실측(우리 수집분 vs 같은 좌표 소급 조회):
+    ⚠️ **종가 단일가 접수 구간(15:20~15:30)에 걸친 window 는 예외**다 — 전부 마감 확정
+    뒤(15:31)로 민다. 그 구간은 주문만 받고 체결이 없는데, 벤더는 그 사실을 **제때 말해
+    주지 않는다**. 같은 좌표를 언제 묻느냐로 답이 갈린다(2026-08-05 실측, 005930):
 
-        0005G0  수집 43,710(V=0)   →  소급 43,305(V=140)     일봉 종가 43,305
-        091160  수집 111,890(V=0)  →  소급 111,905(V=4,368)  일봉 종가 111,905
+        15:19 봉  O247500 H247500 L247000 C247000  vol 26,328   ← 실제 체결
+        15:20~   그 봉이 여덟 창에 **거래량째 복제**된다        ← 접수 구간에 즉시 물은 답
+        15:29 봉  O246000 …                        vol 1,382,080 ← 단일가 체결
+        같은 좌표를 마감 뒤에 물으면 `vol 0`(무거래) 이 온다  ← 정직한 답
 
-    요청한 **좌표는 맞았다** — 나중에 물으면 종가와 정확히 일치한다. 창을 늘릴 문제가
-    아니라 **묻는 시각**의 문제다(개별주는 15:31 봉으로 밀리지만 ETF 는 15:30 봉에
-    담긴다 — 트리거 대상이 ETF 라 이 창이 맞는 창이다).
+    복제 봉은 `volume != 0` 이라 4분류에서 `received`(정상)로 접히고, 5분봉 롤업이
+    거래량을 합산하므로 마지막 버킷이 부푼다(08-05 실측 중앙 1.37배·최대 60배).
+    08-03 의 마감 봉 종가 불일치(0005G0 수집 43,710 V=0 → 소급 43,305 = 일봉 종가)도
+    같은 결함의 마지막 창 발현이었다.
+
+    요청한 **좌표는 맞다** — 창을 늘릴 문제가 아니라 **묻는 시각**의 문제다. 창을 안
+    만드는 게 아니라 claim 시각만 미루므로 원장에 구멍이 생기지 않고, KIS 는 한 콜이
+    `window_end` 로 끝나는 30분치라 콜 수도 늘지 않는다.
 
     지연을 `scheduled_at` 에 두는 이유: worker tick 안에서 자면 `worst_tick` 이 늘어
     `session_lease_seconds` 검증(기본값 여유 **15초**)에 걸리고, lease 가 처리 중 만료되면
     그 window 의 커밋이 fence 에 거부된다. `scheduled_at` 은 claim 조건이라 tick 을
     막지 않고 lease 불변식과 무관하다.
 
-    ⚠️ 시간외 세션(720 window)에도 15:30 로 끝나는 window 가 있고 거기에도 적용된다 —
-    단일가 체결 시각은 세션 길이와 무관하기 때문이다. drain 은 20:05 이라 여유가 있다.
+    ⚠️ 시간외 세션(720 window)에도 이 구간이 있고 거기에도 적용된다 — 단일가 체결 시각은
+    세션 길이와 무관하기 때문이다. 15:31 이후 window 는 안 걸린다. drain 은 20:05 이고
+    밀린 10창은 틱당 3창(realtime 1 + recovery budget 2)씩 빠져 여유가 있다.
     """
     if window_end.tzinfo is None or window_end.tzinfo.utcoffset(window_end) is None:
         # naive 는 실행 환경 TZ 로 해석돼 **호스트마다 다른 결과**가 나온다 — KST 호스트
@@ -81,9 +92,16 @@ def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
         raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
     if dataset != PRICE_MINUTE_DATASET:
         return window_end
-    if window_end.astimezone(KST).time() != SESSION_CLOSE:
+    local_end = window_end.astimezone(KST)
+    # 반열림이라 접수 개시(15:20)로 **끝나는** window 는 마지막 실거래 분이다 — 안 민다.
+    if not CLOSING_AUCTION_OPEN < local_end.time() <= SESSION_CLOSE:
         return window_end
-    return window_end + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+    # 기준은 window_end 가 아니라 **마감 시각**이다 — 구간 전체가 같은 한 번의 체결을
+    # 기다리므로 15:21 창이라고 15:22 에 물어도 답은 여전히 복제 봉이다.
+    settled = local_end.replace(
+        hour=SESSION_CLOSE.hour, minute=SESSION_CLOSE.minute, second=0, microsecond=0
+    )
+    return settled + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
 
 ExecutionMode = Literal["one_shot", "resident"]
 
