@@ -41,15 +41,58 @@ _WHEN = ((9, 30, "장 초반"), (11, 0, "오전 중반"), (13, 0, "점심 무렵
 
 
 def _when_word(t: dt.datetime) -> str:
-    """그 시각이 속한 시간대 낱말. 경계는 관례이고 셀별로 바꾸지 않는다."""
-    for h, m, w in _WHEN:
-        if (t.hour, t.minute) < (h, m):
+    """앞 구간을 **간접 지시**할 때만 쓰는 시간대 낱말. 요구창 본문에는 쓰지 않는다."""
+    for h, m, w in reversed(_WHEN):
+        if (t.hour, t.minute) >= (h, m):
             return w
-    return "장 막판"
+    return "장 초반"
 
 
 class IntervalError(ValueError):
     """구간이 시각으로 읽히지 않는다 — 형식 오류만 던진다(범위는 자른다)."""
+
+
+def _clock(t: dt.time | dt.datetime, *, half: bool = True) -> str:
+    """`13:30` -> `오후 1시 30분`. 사람이 시계를 읽는 말로 **정확한 시각**을 적는다.
+
+    '이 시간대' 같은 지시어를 쓰지 않는다 - 문단에서 지시어가 겹치면 어느 구간을
+    말하는지 사라진다. 그래서 문장마다 시각이 그대로 들어간다.
+    """
+    h, mi = t.hour, t.minute
+    ap = "오전 " if h < 12 else "오후 "
+    hh = h if h <= 12 else h - 12
+    return (ap if half else "") + f"{hh}시" + (f" {mi}분" if mi else "")
+
+
+def _span(w: Window) -> str:
+    """창 하나를 부르는 말. 뒤쪽 시각은 오전/오후가 같으면 접두를 뗀다(자연스러운 한국어)."""
+    if w.kind == "gap":
+        return "전일 종가부터 오늘 시가까지"
+    same = (w.start.hour < 12) == (w.end.hour < 12)
+    return f"{_clock(w.start)}부터 {_clock(w.end, half=not same)}까지"
+
+
+def _para(pairs: list[tuple[str, str]], indent: str = "  ",
+          width: int = 88) -> list[str]:
+    """(문장, 근거) 쌍을 **한 문단**으로 엮는다 - 글머리표가 아니라 이어지는 글이다.
+
+    근거는 문장 바로 뒤 대괄호에 붙는다. 문장 안에 수치를 넣으면 문단이 표처럼
+    읽히고, 근거를 문단 밖으로 빼면 어느 문장의 근거인지 사라진다.
+    """
+    words: list[str] = []
+    for text, ground in pairs:
+        words += text.split()
+        if ground:
+            words.append(f"[{ground}]")
+    out, line = [], indent
+    for tok in words:
+        if len(line) + len(tok) + 1 > width and line.strip():
+            out.append(line.rstrip())
+            line = indent
+        line += tok + " "
+    if line.strip():
+        out.append(line.rstrip())
+    return out
 
 
 def clamp(t0: str, t1: str) -> tuple[str, str, list[str]]:
@@ -116,7 +159,8 @@ def _window_ret(bars: list[tuple[dt.datetime, float, float]],
     return math.log(seg[-1][2] / seg[0][1]), len(seg)
 
 
-def _context(w: Window, ret: float, before: list[tuple[str, float, str]]) -> list[str]:
+def _context(w: Window, ret: float,
+             before: list[tuple[str, float, str]]) -> list[tuple[str, str]]:
     """요구창 앞에서 **더 큰** 움직임이 있었으면 그것을 간접적으로 얹는다.
 
     사용자 규약: 정보 접근은 이전 시간 전부 가능하고 **설명 대상만** 요구 구간이다.
@@ -129,51 +173,75 @@ def _context(w: Window, ret: float, before: list[tuple[str, float, str]]) -> lis
     when, r = max(big, key=lambda x: abs(x[1]))
     same = (r > 0) == (ret > 0)
     if same:
-        return [f"{when}부터 이어진 흐름이 이 시간대에도 계속됐어요. "
-                "앞선 움직임이 더 컸고, 이 구간은 그 연장선에 있어요."]
-    return [f"{when}에 반대 방향으로 더 크게 움직인 뒤였어요. "
-            "이 시간대의 움직임은 그 되돌림으로 읽는 편이 자연스러워요."]
+        return [(f"{when}부터 이어진 흐름이 그대로 이어진 구간이에요."
+                 " 앞선 움직임이 더 컸고, 여기는 그 연장선이에요.",
+                 f"앞 구간 몫 {r * 100:+.2f}%p")]
+    return [(f"{when}에 반대 방향으로 더 크게 움직인 뒤였어요."
+             " 그 되돌림으로 읽는 편이 자연스러워요.",
+             f"앞 구간 몫 {r * 100:+.2f}%p")]
 
 
 def _reasons(w: Window, ret: float, rank: int, roll, inside: list[str],
-             after: int) -> list[str]:
-    """창 하나의 근거들. **수치 없이**, 한 줄보다 길게. 없는 근거는 말하지 않는다."""
+             after: int) -> list[tuple[str, str]]:
+    """창 하나의 (문장, 근거). 문장에는 **정확한 시각**이 들어가고 수치는 근거로 간다."""
     up = "올랐" if ret > 0 else "내렸"
-    out: list[str] = []
+    span = _span(w)
+    out: list[tuple[str, str]] = []
     if w.kind == "gap":
-        out.append(f"밤사이 정보가 한꺼번에 반영되면서 시가가 전일 종가보다 {up}어요. "
-                   "이 구간은 장이 열려 있지 않아 더 잘게 나눌 수 없고, "
-                   "그래서 안에서 무엇이 먼저였는지는 가릴 수 없어요.")
+        out.append((f"{span} 정보가 한꺼번에 반영되면서 시가가 전일 종가보다 {up}어요."
+                    " 장이 열려 있지 않은 구간이라 더 잘게 나눌 수 없고,"
+                    " 그래서 안에서 무엇이 먼저였는지는 가릴 수 없어요.",
+                    f"갭 {ret * 100:+.3f}%p"))
     else:
         word = _RANK_WORD[rank] if rank < len(_RANK_WORD) else "비교적 작게"
-        out.append(f"이 시간대에 {word} {up}어요. "
-                   "같은 날의 다른 시간대와 견줘 본 순서이고, "
-                   "얼마나 움직였는지는 위의 표가 말해요.")
+        out.append((f"{span} {word} {up}어요."
+                    " 같은 날의 다른 구간과 견줘 본 순서예요.",
+                    f"구간 몫 {ret * 100:+.3f}%p · 하루에서 {rank + 1}번째"))
     if roll is not None and roll.layers:
         big = max(roll.layers, key=lambda x: abs(x.contribution))
         same = (big.contribution > 0) == (ret > 0)
         out.append(
-            f"이 시간대의 움직임은 {big.kind} 흐름과 같은 방향이었어요."
+            (f"이 움직임은 {big.kind} 흐름과 같은 방향이었어요.",
+             f"{big.kind} {big.code} {big.contribution * 100:+.3f}%p")
             if same else
-            f"{big.kind} 흐름은 반대로 갔는데도 이 종목은 {up}어요."
-            " 시장을 따라간 게 아니라는 뜻이에요.")
+            (f"{big.kind} 흐름은 반대로 갔는데도 {up}어요."
+             " 시장을 따라간 게 아니라는 뜻이에요.",
+             f"{big.kind} {big.code} {big.contribution * 100:+.3f}%p"))
         if abs(roll.idio) > abs(big.contribution):
-            out.append("설명이 붙는 공통 흐름보다 이 종목만의 움직임이 더 컸어요. "
-                       "무엇이 그 몫을 만들었는지는 아직 가려지지 않았어요.")
+            out.append(("설명이 붙는 공통 흐름보다 이 종목만의 움직임이 더 컸어요."
+                        " 무엇이 그 몫을 만들었는지는 아직 가려지지 않았어요.",
+                        f"고유 {roll.idio * 100:+.3f}%p"))
     if inside:
-        out.append("이 시간대 안에 공시나 보도가 있었어요. "
-                   "다만 그것이 이 움직임을 만들었는지는 확인되지 않았어요 — "
-                   "같은 시간에 있었다는 것과 원인이라는 것은 다른 말이에요.")
+        out.append((f"{span} 사이에 공시나 보도가 있었어요."
+                    " 다만 그것이 이 움직임을 만들었는지는 확인되지 않았어요 -"
+                    " 같은 시간에 있었다는 것과 원인이라는 것은 다른 말이에요.",
+                    f"사건 {len(inside)}건"))
     elif w.kind != "gap":
-        out.append("이 시간대에는 새로 알려진 소식이 없었어요. "
-                   "그래서 움직임의 이유를 소식에서 찾을 수는 없어요."
-                   + (f" 오늘 나온 소식은 이 시간대보다 뒤였어요." if after else ""))
+        out.append((f"{span} 사이에는 새로 알려진 소식이 없었어요."
+                    " 그래서 움직임의 이유를 소식에서 찾을 수는 없어요."
+                    + (" 오늘 나온 소식은 모두 이 구간보다 뒤였어요." if after else ""),
+                    f"구간 내 사건 0건" + (f" · 이후 {after}건" if after else "")))
     return out
 
 
+def _etypes(lake, eids: list[str]) -> list[str]:
+    """오늘 실제로 있었던 사건타입. **우리가 고르지 않는다** - 있는 것만 센다."""
+    if not eids or lake.exists.get("rdb") is not True:
+        return []
+    lit = ",".join(repr(str(e)) for e in eids)
+    rows = lake.sql("SELECT DISTINCT event_type_code FROM rdb.public.source_event "
+                    f"WHERE source_event_id IN ({lit})")
+    return sorted({str(r[0]) for r in rows if r[0]})
+
+
 def explain(lake, ticker: str, instrument_id: str, day: str,
-            t0: str, t1: str) -> str:
-    """하루를 창으로 갈라 시간순으로 설명한다. 요구 구간은 하나의 창으로 못박힌다."""
+            t0: str, t1: str, *, tools: bool = True) -> str:
+    """하루를 창으로 갈라 시간순으로 설명한다. 요구 구간은 하나의 창으로 못박힌다.
+
+    `tools=True` 면 요구창 문단 뒤에 **14 도구 관측**이 붙는다. 관측은 하루 단위이고
+    인과 검정도 거래일 패널이다 - 근거에 `일단위` 가 박히므로 구간 인과로 읽히지
+    않는다. 창 단위 인과는 아직 없다(패널 단위가 거래일).
+    """
     a, b, why = clamp(t0, t1)
     d = dt.date.fromisoformat(day)
     o = dt.datetime.combine(d, dt.time.fromisoformat(SESSION_OPEN))
@@ -188,6 +256,9 @@ def explain(lake, ticker: str, instrument_id: str, day: str,
             continue
         taus.append((tau, eid))
     ws = build_windows(o, c, taus, pin=pin)
+    # 도구가 볼 사건타입은 **하루 전량**에서 온다 - 요구창 안의 사건만 세면
+    # 같은 날 다른 시각의 같은 타입이 사라져 일단위 패널이 얇아진다.
+    day_eids = [str(e) for _t, e in taus]
 
     bars = _bars(lake, ticker, day)
     gap = _gap(lake, ticker, day)
@@ -261,23 +332,33 @@ def explain(lake, ticker: str, instrument_id: str, day: str,
                     out.append("  시장 미계측 — 이 시각 구간의 시장 5분봉 이력이 없다."
                                " 고유로 적힌 몫에 시장 몫이 섞여 있다")
                 if not any(x.kind == "섹터" for x in roll.layers):
-                    out.append("  섹터 미계측 — KRX 업종지수는 5분봉이 없다(실측 0건)")
+                    out.append("  섹터 미계측 — 섹터 ETF 의 5분봉 이력이 β 최소치에"
+                               " 못 미친다(구성종목 평균으로 대신하지 않는다)")
         after = sum(1 for t, _e in taus if t >= w.end)
-        for line in _reasons(w, r, order.index(w.name), roll,
-                             list(w.event_ids), after):
-            out.append("  · " + line)
-        # 요구창에만 앞 구간 맥락을 얹는다 - 다른 창까지 얹으면 서사가 서로를 인용한다.
+        pairs = _reasons(w, r, order.index(w.name), roll, list(w.event_ids), after)
+        # 요구창에만 앞 구간 맥락과 도구 관측을 얹는다 - 다른 창까지 얹으면 서사가
+        # 서로를 인용해 어느 구간이 주어인지 사라진다.
+        skipped: list[str] = []
         if w.kind == "asked":
             before = [("밤사이" if x.kind == "gap" else _when_word(x.start),
                        rets[x.name], x.kind)
                       for x in ws if x.end <= w.start and rets[x.name] is not None]
-            for line in _context(w, r, before):
-                out.append("  · " + line)
+            pairs += _context(w, r, before)
+            if tools:
+                from .observe import observe
+                obs, skipped = observe(lake, ticker, instrument_id, day,
+                                       etypes=_etypes(lake, day_eids))
+                pairs += [(x.text, x.ground) for x in obs]
+        out += _para(pairs)
         if w.event_ids:
             out.append("  근거 id: " + " ".join(w.event_ids[:6]))
         out.append(f"  [절단] as_of = {w.end:%H:%M} — 이 시각까지의 정보만 쓴다"
                    " (그 앞 구간은 전부 볼 수 있다: 설명 대상만 이 창이다)")
-        out.append("  [인과] 미검정 — 검정 패널의 단위가 거래일이다")
+        if w.kind == "asked":
+            out.append("  [인과] 일단위만 검정한다 — 창 단위 패널이 없다."
+                       " 위 문단의 `일단위` 근거가 그것이고, 이 구간에 대한 인과가 아니다")
+            for s in skipped:
+                out.append(f"  [못 부름] {s}")
     return "\n".join(out)
 
 

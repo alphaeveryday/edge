@@ -166,20 +166,34 @@ def etf_label(lake, etf: str, fallback: str) -> str:
 # 장 시각 경계 - 이 밖은 5분봉이 없다. 밤사이는 갭 하나로 뭉쳐지므로 구간이 아니다.
 SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
 
+# 이름(한글)은 계열과 별개로 한 번 조회한다 - 봉 집계와 조인할 이유가 없다.
+_CLOCK_NAMES = ("SELECT symbol, any_value(name) FROM layers_daily "
+                "WHERE kind IN {kinds} GROUP BY symbol")
+
+# 5분봉 스캔은 **클라우드 레이아웃이 져야 한다.** 로컬 물화(CTAS)는 쓰지 않는다:
+# 후보 81심볼 471,389행을 구우면 집계가 100초 -> 0.03초 였지만(실측), 그건 노트북
+# 메모리에 레이크를 복제하는 것이고 세션마다 52초를 다시 낸다. 같은 프루닝을
+# Iceberg 파티션(`bucket(symbol, N)` + `(symbol, ts)` 정렬)이 S3 에서 해 준다.
+#
+# 여기서 할 수 있는 것은 **읽을 심볼을 먼저 좁히는 것**뿐이다 - 그것도 실효가 크다.
 _CLOCK_SQL = r"""
 WITH k AS (
-    SELECT symbol, any_value(name) AS name FROM layers_daily
-    WHERE kind IN {kinds} GROUP BY symbol
+    SELECT DISTINCT symbol FROM layers_daily WHERE kind IN {kinds}
 ), b AS (
     SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, CAST(ts AS DATE) AS d,
            ln(last(close ORDER BY ts) / first(open ORDER BY ts)) AS lr,
            sum(volume) AS vol
     FROM bars_5m
-    WHERE CAST(ts AS DATE) <= DATE '{day}' AND open > 0 AND close > 0
+    -- `trade_date` 로 자른다. `CAST(ts AS DATE)` 는 하이브 프루닝이 안 걸려
+    -- 미래 파티션(롤업 당일분)까지 매번 읽는다.
+    WHERE trade_date <= DATE '{day}' AND open > 0 AND close > 0
       AND CAST(ts AS TIME) >= TIME '{t0}' AND CAST(ts AS TIME) < TIME '{t1}'{pick}
+      -- **후보 심볼로 먼저 자른다.** 이 선필터가 없으면 1,271 종목 전량을 집계한 뒤
+      -- 81개만 조인해 버린다 - 실측 34M 행 물화로 DuckDB 가 OOM 이었다.
+      AND regexp_replace(symbol, '\.(KS|KQ)$', '') IN (SELECT symbol FROM k)
     GROUP BY 1, 2
 )
-SELECT b.sym, any_value(k.name), list(b.lr ORDER BY b.d),
+SELECT b.sym, list(b.lr ORDER BY b.d),
        list(b.d ORDER BY b.d), list(b.vol ORDER BY b.d)
 FROM b JOIN k ON k.symbol = b.sym WHERE b.lr IS NOT NULL GROUP BY b.sym
 """
@@ -213,12 +227,14 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     pick_clock = (f" AND regexp_replace(symbol, '\\.(KS|KQ)$', '') = '{only}'"
                   if only else "")
     if clock is not None:
+        names = {str(s_): n for s_, n in lake.sql(_CLOCK_NAMES.format(kinds=kinds))}
         out = {}
-        for sym, nm, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
+        for sym, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
                 kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick_clock)):
             # 이미 **구간 수익**이다 - 차분하지 않는다(하니까 첫 날이 사라진다).
             halt = {d for d, v in zip(dates, vols) if v is not None and v <= 0}
-            out[sym] = (nm, dict(zip(dates, [float(x) for x in lrs])), halt)
+            out[sym] = (names.get(sym, sym),
+                        dict(zip(dates, [float(x) for x in lrs])), halt)
         return out
     rows = lake.sql(
         "SELECT symbol, any_value(name), list(close ORDER BY date), "
@@ -364,10 +380,11 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     `clock=(t0, t1)` 이면 설명 대상이 **그 구간의 수익률**이 된다. 바뀌는 것은 계열의
     뜻뿐이고 β 추정·층 게이트·ρ 게이트·종목 귀속은 글자 하나 안 바뀐다.
 
-    구간 모드에서 **섹터 층은 미계측**이다: KRX 업종지수 5분봉이 0건이라 후보가 없다
-    (실측). ETF 를 섹터 대리로 쓰면 '섹터를 우리가 고르는' 그 실수로 돌아간다
-    (042700 07-31 에서 삼성전자가 섹터로 뽑힌 일) - 그래서 없는 채로 둔다.
-    호출자가 사유를 적어야 한다: 층이 조용히 사라지면 시장 몫이 그걸 삼킨다.
+    구간 모드의 섹터 층은 **KR 섹터 ETF** 다 - 그게 우리가 쓰는 섹터지수다. 구성종목
+    5분봉을 평균해 섹터를 만들지 않는다: 그건 지수의 근사이고, 비중·유동성·거래정지를
+    우리가 대신 정하는 것이 된다. 겹침 게이트는 그대로 걸린다(반도체 ETF 로 반도체
+    ETF 를 설명하면 동어반복). 후보가 없으면 사유는 'ETF 5분봉 이력 부족' 이지
+    '섹터가 없음' 이 아니다 - 호출자가 그 구분을 적어야 한다.
     """
     d0 = dt.date.fromisoformat(day)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
@@ -401,7 +418,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     # 지수는 **우리가 고르지 않는다**(KRX 가 산출) 그리고 ETF 가 아니라 구성 겹침을
     # 계산할 수 없다 - 그래서 겹침 게이트를 면제한다. 대신 어느 업종인지는 구성종목의
     # **최빈 업종**이 정한다: 그것도 우리가 고르는 게 아니다.
-    # 구간 모드: KRX 업종지수는 5분봉이 없다(실측 0건) - 후보를 만들지 않는다.
+    # 구간 모드: KRX 업종지수는 5분봉이 없다(실측 0건). 섹터는 섹터 ETF 가 맡는다.
     krx = None if clock is not None else _krx_sector_candidate(lake, etf, day, hist, d0)
     if krx is not None:
         code, nm, v, now = krx
