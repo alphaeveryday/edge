@@ -9,7 +9,7 @@ import json
 from collections import defaultdict
 
 from data_pipeline.config import KisInvestorSource as KisInvestorSourceConfig, load_settings
-from data_pipeline.lake import LocalStorage
+from data_pipeline.lake import LocalStorage, raw_investor_estimate_partition
 from data_pipeline.sources.kis_investor import KisInvestorSource
 from data_pipeline.steps import ingest_raw_investor
 
@@ -108,6 +108,28 @@ def test_saves_investor_flow_partition_and_log(tmp_path):
     log = json.loads(storage.get_bytes(logs[0]))
     assert "dataset=investor_flow_daily" in logs[0]
     assert log["status"] == "success" and log["records_saved"] == 2
+
+
+def test_dataset_partition_swap_writes_intraday_zone(tmp_path):
+    # WHY: 장중 추정(ALPHA-767)은 이 스텝을 dataset·partition 인자만 갈아끼워 재사용한다.
+    #      인자가 실제로 갈리지 않으면 **장중 raw 가 EOD 파티션·EOD collection_log 에 조용히
+    #      섞여**, 잠정(가집계)과 확정이 한 데이터셋에 들어간다. 그 오염은 사후에 되돌릴 수
+    #      없으므로(어느 행이 어느 소스였는지 구분 불가) 갈림 자체를 여기서 잠근다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = _source({"005930": [_ok([_row("20260703")])]})
+
+    assert ingest_raw_investor.run(
+        settings, storage, source, "r1",
+        dataset="investor_flow_intraday", partition=raw_investor_estimate_partition,
+        job_name="ingest_raw_investor_estimate",
+    ) == 0
+
+    keys = storage.list_keys("raw")
+    assert keys[0].startswith("raw/source=kis/dataset=investor_flow_intraday/market=KR")
+    logs = storage.list_keys("operations_archive/collection_logs/")
+    assert "dataset=investor_flow_intraday" in logs[0]
+    assert json.loads(storage.get_bytes(logs[0]))["job_name"] == "ingest_raw_investor_estimate"
 
 
 def test_universe_derived_from_latest_holdings_snapshot(tmp_path):

@@ -85,6 +85,25 @@ def raw_investor_partition(
     )
 
 
+def raw_investor_estimate_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 장중 투자자 추정(investor_flow_intraday) 파티션 프리픽스 (끝 슬래시 없음).
+
+    `raw_investor_partition`(EOD 확정)과 **다른 dataset** 이다 — 값이 가집계 추정이고 시간축이
+    거래일이 아니라 그날의 슬롯(`bsop_hour_gb`)이라, 한 데이터셋에 담으면 소비자가 잠정과
+    확정을 구분할 수 없다(`.dev/etf-flow-collection-plan.md` §2.5).
+
+    파티션 축은 EOD 와 같다(수집일 기준 run_id 별 append) — 하루에 여러 슬롯 런이 각자
+    run_id 로 쌓이고, 슬롯 간 중복(응답이 그날 슬롯을 누적해 주는 성질)의 정리는 canonical
+    소관이다(bronze 무변형).
+    """
+    return (
+        f"raw/source={source}/dataset=investor_flow_intraday/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_financial_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
