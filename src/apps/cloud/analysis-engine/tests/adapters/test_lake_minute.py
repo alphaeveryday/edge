@@ -130,13 +130,20 @@ def test_prev_closes_survives_truncated_partition_listing():
 
 
 def test_prev_closes_ignores_non_date_partition_dirs():
-    """문자열 비교로 '직전'을 고르므로 `trade_date=<날짜>-copy` 같은 비정상 디렉터리가
-    정렬상 정상 파티션보다 뒤에 와서 분모로 뽑힌다 — 오류 없이 틀린 값이 된다."""
+    """문자열 비교로 '직전'을 고르므로 비정상 디렉터리가 정렬상 정상 파티션보다 뒤에
+    와서 분모로 뽑힌다 — 오류 없이 틀린 값이 된다.
+
+    길이 검사로는 부족하다. 오염 값이 **정상 파티션과 목표일 사이에** 정렬되는 배치가
+    있어야 그 약한 단언이 깨진다 — 목표 `2026-07-20`, 정상 `2026-07-19`, 오염
+    `2026-07-1x` 가 그 배치다(열 글자 · `…-19` 보다 뒤 · 목표보다 앞). 오염 값이 목표일
+    **뒤로** 정렬되면 `d < target` 이 먼저 걸러버려 날짜 검증이 없어도 테스트가 통과한다.
+    """
     reader = _reader({
-        f"{PRICE_DAILY}trade_date=2026-07-14/p.parquet": _parquet(["005930"], [70000.0]),
-        f"{PRICE_DAILY}trade_date=2026-07-14-copy/p.parquet": _parquet(["005930"], [1.0]),
+        f"{PRICE_DAILY}trade_date=2026-07-19/p.parquet": _parquet(["005930"], [70000.0]),
+        f"{PRICE_DAILY}trade_date=2026-07-1x/p.parquet": _parquet(["005930"], [2.0]),
+        f"{PRICE_DAILY}trade_date=2026-07-19-copy/p.parquet": _parquet(["005930"], [1.0]),
     })
-    assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {"005930": 70000.0}
+    assert reader.load_prev_closes("KR", date(2026, 7, 20)) == {"005930": 70000.0}
 
 
 def test_boolean_price_is_not_coerced_to_one():

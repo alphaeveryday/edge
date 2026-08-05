@@ -432,7 +432,9 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 "INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id,"
                 " window_start, generation, detection_policy_version, open_price,"
                 " close_price, change_rate, threshold, cooldown_bucket)"
-                " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-abs-v1',"
+                # 정책 버전은 운영 판정기와 같아야 한다(ALPHA-745 anchor v2) — v1 을
+                # 시드한 채 전일 종가 분해를 기대하면 픽스처가 축 불일치를 인증한다.
+                " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-anchor-v2',"
                 " 10000, 10300, 0.03, 0.02, 1)",
                 (MINUTE_TRIGGER_ID, ETF_TICKER, trigger_window),
             )

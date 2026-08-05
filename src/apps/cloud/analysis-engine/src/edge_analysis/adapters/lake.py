@@ -31,6 +31,18 @@ def minute_artifact_key(
     )
 
 
+def _as_date(value: str) -> date | None:
+    """파티션 값을 `date` 로 — 날짜가 아니면 None.
+
+    `fromisoformat` 은 `2026-07-1x` 같은 비날짜를 거부한다. 길이·사전순 검사로 대신하면
+    같은 길이의 오염 값이 정상 파티션보다 뒤에 정렬돼 '직전 거래일'로 뽑힌다.
+    """
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def _price(value: Any) -> float | None:
     """가격(문자열·수치)을 float 로 — 계약 위반은 None(분해가 미가격으로 제외).
 
@@ -193,14 +205,16 @@ class LakeReader:
         형 변환 실패(비수치·None·bool)는 그 티커만 뺀다 — 한 행이 분해 전체를 죽이면
         안 되고, 빠진 티커는 분해에서 미가격으로 잡혀 coverage 에 드러난다.
 
-        파티션 값이 `YYYY-MM-DD` 형태인 것만 본다: 문자열 비교로 '직전'을 고르므로
-        `trade_date=2026-07-14-copy` 같은 비정상 디렉터리가 하나 섞이면 정렬상 정상
-        파티션보다 뒤에 와서 그것이 분모로 뽑힌다(오류 없이 틀린 값).
+        파티션 값이 **실제 날짜로 파싱되는 것**만 본다: 문자열 비교로 '직전'을 고르므로
+        비정상 디렉터리가 하나 섞이면 정렬상 정상 파티션보다 뒤에 와서 그것이 분모로
+        뽑힌다(오류 없이 틀린 값). 길이 검사로는 부족하다 — `2026-07-1x` 는 열 글자라
+        통과하면서 `2026-07-19` 보다 뒤에 정렬된다.
         """
         base = f"{LAKE_PRICE_PREFIX}/market={market}/"
-        target = trade_date.isoformat()
-        earlier = [d for d in self._partition_values(base, "trade_date")
-                   if len(d) == len(target) and d < target]
+        earlier = sorted(
+            d for d in self._partition_values(base, "trade_date")
+            if (parsed := _as_date(d)) is not None and parsed < trade_date
+        )
         if not earlier:
             return {}
         closes: dict[str, float] = {}
