@@ -166,26 +166,29 @@ class KisInvestorEstimateSource:
         # 200-무토큰은 kis_auth 가 RuntimeError 로 올린다 — 둘 다 fetch 밖으로 전파(전체 중단).
         token = self.auth.token()
         for our_ticker, kis_symbol in plan:
-            slotless = False  # 심볼당 슬롯 결측 기록 1회 (아래 참조)
+            # ⚠️ **행 단위 사유는 심볼당 1회만 기록한다.** `fetch_failures` 는 스텝이
+            # `records_failed_symbols`·`ops.failed_records` 로 세는 **심볼 단위** 목록이라
+            # (`ingest_raw_investor` 참조), 행마다 append 하면 심볼 1개가 행 수만큼 실패로
+            # 부풀어 카운터의 단위가 어긋난다. 사유별로 한 번씩만 남긴다.
+            noted: set[str] = set()
             try:
                 for row in self._fetch_symbol(kis_symbol, token):
                     if not isinstance(row, dict):
                         # 배열 안 dict 아닌 행(스키마 드리프트)은 한 행이 심볼 전체를 끊지
                         # 않게 기록 후 스킵한다(조용히 버리지 않는다, Rule 12).
-                        self._note_failure(
-                            kis_symbol, our_ticker, f"malformed row: {type(row).__name__}"
-                        )
+                        if "malformed" not in noted:
+                            noted.add("malformed")
+                            self._note_failure(
+                                kis_symbol, our_ticker, f"malformed row: {type(row).__name__}"
+                            )
                         continue
                     # 슬롯(`bsop_hour_gb`)은 이 데이터셋 정체성 키의 일부다 — canonical 이
                     # (market, ticker, trade_date, asof_slot) 로 병합하므로 없으면 그 행은
                     # **어느 시점 값인지 영영 모른다**. 행은 보존하되(bronze 무변형) 실패로
                     # 기록해 런을 partial 로 드러낸다 — 안 그러면 쓸 수 없는 행이 records_out
                     # 에 섞여 성공 0건과 구분되지 않는다(Rule 12).
-                    if not str(row.get("bsop_hour_gb") or "").strip() and not slotless:
-                        # ⚠️ **심볼당 1회만** 기록한다. `fetch_failures` 는 스텝이
-                        # `records_failed_symbols` 로 세는 **심볼 단위** 목록이라, 행마다
-                        # append 하면 심볼 카운터가 행 수로 부풀어 단위가 어긋난다.
-                        slotless = True
+                    if not str(row.get("bsop_hour_gb") or "").strip() and "slotless" not in noted:
+                        noted.add("slotless")
                         self._note_failure(
                             kis_symbol, our_ticker,
                             "슬롯 필드(bsop_hour_gb) 없음 — canonical 정체성 키 조립 불가",

@@ -221,6 +221,18 @@ def test_슬롯_없는_행은_보존하되_실패로_드러낸다(frozen):
     assert "bsop_hour_gb" in src.fetch_failures[0]["error"]
 
 
+def test_malformed_행도_심볼당_1회만_실패로_센다(frozen):
+    """WHY: 슬롯 결측과 같은 이유다 — fetch_failures 는 심볼 단위 목록이라 행마다 세면
+    실패 심볼 1개가 행 수만큼 부푼다. 두 사유(비-dict·슬롯결측) 어느 쪽도 예외가 아니다."""
+    src, _ = _source({"005930": [_ok(["못난행", 42, _row()])]})
+
+    rows = list(src.fetch(["005930"]))
+
+    assert len(rows) == 1                    # 정상 행만 저장
+    assert len(src.fetch_failures) == 1      # 비-dict 2건이지만 심볼 1건
+    assert "malformed" in src.fetch_failures[0]["error"]
+
+
 def test_비거래일에는_거래일_라벨을_지어내지_않는다(monkeypatch):
     """WHY: 거래일을 우리가 붙이는데(응답에 날짜가 없다) 휴장일에 KIS 가 직전 슬롯을 그대로
     주면 **어제 데이터가 오늘 거래일로 저장된다**. 이 소스는 소급 재조회가 없어 잘못 붙은
