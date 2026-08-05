@@ -102,7 +102,6 @@ enabled = true
 env = "prod"
 enabled = true
 
-
 # Yahoo(yfinance) 가격 — **벤치마크 지수 시계열 전용** 보강. 인증 없음(키 주입 불필요).
 # KR 개별주·ETF 자체 종가는 KIS 가 이미 커버한다(ingest-price-raw 가 holdings 에서 ETF
 # 자신도 유니버스에 넣는다, ALPHA-419). 빠진 건 지수뿐이고, 지수가 없어 L0 상대 게이트가
