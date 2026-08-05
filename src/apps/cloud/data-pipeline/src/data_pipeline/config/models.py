@@ -190,6 +190,32 @@ class KisInvestorSource(BaseModel):
     symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
 
 
+class KisInvestorEstimateSource(BaseModel):
+    """KIS 국내 종목별 **장중** 투자자 추정 소스 — investor-trend-estimate, tr_id HHPTJ04160200 (ALPHA-767).
+
+    EOD 확정치(`KisInvestorSource`)와 **별개 소스·별개 데이터셋**이다. 같은 앱키·같은 유니버스를
+    쓰지만 값의 성격이 다르다 — `*_fake_*`(가집계) 추정이고 시간축이 거래일이 아니라 그날의
+    슬롯(`bsop_hour_gb`)이다. 한 데이터셋에 섞으면 소비자가 잠정과 확정을 구분할 수 없다
+    (`.dev/etf-flow-collection-plan.md` §2.5 — granularity 축 미채택, 소스별 별도 데이터셋 관례).
+
+    비밀값은 env 로만 주입:
+        DATA_PIPELINE_KIS_INVESTOR_ESTIMATE__SOURCE__APP_KEY=...
+        DATA_PIPELINE_KIS_INVESTOR_ESTIMATE__SOURCE__APP_SECRET=...
+
+    ⚠️ 앱키는 EOD·가격·NAV 와 **전역 공유**다(KIS 유량은 앱키 단위). 장중 슬롯은 15:40 배치와
+    시각이 갈리므로 경합하지 않는다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    env: Literal["prod", "vps"] = "prod"
+    enabled: bool = True
+    app_key: str | None = None  # 비밀값: env 오버라이드 전용
+    app_secret: str | None = None  # 비밀값: env 오버라이드 전용
+    # our_ticker → KIS 6자리 코드. KR 은 대개 항등(005930→005930). EOD 와 동일 정책.
+    symbol_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+
 class FinancialSource(BaseModel):
     """재무제표 데이터 소스 (FMP 손익·재무상태·현금흐름 수집, S035).
 
@@ -340,6 +366,12 @@ class KisInvestorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: KisInvestorSource
+
+
+class KisInvestorEstimateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KisInvestorEstimateSource
 
 
 class FinancialConfig(BaseModel):

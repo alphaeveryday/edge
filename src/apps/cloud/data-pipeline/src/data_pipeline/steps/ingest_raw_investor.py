@@ -36,18 +36,28 @@ def run(
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
+    *,
+    dataset: str = DATASET,
+    partition=raw_investor_partition,
+    job_name: str = JOB_NAME,
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
 
     from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). 스케줄 증분·백필 창은
     run 엔트리가 정해 넘긴다(가격 스텝과 동형).
+
+    dataset·partition·job_name 은 **장중 추정 소스(ALPHA-767)를 위한 갈아끼우기 축**이다.
+    EOD 확정(`investor_flow_daily`)과 장중 추정(`investor_flow_intraday`)은 벤더·유니버스·
+    격리 규약이 전부 같고 **다른 것은 저장 위치뿐**이라, 스텝을 복제하지 않고 인자로 가른다
+    (`ingest_raw_etf` 가 NAV·iNAV·프로필에 쓰는 것과 같은 형태 — ALPHA-380 선례).
+    기본값은 EOD 라 기존 호출부는 무변경이다.
     """
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
         "run_id": run_id,
-        "job_name": JOB_NAME,
+        "job_name": job_name,
         "source_vendor": vendor,
         "window_from": from_date,
         "window_to": to_date,
@@ -59,7 +69,7 @@ def run(
         # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(감사 레코드 유실 방지).
         logger.warning("%s 투자자 수급 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
         try:
-            _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
+            _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
                                                                "reason": f"{vendor} disabled or missing credentials",
                                                                "ops": {"records_out": 0, "failed_records": 0}})
         except Exception:
@@ -103,7 +113,7 @@ def run(
     saved = 0
     try:
         for market, records in sorted(partitions.items()):
-            key = f"{raw_investor_partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
+            key = f"{partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
             saved += len(records)
@@ -133,7 +143,7 @@ def run(
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한 비0 종료로
     # 스케줄러/ECS 에 실패를 알린다(감사 로그 유실은 로거로만 남김).
     try:
-        _write_log(storage, vendor, started_date, run_id, {
+        _write_log(storage, vendor, dataset, started_date, run_id, {
             **log,
             "status": status,
             "error": error,
@@ -151,12 +161,13 @@ def run(
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
     logger.info(
-        "ingest_raw_investor 완료: status=%s fetched=%d saved=%d failed_symbols=%d partitions=%d",
-        status, fetched, saved, len(failed_symbols), len(partitions),
+        "%s 완료: status=%s fetched=%d saved=%d failed_symbols=%d partitions=%d",
+        job_name, status, fetched, saved, len(failed_symbols), len(partitions),
     )
     return exit_code
 
 
-def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
-    key = collection_log_key(vendor, DATASET, started_date, run_id)
+def _write_log(storage: Storage, vendor: str, dataset: str, started_date: str,
+               run_id: str, payload: dict) -> None:
+    key = collection_log_key(vendor, dataset, started_date, run_id)
     storage.put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
