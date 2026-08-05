@@ -4,10 +4,14 @@ import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   CHECK_RESULT_LABEL,
   EVIDENCE_KIND_LABEL,
+  AUTO_PUBLISH_CRITERIA,
   ITEM_STATUS_LABEL,
+  checkReasonLabel,
   matchedLabel,
   reasonLabel,
 } from '../domains/review';
+import type { ConfidenceLevel } from '../domains/explanations';
+import { CONFIDENCE_LABEL, CONFIDENCE_TONE } from '../domains/explanations';
 import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
 import { isHttpUrl } from './_shared/links';
@@ -39,6 +43,16 @@ export function ReviewDetailPage() {
   const edited = finalText !== undefined && finalText.trim() !== it.summary;
   const inReview = it.status === 'REVIEW_REQUIRED';
   const reviewChecks = it.checks.filter((c) => c.result === 'REVIEW');
+  // 룰 무관(게이트·스위치) 판정의 사유·실측 — 렌더 밖에서 한 번만 만든다. 일반 사유 배지의
+  // 표시 여부가 이 결과에 달려 있어(중복 방지) 두 곳이 같은 계산을 봐야 한다.
+  const gateReasons = reviewChecks
+    .filter((c) => c.ruleType == null)
+    .map((c) => ({
+      reason: checkReasonLabel(c),
+      measured: matchedLabel(c.matchedText, c.ruleType),
+      raw: c.matchedText,
+    }))
+    .filter((v) => v.reason !== null || v.measured !== null);
 
   const done = (msg: string) => () => {
     toast(msg);
@@ -95,6 +109,15 @@ export function ReviewDetailPage() {
         <StatusBadge tone={inReview ? 'warn' : 'neutral'}>
           {ITEM_STATUS_LABEL[it.status] ?? it.status}
         </StatusBadge>
+        {/* 사유가 "설정한 기준"을 말하게 되면서 이 건의 실제 확신도가 화면에서 사라진다
+            (검수 상세엔 확신도 표시가 없었다) — 설명 목록과 같은 배지로 채운다(ALPHA-774). */}
+        {it.confidenceLevel && Object.hasOwn(CONFIDENCE_LABEL, it.confidenceLevel) ? (
+          <StatusBadge tone={CONFIDENCE_TONE[it.confidenceLevel as ConfidenceLevel]} dot={false}>
+            확신도 {CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel]}
+          </StatusBadge>
+        ) : it.confidenceLevel ? (
+          <span className="col-muted" style={{ fontSize: 12 }}>확신도 {it.confidenceLevel}</span>
+        ) : null}
         <div className="flex-1" />
         <span className="col-muted num" style={{ fontSize: 11 }}>
           수신 {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
@@ -110,17 +133,30 @@ export function ReviewDetailPage() {
             검수 사유
           </div>
           <div className="flex flex-wrap items-center gap-1.5" style={{ fontSize: 12 }}>
-            {it.reviewReasons.map((r) => (
-              <StatusBadge key={r} tone="warn">
-                {reasonLabel(r)}
-              </StatusBadge>
+            {/* 룰 무관 판정의 사유는 운영자가 설정한 기준의 문구다(ALPHA-774) — 실측값은
+                옆에 부기하고, 원값은 title 로 남겨 감사·문의에서 그대로 확인할 수 있다.
+                기준을 못 만들면(정책 버전 결측·새 판정 축) 실측이라도 낸다 — 둘 다 없을
+                때만 버린다(Rule 12). */}
+            {/* 기준 문구를 만들었으면 서버 파생 일반 사유("자동 제공 기준 미충족")는 뺀다 —
+                같은 판정을 두 번 말한다. 실측만 있고 기준이 없으면(정책 버전 미조회 — FK 상
+                사실상 불가) 일반 사유를 남겨야 "왜 실패인지"가 사라지지 않는다. */}
+            {it.reviewReasons
+              .filter((r) => r !== AUTO_PUBLISH_CRITERIA || !gateReasons.some((v) => v.reason))
+              .map((r) => (
+                <StatusBadge key={r} tone="warn">
+                  {reasonLabel(r)}
+                </StatusBadge>
+              ))}
+            {gateReasons.map((v, i) => (
+              <span key={i} className="col-muted" title={v.raw ?? undefined}>
+                {v.reason ?? v.measured}
+                {v.reason && v.measured ? ` (${v.measured})` : ''}
+              </span>
             ))}
-            {/* 근거는 판정기가 남긴 원값이라 게이트 판정은 기계 문자열이다(source_events=2 등)
-                — 화면에서 해석한다(ALPHA-770). 해석 못 한 형식은 원문 그대로 나온다. */}
             {reviewChecks
-              .filter((c) => matchedLabel(c.matchedText, c.ruleType) !== null)
+              .filter((c) => c.ruleType != null && c.matchedText)
               .map((c, i) => (
-                <span key={i} className="col-muted" title={c.matchedText ?? undefined}>
+                <span key={`m${i}`} className="col-muted" title={c.matchedText ?? undefined}>
                   {matchedLabel(c.matchedText, c.ruleType)}
                 </span>
               ))}
@@ -224,8 +260,10 @@ export function ReviewDetailPage() {
           <thead>
             <tr>
               <th>판정</th>
-              <th>룰 유형</th>
-              <th>매칭 근거</th>
+              <th>사유</th>
+              <th>실측</th>
+              {/* 어느 기준으로 걸렸나 — 정책은 불변 버전이고 판정마다 기준이 달랐을 수 있다. */}
+              <th className="col-muted">정책</th>
               <th className="col-muted">검사 시각</th>
             </tr>
           </thead>
@@ -237,11 +275,13 @@ export function ReviewDetailPage() {
                     {CHECK_RESULT_LABEL[c.result] ?? c.result}
                   </StatusBadge>
                 </td>
-                <td>{c.ruleType ? reasonLabel(c.ruleType) : '기준 판정'}</td>
-                {/* 해석문을 보여주되 원값은 title 로 남긴다 — 감사·장애 문의에서 판정기가
-                    남긴 문자열 그대로가 필요하다(원장 값과 대조). */}
+                <td>{checkReasonLabel(c) ?? (c.ruleType ? reasonLabel(c.ruleType) : '기준 판정')}</td>
+                {/* 실측값 — 원값은 title 로 남긴다(감사·장애 문의에서 판정기 문자열 그대로 대조). */}
                 <td className="col-muted" title={c.matchedText ?? undefined}>
                   {matchedLabel(c.matchedText, c.ruleType) ?? '—'}
+                </td>
+                <td className="col-muted t-data">
+                  {c.policyVersionNo != null ? `v${c.policyVersionNo}` : '—'}
                 </td>
                 <td className="col-muted t-data">
                   {c.checkedAt ? new Date(c.checkedAt).toLocaleString('sv-SE').slice(0, 19) : '—'}

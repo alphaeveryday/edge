@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, PageSkeleton, Select, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
-import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
+import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, gateReasonLabel, reasonLabel } from '../domains/review';
 import type { ConfidenceLevel } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
 import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
@@ -81,12 +81,30 @@ export function ReviewPage() {
                   </div>
                 </td>
                 <td>
+                  {/* 룰 무관 판정은 서버가 "자동 제공 기준 미충족" 하나로 뭉치는데, 상세는
+                      판정 당시 기준으로 구체 문구를 만든다 — 목록도 같은 말을 써야 한 항목의
+                      사유가 화면마다 달라지지 않는다(ALPHA-774). 기준을 못 만들면 일반 사유가
+                      남아 "왜 걸렸는지"가 사라지지 않는다. */}
                   <div className="flex flex-wrap gap-1">
-                    {it.reviewReasons.map((r) => (
-                      <StatusBadge key={r} tone="warn">
-                        {reasonLabel(r)}
-                      </StatusBadge>
-                    ))}
+                    {it.reviewReasons
+                      .filter(
+                        (r) =>
+                          r !== AUTO_PUBLISH_CRITERIA ||
+                          !it.gateChecks.some((g) => gateReasonLabel(g)),
+                      )
+                      .map((r) => (
+                        <StatusBadge key={r} tone="warn">
+                          {reasonLabel(r)}
+                        </StatusBadge>
+                      ))}
+                    {it.gateChecks
+                      .map((g) => gateReasonLabel(g))
+                      .filter((label): label is string => label !== null)
+                      .map((label) => (
+                        <StatusBadge key={label} tone="warn">
+                          {label}
+                        </StatusBadge>
+                      ))}
                   </div>
                 </td>
                 {/* 설명 목록과 같은 배지 — 같은 값을 화면마다 다른 모양으로 그리지 않는다. */}

@@ -3,6 +3,7 @@ import { PageSkeleton, Select, StatusBadge, Toggle, toast } from 'ui-kit';
 import type { ServeStatus } from '../domains/explanations';
 import { CONFIDENCE_LABEL, STATUS_LABEL, STATUS_TONE } from '../domains/explanations';
 import type { RuleType, WordAction } from '../domains/screening';
+import { confidenceGateLabel, sourceGateLabel } from '../domains/screening';
 import {
   useBannedWords,
   useCriteria,
@@ -323,11 +324,8 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
                 onChange={(v) =>
                   updateCriteria.mutate({ minSources: Number(v) as 1 | 2 | 3 }, { onSuccess: changed })
                 }
-                options={[
-                  { value: '1', label: '출처 없음' },
-                  { value: '2', label: '1개 이하' },
-                  { value: '3', label: '2개 이하' },
-                ]}
+                // 어휘는 screening/labels 가 SSOT — 검수 사유가 같은 말을 써야 한다(ALPHA-774).
+                options={[1, 2, 3].map((n) => ({ value: String(n), label: sourceGateLabel(n)! }))}
               />
             </td>
             <td>{gateResult(criteria.minSources != null, '기준 미설정')}</td>
@@ -347,10 +345,10 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
                 onChange={(v) =>
                   updateCriteria.mutate({ minConfidence: v as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
                 }
-                options={[
-                  { value: 'MEDIUM', label: '보류 이하' },
-                  { value: 'HIGH', label: '중간 이하' },
-                ]}
+                options={(['MEDIUM', 'HIGH'] as const).map((c) => ({
+                  value: c,
+                  label: confidenceGateLabel(c)!,
+                }))}
               />
             </td>
             <td>

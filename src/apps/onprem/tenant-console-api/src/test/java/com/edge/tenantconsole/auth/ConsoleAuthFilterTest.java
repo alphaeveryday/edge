@@ -172,9 +172,10 @@ class ConsoleAuthFilterTest {
 	@BeforeEach
 	void setUp() {
 		// 검수 액션의 기록·감사는 이 테스트의 관심사 밖 — 최소 no-op 대역으로 채운다.
+		StubPolicyVersions authPolicyVersions = new StubPolicyVersions();
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications(),
 				task -> task, new StubHistoryRepo(), new StubCheckRepo(), new StubPolicyRules(),
-				members, new ConsoleActionLogService(null, null) {
+				authPolicyVersions, members, new ConsoleActionLogService(null, null) {
 					@Override
 					public void record(SessionMember actor, String action, String targetType,
 							String targetId, java.util.Map<String, Object> detail, String clientIp) {
@@ -259,6 +260,11 @@ class ConsoleAuthFilterTest {
 		@Override
 		public int maxVersionNo() {
 			return stored.stream().mapToInt(PolicyVersionEntity::getVersionNo).max().orElse(0);
+		}
+
+		@Override
+		public List<PolicyVersionEntity> findByPolicyVersionIdIn(java.util.Collection<Long> ids) {
+			return stored.stream().filter(v -> ids.contains(v.getPolicyVersionId())).toList();
 		}
 
 		@Override

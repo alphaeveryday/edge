@@ -104,6 +104,11 @@ class ScreeningControllerTest {
 		}
 
 		@Override
+		public List<PolicyVersionEntity> findByPolicyVersionIdIn(java.util.Collection<Long> ids) {
+			return stored.stream().filter(v -> ids.contains(v.getPolicyVersionId())).toList();
+		}
+
+		@Override
 		public List<PolicyVersionEntity> findAllByOrderByVersionNoDesc() {
 			return stored.stream()
 					.sorted((a, b) -> Integer.compare(b.getVersionNo(), a.getVersionNo())).toList();

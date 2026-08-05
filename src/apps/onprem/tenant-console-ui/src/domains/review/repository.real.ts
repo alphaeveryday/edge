@@ -16,11 +16,20 @@ interface WireItem {
   status: string;
   received_at?: string;
   review_reasons?: string[];
+  gate_checks?: { matched_text?: string; min_source_count?: number; min_confidence?: string }[];
 }
 
 interface WireDetail extends WireItem {
   evidences: { kind: string; title: string | null; source: string; published_at?: string; source_uri?: string }[];
-  checks: { result: 'PASS' | 'REVIEW' | 'BLOCK'; rule_type?: string; matched_text?: string; checked_at?: string }[];
+  checks: {
+    result: 'PASS' | 'REVIEW' | 'BLOCK';
+    rule_type?: string;
+    matched_text?: string;
+    checked_at?: string;
+    policy_version_no?: number;
+    min_source_count?: number;
+    min_confidence?: string;
+  }[];
   history: {
     from_status?: string;
     to_status: string;
@@ -43,6 +52,11 @@ function toItem(w: WireItem): ReviewItem {
     status: w.status,
     receivedAt: w.received_at ?? null,
     reviewReasons: w.review_reasons ?? [],
+    gateChecks: (w.gate_checks ?? []).map((g) => ({
+      matchedText: g.matched_text ?? null,
+      minSourceCount: g.min_source_count ?? null,
+      minConfidence: g.min_confidence ?? null,
+    })),
   };
 }
 
@@ -61,6 +75,9 @@ function toDetail(w: WireDetail): ReviewItemDetail {
       result: c.result,
       ruleType: c.rule_type ?? null,
       matchedText: c.matched_text ?? null,
+      policyVersionNo: c.policy_version_no ?? null,
+      minSourceCount: c.min_source_count ?? null,
+      minConfidence: c.min_confidence ?? null,
       checkedAt: c.checked_at ?? null,
     })),
     history: (w.history ?? []).map((h) => ({

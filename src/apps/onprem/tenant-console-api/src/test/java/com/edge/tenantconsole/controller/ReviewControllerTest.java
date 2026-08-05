@@ -6,6 +6,8 @@ import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
+import com.edge.tenantconsole.entity.PolicyVersionEntity;
+import com.edge.tenantconsole.repository.PolicyVersionRepository;
 import com.edge.tenantconsole.entity.ScreeningCheckEntity;
 import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.repository.AnalysisItemStatusHistoryRepository;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Limit;
 import org.springframework.http.MediaType;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -155,6 +158,45 @@ class ReviewControllerTest {
 	}
 
 	/** 룰 사전 대역 — 사유 파생(rule_id → rule_type)만 본다. 발행 표면은 관심사 밖. */
+	/** 판정 당시 정책 대역 — 검사 행의 policy_version_id 가 가리키는 버전(ALPHA-774).
+	 * 기준(출처 3건·확신도 HIGH)을 여기서 읽어 검수 사유 문구를 만든다. */
+	private static final class StubPolicyVersionsForChecks implements PolicyVersionRepository {
+		@Override
+		public Optional<PolicyVersionEntity> findActive() {
+			return Optional.empty();
+		}
+
+		@Override
+		public int maxVersionNo() {
+			return 0;
+		}
+
+		@Override
+		public int deactivate(long id) {
+			return 0;
+		}
+
+		@Override
+		public PolicyVersionEntity save(PolicyVersionEntity version) {
+			return version;
+		}
+
+		@Override
+		public List<PolicyVersionEntity> findAllByOrderByVersionNoDesc() {
+			return List.of();
+		}
+
+		@Override
+		public List<PolicyVersionEntity> findByPolicyVersionIdIn(java.util.Collection<Long> ids) {
+			if (!ids.contains(1L)) {
+				return List.of();
+			}
+			PolicyVersionEntity v = new PolicyVersionEntity(43, "문구", true, 3, "HIGH", 2L);
+			ReflectionTestUtils.setField(v, "policyVersionId", 1L);
+			return List.of(v);
+		}
+	}
+
 	private static final class StubRules implements ScreeningRuleRepository {
 		final List<ScreeningRuleEntity> rows = new ArrayList<>();
 
@@ -257,6 +299,7 @@ class ReviewControllerTest {
 	private StubHistory history;
 	private StubChecks checks;
 	private StubRules rules;
+	private StubPolicyVersionsForChecks policyVersions;
 	private RecordingActionLog actionLog;
 	private MockMvc mvc;
 
@@ -268,11 +311,12 @@ class ReviewControllerTest {
 		history = new StubHistory();
 		checks = new StubChecks();
 		rules = new StubRules();
+		policyVersions = new StubPolicyVersionsForChecks();
 		actionLog = new RecordingActionLog();
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ReviewController(
 						new ReviewService(items, publications, tasks, history, checks, rules,
-								new StubMembersDict(), actionLog)))
+								policyVersions, new StubMembersDict(), actionLog)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -495,7 +539,7 @@ class ReviewControllerTest {
 		// rule_type 에서 파생한다(DDL 규약) — 화면 사유 필터·배너의 실데이터 원천.
 		rules.rows.add(withId(new ScreeningRuleEntity(1L, "ASSERTIVE_EXPRESSION",
 				"{\"text\":\"확실\"}", "REVIEW", true, java.time.Instant.now()), 7L));
-		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 7L, "REVIEW", "확실",
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 1L, 7L, "REVIEW", "확실",
 				OffsetDateTime.now()));
 
 		mvc.perform(get("/api/v1/review/items"))
@@ -507,12 +551,18 @@ class ReviewControllerTest {
 	void 룰_무관_REVIEW는_자동_제공_기준_사유로_파생된다() throws Exception {
 		// WHY: 자동 제공 기준 미달(출처 임계·스위치 OFF)은 rule_id 없는 REVIEW 행이다 —
 		// 이를 버리면 정상 유입 경로의 항목이 사유 공백으로 보인다(검수자가 이유를 모름).
-		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", null, "REVIEW", "source_events=1",
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 1L, null, "REVIEW", "source_events=1",
 				OffsetDateTime.now()));
 
 		mvc.perform(get("/api/v1/review/items"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result[0].review_reasons[0]").value("AUTO_PUBLISH_CRITERIA"));
+				.andExpect(jsonPath("$.result[0].review_reasons[0]").value("AUTO_PUBLISH_CRITERIA"))
+				// 목록도 판정 당시 기준을 받아야 상세와 같은 사유 문구를 만든다(ALPHA-774) —
+				// 없으면 목록만 "자동 제공 기준 미충족"으로 뭉뚱그려 화면 간 사유가 갈린다.
+				.andExpect(jsonPath("$.result[0].gate_checks.length()").value(1))
+				.andExpect(jsonPath("$.result[0].gate_checks[0].matched_text").value("source_events=1"))
+				.andExpect(jsonPath("$.result[0].gate_checks[0].min_source_count").value(3))
+				.andExpect(jsonPath("$.result[0].gate_checks[0].min_confidence").value("HIGH"));
 	}
 
 	@Test
@@ -525,9 +575,9 @@ class ReviewControllerTest {
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"공급 계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\"}]");
 		rules.rows.add(withId(new ScreeningRuleEntity(1L, "BANNED_WORD",
 				"{\"text\":\"급등 확실\"}", "REVIEW", true, java.time.Instant.now()), 7L));
-		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 7L, "REVIEW", "급등 확실",
+		checks.rows.add(new ScreeningCheckEntity(1L, "er-rev-1", 1L, 7L, "REVIEW", "급등 확실",
 				OffsetDateTime.now()));
-		checks.rows.add(new ScreeningCheckEntity(2L, "er-rev-1", null, "PASS", null,
+		checks.rows.add(new ScreeningCheckEntity(2L, "er-rev-1", 1L, null, "PASS", null,
 				OffsetDateTime.now()));
 		history.saved.add(new AnalysisItemStatusHistoryEntity("er-rev-1", null,
 				"REVIEW_REQUIRED", "SYSTEM", null, null));
@@ -545,6 +595,13 @@ class ReviewControllerTest {
 				.andExpect(jsonPath("$.result.checks[0].result").value("REVIEW"))
 				.andExpect(jsonPath("$.result.checks[0].rule_type").value("BANNED_WORD"))
 				.andExpect(jsonPath("$.result.checks[0].matched_text").value("급등 확실"))
+				// 판정 당시 정책(ALPHA-774) — 화면이 사유를 "설정한 기준의 문구"로 쓰려면 그때
+				// 임계값이 필요하다. 필드가 빠지거나 camelCase 로 나가면 UI 는 조용히 null 로
+				// 읽어 사유가 사라지므로, 이름과 값을 함께 못박는다.
+				.andExpect(jsonPath("$.result.checks[0].policy_version_no").value(43))
+				.andExpect(jsonPath("$.result.checks[0].min_source_count").value(3))
+				.andExpect(jsonPath("$.result.checks[0].min_confidence").value("HIGH"))
+				.andExpect(jsonPath("$.result.checks[0].policyVersionNo").doesNotExist())
 				.andExpect(jsonPath("$.result.checks[1].result").value("PASS"))
 				.andExpect(jsonPath("$.result.history.length()").value(2))
 				.andExpect(jsonPath("$.result.history[0].to_status").value("REVIEW_REQUIRED"))
