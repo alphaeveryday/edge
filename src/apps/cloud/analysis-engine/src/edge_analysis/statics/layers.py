@@ -207,10 +207,15 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     # `only` = 심볼 하나만. 대상이 개별 종목일 때 856종목 전체 이력을 읽으면
     # 질의가 분 단위로 늘어난다 - 실측: 이 필터가 없어 파이프라인 테스트가 멈췄다.
     pick = f" AND symbol = '{only}'" if only else ""
+    # 5분봉 심볼은 **접미사가 붙는다**(`005930.KS`). 맨 코드로 비교하면 한 번도 안
+    # 맞고, 그러면 대상 계열이 비어 `decompose` 가 조용히 None 을 낸다 - 실측에서
+    # 개별 종목 구간 층 분해가 통째로 '층 미계측' 이었고 원인이 이 한 줄이었다.
+    pick_clock = (f" AND regexp_replace(symbol, '\\.(KS|KQ)$', '') = '{only}'"
+                  if only else "")
     if clock is not None:
         out = {}
         for sym, nm, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
-                kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick)):
+                kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick_clock)):
             # 이미 **구간 수익**이다 - 차분하지 않는다(하니까 첫 날이 사라진다).
             halt = {d for d, v in zip(dates, vols) if v is not None and v <= 0}
             out[sym] = (nm, dict(zip(dates, [float(x) for x in lrs])), halt)

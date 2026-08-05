@@ -132,6 +132,7 @@ def _blank(reason: str, n_days: int = 0, note: str = "") -> dict:
     """부재의 표준형. 빈 dict·0·None 을 조용히 돌려주면 하류가 그것을 '기관 수급
     이상 없음' 으로 읽는다 - 부재는 기각이 아니다."""
     return {"verdict": "판정불가", "reason": reason, "n_days": n_days,
+            "signed": None, "supports": None,
             "by_actor": {}, "top": "", "note": note}
 
 
@@ -217,7 +218,14 @@ def _flow_detail(lake, *, day: str, instrument_id: str, window: int = 20,
     top = min(ok.items(), key=lambda kv: (-abs(kv[1]["z"]), kv[0]))[0]
     if len(ok) < len(by_actor):
         note += f" · 판정불가 주체 {len(by_actor) - len(ok)}개"
-    return {"verdict": "계산됨", "reason": "", "n_days": n_days,
+    # `signed` = **기관 7주체 누적의 합**. 주체 하나를 고르면 어느 주체인지에 따라
+    # 부호가 갈려 '기관이 샀다' 라는 문장의 방향을 정할 수 없다. 합은 그 문장이
+    # 실제로 말하는 양이다. 이 키가 없어서 신뢰성 검사가 수급 문장을 '부호 있는
+    # 근거 없음' 으로 기각했다 - 재료는 있는데 신고를 안 한 것이다.
+    tot = sum(v["cum_norm"] for v in by_actor.values()
+              if isinstance(v.get("cum_norm"), (int, float)))
+    return {"verdict": "계산됨", "reason": "", "n_days": n_days, "signed": tot,
+            "supports": None, "inst_cum_norm": tot,
             "by_actor": by_actor, "top": top, "note": note}
 
 

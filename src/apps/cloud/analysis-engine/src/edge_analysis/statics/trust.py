@@ -58,6 +58,11 @@ class Claim:
     # 필수 인자 부재로 막히고 그 사실이 사유로 남는다 - 아무 타입이나 끼워 넣어
     # 검정을 통과시키는 길을 열지 않는다.
     etype: str = ""
+    # `stability` 가 요구하는 노출 축("계열족/변환"). 없으면 안정성이 판정불가로 남고
+    # 등급이 **정합에서 멈춘다** - 그건 결함이 아니라 정직이다: 무엇을 안정적으로
+    # 재현했는지 말할 수 없으면 확증이라 부를 수 없다. 호출자가 격자·튜플에서 찾은
+    # 축을 넘겨야 한다(신뢰성 에이전트가 스스로 고르면 표본을 고르는 것이 된다).
+    exposure: str = ""
 
 
 @dataclass(slots=True)
@@ -170,7 +175,7 @@ def check(lake, claims: list[Claim], *, day: str, instrument_id: str,
             try:
                 got[name] = used[name] = call(
                     lake, name, day=day, instrument_id=instrument_id,
-                    etype=c.etype)
+                    etype=c.etype, exposure=c.exposure)
                 rounds -= 1
             except (SurfaceError, TypeError) as exc:
                 # 인자가 안 맞으면 그건 배선 결함이다 - 사유를 남기고 넘어간다.

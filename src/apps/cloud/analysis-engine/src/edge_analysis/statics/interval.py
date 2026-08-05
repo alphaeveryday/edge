@@ -33,6 +33,20 @@ FLOOR = 0.20
 # 상대 크기를 **낱말**로 말한다. 수치 없는 설명이 순위를 잃으면 아무 말도 아니게 된다.
 _RANK_WORD = ("가장 크게", "두 번째로 크게", "세 번째로")
 
+# 다른 창을 **간접 지시**하는 낱말. 창 이름·시각을 그대로 부르면("잔여1 09:00~11:00")
+# 요구한 구간을 물은 사람에게 다른 구간을 설명하는 셈이 된다. 시간대 낱말은 맥락을
+# 주면서도 설명 대상을 옮기지 않는다 - 요구창이 여전히 주어다.
+_WHEN = ((9, 30, "장 초반"), (11, 0, "오전 중반"), (13, 0, "점심 무렵"),
+         (14, 30, "오후"), (15, 30, "장 막판"))
+
+
+def _when_word(t: dt.datetime) -> str:
+    """그 시각이 속한 시간대 낱말. 경계는 관례이고 셀별로 바꾸지 않는다."""
+    for h, m, w in _WHEN:
+        if (t.hour, t.minute) < (h, m):
+            return w
+    return "장 막판"
+
 
 class IntervalError(ValueError):
     """구간이 시각으로 읽히지 않는다 — 형식 오류만 던진다(범위는 자른다)."""
@@ -100,6 +114,25 @@ def _window_ret(bars: list[tuple[dt.datetime, float, float]],
     if not seg:
         return None, 0
     return math.log(seg[-1][2] / seg[0][1]), len(seg)
+
+
+def _context(w: Window, ret: float, before: list[tuple[str, float, str]]) -> list[str]:
+    """요구창 앞에서 **더 큰** 움직임이 있었으면 그것을 간접적으로 얹는다.
+
+    사용자 규약: 정보 접근은 이전 시간 전부 가능하고 **설명 대상만** 요구 구간이다.
+    앞 구간이 더 합리적인 설명이면 쓸 수 있지만 **직접 호명은 금지** - 창 이름이나
+    시각을 부르면 물은 구간이 아니라 다른 구간을 설명하는 답이 된다.
+    """
+    big = [(when, r) for when, r, _k in before if abs(r) > abs(ret) * 1.5]
+    if not big:
+        return []
+    when, r = max(big, key=lambda x: abs(x[1]))
+    same = (r > 0) == (ret > 0)
+    if same:
+        return [f"{when}부터 이어진 흐름이 이 시간대에도 계속됐어요. "
+                "앞선 움직임이 더 컸고, 이 구간은 그 연장선에 있어요."]
+    return [f"{when}에 반대 방향으로 더 크게 움직인 뒤였어요. "
+            "이 시간대의 움직임은 그 되돌림으로 읽는 편이 자연스러워요."]
 
 
 def _reasons(w: Window, ret: float, rank: int, roll, inside: list[str],
@@ -188,9 +221,13 @@ def explain(lake, ticker: str, instrument_id: str, day: str,
     if order:
         top = order[0]
         tw = next(w for w in ws if w.name == top)
-        out.append(f"  최대 몫: {top} ({'전일 종가~시가' if tw.kind == 'gap' else f'{tw.start:%H:%M}~{tw.end:%H:%M}'})"
-                   f" — 하루 움직임의 대부분이 여기서 났다"
-                   + (" · **요구한 구간이 아니다**" if tw.kind != "asked" else ""))
+        if tw.kind == "asked":
+            out.append("  요구한 구간이 하루에서 가장 큰 몫이다")
+        else:
+            # **간접 지시**: 어느 창이 컸는지는 말하되 이름·시각으로 호명하지 않는다.
+            when = "밤사이" if tw.kind == "gap" else _when_word(tw.start)
+            out.append(f"  하루의 가장 큰 움직임은 {when}에 났다 —"
+                       f" 요구한 구간은 그 {'뒤' if tw.start < pin[0] else '앞'}이다")
 
     for w in ws:
         r, nb = rets[w.name], nbars[w.name]
@@ -229,9 +266,17 @@ def explain(lake, ticker: str, instrument_id: str, day: str,
         for line in _reasons(w, r, order.index(w.name), roll,
                              list(w.event_ids), after):
             out.append("  · " + line)
+        # 요구창에만 앞 구간 맥락을 얹는다 - 다른 창까지 얹으면 서사가 서로를 인용한다.
+        if w.kind == "asked":
+            before = [("밤사이" if x.kind == "gap" else _when_word(x.start),
+                       rets[x.name], x.kind)
+                      for x in ws if x.end <= w.start and rets[x.name] is not None]
+            for line in _context(w, r, before):
+                out.append("  · " + line)
         if w.event_ids:
             out.append("  근거 id: " + " ".join(w.event_ids[:6]))
-        out.append(f"  [절단] as_of = {w.end:%H:%M} — 이 창 뒤에 나온 것은 쓰지 않았다")
+        out.append(f"  [절단] as_of = {w.end:%H:%M} — 이 시각까지의 정보만 쓴다"
+                   " (그 앞 구간은 전부 볼 수 있다: 설명 대상만 이 창이다)")
         out.append("  [인과] 미검정 — 검정 패널의 단위가 거래일이다")
     return "\n".join(out)
 

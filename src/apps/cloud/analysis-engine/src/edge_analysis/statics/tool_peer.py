@@ -72,7 +72,7 @@ def _no(reason: str, *, n_peers: int = 0, industry: str = "") -> dict:
     것이 이 저장소가 가장 싫어하는 실패다. 없는 값은 없다고 명시된 None 이다."""
     return {"verdict": "판정불가", "reason": reason, "n_peers": n_peers,
             "rank": None, "pct_rank": None, "peer_median": None,
-            "spread": None, "same_sign": None, "supports": None,
+            "spread": None, "same_sign": None, "supports": None, "signed": None,
             "note": "", "industry": industry}
 
 
@@ -132,6 +132,11 @@ def _peer_rank(lake, *, day: str, instrument_id: str, **kw) -> dict:
             # `supports` = 업종 서사를 지지하는가. 동종과 **반대**로 움직였으면
             # "업종이 좋아서 올랐다" 는 거짓이다 - 신뢰성 검사가 이 값을 읽는다.
             "supports": prod > 0,
+            # `signed` = **업종 중앙값**의 부호. '동종 흐름과 함께 올랐다' 가 말하는
+            # 방향은 업종이 간 방향이다(대상-중앙 격차 `spread` 는 다른 질문 - 동종보다
+            # 잘했나). 이 키가 없어서 신뢰성 검사가 그 문장을 '부호 있는 근거 없음' 으로
+            # 기각했다 - 재료는 있는데 신고를 안 한 것이다.
+            "signed": med,
             "industry": industry}
 
 
