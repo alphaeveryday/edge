@@ -43,6 +43,48 @@ EXTENDED_OPEN = time(8, 0)
 EXTENDED_CLOSE = time(20, 0)
 WINDOWS_PER_EXTENDED_SESSION = 720
 
+# 마감 window 를 집기 전에 기다리는 시간. KRX 종가 단일가는 15:20~15:30 접수 후
+# **15:30:00 에 한 번** 체결되는데, 벤더 캔들에 실리기까지 시차가 있다.
+FINAL_WINDOW_SETTLE_SEC = 60
+# 그 지연이 걸리는 dataset. **가격 캔들 얘기**라 뉴스 세션(news_minute)에는 안 건다 —
+# 같은 `plan_session` 을 쓰지만 15:30 에 기다릴 이유가 없고, 1분 지연은 뉴스 realtime
+# 레인의 추출·조립을 그만큼 늦춘다.
+PRICE_MINUTE_DATASET = "price_minute"
+
+
+def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
+    """window 가 claim 가능해지는 시각 — 보통 `window_end`(구간이 닫혀야 봉이 있다).
+
+    ⚠️ **정규장 마감 경계(15:30)로 끝나는 window 만 예외**다. 그 window 를 `window_end`
+    즉시 집으면 종가 단일가가 아직 캔들에 안 실려 **미완성 봉(vol 0·직전가)** 이 커밋된다
+    — 2026-08-03 실측(우리 수집분 vs 같은 좌표 소급 조회):
+
+        0005G0  수집 43,710(V=0)   →  소급 43,305(V=140)     일봉 종가 43,305
+        091160  수집 111,890(V=0)  →  소급 111,905(V=4,368)  일봉 종가 111,905
+
+    요청한 **좌표는 맞았다** — 나중에 물으면 종가와 정확히 일치한다. 창을 늘릴 문제가
+    아니라 **묻는 시각**의 문제다(개별주는 15:31 봉으로 밀리지만 ETF 는 15:30 봉에
+    담긴다 — 트리거 대상이 ETF 라 이 창이 맞는 창이다).
+
+    지연을 `scheduled_at` 에 두는 이유: worker tick 안에서 자면 `worst_tick` 이 늘어
+    `session_lease_seconds` 검증(기본값 여유 **15초**)에 걸리고, lease 가 처리 중 만료되면
+    그 window 의 커밋이 fence 에 거부된다. `scheduled_at` 은 claim 조건이라 tick 을
+    막지 않고 lease 불변식과 무관하다.
+
+    ⚠️ 시간외 세션(720 window)에도 15:30 로 끝나는 window 가 있고 거기에도 적용된다 —
+    단일가 체결 시각은 세션 길이와 무관하기 때문이다. drain 은 20:05 이라 여유가 있다.
+    """
+    if window_end.tzinfo is None or window_end.tzinfo.utcoffset(window_end) is None:
+        # naive 는 실행 환경 TZ 로 해석돼 **호스트마다 다른 결과**가 나온다 — KST 호스트
+        # 에서는 15:30 이 마감으로 잡혀 지연되지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
+        # 이 모듈의 계약(모듈 docstring)이 aware 이므로 조용히 넘기지 않는다(Rule 12).
+        raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
+    if dataset != PRICE_MINUTE_DATASET:
+        return window_end
+    if window_end.astimezone(KST).time() != SESSION_CLOSE:
+        return window_end
+    return window_end + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+
 ExecutionMode = Literal["one_shot", "resident"]
 
 

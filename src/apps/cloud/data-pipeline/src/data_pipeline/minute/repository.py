@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from ..config import DbConfig
 from ..db import connect as _default_connect
 from ..db import stable_domain_id
-from .models import canonical_json
+from .models import canonical_json, scheduled_at_for
 from .states import (
     RESULT_STATUSES,
     WINDOW_CLAIMED,
@@ -74,7 +74,12 @@ class MinuteLedger:
         """session + expected window 를 한 트랜잭션에 멱등 생성. (session_id, created).
 
         재계획(같은 identity)은 no-op 이고, universe 가 다르면 UniverseConflictError.
-        window 의 scheduled_at 은 window_end 다 — bar 는 구간이 닫혀야 존재한다.
+        window 의 scheduled_at 은 `scheduled_at_for` 가 정한다 — 보통 window_end(구간이
+        닫혀야 봉이 있다)고, 마감 window 만 종가 단일가 확정을 기다려 늦춘다.
+
+        ⚠️ window INSERT 는 `DO NOTHING` 이라 **재계획이 기존 행의 scheduled_at 을 안
+        고친다**. 이미 계획된 세션에 이 규칙을 소급 적용하려면 그 행을 직접 UPDATE 해야
+        한다(2026-08-05 에 그렇게 당일 적용했다).
         """
         session_id = stable_domain_id("msn", dataset, source_group, session_date.isoformat())
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
@@ -124,7 +129,8 @@ class MinuteLedger:
                 ) VALUES (%s, %s, %s, %s)
                 ON CONFLICT (session_id, window_start) DO NOTHING
                 """,
-                [(session_id, ws, we, we) for ws, we in windows],
+                [(session_id, ws, we, scheduled_at_for(we, dataset=dataset))
+                 for ws, we in windows],
             )
             # 재계획이 window 를 더했을 수 있다 — 집계는 실제 행 수가 정본
             cur.execute(
