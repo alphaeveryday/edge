@@ -178,7 +178,7 @@ export function AdminLayout() {
   } else if (path.startsWith('/overview')) {
     pageTitle = '레인 원장 요약';
   } else if (path === '/') {
-    pageTitle = '오늘 사건';
+    pageTitle = '오늘 운영 요약';
   }
   const showBack = Boolean(tenantId || analysisId);
 

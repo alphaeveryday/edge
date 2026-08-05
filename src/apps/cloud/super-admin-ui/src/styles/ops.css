@@ -197,3 +197,84 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* ── 오늘 운영 요약 (ALPHA-738) ── */
+/* 최우선 문제 — 목록의 한 줄이 아니라 이 화면의 답이다 */
+.ops-top {
+  border-left: 3px solid var(--down);
+}
+.ops-top-metric {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.ops-top-impact {
+  margin-top: 10px;
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+}
+.ops-top-impact ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.ops-top-impact li {
+  margin-bottom: 2px;
+}
+
+/* 심각도 요약 — 누르면 그 심각도 섹션으로 간다 */
+.ops-sev-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-5);
+}
+button.kpi.ops-sev {
+  display: block;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.14s ease;
+}
+button.kpi.ops-sev:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+button.kpi.ops-sev:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.ops-sev .kpi-label,
+.ops-sev .kpi-value,
+.ops-sev .kpi-sub {
+  display: block;
+}
+
+/* 심각도 섹션 헤더 — card-head 를 그대로 버튼으로 */
+button.card-head.ops-sev-head {
+  width: 100%;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  justify-content: flex-start;
+}
+button.card-head.ops-sev-head:hover {
+  background: var(--bg-hover);
+}
+
+.ops-detect-summary {
+  padding: var(--sp-4) var(--sp-6);
+  color: var(--fg-2);
+  cursor: pointer;
+  list-style: none;
+}
+.ops-detect-summary::-webkit-details-marker {
+  display: none;
+}
+.ops-detect-summary::before {
+  content: '▸ ';
+  color: var(--fg-3);
+}
+details[open] > .ops-detect-summary::before {
+  content: '▾ ';
+}

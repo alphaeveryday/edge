@@ -13,6 +13,7 @@
 import type { Analysis } from '../domains/analyses';
 import type { TaskFact } from '../rules/types';
 import type {
+  ExecutionStatus,
   GridCell,
   GridSlot,
   HoldingsImpact,
@@ -41,6 +42,8 @@ const MARKET_TASKS: { stage: string; taskKey: string }[] = [
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
   { stage: 'normalize', taskKey: 'NORMALIZE_PRICE' },
   { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY' },
+  { stage: 'raw', taskKey: 'DISCLOSURE_COLLECTION_DART' },
+  { stage: 'feature', taskKey: 'LOAD_ETF_FLOW' },
 ];
 const NEWS_TASKS: { stage: string; taskKey: string }[] = [
   { stage: 'raw', taskKey: 'NEWS_COLLECTION_BIGKINDS' },
@@ -102,6 +105,8 @@ function marketSlot(date: string): GridSlot {
           cell(T[3], { recordsOut: 906 }),
           cell(T[4], { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
           cell(T[5], { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
+          cell(T[6], { recordsOut: 2, failedRecords: null }),
+          cell(T[7], { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
         ],
       };
     case '2026-07-29':
@@ -118,6 +123,8 @@ function marketSlot(date: string): GridSlot {
           cell(T[3], { recordsOut: 906 }),
           cell(T[4]),
           cell(T[5], { recordsOut: 1450 }),
+          cell(T[6], { recordsOut: 2, failedRecords: null }),
+          cell(T[7], { recordsOut: 1450 }),
         ],
       };
     case MOCK_TRADING_DATE:
@@ -129,11 +136,13 @@ function marketSlot(date: string): GridSlot {
         tradingDate: date,
         tasks: [
           verified(T[0]),
-          cell(T[1], { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true }),
+          cell(T[1], { outcome: 'FAILED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_TIMEOUT' }),
           cell(T[2], { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 }),
           cell(T[3], { recordsOut: 906 }),
-          cell(T[4], { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true }),
-          cell(T[5], { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null }),
+          cell(T[4], { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
+          cell(T[5], { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true }),
+          cell(T[6], { recordsOut: 2, failedRecords: null }),
+          cell(T[7], { planStatus: 'SKIPPED', outcome: null, dataStatus: null, recordsOut: null, failedRecords: null, skipReason: 'NON_TRADING_DAY_SOURCE' }),
         ],
       };
     default:
@@ -142,7 +151,16 @@ function marketSlot(date: string): GridSlot {
         launchStatus: 'LAUNCHED',
         orchestrationStatus: 'SUCCEEDED',
         tradingDate: date,
-        tasks: [verified(T[0]), cell(T[1]), verified(T[2]), cell(T[3], { recordsOut: 906 }), cell(T[4]), cell(T[5], { recordsOut: 1452 })],
+        tasks: [
+          verified(T[0]),
+          cell(T[1]),
+          verified(T[2]),
+          cell(T[3], { recordsOut: 906 }),
+          cell(T[4]),
+          cell(T[5], { recordsOut: 1452 }),
+          cell(T[6], { recordsOut: 2, failedRecords: null }),
+          cell(T[7], { recordsOut: 1452 }),
+        ],
       };
   }
 }
@@ -408,6 +426,121 @@ export const MOCK_REPORT: SourceReport = {
     { issueType: 'STALLED', scope: 'run', taskKey: null, status: 'RESOLVED', occurrenceCount: 1, firstSeenAt: iso('15:55'), lastSeenAt: iso('16:03'), resolutionReason: 'RETRY_SUCCEEDED' },
   ],
 };
+
+const MOCK_DATASET: Record<string, string> = {
+  ETF_HOLDINGS_COLLECTION_KRX: 'etf_holdings',
+  PRICE_COLLECTION_KIS: 'price_daily',
+  INVESTOR_COLLECTION_KIS: 'investor_flow',
+  DISCLOSURE_COLLECTION_DART: 'disclosures',
+  NORMALIZE_ETF: 'etf_holdings',
+  NORMALIZE_PRICE: 'price_daily',
+  LOAD_PRICE_DAILY: 'price_daily',
+  LOAD_ETF_FLOW: 'etf_flow',
+  NEWS_COLLECTION_BIGKINDS: 'stock_news',
+  NORMALIZE_NEWS: 'stock_news',
+  LOAD_DOCUMENTS: 'document',
+};
+
+function mockSlotAt(slot: GridSlot) {
+  const time = slot.runKey.match(/T(\d{2}:\d{2})/)?.[1];
+  return slot.tradingDate && time ? `${slot.tradingDate}T${time}:00+09:00` : null;
+}
+
+function mockExecutionStatus(gridCell: GridCell): ExecutionStatus | null {
+  if (gridCell.running) return 'RUNNING';
+  if (gridCell.outcome === 'FULFILLED') return 'SUCCEEDED';
+  if (gridCell.outcome === 'FAILED') {
+    return /TIMEOUT/i.test(gridCell.outcomeReason ?? '') ? 'TIMED_OUT' : 'FAILED';
+  }
+  return null;
+}
+
+/** 목 격자의 런·작업을 눌렀을 때 라이브 API 가 아니라 같은 픽스처의 원장 상세를 연다. */
+export function mockReportForRun(runKey: string): SourceReport | null {
+  /* 대표 런은 재시도·대조 이슈까지 직접 채운 상세 픽스처를 쓴다. */
+  if (runKey === MARKET_RUN) return MOCK_REPORT;
+
+  const slot = MOCK_GRID.slots.find((candidate) => candidate.runKey === runKey);
+  if (!slot) return null;
+
+  const at = mockSlotAt(slot);
+  const tasks = slot.tasks.map((gridCell): TaskStatus => {
+    const executionStatus = mockExecutionStatus(gridCell);
+    const finishedAt = executionStatus !== null && executionStatus !== 'RUNNING' ? at : null;
+    const completeness =
+      gridCell.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && gridCell.dataStatus === 'VALID'
+        ? { expected: 33, received: 33, missing: 0 }
+        : gridCell.taskKey === 'INVESTOR_COLLECTION_KIS' && gridCell.dataStatus === 'INCOMPLETE'
+          ? { expected: 363, received: 361, missing: 2 }
+          : null;
+
+    return {
+      stage: gridCell.stage,
+      taskKey: gridCell.taskKey,
+      dataset: MOCK_DATASET[gridCell.taskKey] ?? null,
+      planStatus: gridCell.planStatus,
+      outcome: gridCell.outcome,
+      dataStatus: gridCell.dataStatus,
+      executionStatus,
+      recordsOut: gridCell.recordsOut,
+      failedRecords: gridCell.failedRecords,
+      completeness,
+      lastFinishedAt: finishedAt,
+      expectedAt: at,
+      deadlineAt: null,
+      missedAt: gridCell.outcome === 'MISSED' ? at : null,
+      fulfilledAt: gridCell.outcome === 'FULFILLED' ? at : null,
+      skipReason: gridCell.skipReason,
+      outcomeReason: gridCell.outcomeReason,
+      attempts:
+        executionStatus === null
+          ? []
+          : [
+              {
+                attemptNumber: 1,
+                ecsTaskArn: null,
+                executionStatus,
+                startedAt: at,
+                finishedAt,
+                exitCode: executionStatus === 'SUCCEEDED' ? 0 : executionStatus === 'RUNNING' ? null : 1,
+                failureReason:
+                  executionStatus === 'FAILED' || executionStatus === 'TIMED_OUT'
+                    ? gridCell.outcomeReason
+                    : null,
+                recordSource: 'WRAPPER',
+              },
+            ],
+    };
+  });
+
+  const issues: SourceReport['issues'] = [];
+  if (slot.launchStatus === 'LAUNCH_FAILED') {
+    issues.push({ issueType: 'LAUNCH_FAILED', scope: 'run', taskKey: null, status: 'OPEN', occurrenceCount: 1, firstSeenAt: at, lastSeenAt: at, resolutionReason: null });
+  } else if (slot.orchestrationStatus === 'TIMED_OUT') {
+    issues.push({ issueType: 'STALLED', scope: 'run', taskKey: null, status: 'OPEN', occurrenceCount: 1, firstSeenAt: at, lastSeenAt: at, resolutionReason: null });
+  }
+  for (const gridCell of slot.tasks) {
+    const issueType =
+      gridCell.dataStatus === 'INCOMPLETE' || gridCell.dataStatus === 'INVALID'
+        ? gridCell.dataStatus
+        : gridCell.outcome === 'FAILED' || gridCell.outcome === 'MISSED'
+          ? gridCell.outcome
+          : null;
+    if (!issueType) continue;
+    issues.push({ issueType, scope: 'task', taskKey: gridCell.taskKey, status: 'OPEN', occurrenceCount: 1, firstSeenAt: at, lastSeenAt: at, resolutionReason: null });
+  }
+
+  return {
+    run: {
+      runKey: slot.runKey,
+      launchStatus: slot.launchStatus,
+      orchestrationStatus: slot.orchestrationStatus,
+      tradingDate: slot.tradingDate,
+    },
+    tasks,
+    issues,
+  };
+}
 
 /* ─────────── /impact/holdings — 결손 영향 ─────────── */
 

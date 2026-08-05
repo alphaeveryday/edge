@@ -280,10 +280,8 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
   /* 셀 클릭은 그 작업을 지목해 드릴다운의 해당 행으로 바로 떨어진다 — 런 전체만 열면
    * 방금 누른 작업을 목록에서 다시 찾아야 한다. 헤더 클릭은 런 전체. */
   const openDrilldown = (runKey: string, taskKey?: string) =>
-    mock
-      ? undefined
-      : navigate(
-      `/sources?runKey=${encodeURIComponent(runKey)}${
+    navigate(
+      `/sources?${mock ? 'preview=mock&' : ''}runKey=${encodeURIComponent(runKey)}${
         taskKey ? `&task=${encodeURIComponent(taskKey)}` : ''
       }`,
     );
@@ -355,28 +353,18 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                   {slots.map((slot) => (
                     <th key={slot.runKey} style={{ padding: 0 }}>
                       {/* th 의 onClick 대신 진짜 버튼 — Tab·Enter·Space 가 그대로 동작한다 */}
-                      {mock ? (
-                        <span
-                          className="gd-headbtn"
-                          style={{ display: 'inline-block', color: slotHeaderColor(slot) }}
-                          title={headTip(slot)}
-                        >
-                          {slotLabel(slot.runKey)}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="gd-headbtn"
-                          title={headTip(slot)}
-                          aria-label={`실행 ${slot.runKey} · 기동 ${slot.launchStatus ?? '기록 없음'} · 실행 전체 ${slot.orchestrationStatus ?? '기록 없음'} — 이 실행 전체 보기`}
-                          onClick={() => openDrilldown(slot.runKey)}
-                          /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
-                           * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
-                          style={{ color: slotHeaderColor(slot) }}
-                        >
-                          {slotLabel(slot.runKey)}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="gd-headbtn"
+                        title={headTip(slot)}
+                        aria-label={`실행 ${slot.runKey} · 기동 ${slot.launchStatus ?? '기록 없음'} · 실행 전체 ${slot.orchestrationStatus ?? '기록 없음'} — 이 실행 전체 보기`}
+                        onClick={() => openDrilldown(slot.runKey)}
+                        /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
+                         * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
+                        style={{ color: slotHeaderColor(slot) }}
+                      >
+                        {slotLabel(slot.runKey)}
+                      </button>
                     </th>
                   ))}
                 </tr>
@@ -441,21 +429,15 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                           return (
                             <td key={slot.runKey} style={{ padding: 2 }}>
                               {/* td 의 onClick 대신 진짜 버튼 — 18×18 밀도는 버튼 자체가 유지한다 */}
-                              {mock ? (
-                                <span className="gd-static" title={cellTip(cell, slot.runKey)}>
-                                  {visual}
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="gd-cellbtn"
-                                  title={cellTip(cell, slot.runKey)}
-                                  aria-label={cellLabel(cell, slot.runKey, skipped)}
-                                  onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
-                                >
-                                  {visual}
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                className="gd-cellbtn"
+                                title={cellTip(cell, slot.runKey)}
+                                aria-label={cellLabel(cell, slot.runKey, skipped)}
+                                onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
+                              >
+                                {visual}
+                              </button>
                             </td>
                           );
                         })}

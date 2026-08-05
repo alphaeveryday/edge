@@ -15,7 +15,7 @@ import type {
   TaskStatus,
 } from '../domains/sources';
 import { useSourceReport } from '../domains/sources/hooks';
-import { MOCK_REPORT } from '../mock/preview';
+import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
@@ -341,11 +341,30 @@ export function SourcesPage() {
   /* 공백만 있는 값은 지목이 아니다 — `?runKey=` 를 그대로 보내면 "지정한 실행"이라 표시해 놓고
    * 실제로는 서버가 404 를 내거나(엄한 쪽) 최신 런을 준다(관대한 쪽). 둘 다 화면 문구와 어긋난다. */
   const runKey = searchParams.get('runKey')?.trim() || undefined;
+  /* 목 격자에서 온 주소는 같은 픽스처를 읽는다. 라이브 원장에 목 runKey 를 보내 404 를 만드는
+   * 것은 미리보기 흐름이 아니며, preview 표식은 새로고침해도 남아야 하므로 URL 로 운반한다. */
+  const mockPreview = searchParams.get('preview') === 'mock';
   /* 격자 셀이 지목한 작업 — 있으면 그 작업 하나만 보여준다(셀을 누른 목적이 그 작업의 상세다).
    * 원장에 없는 taskKey 면 전체 목록으로 폴백한다 — 지목 실패를 에러로 만들면 격자 쪽
    * 오타가 화면 전체를 죽인다. */
   const focusTask = searchParams.get('task')?.trim() || undefined;
-  const { data: report, isPending, isError, error } = useSourceReport(runKey);
+  const { data: report, isPending, isError, error } = useSourceReport(runKey, !mockPreview);
+
+  if (mockPreview) {
+    const previewReport = runKey ? mockReportForRun(runKey) : null;
+    if (previewReport === null) {
+      return (
+        <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
+          지정한 목 실행을 찾을 수 없습니다. <Link to="/grid">실행 이력으로 돌아가기</Link>
+        </div>
+      );
+    }
+    return (
+      <MockPreview>
+        <SourcesBody report={previewReport} runKey={runKey} focusTask={focusTask} mock />
+      </MockPreview>
+    );
+  }
 
   if (isError) {
     /* 없는 런과 고장 난 서버는 다른 사실이다 — 404 를 일반 에러로 뭉개면 운영자가 오타를
@@ -460,7 +479,9 @@ function SourcesBody({
             {focusedExists && (
               <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
                 {'격자에서 지목한 작업만 표시 중 · '}
-                <Link to={`/sources?runKey=${encodeURIComponent(runKey ?? '')}`}>
+                <Link
+                  to={`/sources?${mock ? 'preview=mock&' : ''}runKey=${encodeURIComponent(runKey ?? '')}`}
+                >
                   이 실행의 전체 작업 보기
                 </Link>
               </p>
