@@ -109,6 +109,46 @@ class EventStore:
             )
             return cur.fetchone() is not None
 
+    def find_published_minute_run_ids(
+        self, entity_id: str, session_id: str, until_window_start: datetime,
+    ) -> list[str]:
+        """그 종목·세션의 **분봉 트리거 기원** 설명 중 PUBLISHED 인 run id 목록(ALPHA-746).
+
+        ExposureReverted 회수 대상 결정. 무효화 API 의 지목 축이 run 이라
+        (POST /analyses/{explanation_run_id}/invalidate) run id 를 돌려준다.
+
+        - **EOD 제외의 WHY**: 관측의 트리거 축은 정확히 하나다
+          (ck_etf_contribution_one_trigger) — EOD 설명은 price_movement_trigger_id 에,
+          분봉 설명은 minute_price_trigger_id 에 매달린다. minute_price_trigger 로의
+          INNER JOIN 이 EOD 계보를 구조적으로 떨군다(run_reason 은 두 경로 모두
+          'DAILY' 라 분기 축이 못 된다).
+        - **당일 한정 = session_id**: 트리거와 회수 사건이 같은 세션 좌표를 나른다
+          (와이어 계약) — 날짜 재계산(KST 변환)보다 정확하고 자정 crossing 에 안전하다.
+        - **상한 = 회수 사건의 window_start**: 회수는 그 시점 이전 발화만 덮는다.
+          지연·재배달된 회수가 세션 전체를 잡으면, 복귀 **이후** 재발화(앵커 리셋,
+          ALPHA-745)한 새 설명까지 무효화한다 — 정당하게 노출 중인 설명이 지연 하나로
+          내려간다. 트리거의 window_start 는 항상 복귀 window 보다 앞이므로 <= 다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT run.explanation_run_id"
+                " FROM explanation_result res"
+                " JOIN explanation_run run"
+                "   ON run.explanation_run_id = res.explanation_run_id"
+                " JOIN explanation_route rte"
+                "   ON rte.explanation_route_id = run.explanation_route_id"
+                " JOIN etf_contribution_observation obs"
+                "   ON obs.contribution_observation_id = rte.contribution_observation_id"
+                " JOIN minute_price_trigger trg"
+                "   ON trg.trigger_id = obs.minute_price_trigger_id"
+                " WHERE trg.entity_id = %s AND trg.session_id = %s"
+                " AND trg.window_start <= %s"
+                " AND res.publication_status = 'PUBLISHED'"
+                " ORDER BY run.explanation_run_id",
+                (entity_id, session_id, until_window_start),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+
     # -- 읽기 --------------------------------------------------------------- #
     def causal_data(self):
         """인과 설계용 조회 표면. **같은 커넥션**을 공유한다 - PIT 기준이 갈리면 안 된다.

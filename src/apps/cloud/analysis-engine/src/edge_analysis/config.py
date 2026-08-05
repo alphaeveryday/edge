@@ -87,6 +87,14 @@ class Settings:
     canonical_database: str = ""    # Glue 데이터베이스
     canonical_output: str = ""      # Athena 결과 s3:// 경로
 
+    # ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api. 엔진이 DB 를 직접
+    # UPDATE 하지 않는 이유: INVALIDATION 발화자를 super-admin 하나로 유지해야 WITHDRAWN
+    # 전이·tenant_delivery 발번·감사 로그가 한 트랜잭션으로 남는다(ALPHA-440). 비면
+    # 회수 경로가 fail-loud 한다 — 기본값에 비밀을 두지 않는다.
+    super_admin_url: str = ""
+    super_admin_email: str = ""
+    super_admin_password: str = ""
+
 
 def _flag(name: str, *, default: bool) -> bool:
     """불리언 환경변수. 오타는 fail-loud - 조용히 default 로 떨어지면 안 된다."""
@@ -162,4 +170,7 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         canonical_manifest=os.environ.get("CANONICAL_MANIFEST", "").strip(),
         canonical_database=os.environ.get("CANONICAL_DATABASE", "").strip(),
         canonical_output=os.environ.get("CANONICAL_ATHENA_OUTPUT", "").strip(),
+        super_admin_url=os.environ.get("SUPER_ADMIN_API_URL", "").strip(),
+        super_admin_email=os.environ.get("SUPER_ADMIN_EMAIL", "").strip(),
+        super_admin_password=os.environ.get("SUPER_ADMIN_PASSWORD", "").strip(),
     )

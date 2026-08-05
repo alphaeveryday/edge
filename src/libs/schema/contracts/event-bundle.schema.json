@@ -156,14 +156,15 @@
 
     "EvidenceItem": {
       "type": "object",
-      "description": "근거 문서 하나 (document 경계면을 flat 화 — ALPHA-395). publication-api 가 파싱하는 {kind,title,source,published_at} 형상.",
+      "description": "근거 문서 하나 (document 경계면을 flat 화 — ALPHA-395). publication-api 가 파싱하는 {kind,title,source,published_at} 형상 + 콘솔 원문 링크 source_uri(ALPHA-739).",
       "additionalProperties": false,
       "required": ["kind", "title", "source", "published_at"],
       "properties": {
         "kind": { "type": "string", "enum": ["NEWS", "DISCLOSURE"], "description": "document.document_type." },
         "title": { "type": ["string", "null"], "description": "헤드라인 ← document.title (nullable)." },
         "source": { "type": "string", "description": "출처 ← document.source_code." },
-        "published_at": { "type": ["string", "null"], "format": "date-time", "description": "← document.published_at (nullable)." }
+        "published_at": { "type": ["string", "null"], "format": "date-time", "description": "← document.published_at (nullable)." },
+        "source_uri": { "type": ["string", "null"], "description": "원문 링크 ← document.source_uri (ALPHA-739). optional — 구형(4키) 저장분·EOD 뉴스 결측(assemble 선적재 구멍, ALPHA-740)·원천 URL 결측 기사와 공존해야 해 required 승격은 채움 구멍 해소 후. 공시=DART 뷰어 URL 항상, 뉴스=원천 URL 있을 때." }
       }
     }
   }

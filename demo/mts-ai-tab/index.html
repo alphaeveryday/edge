@@ -183,9 +183,11 @@
     <div style="flex:1;overflow-y:auto;min-height:0">
 
       <!-- AI 분석 -->
-      <div id="panel-ai" style="display:none;padding:16px">
-        <!-- 헤더·본문 콘텐츠 폭 통일 — 패널 16px + 4px = 양쪽 20px (ALPHA-733 피드백: 둘의 평균 폭) -->
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px 12px;border-bottom:1px solid #e4e4e7">
+      <!-- 콘텐츠 폭은 패널의 유동 여백 하나에서 파생된다(기기 폭의 5%, 16~28px) — 헤더·본문·디스클레이머가
+           개별 px 조정 없이 구조적으로 같은 폭. % 는 컨테이닝 블록(.device) 기준이라 데스크톱 베젤
+           프리뷰(393px 고정)에서도 브라우저 창이 아닌 기기 프레임에 비례한다 (ALPHA-733) -->
+      <div id="panel-ai" style="display:none;padding:16px clamp(16px, 5%, 28px)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid #e4e4e7">
           <div style="display:flex;align-items:center;gap:8px">
             <span id="ai-date" class="num" style="font-size:12px;color:#71717a"></span>
             <span id="ai-date-dot" style="font-size:12px;color:#d4d4d8;display:none">·</span>
@@ -201,7 +203,8 @@
           <span class="skel" style="width:64%"></span>
         </div>
         <!-- 200: 리포트 본문 (첫 블록=헤드라인, 이후 문단) — 중앙 정렬 + 좌우 여백 (ALPHA-733 피드백) -->
-        <div id="ai-body" style="display:none;text-align:center;padding:0 4px">
+        <!-- 본문 블록: 좌우 5px(헤더·디스클레이머보다 살짝 좁게) + 헤더 구분선 아래 10px 간격(위 12px 와 대칭) (사용자 확정값) -->
+        <div id="ai-body" style="display:none;text-align:center;padding:10px 5px 0">
           <h2 id="ai-headline" style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.45;margin:16px 0 14px;text-wrap:pretty"></h2>
           <div id="ai-paragraphs"></div>
         </div>
@@ -240,16 +243,18 @@
           <span class="skel" style="width:96%"></span>
           <span class="skel" style="width:64%"></span>
         </div>
-        <!-- 실봉 도착 후 렌더 -->
+        <!-- 실봉 도착 후 렌더 — 우측 거터(52px)에 가격 눈금·현재가 태그를 얹는다 -->
         <div id="chart-body" style="display:none">
-          <svg viewBox="0 0 360 180" style="width:100%;display:block">
-            <line x1="0" y1="45" x2="360" y2="45" stroke="#f0f0f1" stroke-width="1"/>
-            <line x1="0" y1="90" x2="360" y2="90" stroke="#f0f0f1" stroke-width="1"/>
-            <line x1="0" y1="135" x2="360" y2="135" stroke="#f0f0f1" stroke-width="1"/>
-            <polyline id="chart-line" points="" fill="none" stroke="#1d4ed8" stroke-width="2"/>
-            <circle id="chart-dot" cx="0" cy="0" r="3" fill="#1d4ed8"/>
-          </svg>
-          <div id="chart-dates" class="num" style="display:flex;justify-content:space-between;font-size:10px;color:#a1a1aa;margin-top:6px"></div>
+          <div id="chart-plot" style="position:relative;padding-right:52px;height:160px">
+            <!-- preserveAspectRatio=none 로 고정 높이에 채우고, 선은 non-scaling-stroke 로 굵기 고정 -->
+            <svg viewBox="0 0 360 180" preserveAspectRatio="none" style="width:100%;height:100%;display:block">
+              <g id="chart-grid"></g>
+              <polyline id="chart-line" points="" fill="none" stroke="#1d4ed8" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+            </svg>
+            <!-- 가격 라벨·현재가 태그 오버레이 (HTML — SVG text 폰트 스케일 회피) -->
+            <div id="chart-yaxis" class="num"></div>
+          </div>
+          <div id="chart-dates" class="num" style="display:flex;justify-content:space-between;font-size:10px;color:#a1a1aa;margin-top:6px;padding-right:52px"></div>
           <div id="chart-stats" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:16px"></div>
         </div>
         <!-- 폴백: 안내 문구 (하드코딩 가짜 차트로 되돌리지 않는다) -->

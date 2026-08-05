@@ -39,7 +39,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+
+from .candle import Candle, build_candle, to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,6 @@ SUPPORTED_INTERVALS = ("1m", "1d")
 INTERVAL_SECONDS = {"1m": 60, "1d": 86_400}
 # 400 응답의 `data.constraint` 가 준 값.
 MAX_COUNT = 200
-# 가격·거래량 크기 상한 — 소스가 지수표기 거대값을 줘도 artifact 에 싣지 않는다
-MAX_MAGNITUDE = Decimal("1e15")
 # 초당 5회(X-RateLimit-Limit). 간격으로 환산해 호출 전에 지킨다 — 429 를 맞고 나서
 # 물러나는 것보다 애초에 안 넘는 게 싸다(429 는 그 콜이 통째로 버려진다).
 RATE_LIMIT_PER_SECOND = 5
@@ -109,46 +108,6 @@ class TossApiError(RuntimeError):
         return self.status in (0, 429) or self.status >= 500   # 0 = 전송 실패
 
 
-@dataclass(frozen=True)
-class Candle:
-    """분봉 하나 — 원장이 쓰는 축으로 정규화한 형태.
-
-    `window_start` 는 토스 timestamp 에서 **1분을 뺀 값**이다(위 right-labeled 주석).
-    """
-
-    symbol: str
-    window_start: datetime
-    window_end: datetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: Decimal
-    currency: str | None
-
-    @property
-    def traded(self) -> bool:
-        """거래가 있었나 — 거래량 0 은 정상 응답이고 no_trade 다(missing 이 아니다)."""
-        return self.volume > 0
-
-
-def _to_decimal(raw: object, field_name: str, symbol: str) -> Decimal:
-    """문자열 숫자를 Decimal 로. float 를 거치지 않는다 — 정밀도가 깨진다."""
-    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
-        raise ValueError(f"{symbol} 캔들의 {field_name} 형이 예상 밖이다: {raw!r}")
-    try:
-        value = Decimal(str(raw))
-    except InvalidOperation as error:
-        raise ValueError(f"{symbol} 캔들의 {field_name} 를 못 읽는다: {raw!r}") from error
-    if not value.is_finite():
-        raise ValueError(f"{symbol} 캔들의 {field_name} 가 유한하지 않다: {raw!r}")
-    if abs(value) >= MAX_MAGNITUDE:
-        # `1E+999` 같은 값도 Decimal 로는 유한하다 — 여기서 안 막으면 artifact 에 실린
-        # 뒤 NUMERIC 저장이나 분석 단계에서야 터진다(그때는 어느 window 인지 못 찾는다)
-        raise ValueError(f"{symbol} 캔들의 {field_name} 가 범위를 벗어났다: {raw!r}")
-    return value
-
-
 def parse_candle(raw: dict, symbol: str, *, interval: str = "1m") -> Candle:
     """응답 캔들 한 건 → `Candle`. 필드가 빠지거나 형이 다르면 즉시 raise 한다.
 
@@ -169,19 +128,9 @@ def parse_candle(raw: dict, symbol: str, *, interval: str = "1m") -> Candle:
         # 골라야 하는데, 그 추측이 바로 한 칸 밀린 커밋을 만든다.
         raise ValueError(f"{symbol} 캔들 timestamp 에 오프셋이 없다: {stamp!r}")
     values = {
-        name: _to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS
+        name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS
     }
-    volume = _to_decimal(raw.get("volume"), "volume", symbol)
-    if volume < 0:
-        raise ValueError(f"{symbol} 캔들 거래량이 음수다: {raw!r}")
-    if min(values.values()) <= 0:
-        # OHLC **상호관계**만 보면 전부 -1 인 행이 통과한다(레포 공통 게이트의
-        # non_positive_price 불변식과 같은 축)
-        raise ValueError(f"{symbol} 캔들 가격이 양수가 아니다: {raw!r}")
-    if not (values["low"] <= values["open"] <= values["high"]
-            and values["low"] <= values["close"] <= values["high"]):
-        # OHLC 정합은 소스가 깨질 수 있는 축이다 — 통과시키면 canonical 이 그대로 받는다
-        raise ValueError(f"{symbol} 캔들 OHLC 정합 위반: {raw!r}")
+    volume = to_decimal(raw.get("volume"), "volume", symbol)
     currency = raw.get("currency")
     if currency is not None and not isinstance(currency, str):
         raise ValueError(f"{symbol} 캔들 currency 형이 예상 밖이다: {currency!r}")
@@ -189,14 +138,10 @@ def parse_candle(raw: dict, symbol: str, *, interval: str = "1m") -> Candle:
     if span is None:
         # 어휘 밖 interval 로 파싱하면 window 길이를 우리가 지어내게 된다
         raise ValueError(f"interval 은 {sorted(INTERVAL_SECONDS)} 만 된다: {interval!r}")
-    return Candle(
-        symbol=symbol,
-        # ⚠️ ts 는 구간의 **끝**이다 — window_start 는 그 interval 만큼 앞이다
-        # (1d 를 60초로 접으면 일봉 소비자의 날짜 창이 통째로 어긋난다)
-        window_start=end.__class__.fromtimestamp(end.timestamp() - span, tz=end.tzinfo),
-        window_end=end,
-        volume=volume, currency=currency, **values,
-    )
+    # 값 정합(양수·OHLC 포함관계·거래량 비음수)과 ts→window_start 는 벤더 무관이다
+    # (1d 를 60초로 접으면 일봉 소비자의 날짜 창이 통째로 어긋난다 — span 을 넘긴다)
+    return build_candle(symbol, window_end=end, span_seconds=span,
+                        values=values, volume=volume, currency=currency)
 
 
 @dataclass

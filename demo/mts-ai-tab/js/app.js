@@ -65,13 +65,14 @@
     { price: '131,930', qty: '20,644', bar: '72%' },
     { price: '131,830', qty: '15,467', bar: '54%' },
   ];
-  // 차트 기간 = 일봉 슬라이스 봉 수(거래일). '1일'은 분봉이 필요해 두지 않는다 —
-  // 버튼이 하나 적은 것보다 눌리는 버튼이 전부 실데이터인 것이 시연 정합성에 우선한다.
+  // 차트 기간 — '1일'은 최근 거래일 분봉(전체 사용), 나머지는 일봉 슬라이스(거래일 수).
+  // 기본은 '1일' — 실 MTS 관례(종목 진입 시 당일 분봉)와 일치시킨다 (ALPHA-749).
   var PERIODS = [
-    { label: '1주', days: 5 },
-    { label: '1개월', days: 22 },
-    { label: '3개월', days: 66 },
-    { label: '1년', days: 250 },
+    { label: '1일', interval: '1m' },
+    { label: '1주', interval: '1d', days: 5 },
+    { label: '1개월', interval: '1d', days: 22 },
+    { label: '3개월', interval: '1d', days: 66 },
+    { label: '1년', interval: '1d', days: 250 },
   ];
   var CHART_FALLBACK_MESSAGE = '차트를 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
   var NEWS = [
@@ -113,13 +114,12 @@
     activeTab: '차트',
     fav: false,
     alertOn: false,
-    period: 1,          // 기본 '1개월'
+    period: 0,          // 기본 '1일'(분봉)
     liked: {},
     aiRequestSeq: 0,    // 종목 전환 중 도착한 낡은 응답 무시용
     aiFetched: false,   // 현재 종목에서 AI 탭이 실제로 열렸는지 — 열기 전엔 호출하지 않는다
-    chart: null,        // BrokerApi.getChart 응답 candles — 과거→현재 순, 기간 슬라이스는 렌더에서
+    chartByInterval: {}, // interval('1m'|'1d') → candles(과거→현재 순). 기간 전환 시 필요한 것만 지연 조회
     chartRequestSeq: 0, // 종목 전환 중 도착한 낡은 차트 응답 무시용
-    chartFetched: false, // 현재 종목에서 차트 탭이 실제로 열렸는지 — 열기 전엔 호출하지 않는다
   };
 
   function el(id) {
@@ -230,8 +230,8 @@
     // exposure_log(고객 노출 이력)로 기록하므로, 보지 않은 화면을 노출로 남기지 않는다.
     state.aiFetched = false;
     state.aiRequestSeq++; // 이전 종목의 in-flight 응답 무효화
-    state.chart = null;
-    state.chartFetched = false; // 차트도 탭이 열릴 때만 — 딥링크로 AI 탭 직행 시 불필요한 호출을 막는다
+    state.chartByInterval = {}; // 차트도 탭이 열릴 때만 조회 — 딥링크로 AI 탭 직행 시 불필요한 호출을 막는다
+    state.period = 0; // 종목 진입은 항상 기본 '1일'(당일 분봉)부터 — 이전 종목의 기간 선택을 승계하지 않는다
     state.chartRequestSeq++;
     selectTab(tab || '차트');
     showScreen('stock');
@@ -261,9 +261,8 @@
       state.aiFetched = true;
       fetchAiAnalysis();
     }
-    if (name === '차트' && !state.chartFetched) {
-      state.chartFetched = true;
-      fetchChart();
+    if (name === '차트') {
+      ensureChart();
     }
   }
 
@@ -308,7 +307,10 @@
       var data = result.data;
       el('ai-date').textContent = data.trade_date;
       el('ai-date-dot').style.display = 'inline';
-      // 게시 시각은 뷰어 타임존과 무관하게 거래소 시간(KST)으로 표기한다
+      // 게시 시각은 뷰어 타임존과 무관하게 거래소 시간(KST)으로 표기한다.
+      // 기준시각(explanation_as_of)은 응답엔 있으나 화면엔 싣지 않는다 — 데모 시드에선
+      // 게시시각과 같은 분이라 중복 노이즈이고 실 증권 앱은 게시시각만 노출한다(ALPHA-753,
+      // owner 판단). API 계약은 불변(응답은 계속 반환).
       var published = new Date(data.published_at).toLocaleTimeString('ko-KR', {
         timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
       });
@@ -322,7 +324,10 @@
       body.textContent = '';
       blocks.forEach(function (text) {
         var p = document.createElement('p');
-        p.style.cssText = 'font-size:14px;line-height:1.75;margin:0 0 14px;text-wrap:pretty';
+        // 본문 단락은 양끝 정렬 — 장문에서 중앙 정렬은 모든 줄의 시작·끝이 제각각이라
+        // '정렬이 안 맞아' 보인다(ALPHA-733 실기기 실증). 한국어는 음절 줄바꿈이라 justify 가 깔끔하고,
+        // 양 가장자리가 직선이 돼 헤더·디스클레이머와 자로 잰 듯 맞는다. 헤드라인은 중앙 유지(컨테이너 상속).
+        p.style.cssText = 'font-size:14px;line-height:1.75;margin:0 0 14px;text-align:justify';
         p.textContent = text;
         body.appendChild(p);
       });
@@ -379,22 +384,55 @@
 
   // ── 차트 탭 — BrokerApi 경유 실데이터 경로 (일봉, 기간 슬라이스·통계는 여기서 파생) ──
 
-  function fetchChart() {
+  var MINUTE_STALE_MS = 60000; // 분봉 화면 신선도 — 서버 캐시 TTL 과 동일
+
+  // 현재 선택된 기간의 interval 데이터가 신선하면 그리고, 없거나 낡았으면 조회한다.
+  // 탭 진입·기간 전환 공용 진입점. 일봉은 하루 안 불변이라 종목당 1회, 분봉은 60초 지나면
+  // 재조회한다 — 장중 탭 왕복·재진입 시 새 봉이 반영되게(서버 캐시가 상류 호출은 눌러준다).
+  function ensureChart() {
+    var interval = PERIODS[state.period].interval;
+    var entry = state.chartByInterval[interval];
+    var fresh = entry && (interval !== '1m' || Date.now() - entry.at < MINUTE_STALE_MS);
+    if (fresh) {
+      el('chart-loading').style.display = 'none';
+      el('chart-empty').style.display = 'none';
+      renderChart();
+      return;
+    }
+    renderChart(); // 기간 버튼의 활성 표시를 즉시 갱신 — 데이터 도착 전에도 방금 누른 선택이 보이게
+    fetchChart(interval);
+  }
+
+  function fetchChart(interval) {
     var seq = ++state.chartRequestSeq;
+    var ticker = state.stock.ticker; // 도착 시 종목 전환 여부 판별용
     el('chart-loading').style.display = 'flex';
     el('chart-body').style.display = 'none';
     el('chart-empty').style.display = 'none';
-    window.BrokerApi.getChart(state.stock.ticker)
+    window.BrokerApi.getChart(ticker, interval)
       .then(function (result) {
-        if (seq !== state.chartRequestSeq) {
-          return;
+        var ok = result.state === 'OK' && result.data && result.data.candles && result.data.candles.length;
+        // 저장은 같은 종목이면 항상 — 기간 전환으로 seq 가 넘어가도 유효 데이터를 버리지 않아
+        // 그 기간으로 복귀할 때 재조회 없이 즉시 렌더된다. 종목이 바뀌었으면 오염 방지를 위해 버린다.
+        if (ok && state.stock && state.stock.ticker === ticker) {
+          // 서버 캐시 나이(ageMs)를 승계 — 이중 TTL 로 최대 2배 낡는 것을 막는다
+          state.chartByInterval[interval] = {
+            at: Date.now() - (result.data.ageMs || 0),
+            candles: result.data.candles,
+          };
         }
-        el('chart-loading').style.display = 'none';
-        if (result.state === 'OK' && result.data && result.data.candles && result.data.candles.length) {
-          state.chart = result.data.candles;
-          renderChart();
-        } else {
-          state.chartFetched = false; // 폴백에 갇히지 않게 — 탭을 떠났다 돌아오면 재시도한다
+        if (seq !== state.chartRequestSeq) {
+          return; // 렌더·폴백 표시는 최신 요청만
+        }
+        if (ok) {
+          // 도착 사이 기간이 바뀌었을 수 있다 — 현재 선택 기간의 interval 일 때만 그린다
+          if (PERIODS[state.period].interval === interval) {
+            el('chart-loading').style.display = 'none';
+            renderChart();
+          }
+        } else if (PERIODS[state.period].interval === interval) {
+          // 실패는 캐시하지 않는다 — 탭 재진입·기간 재선택이 재시도한다
+          el('chart-loading').style.display = 'none';
           el('chart-empty-text').textContent = result.message || CHART_FALLBACK_MESSAGE;
           el('chart-empty').style.display = 'block';
         }
@@ -403,7 +441,6 @@
         // 렌더링 예외까지 스켈레톤 잔류 없이 안내 문구로 수렴시킨다 (AI 탭과 동일)
         console.warn('[app] 차트 렌더링 실패', err);
         if (seq === state.chartRequestSeq) {
-          state.chartFetched = false;
           el('chart-loading').style.display = 'none';
           el('chart-empty-text').textContent = CHART_FALLBACK_MESSAGE;
           el('chart-empty').style.display = 'block';
@@ -427,14 +464,18 @@
         'border:none;font-family:inherit;cursor:pointer;background:' + (active ? '#3f3a33' : '#f4f4f5') + ';color:' + (active ? '#fff' : '#71717a');
       btn.addEventListener('click', function () {
         state.period = i;
-        renderChart();
+        ensureChart(); // 필요한 interval 데이터가 없으면 조회, 있으면 즉시 렌더
       });
       wrap.appendChild(btn);
     });
-    if (!state.chart) {
+    var period = PERIODS[state.period];
+    var entry = state.chartByInterval[period.interval];
+    if (!entry) {
       return; // 데이터 도착 전(스켈레톤·폴백 표시 중)엔 기간 버튼만 그린다
     }
-    var slice = state.chart.slice(-PERIODS[state.period].days);
+    var data = entry.candles;
+    // '1일'(분봉)은 최근 거래일 전체, 일봉 기간은 거래일 수 슬라이스
+    var slice = period.days ? data.slice(-period.days) : data;
     // 종가 폴리라인 — viewBox(360×180) 안에 min/max 정규화
     var W = 360;
     var H = 180;
@@ -449,17 +490,53 @@
       return x.toFixed(1) + ',' + y.toFixed(1);
     });
     var line = el('chart-line');
-    var dot = el('chart-dot');
     line.setAttribute('points', pts.join(' '));
-    var last = pts[pts.length - 1].split(',');
-    dot.setAttribute('cx', last[0]);
-    dot.setAttribute('cy', last[1]);
     // 선 색은 기간 등락에서 파생 (시세 표기 관례와 동일: 상승=빨강·하락=파랑)
     var first = closes[0];
     var latest = closes[closes.length - 1];
     var lineColor = latest > first ? UP : latest < first ? DOWN : FLAT;
     line.setAttribute('stroke', lineColor);
-    dot.setAttribute('fill', lineColor);
+
+    // 가격 축 — 그리드라인·우측 라벨·현재가 태그를 종가 범위(min~max)에서 파생한다.
+    // yOf 는 viewBox y(0~180), topPct 는 오버레이용 % (SVG 가 고정 높이를 채운다).
+    function yOf(v) {
+      return PAD + (1 - (v - min) / span) * (H - PAD * 2);
+    }
+    function topPct(v) {
+      return (yOf(v) / H) * 100;
+    }
+    // 그리드라인 — 고·중·저 3레벨 (종가 기준)
+    var levels = [max, (max + min) / 2, min];
+    el('chart-grid').innerHTML = levels.map(function (v) {
+      var y = yOf(v).toFixed(1);
+      return '<line x1="0" y1="' + y + '" x2="360" y2="' + y + '" stroke="#f0f0f1" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+    }).join('');
+    // 우측 거터: 가격 라벨(현재가 태그와 겹치면 생략) + 현재가 색 태그
+    var yaxis = el('chart-yaxis');
+    yaxis.textContent = '';
+    var dotPct = topPct(latest);
+    levels.forEach(function (v) {
+      var pct = topPct(v);
+      if (Math.abs(pct - dotPct) < 9) {
+        return; // 현재가 태그 근처 라벨은 억제 — 겹쳐 읽기 어려워지지 않게
+      }
+      var lab = document.createElement('div');
+      lab.style.cssText = 'position:absolute;right:0;top:' + pct.toFixed(1) + '%;transform:translateY(-50%);' +
+        'width:50px;text-align:right;font-size:10px;color:#a1a1aa;background:#fff;line-height:1';
+      lab.textContent = fmtNum(v, 0);
+      yaxis.appendChild(lab);
+    });
+    var tag = document.createElement('div');
+    tag.style.cssText = 'position:absolute;right:0;top:' + dotPct.toFixed(1) + '%;transform:translateY(-50%);' +
+      'font-size:10px;font-weight:700;color:#fff;background:' + lineColor + ';border-radius:3px;padding:1px 5px;line-height:1.5;white-space:nowrap';
+    tag.textContent = fmtNum(latest, 0);
+    yaxis.appendChild(tag);
+    // 마지막 점 마커 — 플롯 우측 끝(x=W)에 항상 찍는다. 캔들이 1개면 polyline 이 선을
+    // 못 그리므로(점 하나는 stroke 없음) 이 마커가 유일한 데이터 표시가 된다(봇 P2).
+    var mark = document.createElement('div');
+    mark.style.cssText = 'position:absolute;right:52px;top:' + dotPct.toFixed(1) + '%;transform:translate(50%,-50%);' +
+      'width:6px;height:6px;border-radius:50%;background:' + lineColor;
+    yaxis.appendChild(mark);
     // x축 라벨 — 슬라이스 구간에서 균등 5개
     var dates = el('chart-dates');
     dates.textContent = '';
@@ -467,22 +544,34 @@
     for (var li = 0; li < labelCount; li++) {
       var idx = labelCount > 1 ? Math.round((li * (slice.length - 1)) / (labelCount - 1)) : slice.length - 1;
       var label = document.createElement('span');
-      label.textContent = fmtDateLabel(slice[idx].date);
+      label.textContent = period.interval === '1m' ? slice[idx].time : fmtDateLabel(slice[idx].date);
       dates.appendChild(label);
     }
     // 통계 카드 — 전부 캔들 파생. 거래대금은 상류 필드가 없어 두지 않는다(지어내지 않는다).
-    // '52주'는 목표 250봉 기준이며 상장 1년 미만 종목은 상장 이후 범위다(실 MTS 표기 관행과 동일).
-    var latestCandle = state.chart[state.chart.length - 1];
-    var high52 = Math.max.apply(null, state.chart.map(function (c) { return c.high; }));
-    var low52 = Math.min.apply(null, state.chart.map(function (c) { return c.low; }));
-    var statRows = [
-      { label: '시가', value: fmtNum(latestCandle.open, 0) },
-      { label: '고가', value: fmtNum(latestCandle.high, 0) },
-      { label: '저가', value: fmtNum(latestCandle.low, 0) },
-      { label: '거래량', value: fmtNum(latestCandle.volume, 0) },
-      { label: '52주 최고', value: fmtNum(high52, 0) },
-      { label: '52주 최저', value: fmtNum(low52, 0) },
-    ];
+    var statRows;
+    if (period.interval === '1m') {
+      // '1일': 최근 거래일 분봉 집계 — 시가=첫 봉, 고가/저가=당일 극값, 거래량=합
+      statRows = [
+        { label: '시가', value: fmtNum(slice[0].open, 0) },
+        { label: '고가', value: fmtNum(Math.max.apply(null, slice.map(function (c) { return c.high; })), 0) },
+        { label: '저가', value: fmtNum(Math.min.apply(null, slice.map(function (c) { return c.low; })), 0) },
+        { label: '거래량', value: fmtNum(slice.reduce(function (sum, c) { return sum + c.volume; }, 0), 0) },
+      ];
+    } else {
+      // 일봉 기간: 최신 봉 + 52주 극값. '52주'는 목표 250봉 기준이며 상장 1년 미만 종목은
+      // 상장 이후 범위다(실 MTS 표기 관행과 동일).
+      var latestCandle = data[data.length - 1];
+      var high52 = Math.max.apply(null, data.map(function (c) { return c.high; }));
+      var low52 = Math.min.apply(null, data.map(function (c) { return c.low; }));
+      statRows = [
+        { label: '시가', value: fmtNum(latestCandle.open, 0) },
+        { label: '고가', value: fmtNum(latestCandle.high, 0) },
+        { label: '저가', value: fmtNum(latestCandle.low, 0) },
+        { label: '거래량', value: fmtNum(latestCandle.volume, 0) },
+        { label: '52주 최고', value: fmtNum(high52, 0) },
+        { label: '52주 최저', value: fmtNum(low52, 0) },
+      ];
+    }
     var stats = el('chart-stats');
     stats.textContent = '';
     statRows.forEach(function (cs) {

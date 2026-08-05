@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:rules": "node --test src/rules/rules.test.ts",
+    "test": "node --test 'src/**/*.test.ts'",
+    "test:rules": "node --test 'src/**/*.test.ts'",
     "eval:rules": "node src/rules/cli.ts"
   },
   "dependencies": {

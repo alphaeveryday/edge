@@ -592,21 +592,22 @@ const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' |
   basisTimeAbs: `${MOCK_TRADING_DATE} 15:30 KST`,
   doneTime: '—',
   confidence: null,
-  corrected: false,
+  /* 게시 상태는 실행 상태와 별개 축이다 — 결과가 아직 없는 런은 null (ALPHA-737) */
+  publicationStatus: null,
   result: '',
   evidence: [],
   ...o,
 });
 
 export const MOCK_ANALYSES: Analysis[] = [
-  analysis({ id: 'mock-1', name: 'KODEX 반도체', code: '091160', market: 'KRX', direction: 1, changePct: 3.42, status: 'COMPLETED', doneTime: '15:47', confidence: 'HIGH', result: '반도체 대형주 강세' }),
-  analysis({ id: 'mock-2', name: 'TIGER 2차전지테마', code: '305540', market: 'KRX', direction: -1, changePct: 4.18, status: 'COMPLETED', doneTime: '15:49', confidence: 'MEDIUM', result: '전기차 수요 둔화 우려' }),
+  analysis({ id: 'mock-1', publicationStatus: 'PUBLISHED',  name: 'KODEX 반도체', code: '091160', market: 'KRX', direction: 1, changePct: 3.42, status: 'COMPLETED', doneTime: '15:47', confidence: 'HIGH', result: '반도체 대형주 강세' }),
+  analysis({ id: 'mock-2', publicationStatus: 'PUBLISHED',  name: 'TIGER 2차전지테마', code: '305540', market: 'KRX', direction: -1, changePct: 4.18, status: 'COMPLETED', doneTime: '15:49', confidence: 'MEDIUM', result: '전기차 수요 둔화 우려' }),
   analysis({ id: 'mock-3', name: 'KODEX 200', code: '069500', market: 'KRX', direction: 1, changePct: 1.12, status: 'PENDING' }),
   analysis({ id: 'mock-4', name: 'TIGER 미디어컨텐츠', code: '228810', market: 'KRX', direction: -1, changePct: 3.05, status: 'FAILED' }),
   analysis({ id: 'mock-5', name: 'KODEX 보험', code: '140700', market: 'KRX', direction: -1, changePct: 2.87, status: 'FAILED' }),
-  analysis({ id: 'mock-6', name: 'KODEX 은행', code: '091170', market: 'KRX', direction: 1, changePct: 2.31, status: 'EXCLUDED' }),
-  analysis({ id: 'mock-7', name: 'Invesco QQQ Trust', code: 'QQQ', market: 'NASDAQ', direction: 1, changePct: 2.04, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:18', confidence: 'HIGH', result: '빅테크 실적 호조' }),
-  analysis({ id: 'mock-8', name: 'iShares Semiconductor', code: 'SOXX', market: 'NASDAQ', direction: -1, changePct: 3.76, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:21', confidence: 'LOW', result: '반도체 장비 수출 규제 우려' }),
+  analysis({ id: 'mock-6', name: 'KODEX 은행', code: '091170', market: 'KRX', direction: 1, changePct: 2.31, status: 'COMPLETED', publicationStatus: 'WITHDRAWN', doneTime: '15:52', confidence: 'MEDIUM', result: '무효화로 회수됨' }),
+  analysis({ id: 'mock-7', publicationStatus: 'PUBLISHED',  name: 'Invesco QQQ Trust', code: 'QQQ', market: 'NASDAQ', direction: 1, changePct: 2.04, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:18', confidence: 'HIGH', result: '빅테크 실적 호조' }),
+  analysis({ id: 'mock-8', publicationStatus: 'DRAFT',  name: 'iShares Semiconductor', code: 'SOXX', market: 'NASDAQ', direction: -1, changePct: 3.76, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:21', confidence: 'LOW', result: '반도체 장비 수출 규제 우려' }),
   analysis({ id: 'mock-9', name: 'Tesla', code: 'TSLA', market: 'NASDAQ', direction: -1, changePct: 5.62, status: 'PENDING', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST` }),
 ];
 

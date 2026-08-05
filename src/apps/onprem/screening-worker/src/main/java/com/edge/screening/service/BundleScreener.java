@@ -101,7 +101,7 @@ public class BundleScreener {
 					.findByPolicyVersionIdAndEnabledTrueOrderByScreeningRuleId(version.getPolicyVersionId())
 					.stream().map(this::toRule).toList();
 			return new ActivePolicy(version.getPolicyVersionId(), version.isAutoPublishEnabled(),
-					version.getMinSourceCount(), rules);
+					version.getMinSourceCount(), version.getMinConfidence(), rules);
 		}).orElseThrow(() -> new IllegalStateException(
 				"활성 점검 정책이 없다 — NEW 판정 불가(정책 부재 = 진행 중단), 콘솔 온보딩 발행 후 재시도된다"));
 	}
@@ -149,31 +149,14 @@ public class BundleScreener {
 					result.explanationResultId());
 			return;
 		}
-		// 게시 grain 교체(ALPHA-710) — 하루 다건 발화는 발화마다 게시되므로, 같은
-		// (ticker, trade_date)를 점유한 구본 **자동 게시분**을 비노출로 전이한 뒤
-		// 게시한다(스키마 uq_publication_published_grain 주석의 교체 규율). cursor 순
-		// 처리라 나중 게시 = 최신 발화다. 검수 승인본(APPROVED) 점유는 교체하지 않고
-		// 선점 유지(publish 0 = skip) — 사람 결정을 기계가 덮지 않는다. 구본 item 도
-		// UNPUBLISHED 로 함께 내린다: 콘솔은 item.status 로 노출을 판단하므로 게시분만
-		// 내리면 '제공 중' 유령이 남고 수동 중단이 409 로 롤백된다. screen() 트랜잭션
-		// 안이라 전이-게시가 원자적이다 — 중간 실패는 전체 롤백.
-		String superseded = publicationRepository.findSupersedableItem(
-				result.explanationResultId(), result.etfTicker(), result.tradeDate());
-		if (superseded != null) {
-			String previousStatus = analysisItemRepository.lockStatus(superseded);
-			// 게시분 전이(원자적 UPDATE)가 교체의 정본 판정이다 — 조회~전이 사이 콘솔이
-			// 먼저 제공 중단하면 0행이고, 그때 item 전이·이력을 쓰면 사용자가 중단한
-			// 항목에 거짓 '교체' 이력이 남는다.
-			if (publicationRepository.transitionByItem(superseded, "UNPUBLISHED") > 0) {
-				analysisItemRepository.transition(superseded, "UNPUBLISHED");
-				statusHistoryRepository.save(new AnalysisItemStatusHistory(superseded,
-						previousStatus, "UNPUBLISHED", "같은 grain 신규 발화 게시로 교체(ALPHA-710)"));
-			}
-		}
-		boolean published = publicationRepository
-				.publish(result.explanationResultId(), result.etfTicker(), result.tradeDate()) > 0;
-		log.info("NEW screened id={} auto_published={} superseded={} (같은 item 재수신·검수본 선점 시 skip)",
-				result.explanationResultId(), published, superseded);
+		// 다스냅샷 공존(ADR-0045 결정 3, ALPHA-743) — 같은 (ticker, trade_date)의 다른
+		// 스냅샷은 교체 없이 나란히 게시되고, 표시(publication-api)가 as_of 최신을
+		// 고른다. 구 교체(supersede, ALPHA-710) 경로는 은퇴했다 — 검수 승인 재발행
+		// GRAIN_OCCUPIED·APPROVED 점유 유령 상태(ALPHA-724)도 함께 소멸.
+		boolean published = publicationRepository.publish(result.explanationResultId(),
+				result.etfTicker(), result.tradeDate(), result.explanationAsOf()) > 0;
+		log.info("NEW screened id={} auto_published={} (0 = 같은 item 재수신 멱등 skip)",
+				result.explanationResultId(), published);
 	}
 
 	private void screenInvalidation(DeliveryEntry entry) {

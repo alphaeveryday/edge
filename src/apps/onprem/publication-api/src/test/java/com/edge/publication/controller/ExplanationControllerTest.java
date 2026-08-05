@@ -38,7 +38,8 @@ class ExplanationControllerTest {
 			"MEDIUM",
 			List.of(new PublishedExplanation.Evidence("NEWS", "반도체 수출 반등", "demo",
 					OffsetDateTime.of(2026, 7, 15, 13, 0, 0, 0, ZoneOffset.ofHours(9)))),
-			OffsetDateTime.of(2026, 7, 15, 16, 40, 0, 0, ZoneOffset.ofHours(9)));
+			OffsetDateTime.of(2026, 7, 15, 16, 40, 0, 0, ZoneOffset.ofHours(9)),
+			OffsetDateTime.of(2026, 7, 15, 16, 0, 0, 0, ZoneOffset.ofHours(9)));
 
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
@@ -106,7 +107,10 @@ class ExplanationControllerTest {
 				.andExpect(jsonPath("$.evidences[0].kind").value("NEWS"))
 				.andExpect(jsonPath("$.disclaimer").value(
 						"본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다."))
-				.andExpect(jsonPath("$.published_at").isNotEmpty());
+				.andExpect(jsonPath("$.published_at").isNotEmpty())
+				// 스냅샷 기준시각(ADR-0045) — openapi required. 매핑 누락·오배선(published_at
+				// 재사용) 회귀를 값 단언으로 거부한다(SEED as_of = 16:00 KST).
+				.andExpect(jsonPath("$.explanation_as_of").value("2026-07-15T16:00:00+09:00"));
 	}
 
 	@Test

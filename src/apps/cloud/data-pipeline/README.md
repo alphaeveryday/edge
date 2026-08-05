@@ -45,7 +45,11 @@
 > 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식)와 **토스 분봉 adapter**
 > (ALPHA-682 — 2026-08-01 실호출 실측 형상 기반: `1m` 캔들, ts 는 **구간의 끝**이라
 > `window_start = ts − 1분`, 거래 없어도 캔들이 오므로 no_trade 는 "행 있고 거래량 0"·
-> 행 자체가 없어야 missing. 녹화 fixture `tests/fixtures/toss/`),
+> 행 자체가 없어야 missing. 녹화 fixture `tests/fixtures/toss/`)와 **KIS 분봉 adapter**
+> (ALPHA-735 — 1분 레인의 **기본 벤더**. `FHKST03010200` 당일 분봉, 종목당 1콜에 30분치,
+> `stck_cntg_hour` 도 구간의 끝이라 축은 토스와 같다. 4분류 판정은 벤더 무관부
+> `minute/price_collect.py` 하나를 공유하고 각 collector 는 "그 window 의 봉 하나를 어떻게
+> 얻는가"만 갖는다),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
@@ -87,14 +91,20 @@
 > lease 조합(lease ≥ (1+budget)×75초, session_lease ≥ heartbeat 주기+최악 tick)은
 > 기동·로드 시점에 검증한다. `WorkerConfig.lease_seconds` 기본이 60→300 으로 오른
 > 이유이기도 하다 — 토스 tick 실측 73초+ 아래면 자기 claim 이 in-flight 중 만료된다.
+> collector 는 설정 `source` 가 고른다(ALPHA-735 — kis|toss, 미지 소스는 기동 거부).
 > News Worker 엔트리포인트는 프로덕션 feed 부재로 별도 티켓: ALPHA-707), **가격 트리거
-> 판정 Consumer handler**(ALPHA-708 — kernel 위에 얹는 LLM 0 판정:
-> |현재봉 close/세션 시가−1| ≥ abs_threshold, 대상 universe.etf_ids. 시가=그날 첫 분봉
-> open 을 `minute_session_open` 원장에 **확정 후 불변**으로 남기고(첫 window 미커밋=
-> 재시도, 커밋됐는데 레코드 없음=MISSING+사유), 쿨다운은 `minute_price_trigger` 의
-> UNIQUE(entity, 2h 버킷)+DO NOTHING 이 정본 — 트리거 행과 설명 outbox event 는 한
-> 트랜잭션이다. 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정 규칙의
-> 배선이다), **설명 큐 4번째 destination**(ALPHA-709 — `price-explanation-realtime`
+> 판정 Consumer handler**(ALPHA-708 → **판정식 v2 = ALPHA-745** — kernel 위에 얹는
+> LLM 0 판정. 기준선은 **전일 종가**(`price_daily` 세션당 1회 조회·캐시)고, 기준선
+> ±`revert_threshold`(1%) 안이면 발화 금지 구간이라 노출 중이던 종목은 회수
+> (`ExposureReverted`)하고 앵커를 기준선으로 되돌린다. 밖이면 |close/anchor−1| ≥
+> `abs_threshold`(3%) 에서 발화하고 앵커(`minute_trigger_anchor`) ← 발화가 —
+> **2h 쿨다운은 폐지**됐고(재발화 축이 시간이 아니라 가격) 멱등 축은
+> UNIQUE(entity, session, window)+DO NOTHING 이다. 트리거 행은 `open_price` 에
+> 기준선, `anchor_price` 에 판정 기준가를 남긴다. 전일 종가가 없는 종목만 세션 시가로
+> 폴백한다 — 그때만 `minute_session_open` 원장이 **확정 후 불변**으로 걸린다(첫 window
+> 미커밋=재시도, 커밋됐는데 레코드 없음=MISSING+사유). 트리거 행·앵커·설명 outbox
+> event 는 한 트랜잭션이다. 판정식·임계의 정본은 분석엔진 소관이고 이 handler 는 확정
+> 규칙의 배선이다), **설명 큐 4번째 destination**(ALPHA-709 — `price-explanation-realtime`
 > 이 Relay 어휘에 등록돼 **4종이 전부 필수**다: 빠진 큐는 그 레인 event 전멸이라
 > 기동 거부. 트리거 사건의 발행 가부는 `destination_accepts` 가 정본이고, DLQ 대사
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
@@ -114,12 +124,13 @@
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
-> ⚠️ universe 정본 객체(config/minute/universe.json)의
-> **생산 파이프라인은 아직 없다** — 객체 없이 스케일업하면 worker·consumer 는 기동
-> 거부(fail-loud)다. ⚠️ 토스 adapter 는
-> **처리량이 아직 안 맞는다** — 종목당 1콜 × 363종(2026-08-02 실측, holdings 파생이라
-> 매일 바뀐다) ÷ 초당 5회 ≈ 73초인데 window 는 60초마다 생긴다. 콜 수·유니버스·한도 중
-> 하나를 바꾸기 전까지는 shadow·백필 용도다. ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
+> ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
+> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 에서 만든다.
+> 업로드는 사람이 확인 후 한다: universe 는 세션 identity 축이라 갈아끼우는 순간 그날
+> 계획이 바뀐다). 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
+> **처리량 제약은 벤더 교체로 풀렸다**(ALPHA-735) — 토스는 종목당 1콜 × 363종 ÷ 초당
+> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(마진 두고 12)라 400종이
+> 33초에 든다. 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
 > BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
 > **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
@@ -1010,7 +1021,15 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 2=계획 자체를 못 함(설정·인자 결손·어휘 밖 dataset·source_group·DB 장애).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset price_minute \
-    --source-group toss --session-date 2026-08-04 --universe /path/universe.json
+    --source-group kis --session-date 2026-08-04 --universe /path/universe.json
+# universe.json 생성(1분 파이프라인, ALPHA-735) — canonical KR holdings 의 **ETF 별 최신
+# 스냅샷 합집합**(ALPHA-590 규칙)에서 만든다. 손으로 유지하는 목록은 ETF 편입·제외 때마다
+# 조용히 어긋난다. ⚠️ **업로드는 하지 않는다** — universe 는 세션 identity(universe_hash)
+# 축이라, 확인 후 사람이 반영한다(그날 계획이 바뀐다). `--out` 없으면 stdout.
+AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
+DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
+  uv run python apps/cloud/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
+aws s3 cp /tmp/universe.json s3://edge-dev-pipeline-lake/config/minute/universe.json
 # 세션 drain(1분 파이프라인, ALPHA-698) — phase 를 DRAINING 으로 옮긴다(EOD SFN 이 부를
 # 자리). Worker 가 ack 하면 DRAINED 가 되고 그다음이 qc-minute-session 이다.
 # ⚠️ **이미 drain 이후인 것도 exit 0** 이다 — DB 커밋 뒤 출력 전에 죽은 실행의 재시도가
@@ -1032,19 +1051,24 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 경계에서 멈추고 fence lease 를 즉시 반납한다(교체 무대기 인계). `--session-date`
 # 미지정=오늘(KST). `--max-ticks` 는 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window
 # 도 못 본 채 차단만 됐으면(경쟁 fence·universe 불일치) exit 1.
+# 자격증명은 **source 마다 다른 쌍**이다(ALPHA-735) — 기본 source=kis 는 APP_KEY/APP_SECRET,
+# source=toss 로 되돌릴 때만 CLIENT_ID/CLIENT_SECRET. 결손은 기동에서 죽는다.
+# 상주 워커는 토큰(24h)보다 오래 사므로 KIS_TOKEN_CACHE_PARAM 을 함께 준다(발급 분당 1회).
 DATA_PIPELINE_DB__PASSWORD=... \
-DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID=... \
-DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET=... \
-DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-open-v1 \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2 \
+KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
-# canonical 로 판정한다(LLM 0). 임계는 price_triggers.abs_threshold 재사용(섹션 필수),
-# --universe 는 planner·worker 와 같은 파일/객체(s3://… 지원). --max-ticks 는 로컬
-# 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가 있으면 exit 1.
+# canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
+# revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은
+# 파일/객체(s3://… 지원). --max-ticks 는 로컬 확인용 — 배선 오류 신호
+# (poison·misrouted·orphan·ahead)가 있으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
-DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-open-v1 \
+DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
@@ -1081,7 +1105,7 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
-    --source-group toss --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
+    --source-group kis --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
 # 순서대로 비어야 한다 — session.phase 가 DRAINED 이후(= in-flight window 0) → 게이트 큐
 # 깊이 0 → 미발행 outbox NEW 0. 큐 깊이는 approximate 라 **연속 5회(≈60초)** 확인한다.
@@ -1096,7 +1120,7 @@ MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
-  python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group toss
+  python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯

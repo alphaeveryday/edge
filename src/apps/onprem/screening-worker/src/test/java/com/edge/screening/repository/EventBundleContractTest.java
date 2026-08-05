@@ -58,15 +58,17 @@ class EventBundleContractTest {
 		ScreeningCheckRepository checks = mock(ScreeningCheckRepository.class);
 		AnalysisItemStatusHistoryRepository history = mock(AnalysisItemStatusHistoryRepository.class);
 		// NEW 판정은 활성 정책이 전제 — 관대한 정책(자동 제공 ON·룰 없음)으로 통과시킨다.
-		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null)));
+		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null, null)));
 		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
 		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
 				any(), anyLong(), any())).thenReturn(1);
 		BundleScreener screener = new BundleScreener(pending, analysis, publications, policies, rules, checks, history);
 
 		// 계약을 만족하는 populated evidences 를 담은 NEW 번들을 실제로 screen 한다
+		// (source_uri 포함 — optional 확장 필드(ALPHA-739)도 wire 적재에서 보존돼야 한다)
 		String bundle = newBundleWith(
-				"[{\"kind\":\"DISCLOSURE\",\"title\":\"삼성전자 공급계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\"}]");
+				"[{\"kind\":\"DISCLOSURE\",\"title\":\"삼성전자 공급계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\","
+						+ "\"source_uri\":\"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001\"}]");
 		assertThat(schema.validate(bundle, InputFormat.JSON)).as("입력 번들 자체가 계약을 만족해야 한다").isEmpty();
 
 		// 저장 body 는 신형 봉투(ADR-0040 T4) — 스키마 검증은 봉투 안 EventBundle(bundle) 대상이고,
@@ -84,6 +86,9 @@ class EventBundleContractTest {
 		// (2) 형상 유지 — 옮긴 evidences 를 담은 번들이 다시 계약을 통과해야 한다(키 rename/transform 감지)
 		assertThat(schema.validate(newBundleWith(moved), InputFormat.JSON))
 				.as("BundleScreener 가 옮긴 evidences 가 계약 형상을 유지해야 한다: %s", moved).isEmpty();
+		// (3) optional 확장 필드 보존 — source_uri 는 스키마상 optional 이라 (2)의 재검증으로는
+		// drop 을 못 잡는다. 콘솔 원문 링크(ALPHA-739)의 공급이 여기서 끊기면 안 된다.
+		assertThat(moved).as("optional source_uri 도 유실하면 안 된다(ALPHA-739)").contains("source_uri");
 	}
 
 	/** 신형 와이어 형상(ADR-0040 T4 후 유일 형상) — EventBundle 을 ApiResponse 봉투(result 아래)로 감싼다. */

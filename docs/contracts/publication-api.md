@@ -25,7 +25,7 @@ X-Channel: MTS | HTS | INTERNAL
 ```
 
 - `etf_ticker`: 국내 상장 ETF 종목코드 (MVP 커버리지 — [../adr/0024](../adr/0024-scope-domestic-etf.md)). `[확정 필요 — 식별자 체계: 종목코드 vs ISIN. 초안은 종목코드]`
-- `trade_date` 생략 시 **최신 거래일**의 게시분 — 화면(AI 분석 탭)은 "가장 최근 거래일의 분석"을 원하므로 게시 시각이 아니라 거래일 기준이다. 과거 거래일 분석이 나중에 게시(지연 검수)돼도 최신 거래일 게시분이 우선한다. 같은 거래일에 게시분이 여럿 교체된 경우엔 가장 최근 게시가 이긴다.
+- `trade_date` 생략 시 **최신 거래일**의 게시분 — 화면(AI 분석 탭)은 "가장 최근 거래일의 분석"을 원하므로 게시 시각이 아니라 거래일 기준이다. 과거 거래일 분석이 나중에 게시(지연 검수)돼도 최신 거래일 게시분이 우선한다. 같은 거래일에 유효 스냅샷이 여럿 공존하면 `explanation_as_of` 최신이 이긴다(무효화분 제외 — "유효 최신 승리", ADR-0045 결정 3·ALPHA-743). 최신이 무효화되면 직전 유효 스냅샷이 이 규칙만으로 자동 재노출된다. 응답의 `explanation_as_of`가 스냅샷 기준시각을 말한다. 동률은 게시 시각으로 해소.
 - `X-Customer-Hash` 필수 — 해시 생성 규칙·salt는 증권사 관리 영역(벤더 불관여). 누락 시 400.
 - `X-Channel` 필수 — Exposure Log의 채널 필드.
 
@@ -42,13 +42,14 @@ X-Channel: MTS | HTS | INTERNAL
     { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
   ],
   "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
-  "published_at": "2026-07-15T16:40:00+09:00"
+  "published_at": "2026-07-15T16:40:00+09:00",
+  "explanation_as_of": "2026-07-15T16:00:00+09:00"
 }
 ```
 
 - `summary`는 검수를 거친 **최종 노출 문구**다(원본 AI 문구가 아니라 검수자 수정 반영본). 원천은 Cloud `explanation_result.summary`(물리 스키마의 유일한 고객 노출 텍스트 필드) — 번들로 온프렘에 수신된 뒤 검수를 거친 값이다.
 - `disclaimer`는 테넌트 정책의 기본 안내 문구 — 화면에 반드시 함께 노출한다.
-- `evidences` 요소 형상은 `{kind, title, source, published_at}`(근거 뉴스/공시 문서 목록)로 **확정**(ALPHA-395 — [event-bundle-schema.md](event-bundle-schema.md) "경계면 컬럼" 절). 번들 `evidences`가 온프렘 저장(`analysis_item.evidences`)을 거쳐 이 응답으로 그대로 서빙된다(`ExplanationStore`가 파싱하는 형상). 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
+- `evidences` 요소 형상은 `{kind, title, source, published_at}`(근거 뉴스/공시 문서 목록)로 **확정**(ALPHA-395 — [event-bundle-schema.md](event-bundle-schema.md) "경계면 컬럼" 절). 번들 `evidences`가 온프렘 저장(`analysis_item.evidences`)을 거쳐 이 응답으로 서빙된다(`ExplanationStore`가 파싱하는 형상 — 저장분에는 `source_uri`(ALPHA-739, 검수 콘솔용)도 있으나 **서빙 계약에는 싣지 않는다**: 내부 lineage URI 를 고객 표면에 노출하지 않음). 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
 - **이 200 응답이 Exposure Log 기록 시점**이다 — 응답한 문구 스냅샷·고객 해시·채널·시각이 기록되어 민원·감사 시 재현된다.
 
 **응답 204** (해당 ETF·일자에 노출 가능한 설명이 없을 때): 정상 상태다 — 모든 ETF가 매일 설명을 갖지 않는다. body 없음, Exposure Log 기록 없음.

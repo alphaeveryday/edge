@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * 검수 상세 응답(ALPHA-436, 구 439 흡수) — snake_case(검수 표면 규약). evidences 는
- * 경계면 계약 형상([{kind,title,source,published_at}])을 그대로 통과시킨다. 검사
+ * 경계면 계약 형상([{kind,title,source,published_at,source_uri}])을 그대로 통과시킨다. 검사
  * 결과·상태 이력이 감사 열람의 원천이다(전용 Audit 메뉴 없음 — 콘솔 IA).
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

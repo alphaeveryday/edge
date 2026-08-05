@@ -3,7 +3,7 @@ import { PageSkeleton } from 'ui-kit';
 import { useTrafficSummary } from '../domains/dashboard/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
-import { LoadError, RiskCell, StatusCell, StockCell } from './_shared/cells';
+import { ConfidenceCell, LoadError, StatusCell, StockCell } from './_shared/cells';
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -96,7 +96,7 @@ export function DashboardPage() {
             <tr>
               <th>종목</th>
               <th>제공 상태</th>
-              <th>위험 등급</th>
+              <th>확신도</th>
               <th className="col-muted">반입</th>
             </tr>
           </thead>
@@ -108,7 +108,7 @@ export function DashboardPage() {
                 <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                   <StockCell name={it.name} code={it.code} />
                   <StatusCell it={it} />
-                  <RiskCell it={it} />
+                  <ConfidenceCell it={it} />
                   <td className="col-muted num">{it.receivedRelative}</td>
                 </tr>
               ))}

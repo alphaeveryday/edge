@@ -46,7 +46,7 @@ import java.util.Set;
  * status_history + console_action_log)이며, 행위자=SessionMember·clientIp 로 감사한다.
  *
  * <p>매핑(축소 계약, 사용자 결정 2026-07-29): name←etf_name, code←etf_ticker, status,
- * risk←confidence_level, reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
+ * confidence←confidence_level(원값, ALPHA-634 확신도 배지), reviewReason←screening_check(REVIEW·BLOCK)→rule_type 파생,
  * receivedAt←received_at, evidence←evidences JSONB, original←summary,
  * final←publication.published_summary(널이면 summary). market·direction·changePct 는
  * 온프렘 원장에 없어(ALPHA-497 이연) 제거됐다.
@@ -108,6 +108,10 @@ public class ExplanationService {
 		List<String> ids = items.stream().map(AnalysisItemEntity::getExplanationResultId).toList();
 		Map<String, String> reasons = reviewReasonsFor(items);
 		Map<String, String> finals = publishedSummariesFor(ids);
+		// 노출 head(ALPHA-744) — 다스냅샷 공존에서 "지금 고객 화면의 그 판"은 서빙 술어
+		// 전사 쿼리가 판정한다. publishedSummariesFor 의 publication_id 최대 선택은 final
+		// 문구용이라 술어가 다르다(head 판정에 쓰면 서빙 진실과 어긋난다).
+		Set<String> heads = Set.copyOf(publishedSummaryRepository.findServingHeadItemIds());
 		return items.stream().map(it -> new Explanation(
 				it.getExplanationResultId(),
 				displayName(it),
@@ -116,6 +120,8 @@ public class ExplanationService {
 				it.getConfidenceLevel(),
 				reasons.get(it.getExplanationResultId()),
 				it.getReceivedAt(),
+				it.getExplanationAsOf(),
+				heads.contains(it.getExplanationResultId()),
 				parseEvidence(it.getEvidences()),
 				it.getSummary(),
 				finals.getOrDefault(it.getExplanationResultId(), it.getSummary()))
@@ -232,7 +238,7 @@ public class ExplanationService {
 		return byItem;
 	}
 
-	// ── evidences JSONB([{kind,title,source,published_at}]) → 도메인 근거 목록 ──
+	// ── evidences JSONB([{kind,title,source,published_at,source_uri}]) → 도메인 근거 목록 ──
 
 	private List<Explanation.Evidence> parseEvidence(String evidencesJson) {
 		if (evidencesJson == null || evidencesJson.isBlank()) {
@@ -265,7 +271,8 @@ public class ExplanationService {
 				continue;
 			}
 			out.add(new Explanation.Evidence(
-					kind, text(node, "title"), text(node, "source"), parseTime(node)));
+					kind, text(node, "title"), text(node, "source"), parseTime(node),
+					text(node, "source_uri")));
 		}
 		return out;
 	}

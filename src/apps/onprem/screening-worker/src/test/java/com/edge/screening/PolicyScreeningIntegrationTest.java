@@ -38,14 +38,18 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	private long seedActivePolicy(boolean autoPublish, Integer minSourceCount) {
+		return seedActivePolicy(autoPublish, minSourceCount, null);
+	}
+
+	private long seedActivePolicy(boolean autoPublish, Integer minSourceCount, String minConfidence) {
 		Integer nextNo = jdbc.queryForObject(
 				"SELECT COALESCE(MAX(version_no), 0) + 1 FROM policy_version", Integer.class);
 		return jdbc.queryForObject("""
 				INSERT INTO policy_version (version_no, disclaimer_text, auto_publish_enabled,
-				    min_source_count, activated_at)
-				VALUES (?, '면책 문구', ?, ?, now())
+				    min_source_count, min_confidence, activated_at)
+				VALUES (?, '면책 문구', ?, ?, ?, now())
 				RETURNING policy_version_id
-				""", Long.class, nextNo, autoPublish, minSourceCount);
+				""", Long.class, nextNo, autoPublish, minSourceCount, minConfidence);
 	}
 
 	private long seedRule(long policyVersionId, String ruleType, String paramsJson, String action) {
@@ -122,6 +126,29 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 		assertThat(jdbc.queryForObject(
 				"SELECT status FROM publication WHERE analysis_item_id = 'it429-pass'", String.class))
 				.isEqualTo("PUBLISHED");
+	}
+
+	@Test
+	void 확신도_기준_미달은_검수_대기와_근거_행으로_실테이블에_남는다() {
+		// WHY: min_confidence 게이트(ALPHA-634)의 실 DB 계약 — 새 컬럼이 활성 정책 조회로
+		// 워커까지 배선되고, 미달 근거(rule_id NULL REVIEW 행)가 감사 원장에 남아야 한다.
+		// newBundle 의 confidence 는 MEDIUM 이다.
+		long version = seedActivePolicy(true, null, "HIGH");
+
+		screener.screen(90107L, newBundle("it634-conf", "IT634C", "무해한 요약"));
+
+		assertThat(jdbc.queryForObject(
+				"SELECT status FROM analysis_item WHERE explanation_result_id = 'it634-conf'", String.class))
+				.isEqualTo("REVIEW_REQUIRED");
+		Map<String, Object> check = jdbc.queryForMap(
+				"SELECT policy_version_id, screening_rule_id, result, matched_text "
+						+ "FROM screening_check WHERE analysis_item_id = 'it634-conf'");
+		assertThat(check).containsEntry("policy_version_id", version)
+				.containsEntry("screening_rule_id", null)
+				.containsEntry("result", "REVIEW")
+				.containsEntry("matched_text", "confidence=MEDIUM<min=HIGH");
+		assertThat(jdbc.queryForList("SELECT 1 FROM publication WHERE analysis_item_id = 'it634-conf'"))
+				.isEmpty();
 	}
 
 	@Test

@@ -27,6 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 
 	private static final LocalDate TRADE_DATE = LocalDate.of(2026, 7, 15);
+	private static final OffsetDateTime AS_OF_1 = OffsetDateTime.parse("2026-07-15T16:00:00+09:00");
+	private static final OffsetDateTime AS_OF_2 = OffsetDateTime.parse("2026-07-15T18:00:00+09:00");
 
 	@Autowired
 	private AnalysisItemRepository items;
@@ -76,57 +78,35 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 		assertThat(items.transition("missing", "INVALIDATED")).isEqualTo(0); // 대상 미수신
 	}
 
+	/**
+	 * 다스냅샷 공존(ADR-0045 결정 3, ALPHA-743) — 같은 (ticker, trade_date)의 다른
+	 * 스냅샷(as_of)은 나란히 게시된다. 남은 가드는 같은 item 재수신 멱등뿐이다. 교체
+	 * (supersede) 규율이 회귀하면 두 번째 publish 가 0이 되어 이 테스트가 깨진다.
+	 */
 	@Test
-	void publish_는_게시_grain을_1건으로_선점한다() {
-		// WHY: (ticker,trade_date) 게시 grain 은 1건 — 재수신·경쟁이 중복 게시를 만들면 서빙이 갈린다.
+	void publish_는_다스냅샷을_공존_게시하고_같은_item_만_멱등_skip_한다() {
 		upsertItem("er-3", "069500", "AUTO_PUBLISHED");
-		assertThat(publications.publish("er-3", "069500", TRADE_DATE)).isEqualTo(1);
-		assertThat(publications.publish("er-3", "069500", TRADE_DATE)).isEqualTo(0); // 같은 item 재게시 skip
+		assertThat(publications.publish("er-3", "069500", TRADE_DATE, AS_OF_1)).isEqualTo(1);
+		assertThat(publications.publish("er-3", "069500", TRADE_DATE, AS_OF_1)).isEqualTo(0); // 같은 item 멱등
 
 		upsertItem("er-3b", "069500", "AUTO_PUBLISHED");
-		assertThat(publications.publish("er-3b", "069500", TRADE_DATE)).isEqualTo(0); // grain 선점 skip
+		assertThat(publications.publish("er-3b", "069500", TRADE_DATE, AS_OF_2)).isEqualTo(1); // 공존
 
-		Long count = jdbc.queryForObject(
-				"SELECT count(*) FROM publication WHERE etf_ticker = '069500' AND trade_date = ?",
+		Long published = jdbc.queryForObject(
+				"SELECT count(*) FROM publication WHERE etf_ticker = '069500' AND trade_date = ?"
+						+ " AND status = 'PUBLISHED'",
 				Long.class, TRADE_DATE);
-		assertThat(count).isEqualTo(1L);
-	}
-
-	@Test
-	void supersede_대상은_자동_게시본만이고_같은_item_가드를_지킨다() {
-		// WHY: 하루 다건 발화(분봉 트리거, ALPHA-710)의 교체 규율 — 구본을 비노출로
-		// 전이한 뒤 재게시해야 두 번째 발화가 고객에 닿고, grain 활성 1건 불변식이
-		// 유지된다. 대상은 자동 게시본뿐(검수 승인본을 자동이 끌어내리면 사람 결정이
-		// 기계에 덮인다)이고, 구본 재수신이 신본을 끌어내리면 grain 이 무게시로 남는다.
-		upsertItem("er-5", "069500", "AUTO_PUBLISHED");
-		publications.publish("er-5", "069500", TRADE_DATE);
-
-		// 신규 발화(er-5b): 구본 er-5 가 교체 대상으로 조회되고, 전이 후 게시가 열린다.
-		upsertItem("er-5b", "069500", "AUTO_PUBLISHED");
-		assertThat(publications.findSupersedableItem("er-5b", "069500", TRADE_DATE))
-				.isEqualTo("er-5");
-		assertThat(publications.transitionByItem("er-5", "UNPUBLISHED")).isEqualTo(1);
-		assertThat(publications.publish("er-5b", "069500", TRADE_DATE)).isEqualTo(1);
+		assertThat(published).isEqualTo(2L);
 		assertThat(jdbc.queryForObject(
-				"SELECT analysis_item_id FROM publication WHERE etf_ticker = '069500'"
-						+ " AND trade_date = ? AND status = 'PUBLISHED'",
-				String.class, TRADE_DATE)).isEqualTo("er-5b");
-
-		// 구본(er-5) 재수신: 이미 게시 이력이 있어 대상 없음 — 신본이 그대로 산다.
-		assertThat(publications.findSupersedableItem("er-5", "069500", TRADE_DATE)).isNull();
-
-		// 검수 승인본이 grain 점유로 바뀌면: 자동 신규 발화는 교체 대상을 못 찾는다.
-		jdbc.update("UPDATE analysis_item SET status = 'APPROVED'"
-				+ " WHERE explanation_result_id = 'er-5b'");
-		upsertItem("er-5c", "069500", "AUTO_PUBLISHED");
-		assertThat(publications.findSupersedableItem("er-5c", "069500", TRADE_DATE)).isNull();
+				"SELECT explanation_as_of FROM publication WHERE analysis_item_id = 'er-3b'",
+				OffsetDateTime.class)).isEqualTo(AS_OF_2);
 	}
 
 	@Test
 	void transitionByItem_은_PUBLISHED_게시분만_비노출한다() {
 		// WHY: 무효화·제공 중단은 즉시 비노출 — PUBLISHED 만 골라 전이해야 고객 노출이 끊긴다.
 		upsertItem("er-4", "069500", "AUTO_PUBLISHED");
-		publications.publish("er-4", "069500", TRADE_DATE);
+		publications.publish("er-4", "069500", TRADE_DATE, AS_OF_1);
 
 		assertThat(publications.transitionByItem("er-4", "UNPUBLISHED")).isEqualTo(1);
 		String status = jdbc.queryForObject(

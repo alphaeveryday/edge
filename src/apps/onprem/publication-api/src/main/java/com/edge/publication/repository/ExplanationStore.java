@@ -39,7 +39,9 @@ public class ExplanationStore {
 			String summary,
 			String confidenceLevel,
 			List<Evidence> evidences,
-			OffsetDateTime publishedAt
+			OffsetDateTime publishedAt,
+			/** 스냅샷 기준시각 — 표시 규칙 "유효 최신 승리"의 축, 응답 노출(ALPHA-743). */
+			OffsetDateTime explanationAsOf
 	) {
 		public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt) {
 		}
@@ -117,11 +119,13 @@ public class ExplanationStore {
 				summary,
 				a.getConfidenceLevel(),
 				parseEvidences(a.getEvidences()),
-				p.getPublishedAt());
+				p.getPublishedAt(),
+				p.getExplanationAsOf());
 	}
 
 	/**
-	 * analysis_item.evidences JSONB — [{kind, title, source, published_at}] (번들 경계면 형상).
+	 * analysis_item.evidences JSONB — [{kind, title, source, published_at, source_uri}] (번들 경계면
+	 * 형상 — source_uri 는 검수 콘솔용(ALPHA-739)이라 서빙에선 읽지 않는다).
 	 * 형상 위반(배열 아님·비객체 요소)은 조용히 빈 근거로 만들지 않고 즉시 실패시킨다
 	 * (Rule 12 fail-loud — 저장 데이터 오류를 200 응답이 은폐하면 안 된다).
 	 */

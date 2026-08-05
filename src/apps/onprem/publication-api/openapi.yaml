@@ -130,7 +130,7 @@ components:
       description: >-
         고객에게 노출되는 검수 완료 설명. `summary`는 검수를 거친 **최종 노출 문구**(원본 AI 문구가
         아니라 검수 반영본)이며, `disclaimer`는 화면에 반드시 함께 노출한다(투자권유 아님 안내).
-      required: [publication_id, etf, trade_date, summary, confidence_level, evidences, disclaimer, published_at]
+      required: [publication_id, etf, trade_date, summary, confidence_level, evidences, disclaimer, published_at, explanation_as_of]
       properties:
         publication_id:
           type: string
@@ -159,6 +159,13 @@ components:
           type: string
           format: date-time
           description: 게시 시각(오프셋 포함 ISO-8601).
+        explanation_as_of:
+          type: string
+          format: date-time
+          description: >-
+            스냅샷 기준시각(오프셋 포함 ISO-8601). 같은 거래일에 유효 스냅샷이 여럿이면
+            이 값이 최신인 것이 서빙된다("유효 최신 승리" — ADR-0045). 최신 무효화 시
+            재노출되는 직전 스냅샷의 기준 시점을 화면이 이 값으로 안다.
 
     EtfInfo:
       type: object

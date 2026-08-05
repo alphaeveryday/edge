@@ -5,8 +5,10 @@ import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
 /**
- * 근거 문서 하나 — document 경계면의 flat 화 {kind, title, source, published_at}
- * (ALPHA-395 확정, 조립은 ALPHA-718). kind ← document_type, source ← source_code.
+ * 근거 문서 하나 — document 경계면의 flat 화 {kind, title, source, published_at,
+ * source_uri}(ALPHA-395 확정, 조립은 ALPHA-718, source_uri 는 ALPHA-739). kind ←
+ * document_type, source ← source_code, sourceUri ← document.source_uri(콘솔 근거 원문
+ * 링크 — optional 계약, EOD 뉴스 결측 가능 ALPHA-740).
  * title·published_at 은 NULL 허용이지만 계약상 키 자체는 필수(required)라 NON_NULL 생략
  * 없이 항상 직렬화한다(ALWAYS 명시 — 전역 설정이 바뀌어도 계약이 깨지지 않게).
  * published_at 은 조립부가 ISO-8601(UTC Instant) 문자열로 완성해 싣는다 — java.time
@@ -18,6 +20,7 @@ public record EvidenceItem(
 		String kind,
 		String title,
 		String source,
-		String publishedAt
+		String publishedAt,
+		String sourceUri
 ) {
 }

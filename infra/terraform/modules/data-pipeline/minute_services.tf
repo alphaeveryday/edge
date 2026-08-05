@@ -77,6 +77,9 @@ resource "aws_sqs_queue" "minute" {
 }
 
 # ── 토스 자격증명 그릇 — 값은 운영자가 CLI 로 주입한다(state 에 평문 금지) ──
+# ⚠️ 1분 레인이 KIS 로 바뀌면서(ALPHA-735) 이 그릇은 지금 아무 태스크도 주입받지 않는다.
+# **이번 배포에서 지우지 않는다** — 롤백 경로(source=toss 로 되돌리기)가 이 그릇에 기대고,
+# 시크릿 삭제는 복구창(7~30일)이 붙어 되살리기가 비싸다. KIS 실증이 끝난 뒤 별도로 정리한다.
 resource "aws_secretsmanager_secret" "toss" {
   name = "${var.name}-toss"
 }
@@ -84,16 +87,37 @@ resource "aws_secretsmanager_secret" "toss" {
 # ── 상주 서비스 ────────────────────────────────────────────────────
 locals {
   minute_services = {
+    # 가격 1분 생산자 — 벤더는 KIS 다(ALPHA-735). 토스는 초당 5회라 종목당 1콜 × 400종이
+    # 60초 창을 넘었다(KIS 실측 14.8 req/s).
     price-worker = {
       command = ["price-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION = var.minute_trigger_schema_version
+        # source 는 세션 source_group 과 **같은 변수에서 파생**한다 — 갈리면 워커가 다른
+        # session_id 를 유도해 기동 거부로 레인이 통째로 선다. 롤백(kis↔toss)은 이 변수
+        # 하나로 끝난다(apply 가 아래 시크릿 쌍도 함께 전환한다).
+        # ⚠️ 전환은 **세션 사이에만**(다음 세션부터). 장중에 바꾸면 ①기존 세션이 ACTIVE
+        # 로 고립되고(EOD stop 은 새 source 세션만 지목) ②두 세션이 source 무관 canonical
+        # key 를 다퉈 ArtifactImmutabilityError 다(states.py 키 설계 경고). 장중 불가피하면
+        # 기존 세션 drain·finalize 후 start 재실행이 선행이다.
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE = var.minute_session_source_group
+        # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
+        # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
+        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
       })
-      secrets = {
-        DATA_PIPELINE_DB__PASSWORD                       = "${var.db_password_secret_arn}:password::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
-        DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
-      }
+      # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
+      # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
+      # 그릇만 있는 toss)에서 ResourceInitializationError 로 워커가 아예 못 뜬다.
+      secrets = merge(
+        { DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::" },
+        var.minute_session_source_group == "toss" ? {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
+          } : {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+        }
+      )
     }
     relay = {
       command = ["relay"]
@@ -418,6 +442,19 @@ resource "aws_scheduler_schedule" "minute_session" {
 # `analyze --trigger-id` 경로를 태운다. data-pipeline 서비스 맵(minute_services)에 넣지
 # 않는 이유: 이미지·컨테이너명·env 네임스페이스(PG*·DEEPSEEK_*)가 전부 다르다(tasks.tf
 # analysis 단서와 동일). 세션 스케일에는 아래 env 파생으로 함께 편입된다.
+
+# ExposureReverted 회수 자격(ALPHA-746) — 소비자가 super-admin 무효화 API 를 부를 때 쓰는
+# 운영자 계정. 그릇(SSM SecureString)은 TF 밖 운영자 CLI 주입이다 — 시크릿 그릇 규약("TF 는
+# 그릇만, 값은 수동")에서 한 칸 더: 여기서는 **이름만 계약**한다(kis 토큰 캐시와 같은 결).
+# 미주입이면 태스크가 ResourceInitializationError 로 시작하지 않는다 — 조용한 자격 공백 대신
+# fail-loud. 주입(1회):
+#   aws ssm put-parameter --name /<var.name>/super-admin/operator-email --type SecureString --value '<email>'
+#   aws ssm put-parameter --name /<var.name>/super-admin/operator-password --type SecureString --value '<password>'
+locals {
+  super_admin_email_param_arn    = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-email"
+  super_admin_password_param_arn = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-password"
+}
+
 resource "aws_ecs_task_definition" "analysis_consumer" {
   family                   = "${var.name}-analysis-consumer"
   requires_compatibilities = ["FARGATE"]
@@ -442,8 +479,13 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
     command = ["consume-triggers"]
     environment = [for k, v in merge(local.analysis_env, {
       EDGE_EXPLANATION_QUEUE_URL = aws_sqs_queue.minute["price-explanation-realtime"].url
+      SUPER_ADMIN_API_URL        = var.super_admin_api_url
     }) : { name = k, value = v }]
-    secrets = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
+    # 회수 자격은 이 소비자에게만 주입한다 — 배치 analyze(tasks.tf)는 무효화를 부르지 않는다.
+    secrets = [for k, v in merge(local.analysis_secrets, {
+      SUPER_ADMIN_EMAIL    = local.super_admin_email_param_arn
+      SUPER_ADMIN_PASSWORD = local.super_admin_password_param_arn
+    }) : { name = k, valueFrom = v }]
     logConfiguration = {
       logDriver = "awslogs"
       options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis-consumer" })

@@ -53,17 +53,18 @@ public interface TenantDeliveryRepository extends Repository<TenantDelivery, Ten
 			       lineage.document_type AS "documentType",
 			       lineage.title AS "title",
 			       lineage.source_code AS "sourceCode",
-			       lineage.published_at AS "publishedAt"
+			       lineage.published_at AS "publishedAt",
+			       lineage.source_uri AS "sourceUri"
 			  FROM (
 			       SELECT ree.explanation_run_id, d.document_id, d.document_type,
-			              d.title, d.source_code, d.published_at
+			              d.title, d.source_code, d.published_at, d.source_uri
 			         FROM explanation_run_event_evidence ree
 			         JOIN event_evidence ev ON ev.evidence_id = ree.evidence_id
 			         JOIN document_assertion da ON da.assertion_id = ev.assertion_id
 			         JOIN document d ON d.document_id = da.document_id
 			       UNION ALL
 			       SELECT rdf.explanation_run_id, d.document_id, d.document_type,
-			              d.title, d.source_code, d.published_at
+			              d.title, d.source_code, d.published_at, d.source_uri
 			         FROM explanation_run_disclosure_fact rdf
 			         JOIN disclosure_fact df ON df.fact_id = rdf.fact_id
 			         JOIN document d ON d.document_id = df.document_id

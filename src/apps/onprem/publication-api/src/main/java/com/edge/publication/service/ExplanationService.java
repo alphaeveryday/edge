@@ -91,7 +91,8 @@ public class ExplanationService {
 						.map(v -> new ExplanationResponse.EvidenceItem(v.kind(), v.title(), v.source(), v.publishedAt()))
 						.toList(),
 				DISCLAIMER,
-				e.publishedAt()
+				e.publishedAt(),
+				e.explanationAsOf()
 		);
 	}
 }

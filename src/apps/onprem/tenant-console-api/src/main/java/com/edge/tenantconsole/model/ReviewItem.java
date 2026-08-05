@@ -19,11 +19,13 @@ public record ReviewItem(
 		String headline,
 		String confidenceLevel,
 		String status,
-		OffsetDateTime receivedAt
+		OffsetDateTime receivedAt,
+		/** 스냅샷 기준시각 — 승인 게시 시 publication grain 축으로 복사(ALPHA-743). */
+		OffsetDateTime explanationAsOf
 ) {
 	public static ReviewItem from(AnalysisItemEntity e) {
 		return new ReviewItem(e.getExplanationResultId(), e.getEtfTicker(), e.getEtfName(),
 				e.getTradeDate(), e.getSummary(), e.getHeadline(), e.getConfidenceLevel(),
-				e.getStatus(), e.getReceivedAt());
+				e.getStatus(), e.getReceivedAt(), e.getExplanationAsOf());
 	}
 }

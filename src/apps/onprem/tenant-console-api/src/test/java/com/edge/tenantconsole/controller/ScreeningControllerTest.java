@@ -18,6 +18,7 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -195,18 +196,23 @@ class ScreeningControllerTest {
 	private FakeVersions versions;
 	private FakeRules rules;
 	private List<String> auditActions;
+	/** 감사 detail — 은퇴한 필드가 감사 쪽으로 새는지 보려면 action 이름만으로는 부족하다. */
+	private List<Map<String, Object>> auditDetails;
 	private MockMvc mvc;
+	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@BeforeEach
 	void setUp() {
 		versions = new FakeVersions();
 		rules = new FakeRules();
 		auditActions = new ArrayList<>();
+		auditDetails = new ArrayList<>();
 		ConsoleActionLogService recording = new ConsoleActionLogService(null, null) {
 			@Override
 			public void record(SessionMember actor, String action, String targetType,
 					String targetId, Map<String, Object> detail, String clientIp) {
 				auditActions.add(action);
+				auditDetails.add(detail);
 			}
 		};
 		mvc = MockMvcBuilders.standaloneSetup(new ScreeningController(
@@ -221,33 +227,32 @@ class ScreeningControllerTest {
 		return session;
 	}
 
-	private void addWord(String text, String risk, String action) throws Exception {
+	private void addWord(String text, String action) throws Exception {
 		mvc.perform(post("/api/v1/screening/words").session(session())
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"" + text + "\",\"risk\":\"" + risk
-								+ "\",\"action\":\"" + action + "\"}"))
+						.content("{\"text\":\"" + text + "\",\"action\":\"" + action + "\"}"))
 				.andExpect(status().isOk());
 	}
 
 	@Test
 	void 첫_변경은_온보딩_기반값_위에_새_버전을_발행한다() throws Exception {
 		// WHY: 사용자 결정(2026-07-27) — 온보딩 기본은 자동 제공 ON(걸린 것만 검수).
-		// 첫 발행 기반값이 이 결정의 실체다: auto=true·최소 출처 2·상한 MEDIUM·기본 문구.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		// 첫 발행 기반값이 이 결정의 실체다: auto=true·최소 출처 2·최소 확신도 MEDIUM·기본 문구.
+		addWord("급등 확실", "BLOCK");
 
 		assertThat(versions.stored).hasSize(1);
 		PolicyVersionEntity v1 = versions.stored.get(0);
 		assertThat(v1.getVersionNo()).isEqualTo(1);
 		assertThat(v1.isAutoPublishEnabled()).isTrue();
 		assertThat(v1.getMinSourceCount()).isEqualTo(2);
-		assertThat(v1.getMaxRisk()).isEqualTo("MEDIUM");
+		assertThat(v1.getMinConfidence()).isEqualTo("MEDIUM");
 		assertThat(v1.getDisclaimerText()).contains("공개 데이터");
 		assertThat(v1.getCreatedBy()).isEqualTo(2L);
 		assertThat(v1.getActivatedAt()).isNotNull();
 		assertThat(rules.stored).hasSize(1);
 		ScreeningRuleEntity rule = rules.stored.get(0);
 		assertThat(rule.getRuleType()).isEqualTo("BANNED_WORD");
-		assertThat(rule.getParams()).contains("급등 확실").contains("HIGH");
+		assertThat(objectMapper.readTree(rule.getParams()).propertyNames()).containsExactly("text");
 		assertThat(rule.isEnabled()).isTrue();
 	}
 
@@ -255,8 +260,8 @@ class ScreeningControllerTest {
 	void 금칙어_추가는_기존_룰을_복사하고_활성은_한_버전뿐이다() throws Exception {
 		// WHY: 버전은 불변(ADR-0018) — 변경은 언제나 복사+델타의 새 발행이고, 활성이
 		// 둘이면 평가기가 어느 정책으로 판정했는지 감사 재현이 불능이 된다.
-		addWord("급등 확실", "HIGH", "BLOCK");
-		addWord("무조건", "HIGH", "REVIEW");
+		addWord("급등 확실", "BLOCK");
+		addWord("무조건", "REVIEW");
 
 		assertThat(versions.stored).hasSize(2);
 		assertThat(versions.stored.get(0).getDeactivatedAt()).isNotNull();   // v1 종결
@@ -270,12 +275,15 @@ class ScreeningControllerTest {
 				.andExpect(jsonPath("$.result.length()").value(2))
 				.andExpect(jsonPath("$.result[0].text").value("무조건"))   // 최신 등록 맨 위
 				.andExpect(jsonPath("$.result[0].active").value(true))
-				.andExpect(jsonPath("$.result[0].risk").value("HIGH"));
+				// 위험 등급은 은퇴했다(ALPHA-760) — 판정은 처리 방식(action)만 정하므로
+				// 응답에 남아 있으면 화면이 다시 정하는 축처럼 그리게 된다.
+				.andExpect(jsonPath("$.result[0].risk").doesNotExist())
+				.andExpect(jsonPath("$.result[0].action").value("REVIEW"));
 	}
 
 	@Test
 	void 토글은_enabled를_반전한_복사_발행이고_미존재는_404다() throws Exception {
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		long ruleId = rules.stored.get(0).getScreeningRuleId();
 
 		mvc.perform(post("/api/v1/screening/words/" + ruleId + "/toggle").session(session()))
@@ -294,6 +302,71 @@ class ScreeningControllerTest {
 	}
 
 	@Test
+	void 은퇴한_위험도는_보내도_무시되고_저장되지_않는다() throws Exception {
+		// WHY: risk 는 은퇴했지만(ALPHA-760) Jackson 기본이 미지 필드를 허용해 구 클라이언트의
+		// 요청은 그대로 200 이 된다. 그 관용을 고정해 둔다 — 거부로 바꾸려면 이 테스트가 먼저
+		// 깨져야 하고, 반대로 조용히 저장되기 시작해도 여기서 잡힌다.
+		mvc.perform(post("/api/v1/screening/words").session(session())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+				.andExpect(status().isOk());
+
+		assertThat(rules.stored).hasSize(1);
+		// 키 부재는 문자열 비포함이 아니라 키 집합으로 단언한다 — 다른 이름(severity 등)으로
+		// 되살아나도 잡히게. params 는 text 하나뿐이어야 한다.
+		assertThat(objectMapper.readTree(rules.stored.get(0).getParams()).propertyNames())
+				.containsExactly("text");
+		// 감사 detail 로 새는 경로도 막는다(원장에는 없는데 로그에만 남는 상태 금지).
+		assertThat(auditDetails).hasSize(1);
+		assertThat(auditDetails.get(0)).containsOnlyKeys("text", "action");
+	}
+
+	@Test
+	void 위험도가_남아_있는_기존_행도_그대로_조회된다() throws Exception {
+		// WHY: params 는 JSONB 라 마이그레이션 없이 은퇴했다 — 기존 행에는 risk 키가 남아 있다.
+		// 투영이 그 키를 몰라도 목록이 깨지지 않아야 한다(잔재는 무시하되 표현·처리는 보존).
+		PolicyVersionEntity legacy = new PolicyVersionEntity(1, "문구", true, 2, "MEDIUM", 2L);
+		ReflectionTestUtils.setField(legacy, "policyVersionId", 1L);
+		ReflectionTestUtils.setField(legacy, "activatedAt", Instant.now());
+		versions.stored.add(legacy);
+		rules.save(new ScreeningRuleEntity(1L, "BANNED_WORD",
+				"{\"text\":\"급등 확실\",\"risk\":\"HIGH\"}", "BLOCK", true, Instant.now()));
+
+		mvc.perform(get("/api/v1/screening/words"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(1))
+				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result[0].risk").doesNotExist());
+	}
+
+	@Test
+	void 룰_표면은_금칙어_밖_타입도_전부_보여준다() throws Exception {
+		// WHY: /words 는 BANNED_WORD 만 투영한다 — 그 필터가 콘솔 전체의 필터였던 동안
+		// SINGLE_SOURCE·ASSERTIVE_EXPRESSION 인스턴스는 활성이어도 어느 화면에도 없어
+		// 운영자가 모르는 판정 근거였다(ALPHA-756). 처리 기준 표는 이 표면에서 파생하므로
+		// 여기서 타입을 가리면 표가 다시 정책 일부만 말하게 된다.
+		addWord("급등 확실", "BLOCK");
+		long activeVersion = versions.findActive().orElseThrow().getPolicyVersionId();
+		rules.save(new ScreeningRuleEntity(activeVersion, "SINGLE_SOURCE", "{}", "REVIEW", true, Instant.now()));
+		rules.save(new ScreeningRuleEntity(activeVersion, "ASSERTIVE_EXPRESSION",
+				"{\"text\":\"확실합니다\"}", "BLOCK", false, Instant.now()));
+
+		mvc.perform(get("/api/v1/screening/words"))
+				.andExpect(jsonPath("$.result.length()").value(1));   // 금칙어 표면은 그대로
+		mvc.perform(get("/api/v1/screening/rules"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(3))
+				.andExpect(jsonPath("$.result[0].ruleType").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result[1].ruleType").value("SINGLE_SOURCE"))
+				.andExpect(jsonPath("$.result[1].text").doesNotExist())   // text 없는 타입은 null
+				.andExpect(jsonPath("$.result[2].ruleType").value("ASSERTIVE_EXPRESSION"))
+				.andExpect(jsonPath("$.result[2].enabled").value(false)); // 비활성도 감추지 않는다
+	}
+
+	@Test
 	void 발행_전_GET은_온보딩_기반값을_투영한다() throws Exception {
 		// WHY: 첫 발행 전에도 화면은 기준을 보여줘야 한다 — 보이는 값이 곧 첫 발행의
 		// 기반값이라 화면과 실제 발행 결과가 어긋나지 않는다.
@@ -302,8 +375,15 @@ class ScreeningControllerTest {
 				.andExpect(jsonPath("$.result.length()").value(0));
 		mvc.perform(get("/api/v1/screening/criteria"))
 				.andExpect(status().isOk())
+				// 활성 정책이 없는 구간은 판정기가 NEW 를 아예 집지 않는다(정책 부재 = 진행 중단).
+				// 값은 현재 정책이 아니라 첫 발행 기반값이므로 화면이 구분할 수 있어야 한다.
+				.andExpect(jsonPath("$.result.published").value(false))
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true))
 				.andExpect(jsonPath("$.result.minSources").value(2))
-				.andExpect(jsonPath("$.result.maxRisk").value("MEDIUM"));
+				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"));
+		mvc.perform(get("/api/v1/screening/rules"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(0));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.text").isNotEmpty());
@@ -317,14 +397,66 @@ class ScreeningControllerTest {
 
 		PolicyVersionEntity active = versions.findActive().orElseThrow();
 		assertThat(active.getMinSourceCount()).isEqualTo(3);
-		assertThat(active.getMaxRisk()).isEqualTo("MEDIUM");   // 미지정 필드는 유지(PATCH)
+		assertThat(active.getMinConfidence()).isEqualTo("MEDIUM");   // 미지정 필드는 유지(PATCH)
 
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":0}"))
 				.andExpect(status().isBadRequest());
-		// HIGH 는 상한 불가 — 항상 검수·차단 경로(UI 계약 MAX_RISKS)
+		// LOW 는 기준 불가 — 보류까지 허용은 미설정과 실질 동일(UI 계약 MIN_CONFIDENCES)
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
-						.contentType(MediaType.APPLICATION_JSON).content("{\"maxRisk\":\"HIGH\"}"))
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minConfidence\":\"LOW\"}"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"minConfidence\":\"HIGH\"}"))
+				.andExpect(status().isOk());
+		// 200 만으로는 저장을 증명 못 한다 — 발행된 활성 버전에 HIGH 가 실려야 한다(Rule 9).
+		assertThat(versions.findActive().orElseThrow().getMinConfidence()).isEqualTo("HIGH");
+	}
+
+	@Test
+	void 출처_수_미설정은_기본값으로_위장하지_않는다() throws Exception {
+		// WHY: DDL 이 min_source_count NULL 을 "출처 수 조건 없음"으로 정의하고 평가기도 null 이면
+		// 게이트를 건너뛴다. 화면이 이걸 기본값 2 로 채워 보여주면 없는 조건을 있다고 말하게 되고,
+		// 처리 기준 표는 그 값으로 결과까지 단언한다(ALPHA-756). 확신도와 같은 처리여야 한다.
+		PolicyVersionEntity noGate = new PolicyVersionEntity(1, "문구", true, null, null, 2L);
+		ReflectionTestUtils.setField(noGate, "policyVersionId", 1L);   // IDENTITY 채번 대역
+		ReflectionTestUtils.setField(noGate, "activatedAt", Instant.now());
+		versions.stored.add(noGate);
+
+		mvc.perform(get("/api/v1/screening/criteria"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.published").value(true))          // 활성 버전은 있다
+				.andExpect(jsonPath("$.result.minSources").doesNotExist())      // 2 로 덮이지 않는다
+				.andExpect(jsonPath("$.result.minConfidence").doesNotExist())
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true));
+	}
+
+	@Test
+	void 자동_제공_스위치는_끄고_다시_켤_수_있고_기준은_보존된다() throws Exception {
+		// WHY: 컬럼·평가기 분기·이력 표시는 있는데 조작 수단이 없어 앱 경로로는 항상 켜짐이었다
+		// (ALPHA-756). "전건 검수 운영은 테넌트 선택지"(tenant-console.md)가 코드로 성립하려면
+		// 끌 수 있어야 하고, 끈 동안에도 기준이 보존돼야 다시 켤 때 같은 정책으로 돌아온다.
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"autoPublishEnabled\":false}"))
+				.andExpect(status().isOk());
+
+		PolicyVersionEntity off = versions.findActive().orElseThrow();
+		assertThat(off.isAutoPublishEnabled()).isFalse();
+		assertThat(off.getMinSourceCount()).isEqualTo(2);        // 기준은 그대로 실려 있다
+		assertThat(off.getMinConfidence()).isEqualTo("MEDIUM");
+
+		mvc.perform(get("/api/v1/screening/criteria"))
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(false))
+				.andExpect(jsonPath("$.result.minSources").value(2));
+
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"autoPublishEnabled\":true}"))
+				.andExpect(status().isOk());
+		assertThat(versions.findActive().orElseThrow().isAutoPublishEnabled()).isTrue();
+
+		// 빈 PATCH 는 여전히 400 — 스위치 필드가 늘었다고 허위 발행이 열리면 안 된다.
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{}"))
 				.andExpect(status().isBadRequest());
 	}
 
@@ -345,7 +477,7 @@ class ScreeningControllerTest {
 
 	@Test
 	void 버전_이력은_최신순으로_발행자와_활성_여부를_담는다() throws Exception {
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":1}"))
 				.andExpect(status().isOk());
@@ -366,7 +498,7 @@ class ScreeningControllerTest {
 	void 초안_로드_후_끼어든_발행은_소급_종결되지_않고_409로_진다() throws Exception {
 		// WHY: 발행은 초안의 기반 버전만 종결해야 한다 — 발행 직전 재조회로 "현재 활성"을
 		// 종결하면 경쟁자의 방금 발행분을 소급 종결하고 그 변경을 조용히 덮어쓴다(lost update).
-		addWord("급등 확실", "HIGH", "BLOCK");   // v1 활성
+		addWord("급등 확실", "BLOCK");   // v1 활성
 		versions.afterFindActive = () -> {
 			versions.deactivate(versions.stored.get(0).getPolicyVersionId());
 			versions.injectActive(2);            // 경쟁 트랜잭션이 v2 를 발행·커밋
@@ -385,7 +517,7 @@ class ScreeningControllerTest {
 	void 토글은_금칙어가_아닌_룰을_대상으로_하면_404다() throws Exception {
 		// WHY: /words/{id}/toggle 은 금칙어 표면이다 — id 만 맞으면 SINGLE_SOURCE 등
 		// 다른 판정 룰까지 뒤집을 수 있으면 금칙어 API 로 정책 전체를 변경하는 우회가 된다.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		long activeId = versions.findActive().orElseThrow().getPolicyVersionId();
 		ScreeningRuleEntity other = rules.save(new ScreeningRuleEntity(activeId, "SINGLE_SOURCE",
 				"{}", "REVIEW", true, Instant.now()));
@@ -414,7 +546,7 @@ class ScreeningControllerTest {
 
 		mvc.perform(post("/api/v1/screening/words").session(session())
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("CNSL4096"));
 	}
@@ -423,7 +555,7 @@ class ScreeningControllerTest {
 	void 모든_변경은_감사_로그를_남긴다() throws Exception {
 		// WHY: 정책 변경 이력은 console_action_log 소관(DDL 주석) — 누가 어떤 버전을
 		// 발행했는지 없으면 검수 판정의 근거 재현(민원 대응)이 끊긴다.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		mvc.perform(patch("/api/v1/screening/disclaimer").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"문구\"}"))
 				.andExpect(status().isOk());

@@ -5,6 +5,6 @@ package com.edge.tenantconsole.model;
  * id = screening_rule_id(활성 버전 내 식별), active = enabled, registeredAt = 최초 등록일
  * (버전 복사 시 created_at 을 보존해 유지된다).
  */
-public record BannedWord(long id, String text, String risk, String action, boolean active,
+public record BannedWord(long id, String text, String action, boolean active,
 		String registeredAt) {
 }

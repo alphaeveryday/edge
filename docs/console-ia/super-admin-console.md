@@ -26,9 +26,9 @@ Super Admin Console
 - 데이터 소스 수집 상태: 뉴스 / 공시 / 시세 / 수급 / 실적·재무 / ETF 구성 종목 — 각 상태, 마지막 수집·정상 처리 시각, 최근 오류
 - 뉴스 계보(ALPHA-685·697): funnel 타일(수집→구조화→분석 사용, N/M% + (i) 산출 정의) + 타일 클릭=단계 필터(stage) 목록 + 근거 문서 목록(KST 수집일 필터, 표본 상한 200, 언론사·원문 링크) + 장중 1분 추출 요약(error_code 별 DEAD — 다른 원장임을 명시). 원장이 아는 범위까지만 주장 — 추출 terminal 구분(NO_EVENT/실패)·중복 제거·종목 연결은 미계측 명시
 - 구성종목 결손 영향(ALPHA-686): 기대(snapshot) − **기준일 현재 적재분** 차집합 → 누락 ETF → 기준일 분석 지목 + 권장 재실행 안내(자동 실행 없음). **불변 이력이 아니다** — 나중 런이 기준일을 메우면 결손은 해소로 보인다(멱등 적재는 무변경 행의 data_version 을 안 갈아 run 스코프가 불가능). 계산 불가(기대 목록 또는 기준일 부재)는 영향 없음과 구분해 UNKNOWN, 기준일 대상 적재 진행 중이면 판정 유보
-- 변동(분석) 이벤트 목록: 종목, 시장, 등락률, 방향, 생성 시각, 근거 개수, 상태. 필터: 상태(전체 / 분석 완료 / 분석 대기 / 분석 실패 / 제외됨), 시장, 종목 검색
+- 변동(분석) 이벤트 목록: 종목, 시장, 등락률, 방향, 생성 시각, 근거 개수, 상태, 게시 상태(게시 중/미게시/무효화됨 — 실행 상태와 별개 축). 필터: 상태(전체 / 분석 완료 / 분석 대기 / 분석 실패), 시장, 종목 검색
 - 변동 이벤트 상세: 종목명, 티커, 시장, 등락률, 기준 시각, 관련 뉴스/공시, 시세/수급 변화, AI 공통 설명 후보, 신뢰도, 반대 요인, 분석 정보(변동 기준 시각·분석 완료 시각)
-- 관리 액션: 정정 등록(분석 결과 정정), 무효화 등록(분석 대상 제외). **정정/무효화 시 사유 입력 필수** — 사유는 이벤트 레코드에 보존된다
+- 관리 액션: **무효화 단독**(ALPHA-440·ALPHA-737 — 게시본을 내리고 전 수신 테넌트에 INVALIDATION 전파, 게시본에서만 활성). **사유 입력 필수** — 감사 원장과 테넌트 전파 페이로드에 보존된다. 구 정정/제외/복원 오버레이 액션은 은퇴했다(반쪽 통제 → 진짜 통제로 교체)
 
 ## API 매핑 (super-admin-api)
 
@@ -37,7 +37,7 @@ Super Admin Console
 단일 역할이라 전 표면이 "인증된 운영자"다 — 역할 열이 없다. 응답 원천은 도메인
 단위로 DB 전환 중이다(ALPHA-515 mock 출발): tenants=JPA(ALPHA-526) ·
 sources=운영 원장 조회(ALPHA-514) · analyses 읽기=설명 원장 조회(ALPHA-601) ·
-session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰기=운영자 작업 원장 전이(ALPHA-602).
+session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰기=무효화 단독(ALPHA-440·737 — 게시본 WITHDRAWN 전이 + INVALIDATION 발번 + 감사).
 
 | 화면 | 엔드포인트 |
 |---|---|
@@ -48,12 +48,11 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
 | Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
-| Event Pipeline — 분석 목록/정정/제외/복원/무효화 | `GET /api/v1/analyses` · `PATCH /api/v1/analyses/{id}/result` · `POST /api/v1/analyses/{id}/exclude` · `POST /api/v1/analyses/{id}/restore` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. UI 버튼은 후속) |
+| Event Pipeline — 분석 목록/무효화 | `GET /api/v1/analyses` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. 구 정정/제외/복원 엔드포인트는 ALPHA-737 로 은퇴) |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |
 
-> 정정/무효화 **사유 입력 필수**는 쓰기 실전환(ALPHA-602)과 함께 계약에 편입됐다 — 정정은
-> 새 결과·사유가, 제외는 사유가 필수다(빈 값 400). UI 가 사유 입력을 받는다. 복원 사유는 선택.
-> 작업자·사유·변경 전후는 감사 원장(`admin_activity_log`)에 보존된다.
+> 무효화 **사유 입력 필수**(빈 값 400). UI 가 사유 입력을 받고, 작업자·사유는 감사 원장
+> (`admin_activity_log`)에 보존된다. 미게시본 무효화는 409 로 거부된다.
 
-> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 현재 분석 정정/제외/복원/무효화(ALPHA-440)가 append 되고 테넌트 생성 감사는 후속): 테넌트 생성·이벤트 정정·이벤트 무효화가 작업 시각·작업자·유형·대상·사유·변경 전후 내용과 함께 기록된다. 정정/무효화 사유는 Event Pipeline 상세에서도 확인된다. 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.
+> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 신규 쓰기는 분석 무효화(ALPHA-440)뿐 — 구 정정/제외/복원 기록은 과거 이력으로 보존 — 이고 테넌트 생성 감사는 후속): 이벤트 무효화가 작업 시각·작업자·유형·대상·사유와 함께 기록된다(테넌트 생성 감사는 후속). 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.

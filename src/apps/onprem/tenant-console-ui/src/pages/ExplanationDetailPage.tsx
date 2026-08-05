@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
-  PUBLISHED_STATUSES, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE,
+  CONFIDENCE_LABEL, CONFIDENCE_TONE, PUBLISHED_STATUSES, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { useSession } from '../domains/session/hooks';
+import { isHttpUrl } from './_shared/links';
 import { LoadError } from './_shared/cells';
 
 export function ExplanationDetailPage() {
@@ -58,16 +59,28 @@ export function ExplanationDetailPage() {
         <div className="flex items-center gap-8">
           <div>
             <div className="t-label">제공 상태</div>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex items-center gap-1.5">
               <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status]}</StatusBadge>
+              {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
+              {it.serving && (
+                <StatusBadge tone="exposed" dot={false}>
+                  노출 중
+                </StatusBadge>
+              )}
             </div>
           </div>
           <div>
-            <div className="t-label">위험 등급</div>
+            <div className="t-label">기준시각</div>
+            <div className="num mt-1.5" style={{ fontSize: 12 }}>
+              {it.explanationAsOf}
+            </div>
+          </div>
+          <div>
+            <div className="t-label">확신도</div>
             <div className="mt-1.5">
-              {it.risk ? (
-                <StatusBadge tone={RISK_TONE[it.risk]} dot={false}>
-                  {RISK_LABEL[it.risk]}
+              {it.confidence ? (
+                <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
+                  {CONFIDENCE_LABEL[it.confidence]}
                 </StatusBadge>
               ) : (
                 <span style={{ color: 'var(--fg-4)' }}>—</span>
@@ -179,7 +192,16 @@ export function ExplanationDetailPage() {
                 <td>
                   <span className="chip">{ev.type}</span>
                 </td>
-                <td>{ev.title}</td>
+                <td>
+                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
+                  {ev.sourceUri && isHttpUrl(ev.sourceUri) ? (
+                    <a href={ev.sourceUri} target="_blank" rel="noopener noreferrer">
+                      {ev.title}
+                    </a>
+                  ) : (
+                    ev.title
+                  )}
+                </td>
                 <td className="col-muted">{ev.source}</td>
                 <td className="col-muted num">{ev.time}</td>
               </tr>

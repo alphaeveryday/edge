@@ -1,8 +1,14 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Delta, Icon, PageSkeleton, StatusBadge } from 'ui-kit';
+/* Analysis 타입은 본문 분리(AnalysesBody)가 쓰고, 게시 라벨은 dev 가 추가한 게시 축이 쓴다 */
 import type { Analysis, AnalysisMarket, AnalysisStatus } from '../domains/analyses';
-import { ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
+import {
+  ANALYSIS_PUBLICATION_LABEL,
+  ANALYSIS_PUBLICATION_TONE,
+  ANALYSIS_STATUS_LABEL,
+  ANALYSIS_STATUS_TONE,
+} from '../domains/analyses';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { MOCK_ANALYSES } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
@@ -65,6 +71,7 @@ function AnalysesBody({ items, mock = false }: { items: Analysis[]; mock?: boole
               <th className="col-num">등락률</th>
               <th>변동 기준 시각</th>
               <th>상태</th>
+              <th>게시</th>
             </tr>
           </thead>
           <tbody>
@@ -92,6 +99,16 @@ function AnalysesBody({ items, mock = false }: { items: Analysis[]; mock?: boole
                 <td className="col-muted num whitespace-nowrap">{a.basisTime}</td>
                 <td>
                   <StatusBadge tone={ANALYSIS_STATUS_TONE[a.status]}>{ANALYSIS_STATUS_LABEL[a.status]}</StatusBadge>
+                </td>
+                <td>
+                  {/* 게시 수명주기 — 실행 상태와 별개 축. 결과 없는 런은 배지 없음(—). */}
+                  {a.publicationStatus ? (
+                    <StatusBadge tone={ANALYSIS_PUBLICATION_TONE[a.publicationStatus]}>
+                      {ANALYSIS_PUBLICATION_LABEL[a.publicationStatus]}
+                    </StatusBadge>
+                  ) : (
+                    <span className="t-xs" style={{ color: 'var(--fg-3)' }}>—</span>
+                  )}
                 </td>
               </tr>
             ))}
