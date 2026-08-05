@@ -23,7 +23,9 @@ import type { GridCell, GridSlot, SourceGrid } from '../domains/sources';
 import { useSourceGrid } from '../domains/sources/hooks';
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
+import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
+import '../styles/grid.css';
 
 /* 원장 어휘를 그대로 색에 대응시킨다 — 화면에서 새 상태 이름을 만들지 않는다(SourcesPage 와
  * 같은 이유). 목록에 없는 새 어휘는 PENDING 회색으로 떨어진다 — 모르는 값을 초록·빨강 어느
@@ -35,6 +37,113 @@ const OUTCOME_BG: Record<string, string> = {
   MISSED: '#fff',
   PENDING: '#e5e7eb',
 };
+
+/** 귀결 라벨 — 원장 어휘의 표시명. 배경색과 짝이라 범례와 셀이 같은 출처를 본다. */
+const OUTCOME_LABEL: Record<string, string> = {
+  FULFILLED: '성공',
+  FAILED: '실패',
+  BLOCKED: '선행 미충족',
+  MISSED: '미기동',
+  PENDING: '대기',
+};
+
+/**
+ * 셀 한 칸의 시각 표현 — 격자와 범례가 **이 컴포넌트 하나**를 공유한다.
+ * 두 곳에 모양을 복제하면 범례가 조용히 거짓말을 하게 된다.
+ *
+ * 인코딩(기존 그대로): 배경=task_outcome · 파란 테두리=귀결 전 PENDING 인데 도는 시도 있음 ·
+ * 사선=plan_status SKIPPED · 우상 주황 점=failed_records>0 또는 data_status INCOMPLETE/INVALID ·
+ * 우하 초록 점=data_status VALID(VALID_EMPTY 는 제외).
+ */
+function CellVisual({
+  outcome,
+  skipped = false,
+  running = false,
+  defect = false,
+  verified = false,
+}: {
+  outcome?: string | null;
+  skipped?: boolean;
+  running?: boolean;
+  defect?: boolean;
+  verified?: boolean;
+}) {
+  const cls = [
+    'gd-cell',
+    skipped ? 'gd-skipped' : '',
+    running ? 'gd-running' : '',
+    !running && outcome === 'MISSED' ? 'gd-missed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <span
+      className={cls}
+      /* 사선(SKIPPED)일 때는 배경을 덮지 않는다 — 계획 축이 귀결 축을 가린다 */
+      style={skipped ? undefined : { background: OUTCOME_BG[outcome ?? ''] ?? OUTCOME_BG.PENDING }}
+    >
+      {defect && <span className="gd-dot gd-dot-defect" />}
+      {verified && <span className="gd-dot gd-dot-valid" />}
+    </span>
+  );
+}
+
+const STATUS_TIP = [
+  '배경색 = ops_expected_task.task_outcome (성공 · 실패 · 선행 미충족 · 미기동 · 대기).',
+  '  목록에 없는 새 어휘는 대기 회색으로 떨어진다 — 모르는 상태를 성공·실패로 단정하지 않는다.',
+  '',
+  '파란 테두리 = 귀결은 아직 PENDING 인데 도는 시도(ops_task_attempt RUNNING)가 있다.',
+  '  배경이 아니라 테두리인 이유: 귀결 축과 시도 축은 다른 축이라 덮으면 한쪽이 사라진다.',
+  '',
+  '사선 = plan_status SKIPPED (계획 제외). 안 한 게 아니라 할 일이 아니었다.',
+  '  "작업 정의 없음"(·)과 다른 사실이다 — 그쪽은 그 슬롯의 작업 정의에 애초에 없었다는 뜻이고,',
+  '  이쪽은 정의에는 있는데 계획 단계에서 빠졌다는 뜻이다.',
+  '',
+  '우상 주황 점 = failed_records > 0 또는 data_status 가 INCOMPLETE·INVALID.',
+  '  실행 성공과 데이터 유효는 다른 축이라, 이 점이 없으면 불완전한 산출이 온전히 초록으로 보인다.',
+  '',
+  '우하 초록 점 = data_status VALID — 기대와 대조까지 통과한 성공.',
+  '  VALID_EMPTY 에는 붙이지 않는다. 그건 "검증할 산출이 없었다"이지 "기대와 대조해 맞았다"가 아니다.',
+  '',
+  '산출·유실이 "—" 인 칸은 건수 신호를 남기지 않은 것이다 — 0건 처리와 다르다.',
+].join('\n');
+
+/** 범례 — 실제 셀과 같은 CellVisual 을 쓴다. 항상 보이는 핵심 인코딩만 담는다. */
+function GridLegend() {
+  return (
+    <div className="gd-legend">
+      <span className="gd-legend-label">귀결</span>
+      {(['FULFILLED', 'FAILED', 'BLOCKED', 'MISSED', 'PENDING'] as const).map((o) => (
+        <span key={o} className="gd-legend-item">
+          <CellVisual outcome={o} />
+          {OUTCOME_LABEL[o]}
+        </span>
+      ))}
+      <span className="gd-legend-label">표식</span>
+      <span className="gd-legend-item">
+        <CellVisual outcome="PENDING" running />
+        실행 중
+      </span>
+      <span className="gd-legend-item">
+        <CellVisual skipped />
+        계획 제외
+      </span>
+      <span className="gd-legend-item">
+        <CellVisual outcome="FULFILLED" defect />
+        데이터 결손
+      </span>
+      <span className="gd-legend-item">
+        <CellVisual outcome="FULFILLED" verified />
+        완전성 검증
+      </span>
+      <span className="gd-legend-item">
+        <span className="gd-none" aria-hidden="true">·</span>
+        작업 정의 없음
+      </span>
+      <InfoPopover label="상태 기준" title="상태 기준" text={STATUS_TIP} />
+    </div>
+  );
+}
 
 const STAGE_ORDER: Record<string, number> = { raw: 0, normalize: 1, feature: 2 };
 const STAGE_LABEL: Record<string, string> = { raw: '수집', normalize: '정제', feature: '적재·피처' };
@@ -68,6 +177,26 @@ function slotLabel(runKey: string) {
   if (!m) return runKey;
   const lane = runKey.startsWith('news:') ? '뉴스 ' : '';
   return m[4] ? `${lane}${m[2]}-${m[3]}\n${m[4]}` : `${lane}${m[2]}-${m[3]}`;
+}
+
+/** 스크린리더용 — 런·작업·귀결·데이터 상태와 "어디로 가는가"까지 담는다 */
+function cellLabel(cell: GridCell, runKey: string, skipped: boolean) {
+  const outcome = skipped
+    ? '계획 제외'
+    : (OUTCOME_LABEL[cell.outcome ?? ''] ?? cell.outcome ?? '판정 없음');
+  return (
+    `실행 ${runKey} · 작업 ${cell.taskKey} · 귀결 ${outcome} · 데이터 ${cell.dataStatus ?? '기록 없음'}` +
+    (cell.running ? ' · 실행 중' : '') +
+    ` — 이 실행의 ${cell.taskKey} 상세 보기`
+  );
+}
+
+function headTip(slot: GridSlot) {
+  return [
+    slot.runKey,
+    `기동 ${slot.launchStatus ?? '—'} · 실행 전체 ${slot.orchestrationStatus ?? '—'}`,
+    '이 실행 전체 보기',
+  ].join('\n');
 }
 
 function cellTip(cell: GridCell, runKey: string) {
@@ -163,7 +292,10 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">파이프라인 실행 이력 {mock && <MockChip />}</span>
+          <span className="t-label">
+            파이프라인 실행 이력 {mock && <MockChip />}
+          </span>
+          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>최근 {grid.days}일</span>
           <span style={{ display: 'inline-flex', gap: 4 }}>
             {LANE_FILTERS.map((f) => (
               <button
@@ -184,11 +316,22 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
               </button>
             ))}
           </span>
-          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            최근 {grid.days}일 · 색=귀결 · 파란 테두리=실행 중 · 사선=계획 스킵 · 우상 주황
-            점=데이터 결손 · 우하 초록 점=완전성 검증(VALID) · ·=카탈로그에 없음 · 셀을 누르면
-            그 실행의 드릴다운
-          </span>
+        </div>
+
+        {/* 상태 범례 — 실제 셀과 같은 모양. 조작 안내는 아래에서 따로 말한다 */}
+        <div className="card-pad" style={{ paddingTop: 0 }}>
+          <GridLegend />
+          <div className="gd-hint">
+            <span>
+              <b>런 헤더</b> 선택 → 이 실행 전체 보기
+            </span>
+            <span>
+              <b>작업 셀</b> 선택 → 그 실행의 해당 작업 상세
+            </span>
+            <span style={{ marginLeft: 'auto' }}>
+              이동 대상은 <b>실행 원장 상세</b>입니다 — 시도 이력·대조 이슈가 거기 있습니다
+            </span>
+          </div>
         </div>
 
         {slots.length === 0 ? (
@@ -210,21 +353,30 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                     style={{ position: 'sticky', left: 0, background: 'var(--bg-card, #fff)' }}
                   />
                   {slots.map((slot) => (
-                    <th
-                      key={slot.runKey}
-                      title={`${slot.runKey}\n기동 ${slot.launchStatus ?? '—'} · 실행 전체 ${slot.orchestrationStatus ?? '—'}`}
-                      onClick={() => openDrilldown(slot.runKey)}
-                      style={{
-                        padding: '2px 3px',
-                        whiteSpace: 'pre',
-                        fontWeight: 500,
-                        cursor: mock ? 'default' : 'pointer',
-                        /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
-                         * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
-                        color: slotHeaderColor(slot),
-                      }}
-                    >
-                      {slotLabel(slot.runKey)}
+                    <th key={slot.runKey} style={{ padding: 0 }}>
+                      {/* th 의 onClick 대신 진짜 버튼 — Tab·Enter·Space 가 그대로 동작한다 */}
+                      {mock ? (
+                        <span
+                          className="gd-headbtn"
+                          style={{ display: 'inline-block', color: slotHeaderColor(slot) }}
+                          title={headTip(slot)}
+                        >
+                          {slotLabel(slot.runKey)}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="gd-headbtn"
+                          title={headTip(slot)}
+                          aria-label={`실행 ${slot.runKey} · 기동 ${slot.launchStatus ?? '기록 없음'} · 실행 전체 ${slot.orchestrationStatus ?? '기록 없음'} — 이 실행 전체 보기`}
+                          onClick={() => openDrilldown(slot.runKey)}
+                          /* 기동 축도 함께 본다 — 기동 실패는 orchestration 이 영영 null 이라
+                           * 그 축만 보면 "아예 못 뜬 슬롯"이 무색으로 남는다. */
+                          style={{ color: slotHeaderColor(slot) }}
+                        >
+                          {slotLabel(slot.runKey)}
+                        </button>
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -256,20 +408,20 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                         {slots.map((slot) => {
                           const cell = cellByKey.get(`${slot.runKey}|${taskKey}`);
                           if (!cell) {
-                            /* 그 슬롯의 카탈로그에 없던 작업 — 실패(빈 셀 방치)와 구분해 그린다 */
+                            /* 그 슬롯의 작업 정의에 없던 작업 — 실패(빈 셀 방치)와도, 계획
+                             * 제외(SKIPPED)와도 다른 사실이다. 클릭 대상으로 보이지 않게 둔다. */
                             return (
-                              <td
-                                key={slot.runKey}
-                                style={{ textAlign: 'center', color: 'var(--fg-3, #d1d5db)' }}
-                              >
-                                ·
+                              <td key={slot.runKey} style={{ padding: 2 }}>
+                                <span
+                                  className="gd-none"
+                                  title={`${taskKey} @ ${slot.runKey}\n해당 실행 슬롯의 작업 정의에 포함되지 않음`}
+                                >
+                                  ·
+                                </span>
                               </td>
                             );
                           }
                           const skipped = cell.planStatus === 'SKIPPED';
-                          const bg = skipped
-                            ? 'repeating-linear-gradient(45deg,#e5e7eb 0 3px,#fff 3px 6px)'
-                            : (OUTCOME_BG[cell.outcome ?? ''] ?? OUTCOME_BG.PENDING);
                           const defect =
                             (cell.failedRecords ?? 0) > 0 ||
                             cell.dataStatus === 'INCOMPLETE' ||
@@ -277,59 +429,33 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                           /* VALID_EMPTY 는 표시하지 않는다 — "검증할 산출이 없었다"이지
                            * "기대와 대조해 맞았다"가 아니다. 뱃지는 후자만 주장한다. */
                           const verified = cell.dataStatus === 'VALID';
+                          const visual = (
+                            <CellVisual
+                              outcome={cell.outcome}
+                              skipped={skipped}
+                              running={cell.running}
+                              defect={defect}
+                              verified={verified}
+                            />
+                          );
                           return (
-                            <td
-                              key={slot.runKey}
-                              title={cellTip(cell, slot.runKey)}
-                              onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
-                              style={{ padding: 2, cursor: mock ? 'default' : 'pointer' }}
-                            >
-                              <div
-                                style={{
-                                  width: 18,
-                                  height: 18,
-                                  borderRadius: 3,
-                                  background: bg,
-                                  /* 실행 중은 배경(귀결 축)을 덮지 않고 테두리로 겹쳐 그린다 */
-                                  border: cell.running
-                                    ? '2px solid #3b82f6'
-                                    : cell.outcome === 'MISSED'
-                                      ? '2px solid #ef4444'
-                                      : '1px solid #d1d5db',
-                                  position: 'relative',
-                                }}
-                              >
-                                {defect && (
-                                  <span
-                                    style={{
-                                      position: 'absolute',
-                                      top: -3,
-                                      right: -3,
-                                      width: 8,
-                                      height: 8,
-                                      borderRadius: 4,
-                                      background: '#f59e0b',
-                                      border: '1px solid #fff',
-                                    }}
-                                  />
-                                )}
-                                {verified && (
-                                  /* 결손 점(우상 주황)과 자리를 가른다 — 셀 배경 초록(FULFILLED)
-                                   * 위에서도 읽히도록 진초록 + 흰 테두리 */
-                                  <span
-                                    style={{
-                                      position: 'absolute',
-                                      bottom: -3,
-                                      right: -3,
-                                      width: 8,
-                                      height: 8,
-                                      borderRadius: 4,
-                                      background: '#15803d',
-                                      border: '1px solid #fff',
-                                    }}
-                                  />
-                                )}
-                              </div>
+                            <td key={slot.runKey} style={{ padding: 2 }}>
+                              {/* td 의 onClick 대신 진짜 버튼 — 18×18 밀도는 버튼 자체가 유지한다 */}
+                              {mock ? (
+                                <span className="gd-static" title={cellTip(cell, slot.runKey)}>
+                                  {visual}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="gd-cellbtn"
+                                  title={cellTip(cell, slot.runKey)}
+                                  aria-label={cellLabel(cell, slot.runKey, skipped)}
+                                  onClick={() => openDrilldown(slot.runKey, cell.taskKey)}
+                                >
+                                  {visual}
+                                </button>
+                              )}
                             </td>
                           );
                         })}

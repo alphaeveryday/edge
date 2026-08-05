@@ -10,7 +10,7 @@
  * 과거 날짜로 다시 돌린다 — 산출 축 숫자에 "어느 런이 만든 것인가"가 붙어야 하는 이유다.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { retryCap } from '../../rules/rules';
@@ -590,6 +590,17 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
           <b>계측 없음</b>으로 나옵니다 — 0 이나 성공이 아닙니다.
         </p>
       )}
+      {/* 한 단계 아래 = 원장 근거. 이 화면은 스냅샷 요약이고 시도 전량·대조 이슈는 라이브 원장에 있다.
+       * 같은 run_key 네임스페이스라 그대로 넘기고, 원장에 없으면 그쪽이 정직하게 404 를 말한다. */}
+      <p className="t-xs m-0" style={{ marginTop: 8 }}>
+        <Link to={`/sources?runKey=${encodeURIComponent(run.id)}&task=${encodeURIComponent(t.task_key)}`}>
+          원장 근거 보기 →
+        </Link>{' '}
+        <span style={{ color: 'var(--fg-3)' }}>
+          시도(attempt) 전량·대조 이슈는 실행 원장 상세가 답합니다 (라이브 원장 조회 — 이 스냅샷 런이
+          원장에 없으면 그 화면이 그렇게 밝힙니다)
+        </span>
+      </p>
     </div>
   );
 }

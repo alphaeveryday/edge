@@ -413,15 +413,20 @@ function SourcesBody({
       <div className="card">
         <div className="card-head">
           <span className="t-label">
-            데이터 소스 수집 상태 {mock && <MockChip />}
-            {/* 지목해서 보는 중이면 그 사실을 밝힌다 — 옛 런을 최신 상태로 오독하면 안 된다 */}
-            {runKey && <span className="t-xs">{' · 지정한 실행'}</span>}
+            {/* 런을 지목해 내려온 경우 이 화면은 격자의 한 단계 아래다 — 계층을 문구로 밝힌다.
+             * 지목 없이 들어오면(네비 진입) 최신 런의 수집 상태 화면 그대로다. */}
+            {runKey ? '실행 이력 › 실행 원장 상세' : '데이터 소스 수집 상태'} {mock && <MockChip />}
           </span>
           {run && (
             <span className="t-xs num" style={{ color: 'var(--fg-3)' }}>
               {run.runKey}
               {run.tradingDate && ` · 거래일 ${run.tradingDate}`}
             </span>
+          )}
+          {runKey && (
+            <Link to="/grid" className="t-xs" style={{ marginLeft: 'auto' }}>
+              ← 실행 이력으로 돌아가기
+            </Link>
           )}
         </div>
 
@@ -489,6 +494,10 @@ function SourcesBody({
       {report.issues.length > 0 && <IssuesCard issues={report.issues} />}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
+      </p>
+      <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+        이 화면은 <b>실행 원장 상세</b>입니다 — 시도(attempt) 전량과 대조 이슈가 여기 있습니다.
+        여러 실행을 나란히 놓고 “언제부터 깨졌는지” 찾는 것은 <Link to="/grid">실행 이력</Link> 소관입니다.
       </p>
     </div>
   );
