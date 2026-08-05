@@ -619,6 +619,31 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
     지금은 수동 실행뿐이라 "못 돌 시각에 돌렸다"를 시끄럽게 드러내는 편이 맞지만, ALPHA-769
     가 평일 cron 을 켜면 **공휴일마다 런이 FAILED** 로 마감된다 — 그때 iNAV 규약(skip)으로
     맞출지 함께 결정한다.
+  - **뒤 두 스텝도 SFN 밖이다**(ALPHA-768): `normalize-investor-estimate`(raw → canonical
+    `investor_flow_intraday`) → `load-investor-intraday`(→ 동명 테이블). EOD 체인
+    (`normalize-investor` → `load-etf-flow`)과 스텝을 **복제하지 않고 갈랐다** — 정체성 키에
+    `asof_slot` 이 붙어 병합 키·PK·창 프루닝이 전부 달라 인자로 갈아끼울 수 없다(수집 스텝은
+    저장 위치만 달라 인자로 갈랐던 것과 대조). 세 스텝을 손으로 이어 돌리면 체인이 닫힌다
+    (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — 위 각 절의 env 와 같다):
+    ```bash
+    # 수집 — 거래일이고 09:30(KST) 이후일 때만. 아니면 라벨을 못 붙여 죽는다
+    DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=... \
+      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-investor-estimate
+    # 정제 — --input-run-id 로 한 슬롯 런만 좁힐 수 있다(미지정=전체 raw, 멱등)
+    uv run --package data-pipeline python -m data_pipeline.run normalize-investor-estimate
+    # 적재 — 창 미지정 = trade_date 전체 스캔 + 멱등. 선행: 이 테이블의 Flyway 적용 완료
+    DATA_PIPELINE_DB__HOST=127.0.0.1 DATA_PIPELINE_DB__PASSWORD=... \
+      uv run --package data-pipeline python -m data_pipeline.run load-investor-intraday
+    ```
+    - **컬럼은 추정 수량 3개뿐**(`net_qty_foreign_est`·`net_qty_institution_est`·
+      `net_qty_total_est`). 벤더가 `frgn`·`orgn`·`sum` 가집계 수량만 주고 개인·기관 세분·
+      순매수 대금을 안 준다 — EOD 의 백만원→원 환산도 `currency` 태깅도 대상이 없다.
+      `_est` 접미사는 표면에서 잠정임이 읽히게 하는 장치다.
+    - ⚠️ `asof_slot` 은 **TEXT 로 원문 보존**한다. `bsop_hour_gb` 의 도메인이 미관측이라
+      ("0930" 같은 시각인지 "1"~"5" 코드인지) 시각으로 파싱하면 정체성 키를 잘못 가정하는데,
+      이 소스는 소급 재조회가 없어 사후 정정이 불가하다. 실측으로 좁힌 뒤 좁힌다.
+    - 정정 정책은 **최신값 덮어쓰기**(형제 로더와 같은 모델) — 벤더가 가집계를 고치면
+      canonical 이 최신 `fetched_at` 으로 수렴하고 마트는 `DO UPDATE` 로 따라간다.
 
 **정제(normalize, 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
@@ -792,6 +817,12 @@ settings.targets.keywords            # ["금리", ...]
     이 어느 거래일 스냅샷인지 복원할 수 없다(KRX holdings 의 `trd_dd` 와 같은 형태).
     각 행에 `our_ticker`·`market`·`kis_symbol`·`asof_date`·`fetched_at` 를 붙인다.
     슬롯 응답이 그날 것을 누적해 오므로 슬롯 간 중복은 **정상**이고 정리는 canonical 소관이다.
+- **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
+  market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
+  키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가
+  한 축 많다** — 하루 4~5 슬롯이 한 종목·한 날짜에 공존하므로 ticker 단독으로 병합하면 마지막
+  슬롯이 앞을 덮어 장중 추이가 사라진다. 거래일은 raw 의 `asof_date`(수집이 붙인 provenance)가
+  주고, 같은 슬롯 재관측은 최신 fetched_at 이 이긴다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
