@@ -21,6 +21,21 @@ Table "admin_activity_log" {
   "created_at" timestamptz [not null]
 }
 
+Table "analysis_evidence_bundle" {
+  "bundle_id" text [pk]
+  "basis" text [not null]
+  "cell" text [not null]
+  "trade_date" date [not null]
+  "layer" text
+  "claim" text [not null]
+  "news_ids" text[] [not null]
+  "stats" jsonb [not null]
+  "sign" smallint [not null]
+  "created_at" timestamptz [not null]
+  "thread_ids" text[] [not null]
+  "series_lineage" jsonb [not null]
+}
+
 Table "assertion_argument" {
   "assertion_argument_id" bigint [pk, increment]
   "assertion_id" text [not null]
@@ -473,6 +488,21 @@ Table "investor_flow_daily" {
   }
 }
 
+Table "investor_flow_intraday" {
+  "instrument_id" text [not null]
+  "trade_date" date [not null]
+  "asof_slot" text [not null]
+  "net_qty_foreign_est" bigint [not null]
+  "net_qty_institution_est" bigint [not null]
+  "net_qty_total_est" bigint [not null]
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("instrument_id", "trade_date", "asof_slot") [pk]
+  }
+}
+
 Table "market_series" {
   "market_series_id" text [pk]
   "series_type" varchar(30) [not null]
@@ -547,8 +577,9 @@ Table "minute_price_trigger" {
   "close_price" numeric(24,6) [not null]
   "change_rate" numeric(12,8) [not null]
   "threshold" numeric(12,8) [not null]
-  "cooldown_bucket" bigint [not null]
+  "cooldown_bucket" bigint
   "created_at" timestamptz [not null]
+  "anchor_price" numeric(24,6)
 }
 
 Table "minute_session_open" {
@@ -559,6 +590,18 @@ Table "minute_session_open" {
   "reason" text
   "source_window" timestamptz [not null]
   "decided_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "entity_id") [pk]
+  }
+}
+
+Table "minute_trigger_anchor" {
+  "session_id" text [not null]
+  "entity_id" text [not null]
+  "anchor_price" numeric(24,6) [not null]
+  "anchor_window" timestamptz [not null]
+  "updated_at" timestamptz [not null]
 
   indexes {
     ("session_id", "entity_id") [pk]
@@ -990,9 +1033,11 @@ Ref: "explanation_run_event_price_observation"."explanation_run_id" > "explanati
 Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "entity_type")
 Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
+Ref: "investor_flow_intraday"."instrument_id" > "instrument"."instrument_id"
 Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_trigger_anchor"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
