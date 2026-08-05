@@ -33,6 +33,10 @@ def _lake(bars_dir, *, s3_rows=None):
     lk = CausalLake.__new__(CausalLake)
     lk.con = duckdb.connect()
     lk.exists, lk.unbound, lk.s3 = {}, {}, {}
+    # `__init__` 이 세우는 나머지 상태. 스텁이라 손으로 채운다 - 프로덕션 쪽을
+    # `getattr` 로 무르게 만들면 '초기화가 이걸 세운다' 는 불변식이 사라진다.
+    # `_heavy_cut = 0` 은 바이트 감시를 끈다: 프로파일링은 여기서 잴 것이 아니다.
+    lk.deferred, lk.heavy, lk._heavy_cut = {}, [], 0
     if s3_rows:
         lk.con.execute(
             "CREATE VIEW s3_intraday_5m AS SELECT * FROM (VALUES " + s3_rows + ") "

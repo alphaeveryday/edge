@@ -34,6 +34,16 @@ LAKE = "s3://edge-dev-pipeline-lake/"
 # 1분 워커 롤업이 5분봉을 실시간 공급하기 시작한 날. 이 날부터는 롤업이 정본이고
 # 그 전은 fmp 백필이 정본이다 - 두 벤더가 같은 (symbol, ts) 를 낼 때의 심판.
 ROLLUP_FROM = "2026-08-04"
+# 5분봉 정본 표 — Glue Iceberg. 세 원천(fmp 백필 · 깊은 ETF 재수집 · 1분 롤업)을
+# 적재 쪽에서 이미 합쳐 둔 상위집합이라 뷰가 다시 합칠 필요가 없다. `off` 를 넣으면
+# canonical 합집합 경로로 돌아간다(디버깅·비상용).
+BARS_ICEBERG_ACCOUNT = "393229433969"
+BARS_ICEBERG = "gl.market_data_kr.edge_intraday_5m"
+BARS_ICEBERG_ENV = "EDGE_BARS_ICEBERG"
+# 로컬로 내려오는 바이트 임계. 넘으면 `lake.heavy` 에 남는다(막지는 않는다).
+# 기본 64MB: 실측으로 새는 것들이 그 위다(층분해 295.7MB · pit_daily 106MB).
+# 0 이면 감시를 끈다 - 프로파일링 자체가 비용이라 배치에서는 끌 수 있어야 한다.
+HEAVY_BYTES_ENV = "EDGE_HEAVY_BYTES"
 
 # 하류 SQL 이 이름으로 참조하는 로컬 백필의 빈 스키마. statics.pit / statics.fin 이
 # 아직 안 돌았어도 v_pit·v_fin 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이
@@ -68,6 +78,7 @@ AWS_REGION_ENV = "AWS_REGION"
 S3_CHAIN_ENV = "DUCKDB_S3_CHAIN"
 MEMORY_LIMIT_ENV = "DUCKDB_MEMORY_LIMIT"
 TEMP_DIR_ENV = "DUCKDB_TEMP_DIR"
+HEAVY_BYTES_ENV = "DUCKDB_HEAVY_BYTES"
 # 기본 체인에 instance 가 앞쪽에 있어야 Fargate 가 붙는다: task role 은 컨테이너
 # 자격증명 엔드포인트로 오는데 컨테이너엔 SSO 캐시도 config 파일도 없다.
 # 스필 경로는 **플랫폼이 정하게 둔다** - '/tmp' 를 박아 두면 Windows 에선 git-bash
@@ -83,7 +94,7 @@ TEMP_DIR_ENV = "DUCKDB_TEMP_DIR"
 # 후행 슬래시 금지: 코드가 파일명을 이어붙이므로 '…/backfill//pit_daily.parquet' 가
 # 되고 S3 는 빈 세그먼트를 키의 일부로 봐서 조용히 0파일을 돌려준다.
 DEFAULTS = {S3_CHAIN_ENV: "env;instance;config;sso", AWS_REGION_ENV: "ap-northeast-2",
-            MEMORY_LIMIT_ENV: "1.5GB", TEMP_DIR_ENV: tempfile.gettempdir(),
+            HEAVY_BYTES_ENV: str(64 * 1024 * 1024), MEMORY_LIMIT_ENV: "1.5GB", TEMP_DIR_ENV: tempfile.gettempdir(),
             BACKFILL_S3_ENV: LAKE + "analysis/backfill"}
 
 # S3 데이터셋 전량. **데이터가 없어도 붙인다** - 빈 Iceberg 테이블도 스키마는 있고,
@@ -267,6 +278,10 @@ class CausalLake:
         self.s3: dict[str, str] = {}            # S3 뷰 이름 → 버킷 경로
         self.deferred: dict[str, str] = {}      # 첫 조회 때 걸 뷰 (스니핑이 비싼 것)
         self._probed: str = ""
+        # **로컬로 내려온 무거운 질의 기록** — (질의 앞머리, 바이트). 무거운 집계는
+        # 클라우드가 하고 여기는 작은 결과만 받는다는 계약의 감시 장치다.
+        self.heavy: list[tuple[str, int]] = []
+        self._heavy_cut = int(_env(HEAVY_BYTES_ENV) or 0)
         self._s3()
         self._bars(Path(bars_dir) if bars_dir else self._default_bars())
         self._backfill(Path(backfill_dir or os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")))
@@ -275,6 +290,54 @@ class CausalLake:
     @staticmethod
     def _default_bars() -> Path:
         return Path(os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")) / "bars"
+
+    def _bars_iceberg(self) -> bool:
+        """5분봉을 **Glue Iceberg 표**로 건다. 성공하면 True — 합집합 경로는 안 탄다.
+
+        왜 이게 정본인가: `market_data_kr.edge_intraday_5m` 이 세 원천을 **이미 합쳐
+        놓은 상위집합**이다(실측 fmp 63,889,777 · fmp_backfill 563,249 · 1m_rollup
+        16,652). 그래서 여기서는 심볼 정규화·안티조인·available_at 유도가 필요 없다 -
+        적재 쪽이 한 번 하고 카탈로그가 그것을 기억한다. 노트북의 로컬 parquet 없이
+        β 표본이 서는 것도 이 표 덕이다(069500.KS 13:00~15:30 시각창 865거래일).
+
+        메타 파일 번호를 박지 않는다. `ATTACH` 가 Glue 에서 최신 스냅샷을 해소하므로
+        증분 적재로 스냅샷이 늘어도 같은 배선이 계속 산다(16→18→20→29 실측).
+
+        실패하면 **조용히 True 를 돌려주지 않는다.** 자격증명이 없는 환경(테스트)은
+        여기서 떨어져 기존 합집합 경로를 타야 한다 - 그게 밀폐성을 지키는 방법이고,
+        운영에서 ATTACH 가 깨졌을 때도 분석이 멈추는 대신 canonical 로 돈다.
+
+        신선도를 `exists` 에 싣는다. 이 표는 증분 잡이 돌아야 최신이 되고, 안 돌면
+        **조용히 과거를 본다** - 최신 거래일이 문자열에 있으면 사람이 그걸 본다.
+        """
+        tbl = os.environ.get(BARS_ICEBERG_ENV, "").strip() or BARS_ICEBERG
+        if tbl.lower() in ("", "off", "0", "none"):
+            return False
+        try:
+            self.con.execute("INSTALL iceberg; LOAD iceberg")
+            self.con.execute(f"ATTACH '{BARS_ICEBERG_ACCOUNT}' AS gl "
+                             "(TYPE iceberg, ENDPOINT_TYPE 'glue')")
+            # 2026-08-05 하루만 상류 롤업이 접미사 없는 심볼을 쓴다(실측 14,842행 ·
+            # 362종목). 접미사를 추측하면 KQ 가 깨지므로 같은 표의 접미사 붙은 행에서
+            # 매핑을 만든다 - `month(ts)` 파티션이라 한 달만 읽으면 된다.
+            self.con.execute(
+                "CREATE OR REPLACE TABLE _icb_suffix AS SELECT ticker, "
+                f"max(symbol) AS symbol FROM {tbl} WHERE symbol LIKE '%.%' "
+                f"AND ts >= TIMESTAMP '{ROLLUP_FROM}' - INTERVAL 45 DAY GROUP BY 1")
+            self.con.execute(
+                "CREATE OR REPLACE VIEW bars_5m AS SELECT "
+                "CASE WHEN b.symbol LIKE '%.%' THEN b.symbol "
+                "     ELSE coalesce(m.symbol, b.symbol) END AS symbol, "
+                "b.ticker, b.ts, b.trade_date, b.open, b.high, b.low, b.close, "
+                "b.volume, b.source_vendor, b.available_at "
+                f"FROM {tbl} b LEFT JOIN _icb_suffix m ON m.ticker = b.ticker")
+            newest = self.con.execute(
+                "SELECT max(trade_date) FROM bars_5m").fetchone()[0]
+        except Exception as e:      # noqa: BLE001 - 부재는 폴백으로, 침묵 금지
+            self.unbound["bars_5m_iceberg"] = f"{type(e).__name__}: {str(e)[:80]}"
+            return False
+        self.exists["bars_5m"] = f"Glue Iceberg (최신 {newest})"
+        return True
 
     def _bars(self, d: Path) -> None:
         """5분봉 뷰 — S3 canonical 과 로컬 백필의 **합집합** (21R).
@@ -324,6 +387,8 @@ class CausalLake:
         남은 쪽이 그대로 살아남는다 - 겹칠 때 하나를 고르는 규칙이지 비정본을 지우는
         규칙이 아니다.
         """
+        if self._bars_iceberg():
+            return
         local_src = f"read_parquet('{d.as_posix()}/*.parquet')"
         has_local = d.is_dir() and bool(sorted(d.glob("*.parquet")))
         has_s3 = "s3_intraday_5m" in self.s3
@@ -599,9 +664,17 @@ class CausalLake:
         `SELECT 1 FROM s3_dg_market` 이 'Table does not exist' 였다(실측). 등록과
         실현 사이에 다리가 없으면 등록은 거짓말이다. 스니핑이 비싼 셋만 지연이므로
         첫 조회 때 한 번 물면 된다 - 카탈로그 실패에서만 시도해 정상 경로는 안 느려진다.
+
+        **로컬로 내려오는 바이트를 감시한다.** 무거운 집계는 클라우드가 해야 하고
+        DuckDB 는 작은 결과를 받아 조인하는 최종 표면이다. 그 계약은 주석으로는
+        안 지켜진다 - 새 소비처가 하나 생기면 조용히 수백 MB 를 다시 끌어온다.
+        실측된 새는 구멍: 층분해 시각창 295.7MB, `pit_daily` 전량 106MB × 도구 14개.
+        임계를 넘으면 `heavy` 에 (질의 앞머리, 바이트) 를 적는다 - 산문·감사가 그걸
+        읽고, 사람이 어디를 오프로드해야 하는지 안다. 질의를 **막지는 않는다**:
+        막으면 오프로드가 아직 없는 경로가 통째로 죽는다.
         """
         try:
-            return self.con.execute(q).fetchall()
+            return self._watch(q)
         except UnicodeDecodeError as e:
             # **오류가 오류를 가린다.** DuckDB 예외 메시지에 OS 지역화 문구가 섞이면
             # 클라이언트가 그걸 UTF-8 로 못 읽고 UnicodeDecodeError 로 바꿔 던진다.
@@ -616,7 +689,34 @@ class CausalLake:
                 raise
             for n in hit:
                 self.bind_s3(n)
+            return self._watch(q)
+
+    def _watch(self, q: str) -> list[tuple]:
+        """질의 하나를 돌리고 **읽은 바이트**를 잰다. 감시가 꺼져 있으면 그냥 돈다.
+
+        DuckDB 의 `TOTAL_BYTES_READ` 프로파일 지표를 쓴다. 프로파일링 자체가 비용이라
+        임계 감시는 켜 둘 때만 돈다(`HEAVY_BYTES_ENV=0` 으로 끈다).
+        """
+        if getattr(self, "_heavy_cut", 0) <= 0:
             return self.con.execute(q).fetchall()
+        try:
+            self.con.execute("PRAGMA enable_profiling='no_output'")
+            self.con.execute("PRAGMA custom_profiling_settings="
+                             "'{\"TOTAL_BYTES_READ\": \"true\"}'")
+            rows = self.con.execute(q).fetchall()
+            got = self.con.execute("SELECT total_bytes_read FROM "
+                                   "duckdb_last_profiling_output() LIMIT 1").fetchone()
+        except Exception:           # noqa: BLE001 - 감시 실패가 질의를 죽이면 안 된다
+            return self.con.execute(q).fetchall()
+        finally:
+            try:
+                self.con.execute("PRAGMA disable_profiling")
+            except Exception:       # noqa: BLE001, S110 - 정리 실패는 무해
+                pass
+        n = int(got[0]) if got and got[0] is not None else 0
+        if n >= self._heavy_cut:
+            self.heavy.append((" ".join(q.split())[:120], n))
+        return rows
 
     def probe_day(self) -> dict[str, tuple[int, str | None]]:
         """표 → (뷰 기준일의 행수, 도달 지평). 바인딩과 유효 커버리지는 다른 숫자다.
@@ -804,5 +904,5 @@ class CausalLake:
             "GROUP BY e.source_event_id ORDER BY 1")
 
 
-__all__ = ["BACKFILL_SETS", "CausalLake", "RDB_TABLES", "ROLLUP_FROM",
+__all__ = ["BACKFILL_SETS", "BARS_ICEBERG", "CausalLake", "RDB_TABLES", "ROLLUP_FROM",
            "backfill_sources", "rdb_dsn_from_env", "s3_secret_sql", "session_pragmas"]
