@@ -10,9 +10,6 @@ export type ServeStatus =
   | 'REJECTED' // 검수 반려
   | 'UNPUBLISHED'; // 제공 중단 (운영자 수동 — publication 상태)
 
-/** 금칙어 심각도 메타(screening 도메인 소비) — 설명 배지와 별개 어휘다. */
-export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
-
 /** 엔진 확신도(LLM confidence: 높음/중간/보류) — 원장 confidence_level 원값. */
 export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 

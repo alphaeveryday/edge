@@ -18,6 +18,7 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -195,18 +196,23 @@ class ScreeningControllerTest {
 	private FakeVersions versions;
 	private FakeRules rules;
 	private List<String> auditActions;
+	/** 감사 detail — 은퇴한 필드가 감사 쪽으로 새는지 보려면 action 이름만으로는 부족하다. */
+	private List<Map<String, Object>> auditDetails;
 	private MockMvc mvc;
+	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@BeforeEach
 	void setUp() {
 		versions = new FakeVersions();
 		rules = new FakeRules();
 		auditActions = new ArrayList<>();
+		auditDetails = new ArrayList<>();
 		ConsoleActionLogService recording = new ConsoleActionLogService(null, null) {
 			@Override
 			public void record(SessionMember actor, String action, String targetType,
 					String targetId, Map<String, Object> detail, String clientIp) {
 				auditActions.add(action);
+				auditDetails.add(detail);
 			}
 		};
 		mvc = MockMvcBuilders.standaloneSetup(new ScreeningController(
@@ -221,11 +227,10 @@ class ScreeningControllerTest {
 		return session;
 	}
 
-	private void addWord(String text, String risk, String action) throws Exception {
+	private void addWord(String text, String action) throws Exception {
 		mvc.perform(post("/api/v1/screening/words").session(session())
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"" + text + "\",\"risk\":\"" + risk
-								+ "\",\"action\":\"" + action + "\"}"))
+						.content("{\"text\":\"" + text + "\",\"action\":\"" + action + "\"}"))
 				.andExpect(status().isOk());
 	}
 
@@ -233,7 +238,7 @@ class ScreeningControllerTest {
 	void 첫_변경은_온보딩_기반값_위에_새_버전을_발행한다() throws Exception {
 		// WHY: 사용자 결정(2026-07-27) — 온보딩 기본은 자동 제공 ON(걸린 것만 검수).
 		// 첫 발행 기반값이 이 결정의 실체다: auto=true·최소 출처 2·최소 확신도 MEDIUM·기본 문구.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 
 		assertThat(versions.stored).hasSize(1);
 		PolicyVersionEntity v1 = versions.stored.get(0);
@@ -247,7 +252,7 @@ class ScreeningControllerTest {
 		assertThat(rules.stored).hasSize(1);
 		ScreeningRuleEntity rule = rules.stored.get(0);
 		assertThat(rule.getRuleType()).isEqualTo("BANNED_WORD");
-		assertThat(rule.getParams()).contains("급등 확실").contains("HIGH");
+		assertThat(objectMapper.readTree(rule.getParams()).propertyNames()).containsExactly("text");
 		assertThat(rule.isEnabled()).isTrue();
 	}
 
@@ -255,8 +260,8 @@ class ScreeningControllerTest {
 	void 금칙어_추가는_기존_룰을_복사하고_활성은_한_버전뿐이다() throws Exception {
 		// WHY: 버전은 불변(ADR-0018) — 변경은 언제나 복사+델타의 새 발행이고, 활성이
 		// 둘이면 평가기가 어느 정책으로 판정했는지 감사 재현이 불능이 된다.
-		addWord("급등 확실", "HIGH", "BLOCK");
-		addWord("무조건", "HIGH", "REVIEW");
+		addWord("급등 확실", "BLOCK");
+		addWord("무조건", "REVIEW");
 
 		assertThat(versions.stored).hasSize(2);
 		assertThat(versions.stored.get(0).getDeactivatedAt()).isNotNull();   // v1 종결
@@ -270,12 +275,15 @@ class ScreeningControllerTest {
 				.andExpect(jsonPath("$.result.length()").value(2))
 				.andExpect(jsonPath("$.result[0].text").value("무조건"))   // 최신 등록 맨 위
 				.andExpect(jsonPath("$.result[0].active").value(true))
-				.andExpect(jsonPath("$.result[0].risk").value("HIGH"));
+				// 위험 등급은 은퇴했다(ALPHA-760) — 판정은 처리 방식(action)만 정하므로
+				// 응답에 남아 있으면 화면이 다시 정하는 축처럼 그리게 된다.
+				.andExpect(jsonPath("$.result[0].risk").doesNotExist())
+				.andExpect(jsonPath("$.result[0].action").value("REVIEW"));
 	}
 
 	@Test
 	void 토글은_enabled를_반전한_복사_발행이고_미존재는_404다() throws Exception {
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		long ruleId = rules.stored.get(0).getScreeningRuleId();
 
 		mvc.perform(post("/api/v1/screening/words/" + ruleId + "/toggle").session(session()))
@@ -294,12 +302,51 @@ class ScreeningControllerTest {
 	}
 
 	@Test
+	void 은퇴한_위험도는_보내도_무시되고_저장되지_않는다() throws Exception {
+		// WHY: risk 는 은퇴했지만(ALPHA-760) Jackson 기본이 미지 필드를 허용해 구 클라이언트의
+		// 요청은 그대로 200 이 된다. 그 관용을 고정해 둔다 — 거부로 바꾸려면 이 테스트가 먼저
+		// 깨져야 하고, 반대로 조용히 저장되기 시작해도 여기서 잡힌다.
+		mvc.perform(post("/api/v1/screening/words").session(session())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+				.andExpect(status().isOk());
+
+		assertThat(rules.stored).hasSize(1);
+		// 키 부재는 문자열 비포함이 아니라 키 집합으로 단언한다 — 다른 이름(severity 등)으로
+		// 되살아나도 잡히게. params 는 text 하나뿐이어야 한다.
+		assertThat(objectMapper.readTree(rules.stored.get(0).getParams()).propertyNames())
+				.containsExactly("text");
+		// 감사 detail 로 새는 경로도 막는다(원장에는 없는데 로그에만 남는 상태 금지).
+		assertThat(auditDetails).hasSize(1);
+		assertThat(auditDetails.get(0)).containsOnlyKeys("text", "action");
+	}
+
+	@Test
+	void 위험도가_남아_있는_기존_행도_그대로_조회된다() throws Exception {
+		// WHY: params 는 JSONB 라 마이그레이션 없이 은퇴했다 — 기존 행에는 risk 키가 남아 있다.
+		// 투영이 그 키를 몰라도 목록이 깨지지 않아야 한다(잔재는 무시하되 표현·처리는 보존).
+		PolicyVersionEntity legacy = new PolicyVersionEntity(1, "문구", true, 2, "MEDIUM", 2L);
+		ReflectionTestUtils.setField(legacy, "policyVersionId", 1L);
+		ReflectionTestUtils.setField(legacy, "activatedAt", Instant.now());
+		versions.stored.add(legacy);
+		rules.save(new ScreeningRuleEntity(1L, "BANNED_WORD",
+				"{\"text\":\"급등 확실\",\"risk\":\"HIGH\"}", "BLOCK", true, Instant.now()));
+
+		mvc.perform(get("/api/v1/screening/words"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(1))
+				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result[0].risk").doesNotExist());
+	}
+
+	@Test
 	void 룰_표면은_금칙어_밖_타입도_전부_보여준다() throws Exception {
 		// WHY: /words 는 BANNED_WORD 만 투영한다 — 그 필터가 콘솔 전체의 필터였던 동안
 		// SINGLE_SOURCE·ASSERTIVE_EXPRESSION 인스턴스는 활성이어도 어느 화면에도 없어
 		// 운영자가 모르는 판정 근거였다(ALPHA-756). 처리 기준 표는 이 표면에서 파생하므로
 		// 여기서 타입을 가리면 표가 다시 정책 일부만 말하게 된다.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		long activeVersion = versions.findActive().orElseThrow().getPolicyVersionId();
 		rules.save(new ScreeningRuleEntity(activeVersion, "SINGLE_SOURCE", "{}", "REVIEW", true, Instant.now()));
 		rules.save(new ScreeningRuleEntity(activeVersion, "ASSERTIVE_EXPRESSION",
@@ -430,7 +477,7 @@ class ScreeningControllerTest {
 
 	@Test
 	void 버전_이력은_최신순으로_발행자와_활성_여부를_담는다() throws Exception {
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		mvc.perform(patch("/api/v1/screening/criteria").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"minSources\":1}"))
 				.andExpect(status().isOk());
@@ -451,7 +498,7 @@ class ScreeningControllerTest {
 	void 초안_로드_후_끼어든_발행은_소급_종결되지_않고_409로_진다() throws Exception {
 		// WHY: 발행은 초안의 기반 버전만 종결해야 한다 — 발행 직전 재조회로 "현재 활성"을
 		// 종결하면 경쟁자의 방금 발행분을 소급 종결하고 그 변경을 조용히 덮어쓴다(lost update).
-		addWord("급등 확실", "HIGH", "BLOCK");   // v1 활성
+		addWord("급등 확실", "BLOCK");   // v1 활성
 		versions.afterFindActive = () -> {
 			versions.deactivate(versions.stored.get(0).getPolicyVersionId());
 			versions.injectActive(2);            // 경쟁 트랜잭션이 v2 를 발행·커밋
@@ -470,7 +517,7 @@ class ScreeningControllerTest {
 	void 토글은_금칙어가_아닌_룰을_대상으로_하면_404다() throws Exception {
 		// WHY: /words/{id}/toggle 은 금칙어 표면이다 — id 만 맞으면 SINGLE_SOURCE 등
 		// 다른 판정 룰까지 뒤집을 수 있으면 금칙어 API 로 정책 전체를 변경하는 우회가 된다.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		long activeId = versions.findActive().orElseThrow().getPolicyVersionId();
 		ScreeningRuleEntity other = rules.save(new ScreeningRuleEntity(activeId, "SINGLE_SOURCE",
 				"{}", "REVIEW", true, Instant.now()));
@@ -499,7 +546,7 @@ class ScreeningControllerTest {
 
 		mvc.perform(post("/api/v1/screening/words").session(session())
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("CNSL4096"));
 	}
@@ -508,7 +555,7 @@ class ScreeningControllerTest {
 	void 모든_변경은_감사_로그를_남긴다() throws Exception {
 		// WHY: 정책 변경 이력은 console_action_log 소관(DDL 주석) — 누가 어떤 버전을
 		// 발행했는지 없으면 검수 판정의 근거 재현(민원 대응)이 끊긴다.
-		addWord("급등 확실", "HIGH", "BLOCK");
+		addWord("급등 확실", "BLOCK");
 		mvc.perform(patch("/api/v1/screening/disclaimer").session(session())
 						.contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"문구\"}"))
 				.andExpect(status().isOk());

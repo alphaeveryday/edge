@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { PageSkeleton, Select, StatusBadge, Toggle, toast } from 'ui-kit';
-import type { RiskLevel, ServeStatus } from '../domains/explanations';
-import { CONFIDENCE_LABEL, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE } from '../domains/explanations';
+import type { ServeStatus } from '../domains/explanations';
+import { CONFIDENCE_LABEL, STATUS_LABEL, STATUS_TONE } from '../domains/explanations';
 import type { RuleType, WordAction } from '../domains/screening';
 import {
   useBannedWords,
@@ -55,7 +55,6 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
   const { addWord, toggleWord } = useScreeningActions();
 
   const [text, setText] = useState('');
-  const [risk, setRisk] = useState<RiskLevel>('HIGH');
   const [action, setAction] = useState<WordAction>('BLOCK');
 
   const submit = () => {
@@ -65,7 +64,7 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
       return;
     }
     addWord.mutate(
-      { text: t, risk, action },
+      { text: t, action },
       {
         onSuccess: () => {
           setText('');
@@ -90,15 +89,6 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
             <label className="field w-[220px]">
               <input placeholder="예: 급등 확실" value={text} onChange={(e) => setText(e.target.value)} />
             </label>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>위험 등급</span>
-            <Select
-              aria-label="위험 등급"
-              value={risk}
-              onChange={(v) => setRisk(v as RiskLevel)}
-              options={(Object.keys(RISK_LABEL) as RiskLevel[]).map((r) => ({ value: r, label: RISK_LABEL[r] }))}
-            />
           </div>
           <div className="flex flex-col gap-1">
             <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>처리 방식</span>
@@ -127,7 +117,6 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
           <thead>
             <tr>
               <th>표현</th>
-              <th>위험 등급</th>
               <th>처리 방식</th>
               <th>활성 여부</th>
               <th className="col-muted">등록일</th>
@@ -137,11 +126,8 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
             {words.map((w) => (
               <tr key={w.id} style={{ opacity: w.active ? 1 : 0.45 }}>
                 <td className="font-semibold">“{w.text}”</td>
-                <td>
-                  <StatusBadge tone={RISK_TONE[w.risk]} dot={false}>
-                    {RISK_LABEL[w.risk]}
-                  </StatusBadge>
-                </td>
+                {/* 처리 방식이 결과를 정하는 유일한 축이다 — 위험 등급은 판정에 쓰이지 않아
+                    은퇴했다(ALPHA-760). 처리 기준 표에도 나타나지 않는다. */}
                 <td className="col-muted">{ACTION_LABEL[w.action]}</td>
                 <td>
                   {canEdit ? (
