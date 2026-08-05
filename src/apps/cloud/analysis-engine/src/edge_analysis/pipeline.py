@@ -226,7 +226,9 @@ def run(
             text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
                     f"{type(exc).__name__}: {str(exc)[:160]}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
-    write_agent_trace(s3, settings, trace)
+    trace_manifest = write_agent_trace(s3, settings, trace)
+    if trace_manifest is None:
+        raise PipelineError("중간 분석 trace를 S3에 기록하지 못했습니다")
 
     if minute_row is not None:
         honest = plain = text.strip()
@@ -239,15 +241,26 @@ def run(
         {"kind": x.kind, "name": x.name, "contribution": x.contribution}
         for x in (roll.layers if roll else ())],
         "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
-        # 요청창 분석은 `plain`과 `explain`에 같은 최종 설명을 저장한다. 내부 블록과
-        # 시간창 라벨은 stage_results.window에만 남고 사용자 문장에는 나오지 않는다.
+        # 요청창의 내부 블록·시간축·근거 조회키는 ``stage_results``에도 구조화해
+        # 최종 문자열에서 다시 파싱하지 않고 추적한다.
         "plain": plain.strip().lstrip("=").strip()}
+    final_payload = window_meta.pop("final_explanation", None)
     if window_meta:
         stage["window"] = window_meta
+    if final_payload is not None:
+        stage["final_explanation"] = final_payload
+    payload_bundles = tuple(
+        ref.removeprefix("analysis_evidence_bundle:")
+        for block in ((final_payload or {}).get("blocks") or ())
+        for ref in (block.get("evidence_refs") or ())
+        if ref.startswith("analysis_evidence_bundle:")
+    )
+    stage["analysis_trace"] = trace_manifest
     verdicts = verdicts_from(
         text, route_kind=(rt.kind if rt else ""),
         idio_qualified=bool(roll is None or roll.rho is None or abs(roll.rho) < 0.20),
-        bundles=tuple(sorted(set(re.findall(r"\bev_[0-9a-f]{16}\b", text)))))
+        bundles=tuple(sorted(set(payload_bundles or re.findall(
+            r"\bev_[0-9a-f]{16}\b", text)))))
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))

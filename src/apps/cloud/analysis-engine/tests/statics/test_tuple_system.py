@@ -5,11 +5,15 @@
 같은 입력은 같은 판정(결정론). 성립해도 오늘 조건 미충족이면 부적용.
 반사실은 positivity 를 갖출 때만 채워진다.
 """
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
+
+from edge_analysis.statics.attribute import _verifiable_event_types
 from edge_analysis.statics.hypothesize import propose, screen_tuples
-from edge_analysis.statics.paneltest import FEATURES, edge_test
+from edge_analysis.statics.paneltest import EdgeReport, FEATURES, edge_test
 from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
                                          MIN_N, SERIES_FAMILIES, Trigger, Condition)
 
@@ -197,12 +201,11 @@ def test_relation_transmission_edge_tests_but_never_assigns(monkeypatch):
         RelLake(), t, "2026-06-01", cell_instrument_id="i0", m_tests=10_000)
     assert corrected.verdict != "성립", "관계 검정도 같은 셀의 Bonferroni 보정을 받아야 한다"
 
-    unsupported = HypothesisTuple(
-        conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
-        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),
-        outcome="되돌림")
-    refused = edge_test(RelLake(), unsupported, "2026-06-01", cell_instrument_id="i0")
-    assert refused.verdict == "판정불가" and "결과종류" in refused.reason
+    with pytest.raises(VocabError, match="결과종류"):
+        HypothesisTuple(
+            conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
+            channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),
+            outcome="되돌림")
     # 어휘 밖 관계는 **튜플 생성 시점에** 죽는다 (19R) - 검정기까지 가서 '못 잰다'로
     # 되돌아오면 어휘가 열려 있다는 인상만 주고 실제로는 침묵하는 거부였다.
     with pytest.raises(VocabError, match="닫힌 관계 어휘"):
@@ -740,6 +743,10 @@ def test_layer_gates_which_exposures_may_explain_it():
     v, r = screen_tuples([vol], event_types=ETYPES, measurable=MEAS, layer="시장")
     assert not v and "시장층을 설명할 수 없는 노출" in r[0]
     assert screen_tuples([beta], event_types=ETYPES, measurable=MEAS, layer="시장")[0]
+    explicit = _h(layer="시장",
+                  exposure={"kind": "속성", "ident": "거래량", "transform": "변화"})
+    v, r = screen_tuples([explicit], event_types=ETYPES, measurable=MEAS, layer="고유")
+    assert not v and "시장층을 설명할 수 없는 노출" in r[0]
     # 고유층은 제한 없음 - 종목 거래량이 고유 잔차를 설명하는 건 정당하다
     assert LAYER_EXPOSURES["고유"] is None
     assert screen_tuples([vol], event_types=ETYPES, measurable=MEAS, layer="고유")[0]
@@ -806,6 +813,18 @@ def test_missing_condition_is_not_satisfaction():
     assert not blind.applies_today, "조건 측정불가인데 몫을 받았다"
     none_cond = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9)
     assert none_cond.applies_today, "조건 없는 엣지는 조건 때문에 죽지 않는다"
+
+
+def test_verifier_only_receives_edges_applied_to_today_cell():
+    """패널 성립만으로 오늘 원인 검정을 실행하면 INUS 미충족을 원인으로 되살린다."""
+    applied = EdgeReport("성립", 100, 0.01, 0.02, 0.00, 0.9)
+    unmet = EdgeReport("성립", 100, 0.01, 0.02, 0.00, 0.9, cond_satisfied=False)
+    reports = [
+        (SimpleNamespace(trigger=Trigger("점", "APPLIED")), applied),
+        (SimpleNamespace(trigger=Trigger("점", "UNMET")), unmet),
+        (SimpleNamespace(trigger=Trigger("계열", "가격잔차")), applied),
+    ]
+    assert _verifiable_event_types(reports) == ["APPLIED"]
 
 
 def test_bonferroni_threshold_is_stated_not_just_claimed():

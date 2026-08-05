@@ -332,6 +332,12 @@ def sector_name_of(lake, tk6: str, day: str) -> str:
     return sector_name(str(rows[0][0])) if rows else "업종 미상"
 
 
+def _verifiable_event_types(reports) -> list[str]:
+    """오늘 이 셀에 실제 적용되는 성립 점사건만 검정 층으로 넘긴다."""
+    return sorted({t.trigger.ident for t, r in reports
+                   if t.trigger.kind == "점" and r.applies_today})
+
+
 def _assign_rows(shares, labels: dict[str, str], passing: dict, refuted: set[str]) -> list[Row]:
     """창 행의 3값 배정. 산문의 자기모순을 여기서 막는다 (10차 정정).
 
@@ -576,8 +582,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         # 목록을 받아 zip 한다. 쌍을 그대로 넘기면 r 이 튜플이 된다(실측 즉사).
         brief = probe_brief([t for t, _ in reports], [r for _, r in reports],
                             screens, memory)
-        for et in sorted({t.trigger.ident for t, r in reports
-                          if t.trigger.kind == "점" and r.verdict == "성립"}):
+        for et in _verifiable_event_types(reports):
             imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)
             verif += [vlog, say_implications(imps)]
             verified_imps += [i for i in imps if i.credible]

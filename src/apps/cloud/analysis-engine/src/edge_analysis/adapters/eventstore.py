@@ -52,6 +52,16 @@ class MinuteTriggerRow(NamedTuple):
     generation: int
 
 
+class WindowCandidate(NamedTuple):
+    """오늘 분봉 계보가 이미 성립해 요청창 설명을 매달 수 있는 ETF."""
+
+    instrument_id: str
+    ticker: str
+    name: str
+    route_id: str
+    route_code: str
+
+
 def minute_observation_id(trigger_id: str) -> str:
     """분봉 트리거 계보의 observation id — trigger_id 결정적 파생(멱등 upsert 재료)."""
     return stable_id("cob", trigger_id)
@@ -108,6 +118,28 @@ class EventStore:
                 (route_id,),
             )
             return cur.fetchone() is not None
+
+    def window_candidates(self, trade_date: date) -> list[WindowCandidate]:
+        """당일 분봉 trigger→observation→route가 모두 있는 ETF의 최신 route."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ON (i.ticker) i.instrument_id,"
+                " regexp_replace(i.ticker, '\\.(KS|KQ)$', ''),"
+                " e.display_name, r.explanation_route_id, r.route_code"
+                " FROM minute_price_trigger m"
+                " JOIN etf_contribution_observation o"
+                "   ON o.minute_price_trigger_id = m.trigger_id"
+                " JOIN explanation_route r"
+                "   ON r.contribution_observation_id = o.contribution_observation_id"
+                " JOIN instrument i"
+                "   ON regexp_replace(i.ticker, '\\.(KS|KQ)$', '') = m.entity_id"
+                " JOIN etf_profile p ON p.instrument_id = i.instrument_id"
+                " JOIN entity e ON e.entity_id = i.instrument_id"
+                " WHERE (m.window_start AT TIME ZONE 'Asia/Seoul')::date = %s"
+                " ORDER BY i.ticker, m.window_start DESC",
+                (trade_date,),
+            )
+            return [WindowCandidate(*map(str, row)) for row in cur.fetchall()]
 
     def find_published_minute_run_ids(
         self, entity_id: str, session_id: str, until_window_start: datetime,
@@ -535,9 +567,9 @@ class EventStore:
         bundle: str | None,
         primary_thread_id: str | None,
         events: list[EventContext],
+        run_reason: str = "DAILY",
     ) -> dict[str, str | int | None]:
-        """explanation_run + explanation_result(게시 게이트) + 근거 lineage + fan-out 을
-        한 트랜잭션으로 적재한다(FK 전제는 충족 가정, ALPHA-493)."""
+        """explanation_run + explanation_result + 근거 lineage를 한 트랜잭션으로 적재한다."""
         import json
 
         from psycopg2.extras import execute_values
@@ -554,8 +586,10 @@ class EventStore:
             explanation_as_of, route_id,
         )
         result_id = stable_id("res", run_id)
+        raw = dict(explanation.raw)
+        stage = raw.pop("stage_results", {}) or {}
         stage_results = json.dumps(
-            {"events": event_count, "raw": explanation.raw}, ensure_ascii=False
+            {"events": event_count, **stage, "raw": raw}, ensure_ascii=False
         )
         with self._conn.cursor() as cur:
             cur.execute(
@@ -563,7 +597,7 @@ class EventStore:
                 " bundle_version, explanation_as_of, run_reason, run_status, finished_at)"
                 " VALUES (%s,%s,%s,%s,%s,'SUCCEEDED',now())"
                 " ON CONFLICT (explanation_run_id) DO NOTHING",
-                (run_id, route_id, bundle, explanation_as_of, "DAILY"),
+                (run_id, route_id, bundle, explanation_as_of, run_reason),
             )
             # 게시 게이트·cursor 채번 직렬화(ALPHA-493) — analyze 동시 실행이 같은 날
             # PUBLISHED 를 이중 게시하거나 같은 테넌트 cursor 를 겹쳐 뽑지 못하게 전역 락

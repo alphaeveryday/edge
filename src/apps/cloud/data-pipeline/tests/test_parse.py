@@ -1,5 +1,8 @@
 """parse 테스트 — article_id 규약(SSOT)이 흔들리면 중복 제거·canonical 병합이 깨진다."""
 
+from datetime import timedelta, timezone
+
+
 from data_pipeline.parse import (
     bigkinds_date,
     make_article_id,
@@ -141,7 +144,8 @@ def test_bigkinds_datetime_recovers_seconds_from_news_id():
     from data_pipeline.parse import bigkinds_datetime
     r = {"DATE": "20260601", "NEWS_ID": "01100701.20260601060314001"}
     assert bigkinds_datetime(r) == "2026-06-01 06:03:14"
-    assert parse_datetime(bigkinds_datetime(r)) == "2026-06-01T06:03:14+00:00"
+    assert parse_datetime(bigkinds_datetime(r), naive_tz=timezone(timedelta(hours=9))) == \
+        "2026-06-01T06:03:14+09:00"
 
 
 def test_bigkinds_datetime_keeps_partition_invariant_on_date_mismatch():

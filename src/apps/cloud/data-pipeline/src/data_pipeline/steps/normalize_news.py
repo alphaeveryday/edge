@@ -49,6 +49,8 @@ from ..parse import bigkinds_datetime, news_article_id, normalize_url, parse_dat
 from ..quality import BLOCKING_REASONS, validate_news_meta
 
 logger = logging.getLogger(__name__)
+_KST = timezone(timedelta(hours=9))
+
 
 JOB_NAME = "normalize_news"
 DATASET = "news_articles"
@@ -161,10 +163,9 @@ def _normalize(vendor: str, record: dict) -> dict:
         url = _text(record, "PROVIDER_LINK_PAGE")
         publisher = _text(record, "PROVIDER")
         market = "KR"
-        # 조립하지 않고 그대로 None → parse_datetime(None)=None → 게이트가 unparseable 로 잡음.
-        # 시각은 NEWS_ID 임베드에서 온다(초 단위) — 날짜부는 bigkinds_date 와 동일함이
-        # bigkinds_datetime 의 불변식이라 published_date 파티션은 종전과 같다.
-        published_at = parse_datetime(bigkinds_datetime(record))
+        # NEWS_ID 는 KST 벽시계다. UTC 로 라벨하면 사건 τ가 9시간 밀려 장중 기사가
+        # 마감 후로 분류된다.
+        published_at = parse_datetime(bigkinds_datetime(record), naive_tz=_KST)
         lead = _text(record, "CONTENT")
     else:  # fmp
         title = _text(record, "title")

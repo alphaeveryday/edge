@@ -148,8 +148,17 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     called = {}
 
     def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        from edge_analysis.observability import record
+        record("test.trace")
         meta = kwargs.pop("window_meta")
-        meta.update({"window_start": kwargs["window_start"], "as_of": kwargs["window_end"]})
+        meta.update({
+            "window_start": kwargs["window_start"],
+            "as_of": kwargs["window_end"],
+            "final_explanation": {
+                "rendered_text": "[H] 헤더\n\n[N] 부재",
+                "blocks": [],
+            },
+        })
         called.update(ticker=ticker, day=day, **kwargs)
         return "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다."
 
@@ -223,6 +232,13 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     assert store.explanation.raw["stage_results"]["window"] == {
         "window_start": "09:00", "as_of": "10:35",
     }
+    assert store.explanation.raw["stage_results"]["final_explanation"] == {
+        "rendered_text": "[H] 헤더\n\n[N] 부재",
+        "blocks": [],
+    }
+    trace = store.explanation.raw["stage_results"]["analysis_trace"]
+    assert trace["s3_uri"].endswith("/req-1.json")
+    assert trace["event_count"] > 0 and len(trace["sha256"]) == 64
     assert store.explanation.raw["explain"] == (
         "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다.")
     assert store.explanation.raw["stage_results"]["plain"] == (

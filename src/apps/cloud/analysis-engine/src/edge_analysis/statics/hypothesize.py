@@ -171,7 +171,6 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
     from .paneltest import LAYER_EXPOSURES
     if layer not in LAYER_EXPOSURES:
         raise ValueError(f"층은 {sorted(LAYER_EXPOSURES)} 중 하나다: {layer!r}")
-    allowed = LAYER_EXPOSURES[layer]
     feats = None if measurable is None else {tuple(m) for m in measurable}
     valid: list[HypothesisTuple] = []
     rejected: list[str] = []
@@ -181,7 +180,7 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
             rejected.append(f"[{i}] {why}")
             record("tuple.rejected", idx=i, why=why, raw=hd)
         try:
-            t = _parse(hd)
+            t = _parse(hd if "layer" in hd else {**hd, "layer": layer})
         except (VocabError, TypeError, ValueError, KeyError) as e:
             _kill(f"{type(e).__name__}: {e}")
             continue
@@ -222,12 +221,13 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
                        if v.kind == "상태" and (v.ident, v.transform) not in feats]:
                 _kill(f"못 재는 조건{bad} - 재는 것: {sorted(feats)}")
                 continue
-        # ── 층 자격: 그 층의 y 를 설명할 수 있는 노출인가 ──
+        # ── 층 자격: 튜플이 선언한 층의 y 를 설명할 수 있는 노출인가 ──
+        allowed = LAYER_EXPOSURES[t.layer]
         if allowed is not None and t.exposure.kind == "속성" and (
                 (t.exposure.ident, t.exposure.transform) not in allowed):
-            _kill(f"{layer}층을 설명할 수 없는 노출"
+            _kill(f"{t.layer}층을 설명할 수 없는 노출"
                   f"({t.exposure.ident}/{t.exposure.transform}) - "
-                  f"{layer}층에 유효한 노출: {sorted(allowed)}")
+                  f"{t.layer}층에 유효한 노출: {sorted(allowed)}")
             continue
         if t.channel in seen_ch:
             _kill(f"채널 중복: {t.channel}")

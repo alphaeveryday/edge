@@ -8,6 +8,7 @@ from edge_analysis.statics.interval import (
     StatisticFact,
     WindowFacts,
     build_block_plan,
+    final_explanation_payload,
     explain,
     render_block_plan,
     window_facts,
@@ -196,6 +197,37 @@ def test_statistics_begin_at_minimum_sample_boundary():
     assert "p=0.0040" in text
 
 
+
+def test_final_payload_uses_named_blocks_and_traceable_references():
+    """최종 JSONB는 H→4 순서와 근거 조회키를 동시에 보존한다."""
+    facts = _facts(
+        contributions=(ContributionFact(
+            "삼성전자", 0.012, evidence_ids=("bars_5m:005930",)),),
+        disclosures=("요청창 사건 evt_1",),
+        final_lines=("14:20, 공급계약 공시가 있었습니다.",),
+        event_ids=("evt_1",),
+        final_bundle_ids=("ev_0123456789abcdef",),
+    )
+
+    payload = final_explanation_payload(facts)
+
+    assert [b["block_code"] for b in payload["blocks"]] == ["H", "1", "2", "3", "4"]
+    assert payload["rendered_text"].startswith("[H] KODEX 반도체")
+    assert "\n\n[4] 14:20, 공급계약 공시가 있었습니다." in payload["rendered_text"]
+    event = payload["blocks"][-1]
+    assert event["source_systems"] == ["RDB.source_event", "RDB.analysis_evidence_bundle"]
+    assert event["evidence_refs"] == [
+        "source_event:evt_1", "analysis_evidence_bundle:ev_0123456789abcdef"]
+
+
+def test_final_payload_emits_absence_only_when_optional_blocks_are_empty():
+    """이벤트·통계 블록이 전부 비면 4를 꾸미지 않고 N을 남긴다."""
+    payload = final_explanation_payload(_facts())
+
+    assert [b["block_code"] for b in payload["blocks"]] == ["H", "1", "2", "3", "N"]
+    assert payload["blocks"][-1]["block_title"] == "부재 고지"
+    assert "확인된 공시·보도는 없습니다" in payload["blocks"][-1]["text"]
+
 def test_final_explanation_binds_event_financial_and_statistical_db_facts():
     """최종 네 문장은 DB 사실을 그대로 쓰고 시각을 한 번만 표시한다."""
     from edge_analysis.statics.interval import _final_lines
@@ -207,8 +239,9 @@ def test_final_explanation_binds_event_financial_and_statistical_db_facts():
             if "s3_supply_fact" in query:
                 return [(320_000_000_000, 0.9)]
             if "analysis_evidence_bundle" in query:
-                return [({"n": 41, "mean_excess": -0.031,
-                          "position": "중앙값 부근"},)]
+                return [("ev_0123456789abcdef",
+                         {"n": 41, "mean_excess": -0.031,
+                          "position": "중앙값 부근"})]
             raise AssertionError(query)
 
     lines = _final_lines(

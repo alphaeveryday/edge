@@ -82,6 +82,8 @@ class WindowFacts:
     evidence: tuple[str, ...] = ()
     lineage: tuple[dict, ...] = ()
     final_lines: tuple[str, ...] = ()
+    event_ids: tuple[str, ...] = ()
+    final_bundle_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,19 +200,64 @@ def render_block_plan(plan: tuple[OutputBlock, ...], *, summary: bool = False) -
     return re.sub(r"([+-]\d+(?:\.\d+)?)%p?", _summary_number, text) if summary else text
 
 
-def render_final_explanation(facts: WindowFacts) -> str:
-    """라벨 없이 핵심 네 블록과 DB 근거 설명을 저장한다."""
-    blocks = {block.key: block.lines for block in build_block_plan(facts)}
-    paragraphs = [
-        blocks["header"][:1],
-        blocks["contribution"] + blocks["breadth"],
-        blocks["path"],
-        blocks["relative"],
+def final_explanation_payload(facts: WindowFacts) -> dict:
+    """최종 저장 모양. 고정 블록과 원천 조회키를 한 객체에 둔다."""
+    plan = {block.key: block for block in build_block_plan(facts)}
+
+    def block(code: str, title: str, lines: tuple[str, ...],
+              systems: tuple[str, ...], refs: tuple[str, ...] = ()) -> dict:
+        return {
+            "block_code": code,
+            "block_title": title,
+            "text": "\n".join(lines),
+            "source_systems": list(dict.fromkeys(systems)),
+            "evidence_refs": list(dict.fromkeys(refs)),
+        }
+
+    blocks = [
+        block("H", "헤더", plan["header"].lines, ("S3.bars_5m",),
+              (f"bars_5m:{facts.ticker}",)),
+        block("1", "기여 분해",
+              plan["contribution"].lines + plan["breadth"].lines,
+              ("S3.bars_5m", "RDB.etf_holding_snapshot"),
+              plan["contribution"].evidence_ids),
+        block("2", "시간 구간", plan["path"].lines, ("S3.bars_5m",),
+              (f"bars_5m:{facts.ticker}",)),
+        block("3", "상대 비교", plan["relative"].lines,
+              ("S3.bars_5m", "S3.layers_daily")),
     ]
-    if facts.final_lines:
-        paragraphs.append((" ".join(
-            line.strip() for line in facts.final_lines if line.strip()),))
-    return "\n\n".join("\n".join(lines) for lines in paragraphs)
+    optional_keys = ("disclosure", "flow", "news", "statistics", "causal")
+    optional = tuple(
+        line
+        for key in optional_keys
+        for line in (plan[key].lines if key in plan else ())
+    )
+    if facts.final_lines or optional:
+        lines = facts.final_lines or optional
+        systems = (
+            *(("RDB.source_event",) if facts.event_ids else ()),
+            *(("RDB.analysis_evidence_bundle",) if facts.final_bundle_ids else ()),
+        )
+        refs = tuple(f"source_event:{value}" for value in facts.event_ids) + tuple(
+            f"analysis_evidence_bundle:{value}" for value in facts.final_bundle_ids)
+        blocks.append(block("4", "이벤트 병치", lines, systems, refs))
+    else:
+        blocks.append(block(
+            "N", "부재 고지",
+            ("해당 구간에 확인된 공시·보도는 없습니다. "
+             "비교할 통계·리포트도 없습니다.",),
+            ("RDB.source_event", "RDB.analysis_evidence_bundle"),
+        ))
+    return {
+        "rendered_text": "\n\n".join(
+            f"[{item['block_code']}] {item['text']}" for item in blocks),
+        "blocks": blocks,
+    }
+
+
+def render_final_explanation(facts: WindowFacts) -> str:
+    """고정 H·1·2·3 뒤에 조건부 4 또는 N을 붙인다."""
+    return final_explanation_payload(facts)["rendered_text"]
 
 # 상대 크기를 **낱말**로 말한다. 수치 없는 설명이 순위를 잃으면 아무 말도 아니게 된다.
 _RANK_WORD = ("가장 크게", "두 번째로 크게", "세 번째로")
@@ -433,7 +480,8 @@ def _mapping(value) -> dict:
 
 def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
                  event_times: dict[str, dt.datetime], window_return: float,
-                 market_return: float | None) -> tuple[str, ...]:
+                 market_return: float | None,
+                 evidence_bundle_ids: list[str] | None = None) -> tuple[str, ...]:
     """PIT 사건·재무·통계 사실을 사용자용 네 문장으로 접는다."""
     if not event_ids:
         return ()
@@ -467,13 +515,15 @@ def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
 
     try:
         bundles = lake.sql(
-            "SELECT stats FROM rdb.public.analysis_evidence_bundle "
+            "SELECT bundle_id, stats FROM rdb.public.analysis_evidence_bundle "
             f"WHERE cell={_literal(ticker.split('.')[0])} "
             f"AND trade_date=DATE {_literal(day)} AND basis='statistical' "
             "ORDER BY created_at DESC LIMIT 1")
     except Exception:  # noqa: BLE001 - 통계 부재를 결과 없음으로 명시한다
         bundles = []
-    stats = _mapping(bundles[0][0]) if bundles else {}
+    if bundles and evidence_bundle_ids is not None:
+        evidence_bundle_ids.append(str(bundles[0][0]))
+    stats = _mapping(bundles[0][1]) if bundles else {}
     n = stats.get("n", stats.get("n_days", stats.get("n_pairs")))
     mean = stats.get("mean_excess", stats.get("att", stats.get("effect")))
     if isinstance(n, (int, float)) and int(n) >= MIN_N and isinstance(mean, (int, float)):
@@ -556,6 +606,12 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
             "as_of": b[:5],
         },
     )
+    final_bundle_ids: list[str] = []
+    final_lines = _final_lines(
+        lake, ticker, day, event_ids, event_times, measured,
+        None if market is None else float(market.ret),
+        evidence_bundle_ids=final_bundle_ids,
+    )
     return WindowFacts(
         ticker=ticker,
         name=str(getattr(roll, "etf_name", "") or ticker),
@@ -575,9 +631,9 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         disclosures=tuple(f"요청창 사건 {eid}" for eid in event_ids),
         evidence=tuple(evidence),
         lineage=lineage,
-        final_lines=_final_lines(
-            lake, ticker, day, event_ids, event_times, measured,
-            None if market is None else float(market.ret)),
+        final_lines=final_lines,
+        event_ids=event_ids,
+        final_bundle_ids=tuple(final_bundle_ids),
     )
 
 

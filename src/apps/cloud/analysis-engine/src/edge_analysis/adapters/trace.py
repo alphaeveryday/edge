@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -15,12 +16,10 @@ from ..observability import log, utcnow_iso
 from .archive import _result_prefix, _split_s3_uri
 
 
-def write_agent_trace(s3, settings: Settings, trace: list[dict[str, Any]]) -> str | None:
-    """``{result_prefix}/traces/`` 아래 인과 중간 과정 trace 1건을 쓴다.
-
-    Returns:
-        s3 URI, 또는 쓰기 실패·비 s3:// prefix·빈 trace 면 ``None``(어느 쪽이든 런은 계속).
-    """
+def write_agent_trace(
+    s3, settings: Settings, trace: list[dict[str, Any]],
+) -> dict[str, str | int] | None:
+    """중간 과정 S3 객체와 RDB ``stage_results``용 검증 manifest를 함께 만든다."""
     if not trace:
         return None
     prefix = _result_prefix(settings)
@@ -48,4 +47,9 @@ def write_agent_trace(s3, settings: Settings, trace: list[dict[str, Any]]) -> st
         return None
     location = f"s3://{bucket}/{key}"
     log("agent_trace.stored", s3=location, events=len(trace))
-    return location
+    return {
+        "s3_uri": location,
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "event_count": len(trace),
+        "schema_version": 1,
+    }

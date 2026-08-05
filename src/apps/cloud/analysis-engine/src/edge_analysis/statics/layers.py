@@ -392,10 +392,18 @@ def _krx_sector_candidate(lake, etf: str, day: str, hist: list, d0):
         return None
     try:
         rows = lake.sql(f"""
-            WITH m AS (SELECT code, count(*) n FROM sector_member
-                       WHERE as_of <= DATE '{day}'
-                         AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
-                       GROUP BY 1 ORDER BY 2 DESC LIMIT 1)
+            WITH latest AS (
+              SELECT ticker, code FROM (
+                SELECT ticker, code, row_number() OVER (
+                  PARTITION BY ticker ORDER BY as_of DESC) AS rn
+                FROM sector_member
+                WHERE as_of <= DATE '{day}'
+                  AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
+              ) WHERE rn = 1
+            ), m AS (
+              SELECT code, count(*) n FROM latest
+              GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+            )
             SELECT si.trade_date, si.close, (SELECT code FROM m) AS code
             FROM sector_index si WHERE si.code = (SELECT code FROM m)
               AND si.trade_date <= DATE '{day}' ORDER BY 1""")
@@ -632,7 +640,10 @@ def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
             rows = lake.sql(
                 f"SELECT constituent_ticker, any_value(constituent_name), "
                 f"       any_value(weight_pct) FROM etf_holdings_fmp "
-                f"WHERE etf_id = '{etf}' AND CAST(as_of AS DATE) <= DATE '{day}' "
+                f"WHERE etf_id = '{etf}' "
+                f"  AND CAST(as_of AS DATE) = (SELECT max(CAST(as_of AS DATE)) "
+                f"       FROM etf_holdings_fmp WHERE etf_id = '{etf}' "
+                f"         AND CAST(as_of AS DATE) <= DATE '{day}') "
                 f"GROUP BY 1")
         except Exception:                                  # noqa: BLE001 - 뷰 없음
             return []

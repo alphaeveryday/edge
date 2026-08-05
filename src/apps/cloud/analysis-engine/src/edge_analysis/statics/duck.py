@@ -29,7 +29,8 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
               "entity", "document", "news_document", "event_evidence",
               "document_assertion", "event_measure")
 
-LAKE = "s3://edge-dev-pipeline-lake/"
+LAKE_BUCKET_ENV = "ALPHAMALE_LAKE_BUCKET"
+LAKE = f"s3://{os.environ.get(LAKE_BUCKET_ENV) or 'edge-dev-pipeline-lake'}/"
 
 # 1분 워커 롤업이 5분봉을 실시간 공급하기 시작한 날. 이 날부터는 롤업이 정본이고
 # 그 전은 fmp 백필이 정본이다 - 두 벤더가 같은 (symbol, ts) 를 낼 때의 심판.

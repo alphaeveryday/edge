@@ -28,7 +28,11 @@ import os
 import sys
 
 from .route import route_etf, say_route
-from .interval import build_block_plan, render_final_explanation, window_facts
+from .interval import (
+    build_block_plan,
+    final_explanation_payload,
+    window_facts,
+)
 
 
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
@@ -40,7 +44,8 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
             raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
         facts = window_facts(
             lake, etf, instrument_id, day, window_start, window_end)
-        final = render_final_explanation(facts)
+        final_payload = final_explanation_payload(facts)
+        final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
         if window_meta is not None:
             window_meta.update({
@@ -56,7 +61,7 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                     for block in plan
                 ],
                 "lineage": list(facts.lineage),
-                "final": final,
+                "final_explanation": final_payload,
             })
         return final
     from .layers import decompose
@@ -71,8 +76,14 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
     # 셀이 없으면 판정 없이 진행한다 - 없는 판정을 만들지 않는다.
     pv = None
     try:
+        target_id = instrument_id
+        if target_id is None:
+            found = lake.sql(
+                "SELECT instrument_id FROM rdb.public.instrument "
+                f"WHERE ticker = '{etf.split('.')[0]}' LIMIT 1")
+            target_id = str(found[0][0]) if found else None
         pv = next((c.verdict for c in screen(lake, day, day)
-                   if c.etf_id.startswith(etf) or etf in c.etf_id), None)
+                   if c.etf_id == target_id), None)
         if pv is None:
             # **사유를 틀리게 쓰지 않는다.** `screen` 은 트리거가 울린 셀만 돌려주므로
             # 부재의 원인은 NAV 가 아니라 **트리거 미발화**일 수 있다. 실측(091160
@@ -246,8 +257,10 @@ def _observed_types(lake, ticker: str, day: str) -> list[str]:
     실제로 난 사건은 아무도 안 본다(실측: 종목 경로가 `RESULT_RELEASE` 만 물었다).
     """
     try:
+        from .paneltest import _base
         rows = lake.sql(
-            f"SELECT DISTINCT e.event_type_code FROM v_event e "
+            _base(day) +
+            f"\nSELECT DISTINCT e.event_type_code FROM v_event e "
             f"JOIN v_instrument i ON i.instrument_id = e.instrument_id "
             f"WHERE i.ticker = '{ticker.split('.')[0]}' "
             f"  AND e.trade_date = DATE '{day}' ORDER BY 1")
@@ -263,8 +276,10 @@ def _sector_types(lake, day: str, top: int = 3) -> list[str]:
     '몇 종목에 닿았나' 로 고른다 - 하드코딩 2종은 그날 무엇이 났는지와 무관했다.
     """
     try:
+        from .paneltest import _base
         rows = lake.sql(
-            f"SELECT e.event_type_code, count(DISTINCT e.instrument_id) n "
+            _base(day) +
+            f"\nSELECT e.event_type_code, count(DISTINCT e.instrument_id) n "
             f"FROM v_event e WHERE e.trade_date = DATE '{day}' "
             f"GROUP BY 1 HAVING count(DISTINCT e.instrument_id) >= 2 "
             f"ORDER BY 2 DESC, 1 LIMIT {top}")

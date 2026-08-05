@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # 추적 파라미터만 제거한다. 쿼리 전체를 지우면 ?id=1 / ?id=2 처럼 쿼리가
@@ -76,29 +76,21 @@ def make_article_id(url: str | None, title: str, published_at: str | None) -> st
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
-def parse_datetime(text: str | None) -> str | None:
-    """FMP publishedDate("YYYY-MM-DD HH:MM:SS" 또는 ISO8601) → ISO8601 UTC 문자열.
+def parse_datetime(text: str | None, *, naive_tz: tzinfo = timezone.utc) -> str | None:
+    """ISO 날짜·시각을 timezone-aware 문자열로 정규화한다.
 
-    FMP 는 오프셋 없는 벽시계 시각을 준다 — naive 는 UTC 로 간주한다
-    (published_at 을 비우지 않기 위한 알려진 근사. 페이로드에 오프셋이 없다).
-
-    NOTE(ALPHA-104): offset 포함 ISO(예: '...+09:00', '...-04:00')는 지금 오파싱된다
-    (+오프셋은 잘려 UTC 로 오인, -오프셋은 파싱 실패). Step1 은 이 값을 coarse 파티션
-    날짜로만 써서 raw 보존엔 영향이 작다. 정확한 published_at 은 S003(정규화·품질)의 AC라,
-    offset-aware 파싱(fromisoformat 기반)은 ALPHA-104 에서 다룬다.
+    오프셋 없는 값은 벤더가 선언한 ``naive_tz`` 로 읽는다. 기본은 기존 FMP 계약인
+    UTC이며, BigKinds NEWS_ID 벽시계는 호출부가 KST 를 넘겨 현지 날짜를 보존한다.
     """
     if not text:
         return None
-    t = text.strip().replace("T", " ")
-    # 붙어 있을 수 있는 타임존 토큰 제거 (예: "... +00:00" / "... Z")
-    t = t.split("+")[0].rstrip("Z").strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(t, fmt)
-            return dt.replace(tzinfo=timezone.utc).isoformat()
-        except ValueError:
-            continue
-    return None
+    try:
+        parsed = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=naive_tz)
+    return parsed.isoformat()
 
 
 _KRX_SHORT_CODE = re.compile(r"[0-9][0-9A-Z]{5}\Z")
