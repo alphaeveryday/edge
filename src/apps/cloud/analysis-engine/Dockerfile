@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd -r -u 1001 analysis
+RUN useradd -r -m -u 1001 analysis
 
 COPY apps/cloud/analysis-engine ./apps/cloud/analysis-engine
 RUN pip install --no-cache-dir ./apps/cloud/analysis-engine
