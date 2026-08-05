@@ -2,8 +2,9 @@
 
 의도: 이 소비자의 결함은 돈과 유실 두 방향으로 조용하다 — ①멱등 프리플라이트가 깨지면
 재배달마다 LLM 이 재과금되고(벽시계가 run id 재료), ②실패 메시지를 지우면 그 트리거의
-설명이 영영 없다. 그래서 고정하는 건 **삭제의 조건**(성공·중복만 지운다)과 **실패 3분류의
-처방**(ReturnsNotReady=긴 지연 / 계약 위반=남김 / 기타=기본 재배달), 그리고 route 유도식이
+설명이 영영 없다. 그래서 고정하는 건 **삭제의 조건**(성공·중복만 지운다)과 **실패 4분류의
+처방**(ReturnsNotReady=짧은 지연 / 락 선점=남기고 되돌림 / 계약 위반=남김 / 기타=기본
+재배달), 락과 프리플라이트의 **순서**(ALPHA-779), 그리고 route 유도식이
 eventstore 계보 writer 와 **한 곳**에서 나온다는 사실이다.
 """
 from __future__ import annotations
@@ -13,8 +14,9 @@ import json
 import pytest
 
 from edge_analysis.adapters.superadmin import SuperAdminUnavailableError
-from edge_analysis.config import ReturnsNotReadyError
+from edge_analysis.config import ReturnsNotReadyError, RouteLockedError
 from edge_analysis.consumer import (
+    PROCESSING_VISIBILITY_SECONDS,
     RETURNS_RETRY_SECONDS,
     REVERT_REASON,
     consume_triggers,
@@ -123,6 +125,96 @@ def test_generic_failure_leaves_message_and_fails_bounded_run():
     assert sqs.deleted == []
     # 처리 전 연장(900) → 실패 후 되돌림(60)
     assert [v for _, v in sqs.visibility] == [900, 60]
+
+
+def test_route_locked_leaves_message_and_is_not_a_failure():
+    """선점당한 메시지를 **지우면 안 된다**(ALPHA-779).
+
+    같은 메시지가 두 번 배달된 상황이라 receipt 가 달라도 지우면 메시지 자체가 사라져,
+    이긴 쪽이 죽었을 때 재배달될 것이 없다 — 진 쪽의 삭제가 **이긴 쪽의 안전망**을 없앤다.
+    실패도 아니다: bounded 검증이 exit 1 이 되면 정상 경합이 배포 실패로 보인다.
+    """
+    def locked(_):
+        raise RouteLockedError("다른 소비자가 처리 중인 route 다: r-1")
+    sqs = FakeSqs([envelope("t1")])
+    rc = consume_triggers("q", max_polls=1, process_fn=locked, sqs_client=sqs)
+    assert rc == 0, "경합은 실패가 아니다"
+    assert sqs.deleted == []
+    # 되돌림 폭 = 이긴 쪽의 처리 예산. 짧게(60초) 되돌리면 900초짜리 처리 하나가 도는
+    # 동안 재배달이 15회 쌓여 receive 예산(16)을 태우고, 이긴 쪽이 저장 직전에 죽으면
+    # 원 큐엔 재시도할 메시지가 없다 — 경합 방어가 유실 경로를 새로 만들면 안 된다.
+    assert [v for _, v in sqs.visibility] == [900, PROCESSING_VISIBILITY_SECONDS]
+
+
+def test_lock_precedes_duplicate_preflight():
+    """락이 프리플라이트보다 **먼저**여야 한다(ALPHA-779).
+
+    프리플라이트가 먼저면 두 소비자가 나란히 "run 없음"을 읽고 둘 다 진행한다 — 락이
+    닫으려던 창이 그대로 열려 있어 LLM 이 이중 과금된다. 순서가 곧 계약이라 고정한다.
+    """
+    import edge_analysis.consumer as consumer_module
+
+    calls = []
+
+    class ProbeStore:
+        def try_lock_route(self, route_id):
+            calls.append("lock")
+            return True
+
+        def has_run_for_route(self, route_id):
+            calls.append("preflight")
+            return True          # 중복으로 끊어 파이프라인 조립까지 가지 않게 한다
+
+        def close(self):
+            calls.append("close")
+
+        @classmethod
+        def connect(cls, _settings):
+            return cls()
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(consumer_module, "load_settings", lambda **_: object())
+    monkey.setattr(consumer_module, "EventStore", ProbeStore)
+    try:
+        assert consumer_module.process_trigger("t1") == "skipped_duplicate"
+    finally:
+        monkey.undo()
+    assert calls == ["lock", "preflight", "close"]
+
+
+def test_lock_failure_skips_the_pipeline_entirely():
+    """락을 못 잡으면 프리플라이트조차 보지 않고 빠진다 — 그 뒤는 전부 LLM 을 태우는
+    경로다(ALPHA-779). 커넥션은 반드시 닫힌다: 세션 락 해제가 close 에 매달려 있어
+    새는 커넥션 하나가 route 를 영구 점유한다."""
+    import edge_analysis.consumer as consumer_module
+
+    calls = []
+
+    class LockedStore:
+        def try_lock_route(self, route_id):
+            calls.append("lock")
+            return False
+
+        def has_run_for_route(self, route_id):  # pragma: no cover - 호출되면 실패다
+            calls.append("preflight")
+            return False
+
+        def close(self):
+            calls.append("close")
+
+        @classmethod
+        def connect(cls, _settings):
+            return cls()
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(consumer_module, "load_settings", lambda **_: object())
+    monkey.setattr(consumer_module, "EventStore", LockedStore)
+    try:
+        with pytest.raises(RouteLockedError):
+            consumer_module.process_trigger("t1")
+    finally:
+        monkey.undo()
+    assert calls == ["lock", "close"]
 
 
 def test_processing_extends_visibility_first():

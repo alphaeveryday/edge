@@ -14,7 +14,7 @@ from .adapters.classification import (
     read_industry_csv,
     source_stamp,
 )
-from .adapters.eventstore import EventStore
+from .adapters.eventstore import EventStore, minute_route_id
 from .adapters.lake import LakeReader, make_s3_client
 from .adapters.llm import DeepSeekClient
 from .adapters.price_daily import (
@@ -289,6 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         client = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_model)
         store = EventStore.connect(settings)
         try:
+            if args.trigger_id and not store.try_lock_route(minute_route_id(args.trigger_id)):
+                # 소비자가 같은 트리거를 쥐고 있다 — 수동 실행이 그 위에 겹치면 LLM 이
+                # 이중 과금된다(ALPHA-779). 소비자 쪽만 락을 잡으면 이 문서화된 경로가
+                # 그대로 뚫려 있다. 재실행 자체를 막지는 않는다: 경합이 없으면 잡힌다.
+                raise PipelineError(
+                    f"소비자가 처리 중인 트리거다 — 끝난 뒤 재실행하라: {args.trigger_id}")
             return run(settings, lake=lake, store=store, client=client, s3=s3)
         finally:
             store.close()

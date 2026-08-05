@@ -104,6 +104,39 @@ class EventStore:
         """커넥션을 닫는다."""
         self._conn.close()
 
+    def try_lock_route(self, route_id: str) -> bool:
+        """이 route 를 이 커넥션이 소유하는가 — 재배달 동시 처리 차단(ALPHA-779).
+
+        `has_run_for_route` 프리플라이트는 **처리가 끝나야** 참이 된다. 가시성
+        (`PROCESSING_VISIBILITY_SECONDS`)을 넘긴 처리는 SQS 가 재배달하고, 재배달본은
+        아직 run 이 없어 프리플라이트를 통과한다 → 같은 트리거에 LLM 이중 과금.
+        태스크가 1대여도 샌다 — 순차 처리가 방어막이 아니라 **만료가 순차성을 깬다**.
+
+        세션 락이라 **해제 코드가 없다** — 커넥션에 매달려 `close()` 로 풀린다.
+        ⚠️ 커넥션 풀을 도입하면 이 설계가 깨진다(락이 반납된 커넥션을 타고 다음 메시지로
+        샌다). 그때는 명시적 `pg_advisory_unlock` 이 필요하다.
+
+        UNIQUE 제약이 아닌 이유: route 당 run 다건은 **의도된 계약**이다(무효화 후 재실행,
+        ADR-0045) — 제약을 걸면 daily 재실행이 통째로 막힌다.
+
+        천장: 락은 **커넥션이 살아 있는 동안만** 소유권이다. 처리 중 backend 종료·failover·
+        네트워크 단절이 나면 서버는 락을 즉시 풀지만 이 프로세스는 다음 DB 접근 전까지
+        모르고 LLM 을 계속 태운다 — 그 창에선 이중 과금이 다시 가능하다. 닫으려면 LLM
+        호출 경계마다 소유권 재확인이 필요한데, 이 물량(하루 수십 건)에 그 기계는 과잉이라
+        받아들인 천장이다.
+
+        반대편 천장: 프로세스가 **죽지 않고 얼면** 락이 안 풀린다(커넥션이 살아 있어서다).
+        그 route 의 재배달은 매번 튕기다 receive 예산을 태우고 DLQ 로 간다 — 그 트리거의
+        설명은 수동 복구 전까지 없다. 락 없는 지금이라면 재배달본이 대신 만들었을 것이라,
+        이 한 갈래는 교환에서 잃는 쪽이다. 조용한 이중 과금보다 드러나는 DLQ 를 택했다.
+        태스크가 죽거나 재시작하면 커넥션이 끊겨 락은 풀린다 — 얼되 살아 있는 경우만이다.
+        """
+        with self._conn.cursor() as cur:
+            # hashtext 는 32비트라 충돌 가능하나 **동시에 쥔 락 사이에서만** 문제라
+            # 실질 0 이다(같은 파일의 tenant-delivery-fanout 락이 이미 같은 방식).
+            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s)::bigint)", (route_id,))
+            return bool(cur.fetchone()[0])
+
     def has_run_for_route(self, route_id: str) -> bool:
         """이 route 로 이미 설명 run 이 확정됐는가 — 분봉 소비자의 멱등 프리플라이트(ALPHA-719).
 

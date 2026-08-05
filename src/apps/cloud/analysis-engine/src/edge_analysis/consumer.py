@@ -9,16 +9,21 @@ data-pipeline 의 `MinuteConsumer` 커널을 **쓰지 않는다** — 이 큐는
 
 - **멱등의 권위 = explanation_run 존재**(`has_run_for_route`). run_id 재료에 벽시계
   (`explanation_as_of`)가 들어가 재배달마다 run·result 행이 늘고 LLM 이 재과금되므로,
-  trigger_id 에서 결정적으로 유도한 route id 로 선판정한다.
+  trigger_id 에서 결정적으로 유도한 route id 로 선판정한다. 이 판정은 **처리가 끝나야**
+  참이 되므로 처리 중 재배달은 못 거른다 — 그 창은 route advisory lock 이 닫는다
+  (`try_lock_route`, ALPHA-779). 락이 프리플라이트보다 먼저다.
 - **재시도의 권위 = SQS**(visibility·maxReceiveCount·DLQ). 실패 메시지는 지우지 않고
   가시성 만료로 재배달되다 상한에서 DLQ 로 격리된다 — 근거 보존.
 
-실패 분류는 셋이고 처방이 다르다:
+실패 분류는 넷이고 처방이 다르다:
 
 - `ReturnsNotReadyError` — 분해 입력이 아직 없다(ALPHA-710·747, 초 단위 커밋 지연):
   트리거 window 원장 · 직전 거래일 `price_daily` 파티션(분모) · 구성종목 가격 · checksum.
   코드 결함이 아니라 **시간이 낫게 하는** 실패다 → 120초 고정 지연으로 재확인하고,
   진짜 결손이면 반복이 receive 예산(16)을 태워 ≈32분 안에 DLQ 로 간다.
+- `RouteLockedError` — 같은 route 를 다른 소비자가 쥐고 있다(ALPHA-779). 실패가 아니라
+  양보다 → **지우지 않고** 이긴 쪽의 처리 예산(900초)만큼 되돌린다. 그때면 run 이 있거나
+  (프리플라이트가 흡수) 락이 풀려 있다 — 짧게 되돌리면 재배달이 receive 예산을 태운다.
 - 봉투 계약 위반(파싱 불가·미지 event_type·trigger_id 결손) — 재시도로 낫지 않는다.
   **지우지도 않는다**(지우면 근거가 사라진다) → 짧은 재배달을 반복하다 DLQ 로 간다.
 - 그 외 예외(DB·LLM·일시 장애) — 기본 가시성으로 재배달. 예산 판정은 SQS 상한 몫이다.
@@ -37,7 +42,12 @@ from .adapters.eventstore import EventStore, minute_route_id
 from .adapters.lake import LakeReader, make_s3_client
 from .adapters.llm import DeepSeekClient
 from .adapters.superadmin import SuperAdminClient, SuperAdminUnavailableError
-from .config import PipelineError, ReturnsNotReadyError, load_settings
+from .config import (
+    PipelineError,
+    ReturnsNotReadyError,
+    RouteLockedError,
+    load_settings,
+)
 from .observability import log
 from .pipeline import run
 
@@ -127,11 +137,18 @@ def process_trigger(trigger_id: str) -> str:
     "skipped_duplicate" = route 에 run 이 이미 있다(재배달) / "explained" = run() 완료.
     조립을 메시지마다 새로 하는 이유: 이 레인의 물량(하루 수십 건)에서 커넥션 재사용의
     이득이 없고, 오래 쥔 커넥션의 끊김 처리(재접속 상태기계)가 더 큰 코드다.
+
+    ⚠️ 락이 프리플라이트보다 **먼저**다(ALPHA-779). 프리플라이트가 먼저면 두 소비자가
+    나란히 "run 없음"을 읽고 둘 다 진행한다 — 락은 그 창을 닫는 장치라 순서가 곧 계약이다.
     """
     settings = load_settings(trigger_id=trigger_id)
     store = EventStore.connect(settings)
     try:
-        if store.has_run_for_route(minute_route_id(trigger_id)):
+        route_id = minute_route_id(trigger_id)
+        if not store.try_lock_route(route_id):
+            log("trigger.locked", trigger_id=trigger_id)
+            raise RouteLockedError(f"다른 소비자가 처리 중인 route 다: {route_id}")
+        if store.has_run_for_route(route_id):
             log("trigger.skipped_duplicate", trigger_id=trigger_id)
             return "skipped_duplicate"
         s3 = make_s3_client(settings)
@@ -300,6 +317,20 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
                         RETURNS_RETRY_SECONDS, payload.get("trigger_id"), error)
             _set_visibility(sqs, queue_url, receipt, RETURNS_RETRY_SECONDS)
             _count("deferred")
+            continue
+        except RouteLockedError as error:
+            # 같은 메시지가 두 번 배달됐고 이 쪽이 졌다 — 실패가 아니라 양보다(ALPHA-779).
+            # ⚠️ **지우지 않는다**: 지우면 receipt 가 달라도 메시지 자체가 사라져,
+            # 이긴 쪽이 죽었을 때 재배달될 것이 없어진다(이긴 쪽의 안전망까지 없앤다).
+            # ⚠️ 되돌림 폭은 **이긴 쪽의 처리 예산**이다 — 60초 같은 짧은 값을 쓰면
+            # 900초짜리 처리 하나가 도는 동안 재배달이 15회 쌓여 receive 예산(16)을
+            # 태우고, 이긴 쪽이 저장 직전에 죽으면 원 큐엔 재시도할 메시지가 없다
+            # (DLQ 로 이미 빠져 나갔다). 예산이 만료될 때 깨어나면 그 시점엔 run 이
+            # 있거나(프리플라이트가 흡수) 락이 풀려 있다(이 쪽이 이어받는다).
+            logger.info("route 선점당함 — %d초 뒤 재확인: %s",
+                        PROCESSING_VISIBILITY_SECONDS, error)
+            _set_visibility(sqs, queue_url, receipt, PROCESSING_VISIBILITY_SECONDS)
+            _count("locked")
             continue
         except Exception:
             # 일시 장애(DB·LLM·네트워크) — 가시성을 되돌려 빨리 재배달한다(연장분을
