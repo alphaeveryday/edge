@@ -5,6 +5,7 @@ import com.edge.publication.entity.ServingScopeEntity;
 import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
+import com.edge.publication.repository.PolicyVersionRepository;
 import com.edge.publication.repository.ServingScopeRepository;
 import org.springframework.stereotype.Service;
 
@@ -12,14 +13,24 @@ import java.time.LocalDate;
 import java.util.Optional;
 
 /**
- * 조회 오케스트레이션: 제공 범위 판정 → Published 조회 → 응답 조립 → Exposure 기록.
+ * 조회 오케스트레이션: 제공 범위 판정 → Published 조회 → 응답 조립(활성 정책의 면책 문구 동반)
+ * → Exposure 기록.
  * Published 외 상태는 이 서비스에 존재조차 하지 않는다 — 저장소가 Published 만 안다(제품 보장).
  */
 @Service
 public class ExplanationService {
 
-	// 테넌트 정책의 기본 안내 문구 — 정책 테이블 도입 시 설정에서 읽는다.
-	static final String DISCLAIMER = "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.";
+	/**
+	 * 정책 발행 전(활성 버전 0건) 구간의 기본 안내 문구. 문자열은 콘솔
+	 * {@code ScreeningService.DEFAULT_DISCLAIMER} 와 <b>같아야 한다</b> — 콘솔은 첫 발행 전
+	 * 이 문구를 편집 화면에 투영하므로, 두 기본값이 갈리면 "콘솔에 보이는 문구"와 "고객에게
+	 * 나가는 문구"가 아무도 아무것도 바꾸지 않은 상태에서 이미 어긋난다(ALPHA-772 의 발단).
+	 * 문자열 하나 때문에 모듈 간 의존 간선을 늘리지 않고, scope 어휘(XKRX 등)와 같이 상호참조
+	 * 주석으로 묶는다 — 활성 버전이 생기면 이 값은 더 이상 쓰이지 않는다.
+	 */
+	static final String DEFAULT_DISCLAIMER =
+			"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
+					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
 
 	// 콘솔 "제공 범위" 토글의 scope_type·scope_key 어휘(serving_scope 스키마 COMMENT).
 	// MARKET 저장 키는 MIC(XKRX, ADR-0027) — UI 표기 "KRX" 와 다르다. INSTRUMENT 키는 etf_ticker.
@@ -30,12 +41,14 @@ public class ExplanationService {
 	private final ExplanationStore store;
 	private final ExposureLogRecorder exposureLogRecorder;
 	private final ServingScopeRepository servingScopes;
+	private final PolicyVersionRepository policyVersions;
 
 	public ExplanationService(ExplanationStore store, ExposureLogRecorder exposureLogRecorder,
-			ServingScopeRepository servingScopes) {
+			ServingScopeRepository servingScopes, PolicyVersionRepository policyVersions) {
 		this.store = store;
 		this.exposureLogRecorder = exposureLogRecorder;
 		this.servingScopes = servingScopes;
+		this.policyVersions = policyVersions;
 	}
 
 	public boolean isKnownTicker(String ticker) {
@@ -51,10 +64,30 @@ public class ExplanationService {
 			return Optional.empty();
 		}
 		return store.findPublished(ticker, tradeDate).map(e -> {
-			ExplanationResponse response = toResponse(e);
+			ExplanationResponse response = toResponse(e, resolveDisclaimer());
 			exposureLogRecorder.record(e.publicationId(), e.ticker(), e.summary(), customerHash, channel);
 			return response;
 		});
+	}
+
+	/**
+	 * 응답에 실을 면책 문구를 활성 정책 버전에서 읽는다 — 콘솔 "면책 문구" 발행의 서빙단 실효화.
+	 *
+	 * <p><b>조회 시점 최신값</b>이다(게시 시점 스냅샷이 아니다). 면책 문구는 게시된 설명의 내용이
+	 * 아니라 노출 화면에 동반되는 <b>현행 안내</b>라, 컴플라이언스가 문구를 고치면 이미 게시된
+	 * 설명에도 즉시 적용되는 편이 통제 수단으로서 맞다. 같은 이유로 제공 범위 판정과 같이 캐시하지
+	 * 않는다 — 게시분 캐시(ALPHA-433)는 read path 만 가리고 이 조회는 그 밖이라, 발행 즉시 반영된다.
+	 * 과거 게시분에 당시 문구를 되살리는 소급 재현은 하지 않는다(감사 재현은 노출 시점 문구
+	 * 스냅샷을 남기는 Exposure Log 소관 — 다만 그 스냅샷은 summary 축이다).
+	 *
+	 * <p>활성 버전 0건(첫 발행 전)은 정상 상태다 — 면책 문구는 테넌트 컴플라이언스 콘텐츠라
+	 * 시드로 발행하지 않는다(policy_version 스키마 COMMENT). 그 구간은 콘솔이 편집 화면에 보여주는
+	 * 것과 같은 기본 문구로 수렴시킨다.
+	 */
+	private String resolveDisclaimer() {
+		return policyVersions.findActiveDisclaimerText()
+				.filter(text -> !text.isBlank())
+				.orElse(DEFAULT_DISCLAIMER);
 	}
 
 	/**
@@ -80,7 +113,7 @@ public class ExplanationService {
 				.orElse(false);
 	}
 
-	private static ExplanationResponse toResponse(PublishedExplanation e) {
+	private static ExplanationResponse toResponse(PublishedExplanation e, String disclaimer) {
 		return new ExplanationResponse(
 				String.valueOf(e.publicationId()),
 				new ExplanationResponse.EtfInfo(e.ticker(), e.etfName()),
@@ -90,7 +123,7 @@ public class ExplanationService {
 				e.evidences().stream()
 						.map(v -> new ExplanationResponse.EvidenceItem(v.kind(), v.title(), v.source(), v.publishedAt()))
 						.toList(),
-				DISCLAIMER,
+				disclaimer,
 				e.publishedAt(),
 				e.explanationAsOf()
 		);
