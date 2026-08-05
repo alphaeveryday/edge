@@ -64,7 +64,13 @@
 > 같은 규칙에서 나온다 — 시간외 종목이 있으면 08:00~20:00 = 720 window, 없으면 390.
 > ⚠️ 상품군 축이 **아니다**: 개별주 001527 도 15:30 이 마지막이라, 클래스는 규칙이 아니라
 > universe 가 선언한다. ⛔ **2026-08-02 결정: 장외는 제외한다** — 선언을 빈 채로 두면
-> 전 종목 정규장 390 window 이고, 정규장 390분은 실측상 전 종목이 빈틈없이 채워진다),
+> 전 종목 정규장 390 window 이고, 정규장 390분은 실측상 전 종목이 빈틈없이 채워진다.
+> ⚠️ **마감(15:30)으로 끝나는 window 만 `scheduled_at` 이 +60초다**(ALPHA-763,
+> `models.scheduled_at_for`) — KRX 종가 단일가는 15:30:00 에 한 번 체결되는데 벤더
+> 캔들에 실리기까지 시차가 있어, `window_end` 즉시 집으면 미완성 봉(vol 0·직전가)이
+> 커밋된다(08-03 실측 34종 중 25종이 일봉 종가와 불일치). 그래서 그 window 는 15:31 에
+> 집힌다. window INSERT 는 `DO NOTHING` 이라 **이미 계획된 세션엔 소급되지 않는다** —
+> 당일 적용이 필요하면 그 행의 `scheduled_at` 을 직접 UPDATE 한다),
 > **뉴스 추출 Consumer handler**(ALPHA-689 — kernel 위에 `tagging/extract` 를 job 단위로
 > 부르는 배선: 기사 정본은 PG `document`+`news_document` 자연키, 결과는 feature 존 불변
 > artifact 이고 반환값이 그 바이트의 sha256 이다. artifact key 축은
