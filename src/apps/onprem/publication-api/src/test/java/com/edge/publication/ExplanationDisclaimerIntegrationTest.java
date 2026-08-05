@@ -1,10 +1,15 @@
 package com.edge.publication;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.publication.controller.ExplanationController;
 import com.edge.publication.service.ExplanationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -15,6 +20,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -54,8 +60,12 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
 
 	@DynamicPropertySource
-	static void dedicatedTicker(DynamicPropertyRegistry registry) {
+	static void dedicatedContext(DynamicPropertyRegistry registry) {
 		registry.add("publication.known-tickers", () -> TICKER);
+		// 캐시 TTL 을 테스트 길이보다 충분히 크게 고정한다 — 기본 3s 면 CI 정지·GC 로 요청
+		// 사이에 만료될 수 있고, 그러면 두 번째 요청이 DB 미스 경로로 돌아 "캐시를 켠 채
+		// 즉시 반영"이라는 검증 대상이 우연히 성립한다(캐시가 문구를 가리는 회귀를 놓친다).
+		registry.add("publication.serve-cache-ttl", () -> "60s");
 	}
 
 	@Autowired
@@ -117,6 +127,30 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		deactivateActivePolicy();
 
 		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+	}
+
+	@Test
+	void 활성_문구가_공백이면_기본_문구로_응답하되_로그로_드러낸다() throws Exception {
+		// WHY: 콘솔은 공백 발행을 거부하므로(updateDisclaimer 의 INVALID_REQUEST) 이 상태는 콘솔
+		// 밖 경로(마이그레이션·직접 SQL)가 만든 무결성 이상이다. 고객에겐 빈 면책 문구 대신 기본
+		// 문구를 내보내되(안전), 이상을 조용히 삼키면 콘솔의 활성 정책과 고객 노출이 갈려도
+		// 장애로 드러나지 않는다(Rule 12) — 폴백과 fail-loud 를 함께 고정한다.
+		publishPolicy(1, "   ");
+		Logger serviceLogger = (Logger) LoggerFactory.getLogger(ExplanationService.class);
+		ListAppender<ILoggingEvent> captured = new ListAppender<>();
+		captured.start();
+		serviceLogger.addAppender(captured);
+		try {
+			serve().andExpect(status().isOk())
+					.andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+			assertThat(captured.list).anySatisfy(event -> {
+				assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+				assertThat(event.getFormattedMessage()).contains("면책 문구가 비어 있다");
+			});
+		}
+		finally {
+			serviceLogger.detachAppender(captured);
+		}
 	}
 
 	@Test
