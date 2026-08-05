@@ -289,11 +289,14 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
                 outcome = revert_fn(payload)
             else:
                 outcome = process_fn(payload["trigger_id"])
-        except ReturnsNotReadyError:
-            # 시간이 낫게 하는 실패 — 분봉 artifact 커밋·시가 원장 확정의 짧은 지연이라
+        except ReturnsNotReadyError as error:
+            # 시간이 낫게 하는 실패 — 분봉 artifact 커밋·원장 확정의 짧은 지연이라
             # 고정 짧은 간격으로 재확인한다(ALPHA-710 — 배치 착지 대기 산술은 폐기).
-            logger.info("returns 미준비(분봉 window·시가 원장) — %d초 뒤 재시도: %s",
-                        RETURNS_RETRY_SECONDS, payload.get("trigger_id"))
+            # **예외 메시지를 그대로 싣는다**: 사유가 넷(트리거 window 원장 미착지·분모
+            # 파티션 부재·구성종목 가격 0건·checksum 불일치)인데 고정 문구만 찍으면
+            # 어느 것인지 못 가린다 — 08-05 에 하루치 실패가 그렇게 조용했다(Rule 12).
+            logger.info("returns 미준비 — %d초 뒤 재시도: trigger=%s reason=%s",
+                        RETURNS_RETRY_SECONDS, payload.get("trigger_id"), error)
             _set_visibility(sqs, queue_url, receipt, RETURNS_RETRY_SECONDS)
             _count("deferred")
             continue

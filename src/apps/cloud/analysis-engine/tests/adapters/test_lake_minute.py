@@ -33,18 +33,34 @@ class _MinuteFakeS3:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         return {"Body": io.BytesIO(self.objects[Key])}
 
+    #: 한 응답에 담는 최대 항목 — 실제 S3 는 1,000 에서 자른다. 테스트는 2 로 줄여
+    #: 페이지네이션 경로를 항상 밟게 한다(1,000개 픽스처는 불필요하게 비싸다).
+    page_size = 2
+
     def list_objects_v2(self, *, Bucket: str, Prefix: str = "", **kwargs: object) -> dict:
+        token = kwargs.get("ContinuationToken")
         if kwargs.get("Delimiter") == "/":
-            firsts = {
+            items = sorted({
                 Prefix + key[len(Prefix):].split("/", 1)[0] + "/"
                 for key in self.objects
                 if key.startswith(Prefix) and "/" in key[len(Prefix):]
-            }
-            return {"CommonPrefixes": [{"Prefix": p} for p in sorted(firsts)]}
-        return {
-            "Contents": [{"Key": k} for k in sorted(self.objects) if k.startswith(Prefix)],
-            "IsTruncated": False,
-        }
+            })
+            page, nxt = self._page(items, token)
+            resp: dict = {"CommonPrefixes": [{"Prefix": p} for p in page]}
+        else:
+            items = [k for k in sorted(self.objects) if k.startswith(Prefix)]
+            page, nxt = self._page(items, token)
+            resp = {"Contents": [{"Key": k} for k in page]}
+        resp["IsTruncated"] = nxt is not None
+        if nxt is not None:
+            resp["NextContinuationToken"] = nxt
+        return resp
+
+    def _page(self, items: list[str], token: object) -> tuple[list[str], str | None]:
+        start = int(token) if token else 0
+        page = items[start:start + self.page_size]
+        nxt = start + self.page_size
+        return page, (str(nxt) if nxt < len(items) else None)
 
 
 def _bars(*rows: dict) -> bytes:
@@ -99,6 +115,55 @@ def test_prev_closes_reads_partition_strictly_before_trade_date():
         f"{PRICE_DAILY}trade_date=2026-07-14/p.parquet": _parquet(["005930"], [70000.0]),
     })
     assert reader_intraday.load_prev_closes("KR", date(2026, 7, 15)) == {"005930": 70000.0}
+
+
+def test_prev_closes_survives_truncated_partition_listing():
+    """파티션 목록이 잘리면 **잘린 페이지의 마지막**이 최신으로 인증된다 — 오류 없이
+    수년 전 종가가 분모가 되고, 그 값으로 만든 기여도가 정상 설명으로 영속된다.
+    KR 거래일 ~245/년이라 4년치면 실제 1,000 상한에 닿는다(fake 는 page_size=2)."""
+    reader = _reader({
+        f"{PRICE_DAILY}trade_date=2026-07-{d:02d}/p.parquet": _parquet(["005930"], [float(d)])
+        for d in (10, 11, 12, 13, 14)
+    })
+    # 페이지 하나만 읽으면 07-11 이 '직전'이 된다 — 실제 직전은 07-14 다
+    assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {"005930": 14.0}
+
+
+def test_prev_closes_ignores_non_date_partition_dirs():
+    """문자열 비교로 '직전'을 고르므로 `trade_date=<날짜>-copy` 같은 비정상 디렉터리가
+    정렬상 정상 파티션보다 뒤에 와서 분모로 뽑힌다 — 오류 없이 틀린 값이 된다."""
+    reader = _reader({
+        f"{PRICE_DAILY}trade_date=2026-07-14/p.parquet": _parquet(["005930"], [70000.0]),
+        f"{PRICE_DAILY}trade_date=2026-07-14-copy/p.parquet": _parquet(["005930"], [1.0]),
+    })
+    assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {"005930": 70000.0}
+
+
+def test_boolean_price_is_not_coerced_to_one():
+    """JSON `true` 는 `float(True) == 1.0` 이라 양수·유한성 게이트를 전부 통과한다 —
+    분모 70,000 대비 -99.999% 가 '정상 수익률'로 인증된다(coerce-to-passing).
+    파이썬에서 bool 은 int 의 하위형이라 `float()` 만으로는 안 걸린다."""
+    reader = _reader({
+        minute_artifact_key("KR", "2026-07-15", "1030", 1): _bars(
+            {"unit_id": "A", "open": "70000", "close": True},
+            {"unit_id": "B", "open": "70000", "close": "73500"},
+        ),
+    })
+    returns = reader.load_minute_returns(
+        "KR", "2026-07-15", "1030", 1, None, {"A": 70000.0, "B": 70000.0})
+    assert returns["A"] is None, "bool 종가가 -99.999% 수익률로 통과했다"
+    assert abs(returns["B"] - (73500 / 70000 - 1)) < 1e-9
+
+
+def test_boolean_prev_close_is_not_coerced_to_one():
+    """분모 쪽도 같은 함정이다 — bool 종가가 분모 1.0 이 되면 모든 수익률이 폭발한다."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    buf = io.BytesIO()
+    pq.write_table(pa.table({"ticker": ["A", "B"], "close": [True, None]}), buf)
+    reader = _reader({f"{PRICE_DAILY}trade_date=2026-07-14/p.parquet": buf.getvalue()})
+    assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {}
 
 
 def test_prev_closes_empty_when_no_earlier_partition():

@@ -31,6 +31,22 @@ def minute_artifact_key(
     )
 
 
+def _price(value: Any) -> float | None:
+    """가격(문자열·수치)을 float 로 — 계약 위반은 None(분해가 미가격으로 제외).
+
+    `bool` 을 **먼저** 막는다: JSON `true` 는 `float(True) == 1.0` 이라 양수·유한성
+    게이트를 전부 통과해, 전일 종가 70,000 대비 -99.999% 라는 '정상 수익률'로 인증된다
+    (coerce-to-passing). `isinstance(x, bool)` 없이 `float()` 만 쓰면 안 걸린다 —
+    파이썬에서 bool 은 int 의 하위형이다.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def make_s3_client(settings: Settings):
     """S3 클라이언트 생성(선택적 AWS 프로파일 반영, 지연 boto3)."""
     import boto3
@@ -51,13 +67,29 @@ class LakeReader:
         self._bucket = bucket
 
     def _partition_values(self, base: str, key: str) -> list[str]:
-        """``base`` 바로 아래 ``key=`` 파티션 값들(정렬)."""
-        resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=base, Delimiter="/")
+        """``base`` 바로 아래 ``key=`` 파티션 값들(정렬).
+
+        **끝까지 페이지를 넘긴다.** `list_objects_v2` 는 CommonPrefixes 도 1,000개에서
+        잘리는데, 여기서 첫 페이지만 읽으면 잘린 목록의 마지막이 '최신'으로 인증된다 —
+        `load_prev_closes` 는 그걸 직전 거래일 종가(분해의 분모)로 쓰고, `load_returns`
+        는 당일 파티션을 못 찾아 조용히 빈 dict 를 돌려준다. 둘 다 오류 없이 틀린 값이
+        된다. KR 거래일 ~245/년이라 4년치면 도달한다(dev 현재 18개).
+        """
         out: list[str] = []
-        for common in resp.get("CommonPrefixes", []):
-            seg = common.get("Prefix", "").rstrip("/").split("/")[-1]
-            if seg.startswith(f"{key}="):
-                out.append(seg[len(key) + 1:])
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "Bucket": self._bucket, "Prefix": base, "Delimiter": "/"}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = self._s3.list_objects_v2(**kwargs)
+            for common in resp.get("CommonPrefixes", []):
+                seg = common.get("Prefix", "").rstrip("/").split("/")[-1]
+                if seg.startswith(f"{key}="):
+                    out.append(seg[len(key) + 1:])
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
         return sorted(out)
 
     def _read_parquet_prefix(self, prefix: str, columns: list[str]) -> list[dict[str, Any]]:
@@ -158,21 +190,25 @@ class LakeReader:
         세면(daily `load_returns` 방식) 장중엔 당일 파티션이 없어 항상 빈 dict 가 된다 —
         분봉 분해는 그 파티션이 생기기 전에 도는 것이 정상 경로다.
 
-        형 변환 실패(비수치·None)는 그 티커만 뺀다 — 한 행이 분해 전체를 죽이면 안 되고,
-        빠진 티커는 분해에서 미가격으로 잡혀 coverage 에 드러난다.
+        형 변환 실패(비수치·None·bool)는 그 티커만 뺀다 — 한 행이 분해 전체를 죽이면
+        안 되고, 빠진 티커는 분해에서 미가격으로 잡혀 coverage 에 드러난다.
+
+        파티션 값이 `YYYY-MM-DD` 형태인 것만 본다: 문자열 비교로 '직전'을 고르므로
+        `trade_date=2026-07-14-copy` 같은 비정상 디렉터리가 하나 섞이면 정렬상 정상
+        파티션보다 뒤에 와서 그것이 분모로 뽑힌다(오류 없이 틀린 값).
         """
         base = f"{LAKE_PRICE_PREFIX}/market={market}/"
+        target = trade_date.isoformat()
         earlier = [d for d in self._partition_values(base, "trade_date")
-                   if d < trade_date.isoformat()]
+                   if len(d) == len(target) and d < target]
         if not earlier:
             return {}
         closes: dict[str, float] = {}
         for row in self._read_parquet_prefix(
                 f"{base}trade_date={earlier[-1]}/", ["ticker", "close"]):
-            try:
-                closes[str(row["ticker"])] = float(row["close"])
-            except (KeyError, TypeError, ValueError):
-                continue
+            price = _price(row.get("close"))
+            if price is not None and row.get("ticker") is not None:
+                closes[str(row["ticker"])] = price
         return closes
 
     def load_minute_returns(
@@ -201,9 +237,8 @@ class LakeReader:
         returns: dict[str, float | None] = {}
         for unit_id, record in closes.items():
             base_price = prev_closes.get(unit_id)
-            try:
-                close_price = float(record["close"])
-            except (KeyError, TypeError, ValueError):
+            close_price = _price(record.get("close"))
+            if close_price is None:
                 returns[unit_id] = None
                 continue
             # isfinite — float("Infinity"/"nan") 은 양수 비교를 통과하거나(inf) 전부
