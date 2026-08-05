@@ -21,7 +21,8 @@ from typing import Callable
 
 from ..observability import record
 from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
-                    OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS, Trigger, VocabError)
+                    LAYERS, OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS,
+                    Trigger, VocabError)
 
 Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
@@ -32,6 +33,12 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 계열족 {n_fam}: {families}
 변환 {n_tr}: {transforms}
 비교: {comparators} · 결과종류: {outcomes}
+단위 {n_ly}: {layers}
+  - **이 뉴스가 무엇을 움직였다는 주장인가.** 시장 = 지수 전체 · 섹터 = 그 산업 ·
+    고유 = 이 종목만(시장·산업을 빼고 남은 몫). 층마다 종속변수가 다르므로 이것이
+    가설의 핵심 선택이다. 업황·정책·금리 뉴스를 '고유' 로 걸면 시장·산업이 이미
+    차감된 잔차를 설명해야 해서 기각된다.
+  - 층별 허용 노출: {layer_exposures}
 방아쇠: {{"kind": "점", "ident": <아래 접지 목록의 사건타입>}} 또는 {{"kind": "계열", "ident": <오늘 발화 계열족>}}
 이 셀에 접지된 사건 타입 (점 방아쇠는 이 목록에서만): {event_types}
 오늘 |z|≥2 로 발화한 계열족 (계열 방아쇠는 이 목록에서만): {series_families}
@@ -45,6 +52,7 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
   "channel": "...",
   "exposure": {{"kind": "속성", "ident": 계열족, "transform": 변환}},
   "outcome": "수익률",
+  "layer": "고유",
   "reduction_note": "이 셀의 무엇을 이 타입으로 읽었는가 한 줄",
   "intent": "이 튜플로 검정하려는 인과 주장 한 문장 - 무엇이 사실이면 성립인가"
 }}, ...]}}
@@ -61,6 +69,21 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
 - 조건은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
 - 조건 피처는 노출 피처와 **달라야 한다** - 같으면 조건이 아니라 동어반복이고 표본만 죽는다"""
+
+
+def _layer_menu() -> str:
+    """층 → 그 층을 설명할 자격이 있는 노출. 프롬프트에 **실제 게이트를 그대로** 보인다.
+
+    이걸 안 보이면 모델이 어휘상 합법이지만 층 게이트에서 죽는 조합을 계속 낸다 -
+    거절 사유를 되물음으로 배우게 하는 것보다 메뉴로 미리 닫는 것이 싸다.
+    """
+    from .paneltest import LAYER_EXPOSURES
+    out = []
+    for ly in sorted(LAYERS):
+        allow = LAYER_EXPOSURES.get(ly)
+        out.append(f"{ly}=전부" if allow is None else
+                   f"{ly}=" + ",".join(f"{f}/{t}" for f, t in sorted(allow)))
+    return " · ".join(out)
 
 
 def _cond(v: dict) -> Condition:
@@ -80,6 +103,7 @@ def _parse(h: dict) -> HypothesisTuple:
         channel=str(h.get("channel", "")),
         exposure=ExposureSource(**(h.get("exposure") or {})),
         outcome=str(h.get("outcome", "")),
+        layer=str(h.get("layer", "고유")),
         reduction_note=str(h.get("reduction_note", ""))[:200],
         intent=str(h.get("intent", ""))[:240])
 
@@ -231,6 +255,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                             n_ch=len(CHANNELS), n_fam=len(SERIES_FAMILIES),
                             n_tr=len(TRANSFORMS), comparators=sorted(COMPARATORS),
                             outcomes=sorted(OUTCOME_KINDS), event_types=event_types,
+                            layers=sorted(LAYERS), n_ly=len(LAYERS),
+                            layer_exposures=_layer_menu(),
                             series_families=sorted(series_families),
                             measurable=sorted(measurable), n=n)
     rejected: list[str] = []

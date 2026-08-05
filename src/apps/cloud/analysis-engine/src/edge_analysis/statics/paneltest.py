@@ -616,16 +616,21 @@ def _two_sided(p1: float) -> float:
 
 
 def edge_test(lake, t: HypothesisTuple, day: str,
-              cell_instrument_id: str = "", layer: str = "고유",
+              cell_instrument_id: str = "", layer: str = "",
               m_tests: int = 1) -> EdgeReport:
     """튜플 → 패널 수치. 표본이 얇으면 판정불가 — **다른 표본을 찾으러 가지 않는다.**
 
     엣지 존재는 언제나 **전체 패널**로 검정한다. 조건은 표본을 쪼개지 않고
     조절 대비로만 보고되며, 오늘 적용에만 걸린다(INUS). 조건화로 표본을 쪼개면
     검정력이 죽는다 - 라이브 6회의 지배적 실패가 그것이었다(n=23·6·6 판정불가).
+
+    층은 **튜플이 정한다**(`t.layer`). `layer` 인자는 재지정용이고 비면 튜플을 따른다.
+    예전엔 인자 기본값이 `"고유"` 라 가설이 무엇을 주장하든 전부 고유층에서 검정됐다 -
+    업황·정책 뉴스는 시장·산업이 이미 차감된 잔차를 설명해야 해서 구조적으로 기각됐다.
     """
     if t.outcome != "수익률":
         return _unmeasurable(f"결과종류 {t.outcome!r} 검정은 아직 못 잰다")
+    layer = layer or t.layer
     y = LAYER_Y.get(layer)
     if y is None:
         raise ValueError(f"층은 {sorted(LAYER_Y)} 중 하나다: {layer!r}")

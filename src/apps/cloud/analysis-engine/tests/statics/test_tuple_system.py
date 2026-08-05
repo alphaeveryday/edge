@@ -1236,3 +1236,43 @@ def test_applied_edge_direction_comes_only_from_the_identified_set():
             return [(0,)]                   # 모든 표가 0 행 -> 모든 도구 부재
 
     assert _measurable(_Lake()) == [], "도구가 없는데 노출 축을 제안하고 있다"
+
+
+def test_the_unit_is_the_hypothesis_not_a_default():
+    """**단위(층)는 가설이 정한다.** 인자 기본값이 그것을 덮으면 안 된다.
+
+    예전 결함: `edge_test(layer="고유")` 가 기본값이라 가설이 무엇을 주장하든 전부
+    고유층에서 검정됐다. 업황·정책 뉴스는 시장·산업이 이미 차감된 잔차를 설명해야
+    해서 구조적으로 기각됐다 - 어휘에 그 주장을 부를 자리가 없던 것이 원인이다.
+    """
+    from edge_analysis.statics.vocab import LAYERS
+    from edge_analysis.statics.paneltest import LAYER_Y
+
+    # 어휘와 종속변수가 **같은 집합**이어야 한다. 어휘에만 있는 층은 가설을 받고
+    # 검정에서 죽는다 - 그게 가장 나쁜 실패 양식이다(합법으로 보이는 판정불가).
+    assert set(LAYERS) == set(LAYER_Y), (sorted(LAYERS), sorted(LAYER_Y))
+
+    t = HypothesisTuple(
+        conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
+        channel="Q수량", exposure=ExposureSource("속성", "섹터", transform="민감도"),
+        outcome="수익률", layer="섹터")
+    assert t.layer == "섹터"
+    # 기본값이 아니라 튜플을 따른다: 빈 인자면 t.layer 가 쓰인다.
+    import inspect
+
+    from edge_analysis.statics.paneltest import edge_test
+    assert inspect.signature(edge_test).parameters["layer"].default == "", (
+        "layer 기본값이 비어 있지 않으면 가설의 단위 선언이 조용히 덮인다")
+
+
+def test_a_unit_cannot_be_explained_by_an_unqualified_exposure():
+    """층별 허용 노출이 게이트다 — '종목 거래량이 시장 전체 수익을 설명한다' 는 죽는다."""
+    from edge_analysis.statics.paneltest import LAYER_EXPOSURES
+
+    # 고유층은 전부 허용(잔차는 종목 자신이다), 시장·섹터는 목록이 있다.
+    assert LAYER_EXPOSURES.get("고유") is None
+    for ly in ("시장", "섹터"):
+        allow = LAYER_EXPOSURES[ly]
+        assert allow, ly
+        # 거래량/수준 같은 종목 특성은 시장·섹터 설명 자격이 없다.
+        assert ("거래량", "수준") not in allow, (ly, sorted(allow))

@@ -44,6 +44,10 @@ MODERATOR_STATES = frozenset({"포지셔닝", "기대수준", "밸류", "국면"
 FEATURE_ROLES = frozenset({"처치강도", "조절자", "교란", "매개"})
 
 OUTCOME_KINDS = frozenset({"수익률", "전이", "되돌림"})
+
+# 단위(층) — 뉴스가 무엇을 움직였다는 주장인가. `paneltest.LAYER_Y` 와 **같은 3개**여야
+# 한다: 어휘에만 있고 종속변수가 없는 층은 가설을 받고 검정에서 죽는다.
+LAYERS = frozenset({"시장", "섹터", "고유"})
 # 되돌림 = ln(종가/일중고가). "왜 오르다 떨어졌나" 를 **일 단위 스칼라**로 환원한다.
 # 경로 질문을 창 단위로 쪼개면 SEM 이 8차에 고친 범주 오류로 되돌아간다.
 # 하루 총합의 일부가 아니므로 **몫 배정 금지**(assignable=False) - 전이와 같은 규율.
@@ -272,6 +276,17 @@ class HypothesisTuple:
     # ("운영"→"운영") 채워 넣는 게 잡혔다. 어디서도 쓰이지 않았다. 관계 노출이
     # 몫 배정 가능해지면(창 정렬, 백필 #5) 온톨로지 역할 어휘로 닫아서 되살린다.
     outcome: str            # 수익률 | 전이
+    # **단위(층)** — 이 뉴스가 어느 층을 움직였다는 주장인가. 시장 · 섹터 · 고유.
+    #
+    # 왜 가설이 정하는가: 층마다 종속변수가 다르다(시장 원수익 · 섹터 시장차감 ·
+    # 고유 이중차감). "반도체 업황 뉴스가 섹터를 움직였다" 와 "그 종목만 움직였다"
+    # 는 **다른 주장**이고 다른 y 로 검정된다. 층을 코드가 고정하면(예전 `layer=
+    # "고유"` 기본값) 모든 가설이 '이 종목만' 을 주장하게 되어, 섹터 뉴스는 영원히
+    # 고유층에서 기각된다 - 어휘가 그 주장을 못 부르는 것이 원인이었다.
+    #
+    # 남용은 `LAYER_EXPOSURES`(paneltest)가 막는다: 층마다 그 층을 설명할 자격이
+    # 있는 노출만 허용한다. '종목 거래량이 시장 전체 수익을 설명한다' 는 여기서 죽는다.
+    layer: str = "고유"
     # sign 은 제거했다 (21R): 우리가 찾는 것은 **유효한 CATE** 이고 방향은 그 추정량의
     # 산물이다(상위−하위). 모델이 방향을 미리 선언하게 하면 (a) 게이트는 이미 양측이라
     # 아무 일도 하지 않고(17R), (b) 산문이 '방향 반대' 를 불성립으로 읽을 여지만 남고,
@@ -283,13 +298,13 @@ class HypothesisTuple:
     def __post_init__(self) -> None:
         _need(self.channel, CHANNELS, "채널")
         _need(self.outcome, OUTCOME_KINDS, "결과종류")
-
+        _need(self.layer, LAYERS, "단위")
 
 
 __all__ = [
     "ALPHA", "CHANNELS", "COMPARATORS", "CONDITION_KINDS", "Condition",
     "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS", "ExposureSource",
-    "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "HypothesisTuple",
+    "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "HypothesisTuple", "LAYERS",
     "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "RELATIONS", "SERIES_FAMILIES",
     "PREDICATES", "STAGES", "ARG_ROLES", "NOVELTY", "PLACEBO_NOVELTY",
     "TRANSFORMS", "TRIGGER_KINDS", "Trigger", "VocabError", "W_MINUTES"]

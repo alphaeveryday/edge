@@ -232,6 +232,11 @@ def session_pragmas() -> tuple[str, ...]:
     우리 SQL 은 순서가 중요한 곳마다 `ORDER BY` 를 명시한다 - 보존은 비용뿐이다.
     """
     return ("SET TimeZone='Asia/Seoul'",
+            # 진행바는 **stdout 을 오염시킨다.** 파이프로 받으면 산문 사이에 막대가
+            # 섞이고, 더 나쁘게는 DuckDB 가 그리다 죽으면서 그 오류가 cp949 로 와
+            # UnicodeDecodeError 로 위장된다(형제 작업에서 verify 가 실제로 이걸로
+            # 죽었다). 우리 산출은 사람이 읽는 문단이라 진행바가 낄 자리가 없다.
+            "SET enable_progress_bar=false",
             "SET preserve_insertion_order=false",
             f"SET memory_limit='{_env(MEMORY_LIMIT_ENV)}'",
             f"SET temp_directory='{_env(TEMP_DIR_ENV)}'")

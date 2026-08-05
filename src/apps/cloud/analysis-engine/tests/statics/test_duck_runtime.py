@@ -105,12 +105,13 @@ def test_pragmas_bound_memory_and_open_spill(monkeypatch):
     # 순서 버퍼 때문에 1.5GB 한도에서 **OOM 으로 죽었다**(실측 4회 중 2회). 우리 SQL 은
     # 순서가 중요한 곳마다 ORDER BY 를 쓰므로 보존은 비용뿐이다 - 빠지면 다시 죽는다.
     assert session_pragmas() == ("SET TimeZone='Asia/Seoul'",
+                                 "SET enable_progress_bar=false",
                                  "SET preserve_insertion_order=false",
                                  "SET memory_limit='1.5GB'",
                                  f"SET temp_directory='{tempfile.gettempdir()}'")
     monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "6GB")
     monkeypatch.setenv("DUCKDB_TEMP_DIR", "/mnt/spill")
-    assert session_pragmas()[2:] == ("SET memory_limit='6GB'",
+    assert session_pragmas()[3:] == ("SET memory_limit='6GB'",
                                      "SET temp_directory='/mnt/spill'")
 
 
