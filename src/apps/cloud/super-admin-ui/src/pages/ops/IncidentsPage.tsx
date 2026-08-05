@@ -28,12 +28,11 @@ const SEV_MEANING: Record<Severity, string> = {
  *
  * 판정은 두 수치의 직접 비교다: 뒤 값이 0이고 앞이 있으면 차단, 줄었으면 저하, 같으면 정상.
  * 관측 채널이 없는 단계는 숫자 자리에 두지 않고 "관측 불가"로 낸다 — 0 과 다른 사실이다. */
-type LaneVerdict = '정상' | '저하' | '차단' | '관측 불가';
+type LaneVerdict = '정상' | '저하' | '차단';
 const VERDICT_TONE: Record<LaneVerdict, BadgeTone> = {
   정상: 'active',
   저하: 'warn',
   차단: 'blocked',
-  '관측 불가': 'neutral',
 };
 
 function verdictOf(from: number, to: number): LaneVerdict {
@@ -44,6 +43,8 @@ function verdictOf(from: number, to: number): LaneVerdict {
 
 interface LaneCard {
   label: string;
+  /** 이 카드가 재는 범위 — 세 카드를 같은 층위로 읽지 않게 이름 옆에 함께 낸다 */
+  scope: string;
   verdict: LaneVerdict;
   figure: string;
   note: string;
@@ -57,7 +58,6 @@ function laneCards(): LaneCard[] {
   const firstStage = S.find((s) => !s.blind);
   const pub = S.find((s) => s.id === 'c.pub');
   const dlv = S.find((s) => s.id === 'c.dlv');
-  const consumer = S.find((s) => s.blind);
 
   const batchFrom = batchFeed?.v ?? 0;
   const batchTo = pub?.batch ?? 0;
@@ -66,47 +66,47 @@ function laneCards(): LaneCard[] {
   const dlvFrom = pub?.batch ?? 0;
   const dlvTo = dlv?.batch ?? 0;
 
+  /* 세 카드는 **측정 범위가 서로 다르다** — 이름에 그 범위를 넣어 같은 층위의 지표로 읽히지
+   * 않게 한다. "각 레인의 가장 중요한 지표"가 아니다. */
   return [
     {
-      label: '배치',
+      label: '배치 설명 생성',
+      scope: 'end-to-end · 트리거에서 Cloud 게시까지',
       verdict: verdictOf(batchFrom, batchTo),
-      figure: `트리거 ${fmt(batchFrom)} → 게시 ${fmt(batchTo)}`,
-      note: '트리거된 ETF 중 설명이 게시된 수',
+      figure: `트리거 ${fmt(batchFrom)} → Cloud 게시 ${fmt(batchTo)}`,
+      note: '배치 설명 생성의 최종 결과',
       href: '/ops/chain',
     },
     {
-      label: '장중',
+      label: '장중 트리거 수신',
+      scope: 'ingress · 체인 진입 여부만',
       verdict: verdictOf(intraFrom, intraTo),
       figure: `트리거 ${fmt(intraFrom)} → 관측 진입 ${fmt(intraTo)}`,
-      note: '체인에 들어가지 못한 것이지 체인에서 실패한 것이 아니다',
+      note: '장중 파이프라인 전체 귀결이 아닙니다 — 세션·창 결손은 장중 세션 화면 소관',
       href: '/ops/chain',
     },
     {
-      label: '전달',
+      label: '전달 경계',
+      scope: 'Cloud→테넌트 경계 정합',
       verdict: verdictOf(dlvFrom, dlvTo),
-      figure: `게시 ${fmt(dlvFrom)} → 발번 ${fmt(dlvTo)}`,
-      note: '같은 트랜잭션이라 구조상 같아야 한다',
-      href: '/ops/delivery',
-    },
-    {
-      label: consumer?.label ?? '소비자 수신',
-      verdict: '관측 불가',
-      figure: '접근 채널 없음',
-      note: '온프렘이 무엇을 읽었는지 확인할 채널이 없다 — 0건이 아니다',
+      figure: `Cloud 게시 ${fmt(dlvFrom)} → 발번 ${fmt(dlvTo)}`,
+      note: 'tenant_delivery 정합 — 발번 이후는 온프렘 영역이라 관측하지 않습니다',
       href: '/ops/delivery',
     },
   ];
 }
 
 const LANE_TIP = [
-  '판정은 두 수치의 직접 비교다 — 뒤 값이 0이고 앞이 있으면 차단, 줄었으면 저하, 같으면 정상.',
-  '새 점수나 종합 등급을 만들지 않는다.',
+  '세 카드는 재는 범위가 서로 다르다 — 같은 층위의 지표가 아니다.',
+  '  배치 설명 생성 — 트리거에서 Cloud 게시까지의 end-to-end 결과',
+  '  장중 트리거 수신 — 체인에 들어갔는지(ingress)만. 장중 파이프라인 전체 귀결이 아니다',
+  '  전달 경계 — Cloud 게시와 tenant_delivery 발번의 정합',
   '',
-  '배치와 장중은 같은 체인의 두 입력이지만 오늘의 상태는 서로 다르다 — 한 줄에 섞으면',
-  '어느 쪽이 깨졌는지 안 보인다.',
+  '판정은 관측된 두 수치의 직접 비교다 — 뒤 값이 0이고 앞이 있으면 차단, 줄었으면 저하,',
+  '같으면 정상. 새 점수나 종합 건강도를 만들지 않는다.',
   '',
-  '소비자 수신은 0 이 아니라 관측 불가다. "아무도 안 읽었다"와 "볼 수 없다"는 다른 사실이라',
-  '숫자 자리에 두지 않는다.',
+  '소비자 수신은 여기 없다. 발번 이후는 온프렘 영역(Sync Agent·Intake·Screening·최종 게시)이라',
+  'Cloud 가 관측하지 못한다 — 측정값이 아니므로 상태 카드로 세우지 않는다(ADR-0026).',
 ].join('\n');
 
 function OperationStrip() {
@@ -128,6 +128,8 @@ function OperationStrip() {
                 {/* 배지에 점+글자가 함께 있어 색만으로 상태를 가르지 않는다 */}
                 <StatusBadge tone={VERDICT_TONE[l.verdict]}>{l.verdict}</StatusBadge>
               </div>
+              {/* 재는 범위를 이름 바로 밑에 — 세 카드가 같은 지표로 보이지 않게 */}
+              <div className="t-xs" style={{ color: 'var(--fg-4)' }}>{l.scope}</div>
               <div className="ops-lane-figure">{l.figure}</div>
               <div className="t-xs" style={{ color: 'var(--fg-3)' }}>
                 {l.note}
@@ -179,18 +181,15 @@ function P0Item({ incident: I }: { incident: Incident }) {
         {' · '}
         <span style={{ color: 'var(--fg-2)' }}>{v.why}</span>
       </div>
-      <div className="t-xs" style={{ color: 'var(--fg-3)' }}>
-        <b style={{ color: 'var(--fg-2)' }}>조치</b>{' '}
+      {/* 조치 한 줄만. evidence 원문은 (i) 판정 근거와 상세 화면에 있다 —
+       * 요약 화면에서 문제 설명과 한 문장으로 이어지면 둘 다 안 읽힌다. */}
+      <div className="ops-p0-action">
+        <span className="t-label">조치</span>
         {rb ? (
-          <>
-            <code>{rb.cmd}</code>
-            {rb.note && ` — ${rb.note}`}
-          </>
+          <code className="ops-p0-cmd">{rb.cmd}</code>
         ) : (
-          '런북 미등록'
+          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>런북 미등록</span>
         )}
-        {' · '}
-        <b style={{ color: 'var(--fg-2)' }}>근거</b> {v.evidence}
       </div>
     </li>
   );
@@ -224,7 +223,8 @@ function ImmediateAction({ list }: { list: Incident[] }) {
   );
 }
 
-/* ══ 3. 심각도 요약 — 클릭하면 문제·사건 화면으로 ══ */
+/* ══ 3. 심각도 요약 — 클릭하면 문제·사건 화면으로 ══
+ * P0+P1+P2 단순 합계는 핵심 지표가 아니라 여기서 카드로 세우지 않는다. */
 function SeveritySummary() {
   return (
     <div className="ops-sev-row">
@@ -240,11 +240,6 @@ function SeveritySummary() {
           </Link>
         );
       })}
-      <Link to="/ops/incidents" className="kpi ops-sev">
-        <span className="kpi-label">전체 사건</span>
-        <span className="kpi-value">{INCIDENTS.length}건</span>
-        <span className="kpi-sub">인과로 묶인 조치 단위</span>
-      </Link>
     </div>
   );
 }

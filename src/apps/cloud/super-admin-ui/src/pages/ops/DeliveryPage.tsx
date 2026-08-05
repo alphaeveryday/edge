@@ -1,8 +1,10 @@
-/* 전달 경계 — 게시와 발번이 맞아떨어지는가 (ALPHA-738).
+/* Cloud 게시·발번 경계 — Cloud 게시와 tenant_delivery 발번이 맞아떨어지는가 (ALPHA-738).
  *
- * 전달 이후(온프렘 심사 → 게시 → 소비자 노출)는 관측 경계 밖이다 — "전달 완료"가 곧 "읽혔다"가 아니다.
+ * 책임 경계(ADR-0026): Cloud 는 Event Store 적재·게시까지, 발번 이후는 온프렘 영역이다.
+ * 소비자 수신은 측정된 지표가 아니라 **관측 범위 밖**이라 KPI 로 세우지 않고 안내로만 남긴다 —
+ * 숫자 자리에 두면 0건·실패와 구분되지 않는다.
  */
-import { Absent, AxisHeader, F, Info, fmt, useFocusRow } from './shared';
+import { Absent, AxisHeader, F, fmt, useFocusRow } from './shared';
 import '../../styles/ops.css';
 
 export function DeliveryPage() {
@@ -11,7 +13,10 @@ export function DeliveryPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="게시한 설명이 테넌트로 빠짐없이 발번됐는가?" />
+      <AxisHeader
+        question="Cloud 게시된 설명이 테넌트로 빠짐없이 발번됐는가?"
+        note="Cloud 게시 → tenant_delivery 발번 구간만 답합니다"
+      />
 
       <div className="ops-cards">
         <div className="kpi">
@@ -20,18 +25,9 @@ export function DeliveryPage() {
           <div className="kpi-sub">tenant_delivery 누적</div>
         </div>
         <div className="kpi">
-          <div className="kpi-label">게시·미발번</div>
+          <div className="kpi-label">Cloud 게시·미발번</div>
           <div className="kpi-value">{fmt(cov.published_without_new_delivery)}</div>
           <div className="kpi-sub">구조상 0이어야 함</div>
-        </div>
-        <div className="kpi">
-          <div className="kpi-label">소비자 수신</div>
-          <div className="kpi-value" style={{ fontSize: 15, color: 'var(--fg-4)' }}>
-            관측 불가
-          </div>
-          <div className="kpi-sub">
-            접근 채널 없음 <Info tip="온프렘이 무엇을 읽었는지 확인할 채널이 클라우드에 없다 — 0이 아니다." label="소비자 수신" />
-          </div>
         </div>
         <div className="kpi">
           <div className="kpi-label">운영 테넌트</div>
@@ -61,13 +57,13 @@ export function DeliveryPage() {
           </thead>
           <tbody>
             <tr id="b-pub">
-              <td>게시됐는데 미발번</td>
+              <td>Cloud 게시됐는데 미발번</td>
               <td className="num">{cov.published_without_new_delivery}</td>
               <td className="col-muted">같은 트랜잭션이라 구조상 0</td>
             </tr>
             <tr>
               <td>
-                전달됐는데 현재 비게시 <span className="chip">SEED</span>
+                발번됐는데 현재 Cloud 비게시 <span className="chip">SEED</span>
               </td>
               <td className="num" style={{ color: 'var(--warn)' }}>
                 {cov.new_delivery_now_nonpublished}
@@ -89,11 +85,18 @@ export function DeliveryPage() {
             </tr>
           </tbody>
         </table>
-        <div className="card-pad" style={{ paddingTop: 0 }}>
-          <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            전달 이후는 관측 경계 밖입니다 — 온프렘 심사·게시·소비자 노출은 증권사 관리 환경 콘솔이 답합니다.
-          </p>
-        </div>
+      </div>
+
+      {/* 관측 범위 안내 — 측정값이 아니므로 KPI 로 세우지 않는다 */}
+      <div className="card card-pad">
+        <p className="t-sm m-0" style={{ fontWeight: 600 }}>
+          여기까지가 Cloud 의 관측 범위입니다
+        </p>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+          발번 이후 — Sync Agent(DMZ) → Intake(내부망) → Screening → 최종 게시와 소비자 노출 — 은 온프렘
+          영역이라 Cloud Super Admin 에서 관측하지 못합니다.{' '}
+          <b>관측 불가는 0건도, 실패 판정도 아닙니다.</b> 그 구간은 증권사 관리 환경 콘솔이 답합니다.
+        </p>
       </div>
     </div>
   );

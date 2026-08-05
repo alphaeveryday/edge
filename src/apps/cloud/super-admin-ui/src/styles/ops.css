@@ -354,3 +354,55 @@ a.kpi.ops-sev:hover {
 a.kpi.ops-sev:focus-visible {
   box-shadow: var(--focus-ring);
 }
+
+/* 오늘 P0 항목의 조치 — 긴 명령이 문제 설명과 한 문장으로 이어지지 않게 분리한다 */
+.ops-p0-action {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sp-2);
+}
+.ops-p0-cmd {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 2px var(--sp-3);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--xs-size);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+/* 문제·사건: 심각도 선택 카드 — 색 외에 표식·테두리·"보는 중" 칩으로도 선택을 말한다 */
+button.kpi.ops-sev {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+button.kpi.ops-sev:hover {
+  border-color: var(--accent-border);
+}
+button.kpi.ops-sev:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+button.kpi.ops-sev.ops-sev-on {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.ops-sev-mark {
+  display: inline-block;
+  width: 10px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.ops-sev .kpi-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}

@@ -3,6 +3,7 @@
  * 이 흐름을 "배치"라고 부르지 않는다 — 설명 생산 흐름이다. 데이터셋별 수집→정제→적재가 배치고,
  * 그건 데이터셋 화면 소관이다.
  */
+import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
 import { Absent, AxisHeader, F, Info, useFocusRow } from './shared';
@@ -17,11 +18,14 @@ export function ChainPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="트리거된 설명이 어디까지 갔고, 어느 단계에서 사라졌는가?" />
+      <AxisHeader
+        question="트리거된 설명이 Cloud 게시까지 갔고, 어느 단계에서 사라졌는가?"
+        note="Cloud Event Store 적재·게시 확정까지가 이 화면의 범위입니다"
+      />
 
       <div className="card">
         <div className="card-head">
-          <span className="t-label">단계별 잔존</span>
+          <span className="t-label">단계별 잔존 — 트리거 → Cloud 게시</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             각 칸은 배치 / 장중
             <Info
@@ -37,7 +41,8 @@ export function ChainPage() {
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
             장중 갈래는 관측 단계에서 전량이 사라집니다 — 체인에서 실패한 것이 아니라 체인에 들어가지 못한 것입니다.
-            마지막 단계(소비자 수신)는 관측 채널이 없어 <b>관측 불가</b>이며, 0이 아닙니다.
+            이 흐름은 <b>Cloud 게시</b>에서 끝납니다 — 발번 이후는{' '}
+            <Link to="/ops/delivery">Cloud 게시·발번 경계</Link>가 답합니다.
           </p>
         </div>
       </div>

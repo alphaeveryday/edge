@@ -32,11 +32,18 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    group: '파이프라인',
+    /* 전역 운영 — 특정 파이프라인 단계가 아니라 오늘 전체를 묻는 화면들이다 */
+    group: '운영',
     collapsible: true,
     areas: [
       { path: '/', label: '오늘', icon: 'alertTriangle' },
       { path: '/ops/incidents', label: '문제·사건', icon: 'fileText' },
+    ],
+  },
+  {
+    group: '파이프라인',
+    collapsible: true,
+    areas: [
       {
         path: '/ops/runs',
         label: '실행',
@@ -56,14 +63,16 @@ const NAV_GROUPS: NavGroup[] = [
           { path: '/impact/holdings', label: '결손 영향' },
         ],
       },
-      {
-        path: '/ops/chain',
-        label: '산출 흐름',
-        icon: 'trendChart',
-        subs: [{ path: '/ops/delivery', label: '게시·발번 경계' }],
-      },
+      /* Cloud Event Store 에 결과가 적재되고 Cloud 게시 상태가 확정되는 데까지 (ADR-0026) */
+      { path: '/ops/chain', label: '설명 생성 흐름', icon: 'trendChart' },
       { path: '/ops/trend', label: '추이', icon: 'trendChart' },
     ],
+  },
+  {
+    /* Cloud→테넌트 전달 경계. 테넌트 계정·설정 관리와는 다른 관심사라 그 아래 두지 않는다 */
+    group: '전달',
+    collapsible: true,
+    areas: [{ path: '/ops/delivery', label: 'Cloud 게시·발번 경계', icon: 'shield' }],
   },
   {
     group: '분석 결과',
@@ -171,13 +180,13 @@ export function AdminLayout() {
   } else if (path.startsWith('/ops/runs')) {
     pageTitle = '런·작업 귀결';
   } else if (path.startsWith('/ops/chain')) {
-    pageTitle = '설명 생산 체인';
+    pageTitle = '설명 생성 흐름';
   } else if (path.startsWith('/ops/datasets')) {
     pageTitle = '데이터셋 신선도';
   } else if (path.startsWith('/ops/trend')) {
     pageTitle = '산출 추이';
   } else if (path.startsWith('/ops/delivery')) {
-    pageTitle = '전달 경계';
+    pageTitle = 'Cloud 게시·발번 경계';
   } else if (path.startsWith('/overview')) {
     pageTitle = '레인 원장 요약';
   } else if (path === '/') {
