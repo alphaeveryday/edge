@@ -273,33 +273,6 @@ class EventStore:
             generation=int(row[9]),
         )
 
-    def fetch_minute_open_window(self, session_id: str, entity_id: str):
-        """트리거 대상 ETF 의 세션 시가가 확정된 window 좌표 — (window_start, generation) | None.
-
-        분봉 분해(ALPHA-710)의 기준가 축이다: ETF 트리거 판정이 쓴 것과 **같은**
-        시가 window 의 artifact 에서 구성종목 시가를 읽어야 두 축이 갈리지 않는다
-        (minute_session_open 은 ETF 만 담으므로 구성종목 시가는 artifact 에서 파생).
-        generation 은 원장(minute_ingestion_window)이 정본이다 — artifact 는 불변이라
-        정정 진행 중이어도 커밋된 세대는 안전하게 읽힌다.
-
-        ponytail: 시가 확정 **당시** 세대는 원장에 없어 현재 세대를 쓴다 — 확정 후
-        정정(드묾)이 끼면 ETF 시가(불변, 구세대)와 구성종목 시가(신세대)의 세대가
-        갈릴 수 있다. 해소는 minute_session_open 에 확정 세대 기록(파이프라인 후속).
-        """
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT o.source_window, w.generation, w.checksum"
-                " FROM minute_session_open o"
-                " JOIN minute_ingestion_window w"
-                "   ON w.session_id = o.session_id AND w.window_start = o.source_window"
-                " WHERE o.session_id = %s AND o.entity_id = %s AND o.status = 'OPEN'"
-                "   AND w.generation >= 1"
-                "   AND w.data_status NOT IN ('DUE', 'CLAIMED')",
-                (session_id, entity_id),
-            )
-            row = cur.fetchone()
-        return (row[0], int(row[1]), row[2]) if row else None
-
     def fetch_minute_window_meta(self, session_id: str, window_start):
         """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
 

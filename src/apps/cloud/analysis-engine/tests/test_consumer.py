@@ -87,19 +87,29 @@ def test_duplicate_is_deleted_without_rerun():
     assert rc == 0 and sqs.deleted == ["r0"] and seen == ["t1"]
 
 
-def test_returns_not_ready_defers_without_delete():
-    """분봉 window·시가 원장 미준비는 시간이 낫게 하는 실패다(ALPHA-710) — 지우지 않고
+def test_returns_not_ready_defers_without_delete(caplog):
+    """분봉 window 원장·분모 미준비는 시간이 낫게 하는 실패다(ALPHA-710) — 지우지 않고
     짧은 고정 지연으로 미룬다. 진짜 결손이면 반복이 receive 예산(16)을 태워 DLQ(근거
-    보존)로 가는 것이 맞다. 지연이 길어지면(구 배치 착지 산술) 장중 즉시성이 죽는다."""
+    보존)로 가는 것이 맞다. 지연이 길어지면(구 배치 착지 산술) 장중 즉시성이 죽는다.
+
+    로그에 **예외 메시지가 실려야 한다**: 사유가 넷(트리거 window 원장 미착지·분모
+    파티션 부재·구성종목 가격 0건·checksum 불일치)인데 고정 문구만 찍으면 어느 것인지
+    못 가린다 — 08-05 dev 에서 하루치 실패(709건)가 그렇게 조용히 흘렀다(Rule 12).
+    """
+    import logging
+
     def boom(_):
-        raise ReturnsNotReadyError("window 미착지")
+        raise ReturnsNotReadyError("직전 거래일 price_daily 파티션이 없다")
     sqs = FakeSqs([envelope("t1")])
-    rc = consume_triggers("q", max_polls=1, process_fn=boom, sqs_client=sqs)
+    with caplog.at_level(logging.INFO, logger="edge_analysis.consumer"):
+        rc = consume_triggers("q", max_polls=1, process_fn=boom, sqs_client=sqs)
     assert rc == 0
     assert sqs.deleted == []
     # 처리 전 연장(900) 뒤 짧은 지연 재배달 — 분 단위 즉시성의 상한을 고정한다.
     assert sqs.visibility == [("r0", 900), ("r0", RETURNS_RETRY_SECONDS)]
     assert RETURNS_RETRY_SECONDS <= 300, "재시도 지연이 분 단위 즉시성을 깨면 안 된다"
+    assert "직전 거래일 price_daily 파티션이 없다" in caplog.text, (
+        "사유 없이 고정 문구만 남으면 네 갈래를 로그로 못 가린다")
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():
