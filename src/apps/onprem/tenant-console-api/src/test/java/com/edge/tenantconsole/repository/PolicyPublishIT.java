@@ -48,7 +48,7 @@ class PolicyPublishIT extends AbstractPostgresIntegrationTest {
 	@Test
 	void 발행은_활성_전이와_룰_복사와_worker_소비_계약을_실테이블로_만족한다() {
 		screening.addWord("급등 확실", "HIGH", "BLOCK", actor, "127.0.0.1");
-		screening.updateCriteria(1, null, actor, "127.0.0.1");
+		screening.updateCriteria(null, 1, null, actor, "127.0.0.1");
 
 		// 활성 1건 — worker 의 활성 판정과 동일한 술어로 조회된다.
 		List<Map<String, Object>> active = jdbc.queryForList(

@@ -9,6 +9,7 @@ import com.edge.tenantconsole.dto.CriteriaResponse;
 import com.edge.tenantconsole.dto.DisclaimerRequest;
 import com.edge.tenantconsole.dto.DisclaimerResponse;
 import com.edge.tenantconsole.dto.PolicyVersionResponse;
+import com.edge.tenantconsole.dto.ScreeningRuleResponse;
 import com.edge.tenantconsole.service.ScreeningService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,6 +53,13 @@ public class ScreeningController {
 		return ApiResponse.onSuccess(null);
 	}
 
+	/** 활성 버전의 전 룰 인스턴스 — 콘솔 처리 기준 표가 판정 근거를 실 정책에서 파생한다. */
+	@GetMapping("/api/v1/screening/rules")
+	public ApiResponse<List<ScreeningRuleResponse>> listRules() {
+		return ApiResponse.onSuccess(
+				screeningService.listRules().stream().map(ScreeningRuleResponse::from).toList());
+	}
+
 	@PostMapping("/api/v1/screening/words/{id}/toggle")
 	public ApiResponse<Void> toggleWord(@PathVariable("id") long id, HttpServletRequest httpRequest) {
 		screeningService.toggleWord(id, actor(httpRequest), httpRequest.getRemoteAddr());
@@ -68,6 +76,7 @@ public class ScreeningController {
 			@RequestBody(required = false) CriteriaPatchRequest request,
 			HttpServletRequest httpRequest) {
 		screeningService.updateCriteria(
+				request == null ? null : request.autoPublishEnabled(),
 				request == null ? null : request.minSources(),
 				request == null ? null : request.minConfidence(),
 				actor(httpRequest), httpRequest.getRemoteAddr());
