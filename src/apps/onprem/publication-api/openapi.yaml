@@ -154,7 +154,10 @@ components:
             $ref: '#/components/schemas/EvidenceItem'
         disclaimer:
           type: string
-          description: 테넌트 기본 안내 문구(투자권유 아님) — 화면 필수 노출.
+          description: >-
+            활성 정책 버전(`policy_version.disclaimer_text` — 콘솔 발행분)의 안내 문구(투자권유 아님)
+            — 화면 필수 노출. 조회 시점 최신값이라 재발행 시 기존 게시분 조회에도 즉시 반영된다.
+            활성 버전이 없는 구간(첫 발행 전)에는 콘솔과 같은 기본 문구가 실린다.
         published_at:
           type: string
           format: date-time

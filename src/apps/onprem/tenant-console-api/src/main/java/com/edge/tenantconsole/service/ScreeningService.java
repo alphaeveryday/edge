@@ -47,6 +47,9 @@ public class ScreeningService {
 	// 어긋나지 않는다. 자동 제공 ON 이 기본(걸린 것만 검수), 문구는 UI 시안 기본 문구.
 	private static final int DEFAULT_MIN_SOURCES = 2;
 	private static final String DEFAULT_MIN_CONFIDENCE = "MEDIUM";
+	// DEFAULT_DISCLAIMER 를 고칠 때는 publication-api ExplanationService.DEFAULT_DISCLAIMER 도
+	// 같이 고쳐야 한다 — 서빙은 활성 정책이 없는 구간에 자기 기본값을 응답에 싣는다. 두 값이
+	// 갈리면 아무도 아무것도 바꾸지 않은 상태에서 콘솔 화면과 고객 노출 문구가 어긋난다(ALPHA-772).
 	private static final String DEFAULT_DISCLAIMER =
 			"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
 					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
