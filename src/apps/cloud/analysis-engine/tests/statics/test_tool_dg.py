@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from edge_analysis.statics import tool_dg
 from edge_analysis.statics.paneltest import MIN_N
 from edge_analysis.statics.tool_dg import _dg_catalog, _dg_probe
@@ -29,6 +31,10 @@ _DICT = tuple((f"S4100{i:03d}", f"항목{i}({'배수' if i % 3 == 0 else '수량
               for i in range(50)) + ((CODE, "종가(원)", "price", "가격,수익률"),
                                      ("S410002600", "거래정지구분", "price",
                                       "주식수,시가총액"))
+
+@pytest.fixture(autouse=True)
+def _fake_items(monkeypatch):
+    monkeypatch.setattr(tool_dg, "_items", lambda: _DICT)
 
 
 class _Lake:
