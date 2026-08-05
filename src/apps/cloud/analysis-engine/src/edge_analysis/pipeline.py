@@ -43,6 +43,7 @@ def run(
     # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
     minute_row = None
     minute_gate = None
+    open_window = None
     if settings.trigger_id:
         minute_row = store.fetch_minute_price_trigger(settings.trigger_id)
         if minute_row is None:
