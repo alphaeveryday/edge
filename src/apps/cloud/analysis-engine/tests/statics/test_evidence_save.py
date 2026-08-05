@@ -29,6 +29,7 @@ def test_evidence_lineage_migration_matches_bundle_contract():
     sql = migration.read_text(encoding="utf-8")
     assert "thread_ids TEXT[] NOT NULL DEFAULT '{}'" in sql
     assert "series_lineage JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
+    assert "ADD COLUMN IF NOT EXISTS sign SMALLINT NOT NULL DEFAULT 0" in sql
 
 
 

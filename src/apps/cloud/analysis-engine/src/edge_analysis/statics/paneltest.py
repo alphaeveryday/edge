@@ -24,15 +24,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
-from functools import lru_cache
 
 import numpy as np
 
 from ..observability import record
 from .gates import EdgeVerdict, edge_gate
-from .vocab import (ALPHA, EXPOSURE_CUT, MIN_N, RELATIONS, HypothesisTuple,
-                    Condition)
+from .vocab import ALPHA, EXPOSURE_CUT, MIN_N, RELATIONS, HypothesisTuple
 
 PERMS = 1000        # 전역 상수 - 가설별 지정 금지 (§13)
 SEED = 0
@@ -627,11 +624,13 @@ def edge_test(lake, t: HypothesisTuple, day: str,
     조절 대비로만 보고되며, 오늘 적용에만 걸린다(INUS). 조건화로 표본을 쪼개면
     검정력이 죽는다 - 라이브 6회의 지배적 실패가 그것이었다(n=23·6·6 판정불가).
     """
+    if t.outcome != "수익률":
+        return _unmeasurable(f"결과종류 {t.outcome!r} 검정은 아직 못 잰다")
     y = LAYER_Y.get(layer)
     if y is None:
         raise ValueError(f"층은 {sorted(LAYER_Y)} 중 하나다: {layer!r}")
     if t.exposure.kind == "관계":
-        return _relation_test(lake, t, day, layer=layer)
+        return _relation_test(lake, t, day, layer=layer, m_tests=m_tests)
     got = _cols(t)
     if got is None:
         return _unmeasurable(
@@ -813,7 +812,8 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       reason=dir_note)
 
 
-def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") -> EdgeReport:
+def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유",
+                   m_tests: int = 1) -> EdgeReport:
     """전이 패널 (§16): 사건 종목과 **관계 있는** 종목이 관계 없는 종목보다 부호
     방향으로 더 반응했는가. 위약 = 같은 날 비관계 종목 (날짜 층화가 공통충격을
     소거하므로 남는 대비가 정확히 '관계'다). **몫 배정은 비지원**(assignable=False) -
@@ -863,7 +863,7 @@ def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유") ->
 
     sub = ar[mask]
     p = _two_sided(_stratified_p(sub, hi, dates[mask]))
-    return EdgeReport(edge_gate(int(mask.sum()), p),
+    return EdgeReport(edge_gate(int(mask.sum()), p, alpha=ALPHA / max(m_tests, 1)),
                       int(mask.sum()), p,
                       float(sub[hi].mean()), float(sub[~hi].mean()), None,
                       cond_today="전이: 조건은 피어 측 - 오늘 셀 평가 없음",

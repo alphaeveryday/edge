@@ -154,7 +154,10 @@ def test_reduction_check_flags_today_misalignment():
     assert not r.applies_today
 
 
-def test_relation_transmission_edge_tests_but_never_assigns():
+def test_relation_transmission_edge_tests_but_never_assigns(monkeypatch):
+    from edge_analysis.statics import paneltest
+    monkeypatch.setattr(paneltest, "_stratified_p", lambda *_args: 0.02)
+
     class RelLake:
         """전이 패널 스텁: 동일산업 피어(rel=1)만 +2% 반응."""
 
@@ -169,12 +172,23 @@ def test_relation_transmission_edge_tests_but_never_assigns():
             assert "industry_name" in q                        # 전이 SQL 만 와야 한다
             return self.rows
 
+
     t = HypothesisTuple(
         conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
         channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),  outcome="수익률")
     r = edge_test(RelLake(), t, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립" and r.p < 0.05
     assert r.assignable is False and not r.applies_today       # 엣지만, 몫 배정 금지
+    corrected = edge_test(
+        RelLake(), t, "2026-06-01", cell_instrument_id="i0", m_tests=10_000)
+    assert corrected.verdict != "성립", "관계 검정도 같은 셀의 Bonferroni 보정을 받아야 한다"
+
+    unsupported = HypothesisTuple(
+        conditions=(), trigger=Trigger("점", "COMPANY.PRODUCT.LAUNCH"),
+        channel="Q수량", exposure=ExposureSource("관계", "SAME_INDUSTRY", hops=1),
+        outcome="되돌림")
+    refused = edge_test(RelLake(), unsupported, "2026-06-01", cell_instrument_id="i0")
+    assert refused.verdict == "판정불가" and "결과종류" in refused.reason
     # 어휘 밖 관계는 **튜플 생성 시점에** 죽는다 (19R) - 검정기까지 가서 '못 잰다'로
     # 되돌아오면 어휘가 열려 있다는 인상만 주고 실제로는 침묵하는 거부였다.
     with pytest.raises(VocabError, match="닫힌 관계 어휘"):
