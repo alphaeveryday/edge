@@ -278,3 +278,79 @@ button.card-head.ops-sev-head:hover {
 details[open] > .ops-detect-summary::before {
   content: '▾ ';
 }
+
+/* ── 오늘: 운영 상태 strip ── */
+.ops-lane-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: var(--sp-5);
+}
+.ops-lane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+.ops-lane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.ops-lane-figure {
+  font-size: var(--h3-size);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ops-lane-link {
+  margin-top: auto;
+  padding-top: var(--sp-3);
+}
+
+/* ── 오늘: 즉시 조치 필요(P0) ── */
+.ops-p0-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ops-p0 {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-6);
+  border-top: 1px solid var(--border-faint);
+}
+.ops-p0:first-child {
+  border-top: 0;
+}
+.ops-p0-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.ops-p0-go {
+  margin-left: auto;
+}
+.ops-p0-metric b {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 심각도 요약 타일이 링크가 됐다 — kpi 모양은 그대로 두고 밑줄만 끈다 */
+a.kpi.ops-sev {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.14s ease;
+}
+a.kpi.ops-sev:hover {
+  border-color: var(--accent-border);
+  text-decoration: none;
+}
+a.kpi.ops-sev:focus-visible {
+  box-shadow: var(--focus-ring);
+}

@@ -36,6 +36,7 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     areas: [
       { path: '/', label: '오늘', icon: 'alertTriangle' },
+      { path: '/ops/incidents', label: '문제·사건', icon: 'fileText' },
       {
         path: '/ops/runs',
         label: '실행',
@@ -165,6 +166,8 @@ export function AdminLayout() {
     pageTitle = '뉴스 계보';
   } else if (path.startsWith('/impact/holdings')) {
     pageTitle = '구성종목 결손 영향';
+  } else if (path.startsWith('/ops/incidents')) {
+    pageTitle = '문제·사건';
   } else if (path.startsWith('/ops/runs')) {
     pageTitle = '런·작업 귀결';
   } else if (path.startsWith('/ops/chain')) {

@@ -11,6 +11,7 @@ import { AdminLayout } from './layouts/AdminLayout';
 import { RequireSession } from './layouts/RequireSession';
 import { LoginPage } from './pages/LoginPage';
 import { IncidentsPage } from './pages/ops/IncidentsPage';
+import { IncidentsListPage } from './pages/ops/IncidentsListPage';
 import { RunAxisPage } from './pages/ops/RunAxisPage';
 import { ChainPage } from './pages/ops/ChainPage';
 import { DatasetPage } from './pages/ops/DatasetPage';
@@ -36,6 +37,8 @@ export function App() {
           {/* 규칙 엔진 축(ALPHA-738) — 홈은 사건 목록이고, 각 축은 사이드바의 형제 화면이다.
            * 카드 클릭은 축 화면의 해당 행으로 떨어진다(?focus=…). 이전 레인 원장 요약은 /overview. */}
           <Route path="/" element={<IncidentsPage />} />
+          {/* 오늘(요약)과 문제·사건(전체 목록)은 역할이 다른 화면이다 */}
+          <Route path="/ops/incidents" element={<IncidentsListPage />} />
           <Route path="/ops/runs" element={<RunAxisPage />} />
           <Route path="/ops/chain" element={<ChainPage />} />
           <Route path="/ops/datasets" element={<DatasetPage />} />
