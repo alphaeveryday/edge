@@ -5,6 +5,7 @@ import {
   CHECK_RESULT_LABEL,
   EVIDENCE_KIND_LABEL,
   ITEM_STATUS_LABEL,
+  matchedLabel,
   reasonLabel,
 } from '../domains/review';
 import { apiMessage } from '../api/client';
@@ -114,11 +115,13 @@ export function ReviewDetailPage() {
                 {reasonLabel(r)}
               </StatusBadge>
             ))}
+            {/* 근거는 판정기가 남긴 원값이라 게이트 판정은 기계 문자열이다(source_events=2 등)
+                — 화면에서 해석한다(ALPHA-770). 해석 못 한 형식은 원문 그대로 나온다. */}
             {reviewChecks
-              .filter((c) => c.matchedText)
+              .filter((c) => matchedLabel(c.matchedText, c.ruleType) !== null)
               .map((c, i) => (
-                <span key={i} className="col-muted">
-                  매칭: “{c.matchedText}”
+                <span key={i} className="col-muted" title={c.matchedText ?? undefined}>
+                  {matchedLabel(c.matchedText, c.ruleType)}
                 </span>
               ))}
           </div>
@@ -162,7 +165,7 @@ export function ReviewDetailPage() {
                   )}
                 </td>
                 <td className="col-muted">{e.source}</td>
-                <td className="col-muted num">
+                <td className="col-muted t-data">
                   {e.publishedAt ? new Date(e.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
                 </td>
               </tr>
@@ -235,8 +238,12 @@ export function ReviewDetailPage() {
                   </StatusBadge>
                 </td>
                 <td>{c.ruleType ? reasonLabel(c.ruleType) : '기준 판정'}</td>
-                <td className="col-muted">{c.matchedText ?? '—'}</td>
-                <td className="col-muted num">
+                {/* 해석문을 보여주되 원값은 title 로 남긴다 — 감사·장애 문의에서 판정기가
+                    남긴 문자열 그대로가 필요하다(원장 값과 대조). */}
+                <td className="col-muted" title={c.matchedText ?? undefined}>
+                  {matchedLabel(c.matchedText, c.ruleType) ?? '—'}
+                </td>
+                <td className="col-muted t-data">
                   {c.checkedAt ? new Date(c.checkedAt).toLocaleString('sv-SE').slice(0, 19) : '—'}
                 </td>
               </tr>
@@ -266,14 +273,14 @@ export function ReviewDetailPage() {
           <tbody>
             {it.history.map((h, i) => (
               <tr key={i}>
-                <td className="num">
+                <td>
                   {(h.fromStatus ? (ITEM_STATUS_LABEL[h.fromStatus] ?? h.fromStatus) : '수신') +
                     ' → ' +
                     (ITEM_STATUS_LABEL[h.toStatus] ?? h.toStatus)}
                 </td>
                 <td>{h.actorType === 'SYSTEM' ? '시스템' : (h.actorName ?? '구성원')}</td>
                 <td className="col-muted">{h.reason ?? '—'}</td>
-                <td className="col-muted num">
+                <td className="col-muted t-data">
                   {h.occurredAt ? new Date(h.occurredAt).toLocaleString('sv-SE').slice(0, 19) : '—'}
                 </td>
               </tr>

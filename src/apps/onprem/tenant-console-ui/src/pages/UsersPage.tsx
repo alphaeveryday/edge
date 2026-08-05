@@ -161,7 +161,7 @@ export function UsersPage() {
                     {m.status === 'ACTIVE' ? '활성' : '비활성'}
                   </StatusBadge>
                 </td>
-                <td className="col-muted num">{m.lastLogin ?? '—'}</td>
+                <td className="col-muted t-data">{m.lastLogin ?? '—'}</td>
                 <td style={{ textAlign: 'right' }}>
                   <div className="flex items-center justify-end gap-1">
                     {/* 자기 자신 역할 변경은 서버가 403(직무 분리, permission-matrix.md) — 버튼도 숨겨 이중 방어. */}

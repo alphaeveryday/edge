@@ -4,9 +4,8 @@ import { Icon, PageSkeleton, Select, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
 import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
 import type { ConfidenceLevel } from '../domains/explanations';
-import { CONFIDENCE_LABEL } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
-import { LoadError, StockCell } from './_shared/cells';
+import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
 
 /**
  * Review Queue 목록(ALPHA-436) — status=REVIEW_REQUIRED 논리 작업함의 실계약 조회.
@@ -90,8 +89,9 @@ export function ReviewPage() {
                     ))}
                   </div>
                 </td>
-                <td className="col-muted">{it.confidenceLevel ? (CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel] ?? it.confidenceLevel) : '—'}</td>
-                <td className="col-muted num">
+                {/* 설명 목록과 같은 배지 — 같은 값을 화면마다 다른 모양으로 그리지 않는다. */}
+                <ConfidenceCell level={it.confidenceLevel as ConfidenceLevel | null} />
+                <td className="col-muted t-data">
                   {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
                 </td>
                 <td className="text-right">
