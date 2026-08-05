@@ -107,6 +107,18 @@ resource "aws_iam_role_policy" "analysis_task" {
         Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
       },
       {
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:GetTable",
+          "glue:GetTables",
+        ]
+        Resource = ["*"]
+      },
+      {
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = ["${var.lake_bucket_arn}/${local.analysis_result_s3_prefix}*"]
