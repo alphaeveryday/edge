@@ -7,6 +7,8 @@ import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.PolicyVersionRepository;
 import com.edge.publication.repository.ServingScopeRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -19,6 +21,8 @@ import java.util.Optional;
  */
 @Service
 public class ExplanationService {
+
+	private static final Logger log = LoggerFactory.getLogger(ExplanationService.class);
 
 	/**
 	 * 정책 발행 전(활성 버전 0건) 구간의 기본 안내 문구. 문자열은 콘솔
@@ -85,9 +89,15 @@ public class ExplanationService {
 	 * 것과 같은 기본 문구로 수렴시킨다.
 	 */
 	private String resolveDisclaimer() {
-		return policyVersions.findActiveDisclaimerText()
-				.filter(text -> !text.isBlank())
-				.orElse(DEFAULT_DISCLAIMER);
+		Optional<String> active = policyVersions.findActiveDisclaimerText();
+		if (active.isPresent() && active.get().isBlank()) {
+			// 콘솔은 공백 발행을 거부하므로(ScreeningService.updateDisclaimer 의 INVALID_REQUEST)
+			// 여기 걸린다면 콘솔 밖 경로(마이그레이션·직접 SQL)가 만든 무결성 이상이다. 고객에겐
+			// 안전한 기본 문구를 내보내되(빈 면책 문구 노출이 더 나쁘다) 그 사실을 조용히 삼키지
+			// 않는다 — 폴백만 하면 콘솔의 활성 정책과 고객 노출이 갈려도 장애로 드러나지 않는다(Rule 12).
+			log.error("활성 정책의 면책 문구가 비어 있다 — 기본 문구로 대체해 응답한다");
+		}
+		return active.filter(text -> !text.isBlank()).orElse(DEFAULT_DISCLAIMER);
 	}
 
 	/**

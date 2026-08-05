@@ -119,6 +119,16 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
 	}
 
+	@Test
+	void 활성화되지_않은_버전의_문구는_쓰이지_않는다() throws Exception {
+		// WHY: 활성 술어의 두 조건 중 activated_at 쪽을 고정한다 — deactivated_at IS NULL 만
+		// 남겨도 종결분 테스트는 통과하므로, 그 절이 지워지면 아직 활성화되지 않은 버전의 문구가
+		// 고객에게 새어 나간다. 스키마는 activated_at·deactivated_at 이 함께 NULL 인 행을 허용한다.
+		insertUnactivatedPolicy(1, "아직 활성화되지 않은 문구.");
+
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+	}
+
 	private ResultActions serve() throws Exception {
 		return mvc.perform(get("/api/v1/explanations/" + TICKER)
 				.param("trade_date", TRADE_DATE.toString())
@@ -130,6 +140,14 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		jdbc.update("""
 				INSERT INTO policy_version (version_no, disclaimer_text, activated_at)
 				VALUES (?, ?, now())
+				""", versionNo, disclaimer);
+	}
+
+	/** 활성화 전 버전 — activated_at·deactivated_at 이 함께 NULL 인 행(스키마 CHECK 통과). */
+	private void insertUnactivatedPolicy(int versionNo, String disclaimer) {
+		jdbc.update("""
+				INSERT INTO policy_version (version_no, disclaimer_text)
+				VALUES (?, ?)
 				""", versionNo, disclaimer);
 	}
 
