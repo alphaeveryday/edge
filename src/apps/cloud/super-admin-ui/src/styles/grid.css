@@ -26,8 +26,7 @@
   border-radius: 4px;
 }
 
-/* 셀 본체 — 배경색은 귀결(task_outcome)이라 인라인으로 주입한다(OUTCOME_BG 가 단일 출처).
-   span 이라 display:block 을 명시한다 — 인라인이면 width/height 가 먹지 않아 납작해진다. */
+/* 박스 본체 — 일 단위 상태 6종. 색 하나에만 기대지 않게 테두리·사선·빈 칸을 함께 쓴다. */
 .gd-cell {
   display: block;
   position: relative;
@@ -36,63 +35,69 @@
   box-sizing: border-box;
   border-radius: 3px;
   border: 1px solid #d1d5db;
+  background: #e5e7eb;
 }
-/* 실행 중은 배경(귀결 축)을 덮지 않고 테두리로 겹쳐 그린다 — 두 축이 다른 사실이라서 */
-.gd-cell.gd-running {
-  border: 2px solid #3b82f6;
-}
-.gd-cell.gd-missed {
-  border: 2px solid #ef4444;
-}
-/* 계획 제외(plan_status=SKIPPED) — 안 한 게 아니라 할 일이 아니었다 */
-.gd-cell.gd-skipped {
-  background: repeating-linear-gradient(45deg, #e5e7eb 0 3px, #fff 3px 6px);
-}
-.gd-dot {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-  border: 1px solid #fff;
-}
-.gd-dot-defect {
-  top: -3px;
-  right: -3px;
-  background: #f59e0b;
-}
-/* 결손 점(우상)과 자리를 가른다 — 셀 배경 초록 위에서도 읽히도록 진초록 + 흰 테두리 */
-.gd-dot-valid {
-  bottom: -3px;
-  right: -3px;
-  background: #15803d;
-}
-/* 작업 정의 없음 — 클릭 가능한 것처럼 보이지 않아야 한다 */
-.gd-none {
-  display: block;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
-  text-align: center;
-  color: var(--gray-300);
-  cursor: default;
-}
+.gd-s-ok { background: #22c55e; }
+.gd-s-warn { background: #f59e0b; }
+.gd-s-bad { background: #ef4444; }
+/* 실행 중은 배경을 덮지 않고 테두리로 — 기존 인코딩 그대로 */
+.gd-s-run { background: #e5e7eb; border: 2px solid #3b82f6; }
+/* 계획 스킵 — 안 한 게 아니라 할 일이 아니었다 */
+.gd-s-skip { background: repeating-linear-gradient(45deg, #e5e7eb 0 3px, #fff 3px 6px); }
+/* 계획 없음 — 그 날짜에 계획 행 자체가 없다 */
+.gd-s-none { background: #fff; border-style: dashed; }
 
-/* 런 헤더 — th 안의 진짜 버튼이라 Tab·Enter·Space 가 동작한다 */
-.gd-headbtn {
-  padding: 2px 3px;
+/* 격자 표 — sticky 행 머리와 날짜 열 */
+.gd-scroll { overflow-x: auto; padding: 0 var(--sp-6) var(--sp-5); }
+.gd-table { border-collapse: collapse; font-size: var(--xs-size); }
+.gd-rowhead {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+  text-align: left;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 2px var(--sp-5) 2px 0;
+  min-width: 148px;
+}
+.gd-rowhead-sub { padding-left: var(--sp-6); color: var(--fg-2); font-weight: 400; }
+.gd-datehead {
+  padding: 2px 3px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.gd-box { padding: 2px; }
+/* 그룹 펼치기 — 진짜 버튼이라 Tab·Enter·Space 가 동작한다 */
+.gd-grouptoggle {
   border: 0;
   background: none;
+  padding: 2px 0;
   font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  white-space: pre;
+  font-weight: 600;
+  color: var(--fg-1);
   cursor: pointer;
+  text-align: left;
 }
-.gd-headbtn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: 3px;
+.gd-grouptoggle:hover { color: var(--accent); }
+.gd-grouptoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+/* 선택된 박스 — 색 외에 링으로도 표시 */
+.gd-cellbtn.gd-selected .gd-cell { box-shadow: 0 0 0 2px var(--accent); }
+
+/* 일별 상세의 수치 */
+.gd-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-5);
+  font-size: var(--sm-size);
+  color: var(--fg-2);
 }
+.gd-figure b { color: var(--fg-1); font-variant-numeric: tabular-nums; }
+.gd-figure-zero, .gd-figure-zero b { color: var(--fg-4); }
+.gd-linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.gd-linkbtn:hover { text-decoration: underline; }
 
 /* ── 범례 ── */
 .gd-legend {
