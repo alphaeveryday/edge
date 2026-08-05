@@ -37,6 +37,16 @@ export interface ScreeningRule {
   enabled: boolean;
 }
 
+/**
+ * 활성 정책 스냅샷 — 기준과 룰을 한 응답으로 받는다(ALPHA-762). 따로 조회하면 그 사이
+ * 다른 세션의 발행으로 서로 다른 버전이 한 표에 섞이고, 응답에 버전이 없어 섞인 줄도 모른다.
+ */
+export interface ActivePolicy extends AutoPublishCriteria {
+  /** 활성 버전 번호 — published=false 면 null(아직 발행 전) */
+  versionNo: number | null;
+  rules: ScreeningRule[];
+}
+
 export interface NewBannedWord {
   text: string;
   action: WordAction;

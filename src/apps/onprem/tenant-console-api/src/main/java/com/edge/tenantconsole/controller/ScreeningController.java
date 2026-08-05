@@ -5,7 +5,7 @@ import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.dto.AddWordRequest;
 import com.edge.tenantconsole.dto.BannedWordResponse;
 import com.edge.tenantconsole.dto.CriteriaPatchRequest;
-import com.edge.tenantconsole.dto.CriteriaResponse;
+import com.edge.tenantconsole.dto.ActivePolicyResponse;
 import com.edge.tenantconsole.dto.DisclaimerRequest;
 import com.edge.tenantconsole.dto.DisclaimerResponse;
 import com.edge.tenantconsole.dto.PolicyVersionResponse;
@@ -52,22 +52,20 @@ public class ScreeningController {
 		return ApiResponse.onSuccess(null);
 	}
 
-	/** 활성 버전의 전 룰 인스턴스 — 콘솔 처리 기준 표가 판정 근거를 실 정책에서 파생한다. */
-	@GetMapping("/api/v1/screening/rules")
-	public ApiResponse<List<ScreeningRuleResponse>> listRules() {
-		return ApiResponse.onSuccess(
-				screeningService.listRules().stream().map(ScreeningRuleResponse::from).toList());
-	}
-
 	@PostMapping("/api/v1/screening/words/{id}/toggle")
 	public ApiResponse<Void> toggleWord(@PathVariable("id") long id, HttpServletRequest httpRequest) {
 		screeningService.toggleWord(id, actor(httpRequest), httpRequest.getRemoteAddr());
 		return ApiResponse.onSuccess(null);
 	}
 
-	@GetMapping("/api/v1/screening/criteria")
-	public ApiResponse<CriteriaResponse> getCriteria() {
-		return ApiResponse.onSuccess(CriteriaResponse.from(screeningService.getCriteria()));
+	/**
+	 * 활성 정책 스냅샷 — 기준과 룰을 한 번에 낸다(ALPHA-762). 화면이 둘을 따로 물으면
+	 * 그 사이 발행으로 서로 다른 버전이 한 표에 섞이고, 응답에 버전이 없어 섞인 줄도 모른다.
+	 * 구 표면(GET /criteria·/rules)은 이 하나로 대체됐다 — 쓰기(PATCH /criteria)는 그대로다.
+	 */
+	@GetMapping("/api/v1/screening/policy")
+	public ApiResponse<ActivePolicyResponse> activePolicy() {
+		return ApiResponse.onSuccess(ActivePolicyResponse.from(screeningService.activePolicy()));
 	}
 
 	@PatchMapping("/api/v1/screening/criteria")

@@ -6,10 +6,9 @@ import type { RuleType, WordAction } from '../domains/screening';
 import { confidenceGateLabel, sourceGateLabel } from '../domains/screening';
 import {
   useBannedWords,
-  useCriteria,
+  useActivePolicy,
   useDisclaimer,
   usePolicyVersions,
-  useRules,
   useScreeningActions,
 } from '../domains/screening/hooks';
 import { useSession } from '../domains/session/hooks';
@@ -193,18 +192,18 @@ function NoResult({ why }: { why?: string }) {
  * ADR-0046 이 폐기한 이중 반전이다. 여기선 같은 술어를 같은 형식으로 읽히게만 한다.
  */
 function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords: () => void }) {
-  const criteriaQuery = useCriteria();
-  const rulesQuery = useRules();
+  const policyQuery = useActivePolicy();
   const { updateCriteria } = useScreeningActions();
 
   const changed = () => toast('자동 제공 기준이 변경되었습니다.');
 
-  if (criteriaQuery.isError || rulesQuery.isError) return <LoadError />;
+  if (policyQuery.isError) return <LoadError />;
   // 로드 전 select 기본값(2/MEDIUM)이 실제 설정처럼 보이지 않게 — 로드 후 렌더
-  if (criteriaQuery.isPending || rulesQuery.isPending) return <PageSkeleton />;
+  if (policyQuery.isPending) return <PageSkeleton />;
 
-  const criteria = criteriaQuery.data;
-  const rules = rulesQuery.data;
+  // 기준과 룰이 한 응답이라 같은 버전이다 — 따로 물으면 그 사이 발행으로 섞인다(ALPHA-762).
+  const criteria = policyQuery.data;
+  const rules = criteria.rules;
   const on = criteria.autoPublishEnabled;
   // 비활성 룰은 판정하지 않는다 — 요약에서 세면 걸리지 않는 조건을 걸린다고 말하게 된다.
   const activeWords = rules.filter((r) => r.ruleType === 'BANNED_WORD' && r.enabled);

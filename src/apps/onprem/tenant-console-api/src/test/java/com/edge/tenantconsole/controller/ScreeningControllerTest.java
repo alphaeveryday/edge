@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -67,7 +68,14 @@ class ScreeningControllerTest {
 
 		/** 침입 발행 시뮬레이션 — arbiter 검사 없이 활성 버전을 심는다(경쟁 트랜잭션의 커밋). */
 		PolicyVersionEntity injectActive(int versionNo) {
-			PolicyVersionEntity intruder = new PolicyVersionEntity(versionNo, "침입 문구", true, 2, "MEDIUM", 9L);
+			return injectActive(versionNo, true, 2, "MEDIUM");
+		}
+
+		/** 기준값이 다른 침입 발행 — 한 응답이 두 버전에서 조립되면 값으로 드러난다. */
+		PolicyVersionEntity injectActive(int versionNo, boolean autoPublish, Integer minSources,
+				String minConfidence) {
+			PolicyVersionEntity intruder = new PolicyVersionEntity(versionNo, "침입 문구", autoPublish,
+					minSources, minConfidence, 9L);
 			ReflectionTestUtils.setField(intruder, "policyVersionId", nextId++);
 			stored.add(intruder);
 			return intruder;
@@ -346,7 +354,7 @@ class ScreeningControllerTest {
 	}
 
 	@Test
-	void 룰_표면은_금칙어_밖_타입도_전부_보여준다() throws Exception {
+	void 정책_스냅샷은_기준과_룰을_한_번에_주고_타입을_가리지_않는다() throws Exception {
 		// WHY: /words 는 BANNED_WORD 만 투영한다 — 그 필터가 콘솔 전체의 필터였던 동안
 		// SINGLE_SOURCE·ASSERTIVE_EXPRESSION 인스턴스는 활성이어도 어느 화면에도 없어
 		// 운영자가 모르는 판정 근거였다(ALPHA-756). 처리 기준 표는 이 표면에서 파생하므로
@@ -359,16 +367,49 @@ class ScreeningControllerTest {
 
 		mvc.perform(get("/api/v1/screening/words"))
 				.andExpect(jsonPath("$.result.length()").value(1));   // 금칙어 표면은 그대로
-		mvc.perform(get("/api/v1/screening/rules"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.length()").value(3))
-				.andExpect(jsonPath("$.result[0].ruleType").value("BANNED_WORD"))
-				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
-				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
-				.andExpect(jsonPath("$.result[1].ruleType").value("SINGLE_SOURCE"))
-				.andExpect(jsonPath("$.result[1].text").doesNotExist())   // text 없는 타입은 null
-				.andExpect(jsonPath("$.result[2].ruleType").value("ASSERTIVE_EXPRESSION"))
-				.andExpect(jsonPath("$.result[2].enabled").value(false)); // 비활성도 감추지 않는다
+				// 기준과 룰이 한 응답이다 — 따로 물으면 그 사이 발행으로 서로 다른 버전이
+				// 섞이고, 응답에 버전이 없어 화면이 섞인 줄도 모른다(ALPHA-762).
+				.andExpect(jsonPath("$.result.versionNo").value(1))
+				.andExpect(jsonPath("$.result.rules.length()").value(3))
+				.andExpect(jsonPath("$.result.rules[0].ruleType").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result.rules[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result.rules[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result.rules[1].ruleType").value("SINGLE_SOURCE"))
+				// text 없는 타입은 null 이 계약이다 — 키가 통째로 빠지면 UI 와이어 계약 위반이다.
+				.andExpect(jsonPath("$.result.rules[1].text").value(nullValue()))
+				.andExpect(jsonPath("$.result.rules[2].ruleType").value("ASSERTIVE_EXPRESSION"))
+				.andExpect(jsonPath("$.result.rules[2].enabled").value(false)); // 비활성도 감추지 않는다
+	}
+
+	@Test
+	void 조회_도중_발행돼도_한_버전의_스냅샷만_낸다() throws Exception {
+		// WHY: 통합의 이유가 이 경합이다(ALPHA-762). 기준과 룰을 따로 물으면 그 사이
+		// 다른 세션의 발행으로 v1 기준 + v2 룰이 한 표에 섞이는데, 응답에 버전이 없어
+		// 화면은 섞였다는 사실조차 모른다. 활성 버전을 한 번 확인하고 그 id 로 룰을 읽으면
+		// 이후 발행과 무관하게 같은 버전이다 — 버전은 불변이라(ADR-0018) 재조회가 필요 없다.
+		addWord("급등 확실", "BLOCK");
+		long v1 = versions.findActive().orElseThrow().getPolicyVersionId();
+		// findActive 직후(= 룰 읽기 직전) 다른 세션이 v2 를 발행한 상황을 심는다.
+		// 실 발행과 같은 순서(비활성 전이 → 새 활성 INSERT)라, 여기서 활성을 다시 물으면
+		// v2 가 나온다 — 그래서 룰을 v2 로 읽으면 v1 기준 + v2 룰로 섞인다.
+		versions.afterFindActive = () -> {
+			versions.deactivate(v1);
+			// 기준값도 v1 과 다르게 심는다 — 기준만 v2 에서 읽는 부분 혼합도 값으로 드러나게.
+			PolicyVersionEntity intruder = versions.injectActive(2, false, 1, "HIGH");
+			rules.save(new ScreeningRuleEntity(intruder.getPolicyVersionId(), "BANNED_WORD",
+					"{\"text\":\"침입 금칙어\"}", "BLOCK", true, Instant.now()));
+		};
+
+		mvc.perform(get("/api/v1/screening/policy"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.versionNo").value(1))
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true))   // v2 는 false
+				.andExpect(jsonPath("$.result.minSources").value(2))              // v2 는 1
+				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"))    // v2 는 HIGH
+				.andExpect(jsonPath("$.result.rules.length()").value(1))
+				.andExpect(jsonPath("$.result.rules[0].text").value("급등 확실"));
 	}
 
 	@Test
@@ -378,17 +419,17 @@ class ScreeningControllerTest {
 		mvc.perform(get("/api/v1/screening/words"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.length()").value(0));
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
 				// 활성 정책이 없는 구간은 판정기가 NEW 를 아예 집지 않는다(정책 부재 = 진행 중단).
 				// 값은 현재 정책이 아니라 첫 발행 기반값이므로 화면이 구분할 수 있어야 한다.
 				.andExpect(jsonPath("$.result.published").value(false))
+				// 미발행은 versionNo=null 이 계약이다 — 키 부재는 계약이 아니라 형상 회귀다.
+				.andExpect(jsonPath("$.result.versionNo").value(nullValue()))
 				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true))
 				.andExpect(jsonPath("$.result.minSources").value(2))
-				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"));
-		mvc.perform(get("/api/v1/screening/rules"))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.length()").value(0));
+				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"))
+				.andExpect(jsonPath("$.result.rules.length()").value(0));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.text").isNotEmpty());
@@ -428,11 +469,11 @@ class ScreeningControllerTest {
 		ReflectionTestUtils.setField(noGate, "activatedAt", Instant.now());
 		versions.stored.add(noGate);
 
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.published").value(true))          // 활성 버전은 있다
-				.andExpect(jsonPath("$.result.minSources").doesNotExist())      // 2 로 덮이지 않는다
-				.andExpect(jsonPath("$.result.minConfidence").doesNotExist())
+				.andExpect(jsonPath("$.result.minSources").value(nullValue()))  // 2 로 덮이지 않는다
+				.andExpect(jsonPath("$.result.minConfidence").value(nullValue()))
 				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true));
 	}
 
@@ -450,7 +491,7 @@ class ScreeningControllerTest {
 		assertThat(off.getMinSourceCount()).isEqualTo(2);        // 기준은 그대로 실려 있다
 		assertThat(off.getMinConfidence()).isEqualTo("MEDIUM");
 
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(jsonPath("$.result.autoPublishEnabled").value(false))
 				.andExpect(jsonPath("$.result.minSources").value(2));
 
