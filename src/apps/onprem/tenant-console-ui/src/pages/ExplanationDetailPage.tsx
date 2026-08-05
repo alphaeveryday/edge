@@ -203,7 +203,7 @@ export function ExplanationDetailPage() {
                   )}
                 </td>
                 <td className="col-muted">{ev.source}</td>
-                <td className="col-muted num">{ev.time}</td>
+                <td className="col-muted t-data">{ev.time}</td>
               </tr>
             ))}
           </tbody>

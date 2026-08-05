@@ -138,7 +138,7 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
                     <span className="col-muted">{w.active ? '활성' : '비활성'}</span>
                   )}
                 </td>
-                <td className="col-muted num">{w.registeredAt}</td>
+                <td className="col-muted t-data">{w.registeredAt}</td>
               </tr>
             ))}
           </tbody>
@@ -500,7 +500,7 @@ function HistoryTab() {
           {versions.map((v) => (
             <tr key={v.versionNo}>
               <td className="num">v{v.versionNo}</td>
-              <td className="col-muted num">{v.publishedAt ? new Date(v.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}</td>
+              <td className="col-muted t-data">{v.publishedAt ? new Date(v.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}</td>
               <td>{v.publishedBy ?? '—'}</td>
               <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
               {/* 이력 셀도 설정 화면과 같은 어휘로 — 헤더가 축만 말하므로 조건은 값이 진다.
