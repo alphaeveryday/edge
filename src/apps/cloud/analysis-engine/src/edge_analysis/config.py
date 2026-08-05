@@ -33,6 +33,16 @@ class ReturnsNotReadyError(PipelineError):
     """
 
 
+class RouteLockedError(PipelineError):
+    """같은 route 를 다른 소비자가 처리 중이다 — 실패가 아니라 양보다(ALPHA-779).
+
+    가시성 만료로 재배달된 메시지가 아직 run 이 없는 프리플라이트를 통과해 LLM 을
+    이중 과금하는 경로를 advisory lock 이 막고, 진 쪽이 이 타입으로 빠진다. 소비자가
+    이 타입만 **지우지 않고 짧게 되돌리는** 처방으로 가른다 — 지우면 이긴 쪽이 죽었을 때
+    재배달될 메시지가 없다.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class PgConfig:
     """Cloud Event Store(Postgres) 접속 설정."""
