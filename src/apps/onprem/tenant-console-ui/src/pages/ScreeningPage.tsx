@@ -1,9 +1,16 @@
 import { useState } from 'react';
 import { PageSkeleton, Select, StatusBadge, Toggle, toast } from 'ui-kit';
-import type { RiskLevel } from '../domains/explanations';
-import { CONFIDENCE_LABEL, RISK_LABEL, RISK_TONE } from '../domains/explanations';
-import type { WordAction } from '../domains/screening';
-import { useBannedWords, useCriteria, useDisclaimer, usePolicyVersions, useScreeningActions } from '../domains/screening/hooks';
+import type { RiskLevel, ServeStatus } from '../domains/explanations';
+import { CONFIDENCE_LABEL, RISK_LABEL, RISK_TONE, STATUS_LABEL, STATUS_TONE } from '../domains/explanations';
+import type { RuleType, WordAction } from '../domains/screening';
+import {
+  useBannedWords,
+  useCriteria,
+  useDisclaimer,
+  usePolicyVersions,
+  useRules,
+  useScreeningActions,
+} from '../domains/screening/hooks';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
 
@@ -36,7 +43,7 @@ export function ScreeningPage() {
       </div>
 
       {tab === 'words' && <WordsTab canEdit={canEdit} />}
-      {tab === 'rules' && <RulesTab canEdit={canEdit} />}
+      {tab === 'rules' && <RulesTab canEdit={canEdit} onManageWords={() => setTab('words')} />}
       {tab === 'disclaimer' && <DisclaimerTab canEdit={canEdit} />}
       {tab === 'history' && <HistoryTab />}
     </div>
@@ -153,114 +160,243 @@ function WordsTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-function RulesTab({ canEdit }: { canEdit: boolean }) {
-  const { data: criteria, isError, isPending } = useCriteria();
+/** 룰 타입 → 점검 항목 이름. 금칙어는 처리 방식별 요약 행이 따로 담당한다. */
+const RULE_TYPE_ITEM: Record<Exclude<RuleType, 'BANNED_WORD'>, string> = {
+  SINGLE_SOURCE: '단일 출처 룰',
+  ASSERTIVE_EXPRESSION: '단정 표현 룰',
+};
+
+/** 걸렸을 때 도달하는 원장 상태 — 설명 목록·검수 큐가 쓰는 배지 그대로다(어휘도 톤도
+ * STATUS_LABEL·STATUS_TONE 이 SSOT). 이 표만의 칩을 새로 만들면 같은 상태에 두 모양이 생긴다. */
+function ResultBadge({ status }: { status: ServeStatus }) {
+  return (
+    <StatusBadge tone={STATUS_TONE[status]} dot={false}>
+      {STATUS_LABEL[status]}
+    </StatusBadge>
+  );
+}
+
+/** 결과 없음 — 왜 없는지를 옆에 단다. 빈 칸만 두면 로딩 실패와 구분되지 않는다. */
+function NoResult({ why }: { why: string }) {
+  return (
+    <span className="col-muted">
+      — <span style={{ fontSize: 11 }}>{why}</span>
+    </span>
+  );
+}
+
+/**
+ * 점검 처리 기준 — "무엇이 걸리면 어떻게 되는가"를 활성 정책에서 파생한 한 표다(ALPHA-756).
+ * 이전 화면은 검수·차단 기준을 하드코딩 문구로 그려 설정과 어긋났다(확신도를 미설정해도
+ * "확신도 기준 미달"이 남고, 등록 UI 가 없는 단정 표현이 기준처럼 보였다). 표의 모든 행은
+ * criteria(policy_version 게이트)·rules(screening_rule 인스턴스)·엔진 고정 판정 중 하나에서
+ * 나온다 — 정책에 없는 조건은 화면에도 없다.
+ *
+ * 세 열은 항목 이름 · 설정값 · 도달 상태다. 결과 어휘는 원장 상태 라벨(STATUS_LABEL)을 그대로
+ * 쓴다 — 같은 상태를 화면마다 다른 이름으로 부르지 않는다. 설정값은 걸리는 쪽 극성이다
+ * ("1개 이하면 걸림"): 표 전체가 "걸리면 자동 제공 제외"라 그쪽이 일관된다. 버전 이력 표는
+ * 자동 제공 기준의 기록이라 반대 극성("2개 이상")을 그대로 둔다 — 통일하면 하나가 거짓이 된다.
+ *
+ * 게이트(충족해야 자동 제공)와 룰(걸리면 검수·차단)은 저장 계층에서 합치지 않는다 —
+ * ADR-0046 이 폐기한 이중 반전이다. 여기선 같은 술어를 같은 형식으로 읽히게만 한다.
+ */
+function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords: () => void }) {
+  const criteriaQuery = useCriteria();
+  const rulesQuery = useRules();
   const { updateCriteria } = useScreeningActions();
 
   const changed = () => toast('자동 제공 기준이 변경되었습니다.');
 
-  if (isError) return <LoadError />;
+  if (criteriaQuery.isError || rulesQuery.isError) return <LoadError />;
   // 로드 전 select 기본값(2/MEDIUM)이 실제 설정처럼 보이지 않게 — 로드 후 렌더
-  if (isPending) return <PageSkeleton />;
+  if (criteriaQuery.isPending || rulesQuery.isPending) return <PageSkeleton />;
+
+  const criteria = criteriaQuery.data;
+  const rules = rulesQuery.data;
+  const on = criteria.autoPublishEnabled;
+  // 비활성 룰은 판정하지 않는다 — 요약에서 세면 걸리지 않는 조건을 걸린다고 말하게 된다.
+  const activeWords = rules.filter((r) => r.ruleType === 'BANNED_WORD' && r.enabled);
+  const blockWords = activeWords.filter((r) => r.action === 'BLOCK').length;
+  const reviewWords = activeWords.length - blockWords;
+  const otherRules = rules.filter((r) => r.ruleType !== 'BANNED_WORD');
+  /**
+   * 결과 칸. 항목이 비었으면(금칙어 0건·기준 미설정) 그 사유를 대고, 아니면 도달 상태를 낸다.
+   * 스위치는 여기서 보지 않는다 — 룰(금칙어)과 UNCERTAIN 은 평가기에서 스위치보다 **먼저**
+   * 판정되므로 스위치를 꺼도 그대로 적용된다(PolicyEvaluator 순서: 룰 → UNCERTAIN → 스위치
+   * → 게이트). 스위치에 무력화되는 건 게이트 두 행뿐이라 그건 gateResult 가 따로 다룬다.
+   */
+  const result = (configured: boolean, status: ServeStatus, emptyWhy: string) =>
+    configured ? <ResultBadge status={status} /> : <NoResult why={emptyWhy} />;
+
+  /** 게이트 행(출처 수·확신도) — 스위치가 꺼져 있으면 평가기가 여기까지 오지 않는다. */
+  const gateResult = (configured: boolean, emptyWhy: string) => {
+    if (!configured) return <NoResult why={emptyWhy} />;
+    return on ? <ResultBadge status="REVIEW_REQUIRED" /> : <NoResult why="자동 제공 꺼짐" />;
+  };
 
   return (
-    <div className="grid grid-cols-3 gap-3">
-      <div className="card card-pad" style={{ borderTop: '2px solid var(--up)' }}>
-        <div className="flex items-center gap-1.5">
-          <span className="dot dot-up" />
-          <span className="t-label" style={{ color: 'var(--fg-1)' }}>자동 제공 기준</span>
+    <div className="flex flex-col gap-3">
+      {!criteria.published && (
+        // 활성 정책이 없으면 판정기가 NEW 를 아예 집지 않는다(BundleScreener: 정책 부재 =
+        // 진행 중단). 아래 값은 현재 정책이 아니라 첫 발행에 쓰일 기반값이라, 결론 행이
+        // "자동 제공"이라 말하면 거짓이 된다.
+        <div className="card card-pad" style={{ borderLeft: '2px solid var(--warn)', fontSize: 12 }}>
+          <span className="chip chip-warn">발행 전</span>
+          <span style={{ color: 'var(--fg-2)', marginLeft: 8 }}>
+            아직 발행된 정책이 없어 설명 판정이 진행되지 않습니다. 아래는 첫 발행에 쓰일 기반값입니다 —
+            무엇이든 변경하면 첫 버전이 발행됩니다.
+          </span>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--fg-2)', margin: '10px 0 14px', lineHeight: 1.6 }}>
-          아래 조건을 모두 충족하면 검수 없이 즉시 제공됩니다.
-        </div>
-        <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
-          {/* 라벨은 축(출처 수·확신도)만 지고 조건("이상")은 값이 진다 — 드롭다운은 닫힌
-              상태가 대부분이라 값이 자족적이어야 한다. 라벨에 "최소"를 두면 "2개 이상"과
-              조건어가 겹친다(ALPHA-755). */}
-          <div className="flex items-center justify-between gap-2">
-            <span style={{ color: 'var(--fg-2)' }}>출처 수</span>
-            <Select
-              aria-label="출처 수"
-              width={140}
-              disabled={!canEdit}
-              value={String(criteria?.minSources ?? 2)}
-              onChange={(v) =>
-                updateCriteria.mutate({ minSources: Number(v) as 1 | 2 | 3 }, { onSuccess: changed })
-              }
-              options={[
-                { value: '1', label: '1개 이상' },
-                { value: '2', label: '2개 이상' },
-                { value: '3', label: '3개 이상' },
-              ]}
+      )}
+      <div className="card">
+      <div className="card-head">
+        <span className="t-label">점검 처리 기준</span>
+        {/* 스위치는 항목이 아니라 표 전체를 지배하는 값이라 행이 아니라 헤더에 둔다. */}
+        <span className="flex items-center gap-2" style={{ fontSize: 12, color: 'var(--fg-2)' }}>
+          자동 제공
+          {canEdit ? (
+            <Toggle
+              on={on}
+              onToggle={() => updateCriteria.mutate({ autoPublishEnabled: !on }, { onSuccess: changed })}
+              aria-label="자동 제공 사용 여부"
             />
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span style={{ color: 'var(--fg-2)' }}>확신도</span>
-            {/* 미설정(NULL)=게이트 꺼짐은 placeholder 로만 보이고 선택 불가다 — 화면이 켜진
-                것처럼 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
-                (해제 어휘 없음 — 발행 모델 YAGNI 결정). 트리거 폭은 출처 수와 맞춘다.
-                최상위도 "높음만"이 아니라 "높음 이상"이다 — 판정은 순위 비교 하나뿐이고
-                (PolicyEvaluator.confidenceRank), 등급이 늘면 "만"은 거짓이 된다. */}
-            <Select
-              aria-label="확신도"
-              width={140}
-              disabled={!canEdit}
-              placeholder="미설정 (게이트 꺼짐)"
-              value={criteria?.minConfidence ?? ''}
-              onChange={(v) =>
-                updateCriteria.mutate({ minConfidence: v as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
-              }
-              options={[
-                { value: 'MEDIUM', label: '중간 이상' },
-                { value: 'HIGH', label: '높음 이상' },
-              ]}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <span style={{ color: 'var(--fg-2)' }}>활성 금칙어 미포함</span>
-            <span className="chip">필수</span>
-          </div>
-        </div>
+          ) : null}
+          <span style={{ color: 'var(--fg-3)' }}>{on ? '사용' : '전건 검수'}</span>
+        </span>
       </div>
-
-      <div className="card card-pad" style={{ borderTop: '2px solid var(--warn)' }}>
-        <div className="flex items-center gap-1.5">
-          <span className="dot dot-warn" />
-          <span className="t-label" style={{ color: 'var(--fg-1)' }}>검수 필요 기준</span>
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--fg-2)', margin: '10px 0 14px', lineHeight: 1.6 }}>
-          하나라도 해당하면 검수 대기열로 이동합니다.
-        </div>
-        <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
-          {['단일 출처 기반 설명', '단정 표현 감지', '원인 미확인(UNCERTAIN) 판정', '확신도 기준 미달'].map((label) => (
-            <div key={label} className="flex items-center justify-between">
-              <span style={{ color: 'var(--fg-2)' }}>{label}</span>
-              <span className="chip chip-warn">검수</span>
-            </div>
-          ))}
-        </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-3)', padding: '10px 12px 0' }}>
+        {on
+          ? '항목에 하나라도 걸리면 자동 제공되지 않습니다.'
+          : '스위치가 꺼져 있어 어디에도 걸리지 않은 설명까지 검수 대기열로 갑니다 — 금칙어·원인 미확인은 그대로 적용됩니다.'}
       </div>
-
-      <div className="card card-pad" style={{ borderTop: '2px solid var(--down)' }}>
-        <div className="flex items-center gap-1.5">
-          <span className="dot dot-down" />
-          <span className="t-label" style={{ color: 'var(--fg-1)' }}>점검 차단 기준</span>
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--fg-2)', margin: '10px 0 14px', lineHeight: 1.6 }}>
-          하나라도 해당하면 제공이 자동 차단됩니다.
-        </div>
-        <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
-          {['처리 방식 ‘점검 차단’ 금칙어 포함', '리딩·매수 추천 표현', '근거 데이터 없음'].map((label) => (
-            <div key={label} className="flex items-center justify-between">
-              <span style={{ color: 'var(--fg-2)' }}>{label}</span>
-              <span className="chip chip-down">점검 차단</span>
-            </div>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>점검 항목</th>
+            <th>설정</th>
+            <th>결과</th>
+          </tr>
+        </thead>
+        <tbody>
+          {/* 결과가 센 순 — 차단이 위, 검수가 가운데, 자동 제공이 결론 행으로 맨 아래. */}
+          <tr>
+            <td className="font-semibold">차단 금칙어</td>
+            <td>
+              <button className="btn w-[140px] justify-center" onClick={onManageWords}>
+                금칙어 관리
+              </button>
+            </td>
+            <td>{result(blockWords > 0, 'BLOCKED', '활성 0건')}</td>
+          </tr>
+          <tr>
+            <td className="font-semibold">검수 금칙어</td>
+            <td>
+              <button className="btn w-[140px] justify-center" onClick={onManageWords}>
+                금칙어 관리
+              </button>
+            </td>
+            <td>{result(reviewWords > 0, 'REVIEW_REQUIRED', '활성 0건')}</td>
+          </tr>
+          <tr>
+            <td className="font-semibold">출처 수</td>
+            <td>
+              {/* 설정 컨트롤 폭은 전부 140px 로 맞춘다 — 드롭다운과 버튼의 총폭이 같아야
+                  세로선이 선다(Select 는 트리거 상자에 box-sizing: border-box 를 건다). */}
+              <Select
+                aria-label="출처 수"
+                width={140}
+                disabled={!canEdit}
+                placeholder="기준 없음"
+                value={criteria.minSources == null ? '' : String(criteria.minSources)}
+                onChange={(v) =>
+                  updateCriteria.mutate({ minSources: Number(v) as 1 | 2 | 3 }, { onSuccess: changed })
+                }
+                options={[
+                  { value: '1', label: '출처 없음' },
+                  { value: '2', label: '1개 이하' },
+                  { value: '3', label: '2개 이하' },
+                ]}
+              />
+            </td>
+            <td>{gateResult(criteria.minSources != null, '기준 미설정')}</td>
+          </tr>
+          <tr>
+            <td className="font-semibold">확신도</td>
+            <td>
+              {/* 미설정(NULL)=게이트 꺼짐은 placeholder 로만 보이고 선택 불가다 — 설정은
+                  단방향(해제 어휘 없음, ALPHA-634 의 발행 모델 결정). 어휘가 MEDIUM·HIGH 뿐인
+                  것은 DB CHECK 이고, LOW 는 미설정과 실질 동일이라 애초에 빠져 있다. */}
+              <Select
+                aria-label="확신도"
+                width={140}
+                disabled={!canEdit}
+                placeholder="기준 없음"
+                value={criteria.minConfidence ?? ''}
+                onChange={(v) =>
+                  updateCriteria.mutate({ minConfidence: v as 'MEDIUM' | 'HIGH' }, { onSuccess: changed })
+                }
+                options={[
+                  { value: 'MEDIUM', label: '보류 이하' },
+                  { value: 'HIGH', label: '중간 이하' },
+                ]}
+              />
+            </td>
+            <td>
+              {gateResult(criteria.minConfidence != null, '기준 미설정')}
+            </td>
+          </tr>
+          <tr>
+            {/* 엔진이 스스로 원인 미확인으로 판정한 설명은 정책 설정과 무관하게 항상 검수다
+                (PolicyEvaluator — ADR-0046 의 "모호성은 전부 검수" 결정). 확신도와 별개 축이라
+                한 행을 유지한다 — 지금 엔진이 둘을 함께 내보내 겹쳐 보일 뿐이다(ALPHA-759). */}
+            <td className="font-semibold">원인 미확인</td>
+            <td className="col-muted">항상 검수 · 확신도 무관</td>
+            <td>{result(true, 'REVIEW_REQUIRED', '')}</td>
+          </tr>
+          {/* 금칙어 밖 룰(단일 출처·단정 표현)은 인스턴스가 있을 때만 행이 된다 — 콘솔에
+              만들 경로가 없어 현재는 0건이고, 없는 것을 기준처럼 그리지 않는다. */}
+          {otherRules.map((rule) => (
+            <tr key={rule.id} style={{ opacity: rule.enabled ? 1 : 0.45 }}>
+              <td className="font-semibold">
+                {RULE_TYPE_ITEM[rule.ruleType as Exclude<RuleType, 'BANNED_WORD'>]}
+              </td>
+              <td className="col-muted">
+                {rule.enabled ? '활성 · 고정' : '비활성 · 고정'}
+                {rule.text && ` · ‘${rule.text}’`}
+                {/* 텍스트 매칭 타입인데 params.text 가 없으면 판정기가 예외로 멈춘다
+                    (PolicyEvaluator.match — 계약 위반). 조용히 정상처럼 그리지 않는다. */}
+                {rule.ruleType === 'ASSERTIVE_EXPRESSION' && !rule.text && (
+                  <span style={{ color: 'var(--down)' }}> · 표현 없음 — 판정 불가</span>
+                )}
+              </td>
+              <td>
+                {result(rule.enabled, rule.action === 'BLOCK' ? 'BLOCKED' : 'REVIEW_REQUIRED', '비활성')}
+              </td>
+            </tr>
           ))}
-        </div>
+          <tr>
+            <td className="col-muted">어느 항목에도 걸리지 않음</td>
+            <td className="col-muted">—</td>
+            <td>
+              {!criteria.published ? (
+                <NoResult why="발행 전" />
+              ) : (
+                <ResultBadge status={on ? 'AUTO_PUBLISHED' : 'REVIEW_REQUIRED'} />
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--fg-3)', padding: '10px 12px' }}>
+        {STATUS_LABEL.BLOCKED}은 검수 대기열에 뜨지 않습니다 — 필요하면 설명 상세에서 검수로 이관할 수 있습니다.
+        확신도 기준을 두면 확신도가 <b>미산정</b>인 설명도 함께 걸립니다(정보가 없으면 미달로 봅니다).
+        한 설명이 여러 항목에 동시에 걸리면 {STATUS_LABEL.BLOCKED}이 {STATUS_LABEL.REVIEW_REQUIRED}보다 우선합니다.
+      </div>
       </div>
     </div>
   );
 }
+
 
 function DisclaimerTab({ canEdit }: { canEdit: boolean }) {
   const { data: saved, isError, isPending } = useDisclaimer();

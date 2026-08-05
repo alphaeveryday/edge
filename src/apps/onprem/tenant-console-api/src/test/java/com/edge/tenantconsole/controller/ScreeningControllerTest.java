@@ -294,6 +294,32 @@ class ScreeningControllerTest {
 	}
 
 	@Test
+	void 룰_표면은_금칙어_밖_타입도_전부_보여준다() throws Exception {
+		// WHY: /words 는 BANNED_WORD 만 투영한다 — 그 필터가 콘솔 전체의 필터였던 동안
+		// SINGLE_SOURCE·ASSERTIVE_EXPRESSION 인스턴스는 활성이어도 어느 화면에도 없어
+		// 운영자가 모르는 판정 근거였다(ALPHA-756). 처리 기준 표는 이 표면에서 파생하므로
+		// 여기서 타입을 가리면 표가 다시 정책 일부만 말하게 된다.
+		addWord("급등 확실", "HIGH", "BLOCK");
+		long activeVersion = versions.findActive().orElseThrow().getPolicyVersionId();
+		rules.save(new ScreeningRuleEntity(activeVersion, "SINGLE_SOURCE", "{}", "REVIEW", true, Instant.now()));
+		rules.save(new ScreeningRuleEntity(activeVersion, "ASSERTIVE_EXPRESSION",
+				"{\"text\":\"확실합니다\"}", "BLOCK", false, Instant.now()));
+
+		mvc.perform(get("/api/v1/screening/words"))
+				.andExpect(jsonPath("$.result.length()").value(1));   // 금칙어 표면은 그대로
+		mvc.perform(get("/api/v1/screening/rules"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(3))
+				.andExpect(jsonPath("$.result[0].ruleType").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result[1].ruleType").value("SINGLE_SOURCE"))
+				.andExpect(jsonPath("$.result[1].text").doesNotExist())   // text 없는 타입은 null
+				.andExpect(jsonPath("$.result[2].ruleType").value("ASSERTIVE_EXPRESSION"))
+				.andExpect(jsonPath("$.result[2].enabled").value(false)); // 비활성도 감추지 않는다
+	}
+
+	@Test
 	void 발행_전_GET은_온보딩_기반값을_투영한다() throws Exception {
 		// WHY: 첫 발행 전에도 화면은 기준을 보여줘야 한다 — 보이는 값이 곧 첫 발행의
 		// 기반값이라 화면과 실제 발행 결과가 어긋나지 않는다.
@@ -302,8 +328,15 @@ class ScreeningControllerTest {
 				.andExpect(jsonPath("$.result.length()").value(0));
 		mvc.perform(get("/api/v1/screening/criteria"))
 				.andExpect(status().isOk())
+				// 활성 정책이 없는 구간은 판정기가 NEW 를 아예 집지 않는다(정책 부재 = 진행 중단).
+				// 값은 현재 정책이 아니라 첫 발행 기반값이므로 화면이 구분할 수 있어야 한다.
+				.andExpect(jsonPath("$.result.published").value(false))
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true))
 				.andExpect(jsonPath("$.result.minSources").value(2))
 				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"));
+		mvc.perform(get("/api/v1/screening/rules"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.length()").value(0));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.text").isNotEmpty());
@@ -331,6 +364,53 @@ class ScreeningControllerTest {
 				.andExpect(status().isOk());
 		// 200 만으로는 저장을 증명 못 한다 — 발행된 활성 버전에 HIGH 가 실려야 한다(Rule 9).
 		assertThat(versions.findActive().orElseThrow().getMinConfidence()).isEqualTo("HIGH");
+	}
+
+	@Test
+	void 출처_수_미설정은_기본값으로_위장하지_않는다() throws Exception {
+		// WHY: DDL 이 min_source_count NULL 을 "출처 수 조건 없음"으로 정의하고 평가기도 null 이면
+		// 게이트를 건너뛴다. 화면이 이걸 기본값 2 로 채워 보여주면 없는 조건을 있다고 말하게 되고,
+		// 처리 기준 표는 그 값으로 결과까지 단언한다(ALPHA-756). 확신도와 같은 처리여야 한다.
+		PolicyVersionEntity noGate = new PolicyVersionEntity(1, "문구", true, null, null, 2L);
+		ReflectionTestUtils.setField(noGate, "policyVersionId", 1L);   // IDENTITY 채번 대역
+		ReflectionTestUtils.setField(noGate, "activatedAt", Instant.now());
+		versions.stored.add(noGate);
+
+		mvc.perform(get("/api/v1/screening/criteria"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.published").value(true))          // 활성 버전은 있다
+				.andExpect(jsonPath("$.result.minSources").doesNotExist())      // 2 로 덮이지 않는다
+				.andExpect(jsonPath("$.result.minConfidence").doesNotExist())
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true));
+	}
+
+	@Test
+	void 자동_제공_스위치는_끄고_다시_켤_수_있고_기준은_보존된다() throws Exception {
+		// WHY: 컬럼·평가기 분기·이력 표시는 있는데 조작 수단이 없어 앱 경로로는 항상 켜짐이었다
+		// (ALPHA-756). "전건 검수 운영은 테넌트 선택지"(tenant-console.md)가 코드로 성립하려면
+		// 끌 수 있어야 하고, 끈 동안에도 기준이 보존돼야 다시 켤 때 같은 정책으로 돌아온다.
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"autoPublishEnabled\":false}"))
+				.andExpect(status().isOk());
+
+		PolicyVersionEntity off = versions.findActive().orElseThrow();
+		assertThat(off.isAutoPublishEnabled()).isFalse();
+		assertThat(off.getMinSourceCount()).isEqualTo(2);        // 기준은 그대로 실려 있다
+		assertThat(off.getMinConfidence()).isEqualTo("MEDIUM");
+
+		mvc.perform(get("/api/v1/screening/criteria"))
+				.andExpect(jsonPath("$.result.autoPublishEnabled").value(false))
+				.andExpect(jsonPath("$.result.minSources").value(2));
+
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{\"autoPublishEnabled\":true}"))
+				.andExpect(status().isOk());
+		assertThat(versions.findActive().orElseThrow().isAutoPublishEnabled()).isTrue();
+
+		// 빈 PATCH 는 여전히 400 — 스위치 필드가 늘었다고 허위 발행이 열리면 안 된다.
+		mvc.perform(patch("/api/v1/screening/criteria").session(session())
+						.contentType(MediaType.APPLICATION_JSON).content("{}"))
+				.andExpect(status().isBadRequest());
 	}
 
 	@Test
