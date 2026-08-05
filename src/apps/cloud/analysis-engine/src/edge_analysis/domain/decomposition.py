@@ -55,9 +55,3 @@ def compute_decomposition(
         n_constituents=len(holdings),
     )
 
-
-def decide_route(decomp: Decomposition) -> tuple[str, bool]:
-    """라우트 코드와 이벤트(뉴스) 검색 필요 여부를 반환한다."""
-    if decomp.top1 is not None and decomp.top1 >= CONCENTRATION_THRESHOLD:
-        return "CONCENTRATED", True
-    return "COMMON_FACTOR", True

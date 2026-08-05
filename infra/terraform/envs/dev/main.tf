@@ -496,6 +496,7 @@ module "data_pipeline" {
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
 
+
   # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(15:00·15:30·23:50 KST 평일). 시장 SFN 의 뉴스 스텝
   # 제거와 **같은 apply** 로 켠다 — 같은 event 를 두 SFN 이 동시에 쓰는 겹침 창이 구조적으로
   # 생기지 않는다(PR1 이 DISABLED 로 세워 둔 컷오버 게이트). 수동 e2e 실증(07-27,

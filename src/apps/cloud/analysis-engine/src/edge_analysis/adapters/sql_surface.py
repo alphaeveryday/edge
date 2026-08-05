@@ -131,22 +131,30 @@ def _guard(q: str) -> str:
     return s.replace("%", "%%")
 
 
-def _views() -> str:
-    """시점으로 잘린 뷰 정의. **클램프가 여기 있으므로 질의가 우회할 수 없다.**"""
-    return """
+def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
+           prefix: str = "") -> str:
+    """시점으로 잘린 뷰 정의. **클램프가 여기 있으므로 질의가 우회할 수 없다.**
+
+    방언 파라미터 (18R): 인과 패널(`statics/*`)이 DuckDB 세션에서 **같은 표면**을
+    쓰도록 시점 표현식과 테이블 접두사를 인자로 받는다. 표면이 둘로 갈리면 한쪽만
+    클램프가 빠지고, 그게 정확히 이 파일이 막으려던 사고다.
+      postgres  _views()                                    → %(as_of)s · 접두사 없음
+      duckdb    _views("TIMESTAMP '…'", "DATE '…'", "rdb.public.")
+    """
+    return f"""
     _cls AS (
         SELECT DISTINCT ON (ic.instrument_id)
                ic.instrument_id, ic.sector_name, ic.industry_name,
                ic.market_cap, ic.listing_market
-        FROM instrument_classification ic
-        WHERE ic.as_of_date <= %(trade_date)s
+        FROM {prefix}instrument_classification ic
+        WHERE ic.as_of_date <= {trade_date}
         ORDER BY ic.instrument_id, ic.as_of_date DESC
     ),
     v_instrument AS (
         SELECT i.instrument_id, i.ticker, i.instrument_type, e.display_name,
                c.sector_name, c.industry_name, c.market_cap, c.listing_market
-        FROM instrument i
-        LEFT JOIN entity e ON e.entity_id = i.instrument_id
+        FROM {prefix}instrument i
+        LEFT JOIN {prefix}entity e ON e.entity_id = i.instrument_id
         LEFT JOIN _cls c ON c.instrument_id = i.instrument_id
     ),
     _title AS (
@@ -156,7 +164,7 @@ def _views() -> str:
         -- 와 같다(evidence_id 최소) — 두 경로가 같은 제목을 보여야 한다.
         SELECT DISTINCT ON (ev.source_event_id)
                ev.source_event_id, ev.evidence_text AS title
-        FROM event_evidence ev
+        FROM {prefix}event_evidence ev
         WHERE ev.evidence_type = 'TITLE'
         ORDER BY ev.source_event_id, ev.evidence_id
     ),
@@ -166,13 +174,13 @@ def _views() -> str:
                se.event_type_code, se.predicate_code, se.lifecycle_stage,
                se.event_status, t.title,
                etl.thread_id, etl.novelty_status
-        FROM source_event se
-        JOIN event_argument ea ON ea.source_event_id = se.source_event_id
-        LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id
+        FROM {prefix}source_event se
+        JOIN {prefix}event_argument ea ON ea.source_event_id = se.source_event_id
+        LEFT JOIN {prefix}event_thread_link etl ON etl.source_event_id = se.source_event_id
         LEFT JOIN _title t ON t.source_event_id = se.source_event_id
         WHERE se.event_status = 'ACTIVE'
           AND se.event_date IS NOT NULL
-          AND se.available_at <= %(as_of)s
+          AND se.available_at <= {as_of}
     ),
     v_measure AS (
         -- 컬럼 이름은 `event_measure` 실물이다(V202607242020). `measure_code`·
@@ -181,31 +189,47 @@ def _views() -> str:
         -- 이름은 도메인 모델(`Measure`)과 eventstore 조회에 맞춘다.
         SELECT em.source_event_id, em.role_code, em.value, em.unit, em.basis,
                em.value_source, em.surface
-        FROM event_measure em
-        JOIN source_event se ON se.source_event_id = em.source_event_id
-        WHERE se.available_at <= %(as_of)s
+        FROM {prefix}event_measure em
+        JOIN {prefix}source_event se ON se.source_event_id = em.source_event_id
+        WHERE se.available_at <= {as_of}
     ),
     _ret AS (
+        -- lr: 파이프라인 log_return 이 SSOT, 없으면 수정종가→종가 순으로 유도한다
+        -- (최근 5,803행이 NULL 이라 유도 없이는 최근일 패널이 통째로 빈다).
         SELECT instrument_id, trade_date, close_price, volume,
-               close_price / NULLIF(LAG(close_price) OVER (
-                   PARTITION BY instrument_id ORDER BY trade_date), 0) - 1 AS r
-        FROM price_daily
-        WHERE close_price > 0 AND trade_date <= %(trade_date)s
+               close_price / NULLIF(LAG(close_price) OVER w, 0) - 1 AS r,
+               coalesce(log_return,
+                        ln(adjusted_close_price / NULLIF(LAG(adjusted_close_price) OVER w, 0)),
+                        ln(close_price / NULLIF(LAG(close_price) OVER w, 0))) AS lr
+        FROM {prefix}price_daily
+        WHERE close_price > 0 AND trade_date <= {trade_date}
+        WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
     ),
     _xs AS (
-        SELECT trade_date, avg(r) AS mkt
+        SELECT trade_date, avg(r) AS mkt, avg(lr) AS mkt_lr
         FROM _ret WHERE r IS NOT NULL
         GROUP BY trade_date HAVING count(*) >= 50
     ),
+    _mkt AS (
+        SELECT t.instrument_id, t.trade_date, t.close_price, t.volume, t.r, t.lr,
+               x.mkt, t.r - x.mkt AS ar, t.lr - x.mkt_lr AS ar_lr, c.industry_name
+        FROM _ret t
+        LEFT JOIN _xs x ON x.trade_date = t.trade_date
+        LEFT JOIN _cls c ON c.instrument_id = t.instrument_id
+    ),
     v_daily AS (
-        SELECT t.instrument_id, t.trade_date, t.close_price, t.volume,
-               t.r, x.mkt, t.r - x.mkt AS ar
-        FROM _ret t LEFT JOIN _xs x ON x.trade_date = t.trade_date
+        -- ar_ind: 시장 차감 뒤 **산업층 재차감** (산업 표본 ≥5 일 때만). 등가중 시장
+        -- 차감만으로는 산업 공행이 잔차에 남아 사건연구의 횡단면 독립이 깨진다.
+        SELECT m.*,
+               CASE WHEN m.industry_name IS NOT NULL AND count(*) OVER di >= 5
+                    THEN m.ar_lr - avg(m.ar_lr) OVER di ELSE m.ar_lr END AS ar_ind
+        FROM _mkt m
+        WINDOW di AS (PARTITION BY m.trade_date, m.industry_name)
     ),
     v_hold AS (
         SELECT etf_instrument_id, constituent_instrument_id, trade_date, weight_ratio
-        FROM etf_holding_snapshot
-        WHERE trade_date <= %(trade_date)s
+        FROM {prefix}etf_holding_snapshot
+        WHERE trade_date <= {trade_date}
     ),
     v_flow AS (
         SELECT instrument_id, trade_date,
@@ -213,8 +237,55 @@ def _views() -> str:
                net_val_pension, net_val_investment_trust, net_val_financial_invest,
                net_val_private_fund, net_val_insurance, net_val_bank,
                net_qty_individual, net_qty_foreign, net_qty_institution_total
-        FROM investor_flow_daily
-        WHERE trade_date <= %(trade_date)s AND available_at <= %(as_of)s
+        FROM {prefix}investor_flow_daily
+        WHERE trade_date <= {trade_date} AND available_at <= {as_of}
+    ),
+    v_pit AS (
+        -- curated DataGuide 특정시점 스냅샷(statics.pit → pit_daily 백필).
+        -- **available_at 클램프가 없다** - 원본이 trade_date 별 PIT 스냅샷이라
+        -- 파티션 키가 곧 클램프다. 그날 관측 가능했던 값만 그 행에 들어 있다.
+        -- 주주(외국인지분율) · 신용(융자잔고율) · 공매도(잔고비율) · 배수(PBR) ·
+        -- 주식수(상장주식수) - 계열족당 하나씩만 싣는다(어휘지 열 목록이 아니다).
+        SELECT i.instrument_id, p.trade_date,
+               p.foreign_ratio, p.foreign_used, p.credit_ratio, p.short_ratio,
+               p.lend_bal, p.pbr, p.per, p.shares, p.treasury, p.treasury_ratio,
+               p.mktcap, p.turnover, p.for_net, p.ins_net, p.ind_net
+        FROM pit_daily p
+        JOIN v_instrument i ON i.ticker = p.ticker
+        WHERE p.trade_date <= {trade_date}
+    ),
+    v_sector AS (
+        -- 종목 → **KRX 업종지수** (statics.krxsector). 분기 스냅샷이라 as-of 조인용.
+        -- 그전에는 섹터층이 decompose 가 설명력으로 고른 계열이었고, 그러다 단일
+        -- 종목("삼성전자(시장직교)")을 섹터라고 부르는 일이 났다. 업종은 KRX 가
+        -- 산출하는 것을 받아 쓴다 - 우리가 고르지 않는다.
+        SELECT i.instrument_id, m.as_of, m.code
+        FROM sector_member m
+        JOIN v_instrument i ON i.ticker = m.ticker
+        WHERE m.as_of <= {trade_date}
+    ),
+    v_sector_ret AS (
+        -- 업종지수 로그수익. 시장 차감은 쓰는 쪽에서 한다(정의를 한 곳에 둔다).
+        SELECT trade_date, code,
+               ln(close / NULLIF(lag(close) OVER (PARTITION BY code
+                                                  ORDER BY trade_date), 0)) AS sec_lr
+        FROM sector_index
+        WHERE trade_date <= {trade_date} AND close > 0
+    ),
+    v_fin AS (
+        -- 재무 연간 패널(statics.fin → fin_annual). **available_from 이 클램프다** -
+        -- 파티션 as_of_date 는 수집일이지 공시일이 아니라서, 결산 후 법정 90일을
+        -- 반영한 'FY+1년 4월 1일 가용' 을 행에 박아 두고 여기서 자른다.
+        -- 변화(YoY)는 회계연도 창이라 여기서 만든다 - 일봉 창으로는 만들 수 없다.
+        SELECT i.instrument_id, f.fiscal_year, f.available_from,
+               f.debt_ratio, f.borrow_dep, f.netdebt_dep, f.int_cover, f.cf_assets,
+               f.roe, f.roa, f.op_margin, f.net_margin, f.rev_growth, f.op_growth, f.payout,
+               f.borrow_dep - LAG(f.borrow_dep) OVER wf AS borrow_dep_chg,
+               f.roe        - LAG(f.roe)        OVER wf AS roe_chg
+        FROM fin_annual f
+        JOIN v_instrument i ON i.ticker = f.ticker
+        WHERE f.available_from <= {trade_date}
+        WINDOW wf AS (PARTITION BY f.ticker ORDER BY f.fiscal_year)
     ),
     v_liquidity AS (
         SELECT instrument_id, trade_date, turnover_value,
@@ -224,9 +295,68 @@ def _views() -> str:
             SELECT p.instrument_id, p.trade_date, p.turnover_value,
                    p.close_price / NULLIF(LAG(p.close_price) OVER (
                        PARTITION BY p.instrument_id ORDER BY p.trade_date), 0) - 1 AS r
-            FROM price_daily p
-            WHERE p.close_price > 0 AND p.trade_date <= %(trade_date)s
+            FROM {prefix}price_daily p
+            WHERE p.close_price > 0 AND p.trade_date <= {trade_date}
         ) _a
+    ),
+    v_entity AS (
+        -- 엔티티 원장. 상장사만이 아니라 인물·기관·제품까지 - 역할 인자가 가리키는 대상.
+        SELECT e.entity_id, e.entity_type, e.display_name, e.status
+        FROM {prefix}entity e WHERE e.status <> 'MERGED'
+    ),
+    v_thread AS (
+        -- 사건 스레드: 같은 사태의 연속 보도를 하나로 묶은 것. novelty 가 여기 있다
+        -- (신규 보도인가 후속인가) - PIT: 평가 시각이 as_of 이전인 링크만.
+        SELECT tl.source_event_id, tl.thread_id, tl.novelty_status, tl.link_type,
+               t.thread_key, t.event_type_code, t.current_stage, t.opened_at
+        FROM {prefix}event_thread_link tl
+        JOIN {prefix}event_thread t ON t.thread_id = tl.thread_id
+        WHERE tl.evaluated_at <= {as_of}
+    ),
+    v_news AS (
+        -- 뉴스 원장. available_at 이 곧 정보 도달 시각 - 클램프의 본체다.
+        SELECT d.document_id, d.source_code, d.source_document_id, d.title,
+               d.published_at, d.available_at, n.lead_text, n.dedup_cluster_id,
+               n.theme_concept_id, n.representative_document_id
+        FROM {prefix}document d
+        LEFT JOIN {prefix}news_document n ON n.document_id = d.document_id
+        WHERE d.available_at <= {as_of}
+    ),
+    v_event_news AS (
+        -- 사건 ↔ 근거 문서. '무엇을 보고 그 사건이라 했나'의 연결 - 접지의 뿌리.
+        SELECT DISTINCT ev.source_event_id, da.document_id
+        FROM {prefix}event_evidence ev
+        JOIN {prefix}document_assertion da ON da.assertion_id = ev.assertion_id
+    ),
+    v_link AS (
+        -- **객체 타입 간 1홉** (19R). ObjectSet DSL 은 data-pipeline 앱에 있고 이
+        -- 워크트리에 없다 - 여기서는 그 *개념*(타입 있는 관계 + 역할 방향 + PIT 홉)을
+        -- 공유 뷰로 구현한다. 같은 사건에 **서로 다른 역할**로 등장한 두 상장사가
+        -- 한 간선이다. 실측 쌍: 공급망 57 · 제휴 117 · 지분 10 · 공동발행 185.
+        -- 산업 동일성(v_instrument)은 속성이지 관계가 아니다 - 그것만 재던 것이
+        -- '경로형'이라는 이름과 실제 사이의 격차였다.
+        SELECT a.entity_id AS src, b.entity_id AS dst,
+               a.role_code AS role_src, b.role_code AS role_dst,
+               CASE
+                 WHEN a.role_code IN ('CUSTOMER','SUPPLIER')
+                  AND b.role_code IN ('CUSTOMER','SUPPLIER')
+                  AND a.role_code <> b.role_code           THEN 'SUPPLY_CHAIN'
+                 WHEN a.role_code LIKE 'PARTNER%' AND b.role_code LIKE 'PARTNER%'
+                                                            THEN 'PARTNERSHIP'
+                 WHEN a.role_code IN ('INVESTOR','TARGET_COMPANY')
+                  AND b.role_code IN ('INVESTOR','TARGET_COMPANY')
+                  AND a.role_code <> b.role_code           THEN 'OWNERSHIP'
+                 WHEN a.role_code = 'ISSUER' AND b.role_code = 'ISSUER'
+                                                            THEN 'CO_ISSUER'
+               END AS link_type,
+               se.source_event_id, se.event_date AS link_date
+        FROM {prefix}source_event se
+        JOIN {prefix}event_argument a ON a.source_event_id = se.source_event_id
+        JOIN {prefix}event_argument b ON b.source_event_id = se.source_event_id
+                                     AND a.entity_id <> b.entity_id
+        JOIN {prefix}instrument ia ON ia.instrument_id = a.entity_id
+        JOIN {prefix}instrument ib ON ib.instrument_id = b.entity_id
+        WHERE se.event_status = 'ACTIVE' AND se.available_at <= {as_of}
     ),
     v_nav AS (
         -- ETF 공식 NAV(etf_nav_daily) × 시장 종가(price_daily). **괴리율이 여기서 난다.**
@@ -237,10 +367,15 @@ def _views() -> str:
                p.close_price / NULLIF(n.nav, 0) - 1 AS premium,
                n.nav / NULLIF(LAG(n.nav) OVER (
                    PARTITION BY n.etf_instrument_id ORDER BY n.trade_date), 0) - 1 AS nav_r
-        FROM etf_nav_daily n
-        LEFT JOIN price_daily p ON p.instrument_id = n.etf_instrument_id
-                               AND p.trade_date = n.trade_date
-        WHERE n.trade_date <= %(trade_date)s AND n.available_at <= %(as_of)s
+        -- 파라미터는 이 파일의 규약(`{as_of}`·`{trade_date}` 포맷)을 쓴다. psycopg
+        -- 스타일(psycopg 명명 파라미터)을 남기면 **DuckDB 표면이 통째로 파싱 실패**한다 -
+        -- 실측: 30일 배치의 섹터·고유 검정 전량이 `ParserException: syntax error at
+        -- or near "%"` 로 죽었다. 이 CTE 집합은 Postgres 와 DuckDB 양쪽에서 쓰인다.
+        -- 표 접두도 `{prefix}` 를 붙인다 - 안 붙이면 rdb 부착 경로에서 못 찾는다.
+        FROM {prefix}etf_nav_daily n
+        LEFT JOIN {prefix}price_daily p ON p.instrument_id = n.etf_instrument_id
+                                      AND p.trade_date = n.trade_date
+        WHERE n.trade_date <= {trade_date} AND n.available_at <= {as_of}
     ),
     v_cohort AS (
         SELECT e.instrument_id, e.trade_date, e.source_event_id, e.event_type_code,
@@ -337,4 +472,47 @@ def _cell(v: Any) -> str:
     return s if len(s) <= 60 else s[:57] + "..."
 
 
-__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface"]
+# 공유 표면의 공개 이름 - 인과 패널(statics)이 같은 정의를 쓴다 (18R).
+views_sql = _views
+
+# 손으로 쓴 의미 뷰의 이름. 자동 생성기가 **이 이름은 안 만든다** - 같은 이름이
+# 둘이면 CTE 가 영구 뷰를 가리고, 그게 정확히 "표면이 둘로 갈린다" 사고다.
+HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_hold', 'v_instrument', 'v_link', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
+
+# 시점 클램프 후보 열. 우선순위 = **정보가 관측자에게 도달한 시각**에 가까운 순.
+# `*_at` 은 타임스탬프(as_of 로 자름), `*_date` 는 날짜(trade_date 로 자름).
+# 도메인이 아닌 배관 표. 분모에서 뺀다 - 못 묶은 게 아니라 **안 묶는다**.
+PLUMBING = ("flyway_", "ops_", "tenant", "admin_", "release_")
+
+CLAMP_COLS = ("available_at", "evaluated_at", "published_at", "opened_at",
+              "as_of_date", "profile_as_of_date", "trade_date", "created_at")
+
+
+def auto_views_sql(cols: dict[str, list[str]], *, as_of: str, trade_date: str,
+                   prefix: str, skip: set[str] = frozenset()) -> list[tuple[str, str | None, str]]:
+    """손으로 안 쓴 표 전량에 시점 클램프 뷰를 **생성**한다 (19R).
+
+    왜 자동인가: 클램프를 표마다 손으로 쓰면 새 표는 기본값이 '안 묶임'이 된다.
+    실측이 그랬다 - 살아 있는 44표 중 20표만 묶여 있었고, 안 묶인 쪽에
+    `thread_discovery_snapshot`(사건별 신규성 축) 같은 1급 재료가 앉아 있었다.
+    생성기가 하나면 커버리지가 **구조적으로** 100% 이고, 클램프 누락이 불가능하다.
+
+    반환: (표 이름, 클램프 열 또는 None, CREATE VIEW 문). 클램프 열이 없는 표는
+    시점 불변 차원으로 취급하되 **None 을 그대로 보고**한다 - 조용히 통과시키면
+    PIT 위반이 어디서 들어오는지 알 수 없다.
+    """
+    out: list[tuple[str, str | None, str]] = []
+    for t in sorted(cols):
+        if t in skip or t.startswith(PLUMBING):
+            continue
+        have = set(cols[t])
+        clamp = next((c for c in CLAMP_COLS if c in have), None)
+        where = ""
+        if clamp:
+            where = f" WHERE {clamp} <= {as_of if clamp.endswith('_at') else trade_date}"
+        out.append((t, clamp,
+                    f"CREATE OR REPLACE VIEW v_{t} AS SELECT * FROM {prefix}{t}{where}"))
+    return out
+
+
+__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface", "HAND_VIEWS", "PLUMBING", "auto_views_sql", "views_sql"]

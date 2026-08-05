@@ -6,7 +6,7 @@
 
 import pytest
 
-from edge_analysis.domain.decomposition import compute_decomposition, decide_route
+from edge_analysis.domain.decomposition import compute_decomposition
 from edge_analysis.domain.models import Holding
 
 
@@ -48,23 +48,3 @@ def test_no_priced_constituent_yields_no_proxy():
     assert d.proxy_ret is None
     assert d.coverage == 0.0
     assert d.total_priced == 0
-
-
-def test_route_is_concentrated_at_the_inclusive_threshold():
-    # top1 == 0.5 은 집중으로 친다(임계값 이상 포함).
-    holdings = [Holding("A", "A", 0.5), Holding("B", "B", 0.5)]
-    returns = {"A": 0.10, "B": 0.10}
-
-    d = compute_decomposition(holdings, returns)
-
-    assert d.top1 == pytest.approx(0.5)
-    assert decide_route(d) == ("CONCENTRATED", True)
-
-
-def test_route_is_common_factor_when_dispersed():
-    holdings = [Holding(t, t, 1 / 3) for t in ("A", "B", "C")]
-    returns = {"A": 0.05, "B": 0.05, "C": 0.05}  # top1 ~= 1/3 < 0.5
-
-    d = compute_decomposition(holdings, returns)
-
-    assert decide_route(d) == ("COMMON_FACTOR", True)

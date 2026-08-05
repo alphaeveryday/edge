@@ -64,11 +64,9 @@ class Settings:
     # OFF 로 둘 수 있게 한 이유: 인과 경로는 instrument_classification(V202607291720)을
     # 요구하고, 백필 전에는 코호트가 비어 모든 셀이 UNCERTAIN 으로 떨어진다. 그때
     # 조용히 품질이 내려가는 대신 ops 가 명시적으로 이전 경로를 고를 수 있어야 한다.
-    causal_enabled: bool = True
     # 검정 에이전트의 **샌드박스 코드 실행** 사용 여부. 기본 ON — 간선마다 무엇을 어떻게
     # 잴지는 데이터를 보고 정해야 하고, 그건 코드를 쓰는 일이다. OFF 면 축약 경로(고정
     # 추정량)로 떨어진다: LLM 이 쓴 코드를 실행하는 위험을 끄고도 파이프라인이 돌아야 한다.
-    causal_sandbox_enabled: bool = True
 
     # 분봉 트리거 단건 입력(ALPHA-709). 값이 있으면 대상 ETF·trade_date 를 그 트리거
     # 행에서 유도한다 — env 기본값으로 다른 대상을 분석하면 계보가 조용히 오염된다.
@@ -77,18 +75,12 @@ class Settings:
     # 도메인 문서 저장소(S3). 비어 있으면 조회 도구를 붙이지 않는다 - 도메인 지식이
     # 없다고 설명을 멈추지 않는다. 접두사 배치는 인제스트가 만든다:
     #   index/<sector>/<industry>/chunks.parquet · docs/<sector>/<industry>/<ticker>-<n>.txt
-    domain_docs_bucket: str = ""
-    domain_docs_profile: str = ""
     # 메커니즘 레지스트리 뿌리(P9). 비어 있으면 소환 기록을 남기지 않는다 - 단일 사례
     # 귀속은 반복으로만 검정력을 얻으므로, 이 경로가 비면 그 축적이 통째로 없다는 뜻이다.
-    causal_registry_root: str = ""
     # canonical(S3) PIT 표면. 셋이 다 있어야 붙는다 - 하나라도 비면 재무·지배구조 어휘가
     # 프롬프트에 아예 안 실리고, 그 사실이 P8 커버리지 원장에 `unavailable` 로 남는다.
     # **Cube 를 쓰지 않는 이유**: Cube 는 `*_latest` 라 시점 창이 없다 - 과거를 설명하면서
     # 나중에 정정된 값을 보게 되고, 에러 없이 조용히 미래를 본다.
-    canonical_manifest: str = ""    # pit-manifest.yml 경로 (data-pipeline 이 생성)
-    canonical_database: str = ""    # Glue 데이터베이스
-    canonical_output: str = ""      # Athena 결과 s3:// 경로
 
     # ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api. 엔진이 DB 를 직접
     # UPDATE 하지 않는 이유: INVALIDATION 발화자를 super-admin 하나로 유지해야 WITHDRAWN
@@ -164,15 +156,7 @@ def load_settings(*, trade_date: str | None = None, request_id: str | None = Non
         release_bundle_version=_env("ALPHAMALE_RELEASE_BUNDLE_VERSION"),
         result_s3_prefix=_env("ALPHAMALE_RESULT_S3_PREFIX"),
         aws_profile=_env("AWS_PROFILE"),
-        causal_enabled=_flag("CAUSAL_ENABLED", default=True),
-        causal_sandbox_enabled=_flag("CAUSAL_SANDBOX_ENABLED", default=True),
         trigger_id=(trigger_id or None),
-        domain_docs_bucket=os.environ.get("EDGE_DOMAIN_BUCKET", "").strip(),
-        domain_docs_profile=os.environ.get("EDGE_AWS_PROFILE", "").strip(),
-        causal_registry_root=os.environ.get("CAUSAL_REGISTRY_ROOT", "").strip(),
-        canonical_manifest=os.environ.get("CANONICAL_MANIFEST", "").strip(),
-        canonical_database=os.environ.get("CANONICAL_DATABASE", "").strip(),
-        canonical_output=os.environ.get("CANONICAL_ATHENA_OUTPUT", "").strip(),
         super_admin_url=os.environ.get("SUPER_ADMIN_API_URL", "").strip(),
         super_admin_email=os.environ.get("SUPER_ADMIN_EMAIL", "").strip(),
         super_admin_password=os.environ.get("SUPER_ADMIN_PASSWORD", "").strip(),

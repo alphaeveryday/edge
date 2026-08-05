@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # 추적 파라미터만 제거한다. 쿼리 전체를 지우면 ?id=1 / ?id=2 처럼 쿼리가
@@ -76,29 +76,21 @@ def make_article_id(url: str | None, title: str, published_at: str | None) -> st
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
-def parse_datetime(text: str | None) -> str | None:
-    """FMP publishedDate("YYYY-MM-DD HH:MM:SS" 또는 ISO8601) → ISO8601 UTC 문자열.
+def parse_datetime(text: str | None, *, naive_tz: tzinfo = timezone.utc) -> str | None:
+    """ISO 날짜·시각을 timezone-aware 문자열로 정규화한다.
 
-    FMP 는 오프셋 없는 벽시계 시각을 준다 — naive 는 UTC 로 간주한다
-    (published_at 을 비우지 않기 위한 알려진 근사. 페이로드에 오프셋이 없다).
-
-    NOTE(ALPHA-104): offset 포함 ISO(예: '...+09:00', '...-04:00')는 지금 오파싱된다
-    (+오프셋은 잘려 UTC 로 오인, -오프셋은 파싱 실패). Step1 은 이 값을 coarse 파티션
-    날짜로만 써서 raw 보존엔 영향이 작다. 정확한 published_at 은 S003(정규화·품질)의 AC라,
-    offset-aware 파싱(fromisoformat 기반)은 ALPHA-104 에서 다룬다.
+    오프셋 없는 값은 벤더가 선언한 ``naive_tz`` 로 읽는다. 기본은 기존 FMP 계약인
+    UTC이며, BigKinds NEWS_ID 벽시계는 호출부가 KST 를 넘겨 현지 날짜를 보존한다.
     """
     if not text:
         return None
-    t = text.strip().replace("T", " ")
-    # 붙어 있을 수 있는 타임존 토큰 제거 (예: "... +00:00" / "... Z")
-    t = t.split("+")[0].rstrip("Z").strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(t, fmt)
-            return dt.replace(tzinfo=timezone.utc).isoformat()
-        except ValueError:
-            continue
-    return None
+    try:
+        parsed = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=naive_tz)
+    return parsed.isoformat()
 
 
 _KRX_SHORT_CODE = re.compile(r"[0-9][0-9A-Z]{5}\Z")
@@ -122,7 +114,7 @@ def krx_short_code(value: object) -> str | None:
     return code if _KRX_SHORT_CODE.match(code) else None
 
 
-_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})\d{6}")
+_BIGKINDS_NEWS_ID_TS = re.compile(r"\.(\d{8})(\d{6})")
 
 
 def bigkinds_date(record: dict) -> str | None:
@@ -140,6 +132,34 @@ def bigkinds_date(record: dict) -> str | None:
         day = match.group(1)
         return f"{day[:4]}-{day[4:6]}-{day[6:8]}"
     return None
+
+
+def bigkinds_datetime(record: dict) -> str | None:
+    """BigKinds row 의 발행 **시각**(YYYY-MM-DD HH:MM:SS) — 날짜는 bigkinds_date SSOT,
+    시각은 NEWS_ID 임베드 타임스탬프에서 온다.
+
+    인과귀속의 시간 분해는 τ(초 단위)로 하루를 자른다 — 날짜 해상도로는 모든 사건이
+    09:00 KST 한 창에 뭉쳐 분해가 퇴화한다(2026-08-01 실측: RDB available_at distinct
+    62개, 셀 하나에서 77건 병합). NEWS_ID 는 `언론사코드.YYYYMMDDHHMMSS연번` 꼴로
+    시각을 이미 갖고 있었고, 종전 정규식이 날짜 8자리만 캡처해 버리고 있었다.
+
+    두 가지를 지킨다:
+    - **파티션 불변식**: 반환값의 날짜부는 bigkinds_date 와 항상 같다. NEWS_ID 의
+      날짜가 DATE 필드와 어긋나면 그 시각은 버린다 — published_date 파티션과
+      published_at 이 드리프트하면 멱등 병합이 다른 파티션에 같은 기사를 만든다.
+    - **자정 폴백**: 시각 6자리가 시계로 성립하지 않으면(25시 등) 날짜만 돌려준다.
+      쓰레기 시각이 parse_datetime 에서 None 이 되면 행 전체가 게이트에서 죽는다 —
+      시각을 잃는 것과 기사를 잃는 것은 다른 사고다."""
+    day = bigkinds_date(record)
+    if day is None:
+        return None
+    match = _BIGKINDS_NEWS_ID_TS.search(str(record.get("NEWS_ID") or ""))
+    if match:
+        d, t = match.groups()
+        same_day = f"{d[:4]}-{d[4:6]}-{d[6:8]}" == day
+        if same_day and t[:2] < "24" and t[2:4] < "60" and t[4:6] < "60":
+            return f"{day} {t[:2]}:{t[2:4]}:{t[4:6]}"
+    return day
 
 
 def news_article_id(record: dict) -> str:

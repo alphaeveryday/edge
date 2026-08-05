@@ -53,6 +53,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     consume.add_argument("--max-polls", type=int, default=None,
                          help="receive 횟수 상한(미지정=상주). 로컬·검증용 — 봉투 계약 "
                               "위반이 있었으면 exit 1")
+    window = sub.add_parser(
+        "run-window-universe",
+        help="기존 분봉 계보가 있는 당일 ETF를 요청창으로 Cloud-only 재분석.",
+    )
+    window.add_argument("--window-start", required=True, help="HH:MM")
+    window.add_argument("--window-end", required=True, help="HH:MM")
     loader = sub.add_parser(
         "load-classification",
         help="Load the FMP industry map into instrument_classification.",
@@ -264,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
                     "큐 URL 이 없다 — --queue-url 또는 EDGE_EXPLANATION_QUEUE_URL 주입"
                 )
             return consume_triggers(queue_url, max_polls=args.max_polls)
+        if args.command == "run-window-universe":
+            from .window_batch import run_window_universe
+            return run_window_universe(
+                args.trade_date, args.window_start, args.window_end, args.request_id)
         if args.command == "load-classification":
             return load_classification_command(args)
         if args.command == "load-universe":

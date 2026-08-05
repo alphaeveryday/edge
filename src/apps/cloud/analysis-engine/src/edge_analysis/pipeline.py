@@ -1,4 +1,4 @@
-"""run 오케스트레이션 — 트리거 소비 → 분해 → 설명 → 영속.
+"""run 오케스트레이션 — 트리거 소비 → 분해 → **통계 인과귀속** → 영속.
 
 의존성(lake·store·client·s3)을 주입해 제어 흐름을 I/O 없이 테스트할 수 있다. 엔진은
 파이프라인이 만든 feature 산출물만 읽는다(ADR-0028) — 트리거 행이 없으면 그날은
@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, replace
+from datetime import timedelta
 from typing import Any
 
 from .adapters.archive import (
@@ -17,12 +19,12 @@ from .adapters.archive import (
 )
 from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
-from .adapters.llm import AnalysisClient, TracingClient, analyze
+from .adapters.llm import AnalysisClient, TracingClient
 from .adapters.trace import write_agent_trace
 from .config import KST, PipelineError, ReturnsNotReadyError, Settings
-from .domain.decomposition import compute_decomposition, decide_route
+from .domain.decomposition import compute_decomposition
 from .domain.models import EventContext
-from .observability import collect_trace, log, utcnow_iso
+from .observability import collect_trace, log
 
 _MARKET = "KR"
 
@@ -34,6 +36,7 @@ def run(
     store: EventStore,
     client: AnalysisClient,
     s3,
+    causal_lake=None,
 ) -> int:
     """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
     # 분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다. env 기본값
@@ -69,8 +72,6 @@ def run(
         raise PipelineError(
             f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
             f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
-    # 구성종목 티커→종목명(뉴스 이벤트 표시용) — 이 ETF 의 holdings 에서만 파생한다(ALPHA-467).
-    name_by_ticker = {h.ticker: h.name for h in holdings if h.name}
     if minute_row is not None:
         # 분봉 분해 입력(ALPHA-710) — 분모는 **전일 종가**다(ALPHA-747). 트리거 판정이
         # `intraday-anchor-v2` 로 전일 종가 앵커가 되면서 시가 축은 판정과 갈렸고,
@@ -148,12 +149,34 @@ def run(
         log("done", reason="normal_variation", observed_return=decomp.proxy_ret)
         return 0
 
-    route_code, event_search = decide_route(decomp)
+    # ── 라우팅은 **층 회계**가 정한다 (ALPHA-671) ─────────────────────────────
+    # 레거시 `decide_route` 는 구성종목 집중도만 봤다. 그런데 하루를 끈 것이 시장인지
+    # 섹터인지 그 종목인지는 **층 분해**가 답한다 - 실측(042700 07-31): 하루의 77%가
+    # 시장인데 종목 가설 9간선을 세워 전부 죽었다. 원장의 route_code 가 실제로 물은
+    # 질문과 달라지면 계보가 거짓말을 한다.
+    #
+    # `event_search` 를 호출자가 정하게 두지 않는다 - 원장 CHECK 가 route_code 와
+    # 묶으므로 코드에서 파생한다(`route_code_of`).
+    from .statics.duck import CausalLake
+    from .statics.layers import SESSION_OPEN, decompose as layer_decompose
+    from .statics.record import route_code_of
+    from .statics.route import route_etf
+
+    lake = causal_lake if causal_lake is not None else CausalLake()
+    day_iso = settings.trade_date.isoformat()
+    roll = rt = None
+    try:
+        roll = layer_decompose(lake, settings.etf_ticker, day_iso)
+        rt = route_etf(roll)
+    except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
+        log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}")
+    route_code, event_search = route_code_of(rt.kind if rt else "")
     ids = store.persist_observation_route(
         gate.trigger_id, decomp, route_code, event_search, entity_index,
         minute=minute_gate is not None,
     )
-    log("trigger.consumed", route=route_code, event_search=event_search, **ids)
+    log("trigger.consumed", route=route_code, event_search=event_search,
+        layer_route=(rt.kind if rt else "미상"), **ids)
 
     # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
     events: list[EventContext] = []
@@ -164,56 +187,84 @@ def run(
             settings.trade_date, [h.ticker for h in holdings])
         log("events.ready", events=len(events))
 
-    # P0–P9 인과귀속으로 설명을 만든다. `analyze` 시그니처는 고정이고 의존성만 주입한다 —
-    # 클라우드 진입점(CLI·run)은 그대로다. store 커넥션을 공유하므로 PIT 기준이 갈리지 않는다.
-    causal = store.causal_data() if settings.causal_enabled else None
-    # P2·P3·P5 의 자유 질의 표면. 같은 커넥션·같은 시점이라 두 표면이 갈리지 않는다.
-    causal_sql = (store.sql_surface(as_of=utcnow_iso(), trade_date=settings.trade_date)
-                  if causal is not None else None)
-    # canonical(S3) 온톨로지 표면. **선택 의존**이고 셋이 다 있어야 붙는다. 안 붙으면
-    # 재무·지배구조 어휘가 프롬프트에 아예 안 실리고 P8 이 그 영역을 미개봉으로 적는다 -
-    # 조용히 빈 것과 알고 없는 것을 가르는 자리다.
-    if causal_sql is not None and settings.canonical_manifest and settings.canonical_database:
-        from .adapters.canonical_surface import (CanonicalSurface, Surfaces,
-                                                 athena_runner, load_manifest)
-        manifest = load_manifest(settings.canonical_manifest)
-        canonical_sql = CanonicalSurface(
-            athena_runner(database=settings.canonical_database,
-                          output=settings.canonical_output,
-                          profile=settings.domain_docs_profile),
-            manifest,
-            # ★ 시점은 **거래일**이다. `utcnow` 를 쓰면 그날 이후 정정된 값이 보인다 -
-            # Postgres 쪽은 `available_at <= as_of` 로 사건 공개 시각을 다루지만
-            # canonical 은 날짜 단위 공표축이라 기준이 다르다.
-            as_of=settings.trade_date)
-        causal_sql = Surfaces(causal_sql, canonical_sql)
-        log("canonical.attached", database=settings.canonical_database,
-            tables=len(manifest.get("tables") or ()))
-    # 도메인 문서 조회는 **선택 의존**이다. 버킷이 없으면 붙이지 않고, 그러면 제안이
-    # `lookups` 로 물어도 조회 없이 진행한다 - 산업 지식이 없다고 설명을 멈추지 않는다.
-    domain_docs = None
-    if settings.domain_docs_bucket:
-        from .adapters.domain_docs import DomainDocs
-        domain_docs = DomainDocs(bucket=settings.domain_docs_bucket,
-                                 profile=settings.domain_docs_profile or None)
-        log("domain_docs.attached", bucket=settings.domain_docs_bucket)
+    # ── 통계 인과귀속 (ALPHA-671) ─────────────────────────────────────────────
+    # P0–P9 자유서술 인과 경로를 걷어냈다. 그것은 LLM 이 판정까지 하는 구조였고,
+    # 8셀 실측에서 모델 판정이 코드 결론을 뒤집어 무엇이 판정인지 흐렸다.
+    # 지금은 **설계는 모델, 판정은 코드**다:
+    #   크기  창 분해 (시간 항등식 - 몫의 합 = 하루)
+    #   층    시장·섹터·고유 회계 + 고유 자격 검사(잔차 공통상관)
+    #   라우팅 어느 층에 물을지 - 시장 지배면 종목 가설을 세우지 않는다
+    #   인과  타입 수준 패널 · 매칭 위약 · 순열 p · 시장사건은 거래일 단위
+    #   설명  정직한 전문(summary) + 쉬운 한 줄(headline) + 주장별 근거 묶음
+    #
+    # 레이크는 DuckDB 표면(`CausalLake`)이다 - S3 canonical 과 RDB 를 한 질의에서
+    # 조인한다. store 커넥션과 시점이 갈리지 않게 같은 거래일을 쓴다.
+    from .statics.etfcell import run as run_statics
+    from .statics.record import as_explanation, verdicts_from
+
+    # 레이크는 **주입**한다 - 이 파일의 계약이 그것이다(도크스트링 첫 문장).
+    # 안에서 만들면 제어 흐름을 I/O 없이 못 돌리고, 실제로 그렇게 했다가 파이프라인
+    # 테스트 7건이 `layers_daily does not exist` 로 죽었다.
+    ask = TracingClient(client).complete_json
+    text = ""
+    window_meta: dict[str, Any] = {}
     with collect_trace() as trace:
-        # 인과 경로만 프롬프트·응답을 남긴다 — trace 를 쓰지 않는 단일 프롬프트 경로에
-        # 데코레이터를 끼우면 버퍼 없이 도는 호출에 비용만 붙는다.
-        explanation = analyze(
-            TracingClient(client) if causal is not None else client,
-            etf_ticker=settings.etf_ticker, etf_name=etf_name,
-            name_by_ticker=name_by_ticker, trade_date=settings.trade_date,
-            decomp=decomp, gate=gate, route_code=route_code, events=events,
-            causal=causal,
-            causal_sandbox=settings.causal_sandbox_enabled,
-            domain_docs=domain_docs, causal_sql=causal_sql,
-            causal_registry_root=settings.causal_registry_root or None,
-            etf_instrument_id=etf_instrument_id,
-        )
-    if causal is not None:
-        # 인과가 꺼진 런은 남길 중간 과정이 없다 — 내용 없는 trace 파일을 만들지 않는다.
-        write_agent_trace(s3, settings, trace)
+        try:
+            window = {}
+            if minute_row is not None:
+                window = {
+                    "instrument_id": etf_instrument_id,
+                    "window_start": SESSION_OPEN[:5],
+                    "window_end": (
+                        minute_row.window_start + timedelta(minutes=5)
+                    ).astimezone(KST).strftime("%H:%M"),
+                    "window_meta": window_meta,
+                }
+            text = run_statics(lake, settings.etf_ticker, day_iso, ask, **window)
+        except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
+            # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
+            # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
+            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
+                    f"{type(exc).__name__}: {str(exc)[:160]}")
+            log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
+    trace_manifest = write_agent_trace(s3, settings, trace)
+    if trace_manifest is None:
+        raise PipelineError("중간 분석 trace를 S3에 기록하지 못했습니다")
+
+    if minute_row is not None:
+        honest = plain = text.strip()
+    else:
+        honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
+    from .statics.plain import card as _card
+    headline = _card(plain)
+    # 층·라우팅은 위에서 이미 냈다 - 다시 분해하지 않는다(같은 셀에 두 답 금지)
+    stage = {"route": (rt.kind if rt else ""), "layers": [
+        {"kind": x.kind, "name": x.name, "contribution": x.contribution}
+        for x in (roll.layers if roll else ())],
+        "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
+        # 요청창의 내부 블록·시간축·근거 조회키는 ``stage_results``에도 구조화해
+        # 최종 문자열에서 다시 파싱하지 않고 추적한다.
+        "plain": plain.strip().lstrip("=").strip()}
+    final_payload = window_meta.pop("final_explanation", None)
+    if window_meta:
+        stage["window"] = window_meta
+    if final_payload is not None:
+        stage["final_explanation"] = final_payload
+    payload_bundles = tuple(
+        ref.removeprefix("analysis_evidence_bundle:")
+        for block in ((final_payload or {}).get("blocks") or ())
+        for ref in (block.get("evidence_refs") or ())
+        if ref.startswith("analysis_evidence_bundle:")
+    )
+    stage["analysis_trace"] = trace_manifest
+    verdicts = verdicts_from(
+        text, route_kind=(rt.kind if rt else ""),
+        idio_qualified=bool(roll is None or roll.rho is None or abs(roll.rho) < 0.20),
+        bundles=tuple(sorted(set(payload_bundles or re.findall(
+            r"\bev_[0-9a-f]{16}\b", text)))))
+    explanation = as_explanation(honest.strip(), headline, verdicts, stage)
+    log("statics.explained", route=stage["route"], type=explanation.explanation_type,
+        confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
     outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, events)
     write_run_archive(s3, settings, {
         "outcome": "explained",

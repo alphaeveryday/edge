@@ -26,12 +26,6 @@ _SETTINGS = SimpleNamespace(
     # 이 파일의 두 테스트는 **이전 단일 프롬프트 경로**를 고정한다 - 인과 경로는
     # 산업분류 원장을 요구하고 스텁 store 에 그게 없다. 인과 경로 스모크는
     # tests/e2e/test_causal_pipeline.py 가 별도로 검증한다.
-    causal_enabled=False,
-    causal_sandbox_enabled=True,
-    domain_docs_bucket="",
-    domain_docs_profile="",
-    causal_registry_root="",
-    canonical_manifest="", canonical_database="", canonical_output="",
 )
 
 
@@ -55,6 +49,7 @@ class _FakeStore:
         self._trigger = trigger
         self._prereqs = prereqs
         self.calls: list[str] = []
+        self.explanation = None
 
     def load_entity_index(self):
         return {"005930": "ent_1"}
@@ -76,6 +71,7 @@ class _FakeStore:
         return self._prereqs
 
     def persist_explanation(self, settings, etf_instrument_id, explanation, **kwargs):
+        self.explanation = explanation
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
@@ -126,6 +122,14 @@ def test_triggered_day_persists_the_explanation():
     assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
 
 
+def test_statics_failure_is_persisted_as_low_confidence():
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    assert _run(store, _FakeS3()) == 0
+    assert store.explanation.confidence_level == "LOW"
+    assert "판정불가" in store.explanation.summary
+
+
 def test_missing_prerequisites_fall_back_to_s3():
     store = _FakeStore(trigger=_TRIGGER, prereqs={"profile": False, "route": None, "bundle": None})
     s3 = _FakeS3()
@@ -137,13 +141,30 @@ def test_missing_prerequisites_fall_back_to_s3():
     assert any("/runs/" in k for k in keys)      # 런 아카이브
 
 
-def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
+def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch):
     """분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다.
 
     env 기본값(ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염되고,
     계보가 일 단위 축(price_movement_trigger_id)에 매달리면 FK 위반이다.
     """
-    from dataclasses import replace as _replace
+    called = {}
+
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        from edge_analysis.observability import record
+        record("test.trace")
+        meta = kwargs.pop("window_meta")
+        meta.update({
+            "window_start": kwargs["window_start"],
+            "as_of": kwargs["window_end"],
+            "final_explanation": {
+                "rendered_text": "[H] 헤더\n\n[N] 부재",
+                "blocks": [],
+            },
+        })
+        called.update(ticker=ticker, day=day, **kwargs)
+        return "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다."
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
 
     class _MinuteStore(_FakeStore):
         def __init__(self, prereqs):
@@ -191,11 +212,34 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
                               "etf_ticker": "999999",
                               "trade_date": date(2020, 1, 1)})
     code = run(settings, lake=_FakeLake(), store=store,
-               client=_FakeClient(), s3=s3)
+               client=_FakeClient(), s3=s3, causal_lake=object())
     assert code == 0
     # 일 단위 게이트 조회를 타지 않는다 — 그 테이블엔 이 트리거가 없다
     assert store.daily_fetches == 0
     assert store.persist_kwargs == {"trigger_id": "mpt_1", "minute": True}
+    assert called == {
+        "ticker": "091160",
+        "day": "2026-07-16",
+        "instrument_id": "inst_ETF",
+        "window_start": "09:00",
+        "window_end": "10:35",
+    }
+    assert store.explanation.raw["stage_results"]["window"] == {
+        "window_start": "09:00", "as_of": "10:35",
+    }
+    assert store.explanation.raw["stage_results"]["final_explanation"] == {
+        "rendered_text": "[H] 헤더\n\n[N] 부재",
+        "blocks": [],
+    }
+    trace = store.explanation.raw["stage_results"]["analysis_trace"]
+    assert trace["s3_uri"].endswith("/req-1.json")
+    assert trace["event_count"] > 0 and len(trace["sha256"]) == 64
+    assert store.explanation.raw["explain"] == (
+        "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다.")
+    assert store.explanation.raw["stage_results"]["plain"] == (
+        "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다.")
+    assert "쉬운 설명" not in store.explanation.raw["explain"]
+    assert "요청창" not in store.explanation.raw["explain"]
 
 
 def test_missing_minute_trigger_fails_loud():

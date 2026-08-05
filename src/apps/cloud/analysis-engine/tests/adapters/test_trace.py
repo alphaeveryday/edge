@@ -87,12 +87,15 @@ def test_trace_lands_under_the_result_prefix_traces_path():
     # runs/ 아카이브와 같은 IAM 스코프 안, 그러나 별도 키 — 최종 설명과 디버그 로그를 섞지 않는다.
     s3 = _FakeS3()
 
-    location = write_agent_trace(s3, _SETTINGS, [{"event": "causal.done"}])
+    manifest = write_agent_trace(s3, _SETTINGS, [{"event": "causal.done"}])
 
     [put] = s3.puts
     assert put["Key"] == ("operations_archive/etf_explanations/traces/etf=091160/"
                           "trade_date=2026-07-16/req-1.json")
-    assert location == f"s3://test-lake/{put['Key']}"
+    assert manifest["s3_uri"] == f"s3://test-lake/{put['Key']}"
+    assert manifest["event_count"] == 1
+    assert manifest["schema_version"] == 1
+    assert len(manifest["sha256"]) == 64
     body = json.loads(put["Body"].decode("utf-8"))
     assert body["events"] == [{"event": "causal.done"}]
     assert body["trade_date"] == "2026-07-16"

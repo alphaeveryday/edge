@@ -227,6 +227,13 @@ locals {
   # 어긋나지 않게 한 곳에서 고정한다.
   analysis_result_s3_prefix = "operations_archive/etf_explanations/"
 
+  # 백필 parquet prefix — 결과 prefix 와 같은 이유로 한 곳에서 고정한다. 레이크 버킷 안이라
+  # analysis task 역할의 버킷 전체 Get/List(iam.tf)가 이미 덮는다(추가 정책 불필요).
+  # 결과 prefix 와 달리 **후행 슬래시가 없다**: 이 값은 IAM 스코프가 아니라 코드가 파일명을
+  # 이어붙이는 루트라, 슬래시를 남기면 `…/backfill//pit_daily.parquet` 가 되고 S3 는 그
+  # 빈 세그먼트를 키의 일부로 봐서 조용히 0파일을 돌려준다.
+  analysis_backfill_s3_prefix = "analysis/backfill"
+
   analysis_env = merge({
     AWS_REGION            = var.region
     ALPHAMALE_LAKE_BUCKET = var.lake_bucket_name
@@ -240,6 +247,17 @@ locals {
     # 직접 ecs run-task(특정일 수동 재실행) 때만 이 값이 실제로 쓰인다.
     ALPHAMALE_ETF_TICKER       = "091160"
     ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
+    # 백필은 S3 정본만 주입한다. 컨테이너 로컬 경로는 입력·원장으로 쓰지 않는다.
+    CAUSAL_BACKFILL_S3 = "s3://${var.lake_bucket_name}/${local.analysis_backfill_s3_prefix}"
+    # Fargate 의 자격증명은 컨테이너 메타데이터 엔드포인트(instance 체인)에서만 온다 —
+    # sso·config 만 있는 체인은 ~/.aws 가 없는 컨테이너에서 전량 실패해 S3 뷰가 통째로 빠진다.
+    # ⚠️ AWS_PROFILE 은 여기 **없어야 한다**: 있으면 코드가 PROFILE 절을 붙이고 존재하지 않는
+    # 프로필을 찾다 죽는다(컨테이너에 프로필 파일이 없다).
+    DUCKDB_S3_CHAIN = var.analysis_duckdb_s3_chain
+    # 태스크보다 낮은 메모리 상한에서 넘친 계산만 /tmp로 spill한다. 임시 파일은 입력·산출물
+    # 정본이 아니며, Fargate 기본 임시 스토리지 20GiB면 1.5GB 엔진에 충분하다.
+    DUCKDB_MEMORY_LIMIT = var.analysis_duckdb_memory_limit
+    DUCKDB_TEMP_DIR     = var.analysis_duckdb_temp_dir
     },
     var.analysis_release_bundle_version == null ? {} : { ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version },
   )
@@ -255,7 +273,7 @@ resource "aws_ecs_task_definition" "analysis" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = var.task_cpu
-  memory                   = var.task_memory
+  memory                   = var.analysis_task_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.analysis_task.arn
 
