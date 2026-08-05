@@ -18,8 +18,9 @@ from edge_analysis.statics.duck import (
     session_pragmas)
 
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
-         "AWS_PROFILE", "AWS_REGION", "DUCKDB_S3_CHAIN", "DUCKDB_MEMORY_LIMIT",
-         "DUCKDB_TEMP_DIR", "CAUSAL_BACKFILL_S3")
+         "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_REGION",
+         "DUCKDB_S3_CHAIN", "DUCKDB_MEMORY_LIMIT", "DUCKDB_TEMP_DIR",
+         "CAUSAL_BACKFILL_S3")
 
 
 @pytest.fixture(autouse=True)
@@ -66,11 +67,14 @@ def test_dsn_refuses_half_configuration(monkeypatch):
 
 
 # ── S3 자격증명 ─────────────────────────────────────────────────────────
-def test_secret_omits_profile_in_container():
-    # 컨테이너엔 ~/.aws/config 가 없다 — PROFILE 절이 있으면 시크릿 생성부터 깨진다.
+def test_secret_uses_aws_default_chain_in_ecs(monkeypatch):
+    # ECS task role은 container credentials provider다. 명시 CHAIN의 `instance`는 EC2
+    # metadata만 보므로 상대 URI가 있어도 자격증명을 못 찾는다. 기본 AWS SDK 체인에
+    # 맡겨야 container provider가 선택된다.
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/task")
     sql = s3_secret_sql()
     assert "PROFILE" not in sql
-    assert "CHAIN 'env;instance;config;sso'" in sql   # instance 가 앞에 있어야 task role 이 잡힌다
+    assert "CHAIN" not in sql
     assert "REGION 'ap-northeast-2'" in sql
 
 
