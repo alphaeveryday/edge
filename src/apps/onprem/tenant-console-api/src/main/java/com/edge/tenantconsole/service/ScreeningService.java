@@ -6,7 +6,7 @@ import com.edge.tenantconsole.entity.MemberEntity;
 import com.edge.tenantconsole.entity.PolicyVersionEntity;
 import com.edge.tenantconsole.entity.ScreeningRuleEntity;
 import com.edge.tenantconsole.error.ConsoleErrorStatus;
-import com.edge.tenantconsole.model.AutoPublishCriteria;
+import com.edge.tenantconsole.model.ActivePolicy;
 import com.edge.tenantconsole.model.BannedWord;
 import com.edge.tenantconsole.model.PolicyVersionSummary;
 import com.edge.tenantconsole.model.ScreeningRule;
@@ -102,28 +102,6 @@ public class ScreeningService {
 		return words.reversed();
 	}
 
-	/**
-	 * 활성 버전의 전 룰 인스턴스(ALPHA-756). rule_type 을 가리지 않는다 — 콘솔 처리 기준
-	 * 표가 "무엇이 걸리면 어떻게 되는가"를 실 정책에서 파생하려면 금칙어 밖 룰
-	 * (SINGLE_SOURCE·ASSERTIVE_EXPRESSION)도 보여야 한다. 조회 전용 표면이라 변경 경로
-	 * (/words)의 금칙어 한정 가드와 무관하다.
-	 */
-	public List<ScreeningRule> listRules() {
-		Optional<PolicyVersionEntity> active = versions.findActive();
-		if (active.isEmpty()) {
-			return List.of();
-		}
-		List<ScreeningRule> result = new ArrayList<>();
-		for (ScreeningRuleEntity rule : rules
-				.findByPolicyVersionIdOrderByScreeningRuleId(active.get().getPolicyVersionId())) {
-			// text 없는 룰 타입(SINGLE_SOURCE)은 params 에 text 가 없다 — null 이 정상이다.
-			result.add(new ScreeningRule(rule.getScreeningRuleId(), rule.getRuleType(),
-					objectMapper.readTree(rule.getParams()).path("text").asString(null),
-					rule.getAction(), rule.isEnabled()));
-		}
-		return result;
-	}
-
 	@Transactional
 	public void addWord(String text, String action, SessionMember actor, String clientIp) {
 		if (text == null || text.isBlank() || !ACTIONS.contains(action)) {
@@ -165,15 +143,36 @@ public class ScreeningService {
 				Map.of("ruleId", id, "enabled", target.enabled()));
 	}
 
-	public AutoPublishCriteria getCriteria() {
-		// 활성 버전이 없으면 loadBase 가 온보딩 기반값(2)을 주고, 있으면 그 버전의 원값을
-		// 그대로 낸다 — NULL 은 "출처 수 조건 없음"이라 기본값으로 덮으면 없는 게이트를
-		// 있는 것처럼 보여준다(ALPHA-756: 표가 결과를 단언하므로 위장이 곧 거짓이 된다).
-		Draft base = loadBase();
-		// baseVersionId == null 이면 활성 버전이 없다(첫 발행 전) — 그 구간의 값은 "현재 정책"이
-		// 아니라 첫 발행에 쓰일 기반값이다.
-		return new AutoPublishCriteria(base.baseVersionId() != null, base.autoPublishEnabled(),
-				base.minSources(), base.minConfidence());
+	/**
+	 * 활성 정책 스냅샷(ALPHA-762) — 기준과 룰을 한 번에 낸다. 기존엔 화면이 둘을 따로 물어
+	 * 그 사이 발행이 끼면 서로 다른 버전이 한 표에 섞였는데, 응답에 버전이 없어 섞인 줄도
+	 * 몰랐다.
+	 *
+	 * 여기서 안전한 이유는 **활성 버전을 한 번만 해석**하고 룰을 그 버전 id 로 읽기 때문이다.
+	 * 버전은 불변(ADR-0018)이라 v46 의 룰은 이후 발행과 무관하게 그대로다 — 트랜잭션 격리
+	 * 수준(READ COMMITTED)에 기대지 않는다. 경합이 났던 건 두 호출이 각자 "지금 활성"을
+	 * 따로 해석했기 때문이다.
+	 */
+	public ActivePolicy activePolicy() {
+		Optional<PolicyVersionEntity> active = versions.findActive();
+		if (active.isEmpty()) {
+			// 첫 발행 전 — 값은 현재 정책이 아니라 첫 발행에 쓰일 기반값이다(화면이 구분한다).
+			return new ActivePolicy(false, null, true, DEFAULT_MIN_SOURCES, DEFAULT_MIN_CONFIDENCE,
+					List.of());
+		}
+		PolicyVersionEntity version = active.get();
+		List<ScreeningRule> policyRules = new ArrayList<>();
+		for (ScreeningRuleEntity rule : rules
+				.findByPolicyVersionIdOrderByScreeningRuleId(version.getPolicyVersionId())) {
+			// text 없는 룰 타입(SINGLE_SOURCE)은 params 에 text 가 없다 — null 이 정상이다.
+			policyRules.add(new ScreeningRule(rule.getScreeningRuleId(), rule.getRuleType(),
+					objectMapper.readTree(rule.getParams()).path("text").asString(null),
+					rule.getAction(), rule.isEnabled()));
+		}
+		// NULL 임계는 "조건 없음"이라 기본값으로 덮지 않는다 — 없는 게이트를 있는 것처럼
+		// 보여주면 표가 결과를 거짓으로 단언한다(ALPHA-756).
+		return new ActivePolicy(true, version.getVersionNo(), version.isAutoPublishEnabled(),
+				version.getMinSourceCount(), version.getMinConfidence(), policyRules);
 	}
 
 	/**

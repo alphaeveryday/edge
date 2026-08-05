@@ -346,7 +346,7 @@ class ScreeningControllerTest {
 	}
 
 	@Test
-	void 룰_표면은_금칙어_밖_타입도_전부_보여준다() throws Exception {
+	void 정책_스냅샷은_기준과_룰을_한_번에_주고_타입을_가리지_않는다() throws Exception {
 		// WHY: /words 는 BANNED_WORD 만 투영한다 — 그 필터가 콘솔 전체의 필터였던 동안
 		// SINGLE_SOURCE·ASSERTIVE_EXPRESSION 인스턴스는 활성이어도 어느 화면에도 없어
 		// 운영자가 모르는 판정 근거였다(ALPHA-756). 처리 기준 표는 이 표면에서 파생하므로
@@ -359,16 +359,19 @@ class ScreeningControllerTest {
 
 		mvc.perform(get("/api/v1/screening/words"))
 				.andExpect(jsonPath("$.result.length()").value(1));   // 금칙어 표면은 그대로
-		mvc.perform(get("/api/v1/screening/rules"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.length()").value(3))
-				.andExpect(jsonPath("$.result[0].ruleType").value("BANNED_WORD"))
-				.andExpect(jsonPath("$.result[0].text").value("급등 확실"))
-				.andExpect(jsonPath("$.result[0].action").value("BLOCK"))
-				.andExpect(jsonPath("$.result[1].ruleType").value("SINGLE_SOURCE"))
-				.andExpect(jsonPath("$.result[1].text").doesNotExist())   // text 없는 타입은 null
-				.andExpect(jsonPath("$.result[2].ruleType").value("ASSERTIVE_EXPRESSION"))
-				.andExpect(jsonPath("$.result[2].enabled").value(false)); // 비활성도 감추지 않는다
+				// 기준과 룰이 한 응답이다 — 따로 물으면 그 사이 발행으로 서로 다른 버전이
+				// 섞이고, 응답에 버전이 없어 화면이 섞인 줄도 모른다(ALPHA-762).
+				.andExpect(jsonPath("$.result.versionNo").value(1))
+				.andExpect(jsonPath("$.result.rules.length()").value(3))
+				.andExpect(jsonPath("$.result.rules[0].ruleType").value("BANNED_WORD"))
+				.andExpect(jsonPath("$.result.rules[0].text").value("급등 확실"))
+				.andExpect(jsonPath("$.result.rules[0].action").value("BLOCK"))
+				.andExpect(jsonPath("$.result.rules[1].ruleType").value("SINGLE_SOURCE"))
+				.andExpect(jsonPath("$.result.rules[1].text").doesNotExist())   // text 없는 타입은 null
+				.andExpect(jsonPath("$.result.rules[2].ruleType").value("ASSERTIVE_EXPRESSION"))
+				.andExpect(jsonPath("$.result.rules[2].enabled").value(false)); // 비활성도 감추지 않는다
 	}
 
 	@Test
@@ -378,17 +381,16 @@ class ScreeningControllerTest {
 		mvc.perform(get("/api/v1/screening/words"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.length()").value(0));
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
 				// 활성 정책이 없는 구간은 판정기가 NEW 를 아예 집지 않는다(정책 부재 = 진행 중단).
 				// 값은 현재 정책이 아니라 첫 발행 기반값이므로 화면이 구분할 수 있어야 한다.
 				.andExpect(jsonPath("$.result.published").value(false))
+				.andExpect(jsonPath("$.result.versionNo").doesNotExist())
 				.andExpect(jsonPath("$.result.autoPublishEnabled").value(true))
 				.andExpect(jsonPath("$.result.minSources").value(2))
-				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"));
-		mvc.perform(get("/api/v1/screening/rules"))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.length()").value(0));
+				.andExpect(jsonPath("$.result.minConfidence").value("MEDIUM"))
+				.andExpect(jsonPath("$.result.rules.length()").value(0));
 		mvc.perform(get("/api/v1/screening/disclaimer"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.text").isNotEmpty());
@@ -428,7 +430,7 @@ class ScreeningControllerTest {
 		ReflectionTestUtils.setField(noGate, "activatedAt", Instant.now());
 		versions.stored.add(noGate);
 
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.published").value(true))          // 활성 버전은 있다
 				.andExpect(jsonPath("$.result.minSources").doesNotExist())      // 2 로 덮이지 않는다
@@ -450,7 +452,7 @@ class ScreeningControllerTest {
 		assertThat(off.getMinSourceCount()).isEqualTo(2);        // 기준은 그대로 실려 있다
 		assertThat(off.getMinConfidence()).isEqualTo("MEDIUM");
 
-		mvc.perform(get("/api/v1/screening/criteria"))
+		mvc.perform(get("/api/v1/screening/policy"))
 				.andExpect(jsonPath("$.result.autoPublishEnabled").value(false))
 				.andExpect(jsonPath("$.result.minSources").value(2));
 
