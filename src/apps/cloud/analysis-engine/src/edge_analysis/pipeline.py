@@ -74,17 +74,11 @@ def run(
             f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
             f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
     if minute_row is not None:
-        # 분봉 분해 입력(ALPHA-710) — 트리거 판정과 같은 축(세션 시가 대비)으로
-        # 구성종목 장중 수익률을 파생한다. 기준 window 는 ETF 시가가 확정된 바로
-        # 그 window(minute_session_open.source_window)라 두 축이 갈리지 않는다.
-        open_ctx = store.fetch_minute_open_window(minute_row.session_id, settings.etf_ticker)
-        if open_ctx is None:
-            # 트리거가 발화했다면 시가는 확정돼 있어야 한다 — 부재는 원장 지연이거나
-            # 결손이므로 빈 분해를 만들지 않고 재시도 축(소비자 가시성 연장)으로 접는다.
-            raise ReturnsNotReadyError(
-                f"세션 시가 원장이 없다: session={minute_row.session_id}"
-                f" etf={settings.etf_ticker} — minute_session_open 미확정")
-        open_window, open_generation, open_checksum = open_ctx
+        # 분봉 분해 입력(ALPHA-710) — 분모는 **전일 종가**다(ALPHA-747). 트리거 판정이
+        # `intraday-anchor-v2` 로 전일 종가 앵커가 되면서 시가 축은 판정과 갈렸고,
+        # 시가 원장(minute_session_open)은 판정기에서 prev_close 결손 시 폴백으로만
+        # 남아 대개 비어 있다 — 그것을 분해의 필수 입력으로 두면 장중 설명이 전건
+        # 차단된다(08-05 dev 실측: start 709건·분해 0건).
         # 트리거 window 의 세대·checksum 은 원장의 마지막 커밋 쌍이 정본이다 — 발화 후
         # 정정이 끼면 최신 커밋이 더 정확한 가격이고, checksum 은 그 세대의 바이트다.
         trigger_meta = store.fetch_minute_window_meta(
@@ -94,11 +88,18 @@ def run(
                 f"트리거 window 원장이 없다: session={minute_row.session_id}"
                 f" window={minute_row.window_start.isoformat()} — 커밋 미착지")
         trigger_generation, trigger_checksum = trigger_meta
+        prev_closes = lake.load_prev_closes(_MARKET, settings.trade_date)
+        if not prev_closes:
+            # 분모가 통째로 없으면 모든 unit 이 None 이 돼 total_priced=0 분해가 정상
+            # 설명으로 영속된다 — 아래 빈 검사는 dict 가 truthy 라 못 잡는다(Rule 12).
+            raise ReturnsNotReadyError(
+                f"직전 거래일 price_daily 파티션이 없다: market={_MARKET}"
+                f" trade_date={settings.trade_date.isoformat()} — 분봉 분해의 분모가"
+                " 없다. 빈 분해를 설명으로 만들지 않는다")
         returns = lake.load_minute_returns(
             _MARKET, settings.trade_date.isoformat(),
-            open_window.astimezone(KST).strftime("%H%M"), open_generation, open_checksum,
             minute_row.window_start.astimezone(KST).strftime("%H%M"),
-            trigger_generation, trigger_checksum,
+            trigger_generation, trigger_checksum, prev_closes,
         )
         # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
         # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상

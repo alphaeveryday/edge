@@ -48,6 +48,7 @@ from .minute.worker import price_worker_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
+    raw_investor_estimate_partition,
     raw_etf_nav_partition,
     raw_etf_profile_partition,
 )
@@ -62,6 +63,7 @@ from .sources import (
     KisDailyPriceSource,
     KisEtfProfileSource,
     KisInavSource,
+    KisInvestorEstimateSource,
     KisInvestorSource,
     KisNavSource,
     KrxEtfSource,
@@ -135,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile",
-                 "ingest-raw-investor",
+                 "ingest-raw-investor", "ingest-raw-investor-estimate",
                  "normalize-price", "normalize-investor",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
@@ -621,6 +623,36 @@ def _dispatch(args, settings, storage, run_id) -> int:
             settings, storage, profile_source, run_id,
             dataset="etf_profile", partition=raw_etf_profile_partition,
             job_name="ingest_raw_etf_profile",
+        )
+
+    if args.step == "ingest-raw-investor-estimate":
+        # 장중 투자자 추정(ALPHA-767) — EOD 확정(`ingest-raw-investor`)과 **별개 데이터셋**이다.
+        # 날짜창 블록 **앞**에 둔다: 이 API 는 날짜 파라미터가 없어 창을 계산할 이유가 없다
+        # (ETF 프로필 분기와 같은 자리·같은 이유).
+        #
+        # 창을 준 실행은 **거부한다** — 무시하고 돌면 갭을 메우려던 운영자가 오늘치를 받고
+        # exit 0 을 보게 되고, 소급이 영구 불가한 구간을 복구한 줄 착각한다(iNAV 와 같은
+        # 성질·같은 처방, Rule 12).
+        # `or` 가 아니라 `is not None` 이다 — 운영 스크립트가 unset 변수를 `--from "$FROM"`
+        # 으로 넘기면 빈 문자열이 되고, falsy 검사면 **명시적으로 창을 준 실행이 가드를 지나
+        # 오늘치를 받고 exit 0** 이 된다(소급된 줄 착각). 값의 유무로 판정한다(Rule 12).
+        if args.from_date is not None or args.to_date is not None:
+            raise SystemExit(
+                "ingest-raw-investor-estimate 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜 "
+                "지정이 없고 오늘치 장중 추정만 준다(소급 백필 불가). 갭은 폴링 슬롯으로만 막는다."
+            )
+        # 자격증명·유니버스를 EOD 와 **공유**한다(같은 KIS 앱키·같은 구성종목 축) — iNAV 가
+        # kis_nav 섹션을 재사용하는 선례와 같다. 별도 섹션을 두면 같은 비밀값을 두 env 로
+        # 주입해야 해서, 한쪽만 주입된 배포에서 이 소스가 조용히 비활성된다.
+        if settings.kis_investor is None:
+            raise SystemExit("kis_investor.source 설정이 없다 — sources.toml 확인")
+        estimate_source = KisInvestorEstimateSource(
+            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+        )
+        return ingest_raw_investor.run(
+            settings, storage, estimate_source, run_id,
+            dataset="investor_flow_intraday", partition=raw_investor_estimate_partition,
+            job_name="ingest_raw_investor_estimate",
         )
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).

@@ -47,8 +47,8 @@ class PolicyPublishIT extends AbstractPostgresIntegrationTest {
 
 	@Test
 	void 발행은_활성_전이와_룰_복사와_worker_소비_계약을_실테이블로_만족한다() {
-		screening.addWord("급등 확실", "HIGH", "BLOCK", actor, "127.0.0.1");
-		screening.updateCriteria(1, null, actor, "127.0.0.1");
+		screening.addWord("급등 확실", "BLOCK", actor, "127.0.0.1");
+		screening.updateCriteria(null, 1, null, actor, "127.0.0.1");
 
 		// 활성 1건 — worker 의 활성 판정과 동일한 술어로 조회된다.
 		List<Map<String, Object>> active = jdbc.queryForList(
@@ -77,7 +77,7 @@ class PolicyPublishIT extends AbstractPostgresIntegrationTest {
 
 	@Test
 	void 토글_발행은_구_버전_룰을_불변으로_남기고_새_버전만_반전한다() {
-		screening.addWord("무조건", "HIGH", "BLOCK", actor, "127.0.0.1");
+		screening.addWord("무조건", "BLOCK", actor, "127.0.0.1");
 		long firstRuleId = jdbc.queryForObject(
 				"SELECT screening_rule_id FROM screening_rule sr JOIN policy_version pv "
 						+ "ON sr.policy_version_id = pv.policy_version_id "
@@ -101,7 +101,7 @@ class PolicyPublishIT extends AbstractPostgresIntegrationTest {
 	void 활성_1건은_DB_부분_유니크가_강제한다() {
 		// WHY: 발행 경합의 arbiter 는 코드 재검사가 아니라 이 제약이다(TOCTOU 차단) —
 		// 제약이 사라지면 활성이 둘이 되어 평가기 판정의 감사 재현이 깨진다.
-		screening.addWord("확실시", "MEDIUM", "REVIEW", actor, "127.0.0.1");
+		screening.addWord("확실시", "REVIEW", actor, "127.0.0.1");
 
 		assertThatThrownBy(() -> jdbc.update(
 				"INSERT INTO policy_version (version_no, disclaimer_text, activated_at) "

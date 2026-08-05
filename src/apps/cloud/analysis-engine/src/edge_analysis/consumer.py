@@ -15,9 +15,10 @@ data-pipeline 의 `MinuteConsumer` 커널을 **쓰지 않는다** — 이 큐는
 
 실패 분류는 셋이고 처방이 다르다:
 
-- `ReturnsNotReadyError` — 분봉 window artifact·시가 원장이 아직 없다(ALPHA-710, 초
-  단위 커밋 지연). 코드 결함이 아니라 **시간이 낫게 하는** 실패다 → 120초 고정 지연으로
-  재확인하고, 진짜 결손이면 반복이 receive 예산(16)을 태워 ≈32분 안에 DLQ 로 간다.
+- `ReturnsNotReadyError` — 분해 입력이 아직 없다(ALPHA-710·747, 초 단위 커밋 지연):
+  트리거 window 원장 · 직전 거래일 `price_daily` 파티션(분모) · 구성종목 가격 · checksum.
+  코드 결함이 아니라 **시간이 낫게 하는** 실패다 → 120초 고정 지연으로 재확인하고,
+  진짜 결손이면 반복이 receive 예산(16)을 태워 ≈32분 안에 DLQ 로 간다.
 - 봉투 계약 위반(파싱 불가·미지 event_type·trigger_id 결손) — 재시도로 낫지 않는다.
   **지우지도 않는다**(지우면 근거가 사라진다) → 짧은 재배달을 반복하다 DLQ 로 간다.
 - 그 외 예외(DB·LLM·일시 장애) — 기본 가시성으로 재배달. 예산 판정은 SQS 상한 몫이다.
@@ -54,7 +55,7 @@ REVERT_REASON = (
 )
 WAIT_SECONDS = 20            # long polling — 빈 응답 폭주 방지
 # ReturnsNotReady 지연 — 분해 입력이 분봉 canonical 이 되면서(ALPHA-710) 이 실패는
-# "15:40 배치 대기"가 아니라 window artifact 커밋·시가 원장 확정의 **초 단위 지연**이다.
+# "15:40 배치 대기"가 아니라 window 커밋·원장 확정의 **초 단위 지연**이다.
 # 짧은 고정 지연으로 재확인하고, 진짜 결손이면 반복이 maxReceiveCount(16) 예산을 태워
 # DLQ 로 간다 — 시간이 낫게 하지 않는 실패는 근거 보존 경로가 정답이다. 16회 × 120초
 # ≈ 32분이라 일시 지연은 넉넉히 덮고 결손은 당일 안에 드러난다.
@@ -289,11 +290,14 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
                 outcome = revert_fn(payload)
             else:
                 outcome = process_fn(payload["trigger_id"])
-        except ReturnsNotReadyError:
-            # 시간이 낫게 하는 실패 — 분봉 artifact 커밋·시가 원장 확정의 짧은 지연이라
+        except ReturnsNotReadyError as error:
+            # 시간이 낫게 하는 실패 — 분봉 artifact 커밋·원장 확정의 짧은 지연이라
             # 고정 짧은 간격으로 재확인한다(ALPHA-710 — 배치 착지 대기 산술은 폐기).
-            logger.info("returns 미준비(분봉 window·시가 원장) — %d초 뒤 재시도: %s",
-                        RETURNS_RETRY_SECONDS, payload.get("trigger_id"))
+            # **예외 메시지를 그대로 싣는다**: 사유가 넷(트리거 window 원장 미착지·분모
+            # 파티션 부재·구성종목 가격 0건·checksum 불일치)인데 고정 문구만 찍으면
+            # 어느 것인지 못 가린다 — 08-05 에 하루치 실패가 그렇게 조용했다(Rule 12).
+            logger.info("returns 미준비 — %d초 뒤 재시도: trigger=%s reason=%s",
+                        RETURNS_RETRY_SECONDS, payload.get("trigger_id"), error)
             _set_visibility(sqs, queue_url, receipt, RETURNS_RETRY_SECONDS)
             _count("deferred")
             continue

@@ -53,4 +53,5 @@
 | [0043](0043-dataset-contract-freshness.md) | Dataset Contract와 ETF freshness 상태 축 | 승인됨 |
 | [0044](0044-correction-abolition.md) | 정정(CORRECTION) 전달 폐지 — 무효화(INVALIDATION) 단독 | 승인됨 |
 | [0045](0045-realtime-snapshot-publication.md) | 실시간 스냅샷 게시 전환 — day-grain 게이트 폐지, 승계와 3축 무효화 | 승인됨 |
-| [0046](0046-confidence-gate-risk-grade-abolition.md) | 위험등급 융합 산정 폐기 — 확신도 AND 게이트 전환, max_risk 은퇴 | 승인됨 |
+| [0046](0046-confidence-gate-risk-grade-abolition.md) | 위험등급 융합 산정 폐기 — 확신도 AND 게이트 전환, max_risk 은퇴 | 승인됨 (결정 5 후단 대체 → [0047](0047-banned-word-risk-retirement.md)) |
+| [0047](0047-banned-word-risk-retirement.md) | 금칙어 심각도 은퇴 — 결과를 정하는 축은 처리 방식뿐 | 승인됨 |

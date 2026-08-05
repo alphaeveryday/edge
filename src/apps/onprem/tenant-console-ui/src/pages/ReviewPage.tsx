@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon, PageSkeleton, StatusBadge } from 'ui-kit';
+import { Icon, PageSkeleton, Select, StatusBadge } from 'ui-kit';
 import type { ReviewReasonType } from '../domains/review';
-import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, reasonLabel } from '../domains/review';
+import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, gateReasonLabel, reasonLabel } from '../domains/review';
 import type { ConfidenceLevel } from '../domains/explanations';
-import { CONFIDENCE_LABEL } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
-import { LoadError, StockCell } from './_shared/cells';
+import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
 
 /**
  * Review Queue 목록(ALPHA-436) — status=REVIEW_REQUIRED 논리 작업함의 실계약 조회.
@@ -44,19 +43,16 @@ export function ReviewPage() {
             onChange={(e) => setQ(e.target.value)}
           />
         </label>
-        <select
-          className="select"
+        <Select
+          aria-label="검수 사유 필터"
           value={fReason}
-          onChange={(e) => setFReason(e.target.value)}
-        >
-          <option value="ALL">전체 사유</option>
-          {(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => (
-            <option key={r} value={r}>
-              {REASON_LABEL[r]}
-            </option>
-          ))}
-          <option value={AUTO_PUBLISH_CRITERIA}>{reasonLabel(AUTO_PUBLISH_CRITERIA)}</option>
-        </select>
+          onChange={setFReason}
+          options={[
+            { value: 'ALL', label: '전체 사유' },
+            ...(Object.keys(REASON_LABEL) as ReviewReasonType[]).map((r) => ({ value: r, label: REASON_LABEL[r] })),
+            { value: AUTO_PUBLISH_CRITERIA, label: reasonLabel(AUTO_PUBLISH_CRITERIA) },
+          ]}
+        />
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
           대기 {filtered.length}건
@@ -85,16 +81,35 @@ export function ReviewPage() {
                   </div>
                 </td>
                 <td>
+                  {/* 룰 무관 판정은 서버가 "자동 제공 기준 미충족" 하나로 뭉치는데, 상세는
+                      판정 당시 기준으로 구체 문구를 만든다 — 목록도 같은 말을 써야 한 항목의
+                      사유가 화면마다 달라지지 않는다(ALPHA-774). 기준을 못 만들면 일반 사유가
+                      남아 "왜 걸렸는지"가 사라지지 않는다. */}
                   <div className="flex flex-wrap gap-1">
-                    {it.reviewReasons.map((r) => (
-                      <StatusBadge key={r} tone="warn">
-                        {reasonLabel(r)}
-                      </StatusBadge>
-                    ))}
+                    {it.reviewReasons
+                      .filter(
+                        (r) =>
+                          r !== AUTO_PUBLISH_CRITERIA ||
+                          !it.gateChecks.some((g) => gateReasonLabel(g)),
+                      )
+                      .map((r) => (
+                        <StatusBadge key={r} tone="warn">
+                          {reasonLabel(r)}
+                        </StatusBadge>
+                      ))}
+                    {it.gateChecks
+                      .map((g) => gateReasonLabel(g))
+                      .filter((label): label is string => label !== null)
+                      .map((label) => (
+                        <StatusBadge key={label} tone="warn">
+                          {label}
+                        </StatusBadge>
+                      ))}
                   </div>
                 </td>
-                <td className="col-muted">{it.confidenceLevel ? (CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel] ?? it.confidenceLevel) : '—'}</td>
-                <td className="col-muted num">
+                {/* 설명 목록과 같은 배지 — 같은 값을 화면마다 다른 모양으로 그리지 않는다. */}
+                <ConfidenceCell level={it.confidenceLevel as ConfidenceLevel | null} />
+                <td className="col-muted t-data">
                   {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
                 </td>
                 <td className="text-right">

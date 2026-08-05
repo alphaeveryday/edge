@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -251,6 +252,11 @@ def query_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """설정 로드·어댑터 조립·실행. 실패(PipelineError)는 로그 + 비0 종료."""
+    # 루트 로거 기본은 WARNING 이라, 설정이 없으면 `logger.info` 가 통째로 삼켜진다 —
+    # 상주 소비자가 ReturnsNotReady **사유**를 info 로 찍으므로 실패 709건이 로그에
+    # `start` 만 남긴 실측이 있다(08-05, ALPHA-747). 진단 가능성이 관측의 최소 조건이다.
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s %(message)s", force=True)
     args = parse_args(argv)
     try:
         if args.command == "consume-triggers":

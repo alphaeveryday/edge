@@ -34,8 +34,10 @@ public record ReviewItemDetailResponse(
 
 	@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 	@JsonInclude(JsonInclude.Include.NON_NULL)
+	/** 검사 한 행 — policyVersionNo·minSourceCount·minConfidence 는 판정 당시 값이다(ALPHA-774). */
 	public record CheckResponse(String result, String ruleType, String matchedText,
-			String checkedAt) {
+			String checkedAt, Integer policyVersionNo, Integer minSourceCount,
+			String minConfidence) {
 	}
 
 	@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -55,7 +57,8 @@ public record ReviewItemDetailResponse(
 				detail.reviewReasons(),
 				detail.checks().stream()
 						.map(c -> new CheckResponse(c.result(), c.ruleType(), c.matchedText(),
-								c.checkedAt() == null ? null : c.checkedAt().toString()))
+								c.checkedAt() == null ? null : c.checkedAt().toString(),
+								c.policyVersionNo(), c.minSourceCount(), c.minConfidence()))
 						.toList(),
 				detail.history().stream()
 						.map(h -> new HistoryResponse(h.fromStatus(), h.toStatus(), h.actorType(),

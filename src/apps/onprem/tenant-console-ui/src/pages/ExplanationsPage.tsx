@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Icon, PageSkeleton } from 'ui-kit';
+import { Icon, PageSkeleton, Select } from 'ui-kit';
 import type { ConfidenceLevel, ServeStatus } from '../domains/explanations';
 import { CONFIDENCE_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
@@ -37,30 +37,24 @@ export function ExplanationsPage() {
             onChange={(e) => setQ(e.target.value)}
           />
         </label>
-        <select
-          className="select"
+        <Select
+          aria-label="상태 필터"
           value={fStatus}
-          onChange={(e) => setFStatus(e.target.value as ServeStatus | 'ALL')}
-        >
-          <option value="ALL">전체 상태</option>
-          {(Object.keys(STATUS_LABEL) as ServeStatus[]).map((s) => (
-            <option key={s} value={s}>
-              {STATUS_LABEL[s]}
-            </option>
-          ))}
-        </select>
-        <select
-          className="select"
+          onChange={(v) => setFStatus(v as ServeStatus | 'ALL')}
+          options={[
+            { value: 'ALL', label: '전체 상태' },
+            ...(Object.keys(STATUS_LABEL) as ServeStatus[]).map((s) => ({ value: s, label: STATUS_LABEL[s] })),
+          ]}
+        />
+        <Select
+          aria-label="확신도 필터"
           value={fConfidence}
-          onChange={(e) => setFConfidence(e.target.value as ConfidenceLevel | 'ALL')}
-        >
-          <option value="ALL">전체 확신도</option>
-          {(Object.keys(CONFIDENCE_LABEL) as ConfidenceLevel[]).map((c) => (
-            <option key={c} value={c}>
-              {CONFIDENCE_LABEL[c]}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setFConfidence(v as ConfidenceLevel | 'ALL')}
+          options={[
+            { value: 'ALL', label: '전체 확신도' },
+            ...(Object.keys(CONFIDENCE_LABEL) as ConfidenceLevel[]).map((c) => ({ value: c, label: CONFIDENCE_LABEL[c] })),
+          ]}
+        />
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
           {filtered.length}건
@@ -84,9 +78,9 @@ export function ExplanationsPage() {
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                 <StockCell name={it.name} code={it.code} />
                 <StatusCell it={it} showServing />
-                <ConfidenceCell it={it} />
-                <td className="col-muted num">{it.explanationAsOf}</td>
-                <td className="col-muted num">{it.receivedRelative}</td>
+                <ConfidenceCell level={it.confidence} />
+                <td className="col-muted t-data">{it.explanationAsOf}</td>
+                <td className="col-muted t-data">{it.receivedRelative}</td>
                 <td className="text-right" style={{ color: 'var(--fg-4)' }}>
                   <Icon name="chevronRight" size={14} />
                 </td>

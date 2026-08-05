@@ -17,7 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent))  # minutefakes — tests/ 루트�
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
-from data_pipeline.minute.models import KST, plan_session_windows
+from data_pipeline.minute.models import (
+    FINAL_WINDOW_SETTLE_SEC,
+    KST,
+    plan_session_windows,
+)
 from data_pipeline.minute.repository import (
     MinuteLedger,
     SessionFinalizedError,
@@ -99,6 +103,36 @@ class TestPlanSession:
         first = min(db.windows.values(), key=lambda w: w["window_start"])
         assert first["data_status"] == "DUE"
         assert first["scheduled_at"] == first["window_end"]
+
+    def test_close_window_row_is_scheduled_after_the_auction(self):
+        """마감 window 행이 **원장에** 늦춰져 들어가는지 — `scheduled_at_for` 배선 검증.
+
+        helper 단위 테스트만 두면 INSERT 가 `scheduled_at=window_end` 로 회귀해도
+        전부 통과한다(그러면 미완성 봉 커밋 결함이 그대로 돌아온다). 여기서 원장에
+        저장된 값을 직접 본다.
+        """
+        db = FakeMinuteDB()
+        make_ledger(db).plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
+        )
+        rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
+        close_row = rows[-1]
+        assert close_row["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
+        assert close_row["scheduled_at"] == close_row["window_end"] + timedelta(
+            seconds=FINAL_WINDOW_SETTLE_SEC)
+        # 나머지 389개는 그대로 window_end — 장중에 지연을 만들면 안 된다
+        assert all(w["scheduled_at"] == w["window_end"] for w in rows[:-1])
+
+    def test_news_session_close_window_is_not_delayed(self):
+        """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,
+        1분 지연은 realtime 뉴스 추출·조립을 그만큼 늦춘다(Codex P2)."""
+        db = FakeMinuteDB()
+        make_ledger(db).plan_session(
+            dataset="news_minute", source_group="bigkinds", session_date=SESSION_DATE,
+            universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
+        )
+        assert all(w["scheduled_at"] == w["window_end"] for w in db.windows.values())
 
 
 class TestFence:

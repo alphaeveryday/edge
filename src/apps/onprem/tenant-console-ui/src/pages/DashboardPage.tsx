@@ -108,8 +108,8 @@ export function DashboardPage() {
                 <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                   <StockCell name={it.name} code={it.code} />
                   <StatusCell it={it} />
-                  <ConfidenceCell it={it} />
-                  <td className="col-muted num">{it.receivedRelative}</td>
+                  <ConfidenceCell level={it.confidence} />
+                  <td className="col-muted t-data">{it.receivedRelative}</td>
                 </tr>
               ))}
           </tbody>

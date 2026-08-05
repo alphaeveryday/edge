@@ -9,7 +9,7 @@ export function LoadError() {
     </div>
   );
 }
-import type { Explanation } from '../../domains/explanations';
+import type { ConfidenceLevel, Explanation } from '../../domains/explanations';
 import { CONFIDENCE_LABEL, CONFIDENCE_TONE, STATUS_LABEL, STATUS_TONE } from '../../domains/explanations';
 
 export function StockCell({ name, code }: { name: string; code: string }) {
@@ -40,16 +40,28 @@ export function StatusCell({ it, showServing = false }: { it: Explanation; showS
   );
 }
 
-export function ConfidenceCell({ it }: { it: Explanation }) {
+/** 확신도 셀 — 설명 목록과 검수 목록이 공유한다(같은 값이 화면마다 다른 모양이면 안 된다).
+ * 도메인 형이 아니라 값을 받는 이유가 그것이다: review 는 confidenceLevel, explanations 는
+ * confidence 로 필드명이 다르다. */
+export function ConfidenceCell({ level }: { level?: string | null }) {
+  if (!level) {
+    return (
+      <td>
+        <span style={{ color: 'var(--fg-4)' }}>—</span>
+      </td>
+    );
+  }
+  // 와이어 값은 문자열이라 어휘 밖 등급이 올 수 있다(서버 선배포 등). 라벨이 없으면
+  // 배지가 빈 칸으로 그려지므로 원값을 그대로 낸다 — 확신도 정보가 사라지면 안 된다.
+  // hasOwn 으로 가른다 — 어휘 밖 값이 'constructor' 류면 프로토타입 프로퍼티(함수)가
+  // 잡혀 폴백을 건너뛰고 렌더에서 터진다.
+  if (!Object.hasOwn(CONFIDENCE_LABEL, level)) return <td className="col-muted">{level}</td>;
+  const label = CONFIDENCE_LABEL[level as ConfidenceLevel];
   return (
     <td>
-      {it.confidence ? (
-        <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
-          {CONFIDENCE_LABEL[it.confidence]}
-        </StatusBadge>
-      ) : (
-        <span style={{ color: 'var(--fg-4)' }}>—</span>
-      )}
+      <StatusBadge tone={CONFIDENCE_TONE[level as ConfidenceLevel]} dot={false}>
+        {label}
+      </StatusBadge>
     </td>
   );
 }

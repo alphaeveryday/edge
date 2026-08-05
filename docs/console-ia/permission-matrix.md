@@ -42,8 +42,8 @@ TA = Tenant Admin, CR = Compliance Reviewer, OP = Operator, RO = Read Only.
 | | 제공 중단 | – | ✓ | ✓ | – |
 | Review Queue | 대기 목록·상세 조회 | ✓ | ✓ | ✓ | ✓ |
 | | 검수 액션(임시 저장·승인·수정 후 승인·반려·차단) | – | ✓ | – | – |
-| Compliance Policy | 정책 조회(금칙어·처리 기준·면책 문구·버전 이력) | ✓ | ✓ | ✓ | ✓ |
-| | 정책 변경(금칙어 등록·토글, 처리 기준, 면책 문구 = 새 버전 발행) | – | ✓ | – | – |
+| Compliance Policy | 정책 조회(금칙어·룰 인스턴스·처리 기준·면책 문구·버전 이력) | ✓ | ✓ | ✓ | ✓ |
+| | 정책 변경(금칙어 등록·토글, 자동 제공 스위치·처리 기준, 면책 문구 = 새 버전 발행) | – | ✓ | – | – |
 | Settings — 제공 범위 | 조회 | ✓ | ✓ | ✓ | ✓ |
 | | 커버리지 변경(시장·채널 토글) | ✓ | – | – | – |
 | | 이해상충 제외 변경(종목·섹터 토글) | – | ✓ | – | – |
@@ -94,7 +94,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `POST /api/v1/members` | 사용자 등록 | TA |
 | `POST /api/v1/members/{id}/deactivate` | 사용자 비활성화 | TA |
 | `PATCH /api/v1/members/{id}/role` | 역할 부여·변경 | TA — 자기 자신 대상은 서비스가 403(직무 분리) |
-| `GET /api/v1/screening/words` · `.../criteria` · `.../disclaimer` · `.../versions` | 정책 조회(금칙어·처리 기준·면책 문구·버전 이력) | TA·CR·OP·RO |
+| `GET /api/v1/screening/words` · `.../rules` · `.../criteria` · `.../disclaimer` · `.../versions` | 정책 조회(금칙어·룰 인스턴스·처리 기준·면책 문구·버전 이력) | TA·CR·OP·RO |
 | `POST /api/v1/screening/words` · `POST .../words/{id}/toggle` · `PATCH .../criteria` · `PATCH .../disclaimer` | 정책 변경(= 새 버전 발행, ALPHA-438) | CR |
 | `GET /api/v1/scope/markets` · `GET /api/v1/scope/stocks` | 제공 범위 조회 | TA·CR·OP·RO |
 | `POST /api/v1/scope/markets/{market}/toggle` | 커버리지 변경(시장 토글, ALPHA-606) | TA |

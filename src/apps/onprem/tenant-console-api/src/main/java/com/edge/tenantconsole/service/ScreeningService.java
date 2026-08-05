@@ -9,6 +9,7 @@ import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.AutoPublishCriteria;
 import com.edge.tenantconsole.model.BannedWord;
 import com.edge.tenantconsole.model.PolicyVersionSummary;
+import com.edge.tenantconsole.model.ScreeningRule;
 import com.edge.tenantconsole.repository.MemberRepository;
 import com.edge.tenantconsole.repository.PolicyVersionRepository;
 import com.edge.tenantconsole.repository.ScreeningRuleRepository;
@@ -37,7 +38,6 @@ import java.util.Set;
 @Service
 public class ScreeningService {
 
-	private static final Set<String> RISKS = Set.of("LOW", "MEDIUM", "HIGH");
 	private static final Set<String> ACTIONS = Set.of("REVIEW", "BLOCK");
 	// 자동 제공 최소 확신도에 LOW 는 없다 — 보류(LOW)까지 허용은 미설정과 실질 동일이라
 	// 기준이 될 수 없다(ALPHA-634, max_risk 가 HIGH 를 뺐던 것과 같은 원리).
@@ -47,6 +47,9 @@ public class ScreeningService {
 	// 어긋나지 않는다. 자동 제공 ON 이 기본(걸린 것만 검수), 문구는 UI 시안 기본 문구.
 	private static final int DEFAULT_MIN_SOURCES = 2;
 	private static final String DEFAULT_MIN_CONFIDENCE = "MEDIUM";
+	// DEFAULT_DISCLAIMER 를 고칠 때는 publication-api ExplanationService.DEFAULT_DISCLAIMER 도
+	// 같이 고쳐야 한다 — 서빙은 활성 정책이 없는 구간에 자기 기본값을 응답에 싣는다. 두 값이
+	// 갈리면 아무도 아무것도 바꾸지 않은 상태에서 콘솔 화면과 고객 노출 문구가 어긋난다(ALPHA-772).
 	private static final String DEFAULT_DISCLAIMER =
 			"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
 					+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다.";
@@ -91,8 +94,7 @@ public class ScreeningService {
 			}
 			var params = objectMapper.readTree(rule.getParams());
 			words.add(new BannedWord(rule.getScreeningRuleId(),
-					params.path("text").asString(null), params.path("risk").asString(null),
-					rule.getAction(), rule.isEnabled(),
+					params.path("text").asString(null), rule.getAction(), rule.isEnabled(),
 					LocalDate.ofInstant(rule.getCreatedAt(), ZoneId.systemDefault()).toString()));
 		}
 		// 최신 등록 맨 위 — UI 목록 정렬 규약(구 mock 과 동일). 복사 발행이 상대 순서를
@@ -100,19 +102,41 @@ public class ScreeningService {
 		return words.reversed();
 	}
 
+	/**
+	 * 활성 버전의 전 룰 인스턴스(ALPHA-756). rule_type 을 가리지 않는다 — 콘솔 처리 기준
+	 * 표가 "무엇이 걸리면 어떻게 되는가"를 실 정책에서 파생하려면 금칙어 밖 룰
+	 * (SINGLE_SOURCE·ASSERTIVE_EXPRESSION)도 보여야 한다. 조회 전용 표면이라 변경 경로
+	 * (/words)의 금칙어 한정 가드와 무관하다.
+	 */
+	public List<ScreeningRule> listRules() {
+		Optional<PolicyVersionEntity> active = versions.findActive();
+		if (active.isEmpty()) {
+			return List.of();
+		}
+		List<ScreeningRule> result = new ArrayList<>();
+		for (ScreeningRuleEntity rule : rules
+				.findByPolicyVersionIdOrderByScreeningRuleId(active.get().getPolicyVersionId())) {
+			// text 없는 룰 타입(SINGLE_SOURCE)은 params 에 text 가 없다 — null 이 정상이다.
+			result.add(new ScreeningRule(rule.getScreeningRuleId(), rule.getRuleType(),
+					objectMapper.readTree(rule.getParams()).path("text").asString(null),
+					rule.getAction(), rule.isEnabled()));
+		}
+		return result;
+	}
+
 	@Transactional
-	public void addWord(String text, String risk, String action, SessionMember actor, String clientIp) {
-		if (text == null || text.isBlank() || !RISKS.contains(risk) || !ACTIONS.contains(action)) {
+	public void addWord(String text, String action, SessionMember actor, String clientIp) {
+		if (text == null || text.isBlank() || !ACTIONS.contains(action)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		Draft base = loadBase();
 		List<DraftRule> newRules = new ArrayList<>(base.rules());
 		newRules.add(new DraftRule(null, "BANNED_WORD",
-				objectMapper.writeValueAsString(Map.of("text", text, "risk", risk)),
+				objectMapper.writeValueAsString(Map.of("text", text)),
 				action, true, Instant.now()));
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
 						base.minConfidence(), base.disclaimer(), newRules),
-				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "risk", risk, "action", action));
+				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "action", action));
 	}
 
 	@Transactional
@@ -142,31 +166,45 @@ public class ScreeningService {
 	}
 
 	public AutoPublishCriteria getCriteria() {
+		// 활성 버전이 없으면 loadBase 가 온보딩 기반값(2)을 주고, 있으면 그 버전의 원값을
+		// 그대로 낸다 — NULL 은 "출처 수 조건 없음"이라 기본값으로 덮으면 없는 게이트를
+		// 있는 것처럼 보여준다(ALPHA-756: 표가 결과를 단언하므로 위장이 곧 거짓이 된다).
 		Draft base = loadBase();
-		return new AutoPublishCriteria(
-				base.minSources() == null ? DEFAULT_MIN_SOURCES : base.minSources(), base.minConfidence());
+		// baseVersionId == null 이면 활성 버전이 없다(첫 발행 전) — 그 구간의 값은 "현재 정책"이
+		// 아니라 첫 발행에 쓰일 기반값이다.
+		return new AutoPublishCriteria(base.baseVersionId() != null, base.autoPublishEnabled(),
+				base.minSources(), base.minConfidence());
 	}
 
+	/**
+	 * 자동 제공 기준 부분 갱신(ALPHA-756 에서 autoPublishEnabled 추가). 스위치는 컬럼·평가기
+	 * 분기·이력 표시가 이미 있는데 조작 수단만 없어서 앱 경로로는 항상 켜짐이었다 —
+	 * "전건 검수(0%) 운영은 테넌트 선택지"(tenant-console.md) 서술을 코드가 못 따라가고
+	 * 있었다. 확신도 해제는 여전히 없다: 순수 완화 방향이라 근거가 생길 때 연다(ALPHA-634).
+	 */
 	@Transactional
-	public void updateCriteria(Integer minSources, String minConfidence, SessionMember actor, String clientIp) {
+	public void updateCriteria(Boolean autoPublishEnabled, Integer minSources, String minConfidence,
+			SessionMember actor, String clientIp) {
 		if (minSources != null && (minSources < 1 || minSources > 3)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		if (minConfidence != null && !MIN_CONFIDENCES.contains(minConfidence)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
-		if (minSources == null && minConfidence == null) {
+		if (autoPublishEnabled == null && minSources == null && minConfidence == null) {
 			// 빈 PATCH 가 동일 내용의 새 버전을 발행하면 이력이 허위 변경으로 오염된다.
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		Draft base = loadBase();
 		// 부분 갱신(PATCH) — null 필드는 활성 버전 값 유지.
-		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(),
+		publish(new Draft(base.baseVersionId(),
+						autoPublishEnabled == null ? base.autoPublishEnabled() : autoPublishEnabled,
 						minSources == null ? base.minSources() : minSources,
 						minConfidence == null ? base.minConfidence() : minConfidence,
 						base.disclaimer(), base.rules()),
 				actor, clientIp, "POLICY_CRITERIA_CHANGED",
-				Map.of("minSources", minSources == null ? "unchanged" : minSources,
+				Map.of("autoPublishEnabled", autoPublishEnabled == null ? "unchanged" : autoPublishEnabled,
+						"minSources", minSources == null ? "unchanged" : minSources,
 						"minConfidence", minConfidence == null ? "unchanged" : minConfidence));
 	}
 

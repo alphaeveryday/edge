@@ -172,9 +172,10 @@ class ConsoleAuthFilterTest {
 	@BeforeEach
 	void setUp() {
 		// 검수 액션의 기록·감사는 이 테스트의 관심사 밖 — 최소 no-op 대역으로 채운다.
+		StubPolicyVersions authPolicyVersions = new StubPolicyVersions();
 		ReviewService reviewService = new ReviewService(new StubItems(), new StubPublications(),
 				task -> task, new StubHistoryRepo(), new StubCheckRepo(), new StubPolicyRules(),
-				members, new ConsoleActionLogService(null, null) {
+				authPolicyVersions, members, new ConsoleActionLogService(null, null) {
 					@Override
 					public void record(SessionMember actor, String action, String targetType,
 							String targetId, java.util.Map<String, Object> detail, String clientIp) {
@@ -259,6 +260,11 @@ class ConsoleAuthFilterTest {
 		@Override
 		public int maxVersionNo() {
 			return stored.stream().mapToInt(PolicyVersionEntity::getVersionNo).max().orElse(0);
+		}
+
+		@Override
+		public List<PolicyVersionEntity> findByPolicyVersionIdIn(java.util.Collection<Long> ids) {
+			return stored.stream().filter(v -> ids.contains(v.getPolicyVersionId())).toList();
 		}
 
 		@Override
@@ -359,7 +365,7 @@ class ConsoleAuthFilterTest {
 		// screening 도메인의 DB 전환으로 mock 한시 예외(전 역할)가 해제된다.
 		mvc.perform(post("/api/v1/screening/words").session(sessionOf(READ_ONLY))
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isForbidden());
 		mvc.perform(post("/api/v1/screening/words/1/toggle").session(sessionOf(ADMIN)))
 				.andExpect(status().isForbidden());
@@ -372,7 +378,7 @@ class ConsoleAuthFilterTest {
 
 		mvc.perform(post("/api/v1/screening/words").session(sessionOf(REVIEWER))
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isOk());
 	}
 

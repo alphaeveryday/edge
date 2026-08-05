@@ -115,14 +115,17 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
 # 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
 # 같은 route 재실행만 DRAFT 보존이다. 분해 입력도 분봉 축이다: 트리거 window artifact
-# 의 close 를 세션 시가 window(minute_session_open.source_window)의 open 과 합성해
-# 구성종목 장중 수익률을 파생한다 — 판정과 같은 축(시가 대비).
+# 의 close 를 canonical price_daily **직전 거래일** 종가로 나눠 구성종목 장중 수익률을
+# 파생한다 — 판정(intraday-anchor-v2)과 같은 축(전일 종가 대비, ALPHA-747). 갭이
+# 기여에 포함된다. 시가 원장(minute_session_open)은 분해가 쓰지 않는다.
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 
 # 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
 # --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
 # explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
-# 분봉 window·시가 원장 미준비는 ReturnsNotReady 로 120초 지연 재시도(짧은 커밋 지연).
+# 분봉 window 원장·직전 거래일 파티션 미준비는 ReturnsNotReady 로 120초 지연 재시도.
+# 그 사유는 `logger.info` 라 CLI 가 basicConfig(INFO) 를 건다 — 없으면 루트 기본
+# WARNING 에 삼켜져 실패가 로그에 `start` 만 남긴다(08-05 실측 709건).
 # 같은 큐의 ExposureReverted(가격이 전일 종가 1% 이내로 복귀, ALPHA-746)는 그 종목·세션의
 # 분봉 기원 PUBLISHED 설명을 super-admin 무효화 API(로그인 세션 → /analyses/{run}/invalidate)
 # 로 회수한다 — 엔진이 DB 를 직접 쓰지 않는다(INVALIDATION 발화자 단일화, ALPHA-440).

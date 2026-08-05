@@ -83,10 +83,11 @@ class ExplanationControllerTest {
 	@BeforeEach
 	void setUp() {
 		recorder = new CapturingRecorder();
-		// 제공 범위 판정은 실 DB 통합 테스트(ExplanationScopeIntegrationTest) 소관 — 여기서는
-		// 행 부재(전부 제공)로 두어 기존 HTTP 계약만 검증한다.
+		// 제공 범위 판정·면책 문구 조회는 실 DB 통합 테스트(ExplanationScopeIntegrationTest·
+		// ExplanationDisclaimerIntegrationTest) 소관 — 여기서는 각각 행 부재(전부 제공)와 정책
+		// 미발행(기본 문구)으로 두어 기존 HTTP 계약만 검증한다.
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), recorder, (scopeType, scopeKey) -> Optional.empty());
+				new SeededStore(), recorder, (scopeType, scopeKey) -> Optional.empty(), Optional::empty);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -96,6 +97,8 @@ class ExplanationControllerTest {
 	@Test
 	void 성공_응답은_계약_형상이고_disclaimer가_반드시_포함된다() throws Exception {
 		// WHY: 화면(가상 MTS 포함)이 이 필드명으로 렌더링한다. disclaimer 는 규정상 필수 노출 문구.
+		// 정책 미발행 구간이라 기본 문구가 실린다 — 이 값은 콘솔이 첫 발행 전 편집 화면에
+		// 투영하는 문구와 같아야 한다(ALPHA-772).
 		mvc.perform(get("/api/v1/explanations/069500")
 						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
 				.andExpect(status().isOk())
@@ -106,7 +109,8 @@ class ExplanationControllerTest {
 				.andExpect(jsonPath("$.confidence_level").value("MEDIUM"))
 				.andExpect(jsonPath("$.evidences[0].kind").value("NEWS"))
 				.andExpect(jsonPath("$.disclaimer").value(
-						"본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다."))
+						"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
+								+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다."))
 				.andExpect(jsonPath("$.published_at").isNotEmpty())
 				// 스냅샷 기준시각(ADR-0045) — openapi required. 매핑 누락·오배선(published_at
 				// 재사용) 회귀를 값 단언으로 거부한다(SEED as_of = 16:00 KST).
