@@ -200,13 +200,15 @@ def rdb_dsn_from_env() -> str:
 
 
 def s3_secret_sql() -> str:
-    """S3 자격증명 시크릿 DDL. PROFILE 절은 AWS_PROFILE 이 실제 설정됐을 때만 넣는다.
+    """S3 자격증명 시크릿 DDL. 실행 환경에 맞는 AWS SDK 체인을 고른다.
 
-    'sso;config;env' + PROFILE 하드코딩은 개발 노트북 전용 문장이었다: Fargate 엔
-    SSO 캐시도 ~/.aws/config 도 없어 PROFILE 절 자체가 시크릿 생성을 깨고, 그러면
-    S3 뷰 33개가 통째로 미등록되며 bars_5m 이 빈 로컬 폴백으로 조용히 내려간다.
+    개발 환경은 설정된 CHAIN·PROFILE을 따른다. ECS는 task role을 container
+    credentials provider로 노출하는데, 명시 `instance` 체인은 EC2 metadata만 보므로
+    container URI가 있으면 CHAIN을 생략해 AWS SDK 기본 체인에 맡긴다.
     """
-    clauses = [f"CHAIN '{_env(S3_CHAIN_ENV)}'"]
+    in_ecs = any(os.environ.get(key, "").strip() for key in (
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"))
+    clauses = [] if in_ecs else [f"CHAIN '{_env(S3_CHAIN_ENV)}'"]
     if profile := os.environ.get(AWS_PROFILE_ENV, "").strip():
         clauses.append(f"PROFILE '{profile}'")
     clauses.append(f"REGION '{_env(AWS_REGION_ENV)}'")
