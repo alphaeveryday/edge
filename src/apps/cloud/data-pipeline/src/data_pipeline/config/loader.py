@@ -30,7 +30,6 @@ from .models import (
     EtfConfig,
     FinancialConfig,
     KisInvestorConfig,
-    KisInvestorEstimateConfig,
     KisNavConfig,
     KisPriceConfig,
     MinuteConsumerConfig,
@@ -99,9 +98,6 @@ class Settings(BaseSettings):
     # ingest-raw-investor 진입점이 fail-loud 한다. 수집 유니버스는 canonical KR holdings 에서
     # 파생한다(가격과 같은 축, universe_from_holdings).
     kis_investor: KisInvestorConfig | None = None
-    # KIS 장중 투자자 추정(ALPHA-767) — EOD 와 **별개 소스·별개 데이터셋**이다(잠정≠확정).
-    # 미설정이면 ingest-raw-investor-estimate 진입점이 fail-loud 한다.
-    kis_investor_estimate: KisInvestorEstimateConfig | None = None
     # DB(Cloud Event Store)는 적재 스텝(load-*)만 쓴다 — 수집·정제만 돌리는 환경은 생략
     # 가능하고, 미설정이면 load-* 진입점이 fail-loud 한다.
     db: DbConfig | None = None

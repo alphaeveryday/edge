@@ -37,9 +37,9 @@ import json
 import logging
 import urllib.parse
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
-from ..config import KisInvestorEstimateSource as KisInvestorEstimateSourceConfig
+from ..config import KisInvestorSource as KisInvestorSourceConfig
 from ..ops.trading_calendar import is_trading_day
 from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
@@ -53,12 +53,15 @@ RATE_MSG_CD = "EGW00201"  # "초당 거래건수 초과" — HTTP 429 아님(200
 MAX_RATE_RETRY = 5
 
 KST = timezone(timedelta(hours=9))
+# 그날 첫 스냅샷 슬롯(외국인 09:30 — 기관은 10:00). 이 시각 **전에는 오늘의 추정이 존재하지
+# 않는다**(.dev/etf-flow-collection-plan.md §2.5 실측).
+SESSION_FIRST_SLOT = time(9, 30)
 
 
 class KisInvestorEstimateSource:
     source_name = "kis"
 
-    def __init__(self, config: KisInvestorEstimateSourceConfig, client: PoliteClient):
+    def __init__(self, config: KisInvestorSourceConfig, client: PoliteClient):
         self.env = config.env
         self.base = domain_for(config.env)
         self.app_key = config.app_key
@@ -145,6 +148,16 @@ class KisInvestorEstimateSource:
                 f"{now_kst.date()} 는 KR 거래일이 아니다 — 장중 투자자 추정은 비거래일에 "
                 "존재하지 않아 거래일 라벨을 붙일 수 없다(소급 불가라 사후 정정도 안 된다)"
             )
+        # 거래일 여부만으로는 부족하다 — **개장 전**에도 `is_trading_day` 는 참이다. 월요일
+        # 08:00 실행에서 KIS 가 금요일 마지막 슬롯을 그대로 주면 그 행이 월요일 거래일로
+        # 저장된다(위와 같은 유실, 같은 이유로 복원 불가). 첫 슬롯 전에는 오늘의 추정이
+        # 존재하지 않으므로 라벨을 만들지 않는다.
+        if now_kst.time() < SESSION_FIRST_SLOT:
+            raise ValueError(
+                f"{now_kst.time().strftime('%H:%M')} 는 첫 슬롯"
+                f"({SESSION_FIRST_SLOT.strftime('%H:%M')}) 전이다 — 오늘의 장중 추정이 아직 "
+                "없어 거래일 라벨을 붙일 수 없다"
+            )
         fetched_at = datetime.now(timezone.utc).isoformat()
         # 응답에 날짜가 없다 — 수집 시점의 KST 날짜가 이 스냅샷의 거래일이다. 위 거래일 가드가
         # 통과한 뒤라야 이 라벨이 참이다.
@@ -153,6 +166,7 @@ class KisInvestorEstimateSource:
         # 200-무토큰은 kis_auth 가 RuntimeError 로 올린다 — 둘 다 fetch 밖으로 전파(전체 중단).
         token = self.auth.token()
         for our_ticker, kis_symbol in plan:
+            slotless = False  # 심볼당 슬롯 결측 기록 1회 (아래 참조)
             try:
                 for row in self._fetch_symbol(kis_symbol, token):
                     if not isinstance(row, dict):
@@ -167,7 +181,11 @@ class KisInvestorEstimateSource:
                     # **어느 시점 값인지 영영 모른다**. 행은 보존하되(bronze 무변형) 실패로
                     # 기록해 런을 partial 로 드러낸다 — 안 그러면 쓸 수 없는 행이 records_out
                     # 에 섞여 성공 0건과 구분되지 않는다(Rule 12).
-                    if not str(row.get("bsop_hour_gb") or "").strip():
+                    if not str(row.get("bsop_hour_gb") or "").strip() and not slotless:
+                        # ⚠️ **심볼당 1회만** 기록한다. `fetch_failures` 는 스텝이
+                        # `records_failed_symbols` 로 세는 **심볼 단위** 목록이라, 행마다
+                        # append 하면 심볼 카운터가 행 수로 부풀어 단위가 어긋난다.
+                        slotless = True
                         self._note_failure(
                             kis_symbol, our_ticker,
                             "슬롯 필드(bsop_hour_gb) 없음 — canonical 정체성 키 조립 불가",

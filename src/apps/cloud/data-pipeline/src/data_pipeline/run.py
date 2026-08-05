@@ -641,12 +641,13 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 "ingest-raw-investor-estimate 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜 "
                 "지정이 없고 오늘치 장중 추정만 준다(소급 백필 불가). 갭은 폴링 슬롯으로만 막는다."
             )
-        if settings.kis_investor_estimate is None:
-            # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
-            raise SystemExit("kis_investor_estimate.source 설정이 없다 — sources.toml 확인")
+        # 자격증명·유니버스를 EOD 와 **공유**한다(같은 KIS 앱키·같은 구성종목 축) — iNAV 가
+        # kis_nav 섹션을 재사용하는 선례와 같다. 별도 섹션을 두면 같은 비밀값을 두 env 로
+        # 주입해야 해서, 한쪽만 주입된 배포에서 이 소스가 조용히 비활성된다.
+        if settings.kis_investor is None:
+            raise SystemExit("kis_investor.source 설정이 없다 — sources.toml 확인")
         estimate_source = KisInvestorEstimateSource(
-            settings.kis_investor_estimate.source,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
         )
         return ingest_raw_investor.run(
             settings, storage, estimate_source, run_id,

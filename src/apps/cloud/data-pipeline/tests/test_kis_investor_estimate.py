@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from data_pipeline.config import KisInvestorEstimateSource as Cfg
+from data_pipeline.config import KisInvestorSource as Cfg
 from data_pipeline.sources import kis_investor_estimate
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_investor_estimate import KisInvestorEstimateSource
@@ -209,11 +209,14 @@ def test_슬롯_없는_행은_보존하되_실패로_드러낸다(frozen):
     """WHY: `bsop_hour_gb` 는 canonical 정체성 키(market·ticker·trade_date·asof_slot)의 일부다.
     없으면 그 행이 어느 시점 값인지 영영 알 수 없는데, 조용히 저장하면 **쓸 수 없는 행이
     records_out 에 섞여** 정상 수집과 구분되지 않는다. 행은 보존(bronze)하고 실패로 드러낸다."""
-    src, _ = _source({"005930": [_ok([{"frgn_fake_ntby_qty": "1", "bsop_hour_gb": "  "}])]})
+    slotless = {"frgn_fake_ntby_qty": "1", "bsop_hour_gb": "  "}
+    src, _ = _source({"005930": [_ok([slotless, slotless, _row()])]})
 
     rows = list(src.fetch(["005930"]))
 
-    assert len(rows) == 1  # bronze 무변형 — 원본은 버리지 않는다
+    assert len(rows) == 3  # bronze 무변형 — 원본은 버리지 않는다
+    # ⚠️ 심볼당 1건이다. fetch_failures 는 스텝이 `records_failed_symbols` 로 세는 **심볼 단위**
+    #    목록이라, 행마다 append 하면 심볼 카운터가 행 수로 부풀어 단위가 어긋난다.
     assert len(src.fetch_failures) == 1
     assert "bsop_hour_gb" in src.fetch_failures[0]["error"]
 
@@ -235,6 +238,25 @@ def test_비거래일에는_거래일_라벨을_지어내지_않는다(monkeypat
     with pytest.raises(ValueError, match="거래일이 아니다"):
         list(src.fetch(["005930"]))
     assert client.urls == []  # 토큰·질의를 태우기 전에 죽는다
+
+
+def test_개장_전에는_오늘_라벨을_붙이지_않는다(monkeypatch):
+    """WHY: 거래일 검사만으로는 부족하다 — 월요일 08:00 도 `is_trading_day` 는 참이다. 그때
+    KIS 가 금요일 마지막 슬롯을 주면 그 행이 **월요일 거래일로** 저장되고, 소급 재조회가
+    없어 되돌릴 수 없다. 첫 슬롯(09:30) 전에는 오늘의 추정이 존재하지 않는다."""
+    premarket = datetime(2026, 8, 5, 8, 0, 0, tzinfo=KST)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return premarket.astimezone(tz) if tz is not None else premarket.replace(tzinfo=None)
+
+    monkeypatch.setattr(kis_investor_estimate, "datetime", _Clock)
+    src, client = _source({"005930": [_ok([_row()])]})
+
+    with pytest.raises(ValueError, match="첫 슬롯"):
+        list(src.fetch(["005930"]))
+    assert client.urls == []
 
 
 def test_크리덴셜이_없으면_비활성이다(frozen):
