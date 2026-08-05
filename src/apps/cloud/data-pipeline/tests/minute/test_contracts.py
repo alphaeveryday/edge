@@ -212,7 +212,18 @@ class TestTradingHoursClass:
         assert close_end == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert scheduled_at_for(close_end) == close_end + timedelta(
             seconds=FINAL_WINDOW_SETTLE_SEC)
-        assert FINAL_WINDOW_SETTLE_SEC > 0, "지연이 0 이면 미완성 봉이 다시 커밋된다"
+        # 상수를 양쪽에 쓰면 값이 1초로 바뀌어도 위 단언이 통과한다 — 계약은 "늦춘다"가
+        # 아니라 "**벤더 캔들이 확정될 만큼** 늦춘다"이므로 의미 있는 하한을 건다.
+        assert FINAL_WINDOW_SETTLE_SEC >= 30, (
+            f"{FINAL_WINDOW_SETTLE_SEC}초로는 종가 단일가 반영 시차를 못 덮는다 — "
+            "짧게 두면 미완성 봉(vol 0·직전가)이 다시 커밋된다")
+
+    def test_naive_window_end_is_rejected(self):
+        """naive 는 실행 환경 TZ 로 해석돼 호스트마다 결과가 갈린다 — KST 호스트에선
+        지연되고 UTC 호스트에선 안 걸린다. 조용히 넘기면 배포 환경에 따라 결함이
+        되살아난다(Rule 12)."""
+        with pytest.raises(ValueError, match="naive"):
+            scheduled_at_for(datetime(2026, 7, 31, 15, 30))
 
     def test_non_close_windows_are_scheduled_at_window_end(self):
         """마감 아닌 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""

@@ -70,6 +70,11 @@ def scheduled_at_for(window_end: datetime) -> datetime:
     ⚠️ 시간외 세션(720 window)에도 15:30 로 끝나는 window 가 있고 거기에도 적용된다 —
     단일가 체결 시각은 세션 길이와 무관하기 때문이다. drain 은 20:05 이라 여유가 있다.
     """
+    if window_end.tzinfo is None or window_end.tzinfo.utcoffset(window_end) is None:
+        # naive 는 실행 환경 TZ 로 해석돼 **호스트마다 다른 결과**가 나온다 — KST 호스트
+        # 에서는 15:30 이 마감으로 잡혀 지연되지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
+        # 이 모듈의 계약(모듈 docstring)이 aware 이므로 조용히 넘기지 않는다(Rule 12).
+        raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
     if window_end.astimezone(KST).time() != SESSION_CLOSE:
         return window_end
     return window_end + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
