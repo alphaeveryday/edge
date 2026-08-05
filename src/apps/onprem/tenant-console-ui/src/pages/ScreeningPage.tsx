@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { PageSkeleton, Select, StatusBadge, Toggle, toast } from 'ui-kit';
 import type { RiskLevel } from '../domains/explanations';
-import { RISK_LABEL, RISK_TONE } from '../domains/explanations';
+import { CONFIDENCE_LABEL, RISK_LABEL, RISK_TONE } from '../domains/explanations';
 import type { WordAction } from '../domains/screening';
 import { useBannedWords, useCriteria, useDisclaimer, usePolicyVersions, useScreeningActions } from '../domains/screening/hooks';
 import { useSession } from '../domains/session/hooks';
@@ -174,10 +174,13 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
           아래 조건을 모두 충족하면 검수 없이 즉시 제공됩니다.
         </div>
         <div className="flex flex-col gap-2.5" style={{ fontSize: 12 }}>
+          {/* 라벨은 축(출처 수·확신도)만 지고 조건("이상")은 값이 진다 — 드롭다운은 닫힌
+              상태가 대부분이라 값이 자족적이어야 한다. 라벨에 "최소"를 두면 "2개 이상"과
+              조건어가 겹친다(ALPHA-755). */}
           <div className="flex items-center justify-between gap-2">
-            <span style={{ color: 'var(--fg-2)' }}>최소 출처 수</span>
+            <span style={{ color: 'var(--fg-2)' }}>출처 수</span>
             <Select
-              aria-label="최소 출처 수"
+              aria-label="출처 수"
               width={140}
               disabled={!canEdit}
               value={String(criteria?.minSources ?? 2)}
@@ -192,12 +195,14 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
             />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span style={{ color: 'var(--fg-2)' }}>최소 확신도</span>
+            <span style={{ color: 'var(--fg-2)' }}>확신도</span>
             {/* 미설정(NULL)=게이트 꺼짐은 placeholder 로만 보이고 선택 불가다 — 화면이 켜진
                 것처럼 보이면 보류 확신도가 자동 노출되는 동안 운영자가 모른다. 설정은 단방향
-                (해제 어휘 없음 — 발행 모델 YAGNI 결정). 트리거 폭은 최소 출처 수와 맞춘다. */}
+                (해제 어휘 없음 — 발행 모델 YAGNI 결정). 트리거 폭은 출처 수와 맞춘다.
+                최상위도 "높음만"이 아니라 "높음 이상"이다 — 판정은 순위 비교 하나뿐이고
+                (PolicyEvaluator.confidenceRank), 등급이 늘면 "만"은 거짓이 된다. */}
             <Select
-              aria-label="최소 확신도"
+              aria-label="확신도"
               width={140}
               disabled={!canEdit}
               placeholder="미설정 (게이트 꺼짐)"
@@ -207,7 +212,7 @@ function RulesTab({ canEdit }: { canEdit: boolean }) {
               }
               options={[
                 { value: 'MEDIUM', label: '중간 이상' },
-                { value: 'HIGH', label: '높음만' },
+                { value: 'HIGH', label: '높음 이상' },
               ]}
             />
           </div>
@@ -305,6 +310,16 @@ function DisclaimerTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+/** 이력의 min_confidence 원값 → 설정 화면과 같은 표시 문구. 정책 어휘는 MEDIUM|HIGH 뿐이라
+ * (DB CHECK·ALPHA-634) 확신도 배지 어휘(LOW 포함)로 감싸지 않는다 — LOW 가 이력에 있으면
+ * 그건 드리프트지 정상 정책이 아니고, "보류 이상"으로 렌더하면 감사 이력에서 정상처럼 보인다.
+ * 어휘 밖 값은 원값 그대로 노출한다(Rule 12). */
+function confidenceText(minConfidence: string | null): string {
+  if (minConfidence == null) return '—';
+  if (minConfidence !== 'MEDIUM' && minConfidence !== 'HIGH') return minConfidence;
+  return `${CONFIDENCE_LABEL[minConfidence]} 이상`;
+}
+
 function HistoryTab() {
   const { data: versions = [], isError, isPending } = usePolicyVersions();
 
@@ -325,8 +340,8 @@ function HistoryTab() {
             <th>발행 시각</th>
             <th>발행자</th>
             <th>자동 제공</th>
-            <th>최소 출처</th>
-            <th>최소 확신도</th>
+            <th>출처 수</th>
+            <th>확신도</th>
             <th>상태</th>
           </tr>
         </thead>
@@ -337,8 +352,10 @@ function HistoryTab() {
               <td className="col-muted num">{v.publishedAt ? new Date(v.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}</td>
               <td>{v.publishedBy ?? '—'}</td>
               <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
-              <td className="num">{v.minSources ?? '—'}</td>
-              <td>{v.minConfidence ?? '—'}</td>
+              {/* 이력 셀도 설정 화면과 같은 어휘로 — 헤더가 축만 말하므로 조건은 값이 진다.
+                  순수 숫자가 아니게 되어 num(우측 정렬)은 뗀다(확신도 열과 같은 좌측 정렬). */}
+              <td>{v.minSources != null ? `${v.minSources}개 이상` : '—'}</td>
+              <td>{confidenceText(v.minConfidence)}</td>
               <td>{v.active ? <span className="chip">활성</span> : <span className="col-muted">종결</span>}</td>
             </tr>
           ))}
