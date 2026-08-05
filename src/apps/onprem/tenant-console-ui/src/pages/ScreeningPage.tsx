@@ -16,10 +16,12 @@ import { LoadError } from './_shared/cells';
 
 const ACTION_LABEL: Record<WordAction, string> = { REVIEW: '검수 필요', BLOCK: '점검 차단' };
 
-type Tab = 'words' | 'rules' | 'disclaimer' | 'history';
+type Tab = 'rules' | 'words' | 'disclaimer' | 'history';
 
 export function ScreeningPage() {
-  const [tab, setTab] = useState<Tab>('words');
+  // 처리 기준 표가 정책의 전경이고 금칙어는 그 표 한 항목의 상세라, 진입도 전경부터다
+  // (표의 "금칙어 관리" 버튼이 상세로 내려가는 방향과 같다 — ALPHA-765).
+  const [tab, setTab] = useState<Tab>('rules');
   // 정책 변경(=새 버전 발행)은 CR 전용(permission-matrix) — 강제 지점은 API 필터이고,
   // 화면은 비CR 에게 쓰기 컨트롤을 감춰 403 조작 시도를 예방한다(UsersPage 선례).
   const { data: session } = useSession();
@@ -28,11 +30,11 @@ export function ScreeningPage() {
   return (
     <div className="flex max-w-[900px] flex-col gap-5">
       <div className="tabs">
-        <div className={`tab${tab === 'words' ? ' active' : ''}`} onClick={() => setTab('words')}>
-          금칙어
-        </div>
         <div className={`tab${tab === 'rules' ? ' active' : ''}`} onClick={() => setTab('rules')}>
           점검 처리 기준
+        </div>
+        <div className={`tab${tab === 'words' ? ' active' : ''}`} onClick={() => setTab('words')}>
+          금칙어
         </div>
         <div className={`tab${tab === 'disclaimer' ? ' active' : ''}`} onClick={() => setTab('disclaimer')}>
           면책 문구
@@ -42,8 +44,8 @@ export function ScreeningPage() {
         </div>
       </div>
 
-      {tab === 'words' && <WordsTab canEdit={canEdit} />}
       {tab === 'rules' && <RulesTab canEdit={canEdit} onManageWords={() => setTab('words')} />}
+      {tab === 'words' && <WordsTab canEdit={canEdit} />}
       {tab === 'disclaimer' && <DisclaimerTab canEdit={canEdit} />}
       {tab === 'history' && <HistoryTab />}
     </div>
@@ -162,11 +164,14 @@ function ResultBadge({ status }: { status: ServeStatus }) {
   );
 }
 
+/** 결론 행 — 항목 목록과 시각적으로 끊는다(배경은 결과에 따라 호출부가 정한다). */
+const CONCLUSION_ROW = { borderTop: '1px solid var(--border-strong)' } as const;
+
 /** 결과 없음 — 왜 없는지를 옆에 단다. 빈 칸만 두면 로딩 실패와 구분되지 않는다. */
-function NoResult({ why }: { why: string }) {
+function NoResult({ why }: { why?: string }) {
   return (
     <span className="col-muted">
-      — <span style={{ fontSize: 11 }}>{why}</span>
+      —{why ? <span style={{ fontSize: 11 }}> {why}</span> : null}
     </span>
   );
 }
@@ -214,10 +219,18 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
   const result = (configured: boolean, status: ServeStatus, emptyWhy: string) =>
     configured ? <ResultBadge status={status} /> : <NoResult why={emptyWhy} />;
 
+  const conclusionTint = !criteria.published
+    ? undefined
+    : on
+      ? 'var(--up-tint)'
+      : 'var(--warn-tint)';
+
   /** 게이트 행(출처 수·확신도) — 스위치가 꺼져 있으면 평가기가 여기까지 오지 않는다. */
   const gateResult = (configured: boolean, emptyWhy: string) => {
     if (!configured) return <NoResult why={emptyWhy} />;
-    return on ? <ResultBadge status="REVIEW_REQUIRED" /> : <NoResult why="자동 제공 꺼짐" />;
+    // 꺼짐 사유는 표 위 안내 문구가 한 번 말한다 — 행마다 반복하면 무겁고, 정작
+    // 행별로 다른 정보(등록 0건·기준 미설정)와 구분도 흐려진다.
+    return on ? <ResultBadge status="REVIEW_REQUIRED" /> : <NoResult />;
   };
 
   return (
@@ -238,6 +251,10 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
       <div className="card-head">
         <span className="t-label">점검 처리 기준</span>
         {/* 스위치는 항목이 아니라 표 전체를 지배하는 값이라 행이 아니라 헤더에 둔다. */}
+        {/* 상태 텍스트를 토글 옆에 두지 않는다 — "사용"(2자)과 "전건 검수"(5자)의 폭 차이로
+            토글을 누를 때마다 토글이 움직였다(ALPHA-765). 상태는 토글 모양과 표 위 안내
+            문구가 말한다. 비CR 에겐 토글 대신 상태 칩을 준다 — Toggle 의 disabled 는 켜짐도
+            꺼진 모양으로 그려(on && !disabled) 조회자에게 상태를 거짓말한다. */}
         <span className="flex items-center gap-2" style={{ fontSize: 12, color: 'var(--fg-2)' }}>
           자동 제공
           {canEdit ? (
@@ -246,8 +263,9 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
               onToggle={() => updateCriteria.mutate({ autoPublishEnabled: !on }, { onSuccess: changed })}
               aria-label="자동 제공 사용 여부"
             />
-          ) : null}
-          <span style={{ color: 'var(--fg-3)' }}>{on ? '사용' : '전건 검수'}</span>
+          ) : (
+            <span className={on ? 'chip' : 'chip chip-warn'}>{on ? '사용' : '전건 검수'}</span>
+          )}
         </span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--fg-3)', padding: '10px 12px 0' }}>
@@ -368,7 +386,10 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
               </td>
             </tr>
           ))}
-          <tr>
+          {/* 결론 행 — 위 항목을 다 통과한 설명이 어디로 가는지가 이 표의 답이다.
+              구분선으로 항목 목록과 끊고, 배경은 실제 결과를 따른다(스위치가 꺼졌는데
+              초록을 깔면 자동 제공되는 것처럼 보인다). 발행 전이면 판정 자체가 없어 무색. */}
+          <tr style={{ ...CONCLUSION_ROW, background: conclusionTint }}>
             <td className="col-muted">어느 항목에도 걸리지 않음</td>
             <td className="col-muted">—</td>
             <td>
