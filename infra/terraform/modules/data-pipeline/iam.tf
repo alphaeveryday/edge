@@ -109,6 +109,7 @@ resource "aws_iam_role_policy" "analysis_task" {
       {
         Effect = "Allow"
         Action = [
+          "glue:GetCatalog",
           "glue:GetDatabase",
           "glue:GetDatabases",
           "glue:GetPartition",
