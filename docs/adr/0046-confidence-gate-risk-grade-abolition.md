@@ -1,6 +1,6 @@
 # ADR-0046. 위험등급 융합 산정 폐기 — 확신도 AND 게이트 전환
 
-- 상태: 승인 (2026-08-04)
+- 상태: 승인 (2026-08-04) — 결정 5 후단(금칙어 심각도 유지)은 대체됨 → [ADR-0047](0047-banned-word-risk-retirement.md)
 - 관련: ALPHA-634 · ADR-0018(룰 로직=코드) · ADR-0037(점검≠검수≠정책) · ALPHA-438(정책 버전 모델) · ALPHA-607(확신도 재라벨 임시 매핑) · 스펙 [2026-08-04-confidence-gate-design](../superpowers/specs/2026-08-04-confidence-gate-design.md)
 
 ## 맥락

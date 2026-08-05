@@ -38,7 +38,6 @@ import java.util.Set;
 @Service
 public class ScreeningService {
 
-	private static final Set<String> RISKS = Set.of("LOW", "MEDIUM", "HIGH");
 	private static final Set<String> ACTIONS = Set.of("REVIEW", "BLOCK");
 	// 자동 제공 최소 확신도에 LOW 는 없다 — 보류(LOW)까지 허용은 미설정과 실질 동일이라
 	// 기준이 될 수 없다(ALPHA-634, max_risk 가 HIGH 를 뺐던 것과 같은 원리).
@@ -92,8 +91,7 @@ public class ScreeningService {
 			}
 			var params = objectMapper.readTree(rule.getParams());
 			words.add(new BannedWord(rule.getScreeningRuleId(),
-					params.path("text").asString(null), params.path("risk").asString(null),
-					rule.getAction(), rule.isEnabled(),
+					params.path("text").asString(null), rule.getAction(), rule.isEnabled(),
 					LocalDate.ofInstant(rule.getCreatedAt(), ZoneId.systemDefault()).toString()));
 		}
 		// 최신 등록 맨 위 — UI 목록 정렬 규약(구 mock 과 동일). 복사 발행이 상대 순서를
@@ -124,18 +122,18 @@ public class ScreeningService {
 	}
 
 	@Transactional
-	public void addWord(String text, String risk, String action, SessionMember actor, String clientIp) {
-		if (text == null || text.isBlank() || !RISKS.contains(risk) || !ACTIONS.contains(action)) {
+	public void addWord(String text, String action, SessionMember actor, String clientIp) {
+		if (text == null || text.isBlank() || !ACTIONS.contains(action)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_REQUEST);
 		}
 		Draft base = loadBase();
 		List<DraftRule> newRules = new ArrayList<>(base.rules());
 		newRules.add(new DraftRule(null, "BANNED_WORD",
-				objectMapper.writeValueAsString(Map.of("text", text, "risk", risk)),
+				objectMapper.writeValueAsString(Map.of("text", text)),
 				action, true, Instant.now()));
 		publish(new Draft(base.baseVersionId(), base.autoPublishEnabled(), base.minSources(),
 						base.minConfidence(), base.disclaimer(), newRules),
-				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "risk", risk, "action", action));
+				actor, clientIp, "POLICY_WORD_ADDED", Map.of("text", text, "action", action));
 	}
 
 	@Transactional

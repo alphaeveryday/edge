@@ -359,7 +359,7 @@ class ConsoleAuthFilterTest {
 		// screening 도메인의 DB 전환으로 mock 한시 예외(전 역할)가 해제된다.
 		mvc.perform(post("/api/v1/screening/words").session(sessionOf(READ_ONLY))
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isForbidden());
 		mvc.perform(post("/api/v1/screening/words/1/toggle").session(sessionOf(ADMIN)))
 				.andExpect(status().isForbidden());
@@ -372,7 +372,7 @@ class ConsoleAuthFilterTest {
 
 		mvc.perform(post("/api/v1/screening/words").session(sessionOf(REVIEWER))
 						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"text\":\"급등 확실\",\"risk\":\"HIGH\",\"action\":\"BLOCK\"}"))
+						.content("{\"text\":\"급등 확실\",\"action\":\"BLOCK\"}"))
 				.andExpect(status().isOk());
 	}
 

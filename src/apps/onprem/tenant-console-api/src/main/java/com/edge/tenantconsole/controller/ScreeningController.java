@@ -47,7 +47,6 @@ public class ScreeningController {
 			HttpServletRequest httpRequest) {
 		screeningService.addWord(
 				request == null ? null : request.text(),
-				request == null ? null : request.risk(),
 				request == null ? null : request.action(),
 				actor(httpRequest), httpRequest.getRemoteAddr());
 		return ApiResponse.onSuccess(null);
