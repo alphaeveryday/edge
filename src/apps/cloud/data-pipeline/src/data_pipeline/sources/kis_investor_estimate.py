@@ -40,6 +40,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 from ..config import KisInvestorEstimateSource as KisInvestorEstimateSourceConfig
+from ..ops.trading_calendar import is_trading_day
 from ..parse import krx_short_code
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
@@ -131,9 +132,22 @@ class KisInvestorEstimateSource:
         if not plan:
             return
         now_kst = datetime.now(KST)
+        # ⚠️ **비거래일엔 라벨을 지어낼 수 없다.** 응답에 날짜가 없어 거래일은 우리가 붙이는데
+        # (아래 asof_date), 휴장일·개장 전에 KIS 가 직전 슬롯을 그대로 돌려주면 **어제 데이터가
+        # 오늘 거래일로 저장된다**. 소급 재조회가 없는 소스라 잘못 붙은 라벨은 응답으로 복원할
+        # 수 없다 — 그러니 조용히 라벨하지 않고 여기서 죽는다(Rule 12).
+        #
+        # KRX holdings 가 `_as_of` 로 "거래일이면 오늘, 아니면 직전 거래일"을 택한 것과 다른
+        # 선택인 이유: 그건 **일별 스냅샷**이라 직전 거래일 값이 여전히 참이지만, 장중 추정은
+        # 비거래일에 존재 자체를 하지 않아 어떤 라벨도 참이 아니다.
+        if not is_trading_day(now_kst.date()):
+            raise ValueError(
+                f"{now_kst.date()} 는 KR 거래일이 아니다 — 장중 투자자 추정은 비거래일에 "
+                "존재하지 않아 거래일 라벨을 붙일 수 없다(소급 불가라 사후 정정도 안 된다)"
+            )
         fetched_at = datetime.now(timezone.utc).isoformat()
-        # 응답에 날짜가 없다 — 수집 시점의 KST 날짜가 이 스냅샷의 거래일이다. 장중에만 도는
-        # 소스라(슬롯 09:35~14:35) 자정 넘김이 구조적으로 없어 이 라벨이 안전하다.
+        # 응답에 날짜가 없다 — 수집 시점의 KST 날짜가 이 스냅샷의 거래일이다. 위 거래일 가드가
+        # 통과한 뒤라야 이 라벨이 참이다.
         asof_date = now_kst.strftime("%Y-%m-%d")
         # 토큰 1회 발급(종목마다 발급 금지). 키 오류(4xx)는 client 가 StopFetch 로,
         # 200-무토큰은 kis_auth 가 RuntimeError 로 올린다 — 둘 다 fetch 밖으로 전파(전체 중단).
@@ -148,6 +162,16 @@ class KisInvestorEstimateSource:
                             kis_symbol, our_ticker, f"malformed row: {type(row).__name__}"
                         )
                         continue
+                    # 슬롯(`bsop_hour_gb`)은 이 데이터셋 정체성 키의 일부다 — canonical 이
+                    # (market, ticker, trade_date, asof_slot) 로 병합하므로 없으면 그 행은
+                    # **어느 시점 값인지 영영 모른다**. 행은 보존하되(bronze 무변형) 실패로
+                    # 기록해 런을 partial 로 드러낸다 — 안 그러면 쓸 수 없는 행이 records_out
+                    # 에 섞여 성공 0건과 구분되지 않는다(Rule 12).
+                    if not str(row.get("bsop_hour_gb") or "").strip():
+                        self._note_failure(
+                            kis_symbol, our_ticker,
+                            "슬롯 필드(bsop_hour_gb) 없음 — canonical 정체성 키 조립 불가",
+                        )
                     # bronze 무변형: output2 행 원본 보존 + 수집 provenance 만 부착.
                     record = dict(row)
                     record["our_ticker"] = our_ticker

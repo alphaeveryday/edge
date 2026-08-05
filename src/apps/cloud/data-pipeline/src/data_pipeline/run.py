@@ -633,7 +633,10 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 창을 준 실행은 **거부한다** — 무시하고 돌면 갭을 메우려던 운영자가 오늘치를 받고
         # exit 0 을 보게 되고, 소급이 영구 불가한 구간을 복구한 줄 착각한다(iNAV 와 같은
         # 성질·같은 처방, Rule 12).
-        if args.from_date or args.to_date:
+        # `or` 가 아니라 `is not None` 이다 — 운영 스크립트가 unset 변수를 `--from "$FROM"`
+        # 으로 넘기면 빈 문자열이 되고, falsy 검사면 **명시적으로 창을 준 실행이 가드를 지나
+        # 오늘치를 받고 exit 0** 이 된다(소급된 줄 착각). 값의 유무로 판정한다(Rule 12).
+        if args.from_date is not None or args.to_date is not None:
             raise SystemExit(
                 "ingest-raw-investor-estimate 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜 "
                 "지정이 없고 오늘치 장중 추정만 준다(소급 백필 불가). 갭은 폴링 슬롯으로만 막는다."
