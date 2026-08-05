@@ -210,7 +210,7 @@ class TestTradingHoursClass:
         windows = plan_session_windows(SESSION_DATE, universe=None)
         close_end = windows[-1][1]
         assert close_end == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
-        assert scheduled_at_for(close_end) == close_end + timedelta(
+        assert scheduled_at_for(close_end, dataset="price_minute") == close_end + timedelta(
             seconds=FINAL_WINDOW_SETTLE_SEC)
         # 상수를 양쪽에 쓰면 값이 1초로 바뀌어도 위 단언이 통과한다 — 계약은 "늦춘다"가
         # 아니라 "**벤더 캔들이 확정될 만큼** 늦춘다"이므로 의미 있는 하한을 건다.
@@ -218,23 +218,30 @@ class TestTradingHoursClass:
             f"{FINAL_WINDOW_SETTLE_SEC}초로는 종가 단일가 반영 시차를 못 덮는다 — "
             "짧게 두면 미완성 봉(vol 0·직전가)이 다시 커밋된다")
 
+    def test_news_sessions_are_not_delayed(self):
+        """종가 단일가는 **가격 캔들** 얘기다 — 같은 plan_session 을 쓰는 뉴스 세션에
+        걸면 realtime 뉴스 레인이 15:30 에 1분씩 늦어진다(추출·조립이 그만큼 밀린다)."""
+        close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
+        assert scheduled_at_for(close, dataset="news_minute") == close
+        assert scheduled_at_for(close, dataset="price_minute") != close
+
     def test_naive_window_end_is_rejected(self):
         """naive 는 실행 환경 TZ 로 해석돼 호스트마다 결과가 갈린다 — KST 호스트에선
         지연되고 UTC 호스트에선 안 걸린다. 조용히 넘기면 배포 환경에 따라 결함이
         되살아난다(Rule 12)."""
         with pytest.raises(ValueError, match="naive"):
-            scheduled_at_for(datetime(2026, 7, 31, 15, 30))
+            scheduled_at_for(datetime(2026, 7, 31, 15, 30), dataset="price_minute")
 
     def test_non_close_windows_are_scheduled_at_window_end(self):
         """마감 아닌 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
         windows = plan_session_windows(SESSION_DATE, universe=None)
-        assert all(scheduled_at_for(we) == we for _, we in windows[:-1])
+        assert all(scheduled_at_for(we, dataset="price_minute") == we for _, we in windows[:-1])
 
     def test_extended_session_also_defers_its_1530_window(self):
         """시간외 세션(720)에도 15:30 로 끝나는 window 가 있고 거기에도 걸린다 —
         단일가 체결 시각은 세션 길이와 무관하다. 마지막(20:00) window 는 대상이 아니다."""
         windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
-        by_end = {we: scheduled_at_for(we) for _, we in windows}
+        by_end = {we: scheduled_at_for(we, dataset="price_minute") for _, we in windows}
         close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert by_end[close] == close + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
         last = datetime(2026, 7, 31, 20, 0, tzinfo=KST)

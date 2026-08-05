@@ -129,7 +129,8 @@ class MinuteLedger:
                 ) VALUES (%s, %s, %s, %s)
                 ON CONFLICT (session_id, window_start) DO NOTHING
                 """,
-                [(session_id, ws, we, scheduled_at_for(we)) for ws, we in windows],
+                [(session_id, ws, we, scheduled_at_for(we, dataset=dataset))
+                 for ws, we in windows],
             )
             # 재계획이 window 를 더했을 수 있다 — 집계는 실제 행 수가 정본
             cur.execute(

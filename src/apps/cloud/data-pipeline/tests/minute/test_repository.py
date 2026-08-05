@@ -124,6 +124,16 @@ class TestPlanSession:
         # 나머지 389개는 그대로 window_end — 장중에 지연을 만들면 안 된다
         assert all(w["scheduled_at"] == w["window_end"] for w in rows[:-1])
 
+    def test_news_session_close_window_is_not_delayed(self):
+        """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,
+        1분 지연은 realtime 뉴스 추출·조립을 그만큼 늦춘다(Codex P2)."""
+        db = FakeMinuteDB()
+        make_ledger(db).plan_session(
+            dataset="news_minute", source_group="bigkinds", session_date=SESSION_DATE,
+            universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
+        )
+        assert all(w["scheduled_at"] == w["window_end"] for w in db.windows.values())
+
 
 class TestFence:
     def test_acquire_then_second_worker_blocked(self):

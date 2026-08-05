@@ -46,9 +46,13 @@ WINDOWS_PER_EXTENDED_SESSION = 720
 # 마감 window 를 집기 전에 기다리는 시간. KRX 종가 단일가는 15:20~15:30 접수 후
 # **15:30:00 에 한 번** 체결되는데, 벤더 캔들에 실리기까지 시차가 있다.
 FINAL_WINDOW_SETTLE_SEC = 60
+# 그 지연이 걸리는 dataset. **가격 캔들 얘기**라 뉴스 세션(news_minute)에는 안 건다 —
+# 같은 `plan_session` 을 쓰지만 15:30 에 기다릴 이유가 없고, 1분 지연은 뉴스 realtime
+# 레인의 추출·조립을 그만큼 늦춘다.
+PRICE_MINUTE_DATASET = "price_minute"
 
 
-def scheduled_at_for(window_end: datetime) -> datetime:
+def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
     """window 가 claim 가능해지는 시각 — 보통 `window_end`(구간이 닫혀야 봉이 있다).
 
     ⚠️ **정규장 마감 경계(15:30)로 끝나는 window 만 예외**다. 그 window 를 `window_end`
@@ -75,6 +79,8 @@ def scheduled_at_for(window_end: datetime) -> datetime:
         # 에서는 15:30 이 마감으로 잡혀 지연되지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
         # 이 모듈의 계약(모듈 docstring)이 aware 이므로 조용히 넘기지 않는다(Rule 12).
         raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
+    if dataset != PRICE_MINUTE_DATASET:
+        return window_end
     if window_end.astimezone(KST).time() != SESSION_CLOSE:
         return window_end
     return window_end + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
