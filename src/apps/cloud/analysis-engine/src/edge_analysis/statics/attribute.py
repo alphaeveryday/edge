@@ -466,7 +466,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
     memory: list[str] = []
-    from .paneltest import FEATURES, Z_ANOM, grid_screen, series_z
+    from .paneltest import Z_ANOM, grid_screen, series_z
     # 계열 방아쇠의 접지 = 오늘 발화(|z|≥2, 60d). 점 사건이 없어도 계열 이상이
     # 있으면 가설 단계는 돈다 - 무사건 폭락일이 계열 방아쇠의 존재 이유다
     # (14차 정정: 기계는 e1113ce 부터 있었는데 이 게이트가 점 사건에만 걸려
@@ -577,6 +577,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     # 를 골라 ATT +1.13%p p=0.000 을 냈다 - 코드에 박아둔 단계 목록에는 없던 값이다.
     verif: list[str] = []
     claims: list[tuple[str, float]] = []
+    verified_imps = []
     if reports:
         from .trial import probe_brief
         from .verifier import say_implications, verify
@@ -588,6 +589,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
                           if t.trigger.kind == "점" and r.verdict == "성립"}):
             imps, vlog = verify(lake, day, etype=et, layer="고유", ask=ask, brief=brief)
             verif += [vlog, say_implications(imps)]
+            verified_imps += [i for i in imps if i.credible]
             # 예산을 쓰는 것은 **설명 층으로 넘어가는** 함의뿐이다. 접힌 함의
             # (사전추세·균형 실패)는 인용되지 않으므로 예산도 쓰지 않는다.
             # 이름은 함의 문장의 머리(타입(시행))다 - 형식이 바뀌어도 잘린 문장이
@@ -701,12 +703,25 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     from .plain import PlainError, context, dual, narrate_plain, recent_window
     applied = [(t, r) for t, r in reports if r.applies_today]
     # 서사 경로 허가는 **코드가** 낸다 - 모델이 고르면 편한 쪽(서사)으로 도망간다.
-    allow, why_narr = narrative_allowed(credible=0, applied_edges=len(applied))
-    objs = news_objectset(lake, instrument_id, day) if allow else []
+    allow_narr, why_narr = narrative_allowed(credible=0, applied_edges=len(applied))
+    objs = news_objectset(lake, instrument_id, day)
     stats = [{"ref": f"s{i}", "kind": "튜플 패널", "channel": t.channel,
               "etype": t.trigger.ident, "verdict": r.verdict, "n": r.n,
               "p": None if r.p is None else round(r.p, 4)}
              for i, (t, r) in enumerate(applied, 1)]
+    stats += [
+        {"ref": f"s{len(applied) + j}", "kind": "일단위 ATT", "claim": i.claim,
+         "att": i.att, "p": i.p, "n": i.n_pairs,
+         "pretrend_ok": i.pretrend_ok, "balanced": i.balanced,
+         "placebo": i.placebo,
+         "series_lineage": {
+             "dataset": "analysis mart", "view": "v_daily", "field": "ar_ind",
+             "entities": [instrument_id], "grain": "daily", "end": day,
+             "as_of": day, "transforms": ["matched ATT", "bias adjustment"],
+             "filters": {"layer": "고유"},
+             "matching": "treated/control matched pairs"}}
+        for j, i in enumerate(verified_imps, 1)
+    ]
     ctx = context(
         ticker_name=labels_name(lake, ticker) or ticker,
         day_log=day_total, idio_log=(day_total if idio is None else idio),
@@ -719,8 +734,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
             rows, key=lambda r: abs(r.share.log_ret)).share.window.kind == "residual",
         idio_qualified=idio is not None)
     try:
-        plain, bundles = narrate_plain(ask, ctx, news=objs, stats=stats,
-                                      cell=ticker, day=day, layer="고유")
+        plain, bundles = narrate_plain(
+            ask, ctx, news=objs, stats=stats, cell=ticker, day=day, layer="고유",
+            allow_narrative=allow_narr)
         # 묶음은 **만든 그 자리에서** 적재한다. 꼬리표 id 만 산출물로 나가고 본문이
         # 아무 데도 없으면, 나중에 그 문장이 무엇에 근거했는지 되짚을 방법이 없다.
         note = f"\n[서사 경로] {why_narr}"

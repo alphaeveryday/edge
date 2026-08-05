@@ -36,7 +36,7 @@ IDIO_SHARE = 0.35
 
 BANNED = ("p값", "p-value", "유의", "신뢰구간", "구간", "표본", "베타", "상관",
           "회귀", "검정", "통계", "확률", "퍼센트", "포인트", "%", "ATT", "CATE",
-          "분위", "편차", "가중", "로그", "수익률", "변동성", "지수적")
+          "분위", "편차", "가중", "로그", "수익률", "변동성", "지수적", "스레드")
 _DIGIT = re.compile(r"[0-9０-９]")
 
 # **무유의 ≠ 영향 없음.** 표본이 얇아 못 가른 것을 '영향 없음' 으로 바꾸는 것은
@@ -166,17 +166,21 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 '왜?' 를 눌렀다. 투자 지식이 없다고 가정한다.
 
 ## 반드시
-- 주장 세 개에서 다섯 개. 각 주장은 한 문장. 존댓말. 짧게.
+- 주장 블록 세 개에서 다섯 개. 한 블록은 필요한 만큼 여러 문장이어도 된다. 존댓말. 짧게.
 - **첫 주장은 '방금/오늘 무엇이 어떻게 됐는지'**, 다음부터 '왜'.
 - **재료의 `최근_시점` 낱말을 그 글자 그대로 문장에 넣어라** (예: 재료가 '밤사이' 면
   문장에 '밤사이' 가 들어가야 한다). 하루 요약으로 도망가면 '방금 왜' 에 답이 없다.
   첫 주장에 넣는 것이 가장 자연스럽다: "밤사이부터 오늘 크게 올랐어요".
 - 시장을 따라간 것인지, 이 종목만 다르게 간 것인지 **분명히** 말한다.
-- 주장마다 **근거를 고른다**: 참조키 목록. 통계 재료(s로 시작)면 basis=statistical,
-  뉴스(n으로 시작)면 basis=narrative. 근거 없는 주장은 내지 마라.
-- 재료에 **뉴스**(n으로 시작)가 있으면 **어느 종목의 무슨 소식인지** 말해라
-  (`종목` 칸이 있다). 다만 뉴스는 **관측**이다 - "이런 소식이 있었어요" 는 되지만
-  "그래서 올랐어요" 는 검정된 것만 쓸 수 있다. 뉴스 주장의 방향은 반드시 `0` 이다.
+- 주장마다 근거 참조키를 고른다. 영향이 통계로 확인되고 사건 원문도 있으면
+  basis=statistical로 두고 통계(s)와 뉴스(n) 참조를 **함께** 고른다.
+- 사건은 **기사 제목**, `arguments`의 **역할별 참여자**, `novelty`·`stage`가 말하는
+  **사건 흐름의 위치**를 사실대로 설명한다. `스레드`라는 말은 쓰지 마라. 대신
+  "처음 나온 소식", "기존 발표의 후속 조치", "협상 뒤 체결 단계"처럼 풀어라.
+- 통계 참조가 영향 방향을 확인하면 "이 사건이 가격을 올렸어요/내렸어요"라고 말해도
+  된다. 그러나 "과거에 같은 패턴이 있어서 오늘 이렇게 됐어요"라는 설명은 쓰지 마라.
+- 통계 없이 뉴스만 인용하면 basis=narrative다. 사건 사실은 말하되 영향을 주장하지
+  말고 sign=0으로 둔다.
 - 재료에 `조절 조건` 이 있으면 **어떤 종목에서 더 크게 났는지**를 한 문장으로 말해라.
   `조건` 은 계열족/변환 이름이니 사람 말로 풀어라(예: `주주/수준` -> "외국인 지분이
   많은 종목", `배수/수준` -> "주가가 이미 비싸던 종목"). `방향말` 을 그대로 써라.
@@ -193,7 +197,7 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 - **숫자를 쓰지 마라.** 아라비아 숫자 하나도 안 된다. 퍼센트, 배수, 날짜 전부.
   재료에 숫자가 있어도 문장에는 옮기지 마라 - 크기는 주어진 등급 낱말로만 말한다.
 - 통계·금융 전문용어 금지: 유의·확률·신뢰구간·베타·상관·변동성·수익률·표본.
-- **기사 제목을 옮겨 쓰지 마라.** 무슨 일인지 네 말로 풀고, 출처는 refs 로 가리킨다.
+- 기사 제목·역할별 참여자·사건 흐름을 재료와 다르게 바꾸거나 만들지 마라.
 - 재료에 없는 회사명·사건명·지수명을 만들지 마라.
 - 사라거나 팔라고 하지 마라. 앞날을 예측하지 마라.
 - 묶음 id 를 지어내지 마라 - 너는 참조키만 고른다.
@@ -204,7 +208,7 @@ _SYSTEM = """너는 토스 앱의 설명 문구를 쓴다. 읽는 사람은 방�
 ## 통계 재료 (basis=statistical 의 근거)
 {stats}
 
-## 뉴스 (basis=narrative 의 근거 - 제목은 읽되 옮겨 쓰지 마라)
+## 사건 원문 (기사 제목·역할별 참여자·사건 흐름. 통계 주장에도 함께 참조 가능)
 {news}
 
 ## 답 (JSON 만)
@@ -264,7 +268,8 @@ def guard(text: str, ctx: dict) -> str:
 
 def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
                   stats: list[dict] | None = None, cell: str = "", day: str = "",
-                  layer: str = "", retries: int = 2) -> tuple[str, list]:
+                  layer: str = "", retries: int = 2,
+                  allow_narrative: bool = True) -> tuple[str, list]:
     """토스식 산문 + 근거 묶음. 반환 (꼬리표 붙은 산문, Bundle 목록).
 
     계약 위반이면 **사유를 붙여 다시 묻는다**(감사 2R: 같은 프롬프트 재시도는
@@ -275,7 +280,6 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
     """
     import json
 
-    from .evidence import news_bundle, stat_bundle
     news = news or []
     stats = stats or []
     byref = {o["ref"]: o for o in news} | {o["ref"]: o for o in stats}
@@ -289,7 +293,8 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
         claims = (out or {}).get("claims") or []
         last = " ".join(str(c.get("text", "")) for c in claims if isinstance(c, dict))
         try:
-            return _assemble(claims, ctx, byref, news, cell, day, layer)
+            return _assemble(claims, ctx, byref, news, cell, day, layer,
+                             allow_narrative=allow_narrative)
         except PlainError as e:
             why = str(e)
             user = f"직전 답이 계약을 위반했다: {e}\n고쳐서 다시 써라."
@@ -392,7 +397,8 @@ def _stat_guard(i: int, txt: str, srcs: list[dict]) -> None:
 
 
 def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
-              cell: str, day: str, layer: str) -> tuple[str, list]:
+              cell: str, day: str, layer: str, *,
+              allow_narrative: bool = True) -> tuple[str, list]:
     """주장 목록 → (산문, 묶음). 주장 하나가 계약을 깨면 **전체를 되묻는다** -
     한 문장만 버리면 남은 문장이 그 문장에 의존한 채로 나갈 수 있다."""
     from .evidence import news_bundle, stat_bundle
@@ -440,30 +446,35 @@ def _assemble(claims: list, ctx: dict, byref: dict, news: list[dict],
                                        "확인되지", "모르", "아직")):
                 raise PlainError(f"#{i} 근거 없는 주장인데 모른다고 말하지 않았다: "
                                  f"{txt[:40]!r}")
-            # 근거가 없으면 묶음도 없다 - 그런데 방향 칸은 비워두지 않는다. 꼬리표를
-            # 아예 안 붙이면 '부호가 0 이다' 와 '부호를 못 매겼다' 가 같아 보인다.
-            lines.append(f"{txt} {{none, -, {sign:+d}}}")
+            # 조회할 묶음이 없으므로 근거 부재만 표시한다. 방향은 문장 자체가 말한다.
+            lines.append(f"{txt} {{none, -}}")
             continue
         if bad := [r for r in refs if r not in byref]:
             raise PlainError(f"#{i} 없는 참조 {bad} - 재료에 없다 (날조 폐기)")
-        kinds = {("statistical" if r.startswith("s") else "narrative") for r in refs}
-        if len(kinds) > 1:
-            raise PlainError(f"#{i} 통계와 서사 근거를 한 주장에 섞었다 - "
-                             "무엇이 근거인지 흐려진다")
-        kind = kinds.pop()
-        if basis != kind:
-            raise PlainError(f"#{i} basis={basis} 인데 참조는 {kind} 다")
-        if kind == "statistical":
-            _stat_guard(i, txt, [byref[r] for r in refs])
-            _sign_guard(i, sign, [byref[r] for r in refs])
-        if kind == "narrative":
-            _quote_guard(i, txt, [byref[r] for r in refs])
-            b = news_bundle(cell, day, txt, news, refs, layer=layer, sign=sign)
-        else:
+        stat_refs = [r for r in refs if r.startswith("s")]
+        news_refs = [r for r in refs if not r.startswith("s")]
+        if basis == "statistical":
+            if not stat_refs:
+                raise PlainError(f"#{i} statistical 주장인데 통계 참조가 없다")
+            _stat_guard(i, txt, [byref[r] for r in stat_refs])
+            _sign_guard(i, sign, [byref[r] for r in stat_refs])
+            if news_refs:
+                _quote_guard(i, txt, [byref[r] for r in news_refs])
             st = {}
-            for r in refs:
-                st.update({k: v for k, v in byref[r].items() if k != "ref"})
-            b = stat_bundle(cell, day, txt, layer=layer, sign=sign, **st)
+            for r in stat_refs:
+                st.update({k: v for k, v in byref[r].items()
+                           if k not in ("ref", "claim")})
+            b = stat_bundle(cell, day, txt, layer=layer, sign=sign,
+                            news=news, refs=news_refs, **st)
+        elif basis == "narrative":
+            if not allow_narrative:
+                raise PlainError(f"#{i} 서사 경로가 비활성이다")
+            if stat_refs or not news_refs:
+                raise PlainError(f"#{i} narrative 주장에는 뉴스 참조만 허용한다")
+            _quote_guard(i, txt, [byref[r] for r in news_refs])
+            b = news_bundle(cell, day, txt, news, news_refs, layer=layer, sign=sign)
+        else:
+            raise PlainError(f"#{i} 알 수 없는 basis={basis!r}")
         bundles.append(b)
         lines.append(f"{txt} {b.tag}")
     return " ".join(lines), bundles

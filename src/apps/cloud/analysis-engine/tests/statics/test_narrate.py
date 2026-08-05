@@ -313,7 +313,6 @@ def test_render_folds_but_stays_additive():
     rows = [_row(f"창{i}", (i - 20) * 0.001) for i in range(40)]
     txt = render(rows, top=6)
     assert "…나머지" in txt and "접음" in txt
-    body = [ln for ln in txt.splitlines() if ln and not ln.startswith(("창", "시각", "─", "합계", "단위", "…"))]
     assert len(txt.splitlines()) < 15, "접기가 안 먹었다"
     assert "-2.00" in txt and "+1.90" in txt           # |몫| 큰 창은 남는다
     # 판정이 붙은 행은 접히지 않는다
@@ -429,6 +428,7 @@ def test_plain_narration_forbids_numbers_and_jargon_by_code():
 
     for bad in ("밤사이 미국 반도체가 8% 올랐어요.",            # 숫자
                 "밤사이 유의하게 올랐어요.",                    # 전문용어
+                "밤사이 올랐고 기존 스레드의 후속이에요.",      # 내부 용어
                 "밤사이 '엔비디아' 때문이에요.",                # 접지 없는 이름
                 "오늘 크게 올랐어요. 시장 따라 갔어요."):       # 최근 시점 누락
         with pytest.raises(PlainError):
@@ -441,45 +441,73 @@ def test_plain_narration_forbids_numbers_and_jargon_by_code():
     d = dual("통계 산문", "쉬운 산문")
     assert d.index("통계 산문") < d.index("쉬운 산문")
 
+def test_att_observation_states_impact_without_historical_pattern_story():
+    """ATT 통과 문장은 과거 패턴을 재서술하지 않고 확인된 영향만 말한다."""
+    from edge_analysis.statics.observe import _trial
+
+    _p, obs = _trial({"att": 0.012, "p_adj": 0.01, "pairs": 40,
+                      "pretrend_ok": True}, "COMPANY.CONTRACT.SIGNING")
+    assert "영향이 확인됐어요" in obs.text
+    assert "과거" not in obs.text and "조건이 비슷한" not in obs.text
+
+
+
+def test_plain_prompt_uses_event_facts_not_historical_pattern_jargon():
+    """고객 문장은 사건 제목·참여자·진행 위치와 검정된 영향만 말한다."""
+    from edge_analysis.statics.plain import _SYSTEM
+
+    assert "기사 제목" in _SYSTEM and "역할별 참여자" in _SYSTEM
+    assert "사건 흐름" in _SYSTEM and "`스레드`라는 말은 쓰지 마라" in _SYSTEM
+    assert "과거에 같은 패턴" in _SYSTEM and "쓰지 마라" in _SYSTEM
+
 
 def test_claims_carry_basis_and_evidence_bundle_ids():
-    """주장마다 {statistical|narrative, 묶음id} 가 붙어야 한다.
+    """주장마다 `{statistical|narrative, 묶음id}`가 붙고 통계 사건도 원문 계보를 가진다.
 
-    쉬운 설명에는 수치가 없다 - 수치가 없으면 그 문장이 검정에서 나왔는지 기사
-    서사에서 나왔는지 나중에 구분할 수 없고, 구분 못 하면 **서사를 검정 결과처럼
-    읽는다**. 묶음 id 는 코드가 만든 내용 해시다(모델이 지어내면 접지가 무너진다).
+    화면 태그는 근거 조회키만 보여 준다. 방향은 DB 번들 필드에 남기고, 기사 제목과
+    사건 흐름을 사용한 통계 주장은 그 뉴스·사건 흐름 id를 같은 번들에 보존한다.
     """
-    import pytest
 
     from edge_analysis.statics.evidence import narrative_allowed, news_bundle
     from edge_analysis.statics.plain import PlainError, _assemble, context
-
     ctx = context(ticker_name="A", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="M", recent={"when": "오후"}, established=["x"],
                   overnight=[], unexplained_top=False)
     news = [{"ref": "n1", "news_id": "NEWS_A", "title": "수주", "type": "SIGNING",
              "thread": "t1", "t": "13:10"}]
-    stt = [{"ref": "s1", "etype": "CONTRACT.SIGNING", "p": 0.004, "n": 138}]
+    stt = [{"ref": "s1", "etype": "CONTRACT.SIGNING",
+            "claim": "계약 체결이 고유수익을 높였다", "p": 0.004, "n": 138,
+            "series_lineage": {"view": "v_daily", "field": "ar_ind", "grain": "daily"}}]
     br = {o["ref"]: o for o in news} | {o["ref"]: o for o in stt}
-
     txt, bs = _assemble(
         [{"text": "오후에 크게 올랐어요", "basis": "statistical", "refs": ["s1"],
           "sign": 1},
          {"text": "새로 계약을 따냈다는 소식이 있었어요", "basis": "narrative",
           "refs": ["n1"], "sign": 1}], ctx, br, news, "000660.KS", "2026-07-31", "고유")
     assert "{statistical, ev_" in txt and "{narrative, ev_" in txt
+    assert ", +1}" not in txt and ", -1}" not in txt
     assert [b.basis for b in bs] == ["statistical", "narrative"]
     assert bs[1].news_ids == ("NEWS_A",), "서사 묶음은 뉴스 id 목록을 담는다"
     assert bs[0].stats["p"] == 0.004, "통계 묶음은 그 가설의 검정 수치를 담는다"
-    # 같은 내용이면 같은 id - 재실행 비교가 가능해야 한다
     assert bs[1].bundle_id == news_bundle(
         "000660.KS", "2026-07-31", "새로 계약을 따냈다는 소식이 있었어요",
         news, ["n1"], layer="고유", sign=1).bundle_id
 
-    # 한 주장에 통계와 서사를 섞으면 무엇이 근거인지 흐려진다
-    with pytest.raises(PlainError):
-        _assemble([{"text": "오후에 올랐어요", "basis": "narrative",
-                    "refs": ["s1", "n1"], "sign": 1}], ctx, br, news, "c", "d", "")
+    mixed, mixed_bs = _assemble(
+        [{"text": "오후에 올랐고 수주 소식이 가격을 올리는 영향도 확인됐어요",
+          "basis": "statistical", "refs": ["s1", "n1"], "sign": 1}],
+        ctx, br, news, "c", "d", "고유")
+    assert "{statistical, ev_" in mixed
+    assert mixed_bs[0].news_ids == ("NEWS_A",)
+    assert mixed_bs[0].thread_ids == ("t1",)
+    assert mixed_bs[0].series_lineage["field"] == "ar_ind"
+    import pytest
+    with pytest.raises(PlainError, match="서사 경로"):
+        _assemble(
+            [{"text": "오후에 새 계약 소식으로 올랐어요", "basis": "narrative",
+              "refs": ["n1"], "sign": 1}],
+            ctx, br, news, "c", "d", "고유", allow_narrative=False)
+
 
     # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다.
     # 지금은 경로 자체가 꺼져 있고, **끈 것을 사유로 말해야** 한다 - 조용히 빠지면
@@ -583,13 +611,11 @@ def test_first_claim_must_state_the_day_direction():
     _dir_guard("오후에 거의 움직이지 않았어요", flat)
 
 
-def test_each_claim_carries_a_machine_readable_direction():
-    """쉬운 설명의 주장마다 **트리거 시점 방향**을 `{basis, id, ±1}` 로 싣는다.
+def test_each_claim_keeps_machine_direction_out_of_the_user_tag():
+    """방향은 번들에는 남지만 고객이 보는 태그에는 노출하지 않는다.
 
-    산문은 낱말로 말하고 이 칸은 기계가 읽는다 - 같은 하루에 순풍(+1)과 역풍(-1)이
-    섞이는 것이 정상이고, 낱말로만 두면 집계도 검산도 못 한다. 그리고 **첫 주장의
-    방향은 하루 방향과 같아야** 한다(첫 문장이 '오늘 무엇이 어떻게 됐는지'이므로) -
-    이것이 텍스트 가드(`_dir_guard`)의 기계 판본이다.
+    같은 하루에 순풍과 역풍이 섞일 수 있으므로 `Bundle.sign`은 검산과 집계에 필요하다.
+    화면은 `{basis, id}`만 보여 근거 조회 방법과 내부 판정값을 섞지 않는다.
     """
     import pytest
 
@@ -607,12 +633,12 @@ def test_each_claim_carries_a_machine_readable_direction():
           "sign": 1},
          {"text": "일부 종목은 오히려 발목을 잡았어요", "basis": "statistical",
           "refs": ["s1"], "sign": -1}], ctx, br, [], "c", "d", "고유")
-    assert ", +1}" in txt and ", -1}" in txt, "부호는 명시적으로 적는다"
+    assert ", +1}" not in txt and ", -1}" not in txt
     assert [b.sign for b in bs] == [1, -1], "역풍이 섞이는 것은 정상이다"
-    # 부호가 묶음 id 에 들어간다 - 다른 부호는 다른 주장이다
     assert bs[0].bundle_id != Bundle(
-        "statistical", "c", "d", "오후에 크게 올랐어요", "고유", (),
-        {k: v for k, v in stt[0].items() if k != "ref"}, -1).bundle_id
+        basis="statistical", cell="c", trade_date="d", claim="오후에 크게 올랐어요",
+        layer="고유", stats={k: v for k, v in stt[0].items() if k != "ref"},
+        sign=-1).bundle_id
 
     for bad, why in (({"sign": 2}, "범위 밖"), ({"sign": "up"}, "수가 아님"),
                      ({}, "누락")):
@@ -625,14 +651,14 @@ def test_each_claim_carries_a_machine_readable_direction():
         _assemble([{"text": "오후에 크게 올랐어요", "basis": "statistical",
                     "refs": ["s1"], "sign": -1}], ctx, br, [], "c", "d", "")
 
-    # 근거 없는 주장도 방향 칸은 남긴다 - '0 이다' 와 '못 매겼다' 가 달라야 한다
+    # 근거 없는 주장은 조회할 묶음이 없으므로 태그만 `{none, -}`로 남긴다.
     blind = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
                     market_name="M", recent={"when": "오후"}, established=[],
                     overnight=[], unexplained_top=True)
     t2, b2 = _assemble([{"text": "오후에 올랐지만 뚜렷한 이유는 아직 안 보여요",
                          "basis": "none", "refs": [], "sign": 1}],
                        blind, {}, [], "c", "d", "")
-    assert "{none, -, +1}" in t2 and not b2
+    assert "{none, -}" in t2 and "+1" not in t2 and not b2
 
 
 def test_recent_window_reads_labels_as_an_event_id_map():
@@ -785,7 +811,7 @@ def test_the_first_claim_may_state_the_day_without_evidence():
          {"text": "아직 뚜렷한 이유는 안 보여요", "basis": "none", "refs": [],
           "sign": 0}], blind, {}, [], "c", "d", "")
     assert "올랐어요" in txt and not bs, "묶음은 없다 - 근거가 없으므로"
-    assert "{none, -, +1}" in txt, "방향 칸은 남는다"
+    assert "{none, -}" in txt and "+1" not in txt, "화면에는 내부 방향 코드를 내보내지 않는다"
 
     # 이유 주장은 여전히 근거나 '모른다' 를 요구한다 - 완화되면 날조가 통과한다.
     # (두 가드가 겹쳐 덮는다: 주장별 접지 가드와 산문 전체의 '모른다' 가드)

@@ -62,9 +62,11 @@ CREATE TABLE IF NOT EXISTS public.{TABLE} (
     trade_date  date        NOT NULL,
     layer       text,
     claim       text        NOT NULL,
-    news_ids    text[]      NOT NULL DEFAULT '{{}}',
-    stats       jsonb       NOT NULL DEFAULT '{{}}'::jsonb,
-    created_at  timestamptz NOT NULL DEFAULT now()
+    news_ids       text[]      NOT NULL DEFAULT '{{}}',
+    thread_ids     text[]      NOT NULL DEFAULT '{{}}',
+    stats          jsonb       NOT NULL DEFAULT '{{}}'::jsonb,
+    series_lineage jsonb       NOT NULL DEFAULT '{{}}'::jsonb,
+    created_at     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS {TABLE}_cell_idx
     ON public.{TABLE} (cell, trade_date);
@@ -73,7 +75,7 @@ CREATE INDEX IF NOT EXISTS {TABLE}_cell_idx
 
 @dataclass(frozen=True, slots=True)
 class Bundle:
-    """한 주장의 근거. `basis` 에 따라 한쪽만 채워진다 - 섞이면 무엇이 근거인지 흐려진다."""
+    """한 주장의 근거. 통계 사건은 검정값과 원문·사건 흐름 계보를 함께 가질 수 있다."""
 
     basis: str
     cell: str
@@ -81,10 +83,11 @@ class Bundle:
     claim: str
     layer: str = ""
     news_ids: tuple[str, ...] = ()
+    thread_ids: tuple[str, ...] = ()
     stats: dict = field(default_factory=dict)
-    # **트리거 시점의 방향**: +1 올림 · 0 무관 · -1 내림. 산문은 낱말로 말하고 이 칸은
-    # 기계가 읽는다 - 같은 하루에 역풍(-1)과 순풍(+1)이 섞이는 것이 정상이고, 그것을
-    # 낱말로만 두면 집계도 검산도 못 한다.
+    series_lineage: dict = field(default_factory=dict)
+    # **트리거 시점의 방향**: +1 올림 · 0 무관 · -1 내림. 사용자 태그에는 노출하지
+    # 않고 DB에 보존한다. 같은 하루에 역풍과 순풍이 섞여도 검산할 수 있어야 한다.
     sign: int = 0
 
     def __post_init__(self) -> None:
@@ -102,16 +105,15 @@ class Bundle:
         """**내용 해시.** 재실행에 같은 id 가 나와야 산출물을 비교할 수 있다."""
         body = json.dumps({"b": self.basis, "c": self.cell, "d": self.trade_date,
                            "l": self.layer, "m": self.claim,
-                           "n": sorted(self.news_ids),
-                           "s": self.stats, "g": self.sign},
+                           "n": sorted(self.news_ids), "t": sorted(self.thread_ids),
+                           "s": self.stats, "x": self.series_lineage, "g": self.sign},
                           sort_keys=True, ensure_ascii=False)
         return "ev_" + hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
 
     @property
     def tag(self) -> str:
-        """주장 뒤에 붙는 꼬리표."""
-        # 부호는 **명시적으로** 적는다(+1/0/-1) - '1' 과 '+1' 이 섞이면 파싱이 갈린다.
-        return f"{{{self.basis}, {self.bundle_id}, {self.sign:+d}}}"
+        """고객 문장에는 근거 조회키만 붙인다. 방향은 번들의 `sign`이 가진다."""
+        return f"{{{self.basis}, {self.bundle_id}}}"
 
 
 def news_window(lake, day: str) -> str:
@@ -127,27 +129,40 @@ def news_window(lake, day: str) -> str:
 
 
 def news_objectset(lake, instrument_id: str, day: str, *, limit: int = 30) -> list[dict]:
-    """이 종목의 뉴스 오브젝트셋. **재보도 제외.** 모델은 제목을 옮겨 쓰지 않고
-    참조키(`ref`)로 가리킨다 - 그래서 산문의 접지를 코드가 검사할 수 있다.
+    """이 종목의 사건 원문 오브젝트셋. 재보도는 제외한다.
 
-    스레드 하나에 여러 기사가 붙으면 **가장 이른 것**만 남긴다(첫 보도가 원인이고
-    나머지는 반향이다). 시각은 사이드카가 복원한 발행시각이 먼저다.
+    제목뿐 아니라 역할별 참여자와 사건 흐름의 신규성·현재 단계를 싣는다. 모델은 내부
+    코드나 `스레드`라는 말을 노출하지 않고 고객이 바로 이해하는 사실 문장으로 푼다.
     """
     from .paneltest import _base
     since = news_window(lake, day)
     promote = _PROMOTE if lake.exists.get("tau_sidecar") else ""
+    news_id = "any_value(doc.source_document_id)" if promote else "''"
+    published = ("coalesce(min(sc.published_kst), "
+                 "min(CAST(e.available_at AS TIMESTAMP)))" if promote
+                 else "min(CAST(e.available_at AS TIMESTAMP))")
     try:
-        # `v_event`·`v_thread` 는 뷰가 아니라 `_base(day)` 가 만드는 CTE 다.
-        rows = lake.sql(_base(day) + f"""
-            SELECT any_value(doc.source_document_id) AS news_id,
+        rows = lake.sql(_base(day) + f""",
+            _event_args AS (
+                SELECT ea.source_event_id,
+                       list(ea.role_code || '=' || coalesce(en.display_name, ea.entity_id)
+                            ORDER BY ea.role_code, ea.entity_id) AS arguments
+                FROM rdb.public.event_argument ea
+                LEFT JOIN rdb.public.entity en ON en.entity_id = ea.entity_id
+                GROUP BY ea.source_event_id
+            )
+            SELECT e.source_event_id,
+                   {news_id}                         AS news_id,
                    any_value(e.title)                AS title,
                    e.event_type_code,
                    any_value(th.thread_key)          AS thread_key,
                    any_value(th.novelty_status)      AS novelty,
-                   coalesce(min(sc.published_kst),
-                            min(CAST(e.available_at AS TIMESTAMP))) AS t
+                   any_value(th.current_stage)       AS current_stage,
+                   any_value(a.arguments)            AS arguments,
+                   {published}                       AS t
             FROM v_event e
             LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+            LEFT JOIN _event_args a ON a.source_event_id = e.source_event_id
             {promote}
             WHERE e.instrument_id = '{instrument_id}'
               AND e.trade_date > DATE '{since}' AND e.trade_date <= DATE '{day}'
@@ -159,14 +174,16 @@ def news_objectset(lake, instrument_id: str, day: str, *, limit: int = 30) -> li
         return [{"ref": "!오류", "title": f"{type(e).__name__}: {str(e)[:70]}",
                  "news_id": "", "type": "", "thread": "", "t": ""}]
     seen: dict[str, dict] = {}
-    for nid, title, etype, thread, _nov, t in rows:
-        key = str(thread or nid or title)
-        if key in seen:                     # 스레드의 첫 보도만 - 반향은 원인이 아니다
+    for event_id, nid, title, etype, thread, novelty, stage, arguments, t in rows:
+        key = str(thread or nid or event_id or title)
+        if key in seen:                     # 같은 사건 흐름에서는 첫 보도만 쓴다
             continue
-        seen[key] = {"ref": f"n{len(seen) + 1}", "news_id": str(nid or ""),
-                     "title": str(title or "")[:120],
+        seen[key] = {"ref": f"n{len(seen) + 1}", "event_id": str(event_id or ""),
+                     "news_id": str(nid or ""), "title": str(title or "")[:120],
                      "type": str(etype or "").split(".")[-1],
-                     "thread": str(thread or ""), "t": str(t or "")[11:16]}
+                     "arguments": list(arguments or ()),
+                     "thread": str(thread or ""), "novelty": str(novelty or ""),
+                     "stage": str(stage or ""), "t": str(t or "")[11:16]}
         if len(seen) >= limit:
             break
     return list(seen.values())
@@ -208,22 +225,35 @@ def narrative_allowed(*, credible: int, applied_edges: int) -> tuple[bool, str]:
                   "**모든 주장에 narrative 꼬리표를 붙인다**")
 
 
+def _news_lineage(objs: list[dict], refs: list[str]) -> tuple[tuple[str, ...],
+                                                              tuple[str, ...]]:
+    byref = {o["ref"]: o for o in objs}
+    ids = tuple(byref[r]["news_id"] for r in refs
+                if r in byref and byref[r].get("news_id"))
+    threads = tuple(byref[r]["thread"] for r in refs
+                    if r in byref and byref[r].get("thread"))
+    return ids, threads
+
+
 def stat_bundle(cell: str, day: str, claim: str, *, layer: str = "", sign: int = 0,
-                **stats) -> Bundle:
-    """통계 근거 묶음. `stats` 에 이 주장에 쓴 **가설의 검정 결과**가 들어간다."""
-    return Bundle("statistical", cell, day, claim, layer, (),
-                  _plain_num(dict(stats)), sign)
+                news: list[dict] | None = None, refs: list[str] | None = None,
+                series_lineage: dict | None = None, **stats) -> Bundle:
+    """통계 근거. 사건 원문·흐름과 시계열 조회 계약도 같은 묶음에 둔다."""
+    ids, threads = _news_lineage(news or [], refs or [])
+    return Bundle(basis="statistical", cell=cell, trade_date=day, claim=claim,
+                  layer=layer, news_ids=ids, thread_ids=threads,
+                  stats=_plain_num(dict(stats)),
+                  series_lineage=_plain_num(series_lineage or {}), sign=sign)
 
 
 def news_bundle(cell: str, day: str, claim: str, objs: list[dict], refs: list[str],
                 *, layer: str = "", sign: int = 0) -> Bundle:
-    """서사 근거 묶음. 참조키 → 뉴스 id 목록. **모델이 고른 것만** 담는다."""
-    byref = {o["ref"]: o for o in objs}
-    ids = tuple(byref[r]["news_id"] for r in refs
-                if r in byref and byref[r]["news_id"])
+    """서사 근거 묶음. 참조키 → 뉴스·사건 흐름 id. **모델이 고른 것만** 담는다."""
+    ids, threads = _news_lineage(objs, refs)
     if not ids:
         raise ValueError(f"참조 {refs} 가 뉴스 id 로 풀리지 않는다 - 날조 또는 결손")
-    return Bundle("narrative", cell, day, claim, layer, ids, {}, sign)
+    return Bundle(basis="narrative", cell=cell, trade_date=day, claim=claim,
+                  layer=layer, news_ids=ids, thread_ids=threads, sign=sign)
 
 
 def ensure_schema(dsn: str = "") -> str:
@@ -249,6 +279,10 @@ def ensure_schema(dsn: str = "") -> str:
             # 더해 준다 - 배포는 Flyway 가 하고, 이건 그걸 못 돌리는 로컬용이다.
             con.execute("ALTER TABLE analysis_evidence_bundle "
                         "ADD COLUMN IF NOT EXISTS sign SMALLINT NOT NULL DEFAULT 0")
+            con.execute("ALTER TABLE analysis_evidence_bundle ADD COLUMN IF NOT EXISTS "
+                        "thread_ids TEXT[] NOT NULL DEFAULT '{}'")
+            con.execute("ALTER TABLE analysis_evidence_bundle ADD COLUMN IF NOT EXISTS "
+                        "series_lineage JSONB NOT NULL DEFAULT '{}'::jsonb")
             con.commit()
         return ""
     except Exception as e:                  # noqa: BLE001
@@ -285,12 +319,14 @@ def save(bundles: list[Bundle], dsn: str = "", *, connect=None) -> tuple[int, in
                 cur.executemany(
                     f"INSERT INTO public.{TABLE} "
                     "(bundle_id, basis, cell, trade_date, layer, claim, news_ids,"
-                    " stats, sign)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s) "
-                    "ON CONFLICT (bundle_id) DO NOTHING",
+                    " thread_ids, stats, series_lineage, sign)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb,"
+                    " %s::jsonb, %s) ON CONFLICT (bundle_id) DO NOTHING",
                     [(b.bundle_id, b.basis, b.cell, b.trade_date, b.layer, b.claim,
-                      list(b.news_ids),
-                      json.dumps(b.stats, ensure_ascii=False, default=str), b.sign)
+                      list(b.news_ids), list(b.thread_ids),
+                      json.dumps(b.stats, ensure_ascii=False, default=str),
+                      json.dumps(b.series_lineage, ensure_ascii=False, default=str),
+                      b.sign)
                      for b in bundles])
                 # 드라이버가 '모르겠다'(-1) 고 할 때만 요청 건수로 되돌린다 - 그때는
                 # 중복을 셀 근거가 없으므로 0건 중복이라고 **주장하지 않는다**.

@@ -8,10 +8,10 @@
 import numpy as np
 import pytest
 
-from edge_analysis.statics.hypothesize import propose
-from edge_analysis.statics.paneltest import MIN_OPPOSITE, edge_test
+from edge_analysis.statics.hypothesize import propose, screen_tuples
+from edge_analysis.statics.paneltest import FEATURES, edge_test
 from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
-                                         MIN_N, Trigger, Condition)
+                                         MIN_N, SERIES_FAMILIES, Trigger, Condition)
 
 ETYPES = ["COMPANY.PRODUCT.LAUNCH", "MARKET_STRUCTURE.INDEX.INCLUSION"]
 
@@ -403,7 +403,7 @@ def test_state_machine_hides_tools_and_enforces_order():
     # (1) 그 상태에 없는 도구는 이름조차 존재하지 않는다,
     # (2) 진행은 관측으로만 (가드를 코드가 지킨다),
     # (3) 결정론 브리핑은 상태가 아니다 - 물어볼 값이 없는 질문에 왕복을 안 쓴다.
-    from edge_analysis.statics.fsm import EMIT, GROUND, SCREEN, Machine
+    from edge_analysis.statics.fsm import GROUND, SCREEN, Machine
 
     class FakeCat:
         def __init__(self): self.seen = []
@@ -566,9 +566,6 @@ def test_unmeasured_series_records_why_instead_of_silent_zero():
 # 처치변수 = 방아쇠(주 술어) ∧ 조건들. 조건 어휘를 상태·사건·관계로 넓히면서
 # **가드를 같이 넓히지 않으면** 어휘가 거짓 어포던스를 준다 - 8셀 71튜플 중 55개가
 # 쓰는 순간 n=0 확정이었던 병이 그것이다. 아래는 그 병에 대한 계약이다.
-from edge_analysis.statics.hypothesize import screen_tuples
-from edge_analysis.statics.paneltest import FEATURES
-from edge_analysis.statics.vocab import CONDITION_KINDS, SERIES_FAMILIES
 
 MEAS = list(FEATURES)
 
@@ -708,7 +705,8 @@ def test_financials_are_clamped_by_filing_lag_not_collection_date():
     fin = v[v.index("v_fin AS"):]
     fin = fin[:fin.index("v_liquidity")]
     assert "f.available_from <= DATE '2026-06-01'" in fin
-    code = "\n".join(l for l in fin.splitlines() if not l.strip().startswith("--"))
+    code = "\n".join(line for line in fin.splitlines()
+                     if not line.strip().startswith("--"))
     assert "as_of" not in code          # 수집일로 자르면 선견이 샌다
 
 
@@ -730,7 +728,8 @@ def test_rolling_betas_are_nan_guarded():
     # 가드 하나가 regr_slope 를 두 번 쓴다(CASE WHEN isfinite(..) THEN .. END).
     # 이 항등식이 깨지면 어딘가에 **맨 regr_slope** 가 있다는 뜻이다.
     # 주석은 뺀다 - 도크주석이 함수 이름을 언급하면 개수가 어긋난다(실제로 그랬다).
-    code = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+    code = "\n".join(line for line in sql.splitlines()
+                     if not line.strip().startswith("--"))
     assert code.count("isfinite(regr_slope") * 2 == code.count("regr_slope")
 
 
@@ -983,6 +982,8 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
                        (N("000660", 0.03), N("005930", 0.02), N("x", 0.0001))))
     assert idio.kind == "고유" and idio.targets == ("000660", "005930")
 
+
+
     mix = route_etf(R((L("시장", "K", 0.03), L("섹터", "S", 0.03)), 0.03))
     assert mix.kind == "혼합" and "하나를 고르면" in mix.why
     assert mix.share < DOMINANT
@@ -994,6 +995,40 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
     class P:
         basket_moved = False
     assert route_etf(R((L("시장", "K", 0.9),), 0.0), premium=P()).kind == "괴리단독"
+def test_mixed_workflow_runs_each_material_layer_and_idio_name(monkeypatch):
+    """대표 라벨이 혼합이어도 시장·채택 섹터·고유종목 검정을 모두 실행한다."""
+    from types import SimpleNamespace as NS
+
+    from edge_analysis.statics import etfcell, mkttrial, trial, verifier
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(trial, "reduce_market", lambda *a, **k: {})
+    monkeypatch.setattr(trial, "say_market", lambda _r: "시장")
+    monkeypatch.setattr(mkttrial, "screen_market", lambda *a, **k: {})
+    monkeypatch.setattr(mkttrial, "say_screen", lambda _r: "시장 사건")
+    monkeypatch.setattr(etfcell, "_sector_types", lambda *a: ["POLICY.CHANGE"])
+    monkeypatch.setattr(etfcell, "_observed_types",
+                        lambda _lake, ticker, _day: [f"EVENT.{ticker}"])
+    monkeypatch.setattr(
+        verifier, "verify",
+        lambda _lake, _day, *, etype, layer, **_k:
+        (calls.append((layer, etype)) or [], "검정"))
+    monkeypatch.setattr(verifier, "say_implications", lambda _imps: "")
+
+    layers = (NS(kind="시장", name="시장", contribution=0.25, beta=1, lo=.8, hi=1.2,
+                 ret=.25),
+              NS(kind="섹터", name="반도체", contribution=0.25, beta=1, lo=.8, hi=1.2,
+                 ret=.25),
+              NS(kind="섹터", name="정보기술", contribution=0.25, beta=1, lo=.8, hi=1.2,
+                 ret=.25))
+    names = (NS(ticker="005930", label="삼성전자", contribution=0.20, weight=.2),)
+    roll = NS(etf="091160", layers=layers, idio=0.25, names=names)
+    route = NS(kind="혼합", targets=())
+
+    etfcell._workflow(object(), roll, route, "2026-07-31")
+
+    assert calls.count(("섹터", "POLICY.CHANGE")) == 2
+    assert ("고유", "EVENT.005930") in calls
 
 
 def test_market_trial_refuses_when_treated_days_are_too_few():

@@ -291,64 +291,64 @@ def member_news(lake, roll, day: str, top: int = 4, per: int = 4) -> list[dict]:
 
 def _workflow(lake, roll, r, day: str,
               sink: list | None = None) -> list[str]:
-    """라우팅별 인과 워크플로우. **다른 층의 질문은 세우지 않는다.**
+    """분해에서 실질적인 시장·섹터·고유층을 각각 실행한다.
 
-    `sink` 를 주면 성립한 함의를 거기 모은다 - 쉬운 설명이 조절 조건을 말하려면 그게
-    재료로 넘어가야 한다. 이전에는 산문 문자열만 남기고 객체를 버려서, 정직한 설명에만
-    조절이 찍히고 쉬운 설명은 그 존재를 몰랐다.
+    `Route.kind`는 대표 제목일 뿐 다른 층을 막지 않는다. `sink`에는 성립한 함의를
+    모아 쉬운 설명 재료로 넘긴다.
     """
+    from .interval import FLOOR
+    from .layers import MARKET_CODE
+    from .route import MIN_NAME_SHARE, TOP_NAMES
     from .trial import reduce_market, say_market
-    out: list[str] = []
 
+    out: list[str] = []
     if r.kind == "괴리단독":
         out.append("[워크플로우] ETF 고유 — 구성종목 인과를 세우지 않는다. 수급·유동성"
                    " 축만 유효하고, 그 축은 되돌림 후보다.")
         return out
 
-    if r.kind in ("시장", "혼합"):
+    layers = tuple(getattr(roll, "layers", ()))
+    total = sum(abs(x.contribution) for x in layers) + abs(roll.idio)
+
+    def material(value: float) -> bool:
+        return total > 0 and abs(value) / total >= FLOOR
+
+    is_market_proxy = str(getattr(roll, "etf", "")).endswith(MARKET_CODE)
+    market_on = is_market_proxy or any(
+        x.kind == "시장" and material(x.contribution) for x in layers)
+    sectors = (() if is_market_proxy else tuple(
+        x for x in layers if x.kind == "섹터" and material(x.contribution)))
+    idio_on = not is_market_proxy and material(roll.idio)
+    name_floor = MIN_NAME_SHARE * abs(roll.idio)
+    targets = (() if not idio_on else tuple(
+        n.ticker for n in roll.names if abs(n.contribution) >= name_floor)[:TOP_NAMES])
+
+    if market_on:
         out.append("[워크플로우] 시장 환원 — 종목 가설을 세우지 않는다")
-        mr = reduce_market(lake, day, symbol=f"{roll.etf}.KS")
-        out.append(say_market(mr))
-        # ② 는 선언만 되고 배선이 없었다: `say_market` 의 시장 사건 줄은 `iid` 가
-        # 있을 때만 나오고 ETF 경로는 그것을 안 넘긴다(ETF 에 instrument_id 가 없다).
-        # 그래서 라우팅은 '밤사이 해외 · **장중 시장 사건** · 국면' 셋을 약속하는데
-        # 산문에는 ①③ 만 있었다. 그리고 τ 마크는 **표시**일 뿐 검정이 아니다.
-        # 시장 사건은 그 날 전 종목이 처치라 횡단면 대조군이 없다(SUTVA) - 단위를
-        # 거래일로 바꿔야 검정된다. `mkttrial` 이 그것이다.
+        out.append(say_market(reduce_market(lake, day, symbol=f"{roll.etf}.KS")))
         from .mkttrial import say_screen, screen_market
         out.append(say_screen(screen_market(lake, day)))
 
-    if r.kind in ("섹터", "혼합"):
-        sec = next((x for x in roll.layers if x.kind == "섹터"), None)
-        if sec is None:
-            out.append("[워크플로우] 섹터 층이 분해에 없다 — 섹터 질문을 세울 근거가 없다")
-        else:
-            out.append(f"[워크플로우] 섹터 공통 처치 — {sec.name} "
-                       f"(β {sec.beta:.2f} [{sec.lo:.2f}, {sec.hi:.2f}] · "
-                       f"층 수익 {sec.ret * 100:+.2f}%p)")
-            # 검정 층에 넘긴다 - 위약 먼저, 구체화, 유의한 것에만 CATE.
-            from .verifier import say_implications, verify
-            # 섹터 공통 처치도 **그날 관측된 광역 타입**으로 고른다 (하드코딩 폐기).
-            ets = _sector_types(lake, day)
-            if not ets:
-                out.append("  그날 2종목 이상에 닿은 타입이 없다 - 섹터 공통 처치를 "
-                           "세울 수 없다 (그것도 결과다)")
-            for et in ets:
-                imps, lg = verify(lake, day, etype=et, layer="섹터")
-                if sink is not None:
-                    sink += [x for x in imps if getattr(x, "credible", True)]
-                out.append("  " + lg.replace("\n", "\n  "))
-                out.append("  " + say_implications(imps).replace("\n", "\n  "))
+    from .verifier import say_implications, verify
+    for sec in sectors:
+        out.append(f"[워크플로우] 섹터 공통 처치 — {sec.name} "
+                   f"(β {sec.beta:.2f} [{sec.lo:.2f}, {sec.hi:.2f}] · "
+                   f"층 수익 {sec.ret * 100:+.2f}%p)")
+        ets = _sector_types(lake, day)
+        if not ets:
+            out.append("  그날 2종목 이상에 닿은 타입이 없다 - 섹터 공통 처치를 "
+                       "세울 수 없다 (그것도 결과다)")
+        for et in ets:
+            imps, lg = verify(lake, day, etype=et, layer="섹터")
+            if sink is not None:
+                sink += [x for x in imps if getattr(x, "credible", True)]
+            out.append("  " + lg.replace("\n", "\n  "))
+            out.append("  " + say_implications(imps).replace("\n", "\n  "))
 
-    if r.kind in ("고유", "혼합") and r.targets:
-        out.append(f"[워크플로우] 종목 개별 시행 — 상위 {len(r.targets)}종목")
-        from .verifier import say_implications, verify
-        # **그날 관측된 타입으로 돈다.** 하드코딩된 `RESULT_RELEASE` 는 그 타입이 없는
-        # 날에도 검정을 세워 "처치일 부족" 만 반복했고, 실제로 난 사건은 아무도 안 봤다.
-        # 검정 자체는 **타입 수준 패널**이라 종목별로 쪼갤 수 없다 - 그래서 종목은
-        # 무엇이 났는지 보고하는 자리이고, 검정은 타입마다 한 번이다.
+    if targets:
+        out.append(f"[워크플로우] 종목 개별 시행 — 상위 {len(targets)}종목")
         by_type: dict[str, list[str]] = {}
-        for tk in r.targets:
+        for tk in targets:
             nm = next((n for n in roll.names if n.ticker == tk), None)
             ets = _observed_types(lake, tk, day)
             out.append(f"  {tk}" + (f" ({nm.label})" if nm and nm.label else "")
@@ -367,8 +367,8 @@ def _workflow(lake, roll, r, day: str,
                 sink += [x for x in imps if getattr(x, "credible", True)]
             out.append("    " + lg.replace("\n", "\n    "))
             out.append("    " + say_implications(imps).replace("\n", "\n    "))
-    elif r.kind == "고유":
-        out.append("[워크플로우] 고유가 지배하는데 |기여| 상위 종목이 임계 미달 — "
+    elif idio_on:
+        out.append("[워크플로우] 고유 몫은 크지만 |기여| 상위 종목이 임계 미달 — "
                    "귀속할 이름이 없다. 이것도 결과다 (분산된 고유)")
     return out
 

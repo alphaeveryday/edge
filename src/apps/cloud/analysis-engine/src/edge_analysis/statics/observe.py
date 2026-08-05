@@ -144,15 +144,15 @@ def _trial(r: dict, etype: str) -> tuple[float, Obs] | None:
     att, p = float(r["att"]), float(r.get("p_adj") or r.get("p") or 1.0)
     s = 1 if att > 0 else -1
     nm = etype.split(".")[-1]
-    up = "더 올랐어요" if s > 0 else "더 내렸어요"
-    if p < ALPHA:
-        text = f"과거에 {nm} 이 있던 날들은 조건이 비슷한 다른 날들보다 실제로 {up}."
-        if not r.get("pretrend_ok"):
-            text += " 다만 사건 전부터 이미 움직이던 흐름이라 이 몫만 떼기는 어려워요."
+    up = "더 올리는" if s > 0 else "더 내리는"
+    if p < ALPHA and r.get("pretrend_ok"):
+        text = f"{nm} 사건이 가격을 {up} 영향이 확인됐어요."
+    elif p < ALPHA:
+        text = f"{nm} 사건 전부터 가격이 움직이고 있어 이 사건의 영향만 확인할 수 없어요."
+        s = 0
     else:
-        text = (f"과거에 {nm} 이 있던 날들은 조건이 비슷한 다른 날들과"
-                " 구별되는 차이를 내지 못했어요.")
-        s = 0                       # 방향을 주장하지 않는다
+        text = f"{nm} 사건의 영향은 뚜렷하게 확인되지 않았어요."
+        s = 0
     return p, Obs("run_trial", text,
                   f"일단위 ATT {att * 100:+.2f}%p p={p:.3f} · 짝 {r.get('pairs')}"
                   f" · {'사전추세 통과' if r.get('pretrend_ok') else '사전추세 미통과'}", s)

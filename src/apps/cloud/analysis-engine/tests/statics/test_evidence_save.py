@@ -19,6 +19,59 @@ from edge_analysis.statics import duck, evidence
 from edge_analysis.statics.evidence import _fake_con, say_save, stat_bundle
 
 
+
+def test_evidence_lineage_migration_matches_bundle_contract():
+    """배포 스키마도 통계 사건의 시계열·원문·사건 흐름 계보를 보존해야 한다."""
+    from pathlib import Path
+
+    migration = (Path(__file__).resolve().parents[5] / "libs/schema/migrations-cloud"
+                 / "V202608051100__add_analysis_evidence_lineage.sql")
+    sql = migration.read_text(encoding="utf-8")
+    assert "thread_ids TEXT[] NOT NULL DEFAULT '{}'" in sql
+    assert "series_lineage JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
+
+
+
+def test_news_objectset_exposes_event_facts_for_plain_language():
+    """설명 재료는 제목·역할별 참여자·사건 흐름 위치를 함께 제공한다."""
+    class Lake:
+        exists = {"tau_sidecar": False}
+
+        def sql(self, query):
+            if "max(CAST(ts AS DATE))" in query:
+                return [("2026-07-30",)]
+            assert "event_argument" in query and "current_stage" in query
+            return [("evt_1", "news_1", "삼성전자 HBM 공급 계약",
+                     "COMPANY.CONTRACT.SIGNING", "supply_1", "FIRST_IN_THREAD",
+                     "DEFINITIVE_SIGNED", ["ISSUER=삼성전자", "CUSTOMER=엔비디아"],
+                     "2026-07-31 13:10:00")]
+
+    objs = evidence.news_objectset(Lake(), "inst_1", "2026-07-31")
+    assert objs[0]["title"] == "삼성전자 HBM 공급 계약"
+    assert objs[0]["arguments"] == ["ISSUER=삼성전자", "CUSTOMER=엔비디아"]
+    assert objs[0]["novelty"] == "FIRST_IN_THREAD"
+    assert objs[0]["stage"] == "DEFINITIVE_SIGNED"
+
+
+def test_statistical_stock_explanation_always_receives_event_facts():
+    """통계가 성립한 날에도 사건 제목·참여자·흐름이 쉬운 설명 재료로 들어간다."""
+    from edge_analysis.statics import attribute
+
+    source = inspect.getsource(attribute.run_cell)
+    assert "objs = news_objectset(lake, instrument_id, day)" in source
+    assert "news_objectset(lake, instrument_id, day) if allow else []" not in source
+
+
+def test_stock_plain_payload_includes_verified_att_effects():
+    """쉬운 설명은 엣지 p값뿐 아니라 검증된 ATT 크기와 진단을 받는다."""
+    from edge_analysis.statics import attribute
+
+    source = inspect.getsource(attribute.run_cell)
+    assert 'verified_imps' in source
+    assert '"kind": "일단위 ATT"' in source
+    assert '"att": i.att' in source and '"pretrend_ok": i.pretrend_ok' in source
+
+
 def _bundles() -> list:
     return [stat_bundle("069500", "2026-08-04", "바스켓이 끌었어요", layer="괴리단독",
                         sign=1, kind="5분 괴리 분해", 바스켓몫=0.011),
