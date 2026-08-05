@@ -191,13 +191,13 @@
         <mxCell id="gr" value="접지 2종 (방아쇠의 자격)&#xa;점: 셀의 장중 사건 타입 목록에서만&#xa;계열: 오늘 |z|≥2 발화 계열족에서만 (series_z · 60d · PIT)&#xa;목록 밖 = 날조 → propose 가 거부" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacing=6;" vertex="1" parent="1">
           <mxGeometry x="380" y="60" width="360" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="mem" value="기억 (registry.py)&#xa;회상이 기록보다 먼저 (4R)&#xa;과거 스크린·판정 = PIT 어포던스&#xa;오늘 결과는 마지막에 적층" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacing=6;" vertex="1" parent="1">
+        <mxCell id="mem" value="기억 (registry.py)&#xa;회상이 기록보다 먼저 (4R)&#xa;과거 확증 게이트 판정만 PIT 어포던스&#xa;오늘 결과는 마지막에 적층" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacing=6;" vertex="1" parent="1">
           <mxGeometry x="780" y="60" width="280" height="90" as="geometry" />
         </mxCell>
         <mxCell id="hy" value="가설 에이전트 (hypothesize.py) — 환원의 담당자&#xa;튜플 = (취약성*, 방아쇠, 채널, 노출원, 역할, 결과, 부호) + 환원 노트&#xa;거부 4종: 접지 밖 날조 · 미발화 계열 · 동어반복(취약성=노출 피처) · 채널 중복&#xa;되물음 1회 (거부 사유가 추가된 프롬프트 — 같은 요청 반복 금지, 2R)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacing=6;" vertex="1" parent="1">
           <mxGeometry x="40" y="190" width="500" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="gs" value="격자 스크린 (grid_screen) — 커버리지 이중화&#xa;그날 타입 × 측정가능 노출 전수 · LLM 무관 결정론&#xa;탐색 전용 (방향 사후 · p₂) — 확증은 튜플 게이트만&#xa;LLM 세션 분산을 메운다 (5차: 미발견 조합 적발)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacing=6;dashed=1;" vertex="1" parent="1">
+        <mxCell id="gs" value="스키마 우선 proxy 선택&#xa;schema() = 측정 열·변환·층만 (결과·n·p 없음)&#xa;LLM 이 뉴스 기제로 후보 최대 3개 선택&#xa;edge_tests 가 고정 목록을 한 호출로 검정 · Bonferroni α/m" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacing=6;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="580" y="190" width="480" height="100" as="geometry" />
         </mxCell>
         <mxCell id="pt2" value="검정 에이전트 (paneltest.py) — 순수 코드&#xa;패널: 산업층 이중차감 ar (17R①) · 당일 제외 PIT · 점=과거 그 타입 사건일 / 계열=|z|≥2 였던 날들&#xa;검정: 날짜 층화 순열(SEED=0·PERMS=1000) · 양측 p₂ (17R②) · 셀 Bonferroni α=0.05/m (17R③)&#xa;INUS: 충족 클래스 얇으면 조절자 모드 (6R — 엣지는 전체 패널, 취약성은 교호 대비)&#xa;3값 게이트: 성립 · 불성립 · 판정불가 (표본을 찾으러 가지 않는다)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacing=6;" vertex="1" parent="1">

@@ -28,13 +28,37 @@ import os
 import sys
 
 from .route import route_etf, say_route
+from .interval import build_block_plan, render_final_explanation, window_facts
 
 
-def run(lake, etf: str, day: str, ask=None) -> str:
-    """ETF 하루 → 층 분해 → 라우팅 → 층별 시행 → 한 편의 설명.
-
-    `ask` 를 주면 **쉬운 설명(토스식)** 을 덧붙인다 - 정직한 설명이 먼저다.
-    """
+def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
+        window_start: str | None = None, window_end: str | None = None,
+        summary: bool = False, window_meta: dict | None = None) -> str:
+    """ETF 하루 또는 요청창 하나를 설명한다."""
+    if window_start is not None or window_end is not None:
+        if not instrument_id or window_start is None or window_end is None:
+            raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
+        facts = window_facts(
+            lake, etf, instrument_id, day, window_start, window_end)
+        final = render_final_explanation(facts)
+        plan = build_block_plan(facts)
+        if window_meta is not None:
+            window_meta.update({
+                "window_start": facts.window_start,
+                "window_end": facts.window_end,
+                "as_of": facts.window_end,
+                "blocks": [
+                    {
+                        "kind": block.key,
+                        "evidence_ids": list(block.evidence_ids),
+                        "final": list(block.lines),
+                    }
+                    for block in plan
+                ],
+                "lineage": list(facts.lineage),
+                "final": final,
+            })
+        return final
     from .layers import decompose
     from .premium import screen
     from .premium5 import premium_5m

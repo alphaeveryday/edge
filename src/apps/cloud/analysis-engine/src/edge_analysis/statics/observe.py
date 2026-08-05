@@ -9,10 +9,9 @@
 1. **없는 도구는 사유가 남는다.** `판정불가` 는 조용히 사라지지 않고 `skipped` 로
    올라간다. 부재를 '효과 없음' 으로 읽히게 두면 그게 기각 위장이다.
 2. **가설이 필요한 도구는 부르지 않는다.** `fin_item`(질의어) · `dg_probe`(항목코드) ·
-   `stability`(노출 축) · `edge_test`(튜플)은 사람이나 가설 에이전트가 자리를 채워야
-   한다. 관측 패스가 대신 고르면 그건 표본을 고르는 것이 된다.
-3. **인과는 일 단위라고 적는다.** `grid_screen` · `run_trial` 은 거래일 패널이다.
-   구간 산문에 섞이면 읽는 사람이 그 구간의 인과로 읽는다 - 근거에 `일단위` 를 박는다.
+   `stability`(노출 축) · `edge_tests`(튜플 목록) · `run_trial`(사건타입 후보)은
+   가설 에이전트가 자리를 채워야 한다. 관측 패스가 결과를 보고 대신 고르면
+   proxy·표본 선택 편향이다.
 
 방향(`sign`)은 도구가 신고한 `signed` 에서만 온다. 키 이름을 추측해 부호로 읽으면
 `macro_z` 의 절댓값 z 를 방향으로 읽던 그 실수로 돌아간다.
@@ -30,7 +29,8 @@ NEEDS_HYPOTHESIS = {
     "fin_item": "질의어(어느 재무 항목인가)",
     "dg_probe": "항목코드(어느 시장 항목인가)",
     "stability": "노출 축(어느 계열로 재는가)",
-    "edge_test": "튜플(사건타입 × 채널 × 노출)",
+    "edge_tests": "스키마로 고른 튜플 후보 목록",
+    "run_trial": "뉴스 의미로 고른 사건타입 후보",
 }
 # 가격 움직임에 대한 주장을 만들지 않는 도구 - 사전 조회용.
 MAX_TRIALS = 3          # 문단에 세울 일단위 ATT 문장 수 상한
@@ -121,15 +121,6 @@ def _consensus(r: dict) -> Obs:
                s)
 
 
-def _grid(r: dict) -> Obs | None:
-    rows = [x for x in (r.get("rows") or []) if x.get("p2") is not None]
-    if not rows:
-        return None
-    b = min(rows, key=lambda x: float(x["p2"]))
-    return Obs("grid_screen",
-               "오늘 나온 소식과 같은 종류의 일이 과거에도 가격과 함께 움직인 자리가 있어요.",
-               f"일단위 격자(탐색) · {b['type'].split('.')[-1]} × {b['exposure']} "
-               f"p={float(b['p2']):.3f} n={b['n']}")
 
 
 def _trial(r: dict, etype: str) -> tuple[float, Obs] | None:
@@ -200,70 +191,6 @@ def observe(lake, ticker: str, instrument_id: str, day: str, *,
     except Exception as exc:                                      # noqa: BLE001
         skipped.append(f"business_mix: 호출 실패 ({type(exc).__name__})")
 
-    # **인과는 여기서만, 그리고 일 단위로만.** 창 단위 패널이 없다.
-    #
-    # 순서가 중요하다: 격자가 **탐색**이고 `run_trial` 이 **확증**이다. 예전엔 오늘
-    # 사건타입 전부에 `run_trial` 을 돌렸는데(실측 14회 × 매칭+순열 = 약 27분) 문단에는
-    # 상위 3개만 썼다 - 11회를 계산해 버린 것이다. 격자 1회로 훑고 거기서 고른 것만
-    # 확증한다.
-    #
-    # 대가를 적어 둔다: 같은 날 데이터로 고르고 같은 데이터로 확증하면 **선택 편향**이다.
-    # 격자가 최소 p 를 골랐으니 그 타입의 ATT p 는 낙관적으로 나온다. 그래서 근거에
-    # '격자 선택' 을 박는다 - 성능을 얻고 정직성을 잃지 않으려면 그 표기가 있어야 한다.
-    if etypes:
-        picked, why_pick = list(etypes), ""
-        try:
-            g = S.call(lake, "grid_screen", day=day, types=list(etypes))
-            o = _grid(g) if g.get("verdict") == "계산됨" else None
-            if o is not None:
-                obs.append(o)
-                rows = [x for x in (g.get("rows") or []) if x.get("p2") is not None]
-                rank = sorted(rows, key=lambda x: float(x["p2"]))
-                seen: list[str] = []
-                for x in rank:                     # 타입 중복 제거, p 오름차순
-                    if x["type"] not in seen:
-                        seen.append(x["type"])
-                if seen:
-                    picked = seen[:MAX_TRIALS]
-                    why_pick = " · 격자 선택"
-            elif g.get("verdict") != "계산됨":
-                skipped.append(f"grid_screen: {g.get('reason') or '판정불가'}")
-        except Exception as exc:                                  # noqa: BLE001
-            skipped.append(f"grid_screen: 호출 실패 ({type(exc).__name__})")
-        if len(picked) < len(etypes):
-            skipped.append(
-                f"run_trial: {len(etypes)}타입 중 격자가 고른 {len(picked)}개만 검정했다"
-                " - 나머지는 계산하지 않았다(부재가 아니라 미검정)")
-        trials: list[tuple[float, Obs]] = []
-        for et in picked:
-            try:
-                t = S.call(lake, "run_trial", day=day, etype=et)
-            except Exception as exc:                              # noqa: BLE001
-                skipped.append(f"run_trial({et.split('.')[-1]}): 호출 실패"
-                               f" ({type(exc).__name__})")
-                continue
-            if t.get("verdict") != "계산됨":
-                skipped.append(f"run_trial({et.split('.')[-1]}):"
-                               f" {t.get('reason') or '판정불가'}")
-                continue
-            pair = _trial(t, et)
-            if pair is not None:
-                p, o = pair
-                # 격자가 고른 것임을 근거에 남긴다 - 같은 데이터로 고르고 확증했으므로
-                # 이 p 는 낙관적이다. 그 사실이 표기에서 빠지면 확증으로 읽힌다.
-                trials.append((p, Obs(o.tool, o.text, o.ground + why_pick, o.sign)))
-        # **작은 p 먼저.** 격자 선택으로 이미 MAX_TRIALS 개지만, 격자가 실패해 전 타입을
-        # 돌게 되면 여기서 다시 잘린다. 접은 것은 수만 말하고 사라지지 않는다.
-        trials.sort(key=lambda x: x[0])
-        obs += [o for _p, o in trials[:MAX_TRIALS]]
-        if len(trials) > MAX_TRIALS:
-            rest = trials[MAX_TRIALS:]
-            hit = sum(1 for p, _o in rest if p < ALPHA)
-            obs.append(Obs("run_trial",
-                           f"나머지 사건 종류 {len(rest)}가지도 같은 방식으로 검정했어요.",
-                           f"일단위 ATT {len(rest)}건 · 유의 {hit}건"))
-    else:
-        skipped.append("grid_screen · run_trial: 오늘 사건이 없어 검정할 타입이 없다")
 
     for name, why in NEEDS_HYPOTHESIS.items():
         skipped.append(f"{name}: {why} 가 정해져야 부른다 - 관측 패스가 고르지 않는다")

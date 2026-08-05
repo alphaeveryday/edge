@@ -817,6 +817,20 @@ def edge_test(lake, t: HypothesisTuple, day: str,
                       reason=dir_note)
 
 
+def edge_tests(lake, tuples: list[HypothesisTuple], day: str,
+               cell_instrument_id: str = "") -> list[tuple[HypothesisTuple, EdgeReport]]:
+    """LLM이 스키마로 고른 후보 전부를 **한 번에** 검정한다.
+
+    공개 경계가 목록 하나를 받으므로 후보별 도구 재호출·중간 결과를 본 표본 선택이
+    불가능하다. 각 패널의 검정식은 `edge_test` 하나만 유지하고, 동일한 m으로
+    Bonferroni 임계를 고정한다.
+    """
+    m = len(tuples)
+    return [(t, edge_test(lake, t, day, cell_instrument_id=cell_instrument_id,
+                          m_tests=m))
+            for t in tuples]
+
+
 def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유",
                    m_tests: int = 1) -> EdgeReport:
     """전이 패널 (§16): 사건 종목과 **관계 있는** 종목이 관계 없는 종목보다 부호
@@ -876,57 +890,10 @@ def _relation_test(lake, t: HypothesisTuple, day: str, layer: str = "고유",
                       reason="몫 배정 비지원 - 소스-타깃 창 정렬(5분봉)이 다음 판이다")
 
 
-def grid_screen(lake, day: str, types: list[str],
-                max_rows: int = 6) -> list[dict]:
-    """결정론 격자 스크린 — 그날 타입 × 측정가능 노출 전수. LLM 무관.
-
-    가설 커버리지의 세션 분산(라이브 2차는 EXECUTIVE_CHANGE 성립을 찾았는데
-    3차는 그 튜플을 안 골랐다)을 메우는 이중화다. 닫힌 어휘라서 격자가 유한하고,
-    유한해서 전수가 가능하다. **탐색이지 확증이 아니다**: 방향을 사후에 고르므로
-    p 는 양측(x2)이고, 결과는 '스크린 발견'으로만 표기한다 - 확증은 튜플 게이트의 몫.
-
-    표본은 **발견 표본**(split_date 이전)만 쓴다 (18R): 확증 게이트는 경계 이후를
-    쓰므로 두 표본이 겹치지 않는다. 그래서 이 스크린 결과를
-    가설 에이전트에게 어포던스로 줘도 이중 사용이 아니다.
-    """
-    feat_names = list(dict.fromkeys(FEATURES.values()))
-    all_cols = ", ".join(f"g.{c}" for c in feat_names)
-    out: list[dict] = []
-    label_of = {c: k for k, c in FEATURES.items()}
-    for etype in types:
-        # 격자는 **구체화 없이** 전수한다 - 술어·단계·역할·신규성까지 곱하면
-        # 조합이 폭발하고, 격자의 목적은 탐색(전 격자 훑기)이지 확증이 아니다.
-        sql = (_base(day) + _POINT_PANEL).format(etype=etype, cmp="<", day=day,
-                                                 cols=all_cols, y=LAYER_Y["고유"], refine="")
-        raw = _panel_rows(lake, sql, strict=False)
-        if len(raw) < MIN_N:
-            out.append({"type": etype, "status": f"표본부족 n={len(raw)}"})
-            continue
-        ar = np.array([float(r[2]) for r in raw])
-        dates = np.array([str(r[1]) for r in raw])
-        for j, colname in enumerate(feat_names):
-            xv = np.array([float(r[3 + j]) if r[3 + j] is not None else np.nan
-                           for r in raw])
-            ok = ~np.isnan(xv)
-            if ok.sum() < MIN_N:
-                continue
-            hi = _pctile(xv[ok]) >= EXPOSURE_CUT
-            if hi.sum() < 3 or (~hi).sum() < 3:
-                continue
-            p_pos = _stratified_p(ar[ok], hi, dates[ok])
-            p2 = min(min(p_pos, 1.0 - p_pos) * 2, 1.0)
-            fam, tr = label_of[colname]
-            out.append({"type": etype, "exposure": f"{fam}/{tr}",
-                        "n": int(ok.sum()), "p2": round(p2, 3),
-                        "direction": "+" if p_pos < 0.5 else "-",
-                        "hi": float(ar[ok][hi].mean()), "lo": float(ar[ok][~hi].mean())})
-    hits = sorted((o for o in out if "p2" in o), key=lambda o: o["p2"])
-    misses = [o for o in out if "p2" not in o]
-    return hits[:max_rows] + misses
 
 
 __all__ = ["EdgeReport", "FEATURES", "MIN_OPPOSITE", "PERMS", "SEED", "Z_ANOM",
-           "edge_test", "grid_screen"]
+           "edge_test", "edge_tests"]
 
 
 # ── 패널 → 읽을 글 (판정은 위의 게이트가 이미 냈다) ──────────────────────

@@ -85,3 +85,22 @@ def test_leader_is_whichever_share_is_bigger():
     basket = Split(0.02, 0.019, 0.001, 0.0, 0.001,
                    (Win("t", 0.001, 0.02, 0.019, 0.001, 1.0),))
     assert "주도 바스켓" in basket.line
+
+
+def test_requested_window_excludes_earlier_nav_moves():
+    rows = [
+        ("2026-07-27 09:00:00", 102.0, 0.005, 1.0),
+        ("2026-07-27 10:40:00", 103.0, 0.010, 1.0),
+        ("2026-07-27 10:45:00", 104.0, 0.020, 1.0),
+        ("2026-07-27 13:20:00", 120.0, 0.030, 1.0),
+    ]
+
+    sp, note = premium_5m(
+        _Lake(anchor=("i1", 100.0, 101.0), rows=rows),
+        "091160", "2026-07-27", window_start="10:40", window_end="13:20",
+    )
+
+    assert sp is not None, note
+    assert [w.ts[11:16] for w in sp.wins] == ["10:40", "10:45"]
+    assert abs(sp.total - sum(w.r_etf for w in sp.wins)) < 1e-12
+    assert "09:00" not in sp.line and "13:20" not in sp.line

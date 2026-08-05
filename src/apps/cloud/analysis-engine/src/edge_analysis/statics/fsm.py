@@ -45,7 +45,7 @@ MENUS: dict[str, tuple[tuple[str, str], ...]] = {
                  "거의 아무것도 안 나온다**. 방아쇠를 좁힐 값이 실제로 뭐가 있나"),
     ),
     SCREEN: (
-        ("screen", "screen()  발견 표본 격자 (타입×노출 전수). 탐색이지 확증이 아니다"),
+        ("schema", "schema()  측정 가능한 proxy 열·변환·층. 결과값·n·p는 보지 않는다"),
         ("series", "series()  오늘 계열 혁신 z - 계열 방아쇠 자격 판정"),
         ("peers", "peers()  같은 산업 피어 수 - 속성 동일성(관계 아님)"),
         ("links", "links(관계타입)  타입 있는 1홉 상대 - 경로형 가설의 접지"),
@@ -54,11 +54,11 @@ MENUS: dict[str, tuple[tuple[str, str], ...]] = {
     EMIT: (),
 }
 
-SCREEN_TOOLS = ("screen", "series")   # 역사를 보는 도구 - SCREEN 진행 조건
+SCHEMA_TOOLS = ("schema",)
 
 GUARDS: dict[str, str] = {
     GROUND: "사건 확인(또는 부재 확인) + 근거 열람(news/thread 1회) - 둘 다 있어야 넘어간다",
-    SCREEN: "역사를 봐야 노출축을 고를 수 있다 (screen 또는 series 1회)",
+    SCREEN: "결과를 보기 전에 schema() 로 측정 가능한 proxy 후보를 확인한다",
     EMIT: "",
 }
 
@@ -74,7 +74,7 @@ class Machine:
     grounded: int = 0          # 사건 존재를 확인한 횟수
     absent: int = 0            # **없다**는 것을 확인한 횟수 (부재도 증거다)
     evidence: int = 0          # 근거를 **직접** 열어 본 횟수 (또는 못 연다는 확인)
-    screened: int = 0          # 역사 조회 횟수
+    schema_seen: int = 0       # 결과와 분리된 측정 스키마 확인 횟수
     calls: list[str] = field(default_factory=list)
 
     def brief(self) -> str:
@@ -116,8 +116,8 @@ class Machine:
             self.evidence += 1
             if not (blocked or body.startswith(("근거 문서 없음", "스레드 없음"))):
                 self.grounded += 1
-        elif name in SCREEN_TOOLS and not blocked:
-            self.screened += 1
+        elif name in SCHEMA_TOOLS and not blocked:
+            self.schema_seen += 1
         return out if self._blocked() else out + "\n\n" + self._advance()
 
     def _blocked(self) -> str:
@@ -130,7 +130,7 @@ class Machine:
                     "사건 타입만 봤다. news() 또는 thread() 로 근거를 열어라 "
                     "(못 닿으면 그 사실이 답이다 - 한 번 부르면 된다)")
         if self.state == SCREEN:
-            return "" if self.screened else "역사를 안 봤다. screen() 또는 series() 를 써라"
+            return "" if self.schema_seen else "schema() 로 측정 가능한 proxy를 확인해라"
         return ""
 
     def _advance(self) -> str:
@@ -146,5 +146,5 @@ class Machine:
 
     def stats(self) -> dict:
         return {"state": self.state, "grounded": self.grounded, "absent": self.absent,
-                "evidence": self.evidence, "screened": self.screened,
+                "evidence": self.evidence, "schema_seen": self.schema_seen,
                 "calls": list(self.calls)}

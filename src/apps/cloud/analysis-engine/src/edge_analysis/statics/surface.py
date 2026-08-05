@@ -89,20 +89,70 @@ def register(name: str, what: str, *, needs: tuple[str, ...] = (),
     return deco
 
 
+def _days_from_listing(lake, need: Need) -> int | None:
+    """서로 다른 날짜 수를 **파일 목록에서** 센다. 못 세면 None (호출자가 훑는다).
+
+    `LIMIT` 이 안 듣는 이유: `DISTINCT` 는 블로킹 연산자라 상한을 걸어도 전량을 먼저
+    훑는다. 실측 - `s3_dg_market` 의 `count(DISTINCT trade_date) LIMIT 2` 가 173.6초
+    였다. 답은 '366일' 인데 그걸 얻으려고 13.8GB 를 압축해제한다.
+
+    그런데 `trade_date` 는 **하이브 파티션 키**다 - 값이 경로에 적혀 있다. 그러면
+    파일 목록만 읽어도 답이 나온다. 데이터는 한 바이트도 안 읽는다.
+
+    파티션 키가 아닌 열(예: RDB 표의 날짜 열)이면 경로에 없으므로 None 을 돌려주고
+    호출자가 원래대로 훑는다 - 여기서 0 을 돌려주면 '날짜 없음' 이 되어 도구가
+    부당하게 막힌다.
+    """
+    path = getattr(lake, "s3", {}).get(need.table)
+    if not path:
+        return None
+    from .duck import LAKE
+    key = need.date_col
+    try:
+        rows = lake.sql(
+            f"SELECT count(DISTINCT regexp_extract(file, '{key}=([^/]+)', 1)) "
+            f"FROM glob('{LAKE}{path}/**/*') WHERE file LIKE '%{key}=%'")
+    except Exception:                            # noqa: BLE001 - 못 세면 훑는다
+        return None
+    n = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+    return n or None
+
+
 def _probe(lake, need: Need) -> tuple[int, int]:
-    """(행 수, 서로 다른 날짜 수). 못 읽으면 (0, 0) — **예외를 삼키지 않고 0 으로 말한다**.
+    """(행 수, 서로 다른 날짜 수) — **요구치에서 멈춘다**. 못 읽으면 (0, 0).
+
+    왜 세지 않고 멈추는가: 게이트가 묻는 것은 통계가 아니라 **문턱**이다(`unmet` 은
+    `>= need.rows` 와 `>= need.days` 만 본다). 그런데 정확히 세려다 라이브 게이트의
+    92% 를 여기서 썼다 - 실측:
+
+        count(*) FROM s3_dg_market            100.1초 · 13,797,643,403 B 수신
+        count(DISTINCT trade_date) 같은 표     96.8초 · 13,797,643,403 B
+        count(*) FROM s3_dg_consensus          17.7초 · 12,836,795,035 B
+        dg 소요 356.4초 / 게이트 전체 386.6초
+
+    2.68억 행이 gzip CSV 라 행그룹·열 프루닝이 없다 - `count(*)` 가 전량 압축해제다.
+    13.8GB 를 노트북으로 끌어와서 얻는 답이 '366일' 이었다.
+
+    상한을 걸면 숫자의 뜻이 바뀌지만 **판정은 안 바뀐다**. 그리고 `unmet` 의 문구는
+    미달일 때만 찍히는데, 미달이면 상한에 닿지 못했다는 뜻이므로 그때 찍히는 숫자는
+    여전히 실수다 - 거짓말이 되지 않는다.
 
     날짜 열이 없는 표(예: 마스터)는 일수 0 이고, 그런 표에 일수를 요구하면 안 된다.
     """
     try:
-        n = int(lake.sql(f"SELECT count(*) FROM {need.table}")[0][0])
+        n = int(lake.sql(f"SELECT count(*) FROM (SELECT 1 FROM {need.table} "
+                         f"LIMIT {max(need.rows, 1)})")[0][0])
     except Exception:                            # noqa: BLE001 - 부재는 0 행이다
         return 0, 0
     if not need.days:
         return n, 0
+    # **목록이 먼저다.** 하이브 파티션이면 데이터를 안 읽고 답이 나온다.
+    listed = _days_from_listing(lake, need)
+    if listed is not None:
+        return n, listed
     try:
-        d = int(lake.sql(f"SELECT count(DISTINCT {need.date_col}) "
-                         f"FROM {need.table}")[0][0])
+        d = int(lake.sql(f"SELECT count(*) FROM (SELECT DISTINCT {need.date_col} "
+                         f"FROM {need.table} LIMIT {max(need.days, 1)})")[0][0])
     except Exception:                            # noqa: BLE001 - 열 부재도 0 일이다
         return n, 0
     return n, d
@@ -214,30 +264,25 @@ def audit_vocab() -> dict[str, list[str]]:
 
 
 # ── 기존 도구 등록 (세 에이전트가 공유하는 최소 표면) ────────────────────────
-@register("edge_test", "튜플(사건타입×노출×취약성) 하나를 일간 패널로 검정해 판정·크기·"
-                       "반사실을 낸다. 확증 경로.",
+@register("edge_tests", "스키마로 고른 튜플 후보 전부를 한 호출로 일간 패널 검정한다. "
+                        "중간 결과를 보고 후보를 바꾸지 못하며 α/m을 같은 목록에 적용한다.",
           needs=("layers_daily",), vocab=("가격잔차", "거래량", "주주", "신용", "공매도",
                                           "배수", "주식수", "수급", "지수잔차", "국면",
                                           "거시", "금리", "섹터", "레버리지", "수익성",
                                           "성장", "재무파생"))
-def _edge_test(lake, *, tup, day: str, instrument_id: str = "",
-               layer: str = "고유", m_tests: int = 1) -> dict:
-    from .paneltest import edge_test
-    r = edge_test(lake, tup, day, instrument_id, layer, m_tests)
-    hi, lo = r.effect_high, r.effect_low
-    return {"verdict": r.verdict, "n": r.n, "p": r.p, "reason": r.reason,
-            "effect_high": hi, "effect_low": lo, "applied": r.applied,
-            "counterfactual": r.counterfactual,
-            # 상·하위 노출군 차이가 부호 있는 양이다(효과 방향).
-            "signed": (hi - lo) if hi is not None and lo is not None else None}
+def _edge_tests(lake, *, tuples, day: str, instrument_id: str = "") -> dict:
+    from .paneltest import edge_tests
+    rows = []
+    for t, r in edge_tests(lake, tuples, day, instrument_id):
+        hi, lo = r.effect_high, r.effect_low
+        rows.append({"type": t.trigger.ident, "channel": t.channel,
+                     "verdict": r.verdict, "n": r.n, "p": r.p, "reason": r.reason,
+                     "effect_high": hi, "effect_low": lo, "applied": r.applied,
+                     "counterfactual": r.counterfactual,
+                     "signed": (hi - lo) if hi is not None and lo is not None else None})
+    return {"verdict": "계산됨", "rows": rows}
 
 
-@register("grid_screen", "그날 사건타입 × 측정가능 노출을 **전수** 훑어 후보를 순위로 낸다. "
-                         "탐색 경로(p 양측) — 확증은 edge_test 가 한다.",
-          needs=("layers_daily",))
-def _grid(lake, *, day: str, types: list[str], max_rows: int = 6) -> dict:
-    from .paneltest import grid_screen
-    return {"verdict": "계산됨", "rows": grid_screen(lake, day, types, max_rows)}
 
 
 @register("run_trial", "사건을 처치로 보고 매칭 대조군(위약)과 비교해 ATT 와 조절자 "

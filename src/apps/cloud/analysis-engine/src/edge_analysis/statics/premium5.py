@@ -93,7 +93,7 @@ class Win:
 
 @dataclass(frozen=True, slots=True)
 class Split:
-    """하루의 두 몫. `total == basket + premium_move` (로그 항등식)."""
+    """선택 구간의 두 몫. `total == basket + premium_move` (로그 항등식)."""
 
     total: float
     basket: float
@@ -105,15 +105,17 @@ class Split:
     @property
     def line(self) -> str:
         d = "바스켓" if abs(self.basket) >= abs(self.premium_move) else "수급(ETF 고유)"
-        return (f"5분 괴리 분해: 하루 {self.total * 100:+.2f}%p = "
+        return (f"5분 괴리 분해: 선택 구간 {self.total * 100:+.2f}%p = "
                 f"바스켓 {self.basket * 100:+.2f}%p + 괴리변화 "
                 f"{self.premium_move * 100:+.2f}%p · 주도 {d} · "
                 f"괴리 {self.prem_open * 100:+.2f}%→{self.prem_last * 100:+.2f}% "
                 f"· 창 {len(self.wins)}개")
 
 
-def premium_5m(lake: CausalLake, ticker: str, day: str) -> tuple[Split | None, str]:
-    """(분해, 사유). 재료가 없으면 `(None, 한 줄 사유)` — 절대 예외를 던지지 않는다.
+def premium_5m(lake: CausalLake, ticker: str, day: str, *,
+               window_start: str | None = None,
+               window_end: str | None = None) -> tuple[Split | None, str]:
+    """(분해, 사유). 선택 시각을 주면 `[window_start, window_end)`만 돌려준다.
 
     괴리는 **선제적 부가정보**다. 이것 때문에 셀 설명이 멈추면 안 되므로 부재는
     전부 사유 문자열로 흐른다(호출자가 그 줄을 산문에 남긴다).
@@ -162,6 +164,24 @@ def premium_5m(lake: CausalLake, ticker: str, day: str) -> tuple[Split | None, s
     if abs(sp.total - sp.basket - sp.premium_move) > 1e-9:
         return None, ("괴리 5분 분해 넘어감 — 항등식 검산 실패 "
                       f"({sp.total:.6f} ≠ {sp.basket:.6f} + {sp.premium_move:.6f})")
+    if window_start is not None or window_end is not None:
+        if window_start is None or window_end is None:
+            return None, "괴리 5분 분해 넘어감 — 요청창 시작·종료가 함께 필요하다"
+        picked = tuple(w for w in sp.wins
+                       if window_start <= w.ts[11:19] < window_end)
+        if not picked:
+            return None, (f"괴리 5분 분해 넘어감 — 요청창 {window_start[:5]}~"
+                          f"{window_end[:5]} 교집합 0창")
+        first = sp.wins.index(picked[0])
+        prem_open = sp.prem_open if first == 0 else sp.wins[first - 1].premium
+        sp = Split(
+            sum(w.r_etf for w in picked),
+            sum(w.r_bk for w in picked),
+            sum(w.d_prem for w in picked),
+            prem_open,
+            picked[-1].premium,
+            picked,
+        )
     return sp, sp.line
 
 

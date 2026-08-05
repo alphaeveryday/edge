@@ -350,11 +350,11 @@ def test_interval_clamps_instead_of_rejecting_overnight():
             raise AssertionError(f"{bad} 를 통과시켰다")
 
 
-def test_partial_coverage_is_never_called_a_whole_day():
-    """미계측 창이 하나라도 있으면 **합은 하루가 아니다**.
+def test_missing_previous_close_is_not_rendered_as_zero():
+    """전일 종가 앵커가 없으면 헤더 누적수익을 만들지 않는다.
 
-    실측: 갭을 일봉에서 읽다가 날짜 커버리지가 달라 통째로 미계측이 났는데, 헤더는
-    '몫의 합이 하루와 같다(회계)' 를 무조건 찍었다 - 코드가 스스로 거짓을 말한 지점이다.
+    요청창 출력은 더 이상 하루의 다른 창을 조립하지 않는다. 전일 종가가 없는 날에는
+    요청창 수익과 별개로 헤더 값을 명시적으로 미계측 처리해야 한다.
     """
     import datetime as dt
 
@@ -374,5 +374,5 @@ def test_partial_coverage_is_never_called_a_whole_day():
             return []
 
     txt = iv.explain(_Lake(), "T", "i", "2026-07-27", "10:00", "10:30")
-    assert "합(부분)" in txt and "이 합은 하루가 아니다" in txt
-    assert "몫의 합이 하루와 같다" not in txt
+    assert "전일 종가 대비 수익률 미계측" in txt
+    assert "몫의 합이 하루와 같다" not in txt and "합(부분)" not in txt

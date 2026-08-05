@@ -26,7 +26,7 @@ from ..observability import record as trace   # registry.record 와 이름 충�
 from .duck import CausalLake
 from .hypothesize import explore, propose
 from .narrate import AdditiveBudget, Edge, additive_say, narrate
-from .paneltest import EdgeReport, edge_test
+from .paneltest import EdgeReport, edge_tests
 from .render import Row, render
 from .tree import Share, decompose
 from .vocab import HypothesisTuple
@@ -35,18 +35,14 @@ from .windows import build_windows
 KST = timezone(timedelta(hours=9))
 
 
-def _measurable(lake) -> list[tuple[str, str]]:
-    """가설 에이전트가 제안할 수 있는 노출 축 = **가용 도구가 실제로 재는 것**.
+def _measurable(_lake) -> list[tuple[str, str]]:
+    """가설 에이전트가 보는 proxy **측정 스키마**.
 
-    `FEATURES` 전량을 그대로 주면 안 되는 이유: 도구가 데이터 부재로 사라져도 가설
-    에이전트는 그 축을 계속 제안하고, 검정기는 매번 판정불가를 낸다. 그러면 산출이
-    '판정불가' 로 뒤덮여 진짜 부재와 배선 부재를 구분할 수 없다. 세 에이전트가 같은
-    표면을 본다는 것의 실질이 이 한 줄이다 - **제안 가능 = 측정 가능**.
+    후보를 데이터 커버리지나 결과값으로 좁히면 선택 단계가 통계를 먼저 본다.
+    실제 표본의 결측·부족은 후보가 고정된 뒤 `edge_tests` 가 판정불가로 보고한다.
     """
     from .paneltest import FEATURES
-    from .surface import available
-    fams = {v for t in available(lake) for v in t.vocab}
-    return [k for k in FEATURES if k[0] in fams]
+    return list(FEATURES)
 
 
 def _kst(ts) -> datetime:
@@ -466,7 +462,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     rejected: list[str] = []
     reports: list[tuple[HypothesisTuple, EdgeReport]] = []
     memory: list[str] = []
-    from .paneltest import Z_ANOM, grid_screen, series_z
+    from .paneltest import Z_ANOM, series_z
     # 계열 방아쇠의 접지 = 오늘 발화(|z|≥2, 60d). 점 사건이 없어도 계열 이상이
     # 있으면 가설 단계는 돈다 - 무사건 폭락일이 계열 방아쇠의 존재 이유다
     # (14차 정정: 기계는 e1113ce 부터 있었는데 이 게이트가 점 사건에만 걸려
@@ -475,8 +471,9 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     anomalous = sorted(f for f, z in zs.items() if abs(z) >= Z_ANOM)
     screens: list[dict] = []
     if types or anomalous:
-        # 회상이 기록보다 먼저다 (P9 교훈). 과거 셀들의 스크린·게이트 이력은
-        # PIT 안전한 사실이고, 가설 에이전트의 어포던스로 들어간다.
+        # 회상이 기록보다 먼저다 (P9 교훈). 과거 셀들의 **확증 게이트** 이력만
+        # PIT 안전한 사실이다. 결과로 proxy를 고르던 격자 이력은 선택편향이라
+        # 가설 에이전트에게 주지 않는다.
         memory = recall(root, day=day, types=types)
         if memory:
             facts += "\n과거 셀 이력 (어포던스 - 확증 아님):\n" + "\n".join(
@@ -484,12 +481,8 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         if anomalous:
             facts += ("\n오늘 계열 이상 (계열 방아쇠는 이 계열족에서만): "
                       + " · ".join(f"{f} z={zs[f]:+.1f}" for f in anomalous))
-        # 격자는 **도구로만** 준다 (screen). 프롬프트에 쏟으면 (a) 도구 호출 기록이
-        # 안 남아 무엇을 봤는지 모르고, (b) 상태기계 가드가 무의미해진다. 여기서는
-        # 블록·레지스트리용으로만 계산한다. 발견 표본이라 확증 표본과 겹치지 않는다.
-        screens = grid_screen(lake, day, types) if types else []
-        # 동적 도구 상태기계로 먼저 **관측**한다 (18R). 어휘·격자를 프롬프트로 쏟지
-        # 않고 도구로 준다 - 무엇을 물었고 무엇이 없다고 답했는지가 기록에 남는다.
+        # 동적 도구 상태기계로 사건 근거와 **측정 스키마**를 본다. proxy 후보를
+        # 고르기 전에는 결과 수치·n·p를 어떤 도구도 보여주지 않는다.
         from .fsm import Machine
         from .tools import Catalog
         cat = Catalog(lake=lake, ticker=ticker, instrument_id=instrument_id,
@@ -501,9 +494,7 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
         tuples, rejected = propose(ask, facts=facts, event_types=types,
                                    measurable=_measurable(lake),
                                    series_families=anomalous)
-        reports = [(t, edge_test(lake, t, day, cell_instrument_id=instrument_id,
-                                 m_tests=len(tuples)))
-                   for t in tuples]
+        reports = edge_tests(lake, tuples, day, cell_instrument_id=instrument_id)
 
     # 몫 배정: 성립 + 오늘 조건 충족 + 환원 미불일치 (INUS 의 적용 판정).
     # 크기는 창 행에 싣지 않는다 - SEM 기여는 **일 단위** 추정량이라(패널이 일간 ar)

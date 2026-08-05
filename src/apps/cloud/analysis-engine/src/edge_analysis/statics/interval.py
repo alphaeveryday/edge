@@ -1,14 +1,13 @@
-"""구간 설명 — 하루를 [갭] + [요구창] + [나머지] 로 갈라 **시간순**으로 말한다.
+"""ETF 요청창 설명 — 코드가 사실·블록·근거를 고정하고 LLM은 허용 문구만 채운다.
 
 세 규율이 이 모듈의 전부다.
 
-1. **거부하지 않고 자른다.** 요구가 장 시각 밖으로 삐져나오면 예외를 던지는 게 아니라
-   장 안으로 자르고 사유를 적는다. 밤사이는 이미 `갭` 창으로 항상 따로 나오므로
-   "밤사이는 못 한다" 는 거짓이었다 — 전일 종가→시가는 일봉으로 관측 가능하다.
-2. **창마다 자기 시점까지의 정보만.** 창 k 의 `as_of` 는 창 k 의 **끝**이다. 뒤 창의
-   사건을 앞 창 설명에 쓰면 그건 설명이 아니라 사후확신이다.
-3. **크기는 회계, 인과는 미검정.** 5분봉 시간 항등식이 창별 몫을 정하고 합이 맞는다.
-   검정 패널의 단위는 거래일이라 창에 인과를 못 붙인다 — 그 사실을 창마다 적는다.
+1. **요청창만 설명한다.** 헤더는 전일 종가부터 요청 종료까지의 ETF 누적수익이고,
+   기여·폭·NAV·시장·섹터·가격 경로는 요청 시작부터 종료까지만 계산한다.
+2. **요청 종료까지 알려진 정보만 쓴다.** 공시·뉴스의 `available_at`과 모든 근거의
+   `as_of`는 요청 종료를 넘지 않는다.
+3. **코드가 구조와 수치를 소유한다.** `BlockPlan`이 블록 순서·발생·근거를 정하고,
+   LLM은 허용된 자리표시자만 채운다. 일단위 검정을 요청창 인과로 승격하지 않는다.
 
     python -m edge_analysis.statics.interval <ticker6> <instrument_id> <YYYY-MM-DD> \
         <HH:MM> <HH:MM>
@@ -17,10 +16,14 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import json
+import re
 import sys
+from dataclasses import dataclass
 
 from .layers import SESSION_CLOSE, SESSION_OPEN, decompose
-from .windows import Window, build_windows
+from .premium5 import premium_5m
+from .windows import Window
 
 # 자정 τ = **시각 미상**이다. `lake.taus` 는 사이드카가 없으면 `available_at`(자정)로
 # 폴백하는데, 그걸 '장 전' 으로 세면 부재가 갭 창의 알리바이를 위장한다.
@@ -29,6 +32,185 @@ UNKNOWN_TAU = dt.time(0, 0)
 # 이 몫 미달 창은 층까지 가르지 않는다 — `plain.recent_window` 와 같은 규율.
 # 요구창은 사람이 물었으므로 몫과 무관하게 항상 가른다.
 FLOOR = 0.20
+
+MIN_N = 20
+BLOCK_ORDER = (
+    "header", "nav", "contribution", "breadth", "path", "relative", "anomaly",
+    "disclosure", "flow", "news", "statistics", "causal", "absence", "evidence",
+)
+
+
+@dataclass(frozen=True)
+class ContributionFact:
+    name: str
+    contribution: float
+    return_value: float | None = None
+    evidence_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StatisticFact:
+    claim: str
+    n: int
+    effect: float | None = None
+    p: float | None = None
+    evidence_ids: tuple[str, ...] = ()
+
+@dataclass(frozen=True)
+class WindowFacts:
+    ticker: str
+    name: str
+    day: str
+    window_start: str
+    window_end: str
+    header_return: float | None
+    window_return: float
+    advancers: int
+    decliners: int
+    market_return: float | None
+    sector_name: str | None
+    sector_return: float | None
+    path: str
+    contributions: tuple[ContributionFact, ...] = ()
+    nav_gap: float | None = None
+    anomaly: str | None = None
+    disclosures: tuple[str, ...] = ()
+    flows: tuple[str, ...] = ()
+    news: tuple[str, ...] = ()
+    statistics: tuple[StatisticFact, ...] = ()
+    causal: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    lineage: tuple[dict, ...] = ()
+    final_lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OutputBlock:
+    key: str
+    lines: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
+
+
+def _pct(value: float) -> str:
+    return f"{value * 100:+.2f}%"
+
+
+def _contribution_lines(items: tuple[ContributionFact, ...]) -> tuple[str, ...]:
+    if not items:
+        return ("구성종목 기여를 계산하지 못했습니다.",)
+    up = sorted((x for x in items if x.contribution > 0),
+                key=lambda x: -x.contribution)[:3]
+    down = sorted((x for x in items if x.contribution < 0),
+                  key=lambda x: x.contribution)[:3]
+    out = []
+    if up:
+        out.append("상승 기여: " + " · ".join(
+            f"{x.name} {_pct(x.contribution)}p" for x in up))
+    if down:
+        out.append("하락 기여: " + " · ".join(
+            f"{x.name} {_pct(x.contribution)}p" for x in down))
+    return tuple(out) or ("방향이 있는 구성종목 기여가 없습니다.",)
+
+
+def build_block_plan(facts: WindowFacts) -> tuple[OutputBlock, ...]:
+    """요청창 사실을 고정 순서 블록으로 만든다. 다른 창은 입력 필드부터 없다."""
+    header = (
+        f"{facts.name} {_pct(facts.header_return)}"
+        if facts.header_return is not None else
+        f"{facts.name} · 전일 종가 대비 수익률 미계측"
+    )
+    blocks = [
+        OutputBlock("header", (
+            header,
+            f"{facts.window_end} 기준 · 전일 종가 대비",
+        )),
+    ]
+    if facts.nav_gap is not None:
+        blocks.append(OutputBlock("nav", (f"NAV 괴리 {_pct(facts.nav_gap)}p",)))
+    blocks += [
+        OutputBlock("contribution", _contribution_lines(facts.contributions),
+                    tuple(i for x in facts.contributions for i in x.evidence_ids)),
+        OutputBlock("breadth", (
+            f"구성종목 {facts.advancers + facts.decliners}종목 중 "
+            f"{facts.advancers}종목 상승 · {facts.decliners}종목 하락",
+        )),
+        OutputBlock("path", (facts.path,)),
+    ]
+    relative = []
+    relative.append(
+        "시장 미계측 — 요청창 시장 수익률을 계산하지 못했습니다."
+        if facts.market_return is None else
+        f"시장 대비 {_pct(facts.window_return - facts.market_return)}p")
+    relative.append(
+        "섹터 미계측 — 요청창 섹터 수익률을 계산하지 못했습니다."
+        if facts.sector_return is None else
+        f"{facts.sector_name} 대비 {_pct(facts.window_return - facts.sector_return)}p")
+    blocks.append(OutputBlock("relative", tuple(relative)))
+    if facts.anomaly:
+        blocks.append(OutputBlock("anomaly", (facts.anomaly,)))
+    if facts.disclosures:
+        blocks.append(OutputBlock("disclosure", facts.disclosures))
+    if facts.flows:
+        blocks.append(OutputBlock("flow", facts.flows))
+    if facts.news:
+        blocks.append(OutputBlock("news", facts.news))
+    if facts.statistics:
+        lines, refs = [], []
+        for stat in facts.statistics:
+            refs.extend(stat.evidence_ids)
+            if stat.n < MIN_N:
+                lines.append(f"표본이 부족해 판단하지 않았습니다 (n={stat.n} < {MIN_N}).")
+            else:
+                detail = stat.claim
+                if stat.effect is not None:
+                    detail += f" 효과 {_pct(stat.effect)}p"
+                if stat.p is not None:
+                    detail += f" · p={stat.p:.4f}"
+                lines.append(detail)
+        blocks.append(OutputBlock("statistics", tuple(lines), tuple(refs)))
+    if facts.causal:
+        blocks.append(OutputBlock("causal", facts.causal))
+    if not facts.disclosures and not facts.news:
+        blocks.append(OutputBlock(
+            "absence", ("해당 구간에 확인된 공시·보도는 없습니다.",)))
+    blocks.append(OutputBlock(
+        "evidence",
+        ("근거: " + " · ".join(facts.evidence),) if facts.evidence
+        else ("근거: 요청창 5분봉",),
+    ))
+    return tuple(sorted(blocks, key=lambda block: BLOCK_ORDER.index(block.key)))
+
+def _summary_number(match: re.Match) -> str:
+    value = float(match.group(1))
+    if value <= -3:
+        return "큰 폭 하락"
+    if value < 0:
+        return "하락"
+    if value >= 3:
+        return "큰 폭 상승"
+    if value > 0:
+        return "상승"
+    return "보합"
+
+
+def render_block_plan(plan: tuple[OutputBlock, ...], *, summary: bool = False) -> str:
+    text = "\n\n".join("\n".join(block.lines) for block in plan)
+    return re.sub(r"([+-]\d+(?:\.\d+)?)%p?", _summary_number, text) if summary else text
+
+
+def render_final_explanation(facts: WindowFacts) -> str:
+    """라벨 없이 핵심 네 블록과 DB 근거 설명을 저장한다."""
+    blocks = {block.key: block.lines for block in build_block_plan(facts)}
+    paragraphs = [
+        blocks["header"][:1],
+        blocks["contribution"] + blocks["breadth"],
+        blocks["path"],
+        blocks["relative"],
+    ]
+    if facts.final_lines:
+        paragraphs.append((" ".join(
+            line.strip() for line in facts.final_lines if line.strip()),))
+    return "\n\n".join("\n".join(lines) for lines in paragraphs)
 
 # 상대 크기를 **낱말**로 말한다. 수치 없는 설명이 순위를 잃으면 아무 말도 아니게 된다.
 _RANK_WORD = ("가장 크게", "두 번째로 크게", "세 번째로")
@@ -119,8 +301,7 @@ def clamp(t0: str, t1: str) -> tuple[str, str, list[str]]:
         why.append(f"{b[:5]} 는 장 후라 마감으로 잘랐다 — 그 뒤는 5분봉이 없다")
         b = SESSION_CLOSE
     if a >= b:
-        why.append("자른 뒤 구간이 비었다 — 갭 창만 답한다")
-        a, b = SESSION_OPEN, SESSION_CLOSE
+        raise IntervalError(f"자른 뒤 구간이 비었다: {a} >= {b}")
     return a, b, why
 
 
@@ -220,7 +401,7 @@ def _reasons(w: Window, ret: float, rank: int, roll, inside: list[str],
         out.append((f"{span} 사이에는 새로 알려진 소식이 없었어요."
                     " 그래서 움직임의 이유를 소식에서 찾을 수는 없어요."
                     + (" 오늘 나온 소식은 모두 이 구간보다 뒤였어요." if after else ""),
-                    f"구간 내 사건 0건" + (f" · 이후 {after}건" if after else "")))
+                    "구간 내 사건 0건" + (f" · 이후 {after}건" if after else "")))
     return out
 
 
@@ -234,132 +415,181 @@ def _etypes(lake, eids: list[str]) -> list[str]:
     return sorted({str(r[0]) for r in rows if r[0]})
 
 
-def explain(lake, ticker: str, instrument_id: str, day: str,
-            t0: str, t1: str, *, tools: bool = True) -> str:
-    """하루를 창으로 갈라 시간순으로 설명한다. 요구 구간은 하나의 창으로 못박힌다.
+def _literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
-    `tools=True` 면 요구창 문단 뒤에 **14 도구 관측**이 붙는다. 관측은 하루 단위이고
-    인과 검정도 거래일 패널이다 - 근거에 `일단위` 가 박히므로 구간 인과로 읽히지
-    않는다. 창 단위 인과는 아직 없다(패널 단위가 거래일).
-    """
-    a, b, why = clamp(t0, t1)
-    d = dt.date.fromisoformat(day)
-    o = dt.datetime.combine(d, dt.time.fromisoformat(SESSION_OPEN))
-    c = dt.datetime.combine(d, dt.time.fromisoformat(SESSION_CLOSE))
-    pin = (dt.datetime.combine(d, dt.time.fromisoformat(a)),
-           dt.datetime.combine(d, dt.time.fromisoformat(b)))
 
-    taus, unknown = [], 0
-    for tau, eid in lake.taus(instrument_id, day):
-        if tau is None or tau.time() == UNKNOWN_TAU:
-            unknown += 1
-            continue
-        taus.append((tau, eid))
-    ws = build_windows(o, c, taus, pin=pin)
-    # 도구가 볼 사건타입은 **하루 전량**에서 온다 - 요구창 안의 사건만 세면
-    # 같은 날 다른 시각의 같은 타입이 사라져 일단위 패널이 얇아진다.
-    day_eids = [str(e) for _t, e in taus]
+def _mapping(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
 
+
+def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
+                 event_times: dict[str, dt.datetime], window_return: float,
+                 market_return: float | None) -> tuple[str, ...]:
+    """PIT 사건·재무·통계 사실을 사용자용 네 문장으로 접는다."""
+    if not event_ids:
+        return ()
+    ids = ",".join(_literal(eid) for eid in event_ids)
+    try:
+        events = lake.sql(
+            "SELECT source_event_id, title FROM rdb.public.source_event "
+            f"WHERE source_event_id IN ({ids}) ORDER BY available_at LIMIT 1")
+    except Exception:  # noqa: BLE001 - 최종 문장은 아래의 관측 가능한 사실만 쓴다
+        events = []
+    if not events:
+        return ()
+    event_id, title = str(events[0][0]), str(events[0][1] or "공시")
+    tau = event_times.get(event_id)
+    first = f"{tau:%H:%M}, {title.rstrip('.')}가 있었습니다." if tau else f"{title.rstrip('.')}가 있었습니다."
+
+    lines = [first]
+    try:
+        supply = lake.sql(
+            "SELECT amount_krw, ratio_pct FROM s3_supply_fact "
+            f"WHERE ticker={_literal(ticker.split('.')[0])} "
+            f"AND report_date=DATE {_literal(day)} ORDER BY rcept_no DESC LIMIT 1")
+    except Exception:  # noqa: BLE001 - 재무 부재를 0으로 만들지 않는다
+        supply = []
+    if supply and supply[0][0] is not None and supply[0][1] is not None:
+        amount = float(supply[0][0]) / 100_000_000
+        amount_text = f"{amount:,.0f}" if amount >= 1 else f"{amount:.1f}"
+        lines.append(
+            f"계약금액 {amount_text}억원, 최근 연매출 대비 "
+            f"{float(supply[0][1]):.1f}% 규모입니다.")
+
+    try:
+        bundles = lake.sql(
+            "SELECT stats FROM rdb.public.analysis_evidence_bundle "
+            f"WHERE cell={_literal(ticker.split('.')[0])} "
+            f"AND trade_date=DATE {_literal(day)} AND basis='statistical' "
+            "ORDER BY created_at DESC LIMIT 1")
+    except Exception:  # noqa: BLE001 - 통계 부재를 결과 없음으로 명시한다
+        bundles = []
+    stats = _mapping(bundles[0][0]) if bundles else {}
+    n = stats.get("n", stats.get("n_days", stats.get("n_pairs")))
+    mean = stats.get("mean_excess", stats.get("att", stats.get("effect")))
+    if isinstance(n, (int, float)) and int(n) >= MIN_N and isinstance(mean, (int, float)):
+        lines.append(
+            f"시장 요인을 제거한 기준으로, 조건이 비슷한 과거 {int(n)}건의 공시 당일 "
+            f"초과수익률은 평균 {float(mean) * 100:+.1f}%였습니다.")
+        if market_return is not None:
+            today = window_return - market_return
+            position = str(stats.get("position") or "").strip()
+            tail = f"과거 분포의 {position}입니다." if position else "과거 분포 내 위치는 계산하지 못했습니다."
+            lines.append(
+                f"오늘 이 종목의 초과수익률은 {today * 100:+.1f}%로, {tail}")
+    return tuple(lines)
+
+
+def window_facts(lake, ticker: str, instrument_id: str, day: str,
+                 t0: str, t1: str) -> WindowFacts:
+    """원천에서 요청창 하나의 사실만 계산한다."""
+    a, b, _why = clamp(t0, t1)
+    date = dt.date.fromisoformat(day)
+    start = dt.datetime.combine(date, dt.time.fromisoformat(a))
+    end = dt.datetime.combine(date, dt.time.fromisoformat(b))
+    asked = Window("요구창", start, end, "asked")
+    open_to_end = Window(
+        "헤더", dt.datetime.combine(date, dt.time.fromisoformat(SESSION_OPEN)),
+        end, "asked")
     bars = _bars(lake, ticker, day)
+    window_return, _ = _window_ret(bars, asked)
+    intraday, _ = _window_ret(bars, open_to_end)
     gap = _gap(lake, ticker, day)
-    rets: dict[str, float | None] = {}
-    nbars: dict[str, int] = {}
-    for w in ws:
-        if w.kind == "gap":
-            rets[w.name], nbars[w.name] = gap, 0
-        else:
-            rets[w.name], nbars[w.name] = _window_ret(bars, w)
+    header_return = None if gap is None or intraday is None else gap + intraday
+    premium, _premium_note = premium_5m(
+        lake, ticker, day, window_start=a, window_end=b)
 
-    live = {k: v for k, v in rets.items() if v is not None}
-    tot = sum(live.values())
-    scale = sum(abs(v) for v in live.values()) or 1.0
-    order = sorted(live, key=lambda k: -abs(live[k]))
+    roll = decompose(lake, ticker, day, clock=(a, b))
+    layers = tuple(getattr(roll, "layers", ())) if roll is not None else ()
+    names = tuple(getattr(roll, "names", ())) if roll is not None else ()
+    contributions = tuple(
+        ContributionFact(
+            str(getattr(item, "label", "") or getattr(item, "ticker", "")),
+            float(item.contribution),
+            float(item.ret),
+            (f"bars_5m:{getattr(item, 'ticker', ticker)}",),
+        )
+        for item in names if getattr(item, "contribution", None) is not None
+    )
+    market = next((x for x in layers if x.kind == "시장"), None)
+    sector = next((x for x in layers if x.kind == "섹터"), None)
+    event_times = {
+        str(eid): tau for tau, eid in lake.taus(instrument_id, day)
+        if tau is not None and tau.time() != UNKNOWN_TAU and start <= tau <= end
+    }
+    event_ids = tuple(event_times)
+    if window_return is None:
+        raise ValueError(f"요청창 {a[:5]}~{b[:5]} 5분 수익률을 계산하지 못했습니다")
+    measured = window_return
+    direction = "상승" if measured > 0 else "하락" if measured < 0 else "보합"
+    evidence = ["구성종목 실시간 시세"]
+    if market is not None:
+        evidence.append(str(getattr(market, "name", "시장")))
+    if sector is not None:
+        evidence.append(str(sector.name))
+    if event_ids:
+        evidence.append("요청창 사건")
+    lineage = (
+        {
+            "view": "bars_5m",
+            "fields": ("ts", "open", "close"),
+            "entity": ticker,
+            "window_start": a[:5],
+            "window_end": b[:5],
+            "as_of": b[:5],
+        },
+        {
+            "view": "layers",
+            "fields": ("ret", "contribution", "weight"),
+            "entity": ticker,
+            "window_start": a[:5],
+            "window_end": b[:5],
+            "as_of": b[:5],
+        },
+    )
+    return WindowFacts(
+        ticker=ticker,
+        name=str(getattr(roll, "etf_name", "") or ticker),
+        day=day,
+        window_start=a[:5],
+        window_end=b[:5],
+        header_return=header_return,
+        window_return=measured,
+        advancers=sum(1 for item in names if float(item.ret) > 0),
+        decliners=sum(1 for item in names if float(item.ret) < 0),
+        market_return=None if market is None else float(market.ret),
+        sector_name=None if sector is None else str(sector.name),
+        sector_return=None if sector is None else float(sector.ret),
+        path=f"{a[:5]}부터 {b[:5]}까지 {direction}했습니다.",
+        contributions=contributions,
+        nav_gap=None if premium is None else float(premium.premium_move),
+        disclosures=tuple(f"요청창 사건 {eid}" for eid in event_ids),
+        evidence=tuple(evidence),
+        lineage=lineage,
+        final_lines=_final_lines(
+            lake, ticker, day, event_ids, event_times, measured,
+            None if market is None else float(market.ret)),
+    )
 
-    whole = rets.get("갭") is not None and all(
-        rets[w.name] is not None for w in ws if w.kind != "gap")
-    out = [f"[하루] {ticker} {day} · 창 {len(ws)}개"
-           f" · 합{'' if whole else '(부분)'} {tot * 100:+.3f}%p"
-           f"{' · 시각 미상 사건 ' + str(unknown) + '건' if unknown else ''}"]
-    out += [f"  ! {x}" for x in why]
-    # 미계측 창이 하나라도 있으면 **합이 하루가 아니다**. 이 줄을 무조건 찍던 것이
-    # 코드가 스스로 거짓을 말한 지점이다 - 갭이 없는 날 합을 하루라고 불렀다.
-    out.append("  창은 서로소이고 전 구간을 덮는다 — 몫의 합이 하루와 같다(회계)"
-               if whole else
-               "  **미계측 창이 있어 이 합은 하루가 아니다** — 덮이지 않은 구간이 남았다")
-    # **최대 몫을 선두에 세운다**(narrate 7가드). 이걸 빼면 이 날의 가장 중요한 사실이
-    # 산문에서 사라진다 - 실측 091160 07-31: 갭이 +17.33%p 로 하루 +25.41%p 의 68%
-    # 인데 산문은 장중 창만 얘기했다. 요구창을 물었어도 최대 창은 말해야 한다.
-    if order:
-        top = order[0]
-        tw = next(w for w in ws if w.name == top)
-        if tw.kind == "asked":
-            out.append("  요구한 구간이 하루에서 가장 큰 몫이다")
-        else:
-            # **간접 지시**: 어느 창이 컸는지는 말하되 이름·시각으로 호명하지 않는다.
-            when = "밤사이" if tw.kind == "gap" else _when_word(tw.start)
-            out.append(f"  하루의 가장 큰 움직임은 {when}에 났다 —"
-                       f" 요구한 구간은 그 {'뒤' if tw.start < pin[0] else '앞'}이다")
 
-    for w in ws:
-        r, nb = rets[w.name], nbars[w.name]
-        when = ("전일 종가~시가" if w.kind == "gap"
-                else f"{w.start:%H:%M}~{w.end:%H:%M}")
-        head = f"\n── {w.name} · {when}"
-        if r is None:
-            out.append(head + " · **몫 미계측**")
-            out.append("  봉이 없다 — 0 이 아니라 못 쟀다는 뜻이다(부재를 0 으로 쓰면 거짓)")
-            continue
-        share = abs(r) / scale
-        out.append(head + f" · {r * 100:+.3f}%p"
-                   + (f" · {nb}봉" if nb else "")
-                   + (f" · 사건 {len(w.event_ids)}건" if w.event_ids else ""))
-        # 층은 몫이 큰 창과 **요구창**만 가른다 — 작은 창까지 가르면 왕복만 늘고
-        # 산문은 같아진다. 요구창은 사람이 물었으니 몫과 무관하게 가른다.
-        roll = None
-        if w.kind != "gap" and (w.kind == "asked" or share >= FLOOR):
-            roll = decompose(lake, ticker, day,
-                             clock=(f"{w.start:%H:%M:%S}", f"{w.end:%H:%M:%S}"))
-            if roll is None:
-                out.append("  층 미계측 — 같은 시각 구간의 과거 표본이 β 최소치 미달")
-            else:
-                for x in roll.layers:
-                    out.append(f"  {x.kind} {x.code} {x.contribution * 100:+.3f}%p")
-                out.append(f"  고유 {roll.idio * 100:+.3f}%p")
-                # **층이 조용히 없으면 고유가 그걸 삼킨다.** 실측 000660 06-01:
-                # 시장 5분봉이 그날 시작해 이전 이력이 0 이라 시장 후보가 아예 없었고,
-                # 산출은 '고유 +4.09%p' 라고만 말했다 - 시장을 못 쟀다는 사실이 사라졌다.
-                if not any(x.kind == "시장" for x in roll.layers):
-                    out.append("  시장 미계측 — 이 시각 구간의 시장 5분봉 이력이 없다."
-                               " 고유로 적힌 몫에 시장 몫이 섞여 있다")
-                if not any(x.kind == "섹터" for x in roll.layers):
-                    out.append("  섹터 미계측 — 섹터 ETF 의 5분봉 이력이 β 최소치에"
-                               " 못 미친다(구성종목 평균으로 대신하지 않는다)")
-        after = sum(1 for t, _e in taus if t >= w.end)
-        pairs = _reasons(w, r, order.index(w.name), roll, list(w.event_ids), after)
-        # 요구창에만 앞 구간 맥락과 도구 관측을 얹는다 - 다른 창까지 얹으면 서사가
-        # 서로를 인용해 어느 구간이 주어인지 사라진다.
-        skipped: list[str] = []
-        if w.kind == "asked":
-            before = [("밤사이" if x.kind == "gap" else _when_word(x.start),
-                       rets[x.name], x.kind)
-                      for x in ws if x.end <= w.start and rets[x.name] is not None]
-            pairs += _context(w, r, before)
-            if tools:
-                from .observe import observe
-                obs, skipped = observe(lake, ticker, instrument_id, day,
-                                       etypes=_etypes(lake, day_eids))
-                pairs += [(x.text, x.ground) for x in obs]
-        out += _para(pairs)
-        if w.event_ids:
-            out.append("  근거 id: " + " ".join(w.event_ids[:6]))
-        out.append(f"  [절단] as_of = {w.end:%H:%M} — 이 시각까지의 정보만 쓴다"
-                   " (그 앞 구간은 전부 볼 수 있다: 설명 대상만 이 창이다)")
-        if w.kind == "asked":
-            out.append("  [인과] 일단위만 검정한다 — 창 단위 패널이 없다."
-                       " 위 문단의 `일단위` 근거가 그것이고, 이 구간에 대한 인과가 아니다")
-            for s in skipped:
-                out.append(f"  [못 부름] {s}")
-    return "\n".join(out)
+def explain(lake, ticker: str, instrument_id: str, day: str,
+            t0: str, t1: str, *, tools: bool = True,
+            summary: bool = False) -> str:
+    """요청창 하나만 계산해 고정 블록으로 설명한다."""
+    del tools  # 호환 인자. 일단위 도구 관측은 요청창 설명에 섞지 않는다.
+    return render_block_plan(
+        build_block_plan(window_facts(lake, ticker, instrument_id, day, t0, t1)),
+        summary=summary,
+    )
 
 
 def main() -> None:

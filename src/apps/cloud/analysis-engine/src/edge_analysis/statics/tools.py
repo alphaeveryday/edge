@@ -16,8 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..observability import record as trace
-from .paneltest import (FEATURES, Z_ANOM, flow_z, grid_screen, macro_z,
-                        series_z)
+from .paneltest import FEATURES, LAYER_EXPOSURES, Z_ANOM, flow_z, macro_z, series_z
 from .vocab import CHANNELS, RELATIONS, SERIES_FAMILIES, TRANSFORMS
 
 MAX_ROWS = 40
@@ -28,7 +27,7 @@ TOOL_TABLES: dict[str, tuple[str, ...]] = {
     "news": ("document",),
     "thread": ("event_thread_link",),
     "peers": ("instrument_classification",),
-    "screen": ("price_daily", "source_event"),
+    "schema": (),
     "series": ("price_daily",),
     "links": ("event_argument", "source_event"),
     "args": ("event_argument", "source_event"),
@@ -203,17 +202,18 @@ class Catalog:
             return "스레드 없음: 이 셀 사건이 스레드에 안 묶여 있다 (조회 성공)"
         return "\n".join(f"  {r[0][:34]} 단계={r[1]} 신규성={r[2]} ×{r[3]}" for r in rows)
 
-    def screen(self) -> str:
-        """발견 표본 격자 - 타입 × 노출 전수. **탐색이지 확증이 아니다.**"""
-        hits = [s for s in grid_screen(self.lake, self.day, list(self.types)) if "p2" in s]
-        if not hits:
-            return "격자 결과 없음: 발견 표본이 얇다 (확증은 다른 기간에서 한다)"
-        body = "\n".join(f"  {s['type'][:38]} × {s['exposure']} n={s['n']} "
-                         f"p₂={s['p2']:.3f} 방향{s['direction']}" for s in hits[:8])
-        # 축의 슬롯을 못 박는다: 라이브에서 에이전트가 이 축을 **조건**에 넣어
-        # 노출은 약한 축을 골랐다(18R). 격자가 재는 것은 용량-반응이고 그건 노출이다.
-        return (body + "\n  ↑ 여기 × 오른쪽은 **노출** 후보다 (조건 슬롯이 아니다). "
-                "조건은 다른 계열족에서 골라라 - 같으면 동어반복이라 거부된다.")
+    def schema(self) -> str:
+        """proxy 후보용 측정 스키마. **결과값·표본수·p값을 읽지 않는다.**
+
+        후보의 뜻은 뉴스와 스키마로 정하고, 선택이 끝난 뒤 패널이 검정한다.
+        결과를 먼저 보고 proxy를 고르면 방향을 사후 선택하는 것과 같다.
+        """
+        feats = " · ".join(f"{fam}/{tr}" for fam, tr in sorted(FEATURES))
+        layers = []
+        for layer, allowed in sorted(LAYER_EXPOSURES.items()):
+            labels = sorted(FEATURES) if allowed is None else sorted(allowed)
+            layers.append(f"{layer}=" + ",".join(f"{fam}/{tr}" for fam, tr in labels))
+        return "측정 가능한 proxy: " + feats + "\n층별 허용 proxy: " + " · ".join(layers)
 
     def series(self) -> str:
         """오늘 계열 혁신 z - 계열 방아쇠의 접지. |z|≥2 인 계열족만 방아쇠 자격.

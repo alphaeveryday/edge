@@ -45,11 +45,10 @@ def _side(ar: np.ndarray, xv: np.ndarray, dates: np.ndarray) -> tuple[float, flo
     """한 조각의 (상위-하위 노출군 평균차, 양측 p).
 
     절단은 전역 `EXPOSURE_CUT` 을, p 는 날짜 층화 순열(`_stratified_p`, SEED 고정)을
-    쓴다 - 격자 스크린과 **같은 계산기**다. 조각마다 다른 절단을 쓰면 두 조각의
-    차이가 관계의 불안정인지 절단의 차이인지 갈리지 않는다.
+    쓴다. 조각마다 다른 절단을 쓰면 두 조각의 차이가 관계의 불안정인지 절단의
+    차이인지 갈리지 않는다.
 
-    양측인 이유: 부호를 사후에 보므로 단측 p 는 방향 선택의 자유도를 숨긴다
-    (`grid_screen` 과 같은 규율).
+    양측인 이유: 부호를 사후에 보므로 단측 p 는 방향 선택의 자유도를 숨긴다.
     """
     hi = _pctile(xv) >= EXPOSURE_CUT
     p1 = _stratified_p(ar, hi, dates)

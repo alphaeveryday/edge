@@ -54,6 +54,24 @@ class PlainError(ValueError):
     """토스식 계약 위반. 고치기 전에 절대 내보내지 않는다."""
 
 
+def fill_window_template(template: str, values: dict[str, str], *,
+                         required: tuple[str, ...]) -> str:
+    """모델 문장에서 허용 자리표시자만 받아 코드 값으로 치환한다."""
+    slots = re.findall(r"\{([a-z][a-z0-9_]*)\}", template)
+    if set(slots) - values.keys():
+        raise PlainError("허용되지 않은 자리표시자가 있다")
+    if any(slots.count(name) != 1 for name in required):
+        raise PlainError("필수 자리표시자는 정확히 한 번 필요하다")
+    residue = re.sub(r"\{[a-z][a-z0-9_]*\}", "", template)
+    if re.search(r"\d", residue):
+        raise PlainError("모델이 숫자나 시각을 직접 썼다")
+    if any(value and value in residue for value in values.values()):
+        raise PlainError("모델이 종목명이나 출처를 직접 썼다")
+    if "{" in residue or "}" in residue:
+        raise PlainError("해석할 수 없는 자리표시자가 있다")
+    return template.format_map(values)
+
+
 def size_word(log_ret: float) -> str:
     """크기 → 말. **코드가 정한다** - 모델이 '급등' 을 고르면 강도가 날마다 흔들린다."""
     a = abs(log_ret)

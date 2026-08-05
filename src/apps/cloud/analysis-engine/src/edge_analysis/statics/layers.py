@@ -28,6 +28,8 @@ from statistics import NormalDist
 
 import numpy as np
 
+from . import athena as _athena
+
 BETA_WINDOW = 60      # β 추정 창 (거래일). 당일 제외 - 오늘 충격이 β 를 오염시키면 안 된다
 MIN_BETA_N = 40       # 창이 이만큼 안 차면 그 층은 후보에서 빠진다 (판정불가지 0 이 아니다)
 MAX_LAYERS = 3        # 시장 1 + 섹터 ≤2. 설명 예산의 상한
@@ -170,12 +172,24 @@ SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
 _CLOCK_NAMES = ("SELECT symbol, any_value(name) FROM layers_daily "
                 "WHERE kind IN {kinds} GROUP BY symbol")
 
+# 시각창 집계는 **언제나 Athena 로 보낸다** - 심볼 수로 가르지 않는다.
+#
+# 가르려 했다가 실측이 막았다(2026-08-05 · `bars_5m` = Glue Iceberg 재배선 이후):
+# DuckDB 경로가 읽는 바이트는 심볼 1·4·8·81 에서 **376,395,649 B · 729파일로 한 바이트도
+# 안 달랐다**. 술어를 표현식(`regexp_replace(symbol,…) IN`)에서 날것 컬럼(`symbol IN
+# ('X','X.KS','X.KQ')`)으로 바꿔도 같았다 - `iceberg_scan` 이 `bucket(16, symbol)`
+# 파티션 통계를 아예 안 쓴다. '소수 심볼이면 로컬이 싸다' 는 이 질의에 성립하지 않는다.
+# 같은 집계의 Athena 결과는 1심볼 0.048MB · 81심볼 0.379MB 다.
+# 오프로드가 남는지의 관문은 심볼 수가 아니라 **결과 크기**이고, 그 상수는 실측 근거와
+# 함께 `athena.MAX_RESULT_BYTES` · `athena.MAX_RESULT_ROWS` 에 있다.
+
 # 5분봉 스캔은 **클라우드 레이아웃이 져야 한다.** 로컬 물화(CTAS)는 쓰지 않는다:
 # 후보 81심볼 471,389행을 구우면 집계가 100초 -> 0.03초 였지만(실측), 그건 노트북
 # 메모리에 레이크를 복제하는 것이고 세션마다 52초를 다시 낸다. 같은 프루닝을
 # Iceberg 파티션(`bucket(symbol, N)` + `(symbol, ts)` 정렬)이 S3 에서 해 준다.
 #
-# 여기서 할 수 있는 것은 **읽을 심볼을 먼저 좁히는 것**뿐이다 - 그것도 실효가 크다.
+# 다만 **DuckDB 리더는 그 프루닝을 안 쓴다**(위 실측). 그래서 이 질의는 폴백 경로다 -
+# Athena 가 없을 때 결과를 내기는 하되, 바이트는 못 줄인다.
 _CLOCK_SQL = r"""
 WITH k AS (
     SELECT DISTINCT symbol FROM layers_daily WHERE kind IN {kinds}
@@ -218,11 +232,10 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     거래량 0 은 55일(7%)뿐이다 - 그 7% 만 막는다. 진짜 보합의 고유수익은 정보다:
     시장·섹터가 −7% 미는데 안 빠졌으면 그게 그 종목의 힘이다.
     """
-    # `only` = 심볼 하나만. 대상이 개별 종목일 때 856종목 전체 이력을 읽으면
-    # 질의가 분 단위로 늘어난다 - 실측: 이 필터가 없어 파이프라인 테스트가 멈췄다.
-    # `only` = 읽을 심볼을 못박는다. 하나든 여럿이든 **읽기 전에** 좁히는 것이 핵심이다:
-    # 없으면 856종목 전량을 집계한 뒤 구성종목 50개만 쓴다. 실측 - 시각창 질의가
-    # 심볼 수와 무관하게 33초였고 `decompose` 는 그걸 세 번 돌아 97초였다.
+    # `only` = 읽을 심볼을 못박는다. **의미 장치이지 성능 장치가 아니다** - "구성종목만
+    # 보겠다"는 선언이고, 그래야 `_panel` 이 후보 풀을 안 넓힌다. 예전 주석은 이것을
+    # "읽기 전에 좁혀서 싸진다"로 적었는데 실측이 그걸 무효로 만들었다(위 참고:
+    # DuckDB 경로 바이트는 심볼 수와 무관하게 평평하다). 바이트를 줄이는 것은 Athena 다.
     syms = ((only,) if isinstance(only, str) else tuple(only)) if only else ()
     lit = ", ".join(f"'{x}'" for x in syms)
     pick = f" AND symbol IN ({lit})" if syms else ""
@@ -233,9 +246,35 @@ def _series(lake, day: str, kinds: tuple[str, ...],
                   if syms else "")
     if clock is not None:
         names = {str(s_): n for s_, n in lake.sql(_CLOCK_NAMES.format(kinds=kinds))}
+        # `_CLOCK_SQL` 은 `k`(계열 회원)와 조인하므로 실제 대상은 `only ∩ 회원` 이다.
+        # Athena 엔 회원 표가 없으니 그 교집합을 **여기서** 만들어 넘긴다.
+        want = tuple(sorted(set(syms) & names.keys())) if syms else tuple(sorted(names))
+        rows, note, why = None, "", ""
+        try:
+            # 연결이 없는 레이크(테스트 대역)는 결과 CSV 를 받을 데가 없다. 그것도
+            # 부재이므로 **같은 예외로** 말한다 - 조용히 건너뛰면 왜 로컬로 돌았는지가
+            # 아무 데도 안 남는다.
+            con = getattr(lake, "con", None)
+            if con is None:
+                raise _athena.AthenaUnavailable("DuckDB 연결 없음 - 결과를 받을 데가 없다")
+            rows = _athena.clock_panel(day, kinds, clock[0], clock[1], con=con, only=want)
+            note = _athena.note()
+        except _athena.AthenaUnavailable as e:
+            # **조용히 0행으로 넘기지 않는다.** 사유를 남기고 DuckDB 로 돌아간다 -
+            # 부재를 기각으로 위장하면 산문이 '섹터 부재'라고 거짓말한다.
+            # `ResultTooLarge` 는 일부러 안 잡는다: 폴백해 봐야 더 읽는다(설계 착오다).
+            why = str(e)[:160]
+        if rows is None:
+            rows = lake.sql(_CLOCK_SQL.format(
+                kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick_clock))
+            note = (f"DuckDB _CLOCK_SQL ({len(want)}심볼 · 실측 376.4MB 수신)"
+                    + (f" ← Athena 폴백: {why}" if why else ""))
+        # 경로와 폴백 사유를 **한 자리에** 남긴다. `exists` 는 어떤 레이크에도 있고,
+        # 커버리지 보고가 곧 '어떻게 쟀는가' 다. 사유를 `unbound` 로 갈라 두면 둘 중
+        # 하나만 읽는 소비처가 생기고, 그러면 폴백이 다시 조용해진다.
+        lake.exists["clock_panel"] = note
         out = {}
-        for sym, lrs, dates, vols in lake.sql(_CLOCK_SQL.format(
-                kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick_clock)):
+        for sym, lrs, dates, vols in rows:
             # 이미 **구간 수익**이다 - 차분하지 않는다(하니까 첫 날이 사라진다).
             halt = {d for d, v in zip(dates, vols) if v is not None and v <= 0}
             out[sym] = (names.get(sym, sym),
@@ -436,8 +475,6 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     basis_now: list[float] = []
     # ρ 게이트 재료: 구성종목 패널과 현재 잔차 공통상관. 층은 이 값을 줄여야 산다.
     panel_pair = _panel(lake, etf, day, hist, clock=clock)
-    panel = None if panel_pair is None else panel_pair[0]
-    rho_now = None if panel is None else residual_rho(list(panel))
     rho_blocked: list[str] = []
 
     def left() -> float:

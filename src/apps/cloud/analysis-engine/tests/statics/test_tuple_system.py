@@ -58,6 +58,20 @@ def test_propose_surfaces_measurable_affordance():
     propose(ask, facts="x", event_types=ETYPES, measurable=[("가격잔차", "누적")])
     assert "잴 수 있는 노출" in seen["sys"] and "가격잔차" in seen["sys"]
 
+def test_propose_rejects_proxy_outside_measurement_schema():
+    """LLM 후보는 스키마로 먼저 닫힌다. 못 재는 proxy를 패널까지 보내지 않는다."""
+    ask = lambda _s, _u: {"hypotheses": [  # noqa: E731
+        _h(exposure={"kind": "속성", "ident": "배수", "transform": "수준"}),
+        _h(channel="FX환",
+           exposure={"kind": "속성", "ident": "배수", "transform": "수준"}),
+    ]}
+    valid, rejected = propose(
+        ask, facts="x", event_types=ETYPES,
+        measurable=[("가격잔차", "누적")])
+    assert valid == []
+    assert rejected and all("못 재는 노출" in why for why in rejected)
+
+
 
 # ── 검정 에이전트 ────────────────────────────────────────────────────────
 def _tuple(vuln_family="수급", vuln_tr="누적", trigger=("점", "COMPANY.PRODUCT.LAUNCH"), pct=0.5):
@@ -216,29 +230,59 @@ def test_typed_link_relation_uses_ontology_hop_not_industry_proxy():
     assert r.verdict == "판정불가"                                # 스텁이라 표본 0
 
 
-def test_grid_screen_sweeps_all_measurable_and_labels_two_sided():
-    from edge_analysis.statics.paneltest import grid_screen
+def test_proxy_schema_never_reads_or_returns_outcomes():
+    """proxy 후보 선택은 스키마만 본다. 수익률·n·p를 보면 선택편향이 생긴다."""
+    from edge_analysis.statics.tools import Catalog
 
-    class GridLake:
-        """격자 스텁: 첫 피처(cum20)에만 진짜 효과. 폭은 FEATURES 를 따라간다 -
-        피처가 늘 때마다 스텁을 손보지 않으려면 여기서 세야 한다."""
+    class SchemaLake:
+        effective = {}
+        s3 = {}
 
-        def __init__(self, n=300, seed=4):
-            from edge_analysis.statics.paneltest import FEATURES
-            rng = np.random.default_rng(seed)
-            f = rng.normal(size=(n, len(FEATURES)))
-            hi = f[:, 0] >= np.quantile(f[:, 0], 0.8)
-            ar = 0.02 * hi + rng.normal(scale=0.004, size=n)
-            d = [f"2026-0{1 + i % 5}-01" for i in range(n)]
-            self.rows = [(f"i{k}", d[k], float(ar[k]), *map(float, f[k])) for k in range(n)]
+        def bind_day(self, _day): pass
+        def probe_day(self): return {}
+        def sql(self, _q):
+            raise AssertionError("schema 도구가 결과 데이터를 조회했다")
 
-        def sql(self, q):
-            return self.rows
+    text = Catalog(SchemaLake(), "T", "I", "2026-06-01").schema()
+    assert "가격잔차/누적" in text
+    assert all(token not in text for token in ("p₂", "p=", "n=", "hi=", "lo=", "수익률"))
 
-    hits = grid_screen(GridLake(), "2026-06-01", ["COMPANY.PRODUCT.LAUNCH"])
-    assert hits and hits[0]["exposure"] == "가격잔차/누적"       # 심은 효과가 1위
-    assert hits[0]["p2"] < 0.05 and hits[0]["direction"] == "+"
-    assert all(h["p2"] <= 1.0 for h in hits if "p2" in h)       # 양측 보정 상한
+def test_measurement_schema_is_pure_and_matches_proxy_menu():
+    """후보 메뉴를 데이터 결과·커버리지로 좁히면 선택 단계가 다시 수치를 본다."""
+    from edge_analysis.statics.attribute import _measurable
+
+    class NoRead:
+        def sql(self, _q):
+            raise AssertionError("측정 스키마가 데이터를 읽었다")
+
+    assert set(_measurable(NoRead())) == set(FEATURES)
+
+def test_outcome_driven_proxy_screen_is_not_a_tool():
+    """proxy 선택 전에 결과를 읽는 우회 표면이 남아 있으면 schema 계약은 무의미하다."""
+    from edge_analysis.statics.surface import TOOLS
+    from edge_analysis.statics.tools import Catalog
+
+    assert "grid_screen" not in TOOLS
+    assert not hasattr(Catalog, "screen")
+
+def test_selected_proxies_have_one_batch_validation_surface(monkeypatch):
+    """LLM 선택 뒤 검정 표면은 하나다. 후보마다 도구를 재호출해 표본을 고르지 않는다."""
+    import edge_analysis.statics.paneltest as pt
+    from edge_analysis.statics.surface import TOOLS
+
+    ts = [_tuple(), _tuple(trigger=("점", "MARKET_STRUCTURE.INDEX.INCLUSION"))]
+    seen = []
+
+    def one(_lake, t, _day, cell_instrument_id="", layer="", m_tests=1):
+        seen.append((t, cell_instrument_id, m_tests))
+        return pt.EdgeReport("판정불가", 0, None, None, None, None)
+
+    monkeypatch.setattr(pt, "edge_test", one)
+    reports = pt.edge_tests(object(), ts, "2026-06-01", "I")
+    assert [t for t, _r in reports] == ts
+    assert seen == [(ts[0], "I", 2), (ts[1], "I", 2)]
+    assert "edge_tests" in TOOLS and "edge_test" not in TOOLS
+
 
 
 def test_gate_never_produces_magnitude():
@@ -332,7 +376,7 @@ def test_propose_rejects_unfired_series_trigger():
              "outcome": "수익률",
              "reduction_note": "y"}]}
     valid, rejected = propose(ask, facts="f", event_types=[],
-                              measurable=[("가격잔차", "누적")],
+                              measurable=[("가격잔차", "누적"), ("거래량", "수준")],
                               series_families=["가격잔차"])
     assert [t.trigger.ident for t in valid] == ["가격잔차"]
     assert any("미발화 계열 방아쇠 날조" in r for r in rejected)
@@ -368,8 +412,9 @@ def test_agent_decisions_are_traced_with_raw_submissions():
              "outcome": "수익률",
              "reduction_note": "y"}]}
     with collect_trace() as tr:
-        valid, rejected = propose(ask, facts="f", event_types=["REAL.TYPE"],
-                                  measurable=[("가격잔차", "누적")])
+        valid, rejected = propose(
+            ask, facts="f", event_types=["REAL.TYPE"],
+            measurable=[("가격잔차", "누적"), ("거래량", "수준")])
     kills = [e for e in tr if e["event"] == "tuple.rejected"]
     oks = [e for e in tr if e["event"] == "tuple.accepted"]
     assert len(valid) == 1 and len(kills) >= 1
@@ -426,13 +471,13 @@ def test_state_machine_hides_tools_and_enforces_order():
             return {"cell": "셀 X", "coverage": "바인딩 35/35", "vocab": "채널 8",
                     "events": "사건 없음: 장중 사건이 하나도 없다",
                     "news": "미도달: document 은 2026-07-08 부터 적재됐다",
-                    "screen": "  T × 거래량/변화 n=91 p₂=0.000 방향+"}[name]
+                    "schema": "측정 가능한 proxy: 가격잔차/누적"}[name]
 
     m = Machine(FakeCat())
     assert m.state == GROUND                                   # SCOPE 는 접혔다
     assert "셀 X" in m.brief() and "바인딩" in m.brief()        # 브리핑은 묻지 않고 준다
-    assert "screen" not in m.menu()                            # 미래 도구는 안 보인다
-    out = m.observe("screen")                                  # 상태 밖 호출
+    assert "schema" not in m.menu()                            # 미래 도구는 안 보인다
+    out = m.observe("schema")                                  # 상태 밖 호출
     assert "GROUND" in out and "없다" in out
     assert "vocab" in m.menu()                                 # 탐색 도구는 게이트 밖
     m.observe("vocab")                                         # 불러도 전이 안 함
@@ -443,9 +488,9 @@ def test_state_machine_hides_tools_and_enforces_order():
     # 근거를 **열어 봤다**는 사실이 두 번째 조건 - 못 연다는 확인도 증거로 친다
     assert "→ SCREEN" in m.observe("news")
     assert m.evidence == 1 and m.grounded == 0 and m.state == SCREEN
-    assert "→ EMIT" in m.observe("screen") and m.done
+    assert "→ EMIT" in m.observe("schema") and m.done
     assert m.stats()["calls"] == ["GROUND:vocab()", "GROUND:events()",
-                                  "GROUND:news()", "SCREEN:screen()"]
+                                  "GROUND:news()", "SCREEN:schema()"]
 
 
 def test_unreached_table_is_not_absence():
@@ -1230,12 +1275,6 @@ def test_applied_edge_direction_comes_only_from_the_identified_set():
 
     assert (sign(lo_pos), sign(hi_neg), sign(straddle)) == (1, -1, 0)
 
-    # 제안 가능 = 측정 가능: 도구가 사라지면 그 축은 가설 어포던스에서도 빠진다.
-    class _Lake:
-        def sql(self, q):
-            return [(0,)]                   # 모든 표가 0 행 -> 모든 도구 부재
-
-    assert _measurable(_Lake()) == [], "도구가 없는데 노출 축을 제안하고 있다"
 
 
 def test_the_unit_is_the_hypothesis_not_a_default():

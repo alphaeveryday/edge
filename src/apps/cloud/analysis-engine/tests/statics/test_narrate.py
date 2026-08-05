@@ -857,3 +857,32 @@ def test_card_is_one_sentence_not_the_whole_plain_text():
     # 머리 구분선·빈 본문
     assert card("\n====\n오늘 올랐어요. {statistical, ev_a, +1}") == "오늘 올랐어요."
     assert card("") == "" and card("   \n=== ") == ""
+
+
+def test_window_template_accepts_only_required_placeholders():
+    from edge_analysis.statics.plain import fill_window_template
+
+    rendered = fill_window_template(
+        "하락은 {top1_name}({top1_return})에 집중됐습니다.",
+        {"top1_name": "삼성전자", "top1_return": "-2.10%"},
+        required=("top1_name", "top1_return"),
+    )
+    assert rendered == "하락은 삼성전자(-2.10%)에 집중됐습니다."
+
+
+@pytest.mark.parametrize("template", [
+    "하락은 삼성전자({top1_return})에 집중됐습니다.",
+    "하락은 {top1_name}(-2.10%)에 집중됐습니다.",
+    "하락은 {unknown}에 집중됐습니다.",
+    "하락은 {top1_name}에 집중됐습니다.",
+    "하락은 {top1_name}와 {top1_name}에 집중됐습니다.",
+])
+def test_window_template_rejects_model_authored_facts(template):
+    from edge_analysis.statics.plain import PlainError, fill_window_template
+
+    with pytest.raises(PlainError):
+        fill_window_template(
+            template,
+            {"top1_name": "삼성전자", "top1_return": "-2.10%"},
+            required=("top1_name", "top1_return"),
+        )

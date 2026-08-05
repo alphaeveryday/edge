@@ -63,8 +63,8 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 - **방향을 선언하지 마라.** 우리가 찾는 것은 유효한 CATE 이고 방향은 그 추정량이
   낸다(상위−하위). 검정은 양측이므로 방향을 맞춰도 이득이 없고, 틀리면 환원 검사만
   오염시킨다
-- 도구가 보여준 격자 축은 **노출** 슬롯에 넣어라 (그 축이 용량-반응을 만든다).
-  조건은 다른 계열족에서 - 같은 피처면 동어반복으로 거부된다
+- proxy 후보는 **뉴스의 기제와 위 측정 스키마만** 보고 노출 슬롯에 넣어라.
+  패널 결과·표본수·p값은 후보 선택 뒤 검정기가 처음 본다
 - 사건 id·수치 생성 금지 (백분위 임계만 예외)
 - 셀의 시간 알리바이와 모순 금지 - 알리바이로 배제된 사건을 원인으로 세우지 마라
 - 조건은 "왜 이 종목이·얼마나"(느린 조건), 방아쇠는 "왜 오늘"(빠른 원인)이다
@@ -266,7 +266,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         out = ask(system, user)
         valid, rej = screen_tuples(out.get("hypotheses") or [],
                                    event_types=event_types,
-                                   series_families=list(series_families))
+                                   series_families=list(series_families),
+                                   measurable=(measurable or None))
         rejected += rej
         for t in valid:
             record("tuple.accepted", turn=turn + 1, channel=t.channel,

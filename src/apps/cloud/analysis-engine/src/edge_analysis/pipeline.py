@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, replace
+from datetime import timedelta
 from typing import Any
 
 from .adapters.archive import (
@@ -205,9 +206,20 @@ def run(
     # 테스트 7건이 `layers_daily does not exist` 로 죽었다.
     ask = TracingClient(client).complete_json
     text = ""
+    window_meta: dict[str, Any] = {}
     with collect_trace() as trace:
         try:
-            text = run_statics(lake, settings.etf_ticker, day_iso, ask)
+            window = {}
+            if minute_row is not None:
+                window = {
+                    "instrument_id": etf_instrument_id,
+                    "window_start": open_window.astimezone(KST).strftime("%H:%M"),
+                    "window_end": (
+                        minute_row.window_start + timedelta(minutes=5)
+                    ).astimezone(KST).strftime("%H:%M"),
+                    "window_meta": window_meta,
+                }
+            text = run_statics(lake, settings.etf_ticker, day_iso, ask, **window)
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
@@ -216,9 +228,10 @@ def run(
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
     write_agent_trace(s3, settings, trace)
 
-    honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
-    # **세 길이를 구분한다.** 카드(목록 한 줄) · 쉬운 설명(3~5문장) · 정직한 전문.
-    # 이전에는 `headline` 에 쉬운 설명 전문이 들어가 카드가 네 문장이었다.
+    if minute_row is not None:
+        honest = plain = text.strip()
+    else:
+        honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
     from .statics.plain import card as _card
     headline = _card(plain)
     # 층·라우팅은 위에서 이미 냈다 - 다시 분해하지 않는다(같은 셀에 두 답 금지)
@@ -226,9 +239,11 @@ def run(
         {"kind": x.kind, "name": x.name, "contribution": x.contribution}
         for x in (roll.layers if roll else ())],
         "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
-        # 중간 길이(쉬운 설명 3~5문장)는 최종사용자용 본문이다. 전용 컬럼이 생기기
-        # 전까지 jsonb 로 남긴다 - 버리면 카드와 전문 사이가 빈다.
+        # 요청창 분석은 `plain`과 `explain`에 같은 최종 설명을 저장한다. 내부 블록과
+        # 시간창 라벨은 stage_results.window에만 남고 사용자 문장에는 나오지 않는다.
         "plain": plain.strip().lstrip("=").strip()}
+    if window_meta:
+        stage["window"] = window_meta
     verdicts = verdicts_from(
         text, route_kind=(rt.kind if rt else ""),
         idio_qualified=bool(roll is None or roll.rho is None or abs(roll.rho) < 0.20),
