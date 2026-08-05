@@ -173,6 +173,41 @@ def test_boolean_prev_close_is_not_coerced_to_one():
     assert reader.load_prev_closes("KR", date(2026, 7, 15)) == {}
 
 
+def test_prev_closes_sorts_by_parsed_date_not_string():
+    """정렬은 **파싱한 날짜**로 한다.
+
+    `date.fromisoformat` 은 기본형(`20260718`)도 받는다(파이썬 3.11+). 파싱만 하고
+    문자열로 정렬하면 `'20260718' > '2026-07-19'`(ASCII `'0'` > `'-'`)라 더 **오래된**
+    날이 '직전 거래일'로 뽑혀 분모가 조용히 틀린다.
+    """
+    reader = _reader({
+        f"{PRICE_DAILY}trade_date=2026-07-19/p.parquet": _parquet(["005930"], [70000.0]),
+        f"{PRICE_DAILY}trade_date=20260718/p.parquet": _parquet(["005930"], [1.0]),
+    })
+    assert reader.load_prev_closes("KR", date(2026, 7, 20)) == {"005930": 70000.0}
+
+
+def test_listing_stops_when_token_does_not_advance():
+    """절단됐다면서 토큰이 없거나 안 움직이면 같은 페이지를 영원히 다시 받는다 —
+    상주 소비자가 메모리를 먹으며 조용히 멈춘다. 부분 목록으로 끊는 편이 낫다.
+
+    **파티션 나열과 객체 나열 양쪽**을 건다: 두 경로가 각자 루프를 갖고 있으면 한쪽만
+    고쳐도 다른 쪽에서 그대로 멈춘다(실측 — 이 테스트가 처음엔 그렇게 걸렸다).
+    """
+    class _StuckS3(_MinuteFakeS3):
+        def list_objects_v2(self, **kwargs):
+            resp = super().list_objects_v2(**kwargs)
+            resp["IsTruncated"] = True               # 항상 절단됐다고 주장하고
+            resp.pop("NextContinuationToken", None)  # 토큰은 주지 않는다
+            return resp
+
+    reader = LakeReader(_StuckS3({
+        f"{PRICE_DAILY}trade_date=2026-07-19/p.parquet": _parquet(["005930"], [70000.0]),
+    }), "bkt")
+    # 반환된다는 것 자체가 판정 — 무한루프면 여기서 안 돌아온다
+    assert reader.load_prev_closes("KR", date(2026, 7, 20)) == {"005930": 70000.0}
+
+
 def test_prev_closes_empty_when_no_earlier_partition():
     """직전 파티션이 아예 없으면 빈 dict — 호출부가 ReturnsNotReady 로 접는다.
     0 이나 당일 값으로 메우면 결손이 정상 분해로 위장된다."""

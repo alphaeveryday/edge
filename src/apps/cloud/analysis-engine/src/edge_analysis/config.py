@@ -23,8 +23,11 @@ class PipelineError(RuntimeError):
 class ReturnsNotReadyError(PipelineError):
     """분해 입력이 아직 없다 — 재시도로 낫는 유일한 실패 축.
 
-    분봉 경로(ALPHA-710)에선 window artifact 커밋·시가 원장 확정의 초 단위 지연,
-    EOD 경로에선 당일 `price_daily` 파티션 부재다. 분봉 트리거 소비자(ALPHA-719)가
+    분봉 경로(ALPHA-710·747)에선 넷 중 하나다 — 트리거 window 원장 미착지 · 분모가 될
+    직전 거래일 `price_daily` 파티션 부재 · 구성종목 가격 0건(INCOMPLETE window) ·
+    artifact checksum 불일치. EOD 경로에선 당일 `price_daily` 파티션 부재다. 어느
+    것인지는 예외 메시지에 담기고 소비자가 그대로 로그에 싣는다(고정 문구로 덮으면
+    네 갈래를 못 가린다 — 08-05 실측). 분봉 트리거 소비자(ALPHA-719)가
     이 타입만 **짧은 지연 재시도**(가시성 연장)로 가른다. PipelineError 서브클래스라
     단발 CLI 경로의 계약(비0 종료)은 그대로다.
     """

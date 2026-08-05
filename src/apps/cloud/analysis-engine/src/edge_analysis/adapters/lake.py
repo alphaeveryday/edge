@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import io
+import logging
 from datetime import date
 from typing import Any
 
 from ..config import Settings
 from ..domain.models import Holding
+
+logger = logging.getLogger(__name__)
 
 LAKE_PRICE_PREFIX = "canonical/market_data/price_daily"
 LAKE_HOLDINGS_PREFIX = "canonical/holdings/etf_holdings"
@@ -78,30 +81,46 @@ class LakeReader:
         self._s3 = s3
         self._bucket = bucket
 
-    def _partition_values(self, base: str, key: str) -> list[str]:
-        """``base`` 바로 아래 ``key=`` 파티션 값들(정렬).
+    def _list_pages(self, prefix: str, *, delimiter: str | None = None):
+        """`list_objects_v2` 응답을 **끝까지** 흘린다.
 
-        **끝까지 페이지를 넘긴다.** `list_objects_v2` 는 CommonPrefixes 도 1,000개에서
-        잘리는데, 여기서 첫 페이지만 읽으면 잘린 목록의 마지막이 '최신'으로 인증된다 —
+        첫 페이지만 읽으면 잘린 목록의 마지막이 '최신'으로 인증된다 —
         `load_prev_closes` 는 그걸 직전 거래일 종가(분해의 분모)로 쓰고, `load_returns`
         는 당일 파티션을 못 찾아 조용히 빈 dict 를 돌려준다. 둘 다 오류 없이 틀린 값이
-        된다. KR 거래일 ~245/년이라 4년치면 도달한다(dev 현재 18개).
+        된다. CommonPrefixes 도 1,000개에서 잘리고, KR 거래일 ~245/년이라 4년치면
+        도달한다(dev 현재 18개).
+
+        절단됐다면서 토큰이 없거나 안 움직이면 같은 페이지를 영원히 다시 받는다 —
+        상주 소비자가 메모리를 먹으며 조용히 멈춘다. 부분 목록으로 끊는 편이 낫다
+        (호출부의 빈/부분 결과 게이트가 잡는다).
         """
-        out: list[str] = []
         token: str | None = None
         while True:
-            kwargs: dict[str, Any] = {
-                "Bucket": self._bucket, "Prefix": base, "Delimiter": "/"}
+            kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix}
+            if delimiter:
+                kwargs["Delimiter"] = delimiter
             if token:
                 kwargs["ContinuationToken"] = token
             resp = self._s3.list_objects_v2(**kwargs)
+            yield resp
+            if not resp.get("IsTruncated"):
+                return
+            nxt = resp.get("NextContinuationToken")
+            if not nxt or nxt == token:
+                logger.warning(
+                    "S3 나열이 절단됐는데 토큰이 전진하지 않는다 — 부분 목록으로 중단: %s",
+                    prefix)
+                return
+            token = nxt
+
+    def _partition_values(self, base: str, key: str) -> list[str]:
+        """``base`` 바로 아래 ``key=`` 파티션 값들(정렬)."""
+        out: list[str] = []
+        for resp in self._list_pages(base, delimiter="/"):
             for common in resp.get("CommonPrefixes", []):
                 seg = common.get("Prefix", "").rstrip("/").split("/")[-1]
                 if seg.startswith(f"{key}="):
                     out.append(seg[len(key) + 1:])
-            if not resp.get("IsTruncated"):
-                break
-            token = resp.get("NextContinuationToken")
         return sorted(out)
 
     def _read_parquet_prefix(self, prefix: str, columns: list[str]) -> list[dict[str, Any]]:
@@ -109,20 +128,12 @@ class LakeReader:
         import pyarrow.parquet as pq
 
         rows: list[dict[str, Any]] = []
-        token: str | None = None
-        while True:
-            kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix}
-            if token:
-                kwargs["ContinuationToken"] = token
-            resp = self._s3.list_objects_v2(**kwargs)
+        for resp in self._list_pages(prefix):
             for obj in resp.get("Contents", []):
                 if not obj["Key"].endswith(".parquet"):
                     continue
                 body = self._s3.get_object(Bucket=self._bucket, Key=obj["Key"])["Body"].read()
                 rows.extend(pq.read_table(io.BytesIO(body), columns=columns).to_pylist())
-            if not resp.get("IsTruncated"):
-                break
-            token = resp.get("NextContinuationToken")
         return rows
 
     def load_returns(self, market: str, trade_date: date) -> dict[str, float | None]:
@@ -205,21 +216,22 @@ class LakeReader:
         형 변환 실패(비수치·None·bool)는 그 티커만 뺀다 — 한 행이 분해 전체를 죽이면
         안 되고, 빠진 티커는 분해에서 미가격으로 잡혀 coverage 에 드러난다.
 
-        파티션 값이 **실제 날짜로 파싱되는 것**만 본다: 문자열 비교로 '직전'을 고르므로
-        비정상 디렉터리가 하나 섞이면 정렬상 정상 파티션보다 뒤에 와서 그것이 분모로
-        뽑힌다(오류 없이 틀린 값). 길이 검사로는 부족하다 — `2026-07-1x` 는 열 글자라
-        통과하면서 `2026-07-19` 보다 뒤에 정렬된다.
+        파티션 값이 **실제 날짜로 파싱되는 것**만 보고, **파싱한 날짜로 정렬**한다.
+        문자열로 고르면 두 방향으로 틀린다: 길이 검사만으론 `2026-07-1x`(열 글자)가
+        `2026-07-19` 뒤에 오고, 파싱만 하고 문자열로 정렬하면 `fromisoformat` 이 받는
+        기본형(`20260718`)이 `2026-07-19` 뒤로 정렬돼 더 **오래된** 날이 뽑힌다.
+        어느 쪽도 오류 없이 틀린 분모가 된다.
         """
         base = f"{LAKE_PRICE_PREFIX}/market={market}/"
         earlier = sorted(
-            d for d in self._partition_values(base, "trade_date")
+            (parsed, d) for d in self._partition_values(base, "trade_date")
             if (parsed := _as_date(d)) is not None and parsed < trade_date
         )
         if not earlier:
             return {}
         closes: dict[str, float] = {}
         for row in self._read_parquet_prefix(
-                f"{base}trade_date={earlier[-1]}/", ["ticker", "close"]):
+                f"{base}trade_date={earlier[-1][1]}/", ["ticker", "close"]):
             price = _price(row.get("close"))
             if price is not None and row.get("ticker") is not None:
                 closes[str(row["ticker"])] = price
