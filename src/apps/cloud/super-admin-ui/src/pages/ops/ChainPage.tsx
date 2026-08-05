@@ -53,7 +53,7 @@ export function ChainPage() {
             ETF별 분석 귀결 <span className="chip">MOCK</span>
           </span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            {rows.length}종 · 게시 {published.length} / 실패 {failed.length} / 트리거 없음{' '}
+            {rows.length}종 · Cloud 게시 {published.length} / 실패 {failed.length} / 트리거 없음{' '}
             {rows.filter((r) => !r.triggered).length}
             <Info
               tip={
@@ -79,7 +79,8 @@ export function ChainPage() {
                   `트리거: ${r.triggered ? '발화' : '미발화(정상 변동)'}\n` +
                   `귀결: ${r.outcome}` +
                   (r.error ? `\n오류: ${r.error}` : '') +
-                  `\n게시: ${r.published ? 'PUBLISHED' : '—'} · 전달: ${r.delivered ? 'NEW' : '—'}`
+                  `\nCloud 게시: ${r.published ? 'PUBLISHED' : '—'}` +
+                  `\n테넌트 발번: ${r.delivered ? 'NEW' : '—'} · 이 화면 책임 밖 — 전달 경계에서 확인`
                 }
               >
                 <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -92,7 +93,7 @@ export function ChainPage() {
                       r.outcome === 'FAILED' ? 'var(--down)' : r.published ? 'var(--up)' : 'var(--fg-4)',
                   }}
                 >
-                  {r.outcome === 'FAILED' ? '분석 실패' : r.published ? '게시' : '트리거 없음'}
+                  {r.outcome === 'FAILED' ? '분석 실패' : r.published ? 'Cloud 게시' : '트리거 없음'}
                 </div>
               </div>
             ))}
@@ -102,7 +103,7 @@ export function ChainPage() {
 
       <div className="card">
         <div className="card-head">
-          <span className="t-label">큐 · 구독 서비스</span>
+          <span className="t-label">큐 · 구독 워커 (Cloud)</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             대기가 있는데 구독 서비스가 없으면 런타임 실패가 아니라 배선 부재입니다
           </span>
@@ -148,8 +149,9 @@ export function ChainPage() {
         </table>
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            큐→서비스 매핑이 어디에도 선언돼 있지 않아 "소비자 미배포"를 사람이 판단하고 있습니다. 이 매핑이 생기면
-            R11 이 자동으로 돕니다.
+            큐→서비스 매핑이 어디에도 선언돼 있지 않아 "장중 트리거 처리 워커 미배포"를 사람이 판단하고
+            있습니다. 이 매핑이 생기면 R11 이 자동으로 돕니다. 여기서 말하는 워커는 <b>Cloud 안에서 큐를
+            처리하는 실행체</b>이지, 발번 이후 온프렘에서 데이터를 받는 테넌트 소비자가 아닙니다.
           </p>
         </div>
       </div>

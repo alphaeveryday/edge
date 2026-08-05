@@ -74,6 +74,21 @@ export function violationTip(v: Violation, I?: Incident): string {
   return lines.join('\n');
 }
 
+/* ── 담당 도메인 ──
+ * 사건이 어느 팀·화면 소관인지는 위반의 drill 축으로 **결정적으로** 정해진다.
+ * 새 분류기를 만들지 않는다 — 모르는 축은 규칙의 layer 로, 그것도 없으면 '기타'다. */
+export const DOMAIN_OF_DRILL: Record<string, string> = {
+  run: '파이프라인',
+  dataset: '파이프라인',
+  trend: '파이프라인',
+  chain: '설명 생성',
+  delivery: '테넌트 전달',
+};
+
+export function domainOf(v: Violation): string {
+  return DOMAIN_OF_DRILL[v.drill[0]] ?? v.layer ?? '기타';
+}
+
 /** 드릴다운 대상 — 규칙 위반의 drill 축을 실제 라우트로 옮긴다 */
 export const DRILL_ROUTE: Record<string, string> = {
   run: '/ops/runs',

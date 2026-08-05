@@ -406,3 +406,27 @@ button.kpi.ops-sev.ops-sev-on {
   gap: var(--sp-2);
   flex-wrap: wrap;
 }
+
+/* 오늘: 설명 제공 요약 — 결과 요약이라 상태색을 쓰지 않는다 */
+.ops-stage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--sp-5);
+}
+.ops-stage-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+.ops-stage-card-value {
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--sp-2);
+}

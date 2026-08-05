@@ -8,6 +8,7 @@
  *
  * 판정·정렬은 여기서 아무것도 새로 만들지 않는다. evaluate() 가 낸 사건과 그 순서 그대로다.
  */
+import { useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { Severity } from '../../rules/types';
@@ -30,6 +31,15 @@ export function IncidentsListPage() {
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
   const list = bySeverity(selected);
+
+  /* 화면만 P0 로 떨어뜨리면 주소창이 거짓말을 한다(?severity=foo 인데 P0 를 보여줌).
+   * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다. */
+  useEffect(() => {
+    if (isSeverity(requested)) return;
+    const next = new URLSearchParams(params);
+    next.set('severity', 'P0');
+    setParams(next, { replace: true });
+  }, [requested, params, setParams]);
 
   const select = (sev: Severity) => {
     const next = new URLSearchParams(params);

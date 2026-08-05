@@ -35,7 +35,7 @@ export function DeliveryPage() {
             0 <span className="t-xs" style={{ fontWeight: 500, color: 'var(--fg-3)' }}>(+시드 1)</span>
           </div>
           <div className="kpi-sub">
-            <span className="chip">SEED</span> 로컬 compose 시드 잔재
+            <span className="chip">SEED</span> 로컬 시드 — 기대 fan-out 분모가 아닙니다
           </div>
         </div>
       </div>
@@ -44,7 +44,7 @@ export function DeliveryPage() {
         <div className="card-head">
           <span className="t-label">경계 정합 (R14)</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            게시와 발번은 같은 트랜잭션이라 어긋나면 구조 문제입니다
+            Cloud 게시와 테넌트 발번은 같은 트랜잭션이라 어긋나면 구조 문제입니다
           </span>
         </div>
         <table className="table">
@@ -85,6 +85,19 @@ export function DeliveryPage() {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      {/* 조치 단위의 한계 — 이 화면은 전역 집계라 "누구에게 안 갔나"를 답하지 못한다 */}
+      <div className="card card-pad">
+        <p className="t-sm m-0" style={{ fontWeight: 600 }}>
+          이 화면은 전역 정합 요약입니다 — 조치 단위는 테넌트입니다
+        </p>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+          발번 원장의 grain 은 <code>(tenant_id, cursor)</code> 인 테넌트별 단조증가 outbox 이고, 지금 fan-out 은
+          테넌트 전 행에 무차별 발번합니다 — <b>테넌트별 배정 개념이 없습니다.</b> 그래서 기대 대상 테넌트와
+          누락 테넌트 목록을 낼 데이터가 현재 없고, 위 집계가 맞는다고 해서{' '}
+          <b>모든 테넌트에 정상 전달됐다고 단정할 수 없습니다.</b> 테넌트별 전달 상세는 후속 구현 대상입니다.
+        </p>
       </div>
 
       {/* 관측 범위 안내 — 측정값이 아니므로 KPI 로 세우지 않는다 */}

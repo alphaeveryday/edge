@@ -14,7 +14,19 @@ import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { RULES } from '../../rules/rules';
 import type { Incident, Severity } from '../../rules/types';
-import { EV, F, INCIDENTS, Info, SEV_TONE, VIOLATIONS, drillHref, fmt, runbookOf, violationTip } from './shared';
+import {
+  EV,
+  F,
+  INCIDENTS,
+  Info,
+  SEV_TONE,
+  VIOLATIONS,
+  domainOf,
+  drillHref,
+  fmt,
+  runbookOf,
+  violationTip,
+} from './shared';
 import '../../styles/ops.css';
 
 const SEVERITIES: Severity[] = ['P0', 'P1', 'P2'];
@@ -23,6 +35,115 @@ const SEV_MEANING: Record<Severity, string> = {
   P1: '오늘 안에 확인한다',
   P2: '기록해 두고 본다',
 };
+
+/* ══ 0. 오늘 설명 제공 요약 ══
+ *
+ * 장애 점수가 아니라 **설명이 어느 단계까지 갔는가**의 결과 요약이다. 그래서 상태색을 쓰지 않는다.
+ *
+ * 단위가 단계마다 다르다 — 여기서 화살표로 잇거나 정상/실패를 판정하지 않는다:
+ *   c.res·c.pub — explanation_result **건**(ETF 단위 설명 결과)
+ *   c.dlv       — tenant_delivery **행**, grain 은 (tenant_id, cursor) 인 테넌트별 단조증가 outbox다.
+ *                 한 설명이 여러 cursor 로 재등장할 수 있고 fan-out 은 테넌트 전 행에 무차별 발번한다 —
+ *                 기대 대상 테넌트 분모가 없어 "게시 N = 발번 N 이므로 정상"이라고 말할 수 없다.
+ *   최종 노출    — Cloud 관측 밖. 숫자를 만들지 않는다.
+ */
+interface StageCard {
+  label: string;
+  value: string;
+  unit: string;
+  note: string;
+  href?: string;
+}
+
+function stageCards(): StageCard[] {
+  const S = F.chain.stages;
+  const res = S.find((x) => x.id === 'c.res');
+  const pub = S.find((x) => x.id === 'c.pub');
+  const dlv = S.find((x) => x.id === 'c.dlv');
+  const pair = (x?: { batch?: number | null; intraday?: number | null }) =>
+    `배치 ${fmt(x?.batch ?? 0)} / 장중 ${fmt(x?.intraday ?? 0)}`;
+  return [
+    {
+      label: '설명 결과',
+      value: pair(res),
+      unit: 'explanation_result 건',
+      note: '분석이 설명 결과를 만든 수',
+      href: '/ops/chain',
+    },
+    {
+      label: 'Cloud 게시',
+      value: pair(pub),
+      unit: 'publication_status=PUBLISHED 건',
+      note: 'Cloud Event Store 의 게시 상태 — 온프렘 최종 게시가 아닙니다',
+      href: '/ops/chain',
+    },
+    {
+      label: '테넌트 발번',
+      value: `${fmt(dlv?.batch ?? 0)}행`,
+      unit: 'tenant_delivery 행 · grain (tenant_id, cursor)',
+      note: '위 건수와 단위가 다릅니다 — 기대 테넌트 분모가 없어 완전성을 계산하지 않습니다',
+      href: '/ops/delivery',
+    },
+    {
+      label: '최종 노출',
+      value: '관측 불가',
+      unit: 'MTS/HTS 노출',
+      note: '온프렘 영역이라 Cloud 가 보지 못합니다 — 0건도 실패도 아닙니다. 테넌트 운영 화면 미구현',
+    },
+  ];
+}
+
+const STAGE_TIP = [
+  '이 영역은 설명이 어느 단계까지 갔는지의 결과 요약이지 건강도·장애 점수가 아니다.',
+  '',
+  '단계마다 단위가 다르다 — 화살표로 잇지 않는다.',
+  '  설명 결과 · Cloud 게시 — explanation_result 건(ETF 단위)',
+  '  테넌트 발번 — tenant_delivery 행. grain 은 (tenant_id, cursor) 인 테넌트별 단조증가 outbox 라',
+  '    테넌트×설명 배정이 아니다. 한 설명이 여러 cursor 로 재등장할 수 있다.',
+  '',
+  '"Cloud 게시 N = 발번 N 이므로 정상"이라고 말하지 않는다 — 기대 대상 테넌트 수(fan-out 분모)가',
+  '원장에 없기 때문이다. 지금 테넌트가 1건인 것도 로컬 시드다.',
+  '',
+  '최종 노출은 숫자를 만들지 않는다. 발번 이후는 온프렘(Sync Agent·Intake·Screening·최종 게시)이라',
+  'Cloud 가 관측하지 못한다 — 관측 불가는 0건도 실패도 아니다(ADR-0026).',
+].join('\n');
+
+function DeliverySummary() {
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="t-label">오늘 설명 제공 요약</span>
+        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+          설명이 어디까지 갔는가 — 단계마다 단위가 다릅니다
+          <Info tip={STAGE_TIP} label="단계별 단위" />
+        </span>
+      </div>
+      <div className="card-pad">
+        <div className="ops-stage-cards">
+          {stageCards().map((c) => (
+            <div key={c.label} className="ops-stage-card">
+              <div className="kpi-label">{c.label}</div>
+              {/* 결과 요약이라 상태색을 쓰지 않는다 — 관측 불가만 흐리게 */}
+              <div
+                className="ops-stage-card-value"
+                style={c.href ? undefined : { color: 'var(--fg-4)', fontSize: 16 }}
+              >
+                {c.value}
+              </div>
+              <div className="t-xs" style={{ color: 'var(--fg-4)' }}>{c.unit}</div>
+              <div className="t-xs" style={{ color: 'var(--fg-3)', marginTop: 2 }}>{c.note}</div>
+              {c.href && (
+                <Link to={c.href} className="t-xs ops-lane-link">
+                  상세 →
+                </Link>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ══ 1. 운영 상태 — compact strip ══
  *
@@ -43,6 +164,8 @@ function verdictOf(from: number, to: number): LaneVerdict {
 
 interface LaneCard {
   label: string;
+  /** 담당 도메인 — 상세 링크가 그 소관 화면으로 간다 */
+  domain: string;
   /** 이 카드가 재는 범위 — 세 카드를 같은 층위로 읽지 않게 이름 옆에 함께 낸다 */
   scope: string;
   verdict: LaneVerdict;
@@ -71,6 +194,7 @@ function laneCards(): LaneCard[] {
   return [
     {
       label: '배치 설명 생성',
+      domain: '파이프라인',
       scope: 'end-to-end · 트리거에서 Cloud 게시까지',
       verdict: verdictOf(batchFrom, batchTo),
       figure: `트리거 ${fmt(batchFrom)} → Cloud 게시 ${fmt(batchTo)}`,
@@ -79,6 +203,7 @@ function laneCards(): LaneCard[] {
     },
     {
       label: '장중 트리거 수신',
+      domain: '파이프라인',
       scope: 'ingress · 체인 진입 여부만',
       verdict: verdictOf(intraFrom, intraTo),
       figure: `트리거 ${fmt(intraFrom)} → 관측 진입 ${fmt(intraTo)}`,
@@ -87,10 +212,11 @@ function laneCards(): LaneCard[] {
     },
     {
       label: '전달 경계',
+      domain: '테넌트 전달',
       scope: 'Cloud→테넌트 경계 정합',
       verdict: verdictOf(dlvFrom, dlvTo),
       figure: `Cloud 게시 ${fmt(dlvFrom)} → 발번 ${fmt(dlvTo)}`,
-      note: 'tenant_delivery 정합 — 발번 이후는 온프렘 영역이라 관측하지 않습니다',
+      note: 'tenant_delivery 정합 — 기대 테넌트 분모가 없어 완전한 fan-out 성공으로 단정하지 않습니다',
       href: '/ops/delivery',
     },
   ];
@@ -113,7 +239,7 @@ function OperationStrip() {
   return (
     <div className="card">
       <div className="card-head">
-        <span className="t-label">운영 상태</span>
+        <span className="t-label">도메인별 운영 상태</span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
           배치 · 장중 · 전달을 각각 읽습니다
           <Info tip={LANE_TIP} label="레인 판정 기준" />
@@ -125,6 +251,7 @@ function OperationStrip() {
             <div key={l.label} className="ops-lane">
               <div className="ops-lane-head">
                 <span className="t-label">{l.label}</span>
+                <span className="chip">{l.domain}</span>
                 {/* 배지에 점+글자가 함께 있어 색만으로 상태를 가르지 않는다 */}
                 <StatusBadge tone={VERDICT_TONE[l.verdict]}>{l.verdict}</StatusBadge>
               </div>
@@ -156,6 +283,7 @@ function P0Item({ incident: I }: { incident: Incident }) {
     <li className="ops-p0">
       <div className="ops-p0-head">
         <span className="t-h3">{v.title}</span>
+        <span className="chip chip-accent">{domainOf(v)}</span>
         <span className="chip">{v.kls}</span>
         <span className="mono t-xs" style={{ color: 'var(--fg-3)' }}>
           {v.rule}
@@ -331,6 +459,7 @@ export function IncidentsPage() {
         거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3 {hm(F.meta.aws)}
       </p>
 
+      <DeliverySummary />
       <OperationStrip />
       <ImmediateAction list={p0} />
       <SeveritySummary />
