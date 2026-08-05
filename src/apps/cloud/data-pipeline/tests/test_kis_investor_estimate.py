@@ -233,6 +233,36 @@ def test_malformed_행도_심볼당_1회만_실패로_센다(frozen):
     assert "malformed" in src.fetch_failures[0]["error"]
 
 
+def test_심볼당_1회_억제가_심볼_사이로_새지_않는다(frozen):
+    """WHY: 억제 상태(`noted`)가 심볼 루프 **밖**으로 옮겨지면 두 종목이 각각 불량이어도
+    1건만 남아, 두 번째 종목의 손실이 통째로 사라진다. 중복 억제와 심볼 간 누수는 다른
+    사안인데 한 심볼짜리 테스트로는 구분이 안 된다."""
+    src, _ = _source({
+        "005930": [_ok(["못난행", "못난행"])],
+        "000660": [_ok(["못난행", "못난행"])],
+    })
+
+    list(src.fetch(["005930", "000660"]))
+
+    assert [f["symbol"] for f in src.fetch_failures] == ["005930", "000660"]
+
+
+def test_두_사유는_서로의_기록을_막지_않는다(frozen):
+    """WHY: malformed 와 슬롯결측이 한 억제 플래그를 공유하면 같은 종목에서 **먼저 온 사유
+    하나만** 남는다. 그러면 운영자가 로그에서 나머지 원인을 영영 못 본다 — 사유별로 독립
+    1회여야 한다."""
+    slotless = {"frgn_fake_ntby_qty": "1", "bsop_hour_gb": ""}
+    src, _ = _source({"005930": [_ok(["못난행", slotless, _row()])]})
+
+    rows = list(src.fetch(["005930"]))
+
+    assert len(rows) == 2  # 슬롯결측 행 + 정상 행 (비-dict 는 저장 대상 아님)
+    reasons = [f["error"] for f in src.fetch_failures]
+    assert len(reasons) == 2
+    assert any("malformed" in r for r in reasons)
+    assert any("bsop_hour_gb" in r for r in reasons)
+
+
 def test_비거래일에는_거래일_라벨을_지어내지_않는다(monkeypatch):
     """WHY: 거래일을 우리가 붙이는데(응답에 날짜가 없다) 휴장일에 KIS 가 직전 슬롯을 그대로
     주면 **어제 데이터가 오늘 거래일로 저장된다**. 이 소스는 소급 재조회가 없어 잘못 붙은
