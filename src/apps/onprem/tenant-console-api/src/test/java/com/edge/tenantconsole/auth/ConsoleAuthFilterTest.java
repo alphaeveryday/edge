@@ -422,6 +422,14 @@ class ConsoleAuthFilterTest {
 				.andExpect(status().isOk());
 		mvc.perform(get("/api/v1/screening/versions").session(sessionOf(READ_ONLY)))
 				.andExpect(status().isOk());
+		// 활성 정책 스냅샷(ALPHA-762) — 은퇴한 두 조회(criteria·rules)와 동일하게 전 역할,
+		// 미인증은 fail-closed. 라우트 등록이 빠지면 필터 기본값(거부)에 걸린다.
+		mvc.perform(get("/api/v1/screening/policy").session(sessionOf(READ_ONLY)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/screening/policy").session(sessionOf(OPERATOR)))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/v1/screening/policy"))
+				.andExpect(status().isUnauthorized());
 		mvc.perform(get("/api/v1/screening/versions"))
 				.andExpect(status().isUnauthorized());
 	}
