@@ -8,6 +8,8 @@
 DuckDB 실물 연결이 필요 없는 것은 순수 함수로, 필요한 것(백필 우선순위)은 in-memory
 연결 + 로컬 parquet 로 검사한다 — S3 는 절대 건드리지 않는다.
 """
+import tempfile
+
 import duckdb
 import pytest
 
@@ -96,12 +98,19 @@ def test_secret_ignores_blank_env(monkeypatch):
 # ── 세션 한도 ───────────────────────────────────────────────────────────
 def test_pragmas_bound_memory_and_open_spill(monkeypatch):
     # 한도가 없으면 OOM 으로 태스크가 죽는다. 스필 경로가 있어야 죽는 대신 느려진다.
+    # 경로는 플랫폼이 정한다 - '/tmp' 하드코딩은 Windows 에서 git-bash 매핑에 기대는
+    # 우연이었고, 그게 없으면 스필이 안 열려 정확히 필요할 때 장치가 없다.
+    #
+    # `preserve_insertion_order=false` 도 계약이다: 5분봉 시각창 집계(64M 행 스캔)가
+    # 순서 버퍼 때문에 1.5GB 한도에서 **OOM 으로 죽었다**(실측 4회 중 2회). 우리 SQL 은
+    # 순서가 중요한 곳마다 ORDER BY 를 쓰므로 보존은 비용뿐이다 - 빠지면 다시 죽는다.
     assert session_pragmas() == ("SET TimeZone='Asia/Seoul'",
+                                 "SET preserve_insertion_order=false",
                                  "SET memory_limit='1.5GB'",
-                                 "SET temp_directory='/tmp'")
+                                 f"SET temp_directory='{tempfile.gettempdir()}'")
     monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "6GB")
     monkeypatch.setenv("DUCKDB_TEMP_DIR", "/mnt/spill")
-    assert session_pragmas()[1:] == ("SET memory_limit='6GB'",
+    assert session_pragmas()[2:] == ("SET memory_limit='6GB'",
                                      "SET temp_directory='/mnt/spill'")
 
 
@@ -114,7 +123,8 @@ def test_pragmas_are_accepted_by_duckdb():
     # 호스트 메모리가 아니라는 것**이 계약이다 - 기본값은 물리 메모리의 80% 다.
     got = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
     assert got.endswith("GiB") and 1.0 < float(got.split()[0]) < 1.5
-    assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == "/tmp"
+    assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] \
+        == tempfile.gettempdir()
 
 
 # ── 백필 우선순위 ───────────────────────────────────────────────────────
@@ -128,8 +138,19 @@ def test_backfill_sources_prefers_s3_and_joins_without_double_slash(monkeypatch,
         ("로컬", local.as_posix()))
 
 
-def test_backfill_sources_drops_absent_candidates(monkeypatch, tmp_path):
-    assert backfill_sources("pit_daily", tmp_path / "nope.parquet") == ()
+def test_backfill_sources_defaults_to_the_deployed_s3_prefix(tmp_path):
+    """env 가 없어도 S3 후보가 서야 한다 — 안 서면 기본값이 '로컬 전용'이고,
+    로컬이 없는 컨테이너는 빈 스키마 뷰로 **질의 성공 · 0행**을 낸다.
+
+    이 문자열은 terraform 의 `analysis_backfill_s3_prefix`(Fargate env
+    CAUSAL_BACKFILL_S3 로 주입)와 **같아야** 한다. 여기가 갈리면 노트북만 살고
+    배포판은 아무것도 없는 프리픽스를 읽는다 - 그래서 리터럴로 박아 카나리로 쓴다.
+    """
+    assert backfill_sources("pit_daily", tmp_path / "nope.parquet") == (
+        ("S3", "s3://edge-dev-pipeline-lake/analysis/backfill/pit_daily.parquet"),)
+
+
+def test_backfill_sources_drops_absent_local(monkeypatch, tmp_path):
     monkeypatch.setenv("CAUSAL_BACKFILL_S3", "s3://lake/analysis/backfill")
     assert backfill_sources("pit_daily", tmp_path / "nope.parquet") == (
         ("S3", "s3://lake/analysis/backfill/pit_daily.parquet"),)
@@ -180,7 +201,9 @@ def test_backfill_falls_back_to_local_when_s3_missing(tmp_path, monkeypatch):
     assert "S3 실패" in lk.backfill_notes["flow_daily"]
 
 
-def test_backfill_absence_is_falsy_and_carries_a_reason(tmp_path):
+def test_backfill_absence_is_falsy_and_carries_a_reason(tmp_path, monkeypatch):
+    # 기본 프리픽스는 실제 버킷이다 - 없는 로컬 경로로 덮어 S3 를 안 건드린다.
+    monkeypatch.setenv("CAUSAL_BACKFILL_S3", (tmp_path / "nowhere").as_posix())
     lk = _lake(tmp_path)
 
     CausalLake._backfill(lk, tmp_path)
@@ -189,7 +212,7 @@ def test_backfill_absence_is_falsy_and_carries_a_reason(tmp_path):
     # (causeflow·evidence 의 tau_sidecar). 부재는 falsy 로 남되 사유는 남긴다.
     assert all(lk.exists[n] == 0 for n in BACKFILL_SETS)
     assert not any(lk.exists[n] for n in BACKFILL_SETS)
-    assert lk.backfill_notes["layers_daily"] == "S3 미설정 · 로컬 파일 없음"
+    assert "S3 실패" in lk.backfill_notes["layers_daily"]
     # 빈 스키마 뷰는 그래도 걸려야 한다 - 하류 패널 SQL 이 파스 단계에서 죽지 않게.
     assert lk.con.execute("SELECT count(*) FROM pit_daily").fetchone()[0] == 0
 
@@ -197,6 +220,8 @@ def test_backfill_absence_is_falsy_and_carries_a_reason(tmp_path):
 def test_coverage_does_not_call_zero_rows_present(tmp_path, monkeypatch):
     local = tmp_path / "local"
     local.mkdir()
+    # 기본 프리픽스는 실제 버킷이다 - 없는 로컬 경로로 덮어 S3 를 안 건드린다.
+    monkeypatch.setenv("CAUSAL_BACKFILL_S3", (tmp_path / "nowhere").as_posix())
     lk = _lake(tmp_path)
     _parquet(lk.con, local / "flow_daily.parquet", "(DATE '2026-08-03', '005930', 2.0)")
     lk.rows, lk.bound, lk.unbound, lk.s3, lk.deferred, lk.day = {}, {}, {}, {}, {}, ""

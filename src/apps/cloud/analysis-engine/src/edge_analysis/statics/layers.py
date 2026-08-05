@@ -201,7 +201,7 @@ FROM b JOIN k ON k.symbol = b.sym WHERE b.lr IS NOT NULL GROUP BY b.sym
 
 def _series(lake, day: str, kinds: tuple[str, ...],
             *, clock: tuple[str, str] | None = None,
-            only: str | None = None) -> dict[str, tuple]:
+            only: str | tuple[str, ...] | None = None) -> dict[str, tuple]:
     """{symbol: (name, {date: log수익률}, {거래정지 날짜})}. 당일 포함.
 
     `clock=(t0, t1)` 이면 **하루 대신 매일의 같은 시각 구간**을 계열로 만든다
@@ -220,12 +220,17 @@ def _series(lake, day: str, kinds: tuple[str, ...],
     """
     # `only` = 심볼 하나만. 대상이 개별 종목일 때 856종목 전체 이력을 읽으면
     # 질의가 분 단위로 늘어난다 - 실측: 이 필터가 없어 파이프라인 테스트가 멈췄다.
-    pick = f" AND symbol = '{only}'" if only else ""
+    # `only` = 읽을 심볼을 못박는다. 하나든 여럿이든 **읽기 전에** 좁히는 것이 핵심이다:
+    # 없으면 856종목 전량을 집계한 뒤 구성종목 50개만 쓴다. 실측 - 시각창 질의가
+    # 심볼 수와 무관하게 33초였고 `decompose` 는 그걸 세 번 돌아 97초였다.
+    syms = ((only,) if isinstance(only, str) else tuple(only)) if only else ()
+    lit = ", ".join(f"'{x}'" for x in syms)
+    pick = f" AND symbol IN ({lit})" if syms else ""
     # 5분봉 심볼은 **접미사가 붙는다**(`005930.KS`). 맨 코드로 비교하면 한 번도 안
     # 맞고, 그러면 대상 계열이 비어 `decompose` 가 조용히 None 을 낸다 - 실측에서
     # 개별 종목 구간 층 분해가 통째로 '층 미계측' 이었고 원인이 이 한 줄이었다.
-    pick_clock = (f" AND regexp_replace(symbol, '\\.(KS|KQ)$', '') = '{only}'"
-                  if only else "")
+    pick_clock = (f" AND regexp_replace(symbol, '\\.(KS|KQ)$', '') IN ({lit})"
+                  if syms else "")
     if clock is not None:
         names = {str(s_): n for s_, n in lake.sql(_CLOCK_NAMES.format(kinds=kinds))}
         out = {}
@@ -304,7 +309,9 @@ def _panel(lake, etf: str, day: str, hist: list,
     if not hold:
         return None
     d0 = dt.date.fromisoformat(day)
-    ser = _series(lake, day, ("stock",), clock=clock)
+    # **구성종목만 읽는다.** 예전엔 856종목 전량을 읽고 이 루프에서 버렸다.
+    ser = _series(lake, day, ("stock",), clock=clock,
+                  only=tuple(tk for tk, _l, _w in hold))
     rows, nows = [], []
     for tk, _lab, _w in hold:
         if tk not in ser:
@@ -529,7 +536,8 @@ def _names(lake, etf: str, day: str, hist: list, basis: list[np.ndarray],
     if not hold or not basis:
         return (), None, 0.0, None, 0, 0
     d0 = dt.date.fromisoformat(day)
-    ser = _series(lake, day, ("stock",))
+    # 여기도 `hold` 만 쓴다 - 전량을 읽고 루프에서 버리면 856종목 스캔이 공짜가 아니다.
+    ser = _series(lake, day, ("stock",), only=tuple(tk for tk, _l, _w in hold))
     B, BN = np.column_stack(basis), np.asarray(basis_now)
     out, resid, wsum, wtot, halted = [], [], 0.0, 0.0, 0
     for tk, label, w in hold:

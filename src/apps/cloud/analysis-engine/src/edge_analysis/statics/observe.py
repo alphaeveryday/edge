@@ -201,18 +201,41 @@ def observe(lake, ticker: str, instrument_id: str, day: str, *,
         skipped.append(f"business_mix: 호출 실패 ({type(exc).__name__})")
 
     # **인과는 여기서만, 그리고 일 단위로만.** 창 단위 패널이 없다.
+    #
+    # 순서가 중요하다: 격자가 **탐색**이고 `run_trial` 이 **확증**이다. 예전엔 오늘
+    # 사건타입 전부에 `run_trial` 을 돌렸는데(실측 14회 × 매칭+순열 = 약 27분) 문단에는
+    # 상위 3개만 썼다 - 11회를 계산해 버린 것이다. 격자 1회로 훑고 거기서 고른 것만
+    # 확증한다.
+    #
+    # 대가를 적어 둔다: 같은 날 데이터로 고르고 같은 데이터로 확증하면 **선택 편향**이다.
+    # 격자가 최소 p 를 골랐으니 그 타입의 ATT p 는 낙관적으로 나온다. 그래서 근거에
+    # '격자 선택' 을 박는다 - 성능을 얻고 정직성을 잃지 않으려면 그 표기가 있어야 한다.
     if etypes:
+        picked, why_pick = list(etypes), ""
         try:
             g = S.call(lake, "grid_screen", day=day, types=list(etypes))
             o = _grid(g) if g.get("verdict") == "계산됨" else None
             if o is not None:
                 obs.append(o)
+                rows = [x for x in (g.get("rows") or []) if x.get("p2") is not None]
+                rank = sorted(rows, key=lambda x: float(x["p2"]))
+                seen: list[str] = []
+                for x in rank:                     # 타입 중복 제거, p 오름차순
+                    if x["type"] not in seen:
+                        seen.append(x["type"])
+                if seen:
+                    picked = seen[:MAX_TRIALS]
+                    why_pick = " · 격자 선택"
             elif g.get("verdict") != "계산됨":
                 skipped.append(f"grid_screen: {g.get('reason') or '판정불가'}")
         except Exception as exc:                                  # noqa: BLE001
             skipped.append(f"grid_screen: 호출 실패 ({type(exc).__name__})")
+        if len(picked) < len(etypes):
+            skipped.append(
+                f"run_trial: {len(etypes)}타입 중 격자가 고른 {len(picked)}개만 검정했다"
+                " - 나머지는 계산하지 않았다(부재가 아니라 미검정)")
         trials: list[tuple[float, Obs]] = []
-        for et in etypes:
+        for et in picked:
             try:
                 t = S.call(lake, "run_trial", day=day, etype=et)
             except Exception as exc:                              # noqa: BLE001
@@ -225,9 +248,12 @@ def observe(lake, ticker: str, instrument_id: str, day: str, *,
                 continue
             pair = _trial(t, et)
             if pair is not None:
-                trials.append(pair)
-        # **작은 p 먼저, 최대 MAX_TRIALS 개.** 오늘 사건타입이 14 개면 문장도 14 개가
-        # 되어 문단이 표로 변한다(실측). 접은 것은 수만 말하고 사라지지 않는다.
+                p, o = pair
+                # 격자가 고른 것임을 근거에 남긴다 - 같은 데이터로 고르고 확증했으므로
+                # 이 p 는 낙관적이다. 그 사실이 표기에서 빠지면 확증으로 읽힌다.
+                trials.append((p, Obs(o.tool, o.text, o.ground + why_pick, o.sign)))
+        # **작은 p 먼저.** 격자 선택으로 이미 MAX_TRIALS 개지만, 격자가 실패해 전 타입을
+        # 돌게 되면 여기서 다시 잘린다. 접은 것은 수만 말하고 사라지지 않는다.
         trials.sort(key=lambda x: x[0])
         obs += [o for _p, o in trials[:MAX_TRIALS]]
         if len(trials) > MAX_TRIALS:

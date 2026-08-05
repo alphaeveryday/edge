@@ -11,13 +11,14 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 RDB_DSN_ENV = "EDGE_RDB_DSN"         # 예: host=127.0.0.1 port=15432 dbname=edge user=edge password=...
 BACKFILL_ENV = "CAUSAL_BACKFILL_DIR"  # 기본 .tmp/causal-backfill
-BACKFILL_S3_ENV = "CAUSAL_BACKFILL_S3"  # 예: s3://edge-dev-pipeline-lake/analysis/backfill
+BACKFILL_S3_ENV = "CAUSAL_BACKFILL_S3"  # 기본값은 DEFAULTS 에 있다 (재지정 전용 변수)
 
 # RDB 에서 끌어와 쓰는 표 — 설계 §16 간선 카탈로그의 원천.
 RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
@@ -29,6 +30,10 @@ RDB_TABLES = ("price_daily", "investor_flow_daily", "etf_holding_snapshot",
               "document_assertion", "event_measure")
 
 LAKE = "s3://edge-dev-pipeline-lake/"
+
+# 1분 워커 롤업이 5분봉을 실시간 공급하기 시작한 날. 이 날부터는 롤업이 정본이고
+# 그 전은 fmp 백필이 정본이다 - 두 벤더가 같은 (symbol, ts) 를 낼 때의 심판.
+ROLLUP_FROM = "2026-08-04"
 
 # 하류 SQL 이 이름으로 참조하는 로컬 백필의 빈 스키마. statics.pit / statics.fin 이
 # 아직 안 돌았어도 v_pit·v_fin 을 쓰는 패널 SQL 이 파스는 되어야 한다 - '없는 축'이
@@ -65,8 +70,21 @@ MEMORY_LIMIT_ENV = "DUCKDB_MEMORY_LIMIT"
 TEMP_DIR_ENV = "DUCKDB_TEMP_DIR"
 # 기본 체인에 instance 가 앞쪽에 있어야 Fargate 가 붙는다: task role 은 컨테이너
 # 자격증명 엔드포인트로 오는데 컨테이너엔 SSO 캐시도 config 파일도 없다.
+# 스필 경로는 **플랫폼이 정하게 둔다** - '/tmp' 를 박아 두면 Windows 에선 git-bash
+# 매핑이 있을 때만 우연히 살고, 없으면 스필이 안 열려 OOM 으로 죽는다(죽는 대신
+# 느려지라고 둔 장치가 정확히 필요할 때 없다). 컨테이너에선 그대로 '/tmp' 다.
+# BACKFILL_S3_ENV 의 기본값은 **terraform 이 정한 자리**다: tasks.tf 의
+# `analysis_backfill_s3_prefix` 가 Fargate env `CAUSAL_BACKFILL_S3` 로 같은 문자열을
+# 주입한다. 셋(여기 · terraform local · Fargate env)이 한 자리를 가리켜야 노트북과
+# 컨테이너가 같은 데이터를 본다. 여기를 '예쁘게' 바꾸면 노트북만 새 경로를 보고
+# 컨테이너는 env 로 덮인 옛 경로 - 즉 아무것도 없는 프리픽스 - 를 읽어 백필 10세트가
+# 빈 스키마 뷰로 걸리고 **질의는 성공한 채 0행**이 온다(backfill_sources 도크스트링의
+# 그 실패 양식). 하나만 바꾸는 것은 언제나 버그다.
+# 후행 슬래시 금지: 코드가 파일명을 이어붙이므로 '…/backfill//pit_daily.parquet' 가
+# 되고 S3 는 빈 세그먼트를 키의 일부로 봐서 조용히 0파일을 돌려준다.
 DEFAULTS = {S3_CHAIN_ENV: "env;instance;config;sso", AWS_REGION_ENV: "ap-northeast-2",
-            MEMORY_LIMIT_ENV: "1.5GB", TEMP_DIR_ENV: "/tmp"}
+            MEMORY_LIMIT_ENV: "1.5GB", TEMP_DIR_ENV: tempfile.gettempdir(),
+            BACKFILL_S3_ENV: LAKE + "analysis/backfill"}
 
 # S3 데이터셋 전량. **데이터가 없어도 붙인다** - 빈 Iceberg 테이블도 스키마는 있고,
 # 스키마가 보여야 '아직 안 채워진 축'과 '존재하지 않는 축'을 구분할 수 있다.
@@ -195,8 +213,15 @@ def session_pragmas() -> tuple[str, ...]:
     윈도우(60일/20일 PARTITION BY instrument_id) + _base() CTE 전개가 도는데,
     한도가 없으면 컨테이너가 OOM 으로 통째로 죽는다(정규화 때 실제로 죽었다).
     스필 경로가 열려 있어야 죽는 대신 느려진다.
+
+    preserve_insertion_order=false: 5분봉은 S3 64M 행이고, 구간 β 는 그 중 시각창을
+    전 종목·전 날짜로 집계한다. 삽입 순서 보존을 켜 두면 스캔이 순서 버퍼를 들고
+    있어야 해서 1.5GB 한도에서 **OOM 으로 죽었다**(실측: 구간 층분해가 4회 중 2회
+    실패, 나머지는 지역화된 오류 메시지 때문에 UnicodeDecodeError 로 위장됐다).
+    우리 SQL 은 순서가 중요한 곳마다 `ORDER BY` 를 명시한다 - 보존은 비용뿐이다.
     """
     return ("SET TimeZone='Asia/Seoul'",
+            "SET preserve_insertion_order=false",
             f"SET memory_limit='{_env(MEMORY_LIMIT_ENV)}'",
             f"SET temp_directory='{_env(TEMP_DIR_ENV)}'")
 
@@ -204,15 +229,21 @@ def session_pragmas() -> tuple[str, ...]:
 def backfill_sources(name: str, local: Path) -> tuple[tuple[str, str], ...]:
     """백필 한 세트의 읽기 후보 — (표기, 경로) 를 우선순위 순으로. 없는 후보는 뺀다.
 
-    S3 가 먼저다: 로컬 .tmp/causal-backfill 은 140MB 라 Docker 빌드 컨텍스트(src/)
-    밖이고 컨테이너엔 아예 없다. 그러면 빈 스키마 뷰가 걸려 **파스도 질의도 성공한 뒤
-    0행**이 돌아온다 - layers_daily 0행이면 층 분해가 None, v_pit·flow_daily 0행이면
-    전 튜플이 판정불가인데 아무도 실패를 못 본다. 가장 위험한 실패 양식이라
-    표기를 반환값에 실어 exists 에 남긴다.
+    S3 가 먼저고 **기본값도 S3 다**(DEFAULTS[BACKFILL_S3_ENV]). env 는 재지정용일
+    뿐이다 - 예전엔 CAUSAL_BACKFILL_S3 가 없으면 S3 후보가 아예 안 생겨 사실상
+    '로컬 전용'이 기본값이었다. 로컬 .tmp/causal-backfill 은 144MB 라 Docker 빌드
+    컨텍스트(src/) 밖이고 컨테이너엔 아예 없다. 그러면 빈 스키마 뷰가 걸려 **파스도
+    질의도 성공한 뒤 0행**이 돌아온다 - layers_daily 0행이면 층 분해가 None,
+    v_pit·flow_daily 0행이면 전 튜플이 판정불가인데 아무도 실패를 못 본다.
+    가장 위험한 실패 양식이라 표기를 반환값에 실어 exists 에 남긴다.
+
+    **후보가 있다 ≠ 데이터가 있다.** 여기서 S3 후보는 경로를 조립했다는 뜻일 뿐이다.
+    실제 읽기는 _backfill() 이 하고, 못 읽으면 사유가 backfill_notes 에, 부재는
+    exists 에 falsy 로 그대로 남는다 - 기본값을 켜는 것이 부재를 덮으면 안 된다.
     """
-    prefix = os.environ.get(BACKFILL_S3_ENV, "").strip().rstrip("/")
+    prefix = _env(BACKFILL_S3_ENV).rstrip("/")
     return tuple((label, src) for label, src in (
-        ("S3", f"{prefix}/{name}.parquet" if prefix else ""),
+        ("S3", f"{prefix}/{name}.parquet"),
         ("로컬", local.as_posix() if local.is_file() else "")) if src)
 
 
@@ -246,37 +277,168 @@ class CausalLake:
         return Path(os.environ.get(BACKFILL_ENV, ".tmp/causal-backfill")) / "bars"
 
     def _bars(self, d: Path) -> None:
-        """5분봉 뷰. **S3 canonical 이 있으면 그것을 쓴다** (20R).
+        """5분봉 뷰 — S3 canonical 과 로컬 백필의 **합집합** (21R).
 
-        로컬 `bars/` 는 2종목 사본이었다 - 그래서 셀 배치가 불가능했고 라이브 검증이
-        20라운드 내내 종목 하나짜리 일화에 머물렀다. canonical 정규화분은 KR 1,271종목
-        916거래일이다. 로컬은 S3 가 없을 때의 폴백으로만 남긴다.
+        로컬을 폴백으로만 두던 규율을 버렸다: S3 가 있으면 로컬을 안 읽으니 S3 에
+        없는 과거 구간(ETF·시장지수는 canonical 이 43일뿐이다)을 로컬 parquet 으로
+        채워도 수치가 안 변했다. 이제 둘을 UNION 하고 겹치는 곳만 아래 규칙으로
+        하나 남긴다 - 로컬은 '없을 때 쓰는 것'이 아니라 **비는 구간을 메우는 것**이다.
 
-        심볼 규약은 기존 계약을 지킨다: `symbol` = `005930.KS` (canonical 의
-        `source_symbol`). `trade_date` 를 노출해 하이브 파티션 프루닝이 걸리게 한다 -
-        `CAST(ts AS DATE)` 로 거르면 1.5억 행을 다 읽는다.
+        심볼 규약은 기존 계약을 지킨다: `symbol` = `005930.KS`. `trade_date` 를
+        노출해 하이브 파티션 프루닝이 걸리게 한다 - `CAST(ts AS DATE)` 로 거르면
+        1.5억 행을 다 읽는다.
+
+        **심볼 정규화** — 상류 1분 워커가 `source_symbol` 을 접미사 없는 bare 로
+        쓴다(2026-08-05 실측: 롤업 6,878행 362종목 전부 bare, fmp 6,389만행은 전부
+        `.KS`/`.KQ`). 그대로 두면 같은 종목이 두 심볼로 쪼개져 실시간 봉이 이력에
+        안 이어지고, 거래일수를 세면 bare 티커가 '1일짜리 종목'으로 뜬다. 상류
+        버그지만 **여기서 흡수한다** - 하류 전부가 symbol 로 조인하므로 축이 갈리면
+        층분해가 통째로 틀린다. 접미사는 추측하지 않는다: KRX 는 KQ 가 1/3 이라
+        (실측 863 KS · 406 KQ) `.KS` 를 무조건 붙이면 그만큼이 깨진다. fmp 이력의
+        `ticker → source_symbol` 을 정본 매핑으로 쓰고, 거기 없는 티커(실측 69개)는
+        bare 로 남긴다 - 이을 이력 자체가 없는 종목이라 지어내면 그게 거짓이다.
+
+        **`available_at` 을 컬럼으로 낸다** — 장중 분석의 전제다. 1분 워커 롤업은
+        닫힌 버킷만 쓰므로 파티션에 나타난 봉은 이미 확정분이지만, 그건 '언제부터
+        알 수 있었나'를 말해 주지 않는다. 13:00 에 그날 파티션을 통째로 읽으면
+        15:30 봉이 딸려 온다 - 날짜 절단은 장중 PIT 가 아니다. 컬럼이 없는 원천
+        (로컬 백필 parquet)은 롤업과 **같은 계약**으로 유도한다: 구간이 닫히는 시각
+        `ts + 5분`. 유도분인지는 `source_vendor` 로 갈린다('fmp_backfill').
+
+        **중복 제거는 생성 시점의 서로소 구성이다 — 질의 시점 창은 없다.** 처음엔
+        `QUALIFY row_number()` 로 겹침을 걸렀는데, 창 연산자는 블로킹이라 집계 전에
+        파티션을 물리화한다: 층분해의 시각창 질의(13:00~15:30 · 전 종목 ≈ 34M행)가
+        memory_limit 1.5GB 에서 OOM 으로 죽었다(스필 경로는 열려 있었다). 겹침 한
+        쌍을 막자고 6,400만 행에 창을 씌운 것이 비용의 전부였다.
+
+        그래서 겹칠 수 있는 곳만 **작은 표로 미리 계산해 안티조인**한다:
+          · S3 내부 벤더 겹침은 **실측 0** 이다 - fmp 는 2026-07-31 에 끝나고 롤업은
+            08-05 부터이며 08-03·08-04 파티션은 0행이다. 없는 겹침에 값을 치르지 않는다.
+          · `ROLLUP_FROM` 이전은 fmp 가 정본이고 로컬 백필이 곧 fmp 를 더 깊게 다시
+            받은 것이다 → 로컬이 가진 (symbol, trade_date) 를 **로컬 파일만 읽어**
+            잡고(싸다) S3 가지에서 뺀다.
+          · `ROLLUP_FROM` 이후는 롤업이 정본 → 그 시대 S3 의 (symbol, trade_date) 를
+            잡고(파티션 한둘, 싸다) 로컬 가지에서 뺀다.
+        어느 쪽도 S3 전 구간 집계를 안 한다 - 그건 `max(trade_date)` 하나가 21초다.
+        안티조인은 **상대가 실제로 가진 날짜만** 지운다. 정본 벤더가 결측인 구간은
+        남은 쪽이 그대로 살아남는다 - 겹칠 때 하나를 고르는 규칙이지 비정본을 지우는
+        규칙이 아니다.
         """
-        if "s3_intraday_5m" in self.s3:
-            self.con.execute(
-                "CREATE OR REPLACE VIEW bars_5m AS SELECT source_symbol AS symbol, "
-                "ticker, ts, trade_date, open, high, low, close, volume "
-                "FROM s3_intraday_5m WHERE market = 'KR'")
-            self.exists["bars_5m"] = "S3 canonical (1,271종목)"
-            return
-        files = sorted(d.glob("*.parquet")) if d.is_dir() else []
-        if not files:
+        local_src = f"read_parquet('{d.as_posix()}/*.parquet')"
+        has_local = d.is_dir() and bool(sorted(d.glob("*.parquet")))
+        has_s3 = "s3_intraday_5m" in self.s3
+        if not (has_local or has_s3):
             self.exists["bars_5m"] = 0
             return
-        self.con.execute(
-            f"CREATE VIEW bars_5m AS SELECT symbol, CAST(datetime AS TIMESTAMP) AS ts, "
-            f"open, high, low, close, volume FROM read_parquet('{d.as_posix()}/*.parquet')")
-        self.exists["bars_5m"] = self.con.execute("SELECT count(*) FROM bars_5m").fetchone()[0]
+        parts, cut_s3, cut_local = [], "", ""
+        sm = self._symbol_map(local_src if has_local else "") if has_s3 else ""
+        if has_s3 and has_local:
+            cut_s3, cut_local = self._overlap_cuts(local_src, sm)
+        if has_s3:
+            sym = "coalesce(sm.symbol, b.source_symbol)" if sm else "b.source_symbol"
+            parts.append(
+                f"SELECT {sym} AS symbol, b.ticker, b.ts, b.trade_date, b.open, b.high, "
+                "b.low, b.close, b.volume, b.source_vendor, "
+                "coalesce(b.available_at, b.ts + INTERVAL 5 MINUTE) AS available_at "
+                "FROM s3_intraday_5m b "
+                + (f"LEFT JOIN {sm} sm ON sm.ticker = b.ticker " if sm else "")
+                + "WHERE b.market = 'KR'" + cut_s3.format(sym=sym))
+        if has_local:
+            # 로컬 백필엔 available_at·source_vendor·ticker·trade_date 가 없다 - 전부 유도한다.
+            parts.append(
+                "SELECT l.symbol, regexp_replace(l.symbol, '\\.(KS|KQ)$', '') AS ticker, "
+                "CAST(l.datetime AS TIMESTAMP) AS ts, CAST(l.datetime AS DATE) AS trade_date, "
+                "l.open, l.high, l.low, l.close, l.volume, 'fmp_backfill' AS source_vendor, "
+                "CAST(l.datetime AS TIMESTAMP) + INTERVAL 5 MINUTE AS available_at "
+                f"FROM {local_src} l WHERE true" + cut_local)
+        try:
+            self.con.execute("CREATE OR REPLACE VIEW bars_5m AS "
+                             + " UNION ALL ".join(parts))
+        except Exception as e:      # noqa: BLE001 - 로컬 파일 부재도 커버리지 보고
+            self.exists["bars_5m"] = 0
+            self.unbound["bars_5m"] = f"{type(e).__name__}: {str(e)[:80]}"
+            return
+        src = ["S3 canonical"] if has_s3 else []
+        if has_local:
+            n = self.con.execute(f"SELECT count(*) FROM {local_src}").fetchone()[0]
+            src.append(f"로컬 백필 ({n:,}행)")
+        self.exists["bars_5m"] = " + ".join(src)
+
+    def _overlap_cuts(self, local_src: str, sm: str) -> tuple[str, str]:
+        """두 원천이 겹치는 (symbol, trade_date) 를 미리 잡아 안티조인 절로 돌려준다.
+
+        반환: (S3 가지에 붙일 절, 로컬 가지에 붙일 절). S3 절은 `{sym}` 자리에
+        정규화된 심볼 식이 들어간다 - 겹침 판정은 **뷰가 내는 축** 위에서 해야 한다.
+        `_rollup_days` 도 같은 이유로 정규화해서 잡는다: 롤업의 `source_symbol` 은
+        bare 인데 로컬은 접미사가 붙어 있어, 날것으로 잡으면 키가 영영 안 맞는다
+        (실측: 그래서 2026-08-05 에 (symbol, ts) 중복 156쌍이 샜다).
+
+        비싼 쪽을 절대 안 읽는 것이 요점이다: 로컬 날짜는 로컬 파일에서, 롤업 시대
+        날짜는 파티션 한둘에서 나온다. 실패하면 절을 안 붙인다 - 겹침이 남아 행이
+        두 번 세어질지언정 뷰가 통째로 없어지는 것보다 낫고, 사유는 남긴다.
+        """
+        cuts = []
+        for name, ddl, tmpl in (
+            ("_local_days",
+             f"SELECT DISTINCT symbol, CAST(datetime AS DATE) AS trade_date FROM {local_src}",
+             " AND NOT (b.trade_date < DATE '{rollup}' AND EXISTS (SELECT 1 FROM _local_days x "
+             "WHERE x.symbol = {sym} AND x.trade_date = b.trade_date))"),
+            ("_rollup_days",
+             "SELECT DISTINCT "
+             + ("coalesce(m.symbol, b.source_symbol)" if sm else "b.source_symbol")
+             + " AS symbol, b.trade_date FROM s3_intraday_5m b "
+             + (f"LEFT JOIN {sm} m ON m.ticker = b.ticker " if sm else "")
+             + f"WHERE b.market = 'KR' AND b.trade_date >= DATE '{ROLLUP_FROM}'",
+             " AND NOT EXISTS (SELECT 1 FROM _rollup_days x WHERE x.symbol = l.symbol "
+             "AND x.trade_date = CAST(l.datetime AS DATE))")):
+            try:
+                self.con.execute(f"CREATE OR REPLACE TABLE {name} AS {ddl}")
+            except Exception as e:      # noqa: BLE001 - 못 잡으면 겹침 유지, 침묵 금지
+                self.unbound[name] = f"{type(e).__name__}: {str(e)[:80]}"
+                cuts.append("")
+                continue
+            cuts.append(tmpl.replace("{rollup}", ROLLUP_FROM))
+        return cuts[0], cuts[1]
+
+    def _symbol_map(self, local_src: str) -> str:
+        """bare 티커 → 접미사 붙은 canonical 심볼. 반환: 표 이름 또는 ""(못 만듦).
+
+        `ROLLUP_FROM` 직전 10거래일 창의 fmp 행에서 뽑는다. 전 구간 스캔은 못 쓴다 -
+        `max(trade_date)` 한 번이 21초다(실측). 창을 고정 상수에 매달아 두면 오늘이
+        언제든 같은 매핑이 나온다.
+
+        **로컬 백필도 매핑 원천이다.** canonical 이 안 가진 종목을 로컬이 채우는데
+        (실측: 025560 841일 · 066970 979일), 그 종목의 실시간 롤업 행은 매핑이 없어
+        bare 로 남는다 = 새로 받은 이력과 축이 갈린다. 원천을 넓히면 그대로 붙는다.
+        S3 를 먼저 놓아 충돌 시 canonical 이 이긴다. 한 티커가 두 심볼을 가지면
+        (시장 이전) 하나만 남긴다 - 조인이 불어나 봉이 복제되는 것부터 막아야 한다.
+        """
+        src = ["SELECT ticker, source_symbol AS symbol, 0 AS prio FROM s3_intraday_5m "
+               "WHERE market = 'KR' AND source_symbol LIKE '%.K_' "
+               f"AND trade_date BETWEEN DATE '{ROLLUP_FROM}' - 10 AND DATE '{ROLLUP_FROM}'"]
+        if local_src:
+            src.append("SELECT regexp_replace(symbol, '\\.(KS|KQ)$', '') AS ticker, "
+                       f"symbol, 1 AS prio FROM {local_src} WHERE symbol LIKE '%.K_'")
+        try:
+            self.con.execute(
+                "CREATE OR REPLACE TABLE _symbol_suffix AS SELECT ticker, "
+                "first(symbol ORDER BY prio, symbol) AS symbol FROM ("
+                + " UNION ALL ".join(src) + ") GROUP BY 1")
+        except Exception as e:      # noqa: BLE001 - 매핑 부재는 bare 유지, 침묵 금지
+            self.unbound["_symbol_suffix"] = f"{type(e).__name__}: {str(e)[:80]}"
+            return ""
+        n = self.con.execute("SELECT count(*) FROM _symbol_suffix").fetchone()[0]
+        if not n:
+            self.unbound["_symbol_suffix"] = f"{ROLLUP_FROM} 직전 10일에 fmp 심볼 없음"
+            return ""
+        return "_symbol_suffix"
 
     def _backfill(self, d: Path) -> None:
         """백필 세트: us_market · fx_usdkrw · tau_sidecar · layers_daily(층 분해 재료)
         · etf_holdings_fmp · pit_daily(curated DataGuide 일간 패널 - statics.pit).
 
-        **S3 우선 · 로컬 폴백** — `_bars()` 와 같은 규율이다(CAUSAL_BACKFILL_S3).
+        **S3 우선 · 로컬 폴백** — `_bars()` 와 같은 규율이고, S3 프리픽스는 env 가
+        없어도 기본값이 있다(DEFAULTS[BACKFILL_S3_ENV]) = 컨테이너에도 원천이 있다.
         어느 경로로 읽었는지 exists 에 남긴다: "S3 (1,004,392행)" / "로컬 (1,004,392행)".
         0행은 문자열로 승격하지 않는다 - 하류가 `exists.get(name)` 의 참/거짓으로
         분기하므로(causeflow·evidence 의 tau_sidecar) 0행이 '있음'으로 보이면 안 된다.
@@ -308,7 +470,10 @@ class CausalLake:
                 self.backfill_notes[name] = f"{label} 0행"
             if bound:
                 continue
-            self.backfill_notes.setdefault(name, "S3 미설정 · 로컬 파일 없음")
+            # 여기까지 왔으면 S3 도 로컬도 못 읽었다. S3 후보는 기본값 덕에 항상
+            # 조립되므로 위 except 가 이미 사유를 남겼다 - 이 setdefault 는 그마저
+            # 없을 때의 그물이다(사유 없는 0행은 금지).
+            self.backfill_notes.setdefault(name, "읽을 수 있는 원천 없음")
             # 하류 SQL 이 이름을 직접 참조하는 백필은 원천이 없어도 **빈 스키마**로 건다
             # (S3 셋과 같은 규율: 스키마가 보여야 '안 채워진 축'과 '없는 축'이 갈린다).
             # 안 그러면 v_pit 을 쓰는 패널 SQL 전체가 파스 단계에서 죽는다.
@@ -437,6 +602,14 @@ class CausalLake:
         """
         try:
             return self.con.execute(q).fetchall()
+        except UnicodeDecodeError as e:
+            # **오류가 오류를 가린다.** DuckDB 예외 메시지에 OS 지역화 문구가 섞이면
+            # 클라이언트가 그걸 UTF-8 로 못 읽고 UnicodeDecodeError 로 바꿔 던진다.
+            # 실측: 구간 층분해의 OOM 이 4회 중 2회 이 모습으로 위장돼, 메모리 문제를
+            # 인코딩 문제로 몇 시간 쫓았다. 원문 바이트를 살려 진짜 원인을 남긴다.
+            raw = getattr(e, "object", b"")
+            msg = bytes(raw).decode("cp949", errors="replace") if raw else str(e)
+            raise RuntimeError(f"DuckDB 오류(지역화 메시지 복원): {msg[:400]}") from e
         except Exception:
             hit = [n for n in self.deferred if n in q]
             if not hit:
@@ -567,19 +740,23 @@ class CausalLake:
             line += f"\n  이 셀({self.day}) 봉 {has}개" + ("" if has else " - 시간 분해 불가")
         return line
 
-    def bars(self, ticker: str, day: str) -> list[tuple]:
-        """(ts, close) — tree.decompose 의 입력. 심볼 규약: '005930.KS'."""
+    def bars(self, ticker: str, day: str, as_of: datetime | None = None) -> list[tuple]:
+        """(ts, close) — tree.decompose 의 입력. 심볼 규약: '005930.KS'.
+
+        `as_of` 는 **장중 PIT** 다. 롤업은 닫힌 버킷만 쓰므로 파티션에 나타난 봉은
+        이미 확정분이지만, 그렇다고 13:00 에 그날 파티션을 통째로 읽어도 되는 건
+        아니다 - 15:30 봉도 같은 파티션에 있고 날짜 절단은 그것을 못 막는다.
+        미래를 읽고 과거를 설명하면 무엇이든 설명된다. `as_of` 를 주면
+        `available_at <= as_of`, 즉 **그 시각에 실제로 알 수 있었던 봉**만 낸다.
+        None 이면 그날 전량 - 장 마감 뒤 사후 분석의 정당한 기본값이다.
+        """
         if not self.exists.get("bars_5m"):
             raise RuntimeError("bars_5m 없음 — 백필 먼저 (coverage 참조)")
         # trade_date 로 거른다 - 하이브 파티션 프루닝이 걸려야 1.5억 행을 안 읽는다.
-        col = "trade_date" if self._has_trade_date() else "CAST(ts AS DATE)"
+        cut = f" AND available_at <= TIMESTAMP '{as_of:%Y-%m-%d %H:%M:%S}'" if as_of else ""
         return self.sql(
             f"SELECT ts, close FROM bars_5m WHERE symbol='{ticker}' "
-            f"AND {col} = DATE '{day}' ORDER BY ts")
-
-    @lru_cache(maxsize=1)
-    def _has_trade_date(self) -> bool:
-        return any(r[0] == "trade_date" for r in self.sql("DESCRIBE bars_5m"))
+            f"AND trade_date = DATE '{day}'{cut} ORDER BY ts")
 
     def prev_close(self, ticker: str, day: str) -> float:
         """직전 거래일 종가. **최근 10일로 창을 좁힌다** (20R).
@@ -588,11 +765,10 @@ class CausalLake:
         전 이력을 스캔했다 - 셀 하나에 88초, 배치가 불가능한 비용이었다. 연휴가
         10일을 넘으면 창을 넓혀 재시도한다(있는 것을 못 찾는 일은 없다).
         """
-        col = "trade_date" if self._has_trade_date() else "CAST(ts AS DATE)"
         for back in (10, 40, 400):
             row = self.sql(
                 f"SELECT close FROM bars_5m WHERE symbol='{ticker}' "
-                f"AND {col} < DATE '{day}' AND {col} >= DATE '{day}' - {back} "
+                f"AND trade_date < DATE '{day}' AND trade_date >= DATE '{day}' - {back} "
                 f"ORDER BY ts DESC LIMIT 1")
             if row:
                 return float(row[0][0])
@@ -628,5 +804,5 @@ class CausalLake:
             "GROUP BY e.source_event_id ORDER BY 1")
 
 
-__all__ = ["BACKFILL_SETS", "CausalLake", "RDB_TABLES", "backfill_sources",
-           "rdb_dsn_from_env", "s3_secret_sql", "session_pragmas"]
+__all__ = ["BACKFILL_SETS", "CausalLake", "RDB_TABLES", "ROLLUP_FROM",
+           "backfill_sources", "rdb_dsn_from_env", "s3_secret_sql", "session_pragmas"]
