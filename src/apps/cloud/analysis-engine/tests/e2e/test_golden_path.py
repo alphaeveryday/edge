@@ -412,8 +412,11 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
                 (TRADE_DATE, "0" * 64),
             )
-            # 분봉 분해 입력(ALPHA-710)의 원장 전제 — 시가·트리거 window 의 세대·checksum
-            # 은 minute_ingestion_window 가 정본이고, ETF 세션 시가는 minute_session_open.
+            # 분봉 분해 입력의 원장 전제 — 트리거 window 의 세대·checksum 은
+            # minute_ingestion_window 가 정본이다. 분모는 원장이 아니라 canonical
+            # price_daily 직전 파티션(PREV_DATE)이다(ALPHA-747) — 그래서 여기에
+            # minute_session_open 시드가 **없는 것이 계약**이다: 있으면 시가 축으로
+            # 되돌아간 회귀가 초록으로 통과한다.
             for window_start, bars_bytes in ((open_window, open_bars),
                                              (trigger_window, trigger_bars)):
                 cur.execute(
@@ -424,11 +427,6 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                     (window_start, window_start, window_start,
                      hashlib.sha256(bars_bytes).hexdigest()),
                 )
-            cur.execute(
-                "INSERT INTO minute_session_open (session_id, entity_id, status,"
-                " open_price, source_window) VALUES ('ses-e2e', %s, 'OPEN', 10000, %s)",
-                (ETF_TICKER, open_window),
-            )
             # window_start 01:30Z = 10:30 KST — 엔진이 trade_date 를 여기서 파생한다.
             cur.execute(
                 "INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id,"
@@ -466,9 +464,12 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             assert cur.fetchall() == [("e2e-tenant-a", 2, 2), ("e2e-tenant-b", 2, 2)], (
                 "두 번째 발화의 게시가 전 테넌트 outbox 로 발번되지 않았다"
             )
-            # 분해 입력이 분봉 축(ALPHA-710)임을 값으로 증명 — 삼성 장중 수익률은
-            # 트리거 window close/세션 시가 = 73500/70000−1 = 5%. 일봉 축이면
-            # 70000/68000−1 ≈ 2.94% 가 나와 이 단언이 깨진다.
+            # 분해 입력이 분봉 축 + **전일 종가 분모**(ALPHA-747)임을 값으로 증명 —
+            # 삼성 수익률은 트리거 window close/전일 종가 = 73500/68000−1 ≈ 8.088%.
+            # 세 축이 전부 다른 값이라 이 단언 하나가 셋을 가른다:
+            #   일봉 축      70000/68000−1 ≈ 2.94%
+            #   분봉·시가 축 73500/70000−1 = 5%    (구 ALPHA-710 축)
+            #   분봉·전일 축 73500/68000−1 ≈ 8.09% (지금)
             cur.execute(
                 "SELECT m.constituent_return FROM etf_contribution_observation o"
                 " JOIN etf_contribution_member m"
@@ -477,8 +478,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 (MINUTE_TRIGGER_ID,),
             )
             [(minute_ret,)] = cur.fetchall()
-            assert abs(float(minute_ret) - 0.05) < 1e-9, (
-                f"분봉 분해가 일봉 축을 탔다: {minute_ret}"
+            assert abs(float(minute_ret) - (73500 / 68000 - 1)) < 1e-9, (
+                f"분봉 분해가 전일 종가 분모를 안 썼다: {minute_ret}"
             )
 
         # -- 6) 1분 추출 → event 단건 조립(ALPHA-727) -----------------------------

@@ -151,43 +151,57 @@ class LakeReader:
                 rows[str(record["unit_id"])] = record
         return rows
 
+    def load_prev_closes(self, market: str, trade_date: date) -> dict[str, float]:
+        """직전 거래일 종가 — 분봉 분해의 분모(ALPHA-747).
+
+        '직전'은 `trade_date` **미만** 최신 파티션이다. 당일 파티션을 기준으로 인덱스를
+        세면(daily `load_returns` 방식) 장중엔 당일 파티션이 없어 항상 빈 dict 가 된다 —
+        분봉 분해는 그 파티션이 생기기 전에 도는 것이 정상 경로다.
+
+        형 변환 실패(비수치·None)는 그 티커만 뺀다 — 한 행이 분해 전체를 죽이면 안 되고,
+        빠진 티커는 분해에서 미가격으로 잡혀 coverage 에 드러난다.
+        """
+        base = f"{LAKE_PRICE_PREFIX}/market={market}/"
+        earlier = [d for d in self._partition_values(base, "trade_date")
+                   if d < trade_date.isoformat()]
+        if not earlier:
+            return {}
+        closes: dict[str, float] = {}
+        for row in self._read_parquet_prefix(
+                f"{base}trade_date={earlier[-1]}/", ["ticker", "close"]):
+            try:
+                closes[str(row["ticker"])] = float(row["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return closes
+
     def load_minute_returns(
         self,
         market: str,
         session_date: str,
-        open_window_hhmm: str,
-        open_generation: int,
-        open_checksum: str | None,
         trigger_window_hhmm: str,
         trigger_generation: int,
         trigger_checksum: str | None,
+        prev_closes: dict[str, float],
     ) -> dict[str, float | None]:
-        """unit 별 장중 수익률 — 세션 시가 window 의 open 대비 트리거 window 의 close.
+        """unit 별 장중 수익률 — **전일 종가** 대비 트리거 window 의 close.
 
-        ETF 트리거 판정(ALPHA-708)과 같은 축(시가 대비)이다 — 분해가 다른 기준가를
-        쓰면 트리거가 설명하는 움직임과 분해가 설명하는 움직임이 갈린다(ALPHA-710).
+        ETF 트리거 판정(ALPHA-745 `intraday-anchor-v2`)이 전일 종가를 앵커로 쓰므로
+        분해도 같은 축이어야 한다 — 분모가 갈리면 트리거가 설명하는 움직임과 분해가
+        설명하는 움직임이 다르다(ALPHA-747). 갭(전일 종가→시가)이 기여에 포함된다.
         가격 계약 위반(0·음수·비수치)은 그 unit 만 None 으로 접는다 — 분해는 None 을
         미가격으로 제외한다(daily `load_returns` 와 같은 계약).
         """
         import math
 
-        opens = self._read_minute_bars(
-            market, session_date, open_window_hhmm, open_generation, open_checksum)
-        closes = (
-            opens
-            if (open_window_hhmm, open_generation)
-            == (trigger_window_hhmm, trigger_generation)
-            else self._read_minute_bars(
-                market, session_date, trigger_window_hhmm, trigger_generation,
-                trigger_checksum)
-        )
-        if not opens or not closes:
+        closes = self._read_minute_bars(
+            market, session_date, trigger_window_hhmm, trigger_generation, trigger_checksum)
+        if not closes:
             return {}
         returns: dict[str, float | None] = {}
         for unit_id, record in closes.items():
-            open_record = opens.get(unit_id)
+            base_price = prev_closes.get(unit_id)
             try:
-                open_price = float(open_record["open"]) if open_record else None
                 close_price = float(record["close"])
             except (KeyError, TypeError, ValueError):
                 returns[unit_id] = None
@@ -195,12 +209,12 @@ class LakeReader:
             # isfinite — float("Infinity"/"nan") 은 양수 비교를 통과하거나(inf) 전부
             # False(nan)라, 유한성 없이 접으면 손상 레코드가 수익률 inf 로 위장된다.
             # 결과값도 검사한다: 유한 피연산자끼리도 나눗셈이 오버플로할 수 있다
-            # (예: open 1e-300) — 피연산자 게이트만으론 inf 가 분해에 실린다.
+            # (예: base 1e-300) — 피연산자 게이트만으론 inf 가 분해에 실린다.
             ret = (
-                (close_price / open_price - 1.0)
-                if open_price is not None and math.isfinite(open_price)
+                (close_price / base_price - 1.0)
+                if base_price is not None and math.isfinite(base_price)
                 and math.isfinite(close_price)
-                and open_price > 0 and close_price > 0
+                and base_price > 0 and close_price > 0
                 else None
             )
             returns[unit_id] = ret if ret is not None and math.isfinite(ret) else None

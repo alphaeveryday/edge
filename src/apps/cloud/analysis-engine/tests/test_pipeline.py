@@ -42,9 +42,11 @@ class _FakeLake:
     def load_returns(self, market, trade_date):
         return {"005930": 0.05}
 
-    def load_minute_returns(self, market, session_date, open_window_hhmm,
-                            open_generation, open_checksum,
-                            trigger_window_hhmm, trigger_generation, trigger_checksum):
+    def load_prev_closes(self, market, trade_date):
+        return {"005930": 70000.0}
+
+    def load_minute_returns(self, market, session_date, trigger_window_hhmm,
+                            trigger_generation, trigger_checksum, prev_closes):
         return {"005930": 0.05}
 
 
@@ -163,13 +165,6 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis():
                 generation=1,
             )
 
-        def fetch_minute_open_window(self, session_id, entity_id):
-            # 분해 기준가는 ETF 시가가 확정된 그 window 다 — 다른 좌표로 물으면 분해
-            # 축이 트리거 판정 축과 갈린다(ALPHA-710).
-            assert (session_id, entity_id) == ("ses-1", "091160")
-            from datetime import datetime, timezone
-            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1, "c" * 64)
-
         def fetch_minute_window_meta(self, session_id, window_start):
             assert session_id == "ses-1"
             return (1, "d" * 64)
@@ -238,9 +233,6 @@ def test_minute_returns_without_constituent_prices_fail_loud():
                 generation=1,
             )
 
-        def fetch_minute_open_window(self, session_id, entity_id):
-            return (datetime(2026, 7, 16, 0, 0, tzinfo=timezone.utc), 1, None)
-
         def fetch_minute_window_meta(self, session_id, window_start):
             return (1, None)
 
@@ -250,6 +242,72 @@ def test_minute_returns_without_constituent_prices_fail_loud():
     store = _MinuteOnlyStore(trigger=None, prereqs=_PREREQS_OK)
     with pytest.raises(ReturnsNotReadyError, match="구성종목"):
         run(settings, lake=_EtfOnlyLake(), store=store, client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+
+
+def _minute_store_cls():
+    """분봉 트리거 하나만 돌려주는 store fake — 시가 원장 표면은 **의도적으로 없다**."""
+    from datetime import datetime, timezone
+
+    from edge_analysis.adapters.eventstore import MinuteTriggerRow
+
+    class _MinuteOnlyStore(_FakeStore):
+        def fetch_minute_price_trigger(self, trigger_id):
+            return MinuteTriggerRow(
+                gate=PriceTrigger("mpt_1", 0.03, "intraday", abs_gate=True, rel_gate=False),
+                ticker="091160", trade_date=date(2026, 7, 16), session_id="ses-1",
+                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                generation=1,
+            )
+
+        def fetch_minute_open_window(self, session_id, entity_id):
+            raise AssertionError(
+                "분해가 시가 원장(minute_session_open)을 다시 필수 입력으로 삼았다 —"
+                " 그 원장은 판정기(intraday-anchor-v2)에서 폴백으로 밀려 대개 비어 있고,"
+                " 필수로 두면 장중 설명이 전건 차단된다(ALPHA-747)")
+
+        def fetch_minute_window_meta(self, session_id, window_start):
+            return (1, None)
+
+    return _MinuteOnlyStore
+
+
+def test_minute_decomposition_does_not_require_session_open_ledger():
+    """분모는 전일 종가다 — 시가 원장을 다시 물으면 안 된다.
+
+    08-05 dev 실측: 시가 축이 판정 축과 갈린 채 필수 입력으로 남아 하루치 트리거가
+    통째로 ReturnsNotReady 로 접혔다(start 709건 · 분해 0건 · DLQ 61건). 이 회귀는
+    단위 테스트가 시가 원장을 친절하게 채워주면 안 보인다 — 그래서 호출 자체를 막는다.
+    """
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+    store = _minute_store_cls()(trigger=None, prereqs=_PREREQS_OK)
+    assert run(settings, lake=_FakeLake(), store=store,
+               client=_FakeClient(), s3=_FakeS3()) == 0
+    assert "obs_route" in store.calls, "분해·계보까지 갔어야 한다"
+
+
+def test_minute_missing_prev_closes_fails_loud():
+    """분모(직전 거래일 파티션)가 통째로 없으면 모든 unit 이 None 이 된다 — returns
+    dict 는 truthy 라 빈 검사를 통과하고 total_priced=0 분해가 설명으로 영속된다.
+    분해 전에 ReturnsNotReady 로 죽어야 소비자가 재시도 축으로 가른다."""
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _NoPrevCloseLake(_FakeLake):
+        def load_prev_closes(self, market, trade_date):
+            return {}
+
+        def load_minute_returns(self, *args, **kwargs):
+            raise AssertionError("분모 없이 분해를 시도했다")
+
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+    store = _minute_store_cls()(trigger=None, prereqs=_PREREQS_OK)
+    with pytest.raises(ReturnsNotReadyError, match="직전 거래일"):
+        run(settings, lake=_NoPrevCloseLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
 
 
