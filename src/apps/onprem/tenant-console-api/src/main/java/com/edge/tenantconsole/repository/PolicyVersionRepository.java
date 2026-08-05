@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,4 +37,7 @@ public interface PolicyVersionRepository extends Repository<PolicyVersionEntity,
 	PolicyVersionEntity save(PolicyVersionEntity version);
 
 	List<PolicyVersionEntity> findAllByOrderByVersionNoDesc();
+
+	/** 검사 행이 가리키는 판정 당시 버전들 — 행마다 findById 를 부르면 N+1 이다. */
+	List<PolicyVersionEntity> findByPolicyVersionIdIn(Collection<Long> policyVersionIds);
 }

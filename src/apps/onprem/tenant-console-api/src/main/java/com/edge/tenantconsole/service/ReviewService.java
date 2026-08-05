@@ -5,6 +5,7 @@ import com.edge.tenantconsole.auth.SessionMember;
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.AnalysisItemStatusHistoryEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
+import com.edge.tenantconsole.entity.PolicyVersionEntity;
 import com.edge.tenantconsole.entity.ReviewTaskEntity;
 import com.edge.tenantconsole.entity.ScreeningCheckEntity;
 import com.edge.tenantconsole.entity.ScreeningRuleEntity;
@@ -18,6 +19,7 @@ import com.edge.tenantconsole.repository.PublicationRepository;
 import com.edge.tenantconsole.repository.ReviewItemRepository;
 import com.edge.tenantconsole.repository.ReviewTaskRepository;
 import com.edge.tenantconsole.repository.ScreeningCheckRepository;
+import com.edge.tenantconsole.repository.PolicyVersionRepository;
 import com.edge.tenantconsole.repository.ScreeningRuleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +36,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 검수 오케스트레이션(state-machine.md·ALPHA-437): 승인 = REVIEW_REQUIRED → APPROVED +
@@ -57,6 +60,7 @@ public class ReviewService {
 	private final AnalysisItemStatusHistoryRepository statusHistoryRepository;
 	private final ScreeningCheckRepository screeningCheckRepository;
 	private final ScreeningRuleRepository screeningRuleRepository;
+	private final PolicyVersionRepository policyVersionRepository;
 	private final MemberRepository memberRepository;
 	private final ConsoleActionLogService actionLog;
 	private final ObjectMapper objectMapper = new ObjectMapper();
@@ -67,6 +71,7 @@ public class ReviewService {
 			AnalysisItemStatusHistoryRepository statusHistoryRepository,
 			ScreeningCheckRepository screeningCheckRepository,
 			ScreeningRuleRepository screeningRuleRepository,
+			PolicyVersionRepository policyVersionRepository,
 			MemberRepository memberRepository,
 			ConsoleActionLogService actionLog) {
 		this.reviewItemRepository = reviewItemRepository;
@@ -75,6 +80,7 @@ public class ReviewService {
 		this.statusHistoryRepository = statusHistoryRepository;
 		this.screeningCheckRepository = screeningCheckRepository;
 		this.screeningRuleRepository = screeningRuleRepository;
+		this.policyVersionRepository = policyVersionRepository;
 		this.memberRepository = memberRepository;
 		this.actionLog = actionLog;
 	}
@@ -87,11 +93,16 @@ public class ReviewService {
 	/** 목록 + 파생 검수 사유(ALPHA-436) — 사유는 배치 조회로 해석한다(항목당 N+1 금지). */
 	public List<ReviewListEntry> listWithReasons(String status) {
 		List<ReviewItem> items = list(status);
-		Map<String, List<String>> reasons = reviewReasonsFor(
-				items.stream().map(ReviewItem::explanationResultId).toList());
+		List<String> ids = items.stream().map(ReviewItem::explanationResultId).toList();
+		// 검사 행은 한 번만 읽는다 — 사유와 게이트 재료가 같은 행에서 나온다.
+		List<ScreeningCheckEntity> reviewChecks = ids.isEmpty() ? List.of()
+				: screeningCheckRepository.findByAnalysisItemIdInAndResultOrderByScreeningCheckId(ids, "REVIEW");
+		Map<String, List<String>> reasons = reviewReasonsFor(reviewChecks);
+		Map<String, List<ReviewListEntry.GateCheck>> gateChecks = gateChecksFor(reviewChecks);
 		return items.stream()
 				.map(i -> new ReviewListEntry(i,
-						reasons.getOrDefault(i.explanationResultId(), List.of())))
+						reasons.getOrDefault(i.explanationResultId(), List.of()),
+						gateChecks.getOrDefault(i.explanationResultId(), List.of())))
 				.toList();
 	}
 
@@ -107,10 +118,22 @@ public class ReviewService {
 				.filter(c -> "REVIEW".equals(c.getResult()))
 				.map(c -> reasonOf(c, ruleTypes))
 				.filter(t -> t != null).distinct().toList();
+		// 판정 당시 정책 — 검수 사유를 "설정한 기준의 문구"로 쓰려면 기준이 필요하고,
+		// 그 출처는 기록된 버전이다(matchedText 는 실측값이라 기준을 담지 않는다, ALPHA-774).
+		Map<Long, PolicyVersionEntity> versions = policyVersionsById(
+				checks.stream().map(ScreeningCheckEntity::getPolicyVersionId)
+						.filter(id -> id != null).toList());
 		List<ReviewItemDetail.ScreeningCheckView> checkViews = checks.stream()
-				.map(c -> new ReviewItemDetail.ScreeningCheckView(c.getResult(),
-						c.getScreeningRuleId() == null ? null : ruleTypes.get(c.getScreeningRuleId()),
-						c.getMatchedText(), c.getCheckedAt()))
+				.map(c -> {
+					PolicyVersionEntity version = c.getPolicyVersionId() == null
+							? null : versions.get(c.getPolicyVersionId());
+					return new ReviewItemDetail.ScreeningCheckView(c.getResult(),
+							c.getScreeningRuleId() == null ? null : ruleTypes.get(c.getScreeningRuleId()),
+							c.getMatchedText(), c.getCheckedAt(),
+							version == null ? null : version.getVersionNo(),
+							version == null ? null : version.getMinSourceCount(),
+							version == null ? null : version.getMinConfidence());
+				})
 				.toList();
 		List<AnalysisItemStatusHistoryEntity> history = statusHistoryRepository
 				.findByAnalysisItemIdOrderByStatusHistoryIdAsc(explanationResultId);
@@ -132,13 +155,46 @@ public class ReviewService {
 				reviewReasons, checkViews, changes);
 	}
 
-	/** 항목들의 검수 사유 파생 — screening_check(result='REVIEW') → screening_rule.rule_type. */
-	private Map<String, List<String>> reviewReasonsFor(Collection<String> analysisItemIds) {
-		if (analysisItemIds.isEmpty()) {
+	/**
+	 * 목록의 룰 무관 REVIEW 재료 — 상세와 같은 문구를 만들려면 판정 당시 기준이 필요하다
+	 * (ALPHA-774). 목록만 "자동 제공 기준 미충족"으로 뭉치면 같은 항목의 사유가 두 화면에서
+	 * 달라진다. 검사·버전 모두 일괄 조회다(항목당 조회는 N+1).
+	 */
+	private Map<String, List<ReviewListEntry.GateCheck>> gateChecksFor(
+			List<ScreeningCheckEntity> reviewChecks) {
+		List<ScreeningCheckEntity> checks = reviewChecks.stream()
+				.filter(c -> c.getScreeningRuleId() == null)
+				.toList();
+		Map<Long, PolicyVersionEntity> versions = policyVersionsById(
+				checks.stream().map(ScreeningCheckEntity::getPolicyVersionId)
+						.filter(id -> id != null).toList());
+		Map<String, List<ReviewListEntry.GateCheck>> byItem = new LinkedHashMap<>();
+		for (ScreeningCheckEntity check : checks) {
+			PolicyVersionEntity version = check.getPolicyVersionId() == null
+					? null : versions.get(check.getPolicyVersionId());
+			byItem.computeIfAbsent(check.getAnalysisItemId(), k -> new ArrayList<>())
+					.add(new ReviewListEntry.GateCheck(check.getMatchedText(),
+							version == null ? null : version.getMinSourceCount(),
+							version == null ? null : version.getMinConfidence()));
+		}
+		return byItem;
+	}
+
+	/** 검사 행이 가리키는 정책 버전 일괄 조회 — 행마다 조회하면 N+1 이다. */
+	private Map<Long, PolicyVersionEntity> policyVersionsById(Collection<Long> policyVersionIds) {
+		if (policyVersionIds.isEmpty()) {
 			return Map.of();
 		}
-		List<ScreeningCheckEntity> checks = screeningCheckRepository
-				.findByAnalysisItemIdInAndResultOrderByScreeningCheckId(analysisItemIds, "REVIEW");
+		Map<Long, PolicyVersionEntity> byId = new HashMap<>();
+		for (PolicyVersionEntity version : policyVersionRepository
+				.findByPolicyVersionIdIn(Set.copyOf(policyVersionIds))) {
+			byId.put(version.getPolicyVersionId(), version);
+		}
+		return byId;
+	}
+
+	/** 항목들의 검수 사유 파생 — screening_check(result='REVIEW') → screening_rule.rule_type. */
+	private Map<String, List<String>> reviewReasonsFor(List<ScreeningCheckEntity> checks) {
 		Map<Long, String> ruleTypes = ruleTypesById(
 				checks.stream().map(ScreeningCheckEntity::getScreeningRuleId).filter(id -> id != null).toList());
 		Map<String, List<String>> byItem = new LinkedHashMap<>();
