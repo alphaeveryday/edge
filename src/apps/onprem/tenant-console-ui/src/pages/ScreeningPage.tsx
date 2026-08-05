@@ -255,7 +255,15 @@ function RulesTab({ canEdit, onManageWords }: { canEdit: boolean; onManageWords:
           ? '항목에 하나라도 걸리면 자동 제공되지 않습니다.'
           : '스위치가 꺼져 있어 어디에도 걸리지 않은 설명까지 검수 대기열로 갑니다 — 금칙어·원인 미확인은 그대로 적용됩니다.'}
       </div>
-      <table className="table">
+      {/* 열 폭을 고정한다 — auto-layout 이면 결과 칸 내용이 스위치 상태에 따라 배지(짧다)와
+          "— 자동 제공 꺼짐"(길다)로 바뀌면서 설정 열까지 밀어낸다. 상태 전환이 레이아웃
+          전환으로 보이면 안 된다(ALPHA-764). `.table` 은 ui-kit 공유라 이 표에만 건다. */}
+      <table className="table" style={{ tableLayout: 'fixed' }}>
+        <colgroup>
+          <col />
+          <col style={{ width: 200 }} />
+          <col style={{ width: 200 }} />
+        </colgroup>
         <thead>
           <tr>
             <th>점검 항목</th>
