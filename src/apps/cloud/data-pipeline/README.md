@@ -588,6 +588,30 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
     종가 구간이라 라벨이 맞다. 휴장일 집합은 Planner·KRX 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다
     (`kis` task-def 에도 주입). 이 skip 은 **정상 상태**라 raw-ingest-skipped 알람 토큰을 쓰지
     않는다 — 드러남은 collection_log 가 맡는다.
+- `ingest-raw-investor-estimate`(종목별 **장중** 투자자 추정, **kis 세트** — EOD 투자자 수급과
+  같은 앱키·같은 유니버스, ALPHA-767) — **SFN 에 편입돼 있지 않다.** 레인 신설은 ALPHA-769
+  소관이라 그전까지는 손으로 돌릴 때만 수집된다. dataset 은 `investor_flow_intraday` 로
+  EOD(`investor_flow_daily`)와 **갈라 둔다** — 값이 가집계 추정(`*_fake_*`)이고 시간축이
+  거래일이 아니라 그날의 슬롯(`bsop_hour_gb`)이라, 한 데이터셋에 섞으면 소비자가 잠정과
+  확정을 구분할 수 없다.
+  - EOD(`FHPTJ04160001`)와 **tr_id·파라미터가 갈린다**: 장중은 `HHPTJ04160200` 이고 종목코드
+    하나(`MKSC_SHRN_ISCD`)만 받는다 — 날짜 파라미터가 아예 없다.
+  - **갱신은 하루 4회**(외국인 09:30·11:20·13:20·14:30 / 기관 10:00·11:20·13:20·14:30) —
+    합집합 5슬롯이 ALPHA-769 스케줄의 근거다.
+  - ⚠️ **ETF 자체는 0행이다.** 거래소가 ETF 의 장중 투자자 귀속을 생산하지 않는다(KIS 장중
+    투자자 4종 전수조사로 확정). 우리 유니버스는 ETF **구성종목**(개별주식)이라 적용되지만,
+    holdings 유니버스에 섞여 오는 ETF 자신은 빈 응답이 정상이다.
+  - ⚠️ **소급 백필이 없다**(iNAV 와 같다). 날짜 지정이 없어 오늘치만 오고, 놓친 슬롯은 그날
+    안에서만 회복된다. 그래서 `--from/--to` 를 주면 **실행을 거부**한다.
+  - **기준일 가드**: 응답에 날짜 필드가 없어 거래일을 수집 시각(KST)으로 붙이는데, 비거래일·
+    개장 전에 KIS 가 직전 슬롯을 주면 어제 데이터가 오늘 거래일로 굳는다(위 iNAV·ALPHA-387 과
+    같은 함정). 그래서 **거래일이고 첫 슬롯(09:30 KST) 이후**일 때만 수집한다.
+  - ⚠️ **가드 처리 방식이 iNAV 와 다르다 — ALPHA-769 에서 정할 결정이다.** iNAV 는
+    `skip_reason` 으로 `status=skipped`(정상 상태) 마감인데, 이 스텝은 예외를 올려
+    `status=error`·exit 1 이 된다(`ingest_raw_investor` 스텝에 `skip_reason` 기제가 없다).
+    지금은 수동 실행뿐이라 "못 돌 시각에 돌렸다"를 시끄럽게 드러내는 편이 맞지만, ALPHA-769
+    가 평일 cron 을 켜면 **공휴일마다 런이 FAILED** 로 마감된다 — 그때 iNAV 규약(skip)으로
+    맞출지 함께 결정한다.
 
 **정제(normalize, 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
@@ -752,6 +776,15 @@ settings.targets.keywords            # ["금리", ...]
   없음 — 실측). 그래서 폴링 창을 겹치게 잡아 같은 시각이 여러 run 에 중복 수집되는 것이 **정상**이며,
   겹침이 유일한 갭 방어 수단이라 raw 는 전부 보존하고 중복 제거는 canonical 소관이다.
   각 행에 `interval_sec`·`our_etf_id`·`market`·`kis_symbol`·`fetched_at` 를 부착한다.
+- **raw(투자자 수급)** — 확정과 추정을 **다른 dataset 으로 가른다**(iNAV↔NAV 와 같은 이유):
+  - EOD 확정 — `raw/source=kis/dataset=investor_flow_daily/market=KR/ingest_date=…/run_id=…/`
+    (ALPHA-482). 거래일 grain 확정 순매수. 자연키 날짜는 행의 `stck_bsop_date` 다.
+  - 장중 추정 — `raw/source=kis/dataset=investor_flow_intraday/market=KR/ingest_date=…/run_id=…/`
+    (ALPHA-767). 그날 슬롯 grain 가집계(`*_fake_*`) 추정. **응답에 날짜 필드가 없어**
+    `asof_date`(수집 시각의 KST 날짜)를 provenance 로 부착하는 것이 필수다 — 없으면 canonical
+    이 어느 거래일 스냅샷인지 복원할 수 없다(KRX holdings 의 `trd_dd` 와 같은 형태).
+    각 행에 `our_ticker`·`market`·`kis_symbol`·`asof_date`·`fetched_at` 를 붙인다.
+    슬롯 응답이 그날 것을 누적해 오므로 슬롯 간 중복은 **정상**이고 정리는 canonical 소관이다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
