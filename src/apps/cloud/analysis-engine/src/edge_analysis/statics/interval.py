@@ -578,7 +578,10 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
     }
     event_ids = tuple(event_times)
     if window_return is None:
-        raise ValueError(f"요청창 {a[:5]}~{b[:5]} 5분 수익률을 계산하지 못했습니다")
+        # 이 파일의 도메인 예외를 쓴다(`clamp` 과 같은 축). `ValueError` 하위라 기존
+        # `except` 는 그대로 동작하고, 호출자가 "이 모듈이 낸 부재" 와 "예상 못 한 버그" 를
+        # 가를 수 있게 된다 — 판정불가 산문이 그 구분으로 문구를 정한다.
+        raise IntervalError(f"요청창 {a[:5]}~{b[:5]} 5분 수익률을 계산하지 못했습니다")
     measured = window_return
     direction = "상승" if measured > 0 else "하락" if measured < 0 else "보합"
     evidence = ["구성종목 실시간 시세"]
