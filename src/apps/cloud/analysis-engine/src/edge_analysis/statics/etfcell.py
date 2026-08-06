@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import sys
 
+from ..config import PipelineError
 from .route import route_etf, say_route
 from .interval import (
     build_block_plan,
@@ -71,7 +72,10 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
 
     roll = decompose(lake, etf, day)
     if roll is None:
-        return f"[ETF {etf} {day}] 층 분해 불가 — 구성종목 이력 또는 ETF 봉이 없다"
+        # **부재는 예외로 말한다.** 산문으로 돌려주면 호출자가 그것을 정상 설명과 못 가르고
+        # 게시본 자리를 내준다 - 판정불가가 발화의 게시본을 선점하면 나중의 제대로 된
+        # 설명이 DRAFT 로 밀린다. 예외로 올리면 `pipeline` 의 표면 부재 경로 하나로 모인다.
+        raise PipelineError(f"층 분해 불가 — 구성종목 이력 또는 ETF 봉이 없다 ({etf} {day})")
     # 괴리 판정은 `premium.screen` 이 셀 목록으로 준다 (NAV vs 가격). 그날 이 ETF 의
     # 셀이 없으면 판정 없이 진행한다 - 없는 판정을 만들지 않는다.
     pv = None

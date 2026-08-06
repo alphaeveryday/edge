@@ -574,6 +574,7 @@ class EventStore:
         primary_thread_id: str | None,
         events: list[EventContext],
         run_reason: str = "DAILY",
+        publishable: bool = True,
     ) -> dict[str, str | int | None]:
         """explanation_run + explanation_result + 근거 lineage를 한 트랜잭션으로 적재한다."""
         import json
@@ -625,10 +626,17 @@ class EventStore:
                 " explanation_type, summary, confidence_level, stage_results,"
                 " publication_status, headline)"
                 " SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                # `%s = FALSE` 는 **표면 부재**다. 게시 규칙("발화당 첫 결과가 게시본")은
+                # "첫 결과가 그 발화의 최선"을 전제하는데, 내용 없는 결과가 먼저 오면 그
+                # 전제가 깨진다 - 자리를 선점하고 재실행분을 DRAFT 로 밀어낸다. 무효화된
+                # 게시본이 자리를 안 지키는 것과 결이 같다(ADR-0045): **내용 없는 결과도
+                # 자리를 지킬 이유가 없다.** DRAFT 로 떨어지면 아래 fan-out 게이트가
+                # PUBLISHED 만 보므로 테넌트 전파도 함께 멈춘다.
                 " CASE WHEN EXISTS (SELECT 1 FROM explanation_result p"
                 "   JOIN explanation_run r ON r.explanation_run_id = p.explanation_run_id"
                 "   WHERE r.explanation_route_id = %s"
                 "     AND p.publication_status = 'PUBLISHED')"
+                "   OR %s = FALSE"
                 " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
                 " ON CONFLICT (explanation_result_id) DO NOTHING"
                 " RETURNING publication_status",
@@ -636,7 +644,7 @@ class EventStore:
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
-                    route_id,
+                    route_id, publishable,
                     explanation.headline,
                 ),
             )
@@ -695,10 +703,12 @@ class EventStore:
             fanout_tenants=fanout_tenants,
         )
         if publication_status == "DRAFT":
-            # 같은 발화(route) 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
+            # DRAFT 사유가 둘이다 — 같은 발화 재실행(게시분이 이미 있다)과 표면 부재
+            # (내용 없는 결과라 자리를 안 준다). 한 사유로 뭉치면 "왜 안 나갔나"에
+            # 못 답한다(Rule 12 — 부재를 사유와 함께 드러낸다).
             log(
                 "explanation_result.publish_skipped",
-                reason="route_already_published",
+                reason="route_already_published" if publishable else "surface_absent",
                 etf_instrument_id=etf_instrument_id,
                 trade_date=settings.trade_date.isoformat(),
                 explanation_result_id=result_id,

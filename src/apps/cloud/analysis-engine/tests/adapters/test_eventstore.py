@@ -486,3 +486,30 @@ def test_find_published_minute_run_ids_scopes_to_minute_published_session():
     assert "trg.window_start <= %s" in sql             # 복귀 이후 재발화 보호
     assert "price_movement_trigger" not in sql.replace("minute_price_trigger", "")
     assert params == ("091160", "ses-1", until)        # 종목·세션·상한 좌표
+
+
+def test_surface_absent_result_is_drafted_and_not_fanned_out(capsys):
+    """표면 부재 런은 **게시본 자리를 차지하지 않는다.**
+
+    게시 규칙("발화당 첫 결과가 게시본")은 첫 결과가 그 발화의 최선임을 전제한다. 내용
+    없는 판정불가가 먼저 오면 자리를 선점하고, 데이터가 들어온 뒤 재실행해도 DRAFT 로
+    밀린다. 무효화된 게시본이 자리를 안 지키는 것과 같은 근거다(ADR-0045).
+
+    사유도 갈라 적는다 — "이미 게시됨"과 "내용이 없음"은 다른 처방이다.
+    """
+    conn = _FakeConn(result_insert_row=("DRAFT",))
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "판정불가 — 표면 부재"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)], publishable=False,
+    )
+
+    result_sql, params = next((s, p) for s, p in conn.executed
+                              if s.startswith("INSERT INTO explanation_result"))
+    assert "OR %s = FALSE" in result_sql          # 게시 판정이 이 플래그를 본다
+    assert False in params                        # 그리고 실제로 전달된다
+    assert not any(s.startswith("INSERT INTO tenant_delivery") for s, _ in conn.executed)
+    assert (ids["publication_status"], ids["fanout_tenants"]) == ("DRAFT", 0)
+    assert conn.committed                         # 계보는 남는다
+    assert "surface_absent" in capsys.readouterr().out

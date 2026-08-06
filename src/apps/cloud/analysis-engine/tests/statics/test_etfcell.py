@@ -81,3 +81,24 @@ def test_model_cannot_replace_the_final_explanation(monkeypatch):
 
     assert "SK하이닉스 공급계약 해지 공시" in text
     assert "삼성전자" not in text
+
+
+def test_missing_layers_raise_instead_of_returning_prose():
+    """**부재는 예외로 말한다.**
+
+    산문으로 돌려주면 호출자가 정상 설명과 못 가르고 게시본 자리를 내준다 — 판정불가가
+    발화의 게시본을 선점하면 나중의 제대로 된 설명이 DRAFT 로 밀린다(ALPHA-795).
+    """
+    import pytest
+
+    from edge_analysis.config import PipelineError
+    from edge_analysis.statics import etfcell
+
+    class _NoLayers:
+        exists: dict = {}
+
+        def sql(self, q):
+            return []
+
+    with pytest.raises(PipelineError, match="층 분해 불가"):
+        etfcell.run(_NoLayers(), "091160", "2026-08-06", lambda *_a, **_k: {})

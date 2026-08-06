@@ -74,6 +74,7 @@ class _FakeStore:
 
     def persist_explanation(self, settings, etf_instrument_id, explanation, **kwargs):
         self.explanation = explanation
+        self.explanation_kwargs = kwargs
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
@@ -502,3 +503,41 @@ class _BarelessLake:
 
     def taus(self, instrument_id: str, day: str):
         return []
+
+
+def _statics(monkeypatch, outcome):
+    """`run_statics` 를 못 박는다 — 표면 성패가 환경에 따라 갈리면 이 계약을 못 잰다."""
+    def _fake(*_a, **_k):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", _fake)
+
+
+def test_surface_absent_run_is_not_published(monkeypatch):
+    """표면 부재 런은 게시본 자리를 차지하면 안 된다.
+
+    게시 판정이 **발화당 첫 결과**를 PUBLISHED 로 만든다. 판정불가가 먼저 오면 그 자리를
+    선점하고, 데이터가 들어온 뒤 재실행해도 DRAFT 로 밀린다. 온프렘 `PolicyEvaluator` 는
+    UNCERTAIN 을 상시 검수로 보내므로 검수 큐도 판정불가로 찬다 — 승인도 반려도 의미가
+    없는 항목이라 범주 오류다.
+    """
+    _statics(monkeypatch, RuntimeError("통계 표면이 안 선다"))
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    assert _run(store, _FakeS3()) == 0
+    assert "persist_explanation" in store.calls          # 계보는 남는다
+    assert store.explanation_kwargs["publishable"] is False
+
+
+def test_a_measured_run_is_still_published(monkeypatch):
+    """기준은 **표면 부재**지 `UNCERTAIN` 전체가 아니다.
+
+    측정값이 있는 '원인 미확인'(실측 `[3] 시장 대비 -0.84%p`)은 검수자가 판단할 값이
+    있으므로 그대로 게시돼야 한다. 여기서 막으면 쓸 수 있는 설명까지 묻힌다.
+    """
+    _statics(monkeypatch, "[H] 471780 -3.68% / 09:22 기준\n[3] 시장 대비 -0.84%p")
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    assert _run(store, _FakeS3()) == 0
+    assert store.explanation_kwargs["publishable"] is True

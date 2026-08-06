@@ -246,6 +246,10 @@ def run(
     # 테스트 7건이 `layers_daily does not exist` 로 죽었다.
     ask = TracingClient(client).complete_json
     text = ""
+    # 표면 부재 런은 **게시본 자리를 차지하면 안 된다.** 게시 판정은 발화당 첫 결과를
+    # PUBLISHED 로 만드는데("첫 결과가 그 발화의 최선"), 판정불가가 먼저 오면 그 전제가
+    # 깨진다 - 데이터가 들어온 뒤 재실행해도 DRAFT 로 밀린다. 여기서만 그 사실을 안다.
+    surface_ok = True
     window_meta: dict[str, Any] = {}
     with collect_trace() as trace:
         try:
@@ -266,6 +270,7 @@ def run(
             text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — "
                     f"{_verdict_reason(exc)}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
+            surface_ok = False
     # **커버리지를 읽는 소비자를 만든다.** `layers`·`duck` 은 로깅을 모르고 경로와 폴백
     # 사유를 `exists`/`unbound` 에만 적는다 - "커버리지 보고가 곧 '어떻게 쟀는가' 다"
     # (`_series` 주석). 그런데 그 딕셔너리를 아무도 읽지 않아, 2026-08-06 하루 동안
@@ -331,6 +336,7 @@ def run(
         bundle=prereqs["bundle"],
         primary_thread_id=_primary_thread_id(events),
         events=events,
+        publishable=surface_ok,
     )
     write_run_archive(s3, settings, {
         "outcome": "explained",
