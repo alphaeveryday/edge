@@ -158,19 +158,30 @@ def run(
     # `event_search` 를 호출자가 정하게 두지 않는다 - 원장 CHECK 가 route_code 와
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.core.duck import CausalLake
-    from .statics.core.layers import SESSION_OPEN, decompose as layer_decompose
-    from .statics.window.record import route_code_of
-    from .statics.window.route import route_etf
+    from .statics.core.layers import SESSION_CLOSE, SESSION_OPEN
+    from .statics.window.routing import compute_route
 
     lake = causal_lake if causal_lake is not None else CausalLake()
     day_iso = settings.trade_date.isoformat()
+    # clock 은 필수다 — 하루 모드면 (open, close), 분봉이면 (open, window_end).
+    if minute_row is not None:
+        window_end = (
+            minute_row.window_start + timedelta(minutes=5)
+        ).astimezone(KST).strftime("%H:%M:%S")
+        clock = (SESSION_OPEN, window_end)
+    else:
+        clock = (SESSION_OPEN, SESSION_CLOSE)
     roll = rt = None
+    route_code = event_search = None
     try:
-        roll = layer_decompose(lake, settings.etf_ticker, day_iso)
-        rt = route_etf(roll)
+        result = compute_route(lake, settings.etf_ticker, day_iso, clock)
+        roll, rt = result.roll, result.rt
+        route_code, event_search = result.route_code, result.event_search
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
         log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}")
-    route_code, event_search = route_code_of(rt.kind if rt else "")
+    if route_code is None:
+        from .statics.window.record import route_code_of
+        route_code, event_search = route_code_of("")
     ids = store.persist_observation_route(
         gate.trigger_id, decomp, route_code, event_search, entity_index,
         minute=minute_gate is not None,
