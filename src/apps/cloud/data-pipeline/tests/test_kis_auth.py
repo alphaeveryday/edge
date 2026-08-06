@@ -2,6 +2,7 @@
 
 import itertools
 import json
+import re as _re_module
 
 import pytest
 
@@ -604,7 +605,26 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
             crons = _hcl_cron_map(variables, f"{prefix}_schedule_expressions")
             timeout = _hcl_default_number(variables, f"{prefix}_state_machine_timeout_seconds")
         mins = sorted(h * 60 + m for h, m in (_cron_hm(c) for c in crons))
-        windows[lane] = (mins[0], mins[-1] + timeout // 60)
+        end = mins[-1] + timeout // 60
+        # 창을 하루 안의 분(0~1440)으로 비교하므로 자정을 넘으면 아래 disjoint 판정이 거짓이
+        # 된다(끝이 시작보다 작아져 어떤 창과도 안 겹치는 것처럼 보인다). 넘는 순간 조용히
+        # 통과시키지 말고 여기서 멈춘다 — 그때는 요일 축까지 넣어 다시 모델링해야 한다.
+        assert end < 24 * 60, (
+            f"{lane} 실행 창이 자정을 넘는다({mins[0]}~{end}분) — 하루 안 분 비교로는 겹침을 "
+            "판정할 수 없다. 타임아웃을 줄이거나 이 계산에 요일 축을 넣어라")
+        windows[lane] = (mins[0], end)
+
+    # ⚠️ **이 가드는 모듈 default 만 읽는다.** `envs/*/main.tf` 가 cron·타임아웃을 오버라이드하면
+    #    실제로 도는 창과 여기서 검증하는 창이 갈려 **가드가 눈이 먼다** — 하필 위 실패 메시지가
+    #    "슬롯을 떼든 하라"고 유도하는 자리가 env 쪽이라 실제로 밟기 쉬운 경로다. 오버라이드가
+    #    생기면 조용히 지나가지 말고 여기서 멈춰 이 계산을 env 기준으로 고치게 한다.
+    env_tf = _strip_hcl((tf.parent.parent.parent / "envs/dev/main.tf").read_text())
+    for var in ("schedule_expression", "state_machine_timeout_seconds",
+                "investor_intraday_schedule_expressions",
+                "investor_intraday_state_machine_timeout_seconds"):
+        assert not _re_module.search(rf"^\s*{var}\s*=", env_tf, _re_module.M), (
+            f"envs/dev 가 `{var}` 를 오버라이드한다 — 이 가드는 모듈 default 로 창을 계산하므로 "
+            "실제와 다른 값을 검증하게 된다. 계산을 env 기준으로 바꿔라")
 
     for a, b in itertools.combinations(sorted(windows), 2):
         (a0, a1), (b0, b1) = windows[a], windows[b]
@@ -627,21 +647,21 @@ def _strip_hcl(text: str) -> str:
 
 def _hcl_default(tf: str, name: str) -> str:
     import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*"([^"]+)"', tf, _re.S)
+    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*"([^"]+)"', tf, _re.S)
     assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
     return m.group(1)
 
 
 def _hcl_default_number(tf: str, name: str) -> int:
     import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*(\d+)', tf, _re.S)
+    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*(\d+)', tf, _re.S)
     assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
     return int(m.group(1))
 
 
 def _hcl_cron_map(tf: str, name: str) -> list[str]:
     import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*\{{(.*?)^\s*\}}', tf, _re.S | _re.M)
+    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*\{{(.*?)^\s*\}}', tf, _re.S | _re.M)
     assert m, f"{name} 의 default 맵을 못 찾았다 — 파서가 낡았다"
     crons = _re.findall(r'"(cron\([^"]+\))"', m.group(1))
     assert crons, f"{name} 에서 cron 을 못 뽑았다"

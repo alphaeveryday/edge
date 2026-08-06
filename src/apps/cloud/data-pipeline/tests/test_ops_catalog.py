@@ -94,25 +94,28 @@ def _hcl_number(tf: str, name: str) -> int:
     return int(value.group(1))
 
 
-def disclosure_slot_interval_seconds() -> int:
-    """공시 cron 맵에서 **실제 최소 슬롯 간격**을 계산한다(분 단위 cron 을 KST 시각으로).
+def lane_slot_interval_seconds(prefix: str = "disclosure") -> int:
+    """다슬롯 레인의 cron 맵에서 **실제 최소 슬롯 간격**을 계산한다(분 단위 cron 을 KST 시각으로).
 
     테스트가 3600 을 하드코딩하면 cron 에 30분 슬롯을 하나 더해도 통과한다 — 그때 deadline·
     STALLED 임계는 다음 슬롯 뒤로 밀려 판정이 무의미해지는데 아무도 모른다(edge-review).
+
+    `prefix` 로 레인을 고른다(ALPHA-769 에 장중 수급 레인이 붙으며 일반화). 복제하지 않는
+    이유는 이 계산이 곧 계약이라서다 — 레인마다 베끼면 한쪽만 고쳐진 채 갈린다.
     """
     tf = _strip_hcl_comments((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
-    block = re.search(r'variable\s+"disclosure_schedule_expressions"\s*\{(.*?)^\}', tf,
+    block = re.search(rf'variable\s+"{prefix}_schedule_expressions"\s*\{{(.*?)^\}}', tf,
                       re.M | re.S)
-    assert block, "disclosure_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    assert block, f"{prefix}_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
     minutes = sorted(int(h) * 60 + int(m)
                      for m, h in re.findall(r'"cron\((\d+) (\d+) ', block.group(1)))
     assert len(minutes) >= 2, f"슬롯이 {len(minutes)}개 — 간격을 잴 수 없다"
     return min(b - a for a, b in zip(minutes, minutes[1:])) * 60
 
 
-def disclosure_sfn_timeout_seconds() -> int:
+def lane_sfn_timeout_seconds(prefix: str = "disclosure") -> int:
     return _hcl_number((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"),
-                       "disclosure_state_machine_timeout_seconds")
+                       f"{prefix}_state_machine_timeout_seconds")
 
 
 def reconcile_period_seconds() -> int:
