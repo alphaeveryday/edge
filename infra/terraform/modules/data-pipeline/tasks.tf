@@ -258,8 +258,10 @@ locals {
     # 정본이 아니며, Fargate 기본 임시 스토리지 20GiB면 1.5GB 엔진에 충분하다.
     DUCKDB_MEMORY_LIMIT = var.analysis_duckdb_memory_limit
     DUCKDB_TEMP_DIR     = var.analysis_duckdb_temp_dir
+    # 조건부 주입이 아니다 — 변수가 nullable=false 라 항상 값이 있고, 없으면 런이 선다
+    # (ALPHA-797 이 미주입 = S3 폴백 모드를 폐기).
+    ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version
     },
-    var.analysis_release_bundle_version == null ? {} : { ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version },
     # 워크그룹 이름만 넘긴다 — IAM 정책이 스코프로 쓰는 유일한 이름이라 여기서 고정한다.
     # DB·표 이름은 코드 DEFAULTS 에 둔다(IAM 은 glue:Get* 를 "*" 로 주므로 정책과 안 엮인다).
     # ⛔ EDGE_ATHENA_OUTPUT 은 주입 금지 — 워크그룹이 결과 위치를 강제(Enforce)하므로 같이
