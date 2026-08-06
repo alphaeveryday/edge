@@ -169,6 +169,9 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 | `CANONICAL_MANIFEST` | 생성 매니페스트(`infra/canonical/pit-manifest.yml`) 경로. 비면 재무·컨센서스·지배구조 어휘가 표면에 안 실린다 | (없음) |
 | `CANONICAL_DATABASE` | canonical PIT 질의가 도는 Glue 데이터베이스 | (없음) — 예: `edge_lake_draft` |
 | `CANONICAL_ATHENA_OUTPUT` | Athena 결과 저장 `s3://` 경로 | (없음) |
+| `EDGE_ATHENA_WORKGROUP` | 시각창 집계 Athena 오프로드 워크그룹(ALPHA-780). **IAM 정책이 스코프로 쓰는 유일한 이름**이라 terraform 이 이 값만 주입한다 — 정책과 갈리면 질의 제출이 AccessDenied 다 | `market_data` |
+| `EDGE_ATHENA_DB` · `EDGE_ATHENA_BARS_TABLE` | 시각창 패널 질의가 읽는 Glue 데이터베이스·5분봉 표. IAM 은 `glue:Get*` 를 `"*"` 로 주므로 정책과 안 엮여 컨테이너에 주입하지 않는다(코드 기본값) | `market_data_kr` · `edge_intraday_5m` |
+| `EDGE_ATHENA_OUTPUT` | ⚠️ **컨테이너에는 넘기지 않는다.** 워크그룹이 결과 위치를 강제(`EnforceWorkGroupConfiguration=True`)하므로 같이 보내면 질의가 시작조차 못 한다. 코드는 이 값이 **설정됐을 때만** `ResultConfiguration` 을 붙인다 — 평소엔 워크그룹에 맡기고 실제 위치는 응답에서 확인한다 | (컨테이너 미주입) |
 | `SUPER_ADMIN_API_URL` | ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api base URL. 소비자 전용 | (없음 — 비면 회수 경로 fail-loud) |
 | `SUPER_ADMIN_EMAIL`·`SUPER_ADMIN_PASSWORD` | 회수용 운영자 자격 (SSM SecureString 주입 — `/edge-dev-data-pipeline/super-admin/operator-email`·`operator-password`) | — |
 
